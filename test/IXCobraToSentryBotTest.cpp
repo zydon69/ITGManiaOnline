@@ -1,7 +1,7 @@
 /*
- *  cmd_satori_chat.cpp
+ *  IXCobraToSentryTest.cpp
  *  Author: Benjamin Sergeant
- *  Copyright (c) 2017 Machine Zone. All rights reserved.
+ *  Copyright (c) 2020 Machine Zone. All rights reserved.
  */
 
 #include "IXTest.h"
