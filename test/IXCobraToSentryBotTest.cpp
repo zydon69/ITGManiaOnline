@@ -141,7 +141,6 @@ TEST_CASE("Cobra_to_sentry_bot", "[cobra_bots]")
         std::string filter;
         std::string position("$");
         bool verbose = true;
-        bool strict = true;
         size_t maxQueueSize = 10;
         bool enableHeartbeat = false;
 
@@ -161,16 +160,15 @@ TEST_CASE("Cobra_to_sentry_bot", "[cobra_bots]")
         // Only run the bot for 3 seconds
         int runtime = 3;
 
-        int sentCount = cobra_to_sentry_bot(config,
-                                            channel,
-                                            filter,
-                                            position,
-                                            sentryClient,
-                                            verbose,
-                                            strict,
-                                            maxQueueSize,
-                                            enableHeartbeat,
-                                            runtime);
+        int64_t sentCount = cobra_to_sentry_bot(config,
+                                                channel,
+                                                filter,
+                                                position,
+                                                sentryClient,
+                                                verbose,
+                                                maxQueueSize,
+                                                enableHeartbeat,
+                                                runtime);
         //
         // We want at least 2 messages to be sent
         //

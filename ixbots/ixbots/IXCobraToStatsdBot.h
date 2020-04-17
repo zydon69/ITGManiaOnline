@@ -9,19 +9,20 @@
 #include <ixbots/IXStatsdClient.h>
 #include <string>
 #include <stddef.h>
+#include <cstdint>
 
 namespace ix
 {
-    int cobra_to_statsd_bot(const ix::CobraConfig& config,
-                            const std::string& channel,
-                            const std::string& filter,
-                            const std::string& position,
-                            StatsdClient& statsdClient,
-                            const std::string& fields,
-                            const std::string& gauge,
-                            const std::string& timer,
-                            bool verbose,
-                            size_t maxQueueSize,
-                            bool enableHeartbeat,
-                            int runtime);
+    int64_t cobra_to_statsd_bot(const ix::CobraConfig& config,
+                                const std::string& channel,
+                                const std::string& filter,
+                                const std::string& position,
+                                StatsdClient& statsdClient,
+                                const std::string& fields,
+                                const std::string& gauge,
+                                const std::string& timer,
+                                bool verbose,
+                                size_t maxQueueSize,
+                                bool enableHeartbeat,
+                                int runtime);
 } // namespace ix
