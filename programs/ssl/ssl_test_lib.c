@@ -1,5 +1,8 @@
 /*
- *  Common code for SSL test programs
+ *  Common code library for SSL test programs.
+ *
+ *  In addition to the functions in this file, there is shared source code
+ *  that cannot be compiled separately in "ssl_test_common_source.c".
  *
  *  Copyright The Mbed TLS Contributors
  *  SPDX-License-Identifier: Apache-2.0
