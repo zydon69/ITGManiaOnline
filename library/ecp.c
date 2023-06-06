@@ -43,6 +43,10 @@
 
 #include "common.h"
 
+#include "ecp_invasive.h"
+
+#if defined(MBEDTLS_ECP_WITH_MPI_STRUCT)
+
 /**
  * \brief Function level alternative implementation.
  *
@@ -80,7 +84,6 @@
 #include "mbedtls/error.h"
 
 #include "bn_mul.h"
-#include "ecp_invasive.h"
 
 #include <string.h>
 
@@ -3639,3 +3642,5 @@ cleanup:
 #endif /* !MBEDTLS_ECP_ALT */
 
 #endif /* MBEDTLS_ECP_LIGHT */
+
+#endif /* MBEDTLS_ECP_WITH_MPI_STRUCT */
