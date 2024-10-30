@@ -179,24 +179,15 @@ void ActorMultiVertex::SetNumVertices( size_t n )
 		AMV_start.vertices.resize( n );
 	}
 }
- 
-void ActorMultiVertex::ResizeVertices(std::vector<RageSpriteVertex>& vertices, int size)
-{
-	if (vertices.capacity() < static_cast<size_t>(size))
-	{
-		vertices.reserve(size);
-	}
-	vertices.resize(size);
-}
 
 void ActorMultiVertex::AddVertex()
 {
 	for( size_t i = 0; i < AMV_Tweens.size(); ++i )
 	{
-		AMV_Tweens[i].vertices.emplace_back( RageSpriteVertex() );
+		AMV_Tweens[i].vertices.push_back( RageSpriteVertex() );
 	}
-	AMV_current.vertices.emplace_back( RageSpriteVertex() );
-	AMV_start.vertices.emplace_back( RageSpriteVertex() );
+	AMV_current.vertices.push_back( RageSpriteVertex() );
+	AMV_start.vertices.push_back( RageSpriteVertex() );
 }
 
 void ActorMultiVertex::AddVertices( int Add )
@@ -205,10 +196,10 @@ void ActorMultiVertex::AddVertices( int Add )
 	size += Add;
 	for( size_t i = 0; i < AMV_Tweens.size(); ++i )
 	{
-		ResizeVertices(AMV_Tweens[i].vertices, size);
+		AMV_Tweens[i].vertices.resize( size );
 	}
-	ResizeVertices(AMV_current.vertices, size);
-	ResizeVertices(AMV_start.vertices, size);
+	AMV_current.vertices.resize( size );
+	AMV_start.vertices.resize( size );
 }
 
 void ActorMultiVertex::SetVertexPos( int index, float x, float y, float z )
@@ -638,11 +629,11 @@ void ActorMultiVertex::BeginTweening( float time, ITween *pTween )
 
 	if (!AMV_Tweens.empty()) // if there was already a TS on the stack
 	{
-		AMV_Tweens.emplace_back(AMV_Tweens.back());
+		AMV_Tweens.push_back( AMV_Tweens.back() );
 	}
 	else
 	{
-		AMV_Tweens.emplace_back(AMV_current);
+		AMV_Tweens.push_back( AMV_current );
 	}
 }
 
@@ -1052,10 +1043,10 @@ public:
 		{
 			luaL_error(L, "The texture must be set before adding states.");
 		}
-		const float width_pix = tex->GetImageToTexCoordsRatioX();
-		const float height_pix = tex->GetImageToTexCoordsRatioY();
-		const float width_ratio = width_pix != 0 ? 1.0f / width_pix : 0;
-		const float height_ratio = height_pix != 0 ? 1.0f / height_pix : 0;
+		const float width_pix= tex->GetImageToTexCoordsRatioX();
+		const float height_pix= tex->GetImageToTexCoordsRatioY();
+		const float width_ratio= 1.0f / tex->GetImageToTexCoordsRatioX();
+		const float height_ratio= 1.0f / tex->GetImageToTexCoordsRatioY();
 		const ActorMultiVertex::State& state=
 			p->GetStateData(ValidStateIndex(p, L, 1));
 		lua_createtable(L, 2, 0);
