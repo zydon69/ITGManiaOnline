@@ -94,21 +94,27 @@ static float GetNoteFieldHeight()
 
 float ArrowEffects::GetTime()
 {
-	float mult = 1.f + curr_options->m_fModTimerMult;
-	float offset = curr_options->m_fModTimerOffset;
+	double mult = 1.0 + static_cast<double>(curr_options->m_fModTimerMult);
+	double offset = static_cast<double>(curr_options->m_fModTimerOffset);
 	ModTimerType modtimer = curr_options->m_ModTimerType;
+	double returned_time = 0;
 	switch(modtimer)
 	{
-	    case ModTimerType_Default:
-	    case ModTimerType_Game:
-		return (RageTimer::GetTimeSinceStart()+offset)*mult;
-	    case ModTimerType_Beat:
-		return (GAMESTATE->m_Position.m_fSongBeatVisible+offset)*mult;
-	    case ModTimerType_Song:
-		return (GAMESTATE->m_Position.m_fMusicSeconds+offset)*mult;
-	    default:
-		return RageTimer::GetTimeSinceStart()+offset;
+		case ModTimerType_Default:
+		case ModTimerType_Game:
+			returned_time = (RageTimer::GetTimeSinceStart() + offset) * mult;
+			break;
+		case ModTimerType_Beat:
+			returned_time = (static_cast<double>(GAMESTATE->m_Position.m_fSongBeatVisible) + offset) * mult;
+			break;
+		case ModTimerType_Song:
+			returned_time = (static_cast<double>(GAMESTATE->m_Position.m_fMusicSeconds) + offset) * mult;
+			break;
+		default:
+			returned_time = RageTimer::GetTimeSinceStart() + offset;
+			break;
 	}
+	return static_cast<float>(returned_time);
 }
 
 namespace
@@ -315,8 +321,8 @@ void ArrowEffects::Init(PlayerNumber pn)
 
 void ArrowEffects::Update()
 {
-	static float fLastTime = 0;
-	float fTime = RageTimer::GetTimeSinceStart();
+	static double fLastTime = 0.0;
+	double fTime = RageTimer::GetTimeSinceStart();
 
 	FOREACH_EnabledPlayer( pn )
 	{
@@ -337,9 +343,9 @@ void ArrowEffects::Update()
 
 		if( !position.m_bFreeze || !position.m_bDelay )
 		{
-			data.m_fExpandSeconds += fTime - fLastTime;
+			data.m_fExpandSeconds += static_cast<float>(fTime - fLastTime);
 			data.m_fExpandSeconds = std::fmod( data.m_fExpandSeconds, (PI*2)/(accels[PlayerOptions::ACCEL_EXPAND_PERIOD]+1) );
-			data.m_fTanExpandSeconds += fTime - fLastTime;
+			data.m_fTanExpandSeconds += static_cast<float>(fTime - fLastTime);
 			data.m_fTanExpandSeconds = std::fmod( data.m_fTanExpandSeconds, (PI*2)/(accels[PlayerOptions::ACCEL_TAN_EXPAND_PERIOD]+1) );
 		}
 
