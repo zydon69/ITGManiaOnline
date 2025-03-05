@@ -24,7 +24,6 @@ ExternalProject_Add(
              -DENABLE_STATIC=ON
              ${ARCH_FLAGS}
   BUILD_IN_SOURCE OFF
-  BUILD_ALWAYS ON
   CONFIGURE_HANDLED_BY_BUILD ON
   BUILD_BYPRODUCTS "${LIB_PATH}"  # Needed for Ninja generator. See BUILD_BYPRODUCTS docs for details.
 )
