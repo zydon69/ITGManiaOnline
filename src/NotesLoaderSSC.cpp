@@ -752,6 +752,10 @@ void SSCLoader::ProcessBPMs( TimingData &out, const RString sParam )
 	for( unsigned b=0; b<arrayBPMExpressions.size(); b++ )
 	{
 		std::vector<RString> arrayBPMValues;
+		Trim(arrayBPMExpressions[b]);
+		if (arrayBPMExpressions[b].empty()) {
+			continue;
+		}
 		split( arrayBPMExpressions[b], "=", arrayBPMValues );
 		if( arrayBPMValues.size() != 2 )
 		{
@@ -786,6 +790,10 @@ void SSCLoader::ProcessStops( TimingData &out, const RString sParam )
 	for( unsigned b=0; b<arrayStopExpressions.size(); b++ )
 	{
 		std::vector<RString> arrayStopValues;
+		Trim(arrayStopExpressions[b]);
+		if (arrayStopExpressions[b].empty()) {
+			continue;
+		}
 		split( arrayStopExpressions[b], "=", arrayStopValues );
 		if( arrayStopValues.size() != 2 )
 		{
@@ -818,6 +826,10 @@ void SSCLoader::ProcessWarps( TimingData &out, const RString sParam, const float
 	for( unsigned b=0; b<arrayWarpExpressions.size(); b++ )
 	{
 		std::vector<RString> arrayWarpValues;
+		Trim(arrayWarpExpressions[b]);
+		if (arrayWarpExpressions[b].empty()) {
+			continue;
+		}
 		split( arrayWarpExpressions[b], "=", arrayWarpValues );
 		if( arrayWarpValues.size() != 2 )
 		{
@@ -855,6 +867,10 @@ void SSCLoader::ProcessLabels( TimingData &out, const RString sParam )
 	for( unsigned b=0; b<arrayLabelExpressions.size(); b++ )
 	{
 		std::vector<RString> arrayLabelValues;
+		Trim(arrayLabelExpressions[b]);
+		if (arrayLabelExpressions[b].empty()) {
+			continue;
+		}
 		split( arrayLabelExpressions[b], "=", arrayLabelValues );
 		if( arrayLabelValues.size() != 2 )
 		{

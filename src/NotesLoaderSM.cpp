@@ -449,6 +449,10 @@ void SMLoader::ParseBPMs( std::vector<std::pair<float, float>> &out, const RStri
 	for( unsigned b=0; b<arrayBPMChangeExpressions.size(); b++ )
 	{
 		std::vector<RString> arrayBPMChangeValues;
+		Trim(arrayBPMChangeExpressions[b]);
+		if (arrayBPMChangeExpressions[b].empty()) {
+			continue;
+		}
 		split( arrayBPMChangeExpressions[b], "=", arrayBPMChangeValues );
 		if( arrayBPMChangeValues.size() != 2 )
 		{
@@ -479,6 +483,10 @@ void SMLoader::ParseStops( std::vector<std::pair<float, float>> &out, const RStr
 	for( unsigned f=0; f<arrayFreezeExpressions.size(); f++ )
 	{
 		std::vector<RString> arrayFreezeValues;
+		Trim(arrayFreezeExpressions[f]);
+		if (arrayFreezeExpressions[f].empty()) {
+			continue;
+		}
 		split( arrayFreezeExpressions[f], "=", arrayFreezeValues );
 		if( arrayFreezeValues.size() != 2 )
 		{
@@ -745,6 +753,10 @@ void SMLoader::ProcessDelays( TimingData &out, const RString line, const int row
 	for( unsigned f=0; f<arrayDelayExpressions.size(); f++ )
 	{
 		std::vector<RString> arrayDelayValues;
+		Trim(arrayDelayExpressions[f]);
+		if (arrayDelayExpressions[f].empty()) {
+			continue;
+		}
 		split( arrayDelayExpressions[f], "=", arrayDelayValues );
 		if( arrayDelayValues.size() != 2 )
 		{
@@ -845,6 +857,10 @@ void SMLoader::ProcessTickcounts( TimingData &out, const RString line, const int
 	for( unsigned f=0; f<arrayTickcountExpressions.size(); f++ )
 	{
 		std::vector<RString> arrayTickcountValues;
+		Trim(arrayTickcountExpressions[f]);
+		if (arrayTickcountExpressions[f].empty()) {
+			continue;
+		}
 		split( arrayTickcountExpressions[f], "=", arrayTickcountValues );
 		if( arrayTickcountValues.size() != 2 )
 		{
@@ -930,6 +946,10 @@ void SMLoader::ProcessFakes( TimingData &out, const RString line, const int rows
 	for( unsigned b=0; b<arrayFakeExpressions.size(); b++ )
 	{
 		std::vector<RString> arrayFakeValues;
+		Trim(arrayFakeExpressions[b]);
+		if (arrayFakeExpressions[b].empty()) {
+			continue;
+		}
 		split( arrayFakeExpressions[b], "=", arrayFakeValues );
 		if( arrayFakeValues.size() != 2 )
 		{
