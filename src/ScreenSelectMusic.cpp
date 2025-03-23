@@ -1743,6 +1743,8 @@ void ScreenSelectMusic::SwitchToPreferredDifficulty()
 	}
 }
 
+// NOTE: This could a be a bit more robust than just looking at the extension,
+// but it's good enough for now.
 static bool IsVideoFile(const RString& path) {
 	const RString extension = GetExtension(path);
 	return extension == "mp4" ||
@@ -2013,6 +2015,10 @@ void ScreenSelectMusic::AfterMusicChange()
 	if( bWantBanner )
 	{
 		LOG->Trace("LoadFromCachedBanner(%s)",g_sBannerPath .c_str());
+		// TODO: We should probably have some fallback banner for videos, but for
+		// now we can just load the video file directly. This is to try an address
+		// some issues with the video banners potentially crashing the game but
+		// needs some more investigation.
 		if( IsVideoFile(g_sBannerPath) )
 		{
 			// Directly load the video file.
