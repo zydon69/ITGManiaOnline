@@ -682,7 +682,7 @@ bool SongManager::DoesSongGroupExist( RString sSongGroup ) const
 	return find( m_sSongGroupNames.begin(), m_sSongGroupNames.end(), sSongGroup ) != m_sSongGroupNames.end();
 }
 
-bool SongManager::HasPackIni(RString sSongGroup) const
+bool SongManager::HasPackIni(const RString& sSongGroup) const
 {
 	Group* group = GetGroupFromName(sSongGroup);
 	if(group != nullptr)
@@ -937,6 +937,9 @@ std::vector<Song*> SongManager::GetPreferredSortSongsBySectionName( const RStrin
 
 Group* SongManager::GetGroup( const Song* pSong ) const
 {
+	if ( pSong == nullptr ) {
+		return nullptr;
+	}
 	return GetGroupFromName( pSong->m_sGroupName );
 }
 
