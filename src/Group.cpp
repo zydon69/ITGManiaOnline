@@ -57,6 +57,13 @@ Group::Group(const RString& sDir, const RString& sGroupDirName, bool bFromProfil
     m_sSortTitle = m_sGroupName;
     m_sTranslitTitle = m_sGroupName;
     m_sSeries = "";
+    // The m_DefaultSyncOffset preference corresponds to what offset the user
+    // would like to assume as a "default" for packs without a Pack.ini.
+    //
+    // If the m_DefaultSyncOffset is set to ITG, we want to remove the 9ms ITG
+    // bias for all packs without a Pack.ini.
+    //
+    // We can start with that as our default value, and potentially update it below.
     m_fSyncOffset = (PREFSMAN->m_DefaultSyncOffset == SyncOffset_NULL) ? 0.0f : -0.009f;
     m_bHasPackIni = false;
     m_iYearReleased = 0;
@@ -102,20 +109,12 @@ Group::Group(const RString& sDir, const RString& sGroupDirName, bool bFromProfil
             RString sValue = "";
             ini.GetValue("Group", "SyncOffset", sValue);
             Trim(sValue);
-            // Handle the group offset application.
-            // 
-            // The goal of Pack.ini is to make everything NULL synced internally.
-            // 
-            // The machine sync offset preference corresponds to what offset the user
-            // would like to assume as a "default" for packs without a Pack.ini.
+            // If the Pack.ini is specified as SyncOffset=ITG (regardless of the
+            // m_DefaultSyncOffset value, we need to always remove the 9ms ITG
+            // bias.
             //
-            // If the machine sync bias is set to ITG, we want to remove the 9ms ITG bias
-            // for all packs without a Pack.ini.
-            // 
-            // If the Pack.ini is specified (regardless of the machine sync bias) with
-            // SyncOffset=ITG, we need to always remove the 9ms ITG bias.
-            // Otherwise, if SyncOffset=NULL, we don't need to do anything since it's
-            // already NULL synced.
+            // Otherwise, if SyncOffset=NULL, we don't need to do anything since
+            // it's already NULL synced, which is what we shift everything to.
             if (!sValue.empty()) {
                 if (sValue == "NULL") {
                     m_fSyncOffset = 0.0f;
