@@ -57,7 +57,7 @@ Group::Group(const RString& sDir, const RString& sGroupDirName, bool bFromProfil
     m_sSortTitle = m_sGroupName;
     m_sTranslitTitle = m_sGroupName;
     m_sSeries = "";
-    m_fSyncOffset = 0.0f;
+    m_fSyncOffset = (PREFSMAN->m_DefaultSyncOffset == SyncOffset_NULL) ? 0.0f : -0.009f;
     m_bHasPackIni = false;
     m_iYearReleased = 0;
     m_sBannerPath = "";
@@ -116,7 +116,6 @@ Group::Group(const RString& sDir, const RString& sGroupDirName, bool bFromProfil
             // SyncOffset=ITG, we need to always remove the 9ms ITG bias.
             // Otherwise, if SyncOffset=NULL, we don't need to do anything since it's
             // already NULL synced.
-            m_fSyncOffset = (PREFSMAN->m_DefaultSyncOffset == SyncOffset_NULL) ? 0.0f : -0.009f;
             if (!sValue.empty()) {
                 if (sValue == "NULL") {
                     m_fSyncOffset = 0.0f;
