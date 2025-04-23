@@ -135,7 +135,7 @@ void RageDisplay::ProcessStatsOnFlip()
 	g_iFramesRenderedSinceLastCheck++;
 	g_iFramesRenderedSinceLastReset++;
 
-	if( g_LastCheckTimer.PeekDeltaTime() >= 1.0f )	// update stats every 1 sec.
+	if( g_LastCheckTimer.Ago() >= 1.0f )	// update stats every 1 sec.
 	{
 		float fActualTime = g_LastCheckTimer.GetDeltaTime();
 		g_iNumChecksSinceLastReset++;

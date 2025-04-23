@@ -285,7 +285,7 @@ void ScreenMapControllers::Update( float fDeltaTime )
 
 	if( !m_WaitingForPress.IsZero() && m_DeviceIToMap.IsValid() ) // we're going to map an input
 	{
-		if( m_WaitingForPress.PeekDeltaTime() < g_fSecondsToWaitForInput )
+		if( m_WaitingForPress.Ago() < g_fSecondsToWaitForInput )
 			return; /* keep waiting */
 		m_WaitingForPress.SetZero();
 
