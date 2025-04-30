@@ -328,7 +328,7 @@ void BitmapText::BuildChars()
 
 	if( m_bUsingDistortion )
 	{
-		int iSeed = std::lrint( RageTimer::GetTimeSinceStart()*500000.0f );
+		int iSeed = RageTimer::GetTimeSinceStartSeconds() * 500000;
 		RandomGen rnd( iSeed );
 		for(unsigned int i= 0; i < m_aVertices.size(); i+=4)
 		{
@@ -798,7 +798,7 @@ void BitmapText::DrawPrimitives() noexcept
 		std::vector<RageVector3> vGlyphJitter;
 		if( m_bJitter )
 		{
-			int iSeed = std::lrint( RageTimer::GetTimeSinceStart()*8 );
+			int iSeed = RageTimer::GetTimeSinceStartSeconds() * 8;
 			RandomGen rnd( iSeed );
 			for (size_t i = 0; i < m_aVertices.size(); i += 4)
 			{
