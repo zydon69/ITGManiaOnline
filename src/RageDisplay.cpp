@@ -820,7 +820,10 @@ bool RageDisplay::SaveScreenshot( RString sPath, GraphicsFileFormat format )
 	case SAVE_LOSSY_HIGH_QUAL:
 		bSuccess = RageSurfaceUtils::SaveJPEG( surface, out, true );
 		break;
-	DEFAULT_FAIL( format );
+	default:
+		LOG->Warn("SaveScreenshot: Invalid graphics file format requested %d", format);
+		bSuccess = false;
+		break;
 	}
 //	LOG->Trace( "Saving Screenshot file took %f seconds.", timer.GetDeltaTime() );
 
@@ -829,10 +832,9 @@ bool RageDisplay::SaveScreenshot( RString sPath, GraphicsFileFormat format )
 	if( !bSuccess )
 	{
 		LOG->Warn("SaveScreenshot: Failed to save screenshot to %s: %s", sPath.c_str(), out.GetError().c_str() );
-		return false;
 	}
 
-	return true;
+	return bSuccess;
 }
 
 void RageDisplay::DrawQuads( const RageSpriteVertex v[], int iNumVerts )
