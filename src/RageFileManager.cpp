@@ -725,7 +725,7 @@ bool RageFileManager::Mount( const RString &sType, const RString &sRoot_, const 
 		return false;
 	}
 
-	CHECKPOINT_M("Driver %s successfully made.");
+	CHECKPOINT_M(ssprintf("Driver %s successfully made.", sType.c_str()));
 
 	LoadedDriver *pLoadedDriver = new LoadedDriver;
 	pLoadedDriver->m_pDriver = pDriver;
