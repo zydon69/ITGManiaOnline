@@ -26,6 +26,8 @@
 #include <vector>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <random>
+#include <climits>
 
 const RString CUSTOM_SONG_PATH= "/@mem/";
 
