@@ -621,7 +621,7 @@ static LocalizedString SYNC_TEMPO		( "ScreenDebugOverlay", "Tempo" );
 
 class DebugLineAutoplay : public IDebugLine
 {
-	virtual RString GetDisplayTitle() { return AUTO_PLAY.GetValue() + " (+Shift = AI) (+Alt = hide)"; }
+	virtual RString GetDisplayTitle() { return AUTO_PLAY.GetValue() + " (+Shift = AI)"; }
 	virtual RString GetDisplayValue()
 	{
 		PlayerController pc = GamePreferences::m_AutoPlay.Get();
