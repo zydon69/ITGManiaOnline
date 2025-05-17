@@ -123,14 +123,14 @@ Group::Group(const RString& sDir, const RString& sGroupDirName, bool bFromProfil
                     m_fSyncOffset = -0.009f;
                 }
                 else {
-                    LOG->Warn("Group::Group: Invalid SyncOffset value: %s in Pack.ini. Valid values are NULL and ITG. Using default value.", sValue.c_str());
+                    LOG->Warn("Group::Group: Invalid SyncOffset value: %s in Pack.ini file \"%s\". Valid values are NULL and ITG. Using default value.", sValue.c_str(), sPackIniPath.c_str());
                 }
             }
 
             ini.GetValue("Group", "Year", m_iYearReleased);
         } else {
-            LOG->Warn("Group::Group: Pack.ini version not set. Using default values.");
-        }  
+            LOG->Warn("Group::Group: Pack.ini version not set in file \"%s\". Using default values.", sPackIniPath.c_str());
+        }
     }
 }
 
