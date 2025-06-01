@@ -1,7 +1,9 @@
 #include "global.h"
 #include "DSoundHelpers.h"
+#include "PrefsManager.h"
 #include "RageUtil.h"
 #include "RageLog.h"
+#include "RageSound.h"
 #include "archutils/Win32/DirectXHelpers.h"
 #include "archutils/Win32/GetFileInformation.h"
 
