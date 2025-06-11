@@ -100,7 +100,7 @@ void DSound::SetPrimaryBufferMode()
 	 *
 	 * However, I just added the above code and I don't want to change more until it's tested.
 	 */
-//	pBuffer->Play( 0, 0, DSBPLAY_LOOPING );
+	pBuffer->Play( 0, 0, DSBPLAY_LOOPING );
 
 	pBuffer->Release();
 }
