@@ -45,7 +45,7 @@ void DSound::SetPrimaryBufferMode()
 {
 	DSBUFFERDESC format;
 	memset( &format, 0, sizeof(format) );
-	format.dwSize = sizeof(format);
+	format.dwSize = sizeof(DSBUFFERDESC);
 	format.dwFlags = DSBCAPS_PRIMARYBUFFER;
 	format.dwBufferBytes = 0;
 	format.lpwfxFormat = nullptr;
@@ -219,7 +219,7 @@ RString DSoundBuf::Init( DSound &ds, DSoundBuf::hw hardware,
 	/* Try to create the secondary buffer */
 	DSBUFFERDESC format;
 	memset( &format, 0, sizeof(format) );
-	format.dwSize = sizeof(format);
+	format.dwSize = sizeof(DSBUFFERDESC);
 
 	if (IsWindowsVistaOrGreater())
 	{
