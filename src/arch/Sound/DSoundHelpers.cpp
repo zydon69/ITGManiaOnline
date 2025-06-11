@@ -349,7 +349,8 @@ void DSoundBuf::CheckWriteahead( int iCursorStart, int iCursorEnd )
 	int iPrefetch = iCursorEnd - iCursorStart;
 	wrap( iPrefetch, m_iBufferSize );
 
-	if( iPrefetch >= 1024*32 )
+	constexpr int kMaxAllowedPrefetch = 1024 * 32; // 32 KB
+	if( iPrefetch >= kMaxAllowedPrefetch )
 	{
 		static bool bLogged = false;
 		if( bLogged )
