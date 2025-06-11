@@ -171,9 +171,27 @@ bool DSound::IsEmulated() const
 }
 
 DSoundBuf::DSoundBuf()
+:	m_pBuffer(nullptr),
+	m_iLastCursors{{0, 0}, {0, 0}, {0, 0}, {0, 0}},
+	m_pLockedBuf1(nullptr),
+	m_pLockedBuf2(nullptr),
+	m_pTempBuffer(nullptr),
+	m_iLockedSize1(0),
+	m_iLockedSize2(0),
+	m_iWriteCursor(0),
+	m_iWriteCursorPos(0),
+	m_iBufferBytesFilled(0),
+	m_iExtraWriteahead(0),
+	m_bBufferLocked(false),
+	m_bPlaying(false),
+	m_iBufferSize(0),
+	m_iChannels(0),
+	m_iLastPosition(0),
+	m_iSampleBits(0),
+	m_iSampleRate(0),
+	m_iVolume(-1),
+	m_iWriteAhead(0)
 {
-	m_pBuffer = nullptr;
-	m_pTempBuffer = nullptr;
 }
 
 RString DSoundBuf::Init( DSound &ds, DSoundBuf::hw hardware,
