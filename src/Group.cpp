@@ -36,11 +36,6 @@ Group::Group() {
     m_sBannerPath = "";
 }
 
-Group::~Group() 
-{
-
-}
-
 Group::Group(const RString& sDir, const RString& sGroupDirName, bool bFromProfile) {
     if (sDir.empty() || sGroupDirName.empty()) {
         LOG->Warn("Group::Group: Empty directory or group name provided.");
