@@ -75,7 +75,7 @@ static void UnreferenceAllDrivers( std::vector<LoadedDriver *> &apDriverList )
 RageFileDriver *RageFileManager::GetFileDriver( RString sMountpoint )
 {
 	FixSlashesInPlace( sMountpoint );
-	if( sMountpoint.size() && Right(sMountpoint, 1) != "/" )
+	if( sMountpoint.size() && sMountpoint.Right(1) != "/" )
 		sMountpoint += '/';
 
 	g_Mutex->Lock();
@@ -84,7 +84,7 @@ RageFileDriver *RageFileManager::GetFileDriver( RString sMountpoint )
 	{
 		if( g_pDrivers[i]->m_sType == "mountpoints" )
 			continue;
-		if( CompareNoCase(g_pDrivers[i]->m_sMountPoint, sMountpoint) )
+		if( g_pDrivers[i]->m_sMountPoint.CompareNoCase( sMountpoint ) )
 			continue;
 
 		pRet = g_pDrivers[i]->m_pDriver;
@@ -256,7 +256,7 @@ void RageFileManager::ProtectPath(const std::string& path)
 {
 	RString normalizedPath(path);
 	NormalizePath(normalizedPath);
-	MakeLower(normalizedPath);
+	normalizedPath.MakeLower();
 
 	m_protectedPaths.insert(normalizedPath);
 }
@@ -265,7 +265,7 @@ bool RageFileManager::IsPathProtected(const std::string& path)
 {
 	RString normalizedPath(path);
 	NormalizePath(normalizedPath);
-	MakeLower(normalizedPath);
+	normalizedPath.MakeLower();
 
 	return m_protectedPaths.count(normalizedPath) > 0;
 }
@@ -348,7 +348,7 @@ static RString GetDirOfExecutable( RString argv0 )
 	sPath = argv0;
 #endif
 
-	Replace(sPath, "\\", "/");
+	sPath.Replace( "\\", "/" );
 
 	bool bIsAbsolutePath = false;
 	if( sPath.size() == 0 || sPath[0] == '/' )
@@ -393,7 +393,7 @@ static RString GetDirOfExecutable( RString argv0 )
 		}
 #else
 		sPath = GetCwd() + "/" + sPath;
-		Replace(sPath, "\\", "/" );
+		sPath.Replace( "\\", "/" );
 #endif
 	}
 	return sPath;
@@ -490,16 +490,16 @@ RString LoadedDriver::GetPath( const RString &sPath ) const
 			return RString();
 	}
 
-	if( CompareNoCase(Left(sPath, m_sMountPoint.size()), m_sMountPoint) )
+	if( sPath.Left(m_sMountPoint.size()).CompareNoCase(m_sMountPoint) )
 		return RString(); /* no match */
 
 	/* Add one, so we don't cut off the leading slash. */
-	RString sRet = Right(sPath, sPath.size() - m_sMountPoint.size() + 1);
+	RString sRet = sPath.Right( sPath.size() - m_sMountPoint.size() + 1 );
 	return sRet;
 }
 
-bool ilt( const RString &a, const RString &b ) { return CompareNoCase(a, b) < 0; }
-bool ieq( const RString &a, const RString &b ) { return CompareNoCase(a, b) == 0; }
+bool ilt( const RString &a, const RString &b ) { return a.CompareNoCase(b) < 0; }
+bool ieq( const RString &a, const RString &b ) { return a.CompareNoCase(b) == 0; }
 void RageFileManager::GetDirListing( const RString &sPath_, std::vector<RString> &AddTo, bool bOnlyDirs, bool bReturnPathToo )
 {
 	RString sPath = sPath_;
@@ -676,12 +676,12 @@ static void AdjustMountpoint( RString &sMountPoint )
 {
 	FixSlashesInPlace( sMountPoint );
 
-	ASSERT_M( Left(sMountPoint, 1) == "/", "Mountpoints must be absolute: " + sMountPoint );
+	ASSERT_M( sMountPoint.Left(1) == "/", "Mountpoints must be absolute: " + sMountPoint );
 
-	if( sMountPoint.size() && Right(sMountPoint, 1) != "/" )
+	if( sMountPoint.size() && sMountPoint.Right(1) != "/" )
 		sMountPoint += '/';
 
-	if( Left(sMountPoint, 1) != "/" )
+	if( sMountPoint.Left(1) != "/" )
 		sMountPoint = "/" + sMountPoint;
 
 }
@@ -746,7 +746,7 @@ void RageFileManager::Unmount( const RString &sType, const RString &sRoot_, cons
 	FixSlashesInPlace( sRoot );
 	FixSlashesInPlace( sMountPoint );
 
-	if( sMountPoint.size() && Right(sMountPoint, 1) != "/" )
+	if( sMountPoint.size() && sMountPoint.Right(1) != "/" )
 		sMountPoint += '/';
 
 	/* Find all drivers we want to delete.  Remove them from g_pDrivers, and move them
@@ -755,11 +755,11 @@ void RageFileManager::Unmount( const RString &sType, const RString &sRoot_, cons
 	g_Mutex->Lock();
 	for( unsigned i = 0; i < g_pDrivers.size(); ++i )
 	{
-		if( !sType.empty() && CompareNoCase(g_pDrivers[i]->m_sType, sType) )
+		if( !sType.empty() && g_pDrivers[i]->m_sType.CompareNoCase( sType ) )
 			continue;
-		if( !sRoot.empty() && CompareNoCase(g_pDrivers[i]->m_sRoot, sRoot) )
+		if( !sRoot.empty() && g_pDrivers[i]->m_sRoot.CompareNoCase( sRoot ) )
 			continue;
-		if( !sMountPoint.empty() && CompareNoCase(g_pDrivers[i]->m_sMountPoint, sMountPoint) )
+		if( !sMountPoint.empty() && g_pDrivers[i]->m_sMountPoint.CompareNoCase( sMountPoint ) )
 			continue;
 
 		++g_pDrivers[i]->m_iRefs;
@@ -812,7 +812,7 @@ bool RageFileManager::IsMounted( RString MountPoint )
 	LockMut( *g_Mutex );
 
 	for( unsigned i = 0; i < g_pDrivers.size(); ++i )
-		if( !CompareNoCase(g_pDrivers[i]->m_sMountPoint, MountPoint) )
+		if( !g_pDrivers[i]->m_sMountPoint.CompareNoCase( MountPoint ) )
 			return true;
 
 	return false;
@@ -1167,7 +1167,7 @@ void GetDirListing( const RString &sPath, std::vector<RString> &AddTo, bool bOnl
 
 void GetDirListingRecursive( const RString &sDir, const RString &sMatch, std::vector<RString> &AddTo )
 {
-	ASSERT( Right(sDir, 1) == "/" );
+	ASSERT( sDir.Right(1) == "/" );
 	std::vector<RString> vsFiles;
 	GetDirListing( sDir+sMatch, vsFiles, false, true );
 	std::vector<RString> vsDirs;
@@ -1188,7 +1188,7 @@ void GetDirListingRecursive( const RString &sDir, const RString &sMatch, std::ve
 
 void GetDirListingRecursive( RageFileDriver *prfd, const RString &sDir, const RString &sMatch, std::vector<RString> &AddTo )
 {
-	ASSERT( Right(sDir, 1) == "/" );
+	ASSERT( sDir.Right(1) == "/" );
 	std::vector<RString> vsFiles;
 	prfd->GetDirListing( sDir+sMatch, vsFiles, false, true );
 	std::vector<RString> vsDirs;
@@ -1209,7 +1209,7 @@ void GetDirListingRecursive( RageFileDriver *prfd, const RString &sDir, const RS
 
 bool DeleteRecursive( RageFileDriver *prfd, const RString &sDir )
 {
-	ASSERT( Right(sDir, 1) == "/" );
+	ASSERT( sDir.Right(1) == "/" );
 
 	std::vector<RString> vsFiles;
 	prfd->GetDirListing( sDir+"*", vsFiles, false, true );
@@ -1226,7 +1226,7 @@ bool DeleteRecursive( RageFileDriver *prfd, const RString &sDir )
 
 bool DeleteRecursive( const RString &sDir )
 {
-	ASSERT( Right(sDir, 1) == "/" );
+	ASSERT( sDir.Right(1) == "/" );
 
 	std::vector<RString> vsFiles;
 	GetDirListing( sDir+"*", vsFiles, false, true );

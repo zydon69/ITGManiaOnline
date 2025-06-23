@@ -16,13 +16,13 @@ RageSoundReader_FileReader *RageSoundReader_FileReader::TryOpenFile( RageFileBas
 {
 	RageSoundReader_FileReader *Sample = nullptr;
 
-	if( !CompareNoCase(format, "wav") )
+	if( !format.CompareNoCase("wav") )
 		Sample = new RageSoundReader_WAV;
 
-	if( !CompareNoCase(format, "mp3") )
+	if( !format.CompareNoCase("mp3") )
 		Sample = new RageSoundReader_MP3;
 
-	if( !CompareNoCase(format, "oga") || !CompareNoCase(format, "ogg") )
+	if( !format.CompareNoCase("oga") || !format.CompareNoCase("ogg") )
 		Sample = new RageSoundReader_Vorbisfile;
 
 	if( !Sample )
@@ -121,7 +121,7 @@ RageSoundReader_FileReader *RageSoundReader_FileReader::OpenFile( RString filena
 	}
 
 	RString format = GetExtension( filename );
-	MakeLower(format);
+	format.MakeLower();
 
 	error = "";
 

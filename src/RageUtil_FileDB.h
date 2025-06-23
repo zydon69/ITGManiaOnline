@@ -20,7 +20,7 @@ struct File
 	{
 		name = fn;
 		lname = name;
-		MakeLower(lname);
+		lname.MakeLower();
 	}
 
 	bool dir;
@@ -49,7 +49,7 @@ struct File
 	bool equal(const RString &rhs) const
 	{
 		RString l = rhs;
-		MakeLower(l);
+		l.MakeLower();
 		return lname == l;
 	}
 };

@@ -48,7 +48,7 @@ bool RandomSample::LoadSoundDir( RString sDir, int iMaxToLoad )
 		sDir += "/";
 #else
 	// make sure there's a slash at the end of this path
-	if( Right(sDir, 1) != "/" )
+	if( sDir.Right(1) != "/" )
 		sDir += "/";
 #endif
 

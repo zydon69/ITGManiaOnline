@@ -49,7 +49,7 @@ bool LightsDriver_Linux_Leds::IsDance()
 	pInput = &GAMESTATE->GetCurrentGame()->m_InputScheme;
 	sInputName = pInput->m_szName;
 
-	return EqualsNoCase(sInputName, "dance");
+	return sInputName.EqualsNoCase("dance");
 }
 
 bool LightsDriver_Linux_Leds::IsPump()
@@ -57,7 +57,7 @@ bool LightsDriver_Linux_Leds::IsPump()
 	pInput = &GAMESTATE->GetCurrentGame()->m_InputScheme;
 	sInputName = pInput->m_szName;
 
-	return EqualsNoCase(sInputName, "pump");
+	return sInputName.EqualsNoCase("pump");
 }
 
 void LightsDriver_Linux_Leds::SetLight(const char *filename, bool previous, bool desired)

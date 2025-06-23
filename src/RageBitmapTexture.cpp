@@ -112,7 +112,7 @@ void RageBitmapTexture::Create()
 
 	// look in the file name for a format hints
 	RString sHintString = GetID().filename + actualID.AdditionalTextureHints;
-	MakeLower(sHintString);
+	sHintString.MakeLower();
 
 	if( sHintString.find("32bpp") != std::string::npos )			actualID.iColorDepth = 32;
 	else if( sHintString.find("16bpp") != std::string::npos )		actualID.iColorDepth = 16;

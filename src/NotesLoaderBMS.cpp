@@ -75,7 +75,7 @@ static RString FindLargestInitialSubstring( const RString &string1, const RStrin
 
 static void SearchForDifficulty( RString sTag, Steps *pOut )
 {
-	MakeLower(sTag);
+	sTag.MakeLower();
 
 	// Only match "Light" in parentheses.
 	if( sTag.find( "(light" ) != sTag.npos )
@@ -425,7 +425,7 @@ struct bmsCommandTree
 
 		if (space != statement.npos)
 			value = statement.substr(space + 1);
-		MakeLower(name);
+		name.MakeLower();
 
 		if (name == "#if")
 		{
@@ -573,7 +573,7 @@ bool BMSChart::Load( const RString &chartPath )
 				RString value = data.substr(2 * i, 2);
 				if (value != "00")
 				{
-					MakeLower(value);
+					value.MakeLower();
 					BMSObject o = { channel, measure, (float)i / count, flag, value };
 					objects.push_back(o);
 				}
@@ -885,7 +885,7 @@ void BMSChartReader::ReadHeaders()
 		else if( it->first == "#lnobj" )
 		{
 			lnobj = it->second;
-			MakeLower(lnobj);
+			lnobj.MakeLower();
 		}
 		else if( it->first == "#playlevel" )
 		{
@@ -1587,7 +1587,7 @@ void BMSSongLoader::AddToSong()
 			if( title != "" && title.size() != commonSubstring.size() )
 			{
 				RString tag = title.substr( commonSubstring.size(), title.size() - commonSubstring.size() );
-				MakeLower(tag);
+				tag.MakeLower();
 
 				// XXX: We should do this with filenames too, I have plenty of examples.
 				// however, filenames will be trickier, as stuff at the beginning AND

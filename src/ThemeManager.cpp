@@ -139,8 +139,8 @@ static void FileNameToMetricsGroupAndElement( const RString &sFileName, RString 
 	}
 	else
 	{
-		sMetricsGroupOut = Left(sFileName, iIndexOfFirstSpace);
-		sElementOut = Right(sFileName, sFileName.size() - iIndexOfFirstSpace - 1);
+		sMetricsGroupOut = sFileName.Left( iIndexOfFirstSpace );
+		sElementOut = sFileName.Right( sFileName.size() - iIndexOfFirstSpace - 1 );
 	}
 }
 
@@ -215,7 +215,7 @@ bool ThemeManager::DoesThemeExist( const RString &sThemeName )
 	GetThemeNames( asThemeNames );
 	for( unsigned i=0; i<asThemeNames.size(); i++ )
 	{
-		if( !CompareNoCase(sThemeName, asThemeNames[i]) )
+		if( !sThemeName.CompareNoCase(asThemeNames[i]) )
 			return true;
 	}
 	return false;
@@ -228,7 +228,7 @@ bool ThemeManager::IsThemeSelectable(RString const& name)
 
 bool ThemeManager::IsThemeNameValid(RString const& name)
 {
-	return Left(name, 1) != "_";
+	return name.Left(1) != "_";
 }
 
 RString ThemeManager::GetThemeDisplayName( const RString &sThemeName )
@@ -257,6 +257,10 @@ RString ThemeManager::GetThemeAuthor( const RString &sThemeName )
 	return "[unknown author]";
 }
 
+static bool EqualsNoCase( const RString &s1, const RString &s2 )
+{
+	return s1.EqualsNoCase(s2);
+}
 void ThemeManager::GetLanguages( std::vector<RString>& AddTo )
 {
 	AddTo.clear();
@@ -276,7 +280,7 @@ bool ThemeManager::DoesLanguageExist( const RString &sLanguage )
 	GetLanguages( asLanguages );
 
 	for( unsigned i=0; i<asLanguages.size(); i++ )
-		if( CompareNoCase(sLanguage, asLanguages[i])==0 )
+		if( sLanguage.CompareNoCase(asLanguages[i])==0 )
 			return true;
 	return false;
 }
@@ -317,11 +321,11 @@ void ThemeManager::LoadThemeMetrics( const RString &sThemeName_, const RString &
 				iniStrings.ReadFile( s );
 		}
 		iniStrings.ReadFile( GetLanguageIniPath(sThemeName,SpecialFiles::BASE_LANGUAGE) );
-		if( CompareNoCase(sLanguage, SpecialFiles::BASE_LANGUAGE) )
+		if( sLanguage.CompareNoCase(SpecialFiles::BASE_LANGUAGE) )
 		{
 			iniStrings.ReadFile( GetLanguageIniPath(sThemeName,sLanguage) );
 		}
-		bool bIsBaseTheme = !CompareNoCase(sThemeName, SpecialFiles::BASE_THEME_NAME);
+		bool bIsBaseTheme = !sThemeName.CompareNoCase(SpecialFiles::BASE_THEME_NAME);
 		iniMetrics.GetValue( "Global", "IsBaseTheme", bIsBaseTheme );
 		if( bIsBaseTheme )
 		{
@@ -334,7 +338,7 @@ void ThemeManager::LoadThemeMetrics( const RString &sThemeName_, const RString &
 		RString sFallback;
 		if( !iniMetrics.GetValue("Global","FallbackTheme",sFallback) )
 		{
-			if( CompareNoCase(sThemeName, SpecialFiles::BASE_THEME_NAME) && !bLoadedBase )
+			if( sThemeName.CompareNoCase( SpecialFiles::BASE_THEME_NAME ) && !bLoadedBase )
 			{
 				sFallback = SpecialFiles::BASE_THEME_NAME;
 			}
@@ -573,13 +577,13 @@ struct CompareLanguageTag
 	{
 		m_sLanguageString = RString("(lang ") + sLang + ")";
 		LOG->Trace( "try \"%s\"", sLang.c_str() );
-		MakeLower(m_sLanguageString);
+		m_sLanguageString.MakeLower();
 	}
 
 	bool operator()( const RString &sFile ) const
 	{
 		RString sLower( sFile );
-		MakeLower(sLower);
+		sLower.MakeLower();
 		size_t iPos = sLower.find( m_sLanguageString );
 		return iPos != RString::npos;
 	}
@@ -729,7 +733,7 @@ bool ThemeManager::GetPathInfoToRaw( PathInfo &out, const RString &sThemeName_, 
 
 
 	RString sPath = asElementPaths[0];
-	bool bIsARedirect = CompareNoCase(GetExtension(sPath), "redir")==0;
+	bool bIsARedirect = GetExtension(sPath).CompareNoCase("redir")==0;
 
 	if( !bIsARedirect )
 	{
@@ -1145,7 +1149,7 @@ RString ThemeManager::GetNextTheme()
 	GetThemeNames( as );
 	unsigned i;
 	for( i=0; i<as.size(); i++ )
-		if( CompareNoCase(as[i], m_sCurThemeName)==0 )
+		if( as[i].CompareNoCase(m_sCurThemeName)==0 )
 			break;
 	int iNewIndex = (i+1)%as.size();
 	return as[iNewIndex];
@@ -1157,7 +1161,7 @@ RString ThemeManager::GetNextSelectableTheme()
 	GetSelectableThemeNames( as );
 	unsigned i;
 	for( i=0; i<as.size(); i++ )
-		if( CompareNoCase(as[i], m_sCurThemeName)==0 )
+		if( as[i].CompareNoCase(m_sCurThemeName)==0 )
 			break;
 	int iNewIndex = (i+1)%as.size();
 	return as[iNewIndex];
@@ -1172,7 +1176,7 @@ void ThemeManager::GetLanguagesForTheme( const RString &sThemeName, std::vector<
 	for (RString const &s : as)
 	{
 		// ignore metrics.ini
-		if( CompareNoCase(s, SpecialFiles::METRICS_FILE)==0 )
+		if( s.CompareNoCase(SpecialFiles::METRICS_FILE)==0 )
 			continue;
 
 		// Ignore filenames with a space.  These are optional language inis that probably came from a mounted package.
@@ -1180,7 +1184,7 @@ void ThemeManager::GetLanguagesForTheme( const RString &sThemeName, std::vector<
 			continue;
 
 		// strip ".ini"
-		RString s2 = Left(s, s.size()-4);
+		RString s2 = s.Left( s.size()-4 );
 
 		asLanguagesOut.push_back( s2 );
 	}
@@ -1209,24 +1213,24 @@ void ThemeManager::GetOptionNames( std::vector<RString>& AddTo )
 
 static RString PseudoLocalize( RString s )
 {
-	Replace(s, "a", "\xc3\xa0\xc3\xa1"); // àá
-	Replace(s, "A", "\xc3\x80\xc3\x80"); // ÀÀ
-	Replace(s, "e", "\xc3\xa9\xc3\xa9"); // éé
-	Replace(s, "E", "\xc3\x89\xc3\x89"); // ÉÉ
-	Replace(s, "i", "\xc3\xad\xc3\xad"); // íí
-	Replace(s, "I", "\xc3\x8d\xc3\x8d"); // ÍÍ
-	Replace(s, "o", "\xc3\xb3\xc3\xb3"); // óó
-	Replace(s, "O", "\xc3\x93\xc3\x93"); // ÓÓ
-	Replace(s, "u", "\xc3\xbc\xc3\xbc"); // üü
-	Replace(s, "U", "\xc3\x9c\xc3\x9c"); // ÜÜ
-	Replace(s, "n", "\xc3\xb1"); // ñ
-	Replace(s, "N", "\xc3\x91"); // Ñ
-	Replace(s, "c", "\xc3\xa7"); // ç
-	Replace(s, "C", "\xc3\x87"); // Ç
+	s.Replace( "a", "\xc3\xa0\xc3\xa1" ); // àá
+	s.Replace( "A", "\xc3\x80\xc3\x80" ); // ÀÀ
+	s.Replace( "e", "\xc3\xa9\xc3\xa9" ); // éé
+	s.Replace( "E", "\xc3\x89\xc3\x89" ); // ÉÉ
+	s.Replace( "i", "\xc3\xad\xc3\xad" ); // íí
+	s.Replace( "I", "\xc3\x8d\xc3\x8d" ); // ÍÍ
+	s.Replace( "o", "\xc3\xb3\xc3\xb3" ); // óó
+	s.Replace( "O", "\xc3\x93\xc3\x93" ); // ÓÓ
+	s.Replace( "u", "\xc3\xbc\xc3\xbc" ); // üü
+	s.Replace( "U", "\xc3\x9c\xc3\x9c" ); // ÜÜ
+	s.Replace( "n", "\xc3\xb1" ); // ñ
+	s.Replace( "N", "\xc3\x91" ); // Ñ
+	s.Replace( "c", "\xc3\xa7" ); // ç
+	s.Replace( "C", "\xc3\x87" ); // Ç
 	// transformations that help expose punctuation assumptions
 	//s.Replace( ":", " :" );	// this messes up "::" help text tip separator markers
-	Replace(s, "?", " ?");
-	Replace(s, "!", " !");
+	s.Replace( "?", " ?" );
+	s.Replace( "!", " !" );
 
 	return s;
 }
@@ -1244,8 +1248,8 @@ RString ThemeManager::GetString( const RString &sMetricsGroup, const RString &sV
 	DEBUG_ASSERT( sValueName.find('=') == sValueName.npos );
 
 	// TODO: Move this escaping into IniFile?
-	Replace(sValueName, "\r\n", "\\n");
-	Replace(sValueName, "\n", "\\n");
+	sValueName.Replace( "\r\n", "\\n" );
+	sValueName.Replace( "\n", "\\n" );
 
 	ASSERT( g_pLoadedThemeData != nullptr );
 	RString s = GetMetricRaw( g_pLoadedThemeData->iniStrings, sMetricsGroup, sValueName );
@@ -1254,7 +1258,7 @@ RString ThemeManager::GetString( const RString &sMetricsGroup, const RString &sV
 	// Don't EvalulateString.  Strings are raw and shouldn't allow Lua.
 	//EvaluateString( s );
 
-	Replace(s, "\\n", "\n");
+	s.Replace( "\\n", "\n" );
 
 	if( m_bPseudoLocalize )
 	{
@@ -1299,7 +1303,7 @@ void ThemeManager::GetMetricsThatBeginWith( const RString &sMetricsGroup_, const
 			for( XAttrs::const_iterator j = cur->m_attrs.lower_bound( sValueName ); j != cur->m_attrs.end(); ++j )
 			{
 				const RString &sv = j->first;
-				if( Left(sv, sValueName.size()) == sValueName )
+				if( sv.Left(sValueName.size()) == sValueName )
 					vsValueNamesOut.insert( sv );
 				else	// we passed the last metric that matched sValueName
 					break;

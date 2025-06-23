@@ -50,7 +50,7 @@ static bool LoadFromKSFFile( const RString &sPath, Steps &out, Song &song, bool 
 	{
 		const MsdFile::value_t &sParams = msd.GetValue( i );
 		RString sValueName = sParams[0];
-		MakeUpper(sValueName);
+		sValueName.MakeUpper();
 
 		/* handle the data...well, not this data: not related to steps.
 		 * Skips INTRO, MUSICINTRO, TITLEFILE, DISCFILE, SONGFILE. */
@@ -150,7 +150,7 @@ static bool LoadFromKSFFile( const RString &sPath, Steps &out, Song &song, bool 
 		else if( sValueName=="PLAYER" )
 		{
 			RString sPlayer = sParams[1];
-			MakeLower(sPlayer);
+			sPlayer.MakeLower();
 			if( sPlayer.find( "double" ) != std::string::npos )
 				bDoublesChart = true;
 		}
@@ -188,7 +188,7 @@ static bool LoadFromKSFFile( const RString &sPath, Steps &out, Song &song, bool 
 	{
 		RString sDir, sFName, sExt;
 		splitpath( sPath, sDir, sFName, sExt );
-		MakeLower(sFName);
+		sFName.MakeLower();
 
 		out.SetDescription(sFName);
 		// Check another before anything else... is this okay? -DaisuMaster
@@ -479,12 +479,12 @@ static void LoadTags( const RString &str, Song &out )
 	split( str, " - ", asBits, false );
 	// Ignore the difficulty, since we get that elsewhere.
 	if( asBits.size() == 3 && (
-		EqualsNoCase(asBits[2], "double") ||
-		EqualsNoCase(asBits[2], "easy") ||
-		EqualsNoCase(asBits[2], "normal") ||
-		EqualsNoCase(asBits[2], "hard") ||
-		EqualsNoCase(asBits[2], "crazy") ||
-		EqualsNoCase(asBits[2], "nightmare"))
+		asBits[2].EqualsNoCase("double") ||
+		asBits[2].EqualsNoCase("easy") ||
+		asBits[2].EqualsNoCase("normal") ||
+		asBits[2].EqualsNoCase("hard") ||
+		asBits[2].EqualsNoCase("crazy") ||
+		asBits[2].EqualsNoCase("nightmare"))
 		)
 	{
 		asBits.erase( asBits.begin()+2, asBits.begin()+3 );
@@ -557,7 +557,7 @@ static bool LoadGlobalData( const RString &sPath, Song &out, bool &bKIUCompliant
 	{
 		const MsdFile::value_t &sParams = msd.GetValue(i);
 		RString sValueName = sParams[0];
-		MakeUpper(sValueName);
+		sValueName.MakeUpper();
 
 		// handle the data
 		if( sValueName=="TITLE" )

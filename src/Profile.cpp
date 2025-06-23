@@ -246,7 +246,7 @@ Character *Profile::GetCharacter() const
 	CHARMAN->GetCharacters( vpCharacters );
 	for (Character *c : vpCharacters)
 	{
-		if( CompareNoCase(c->m_sCharacterID, m_sCharacterID)==0 )
+		if( c->m_sCharacterID.CompareNoCase(m_sCharacterID)==0 )
 			return c;
 	}
 	return CHARMAN->GetDefaultCharacter();
@@ -1165,7 +1165,7 @@ ProfileLoadResult Profile::LoadAllFromDir( RString sDir, bool bRequireSignature 
 {
 	LOG->Trace( "Profile::LoadAllFromDir( %s )", sDir.c_str() );
 
-	ASSERT( Right(sDir, 1) == "/" );
+	ASSERT( sDir.Right(1) == "/" );
 
 	InitAll();
 
@@ -2162,9 +2162,9 @@ void Profile::LoadCourseScoresFromNode( const XNode* pCourseScores )
 
 				for (Course *c : vpAllCourses)
 				{
-					RString sOther = Right(c->m_sPath, sFullFileName.size());
+					RString sOther = c->m_sPath.Right(sFullFileName.size());
 
-					if( CompareNoCase(sFullFileName, sOther) == 0 )
+					if( sFullFileName.CompareNoCase(sOther) == 0 )
 					{
 						pC = c;
 						courseID.FromCourse( pC );

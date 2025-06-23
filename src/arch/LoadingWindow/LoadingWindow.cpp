@@ -29,15 +29,15 @@ LoadingWindow *LoadingWindow::Create()
 		Driver = DriversToTry[i];
 
 #ifdef USE_LOADING_WINDOW_MACOSX
-		if( !CompareNoCase(DriversToTry[i], "MacOSX") )	ret = new LoadingWindow_MacOSX;
+		if( !DriversToTry[i].CompareNoCase("MacOSX") )	ret = new LoadingWindow_MacOSX;
 #endif
 #ifdef USE_LOADING_WINDOW_GTK
-		if( !CompareNoCase(DriversToTry[i], "Gtk") )	ret = new LoadingWindow_Gtk;
+		if( !DriversToTry[i].CompareNoCase("Gtk") )	ret = new LoadingWindow_Gtk;
 #endif
 #ifdef USE_LOADING_WINDOW_WIN32
-		if( !CompareNoCase(DriversToTry[i], "Win32") )	ret = new LoadingWindow_Win32;
+		if( !DriversToTry[i].CompareNoCase("Win32") )	ret = new LoadingWindow_Win32;
 #endif
-		if( !CompareNoCase(DriversToTry[i], "Null") )	ret = new LoadingWindow_Null;
+		if( !DriversToTry[i].CompareNoCase("Null") )	ret = new LoadingWindow_Null;
 
 		if( ret == nullptr )
 			continue;

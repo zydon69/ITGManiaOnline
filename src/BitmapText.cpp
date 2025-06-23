@@ -463,7 +463,7 @@ void BitmapText::SetText( const RString& _sText, const RString& _sAlternateText,
 	RString sNewText = StringWillUseAlternate(_sText,_sAlternateText) ? _sAlternateText : _sText;
 
 	if( m_bUppercase )
-		MakeUpper(sNewText);
+		sNewText.MakeUpper();
 
 	if( iWrapWidthPixels == -1 )	// wrap not specified
 		iWrapWidthPixels = m_iWrapWidthPixels;
@@ -1069,13 +1069,13 @@ public:
 		 * it's confusing for :: to work in some strings and not others.
 		 * Eventually, all strings should be Lua expressions, but until then,
 		 * continue to support this. */
-		Replace(s, "::", "\n");
+		s.Replace("::","\n");
 		FontCharAliases::ReplaceMarkers( s );
 
 		if( lua_gettop(L) > 1 )
 		{
 			sAlt = SArg(2);
-			Replace(sAlt, "::", "\n");
+			sAlt.Replace("::","\n");
 			FontCharAliases::ReplaceMarkers( sAlt );
 		}
 

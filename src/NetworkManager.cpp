@@ -134,10 +134,10 @@ bool NetworkManager::IsUrlAllowed(const std::string& url)
 		return false;
 	}
 
-	MakeLower(host);
+	host.MakeLower();
 
 	RString allowedHostsStr = this->httpAllowHosts.Get();
-	MakeLower(allowedHostsStr);
+	allowedHostsStr.MakeLower();
 
 	std::vector<RString> allowedHosts;
 	split(allowedHostsStr, ",", allowedHosts);

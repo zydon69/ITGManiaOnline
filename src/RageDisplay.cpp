@@ -147,7 +147,7 @@ void RageDisplay::ProcessStatsOnFlip()
 		if( LOG_FPS )
 		{
 			RString sStats = GetStats();
-			Replace(sStats, "\n", ", ");
+			sStats.Replace( "\n", ", " );
 			LOG->Trace( "%s", sStats.c_str() );
 		}
 	}

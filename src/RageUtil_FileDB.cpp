@@ -14,11 +14,11 @@ void FileSet::GetFilesMatching( const RString &sBeginning_, const RString &sCont
 	/* "files" is a case-insensitive mapping, by filename.  Use lower_bound to figure
 	 * out where to start. */
 	RString sBeginning = sBeginning_;
-	MakeLower(sBeginning);
+	sBeginning.MakeLower();
 	RString sContaining = sContaining_;
-	MakeLower(sContaining);
+	sContaining.MakeLower();
 	RString sEnding = sEnding_;
-	MakeLower(sEnding);
+	sEnding.MakeLower();
 
 	std::set<File>::const_iterator i = files.lower_bound( File(sBeginning) );
 	for( ; i != files.end(); ++i )
@@ -105,7 +105,7 @@ int FileSet::GetFileHash( const RString &sPath ) const
 static void SplitPath( RString sPath, RString &sDir, RString &sName )
 {
 	CollapsePath( sPath );
-	if( Right(sPath, 1) == "/" )
+	if( sPath.Right(1) == "/" )
 		sPath.erase( sPath.size()-1 );
 
 	size_t iSep = sPath.find_last_of( '/' );
@@ -277,14 +277,14 @@ FileSet *FilenameDB::GetFileSet( const RString &sDir_, bool bCreate )
 		LOG->Warn( "FilenameDB::GetFileSet: m_Mutex was locked" );
 
 	/* Normalize the path. */
-	Replace(sDir, "\\", "/"); /* foo\bar -> foo/bar */
-	Replace(sDir, "//", "/"); /* foo//bar -> foo/bar */
+	sDir.Replace("\\", "/"); /* foo\bar -> foo/bar */
+	sDir.Replace("//", "/"); /* foo//bar -> foo/bar */
 
 	if( sDir == "" )
 		sDir = "/";
 
 	RString sLower = sDir;
-	MakeLower(sLower);
+	sLower.MakeLower();
 
 	m_Mutex.Lock();
 
@@ -465,7 +465,7 @@ void FilenameDB::DelFile( const RString &sPath )
 {
 	LockMut(m_Mutex);
 	RString lower = sPath;
-	MakeLower(lower);
+	lower.MakeLower();
 
 	std::map<RString, FileSet*>::iterator fsi = dirs.find( lower );
 	DelFileSet( fsi );

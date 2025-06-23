@@ -26,7 +26,7 @@ IPreference *IPreference::GetPreferenceByName( const RString &sName )
 {
 	for (IPreference *p : *m_Subscribers.m_pSubscribers)
 	{
-		if( !CompareNoCase(p->GetName(), sName) )
+		if( !p->GetName().CompareNoCase( sName ) )
 			return p;
 	}
 

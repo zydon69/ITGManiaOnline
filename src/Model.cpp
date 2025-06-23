@@ -64,7 +64,7 @@ void Model::Load( const RString &sFile )
 	if( sFile == "" ) return;
 
 	RString sExt = GetExtension(sFile);
-	MakeLower(sExt);
+	sExt.MakeLower();
 	if( sExt=="txt" )
 		LoadMilkshapeAscii( sFile );
 	RecalcAnimationLengthSeconds();

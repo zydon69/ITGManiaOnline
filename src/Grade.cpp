@@ -61,7 +61,7 @@ Grade GradeToOldGrade( Grade g )
 Grade StringToGrade( const RString &sGrade )
 {
 	RString s = sGrade;
-	MakeUpper(s);
+	s.MakeUpper();
 
 	// new style
 	int iTier;

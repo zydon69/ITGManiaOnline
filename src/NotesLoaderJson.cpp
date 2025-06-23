@@ -173,9 +173,9 @@ static void Deserialize( Song &out, const Json::Value &root )
 	out.m_fMusicSampleStartSeconds = (float)root["SampleStart"].asDouble();
 	out.m_fMusicSampleLengthSeconds = (float)root["SampleLength"].asDouble();
 	RString sSelectable = root["Selectable"].asString();
-	if( EqualsNoCase(sSelectable, "YES") )
+	if( sSelectable.EqualsNoCase("YES") )
 		out.m_SelectionDisplay = out.SHOW_ALWAYS;
-	else if( EqualsNoCase(sSelectable, "NO") )
+	else if( sSelectable.EqualsNoCase("NO") )
 		out.m_SelectionDisplay = out.SHOW_NEVER;
 
 	out.m_sSongFileName = root["SongFileName"].asString();

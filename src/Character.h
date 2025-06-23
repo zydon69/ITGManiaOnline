@@ -30,7 +30,7 @@ public:
 
 	bool IsDefaultCharacter() const
 	{
-		return CompareNoCase(m_sCharacterID, "default") == 0;
+		return m_sCharacterID.CompareNoCase("default") == 0;
 	}
 
 	void DemandGraphics();

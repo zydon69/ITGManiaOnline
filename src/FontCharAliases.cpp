@@ -364,7 +364,7 @@ static void InitCharAliases()
 	{
 		RString from = i->first;
 		RString to = WcharToUTF8(i->second);
-		MakeLower(from);
+		from.MakeLower();
 		CharAliasRepl[from] = to;
 	}
 }
