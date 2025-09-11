@@ -161,7 +161,7 @@ int64_t pos_map_queue::Search( int64_t iSourceFrame ) const
 	if( last.Ago() >= 1.0f )
 	{
 		last.Touch();
-		LOG->Trace("Audio frame (%" PRId64 ") was out of range of the data sent - possible buffer underflow? This is not always an error, however if you see it frequently there could be sound buffer problems.", iSourceFrame);
+		LOG->Trace("Audio position mismatch: frame %" PRId64 " outside buffered range (normal during start/stop)", iSourceFrame);
 	}
 
 	return iClosestPosition;
