@@ -517,7 +517,9 @@ float RageSound::GetPositionSeconds( RageTimer *pTimestamp ) const
 	LockMut(m_Mutex);
     
 	if( m_HardwareToStreamMap.IsEmpty() || m_StreamToSourceMap.IsEmpty() )
+	{
 		return static_cast<float>(m_iStoppedSourceFrame) / fSampleRate;
+	}
 
 	int iSourceFrame = GetSourceFrameFromHardwareFrame( iCurrentHardwareFrame );
 	return static_cast<float>(iSourceFrame) / fSampleRate;
