@@ -54,7 +54,7 @@ void DSound::SetPrimaryBufferMode()
 	HRESULT hr = this->GetDS()->CreateSoundBuffer( &format, &pBuffer, nullptr );
 	if( FAILED(hr) )
 	{
-		LOG->Warn(hr_ssprintf(hr, "Couldn't create primary buffer"));
+		LOG->Warn(hr_ssprintf(hr, "Couldn't create primary buffer").c_str());
 		return;
 	}
 
@@ -76,12 +76,12 @@ void DSound::SetPrimaryBufferMode()
 	// Set the primary buffer's format
 	hr = IDirectSoundBuffer_SetFormat( pBuffer, &waveformat );
 	if( FAILED(hr) )
-		LOG->Warn( hr_ssprintf(hr, "SetFormat on primary buffer") );
+		LOG->Warn( hr_ssprintf(hr, "SetFormat on primary buffer").c_str() );
 
 	DWORD got;
 	hr = pBuffer->GetFormat( &waveformat, sizeof(waveformat), &got );
 	if( FAILED(hr) )
-		LOG->Warn( hr_ssprintf(hr, "GetFormat on primary buffer") );
+		LOG->Warn( hr_ssprintf(hr, "GetFormat on primary buffer").c_str() );
 	else if( waveformat.nSamplesPerSec != 44100 )
 		LOG->Warn( "Primary buffer set to %i instead of 44100", waveformat.nSamplesPerSec );
 
@@ -109,7 +109,7 @@ DSound::DSound()
 {
 	HRESULT hr;
 	if( FAILED( hr = CoInitialize(nullptr) ) )
-		RageException::Throw( hr_ssprintf(hr, "CoInitialize") );
+		RageException::Throw( hr_ssprintf(hr, "CoInitialize").c_str() );
 	m_pDS = nullptr;
 }
 
@@ -129,7 +129,7 @@ RString DSound::Init()
 		Caps.dwSize = sizeof(Caps);
 		if( FAILED(hr = m_pDS->GetCaps(&Caps)) )
 		{
-			LOG->Warn( hr_ssprintf(hr, "m_pDS->GetCaps failed") );
+			LOG->Warn( hr_ssprintf(hr, "m_pDS->GetCaps failed").c_str() );
 		}
 		else
 		{
@@ -162,7 +162,7 @@ bool DSound::IsEmulated() const
 	HRESULT hr;
 	if( FAILED(hr = m_pDS->GetCaps(&Caps)) )
 	{
-		LOG->Warn( hr_ssprintf(hr, "m_pDS->GetCaps failed") );
+		LOG->Warn( hr_ssprintf(hr, "m_pDS->GetCaps failed").c_str() );
 		/* This is strange, so let's be conservative. */
 		return true;
 	}
@@ -273,7 +273,7 @@ RString DSoundBuf::Init( DSound &ds, DSoundBuf::hw hardware,
 	bcaps.dwSize=sizeof(bcaps);
 	hr = m_pBuffer->GetCaps( &bcaps );
 	if( FAILED(hr) )
-		return hr_ssprintf( hr, "m_pBuffer->GetCaps" );
+		return hr_ssprintf( hr, "m_pBuffer->GetCaps" ).c_str();
 	if( int(bcaps.dwBufferBytes) != m_iBufferSize )
 	{
 		LOG->Warn( "bcaps.dwBufferBytes (%i) != m_iBufferSize(%i); adjusting", bcaps.dwBufferBytes, m_iBufferSize );
@@ -289,7 +289,7 @@ RString DSoundBuf::Init( DSound &ds, DSoundBuf::hw hardware,
 	DWORD got;
 	hr = m_pBuffer->GetFormat( &waveformat, sizeof(waveformat), &got );
 	if( FAILED(hr) )
-		LOG->Warn( hr_ssprintf(hr, "GetFormat on secondary buffer") );
+		LOG->Warn( hr_ssprintf(hr, "GetFormat on secondary buffer").c_str() );
 	else if( (int) waveformat.nSamplesPerSec != m_iSampleRate )
 		LOG->Warn( "Secondary buffer set to %i instead of %i", waveformat.nSamplesPerSec, m_iSampleRate );
 
@@ -303,7 +303,7 @@ void DSoundBuf::SetSampleRate( int hz )
 	m_iSampleRate = hz;
 	HRESULT hr = m_pBuffer->SetFrequency( hz );
 	if( FAILED(hr) )
-		RageException::Throw( hr_ssprintf(hr, "m_pBuffer->SetFrequency(%i)", hz) );
+		RageException::Throw( hr_ssprintf(hr, "m_pBuffer->SetFrequency(%i)", hz).c_str() );
 }
 
 void DSoundBuf::SetVolume( float fVolume )
@@ -325,7 +325,7 @@ void DSoundBuf::SetVolume( float fVolume )
 	{
 		static bool bWarned = false;
 		if( !bWarned )
-			LOG->Warn( hr_ssprintf(hr, "DirectSoundBuffer::SetVolume(%i) failed", iNewVolume) );
+			LOG->Warn( hr_ssprintf(hr, "DirectSoundBuffer::SetVolume(%i) failed", iNewVolume).c_str() );
 		bWarned = true;
 		return;
 	}
@@ -464,7 +464,7 @@ bool DSoundBuf::get_output_buf( char **pBuffer, unsigned *pBufferSize, int iChun
 	}
 	if( result != DS_OK )
 	{
-		LOG->Warn( hr_ssprintf(result, "DirectSound::GetCurrentPosition failed") );
+		LOG->Warn( hr_ssprintf(result, "DirectSound::GetCurrentPosition failed" ).c_str() );
 		return false;
 	}
 
@@ -559,7 +559,7 @@ bool DSoundBuf::get_output_buf( char **pBuffer, unsigned *pBufferSize, int iChun
 
 	if( result != DS_OK )
 	{
-		LOG->Warn( hr_ssprintf(result, "Couldn't lock the DirectSound buffer.") );
+		LOG->Warn( hr_ssprintf(result, "Couldn't lock the DirectSound buffer.").c_str() );
 		return false;
 	}
 
@@ -598,7 +598,7 @@ int64_t DSoundBuf::GetPosition() const
 	}
 	if( hr != DS_OK )
 	{
-		LOG->Warn( hr_ssprintf(hr, "DirectSound::GetPosition failed") );
+		LOG->Warn( hr_ssprintf(hr, "DirectSound::GetPosition failed").c_str() );
 		iCursor = 0;
 	}
 

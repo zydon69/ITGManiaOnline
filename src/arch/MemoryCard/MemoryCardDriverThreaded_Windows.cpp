@@ -51,14 +51,14 @@ bool MemoryCardDriverThreaded_Windows::TestWrite( UsbStorageDevice* pDevice )
 	 * the chance of corruption if the user removes the device immediately, without doing anything. */
 	for( int i = 0; i < 10; ++i )
 	{
-		HANDLE hFile = CreateFile( ssprintf( "%stmp%i", pDevice->sOsMountDir.c_str(), RandomInt(100000)),
+		HANDLE hFile = CreateFile( ssprintf( "%stmp%i", pDevice->sOsMountDir.c_str(), RandomInt(100000)).c_str(),
 			GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
 			nullptr, CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr );
 
 		if( hFile == INVALID_HANDLE_VALUE )
 		{
 			DWORD iError = GetLastError();
-			LOG->Warn( werr_ssprintf(iError, "Couldn't write to %s", pDevice->sOsMountDir.c_str()) );
+			LOG->Warn( werr_ssprintf(iError, "Couldn't write to %s", pDevice->sOsMountDir.c_str()).c_str() );
 
 			if( iError == ERROR_FILE_EXISTS )
 				continue;
@@ -80,7 +80,7 @@ static bool IsFloppyDrive( const RString &sDrive )
 	int iRet = QueryDosDevice( sDrive.c_str(), szBuf, 1024 );
 	if( iRet == 0 )
 	{
-		LOG->Warn( werr_ssprintf(GetLastError(), "QueryDosDevice(%s)", sDrive.c_str()) );
+		LOG->Warn( werr_ssprintf(GetLastError(), "QueryDosDevice(%s)", sDrive.c_str()).c_str() );
 		return false;
 	}
 
@@ -115,7 +115,7 @@ void MemoryCardDriverThreaded_Windows::GetUSBStorageDevices( std::vector<UsbStor
 
 		RString sDrive = ssprintf( "%c:", 'A'+i%26 );
 
-		LOG->Trace( sDrive );
+		LOG->Trace(sDrive.c_str());
 
 		// we definitely don't need this lol
 		if (IsFloppyDrive(sDrive.c_str()))
@@ -204,12 +204,12 @@ void MemoryCardDriverThreaded_Windows::Unmount( UsbStorageDevice* pDevice )
 
 	if( hDevice == INVALID_HANDLE_VALUE )
 	{
-		LOG->Warn( werr_ssprintf(GetLastError(), "Couldn't open memory card device to flush (%s): CreateFile", pDevice->sDevice.c_str()) );
+		LOG->Warn( werr_ssprintf(GetLastError(), "Couldn't open memory card device to flush (%s): CreateFile", pDevice->sDevice.c_str()).c_str() );
 		return;
 	}
 
 	if( !FlushFileBuffers(hDevice) )
-		LOG->Warn( werr_ssprintf(GetLastError(), "Couldn't flush memory card device (%s): FlushFileBuffers", pDevice->sDevice.c_str()) );
+		LOG->Warn( werr_ssprintf(GetLastError(), "Couldn't flush memory card device (%s): FlushFileBuffers", pDevice->sDevice.c_str()).c_str() );
 	CloseHandle( hDevice );
 }
 

@@ -203,7 +203,7 @@ static void GetSoundDriverDebugInfo()
 		MMRESULT ret = waveOutGetDevCaps(i, &caps, sizeof(caps));
 		if(ret != MMSYSERR_NOERROR)
 		{
-			LOG->Info(wo_ssprintf(ret, "waveOutGetDevCaps(%i) failed", i));
+			LOG->Info(wo_ssprintf(ret, "waveOutGetDevCaps(%i) failed", i).c_str());
 			continue;
 		}
 		LOG->Info("Sound device %i: %s, %i.%i, MID %i, PID %i %s", i, caps.szPname,

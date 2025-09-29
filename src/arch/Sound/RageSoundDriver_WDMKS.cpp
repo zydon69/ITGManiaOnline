@@ -577,7 +577,7 @@ bool WinWdmFilter::Use( RString &sError )
 	if( m_hHandle == nullptr )
 	{
 		/* Open the filter */
-		m_hHandle = CreateFile( m_sFilterName, GENERIC_READ | GENERIC_WRITE, 0,
+		m_hHandle = CreateFile( m_sFilterName.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
 			nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, nullptr );
 
 		if( m_hHandle == nullptr )
@@ -1160,7 +1160,7 @@ void RageSoundDriver_WDMKS::MixerThread()
 	/* I don't trust this driver with THREAD_PRIORITY_TIME_CRITICAL just yet. */
 	if( !SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) )
 //	if( !SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) )
-		LOG->Warn( werr_ssprintf(GetLastError(), "Failed to set sound thread priority") );
+		LOG->Warn( werr_ssprintf(GetLastError(), "Failed to set sound thread priority").c_str() );
 
 	/* Enable priority boosting. */
 	SetThreadPriorityBoost( GetCurrentThread(), FALSE );
@@ -1191,7 +1191,7 @@ void RageSoundDriver_WDMKS::MixerThread()
 
 		if( iWait == WAIT_FAILED )
 		{
-			LOG->Warn( werr_ssprintf(GetLastError(), "WaitForMultipleObjects") );
+			LOG->Warn( werr_ssprintf(GetLastError(), "WaitForMultipleObjects").c_str() );
 			break;
 		}
 		if( iWait == WAIT_TIMEOUT )
@@ -1233,7 +1233,7 @@ int RageSoundDriver_WDMKS::MixerThread_start( void *p )
 void RageSoundDriver_WDMKS::SetupDecodingThread()
 {
 	if( !SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL) )
-		LOG->Warn( werr_ssprintf(GetLastError(), "Failed to set sound thread priority") );
+		LOG->Warn( werr_ssprintf(GetLastError(), "Failed to set sound thread priority").c_str() );
 }
 
 int64_t RageSoundDriver_WDMKS::GetPosition() const

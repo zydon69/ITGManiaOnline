@@ -831,7 +831,7 @@ INT_PTR CrashDialog::HandleMessage( UINT msg, WPARAM wParam, LPARAM lParam )
 				{
 					char sBuf[1024];
 					GetWindowText( hDlg, sBuf, 1024 );
-					SetWindowText( hDlg, ssprintf("%s (#%i)", sBuf, iID) );
+					SetWindowText( hDlg, ssprintf("%s (#%i)", sBuf, iID).c_str() );
 				}
 
 				ShowWindow( GetDlgItem(hDlg, IDC_PROGRESS), false );
