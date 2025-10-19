@@ -129,7 +129,7 @@ void HidDevice::GetDeviceInfo(int vid, const std::vector<int> pids, int interfac
 		// Look for the desired devices by iterating connected ones
 		while (cur_dev)
 		{
-			for (int i = 0; i < size; i++)
+			for (size_t i = 0; i < size; i++)
 			{
 				if (cur_dev->vendor_id == vid &&
 					cur_dev->product_id == pids[i])
@@ -191,7 +191,7 @@ HidResults HidDevice::Write(const unsigned char* data, size_t length)
 	if (!CheckConnection())
 		return NotConnected;
 
-	int result = hid_write(handle, data, length);
+	size_t result = static_cast<size_t>(hid_write(handle, data, length));
 
 	if (result != length)
 	{
