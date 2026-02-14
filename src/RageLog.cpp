@@ -447,6 +447,7 @@ const char* RageLog::GetAdditionalLog() {
 }
 
 void RageLog::MapLog(const std::string& key, const char* fmt, ...) {
+  LockMut(*g_Mutex) 
   std::string s;
 
   va_list va;
@@ -459,6 +460,7 @@ void RageLog::MapLog(const std::string& key, const char* fmt, ...) {
 }
 
 void RageLog::UnmapLog(const std::string& key) {
+  LockMut(*g_Mutex) 
   LogMaps.erase(key);
   UpdateMappedLog();
 }
