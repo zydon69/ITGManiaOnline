@@ -6,12 +6,10 @@
 struct CrashInfo {
   char m_CrashReason[1024 * 8];
 
-  const void* m_BacktracePointers[BACKTRACE_MAX_SIZE];
+  const void* m_BacktracePointers[BACKTRACE_MAX_SIZE] = {nullptr};
 
   enum { MAX_BACKTRACE_THREADS = 32 };
   const void* m_AlternateThreadBacktrace[MAX_BACKTRACE_THREADS]
-                                        [BACKTRACE_MAX_SIZE];
-  char m_AlternateThreadName[MAX_BACKTRACE_THREADS][128];
 
   CrashInfo() {
     m_CrashReason[0] = 0;
@@ -19,6 +17,8 @@ struct CrashInfo {
     memset(m_AlternateThreadName, 0, sizeof(m_AlternateThreadName));
     m_BacktracePointers[0] = nullptr;
   }
+                                        [BACKTRACE_MAX_SIZE] = {{nullptr}};
+  char m_AlternateThreadName[MAX_BACKTRACE_THREADS][512] = {{'\0'}};
 };
 
 #define CHILD_MAGIC_PARAMETER "--private-do-crash-handler"
