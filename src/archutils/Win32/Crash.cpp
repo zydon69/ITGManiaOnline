@@ -353,8 +353,8 @@ static DWORD WINAPI MainExceptionHandler(LPVOID lpParameter) {
     GetReason(pExc->ExceptionRecord, &g_CrashInfo);
   }
   CrashHandler::do_backtrace(
-      g_CrashInfo.m_BacktracePointers, BACKTRACE_MAX_SIZE, GetCurrentProcess(),
-      GetCurrentThread(), pExc->ContextRecord);
+      (void**)g_CrashInfo.m_BacktracePointers, BACKTRACE_MAX_SIZE,
+      GetCurrentProcess(), GetCurrentThread(), pExc->ContextRecord);
 
   RunChild();
 
@@ -655,8 +655,8 @@ void CrashHandler::ForceDeadlock(std::string reason, uint64_t iID) {
       } else {
         static const void* BacktracePointers[BACKTRACE_MAX_SIZE];
         do_backtrace(
-            g_CrashInfo.m_AlternateThreadBacktrace[iCnt], BACKTRACE_MAX_SIZE,
-            GetCurrentProcess(), hThread, &context);
+            (void**)g_CrashInfo.m_AlternateThreadBacktrace[iCnt],
+            BACKTRACE_MAX_SIZE, GetCurrentProcess(), hThread, &context);
 
         const char* pName = RageThread::GetThreadNameByID(iID);
         strncpy(
@@ -680,7 +680,7 @@ void CrashHandler::ForceDeadlock(std::string reason, uint64_t iID) {
     } else {
       static const void* BacktracePointers[BACKTRACE_MAX_SIZE];
       do_backtrace(
-          g_CrashInfo.m_AlternateThreadBacktrace[0], BACKTRACE_MAX_SIZE,
+          (void**)g_CrashInfo.m_AlternateThreadBacktrace[0], BACKTRACE_MAX_SIZE,
           GetCurrentProcess(), hThread, &context);
 
       const char* pName = RageThread::GetThreadNameByID(iID);
