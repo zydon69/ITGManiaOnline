@@ -1701,6 +1701,9 @@ void ScreenEdit::Init() {
 
   GAMESTATE->m_bIsUsingStepTiming = false;
   GAMESTATE->m_bInStepEditor = true;
+  // Is already zero if going into EditMode, but not always zero upon entering
+  // PracticeMode
+  GAMESTATE->m_Position.m_fMusicSeconds = 0.0;
 
   SubscribeToMessage("Judgment");
   main_player_ = GAMESTATE->GetMasterPlayerNumber();
@@ -4080,8 +4083,11 @@ void ScreenEdit::ScrollTo(float fDestinationBeat) {
       }
     }
   }
-
+  GAMESTATE->m_Position.m_fMusicSeconds =
+      GetAppropriateTiming().GetElapsedTimeFromBeat(fDestinationBeat);
   m_soundChangeLine.Play(true);
+  m_sprOverlay->PlayCommand("ScrollSong");
+  m_sprUnderlay->PlayCommand("ScrollSong");
 }
 
 static LocalizedString NEW_KEYSOUND_FILE(
