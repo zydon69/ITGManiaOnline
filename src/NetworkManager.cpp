@@ -342,10 +342,6 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
                 if (args.onResponse) {
                   args.onResponse(response);
                 }
-
-                if (!args.downloadFile.empty()) {
-                  FILEMAN->Remove(downloadFilename);
-                }
               });
         });
   }
