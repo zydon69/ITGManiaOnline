@@ -369,8 +369,8 @@ static void MigrateLegacyDirectory(const std::string& oldPath, const std::string
 
   BOOL destinationExists = [fileManager fileExistsAtPath:destination];
   BOOL destinationIsDirectory = NO;
-  if (destinationExists &&
-      ![fileManager fileExistsAtPath:destination isDirectory:&destinationIsDirectory]) {
+  if (destinationExists && ![fileManager fileExistsAtPath:destination
+                                              isDirectory:&destinationIsDirectory]) {
     return;
   }
 
@@ -394,7 +394,8 @@ static void MigrateLegacyDirectory(const std::string& oldPath, const std::string
   }
 
   // Iterate through the source directory, moving each file/folder individually.
-  // If the destination entry already exists, recurse if it's a directory, otherwise skip (to prevent overwriting).
+  // If the destination entry already exists, recurse if it's a directory, otherwise skip (to
+  // prevent overwriting).
   for (NSString* entry in sourceEntries) {
     NSString* sourceEntryPath = [source stringByAppendingPathComponent:entry];
     NSString* destinationEntryPath = [destination stringByAppendingPathComponent:entry];
@@ -407,7 +408,8 @@ static void MigrateLegacyDirectory(const std::string& oldPath, const std::string
 
     BOOL sourceEntryIsDirectory = NO;
     BOOL destinationEntryIsDirectory = NO;
-    BOOL sourceEntryExists = [fileManager fileExistsAtPath:sourceEntryPath isDirectory:&sourceEntryIsDirectory];
+    BOOL sourceEntryExists = [fileManager fileExistsAtPath:sourceEntryPath
+                                               isDirectory:&sourceEntryIsDirectory];
     [fileManager fileExistsAtPath:destinationEntryPath isDirectory:&destinationEntryIsDirectory];
 
     if (sourceEntryExists && sourceEntryIsDirectory && destinationEntryIsDirectory) {
