@@ -358,10 +358,6 @@ static void MigrateLegacyDirectory(const std::string& oldPath, const std::string
     return;
   }
 
-  if ([fileManager fileExistsAtPath:destination]) {
-    return;
-  }
-
   NSString* destinationParent = [destination stringByDeletingLastPathComponent];
   NSError* error = nil;
   if (![fileManager createDirectoryAtPath:destinationParent
@@ -371,10 +367,75 @@ static void MigrateLegacyDirectory(const std::string& oldPath, const std::string
     return;
   }
 
-  error = nil;
-  if ([fileManager moveItemAtPath:source toPath:destination error:&error]) {
+  BOOL destinationExists = [fileManager fileExistsAtPath:destination];
+  BOOL destinationIsDirectory = NO;
+  if (destinationExists &&
+      ![fileManager fileExistsAtPath:destination isDirectory:&destinationIsDirectory]) {
     return;
   }
+
+  // Fast path: if destination does not exist, a full move preserves directory contents.
+  if (!destinationExists) {
+    error = nil;
+    if ([fileManager moveItemAtPath:source toPath:destination error:&error]) {
+      return;
+    }
+    return;
+  }
+
+  if (!destinationIsDirectory) {
+    return;
+  }
+
+  // Merge source into destination so migration still works when startup created folders already.
+  NSArray<NSString*>* sourceEntries = [fileManager contentsOfDirectoryAtPath:source error:&error];
+  if (sourceEntries == nil) {
+    return;
+  }
+
+  // Iterate through the source directory, moving each file/folder individually.
+  // If the destination entry already exists, recurse if it's a directory, otherwise skip (to prevent overwriting).
+  for (NSString* entry in sourceEntries) {
+    NSString* sourceEntryPath = [source stringByAppendingPathComponent:entry];
+    NSString* destinationEntryPath = [destination stringByAppendingPathComponent:entry];
+
+    BOOL destinationEntryExists = [fileManager fileExistsAtPath:destinationEntryPath];
+    if (!destinationEntryExists) {
+      [fileManager moveItemAtPath:sourceEntryPath toPath:destinationEntryPath error:nil];
+      continue;
+    }
+
+    BOOL sourceEntryIsDirectory = NO;
+    BOOL destinationEntryIsDirectory = NO;
+    BOOL sourceEntryExists = [fileManager fileExistsAtPath:sourceEntryPath isDirectory:&sourceEntryIsDirectory];
+    [fileManager fileExistsAtPath:destinationEntryPath isDirectory:&destinationEntryIsDirectory];
+
+    if (sourceEntryExists && sourceEntryIsDirectory && destinationEntryIsDirectory) {
+      std::string sourceChild = [sourceEntryPath fileSystemRepresentation];
+      std::string destinationChild = [destinationEntryPath fileSystemRepresentation];
+      MigrateLegacyDirectory(sourceChild, destinationChild);
+    }
+  }
+
+  // Clean up if nothing is left after merge.
+  [fileManager removeItemAtPath:source error:nil];
+}
+
+static void RemoveLegacyDirectory(const std::string& oldPath) {
+  NSFileManager* fileManager = [NSFileManager defaultManager];
+  NSString* source = [NSString stringWithUTF8String:oldPath.c_str()];
+  NSError* error = nil;
+
+  if (source == nil) {
+    return;
+  }
+
+  BOOL sourceIsDirectory = NO;
+  if (![fileManager fileExistsAtPath:source isDirectory:&sourceIsDirectory] || !sourceIsDirectory) {
+    return;
+  }
+
+  [fileManager removeItemAtPath:source error:&error];
 }
 
 void ArchHooks::MountUserFilesystems(const std::string& sDirOfExecutable) {
@@ -383,11 +444,15 @@ void ArchHooks::MountUserFilesystems(const std::string& sDirOfExecutable) {
   std::string appSupportDir = PathForDirectory(NSApplicationSupportDirectory);
   std::string appSupportPath = ssprintf("%s/" PRODUCT_ID, appSupportDir.c_str());
 
+  // Do a best effort to migrate the save folder and screenshots.
   MigrateLegacyDirectory(libraryDir + "/Preferences/" PRODUCT_ID, appSupportPath + "/Save");
   MigrateLegacyDirectory(
       cachesDir + "/" PRODUCT_ID " Screenshots", appSupportPath + "/Screenshots");
-  MigrateLegacyDirectory(cachesDir + "/" PRODUCT_ID, appSupportPath + "/Cache");
-  MigrateLegacyDirectory(libraryDir + "/Logs/" PRODUCT_ID, appSupportPath + "/Logs");
+  // It's fine to just delete the old Cache directory, and just let the game regenerate it on boot.
+  RemoveLegacyDirectory(cachesDir + "/" PRODUCT_ID);
+  // It's fine to just delete the old Logs directory, as the contents of the data will get
+  // regenerated on boot. In that case, we can just avoid the complexity of migrating directories.
+  RemoveLegacyDirectory(libraryDir + "/Logs/" PRODUCT_ID);
 
   MountDirectories(appSupportPath);
 }
