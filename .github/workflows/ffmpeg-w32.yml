@@ -66,6 +66,7 @@ jobs:
         COMMON_FLAGS_FFMPEG="--cpu=x86-64 \
           --disable-runtime-cpudetect \
           --disable-autodetect \
+          --disable-asm \
           --disable-avdevice \
           --disable-avfilter \
           --disable-debug \
@@ -78,16 +79,6 @@ jobs:
           --disable-programs \
           --disable-static \
           --disable-swresample \
-          --disable-sse3 \
-          --disable-ssse3 \
-          --disable-sse4 \
-          --disable-sse42 \
-          --disable-avx \
-          --disable-avx2 \
-          --disable-avx512 \
-          --disable-fma3 \
-          --disable-fma4 \
-          --disable-aesni \
           --enable-bzlib \
           --enable-d3d11va \
           --enable-dxva2 \
