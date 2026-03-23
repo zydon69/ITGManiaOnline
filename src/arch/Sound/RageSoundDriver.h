@@ -223,10 +223,10 @@ class RageSoundDriver : public RageDriver {
 // Can't use Create##name because many of these have -sw suffixes.
 #define REGISTER_SOUND_DRIVER_CLASS2(name, x) \
   static RegisterRageDriver register_##x(     \
-      &RageSoundDriver::m_pDriverList, #name, \
+      &RageSoundDriver::m_pDriverList, name,  \
       CreateClass<RageSoundDriver_##x, RageDriver>)
 #define REGISTER_SOUND_DRIVER_CLASS(name) \
-  REGISTER_SOUND_DRIVER_CLASS2(name, name)
+  REGISTER_SOUND_DRIVER_CLASS2(#name, name)
 
 /*
  * (c) 2002-2004 Glenn Maynard

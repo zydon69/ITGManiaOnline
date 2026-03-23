@@ -21,7 +21,7 @@
 #include "ver.h"
 
 /* Register the RageSoundDriver_Pulseaudio class as sound driver "Pulse" */
-REGISTER_SOUND_DRIVER_CLASS2(Pulse, PulseAudio);
+REGISTER_SOUND_DRIVER_CLASS2("Pulse", PulseAudio);
 
 /* Constructor */
 RageSoundDriver_PulseAudio::RageSoundDriver_PulseAudio()

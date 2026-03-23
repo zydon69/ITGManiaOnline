@@ -11,7 +11,7 @@
 #include <CoreAudio/CoreAudio.h>
 #include <CoreServices/CoreServices.h>
 
-REGISTER_SOUND_DRIVER_CLASS2(AudioUnit, AU);
+REGISTER_SOUND_DRIVER_CLASS2("AudioUnit", AU);
 
 static const UInt32 kFramesPerPacket = 1;
 static const UInt32 kChannelsPerFrame = 2;
