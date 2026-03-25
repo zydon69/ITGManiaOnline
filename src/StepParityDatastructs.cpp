@@ -161,9 +161,10 @@ void StageLayout::preCalculateStuff() {
 
 // Counts the number of ones in the binary representation
 // of the given `x`.
-inline int popcount(unsigned int x) {
-#if defined(__GNUC__) || defined(__clang__)
-  return __builtin_popcount(x);
+// TODO: use std::popcount if we upgrade to C++20.
+inline int popcount(uint64_t x) {
+#if defined(__clang__) || defined(__GNUC__)
+  return __builtin_popcountll(x);
 #else
   // Fallback implementation
   int count = 0;
