@@ -166,13 +166,17 @@ inline int popcount(uint64_t x) {
 #if defined(__clang__) || defined(__GNUC__)
   return __builtin_popcountll(x);
 #else
-  // Fallback implementation
-  int count = 0;
-  while (x) {
-    x &= x - 1;  // Clear the lowest set bit
-    count++;
-  }
-  return count;
+  // popcount64b from https://en.wikipedia.org/wiki/Hamming_weight
+  constexpr uint64_t m1 = 0x5555555555555555;  // binary: 0101...
+  constexpr uint64_t m2 = 0x3333333333333333;  // binary: 00110011..
+  constexpr uint64_t m4 = 0x0f0f0f0f0f0f0f0f;  // binary:  4 zeros,  4 ones ...
+  x -= (x >> 1) & m1;              // put count of each 2 bits into those 2 bits
+  x = (x & m2) + ((x >> 2) & m2);  // put count of each 4 bits into those 4 bits
+  x = (x + (x >> 4)) & m4;         // put count of each 8 bits into those 8 bits
+  x += x >> 8;   // put count of each 16 bits into their lowest 8 bits
+  x += x >> 16;  // put count of each 32 bits into their lowest 8 bits
+  x += x >> 32;  // put count of each 64 bits into their lowest 8 bits
+  return x & 0x7f;
 #endif
 }
 
