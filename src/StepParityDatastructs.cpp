@@ -164,8 +164,6 @@ void StageLayout::preCalculateStuff() {
 inline int popcount(unsigned int x) {
 #if defined(__GNUC__) || defined(__clang__)
   return __builtin_popcount(x);
-#elif defined(_MSC_VER)
-  return __popcnt(x);
 #else
   // Fallback implementation
   int count = 0;
