@@ -228,11 +228,13 @@ elseif(APPLE)
     "${SM_ROOT_DIR}/Themes"
   )
 
-  # Xcode understands bundle resource directories directly. Other generators
-  # (for example Unix Makefiles) end up emitting non-recursive copy commands.
-  if(CMAKE_GENERATOR STREQUAL "Xcode")
-    target_sources("${SM_EXE_NAME}" PUBLIC ${APPLE_BUNDLE_RESOURCES})
-    set_source_files_properties(${APPLE_BUNDLE_RESOURCES} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+  if(NOT WITH_MACOS_PORTABLE_APP)
+    # Xcode understands bundle resource directories directly. Other generators
+    # (for example Unix Makefiles) end up emitting non-recursive copy commands.
+    if(CMAKE_GENERATOR STREQUAL "Xcode")
+      target_sources("${SM_EXE_NAME}" PUBLIC ${APPLE_BUNDLE_RESOURCES})
+      set_source_files_properties(${APPLE_BUNDLE_RESOURCES} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    endif()
   endif()
 
   target_compile_definitions("${SM_EXE_NAME}" PRIVATE _XOPEN_SOURCE)
@@ -247,34 +249,62 @@ elseif(APPLE)
     set(SM_APP_RELEASE_NAME "${SM_NAME_RELEASE}")
   endif()
 
-    # Always copy bundle resources recursively so the .app contains defaults
-    # regardless of generator (Xcode, Unix Makefiles, Ninja, etc.).
-    add_custom_command(TARGET "${SM_EXE_NAME}" POST_BUILD
-           COMMAND ${CMAKE_COMMAND} -E make_directory
-             "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources")
-
-    foreach(RESOURCE_DIR IN LISTS APPLE_BUNDLE_RESOURCES)
-      get_filename_component(RESOURCE_NAME "${RESOURCE_DIR}" NAME)
+    if(NOT WITH_MACOS_PORTABLE_APP)
+      # Always copy bundle resources recursively so the .app contains defaults
+      # regardless of generator (Xcode, Unix Makefiles, Ninja, etc.).
       add_custom_command(TARGET "${SM_EXE_NAME}" POST_BUILD
-                 COMMAND ${CMAKE_COMMAND} -E remove_directory
-               "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/${RESOURCE_NAME}"
-             COMMAND ${CMAKE_COMMAND} -E copy_directory
-               "${RESOURCE_DIR}"
-               "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/${RESOURCE_NAME}")
-    endforeach()
+             COMMAND ${CMAKE_COMMAND} -E make_directory
+               "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources")
 
-    # Always wipe and recreate an empty Songs folder so stale songs from a prior
-    # WITH_CLUB_FANTASTIC build don't persist in the bundle.
-    add_custom_command(TARGET "${SM_EXE_NAME}" POST_BUILD
-                       COMMAND ${CMAKE_COMMAND} -E remove_directory
-                               "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/Songs"
-                       COMMAND ${CMAKE_COMMAND} -E make_directory
-                               "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/Songs")
+      foreach(RESOURCE_DIR IN LISTS APPLE_BUNDLE_RESOURCES)
+        get_filename_component(RESOURCE_NAME "${RESOURCE_DIR}" NAME)
+        add_custom_command(TARGET "${SM_EXE_NAME}" POST_BUILD
+                   COMMAND ${CMAKE_COMMAND} -E remove_directory
+                 "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/${RESOURCE_NAME}"
+               COMMAND ${CMAKE_COMMAND} -E copy_directory
+                 "${RESOURCE_DIR}"
+                 "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/${RESOURCE_NAME}")
+      endforeach()
 
-    add_custom_command(TARGET "${SM_EXE_NAME}" POST_BUILD
-           COMMAND ${CMAKE_COMMAND} -E copy
-             "${SM_XCODE_DIR}/logo.icns"
-             "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/")
+      # Always wipe and recreate an empty Songs folder so stale songs from a prior
+      # WITH_CLUB_FANTASTIC build don't persist in the bundle.
+      add_custom_command(TARGET "${SM_EXE_NAME}" POST_BUILD
+                         COMMAND ${CMAKE_COMMAND} -E remove_directory
+                                 "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/Songs"
+                         COMMAND ${CMAKE_COMMAND} -E make_directory
+                                 "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/Songs")
+
+      add_custom_command(TARGET "${SM_EXE_NAME}" POST_BUILD
+             COMMAND ${CMAKE_COMMAND} -E copy
+               "${SM_XCODE_DIR}/logo.icns"
+               "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/")
+    else()
+      message(STATUS "WITH_MACOS_PORTABLE_APP is ON: creating empty .app Resources directories and bundling only the icon")
+
+      add_custom_command(TARGET "${SM_EXE_NAME}" POST_BUILD
+             COMMAND ${CMAKE_COMMAND} -E make_directory
+               "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources")
+
+      foreach(RESOURCE_DIR IN LISTS APPLE_BUNDLE_RESOURCES)
+        get_filename_component(RESOURCE_NAME "${RESOURCE_DIR}" NAME)
+        add_custom_command(TARGET "${SM_EXE_NAME}" POST_BUILD
+                   COMMAND ${CMAKE_COMMAND} -E remove_directory
+                 "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/${RESOURCE_NAME}"
+               COMMAND ${CMAKE_COMMAND} -E make_directory
+                 "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/${RESOURCE_NAME}")
+      endforeach()
+
+      add_custom_command(TARGET "${SM_EXE_NAME}" POST_BUILD
+                         COMMAND ${CMAKE_COMMAND} -E remove_directory
+                                 "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/Songs"
+                         COMMAND ${CMAKE_COMMAND} -E make_directory
+                                 "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/Songs")
+
+      add_custom_command(TARGET "${SM_EXE_NAME}" POST_BUILD
+             COMMAND ${CMAKE_COMMAND} -E copy
+               "${SM_XCODE_DIR}/logo.icns"
+               "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/")
+    endif()
 else() # Linux
   set_target_properties("${SM_EXE_NAME}"
                         PROPERTIES RUNTIME_OUTPUT_DIRECTORY
