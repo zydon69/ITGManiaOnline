@@ -1,5 +1,9 @@
 #include <cstddef>
 
+#ifndef FUNC
+#error "Improper use of FUNC X-macro in ALSA9Functions.h"
+#endif
+
 FUNC(size_t, snd_pcm_hw_params_sizeof, (void));
 FUNC(size_t, snd_pcm_sw_params_sizeof, (void));
 FUNC(size_t, snd_pcm_info_sizeof, (void));
