@@ -1,3 +1,5 @@
+#ifndef EDITMODEPLAYERMANAGER_H
+#define EDITMODEPLAYERMANAGER_H
 
 #include <memory>
 #include <unordered_map>
@@ -49,3 +51,4 @@ class EditModePlayerManager {
   std::unordered_map<PlayerNumber, std::shared_ptr<PlayerPlus>> players_;
   bool center_;
 };
+#endif

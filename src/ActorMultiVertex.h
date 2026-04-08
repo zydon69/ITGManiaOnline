@@ -1,3 +1,6 @@
+#ifndef ACTORMULTIVERTEX_H
+#define ACTORMULTIVERTEX_H
+
 /** @brief ActorMultiVertex - An actor with mutiple vertices. Can be used to
  * create shapes that quads can't. */
 
@@ -225,3 +228,4 @@ class ActorMultiVertex : public Actor {
  * OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  */
+#endif
