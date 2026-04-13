@@ -50,3 +50,7 @@
 	path = extern/hidapi
 	url = https://github.com/libusb/hidapi.git
 	shallow = true
+[submodule "extern/stb"]
+	path = extern/stb
+	url = https://github.com/nothings/stb
+	shallow = true
