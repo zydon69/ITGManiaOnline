@@ -17,6 +17,7 @@ list(APPEND FFMPEG_CONFIGURE
             "--disable-vaapi"
             "--disable-bzlib"
             "--enable-gpl"
+            "--enable-version3"
             "--enable-pthreads"
             "--enable-static"
             "--enable-zlib"
