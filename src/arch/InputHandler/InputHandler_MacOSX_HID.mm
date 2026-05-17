@@ -15,14 +15,14 @@
 #include <Carbon/Carbon.h>
 #include <IOKit/IOMessage.h>
 
-REGISTER_INPUT_HANDLER_CLASS2(HID, MacOSX_HID);
-
 static double GetTimebaseFactor() {
   mach_timebase_info_data_t timeBase;
   mach_timebase_info(&timeBase);
   return timeBase.numer / (1000.0 * timeBase.denom);
 }
 static const double g_fTimebaseFactor = GetTimebaseFactor();
+
+REGISTER_INPUT_HANDLER_CLASS2(HID, MacOSX_HID);
 
 void InputHandler_MacOSX_HID::QueueCallback(void* target, int result, void* refcon, void* sender) {
   // The result seems useless as you can't actually return anything...
