@@ -1,0 +1,108 @@
+# Traditional Compilation File Stuff.
+*.o
+*.obj
+*.a
+
+# CMake Files/Directories
+CMakeFiles/
+CMakeCache.txt
+CMakeScripts/
+cmake_install.cmake
+CPackConfig.cmake
+CPackSourceConfig.cmake
+# The following are generated from CMake, and thus should be stopped.
+ITGmania.project
+ITGmania.workspace
+Build/
+!Build/INSTALL.md
+!Build/README.md
+verdata.*
+
+# Text Editor Based Items
+___*
+*~
+*.log
+!change.log
+*.sublime-project
+*.sublime-workspace
+*.old
+.codelite/
+.vscode/
+.idea/
+
+# Patch Files
+*.diff
+*.orig
+*.patch
+*.rej
+
+# Mac General Files
+*.app
+*.dmg
+.DS_Store
+
+# Visual Studio
+*.pdb
+*.sdf
+*.opensdf
+*.suo
+*.exp
+*.ilk
+*.map
+*.aps
+*.res
+.vs/
+
+# Windows General Files
+Thumbs.db
+*.exe
+*.dll
+!extern/ffmpeg-w32/*/*.dll
+
+# Linux General Files
+itgmania
+itgmania-debug
+itgmania-min-size
+itgmania-release-symbols
+*.core
+
+# StepMania Specific
+*.smzip
+gitversion.h
+Cache/
+Save/
+Logs/
+Songs/*
+Screenshots/
+portable.ini
+Docs/doxygen
+Data/UserPrefs
+Data/uPrefs
+Data/GamePrefs/*.cfg
+Data/Static.ini
+src/*.so
+Data/SpeedMods.txt
+crashinfo.txt
+Utils/temp*
+Program/ITGmania*.lib
+
+# Unknown File Types
+*.dia
+tests/*.err
+*.ncb
+*.tlog
+*.lastbuildstate
+*.unsuccessfulbuild
+*.ipch
+*.dep
+*.idb
+*.user
+*.mode1v3
+*.vdi
+*.lnk
+BuildLog.htm
+*.pch
+*.swp
+*.pc
+*.d
+*.lastcodeanalysissucceeded

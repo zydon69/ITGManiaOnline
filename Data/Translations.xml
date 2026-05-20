@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+You can define translations in this file to replace text in the song wheel.
+
+   - Each translation entry is defined within a <Translation> tag.
+   - The attributes TitleFrom, ArtistFrom, SubtitleFrom specify the original text to match.
+   - The attributes TitleTo, ArtistTo, SubtitleTo specify the text to replace the matched text with.
+
+To create your own translation value in the Translations.xml file, follow these steps:
+
+1. Create a New Translation Entry:
+   - Add a new <Translation> tag within the <Songs> section.
+   - Define the TitleFrom, ArtistFrom, and/or SubtitleFrom attributes with the text you want to match.
+   - Define the TitleTo, ArtistTo, and/or SubtitleTo attributes with the text you want to replace the matched text with.
+   - All lines, by default, must match the entire line; for example, "Foo" matches only "Foo", not "Foobar".
+   - Matches are case-insensitive.
+   - Courses are matched by title only.
+
+2. Use Regular Expressions:
+   - The From attributes can use regular expressions to match patterns.
+   - Ensure your regular expressions are correctly formatted and case-insensitive.
+   - If all From lines for a set are matched, all To lines are replaced.
+
+3. Example:
+   - Here is an example of how to add a new translation entry:
+   
+<Translation TitleFrom="Old Title" TitleTo="New Title" />
+   
+   - If you want to match an artist as well:
+   
+<Translation TitleFrom="Old Title" ArtistFrom="Old Artist" TitleTo="New Title" ArtistTo="New Artist" />
+
+4. Save and Apply Changes:
+   - Save the Translations.xml file.
+   - To apply the changes, delete the files in the "Cache" directory as mentioned in the comments of the XML file.
+
+ --- Example ---
+
+To add a translation for a song titled "Happy Song" by "John Doe" to be replaced with "Joyful Melody" by "Jane Doe":
+
+<Translation TitleFrom="Happy Song" ArtistFrom="John Doe" TitleTo="Joyful Melody" ArtistTo="Jane Doe" />
+
+or, to shorten the title of all songs from "In The Groove" to "ITG":
+
+<Translation TitleFrom="((In The Groove)|(In the Groove))(.*)" TitleTo="ITG\${4}" />
+
+Note that changes to this file are only applied to songs when they are first loaded.
+Delete the files in the "Cache" directory after making changes.
+-->
+<Translations>
+	<Songs>
+		<!-- Add your translations here. -->
+	<!-- Subtitles: -->
+		<!-- Add your translations here. -->
+	<!-- Artists: -->
+		<!-- Add your translations here. -->
+	</Songs>
+	<Courses>
+		<!-- Add your translations here. -->
+	</Courses>
+	<Groups>
+		<!-- Add your translations here. -->
+		<Translation TitleFrom="((In The Groove)|(In the Groove))(.*)" TitleTo="ITG\${4}" />
+	</Groups>
+</Translations>
