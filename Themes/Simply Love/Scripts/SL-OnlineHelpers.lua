@@ -812,6 +812,9 @@ CreateOnlineHandler = function()
           local screenName = screen and screen:GetName() or "NoScreen"
 					if ITGOnline and ITGOnline.NoteScreenChanged then
 						ITGOnline:NoteScreenChanged(screenName)
+						if ITGOnline.ConsumeNeedsSyncAfterScreenCancel and ITGOnline:ConsumeNeedsSyncAfterScreenCancel() and ITGOnline.Sync then
+							ITGOnline:Sync()
+						end
 					end
 					startHoldTime = { ["P1"] = 0, ["P2"] = 0 }
 					lastDisconnectCountdown = nil

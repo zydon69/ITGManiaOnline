@@ -493,15 +493,6 @@ bool ScreenSelectMusic::Input(const InputEventPlus& input) {
   // reset announcer timer
   m_timerIdleComment.GetDeltaTime();
 
-  if (input.DeviceI.device == DEVICE_KEYBOARD &&
-      input.DeviceI.button == KEY_BACK && input.type == IET_FIRST_PRESS &&
-      HasActiveITGOnlineRoom()) {
-    m_BackgroundLoader.Abort();
-    SetNextScreenName("ScreenOnlineLobbies");
-    StartTransitioningScreen(SM_GoToNextScreen);
-    return true;
-  }
-
   // debugging?
   // I just like being able to see untransliterated titles occasionally.
   if (input.DeviceI.device == DEVICE_KEYBOARD &&

@@ -34,6 +34,7 @@ ITGOnline.currentScreenName = ITGOnline.currentScreenName or "NoScreen"
 ITGOnline.authRefreshInFlight = ITGOnline.authRefreshInFlight or false
 ITGOnline.authRefreshCallbacks = ITGOnline.authRefreshCallbacks or {}
 ITGOnline.lastFinalScoreRoomId = ITGOnline.lastFinalScoreRoomId or nil
+ITGOnline.needsSyncAfterScreenCancel = ITGOnline.needsSyncAfterScreenCancel or false
 
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -66,7 +67,8 @@ local function response_message(response, decoded, fallback)
 end
 
 local function online_trace(message)
-	if Trace then Trace("ITG Online: " .. tostring(message or "")) end
+	local line = "ITG Online: " .. tostring(message or "")
+	if Warn then Warn(line) elseif Trace then Trace(line) end
 end
 
 local function request_id()
@@ -243,6 +245,13 @@ function ITGOnline:SaveConfig(values)
 	return nextConfig
 end
 
+function ITGOnline:ClearTransientSecrets()
+	ITGOnline.transientPassword = nil
+	if self.config then
+		self.config.password = ""
+	end
+end
+
 function ITGOnline:Configured()
 	local config = self:Config()
 	return config.email ~= "" and config.password ~= ""
@@ -312,13 +321,14 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 			if response and response.statusCode == 401 and path ~= "/auth/login" and not self.disconnecting and not alreadyRetriedAuth then
 				self:Relogin(function(loginOk)
 					if loginOk then
-						self:Request(method, path, payload, callback, true)
+						self:Request(method, path, payload, callback, true, options)
 						return
 					end
 
 					self.sessionExpired = true
 					if self.socket then self.socket:Close() end
 					self.socket = nil
+					self:ClearTransientSecrets()
 					MESSAGEMAN:Broadcast("OnlineSessionExpired")
 					if callback then callback(false, decoded, response) end
 				end)
@@ -347,6 +357,7 @@ function ITGOnline:CancelPendingRequests()
 end
 
 function ITGOnline:CancelScreenBoundRequests()
+	local cancelledAny = false
 	for requestId, request in pairs(self.requests or {}) do
 		if request.cancelOnScreenChange == true and request.screenGeneration ~= self.screenGeneration then
 			request.cancelled = true
@@ -354,8 +365,18 @@ function ITGOnline:CancelScreenBoundRequests()
 				request.future:Cancel()
 			end
 			self.requests[requestId] = nil
+			cancelledAny = true
 		end
 	end
+	if cancelledAny then
+		self.needsSyncAfterScreenCancel = true
+	end
+end
+
+function ITGOnline:ConsumeNeedsSyncAfterScreenCancel()
+	if not self.needsSyncAfterScreenCancel then return false end
+	self.needsSyncAfterScreenCancel = false
+	return true
 end
 
 function ITGOnline:NoteScreenChanged(screenName)
@@ -472,6 +493,9 @@ function ITGOnline:Disconnect()
 	if self.socket then
 		self.socket:Close()
 	end
+	if NETWORK and NETWORK.CloseAllWebSockets then
+		NETWORK:CloseAllWebSockets()
+	end
 	self.socket = nil
 	self.token = nil
 	self.user = nil
@@ -480,6 +504,7 @@ function ITGOnline:Disconnect()
 	self.currentSongPayload = nil
 	self.pendingJoinRoomId = nil
 	self.scheduledStartLocalTime = nil
+	self:ClearTransientSecrets()
 end
 
 function ITGOnline:Sync(callback)
@@ -592,7 +617,7 @@ function ITGOnline:SelectSong(callback)
 			self:FetchRoom(self.currentRoomId)
 		end
 		if callback then callback(ok, decoded, response) end
-	end)
+	end, nil, { cancelOnScreenChange = true })
 end
 
 function ITGOnline:SelectSongAndMarkLobbyReady(callback)
@@ -633,7 +658,7 @@ function ITGOnline:PreviewSong(callback)
 		folder_name = payload.folder_name,
 		difficulty = payload.difficulty,
 		meter = payload.meter,
-	}, callback)
+	}, callback, nil, { cancelOnScreenChange = true })
 end
 
 function ITGOnline:ServerJudgments(player)
@@ -664,8 +689,10 @@ function ITGOnline:SendScore(force, final)
 	local dancePoints = stats:GetPercentDancePoints()
 	local accuracy = math.max(0, math.min(100, (tonumber(dancePoints) or 0) * 100))
 	local exScore = CalculateExScore(player) or 0
-	local songPosition = GAMESTATE:GetPlayerState(player):GetSongPosition():GetMusicSeconds()
+	local songPositionState = GAMESTATE:GetPlayerState(player):GetSongPosition()
+	local songPosition = songPositionState.GetMusicSecondsVisible and songPositionState:GetMusicSecondsVisible() or songPositionState:GetMusicSeconds()
 	local maxCombo = stats.MaxCombo and stats:MaxCombo() or stats:GetCurrentCombo()
+	local failed = stats.GetFailed and stats:GetFailed() == true or false
 
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/score", {
 		score = math.max(0, math.floor(exScore * 1000000)),
@@ -675,7 +702,7 @@ function ITGOnline:SendScore(force, final)
 		song_position_seconds = math.max(0, songPosition or 0),
 		song_hash = self.currentSongPayload.song_hash,
 		chart_hash = self.currentSongPayload.chart_hash,
-		failed = stats:GetFailed() and true or false,
+		failed = failed,
 		final = final and true or false,
 		judgments = self:ServerJudgments(player),
 	}, function(ok, decoded, response)
@@ -702,7 +729,7 @@ function ITGOnline:SetReady(phase, isReady, callback)
 			self.currentRoom = decoded.room
 		end
 		if callback then callback(ok, decoded, response) end
-	end)
+	end, nil, { cancelOnScreenChange = true })
 end
 
 function ITGOnline:MarkConfigReady(callback)
@@ -770,7 +797,7 @@ function ITGOnline:StartRoom(callback)
 			self.currentRoom = decoded.room
 		end
 		if callback then callback(ok, decoded, response) end
-	end)
+	end, nil, { cancelOnScreenChange = true })
 end
 
 function ITGOnline:UpdateScheduledStart(room)
@@ -826,7 +853,7 @@ function ITGOnline:CreateRoom(callback, visibility)
 			self.currentRoom = decoded.room
 		end
 		if callback then callback(ok, decoded, response) end
-	end)
+	end, nil, { cancelOnScreenChange = true })
 end
 
 function ITGOnline:RequestJoinRoom(roomId, callback)
@@ -836,7 +863,7 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 			self.pendingJoinRoomId = nil
 		end
 		if callback then callback(ok, decoded, response) end
-	end)
+	end, nil, { cancelOnScreenChange = true })
 end
 
 function ITGOnline:ReportSongAvailability(missing, reason, callback)
@@ -854,7 +881,7 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
 		end
 		if callback then callback(ok, decoded, response) end
-	end)
+	end, nil, { cancelOnScreenChange = true })
 end
 
 function ITGOnline:RequestJoinUserRoom(userId, callback)
@@ -866,13 +893,13 @@ function ITGOnline:RequestJoinUserRoom(userId, callback)
 			self.pendingJoinRoomId = decoded.join_request.room_id
 		end
 		if callback then callback(ok, decoded, response) end
-	end)
+	end, nil, { cancelOnScreenChange = true })
 end
 
 function ITGOnline:InviteUser(roomId, userId, callback)
 	self:Request("POST", "/rooms/" .. tostring(roomId) .. "/invitations", {
 		user_id = tonumber(userId) or userId,
-	}, callback)
+	}, callback, nil, { cancelOnScreenChange = true })
 end
 
 function ITGOnline:InviteUserToNewRoom(userId, visibility, callback)
@@ -903,21 +930,21 @@ function ITGOnline:AcceptInvitation(invitationId, callback)
 			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
 		end
 		if callback then callback(ok, decoded, response) end
-	end)
+	end, nil, { cancelOnScreenChange = true })
 end
 
 function ITGOnline:DeclineInvitation(invitationId, callback)
-	self:Request("POST", "/room-invitations/" .. tostring(invitationId) .. "/decline", {}, callback)
+	self:Request("POST", "/room-invitations/" .. tostring(invitationId) .. "/decline", {}, callback, nil, { cancelOnScreenChange = true })
 end
 
 function ITGOnline:AcceptJoinRequest(joinRequestId, callback)
-	self:Request("POST", "/room-join-requests/" .. tostring(joinRequestId) .. "/accept", {}, callback)
+	self:Request("POST", "/room-join-requests/" .. tostring(joinRequestId) .. "/accept", {}, callback, nil, { cancelOnScreenChange = true })
 end
 
 function ITGOnline:DeclineJoinRequest(joinRequestId, reason, callback)
 	self:Request("POST", "/room-join-requests/" .. tostring(joinRequestId) .. "/decline", {
 		reason = reason or "",
-	}, callback)
+	}, callback, nil, { cancelOnScreenChange = true })
 end
 
 function ITGOnline:LeaveRoom(callback)
@@ -935,7 +962,7 @@ function ITGOnline:LeaveRoom(callback)
 			self.pendingJoinRoomId = nil
 		end
 		if callback then callback(ok or gone, decoded, response) end
-	end)
+	end, nil, { cancelOnScreenChange = true })
 end
 
 function ITGOnline:FetchRoom(roomId, callback)

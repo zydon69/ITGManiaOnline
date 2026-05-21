@@ -155,6 +155,7 @@ class NetworkManager {
 
   static Preference<bool> httpEnabled;
   static Preference<std::string> httpAllowHosts;
+  static Preference<std::string> httpDenyHosts;
 
   std::atomic<bool> shutdownWorkers{false};
 

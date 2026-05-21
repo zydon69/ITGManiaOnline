@@ -45,8 +45,8 @@ constexpr const char* BUILT_IN_HTTP_ALLOW_HOSTS =
 Preference<bool> NetworkManager::httpEnabled(
     "HttpEnabled", true, nullptr, PreferenceType::Immutable);
 Preference<std::string> NetworkManager::httpAllowHosts(
-    "HttpAllowHosts", BUILT_IN_HTTP_ALLOW_HOSTS, nullptr,
-    PreferenceType::Immutable);
+    "HttpAllowHosts", BUILT_IN_HTTP_ALLOW_HOSTS);
+Preference<std::string> NetworkManager::httpDenyHosts("HttpDenyHosts", "");
 
 static const char* HttpErrorCodeNames[] = {
     "Blocked",
@@ -79,8 +79,40 @@ static const char* WebSocketMessageTypeNames[] = {
     "Error",
 };
 
-static constexpr int kMaxMainThreadTasksPerUpdate = 32;
-static constexpr float kMaxMainThreadTaskSecondsPerUpdate = 0.001f;
+static constexpr int kMaxMainThreadTasksPerUpdate = 128;
+static constexpr float kMaxMainThreadTaskSecondsPerUpdate = 0.002f;
+
+static bool HostMatchesPattern(const std::string& host, const std::string& pattern) {
+  if (pattern.empty()) {
+    return false;
+  }
+
+  if (pattern.substr(0, 2) == "*." && host.length() >= pattern.length()) {
+    size_t pos = host.length() - pattern.length() + 1;
+    return host.substr(pos) == pattern.substr(1);
+  }
+
+  return host == pattern;
+}
+
+static const std::vector<std::string>& CachedHostList(
+    const std::string& rawValue,
+    std::string& cachedRawValue,
+    std::vector<std::string>& cachedHosts) {
+  std::string normalized = rawValue;
+  MakeLower(normalized);
+
+  if (normalized != cachedRawValue) {
+    cachedRawValue = normalized;
+    cachedHosts.clear();
+    split(cachedRawValue, ",", cachedHosts);
+    for (auto& host : cachedHosts) {
+      Trim(host);
+    }
+  }
+
+  return cachedHosts;
+}
 
 XToString(WebSocketMessageType);
 StringToX(WebSocketMessageType);
@@ -270,25 +302,24 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
 
   MakeLower(host);
 
-  std::string allowedHostsStr = this->httpAllowHosts.Get();
-  MakeLower(allowedHostsStr);
+  static std::string cachedDeniedRaw;
+  static std::vector<std::string> cachedDeniedHosts;
+  const auto& deniedHosts =
+      CachedHostList(this->httpDenyHosts.Get(), cachedDeniedRaw, cachedDeniedHosts);
 
-  std::vector<std::string> allowedHosts;
-  split(allowedHostsStr, ",", allowedHosts);
+  for (const auto& deniedHost : deniedHosts) {
+    if (HostMatchesPattern(host, deniedHost)) {
+      return false;
+    }
+  }
+
+  static std::string cachedAllowedRaw;
+  static std::vector<std::string> cachedAllowedHosts;
+  const auto& allowedHosts =
+      CachedHostList(this->httpAllowHosts.Get(), cachedAllowedRaw, cachedAllowedHosts);
 
   for (const auto& allowedHost : allowedHosts) {
-    // subdomain wildcards; ".domain" doesn't match "*.domain", but "a.domain"
-    // does
-    if (allowedHost.substr(0, 2) == "*." &&
-        host.length() >= allowedHost.length()) {
-      size_t pos = host.length() - allowedHost.length() + 1;
-      if (host.substr(pos) == allowedHost.substr(1)) {
-        return true;
-      }
-    }
-
-    // literal match
-    if (host == allowedHost) {
+    if (HostMatchesPattern(host, allowedHost)) {
       return true;
     }
   }
@@ -939,12 +970,18 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     return 1;
   }
 
+  static int CloseAllWebSockets(T* p, lua_State* /* L */) {
+    p->CloseAllWebSockets();
+    return 0;
+  }
+
   LunaNetworkManager() {
     ADD_METHOD(IsUrlAllowed);
     ADD_METHOD(HttpRequest);
     ADD_METHOD(WebSocket);
     ADD_METHOD(UrlEncode);
     ADD_METHOD(EncodeQueryParameters);
+    ADD_METHOD(CloseAllWebSockets);
   }
 
  private:

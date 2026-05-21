@@ -76,6 +76,14 @@ local function connect()
 		return
 	end
 
+	if NETWORK and NETWORK.IsUrlAllowed and
+		(not NETWORK:IsUrlAllowed(tostring(config.apiBaseUrl or "")) or
+		 not NETWORK:IsUrlAllowed(tostring(config.webSocketUrl or ""))) then
+		status = "Network access is disabled or this ITG Online host is not allowed."
+		refresh()
+		return
+	end
+
 	busy = true
 	status = THEME:GetString("ScreenITGOnlineLogin", "Connecting")
 	refresh()

@@ -282,6 +282,7 @@ end
 
 local function execute_player_action(option, user)
 	if not option or not user then return end
+	if not t then return end
 	showing_player_action_menu = false
 	t:GetChild("PlayerActionMenu"):visible(false)
 
@@ -306,6 +307,7 @@ end
 
 local InputHandler = function(event)
   if not event.PlayerNumber or not event.button then return false end
+	if not t then return false end
 
   if event.type == "InputEventType_FirstPress" then
 		if showing_leave_confirm then
@@ -747,7 +749,7 @@ local af = Def.ActorFrame{
 		local lobbyContent = self:GetChild("LobbyContent")
 		local playersContent = self:GetChild("OnlinePlayersContent")
 		if lobbyContent then
-			lobbyContent:visible(mode ~= "joined")
+			lobbyContent:visible(mode ~= "joined" and lobby_view == "lobbies")
 			local lobbyList = lobbyContent:GetChild("LobbyList")
 			if lobbyList then lobbyList:visible(lobby_view == "lobbies") end
 		end
@@ -761,7 +763,7 @@ local af = Def.ActorFrame{
 		local toggleButton = lobbyContent and lobbyContent:GetChild("OnlinePlayersButton")
 		local toggleText = toggleButton and toggleButton:GetChild("OnlinePlayersButtonText")
 		if toggleText then
-			toggleText:settext(lobby_view == "players" and "Available Lobbies" or "Online Players")
+			toggleText:settext("Online Players")
 		end
 
 		self:queuecommand("UpdateOnlinePlayers")
@@ -1622,7 +1624,7 @@ local af = Def.ActorFrame{
 			self:visible(false)
 		end,
 		HoverCommand=function(self)
-			local toggleButton = t and t:GetChild("LobbyContent") and t:GetChild("LobbyContent"):GetChild("OnlinePlayersButton")
+			local toggleButton = self:GetChild("AvailableLobbiesButton")
 			if toggleButton then toggleButton:playcommand("Hover") end
 		end,
 
@@ -1667,6 +1669,59 @@ local af = Def.ActorFrame{
 			InitCommand=function(self)
 				self:horizalign(left):vertalign(top):xy(-290, -132):zoom(0.82):maxwidth(620)
 			end
+		},
+		Def.ActorFrame{
+			Name="AvailableLobbiesButton",
+			InitCommand=function(self)
+				local idx = 2
+				local width = 200
+				local height = 40
+				local spacing = 20
+				local mid = #options / 2
+				self:y((idx - 1 - mid) * (spacing + height))
+				self:x(180)
+				self.idx = idx - 1
+			end,
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(200, 40):diffuse(Color.White)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(active_index == self:GetParent().idx and Color.Yellow or Color.White)
+				end,
+				SelectedCommand=function(self)
+					self:diffuse(active_index == self:GetParent().idx and Color.Green or Color.White)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(198, 38):diffuse(Color.Black)
+				end
+			},
+			LoadFont("Common Bold")..{
+				Text="Available Lobbies",
+				InitCommand=function(self)
+					self:zoom(0.5)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(200, 40):diffuse(color("#424242")):diffusealpha(0)
+				end,
+				SelectedCommand=function(self)
+					if active_index ~= self:GetParent().idx then
+						self:diffusealpha(0.70)
+					else
+						self:diffusealpha(0)
+					end
+				end,
+				LoseFocusCommand=function(self)
+					self:diffusealpha(0)
+				end
+			},
 		},
 	},
 
