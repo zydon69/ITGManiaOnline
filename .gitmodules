@@ -1,6 +1,7 @@
 [submodule "Themes/Simply-Love"]
 	path = Themes/Simply Love
-	url = https://github.com/Simply-Love/Simply-Love-SM5.git
+	url = git@github.com:chabbiaz/ITGManiaOnline.git
+	branch = simply-love-online
 	shallow = true
 [submodule "extern/ixwebsocket"]
 	path = extern/IXWebSocket
@@ -8,7 +9,8 @@
 	shallow = true
 [submodule "extern/mbedtls"]
 	path = extern/mbedtls
-	url = https://github.com/Mbed-TLS/mbedtls.git
+	url = git@github.com:chabbiaz/ITGManiaOnline.git
+	branch = mbedtls-online
 	shallow = true
 [submodule "extern/zlib"]
 	path = extern/zlib

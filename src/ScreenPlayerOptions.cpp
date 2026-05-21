@@ -12,6 +12,8 @@
 #include "InputFilter.h"
 #include "MessageManager.h"
 #include "ModsGroup.h"
+#include "LuaManager.h"
+#include "OptionRow.h"
 #include "PlayerNumber.h"
 #include "PlayerState.h"
 #include "PrefsManager.h"
@@ -25,6 +27,22 @@
 #include "global.h"
 
 REGISTER_SCREEN_CLASS(ScreenPlayerOptions);
+
+static bool HasActiveITGOnlineRoom() {
+  if (LUA == nullptr) {
+    return false;
+  }
+
+  Lua* L = LUA->Get();
+  const bool ran = LuaHelpers::RunExpression(
+      L, "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil",
+      "ScreenPlayerOptions::HasActiveITGOnlineRoom");
+  const bool active = ran && lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  LUA->Release(L);
+
+  return active;
+}
 
 void ScreenPlayerOptions::Init() {
   ScreenOptionsMaster::Init();
@@ -55,6 +73,14 @@ void ScreenPlayerOptions::BeginScreen() {
   FOREACH_PlayerNumber(p) ON_COMMAND(m_sprDisqualify[p]);
 
   ScreenOptionsMaster::BeginScreen();
+
+  if (HasActiveITGOnlineRoom()) {
+    for (OptionRow* row : m_pRows) {
+      if (row != nullptr && row->GetRowType() == OptionRow::RowType_Exit) {
+        row->SetExitText(THEME->GetString("OptionNames", "Ready"));
+      }
+    }
+  }
 
   FOREACH_HumanPlayer(p) {
     for (unsigned r = 0; r < m_pRows.size(); r++) {

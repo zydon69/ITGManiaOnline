@@ -133,8 +133,10 @@ if(WITH_SSE2)
     endif()
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86")
     set(SM_COMPILE_FLAGS "${SM_COMPILE_FLAGS} -msse2")
-  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
-    set(SM_COMPILE_FLAGS "${SM_COMPILE_FLAGS} -mtune=cortex-a72")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+    if(NOT APPLE)
+      set(SM_COMPILE_FLAGS "${SM_COMPILE_FLAGS} -mtune=cortex-a72")
+    endif()
   else()
     message("Unrecognized host processor type")
   endif()
@@ -198,6 +200,11 @@ elseif(APPLE)
     target_compile_definitions("${SM_EXE_NAME}" PRIVATE CPU_X86)
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
     target_compile_definitions("${SM_EXE_NAME}" PRIVATE CPU_AARCH64)
+    # Apple's arm64 linker otherwise lowers the large zero-fill __DATA,__common
+    # section from 32 KiB to the default 16 KiB segment alignment and emits a
+    # noisy warning. The explicit segment alignment matches the requested
+    # section alignment without changing source semantics.
+    sm_add_link_flag("${SM_EXE_NAME}" "-Wl,-segalign,0x8000")
   endif()
   set_target_properties(
     "${SM_EXE_NAME}"

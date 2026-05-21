@@ -6,6 +6,7 @@
 //
 
 #include "InputHandler_NSEvent.hpp"
+#include "archutils/Darwin/KeyboardDevice.h"
 #include "archutils/Darwin/CocoaEventDispatcher.h"
 #include "global.h"
 
@@ -18,7 +19,57 @@ REGISTER_INPUT_HANDLER_CLASS2(NSEvent, NSEvent);
 
 static float DownOrUp(bool down) { return down ? 1 : 0; }
 
+static wchar_t FirstCharacterFromEvent(NSEvent* event) {
+  NSString* characters = [event characters];
+  if (characters == nil || [characters length] == 0) {
+    return L'\0';
+  }
+
+  return (wchar_t)[characters characterAtIndex:0];
+}
+
+static bool PrintableCharacterToDeviceButton(wchar_t character, DeviceButton& buttonOut) {
+  if (character >= L' ' && character < KEY_OTHER_0) {
+    buttonOut = static_cast<DeviceButton>(character);
+    return true;
+  }
+
+  return false;
+}
+
+static wchar_t KeyCodeToChar(CGKeyCode keyCode, unsigned int modifierFlags) {
+  TISInputSourceRef currentKeyboard = TISCopyCurrentKeyboardInputSource();
+  if (currentKeyboard == nullptr) {
+    return 0;
+  }
+
+  CFDataRef uchr =
+      (CFDataRef)TISGetInputSourceProperty(currentKeyboard, kTISPropertyUnicodeKeyLayoutData);
+  const UCKeyboardLayout* keyboardLayout =
+      uchr ? (const UCKeyboardLayout*)CFDataGetBytePtr(uchr) : nullptr;
+
+  wchar_t result = 0;
+  if (keyboardLayout) {
+    UInt32 deadKeyState = 0;
+    constexpr UniCharCount maxStringLength = 255;
+    UniCharCount actualStringLength = 0;
+    UniChar unicodeString[maxStringLength];
+
+    OSStatus status = UCKeyTranslate(
+        keyboardLayout, keyCode, kUCKeyActionDown, modifierFlags, LMGetKbdType(), 0, &deadKeyState,
+        maxStringLength, &actualStringLength, unicodeString);
+
+    if (status == noErr && actualStringLength > 0) {
+      result = unicodeString[0];
+    }
+  }
+
+  CFRelease(currentKeyboard);
+  return result;
+}
+
 InputHandler_NSEvent::InputHandler_NSEvent() {
+  std::fill(std::begin(m_NSKeyCodeMap), std::end(m_NSKeyCodeMap), DeviceButton_Invalid);
   InitKeyCodeMap();
 
   auto& dispatcher = CocoaEventDispatcher::sharedDispatcher;
@@ -160,11 +211,23 @@ void InputHandler_NSEvent::HandleEvent(NSEvent* e) {
   RageTimer now;
   unsigned short keyCode = [e keyCode];
   float zval = (type == NSEventTypeKeyDown ? 1.0 : 0.0);
+  wchar_t typedCharacter = FirstCharacterFromEvent(e);
+  DeviceButton button = m_NSKeyCodeMap[keyCode];
+  if (button == DeviceButton_Invalid) {
+    PrintableCharacterToDeviceButton(typedCharacter, button);
+  }
 
   switch (type) {
     case NSEventTypeKeyUp:
     case NSEventTypeKeyDown:
-      ButtonPressed(DeviceInput(DEVICE_KEYBOARD, m_NSKeyCodeMap[keyCode], zval, now));
+      if (type == NSEventTypeKeyDown) {
+        if (typedCharacter != L'\0' && button != DeviceButton_Invalid) {
+          m_LastTypedCharacterByButton[button] = typedCharacter;
+        }
+      }
+      if (button != DeviceButton_Invalid) {
+        ButtonPressed(DeviceInput(DEVICE_KEYBOARD, button, zval, now));
+      }
       break;
 
     case NSEventTypeFlagsChanged: {
@@ -210,6 +273,73 @@ void InputHandler_NSEvent::HandleEvent(NSEvent* e) {
     default:
       break;
   }
+}
+
+wchar_t InputHandler_NSEvent::DeviceButtonToChar(
+    DeviceButton button, bool bUseCurrentKeyModifiers) {
+  switch (button) {
+    default:
+      if ((button >= KEY_F1 && button <= KEY_F16)) {
+        return L'\0';
+      }
+      break;
+    case KEY_UP:
+    case KEY_DOWN:
+    case KEY_LEFT:
+    case KEY_RIGHT:
+    case KEY_ESC:
+    case KEY_TAB:
+    case KEY_ENTER:
+    case KEY_PRTSC:
+    case KEY_SCRLLOCK:
+    case KEY_PAUSE:
+    case KEY_DEL:
+    case KEY_HOME:
+    case KEY_END:
+    case KEY_PGUP:
+    case KEY_PGDN:
+    case KEY_NUMLOCK:
+    case KEY_KP_ENTER:
+    case KEY_CAPSLOCK:
+    case KEY_LSHIFT:
+    case KEY_RSHIFT:
+    case KEY_LCTRL:
+    case KEY_RCTRL:
+    case KEY_LALT:
+    case KEY_RALT:
+    case KEY_LMETA:
+    case KEY_RMETA:
+    case KEY_LSUPER:
+    case KEY_RSUPER:
+    case KEY_FN:
+    case KEY_MENU:
+      return L'\0';
+  }
+
+  if (bUseCurrentKeyModifiers) {
+    const auto lastTypedCharacter = m_LastTypedCharacterByButton.find(button);
+    if (lastTypedCharacter != m_LastTypedCharacterByButton.end() &&
+        lastTypedCharacter->second != L'\0') {
+      return lastTypedCharacter->second;
+    }
+  }
+
+  UInt8 macVirtualKey;
+  if (KeyboardDevice::DeviceButtonToMacVirtualKey(button, macVirtualKey)) {
+    CGEventRef event = CGEventCreate(nullptr);
+    CGEventFlags flags = event ? CGEventGetFlags(event) : 0;
+    if (event) {
+      CFRelease(event);
+    }
+
+    UInt32 modifiers = bUseCurrentKeyModifiers ? (UInt32)flags : 0;
+    wchar_t character = KeyCodeToChar(macVirtualKey, modifiers);
+    if (character != 0) {
+      return character;
+    }
+  }
+
+  return InputHandler::DeviceButtonToChar(button, bUseCurrentKeyModifiers);
 }
 
 void InputHandler_NSEvent::GetDevicesAndDescriptions(std::vector<InputDeviceInfo>& vDevicesOut) {

@@ -70,6 +70,7 @@ void ScreenTextEntry::SetTextEntrySettings(
   g_sQuestion = sQuestion;
   g_sInitialAnswer = sInitialAnswer;
   g_iMaxInputLength = iMaxInputLength;
+  g_bPassword = bPassword;
   g_pValidate = Validate;
   g_pOnOK = OnOK;
   g_pOnCancel = OnCancel;

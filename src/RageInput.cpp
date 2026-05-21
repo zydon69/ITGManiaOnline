@@ -134,7 +134,9 @@ void RageInput::AddHandler(InputHandler* pHandler) {
   std::vector<InputDeviceInfo> aDeviceInfo;
   hand.m_pDevice->GetDevicesAndDescriptions(aDeviceInfo);
   for (const InputDeviceInfo& idi : aDeviceInfo) {
-    g_mapDeviceToHandler[idi.id] = pHandler;
+    if (g_mapDeviceToHandler.find(idi.id) == g_mapDeviceToHandler.end()) {
+      g_mapDeviceToHandler[idi.id] = pHandler;
+    }
   }
 }
 

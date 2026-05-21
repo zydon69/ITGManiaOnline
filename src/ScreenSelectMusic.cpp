@@ -97,6 +97,23 @@ static LocalizedString PROMPT_BEFORE_EXITING(
     "ScreenSelectMusic", "PromptBeforeExiting");
 
 REGISTER_SCREEN_CLASS(ScreenSelectMusic);
+
+static bool HasActiveITGOnlineRoom() {
+  if (LUA == nullptr) {
+    return false;
+  }
+
+  Lua* L = LUA->Get();
+  const bool ran = LuaHelpers::RunExpression(
+      L, "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil",
+      "HasActiveITGOnlineRoom");
+  const bool active = ran && lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  LUA->Release(L);
+
+  return active;
+}
+
 void ScreenSelectMusic::Init() {
   g_ScreenStartedLoadingAt.Touch();
   if (PREFSMAN->m_sTestInitialScreen.Get() == m_sName) {
@@ -475,6 +492,15 @@ bool ScreenSelectMusic::Input(const InputEventPlus& input) {
 
   // reset announcer timer
   m_timerIdleComment.GetDeltaTime();
+
+  if (input.DeviceI.device == DEVICE_KEYBOARD &&
+      input.DeviceI.button == KEY_BACK && input.type == IET_FIRST_PRESS &&
+      HasActiveITGOnlineRoom()) {
+    m_BackgroundLoader.Abort();
+    SetNextScreenName("ScreenOnlineLobbies");
+    StartTransitioningScreen(SM_GoToNextScreen);
+    return true;
+  }
 
   // debugging?
   // I just like being able to see untransliterated titles occasionally.
@@ -1532,6 +1558,13 @@ bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
 }
 
 bool ScreenSelectMusic::MenuBack(const InputEventPlus& /* input */) {
+  if (HasActiveITGOnlineRoom()) {
+    m_BackgroundLoader.Abort();
+    SetNextScreenName("ScreenOnlineLobbies");
+    StartTransitioningScreen(SM_GoToNextScreen);
+    return true;
+  }
+
   // Handle unselect song (ffff)
   // todo: this isn't right at all. -aj
   /*

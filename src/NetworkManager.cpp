@@ -37,10 +37,15 @@
 NetworkManager* NETWORK =
     nullptr;  // global and accessible from anywhere in our program
 
+namespace {
+constexpr const char* BUILT_IN_HTTP_ALLOW_HOSTS =
+    "*.groovestats.com,*.itgmania.com,itgonline.fr,*.itgonline.fr";
+}
+
 Preference<bool> NetworkManager::httpEnabled(
     "HttpEnabled", true, nullptr, PreferenceType::Immutable);
 Preference<std::string> NetworkManager::httpAllowHosts(
-    "HttpAllowHosts", "*.groovestats.com,*.itgmania.com", nullptr,
+    "HttpAllowHosts", BUILT_IN_HTTP_ALLOW_HOSTS, nullptr,
     PreferenceType::Immutable);
 
 static const char* HttpErrorCodeNames[] = {
@@ -497,7 +502,7 @@ int WebSocketHandle::Close(lua_State* L) {
     handle->onClose();
   }
 
-  return 1;
+  return 0;
 }
 
 int WebSocketHandle::Send(lua_State* L) {

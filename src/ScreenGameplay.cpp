@@ -115,6 +115,29 @@ static ThemeMetric<bool> FORCE_IMMEDIATE_FAIL_FOR_BATTERY(
 
 AutoScreenMessage(SM_PlayGo);
 
+static bool GetITGOnlineSecondsUntilScheduledStart(float& secondsUntilStart) {
+  if (LUA == nullptr) {
+    return false;
+  }
+
+  Lua* L = LUA->Get();
+  const bool ran = LuaHelpers::RunExpression(
+      L,
+      "ITGOnline ~= nil and ITGOnline.SecondsUntilScheduledStart ~= nil and "
+      "ITGOnline:SecondsUntilScheduledStart() or nil",
+      "ScreenGameplay::GetITGOnlineSecondsUntilScheduledStart");
+
+  const bool hasNumber = ran && lua_isnumber(L, -1);
+  if (hasNumber) {
+    secondsUntilStart = static_cast<float>(lua_tonumber(L, -1));
+  }
+
+  lua_pop(L, 1);
+  LUA->Release(L);
+
+  return hasNumber && secondsUntilStart > -30.0f && secondsUntilStart < 120.0f;
+}
+
 // received while STATE_DANCING
 AutoScreenMessage(SM_LoadNextSong);
 AutoScreenMessage(SM_StartLoadingNextSong);
@@ -1517,10 +1540,15 @@ void ScreenGameplay::StartPlayingSong(
   p.StopMode = RageSoundParams::M_CONTINUE;
 
   {
-    const float fFirstSecond = GAMESTATE->m_pCurSong->GetFirstSecond();
-    float fStartDelay = fMinTimeToNotes - fFirstSecond;
-    fStartDelay = std::max(fStartDelay, fMinTimeToMusic);
-    p.m_StartSecond = -fStartDelay;
+    float onlineSecondsUntilStart = 0.0f;
+    if (GetITGOnlineSecondsUntilScheduledStart(onlineSecondsUntilStart)) {
+      p.m_StartSecond = -onlineSecondsUntilStart;
+    } else {
+      const float fFirstSecond = GAMESTATE->m_pCurSong->GetFirstSecond();
+      float fStartDelay = fMinTimeToNotes - fFirstSecond;
+      fStartDelay = std::max(fStartDelay, fMinTimeToMusic);
+      p.m_StartSecond = -fStartDelay;
+    }
   }
 
   ASSERT(!m_pSoundMusic->IsPlaying());

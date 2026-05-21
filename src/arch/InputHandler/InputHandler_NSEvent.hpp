@@ -11,12 +11,15 @@
 #include "InputHandler.h"
 #include "archutils/Darwin/CocoaEventDispatcher.h"
 
+#include <map>
+
 class InputHandler_NSEvent : public InputHandler {
  public:
   InputHandler_NSEvent();
   ~InputHandler_NSEvent();
 
-  void GetDevicesAndDescriptions(std::vector<InputDeviceInfo>& vDevicesOut);
+  void GetDevicesAndDescriptions(std::vector<InputDeviceInfo>& vDevicesOut) override;
+  wchar_t DeviceButtonToChar(DeviceButton button, bool bUseCurrentKeyModifiers) override;
 
  protected:
   void HandleEvent(EVENT_TYPE e);
@@ -24,6 +27,7 @@ class InputHandler_NSEvent : public InputHandler {
 
  private:
   DeviceButton m_NSKeyCodeMap[0x100];
+  std::map<DeviceButton, wchar_t> m_LastTypedCharacterByButton;
   unsigned m_ResponderID;
 };
 
