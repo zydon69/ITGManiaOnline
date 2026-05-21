@@ -270,8 +270,7 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
 
   MakeLower(host);
 
-  std::string allowedHostsStr = std::string(BUILT_IN_HTTP_ALLOW_HOSTS) + "," +
-                                this->httpAllowHosts.Get();
+  std::string allowedHostsStr = this->httpAllowHosts.Get();
   MakeLower(allowedHostsStr);
 
   std::vector<std::string> allowedHosts;
@@ -503,7 +502,7 @@ int WebSocketHandle::Close(lua_State* L) {
     handle->onClose();
   }
 
-  return 1;
+  return 0;
 }
 
 int WebSocketHandle::Send(lua_State* L) {

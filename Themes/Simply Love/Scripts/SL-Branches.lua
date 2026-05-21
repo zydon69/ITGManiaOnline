@@ -198,7 +198,11 @@ Branch.AfterSelectMusic = function()
 	-- would be expected to pick the same song since it's broadcast to the library.
 	--
 	-- TODO: Consider locking the music wheel in this case.
-	MESSAGEMAN:Broadcast("SongSelected")
+	if ITGOnline and ITGOnline.currentRoomId and ITGOnline.SelectSongAndMarkLobbyReady then
+		ITGOnline:SelectSongAndMarkLobbyReady()
+	else
+		MESSAGEMAN:Broadcast("SongSelected")
+	end
 
 	if ITGOnline and ITGOnline.currentRoomId then
 		return "ScreenPlayerOptions"
@@ -219,6 +223,10 @@ Branch.AfterSelectMusic = function()
 end
 
 Branch.SSMCancel = function()
+
+	if ITGOnline and ITGOnline.currentRoomId then
+		return "ScreenOnlineLobbies"
+	end
 
 	if GAMESTATE:GetCurrentStageIndex() > 0 then
 		return Branch.AllowScreenEvalSummary()

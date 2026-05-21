@@ -2,8 +2,8 @@
 -- ITG Online API client.
 --
 -- This bridges Simply Love's existing online-lobby UI to the Laravel server.
--- Credentials are intentionally read from a local Save/ITGOnline.ini file and
--- are never committed with the theme.
+-- Save/ITGOnline.ini stores connection settings only; the password is kept in
+-- memory for the current session and is never persisted to disk.
 
 ITGOnline = ITGOnline or {}
 
@@ -24,6 +24,11 @@ ITGOnline.currentRoom = ITGOnline.currentRoom or nil
 ITGOnline.currentSongPayload = ITGOnline.currentSongPayload or nil
 ITGOnline.pendingJoinRoomId = ITGOnline.pendingJoinRoomId or nil
 ITGOnline.lastScoreSentAt = ITGOnline.lastScoreSentAt or 0
+ITGOnline.scheduledStartLocalTime = ITGOnline.scheduledStartLocalTime or nil
+ITGOnline.sessionExpired = ITGOnline.sessionExpired or false
+ITGOnline.disconnecting = ITGOnline.disconnecting or false
+ITGOnline.lastEventCursor = ITGOnline.lastEventCursor or 0
+ITGOnline.lastRealtimeMessageAt = ITGOnline.lastRealtimeMessageAt or GetTimeSinceStart()
 
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -49,9 +54,47 @@ end
 
 local function response_message(response, decoded, fallback)
 	if response and response.errorMessage then return response.errorMessage end
+	if response and response.error then return fallback .. " (" .. tostring(response.error) .. ")" end
 	if decoded and decoded.message then return decoded.message end
 	if response and response.statusCode then return fallback .. " (" .. tostring(response.statusCode) .. ")" end
 	return fallback
+end
+
+local function online_trace(message)
+	if Trace then Trace("ITG Online: " .. tostring(message or "")) end
+end
+
+local function request_id()
+	if CRYPTMAN and CRYPTMAN.GenerateRandomUUID then
+		return CRYPTMAN:GenerateRandomUUID()
+	end
+
+	return tostring(GetTimeSinceStart()) .. "-" .. tostring(math.random(100000, 999999))
+end
+
+local function days_from_civil(year, month, day)
+	year = year - (month <= 2 and 1 or 0)
+	local era = math.floor(year / 400)
+	local yoe = year - era * 400
+	local mp = month + (month > 2 and -3 or 9)
+	local doy = math.floor((153 * mp + 2) / 5) + day - 1
+	local doe = yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy
+	return era * 146097 + doe - 719468
+end
+
+local function iso_utc_milliseconds(value)
+	if type(value) ~= "string" then return nil end
+
+	local year, month, day, hour, minute, second, fraction = value:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)%.?(%d*)Z$")
+	if not year then return nil end
+
+	local days = days_from_civil(tonumber(year), tonumber(month), tonumber(day))
+	local seconds = (((days * 24 + tonumber(hour)) * 60 + tonumber(minute)) * 60) + tonumber(second)
+	local milliseconds = tonumber((fraction or ""):sub(1, 3)) or 0
+	if fraction and #fraction == 1 then milliseconds = milliseconds * 100 end
+	if fraction and #fraction == 2 then milliseconds = milliseconds * 10 end
+
+	return seconds * 1000 + milliseconds
 end
 
 local function first_enabled_player()
@@ -90,29 +133,64 @@ local function enum_short(value)
 	return ToEnumShortString(value)
 end
 
+local function current_game_name()
+	local game = GAMESTATE:GetCurrentGame()
+	if game and game.GetName then
+		local name = game:GetName()
+		if name and name ~= "" then return tostring(name):lower() end
+	end
+
+	return "dance"
+end
+
+local function normalize_chart_type(value)
+	local raw = tostring(value or ""):gsub("_", "-")
+	local lower = raw:lower()
+
+	local direct = {
+		["dance-single"] = "dance-single",
+		["dance-double"] = "dance-double",
+		["dance-couple"] = "dance-couple",
+		["dance-solo"] = "dance-solo",
+		["pump-single"] = "pump-single",
+		["pump-double"] = "pump-double",
+	}
+	if direct[lower] then return direct[lower] end
+
+	local game = current_game_name()
+	local short = {
+		single = game .. "-single",
+		double = game .. "-double",
+		couple = game .. "-couple",
+		solo = game .. "-solo",
+	}
+	if short[lower] then return short[lower] end
+
+	return lower
+end
+
 local function read_config()
 	if not FILEMAN:DoesFileExist(ITGOnline.configPath) then
 		IniFile.WriteFile(ITGOnline.configPath, {
 			["ITGOnline"] = {
-				["ApiBaseUrl"] = ITGOnline.defaults.apiBaseUrl,
-				["WebSocketUrl"] = ITGOnline.defaults.webSocketUrl,
-				["Email"] = "",
-				["Password"] = "",
-				["DeviceName"] = ITGOnline.defaults.deviceName,
-			}
-		})
+					["ApiBaseUrl"] = ITGOnline.defaults.apiBaseUrl,
+					["WebSocketUrl"] = ITGOnline.defaults.webSocketUrl,
+					["Email"] = "",
+					["DeviceName"] = ITGOnline.defaults.deviceName,
+				}
+			})
 	end
 
 	local raw = IniFile.ReadFile(ITGOnline.configPath) or {}
 	local section = raw["ITGOnline"] or {}
 	return {
-		apiBaseUrl = normalize_base_url(section["ApiBaseUrl"]),
-		webSocketUrl = trim(section["WebSocketUrl"]) ~= "" and trim(section["WebSocketUrl"]) or ITGOnline.defaults.webSocketUrl,
-		email = trim(section["Email"]),
-		password = tostring(section["Password"] or ""),
-		deviceName = trim(section["DeviceName"]) ~= "" and trim(section["DeviceName"]) or ITGOnline.defaults.deviceName,
-	}
-end
+			apiBaseUrl = normalize_base_url(section["ApiBaseUrl"]),
+			webSocketUrl = trim(section["WebSocketUrl"]) ~= "" and trim(section["WebSocketUrl"]) or ITGOnline.defaults.webSocketUrl,
+			email = trim(section["Email"]),
+			password = tostring(ITGOnline.transientPassword or ""),
+			deviceName = trim(section["DeviceName"]) ~= "" and trim(section["DeviceName"]) or ITGOnline.defaults.deviceName,
+		}
+	end
 
 function ITGOnline:Config()
 	self.config = read_config()
@@ -124,22 +202,22 @@ function ITGOnline:SaveConfig(values)
 	values = values or {}
 
 	local nextConfig = {
-		apiBaseUrl = normalize_base_url(values.apiBaseUrl or current.apiBaseUrl),
-		webSocketUrl = trim(values.webSocketUrl or current.webSocketUrl) ~= "" and trim(values.webSocketUrl or current.webSocketUrl) or ITGOnline.defaults.webSocketUrl,
-		email = trim(values.email or current.email),
-		password = tostring(values.password ~= nil and values.password or current.password or ""),
-		deviceName = trim(values.deviceName or current.deviceName) ~= "" and trim(values.deviceName or current.deviceName) or ITGOnline.defaults.deviceName,
-	}
-
-	IniFile.WriteFile(ITGOnline.configPath, {
-		["ITGOnline"] = {
-			["ApiBaseUrl"] = nextConfig.apiBaseUrl,
-			["WebSocketUrl"] = nextConfig.webSocketUrl,
-			["Email"] = nextConfig.email,
-			["Password"] = nextConfig.password,
-			["DeviceName"] = nextConfig.deviceName,
+			apiBaseUrl = normalize_base_url(values.apiBaseUrl or current.apiBaseUrl),
+			webSocketUrl = trim(values.webSocketUrl or current.webSocketUrl) ~= "" and trim(values.webSocketUrl or current.webSocketUrl) or ITGOnline.defaults.webSocketUrl,
+			email = trim(values.email or current.email),
+			deviceName = trim(values.deviceName or current.deviceName) ~= "" and trim(values.deviceName or current.deviceName) or ITGOnline.defaults.deviceName,
 		}
-	})
+	ITGOnline.transientPassword = tostring(values.password ~= nil and values.password or current.password or ITGOnline.transientPassword or "")
+	nextConfig.password = ITGOnline.transientPassword
+
+		IniFile.WriteFile(ITGOnline.configPath, {
+			["ITGOnline"] = {
+				["ApiBaseUrl"] = nextConfig.apiBaseUrl,
+				["WebSocketUrl"] = nextConfig.webSocketUrl,
+				["Email"] = nextConfig.email,
+				["DeviceName"] = nextConfig.deviceName,
+			}
+		})
 
 	self.config = nextConfig
 	return nextConfig
@@ -151,42 +229,93 @@ function ITGOnline:Configured()
 end
 
 function ITGOnline:AuthHeaders()
-	return {
-		["Accept"] = "application/json",
-		["Content-Type"] = "application/json",
-		["Authorization"] = "Bearer " .. tostring(self.token or ""),
-	}
-end
-
-function ITGOnline:Request(method, path, payload, callback)
-	local config = self:Config()
-	local url = config.apiBaseUrl .. path
-	local body = payload and JsonEncode(payload) or ""
-	local requestId = self.nextRequestId
-	self.nextRequestId = self.nextRequestId + 1
-
 	local headers = {
 		["Accept"] = "application/json",
 		["Content-Type"] = "application/json",
 	}
 	if self.token then
+		headers["Authorization"] = "Bearer " .. tostring(self.token)
+	end
+	return headers
+end
+
+function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth)
+	local config = self:Config()
+	local url = config.apiBaseUrl .. path
+	local encodeOk, body = pcall(JsonEncode, payload or {})
+	if not encodeOk then
+		if callback then callback(false, nil, { errorMessage = "Request payload could not be encoded." }) end
+		return
+	end
+	if payload == nil then body = "" end
+
+	local requestId = self.nextRequestId
+	self.nextRequestId = self.nextRequestId + 1
+	local traceId = request_id()
+
+	local headers = {
+		["Accept"] = "application/json",
+		["Content-Type"] = "application/json",
+		["X-Request-ID"] = traceId,
+	}
+	if self.token then
 		headers["Authorization"] = "Bearer " .. self.token
 	end
 
-	self.requests[requestId] = NETWORK:HttpRequest{
+	online_trace(method .. " " .. path .. " [" .. traceId .. "]")
+	local startedAt = GetTimeSinceStart()
+	local request = NETWORK:HttpRequest{
 		url = url,
 		method = method,
 		body = body,
 		headers = headers,
 		connectTimeout = 5,
-		transferTimeout = 20,
+		transferTimeout = 45,
 		onResponse = function(response)
+			local record = ITGOnline.requests[requestId]
+			if not record or record.cancelled then
+				return
+			end
+
 			ITGOnline.requests[requestId] = nil
 			local decoded = safe_decode(response and response.body)
 			local ok = response and response.statusCode and response.statusCode >= 200 and response.statusCode < 300
+			local duration = math.floor((GetTimeSinceStart() - startedAt) * 1000)
+			local responseBytes = response and response.body and #tostring(response.body) or 0
+			local errorCode = decoded and decoded.error_code or response and response.error or nil
+			online_trace(method .. " " .. path .. " -> " .. tostring(response and response.statusCode or "no-status") .. " in " .. tostring(duration) .. "ms, " .. tostring(responseBytes) .. "b" .. (errorCode and (", error=" .. tostring(errorCode)) or "") .. " [" .. traceId .. "]")
+			if not ok and response and response.body then
+				online_trace(method .. " " .. path .. " body: " .. tostring(response.body))
+			end
+
+			if response and response.statusCode == 401 and path ~= "/auth/login" and not alreadyRetriedAuth then
+				self:Login(function(loginOk)
+					if loginOk then
+						self:Request(method, path, payload, callback, true)
+						return
+					end
+
+					self.sessionExpired = true
+					MESSAGEMAN:Broadcast("OnlineSessionExpired")
+					if callback then callback(false, decoded, response) end
+				end)
+				return
+			end
+
 			if callback then callback(ok, decoded, response) end
 		end,
 	}
+	self.requests[requestId] = { future = request, cancelled = false }
+end
+
+function ITGOnline:CancelPendingRequests()
+	for _, request in pairs(self.requests or {}) do
+		request.cancelled = true
+		if request.future and request.future.Cancel then
+			request.future:Cancel()
+		end
+	end
+	self.requests = {}
 end
 
 function ITGOnline:Login(callback)
@@ -229,12 +358,14 @@ function ITGOnline:ConnectWebSocket(callbacks)
 				["Sec-WebSocket-Protocol"] = "itgmania-ticket." .. tostring(decoded.ticket),
 			},
 			pingInterval = 20,
-			automaticReconnect = true,
+			automaticReconnect = false,
 			onMessage = function(msg)
 				local msgType = ToEnumShortString(msg.type)
 				if msgType == "Open" then
+					self.lastRealtimeMessageAt = GetTimeSinceStart()
 					if callbacks and callbacks.open then callbacks.open() end
 				elseif msgType == "Message" then
+					self.lastRealtimeMessageAt = GetTimeSinceStart()
 					local payload = safe_decode(msg.data)
 					self:HandleRealtimeEvent(payload)
 					if callbacks and callbacks.message then callbacks.message(payload) end
@@ -249,6 +380,7 @@ function ITGOnline:ConnectWebSocket(callbacks)
 end
 
 function ITGOnline:Connect(callbacks)
+	self.disconnecting = false
 	self:Login(function(ok, errorMessage)
 		if not ok then
 			if callbacks and callbacks.error then callbacks.error(errorMessage) end
@@ -259,6 +391,13 @@ function ITGOnline:Connect(callbacks)
 end
 
 function ITGOnline:Disconnect()
+	self.disconnecting = true
+	self:CancelPendingRequests()
+	if self.token then
+		local token = self.token
+		self:Request("POST", "/auth/logout", {}, function() end)
+		self.token = token
+	end
 	if self.socket then
 		self.socket:Close()
 	end
@@ -269,6 +408,64 @@ function ITGOnline:Disconnect()
 	self.currentRoom = nil
 	self.currentSongPayload = nil
 	self.pendingJoinRoomId = nil
+	self.scheduledStartLocalTime = nil
+end
+
+function ITGOnline:Sync(callback)
+	local cursor = tonumber(self.lastEventCursor or 0) or 0
+	self:Request("GET", "/sync?cursor=" .. tostring(math.floor(cursor)), nil, function(ok, decoded, response)
+		if ok and decoded then
+			if decoded.next_cursor then
+				self.lastEventCursor = math.max(self.lastEventCursor or 0, tonumber(decoded.next_cursor) or 0)
+			end
+
+			if decoded.current_room then
+				self.currentRoomId = decoded.current_room.id
+				self.currentRoom = decoded.current_room
+				if decoded.current_room.selected_song then
+					self.currentSongPayload = decoded.current_room.selected_song
+				end
+				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.current_room))
+			else
+				self.currentRoomId = nil
+				self.currentRoom = nil
+				self.currentSongPayload = nil
+			end
+			MESSAGEMAN:Broadcast("LobbySearched", self:LobbySearchPayload(decoded))
+
+			for joinRequest in ivalues(decoded.pending_join_requests or {}) do
+				MESSAGEMAN:Broadcast("OnlinePrivateJoinRequest", {
+					join_request = {
+						id = joinRequest.id,
+						room_id = joinRequest.room_id,
+						user_id = joinRequest.user and joinRequest.user.id or nil,
+						target_user_id = joinRequest.target and joinRequest.target.id or nil,
+						status = "pending",
+					},
+					requester = joinRequest.user,
+					room = joinRequest.room,
+				})
+			end
+
+			for invitation in ivalues(decoded.pending_invitations or {}) do
+				MESSAGEMAN:Broadcast("OnlineRoomInvitation", {
+					invitation = {
+						id = invitation.id,
+						room_id = invitation.room_id,
+						status = "pending",
+					},
+					inviter = invitation.inviter,
+					room = invitation.room,
+				})
+			end
+
+			for event in ivalues(decoded.events or {}) do
+				self:HandleRealtimeEvent(event)
+			end
+		end
+
+		if callback then callback(ok, decoded, response) end
+	end)
 end
 
 function ITGOnline:BuildSongPayload()
@@ -278,25 +475,15 @@ function ITGOnline:BuildSongPayload()
 	local steps = selected_steps()
 	local path = song_path(song)
 	local stepsHash = steps and tostring(steps:GetHash()) or "no-steps"
-	local chartType = steps and enum_short(steps:GetStepsType()) or "unknown"
+	local chartType = normalize_chart_type(steps and enum_short(steps:GetStepsType()) or "")
 	local difficulty = steps and enum_short(steps:GetDifficulty()) or "unknown"
-		local meter = steps and steps:GetMeter() or nil
-		local chartName = steps and steps:GetChartName() or ""
+	local meter = steps and steps:GetMeter() or nil
 
-		local songHashSource = table.concat({
-			path,
-			song:GetDisplayFullTitle() or "",
-			song:GetDisplayArtist() or "",
-			tostring(song:MusicLengthSeconds() or 0),
-		}, "|")
-
-		local chartHashSource = table.concat({
-			path,
-			chartType,
-			difficulty,
-			tostring(meter or ""),
-		chartName or "",
-		stepsHash,
+	local songHashSource = table.concat({
+		path,
+		song:GetDisplayFullTitle() or "",
+		song:GetDisplayArtist() or "",
+		tostring(song:MusicLengthSeconds() or 0),
 	}, "|")
 
 	return {
@@ -305,7 +492,7 @@ function ITGOnline:BuildSongPayload()
 		pack = path:match("^([^/]+)") or "",
 		folder_name = path,
 		song_hash = sha256_hex(songHashSource),
-		chart_hash = sha256_hex(chartHashSource),
+		chart_hash = sha256_hex(stepsHash),
 		chart_type = chartType,
 		difficulty = difficulty,
 		meter = meter,
@@ -322,8 +509,39 @@ function ITGOnline:SelectSong(callback)
 
 	self.currentSongPayload = payload
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/song-selection", payload, function(ok, decoded, response)
+		if ok and decoded and decoded.room then
+			self.currentRoom = decoded.room
+			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
+		elseif ok then
+			self:FetchRoom(self.currentRoomId)
+		end
 		if callback then callback(ok, decoded, response) end
-		if ok then self:FetchRoom(self.currentRoomId) end
+	end)
+end
+
+function ITGOnline:SelectSongAndMarkLobbyReady(callback)
+	if not self.currentRoomId then
+		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
+		return
+	end
+
+	self:SelectSong(function(selectOk, selectDecoded, selectResponse)
+		if not selectOk then
+			if callback then callback(false, selectDecoded, selectResponse) end
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = "selectSong",
+				success = false,
+				message = response_message(selectResponse, selectDecoded, "Song selection failed")
+			})
+			return
+		end
+
+		self:SetReady("lobby_ready", true, function(readyOk, readyDecoded, readyResponse)
+			if readyOk and readyDecoded and readyDecoded.room then
+				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(readyDecoded.room))
+			end
+			if callback then callback(readyOk, readyDecoded or selectDecoded, readyResponse or selectResponse) end
+		end)
 	end)
 end
 
@@ -357,23 +575,24 @@ function ITGOnline:ServerJudgments(player)
 	}
 end
 
-function ITGOnline:SendScore()
+function ITGOnline:SendScore(force)
 	if not self.currentRoomId or not self.currentSongPayload then return end
 	if not self.currentRoom or self.currentRoom.phase ~= "playing" then return end
-	if GetTimeSinceStart() - self.lastScoreSentAt < 1 then return end
+	if not force and GetTimeSinceStart() - self.lastScoreSentAt < 1 then return end
 	self.lastScoreSentAt = GetTimeSinceStart()
 
 	local player = first_enabled_player()
 	local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 	local dancePoints = stats:GetPercentDancePoints()
-	local accuracy = tonumber(FormatPercentScore(dancePoints):gsub("%%", "")) or 0
+	local accuracy = math.max(0, math.min(100, (tonumber(dancePoints) or 0) * 100))
 	local exScore = CalculateExScore(player) or 0
 	local songPosition = GAMESTATE:GetPlayerState(player):GetSongPosition():GetMusicSeconds()
+	local maxCombo = stats.MaxCombo and stats:MaxCombo() or stats:GetCurrentCombo()
 
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/score", {
 		score = math.max(0, math.floor(exScore * 1000000)),
 		combo = math.max(0, stats:GetCurrentCombo() or 0),
-		max_combo = math.max(0, stats:GetCurrentCombo() or 0),
+		max_combo = math.max(0, maxCombo or 0),
 		accuracy = accuracy,
 		song_position_seconds = math.max(0, songPosition or 0),
 		song_hash = self.currentSongPayload.song_hash,
@@ -383,16 +602,122 @@ function ITGOnline:SendScore()
 	})
 end
 
-	function ITGOnline:SetReady(phase, isReady, callback)
-		if not self.currentRoomId then
-			if callback then callback(false, nil, { errorMessage = "No active online room." }) end
-			return
-		end
-		self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/ready", {
-			phase = phase,
-			is_ready = isReady and true or false,
-		}, callback)
+function ITGOnline:SetReady(phase, isReady, callback)
+	if not self.currentRoomId then
+		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
+		return
 	end
+	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/ready", {
+		phase = phase,
+		is_ready = isReady and true or false,
+	}, function(ok, decoded, response)
+		if ok and decoded and decoded.room then
+			self.currentRoom = decoded.room
+		end
+		if callback then callback(ok, decoded, response) end
+	end)
+end
+
+function ITGOnline:MarkConfigReady(callback)
+	if not self.currentRoomId then
+		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
+		return
+	end
+	if self.configReadyInFlight then
+		if callback then callback(false, nil, { errorMessage = "Ready synchronization is already in progress." }) end
+		return
+	end
+	self.configReadyInFlight = true
+
+	local finish = function(ok, decoded, response)
+		self.configReadyInFlight = false
+		if callback then callback(ok, decoded, response) end
+	end
+
+	local finishConfigReady = function()
+		self:SetReady("config_ready", true, function(ok, decoded, response)
+			if ok and decoded and decoded.room then
+				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
+			end
+			finish(ok, decoded, response)
+		end)
+	end
+
+	local waitForConfig
+	waitForConfig = function(attempt)
+		attempt = attempt or 1
+			self:FetchRoom(self.currentRoomId, function(fetchOk, fetchDecoded, fetchResponse)
+				if not fetchOk or not fetchDecoded or not fetchDecoded.room then
+				finish(false, fetchDecoded, fetchResponse)
+				return
+			end
+
+			local room = fetchDecoded.room
+			if not room.selected_song then
+				self:SelectSongAndMarkLobbyReady(function(ok, decoded, response)
+					if ok and attempt < 6 then
+						waitForConfig(attempt + 1)
+					else
+						finish(ok, decoded, response)
+					end
+				end)
+				return
+			end
+
+			if room.phase == "config" or room.phase == "starting" or room.phase == "playing" then
+				finishConfigReady()
+			elseif room.phase == "lobby" or room.phase == "lobby_ready" then
+				self:SetReady("lobby_ready", true, function(readyOk, readyDecoded, readyResponse)
+					if readyOk and readyDecoded and readyDecoded.room then
+						MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(readyDecoded.room))
+					end
+
+					if readyOk and attempt < 6 then
+						waitForConfig(attempt + 1)
+					else
+						finish(readyOk, readyDecoded, readyResponse)
+					end
+				end)
+			else
+				finish(false, fetchDecoded, { errorMessage = "Room is not accepting ready state." })
+			end
+		end)
+	end
+
+	waitForConfig(1)
+end
+
+function ITGOnline:StartRoom(callback)
+	if not self.currentRoomId then
+		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
+		return
+	end
+	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/start", {}, function(ok, decoded, response)
+		if ok and decoded and decoded.room then
+			self.currentRoom = decoded.room
+		end
+		if callback then callback(ok, decoded, response) end
+	end)
+end
+
+function ITGOnline:UpdateScheduledStart(room)
+	room = room or self.currentRoom
+	if not room then return end
+
+	local startAtMs = tonumber(room.start_at_ms or "") or iso_utc_milliseconds(room.start_at)
+	local serverTimeMs = tonumber(room.server_time_ms or "") or iso_utc_milliseconds(room.server_time)
+
+	if startAtMs and serverTimeMs then
+		self.scheduledStartLocalTime = GetTimeSinceStart() + ((startAtMs - serverTimeMs) / 1000)
+	elseif room.phase ~= "starting" and room.phase ~= "playing" then
+		self.scheduledStartLocalTime = nil
+	end
+end
+
+function ITGOnline:SecondsUntilScheduledStart()
+	if not self.scheduledStartLocalTime then return nil end
+	return self.scheduledStartLocalTime - GetTimeSinceStart()
+end
 
 function ITGOnline:Heartbeat(status)
 	local payload = { status = status or "available" }
@@ -402,6 +727,20 @@ end
 
 function ITGOnline:FetchLobby(callback)
 	self:Request("GET", "/lobby", nil, function(ok, decoded, response)
+		if callback then callback(ok, decoded, response) end
+	end)
+end
+
+function ITGOnline:FetchCurrentRoom(callback)
+	self:Request("GET", "/rooms/current", nil, function(ok, decoded, response)
+		if ok and decoded and decoded.room then
+			self.currentRoomId = decoded.room.id
+			self.currentRoom = decoded.room
+			if decoded.room.selected_song and decoded.room.selected_song.song_hash and decoded.room.selected_song.chart_hash then
+				self.currentSongPayload = decoded.room.selected_song
+			end
+			self:AutoAcceptPendingRequests(decoded.room)
+		end
 		if callback then callback(ok, decoded, response) end
 	end)
 end
@@ -420,6 +759,27 @@ end
 function ITGOnline:RequestJoinRoom(roomId, callback)
 	self.pendingJoinRoomId = roomId
 	self:Request("POST", "/rooms/" .. tostring(roomId) .. "/join-requests", {}, function(ok, decoded, response)
+		if not ok then
+			self.pendingJoinRoomId = nil
+		end
+		if callback then callback(ok, decoded, response) end
+	end)
+end
+
+function ITGOnline:ReportSongAvailability(missing, reason, callback)
+	if not self.currentRoomId then
+		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
+		return
+	end
+
+	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/song-availability", {
+		missing = missing and true or false,
+		reason = reason or (missing and "unknown" or "reloaded"),
+	}, function(ok, decoded, response)
+		if ok and decoded and decoded.room then
+			self.currentRoom = decoded.room
+			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
+		end
 		if callback then callback(ok, decoded, response) end
 	end)
 end
@@ -462,6 +822,21 @@ function ITGOnline:InviteUserToNewRoom(userId, visibility, callback)
 	end, visibility or "private")
 end
 
+function ITGOnline:AcceptInvitation(invitationId, callback)
+	self:Request("POST", "/room-invitations/" .. tostring(invitationId) .. "/accept", {}, function(ok, decoded, response)
+		if ok and decoded and decoded.room then
+			self.currentRoomId = decoded.room.id
+			self.currentRoom = decoded.room
+			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
+		end
+		if callback then callback(ok, decoded, response) end
+	end)
+end
+
+function ITGOnline:DeclineInvitation(invitationId, callback)
+	self:Request("POST", "/room-invitations/" .. tostring(invitationId) .. "/decline", {}, callback)
+end
+
 function ITGOnline:AcceptJoinRequest(joinRequestId, callback)
 	self:Request("POST", "/room-join-requests/" .. tostring(joinRequestId) .. "/accept", {}, callback)
 end
@@ -479,12 +854,14 @@ function ITGOnline:LeaveRoom(callback)
 	end
 	local roomId = self.currentRoomId
 	self:Request("POST", "/rooms/" .. tostring(roomId) .. "/leave", {}, function(ok, decoded, response)
-		if ok then
+		local gone = response and (response.statusCode == 404 or response.statusCode == 410)
+		if ok or gone then
 			self.currentRoomId = nil
 			self.currentRoom = nil
 			self.currentSongPayload = nil
+			self.pendingJoinRoomId = nil
 		end
-		if callback then callback(ok, decoded, response) end
+		if callback then callback(ok or gone, decoded, response) end
 	end)
 end
 
@@ -508,9 +885,12 @@ end
 function ITGOnline:AutoAcceptPendingRequests(room)
 	if not room or not self.user or not room.manager or tonumber(room.manager.id) ~= tonumber(self.user.id) then return end
 	if not room.pending_join_requests then return end
+	self.acceptedJoinRequestIds = self.acceptedJoinRequestIds or {}
 
 	for request in ivalues(room.pending_join_requests) do
-		if request and request.id and request.status == "pending" then
+		local requestId = request and tostring(request.id or "")
+		if request and request.id and request.status == "pending" and not self.acceptedJoinRequestIds[requestId] then
+			self.acceptedJoinRequestIds[requestId] = true
 			self:AcceptJoinRequest(request.id, function()
 				self:FetchRoom(room.id)
 			end)
@@ -519,16 +899,34 @@ function ITGOnline:AutoAcceptPendingRequests(room)
 end
 
 function ITGOnline:HandleRealtimeEvent(event)
-	if type(event) ~= "table" then return end
+	if type(event) ~= "table" then
+		online_trace("Ignored malformed realtime event.")
+		return
+	end
 	local name = event.event or event.name
 	local payload = event.payload or {}
+	if event.id then
+		self.lastEventCursor = math.max(self.lastEventCursor or 0, tonumber(event.id) or 0)
+	end
+	if not name then
+		online_trace("Ignored realtime event without name.")
+		return
+	end
+
+	local room_event_is_relevant = function(roomId)
+		if not roomId then return true end
+		local expected = self.currentRoomId or self.pendingJoinRoomId
+		return expected == nil or tonumber(roomId) == tonumber(expected)
+	end
 
 	if name == "connection.ready" then
-		if self.currentRoomId then self:FetchRoom(self.currentRoomId) end
+		self:Sync()
 	elseif name == "lobby.updated" then
 		self:FetchLobby(function(ok, decoded)
 			if ok then MESSAGEMAN:Broadcast("LobbySearched", self:LobbySearchPayload(decoded)) end
 		end)
+	elseif name == "room.invitation.created" then
+		MESSAGEMAN:Broadcast("OnlineRoomInvitation", payload)
 	elseif name == "room.private_join_request.created" then
 		MESSAGEMAN:Broadcast("OnlinePrivateJoinRequest", payload)
 	elseif name == "room.join_request.declined" then
@@ -538,6 +936,7 @@ function ITGOnline:HandleRealtimeEvent(event)
 			message = payload.reason and payload.reason ~= "" and ("Join request declined: " .. tostring(payload.reason)) or "Join request declined."
 		})
 	elseif name == "room.join_request.accepted" and payload.room_id then
+		if not room_event_is_relevant(payload.room_id) then return end
 		self:FetchRoom(payload.room_id, function(ok, decoded)
 			if ok and decoded and decoded.room then
 				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
@@ -552,13 +951,20 @@ function ITGOnline:HandleRealtimeEvent(event)
 			or payload.id
 			or self.currentRoomId
 			or self.pendingJoinRoomId
-		if roomId then
+		if not room_event_is_relevant(roomId) then return end
+		if payload.room then
+			self.currentRoomId = payload.room.id
+			self.currentRoom = payload.room
+			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(payload.room))
+		elseif roomId then
 			self:FetchRoom(roomId, function(ok, decoded)
 				if ok and decoded and decoded.room then
 					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
 				end
 			end)
 		end
+	else
+		online_trace("Unhandled realtime event: " .. tostring(name))
 	end
 end
 
@@ -599,6 +1005,7 @@ end
 function ITGOnline:LobbyStatePayload(room)
 	room = room or self.currentRoom
 	if not room then return { code = "", players = {} } end
+	self:UpdateScheduledStart(room)
 
 	local readyByUserId = {}
 	if room.ready_states then
@@ -611,8 +1018,14 @@ function ITGOnline:LobbyStatePayload(room)
 		end
 	end
 
-	local screen = SCREENMAN:GetTopScreen()
-	local screenName = screen and screen:GetName() or "ScreenSelectMusic"
+	local screenName = "ScreenOnlineLobbies"
+	if room.phase == "config" or room.phase == "lobby_ready" then
+		screenName = "ScreenPlayerOptions"
+	elseif room.phase == "starting" or room.phase == "playing" then
+		screenName = "ScreenGameplay"
+	elseif room.phase == "results" then
+		screenName = "ScreenEvaluationStage"
+	end
 	local players = {}
 	for member in ivalues(room.members or {}) do
 		local user = member.user or member
@@ -622,6 +1035,8 @@ function ITGOnline:LobbyStatePayload(room)
 				profileName = user.name or ("Player " .. userId),
 				screenName = screenName,
 				ready = readyByUserId[userId] == true,
+				missingSong = member.missing_song and true or false,
+				missingSongReason = member.missing_song_reason,
 				score = nil,
 				exScore = nil,
 			}
@@ -643,13 +1058,20 @@ function ITGOnline:LobbyStatePayload(room)
 		}
 	end
 
-	return {
-		code = tostring(room.id),
-		roomId = room.id,
-		phase = room.phase,
-		manager = room.manager,
-		isManager = self.user and room.manager and tonumber(room.manager.id) == tonumber(self.user.id) or false,
-		players = players,
+		return {
+			code = tostring(room.id),
+			roomId = room.id,
+			phase = room.phase,
+			startAt = room.start_at,
+			startAtMs = room.start_at_ms,
+			startedAt = room.started_at,
+			startedAtMs = room.started_at_ms,
+			serverTime = room.server_time,
+			serverTimeMs = room.server_time_ms,
+			secondsUntilStart = self:SecondsUntilScheduledStart(),
+			manager = room.manager,
+			isManager = self.user and room.manager and tonumber(room.manager.id) == tonumber(self.user.id) or false,
+			players = players,
 		songInfo = songInfo,
 	}
 end

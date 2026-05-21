@@ -11,11 +11,10 @@ The login screen creates and updates `Save/ITGOnline.ini`. You can also edit it 
 ApiBaseUrl=https://itgonline.fr/api/v1
 WebSocketUrl=wss://ws.itgonline.fr
 Email=player@example.com
-Password=your-password
 DeviceName=itgmania-client
 ```
 
-The file is local to the machine. Do not commit it.
+The file is local to the machine. Do not commit it. The password is entered through the login screen and kept in memory for the current session only.
 
 Until production mail is enabled on the server, accounts must be created and verified from the server side before the game can log in.
 

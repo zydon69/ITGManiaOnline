@@ -65,4 +65,63 @@ end
 -- add to the ActorFrame last; overlapped by StepStatistics otherwise
 t[#t+1] = LoadActor("./Shared/BPMDisplay.lua")
 
+t[#t+1] = Def.ActorFrame{
+	Name="OnlineStartCountdown",
+	InitCommand=function(self)
+		self:xy(_screen.cx, _screen.cy - 120):visible(false)
+	end,
+	OnCommand=function(self)
+		self:SetUpdateFunction(function(actor)
+			if not (ITGOnline and ITGOnline.SecondsUntilScheduledStart) then
+				actor:visible(false)
+				return
+			end
+
+			local seconds = ITGOnline:SecondsUntilScheduledStart()
+			if not seconds or seconds <= 0 then
+				actor:visible(false)
+				return
+			end
+
+			actor:visible(true)
+			actor:GetChild("CountdownText"):settext("START IN " .. tostring(math.ceil(seconds)))
+		end)
+	end,
+
+	Def.Quad{
+		InitCommand=function(self)
+			self:zoomto(260, 62):diffuse(0,0,0,0.72)
+		end
+	},
+	LoadFont("Common Bold")..{
+		Name="CountdownText",
+		Text="",
+		InitCommand=function(self)
+			self:zoom(0.82):diffuse(Color.Yellow)
+		end
+	}
+}
+
+t[#t+1] = LoadFont("Common Normal")..{
+	Name="ITGOnlineConnectionStatus",
+	Text="",
+	InitCommand=function(self)
+		self:xy(_screen.w - 14, _screen.h - 18):halign(1):zoom(0.45):diffuse(Color.White):shadowlength(1)
+	end,
+	OnCommand=function(self)
+		self:SetUpdateFunction(function(actor)
+			if not ITGOnline or not ITGOnline.currentRoomId then
+				actor:settext("")
+				return
+			end
+
+			local handler = GetOnlineHandlerInstance and GetOnlineHandlerInstance() or nil
+			local connected = handler and handler.connected and handler.socket ~= nil
+			local text = connected and "ITG Online: connected" or "ITG Online: reconnecting"
+			actor:settext(text)
+			actor:diffuse(connected and color("#66ff99") or Color.Yellow)
+		end)
+	end
+}
+
 return t

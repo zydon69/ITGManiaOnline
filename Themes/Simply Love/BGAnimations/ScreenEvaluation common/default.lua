@@ -99,4 +99,25 @@ t[#t+1] = LoadActor("./Panes/default.lua", NumPanes)
 -- Since this actor also spawns the event overlay it must go on top of everything else
 t[#t+1] = LoadActor("./Shared/AutoSubmitScore.lua")
 
+t[#t+1] = LoadFont("Common Normal")..{
+	Name="ITGOnlineConnectionStatus",
+	Text="",
+	InitCommand=function(self)
+		self:xy(_screen.w - 14, _screen.h - 18):halign(1):zoom(0.45):diffuse(Color.White):shadowlength(1)
+	end,
+	OnCommand=function(self)
+		self:SetUpdateFunction(function(actor)
+			if not ITGOnline or not ITGOnline.currentRoomId then
+				actor:settext("")
+				return
+			end
+
+			local handler = GetOnlineHandlerInstance and GetOnlineHandlerInstance() or nil
+			local connected = handler and handler.connected and handler.socket ~= nil
+			actor:settext(connected and "ITG Online: connected" or "ITG Online: reconnecting")
+			actor:diffuse(connected and color("#66ff99") or Color.Yellow)
+		end)
+	end
+}
+
 return t

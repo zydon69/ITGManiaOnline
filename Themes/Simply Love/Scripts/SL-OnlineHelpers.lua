@@ -17,6 +17,7 @@ local lastSongPreviewSentAt = 0
 local lastSongPreviewKey = ""
 local lastOnlineOptionsSongKey = ""
 local lastOnlineGameplayRoomId = nil
+local pendingOnlineStartRoomId = nil
 local pendingConfigReady = false
 -- These screens are the ones we want to display the player's scores for.
 local scoreScreens = {"ScreenGameplay", "ScreenEvaluationStage"}
@@ -38,17 +39,33 @@ local knownDisconnectScreens = {
   ["ScreenOptionsService"] = true,
 }
 
+local DisplayLobbyState
+
+local OnlineStartCountdownText = function()
+	if not (ITGOnline and ITGOnline.SecondsUntilScheduledStart) then return nil end
+
+	local seconds = ITGOnline:SecondsUntilScheduledStart()
+	if not seconds then return nil end
+
+	if seconds > 0 then
+		return "Song starts in " .. tostring(math.ceil(seconds)) .. "..."
+	end
+
+	return "Song started. Syncing audio..."
+end
+
 -- This input handler is used to lock input while we're waiting on the server to tell us to proceed.
 -- It does nothing, but it's necessary to prevent the player from interacting with the screen
 -- until everyone is ready.
 -- Holding Start for 5 seconds will disconnect from the lobby.
 local InputHandler = function(event)
-	if SCREENMAN:GetTopScreen() and isWaiting and event.PlayerNumber then
+	local topScreen = SCREENMAN:GetTopScreen()
+	if topScreen and isWaiting and event.PlayerNumber then
 		local pn = ToEnumShortString(event.PlayerNumber)
 		if event.type == "InputEventType_FirstPress" and event.GameButton == "Start" then
 			startHoldTime[pn] = GetTimeSinceStart()
 			lastDisconnectCountdown = nil
-			if SCREENMAN:GetTopScreen():GetName() == "ScreenGameplay" then
+			if topScreen:GetName() == "ScreenGameplay" then
 				readyState[pn] = true
 				MESSAGEMAN:Broadcast("UpdateMachineState")
 			end
@@ -66,8 +83,9 @@ local InputHandler = function(event)
 					startHoldTime[pn] = 0
 					lastDisconnectCountdown = nil
 					isWaiting = false
-					if SCREENMAN:GetTopScreen():GetName() == "ScreenGameplay" then
-						SCREENMAN:GetTopScreen():PauseGame(false)
+					local topScreen = SCREENMAN:GetTopScreen()
+					if topScreen and topScreen:GetName() == "ScreenGameplay" then
+						topScreen:PauseGame(false)
 					end
 					MESSAGEMAN:Broadcast("DisconnectOnline", {leaveRoom=true})
 				end
@@ -116,8 +134,21 @@ local ApplyOnlineSongSelection = function(songInfo)
 
 	local stepsType = GAMESTATE:GetCurrentStyle() and GAMESTATE:GetCurrentStyle():GetStepsType() or nil
 	local matchedSteps = nil
+	if stepsType and songInfo.chartHash and songInfo.chartHash ~= "" and ITGOnline and ITGOnline.BuildSongPayload then
+		for steps in ivalues(song:GetStepsByStepsType(stepsType)) do
+			for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
+				GAMESTATE:SetCurrentSteps(player, steps)
+			end
+			local localPayload = ITGOnline:BuildSongPayload()
+			if localPayload and localPayload.chart_hash == songInfo.chartHash then
+				matchedSteps = steps
+				break
+			end
+		end
+	end
 	if stepsType then
 		for steps in ivalues(song:GetStepsByStepsType(stepsType)) do
+			if matchedSteps then break end
 			local difficultyMatches = songInfo.difficulty == nil or songInfo.difficulty == "" or ToEnumShortString(steps:GetDifficulty()) == songInfo.difficulty
 			local meterMatches = songInfo.meter == nil or tonumber(songInfo.meter) == nil or steps:GetMeter() == tonumber(songInfo.meter)
 			if difficultyMatches and meterMatches then
@@ -186,6 +217,67 @@ local TransitionToOnlineGameplay = function()
 
 	topScreen:SetNextScreenName(OnlineGameplayScreen())
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+end
+
+local ReturnToOnlineLobbyFromMusicSelect = function()
+	local topScreen = SCREENMAN:GetTopScreen()
+	if not topScreen or topScreen:GetName() ~= "ScreenSelectMusic" then return false end
+	if not (ITGOnline and ITGOnline.currentRoomId) then return false end
+
+	UnlockOnlineInput()
+	topScreen:SetNextScreenName("ScreenOnlineLobbies")
+	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+	return true
+end
+
+local PollOnlineStart = function(actor, roomId)
+	if not actor or not roomId or not (ITGOnline and ITGOnline.FetchRoom) then return end
+
+	local timer = actor:GetChild("OnlineStartPollTimer")
+	if not timer then return end
+
+	pendingOnlineStartRoomId = roomId
+	timer:stoptweening()
+	timer:sleep(1):queuecommand("Poll")
+end
+
+local SelectMusicInputHandler = function(event)
+	if not event or event.type ~= "InputEventType_FirstPress" then return false end
+
+	local deviceButton = ""
+	if event.DeviceInput and event.DeviceInput.button then
+		deviceButton = string.lower(tostring(event.DeviceInput.button))
+	end
+
+	if event.GameButton == "Back" or string.find(deviceButton, "backspace", 1, true) then
+		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+		return ReturnToOnlineLobbyFromMusicSelect()
+	end
+
+	return false
+end
+
+local RestoreCurrentRoom = function(actor, callback)
+	if not (ITGOnline and ITGOnline.FetchCurrentRoom) then
+		if callback then callback(false) end
+		return
+	end
+
+	ITGOnline:FetchCurrentRoom(function(ok, decoded)
+		if ok and decoded and decoded.room then
+			actor.inLobby = true
+			local payload = ITGOnline:LobbyStatePayload(decoded.room)
+			DisplayLobbyState(payload, actor)
+			MESSAGEMAN:Broadcast("OnlineLobbyState", payload)
+			ITGOnline:Heartbeat("in_room")
+			if callback then callback(true) end
+			return
+		end
+
+		actor.inLobby = false
+		ITGOnline:Heartbeat("available")
+		if callback then callback(false) end
+	end)
 end
 
 local CreateRequest = function(event, data)
@@ -372,11 +464,13 @@ local OrderPlayers = function(data, localScreenName)
 	return updatedData
 end
 
-local DisplayLobbyState = function(data, actor)
+DisplayLobbyState = function(data, actor)
 	-- NOTE(teejusb): Keep in mind that SCREENMAN:GetTopScreen() might return nil since we might be
 	-- transitioning screens when we receive any messages from the server.
-	local screen = SCREENMAN:GetTopScreen()
-	local screenName = screen and screen:GetName() or "NoScreen"
+	          local screen = SCREENMAN:GetTopScreen()
+	          local screenName = screen and screen:GetName() or "NoScreen"
+						startHoldTime = { ["P1"] = 0, ["P2"] = 0 }
+						lastDisconnectCountdown = nil
 
 	local updatedData = OrderPlayers(data, screenName)
 
@@ -413,9 +507,9 @@ local DisplayLobbyState = function(data, actor)
 			if not anyInEval then
 				readyToUnlock = true
 			end
-		end
+			end
 
-		if readyToUnlock then
+			if readyToUnlock then
 			isWaiting = false
 			-- Lift the lock.
 			-- SCREENMAN:GetTopScreen():RemoveInputCallback(InputHandler)
@@ -426,7 +520,8 @@ local DisplayLobbyState = function(data, actor)
 			end
 
 			if screenName == "ScreenGameplay" then
-				SCREENMAN:GetTopScreen():PauseGame(false)
+				local topScreen = SCREENMAN:GetTopScreen()
+				if topScreen then topScreen:PauseGame(false) end
 			end
 		else
 			lines[#lines+1] = "Waiting for players to sync screens...\n"
@@ -436,15 +531,14 @@ local DisplayLobbyState = function(data, actor)
 		end
 	end
 
-	if screenName == "ScreenGameplay" and data.phase == "playing" then
-		isWaiting = false
-		for player in ivalues(PlayerNumber) do
-			SCREENMAN:set_input_redirected(player, false)
+		if screenName == "ScreenGameplay" and data.phase == "playing" then
+			isWaiting = false
+			for player in ivalues(PlayerNumber) do
+				SCREENMAN:set_input_redirected(player, false)
+			end
+			local topScreen = SCREENMAN:GetTopScreen()
+			if topScreen then topScreen:PauseGame(false) end
 		end
-		if SCREENMAN:GetTopScreen() then
-			SCREENMAN:GetTopScreen():PauseGame(false)
-		end
-	end
 	for i, player in ipairs(updatedData.players) do
 		local displayedScreen = player.screenName ~= "NoScreen" and player.screenName:gsub("Screen", "") or "Transitioning"
 		local readyText = ""
@@ -480,10 +574,12 @@ local DisplayLobbyState = function(data, actor)
 
 	if data.songInfo ~= nil then
 		local songKey = OnlineSongKey(data)
-		if data.phase == "lobby_ready" and songKey ~= "" and songKey ~= lastOnlineOptionsSongKey then
+		if (data.phase == "lobby_ready" or data.phase == "config") and songKey ~= "" and songKey ~= lastOnlineOptionsSongKey then
 			if ApplyOnlineSongSelection(data.songInfo) then
 				lastOnlineOptionsSongKey = songKey
-				ITGOnline:SetReady("lobby_ready", true)
+				if data.phase == "lobby_ready" then
+					ITGOnline:SetReady("lobby_ready", true)
+				end
 				TransitionToOnlineOptions()
 			end
 		end
@@ -531,11 +627,20 @@ local DisplayLobbyState = function(data, actor)
 	-- This gets cleared out by the server when every player has arrived at the song selection screen.
 	songSelected = (data.songInfo ~= nil)
 
-	if data.phase == "playing" and data.roomId and lastOnlineGameplayRoomId ~= data.roomId then
-		if ApplyOnlineSongSelection(data.songInfo) then
-			lastOnlineGameplayRoomId = data.roomId
-			UnlockOnlineInput()
-			TransitionToOnlineGameplay()
+			if data.phase == "starting" and data.roomId and lastOnlineGameplayRoomId ~= data.roomId then
+				if ApplyOnlineSongSelection(data.songInfo) then
+					lines[#lines+1] = OnlineStartCountdownText() or "Starting song..."
+					pendingOnlineStartRoomId = data.roomId
+					lastOnlineGameplayRoomId = data.roomId
+					UnlockOnlineInput()
+					TransitionToOnlineGameplay()
+				end
+			elseif data.phase == "playing" and data.roomId and lastOnlineGameplayRoomId ~= data.roomId then
+				if ApplyOnlineSongSelection(data.songInfo) then
+				pendingOnlineStartRoomId = nil
+				lastOnlineGameplayRoomId = data.roomId
+				UnlockOnlineInput()
+				TransitionToOnlineGameplay()
 		end
 	end
 
@@ -583,11 +688,16 @@ CreateOnlineHandler = function()
       InitCommand=function(self)
 				onlineHandlerInstance = self
 				onlineHandlerShuttingDown = false
-        self.socket = nil
-        self.connected = false
-				self.inLobby = false
-        self.errorMsg = nil
-      end,
+	        self.socket = nil
+	        self.connected = false
+					self.inLobby = false
+					self.errorMsg = nil
+					self.reconnectDelay = 1
+					self.deadmanTimeoutSeconds = 75
+	      end,
+				OnCommand=function(self)
+					self:sleep(1):queuecommand("RealtimeDeadman")
+				end,
 			OffCommand=function(self)
 				onlineHandlerShuttingDown = true
 				ITGOnline:Disconnect()
@@ -599,31 +709,51 @@ CreateOnlineHandler = function()
 				if display then
 					display:GetChild("Text"):settext("")
 				end
-				if onlineHandlerInstance == self then
-					onlineHandlerInstance = nil
-				end
-			end,
+					if onlineHandlerInstance == self then
+						onlineHandlerInstance = nil
+					end
+					lastSongPreviewSentAt = 0
+					lastSongPreviewKey = ""
+					lastOnlineOptionsSongKey = ""
+					lastOnlineGameplayRoomId = nil
+					pendingOnlineStartRoomId = nil
+					pendingConfigReady = false
+					startHoldTime = { ["P1"] = 0, ["P2"] = 0 }
+					lastDisconnectCountdown = nil
+					self.joinLobbyBusy = false
+					self.createLobbyBusy = false
+					self.startRoomBusy = false
+					self.invitePlayerBusy = false
+					self.joinPlayerBusy = false
+					self.privateJoinAnswerBusy = false
+					self.searchLobbyBusy = false
+					self.leaveLobbyBusy = false
+				end,
       ConnectOnlineMessageCommand=function(self)
         if self.socket == nil or self.errorMsg ~= nil then
 					onlineHandlerShuttingDown = false
 					self.errorMsg = nil
 					ITGOnline:Connect({
-						open=function()
-							if onlineHandlerShuttingDown then return end
-							self.socket = ITGOnline.socket
-							self.connected = true
-							self.inLobby = ITGOnline.currentRoomId ~= nil
-							self.errorMsg = nil
-							self:GetChild("Display"):visible(true)
-							ITGOnline:Heartbeat(self.inLobby and "in_room" or "available")
-							if ITGOnline.currentRoomId then
-								ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok, decoded)
-									if ok and decoded and decoded.room then
-										DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
-										MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
-									end
-								end)
-							end
+							open=function()
+								if onlineHandlerShuttingDown then return end
+								self.socket = ITGOnline.socket
+								self.connected = true
+								self.reconnectDelay = 1
+								self.inLobby = ITGOnline.currentRoomId ~= nil
+								self.errorMsg = nil
+									self:GetChild("Display"):visible(false)
+								if ITGOnline.Sync then
+									ITGOnline:Sync(function(ok, decoded)
+										if ok and decoded and decoded.current_room then
+											self.inLobby = true
+											ITGOnline:Heartbeat("in_room")
+										else
+											RestoreCurrentRoom(self)
+										end
+									end)
+								else
+									RestoreCurrentRoom(self)
+								end
 						end,
 						error=function(message)
 							if onlineHandlerShuttingDown then return end
@@ -633,16 +763,49 @@ CreateOnlineHandler = function()
 							self:GetChild("Display"):GetChild("Text"):settext("")
 							self:GetChild("Display"):visible(false)
 						end,
-						close=function()
-							if onlineHandlerShuttingDown then return end
+							close=function()
+								if onlineHandlerShuttingDown then return end
+								self.connected = false
+								self.socket = nil
+								self:GetChild("Display"):GetChild("Text"):settext("")
+								self:GetChild("Display"):visible(false)
+								if not ITGOnline.disconnecting then
+									self:stoptweening()
+									self:sleep(self.reconnectDelay or 1):queuecommand("ReconnectOnline")
+									self.reconnectDelay = math.min(30, (self.reconnectDelay or 1) * 2)
+								end
+							end,
+						})
+	        end
+	      end,
+				ReconnectOnlineCommand=function(self)
+					if onlineHandlerShuttingDown or ITGOnline.disconnecting or self.connected or self.socket ~= nil then
+						return
+					end
+					MESSAGEMAN:Broadcast("ConnectOnline")
+				end,
+				RealtimeDeadmanCommand=function(self)
+					if onlineHandlerShuttingDown then return end
+
+					if self.connected and self.socket ~= nil and ITGOnline and ITGOnline.lastRealtimeMessageAt then
+						local idle = GetTimeSinceStart() - ITGOnline.lastRealtimeMessageAt
+						if idle > (self.deadmanTimeoutSeconds or 75) then
 							self.connected = false
+							if ITGOnline.socket then
+								ITGOnline.socket:Close()
+							end
 							self.socket = nil
-							self:GetChild("Display"):GetChild("Text"):settext("")
-							self:GetChild("Display"):visible(false)
-						end,
-					})
-        end
-      end,
+							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+								event="websocket",
+								success=false,
+								message="Realtime connection timed out. Reconnecting..."
+							})
+							self:queuecommand("ReconnectOnline")
+						end
+					end
+
+					self:sleep(1):queuecommand("RealtimeDeadman")
+				end,
       ScreenChangedMessageCommand=function(self)
         if self.connected and self.socket ~= nil then
 					if not self.inLobby then
@@ -657,9 +820,10 @@ CreateOnlineHandler = function()
             return
           end
 
-          if screenName == "ScreenSelectMusic" then
-            UnlockOnlineInput()
-          end
+	          if screenName == "ScreenSelectMusic" then
+	            UnlockOnlineInput()
+		            if screen then screen:AddInputCallback(SelectMusicInputHandler) end
+	          end
 
           -- Lock input while syncing arrival on key screens.
           if syncLockScreens[screenName] then
@@ -684,23 +848,26 @@ CreateOnlineHandler = function()
 					readyState[pn] = false
 				end
 	            -- Input callbacks get cleared out when we transition screens, so we don't need to worry about explicitly removing it.
-	            SCREENMAN:GetTopScreen():AddInputCallback(InputHandler)
+	            if screen then screen:AddInputCallback(InputHandler) end
 	            if ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing" then
 	              UnlockOnlineInput()
-	              SCREENMAN:GetTopScreen():PauseGame(false)
+	              if screen then screen:PauseGame(false) end
 	            else
-	              SCREENMAN:GetTopScreen():PauseGame(true)
+	              if screen then screen:PauseGame(true) end
 	            end
 			elseif isWaiting then
-				SCREENMAN:GetTopScreen():AddInputCallback(InputHandler)
+				if screen then screen:AddInputCallback(InputHandler) end
 
 		end
 
-					local status = (screenName == "ScreenGameplay" and ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing") and "playing" or "in_room"
-					ITGOnline:Heartbeat(status)
-						if screenName == "ScreenSelectMusic" and ITGOnline.currentSongPayload then
-							ITGOnline:SetReady("lobby_ready", true)
+						local status = (screenName == "ScreenGameplay" and ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing") and "playing" or "in_room"
+						ITGOnline:Heartbeat(status)
+						if screenName == "ScreenEvaluationStage" and ITGOnline and ITGOnline.SendScore then
+							ITGOnline:SendScore(true)
 						end
+							if screenName == "ScreenSelectMusic" and ITGOnline.currentSongPayload then
+								ITGOnline:SetReady("lobby_ready", true)
+							end
           MESSAGEMAN:Broadcast("UpdateMachineState")
         end
       end,
@@ -719,147 +886,240 @@ CreateOnlineHandler = function()
           ITGOnline:Heartbeat("in_room")
         end
       end,
-      OnlineConfigReadyMessageCommand=function(self)
-				if not (self.connected and self.socket ~= nil and self.inLobby and ITGOnline.currentRoomId) then
-					return
-				end
-
-				pendingConfigReady = true
-				self:queuecommand("RetryOnlineConfigReady")
-      end,
-      RetryOnlineConfigReadyCommand=function(self)
-				if not pendingConfigReady or not ITGOnline.currentRoomId then
-					return
-				end
-
-				ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok, decoded)
-					if not ok or not decoded or not decoded.room then
-						self:sleep(1):queuecommand("RetryOnlineConfigReady")
+	      OnlineConfigReadyMessageCommand=function(self)
+					if not (self.connected and self.socket ~= nil and ITGOnline.currentRoomId) then
 						return
 					end
 
-					local phase = decoded.room.phase
-					if phase == "config" or phase == "starting" or phase == "playing" then
-						ITGOnline:SetReady("config_ready", true, function()
-							pendingConfigReady = false
-							ITGOnline:FetchRoom(ITGOnline.currentRoomId)
-						end)
-					elseif phase == "lobby_ready" then
-						ITGOnline:SetReady("lobby_ready", true)
-						self:sleep(1):queuecommand("RetryOnlineConfigReady")
-					else
-						pendingConfigReady = false
-					end
-				end)
-      end,
-      ExCountsChangedMessageCommand=function(self)
-				if self.connected and self.socket ~= nil and self.inLobby then	
-          ITGOnline:SendScore()
-        end
-      end,
-			OnlineLobbyStateMessageCommand=function(self, params)
-				if self.connected and params and params.roomId then
 					self.inLobby = true
-					DisplayLobbyState(params, self)
-				end
-			end,
-			OnlineLobbyLeftMessageCommand=function(self)
-				self.inLobby = false
-			end,
-	      SongSelectedMessageCommand=function(self)
-				if self.connected and self.socket ~= nil and self.inLobby then
-          ITGOnline:SelectSong(function(ok, decoded, response)
-						if ok then
-							ITGOnline:SetReady("lobby_ready", true)
-						else
-							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-								event="selectSong",
-								success=false,
-								message=(decoded and decoded.message) or (response and response.errorMessage) or "Song selection failed."
-							})
+					if ITGOnline.MarkConfigReady then
+						ITGOnline:MarkConfigReady()
+						return
+					end
+
+					pendingConfigReady = true
+					self:queuecommand("RetryOnlineConfigReady")
+	      end,
+	      RetryOnlineConfigReadyCommand=function(self)
+					if not pendingConfigReady or not ITGOnline.currentRoomId then
+						return
+					end
+
+					ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok, decoded)
+						if not ok or not decoded or not decoded.room then
+							self:sleep(1):queuecommand("RetryOnlineConfigReady")
+							return
 						end
-					end)
-        end
-      end,
-      CurrentSongChangedMessageCommand=function(self)
-				if self.connected and self.socket ~= nil and self.inLobby and ITGOnline.currentRoom and ITGOnline.user then
-					local manager = ITGOnline.currentRoom.manager
-					if not manager or tonumber(manager.id) ~= tonumber(ITGOnline.user.id) then
-						return
-					end
 
-					local song = GAMESTATE:GetCurrentSong()
-					if not song then return end
-
-					local now = GetTimeSinceStart()
-					local key = song:GetSongDir() or song:GetDisplayFullTitle() or ""
-					if key == lastSongPreviewKey and now - lastSongPreviewSentAt < 0.75 then
-						return
-					end
-
-					lastSongPreviewKey = key
-					lastSongPreviewSentAt = now
-					ITGOnline:PreviewSong()
-				end
-      end,
-      JoinLobbyMessageCommand=function(self, params)
-        if self.connected and self.socket ~= nil then
-				self.inLobby = false
-          ITGOnline:RequestJoinRoom(params.code, function(ok, decoded, response)
-						if ok then
-							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-								event="joinLobby",
-								success=true,
-								message="Join request sent. Waiting for the room manager."
-							})
-						elseif decoded and decoded.message == "You are already in this room." and params and params.code then
-							ITGOnline:FetchRoom(params.code, function(fetchOk, fetchDecoded, fetchResponse)
-								if fetchOk and fetchDecoded and fetchDecoded.room then
-									self.inLobby = true
-									DisplayLobbyState(ITGOnline:LobbyStatePayload(fetchDecoded.room), self)
-									MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(fetchDecoded.room))
+						local phase = decoded.room.phase
+						if not decoded.room.selected_song then
+							ITGOnline:SelectSong(function(selectOk, selectDecoded, selectResponse)
+								if selectOk then
+									self:sleep(0.25):queuecommand("RetryOnlineConfigReady")
 								else
+									pendingConfigReady = false
 									MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-										event="joinLobby",
+										event="selectSong",
 										success=false,
-										message=(fetchDecoded and fetchDecoded.message) or (fetchResponse and fetchResponse.errorMessage) or "Could not restore lobby state."
+										message=(selectDecoded and selectDecoded.message) or (selectResponse and selectResponse.errorMessage) or "Song selection failed."
 									})
 								end
 							end)
+							return
+						end
+
+						if phase == "config" or phase == "starting" or phase == "playing" then
+							ITGOnline:SetReady("config_ready", true, function()
+								pendingConfigReady = false
+								ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(fetchOk, fetchDecoded)
+									if fetchOk and fetchDecoded and fetchDecoded.room then
+									MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(fetchDecoded.room))
+									end
+								end)
+							end)
+						elseif phase == "lobby" or phase == "lobby_ready" then
+							ITGOnline:SetReady("lobby_ready", true, function()
+								self:sleep(0.5):queuecommand("RetryOnlineConfigReady")
+							end)
+						else
+							pendingConfigReady = false
+						end
+					end)
+	      end,
+		      ExCountsChangedMessageCommand=function(self)
+						if self.connected and self.socket ~= nil and self.inLobby and ITGOnline and ITGOnline.SendScore then
+		          ITGOnline:SendScore()
+		        end
+	      end,
+				OnlineSessionExpiredMessageCommand=function(self)
+					self.connected = false
+					self.inLobby = false
+					self.socket = nil
+					isWaiting = false
+					for player in ivalues(PlayerNumber) do
+						SCREENMAN:set_input_redirected(player, false)
+					end
+					MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+						event="sessionExpired",
+						success=false,
+						message="Online session expired. Please reconnect."
+					})
+				end,
+				OnlineLobbyStateMessageCommand=function(self, params)
+					if self.connected and params and params.roomId then
+						self.inLobby = true
+						DisplayLobbyState(params, self)
+					end
+				end,
+				OnlineLobbyLeftMessageCommand=function(self)
+					self.inLobby = false
+				end,
+			      SongSelectedMessageCommand=function(self)
+						if self.connected and self.socket ~= nil and ITGOnline.currentRoomId then
+							self.inLobby = true
+							if ITGOnline.SelectSongAndMarkLobbyReady then
+								ITGOnline:SelectSongAndMarkLobbyReady()
+								return
+							end
+
+		          ITGOnline:SelectSong(function(ok, decoded, response)
+								if ok then
+									ITGOnline:SetReady("lobby_ready", true)
+								ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(fetchOk, fetchDecoded)
+									if fetchOk and fetchDecoded and fetchDecoded.room then
+										local payload = ITGOnline:LobbyStatePayload(fetchDecoded.room)
+										DisplayLobbyState(payload, self)
+										MESSAGEMAN:Broadcast("OnlineLobbyState", payload)
+									end
+								end)
+							else
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="selectSong",
+									success=false,
+									message=(decoded and decoded.message) or (response and response.errorMessage) or "Song selection failed."
+								})
+							end
+						end)
+	        end
+	      end,
+		      CurrentSongChangedMessageCommand=function(self)
+						if self.connected and self.socket ~= nil and ITGOnline.currentRoomId and ITGOnline.currentRoom and ITGOnline.user then
+						local manager = ITGOnline.currentRoom.manager
+						if not manager or tonumber(manager.id) ~= tonumber(ITGOnline.user.id) then
+							return
+						end
+
+						local song = GAMESTATE:GetCurrentSong()
+						if not song then return end
+
+						local now = GetTimeSinceStart()
+						local key = song:GetSongDir() or song:GetDisplayFullTitle() or ""
+						if key == lastSongPreviewKey and now - lastSongPreviewSentAt < 0.75 then
+							return
+						end
+
+						lastSongPreviewKey = key
+						lastSongPreviewSentAt = now
+						ITGOnline:PreviewSong()
+					end
+	      end,
+		      JoinLobbyMessageCommand=function(self, params)
+		        if self.connected and self.socket ~= nil then
+						if self.joinLobbyBusy then return end
+						self.joinLobbyBusy = true
+						self.inLobby = false
+		          ITGOnline:RequestJoinRoom(params.code, function(ok, decoded, response)
+								self.joinLobbyBusy = false
+								if ok then
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="joinLobby",
+									success=true,
+									message="Join request sent. Waiting for the room manager."
+								})
+								elseif decoded and (decoded.error_code == "already_in_room" or decoded.message == "You are already in this room.") and params and params.code then
+								ITGOnline:FetchRoom(params.code, function(fetchOk, fetchDecoded, fetchResponse)
+									if fetchOk and fetchDecoded and fetchDecoded.room then
+										self.inLobby = true
+										DisplayLobbyState(ITGOnline:LobbyStatePayload(fetchDecoded.room), self)
+										MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(fetchDecoded.room))
+									else
+										MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+											event="joinLobby",
+											success=false,
+											message=(fetchDecoded and fetchDecoded.message) or (fetchResponse and fetchResponse.errorMessage) or "Could not restore lobby state."
+										})
+									end
+								end)
+							else
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="joinLobby",
+									success=false,
+									message=(decoded and decoded.message) or (response and response.errorMessage) or "Join lobby failed."
+								})
+							end
+						end)
+	        end
+	      end,
+		      CreateLobbyMessageCommand=function(self, params)
+		        if self.connected and self.socket ~= nil then
+						if self.createLobbyBusy then return end
+						self.createLobbyBusy = true
+						self.inLobby = false
+		          ITGOnline:CreateRoom(function(ok, decoded, response)
+								self.createLobbyBusy = false
+								if ok and decoded and decoded.room then
+								self.inLobby = true
+								DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
+								MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+								elseif decoded and (decoded.error_code == "already_in_open_room" or decoded.message == "User is already in an open room.") then
+								RestoreCurrentRoom(self, function(restored)
+									if not restored then
+										MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+											event="createLobby",
+											success=false,
+											message="Create lobby failed: User is already in an open room."
+										})
+									end
+								end)
+							else
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="createLobby",
+									success=false,
+									message=(decoded and decoded.message) or (response and response.errorMessage) or "Create lobby failed."
+								})
+							end
+						end, params and params.visibility or "public")
+	        end
+	      end,
+		      StartOnlineRoomMessageCommand=function(self)
+					if self.connected and self.socket ~= nil and self.inLobby then
+						if self.startRoomBusy then return end
+						self.startRoomBusy = true
+	          ITGOnline:StartRoom(function(ok, decoded, response)
+							self.startRoomBusy = false
+							if ok and decoded and decoded.room then
+							local payload = ITGOnline:LobbyStatePayload(decoded.room)
+							DisplayLobbyState(payload, self)
+							MESSAGEMAN:Broadcast("OnlineLobbyState", payload)
 						else
 							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-								event="joinLobby",
+								event="startRoom",
 								success=false,
-								message=(decoded and decoded.message) or (response and response.errorMessage) or "Join lobby failed."
+								message=(decoded and decoded.message) or (response and response.errorMessage) or "Start failed."
 							})
 						end
 					end)
         end
       end,
-      CreateLobbyMessageCommand=function(self, params)
-        if self.connected and self.socket ~= nil then
-				self.inLobby = false
-          ITGOnline:CreateRoom(function(ok, decoded, response)
-						if ok and decoded and decoded.room then
-							self.inLobby = true
-							DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
-							MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
-						else
-							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-								event="createLobby",
-								success=false,
-								message=(decoded and decoded.message) or (response and response.errorMessage) or "Create lobby failed."
-							})
-						end
-					end, params and params.visibility or "public")
-        end
-      end,
-      InviteOnlinePlayerMessageCommand=function(self, params)
-        if self.connected and self.socket ~= nil and params and params.user_id then
-					self.inLobby = false
-					local visibility = params.visibility or "private"
-          ITGOnline:InviteUserToNewRoom(params.user_id, visibility, function(ok, decoded, response)
-						if ok then
+	      InviteOnlinePlayerMessageCommand=function(self, params)
+	        if self.connected and self.socket ~= nil and params and params.user_id then
+						if self.invitePlayerBusy then return end
+						self.invitePlayerBusy = true
+						self.inLobby = false
+						local visibility = params.visibility or "private"
+	          ITGOnline:InviteUserToNewRoom(params.user_id, visibility, function(ok, decoded, response)
+							self.invitePlayerBusy = false
+							if ok then
 							self.inLobby = true
 							if ITGOnline.currentRoom then
 								DisplayLobbyState(ITGOnline:LobbyStatePayload(ITGOnline.currentRoom), self)
@@ -880,11 +1140,14 @@ CreateOnlineHandler = function()
 					end)
         end
       end,
-      JoinOnlinePlayerRoomMessageCommand=function(self, params)
-        if self.connected and self.socket ~= nil and params and params.user_id then
-					self.inLobby = false
-          ITGOnline:RequestJoinUserRoom(params.user_id, function(ok, decoded, response)
-						if ok and decoded and decoded.room then
+	      JoinOnlinePlayerRoomMessageCommand=function(self, params)
+	        if self.connected and self.socket ~= nil and params and params.user_id then
+						if self.joinPlayerBusy then return end
+						self.joinPlayerBusy = true
+						self.inLobby = false
+	          ITGOnline:RequestJoinUserRoom(params.user_id, function(ok, decoded, response)
+							self.joinPlayerBusy = false
+							if ok and decoded and decoded.room then
 							self.inLobby = true
 							DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
 							MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
@@ -904,11 +1167,14 @@ CreateOnlineHandler = function()
 					end)
         end
       end,
-      AnswerPrivateJoinRequestMessageCommand=function(self, params)
-        if self.connected and self.socket ~= nil and params and params.join_request_id then
-					if params.accept then
-						ITGOnline:AcceptJoinRequest(params.join_request_id, function(ok, decoded, response)
-							if ok and decoded and decoded.room then
+	      AnswerPrivateJoinRequestMessageCommand=function(self, params)
+	        if self.connected and self.socket ~= nil and params and params.join_request_id then
+						if self.privateJoinAnswerBusy then return end
+						self.privateJoinAnswerBusy = true
+						if params.accept then
+							ITGOnline:AcceptJoinRequest(params.join_request_id, function(ok, decoded, response)
+								self.privateJoinAnswerBusy = false
+								if ok and decoded and decoded.room then
 								DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
 								MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
 							end
@@ -918,9 +1184,10 @@ CreateOnlineHandler = function()
 								message=ok and "Join request accepted." or ((decoded and decoded.message) or (response and response.errorMessage) or "Could not answer join request.")
 							})
 						end)
-					else
-						ITGOnline:DeclineJoinRequest(params.join_request_id, params.reason or "", function(ok, decoded, response)
-							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+						else
+							ITGOnline:DeclineJoinRequest(params.join_request_id, params.reason or "", function(ok, decoded, response)
+								self.privateJoinAnswerBusy = false
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 								event="privateJoinAnswer",
 								success=ok and true or false,
 								message=ok and "Join request declined." or ((decoded and decoded.message) or (response and response.errorMessage) or "Could not answer join request.")
@@ -929,10 +1196,42 @@ CreateOnlineHandler = function()
 					end
         end
       end,
-			SearchLobbyMessageCommand=function(self)
-				if self.connected and self.socket ~= nil then
-					ITGOnline:FetchLobby(function(ok, decoded, response)
-						if ok then
+	      AnswerRoomInvitationMessageCommand=function(self, params)
+	        if self.connected and self.socket ~= nil and params and params.invitation_id then
+						if self.roomInvitationAnswerBusy then return end
+						self.roomInvitationAnswerBusy = true
+						if params.accept then
+							ITGOnline:AcceptInvitation(params.invitation_id, function(ok, decoded, response)
+								self.roomInvitationAnswerBusy = false
+								if ok and decoded and decoded.room then
+									DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
+									MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+								end
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="roomInvitationAnswer",
+									success=ok and true or false,
+									message=ok and "Invitation accepted." or ((decoded and decoded.message) or (response and response.errorMessage) or "Could not answer invitation.")
+								})
+							end)
+						else
+							ITGOnline:DeclineInvitation(params.invitation_id, function(ok, decoded, response)
+								self.roomInvitationAnswerBusy = false
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="roomInvitationAnswer",
+									success=ok and true or false,
+									message=ok and "Invitation declined." or ((decoded and decoded.message) or (response and response.errorMessage) or "Could not answer invitation.")
+								})
+							end)
+						end
+        end
+      end,
+				SearchLobbyMessageCommand=function(self)
+					if self.connected and self.socket ~= nil then
+						if self.searchLobbyBusy then return end
+						self.searchLobbyBusy = true
+						ITGOnline:FetchLobby(function(ok, decoded, response)
+							self.searchLobbyBusy = false
+							if ok then
 							MESSAGEMAN:Broadcast("LobbySearched", ITGOnline:LobbySearchPayload(decoded))
 						else
 							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
@@ -944,10 +1243,13 @@ CreateOnlineHandler = function()
 					end)
 				end
 			end,
-			LeaveLobbyMessageCommand=function(self)
-				if self.connected and self.socket ~= nil then
-					ITGOnline:LeaveRoom(function(ok, decoded, response)
-						if ok then
+				LeaveLobbyMessageCommand=function(self)
+					if self.connected and self.socket ~= nil then
+						if self.leaveLobbyBusy then return end
+						self.leaveLobbyBusy = true
+						ITGOnline:LeaveRoom(function(ok, decoded, response)
+							self.leaveLobbyBusy = false
+							if ok then
 							self.inLobby = false
 							MESSAGEMAN:Broadcast("OnlineLobbyLeft", {left=true})
 						else
@@ -960,7 +1262,7 @@ CreateOnlineHandler = function()
 					end)
 				end
 			end,
-      DisconnectOnlineMessageCommand=function(self, params)
+	      DisconnectOnlineMessageCommand=function(self, params)
 				local shouldLeaveRoom = params and params.leaveRoom and self.inLobby
 				local finalize = function()
 					onlineHandlerShuttingDown = true
@@ -983,20 +1285,47 @@ CreateOnlineHandler = function()
 					return
 				end
 
-				finalize()
-      end,
+					finalize()
+	      end,
 
-      Def.ActorFrame{
-        Name="Display",
-        InitCommand=function(self)
-          self:visible(false)
+	      Def.Actor{
+	        Name="OnlineStartPollTimer",
+	        PollCommand=function(self)
+						local actor = self:GetParent()
+						local roomId = pendingOnlineStartRoomId
+						if not roomId or not (ITGOnline and ITGOnline.FetchRoom) then
+							return
+						end
+
+						ITGOnline:FetchRoom(roomId, function(ok, decoded)
+							if not ok or not decoded or not decoded.room then
+								PollOnlineStart(actor, roomId)
+								return
+							end
+
+							local payload = ITGOnline:LobbyStatePayload(decoded.room)
+							DisplayLobbyState(payload, actor)
+							MESSAGEMAN:Broadcast("OnlineLobbyState", payload)
+
+							if decoded.room.phase == "starting" then
+								PollOnlineStart(actor, roomId)
+							end
+						end)
+	        end,
+	      },
+
+		      Def.ActorFrame{
+		        Name="Display",
+	        InitCommand=function(self)
+	          self:visible(false)
 
 					local width = 200
 					local LEFT = width/2
 					self:xy(LEFT, _screen.cy)
         end,
-        UpdateTextCommand=function(self, params)
-          local screen = SCREENMAN:GetTopScreen()
+	        UpdateTextCommand=function(self, params)
+						self:visible(false)
+	          local screen = SCREENMAN:GetTopScreen()
           local screenName = screen and screen:GetName() or "NoScreen"
 
           local bg = self:GetChild("Background")

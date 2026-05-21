@@ -6,7 +6,7 @@ local busy = false
 local function mask_password(value)
 	value = tostring(value or "")
 	if value == "" then return "(not set)" end
-	return string.rep("*", math.min(#value, 12))
+	return string.rep("*", #value)
 end
 
 local function refresh()
@@ -93,6 +93,7 @@ local function connect()
 			refresh()
 		end,
 		close = function(reason)
+			busy = false
 			status = tostring(reason or THEME:GetString("ScreenITGOnlineLogin", "Disconnected"))
 			refresh()
 		end,

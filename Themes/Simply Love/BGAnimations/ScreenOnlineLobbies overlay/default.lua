@@ -22,11 +22,17 @@ local player_action_user = nil
 local showing_private_join_prompt = false
 local private_join_prompt_index = 1
 local private_join_request = nil
+local private_join_prompt_kind = "join_request"
 local private_join_options = {
 	{label="Accept", accept=true, reason=""},
 	{label="Decline", accept=false, reason=""},
 	{label="Busy", accept=false, reason="Busy right now."},
 	{label="Maybe Later", accept=false, reason="Maybe later."},
+}
+local room_invitation_options = {
+	{label="Accept Invitation", accept=true},
+	{label="Decline Invitation", accept=false},
+	{label="Dismiss", dismiss=true},
 }
 local pending_join_action_id = 0
 local pending_join_deadline = 0
@@ -34,6 +40,7 @@ local pending_join_deadline = 0
 local mode = "browse"
 local joined_active_index = 1
 local joined_is_manager = false
+local joined_phase = nil
 local joined_lobby_code = ""
 local joined_lobby_players = {}
 local joined_song_preview = nil
@@ -47,6 +54,7 @@ local leave_confirm_index = 0
 local create_lobby_password = ""
 local join_lobby_password = ""
 local join_lobby_code = ""
+local lobby_passwords_enabled = false
 local password_prompt_mode = "create"
 local show_password_in_lobby = false
 local showing_password_prompt = false
@@ -103,7 +111,7 @@ SL.Global.Online = SL.Global.Online or {}
 local sample_lobby = {
 	code = "ABCD",
 	playerCount = 1,
-	isPasswordProtected = true,
+	isPasswordProtected = false,
 }
 
 local function GetPromptPassword()
@@ -121,6 +129,8 @@ local function SetPromptPassword(value)
 	end
 end
 
+local joined_any_player_missing_song
+
 local function joined_button_indices()
 	local indices = {1}
 	if joined_is_manager then
@@ -129,7 +139,34 @@ local function joined_button_indices()
 	if joined_missing_song then
 		indices[#indices + 1] = 3
 	end
+	if joined_is_manager and joined_phase == "config" and #joined_lobby_players > 0 then
+		local allReady = true
+		for player in ivalues(joined_lobby_players) do
+			if not player.ready then
+				allReady = false
+				break
+			end
+		end
+			if allReady and not joined_any_player_missing_song() then
+				indices[#indices + 1] = 4
+			end
+	end
 	return indices
+end
+
+local function joined_all_players_ready()
+	if #joined_lobby_players == 0 then return false end
+	for player in ivalues(joined_lobby_players) do
+		if not player.ready then return false end
+	end
+	return true
+end
+
+joined_any_player_missing_song = function()
+	for player in ivalues(joined_lobby_players) do
+		if player.missingSong then return true end
+	end
+	return false
 end
 
 local function normalize_joined_active_index()
@@ -198,6 +235,13 @@ local function build_player_action_options(user)
 		{label="Invite To Public Lobby", action="invite_public"},
 		{label="Cancel", action="cancel"},
 	}
+end
+
+local function active_private_prompt_options()
+	if private_join_prompt_kind == "invitation" then
+		return room_invitation_options
+	end
+	return private_join_options
 end
 
 local function clear_pending_join()
@@ -290,14 +334,31 @@ local InputHandler = function(event)
 		end
 
 		if showing_private_join_prompt then
+			local promptOptions = active_private_prompt_options()
 			if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
-				private_join_prompt_index = ((private_join_prompt_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #private_join_options) + 1
+				private_join_prompt_index = ((private_join_prompt_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #promptOptions) + 1
 				SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
 				t:queuecommand("UpdatePrivateJoinPrompt")
 			elseif event.GameButton == "Start" then
-				local option = private_join_options[private_join_prompt_index]
-				local request = private_join_request and private_join_request.join_request
-				if option and request and request.id then
+				local option = promptOptions[private_join_prompt_index]
+				if private_join_prompt_kind == "invitation" then
+					local invitation = private_join_request and private_join_request.invitation
+					if option and option.dismiss then
+						showing_private_join_prompt = false
+						t:GetChild("PrivateJoinPrompt"):visible(false)
+						SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+					elseif option and invitation and invitation.id then
+						showing_private_join_prompt = false
+						t:GetChild("PrivateJoinPrompt"):visible(false)
+						MESSAGEMAN:Broadcast("AnswerRoomInvitation", {
+							invitation_id=invitation.id,
+							accept=option.accept,
+						})
+						SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+					end
+				else
+					local request = private_join_request and private_join_request.join_request
+					if option and request and request.id then
 					showing_private_join_prompt = false
 					t:GetChild("PrivateJoinPrompt"):visible(false)
 					MESSAGEMAN:Broadcast("AnswerPrivateJoinRequest", {
@@ -306,6 +367,7 @@ local InputHandler = function(event)
 						reason=option.reason,
 					})
 					SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+				end
 				end
 			elseif event.GameButton == "Select" or event.GameButton == "Back" then
 				showing_private_join_prompt = false
@@ -332,6 +394,12 @@ local InputHandler = function(event)
 		end
 
 		if showing_password_prompt then
+			if not lobby_passwords_enabled then
+				showing_password_prompt = false
+				t:GetChild("PasswordPrompt"):visible(false)
+				return false
+			end
+
 			if event.GameButton == "MenuRight" then
 				password_wheel:scroll_by_amount(1)
 				SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
@@ -368,7 +436,7 @@ local InputHandler = function(event)
 							showSpinner=true,
 							showPrompt=false
 						})
-						MESSAGEMAN:Broadcast("CreateLobby", {password=create_lobby_password})
+						MESSAGEMAN:Broadcast("CreateLobby", lobby_passwords_enabled and {password=create_lobby_password} or {})
 					end
 					SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
 				elseif selected_char == "❌" then
@@ -444,9 +512,19 @@ local InputHandler = function(event)
 							topScreen:SetNextScreenName("ScreenSelectMusic")
 							topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 						end
-					elseif joined_active_index == 3 and joined_missing_song then
+				elseif joined_active_index == 3 and joined_missing_song then
 						transition_to_online_song_reload()
-					end
+						elseif joined_active_index == 4 and joined_is_manager then
+							if joined_phase == "config" and joined_all_players_ready() and not joined_any_player_missing_song() then
+								MESSAGEMAN:Broadcast("StartOnlineRoom")
+							else
+								t:playcommand("SetStatus", {
+									text=joined_any_player_missing_song() and "Cannot start yet. A player is missing the selected song." or "Cannot start yet. Wait until every player is ready.",
+									showSpinner=false,
+									showPrompt=true
+								})
+							end
+						end
 				end
 				return false
 			end
@@ -596,11 +674,14 @@ end
 local wait_time = 0
 local attempted = false
 local af = Def.ActorFrame{
-  OnCommand=function(self)
-		t=self
-    self:Center()
-		if not input_added and SCREENMAN:GetTopScreen() then
-			SCREENMAN:GetTopScreen():AddInputCallback(InputHandler)
+	  OnCommand=function(self)
+			t=self
+			input_added = false
+			holding.MenuLeft = false
+			holding.MenuRight = false
+	    self:Center()
+			if not input_added and SCREENMAN:GetTopScreen() then
+				SCREENMAN:GetTopScreen():AddInputCallback(InputHandler)
 			input_added = true
 		end
 		create_lobby_password = ""
@@ -612,9 +693,13 @@ local af = Def.ActorFrame{
 		self:queuecommand("CheckConnect")
   end,
 	OffCommand=function(self)
-		local onlineHandler = GetOnlineHandlerInstance()
-		if onlineHandler and onlineHandler.connected and not onlineHandler.inLobby then
-			MESSAGEMAN:Broadcast("DisconnectOnline")
+			input_added = false
+			holding.MenuLeft = false
+			holding.MenuRight = false
+			t = nil
+			local onlineHandler = GetOnlineHandlerInstance()
+			if onlineHandler and onlineHandler.connected and not onlineHandler.inLobby then
+				MESSAGEMAN:Broadcast("DisconnectOnline")
 		end
 	end,
 	Def.Actor{
@@ -710,17 +795,22 @@ local af = Def.ActorFrame{
 		local prompt = self:GetChild("PrivateJoinPrompt")
 		if not prompt then return end
 		local requester = private_join_request and private_join_request.requester or {}
+		local inviter = private_join_request and private_join_request.inviter or {}
 		local room = private_join_request and private_join_request.room or {}
 		local title = prompt:GetChild("PrivateJoinTitle")
 		if title then
-			title:settext(tostring(requester.name or "A player") .. " wants to join")
+			if private_join_prompt_kind == "invitation" then
+				title:settext(tostring(inviter.name or "A player") .. " invited you")
+			else
+				title:settext(tostring(requester.name or "A player") .. " wants to join")
+			end
 		end
 		local detail = prompt:GetChild("PrivateJoinDetail")
 		if detail then
-			detail:settext("Private lobby: " .. tostring(room.name or "Lobby"))
+			detail:settext(tostring(room.visibility == "private" and "Private lobby: " or "Lobby: ") .. tostring(room.name or "Lobby"))
 		end
 		local lines = {}
-		for i, option in ipairs(private_join_options) do
+		for i, option in ipairs(active_private_prompt_options()) do
 			lines[#lines + 1] = (i == private_join_prompt_index and "> " or "  ") .. option.label
 		end
 		local optionsText = prompt:GetChild("PrivateJoinOptions")
@@ -762,11 +852,12 @@ local af = Def.ActorFrame{
 		end
 
 		local lines = {}
-		for i, player in ipairs(joined_lobby_players) do
-			local profile = player.profileName or player.name or player.playerId or ("Player "..i)
-			local ready = player.ready and " ✔" or ""
-			lines[#lines+1] = i..". "..profile..ready
-		end
+			for i, player in ipairs(joined_lobby_players) do
+				local profile = player.profileName or player.name or player.playerId or ("Player "..i)
+				local ready = player.ready and " ✔" or ""
+				local missing = player.missingSong and " ⚠ missing song" or ""
+				lines[#lines+1] = i..". "..profile..ready..missing
+			end
 
 		local playersText = self:GetChild("JoinedLobbyContent"):GetChild("JoinedLobbyPlayers")
 		if playersText then
@@ -790,9 +881,17 @@ local af = Def.ActorFrame{
 						statusLines[#statusLines + 1] = "Pack: " .. tostring(joined_song_preview.pack)
 					end
 					statusLines[#statusLines + 1] = "Song: " .. tostring(joined_song_preview.title or "Unknown")
-				if joined_song_preview.artist and joined_song_preview.artist ~= "" then
-					statusLines[#statusLines + 1] = "Artist: " .. tostring(joined_song_preview.artist)
-				end
+					if joined_song_preview.artist and joined_song_preview.artist ~= "" then
+						statusLines[#statusLines + 1] = "Artist: " .. tostring(joined_song_preview.artist)
+					end
+					if joined_phase == "starting" then
+						local seconds = ITGOnline and ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or nil
+						statusLines[#statusLines + 1] = seconds and ("Starting in " .. tostring(math.ceil(math.max(0, seconds))) .. "...") or "Starting..."
+					elseif joined_phase == "config" then
+						statusLines[#statusLines + 1] = joined_all_players_ready()
+							and (joined_is_manager and "All players ready. Press Start." or "Waiting for the manager to start.")
+							or "Waiting for players to press Ready."
+					end
 			elseif joined_is_manager then
 				statusLines[#statusLines + 1] = "Choose a song when everyone is ready."
 			else
@@ -805,7 +904,7 @@ local af = Def.ActorFrame{
 		local codeLabel = joinedContent and joinedContent:GetChild("JoinedLobbyCodeLabel")
 		local passwordLabel = joinedContent and joinedContent:GetChild("JoinedLobbyPasswordLabel")
 		local passwordValue = joinedContent and joinedContent:GetChild("JoinedLobbyPasswordValue")
-		local hasPassword = create_lobby_password ~= ""
+		local hasPassword = lobby_passwords_enabled and create_lobby_password ~= ""
 		local passwordHidden = hasPassword and (not show_password_in_lobby)
 		if passwordLabel and passwordValue then
 			if not hasPassword then
@@ -863,6 +962,11 @@ local af = Def.ActorFrame{
 			if reloadSongsButton then
 				reloadSongsButton:visible(joined_missing_song)
 			end
+
+			local startRoomButton = joinedContent and joinedContent:GetChild("StartRoomButton")
+			if startRoomButton then
+					startRoomButton:visible(joined_is_manager and joined_phase == "config" and joined_all_players_ready() and not joined_any_player_missing_song())
+				end
 		end,
 		SetStatusCommand=function(self, params)
 			self:GetChild("NetworkStatus"):visible(true)
@@ -906,27 +1010,57 @@ local af = Def.ActorFrame{
 			if onlineHandler.connected then
 				connected = true
 				has_error = false
-				self:playcommand("SetStatus", {
-					text="Connected to online service.",
-					showSpinner=false,
-					showPrompt=false
-				})
-				self:GetChild("NetworkStatus"):visible(false)
-				self:queuecommand("UpdateLobbyView")
-					self:GetChild("JoinedLobbyContent"):visible(mode == "joined")
-					if ITGOnline and ITGOnline.currentRoomId then
-						ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok, decoded)
-							if ok and decoded and decoded.room then
-								MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
-							else
-								MESSAGEMAN:Broadcast("SearchLobby")
-							end
-						end)
-					else
-						MESSAGEMAN:Broadcast("SearchLobby")
+					self:playcommand("SetStatus", {
+						text="Connected to online service.",
+						showSpinner=false,
+						showPrompt=false
+					})
+					self:GetChild("NetworkStatus"):visible(false)
+							if ITGOnline and ITGOnline.Sync then
+								self:playcommand("SetStatus", {
+									text="Synchronizing online state...",
+									showSpinner=true,
+									showPrompt=false
+								})
+								ITGOnline:Sync(function(ok, decoded)
+									if ok and decoded and decoded.current_room then
+										MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.current_room))
+									else
+										MESSAGEMAN:Broadcast("SearchLobby")
+									end
+								end)
+							elseif ITGOnline and ITGOnline.currentRoomId then
+								self:playcommand("SetStatus", {
+									text="Restoring current lobby...",
+									showSpinner=true,
+									showPrompt=false
+								})
+								ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok, decoded)
+									if ok and decoded and decoded.room then
+										MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+									else
+										MESSAGEMAN:Broadcast("SearchLobby")
+									end
+								end)
+						elseif ITGOnline and ITGOnline.FetchCurrentRoom then
+							self:playcommand("SetStatus", {
+								text="Restoring current lobby...",
+								showSpinner=true,
+								showPrompt=false
+							})
+							ITGOnline:FetchCurrentRoom(function(ok, decoded)
+								if ok and decoded and decoded.room then
+									MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+								else
+									MESSAGEMAN:Broadcast("SearchLobby")
+								end
+							end)
+						else
+							self:queuecommand("UpdateLobbyView")
+							MESSAGEMAN:Broadcast("SearchLobby")
+						end
+						self:queuecommand("Hover")
 					end
-					self:queuecommand("Hover")
-				end
 
 			if onlineHandler.errorMsg ~= nil then
 				connected = false
@@ -983,6 +1117,7 @@ local af = Def.ActorFrame{
 		joined_lobby_code = params and params.code or ""
 			joined_lobby_players = params and params.players or {}
 			joined_is_manager = params and params.isManager or false
+			joined_phase = params and params.phase or nil
 			joined_song_preview = params and params.songInfo or nil
 			joined_song_confirmed = params and params.songInfo ~= nil or false
 			if not joined_song_confirmed then
@@ -1001,21 +1136,28 @@ local af = Def.ActorFrame{
 			normalize_joined_active_index()
 			self:queuecommand("Hover")
 		end,
-		OnlineMissingSongMessageCommand=function(self, params)
-			joined_missing_song = true
-			joined_missing_song_info = params and params.songInfo or joined_song_preview
-			if params and params.songInfo then
-				joined_song_preview = params.songInfo
-				joined_song_confirmed = true
+			OnlineMissingSongMessageCommand=function(self, params)
+				joined_missing_song = true
+				joined_missing_song_info = params and params.songInfo or joined_song_preview
+				if ITGOnline and ITGOnline.ReportSongAvailability then
+					ITGOnline:ReportSongAvailability(true, params and params.reason or "missing_local_song")
+				end
+				if params and params.songInfo then
+					joined_song_preview = params.songInfo
+					joined_song_confirmed = true
 			end
 			normalize_joined_active_index()
 			self:queuecommand("UpdateJoinedLobbyText")
 			self:queuecommand("Hover")
 		end,
-		OnlineSongAvailableMessageCommand=function(self)
-			joined_missing_song = false
-			joined_missing_song_info = nil
-			normalize_joined_active_index()
+			OnlineSongAvailableMessageCommand=function(self)
+				local wasMissing = joined_missing_song
+				joined_missing_song = false
+				joined_missing_song_info = nil
+				if wasMissing and ITGOnline and ITGOnline.ReportSongAvailability then
+					ITGOnline:ReportSongAvailability(false, "reloaded")
+				end
+				normalize_joined_active_index()
 			self:queuecommand("UpdateJoinedLobbyText")
 			self:queuecommand("Hover")
 		end,
@@ -1026,7 +1168,7 @@ local af = Def.ActorFrame{
 		end
 
 		join_lobby_code = params.code
-		if params.isPasswordProtected then
+		if lobby_passwords_enabled and params.isPasswordProtected then
 			password_prompt_mode = "join"
 			join_lobby_password = ""
 			showing_password_prompt = true
@@ -1073,6 +1215,17 @@ local af = Def.ActorFrame{
 	OnlinePrivateJoinRequestMessageCommand=function(self, params)
 		if not params or not params.join_request then return end
 		private_join_request = params
+		private_join_prompt_kind = "join_request"
+		private_join_prompt_index = 1
+		showing_private_join_prompt = true
+		local prompt = self:GetChild("PrivateJoinPrompt")
+		if prompt then prompt:visible(true) end
+		self:queuecommand("UpdatePrivateJoinPrompt")
+	end,
+	OnlineRoomInvitationMessageCommand=function(self, params)
+		if not params or not params.invitation then return end
+		private_join_request = params
+		private_join_prompt_kind = "invitation"
 		private_join_prompt_index = 1
 		showing_private_join_prompt = true
 		local prompt = self:GetChild("PrivateJoinPrompt")
@@ -1141,6 +1294,12 @@ local af = Def.ActorFrame{
 		elseif params and params.event == "privateJoinAnswer" then
 			self:playcommand("SetStatus", {
 				text=params.message or "Join request answered.",
+				showSpinner=false,
+				showPrompt=false
+			})
+		elseif params and params.event == "roomInvitationAnswer" then
+			self:playcommand("SetStatus", {
+				text=params.message or "Invitation answered.",
 				showSpinner=false,
 				showPrompt=false
 			})
@@ -1826,6 +1985,37 @@ local af = Def.ActorFrame{
 					end
 				}
 			},
+
+			Def.ActorFrame{
+				Name="StartRoomButton",
+				InitCommand=function(self)
+					self:xy(180, 180)
+					self.idx = 4
+					self:visible(false)
+				end,
+				Def.Quad{
+					InitCommand=function(self)
+						self:zoomto(200, 40):diffuse(Color.White)
+					end,
+					HoverCommand=function(self)
+						self:diffuse(joined_active_index == self:GetParent().idx and Color.Yellow or Color.White)
+					end
+				},
+				Def.Quad{
+					InitCommand=function(self)
+						self:zoomto(198, 38):diffuse(Color.Black)
+					end
+				},
+				LoadFont("Common Bold")..{
+					Text="Start",
+					InitCommand=function(self)
+						self:zoom(0.5)
+					end,
+					HoverCommand=function(self)
+						self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
+					end
+				}
+			},
 		},
 
 	Def.ActorFrame{
@@ -1916,9 +2106,17 @@ local af = Def.ActorFrame{
 
 
 
-	-- Keep this on top of everything else so that it doesn't get covered up by any other elements.
-	Def.ActorFrame{
-		Name="NetworkStatus",
+		LoadFont("Common Normal")..{
+			Name="ITGOnlineBuildMarker",
+			Text="ITG Online build 2026-05-21.9",
+			InitCommand=function(self)
+				self:xy(_screen.w - 12, _screen.h - 18):horizalign(right):zoom(0.32):diffuse(0.75,0.75,0.75,0.85)
+			end
+		},
+
+		-- Keep this on top of everything else so that it doesn't get covered up by any other elements.
+		Def.ActorFrame{
+			Name="NetworkStatus",
 		InitCommand=function(self)
 			self:y(-130)
 		end,

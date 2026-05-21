@@ -784,7 +784,8 @@ local Overrides = {
 	-------------------------------------------------------------------------
 	ScreenAfterPlayerOptions = {
 		Values = function()
-			local choices = { "Gameplay", "Select Music", "Options2", "Options3"  }
+			local finishChoice = (ITGOnline and ITGOnline.currentRoomId) and "Ready" or "Gameplay"
+			local choices = { finishChoice, "Select Music", "Options2", "Options3"  }
 			if SL.Global.MenuTimer.ScreenSelectMusic < 1  or SL.Global.MusicWheelLocked == true then table.remove(choices, 2) end
 			return choices
 		end,
@@ -793,7 +794,11 @@ local Overrides = {
 			if list[1] then
 				if ITGOnline and ITGOnline.currentRoomId then
 					SL.Global.ScreenAfter.PlayerOptions = "ScreenOnlineLobbies"
-					MESSAGEMAN:Broadcast("OnlineConfigReady")
+					if ITGOnline.MarkConfigReady then
+						ITGOnline:MarkConfigReady()
+					else
+						MESSAGEMAN:Broadcast("OnlineConfigReady")
+					end
 				else
 					SL.Global.ScreenAfter.PlayerOptions = Branch.GameplayScreen()
 				end
@@ -812,7 +817,8 @@ local Overrides = {
 	-------------------------------------------------------------------------
 	ScreenAfterPlayerOptions2 = {
 		Values = function()
-			local choices = { "Gameplay", "Select Music", "Options1", "Options3"  }
+			local finishChoice = (ITGOnline and ITGOnline.currentRoomId) and "Ready" or "Gameplay"
+			local choices = { finishChoice, "Select Music", "Options1", "Options3"  }
 			if SL.Global.MenuTimer.ScreenSelectMusic < 1  or SL.Global.MusicWheelLocked == true	 then table.remove(choices, 2) end
 			return choices
 		end,
@@ -821,7 +827,11 @@ local Overrides = {
 			if list[1] then
 				if ITGOnline and ITGOnline.currentRoomId then
 					SL.Global.ScreenAfter.PlayerOptions2 = "ScreenOnlineLobbies"
-					MESSAGEMAN:Broadcast("OnlineConfigReady")
+					if ITGOnline.MarkConfigReady then
+						ITGOnline:MarkConfigReady()
+					else
+						MESSAGEMAN:Broadcast("OnlineConfigReady")
+					end
 				else
 					SL.Global.ScreenAfter.PlayerOptions2 = Branch.GameplayScreen()
 				end
@@ -841,7 +851,8 @@ local Overrides = {
 	-- this is so dumb; I need to find time to completely rewrite ScreenPlayerOptions :(
 	ScreenAfterPlayerOptions3 = {
 		Values = function()
-			local choices = { "Gameplay", "Select Music", "Options1", "Options2"  }
+			local finishChoice = (ITGOnline and ITGOnline.currentRoomId) and "Ready" or "Gameplay"
+			local choices = { finishChoice, "Select Music", "Options1", "Options2"  }
 			if SL.Global.MenuTimer.ScreenSelectMusic < 1  or SL.Global.MusicWheelLocked == true then table.remove(choices, 2) end
 			return choices
 		end,
@@ -850,7 +861,11 @@ local Overrides = {
 			if list[1] then
 				if ITGOnline and ITGOnline.currentRoomId then
 					SL.Global.ScreenAfter.PlayerOptions3 = "ScreenOnlineLobbies"
-					MESSAGEMAN:Broadcast("OnlineConfigReady")
+					if ITGOnline.MarkConfigReady then
+						ITGOnline:MarkConfigReady()
+					else
+						MESSAGEMAN:Broadcast("OnlineConfigReady")
+					end
 				else
 					SL.Global.ScreenAfter.PlayerOptions3 = Branch.GameplayScreen()
 				end
