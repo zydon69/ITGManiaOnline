@@ -29,6 +29,11 @@ ITGOnline.sessionExpired = ITGOnline.sessionExpired or false
 ITGOnline.disconnecting = ITGOnline.disconnecting or false
 ITGOnline.lastEventCursor = ITGOnline.lastEventCursor or 0
 ITGOnline.lastRealtimeMessageAt = ITGOnline.lastRealtimeMessageAt or GetTimeSinceStart()
+ITGOnline.screenGeneration = ITGOnline.screenGeneration or 0
+ITGOnline.currentScreenName = ITGOnline.currentScreenName or "NoScreen"
+ITGOnline.authRefreshInFlight = ITGOnline.authRefreshInFlight or false
+ITGOnline.authRefreshCallbacks = ITGOnline.authRefreshCallbacks or {}
+ITGOnline.lastFinalScoreRoomId = ITGOnline.lastFinalScoreRoomId or nil
 
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -121,6 +126,21 @@ end
 
 local function sha256_hex(value)
 	return BinaryToHex(CRYPTMAN:SHA256String(tostring(value or ""))):lower()
+end
+
+local function sha256_file_hex(path)
+	if not path or path == "" or not CRYPTMAN or not CRYPTMAN.SHA256File then return nil end
+	local ok, digest = pcall(function() return CRYPTMAN:SHA256File(path) end)
+	if ok and digest and digest ~= "" then
+		return BinaryToHex(digest):lower()
+	end
+	return nil
+end
+
+local function normalized_hash(value)
+	value = tostring(value or ""):lower()
+	if value:match("^[a-f0-9]+$") and #value == 64 then return value end
+	return sha256_hex(value)
 end
 
 local function selected_steps()
@@ -239,7 +259,8 @@ function ITGOnline:AuthHeaders()
 	return headers
 end
 
-function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth)
+function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, options)
+	options = options or {}
 	local config = self:Config()
 	local url = config.apiBaseUrl .. path
 	local encodeOk, body = pcall(JsonEncode, payload or {})
@@ -288,14 +309,16 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth)
 				online_trace(method .. " " .. path .. " body: " .. tostring(response.body))
 			end
 
-			if response and response.statusCode == 401 and path ~= "/auth/login" and not alreadyRetriedAuth then
-				self:Login(function(loginOk)
+			if response and response.statusCode == 401 and path ~= "/auth/login" and not self.disconnecting and not alreadyRetriedAuth then
+				self:Relogin(function(loginOk)
 					if loginOk then
 						self:Request(method, path, payload, callback, true)
 						return
 					end
 
 					self.sessionExpired = true
+					if self.socket then self.socket:Close() end
+					self.socket = nil
 					MESSAGEMAN:Broadcast("OnlineSessionExpired")
 					if callback then callback(false, decoded, response) end
 				end)
@@ -305,7 +328,12 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth)
 			if callback then callback(ok, decoded, response) end
 		end,
 	}
-	self.requests[requestId] = { future = request, cancelled = false }
+	self.requests[requestId] = {
+		future = request,
+		cancelled = false,
+		cancelOnScreenChange = options.cancelOnScreenChange == true,
+		screenGeneration = self.screenGeneration,
+	}
 end
 
 function ITGOnline:CancelPendingRequests()
@@ -316,6 +344,27 @@ function ITGOnline:CancelPendingRequests()
 		end
 	end
 	self.requests = {}
+end
+
+function ITGOnline:CancelScreenBoundRequests()
+	for requestId, request in pairs(self.requests or {}) do
+		if request.cancelOnScreenChange == true and request.screenGeneration ~= self.screenGeneration then
+			request.cancelled = true
+			if request.future and request.future.Cancel then
+				request.future:Cancel()
+			end
+			self.requests[requestId] = nil
+		end
+	end
+end
+
+function ITGOnline:NoteScreenChanged(screenName)
+	screenName = tostring(screenName or "NoScreen")
+	if self.currentScreenName ~= screenName then
+		self.currentScreenName = screenName
+		self.screenGeneration = (self.screenGeneration or 0) + 1
+		self:CancelScreenBoundRequests()
+	end
 end
 
 function ITGOnline:Login(callback)
@@ -338,6 +387,28 @@ function ITGOnline:Login(callback)
 		self.token = decoded.access_token
 		self.user = decoded.user
 		if callback then callback(true) end
+	end)
+end
+
+function ITGOnline:Relogin(callback)
+	self.authRefreshCallbacks = self.authRefreshCallbacks or {}
+	self.authRefreshCallbacks[#self.authRefreshCallbacks + 1] = callback
+
+	if self.authRefreshInFlight then return end
+	self.authRefreshInFlight = true
+
+	self:Login(function(ok, message)
+		self.authRefreshInFlight = false
+		local callbacks = self.authRefreshCallbacks or {}
+		self.authRefreshCallbacks = {}
+
+		if not ok then
+			online_trace("Auth refresh failed: " .. tostring(message or "unknown"))
+		end
+
+		for cb in ivalues(callbacks) do
+			if cb then cb(ok) end
+		end
 	end)
 end
 
@@ -475,24 +546,21 @@ function ITGOnline:BuildSongPayload()
 	local steps = selected_steps()
 	local path = song_path(song)
 	local stepsHash = steps and tostring(steps:GetHash()) or "no-steps"
+	local grooveStatsHash = steps and steps.GetGrooveStatsHash and tostring(steps:GetGrooveStatsHash()) or ""
 	local chartType = normalize_chart_type(steps and enum_short(steps:GetStepsType()) or "")
 	local difficulty = steps and enum_short(steps:GetDifficulty()) or "unknown"
 	local meter = steps and steps:GetMeter() or nil
-
-	local songHashSource = table.concat({
-		path,
-		song:GetDisplayFullTitle() or "",
-		song:GetDisplayArtist() or "",
-		tostring(song:MusicLengthSeconds() or 0),
-	}, "|")
+	local songFilePath = song.GetSongFilePath and song:GetSongFilePath() or ""
+	local songHash = sha256_file_hex(songFilePath) or normalized_hash(songFilePath ~= "" and songFilePath or path)
+	local chartHash = normalized_hash(grooveStatsHash ~= "" and grooveStatsHash or stepsHash)
 
 	return {
 		title = song:GetDisplayFullTitle(),
 		artist = song:GetDisplayArtist(),
 		pack = path:match("^([^/]+)") or "",
 		folder_name = path,
-		song_hash = sha256_hex(songHashSource),
-		chart_hash = sha256_hex(stepsHash),
+		song_hash = songHash,
+		chart_hash = chartHash,
 		chart_type = chartType,
 		difficulty = difficulty,
 		meter = meter,
@@ -505,7 +573,15 @@ end
 function ITGOnline:SelectSong(callback)
 	if not self.currentRoomId then return end
 	local payload = self:BuildSongPayload()
-	if not payload then return end
+	if not payload then
+		if callback then callback(false, nil, { errorMessage = "No selected song or chart." }) end
+		MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+			event = "selectSong",
+			success = false,
+			message = "No selected song or chart."
+		})
+		return
+	end
 
 	self.currentSongPayload = payload
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/song-selection", payload, function(ok, decoded, response)
@@ -575,11 +651,13 @@ function ITGOnline:ServerJudgments(player)
 	}
 end
 
-function ITGOnline:SendScore(force)
+function ITGOnline:SendScore(force, final)
 	if not self.currentRoomId or not self.currentSongPayload then return end
 	if not self.currentRoom or self.currentRoom.phase ~= "playing" then return end
 	if not force and GetTimeSinceStart() - self.lastScoreSentAt < 1 then return end
+	if final and self.lastFinalScoreRoomId == self.currentRoomId then return end
 	self.lastScoreSentAt = GetTimeSinceStart()
+	if final then self.lastFinalScoreRoomId = self.currentRoomId end
 
 	local player = first_enabled_player()
 	local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
@@ -598,8 +676,17 @@ function ITGOnline:SendScore(force)
 		song_hash = self.currentSongPayload.song_hash,
 		chart_hash = self.currentSongPayload.chart_hash,
 		failed = stats:GetFailed() and true or false,
+		final = final and true or false,
 		judgments = self:ServerJudgments(player),
-	})
+	}, function(ok, decoded, response)
+		if not ok and (force or final) then
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = final and "finalScore" or "score",
+				success = false,
+				message = response_message(response, decoded, final and "Final score upload failed" or "Score upload failed")
+			})
+		end
+	end)
 end
 
 function ITGOnline:SetReady(phase, isReady, callback)
@@ -643,48 +730,34 @@ function ITGOnline:MarkConfigReady(callback)
 		end)
 	end
 
-	local waitForConfig
-	waitForConfig = function(attempt)
-		attempt = attempt or 1
-			self:FetchRoom(self.currentRoomId, function(fetchOk, fetchDecoded, fetchResponse)
-				if not fetchOk or not fetchDecoded or not fetchDecoded.room then
-				finish(false, fetchDecoded, fetchResponse)
-				return
-			end
+	self:FetchRoom(self.currentRoomId, function(fetchOk, fetchDecoded, fetchResponse)
+		if not fetchOk or not fetchDecoded or not fetchDecoded.room then
+			finish(false, fetchDecoded, fetchResponse)
+			return
+		end
 
-			local room = fetchDecoded.room
-			if not room.selected_song then
-				self:SelectSongAndMarkLobbyReady(function(ok, decoded, response)
-					if ok and attempt < 6 then
-						waitForConfig(attempt + 1)
-					else
-						finish(ok, decoded, response)
-					end
-				end)
-				return
-			end
+		local room = fetchDecoded.room
+		if not room.selected_song then
+			self:SelectSongAndMarkLobbyReady(finish)
+			return
+		end
 
-			if room.phase == "config" or room.phase == "starting" or room.phase == "playing" then
-				finishConfigReady()
-			elseif room.phase == "lobby" or room.phase == "lobby_ready" then
-				self:SetReady("lobby_ready", true, function(readyOk, readyDecoded, readyResponse)
-					if readyOk and readyDecoded and readyDecoded.room then
-						MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(readyDecoded.room))
-					end
-
-					if readyOk and attempt < 6 then
-						waitForConfig(attempt + 1)
-					else
-						finish(readyOk, readyDecoded, readyResponse)
-					end
-				end)
-			else
-				finish(false, fetchDecoded, { errorMessage = "Room is not accepting ready state." })
-			end
-		end)
-	end
-
-	waitForConfig(1)
+		if room.phase == "config" or room.phase == "starting" or room.phase == "playing" then
+			finishConfigReady()
+		elseif room.phase == "lobby" or room.phase == "lobby_ready" then
+			self:SetReady("lobby_ready", true, function(readyOk, readyDecoded, readyResponse)
+				if readyOk and readyDecoded and readyDecoded.room then
+					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(readyDecoded.room))
+				end
+				finish(false, readyDecoded or fetchDecoded, {
+					errorMessage = "Waiting for room config phase.",
+					retryAfter = 1,
+				})
+			end)
+		else
+			finish(false, fetchDecoded, { errorMessage = "Room is not accepting ready state." })
+		end
+	end)
 end
 
 function ITGOnline:StartRoom(callback)

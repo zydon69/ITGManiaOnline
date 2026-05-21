@@ -808,12 +808,17 @@ CreateOnlineHandler = function()
 				end,
       ScreenChangedMessageCommand=function(self)
         if self.connected and self.socket ~= nil then
+          local screen = SCREENMAN:GetTopScreen()
+          local screenName = screen and screen:GetName() or "NoScreen"
+					if ITGOnline and ITGOnline.NoteScreenChanged then
+						ITGOnline:NoteScreenChanged(screenName)
+					end
+					startHoldTime = { ["P1"] = 0, ["P2"] = 0 }
+					lastDisconnectCountdown = nil
+
 					if not self.inLobby then
 						return
 					end
-
-          local screen = SCREENMAN:GetTopScreen()
-          local screenName = screen and screen:GetName() or "NoScreen"
 
           if knownDisconnectScreens[screenName] then
             MESSAGEMAN:Broadcast("DisconnectOnline", {leaveRoom=true})
@@ -863,7 +868,7 @@ CreateOnlineHandler = function()
 						local status = (screenName == "ScreenGameplay" and ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing") and "playing" or "in_room"
 						ITGOnline:Heartbeat(status)
 						if screenName == "ScreenEvaluationStage" and ITGOnline and ITGOnline.SendScore then
-							ITGOnline:SendScore(true)
+							ITGOnline:SendScore(true, true)
 						end
 							if screenName == "ScreenSelectMusic" and ITGOnline.currentSongPayload then
 								ITGOnline:SetReady("lobby_ready", true)
@@ -893,7 +898,8 @@ CreateOnlineHandler = function()
 
 					self.inLobby = true
 					if ITGOnline.MarkConfigReady then
-						ITGOnline:MarkConfigReady()
+						pendingConfigReady = true
+						self:queuecommand("RetryOnlineConfigReady")
 						return
 					end
 
@@ -902,6 +908,28 @@ CreateOnlineHandler = function()
 	      end,
 	      RetryOnlineConfigReadyCommand=function(self)
 					if not pendingConfigReady or not ITGOnline.currentRoomId then
+						return
+					end
+
+					if ITGOnline.MarkConfigReady then
+						ITGOnline:MarkConfigReady(function(ok, decoded, response)
+							if ok then
+								pendingConfigReady = false
+								return
+							end
+
+							if response and response.retryAfter then
+								self:sleep(response.retryAfter):queuecommand("RetryOnlineConfigReady")
+								return
+							end
+
+							pendingConfigReady = false
+							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+								event="ready",
+								success=false,
+								message=(decoded and decoded.message) or (response and response.errorMessage) or "Ready synchronization failed."
+							})
+						end)
 						return
 					end
 
@@ -1014,7 +1042,7 @@ CreateOnlineHandler = function()
 
 						local now = GetTimeSinceStart()
 						local key = song:GetSongDir() or song:GetDisplayFullTitle() or ""
-						if key == lastSongPreviewKey and now - lastSongPreviewSentAt < 0.75 then
+						if key == lastSongPreviewKey and now - lastSongPreviewSentAt < 1.5 then
 							return
 						end
 
@@ -1287,6 +1315,23 @@ CreateOnlineHandler = function()
 
 					finalize()
 	      end,
+
+	      Def.Actor{
+	        Name="OnlineHeartbeatTimer",
+	        OnCommand=function(self)
+						self:sleep(5):queuecommand("Tick")
+	        end,
+	        TickCommand=function(self)
+						local actor = self:GetParent()
+						if actor and actor.connected and actor.socket ~= nil and actor.inLobby and ITGOnline and ITGOnline.Heartbeat then
+							local screen = SCREENMAN:GetTopScreen()
+							local screenName = screen and screen:GetName() or "NoScreen"
+							local status = (screenName == "ScreenGameplay" or screenName == "ScreenGameplayShared") and "playing" or "in_room"
+							ITGOnline:Heartbeat(status)
+						end
+						self:sleep(5):queuecommand("Tick")
+	        end,
+	      },
 
 	      Def.Actor{
 	        Name="OnlineStartPollTimer",

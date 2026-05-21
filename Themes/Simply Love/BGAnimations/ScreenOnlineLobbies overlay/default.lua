@@ -251,11 +251,11 @@ end
 
 local function begin_join_timeout(actor)
 	pending_join_action_id = pending_join_action_id + 1
-	pending_join_deadline = GetTimeSinceStart() + 12
+	pending_join_deadline = GetTimeSinceStart() + 20
 	local timer = actor and actor:GetChild("JoinTimeoutTimer")
 	if timer then
 		timer:stoptweening()
-		timer:sleep(12):queuecommand("CheckJoinTimeout")
+		timer:sleep(20):queuecommand("CheckJoinTimeout")
 	end
 end
 
