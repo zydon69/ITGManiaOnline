@@ -26,6 +26,7 @@
 #include "RageLog.h"
 #include "RageTimer.h"
 #include "RageUtil.h"
+#include "SecureCredentialStore.h"
 #include "SpecialFiles.h"
 #include "StdString.h"
 #include "ixwebsocket/IXHttp.h"
@@ -255,6 +256,7 @@ void NetworkManager::EnqueueMainThreadTask(std::function<void()> task) {
 
 void NetworkManager::Update() {
   RageTimer timer;
+  static RageTimer lastBacklogWarning;
   int tasksProcessed = 0;
 
   while (tasksProcessed < kMaxMainThreadTasksPerUpdate) {
@@ -276,9 +278,23 @@ void NetworkManager::Update() {
       break;
     }
   }
+
+  if (tasksProcessed >= kMaxMainThreadTasksPerUpdate ||
+      timer.Ago() >= kMaxMainThreadTaskSecondsPerUpdate) {
+    std::lock_guard<std::mutex> lock(this->mainThreadTaskMutex);
+    if (!this->mainThreadTaskQueue.empty() &&
+        lastBacklogWarning.Ago() >= 1.0f) {
+      LOG->Warn(
+          "Network main-thread task backlog still has %zu queued task(s)",
+          this->mainThreadTaskQueue.size());
+      lastBacklogWarning.Touch();
+    }
+  }
 }
 
 bool NetworkManager::IsUrlAllowed(const std::string& url) {
+  static std::mutex hostCacheMutex;
+
   if (!this->httpEnabled.Get()) {
     return false;
   }
@@ -301,6 +317,8 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
   }
 
   MakeLower(host);
+
+  std::lock_guard<std::mutex> hostCacheLock(hostCacheMutex);
 
   static std::string cachedDeniedRaw;
   static std::vector<std::string> cachedDeniedHosts;
@@ -326,6 +344,8 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
 
   return false;
 }
+
+bool NetworkManager::IsHttpEnabled() const { return this->httpEnabled.Get(); }
 
 HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
   bool useDownloadClient = !args.downloadFile.empty();
@@ -529,8 +549,9 @@ int WebSocketHandle::Close(lua_State* L) {
   handle->webSocket.stop();
   LUA->UnyieldLua();
 
-  if (handle->onClose) {
-    handle->onClose();
+  if (auto onClose = std::move(handle->onClose)) {
+    handle->onClose = nullptr;
+    onClose();
   }
 
   return 0;
@@ -595,6 +616,11 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     std::string url = SArg(1);
 
     lua_pushboolean(L, p->IsUrlAllowed(url));
+    return 1;
+  }
+
+  static int HttpEnabled(T* p, lua_State* L) {
+    lua_pushboolean(L, p->IsHttpEnabled());
     return 1;
   }
 
@@ -975,13 +1001,89 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     return 0;
   }
 
+  static int SecureCredentialBackend(T* /* p */, lua_State* L) {
+    lua_pushstring(L, SecureCredentialStore::BackendName());
+    return 1;
+  }
+
+  static int SecureCredentialIsAvailable(T* /* p */, lua_State* L) {
+    lua_pushboolean(L, SecureCredentialStore::IsAvailable());
+    return 1;
+  }
+
+  static int SecureCredentialGet(T* /* p */, lua_State* L) {
+    std::string service = SArg(1);
+    std::string account = SArg(2);
+    std::string secret;
+    std::string error;
+    bool ok = SecureCredentialStore::Load(service, account, secret, error);
+
+    lua_newtable(L);
+    lua_pushboolean(L, ok);
+    lua_setfield(L, -2, "ok");
+    if (ok) {
+      lua_pushlstring(L, secret.data(), secret.size());
+      lua_setfield(L, -2, "secret");
+    } else {
+      lua_pushstring(L, error.c_str());
+      lua_setfield(L, -2, "error");
+    }
+
+    return 1;
+  }
+
+  static int SecureCredentialSet(T* /* p */, lua_State* L) {
+    std::string service = SArg(1);
+    std::string account = SArg(2);
+
+    size_t secretLength = 0;
+    const char* secretBytes = luaL_checklstring(L, 3, &secretLength);
+    std::string secret(secretBytes, secretLength);
+
+    std::string error;
+    bool ok = SecureCredentialStore::Store(service, account, secret, error);
+
+    lua_newtable(L);
+    lua_pushboolean(L, ok);
+    lua_setfield(L, -2, "ok");
+    if (!ok) {
+      lua_pushstring(L, error.c_str());
+      lua_setfield(L, -2, "error");
+    }
+
+    return 1;
+  }
+
+  static int SecureCredentialDelete(T* /* p */, lua_State* L) {
+    std::string service = SArg(1);
+    std::string account = SArg(2);
+    std::string error;
+    bool ok = SecureCredentialStore::Delete(service, account, error);
+
+    lua_newtable(L);
+    lua_pushboolean(L, ok);
+    lua_setfield(L, -2, "ok");
+    if (!ok) {
+      lua_pushstring(L, error.c_str());
+      lua_setfield(L, -2, "error");
+    }
+
+    return 1;
+  }
+
   LunaNetworkManager() {
     ADD_METHOD(IsUrlAllowed);
+    ADD_METHOD(HttpEnabled);
     ADD_METHOD(HttpRequest);
     ADD_METHOD(WebSocket);
     ADD_METHOD(UrlEncode);
     ADD_METHOD(EncodeQueryParameters);
     ADD_METHOD(CloseAllWebSockets);
+    ADD_METHOD(SecureCredentialBackend);
+    ADD_METHOD(SecureCredentialIsAvailable);
+    ADD_METHOD(SecureCredentialGet);
+    ADD_METHOD(SecureCredentialSet);
+    ADD_METHOD(SecureCredentialDelete);
   }
 
  private:

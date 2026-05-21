@@ -374,6 +374,10 @@ else() # Linux
   if(${HAS_XINERAMA})
     target_compile_definitions("${SM_EXE_NAME}" PRIVATE HAVE_XINERAMA)
   endif()
+  if(HAS_LIBSECRET)
+    target_compile_definitions("${SM_EXE_NAME}" PRIVATE HAVE_LIBSECRET)
+    target_include_directories("${SM_EXE_NAME}" PRIVATE ${LIBSECRET_INCLUDE_DIRS})
+  endif()
 
   if(BSD)
     target_compile_definitions("${SM_EXE_NAME}" PRIVATE BSD)
@@ -418,6 +422,7 @@ if(WIN32)
 
   list(APPEND SMDATA_LINK_LIB
               "dbghelp.lib"
+              "Advapi32.lib"
               "setupapi.lib"
               "hid.lib")
 
@@ -447,6 +452,7 @@ elseif(APPLE)
               ${MAC_FRAME_COCOA}
               ${MAC_FRAME_IOKIT}
               ${MAC_FRAME_OPENGL}
+              ${MAC_FRAME_SECURITY}
               ${MAC_FRAME_COREFOUNDATION}
               ${MAC_FRAME_AUDIOTOOLBOX}
               ${MAC_FRAME_AUDIOUNIT}
@@ -475,6 +481,10 @@ else() # Unix / Linux TODO: Remember to find and locate the zip archive files.
 
   if(GTK3_FOUND)
     list(APPEND SMDATA_LINK_LIB "${GTK3_LIBRARIES}")
+  endif()
+  if(HAS_LIBSECRET)
+    list(APPEND SMDATA_LINK_LIB ${LIBSECRET_LIBRARIES})
+    target_link_directories("${SM_EXE_NAME}" PRIVATE ${LIBSECRET_LIBRARY_DIRS})
   endif()
 
   list(APPEND SMDATA_LINK_LIB "${CMAKE_THREAD_LIBS_INIT}")

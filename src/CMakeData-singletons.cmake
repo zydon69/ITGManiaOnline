@@ -53,6 +53,9 @@ list(APPEND SMDATA_GLOBAL_SINGLETON_HPP
             "ThemeManager.h"
             "UnlockManager.h")
 
+list(APPEND SMDATA_GLOBAL_SINGLETON_SRC "SecureCredentialStore.cpp")
+list(APPEND SMDATA_GLOBAL_SINGLETON_HPP "SecureCredentialStore.h")
+
 source_group("Global Singletons"
              FILES
              ${SMDATA_GLOBAL_SINGLETON_SRC}

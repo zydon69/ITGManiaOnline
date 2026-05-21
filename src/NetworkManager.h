@@ -129,6 +129,7 @@ class NetworkManager {
   ~NetworkManager();
 
   bool IsUrlAllowed(const std::string& url);
+  bool IsHttpEnabled() const;
   HttpRequestFuturePtr HttpRequest(const HttpRequestArgs& args);
   WebSocketHandlePtr WebSocket(const WebSocketArgs& args);
   void CloseAllWebSockets();
