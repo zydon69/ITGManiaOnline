@@ -3,9 +3,12 @@ local selection = 1
 local status = ""
 local busy = false
 
-local function mask_password(value)
+local function mask_password(value, storedSecurely)
 	value = tostring(value or "")
 	if value == "" then return "(not set)" end
+	if storedSecurely then
+		return "******** (" .. THEME:GetString("ScreenITGOnlineLogin", "PasswordStoredSecurely") .. ")"
+	end
 	return string.rep("*", #value)
 end
 
@@ -34,11 +37,20 @@ local function option_rows()
 		return { "Continue", "Disconnect", "EditEmail", "EditPassword", "Back" }
 	end
 
-	return { "Connect", "EditEmail", "EditPassword", "Back" }
+	return { "Connect", "EditEmail", "EditPassword", "ForgotPassword", "Back" }
 end
 
-local function save_config()
-	config = ITGOnline:SaveConfig(config)
+local function save_config(password)
+	local values = {
+		apiBaseUrl = config.apiBaseUrl,
+		webSocketUrl = config.webSocketUrl,
+		email = config.email,
+		deviceName = config.deviceName,
+	}
+	if password ~= nil then
+		values.password = password
+	end
+	config = ITGOnline:SaveConfig(values)
 end
 
 local function prompt_for(field)
@@ -53,7 +65,7 @@ local function prompt_for(field)
 		Password = is_password,
 		OnOK = function(input)
 			config[field] = tostring(input or "")
-			save_config()
+			save_config(is_password and config[field] or nil)
 			status = THEME:GetString("ScreenITGOnlineLogin", "Saved")
 			refresh()
 		end,
@@ -69,9 +81,14 @@ end
 local function connect()
 	if busy then return end
 
-	save_config()
 	if tostring(config.email or "") == "" or tostring(config.password or "") == "" then
 		status = THEME:GetString("ScreenITGOnlineLogin", "MissingCredentials")
+		refresh()
+		return
+	end
+
+	if NETWORK and NETWORK.HttpEnabled and not NETWORK:HttpEnabled() then
+		status = THEME:GetString("ScreenITGOnlineLogin", "HttpDisabled")
 		refresh()
 		return
 	end
@@ -79,7 +96,7 @@ local function connect()
 	if NETWORK and NETWORK.IsUrlAllowed and
 		(not NETWORK:IsUrlAllowed(tostring(config.apiBaseUrl or "")) or
 		 not NETWORK:IsUrlAllowed(tostring(config.webSocketUrl or ""))) then
-		status = "Network access is disabled or this ITG Online host is not allowed."
+		status = THEME:GetString("ScreenITGOnlineLogin", "HostNotAllowed")
 		refresh()
 		return
 	end
@@ -114,12 +131,35 @@ local function disconnect()
 	refresh()
 end
 
+local function forgot_password()
+	if busy then return end
+
+	if tostring(config.email or "") == "" then
+		status = THEME:GetString("ScreenITGOnlineLogin", "MissingEmail")
+		refresh()
+		return
+	end
+
+	busy = true
+	status = THEME:GetString("ScreenITGOnlineLogin", "PasswordResetSending")
+	refresh()
+
+	ITGOnline:ForgotPassword(function(ok, decoded, response)
+		busy = false
+		status = ok
+			and THEME:GetString("ScreenITGOnlineLogin", "PasswordResetSent")
+			or tostring((decoded and decoded.message) or (response and response.errorMessage) or THEME:GetString("ScreenITGOnlineLogin", "PasswordResetFailed"))
+		refresh()
+	end)
+end
+
 local actions = {
 	Continue = function() SCREENMAN:SetNewScreen("ScreenOnlineLobbies") end,
 	Disconnect = disconnect,
 	Connect = connect,
 	EditEmail = function() prompt_for("email") end,
 	EditPassword = function() prompt_for("password") end,
+	ForgotPassword = forgot_password,
 	Back = go_back,
 }
 
@@ -193,7 +233,7 @@ local t = Def.ActorFrame{
 		InitCommand=function(self) self:xy(_screen.cx - 260, _screen.cy - 8):halign(0):zoom(0.7):maxwidth(640) end,
 		RefreshCommand=function(self)
 			config = ITGOnline:Config()
-			self:settext(THEME:GetString("ScreenITGOnlineLogin", "PasswordLabel") .. " " .. mask_password(config.password))
+			self:settext(THEME:GetString("ScreenITGOnlineLogin", "PasswordLabel") .. " " .. mask_password(config.password, config.passwordStoredSecurely))
 		end,
 		ITGOnlineLoginStateChangedMessageCommand=function(self) self:playcommand("Refresh") end,
 		OnCommand=function(self) self:queuecommand("Refresh") end,

@@ -229,6 +229,7 @@ elseif(MACOSX)
   find_library(MAC_FRAME_FOUNDATION Foundation ${CMAKE_SYSTEM_FRAMEWORK_PATH} REQUIRED)
   find_library(MAC_FRAME_IOKIT IOKit ${CMAKE_SYSTEM_FRAMEWORK_PATH} REQUIRED)
   find_library(MAC_FRAME_OPENGL OpenGL ${CMAKE_SYSTEM_FRAMEWORK_PATH} REQUIRED)
+  find_library(MAC_FRAME_SECURITY Security ${CMAKE_SYSTEM_FRAMEWORK_PATH} REQUIRED)
   find_library(MAC_FRAME_SYSTEM System ${CMAKE_SYSTEM_FRAMEWORK_PATH} REQUIRED)
 
   mark_as_advanced(MAC_FRAME_ACCELERATE
@@ -243,6 +244,7 @@ elseif(MACOSX)
                    MAC_FRAME_FOUNDATION
                    MAC_FRAME_IOKIT
                    MAC_FRAME_OPENGL
+                   MAC_FRAME_SECURITY
                    MAC_FRAME_SYSTEM)
 
   find_library(MAC_FRAME_COREMEDIA CoreMedia ${CMAKE_SYSTEM_FRAMEWORK_PATH} REQUIRED)
@@ -255,6 +257,18 @@ elseif(MACOSX)
     )
   endif()
 elseif(LINUX OR BSD)
+  find_package(PkgConfig QUIET)
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(LIBSECRET QUIET libsecret-1)
+  endif()
+
+  if(LIBSECRET_FOUND)
+    set(HAS_LIBSECRET TRUE)
+  else()
+    set(HAS_LIBSECRET FALSE)
+    message("libsecret-1 was not found. Secure ITG Online password persistence will be disabled on this build.")
+  endif()
+
   if(WITH_GTK3)
     find_package("GTK3" 2.0)
     if(${GTK3_FOUND})

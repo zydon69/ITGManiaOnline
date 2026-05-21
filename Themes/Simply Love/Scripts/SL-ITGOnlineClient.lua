@@ -3,11 +3,13 @@
 --
 -- This bridges Simply Love's existing online-lobby UI to the Laravel server.
 -- Save/ITGOnline.ini stores connection settings only; the password is kept in
--- memory for the current session and is never persisted to disk.
+-- native secure storage when available, otherwise only in memory for the
+-- current session. It is never persisted to Save/ITGOnline.ini.
 
 ITGOnline = ITGOnline or {}
 
 ITGOnline.configPath = "/Save/ITGOnline.ini"
+ITGOnline.passwordService = "ITG Online Password"
 ITGOnline.defaults = {
 	apiBaseUrl = "https://itgonline.fr/api/v1",
 	webSocketUrl = "wss://ws.itgonline.fr",
@@ -34,7 +36,10 @@ ITGOnline.currentScreenName = ITGOnline.currentScreenName or "NoScreen"
 ITGOnline.authRefreshInFlight = ITGOnline.authRefreshInFlight or false
 ITGOnline.authRefreshCallbacks = ITGOnline.authRefreshCallbacks or {}
 ITGOnline.lastFinalScoreRoomId = ITGOnline.lastFinalScoreRoomId or nil
+ITGOnline.lastScorePositionKey = ITGOnline.lastScorePositionKey or nil
+ITGOnline.lastScoreSongPosition = ITGOnline.lastScoreSongPosition or 0
 ITGOnline.needsSyncAfterScreenCancel = ITGOnline.needsSyncAfterScreenCancel or false
+ITGOnline.songLoadedAckKey = ITGOnline.songLoadedAckKey or ""
 
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -49,6 +54,64 @@ end
 local function origin_from_base_url(value)
 	value = normalize_base_url(value)
 	return value:match("^(https?://[^/]+)") or ""
+end
+
+local online_trace
+
+local function secure_credentials_available()
+	return NETWORK and NETWORK.SecureCredentialIsAvailable and NETWORK:SecureCredentialIsAvailable()
+end
+
+local function secure_credentials_backend()
+	if NETWORK and NETWORK.SecureCredentialBackend then
+		return tostring(NETWORK:SecureCredentialBackend() or "unavailable")
+	end
+	return "unavailable"
+end
+
+local function secure_password_account(apiBaseUrl, email)
+	email = trim(email):lower()
+	if email == "" then return "" end
+	return normalize_base_url(apiBaseUrl) .. "|" .. email
+end
+
+local function secure_password_get(apiBaseUrl, email)
+	if not secure_credentials_available() then return nil, false end
+
+	local account = secure_password_account(apiBaseUrl, email)
+	if account == "" then return nil, false end
+
+	local result = NETWORK:SecureCredentialGet(ITGOnline.passwordService, account)
+	if result and result.ok and tostring(result.secret or "") ~= "" then
+		return tostring(result.secret), true
+	end
+
+	return nil, false
+end
+
+local function secure_password_set(apiBaseUrl, email, password)
+	if not secure_credentials_available() then return false end
+
+	local account = secure_password_account(apiBaseUrl, email)
+	if account == "" or tostring(password or "") == "" then return false end
+
+	local result = NETWORK:SecureCredentialSet(ITGOnline.passwordService, account, tostring(password))
+	if not result or not result.ok then
+		online_trace("Secure password save failed using " .. secure_credentials_backend() .. ": " .. tostring(result and result.error or "unknown"))
+		return false
+	end
+
+	return true
+end
+
+local function secure_password_delete(apiBaseUrl, email)
+	if not secure_credentials_available() then return false end
+
+	local account = secure_password_account(apiBaseUrl, email)
+	if account == "" then return false end
+
+	local result = NETWORK:SecureCredentialDelete(ITGOnline.passwordService, account)
+	return result and result.ok
 end
 
 local function safe_decode(body)
@@ -66,7 +129,7 @@ local function response_message(response, decoded, fallback)
 	return fallback
 end
 
-local function online_trace(message)
+function online_trace(message)
 	local line = "ITG Online: " .. tostring(message or "")
 	if Warn then Warn(line) elseif Trace then Trace(line) end
 end
@@ -205,11 +268,22 @@ local function read_config()
 
 	local raw = IniFile.ReadFile(ITGOnline.configPath) or {}
 	local section = raw["ITGOnline"] or {}
+	local apiBaseUrl = normalize_base_url(section["ApiBaseUrl"])
+	local email = trim(section["Email"])
+	local transientPassword = tostring(ITGOnline.transientPassword or "")
+	local securePassword, securePasswordStored = secure_password_get(apiBaseUrl, email)
+	if transientPassword == "" and securePasswordStored and tostring(securePassword or "") ~= "" then
+		ITGOnline.transientPassword = tostring(securePassword)
+		transientPassword = ITGOnline.transientPassword
+	end
+
 	return {
-			apiBaseUrl = normalize_base_url(section["ApiBaseUrl"]),
+			apiBaseUrl = apiBaseUrl,
 			webSocketUrl = trim(section["WebSocketUrl"]) ~= "" and trim(section["WebSocketUrl"]) or ITGOnline.defaults.webSocketUrl,
-			email = trim(section["Email"]),
-			password = tostring(ITGOnline.transientPassword or ""),
+			email = email,
+			password = transientPassword ~= "" and transientPassword or tostring(securePassword or ""),
+			passwordStoredSecurely = securePasswordStored,
+			secureCredentialsBackend = secure_credentials_backend(),
 			deviceName = trim(section["DeviceName"]) ~= "" and trim(section["DeviceName"]) or ITGOnline.defaults.deviceName,
 		}
 	end
@@ -229,8 +303,32 @@ function ITGOnline:SaveConfig(values)
 			email = trim(values.email or current.email),
 			deviceName = trim(values.deviceName or current.deviceName) ~= "" and trim(values.deviceName or current.deviceName) or ITGOnline.defaults.deviceName,
 		}
-	ITGOnline.transientPassword = tostring(values.password ~= nil and values.password or current.password or ITGOnline.transientPassword or "")
-	nextConfig.password = ITGOnline.transientPassword
+
+	local passwordWasProvided = values.password ~= nil
+	local nextPassword = tostring(passwordWasProvided and values.password or current.password or ITGOnline.transientPassword or "")
+	local securePasswordStored = false
+
+	if passwordWasProvided then
+		if nextPassword == "" then
+			secure_password_delete(current.apiBaseUrl, current.email)
+			secure_password_delete(nextConfig.apiBaseUrl, nextConfig.email)
+		else
+			securePasswordStored = secure_password_set(nextConfig.apiBaseUrl, nextConfig.email, nextPassword)
+		end
+	else
+		local storedPassword
+		storedPassword, securePasswordStored = secure_password_get(nextConfig.apiBaseUrl, nextConfig.email)
+		if storedPassword and storedPassword ~= "" then
+			nextPassword = storedPassword
+		elseif nextConfig.email ~= current.email or nextConfig.apiBaseUrl ~= current.apiBaseUrl then
+			nextPassword = ""
+		end
+	end
+
+	ITGOnline.transientPassword = nextPassword
+	nextConfig.password = nextPassword
+	nextConfig.passwordStoredSecurely = securePasswordStored
+	nextConfig.secureCredentialsBackend = secure_credentials_backend()
 
 		IniFile.WriteFile(ITGOnline.configPath, {
 			["ITGOnline"] = {
@@ -249,6 +347,7 @@ function ITGOnline:ClearTransientSecrets()
 	ITGOnline.transientPassword = nil
 	if self.config then
 		self.config.password = ""
+		self.config.passwordStoredSecurely = false
 	end
 end
 
@@ -282,6 +381,13 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 	local requestId = self.nextRequestId
 	self.nextRequestId = self.nextRequestId + 1
 	local traceId = request_id()
+	self.requests[requestId] = {
+		future = nil,
+		cancelled = false,
+		cancelOnScreenChange = options.cancelOnScreenChange == true,
+		resyncAfterCancel = options.resyncAfterCancel ~= false and options.cancelOnScreenChange == true,
+		screenGeneration = self.screenGeneration,
+	}
 
 	local headers = {
 		["Accept"] = "application/json",
@@ -301,11 +407,19 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 		headers = headers,
 		connectTimeout = 5,
 		transferTimeout = 45,
-		onResponse = function(response)
-			local record = ITGOnline.requests[requestId]
-			if not record or record.cancelled then
-				return
-			end
+			onResponse = function(response)
+				local record = ITGOnline.requests[requestId]
+				if record and record.cancelled then
+					ITGOnline.requests[requestId] = nil
+					if record.resyncAfterCancel and self.Sync then
+						self.needsSyncAfterScreenCancel = true
+						self:Sync()
+					end
+					return
+				end
+				if not record then
+					return
+				end
 
 			ITGOnline.requests[requestId] = nil
 			local decoded = safe_decode(response and response.body)
@@ -314,9 +428,9 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 			local responseBytes = response and response.body and #tostring(response.body) or 0
 			local errorCode = decoded and decoded.error_code or response and response.error or nil
 			online_trace(method .. " " .. path .. " -> " .. tostring(response and response.statusCode or "no-status") .. " in " .. tostring(duration) .. "ms, " .. tostring(responseBytes) .. "b" .. (errorCode and (", error=" .. tostring(errorCode)) or "") .. " [" .. traceId .. "]")
-			if not ok and response and response.body then
-				online_trace(method .. " " .. path .. " body: " .. tostring(response.body))
-			end
+				if not ok and decoded and decoded.message then
+					online_trace(method .. " " .. path .. " message: " .. tostring(decoded.message))
+				end
 
 			if response and response.statusCode == 401 and path ~= "/auth/login" and not self.disconnecting and not alreadyRetriedAuth then
 				self:Relogin(function(loginOk)
@@ -338,12 +452,9 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 			if callback then callback(ok, decoded, response) end
 		end,
 	}
-	self.requests[requestId] = {
-		future = request,
-		cancelled = false,
-		cancelOnScreenChange = options.cancelOnScreenChange == true,
-		screenGeneration = self.screenGeneration,
-	}
+	if self.requests[requestId] then
+		self.requests[requestId].future = request
+	end
 end
 
 function ITGOnline:CancelPendingRequests()
@@ -370,6 +481,9 @@ function ITGOnline:CancelScreenBoundRequests()
 	end
 	if cancelledAny then
 		self.needsSyncAfterScreenCancel = true
+		if not self.disconnecting and self.Sync then
+			self:Sync()
+		end
 	end
 end
 
@@ -409,6 +523,18 @@ function ITGOnline:Login(callback)
 		self.user = decoded.user
 		if callback then callback(true) end
 	end)
+end
+
+function ITGOnline:ForgotPassword(callback)
+	local config = self:Config()
+	if config.email == "" then
+		if callback then callback(false, nil, { errorMessage = "Email is required." }) end
+		return
+	end
+
+	self:Request("POST", "/auth/password/forgot", {
+		email = config.email,
+	}, callback)
 end
 
 function ITGOnline:Relogin(callback)
@@ -493,9 +619,6 @@ function ITGOnline:Disconnect()
 	if self.socket then
 		self.socket:Close()
 	end
-	if NETWORK and NETWORK.CloseAllWebSockets then
-		NETWORK:CloseAllWebSockets()
-	end
 	self.socket = nil
 	self.token = nil
 	self.user = nil
@@ -513,6 +636,10 @@ function ITGOnline:Sync(callback)
 		if ok and decoded then
 			if decoded.next_cursor then
 				self.lastEventCursor = math.max(self.lastEventCursor or 0, tonumber(decoded.next_cursor) or 0)
+			end
+
+			for event in ivalues(decoded.events or {}) do
+				self:HandleRealtimeEvent(event)
 			end
 
 			if decoded.current_room then
@@ -554,10 +681,6 @@ function ITGOnline:Sync(callback)
 					room = invitation.room,
 				})
 			end
-
-			for event in ivalues(decoded.events or {}) do
-				self:HandleRealtimeEvent(event)
-			end
 		end
 
 		if callback then callback(ok, decoded, response) end
@@ -576,7 +699,8 @@ function ITGOnline:BuildSongPayload()
 	local difficulty = steps and enum_short(steps:GetDifficulty()) or "unknown"
 	local meter = steps and steps:GetMeter() or nil
 	local songFilePath = song.GetSongFilePath and song:GetSongFilePath() or ""
-	local songHash = sha256_file_hex(songFilePath) or normalized_hash(songFilePath ~= "" and songFilePath or path)
+	local songHash = sha256_file_hex(songFilePath)
+	if not songHash then return nil end
 	local chartHash = normalized_hash(grooveStatsHash ~= "" and grooveStatsHash or stepsHash)
 
 	return {
@@ -612,6 +736,7 @@ function ITGOnline:SelectSong(callback)
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/song-selection", payload, function(ok, decoded, response)
 		if ok and decoded and decoded.room then
 			self.currentRoom = decoded.room
+			self.songLoadedAckKey = ""
 			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
 		elseif ok then
 			self:FetchRoom(self.currentRoomId)
@@ -678,7 +803,8 @@ end
 
 function ITGOnline:SendScore(force, final)
 	if not self.currentRoomId or not self.currentSongPayload then return end
-	if not self.currentRoom or self.currentRoom.phase ~= "playing" then return end
+	if not self.currentRoom then return end
+	if self.currentRoom.phase ~= "playing" and not (final and self.currentRoom.phase == "results") then return end
 	if not force and GetTimeSinceStart() - self.lastScoreSentAt < 1 then return end
 	if final and self.lastFinalScoreRoomId == self.currentRoomId then return end
 	self.lastScoreSentAt = GetTimeSinceStart()
@@ -690,16 +816,38 @@ function ITGOnline:SendScore(force, final)
 	local accuracy = math.max(0, math.min(100, (tonumber(dancePoints) or 0) * 100))
 	local exScore = CalculateExScore(player) or 0
 	local songPositionState = GAMESTATE:GetPlayerState(player):GetSongPosition()
-	local songPosition = songPositionState.GetMusicSecondsVisible and songPositionState:GetMusicSecondsVisible() or songPositionState:GetMusicSeconds()
-	local maxCombo = stats.MaxCombo and stats:MaxCombo() or stats:GetCurrentCombo()
-	local failed = stats.GetFailed and stats:GetFailed() == true or false
+	local songPosition = songPositionState:GetMusicSeconds()
+	local visibleOk, visibleSeconds = pcall(function() return songPositionState:GetMusicSecondsVisible() end)
+	if visibleOk and tonumber(visibleSeconds) then songPosition = visibleSeconds end
+	local positionKey = tostring(self.currentRoomId or "") .. "|" .. tostring(self.currentSongPayload.chart_hash or "")
+	if self.lastScorePositionKey ~= positionKey then
+		self.lastScorePositionKey = positionKey
+		self.lastScoreSongPosition = 0
+	end
+	songPosition = math.max(0, tonumber(songPosition) or 0)
+	if final and self.currentRoom.phase == "results" and tonumber(self.currentSongPayload.music_length_seconds) then
+		songPosition = math.max(songPosition, tonumber(self.currentSongPayload.music_length_seconds) or 0)
+	else
+		songPosition = math.max(songPosition, tonumber(self.lastScoreSongPosition) or 0)
+	end
+	self.lastScoreSongPosition = songPosition
+	local maxCombo = stats:GetCurrentCombo() or 0
+	for _, methodName in ipairs({ "GetMaxCombo", "MaxCombo" }) do
+		local ok, value = pcall(function() return stats[methodName] and stats[methodName](stats) or nil end)
+		if ok and tonumber(value) then
+			maxCombo = tonumber(value)
+			break
+		end
+	end
+	local failedOk, failedValue = pcall(function() return stats:GetFailed() end)
+	local failed = failedOk and failedValue == true or false
 
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/score", {
 		score = math.max(0, math.floor(exScore * 1000000)),
 		combo = math.max(0, stats:GetCurrentCombo() or 0),
 		max_combo = math.max(0, maxCombo or 0),
 		accuracy = accuracy,
-		song_position_seconds = math.max(0, songPosition or 0),
+		song_position_seconds = songPosition,
 		song_hash = self.currentSongPayload.song_hash,
 		chart_hash = self.currentSongPayload.chart_hash,
 		failed = failed,
@@ -769,7 +917,9 @@ function ITGOnline:MarkConfigReady(callback)
 			return
 		end
 
-		if room.phase == "config" or room.phase == "starting" or room.phase == "playing" then
+		if room.phase == "starting" or room.phase == "playing" or room.phase == "results" then
+			finish(true, fetchDecoded, fetchResponse)
+		elseif room.phase == "config" then
 			finishConfigReady()
 		elseif room.phase == "lobby" or room.phase == "lobby_ready" then
 			self:SetReady("lobby_ready", true, function(readyOk, readyDecoded, readyResponse)
@@ -798,6 +948,34 @@ function ITGOnline:StartRoom(callback)
 		end
 		if callback then callback(ok, decoded, response) end
 	end, nil, { cancelOnScreenChange = true })
+end
+
+function ITGOnline:MarkSongLoaded(callback)
+	if not self.currentRoomId then
+		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
+		return
+	end
+
+	local songKey = tostring(self.currentRoomId or "") .. "|" .. tostring(self.currentSongPayload and self.currentSongPayload.chart_hash or "")
+	if self.songLoadedAckKey == songKey then
+		if callback then callback(true, { room = self.currentRoom }, nil) end
+		return
+	end
+
+	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/loaded", {}, function(ok, decoded, response)
+		if ok and decoded and decoded.room then
+			self.currentRoom = decoded.room
+			self:UpdateScheduledStart(decoded.room)
+			self.songLoadedAckKey = songKey
+			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
+		end
+		if callback then callback(ok, decoded, response) end
+	end)
+end
+
+function ITGOnline:ShouldHoldGameplayForOnlineStart()
+	return self.currentRoom
+		and self.currentRoom.phase == "starting"
 end
 
 function ITGOnline:UpdateScheduledStart(room)
@@ -878,6 +1056,7 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 	}, function(ok, decoded, response)
 		if ok and decoded and decoded.room then
 			self.currentRoom = decoded.room
+			if missing then self.songLoadedAckKey = "" end
 			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
 		end
 		if callback then callback(ok, decoded, response) end
@@ -1044,6 +1223,18 @@ function ITGOnline:HandleRealtimeEvent(event)
 		end)
 	elseif name == "room.song_previewed" then
 		MESSAGEMAN:Broadcast("OnlineSongPreview", payload.preview or {})
+	elseif name == "room.load_timeout" then
+		if payload.room then
+			self.currentRoomId = payload.room.id
+			self.currentRoom = payload.room
+			self.songLoadedAckKey = ""
+			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(payload.room))
+		end
+		MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+			event = "songLoaded",
+			success = false,
+			message = "Song loading timed out. Returning to lobby."
+		})
 	elseif name and name:match("^room%.") then
 		local roomId = payload.room_id
 			or (payload.room and payload.room.id)

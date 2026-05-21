@@ -138,6 +138,25 @@ static bool GetITGOnlineSecondsUntilScheduledStart(float& secondsUntilStart) {
   return hasNumber && secondsUntilStart > -30.0f && secondsUntilStart < 120.0f;
 }
 
+static bool GetITGOnlineShouldHoldGameplayForStart() {
+  if (LUA == nullptr) {
+    return false;
+  }
+
+  Lua* L = LUA->Get();
+  const bool ran = LuaHelpers::RunExpression(
+      L,
+      "ITGOnline ~= nil and ITGOnline.ShouldHoldGameplayForOnlineStart ~= nil "
+      "and ITGOnline:ShouldHoldGameplayForOnlineStart() or false",
+      "ScreenGameplay::GetITGOnlineShouldHoldGameplayForStart");
+
+  const bool shouldHold = ran && lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  LUA->Release(L);
+
+  return shouldHold;
+}
+
 // received while STATE_DANCING
 AutoScreenMessage(SM_LoadNextSong);
 AutoScreenMessage(SM_StartLoadingNextSong);
@@ -1541,7 +1560,10 @@ void ScreenGameplay::StartPlayingSong(
 
   {
     float onlineSecondsUntilStart = 0.0f;
-    if (GetITGOnlineSecondsUntilScheduledStart(onlineSecondsUntilStart)) {
+    if (GetITGOnlineShouldHoldGameplayForStart()) {
+      p.m_StartSecond = 0.0f;
+      set_paused_internal(true);
+    } else if (GetITGOnlineSecondsUntilScheduledStart(onlineSecondsUntilStart)) {
       p.m_StartSecond = -onlineSecondsUntilStart;
     } else {
       const float fFirstSecond = GAMESTATE->m_pCurSong->GetFirstSecond();
