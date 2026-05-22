@@ -5,7 +5,8 @@
 	shallow = true
 [submodule "extern/ixwebsocket"]
 	path = extern/IXWebSocket
-	url = https://github.com/machinezone/IXWebSocket.git
+	url = git@github.com:chabbiaz/ITGManiaOnline.git
+	branch = ixwebsocket-online
 	shallow = true
 [submodule "extern/mbedtls"]
 	path = extern/mbedtls

@@ -44,8 +44,15 @@ namespace {
   "*.groovestats.com,*.itgmania.com,itgonline.fr,*.itgonline.fr"
 #endif
 
+#ifndef ITGMANIA_HTTP_PUBLIC_KEY_PINS_DEFAULT
+#define ITGMANIA_HTTP_PUBLIC_KEY_PINS_DEFAULT \
+  "itgonline.fr=660801b6fa3faba577853c89d1b6d908d75a00a4396259184b1a65dc1bcd1f60,*.itgonline.fr=660801b6fa3faba577853c89d1b6d908d75a00a4396259184b1a65dc1bcd1f60"
+#endif
+
 constexpr const char* BUILT_IN_HTTP_ALLOW_HOSTS =
     ITGMANIA_HTTP_ALLOW_HOSTS_DEFAULT;
+constexpr const char* BUILT_IN_HTTP_PUBLIC_KEY_PINS =
+    ITGMANIA_HTTP_PUBLIC_KEY_PINS_DEFAULT;
 
 bool IsSafeDownloadFileName(const std::string& value) {
   if (value.empty() || value == "." || value == "..") {
@@ -167,6 +174,7 @@ NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
         f.GetError().c_str());
   }
 
+  this->tlsOptions.publicKeySha256Pins = BUILT_IN_HTTP_PUBLIC_KEY_PINS;
   this->httpClient.setTLSOptions(this->tlsOptions);
   this->downloadClient.setTLSOptions(this->tlsOptions);
 

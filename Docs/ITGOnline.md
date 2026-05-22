@@ -28,6 +28,19 @@ The engine default `HttpAllowHosts` now permits:
 
 For a self-hosted server, update `HttpAllowHosts`, `ApiBaseUrl`, and `WebSocketUrl` to match the deployed domain. `HttpAllowHosts` is an immutable preference, so distribution builds should set it through their own `Data/Static.ini` or source default.
 
+## TLS public-key pinning
+
+The distributed client pins the SPKI SHA-256 public key for `itgonline.fr` and `*.itgonline.fr` in `src/NetworkManager.cpp`. Before rotating the production certificate key pair, update both pins with:
+
+```bash
+openssl s_client -servername itgonline.fr -connect itgonline.fr:443 </dev/null 2>/dev/null \
+  | openssl x509 -pubkey -noout \
+  | openssl pkey -pubin -outform DER 2>/dev/null \
+  | openssl dgst -sha256
+```
+
+Certificate renewals that keep the same public key do not require a client update. Key rotations do.
+
 ## Current flow
 
 - The normal play flow now adds a Local / Online choice after Standard / Marathon.

@@ -213,9 +213,8 @@ bool Store(
   credential.CredentialBlob =
       reinterpret_cast<LPBYTE>(const_cast<char*>(secret.data()));
   credential.CredentialBlobSize = static_cast<DWORD>(secret.size());
-  // Persist for the current Windows user on this machine. Windows Credential
-  // Manager does not expose this generic credential to other user profiles.
-  credential.Persist = CRED_PERSIST_LOCAL_MACHINE;
+  // Persist only for the current Windows user profile on this machine.
+  credential.Persist = CRED_PERSIST_LOCAL_USER;
 
   if (!CredWriteA(&credential, 0)) {
     error = LastWindowsErrorMessage("Credential Manager write failed");
