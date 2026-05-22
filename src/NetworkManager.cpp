@@ -39,8 +39,13 @@ NetworkManager* NETWORK =
     nullptr;  // global and accessible from anywhere in our program
 
 namespace {
+#ifndef ITGMANIA_HTTP_ALLOW_HOSTS_DEFAULT
+#define ITGMANIA_HTTP_ALLOW_HOSTS_DEFAULT \
+  "*.groovestats.com,*.itgmania.com,itgonline.fr,*.itgonline.fr"
+#endif
+
 constexpr const char* BUILT_IN_HTTP_ALLOW_HOSTS =
-    "*.groovestats.com,*.itgmania.com,itgonline.fr,*.itgonline.fr";
+    ITGMANIA_HTTP_ALLOW_HOSTS_DEFAULT;
 
 bool IsSafeDownloadFileName(const std::string& value) {
   if (value.empty() || value == "." || value == "..") {
