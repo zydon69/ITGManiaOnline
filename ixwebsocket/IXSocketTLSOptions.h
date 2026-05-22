@@ -36,6 +36,11 @@ namespace ix
         // whether to skip validating the peer's hostname against the certificate presented
         bool disable_hostname_validation = false;
 
+        // Optional comma-separated host=sha256_spki_hex pins. When a TLS client
+        // connects to a matching host, the peer certificate public key must hash
+        // to one of the configured SHA-256 SPKI pins.
+        std::string publicKeySha256Pins;
+
         bool hasCertAndKey() const;
 
         bool isUsingSystemDefaults() const;

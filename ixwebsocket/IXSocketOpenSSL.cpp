@@ -13,6 +13,8 @@
 #include "IXUniquePtr.h"
 #include <cassert>
 #include <errno.h>
+#include <iomanip>
+#include <sstream>
 #include <vector>
 #ifdef _WIN32
 #include <shlwapi.h>
@@ -22,6 +24,7 @@
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
 #include <openssl/x509v3.h>
 #endif
+#include <openssl/evp.h>
 #define socketerrno errno
 
 #ifdef _WIN32
@@ -94,6 +97,83 @@ namespace ix
     std::atomic<bool> SocketOpenSSL::_openSSLInitializationSuccessful(false);
     std::once_flag SocketOpenSSL::_openSSLInitFlag;
     std::vector<std::unique_ptr<std::mutex>> openSSLMutexes;
+
+    static std::string sha256Hex(const unsigned char* data, size_t length)
+    {
+        unsigned char digest[EVP_MAX_MD_SIZE];
+        unsigned int digestLength = 0;
+
+        EVP_Digest(data, length, digest, &digestLength, EVP_sha256(), nullptr);
+
+        std::ostringstream out;
+        for (unsigned int i = 0; i < digestLength; ++i)
+        {
+            out << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(digest[i]);
+        }
+
+        return out.str();
+    }
+
+    static std::string trimCopy(const std::string& value)
+    {
+        const auto first = value.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos)
+        {
+            return "";
+        }
+
+        const auto last = value.find_last_not_of(" \t\r\n");
+        return value.substr(first, last - first + 1);
+    }
+
+    static bool pinnedHostMatches(const std::string& host, const std::string& pattern)
+    {
+        if (pattern.rfind("*.", 0) == 0)
+        {
+            const std::string suffix = pattern.substr(1);
+            return host.size() >= suffix.size() && host.compare(host.size() - suffix.size(), suffix.size(), suffix) == 0;
+        }
+
+        return host == pattern;
+    }
+
+    static bool publicKeyPinMatches(const std::string& pins, const std::string& host, const std::string& spkiHash)
+    {
+        if (pins.empty())
+        {
+            return true;
+        }
+
+        std::stringstream stream(pins);
+        std::string entry;
+        bool hostHasPins = false;
+
+        while (std::getline(stream, entry, ','))
+        {
+            entry = trimCopy(entry);
+            const auto separator = entry.find('=');
+            if (separator == std::string::npos)
+            {
+                continue;
+            }
+
+            const std::string pattern = trimCopy(entry.substr(0, separator));
+            const std::string expectedHash = trimCopy(entry.substr(separator + 1));
+
+            if (!pinnedHostMatches(host, pattern))
+            {
+                continue;
+            }
+
+            hostHasPins = true;
+            if (expectedHash == spkiHash)
+            {
+                return true;
+            }
+        }
+
+        return !hostHasPins;
+    }
 
     SocketOpenSSL::SocketOpenSSL(const SocketTLSOptions& tlsOptions, int fd)
         : Socket(fd)
@@ -311,7 +391,7 @@ namespace ix
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
                                                const std::string& hostname,
 #else
-                                               const std::string& /* hostname */,
+                                               const std::string& hostname,
 #endif
                                                std::string& errMsg)
     {
@@ -375,6 +455,26 @@ namespace ix
             return false;
         }
 #endif
+
+        X509_PUBKEY* publicKey = X509_get_X509_PUBKEY(server_cert);
+        unsigned char* publicKeyDer = nullptr;
+        const int publicKeyDerLength = publicKey == nullptr ? -1 : i2d_X509_PUBKEY(publicKey, &publicKeyDer);
+        if (publicKeyDerLength <= 0 || publicKeyDer == nullptr)
+        {
+            X509_free(server_cert);
+            errMsg = "OpenSSL failed - could not encode peer public key.";
+            return false;
+        }
+
+        const std::string publicKeyHash = sha256Hex(publicKeyDer, static_cast<size_t>(publicKeyDerLength));
+        OPENSSL_free(publicKeyDer);
+
+        if (!publicKeyPinMatches(_tlsOptions.publicKeySha256Pins, hostname, publicKeyHash))
+        {
+            X509_free(server_cert);
+            errMsg = "OpenSSL failed - peer public key pin mismatch.";
+            return false;
+        }
 
         X509_free(server_cert);
         return true;
