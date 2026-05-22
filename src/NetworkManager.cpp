@@ -56,6 +56,10 @@ bool IsSafeDownloadFileName(const std::string& value) {
 
   return value.find("..") == std::string::npos;
 }
+
+bool IsProductionItgOnlineHost(const std::string& host) {
+  return host == "itgonline.fr" || EndsWith(host, ".itgonline.fr");
+}
 }
 
 Preference<bool> NetworkManager::httpEnabled(
@@ -332,6 +336,11 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
   }
 
   MakeLower(host);
+
+  if ((protocol == "http" || protocol == "ws") &&
+      IsProductionItgOnlineHost(host)) {
+    return false;
+  }
 
   std::lock_guard<std::mutex> hostCacheLock(hostCacheMutex);
 

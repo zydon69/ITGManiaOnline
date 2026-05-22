@@ -213,6 +213,8 @@ bool Store(
   credential.CredentialBlob =
       reinterpret_cast<LPBYTE>(const_cast<char*>(secret.data()));
   credential.CredentialBlobSize = static_cast<DWORD>(secret.size());
+  // Persist for the current Windows user on this machine. Windows Credential
+  // Manager does not expose this generic credential to other user profiles.
   credential.Persist = CRED_PERSIST_LOCAL_MACHINE;
 
   if (!CredWriteA(&credential, 0)) {
