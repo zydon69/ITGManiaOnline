@@ -21,6 +21,7 @@
 
 #include "RageSound.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 
@@ -599,6 +600,17 @@ void RageSound::ApplyParams() {
 
 bool RageSound::SetProperty(const std::string& sProperty, float fValue) {
   return m_pSource->SetProperty(sProperty, fValue);
+}
+
+bool RageSound::SetPositionSeconds(float seconds) {
+  if (m_pSource == nullptr || m_pSource->GetSampleRate() <= 0) {
+    return false;
+  }
+
+  seconds = std::max(0.0f, seconds);
+  const int frame =
+      static_cast<int>((seconds * m_pSource->GetSampleRate()) + 0.5f);
+  return SetPositionFrames(frame);
 }
 
 RageSoundParams::StopMode_t RageSound::GetStopMode() const {

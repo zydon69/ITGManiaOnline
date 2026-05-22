@@ -41,6 +41,21 @@ NetworkManager* NETWORK =
 namespace {
 constexpr const char* BUILT_IN_HTTP_ALLOW_HOSTS =
     "*.groovestats.com,*.itgmania.com,itgonline.fr,*.itgonline.fr";
+
+bool IsSafeDownloadFileName(const std::string& value) {
+  if (value.empty() || value == "." || value == "..") {
+    return false;
+  }
+
+  for (const char ch : value) {
+    if (ch == '/' || ch == '\\' || ch == ':' ||
+        static_cast<unsigned char>(ch) < 32) {
+      return false;
+    }
+  }
+
+  return value.find("..") == std::string::npos;
+}
 }
 
 Preference<bool> NetworkManager::httpEnabled(
@@ -735,6 +750,9 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     if (!lua_isnil(L, -1)) {
       if (lua_isstring(L, -1)) {
         args.downloadFile = lua_tostring(L, -1);
+        if (!IsSafeDownloadFileName(args.downloadFile)) {
+          luaL_error(L, "downloadFile must be a safe file name");
+        }
       } else {
         luaL_error(L, "downloadFile must be a string");
       }

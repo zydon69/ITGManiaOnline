@@ -1548,11 +1548,15 @@ bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
   return true;
 }
 
+void ScreenSelectMusic::ReturnToOnlineLobbyFromMusicSelect() {
+  m_BackgroundLoader.Abort();
+  SetNextScreenName("ScreenOnlineLobbies");
+  StartTransitioningScreen(SM_GoToNextScreen);
+}
+
 bool ScreenSelectMusic::MenuBack(const InputEventPlus& /* input */) {
   if (HasActiveITGOnlineRoom()) {
-    m_BackgroundLoader.Abort();
-    SetNextScreenName("ScreenOnlineLobbies");
-    StartTransitioningScreen(SM_GoToNextScreen);
+    ReturnToOnlineLobbyFromMusicSelect();
     return true;
   }
 
@@ -2121,12 +2125,17 @@ class LunaScreenSelectMusic : public Luna<ScreenSelectMusic> {
     lua_pushboolean(L, p->can_open_options_list(pn));
     return 1;
   }
+  static int ReturnToOnlineLobbyFromMusicSelect(T* p, lua_State* L) {
+    p->ReturnToOnlineLobbyFromMusicSelect();
+    COMMON_RETURN_SELF;
+  }
 
   LunaScreenSelectMusic() {
     ADD_METHOD(GetGoToOptions);
     ADD_METHOD(GetMusicWheel);
     ADD_METHOD(OpenOptionsList);
     ADD_METHOD(CanOpenOptionsList);
+    ADD_METHOD(ReturnToOnlineLobbyFromMusicSelect);
   }
 };
 

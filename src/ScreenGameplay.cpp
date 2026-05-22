@@ -1610,6 +1610,20 @@ void ScreenGameplay::set_paused_internal(bool p) {
   GAMESTATE->SetPaused(p);
 }
 
+bool ScreenGameplay::SeekMusicSeconds(float seconds) {
+  if (m_pSoundMusic == nullptr || !m_pSoundMusic->IsLoaded()) {
+    return false;
+  }
+
+  seconds = std::max(0.0f, seconds);
+  const bool seeked = m_pSoundMusic->SetPositionSeconds(seconds);
+  if (seeked) {
+    GAMESTATE->m_Position.m_fMusicSeconds = seconds;
+  }
+
+  return seeked;
+}
+
 void ScreenGameplay::PauseGame(bool bPause, GameController gc) {
   if (m_bPaused == bPause) {
     LOG->Trace(
@@ -3300,6 +3314,10 @@ class LunaScreenGameplay : public Luna<ScreenGameplay> {
     p->Pause(BArg(1));
     return 0;
   }
+  static int SeekMusicSeconds(T* p, lua_State* L) {
+    lua_pushboolean(L, p->SeekMusicSeconds(FArg(1)));
+    return 1;
+  }
   static int IsPaused(T* p, lua_State* L) {
     lua_pushboolean(L, p->IsPaused());
     return 1;
@@ -3357,6 +3375,7 @@ class LunaScreenGameplay : public Luna<ScreenGameplay> {
     ADD_METHOD(GetDummyPlayerInfo);
     // sm-ssc additions:
     ADD_METHOD(PauseGame);
+    ADD_METHOD(SeekMusicSeconds);
     ADD_METHOD(IsPaused);
     ADD_METHOD(GetHasteRate);
     ADD_METHOD(HasteTurningPoints);

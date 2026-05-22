@@ -62,6 +62,7 @@ class ScreenSelectMusic : public ScreenWithMenuElements {
   MusicWheel* GetMusicWheel() { return &m_MusicWheel; }
 
   void OpenOptionsList(PlayerNumber pn);
+  void ReturnToOnlineLobbyFromMusicSelect();
   void OnConfirmSongDeletion();
 
   bool can_open_options_list(PlayerNumber pn);
