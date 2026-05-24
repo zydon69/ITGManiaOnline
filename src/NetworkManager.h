@@ -130,6 +130,7 @@ class NetworkManager {
 
   bool IsUrlAllowed(const std::string& url);
   bool IsHttpEnabled() const;
+  std::string HttpPublicKeyPins() const;
   HttpRequestFuturePtr HttpRequest(const HttpRequestArgs& args);
   WebSocketHandlePtr WebSocket(const WebSocketArgs& args);
   void CloseAllWebSockets();
@@ -157,6 +158,7 @@ class NetworkManager {
   static Preference<bool> httpEnabled;
   static Preference<std::string> httpAllowHosts;
   static Preference<std::string> httpDenyHosts;
+  static Preference<std::string> httpPublicKeyPins;
 
   std::atomic<bool> shutdownWorkers{false};
 

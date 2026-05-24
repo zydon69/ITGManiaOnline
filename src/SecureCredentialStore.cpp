@@ -77,8 +77,54 @@ CFMutableDictionaryRef CopyBaseQuery(
   return query;
 }
 #elif defined(_WIN32)
-std::string TargetName(const std::string& service, const std::string& account) {
-  return service + ":" + account;
+std::wstring Utf8ToWide(const std::string& value) {
+  if (value.empty()) {
+    return std::wstring();
+  }
+
+  const int required = MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+      static_cast<int>(value.size()), nullptr, 0);
+  if (required <= 0) {
+    return std::wstring();
+  }
+
+  std::wstring wide(static_cast<size_t>(required), L'\0');
+  const int written = MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+      static_cast<int>(value.size()), wide.data(), required);
+  if (written <= 0) {
+    return std::wstring();
+  }
+
+  return wide;
+}
+
+std::string WideToUtf8(const std::wstring& value) {
+  if (value.empty()) {
+    return std::string();
+  }
+
+  const int required = WideCharToMultiByte(
+      CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+      static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+  if (required <= 0) {
+    return std::string();
+  }
+
+  std::string utf8(static_cast<size_t>(required), '\0');
+  const int written = WideCharToMultiByte(
+      CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+      static_cast<int>(value.size()), utf8.data(), required, nullptr, nullptr);
+  if (written <= 0) {
+    return std::string();
+  }
+
+  return utf8;
+}
+
+std::wstring TargetName(const std::string& service, const std::string& account) {
+  return Utf8ToWide(service + ":" + account);
 }
 
 std::string LastWindowsErrorMessage(const char* fallback) {
@@ -87,18 +133,23 @@ std::string LastWindowsErrorMessage(const char* fallback) {
     return "credential not found";
   }
 
-  LPSTR message = nullptr;
-  DWORD size = FormatMessageA(
+  LPWSTR message = nullptr;
+  DWORD size = FormatMessageW(
       FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
           FORMAT_MESSAGE_IGNORE_INSERTS,
       nullptr, code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-      reinterpret_cast<LPSTR>(&message), 0, nullptr);
+      reinterpret_cast<LPWSTR>(&message), 0, nullptr);
 
   if (size == 0 || message == nullptr) {
     return fallback;
   }
 
-  std::string result(message, size);
+  std::wstring wideMessage(message, size);
+  std::string result = WideToUtf8(wideMessage);
+  if (result.empty()) {
+    result = fallback;
+  }
+
   LocalFree(message);
   while (!result.empty() &&
          (result.back() == '\r' || result.back() == '\n' ||
@@ -206,17 +257,22 @@ bool Store(
   error.clear();
   return true;
 #elif defined(_WIN32)
-  std::string target = TargetName(service, account);
-  CREDENTIALA credential = {};
+  std::wstring target = TargetName(service, account);
+  if (target.empty()) {
+    error = "invalid service/account UTF-8 value";
+    return false;
+  }
+
+  CREDENTIALW credential = {};
   credential.Type = CRED_TYPE_GENERIC;
-  credential.TargetName = const_cast<LPSTR>(target.c_str());
+  credential.TargetName = const_cast<LPWSTR>(target.c_str());
   credential.CredentialBlob =
       reinterpret_cast<LPBYTE>(const_cast<char*>(secret.data()));
   credential.CredentialBlobSize = static_cast<DWORD>(secret.size());
   // Persist only for the current Windows user profile on this machine.
   credential.Persist = CRED_PERSIST_LOCAL_USER;
 
-  if (!CredWriteA(&credential, 0)) {
+  if (!CredWriteW(&credential, 0)) {
     error = LastWindowsErrorMessage("Credential Manager write failed");
     return false;
   }
@@ -285,9 +341,14 @@ bool Load(
   error.clear();
   return true;
 #elif defined(_WIN32)
-  std::string target = TargetName(service, account);
-  PCREDENTIALA credential = nullptr;
-  if (!CredReadA(target.c_str(), CRED_TYPE_GENERIC, 0, &credential)) {
+  std::wstring target = TargetName(service, account);
+  if (target.empty()) {
+    error = "invalid service/account UTF-8 value";
+    return false;
+  }
+
+  PCREDENTIALW credential = nullptr;
+  if (!CredReadW(target.c_str(), CRED_TYPE_GENERIC, 0, &credential)) {
     error = LastWindowsErrorMessage("Credential Manager read failed");
     return false;
   }
@@ -343,8 +404,13 @@ bool Delete(
   error.clear();
   return true;
 #elif defined(_WIN32)
-  std::string target = TargetName(service, account);
-  if (!CredDeleteA(target.c_str(), CRED_TYPE_GENERIC, 0)) {
+  std::wstring target = TargetName(service, account);
+  if (target.empty()) {
+    error = "invalid service/account UTF-8 value";
+    return false;
+  }
+
+  if (!CredDeleteW(target.c_str(), CRED_TYPE_GENERIC, 0)) {
     DWORD code = GetLastError();
     if (code != ERROR_NOT_FOUND) {
       error = LastWindowsErrorMessage("Credential Manager delete failed");

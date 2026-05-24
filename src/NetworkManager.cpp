@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "CryptManager.h"
 #include "EnumHelper.h"
 #include "LuaManager.h"
 #include "Preference.h"
@@ -49,10 +50,122 @@ namespace {
   "itgonline.fr=660801b6fa3faba577853c89d1b6d908d75a00a4396259184b1a65dc1bcd1f60,*.itgonline.fr=660801b6fa3faba577853c89d1b6d908d75a00a4396259184b1a65dc1bcd1f60"
 #endif
 
+#ifndef ITGMANIA_HTTP_PUBLIC_KEY_PINS_BACKUP_DEFAULT
+#define ITGMANIA_HTTP_PUBLIC_KEY_PINS_BACKUP_DEFAULT ""
+#endif
+
 constexpr const char* BUILT_IN_HTTP_ALLOW_HOSTS =
     ITGMANIA_HTTP_ALLOW_HOSTS_DEFAULT;
-constexpr const char* BUILT_IN_HTTP_PUBLIC_KEY_PINS =
-    ITGMANIA_HTTP_PUBLIC_KEY_PINS_DEFAULT;
+constexpr const char* SIGNED_HTTP_SECURITY_OVERRIDE_PATH =
+    "Save/ITGOnlineNetworkSecurity.ini";
+
+std::string BuildDefaultPublicKeyPins() {
+  std::string primary = ITGMANIA_HTTP_PUBLIC_KEY_PINS_DEFAULT;
+  std::string backup = ITGMANIA_HTTP_PUBLIC_KEY_PINS_BACKUP_DEFAULT;
+  Trim(primary);
+  Trim(backup);
+
+  if (primary.empty()) {
+    return backup;
+  }
+
+  if (backup.empty()) {
+    return primary;
+  }
+
+  return primary + "," + backup;
+}
+
+const std::string BUILT_IN_HTTP_PUBLIC_KEY_PINS = BuildDefaultPublicKeyPins();
+
+bool ParseSignedOverrideFile(
+    const std::string& contents,
+    std::string& pinsOut,
+    std::string& allowHostsOut) {
+  std::vector<std::string> lines;
+  split(contents, "\n", lines);
+
+  for (const auto& rawLine : lines) {
+    std::string line = rawLine;
+    Trim(line);
+
+    if (line.empty() || line[0] == '#' || line[0] == ';') {
+      continue;
+    }
+
+    const auto separator = line.find('=');
+    if (separator == std::string::npos) {
+      continue;
+    }
+
+    std::string key = line.substr(0, separator);
+    std::string value = line.substr(separator + 1);
+    Trim(key);
+    Trim(value);
+    MakeLower(key);
+
+    if (value.empty()) {
+      continue;
+    }
+
+    if (key == "http_public_key_pins") {
+      pinsOut = value;
+      continue;
+    }
+
+    if (key == "http_allow_hosts") {
+      allowHostsOut = value;
+      continue;
+    }
+  }
+
+  return !pinsOut.empty() || !allowHostsOut.empty();
+}
+
+bool LoadSignedNetworkSecurityOverride(
+    std::string& pinsOut,
+    std::string& allowHostsOut) {
+  const std::string overridePath = SIGNED_HTTP_SECURITY_OVERRIDE_PATH;
+  const std::string signaturePath = overridePath + SIGNATURE_APPEND;
+
+  if (!FILEMAN->DoesFileExist(overridePath) &&
+      !FILEMAN->DoesFileExist(signaturePath)) {
+    return false;
+  }
+
+  if (!FILEMAN->DoesFileExist(overridePath) ||
+      !FILEMAN->DoesFileExist(signaturePath)) {
+    LOG->Warn(
+        "Signed network security override ignored: both %s and %s must exist",
+        overridePath.c_str(), signaturePath.c_str());
+    return false;
+  }
+
+  if (!CryptManager::VerifyFileWithFile(overridePath, signaturePath)) {
+    LOG->Warn(
+        "Signed network security override verification failed for %s",
+        overridePath.c_str());
+    return false;
+  }
+
+  std::string contents;
+  if (!GetFileContents(overridePath, contents)) {
+    LOG->Warn(
+        "Signed network security override could not be read from %s",
+        overridePath.c_str());
+    return false;
+  }
+
+  if (!ParseSignedOverrideFile(contents, pinsOut, allowHostsOut)) {
+    LOG->Warn(
+        "Signed network security override file %s does not define any "
+        "http_public_key_pins/http_allow_hosts value",
+        overridePath.c_str());
+    return false;
+  }
+
+  return true;
+}
 
 bool IsSafeDownloadFileName(const std::string& value) {
   if (value.empty() || value == "." || value == "..") {
@@ -79,6 +192,8 @@ Preference<bool> NetworkManager::httpEnabled(
 Preference<std::string> NetworkManager::httpAllowHosts(
     "HttpAllowHosts", BUILT_IN_HTTP_ALLOW_HOSTS);
 Preference<std::string> NetworkManager::httpDenyHosts("HttpDenyHosts", "");
+Preference<std::string> NetworkManager::httpPublicKeyPins(
+    "HttpPublicKeyPins", BUILT_IN_HTTP_PUBLIC_KEY_PINS);
 
 static const char* HttpErrorCodeNames[] = {
     "Blocked",
@@ -174,7 +289,35 @@ NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
         f.GetError().c_str());
   }
 
-  this->tlsOptions.publicKeySha256Pins = BUILT_IN_HTTP_PUBLIC_KEY_PINS;
+  std::string configuredPins = this->httpPublicKeyPins.Get();
+  std::string signedPins;
+  std::string signedAllowHosts;
+
+  if (LoadSignedNetworkSecurityOverride(signedPins, signedAllowHosts)) {
+    if (!signedPins.empty()) {
+      configuredPins = signedPins;
+      this->httpPublicKeyPins.Set(signedPins);
+      LOG->Warn("Loaded signed HttpPublicKeyPins override from Save/");
+    }
+
+    if (!signedAllowHosts.empty()) {
+      this->httpAllowHosts.Set(signedAllowHosts);
+      LOG->Warn("Loaded signed HttpAllowHosts override from Save/");
+    }
+  }
+
+  Trim(configuredPins);
+  if (configuredPins.empty()) {
+    configuredPins = BUILT_IN_HTTP_PUBLIC_KEY_PINS;
+  }
+
+  if (configuredPins != BUILT_IN_HTTP_PUBLIC_KEY_PINS) {
+    LOG->Warn(
+        "HttpPublicKeyPins override active. Ensure emergency pin rotation value "
+        "is trusted and distributed securely.");
+  }
+
+  this->tlsOptions.publicKeySha256Pins = configuredPins;
   this->httpClient.setTLSOptions(this->tlsOptions);
   this->downloadClient.setTLSOptions(this->tlsOptions);
 
@@ -383,6 +526,10 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
 }
 
 bool NetworkManager::IsHttpEnabled() const { return this->httpEnabled.Get(); }
+
+std::string NetworkManager::HttpPublicKeyPins() const {
+  return this->tlsOptions.publicKeySha256Pins;
+}
 
 HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
   bool useDownloadClient = !args.downloadFile.empty();
@@ -658,6 +805,11 @@ class LunaNetworkManager : public Luna<NetworkManager> {
 
   static int HttpEnabled(T* p, lua_State* L) {
     lua_pushboolean(L, p->IsHttpEnabled());
+    return 1;
+  }
+
+  static int HttpPublicKeyPins(T* p, lua_State* L) {
+    lua_pushstring(L, p->HttpPublicKeyPins().c_str());
     return 1;
   }
 
@@ -1114,6 +1266,7 @@ class LunaNetworkManager : public Luna<NetworkManager> {
   LunaNetworkManager() {
     ADD_METHOD(IsUrlAllowed);
     ADD_METHOD(HttpEnabled);
+    ADD_METHOD(HttpPublicKeyPins);
     ADD_METHOD(HttpRequest);
     ADD_METHOD(WebSocket);
     ADD_METHOD(UrlEncode);
