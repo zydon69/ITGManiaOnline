@@ -1,0 +1,1837 @@
+-- -----------------------------------------------------------------------
+-- ALL ONLINE PLAY SOCKET STUFF
+
+local isWaiting = false
+local readyState = {
+	["P1"] = true,
+	["P2"] = true
+}
+local songSelected = false
+-- Track Start button hold time for disconnect
+local startHoldTime = {
+	["P1"] = 0,
+	["P2"] = 0
+}
+local lastDisconnectCountdown = nil
+local lastSongPreviewSentAt = 0
+local lastSongPreviewKey = ""
+local lastOnlineOptionsSongKey = ""
+local lastOnlineGameplayRoomId = nil
+local pendingOnlineStartRoomId = nil
+local pendingConfigReady = nil
+local lastWaitingDebugKey = ""
+local UnlockOnlineInput
+-- These screens are the ones we want to display the player's scores for.
+local scoreScreens = {"ScreenGameplay", "ScreenGameplayShared", "ScreenEvaluationStage", "ScreenEvaluationNonstop", "ScreenEvaluationSummary"}
+local gameplayScreens = {
+	["ScreenGameplay"] = true,
+	["ScreenGameplayShared"] = true,
+}
+local evaluationScreens = {
+	["ScreenEvaluationStage"] = true,
+	["ScreenEvaluationNonstop"] = true,
+	["ScreenEvaluationSummary"] = true,
+}
+
+local syncLockScreens = {
+	["ScreenGameplay"] = true,
+	["ScreenGameplayShared"] = true,
+	["ScreenEvaluationStage"] = true,
+	["ScreenEvaluationNonstop"] = true,
+	["ScreenEvaluationSummary"] = true,
+}
+
+local autoReadyScreens = {
+	["ScreenSelectMusic"] = true,
+	["ScreenEvaluationStage"] = true,
+	["ScreenEvaluationNonstop"] = true,
+	["ScreenEvaluationSummary"] = true,
+}
+
+local knownDisconnectScreens = {
+  ["ScreenTitleMenu"] = true,
+  ["ScreenGameOver"] = true,
+  ["ScreenNameEntryTraditional"] = true,
+  ["ScreenOptionsService"] = true,
+}
+
+local DisplayLobbyState
+
+local function ready_debug_enabled()
+	if ITGOnline and ITGOnline.debugReadyFlow ~= nil then
+		return ITGOnline.debugReadyFlow == true
+	end
+	return true
+end
+
+local function ready_debug(message)
+	if not ready_debug_enabled() then return end
+	local line = "ITG Online ReadyFlow: " .. tostring(message or "")
+	if online_trace then
+		online_trace(line)
+	elseif Warn then
+		Warn(line)
+	elseif Trace then
+		Trace(line)
+	end
+end
+
+local OnlineStartCountdownText = function()
+	if not (ITGOnline and ITGOnline.SecondsUntilScheduledStart) then return nil end
+
+	local seconds = ITGOnline:SecondsUntilScheduledStart()
+	if not seconds then return nil end
+
+	if seconds > 0 then
+		return "Song starts in " .. tostring(math.ceil(seconds)) .. "..."
+	end
+
+	return "Song started. Syncing audio..."
+end
+
+local OnlinePlayingSpinner = function()
+	local frames = { "|", "/", "-", "\\" }
+	return frames[(math.floor(GetTimeSinceStart() * 6) % #frames) + 1]
+end
+
+local FormatRemainingSeconds = function(value)
+	local seconds = math.max(0, math.ceil(tonumber(value) or 0))
+	local minutes = math.floor(seconds / 60)
+	local remainder = seconds % 60
+	return string.format("%d:%02d", minutes, remainder)
+end
+
+local OnlineRemainingText = function(data)
+	if not data then return nil end
+
+	local remaining = nil
+	local estimatedEndAtMs = tonumber(data.estimatedEndAtMs)
+	if estimatedEndAtMs then
+		local estimatedServerNowMs = nil
+		if ITGOnline and ITGOnline.serverClockOffsetSeconds ~= nil then
+			estimatedServerNowMs = (GetTimeSinceStart() + tonumber(ITGOnline.serverClockOffsetSeconds)) * 1000
+		end
+
+		if estimatedServerNowMs then
+			remaining = math.max(0, (estimatedEndAtMs - estimatedServerNowMs) / 1000)
+		end
+	end
+
+	if remaining == nil then
+		local snapshotRemaining = tonumber(data.remainingSeconds)
+		if snapshotRemaining ~= nil then
+			local receivedAt = tonumber(data.__receivedLocalTime)
+			if receivedAt ~= nil then
+				remaining = math.max(0, snapshotRemaining - (GetTimeSinceStart() - receivedAt))
+			else
+				remaining = snapshotRemaining
+			end
+		end
+	end
+
+	if remaining == nil then return nil end
+	return "Players still in song: " .. FormatRemainingSeconds(remaining) .. " remaining"
+end
+
+local QueueOnlineGameplayStartRelease = function(actor)
+	if actor and not actor.onlineStartReleaseQueued then
+		actor.onlineStartReleaseQueued = true
+		actor:sleep(0.05):queuecommand("ReleaseOnlineGameplayAtStart")
+	end
+end
+
+local ReleaseOnlineGameplay = function(screen, secondsUntilStart)
+	local lateBy = secondsUntilStart and math.max(0, -secondsUntilStart) or 0
+	if screen and lateBy > 0.03 and screen.SeekMusicSeconds then
+		screen:SeekMusicSeconds(lateBy)
+	end
+
+	UnlockOnlineInput()
+	if screen then screen:PauseGame(false) end
+	if ITGOnline and ITGOnline.Heartbeat then ITGOnline:Heartbeat("playing") end
+end
+
+-- This input handler is used to lock input while we're waiting on the server to tell us to proceed.
+-- It does nothing, but it's necessary to prevent the player from interacting with the screen
+-- until everyone is ready.
+-- Holding Start for 5 seconds will disconnect from the lobby.
+local InputHandler = function(event)
+	local topScreen = SCREENMAN:GetTopScreen()
+	if topScreen and isWaiting and event.PlayerNumber then
+		local pn = ToEnumShortString(event.PlayerNumber)
+		if event.type == "InputEventType_FirstPress" and event.GameButton == "Start" then
+			startHoldTime[pn] = GetTimeSinceStart()
+			lastDisconnectCountdown = nil
+			if topScreen:GetName() == "ScreenGameplay" then
+				readyState[pn] = true
+				MESSAGEMAN:Broadcast("UpdateMachineState")
+			end
+		elseif event.type == "InputEventType_Repeat" and event.GameButton == "Start" then
+			-- Check if Start has been held for 5 seconds
+			if startHoldTime[pn] > 0 then
+				local holdDuration = GetTimeSinceStart() - startHoldTime[pn]
+				local remainingSeconds = math.max(0, 5 - math.floor(holdDuration))
+				if remainingSeconds ~= lastDisconnectCountdown then
+					SM("Continue holding &START; for " .. remainingSeconds .. " more seconds to disconnect...")
+					lastDisconnectCountdown = remainingSeconds
+				end
+					if holdDuration >= 5.0 then
+					SM("Disconnected from lobby.")
+					startHoldTime[pn] = 0
+					lastDisconnectCountdown = nil
+					isWaiting = false
+					local topScreen = SCREENMAN:GetTopScreen()
+					if topScreen and topScreen:GetName() == "ScreenGameplay" then
+						topScreen:PauseGame(false)
+					end
+					MESSAGEMAN:Broadcast("DisconnectOnline", {leaveRoom=true})
+				end
+			end
+		elseif event.type == "InputEventType_Release" and event.GameButton == "Start" then
+			startHoldTime[pn] = 0
+			lastDisconnectCountdown = nil
+		end
+	end
+
+	return false
+end
+
+UnlockOnlineInput = function()
+	isWaiting = false
+	for player in ivalues(PlayerNumber) do
+		SCREENMAN:set_input_redirected(player, false)
+	end
+end
+
+local OnlineGameplayScreen = function()
+	local style = GAMESTATE:GetCurrentStyle() and GAMESTATE:GetCurrentStyle():GetName() or ""
+	return style == "routine" and "ScreenGameplayShared" or "ScreenGameplay"
+end
+
+local OnlineSongKey = function(data)
+	if not data or not data.songInfo then return "" end
+	return tostring(data.roomId or data.code or "") .. "|" .. tostring(data.songInfo.chartHash or data.songInfo.songPath or "")
+end
+
+local ApplyOnlineSongSelection = function(songInfo)
+	if not songInfo or not songInfo.songPath then return false end
+
+	local song = SONGMAN:FindSong(songInfo.songPath)
+	local parts = songInfo.songPath:split("/")
+	if not song and parts[2] then
+		song = SONGMAN:FindSong(parts[2])
+	end
+	if not song then
+		SM("Online song not found locally: " .. tostring(songInfo.songPath))
+		MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo})
+		return false
+	end
+
+	GAMESTATE:SetCurrentSong(song)
+
+	local stepsType = GAMESTATE:GetCurrentStyle() and GAMESTATE:GetCurrentStyle():GetStepsType() or nil
+	local matchedSteps = nil
+	if stepsType and songInfo.chartHash and songInfo.chartHash ~= "" and ITGOnline and ITGOnline.ChartHashForSteps then
+		for steps in ivalues(song:GetStepsByStepsType(stepsType)) do
+			if ITGOnline:ChartHashForSteps(steps) == songInfo.chartHash then
+				matchedSteps = steps
+				break
+			end
+		end
+	end
+	if stepsType then
+		for steps in ivalues(song:GetStepsByStepsType(stepsType)) do
+			if matchedSteps then break end
+			local difficultyMatches = songInfo.difficulty == nil or songInfo.difficulty == "" or ToEnumShortString(steps:GetDifficulty()) == songInfo.difficulty
+			local meterMatches = songInfo.meter == nil or tonumber(songInfo.meter) == nil or steps:GetMeter() == tonumber(songInfo.meter)
+			if difficultyMatches and meterMatches then
+				matchedSteps = steps
+				break
+			end
+		end
+	end
+
+	if not matchedSteps then
+		for steps in ivalues(SongUtil.GetPlayableSteps(song)) do
+			matchedSteps = steps
+			break
+		end
+	end
+
+	if matchedSteps then
+		for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
+			GAMESTATE:SetCurrentSteps(player, matchedSteps)
+		end
+	end
+
+	local localPayload = ITGOnline and ITGOnline.BuildSongPayload and ITGOnline:BuildSongPayload() or nil
+	if localPayload then
+		if songInfo.songHash and songInfo.songHash ~= "" and localPayload.song_hash ~= songInfo.songHash then
+			SM("Online song hash mismatch for: " .. tostring(songInfo.songPath))
+			MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="hash_mismatch"})
+			return false
+		end
+		if songInfo.chartHash and songInfo.chartHash ~= "" and localPayload.chart_hash ~= songInfo.chartHash then
+			SM("Online chart hash mismatch for: " .. tostring(songInfo.songPath))
+			MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="hash_mismatch"})
+			return false
+		end
+	end
+
+	MESSAGEMAN:Broadcast("OnlineSongAvailable", {songInfo=songInfo})
+	return true
+end
+
+local TransitionToOnlineOptions = function()
+	local topScreen = SCREENMAN:GetTopScreen()
+	if not topScreen then return end
+
+	local screenName = topScreen:GetName()
+	if screenName == "ScreenPlayerOptions"
+		or screenName == "ScreenPlayerOptions2"
+		or screenName == "ScreenPlayerOptions3"
+		or screenName == "ScreenGameplay"
+		or screenName == "ScreenGameplayShared" then
+		return
+	end
+
+	topScreen:SetNextScreenName("ScreenPlayerOptions")
+	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+end
+
+local TransitionToOnlineGameplay = function()
+	local topScreen = SCREENMAN:GetTopScreen()
+	if not topScreen then return end
+
+	local screenName = topScreen:GetName()
+	if screenName == "ScreenGameplay" or screenName == "ScreenGameplayShared" then
+		return
+	end
+
+	topScreen:SetNextScreenName(OnlineGameplayScreen())
+	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+end
+
+local ReturnToOnlineLobbyFromMusicSelect = function()
+	local topScreen = SCREENMAN:GetTopScreen()
+	if not topScreen or topScreen:GetName() ~= "ScreenSelectMusic" then return false end
+	if not (ITGOnline and ITGOnline.currentRoomId) then return false end
+
+	UnlockOnlineInput()
+	if topScreen.ReturnToOnlineLobbyFromMusicSelect then
+		topScreen:ReturnToOnlineLobbyFromMusicSelect()
+		return true
+	end
+
+	topScreen:SetNextScreenName("ScreenOnlineLobbies")
+	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+	return true
+end
+
+local PollOnlineStart = function(actor, roomId)
+	if not actor or not roomId or not (ITGOnline and ITGOnline.FetchRoom) then return end
+
+	local timer = actor:GetChild("OnlineStartPollTimer")
+	if not timer then return end
+
+	pendingOnlineStartRoomId = roomId
+	timer:stoptweening()
+	timer:sleep(1):queuecommand("Poll")
+end
+
+local SelectMusicInputHandler = function(event)
+	if not event or event.type ~= "InputEventType_FirstPress" then return false end
+
+	local deviceButton = ""
+	if event.DeviceInput and event.DeviceInput.button then
+		deviceButton = string.lower(tostring(event.DeviceInput.button))
+	end
+
+	if event.GameButton == "Back" or string.find(deviceButton, "backspace", 1, true) then
+		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+		return ReturnToOnlineLobbyFromMusicSelect()
+	end
+
+	return false
+end
+
+local ReturnToOnlineLobbyFromEvaluation = function()
+	local topScreen = SCREENMAN:GetTopScreen()
+	if not topScreen then return false end
+	if not evaluationScreens[topScreen:GetName()] then return false end
+	if not (ITGOnline and ITGOnline.currentRoomId) then return false end
+
+	UnlockOnlineInput()
+	topScreen:SetNextScreenName("ScreenOnlineLobbies")
+	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+	return true
+end
+
+local EvaluationInputHandler = function(event)
+	if not event or event.type ~= "InputEventType_FirstPress" then return false end
+
+	local deviceButton = ""
+	if event.DeviceInput and event.DeviceInput.button then
+		deviceButton = string.lower(tostring(event.DeviceInput.button))
+	end
+
+	local isEscape = string.find(deviceButton, "escape", 1, true)
+		or string.find(deviceButton, "backspace", 1, true)
+	local isConfirm = event.GameButton == "Start"
+	local isBack = event.GameButton == "Back"
+
+	if isConfirm or isBack or isEscape then
+		return ReturnToOnlineLobbyFromEvaluation()
+	end
+
+	return false
+end
+
+local RestoreCurrentRoom = function(actor, callback)
+	if not (ITGOnline and ITGOnline.FetchCurrentRoom) then
+		if callback then callback(false) end
+		return
+	end
+
+	ITGOnline:FetchCurrentRoom(function(ok, decoded)
+		if ok and decoded and decoded.room then
+			actor.inLobby = true
+			local payload = ITGOnline:LobbyStatePayload(decoded.room)
+			DisplayLobbyState(payload, actor)
+			MESSAGEMAN:Broadcast("OnlineLobbyState", payload)
+			ITGOnline:Heartbeat("in_room")
+			if callback then callback(true) end
+			return
+		end
+
+		actor.inLobby = false
+		ITGOnline:Heartbeat("available")
+		if callback then callback(false) end
+	end)
+end
+
+local CreateRequest = function(event, data)
+	return JsonEncode({
+		event=event,
+		data=data
+	})
+end
+
+local GetJudgmentCounts = function(player)
+	local counts = GetExJudgmentCounts(player)
+	local translation = {
+		["W0"] = "fantasticPlus",
+		["W1"] = "fantastics",
+		["W2"] = "excellents",
+		["W3"] = "greats",
+		["W4"] = "decents",
+		["W5"] = "wayOffs",
+		["Miss"] = "misses",
+		["totalSteps"] = "totalSteps",
+		["Mines"] = "minesHit",
+		["totalMines"] = "totalMines",
+		["Holds"] = "holdsHeld",
+		["totalHolds"] = "totalHolds",
+		["Rolls"] = "rollsHeld",
+		["totalRolls"] = "totalRolls"
+	}
+
+	local judgmentCounts = {}
+
+	for key, value in pairs(counts) do
+		if translation[key] ~= nil then
+			judgmentCounts[translation[key]] = value
+		end
+	end
+
+	return judgmentCounts
+end
+
+local GetMachineState = function()
+	-- Keep in mind that SCREENMAN:GetTopScreen() might return nil while screens transition.
+
+	local screen = SCREENMAN:GetTopScreen()
+	-- Use a "NoScreen" fallback in case we're transitioning screens.
+	local screenName = screen and screen:GetName() or "NoScreen"
+
+	local players = {}
+	for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
+		if GAMESTATE:IsSideJoined(player) then
+			local profileName = "NoName"
+			if (PROFILEMAN:IsPersistentProfile(player) and
+					PROFILEMAN:GetProfile(player)) then
+				profileName = PROFILEMAN:GetProfile(player):GetDisplayName()
+			end
+
+			local judgments = nil
+			local score = nil
+			local exScore = nil
+			if gameplayScreens[screenName] or evaluationScreens[screenName] then
+				judgments = GetJudgmentCounts(player)
+				local dance_points = STATSMAN:GetCurStageStats():GetPlayerStageStats(player):GetPercentDancePoints()
+				local percent = FormatPercentScore( dance_points ):gsub("%%", "")
+				score = tonumber(percent)
+				exScore = CalculateExScore(player)
+			end
+
+			local pn = ToEnumShortString(player)
+			players[pn] = {
+				playerId = pn,
+				profileName = profileName,
+				screenName=screenName,
+				ready=readyState[pn],
+
+				judgments = judgments,
+				score = score,
+				exScore = exScore,
+					-- Song progression can be attached here when the telemetry source is available.
+			}
+		end
+	end
+
+	-- If "P1"/"P2" is missing from players, then the player isn't enabled and the corresponding
+	-- player1/player2 key will be nil.
+	return {
+		machine = {
+			player1=players["P1"],
+			player2=players["P2"]
+		}
+	}
+end
+
+local OrderPlayers = function(data, localScreenName)
+	local updatedData = {
+		players = {},
+
+		-- Additional data that we can pre-calculate.
+		aux = {
+			-- Used to give input back to the players if we're waiting.
+			allInSameScreen = true,
+			-- Evaluation should stay locked only while any player is still in gameplay.
+			anyInGameplay = false,
+			-- Used to determine when to display the Ready/Not Ready state for players.
+			allPlayersReady = true,
+		}
+	}
+
+	--  Copy over the song info, if any.
+	updatedData.songInfo = data.songInfo
+
+	-- Use the current screen as the baseline to prevent
+	-- incorrectly reporting all players as synchronized.
+	local firstScreen = localScreenName
+	-- Process the scoreScreens first so we can sort the players by score.
+	for player in ivalues(data.players) do
+		if firstScreen == nil then
+			firstScreen = player.screenName
+		end
+
+		if player.screenName ~= firstScreen then
+			updatedData.aux.allInSameScreen = false
+		end
+
+		if gameplayScreens[player.screenName] then
+			updatedData.aux.anyInGameplay = true
+		end
+
+		if not player.ready then
+			updatedData.aux.allPlayersReady = false
+		end
+
+		for screen in ivalues(scoreScreens) do
+			if player.screenName == screen then
+				updatedData.players[#updatedData.players+1] = player
+				break
+			end
+		end
+	end
+
+	-- Sort the players by score.
+	-- A score/exScore display toggle can be introduced here if needed.
+	table.sort(updatedData.players, function(a, b)
+		-- a.exScore or b.exScore can be nil, so we need to handle that.
+		if a.exScore == nil then
+			return false
+		end
+		if b.exScore == nil then
+			return true
+		end
+		return a.exScore > b.exScore
+	end)
+
+	-- Then add all the other players in other screens below.
+	for player in ivalues(data.players) do
+		if firstScreen == nil then
+			firstScreen = player.screenName
+		end
+
+		if player.screenName ~= firstScreen then
+			updatedData.aux.allInSameScreen = false
+		end
+
+		if gameplayScreens[player.screenName] then
+			updatedData.aux.anyInGameplay = true
+		end
+
+		if not player.ready then
+			updatedData.aux.allPlayersReady = false
+		end
+
+		local inScoreScreen = false
+		for screen in ivalues(scoreScreens) do
+			if player.screenName == screen then
+				inScoreScreen = true
+				break
+			end
+		end
+
+		if not inScoreScreen then
+			updatedData.players[#updatedData.players+1] = player
+		end
+	end
+
+	return updatedData
+end
+
+DisplayLobbyState = function(data, actor)
+		if not actor or not actor.GetChild then return end
+		-- Keep in mind that SCREENMAN:GetTopScreen() might return nil while screens transition.
+	          local screen = SCREENMAN:GetTopScreen()
+	          local screenName = screen and screen:GetName() or "NoScreen"
+						startHoldTime = { ["P1"] = 0, ["P2"] = 0 }
+						lastDisconnectCountdown = nil
+
+	local updatedData = OrderPlayers(data, screenName)
+
+	local lines = {}
+
+	if isWaiting then
+		local readyToUnlock = false
+		local playerCount = #updatedData.players
+		if gameplayScreens[screenName] then
+			-- Gameplay no longer uses manual ready-up; we only wait for screen synchronization.
+			readyToUnlock = updatedData.aux.allInSameScreen or playerCount <= 1
+		elseif evaluationScreens[screenName] then
+			-- Evaluation should only be blocked while someone is still playing.
+			readyToUnlock = not updatedData.aux.anyInGameplay
+		elseif autoReadyScreens[screenName] then
+			-- Other auto-ready screens require everyone to arrive at the same screen.
+			readyToUnlock = updatedData.aux.allInSameScreen
+		else
+			readyToUnlock = updatedData.aux.allPlayersReady
+		end
+
+		if screenName == "ScreenSelectMusic" and data.songInfo ~= nil then
+			-- If we're navigating back to screen select music (say from options),
+			-- then don't lock input as we will have already synced before.
+			-- In this case a song will have been selected already.
+			-- However, if someone is still in EvaluationStage, we are transitioning
+			-- eval -> music and should keep input locked until everyone arrives.
+			local anyInEval = false
+			for _, player in ipairs(updatedData.players) do
+					if evaluationScreens[player.screenName] then
+					anyInEval = true
+					break
+				end
+			end
+			if not anyInEval then
+				readyToUnlock = true
+			end
+			end
+
+			if readyToUnlock and gameplayScreens[screenName] and data.phase == "starting" then
+				QueueOnlineGameplayStartRelease(actor)
+			elseif readyToUnlock then
+			isWaiting = false
+			-- Lift the lock.
+			-- SCREENMAN:GetTopScreen():RemoveInputCallback(InputHandler)
+
+			-- The below does work, but it's currently possible that other screens are resetting this early.
+			for player in ivalues(PlayerNumber) do
+				SCREENMAN:set_input_redirected(player, false)
+			end
+
+			if gameplayScreens[screenName] then
+				local topScreen = SCREENMAN:GetTopScreen()
+				if topScreen then topScreen:PauseGame(false) end
+			end
+		else
+			lines[#lines+1] = "Waiting for players to sync screens...\n"
+			local readyStates = {}
+			for _, player in ivalues(updatedData.players or {}) do
+				readyStates[#readyStates + 1] = tostring(player.profileName or "?") .. "=" .. tostring(player.ready and "1" or "0")
+			end
+			local debugKey = table.concat({
+				tostring(data and data.roomId or ""),
+				tostring(screenName),
+				tostring(data and data.phase or ""),
+				tostring(playerCount),
+				updatedData.aux.allInSameScreen and "1" or "0",
+				updatedData.aux.allPlayersReady and "1" or "0",
+				updatedData.aux.anyInGameplay and "1" or "0",
+				readyToUnlock and "1" or "0",
+				table.concat(readyStates, ","),
+			}, "|")
+			if debugKey ~= lastWaitingDebugKey then
+				lastWaitingDebugKey = debugKey
+				ready_debug("waiting room=" .. tostring(data and data.roomId or "")
+					.. " screen=" .. tostring(screenName)
+					.. " phase=" .. tostring(data and data.phase or "")
+					.. " players=" .. tostring(playerCount)
+					.. " allInSameScreen=" .. tostring(updatedData.aux.allInSameScreen)
+					.. " allPlayersReady=" .. tostring(updatedData.aux.allPlayersReady)
+					.. " anyInGameplay=" .. tostring(updatedData.aux.anyInGameplay)
+					.. " readyToUnlock=" .. tostring(readyToUnlock)
+					.. " readyStates=[" .. table.concat(readyStates, ",") .. "]")
+			end
+		end
+	end
+
+		if gameplayScreens[screenName] and data.phase == "starting" then
+			local countdown = OnlineStartCountdownText()
+			if countdown then
+				lines[#lines+1] = countdown .. "\n"
+			else
+				lines[#lines+1] = "Waiting for every player to load the song...\n"
+			end
+			QueueOnlineGameplayStartRelease(actor)
+		elseif gameplayScreens[screenName] and data.phase == "playing" then
+			isWaiting = false
+			for player in ivalues(PlayerNumber) do
+				SCREENMAN:set_input_redirected(player, false)
+			end
+			local topScreen = SCREENMAN:GetTopScreen()
+			if topScreen then topScreen:PauseGame(false) end
+			if ITGOnline and ITGOnline.MarkPlayEntered then ITGOnline:MarkPlayEntered() end
+		elseif gameplayScreens[screenName] and data.phase == "results" then
+			UnlockOnlineInput()
+			local topScreen = SCREENMAN:GetTopScreen()
+			if topScreen then topScreen:PauseGame(false) end
+			if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
+				ITGOnline:EnforceRoomPhaseScreen(screenName)
+			end
+		elseif gameplayScreens[screenName] and (data.phase == "config" or data.phase == "lobby_ready" or data.phase == "lobby") then
+			UnlockOnlineInput()
+			local topScreen = SCREENMAN:GetTopScreen()
+			if topScreen then topScreen:PauseGame(false) end
+			if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
+				ITGOnline:EnforceRoomPhaseScreen(screenName)
+			end
+		end
+
+	if screenName == "ScreenOnlineLobbies" and data.phase == "playing" then
+		local remainingText = OnlineRemainingText(data)
+		if remainingText then
+			lines[#lines+1] = remainingText
+			lines[#lines+1] = ""
+		end
+	end
+
+	for i, player in ipairs(updatedData.players) do
+		local displayedScreen = player.screenName ~= "NoScreen" and player.screenName:gsub("Screen", "") or "Transitioning"
+		local readyText = ""
+		if (data.phase == "lobby" or data.phase == "lobby_ready" or data.phase == "config")
+			and not updatedData.aux.allPlayersReady then
+			readyText =" ["..(player.ready and "✔" or "❌").."]"
+		end
+
+		-- Only display the screen name of the players that are on a different
+		-- screen than we are.
+		local playingText = player.isPlayingSong and (" " .. OnlinePlayingSpinner()) or ""
+		local stateText = ""
+		if data.phase == "playing" and player.playState and player.playState ~= "playing" then
+			stateText = " - back in lobby"
+		end
+		local playerAndScreen = i..'. '..player.profileName..playingText..readyText..stateText
+		if screenName ~= player.screenName then
+			playerAndScreen = playerAndScreen.." - in "..displayedScreen
+		end
+
+		lines[#lines+1] = playerAndScreen
+		for scoreScreen in ivalues(scoreScreens) do
+			if player.screenName == scoreScreen then
+				-- Display canonical competition score (aligned with in-game online score),
+				-- and keep accuracy as secondary diagnostic info when it differs.
+				local score = (player.score ~= nil and player.score) or 0
+				local accuracy = (player.accuracy ~= nil and player.accuracy) or nil
+				local scoreStr = string.format("%.2f", score).."%"
+				if accuracy ~= nil and math.abs((tonumber(accuracy) or 0) - (tonumber(score) or 0)) > 0.05 then
+					lines[#lines+1] = "    "..scoreStr.." (acc "..string.format("%.2f", accuracy).."%)"
+				else
+					lines[#lines+1] = "    "..scoreStr
+				end
+				break
+			end
+		end
+
+		-- Add a new line between players.
+		lines[#lines+1] = ""
+	end
+
+	if screenName == "ScreenOnlineLobbies" and data.finalResults and #data.finalResults > 0 then
+		lines[#lines+1] = "Last game results"
+		for result in ivalues(data.finalResults) do
+			local user = result.user or {}
+			local score = math.floor(tonumber(result.score) or 0)
+			local accuracy = tonumber(result.accuracy) or 0
+			local failedText = result.failed and " failed" or ""
+			lines[#lines+1] = tostring(result.rank or "?")
+				.. ". " .. tostring(user.name or "Player")
+				.. " - " .. tostring(score)
+				.. " pts (" .. string.format("%.2f", accuracy) .. "%)"
+				.. failedText
+		end
+		lines[#lines+1] = ""
+	end
+
+	if data.songInfo ~= nil then
+		local songKey = OnlineSongKey(data)
+		if (data.phase == "lobby_ready" or data.phase == "config") and songKey ~= "" and songKey ~= lastOnlineOptionsSongKey then
+			if ApplyOnlineSongSelection(data.songInfo) then
+				lastOnlineOptionsSongKey = songKey
+				if data.phase == "lobby_ready" then
+					ITGOnline:SetReady("lobby_ready", true)
+				end
+				TransitionToOnlineOptions()
+			end
+		end
+
+		if not songSelected then
+			local topScreen = SCREENMAN:GetTopScreen()
+			if topScreen and topScreen:GetName() == "ScreenSelectMusic" then
+				local song = SONGMAN:FindSong(data.songInfo.songPath)
+				local wheel = topScreen:GetMusicWheel()
+				if not song and data.songInfo.songPath:split("/")[2] then
+					song = SONGMAN:FindSong(data.songInfo.songPath:split("/")[2])
+				end
+				if song and wheel then
+					wheel:SelectSong(song)
+					wheel:Move(1)
+					wheel:Move(-1)
+					wheel:Move(0)
+				end
+			end
+		else
+      -- Only display the song in ScreenSelectMusic so that players know
+      -- which songs they may need to navigate to.
+      if screenName == "ScreenSelectMusic" then
+        -- Split the song path into pack and song name for easier reading.
+        -- It looks like "<pack>/<song>" so we can just split on the first "/"
+        local songPathParts = data.songInfo.songPath:split("/")
+        local pack = songPathParts[1] or "Unknown"
+        local song = songPathParts[2] or "Unknown"
+
+        -- Sometimes the pack or song can get quite long, so add ... if it's too long.
+        local maxLength = 30
+        if #pack > maxLength then
+          pack = string.sub(pack, 1, maxLength) .. "..."
+        end
+        if #song > maxLength then
+          song = string.sub(song, 1, maxLength) .. "..."
+        end
+
+        lines[#lines+1] = "Pack: "..pack
+        lines[#lines+1] = "Song: "..song
+      end
+		end
+	end
+
+	-- This gets cleared out by the server when every player has arrived at the song selection screen.
+	songSelected = (data.songInfo ~= nil)
+
+			local gameplaySongKey = OnlineSongKey(data)
+			if data.phase == "starting" and data.roomId and gameplaySongKey ~= "" and lastOnlineGameplayRoomId ~= gameplaySongKey then
+				if ApplyOnlineSongSelection(data.songInfo) then
+					lines[#lines+1] = OnlineStartCountdownText() or "Starting song..."
+					pendingOnlineStartRoomId = data.roomId
+					lastOnlineGameplayRoomId = gameplaySongKey
+					UnlockOnlineInput()
+					TransitionToOnlineGameplay()
+				end
+			elseif data.phase == "playing" then
+				-- Never auto-transition to gameplay while a room is already in playing phase.
+				-- Players who are not already in-song must stay in lobby (countdown/results view)
+				-- to avoid involuntary replay loops after reconnect/crash/end-of-song races.
+				pendingOnlineStartRoomId = nil
+			end
+
+	actor:GetChild("Display"):playcommand("UpdateText", {text=table.concat(lines, "\n")})
+end
+
+local HandleResponse = function(response, actor)
+	local event = response.event
+	local data = response.data
+
+	if event == "lobbyState" then
+		actor.inLobby = true
+		DisplayLobbyState(data, actor)
+		MESSAGEMAN:Broadcast("OnlineLobbyState", data or {})
+	elseif event == "lobbySearched" then
+		MESSAGEMAN:Broadcast("LobbySearched", {
+			lobbies = data and data.lobbies or {}
+		})
+	elseif event == "lobbyLeft" then
+		actor.inLobby = false
+		MESSAGEMAN:Broadcast("OnlineLobbyLeft", data or {})
+	elseif event == "clientDisconnected" then
+		actor.inLobby = false
+		MESSAGEMAN:Broadcast("OnlineClientDisconnected", data or {})
+	elseif event == "responseStatus" then
+		MESSAGEMAN:Broadcast("OnlineResponseStatus", data or {})
+	end
+end
+
+-- Only allow one instance of the online handler at a time.
+-- Things can get a bit convoluted if we have many handlers trying to manage
+-- multiple connections.
+local onlineHandler = nil
+local onlineHandlerInstance = nil
+local onlineHandlerShuttingDown = false
+
+GetOnlineHandlerInstance = function()
+	return onlineHandlerInstance
+end
+
+CreateOnlineHandler = function() 
+  if onlineHandler == nil then
+    onlineHandler = Def.ActorFrame{
+      Name="OnlineWebsocketHandler",
+	      InitCommand=function(self)
+				onlineHandlerInstance = self
+				onlineHandlerShuttingDown = false
+	        self.socket = nil
+	        self.connected = false
+					self.connecting = false
+					self.inLobby = false
+					self.errorMsg = nil
+					self.reconnectDelay = 1
+					self.deadmanTimeoutSeconds = 75
+					self.lastLobbyStatePayload = nil
+	      end,
+				OnCommand=function(self)
+					self:sleep(1):queuecommand("RealtimeDeadman")
+					self:sleep(5):queuecommand("OnlineHeartbeatTick")
+					self:sleep(0.25):queuecommand("OnlinePlayingCountdownTick")
+				end,
+			OffCommand=function(self)
+				onlineHandlerShuttingDown = true
+				ITGOnline:Disconnect()
+				self.socket = nil
+				self.connected = false
+				self.connecting = false
+				self.inLobby = false
+				self.errorMsg = nil
+				local display = self:GetChild("Display")
+				if display then
+					display:GetChild("Text"):settext("")
+				end
+					if onlineHandlerInstance == self then
+						onlineHandlerInstance = nil
+					end
+					lastSongPreviewSentAt = 0
+					lastSongPreviewKey = ""
+					lastOnlineOptionsSongKey = ""
+					lastOnlineGameplayRoomId = nil
+					pendingOnlineStartRoomId = nil
+					pendingConfigReady = nil
+					self.lastLobbyStatePayload = nil
+					startHoldTime = { ["P1"] = 0, ["P2"] = 0 }
+					lastDisconnectCountdown = nil
+					self.joinLobbyBusy = false
+					self.createLobbyBusy = false
+					self.startRoomBusy = false
+					self.invitePlayerBusy = false
+					self.joinPlayerBusy = false
+					self.privateJoinAnswerBusy = false
+					self.searchLobbyBusy = false
+					self.leaveLobbyBusy = false
+				end,
+	      ConnectOnlineMessageCommand=function(self)
+	        if self.connecting then return end
+	        if self.socket == nil or self.errorMsg ~= nil then
+					self.connecting = true
+					onlineHandlerShuttingDown = false
+					self.errorMsg = nil
+					ITGOnline:Connect({
+							open=function()
+								if onlineHandlerShuttingDown then return end
+								self.connecting = false
+								self.socket = ITGOnline.socket
+								self.connected = true
+								self.reconnectDelay = 1
+								self.inLobby = ITGOnline.currentRoomId ~= nil
+								self.errorMsg = nil
+									self:GetChild("Display"):visible(false)
+								if ITGOnline.Sync then
+									ITGOnline:Sync(function(ok, decoded)
+										if ok and decoded and decoded.current_room then
+											self.inLobby = true
+											ITGOnline:Heartbeat("in_room")
+										else
+											RestoreCurrentRoom(self)
+										end
+									end)
+								else
+									RestoreCurrentRoom(self)
+								end
+						end,
+						error=function(message)
+							if onlineHandlerShuttingDown then return end
+							self.connecting = false
+							self.inLobby = false
+							self.connected = false
+							self.errorMsg = message or "Connection failed"
+							self:GetChild("Display"):GetChild("Text"):settext("")
+							self:GetChild("Display"):visible(false)
+						end,
+							close=function()
+								if onlineHandlerShuttingDown then return end
+								self.connecting = false
+								self.connected = false
+								self.socket = nil
+								self:GetChild("Display"):GetChild("Text"):settext("")
+								self:GetChild("Display"):visible(false)
+								if not ITGOnline.disconnecting then
+									self:stoptweening()
+									self:sleep(self.reconnectDelay or 1):queuecommand("ReconnectOnline")
+									self.reconnectDelay = math.min(30, (self.reconnectDelay or 1) * 2)
+								end
+							end,
+						})
+	        end
+	      end,
+				ReconnectOnlineCommand=function(self)
+					if onlineHandlerShuttingDown or ITGOnline.disconnecting or self.connected or self.socket ~= nil or self.connecting then
+						return
+					end
+					MESSAGEMAN:Broadcast("ConnectOnline")
+				end,
+					RealtimeDeadmanCommand=function(self)
+					if onlineHandlerShuttingDown then return end
+
+					if self.connected and self.socket ~= nil and ITGOnline and ITGOnline.lastRealtimeMessageAt then
+						local idle = GetTimeSinceStart() - ITGOnline.lastRealtimeMessageAt
+						if idle > (self.deadmanTimeoutSeconds or 75) then
+							self.connected = false
+							if ITGOnline.socket then
+								ITGOnline.socket:Close()
+							end
+							self.socket = nil
+							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+								event="websocket",
+								success=false,
+								message="Realtime connection timed out. Reconnecting..."
+							})
+							self:queuecommand("ReconnectOnline")
+						end
+					end
+
+						self:sleep(1):queuecommand("RealtimeDeadman")
+					end,
+					OnlineHeartbeatTickCommand=function(self)
+						if onlineHandlerShuttingDown then return end
+
+							if self.connected and self.socket ~= nil and ITGOnline and ITGOnline.Heartbeat then
+								local screen = SCREENMAN:GetTopScreen()
+								local screenName = screen and screen:GetName() or "NoScreen"
+								local phase = ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil
+								local status = "available"
+								if ITGOnline.currentRoomId then
+									status = (phase == "playing" or screenName == "ScreenGameplay" or screenName == "ScreenGameplayShared") and "playing" or "in_room"
+								end
+								ITGOnline:Heartbeat(status)
+							end
+
+						self:sleep(5):queuecommand("OnlineHeartbeatTick")
+					end,
+					OnlinePlayingCountdownTickCommand=function(self)
+						if not onlineHandlerShuttingDown and self.inLobby and self.lastLobbyStatePayload then
+							local screen = SCREENMAN:GetTopScreen()
+							local screenName = screen and screen:GetName() or "NoScreen"
+							if screenName == "ScreenOnlineLobbies" and tostring(self.lastLobbyStatePayload.phase or "") == "playing" then
+								DisplayLobbyState(self.lastLobbyStatePayload, self)
+							end
+						end
+						self:sleep(0.25):queuecommand("OnlinePlayingCountdownTick")
+					end,
+					OnlineScoreSnapshotMessageCommand=function(self, params)
+						if onlineHandlerShuttingDown then return end
+						if not (self.connected and self.socket ~= nil) then return end
+						if not (ITGOnline and ITGOnline.SendScore and ITGOnline.currentRoom) then return end
+						local enabled = GAMESTATE:GetEnabledPlayers()
+						local primary = enabled and enabled[1] or nil
+						if not (params and primary and params.Player == primary) then return end
+
+						ITGOnline.lastDisplayedScoreSnapshot = {
+							scorePercent = params.ScorePercent,
+							exScorePercent = params.ExScorePercent,
+							displayedPercent = params.DisplayedPercent,
+							combo = params.Combo,
+						}
+
+						ITGOnline:SendScore(true, false, {
+							scorePercent = params.ScorePercent,
+							exScorePercent = params.ExScorePercent,
+							displayedPercent = params.DisplayedPercent,
+							combo = params.Combo,
+						})
+					end,
+					ReleaseOnlineGameplayAtStartCommand=function(self)
+						self.onlineStartReleaseQueued = false
+						if onlineHandlerShuttingDown or not (ITGOnline and ITGOnline.currentRoom) then return end
+
+						local screen = SCREENMAN:GetTopScreen()
+						local screenName = screen and screen:GetName() or "NoScreen"
+						if screenName ~= "ScreenGameplay" and screenName ~= "ScreenGameplayShared" then
+							return
+						end
+
+							if ITGOnline.currentRoom.phase == "playing" then
+								local seconds = ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or nil
+								ReleaseOnlineGameplay(screen, seconds)
+								return
+							end
+
+						if ITGOnline.currentRoom.phase ~= "starting" then
+							return
+						end
+
+							local seconds = ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or nil
+							if seconds ~= nil and seconds <= 0.03 then
+								ReleaseOnlineGameplay(screen, seconds)
+								return
+							end
+
+						self.onlineStartReleaseQueued = true
+						self:sleep(seconds and math.min(math.max(seconds, 0.05), 0.25) or 0.25):queuecommand("ReleaseOnlineGameplayAtStart")
+					end,
+	      ScreenChangedMessageCommand=function(self)
+        if self.connected and self.socket ~= nil then
+          local screen = SCREENMAN:GetTopScreen()
+          local screenName = screen and screen:GetName() or "NoScreen"
+					if ITGOnline and ITGOnline.NoteScreenChanged then
+						ITGOnline:NoteScreenChanged(screenName)
+						if ITGOnline.ConsumeNeedsSyncAfterScreenCancel and ITGOnline:ConsumeNeedsSyncAfterScreenCancel() and ITGOnline.Sync then
+							ITGOnline:Sync()
+						end
+					end
+					startHoldTime = { ["P1"] = 0, ["P2"] = 0 }
+					lastDisconnectCountdown = nil
+
+					if not self.inLobby then
+						return
+					end
+
+          if knownDisconnectScreens[screenName] then
+            MESSAGEMAN:Broadcast("DisconnectOnline", {leaveRoom=true})
+            return
+          end
+
+	          if screenName == "ScreenSelectMusic" then
+	            UnlockOnlineInput()
+		            if screen then screen:AddInputCallback(SelectMusicInputHandler) end
+	          end
+	          if ITGOnline and ITGOnline.currentRoomId then
+		            -- Keep online flow deterministic: finishing options returns to the room lobby.
+		            SL.Global.ScreenAfter.PlayerOptions = "ScreenOnlineLobbies"
+		            SL.Global.ScreenAfter.PlayerOptions2 = "ScreenOnlineLobbies"
+		            SL.Global.ScreenAfter.PlayerOptions3 = "ScreenOnlineLobbies"
+	          end
+	          if evaluationScreens[screenName] and screen then
+		            screen:AddInputCallback(EvaluationInputHandler)
+	          end
+
+          -- Lock input while syncing arrival on key screens.
+          if syncLockScreens[screenName] then
+            isWaiting = true
+
+            -- The below does work, but it's currently possible that other screens are resetting this early.
+            for player in ivalues(PlayerNumber) do
+              SCREENMAN:set_input_redirected(player, true)
+            end
+          end
+
+		if autoReadyScreens[screenName] then
+			for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
+				local pn = ToEnumShortString(player)
+				readyState[pn] = true
+			end
+		end
+
+	          if screenName == "ScreenGameplay" or screenName == "ScreenGameplayShared" then
+				for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
+					local pn = ToEnumShortString(player)
+					readyState[pn] = false
+				end
+	            -- Input callbacks get cleared out when we transition screens, so we don't need to worry about explicitly removing it.
+	            if screen then screen:AddInputCallback(InputHandler) end
+	            if ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing" then
+	              UnlockOnlineInput()
+	              if screen then screen:PauseGame(false) end
+	            elseif ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "starting" then
+	              if screen then screen:PauseGame(true) end
+								if ITGOnline.MarkSongLoaded then
+									ITGOnline:MarkSongLoaded(function(ok, decoded, response)
+										if not ok then
+											MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+												event="songLoaded",
+												success=false,
+												message=(decoded and decoded.message) or (response and response.errorMessage) or "Could not confirm song loading."
+											})
+										end
+									end)
+								end
+								QueueOnlineGameplayStartRelease(self)
+	            else
+	              if screen then screen:PauseGame(false) end
+								if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
+									ITGOnline:EnforceRoomPhaseScreen(screenName)
+								end
+	            end
+			elseif isWaiting then
+				if screen then screen:AddInputCallback(InputHandler) end
+
+		end
+
+						local status = (gameplayScreens[screenName] and ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing") and "playing" or "in_room"
+						ITGOnline:Heartbeat(status)
+						if evaluationScreens[screenName] and ITGOnline and ITGOnline.SendScore then
+							ITGOnline:SendScore(true, true)
+						end
+							if screenName == "ScreenSelectMusic"
+								and ITGOnline.currentSongPayload
+								and ITGOnline.currentRoom
+								and tostring(ITGOnline.currentRoom.phase or "") == "lobby_ready" then
+								ITGOnline:SetReady("lobby_ready", true)
+							end
+          MESSAGEMAN:Broadcast("UpdateMachineState")
+        end
+      end,
+      PlayerJoinedMessageCommand=function(self)
+				if self.connected and self.socket ~= nil and self.inLobby then	
+          ITGOnline:Heartbeat("in_room")
+        end
+      end,
+      PlayerUnjoinedMessageCommand=function(self)
+				if self.connected and self.socket ~= nil and self.inLobby then	
+          ITGOnline:Heartbeat("in_room")
+        end
+      end,
+		UpdateMachineStateMessageCommand=function(self)
+				if self.connected and self.socket ~= nil and self.inLobby then	
+          ITGOnline:Heartbeat("in_room")
+        end
+      end,
+		      OnlineConfigReadyMessageCommand=function(self)
+						if not (self.connected and self.socket ~= nil and ITGOnline.currentRoomId) then
+							return
+						end
+
+						self.inLobby = true
+						local configReadyKey = tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or "")
+						if ITGOnline.MarkConfigReady then
+							pendingConfigReady = configReadyKey
+							self:queuecommand("RetryOnlineConfigReady")
+							return
+						end
+
+						pendingConfigReady = configReadyKey
+						self:queuecommand("RetryOnlineConfigReady")
+		      end,
+		      RetryOnlineConfigReadyCommand=function(self)
+						if not pendingConfigReady or not ITGOnline.currentRoomId then
+							return
+						end
+						local expectedConfigReadyKey = tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or "")
+						if pendingConfigReady ~= expectedConfigReadyKey then
+							return
+						end
+
+						if ITGOnline.MarkConfigReady then
+							ITGOnline:MarkConfigReady(function(ok, decoded, response)
+								if ok then
+									if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+									return
+								end
+
+								if response and response.retryAfter then
+									self:sleep(response.retryAfter):queuecommand("RetryOnlineConfigReady")
+									return
+								end
+
+								if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+								event="ready",
+								success=false,
+								message=(decoded and decoded.message) or (response and response.errorMessage) or "Ready synchronization failed."
+							})
+						end)
+						return
+					end
+
+					ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok, decoded)
+							if not ok or not decoded or not decoded.room then
+								self:sleep(1):queuecommand("RetryOnlineConfigReady")
+								return
+						end
+
+						local phase = decoded.room.phase
+						if not decoded.room.selected_song then
+							ITGOnline:SelectSong(function(selectOk, selectDecoded, selectResponse)
+									if selectOk then
+										self:sleep(0.25):queuecommand("RetryOnlineConfigReady")
+									else
+										if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+									MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+										event="selectSong",
+										success=false,
+										message=(selectDecoded and selectDecoded.message) or (selectResponse and selectResponse.errorMessage) or "Song selection failed."
+									})
+								end
+							end)
+							return
+						end
+
+							if phase == "starting" or phase == "playing" or phase == "results" then
+								if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+							elseif phase == "config" then
+								ITGOnline:SetReady("config_ready", true, function()
+									if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+								ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(fetchOk, fetchDecoded)
+									if fetchOk and fetchDecoded and fetchDecoded.room then
+									MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(fetchDecoded.room))
+									end
+								end)
+							end)
+						elseif phase == "lobby" or phase == "lobby_ready" then
+							ITGOnline:SetReady("lobby_ready", true, function()
+								self:sleep(0.5):queuecommand("RetryOnlineConfigReady")
+							end)
+						else
+							if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+						end
+					end)
+	      end,
+					OnlineSessionExpiredMessageCommand=function(self)
+						self.connected = false
+					self.inLobby = false
+					self.socket = nil
+					isWaiting = false
+					for player in ivalues(PlayerNumber) do
+						SCREENMAN:set_input_redirected(player, false)
+					end
+					MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+						event="sessionExpired",
+						success=false,
+						message="Online session expired. Please reconnect."
+					})
+				end,
+				OnlineLobbyStateMessageCommand=function(self, params)
+					if self.connected and params and params.roomId then
+						self.inLobby = true
+						params.__receivedLocalTime = GetTimeSinceStart()
+						self.lastLobbyStatePayload = params
+						DisplayLobbyState(params, self)
+					end
+				end,
+				OnlineLobbyLeftMessageCommand=function(self)
+					self.inLobby = false
+				end,
+			      SongSelectedMessageCommand=function(self)
+						if self.connected and self.socket ~= nil and ITGOnline.currentRoomId then
+							self.inLobby = true
+
+							local room = ITGOnline.currentRoom
+							local user = ITGOnline.user
+							local manager = room and room.manager or nil
+							if manager and user and tonumber(manager.id) ~= tonumber(user.id) then
+								return
+							end
+
+							if ITGOnline.SelectSongAndMarkLobbyReady then
+								ITGOnline:SelectSongAndMarkLobbyReady(function(ok, decoded, response)
+									if ok then
+										TransitionToOnlineOptions()
+										return
+									end
+
+									MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+										event="selectSong",
+										success=false,
+										message=(decoded and decoded.message) or (response and response.errorMessage) or "Song selection failed."
+									})
+								end)
+								return
+							end
+
+		          ITGOnline:SelectSong(function(ok, decoded, response)
+								if ok then
+									ITGOnline:SetReady("lobby_ready", true)
+								ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(fetchOk, fetchDecoded)
+									if fetchOk and fetchDecoded and fetchDecoded.room then
+										local payload = ITGOnline:LobbyStatePayload(fetchDecoded.room)
+										DisplayLobbyState(payload, self)
+										MESSAGEMAN:Broadcast("OnlineLobbyState", payload)
+										TransitionToOnlineOptions()
+									end
+								end)
+							else
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="selectSong",
+									success=false,
+									message=(decoded and decoded.message) or (response and response.errorMessage) or "Song selection failed."
+								})
+							end
+						end)
+	        end
+	      end,
+		      CurrentSongChangedMessageCommand=function(self)
+						if self.connected and self.socket ~= nil and ITGOnline.currentRoomId and ITGOnline.currentRoom and ITGOnline.user then
+						local manager = ITGOnline.currentRoom.manager
+						if not manager or tonumber(manager.id) ~= tonumber(ITGOnline.user.id) then
+							return
+						end
+
+						local song = GAMESTATE:GetCurrentSong()
+						if not song then return end
+
+						local now = GetTimeSinceStart()
+						local key = song:GetSongDir() or song:GetDisplayFullTitle() or ""
+						if key == lastSongPreviewKey and now - lastSongPreviewSentAt < 1.5 then
+							return
+						end
+
+						lastSongPreviewKey = key
+						lastSongPreviewSentAt = now
+						ITGOnline:PreviewSong()
+					end
+	      end,
+		      JoinLobbyMessageCommand=function(self, params)
+		        if self.connected and self.socket ~= nil then
+						if self.joinLobbyBusy then return end
+						self.joinLobbyBusy = true
+						self.inLobby = false
+		          ITGOnline:RequestJoinRoom(params.code, function(ok, decoded, response)
+								self.joinLobbyBusy = false
+								if ok then
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="joinLobby",
+									success=true,
+									message="Join request sent. Waiting for the room manager."
+								})
+								elseif decoded and (decoded.error_code == "already_in_room" or decoded.message == "You are already in this room.") and params and params.code then
+								ITGOnline:FetchRoom(params.code, function(fetchOk, fetchDecoded, fetchResponse)
+									if fetchOk and fetchDecoded and fetchDecoded.room then
+										self.inLobby = true
+										DisplayLobbyState(ITGOnline:LobbyStatePayload(fetchDecoded.room), self)
+										MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(fetchDecoded.room))
+									else
+										MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+											event="joinLobby",
+											success=false,
+											message=(fetchDecoded and fetchDecoded.message) or (fetchResponse and fetchResponse.errorMessage) or "Could not restore lobby state."
+										})
+									end
+								end)
+							else
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="joinLobby",
+									success=false,
+									message=(decoded and decoded.message) or (response and response.errorMessage) or "Join lobby failed."
+								})
+							end
+						end)
+	        end
+	      end,
+		      CreateLobbyMessageCommand=function(self, params)
+		        if self.connected and self.socket ~= nil then
+						if self.createLobbyBusy then return end
+						self.createLobbyBusy = true
+						self.inLobby = false
+		          ITGOnline:CreateRoom(function(ok, decoded, response)
+								self.createLobbyBusy = false
+								if ok and decoded and decoded.room then
+								self.inLobby = true
+								DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
+								MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+								elseif decoded and (decoded.error_code == "already_in_open_room" or decoded.message == "User is already in an open room.") then
+								RestoreCurrentRoom(self, function(restored)
+									if not restored then
+										MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+											event="createLobby",
+											success=false,
+											message="Create lobby failed: User is already in an open room."
+										})
+									end
+								end)
+							else
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="createLobby",
+									success=false,
+									message=(decoded and decoded.message) or (response and response.errorMessage) or "Create lobby failed."
+								})
+							end
+						end, params and params.visibility or "public")
+	        end
+	      end,
+	      StartOnlineRoomMessageCommand=function(self)
+					if self.connected and self.socket ~= nil and self.inLobby then
+						if self.startRoomBusy then return end
+						if not ITGOnline.currentRoom then
+							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+								event="startRoom",
+								success=false,
+								message="The room is not ready to start yet."
+							})
+							return
+						end
+
+						local attemptStart = function()
+							self.startRoomBusy = true
+							ITGOnline:StartRoom(function(ok, decoded, response)
+								self.startRoomBusy = false
+								if ok and decoded and decoded.room then
+									local payload = ITGOnline:LobbyStatePayload(decoded.room)
+									DisplayLobbyState(payload, self)
+									MESSAGEMAN:Broadcast("OnlineLobbyState", payload)
+								else
+									MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+										event="startRoom",
+										success=false,
+										message=(decoded and decoded.message) or (response and response.errorMessage) or "Start failed."
+									})
+								end
+							end)
+						end
+
+						local phase = tostring(ITGOnline.currentRoom.phase or "")
+						if phase == "config" then
+							attemptStart()
+							return
+						end
+
+						if phase == "lobby" or phase == "lobby_ready" then
+							if ITGOnline.MarkConfigReady then
+								self.startRoomBusy = true
+								ITGOnline:MarkConfigReady(function(readyOk, readyDecoded, readyResponse)
+									self.startRoomBusy = false
+									if not readyOk then
+										MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+											event="ready",
+											success=false,
+											message=(readyDecoded and readyDecoded.message) or (readyResponse and readyResponse.errorMessage) or "Could not mark manager ready."
+										})
+										return
+									end
+
+									local updatedRoom = readyDecoded and readyDecoded.room or ITGOnline.currentRoom
+									if updatedRoom then
+										local payload = ITGOnline:LobbyStatePayload(updatedRoom)
+										DisplayLobbyState(payload, self)
+										MESSAGEMAN:Broadcast("OnlineLobbyState", payload)
+									end
+
+									if updatedRoom and tostring(updatedRoom.phase or "") == "config" then
+										attemptStart()
+									else
+										MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+											event="startRoom",
+											success=false,
+											message="Room is still synchronizing. Try Start again in a moment."
+										})
+									end
+								end)
+								return
+							end
+						end
+
+						MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+							event="startRoom",
+							success=false,
+							message="The room is not ready to start yet."
+						})
+        end
+      end,
+	      InviteOnlinePlayerMessageCommand=function(self, params)
+	        if self.connected and self.socket ~= nil and params and params.user_id then
+						if self.invitePlayerBusy then return end
+						self.invitePlayerBusy = true
+						self.inLobby = false
+						local visibility = params.visibility or "private"
+	          ITGOnline:InviteUserToNewRoom(params.user_id, visibility, function(ok, decoded, response)
+							self.invitePlayerBusy = false
+							if ok then
+							self.inLobby = true
+							if ITGOnline.currentRoom then
+								DisplayLobbyState(ITGOnline:LobbyStatePayload(ITGOnline.currentRoom), self)
+								MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(ITGOnline.currentRoom))
+							end
+							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+								event="invitePlayer",
+								success=true,
+								message="Invitation sent."
+							})
+						else
+							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+								event="invitePlayer",
+								success=false,
+								message=(decoded and decoded.message) or (response and response.errorMessage) or "Invitation failed."
+							})
+						end
+					end)
+        end
+      end,
+	      JoinOnlinePlayerRoomMessageCommand=function(self, params)
+	        if self.connected and self.socket ~= nil and params and params.user_id then
+						if self.joinPlayerBusy then return end
+						self.joinPlayerBusy = true
+						self.inLobby = false
+	          ITGOnline:RequestJoinUserRoom(params.user_id, function(ok, decoded, response)
+							self.joinPlayerBusy = false
+							if ok and decoded and decoded.room then
+								self.inLobby = true
+								DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
+								MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+							elseif ok then
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="joinLobby",
+									success=true,
+									message="Join request sent. Waiting for approval."
+								})
+						else
+							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+								event="joinLobby",
+								success=false,
+								message=(decoded and decoded.message) or (response and response.errorMessage) or "Join request failed."
+							})
+						end
+					end)
+        end
+      end,
+	      AnswerPrivateJoinRequestMessageCommand=function(self, params)
+	        if self.connected and self.socket ~= nil and params and params.join_request_id then
+						if self.privateJoinAnswerBusy then return end
+						self.privateJoinAnswerBusy = true
+						if params.accept then
+							ITGOnline:AcceptJoinRequest(params.join_request_id, function(ok, decoded, response)
+								self.privateJoinAnswerBusy = false
+								if ok and decoded and decoded.room then
+								DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
+								MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+							end
+							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+								event="privateJoinAnswer",
+								success=ok and true or false,
+								message=ok and "Join request accepted." or ((decoded and decoded.message) or (response and response.errorMessage) or "Could not answer join request.")
+							})
+						end)
+						else
+							ITGOnline:DeclineJoinRequest(params.join_request_id, params.reason or "", function(ok, decoded, response)
+								self.privateJoinAnswerBusy = false
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+								event="privateJoinAnswer",
+								success=ok and true or false,
+								message=ok and "Join request declined." or ((decoded and decoded.message) or (response and response.errorMessage) or "Could not answer join request.")
+							})
+						end)
+					end
+        end
+      end,
+	      AnswerRoomInvitationMessageCommand=function(self, params)
+	        if self.connected and self.socket ~= nil and params and params.invitation_id then
+						if self.roomInvitationAnswerBusy then return end
+						self.roomInvitationAnswerBusy = true
+						if params.accept then
+							ITGOnline:AcceptInvitation(params.invitation_id, function(ok, decoded, response)
+								self.roomInvitationAnswerBusy = false
+								if ok and decoded and decoded.room then
+									DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
+									MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+								end
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="roomInvitationAnswer",
+									success=ok and true or false,
+									message=ok and "Invitation accepted." or ((decoded and decoded.message) or (response and response.errorMessage) or "Could not answer invitation.")
+								})
+							end)
+						else
+							ITGOnline:DeclineInvitation(params.invitation_id, function(ok, decoded, response)
+								self.roomInvitationAnswerBusy = false
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="roomInvitationAnswer",
+									success=ok and true or false,
+									message=ok and "Invitation declined." or ((decoded and decoded.message) or (response and response.errorMessage) or "Could not answer invitation.")
+								})
+							end)
+						end
+        end
+      end,
+				SearchLobbyMessageCommand=function(self)
+					if self.connected and self.socket ~= nil then
+						if self.searchLobbyBusy then return end
+						self.searchLobbyBusy = true
+						ITGOnline:FetchLobby(function(ok, decoded, response)
+							self.searchLobbyBusy = false
+							if ok then
+							MESSAGEMAN:Broadcast("LobbySearched", ITGOnline:LobbySearchPayload(decoded))
+						else
+							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+								event="searchLobby",
+								success=false,
+								message=(decoded and decoded.message) or (response and response.errorMessage) or "Lobby search failed."
+							})
+						end
+					end)
+				end
+			end,
+				LeaveLobbyMessageCommand=function(self)
+					if self.connected and self.socket ~= nil then
+						if self.leaveLobbyBusy then return end
+						self.leaveLobbyBusy = true
+						ITGOnline:LeaveRoom(function(ok, decoded, response)
+							self.leaveLobbyBusy = false
+							if ok then
+							self.inLobby = false
+							MESSAGEMAN:Broadcast("OnlineLobbyLeft", {left=true})
+						else
+							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+								event="leaveLobby",
+								success=false,
+								message=(decoded and decoded.message) or (response and response.errorMessage) or "Leave lobby failed."
+							})
+						end
+					end)
+				end
+			end,
+	      DisconnectOnlineMessageCommand=function(self, params)
+				local shouldLeaveRoom = params and params.leaveRoom and self.inLobby
+				local finalize = function()
+					onlineHandlerShuttingDown = true
+					isWaiting = false
+					ITGOnline:Disconnect()
+					for player in ivalues(PlayerNumber) do
+						SCREENMAN:set_input_redirected(player, false)
+					end
+					self.connected = false
+					self.inLobby = false
+					self.socket = nil
+					self:GetChild("Display"):GetChild("Text"):settext("")
+					self:GetChild("Display"):visible(false)
+				end
+
+				if shouldLeaveRoom then
+					ITGOnline:LeaveRoom(function()
+						finalize()
+					end)
+					return
+				end
+
+					finalize()
+	      end,
+
+		      Def.Actor{
+		        Name="OnlineStartPollTimer",
+	        PollCommand=function(self)
+						local actor = self:GetParent()
+						local roomId = pendingOnlineStartRoomId
+						if not roomId or not (ITGOnline and ITGOnline.FetchRoom) then
+							return
+						end
+
+						ITGOnline:FetchRoom(roomId, function(ok, decoded)
+							if not ok or not decoded or not decoded.room then
+								PollOnlineStart(actor, roomId)
+								return
+							end
+
+							local payload = ITGOnline:LobbyStatePayload(decoded.room)
+							DisplayLobbyState(payload, actor)
+							MESSAGEMAN:Broadcast("OnlineLobbyState", payload)
+
+							if decoded.room.phase == "starting" then
+								PollOnlineStart(actor, roomId)
+							end
+						end)
+	        end,
+	      },
+
+		      Def.ActorFrame{
+		        Name="Display",
+	        InitCommand=function(self)
+	          self:visible(false)
+
+					local width = 200
+					local LEFT = width/2
+					self:xy(LEFT, _screen.cy)
+        end,
+	        UpdateTextCommand=function(self, params)
+						self:visible(false)
+	          local screen = SCREENMAN:GetTopScreen()
+          local screenName = screen and screen:GetName() or "NoScreen"
+
+          local bg = self:GetChild("Background")
+          local width = 200
+          local height = SCREEN_HEIGHT
+
+          -- Some generic constants for easy positioning.
+          local LEFT = width/2
+          local RIGHT = SCREEN_WIDTH - width/2
+          local CENTER = _screen.cx
+
+          -- If we're on a different screen, we'll just retain the last position.
+          if screenName == "ScreenSelectMusic" then
+            self:xy(LEFT, _screen.cy)
+            bg:zoomto(width, height)
+          elseif evaluationScreens[screenName] or gameplayScreens[screenName] then
+            local p1Joined = GAMESTATE:IsSideJoined("PlayerNumber_P1")
+            local p2Joined = GAMESTATE:IsSideJoined("PlayerNumber_P2")
+
+            if p1Joined and p2Joined then
+              self:xy(CENTER, _screen.cy)
+              bg:zoomto(width, height)
+            elseif p1Joined then
+              self:xy(RIGHT, _screen.cy)
+              bg:zoomto(width, height)
+            elseif p2Joined then
+              self:xy(LEFT, _screen.cy)
+              bg:zoomto(width, height)
+            end
+          end
+
+          self:GetChild("Text"):playcommand("Resize", {width=width, height=height, text=params.text})
+        end,
+
+        Def.Quad{
+          Name="Background",
+          InitCommand=function(self)
+            self:zoomto(SCREEN_WIDTH / 3, SCREEN_HEIGHT):diffuse(0, 0, 0, 0.5)
+          end,
+        },
+
+        LoadFont("Common Normal").. {
+          Name="Text",
+          Text="",
+          InitCommand=function(self)
+            self:diffuse(Color.Yellow)
+          end,
+          ResizeCommand=function(self, params)
+            self:settext(params.text)
+            DiffuseEmojis(self)
+            -- We don't want text to be cut off.
+            -- Incrementally adjust the zoom while checking the width until it fits.
+            -- Not the prettiest solution but it works.
+            for zoomVal=1.0, 0.1, -0.05 do
+              self:zoom(zoomVal)
+              self:settext(params.text)
+              if self:GetWidth() * zoomVal <= params.width then
+                break
+              end
+            end
+          end
+        },
+      },
+    }
+  end
+
+  return onlineHandler
+end
