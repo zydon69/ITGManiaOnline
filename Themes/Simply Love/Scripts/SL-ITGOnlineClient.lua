@@ -980,7 +980,6 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 				.. " roundKey=" .. tostring(roundKey))
 			if self.SendScore and (freshPhase == "playing" or freshPhase == "results") then
 				self:SendScore(true, true)
-				return
 			end
 
 			if failedOk and failedValue == true and self.MarkPlayFailed then
@@ -1711,8 +1710,12 @@ function ITGOnline:SendScore(force, final, snapshot)
 		songPosition = math.max(songPosition, math.max(0, estimatedPosition - 0.5))
 	end
 	local chartDuration = tonumber(self.currentSongPayload.chart_duration_seconds) or tonumber(self.currentSongPayload.music_length_seconds)
-	if final and self.currentRoom.phase == "results" and chartDuration then
-		songPosition = math.max(songPosition, chartDuration)
+	if final and chartDuration then
+		local finalPosition = tonumber(chartDuration) or songPosition
+		if self.currentRoom.phase ~= "results" then
+			finalPosition = math.max(0, math.min(math.max(songPosition, tonumber(self.lastScoreSongPosition) or 0), finalPosition))
+		end
+		songPosition = finalPosition
 	else
 		songPosition = math.max(songPosition, tonumber(self.lastScoreSongPosition) or 0)
 	end
