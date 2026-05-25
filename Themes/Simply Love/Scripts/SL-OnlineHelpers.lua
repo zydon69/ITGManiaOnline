@@ -1151,7 +1151,7 @@ CreateOnlineHandler = function()
             end
           end
 
-		if autoReadyScreens[screenName] then
+		if autoReadyScreens[screenName] and not (evaluationScreens[screenName] and ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing") then
 			for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
 				local pn = ToEnumShortString(player)
 				readyState[pn] = true

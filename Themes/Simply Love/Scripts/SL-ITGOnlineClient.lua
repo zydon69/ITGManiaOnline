@@ -825,8 +825,19 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 
 	local phase = self:NormalizeRoomPhase(self.currentRoom.phase)
 	local playState = tostring(self:CurrentUserPlayState(self.currentRoom) or "")
+	local roundKey = self.PlayStateKey and self:PlayStateKey() or ""
+	local localRoundEnded = roundKey ~= "|" and self.onlineGameplayEndedKey == roundKey
+
+	if self:IsOnlineOptionsScreen(screenName)
+		and (phase == "playing" or phase == "results")
+	then
+		return "lobby"
+	end
 
 	if phase == "starting" then
+		if localRoundEnded then
+			return nil
+		end
 		return "gameplay"
 	end
 
@@ -838,7 +849,14 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 			return nil
 		end
 
-		-- Never auto-jump from lobby/options back into gameplay while a song is already running.
+		if screenName == "ScreenEvaluationStage"
+			or screenName == "ScreenEvaluationNonstop"
+			or screenName == "ScreenEvaluationSummary"
+		then
+			return nil
+		end
+
+		-- Never auto-jump from lobby/options/music select back into gameplay while a song is already running.
 		-- A player who left/quit mid-song must stay in lobby view and wait for the current round to end.
 		return "lobby"
 	end
@@ -915,16 +933,43 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 
 	if nextIsGameplay and roomPhase == "playing" then
 		self:MarkPlayEntered()
-	elseif previousWasGameplay and nextIsEvaluation and roomPhase == "playing" then
+	elseif previousWasGameplay and nextIsEvaluation and (roomPhase == "starting" or roomPhase == "playing" or roomPhase == "results") then
 		-- Song finished locally: eagerly mark finished so the server session state
 		-- no longer treats this player as actively playing.
+		local roundKey = self.PlayStateKey and self:PlayStateKey() or ""
+		if roundKey ~= "|" then
+			self.onlineGameplayEndedKey = roundKey
+		end
+
 		local player = first_enabled_player()
 		local stats = player and STATSMAN:GetCurStageStats():GetPlayerStageStats(player) or nil
 		local failedOk, failedValue = pcall(function() return stats and stats:GetFailed() end)
-		if failedOk and failedValue == true and self.MarkPlayFailed then
-			self:MarkPlayFailed()
+		local markTerminal = function()
+			local freshPhase = self.currentRoom and self:NormalizeRoomPhase(self.currentRoom.phase) or roomPhase
+			if self.SendScore and (freshPhase == "playing" or freshPhase == "results") then
+				self:SendScore(true, true)
+				return
+			end
+
+			if failedOk and failedValue == true and self.MarkPlayFailed then
+				self:MarkPlayFailed()
+			else
+				self:MarkPlayFinished()
+			end
+		end
+
+		if roomPhase == "starting" and self.FetchRoom and self.currentRoomId then
+			self:FetchRoom(self.currentRoomId, function(ok, decoded)
+				if ok and decoded and decoded.room then
+					self.currentRoom = decoded.room
+					local freshPhase = self:NormalizeRoomPhase(decoded.room.phase)
+					if freshPhase == "playing" or freshPhase == "results" then
+						markTerminal()
+					end
+				end
+			end)
 		else
-			self:MarkPlayFinished()
+			markTerminal()
 		end
 	elseif previousWasGameplay and nextIsLobby and roomPhase == "playing" then
 		self:MarkReturnedToLobby()
@@ -1901,6 +1946,9 @@ end
 function ITGOnline:UpdatePlayStateFromResponse(decoded)
 	if decoded and decoded.play_state and self.currentRoom then
 		self.currentRoom.play_state = decoded.play_state
+		if decoded.room_phase then
+			self.currentRoom.phase = decoded.room_phase
+		end
 		MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
 		MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", decoded.play_state)
 	end
