@@ -151,9 +151,12 @@ Branch.AfterSelectOnlineMode = function()
 end
 
 Branch.AfterEvaluationStage = function()
-	if ITGOnline and ITGOnline.currentRoomId and online_trace then
-		local phase = ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
-		online_trace("FLOW branch=AfterEvaluationStage room=" .. tostring(ITGOnline.currentRoomId) .. " phase=" .. tostring(phase) .. " next=ScreenProfileSave")
+	if ITGOnline and ITGOnline.currentRoomId then
+		if online_trace then
+			local phase = ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
+			online_trace("FLOW branch=AfterEvaluationStage room=" .. tostring(ITGOnline.currentRoomId) .. " phase=" .. tostring(phase) .. " next=ScreenOnlineLobbies")
+		end
+		return "ScreenOnlineLobbies"
 	end
 
 	-- If we're in Casual mode, don't save the profile(s).
@@ -278,11 +281,14 @@ Branch.AllowScreenEvalSummary = function()
 end
 
 Branch.AfterProfileSave = function()
-	if ITGOnline and ITGOnline.currentRoomId and online_trace then
-		local phase = ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
-		online_trace("FLOW branch=AfterProfileSave room=" .. tostring(ITGOnline.currentRoomId)
-			.. " phase=" .. tostring(phase)
-			.. " eventMode=" .. tostring(PREFSMAN:GetPreference("EventMode")))
+	if ITGOnline and ITGOnline.currentRoomId then
+		if online_trace then
+			local phase = ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
+			online_trace("FLOW branch=AfterProfileSave room=" .. tostring(ITGOnline.currentRoomId)
+				.. " phase=" .. tostring(phase)
+				.. " next=ScreenOnlineLobbies")
+		end
+		return "ScreenOnlineLobbies"
 	end
 
 	if PREFSMAN:GetPreference("EventMode") then
