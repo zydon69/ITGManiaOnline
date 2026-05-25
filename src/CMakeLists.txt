@@ -285,6 +285,38 @@ elseif(APPLE)
              COMMAND ${CMAKE_COMMAND} -E copy
                "${SM_XCODE_DIR}/logo.icns"
                "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/")
+
+      # Resource-only changes (Lua scripts, themes, noteskins, etc.) do not
+      # relink the C++ binary, so POST_BUILD commands are not guaranteed to run.
+      # Keep the .app bundle in sync on every normal build so test packages never
+      # ship stale gameplay scripts.
+      set(SM_MACOS_RESOURCE_SYNC_COMMANDS
+          COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources")
+
+      foreach(RESOURCE_DIR IN LISTS APPLE_BUNDLE_RESOURCES)
+        get_filename_component(RESOURCE_NAME "${RESOURCE_DIR}" NAME)
+        list(APPEND SM_MACOS_RESOURCE_SYNC_COMMANDS
+             COMMAND ${CMAKE_COMMAND} -E remove_directory
+               "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/${RESOURCE_NAME}"
+             COMMAND ${CMAKE_COMMAND} -E copy_directory
+               "${RESOURCE_DIR}"
+               "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/${RESOURCE_NAME}")
+      endforeach()
+
+      list(APPEND SM_MACOS_RESOURCE_SYNC_COMMANDS
+           COMMAND ${CMAKE_COMMAND} -E remove_directory
+             "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/Songs"
+           COMMAND ${CMAKE_COMMAND} -E make_directory
+             "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/Songs"
+           COMMAND ${CMAKE_COMMAND} -E copy
+             "${SM_XCODE_DIR}/logo.icns"
+             "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/")
+
+      add_custom_target(sync_macos_bundle_resources ALL
+                        ${SM_MACOS_RESOURCE_SYNC_COMMANDS}
+                        COMMENT "Synchronizing macOS bundle resources")
+      add_dependencies(sync_macos_bundle_resources "${SM_EXE_NAME}")
     else()
       message(STATUS "WITH_MACOS_PORTABLE_APP is ON: creating empty .app Resources directories and bundling only the icon")
 
