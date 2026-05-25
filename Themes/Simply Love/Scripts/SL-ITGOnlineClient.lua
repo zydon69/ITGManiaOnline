@@ -189,6 +189,17 @@ function online_trace(message)
 	if Warn then Warn(line) elseif Trace then Trace(line) end
 end
 
+local function online_flow_trace(message)
+	local screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+	local screenName = screen and screen:GetName() or "NoScreen"
+	local phase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
+	local roomId = ITGOnline and ITGOnline.currentRoomId or "no-room-id"
+	online_trace("FLOW room=" .. tostring(roomId)
+		.. " phase=" .. tostring(phase)
+		.. " screen=" .. tostring(screenName)
+		.. " " .. tostring(message or ""))
+end
+
 local function request_id()
 	if CRYPTMAN and CRYPTMAN.GenerateRandomUUID then
 		return CRYPTMAN:GenerateRandomUUID()
@@ -831,19 +842,23 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 	if self:IsOnlineOptionsScreen(screenName)
 		and (phase == "playing" or phase == "results")
 	then
+		online_flow_trace("preferred=lobby reason=options_during_terminal_or_playing playState=" .. tostring(playState) .. " roundEnded=" .. tostring(localRoundEnded))
 		return "lobby"
 	end
 
 	if phase == "starting" then
 		if localRoundEnded then
+			online_flow_trace("preferred=nil reason=starting_after_local_round_end playState=" .. tostring(playState) .. " roundKey=" .. tostring(roundKey))
 			return nil
 		end
+		online_flow_trace("preferred=gameplay reason=starting playState=" .. tostring(playState) .. " roundEnded=" .. tostring(localRoundEnded))
 		return "gameplay"
 	end
 
 	if phase == "playing" then
 		if self:IsOnlineGameplayScreen(screenName) then
 			if playState ~= "playing" then
+				online_flow_trace("preferred=lobby reason=gameplay_but_user_terminal playState=" .. tostring(playState))
 				return "lobby"
 			end
 			return nil
@@ -853,16 +868,19 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 			or screenName == "ScreenEvaluationNonstop"
 			or screenName == "ScreenEvaluationSummary"
 		then
+			online_flow_trace("preferred=nil reason=keep_evaluation_while_server_playing playState=" .. tostring(playState) .. " roundEnded=" .. tostring(localRoundEnded))
 			return nil
 		end
 
 		-- Never auto-jump from lobby/options/music select back into gameplay while a song is already running.
 		-- A player who left/quit mid-song must stay in lobby view and wait for the current round to end.
+		online_flow_trace("preferred=lobby reason=playing_non_gameplay_screen playState=" .. tostring(playState) .. " roundEnded=" .. tostring(localRoundEnded))
 		return "lobby"
 	end
 
 	if phase == "results" then
 		if self:IsOnlineGameplayScreen(screenName) then
+			online_flow_trace("preferred=evaluation reason=results_while_in_gameplay playState=" .. tostring(playState))
 			return "evaluation"
 		end
 		return nil
@@ -870,6 +888,7 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 
 	if phase == "lobby" or phase == "lobby_ready" or phase == "config" then
 		if self:IsOnlineGameplayScreen(screenName) then
+			online_flow_trace("preferred=lobby reason=non_playing_phase_in_gameplay playState=" .. tostring(playState))
 			return "lobby"
 		end
 		return nil
@@ -893,6 +912,7 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 
 	if not target or topScreen:GetName() == target then return false end
 
+	online_flow_trace("navigate target=" .. tostring(target) .. " preferred=" .. tostring(preferred) .. " from=" .. tostring(topScreen:GetName()))
 	topScreen:SetNextScreenName(target)
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 	return true
@@ -913,6 +933,7 @@ function ITGOnline:NoteScreenChanged(screenName)
 		local previous = self.currentScreenName
 		self.currentScreenName = screenName
 		self.screenGeneration = (self.screenGeneration or 0) + 1
+		online_flow_trace("screen_changed previous=" .. tostring(previous) .. " next=" .. tostring(screenName) .. " generation=" .. tostring(self.screenGeneration))
 		self:CancelScreenBoundRequests()
 		self:HandleOnlineGameplayScreenTransition(previous, screenName)
 		self:EnforceRoomPhaseScreen(screenName)
@@ -930,8 +951,16 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 		or nextScreenName == "ScreenEvaluationNonstop"
 		or nextScreenName == "ScreenEvaluationSummary"
 	local roomPhase = self:NormalizeRoomPhase(self.currentRoom.phase)
+	online_flow_trace("gameplay_transition previous=" .. tostring(previousScreenName)
+		.. " next=" .. tostring(nextScreenName)
+		.. " roomPhase=" .. tostring(roomPhase)
+		.. " previousWasGameplay=" .. tostring(previousWasGameplay)
+		.. " nextIsEvaluation=" .. tostring(nextIsEvaluation)
+		.. " nextIsLobby=" .. tostring(nextIsLobby)
+		.. " nextIsSelectMusic=" .. tostring(nextIsSelectMusic))
 
 	if nextIsGameplay and roomPhase == "playing" then
+		online_flow_trace("mark_play_entered reason=entered_gameplay")
 		self:MarkPlayEntered()
 	elseif previousWasGameplay and nextIsEvaluation and (roomPhase == "starting" or roomPhase == "playing" or roomPhase == "results") then
 		-- Song finished locally: eagerly mark finished so the server session state
@@ -946,6 +975,9 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 		local failedOk, failedValue = pcall(function() return stats and stats:GetFailed() end)
 		local markTerminal = function()
 			local freshPhase = self.currentRoom and self:NormalizeRoomPhase(self.currentRoom.phase) or roomPhase
+			online_flow_trace("mark_terminal freshPhase=" .. tostring(freshPhase)
+				.. " failed=" .. tostring(failedOk and failedValue == true)
+				.. " roundKey=" .. tostring(roundKey))
 			if self.SendScore and (freshPhase == "playing" or freshPhase == "results") then
 				self:SendScore(true, true)
 				return
@@ -959,22 +991,28 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 		end
 
 		if roomPhase == "starting" and self.FetchRoom and self.currentRoomId then
+			online_flow_trace("fetch_before_terminal_mark reason=left_gameplay_while_starting")
 			self:FetchRoom(self.currentRoomId, function(ok, decoded)
 				if ok and decoded and decoded.room then
 					self.currentRoom = decoded.room
 					local freshPhase = self:NormalizeRoomPhase(decoded.room.phase)
+					online_flow_trace("fetch_before_terminal_mark result phase=" .. tostring(freshPhase))
 					if freshPhase == "playing" or freshPhase == "results" then
 						markTerminal()
 					end
+				else
+					online_flow_trace("fetch_before_terminal_mark failed ok=" .. tostring(ok))
 				end
 			end)
 		else
 			markTerminal()
 		end
 	elseif previousWasGameplay and nextIsLobby and roomPhase == "playing" then
+		online_flow_trace("mark_returned_to_lobby reason=gameplay_to_lobby")
 		self:MarkReturnedToLobby()
 	elseif previousWasGameplay and nextIsSelectMusic and (roomPhase == "playing" or roomPhase == "starting" or roomPhase == "results") then
 		-- If a player leaves gameplay early, force the online flow back to the room lobby.
+		online_flow_trace("mark_returned_to_lobby reason=gameplay_to_select_music roomPhase=" .. tostring(roomPhase))
 		self:MarkReturnedToLobby()
 	end
 end
@@ -1945,10 +1983,14 @@ end
 
 function ITGOnline:UpdatePlayStateFromResponse(decoded)
 	if decoded and decoded.play_state and self.currentRoom then
+		local previousPhase = self.currentRoom.phase
 		self.currentRoom.play_state = decoded.play_state
 		if decoded.room_phase then
 			self.currentRoom.phase = decoded.room_phase
 		end
+		online_flow_trace("play_state_response previousPhase=" .. tostring(previousPhase)
+			.. " responsePhase=" .. tostring(decoded.room_phase)
+			.. " currentPhase=" .. tostring(self.currentRoom.phase))
 		MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
 		MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", decoded.play_state)
 	end
@@ -2455,6 +2497,10 @@ function ITGOnline:HandleRealtimeEvent(event)
 			or self.pendingJoinRoomId
 		if not room_event_is_relevant(roomId) then return end
 		if payload.room then
+			online_flow_trace("realtime_room_event name=" .. tostring(name)
+				.. " payloadPhase=" .. tostring(payload.room.phase)
+				.. " previousPhase=" .. tostring(self.currentRoom and self.currentRoom.phase or "no-room")
+				.. " eventId=" .. tostring(eventId))
 			self.currentRoomId = payload.room.id
 			self.currentRoom = payload.room
 			self:MaybeAutoReadyManager(payload.room)
@@ -2463,8 +2509,14 @@ function ITGOnline:HandleRealtimeEvent(event)
 				MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", payload.room.play_state)
 			end
 		elseif roomId then
+			online_flow_trace("realtime_room_event_fetch name=" .. tostring(name)
+				.. " roomId=" .. tostring(roomId)
+				.. " eventId=" .. tostring(eventId))
 			self:FetchRoom(roomId, function(ok, decoded)
 				if ok and decoded and decoded.room then
+					online_flow_trace("realtime_room_event_fetch_result name=" .. tostring(name)
+						.. " roomId=" .. tostring(roomId)
+						.. " phase=" .. tostring(decoded.room.phase))
 					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
 				end
 			end)

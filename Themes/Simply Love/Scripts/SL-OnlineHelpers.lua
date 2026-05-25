@@ -20,6 +20,7 @@ local lastOnlineGameplayRoomId = nil
 local pendingOnlineStartRoomId = nil
 local pendingConfigReady = nil
 local lastWaitingDebugKey = ""
+local lastFlowLobbyKey = ""
 local UnlockOnlineInput
 -- These screens are the ones we want to display the player's scores for.
 local scoreScreens = {"ScreenGameplay", "ScreenGameplayShared", "ScreenEvaluationStage", "ScreenEvaluationNonstop", "ScreenEvaluationSummary"}
@@ -142,6 +143,12 @@ end
 
 local ReleaseOnlineGameplay = function(screen, secondsUntilStart)
 	local lateBy = secondsUntilStart and math.max(0, -secondsUntilStart) or 0
+	if online_trace then
+		online_trace("FLOW release_gameplay screen=" .. tostring(screen and screen:GetName() or "nil")
+			.. " secondsUntilStart=" .. tostring(secondsUntilStart)
+			.. " lateBy=" .. tostring(lateBy)
+			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"))
+	end
 	if screen and lateBy > 0.03 and screen.SeekMusicSeconds then
 		screen:SeekMusicSeconds(lateBy)
 	end
@@ -295,6 +302,10 @@ local TransitionToOnlineOptions = function()
 		return
 	end
 
+	if online_trace then
+		online_trace("FLOW transition_to_options from=" .. tostring(screenName)
+			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"))
+	end
 	topScreen:SetNextScreenName("ScreenPlayerOptions")
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 end
@@ -308,6 +319,11 @@ local TransitionToOnlineGameplay = function()
 		return
 	end
 
+	if online_trace then
+		online_trace("FLOW transition_to_gameplay from=" .. tostring(screenName)
+			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room")
+			.. " pendingRoom=" .. tostring(pendingOnlineStartRoomId))
+	end
 	topScreen:SetNextScreenName(OnlineGameplayScreen())
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 end
@@ -600,6 +616,27 @@ DisplayLobbyState = function(data, actor)
 	          local screenName = screen and screen:GetName() or "NoScreen"
 						startHoldTime = { ["P1"] = 0, ["P2"] = 0 }
 						lastDisconnectCountdown = nil
+	local flowLobbyKey = table.concat({
+		tostring(data and data.roomId or ""),
+		tostring(data and data.phase or ""),
+		tostring(screenName),
+		tostring(data and data.startAt or ""),
+		tostring(data and data.startedAt or ""),
+		tostring(data and data.playState and #(data.playState.sessions or {}) or 0),
+		tostring(data and data.finalResults and #data.finalResults or 0),
+	}, "|")
+	if flowLobbyKey ~= lastFlowLobbyKey then
+		lastFlowLobbyKey = flowLobbyKey
+		if online_trace then
+			online_trace("FLOW display_lobby room=" .. tostring(data and data.roomId or "")
+				.. " phase=" .. tostring(data and data.phase or "")
+				.. " screen=" .. tostring(screenName)
+				.. " startAt=" .. tostring(data and data.startAt or "")
+				.. " startedAt=" .. tostring(data and data.startedAt or "")
+				.. " sessions=" .. tostring(data and data.playState and #(data.playState.sessions or {}) or 0)
+				.. " finalResults=" .. tostring(data and data.finalResults and #data.finalResults or 0))
+		end
+	end
 
 	local updatedData = OrderPlayers(data, screenName)
 
@@ -842,6 +879,12 @@ DisplayLobbyState = function(data, actor)
 			local gameplaySongKey = OnlineSongKey(data)
 			if data.phase == "starting" and data.roomId and gameplaySongKey ~= "" and lastOnlineGameplayRoomId ~= gameplaySongKey then
 				if ApplyOnlineSongSelection(data.songInfo) then
+					if online_trace then
+						online_trace("FLOW schedule_gameplay_start room=" .. tostring(data.roomId)
+							.. " key=" .. tostring(gameplaySongKey)
+							.. " previousKey=" .. tostring(lastOnlineGameplayRoomId)
+							.. " screen=" .. tostring(screenName))
+					end
 					lines[#lines+1] = OnlineStartCountdownText() or "Starting song..."
 					pendingOnlineStartRoomId = data.roomId
 					lastOnlineGameplayRoomId = gameplaySongKey

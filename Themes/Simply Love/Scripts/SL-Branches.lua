@@ -151,6 +151,11 @@ Branch.AfterSelectOnlineMode = function()
 end
 
 Branch.AfterEvaluationStage = function()
+	if ITGOnline and ITGOnline.currentRoomId and online_trace then
+		local phase = ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
+		online_trace("FLOW branch=AfterEvaluationStage room=" .. tostring(ITGOnline.currentRoomId) .. " phase=" .. tostring(phase) .. " next=ScreenProfileSave")
+	end
+
 	-- If we're in Casual mode, don't save the profile(s).
 	if SL.Global.GameMode == "Casual" then
 		return Branch.AfterProfileSave()
@@ -164,6 +169,11 @@ Branch.AfterSelectPlayMode = function()
 end
 
 Branch.AfterGameplay = function()
+	if ITGOnline and ITGOnline.currentRoomId and online_trace then
+		local phase = ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
+		online_trace("FLOW branch=AfterGameplay room=" .. tostring(ITGOnline.currentRoomId) .. " phase=" .. tostring(phase))
+	end
+
 	if THEME:GetMetric("ScreenHeartEntry", "HeartEntryEnabled") then
 		local go_to_heart= false
 		for i, pn in ipairs(GAMESTATE:GetEnabledPlayers()) do
@@ -183,8 +193,17 @@ end
 
 Branch.AfterHeartEntry = function()
 	local pm = ToEnumShortString(GAMESTATE:GetPlayMode())
-	if( pm == "Regular" ) then return "ScreenEvaluationStage" end
-	if( pm == "Nonstop" ) then return "ScreenEvaluationNonstop" end
+	local nextScreen = nil
+	if( pm == "Regular" ) then nextScreen = "ScreenEvaluationStage" end
+	if( pm == "Nonstop" ) then nextScreen = "ScreenEvaluationNonstop" end
+	if ITGOnline and ITGOnline.currentRoomId and online_trace then
+		local phase = ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
+		online_trace("FLOW branch=AfterHeartEntry room=" .. tostring(ITGOnline.currentRoomId)
+			.. " phase=" .. tostring(phase)
+			.. " playMode=" .. tostring(pm)
+			.. " next=" .. tostring(nextScreen))
+	end
+	return nextScreen
 end
 
 Branch.AfterSelectMusic = function()
@@ -259,6 +278,12 @@ Branch.AllowScreenEvalSummary = function()
 end
 
 Branch.AfterProfileSave = function()
+	if ITGOnline and ITGOnline.currentRoomId and online_trace then
+		local phase = ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
+		online_trace("FLOW branch=AfterProfileSave room=" .. tostring(ITGOnline.currentRoomId)
+			.. " phase=" .. tostring(phase)
+			.. " eventMode=" .. tostring(PREFSMAN:GetPreference("EventMode")))
+	end
 
 	if PREFSMAN:GetPreference("EventMode") then
 		return SelectMusicOrCourse()
