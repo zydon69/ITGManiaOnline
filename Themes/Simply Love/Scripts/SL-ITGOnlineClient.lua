@@ -82,6 +82,11 @@ ITGOnline.onlineGameplayTerminalKey = ITGOnline.onlineGameplayTerminalKey or ""
 ITGOnline.onlineGameplayTerminalInFlightKey = ITGOnline.onlineGameplayTerminalInFlightKey or ""
 ITGOnline.onlineGameplayTerminalState = ITGOnline.onlineGameplayTerminalState or ""
 ITGOnline.previousScreenName = ITGOnline.previousScreenName or nil
+ITGOnline.heartbeatInFlight = ITGOnline.heartbeatInFlight or false
+ITGOnline.heartbeatQueuedStatus = ITGOnline.heartbeatQueuedStatus or nil
+ITGOnline.lastHeartbeatSentAt = ITGOnline.lastHeartbeatSentAt or 0
+ITGOnline.lastHeartbeatFingerprint = ITGOnline.lastHeartbeatFingerprint or ""
+ITGOnline.heartbeatMinIntervalSeconds = ITGOnline.heartbeatMinIntervalSeconds or 1.5
 
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -1313,6 +1318,10 @@ function ITGOnline:Disconnect()
 	self.currentSongPayload = nil
 	self.lastDisplayedScoreSnapshot = nil
 	self.pendingJoinRoomId = nil
+	self.heartbeatInFlight = false
+	self.heartbeatQueuedStatus = nil
+	self.lastHeartbeatSentAt = 0
+	self.lastHeartbeatFingerprint = ""
 	self.scheduledStartLocalTime = nil
 	self.songLoadedAckKey = ""
 	self.songLoadedInFlightKey = ""
@@ -2358,10 +2367,37 @@ function ITGOnline:SecondsUntilScheduledStart()
 	return self.scheduledStartLocalTime - GetTimeSinceStart()
 end
 
-function ITGOnline:Heartbeat(status)
-	local payload = { status = status or "available" }
-	if self.currentRoomId then payload.room_id = self.currentRoomId end
-	self:Request("POST", "/presence/heartbeat", payload)
+function ITGOnline:Heartbeat(status, force)
+	status = status or "available"
+	local roomId = self.currentRoomId
+	local fingerprint = tostring(status) .. "|" .. tostring(roomId or "")
+	local now = GetTimeSinceStart()
+
+	if self.heartbeatInFlight then
+		self.heartbeatQueuedStatus = status
+		return
+	end
+
+	if not force
+		and fingerprint == self.lastHeartbeatFingerprint
+		and now - (tonumber(self.lastHeartbeatSentAt) or 0) < (tonumber(self.heartbeatMinIntervalSeconds) or 1.5) then
+		return
+	end
+
+	local payload = { status = status }
+	if roomId then payload.room_id = roomId end
+
+	self.heartbeatInFlight = true
+	self.lastHeartbeatSentAt = now
+	self.lastHeartbeatFingerprint = fingerprint
+	self:Request("POST", "/presence/heartbeat", payload, function()
+		self.heartbeatInFlight = false
+		local queuedStatus = self.heartbeatQueuedStatus
+		self.heartbeatQueuedStatus = nil
+		if queuedStatus then
+			self:Heartbeat(queuedStatus)
+		end
+	end)
 end
 
 function ITGOnline:FetchLobby(callback)
@@ -2597,9 +2633,10 @@ function ITGOnline:HandleRealtimeEvent(event)
 	end
 
 	local room_event_is_relevant = function(roomId)
-		if not roomId then return true end
 		local expected = self.currentRoomId or self.pendingJoinRoomId
-		return expected == nil or tonumber(roomId) == tonumber(expected)
+		if not expected then return false end
+		if not roomId then return true end
+		return tonumber(roomId) == tonumber(expected)
 	end
 
 	if name == "connection.ready" then

@@ -4,6 +4,8 @@ local NumPanes = SL.Global.GameMode=="Casual" and 1 or 8
 local InputHandler = nil
 local EventOverlayInputHandler = nil
 local OnlineResultsWaitInputHandler = nil
+local onlineResultsConfirmedUntil = 0
+local onlineResultsConfirmedKey = ""
 
 if ThemePrefs.Get("WriteCustomScores") then
 	WriteScores()
@@ -156,21 +158,47 @@ t[#t+1] = Def.ActorFrame{
 	end,
 	RefreshCommand=function(self)
 		local waiting = ITGOnline and ITGOnline.ShouldWaitForOnlineResults and ITGOnline:ShouldWaitForOnlineResults()
-		self:visible(waiting == true)
+		local room = ITGOnline and ITGOnline.currentRoom or nil
+		local phase = ITGOnline and ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(room and room.phase) or ""
+		local state = ITGOnline and ITGOnline.CurrentUserPlayState and ITGOnline:CurrentUserPlayState(room) or nil
+		local terminal = ITGOnline and ITGOnline.IsTerminalPlayState and ITGOnline:IsTerminalPlayState(state)
+		local confirmationKey = ITGOnline and ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
+			or tostring(room and room.id or "")
+		if not waiting
+			and phase == "results"
+			and terminal
+			and confirmationKey ~= ""
+			and onlineResultsConfirmedKey ~= confirmationKey then
+			onlineResultsConfirmedKey = confirmationKey
+			onlineResultsConfirmedUntil = GetTimeSinceStart() + 1.25
+		end
+		local confirming = not waiting
+			and confirmationKey ~= ""
+			and onlineResultsConfirmedKey == confirmationKey
+			and onlineResultsConfirmedUntil > 0
+			and GetTimeSinceStart() < onlineResultsConfirmedUntil
+		if not confirming and not waiting and confirmationKey == "" then
+			onlineResultsConfirmedUntil = 0
+			onlineResultsConfirmedKey = ""
+		end
+		local visible = waiting == true or confirming == true
+		self:visible(visible)
 
 		local screen = SCREENMAN:GetTopScreen()
 		if screen then
 			local timer = screen:GetChild("Timer")
-			if timer and waiting then timer:visible(false) end
+			if timer and visible then timer:visible(false) end
 		end
 
 		for player in ivalues(PlayerNumber) do
-			SCREENMAN:set_input_redirected(player, waiting == true)
+			SCREENMAN:set_input_redirected(player, visible == true)
 		end
 		local progress = self:GetChild("Progress")
 		if progress then progress:playcommand("Refresh") end
 		local sessions = self:GetChild("Sessions")
 		if sessions then sessions:playcommand("Refresh") end
+		local title = self:GetChild("Title")
+		if title then title:playcommand("Refresh") end
 
 		if waiting and ITGOnline and ITGOnline.FetchRoom and ITGOnline.currentRoomId then
 			ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok)
@@ -179,13 +207,13 @@ t[#t+1] = Def.ActorFrame{
 					MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", ITGOnline.currentRoom.play_state or {})
 				end
 			end)
-		elseif not waiting then
+		elseif not visible then
 			for player in ivalues(PlayerNumber) do
 				SCREENMAN:set_input_redirected(player, false)
 			end
 		end
 
-		self:sleep(waiting and 0.75 or 0.25):queuecommand("Refresh")
+		self:sleep(waiting and 0.75 or 0.15):queuecommand("Refresh")
 	end,
 
 	Def.Quad{
@@ -198,6 +226,10 @@ t[#t+1] = Def.ActorFrame{
 		Text="Waiting for every player to finish",
 		InitCommand=function(self)
 			self:y(-76):zoom(0.72):diffuse(color("#66ff99")):shadowlength(1)
+		end,
+		RefreshCommand=function(self)
+			local waiting = ITGOnline and ITGOnline.ShouldWaitForOnlineResults and ITGOnline:ShouldWaitForOnlineResults()
+			self:settext(waiting and "Waiting for every player to finish" or "Final score confirmed")
 		end,
 	},
 	LoadFont("Common Normal")..{
@@ -212,7 +244,11 @@ t[#t+1] = Def.ActorFrame{
 				self:settext("")
 				return
 			end
-			self:settext(string.format("%d/%d players finished", summary.terminal or 0, summary.players or 0))
+			if summary.allTerminal then
+				self:settext("All players finished")
+			else
+				self:settext(string.format("%d/%d players finished", summary.terminal or 0, summary.players or 0))
+			end
 		end,
 	},
 	LoadFont("Common Normal")..{
