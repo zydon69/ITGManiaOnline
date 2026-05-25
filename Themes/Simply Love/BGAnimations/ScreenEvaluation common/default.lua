@@ -158,8 +158,8 @@ t[#t+1] = Def.ActorFrame{
 	end,
 	RefreshCommand=function(self)
 		local waiting = ITGOnline and ITGOnline.ShouldWaitForOnlineResults and ITGOnline:ShouldWaitForOnlineResults()
-		local confirming = ITGOnline and ITGOnline.EnsureOnlineEvaluationHold and ITGOnline:EnsureOnlineEvaluationHold(1.25)
-		local visible = waiting == true or confirming == true
+		local holding = ITGOnline and ITGOnline.ShouldHoldOnlineEvaluation and ITGOnline:ShouldHoldOnlineEvaluation()
+		local visible = ITGOnline and ITGOnline.ShouldShowOnlineEvaluationStatus and ITGOnline:ShouldShowOnlineEvaluationStatus()
 		self:visible(visible)
 
 		local screen = SCREENMAN:GetTopScreen()
@@ -169,7 +169,7 @@ t[#t+1] = Def.ActorFrame{
 		end
 
 		for player in ivalues(PlayerNumber) do
-			SCREENMAN:set_input_redirected(player, visible == true)
+			SCREENMAN:set_input_redirected(player, holding == true)
 		end
 		local progress = self:GetChild("Progress")
 		if progress then progress:playcommand("Refresh") end
@@ -185,22 +185,20 @@ t[#t+1] = Def.ActorFrame{
 					MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", ITGOnline.currentRoom.play_state or {})
 				end
 			end)
-		elseif not visible then
+		elseif visible and ITGOnline and ITGOnline.currentRoomId and ITGOnline.FetchRoom then
+			ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok)
+				if ok and ITGOnline and ITGOnline.currentRoom and ITGOnline.LobbyStatePayload then
+					MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(ITGOnline.currentRoom))
+					MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", ITGOnline.currentRoom.play_state or {})
+				end
+			end)
+		else
 			for player in ivalues(PlayerNumber) do
 				SCREENMAN:set_input_redirected(player, false)
 			end
-			if ITGOnline and ITGOnline.ConsumeOnlineEvaluationHoldComplete and ITGOnline:ConsumeOnlineEvaluationHoldComplete() then
-				local screen = SCREENMAN:GetTopScreen()
-				if screen and (screen:GetName() == "ScreenEvaluationStage"
-					or screen:GetName() == "ScreenEvaluationNonstop"
-					or screen:GetName() == "ScreenEvaluationSummary") then
-					screen:SetNextScreenName("ScreenOnlineLobbies")
-					screen:StartTransitioningScreen("SM_GoToNextScreen")
-				end
-			end
 		end
 
-		self:sleep(waiting and 0.75 or 0.15):queuecommand("Refresh")
+		self:sleep(visible and 0.75 or 0.25):queuecommand("Refresh")
 	end,
 
 	Def.Quad{
@@ -216,7 +214,7 @@ t[#t+1] = Def.ActorFrame{
 		end,
 		RefreshCommand=function(self)
 			local waiting = ITGOnline and ITGOnline.ShouldWaitForOnlineResults and ITGOnline:ShouldWaitForOnlineResults()
-			self:settext(waiting and "Waiting for every player to finish" or "Final score confirmed")
+			self:settext(waiting and "Waiting for every player to finish" or "Final scores confirmed - press Start or Esc")
 		end,
 	},
 	LoadFont("Common Normal")..{

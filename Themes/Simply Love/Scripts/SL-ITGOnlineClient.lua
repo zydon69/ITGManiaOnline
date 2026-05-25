@@ -89,7 +89,6 @@ ITGOnline.lastHeartbeatFingerprint = ITGOnline.lastHeartbeatFingerprint or ""
 ITGOnline.heartbeatMinIntervalSeconds = ITGOnline.heartbeatMinIntervalSeconds or 1.5
 ITGOnline.onlineEvaluationHoldUntil = ITGOnline.onlineEvaluationHoldUntil or 0
 ITGOnline.onlineEvaluationHoldKey = ITGOnline.onlineEvaluationHoldKey or ""
-ITGOnline.onlineEvaluationTransitionedKey = ITGOnline.onlineEvaluationTransitionedKey or ""
 ITGOnline.onlineEvaluationHoldDurationSeconds = ITGOnline.onlineEvaluationHoldDurationSeconds or 1.25
 
 local function trim(value)
@@ -955,14 +954,14 @@ function ITGOnline:ShouldHoldOnlineEvaluation()
 		or self:EnsureOnlineEvaluationHold(self.onlineEvaluationHoldDurationSeconds)
 end
 
-function ITGOnline:ConsumeOnlineEvaluationHoldComplete()
+function ITGOnline:ShouldShowOnlineEvaluationStatus()
 	if not self.currentRoomId then return false end
-	local key = tostring(self.onlineEvaluationHoldKey or "")
-	if key == "" or self.onlineEvaluationTransitionedKey == key then return false end
-	if GetTimeSinceStart() < (tonumber(self.onlineEvaluationHoldUntil) or 0) then return false end
+	local screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+	local screenName = screen and screen:GetName() or self.currentScreenName
+	if not self:IsOnlineEvaluationScreen(screenName) then return false end
 
-	self.onlineEvaluationTransitionedKey = key
-	return true
+	return self:ShouldWaitForOnlineResults(self.currentRoom)
+		or self:ShouldConfirmOnlineEvaluation(self.currentRoom)
 end
 
 function ITGOnline:PreferredScreenForRoomPhase(screenName)
@@ -1383,7 +1382,6 @@ function ITGOnline:Disconnect()
 	self.lastHeartbeatFingerprint = ""
 	self.onlineEvaluationHoldUntil = 0
 	self.onlineEvaluationHoldKey = ""
-	self.onlineEvaluationTransitionedKey = ""
 	self.scheduledStartLocalTime = nil
 	self.songLoadedAckKey = ""
 	self.songLoadedInFlightKey = ""
