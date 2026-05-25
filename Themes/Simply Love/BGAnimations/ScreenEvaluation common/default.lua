@@ -4,8 +4,6 @@ local NumPanes = SL.Global.GameMode=="Casual" and 1 or 8
 local InputHandler = nil
 local EventOverlayInputHandler = nil
 local OnlineResultsWaitInputHandler = nil
-local onlineResultsConfirmedUntil = 0
-local onlineResultsConfirmedKey = ""
 
 if ThemePrefs.Get("WriteCustomScores") then
 	WriteScores()
@@ -133,12 +131,14 @@ t[#t+1] = Def.ActorFrame{
 	end,
 	OnCommand=function(self)
 		OnlineResultsWaitInputHandler = function(event)
-			if not ITGOnline or not ITGOnline.ShouldWaitForOnlineResults or not ITGOnline:ShouldWaitForOnlineResults() then
+			local holding = ITGOnline and ITGOnline.ShouldHoldOnlineEvaluation and ITGOnline:ShouldHoldOnlineEvaluation()
+			if not holding then
 				return false
 			end
 
 			if event and event.type == "InputEventType_FirstPress" then
-				SM("Waiting for every online player to finish...")
+				local waiting = ITGOnline and ITGOnline.ShouldWaitForOnlineResults and ITGOnline:ShouldWaitForOnlineResults()
+				SM(waiting and "Waiting for every online player to finish..." or "Final score confirmed.")
 			end
 			return true
 		end
@@ -158,29 +158,7 @@ t[#t+1] = Def.ActorFrame{
 	end,
 	RefreshCommand=function(self)
 		local waiting = ITGOnline and ITGOnline.ShouldWaitForOnlineResults and ITGOnline:ShouldWaitForOnlineResults()
-		local room = ITGOnline and ITGOnline.currentRoom or nil
-		local phase = ITGOnline and ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(room and room.phase) or ""
-		local state = ITGOnline and ITGOnline.CurrentUserPlayState and ITGOnline:CurrentUserPlayState(room) or nil
-		local terminal = ITGOnline and ITGOnline.IsTerminalPlayState and ITGOnline:IsTerminalPlayState(state)
-		local confirmationKey = ITGOnline and ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
-			or tostring(room and room.id or "")
-		if not waiting
-			and phase == "results"
-			and terminal
-			and confirmationKey ~= ""
-			and onlineResultsConfirmedKey ~= confirmationKey then
-			onlineResultsConfirmedKey = confirmationKey
-			onlineResultsConfirmedUntil = GetTimeSinceStart() + 1.25
-		end
-		local confirming = not waiting
-			and confirmationKey ~= ""
-			and onlineResultsConfirmedKey == confirmationKey
-			and onlineResultsConfirmedUntil > 0
-			and GetTimeSinceStart() < onlineResultsConfirmedUntil
-		if not confirming and not waiting and confirmationKey == "" then
-			onlineResultsConfirmedUntil = 0
-			onlineResultsConfirmedKey = ""
-		end
+		local confirming = ITGOnline and ITGOnline.EnsureOnlineEvaluationHold and ITGOnline:EnsureOnlineEvaluationHold(1.25)
 		local visible = waiting == true or confirming == true
 		self:visible(visible)
 
@@ -210,6 +188,15 @@ t[#t+1] = Def.ActorFrame{
 		elseif not visible then
 			for player in ivalues(PlayerNumber) do
 				SCREENMAN:set_input_redirected(player, false)
+			end
+			if ITGOnline and ITGOnline.ConsumeOnlineEvaluationHoldComplete and ITGOnline:ConsumeOnlineEvaluationHoldComplete() then
+				local screen = SCREENMAN:GetTopScreen()
+				if screen and (screen:GetName() == "ScreenEvaluationStage"
+					or screen:GetName() == "ScreenEvaluationNonstop"
+					or screen:GetName() == "ScreenEvaluationSummary") then
+					screen:SetNextScreenName("ScreenOnlineLobbies")
+					screen:StartTransitioningScreen("SM_GoToNextScreen")
+				end
 			end
 		end
 

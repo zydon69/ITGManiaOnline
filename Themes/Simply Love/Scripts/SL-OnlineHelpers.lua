@@ -387,6 +387,9 @@ end
 
 local EvaluationInputHandler = function(event)
 	if not event or event.type ~= "InputEventType_FirstPress" then return false end
+	if ITGOnline and ITGOnline.ShouldHoldOnlineEvaluation and ITGOnline:ShouldHoldOnlineEvaluation() then
+		return true
+	end
 
 	local deviceButton = ""
 	if event.DeviceInput and event.DeviceInput.button then
