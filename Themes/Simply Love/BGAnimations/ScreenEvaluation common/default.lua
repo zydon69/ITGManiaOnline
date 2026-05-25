@@ -3,6 +3,7 @@ local NumPanes = SL.Global.GameMode=="Casual" and 1 or 8
 
 local InputHandler = nil
 local EventOverlayInputHandler = nil
+local OnlineResultsWaitInputHandler = nil
 
 if ThemePrefs.Get("WriteCustomScores") then
 	WriteScores()
@@ -106,18 +107,143 @@ t[#t+1] = LoadFont("Common Normal")..{
 		self:xy(_screen.w - 14, _screen.h - 18):halign(1):zoom(0.45):diffuse(Color.White):shadowlength(1)
 	end,
 	OnCommand=function(self)
-		self:SetUpdateFunction(function(actor)
-			if not ITGOnline or not ITGOnline.currentRoomId then
-				actor:settext("")
+		self:queuecommand("RefreshOnlineStatus")
+	end,
+	RefreshOnlineStatusCommand=function(self)
+		if not ITGOnline or not ITGOnline.currentRoomId then
+			self:settext("")
+			self:sleep(0.5):queuecommand("RefreshOnlineStatus")
+			return
+		end
+
+		local handler = GetOnlineHandlerInstance and GetOnlineHandlerInstance() or nil
+		local connected = handler and handler.connected and handler.socket ~= nil
+		self:settext(connected and "ITG Online: connected" or "ITG Online: reconnecting")
+		self:diffuse(connected and color("#66ff99") or Color.Yellow)
+		self:sleep(0.5):queuecommand("RefreshOnlineStatus")
+	end
+}
+
+t[#t+1] = Def.ActorFrame{
+	Name="ITGOnlineResultsWait",
+	InitCommand=function(self)
+		self:Center():visible(false)
+	end,
+	OnCommand=function(self)
+		OnlineResultsWaitInputHandler = function(event)
+			if not ITGOnline or not ITGOnline.ShouldWaitForOnlineResults or not ITGOnline:ShouldWaitForOnlineResults() then
+				return false
+			end
+
+			if event and event.type == "InputEventType_FirstPress" then
+				SM("Waiting for every online player to finish...")
+			end
+			return true
+		end
+
+		local screen = SCREENMAN:GetTopScreen()
+		if screen then screen:AddInputCallback(OnlineResultsWaitInputHandler) end
+		self:queuecommand("Refresh")
+	end,
+	OffCommand=function(self)
+		local screen = SCREENMAN:GetTopScreen()
+		if screen and OnlineResultsWaitInputHandler then
+			screen:RemoveInputCallback(OnlineResultsWaitInputHandler)
+		end
+		for player in ivalues(PlayerNumber) do
+			SCREENMAN:set_input_redirected(player, false)
+		end
+	end,
+	RefreshCommand=function(self)
+		local waiting = ITGOnline and ITGOnline.ShouldWaitForOnlineResults and ITGOnline:ShouldWaitForOnlineResults()
+		self:visible(waiting == true)
+
+		local screen = SCREENMAN:GetTopScreen()
+		if screen then
+			local timer = screen:GetChild("Timer")
+			if timer and waiting then timer:visible(false) end
+		end
+
+		for player in ivalues(PlayerNumber) do
+			SCREENMAN:set_input_redirected(player, waiting == true)
+		end
+		local progress = self:GetChild("Progress")
+		if progress then progress:playcommand("Refresh") end
+		local sessions = self:GetChild("Sessions")
+		if sessions then sessions:playcommand("Refresh") end
+
+		if waiting and ITGOnline and ITGOnline.FetchRoom and ITGOnline.currentRoomId then
+			ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok)
+				if ok and ITGOnline and ITGOnline.currentRoom and ITGOnline.LobbyStatePayload then
+					MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(ITGOnline.currentRoom))
+					MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", ITGOnline.currentRoom.play_state or {})
+				end
+			end)
+		elseif not waiting then
+			for player in ivalues(PlayerNumber) do
+				SCREENMAN:set_input_redirected(player, false)
+			end
+		end
+
+		self:sleep(waiting and 0.75 or 0.25):queuecommand("Refresh")
+	end,
+
+	Def.Quad{
+		InitCommand=function(self)
+			self:zoomto(_screen.w, _screen.h):diffuse(color("#000000")):diffusealpha(0.74)
+		end,
+	},
+	LoadFont("Common Normal")..{
+		Name="Title",
+		Text="Waiting for every player to finish",
+		InitCommand=function(self)
+			self:y(-76):zoom(0.72):diffuse(color("#66ff99")):shadowlength(1)
+		end,
+	},
+	LoadFont("Common Normal")..{
+		Name="Progress",
+		Text="",
+		InitCommand=function(self)
+			self:y(-46):zoom(0.54):diffuse(Color.White):shadowlength(1)
+		end,
+		RefreshCommand=function(self)
+			local summary = ITGOnline and ITGOnline.PlayStateSummary and ITGOnline:PlayStateSummary() or nil
+			if not summary then
+				self:settext("")
+				return
+			end
+			self:settext(string.format("%d/%d players finished", summary.terminal or 0, summary.players or 0))
+		end,
+	},
+	LoadFont("Common Normal")..{
+		Name="Sessions",
+		Text="",
+		InitCommand=function(self)
+			self:y(8):zoom(0.48):diffuse(Color.White):shadowlength(1):wrapwidthpixels(_screen.w * 1.45):vertspacing(5)
+		end,
+		RefreshCommand=function(self)
+			local summary = ITGOnline and ITGOnline.PlayStateSummary and ITGOnline:PlayStateSummary() or nil
+			if not summary then
+				self:settext("")
 				return
 			end
 
-			local handler = GetOnlineHandlerInstance and GetOnlineHandlerInstance() or nil
-			local connected = handler and handler.connected and handler.socket ~= nil
-			actor:settext(connected and "ITG Online: connected" or "ITG Online: reconnecting")
-			actor:diffuse(connected and color("#66ff99") or Color.Yellow)
-		end)
-	end
+			local lines = {}
+			for session in ivalues(summary.sessions or {}) do
+				local user = session.user or {}
+				local name = tostring(user.name or session.name or "Player")
+				local state = tostring(session.state or "pending")
+				local prefix = "…"
+				if state == "finished" then
+					prefix = "✓"
+				elseif state == "failed" or state == "returned_to_lobby" or state == "disconnected" then
+					prefix = "✖"
+				end
+				lines[#lines + 1] = prefix .. " " .. name .. " - " .. state
+			end
+			self:settext(table.concat(lines, "\n"))
+		end,
+	},
 }
 
 return t

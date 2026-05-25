@@ -63,6 +63,7 @@ local sample_lobby = {
 }
 
 local joined_any_player_missing_song
+local joined_all_players_ready
 local last_start_visibility_debug_key = ""
 
 local function lobby_debug_enabled()
@@ -131,35 +132,45 @@ local function abbreviate_stepchart(value)
 	return chart
 end
 
+local function joined_phase_allows_song_selection()
+	return joined_phase == "lobby"
+		or joined_phase == "lobby_ready"
+		or joined_phase == "config"
+		or joined_phase == "results"
+end
+
+local function joined_phase_allows_start()
+	return joined_phase == "config"
+		or joined_phase == "lobby"
+		or joined_phase == "lobby_ready"
+end
+
+local function joined_room_can_start()
+	return joined_is_manager
+		and joined_song_confirmed
+		and joined_phase_allows_start()
+		and joined_all_players_ready()
+		and not joined_any_player_missing_song()
+end
+
 local function joined_button_indices()
 	local indices = {1}
-	if joined_is_manager then
+	if joined_is_manager and joined_phase_allows_song_selection() then
 		indices[#indices + 1] = 2
 	end
 	if joined_missing_song then
 		indices[#indices + 1] = 3
 	end
-	if joined_is_manager and (joined_phase == "config" or joined_phase == "lobby" or joined_phase == "lobby_ready") and #joined_lobby_players > 0 then
-		local allReady = true
-		for player in ivalues(joined_lobby_players) do
-			if not player.ready then
-				allReady = false
-				break
-			end
-		end
-			if allReady and not joined_any_player_missing_song() then
-				indices[#indices + 1] = 4
-			end
+	if joined_room_can_start() then
+		indices[#indices + 1] = 4
 	end
 	return indices
 end
 
-local function joined_all_players_ready()
+function joined_all_players_ready()
 	if #joined_lobby_players == 0 then return false end
 	for player in ivalues(joined_lobby_players) do
-		local isManagerPlayer = joined_manager_user_id ~= nil and tostring(player.playerId or "") == tostring(joined_manager_user_id)
-		-- Defensive local override: when testing alone as manager, treat manager as ready.
-		if not player.ready and not (joined_is_manager and isManagerPlayer and #joined_lobby_players == 1) then
+		if not player.ready then
 			return false
 		end
 	end
@@ -455,24 +466,31 @@ local InputHandler = function(event)
 						leave_confirm_index = 0
 						showing_leave_confirm = true
 						t:GetChild("LeaveConfirmPrompt"):visible(true)
-					t:GetChild("LeaveConfirmPrompt"):playcommand("Hover")
-				elseif joined_active_index == 2 and joined_is_manager then
-					local topScreen = SCREENMAN:GetTopScreen()
-					if topScreen then
+						t:GetChild("LeaveConfirmPrompt"):playcommand("Hover")
+					elseif joined_active_index == 2 and joined_is_manager then
+						if not joined_phase_allows_song_selection() then
+							t:playcommand("SetStatus", {
+								text="The current round is still finalizing. Wait for results before selecting another song.",
+								showSpinner=false,
+								showPrompt=true
+							})
+							return false
+						end
+						local topScreen = SCREENMAN:GetTopScreen()
+						if topScreen then
 							topScreen:SetNextScreenName("ScreenSelectMusic")
 							topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 						end
-				elseif joined_active_index == 3 and joined_missing_song then
+					elseif joined_active_index == 3 and joined_missing_song then
 						transition_to_online_song_reload()
-						elseif joined_active_index == 4 and joined_is_manager then
-							if (joined_phase == "config" or joined_phase == "lobby" or joined_phase == "lobby_ready")
-								and joined_all_players_ready() and not joined_any_player_missing_song() then
-								MESSAGEMAN:Broadcast("StartOnlineRoom")
-							else
-								t:playcommand("SetStatus", {
-									text=joined_any_player_missing_song() and "Cannot start yet. A player has not confirmed the selected song." or "Cannot start yet. Wait until every player is ready.",
-									showSpinner=false,
-									showPrompt=true
+					elseif joined_active_index == 4 and joined_is_manager then
+						if joined_room_can_start() then
+							MESSAGEMAN:Broadcast("StartOnlineRoom")
+						else
+							t:playcommand("SetStatus", {
+								text=joined_any_player_missing_song() and "Cannot start yet. A player has not confirmed the selected song." or "Cannot start yet. Select a song and wait until every player is ready.",
+								showSpinner=false,
+								showPrompt=true
 								})
 							end
 						end
@@ -813,12 +831,13 @@ local af = Def.ActorFrame{
 					or "Role: Member (only manager can start)"
 				statusLines[#statusLines + 1] = "Manager: " .. managerLabel
 
-				local canStartInPhase = joined_phase == "config" or joined_phase == "lobby" or joined_phase == "lobby_ready"
+				local canStartInPhase = joined_phase_allows_start()
 				local everyoneReady = joined_all_players_ready()
-				local hasMissingSong = joined_any_player_missing_song()
-				local blockers = {}
-				if not joined_is_manager then blockers[#blockers + 1] = "you are not manager" end
-				if not canStartInPhase then blockers[#blockers + 1] = "phase is " .. tostring(joined_phase or "unknown") end
+					local hasMissingSong = joined_any_player_missing_song()
+					local blockers = {}
+					if not joined_is_manager then blockers[#blockers + 1] = "you are not manager" end
+					if not joined_song_confirmed then blockers[#blockers + 1] = "no song selected" end
+					if not canStartInPhase then blockers[#blockers + 1] = "phase is " .. tostring(joined_phase or "unknown") end
 				if not everyoneReady then
 					local missingReady = joined_not_ready_player_names()
 					blockers[#blockers + 1] = (#missingReady > 0
@@ -849,7 +868,12 @@ local af = Def.ActorFrame{
 					if joined_song_preview.artist and joined_song_preview.artist ~= "" then
 						statusLines[#statusLines + 1] = "Artist: " .. tostring(joined_song_preview.artist)
 					end
-					if joined_phase == "starting" then
+					if joined_phase == "playing" then
+						statusLines[#statusLines + 1] = "Round in progress. Waiting for everyone to finish."
+					elseif joined_phase == "results" then
+						statusLines[#statusLines + 1] = joined_is_manager and "Results ready. Select Music for the next song."
+							or "Results ready. Waiting for the manager to choose the next song."
+					elseif joined_phase == "starting" then
 						local seconds = ITGOnline and ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or nil
 						statusLines[#statusLines + 1] = seconds and ("Starting in " .. tostring(math.ceil(math.max(0, seconds))) .. "...") or "Starting..."
 					elseif joined_phase == "config" then
@@ -892,7 +916,7 @@ local af = Def.ActorFrame{
 
 			local selectSongButton = joinedContent and joinedContent:GetChild("SelectSongButton")
 			if selectSongButton then
-				selectSongButton:visible(joined_is_manager)
+				selectSongButton:visible(joined_is_manager and joined_phase_allows_song_selection())
 			end
 
 			local reloadSongsButton = joinedContent and joinedContent:GetChild("ReloadSongsButton")
@@ -902,11 +926,11 @@ local af = Def.ActorFrame{
 
 			local startRoomButton = joinedContent and joinedContent:GetChild("StartRoomButton")
 			if startRoomButton then
-				local canStartInPhase = joined_phase == "config" or joined_phase == "lobby" or joined_phase == "lobby_ready"
-				local everyoneReady = joined_all_players_ready()
-				local hasMissingSong = joined_any_player_missing_song()
-				local visible = joined_is_manager and canStartInPhase and everyoneReady and not hasMissingSong
-				startRoomButton:visible(visible)
+					local canStartInPhase = joined_phase_allows_start()
+					local everyoneReady = joined_all_players_ready()
+					local hasMissingSong = joined_any_player_missing_song()
+					local visible = joined_room_can_start()
+					startRoomButton:visible(visible)
 
 				local debugKey = table.concat({
 					tostring(joined_lobby_code or ""),

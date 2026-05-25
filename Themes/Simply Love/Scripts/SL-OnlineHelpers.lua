@@ -217,7 +217,9 @@ end
 
 local OnlineSongKey = function(data)
 	if not data or not data.songInfo then return "" end
-	return tostring(data.roomId or data.code or "") .. "|" .. tostring(data.songInfo.chartHash or data.songInfo.songPath or "")
+	return tostring(data.roomId or data.code or "")
+		.. "|" .. tostring(data.songInfo.chartHash or data.songInfo.songPath or "")
+		.. "|" .. tostring(data.songInfo.selectedAt or "")
 end
 
 local ApplyOnlineSongSelection = function(songInfo)
@@ -777,7 +779,17 @@ DisplayLobbyState = function(data, actor)
 		local playingText = player.isPlayingSong and (" " .. OnlinePlayingSpinner()) or ""
 		local stateText = ""
 		if data.phase == "playing" and player.playState and player.playState ~= "playing" then
-			stateText = " - back in lobby"
+			if player.playState == "finished" then
+				stateText = " - finished ✔"
+			elseif player.playState == "failed" then
+				stateText = " - failed ❌"
+			elseif player.playState == "returned_to_lobby" then
+				stateText = " - left song ❌"
+			elseif player.playState == "disconnected" then
+				stateText = " - disconnected ❌"
+			else
+				stateText = " - " .. tostring(player.playState)
+			end
 		end
 		local playerAndScreen = i..'. '..player.profileName..playingText..readyText..stateText
 		if screenName ~= player.screenName then
@@ -1271,7 +1283,8 @@ CreateOnlineHandler = function()
 						end
 
 						self.inLobby = true
-						local configReadyKey = tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or "")
+							local configReadyKey = ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
+								or (tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or ""))
 						if ITGOnline.MarkConfigReady then
 							pendingConfigReady = configReadyKey
 							self:queuecommand("RetryOnlineConfigReady")
@@ -1285,7 +1298,8 @@ CreateOnlineHandler = function()
 						if not pendingConfigReady or not ITGOnline.currentRoomId then
 							return
 						end
-						local expectedConfigReadyKey = tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or "")
+							local expectedConfigReadyKey = ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
+								or (tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or ""))
 						if pendingConfigReady ~= expectedConfigReadyKey then
 							return
 						end

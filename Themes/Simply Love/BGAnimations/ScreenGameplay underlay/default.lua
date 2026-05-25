@@ -71,21 +71,25 @@ t[#t+1] = Def.ActorFrame{
 		self:xy(_screen.cx, _screen.cy - 120):visible(false)
 	end,
 	OnCommand=function(self)
-		self:SetUpdateFunction(function(actor)
-			if not (ITGOnline and ITGOnline.SecondsUntilScheduledStart) then
-				actor:visible(false)
-				return
-			end
+		self:queuecommand("RefreshCountdown")
+	end,
+	RefreshCountdownCommand=function(self)
+		if not (ITGOnline and ITGOnline.SecondsUntilScheduledStart) then
+			self:visible(false)
+			self:sleep(0.1):queuecommand("RefreshCountdown")
+			return
+		end
 
-			local seconds = ITGOnline:SecondsUntilScheduledStart()
-			if not seconds or seconds <= 0 then
-				actor:visible(false)
-				return
-			end
+		local seconds = ITGOnline:SecondsUntilScheduledStart()
+		if not seconds or seconds <= 0 then
+			self:visible(false)
+			self:sleep(0.1):queuecommand("RefreshCountdown")
+			return
+		end
 
-			actor:visible(true)
-			actor:GetChild("CountdownText"):settext("START IN " .. tostring(math.ceil(seconds)))
-		end)
+		self:visible(true)
+		self:GetChild("CountdownText"):settext("START IN " .. tostring(math.ceil(seconds)))
+		self:sleep(0.1):queuecommand("RefreshCountdown")
 	end,
 
 	Def.Quad{
@@ -109,18 +113,21 @@ t[#t+1] = LoadFont("Common Normal")..{
 		self:xy(_screen.w - 14, _screen.h - 18):halign(1):zoom(0.45):diffuse(Color.White):shadowlength(1)
 	end,
 	OnCommand=function(self)
-		self:SetUpdateFunction(function(actor)
-			if not ITGOnline or not ITGOnline.currentRoomId then
-				actor:settext("")
-				return
-			end
+		self:queuecommand("RefreshOnlineStatus")
+	end,
+	RefreshOnlineStatusCommand=function(self)
+		if not ITGOnline or not ITGOnline.currentRoomId then
+			self:settext("")
+			self:sleep(0.5):queuecommand("RefreshOnlineStatus")
+			return
+		end
 
-			local handler = GetOnlineHandlerInstance and GetOnlineHandlerInstance() or nil
-			local connected = handler and handler.connected and handler.socket ~= nil
-			local text = connected and "ITG Online: connected" or "ITG Online: reconnecting"
-			actor:settext(text)
-			actor:diffuse(connected and color("#66ff99") or Color.Yellow)
-		end)
+		local handler = GetOnlineHandlerInstance and GetOnlineHandlerInstance() or nil
+		local connected = handler and handler.connected and handler.socket ~= nil
+		local text = connected and "ITG Online: connected" or "ITG Online: reconnecting"
+		self:settext(text)
+		self:diffuse(connected and color("#66ff99") or Color.Yellow)
+		self:sleep(0.5):queuecommand("RefreshOnlineStatus")
 	end
 }
 

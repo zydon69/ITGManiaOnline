@@ -27,6 +27,31 @@ local function selected_max_score()
 	return 0
 end
 
+local function play_state_for_user(user_id)
+	local room = ITGOnline and ITGOnline.currentRoom or nil
+	local sessions = room and room.play_state and room.play_state.sessions or {}
+	local wanted = tostring(user_id or "")
+	for session in ivalues(sessions or {}) do
+		local user = session.user or {}
+		local current = tostring(user.id or session.user_id or "")
+		if current ~= "" and current == wanted then
+			return tostring(session.state or "")
+		end
+	end
+	return ""
+end
+
+local function terminal_flags(state, explicit_failed)
+	state = tostring(state or "")
+	return {
+		finished = state == "finished",
+		failed = explicit_failed == true
+			or state == "failed"
+			or state == "returned_to_lobby"
+			or state == "disconnected",
+	}
+end
+
 local function rows_from_leaderboard(leaderboard)
 	local rows = {}
 	local max_score = selected_max_score()
@@ -50,11 +75,13 @@ local function rows_from_leaderboard(leaderboard)
 		if user_id == self_id and self_displayed ~= nil then
 			percent = self_displayed
 		end
+		local flags = terminal_flags(play_state_for_user(user_id), score.failed and true or false)
 		rows[#rows + 1] = {
 			user_id = user_id,
 			name = tostring(user.name or "Player"),
 			percent = percent or 0,
-			failed = score.failed and true or false,
+			failed = flags.failed,
+			finished = flags.finished,
 		}
 	end
 	return rows
@@ -66,7 +93,7 @@ local function rows_from_lobby_state(data)
 	local self_id = local_user_id()
 	local self_displayed = local_displayed_percent()
 	for player in ivalues(data.players or {}) do
-		if player.exScore ~= nil or player.score ~= nil then
+		if player.exScore ~= nil or player.score ~= nil or player.playState ~= nil then
 			local score_percent = tonumber(player.score)
 			local ex_percent = tonumber(player.exScore)
 			-- `player.score` is currently accuracy in LobbyState payload.
@@ -79,11 +106,13 @@ local function rows_from_lobby_state(data)
 			if player_id == self_id and self_displayed ~= nil then
 				percent = self_displayed
 			end
+			local flags = terminal_flags(player.playState, false)
 			rows[#rows + 1] = {
 				user_id = player_id,
 				name = tostring(player.profileName or "Player"),
 				percent = percent or 0,
-				failed = player.playState == "failed" or player.playState == "returned_to_lobby",
+				failed = flags.failed,
+				finished = flags.finished,
 			}
 		end
 	end
@@ -104,7 +133,7 @@ local function update_rows(frame, rows)
 		local row = frame:GetChild("Row" .. tostring(i))
 		local data = rows[i]
 		if row and data then
-			local suffix = data.failed and "  ✖" or ""
+			local suffix = data.failed and "  ✖" or (data.finished and "  ✓" or "")
 			if data.user_id == self_id then
 				local localValue = tonumber(self_displayed)
 				local shownValue = tonumber(data.percent) or 0
@@ -124,6 +153,8 @@ local function update_rows(frame, rows)
 			row:settext(string.format("%d. %s  %.2f%%%s", i, data.name, data.percent or 0, suffix))
 			if data.failed then
 				row:diffuse(color("#ff3b30"))
+			elseif data.finished then
+				row:diffuse(color("#66ff99"))
 			elseif data.user_id == self_id then
 				row:diffuse(color("#ffd166"))
 			else
