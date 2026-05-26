@@ -2352,11 +2352,23 @@ function ITGOnline:SelectSongAndMarkLobbyReady(callback)
 			return
 		end
 
-		self:SetReady("lobby_ready", true, function(readyOk, readyDecoded, readyResponse)
-			if readyOk and readyDecoded and readyDecoded.room then
-				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or readyDecoded.room))
+		self:ConfirmSelectedSongAvailability("song_selected", function(availabilityOk, availabilityDecoded, availabilityResponse)
+			if not availabilityOk then
+				if callback then callback(false, availabilityDecoded or selectDecoded, availabilityResponse or selectResponse) end
+				MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+					event = "songAvailability",
+					success = false,
+					message = response_message(availabilityResponse, availabilityDecoded, "Could not confirm selected song")
+				})
+				return
 			end
-			if callback then callback(readyOk, readyDecoded or selectDecoded, readyResponse or selectResponse) end
+
+			self:SetReady("lobby_ready", true, function(readyOk, readyDecoded, readyResponse)
+				if readyOk and readyDecoded and readyDecoded.room then
+					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or readyDecoded.room))
+				end
+				if callback then callback(readyOk, readyDecoded or availabilityDecoded or selectDecoded, readyResponse or availabilityResponse or selectResponse) end
+			end)
 		end)
 	end)
 end
@@ -2892,11 +2904,18 @@ function ITGOnline:MarkConfigReady(callback)
 	end
 
 	local finishConfigReady = function()
-		self:SetReady("config_ready", true, function(ok, decoded, response)
-			if ok and decoded and decoded.room then
-				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or decoded.room))
+		self:ConfirmSelectedSongAvailability("options_ready", function(availabilityOk, availabilityDecoded, availabilityResponse)
+			if not availabilityOk then
+				finish(false, availabilityDecoded, availabilityResponse)
+				return
 			end
-			finish(ok, decoded, response)
+
+			self:SetReady("config_ready", true, function(ok, decoded, response)
+				if ok and decoded and decoded.room then
+					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or decoded.room))
+				end
+				finish(ok, decoded or availabilityDecoded, response or availabilityResponse)
+			end)
 		end)
 	end
 
@@ -2917,14 +2936,21 @@ function ITGOnline:MarkConfigReady(callback)
 		elseif room.phase == "config" then
 			finishConfigReady()
 		elseif room.phase == "lobby" or room.phase == "lobby_ready" then
-			self:SetReady("lobby_ready", true, function(readyOk, readyDecoded, readyResponse)
-				if readyOk and readyDecoded and readyDecoded.room then
-					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or readyDecoded.room))
+			self:ConfirmSelectedSongAvailability("options_ready", function(availabilityOk, availabilityDecoded, availabilityResponse)
+				if not availabilityOk then
+					finish(false, availabilityDecoded or fetchDecoded, availabilityResponse)
+					return
 				end
-				finish(false, readyDecoded or fetchDecoded, {
-					errorMessage = "Waiting for room config phase.",
-					retryAfter = 1,
-				})
+
+				self:SetReady("lobby_ready", true, function(readyOk, readyDecoded, readyResponse)
+					if readyOk and readyDecoded and readyDecoded.room then
+						MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or readyDecoded.room))
+					end
+					finish(false, readyDecoded or availabilityDecoded or fetchDecoded, {
+						errorMessage = "Waiting for room config phase.",
+						retryAfter = 1,
+					})
+				end)
 			end)
 		else
 			finish(false, fetchDecoded, { errorMessage = "Room is not accepting ready state." })
@@ -3529,6 +3555,10 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		end
 		if callback then callback(ok, decoded, response) end
 	end)
+end
+
+function ITGOnline:ConfirmSelectedSongAvailability(reason, callback)
+	self:ReportSongAvailability(false, reason or "available", callback)
 end
 
 function ITGOnline:RequestJoinUserRoom(userId, callback)

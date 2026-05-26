@@ -831,7 +831,15 @@ DisplayLobbyState = function(data, actor)
 			lastOnlineOptionsSongKey = songKey
 			if ApplyOnlineSongSelection(data.songInfo) then
 				if data.phase == "lobby_ready" then
-					ITGOnline:SetReady("lobby_ready", true)
+					if ITGOnline.ConfirmSelectedSongAvailability then
+						ITGOnline:ConfirmSelectedSongAvailability("local_song_available", function(ok)
+							if ok then
+								ITGOnline:SetReady("lobby_ready", true)
+							end
+						end)
+					else
+						ITGOnline:SetReady("lobby_ready", true)
+					end
 				end
 				TransitionToOnlineOptions()
 			end
