@@ -2,7 +2,19 @@
 
 #include <string>
 
-#if defined(__APPLE__)
+// The macOS Keychain can trigger an interactive "session keychain" prompt on
+// freshly copied / unsigned development builds. For the distributed arcade
+// client, credentials must stay explicit and non-persistent until we ship a
+// proper notarized Developer ID build with a deliberate keychain policy.
+#if defined(__APPLE__) && !defined(ITGMANIA_ENABLE_MACOS_KEYCHAIN)
+#define ITGMANIA_MACOS_KEYCHAIN_ENABLED 0
+#elif defined(__APPLE__)
+#define ITGMANIA_MACOS_KEYCHAIN_ENABLED 1
+#else
+#define ITGMANIA_MACOS_KEYCHAIN_ENABLED 0
+#endif
+
+#if ITGMANIA_MACOS_KEYCHAIN_ENABLED
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
 #elif defined(_WIN32)
@@ -31,7 +43,7 @@ bool ValidateInputs(
   return true;
 }
 
-#if defined(__APPLE__)
+#if ITGMANIA_MACOS_KEYCHAIN_ENABLED
 CFStringRef CopyCFString(const std::string& value) {
   return CFStringCreateWithBytes(
       kCFAllocatorDefault, reinterpret_cast<const UInt8*>(value.data()),
@@ -189,8 +201,10 @@ std::string GlibErrorMessage(GError* glibError, const char* fallback) {
 namespace SecureCredentialStore {
 
 const char* BackendName() {
-#if defined(__APPLE__)
+#if ITGMANIA_MACOS_KEYCHAIN_ENABLED
   return "macOS Keychain";
+#elif defined(__APPLE__)
+  return "unavailable";
 #elif defined(_WIN32)
   return "Windows Credential Manager";
 #elif defined(__linux__) && defined(HAVE_LIBSECRET)
@@ -201,7 +215,7 @@ const char* BackendName() {
 }
 
 bool IsAvailable() {
-#if defined(__APPLE__) || defined(_WIN32) || \
+#if ITGMANIA_MACOS_KEYCHAIN_ENABLED || defined(_WIN32) || \
     (defined(__linux__) && defined(HAVE_LIBSECRET))
   return true;
 #else
@@ -222,7 +236,7 @@ bool Store(
     return false;
   }
 
-#if defined(__APPLE__)
+#if ITGMANIA_MACOS_KEYCHAIN_ENABLED
   CFMutableDictionaryRef query = CopyBaseQuery(service, account);
   CFDataRef secretRef = CopyCFData(secret);
   CFDictionarySetValue(query, kSecValueData, secretRef);
@@ -309,7 +323,7 @@ bool Load(
     return false;
   }
 
-#if defined(__APPLE__)
+#if ITGMANIA_MACOS_KEYCHAIN_ENABLED
   CFMutableDictionaryRef query = CopyBaseQuery(service, account);
   CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue);
   CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne);
@@ -391,7 +405,7 @@ bool Delete(
     return false;
   }
 
-#if defined(__APPLE__)
+#if ITGMANIA_MACOS_KEYCHAIN_ENABLED
   CFMutableDictionaryRef query = CopyBaseQuery(service, account);
   OSStatus status = SecItemDelete(query);
   CFRelease(query);
