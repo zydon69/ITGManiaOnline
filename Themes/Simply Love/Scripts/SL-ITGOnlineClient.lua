@@ -270,10 +270,12 @@ local function online_flow_trace(message)
 	local screenName = screen and screen:GetName() or "NoScreen"
 	local phase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
 	local roomId = ITGOnline and ITGOnline.currentRoomId or "no-room-id"
-	online_trace("FLOW room=" .. tostring(roomId)
+	local line = "ITG Online: FLOW room=" .. tostring(roomId)
 		.. " phase=" .. tostring(phase)
 		.. " screen=" .. tostring(screenName)
-		.. " " .. tostring(message or ""))
+		.. " " .. tostring(message or "")
+	if Trace then Trace(line) elseif Warn then Warn(line) end
+	if Flush then Flush() end
 end
 
 local function request_id()

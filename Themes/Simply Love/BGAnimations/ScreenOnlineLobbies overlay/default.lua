@@ -436,14 +436,14 @@ local InputHandler = function(event)
 			return false
 		end
 
-		if has_error and event.GameButton == "Start" then
-			local topScreen = SCREENMAN:GetTopScreen()
-			if topScreen then
-				topScreen:SetNextScreenName("ScreenSelectMusic")
-				topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+			if has_error and event.GameButton == "Start" then
+				local topScreen = SCREENMAN:GetTopScreen()
+				if topScreen then
+					topScreen:SetNextScreenName("ScreenTitleMenu")
+					topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+				end
+				return false
 			end
-			return false
-		end
 
 		if not connected then
 			return false
@@ -597,14 +597,14 @@ local InputHandler = function(event)
 					})
 					t:queuecommand("CheckConnect")
 				end
-			elseif active_index == 4 then
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-				local topScreen = SCREENMAN:GetTopScreen()
-				if topScreen then
-					topScreen:SetNextScreenName("ScreenSelectMusic")
-					topScreen:StartTransitioningScreen("SM_GoToNextScreen")
-				end
-			elseif active_index == 3 then
+				elseif active_index == 4 then
+					SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+					local topScreen = SCREENMAN:GetTopScreen()
+					if topScreen then
+						topScreen:SetNextScreenName("ScreenTitleMenu")
+						topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+					end
+				elseif active_index == 3 then
 				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
 				t:GetChild("LobbyContent"):visible(false)
 				t:GetChild("OnlinePlayersContent"):visible(false)
@@ -1062,7 +1062,7 @@ local af = Def.ActorFrame{
 					text="Error connecting to online service:\n"..onlineHandler.errorMsg,
 					showSpinner=false,
 					showPrompt=true,
-					promptText="Press &START; to return to Select Music."
+					promptText="Press &START; to return to the main menu."
 				})
 				self:GetChild("LobbyContent"):visible(false)
 				self:GetChild("OnlinePlayersContent"):visible(false)
@@ -2079,7 +2079,7 @@ local af = Def.ActorFrame{
 			end
 		},
 		LoadFont("Common Normal")..{
-			Text="Disconnect from the lobby and return to Select Music?",
+			Text="Disconnect from the lobby?",
 			InitCommand=function(self)
 				self:y(-42):zoom(1)
 			end
