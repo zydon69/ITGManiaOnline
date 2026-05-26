@@ -867,8 +867,8 @@ bool ScreenEvaluation::OnlineEvaluationAutoAdvanceBlocked() const {
   bool blocked = false;
   const bool ok = LuaHelpers::RunExpression(
       L,
-      "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil "
-      "and not ITGOnline.onlineEvaluationExitRequested",
+      "ITGOnline ~= nil and ITGOnline.ShouldBlockEvaluationAutoAdvance ~= nil "
+      "and ITGOnline:ShouldBlockEvaluationAutoAdvance()",
       "ScreenEvaluation online auto advance gate");
   if (ok) {
     LuaHelpers::Pop(L, blocked);

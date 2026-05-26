@@ -71,6 +71,8 @@ ITGOnline.songLoadedInFlightKey = ITGOnline.songLoadedInFlightKey or ""
 ITGOnline.songLoadedPendingCallbacks = ITGOnline.songLoadedPendingCallbacks or {}
 ITGOnline.songAvailabilityInFlightKey = ITGOnline.songAvailabilityInFlightKey or ""
 ITGOnline.songAvailabilityReportedKey = ITGOnline.songAvailabilityReportedKey or ""
+ITGOnline.songAvailabilitySuppressedUntil = ITGOnline.songAvailabilitySuppressedUntil or {}
+ITGOnline.songAvailabilityFailureDedupSeconds = ITGOnline.songAvailabilityFailureDedupSeconds or 5
 ITGOnline.songSelectionInFlightKey = ITGOnline.songSelectionInFlightKey or ""
 ITGOnline.songSelectionInFlightCallbacks = ITGOnline.songSelectionInFlightCallbacks or {}
 ITGOnline.startScheduleAckKey = ITGOnline.startScheduleAckKey or ""
@@ -341,6 +343,10 @@ local function online_local_player_count()
 		if GAMESTATE:IsSideJoined(player) then count = count + 1 end
 	end
 	return count
+end
+
+local function online_single_local_player_allowed()
+	return online_local_player_count() <= 1
 end
 
 local function local_profile_name()
@@ -1117,6 +1123,17 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		return self.currentRoom
 	end
 
+	local roomVersionKey = tostring(room.id or self.currentRoomId or "")
+	local incomingPlayStateVersion = tonumber(room.play_state and room.play_state.version_ms) or 0
+	local previousPlayStateVersion = tonumber(self.lastPlayStateVersionByRoomId[roomVersionKey]) or 0
+	if incomingPlayStateVersion > 0 and incomingPlayStateVersion < previousPlayStateVersion and previousRoom and previousRoom.play_state then
+		room.play_state = previousRoom.play_state
+	elseif incomingPlayStateVersion <= 0 and previousPlayStateVersion > 0 and previousRoom and previousRoom.play_state then
+		room.play_state = previousRoom.play_state
+	elseif incomingPlayStateVersion > 0 and roomVersionKey ~= "" then
+		self.lastPlayStateVersionByRoomId[roomVersionKey] = incomingPlayStateVersion
+	end
+
 	self.currentRoomId = room.id
 	self.currentRoom = room
 
@@ -1864,6 +1881,7 @@ function ITGOnline:Disconnect()
 	self.songLoadedPendingCallbacks = {}
 	self.songAvailabilityInFlightKey = ""
 	self.songAvailabilityReportedKey = ""
+	self.songAvailabilitySuppressedUntil = {}
 	self.songSelectionInFlightKey = ""
 	self.startScheduleAckKey = ""
 	self.startScheduleAckInFlightKey = ""
@@ -1974,16 +1992,16 @@ function ITGOnline:ApplySyncPayload(decoded)
 	end
 	MESSAGEMAN:Broadcast("LobbySearched", self:LobbySearchPayload(decoded))
 
-		for joinRequest in ivalues(decoded.pending_join_requests or {}) do
-			MESSAGEMAN:Broadcast("OnlinePrivateJoinRequest", {
-				join_request = {
-					id = joinRequest.id,
-					room_id = joinRequest.room_id,
-					user_id = joinRequest.user and joinRequest.user.id or nil,
-					status = "pending",
-				},
-				requester = joinRequest.user,
-				room = joinRequest.room,
+	for joinRequest in ivalues(decoded.pending_join_requests or {}) do
+		MESSAGEMAN:Broadcast("OnlinePrivateJoinRequest", {
+			join_request = {
+				id = joinRequest.id,
+				room_id = joinRequest.room_id,
+				user_id = joinRequest.user and joinRequest.user.id or nil,
+				status = "pending",
+			},
+			requester = joinRequest.user,
+			room = joinRequest.room,
 		})
 	end
 
@@ -2019,86 +2037,81 @@ function ITGOnline:SyncPages(accumulator, generation, pageCount)
 		if generation ~= self.syncGeneration then return end
 
 		if ok and decoded then
-					if decoded.next_cursor then
-						local nextCursor = math.max(accumulator and accumulator.next_cursor or self.lastEventCursor or 0, tonumber(decoded.next_cursor) or 0)
-						if accumulator then
-							accumulator.next_cursor = nextCursor
-						else
-							self.lastEventCursor = nextCursor
-						end
-					end
+			if decoded.next_cursor then
+				accumulator.next_cursor = math.max(accumulator.next_cursor or self.lastEventCursor or 0, tonumber(decoded.next_cursor) or 0)
+			end
 
-						if accumulator then
-						for _, key in ipairs({ "online_users", "public_rooms", "pending_join_requests", "pending_invitations", "events" }) do
-							for item in ivalues(decoded[key] or {}) do
-								accumulator[key][#accumulator[key] + 1] = item
-							end
-							decoded[key] = accumulator[key]
-						end
+			accumulator.seen = accumulator.seen or {}
+			for _, key in ipairs({ "online_users", "public_rooms", "pending_join_requests", "pending_invitations", "events" }) do
+				accumulator.seen[key] = accumulator.seen[key] or {}
+				for item in ivalues(decoded[key] or {}) do
+					local itemId = type(item) == "table" and (item.id or item.room_id or (item.user and item.user.id)) or nil
+					local itemKey = tostring(itemId or (#accumulator[key] + 1) .. ":" .. tostring(item))
+					if not accumulator.seen[key][itemKey] then
+						accumulator.seen[key][itemKey] = true
+						accumulator[key][#accumulator[key] + 1] = item
 					end
+				end
+				decoded[key] = accumulator[key]
+			end
 
-					local meta = decoded.meta or {}
-					if meta.sync and meta.sync.snapshot_token then
-						accumulator.snapshot_token = tostring(meta.sync.snapshot_token)
-					end
-					local hasMore = (meta.events and meta.events.has_more)
-					or (meta.online_users and meta.online_users.has_more)
-					or (meta.public_rooms and meta.public_rooms.has_more)
-					or (meta.pending_join_requests and meta.pending_join_requests.has_more)
-					or (meta.pending_invitations and meta.pending_invitations.has_more)
-					local baseBudget = math.max(1, tonumber(self.syncMaxPages or 100) or 100)
-					local budgetMultiplier = math.max(1, tonumber(accumulator.syncPageBudgetMultiplier or 1) or 1)
-					local pageBudget = baseBudget * budgetMultiplier
-					if hasMore and page < pageBudget and not self.disconnecting then
-						self:SyncPages(accumulator, generation, pageCount + 1)
-						return
-					elseif hasMore then
-						local attempt = (tonumber(accumulator.syncOverflowAttempts or 0) or 0) + 1
-						local maxRetries = math.max(1, tonumber(self.syncOverflowMaxRetries or 3) or 3)
-						if attempt <= maxRetries then
-							accumulator.syncOverflowAttempts = attempt
-							accumulator.snapshot_token = nil
-							accumulator.next_cursor = 0
-							accumulator.online_users = {}
-							accumulator.public_rooms = {}
-							accumulator.pending_join_requests = {}
-							accumulator.pending_invitations = {}
-							accumulator.events = {}
-							local maxMultiplier = math.max(1, tonumber(self.syncOverflowMaxBudgetMultiplier or 4) or 4)
-							accumulator.syncPageBudgetMultiplier = math.min(
-								maxMultiplier,
-								math.max(1, tonumber(accumulator.syncPageBudgetMultiplier or 1) or 1) * 2
-							)
-							online_trace(
-								"Sync overflow retry "
-									.. tostring(attempt)
-									.. "/"
-									.. tostring(maxRetries)
-									.. " with page budget x"
-									.. tostring(accumulator.syncPageBudgetMultiplier)
-							)
-							self:SyncPages(accumulator, generation, 0)
-							return
-						end
-
-					online_trace("Sync page limit reached before all state was drained.")
-					local response = { errorMessage = "Sync did not complete before the page budget was exhausted." }
-					MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-						event = "sync",
-						success = false,
-						message = response.errorMessage,
-					})
-					self:FinishSync(generation, false, decoded, response)
+			local meta = decoded.meta or {}
+			if meta.sync and meta.sync.snapshot_token then
+				accumulator.snapshot_token = tostring(meta.sync.snapshot_token)
+			end
+			local hasMore = (meta.events and meta.events.has_more)
+				or (meta.online_users and meta.online_users.has_more)
+				or (meta.public_rooms and meta.public_rooms.has_more)
+				or (meta.pending_join_requests and meta.pending_join_requests.has_more)
+				or (meta.pending_invitations and meta.pending_invitations.has_more)
+			local baseBudget = math.max(1, tonumber(self.syncMaxPages or 100) or 100)
+			local budgetMultiplier = math.max(1, tonumber(accumulator.syncPageBudgetMultiplier or 1) or 1)
+			local pageBudget = baseBudget * budgetMultiplier
+			if hasMore and page < pageBudget and not self.disconnecting then
+				self:SyncPages(accumulator, generation, pageCount + 1)
+				return
+			elseif hasMore then
+				local attempt = (tonumber(accumulator.syncOverflowAttempts or 0) or 0) + 1
+				local maxRetries = math.max(1, tonumber(self.syncOverflowMaxRetries or 3) or 3)
+				if attempt <= maxRetries then
+					accumulator.syncOverflowAttempts = attempt
+					accumulator.snapshot_token = nil
+					accumulator.next_cursor = 0
+					accumulator.online_users = {}
+					accumulator.public_rooms = {}
+					accumulator.pending_join_requests = {}
+					accumulator.pending_invitations = {}
+					accumulator.events = {}
+					accumulator.seen = {}
+					local maxMultiplier = math.max(1, tonumber(self.syncOverflowMaxBudgetMultiplier or 4) or 4)
+					accumulator.syncPageBudgetMultiplier = math.min(
+						maxMultiplier,
+						math.max(1, tonumber(accumulator.syncPageBudgetMultiplier or 1) or 1) * 2
+					)
+					online_trace("Sync overflow retry " .. tostring(attempt) .. "/" .. tostring(maxRetries)
+						.. " with page budget x" .. tostring(accumulator.syncPageBudgetMultiplier))
+					self:SyncPages(accumulator, generation, 0)
 					return
 				end
 
-						self:ApplySyncPayload(decoded)
-						self.lastEventCursor = math.max(self.lastEventCursor or 0, tonumber(accumulator and accumulator.next_cursor or decoded.next_cursor or 0) or 0)
-					end
+				local syncResponse = { errorMessage = "Sync did not complete before the page budget was exhausted." }
+				online_trace(syncResponse.errorMessage)
+				MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+					event = "sync",
+					success = false,
+					message = syncResponse.errorMessage,
+				})
+				self:FinishSync(generation, false, decoded, syncResponse)
+				return
+			end
+
+			self:ApplySyncPayload(decoded)
+			self.lastEventCursor = math.max(self.lastEventCursor or 0, tonumber(accumulator.next_cursor or decoded.next_cursor or 0) or 0)
+		end
 
 		self:FinishSync(generation, ok, decoded, response)
-		end)
-	end
+	end)
+end
 
 function ITGOnline:BuildSongPayloadFor(song, steps)
 	if not song then return nil end
@@ -2223,6 +2236,7 @@ function ITGOnline:SelectSong(callback)
 			self.songLoadedPendingCallbacks = {}
 			self.songAvailabilityInFlightKey = ""
 			self.songAvailabilityReportedKey = ""
+			self.songAvailabilitySuppressedUntil = {}
 			self.startScheduleAckKey = ""
 			self.startScheduleAckInFlightKey = ""
 			self.onlineGameplayEnteredKey = ""
@@ -2413,6 +2427,10 @@ end
 
 function ITGOnline:QueueLiveScore(snapshot)
 	if type(snapshot) ~= "table" then return false end
+	if not online_single_local_player_allowed() then
+		online_flow_trace("ignored_live_score_multiple_local_players")
+		return false
+	end
 	self.lastDisplayedScoreSnapshot = snapshot
 	self.lastDisplayedScoreSnapshotAt = GetTimeSinceStart()
 	self.pendingLiveScoreRoundKey = self.PlayStateKey and self:PlayStateKey() or tostring(self.currentRoomId or "")
@@ -2487,6 +2505,10 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		if callback then callback(ok, decoded, response, meta or {}) end
 	end
 
+	if not online_single_local_player_allowed() then
+		finish(false, nil, { errorMessage = "Online play supports one local player per client." })
+		return
+	end
 	if not self.currentRoomId then finish(false, nil, { errorMessage = "No active online room." }); return end
 	if not self.currentRoom then finish(false, nil, { errorMessage = "No active online room snapshot." }); return end
 	local roomPhase = self:NormalizeRoomPhase(self.currentRoom.phase)
@@ -2869,7 +2891,7 @@ end
 function ITGOnline:UpdatePlayStateFromResponse(decoded)
 	if decoded and decoded.play_state and self.currentRoom then
 		local versionKey = tostring(self.currentRoomId or self.currentRoom.id or "")
-		local incomingVersion = tonumber(decoded.play_state_version_ms or decoded.leaderboard_version_ms or decoded.version_ms) or 0
+		local incomingVersion = tonumber(decoded.play_state_version_ms or (decoded.play_state and decoded.play_state.version_ms) or decoded.version_ms) or 0
 		local previousVersion = tonumber(self.lastPlayStateVersionByRoomId[versionKey]) or 0
 		if incomingVersion > 0 then
 			if incomingVersion < previousVersion then
@@ -2879,7 +2901,15 @@ function ITGOnline:UpdatePlayStateFromResponse(decoded)
 			end
 			self.lastPlayStateVersionByRoomId[versionKey] = incomingVersion
 		elseif previousVersion > 0 then
-			online_flow_trace("accepted_unversioned_play_state_response previous=" .. tostring(previousVersion))
+			online_flow_trace("ignored_unversioned_play_state_response previous=" .. tostring(previousVersion))
+			if self.FetchRoom then
+				local now = GetTimeSinceStart()
+				if now - (tonumber(self.lastUnversionedPlayStateFetchAt) or 0) >= 1.0 then
+					self.lastUnversionedPlayStateFetchAt = now
+					self:FetchRoom(self.currentRoomId)
+				end
+			end
+			return
 		end
 		local previousPhase = self.currentRoom.phase
 		self.currentRoom.play_state = decoded.play_state
@@ -2893,13 +2923,6 @@ function ITGOnline:UpdatePlayStateFromResponse(decoded)
 		MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", decoded.play_state)
 		if self.EnforceRoomPhaseScreen then
 			self:EnforceRoomPhaseScreen()
-		end
-		if incomingVersion <= 0 and previousVersion > 0 and self.FetchRoom then
-			local now = GetTimeSinceStart()
-			if now - (tonumber(self.lastUnversionedPlayStateFetchAt) or 0) >= 1.0 then
-				self.lastUnversionedPlayStateFetchAt = now
-				self:FetchRoom(self.currentRoomId)
-			end
 		end
 	end
 end
@@ -2916,6 +2939,12 @@ function ITGOnline:BroadcastCurrentRoomState(source)
 	if self.currentRoom.play_state then
 		MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", self.currentRoom.play_state)
 	end
+end
+
+function ITGOnline:ShouldBlockEvaluationAutoAdvance()
+	if not self.currentRoomId or self.onlineEvaluationExitRequested then return false end
+	local phase = self.currentRoom and self:NormalizeRoomPhase(self.currentRoom.phase) or ""
+	return phase == "playing" or phase == "results"
 end
 
 function ITGOnline:LocalUserId()
@@ -3411,6 +3440,11 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		if callback then callback(true, nil, { duplicate = true }) end
 		return
 	end
+	local suppressedUntil = tonumber(self.songAvailabilitySuppressedUntil[availabilityKey]) or 0
+	if suppressedUntil > GetTimeSinceStart() then
+		if callback then callback(true, nil, { duplicate = true, suppressed = true }) end
+		return
+	end
 	self.songAvailabilityInFlightKey = availabilityKey
 
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/song-availability", payload, function(ok, decoded, response)
@@ -3419,6 +3453,9 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		end
 		if ok then
 			self.songAvailabilityReportedKey = availabilityKey
+		elseif not (response and tonumber(response.statusCode) == 401) then
+			self.songAvailabilitySuppressedUntil[availabilityKey] = GetTimeSinceStart()
+				+ (tonumber(self.songAvailabilityFailureDedupSeconds) or 5)
 		end
 		if ok and decoded and decoded.room then
 			local room = self:ApplyRoomSnapshot(decoded.room, "song_availability")
@@ -3630,6 +3667,7 @@ function ITGOnline:HandleRealtimeEvent(event)
 		end
 
 		local incomingVersion = tonumber(payload.leaderboard_version_ms) or 0
+		local incomingPlayStateVersion = tonumber(payload.play_state_version_ms or (payload.play_state and payload.play_state.version_ms)) or 0
 		local versionRoomId = tostring(roomId or expectedRoomId or "")
 		if versionRoomId ~= "" then
 			local previousVersion = tonumber(self.lastLeaderboardVersionByRoomId[versionRoomId]) or 0
@@ -3649,43 +3687,49 @@ function ITGOnline:HandleRealtimeEvent(event)
 			return
 		end
 
-			if payload.leaderboard then
-				MESSAGEMAN:Broadcast("ITGOnlineLeaderboardUpdated", {
-					leaderboard = payload.leaderboard,
-					room_id = payload.room_id,
-					leaderboard_version_ms = incomingVersion,
-				})
-			end
-				if payload.play_state and self.currentRoom then
-					local playStateVersionKey = tostring(roomId or expectedRoomId or "")
-					local previousPlayStateVersion = tonumber(self.lastPlayStateVersionByRoomId[playStateVersionKey]) or 0
-					if incomingVersion < previousPlayStateVersion then
-						return
+		if payload.leaderboard then
+			MESSAGEMAN:Broadcast("ITGOnlineLeaderboardUpdated", {
+				leaderboard = payload.leaderboard,
+				room_id = payload.room_id,
+				leaderboard_version_ms = incomingVersion,
+			})
+		end
+		if payload.play_state and self.currentRoom then
+			local playStateVersionKey = tostring(roomId or expectedRoomId or "")
+			local previousPlayStateVersion = tonumber(self.lastPlayStateVersionByRoomId[playStateVersionKey]) or 0
+			if incomingPlayStateVersion <= 0 and previousPlayStateVersion > 0 then
+				online_flow_trace("ignored_unversioned_score_play_state previous=" .. tostring(previousPlayStateVersion))
+			elseif incomingPlayStateVersion > 0 and incomingPlayStateVersion < previousPlayStateVersion then
+				online_flow_trace("ignored_stale_score_play_state version=" .. tostring(incomingPlayStateVersion)
+					.. " previous=" .. tostring(previousPlayStateVersion))
+			else
+				if incomingPlayStateVersion > 0 then
+					self.lastPlayStateVersionByRoomId[playStateVersionKey] = incomingPlayStateVersion
+				end
+				self.currentRoom.play_state = payload.play_state
+				if payload.room_phase then
+					if self:RoomPhaseFromScoreEventIsStale(payload.room_phase) then
+						online_flow_trace("ignored_stale_score_room_phase current="
+							.. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+							.. " incoming=" .. tostring(payload.room_phase))
+					else
+						self:ApplyRoomPhase(payload.room_phase, "score_updated")
 					end
-					self.lastPlayStateVersionByRoomId[playStateVersionKey] = incomingVersion
-					self.currentRoom.play_state = payload.play_state
-					if payload.room_phase then
-						if self:RoomPhaseFromScoreEventIsStale(payload.room_phase) then
-							online_flow_trace("ignored_stale_score_room_phase current="
-								.. tostring(self.currentRoom and self.currentRoom.phase or "nil")
-								.. " incoming=" .. tostring(payload.room_phase))
-						else
-							self:ApplyRoomPhase(payload.room_phase, "score_updated")
-						end
-					end
-					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
-					MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", payload.play_state)
+				end
+				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
+				MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", payload.play_state)
 				if self.EnforceRoomPhaseScreen then
 					self:EnforceRoomPhaseScreen()
 				end
 			end
-		elseif name == "room.load_timeout" then
-				if payload.room then
-					local room = self:ApplyRoomSnapshot(payload.room, "load_timeout")
-					self:MaybeAutoReadyManager(room)
-					self.songLoadedAckKey = ""
-					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(room or payload.room))
-				end
+		end
+	elseif name == "room.load_timeout" then
+		if payload.room then
+			local room = self:ApplyRoomSnapshot(payload.room, "load_timeout")
+			self:MaybeAutoReadyManager(room)
+			self.songLoadedAckKey = ""
+			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(room or payload.room))
+		end
 		MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 			event = "songLoaded",
 			success = false,

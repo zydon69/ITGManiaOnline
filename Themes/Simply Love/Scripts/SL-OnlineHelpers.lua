@@ -600,12 +600,12 @@ local OrderPlayers = function(data, localScreenName)
 end
 
 DisplayLobbyState = function(data, actor)
-		if not actor or not actor.GetChild then return end
-		-- Keep in mind that SCREENMAN:GetTopScreen() might return nil while screens transition.
-	          local screen = SCREENMAN:GetTopScreen()
-	          local screenName = screen and screen:GetName() or "NoScreen"
-						startHoldTime = { ["P1"] = 0, ["P2"] = 0 }
-						lastDisconnectCountdown = nil
+	if not actor or not actor.GetChild then return end
+	-- Keep in mind that SCREENMAN:GetTopScreen() might return nil while screens transition.
+	local screen = SCREENMAN:GetTopScreen()
+	local screenName = screen and screen:GetName() or "NoScreen"
+	startHoldTime = { ["P1"] = 0, ["P2"] = 0 }
+	lastDisconnectCountdown = nil
 	local flowLobbyKey = table.concat({
 		tostring(data and data.roomId or ""),
 		tostring(data and data.phase or ""),
@@ -759,7 +759,7 @@ DisplayLobbyState = function(data, actor)
 		local readyText = ""
 		if (data.phase == "lobby" or data.phase == "lobby_ready" or data.phase == "config")
 			and not updatedData.aux.allPlayersReady then
-			readyText =" ["..(player.ready and "✔" or "❌").."]"
+			readyText =" ["..(player.ready and "OK" or "WAIT").."]"
 		end
 
 		-- Only display the screen name of the players that are on a different
@@ -768,13 +768,13 @@ DisplayLobbyState = function(data, actor)
 		local stateText = ""
 		if data.phase == "playing" and player.playState and player.playState ~= "playing" then
 			if player.playState == "finished" then
-				stateText = " - finished ✔"
+				stateText = " - finished [OK]"
 			elseif player.playState == "failed" then
-				stateText = " - failed ❌"
+				stateText = " - failed [X]"
 			elseif player.playState == "returned_to_lobby" then
-				stateText = " - left song ❌"
+				stateText = " - left song [X]"
 			elseif player.playState == "disconnected" then
-				stateText = " - disconnected ❌"
+				stateText = " - disconnected [X]"
 			else
 				stateText = " - " .. tostring(player.playState)
 			end
@@ -810,12 +810,16 @@ DisplayLobbyState = function(data, actor)
 		for result in ivalues(data.finalResults) do
 			local user = result.user or {}
 			local score = math.floor(tonumber(result.score) or 0)
+			local scorePercent = tonumber(result.score_percent)
 			local accuracy = tonumber(result.accuracy) or 0
 			local failedText = result.failed and " failed" or ""
+			local scoreText = scorePercent ~= nil
+				and (string.format("%.2f", scorePercent) .. "% (" .. tostring(score) .. " pts)")
+				or (tostring(score) .. " pts")
 			lines[#lines+1] = tostring(result.rank or "?")
 				.. ". " .. tostring(user.name or "Player")
-				.. " - " .. tostring(score)
-				.. " pts (" .. string.format("%.2f", accuracy) .. "%)"
+				.. " - " .. scoreText
+				.. " acc " .. string.format("%.2f", accuracy) .. "%"
 				.. failedText
 		end
 		lines[#lines+1] = ""
