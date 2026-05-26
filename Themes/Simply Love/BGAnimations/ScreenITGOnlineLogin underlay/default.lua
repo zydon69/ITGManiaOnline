@@ -81,6 +81,12 @@ end
 local function connect()
 	if busy then return end
 
+	if two_player_online_requested() then
+		status = THEME:GetString("ScreenITGOnlineLogin", "TwoPlayerNotice")
+		refresh()
+		return
+	end
+
 	if tostring(config.email or "") == "" or tostring(config.password or "") == "" then
 		status = THEME:GetString("ScreenITGOnlineLogin", "MissingCredentials")
 		refresh()
@@ -93,13 +99,11 @@ local function connect()
 		return
 	end
 
-	if NETWORK and NETWORK.IsUrlAllowed and
-		(not NETWORK:IsUrlAllowed(tostring(config.apiBaseUrl or "")) or
-		 not NETWORK:IsUrlAllowed(tostring(config.webSocketUrl or ""))) then
-		status = THEME:GetString("ScreenITGOnlineLogin", "HostNotAllowed")
-		refresh()
-		return
-	end
+		if ITGOnline and ITGOnline.IsTrustedConnectionConfig and not ITGOnline:IsTrustedConnectionConfig(config) then
+			status = THEME:GetString("ScreenITGOnlineLogin", "HostNotAllowed")
+			refresh()
+			return
+		end
 
 	busy = true
 	status = THEME:GetString("ScreenITGOnlineLogin", "Connecting")
@@ -177,6 +181,12 @@ end
 
 local function register_account()
 	if busy then return end
+
+	if two_player_online_requested() then
+		status = THEME:GetString("ScreenITGOnlineLogin", "TwoPlayerNotice")
+		refresh()
+		return
+	end
 
 	if tostring(config.email or "") == "" or tostring(config.password or "") == "" then
 		status = THEME:GetString("ScreenITGOnlineLogin", "MissingCredentials")

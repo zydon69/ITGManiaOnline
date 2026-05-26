@@ -138,6 +138,24 @@ static bool GetITGOnlineSecondsUntilScheduledStart(float& secondsUntilStart) {
   return hasNumber && secondsUntilStart > -30.0f && secondsUntilStart < 120.0f;
 }
 
+static bool GetITGOnlineIsActive() {
+  if (LUA == nullptr) {
+    return false;
+  }
+
+  Lua* L = LUA->Get();
+  const bool ran = LuaHelpers::RunExpression(
+      L,
+      "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil",
+      "ScreenGameplay::GetITGOnlineIsActive");
+
+  const bool isActive = ran && lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  LUA->Release(L);
+
+  return isActive;
+}
+
 static bool GetITGOnlineShouldHoldGameplayForStart() {
   if (LUA == nullptr) {
     return false;
@@ -153,6 +171,14 @@ static bool GetITGOnlineShouldHoldGameplayForStart() {
   const bool shouldHold = ran && lua_toboolean(L, -1);
   lua_pop(L, 1);
   LUA->Release(L);
+
+  if (!ran) {
+    const bool isOnlineActive = GetITGOnlineIsActive();
+    LOG->Warn(
+        "ITG Online: start hold gate failed; %s",
+        isOnlineActive ? "holding gameplay closed" : "local gameplay unaffected");
+    return isOnlineActive;
+  }
 
   return shouldHold;
 }
@@ -2736,9 +2762,16 @@ bool ScreenGameplay::OnlineShouldHoldBeforeEvaluation() {
   }
   LUA->Release(L);
   if (shouldHold) {
-    LOG->Warn("ITG Online: holding ScreenGameplay before evaluation");
+    LOG->Trace("ITG Online: holding ScreenGameplay before evaluation");
   }
-  return ok && shouldHold;
+  if (!ok) {
+    const bool isOnlineActive = GetITGOnlineIsActive();
+    LOG->Warn(
+        "ITG Online: evaluation hold gate failed; %s",
+        isOnlineActive ? "holding gameplay closed" : "local gameplay unaffected");
+    return isOnlineActive;
+  }
+  return shouldHold;
 }
 
 void ScreenGameplay::StageFinished(bool bBackedOut) {

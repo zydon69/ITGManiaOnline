@@ -351,10 +351,19 @@ void NetworkManager::CloseAllWebSockets() {
   std::vector<WebSocketHandlePtr> webSocketHandlesCopy;
   {
     std::lock_guard<std::mutex> lock(this->webSocketHandlesMutex);
-    webSocketHandlesCopy = this->webSocketHandles;
+    for (auto it = this->webSocketHandles.begin();
+         it != this->webSocketHandles.end();) {
+      if (auto handle = it->lock()) {
+        webSocketHandlesCopy.push_back(handle);
+        ++it;
+      } else {
+        it = this->webSocketHandles.erase(it);
+      }
+    }
   }
 
   for (auto& handle : webSocketHandlesCopy) {
+    handle->closed = true;
     handle->webSocket.disableAutomaticReconnection();
     handle->webSocket.stop();
   }
@@ -656,7 +665,7 @@ WebSocketHandlePtr NetworkManager::WebSocket(const WebSocketArgs& args) {
   {
     std::lock_guard<std::mutex> lock(this->webSocketWorkerMutex);
     this->webSocketWorkerQueue.push([this, handle]() {
-      if (this->shutdownWorkers.load()) {
+      if (this->shutdownWorkers.load() || handle->closed.load()) {
         return;
       }
 
@@ -716,7 +725,10 @@ int HttpRequestFuture::Cancel(lua_State* L) {
   return 0;
 }
 
-WebSocketHandle::~WebSocketHandle() { webSocket.stop(); }
+WebSocketHandle::~WebSocketHandle() {
+  closed = true;
+  webSocket.stop();
+}
 
 int WebSocketHandle::Collect(lua_State* L) {
   void* udata = luaL_checkudata(L, 1, "WebSocketHandle");
@@ -729,6 +741,7 @@ int WebSocketHandle::Close(lua_State* L) {
   void* udata = luaL_checkudata(L, 1, "WebSocketHandle");
   auto handle = *static_cast<WebSocketHandlePtr*>(udata);
 
+  handle->closed = true;
   LUA->YieldLua();
   handle->webSocket.stop();
   LUA->UnyieldLua();

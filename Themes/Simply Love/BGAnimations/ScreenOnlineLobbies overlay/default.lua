@@ -56,12 +56,6 @@ local join_lobby_code = ""
 
 SL.Global.Online = SL.Global.Online or {}
 
--- Just for testing
-local sample_lobby = {
-	code = "ABCD",
-	playerCount = 1,
-}
-
 local joined_any_player_missing_song
 local joined_all_players_ready
 local last_start_visibility_debug_key = ""
@@ -70,7 +64,7 @@ local function lobby_debug_enabled()
 	if ITGOnline and ITGOnline.debugReadyFlow ~= nil then
 		return ITGOnline.debugReadyFlow == true
 	end
-	return true
+	return false
 end
 
 local function lobby_debug(message)
@@ -287,13 +281,14 @@ local function clear_pending_join()
 	pending_join_deadline = 0
 end
 
-local function begin_join_timeout(actor)
+local function begin_join_timeout(actor, seconds)
+	seconds = tonumber(seconds) or 20
 	pending_join_action_id = pending_join_action_id + 1
-	pending_join_deadline = GetTimeSinceStart() + 20
+	pending_join_deadline = GetTimeSinceStart() + seconds
 	local timer = actor and actor:GetChild("JoinTimeoutTimer")
 	if timer then
 		timer:stoptweening()
-		timer:sleep(20):queuecommand("CheckJoinTimeout")
+		timer:sleep(seconds):queuecommand("CheckJoinTimeout")
 	end
 end
 
@@ -570,17 +565,6 @@ local InputHandler = function(event)
 			elseif active_index == 2 then
 				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
 
-				-- Uncomment the below to inject a sample lobby for testing purposes when refreshing the lobby list. --- IGNORE ---
-				-- t:playcommand("SetStatus", {
-				-- 	text="Loaded sample lobby (test mode).",
-				-- 	showSpinner=false,
-				-- 	showPrompt=false
-				-- })
-				-- MESSAGEMAN:Broadcast("LobbySearched", {
-				-- 	lobbies = {sample_lobby}
-				-- })
-				-- return false
-
 				local onlineHandler = GetOnlineHandlerInstance()
 				if onlineHandler and onlineHandler.connected then
 					t:playcommand("SetStatus", {
@@ -638,6 +622,7 @@ end
 
 local wait_time = 0
 local attempted = false
+local input_screen = nil
 local af = Def.ActorFrame{
 	  OnCommand=function(self)
 			t=self
@@ -645,8 +630,10 @@ local af = Def.ActorFrame{
 			holding.MenuLeft = false
 			holding.MenuRight = false
 	    self:Center()
-			if not input_added and SCREENMAN:GetTopScreen() then
-				SCREENMAN:GetTopScreen():AddInputCallback(InputHandler)
+			local screen = SCREENMAN:GetTopScreen()
+			if not input_added and screen then
+				screen:AddInputCallback(InputHandler)
+				input_screen = screen
 			input_added = true
 		end
 			self:playcommand("SetStatus", {
@@ -656,6 +643,10 @@ local af = Def.ActorFrame{
 		self:queuecommand("CheckConnect")
   end,
 	OffCommand=function(self)
+			if input_added and input_screen and input_screen.RemoveInputCallback then
+				pcall(function() input_screen:RemoveInputCallback(InputHandler) end)
+			end
+			input_screen = nil
 			input_added = false
 			holding.MenuLeft = false
 			holding.MenuRight = false
@@ -778,10 +769,11 @@ local af = Def.ActorFrame{
 		end
 		local optionsText = prompt:GetChild("PrivateJoinOptions")
 		if optionsText then optionsText:settext(table.concat(lines, "\n")) end
-	end,
-	UpdateJoinedLobbyTextCommand=function(self)
-		local joinedContent = self:GetChild("JoinedLobbyContent")
-		local codeValue = self:GetChild("JoinedLobbyContent"):GetChild("JoinedLobbyCodeValue")
+		end,
+		UpdateJoinedLobbyTextCommand=function(self)
+			local joinedContent = self:GetChild("JoinedLobbyContent")
+			if not joinedContent then return end
+			local codeValue = joinedContent:GetChild("JoinedLobbyCodeValue")
 		if codeValue then
 			codeValue:settext(joined_lobby_code ~= "" and joined_lobby_code or "(pending)")
 		end
@@ -816,7 +808,7 @@ local af = Def.ActorFrame{
 				lines[#lines+1] = clamp_text(lineHead..options..lineTail, maxLineLen)
 			end
 
-		local playersText = self:GetChild("JoinedLobbyContent"):GetChild("JoinedLobbyPlayers")
+			local playersText = joinedContent:GetChild("JoinedLobbyPlayers")
 		if playersText then
 			playersText:settext(#lines > 0 and table.concat(lines, "\n") or "Waiting for players...")
 		end
@@ -1238,7 +1230,7 @@ local af = Def.ActorFrame{
 				showPrompt=false
 			})
 			elseif params and params.event == "joinLobby" and params.success == true then
-				clear_pending_join()
+				begin_join_timeout(self, 60)
 				self:playcommand("SetStatus", {
 					text=params.message or "Join request sent. Waiting for the room manager.",
 					showSpinner=false,
@@ -1981,7 +1973,7 @@ local af = Def.ActorFrame{
 
 		LoadFont("Common Normal")..{
 			Name="ITGOnlineBuildMarker",
-			Text="ITG Online build 2026-05-21.9",
+			Text="ITG Online client",
 			InitCommand=function(self)
 				self:xy(_screen.w - 12, _screen.h - 18):horizalign(right):zoom(0.32):diffuse(0.75,0.75,0.75,0.85)
 			end

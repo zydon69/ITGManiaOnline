@@ -119,6 +119,7 @@ class WebSocketHandle {
 
   ix::WebSocket webSocket;
   std::function<void()> onClose;
+  std::atomic<bool> closed{false};
 };
 
 typedef std::shared_ptr<WebSocketHandle> WebSocketHandlePtr;
@@ -173,7 +174,7 @@ class NetworkManager {
   std::queue<std::function<void()>> webSocketWorkerQueue;
 
   std::mutex webSocketHandlesMutex;
-  std::vector<std::shared_ptr<WebSocketHandle>> webSocketHandles;
+  std::vector<std::weak_ptr<WebSocketHandle>> webSocketHandles;
 
   std::mutex mainThreadTaskMutex;
   std::queue<std::function<void()>> mainThreadTaskQueue;

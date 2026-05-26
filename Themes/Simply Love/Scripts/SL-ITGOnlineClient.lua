@@ -51,7 +51,15 @@ ITGOnline.lastAcceptedScoreSongPosition = ITGOnline.lastAcceptedScoreSongPositio
 ITGOnline.lastAcceptedScoreFingerprint = ITGOnline.lastAcceptedScoreFingerprint or nil
 ITGOnline.scoreInFlightFingerprint = ITGOnline.scoreInFlightFingerprint or nil
 ITGOnline.lastDisplayedScoreSnapshot = ITGOnline.lastDisplayedScoreSnapshot or nil
+ITGOnline.pendingLiveScoreSnapshot = ITGOnline.pendingLiveScoreSnapshot or nil
+ITGOnline.pendingLiveScoreRoundKey = ITGOnline.pendingLiveScoreRoundKey or ""
+ITGOnline.liveScoreInFlight = ITGOnline.liveScoreInFlight or false
+ITGOnline.liveScoreNextAttemptAt = ITGOnline.liveScoreNextAttemptAt or 0
+ITGOnline.liveScoreMinIntervalSeconds = ITGOnline.liveScoreMinIntervalSeconds or 0.35
 ITGOnline.lastLeaderboardVersionByRoomId = ITGOnline.lastLeaderboardVersionByRoomId or {}
+ITGOnline.lastPlayStateVersionByRoomId = ITGOnline.lastPlayStateVersionByRoomId or {}
+ITGOnline.lastRoomEventIdByRoomId = ITGOnline.lastRoomEventIdByRoomId or {}
+ITGOnline.lastUnversionedPlayStateFetchAt = ITGOnline.lastUnversionedPlayStateFetchAt or 0
 ITGOnline.processedRealtimeEventIds = ITGOnline.processedRealtimeEventIds or {}
 ITGOnline.processedRealtimeEventOrder = ITGOnline.processedRealtimeEventOrder or {}
 ITGOnline.processedRealtimeEventLimit = ITGOnline.processedRealtimeEventLimit or 512
@@ -59,6 +67,8 @@ ITGOnline.needsSyncAfterScreenCancel = ITGOnline.needsSyncAfterScreenCancel or f
 ITGOnline.songLoadedAckKey = ITGOnline.songLoadedAckKey or ""
 ITGOnline.songLoadedInFlightKey = ITGOnline.songLoadedInFlightKey or ""
 ITGOnline.songLoadedPendingCallbacks = ITGOnline.songLoadedPendingCallbacks or {}
+ITGOnline.songAvailabilityInFlightKey = ITGOnline.songAvailabilityInFlightKey or ""
+ITGOnline.songAvailabilityReportedKey = ITGOnline.songAvailabilityReportedKey or ""
 ITGOnline.songSelectionInFlightKey = ITGOnline.songSelectionInFlightKey or ""
 ITGOnline.startScheduleAckKey = ITGOnline.startScheduleAckKey or ""
 ITGOnline.startScheduleAckInFlightKey = ITGOnline.startScheduleAckInFlightKey or ""
@@ -80,21 +90,37 @@ ITGOnline.syncCallbacks = ITGOnline.syncCallbacks or {}
 ITGOnline.syncGeneration = ITGOnline.syncGeneration or 0
 ITGOnline.onlineGameplayEnteredKey = ITGOnline.onlineGameplayEnteredKey or ""
 ITGOnline.onlineGameplayReturnedKey = ITGOnline.onlineGameplayReturnedKey or ""
+ITGOnline.onlineGameplayReturnedInFlightKey = ITGOnline.onlineGameplayReturnedInFlightKey or ""
 ITGOnline.onlineGameplayTerminalKey = ITGOnline.onlineGameplayTerminalKey or ""
 ITGOnline.onlineGameplayTerminalInFlightKey = ITGOnline.onlineGameplayTerminalInFlightKey or ""
 ITGOnline.onlineGameplayTerminalState = ITGOnline.onlineGameplayTerminalState or ""
+ITGOnline.onlineGameplayEndedKey = ITGOnline.onlineGameplayEndedKey or ""
+ITGOnline.onlineGameplayEvaluationMarkKey = ITGOnline.onlineGameplayEvaluationMarkKey or ""
+ITGOnline.onlineGameplayEvaluationMarkInFlightKey = ITGOnline.onlineGameplayEvaluationMarkInFlightKey or ""
+ITGOnline.onlineGameplayEvaluationRetryKey = ITGOnline.onlineGameplayEvaluationRetryKey or ""
+ITGOnline.onlineGameplayEvaluationRetryCount = ITGOnline.onlineGameplayEvaluationRetryCount or 0
+ITGOnline.onlineGameplayEvaluationNextRetryAt = ITGOnline.onlineGameplayEvaluationNextRetryAt or 0
+ITGOnline.onlineGameplayEvaluationMaxRetries = ITGOnline.onlineGameplayEvaluationMaxRetries or 3
+ITGOnline.onlineGameplayAllTerminalHoldKey = ITGOnline.onlineGameplayAllTerminalHoldKey or ""
+ITGOnline.onlineGameplayAllTerminalHoldUntil = ITGOnline.onlineGameplayAllTerminalHoldUntil or 0
 ITGOnline.previousScreenName = ITGOnline.previousScreenName or nil
 ITGOnline.heartbeatInFlight = ITGOnline.heartbeatInFlight or false
 ITGOnline.heartbeatQueuedStatus = ITGOnline.heartbeatQueuedStatus or nil
 ITGOnline.lastHeartbeatSentAt = ITGOnline.lastHeartbeatSentAt or 0
 ITGOnline.lastHeartbeatFingerprint = ITGOnline.lastHeartbeatFingerprint or ""
 ITGOnline.heartbeatMinIntervalSeconds = ITGOnline.heartbeatMinIntervalSeconds or 1.5
+ITGOnline.fileHashCache = ITGOnline.fileHashCache or {}
+ITGOnline.fileHashCacheTtlSeconds = ITGOnline.fileHashCacheTtlSeconds or 30
+ITGOnline.debugOnlineTrace = ITGOnline.debugOnlineTrace or false
+ITGOnline.debugScoreTrace = ITGOnline.debugScoreTrace or false
 
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
 local function url_host(value)
+	local host = tostring(value or ""):match("^[A-Za-z]+://%[([^%]]+)%]")
+	if host then return host end
 	return tostring(value or ""):match("^[A-Za-z]+://([^/:]+)")
 end
 
@@ -104,22 +130,44 @@ local function is_local_host(host)
 	return host == "localhost" or host == "127.0.0.1" or host == "::1"
 end
 
+local function is_itgonline_host(host)
+	if not host then return false end
+	host = tostring(host):lower()
+	return host == "itgonline.fr" or host:match("%.itgonline%.fr$") ~= nil
+end
+
+local function network_allows(value)
+	return NETWORK and NETWORK.IsUrlAllowed and NETWORK:IsUrlAllowed(value)
+end
+
+local function is_trusted_online_api_url(value)
+	local lower = tostring(value or ""):lower()
+	local host = url_host(value)
+	if lower:match("^https://") and is_itgonline_host(host) then return true end
+	if lower:match("^http://") and is_local_host(host) then return true end
+	return false
+end
+
+local function is_trusted_online_websocket_url(value)
+	local lower = tostring(value or ""):lower()
+	local host = url_host(value)
+	if lower:match("^wss://") and is_itgonline_host(host) then return true end
+	if lower:match("^ws://") and is_local_host(host) then return true end
+	return false
+end
+
 local function normalize_base_url(value)
 	value = trim(value)
 	if value == "" then return ITGOnline.defaults.apiBaseUrl end
 	value = value:gsub("/+$", "")
-	local lower = value:lower()
-	if lower:match("^https://") then return value end
-	if lower:match("^http://") and is_local_host(url_host(value)) then return value end
+	if is_trusted_online_api_url(value) and network_allows(value) then return value end
 	return ITGOnline.defaults.apiBaseUrl
 end
 
 local function normalize_websocket_url(value)
 	value = trim(value)
 	if value == "" then return ITGOnline.defaults.webSocketUrl end
-	local lower = value:lower()
-	if lower:match("^wss://") then return value end
-	if lower:match("^ws://") and is_local_host(url_host(value)) then return value end
+	if is_trusted_online_websocket_url(value) and network_allows(value) then return value end
 	return ITGOnline.defaults.webSocketUrl
 end
 
@@ -202,8 +250,11 @@ local function response_message(response, decoded, fallback)
 end
 
 function online_trace(message)
+	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
+		return
+	end
 	local line = "ITG Online: " .. tostring(message or "")
-	if Warn then Warn(line) elseif Trace then Trace(line) end
+	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
 
 local function online_flow_trace(message)
@@ -237,6 +288,16 @@ local function days_from_civil(year, month, day)
 	return era * 146097 + doe - 719468
 end
 
+local function is_leap_year(year)
+	return (year % 4 == 0 and year % 100 ~= 0) or (year % 400 == 0)
+end
+
+local function days_in_month(year, month)
+	local days = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
+	if month == 2 and is_leap_year(year) then return 29 end
+	return days[month] or 0
+end
+
 local function iso_utc_milliseconds(value)
 	if type(value) ~= "string" then return nil end
 
@@ -249,7 +310,8 @@ local function iso_utc_milliseconds(value)
 	minute = tonumber(minute)
 	second = tonumber(second)
 	if not year or not month or not day or not hour or not minute or not second then return nil end
-	if year < 1970 or year > 2100 or month < 1 or month > 12 or day < 1 or day > 31 then return nil end
+	if year < 1970 or year > 2100 or month < 1 or month > 12 then return nil end
+	if day < 1 or day > days_in_month(year, month) then return nil end
 	if hour > 23 or minute > 59 or second > 60 then return nil end
 
 	local days = days_from_civil(year, month, day)
@@ -294,6 +356,30 @@ local function sha256_file_hex(path)
 		return BinaryToHex(digest):lower()
 	end
 	return nil
+end
+
+local function cached_sha256_file_hex(path)
+	path = tostring(path or "")
+	if path == "" then return nil end
+	ITGOnline.fileHashCache = ITGOnline.fileHashCache or {}
+	local size = nil
+	if FILEMAN and FILEMAN.GetFileSizeBytes then
+		local ok, value = pcall(function() return FILEMAN:GetFileSizeBytes(path) end)
+		if ok and tonumber(value) then size = tonumber(value) end
+	end
+	local cacheKey = path .. "|" .. tostring(size or "unknown")
+	local cached = ITGOnline.fileHashCache[cacheKey]
+	local now = GetTimeSinceStart()
+	local ttl = tonumber(ITGOnline.fileHashCacheTtlSeconds) or 30
+	if type(cached) == "table" and cached.digest and cached.at and now - cached.at <= ttl then
+		return cached.digest
+	end
+
+	local digest = sha256_file_hex(path)
+	if digest then
+		ITGOnline.fileHashCache[cacheKey] = { digest = digest, at = now }
+	end
+	return digest
 end
 
 local function manifest_file_name(path)
@@ -459,37 +545,57 @@ local function normalize_chart_type(value)
 	return lower
 end
 
-local function read_config()
+local function read_config(loadPassword)
+	if loadPassword == nil then loadPassword = true end
 	if not FILEMAN:DoesFileExist(ITGOnline.configPath) then
 		IniFile.WriteFile(ITGOnline.configPath, {
 			["ITGOnline"] = {
-					["ApiBaseUrl"] = ITGOnline.defaults.apiBaseUrl,
-					["WebSocketUrl"] = ITGOnline.defaults.webSocketUrl,
-					["Email"] = "",
-					["DeviceName"] = ITGOnline.defaults.deviceName,
-				}
-			})
+				["ApiBaseUrl"] = ITGOnline.defaults.apiBaseUrl,
+				["WebSocketUrl"] = ITGOnline.defaults.webSocketUrl,
+				["Email"] = "",
+				["DeviceName"] = ITGOnline.defaults.deviceName,
+			}
+		})
 	end
 
 	local raw = IniFile.ReadFile(ITGOnline.configPath) or {}
 	local section = raw["ITGOnline"] or {}
 	local apiBaseUrl = normalize_base_url(section["ApiBaseUrl"])
 	local email = trim(section["Email"])
-	local securePassword, securePasswordStored = secure_password_get(apiBaseUrl, email)
-
-	return {
-			apiBaseUrl = apiBaseUrl,
-			webSocketUrl = normalize_websocket_url(section["WebSocketUrl"]),
-			email = email,
-			password = tostring(securePassword or ""),
-			passwordStoredSecurely = securePasswordStored,
-			secureCredentialsBackend = secure_credentials_backend(),
-			deviceName = trim(section["DeviceName"]) ~= "" and trim(section["DeviceName"]) or ITGOnline.defaults.deviceName,
-		}
+	local securePassword, securePasswordStored = nil, false
+	if loadPassword then
+		securePassword, securePasswordStored = secure_password_get(apiBaseUrl, email)
+	elseif ITGOnline.config and ITGOnline.config.email == email and ITGOnline.config.apiBaseUrl == apiBaseUrl then
+		securePassword = ITGOnline.config.password
+		securePasswordStored = ITGOnline.config.passwordStoredSecurely == true
 	end
 
+	return {
+		apiBaseUrl = apiBaseUrl,
+		webSocketUrl = normalize_websocket_url(section["WebSocketUrl"]),
+		email = email,
+		password = tostring(securePassword or ""),
+		passwordStoredSecurely = securePasswordStored,
+		secureCredentialsBackend = secure_credentials_backend(),
+		deviceName = trim(section["DeviceName"]) ~= "" and trim(section["DeviceName"]) or ITGOnline.defaults.deviceName,
+	}
+end
+
 function ITGOnline:Config()
-	self.config = read_config()
+	self.config = read_config(true)
+	return self.config
+end
+
+function ITGOnline:IsTrustedConnectionConfig(config)
+	config = config or self.config or self:Config()
+	return is_trusted_online_api_url(config.apiBaseUrl)
+		and is_trusted_online_websocket_url(config.webSocketUrl)
+		and network_allows(config.apiBaseUrl)
+		and network_allows(config.webSocketUrl)
+end
+
+function ITGOnline:ConnectionConfig()
+	self.config = read_config(false)
 	return self.config
 end
 
@@ -498,11 +604,11 @@ function ITGOnline:SaveConfig(values)
 	values = values or {}
 
 	local nextConfig = {
-			apiBaseUrl = normalize_base_url(values.apiBaseUrl or current.apiBaseUrl),
-			webSocketUrl = normalize_websocket_url(values.webSocketUrl or current.webSocketUrl),
-			email = trim(values.email or current.email),
-			deviceName = trim(values.deviceName or current.deviceName) ~= "" and trim(values.deviceName or current.deviceName) or ITGOnline.defaults.deviceName,
-		}
+		apiBaseUrl = normalize_base_url(values.apiBaseUrl or current.apiBaseUrl),
+		webSocketUrl = normalize_websocket_url(values.webSocketUrl or current.webSocketUrl),
+		email = trim(values.email or current.email),
+		deviceName = trim(values.deviceName or current.deviceName) ~= "" and trim(values.deviceName or current.deviceName) or ITGOnline.defaults.deviceName,
+	}
 
 	local passwordWasProvided = values.password ~= nil
 	local nextPassword = tostring(passwordWasProvided and values.password or current.password or "")
@@ -514,6 +620,10 @@ function ITGOnline:SaveConfig(values)
 			secure_password_delete(nextConfig.apiBaseUrl, nextConfig.email)
 		else
 			securePasswordStored = secure_password_set(nextConfig.apiBaseUrl, nextConfig.email, nextPassword)
+			if securePasswordStored
+				and (nextConfig.email ~= current.email or nextConfig.apiBaseUrl ~= current.apiBaseUrl) then
+				secure_password_delete(current.apiBaseUrl, current.email)
+			end
 		end
 	else
 		local storedPassword
@@ -529,14 +639,14 @@ function ITGOnline:SaveConfig(values)
 	nextConfig.passwordStoredSecurely = securePasswordStored
 	nextConfig.secureCredentialsBackend = secure_credentials_backend()
 
-		IniFile.WriteFile(ITGOnline.configPath, {
-			["ITGOnline"] = {
-				["ApiBaseUrl"] = nextConfig.apiBaseUrl,
-				["WebSocketUrl"] = nextConfig.webSocketUrl,
-				["Email"] = nextConfig.email,
-				["DeviceName"] = nextConfig.deviceName,
-			}
-		})
+	IniFile.WriteFile(ITGOnline.configPath, {
+		["ITGOnline"] = {
+			["ApiBaseUrl"] = nextConfig.apiBaseUrl,
+			["WebSocketUrl"] = nextConfig.webSocketUrl,
+			["Email"] = nextConfig.email,
+			["DeviceName"] = nextConfig.deviceName,
+		}
+	})
 
 	self.config = nextConfig
 	return nextConfig
@@ -567,7 +677,7 @@ end
 
 function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, options)
 	options = options or {}
-	local config = self:Config()
+	local config = self:ConnectionConfig()
 	local url = config.apiBaseUrl .. path
 	local encodeOk, body = pcall(JsonEncode, payload or {})
 	if not encodeOk then
@@ -766,6 +876,8 @@ function ITGOnline:MaybeAutoReadyManager(room)
 	local readyPhase = nil
 	if normalizedPhase == "lobby_ready" then
 		readyPhase = "lobby_ready"
+	elseif normalizedPhase == "config" and room.selected_song then
+		readyPhase = "config_ready"
 	else
 		return
 	end
@@ -860,6 +972,11 @@ function ITGOnline:RoomSongRoundKey(room)
 		.. tostring(song.selected_at or song.selectedAt or "")
 end
 
+function ITGOnline:RoomSongSelectedAtMs(room)
+	local value = room and room.selected_song and (room.selected_song.selected_at or room.selected_song.selectedAt) or nil
+	return iso_utc_milliseconds(value)
+end
+
 function ITGOnline:RoomPhaseIsStale(currentPhase, incomingPhase)
 	currentPhase = self:NormalizeRoomPhase(currentPhase)
 	incomingPhase = self:NormalizeRoomPhase(incomingPhase)
@@ -895,10 +1012,12 @@ function ITGOnline:RoomSnapshotIsStale(previousRoom, incomingRoom)
 	local incomingKey = self:RoomSongRoundKey(incomingRoom)
 
 	if currentKey ~= "" and incomingKey ~= "" and currentKey ~= incomingKey then
-		local currentRank = self:RoomPhaseRank(currentPhase)
-		local incomingRank = self:RoomPhaseRank(incomingPhase)
-		return currentRank >= self:RoomPhaseRank("config")
-			and incomingRank >= self:RoomPhaseRank("playing")
+		local currentSelectedAt = self:RoomSongSelectedAtMs(previousRoom)
+		local incomingSelectedAt = self:RoomSongSelectedAtMs(incomingRoom)
+		if currentSelectedAt and incomingSelectedAt then
+			return incomingSelectedAt < currentSelectedAt
+		end
+		return false
 	end
 
 	if incomingPhase == "results"
@@ -952,6 +1071,10 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	elseif self:NormalizeRoomPhase(room.phase) ~= "results" then
 		self.currentSongPayload = nil
 		self.currentRoomRoundKey = ""
+	end
+
+	if self.MaybeAutoReadyManager then
+		self:MaybeAutoReadyManager(self.currentRoom)
 	end
 
 	return self.currentRoom
@@ -1026,7 +1149,10 @@ function ITGOnline:ShouldWaitForOnlineResults(room)
 	local roundKey = self.PlayStateKey and self:PlayStateKey() or ""
 	local localRoundEnded = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)
 		and self.onlineGameplayEndedKey == roundKey
+	local localRoundEnding = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)
+		and self.onlineGameplayEvaluationMarkInFlightKey == roundKey
 
+	if localRoundEnding then return true end
 	if not localRoundEnded and not self:IsTerminalPlayState(state) then return false end
 
 	local summary = self:PlayStateSummary(room)
@@ -1044,14 +1170,19 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 	end
 
 	local roundKey = self.PlayStateKey and self:PlayStateKey() or ""
-	if self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey) then
-		self.onlineGameplayEndedKey = roundKey
-	end
 
 	if self.onlineGameplayEvaluationMarkKey == roundKey then
 		return true
 	end
 	if self.onlineGameplayEvaluationMarkInFlightKey == roundKey then
+		return true
+	end
+	if self.onlineGameplayEvaluationRetryKey ~= roundKey then
+		self.onlineGameplayEvaluationRetryKey = roundKey
+		self.onlineGameplayEvaluationRetryCount = 0
+		self.onlineGameplayEvaluationNextRetryAt = 0
+	end
+	if GetTimeSinceStart() < (tonumber(self.onlineGameplayEvaluationNextRetryAt) or 0) then
 		return true
 	end
 
@@ -1065,6 +1196,33 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 		.. " failed=" .. tostring(failed)
 		.. " roundKey=" .. tostring(roundKey))
 
+	local markTerminalWithoutScore
+	markTerminalWithoutScore = function(reason)
+		self.onlineGameplayEvaluationMarkInFlightKey = roundKey
+		local terminalCallback = function(terminalOk, terminalDecoded, terminalResponse)
+			if self.onlineGameplayEvaluationMarkInFlightKey == roundKey then
+				self.onlineGameplayEvaluationMarkInFlightKey = ""
+			end
+			if terminalOk then
+				self.onlineGameplayEvaluationMarkKey = roundKey
+				self.onlineGameplayEndedKey = roundKey
+				self.onlineGameplayEvaluationRetryCount = 0
+				self.onlineGameplayEvaluationNextRetryAt = 0
+				return
+			end
+			self.onlineGameplayEvaluationNextRetryAt = GetTimeSinceStart() + 1.0
+			online_flow_trace("mark_terminal_failed_without_final_score reason=" .. tostring(reason or "unknown")
+				.. " roundKey=" .. tostring(roundKey)
+				.. " message=" .. tostring(response_message(terminalResponse, terminalDecoded, "terminal state rejected")))
+		end
+
+		if failed and self.MarkPlayFailed then
+			self:MarkPlayFailed(terminalCallback)
+		elseif self.MarkPlayFinished then
+			self:MarkPlayFinished(terminalCallback)
+		end
+	end
+
 	if self.SendScore and (phase == "playing" or phase == "results") then
 		self.onlineGameplayEvaluationMarkInFlightKey = roundKey
 		self:SendScore(true, true, nil, function(scoreOk, scoreDecoded, scoreResponse)
@@ -1072,8 +1230,15 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 				if self.onlineGameplayEvaluationMarkInFlightKey == roundKey then
 					self.onlineGameplayEvaluationMarkInFlightKey = ""
 				end
+				self.onlineGameplayEvaluationRetryCount = (tonumber(self.onlineGameplayEvaluationRetryCount) or 0) + 1
 				online_flow_trace("mark_terminal_waiting_for_score_retry roundKey=" .. tostring(roundKey)
+					.. " retry=" .. tostring(self.onlineGameplayEvaluationRetryCount)
 					.. " message=" .. tostring(response_message(scoreResponse, scoreDecoded, "score rejected")))
+				if self.onlineGameplayEvaluationRetryCount >= (tonumber(self.onlineGameplayEvaluationMaxRetries) or 3) then
+					markTerminalWithoutScore("final_score_retry_exhausted")
+				else
+					self.onlineGameplayEvaluationNextRetryAt = GetTimeSinceStart() + 1.0
+				end
 				return
 			end
 
@@ -1083,6 +1248,9 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 				end
 				if terminalOk then
 					self.onlineGameplayEvaluationMarkKey = roundKey
+					self.onlineGameplayEndedKey = roundKey
+					self.onlineGameplayEvaluationRetryCount = 0
+					self.onlineGameplayEvaluationNextRetryAt = 0
 					return
 				end
 
@@ -1097,23 +1265,7 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 			end
 		end)
 	else
-		self.onlineGameplayEvaluationMarkInFlightKey = roundKey
-		local terminalCallback = function(terminalOk, terminalDecoded, terminalResponse)
-			if self.onlineGameplayEvaluationMarkInFlightKey == roundKey then
-				self.onlineGameplayEvaluationMarkInFlightKey = ""
-			end
-			if terminalOk then
-				self.onlineGameplayEvaluationMarkKey = roundKey
-				return
-			end
-			online_flow_trace("mark_terminal_failed_without_score roundKey=" .. tostring(roundKey)
-				.. " message=" .. tostring(response_message(terminalResponse, terminalDecoded, "terminal state rejected")))
-		end
-		if failed and self.MarkPlayFailed then
-			self:MarkPlayFailed(terminalCallback)
-		elseif self.MarkPlayFinished then
-			self:MarkPlayFinished(terminalCallback)
-		end
+		markTerminalWithoutScore("no_score_submission_path")
 	end
 
 	return true
@@ -1294,6 +1446,10 @@ function ITGOnline:NoteScreenChanged(screenName)
 		self.screenGeneration = (self.screenGeneration or 0) + 1
 		online_flow_trace("screen_changed previous=" .. tostring(previous) .. " next=" .. tostring(screenName) .. " generation=" .. tostring(self.screenGeneration))
 		self:CancelScreenBoundRequests()
+		if previous == "ScreenReloadSongsOnline" and screenName == "ScreenOnlineLobbies" then
+			self:ClearFileHashCache()
+			MESSAGEMAN:Broadcast("OnlineSongReloadCompleted")
+		end
 		self:HandleOnlineGameplayScreenTransition(previous, screenName)
 		self:EnforceRoomPhaseScreen(screenName)
 	end
@@ -1351,15 +1507,15 @@ function ITGOnline:Login(callback)
 		if not ok or not decoded or not decoded.access_token then
 			if callback then callback(false, response_message(response, decoded, "Login failed")) end
 			return
-			end
+		end
 
-			self.token = decoded.access_token
-			self.user = decoded.user
-			self.sessionExpired = false
-			self:ClearTransientSecrets()
-			if callback then callback(true) end
-		end)
-	end
+		self.token = decoded.access_token
+		self.user = decoded.user
+		self.sessionExpired = false
+		self:ClearTransientSecrets()
+		if callback then callback(true) end
+	end)
+end
 
 function ITGOnline:Register(name, callback)
 	local config = self:Config()
@@ -1440,31 +1596,62 @@ function ITGOnline:Relogin(callback)
 	end
 
 	self:Request("POST", "/auth/refresh", {}, function(ok, decoded, response)
-		self.authRefreshInFlight = false
 		local callbacks = self.authRefreshCallbacks or {}
 		self.authRefreshCallbacks = {}
 
 		if ok and decoded and decoded.access_token then
+			self.authRefreshInFlight = false
 			self.token = decoded.access_token
 			self.user = decoded.user
 			self.sessionExpired = false
 			self.authRefreshFailureCount = 0
 			self.authRefreshNextAttemptAt = 0
-		else
-			online_trace("Auth refresh failed: " .. response_message(response, decoded, "unknown"))
-			self.token = nil
-			self.user = nil
-			self.authRefreshFailureCount = (self.authRefreshFailureCount or 0) + 1
-			local failCount = math.max(1, self.authRefreshFailureCount or 1)
-			local backoffSeconds = math.min(
-				tonumber(self.authRefreshMaxBackoffSeconds) or 30,
-				math.pow(2, math.max(0, failCount - 1))
-			)
-			self.authRefreshNextAttemptAt = GetTimeSinceStart() + backoffSeconds
+			for cb in ivalues(callbacks) do
+				if cb then cb(true) end
+			end
+			return
 		end
 
+		if response and response.statusCode == 401 and self:Configured() then
+			online_trace("Auth refresh failed with 401; falling back to password login.")
+			self.token = nil
+			self.user = nil
+			self:Login(function(loginOk)
+				self.authRefreshInFlight = false
+				if loginOk then
+					self.sessionExpired = false
+					self.authRefreshFailureCount = 0
+					self.authRefreshNextAttemptAt = 0
+				else
+					self.authRefreshFailureCount = (self.authRefreshFailureCount or 0) + 1
+					local failCount = math.max(1, self.authRefreshFailureCount or 1)
+					local backoffSeconds = math.min(
+						tonumber(self.authRefreshMaxBackoffSeconds) or 30,
+						math.pow(2, math.max(0, failCount - 1))
+					)
+					self.authRefreshNextAttemptAt = GetTimeSinceStart() + backoffSeconds
+				end
+				for cb in ivalues(callbacks) do
+					if cb then cb(loginOk == true) end
+				end
+			end)
+			return
+		end
+
+		self.authRefreshInFlight = false
+		online_trace("Auth refresh failed: " .. response_message(response, decoded, "unknown"))
+		self.token = nil
+		self.user = nil
+		self.authRefreshFailureCount = (self.authRefreshFailureCount or 0) + 1
+		local failCount = math.max(1, self.authRefreshFailureCount or 1)
+		local backoffSeconds = math.min(
+			tonumber(self.authRefreshMaxBackoffSeconds) or 30,
+			math.pow(2, math.max(0, failCount - 1))
+		)
+		self.authRefreshNextAttemptAt = GetTimeSinceStart() + backoffSeconds
+
 		for cb in ivalues(callbacks) do
-			if cb then cb(ok and decoded and decoded.access_token ~= nil) end
+			if cb then cb(false) end
 		end
 	end)
 end
@@ -1518,7 +1705,10 @@ function ITGOnline:SendRealtimeAck(eventId)
 		event_id = tonumber(eventId),
 	})
 	if ok and encoded then
-		self.socket:Send(encoded)
+		local sent = self.socket:Send(encoded)
+		if not sent then
+			online_trace("Realtime ack send failed for event " .. tostring(eventId))
+		end
 	end
 end
 
@@ -1558,6 +1748,9 @@ function ITGOnline:Disconnect()
 	self.currentRoomRoundKey = ""
 	self.lastResultSongPayload = nil
 	self.lastDisplayedScoreSnapshot = nil
+	self.pendingLiveScoreSnapshot = nil
+	self.liveScoreInFlight = false
+	self.liveScoreNextAttemptAt = 0
 	self.pendingJoinRoomId = nil
 	self.heartbeatInFlight = false
 	self.heartbeatQueuedStatus = nil
@@ -1567,6 +1760,8 @@ function ITGOnline:Disconnect()
 	self.songLoadedAckKey = ""
 	self.songLoadedInFlightKey = ""
 	self.songLoadedPendingCallbacks = {}
+	self.songAvailabilityInFlightKey = ""
+	self.songAvailabilityReportedKey = ""
 	self.songSelectionInFlightKey = ""
 	self.startScheduleAckKey = ""
 	self.startScheduleAckInFlightKey = ""
@@ -1576,9 +1771,18 @@ function ITGOnline:Disconnect()
 	self.readyRequestLastResult = {}
 	self.onlineGameplayEnteredKey = ""
 	self.onlineGameplayReturnedKey = ""
+	self.onlineGameplayReturnedInFlightKey = ""
 	self.onlineGameplayTerminalKey = ""
 	self.onlineGameplayTerminalInFlightKey = ""
 	self.onlineGameplayTerminalState = ""
+	self.onlineGameplayEndedKey = ""
+	self.onlineGameplayEvaluationMarkKey = ""
+	self.onlineGameplayEvaluationMarkInFlightKey = ""
+	self.onlineGameplayEvaluationRetryKey = ""
+	self.onlineGameplayEvaluationRetryCount = 0
+	self.onlineGameplayEvaluationNextRetryAt = 0
+	self.onlineGameplayAllTerminalHoldKey = ""
+	self.onlineGameplayAllTerminalHoldUntil = 0
 	self.lastFinalScoreKey = ""
 	self.lastFinalScoreInFlightKey = ""
 	self.syncInFlight = false
@@ -1803,8 +2007,8 @@ function ITGOnline:BuildSongPayload()
 	local meter = steps and steps:GetMeter() or nil
 	local songFilePath = song.GetSongFilePath and song:GetSongFilePath() or ""
 	local musicPath = song.GetMusicPath and song:GetMusicPath() or ""
-	local songFileHash = sha256_file_hex(songFilePath)
-	local musicHash = sha256_file_hex(musicPath)
+	local songFileHash = cached_sha256_file_hex(songFilePath)
+	local musicHash = cached_sha256_file_hex(musicPath)
 	if not songFileHash or not musicHash then return nil end
 	local musicName = manifest_file_name(musicPath)
 	local songFileName = manifest_file_name(songFilePath)
@@ -1888,13 +2092,24 @@ function ITGOnline:SelectSong(callback)
 			self.songLoadedAckKey = ""
 			self.songLoadedInFlightKey = ""
 			self.songLoadedPendingCallbacks = {}
+			self.songAvailabilityInFlightKey = ""
+			self.songAvailabilityReportedKey = ""
 			self.startScheduleAckKey = ""
 			self.startScheduleAckInFlightKey = ""
 			self.onlineGameplayEnteredKey = ""
 			self.onlineGameplayReturnedKey = ""
+			self.onlineGameplayReturnedInFlightKey = ""
 			self.onlineGameplayTerminalKey = ""
 			self.onlineGameplayTerminalInFlightKey = ""
 			self.onlineGameplayTerminalState = ""
+			self.onlineGameplayEndedKey = ""
+			self.onlineGameplayEvaluationMarkKey = ""
+			self.onlineGameplayEvaluationMarkInFlightKey = ""
+			self.onlineGameplayEvaluationRetryKey = ""
+			self.onlineGameplayEvaluationRetryCount = 0
+			self.onlineGameplayEvaluationNextRetryAt = 0
+			self.onlineGameplayAllTerminalHoldKey = ""
+			self.onlineGameplayAllTerminalHoldUntil = 0
 			self.lastFinalScoreKey = ""
 			self.lastFinalScoreInFlightKey = ""
 			self.lastAcceptedScoreFingerprint = nil
@@ -2010,6 +2225,112 @@ function ITGOnline:ScoreFingerprint(score, combo, maxCombo, failed, judgments)
 	}, "|")
 end
 
+function ITGOnline:BuildCurrentScoreSnapshot()
+	local player = first_enabled_player()
+	if not player or not STATSMAN or not STATSMAN.GetCurStageStats then return nil end
+
+	local ok, stats = pcall(function()
+		return STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+	end)
+	if not ok or not stats then return nil end
+
+	local dancePoints = 0
+	local danceOk, danceValue = pcall(function() return stats:GetPercentDancePoints() end)
+	if danceOk and tonumber(danceValue) then dancePoints = tonumber(danceValue) end
+
+	local exScore = 0
+	if CalculateExScore then
+		local exOk, exValue = pcall(function() return CalculateExScore(player) end)
+		if exOk and tonumber(exValue) then exScore = tonumber(exValue) end
+	end
+
+	local pn = ToEnumShortString(player)
+	local showExScore = SL and pn and SL[pn] and SL[pn].ActiveModifiers and SL[pn].ActiveModifiers.ShowExScore == true
+	local scorePercent = math.max(0, math.min(100, dancePoints * 100))
+	local displayedPercent = showExScore and exScore or scorePercent
+	local combo = 0
+	local comboOk, comboValue = pcall(function() return stats:GetCurrentCombo() end)
+	if comboOk and tonumber(comboValue) then combo = tonumber(comboValue) end
+
+	return {
+		Player = player,
+		ScorePercent = scorePercent,
+		ExScorePercent = exScore,
+		DisplayedPercent = displayedPercent,
+		Combo = combo,
+		scorePercent = scorePercent,
+		exScorePercent = exScore,
+		displayedPercent = displayedPercent,
+		combo = combo,
+	}
+end
+
+function ITGOnline:ClearFileHashCache()
+	self.fileHashCache = {}
+end
+
+function ITGOnline:QueueLiveScore(snapshot)
+	if type(snapshot) ~= "table" then return false end
+	self.lastDisplayedScoreSnapshot = snapshot
+	self.pendingLiveScoreRoundKey = self.PlayStateKey and self:PlayStateKey() or tostring(self.currentRoomId or "")
+	self.pendingLiveScoreSnapshot = snapshot
+	return true
+end
+
+function ITGOnline:HasPendingLiveScore()
+	return self.pendingLiveScoreSnapshot ~= nil or self.liveScoreInFlight == true
+end
+
+function ITGOnline:FlushLiveScore()
+	if not self.currentRoomId or not self.currentRoom then
+		self.pendingLiveScoreSnapshot = nil
+		self.pendingLiveScoreRoundKey = ""
+		self.liveScoreInFlight = false
+		return false
+	end
+	if self.liveScoreInFlight then return true end
+
+	local now = GetTimeSinceStart()
+	if now < (tonumber(self.liveScoreNextAttemptAt) or 0) then
+		return true
+	end
+
+	local minInterval = tonumber(self.liveScoreMinIntervalSeconds) or 0.35
+	if now - (tonumber(self.lastScoreSentAt) or 0) < minInterval then
+		return true
+	end
+
+	local snapshot = self.pendingLiveScoreSnapshot
+	if snapshot == nil then return false end
+	local roundKey = self.PlayStateKey and self:PlayStateKey() or tostring(self.currentRoomId or "")
+	if self.pendingLiveScoreRoundKey ~= "" and self.pendingLiveScoreRoundKey ~= roundKey then
+		self.pendingLiveScoreSnapshot = nil
+		self.pendingLiveScoreRoundKey = ""
+		return false
+	end
+
+	self.pendingLiveScoreSnapshot = nil
+	self.pendingLiveScoreRoundKey = ""
+	self.liveScoreInFlight = true
+	self:SendScore(false, false, snapshot, function(ok, decoded, response)
+		self.liveScoreInFlight = false
+		if not ok and response and response.inFlight then
+			self.pendingLiveScoreSnapshot = self.pendingLiveScoreSnapshot or snapshot
+			self.pendingLiveScoreRoundKey = self.pendingLiveScoreRoundKey ~= "" and self.pendingLiveScoreRoundKey or roundKey
+		end
+		if not ok and response and tonumber(response.statusCode) == 429 then
+			self.pendingLiveScoreSnapshot = self.pendingLiveScoreSnapshot or snapshot
+			self.pendingLiveScoreRoundKey = self.pendingLiveScoreRoundKey ~= "" and self.pendingLiveScoreRoundKey or roundKey
+			self.liveScoreNextAttemptAt = GetTimeSinceStart() + 1.5
+		elseif not ok and not (response and response.inFlight) then
+			self.pendingLiveScoreSnapshot = self.pendingLiveScoreSnapshot or snapshot
+			self.pendingLiveScoreRoundKey = self.pendingLiveScoreRoundKey ~= "" and self.pendingLiveScoreRoundKey or roundKey
+			self.liveScoreNextAttemptAt = GetTimeSinceStart() + 0.75
+		end
+	end)
+	return true
+end
+
 function ITGOnline:SendScore(force, final, snapshot, callback)
 	local finish = function(ok, decoded, response, meta)
 		if callback then callback(ok, decoded, response, meta or {}) end
@@ -2027,8 +2348,9 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		finish(false, nil, { errorMessage = "Room is not accepting a final score." })
 		return
 	end
-	if not force and GetTimeSinceStart() - self.lastScoreSentAt < 1 then
-		finish(false, nil, { retryAfter = 1 })
+	local minLiveInterval = tonumber(self.liveScoreMinIntervalSeconds) or 0.35
+	if not force and GetTimeSinceStart() - self.lastScoreSentAt < minLiveInterval then
+		finish(false, nil, { retryAfter = minLiveInterval })
 		return
 	end
 	local roundKey = self.PlayStateKey and self:PlayStateKey() or tostring(self.currentRoomId or "")
@@ -2048,6 +2370,9 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	end
 	if snapshot == nil then
 		snapshot = self.lastDisplayedScoreSnapshot
+	end
+	if snapshot == nil and self.BuildCurrentScoreSnapshot then
+		snapshot = self:BuildCurrentScoreSnapshot()
 	end
 	if snapshot == nil and not final then
 		finish(false, nil, { errorMessage = "No score snapshot available." })
@@ -2146,25 +2471,29 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	-- Always transport the score currently shown to the player in gameplay.
 	local outgoingScore = math.max(0, math.floor((displayedScorePercent / 100) * selectedMaxScore + 0.5))
 	local outgoingPercent = selectedMaxScore > 0 and ((outgoingScore / selectedMaxScore) * 100) or 0
-	online_trace(string.format(
-		"score-trace room=%s displayed=%.3f outgoing=%.3f snapshot(score=%.3f ex=%.3f shown=%.3f) max=%d combo=%d",
-		tostring(self.currentRoomId or ""),
-		tonumber(displayedScorePercent) or 0,
-		tonumber(outgoingPercent) or 0,
-		tonumber(snapshot and snapshot.scorePercent) or -1,
-		tonumber(snapshot and snapshot.exScorePercent) or -1,
-		tonumber(snapshot and snapshot.displayedPercent) or -1,
-		tonumber(selectedMaxScore) or 0,
-		tonumber(liveCombo) or 0
-	))
-	if math.abs((tonumber(displayedScorePercent) or 0) - outgoingPercent) > 0.2 then
+	if self.debugScoreTrace == true then
 		online_trace(string.format(
-			"score-drift local(displayed=%.3f, outgoing=%.3f, max=%d, rawScore=%d)",
+			"score-trace room=%s displayed=%.3f outgoing=%.3f snapshot(score=%.3f ex=%.3f shown=%.3f) max=%d combo=%d",
+			tostring(self.currentRoomId or ""),
 			tonumber(displayedScorePercent) or 0,
 			tonumber(outgoingPercent) or 0,
+			tonumber(snapshot and snapshot.scorePercent) or -1,
+			tonumber(snapshot and snapshot.exScorePercent) or -1,
+			tonumber(snapshot and snapshot.displayedPercent) or -1,
 			tonumber(selectedMaxScore) or 0,
-			tonumber(outgoingScore) or 0
+			tonumber(liveCombo) or 0
 		))
+	end
+	if math.abs((tonumber(displayedScorePercent) or 0) - outgoingPercent) > 0.2 then
+		if self.debugScoreTrace == true then
+			online_trace(string.format(
+				"score-drift local(displayed=%.3f, outgoing=%.3f, max=%d, rawScore=%d)",
+				tonumber(displayedScorePercent) or 0,
+				tonumber(outgoingPercent) or 0,
+				tonumber(selectedMaxScore) or 0,
+				tonumber(outgoingScore) or 0
+			))
+		end
 	end
 	local outgoingCombo = math.max(0, liveCombo or 0)
 	local outgoingMaxCombo = math.max(0, maxCombo or 0)
@@ -2172,10 +2501,12 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	local scoreFingerprint = self:ScoreFingerprint(outgoingScore, outgoingCombo, outgoingMaxCombo, outgoingFailed, judgments)
 
 	if not final then
-		if self.scoreInFlightFingerprint and self.scoreInFlightFingerprint == scoreFingerprint then
+		if self.scoreInFlightFingerprint then
+			finish(false, nil, { retryAfter = minLiveInterval, inFlight = true })
 			return
 		end
 		if self.lastAcceptedScoreFingerprint and self.lastAcceptedScoreFingerprint == scoreFingerprint then
+			finish(true, nil, nil, { duplicate = true })
 			return
 		end
 	end
@@ -2205,6 +2536,8 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		end
 		if ok and final then
 			self.lastFinalScoreKey = roundKey
+			self.onlineGameplayEvaluationRetryCount = 0
+			self.onlineGameplayEvaluationNextRetryAt = 0
 		end
 		if ok then
 			self.lastAcceptedScoreFingerprint = scoreFingerprint
@@ -2213,7 +2546,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 				tonumber(songPosition) or 0
 			)
 		end
-		if not ok and (force or final) then
+		if not ok and final then
 			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 				event = final and "finalScore" or "score",
 				success = false,
@@ -2541,8 +2874,18 @@ function ITGOnline:MarkReturnedToLobby(callback)
 		if callback then callback(true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil) end
 		return
 	end
+	if self:PlayStateKeyIsValid(key) and self.onlineGameplayReturnedInFlightKey == key then
+		if callback then callback(false, nil, { retryAfter = 0.5, inFlight = true }) end
+		return
+	end
 
+	if self:PlayStateKeyIsValid(key) then
+		self.onlineGameplayReturnedInFlightKey = key
+	end
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/play/returned-to-lobby", {}, function(ok, decoded, response)
+		if self.onlineGameplayReturnedInFlightKey == key then
+			self.onlineGameplayReturnedInFlightKey = ""
+		end
 		if ok then
 			self.onlineGameplayReturnedKey = key
 			self:UpdatePlayStateFromResponse(decoded)
@@ -2558,30 +2901,43 @@ function ITGOnline:MarkPlayTerminal(endpoint, state, callback)
 	end
 	local key = self:PlayStateKey()
 	local validKey = self:PlayStateKeyIsValid(key)
-		if validKey and self.onlineGameplayTerminalKey == key then
-			if callback then callback(true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil) end
-			return
-		end
-		if validKey and self.onlineGameplayTerminalInFlightKey == key then
-			if callback then callback(false, nil, { retryAfter = 0.5, inFlight = true }) end
-			return
-		end
+	local terminalKey = key .. "|" .. tostring(state or "")
+	if validKey and self.onlineGameplayTerminalKey == terminalKey then
+		if callback then callback(true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil) end
+		return
+	end
+	if validKey and self.onlineGameplayTerminalKey == (key .. "|finished") then
+		if callback then callback(true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil) end
+		return
+	end
+	if validKey and self.onlineGameplayTerminalKey == (key .. "|failed") and state == "failed" then
+		if callback then callback(true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil) end
+		return
+	end
+	if validKey and self.onlineGameplayTerminalKey == key and self.onlineGameplayTerminalState == state then
+		if callback then callback(true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil) end
+		return
+	end
+	if validKey and self.onlineGameplayTerminalInFlightKey == terminalKey then
+		if callback then callback(false, nil, { retryAfter = 0.5, inFlight = true }) end
+		return
+	end
 
-		if validKey then
-			self.onlineGameplayTerminalInFlightKey = key
-		end
+	if validKey then
+		self.onlineGameplayTerminalInFlightKey = terminalKey
+	end
 
-		self.onlineGameplayTerminalState = state
+			self.onlineGameplayTerminalState = state
 
-		self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. endpoint, {}, function(ok, decoded, response)
-			if validKey and self.onlineGameplayTerminalInFlightKey == key then
-				self.onlineGameplayTerminalInFlightKey = ""
-		end
-		if ok then
-			if validKey then
-				self.onlineGameplayTerminalKey = key
-				self.onlineGameplayTerminalState = state
+			self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. endpoint, {}, function(ok, decoded, response)
+				if validKey and self.onlineGameplayTerminalInFlightKey == terminalKey then
+					self.onlineGameplayTerminalInFlightKey = ""
 			end
+			if ok then
+				if validKey then
+					self.onlineGameplayTerminalKey = terminalKey
+					self.onlineGameplayTerminalState = state
+				end
 			self:UpdatePlayStateFromResponse(decoded)
 		end
 		if callback then callback(ok, decoded, response) end
@@ -2826,6 +3182,9 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 	}
 
 	if not missing then
+		if reason == "reloaded" and self.ClearFileHashCache then
+			self:ClearFileHashCache()
+		end
 		local selectedSong = self.currentRoom and self.currentRoom.selected_song or nil
 		local selectedPayload = self:CurrentSelectedSongPayload()
 		local localPayload = self:BuildSongPayload()
@@ -2835,7 +3194,28 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		payload.max_score = localPayload and localPayload.max_score or selectedSong and selectedSong.max_score or nil
 	end
 
+	local selectedSong = self.currentRoom and self.currentRoom.selected_song or {}
+	local availabilityKey = table.concat({
+		tostring(self.currentRoomId or ""),
+		tostring(selectedSong.selected_at or selectedSong.selectedAt or ""),
+		missing and "missing" or "available",
+		tostring(payload.song_hash or selectedSong.song_hash or ""),
+		tostring(payload.chart_hash or selectedSong.chart_hash or ""),
+		tostring(payload.reason or ""),
+	}, "|")
+	if self.songAvailabilityInFlightKey == availabilityKey or self.songAvailabilityReportedKey == availabilityKey then
+		if callback then callback(true, nil, { duplicate = true }) end
+		return
+	end
+	self.songAvailabilityInFlightKey = availabilityKey
+
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/song-availability", payload, function(ok, decoded, response)
+		if self.songAvailabilityInFlightKey == availabilityKey then
+			self.songAvailabilityInFlightKey = ""
+		end
+		if ok then
+			self.songAvailabilityReportedKey = availabilityKey
+		end
 		if ok and decoded and decoded.room then
 			local room = self:ApplyRoomSnapshot(decoded.room, "song_availability")
 			decoded.room = room or decoded.room
@@ -3062,6 +3442,20 @@ function ITGOnline:HandleRealtimeEvent(event)
 				})
 			end
 				if payload.play_state and self.currentRoom then
+					if incomingVersion <= 0 then
+						local now = GetTimeSinceStart()
+						if now - (tonumber(self.lastUnversionedPlayStateFetchAt) or 0) > 1 then
+							self.lastUnversionedPlayStateFetchAt = now
+							self:FetchRoom(roomId or expectedRoomId)
+						end
+						return
+					end
+					local playStateVersionKey = tostring(roomId or expectedRoomId or "")
+					local previousPlayStateVersion = tonumber(self.lastPlayStateVersionByRoomId[playStateVersionKey]) or 0
+					if incomingVersion < previousPlayStateVersion then
+						return
+					end
+					self.lastPlayStateVersionByRoomId[playStateVersionKey] = incomingVersion
 					self.currentRoom.play_state = payload.play_state
 					if payload.room_phase then
 						if self:RoomPhaseFromScoreEventIsStale(payload.room_phase) then
@@ -3099,6 +3493,18 @@ function ITGOnline:HandleRealtimeEvent(event)
 			or self.pendingJoinRoomId
 		if not room_event_is_relevant(roomId) then return end
 			if payload.room then
+				local versionRoomId = tostring(roomId or payload.room.id or "")
+				if eventId and eventId > 0 and versionRoomId ~= "" then
+					local previousRoomEventId = tonumber(self.lastRoomEventIdByRoomId[versionRoomId]) or 0
+					if eventId < previousRoomEventId then
+						online_flow_trace("ignored_stale_room_event name=" .. tostring(name)
+							.. " roomId=" .. tostring(versionRoomId)
+							.. " previousEventId=" .. tostring(previousRoomEventId)
+							.. " eventId=" .. tostring(eventId))
+						return
+					end
+					self.lastRoomEventIdByRoomId[versionRoomId] = eventId
+				end
 				online_flow_trace("realtime_room_event name=" .. tostring(name)
 					.. " payloadPhase=" .. tostring(payload.room.phase)
 					.. " previousPhase=" .. tostring(self.currentRoom and self.currentRoom.phase or "no-room")

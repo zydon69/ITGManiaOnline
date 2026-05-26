@@ -113,6 +113,11 @@ openssl s_client -servername itgonline.fr -connect itgonline.fr:443 </dev/null 2
 
 Normaliser en hex minuscule sans prefixe.
 
+Important: le build source ne contient pas de pin de secours par defaut tant
+que `ITGMANIA_HTTP_PUBLIC_KEY_PINS_BACKUP_DEFAULT` reste vide. Le pin de
+secours doit venir d'une vraie cle publique standby. Ne pas reutiliser le pin
+courant comme "backup": cela ne protege pas une rotation de cle.
+
 ### Etape 2 - Publier en mode dual-pin
 
 Avant bascule certificat, distribuer un override signe contenant:

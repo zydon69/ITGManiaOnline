@@ -7,11 +7,13 @@ local RestartHandler = function(event)
 		if event.DeviceInput.button == "DeviceButton_left ctrl" then
 			holdingCtrl = true
 		elseif event.DeviceInput.button == "DeviceButton_r" then
+			if ITGOnline and ITGOnline.currentRoomId then return end
 			if holdingCtrl then
 				SM("Replaying Song")
 				SCREENMAN:GetTopScreen():SetNextScreenName("ScreenGameplay"):StartTransitioningScreen("SM_GoToNextScreen")
 			end
 		elseif event.DeviceInput.button == "DeviceButton_p" then
+			if ITGOnline and ITGOnline.currentRoomId then return end
 			if holdingCtrl then
 				SM("Entering Practice Mode")
 				SCREENMAN:GetTopScreen():SetNextScreenName("ScreenPractice"):StartTransitioningScreen("SM_GoToNextScreen")

@@ -1,4 +1,5 @@
 local max_rows = 8
+local play_state_for_user
 
 local function local_user_id()
 	if ITGOnline and ITGOnline.user and ITGOnline.user.id then
@@ -8,6 +9,11 @@ local function local_user_id()
 end
 
 local function local_displayed_percent()
+	local room = ITGOnline and ITGOnline.currentRoom or nil
+	local phase = tostring(room and room.phase or "")
+	if phase ~= "playing" then return nil end
+	local state = play_state_for_user(local_user_id())
+	if state ~= "" and state ~= "playing" then return nil end
 	if ITGOnline and ITGOnline.lastDisplayedScoreSnapshot then
 		local value = tonumber(ITGOnline.lastDisplayedScoreSnapshot.displayedPercent)
 		if value ~= nil then
@@ -27,7 +33,7 @@ local function selected_max_score()
 	return 0
 end
 
-local function play_state_for_user(user_id)
+play_state_for_user = function(user_id)
 	local room = ITGOnline and ITGOnline.currentRoom or nil
 	local sessions = room and room.play_state and room.play_state.sessions or {}
 	local wanted = tostring(user_id or "")
@@ -140,11 +146,11 @@ local function update_rows(frame, rows)
 			local label = row:GetChild("Label")
 			local status = row:GetChild("Status")
 			local statusText = data.failed and "✖" or (data.finished and "✔" or "")
-			if data.user_id == self_id then
+			if data.user_id == self_id and ITGOnline and ITGOnline.debugScoreTrace == true then
 				local localValue = tonumber(self_displayed)
 				local shownValue = tonumber(data.percent) or 0
-				if Warn then
-					Warn(string.format(
+				if online_trace then
+					online_trace(string.format(
 						"ITG Online Leaderboard trace: shown=%.3f local_displayed=%s state=%s failed=%s finished=%s status=%s",
 						shownValue,
 						localValue and string.format("%.3f", localValue) or "nil",
@@ -156,8 +162,8 @@ local function update_rows(frame, rows)
 				end
 			end
 			if data.user_id == self_id and self_displayed ~= nil and math.abs((tonumber(data.percent) or 0) - self_displayed) > 0.2 then
-				if Warn then
-					Warn(string.format(
+				if online_trace and ITGOnline and ITGOnline.debugScoreTrace == true then
+					online_trace(string.format(
 						"ITG Online Leaderboard drift: shown=%.3f local_displayed=%.3f",
 						tonumber(data.percent) or 0,
 						tonumber(self_displayed) or 0

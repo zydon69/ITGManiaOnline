@@ -33,7 +33,8 @@ local pos = {
 local pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 
 local StepsOrTrail = (GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(player)) or GAMESTATE:GetCurrentSteps(player)
-local total_tapnotes = StepsOrTrail:GetRadarValues(player):GetValue( "RadarCategory_Notes" )
+local total_tapnotes = StepsOrTrail and StepsOrTrail:GetRadarValues(player):GetValue( "RadarCategory_Notes" ) or 1
+total_tapnotes = math.max(1, tonumber(total_tapnotes) or 1)
 
 -- determine how many digits are needed to express the number of notes in base-10
 local digits = (math.floor(math.log10(total_tapnotes)) + 1)
@@ -139,26 +140,30 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 		if not IsEX then
 			self:settext(percent)
 		end
-		MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
-			Player = player,
-			ScorePercent = tonumber(percent),
-			ExScorePercent = exPercent,
-			DisplayedPercent = displayedPercent,
-			Combo = pss:GetCurrentCombo() or 0,
-		})
+		if ITGOnline and ITGOnline.currentRoomId then
+			MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
+				Player = player,
+				ScorePercent = tonumber(percent),
+				ExScorePercent = exPercent,
+				DisplayedPercent = displayedPercent,
+				Combo = pss:GetCurrentCombo() or 0,
+			})
+		end
 	end,
 	ExCountsChangedMessageCommand=function(self, params)
 		if params.Player ~= player then return end
 
 		if IsEX then
 			self:settext(("%.02f"):format(params.ExScore))
-			MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
-				Player = player,
-				ScorePercent = tonumber(params.ExScore),
-				ExScorePercent = tonumber(params.ExScore),
-				DisplayedPercent = tonumber(params.ExScore),
-				Combo = pss:GetCurrentCombo() or 0,
-			})
+			if ITGOnline and ITGOnline.currentRoomId then
+				MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
+					Player = player,
+					ScorePercent = tonumber(params.ExScore),
+					ExScorePercent = tonumber(params.ExScore),
+					DisplayedPercent = tonumber(params.ExScore),
+					Combo = pss:GetCurrentCombo() or 0,
+				})
+			end
 		end
 	end,
 }
