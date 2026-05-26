@@ -282,6 +282,10 @@ static void GetFilterToFileNames(
   IniFile ini;
   std::string sPath =
       sBaseDir + pSong->m_sGroupName + "/" + "BackgroundMapping.ini";
+  if (!DoesFileExist(sPath)) {
+    return;
+  }
+
   ini.ReadFile(sPath);
 
   std::string sSection;

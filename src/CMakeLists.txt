@@ -231,6 +231,7 @@ elseif(APPLE)
     "${SM_ROOT_DIR}/Courses"
     "${SM_ROOT_DIR}/Data"
     "${SM_ROOT_DIR}/NoteSkins"
+    "${SM_ROOT_DIR}/RandomMovies"
     "${SM_ROOT_DIR}/Scripts"
     "${SM_ROOT_DIR}/Themes"
   )
@@ -632,6 +633,7 @@ if(NOT APPLE)
   install(DIRECTORY "${SM_ROOT_DIR}/BackgroundEffects" DESTINATION "${SM_INSTALL_DESTINATION}")
   install(DIRECTORY "${SM_ROOT_DIR}/Data" DESTINATION "${SM_INSTALL_DESTINATION}")
   install(DIRECTORY "${SM_ROOT_DIR}/BackgroundTransitions" DESTINATION "${SM_INSTALL_DESTINATION}")
+  install(DIRECTORY "${SM_ROOT_DIR}/RandomMovies" DESTINATION "${SM_INSTALL_DESTINATION}")
   install(DIRECTORY "${SM_ROOT_DIR}/Docs" DESTINATION "${SM_INSTALL_DESTINATION}")
   install(DIRECTORY "${SM_ROOT_DIR}/NoteSkins" DESTINATION "${SM_INSTALL_DESTINATION}")
   install(FILES "${SM_ROOT_DIR}/Songs/instructions.txt"

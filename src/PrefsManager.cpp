@@ -457,6 +457,10 @@ void PrefsManager::ResetToFactoryDefaults() {
 
 void PrefsManager::ReadPrefsFromFile(
     const std::string& sIni, const std::string& sSection, bool bIsStatic) {
+  if (!DoesFileExist(sIni)) {
+    return;
+  }
+
   IniFile ini;
   if (!ini.ReadFile(sIni)) {
     return;
@@ -520,6 +524,10 @@ void PrefsManager::ReadGamePrefsFromIni(const std::string& sIni) {
 
 void PrefsManager::ReadDefaultsFromFile(
     const std::string& sIni, const std::string& sSection) {
+  if (!DoesFileExist(sIni)) {
+    return;
+  }
+
   IniFile ini;
   if (!ini.ReadFile(sIni)) {
     return;

@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 #include <ApplicationServices/ApplicationServices.h>
@@ -228,8 +229,14 @@ std::string ArchHooks::GetPreferredLanguage() {
   if (CFArrayGetCount(languages) > 0 &&
       (lang = (CFStringRef)CFArrayGetValueAtIndex(languages, 0)) != nil) {
     // MacRoman agrees with ASCII in the low-order 7 bits.
+    char langBuffer[16] = {};
     const char* str = CFStringGetCStringPtr(lang, kCFStringEncodingMacRoman);
-    if (str) {
+    if (str == nullptr &&
+        CFStringGetCString(lang, langBuffer, sizeof(langBuffer), kCFStringEncodingMacRoman)) {
+      str = langBuffer;
+    }
+
+    if (str && strlen(str) >= 2) {
       ret = std::string(str, 2);
       if (ret == "zh") {
         ret = std::string(str, 7);

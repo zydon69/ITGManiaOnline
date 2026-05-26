@@ -835,7 +835,7 @@ bool ScreenEvaluation::MenuStart(const InputEventPlus& input) {
   }
 
   if (OnlineEvaluationAutoAdvanceBlocked()) {
-    LOG->Warn(
+    LOG->Trace(
         "ITG Online: evaluation auto advance blocked screen=%s input=%s",
         m_sName.c_str(),
         GameButtonToString(INPUTMAPPER->GetInputScheme(), input.MenuI).c_str());

@@ -12,3 +12,5 @@ end
 if #soundFiles > 0 then
   return soundFiles[math.random(#soundFiles)]
 end
+
+return THEME:GetPathS("", "_silent")
