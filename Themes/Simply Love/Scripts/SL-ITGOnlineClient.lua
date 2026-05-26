@@ -588,7 +588,9 @@ local function read_config(loadPassword)
 		if not securePasswordStored then
 			local transientAccount = ITGOnline and ITGOnline.transientPasswordAccount or nil
 			local currentAccount = secure_password_account(apiBaseUrl, email)
-			if currentAccount ~= "" and transientAccount == currentAccount then
+			if (currentAccount ~= "" and transientAccount == currentAccount)
+				or (transientAccount == "" and tostring(ITGOnline.transientPassword or "") ~= "")
+			then
 				local transientPassword = tostring(ITGOnline.transientPassword or "")
 				if transientPassword ~= "" then
 					securePassword = transientPassword
@@ -669,6 +671,11 @@ function ITGOnline:SaveConfig(values)
 			and tostring(self.transientPassword or "") ~= ""
 		then
 			nextPassword = tostring(self.transientPassword or "")
+		elseif self.transientPasswordAccount == ""
+			and tostring(self.transientPassword or "") ~= ""
+		then
+			nextPassword = tostring(self.transientPassword or "")
+			self.transientPasswordAccount = secure_password_account(nextConfig.apiBaseUrl, nextConfig.email)
 		elseif nextConfig.email ~= current.email or nextConfig.apiBaseUrl ~= current.apiBaseUrl then
 			nextPassword = ""
 		end
@@ -1640,11 +1647,12 @@ function ITGOnline:Login(callback)
 		password = loginPassword,
 		device_name = config.deviceName,
 	}, function(ok, decoded, response)
-		self:ClearTransientSecrets()
 		if not ok or not decoded or not decoded.access_token then
 			if callback then callback(false, response_message(response, decoded, "Login failed")) end
 			return
 		end
+
+		self:ClearTransientSecrets()
 
 		local previousUserId = self.lastAuthenticatedUserId or (self.user and self.user.id) or nil
 		local nextUserId = decoded.user and decoded.user.id or nil
@@ -1657,7 +1665,6 @@ function ITGOnline:Login(callback)
 		self.sessionExpired = false
 		if callback then callback(true) end
 	end)
-	self:ClearTransientSecrets()
 end
 
 function ITGOnline:Register(name, callback)
