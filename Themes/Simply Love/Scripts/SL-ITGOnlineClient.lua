@@ -961,8 +961,6 @@ function ITGOnline:MaybeAutoReadyManager(room)
 	local readyPhase = nil
 	if normalizedPhase == "lobby_ready" then
 		readyPhase = "lobby_ready"
-	elseif normalizedPhase == "config" and room.selected_song then
-		readyPhase = "config_ready"
 	else
 		return
 	end
@@ -2864,6 +2862,11 @@ function ITGOnline:SetReady(phase, isReady, callback)
 		callbacks = callback and { callback } or {},
 	}
 
+	Trace("[ITGOnline] ready_request room=" .. tostring(self.currentRoomId)
+		.. " phase=" .. tostring(phase)
+		.. " is_ready=" .. tostring(isReady and true or false)
+		.. " play_key=" .. tostring(self:PlayStateKey()))
+
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/ready", payload, function(ok, decoded, response)
 		self.readyRequestLastResult[requestKey] = {
 			ok = ok and true or false,
@@ -2875,6 +2878,13 @@ function ITGOnline:SetReady(phase, isReady, callback)
 			local room = self:ApplyRoomSnapshot(decoded.room, "ready")
 			decoded.room = room or decoded.room
 		end
+		local roomPhase = decoded and decoded.room and decoded.room.phase
+		local errorCode = decoded and decoded.error_code
+		Trace("[ITGOnline] ready_response room=" .. tostring(self.currentRoomId)
+			.. " phase=" .. tostring(phase)
+			.. " ok=" .. tostring(ok and true or false)
+			.. " room_phase=" .. tostring(roomPhase or "")
+			.. " error=" .. tostring(errorCode or (response and response.errorMessage) or ""))
 		local callbacks = pending and pending.callbacks or {}
 		for cb in ivalues(callbacks) do
 			cb(ok, decoded, response)

@@ -1292,11 +1292,13 @@ CreateOnlineHandler = function()
 								or (tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or ""))
 						if ITGOnline.MarkConfigReady then
 							pendingConfigReady = configReadyKey
+							Trace("[ITGOnline] options_confirmed queue config_ready key=" .. tostring(configReadyKey))
 							self:queuecommand("RetryOnlineConfigReady")
 							return
 						end
 
 						pendingConfigReady = configReadyKey
+						Trace("[ITGOnline] options_confirmed queue legacy_config_ready key=" .. tostring(configReadyKey))
 						self:queuecommand("RetryOnlineConfigReady")
 		      end,
 		      RetryOnlineConfigReadyCommand=function(self)
