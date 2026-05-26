@@ -831,6 +831,7 @@ local af = Def.ActorFrame{
 					or "Role: Member (only manager can start)"
 				statusLines[#statusLines + 1] = "Manager: " .. managerLabel
 
+				local showStartStatus = joined_phase ~= "results"
 				local canStartInPhase = joined_phase_allows_start()
 				local everyoneReady = joined_all_players_ready()
 					local hasMissingSong = joined_any_player_missing_song()
@@ -845,10 +846,12 @@ local af = Def.ActorFrame{
 						or "players not ready")
 				end
 				if hasMissingSong then blockers[#blockers + 1] = "song not confirmed for all players" end
-				if #blockers == 0 then
-					statusLines[#statusLines + 1] = "Start status: available"
-				else
-					statusLines[#statusLines + 1] = "Start status: blocked (" .. table.concat(blockers, "; ") .. ")"
+				if showStartStatus then
+					if #blockers == 0 then
+						statusLines[#statusLines + 1] = "Start status: available"
+					else
+						statusLines[#statusLines + 1] = "Start status: blocked (" .. table.concat(blockers, "; ") .. ")"
+					end
 				end
 
 				local missingSongInfo = joined_missing_song_info or joined_song_preview
@@ -1104,8 +1107,15 @@ local af = Def.ActorFrame{
 			joined_is_manager = params and params.isManager or false
 			joined_manager_user_id = params and params.manager and params.manager.id or nil
 			joined_phase = params and params.phase or nil
-			joined_song_preview = params and params.songInfo or nil
-			joined_song_confirmed = params and params.songInfo ~= nil or false
+			if joined_phase == "results" then
+				joined_song_preview = nil
+				joined_song_confirmed = false
+				joined_missing_song = false
+				joined_missing_song_info = nil
+			else
+				joined_song_preview = params and params.songInfo or nil
+				joined_song_confirmed = params and params.songInfo ~= nil or false
+			end
 			if not joined_song_confirmed then
 				joined_missing_song = false
 				joined_missing_song_info = nil

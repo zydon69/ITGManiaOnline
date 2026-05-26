@@ -373,23 +373,29 @@ local SelectMusicInputHandler = function(event)
 	return false
 end
 
-local ReturnToOnlineLobbyFromEvaluation = function()
+local ReturnToOnlineLobbyFromEvaluation = function(reason)
 	local topScreen = SCREENMAN:GetTopScreen()
 	if not topScreen then return false end
 	if not evaluationScreens[topScreen:GetName()] then return false end
 	if not (ITGOnline and ITGOnline.currentRoomId) then return false end
 
 	UnlockOnlineInput()
+	ITGOnline.onlineEvaluationExitRequested = true
+	if online_trace then
+		online_trace("FLOW evaluation_exit_requested reason=" .. tostring(reason or "input")
+			.. " screen=" .. tostring(topScreen:GetName())
+			.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or ITGOnline.currentRoomPhase))
+	end
 	topScreen:SetNextScreenName("ScreenOnlineLobbies")
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 	return true
 end
 
+ITGOnlineReturnToLobbyFromEvaluation = ReturnToOnlineLobbyFromEvaluation
+
 local EvaluationInputHandler = function(event)
 	if not event or event.type ~= "InputEventType_FirstPress" then return false end
-	if ITGOnline and ITGOnline.ShouldHoldOnlineEvaluation and ITGOnline:ShouldHoldOnlineEvaluation() then
-		return true
-	end
+	if ITGOnline and ITGOnline.currentRoomId then return false end
 
 	local deviceButton = ""
 	if event.DeviceInput and event.DeviceInput.button then
@@ -402,7 +408,7 @@ local EvaluationInputHandler = function(event)
 	local isBack = event.GameButton == "Back"
 
 	if isConfirm or isBack or isEscape then
-		return ReturnToOnlineLobbyFromEvaluation()
+		return ReturnToOnlineLobbyFromEvaluation("evaluation_input")
 	end
 
 	return false
@@ -1253,9 +1259,11 @@ CreateOnlineHandler = function()
 
 						local status = (gameplayScreens[screenName] and ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing") and "playing" or "in_room"
 						ITGOnline:Heartbeat(status)
-						if evaluationScreens[screenName] and ITGOnline and ITGOnline.SendScore then
-							ITGOnline:SendScore(true, true)
-						end
+							if evaluationScreens[screenName]
+								and ITGOnline
+								and ITGOnline.MarkGameplayCompleteForEvaluation then
+								ITGOnline:MarkGameplayCompleteForEvaluation("evaluation_screen")
+							end
 							if screenName == "ScreenSelectMusic"
 								and ITGOnline.currentSongPayload
 								and ITGOnline.currentRoom

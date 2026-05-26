@@ -262,6 +262,7 @@ class ScreenGameplay : public ScreenWithMenuElements {
   void UpdateSongPosition(float fDeltaTime);
   void UpdateLyrics(float fDeltaTime);
   void SongFinished();
+  bool OnlineShouldHoldBeforeEvaluation();
   virtual void SaveStats();
   virtual void StageFinished(bool bBackedOut);
   void SaveReplay();
@@ -367,6 +368,8 @@ class ScreenGameplay : public ScreenWithMenuElements {
   // announcer sound needs to be delayed.  See HandleScreenMessage for more.
   // -Kyz
   bool m_delaying_ready_announce;
+  RageTimer m_timerOnlineEvaluationHoldMessage;
+  bool m_bOnlineEvaluationHoldMessagePending;
 };
 
 std::vector<PlayerInfo>::iterator GetNextEnabledPlayerInfo(

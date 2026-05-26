@@ -19,6 +19,10 @@ local function input(event)
 	-- Pressing Start or Back (typically Esc on a keyboard) will queue "DirectInputToEngine"
 	-- but only if the event.type is not a Release.
 	if (event.GameButton == "Start" or event.GameButton == "Back") and event.type ~= "InputEventType_Release" then
+		if ITGOnline and ITGOnline.currentRoomId then
+			return false
+		end
+
 		overlay:GetChild("AutoSubmitMaster"):GetChild("EventOverlay"):visible(false)
 
 		for player in ivalues(PlayerNumber) do

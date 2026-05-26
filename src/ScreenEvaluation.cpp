@@ -22,6 +22,7 @@
 #include "HighScore.h"
 #include "InputEventPlus.h"
 #include "InputFilter.h"
+#include "InputMapper.h"
 #include "LuaManager.h"
 #include "MemoryCardManager.h"
 #include "ModsGroup.h"
@@ -833,6 +834,14 @@ bool ScreenEvaluation::MenuStart(const InputEventPlus& input) {
     return false;
   }
 
+  if (OnlineEvaluationAutoAdvanceBlocked()) {
+    LOG->Warn(
+        "ITG Online: evaluation auto advance blocked screen=%s input=%s",
+        m_sName.c_str(),
+        GameButtonToString(INPUTMAPPER->GetInputScheme(), input.MenuI).c_str());
+    return true;
+  }
+
   m_soundStart.Play(true);
 
   HandleMenuStart();
@@ -851,6 +860,21 @@ bool ScreenEvaluation::MenuRestart(const InputEventPlus& input) {
 
 void ScreenEvaluation::HandleMenuStart() {
   StartTransitioningScreen(SM_GoToNextScreen);
+}
+
+bool ScreenEvaluation::OnlineEvaluationAutoAdvanceBlocked() const {
+  Lua* L = LUA->Get();
+  bool blocked = false;
+  const bool ok = LuaHelpers::RunExpression(
+      L,
+      "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil "
+      "and not ITGOnline.onlineEvaluationExitRequested",
+      "ScreenEvaluation online auto advance gate");
+  if (ok) {
+    LuaHelpers::Pop(L, blocked);
+  }
+  LUA->Release(L);
+  return ok && blocked;
 }
 
 // lua start

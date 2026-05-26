@@ -45,10 +45,10 @@ local function terminal_flags(state, explicit_failed)
 	state = tostring(state or "")
 	return {
 		finished = state == "finished",
-		failed = explicit_failed == true
+		failed = state ~= "finished" and (explicit_failed == true
 			or state == "failed"
 			or state == "returned_to_lobby"
-			or state == "disconnected",
+			or state == "disconnected"),
 	}
 end
 
@@ -75,13 +75,15 @@ local function rows_from_leaderboard(leaderboard)
 		if user_id == self_id and self_displayed ~= nil then
 			percent = self_displayed
 		end
-		local flags = terminal_flags(play_state_for_user(user_id), score.failed and true or false)
+		local play_state = play_state_for_user(user_id)
+		local flags = terminal_flags(play_state, score.failed and true or false)
 		rows[#rows + 1] = {
 			user_id = user_id,
 			name = tostring(user.name or "Player"),
 			percent = percent or 0,
 			failed = flags.failed,
 			finished = flags.finished,
+			play_state = play_state,
 		}
 	end
 	return rows
@@ -89,7 +91,7 @@ end
 
 local function rows_from_lobby_state(data)
 	local rows = {}
-	if not data or data.phase ~= "playing" then return rows end
+	if not data or (data.phase ~= "playing" and data.phase ~= "results") then return rows end
 	local self_id = local_user_id()
 	local self_displayed = local_displayed_percent()
 	for player in ivalues(data.players or {}) do
@@ -113,6 +115,7 @@ local function rows_from_lobby_state(data)
 				percent = percent or 0,
 				failed = flags.failed,
 				finished = flags.finished,
+				play_state = tostring(player.playState or ""),
 			}
 		end
 	end
@@ -123,7 +126,8 @@ local function rows_from_lobby_state(data)
 end
 
 local function update_rows(frame, rows)
-	local show = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing" and #rows > 0
+	local phase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil
+	local show = ITGOnline and ITGOnline.currentRoom and (phase == "playing" or phase == "results") and #rows > 0
 	frame:visible(show)
 	if not show then return end
 
@@ -133,12 +137,22 @@ local function update_rows(frame, rows)
 		local row = frame:GetChild("Row" .. tostring(i))
 		local data = rows[i]
 		if row and data then
-			local suffix = data.failed and "  ✖" or (data.finished and "  ✓" or "")
+			local label = row:GetChild("Label")
+			local status = row:GetChild("Status")
+			local statusText = data.failed and "✖" or (data.finished and "✔" or "")
 			if data.user_id == self_id then
 				local localValue = tonumber(self_displayed)
 				local shownValue = tonumber(data.percent) or 0
 				if Warn then
-					Warn(string.format("ITG Online Leaderboard trace: shown=%.3f local_displayed=%s", shownValue, localValue and string.format("%.3f", localValue) or "nil"))
+					Warn(string.format(
+						"ITG Online Leaderboard trace: shown=%.3f local_displayed=%s state=%s failed=%s finished=%s status=%s",
+						shownValue,
+						localValue and string.format("%.3f", localValue) or "nil",
+						tostring(data.play_state or ""),
+						tostring(data.failed == true),
+						tostring(data.finished == true),
+						tostring(statusText)
+					))
 				end
 			end
 			if data.user_id == self_id and self_displayed ~= nil and math.abs((tonumber(data.percent) or 0) - self_displayed) > 0.2 then
@@ -150,7 +164,13 @@ local function update_rows(frame, rows)
 					))
 				end
 			end
-			row:settext(string.format("%d. %s  %.2f%%%s", i, data.name, data.percent or 0, suffix))
+			if label then
+				label:settext(string.format("%d. %s  %.2f%%", i, data.name, data.percent or 0))
+			end
+			if status then
+				status:settext(statusText)
+				status:diffuse(data.failed and color("#ff3b30") or color("#66ff99"))
+			end
 			if data.failed then
 				row:diffuse(color("#ff3b30"))
 			elseif data.finished then
@@ -181,11 +201,23 @@ local af = Def.ActorFrame{
 }
 
 for i = 1, max_rows do
-	af[#af + 1] = LoadFont("Common Normal")..{
+	af[#af + 1] = Def.ActorFrame{
 		Name="Row" .. tostring(i),
 		InitCommand=function(self)
-			self:horizalign(center):zoom(0.55):shadowlength(1):diffusealpha(0.9):visible(false)
+			self:visible(false)
 		end,
+		LoadFont("Common Normal")..{
+			Name="Label",
+			InitCommand=function(self)
+				self:horizalign(center):zoom(0.55):shadowlength(1):diffusealpha(0.9)
+			end,
+		},
+		LoadFont("16px fonts/_emoji 16px")..{
+			Name="Status",
+			InitCommand=function(self)
+				self:x(168):horizalign(center):zoom(0.72):shadowlength(1):diffusealpha(0.95)
+			end,
+		},
 	}
 end
 

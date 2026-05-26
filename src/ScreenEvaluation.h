@@ -66,6 +66,7 @@ class ScreenEvaluation : public ScreenWithMenuElements {
   StageStats* GetStageStats() { return m_pStageStats; }
 
  protected:
+  bool OnlineEvaluationAutoAdvanceBlocked() const;
   void HandleMenuStart();
 
   bool m_bSummary;

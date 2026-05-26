@@ -745,8 +745,13 @@ CalculateExScore = function(player, ex_counts, use_actual_w0_weight)
 		total_points = total_points + totalMines * SL.ExWeights["HitMine"];
 	end
 
-	local keys = { "W0", "W1", "W2", "W3", "W4", "W5", "Miss", "Held", "LetGo", "HitMine" }
-	local counts = ex_counts or SL[ToEnumShortString(player)].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1].ex_counts
+		local keys = { "W0", "W1", "W2", "W3", "W4", "W5", "Miss", "Held", "LetGo", "HitMine" }
+		local playerKey = ToEnumShortString(player)
+		local playerState = SL[playerKey]
+		local stages = playerState and playerState.Stages
+		local stats = stages and stages.Stats
+		local stageStats = stats and stats[SL.Global.Stages.PlayedThisGame + 1]
+		local counts = ex_counts or (stageStats and stageStats.ex_counts)
 	-- Just for validation, but shouldn't happen in normal gameplay.
 	if counts == nil then return 0 end
 

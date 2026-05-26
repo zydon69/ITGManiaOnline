@@ -422,6 +422,7 @@ ScreenGameplay::ScreenGameplay() {
   m_pSongBackground = nullptr;
   m_pSongForeground = nullptr;
   m_delaying_ready_announce = false;
+  m_bOnlineEvaluationHoldMessagePending = false;
   GAMESTATE->m_AdjustTokensBySongCostForFinalStageCheck = false;
 }
 
@@ -2722,6 +2723,24 @@ void ScreenGameplay::SongFinished() {
       pi->m_pActiveAttackList->Refresh();
 }
 
+bool ScreenGameplay::OnlineShouldHoldBeforeEvaluation() {
+  Lua* L = LUA->Get();
+  bool shouldHold = false;
+  const bool ok = LuaHelpers::RunExpression(
+      L,
+      "ITGOnlineShouldHoldGameplayForEvaluation ~= nil "
+      "and ITGOnlineShouldHoldGameplayForEvaluation()",
+      "ScreenGameplay online evaluation hold gate");
+  if (ok) {
+    LuaHelpers::Pop(L, shouldHold);
+  }
+  LUA->Release(L);
+  if (shouldHold) {
+    LOG->Warn("ITG Online: holding ScreenGameplay before evaluation");
+  }
+  return ok && shouldHold;
+}
+
 void ScreenGameplay::StageFinished(bool bBackedOut) {
   if (GAMESTATE->IsCourseMode() && GAMESTATE->m_PlayMode != PLAY_MODE_ENDLESS) {
     LOG->Trace(
@@ -2860,6 +2879,20 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
       return;
     }
   } else if (SM == SM_LeaveGameplay) {
+    if (m_bOnlineEvaluationHoldMessagePending &&
+        m_timerOnlineEvaluationHoldMessage.Ago() < 0.20f) {
+      return;
+    }
+    m_bOnlineEvaluationHoldMessagePending = false;
+
+    if (OnlineShouldHoldBeforeEvaluation()) {
+      m_bOnlineEvaluationHoldMessagePending = true;
+      m_timerOnlineEvaluationHoldMessage.Touch();
+      this->PostScreenMessage(SM_LeaveGameplay, 0.25f);
+      return;
+    }
+    m_bOnlineEvaluationHoldMessagePending = false;
+
     GAMESTATE->m_DanceDuration = GAMESTATE->m_DanceStartTime.Ago();
     // update dancing characters for win / lose
     DancingCharacters* pDancers = nullptr;

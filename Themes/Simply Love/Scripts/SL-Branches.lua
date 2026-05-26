@@ -152,9 +152,17 @@ end
 
 Branch.AfterEvaluationStage = function()
 	if ITGOnline and ITGOnline.currentRoomId then
+		if ITGOnline.onlineEvaluationExitRequested then
+			ITGOnline.onlineEvaluationExitRequested = false
+			if online_trace then
+				local phase = ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
+				online_trace("FLOW branch=AfterEvaluationStage room=" .. tostring(ITGOnline.currentRoomId) .. " phase=" .. tostring(phase) .. " next=ScreenOnlineLobbies reason=explicit_exit")
+			end
+			return "ScreenOnlineLobbies"
+		end
 		if online_trace then
 			local phase = ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
-			online_trace("FLOW branch=AfterEvaluationStage room=" .. tostring(ITGOnline.currentRoomId) .. " phase=" .. tostring(phase) .. " next=ScreenOnlineLobbies")
+			online_trace("FLOW branch=AfterEvaluationStage room=" .. tostring(ITGOnline.currentRoomId) .. " phase=" .. tostring(phase) .. " next=ScreenOnlineLobbies reason=safety_exit")
 		end
 		return "ScreenOnlineLobbies"
 	end

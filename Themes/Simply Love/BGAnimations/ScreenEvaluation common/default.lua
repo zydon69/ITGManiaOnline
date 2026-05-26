@@ -3,7 +3,106 @@ local NumPanes = SL.Global.GameMode=="Casual" and 1 or 8
 
 local InputHandler = nil
 local EventOverlayInputHandler = nil
-local OnlineResultsWaitInputHandler = nil
+local OnlineEvaluationInputHandler = nil
+
+local function OnlineEvaluationActive()
+	return ITGOnline and ITGOnline.currentRoomId ~= nil
+end
+
+local function SetOnlineEvaluationInputRedirected(enabled, reason)
+	if not OnlineEvaluationActive() then return end
+	for player in ivalues(PlayerNumber) do
+		SCREENMAN:set_input_redirected(player, enabled == true)
+	end
+	if online_trace then
+		online_trace("FLOW evaluation_input_redirected enabled=" .. tostring(enabled == true)
+			.. " reason=" .. tostring(reason or "unknown"))
+	end
+end
+
+local function ReturnToOnlineLobby(reason)
+	if ITGOnlineReturnToLobbyFromEvaluation and ITGOnlineReturnToLobbyFromEvaluation(reason) then
+		return true
+	end
+
+	local topScreen = SCREENMAN:GetTopScreen()
+	if not topScreen then return false end
+	if ITGOnline then ITGOnline.onlineEvaluationExitRequested = true end
+	if online_trace then
+		online_trace("FLOW evaluation_exit_requested reason=" .. tostring(reason or "fallback")
+			.. " screen=" .. tostring(topScreen:GetName()))
+	end
+	SetOnlineEvaluationInputRedirected(false, "exit_fallback")
+	topScreen:SetNextScreenName("ScreenOnlineLobbies")
+	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+	return true
+end
+
+local function IsEvaluationExitInput(event)
+	if not event then return false end
+	local deviceButton = ""
+	if event.DeviceInput and event.DeviceInput.button then
+		deviceButton = string.lower(tostring(event.DeviceInput.button))
+	end
+	return event.GameButton == "Start"
+		or event.GameButton == "Back"
+		or string.find(deviceButton, "escape", 1, true) ~= nil
+		or string.find(deviceButton, "backspace", 1, true) ~= nil
+end
+
+local function BuildOnlineEvaluationInputHandler(reason)
+	return function(event)
+		if not OnlineEvaluationActive() then return false end
+		if not IsEvaluationExitInput(event) then return false end
+		if event.type ~= "InputEventType_FirstPress" and event.type ~= "InputEventType_Repeat" then
+			return true
+		end
+
+		local waiting = ITGOnline.ShouldWaitForOnlineResults and ITGOnline:ShouldWaitForOnlineResults()
+		if online_trace then
+			local summary = ITGOnline.PlayStateSummary and ITGOnline:PlayStateSummary() or nil
+			online_trace("FLOW evaluation_input button=" .. tostring(event.GameButton)
+				.. " type=" .. tostring(event.type)
+				.. " reason=" .. tostring(reason or "unknown")
+				.. " waiting=" .. tostring(waiting == true)
+				.. " terminal=" .. tostring(summary and summary.terminal or "nil")
+				.. " players=" .. tostring(summary and summary.players or "nil"))
+		end
+
+		if waiting then
+			if event.type == "InputEventType_FirstPress" then
+				SM("Waiting for every online player to finish...")
+			end
+			return true
+		end
+
+		if event.type == "InputEventType_FirstPress" then
+			ReturnToOnlineLobby("evaluation_common_input")
+		end
+		return true
+	end
+end
+
+local function DisableOnlineEvaluationTimer(reason)
+	if not (ITGOnline and ITGOnline.currentRoomId) then return end
+	local screen = SCREENMAN:GetTopScreen()
+	local timer = screen and screen:GetChild("Timer") or nil
+	if not timer then
+		if online_trace then
+			online_trace("FLOW evaluation_timer_absent reason=" .. tostring(reason or "unknown"))
+		end
+		return
+	end
+
+	pcall(function() timer:disable() end)
+	pcall(function() timer:pause() end)
+	pcall(function() timer:stop() end)
+	pcall(function() timer:SetSeconds(999) end)
+	timer:visible(false)
+	if online_trace then
+		online_trace("FLOW evaluation_timer_disabled reason=" .. tostring(reason or "unknown"))
+	end
+end
 
 if ThemePrefs.Get("WriteCustomScores") then
 	WriteScores()
@@ -18,7 +117,13 @@ if SL.Global.GameMode ~= "Casual" then
 	t.OnCommand=function(self)
 		InputHandler = LoadActor("./InputHandler.lua", {self, NumPanes})
 		EventOverlayInputHandler = LoadActor("./Shared/EventInputHandler.lua")
-		SCREENMAN:GetTopScreen():AddInputCallback(InputHandler)
+		local screen = SCREENMAN:GetTopScreen()
+		if screen then
+			screen:AddInputCallback(InputHandler)
+			OnlineEvaluationInputHandler = BuildOnlineEvaluationInputHandler("standard")
+			screen:AddInputCallback(OnlineEvaluationInputHandler)
+			DisableOnlineEvaluationTimer("on_command")
+		end
 		PROFILEMAN:SaveMachineProfile()
 	end
 	t.DirectInputToEngineCommand=function(self)
@@ -39,8 +144,20 @@ if SL.Global.GameMode ~= "Casual" then
 	end
 else
 	t.OnCommand=function(self)
+		OnlineEvaluationInputHandler = BuildOnlineEvaluationInputHandler("casual")
+		local screen = SCREENMAN:GetTopScreen()
+		if screen then screen:AddInputCallback(OnlineEvaluationInputHandler) end
+		DisableOnlineEvaluationTimer("casual_on_command")
 		PROFILEMAN:SaveMachineProfile()
 	end
+end
+
+t.OffCommand=function(self)
+	local screen = SCREENMAN:GetTopScreen()
+	if screen and OnlineEvaluationInputHandler then
+		screen:RemoveInputCallback(OnlineEvaluationInputHandler)
+	end
+	SetOnlineEvaluationInputRedirected(false, "off")
 end
 
 -- -----------------------------------------------------------------------
@@ -130,47 +247,23 @@ t[#t+1] = Def.ActorFrame{
 		self:Center():visible(false)
 	end,
 	OnCommand=function(self)
-		OnlineResultsWaitInputHandler = function(event)
-			local holding = ITGOnline and ITGOnline.ShouldHoldOnlineEvaluation and ITGOnline:ShouldHoldOnlineEvaluation()
-			if not holding then
-				return false
-			end
-
-			if event and event.type == "InputEventType_FirstPress" then
-				local waiting = ITGOnline and ITGOnline.ShouldWaitForOnlineResults and ITGOnline:ShouldWaitForOnlineResults()
-				SM(waiting and "Waiting for every online player to finish..." or "Final score confirmed.")
-			end
-			return true
-		end
-
-		local screen = SCREENMAN:GetTopScreen()
-		if screen then screen:AddInputCallback(OnlineResultsWaitInputHandler) end
 		self:queuecommand("Refresh")
 	end,
 	OffCommand=function(self)
-		local screen = SCREENMAN:GetTopScreen()
-		if screen and OnlineResultsWaitInputHandler then
-			screen:RemoveInputCallback(OnlineResultsWaitInputHandler)
-		end
-		for player in ivalues(PlayerNumber) do
-			SCREENMAN:set_input_redirected(player, false)
-		end
+		SetOnlineEvaluationInputRedirected(false, "results_wait_off")
 	end,
 	RefreshCommand=function(self)
 		local waiting = ITGOnline and ITGOnline.ShouldWaitForOnlineResults and ITGOnline:ShouldWaitForOnlineResults()
-		local holding = ITGOnline and ITGOnline.ShouldHoldOnlineEvaluation and ITGOnline:ShouldHoldOnlineEvaluation()
-		local visible = ITGOnline and ITGOnline.ShouldShowOnlineEvaluationStatus and ITGOnline:ShouldShowOnlineEvaluationStatus()
-		self:visible(visible)
+		self:visible(waiting == true)
+		DisableOnlineEvaluationTimer("results_wait_refresh")
 
 		local screen = SCREENMAN:GetTopScreen()
 		if screen then
 			local timer = screen:GetChild("Timer")
-			if timer and visible then timer:visible(false) end
+			if timer then timer:visible(false) end
 		end
 
-		for player in ivalues(PlayerNumber) do
-			SCREENMAN:set_input_redirected(player, holding == true)
-		end
+		SetOnlineEvaluationInputRedirected(waiting == true, "results_wait_refresh")
 		local progress = self:GetChild("Progress")
 		if progress then progress:playcommand("Refresh") end
 		local sessions = self:GetChild("Sessions")
@@ -185,20 +278,9 @@ t[#t+1] = Def.ActorFrame{
 					MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", ITGOnline.currentRoom.play_state or {})
 				end
 			end)
-		elseif visible and ITGOnline and ITGOnline.currentRoomId and ITGOnline.FetchRoom then
-			ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok)
-				if ok and ITGOnline and ITGOnline.currentRoom and ITGOnline.LobbyStatePayload then
-					MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(ITGOnline.currentRoom))
-					MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", ITGOnline.currentRoom.play_state or {})
-				end
-			end)
-		else
-			for player in ivalues(PlayerNumber) do
-				SCREENMAN:set_input_redirected(player, false)
-			end
 		end
 
-		self:sleep(visible and 0.75 or 0.25):queuecommand("Refresh")
+		self:sleep(waiting and 0.75 or 0.25):queuecommand("Refresh")
 	end,
 
 	Def.Quad{
@@ -213,8 +295,7 @@ t[#t+1] = Def.ActorFrame{
 			self:y(-76):zoom(0.72):diffuse(color("#66ff99")):shadowlength(1)
 		end,
 		RefreshCommand=function(self)
-			local waiting = ITGOnline and ITGOnline.ShouldWaitForOnlineResults and ITGOnline:ShouldWaitForOnlineResults()
-			self:settext(waiting and "Waiting for every player to finish" or "Final scores confirmed - press Start or Esc")
+			self:settext("Waiting for every player to finish")
 		end,
 	},
 	LoadFont("Common Normal")..{
