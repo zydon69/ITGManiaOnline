@@ -1095,6 +1095,12 @@ function ITGOnline:NormalizeRoomPhase(value)
 	return "unknown"
 end
 
+function ITGOnline:KnownRoomPhaseOrNil(value)
+	local phase = self:NormalizeRoomPhase(value)
+	if phase == "unknown" then return nil end
+	return phase
+end
+
 function ITGOnline:RoomPhaseRank(phase)
 	phase = self:NormalizeRoomPhase(phase)
 	local ranks = {
@@ -1190,14 +1196,21 @@ end
 
 function ITGOnline:ApplyRoomPhase(incomingPhase, source)
 	if not self.currentRoom or incomingPhase == nil then return end
-	local currentPhase = self.currentRoom.phase
-	if self:RoomPhaseIsStale(currentPhase, incomingPhase) then
-		online_flow_trace("ignored_stale_room_phase source=" .. tostring(source or "unknown")
-			.. " current=" .. tostring(currentPhase)
+	local normalizedPhase = self:KnownRoomPhaseOrNil(incomingPhase)
+	if not normalizedPhase then
+		online_flow_trace("ignored_invalid_room_phase source=" .. tostring(source or "unknown")
+			.. " current=" .. tostring(self.currentRoom.phase)
 			.. " incoming=" .. tostring(incomingPhase))
 		return
 	end
-	self.currentRoom.phase = incomingPhase
+	local currentPhase = self.currentRoom.phase
+	if self:RoomPhaseIsStale(currentPhase, normalizedPhase) then
+		online_flow_trace("ignored_stale_room_phase source=" .. tostring(source or "unknown")
+			.. " current=" .. tostring(currentPhase)
+			.. " incoming=" .. tostring(normalizedPhase))
+		return
+	end
+	self.currentRoom.phase = normalizedPhase
 end
 
 function ITGOnline:ApplyRoomSnapshot(room, source)
@@ -3119,10 +3132,20 @@ function ITGOnline:UpdatePlayStateFromResponse(decoded)
 		end
 		local previousPhase = self.currentRoom.phase
 		self.currentRoom.play_state = decoded.play_state
-		local responsePhase = self:NormalizeRoomPhase(decoded.room_phase)
-		if responsePhase ~= "" then
+		local rawResponsePhase = decoded.room_phase
+		local hasResponsePhase = rawResponsePhase ~= nil and tostring(rawResponsePhase or "") ~= ""
+		local responsePhase = hasResponsePhase and self:KnownRoomPhaseOrNil(rawResponsePhase) or nil
+		local responsePhaseLabel = "unchanged"
+		if responsePhase then
+			responsePhaseLabel = responsePhase
 			self:ApplyRoomPhase(responsePhase, "play_state_response")
-		elseif self.FetchRoom then
+		elseif hasResponsePhase then
+			responsePhaseLabel = "ignored:" .. tostring(rawResponsePhase)
+			online_flow_trace("ignored_invalid_play_state_response_phase previousPhase=" .. tostring(previousPhase)
+				.. " incoming=" .. tostring(rawResponsePhase)
+				.. " version=" .. tostring(incomingVersion))
+		end
+		if not responsePhase and self.FetchRoom then
 			local summary = self:PlayStateSummary(self.currentRoom)
 			local needsAuthoritativePhase = summary
 				and summary.players > 0
@@ -3142,7 +3165,7 @@ function ITGOnline:UpdatePlayStateFromResponse(decoded)
 			end
 		end
 		online_flow_trace("play_state_response previousPhase=" .. tostring(previousPhase)
-			.. " responsePhase=" .. tostring(responsePhase ~= "" and responsePhase or "unchanged")
+			.. " responsePhase=" .. tostring(responsePhaseLabel)
 			.. " currentPhase=" .. tostring(self.currentRoom.phase))
 		MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
 		MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", decoded.play_state)
