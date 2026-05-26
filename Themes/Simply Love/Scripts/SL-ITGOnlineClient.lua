@@ -584,6 +584,16 @@ local function read_config(loadPassword)
 	local securePassword, securePasswordStored = nil, false
 	if loadPassword then
 		securePassword, securePasswordStored = secure_password_get(apiBaseUrl, email)
+		if not securePasswordStored then
+			local transientAccount = ITGOnline and ITGOnline.transientPasswordAccount or nil
+			local currentAccount = secure_password_account(apiBaseUrl, email)
+			if currentAccount ~= "" and transientAccount == currentAccount then
+				local transientPassword = tostring(ITGOnline.transientPassword or "")
+				if transientPassword ~= "" then
+					securePassword = transientPassword
+				end
+			end
+		end
 	end
 
 	return {
@@ -631,6 +641,8 @@ function ITGOnline:SaveConfig(values)
 
 	if passwordWasProvided then
 		if nextPassword == "" then
+			self.transientPassword = nil
+			self.transientPasswordAccount = nil
 			secure_password_delete(current.apiBaseUrl, current.email)
 			secure_password_delete(nextConfig.apiBaseUrl, nextConfig.email)
 		else
@@ -639,12 +651,23 @@ function ITGOnline:SaveConfig(values)
 				and (nextConfig.email ~= current.email or nextConfig.apiBaseUrl ~= current.apiBaseUrl) then
 				secure_password_delete(current.apiBaseUrl, current.email)
 			end
+			if securePasswordStored then
+				self.transientPassword = nil
+				self.transientPasswordAccount = nil
+			else
+				self.transientPassword = nextPassword
+				self.transientPasswordAccount = secure_password_account(nextConfig.apiBaseUrl, nextConfig.email)
+			end
 		end
 	else
 		local storedPassword
 		storedPassword, securePasswordStored = secure_password_get(nextConfig.apiBaseUrl, nextConfig.email)
 		if storedPassword and storedPassword ~= "" then
 			nextPassword = storedPassword
+		elseif self.transientPasswordAccount == secure_password_account(nextConfig.apiBaseUrl, nextConfig.email)
+			and tostring(self.transientPassword or "") ~= ""
+		then
+			nextPassword = tostring(self.transientPassword or "")
 		elseif nextConfig.email ~= current.email or nextConfig.apiBaseUrl ~= current.apiBaseUrl then
 			nextPassword = ""
 		end
@@ -669,6 +692,7 @@ end
 
 function ITGOnline:ClearTransientSecrets()
 	ITGOnline.transientPassword = nil
+	ITGOnline.transientPasswordAccount = nil
 	if self.config then
 		self.config.password = ""
 	end
