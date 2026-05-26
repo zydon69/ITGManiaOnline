@@ -3,16 +3,18 @@ local pn = ToEnumShortString(player)
 local mods = SL[pn].ActiveModifiers
 local opts = GAMESTATE:GetPlayerState(player):GetCurrentPlayerOptions()
 local layout = GetGameplayLayout(player, opts:Reverse() ~= 0)
+local online_notefield_offset_x = (ITGOnline and ITGOnline.currentRoomId ~= nil and GAMESTATE:GetCurrentStyle():GetName() == "single") and -16 or 0
 
 local af = Def.ActorFrame{
   Name="NoteFieldContainer"..pn,
   OnCommand=function(self)
     local adjusted_offset_x = mods.NoteFieldOffsetX * (player == PLAYER_1 and -1 or 1)
 
+    self:addx(online_notefield_offset_x)
     self:addy(mods.NoteFieldOffsetY)
     local player = GetPlayerAF(pn)
     
-    player:addx(adjusted_offset_x)
+    player:addx(adjusted_offset_x + online_notefield_offset_x)
     player:addy(mods.NoteFieldOffsetY)
 
     local notefield = player:GetChild("NoteField")

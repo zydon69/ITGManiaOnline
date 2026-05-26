@@ -370,6 +370,7 @@ class ScreenGameplay : public ScreenWithMenuElements {
   bool m_delaying_ready_announce;
   RageTimer m_timerOnlineEvaluationHoldMessage;
   bool m_bOnlineEvaluationHoldMessagePending;
+  bool m_bLoggedStageEndState;
 };
 
 std::vector<PlayerInfo>::iterator GetNextEnabledPlayerInfo(

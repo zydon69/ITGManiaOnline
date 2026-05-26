@@ -3,6 +3,7 @@ local pn = ToEnumShortString(player)
 
 local IsUltraWide = (GetScreenAspectRatio() > 21/9)
 local NoteFieldIsCentered = (GetNotefieldX(player) == _screen.cx)
+local OnlineCompactLayout = ITGOnline and ITGOnline.currentRoomId ~= nil
 
 local style = GAMESTATE:GetCurrentStyle():GetName()
 
@@ -75,9 +76,17 @@ af.InitCommand=function(self)
 	if style ~= "double" then
 		self:zoom(0.8)
 		self:x( SL_WideScale(152,204) * (player==PLAYER_1 and -1 or 1))
+		if OnlineCompactLayout and style == "single" then
+			self:zoom(0.92)
+			self:x(20)
+			self:y(32)
+		end
 
 		if NoteFieldIsCentered and IsUsingWideScreen() then
 			self:x( 156 * (player==PLAYER_1 and -1 or 1))
+			if OnlineCompactLayout and style == "single" then
+				self:x(20)
+			end
 		end
 
 		-- adjust for smaller panes when ultrawide and both players joined
@@ -166,6 +175,9 @@ for index, window in ipairs(TNS.Types) do
 				Text=TNS.Names[index]:upper(),
 				InitCommand=function(self)
 					self:zoom(0.833):maxwidth(72)
+					if OnlineCompactLayout and style == "single" then
+						self:zoom(0.76):maxwidth(60)
+					end
 					if style ~= "double" then
 						self:halign( PlayerNumber:Reverse()[player] )
 					else

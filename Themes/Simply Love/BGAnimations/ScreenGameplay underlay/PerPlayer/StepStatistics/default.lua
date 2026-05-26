@@ -3,6 +3,7 @@ local pn = ToEnumShortString(player)
 local ar = GetScreenAspectRatio()
 local IsUltraWide = (GetScreenAspectRatio() > 21/9)
 local NoteFieldIsCentered = (GetNotefieldX(player) == _screen.cx)
+local OnlineCompactLayout = ITGOnline and ITGOnline.currentRoomId ~= nil
 
 -- -----------------------------------------------------------------------
 -- if the conditions aren't right, don't bother
@@ -29,6 +30,10 @@ end
 
 local header_height   = 80
 local notefield_width = GetNotefieldWidth()
+local density_graph_width = nil
+local density_graph_start_offset = nil
+local online_panel_start_x = math.min(_screen.w - 120, 520)
+local online_content_offset_x = nil
 local sidepane_width  = _screen.w/2
 local sidepane_pos_x  = _screen.w * (player==PLAYER_1 and 0.75 or 0.25)
 
@@ -41,7 +46,7 @@ if not IsUltraWide then
 		else
 			sidepane_pos_x = _screen.cx - notefield_width - (sidepane_width-notefield_width)/2
 		end
-		
+
 		if stylename == "double" then sidepane_pos_x = _screen.cx; end
 	end
 
@@ -55,6 +60,16 @@ else
 			sidepane_pos_x = _screen.w - (sidepane_width/2)
 		end
 	end
+end
+
+if OnlineCompactLayout and stylename == "single" then
+	sidepane_width = math.max(120, _screen.w - online_panel_start_x)
+	sidepane_pos_x = player==PLAYER_1
+		and (_screen.w - (sidepane_width / 2))
+		or (sidepane_width / 2)
+	density_graph_width = sidepane_width
+	density_graph_start_offset = -sidepane_width / 2
+	online_content_offset_x = density_graph_start_offset
 end
 
 -- -----------------------------------------------------------------------
@@ -79,12 +94,17 @@ af[#af+1] = LoadActor("./DarkBackground.lua", {player, header_height, sidepane_w
 				sixteen_nine = 0.925
 			}
 
-			if not IsUltraWide then
-				if (NoteFieldIsCentered and IsUsingWideScreen()) then
-					local zoom = scale(GetScreenAspectRatio(), 16/10, 16/9, zoomfactor.sixteen_ten, zoomfactor.sixteen_nine)
-					self:zoom( zoom )
-				end
-			else
+		if not IsUltraWide then
+			if OnlineCompactLayout and stylename == "single" then
+				self:x(online_content_offset_x or 0):zoom(0.78)
+				return
+			end
+
+			if (NoteFieldIsCentered and IsUsingWideScreen()) then
+				local zoom = scale(GetScreenAspectRatio(), 16/10, 16/9, zoomfactor.sixteen_ten, zoomfactor.sixteen_nine)
+				self:zoom( zoom )
+			end
+		else
 				if #GAMESTATE:GetHumanPlayers() > 1 then
 					self:zoom(zoomfactor.ultrawide):addy(-55)
 				end
@@ -98,6 +118,6 @@ af[#af+1] = LoadActor("./DarkBackground.lua", {player, header_height, sidepane_w
 		LoadActor("./Scorebox.lua", player),
 	}	
 
-	af[#af+1] = LoadActor("./DensityGraph.lua", {player, sidepane_width})
+	af[#af+1] = LoadActor("./DensityGraph.lua", {player, density_graph_width or sidepane_width, density_graph_start_offset})
 
 return af

@@ -1,6 +1,12 @@
 local max_rows = 8
 local play_state_for_user
 
+local function compact_name(name)
+	name = tostring(name or "Player")
+	if #name <= 14 then return name end
+	return name:sub(1, 11) .. "..."
+end
+
 local function local_user_id()
 	if ITGOnline and ITGOnline.user and ITGOnline.user.id then
 		return tostring(ITGOnline.user.id)
@@ -175,7 +181,15 @@ local function update_rows(frame, rows)
 				end
 			end
 			if label then
-				label:settext(string.format("%d. %s  %.2f%%", i, data.name, data.percent or 0))
+				label:settext(string.format("%d. %s", i, compact_name(data.name)))
+			end
+			local marker = row:GetChild("Marker")
+			if marker then
+				marker:settext(data.user_id == self_id and ">" or "")
+			end
+			local score = row:GetChild("Score")
+			if score then
+				score:settext(string.format("%.2f%%", data.percent or 0))
 			end
 			if status then
 				status:settext(statusText)
@@ -190,7 +204,7 @@ local function update_rows(frame, rows)
 			else
 				row:diffuse(color("#ffffff"))
 			end
-			row:stoptweening():linear(0.18):y((i - 1) * 20)
+			row:stoptweening():linear(0.18):y(12 + (i - 1) * 20)
 			row:visible(true)
 		elseif row then
 			row:visible(false)
@@ -200,13 +214,30 @@ end
 
 local af = Def.ActorFrame{
 	InitCommand=function(self)
-		self:xy(_screen.cx, _screen.cy - 95):visible(false)
+		self:xy(_screen.cx, _screen.cy - 125):visible(false)
 	end,
 	ITGOnlineLeaderboardUpdatedMessageCommand=function(self, params)
 		update_rows(self, rows_from_leaderboard(params and params.leaderboard or {}))
 	end,
 	OnlineLobbyStateMessageCommand=function(self, data)
 		update_rows(self, rows_from_lobby_state(data))
+	end,
+}
+
+af[#af + 1] = Def.Quad{
+	Name="Background",
+	InitCommand=function(self)
+		local top = -36
+		local bottom = _screen.h - self:GetParent():GetY()
+		self:xy(-4, (top + bottom) / 2):zoomto(196, bottom - top):diffuse(color("#000000")):diffusealpha(0.55)
+	end,
+}
+
+af[#af + 1] = LoadFont("Common Bold")..{
+	Name="Title",
+	Text="Leaderboard",
+	InitCommand=function(self)
+		self:y(-16):horizalign(center):zoom(0.48):shadowlength(1):diffuse(color("#ffffff")):diffusealpha(0.92)
 	end,
 }
 
@@ -217,15 +248,27 @@ for i = 1, max_rows do
 			self:visible(false)
 		end,
 		LoadFont("Common Normal")..{
+			Name="Marker",
+			InitCommand=function(self)
+				self:x(-88):horizalign(center):zoom(0.833):shadowlength(1):diffusealpha(0.95)
+			end,
+		},
+		LoadFont("Common Normal")..{
 			Name="Label",
 			InitCommand=function(self)
-				self:horizalign(center):zoom(0.55):shadowlength(1):diffusealpha(0.9)
+				self:x(-76):horizalign(left):zoom(0.833):shadowlength(1):diffusealpha(0.9)
+			end,
+		},
+		LoadFont("Wendy/_ScreenEvaluation numbers")..{
+			Name="Score",
+			InitCommand=function(self)
+				self:x(82):horizalign(right):zoom(0.26):shadowlength(1):diffusealpha(0.95)
 			end,
 		},
 		LoadFont("Common Normal")..{
 			Name="Status",
 			InitCommand=function(self)
-				self:x(168):horizalign(center):zoom(0.5):shadowlength(1):diffusealpha(0.95)
+				self:x(98):horizalign(center):zoom(0.48):shadowlength(1):diffusealpha(0.95)
 			end,
 		},
 	}

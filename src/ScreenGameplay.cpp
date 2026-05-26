@@ -449,6 +449,7 @@ ScreenGameplay::ScreenGameplay() {
   m_pSongForeground = nullptr;
   m_delaying_ready_announce = false;
   m_bOnlineEvaluationHoldMessagePending = false;
+  m_bLoggedStageEndState = false;
   GAMESTATE->m_AdjustTokensBySongCostForFinalStageCheck = false;
 }
 
@@ -2892,11 +2893,14 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
     const bool bStopCourseEarly = STOP_COURSE_EARLY;
     const bool bIsLastSong = IsLastSong();
 
-    LOG->Trace(
-        "bAllReallyFailed = %d, bStopCourseEarly = %d, "
-        "bIsLastSong = %d, m_gave_up = %d, m_skipped_song = %d",
-        bAllReallyFailed, bStopCourseEarly, bIsLastSong, m_gave_up,
-        m_skipped_song);
+    if (!m_bLoggedStageEndState) {
+      LOG->Trace(
+          "bAllReallyFailed = %d, bStopCourseEarly = %d, "
+          "bIsLastSong = %d, m_gave_up = %d, m_skipped_song = %d",
+          bAllReallyFailed, bStopCourseEarly, bIsLastSong, m_gave_up,
+          m_skipped_song);
+      m_bLoggedStageEndState = true;
+    }
 
     if (!bIsLastSong && m_skipped_song) {
       // Load the next song in the course.

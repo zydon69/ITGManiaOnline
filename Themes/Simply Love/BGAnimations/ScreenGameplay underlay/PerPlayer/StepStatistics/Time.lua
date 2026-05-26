@@ -5,6 +5,7 @@ local rate = SL.Global.ActiveModifiers.MusicRate
 
 local NoteFieldIsCentered = (GetNotefieldX(player) == _screen.cx)
 local IsUltraWide = (GetScreenAspectRatio() > 21/9)
+local OnlineCompactLayout = ITGOnline and ITGOnline.currentRoomId ~= nil
 
 local style = GAMESTATE:GetCurrentStyle():GetName()
 
@@ -139,9 +140,17 @@ af.InitCommand=function(self)
 	if style ~= "double" then
 		self:x(SL_WideScale(150,202) * (player==PLAYER_1 and -1 or 1))
 		self:y(-40)
+		if OnlineCompactLayout and style == "single" then
+			self:x(20)
+			self:y(-22)
+			self:zoom(0.88)
+		end
 
 		if NoteFieldIsCentered and IsUsingWideScreen() then
 			self:x( 154 * (player==PLAYER_1 and -1 or 1) )
+			if OnlineCompactLayout and style == "single" then
+				self:x(20)
+			end
 		end
 
 		-- flip alignment when ultrawide and both players joined

@@ -1416,7 +1416,16 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 	local waiting = self:ShouldWaitForOnlineResults()
 	local summary = self:PlayStateSummary()
 	local roundKey = self.PlayStateKey and self:PlayStateKey() or ""
+	local validRoundKey = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)
 	local now = GetTimeSinceStart()
+	local minimumVisibleHoldSeconds = 2.25
+
+	if validRoundKey and self.onlineGameplayEvaluationHoldStartedKey ~= roundKey then
+		self.onlineGameplayEvaluationHoldStartedKey = roundKey
+		self.onlineGameplayEvaluationMinimumHoldUntil = now + minimumVisibleHoldSeconds
+		online_flow_trace("hold_gameplay_minimum start roundKey=" .. tostring(roundKey)
+			.. " until=" .. tostring(self.onlineGameplayEvaluationMinimumHoldUntil))
+	end
 
 	online_flow_trace("hold_gameplay_before_evaluation waiting=" .. tostring(waiting == true)
 		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
@@ -1434,6 +1443,14 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 	end
 
 	if waiting then return true end
+
+	if validRoundKey and self.onlineGameplayEvaluationHoldStartedKey == roundKey then
+		local minimumRemaining = (tonumber(self.onlineGameplayEvaluationMinimumHoldUntil) or 0) - now
+		if minimumRemaining > 0 then
+			online_flow_trace("hold_gameplay_minimum remaining=" .. string.format("%.2f", minimumRemaining))
+			return true
+		end
+	end
 
 	if summary and summary.players > 0 and summary.allTerminal == true then
 		if self.onlineGameplayAllTerminalHoldKey ~= roundKey then
@@ -1934,6 +1951,8 @@ function ITGOnline:Disconnect()
 	self.onlineGameplayEvaluationRetryCount = 0
 	self.onlineGameplayEvaluationNextRetryAt = 0
 	self.onlineGameplayEvaluationTerminalErrorKey = ""
+	self.onlineGameplayEvaluationHoldStartedKey = ""
+	self.onlineGameplayEvaluationMinimumHoldUntil = 0
 	self.onlineGameplayAllTerminalHoldKey = ""
 	self.onlineGameplayAllTerminalHoldUntil = 0
 	self.lastFinalScoreKey = ""
@@ -2313,6 +2332,8 @@ function ITGOnline:SelectSong(callback)
 			self.onlineGameplayEvaluationRetryCount = 0
 			self.onlineGameplayEvaluationNextRetryAt = 0
 			self.onlineGameplayEvaluationTerminalErrorKey = ""
+			self.onlineGameplayEvaluationHoldStartedKey = ""
+			self.onlineGameplayEvaluationMinimumHoldUntil = 0
 			self.onlineGameplayAllTerminalHoldKey = ""
 			self.onlineGameplayAllTerminalHoldUntil = 0
 			self.lastFinalScoreKey = ""
@@ -2820,6 +2841,30 @@ function ITGOnline:SetReady(phase, isReady, callback)
 		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
 		return
 	end
+
+	local currentPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+	if isReady and phase == "lobby_ready" and currentPhase ~= "" and currentPhase ~= "lobby" and currentPhase ~= "lobby_ready" then
+		Trace("[ITGOnline] ready_request_skipped room=" .. tostring(self.currentRoomId)
+			.. " phase=" .. tostring(phase)
+			.. " current_phase=" .. tostring(currentPhase)
+			.. " reason=stale_lobby_ready")
+		if callback then callback(true, { room = self.currentRoom, stale_ready = true }, nil) end
+		return
+	end
+
+	if isReady and phase == "config_ready"
+		and currentPhase ~= ""
+		and currentPhase ~= "config"
+		and currentPhase ~= "lobby"
+		and currentPhase ~= "lobby_ready" then
+		Trace("[ITGOnline] ready_request_skipped room=" .. tostring(self.currentRoomId)
+			.. " phase=" .. tostring(phase)
+			.. " current_phase=" .. tostring(currentPhase)
+			.. " reason=stale_config_ready")
+		if callback then callback(true, { room = self.currentRoom, stale_ready = true }, nil) end
+		return
+	end
+
 	local payload = {
 		phase = phase,
 		is_ready = isReady and true or false,

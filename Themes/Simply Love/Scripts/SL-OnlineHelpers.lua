@@ -655,8 +655,8 @@ DisplayLobbyState = function(data, actor)
 			-- However, if someone is still in EvaluationStage, we are transitioning
 			-- eval -> music and should keep input locked until everyone arrives.
 			local anyInEval = false
-			for _, player in ipairs(updatedData.players) do
-					if evaluationScreens[player.screenName] then
+			for _, player in ipairs(updatedData.players or {}) do
+				if type(player) == "table" and evaluationScreens[player.screenName] then
 					anyInEval = true
 					break
 				end
@@ -686,7 +686,9 @@ DisplayLobbyState = function(data, actor)
 			lines[#lines+1] = "Waiting for players to sync screens...\n"
 			local readyStates = {}
 			for _, player in ivalues(updatedData.players or {}) do
-				readyStates[#readyStates + 1] = tostring(player.profileName or "?") .. "=" .. tostring(player.ready and "1" or "0")
+				if type(player) == "table" then
+					readyStates[#readyStates + 1] = tostring(player.profileName or "?") .. "=" .. tostring(player.ready and "1" or "0")
+				end
 			end
 			local debugKey = table.concat({
 				tostring(data and data.roomId or ""),
@@ -754,55 +756,60 @@ DisplayLobbyState = function(data, actor)
 		end
 	end
 
-	for i, player in ipairs(updatedData.players) do
-		local displayedScreen = player.screenName ~= "NoScreen" and player.screenName:gsub("Screen", "") or "Transitioning"
-		local readyText = ""
-		if (data.phase == "lobby" or data.phase == "lobby_ready" or data.phase == "config")
-			and not updatedData.aux.allPlayersReady then
-			readyText =" ["..(player.ready and "OK" or "WAIT").."]"
-		end
-
-		-- Only display the screen name of the players that are on a different
-		-- screen than we are.
-		local playingText = player.isPlayingSong and (" " .. OnlinePlayingSpinner()) or ""
-		local stateText = ""
-		if data.phase == "playing" and player.playState and player.playState ~= "playing" then
-			if player.playState == "finished" then
-				stateText = " - finished [OK]"
-			elseif player.playState == "failed" then
-				stateText = " - failed [X]"
-			elseif player.playState == "returned_to_lobby" then
-				stateText = " - left song [X]"
-			elseif player.playState == "disconnected" then
-				stateText = " - disconnected [X]"
-			else
-				stateText = " - " .. tostring(player.playState)
+	for i, player in ipairs(updatedData.players or {}) do
+		if type(player) ~= "table" then
+			lines[#lines+1] = tostring(i)..". Unknown player"
+			lines[#lines+1] = ""
+		else
+			local displayedScreen = player.screenName ~= "NoScreen" and player.screenName:gsub("Screen", "") or "Transitioning"
+			local readyText = ""
+			if (data.phase == "lobby" or data.phase == "lobby_ready" or data.phase == "config")
+				and not updatedData.aux.allPlayersReady then
+				readyText =" ["..(player.ready and "OK" or "WAIT").."]"
 			end
-		end
-		local playerAndScreen = i..'. '..player.profileName..playingText..readyText..stateText
-		if screenName ~= player.screenName then
-			playerAndScreen = playerAndScreen.." - in "..displayedScreen
-		end
 
-		lines[#lines+1] = playerAndScreen
-		for scoreScreen in ivalues(scoreScreens) do
-			if player.screenName == scoreScreen then
-				-- Display canonical competition score (aligned with in-game online score),
-				-- and keep accuracy as secondary diagnostic info when it differs.
-				local score = (player.score ~= nil and player.score) or 0
-				local accuracy = (player.accuracy ~= nil and player.accuracy) or nil
-				local scoreStr = string.format("%.2f", score).."%"
-				if accuracy ~= nil and math.abs((tonumber(accuracy) or 0) - (tonumber(score) or 0)) > 0.05 then
-					lines[#lines+1] = "    "..scoreStr.." (acc "..string.format("%.2f", accuracy).."%)"
+			-- Only display the screen name of the players that are on a different
+			-- screen than we are.
+			local playingText = player.isPlayingSong and (" " .. OnlinePlayingSpinner()) or ""
+			local stateText = ""
+			if data.phase == "playing" and player.playState and player.playState ~= "playing" then
+				if player.playState == "finished" then
+					stateText = " - finished [OK]"
+				elseif player.playState == "failed" then
+					stateText = " - failed [X]"
+				elseif player.playState == "returned_to_lobby" then
+					stateText = " - left song [X]"
+				elseif player.playState == "disconnected" then
+					stateText = " - disconnected [X]"
 				else
-					lines[#lines+1] = "    "..scoreStr
+					stateText = " - " .. tostring(player.playState)
 				end
-				break
 			end
-		end
+			local playerAndScreen = i..'. '..player.profileName..playingText..readyText..stateText
+			if screenName ~= player.screenName then
+				playerAndScreen = playerAndScreen.." - in "..displayedScreen
+			end
 
-		-- Add a new line between players.
-		lines[#lines+1] = ""
+			lines[#lines+1] = playerAndScreen
+			for scoreScreen in ivalues(scoreScreens) do
+				if player.screenName == scoreScreen then
+					-- Display canonical competition score (aligned with in-game online score),
+					-- and keep accuracy as secondary diagnostic info when it differs.
+					local score = (player.score ~= nil and player.score) or 0
+					local accuracy = (player.accuracy ~= nil and player.accuracy) or nil
+					local scoreStr = string.format("%.2f", score).."%"
+					if accuracy ~= nil and math.abs((tonumber(accuracy) or 0) - (tonumber(score) or 0)) > 0.05 then
+						lines[#lines+1] = "    "..scoreStr.." (acc "..string.format("%.2f", accuracy).."%)"
+					else
+						lines[#lines+1] = "    "..scoreStr
+					end
+					break
+				end
+			end
+
+			-- Add a new line between players.
+			lines[#lines+1] = ""
+		end
 	end
 
 	if screenName == "ScreenOnlineLobbies" and data.finalResults and #data.finalResults > 0 then

@@ -1,6 +1,7 @@
 local player = ...
 local pn = ToEnumShortString(player)
 local mods = SL[pn].ActiveModifiers
+local online_notefield_offset_x = (ITGOnline and ITGOnline.currentRoomId ~= nil and GAMESTATE:GetCurrentStyle():GetName() == "single") and -16 or 0
 
 -- if no BackgroundFilter is necessary, it's safe to bail now
 if mods.BackgroundFilter == "Off" then return end
@@ -8,7 +9,7 @@ if mods.BackgroundFilter == "Off" then return end
 local FilterAlpha = BackgroundFilterValues()
 return Def.Quad{
 	InitCommand=function(self)
-		self:xy(GetNotefieldX(player), _screen.cy )
+		self:xy(GetNotefieldX(player) + online_notefield_offset_x, _screen.cy )
 			:diffuse(Color.Black)
 			:diffusealpha( FilterAlpha[mods.BackgroundFilter]/100 or 0 )
 			:zoomto( GetNotefieldWidth(), _screen.h )

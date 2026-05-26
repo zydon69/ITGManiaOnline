@@ -1,4 +1,4 @@
-local player, width = unpack(...)
+local player, width, start_offset = unpack(...)
 
 local style = GAMESTATE:GetCurrentStyle():GetName();
 if style == "double" then width = width * 0.95 end
@@ -15,6 +15,7 @@ local offset = 0
 
 local IsUltraWide = (GetScreenAspectRatio() > 21/9)
 local NoteFieldIsCentered = (GetNotefieldX(player) == _screen.cx)
+local OnlineCompactLayout = ITGOnline and ITGOnline.currentRoomId ~= nil
 
 -- -----------------------------------------------------------------------
 local BothUsingStepStats = (#GAMESTATE:GetHumanPlayers()==2
@@ -42,7 +43,7 @@ local UpdateRate, first_second, last_second
 local af = Def.ActorFrame{
 	InitCommand=function(self)
 		if style ~= "double" then
-			self:xy(pos_x, 55)
+			self:xy(start_offset or pos_x, 55)
 		else
 			self:xy(260, 40)
 		end
@@ -99,6 +100,9 @@ local text = LoadFont("Common Normal")..{
 	InitCommand=function(self)
 		if style ~= "double" then
 			self:halign(PlayerNumber:Reverse()[OtherPlayer[player]]):zoom(0.9)
+			if OnlineCompactLayout and style == "single" then
+				self:halign(1):zoom(0.76)
+			end
 		else
 			self:halign(3.4):zoom(0.9)
 		end
@@ -124,6 +128,9 @@ local text = LoadFont("Common Normal")..{
 			if NoteFieldIsCentered then
 				self:x(_screen.w*0.5 - 134)
 			end
+			if OnlineCompactLayout and style == "single" then
+				self:x(width - 12)
+			end
 			if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
 				self:x(52)
 			end
@@ -131,6 +138,9 @@ local text = LoadFont("Common Normal")..{
 			self:x(SL_WideScale(6,130))
 			if NoteFieldIsCentered then
 				self:x(69)
+			end
+			if OnlineCompactLayout and style == "single" then
+				self:x(12)
 			end
 			if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
 				self:x(180)
