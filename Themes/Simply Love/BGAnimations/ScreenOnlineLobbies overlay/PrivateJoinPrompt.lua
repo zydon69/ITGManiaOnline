@@ -1,6 +1,8 @@
 return Def.ActorFrame{
 	Name="PrivateJoinPrompt",
-	InitCommand=function(self) self:visible(false) end,
+	InitCommand=function(self)
+		self:visible(false):draworder(1000)
+	end,
 	Def.Quad{
 		InitCommand=function(self)
 			self:zoomto(SCREEN_WIDTH, SCREEN_HEIGHT):diffuse(0,0,0,0.72)

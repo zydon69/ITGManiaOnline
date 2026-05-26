@@ -1704,7 +1704,6 @@ local af = Def.ActorFrame{
 	},
 
 	LoadActor("PlayerActionMenu.lua"),
-	LoadActor("PrivateJoinPrompt.lua"),
 
 	Def.ActorFrame{
 		Name="JoinedLobbyContent",
@@ -2033,6 +2032,8 @@ local af = Def.ActorFrame{
 			end
 		}
 	},
+
+	LoadActor("PrivateJoinPrompt.lua"),
 }
 
 return af
