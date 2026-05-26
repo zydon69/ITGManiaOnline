@@ -611,8 +611,57 @@ local function read_config(loadPassword)
 	}
 end
 
+local function copy_connection_config(config)
+	config = config or {}
+	return {
+		apiBaseUrl = config.apiBaseUrl or ITGOnline.defaults.apiBaseUrl,
+		webSocketUrl = config.webSocketUrl or ITGOnline.defaults.webSocketUrl,
+		email = config.email or "",
+		password = "",
+		passwordStoredSecurely = config.passwordStoredSecurely == true,
+		secureCredentialsBackend = config.secureCredentialsBackend or secure_credentials_backend(),
+		deviceName = config.deviceName or ITGOnline.defaults.deviceName,
+	}
+end
+
+local function hydrate_config_password(config)
+	config = config or {}
+	if tostring(config.password or "") ~= "" then return config end
+
+	local securePassword, securePasswordStored = secure_password_get(config.apiBaseUrl, config.email)
+	if securePasswordStored and tostring(securePassword or "") ~= "" then
+		config.password = tostring(securePassword or "")
+		config.passwordStoredSecurely = true
+		return config
+	end
+
+	local transientAccount = ITGOnline and ITGOnline.transientPasswordAccount or nil
+	local currentAccount = secure_password_account(config.apiBaseUrl, config.email)
+	if (currentAccount ~= "" and transientAccount == currentAccount)
+		or (transientAccount == "" and tostring(ITGOnline.transientPassword or "") ~= "")
+	then
+		local transientPassword = tostring(ITGOnline.transientPassword or "")
+		if transientPassword ~= "" then
+			config.password = transientPassword
+		end
+	end
+
+	config.passwordStoredSecurely = false
+	return config
+end
+
 function ITGOnline:Config()
+	if self.config then
+		return hydrate_config_password(self.config)
+	end
+
+	if self.connectionConfig then
+		self.config = copy_connection_config(self.connectionConfig)
+		return hydrate_config_password(self.config)
+	end
+
 	self.config = read_config(true)
+	self.connectionConfig = copy_connection_config(self.config)
 	return self.config
 end
 
@@ -625,7 +674,17 @@ function ITGOnline:IsTrustedConnectionConfig(config)
 end
 
 function ITGOnline:ConnectionConfig()
-	return read_config(false)
+	if self.connectionConfig then
+		return self.connectionConfig
+	end
+
+	if self.config then
+		self.connectionConfig = copy_connection_config(self.config)
+		return self.connectionConfig
+	end
+
+	self.connectionConfig = read_config(false)
+	return self.connectionConfig
 end
 
 function ITGOnline:SaveConfig(values)
@@ -696,6 +755,7 @@ function ITGOnline:SaveConfig(values)
 	})
 
 	self.config = nextConfig
+	self.connectionConfig = copy_connection_config(nextConfig)
 	return nextConfig
 end
 

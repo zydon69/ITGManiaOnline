@@ -186,6 +186,30 @@ local QueueOnlineGameplayStartRelease = function(actor)
 	end
 end
 
+local lastGameplayPauseScreen = nil
+local lastGameplayPauseState = nil
+local SetGameplayPaused = function(screen, paused)
+	if not screen then return end
+
+	local screenName = screen.GetName and screen:GetName() or ""
+	local isGameplay = gameplayScreens[screenName] == true
+	local screenKey = tostring(screen)
+	paused = paused == true
+
+	if isGameplay and lastGameplayPauseScreen == screenKey and lastGameplayPauseState == paused then
+		return
+	end
+
+	screen:PauseGame(paused)
+	if isGameplay then
+		lastGameplayPauseScreen = screenKey
+		lastGameplayPauseState = paused
+	else
+		lastGameplayPauseScreen = nil
+		lastGameplayPauseState = nil
+	end
+end
+
 local ReleaseOnlineGameplay = function(screen, secondsUntilStart)
 	local lateBy = secondsUntilStart and math.max(0, -secondsUntilStart) or 0
 	if online_trace then
@@ -199,7 +223,7 @@ local ReleaseOnlineGameplay = function(screen, secondsUntilStart)
 	end
 
 	UnlockOnlineInput()
-	if screen then screen:PauseGame(false) end
+	SetGameplayPaused(screen, false)
 	if ITGOnline and ITGOnline.Heartbeat then ITGOnline:Heartbeat("playing") end
 end
 
@@ -231,13 +255,13 @@ local InputHandler = function(event)
 					SM("Disconnected from lobby.")
 					startHoldTime[pn] = 0
 					lastDisconnectCountdown = nil
-					isWaiting = false
-					local topScreen = SCREENMAN:GetTopScreen()
-					if topScreen and topScreen:GetName() == "ScreenGameplay" then
-						topScreen:PauseGame(false)
+						isWaiting = false
+						local topScreen = SCREENMAN:GetTopScreen()
+						if topScreen and topScreen:GetName() == "ScreenGameplay" then
+							SetGameplayPaused(topScreen, false)
+						end
+						MESSAGEMAN:Broadcast("DisconnectOnline", {leaveRoom=true})
 					end
-					MESSAGEMAN:Broadcast("DisconnectOnline", {leaveRoom=true})
-				end
 			end
 		elseif event.type == "InputEventType_Release" and event.GameButton == "Start" then
 			startHoldTime[pn] = 0
@@ -698,16 +722,16 @@ DisplayLobbyState = function(data, actor)
 			-- Lift the lock.
 			-- SCREENMAN:GetTopScreen():RemoveInputCallback(InputHandler)
 
-			-- The below does work, but it's currently possible that other screens are resetting this early.
-			for player in ivalues(PlayerNumber) do
-				SCREENMAN:set_input_redirected(player, false)
-			end
+				-- The below does work, but it's currently possible that other screens are resetting this early.
+				for player in ivalues(PlayerNumber) do
+					SCREENMAN:set_input_redirected(player, false)
+				end
 
-			if gameplayScreens[screenName] then
-				local topScreen = SCREENMAN:GetTopScreen()
-				if topScreen then topScreen:PauseGame(false) end
-			end
-		else
+				if gameplayScreens[screenName] then
+					local topScreen = SCREENMAN:GetTopScreen()
+					SetGameplayPaused(topScreen, false)
+				end
+			else
 			lines[#lines+1] = "Waiting for players to sync screens...\n"
 			local readyStates = {}
 			for _, player in ivalues(updatedData.players or {}) do
@@ -749,28 +773,28 @@ DisplayLobbyState = function(data, actor)
 				lines[#lines+1] = "Waiting for every player to load the song...\n"
 			end
 			QueueOnlineGameplayStartRelease(actor)
-		elseif gameplayScreens[screenName] and data.phase == "playing" then
-			isWaiting = false
-			for player in ivalues(PlayerNumber) do
-				SCREENMAN:set_input_redirected(player, false)
-			end
-			local topScreen = SCREENMAN:GetTopScreen()
-			if topScreen then topScreen:PauseGame(false) end
-			if ITGOnline and ITGOnline.MarkPlayEntered then ITGOnline:MarkPlayEntered() end
-		elseif gameplayScreens[screenName] and data.phase == "results" then
-			UnlockOnlineInput()
-			local topScreen = SCREENMAN:GetTopScreen()
-			if topScreen then topScreen:PauseGame(false) end
-			if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
-				ITGOnline:EnforceRoomPhaseScreen(screenName)
-			end
-		elseif gameplayScreens[screenName] and (data.phase == "config" or data.phase == "lobby_ready" or data.phase == "lobby") then
-			UnlockOnlineInput()
-			local topScreen = SCREENMAN:GetTopScreen()
-			if topScreen then topScreen:PauseGame(false) end
-			if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
-				ITGOnline:EnforceRoomPhaseScreen(screenName)
-			end
+			elseif gameplayScreens[screenName] and data.phase == "playing" then
+				isWaiting = false
+				for player in ivalues(PlayerNumber) do
+					SCREENMAN:set_input_redirected(player, false)
+				end
+				local topScreen = SCREENMAN:GetTopScreen()
+				SetGameplayPaused(topScreen, false)
+				if ITGOnline and ITGOnline.MarkPlayEntered then ITGOnline:MarkPlayEntered() end
+			elseif gameplayScreens[screenName] and data.phase == "results" then
+				UnlockOnlineInput()
+				local topScreen = SCREENMAN:GetTopScreen()
+				SetGameplayPaused(topScreen, false)
+				if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
+					ITGOnline:EnforceRoomPhaseScreen(screenName)
+				end
+			elseif gameplayScreens[screenName] and (data.phase == "config" or data.phase == "lobby_ready" or data.phase == "lobby") then
+				UnlockOnlineInput()
+				local topScreen = SCREENMAN:GetTopScreen()
+				SetGameplayPaused(topScreen, false)
+				if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
+					ITGOnline:EnforceRoomPhaseScreen(screenName)
+				end
 		end
 
 	if screenName == "ScreenOnlineLobbies" and data.phase == "playing" then
@@ -1248,21 +1272,21 @@ CreateOnlineHandler = function()
 							local pn = ToEnumShortString(player)
 							readyState[pn] = false
 						end
-						replace_online_input_callback(screen, "gameplay_wait", InputHandler)
-						if ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing" then
-							UnlockOnlineInput()
-							if screen then screen:PauseGame(false) end
-						elseif ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "starting" then
-							if screen then screen:PauseGame(true) end
-							if ITGOnline.MarkSongLoaded then
-								ITGOnline:MarkSongLoaded(function(ok, decoded, response)
-									if not ok then
-										UnlockOnlineInput()
-										if screen then
-											screen:PauseGame(false)
-											screen:SetNextScreenName("ScreenOnlineLobbies")
-											screen:StartTransitioningScreen("SM_GoToNextScreen")
-										end
+							replace_online_input_callback(screen, "gameplay_wait", InputHandler)
+							if ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing" then
+								UnlockOnlineInput()
+								SetGameplayPaused(screen, false)
+							elseif ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "starting" then
+								SetGameplayPaused(screen, true)
+								if ITGOnline.MarkSongLoaded then
+									ITGOnline:MarkSongLoaded(function(ok, decoded, response)
+										if not ok then
+											UnlockOnlineInput()
+											if screen then
+												SetGameplayPaused(screen, false)
+												screen:SetNextScreenName("ScreenOnlineLobbies")
+												screen:StartTransitioningScreen("SM_GoToNextScreen")
+											end
 										MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 											event="songLoaded",
 											success=false,
@@ -1270,13 +1294,13 @@ CreateOnlineHandler = function()
 										})
 									end
 								end)
-							end
-							QueueOnlineGameplayStartRelease(self)
-						else
-							if screen then screen:PauseGame(false) end
-							if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
-								ITGOnline:EnforceRoomPhaseScreen(screenName)
-							end
+								end
+								QueueOnlineGameplayStartRelease(self)
+							else
+								SetGameplayPaused(screen, false)
+								if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
+									ITGOnline:EnforceRoomPhaseScreen(screenName)
+								end
 						end
 					elseif isWaiting then
 						replace_online_input_callback(screen, "wait", InputHandler)

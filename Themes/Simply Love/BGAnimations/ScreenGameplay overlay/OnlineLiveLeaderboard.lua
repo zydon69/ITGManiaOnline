@@ -156,6 +156,14 @@ local function update_rows(frame, rows)
 			local label = row:GetChild("Label")
 			local status = row:GetChild("Status")
 			local statusText = data.failed and "X" or (data.finished and "OK" or "")
+			local rowColor = color("#ffffff")
+			if data.failed then
+				rowColor = color("#ff3b30")
+			elseif data.finished then
+				rowColor = color("#66ff99")
+			elseif data.user_id == self_id then
+				rowColor = color("#ffd166")
+			end
 			if data.user_id == self_id and ITGOnline and ITGOnline.debugScoreTrace == true then
 				local localValue = tonumber(self_displayed)
 				local shownValue = tonumber(data.percent) or 0
@@ -182,28 +190,23 @@ local function update_rows(frame, rows)
 			end
 			if label then
 				label:settext(string.format("%d. %s", i, compact_name(data.name)))
+				label:diffuse(rowColor)
 			end
 			local marker = row:GetChild("Marker")
 			if marker then
 				marker:settext(data.user_id == self_id and ">" or "")
+				marker:diffuse(rowColor)
 			end
 			local score = row:GetChild("Score")
 			if score then
 				score:settext(string.format("%.2f%%", data.percent or 0))
+				score:diffuse(rowColor)
 			end
 			if status then
 				status:settext(statusText)
-				status:diffuse(data.failed and color("#ff3b30") or color("#66ff99"))
+				status:diffuse(rowColor)
 			end
-			if data.failed then
-				row:diffuse(color("#ff3b30"))
-			elseif data.finished then
-				row:diffuse(color("#66ff99"))
-			elseif data.user_id == self_id then
-				row:diffuse(color("#ffd166"))
-			else
-				row:diffuse(color("#ffffff"))
-			end
+			row:diffuse(color("#ffffff"))
 			row:stoptweening():linear(0.18):y(12 + (i - 1) * 20)
 			row:visible(true)
 		elseif row then
