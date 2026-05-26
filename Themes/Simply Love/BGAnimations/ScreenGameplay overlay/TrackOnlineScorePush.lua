@@ -13,10 +13,11 @@ return Def.Actor{
 		local primary = primary_enabled_player()
 		if primary and params and params.Player and params.Player ~= primary then return end
 
-		local snapshot = ITGOnline.lastDisplayedScoreSnapshot
-		if not snapshot and ITGOnline.BuildCurrentScoreSnapshot then
+		local snapshot = nil
+		if ITGOnline.BuildCurrentScoreSnapshot then
 			snapshot = ITGOnline:BuildCurrentScoreSnapshot()
 		end
+		snapshot = snapshot or ITGOnline.lastDisplayedScoreSnapshot
 		if snapshot then ITGOnline:QueueLiveScore(snapshot) end
 	end,
 }

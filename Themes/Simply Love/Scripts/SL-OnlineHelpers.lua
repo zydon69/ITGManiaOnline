@@ -321,18 +321,30 @@ local ApplyOnlineSongSelection = function(songInfo)
 		localPayload = ITGOnline:BuildSongPayload()
 		restorePreviousSelection()
 	end
+
+	local requiresHashVerification = (songInfo.songHash and songInfo.songHash ~= "")
+		or (songInfo.chartHash and songInfo.chartHash ~= "")
+	if requiresHashVerification and not localPayload then
+		SM("Online song could not be verified locally: " .. tostring(songInfo.songPath))
+		MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="local_payload_unavailable"})
+		restorePreviousSelection()
+		return false
+	end
+
 	if localPayload then
-				if songInfo.songHash and songInfo.songHash ~= "" and localPayload.song_hash ~= songInfo.songHash then
-					SM("Online song hash mismatch for: " .. tostring(songInfo.songPath))
-					MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="hash_mismatch"})
-					return false
-				end
-				if songInfo.chartHash and songInfo.chartHash ~= "" and localPayload.chart_hash ~= songInfo.chartHash then
-					SM("Online chart hash mismatch for: " .. tostring(songInfo.songPath))
-					MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="hash_mismatch"})
-					return false
-				end
-			end
+		if songInfo.songHash and songInfo.songHash ~= "" and localPayload.song_hash ~= songInfo.songHash then
+			SM("Online song hash mismatch for: " .. tostring(songInfo.songPath))
+			MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="hash_mismatch"})
+			restorePreviousSelection()
+			return false
+		end
+		if songInfo.chartHash and songInfo.chartHash ~= "" and localPayload.chart_hash ~= songInfo.chartHash then
+			SM("Online chart hash mismatch for: " .. tostring(songInfo.songPath))
+			MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="hash_mismatch"})
+			restorePreviousSelection()
+			return false
+		end
+	end
 
 	GAMESTATE:SetCurrentSong(song)
 	if matchedSteps then

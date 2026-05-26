@@ -149,7 +149,7 @@ local function update_rows(frame, rows)
 		if row and data then
 			local label = row:GetChild("Label")
 			local status = row:GetChild("Status")
-			local statusText = data.failed and "✖" or (data.finished and "✔" or "")
+			local statusText = data.failed and "X" or (data.finished and "OK" or "")
 			if data.user_id == self_id and ITGOnline and ITGOnline.debugScoreTrace == true then
 				local localValue = tonumber(self_displayed)
 				local shownValue = tonumber(data.percent) or 0
@@ -222,10 +222,10 @@ for i = 1, max_rows do
 				self:horizalign(center):zoom(0.55):shadowlength(1):diffusealpha(0.9)
 			end,
 		},
-		LoadFont("16px fonts/_emoji 16px")..{
+		LoadFont("Common Normal")..{
 			Name="Status",
 			InitCommand=function(self)
-				self:x(168):horizalign(center):zoom(0.72):shadowlength(1):diffusealpha(0.95)
+				self:x(168):horizalign(center):zoom(0.5):shadowlength(1):diffusealpha(0.95)
 			end,
 		},
 	}

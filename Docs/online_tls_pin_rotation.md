@@ -113,10 +113,22 @@ openssl s_client -servername itgonline.fr -connect itgonline.fr:443 </dev/null 2
 
 Normaliser en hex minuscule sans prefixe.
 
-Important: le build source ne contient pas de pin de secours par defaut tant
-que `ITGMANIA_HTTP_PUBLIC_KEY_PINS_BACKUP_DEFAULT` reste vide. Le pin de
-secours doit venir d'une vraie cle publique standby. Ne pas reutiliser le pin
-courant comme "backup": cela ne protege pas une rotation de cle.
+Important: le build source contient un pin de secours issu de la cle standby
+production conservee sur le serveur. Ce pin doit toujours correspondre a une
+vraie cle publique leaf utilisable pour le prochain certificat. Ne pas
+reutiliser le pin courant comme "backup": cela ne protege pas une rotation de
+cle.
+
+Cote serveur, la cle/CSR standby se verifient avec:
+
+```bash
+deploy/centos/scripts/tls-standby-key.sh
+```
+
+Etat production actuel:
+
+- pin courant: `660801b6fa3faba577853c89d1b6d908d75a00a4396259184b1a65dc1bcd1f60`
+- pin standby: `3349ce463a6f443f110a1764102bc52401b6f4f42a9971a9747b02214a9ef60a`
 
 ### Etape 2 - Publier en mode dual-pin
 
