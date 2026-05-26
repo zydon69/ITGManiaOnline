@@ -3119,11 +3119,30 @@ function ITGOnline:UpdatePlayStateFromResponse(decoded)
 		end
 		local previousPhase = self.currentRoom.phase
 		self.currentRoom.play_state = decoded.play_state
-		if decoded.room_phase then
-			self:ApplyRoomPhase(decoded.room_phase, "play_state_response")
+		local responsePhase = self:NormalizeRoomPhase(decoded.room_phase)
+		if responsePhase ~= "" then
+			self:ApplyRoomPhase(responsePhase, "play_state_response")
+		elseif self.FetchRoom then
+			local summary = self:PlayStateSummary(self.currentRoom)
+			local needsAuthoritativePhase = summary
+				and summary.players > 0
+				and summary.allTerminal == true
+				and (self:NormalizeRoomPhase(previousPhase) == "playing" or self:NormalizeRoomPhase(previousPhase) == "starting")
+
+			if needsAuthoritativePhase then
+				local now = GetTimeSinceStart()
+				if now - (tonumber(self.lastMissingPhasePlayStateFetchAt) or 0) >= 0.75 then
+					self.lastMissingPhasePlayStateFetchAt = now
+					online_flow_trace("play_state_response_missing_phase_fetch previousPhase=" .. tostring(previousPhase)
+						.. " version=" .. tostring(incomingVersion)
+						.. " terminal=" .. tostring(summary.terminal)
+						.. " players=" .. tostring(summary.players))
+					self:FetchRoom(self.currentRoomId)
+				end
+			end
 		end
 		online_flow_trace("play_state_response previousPhase=" .. tostring(previousPhase)
-			.. " responsePhase=" .. tostring(decoded.room_phase)
+			.. " responsePhase=" .. tostring(responsePhase ~= "" and responsePhase or "unchanged")
 			.. " currentPhase=" .. tostring(self.currentRoom.phase))
 		MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
 		MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", decoded.play_state)
