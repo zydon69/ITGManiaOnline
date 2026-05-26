@@ -71,6 +71,7 @@ ITGOnline.songLoadedAckKey = ITGOnline.songLoadedAckKey or ""
 ITGOnline.songLoadedInFlightKey = ITGOnline.songLoadedInFlightKey or ""
 ITGOnline.songLoadedPendingCallbacks = ITGOnline.songLoadedPendingCallbacks or {}
 ITGOnline.songAvailabilityInFlightKey = ITGOnline.songAvailabilityInFlightKey or ""
+ITGOnline.songAvailabilityInFlightCallbacks = ITGOnline.songAvailabilityInFlightCallbacks or {}
 ITGOnline.songAvailabilityReportedKey = ITGOnline.songAvailabilityReportedKey or ""
 ITGOnline.songAvailabilitySuppressedUntil = ITGOnline.songAvailabilitySuppressedUntil or {}
 ITGOnline.songAvailabilityFailureDedupSeconds = ITGOnline.songAvailabilityFailureDedupSeconds or 5
@@ -1912,6 +1913,7 @@ function ITGOnline:Disconnect()
 	self.songLoadedInFlightKey = ""
 	self.songLoadedPendingCallbacks = {}
 	self.songAvailabilityInFlightKey = ""
+	self.songAvailabilityInFlightCallbacks = {}
 	self.songAvailabilityReportedKey = ""
 	self.songAvailabilitySuppressedUntil = {}
 	self.songSelectionInFlightKey = ""
@@ -2295,6 +2297,7 @@ function ITGOnline:SelectSong(callback)
 			self.songLoadedInFlightKey = ""
 			self.songLoadedPendingCallbacks = {}
 			self.songAvailabilityInFlightKey = ""
+			self.songAvailabilityInFlightCallbacks = {}
 			self.songAvailabilityReportedKey = ""
 			self.songAvailabilitySuppressedUntil = {}
 			self.startScheduleAckKey = ""
@@ -3486,7 +3489,7 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 
 	local payload = {
 		missing = missing and true or false,
-		reason = reason or (missing and "unknown" or "reloaded"),
+		reason = missing and (reason or "unknown") or "reloaded",
 	}
 
 	if not missing then
@@ -3522,7 +3525,13 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		tostring(payload.chart_hash or selectedSong.chart_hash or ""),
 		tostring(payload.reason or ""),
 	}, "|")
-	if self.songAvailabilityInFlightKey == availabilityKey or self.songAvailabilityReportedKey == availabilityKey then
+	if self.songAvailabilityInFlightKey == availabilityKey then
+		if callback then
+			self.songAvailabilityInFlightCallbacks[#self.songAvailabilityInFlightCallbacks + 1] = callback
+		end
+		return
+	end
+	if self.songAvailabilityReportedKey == availabilityKey then
 		if callback then callback(true, nil, { duplicate = true }) end
 		return
 	end
@@ -3532,10 +3541,13 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		return
 	end
 	self.songAvailabilityInFlightKey = availabilityKey
+	self.songAvailabilityInFlightCallbacks = callback and { callback } or {}
 
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/song-availability", payload, function(ok, decoded, response)
+		local callbacks = self.songAvailabilityInFlightCallbacks or {}
 		if self.songAvailabilityInFlightKey == availabilityKey then
 			self.songAvailabilityInFlightKey = ""
+			self.songAvailabilityInFlightCallbacks = {}
 		end
 		if ok then
 			self.songAvailabilityReportedKey = availabilityKey
@@ -3553,12 +3565,14 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 				end
 			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(room or decoded.room))
 		end
-		if callback then callback(ok, decoded, response) end
+		for cb in ivalues(callbacks) do
+			if cb then cb(ok, decoded, response) end
+		end
 	end)
 end
 
 function ITGOnline:ConfirmSelectedSongAvailability(reason, callback)
-	self:ReportSongAvailability(false, reason or "available", callback)
+	self:ReportSongAvailability(false, "reloaded", callback)
 end
 
 function ITGOnline:RequestJoinUserRoom(userId, callback)
