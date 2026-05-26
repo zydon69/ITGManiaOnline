@@ -2844,7 +2844,7 @@ function ITGOnline:SetReady(phase, isReady, callback)
 
 	local currentPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
 	if isReady and phase == "lobby_ready" and currentPhase ~= "" and currentPhase ~= "lobby" and currentPhase ~= "lobby_ready" then
-		Trace("[ITGOnline] ready_request_skipped room=" .. tostring(self.currentRoomId)
+		online_flow_trace("ready_request_skipped room=" .. tostring(self.currentRoomId)
 			.. " phase=" .. tostring(phase)
 			.. " current_phase=" .. tostring(currentPhase)
 			.. " reason=stale_lobby_ready")
@@ -2857,7 +2857,7 @@ function ITGOnline:SetReady(phase, isReady, callback)
 		and currentPhase ~= "config"
 		and currentPhase ~= "lobby"
 		and currentPhase ~= "lobby_ready" then
-		Trace("[ITGOnline] ready_request_skipped room=" .. tostring(self.currentRoomId)
+		online_flow_trace("ready_request_skipped room=" .. tostring(self.currentRoomId)
 			.. " phase=" .. tostring(phase)
 			.. " current_phase=" .. tostring(currentPhase)
 			.. " reason=stale_config_ready")

@@ -97,6 +97,31 @@ local function ready_debug(message)
 	end
 end
 
+local function maybe_set_lobby_ready(reason, callback)
+	if not (ITGOnline and ITGOnline.SetReady) then
+		if callback then callback(false) end
+		return
+	end
+
+	local room = ITGOnline.currentRoom
+	local phase = tostring(room and room.phase or "")
+	if phase ~= "lobby" and phase ~= "lobby_ready" then
+		ready_debug("skip lobby_ready reason=" .. tostring(reason or "unknown")
+			.. " phase=" .. tostring(phase))
+		if callback then callback(true, { room = room, skipped = true }) end
+		return
+	end
+
+	if ITGOnline.IsCurrentUserReadyInRoom and ITGOnline:IsCurrentUserReadyInRoom(room) then
+		ready_debug("skip lobby_ready reason=" .. tostring(reason or "unknown")
+			.. " already_ready=1")
+		if callback then callback(true, { room = room, skipped = true }) end
+		return
+	end
+
+	ITGOnline:SetReady("lobby_ready", true, callback)
+end
+
 local OnlineStartCountdownText = function()
 	if not (ITGOnline and ITGOnline.SecondsUntilScheduledStart) then return nil end
 
@@ -832,25 +857,25 @@ DisplayLobbyState = function(data, actor)
 		lines[#lines+1] = ""
 	end
 
-	if data.songInfo ~= nil then
-		local songKey = OnlineSongKey(data)
-		if (data.phase == "lobby_ready" or data.phase == "config") and songKey ~= "" and songKey ~= lastOnlineOptionsSongKey then
-			lastOnlineOptionsSongKey = songKey
-			if ApplyOnlineSongSelection(data.songInfo) then
-				if data.phase == "lobby_ready" then
-					if ITGOnline.ConfirmSelectedSongAvailability then
-						ITGOnline:ConfirmSelectedSongAvailability("local_song_available", function(ok)
-							if ok then
-								ITGOnline:SetReady("lobby_ready", true)
-							end
-						end)
-					else
-						ITGOnline:SetReady("lobby_ready", true)
+		if data.songInfo ~= nil then
+			local songKey = OnlineSongKey(data)
+			if (data.phase == "lobby_ready" or data.phase == "config") and songKey ~= "" and songKey ~= lastOnlineOptionsSongKey then
+				lastOnlineOptionsSongKey = songKey
+				if ApplyOnlineSongSelection(data.songInfo) then
+					if data.phase == "lobby_ready" then
+						if ITGOnline.ConfirmSelectedSongAvailability then
+							ITGOnline:ConfirmSelectedSongAvailability("local_song_available", function(ok)
+								if ok then
+									maybe_set_lobby_ready("local_song_available")
+								end
+							end)
+						else
+							maybe_set_lobby_ready("local_song_available")
+						end
 					end
+					TransitionToOnlineOptions()
 				end
-				TransitionToOnlineOptions()
 			end
-		end
 
 		if not songSelected then
 			local topScreen = SCREENMAN:GetTopScreen()
@@ -1261,18 +1286,18 @@ CreateOnlineHandler = function()
 						local status = (gameplayScreens[screenName] and ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing") and "playing" or "in_room"
 						ITGOnline:Heartbeat(status)
 					end
-					if evaluationScreens[screenName]
-						and ITGOnline
-						and ITGOnline.MarkGameplayCompleteForEvaluation then
-						ITGOnline:MarkGameplayCompleteForEvaluation("evaluation_screen")
-					end
-					if screenName == "ScreenSelectMusic"
-						and ITGOnline.currentSongPayload
-						and ITGOnline.currentRoom
-						and tostring(ITGOnline.currentRoom.phase or "") == "lobby_ready" then
-						ITGOnline:SetReady("lobby_ready", true)
-					end
-					MESSAGEMAN:Broadcast("UpdateMachineState")
+						if evaluationScreens[screenName]
+							and ITGOnline
+							and ITGOnline.MarkGameplayCompleteForEvaluation then
+							ITGOnline:MarkGameplayCompleteForEvaluation("evaluation_screen")
+						end
+						if screenName == "ScreenSelectMusic"
+							and ITGOnline.currentSongPayload
+							and ITGOnline.currentRoom
+							and tostring(ITGOnline.currentRoom.phase or "") == "lobby_ready" then
+							maybe_set_lobby_ready("screen_select_music")
+						end
+						MESSAGEMAN:Broadcast("UpdateMachineState")
 	      end,
       PlayerJoinedMessageCommand=function(self)
 				if self.connected and self.socket ~= nil and self.inLobby then	
@@ -1435,13 +1460,13 @@ CreateOnlineHandler = function()
 								return
 							end
 
-		          ITGOnline:SelectSong(function(ok, decoded, response)
+			          ITGOnline:SelectSong(function(ok, decoded, response)
 								if ok then
-									ITGOnline:SetReady("lobby_ready", true)
-								ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(fetchOk, fetchDecoded)
-									if fetchOk and fetchDecoded and fetchDecoded.room then
-										local payload = ITGOnline:LobbyStatePayload(fetchDecoded.room)
-										DisplayLobbyState(payload, self)
+									maybe_set_lobby_ready("legacy_song_selected")
+									ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(fetchOk, fetchDecoded)
+										if fetchOk and fetchDecoded and fetchDecoded.room then
+											local payload = ITGOnline:LobbyStatePayload(fetchDecoded.room)
+											DisplayLobbyState(payload, self)
 										MESSAGEMAN:Broadcast("OnlineLobbyState", payload)
 										TransitionToOnlineOptions()
 									end

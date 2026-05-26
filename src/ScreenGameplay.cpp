@@ -450,6 +450,7 @@ ScreenGameplay::ScreenGameplay() {
   m_delaying_ready_announce = false;
   m_bOnlineEvaluationHoldMessagePending = false;
   m_bLoggedStageEndState = false;
+  m_bLoggedOnlineEvaluationHold = false;
   GAMESTATE->m_AdjustTokensBySongCostForFinalStageCheck = false;
 }
 
@@ -2762,8 +2763,12 @@ bool ScreenGameplay::OnlineShouldHoldBeforeEvaluation() {
     LuaHelpers::Pop(L, shouldHold);
   }
   LUA->Release(L);
-  if (shouldHold) {
+  if (shouldHold && !m_bLoggedOnlineEvaluationHold) {
     LOG->Trace("ITG Online: holding ScreenGameplay before evaluation");
+    m_bLoggedOnlineEvaluationHold = true;
+  } else if (!shouldHold && m_bLoggedOnlineEvaluationHold) {
+    LOG->Trace("ITG Online: released ScreenGameplay for evaluation");
+    m_bLoggedOnlineEvaluationHold = false;
   }
   if (!ok) {
     const bool isOnlineActive = GetITGOnlineIsActive();
