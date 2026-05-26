@@ -6,7 +6,46 @@ local function primary_enabled_player()
 	return enabled and enabled[1] or nil
 end
 
+local function snapshot_key(snapshot)
+	if type(snapshot) ~= "table" then return "" end
+
+	return table.concat({
+		string.format("%.4f", tonumber(snapshot.displayedPercent or snapshot.DisplayedPercent) or 0),
+		string.format("%.4f", tonumber(snapshot.scorePercent or snapshot.ScorePercent) or 0),
+		string.format("%.4f", tonumber(snapshot.exScorePercent or snapshot.ExScorePercent) or 0),
+		tostring(math.floor(tonumber(snapshot.combo or snapshot.Combo) or 0)),
+	}, "|")
+end
+
+local function queue_current_score_if_changed(actor)
+	if not (ITGOnline and ITGOnline.QueueLiveScore and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
+	if tostring(ITGOnline.currentRoom.phase or "") ~= "playing" then return end
+
+	local snapshot = nil
+	if ITGOnline.BuildCurrentScoreSnapshot then
+		snapshot = ITGOnline:BuildCurrentScoreSnapshot()
+	end
+	if type(snapshot) ~= "table" then return end
+
+	local key = snapshot_key(snapshot)
+	if key ~= "" and key ~= actor.lastOnlineScoreSnapshotKey then
+		actor.lastOnlineScoreSnapshotKey = key
+		ITGOnline:QueueLiveScore(snapshot)
+	end
+end
+
 return Def.Actor{
+	OnCommand=function(self)
+		self.lastOnlineScoreSnapshotKey = ""
+		self:queuecommand("FlushOnlineScore")
+	end,
+	FlushOnlineScoreCommand=function(self)
+		queue_current_score_if_changed(self)
+		if ITGOnline and ITGOnline.FlushLiveScore then
+			ITGOnline:FlushLiveScore()
+		end
+		self:sleep(0.20):queuecommand("FlushOnlineScore")
+	end,
 	JudgmentMessageCommand=function(self, params)
 		if not (ITGOnline and ITGOnline.QueueLiveScore and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
 
@@ -18,6 +57,12 @@ return Def.Actor{
 			snapshot = ITGOnline:BuildCurrentScoreSnapshot()
 		end
 		snapshot = snapshot or ITGOnline.lastDisplayedScoreSnapshot
-		if snapshot then ITGOnline:QueueLiveScore(snapshot) end
+		if snapshot then
+			self.lastOnlineScoreSnapshotKey = snapshot_key(snapshot)
+			ITGOnline:QueueLiveScore(snapshot)
+			if ITGOnline.FlushLiveScore then
+				ITGOnline:FlushLiveScore()
+			end
+		end
 	end,
 }
