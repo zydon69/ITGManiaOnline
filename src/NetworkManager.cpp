@@ -41,6 +41,8 @@ NetworkManager* NETWORK =
 namespace {
 constexpr const char* BUILT_IN_HTTP_ALLOW_HOSTS =
     "*.groovestats.com,*.itgmania.com,itgonline.fr,*.itgonline.fr";
+constexpr const char* REQUIRED_ITG_ONLINE_ALLOW_HOSTS =
+    "itgonline.fr,*.itgonline.fr";
 }
 
 Preference<bool> NetworkManager::httpEnabled(
@@ -338,6 +340,22 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
 
   for (const auto& allowedHost : allowedHosts) {
     if (HostMatchesPattern(host, allowedHost)) {
+      return true;
+    }
+  }
+
+  // Older installs can already have Save/Preferences.ini with a stale
+  // HttpAllowHosts value, which would otherwise override the safer compiled
+  // default and block the official ITG Online service. Keep HttpDenyHosts
+  // authoritative above, but never let stale local preferences brick the
+  // production online endpoint.
+  static std::string cachedRequiredRaw;
+  static std::vector<std::string> cachedRequiredHosts;
+  const auto& requiredHosts = CachedHostList(
+      REQUIRED_ITG_ONLINE_ALLOW_HOSTS, cachedRequiredRaw, cachedRequiredHosts);
+
+  for (const auto& requiredHost : requiredHosts) {
+    if (HostMatchesPattern(host, requiredHost)) {
       return true;
     }
   }
