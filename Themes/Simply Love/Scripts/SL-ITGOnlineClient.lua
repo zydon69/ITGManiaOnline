@@ -60,6 +60,7 @@ ITGOnline.liveScoreMinIntervalSeconds = ITGOnline.liveScoreMinIntervalSeconds or
 ITGOnline.lastLeaderboardVersionByRoomId = ITGOnline.lastLeaderboardVersionByRoomId or {}
 ITGOnline.lastPlayStateVersionByRoomId = ITGOnline.lastPlayStateVersionByRoomId or {}
 ITGOnline.lastRoomEventIdByRoomId = ITGOnline.lastRoomEventIdByRoomId or {}
+ITGOnline.promptedPendingJoinRequestIds = ITGOnline.promptedPendingJoinRequestIds or {}
 ITGOnline.lastUnversionedPlayStateFetchAt = ITGOnline.lastUnversionedPlayStateFetchAt or 0
 ITGOnline.processedRealtimeEventIds = ITGOnline.processedRealtimeEventIds or {}
 ITGOnline.processedRealtimeEventOrder = ITGOnline.processedRealtimeEventOrder or {}
@@ -2017,16 +2018,7 @@ function ITGOnline:ApplySyncPayload(decoded)
 	MESSAGEMAN:Broadcast("LobbySearched", self:LobbySearchPayload(decoded))
 
 	for joinRequest in ivalues(decoded.pending_join_requests or {}) do
-		MESSAGEMAN:Broadcast("OnlinePrivateJoinRequest", {
-			join_request = {
-				id = joinRequest.id,
-				room_id = joinRequest.room_id,
-				user_id = joinRequest.user and joinRequest.user.id or nil,
-				status = "pending",
-			},
-			requester = joinRequest.user,
-			room = joinRequest.room,
-		})
+		self:BroadcastPendingJoinRequest(joinRequest, joinRequest.room)
 	end
 
 	for invitation in ivalues(decoded.pending_invitations or {}) do
@@ -2040,6 +2032,43 @@ function ITGOnline:ApplySyncPayload(decoded)
 			room = invitation.room,
 		})
 	end
+end
+
+function ITGOnline:BroadcastPendingJoinRequest(joinRequest, room)
+	if type(joinRequest) ~= "table" or not joinRequest.id then return false end
+
+	local requestId = tostring(joinRequest.id)
+	self.promptedPendingJoinRequestIds = self.promptedPendingJoinRequestIds or {}
+	if self.promptedPendingJoinRequestIds[requestId] then return false end
+
+	local resolvedRoom = room or joinRequest.room or self.currentRoom
+	local roomId = joinRequest.room_id
+		or (resolvedRoom and resolvedRoom.id)
+		or self.currentRoomId
+
+	self.promptedPendingJoinRequestIds[requestId] = true
+	MESSAGEMAN:Broadcast("OnlinePrivateJoinRequest", {
+		join_request = {
+			id = joinRequest.id,
+			room_id = roomId,
+			user_id = joinRequest.user_id or (joinRequest.user and joinRequest.user.id) or nil,
+			status = joinRequest.status or "pending",
+		},
+		requester = joinRequest.user,
+		room = resolvedRoom,
+	})
+	return true
+end
+
+function ITGOnline:BroadcastPendingJoinRequestsFromRoom(room)
+	if type(room) ~= "table" then return 0 end
+	local count = 0
+	for joinRequest in ivalues(room.pending_join_requests or {}) do
+		if self:BroadcastPendingJoinRequest(joinRequest, room) then
+			count = count + 1
+		end
+	end
+	return count
 end
 
 function ITGOnline:SyncPages(accumulator, generation, pageCount)
@@ -3787,6 +3816,9 @@ function ITGOnline:HandleRealtimeEvent(event)
 				local room = self:ApplyRoomSnapshot(payload.room, "realtime_room_event:" .. tostring(name))
 				self:MaybeAutoReadyManager(room)
 				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(room or self.currentRoom or payload.room))
+				if name == "room.join_request.created" then
+					self:BroadcastPendingJoinRequestsFromRoom(room or payload.room)
+				end
 				if room and room.play_state then
 					MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", room.play_state)
 				end
@@ -3800,6 +3832,9 @@ function ITGOnline:HandleRealtimeEvent(event)
 						.. " roomId=" .. tostring(roomId)
 						.. " phase=" .. tostring(decoded.room.phase))
 					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or decoded.room))
+					if name == "room.join_request.created" then
+						self:BroadcastPendingJoinRequestsFromRoom(self.currentRoom or decoded.room)
+					end
 				end
 			end)
 		end
