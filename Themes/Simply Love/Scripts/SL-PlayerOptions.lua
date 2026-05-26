@@ -794,7 +794,6 @@ local Overrides = {
 			if list[1] then
 				if ITGOnline and ITGOnline.currentRoomId then
 					SL.Global.ScreenAfter.PlayerOptions = "ScreenOnlineLobbies"
-					MESSAGEMAN:Broadcast("OnlineConfigReady")
 				else
 					SL.Global.ScreenAfter.PlayerOptions = Branch.GameplayScreen()
 				end
@@ -823,7 +822,6 @@ local Overrides = {
 			if list[1] then
 				if ITGOnline and ITGOnline.currentRoomId then
 					SL.Global.ScreenAfter.PlayerOptions2 = "ScreenOnlineLobbies"
-					MESSAGEMAN:Broadcast("OnlineConfigReady")
 				else
 					SL.Global.ScreenAfter.PlayerOptions2 = Branch.GameplayScreen()
 				end
@@ -853,7 +851,6 @@ local Overrides = {
 			if list[1] then
 				if ITGOnline and ITGOnline.currentRoomId then
 					SL.Global.ScreenAfter.PlayerOptions3 = "ScreenOnlineLobbies"
-					MESSAGEMAN:Broadcast("OnlineConfigReady")
 				else
 					SL.Global.ScreenAfter.PlayerOptions3 = Branch.GameplayScreen()
 				end

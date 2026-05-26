@@ -1,4 +1,31 @@
-local af = Def.ActorFrame{}
+local function online_next_screen_for_options(screenName)
+	if screenName == "ScreenPlayerOptions" then
+		return SL.Global.ScreenAfter.PlayerOptions
+	elseif screenName == "ScreenPlayerOptions2" then
+		return SL.Global.ScreenAfter.PlayerOptions2
+	elseif screenName == "ScreenPlayerOptions3" then
+		return SL.Global.ScreenAfter.PlayerOptions3
+	end
+
+	return nil
+end
+
+local af = Def.ActorFrame{
+	OffCommand=function(self)
+		if not (ITGOnline and ITGOnline.currentRoomId) then
+			return
+		end
+
+		local screen = SCREENMAN:GetTopScreen()
+		local screenName = screen and screen:GetName() or ""
+		if online_next_screen_for_options(screenName) ~= "ScreenOnlineLobbies" then
+			return
+		end
+
+		Trace("[ITGOnline] options_screen_off confirmed screen=" .. tostring(screenName))
+		MESSAGEMAN:Broadcast("OnlineConfigReady")
+	end,
+}
 
 -- this is broadcast from [OptionRow] TitleGainFocusCommand in metrics.ini
 -- we use it to color the active OptionRow's title appropriately by PlayerColor()
