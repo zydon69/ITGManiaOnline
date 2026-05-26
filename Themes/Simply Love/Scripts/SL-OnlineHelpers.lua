@@ -1477,12 +1477,16 @@ CreateOnlineHandler = function()
 						self.inLobby = false
 		          ITGOnline:RequestJoinRoom(params.code, function(ok, decoded, response)
 								self.joinLobbyBusy = false
-								if ok then
-								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-									event="joinLobby",
-									success=true,
-									message="Join request sent. Waiting for the room manager."
-								})
+								if ok and decoded and decoded.room then
+									self.inLobby = true
+									DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
+									MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+								elseif ok then
+									MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+										event="joinLobby",
+										success=true,
+										message="Join request sent. Waiting for the room manager."
+									})
 								elseif decoded and (decoded.error_code == "already_in_room" or decoded.message == "You are already in this room.") and params and params.code then
 								ITGOnline:FetchRoom(params.code, function(fetchOk, fetchDecoded, fetchResponse)
 									if fetchOk and fetchDecoded and fetchDecoded.room then

@@ -257,6 +257,10 @@ local function build_player_action_options(user)
 		return {{label="This Is You", action="cancel"}, {label="Cancel", action="cancel"}}
 	end
 	if user.room and user.room.visibility == "public" then
+		if user.room.id then
+			return {{label="Join Public Lobby", action="join_public_room", room_id=user.room.id}, {label="Cancel", action="cancel"}}
+		end
+
 		return {{label="Join Public Lobby", action="join_user_room"}, {label="Cancel", action="cancel"}}
 	end
 	if user.room and user.room.visibility == "private" then
@@ -333,6 +337,12 @@ local function execute_player_action(option, user)
 		t:playcommand("SetStatus", {text="Contacting player lobby...", showSpinner=true, showPrompt=false})
 		begin_join_timeout(t)
 		MESSAGEMAN:Broadcast("JoinOnlinePlayerRoom", {user_id=user.id})
+	elseif option.action == "join_public_room" and option.room_id then
+		t:GetChild("LobbyContent"):visible(false)
+		t:GetChild("OnlinePlayersContent"):visible(false)
+		t:playcommand("SetStatus", {text="Joining public lobby...", showSpinner=true, showPrompt=false})
+		begin_join_timeout(t)
+		MESSAGEMAN:Broadcast("JoinLobby", {code=option.room_id})
 	end
 end
 
@@ -1614,8 +1624,27 @@ local af = Def.ActorFrame{
 		},
 
 		Def.Quad{
+			Name="OnlinePlayersBorder",
 			InitCommand=function(self)
 				self:zoomto(360,340):x(-120):y(-20):diffuse(Color.White)
+			end,
+			HoverCommand=function(self)
+				if list_selected and lobby_view == "players" then
+					self:diffuse(Color.Green)
+				elseif active_index == 0 then
+					self:diffuse(Color.Yellow)
+				else
+					self:diffuse(Color.White)
+				end
+			end,
+			SelectedCommand=function(self)
+				self:diffuse(list_selected and lobby_view == "players" and Color.Green or Color.White)
+			end,
+			GainFocusCommand=function(self)
+				self:diffuse(Color.Green)
+			end,
+			LoseFocusCommand=function(self)
+				self:diffuse(Color.White)
 			end
 		},
 		Def.Quad{
@@ -1695,6 +1724,153 @@ local af = Def.ActorFrame{
 					else
 						self:diffusealpha(0)
 					end
+				end,
+				LoseFocusCommand=function(self)
+					self:diffusealpha(0)
+				end
+			},
+		},
+		Def.ActorFrame{
+			Name="OnlinePlayersRefreshButton",
+			InitCommand=function(self)
+				local idx = 3
+				local width = 200
+				local height = 40
+				local spacing = 20
+				local mid = #options / 2
+				self:y((idx - 1 - mid) * (spacing + height))
+				self:x(180)
+				self.idx = idx - 1
+			end,
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(200, 40):diffuse(Color.White)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(active_index == self:GetParent().idx and Color.Yellow or Color.White)
+				end,
+				SelectedCommand=function(self)
+					self:diffuse(active_index == self:GetParent().idx and Color.Green or Color.White)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(198, 38):diffuse(Color.Black)
+				end
+			},
+			LoadFont("Common Bold")..{
+				Text="Refresh List",
+				InitCommand=function(self)
+					self:zoom(0.5)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(200, 40):diffuse(color("#424242")):diffusealpha(0)
+				end,
+				SelectedCommand=function(self)
+					self:diffusealpha(active_index ~= self:GetParent().idx and 0.70 or 0)
+				end,
+				LoseFocusCommand=function(self)
+					self:diffusealpha(0)
+				end
+			},
+		},
+		Def.ActorFrame{
+			Name="OnlinePlayersCreateButton",
+			InitCommand=function(self)
+				local idx = 4
+				local width = 200
+				local height = 40
+				local spacing = 20
+				local mid = #options / 2
+				self:y((idx - 1 - mid) * (spacing + height))
+				self:x(180)
+				self.idx = idx - 1
+			end,
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(200, 40):diffuse(Color.White)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(active_index == self:GetParent().idx and Color.Yellow or Color.White)
+				end,
+				SelectedCommand=function(self)
+					self:diffuse(active_index == self:GetParent().idx and Color.Green or Color.White)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(198, 38):diffuse(Color.Black)
+				end
+			},
+			LoadFont("Common Bold")..{
+				Text="Create Lobby",
+				InitCommand=function(self)
+					self:zoom(0.5)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(200, 40):diffuse(color("#424242")):diffusealpha(0)
+				end,
+				SelectedCommand=function(self)
+					self:diffusealpha(active_index ~= self:GetParent().idx and 0.70 or 0)
+				end,
+				LoseFocusCommand=function(self)
+					self:diffusealpha(0)
+				end
+			},
+		},
+		Def.ActorFrame{
+			Name="OnlinePlayersBackButton",
+			InitCommand=function(self)
+				local idx = 5
+				local width = 200
+				local height = 40
+				local spacing = 20
+				local mid = #options / 2
+				self:y((idx - 1 - mid) * (spacing + height))
+				self:x(180)
+				self.idx = idx - 1
+			end,
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(200, 40):diffuse(Color.White)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(active_index == self:GetParent().idx and Color.Yellow or Color.White)
+				end,
+				SelectedCommand=function(self)
+					self:diffuse(active_index == self:GetParent().idx and Color.Green or Color.White)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(198, 38):diffuse(Color.Black)
+				end
+			},
+			LoadFont("Common Bold")..{
+				Text="Go Back",
+				InitCommand=function(self)
+					self:zoom(0.5)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(200, 40):diffuse(color("#424242")):diffusealpha(0)
+				end,
+				SelectedCommand=function(self)
+					self:diffusealpha(active_index ~= self:GetParent().idx and 0.70 or 0)
 				end,
 				LoseFocusCommand=function(self)
 					self:diffusealpha(0)

@@ -3483,8 +3483,12 @@ end
 
 function ITGOnline:RequestJoinRoom(roomId, callback)
 	self.pendingJoinRoomId = roomId
-	self:Request("POST", "/rooms/" .. tostring(roomId) .. "/join-requests", {}, function(ok, decoded, response)
-		if not ok then
+	self:Request("POST", "/rooms/" .. tostring(roomId) .. "/join", {}, function(ok, decoded, response)
+		if ok and decoded and decoded.room then
+			local room = self:ApplyRoomSnapshot(decoded.room, "join_room")
+			decoded.room = room or decoded.room
+			self.pendingJoinRoomId = nil
+		elseif not ok then
 			self.pendingJoinRoomId = nil
 		end
 		if callback then callback(ok, decoded, response) end
