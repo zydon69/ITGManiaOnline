@@ -229,13 +229,21 @@ Branch.AfterSelectMusic = function()
 	--
 	-- TODO: Consider locking the music wheel in this case.
 	if ITGOnline and ITGOnline.currentRoomId and ITGOnline.SelectSongAndMarkLobbyReady then
-		ITGOnline:SelectSongAndMarkLobbyReady()
+		ITGOnline:SelectSongAndMarkLobbyReady(function(ok, decoded, response)
+			if not ok then
+				MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+					event = "selectSong",
+					success = false,
+					message = (decoded and decoded.message) or (response and response.errorMessage) or "Song selection failed."
+				})
+			end
+		end)
 	else
 		MESSAGEMAN:Broadcast("SongSelected")
 	end
 
 	if ITGOnline and ITGOnline.currentRoomId then
-		return "ScreenPlayerOptions"
+		return "ScreenOnlineLobbies"
 	end
 
 	if SCREENMAN:GetTopScreen():GetGoToOptions() then

@@ -15,6 +15,10 @@ local function local_displayed_percent()
 	local state = play_state_for_user(local_user_id())
 	if state ~= "" and state ~= "playing" then return nil end
 	if ITGOnline and ITGOnline.lastDisplayedScoreSnapshot then
+		local age = GetTimeSinceStart() - (tonumber(ITGOnline.lastDisplayedScoreSnapshotAt) or 0)
+		if age > 1.0 and not ITGOnline.liveScoreInFlight and ITGOnline.pendingLiveScoreSnapshot == nil then
+			return nil
+		end
 		local value = tonumber(ITGOnline.lastDisplayedScoreSnapshot.displayedPercent)
 		if value ~= nil then
 			return math.max(0, math.min(100, value))
@@ -104,7 +108,7 @@ local function rows_from_lobby_state(data)
 		if player.exScore ~= nil or player.score ~= nil or player.playState ~= nil then
 			local score_percent = tonumber(player.score)
 			local ex_percent = tonumber(player.exScore)
-			-- `player.score` is currently accuracy in LobbyState payload.
+			-- `player.score` is the canonical displayed score percent reported by the client.
 			-- Prefer EX/score-derived percentage for consistency with gameplay score.
 			local percent = ex_percent
 			if percent == nil then

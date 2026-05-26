@@ -728,6 +728,10 @@ int HttpRequestFuture::Cancel(lua_State* L) {
 WebSocketHandle::~WebSocketHandle() {
   closed = true;
   webSocket.stop();
+  if (auto closeCallback = std::move(onClose)) {
+    onClose = nullptr;
+    closeCallback();
+  }
 }
 
 int WebSocketHandle::Collect(lua_State* L) {

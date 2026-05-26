@@ -238,6 +238,8 @@ end
 local OnlineSongKey = function(data)
 	if not data or not data.songInfo then return "" end
 	return tostring(data.roomId or data.code or "")
+		.. "|" .. tostring(data.songInfo.roundId or "")
+		.. "|" .. tostring(data.songInfo.songHash or "")
 		.. "|" .. tostring(data.songInfo.chartHash or data.songInfo.songPath or "")
 		.. "|" .. tostring(data.songInfo.selectedAt or "")
 end
@@ -251,11 +253,9 @@ local ApplyOnlineSongSelection = function(songInfo)
 		previousSteps[player] = GAMESTATE:GetCurrentSteps(player)
 	end
 	local restorePreviousSelection = function()
-		if previousSong then
-			GAMESTATE:SetCurrentSong(previousSong)
-		end
+		GAMESTATE:SetCurrentSong(previousSong)
 		for player, steps in pairs(previousSteps) do
-			if steps then GAMESTATE:SetCurrentSteps(player, steps) end
+			GAMESTATE:SetCurrentSteps(player, steps)
 		end
 	end
 
@@ -308,29 +308,38 @@ local ApplyOnlineSongSelection = function(songInfo)
 		end
 	end
 
-	GAMESTATE:SetCurrentSong(song)
+	local localPayload = nil
+	if ITGOnline and ITGOnline.BuildSongPayloadFor then
+		localPayload = ITGOnline:BuildSongPayloadFor(song, matchedSteps)
+	elseif ITGOnline and ITGOnline.BuildSongPayload then
+		GAMESTATE:SetCurrentSong(song)
+		if matchedSteps then
+			for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
+				GAMESTATE:SetCurrentSteps(player, matchedSteps)
+			end
+		end
+		localPayload = ITGOnline:BuildSongPayload()
+		restorePreviousSelection()
+	end
+	if localPayload then
+				if songInfo.songHash and songInfo.songHash ~= "" and localPayload.song_hash ~= songInfo.songHash then
+					SM("Online song hash mismatch for: " .. tostring(songInfo.songPath))
+					MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="hash_mismatch"})
+					return false
+				end
+				if songInfo.chartHash and songInfo.chartHash ~= "" and localPayload.chart_hash ~= songInfo.chartHash then
+					SM("Online chart hash mismatch for: " .. tostring(songInfo.songPath))
+					MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="hash_mismatch"})
+					return false
+				end
+			end
 
+	GAMESTATE:SetCurrentSong(song)
 	if matchedSteps then
 		for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
 			GAMESTATE:SetCurrentSteps(player, matchedSteps)
 		end
 	end
-
-	local localPayload = ITGOnline and ITGOnline.BuildSongPayload and ITGOnline:BuildSongPayload() or nil
-	if localPayload then
-			if songInfo.songHash and songInfo.songHash ~= "" and localPayload.song_hash ~= songInfo.songHash then
-				SM("Online song hash mismatch for: " .. tostring(songInfo.songPath))
-				MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="hash_mismatch"})
-				restorePreviousSelection()
-				return false
-			end
-			if songInfo.chartHash and songInfo.chartHash ~= "" and localPayload.chart_hash ~= songInfo.chartHash then
-				SM("Online chart hash mismatch for: " .. tostring(songInfo.songPath))
-				MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="hash_mismatch"})
-				restorePreviousSelection()
-				return false
-			end
-		end
 
 	MESSAGEMAN:Broadcast("OnlineSongAvailable", {songInfo=songInfo})
 	return true
@@ -1192,6 +1201,12 @@ CreateOnlineHandler = function()
 							if ITGOnline.MarkSongLoaded then
 								ITGOnline:MarkSongLoaded(function(ok, decoded, response)
 									if not ok then
+										UnlockOnlineInput()
+										if screen then
+											screen:PauseGame(false)
+											screen:SetNextScreenName("ScreenOnlineLobbies")
+											screen:StartTransitioningScreen("SM_GoToNextScreen")
+										end
 										MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 											event="songLoaded",
 											success=false,
