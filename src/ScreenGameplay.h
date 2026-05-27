@@ -369,7 +369,9 @@ class ScreenGameplay : public ScreenWithMenuElements {
   // -Kyz
   bool m_delaying_ready_announce;
   RageTimer m_timerOnlineEvaluationHoldMessage;
+  RageTimer m_timerOnlineEvaluationHoldStarted;
   bool m_bOnlineEvaluationHoldMessagePending;
+  bool m_bOnlineEvaluationHoldStarted;
   bool m_bLoggedStageEndState;
   bool m_bLoggedOnlineEvaluationHold;
 };

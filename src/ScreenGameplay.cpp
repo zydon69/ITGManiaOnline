@@ -115,6 +115,8 @@ static ThemeMetric<bool> FORCE_IMMEDIATE_FAIL_FOR_BATTERY(
 
 AutoScreenMessage(SM_PlayGo);
 
+static constexpr float ITGONLINE_EVALUATION_HOLD_MAX_SECONDS = 30.0f;
+
 static bool GetITGOnlineSecondsUntilScheduledStart(float& secondsUntilStart) {
   if (LUA == nullptr) {
     return false;
@@ -449,6 +451,7 @@ ScreenGameplay::ScreenGameplay() {
   m_pSongForeground = nullptr;
   m_delaying_ready_announce = false;
   m_bOnlineEvaluationHoldMessagePending = false;
+  m_bOnlineEvaluationHoldStarted = false;
   m_bLoggedStageEndState = false;
   m_bLoggedOnlineEvaluationHold = false;
   GAMESTATE->m_AdjustTokensBySongCostForFinalStageCheck = false;
@@ -2928,11 +2931,26 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
     m_bOnlineEvaluationHoldMessagePending = false;
 
     if (OnlineShouldHoldBeforeEvaluation()) {
-      m_bOnlineEvaluationHoldMessagePending = true;
-      m_timerOnlineEvaluationHoldMessage.Touch();
-      this->PostScreenMessage(SM_LeaveGameplay, 0.25f);
-      return;
+      if (!m_bOnlineEvaluationHoldStarted) {
+        m_bOnlineEvaluationHoldStarted = true;
+        m_timerOnlineEvaluationHoldStarted.Touch();
+      } else if (m_timerOnlineEvaluationHoldStarted.Ago() >=
+                 ITGONLINE_EVALUATION_HOLD_MAX_SECONDS) {
+        LOG->Warn(
+            "ITG Online: evaluation hold timed out after %.2fs; continuing to "
+            "evaluation",
+            m_timerOnlineEvaluationHoldStarted.Ago());
+        m_bOnlineEvaluationHoldStarted = false;
+      } else {
+        m_bOnlineEvaluationHoldMessagePending = true;
+        m_timerOnlineEvaluationHoldMessage.Touch();
+        this->PostScreenMessage(SM_LeaveGameplay, 0.25f);
+        return;
+      }
+    } else {
+      m_bOnlineEvaluationHoldStarted = false;
     }
+
     m_bOnlineEvaluationHoldMessagePending = false;
 
     GAMESTATE->m_DanceDuration = GAMESTATE->m_DanceStartTime.Ago();
