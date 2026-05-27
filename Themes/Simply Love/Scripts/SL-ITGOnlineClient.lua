@@ -27,6 +27,8 @@ ITGOnline.currentRoom = ITGOnline.currentRoom or nil
 ITGOnline.currentSongPayload = ITGOnline.currentSongPayload or nil
 ITGOnline.currentRoomRoundKey = ITGOnline.currentRoomRoundKey or ""
 ITGOnline.lastResultSongPayload = ITGOnline.lastResultSongPayload or nil
+ITGOnline.activeGameplaySongPayload = ITGOnline.activeGameplaySongPayload or nil
+ITGOnline.activeGameplayRoundKey = ITGOnline.activeGameplayRoundKey or ""
 ITGOnline.pendingJoinRoomId = ITGOnline.pendingJoinRoomId or nil
 ITGOnline.lastScoreSentAt = ITGOnline.lastScoreSentAt or 0
 ITGOnline.scheduledStartLocalTime = ITGOnline.scheduledStartLocalTime or nil
@@ -85,6 +87,11 @@ ITGOnline.managerAutoReadyCompletedKey = ITGOnline.managerAutoReadyCompletedKey 
 ITGOnline.readyRequestInFlight = ITGOnline.readyRequestInFlight or {}
 ITGOnline.readyRequestLastResult = ITGOnline.readyRequestLastResult or {}
 ITGOnline.readyRequestReplayWindowSeconds = ITGOnline.readyRequestReplayWindowSeconds or 1.0
+ITGOnline.onlineOptionsReadyDeadlineKey = ITGOnline.onlineOptionsReadyDeadlineKey or ""
+ITGOnline.onlineOptionsReadyDeadlineAt = ITGOnline.onlineOptionsReadyDeadlineAt or 0
+ITGOnline.onlineOptionsReadyTimeoutInFlightKey = ITGOnline.onlineOptionsReadyTimeoutInFlightKey or ""
+ITGOnline.onlineOptionsReadyExitSuppressedKey = ITGOnline.onlineOptionsReadyExitSuppressedKey or ""
+ITGOnline.onlineOptionsReadyTimeoutSeconds = ITGOnline.onlineOptionsReadyTimeoutSeconds or 30
 ITGOnline.serverClockOffsetSeconds = ITGOnline.serverClockOffsetSeconds or nil
 ITGOnline.lastClockSyncAt = ITGOnline.lastClockSyncAt or 0
 ITGOnline.lastClockRttSeconds = ITGOnline.lastClockRttSeconds or nil
@@ -1006,6 +1013,114 @@ function ITGOnline:IsCurrentUserReadyInRoom(room)
 	return false
 end
 
+function ITGOnline:OnlineOptionsReadyKey()
+	if not self.currentRoomId then return "" end
+	local key = self.PlayStateKey and self:PlayStateKey() or ""
+	if self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(key) then
+		return key
+	end
+
+	return tostring(self.currentRoomId) .. "|" .. tostring(self.currentRoomRoundKey or "")
+end
+
+function ITGOnline:ClearOnlineOptionsReadyDeadline(source)
+	if self.onlineOptionsReadyDeadlineKey ~= "" then
+		online_flow_trace("options_ready_deadline_cleared source=" .. tostring(source or "unknown")
+			.. " key=" .. tostring(self.onlineOptionsReadyDeadlineKey))
+	end
+	self.onlineOptionsReadyDeadlineKey = ""
+	self.onlineOptionsReadyDeadlineAt = 0
+	self.onlineOptionsReadyTimeoutInFlightKey = ""
+	self.onlineOptionsReadyExitSuppressedKey = ""
+end
+
+function ITGOnline:BeginOnlineOptionsReadyDeadline(seconds, source)
+	if not self.currentRoomId or not self.currentRoom then return nil end
+	if self:NormalizeRoomPhase(self.currentRoom.phase) ~= "config" then return nil end
+	if self:IsCurrentUserReadyInRoom(self.currentRoom) then
+		self:ClearOnlineOptionsReadyDeadline("already_ready")
+		return nil
+	end
+
+	local key = self:OnlineOptionsReadyKey()
+	if key == "" then return nil end
+
+	if self.onlineOptionsReadyDeadlineKey ~= key then
+		self.onlineOptionsReadyDeadlineKey = key
+		self.onlineOptionsReadyDeadlineAt = GetTimeSinceStart() + (tonumber(seconds) or tonumber(self.onlineOptionsReadyTimeoutSeconds) or 30)
+		self.onlineOptionsReadyTimeoutInFlightKey = ""
+		self.onlineOptionsReadyExitSuppressedKey = ""
+		online_flow_trace("options_ready_deadline_started source=" .. tostring(source or "unknown")
+			.. " key=" .. tostring(key)
+			.. " deadline=" .. tostring(self.onlineOptionsReadyDeadlineAt))
+	end
+
+	return math.max(0, (tonumber(self.onlineOptionsReadyDeadlineAt) or 0) - GetTimeSinceStart())
+end
+
+function ITGOnline:OnlineOptionsReadyRemaining()
+	if self.onlineOptionsReadyDeadlineKey == "" then return nil end
+	if self.onlineOptionsReadyDeadlineKey ~= self:OnlineOptionsReadyKey() then
+		self:ClearOnlineOptionsReadyDeadline("stale_key")
+		return nil
+	end
+	if self.currentRoom and self:IsCurrentUserReadyInRoom(self.currentRoom) then
+		self:ClearOnlineOptionsReadyDeadline("ready")
+		return nil
+	end
+	return math.max(0, (tonumber(self.onlineOptionsReadyDeadlineAt) or 0) - GetTimeSinceStart())
+end
+
+function ITGOnline:ShouldSuppressOnlineConfigReadyOnOptionsExit()
+	local key = self:OnlineOptionsReadyKey()
+	return key ~= "" and self.onlineOptionsReadyExitSuppressedKey == key
+end
+
+function ITGOnline:ExpireOnlineOptionsReady(source, callback)
+	if not self.currentRoomId or not self.currentRoom then
+		if callback then callback(false) end
+		return
+	end
+	if self:NormalizeRoomPhase(self.currentRoom.phase) ~= "config" then
+		if callback then callback(false) end
+		return
+	end
+	if self:IsCurrentUserReadyInRoom(self.currentRoom) then
+		self:ClearOnlineOptionsReadyDeadline("expire_already_ready")
+		if callback then callback(false) end
+		return
+	end
+
+	local key = self:OnlineOptionsReadyKey()
+	if key == "" then
+		if callback then callback(false) end
+		return
+	end
+	if self.onlineOptionsReadyTimeoutInFlightKey == key then
+		if callback then callback(true) end
+		return
+	end
+
+	self.onlineOptionsReadyTimeoutInFlightKey = key
+	self.onlineOptionsReadyExitSuppressedKey = key
+	online_flow_trace("options_ready_deadline_expired source=" .. tostring(source or "unknown")
+		.. " key=" .. tostring(key))
+
+	MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+		event = "ready",
+		success = false,
+		message = "Options timeout. You left the lobby."
+	})
+
+	self:LeaveRoom(function(ok, decoded, response)
+		if self.onlineOptionsReadyTimeoutInFlightKey == key then
+			self.onlineOptionsReadyTimeoutInFlightKey = ""
+		end
+		self:ClearOnlineOptionsReadyDeadline("timeout_leave")
+		if callback then callback(ok, decoded, response) end
+	end)
+end
+
 function ITGOnline:ManagerAutoReadyKey(room, readyPhase)
 	return tostring(readyPhase or "") .. "|" .. tostring(self:RoomSongRoundKey(room))
 end
@@ -1134,6 +1249,33 @@ function ITGOnline:SelectedSongRoundKey(song, roomId)
 		.. tostring(song.selected_at or song.selectedAt or "")
 end
 
+function ITGOnline:CaptureActiveGameplayRound(source)
+	local song = (self.currentRoom and self.currentRoom.selected_song) or self.currentSongPayload
+	if not song or not song.chart_hash then return "" end
+
+	local roundKey = self:SelectedSongRoundKey(song, self.currentRoomId)
+	if roundKey == "" then return "" end
+
+	if self.activeGameplayRoundKey ~= roundKey then
+		online_flow_trace("active_gameplay_round source=" .. tostring(source or "unknown")
+			.. " previous=" .. tostring(self.activeGameplayRoundKey or "")
+			.. " current=" .. tostring(roundKey))
+	end
+
+	self.activeGameplaySongPayload = song
+	self.activeGameplayRoundKey = roundKey
+	return roundKey
+end
+
+function ITGOnline:ClearActiveGameplayRound(source)
+	if self.activeGameplayRoundKey ~= "" then
+		online_flow_trace("active_gameplay_round_cleared source=" .. tostring(source or "unknown")
+			.. " previous=" .. tostring(self.activeGameplayRoundKey or ""))
+	end
+	self.activeGameplaySongPayload = nil
+	self.activeGameplayRoundKey = ""
+end
+
 function ITGOnline:RoomSongSelectedAtMs(room)
 	local value = room and room.selected_song and (room.selected_song.selected_at or room.selected_song.selectedAt) or nil
 	return iso_utc_milliseconds(value)
@@ -1242,6 +1384,9 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 
 	self.currentRoomId = room.id
 	self.currentRoom = room
+	if self:NormalizeRoomPhase(room.phase) ~= "config" then
+		self:ClearOnlineOptionsReadyDeadline("room_snapshot_" .. tostring(room.phase or "unknown"))
+	end
 
 	if room.selected_song and room.selected_song.song_hash and room.selected_song.chart_hash then
 		local phase = self:NormalizeRoomPhase(room.phase)
@@ -1250,10 +1395,14 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		else
 			self.currentSongPayload = room.selected_song
 			self.currentRoomRoundKey = self:RoomSongRoundKey(room)
+			if phase == "lobby" or phase == "lobby_ready" or phase == "config" then
+				self:ClearActiveGameplayRound("room_snapshot_" .. tostring(phase))
+			end
 		end
 	elseif self:NormalizeRoomPhase(room.phase) ~= "results" then
 		self.currentSongPayload = nil
 		self.currentRoomRoundKey = ""
+		self:ClearActiveGameplayRound("room_snapshot_no_song")
 	end
 
 	if self.MaybeAutoReadyManager then
@@ -1353,6 +1502,17 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 	end
 
 	local roundKey = self.PlayStateKey and self:PlayStateKey() or ""
+	local activeRoundKey = tostring(self.activeGameplayRoundKey or "")
+	if self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(activeRoundKey)
+		and self.PlayStateKeyIsValid(roundKey)
+		and roundKey ~= activeRoundKey
+	then
+		online_flow_trace("mark_terminal_skipped source=" .. tostring(source or "unknown")
+			.. " reason=stale_round_key"
+			.. " active=" .. tostring(activeRoundKey)
+			.. " incoming=" .. tostring(roundKey))
+		return false
+	end
 
 	if self.onlineGameplayEvaluationMarkKey == roundKey then
 		return true
@@ -1702,13 +1862,16 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 		.. " nextIsSelectMusic=" .. tostring(nextIsSelectMusic))
 
 	if nextIsGameplay and roomPhase == "playing" then
+		self:CaptureActiveGameplayRound("entered_gameplay")
 		online_flow_trace("mark_play_entered reason=entered_gameplay")
 		self:MarkPlayEntered()
-		elseif previousWasGameplay and nextIsEvaluation and (roomPhase == "starting" or roomPhase == "playing" or roomPhase == "results") then
-			-- Fallback only. The normal online path marks completion while still
-			-- on ScreenGameplay so every client can wait there before results.
-			self.onlineEvaluationExitRequested = false
-			self:MarkGameplayCompleteForEvaluation("screen_transition")
+	elseif nextIsGameplay and roomPhase == "starting" then
+		self:CaptureActiveGameplayRound("entered_gameplay_starting")
+	elseif previousWasGameplay and nextIsEvaluation and (roomPhase == "starting" or roomPhase == "playing" or roomPhase == "results") then
+		-- Fallback only. The normal online path marks completion while still
+		-- on ScreenGameplay so every client can wait there before results.
+		self.onlineEvaluationExitRequested = false
+		self:MarkGameplayCompleteForEvaluation("screen_transition")
 	elseif previousWasGameplay and nextIsLobby and roomPhase == "playing" then
 		online_flow_trace("mark_returned_to_lobby reason=gameplay_to_lobby")
 		self:MarkReturnedToLobby()
@@ -1988,6 +2151,8 @@ function ITGOnline:Disconnect()
 	self.currentSongPayload = nil
 	self.currentRoomRoundKey = ""
 	self.lastResultSongPayload = nil
+	self.activeGameplaySongPayload = nil
+	self.activeGameplayRoundKey = ""
 	self.lastDisplayedScoreSnapshot = nil
 	self.lastDisplayedScoreSnapshotAt = 0
 	self.pendingLiveScoreSnapshot = nil
@@ -2013,6 +2178,7 @@ function ITGOnline:Disconnect()
 	self.managerAutoReadyCompletedKey = ""
 	self.readyRequestInFlight = {}
 	self.readyRequestLastResult = {}
+	self:ClearOnlineOptionsReadyDeadline("disconnect")
 	self.onlineGameplayEnteredKey = ""
 	self.onlineGameplayReturnedKey = ""
 	self.onlineGameplayReturnedInFlightKey = ""
@@ -2411,6 +2577,7 @@ function ITGOnline:SelectSong(callback)
 			self.onlineGameplayEvaluationMinimumHoldUntil = 0
 			self.onlineGameplayAllTerminalHoldKey = ""
 			self.onlineGameplayAllTerminalHoldUntil = 0
+			self:ClearActiveGameplayRound("song_selection")
 			self.lastFinalScoreKey = ""
 			self.lastFinalScoreInFlightKey = ""
 			self.lastAcceptedScoreFingerprint = nil
@@ -2997,6 +3164,9 @@ function ITGOnline:SetReady(phase, isReady, callback)
 		if ok and decoded and decoded.room then
 			local room = self:ApplyRoomSnapshot(decoded.room, "ready")
 			decoded.room = room or decoded.room
+			if phase == "config_ready" and isReady then
+				self:ClearOnlineOptionsReadyDeadline("config_ready")
+			end
 		end
 		local roomPhase = decoded and decoded.room and decoded.room.phase
 		local errorCode = decoded and decoded.error_code
@@ -3265,6 +3435,15 @@ end
 function ITGOnline:CurrentSelectedSongPayload()
 	local roomSong = self.currentRoom and self.currentRoom.selected_song or nil
 	local phase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase or nil)
+	local screen = SCREENMAN:GetTopScreen()
+	local screenName = screen and screen:GetName() or tostring(self.currentScreenName or "")
+	if self:IsOnlineGameplayScreen(screenName)
+		and self.activeGameplaySongPayload
+		and self.PlayStateKeyIsValid
+		and self:PlayStateKeyIsValid(self.activeGameplayRoundKey)
+	then
+		return self.activeGameplaySongPayload
+	end
 	if roomSong and roomSong.chart_hash then
 		if phase == "results" then
 			return self.lastResultSongPayload or roomSong
@@ -3819,6 +3998,7 @@ function ITGOnline:LeaveRoom(callback)
 			self.currentRoomRoundKey = ""
 			self.lastResultSongPayload = nil
 			self.pendingJoinRoomId = nil
+			self:ClearOnlineOptionsReadyDeadline("leave_room")
 		end
 		if callback then callback(ok or gone, decoded, response) end
 	end)

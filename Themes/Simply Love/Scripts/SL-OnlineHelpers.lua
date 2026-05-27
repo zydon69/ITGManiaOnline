@@ -825,7 +825,7 @@ DisplayLobbyState = function(data, actor)
 				if player.playState == "finished" then
 					stateText = " - finished [OK]"
 				elseif player.playState == "failed" then
-					stateText = " - failed [X]"
+					stateText = " - failed [F]"
 				elseif player.playState == "returned_to_lobby" then
 					stateText = " - left song [X]"
 				elseif player.playState == "disconnected" then
@@ -868,7 +868,7 @@ DisplayLobbyState = function(data, actor)
 			local score = math.floor(tonumber(result.score) or 0)
 			local scorePercent = tonumber(result.score_percent)
 			local accuracy = tonumber(result.accuracy) or 0
-			local failedText = result.failed and " failed" or ""
+			local failedText = result.failed and " failed [F]" or ""
 			local scoreText = scorePercent ~= nil
 				and (string.format("%.2f", scorePercent) .. "% (" .. tostring(score) .. " pts)")
 				or (tostring(score) .. " pts")

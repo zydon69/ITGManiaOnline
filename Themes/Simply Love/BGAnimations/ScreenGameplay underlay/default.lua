@@ -6,10 +6,27 @@ end
 local Players = GAMESTATE:GetHumanPlayers()
 local holdingCtrl = false
 
+local function online_gameplay_phase()
+	if not ITGOnline or not ITGOnline.currentRoom then return "" end
+	if not ITGOnline.NormalizeRoomPhase then return tostring(ITGOnline.currentRoom.phase or "") end
+	return ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase)
+end
+
+local function online_gameplay_routes_back_to_lobby()
+	local phase = online_gameplay_phase()
+	return ITGOnline
+		and ITGOnline.currentRoomId
+		and (phase == "starting" or phase == "playing" or phase == "results")
+end
+
 local RestartHandler = function(event)
 	if not event then return end
 
 	if event.type == "InputEventType_FirstPress" then
+		if event.GameButton == "Back" and online_gameplay_routes_back_to_lobby() then
+			SCREENMAN:GetTopScreen():SetNextScreenName("ScreenOnlineLobbies")
+		end
+
 		if event.DeviceInput.button == "DeviceButton_left ctrl" then
 			holdingCtrl = true
 		elseif event.DeviceInput.button == "DeviceButton_r" then
@@ -27,6 +44,11 @@ end
 local t = Def.ActorFrame{
 	Name="GameplayUnderlay",
 	OnCommand=function(self)
+		if ITGOnline and ITGOnline.currentRoomId then
+			SCREENMAN:GetTopScreen():AddInputCallback(RestartHandler)
+			return
+		end
+
 		if ThemePrefs.Get("KeyboardFeatures") and PREFSMAN:GetPreference("EventMode") and not GAMESTATE:IsCourseMode() then
 			SCREENMAN:GetTopScreen():AddInputCallback(RestartHandler)
 		end

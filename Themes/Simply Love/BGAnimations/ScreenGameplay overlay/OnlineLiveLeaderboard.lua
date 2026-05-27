@@ -3,8 +3,8 @@ local play_state_for_user
 
 local function compact_name(name)
 	name = tostring(name or "Player")
-	if #name <= 14 then return name end
-	return name:sub(1, 11) .. "..."
+	if #name <= 19 then return name end
+	return name:sub(1, 16) .. "..."
 end
 
 local function local_user_id()
@@ -59,12 +59,12 @@ end
 
 local function terminal_flags(state, explicit_failed)
 	state = tostring(state or "")
+	local failed = explicit_failed == true or state == "failed"
+	local exited = state == "returned_to_lobby" or state == "disconnected"
 	return {
-		finished = state == "finished",
-		failed = state ~= "finished" and (explicit_failed == true
-			or state == "failed"
-			or state == "returned_to_lobby"
-			or state == "disconnected"),
+		finished = state == "finished" and not failed,
+		failed = failed,
+		exited = exited,
 	}
 end
 
@@ -98,6 +98,7 @@ local function rows_from_leaderboard(leaderboard)
 			name = tostring(user.name or "Player"),
 			percent = percent or 0,
 			failed = flags.failed,
+			exited = flags.exited,
 			finished = flags.finished,
 			play_state = play_state,
 		}
@@ -130,6 +131,7 @@ local function rows_from_lobby_state(data)
 				name = tostring(player.profileName or "Player"),
 				percent = percent or 0,
 				failed = flags.failed,
+				exited = flags.exited,
 				finished = flags.finished,
 				play_state = tostring(player.playState or ""),
 			}
@@ -155,9 +157,9 @@ local function update_rows(frame, rows)
 		if row and data then
 			local label = row:GetChild("Label")
 			local status = row:GetChild("Status")
-			local statusText = data.failed and "X" or (data.finished and "OK" or "")
+			local statusText = data.failed and "F" or (data.exited and "X" or (data.finished and "OK" or ""))
 			local rowColor = color("#ffffff")
-			if data.failed then
+			if data.failed or data.exited then
 				rowColor = color("#ff3b30")
 			elseif data.finished then
 				rowColor = color("#66ff99")
