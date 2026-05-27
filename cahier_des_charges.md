@@ -364,6 +364,109 @@ Fréquence recommandée :
 
 Le serveur calcule ou relaie le classement et le diffuse aux membres du salon.
 
+## Qualité release et validation avant diffusion
+
+Le mode online ajoute du réseau, des overlays temps réel et des transitions synchronisées dans un moteur de jeu de rythme.
+Une version qui compile n'est donc pas considérée comme publiable.
+
+Avant toute diffusion publique ou semi-publique d'un build, le projet doit appliquer une discipline de release stricte.
+
+### Gel fonctionnel
+
+Avant une release destinée à des joueurs externes :
+
+- appliquer un gel fonctionnel d'au moins 2 semaines ;
+- ne plus merger de nouvelles fonctionnalités pendant cette période ;
+- accepter uniquement les corrections de bugs, corrections de crash, corrections de sécurité et corrections de packaging ;
+- refuser les refactors larges non indispensables ;
+- reporter les mises à jour upstream non critiques après la release.
+
+Une période de tournoi, d'événement public ou de test multi-joueurs important ne doit jamais servir de bêta implicite.
+
+### Builds testés
+
+Les builds testés doivent être produits exactement comme les builds distribués.
+
+Le projet doit distinguer explicitement :
+
+- build local développeur ;
+- build CI éventuel ;
+- build release ;
+- build signé ;
+- build notarisé si applicable ;
+- build distribué aux testeurs.
+
+Le build distribué aux joueurs doit avoir été validé dans sa forme finale.
+Il ne suffit pas de tester une version compilée autrement.
+
+### Tests obligatoires avant release client
+
+Chaque release du jeu doit valider au minimum :
+
+- lancement propre du `.app` final sur une machine propre ;
+- connexion online ;
+- création de salon ;
+- join d'un deuxième joueur ;
+- sélection de chanson ;
+- passage écran options ;
+- retour salon avec états ready ;
+- lancement synchronisé ;
+- score live en gameplay ;
+- fin de chanson ;
+- maintien gameplay jusqu'aux états terminaux ;
+- écran d'évaluation ;
+- retour salon ;
+- nouvelle chanson dans le même salon ;
+- fermeture brutale du client puis reprise propre ;
+- déconnexion réseau temporaire puis resynchronisation.
+
+### Tests longs anti-drift et mémoire
+
+Un jeu de rythme ne peut pas tolérer une dérive progressive du timing.
+
+Avant release, il faut exécuter des tests longs :
+
+- chansons longues ou autoplay d'au moins 10 à 20 minutes ;
+- observation de la dérive audio/visuelle ;
+- observation du CPU ;
+- observation de la mémoire ;
+- observation du framerate ;
+- observation des logs ;
+- vérification que l'overlay online ne crée pas de stutter ;
+- vérification que l'envoi de scores ne crée pas de tempête HTTP ;
+- vérification que le WebSocket ne provoque pas de fuite mémoire.
+
+Tout nouveau drift de synchronisation, fuite mémoire ou stutter gameplay est bloquant pour une release.
+
+### Testeurs
+
+Les changements moteur, réseau, timing, audio, input, overlay gameplay ou packaging doivent être testés par plusieurs personnes avant diffusion.
+
+Les testeurs doivent recevoir :
+
+- le build final ou un build strictement équivalent ;
+- la liste des scénarios à vérifier ;
+- les logs à remonter ;
+- les conditions de test attendues ;
+- une procédure simple pour signaler drift, crash, désynchronisation, freeze ou fuite mémoire.
+
+### Critères bloquants
+
+Une release doit être bloquée si l'un des points suivants est constaté :
+
+- drift audio/notes progressif ;
+- fuite mémoire répétable ;
+- stutter pendant gameplay ;
+- score live incohérent ;
+- relance involontaire d'une chanson ;
+- transition online bloquée ;
+- joueur coincé en salon, options, gameplay ou évaluation ;
+- échec de connexion sur le serveur de production ;
+- pin TLS invalide ou non testé ;
+- build signé refusé par macOS ;
+- crash à la fin d'une chanson ;
+- logs d'erreur répétés pendant une partie normale.
+
 ### Anti-triche
 
 Pour le prototype, le serveur peut faire confiance au client.
