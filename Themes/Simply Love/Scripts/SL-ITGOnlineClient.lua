@@ -60,6 +60,8 @@ ITGOnline.pendingLiveScoreRoundKey = ITGOnline.pendingLiveScoreRoundKey or ""
 ITGOnline.liveScoreInFlight = ITGOnline.liveScoreInFlight or false
 ITGOnline.liveScoreNextAttemptAt = ITGOnline.liveScoreNextAttemptAt or 0
 ITGOnline.liveScoreMinIntervalSeconds = ITGOnline.liveScoreMinIntervalSeconds or 0.35
+ITGOnline.liveScoreEndgameWindowSeconds = ITGOnline.liveScoreEndgameWindowSeconds or 6
+ITGOnline.liveScoreEndgameIntervalSeconds = ITGOnline.liveScoreEndgameIntervalSeconds or 0.20
 ITGOnline.lastLeaderboardVersionByRoomId = ITGOnline.lastLeaderboardVersionByRoomId or {}
 ITGOnline.lastPlayStateVersionByRoomId = ITGOnline.lastPlayStateVersionByRoomId or {}
 ITGOnline.lastRoomEventIdByRoomId = ITGOnline.lastRoomEventIdByRoomId or {}
@@ -2825,6 +2827,56 @@ function ITGOnline:HasPendingLiveScore()
 	return self.pendingLiveScoreSnapshot ~= nil or self.liveScoreInFlight == true
 end
 
+function ITGOnline:LiveScoreMinIntervalSeconds()
+	local normalInterval = tonumber(self.liveScoreMinIntervalSeconds) or 0.35
+	local endgameInterval = tonumber(self.liveScoreEndgameIntervalSeconds) or normalInterval
+	local endgameWindow = tonumber(self.liveScoreEndgameWindowSeconds) or 6
+	if endgameInterval >= normalInterval or endgameWindow <= 0 then
+		return normalInterval
+	end
+
+	local roomPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+	if roomPhase ~= "playing" then
+		return normalInterval
+	end
+
+	local song = self.CurrentSelectedSongPayload and self:CurrentSelectedSongPayload() or nil
+	local duration = tonumber(song and (song.chart_duration_seconds or song.music_length_seconds))
+	if duration == nil or duration <= 0 then
+		return normalInterval
+	end
+
+	local rate = tonumber(song and song.rate) or 1
+	rate = math.max(0.25, math.min(3, rate))
+	local expectedPlaySeconds = duration / rate
+
+	local player = first_enabled_player()
+	if not player or not GAMESTATE or not GAMESTATE.GetPlayerState then
+		return normalInterval
+	end
+
+	local ok, position = pcall(function()
+		local songPositionState = GAMESTATE:GetPlayerState(player):GetSongPosition()
+		local visibleOk, visibleSeconds = pcall(function()
+			return songPositionState:GetMusicSecondsVisible()
+		end)
+		if visibleOk and tonumber(visibleSeconds) then
+			return tonumber(visibleSeconds)
+		end
+		return tonumber(songPositionState:GetMusicSeconds())
+	end)
+	if not ok or tonumber(position) == nil then
+		return normalInterval
+	end
+
+	local remaining = expectedPlaySeconds - math.max(0, tonumber(position) or 0)
+	if remaining >= 0 and remaining <= endgameWindow then
+		return endgameInterval
+	end
+
+	return normalInterval
+end
+
 function ITGOnline:FlushLiveScore()
 	if not self.currentRoomId or not self.currentRoom then
 		self.pendingLiveScoreSnapshot = nil
@@ -2839,7 +2891,7 @@ function ITGOnline:FlushLiveScore()
 		return true
 	end
 
-	local minInterval = tonumber(self.liveScoreMinIntervalSeconds) or 0.35
+	local minInterval = self:LiveScoreMinIntervalSeconds()
 	if now - (tonumber(self.lastScoreSentAt) or 0) < minInterval then
 		return true
 	end
@@ -2904,7 +2956,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		finish(false, nil, { errorMessage = "Room is not accepting a final score." })
 		return
 	end
-	local minLiveInterval = tonumber(self.liveScoreMinIntervalSeconds) or 0.35
+	local minLiveInterval = self:LiveScoreMinIntervalSeconds()
 	if not force and GetTimeSinceStart() - self.lastScoreSentAt < minLiveInterval then
 		finish(false, nil, { retryAfter = minLiveInterval })
 		return
