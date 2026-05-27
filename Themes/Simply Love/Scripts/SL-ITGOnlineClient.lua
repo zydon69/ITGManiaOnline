@@ -128,6 +128,7 @@ ITGOnline.lastHeartbeatFingerprint = ITGOnline.lastHeartbeatFingerprint or ""
 ITGOnline.heartbeatMinIntervalSeconds = ITGOnline.heartbeatMinIntervalSeconds or 1.5
 ITGOnline.fileHashCache = ITGOnline.fileHashCache or {}
 ITGOnline.fileHashCacheTtlSeconds = ITGOnline.fileHashCacheTtlSeconds or 30
+ITGOnline.onlineFlowTraceThrottle = ITGOnline.onlineFlowTraceThrottle or {}
 ITGOnline.debugOnlineTrace = ITGOnline.debugOnlineTrace or false
 ITGOnline.debugScoreTrace = ITGOnline.debugScoreTrace or false
 
@@ -266,6 +267,13 @@ local function response_message(response, decoded, fallback)
 	return fallback
 end
 
+local function response_error_code(response, decoded)
+	if decoded and decoded.error_code then return tostring(decoded.error_code) end
+	if response and response.error_code then return tostring(response.error_code) end
+	if response and response.error then return tostring(response.error) end
+	return ""
+end
+
 function online_trace(message)
 	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
 		return
@@ -285,6 +293,25 @@ local function online_flow_trace(message)
 		.. " " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 	if Flush then Flush() end
+end
+
+local function online_flow_trace_throttled(key, intervalSeconds, message)
+	if not ITGOnline then return end
+
+	local now = GetTimeSinceStart()
+	ITGOnline.onlineFlowTraceThrottle = ITGOnline.onlineFlowTraceThrottle or {}
+
+	local throttleKey = tostring(key or "")
+	local previous = ITGOnline.onlineFlowTraceThrottle[throttleKey] or {}
+	if previous.message == message and now - (tonumber(previous.at) or 0) < (tonumber(intervalSeconds) or 1.0) then
+		return
+	end
+
+	ITGOnline.onlineFlowTraceThrottle[throttleKey] = {
+		at = now,
+		message = message,
+	}
+	online_flow_trace(message)
 end
 
 local function request_id()
@@ -1599,6 +1626,21 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 		self.onlineGameplayEvaluationMarkInFlightKey = roundKey
 		self:SendScore(true, true, nil, function(scoreOk, scoreDecoded, scoreResponse)
 			if not scoreOk then
+				if response_error_code(scoreResponse, scoreDecoded) == "score_already_finalized" then
+					if self.onlineGameplayEvaluationMarkInFlightKey == roundKey then
+						self.onlineGameplayEvaluationMarkInFlightKey = ""
+					end
+					self.onlineGameplayEvaluationMarkKey = roundKey
+					self.onlineGameplayEndedKey = roundKey
+					self.onlineGameplayEvaluationTerminalErrorKey = ""
+					self.onlineGameplayEvaluationRetryCount = 0
+					self.onlineGameplayEvaluationNextRetryAt = 0
+					online_flow_trace("mark_terminal_score_already_finalized roundKey=" .. tostring(roundKey))
+					if self.FetchPlayState then
+						self:FetchPlayState()
+					end
+					return
+				end
 				if self.onlineGameplayEvaluationMarkInFlightKey == roundKey then
 					self.onlineGameplayEvaluationMarkInFlightKey = ""
 				end
@@ -1664,7 +1706,7 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 			.. " until=" .. tostring(self.onlineGameplayEvaluationMinimumHoldUntil))
 	end
 
-	online_flow_trace("hold_gameplay_before_evaluation waiting=" .. tostring(waiting == true)
+	online_flow_trace_throttled("hold_gameplay_before_evaluation", 1.0, "hold_gameplay_before_evaluation waiting=" .. tostring(waiting == true)
 		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
 		.. " terminal=" .. tostring(summary and summary.terminal or "nil")
 		.. " players=" .. tostring(summary and summary.players or "nil")
@@ -1684,7 +1726,6 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 	if validRoundKey and self.onlineGameplayEvaluationHoldStartedKey == roundKey then
 		local minimumRemaining = (tonumber(self.onlineGameplayEvaluationMinimumHoldUntil) or 0) - now
 		if minimumRemaining > 0 then
-			online_flow_trace("hold_gameplay_minimum remaining=" .. string.format("%.2f", minimumRemaining))
 			return true
 		end
 	end
@@ -1699,7 +1740,6 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 
 		local remaining = (tonumber(self.onlineGameplayAllTerminalHoldUntil) or 0) - now
 		if remaining > 0 then
-			online_flow_trace("hold_gameplay_after_all_terminal remaining=" .. string.format("%.2f", remaining))
 			return true
 		end
 	end
@@ -1723,18 +1763,18 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 	local roundKey = self.PlayStateKey and self:PlayStateKey() or ""
 	local localRoundEnded = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey) and self.onlineGameplayEndedKey == roundKey
 
-		if self:IsOnlineOptionsScreen(screenName) and phase == "results" and self.songSelectionInFlightKey ~= "" then
-			online_flow_trace("preferred=nil reason=options_during_song_selection playState=" .. tostring(playState)
-				.. " selectionKey=" .. tostring(self.songSelectionInFlightKey))
-			return nil
-		end
+	if self:IsOnlineOptionsScreen(screenName) and phase == "results" and self.songSelectionInFlightKey ~= "" then
+		online_flow_trace("preferred=nil reason=options_during_song_selection playState=" .. tostring(playState)
+			.. " selectionKey=" .. tostring(self.songSelectionInFlightKey))
+		return nil
+	end
 
-		if self:IsOnlineOptionsScreen(screenName)
-			and (phase == "playing" or phase == "results")
-		then
-			online_flow_trace("preferred=lobby reason=options_during_terminal_or_playing playState=" .. tostring(playState) .. " roundEnded=" .. tostring(localRoundEnded))
-			return "lobby"
-		end
+	if self:IsOnlineOptionsScreen(screenName)
+		and (phase == "playing" or phase == "results")
+	then
+		online_flow_trace("preferred=lobby reason=options_during_terminal_or_playing playState=" .. tostring(playState) .. " roundEnded=" .. tostring(localRoundEnded))
+		return "lobby"
+	end
 
 	if phase == "starting" then
 		if localRoundEnded then
@@ -1771,7 +1811,7 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 	if phase == "results" then
 		if self:IsOnlineGameplayScreen(screenName) then
 			if self.ShouldHoldGameplayForEvaluation and self:ShouldHoldGameplayForEvaluation() then
-				online_flow_trace("preferred=nil reason=hold_gameplay_before_evaluation playState=" .. tostring(playState))
+				online_flow_trace_throttled("preferred_hold_gameplay_before_evaluation", 1.0, "preferred=nil reason=hold_gameplay_before_evaluation playState=" .. tostring(playState))
 				return nil
 			end
 			online_flow_trace("preferred=evaluation reason=results_while_in_gameplay playState=" .. tostring(playState))
@@ -3024,6 +3064,8 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 
 	if not final then
 		if self.scoreInFlightFingerprint then
+			self.pendingLiveScoreSnapshot = snapshot
+			self.pendingLiveScoreRoundKey = validRoundKey and roundKey or tostring(self.currentRoomId or "")
 			finish(false, nil, { retryAfter = minLiveInterval, inFlight = true })
 			return
 		end
@@ -3674,7 +3716,7 @@ function ITGOnline:MarkPlayFailedEarly(source, callback)
 	end
 
 	if self.SendScore then
-		self:SendScore(true, true, nil, confirmFailed)
+		self:SendScore(true, false, nil, confirmFailed)
 		return true
 	end
 
@@ -4213,25 +4255,45 @@ function ITGOnline:HandleRealtimeEvent(event)
 		local incomingVersion = tonumber(payload.leaderboard_version_ms) or 0
 		local incomingPlayStateVersion = tonumber(payload.play_state_version_ms or (payload.play_state and payload.play_state.version_ms)) or 0
 		local versionRoomId = tostring(roomId or expectedRoomId or "")
-		if versionRoomId ~= "" then
+		local leaderboardIsFresh = false
+		if payload.leaderboard and versionRoomId ~= "" then
 			local previousVersion = tonumber(self.lastLeaderboardVersionByRoomId[versionRoomId]) or 0
 			if incomingVersion > 0 and incomingVersion < previousVersion then
-				return
-			end
-			if incomingVersion > 0 then
+				online_flow_trace("ignored_stale_score_leaderboard version=" .. tostring(incomingVersion)
+					.. " previous=" .. tostring(previousVersion))
+			elseif incomingVersion > 0 then
 				self.lastLeaderboardVersionByRoomId[versionRoomId] = incomingVersion
+				leaderboardIsFresh = true
+			else
+				local now = GetTimeSinceStart()
+				if now - (tonumber(self.lastUnversionedPlayStateFetchAt) or 0) > 1 then
+					self.lastUnversionedPlayStateFetchAt = now
+					self:FetchRoom(roomId or expectedRoomId)
+				end
 			end
-		end
-		if incomingVersion <= 0 then
-			local now = GetTimeSinceStart()
-			if now - (tonumber(self.lastUnversionedPlayStateFetchAt) or 0) > 1 then
-				self.lastUnversionedPlayStateFetchAt = now
-				self:FetchRoom(roomId or expectedRoomId)
-			end
-			return
 		end
 
-		if payload.leaderboard then
+		if payload.leaderboard and leaderboardIsFresh then
+			if self.debugScoreTrace == true then
+				local score = payload.score or {}
+				local user = score.user or {}
+				local playState = ""
+				if payload.play_state and payload.play_state.sessions and user.id then
+					for session in ivalues(payload.play_state.sessions) do
+						local sessionUser = session.user or {}
+						if tostring(sessionUser.id or session.user_id or "") == tostring(user.id or "") then
+							playState = tostring(session.state or "")
+							break
+						end
+					end
+				end
+				online_trace("score_update room=" .. tostring(payload.room_id or "")
+					.. " version=" .. tostring(incomingVersion)
+					.. " user=" .. tostring(user.id or "")
+					.. " score=" .. tostring(score.score or "")
+					.. " percent=" .. tostring(score.score_percent or "")
+					.. " state=" .. tostring(playState))
+			end
 			MESSAGEMAN:Broadcast("ITGOnlineLeaderboardUpdated", {
 				leaderboard = payload.leaderboard,
 				room_id = payload.room_id,

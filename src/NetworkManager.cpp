@@ -469,11 +469,20 @@ void NetworkManager::Update() {
   if (tasksProcessed >= kMaxMainThreadTasksPerUpdate ||
       timer.Ago() >= kMaxMainThreadTaskSecondsPerUpdate) {
     std::lock_guard<std::mutex> lock(this->mainThreadTaskMutex);
-    if (!this->mainThreadTaskQueue.empty() &&
+    const auto queuedTasks = this->mainThreadTaskQueue.size();
+    static int consecutiveBacklogWarnings = 0;
+
+    if (queuedTasks == 0) {
+      consecutiveBacklogWarnings = 0;
+      return;
+    }
+
+    ++consecutiveBacklogWarnings;
+    if ((queuedTasks > 3 || consecutiveBacklogWarnings >= 3) &&
         lastBacklogWarning.Ago() >= 1.0f) {
       LOG->Warn(
           "Network main-thread task backlog still has %zu queued task(s)",
-          this->mainThreadTaskQueue.size());
+          queuedTasks);
       lastBacklogWarning.Touch();
     }
   }
