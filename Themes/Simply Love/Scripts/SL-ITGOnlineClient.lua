@@ -108,6 +108,8 @@ ITGOnline.onlineGameplayReturnedInFlightKey = ITGOnline.onlineGameplayReturnedIn
 ITGOnline.onlineGameplayTerminalKey = ITGOnline.onlineGameplayTerminalKey or ""
 ITGOnline.onlineGameplayTerminalInFlightKey = ITGOnline.onlineGameplayTerminalInFlightKey or ""
 ITGOnline.onlineGameplayTerminalState = ITGOnline.onlineGameplayTerminalState or ""
+ITGOnline.onlineGameplayFailedEarlyKey = ITGOnline.onlineGameplayFailedEarlyKey or ""
+ITGOnline.onlineGameplayFailedEarlyInFlightKey = ITGOnline.onlineGameplayFailedEarlyInFlightKey or ""
 ITGOnline.onlineGameplayEndedKey = ITGOnline.onlineGameplayEndedKey or ""
 ITGOnline.onlineGameplayEvaluationMarkKey = ITGOnline.onlineGameplayEvaluationMarkKey or ""
 ITGOnline.onlineGameplayEvaluationMarkInFlightKey = ITGOnline.onlineGameplayEvaluationMarkInFlightKey or ""
@@ -2185,6 +2187,8 @@ function ITGOnline:Disconnect()
 	self.onlineGameplayTerminalKey = ""
 	self.onlineGameplayTerminalInFlightKey = ""
 	self.onlineGameplayTerminalState = ""
+	self.onlineGameplayFailedEarlyKey = ""
+	self.onlineGameplayFailedEarlyInFlightKey = ""
 	self.onlineGameplayEndedKey = ""
 	self.onlineGameplayEvaluationMarkKey = ""
 	self.onlineGameplayEvaluationMarkInFlightKey = ""
@@ -2566,6 +2570,8 @@ function ITGOnline:SelectSong(callback)
 			self.onlineGameplayTerminalKey = ""
 			self.onlineGameplayTerminalInFlightKey = ""
 			self.onlineGameplayTerminalState = ""
+			self.onlineGameplayFailedEarlyKey = ""
+			self.onlineGameplayFailedEarlyInFlightKey = ""
 			self.onlineGameplayEndedKey = ""
 			self.onlineGameplayEvaluationMarkKey = ""
 			self.onlineGameplayEvaluationMarkInFlightKey = ""
@@ -3596,6 +3602,97 @@ end
 
 function ITGOnline:MarkPlayFailed(callback)
 	self:MarkPlayTerminal("/play/failed", "failed", callback)
+end
+
+function ITGOnline:MarkPlayFailedEarly(source, callback)
+	if not self.currentRoomId or not self.currentRoom then
+		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
+		return false
+	end
+
+	local phase = self:NormalizeRoomPhase(self.currentRoom.phase)
+	if phase ~= "starting" and phase ~= "playing" and phase ~= "results" then
+		online_flow_trace("mark_failed_early_skipped source=" .. tostring(source or "unknown")
+			.. " phase=" .. tostring(phase))
+		if callback then callback(false, nil, { errorMessage = "Room is not in a playable phase." }) end
+		return false
+	end
+
+	local key = self:PlayStateKey()
+	if not self:PlayStateKeyIsValid(key) then
+		online_flow_trace("mark_failed_early_skipped source=" .. tostring(source or "unknown")
+			.. " reason=invalid_round_key")
+		if callback then callback(false, nil, { errorMessage = "No active song round." }) end
+		return false
+	end
+
+	local activeRoundKey = tostring(self.activeGameplayRoundKey or "")
+	if self:PlayStateKeyIsValid(activeRoundKey) and activeRoundKey ~= key then
+		online_flow_trace("mark_failed_early_skipped source=" .. tostring(source or "unknown")
+			.. " reason=stale_round_key"
+			.. " active=" .. tostring(activeRoundKey)
+			.. " incoming=" .. tostring(key))
+		if callback then callback(false, nil, { errorMessage = "Stale song round." }) end
+		return false
+	end
+
+	if self.onlineGameplayFailedEarlyKey == key then
+		if callback then callback(true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil) end
+		return true
+	end
+	if self.onlineGameplayFailedEarlyInFlightKey == key then
+		if callback then callback(false, nil, { retryAfter = 0.5, inFlight = true }) end
+		return true
+	end
+
+	self.onlineGameplayFailedEarlyInFlightKey = key
+	self:ApplyLocalPlayState("failed", "failed_early_local")
+	online_flow_trace("mark_failed_early source=" .. tostring(source or "unknown")
+		.. " phase=" .. tostring(phase)
+		.. " roundKey=" .. tostring(key))
+
+	local confirmFailed
+	confirmFailed = function(scoreOk, scoreDecoded, scoreResponse)
+		if scoreOk == false then
+			online_flow_trace("mark_failed_early_score_not_finalized roundKey=" .. tostring(key)
+				.. " message=" .. tostring(response_message(scoreResponse, scoreDecoded, "failed score rejected")))
+		end
+
+		self:MarkPlayFailed(function(ok, decoded, response)
+			if self.onlineGameplayFailedEarlyInFlightKey == key then
+				self.onlineGameplayFailedEarlyInFlightKey = ""
+			end
+			if ok then
+				self.onlineGameplayFailedEarlyKey = key
+				online_flow_trace("mark_failed_early_confirmed roundKey=" .. tostring(key))
+			else
+				online_flow_trace("mark_failed_early_rejected roundKey=" .. tostring(key)
+					.. " message=" .. tostring(response_message(response, decoded, "failed state rejected")))
+			end
+			if callback then callback(ok, decoded, response) end
+		end)
+	end
+
+	if self.SendScore then
+		self:SendScore(true, true, nil, confirmFailed)
+		return true
+	end
+
+	self:MarkPlayFailed(function(ok, decoded, response)
+		if self.onlineGameplayFailedEarlyInFlightKey == key then
+			self.onlineGameplayFailedEarlyInFlightKey = ""
+		end
+		if ok then
+			self.onlineGameplayFailedEarlyKey = key
+			online_flow_trace("mark_failed_early_confirmed roundKey=" .. tostring(key))
+		else
+			online_flow_trace("mark_failed_early_rejected roundKey=" .. tostring(key)
+				.. " message=" .. tostring(response_message(response, decoded, "failed state rejected")))
+		end
+		if callback then callback(ok, decoded, response) end
+	end)
+
+	return true
 end
 
 function ITGOnline:FetchPlayState(callback)

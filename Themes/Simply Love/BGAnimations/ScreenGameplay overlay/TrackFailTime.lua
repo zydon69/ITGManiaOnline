@@ -7,6 +7,12 @@
 local player = ...
 local pn = ToEnumShortString(player)
 
+local NotifyOnlineFailed = function()
+    if ITGOnline and ITGOnline.MarkPlayFailedEarly then
+        ITGOnline:MarkPlayFailedEarly("health_state_dead")
+    end
+end
+
 -- Return an array of cumulativeSeconds for each song in a course, which is used by Step Statistics Time.lua
 local CourseLengthPerSong = function(player)
     local cumulativeSeconds = {}
@@ -83,6 +89,8 @@ local af = Def.Actor{
 	HealthStateChangedMessageCommand=function(self, param)
 		-- Only do something if the player fails
 		if param.PlayerNumber == player and param.HealthState == "HealthState_Dead" then			
+			NotifyOnlineFailed()
+
 			local playerState = GAMESTATE:GetPlayerState(player)			
 
 			-- These functions already account for rate mod
