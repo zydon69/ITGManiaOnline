@@ -280,10 +280,10 @@ local function active_private_prompt_options()
 	return private_join_options
 end
 
-local function clear_pending_join()
-	pending_join_action_id = 0
-	pending_join_deadline = 0
-end
+	local function clear_pending_join()
+		pending_join_action_id = 0
+		pending_join_deadline = 0
+	end
 
 local function begin_join_timeout(actor, seconds)
 	seconds = tonumber(seconds) or 20
@@ -296,10 +296,15 @@ local function begin_join_timeout(actor, seconds)
 	end
 end
 
-local function cancel_pending_join(message)
-	clear_pending_join()
-	mode = "browse"
-	showing_player_action_menu = false
+	local function cancel_pending_join(message)
+		local onlineHandler = GetOnlineHandlerInstance()
+		if onlineHandler and onlineHandler.connected and onlineHandler.pendingJoinRequestId then
+			onlineHandler:CancelJoinRequest()
+		end
+
+		clear_pending_join()
+		mode = "browse"
+		showing_player_action_menu = false
 
 	if t then
 		t:GetChild("PlayerActionMenu"):visible(false)
@@ -1239,13 +1244,13 @@ local af = Def.ActorFrame{
 				showSpinner=false,
 				showPrompt=false
 			})
-			elseif params and params.event == "joinLobby" and params.success == true then
-				begin_join_timeout(self, 60)
-				self:playcommand("SetStatus", {
-					text=params.message or "Join request sent. Waiting for the room manager.",
-					showSpinner=false,
-					showPrompt=false
-				})
+				elseif params and params.event == "joinLobby" and params.success == true then
+					begin_join_timeout(self, 60)
+					self:playcommand("SetStatus", {
+						text=(params.message or "Join request sent. Waiting for the room manager.") .. "\nPress Select or Back to cancel.",
+						showSpinner=false,
+						showPrompt=false
+					})
 			elseif params and params.event == "joinLobby" and params.success == false then
 				clear_pending_join()
 				mode = "browse"

@@ -30,6 +30,7 @@ ITGOnline.lastResultSongPayload = ITGOnline.lastResultSongPayload or nil
 ITGOnline.activeGameplaySongPayload = ITGOnline.activeGameplaySongPayload or nil
 ITGOnline.activeGameplayRoundKey = ITGOnline.activeGameplayRoundKey or ""
 ITGOnline.pendingJoinRoomId = ITGOnline.pendingJoinRoomId or nil
+ITGOnline.pendingJoinRequestId = ITGOnline.pendingJoinRequestId or nil
 ITGOnline.lastScoreSentAt = ITGOnline.lastScoreSentAt or 0
 ITGOnline.scheduledStartLocalTime = ITGOnline.scheduledStartLocalTime or nil
 ITGOnline.sessionExpired = ITGOnline.sessionExpired or false
@@ -3929,10 +3930,11 @@ end
 
 function ITGOnline:FetchCurrentRoom(callback)
 	self:Request("GET", "/rooms/current", nil, function(ok, decoded, response)
-		if ok and decoded and decoded.room then
-			local room = self:ApplyRoomSnapshot(decoded.room, "fetch_current_room")
-			decoded.room = room or decoded.room
-		end
+			if ok and decoded and decoded.room then
+				local room = self:ApplyRoomSnapshot(decoded.room, "fetch_current_room")
+				decoded.room = room or decoded.room
+				self.pendingJoinRequestId = nil
+			end
 		if callback then callback(ok, decoded, response) end
 	end)
 end
@@ -3950,17 +3952,32 @@ end
 
 function ITGOnline:RequestJoinRoom(roomId, callback)
 	self.pendingJoinRoomId = roomId
-	self:Request("POST", "/rooms/" .. tostring(roomId) .. "/join", {}, function(ok, decoded, response)
-		if ok and decoded and decoded.room then
-			local room = self:ApplyRoomSnapshot(decoded.room, "join_room")
-			decoded.room = room or decoded.room
+		self:Request("POST", "/rooms/" .. tostring(roomId) .. "/join", {}, function(ok, decoded, response)
+			if ok and decoded and decoded.room then
+				local room = self:ApplyRoomSnapshot(decoded.room, "join_room")
+				decoded.room = room or decoded.room
+				self.pendingJoinRoomId = nil
+				self.pendingJoinRequestId = nil
+			elseif not ok then
+				self.pendingJoinRoomId = nil
+				self.pendingJoinRequestId = nil
+			end
+			if callback then callback(ok, decoded, response) end
+		end)
+	end
+
+	function ITGOnline:CancelJoinRequest(callback)
+		local joinRequestId = self.pendingJoinRequestId
+		if not joinRequestId then
 			self.pendingJoinRoomId = nil
-		elseif not ok then
-			self.pendingJoinRoomId = nil
+			if callback then callback(true, { message = "No pending join request." }, nil) end
+			return
 		end
-		if callback then callback(ok, decoded, response) end
-	end)
-end
+
+		self.pendingJoinRoomId = nil
+		self.pendingJoinRequestId = nil
+		self:Request("POST", "/room-join-requests/" .. tostring(joinRequestId) .. "/cancel", {}, callback)
+	end
 
 function ITGOnline:ReportSongAvailability(missing, reason, callback)
 	if not self.currentRoomId then
@@ -4057,18 +4074,22 @@ function ITGOnline:ConfirmSelectedSongAvailability(reason, callback)
 end
 
 function ITGOnline:RequestJoinUserRoom(userId, callback)
-	self:Request("POST", "/users/" .. tostring(userId) .. "/room-join-request", {}, function(ok, decoded, response)
-		if ok and decoded and decoded.room then
-			local room = self:ApplyRoomSnapshot(decoded.room, "request_join_user_room")
-			decoded.room = room or decoded.room
+		self:Request("POST", "/users/" .. tostring(userId) .. "/room-join-request", {}, function(ok, decoded, response)
+			if ok and decoded and decoded.room then
+				local room = self:ApplyRoomSnapshot(decoded.room, "request_join_user_room")
+				decoded.room = room or decoded.room
+				self.pendingJoinRoomId = nil
+				self.pendingJoinRequestId = nil
 			elseif ok and decoded and decoded.join_request then
 				self.pendingJoinRoomId = decoded.join_request.room_id
+				self.pendingJoinRequestId = decoded.join_request.id
 			elseif not ok then
 				self.pendingJoinRoomId = nil
+				self.pendingJoinRequestId = nil
 			end
-		if callback then callback(ok, decoded, response) end
-	end)
-end
+			if callback then callback(ok, decoded, response) end
+		end)
+	end
 
 function ITGOnline:InviteUser(roomId, userId, callback)
 	self:Request("POST", "/rooms/" .. tostring(roomId) .. "/invitations", {
@@ -4181,24 +4202,35 @@ function ITGOnline:MarkRealtimeEventProcessed(eventId)
 	return false
 end
 
-function ITGOnline:HandleRealtimeEvent(event)
-	if type(event) ~= "table" then
-		online_trace("Ignored malformed realtime event.")
-		return
-	end
-	local name = event.event or event.name
-	local payload = event.payload or {}
-	local eventId = tonumber(event.id)
-	if eventId and eventId > 0 then
-		self.lastEventCursor = math.max(self.lastEventCursor or 0, math.floor(eventId))
-		if self:MarkRealtimeEventProcessed(eventId) then
+	function ITGOnline:HandleRealtimeEvent(event)
+		if type(event) ~= "table" then
+			online_trace("Ignored malformed realtime event.")
 			return
 		end
+		local name = event.event or event.name
+		local payload = event.payload or {}
+		local eventId = tonumber(event.id)
+		local idlessControlEvents = {
+			["connection.ready"] = true,
+			["connection.closed"] = true,
+			["server.ping"] = true,
+			["pong"] = true,
+			["client.error"] = true,
+		}
+		if eventId and eventId > 0 then
+			self.lastEventCursor = math.max(self.lastEventCursor or 0, math.floor(eventId))
+			if self:MarkRealtimeEventProcessed(eventId) then
+				return
+			end
 	end
 	if not name then
-		online_trace("Ignored realtime event without name.")
-		return
-	end
+			online_trace("Ignored realtime event without name.")
+			return
+		end
+		if (not eventId or eventId <= 0) and not idlessControlEvents[name] then
+			online_trace("Ignored idless non-control realtime event: " .. tostring(name))
+			return
+		end
 
 	local room_event_is_relevant = function(roomId)
 		local expected = self.currentRoomId or self.pendingJoinRoomId
@@ -4227,21 +4259,34 @@ function ITGOnline:HandleRealtimeEvent(event)
 			self:QueueLobbyRefresh()
 	elseif name == "room.invitation.created" then
 		MESSAGEMAN:Broadcast("OnlineRoomInvitation", payload)
-	elseif name == "room.join_request.declined" then
-		if payload.room_id == nil or tonumber(payload.room_id) == tonumber(self.pendingJoinRoomId or -1) then
-			self.pendingJoinRoomId = nil
-		end
-		MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-			event = "joinLobby",
-			success = false,
-			message = payload.reason and payload.reason ~= "" and ("Join request declined: " .. tostring(payload.reason)) or "Join request declined."
-		})
-	elseif name == "room.join_request.accepted" and payload.room_id then
-		if not room_event_is_relevant(payload.room_id) then return end
-		self:FetchRoom(payload.room_id, function(ok, decoded)
-			if ok and decoded and decoded.room then
-				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
+		elseif name == "room.join_request.declined" then
+			if payload.room_id == nil or tonumber(payload.room_id) == tonumber(self.pendingJoinRoomId or -1) then
+				self.pendingJoinRoomId = nil
+				self.pendingJoinRequestId = nil
 			end
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = "joinLobby",
+				success = false,
+				message = payload.reason and payload.reason ~= "" and ("Join request declined: " .. tostring(payload.reason)) or "Join request declined."
+			})
+		elseif name == "room.join_request.expired" then
+			if payload.room_id == nil or tonumber(payload.room_id) == tonumber(self.pendingJoinRoomId or -1) then
+				self.pendingJoinRoomId = nil
+				self.pendingJoinRequestId = nil
+			end
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = "joinLobby",
+				success = false,
+				message = payload.reason == "cancelled_by_user" and "Join request cancelled." or "Join request expired."
+			})
+		elseif name == "room.join_request.accepted" and payload.room_id then
+			if not room_event_is_relevant(payload.room_id) then return end
+			self.pendingJoinRoomId = nil
+			self.pendingJoinRequestId = nil
+			self:FetchRoom(payload.room_id, function(ok, decoded)
+				if ok and decoded and decoded.room then
+					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
+				end
 		end)
 	elseif name == "room.song_previewed" then
 		MESSAGEMAN:Broadcast("OnlineSongPreview", payload.preview or {})
