@@ -71,8 +71,6 @@ end
 local function rows_from_leaderboard(leaderboard)
 	local rows = {}
 	local max_score = selected_max_score()
-	local self_id = local_user_id()
-	local self_displayed = local_displayed_percent()
 	for score in ivalues(leaderboard or {}) do
 		local user = score.user or {}
 		local accuracy_percent = tonumber(score.accuracy)
@@ -88,9 +86,6 @@ local function rows_from_leaderboard(leaderboard)
 			percent = accuracy_percent
 		end
 		local user_id = tostring(user.id or "")
-		if user_id == self_id and self_displayed ~= nil then
-			percent = self_displayed
-		end
 		local play_state = play_state_for_user(user_id)
 		local flags = terminal_flags(play_state, score.failed and true or false)
 		rows[#rows + 1] = {
@@ -109,8 +104,6 @@ end
 local function rows_from_lobby_state(data)
 	local rows = {}
 	if not data or (data.phase ~= "playing" and data.phase ~= "results") then return rows end
-	local self_id = local_user_id()
-	local self_displayed = local_displayed_percent()
 	for player in ivalues(data.players or {}) do
 		if player.exScore ~= nil or player.score ~= nil or player.playState ~= nil then
 			local score_percent = tonumber(player.score)
@@ -122,9 +115,6 @@ local function rows_from_lobby_state(data)
 				percent = score_percent
 			end
 			local player_id = tostring(player.playerId or "")
-			if player_id == self_id and self_displayed ~= nil then
-				percent = self_displayed
-			end
 			local flags = terminal_flags(player.playState, false)
 			rows[#rows + 1] = {
 				user_id = player_id,

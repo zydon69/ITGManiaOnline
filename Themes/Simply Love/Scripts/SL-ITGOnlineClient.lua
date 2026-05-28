@@ -61,8 +61,9 @@ ITGOnline.liveScoreInFlight = ITGOnline.liveScoreInFlight or false
 ITGOnline.liveScoreNextAttemptAt = ITGOnline.liveScoreNextAttemptAt or 0
 ITGOnline.liveScoreMinIntervalSeconds = ITGOnline.liveScoreMinIntervalSeconds or 0.35
 ITGOnline.liveScoreEndgameWindowSeconds = ITGOnline.liveScoreEndgameWindowSeconds or 6
-ITGOnline.liveScoreEndgameIntervalSeconds = ITGOnline.liveScoreEndgameIntervalSeconds or 0.20
+ITGOnline.liveScoreEndgameIntervalSeconds = ITGOnline.liveScoreEndgameIntervalSeconds or 0.30
 ITGOnline.lastLeaderboardVersionByRoomId = ITGOnline.lastLeaderboardVersionByRoomId or {}
+ITGOnline.lastLeaderboardTickByRoomId = ITGOnline.lastLeaderboardTickByRoomId or {}
 ITGOnline.lastPlayStateVersionByRoomId = ITGOnline.lastPlayStateVersionByRoomId or {}
 ITGOnline.lastRoomEventIdByRoomId = ITGOnline.lastRoomEventIdByRoomId or {}
 ITGOnline.promptedPendingJoinRequestIds = ITGOnline.promptedPendingJoinRequestIds or {}
@@ -283,6 +284,33 @@ function online_trace(message)
 	end
 	local line = "ITG Online: " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
+end
+
+local function online_pack_sync_trace(message)
+	local line = "[OnlinePackSync] " .. tostring(message or "")
+	if Trace then Trace(line) elseif Warn then Warn(line) end
+end
+
+local function online_short_hash(value)
+	value = tostring(value or "")
+	return value ~= "" and value:sub(1, 12) or ""
+end
+
+local function online_add_log_field(parts, key, value)
+	if value == nil then return end
+	value = tostring(value)
+	if value == "" then return end
+	parts[#parts + 1] = tostring(key) .. "=" .. value:gsub("%s+", "_")
+end
+
+local function online_pack_sync_fields(event, fields)
+	local parts = { tostring(event or "event") }
+	if type(fields) == "table" then
+		for _, pair in ipairs(fields) do
+			online_add_log_field(parts, pair[1], pair[2])
+		end
+	end
+	online_pack_sync_trace(table.concat(parts, " "))
 end
 
 local function online_flow_trace(message)
@@ -825,6 +853,7 @@ end
 function ITGOnline:ResetRealtimeState()
 	self.lastEventCursor = 0
 	self.lastLeaderboardVersionByRoomId = {}
+	self.lastLeaderboardTickByRoomId = {}
 	self.lastPlayStateVersionByRoomId = {}
 	self.lastRoomEventIdByRoomId = {}
 	self.lastUnversionedPlayStateFetchAt = 0
@@ -1292,7 +1321,26 @@ function ITGOnline:SelectedSongRoundKey(song, roomId)
 		.. tostring(song.game_session_id or song.session_id or song.round_id or song.selected_song_id or "") .. "|"
 		.. tostring(song.song_hash or song.songHash or "") .. "|"
 		.. tostring(song.chart_hash or "") .. "|"
-		.. tostring(song.selected_at or song.selectedAt or "")
+			.. tostring(song.selected_at or song.selectedAt or "")
+end
+
+function ITGOnline:LeaderboardStateKey(roomId)
+	local normalizedRoomId = tostring(roomId or self.currentRoomId or "")
+	if normalizedRoomId == "" then return "" end
+
+	local roundKey = tostring(self.currentRoomRoundKey or "")
+	if roundKey == "" and self.PlayStateKey then
+		local candidate = self:PlayStateKey()
+		if candidate ~= "" and (not self.PlayStateKeyIsValid or self:PlayStateKeyIsValid(candidate)) then
+			roundKey = candidate
+		end
+	end
+
+	if roundKey ~= "" then
+		return normalizedRoomId .. "|" .. roundKey
+	end
+
+	return normalizedRoomId
 end
 
 function ITGOnline:CaptureActiveGameplayRound(source)
@@ -1434,13 +1482,16 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		self:ClearOnlineOptionsReadyDeadline("room_snapshot_" .. tostring(room.phase or "unknown"))
 	end
 
+	local previousRoundKey = tostring(self.currentRoomRoundKey or "")
+	local nextRoundKey = ""
 	if room.selected_song and room.selected_song.song_hash and room.selected_song.chart_hash then
 		local phase = self:NormalizeRoomPhase(room.phase)
 		if phase == "results" then
 			self.lastResultSongPayload = room.selected_song
 		else
 			self.currentSongPayload = room.selected_song
-			self.currentRoomRoundKey = self:RoomSongRoundKey(room)
+			nextRoundKey = self:RoomSongRoundKey(room)
+			self.currentRoomRoundKey = nextRoundKey
 			if phase == "lobby" or phase == "lobby_ready" or phase == "config" then
 				self:ClearActiveGameplayRound("room_snapshot_" .. tostring(phase))
 			end
@@ -1449,6 +1500,14 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		self.currentSongPayload = nil
 		self.currentRoomRoundKey = ""
 		self:ClearActiveGameplayRound("room_snapshot_no_song")
+	end
+	if nextRoundKey ~= "" and previousRoundKey ~= "" and nextRoundKey ~= previousRoundKey then
+		local roomKey = tostring(room.id or self.currentRoomId or "")
+		self.lastLeaderboardVersionByRoomId[roomKey] = nil
+		self.lastLeaderboardTickByRoomId[roomKey] = nil
+		online_flow_trace("leaderboard_state_reset_for_new_round room=" .. roomKey
+			.. " previous_key=" .. previousRoundKey
+			.. " next_key=" .. nextRoundKey)
 	end
 
 	if self.MaybeAutoReadyManager then
@@ -2498,7 +2557,13 @@ function ITGOnline:SyncPages(accumulator, generation, pageCount)
 end
 
 function ITGOnline:BuildSongPayloadFor(song, steps)
-	if not song then return nil end
+	if not song then
+		online_pack_sync_fields("build_song_payload_failed", {
+			{ "reason", "missing_song" },
+			{ "room", self.currentRoomId },
+		})
+		return nil
+	end
 	steps = steps or selected_steps()
 	local path = song_path(song)
 	local chartType = normalize_chart_type(steps and enum_short(steps:GetStepsType()) or "")
@@ -2508,15 +2573,64 @@ function ITGOnline:BuildSongPayloadFor(song, steps)
 	local musicPath = song.GetMusicPath and song:GetMusicPath() or ""
 	local songFileHash = cached_sha256_file_hex(songFilePath)
 	local musicHash = cached_sha256_file_hex(musicPath)
-	if not songFileHash or not musicHash then return nil end
+	if not songFileHash or not musicHash then
+		online_pack_sync_fields("build_song_payload_failed", {
+			{ "reason", "hash_unavailable" },
+			{ "room", self.currentRoomId },
+			{ "song_path", path },
+			{ "song_file", songFilePath },
+			{ "music_file", musicPath },
+			{ "song_file_hash", online_short_hash(songFileHash) },
+			{ "music_hash", online_short_hash(musicHash) },
+		})
+		return nil
+	end
 	local musicName = manifest_file_name(musicPath)
 	local songFileName = manifest_file_name(songFilePath)
-	if not musicName or not songFileName then return nil end
+	if not musicName or not songFileName then
+		online_pack_sync_fields("build_song_payload_failed", {
+			{ "reason", "manifest_file_name_unavailable" },
+			{ "room", self.currentRoomId },
+			{ "song_path", path },
+			{ "song_file", songFilePath },
+			{ "music_file", musicPath },
+		})
+		return nil
+	end
 	local chartHash = self:ChartHashForSteps(steps)
 	local chartKey = steps and steps.GetChartKey and tostring(steps:GetChartKey() or "") or ""
 	local rate = current_music_rate()
 	local noteCount = current_chart_note_count(steps)
-	if not noteCount then return nil end
+	if not noteCount then
+		online_pack_sync_fields("build_song_payload_failed", {
+			{ "reason", "note_count_unavailable" },
+			{ "room", self.currentRoomId },
+			{ "song_path", path },
+			{ "chart_type", chartType },
+			{ "difficulty", difficulty },
+			{ "meter", meter },
+			{ "chart_hash", online_short_hash(chartHash) },
+		})
+		return nil
+	end
+
+	online_pack_sync_fields("build_song_payload_ok", {
+		{ "room", self.currentRoomId },
+		{ "title", song:GetDisplayFullTitle() },
+		{ "artist", song:GetDisplayArtist() },
+		{ "pack", path:match("^([^/]+)") or "" },
+		{ "folder", path },
+		{ "chart_type", chartType },
+		{ "difficulty", difficulty },
+		{ "meter", meter },
+		{ "rate", rate },
+		{ "song_hash", online_short_hash(musicHash) },
+		{ "chart_hash", online_short_hash(chartHash) },
+		{ "chart_file_hash", online_short_hash(songFileHash) },
+		{ "chart_key", chartKey },
+		{ "note_count", noteCount },
+		{ "max_score", server_max_score_for_note_count(noteCount) },
+	})
 
 	return {
 		title = song:GetDisplayFullTitle(),
@@ -2743,6 +2857,20 @@ function ITGOnline:ServerJudgments(player)
 	}
 end
 
+function ITGOnline:JudgmentAccuracyWeights()
+	local scoring = self.serverPolicy and self.serverPolicy.scoring or {}
+	local weights = scoring.judgment_accuracy_weights or {}
+
+	return {
+		fantastic = tonumber(weights.fantastic) or 1.0,
+		excellent = tonumber(weights.excellent) or 0.95,
+		great = tonumber(weights.great) or 0.8,
+		decent = tonumber(weights.decent) or 0.5,
+		way_off = tonumber(weights.way_off) or 0.2,
+		miss = tonumber(weights.miss) or 0.0,
+	}
+end
+
 function ITGOnline:ServerAccuracyFromJudgments(judgments)
 	if not judgments then return nil end
 
@@ -2756,20 +2884,23 @@ function ITGOnline:ServerAccuracyFromJudgments(judgments)
 	local total = fantastic + excellent + great + decent + wayOff + miss
 	if total <= 0 then return nil end
 
-	local weightedHits = (fantastic * 1.0)
-		+ (excellent * 0.95)
-		+ (great * 0.8)
-		+ (decent * 0.5)
-		+ (wayOff * 0.2)
-		+ (miss * 0.0)
+	local weights = self:JudgmentAccuracyWeights()
+	local weightedHits = (fantastic * weights.fantastic)
+		+ (excellent * weights.excellent)
+		+ (great * weights.great)
+		+ (decent * weights.decent)
+		+ (wayOff * weights.way_off)
+		+ (miss * weights.miss)
 
 	return math.max(0, math.min(100, (weightedHits / total) * 100))
 end
 
-function ITGOnline:ScoreFingerprint(score, combo, maxCombo, failed, judgments)
+function ITGOnline:ScoreFingerprint(score, combo, maxCombo, failed, judgments, songPosition)
 	local j = judgments or {}
+	local positionBucket = math.floor(math.max(0, tonumber(songPosition) or 0) * 2)
 	return table.concat({
 		tostring(self.PlayStateKey and self:PlayStateKey() or self.currentRoomId or ""),
+		tostring(positionBucket),
 		tostring(math.floor(tonumber(score) or 0)),
 		tostring(math.floor(tonumber(combo) or 0)),
 		tostring(math.floor(tonumber(maxCombo) or 0)),
@@ -3016,13 +3147,32 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	end
 
 	local player = first_enabled_player()
-	local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
-	local dancePoints = stats:GetPercentDancePoints()
-	local exScore = CalculateExScore(player) or 0
-	local songPositionState = GAMESTATE:GetPlayerState(player):GetSongPosition()
-	local songPosition = songPositionState:GetMusicSeconds()
-	local visibleOk, visibleSeconds = pcall(function() return songPositionState:GetMusicSecondsVisible() end)
-	if visibleOk and tonumber(visibleSeconds) then songPosition = visibleSeconds end
+	if not player or not STATSMAN or not STATSMAN.GetCurStageStats then
+		finish(false, nil, { errorMessage = "No active gameplay stats." })
+		return
+	end
+	local statsOk, stats = pcall(function()
+		return STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+	end)
+	if not statsOk or not stats then
+		finish(false, nil, { errorMessage = "No active gameplay stats." })
+		return
+	end
+	local danceOk, dancePointsValue = pcall(function() return stats:GetPercentDancePoints() end)
+	local dancePoints = danceOk and tonumber(dancePointsValue) or 0
+	local exScore = 0
+	if CalculateExScore then
+		local exOk, exValue = pcall(function() return CalculateExScore(player) end)
+		if exOk and tonumber(exValue) then exScore = tonumber(exValue) end
+	end
+	local songPosition = 0
+	local positionOk, positionValue = pcall(function()
+		local songPositionState = GAMESTATE:GetPlayerState(player):GetSongPosition()
+		local visibleOk, visibleSeconds = pcall(function() return songPositionState:GetMusicSecondsVisible() end)
+		if visibleOk and tonumber(visibleSeconds) then return tonumber(visibleSeconds) end
+		return tonumber(songPositionState:GetMusicSeconds())
+	end)
+	if positionOk and tonumber(positionValue) then songPosition = tonumber(positionValue) end
 	local positionKey = roundKey
 	if self.lastScorePositionKey ~= positionKey then
 		self.lastScorePositionKey = positionKey
@@ -3036,8 +3186,11 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		rateForClock = math.max(0.25, math.min(3, rateForClock))
 		local estimatedServerNowSeconds = GetTimeSinceStart() + self.serverClockOffsetSeconds
 		local estimatedPosition = math.max(0, (estimatedServerNowSeconds - (startAtMs / 1000)) * rateForClock)
-		-- Keep client position coherent with server clock to avoid "behind_server_clock" rejects.
-		songPosition = math.max(songPosition, math.max(0, estimatedPosition - 0.5))
+		local scoring = self.serverPolicy and self.serverPolicy.scoring or {}
+		local clockGrace = tonumber(scoring.playing_score_clock_grace_seconds) or 5
+		local allowedByClock = estimatedPosition + math.max(0, clockGrace - 0.25)
+		-- Keep client position coherent with server clock without drifting beyond the server guard.
+		songPosition = math.min(math.max(songPosition, math.max(0, estimatedPosition - 0.5)), allowedByClock)
 	end
 	local chartDuration = tonumber(scoreSongPayload.chart_duration_seconds) or tonumber(scoreSongPayload.music_length_seconds)
 	local lastKnownSongPosition = math.max(
@@ -3058,7 +3211,8 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		songPosition = math.max(songPosition, lastKnownSongPosition)
 	end
 	self.lastScoreSongPosition = songPosition
-	local maxCombo = stats:GetCurrentCombo() or 0
+	local currentComboOk, currentComboValue = pcall(function() return stats:GetCurrentCombo() end)
+	local maxCombo = currentComboOk and tonumber(currentComboValue) or 0
 	for _, methodName in ipairs({ "GetMaxCombo", "MaxCombo" }) do
 		local ok, value = pcall(function() return stats[methodName] and stats[methodName](stats) or nil end)
 		if ok and tonumber(value) then
@@ -3101,17 +3255,27 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	end
 	local liveCombo = tonumber(snapshot and snapshot.combo)
 	if liveCombo == nil then
-		liveCombo = stats:GetCurrentCombo() or 0
+		liveCombo = currentComboOk and tonumber(currentComboValue) or 0
 	end
 
-	-- Always transport the score currently shown to the player in gameplay.
-	local outgoingScore = math.max(0, math.floor((displayedScorePercent / 100) * selectedMaxScore + 0.5))
+	local canonicalScorePercent = tonumber(accuracyFromJudgments) or tonumber(snapshot and snapshot.scorePercent)
+	if canonicalScorePercent == nil then
+		canonicalScorePercent = (tonumber(dancePoints) or 0) * 100
+	end
+	canonicalScorePercent = math.max(0, math.min(100, tonumber(canonicalScorePercent) or 0))
+	if canonicalScorePercent <= 0 and normalizedExScore > 0 then
+		canonicalScorePercent = normalizedExScore * 100
+	end
+
+	-- Online score transport is canonical. Local display modifiers must not change competition results.
+	local outgoingScore = math.max(0, math.floor((canonicalScorePercent / 100) * selectedMaxScore + 0.5))
 	local outgoingPercent = selectedMaxScore > 0 and ((outgoingScore / selectedMaxScore) * 100) or 0
 	if self.debugScoreTrace == true then
 		online_trace(string.format(
-			"score-trace room=%s displayed=%.3f outgoing=%.3f snapshot(score=%.3f ex=%.3f shown=%.3f) max=%d combo=%d",
+			"score-trace room=%s displayed=%.3f canonical=%.3f outgoing=%.3f snapshot(score=%.3f ex=%.3f shown=%.3f) max=%d combo=%d",
 			tostring(self.currentRoomId or ""),
 			tonumber(displayedScorePercent) or 0,
+			tonumber(canonicalScorePercent) or 0,
 			tonumber(outgoingPercent) or 0,
 			tonumber(snapshot and snapshot.scorePercent) or -1,
 			tonumber(snapshot and snapshot.exScorePercent) or -1,
@@ -3123,8 +3287,9 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	if math.abs((tonumber(displayedScorePercent) or 0) - outgoingPercent) > 0.2 then
 		if self.debugScoreTrace == true then
 			online_trace(string.format(
-				"score-drift local(displayed=%.3f, outgoing=%.3f, max=%d, rawScore=%d)",
+				"score-drift local(displayed=%.3f, canonical=%.3f, outgoing=%.3f, max=%d, rawScore=%d)",
 				tonumber(displayedScorePercent) or 0,
+				tonumber(canonicalScorePercent) or 0,
 				tonumber(outgoingPercent) or 0,
 				tonumber(selectedMaxScore) or 0,
 				tonumber(outgoingScore) or 0
@@ -3134,7 +3299,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	local outgoingCombo = math.max(0, liveCombo or 0)
 	local outgoingMaxCombo = math.max(0, maxCombo or 0)
 	local outgoingFailed = failed and true or false
-	local scoreFingerprint = self:ScoreFingerprint(outgoingScore, outgoingCombo, outgoingMaxCombo, outgoingFailed, judgments)
+	local scoreFingerprint = self:ScoreFingerprint(outgoingScore, outgoingCombo, outgoingMaxCombo, outgoingFailed, judgments, songPosition)
 
 	if not final then
 		if self.scoreInFlightFingerprint then
@@ -4054,6 +4219,10 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 
 function ITGOnline:ReportSongAvailability(missing, reason, callback)
 	if not self.currentRoomId then
+		online_pack_sync_fields("song_availability_skipped", {
+			{ "reason", "no_active_online_room" },
+			{ "missing", missing and "true" or "false" },
+		})
 		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
 		return
 	end
@@ -4070,14 +4239,35 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		local expectedSongHash = selectedPayload and selectedPayload.song_hash or selectedSong and selectedSong.song_hash or nil
 		local expectedChartHash = selectedPayload and selectedPayload.chart_hash or selectedSong and selectedSong.chart_hash or nil
 		if not localPayload then
+			online_pack_sync_fields("song_availability_local_payload_failed", {
+				{ "room", self.currentRoomId },
+				{ "selected_at", selectedSong and (selectedSong.selected_at or selectedSong.selectedAt) or "" },
+				{ "reason", "local_payload_unavailable" },
+			})
 			self:ReportSongAvailability(true, "local_payload_unavailable", callback)
 			return
 		end
 		if expectedSongHash and expectedSongHash ~= "" and localPayload.song_hash ~= expectedSongHash then
+			online_pack_sync_fields("song_availability_local_payload_mismatch", {
+				{ "room", self.currentRoomId },
+				{ "selected_at", selectedSong and (selectedSong.selected_at or selectedSong.selectedAt) or "" },
+				{ "reason", "song_hash_mismatch" },
+				{ "expected_song_hash", online_short_hash(expectedSongHash) },
+				{ "local_song_hash", online_short_hash(localPayload.song_hash) },
+				{ "local_chart_hash", online_short_hash(localPayload.chart_hash) },
+			})
 			self:ReportSongAvailability(true, "song_hash_mismatch", callback)
 			return
 		end
 		if expectedChartHash and expectedChartHash ~= "" and localPayload.chart_hash ~= expectedChartHash then
+			online_pack_sync_fields("song_availability_local_payload_mismatch", {
+				{ "room", self.currentRoomId },
+				{ "selected_at", selectedSong and (selectedSong.selected_at or selectedSong.selectedAt) or "" },
+				{ "reason", "chart_hash_mismatch" },
+				{ "expected_chart_hash", online_short_hash(expectedChartHash) },
+				{ "local_song_hash", online_short_hash(localPayload.song_hash) },
+				{ "local_chart_hash", online_short_hash(localPayload.chart_hash) },
+			})
 			self:ReportSongAvailability(true, "chart_hash_mismatch", callback)
 			return
 		end
@@ -4097,24 +4287,61 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		tostring(payload.reason or ""),
 	}, "|")
 	if self.songAvailabilityInFlightKey == availabilityKey then
+		online_pack_sync_fields("song_availability_dedup_in_flight", {
+			{ "room", self.currentRoomId },
+			{ "key", availabilityKey },
+			{ "missing", missing and "true" or "false" },
+			{ "reason", payload.reason },
+		})
 		if callback then
 			self.songAvailabilityInFlightCallbacks[#self.songAvailabilityInFlightCallbacks + 1] = callback
 		end
 		return
 	end
 	if self.songAvailabilityReportedKey == availabilityKey then
+		online_pack_sync_fields("song_availability_dedup_reported", {
+			{ "room", self.currentRoomId },
+			{ "key", availabilityKey },
+			{ "missing", missing and "true" or "false" },
+			{ "reason", payload.reason },
+		})
 		if callback then callback(true, nil, { duplicate = true }) end
 		return
 	end
 	local suppressedUntil = tonumber(self.songAvailabilitySuppressedUntil[availabilityKey]) or 0
 	if suppressedUntil > GetTimeSinceStart() then
+		online_pack_sync_fields("song_availability_dedup_suppressed", {
+			{ "room", self.currentRoomId },
+			{ "key", availabilityKey },
+			{ "missing", missing and "true" or "false" },
+			{ "reason", payload.reason },
+		})
 		if callback then callback(true, nil, { duplicate = true, suppressed = true }) end
 		return
 	end
 	self.songAvailabilityInFlightKey = availabilityKey
 	self.songAvailabilityInFlightCallbacks = callback and { callback } or {}
 
+	online_pack_sync_fields("song_availability_send", {
+		{ "room", self.currentRoomId },
+		{ "selected_at", selectedSong.selected_at or selectedSong.selectedAt },
+		{ "missing", payload.missing and "true" or "false" },
+		{ "reason", payload.reason },
+		{ "song_hash", online_short_hash(payload.song_hash) },
+		{ "chart_hash", online_short_hash(payload.chart_hash) },
+		{ "note_count", payload.chart_note_count },
+		{ "max_score", payload.max_score },
+	})
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/song-availability", payload, function(ok, decoded, response)
+		online_pack_sync_fields("song_availability_response", {
+			{ "room", self.currentRoomId },
+			{ "selected_at", selectedSong.selected_at or selectedSong.selectedAt },
+			{ "ok", ok and "true" or "false" },
+			{ "http", response and response.statusCode or "" },
+			{ "error", response and response.errorMessage or decoded and decoded.error_code or "" },
+			{ "missing", payload.missing and "true" or "false" },
+			{ "reason", payload.reason },
+		})
 		local callbacks = self.songAvailabilityInFlightCallbacks or {}
 		if self.songAvailabilityInFlightKey == availabilityKey then
 			self.songAvailabilityInFlightKey = ""
@@ -4371,16 +4598,26 @@ end
 		end
 
 		local incomingVersion = tonumber(payload.leaderboard_version_ms) or 0
+		local incomingTick = tonumber(payload.leaderboard_publish_tick_seconds)
 		local incomingPlayStateVersion = tonumber(payload.play_state_version_ms or (payload.play_state and payload.play_state.version_ms)) or 0
-		local versionRoomId = tostring(roomId or expectedRoomId or "")
+		local versionRoomId = self:LeaderboardStateKey(roomId or expectedRoomId)
 		local leaderboardIsFresh = false
 		if payload.leaderboard and versionRoomId ~= "" then
 			local previousVersion = tonumber(self.lastLeaderboardVersionByRoomId[versionRoomId]) or 0
-			if incomingVersion > 0 and incomingVersion < previousVersion then
+			local previousTick = tonumber(self.lastLeaderboardTickByRoomId[versionRoomId])
+			if incomingTick ~= nil and previousTick ~= nil and incomingTick + 0.001 < previousTick then
+				online_flow_trace("ignored_regressed_score_leaderboard_tick tick=" .. tostring(incomingTick)
+					.. " previous_tick=" .. tostring(previousTick)
+					.. " version=" .. tostring(incomingVersion)
+					.. " previous_version=" .. tostring(previousVersion))
+			elseif incomingVersion > 0 and incomingVersion < previousVersion then
 				online_flow_trace("ignored_stale_score_leaderboard version=" .. tostring(incomingVersion)
 					.. " previous=" .. tostring(previousVersion))
 			elseif incomingVersion > 0 then
 				self.lastLeaderboardVersionByRoomId[versionRoomId] = incomingVersion
+				if incomingTick ~= nil then
+					self.lastLeaderboardTickByRoomId[versionRoomId] = incomingTick
+				end
 				leaderboardIsFresh = true
 			else
 				local now = GetTimeSinceStart()
@@ -4407,16 +4644,45 @@ end
 				end
 				online_trace("score_update room=" .. tostring(payload.room_id or "")
 					.. " version=" .. tostring(incomingVersion)
+					.. " tick=" .. tostring(payload.leaderboard_publish_tick_seconds or "")
+					.. " tick_complete=" .. tostring(payload.leaderboard_publish_tick_complete)
 					.. " user=" .. tostring(user.id or "")
 					.. " score=" .. tostring(score.score or "")
 					.. " percent=" .. tostring(score.score_percent or "")
 					.. " state=" .. tostring(playState))
 			end
-			MESSAGEMAN:Broadcast("ITGOnlineLeaderboardUpdated", {
-				leaderboard = payload.leaderboard,
-				room_id = payload.room_id,
-				leaderboard_version_ms = incomingVersion,
-			})
+				if payload.leaderboard_publish_tick_complete == false then
+					local pending = payload.leaderboard_pending_user_ids or {}
+					online_flow_trace("leaderboard_tick_incomplete room=" .. tostring(payload.room_id or "")
+						.. " tick=" .. tostring(payload.leaderboard_publish_tick_seconds or "")
+						.. " pending_count=" .. tostring(type(pending) == "table" and #pending or 0))
+					if type(payload.leaderboard) == "table" then
+						for entry in ivalues(payload.leaderboard) do
+							if entry and entry.leaderboard_tick_pending == true then
+								local user = entry.user or {}
+								online_flow_trace("leaderboard_player_pending room=" .. tostring(payload.room_id or "")
+									.. " tick=" .. tostring(payload.leaderboard_publish_tick_seconds or "")
+									.. " user=" .. tostring(user.id or "")
+									.. " source=" .. tostring(entry.leaderboard_tick_source or ""))
+							end
+						end
+					end
+				end
+				local degraded = payload.leaderboard_history_degraded_user_ids or {}
+				if type(degraded) == "table" and #degraded > 0 then
+					online_flow_trace("leaderboard_history_degraded room=" .. tostring(payload.room_id or "")
+						.. " tick=" .. tostring(payload.leaderboard_publish_tick_seconds or "")
+						.. " degraded_count=" .. tostring(#degraded))
+				end
+				MESSAGEMAN:Broadcast("ITGOnlineLeaderboardUpdated", {
+					leaderboard = payload.leaderboard,
+					room_id = payload.room_id,
+					leaderboard_version_ms = incomingVersion,
+					leaderboard_publish_tick_seconds = payload.leaderboard_publish_tick_seconds,
+					leaderboard_publish_tick_complete = payload.leaderboard_publish_tick_complete,
+					leaderboard_pending_user_ids = payload.leaderboard_pending_user_ids,
+					leaderboard_history_degraded_user_ids = payload.leaderboard_history_degraded_user_ids,
+				})
 		end
 		if payload.play_state and self.currentRoom then
 			local playStateVersionKey = tostring(roomId or expectedRoomId or "")
@@ -4573,7 +4839,7 @@ function ITGOnline:LobbyStatePayload(room)
 	end
 
 	local liveScoreByUserId = {}
-	for score in ivalues(room.live_scores or room.top_scores or {}) do
+	for score in ivalues(room.live_scores or {}) do
 		local user = score.user or {}
 		local userId = tostring(user.id or score.user_id or "")
 		if userId ~= "" then liveScoreByUserId[userId] = score end

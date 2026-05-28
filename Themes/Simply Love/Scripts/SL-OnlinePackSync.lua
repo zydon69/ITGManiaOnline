@@ -45,6 +45,28 @@ local function trace(message)
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
 
+local function short_hash(value)
+	value = tostring(value or "")
+	return value ~= "" and value:sub(1, 12) or ""
+end
+
+local function add_log_field(parts, key, value)
+	if value == nil then return end
+	value = tostring(value)
+	if value == "" then return end
+	parts[#parts + 1] = tostring(key) .. "=" .. value:gsub("%s+", "_")
+end
+
+local function trace_fields(event, fields)
+	local parts = { tostring(event or "event") }
+	if type(fields) == "table" then
+		for _, pair in ipairs(fields) do
+			add_log_field(parts, pair[1], pair[2])
+		end
+	end
+	trace(table.concat(parts, " "))
+end
+
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
@@ -93,6 +115,36 @@ local function selected_at(songInfo)
 	return trim(songInfo and (songInfo.selectedAt or songInfo.selected_at))
 end
 
+local function song_dir(song)
+	return song and song.GetSongDir and tostring(song:GetSongDir() or "") or ""
+end
+
+local function steps_label(steps)
+	if not steps then return "" end
+	local difficulty = steps.GetDifficulty and ToEnumShortString(steps:GetDifficulty()) or ""
+	local meter = steps.GetMeter and tostring(steps:GetMeter()) or ""
+	local stepsType = steps.GetStepsType and ToEnumShortString(steps:GetStepsType()) or ""
+	return table.concat({ stepsType, difficulty, meter }, ":")
+end
+
+local function trace_song_info(event, songInfo, extra)
+	local fields = {
+		{ "room", ITGOnline and ITGOnline.currentRoomId or "" },
+		{ "selected_at", selected_at(songInfo) },
+		{ "title", selected_title(songInfo) },
+		{ "artist", selected_artist(songInfo) },
+		{ "pack", selected_pack(songInfo) },
+		{ "path", selected_path(songInfo) },
+		{ "chart_key", selected_chart_key(songInfo) },
+		{ "song_hash", short_hash(selected_song_hash(songInfo)) },
+		{ "chart_hash", short_hash(selected_chart_hash(songInfo)) },
+	}
+	if type(extra) == "table" then
+		for _, pair in ipairs(extra) do fields[#fields + 1] = pair end
+	end
+	trace_fields(event, fields)
+end
+
 local function status_message(value)
 	value = trim(value)
 	if #value > 240 then
@@ -122,8 +174,15 @@ local function first_enabled_player()
 	return enabled[1] or PLAYER_1
 end
 
+local chart_hash_for_steps
+
 local function set_current_selection(song, steps)
 	if not song then return end
+	trace_fields("select_local_chart", {
+		{ "song_dir", song_dir(song) },
+		{ "steps", steps_label(steps) },
+		{ "chart_hash", short_hash(chart_hash_for_steps(steps)) },
+	})
 	GAMESTATE:SetCurrentSong(song)
 	if steps then
 		for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
@@ -142,9 +201,15 @@ local function transition_to_player_options()
 		or screenName == "ScreenPlayerOptions3"
 		or screenName == "ScreenGameplay"
 		or screenName == "ScreenGameplayShared" then
+		trace_fields("transition_options_skipped", {
+			{ "screen", screenName },
+		})
 		return
 	end
 
+	trace_fields("transition_to_player_options", {
+		{ "from", screenName },
+	})
 	topScreen:SetNextScreenName("ScreenPlayerOptions")
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 end
@@ -159,9 +224,13 @@ local function transition_to_reload_songs()
 	if not topScreen then return end
 
 	if topScreen:GetName() == "ScreenReloadSongsOnline" then
+		trace("transition_reload_songs_skipped already_on_reload_screen")
 		return
 	end
 
+	trace_fields("transition_to_reload_songs", {
+		{ "from", topScreen:GetName() },
+	})
 	topScreen:SetNextScreenName("ScreenReloadSongsOnline")
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 end
@@ -176,7 +245,7 @@ local function playable_steps(song)
 	return stepsType and song:GetStepsByStepsType(stepsType) or {}
 end
 
-local function chart_hash_for_steps(steps)
+function chart_hash_for_steps(steps)
 	if not steps then return "" end
 	if ITGOnline and ITGOnline.ChartHashForSteps then
 		return tostring(ITGOnline:ChartHashForSteps(steps) or "")
@@ -264,9 +333,20 @@ function PackSync:UpdateStatus(status, message, progress, callback)
 	self:SyncSequenceFromRoom(currentSelectedAt)
 	self.sequence = (tonumber(self.sequence) or 0) + 1
 	message = status_message(message)
-	trace("Status " .. status .. (message and (" - " .. tostring(message)) or ""))
+	trace_fields("status_update_send", {
+		{ "room", ITGOnline and ITGOnline.currentRoomId or "" },
+		{ "status", status },
+		{ "sequence", self.sequence },
+		{ "selected_at", currentSelectedAt },
+		{ "progress", progress },
+		{ "message", message },
+	})
 
 	if not (ITGOnline and ITGOnline.Request and ITGOnline.currentRoomId) then
+		trace_fields("status_update_skipped", {
+			{ "status", status },
+			{ "reason", "no_active_online_room" },
+		})
 		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
 		return
 	end
@@ -284,6 +364,14 @@ function PackSync:UpdateStatus(status, message, progress, callback)
 	end
 
 	ITGOnline:Request("POST", "/rooms/" .. tostring(ITGOnline.currentRoomId) .. "/pack-sync-status", payload, function(ok, decoded, response)
+		trace_fields("status_update_response", {
+			{ "room", ITGOnline and ITGOnline.currentRoomId or "" },
+			{ "status", status },
+			{ "sequence", payload.sequence },
+			{ "ok", ok and "true" or "false" },
+			{ "http", response and response.statusCode or "" },
+			{ "error", response and response.errorMessage or decoded and decoded.error_code or "" },
+		})
 		if ok and decoded and decoded.room and ITGOnline.ApplyRoomSnapshot then
 			ITGOnline:ApplyRoomSnapshot(decoded.room, "pack_sync_status")
 			MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
@@ -306,6 +394,12 @@ function PackSync:SyncSequenceFromRoom(currentSelectedAt)
 		if memberUserId == currentUserId then
 			local serverSequence = tonumber(member.pack_sync_sequence)
 			if serverSequence and serverSequence > (tonumber(self.sequence) or 0) then
+				trace_fields("sequence_synced_from_room", {
+					{ "selected_at", currentSelectedAt },
+					{ "local_sequence", self.sequence },
+					{ "server_sequence", serverSequence },
+					{ "server_status", member.pack_sync_status },
+				})
 				self.sequence = serverSequence
 			end
 			return
@@ -325,13 +419,17 @@ function PackSync:LocalChartIndex()
 	end
 
 	local index = {}
+	local songsSeen = 0
+	local chartsIndexed = 0
 	if SONGMAN and SONGMAN.GetAllSongs then
 		for song in ivalues(SONGMAN:GetAllSongs()) do
+			songsSeen = songsSeen + 1
 			for steps in ivalues(playable_steps(song)) do
 				local hash = normalized_hash(chart_hash_for_steps(steps))
 				if hash ~= "" then
 					index[hash] = index[hash] or {}
 					index[hash][#index[hash] + 1] = { song = song, steps = steps }
+					chartsIndexed = chartsIndexed + 1
 				end
 			end
 		end
@@ -339,6 +437,11 @@ function PackSync:LocalChartIndex()
 
 	self.localChartIndex = index
 	self.localChartIndexKey = key
+	trace_fields("local_chart_index_built", {
+		{ "songs", songsSeen },
+		{ "charts", chartsIndexed },
+		{ "key", key },
+	})
 	return index
 end
 
@@ -346,21 +449,26 @@ function PackSync:ManagerBrowsingPreview(songInfo)
 	if not songInfo then return end
 	if selected_pack(songInfo) ~= "" and SONGMAN and SONGMAN.DoesSongGroupExist and not SONGMAN:DoesSongGroupExist(selected_pack(songInfo)) then
 		self.currentSongInfo = nil
+		trace_song_info("manager_browsing_unknown_pack", songInfo)
 		self:UpdateStatus(self.status.ManagerBrowsingUnknownPack, "Le manager navigue dans un pack que vous ne possédez pas.")
 	end
 end
 
 function PackSync:FindLocalMatch(songInfo)
 	if not songInfo then
+		trace("local_match_aborted reason=missing_song_info")
 		return { ok = false, status = "missing", reason = "missing_local_song" }
 	end
 
 	self.currentSongInfo = songInfo
-	trace("Searching local charts title=" .. selected_title(songInfo) .. " pack=" .. selected_pack(songInfo))
+	trace_song_info("local_match_start", songInfo)
 	self:UpdateStatus(self.status.SearchingLocalCharts, nil)
 
 	local expectedChartHash = selected_chart_hash(songInfo)
 	if expectedChartHash == "" then
+		trace_song_info("local_match_failed", songInfo, {
+			{ "reason", "missing_expected_chart_hash" },
+		})
 		return { ok = false, status = "missing", reason = "chart_hash_mismatch" }
 	end
 
@@ -370,50 +478,111 @@ function PackSync:FindLocalMatch(songInfo)
 		local parts = exactPath:split("/")
 		if parts and parts[2] then exactSong = SONGMAN:FindSong(parts[2]) end
 	end
+	trace_fields("local_match_exact_path", {
+		{ "path", exactPath },
+		{ "found", exactSong and "true" or "false" },
+		{ "song_dir", song_dir(exactSong) },
+	})
 
 	local mismatchReason = nil
 	local function evaluate_candidate(song, source)
 		local steps = matching_steps_in_song(song, songInfo)
-		if not steps then return nil end
+		if not steps then
+			trace_fields("candidate_skipped_no_steps", {
+				{ "source", source or "scan" },
+				{ "song_dir", song_dir(song) },
+				{ "expected_chart_hash", short_hash(expectedChartHash) },
+			})
+			return nil
+		end
 
-		trace("Candidate chart found " .. tostring(source or song:GetSongDir()))
+		trace_fields("candidate_chart_found", {
+			{ "source", source or "scan" },
+			{ "song_dir", song_dir(song) },
+			{ "steps", steps_label(steps) },
+			{ "candidate_chart_hash", short_hash(chart_hash_for_steps(steps)) },
+		})
 		local payload = build_payload(song, steps)
 		local payloadOk, reason = payload_matches_selected(payload, songInfo)
 		if payloadOk then
-			trace("Matching local chart found " .. tostring(source or song:GetSongDir()))
+			trace_fields("local_match_found", {
+				{ "source", source or "scan" },
+				{ "song_dir", song_dir(song) },
+				{ "steps", steps_label(steps) },
+				{ "song_hash", short_hash(payload and payload.song_hash) },
+				{ "chart_hash", short_hash(payload and payload.chart_hash) },
+				{ "chart_key", payload and payload.chart_key or "" },
+			})
 			self:UpdateStatus(self.status.LocalChartMatchFound, nil)
 			return { ok = true, song = song, steps = steps, payload = payload }
 		end
 
 		mismatchReason = mismatchReason or reason or "chart_mismatch"
-		trace("Candidate hash mismatch " .. tostring(source or song:GetSongDir()) .. " reason=" .. tostring(mismatchReason))
+		trace_fields("candidate_hash_mismatch", {
+			{ "source", source or "scan" },
+			{ "song_dir", song_dir(song) },
+			{ "reason", reason or "chart_mismatch" },
+			{ "local_song_hash", short_hash(payload and payload.song_hash) },
+			{ "local_chart_hash", short_hash(payload and payload.chart_hash) },
+			{ "expected_song_hash", short_hash(selected_song_hash(songInfo)) },
+			{ "expected_chart_hash", short_hash(expectedChartHash) },
+		})
 		return nil
 	end
 
 	if exactSong then
+		trace_fields("local_match_try_exact_song", {
+			{ "song_dir", song_dir(exactSong) },
+		})
 		local result = evaluate_candidate(exactSong, "manager pack")
 		if result then return result end
 	end
 
+	local scannedSongs = 0
 	for song in ivalues(SONGMAN:GetAllSongs()) do
 		if song ~= exactSong and song_matches_text_prefilter(song, songInfo) then
+			scannedSongs = scannedSongs + 1
 			local result = evaluate_candidate(song)
 			if result then return result end
 		end
 	end
+	trace_fields("local_match_text_scan_complete", {
+		{ "scanned", scannedSongs },
+		{ "mismatch_reason", mismatchReason },
+	})
 
 	local indexedCandidates = self:LocalChartIndex()[expectedChartHash] or {}
+	trace_fields("local_match_hash_index_scan", {
+		{ "expected_chart_hash", short_hash(expectedChartHash) },
+		{ "candidates", #indexedCandidates },
+	})
 	for candidate in ivalues(indexedCandidates) do
 		if candidate.song ~= exactSong and not song_matches_text_prefilter(candidate.song, songInfo) then
-			trace("Candidate chart found via hash index " .. tostring(candidate.song:GetSongDir()))
+			trace_fields("candidate_chart_found_hash_index", {
+				{ "song_dir", song_dir(candidate.song) },
+				{ "steps", steps_label(candidate.steps) },
+				{ "candidate_chart_hash", short_hash(chart_hash_for_steps(candidate.steps)) },
+			})
 			local payload = build_payload(candidate.song, candidate.steps)
 			local payloadOk, reason = payload_matches_selected(payload, songInfo)
 			if payloadOk then
-				trace("Matching local chart found via hash index " .. tostring(candidate.song:GetSongDir()))
+				trace_fields("local_match_found_hash_index", {
+					{ "song_dir", song_dir(candidate.song) },
+					{ "steps", steps_label(candidate.steps) },
+					{ "song_hash", short_hash(payload and payload.song_hash) },
+					{ "chart_hash", short_hash(payload and payload.chart_hash) },
+					{ "chart_key", payload and payload.chart_key or "" },
+				})
 				self:UpdateStatus(self.status.LocalChartMatchFound, nil)
 				return { ok = true, song = candidate.song, steps = candidate.steps, payload = payload }
 			end
 			mismatchReason = mismatchReason or reason or "chart_mismatch"
+			trace_fields("candidate_hash_index_mismatch", {
+				{ "song_dir", song_dir(candidate.song) },
+				{ "reason", reason or "chart_mismatch" },
+				{ "local_song_hash", short_hash(payload and payload.song_hash) },
+				{ "local_chart_hash", short_hash(payload and payload.chart_hash) },
+			})
 		end
 	end
 
@@ -421,31 +590,47 @@ function PackSync:FindLocalMatch(songInfo)
 		local message = mismatchReason == "song_hash_mismatch"
 			and "La stepchart existe localement, mais l'audio differe de celui du manager."
 			or "La musique ou la stepchart trouvée est différente de celle du manager."
+		trace_song_info("local_match_mismatch", songInfo, {
+			{ "reason", mismatchReason },
+		})
 		self:UpdateStatus(self.status.ChartMismatch, message)
 		return { ok = false, status = "mismatch", reason = mismatchReason }
 	end
 
-	trace("No compatible chart found title=" .. selected_title(songInfo))
+	trace_song_info("local_match_not_found", songInfo)
 	self:UpdateStatus(self.status.NoCompatibleChartFound, "Aucune stepchart identique à celle du manager n’a été trouvée.")
 	return { ok = false, status = "missing", reason = "no_compatible_chart_found" }
 end
 
 function PackSync:ApplySelectedChart(songInfo)
+	trace_song_info("apply_selected_chart_start", songInfo)
 	local result = self:FindLocalMatch(songInfo)
 	if result.ok then
 		set_current_selection(result.song, result.steps)
 		MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
 		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
 			ITGOnline:ConfirmSelectedSongAvailability("local_chart_match_found", function(ok)
+				trace_song_info("confirm_availability_after_local_match", songInfo, {
+					{ "ok", ok and "true" or "false" },
+				})
 				if ok then self:UpdateStatus(self.status.Ready, nil) end
 			end)
 		else
+			trace("confirm_availability_after_local_match skipped reason=no_itgonline_helper")
 			self:UpdateStatus(self.status.Ready, nil)
 		end
+		trace_song_info("apply_selected_chart_success", songInfo, {
+			{ "song_dir", song_dir(result.song) },
+			{ "steps", steps_label(result.steps) },
+		})
 		return true
 	end
 
 	local reason = result.reason or "missing_local_song"
+	trace_song_info("apply_selected_chart_failed", songInfo, {
+		{ "status", result.status },
+		{ "reason", reason },
+	})
 	if result.status == "mismatch" then
 		MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = reason, chartMismatch = true })
 	else
@@ -459,6 +644,9 @@ local function stepmaniaonline_origin()
 end
 
 local function request_json(url, callback)
+	trace_fields("smo_request", {
+		{ "url", url },
+	})
 	NETWORK:HttpRequest({
 		url = url,
 		method = "GET",
@@ -466,10 +654,20 @@ local function request_json(url, callback)
 		transferTimeout = 20,
 		onResponse = function(response)
 			if (tonumber(response and response.statusCode) or 0) ~= 200 then
+				trace_fields("smo_response_failed", {
+					{ "url", url },
+					{ "http", response and response.statusCode or "" },
+					{ "error", response and response.errorMessage or "" },
+				})
 				callback(false, nil, response)
 				return
 			end
 			local ok, decoded = pcall(JsonDecode, response.body or "")
+			trace_fields("smo_response", {
+				{ "url", url },
+				{ "http", response and response.statusCode or "" },
+				{ "json_ok", ok and decoded ~= nil and "true" or "false" },
+			})
 			callback(ok and decoded ~= nil, decoded, response)
 		end,
 	})
@@ -492,6 +690,9 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 	local title = selected_title(songInfo)
 	local artist = lower(selected_artist(songInfo))
 	local chartKey = selected_chart_key(songInfo)
+	trace_song_info("smo_search_start", songInfo, {
+		{ "has_chart_key", chartKey ~= "" and "true" or "false" },
+	})
 
 	local function choose_chart_key_pack(chartDecoded)
 		local commonPacks = chartDecoded and chartDecoded.common_packs or {}
@@ -523,15 +724,28 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 				candidates[#candidates + 1] = packResult
 			end
 		end
+		trace_fields("smo_search_candidates_filtered", {
+			{ "count", #candidates },
+			{ "pack", pack },
+			{ "title", title },
+		})
 		return candidates
 	end
 
 	local function finish_with_results(decoded)
 		local candidates = choose(decoded and decoded.results or {})
 		if #candidates == 1 then
+			trace_fields("smo_search_match", {
+				{ "pack_id", candidates[1].id },
+				{ "pack", candidates[1].name },
+			})
 			callback(true, candidates[1])
 			return
 		end
+		trace_fields("smo_search_failed", {
+			{ "reason", #candidates == 0 and "no_match" or "ambiguous" },
+			{ "candidates", #candidates },
+		})
 		callback(false, nil, { errorMessage = #candidates == 0 and "No StepManiaOnline pack matched." or "StepManiaOnline pack search is ambiguous." })
 	end
 
@@ -544,6 +758,9 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 
 		search("artist", artist, function(artistOk, artistDecoded)
 			if not artistOk then
+				trace_fields("smo_artist_search_failed", {
+					{ "artist", artist },
+				})
 				callback(false, nil, { errorMessage = "StepManiaOnline artist search failed." })
 				return
 			end
@@ -560,6 +777,10 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 				end
 			end
 			decoded.results = filtered
+			trace_fields("smo_artist_filter_applied", {
+				{ "artist", artist },
+				{ "filtered", #filtered },
+			})
 			finish_with_results(decoded)
 		end)
 	end
@@ -569,17 +790,34 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 			if ok and chartDecoded then
 				local chartPack = choose_chart_key_pack(chartDecoded)
 				if chartPack and chartPack.id then
+					trace_fields("smo_chart_key_match", {
+						{ "chart_key", chartKey },
+						{ "pack_id", chartPack.id },
+						{ "pack", chartPack.name },
+					})
 					callback(true, chartPack)
 					return
 				end
 				local commonPacks = chartDecoded.common_packs or {}
 				if #commonPacks > 1 and pack == "" then
+					trace_fields("smo_chart_key_ambiguous", {
+						{ "chart_key", chartKey },
+						{ "packs", #commonPacks },
+					})
 					callback(false, nil, { errorMessage = "StepManiaOnline chart key matched multiple packs." })
 					return
 				end
+				trace_fields("smo_chart_key_no_selected_pack_match", {
+					{ "chart_key", chartKey },
+					{ "pack", pack },
+					{ "packs", #commonPacks },
+				})
 				callback(false, nil, { errorMessage = "StepManiaOnline chart key did not match the selected pack." })
 				return
 			end
+			trace_fields("smo_chart_key_lookup_failed", {
+				{ "chart_key", chartKey },
+			})
 			self:SearchStepManiaOnline({
 				title = title,
 				artist = artist,
@@ -611,11 +849,13 @@ end
 
 function PackSync:DownloadSelectedPack(songInfo, callback)
 	if not songInfo then
+		trace("download_aborted reason=missing_song_info")
 		if callback then callback(false, "No selected song.") end
 		return
 	end
 
 	self.currentSongInfo = songInfo
+	trace_song_info("download_requested", songInfo)
 	local downloadKey = selected_at(songInfo)
 	if downloadKey == "" then
 		downloadKey = selected_chart_hash(songInfo) .. "|" .. selected_path(songInfo)
@@ -623,7 +863,10 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 	if downloadKey == "" then downloadKey = tostring(songInfo) end
 	if self.downloadInFlightKey == downloadKey then
 		local message = "Download already in progress."
-		trace(message)
+		trace_song_info("download_skipped", songInfo, {
+			{ "reason", "already_in_progress" },
+			{ "download_key", downloadKey },
+		})
 		if callback then callback(false, message) end
 		return
 	end
@@ -631,6 +874,9 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 	self.downloadInFlightKey = downloadKey
 	local function fail_download(message)
 		self.downloadInFlightKey = nil
+		trace_song_info("download_failed", songInfo, {
+			{ "message", message },
+		})
 		self:UpdateStatus(self.status.DownloadFailed, message)
 		if callback then callback(false, message) end
 	end
@@ -639,13 +885,19 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 	self:SearchStepManiaOnline(songInfo, function(ok, pack, searchError)
 		if not ok or not pack or not pack.id then
 			local message = searchError and searchError.errorMessage or "StepManiaOnline pack search failed."
-			trace("Download failed search=" .. tostring(message))
+			trace_song_info("download_search_failed", songInfo, {
+				{ "message", message },
+			})
 			fail_download(message)
 			return
 		end
 
 		local packId = tonumber(pack.id)
 		if not packId or math.floor(packId) ~= packId or packId < 1 then
+			trace_fields("download_pack_id_invalid", {
+				{ "pack_id", pack.id },
+				{ "pack", pack.name },
+			})
 			fail_download("StepManiaOnline returned an invalid pack id.")
 			return
 		end
@@ -653,11 +905,20 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 		local fileName = tostring(packId) .. "_" .. safe_file_name(pack.name)
 		local quarantinePath = "/Songs/Online Downloads/" .. safe_folder_name(pack.name) .. " " .. tostring(packId) .. "/"
 		if FILEMAN:DoesFileExist(quarantinePath) then
+			trace_fields("download_quarantine_cleanup", {
+				{ "path", quarantinePath },
+			})
 			FILEMAN:DeleteRecursive(quarantinePath)
 		end
 		local url = stepmaniaonline_origin() .. "/download/pack/" .. tostring(packId) .. "/"
 		local downloadMessage = "Downloading " .. tostring(pack.name)
-		trace("Download started pack=" .. tostring(pack.name) .. " id=" .. tostring(packId))
+		trace_fields("download_started", {
+			{ "pack_id", packId },
+			{ "pack", pack.name },
+			{ "file", fileName },
+			{ "quarantine", quarantinePath },
+			{ "url", url },
+		})
 		self:UpdateStatus(self.status.DownloadInProgress, downloadMessage, 0)
 		self.lastProgressStatusAt = 0
 		self.lastProgressValue = -10
@@ -676,6 +937,12 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 					if progress >= 100 or progress - (tonumber(self.lastProgressValue) or -10) >= 10 or now - (tonumber(self.lastProgressStatusAt) or 0) >= 2 then
 						self.lastProgressValue = progress
 						self.lastProgressStatusAt = now
+						trace_fields("download_progress", {
+							{ "pack_id", packId },
+							{ "progress", progress },
+							{ "current", current },
+							{ "total", total },
+						})
 						self:UpdateStatus(self.status.DownloadInProgress, downloadMessage, progress)
 					end
 				end
@@ -685,26 +952,48 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 				local statusCode = tonumber(response and response.statusCode) or 0
 				if statusCode < 200 or statusCode >= 300 then
 					local message = "Le téléchargement du pack a échoué."
-					trace("Download failed status=" .. tostring(statusCode))
+					trace_fields("download_http_failed", {
+						{ "pack_id", packId },
+						{ "http", statusCode },
+						{ "error", response and response.errorMessage or "" },
+					})
 					fail_download(message)
 					return
 				end
 
 				local zipPath = "/Downloads/" .. fileName
 				if not FILEMAN:DoesFileExist(zipPath) then
+					trace_fields("download_zip_missing", {
+						{ "pack_id", packId },
+						{ "zip", zipPath },
+					})
 					fail_download("Le fichier téléchargé est introuvable.")
 					return
 				end
 
+				trace_fields("download_extract_start", {
+					{ "pack_id", packId },
+					{ "zip", zipPath },
+					{ "target", quarantinePath },
+				})
 				local extracted = FILEMAN:Unzip(zipPath, quarantinePath, 0)
 				if not extracted then
 					local message = "Le zip téléchargé est invalide ou impossible à extraire."
-					trace("Download failed unzip pack=" .. tostring(pack.name))
+					trace_fields("download_extract_failed", {
+						{ "pack_id", packId },
+						{ "pack", pack.name },
+						{ "zip", zipPath },
+						{ "target", quarantinePath },
+					})
 					fail_download(message)
 					return
 				end
 
-				trace("Reload Songs after download pack=" .. tostring(pack.name))
+				trace_fields("download_extract_ok_reload_required", {
+					{ "pack_id", packId },
+					{ "pack", pack.name },
+					{ "target", quarantinePath },
+				})
 				self.pendingPostReloadSongInfo = songInfo
 				self.pendingQuarantinePath = quarantinePath
 				self:UpdateStatus(self.status.ReloadingSongs, "Reloading songs")
@@ -721,27 +1010,45 @@ function PackSync:ValidatePendingPostReload()
 	self.pendingPostReloadSongInfo = nil
 	self.pendingQuarantinePath = nil
 	self.downloadInFlightKey = nil
-	if not songInfo then return false end
+	if not songInfo then
+		trace("post_reload_validation_skipped reason=no_pending_song")
+		return false
+	end
 
+	trace_song_info("post_reload_validation_start", songInfo, {
+		{ "quarantine", quarantinePath },
+	})
 	self:InvalidateLocalChartIndex()
 	local result = self:FindLocalMatch(songInfo)
 	if result.ok then
 		local songDir = result.song and result.song.GetSongDir and tostring(result.song:GetSongDir() or "") or ""
 		if quarantinePath and quarantinePath ~= "" and songDir:sub(1, #quarantinePath) ~= quarantinePath then
-			trace("Downloaded pack did not contain the selected chart; matched existing local chart instead")
+			trace_fields("post_reload_validation_failed", {
+				{ "reason", "matched_existing_chart_outside_quarantine" },
+				{ "song_dir", songDir },
+				{ "quarantine", quarantinePath },
+			})
 			if FILEMAN and FILEMAN.DeleteRecursive then FILEMAN:DeleteRecursive(quarantinePath) end
 			self:UpdateStatus(self.status.DownloadFailed, "Le pack téléchargé ne contient pas la stepchart attendue.")
 			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
 			return false
 		end
 		set_current_selection(result.song, result.steps)
-		trace("Downloaded OK and local chart validated")
+		trace_fields("post_reload_validation_ok", {
+			{ "song_dir", song_dir(result.song) },
+			{ "steps", steps_label(result.steps) },
+			{ "quarantine", quarantinePath },
+		})
 		self:UpdateStatus(self.status.DownloadedOk, nil)
 		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
 			ITGOnline:ConfirmSelectedSongAvailability("downloaded_ok", function(ok)
+				trace_song_info("confirm_availability_after_download", songInfo, {
+					{ "ok", ok and "true" or "false" },
+				})
 				if ok then self:UpdateStatus(self.status.Ready, nil) end
 			end)
 		else
+			trace("confirm_availability_after_download skipped reason=no_itgonline_helper")
 			self:UpdateStatus(self.status.Ready, nil)
 		end
 		MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
@@ -750,6 +1057,10 @@ function PackSync:ValidatePendingPostReload()
 	end
 
 	if result.status == "mismatch" then
+		trace_song_info("post_reload_validation_mismatch", songInfo, {
+			{ "reason", result.reason or "chart_mismatch" },
+			{ "quarantine", quarantinePath },
+		})
 		self:UpdateStatus(self.status.ChartMismatch, "La musique ou la stepchart trouvée est différente de celle du manager.")
 		if quarantinePath and quarantinePath ~= "" and FILEMAN and FILEMAN.DeleteRecursive then FILEMAN:DeleteRecursive(quarantinePath) end
 		if ITGOnline and ITGOnline.ReportSongAvailability then
@@ -757,6 +1068,10 @@ function PackSync:ValidatePendingPostReload()
 		end
 		MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "chart_mismatch", chartMismatch = true })
 	else
+		trace_song_info("post_reload_validation_failed", songInfo, {
+			{ "reason", result.reason or "download_failed" },
+			{ "quarantine", quarantinePath },
+		})
 		self:UpdateStatus(self.status.DownloadFailed, "La chanson est introuvable après reload.")
 		if quarantinePath and quarantinePath ~= "" and FILEMAN and FILEMAN.DeleteRecursive then FILEMAN:DeleteRecursive(quarantinePath) end
 		if ITGOnline and ITGOnline.ReportSongAvailability then
