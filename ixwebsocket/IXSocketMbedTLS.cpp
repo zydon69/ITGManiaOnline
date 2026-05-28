@@ -14,8 +14,14 @@
 #include "IXNetSystem.h"
 #include "IXSocket.h"
 #include "IXSocketConnect.h"
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
+#include <sstream>
 #include <string.h>
+
+#include <mbedtls/pk.h>
+#include <mbedtls/sha256.h>
 
 #ifdef _WIN32
 // For manipulating the certificate store
@@ -24,6 +30,117 @@
 
 namespace ix
 {
+    static std::string trimCopy(const std::string& value)
+    {
+        auto begin = std::find_if_not(value.begin(), value.end(), [](unsigned char c) { return std::isspace(c); });
+        auto end = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) { return std::isspace(c); }).base();
+        if (begin >= end)
+        {
+            return std::string();
+        }
+        return std::string(begin, end);
+    }
+
+    static bool pinnedHostMatches(const std::string& host, const std::string& pattern)
+    {
+        if (pattern.rfind("*.", 0) == 0)
+        {
+            const std::string suffix = pattern.substr(1);
+            return host.size() >= suffix.size() &&
+                   host.compare(host.size() - suffix.size(), suffix.size(), suffix) == 0;
+        }
+
+        return host == pattern;
+    }
+
+    static bool publicKeyPinMatches(const std::string& pins, const std::string& host, const std::string& spkiHash)
+    {
+        if (pins.empty())
+        {
+            return true;
+        }
+
+        std::stringstream stream(pins);
+        std::string entry;
+        bool hostHasPins = false;
+
+        while (std::getline(stream, entry, ','))
+        {
+            entry = trimCopy(entry);
+            const auto separator = entry.find('=');
+            if (separator == std::string::npos)
+            {
+                continue;
+            }
+
+            const std::string pattern = trimCopy(entry.substr(0, separator));
+            const std::string expectedHash = trimCopy(entry.substr(separator + 1));
+
+            if (!pinnedHostMatches(host, pattern))
+            {
+                continue;
+            }
+
+            hostHasPins = true;
+            if (expectedHash == spkiHash)
+            {
+                return true;
+            }
+        }
+
+        return !hostHasPins;
+    }
+
+    static std::string sha256Hex(const unsigned char* data, size_t length)
+    {
+        unsigned char digest[32];
+        static const char* hex = "0123456789abcdef";
+        std::string out;
+        out.resize(64);
+
+        mbedtls_sha256(data, length, digest, 0);
+        for (size_t i = 0; i < sizeof(digest); ++i)
+        {
+            out[i * 2] = hex[(digest[i] >> 4) & 0x0f];
+            out[i * 2 + 1] = hex[digest[i] & 0x0f];
+        }
+
+        return out;
+    }
+
+    static bool verifyPublicKeyPin(mbedtls_ssl_context* ssl, const SocketTLSOptions& tlsOptions, const std::string& host, std::string& errMsg)
+    {
+        if (tlsOptions.publicKeySha256Pins.empty())
+        {
+            return true;
+        }
+
+        const mbedtls_x509_crt* cert = mbedtls_ssl_get_peer_cert(ssl);
+        if (cert == nullptr)
+        {
+            errMsg = "Public key pinning failed: no peer certificate.";
+            return false;
+        }
+
+        unsigned char buffer[4096];
+        const int length = mbedtls_pk_write_pubkey_der(const_cast<mbedtls_pk_context*>(&cert->pk), buffer, sizeof(buffer));
+        if (length <= 0 || static_cast<size_t>(length) > sizeof(buffer))
+        {
+            errMsg = "Public key pinning failed: cannot encode peer public key.";
+            return false;
+        }
+
+        const unsigned char* der = buffer + sizeof(buffer) - static_cast<size_t>(length);
+        const std::string spkiHash = sha256Hex(der, static_cast<size_t>(length));
+        if (!publicKeyPinMatches(tlsOptions.publicKeySha256Pins, host, spkiHash))
+        {
+            errMsg = "Public key pinning failed for host '" + host + "'.";
+            return false;
+        }
+
+        return true;
+    }
+
     SocketMbedTLS::SocketMbedTLS(const SocketTLSOptions& tlsOptions, int fd)
         : Socket(fd)
         , _tlsOptions(tlsOptions)
@@ -304,6 +421,12 @@ namespace ix
             errMsg = "error in handshake : ";
             errMsg += buf;
 
+            close();
+            return false;
+        }
+
+        if (!verifyPublicKeyPin(&_ssl, _tlsOptions, host, errMsg))
+        {
             close();
             return false;
         }

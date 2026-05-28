@@ -25,9 +25,58 @@
 #define socketerrno errno
 
 #include <Security/SecureTransport.h>
+#include <algorithm>
+#include <cctype>
+#include <sstream>
 
 namespace ix
 {
+    static std::string trimCopy(const std::string& value)
+    {
+        auto begin = std::find_if_not(value.begin(), value.end(), [](unsigned char c) { return std::isspace(c); });
+        auto end = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) { return std::isspace(c); }).base();
+        if (begin >= end)
+        {
+            return std::string();
+        }
+        return std::string(begin, end);
+    }
+
+    static bool pinnedHostMatches(const std::string& host, const std::string& pattern)
+    {
+        if (pattern.rfind("*.", 0) == 0)
+        {
+            const std::string suffix = pattern.substr(1);
+            return host.size() >= suffix.size() &&
+                   host.compare(host.size() - suffix.size(), suffix.size(), suffix) == 0;
+        }
+
+        return host == pattern;
+    }
+
+    static bool hostHasPublicKeyPins(const std::string& pins, const std::string& host)
+    {
+        std::stringstream stream(pins);
+        std::string entry;
+
+        while (std::getline(stream, entry, ','))
+        {
+            entry = trimCopy(entry);
+            const auto separator = entry.find('=');
+            if (separator == std::string::npos)
+            {
+                continue;
+            }
+
+            if (pinnedHostMatches(host, trimCopy(entry.substr(0, separator))))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     SocketAppleSSL::SocketAppleSSL(const SocketTLSOptions& tlsOptions, int fd)
         : Socket(fd)
         , _sslContext(nullptr)
@@ -231,6 +280,14 @@ namespace ix
         if (status != noErr)
         {
             errMsg = getSSLErrorDescription(status);
+            close();
+            return false;
+        }
+
+        if (hostHasPublicKeyPins(_tlsOptions.publicKeySha256Pins, host))
+        {
+            errMsg = "Public key pinning is configured for host '" + host +
+                     "', but the SecureTransport backend does not implement SPKI pin verification.";
             close();
             return false;
         }
