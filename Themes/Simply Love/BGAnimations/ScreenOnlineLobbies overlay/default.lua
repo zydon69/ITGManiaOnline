@@ -821,10 +821,9 @@ local af = Def.ActorFrame{
 			codeValue:settext(joined_lobby_code ~= "" and joined_lobby_code or "(pending)")
 		end
 
-		local lines = {}
+			local lines = {}
 			for i, player in ipairs(joined_lobby_players) do
 				local profile = trim_text(player.profileName or player.name or player.playerId or ("Player "..i))
-				local ready = player.ready and " ✔" or ""
 				local missing = player.missingSong and " ⚠ missing song" or ""
 				local packSyncText = pack_sync_display_text(player.packSyncStatus)
 				if packSyncText ~= "" and packSyncText ~= "Ready" then
@@ -846,7 +845,7 @@ local af = Def.ActorFrame{
 				end
 				local maxLineLen = 88
 				local lineHead = i..". "..profile
-				local lineTail = ready..missing
+				local lineTail = missing
 				local optionsText = table.concat(optionParts, " | ")
 				local options = ""
 				if optionsText ~= "" then
