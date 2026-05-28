@@ -74,14 +74,13 @@ local function rows_from_leaderboard(leaderboard)
 	for score in ivalues(leaderboard or {}) do
 		local user = score.user or {}
 		local accuracy_percent = tonumber(score.accuracy)
-		local ex_percent = tonumber(score.score_percent)
-		if ex_percent == nil and max_score > 0 and tonumber(score.score) then
-			ex_percent = math.max(0, math.min(100, (tonumber(score.score) / max_score) * 100))
+		local score_percent = tonumber(score.score_percent)
+		if score_percent == nil and max_score > 0 and tonumber(score.score) then
+			score_percent = math.max(0, math.min(100, (tonumber(score.score) / max_score) * 100))
 		end
 
-		-- The live leaderboard should follow score progression, not accuracy.
-		-- Use accuracy only when score-based percentage is unavailable.
-		local percent = ex_percent
+		-- The live leaderboard must follow the same canonical score shown in gameplay.
+		local percent = score_percent
 		if percent == nil then
 			percent = accuracy_percent
 		end
@@ -108,12 +107,9 @@ local function rows_from_lobby_state(data)
 		if player.exScore ~= nil or player.score ~= nil or player.playState ~= nil then
 			local score_percent = tonumber(player.score)
 			local ex_percent = tonumber(player.exScore)
-			-- `player.score` is the canonical displayed score percent reported by the client.
-			-- Prefer EX/score-derived percentage for consistency with gameplay score.
-			local percent = ex_percent
-			if percent == nil then
-				percent = score_percent
-			end
+			-- `player.score` is canonical in online play; EX is fallback only.
+			local percent = score_percent
+			if percent == nil then percent = ex_percent end
 			local player_id = tostring(player.playerId or "")
 			local flags = terminal_flags(player.playState, false)
 			rows[#rows + 1] = {

@@ -4865,18 +4865,17 @@ function ITGOnline:LobbyStatePayload(room)
 		end
 			local liveScore = liveScoreByUserId[userId] or {}
 			local selectedMaxScore = tonumber(room.selected_song and room.selected_song.max_score) or 0
-			local scorePercent = tonumber(liveScore.accuracy or session.last_accuracy)
-			local exPercent = tonumber(liveScore.score_percent)
-			if exPercent == nil and selectedMaxScore > 0 and tonumber(liveScore.score or session.last_score) then
-				exPercent = math.max(0, math.min(100, (tonumber(liveScore.score or session.last_score) / selectedMaxScore) * 100))
+			local scorePercent = tonumber(liveScore.score_percent)
+			if scorePercent == nil and selectedMaxScore > 0 and tonumber(liveScore.score or session.last_score) then
+				scorePercent = math.max(0, math.min(100, (tonumber(liveScore.score or session.last_score) / selectedMaxScore) * 100))
 			end
+			local accuracyPercent = tonumber(liveScore.accuracy or session.last_accuracy)
+			local exPercent = scorePercent
 		-- Unified online score semantics:
 		-- - `score` is what we treat as the canonical displayed competition percentage.
 		-- - `accuracy` keeps the judgment-derived metric for diagnostics.
-		local displayedPercent = exPercent
-		if displayedPercent == nil then
-			displayedPercent = scorePercent
-		end
+		local displayedPercent = scorePercent
+		if displayedPercent == nil then displayedPercent = accuracyPercent end
 			players[#players + 1] = {
 				playerId = userId,
 				profileName = user.name or ("Player " .. userId),
@@ -4896,7 +4895,7 @@ function ITGOnline:LobbyStatePayload(room)
 				playState = state,
 				isPlayingSong = state == "playing" and room.phase == "playing",
 				score = displayedPercent,
-				accuracy = scorePercent,
+				accuracy = accuracyPercent,
 				exScore = exPercent,
 			}
 	end
