@@ -972,7 +972,7 @@ std::string Steps::GenerateChartKey(NoteData& nd, TimingData* td) {
         bpm = td->GetBPMAtRow(row);
         std::ostringstream os;
         os << static_cast<int>(bpm + 0.374643f);
-        firstHalf.append(os.str());
+        secondHalf.append(os.str());
       }
     }
   }
@@ -1158,6 +1158,10 @@ class LunaSteps : public Luna<Steps> {
     lua_pushstring(L, p->GetChartName().c_str());
     return 1;
   }
+  static int GetChartKey(T* p, lua_State* L) {
+    lua_pushstring(L, p->GetChartKey().c_str());
+    return 1;
+  }
   static int GetDisplayBpms(T* p, lua_State* L) {
     DisplayBpms temp;
     p->GetDisplayBpms(temp);
@@ -1246,6 +1250,7 @@ class LunaSteps : public Luna<Steps> {
     ADD_METHOD(CalculateTechCounts);
     ADD_METHOD(GetTimingData);
     ADD_METHOD(GetChartName);
+    ADD_METHOD(GetChartKey);
     // ADD_METHOD( GetSMNoteData );
     ADD_METHOD(GetStepsType);
     ADD_METHOD(IsAnEdit);

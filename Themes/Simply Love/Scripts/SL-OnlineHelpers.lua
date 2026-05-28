@@ -295,6 +295,9 @@ end
 
 local ApplyOnlineSongSelection = function(songInfo)
 	if not songInfo or not songInfo.songPath then return false end
+	if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ApplySelectedChart then
+		return ITGOnline.PackSync:ApplySelectedChart(songInfo)
+	end
 
 	local previousSong = GAMESTATE:GetCurrentSong()
 	local previousSteps = {}
@@ -1634,45 +1637,10 @@ CreateOnlineHandler = function()
 							return
 						end
 
-						if phase == "lobby" or phase == "lobby_ready" then
-							if ITGOnline.MarkConfigReady then
-								self.startRoomBusy = true
-								ITGOnline:MarkConfigReady(function(readyOk, readyDecoded, readyResponse)
-									self.startRoomBusy = false
-									if not readyOk then
-										MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-											event="ready",
-											success=false,
-											message=(readyDecoded and readyDecoded.message) or (readyResponse and readyResponse.errorMessage) or "Could not mark manager ready."
-										})
-										return
-									end
-
-									local updatedRoom = readyDecoded and readyDecoded.room or ITGOnline.currentRoom
-									if updatedRoom then
-										local payload = ITGOnline:LobbyStatePayload(updatedRoom)
-										DisplayLobbyState(payload, self)
-										MESSAGEMAN:Broadcast("OnlineLobbyState", payload)
-									end
-
-									if updatedRoom and tostring(updatedRoom.phase or "") == "config" then
-										attemptStart()
-									else
-										MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-											event="startRoom",
-											success=false,
-											message="Room is still synchronizing. Try Start again in a moment."
-										})
-									end
-								end)
-								return
-							end
-						end
-
-						MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-							event="startRoom",
-							success=false,
-							message="The room is not ready to start yet."
+							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+								event="startRoom",
+								success=false,
+								message="The room is not ready to start yet."
 						})
         end
       end,

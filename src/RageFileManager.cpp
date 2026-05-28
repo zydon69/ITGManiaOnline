@@ -158,6 +158,43 @@ size_t zipWriteFile(
   return f->Write(pBuf, n);
 }
 
+bool IsSafeZipEntryPath(const std::string& rawPath) {
+  if (rawPath.empty()) {
+    return false;
+  }
+
+  std::string path(rawPath);
+  FixSlashesInPlace(path);
+
+  if (path.empty() || path[0] == '/') {
+    return false;
+  }
+  if (path.size() >= 2 && path[1] == ':') {
+    return false;
+  }
+
+  std::vector<std::string> segments;
+  split(path, "/", segments);
+  for (const auto& segment : segments) {
+    if (segment.empty() || segment == "." || segment == "..") {
+      return false;
+    }
+    for (const char ch : segment) {
+      if (static_cast<unsigned char>(ch) < 32) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+constexpr mz_uint kMaxZipEntryCount = 20000;
+constexpr mz_uint64 kMaxZipSingleFileBytes =
+    static_cast<mz_uint64>(1024) * 1024 * 1024;
+constexpr mz_uint64 kMaxZipTotalUncompressedBytes =
+    static_cast<mz_uint64>(4) * 1024 * 1024 * 1024;
+
 bool RageFileManager::Unzip(
     const std::string& zipPath, std::string targetPath, int strip) {
   if (targetPath.empty() || targetPath.back() != '/') {
@@ -185,6 +222,15 @@ bool RageFileManager::Unzip(
 
   bool success = true;
   mz_uint file_count = mz_zip_reader_get_num_files(&zip);
+  if (file_count > kMaxZipEntryCount) {
+    LOG->Warn(
+        "Could not unzip %s: archive has too many entries (%u)",
+        zipPath.c_str(), file_count);
+    mz_zip_reader_end(&zip);
+    return false;
+  }
+
+  mz_uint64 total_uncompressed_size = 0;
 
   for (mz_uint fileIndex = 0; fileIndex < file_count; fileIndex++) {
     mz_zip_archive_file_stat info;
@@ -196,8 +242,28 @@ bool RageFileManager::Unzip(
       break;
     }
 
+    if (!info.m_is_directory &&
+        info.m_uncomp_size > kMaxZipSingleFileBytes) {
+      LOG->Warn(
+          "Could not unzip %s: entry %s is too large",
+          zipPath.c_str(), info.m_filename);
+      success = false;
+      break;
+    }
+
+    if (total_uncompressed_size >
+        kMaxZipTotalUncompressedBytes - info.m_uncomp_size) {
+      LOG->Warn(
+          "Could not unzip %s: archive is too large when decompressed",
+          zipPath.c_str());
+      success = false;
+      break;
+    }
+    total_uncompressed_size += info.m_uncomp_size;
+
     std::string filename(info.m_filename);
-    if (filename.back() == '/') {
+    FixSlashesInPlace(filename);
+    if (!filename.empty() && filename.back() == '/') {
       filename.pop_back();
     }
 
@@ -210,6 +276,13 @@ bool RageFileManager::Unzip(
     }
     if (filename.empty()) {
       continue;
+    }
+    if (!IsSafeZipEntryPath(filename)) {
+      LOG->Warn(
+          "Could not unzip %s: unsafe archive entry %s",
+          zipPath.c_str(), info.m_filename);
+      success = false;
+      break;
     }
 
     std::string filepath = targetPath + filename;
@@ -1362,6 +1435,21 @@ class LunaRageFileManager : public Luna<RageFileManager> {
     lua_pushboolean(L, success);
     return 1;
   }
+  static int DeleteRecursive(T* p, lua_State* L) {
+    std::string path = SArg(1);
+    if (path.empty() || path == "/" || path == "/Songs/" || path == "/Downloads/") {
+      LOG->Warn("Refusing to recursively delete unsafe path %s", path.c_str());
+      lua_pushboolean(L, false);
+      return 1;
+    }
+
+    if (path.back() != '/') {
+      path.push_back('/');
+    }
+
+    lua_pushboolean(L, p->DeleteRecursive(path));
+    return 1;
+  }
 
   LunaRageFileManager() {
     ADD_METHOD(Copy);
@@ -1370,6 +1458,7 @@ class LunaRageFileManager : public Luna<RageFileManager> {
     ADD_METHOD(GetHashForFile);
     ADD_METHOD(GetDirListing);
     ADD_METHOD(Unzip);
+    ADD_METHOD(DeleteRecursive);
   }
 };
 

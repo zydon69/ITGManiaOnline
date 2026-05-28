@@ -7,6 +7,8 @@
 #include "RageTexture.h"
 #include "RageTextureID.h"
 
+#include <string>
+
 struct RageTextureManagerPrefs {
   int m_iTextureColorDepth;
   int m_iMovieColorDepth;
@@ -79,6 +81,7 @@ class RageTextureManager {
 
   void AdjustTextureID(RageTextureID& ID) const;
   void DiagnosticOutput() const;
+  void LogResourceSnapshot(const std::string& label) const;
 
   void DisableOddDimensionWarning() { m_iNoWarnAboutOddDimensions++; }
   void EnableOddDimensionWarning() { m_iNoWarnAboutOddDimensions--; }

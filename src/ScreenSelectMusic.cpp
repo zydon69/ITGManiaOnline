@@ -355,6 +355,10 @@ void ScreenSelectMusic::BeginScreen() {
 
 ScreenSelectMusic::~ScreenSelectMusic() {
   LOG->Trace("ScreenSelectMusic::~ScreenSelectMusic()");
+  m_BackgroundLoader.Abort();
+  m_sprCDTitleFront.UnloadTexture();
+  m_sprCDTitleBack.UnloadTexture();
+  m_TexturePreload.UnloadAll();
   IMAGECACHE->Undemand("Banner");
 }
 

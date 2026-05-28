@@ -9,6 +9,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -79,6 +80,7 @@ struct HttpRequestArgs {
   std::unordered_map<std::string, std::string> headers;
   int connectTimeout = -1;
   int transferTimeout = -1;
+  int64_t maxDownloadBytes = -1;
   std::string downloadFile;
   std::function<bool(int current, int total)> onProgress;
   std::function<void(const ix::HttpResponsePtr& response)> onResponse;

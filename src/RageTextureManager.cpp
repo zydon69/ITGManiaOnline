@@ -37,6 +37,7 @@
 #include "RageTextureID.h"
 #include "RageThreads.h"
 #include "RageUtil.h"
+#include "LuaManager.h"
 #include "arch/MovieTexture/MovieTexture.h"
 #include "global.h"
 
@@ -376,6 +377,52 @@ void RageTextureManager::DiagnosticOutput() const {
   }
   LOG->Trace("total %3i texels", iTotal);
 }
+
+void RageTextureManager::LogResourceSnapshot(const std::string& label) const {
+  int totalRefs = 0;
+  int defaultTextures = 0;
+  int volatileTextures = 0;
+  int maxRefCount = 0;
+  std::string maxRefTexture;
+
+  for (const auto& i : m_mapPathToTexture) {
+    const RageTexture* texture = i.second;
+    const int refCount = texture->m_iRefCount;
+    totalRefs += refCount;
+
+    if (texture->GetPolicy() == RageTextureID::TEX_VOLATILE) {
+      ++volatileTextures;
+    } else {
+      ++defaultTextures;
+    }
+
+    if (refCount > maxRefCount) {
+      maxRefCount = refCount;
+      maxRefTexture = Basename(i.first.filename);
+    }
+  }
+
+  LOG->Trace(
+      "ITG Resource: label=%s textures=%zu default=%d volatile=%d "
+      "update_queue=%zu refs=%d max_ref=%d max_ref_texture=%s",
+      label.c_str(), m_mapPathToTexture.size(), defaultTextures,
+      volatileTextures, m_textures_to_update.size(), totalRefs, maxRefCount,
+      maxRefTexture.c_str());
+}
+
+static int LuaFunc_ITGOnlineLogResourceSnapshot(lua_State* L) {
+  std::string label;
+  if (!lua_isnoneornil(L, 1)) {
+    label = SArg(1);
+  }
+
+  if (TEXTUREMAN != nullptr) {
+    TEXTUREMAN->LogResourceSnapshot(label);
+  }
+
+  return 0;
+}
+LUAFUNC_REGISTER_COMMON(ITGOnlineLogResourceSnapshot)
 
 /*
  * Copyright (c) 2001-2004 Chris Danford, Glenn Maynard

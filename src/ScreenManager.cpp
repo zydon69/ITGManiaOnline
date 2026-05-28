@@ -134,6 +134,17 @@ std::set<std::string> g_setPersistantScreens;
 std::vector<LoadedScreen> g_vPreparedScreens;
 std::vector<Actor*> g_vPreparedBackgrounds;
 
+void LogResourceSnapshotForScreenTransition(
+    const std::string& action, const std::string& previous,
+    const std::string& next) {
+  if (TEXTUREMAN == nullptr) {
+    return;
+  }
+
+  TEXTUREMAN->LogResourceSnapshot(
+      ssprintf("%s:%s->%s", action.c_str(), previous.c_str(), next.c_str()));
+}
+
 // Add a screen to g_ScreenStack. This is the only function that adds to
 // g_ScreenStack.
 void PushLoadedScreen(const LoadedScreen& ls) {
@@ -433,11 +444,19 @@ void ScreenManager::Update(float fDeltaTime) {
     ScreenMessage SM = m_PopTopScreen;
     m_PopTopScreen = SM_Invalid;
 
+    std::string sPreviousScreenName =
+        GetTopScreen() != nullptr ? GetTopScreen()->GetName() : "NoScreen";
+
     ScreenMessage SM2 = PopTopScreenInternal();
 
     SendMessageToTopScreen(SM_GainFocus);
     SendMessageToTopScreen(SM);
     SendMessageToTopScreen(SM2);
+
+    std::string sNextScreenName =
+        GetTopScreen() != nullptr ? GetTopScreen()->GetName() : "NoScreen";
+    LogResourceSnapshotForScreenTransition(
+        "screen_pop", sPreviousScreenName, sNextScreenName);
   }
 
   /* Screens take some time to load.  If we don't do this, then screens
@@ -724,6 +743,9 @@ void ScreenManager::LoadDelayedScreen() {
     return;
   }
 
+  std::string sPreviousScreenName =
+      GetTopScreen() != nullptr ? GetTopScreen()->GetName() : "NoScreen";
+
   // Pop the top screen, if any.
   ScreenMessage SM = PopTopScreenInternal();
 
@@ -775,10 +797,16 @@ void ScreenManager::LoadDelayedScreen() {
   MESSAGEMAN->Broadcast(Message_ScreenChanged);
 
   SendMessageToTopScreen(SM);
+
+  LogResourceSnapshotForScreenTransition(
+      "screen_changed", sPreviousScreenName, sScreenName);
 }
 
 void ScreenManager::AddNewScreenToTop(
     const std::string& sScreenName, ScreenMessage SendOnPop) {
+  std::string sPreviousScreenName =
+      GetTopScreen() != nullptr ? GetTopScreen()->GetName() : "NoScreen";
+
   // Load the screen, if it's not already prepared.
   PrepareScreen(sScreenName);
 
@@ -797,6 +825,9 @@ void ScreenManager::AddNewScreenToTop(
     g_ScreenStack.back().m_pScreen->HandleScreenMessage(SM_LoseFocus);
   }
   PushLoadedScreen(ls);
+
+  LogResourceSnapshotForScreenTransition(
+      "screen_push", sPreviousScreenName, sScreenName);
 }
 
 void ScreenManager::PopTopScreen(ScreenMessage SM) {

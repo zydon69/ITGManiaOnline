@@ -42,7 +42,7 @@ NetworkManager* NETWORK =
 namespace {
 #ifndef ITGMANIA_HTTP_ALLOW_HOSTS_DEFAULT
 #define ITGMANIA_HTTP_ALLOW_HOSTS_DEFAULT \
-  "*.groovestats.com,*.itgmania.com,itgonline.fr,*.itgonline.fr"
+  "*.groovestats.com,*.itgmania.com,itgonline.fr,*.itgonline.fr,stepmaniaonline.net,www.stepmaniaonline.net"
 #endif
 
 #ifndef ITGMANIA_HTTP_PUBLIC_KEY_PINS_DEFAULT
@@ -321,6 +321,14 @@ NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
   }
 
   this->tlsOptions.publicKeySha256Pins = configuredPins;
+#if !defined(IXWEBSOCKET_USE_OPEN_SSL) && !defined(IXWEBSOCKET_USE_MBED_TLS)
+  if (!configuredPins.empty()) {
+    LOG->Warn(
+        "HttpPublicKeyPins are configured, but this IXWebSocket TLS backend "
+        "does not enforce public key pinning. Use OpenSSL builds or implement "
+        "pinning for this backend before relying on pins as a trust boundary.");
+  }
+#endif
   this->httpClient.setTLSOptions(this->tlsOptions);
   this->downloadClient.setTLSOptions(this->tlsOptions);
 
@@ -572,6 +580,8 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
   bool useDownloadClient = !args.downloadFile.empty();
   auto& client = useDownloadClient ? this->downloadClient : this->httpClient;
   auto downloadFile = std::make_shared<RageFile>();
+  auto downloadError = std::make_shared<std::string>();
+  auto downloadedBytes = std::make_shared<int64_t>(0);
   std::string downloadFilename;
 
   ix::HttpRequestArgsPtr req = client.createRequest(args.url, args.method);
@@ -590,7 +600,17 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
       req->cancel = true;
     }
 
-    req->onChunkCallback = [args, downloadFile, req](const std::string& data) {
+    req->onChunkCallback =
+        [args, downloadFile, downloadError, downloadedBytes,
+         req](const std::string& data) {
+      if (args.maxDownloadBytes >= 0) {
+        *downloadedBytes += static_cast<int64_t>(data.size());
+        if (*downloadedBytes > args.maxDownloadBytes) {
+          *downloadError = "download exceeded maximum allowed size";
+          req->cancel = true;
+          return;
+        }
+      }
       if (downloadFile->Write(data.c_str(), data.size()) < 0) {
         req->cancel = true;
       }
@@ -616,7 +636,8 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
   {
     std::lock_guard<std::mutex> lock(this->httpWorkerMutex);
     this->httpWorkerQueue.push(
-        [this, useDownloadClient, req, args, downloadFile, downloadFilename]() {
+        [this, useDownloadClient, req, args, downloadFile, downloadError,
+         downloadFilename]() {
           if (this->shutdownWorkers.load()) {
             return;
           }
@@ -625,10 +646,12 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
               useDownloadClient ? this->downloadClient : this->httpClient;
 
           workerClient.performRequest(
-              req, [args, downloadFile,
+              req, [args, downloadFile, downloadError,
                     downloadFilename](const ix::HttpResponsePtr& response) {
                 if (!args.downloadFile.empty()) {
-                  std::string error = downloadFile->GetError();
+                  std::string error = !downloadError->empty()
+                                          ? *downloadError
+                                          : downloadFile->GetError();
                   downloadFile->Close();
 
                   if (!error.empty()) {
@@ -961,6 +984,19 @@ class LunaNetworkManager : public Luna<NetworkManager> {
         args.transferTimeout = lua_tointeger(L, -1);
       } else {
         luaL_error(L, "transferTimeout must be an integer");
+      }
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "maxDownloadBytes");
+    if (!lua_isnil(L, -1)) {
+      if (lua_isnumber(L, -1)) {
+        args.maxDownloadBytes = lua_tointeger(L, -1);
+        if (args.maxDownloadBytes < 0) {
+          luaL_error(L, "maxDownloadBytes must be non-negative");
+        }
+      } else {
+        luaL_error(L, "maxDownloadBytes must be an integer");
       }
     }
     lua_pop(L, 1);

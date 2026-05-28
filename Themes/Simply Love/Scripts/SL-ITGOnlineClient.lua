@@ -452,10 +452,24 @@ local function manifest_file_name(path)
 	return name
 end
 
-local function normalized_hash(value)
+local function simfile_relative_path(path)
+	local value = tostring(path or ""):gsub("\\", "/")
+	value = value:gsub("^/*Songs/+", "")
+	value = value:gsub("^/+", "")
+	value = value:gsub("/+$", "")
+	return value ~= "" and value or nil
+end
+
+function ITGOnline:NormalizeHash(value, options)
+	options = options or {}
 	value = tostring(value or ""):lower()
 	if value:match("^[a-f0-9]+$") and #value == 64 then return value end
-	return sha256_hex(value)
+	if options.hashFallback then return sha256_hex(value) end
+	return ""
+end
+
+local function normalized_hash(value)
+	return ITGOnline:NormalizeHash(value, { hashFallback = true })
 end
 
 local function selected_steps()
@@ -1881,6 +1895,9 @@ function ITGOnline:NoteScreenChanged(screenName)
 		if previous == "ScreenReloadSongsOnline" and screenName == "ScreenOnlineLobbies" then
 			self:ClearFileHashCache()
 			MESSAGEMAN:Broadcast("OnlineSongReloadCompleted")
+			if self.PackSync and self.PackSync.ValidatePendingPostReload then
+				self.PackSync:ValidatePendingPostReload()
+			end
 		end
 		self:HandleOnlineGameplayScreenTransition(previous, screenName)
 		self:EnforceRoomPhaseScreen(screenName)
@@ -2496,6 +2513,7 @@ function ITGOnline:BuildSongPayloadFor(song, steps)
 	local songFileName = manifest_file_name(songFilePath)
 	if not musicName or not songFileName then return nil end
 	local chartHash = self:ChartHashForSteps(steps)
+	local chartKey = steps and steps.GetChartKey and tostring(steps:GetChartKey() or "") or ""
 	local rate = current_music_rate()
 	local noteCount = current_chart_note_count(steps)
 	if not noteCount then return nil end
@@ -2509,6 +2527,9 @@ function ITGOnline:BuildSongPayloadFor(song, steps)
 		audio_file_hash = musicHash,
 		chart_hash = chartHash,
 		chart_file_hash = songFileHash,
+		chart_key = chartKey ~= "" and chartKey or nil,
+		simfile_relative_path = simfile_relative_path(songFilePath),
+		simfile_hash = chartHash,
 		chart_type = chartType,
 		difficulty = difficulty,
 		meter = meter,
@@ -4598,6 +4619,11 @@ function ITGOnline:LobbyStatePayload(room)
 				missingSong = member.missing_song and true or false,
 				missingSongReason = member.missing_song_reason,
 				songAvailable = member.song_available and true or false,
+				packSyncStatus = member.pack_sync_status or "unknown",
+				packSyncMessage = member.pack_sync_message,
+				packSyncDownloadProgress = member.pack_sync_download_progress,
+				packSyncSequence = member.pack_sync_sequence,
+				packSyncUpdatedAt = member.pack_sync_updated_at,
 				speedMod = member.options and member.options.speed_mod or nil,
 				musicRateBpm = member.options and member.options.music_rate_bpm or nil,
 				stepchart = member.options and member.options.stepchart or nil,
@@ -4619,6 +4645,9 @@ function ITGOnline:LobbyStatePayload(room)
 				songLength = room.selected_song.music_length_seconds or room.selected_song.chart_duration_seconds,
 					songHash = room.selected_song.song_hash or "",
 					chartHash = room.selected_song.chart_hash or "",
+					chartKey = room.selected_song.chart_key or "",
+					simfileRelativePath = room.selected_song.simfile_relative_path or "",
+					simfileHash = room.selected_song.simfile_hash or room.selected_song.chart_hash or "",
 					selectedAt = room.selected_song.selected_at or "",
 					roundId = room.selected_song.game_session_id or room.selected_song.session_id or room.selected_song.round_id or room.selected_song.selected_song_id or "",
 				chartType = room.selected_song.chart_type or "",

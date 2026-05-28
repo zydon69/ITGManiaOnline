@@ -2934,6 +2934,10 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
       if (!m_bOnlineEvaluationHoldStarted) {
         m_bOnlineEvaluationHoldStarted = true;
         m_timerOnlineEvaluationHoldStarted.Touch();
+        m_bOnlineEvaluationHoldMessagePending = true;
+        m_timerOnlineEvaluationHoldMessage.Touch();
+        this->PostScreenMessage(SM_LeaveGameplay, 0.25f);
+        return;
       } else if (m_timerOnlineEvaluationHoldStarted.Ago() >=
                  ITGONLINE_EVALUATION_HOLD_MAX_SECONDS) {
         LOG->Warn(

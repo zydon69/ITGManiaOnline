@@ -46,8 +46,12 @@ local joined_lobby_players = {}
 local joined_manager_user_id = nil
 local joined_song_preview = nil
 local joined_song_confirmed = false
+local joined_song_selected_key = ""
 local joined_missing_song = false
 local joined_missing_song_info = nil
+local joined_can_download_pack = false
+local joined_missing_song_reason = nil
+local joined_preview_unknown_pack = false
 local leaving_lobby = false
 local showing_leave_confirm = false
 local leave_confirm_index = 0
@@ -126,6 +130,20 @@ local function abbreviate_stepchart(value)
 	return chart
 end
 
+local function pack_sync_display_text(status)
+	status = trim_text(status)
+	if status == "" or status == "unknown" then return "" end
+	if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.statusText then
+		return ITGOnline.PackSync.statusText[status] or status
+	end
+	return status:gsub("_", " ")
+end
+
+local function local_pack_exists(songInfo)
+	local pack = trim_text(songInfo and songInfo.pack)
+	return pack ~= "" and SONGMAN and SONGMAN.DoesSongGroupExist and SONGMAN:DoesSongGroupExist(pack)
+end
+
 local function joined_phase_allows_song_selection()
 	return joined_phase == "lobby"
 		or joined_phase == "lobby_ready"
@@ -135,8 +153,6 @@ end
 
 local function joined_phase_allows_start()
 	return joined_phase == "config"
-		or joined_phase == "lobby"
-		or joined_phase == "lobby_ready"
 end
 
 local function joined_room_can_start()
@@ -492,7 +508,19 @@ local InputHandler = function(event)
 							topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 						end
 					elseif joined_active_index == 3 and joined_missing_song then
-						transition_to_online_song_reload()
+						if joined_can_download_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadSelectedPack then
+							ITGOnline.PackSync:DownloadSelectedPack(joined_missing_song_info or joined_song_preview, function(ok, message)
+								if not ok and t then
+									t:playcommand("SetStatus", {
+										text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
+										showSpinner=false,
+										showPrompt=true
+									})
+								end
+							end)
+						else
+							transition_to_online_song_reload()
+						end
 					elseif joined_active_index == 4 and joined_is_manager then
 						if joined_room_can_start() then
 							MESSAGEMAN:Broadcast("StartOnlineRoom")
@@ -798,6 +826,14 @@ local af = Def.ActorFrame{
 				local profile = trim_text(player.profileName or player.name or player.playerId or ("Player "..i))
 				local ready = player.ready and " ✔" or ""
 				local missing = player.missingSong and " ⚠ missing song" or ""
+				local packSyncText = pack_sync_display_text(player.packSyncStatus)
+				if packSyncText ~= "" and packSyncText ~= "Ready" then
+					local progress = tonumber(player.packSyncDownloadProgress)
+					if progress and trim_text(player.packSyncStatus) == "download_in_progress" then
+						packSyncText = packSyncText .. " " .. tostring(progress) .. "%"
+					end
+					missing = missing .. " · " .. packSyncText
+				end
 				local optionParts = {}
 				local speedMod = trim_text(player.speedMod)
 				if speedMod ~= "" then optionParts[#optionParts+1] = speedMod end
@@ -863,16 +899,33 @@ local af = Def.ActorFrame{
 
 				local missingSongInfo = joined_missing_song_info or joined_song_preview
 				if joined_missing_song and missingSongInfo then
-					statusLines[#statusLines + 1] = "Missing or different song pack locally"
+					if joined_missing_song_reason == "song_hash_mismatch" then
+						statusLines[#statusLines + 1] = "La stepchart existe localement, mais l'audio est différent de celui du manager."
+						statusLines[#statusLines + 1] = "Le mode online exige la même musique et la même stepchart."
+					elseif joined_missing_song_reason == "chart_mismatch" or joined_missing_song_reason == "hash_mismatch" then
+						statusLines[#statusLines + 1] = "La musique ou la stepchart trouvée est différente de celle du manager."
+						statusLines[#statusLines + 1] = "Veuillez supprimer le pack manuellement, recharger Songs, puis télécharger à nouveau le pack."
+					elseif joined_missing_song_reason == "download_failed" then
+						statusLines[#statusLines + 1] = "Le téléchargement du pack a échoué."
+						statusLines[#statusLines + 1] = "Veuillez réessayer ou installer le pack manuellement."
+					elseif joined_can_download_pack then
+						statusLines[#statusLines + 1] = "Cette chanson existe peut-être dans vos packs,"
+						statusLines[#statusLines + 1] = "mais aucune stepchart identique à celle du manager n’a été trouvée."
+						statusLines[#statusLines + 1] = "Vous pouvez télécharger le pack utilisé par le manager."
+					else
+						statusLines[#statusLines + 1] = "Missing or different song pack locally"
+					end
 					if missingSongInfo.pack and missingSongInfo.pack ~= "" then
 						statusLines[#statusLines + 1] = "Pack: " .. tostring(missingSongInfo.pack)
 					end
 					statusLines[#statusLines + 1] = "Song: " .. tostring(missingSongInfo.title or "Unknown")
-					statusLines[#statusLines + 1] = "Install the exact pack in Songs/, then reload."
 				elseif joined_song_preview then
 					statusLines[#statusLines + 1] = (joined_song_confirmed and "✔ Song selected" or "Browsing song")
 					if joined_song_preview.pack and joined_song_preview.pack ~= "" then
 						statusLines[#statusLines + 1] = "Pack: " .. tostring(joined_song_preview.pack)
+					end
+					if joined_preview_unknown_pack and not joined_song_confirmed then
+						statusLines[#statusLines + 1] = "Le manager navigue dans un pack que vous ne possédez pas."
 					end
 					statusLines[#statusLines + 1] = "Song: " .. tostring(joined_song_preview.title or "Unknown")
 					if joined_song_preview.artist and joined_song_preview.artist ~= "" then
@@ -932,6 +985,10 @@ local af = Def.ActorFrame{
 			local reloadSongsButton = joinedContent and joinedContent:GetChild("ReloadSongsButton")
 			if reloadSongsButton then
 				reloadSongsButton:visible(joined_missing_song)
+				local label = reloadSongsButton:GetChild("ReloadSongsLabel")
+				if label then
+					label:settext(joined_can_download_pack and "Download pack" or "Reload Songs")
+				end
 			end
 
 			local startRoomButton = joinedContent and joinedContent:GetChild("StartRoomButton")
@@ -1117,15 +1174,31 @@ local af = Def.ActorFrame{
 			if joined_phase == "results" then
 				joined_song_preview = nil
 				joined_song_confirmed = false
+				joined_song_selected_key = ""
 				joined_missing_song = false
 				joined_missing_song_info = nil
+				joined_can_download_pack = false
+				joined_missing_song_reason = nil
+				joined_preview_unknown_pack = false
 			else
+				local previousSelectedKey = joined_song_selected_key
 				joined_song_preview = params and params.songInfo or nil
 				joined_song_confirmed = params and params.songInfo ~= nil or false
+				joined_song_selected_key = joined_song_preview and tostring(joined_song_preview.selectedAt or joined_song_preview.selected_at or "") or ""
+				joined_preview_unknown_pack = joined_song_preview ~= nil and not local_pack_exists(joined_song_preview)
+				if joined_song_confirmed and joined_song_selected_key ~= previousSelectedKey then
+					joined_missing_song = false
+					joined_missing_song_info = nil
+					joined_can_download_pack = false
+					joined_missing_song_reason = nil
+				end
 			end
 			if not joined_song_confirmed then
+				joined_song_selected_key = ""
 				joined_missing_song = false
 				joined_missing_song_info = nil
+				joined_can_download_pack = false
+				joined_missing_song_reason = nil
 			end
 			normalize_joined_active_index()
 			lobby_debug("lobby_state room=" .. tostring(joined_lobby_code)
@@ -1147,6 +1220,8 @@ local af = Def.ActorFrame{
 			OnlineMissingSongMessageCommand=function(self, params)
 				joined_missing_song = true
 				joined_missing_song_info = params and params.songInfo or joined_song_preview
+				joined_missing_song_reason = params and params.reason or "missing_local_song"
+				joined_can_download_pack = params and (params.noCompatibleChart == true or params.reason == "no_compatible_chart_found") or false
 				if ITGOnline and ITGOnline.ReportSongAvailability then
 					ITGOnline:ReportSongAvailability(true, params and params.reason or "missing_local_song")
 				end
@@ -1162,6 +1237,8 @@ local af = Def.ActorFrame{
 				local wasMissing = joined_missing_song
 				joined_missing_song = false
 				joined_missing_song_info = nil
+				joined_can_download_pack = false
+				joined_missing_song_reason = nil
 				if wasMissing and ITGOnline and ITGOnline.ReportSongAvailability then
 					ITGOnline:ReportSongAvailability(false, "reloaded")
 				end
@@ -1231,8 +1308,16 @@ local af = Def.ActorFrame{
 		if params and params.title then
 			joined_song_preview = params
 			joined_song_confirmed = false
+			joined_song_selected_key = ""
+			joined_preview_unknown_pack = not local_pack_exists(params)
+			if joined_preview_unknown_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ManagerBrowsingPreview then
+				ITGOnline.PackSync:ManagerBrowsingPreview(params)
+			end
 			self:queuecommand("UpdateJoinedLobbyText")
 		end
+	end,
+	OnlinePackSyncReloadSongsMessageCommand=function(self)
+		transition_to_online_song_reload()
 	end,
 	OnlineResponseStatusMessageCommand=function(self, params)
 		if params and params.event == "createLobby" and params.success == false then
@@ -2021,7 +2106,8 @@ local af = Def.ActorFrame{
 					end
 				},
 				LoadFont("Common Bold")..{
-					Text="Reload Songs",
+					Name="ReloadSongsLabel",
+					Text="Download pack",
 					InitCommand=function(self)
 						self:zoom(0.5)
 					end,
