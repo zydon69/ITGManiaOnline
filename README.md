@@ -19,6 +19,90 @@ ITGmania is a fork of [StepMania 5.1](https://github.com/stepmania/stepmania/tre
 - Increased the Stats.xml file size limit to 100MB
 - Changed the default binding for P2/back from hyphen to backslash
 
+## ITG Online additions in this fork
+
+This fork contains an integrated online mode wired to an ITG Online Laravel
+server. The full product specification is maintained in
+[`cahier_des_charges.md`](cahier_des_charges.md), and client setup details are
+documented in [`Docs/ITGOnline.md`](Docs/ITGOnline.md).
+
+### Online room and song synchronization
+
+The online flow is designed so every player plays the same chart while avoiding
+unnecessary downloads:
+
+- the room manager selects the reference chart;
+- the client identifies the chart with technical metadata such as pack, simfile
+  path, `chart_key`, `song_hash`, and `chart_hash`;
+- each player first checks whether the exact compatible chart exists locally;
+- if the manager's pack is missing, the client searches across local packs and
+  accepts a match only when the hashes are compatible;
+- if no local compatible chart exists, the client can offer a pack download;
+- pack sync status is broadcast to the room and shown beside each player.
+
+Pack sync statuses include states such as:
+
+```text
+searching
+found
+no_match
+downloading
+reloading
+mismatch
+failed
+ready
+```
+
+StepManiaOnline-style pack search/download can be used as a source for missing
+packs. The client searches, downloads, extracts, reloads songs, and validates the
+result by hash before marking the player ready.
+
+### Synchronized live leaderboard
+
+The live leaderboard uses server-published musical ticks instead of simply
+showing the latest raw score received from each client. This reduces the visual
+advantage of low latency during close score races.
+
+The server publishes leaderboard snapshots on fixed musical ticks, currently
+designed around a 0.5 second tick with a bounded wait window. A tick is published
+as soon as all active players are covered, or after a deadline with missing
+players marked as pending.
+
+Leaderboard payloads expose synchronization metadata:
+
+```text
+leaderboard_sync_position_seconds
+leaderboard_publish_tick_seconds
+leaderboard_publish_tick_complete
+leaderboard_pending_user_ids
+```
+
+Each entry can also describe how the tick value was produced:
+
+```text
+leaderboard_tick_pending
+leaderboard_tick_source=snapshot|carry_forward|zero|terminal
+```
+
+The final competitive result remains independent from the live display and is
+recorded through the final score flow on the server.
+
+### Online diagnostics
+
+The client and server log the important online transitions and leaderboard
+decisions:
+
+- pack sync status changes;
+- room phase transitions;
+- song availability rejections;
+- score snapshot rejection reasons;
+- leaderboard tick selection;
+- complete, pending, and degraded ticks;
+- ignored stale leaderboard versions.
+
+The game also includes compact resource snapshots around screen transitions to
+help detect local or online memory leaks during soak tests.
+
 ## Installation
 
 You can choose between using the installer or using the portable build. Using the installer is recommended, because it makes upgrading to new versions easier.

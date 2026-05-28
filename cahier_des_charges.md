@@ -288,6 +288,104 @@ Le serveur doit imposer :
 
 Ce système doit uniquement servir au partage de contenus que les joueurs ont le droit de partager.
 
+## Synchronisation intelligente des songs et packs
+
+Le mode online doit éviter les téléchargements inutiles et ne télécharger un pack que lorsque le client ne possède réellement aucune chart compatible.
+
+### Principe
+
+Lorsqu'un manager choisit une chart de référence, la sélection doit contenir assez d'informations techniques pour identifier précisément la chart jouée :
+
+- pack d'origine ;
+- dossier ou chemin de simfile ;
+- `chart_key` ;
+- `song_hash` ;
+- `chart_hash` ;
+- type de chart ;
+- difficulté ;
+- durée et métadonnées nécessaires au lancement synchronisé.
+
+Chaque client doit ensuite appliquer la stratégie suivante :
+
+1. vérifier localement si le pack exact du manager existe ;
+2. vérifier si la chart exacte existe dans ce pack ;
+3. si le pack manque, effectuer une recherche locale cross-pack ;
+4. accepter une chart trouvée dans un autre pack uniquement si les hashes attendus correspondent ;
+5. passer en état prêt si une chart strictement compatible est trouvée ;
+6. proposer `Download pack` uniquement si aucune chart compatible n'existe localement.
+
+Le nom d'une chanson ou d'un pack ne doit jamais suffire à valider une compatibilité. Les hashes restent l'autorité fonctionnelle.
+
+### Etats de synchronisation de pack
+
+Le client et le serveur doivent synchroniser un statut lisible pour chaque membre du salon.
+
+Etats recommandés :
+
+```txt
+searching
+found
+no_match
+downloading
+reloading
+mismatch
+failed
+ready
+```
+
+Ces statuts doivent être diffusés à tous les membres du salon et affichés dans l'overlay du salon à côté du joueur concerné.
+
+Objectif UX :
+
+- savoir qui cherche encore la chart ;
+- savoir qui télécharge ;
+- savoir qui recharge la liste des songs ;
+- savoir qui est prêt ;
+- distinguer clairement une erreur de hash d'un simple pack absent.
+
+### Recherche et téléchargement StepManiaOnline
+
+Le client peut utiliser des endpoints de recherche/téléchargement compatibles StepManiaOnline pour récupérer un pack manquant.
+
+La stratégie doit rester déterministe :
+
+1. recherche par pack exact ;
+2. fallback par titre si le pack exact n'est pas trouvé ;
+3. filtres anti-ambiguïté ;
+4. refus automatique si plusieurs résultats incompatibles existent ;
+5. téléchargement HTTP ;
+6. extraction locale contrôlée ;
+7. reload de la liste des songs ;
+8. revalidation par hash avant de marquer le joueur prêt.
+
+Une erreur pendant ce flux doit être représentée explicitement :
+
+- `download_failed` ;
+- `chart_mismatch` ;
+- `pack_not_found` ;
+- `ambiguous_result` ;
+- `reload_failed`.
+
+### Garanties de sécurité et robustesse
+
+Le téléchargement de pack ne remplace pas les contrôles serveur.
+
+Le serveur doit conserver :
+
+- vérification du `chart_hash` ;
+- vérification du `song_hash` ;
+- vérification des métadonnées attendues ;
+- protection contre les séquences obsolètes ;
+- rejet des statuts envoyés pour une ancienne sélection ;
+- logs détaillés des rejets de disponibilité ou de score.
+
+Le client doit conserver :
+
+- anti-boucle sur les statuts de song manquante ;
+- cache des hashes de fichiers locaux ;
+- revalidation après reload ;
+- logs lisibles de chaque étape de sync.
+
 ## Phases d'un salon
 
 Phases recommandées :
@@ -363,6 +461,115 @@ Fréquence recommandée :
 ```
 
 Le serveur calcule ou relaie le classement et le diffuse aux membres du salon.
+
+## Leaderboard live synchronisé par ticks musicaux
+
+Le classement live ne doit pas être basé naïvement sur le dernier score reçu en temps réel brut.
+
+Dans un jeu de précision, un joueur local voit naturellement son propre score avec moins de latence que les scores distants. Sans correction, le leaderboard peut donner l'impression qu'un joueur est devant simplement parce que son score local correspond à plus de flèches déjà jouées que celui des autres joueurs.
+
+Le serveur doit donc publier un leaderboard synchronisé sur une position musicale commune.
+
+### Objectif
+
+Réduire l'avantage visuel des faibles latences sans bloquer la partie et sans retarder artificiellement le gameplay.
+
+Le score final compétitif reste enregistré séparément et reste autoritaire.
+
+### Mécanique serveur
+
+Le serveur calcule une position de synchronisation basée sur :
+
+- temps serveur ;
+- `started_at` de la room ;
+- position musicale théorique ;
+- délai de publication accepté ;
+- tick de publication courant.
+
+Paramètres recommandés :
+
+```txt
+leaderboard_publish_tick_seconds = 0.5
+leaderboard_max_wait_seconds = 2.0
+```
+
+Pour chaque tick :
+
+1. le serveur choisit une position musicale cible ;
+2. il attend les snapshots des joueurs pour cette position ;
+3. si tous les joueurs actifs sont couverts, il publie un tick complet ;
+4. si certains joueurs manquent après la deadline, il publie un tick dégradé ;
+5. les joueurs manquants sont signalés en `pending` ;
+6. le score d'un joueur en retard est porté par carry-forward si possible ;
+7. si aucun score précédent n'existe, le joueur est affiché à zéro ;
+8. un joueur terminal conserve son score terminal.
+
+Le serveur ne doit jamais publier un tick régressif pour un client.
+
+### Payload de leaderboard
+
+Les événements de score/leaderboard doivent contenir les champs de synchronisation suivants :
+
+```txt
+leaderboard_sync_position_seconds
+leaderboard_publish_tick_seconds
+leaderboard_publish_tick_complete
+leaderboard_pending_user_ids
+```
+
+Chaque entrée de joueur doit pouvoir indiquer :
+
+```txt
+leaderboard_tick_pending
+leaderboard_tick_source
+```
+
+Valeurs recommandées pour `leaderboard_tick_source` :
+
+```txt
+snapshot
+carry_forward
+zero
+terminal
+```
+
+### Garanties client
+
+Le client doit :
+
+- ignorer les ticks régressifs ;
+- ignorer les versions obsolètes ;
+- afficher clairement les joueurs pending ;
+- conserver un affichage stable si un tick arrive incomplet ;
+- ne pas faire régresser le score affiché d'un joueur sur un tick plus ancien ;
+- continuer à récupérer les scores jusqu'à l'état terminal de tous les joueurs.
+
+### Logs obligatoires
+
+Le serveur doit journaliser les décisions importantes :
+
+- tick sélectionné ;
+- tick complet ;
+- tick publié par deadline ;
+- joueurs pending ;
+- tick dégradé ;
+- rejet de snapshot obsolète ;
+- rejet de score hors phase.
+
+Le client doit journaliser :
+
+- réception `room.score_updated` ;
+- tick incomplet ;
+- pending ;
+- tick régressif ignoré ;
+- version de leaderboard ignorée ;
+- mode debug score si activé.
+
+### Invariants
+
+Le classement live est un affichage synchronisé et comparable, mais il ne remplace pas la finalisation officielle.
+
+Les résultats finaux doivent rester produits par le flux de fin de chanson et les scores finaux enregistrés côté serveur.
 
 ## Qualité release et validation avant diffusion
 
