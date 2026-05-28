@@ -97,6 +97,19 @@ local function ready_debug(message)
 	end
 end
 
+-- Keep flow tracing safe in all contexts; never allow a missing logger
+-- to break lobby state processing.
+local function online_flow_trace(message)
+	local line = tostring(message or "")
+	if online_trace then
+		online_trace("FLOW " .. line)
+	elseif Warn then
+		Warn("ITG Online FLOW: " .. line)
+	elseif Trace then
+		Trace("ITG Online FLOW: " .. line)
+	end
+end
+
 local function maybe_set_lobby_ready(reason, callback)
 	if not (ITGOnline and ITGOnline.SetReady) then
 		if callback then callback(false) end
@@ -1651,7 +1664,7 @@ CreateOnlineHandler = function()
 						end
 
 						local phase = tostring(ITGOnline.currentRoom.phase or "")
-						if phase == "config" then
+						if phase == "config" or phase == "lobby_ready" then
 							attemptStart()
 							return
 						end

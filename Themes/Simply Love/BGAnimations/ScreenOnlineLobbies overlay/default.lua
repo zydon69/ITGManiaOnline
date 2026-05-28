@@ -152,14 +152,13 @@ local function joined_phase_allows_song_selection()
 end
 
 local function joined_phase_allows_start()
-	return joined_phase == "config"
+	return joined_phase == "config" or joined_phase == "lobby_ready"
 end
 
 local function joined_room_can_start()
 	return joined_is_manager
 		and joined_song_confirmed
 		and joined_phase_allows_start()
-		and joined_all_players_ready()
 		and not joined_any_player_missing_song()
 end
 
@@ -178,6 +177,7 @@ local function joined_button_indices()
 end
 
 function joined_all_players_ready()
+	-- Legacy helper kept for debug text compatibility; gameplay start no longer depends on ready flags.
 	if #joined_lobby_players == 0 then return false end
 	for player in ivalues(joined_lobby_players) do
 		if not player.ready then
@@ -877,17 +877,11 @@ local af = Def.ActorFrame{
 				local showStartStatus = joined_phase ~= "results"
 				local canStartInPhase = joined_phase_allows_start()
 				local everyoneReady = joined_all_players_ready()
-					local hasMissingSong = joined_any_player_missing_song()
+				local hasMissingSong = joined_any_player_missing_song()
 					local blockers = {}
 					if not joined_is_manager then blockers[#blockers + 1] = "you are not manager" end
 					if not joined_song_confirmed then blockers[#blockers + 1] = "no song selected" end
 					if not canStartInPhase then blockers[#blockers + 1] = "phase is " .. tostring(joined_phase or "unknown") end
-				if not everyoneReady then
-					local missingReady = joined_not_ready_player_names()
-					blockers[#blockers + 1] = (#missingReady > 0
-						and ("players not ready: " .. table.concat(missingReady, ", "))
-						or "players not ready")
-				end
 				if hasMissingSong then blockers[#blockers + 1] = "song not confirmed for all players" end
 				if showStartStatus then
 					if #blockers == 0 then
@@ -939,17 +933,16 @@ local af = Def.ActorFrame{
 					elseif joined_phase == "starting" then
 						local seconds = ITGOnline and ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or nil
 						statusLines[#statusLines + 1] = seconds and ("Starting in " .. tostring(math.ceil(math.max(0, seconds))) .. "...") or "Starting..."
-					elseif joined_phase == "config" then
+					elseif joined_phase == "config" or joined_phase == "lobby_ready" then
 						if joined_any_player_missing_song() then
 							statusLines[#statusLines + 1] = "Waiting for every player to confirm the selected song."
 						else
-							statusLines[#statusLines + 1] = joined_all_players_ready()
-								and (joined_is_manager and "All players ready. Press Start." or "Waiting for the manager to start.")
-								or "Waiting for players to press Ready."
+							statusLines[#statusLines + 1] = joined_is_manager and "Song confirmed. Press Start."
+								or "Song confirmed. Waiting for the manager to start."
 						end
 					end
 			elseif joined_is_manager then
-				statusLines[#statusLines + 1] = "Choose a song when everyone is ready."
+				statusLines[#statusLines + 1] = "Choose a song to start the round."
 			else
 					statusLines[#statusLines + 1] = "Waiting for the lobby creator to choose a song."
 				end
