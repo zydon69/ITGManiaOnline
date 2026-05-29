@@ -103,10 +103,10 @@ local function online_flow_trace(message)
 	local line = tostring(message or "")
 	if online_trace then
 		online_trace("FLOW " .. line)
-	elseif Warn then
-		Warn("ITG Online FLOW: " .. line)
 	elseif Trace then
 		Trace("ITG Online FLOW: " .. line)
+	elseif Warn then
+		Warn("ITG Online FLOW: " .. line)
 	end
 end
 

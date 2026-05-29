@@ -509,7 +509,17 @@ local function current_chart_note_count(steps)
 	if not steps or not steps.GetRadarValues then return nil end
 
 	local player = first_enabled_player()
-	local ok, radar = pcall(function() return steps:GetRadarValues(player) end)
+	local radar = nil
+	local ok = false
+
+	if player ~= nil then
+		ok, radar = pcall(function() return steps:GetRadarValues(player) end)
+	end
+
+	if (not ok or not radar or not radar.GetValue) then
+		ok, radar = pcall(function() return steps:GetRadarValues() end)
+	end
+
 	if not ok or not radar or not radar.GetValue then return nil end
 
 	local function radar_value(name)
@@ -2602,6 +2612,24 @@ function ITGOnline:BuildSongPayloadFor(song, steps)
 	local rate = current_music_rate()
 	local noteCount = current_chart_note_count(steps)
 	if not noteCount then
+		local selectedSong = self.currentRoom and self.currentRoom.selected_song or nil
+		local selectedCount = tonumber(selectedSong and selectedSong.chart_note_count or 0) or 0
+		if selectedCount > 0 then
+			local selectedChartHash = normalized_hash(selectedSong and selectedSong.chart_hash or "")
+			local localChartHash = normalized_hash(chartHash)
+			if selectedChartHash ~= "" and selectedChartHash == localChartHash then
+				noteCount = math.floor(selectedCount)
+				online_pack_sync_fields("build_song_payload_note_count_fallback", {
+					{ "reason", "selected_song_match" },
+					{ "room", self.currentRoomId },
+					{ "song_path", path },
+					{ "chart_hash", online_short_hash(chartHash) },
+					{ "note_count", noteCount },
+				})
+			end
+		end
+	end
+	if not noteCount then
 		online_pack_sync_fields("build_song_payload_failed", {
 			{ "reason", "note_count_unavailable" },
 			{ "room", self.currentRoomId },
@@ -3009,13 +3037,19 @@ function ITGOnline:LiveScoreMinIntervalSeconds()
 
 	local ok, position = pcall(function()
 		local songPositionState = GAMESTATE:GetPlayerState(player):GetSongPosition()
+		local rawOk, rawSeconds = pcall(function()
+			return songPositionState:GetMusicSeconds()
+		end)
+		if rawOk and tonumber(rawSeconds) then
+			return tonumber(rawSeconds)
+		end
 		local visibleOk, visibleSeconds = pcall(function()
 			return songPositionState:GetMusicSecondsVisible()
 		end)
 		if visibleOk and tonumber(visibleSeconds) then
 			return tonumber(visibleSeconds)
 		end
-		return tonumber(songPositionState:GetMusicSeconds())
+		return nil
 	end)
 	if not ok or tonumber(position) == nil then
 		return normalInterval
@@ -3168,9 +3202,11 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	local songPosition = 0
 	local positionOk, positionValue = pcall(function()
 		local songPositionState = GAMESTATE:GetPlayerState(player):GetSongPosition()
+		local rawOk, rawSeconds = pcall(function() return songPositionState:GetMusicSeconds() end)
+		if rawOk and tonumber(rawSeconds) then return tonumber(rawSeconds) end
 		local visibleOk, visibleSeconds = pcall(function() return songPositionState:GetMusicSecondsVisible() end)
 		if visibleOk and tonumber(visibleSeconds) then return tonumber(visibleSeconds) end
-		return tonumber(songPositionState:GetMusicSeconds())
+		return nil
 	end)
 	if positionOk and tonumber(positionValue) then songPosition = tonumber(positionValue) end
 	local positionKey = roundKey
@@ -3258,16 +3294,16 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		liveCombo = currentComboOk and tonumber(currentComboValue) or 0
 	end
 
-	local canonicalScorePercent = tonumber(accuracyFromJudgments) or tonumber(snapshot and snapshot.scorePercent)
+	-- The online score must match what the player actually sees on screen.
+	local canonicalScorePercent = tonumber(displayedScorePercent)
+	if canonicalScorePercent == nil then
+		canonicalScorePercent = tonumber(snapshot and snapshot.scorePercent)
+	end
 	if canonicalScorePercent == nil then
 		canonicalScorePercent = (tonumber(dancePoints) or 0) * 100
 	end
 	canonicalScorePercent = math.max(0, math.min(100, tonumber(canonicalScorePercent) or 0))
-	if canonicalScorePercent <= 0 and normalizedExScore > 0 then
-		canonicalScorePercent = normalizedExScore * 100
-	end
 
-	-- Online score transport is canonical. Local display modifiers must not change competition results.
 	local outgoingScore = math.max(0, math.floor((canonicalScorePercent / 100) * selectedMaxScore + 0.5))
 	local outgoingPercent = selectedMaxScore > 0 and ((outgoingScore / selectedMaxScore) * 100) or 0
 	if self.debugScoreTrace == true then
@@ -3373,7 +3409,8 @@ function ITGOnline:SetReady(phase, isReady, callback)
 
 	local currentPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
 	if isReady and phase == "lobby_ready" and currentPhase ~= "" and currentPhase ~= "lobby" and currentPhase ~= "lobby_ready" then
-		online_flow_trace("ready_request_skipped room=" .. tostring(self.currentRoomId)
+		online_flow_trace_throttled("ready_request_skipped:lobby_ready:" .. tostring(self.currentRoomId), 1.5,
+			"ready_request_skipped room=" .. tostring(self.currentRoomId)
 			.. " phase=" .. tostring(phase)
 			.. " current_phase=" .. tostring(currentPhase)
 			.. " reason=stale_lobby_ready")
@@ -3386,7 +3423,8 @@ function ITGOnline:SetReady(phase, isReady, callback)
 		and currentPhase ~= "config"
 		and currentPhase ~= "lobby"
 		and currentPhase ~= "lobby_ready" then
-		online_flow_trace("ready_request_skipped room=" .. tostring(self.currentRoomId)
+		online_flow_trace_throttled("ready_request_skipped:config_ready:" .. tostring(self.currentRoomId), 1.5,
+			"ready_request_skipped room=" .. tostring(self.currentRoomId)
 			.. " phase=" .. tostring(phase)
 			.. " current_phase=" .. tostring(currentPhase)
 			.. " reason=stale_config_ready")

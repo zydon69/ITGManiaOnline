@@ -156,9 +156,11 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 		if IsEX then
 			self:settext(("%.02f"):format(params.ExScore))
 			if ITGOnline and ITGOnline.currentRoomId then
+				local dance_points = pss:GetPercentDancePoints()
+				local percent = FormatPercentScore( dance_points ):sub(1,-2)
 				MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
 					Player = player,
-					ScorePercent = tonumber(params.ExScore),
+					ScorePercent = tonumber(percent),
 					ExScorePercent = tonumber(params.ExScore),
 					DisplayedPercent = tonumber(params.ExScore),
 					Combo = pss:GetCurrentCombo() or 0,

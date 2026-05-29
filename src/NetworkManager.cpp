@@ -452,6 +452,7 @@ void NetworkManager::EnqueueMainThreadTask(std::function<void()> task) {
 void NetworkManager::Update() {
   RageTimer timer;
   static RageTimer lastBacklogWarning;
+  static int consecutiveBacklogPressure = 0;
   int tasksProcessed = 0;
 
   while (tasksProcessed < kMaxMainThreadTasksPerUpdate) {
@@ -478,18 +479,19 @@ void NetworkManager::Update() {
       timer.Ago() >= kMaxMainThreadTaskSecondsPerUpdate) {
     std::lock_guard<std::mutex> lock(this->mainThreadTaskMutex);
     const auto queuedTasks = this->mainThreadTaskQueue.size();
-    static int consecutiveBacklogWarnings = 0;
-
     if (queuedTasks == 0) {
-      consecutiveBacklogWarnings = 0;
+      consecutiveBacklogPressure = 0;
       return;
     }
 
-    ++consecutiveBacklogWarnings;
-    if ((queuedTasks > 3 || consecutiveBacklogWarnings >= 3) &&
-        lastBacklogWarning.Ago() >= 1.0f) {
+    ++consecutiveBacklogPressure;
+    const bool queueVeryLarge = queuedTasks > 20;
+    const bool queuePersistentlyHigh =
+        queuedTasks > 8 && consecutiveBacklogPressure >= 2;
+    if ((queueVeryLarge || queuePersistentlyHigh) &&
+        lastBacklogWarning.Ago() >= 5.0f) {
       LOG->Warn(
-          "Network main-thread task backlog still has %zu queued task(s)",
+          "Network main-thread task backlog remains high (%zu queued task(s))",
           queuedTasks);
       lastBacklogWarning.Touch();
     }
