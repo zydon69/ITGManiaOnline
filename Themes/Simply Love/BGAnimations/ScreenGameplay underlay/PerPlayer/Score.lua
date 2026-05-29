@@ -137,6 +137,18 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 		local dance_points = pss:GetPercentDancePoints()
 		local percent = FormatPercentScore( dance_points ):sub(1,-2)
 		local displayedPercent = IsEX and tonumber(exPercent) or tonumber(percent)
+		if ITGOnline and ITGOnline.currentRoomId and ITGOnline.debugLeaderboardTrace == true and online_trace then
+			online_trace(string.format(
+				"LBTRACE local_score room=%s player=%s displayed=%.3f score=%.3f ex=%.3f combo=%d mode=%s",
+				tostring(ITGOnline.currentRoomId or ""),
+				tostring(pn),
+				tonumber(displayedPercent) or -1,
+				tonumber(percent) or -1,
+				tonumber(exPercent) or -1,
+				tonumber(pss:GetCurrentCombo() or 0),
+				IsEX and "ex" or "dp"
+			))
+		end
 		if not IsEX then
 			self:settext(percent)
 		end

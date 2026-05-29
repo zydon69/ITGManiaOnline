@@ -17,6 +17,13 @@ local function snapshot_key(snapshot)
 	}, "|")
 end
 
+local function lbtrace(message)
+	if not (ITGOnline and ITGOnline.debugLeaderboardTrace == true) then return end
+	if online_trace then
+		online_trace("LBTRACE client_push " .. tostring(message or ""))
+	end
+end
+
 local function queue_current_score_if_changed(actor)
 	if not (ITGOnline and ITGOnline.QueueLiveScore and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
 	if tostring(ITGOnline.currentRoom.phase or "") ~= "playing" then return end
@@ -30,6 +37,15 @@ local function queue_current_score_if_changed(actor)
 	local key = snapshot_key(snapshot)
 	if key ~= "" and key ~= actor.lastOnlineScoreSnapshotKey then
 		actor.lastOnlineScoreSnapshotKey = key
+		lbtrace(string.format(
+			"room=%s kind=periodic displayed=%.3f score=%.3f ex=%.3f combo=%d key=%s",
+			tostring(ITGOnline and ITGOnline.currentRoomId or ""),
+			tonumber(snapshot.displayedPercent or snapshot.DisplayedPercent) or -1,
+			tonumber(snapshot.scorePercent or snapshot.ScorePercent) or -1,
+			tonumber(snapshot.exScorePercent or snapshot.ExScorePercent) or -1,
+			math.floor(tonumber(snapshot.combo or snapshot.Combo) or 0),
+			tostring(key)
+		))
 		ITGOnline:QueueLiveScore(snapshot)
 	end
 end
@@ -59,6 +75,15 @@ return Def.Actor{
 		snapshot = snapshot or ITGOnline.lastDisplayedScoreSnapshot
 		if snapshot then
 			self.lastOnlineScoreSnapshotKey = snapshot_key(snapshot)
+			lbtrace(string.format(
+				"room=%s kind=judgment displayed=%.3f score=%.3f ex=%.3f combo=%d key=%s",
+				tostring(ITGOnline and ITGOnline.currentRoomId or ""),
+				tonumber(snapshot.displayedPercent or snapshot.DisplayedPercent) or -1,
+				tonumber(snapshot.scorePercent or snapshot.ScorePercent) or -1,
+				tonumber(snapshot.exScorePercent or snapshot.ExScorePercent) or -1,
+				math.floor(tonumber(snapshot.combo or snapshot.Combo) or 0),
+				tostring(self.lastOnlineScoreSnapshotKey or "")
+			))
 			ITGOnline:QueueLiveScore(snapshot)
 			if ITGOnline.FlushLiveScore then
 				ITGOnline:FlushLiveScore()

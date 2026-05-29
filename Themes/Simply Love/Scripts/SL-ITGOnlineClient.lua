@@ -137,6 +137,7 @@ ITGOnline.fileHashCacheTtlSeconds = ITGOnline.fileHashCacheTtlSeconds or 30
 ITGOnline.onlineFlowTraceThrottle = ITGOnline.onlineFlowTraceThrottle or {}
 ITGOnline.debugOnlineTrace = ITGOnline.debugOnlineTrace or false
 ITGOnline.debugScoreTrace = ITGOnline.debugScoreTrace or false
+ITGOnline.debugLeaderboardTrace = ITGOnline.debugLeaderboardTrace ~= false
 
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -4719,7 +4720,7 @@ end
 		end
 
 		if payload.leaderboard and leaderboardIsFresh then
-			if self.debugScoreTrace == true then
+			if self.debugScoreTrace == true or self.debugLeaderboardTrace == true then
 				local score = payload.score or {}
 				local user = score.user or {}
 				local playState = ""
@@ -4732,13 +4733,17 @@ end
 						end
 					end
 				end
-				online_trace("score_update room=" .. tostring(payload.room_id or "")
+				online_trace("LBTRACE score_update room=" .. tostring(payload.room_id or "")
 					.. " version=" .. tostring(incomingVersion)
 					.. " tick=" .. tostring(payload.leaderboard_publish_tick_seconds or "")
 					.. " tick_complete=" .. tostring(payload.leaderboard_publish_tick_complete)
 					.. " user=" .. tostring(user.id or "")
 					.. " score=" .. tostring(score.score or "")
 					.. " percent=" .. tostring(score.score_percent or "")
+					.. " source=" .. tostring(score.leaderboard_tick_source or "")
+					.. " status=" .. tostring(score.leaderboard_tick_status or "")
+					.. " pending=" .. tostring(score.leaderboard_tick_pending == true)
+					.. " latest_score=" .. tostring(score.latest_score or "")
 					.. " state=" .. tostring(playState))
 			end
 				if payload.leaderboard_publish_tick_complete == false then

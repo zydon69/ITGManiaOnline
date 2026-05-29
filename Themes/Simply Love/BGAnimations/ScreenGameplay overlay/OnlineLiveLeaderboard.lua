@@ -101,6 +101,11 @@ local function rows_from_leaderboard(leaderboard)
 			exited = flags.exited,
 			finished = flags.finished,
 			play_state = play_state,
+			tick = tonumber(score.leaderboard_publish_tick_seconds),
+			score_tick = tonumber(score.leaderboard_score_tick_seconds),
+			tick_source = tostring(score.leaderboard_tick_source or ""),
+			tick_status = tostring(score.leaderboard_tick_status or ""),
+			tick_pending = score.leaderboard_tick_pending == true,
 		}
 	end
 	return rows
@@ -171,13 +176,35 @@ local function update_rows(frame, rows)
 				local shownValue = tonumber(data.percent) or 0
 				if online_trace then
 					online_trace(string.format(
-						"ITG Online Leaderboard trace: shown=%.3f local_displayed=%s state=%s failed=%s finished=%s status=%s",
+						"ITG Online Leaderboard trace: shown=%.3f local_displayed=%s state=%s failed=%s finished=%s status=%s tick=%s score_tick=%s source=%s pending=%s",
 						shownValue,
 						localValue and string.format("%.3f", localValue) or "nil",
 						tostring(data.play_state or ""),
 						tostring(data.failed == true),
 						tostring(data.finished == true),
-						tostring(statusText)
+						tostring(statusText),
+						tostring(data.tick or ""),
+						tostring(data.score_tick or ""),
+						tostring(data.tick_source or ""),
+						tostring(data.tick_pending == true)
+					))
+				end
+			end
+			if data.user_id == self_id and ITGOnline and ITGOnline.debugLeaderboardTrace == true and online_trace then
+				local now = GetTimeSinceStart()
+				if not frame._lbTraceAt or (now - frame._lbTraceAt) >= 0.20 then
+					frame._lbTraceAt = now
+					online_trace(string.format(
+						"LBTRACE leaderboard_view room=%s shown=%.3f local=%s tick=%s score_tick=%s source=%s status=%s pending=%s state=%s",
+						tostring(ITGOnline and ITGOnline.currentRoomId or ""),
+						tonumber(data.percent) or -1,
+						self_displayed and string.format("%.3f", tonumber(self_displayed) or 0) or "nil",
+						tostring(data.tick or ""),
+						tostring(data.score_tick or ""),
+						tostring(data.tick_source or ""),
+						tostring(data.tick_status or ""),
+						tostring(data.tick_pending == true),
+						tostring(data.play_state or "")
 					))
 				end
 			end
