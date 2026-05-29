@@ -527,6 +527,12 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
     return false;
   }
 
+#if !defined(IXWEBSOCKET_USE_OPEN_SSL) && !defined(IXWEBSOCKET_USE_MBED_TLS)
+  if (IsProductionItgOnlineHost(host)) {
+    return false;
+  }
+#endif
+
   std::lock_guard<std::mutex> hostCacheLock(hostCacheMutex);
 
   static std::string cachedDeniedRaw;
