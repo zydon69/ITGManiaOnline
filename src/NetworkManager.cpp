@@ -672,6 +672,11 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
                 if (args.onResponse) {
                   args.onResponse(response);
                 }
+
+                if (!args.downloadFile.empty() &&
+                    args.deleteDownloadAfterResponse) {
+                  FILEMAN->Remove(downloadFilename);
+                }
               });
         });
   }
@@ -1012,6 +1017,16 @@ class LunaNetworkManager : public Luna<NetworkManager> {
         }
       } else {
         luaL_error(L, "downloadFile must be a string");
+      }
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "deleteDownloadAfterResponse");
+    if (!lua_isnil(L, -1)) {
+      if (lua_isboolean(L, -1)) {
+        args.deleteDownloadAfterResponse = lua_toboolean(L, -1);
+      } else {
+        luaL_error(L, "deleteDownloadAfterResponse must be a boolean");
       }
     }
     lua_pop(L, 1);

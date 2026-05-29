@@ -2,6 +2,7 @@
 
 #include <sys/fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -35,19 +36,59 @@ bool MemoryCardDriverThreaded_Linux::TestWrite(UsbStorageDevice* pDevice) {
   return true;
 }
 
-static bool ExecuteCommand(const std::string& sCommand) {
-  LOG->Trace("executing '%s'", sCommand.c_str());
-  int ret = system(sCommand.c_str());
-  LOG->Trace("done executing '%s'", sCommand.c_str());
-  if (ret != 0) {
-    std::string sError =
-        ssprintf("failed to execute '%s' with error %d", sCommand.c_str(), ret);
-    if (ret == -1) {
-      sError += ssprintf(": %s", sCommand.c_str());
+static std::string CommandForLog(const std::vector<std::string>& args) {
+  std::string command;
+  for (const auto& arg : args) {
+    if (!command.empty()) {
+      command += ' ';
     }
-    LOG->Warn("%s", sError.c_str());
+    command += arg;
   }
-  return ret == 0;
+  return command;
+}
+
+static bool ExecuteCommand(const std::vector<std::string>& args) {
+  if (args.empty()) {
+    return false;
+  }
+
+  const std::string sCommand = CommandForLog(args);
+  LOG->Trace("executing '%s'", sCommand.c_str());
+
+  pid_t pid = fork();
+  if (pid == -1) {
+    LOG->Warn("failed to fork for '%s': %s", sCommand.c_str(), strerror(errno));
+    return false;
+  }
+
+  if (pid == 0) {
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (const auto& arg : args) {
+      argv.push_back(const_cast<char*>(arg.c_str()));
+    }
+    argv.push_back(nullptr);
+    execvp(argv[0], argv.data());
+    _exit(127);
+  }
+
+  int status = 0;
+  while (waitpid(pid, &status, 0) == -1) {
+    if (errno == EINTR) {
+      continue;
+    }
+
+    LOG->Warn("failed waiting for '%s': %s", sCommand.c_str(), strerror(errno));
+    return false;
+  }
+
+  LOG->Trace("done executing '%s'", sCommand.c_str());
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    LOG->Warn("failed to execute '%s' with status %d", sCommand.c_str(), status);
+    return false;
+  }
+
+  return true;
 }
 
 static bool ReadFile(const std::string& sPath, std::string& sBuf) {
@@ -187,7 +228,7 @@ void MemoryCardDriverThreaded_Linux::GetUSBStorageDevices(
       }
 
       /* Wait for udev to finish handling device node creation */
-      ExecuteCommand("udevadm settle");
+      ExecuteCommand({"udevadm", "settle"});
 
       /* If the first partition device exists, eg. /sys/block/uba/uba1, use it.
        */
@@ -372,8 +413,7 @@ void MemoryCardDriverThreaded_Linux::GetUSBStorageDevices(
 bool MemoryCardDriverThreaded_Linux::Mount(UsbStorageDevice* pDevice) {
   ASSERT(!pDevice->sDevice.empty());
 
-  std::string sCommand = "mount " + pDevice->sDevice;
-  bool bMountedSuccessfully = ExecuteCommand(sCommand);
+  bool bMountedSuccessfully = ExecuteCommand({"mount", pDevice->sDevice});
 
   return bMountedSuccessfully;
 }
@@ -388,8 +428,8 @@ void MemoryCardDriverThreaded_Linux::Unmount(UsbStorageDevice* pDevice) {
    * by new devices until those are closed.  Without this, if something
    * causes the device to not unmount here, we'll never unmount it; that
    * causes a device name leak, eventually running us out of mountpoints. */
-  std::string sCommand = "sync; umount -l \"" + pDevice->sDevice + "\"";
-  ExecuteCommand(sCommand);
+  ::sync();
+  ExecuteCommand({"umount", "-l", pDevice->sDevice});
 }
 
 /*

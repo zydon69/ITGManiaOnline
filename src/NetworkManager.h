@@ -82,6 +82,7 @@ struct HttpRequestArgs {
   int transferTimeout = -1;
   int64_t maxDownloadBytes = -1;
   std::string downloadFile;
+  bool deleteDownloadAfterResponse = false;
   std::function<bool(int current, int total)> onProgress;
   std::function<void(const ix::HttpResponsePtr& response)> onResponse;
   std::function<void(const std::string& errorMessage)> onFileError;

@@ -3349,11 +3349,8 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		liveCombo = currentComboOk and tonumber(currentComboValue) or 0
 	end
 
-	-- The online score must match what the player actually sees on screen.
-	local canonicalScorePercent = tonumber(displayedScorePercent)
-	if canonicalScorePercent == nil then
-		canonicalScorePercent = tonumber(snapshot and snapshot.scorePercent)
-	end
+	-- Online ranking score is always the server policy score, independent of local display mode.
+	local canonicalScorePercent = tonumber(snapshot and snapshot.scorePercent)
 	if canonicalScorePercent == nil then
 		canonicalScorePercent = (tonumber(dancePoints) or 0) * 100
 	end
