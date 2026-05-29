@@ -714,6 +714,8 @@ DownloadEventUnlock = function(url, unlockName, packName)
 	SL.Downloads[uuid].Request = NETWORK:HttpRequest{
 		url=url,
 		downloadFile=downloadfile,
+		maxDownloadBytes=2 * 1024 * 1024 * 1024 - 1,
+		deleteDownloadAfterResponse=true,
 		onProgress=function(currentBytes, totalBytes)
 			local downloadInfo = SL.Downloads[uuid]
 			if downloadInfo == nil then return end

@@ -251,6 +251,14 @@ bool RageFileManager::Unzip(
       break;
     }
 
+    if (info.m_uncomp_size > kMaxZipTotalUncompressedBytes) {
+      LOG->Warn(
+          "Could not unzip %s: entry %s is too large for the archive limit",
+          zipPath.c_str(), info.m_filename);
+      success = false;
+      break;
+    }
+
     if (total_uncompressed_size >
         kMaxZipTotalUncompressedBytes - info.m_uncomp_size) {
       LOG->Warn(
@@ -1375,6 +1383,21 @@ unsigned int GetHashForDirectory(const std::string& sDir) {
 // lua start
 #include "LuaBinding.h"
 
+static std::string NormalizeLuaDeleteRecursivePath(std::string path) {
+  FixSlashesInPlace(path);
+  CollapsePath(path, true);
+  if (!path.empty() && path.back() != '/') {
+    path.push_back('/');
+  }
+  return path;
+}
+
+static bool IsLuaDeleteRecursivePathAllowed(const std::string& path) {
+  static const std::string allowedRoot = "/Songs/Online Downloads/";
+  return path.size() > allowedRoot.size() &&
+         CompareNoCase(path.substr(0, allowedRoot.size()), allowedRoot) == 0;
+}
+
 /** @brief Allow Lua to have access to the RageFileManager. */
 class LunaRageFileManager : public Luna<RageFileManager> {
  public:
@@ -1436,15 +1459,12 @@ class LunaRageFileManager : public Luna<RageFileManager> {
     return 1;
   }
   static int DeleteRecursive(T* p, lua_State* L) {
-    std::string path = SArg(1);
-    if (path.empty() || path == "/" || path == "/Songs/" || path == "/Downloads/") {
+    const std::string requestedPath = SArg(1);
+    const std::string path = NormalizeLuaDeleteRecursivePath(requestedPath);
+    if (!IsLuaDeleteRecursivePathAllowed(path)) {
       LOG->Warn("Refusing to recursively delete unsafe path %s", path.c_str());
       lua_pushboolean(L, false);
       return 1;
-    }
-
-    if (path.back() != '/') {
-      path.push_back('/');
     }
 
     lua_pushboolean(L, p->DeleteRecursive(path));

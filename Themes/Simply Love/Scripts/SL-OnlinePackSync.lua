@@ -669,6 +669,7 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 			connectTimeout = 15,
 			transferTimeout = 600,
 			maxDownloadBytes = 2 * 1024 * 1024 * 1024 - 1,
+			deleteDownloadAfterResponse = true,
 			onProgress = function(current, total)
 				if tonumber(total) and tonumber(total) > 0 then
 					local progress = math.max(0, math.min(100, math.floor((tonumber(current) or 0) * 100 / tonumber(total))))
