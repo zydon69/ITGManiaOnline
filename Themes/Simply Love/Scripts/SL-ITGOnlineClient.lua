@@ -57,6 +57,8 @@ ITGOnline.lastDisplayedScoreSnapshot = ITGOnline.lastDisplayedScoreSnapshot or n
 ITGOnline.lastDisplayedScoreSnapshotAt = ITGOnline.lastDisplayedScoreSnapshotAt or 0
 ITGOnline.pendingLiveScoreSnapshot = ITGOnline.pendingLiveScoreSnapshot or nil
 ITGOnline.pendingLiveScoreRoundKey = ITGOnline.pendingLiveScoreRoundKey or ""
+ITGOnline.liveScoreTickRoundKey = ITGOnline.liveScoreTickRoundKey or ""
+ITGOnline.lastQueuedLiveScoreTickSeconds = ITGOnline.lastQueuedLiveScoreTickSeconds or 0
 ITGOnline.liveScoreInFlight = ITGOnline.liveScoreInFlight or false
 ITGOnline.liveScoreNextAttemptAt = ITGOnline.liveScoreNextAttemptAt or 0
 ITGOnline.liveScoreMinIntervalSeconds = ITGOnline.liveScoreMinIntervalSeconds or 0.35
@@ -2990,17 +2992,88 @@ function ITGOnline:ClearFileHashCache()
 	self.fileHashCache = {}
 end
 
+local function round_live_score_tick(value)
+	return math.floor((tonumber(value) or 0) * 1000 + 0.5) / 1000
+end
+
+function ITGOnline:LiveScoreTickSeconds()
+	local scoring = self.serverPolicy and self.serverPolicy.scoring or {}
+	local tick = tonumber(scoring.live_leaderboard_tick_seconds) or 0.5
+	return math.max(0.1, tick)
+end
+
+function ITGOnline:CurrentMusicPositionSeconds(player)
+	player = player or first_enabled_player()
+	if not player or not GAMESTATE or not GAMESTATE.GetPlayerState then return nil end
+
+	local ok, position = pcall(function()
+		local songPositionState = GAMESTATE:GetPlayerState(player):GetSongPosition()
+		local rawOk, rawSeconds = pcall(function() return songPositionState:GetMusicSeconds() end)
+		if rawOk and tonumber(rawSeconds) then return tonumber(rawSeconds) end
+		local visibleOk, visibleSeconds = pcall(function() return songPositionState:GetMusicSecondsVisible() end)
+		if visibleOk and tonumber(visibleSeconds) then return tonumber(visibleSeconds) end
+		return nil
+	end)
+
+	if ok and tonumber(position) then
+		return math.max(0, tonumber(position) or 0)
+	end
+	return nil
+end
+
+function ITGOnline:RememberLiveScoreSnapshot(snapshot)
+	if type(snapshot) ~= "table" then return false end
+	self.lastDisplayedScoreSnapshot = snapshot
+	self.lastDisplayedScoreSnapshotAt = GetTimeSinceStart()
+	return true
+end
+
 function ITGOnline:QueueLiveScore(snapshot)
 	if type(snapshot) ~= "table" then return false end
 	if not online_single_local_player_allowed() then
 		online_flow_trace("ignored_live_score_multiple_local_players")
 		return false
 	end
-	self.lastDisplayedScoreSnapshot = snapshot
-	self.lastDisplayedScoreSnapshotAt = GetTimeSinceStart()
+	self:RememberLiveScoreSnapshot(snapshot)
 	self.pendingLiveScoreRoundKey = self.PlayStateKey and self:PlayStateKey() or tostring(self.currentRoomId or "")
 	self.pendingLiveScoreSnapshot = snapshot
 	return true
+end
+
+function ITGOnline:QueueLiveScoreTickIfDue()
+	if not (self.currentRoomId and self.currentRoom) then return false end
+	if self:NormalizeRoomPhase(self.currentRoom.phase) ~= "playing" then return false end
+	if not online_single_local_player_allowed() then
+		online_flow_trace("ignored_live_score_tick_multiple_local_players")
+		return false
+	end
+
+	local roundKey = self.PlayStateKey and self:PlayStateKey() or tostring(self.currentRoomId or "")
+	if self.PlayStateKeyIsValid and not self:PlayStateKeyIsValid(roundKey) then
+		return false
+	end
+	if self.liveScoreTickRoundKey ~= roundKey then
+		self.liveScoreTickRoundKey = roundKey
+		self.lastQueuedLiveScoreTickSeconds = 0
+	end
+
+	local position = self:CurrentMusicPositionSeconds()
+	if position == nil then return false end
+
+	local tickSeconds = self:LiveScoreTickSeconds()
+	local dueTick = round_live_score_tick(math.floor((position / tickSeconds) + 0.000001) * tickSeconds)
+	if dueTick < tickSeconds then return false end
+	if dueTick <= (tonumber(self.lastQueuedLiveScoreTickSeconds) or 0) + 0.001 then
+		return false
+	end
+
+	local snapshot = self.BuildCurrentScoreSnapshot and self:BuildCurrentScoreSnapshot() or nil
+	snapshot = snapshot or self.lastDisplayedScoreSnapshot
+	if type(snapshot) ~= "table" then return false end
+
+	snapshot.leaderboardTickSeconds = dueTick
+	self.lastQueuedLiveScoreTickSeconds = dueTick
+	return self:QueueLiveScore(snapshot)
 end
 
 function ITGOnline:HasPendingLiveScore()
@@ -3030,28 +3103,8 @@ function ITGOnline:LiveScoreMinIntervalSeconds()
 	rate = math.max(0.25, math.min(3, rate))
 	local expectedPlaySeconds = duration / rate
 
-	local player = first_enabled_player()
-	if not player or not GAMESTATE or not GAMESTATE.GetPlayerState then
-		return normalInterval
-	end
-
-	local ok, position = pcall(function()
-		local songPositionState = GAMESTATE:GetPlayerState(player):GetSongPosition()
-		local rawOk, rawSeconds = pcall(function()
-			return songPositionState:GetMusicSeconds()
-		end)
-		if rawOk and tonumber(rawSeconds) then
-			return tonumber(rawSeconds)
-		end
-		local visibleOk, visibleSeconds = pcall(function()
-			return songPositionState:GetMusicSecondsVisible()
-		end)
-		if visibleOk and tonumber(visibleSeconds) then
-			return tonumber(visibleSeconds)
-		end
-		return nil
-	end)
-	if not ok or tonumber(position) == nil then
+	local position = self:CurrentMusicPositionSeconds()
+	if tonumber(position) == nil then
 		return normalInterval
 	end
 
@@ -3199,16 +3252,12 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		local exOk, exValue = pcall(function() return CalculateExScore(player) end)
 		if exOk and tonumber(exValue) then exScore = tonumber(exValue) end
 	end
-	local songPosition = 0
-	local positionOk, positionValue = pcall(function()
-		local songPositionState = GAMESTATE:GetPlayerState(player):GetSongPosition()
-		local rawOk, rawSeconds = pcall(function() return songPositionState:GetMusicSeconds() end)
-		if rawOk and tonumber(rawSeconds) then return tonumber(rawSeconds) end
-		local visibleOk, visibleSeconds = pcall(function() return songPositionState:GetMusicSecondsVisible() end)
-		if visibleOk and tonumber(visibleSeconds) then return tonumber(visibleSeconds) end
-		return nil
-	end)
-	if positionOk and tonumber(positionValue) then songPosition = tonumber(positionValue) end
+	local songPosition = self:CurrentMusicPositionSeconds(player) or 0
+	local requestedTickPosition = nil
+	if not final and snapshot ~= nil and tonumber(snapshot.leaderboardTickSeconds) then
+		requestedTickPosition = round_live_score_tick(snapshot.leaderboardTickSeconds)
+		songPosition = requestedTickPosition
+	end
 	local positionKey = roundKey
 	if self.lastScorePositionKey ~= positionKey then
 		self.lastScorePositionKey = positionKey
@@ -3225,8 +3274,14 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		local scoring = self.serverPolicy and self.serverPolicy.scoring or {}
 		local clockGrace = tonumber(scoring.playing_score_clock_grace_seconds) or 5
 		local allowedByClock = estimatedPosition + math.max(0, clockGrace - 0.25)
-		-- Keep client position coherent with server clock without drifting beyond the server guard.
-		songPosition = math.min(math.max(songPosition, math.max(0, estimatedPosition - 0.5)), allowedByClock)
+		if requestedTickPosition ~= nil then
+			-- Tick snapshots are intentionally quantized. Clamp only the upper bound so
+			-- the server receives the exact music row the leaderboard table expects.
+			songPosition = math.min(songPosition, allowedByClock)
+		else
+			-- Keep client position coherent with server clock without drifting beyond the server guard.
+			songPosition = math.min(math.max(songPosition, math.max(0, estimatedPosition - 0.5)), allowedByClock)
+		end
 	end
 	local chartDuration = tonumber(scoreSongPayload.chart_duration_seconds) or tonumber(scoreSongPayload.music_length_seconds)
 	local lastKnownSongPosition = math.max(

@@ -87,10 +87,12 @@ local function rows_from_leaderboard(leaderboard)
 		local user_id = tostring(user.id or "")
 		local play_state = play_state_for_user(user_id)
 		local flags = terminal_flags(play_state, score.failed and true or false)
+		local tick_status = tostring(score.leaderboard_tick_status or "")
 		rows[#rows + 1] = {
 			user_id = user_id,
 			name = tostring(user.name or "Player"),
 			percent = percent or 0,
+			stale = tick_status == "stale" or score.leaderboard_tick_pending == true,
 			failed = flags.failed,
 			exited = flags.exited,
 			finished = flags.finished,
@@ -149,8 +151,8 @@ local function update_rows(frame, rows)
 				rowColor = color("#ff3b30")
 			elseif data.finished then
 				rowColor = color("#66ff99")
-			elseif data.user_id == self_id then
-				rowColor = color("#ffd166")
+			elseif data.stale then
+				rowColor = color("#ff9f1c")
 			end
 			if data.user_id == self_id and ITGOnline and ITGOnline.debugScoreTrace == true then
 				local localValue = tonumber(self_displayed)

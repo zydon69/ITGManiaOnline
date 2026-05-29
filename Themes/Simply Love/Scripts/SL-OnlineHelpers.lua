@@ -1206,12 +1206,12 @@ CreateOnlineHandler = function()
 					end,
 					OnlineScoreSnapshotMessageCommand=function(self, params)
 						if onlineHandlerShuttingDown then return end
-						if not (ITGOnline and ITGOnline.QueueLiveScore and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
+						if not (ITGOnline and ITGOnline.RememberLiveScoreSnapshot and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
 						local enabled = GAMESTATE:GetEnabledPlayers()
 						local primary = enabled and enabled[1] or nil
 						if not (params and primary and params.Player == primary) then return end
 
-						ITGOnline:QueueLiveScore({
+						ITGOnline:RememberLiveScoreSnapshot({
 							scorePercent = params.ScorePercent,
 							exScorePercent = params.ExScorePercent,
 							displayedPercent = params.DisplayedPercent,
