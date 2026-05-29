@@ -282,7 +282,12 @@ local function response_error_code(response, decoded)
 end
 
 function online_trace(message)
-	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
+	if not (ITGOnline and (
+		ITGOnline.debugOnlineTrace == true
+		or ITGOnline.debugReadyFlow == true
+		or ITGOnline.debugLeaderboardTrace == true
+		or ITGOnline.debugScoreTrace == true
+	)) then
 		return
 	end
 	local line = "ITG Online: " .. tostring(message or "")
