@@ -71,28 +71,32 @@ end
 local function rows_from_leaderboard(leaderboard)
 	local rows = {}
 	local max_score = selected_max_score()
+	local self_id = local_user_id()
+	local self_displayed = local_displayed_percent()
 	for score in ivalues(leaderboard or {}) do
 		local user = score.user or {}
 		local accuracy_percent = tonumber(score.accuracy)
-		local score_percent = tonumber(score.score_percent)
-		if score_percent == nil and max_score > 0 and tonumber(score.score) then
-			score_percent = math.max(0, math.min(100, (tonumber(score.score) / max_score) * 100))
+		local ex_percent = tonumber(score.score_percent)
+		if ex_percent == nil and max_score > 0 and tonumber(score.score) then
+			ex_percent = math.max(0, math.min(100, (tonumber(score.score) / max_score) * 100))
 		end
 
-		-- The live leaderboard must follow the same canonical score shown in gameplay.
-		local percent = score_percent
+		-- The live leaderboard should follow score progression, not accuracy.
+		-- Use accuracy only when score-based percentage is unavailable.
+		local percent = ex_percent
 		if percent == nil then
 			percent = accuracy_percent
 		end
 		local user_id = tostring(user.id or "")
+		if user_id == self_id and self_displayed ~= nil then
+			percent = self_displayed
+		end
 		local play_state = play_state_for_user(user_id)
 		local flags = terminal_flags(play_state, score.failed and true or false)
-		local tick_status = tostring(score.leaderboard_tick_status or "")
 		rows[#rows + 1] = {
 			user_id = user_id,
 			name = tostring(user.name or "Player"),
 			percent = percent or 0,
-			stale = tick_status == "stale" or score.leaderboard_tick_pending == true,
 			failed = flags.failed,
 			exited = flags.exited,
 			finished = flags.finished,
@@ -105,14 +109,22 @@ end
 local function rows_from_lobby_state(data)
 	local rows = {}
 	if not data or (data.phase ~= "playing" and data.phase ~= "results") then return rows end
+	local self_id = local_user_id()
+	local self_displayed = local_displayed_percent()
 	for player in ivalues(data.players or {}) do
 		if player.exScore ~= nil or player.score ~= nil or player.playState ~= nil then
 			local score_percent = tonumber(player.score)
 			local ex_percent = tonumber(player.exScore)
-			-- `player.score` is canonical in online play; EX is fallback only.
-			local percent = score_percent
-			if percent == nil then percent = ex_percent end
+			-- `player.score` is the canonical displayed score percent reported by the client.
+			-- Prefer EX/score-derived percentage for consistency with gameplay score.
+			local percent = ex_percent
+			if percent == nil then
+				percent = score_percent
+			end
 			local player_id = tostring(player.playerId or "")
+			if player_id == self_id and self_displayed ~= nil then
+				percent = self_displayed
+			end
 			local flags = terminal_flags(player.playState, false)
 			rows[#rows + 1] = {
 				user_id = player_id,
@@ -151,8 +163,8 @@ local function update_rows(frame, rows)
 				rowColor = color("#ff3b30")
 			elseif data.finished then
 				rowColor = color("#66ff99")
-			elseif data.stale then
-				rowColor = color("#ff9f1c")
+			elseif data.user_id == self_id then
+				rowColor = color("#ffd166")
 			end
 			if data.user_id == self_id and ITGOnline and ITGOnline.debugScoreTrace == true then
 				local localValue = tonumber(self_displayed)

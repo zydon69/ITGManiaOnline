@@ -1,13 +1,24 @@
--- Extra reliability path: remember every score change, then send fixed music-time
--- ticks so every client fills the same leaderboard table rows.
+-- Extra reliability path: push live score whenever judgments update gameplay state.
+-- This runs independently from score text visibility/layout.
 
 local function primary_enabled_player()
 	local enabled = GAMESTATE:GetEnabledPlayers()
 	return enabled and enabled[1] or nil
 end
 
-local function remember_current_score()
-	if not (ITGOnline and ITGOnline.RememberLiveScoreSnapshot and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
+local function snapshot_key(snapshot)
+	if type(snapshot) ~= "table" then return "" end
+
+	return table.concat({
+		string.format("%.4f", tonumber(snapshot.displayedPercent or snapshot.DisplayedPercent) or 0),
+		string.format("%.4f", tonumber(snapshot.scorePercent or snapshot.ScorePercent) or 0),
+		string.format("%.4f", tonumber(snapshot.exScorePercent or snapshot.ExScorePercent) or 0),
+		tostring(math.floor(tonumber(snapshot.combo or snapshot.Combo) or 0)),
+	}, "|")
+end
+
+local function queue_current_score_if_changed(actor)
+	if not (ITGOnline and ITGOnline.QueueLiveScore and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
 	if tostring(ITGOnline.currentRoom.phase or "") ~= "playing" then return end
 
 	local snapshot = nil
@@ -16,25 +27,27 @@ local function remember_current_score()
 	end
 	if type(snapshot) ~= "table" then return end
 
-	ITGOnline:RememberLiveScoreSnapshot(snapshot)
+	local key = snapshot_key(snapshot)
+	if key ~= "" and key ~= actor.lastOnlineScoreSnapshotKey then
+		actor.lastOnlineScoreSnapshotKey = key
+		ITGOnline:QueueLiveScore(snapshot)
+	end
 end
 
 return Def.Actor{
 	OnCommand=function(self)
+		self.lastOnlineScoreSnapshotKey = ""
 		self:queuecommand("FlushOnlineScore")
 	end,
 	FlushOnlineScoreCommand=function(self)
-		remember_current_score()
-		if ITGOnline and ITGOnline.QueueLiveScoreTickIfDue then
-			ITGOnline:QueueLiveScoreTickIfDue()
-		end
+		queue_current_score_if_changed(self)
 		if ITGOnline and ITGOnline.FlushLiveScore then
 			ITGOnline:FlushLiveScore()
 		end
-		self:sleep(0.10):queuecommand("FlushOnlineScore")
+		self:sleep(0.20):queuecommand("FlushOnlineScore")
 	end,
 	JudgmentMessageCommand=function(self, params)
-		if not (ITGOnline and ITGOnline.RememberLiveScoreSnapshot and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
+		if not (ITGOnline and ITGOnline.QueueLiveScore and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
 
 		local primary = primary_enabled_player()
 		if primary and params and params.Player and params.Player ~= primary then return end
@@ -45,7 +58,11 @@ return Def.Actor{
 		end
 		snapshot = snapshot or ITGOnline.lastDisplayedScoreSnapshot
 		if snapshot then
-			ITGOnline:RememberLiveScoreSnapshot(snapshot)
+			self.lastOnlineScoreSnapshotKey = snapshot_key(snapshot)
+			ITGOnline:QueueLiveScore(snapshot)
+			if ITGOnline.FlushLiveScore then
+				ITGOnline:FlushLiveScore()
+			end
 		end
 	end,
 }

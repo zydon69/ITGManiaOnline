@@ -97,19 +97,6 @@ local function ready_debug(message)
 	end
 end
 
--- Keep flow tracing safe in all contexts; never allow a missing logger
--- to break lobby state processing.
-local function online_flow_trace(message)
-	local line = tostring(message or "")
-	if online_trace then
-		online_trace("FLOW " .. line)
-	elseif Trace then
-		Trace("ITG Online FLOW: " .. line)
-	elseif Warn then
-		Warn("ITG Online FLOW: " .. line)
-	end
-end
-
 local function maybe_set_lobby_ready(reason, callback)
 	if not (ITGOnline and ITGOnline.SetReady) then
 		if callback then callback(false) end
@@ -309,17 +296,9 @@ end
 local ApplyOnlineSongSelection = function(songInfo)
 	if not songInfo or not songInfo.songPath then return false end
 	if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ApplySelectedChart then
-		online_flow_trace("pack_sync_apply_selected_chart title=" .. tostring(songInfo.title or songInfo.name or "")
-			.. " pack=" .. tostring(songInfo.pack or "")
-			.. " path=" .. tostring(songInfo.songPath or songInfo.folder_name or "")
-			.. " selected_at=" .. tostring(songInfo.selectedAt or songInfo.selected_at or "")
-			.. " chart_hash=" .. tostring(songInfo.chartHash or songInfo.chart_hash or ""):sub(1, 12))
 		return ITGOnline.PackSync:ApplySelectedChart(songInfo)
 	end
 
-	online_flow_trace("legacy_apply_song_selection title=" .. tostring(songInfo.title or songInfo.name or "")
-		.. " pack=" .. tostring(songInfo.pack or "")
-		.. " path=" .. tostring(songInfo.songPath or songInfo.folder_name or ""))
 	local previousSong = GAMESTATE:GetCurrentSong()
 	local previousSteps = {}
 	for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
@@ -338,7 +317,6 @@ local ApplyOnlineSongSelection = function(songInfo)
 		song = SONGMAN:FindSong(parts[2])
 	end
 	if not song then
-		online_flow_trace("legacy_apply_song_selection_missing_song path=" .. tostring(songInfo.songPath))
 		SM("Online song not found locally: " .. tostring(songInfo.songPath))
 		MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo})
 		return false
@@ -357,8 +335,6 @@ local ApplyOnlineSongSelection = function(songInfo)
 	end
 
 	if requiresExactChartHash and not matchedSteps then
-		online_flow_trace("legacy_apply_song_selection_chart_hash_missing path=" .. tostring(songInfo.songPath)
-			.. " chart_hash=" .. tostring(songInfo.chartHash or ""):sub(1, 12))
 		SM("Online chart hash not found locally for: " .. tostring(songInfo.songPath))
 		MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="chart_hash_mismatch"})
 		restorePreviousSelection()
@@ -401,7 +377,6 @@ local ApplyOnlineSongSelection = function(songInfo)
 	local requiresHashVerification = (songInfo.songHash and songInfo.songHash ~= "")
 		or (songInfo.chartHash and songInfo.chartHash ~= "")
 	if requiresHashVerification and not localPayload then
-		online_flow_trace("legacy_apply_song_selection_payload_unavailable path=" .. tostring(songInfo.songPath))
 		SM("Online song could not be verified locally: " .. tostring(songInfo.songPath))
 		MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="local_payload_unavailable"})
 		restorePreviousSelection()
@@ -410,18 +385,12 @@ local ApplyOnlineSongSelection = function(songInfo)
 
 	if localPayload then
 		if songInfo.songHash and songInfo.songHash ~= "" and localPayload.song_hash ~= songInfo.songHash then
-			online_flow_trace("legacy_apply_song_selection_song_hash_mismatch path=" .. tostring(songInfo.songPath)
-				.. " expected=" .. tostring(songInfo.songHash):sub(1, 12)
-				.. " local=" .. tostring(localPayload.song_hash):sub(1, 12))
 			SM("Online song hash mismatch for: " .. tostring(songInfo.songPath))
 			MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="hash_mismatch"})
 			restorePreviousSelection()
 			return false
 		end
 		if songInfo.chartHash and songInfo.chartHash ~= "" and localPayload.chart_hash ~= songInfo.chartHash then
-			online_flow_trace("legacy_apply_song_selection_chart_hash_mismatch path=" .. tostring(songInfo.songPath)
-				.. " expected=" .. tostring(songInfo.chartHash):sub(1, 12)
-				.. " local=" .. tostring(localPayload.chart_hash):sub(1, 12))
 			SM("Online chart hash mismatch for: " .. tostring(songInfo.songPath))
 			MESSAGEMAN:Broadcast("OnlineMissingSong", {songInfo=songInfo, reason="hash_mismatch"})
 			restorePreviousSelection()
@@ -437,7 +406,6 @@ local ApplyOnlineSongSelection = function(songInfo)
 	end
 
 	MESSAGEMAN:Broadcast("OnlineSongAvailable", {songInfo=songInfo})
-	online_flow_trace("legacy_apply_song_selection_success path=" .. tostring(songInfo.songPath))
 	return true
 end
 
@@ -1206,12 +1174,12 @@ CreateOnlineHandler = function()
 					end,
 					OnlineScoreSnapshotMessageCommand=function(self, params)
 						if onlineHandlerShuttingDown then return end
-						if not (ITGOnline and ITGOnline.RememberLiveScoreSnapshot and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
+						if not (ITGOnline and ITGOnline.QueueLiveScore and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
 						local enabled = GAMESTATE:GetEnabledPlayers()
 						local primary = enabled and enabled[1] or nil
 						if not (params and primary and params.Player == primary) then return end
 
-						ITGOnline:RememberLiveScoreSnapshot({
+						ITGOnline:QueueLiveScore({
 							scorePercent = params.ScorePercent,
 							exScorePercent = params.ExScorePercent,
 							displayedPercent = params.DisplayedPercent,
@@ -1664,7 +1632,7 @@ CreateOnlineHandler = function()
 						end
 
 						local phase = tostring(ITGOnline.currentRoom.phase or "")
-						if phase == "config" or phase == "lobby_ready" then
+						if phase == "config" then
 							attemptStart()
 							return
 						end
