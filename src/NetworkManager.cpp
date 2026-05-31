@@ -321,6 +321,11 @@ NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
   }
 
   this->tlsOptions.publicKeySha256Pins = configuredPins;
+#if defined(IXWEBSOCKET_USE_OPEN_SSL) || defined(IXWEBSOCKET_USE_MBED_TLS)
+  this->tlsBackendEnforcesPublicKeyPins = true;
+#else
+  this->tlsBackendEnforcesPublicKeyPins = false;
+#endif
 #if !defined(IXWEBSOCKET_USE_OPEN_SSL) && !defined(IXWEBSOCKET_USE_MBED_TLS)
   if (!configuredPins.empty()) {
     LOG->Warn(
@@ -524,6 +529,20 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
 
   if ((protocol == "http" || protocol == "ws") &&
       IsProductionItgOnlineHost(host)) {
+    return false;
+  }
+
+  if ((protocol == "https" || protocol == "wss") &&
+      IsProductionItgOnlineHost(host) &&
+      !this->tlsBackendEnforcesPublicKeyPins &&
+      !this->httpPublicKeyPins.Get().empty()) {
+    if (!this->warnedPinningUnsupportedForProductionHost) {
+      this->warnedPinningUnsupportedForProductionHost = true;
+      LOG->Warn(
+          "Blocked %s because HttpPublicKeyPins are configured but this build "
+          "cannot enforce key pinning for production ITG Online hosts.",
+          url.c_str());
+    }
     return false;
   }
 

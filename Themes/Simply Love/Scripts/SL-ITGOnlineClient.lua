@@ -65,7 +65,6 @@ ITGOnline.liveScoreEndgameWindowSeconds = ITGOnline.liveScoreEndgameWindowSecond
 ITGOnline.liveScoreEndgameIntervalSeconds = ITGOnline.liveScoreEndgameIntervalSeconds or 0.20
 ITGOnline.lastLeaderboardVersionByRoomId = ITGOnline.lastLeaderboardVersionByRoomId or {}
 ITGOnline.lastLeaderboardRealtimeAt = ITGOnline.lastLeaderboardRealtimeAt or 0
-ITGOnline.lastLeaderboardFallbackFetchAt = ITGOnline.lastLeaderboardFallbackFetchAt or 0
 ITGOnline.lastPlayStateVersionByRoomId = ITGOnline.lastPlayStateVersionByRoomId or {}
 ITGOnline.lastRoomEventIdByRoomId = ITGOnline.lastRoomEventIdByRoomId or {}
 ITGOnline.promptedPendingJoinRequestIds = ITGOnline.promptedPendingJoinRequestIds or {}
@@ -830,7 +829,6 @@ function ITGOnline:ResetRealtimeState()
 	self.fetchRoomInFlightByRoomId = {}
 	self.lastLeaderboardVersionByRoomId = {}
 	self.lastLeaderboardRealtimeAt = 0
-	self.lastLeaderboardFallbackFetchAt = 0
 	self.lastPlayStateVersionByRoomId = {}
 	self.lastRoomEventIdByRoomId = {}
 	self.lastUnversionedPlayStateFetchAt = 0
@@ -1739,20 +1737,6 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 		if not self.onlineGameplayHoldFetchAt or (now - self.onlineGameplayHoldFetchAt) >= 0.75 then
 			self.onlineGameplayHoldFetchAt = now
 			self:FetchPlayState()
-		end
-
-		-- Keep leaderboard visually alive near evaluation transition.
-		-- If realtime score ticks stall briefly, request an authoritative room snapshot.
-		local lastLeaderboardAt = tonumber(self.lastLeaderboardRealtimeAt) or 0
-		if (now - lastLeaderboardAt) >= 1.5 and self.FetchRoom and self.currentRoomId then
-			local lastFallbackFetch = tonumber(self.lastLeaderboardFallbackFetchAt) or 0
-			if (now - lastFallbackFetch) >= 1.25 then
-				self.lastLeaderboardFallbackFetchAt = now
-				online_flow_trace_throttled("leaderboard_fallback_fetch", 1.0,
-					"leaderboard_fallback_fetch room=" .. tostring(self.currentRoomId)
-					.. " staleFor=" .. tostring(now - lastLeaderboardAt))
-				self:FetchRoom(self.currentRoomId)
-			end
 		end
 
 		self.onlineGameplayAllTerminalHoldKey = ""

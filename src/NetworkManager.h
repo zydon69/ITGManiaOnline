@@ -158,6 +158,8 @@ class NetworkManager {
   ix::HttpClient httpClient;
   ix::HttpClient downloadClient;
   ix::SocketTLSOptions tlsOptions;
+  bool tlsBackendEnforcesPublicKeyPins{false};
+  bool warnedPinningUnsupportedForProductionHost{false};
 
   static Preference<bool> httpEnabled;
   static Preference<std::string> httpAllowHosts;
