@@ -63,6 +63,7 @@ SL.Global.Online = SL.Global.Online or {}
 local joined_any_player_missing_song
 local joined_all_players_ready
 local last_start_visibility_debug_key = ""
+local last_select_song_visibility_debug_key = ""
 
 local function lobby_debug_enabled()
 	if ITGOnline and ITGOnline.debugReadyFlow ~= nil then
@@ -75,6 +76,11 @@ local function lobby_debug(message)
 	if not lobby_debug_enabled() then return end
 	local line = "ITG Online Lobby: " .. tostring(message or "")
 	if Warn then Warn(line) elseif Trace then Trace(line) end
+end
+
+local function lobby_flow_trace(message)
+	local line = "ITG Online: FLOW lobby_ui " .. tostring(message or "")
+	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
 
 local function ready_summary()
@@ -144,11 +150,19 @@ local function local_pack_exists(songInfo)
 	return pack ~= "" and SONGMAN and SONGMAN.DoesSongGroupExist and SONGMAN:DoesSongGroupExist(pack)
 end
 
+local function normalized_online_phase(value)
+	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+end
+
 local function joined_phase_allows_song_selection()
-	return joined_phase == "lobby"
-		or joined_phase == "lobby_ready"
-		or joined_phase == "config"
-		or joined_phase == "results"
+	local phase = normalized_online_phase(joined_phase)
+	if phase == "" and ITGOnline and ITGOnline.currentRoom then
+		phase = normalized_online_phase(ITGOnline.currentRoom.phase)
+	end
+	return phase == "lobby"
+		or phase == "lobby_ready"
+		or phase == "config"
+		or phase == "results"
 end
 
 local function joined_phase_allows_start()
@@ -979,7 +993,31 @@ local af = Def.ActorFrame{
 
 			local selectSongButton = joinedContent and joinedContent:GetChild("SelectSongButton")
 			if selectSongButton then
-				selectSongButton:visible(joined_is_manager and joined_phase_allows_song_selection())
+				local allowSelection = joined_phase_allows_song_selection()
+				local visible = joined_is_manager and allowSelection
+				selectSongButton:visible(visible)
+
+				local currentPhase = normalized_online_phase(joined_phase)
+				local roomPhase = normalized_online_phase(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "")
+				local visibilityKey = table.concat({
+					tostring(joined_lobby_code or ""),
+					tostring(currentPhase),
+					tostring(roomPhase),
+					joined_is_manager and "1" or "0",
+					allowSelection and "1" or "0",
+					visible and "1" or "0",
+					tostring(#joined_lobby_players),
+				}, "|")
+				if visibilityKey ~= last_select_song_visibility_debug_key then
+					last_select_song_visibility_debug_key = visibilityKey
+					lobby_flow_trace("select_music_button visible=" .. tostring(visible)
+						.. " allowSelection=" .. tostring(allowSelection)
+						.. " joinedPhase=" .. tostring(currentPhase)
+						.. " roomPhase=" .. tostring(roomPhase)
+						.. " isManager=" .. tostring(joined_is_manager)
+						.. " players=" .. tostring(#joined_lobby_players)
+						.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+				end
 			end
 
 			local reloadSongsButton = joinedContent and joinedContent:GetChild("ReloadSongsButton")

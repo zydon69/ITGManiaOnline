@@ -36,6 +36,7 @@ ITGOnline.scheduledStartLocalTime = ITGOnline.scheduledStartLocalTime or nil
 ITGOnline.sessionExpired = ITGOnline.sessionExpired or false
 ITGOnline.disconnecting = ITGOnline.disconnecting or false
 ITGOnline.lastEventCursor = ITGOnline.lastEventCursor or 0
+ITGOnline.fetchRoomInFlightByRoomId = ITGOnline.fetchRoomInFlightByRoomId or {}
 ITGOnline.lastRealtimeMessageAt = ITGOnline.lastRealtimeMessageAt or GetTimeSinceStart()
 ITGOnline.lastSyncRequestedAt = ITGOnline.lastSyncRequestedAt or 0
 ITGOnline.screenGeneration = ITGOnline.screenGeneration or 0
@@ -63,6 +64,8 @@ ITGOnline.liveScoreMinIntervalSeconds = ITGOnline.liveScoreMinIntervalSeconds or
 ITGOnline.liveScoreEndgameWindowSeconds = ITGOnline.liveScoreEndgameWindowSeconds or 6
 ITGOnline.liveScoreEndgameIntervalSeconds = ITGOnline.liveScoreEndgameIntervalSeconds or 0.20
 ITGOnline.lastLeaderboardVersionByRoomId = ITGOnline.lastLeaderboardVersionByRoomId or {}
+ITGOnline.lastLeaderboardRealtimeAt = ITGOnline.lastLeaderboardRealtimeAt or 0
+ITGOnline.lastLeaderboardFallbackFetchAt = ITGOnline.lastLeaderboardFallbackFetchAt or 0
 ITGOnline.lastPlayStateVersionByRoomId = ITGOnline.lastPlayStateVersionByRoomId or {}
 ITGOnline.lastRoomEventIdByRoomId = ITGOnline.lastRoomEventIdByRoomId or {}
 ITGOnline.promptedPendingJoinRequestIds = ITGOnline.promptedPendingJoinRequestIds or {}
@@ -824,7 +827,10 @@ end
 
 function ITGOnline:ResetRealtimeState()
 	self.lastEventCursor = 0
+	self.fetchRoomInFlightByRoomId = {}
 	self.lastLeaderboardVersionByRoomId = {}
+	self.lastLeaderboardRealtimeAt = 0
+	self.lastLeaderboardFallbackFetchAt = 0
 	self.lastPlayStateVersionByRoomId = {}
 	self.lastRoomEventIdByRoomId = {}
 	self.lastUnversionedPlayStateFetchAt = 0
@@ -1734,6 +1740,21 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 			self.onlineGameplayHoldFetchAt = now
 			self:FetchPlayState()
 		end
+
+		-- Keep leaderboard visually alive near evaluation transition.
+		-- If realtime score ticks stall briefly, request an authoritative room snapshot.
+		local lastLeaderboardAt = tonumber(self.lastLeaderboardRealtimeAt) or 0
+		if (now - lastLeaderboardAt) >= 1.5 and self.FetchRoom and self.currentRoomId then
+			local lastFallbackFetch = tonumber(self.lastLeaderboardFallbackFetchAt) or 0
+			if (now - lastFallbackFetch) >= 1.25 then
+				self.lastLeaderboardFallbackFetchAt = now
+				online_flow_trace_throttled("leaderboard_fallback_fetch", 1.0,
+					"leaderboard_fallback_fetch room=" .. tostring(self.currentRoomId)
+					.. " staleFor=" .. tostring(now - lastLeaderboardAt))
+				self:FetchRoom(self.currentRoomId)
+			end
+		end
+
 		self.onlineGameplayAllTerminalHoldKey = ""
 		self.onlineGameplayAllTerminalHoldUntil = 0
 	end
@@ -4243,14 +4264,34 @@ function ITGOnline:FetchRoom(roomId, callback)
 		if callback then callback(false, nil, { errorMessage = "No room id available." }) end
 		return
 	end
-	self:Request("GET", "/rooms/" .. tostring(roomId), nil, function(ok, decoded, response)
+	local roomKey = tostring(roomId)
+	self.fetchRoomInFlightByRoomId = self.fetchRoomInFlightByRoomId or {}
+	local inFlight = self.fetchRoomInFlightByRoomId[roomKey]
+	if inFlight then
+		if callback then
+			inFlight[#inFlight + 1] = callback
+		end
+		return
+	end
+
+	local callbacks = {}
+	if callback then callbacks[#callbacks + 1] = callback end
+	self.fetchRoomInFlightByRoomId[roomKey] = callbacks
+
+	self:Request("GET", "/rooms/" .. roomKey, nil, function(ok, decoded, response)
+		local queuedCallbacks = self.fetchRoomInFlightByRoomId[roomKey] or {}
+		self.fetchRoomInFlightByRoomId[roomKey] = nil
+
 		if ok and decoded and decoded.room then
 			local room = self:ApplyRoomSnapshot(decoded.room, "fetch_room")
 			decoded.room = room or decoded.room
 			self:MaybeAutoReadyManager(room)
 			self.pendingJoinRoomId = nil
 		end
-		if callback then callback(ok, decoded, response) end
+
+		for queuedCallback in ivalues(queuedCallbacks) do
+			queuedCallback(ok, decoded, response)
+		end
 	end)
 end
 
@@ -4364,6 +4405,7 @@ end
 	elseif name == "room.song_previewed" then
 		MESSAGEMAN:Broadcast("OnlineSongPreview", payload.preview or {})
 	elseif name == "room.score_updated" then
+		self.lastLeaderboardRealtimeAt = GetTimeSinceStart()
 		local roomId = tonumber(payload.room_id)
 		local expectedRoomId = tonumber(self.currentRoomId or self.pendingJoinRoomId or -1)
 		if roomId and expectedRoomId > 0 and roomId ~= expectedRoomId then
