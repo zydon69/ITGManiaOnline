@@ -257,6 +257,19 @@ local function move_joined_button(delta)
 	joined_active_index = indices[nextIndex] or 1
 end
 
+local function set_joined_default_active_index()
+	local indices = joined_button_indices()
+	if joined_is_manager and joined_phase_allows_song_selection() then
+		for _, index in ipairs(indices) do
+			if index == 2 then
+				joined_active_index = 2
+				return
+			end
+		end
+	end
+	joined_active_index = indices[1] or 1
+end
+
 local function transition_to_online_song_reload()
 	SL.Global.Online = SL.Global.Online or {}
 	SL.Global.Online.ReturnToLobbyAfterSongReload = true
@@ -1238,7 +1251,7 @@ local af = Def.ActorFrame{
 				joined_can_download_pack = false
 				joined_missing_song_reason = nil
 			end
-			normalize_joined_active_index()
+			set_joined_default_active_index()
 			lobby_debug("lobby_state room=" .. tostring(joined_lobby_code)
 				.. " phase=" .. tostring(joined_phase)
 				.. " isManager=" .. tostring(joined_is_manager)
@@ -1249,12 +1262,12 @@ local af = Def.ActorFrame{
 			self:queuecommand("UpdateJoinedLobbyText")
 
 		self:GetChild("NetworkStatus"):visible(false)
-		self:GetChild("LobbyContent"):visible(false)
-			self:GetChild("OnlinePlayersContent"):visible(false)
-			self:GetChild("JoinedLobbyContent"):visible(true)
-			normalize_joined_active_index()
-			self:queuecommand("Hover")
-		end,
+			self:GetChild("LobbyContent"):visible(false)
+				self:GetChild("OnlinePlayersContent"):visible(false)
+				self:GetChild("JoinedLobbyContent"):visible(true)
+				normalize_joined_active_index()
+				self:queuecommand("Hover")
+			end,
 			OnlineMissingSongMessageCommand=function(self, params)
 				joined_missing_song = true
 				joined_missing_song_info = params and params.songInfo or joined_song_preview

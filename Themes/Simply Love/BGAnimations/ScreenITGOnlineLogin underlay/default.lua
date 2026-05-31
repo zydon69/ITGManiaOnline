@@ -40,6 +40,24 @@ local function option_rows()
 	return { "Connect", "Register", "EditEmail", "EditPassword", "ResendVerification", "ForgotPassword", "Back" }
 end
 
+local function default_selection(rows)
+	for index, row in ipairs(rows) do
+		if row == "EditPassword" then
+			return index
+		end
+	end
+	return 1
+end
+
+local function find_row_index(rows, target)
+	for index, row in ipairs(rows) do
+		if row == target then
+			return index
+		end
+	end
+	return nil
+end
+
 local function save_config(password)
 	local values = {
 		apiBaseUrl = config.apiBaseUrl,
@@ -63,13 +81,20 @@ local function prompt_for(field)
 		InitialAnswer = is_password and "" or tostring(config.email or ""),
 		MaxInputLength = is_password and 128 or 160,
 		Password = is_password,
-		OnOK = function(input)
-			config[field] = tostring(input or "")
-			save_config(is_password and config[field] or nil)
-			status = THEME:GetString("ScreenITGOnlineLogin", "Saved")
-			refresh()
-		end,
-	})
+			OnOK = function(input)
+				config[field] = tostring(input or "")
+				save_config(is_password and config[field] or nil)
+				if is_password then
+					local rows = option_rows()
+					local connect_index = find_row_index(rows, "Connect")
+					if connect_index then
+						selection = connect_index
+					end
+				end
+				status = THEME:GetString("ScreenITGOnlineLogin", "Saved")
+				refresh()
+			end,
+		})
 end
 
 local function go_back()
@@ -256,6 +281,7 @@ end
 local t = Def.ActorFrame{
 	OnCommand=function(self)
 		SCREENMAN:GetTopScreen():AddInputCallback(input)
+		selection = default_selection(option_rows())
 		if two_player_online_requested() then
 			status = THEME:GetString("ScreenITGOnlineLogin", "TwoPlayerNotice")
 		elseif connected() then

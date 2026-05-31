@@ -1922,11 +1922,15 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 	local nextIsEvaluation = nextScreenName == "ScreenEvaluationStage"
 		or nextScreenName == "ScreenEvaluationNonstop"
 		or nextScreenName == "ScreenEvaluationSummary"
+	local previousWasEvaluation = previousScreenName == "ScreenEvaluationStage"
+		or previousScreenName == "ScreenEvaluationNonstop"
+		or previousScreenName == "ScreenEvaluationSummary"
 	local roomPhase = self:NormalizeRoomPhase(self.currentRoom.phase)
 	online_flow_trace("gameplay_transition previous=" .. tostring(previousScreenName)
 		.. " next=" .. tostring(nextScreenName)
 		.. " roomPhase=" .. tostring(roomPhase)
 		.. " previousWasGameplay=" .. tostring(previousWasGameplay)
+		.. " previousWasEvaluation=" .. tostring(previousWasEvaluation)
 		.. " nextIsEvaluation=" .. tostring(nextIsEvaluation)
 		.. " nextIsLobby=" .. tostring(nextIsLobby)
 		.. " nextIsSelectMusic=" .. tostring(nextIsSelectMusic))
@@ -1944,6 +1948,11 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 		self:MarkGameplayCompleteForEvaluation("screen_transition")
 	elseif previousWasGameplay and nextIsLobby and roomPhase == "playing" then
 		online_flow_trace("mark_returned_to_lobby reason=gameplay_to_lobby")
+		self:MarkReturnedToLobby()
+	elseif previousWasEvaluation and nextIsLobby and (roomPhase == "playing" or roomPhase == "starting" or roomPhase == "results") then
+		-- Some flows go Gameplay -> Evaluation -> Lobby. Make sure we still
+		-- notify the server immediately when the player is back in the lobby.
+		online_flow_trace("mark_returned_to_lobby reason=evaluation_to_lobby roomPhase=" .. tostring(roomPhase))
 		self:MarkReturnedToLobby()
 	elseif previousWasGameplay and nextIsSelectMusic and (roomPhase == "playing" or roomPhase == "starting" or roomPhase == "results") then
 		-- If a player leaves gameplay early, force the online flow back to the room lobby.
