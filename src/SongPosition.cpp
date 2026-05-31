@@ -2,6 +2,7 @@
 
 #include "LightsManager.h"
 #include "Preference.h"
+#include "RageLog.h"
 #include "RageTimer.h"
 #include "RageUtil.h"
 #include "TimingData.h"
@@ -28,12 +29,13 @@ void SongPosition::UpdateSongPosition(
   m_iWarpBeginRow = beat_info.warp_begin_out;
   m_fWarpDestination = beat_info.warp_dest_out;
 
-  // "Crash reason : -243478.890625 -48695.773438"
-  // The question is why is -2000 used as the limit? -aj
-  ASSERT_M(
-      m_fSongBeat > -2000, ssprintf(
-                               "Song beat %f at %f seconds is less than -2000!",
-                               m_fSongBeat, fPositionSeconds));
+  // Defensive guard: malformed/unstable timing state should never hard-crash a
+  // live run. Keep gameplay alive and surface diagnostics in logs.
+  if (m_fSongBeat <= -2000.0f) {
+    LOG->Warn("SongPosition: suspicious beat %f at %f seconds, clamping to -1999.0",
+              m_fSongBeat, fPositionSeconds);
+    m_fSongBeat = -1999.0f;
+  }
 
   m_fMusicSeconds = fPositionSeconds;
 

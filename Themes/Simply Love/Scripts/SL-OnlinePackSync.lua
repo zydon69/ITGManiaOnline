@@ -97,6 +97,14 @@ local function selected_at(songInfo)
 	return trim(songInfo and (songInfo.selectedAt or songInfo.selected_at))
 end
 
+local function split_path_segments(path)
+	local segments = {}
+	for segment in tostring(path or ""):gmatch("[^/]+") do
+		segments[#segments + 1] = segment
+	end
+	return segments
+end
+
 local function status_message(value)
 	value = trim(value)
 	if #value > 240 then
@@ -380,7 +388,7 @@ function PackSync:FindLocalMatch(songInfo)
 	local exactPath = selected_path(songInfo)
 	local exactSong = exactPath ~= "" and SONGMAN:FindSong(exactPath) or nil
 	if not exactSong and exactPath ~= "" then
-		local parts = exactPath:split("/")
+		local parts = split_path_segments(exactPath)
 		if parts and parts[2] then exactSong = SONGMAN:FindSong(parts[2]) end
 	end
 

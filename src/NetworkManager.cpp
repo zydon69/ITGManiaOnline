@@ -237,8 +237,11 @@ static const char* WebSocketMessageTypeNames[] = {
     "Error",
 };
 
-static constexpr int kMaxMainThreadTasksPerUpdate = 128;
-static constexpr float kMaxMainThreadTaskSecondsPerUpdate = 0.002f;
+static constexpr int kBaseMainThreadTasksPerUpdate = 128;
+static constexpr float kBaseMainThreadTaskSecondsPerUpdate = 0.002f;
+static constexpr int kBacklogMainThreadTasksPerUpdate = 512;
+static constexpr float kBacklogMainThreadTaskSecondsPerUpdate = 0.006f;
+static constexpr std::size_t kBacklogAdaptiveThreshold = 24;
 
 static bool HostMatchesPattern(const std::string& host, const std::string& pattern) {
   if (pattern.empty()) {
@@ -467,8 +470,21 @@ void NetworkManager::Update() {
   RageTimer timer;
   static RageTimer lastBacklogWarning;
   int tasksProcessed = 0;
+  std::size_t queuedAtStart = 0;
+  {
+    std::lock_guard<std::mutex> lock(this->mainThreadTaskMutex);
+    queuedAtStart = this->mainThreadTaskQueue.size();
+  }
 
-  while (tasksProcessed < kMaxMainThreadTasksPerUpdate) {
+  const bool backlogMode = queuedAtStart >= kBacklogAdaptiveThreshold;
+  const int maxTasksThisFrame = backlogMode
+      ? kBacklogMainThreadTasksPerUpdate
+      : kBaseMainThreadTasksPerUpdate;
+  const float maxSecondsThisFrame = backlogMode
+      ? kBacklogMainThreadTaskSecondsPerUpdate
+      : kBaseMainThreadTaskSecondsPerUpdate;
+
+  while (tasksProcessed < maxTasksThisFrame) {
     std::function<void()> task;
     {
       std::lock_guard<std::mutex> lock(this->mainThreadTaskMutex);
@@ -483,13 +499,13 @@ void NetworkManager::Update() {
     task();
     ++tasksProcessed;
 
-    if (timer.Ago() >= kMaxMainThreadTaskSecondsPerUpdate) {
+    if (timer.Ago() >= maxSecondsThisFrame) {
       break;
     }
   }
 
-  if (tasksProcessed >= kMaxMainThreadTasksPerUpdate ||
-      timer.Ago() >= kMaxMainThreadTaskSecondsPerUpdate) {
+  if (tasksProcessed >= maxTasksThisFrame ||
+      timer.Ago() >= maxSecondsThisFrame) {
     std::lock_guard<std::mutex> lock(this->mainThreadTaskMutex);
     const auto queuedTasks = this->mainThreadTaskQueue.size();
     static int consecutiveBacklogWarnings = 0;
@@ -500,7 +516,7 @@ void NetworkManager::Update() {
     }
 
     ++consecutiveBacklogWarnings;
-    if ((queuedTasks > 3 || consecutiveBacklogWarnings >= 3) &&
+    if ((queuedTasks > 8 || consecutiveBacklogWarnings >= 3) &&
         lastBacklogWarning.Ago() >= 1.0f) {
       LOG->Warn(
           "Network main-thread task backlog still has %zu queued task(s)",
