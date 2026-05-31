@@ -3,6 +3,7 @@
 #include <ixwebsocket/IXHttpClient.h>
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXUrlParser.h>
+#include <ixwebsocket/IXUserAgent.h>
 #include <ixwebsocket/IXWebSocket.h>
 
 #include <algorithm>
@@ -23,6 +24,7 @@
 #include "Preference.h"
 #include "ProductInfo.h"
 #include "RageFile.h"
+#include "RageFileDriverDeflate.h"
 #include "RageFileManager.h"
 #include "RageLog.h"
 #include "RageTimer.h"
@@ -58,7 +60,7 @@ namespace {
 constexpr const char* BUILT_IN_HTTP_ALLOW_HOSTS =
     ITGMANIA_HTTP_ALLOW_HOSTS_DEFAULT;
 constexpr const char* REQUIRED_ITG_ONLINE_ALLOW_HOSTS =
-    "itgonline.fr,*.itgonline.fr";
+    "itgonline.fr,*.itgonline.fr,stepmaniaonline.net,www.stepmaniaonline.net";
 constexpr const char* SIGNED_HTTP_SECURITY_OVERRIDE_PATH =
     "Save/ITGOnlineNetworkSecurity.ini";
 
@@ -188,6 +190,12 @@ bool IsSafeDownloadFileName(const std::string& value) {
 bool IsProductionItgOnlineHost(const std::string& host) {
   return host == "itgonline.fr" || EndsWith(host, ".itgonline.fr");
 }
+
+bool TlsBackendLikelySupportsPinning() {
+  const std::string userAgent = ix::userAgent();
+  return userAgent.find("ssl/OpenSSL") != std::string::npos ||
+         userAgent.find("ssl/mbedtls") != std::string::npos;
+}
 }
 
 Preference<bool> NetworkManager::httpEnabled(
@@ -229,8 +237,11 @@ static const char* WebSocketMessageTypeNames[] = {
     "Error",
 };
 
-static constexpr int kMaxMainThreadTasksPerUpdate = 128;
-static constexpr float kMaxMainThreadTaskSecondsPerUpdate = 0.002f;
+static constexpr int kBaseMainThreadTasksPerUpdate = 128;
+static constexpr float kBaseMainThreadTaskSecondsPerUpdate = 0.002f;
+static constexpr int kBacklogMainThreadTasksPerUpdate = 512;
+static constexpr float kBacklogMainThreadTaskSecondsPerUpdate = 0.006f;
+static constexpr std::size_t kBacklogAdaptiveThreshold = 24;
 
 static bool HostMatchesPattern(const std::string& host, const std::string& pattern) {
   if (pattern.empty()) {
@@ -321,14 +332,20 @@ NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
   }
 
   this->tlsOptions.publicKeySha256Pins = configuredPins;
-#if !defined(IXWEBSOCKET_USE_OPEN_SSL) && !defined(IXWEBSOCKET_USE_MBED_TLS)
+  this->tlsBackendEnforcesPublicKeyPins = TlsBackendLikelySupportsPinning();
   if (!configuredPins.empty()) {
-    LOG->Warn(
-        "HttpPublicKeyPins are configured, but this IXWebSocket TLS backend "
-        "does not enforce public key pinning. Use OpenSSL builds or implement "
-        "pinning for this backend before relying on pins as a trust boundary.");
+    if (!this->tlsBackendEnforcesPublicKeyPins) {
+      LOG->Warn(
+          "HttpPublicKeyPins are configured, but this IXWebSocket TLS backend "
+          "appears not to enforce public key pinning. Rebuild with a "
+          "pinning-capable backend for strict trust guarantees.");
+    } else {
+      LOG->Trace(
+          "HttpPublicKeyPins are configured and TLS backend reports pinning "
+          "support via user agent: %s",
+          ix::userAgent().c_str());
+    }
   }
-#endif
   this->httpClient.setTLSOptions(this->tlsOptions);
   this->downloadClient.setTLSOptions(this->tlsOptions);
 
@@ -452,10 +469,22 @@ void NetworkManager::EnqueueMainThreadTask(std::function<void()> task) {
 void NetworkManager::Update() {
   RageTimer timer;
   static RageTimer lastBacklogWarning;
-  static int consecutiveBacklogPressure = 0;
   int tasksProcessed = 0;
+  std::size_t queuedAtStart = 0;
+  {
+    std::lock_guard<std::mutex> lock(this->mainThreadTaskMutex);
+    queuedAtStart = this->mainThreadTaskQueue.size();
+  }
 
-  while (tasksProcessed < kMaxMainThreadTasksPerUpdate) {
+  const bool backlogMode = queuedAtStart >= kBacklogAdaptiveThreshold;
+  const int maxTasksThisFrame = backlogMode
+      ? kBacklogMainThreadTasksPerUpdate
+      : kBaseMainThreadTasksPerUpdate;
+  const float maxSecondsThisFrame = backlogMode
+      ? kBacklogMainThreadTaskSecondsPerUpdate
+      : kBaseMainThreadTaskSecondsPerUpdate;
+
+  while (tasksProcessed < maxTasksThisFrame) {
     std::function<void()> task;
     {
       std::lock_guard<std::mutex> lock(this->mainThreadTaskMutex);
@@ -470,28 +499,27 @@ void NetworkManager::Update() {
     task();
     ++tasksProcessed;
 
-    if (timer.Ago() >= kMaxMainThreadTaskSecondsPerUpdate) {
+    if (timer.Ago() >= maxSecondsThisFrame) {
       break;
     }
   }
 
-  if (tasksProcessed >= kMaxMainThreadTasksPerUpdate ||
-      timer.Ago() >= kMaxMainThreadTaskSecondsPerUpdate) {
+  if (tasksProcessed >= maxTasksThisFrame ||
+      timer.Ago() >= maxSecondsThisFrame) {
     std::lock_guard<std::mutex> lock(this->mainThreadTaskMutex);
     const auto queuedTasks = this->mainThreadTaskQueue.size();
+    static int consecutiveBacklogWarnings = 0;
+
     if (queuedTasks == 0) {
-      consecutiveBacklogPressure = 0;
+      consecutiveBacklogWarnings = 0;
       return;
     }
 
-    ++consecutiveBacklogPressure;
-    const bool queueVeryLarge = queuedTasks > 20;
-    const bool queuePersistentlyHigh =
-        queuedTasks > 8 && consecutiveBacklogPressure >= 2;
-    if ((queueVeryLarge || queuePersistentlyHigh) &&
-        lastBacklogWarning.Ago() >= 5.0f) {
+    ++consecutiveBacklogWarnings;
+    if ((queuedTasks > 8 || consecutiveBacklogWarnings >= 3) &&
+        lastBacklogWarning.Ago() >= 1.0f) {
       LOG->Warn(
-          "Network main-thread task backlog remains high (%zu queued task(s))",
+          "Network main-thread task backlog still has %zu queued task(s)",
           queuedTasks);
       lastBacklogWarning.Touch();
     }
@@ -527,6 +555,19 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
   if ((protocol == "http" || protocol == "ws") &&
       IsProductionItgOnlineHost(host)) {
     return false;
+  }
+
+  if ((protocol == "https" || protocol == "wss") &&
+      IsProductionItgOnlineHost(host) &&
+      !this->tlsBackendEnforcesPublicKeyPins &&
+      !this->httpPublicKeyPins.Get().empty() &&
+      !this->warnedPinningUnsupportedForProductionHost) {
+    this->warnedPinningUnsupportedForProductionHost = true;
+    LOG->Warn(
+        "Allowing %s without enforced public key pinning because this build "
+        "TLS backend does not support pin verification. Rebuild with a "
+        "pinning-capable backend for strict trust guarantees.",
+        url.c_str());
   }
 
   std::lock_guard<std::mutex> hostCacheLock(hostCacheMutex);
@@ -589,6 +630,9 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
   ix::HttpRequestArgsPtr req = client.createRequest(args.url, args.method);
   req->body = args.body;
   req->multipartBoundary = args.multipartBoundary;
+  // Avoid gzip-compressed HTTP responses: Lua JSON consumers expect plain text.
+  // Some upstream endpoints return gzip payloads that are not decoded in this path.
+  req->compress = false;
 
   req->extraHeaders["User-Agent"] = this->GetUserAgent();
   for (const auto& entry : args.headers) {
@@ -666,6 +710,20 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
 
                     FILEMAN->Remove(downloadFilename);
                     return;
+                  }
+                }
+
+                if (args.downloadFile.empty() && response &&
+                    response->body.size() >= 2 &&
+                    static_cast<unsigned char>(response->body[0]) == 0x1f &&
+                    static_cast<unsigned char>(response->body[1]) == 0x8b) {
+                  std::string decodedBody;
+                  std::string gunzipError;
+                  if (GunzipString(response->body, decodedBody, gunzipError)) {
+                    response->body = decodedBody;
+                  } else {
+                    LOG->Warn("Failed to gunzip HTTP response body: %s",
+                              gunzipError.c_str());
                   }
                 }
 

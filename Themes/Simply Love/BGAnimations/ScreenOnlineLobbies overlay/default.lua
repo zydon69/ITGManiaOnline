@@ -23,6 +23,15 @@ local showing_private_join_prompt = false
 local private_join_prompt_index = 1
 local private_join_request = nil
 local private_join_prompt_kind = "join_request"
+local showing_pack_choice_menu = false
+local pack_choice_index = 1
+local pack_choice_candidates = {}
+local pack_choice_song_info = nil
+local pack_choice_message = nil
+local pack_choice_last_candidates = {}
+local pack_choice_last_song_info = nil
+local pack_choice_last_selected_pack_id = nil
+local pack_choice_all_candidates_exhausted = false
 local private_join_options = {
 	{label="Accept", accept=true, reason=""},
 	{label="Decline", accept=false, reason=""},
@@ -59,10 +68,17 @@ local leave_confirm_index = 0
 local join_lobby_code = ""
 
 SL.Global.Online = SL.Global.Online or {}
+SL.Global.Online.PackChoiceRecovery = SL.Global.Online.PackChoiceRecovery or {}
+if type(SL.Global.Online.PackChoiceRecovery.candidates) == "table" then
+	pack_choice_last_candidates = SL.Global.Online.PackChoiceRecovery.candidates
+	pack_choice_last_song_info = SL.Global.Online.PackChoiceRecovery.songInfo
+	pack_choice_last_selected_pack_id = SL.Global.Online.PackChoiceRecovery.selectedPackId
+end
 
 local joined_any_player_missing_song
 local joined_all_players_ready
 local last_start_visibility_debug_key = ""
+local last_select_song_visibility_debug_key = ""
 
 local function lobby_debug_enabled()
 	if ITGOnline and ITGOnline.debugReadyFlow ~= nil then
@@ -75,6 +91,11 @@ local function lobby_debug(message)
 	if not lobby_debug_enabled() then return end
 	local line = "ITG Online Lobby: " .. tostring(message or "")
 	if Warn then Warn(line) elseif Trace then Trace(line) end
+end
+
+local function lobby_flow_trace(message)
+	local line = "ITG Online: FLOW lobby_ui " .. tostring(message or "")
+	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
 
 local function ready_summary()
@@ -139,16 +160,39 @@ local function pack_sync_display_text(status)
 	return status:gsub("_", " ")
 end
 
+local function pack_sync_busy()
+	if not (ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.currentStatus) then return false end
+	local status = trim_text(ITGOnline.PackSync.currentStatus)
+	return status == "download_requested" or status == "download_in_progress" or status == "reloading_songs"
+end
+
+local function can_download_pack_for_reason(reason)
+	reason = trim_text(reason)
+	return reason == "missing_local_song"
+		or reason == "no_compatible_chart_found"
+		or reason == "local_payload_unavailable"
+		or reason == "song_hash_mismatch"
+		or reason == "chart_hash_mismatch"
+end
+
 local function local_pack_exists(songInfo)
 	local pack = trim_text(songInfo and songInfo.pack)
 	return pack ~= "" and SONGMAN and SONGMAN.DoesSongGroupExist and SONGMAN:DoesSongGroupExist(pack)
 end
 
+local function normalized_online_phase(value)
+	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+end
+
 local function joined_phase_allows_song_selection()
-	return joined_phase == "lobby"
-		or joined_phase == "lobby_ready"
-		or joined_phase == "config"
-		or joined_phase == "results"
+	local phase = normalized_online_phase(joined_phase)
+	if phase == "" and ITGOnline and ITGOnline.currentRoom then
+		phase = normalized_online_phase(ITGOnline.currentRoom.phase)
+	end
+	return phase == "lobby"
+		or phase == "lobby_ready"
+		or phase == "config"
+		or phase == "results"
 end
 
 local function joined_phase_allows_start()
@@ -210,6 +254,33 @@ local function joined_not_ready_player_names()
 	return names
 end
 
+local function sync_local_missing_song_from_joined_players()
+	if not joined_lobby_players or not ITGOnline or not ITGOnline.user then return end
+
+	local selfId = tostring(ITGOnline.user.id or "")
+	if selfId == "" then return end
+
+	for _, player in ipairs(joined_lobby_players) do
+		if tostring(player and player.playerId or "") == selfId then
+			local selfMissing = player.missingSong == true
+			if selfMissing then
+				joined_missing_song = true
+				joined_missing_song_reason = player.missingSongReason or joined_missing_song_reason or "missing_local_song"
+				if joined_missing_song_info == nil then
+					joined_missing_song_info = joined_song_preview
+				end
+				joined_can_download_pack = joined_can_download_pack or can_download_pack_for_reason(joined_missing_song_reason)
+			elseif joined_missing_song and player.songAvailable == true then
+				joined_missing_song = false
+				joined_missing_song_info = nil
+				joined_can_download_pack = false
+				joined_missing_song_reason = nil
+			end
+			return
+		end
+	end
+end
+
 joined_any_player_missing_song = function()
 	for player in ivalues(joined_lobby_players) do
 		if player.missingSong or (joined_song_preview ~= nil and player.songAvailable == false) then return true end
@@ -241,6 +312,19 @@ local function move_joined_button(delta)
 	if nextIndex < 1 then nextIndex = #indices end
 	if nextIndex > #indices then nextIndex = 1 end
 	joined_active_index = indices[nextIndex] or 1
+end
+
+local function set_joined_default_active_index()
+	local indices = joined_button_indices()
+	if joined_is_manager and joined_phase_allows_song_selection() then
+		for _, index in ipairs(indices) do
+			if index == 2 then
+				joined_active_index = 2
+				return
+			end
+		end
+	end
+	joined_active_index = indices[1] or 1
 end
 
 local function transition_to_online_song_reload()
@@ -367,6 +451,72 @@ local function execute_player_action(option, user)
 	end
 end
 
+local function close_pack_choice_menu()
+	showing_pack_choice_menu = false
+	pack_choice_index = 1
+	pack_choice_candidates = {}
+	pack_choice_song_info = nil
+	pack_choice_message = nil
+	if t then
+		local menu = t:GetChild("PackChoiceMenu")
+		if menu then menu:visible(false) end
+	end
+end
+
+local function update_pack_choice_menu()
+	if not t then return end
+	local menu = t:GetChild("PackChoiceMenu")
+	if not menu then return end
+	local title = menu:GetChild("PackChoiceTitle")
+	local options = menu:GetChild("PackChoiceOptions")
+	if title then title:settext("Choose Pack To Download") end
+	if options then
+		local lines = {}
+		if pack_choice_message and trim_text(pack_choice_message) ~= "" then
+			lines[#lines + 1] = tostring(pack_choice_message)
+			lines[#lines + 1] = ""
+		end
+		for i, candidate in ipairs(pack_choice_candidates) do
+			local prefix = (i == pack_choice_index) and "> " or "  "
+			local songsCount = tonumber(candidate.songs_count) or 0
+			lines[#lines + 1] = prefix .. tostring(candidate.name or ("Pack " .. tostring(candidate.id)))
+				.. " (" .. tostring(songsCount) .. " songs)"
+		end
+		lines[#lines + 1] = ""
+		lines[#lines + 1] = "Use Left/Right to choose, Start to download, Select to cancel."
+		options:settext(table.concat(lines, "\n"))
+	end
+	menu:visible(true)
+end
+
+local function open_pack_choice_menu(songInfo, candidates, message)
+	if type(candidates) ~= "table" or #candidates == 0 then return false end
+	showing_player_action_menu = false
+	if t then
+		local playerMenu = t:GetChild("PlayerActionMenu")
+		if playerMenu then playerMenu:visible(false) end
+	end
+	pack_choice_song_info = songInfo
+	pack_choice_candidates = candidates
+	pack_choice_last_song_info = songInfo
+	pack_choice_last_candidates = candidates
+	SL.Global.Online.PackChoiceRecovery = {
+		songInfo = songInfo,
+		candidates = candidates,
+		selectedPackId = pack_choice_last_selected_pack_id,
+	}
+	pack_choice_index = 1
+	pack_choice_message = message
+	pack_choice_all_candidates_exhausted = false
+	showing_pack_choice_menu = true
+	update_pack_choice_menu()
+	if t and message then
+		local networkStatus = t:GetChild("NetworkStatus")
+		if networkStatus then networkStatus:visible(false) end
+	end
+	return true
+end
+
 local InputHandler = function(event)
   if not event.PlayerNumber or not event.button then return false end
 	if not t then return false end
@@ -383,6 +533,16 @@ local InputHandler = function(event)
 					showing_leave_confirm = false
 					t:GetChild("LeaveConfirmPrompt"):visible(false)
 					leaving_lobby = true
+					-- Immediate local UX transition: avoid mixed joined/browse visuals
+					-- while waiting for async leave-lobby response.
+					mode = "browse"
+					t:GetChild("JoinedLobbyContent"):visible(false)
+					t:queuecommand("UpdateLobbyView")
+					t:playcommand("SetStatus", {
+						text="Leaving lobby...",
+						showSpinner=true,
+						showPrompt=false
+					})
 					MESSAGEMAN:Broadcast("LeaveLobby")
 				else
 					SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
@@ -441,7 +601,7 @@ local InputHandler = function(event)
 			return false
 		end
 
-		if showing_player_action_menu then
+			if showing_player_action_menu then
 			if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 				player_action_index = ((player_action_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #player_action_options) + 1
 				SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
@@ -462,6 +622,52 @@ local InputHandler = function(event)
 				if topScreen then
 					topScreen:SetNextScreenName("ScreenTitleMenu")
 					topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+				end
+				return false
+			end
+
+			if showing_pack_choice_menu then
+				if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
+					pack_choice_index = ((pack_choice_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #pack_choice_candidates) + 1
+					SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+					update_pack_choice_menu()
+				elseif event.GameButton == "Start" then
+					local candidate = pack_choice_candidates[pack_choice_index]
+					if candidate and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadPackByCandidate then
+						SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+						pack_choice_last_selected_pack_id = tonumber(candidate.id)
+						if SL and SL.Global and SL.Global.Online then
+							SL.Global.Online.PackChoiceRecovery = {
+								songInfo = pack_choice_last_song_info or pack_choice_song_info,
+								candidates = pack_choice_last_candidates,
+								selectedPackId = pack_choice_last_selected_pack_id,
+							}
+						end
+						close_pack_choice_menu()
+						t:playcommand("SetStatus", {
+							text="Starting pack download...",
+							showSpinner=true,
+							showPrompt=false
+						})
+						ITGOnline.PackSync:DownloadPackByCandidate(pack_choice_song_info or joined_missing_song_info or joined_song_preview, candidate, function(ok, message)
+							if ok and t then
+								t:playcommand("SetStatus", {
+									text="Download complete. Extracting and reloading songs...",
+									showSpinner=true,
+									showPrompt=false
+								})
+							elseif not ok and t then
+								t:playcommand("SetStatus", {
+									text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
+									showSpinner=false,
+									showPrompt=true
+								})
+							end
+						end)
+					end
+				elseif event.GameButton == "Select" or event.GameButton == "Back" then
+					SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+					close_pack_choice_menu()
 				end
 				return false
 			end
@@ -507,13 +713,21 @@ local InputHandler = function(event)
 							topScreen:SetNextScreenName("ScreenSelectMusic")
 							topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 						end
-					elseif joined_active_index == 3 and joined_missing_song then
-						if joined_can_download_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadSelectedPack then
-							ITGOnline.PackSync:DownloadSelectedPack(joined_missing_song_info or joined_song_preview, function(ok, message)
-								if not ok and t then
-									t:playcommand("SetStatus", {
-										text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
-										showSpinner=false,
+						elseif joined_active_index == 3 and joined_missing_song then
+							if joined_can_download_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadSelectedPack then
+								ITGOnline.PackSync:DownloadSelectedPack(joined_missing_song_info or joined_song_preview, function(ok, message)
+									if not ok and type(message) == "table" and message.kind == "pack_candidates" then
+										open_pack_choice_menu(
+											joined_missing_song_info or joined_song_preview,
+											message.candidates,
+											message.message or "Plusieurs packs correspondent. Choisissez-en un."
+										)
+										return
+									end
+									if not ok and t then
+										t:playcommand("SetStatus", {
+											text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
+											showSpinner=false,
 										showPrompt=true
 									})
 								end
@@ -814,6 +1028,7 @@ local af = Def.ActorFrame{
 		if optionsText then optionsText:settext(table.concat(lines, "\n")) end
 		end,
 		UpdateJoinedLobbyTextCommand=function(self)
+			sync_local_missing_song_from_joined_players()
 			local joinedContent = self:GetChild("JoinedLobbyContent")
 			if not joinedContent then return end
 			local codeValue = joinedContent:GetChild("JoinedLobbyCodeValue")
@@ -900,8 +1115,16 @@ local af = Def.ActorFrame{
 						statusLines[#statusLines + 1] = "La musique ou la stepchart trouvée est différente de celle du manager."
 						statusLines[#statusLines + 1] = "Veuillez supprimer le pack manuellement, recharger Songs, puis télécharger à nouveau le pack."
 					elseif joined_missing_song_reason == "download_failed" then
-						statusLines[#statusLines + 1] = "Le téléchargement du pack a échoué."
-						statusLines[#statusLines + 1] = "Veuillez réessayer ou installer le pack manuellement."
+						if pack_choice_all_candidates_exhausted then
+							statusLines[#statusLines + 1] = "Aucun pack candidat ne contient la chart attendue."
+							statusLines[#statusLines + 1] = "Installez manuellement le bon pack/stepchart."
+						else
+							statusLines[#statusLines + 1] = "Le téléchargement du pack a échoué."
+							statusLines[#statusLines + 1] = "Veuillez réessayer ou installer le pack manuellement."
+						end
+					elseif joined_missing_song_reason == "missing_local_song" and joined_can_download_pack then
+						statusLines[#statusLines + 1] = "Vous ne possédez pas ce pack localement."
+						statusLines[#statusLines + 1] = "Vous pouvez télécharger le pack utilisé par le manager."
 					elseif joined_can_download_pack then
 						statusLines[#statusLines + 1] = "Cette chanson existe peut-être dans vos packs,"
 						statusLines[#statusLines + 1] = "mais aucune stepchart identique à celle du manager n’a été trouvée."
@@ -972,7 +1195,31 @@ local af = Def.ActorFrame{
 
 			local selectSongButton = joinedContent and joinedContent:GetChild("SelectSongButton")
 			if selectSongButton then
-				selectSongButton:visible(joined_is_manager and joined_phase_allows_song_selection())
+				local allowSelection = joined_phase_allows_song_selection()
+				local visible = joined_is_manager and allowSelection
+				selectSongButton:visible(visible)
+
+				local currentPhase = normalized_online_phase(joined_phase)
+				local roomPhase = normalized_online_phase(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "")
+				local visibilityKey = table.concat({
+					tostring(joined_lobby_code or ""),
+					tostring(currentPhase),
+					tostring(roomPhase),
+					joined_is_manager and "1" or "0",
+					allowSelection and "1" or "0",
+					visible and "1" or "0",
+					tostring(#joined_lobby_players),
+				}, "|")
+				if visibilityKey ~= last_select_song_visibility_debug_key then
+					last_select_song_visibility_debug_key = visibilityKey
+					lobby_flow_trace("select_music_button visible=" .. tostring(visible)
+						.. " allowSelection=" .. tostring(allowSelection)
+						.. " joinedPhase=" .. tostring(currentPhase)
+						.. " roomPhase=" .. tostring(roomPhase)
+						.. " isManager=" .. tostring(joined_is_manager)
+						.. " players=" .. tostring(#joined_lobby_players)
+						.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+				end
 			end
 
 			local reloadSongsButton = joinedContent and joinedContent:GetChild("ReloadSongsButton")
@@ -1017,6 +1264,9 @@ local af = Def.ActorFrame{
 			end
 		end,
 		SetStatusCommand=function(self, params)
+			if showing_pack_choice_menu then
+				return
+			end
 			self:GetChild("NetworkStatus"):visible(true)
 			self:GetChild("NetworkStatus"):playcommand("Set", params)
 		end,
@@ -1147,7 +1397,9 @@ local af = Def.ActorFrame{
 			end
 		end
 
-		self:GetChild("NetworkStatus"):visible(false)
+		if not pack_sync_busy() then
+			self:GetChild("NetworkStatus"):visible(false)
+		end
 		self:queuecommand("UpdateLobbyView")
 		self:GetChild("JoinedLobbyContent"):visible(mode == "joined")
 		self:queuecommand("Hover")
@@ -1192,8 +1444,12 @@ local af = Def.ActorFrame{
 				joined_missing_song_info = nil
 				joined_can_download_pack = false
 				joined_missing_song_reason = nil
+				if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ResetLocalState then
+					ITGOnline.PackSync:ResetLocalState("no_song_confirmed")
+				end
 			end
-			normalize_joined_active_index()
+				sync_local_missing_song_from_joined_players()
+				set_joined_default_active_index()
 			lobby_debug("lobby_state room=" .. tostring(joined_lobby_code)
 				.. " phase=" .. tostring(joined_phase)
 				.. " isManager=" .. tostring(joined_is_manager)
@@ -1203,24 +1459,63 @@ local af = Def.ActorFrame{
 
 			self:queuecommand("UpdateJoinedLobbyText")
 
-		self:GetChild("NetworkStatus"):visible(false)
-		self:GetChild("LobbyContent"):visible(false)
-			self:GetChild("OnlinePlayersContent"):visible(false)
-			self:GetChild("JoinedLobbyContent"):visible(true)
-			normalize_joined_active_index()
-			self:queuecommand("Hover")
-		end,
-			OnlineMissingSongMessageCommand=function(self, params)
+		if not pack_sync_busy() then
+			self:GetChild("NetworkStatus"):visible(false)
+		end
+			self:GetChild("LobbyContent"):visible(false)
+				self:GetChild("OnlinePlayersContent"):visible(false)
+				self:GetChild("JoinedLobbyContent"):visible(true)
+				normalize_joined_active_index()
+				self:queuecommand("Hover")
+			end,
+		OnlineMissingSongMessageCommand=function(self, params)
 				joined_missing_song = true
 				joined_missing_song_info = params and params.songInfo or joined_song_preview
 				joined_missing_song_reason = params and params.reason or "missing_local_song"
-				joined_can_download_pack = params and (params.noCompatibleChart == true or params.reason == "no_compatible_chart_found") or false
+				joined_can_download_pack = params and (
+					params.noCompatibleChart == true
+					or can_download_pack_for_reason(params.reason)
+				) or false
 				if ITGOnline and ITGOnline.ReportSongAvailability then
 					ITGOnline:ReportSongAvailability(true, params and params.reason or "missing_local_song")
 				end
-				if params and params.songInfo then
+			if params and params.songInfo then
 					joined_song_preview = params.songInfo
 					joined_song_confirmed = true
+			end
+			local reason = params and params.reason or "missing_local_song"
+			if reason == "download_failed" then
+				if (#pack_choice_last_candidates == 0) and SL and SL.Global and SL.Global.Online and type(SL.Global.Online.PackChoiceRecovery.candidates) == "table" then
+					pack_choice_last_candidates = SL.Global.Online.PackChoiceRecovery.candidates
+					pack_choice_last_song_info = SL.Global.Online.PackChoiceRecovery.songInfo
+					pack_choice_last_selected_pack_id = SL.Global.Online.PackChoiceRecovery.selectedPackId
+				end
+				local reopened = false
+				if type(pack_choice_last_candidates) == "table" and #pack_choice_last_candidates > 1 then
+					local alternatives = {}
+					local lastId = tonumber(pack_choice_last_selected_pack_id)
+					for _, candidate in ipairs(pack_choice_last_candidates) do
+						local candidateId = tonumber(candidate and candidate.id)
+						if not lastId or not candidateId or candidateId ~= lastId then
+							alternatives[#alternatives + 1] = candidate
+						end
+					end
+					if #alternatives > 0 then
+						reopened = open_pack_choice_menu(
+							pack_choice_last_song_info or joined_missing_song_info or joined_song_preview,
+							alternatives,
+							"Le pack choisi n'a pas fourni la chart attendue. Choisissez un autre pack."
+						)
+					end
+				end
+				if not reopened then
+					pack_choice_all_candidates_exhausted = true
+					self:playcommand("SetStatus", {
+						text="Aucun des packs testés ne contient la chart attendue.\nInstallation manuelle requise pour cette chanson.",
+						showSpinner=false,
+						showPrompt=true
+					})
+				end
 			end
 			normalize_joined_active_index()
 			self:queuecommand("UpdateJoinedLobbyText")
@@ -1263,6 +1558,9 @@ local af = Def.ActorFrame{
 				clear_pending_join()
 				leaving_lobby = false
 				showing_leave_confirm = false
+			if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ResetLocalState then
+				ITGOnline.PackSync:ResetLocalState("lobby_left")
+			end
 			mode = "browse"
 			joined_lobby_code = ""
 			joined_lobby_players = {}
@@ -1342,6 +1640,12 @@ local af = Def.ActorFrame{
 		elseif params and params.event == "leaveLobby" and params.success == false then
 			leaving_lobby = false
 			showing_leave_confirm = false
+			-- Leave failed: restore joined view coherently.
+			mode = "joined"
+			self:GetChild("JoinedLobbyContent"):visible(true)
+			self:GetChild("LobbyContent"):visible(false)
+			self:GetChild("OnlinePlayersContent"):visible(false)
+			self:queuecommand("UpdateJoinedLobbyText")
 			self:playcommand("SetStatus", {
 				text=params.message and ("Leave lobby failed:\n"..params.message) or "Leave lobby failed.",
 				showSpinner=false,
@@ -1962,8 +2266,6 @@ local af = Def.ActorFrame{
 		},
 	},
 
-	LoadActor("PlayerActionMenu.lua"),
-
 	Def.ActorFrame{
 		Name="JoinedLobbyContent",
 		InitCommand=function(self)
@@ -2227,6 +2529,10 @@ local af = Def.ActorFrame{
 			}
 		}
 	},
+
+	-- Rendered late on purpose so this modal always sits above lobby panes/buttons.
+	LoadActor("PlayerActionMenu.lua"),
+	LoadActor("PackChoiceMenu.lua"),
 
 
 
