@@ -23,6 +23,10 @@
 #endif
 #include <windows.h>
 #include <wincred.h>
+// Older Windows SDKs do not provide CRED_PERSIST_LOCAL_USER.
+#ifndef CRED_PERSIST_LOCAL_USER
+#define CRED_PERSIST_LOCAL_USER CRED_PERSIST_LOCAL_MACHINE
+#endif
 #elif defined(__linux__) && defined(HAVE_LIBSECRET)
 #include <libsecret/secret.h>
 #endif
