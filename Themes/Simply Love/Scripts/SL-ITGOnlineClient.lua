@@ -69,6 +69,7 @@ ITGOnline.lastPlayStateVersionByRoomId = ITGOnline.lastPlayStateVersionByRoomId 
 ITGOnline.lastRoomEventIdByRoomId = ITGOnline.lastRoomEventIdByRoomId or {}
 ITGOnline.promptedPendingJoinRequestIds = ITGOnline.promptedPendingJoinRequestIds or {}
 ITGOnline.lastUnversionedPlayStateFetchAt = ITGOnline.lastUnversionedPlayStateFetchAt or 0
+ITGOnline.lastRoomNotPlayingScoreRejectAt = ITGOnline.lastRoomNotPlayingScoreRejectAt or 0
 ITGOnline.processedRealtimeEventIds = ITGOnline.processedRealtimeEventIds or {}
 ITGOnline.processedRealtimeEventOrder = ITGOnline.processedRealtimeEventOrder or {}
 ITGOnline.processedRealtimeEventLimit = ITGOnline.processedRealtimeEventLimit or 512
@@ -134,8 +135,9 @@ ITGOnline.heartbeatMinIntervalSeconds = ITGOnline.heartbeatMinIntervalSeconds or
 ITGOnline.fileHashCache = ITGOnline.fileHashCache or {}
 ITGOnline.fileHashCacheTtlSeconds = ITGOnline.fileHashCacheTtlSeconds or 30
 ITGOnline.onlineFlowTraceThrottle = ITGOnline.onlineFlowTraceThrottle or {}
-ITGOnline.debugOnlineTrace = ITGOnline.debugOnlineTrace or false
-ITGOnline.debugScoreTrace = ITGOnline.debugScoreTrace or false
+ITGOnline.debugOnlineTrace = true
+ITGOnline.debugScoreTrace = true
+ITGOnline.lastHudScoreTraceSecond = ITGOnline.lastHudScoreTraceSecond or -1
 
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -832,6 +834,7 @@ function ITGOnline:ResetRealtimeState()
 	self.lastPlayStateVersionByRoomId = {}
 	self.lastRoomEventIdByRoomId = {}
 	self.lastUnversionedPlayStateFetchAt = 0
+	self.lastRoomNotPlayingScoreRejectAt = 0
 	self.processedRealtimeEventIds = {}
 	self.processedRealtimeEventOrder = {}
 end
@@ -2819,6 +2822,22 @@ function ITGOnline:BuildCurrentScoreSnapshot()
 	local comboOk, comboValue = pcall(function() return stats:GetCurrentCombo() end)
 	if comboOk and tonumber(comboValue) then combo = tonumber(comboValue) end
 
+	if self.debugScoreTrace == true then
+		local nowSecond = math.floor(GetTimeSinceStart())
+		if nowSecond ~= tonumber(self.lastHudScoreTraceSecond) then
+			self.lastHudScoreTraceSecond = nowSecond
+			online_trace(string.format(
+				"hud-score room=%s round=%s displayed=%.3f score=%.3f ex=%.3f combo=%d",
+				tostring(self.currentRoomId or ""),
+				tostring(self.PlayStateKey and self:PlayStateKey() or ""),
+				tonumber(displayedPercent) or 0,
+				tonumber(scorePercent) or 0,
+				tonumber(exScore) or 0,
+				tonumber(combo) or 0
+			))
+		end
+	end
+
 	return {
 		Player = player,
 		ScorePercent = scorePercent,
@@ -2924,6 +2943,12 @@ function ITGOnline:FlushLiveScore()
 
 	local snapshot = self.pendingLiveScoreSnapshot
 	if snapshot == nil then return false end
+	local roomPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+	if roomPhase ~= "playing" then
+		self.pendingLiveScoreSnapshot = nil
+		self.pendingLiveScoreRoundKey = ""
+		return false
+	end
 	local roundKey = self.PlayStateKey and self:PlayStateKey() or tostring(self.currentRoomId or "")
 	local currentRoundIsValid = roundKey ~= ""
 	local pendingRoundIsValid = self.pendingLiveScoreRoundKey ~= ""
@@ -2959,6 +2984,35 @@ function ITGOnline:FlushLiveScore()
 		end
 	end)
 	return true
+end
+
+function ITGOnline:HandleRoomNotPlayingScoreReject(final, decoded)
+	if type(decoded) == "table" and decoded.room_phase and self.ApplyRoomPhase then
+		self:ApplyRoomPhase(decoded.room_phase, "score_reject_room_not_playing")
+	end
+
+	self.liveScoreNextAttemptAt = GetTimeSinceStart() + 1.5
+	if not final then
+		self.pendingLiveScoreSnapshot = nil
+		self.pendingLiveScoreRoundKey = ""
+	end
+
+	local now = GetTimeSinceStart()
+	if now - (tonumber(self.lastRoomNotPlayingScoreRejectAt) or 0) < 0.75 then
+		return
+	end
+	self.lastRoomNotPlayingScoreRejectAt = now
+
+	online_flow_trace_throttled(
+		"score_reject_room_not_playing",
+		1.0,
+		"score_reject_room_not_playing trigger_resync final=" .. tostring(final == true)
+	)
+	if self.FetchPlayState then
+		self:FetchPlayState()
+	elseif self.FetchRoom and self.currentRoomId then
+		self:FetchRoom(self.currentRoomId)
+	end
 end
 
 function ITGOnline:SendScore(force, final, snapshot, callback)
@@ -3171,6 +3225,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		final = final and true or false,
 		judgments = judgments,
 	}, function(ok, decoded, response)
+		local errorCode = response_error_code(response, decoded)
 		if self.scoreInFlightFingerprint == scoreFingerprint then
 			self.scoreInFlightFingerprint = nil
 		end
@@ -3189,6 +3244,29 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 				tonumber(self.lastAcceptedScoreSongPosition) or 0,
 				tonumber(songPosition) or 0
 			)
+			if self.debugScoreTrace == true then
+				online_trace("score-ack room=" .. tostring(self.currentRoomId or "")
+					.. " round=" .. tostring(roundKey)
+					.. " final=" .. tostring(final == true)
+					.. " sent=" .. tostring(outgoingScore)
+					.. " sent_percent=" .. tostring(outgoingPercent)
+					.. " combo=" .. tostring(outgoingCombo)
+					.. " max_combo=" .. tostring(outgoingMaxCombo)
+					.. " failed=" .. tostring(outgoingFailed)
+					.. " song_pos=" .. tostring(songPosition)
+					.. " status=" .. tostring(response and response.statusCode or "nil"))
+			end
+		elseif self.debugScoreTrace == true then
+			online_trace("score-nack room=" .. tostring(self.currentRoomId or "")
+				.. " round=" .. tostring(roundKey)
+				.. " final=" .. tostring(final == true)
+				.. " sent=" .. tostring(outgoingScore)
+				.. " sent_percent=" .. tostring(outgoingPercent)
+				.. " status=" .. tostring(response and response.statusCode or "nil")
+				.. " message=" .. tostring(response_message(response, decoded, "score failed")))
+		end
+		if not ok and errorCode == "room_not_playing" then
+			self:HandleRoomNotPlayingScoreReject(final, decoded)
 		end
 		if not ok and final then
 			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
@@ -4421,6 +4499,9 @@ end
 			if self.debugScoreTrace == true then
 				local score = payload.score or {}
 				local user = score.user or {}
+				local localDisplayed = tonumber(self.lastDisplayedScoreSnapshot and self.lastDisplayedScoreSnapshot.displayedPercent) or -1
+				local localScore = tonumber(self.lastDisplayedScoreSnapshot and self.lastDisplayedScoreSnapshot.scorePercent) or -1
+				local localEx = tonumber(self.lastDisplayedScoreSnapshot and self.lastDisplayedScoreSnapshot.exScorePercent) or -1
 				local playState = ""
 				if payload.play_state and payload.play_state.sessions and user.id then
 					for session in ivalues(payload.play_state.sessions) do
@@ -4436,7 +4517,10 @@ end
 					.. " user=" .. tostring(user.id or "")
 					.. " score=" .. tostring(score.score or "")
 					.. " percent=" .. tostring(score.score_percent or "")
-					.. " state=" .. tostring(playState))
+					.. " state=" .. tostring(playState)
+					.. " local_displayed=" .. tostring(localDisplayed)
+					.. " local_score=" .. tostring(localScore)
+					.. " local_ex=" .. tostring(localEx))
 			end
 			MESSAGEMAN:Broadcast("ITGOnlineLeaderboardUpdated", {
 				leaderboard = payload.leaderboard,

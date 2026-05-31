@@ -69,13 +69,14 @@ local function rows_from_leaderboard(leaderboard)
 		local user_id = tostring(user.id or "")
 		local play_state = play_state_for_user(user_id)
 		local flags = terminal_flags(play_state, score.failed and true or false)
+		local is_finalized = score.finalized_at ~= nil and tostring(score.finalized_at) ~= ""
 		rows[#rows + 1] = {
 			user_id = user_id,
 			name = tostring(user.name or "Player"),
 			percent = percent or 0,
 			failed = flags.failed,
 			exited = flags.exited,
-			finished = flags.finished,
+			finished = flags.finished or is_finalized,
 			play_state = play_state,
 		}
 	end
@@ -106,10 +107,14 @@ local function update_rows(frame, rows)
 			end
 			if data.user_id == self_id and ITGOnline and ITGOnline.debugScoreTrace == true then
 				local shownValue = tonumber(data.percent) or 0
+				local localShown = tonumber(ITGOnline.lastDisplayedScoreSnapshot and ITGOnline.lastDisplayedScoreSnapshot.displayedPercent) or -1
+				local delta = (localShown >= 0) and (shownValue - localShown) or 0
 				if online_trace then
 					online_trace(string.format(
-						"ITG Online Leaderboard trace: shown=%.3f source=server state=%s failed=%s finished=%s status=%s",
+						"ITG Online Leaderboard trace: shown=%.3f local=%.3f delta=%.3f source=server state=%s failed=%s finished=%s status=%s",
 						shownValue,
+						localShown,
+						delta,
 						tostring(data.play_state or ""),
 						tostring(data.failed == true),
 						tostring(data.finished == true),

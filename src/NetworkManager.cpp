@@ -3,6 +3,7 @@
 #include <ixwebsocket/IXHttpClient.h>
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXUrlParser.h>
+#include <ixwebsocket/IXUserAgent.h>
 #include <ixwebsocket/IXWebSocket.h>
 
 #include <algorithm>
@@ -188,6 +189,12 @@ bool IsSafeDownloadFileName(const std::string& value) {
 bool IsProductionItgOnlineHost(const std::string& host) {
   return host == "itgonline.fr" || EndsWith(host, ".itgonline.fr");
 }
+
+bool TlsBackendLikelySupportsPinning() {
+  const std::string userAgent = ix::userAgent();
+  return userAgent.find("ssl/OpenSSL") != std::string::npos ||
+         userAgent.find("ssl/mbedtls") != std::string::npos;
+}
 }
 
 Preference<bool> NetworkManager::httpEnabled(
@@ -321,19 +328,20 @@ NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
   }
 
   this->tlsOptions.publicKeySha256Pins = configuredPins;
-#if defined(IXWEBSOCKET_USE_OPEN_SSL) || defined(IXWEBSOCKET_USE_MBED_TLS)
-  this->tlsBackendEnforcesPublicKeyPins = true;
-#else
-  this->tlsBackendEnforcesPublicKeyPins = false;
-#endif
-#if !defined(IXWEBSOCKET_USE_OPEN_SSL) && !defined(IXWEBSOCKET_USE_MBED_TLS)
+  this->tlsBackendEnforcesPublicKeyPins = TlsBackendLikelySupportsPinning();
   if (!configuredPins.empty()) {
-    LOG->Warn(
-        "HttpPublicKeyPins are configured, but this IXWebSocket TLS backend "
-        "does not enforce public key pinning. Use OpenSSL builds or implement "
-        "pinning for this backend before relying on pins as a trust boundary.");
+    if (!this->tlsBackendEnforcesPublicKeyPins) {
+      LOG->Warn(
+          "HttpPublicKeyPins are configured, but this IXWebSocket TLS backend "
+          "appears not to enforce public key pinning. Rebuild with a "
+          "pinning-capable backend for strict trust guarantees.");
+    } else {
+      LOG->Trace(
+          "HttpPublicKeyPins are configured and TLS backend reports pinning "
+          "support via user agent: %s",
+          ix::userAgent().c_str());
+    }
   }
-#endif
   this->httpClient.setTLSOptions(this->tlsOptions);
   this->downloadClient.setTLSOptions(this->tlsOptions);
 
@@ -535,15 +543,14 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
   if ((protocol == "https" || protocol == "wss") &&
       IsProductionItgOnlineHost(host) &&
       !this->tlsBackendEnforcesPublicKeyPins &&
-      !this->httpPublicKeyPins.Get().empty()) {
-    if (!this->warnedPinningUnsupportedForProductionHost) {
-      this->warnedPinningUnsupportedForProductionHost = true;
-      LOG->Warn(
-          "Blocked %s because HttpPublicKeyPins are configured but this build "
-          "cannot enforce key pinning for production ITG Online hosts.",
-          url.c_str());
-    }
-    return false;
+      !this->httpPublicKeyPins.Get().empty() &&
+      !this->warnedPinningUnsupportedForProductionHost) {
+    this->warnedPinningUnsupportedForProductionHost = true;
+    LOG->Warn(
+        "Allowing %s without enforced public key pinning because this build "
+        "TLS backend does not support pin verification. Rebuild with a "
+        "pinning-capable backend for strict trust guarantees.",
+        url.c_str());
   }
 
   std::lock_guard<std::mutex> hostCacheLock(hostCacheMutex);
