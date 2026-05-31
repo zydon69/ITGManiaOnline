@@ -195,6 +195,49 @@ constexpr mz_uint64 kMaxZipSingleFileBytes =
 constexpr mz_uint64 kMaxZipTotalUncompressedBytes =
     static_cast<mz_uint64>(4) * 1024 * 1024 * 1024;
 
+static bool EndsWithNoCase(const std::string& value, const std::string& suffix) {
+  if (value.size() < suffix.size()) {
+    return false;
+  }
+  return CompareNoCase(
+             value.substr(value.size() - suffix.size()), suffix) == 0;
+}
+
+static void CleanupTempNewDirArtifacts(const std::string& rootPath) {
+  std::vector<std::string> queue;
+  queue.push_back(rootPath);
+
+  while (!queue.empty()) {
+    std::string current = queue.back();
+    queue.pop_back();
+    if (current.empty()) {
+      continue;
+    }
+    if (current.back() != '/') {
+      current.push_back('/');
+    }
+
+    std::vector<std::string> entries;
+    FILEMAN->GetDirListing(current + "*", entries, false, true);
+    for (const auto& entry : entries) {
+      const bool isArtifact = EndsWithNoCase(entry, ".temp.newdir") ||
+                              EndsWithNoCase(entry, "newdir.temp.newdir");
+      if (isArtifact) {
+        if (FILEMAN->DeleteRecursive(entry)) {
+          LOG->Trace("Removed temp directory artifact %s", entry.c_str());
+        } else {
+          LOG->Warn("Could not remove temp directory artifact %s", entry.c_str());
+        }
+        continue;
+      }
+
+      if (FILEMAN->IsADirectory(entry)) {
+        queue.push_back(entry);
+      }
+    }
+  }
+}
+
 bool RageFileManager::Unzip(
     const std::string& zipPath, std::string targetPath, int strip) {
   if (targetPath.empty() || targetPath.back() != '/') {
@@ -323,6 +366,9 @@ bool RageFileManager::Unzip(
   }
 
   mz_zip_reader_end(&zip);
+  if (success) {
+    CleanupTempNewDirArtifacts(targetPath);
+  }
   return success;
 }
 
@@ -760,7 +806,9 @@ void RageFileManager::CreateDir(const std::string& sDir) {
   f.Open(sTempFile, RageFile::WRITE);
   f.Close();
 
-  Remove(sTempFile);
+  if (!Remove(sTempFile) && DoesFileExist(sTempFile)) {
+    DeleteRecursive(sTempFile);
+  }
 }
 
 static void AdjustMountpoint(std::string& sMountPoint) {

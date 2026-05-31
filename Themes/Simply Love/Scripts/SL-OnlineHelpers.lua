@@ -293,6 +293,18 @@ local OnlineSongKey = function(data)
 		.. "|" .. tostring(data.songInfo.selectedAt or "")
 end
 
+local CurrentUserInLobbyState = function(data)
+	if not (data and data.players and ITGOnline and ITGOnline.user) then return false end
+	local selfId = tostring(ITGOnline.user.id or "")
+	if selfId == "" then return false end
+	for _, player in ipairs(data.players) do
+		if tostring(player and player.playerId or "") == selfId then
+			return true
+		end
+	end
+	return false
+end
+
 local ApplyOnlineSongSelection = function(songInfo)
 	if not songInfo or not songInfo.songPath then return false end
 	if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ApplySelectedChart then
@@ -886,7 +898,9 @@ DisplayLobbyState = function(data, actor)
 
 		if data.songInfo ~= nil then
 			local songKey = OnlineSongKey(data)
-			if (data.phase == "lobby_ready" or data.phase == "config") and songKey ~= "" and songKey ~= lastOnlineOptionsSongKey then
+			local shouldApplyInLobby = (data.phase == "lobby_ready" or data.phase == "config")
+				and CurrentUserInLobbyState(data)
+			if shouldApplyInLobby and songKey ~= "" and songKey ~= lastOnlineOptionsSongKey then
 				lastOnlineOptionsSongKey = songKey
 				if ApplyOnlineSongSelection(data.songInfo) then
 					if data.phase == "lobby_ready" then
@@ -948,7 +962,7 @@ DisplayLobbyState = function(data, actor)
 	songSelected = (data.songInfo ~= nil)
 
 			local gameplaySongKey = OnlineSongKey(data)
-			if data.phase == "starting" and data.roomId and gameplaySongKey ~= "" and lastOnlineGameplayRoomId ~= gameplaySongKey then
+			if data.phase == "starting" and data.roomId and CurrentUserInLobbyState(data) and gameplaySongKey ~= "" and lastOnlineGameplayRoomId ~= gameplaySongKey then
 				if ApplyOnlineSongSelection(data.songInfo) then
 					if online_trace then
 						online_trace("FLOW schedule_gameplay_start room=" .. tostring(data.roomId)

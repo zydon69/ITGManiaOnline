@@ -24,6 +24,7 @@
 #include "Preference.h"
 #include "ProductInfo.h"
 #include "RageFile.h"
+#include "RageFileDriverDeflate.h"
 #include "RageFileManager.h"
 #include "RageLog.h"
 #include "RageTimer.h"
@@ -59,7 +60,7 @@ namespace {
 constexpr const char* BUILT_IN_HTTP_ALLOW_HOSTS =
     ITGMANIA_HTTP_ALLOW_HOSTS_DEFAULT;
 constexpr const char* REQUIRED_ITG_ONLINE_ALLOW_HOSTS =
-    "itgonline.fr,*.itgonline.fr";
+    "itgonline.fr,*.itgonline.fr,stepmaniaonline.net,www.stepmaniaonline.net";
 constexpr const char* SIGNED_HTTP_SECURITY_OVERRIDE_PATH =
     "Save/ITGOnlineNetworkSecurity.ini";
 
@@ -613,6 +614,9 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
   ix::HttpRequestArgsPtr req = client.createRequest(args.url, args.method);
   req->body = args.body;
   req->multipartBoundary = args.multipartBoundary;
+  // Avoid gzip-compressed HTTP responses: Lua JSON consumers expect plain text.
+  // Some upstream endpoints return gzip payloads that are not decoded in this path.
+  req->compress = false;
 
   req->extraHeaders["User-Agent"] = this->GetUserAgent();
   for (const auto& entry : args.headers) {
@@ -690,6 +694,20 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
 
                     FILEMAN->Remove(downloadFilename);
                     return;
+                  }
+                }
+
+                if (args.downloadFile.empty() && response &&
+                    response->body.size() >= 2 &&
+                    static_cast<unsigned char>(response->body[0]) == 0x1f &&
+                    static_cast<unsigned char>(response->body[1]) == 0x8b) {
+                  std::string decodedBody;
+                  std::string gunzipError;
+                  if (GunzipString(response->body, decodedBody, gunzipError)) {
+                    response->body = decodedBody;
+                  } else {
+                    LOG->Warn("Failed to gunzip HTTP response body: %s",
+                              gunzipError.c_str());
                   }
                 }
 
