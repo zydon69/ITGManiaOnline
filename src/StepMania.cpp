@@ -1172,7 +1172,7 @@ bool HandleGlobalInputs(const InputEventPlus& input) {
     if (bIsShiftHeld && !bIsCtrlHeld) {
       // Shift+F2: refresh metrics,noteskin cache and CodeDetector cache only
       THEME->ReloadMetrics();
-      NOTESKIN->RefreshNoteSkinData(GAMESTATE->m_pCurGame);
+      NOTESKIN->RefreshNoteSkinData(GAMESTATE->m_pCurGame, true);
       CodeDetector::RefreshCacheItems();
       SCREENMAN->SystemMessage(RELOADED_METRICS);
     } else if (bIsCtrlHeld && !bIsShiftHeld) {
@@ -1192,7 +1192,7 @@ bool HandleGlobalInputs(const InputEventPlus& input) {
       // F2 alone: refresh metrics, textures, noteskins, codedetector cache
       THEME->ReloadMetrics();
       TEXTUREMAN->ReloadAll();
-      NOTESKIN->RefreshNoteSkinData(GAMESTATE->m_pCurGame);
+      NOTESKIN->RefreshNoteSkinData(GAMESTATE->m_pCurGame, true);
       CodeDetector::RefreshCacheItems();
       SCREENMAN->SystemMessage(RELOADED_METRICS_AND_TEXTURES);
     }

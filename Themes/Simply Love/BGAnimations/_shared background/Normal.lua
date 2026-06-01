@@ -32,18 +32,24 @@ local t = Def.ActorFrame {
 	end
 }
 
+local function ShouldShowNormal()
+	local style = ThemePrefs.Get("VisualStyle")
+	return not ThemePrefs.Get("RainbowMode") and style ~= "SRPG9" and style ~= "Technique"
+end
+
 for i=1,10 do
 	t[#t+1] = Def.Sprite {
-		Texture=file,
 		InitCommand=function(self)
 			self:diffuse(GetHexColor(SL.Global.ActiveColorIndex+anim_data.color_add[i], true))
 		end,
 		OnCommand=function(self)
+			if ShouldShowNormal() then
+				self:Load(file)
+			end
 			self:zoom(1.3):xy(anim_data.xy[i], anim_data.xy[i])
 			:customtexturerect(0,0,1,1):texcoordvelocity(anim_data.texcoordvelocity[i][1], anim_data.texcoordvelocity[i][2])
 			:diffusealpha(anim_data.diffusealpha[i])
 		end,
-
 		ColorSelectedMessageCommand=function(self)
 			self:linear(0.5)
 			:diffuse(GetHexColor(SL.Global.ActiveColorIndex+anim_data.color_add[i], true))

@@ -30,6 +30,11 @@ local af1 = Def.ActorFrame{
 	HideCommand=function(self) self:visible(false) end,
 }
 
+local function ShouldShowRainbow()
+	local style = ThemePrefs.Get("VisualStyle")
+	return ThemePrefs.Get("RainbowMode") and style ~= "SRPG9"
+end
+
 local af2 = Def.ActorFrame{
 	InitCommand=function(self) self:diffusealpha(0):queuecommand("Appear"):playcommand("NewColor") end,
 	AppearCommand=function(self) self:linear(1):diffusealpha(1):queuecommand("Loop") end,
@@ -66,13 +71,19 @@ local anim_data = {
 }
 
 for i=1,25 do
-	af2[#af2+1] = LoadActor(file)..{
+	af2[#af2+1] = Def.Sprite{
 		InitCommand=function(self)
+			self:Load(nil)
 			self:zoom(1.3)
 			:xy(anim_data.x[i], anim_data.y[i])
 			:z(anim_data.z[i])
-			:customtexturerect(0,0,1,1)
-			:texcoordvelocity(anim_data.tv_x[i], anim_data.tv_y[i])
+		end,
+		OnCommand=function(self)
+			if ShouldShowRainbow() then
+				self:Load(file)
+			end
+			self:customtexturerect(0,0,1,1)
+			    :texcoordvelocity(anim_data.tv_x[i], anim_data.tv_y[i])
 		end,
 		NewColorCommand=function(self)
 			self:linear(delay)

@@ -204,7 +204,10 @@ void RageSoundDriver::DecodeThread() {
     {
       int iSampleRate = GetSampleRate();
       ASSERT_M(iSampleRate > 0, ssprintf("%i", iSampleRate));
-      int iUsecs = 1000000 * chunksize() / iSampleRate;
+      /* Wake up twice per chunk duration to reduce startup/transition underruns
+       * on systems with bursty thread scheduling (notably macOS desktop). */
+      int iUsecs = (1000000 * chunksize() / iSampleRate) / 2;
+      iUsecs = std::max(iUsecs, 1000);
       usleep(iUsecs);
     }
 

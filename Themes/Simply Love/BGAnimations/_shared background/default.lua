@@ -12,18 +12,20 @@ local style = ThemePrefs.Get("VisualStyle")
 -- if the player chooses a different VisualStyle during runtime, MESSAGEMAN will broadcast
 -- "VisualStyleSelected" which we can use in Normal.lua and RainbowMode.lua to Load() the
 -- newly-appropriate texture from disk into each Sprite; see also: ./BGAnimations/ScreenOptionsService overlay.lua
-local style = ThemePrefs.Get("VisualStyle")
 local file = THEME:GetPathG("", "_VisualStyles/" .. style .. "/SharedBackground.png")
 
 local af = Def.ActorFrame{}
 
 -- a simple Quad to serve as the backdrop
 af[#af+1] = Def.Quad{
-	InitCommand=function(self) self:FullScreen():Center():diffuse( ThemePrefs.Get("RainbowMode") and Color.White or Color.Black ) end,
+	InitCommand=function(self)
+		local rainbow = ThemePrefs.Get("RainbowMode")
+		self:FullScreen():Center():diffuse(rainbow and Color.White or Color.Black)
+	end,
 	VisualStyleSelectedMessageCommand=function(self)
-		THEME:ReloadMetrics() -- is this needed here?  -quietly
-		SL.Global.ActiveColorIndex = ThemePrefs.Get("RainbowMode") and 3 or ThemePrefs.Get("SimplyLoveColor")
-		self:linear(1):diffuse( ThemePrefs.Get("RainbowMode") and Color.White or Color.Black )
+		local rainbow = ThemePrefs.Get("RainbowMode")
+		SL.Global.ActiveColorIndex = rainbow and 3 or ThemePrefs.Get("SimplyLoveColor")
+		self:linear(1):diffuse(rainbow and Color.White or Color.Black)
 	end
 }
 

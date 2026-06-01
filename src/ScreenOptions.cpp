@@ -916,6 +916,10 @@ void ScreenOptions::ProcessMenuStart(const InputEventPlus& input) {
   PlayerNumber pn = input.pn;
 
   int iCurRow = m_iCurrentRow[pn];
+  LOG->Trace(
+      "ITG Debug: ScreenOptions::ProcessMenuStart screen=%s pn=%d row=%d rows=%zu transitioning=%d",
+      this->GetName().c_str(), (int)pn, iCurRow, m_pRows.size(),
+      IsTransitioning() ? 1 : 0);
 
   if (iCurRow < 0) {
     // this shouldn't be happening, but it is, so we need to bail out. -aj
@@ -925,6 +929,10 @@ void ScreenOptions::ProcessMenuStart(const InputEventPlus& input) {
   }
 
   OptionRow& row = *m_pRows[iCurRow];
+  LOG->Trace(
+      "ITG Debug: ScreenOptions::ProcessMenuStart row_title=\"%s\" row_type=%d choice=%d",
+      row.GetRowTitle().c_str(), (int)row.GetRowType(),
+      row.GetChoiceInRowWithFocus(pn));
 
   if (m_OptionsNavigation == NAV_THREE_KEY_MENU &&
       row.GetRowType() != OptionRow::RowType_Exit) {
@@ -1078,6 +1086,9 @@ void ScreenOptions::StoreFocus(PlayerNumber pn) {
 
 bool ScreenOptions::FocusedItemEndsScreen(PlayerNumber pn) const {
   std::string sScreen = GetNextScreenForFocusedItem(pn);
+  LOG->Trace(
+      "ITG Debug: ScreenOptions::FocusedItemEndsScreen screen=%s pn=%d next=\"%s\"",
+      this->GetName().c_str(), (int)pn, sScreen.c_str());
   return !sScreen.empty();
 }
 
@@ -1103,9 +1114,16 @@ std::string ScreenOptions::GetNextScreenForFocusedItem(PlayerNumber pn) const {
 
   const OptionRowHandler* pHand = pRow->GetHandler();
   if (pHand == nullptr) {
+    LOG->Trace(
+        "ITG Debug: ScreenOptions::GetNextScreenForFocusedItem handler=null screen=%s pn=%d row=%d",
+        this->GetName().c_str(), (int)pn, iCurRow);
     return std::string();
   }
-  return pHand->GetScreen(iChoice);
+  std::string next = pHand->GetScreen(iChoice);
+  LOG->Trace(
+      "ITG Debug: ScreenOptions::GetNextScreenForFocusedItem screen=%s pn=%d row=%d choice=%d next=\"%s\"",
+      this->GetName().c_str(), (int)pn, iCurRow, iChoice, next.c_str());
+  return next;
 }
 
 void ScreenOptions::BeginFadingOut() {

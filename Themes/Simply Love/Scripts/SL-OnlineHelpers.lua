@@ -1059,6 +1059,9 @@ CreateOnlineHandler = function()
 	      InitCommand=function(self)
 				onlineHandlerInstance = self
 				onlineHandlerShuttingDown = false
+				if ITGOnline and ITGOnline.RefreshDebugFlags then
+					ITGOnline:RefreshDebugFlags(true)
+				end
 	        self.socket = nil
 	        self.connected = false
 					self.connecting = false
@@ -1191,6 +1194,9 @@ CreateOnlineHandler = function()
 					end,
 					OnlineHeartbeatTickCommand=function(self)
 						if onlineHandlerShuttingDown then return end
+						if ITGOnline and ITGOnline.RefreshDebugFlags then
+							ITGOnline:RefreshDebugFlags(false)
+						end
 
 							if self.connected and self.socket ~= nil and ITGOnline and ITGOnline.Heartbeat then
 								local screen = SCREENMAN:GetTopScreen()
@@ -1206,6 +1212,9 @@ CreateOnlineHandler = function()
 						self:sleep(5):queuecommand("OnlineHeartbeatTick")
 					end,
 					OnlinePlayingCountdownTickCommand=function(self)
+						if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.WatchdogTick then
+							ITGOnline.PackSync:WatchdogTick()
+						end
 						if not onlineHandlerShuttingDown and self.inLobby and self.lastLobbyStatePayload then
 							local screen = SCREENMAN:GetTopScreen()
 							local screenName = screen and screen:GetName() or "NoScreen"

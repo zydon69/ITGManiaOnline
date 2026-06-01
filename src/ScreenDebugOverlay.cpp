@@ -1141,7 +1141,7 @@ class DebugLineReloadTheme : public IDebugLine {
   virtual void DoAndLog(std::string& sMessageOut) {
     THEME->ReloadMetrics();
     TEXTUREMAN->ReloadAll();
-    NOTESKIN->RefreshNoteSkinData(GAMESTATE->m_pCurGame);
+    NOTESKIN->RefreshNoteSkinData(GAMESTATE->m_pCurGame, true);
     CodeDetector::RefreshCacheItems();
     // HACK: Don't update text below. Return immediately because this screen
     // was just destroyed as part of the theme reload.

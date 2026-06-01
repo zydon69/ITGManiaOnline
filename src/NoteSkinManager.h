@@ -19,7 +19,7 @@ class NoteSkinManager {
   NoteSkinManager();
   ~NoteSkinManager();
 
-  void RefreshNoteSkinData(const Game* game);
+  void RefreshNoteSkinData(const Game* game, bool force = false);
   void GetNoteSkinNames(
       const Game* game, std::vector<std::string>& AddTo,
       bool bIncludeVariants = true);

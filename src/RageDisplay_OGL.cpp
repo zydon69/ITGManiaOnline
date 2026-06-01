@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <map>
 #include <set>
 #include <string>
@@ -83,6 +84,14 @@ static RenderTarget* g_pCurrentRenderTarget = nullptr;
 static LowLevelWindow* g_pWind;
 
 static bool g_bInvertY = false;
+
+static bool ShouldTraceGlTextureUploads() {
+  static const bool enabled = []() {
+    const char* value = std::getenv("ITG_TRACE_GL_UPLOADS");
+    return value != nullptr && std::string(value) == "1";
+  }();
+  return enabled;
+}
 
 static void InvalidateObjects();
 
@@ -2255,11 +2264,13 @@ uintptr_t RageDisplay_Legacy::CreateTexture(
     ASSERT(iRealFormat == GL_RGBA8);
   }
 
-  LOG->Trace(
-      "%s (format %s, %ix%i, format %s, type %s, pixfmt %i, imgpixfmt %i)",
-      "glTexImage2D", GLToString(glTexFormat).c_str(), pImg->w, pImg->h,
-      GLToString(glImageFormat).c_str(), GLToString(glImageType).c_str(),
-      pixfmt, SurfacePixFmt);
+  if (ShouldTraceGlTextureUploads()) {
+    LOG->Trace(
+        "%s (format %s, %ix%i, format %s, type %s, pixfmt %i, imgpixfmt %i)",
+        "glTexImage2D", GLToString(glTexFormat).c_str(), pImg->w, pImg->h,
+        GLToString(glImageFormat).c_str(), GLToString(glImageType).c_str(),
+        pixfmt, SurfacePixFmt);
+  }
 
   DebugFlushGLErrors();
 

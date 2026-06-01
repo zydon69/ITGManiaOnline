@@ -756,6 +756,15 @@ void PlayerOptions::FromString(const std::string& sMultipleMods) {
   split(sTemp, ",", vs, true);
   std::string sThrowAway;
   for (std::string& s : vs) {
+    std::string normalized = s;
+    MakeLower(normalized);
+    Trim(normalized);
+    if (EndsWith(normalized, "xmusic")) {
+      // Song option token occasionally leaks into player mod strings.
+      // PlayerOptions should ignore it silently instead of warning.
+      continue;
+    }
+
     if (!FromOneModString(s, sThrowAway)) {
       LOG->Trace(
           "Attempted to load a non-existing mod \'%s\' for the Player. "

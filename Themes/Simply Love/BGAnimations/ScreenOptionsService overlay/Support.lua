@@ -1,6 +1,7 @@
 -- Simply Thonk needs render-to-texture, and render-to-texture doesn't work with SM5's D3D implementation
 local ThonkAndRTTOkay = function()
-	if ThemePrefs.Get("VisualStyle") == "Thonk" and not SupportsRenderToTexture() then
+	local style = ThemePrefs.Get("VisualStyle")
+	if style == "Thonk" and not SupportsRenderToTexture() then
 		SM( THEME:GetString("ScreenThemeOptions", "ThonkRequiresRenderToTexture") )
 		return false
 	end
@@ -11,7 +12,8 @@ local InputHandler = function(event)
 	if not event then return false end
 	if event.type == "InputEventType_FirstPress" and event.GameButton == "Back" then
 		 if ThonkAndRTTOkay() and CurrentGameIsSupported() and StepManiaVersionIsSupported() then
-			 SCREENMAN:GetTopScreen():Cancel()
+			 local top = SCREENMAN:GetTopScreen()
+			 if top then top:Cancel() end
 		 end
 	end
 	return false
@@ -19,10 +21,17 @@ end
 
 local a = Def.Actor{}
 
-a.OnCommand=function(self) SCREENMAN:GetTopScreen():AddInputCallback( InputHandler ) end
+a.OnCommand=function(self)
+	local top = SCREENMAN:GetTopScreen()
+	if top then
+		top:AddInputCallback(InputHandler)
+	end
+end
 a.BeginCommand=function(self)
+	local style = ThemePrefs.Get("VisualStyle")
+	local rainbow = ThemePrefs.Get("RainbowMode")
 	-- In case we switched into SRPG9 and had Rainbow Mode enabled, disable it.
-	if ThemePrefs.Get("VisualStyle") == "SRPG9" and ThemePrefs.Get("RainbowMode") == true then
+	if style == "SRPG9" and rainbow == true then
 		ThemePrefs.Set("RainbowMode", false)
 	end
 
@@ -50,13 +59,19 @@ end
 -- it will not be called if the player presses the "Back" MenuButton (typically Esc on a keyboard),
 -- so we handle that case using a Lua InputCallback function
 a.OffCommand=function(self)
-	if SCREENMAN:GetTopScreen():AllAreOnLastRow() then
+	local top = SCREENMAN:GetTopScreen()
+	if top then
+		top:RemoveInputCallback(InputHandler)
+	end
+
+	if top and top:AllAreOnLastRow() then
+		local current_game = GAMESTATE:GetCurrentGame():GetName()
 		if not ThonkAndRTTOkay() then
 			SCREENMAN:SetNewScreen("ScreenOptionsService")
 		end
 
 		if not CurrentGameIsSupported() then
-			SM( THEME:GetString("ScreenInit", "UnsupportedGame"):format(GAMESTATE:GetCurrentGame():GetName()) )
+			SM( THEME:GetString("ScreenInit", "UnsupportedGame"):format(current_game) )
 			SCREENMAN:SetNewScreen("ScreenSystemOptions")
 		end
 

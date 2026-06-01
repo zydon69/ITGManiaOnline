@@ -1,5 +1,8 @@
 local choices, choice_actors = {}, {}
 local TopScreen = nil
+local MPN = GAMESTATE:GetMasterPlayerNumber()
+local last_description_key = nil
+local current_choice = nil
 -- give this a value now, before the TopScreen has been prepared and we can fetch its name
 -- we'll reassign it appropriately below, once the TopScreen is available
 local ScreenName = "ScreenSelectPlayMode"
@@ -9,12 +12,15 @@ local cursor = {
 	index = 0,
 	-- the width of the cursor will be clamped to exist between these two values
 	min_w = 90, max_w = 170,
+	width = 90,
 }
 
-local Update = function(af, delta)
-	local index = TopScreen:GetSelectionIndex( GAMESTATE:GetMasterPlayerNumber() )
+local Update = function(af)
+	if not TopScreen then return end
+	local index = TopScreen:GetSelectionIndex(MPN)
 	if index ~= cursor.index then
 		cursor.index = index
+		current_choice = choices[cursor.index+1]
 
 		-- queue the appropriate command to the faux playfield, if needed
 		if ScreenName=="ScreenSelectPlayMode2" then
@@ -27,30 +33,38 @@ local Update = function(af, delta)
 
 		-- queue an "Update" to the AF containing the cursor, description text, score, and lifemeter actors
 		-- since they are children of that AF, they will also listen for that command
+		local actor = choice_actors[cursor.index+1]
+		if actor then
+			cursor.width = clamp(actor:GetWidth()/1.4, cursor.min_w, cursor.max_w)
+		end
 		af:queuecommand("Update")
 	end
 end
 
 local InputHandler = function(event)
 	if not event.PlayerNumber or not event.button then return false end
+	if event.PlayerNumber ~= MPN then return false end
+	if event.type ~= "InputEventType_FirstPress" or event.GameButton ~= "Start" then
+		return false
+	end
 
-	if event.type == "InputEventType_FirstPress" then
-		if event.GameButton == "Start" then
-			if ScreenName=="ScreenSelectPlayMode" or ScreenName=="ScreenSelectPlayModeThonk" then
-				SL.Global.GameMode = choices[cursor.index+1]
-				-- now that a GameMode has been selected, set related preferences
-				SetGameModePreferences()
-				-- and reload the theme's Metrics
-				THEME:ReloadMetrics()
-				SCREENMAN:GetTopScreen():StartTransitioningScreen("SM_GoToNextScreen")
-			elseif ScreenName=="ScreenSelectOnlineMode" then
-				SL.Global.ITGOnline = SL.Global.ITGOnline or {}
-				SL.Global.ITGOnline.Enabled = choices[cursor.index+1] == "Online"
+	local selected = choices[cursor.index+1]
+	if not selected then return false end
 
-				local top = SCREENMAN:GetTopScreen()
-				top:SetNextScreenName(Branch.AfterSelectOnlineMode())
-				top:StartTransitioningScreen("SM_GoToNextScreen")
-			end
+	if ScreenName=="ScreenSelectPlayMode" or ScreenName=="ScreenSelectPlayModeThonk" then
+		SL.Global.GameMode = selected
+		-- now that a GameMode has been selected, set related preferences
+		SetGameModePreferences()
+		-- and reload the theme's Metrics
+		THEME:ReloadMetrics()
+		if TopScreen then TopScreen:StartTransitioningScreen("SM_GoToNextScreen") end
+	elseif ScreenName=="ScreenSelectOnlineMode" then
+		SL.Global.ITGOnline = SL.Global.ITGOnline or {}
+		SL.Global.ITGOnline.Enabled = selected == "Online"
+
+		if TopScreen then
+			TopScreen:SetNextScreenName(Branch.AfterSelectOnlineMode())
+			TopScreen:StartTransitioningScreen("SM_GoToNextScreen")
 		end
 	end
 end
@@ -65,6 +79,10 @@ local t = Def.ActorFrame{
 		-- Get the Topscreen and its name, now that that TopScreen itself actually exists
 		TopScreen = SCREENMAN:GetTopScreen()
 		ScreenName = TopScreen:GetName()
+		choices = {}
+		choice_actors = {}
+		current_choice = nil
+		last_description_key = nil
 
 		-- now that we have the TopScreen's name, get the single string containing this
 		-- screen's choices from Metrics.ini, and split it on commas; store those choices
@@ -73,9 +91,20 @@ local t = Def.ActorFrame{
 			choices[#choices+1] = choice
 			choice_actors[#choice_actors+1] = TopScreen:GetChild("IconChoice"..choice)
 		end
-    	SCREENMAN:GetTopScreen():AddInputCallback(InputHandler)
+		current_choice = choices[cursor.index+1]
+    	TopScreen:AddInputCallback(InputHandler)
 
 		self:queuecommand("Update")
+	end,
+	OffCommand=function(self)
+		if TopScreen then
+			TopScreen:RemoveInputCallback(InputHandler)
+		end
+		TopScreen = nil
+		choices = {}
+		choice_actors = {}
+		current_choice = nil
+		last_description_key = nil
 	end,
 	-- side mask
 	Def.Quad{
@@ -128,7 +157,19 @@ local t = Def.ActorFrame{
 			self:zoom(0.825):halign(0):valign(0):xy(-130,-60)
 		end,
 		UpdateCommand=function(self)
-			self:settext( THEME:GetString("ScreenSelectPlayMode", choices[cursor.index+1] .. "Description") )
+			local selected = current_choice or choices[cursor.index+1]
+			if selected then
+				local key = selected .. "Description"
+				if key ~= last_description_key then
+					last_description_key = key
+					self:settext(THEME:GetString("ScreenSelectPlayMode", key))
+				end
+			else
+				if last_description_key ~= "" then
+					last_description_key = ""
+					self:settext("")
+				end
+			end
 		end,
 		OffCommand=function(self) self:sleep(0.4):linear(0.2):diffusealpha(0) end
 	},
@@ -153,12 +194,12 @@ local t = Def.ActorFrame{
 
 		Def.Quad{
 			InitCommand=function(self) self:zoomtoheight(cursor.h+2):diffuse(1,1,1,1):x(-1):halign(1) end,
-			UpdateCommand=function(self) self:zoomtowidth( clamp( choice_actors[cursor.index+1]:GetWidth()/1.4, cursor.min_w, cursor.max_w) ) end,
+			UpdateCommand=function(self) self:zoomtowidth(cursor.width) end,
 			OffCommand=function(self) self:sleep(0.4):linear(0.2):cropleft(1) end
 		},
 		Def.Quad{
 			InitCommand=function(self) self:zoomtoheight(cursor.h):diffuse(0,0,0,1):halign(1) end,
-			UpdateCommand=function(self) self:zoomtowidth( clamp(choice_actors[cursor.index+1]:GetWidth()/1.4, cursor.min_w, cursor.max_w) ) end,
+			UpdateCommand=function(self) self:zoomtowidth(cursor.width) end,
 			OffCommand=function(self) self:sleep(0.4):linear(0.2):cropleft(1) end
 		}
 	},
@@ -174,7 +215,7 @@ local t = Def.ActorFrame{
 			if ScreenName == "ScreenSelectOnlineMode" then
 				self:stoptweening():linear(0.25):diffusealpha(0)
 			elseif ScreenName == "ScreenSelectPlayMode" then
-				if choices[cursor.index+1] == "Casual" then
+				if current_choice == "Casual" then
 					self:stoptweening():linear(0.25):diffusealpha(0)
 				else
 					self:settext("77.41")
@@ -196,7 +237,7 @@ local t = Def.ActorFrame{
 			if ScreenName == "ScreenSelectOnlineMode" then
 				self:stoptweening():linear(0.25):diffusealpha(0)
 			elseif ScreenName == "ScreenSelectPlayMode" then
-				if choices[cursor.index+1] == "ITG" then
+				if current_choice == "ITG" then
 					self:stoptweening():linear(0.25):diffusealpha(1)
 				else
 					self:stoptweening():linear(0.25):diffusealpha(0)
@@ -217,16 +258,11 @@ local t = Def.ActorFrame{
 		Def.Quad{
 			InitCommand=function(self) self:zoomto(40,14):xy(59,-64):diffuse( GetCurrentColor(true) ) end
 		},
-		-- life meter animated swoosh
-		LoadActor(THEME:GetPathB("ScreenGameplay", "underlay/PerPlayer/LifeMeter/swoosh.png"))..{
-			InitCommand=function(self) self:zoomto(40,14):diffusealpha(0.45):xy(59,-64) end,
-			OnCommand=function(self)
-				self:customtexturerect(0,0,1,1):texcoordvelocity(-2,0)
-			end,
-		},
+		-- Keep this static in menu screens to reduce asset churn and audio pressure.
 	},
 }
 
-t[#t+1] = LoadActor("./GameplayDemo.lua" )
+-- Preview arrows are intentionally disabled here to eliminate transition stalls
+-- and reduce intermittent mixer underruns on lower-end machines.
 
 return t

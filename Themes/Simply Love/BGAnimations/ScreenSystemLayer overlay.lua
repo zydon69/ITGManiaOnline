@@ -43,17 +43,18 @@ local function CreditsText( player )
 
 			local textColor = Color.White
 			local shadowLength = 0
+			local style = ThemePrefs.Get("VisualStyle")
+			local rainbow = ThemePrefs.Get("RainbowMode")
 
 			if screen then
-				bShow = THEME:GetMetric( screen:GetName(), "ShowCreditDisplay" )
-
 				local screenName = screen:GetName()
+				bShow = THEME:GetMetric(screenName, "ShowCreditDisplay")
 				if screenName == "ScreenTitleMenu" or screenName == "ScreenTitleJoin" or screenName == "ScreenLogo" then
-					if ThemePrefs.Get("VisualStyle") == "SRPG9" then
+					if style == "SRPG9" then
 						textColor = color(SL.SRPG9.TextColor)
 						shadowLength = 0.4
 					end
-				elseif (screen:GetName() == "ScreenEvaluationStage") or (screen:GetName() == "ScreenEvaluationNonstop") or (screen:GetName() == "ScreenGameplay") then
+				elseif screenName == "ScreenEvaluationStage" or screenName == "ScreenEvaluationNonstop" or screenName == "ScreenGameplay" then
 					-- ignore ShowCreditDisplay metric for ScreenEval
 					-- only show this BitmapText actor on Evaluation if the player is joined
 					bShow = GAMESTATE:IsHumanPlayer(player)
@@ -62,7 +63,7 @@ local function CreditsText( player )
 					--        I'll see tomorrow
 
 					-- dark text for RainbowMode
-					if ThemePrefs.Get("RainbowMode") then
+					if rainbow then
 						textColor = Color.Black
 					end
 				end
@@ -141,6 +142,7 @@ t[#t+1] = LoadFont("Common Footer")..{
 
 	RefreshCommand=function(self)
 		local screen = SCREENMAN:GetTopScreen()
+		local style = ThemePrefs.Get("VisualStyle")
 
 		-- if this screen's Metric for ShowCreditDisplay=false, then hide this BitmapText actor
 		-- PS: "ShowCreditDisplay" isn't a real Metric as far as the engine is concerned.
@@ -181,9 +183,9 @@ t[#t+1] = LoadFont("Common Footer")..{
 		end
 
 		local textColor = Color.White
-		local screenName = screen:GetName()
-		if screen ~= nil and (screenName == "ScreenTitleMenu" or screenName == "ScreenTitleJoin" or screenName == "ScreenLogo") then
-			if ThemePrefs.Get("VisualStyle") == "SRPG9" then
+		local screenName = screen and screen:GetName() or nil
+		if screenName and (screenName == "ScreenTitleMenu" or screenName == "ScreenTitleJoin" or screenName == "ScreenLogo") then
+			if style == "SRPG9" then
 				textColor = color(SL.SRPG9.TextColor)
 			end
 		end

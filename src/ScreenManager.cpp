@@ -62,6 +62,7 @@
 #include "ScreenManager.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <map>
 #include <set>
 #include <string>
@@ -137,6 +138,14 @@ std::vector<Actor*> g_vPreparedBackgrounds;
 void LogResourceSnapshotForScreenTransition(
     const std::string& action, const std::string& previous,
     const std::string& next) {
+  static const bool shouldTraceResourceSnapshots = []() {
+    const char* value = std::getenv("ITG_TRACE_RESOURCE_SNAPSHOTS");
+    return value != nullptr && std::string(value) == "1";
+  }();
+  if (!shouldTraceResourceSnapshots) {
+    return;
+  }
+
   if (TEXTUREMAN == nullptr) {
     return;
   }
@@ -676,6 +685,11 @@ void ScreenManager::PersistantScreen(const std::string& sScreenName) {
 
 void ScreenManager::SetNewScreen(const std::string& sScreenName) {
   ASSERT(sScreenName != "");
+  LOG->Trace(
+      "ITG Debug: ScreenManager::SetNewScreen from=%s to=%s",
+      GetTopScreen() != nullptr ? GetTopScreen()->GetName().c_str()
+                                : "NoScreen",
+      sScreenName.c_str());
   m_sDelayedScreen = sScreenName;
 }
 

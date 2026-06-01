@@ -9,6 +9,9 @@ ITGOnline = ITGOnline or {}
 ITGOnline.PackSync = ITGOnline.PackSync or {}
 
 local PackSync = ITGOnline.PackSync
+PackSync.statusChangedAt = PackSync.statusChangedAt or 0
+PackSync.watchdogLastKey = PackSync.watchdogLastKey or ""
+PackSync.watchdogTimeoutSeconds = PackSync.watchdogTimeoutSeconds or 25
 
 PackSync.status = {
 	Unknown = "unknown",
@@ -268,6 +271,7 @@ end
 function PackSync:UpdateStatus(status, message, progress, callback)
 	status = tostring(status or self.status.Unknown)
 	self.currentStatus = status
+	self.statusChangedAt = GetTimeSinceStart()
 	local currentSelectedAt = selected_at(self.currentSongInfo)
 	if self.lastSelectedAt ~= currentSelectedAt then
 		self.sequence = 0
@@ -305,9 +309,38 @@ function PackSync:UpdateStatus(status, message, progress, callback)
 	end)
 end
 
+function PackSync:WatchdogTick()
+	local status = tostring(self.currentStatus or self.status.Unknown)
+	if status == self.status.Unknown or status == self.status.Ready then
+		self.watchdogLastKey = ""
+		return
+	end
+
+	local watchable = (
+		status == self.status.SearchingLocalCharts
+		or status == self.status.DownloadRequested
+		or status == self.status.ReloadingSongs
+	)
+	if not watchable then return end
+
+	local age = GetTimeSinceStart() - (tonumber(self.statusChangedAt) or 0)
+	if age < (tonumber(self.watchdogTimeoutSeconds) or 25) then return end
+
+	local key = status .. ":" .. tostring(selected_at(self.currentSongInfo))
+	if self.watchdogLastKey == key then return end
+	self.watchdogLastKey = key
+
+	local message = "Opération interrompue (timeout). Réessayez le téléchargement du pack."
+	trace("Watchdog timeout status=" .. tostring(status) .. " age=" .. tostring(math.floor(age)))
+	self:UpdateStatus(self.status.DownloadFailed, message)
+	if SM then SM(message, 4) end
+end
+
 function PackSync:ResetLocalState(reason)
 	self.currentSongInfo = nil
 	self.currentStatus = self.status.Unknown
+	self.statusChangedAt = 0
+	self.watchdogLastKey = ""
 	self.sequence = 0
 	self.lastSelectedAt = ""
 	trace("Reset local state" .. (reason and (" (" .. tostring(reason) .. ")") or ""))

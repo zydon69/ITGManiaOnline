@@ -29,6 +29,8 @@ local arrow	= {
 }
 
 local timePerArrow = 0.2
+-- Keep this preview intentionally lightweight to avoid menu-transition hitches.
+local maxPreviewSteps = 6
 local pattern = {
 	dance =	{
 		"left", "down", "left", "right", "down", "up",
@@ -141,31 +143,21 @@ local function YieldStepPattern(i, dir)
 				:queuecommand('LoopMarathon')
 		end
 	}
-	local files
-	if dir == "center" then
-		files = { "center-body.png", "center-border.png", "center-feet.png" }
-	else
-		files = {"arrow-border.png", "arrow-body.png", "arrow-stripes.png" }
-	end
-
-	for index,file in ipairs(files) do
-		step[#step+1] = LoadActor( file )..{
-			InitCommand=function(self) self:diffuse(1,1,1,1):zoom(ColumnZoom(dir)) end,
-			OnCommand=function(self)
-				if file == "center-feet.png" or file == "arrow-stripes.png" then
-					self:blend(Blend.Multiply)
-				end
-				if file == "center-body.png" or file == "center-feet.png" or file == "arrow-body.png" then
-					self:diffuse( GetHexColor(i, true) )
-				end
-			end,
-		}
-	end
+	-- A single textured layer per preview step is enough for readability and
+	-- avoids loading/instancing 3 sprites for each moving arrow.
+	local file = (dir == "center") and "center-body.png" or "arrow-body.png"
+	step[#step+1] = LoadActor(file)..{
+		InitCommand=function(self)
+			self:zoom(ColumnZoom(dir))
+			self:diffuse(GetHexColor(i, true))
+		end
+	}
 
 	return step
 end
 
-for index, direction in ipairs(pattern[game]) do
+for index = 1, math.min(#pattern[game], maxPreviewSteps) do
+	local direction = pattern[game][index]
 	notefield[#notefield+1] = YieldStepPattern(index, direction)
 end
 

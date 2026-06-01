@@ -177,6 +177,12 @@ std::string RageSoundDriver_AU::Init() {
     return ssprintf("Could not initialize the AudioUnit: %s", FormatOSError(error));
   }
 
+  int decodeBufferFrames = 8192;
+  if (PREFSMAN->m_iSoundWriteAhead > 0) {
+    decodeBufferFrames = std::max(decodeBufferFrames, PREFSMAN->m_iSoundWriteAhead.Get());
+  }
+  SetDecodeBufferSize(decodeBufferFrames);
+
   StartDecodeThread();
 
   if ((error = AudioOutputUnitStart(m_OutputUnit))) {
@@ -206,7 +212,7 @@ int64_t RageSoundDriver_AU::GetPosition() const {
 
 void RageSoundDriver_AU::SetupDecodingThread() {
   /* Increase the scheduling precedence of the decoder thread. */
-  const std::string sError = SetThreadPrecedence(0.75f);
+  const std::string sError = SetThreadPrecedence(0.9f);
   if (!sError.empty()) {
     LOG->Warn("Could not set precedence of the decoding thread: %s", sError.c_str());
   }

@@ -1,20 +1,35 @@
 local wheel = setmetatable({}, sick_wheel_mt)
+local top_screen = nil
 
 -- a simple flag to determine if the color was actively selected by a player;
 -- we don't want the FinishCommand to double-trigger via the timer running out
 -- AND a player pressing start
 local ColorSelected = false
+local ColorPrefDirty = false
 
-local NumHeartsToDraw = IsUsingWideScreen() and 11 or 7
+local is_widescreen = IsUsingWideScreen()
+local NumHeartsToDraw = is_widescreen and 11 or 7
+local HeartsSpacing = is_widescreen and (_screen.w / (NumHeartsToDraw-1)) or (_screen.w / NumHeartsToDraw)
+local WheelHalfItems = math.floor(NumHeartsToDraw/2)
 
 local style = ThemePrefs.Get("VisualStyle")
 local colorTable = (style == "SRPG9") and SL.SRPG9.Colors or SL.DecorativeColors
+local color_count = #colorTable
+local colorIndexMap = {}
+for i, c in ipairs(colorTable) do
+	colorIndexMap[c] = i
+end
 local factionBmt
+local selectColorTexture = THEME:GetPathG("", "_VisualStyles/"..style.."/SelectColor.png")
+local underlay_ref = nil
+local change_sound_ref = nil
+local start_sound_ref = nil
 
 local text
 if style == "Gay" then
 	text = { "I'm gay", "we're gay", "proud", "queer" }
 end
+local text_count = (type(text) == "table") and #text or 0
 
 -- this handles user input
 -- need to split declaration and assignment up across two lines
@@ -27,19 +42,20 @@ input = function(event)
 	end
 
 	if event.type == "InputEventType_FirstPress" then
-		local topscreen = SCREENMAN:GetTopScreen()
-		local underlay = topscreen:GetChild("Underlay")
+		local topscreen = top_screen or SCREENMAN:GetTopScreen()
+		if not topscreen then return false end
+		local underlay = underlay_ref or topscreen:GetChild("Underlay")
+		if not underlay then return false end
+		underlay_ref = underlay
+		local direction = nil
+		if event.GameButton == "MenuRight" then direction = 1 end
+		if event.GameButton == "MenuLeft" then direction = -1 end
 
-		if event.GameButton == "MenuRight" then
-			wheel:scroll_by_amount(1)
-			underlay:GetChild("change_sound"):play()
+		if direction ~= nil then
+			wheel:scroll_by_amount(direction)
+			change_sound_ref = change_sound_ref or underlay:GetChild("change_sound")
+			if change_sound_ref then change_sound_ref:play() end
 			underlay:playcommand("Preview")
-
-		elseif event.GameButton == "MenuLeft" then
-			wheel:scroll_by_amount(-1)
-			underlay:GetChild("change_sound"):play()
-			underlay:playcommand("Preview")
-
 		elseif event.GameButton == "Start" then
 			ColorSelected = true
 			underlay:playcommand("Finish")
@@ -75,7 +91,8 @@ local wheel_item_mt = {
 				end
 			}
 
-			af[#af+1] = LoadActor(THEME:GetPathG("", "_VisualStyles/"..style.."/SelectColor.png"))..{
+			af[#af+1] = Def.Sprite{
+				Texture=selectColorTexture,
 				InitCommand=function(subself)
 					self.heart = subself
 					subself:diffusealpha(0)
@@ -110,11 +127,11 @@ local wheel_item_mt = {
 			self.container:linear(0.2)
 			self.index=item_index
 
-			local X_SpaceBetweenHearts = IsUsingWideScreen() and (_screen.w / (num_items-1)) or (_screen.w / (num_items))
-			local OffsetFromCenter = (item_index - math.floor(num_items/2))-1
-			local x = X_SpaceBetweenHearts * OffsetFromCenter
+			local half_items = (num_items == NumHeartsToDraw) and WheelHalfItems or math.floor(num_items/2)
+			local OffsetFromCenter = (item_index - half_items)-1
+			local x = HeartsSpacing * OffsetFromCenter
 			local z = -1 * math.abs(OffsetFromCenter)
-			local zoom = IsUsingWideScreen() and (z + math.floor(num_items/2))/4 or (z + math.floor(num_items/2) + 1)/4
+			local zoom = is_widescreen and (z + half_items)/4 or (z + half_items + 1)/4
 
 			if item_index <= 1 or item_index >= num_items then
 				self.container:diffusealpha(0)
@@ -126,7 +143,7 @@ local wheel_item_mt = {
 			self.container:z(z)
 			self.heart:diffuse( color(self.color) )
 
-			if IsUsingWideScreen() then
+			if is_widescreen then
 				local y = (12 * math.pow(OffsetFromCenter,2)) - 20
 				self.container:rotationz( OffsetFromCenter * 15 )
 				self.container:zoom( zoom )
@@ -137,14 +154,14 @@ local wheel_item_mt = {
 				self.container:zoom( zoom )
 			end
 
-			if style=="Gay" and item_index == (IsUsingWideScreen() and 6 or 4) then
+			if style=="Gay" and item_index == (is_widescreen and 6 or 4) then
 				self.container:effectmagnitude(0,4,0)
 			else
 				self.container:effectmagnitude(0,0,0)
 			end
 
 			if style == "SRPG9" and has_focus then
-				local idx = self.color_index % #colorTable + 1
+				local idx = self.color_index % color_count + 1
 				factionBmt:settext(SL.SRPG9.GetFactionName(idx))
 			end
 		end,
@@ -152,9 +169,10 @@ local wheel_item_mt = {
 		set = function(self, color)
 			if not color then return end
 			self.color = color
-			self.color_index = FindInTable(color, colorTable)
-			if style=="Gay" and type(text)=="table" then
-				self.text:settext(text[(self.color_index - (SL.Global.ActiveColorIndex-(#text-1))) % #text + 1])
+			self.color_index = colorIndexMap[color]
+			if not self.color_index then return end
+			if style=="Gay" and text_count > 0 then
+				self.text:settext(text[(self.color_index - (SL.Global.ActiveColorIndex-(text_count-1))) % text_count + 1])
 			end
 		end
 	}
@@ -162,6 +180,7 @@ local wheel_item_mt = {
 
 local t = Def.ActorFrame{
 	InitCommand=function(self)
+		top_screen = SCREENMAN:GetTopScreen()
 		wheel:set_info_set(colorTable, SL.Global.ActiveColorIndex - 1)
 		self:queuecommand("Capture")
 		self:GetChild("ColorWheel"):SetDrawByZPosition(true)
@@ -172,7 +191,8 @@ local t = Def.ActorFrame{
 		end
 	end,
 	ListenCommand=function(self)
-		local topscreen = SCREENMAN:GetTopScreen()
+		local topscreen = top_screen or SCREENMAN:GetTopScreen()
+		if not topscreen then return end
 		local seconds = topscreen:GetChild("Timer"):GetSeconds()
 		if seconds <= 0 and not ColorSelected then
 			ColorSelected = true
@@ -183,20 +203,42 @@ local t = Def.ActorFrame{
 		end
 	end,
 	CaptureCommand=function(self)
-		SCREENMAN:GetTopScreen():AddInputCallback(input)
+		local topscreen = top_screen or SCREENMAN:GetTopScreen()
+		if topscreen then
+			top_screen = topscreen
+			topscreen:AddInputCallback(input)
+		end
 	end,
 	PreviewCommand=function(self)
-		SL.Global.ActiveColorIndex = FindInTable(wheel:get_info_at_focus_pos(), colorTable)
-		SL.Global.ActiveColorIndex = (SL.Global.ActiveColorIndex % #colorTable) + 1
-		ThemePrefs.Set("SimplyLoveColor", SL.Global.ActiveColorIndex)
-		ThemePrefs.Save()
-		
-		MESSAGEMAN:Broadcast("ColorSelected")
+		local focused = wheel:get_info_at_focus_pos()
+		local new_index = colorIndexMap[focused]
+		if not new_index then return end
+		new_index = (new_index % color_count) + 1
+		if new_index ~= SL.Global.ActiveColorIndex then
+			SL.Global.ActiveColorIndex = new_index
+			ThemePrefs.Set("SimplyLoveColor", SL.Global.ActiveColorIndex)
+			ColorPrefDirty = true
+			MESSAGEMAN:Broadcast("ColorSelected")
+		end
 	end,
 	FinishCommand=function(self)
-		self:GetChild("start_sound"):play()
-		SCREENMAN:GetTopScreen():RemoveInputCallback(input)
-		SCREENMAN:GetTopScreen():StartTransitioningScreen("SM_GoToNextScreen")
+		start_sound_ref = start_sound_ref or self:GetChild("start_sound")
+		if start_sound_ref then start_sound_ref:play() end
+		local topscreen = top_screen or SCREENMAN:GetTopScreen()
+		if topscreen then
+			topscreen:RemoveInputCallback(input)
+			topscreen:StartTransitioningScreen("SM_GoToNextScreen")
+		end
+		if ColorPrefDirty then
+			ThemePrefs.Save()
+			ColorPrefDirty = false
+		end
+	end,
+	OffCommand=function(self)
+		underlay_ref = nil
+		change_sound_ref = nil
+		start_sound_ref = nil
+		top_screen = nil
 	end,
 	wheel:create_actors( "ColorWheel", NumHeartsToDraw, wheel_item_mt, _screen.cx, _screen.cy )
 }

@@ -27,7 +27,20 @@ std::string CrashHandler::GetLogsDirectory() {
     return "/tmp";
   }
 
-  std::string path = std::string([url fileSystemRepresentation]) + "/Logs/" PRODUCT_ID;
+  std::string path =
+      std::string([url fileSystemRepresentation]) + "/Logs/" PRODUCT_ID;
+  NSString* pathString = [NSString stringWithUTF8String:path.c_str()];
+  if (pathString != nil) {
+    NSError* error = nil;
+    [fileManager createDirectoryAtPath:pathString
+           withIntermediateDirectories:YES
+                            attributes:nil
+                                 error:&error];
+    if (error != nil) {
+      return "/tmp";
+    }
+  }
+
   return std::string(path.c_str());
 }
 

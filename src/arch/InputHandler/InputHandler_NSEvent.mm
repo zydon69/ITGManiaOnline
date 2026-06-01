@@ -38,6 +38,10 @@ static bool PrintableCharacterToDeviceButton(wchar_t character, DeviceButton& bu
 }
 
 static wchar_t KeyCodeToChar(CGKeyCode keyCode, unsigned int modifierFlags) {
+  if (![NSThread isMainThread]) {
+    return 0;
+  }
+
   TISInputSourceRef currentKeyboard = TISCopyCurrentKeyboardInputSource();
   if (currentKeyboard == nullptr) {
     return 0;
@@ -321,21 +325,6 @@ wchar_t InputHandler_NSEvent::DeviceButtonToChar(
     if (lastTypedCharacter != m_LastTypedCharacterByButton.end() &&
         lastTypedCharacter->second != L'\0') {
       return lastTypedCharacter->second;
-    }
-  }
-
-  UInt8 macVirtualKey;
-  if (KeyboardDevice::DeviceButtonToMacVirtualKey(button, macVirtualKey)) {
-    CGEventRef event = CGEventCreate(nullptr);
-    CGEventFlags flags = event ? CGEventGetFlags(event) : 0;
-    if (event) {
-      CFRelease(event);
-    }
-
-    UInt32 modifiers = bUseCurrentKeyModifiers ? (UInt32)flags : 0;
-    wchar_t character = KeyCodeToChar(macVirtualKey, modifiers);
-    if (character != 0) {
-      return character;
     }
   }
 

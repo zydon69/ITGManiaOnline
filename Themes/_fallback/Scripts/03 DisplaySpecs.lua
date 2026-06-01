@@ -600,6 +600,9 @@ function ConfFullscreenType()
 			local fsType = PREFSMAN:GetPreference("FullscreenIsBorderlessWindow") and FULLSCREEN_BORDERLESS_WIN
 				or FULLSCREEN_EXCLUSIVE
 			local i = FindValue(self.ChoiceVals, fsType)
+			if i == nil then
+				i = 1
+			end
 			list[i] = true
 		end,
 		SaveSelections= function(self, list, pn)

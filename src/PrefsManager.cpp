@@ -338,7 +338,7 @@ PrefsManager::PrefsManager()
       m_bForceLogFlush("ForceLogFlush", true),
       m_bShowLogOutput("ShowLogOutput", true),
 #else
-      m_bForceLogFlush("ForceLogFlush", false),
+      m_bForceLogFlush("ForceLogFlush", true),
       m_bShowLogOutput("ShowLogOutput", false),
 #endif
       m_bLogSkips("LogSkips", false),

@@ -9,6 +9,7 @@
 ITGOnline = ITGOnline or {}
 
 ITGOnline.configPath = "/Save/ITGOnline.ini"
+ITGOnline.debugConfigPath = "/Save/ITGOnlineDebug.ini"
 ITGOnline.passwordService = "ITG Online Password"
 ITGOnline.defaults = {
 	apiBaseUrl = "https://itgonline.fr/api/v1",
@@ -135,12 +136,23 @@ ITGOnline.heartbeatMinIntervalSeconds = ITGOnline.heartbeatMinIntervalSeconds or
 ITGOnline.fileHashCache = ITGOnline.fileHashCache or {}
 ITGOnline.fileHashCacheTtlSeconds = ITGOnline.fileHashCacheTtlSeconds or 30
 ITGOnline.onlineFlowTraceThrottle = ITGOnline.onlineFlowTraceThrottle or {}
-ITGOnline.debugOnlineTrace = true
-ITGOnline.debugScoreTrace = true
+ITGOnline.debugOnlineTrace = ITGOnline.debugOnlineTrace == true
+ITGOnline.debugScoreTrace = ITGOnline.debugScoreTrace == true
+ITGOnline.debugReadyFlow = ITGOnline.debugReadyFlow == true
+ITGOnline.lastDebugConfigPollAt = ITGOnline.lastDebugConfigPollAt or 0
+ITGOnline.debugConfigPollIntervalSeconds = ITGOnline.debugConfigPollIntervalSeconds or 1.0
 ITGOnline.lastHudScoreTraceSecond = ITGOnline.lastHudScoreTraceSecond or -1
 
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function parse_bool(value, fallback)
+	if value == nil then return fallback == true end
+	local text = trim(value):lower()
+	if text == "1" or text == "true" or text == "yes" or text == "on" then return true end
+	if text == "0" or text == "false" or text == "no" or text == "off" then return false end
+	return fallback == true
 end
 
 local function url_host(value)
@@ -287,6 +299,31 @@ function online_trace(message)
 	end
 	local line = "ITG Online: " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
+end
+
+function ITGOnline:RefreshDebugFlags(force)
+	local now = GetTimeSinceStart()
+	if not force and (now - (tonumber(self.lastDebugConfigPollAt) or 0) < (tonumber(self.debugConfigPollIntervalSeconds) or 1.0)) then
+		return
+	end
+	self.lastDebugConfigPollAt = now
+
+	if not FILEMAN:DoesFileExist(self.debugConfigPath) then
+		IniFile.WriteFile(self.debugConfigPath, {
+			["ITGOnlineDebug"] = {
+				["OnlineTrace"] = "false",
+				["ScoreTrace"] = "false",
+				["ReadyFlow"] = "false",
+			}
+		})
+	end
+
+	local raw = IniFile.ReadFile(self.debugConfigPath) or {}
+	local section = raw["ITGOnlineDebug"] or {}
+
+	self.debugOnlineTrace = parse_bool(section["OnlineTrace"], false)
+	self.debugScoreTrace = parse_bool(section["ScoreTrace"], false)
+	self.debugReadyFlow = parse_bool(section["ReadyFlow"], false)
 end
 
 local function online_flow_trace(message)

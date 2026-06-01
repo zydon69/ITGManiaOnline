@@ -4,6 +4,10 @@
 -- this applies to any screens that inherit from ScreenOptionsService, including ScreenOptionsServiceSub
 
 local a = Def.Actor{}
+local MPN = GAMESTATE:GetMasterPlayerNumber()
+
+SL.Global = SL.Global or {}
+SL.Global.PrevScreenOptionsServiceRow = SL.Global.PrevScreenOptionsServiceRow or {}
 
 a.InitCommand=function(self)
 	self:queuecommand("SetActiveOptionRow")
@@ -14,14 +18,16 @@ end
 -- active OptionRow
 a.SetActiveOptionRowCommand=function(self)
 	local screen = SCREENMAN:GetTopScreen()
+	if not screen then return end
 	local row_index = SL.Global.PrevScreenOptionsServiceRow[screen:GetName()] or 0
-	screen:SetOptionRowIndex(GAMESTATE:GetMasterPlayerNumber(), row_index)
+	screen:SetOptionRowIndex(MPN, row_index)
 end
 
 -- when leaving this screen, save the index of the active OptionRow
 a.OffCommand=function(self)
 	local screen = SCREENMAN:GetTopScreen()
-	local row_index = screen:GetCurrentRowIndex(GAMESTATE:GetMasterPlayerNumber())
+	if not screen then return end
+	local row_index = screen:GetCurrentRowIndex(MPN)
   -- if we're on the "Exit" row, save the index for this screen's 1st row
   if screen:GetNumRows()-1 == row_index then
     row_index = 0

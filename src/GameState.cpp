@@ -3137,7 +3137,7 @@ class LunaGameState : public Luna<GameState> {
   }
 
   static int RefreshNoteSkinData(T* p, lua_State* L) {
-    NOTESKIN->RefreshNoteSkinData(p->m_pCurGame);
+    NOTESKIN->RefreshNoteSkinData(p->m_pCurGame, true);
     COMMON_RETURN_SELF;
   }
 

@@ -438,7 +438,15 @@ std::string InputHandler_MacOSX_HID::GetDeviceSpecificInputString(const DeviceIn
 // http://macifom.googlecode.com/svn-history/r89/Macifom/trunk/NESControllerInterface.m Used under
 // MIT license from http://inquisitivecocoa.com/2009/04/05/key-code-translator/
 static wchar_t KeyCodeToChar(CGKeyCode keyCode, unsigned int modifierFlags) {
+  if (![NSThread isMainThread]) {
+    return 0;
+  }
+
   TISInputSourceRef currentKeyboard = TISCopyCurrentKeyboardInputSource();
+  if (currentKeyboard == nullptr) {
+    return 0;
+  }
+
   CFDataRef uchr =
       (CFDataRef)TISGetInputSourceProperty(currentKeyboard, kTISPropertyUnicodeKeyLayoutData);
   const UCKeyboardLayout* keyboardLayout =
@@ -464,11 +472,13 @@ static wchar_t KeyCodeToChar(CGKeyCode keyCode, unsigned int modifierFlags) {
     } else if (actualStringLength == 0) {
       fprintf(stderr, "Couldn't find a translation for the '%d' key code\n", keyCode);
     } else {
+      CFRelease(currentKeyboard);
       return unicodeString[0];
     }
   } else {
     fprintf(stderr, "Couldn't find a translation for the '%d' key code\n", keyCode);
   }
+  CFRelease(currentKeyboard);
   return 0;
 }
 
@@ -499,19 +509,6 @@ wchar_t InputHandler_MacOSX_HID::DeviceButtonToChar(
     case KEY_NUMLOCK:
     case KEY_KP_ENTER:
       return L'\0';
-  }
-
-  // Use Text Input Source services to convert the key code to character code.
-  UInt8 iMacVirtualKey;
-  if (KeyboardDevice::DeviceButtonToMacVirtualKey(button, iMacVirtualKey)) {
-    CGEventRef event = CGEventCreate(nullptr);
-    CGEventFlags mods = CGEventGetFlags(event);
-    CFRelease(event);
-    UInt32 nModifiers = bUseCurrentKeyModifiers ? (UInt32)mods : 0;
-    wchar_t sCharCode = KeyCodeToChar(iMacVirtualKey, nModifiers);
-    if (sCharCode != 0) {
-      return sCharCode;
-    }
   }
 
   return InputHandler::DeviceButtonToChar(button, bUseCurrentKeyModifiers);

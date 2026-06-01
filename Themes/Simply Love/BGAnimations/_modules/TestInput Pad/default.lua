@@ -3,8 +3,16 @@ local player = args.Player or GAMESTATE:GetMasterPlayerNumber()
 local show_menu_buttons = args.ShowMenuButtons
 local show_player_label = args.ShowPlayerLabel
 
+-- ScreenTestInput can instantiate this module for both sides even when only one
+-- human player is joined. Skip building actors for inactive sides.
+if player and not GAMESTATE:IsHumanPlayer(player) then
+	return Def.ActorFrame{}
+end
+
 local af = Def.ActorFrame{}
 local pad_img = GAMESTATE:GetCurrentGame():GetName()
+local player_reverse = PlayerNumber:Reverse()
+local controller_reverse = GameController:Reverse()
 
 if pad_img == "dance" and ThemePrefs.Get("AllowDanceSolo") then
 	local style = GAMESTATE:GetCurrentStyle()
@@ -58,7 +66,7 @@ if show_menu_buttons then
 	}
 end
 
-for panel,values in pairs(Highlights) do
+for panel, values in pairs(Highlights) do
 	pad[#pad+1] = LoadActor( values.graphic )..{
 		InitCommand=function(self) self:xy(values.x, values.y):rotationz(values.rotationz):zoom(values.zoom):visible(false) end,
 		TestInputEventMessageCommand=function(self, event)
@@ -72,7 +80,7 @@ for panel,values in pairs(Highlights) do
 				-- so instead, compared the input event's "controller" key from the engine's GameController enum
 				-- "GameController_1" is indexed at 0, and "GameController_2" is indexed at 1, conveniently just like how
 				--  "PlayerNumber_P1" is indexed at 0, and  "PlayerNumber_P2" is indexed at 1
-				if GameController:Reverse()[event.controller]==PlayerNumber:Reverse()[player]
+				if controller_reverse[event.controller] == player_reverse[player]
 				and event.button == panel then
 					self:visible(event.type == "InputEventType_FirstPress")
 				end

@@ -67,6 +67,7 @@ static LocalizedString SLOT_NAMES[3] = {
     LocalizedString("ScreenMapControllers", "Default")};
 static LocalizedString KEYNAME("ScreenMapControllers", "KeyName");
 void ScreenMapControllers::Init() {
+  LOG->Trace("ITG Debug: ScreenMapControllers::Init begin");
   ScreenWithMenuElements::Init();
 
   m_soundChange.Load(THEME->GetPathS(m_sName, "change"), true);
@@ -228,9 +229,13 @@ void ScreenMapControllers::Init() {
   m_Warning->SetDrawOrder(DRAW_ORDER_TRANSITIONS);
   this->AddChild(m_Warning);
   LOAD_ALL_COMMANDS(m_Warning);
+  LOG->Trace(
+      "ITG Debug: ScreenMapControllers::Init end keys_to_map=%zu line_count=%zu max_dest_item=%d",
+      m_KeysToMap.size(), m_Line.size(), m_MaxDestItem);
 }
 
 void ScreenMapControllers::BeginScreen() {
+  LOG->Trace("ITG Debug: ScreenMapControllers::BeginScreen begin");
   m_CurController = 0;
   m_CurButton = 0;
   m_CurSlot = 0;
@@ -255,6 +260,9 @@ void ScreenMapControllers::BeginScreen() {
       m_Warning->SetHibernate(16777216.0f);
     }
   }
+  LOG->Trace(
+      "ITG Debug: ScreenMapControllers::BeginScreen end cur_controller=%d cur_button=%d cur_slot=%d",
+      m_CurController, m_CurButton, m_CurSlot);
 }
 
 void ScreenMapControllers::Update(float fDeltaTime) {

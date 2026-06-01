@@ -87,7 +87,17 @@ NoteSkinManager::~NoteSkinManager() {
   g_mapNameToData.clear();
 }
 
-void NoteSkinManager::RefreshNoteSkinData(const Game* pGame) {
+void NoteSkinManager::RefreshNoteSkinData(const Game* pGame, bool force) {
+  if (pGame == nullptr) {
+    return;
+  }
+
+  if (!force && m_pCurGame == pGame && !g_mapNameToData.empty()) {
+    // Fast path: most screen transitions keep the same game, so reusing the
+    // already-built noteskin cache avoids expensive recursive reloads.
+    return;
+  }
+
   m_pCurGame = pGame;
 
   // clear path cache
