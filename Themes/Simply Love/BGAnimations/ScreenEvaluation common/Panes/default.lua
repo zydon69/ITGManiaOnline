@@ -50,7 +50,9 @@ elseif #players == 1 then
 	-- check if some expensive calculations have already been run, and refer to the ComputedData
 	-- table to get the results.
 	local ComputedData = {}
+	local style_type = ToEnumShortString(GAMESTATE:GetCurrentStyle():GetStyleType())
 	local proxyable_panes = {
+		[3] = style_type ~= "OnePlayerTwoSides",
 		[4] = true,
 		[5] = true,
 		[7] = true,

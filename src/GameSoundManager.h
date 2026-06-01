@@ -1,6 +1,8 @@
 #ifndef RAGE_SOUNDS_H
 #define RAGE_SOUNDS_H
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 
 #include "PlayerNumber.h"
@@ -14,6 +16,19 @@ int MusicThread_start(void* p);
 /** @brief High-level sound utilities. */
 class GameSoundManager {
  public:
+  struct PlayOnceDiagnosticsSnapshot {
+    size_t poolCount = 0;
+    size_t invalidCacheCount = 0;
+    size_t emptyPoolCount = 0;
+    size_t estimatedCacheBytes = 0;
+    size_t maxCacheBytes = 0;
+    uint64_t droppedBusyCount = 0;
+    uint64_t droppedPoolFullCount = 0;
+    uint64_t droppedMemoryBudgetCount = 0;
+    uint64_t evictedPoolCount = 0;
+    uint64_t invalidLoadCount = 0;
+  };
+
   GameSoundManager();
   ~GameSoundManager();
   void Update(float fDeltaTime);
@@ -56,6 +71,11 @@ class GameSoundManager {
   void PlayOnce(std::string sPath);
   void PlayOnceFromDir(std::string sDir);
   void PlayOnceFromAnnouncer(std::string sFolderName);
+  void SetPlayOnceDebugToolsEnabled(bool enabled);
+  void StressTestPlayOnce(std::string sPath, int iCount);
+  bool RunPlayOnceRuntimeSmokeTest(std::string sPath, int iCount);
+  PlayOnceDiagnosticsSnapshot GetPlayOnceDiagnosticsSnapshot() const;
+  void LogPlayOnceDiagnostics(const std::string& reason = "manual");
 
   void HandleSongTimer(bool on = true);
   float GetFrameTimingAdjustment(float fDeltaTime);
