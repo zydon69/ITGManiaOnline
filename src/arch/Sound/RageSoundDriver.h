@@ -218,6 +218,25 @@ class RageSoundDriver : public RageDriver {
   RageThread m_DecodeThread;
 
   int GetDataForSound(Sound& s);
+  struct RefillTrace {
+    std::string path;
+    unsigned readableBefore = 0;
+    unsigned readableAfter = 0;
+    unsigned writableBefore = 0;
+    unsigned writableAfter = 0;
+    unsigned target = 0;
+    uint64_t elapsedUsec = 0;
+    int writes = 0;
+    int wouldBlocks = 0;
+    int terminalRet = 0;
+    int state = 0;
+    bool targetReached = false;
+    bool shouldLog = false;
+  };
+  bool RefillSoundBufferToTarget(
+      Sound& s, unsigned readableTargetBlocks, const char* reason,
+      int maxWouldBlockRetries, int retrySleepUsec,
+      RefillTrace* trace = nullptr);
 };
 
 // Can't use Create##name because many of these have -sw suffixes.

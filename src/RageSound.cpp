@@ -21,7 +21,6 @@
 
 #include "RageSound.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <string>
 
@@ -69,6 +68,7 @@ RageSound::RageSound()
       m_iStoppedSourceFrame(0),
       m_bPlaying(false),
       m_bDeleteWhenFinished(false),
+      m_bPreferStrongPrebuffer(false),
       m_sError("") {
   ASSERT(SOUNDMAN != nullptr);
 }
@@ -76,7 +76,10 @@ RageSound::RageSound()
 RageSound::~RageSound() { Unload(); }
 
 RageSound::RageSound(const RageSound& cpy)
-    : RageSoundBase(cpy), m_Mutex("RageSound"), m_pSource(nullptr) {
+    : RageSoundBase(cpy),
+      m_Mutex("RageSound"),
+      m_pSource(nullptr),
+      m_bPlaying(false) {
   ASSERT(SOUNDMAN != nullptr);
 
   *this = cpy;
@@ -92,8 +95,9 @@ RageSound& RageSound::operator=(const RageSound& cpy) {
   m_Param = cpy.m_Param;
   m_iStreamFrame = cpy.m_iStreamFrame;
   m_iStoppedSourceFrame = cpy.m_iStoppedSourceFrame;
-  m_bPlaying = false;
+  m_bPlaying.store(false, std::memory_order_release);
   m_bDeleteWhenFinished = false;
+  m_bPreferStrongPrebuffer = cpy.m_bPreferStrongPrebuffer;
 
   if (m_pSource != nullptr) {
     delete m_pSource;
@@ -122,6 +126,7 @@ void RageSound::Unload() {
   m_pSource = nullptr;
 
   m_sFilePath = "";
+  m_bPreferStrongPrebuffer = false;
 }
 
 /* The sound will self-delete itself when it stops playing. If the sound is not
@@ -130,7 +135,7 @@ void RageSound::Unload() {
 void RageSound::DeleteSelfWhenFinishedPlaying() {
   m_Mutex.Lock();
 
-  if (!m_bPlaying) {
+  if (!IsPlaying()) {
     m_Mutex.Unlock();
     delete this;
     return;
@@ -173,6 +178,7 @@ bool RageSound::Load(
     static const RageSoundLoadParams Defaults;
     pParams = &Defaults;
   }
+  m_sError = "";
 
   /* If this sound is already preloaded and held by SOUNDMAN, just make a copy
    * of that.  Since RageSoundReader_Preload is refcounted, this is cheap. */
@@ -180,10 +186,13 @@ bool RageSound::Load(
   bool bNeedBuffer = true;
   if (pSound == nullptr) {
     std::string error;
-    bool bPrebuffer;
+    bool bPrebuffer = false;
+    bool bLoaded = true;
     pSound = RageSoundReader_FileReader::OpenFile(
         sSoundFilePath, error, &bPrebuffer);
     if (pSound == nullptr) {
+      bLoaded = false;
+      m_sError = error;
       LOG->Warn(
           "RageSound::Load: error opening sound \"%s\": %s",
           sSoundFilePath.c_str(), error.c_str());
@@ -193,24 +202,33 @@ bool RageSound::Load(
 
     /* If the sound is prebuffered into memory, we don't need to buffer reads.
      */
-    if (bPrebuffer) {
+    if (bLoaded && bPrebuffer) {
       bNeedBuffer = false;
     }
   } else {
     /* The sound we were given from SOUNDMAN is already preloaded. */
     bPrecache = false;
     bNeedBuffer = false;
+    m_sError = "";
   }
 
   LoadSoundReader(pSound);
 
   /* Try to precache.  Do this after calling LoadSoundReader() to put the
    * sound in this->m_pSource, so we preload after resampling. */
-  if (bPrecache) {
+  if (bPrecache && m_sError.empty()) {
     if (RageSoundReader_Preload::PreloadSound(m_pSource)) {
       /* We've preloaded the sound.  Pass it to SOUNDMAN, for reuse. */
       SOUNDMAN->AddLoadedSound(
           sSoundFilePath, (RageSoundReader_Preload*)m_pSource);
+    } else {
+      const std::string preloadError = m_pSource->GetError();
+      if (!preloadError.empty()) {
+        m_sError = preloadError;
+        LOG->Warn(
+            "RageSound::Load: error preloading sound \"%s\": %s",
+            sSoundFilePath.c_str(), m_sError.c_str());
+      }
     }
     bNeedBuffer = false;
   }
@@ -235,7 +253,7 @@ bool RageSound::Load(
 
   m_Mutex.SetName(ssprintf("RageSound (%s)", Basename(sSoundFilePath).c_str()));
 
-  return true;
+  return m_sError.empty();
 }
 
 void RageSound::LoadSoundReader(RageSoundReader* pSound) {
@@ -274,7 +292,7 @@ int RageSound::GetDataToPlay(
    * the main thread. */
   //	LockMut(m_Mutex);
 
-  ASSERT_M(m_bPlaying, ssprintf("%p", static_cast<void*>(this)));
+  ASSERT_M(IsPlaying(), ssprintf("%p", static_cast<void*>(this)));
   ASSERT(m_pSource != nullptr);
 
   iFramesStored = 0;
@@ -334,7 +352,7 @@ void RageSound::CommitPlayingPosition(
 
 /* Start playing from the current position. */
 void RageSound::StartPlaying() {
-  ASSERT(!m_bPlaying);
+  ASSERT(!IsPlaying());
 
   // Move to the start position.
   SetPositionFrames(
@@ -354,7 +372,7 @@ void RageSound::StartPlaying() {
   //	LOG->Trace("set playing true for %p (StartPlaying) (%s)", this,
   // this->GetLoadedFilePath().c_str());
 
-  m_bPlaying = true;
+  m_bPlaying.store(true, std::memory_order_release);
 
   /* Save the attract volume, so changes don't affect previously played
    * sounds. */
@@ -380,7 +398,7 @@ void RageSound::StopPlaying() {
 
 /* This is called by sound drivers when we're done playing. */
 void RageSound::SoundIsFinishedPlaying() {
-  if (!m_bPlaying) {
+  if (!IsPlaying()) {
     return;
   }
 
@@ -411,7 +429,7 @@ void RageSound::SoundIsFinishedPlaying() {
             GetSourceFrameFromHardwareFrame(iCurrentHardwareFrame));
       }
 
-      m_bPlaying = false;
+      m_bPlaying.store(false, std::memory_order_release);
       m_HardwareToStreamMap.Clear();
       m_StreamToSourceMap.Clear();
     }
@@ -459,6 +477,15 @@ void RageSound::PlayCopy(bool is_action, const RageSoundParams* pParams) const {
 }
 
 void RageSound::Stop() { StopPlaying(); }
+
+bool RageSound::IsPlayingThreadSafe() const {
+  return IsPlaying();
+}
+
+bool RageSound::PrefersStrongPrebuffer() const {
+  LockMut(m_Mutex);
+  return m_bPreferStrongPrebuffer;
+}
 
 bool RageSound::Pause(bool bPause) {
   if (m_pSource == nullptr) {
@@ -563,6 +590,11 @@ RageTimer RageSound::GetStartTime() const { return m_Param.m_StartTime; }
 void RageSound::SetParams(const RageSoundParams& p) {
   m_Param = p;
   ApplyParams();
+}
+
+void RageSound::SetPrefersStrongPrebuffer(bool prefer) {
+  LockMut(m_Mutex);
+  m_bPreferStrongPrebuffer = prefer;
 }
 
 void RageSound::ApplyParams() {

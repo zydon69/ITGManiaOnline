@@ -8,10 +8,9 @@ style  = style  or (GAMESTATE:GetCurrentStyle() and GAMESTATE:GetCurrentStyle():
 
 local zoom = SL_WideScale(0.435, 0.525)
 local game = GAMESTATE:GetCurrentGame():GetName()
-
 local init_panel = function(self, col, row, z)
 	self:zoom(z)
-	self:x(z * self:GetWidth()  * (col-1))
+	self:x(z * self:GetWidth() * (col-1))
 	self:y(z * self:GetHeight() * (row-2))
 	return self
 end
@@ -52,7 +51,9 @@ for row=0,2 do
 		end
 
 		panel_af[#panel_af+1] = LoadActor("rounded-square.png")..{
-			InitCommand=function(self) init_panel(self, col, row, zoom) end,
+			InitCommand=function(self)
+				init_panel(self, col, row, zoom)
+			end,
 			ReassessCommand=function(self, layout)
 				if layout[panel_index] then
 					self:diffuse(color_used)

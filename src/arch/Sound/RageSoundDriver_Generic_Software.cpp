@@ -1,7 +1,9 @@
 #include <algorithm>
+#include <atomic>
 #include <cinttypes>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 
 #include "RageLog.h"
 #include "RageSound.h"
@@ -34,6 +36,35 @@ static int frames_to_buffer;
 static int chunksize() { return 512; }
 
 static int underruns = 0, logged_underruns = 0;
+static std::atomic<bool> g_bUnderrunTraceEnabled{false};
+static std::once_flag g_UnderrunTraceInitOnce;
+static constexpr unsigned kDecodeLowWatermarkBlocks = 2;
+static constexpr unsigned kDecodeRefillTargetBlocks = 16;
+static constexpr unsigned kDecodeStartPrebufferTargetBlocks = 16;
+static constexpr unsigned kDecodeShortSoundPrebufferTargetBlocks = 4;
+static constexpr int kDecodeEmergencySleepUsec = 125;
+static constexpr int kDecodeLowWatermarkSleepUsec = 250;
+static constexpr uint64_t kDecodeEmergencyModeMaxUsec = 200000;
+static constexpr int kDecodeEmergencyRecoverySleepUsec = 500;
+static constexpr uint64_t kDecodeSchedulerStatsLogPeriodUsec = 3000000;
+static constexpr int kDecodeThreadWouldBlockRetries = 0;
+static constexpr int kStartPrebufferWouldBlockRetries = 80;
+static constexpr int kStartPrebufferRetrySleepUsec = 1000;
+
+static void EnsureUnderrunTraceInitialized() {
+  std::call_once(g_UnderrunTraceInitOnce, []() {
+    const bool enabled = GetCommandlineArgument("audio-underrun-trace");
+    g_bUnderrunTraceEnabled.store(enabled, std::memory_order_release);
+    if (enabled) {
+      LOG->Info("Audio underrun forensic tracing enabled.");
+    }
+  });
+}
+
+static bool IsUnderrunTraceEnabled() {
+  EnsureUnderrunTraceInitialized();
+  return g_bUnderrunTraceEnabled.load(std::memory_order_acquire);
+}
 
 RageSoundDriver::Sound::Sound() {
   m_pSound = nullptr;
@@ -68,6 +99,7 @@ RageSoundMixBuffer& RageSoundDriver::MixIntoBuffer(
       "RageSoundDriver::StartDecodeThread() was never called");
 
   static RageSoundMixBuffer mix;
+  const bool traceEnabled = IsUnderrunTraceEnabled();
 
   for (unsigned i = 0; i < ARRAYLEN(m_Sounds); ++i) {
     /* s.m_pSound can not safely be accessed from here. */
@@ -168,6 +200,23 @@ RageSoundMixBuffer& RageSoundDriver::MixIntoBuffer(
     /* If we don't have enough to fill the buffer, we've underrun. */
     if (iGotFrames < iFrames && s.m_State == Sound::PLAYING) {
       ++underruns;
+      if (traceEnabled) {
+        static uint64_t sLastUnderrunTraceUsec = 0;
+        const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+        if (sLastUnderrunTraceUsec == 0 ||
+            nowUsec - sLastUnderrunTraceUsec >= 250000) {
+          sLastUnderrunTraceUsec = nowUsec;
+          const std::string loadedPath =
+              s.m_pSound ? s.m_pSound->GetLoadedFilePath() : "<null>";
+          LOG->Warn(
+              "UNDERRUN_TRACE: sound='%s' state=%d got=%d need=%d missing=%d "
+              "frames_left=%d readable_blocks=%u writable_blocks=%u "
+              "mix_frame=%" PRId64 " hw_frame=%" PRId64,
+              loadedPath.c_str(), s.m_State, iGotFrames, iFrames,
+              iFrames - iGotFrames, iFramesLeft, s.m_Buffer.num_readable(),
+              s.m_Buffer.num_writable(), iFrameNumber, iCurrentFrame);
+        }
+      }
     }
   }
 
@@ -198,45 +247,213 @@ void RageSoundDriver::MixDeinterlaced(
 
 void RageSoundDriver::DecodeThread() {
   SetupDecodingThread();
+  const bool traceEnabled = IsUnderrunTraceEnabled();
+  int idle_decode_spin_count = 0;
+  uint64_t critical_starvation_since_usec = 0;
+  bool was_in_critical_starvation = false;
+  uint64_t emergency_entries = 0;
+  uint64_t emergency_capped_recoveries = 0;
+  uint64_t low_watermark_cycles = 0;
+  uint64_t decode_stall_cycles = 0;
+  uint64_t scheduler_loops = 0;
+  uint64_t last_scheduler_stats_log_usec = 0;
 
   while (!m_bShutdownDecodeThread) {
-    /* Fill each playing sound, round-robin. */
+    ++scheduler_loops;
+    bool has_active_sound = false;
+    bool wrote_any_data = false;
+    bool still_needs_decode = false;
+    bool has_critical_starvation = false;
+    bool has_low_watermark = false;
+    RefillTrace decodeRefillTrace;
+    bool hasDecodeRefillTrace = false;
+
     {
-      int iSampleRate = GetSampleRate();
-      ASSERT_M(iSampleRate > 0, ssprintf("%i", iSampleRate));
-      /* Wake up twice per chunk duration to reduce startup/transition underruns
-       * on systems with bursty thread scheduling (notably macOS desktop). */
-      int iUsecs = (1000000 * chunksize() / iSampleRate) / 2;
-      iUsecs = std::max(iUsecs, 1000);
-      usleep(iUsecs);
+      LockMut(m_Mutex);
+      //		LOG->Trace("begin mix");
+
+      for (unsigned i = 0; i < ARRAYLEN(m_Sounds); ++i) {
+        if (m_Sounds[i].m_State != Sound::PLAYING &&
+            m_Sounds[i].m_State != Sound::BUFFERING &&
+            m_Sounds[i].m_State != Sound::STOPPING) {
+          continue;
+        }
+
+        has_active_sound = true;
+        if (m_Sounds[i].m_State != Sound::PLAYING) {
+          continue;
+        }
+        Sound* pSound = &m_Sounds[i];
+        const unsigned readableBeforeDecode = pSound->m_Buffer.num_readable();
+        const unsigned writableBeforeDecode = pSound->m_Buffer.num_writable();
+
+        if (!pSound->m_bPaused) {
+          if (readableBeforeDecode == 0 && writableBeforeDecode > 0) {
+            has_critical_starvation = true;
+          } else if (readableBeforeDecode <= kDecodeLowWatermarkBlocks &&
+                     writableBeforeDecode > 0) {
+            has_low_watermark = true;
+          }
+        }
+
+        CHECKPOINT_M("Processing the sound while buffers are available.");
+        RefillTrace refillTrace;
+        const bool refilled = RefillSoundBufferToTarget(
+            *pSound, kDecodeRefillTargetBlocks, "decode_thread",
+            kDecodeThreadWouldBlockRetries, 0,
+            traceEnabled ? &refillTrace : nullptr);
+        wrote_any_data = refilled || wrote_any_data;
+        if (traceEnabled && refillTrace.shouldLog && !hasDecodeRefillTrace) {
+          decodeRefillTrace = refillTrace;
+          hasDecodeRefillTrace = true;
+        }
+
+        const unsigned readableAfterDecode = pSound->m_Buffer.num_readable();
+        const unsigned writableAfterDecode = pSound->m_Buffer.num_writable();
+        if (pSound->m_State == Sound::PLAYING &&
+            writableAfterDecode > 0 &&
+            readableAfterDecode < kDecodeRefillTargetBlocks) {
+          still_needs_decode = true;
+        }
+
+        if (pSound->m_State == Sound::PLAYING && !pSound->m_bPaused) {
+          if (readableAfterDecode == 0 && writableAfterDecode > 0) {
+            has_critical_starvation = true;
+          } else if (readableAfterDecode <= kDecodeLowWatermarkBlocks &&
+                     writableAfterDecode > 0) {
+            has_low_watermark = true;
+          }
+        }
+      }
+      //		LOG->Trace("end mix");
     }
 
-    LockMut(m_Mutex);
-    //		LOG->Trace("begin mix");
+    if (hasDecodeRefillTrace) {
+      LOG->Info(
+          "UNDERRUN_TRACE: refill reason=decode_thread sound='%s' "
+          "readable=%u->%u writable=%u->%u target=%u writes=%d "
+          "would_block=%d target_reached=%d terminal_ret=%d elapsed_us=%" PRIu64
+          " state=%d",
+          decodeRefillTrace.path.c_str(), decodeRefillTrace.readableBefore,
+          decodeRefillTrace.readableAfter, decodeRefillTrace.writableBefore,
+          decodeRefillTrace.writableAfter, decodeRefillTrace.target,
+          decodeRefillTrace.writes, decodeRefillTrace.wouldBlocks,
+          decodeRefillTrace.targetReached ? 1 : 0, decodeRefillTrace.terminalRet,
+          decodeRefillTrace.elapsedUsec, decodeRefillTrace.state);
+    }
 
-    for (unsigned i = 0; i < ARRAYLEN(m_Sounds); ++i) {
-      if (m_Sounds[i].m_State != Sound::PLAYING) {
-        continue;
+    int iSampleRate = GetSampleRate();
+    ASSERT_M(iSampleRate > 0, ssprintf("%i", iSampleRate));
+
+    // Adaptive sleep strategy:
+    // - Aggressive wakeups when buffers still need decode (underrun prevention).
+    // - Moderate wakeups when actively playing and writing.
+    // - Relaxed wakeups when idle.
+    int iUsecs = (1000000 * chunksize() / iSampleRate) / 2;
+    if (!has_active_sound) {
+      idle_decode_spin_count = 0;
+      critical_starvation_since_usec = 0;
+      iUsecs = std::max(iUsecs, 2000);
+    } else if (has_critical_starvation) {
+      // A PLAYING stream ran out of readable blocks. Poll aggressively until
+      // we refill, otherwise the mixer can consume silence before decode wakes.
+      const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+      if (critical_starvation_since_usec == 0) {
+        critical_starvation_since_usec = nowUsec;
+        ++emergency_entries;
+        if (traceEnabled) {
+          LOG->Warn(
+              "UNDERRUN_TRACE: decode_emergency_enter sample_rate=%d",
+              iSampleRate);
+        }
+      }
+      idle_decode_spin_count = 0;
+      if (nowUsec - critical_starvation_since_usec <=
+          kDecodeEmergencyModeMaxUsec) {
+        iUsecs = kDecodeEmergencySleepUsec;
+      } else {
+        ++emergency_capped_recoveries;
+        if (traceEnabled) {
+          static uint64_t sLastEmergencyCapTraceUsec = 0;
+          if (sLastEmergencyCapTraceUsec == 0 ||
+              nowUsec - sLastEmergencyCapTraceUsec >= 500000) {
+            sLastEmergencyCapTraceUsec = nowUsec;
+            LOG->Warn(
+                "UNDERRUN_TRACE: decode_emergency_capped "
+                "duration_us=%" PRIu64 " recovery_sleep_us=%d",
+                nowUsec - critical_starvation_since_usec,
+                kDecodeEmergencyRecoverySleepUsec);
+          }
+        }
+        iUsecs = kDecodeEmergencyRecoverySleepUsec;
+      }
+      was_in_critical_starvation = true;
+    } else if (has_low_watermark) {
+      // Keep a small but safe lead in decode buffers to prevent starvation.
+      ++low_watermark_cycles;
+      critical_starvation_since_usec = 0;
+      idle_decode_spin_count = std::max(idle_decode_spin_count - 1, 0);
+      iUsecs = std::min(iUsecs, kDecodeLowWatermarkSleepUsec);
+    } else if (still_needs_decode) {
+      critical_starvation_since_usec = 0;
+      if (wrote_any_data) {
+        idle_decode_spin_count = std::max(idle_decode_spin_count - 1, 0);
+        iUsecs = 250;
+      } else {
+        // If decode can't progress right now, back off progressively to avoid
+        // a hot spin loop while still retrying quickly.
+        ++decode_stall_cycles;
+        idle_decode_spin_count = std::min(idle_decode_spin_count + 1, 8);
+        const int backoffUsecs = 250 + idle_decode_spin_count * 250;
+        iUsecs = std::max(iUsecs / 4, backoffUsecs);
+        if (traceEnabled) {
+          static uint64_t sLastDecodeStallTraceUsec = 0;
+          const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+          if (sLastDecodeStallTraceUsec == 0 ||
+              nowUsec - sLastDecodeStallTraceUsec >= 500000) {
+            sLastDecodeStallTraceUsec = nowUsec;
+            LOG->Warn(
+                "UNDERRUN_TRACE: decode_stall active=1 needs_decode=1 "
+                "wrote_any=0 spin=%d sleep_us=%d sample_rate=%d",
+                idle_decode_spin_count, iUsecs, iSampleRate);
+          }
+        }
+      }
+    } else if (wrote_any_data) {
+      critical_starvation_since_usec = 0;
+      idle_decode_spin_count = std::max(idle_decode_spin_count - 1, 0);
+      iUsecs = std::max(iUsecs / 3, 500);
+    } else {
+      critical_starvation_since_usec = 0;
+      idle_decode_spin_count = std::min(idle_decode_spin_count + 1, 8);
+      iUsecs = std::max(iUsecs / 2, 1000);
+    }
+
+    {
+      const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+      if (was_in_critical_starvation && !has_critical_starvation) {
+        was_in_critical_starvation = false;
+        if (traceEnabled) {
+          LOG->Warn("UNDERRUN_TRACE: decode_emergency_exit");
+        }
       }
 
-      Sound* pSound = &m_Sounds[i];
-
-      CHECKPOINT_M("Processing the sound while buffers are available.");
-      while (pSound->m_Buffer.num_writable()) {
-        int iWrote = GetDataForSound(*pSound);
-        if (iWrote == RageSoundReader::WOULD_BLOCK) {
-          break;
-        }
-        if (iWrote < 0) {
-          /* This sound is finishing. */
-          pSound->m_State = Sound::STOPPING;
-          break;
-          //					LOG->Trace("mixer: (#%i) eof
-          //(%p)", i, pSound->m_pSound );
-        }
+      if (traceEnabled &&
+          (last_scheduler_stats_log_usec == 0 ||
+           nowUsec - last_scheduler_stats_log_usec >=
+               kDecodeSchedulerStatsLogPeriodUsec)) {
+        last_scheduler_stats_log_usec = nowUsec;
+        LOG->Info(
+            "UNDERRUN_TRACE: decode_scheduler_stats loops=%" PRIu64
+            " emergency_entries=%" PRIu64 " emergency_capped=%" PRIu64
+            " low_watermark_cycles=%" PRIu64 " decode_stall_cycles=%" PRIu64
+            " active=%d needs_decode=%d wrote_any=%d sleep_us=%d",
+            scheduler_loops, emergency_entries, emergency_capped_recoveries,
+            low_watermark_cycles, decode_stall_cycles, has_active_sound ? 1 : 0,
+            still_needs_decode ? 1 : 0, wrote_any_data ? 1 : 0, iUsecs);
       }
     }
-    //		LOG->Trace("end mix");
+    usleep(iUsecs);
   }
 }
 
@@ -263,6 +480,91 @@ int RageSoundDriver::GetDataForSound(Sound& s) {
   //		(int) pBlock->m_FramesInBuffer, s.m_State, s.m_pSound );
 
   return iRet;
+}
+
+bool RageSoundDriver::RefillSoundBufferToTarget(
+    Sound& s, unsigned readableTargetBlocks, const char* reason,
+    int maxWouldBlockRetries, int retrySleepUsec, RefillTrace* trace) {
+  const bool traceEnabled = IsUnderrunTraceEnabled();
+  const unsigned readableBefore = s.m_Buffer.num_readable();
+  const unsigned writableBefore = s.m_Buffer.num_writable();
+  const unsigned maxReadableBlocks =
+      s.m_Buffer.capacity() > 0 ? s.m_Buffer.capacity() - 1 : 0;
+  const unsigned target =
+      std::min(readableTargetBlocks, maxReadableBlocks);
+  const uint64_t startUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  int writes = 0;
+  int wouldBlocks = 0;
+  int terminalRet = 0;
+  bool wroteAnyData = false;
+
+  while ((s.m_State == Sound::PLAYING || s.m_State == Sound::BUFFERING) &&
+         s.m_Buffer.num_readable() < target && s.m_Buffer.num_writable() > 0) {
+    const int iWrote = GetDataForSound(s);
+    if (iWrote == RageSoundReader::WOULD_BLOCK) {
+      ++wouldBlocks;
+      terminalRet = iWrote;
+      if (maxWouldBlockRetries <= 0) {
+        break;
+      }
+      --maxWouldBlockRetries;
+      if (retrySleepUsec > 0) {
+        usleep(retrySleepUsec);
+      }
+      continue;
+    }
+
+    if (iWrote < 0) {
+      terminalRet = iWrote;
+      s.m_State = Sound::STOPPING;
+      break;
+    }
+
+    if (iWrote > 0) {
+      ++writes;
+      wroteAnyData = true;
+      terminalRet = iWrote;
+    }
+  }
+
+  if (trace != nullptr || traceEnabled) {
+    const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+    const unsigned readableAfter = s.m_Buffer.num_readable();
+    const unsigned writableAfter = s.m_Buffer.num_writable();
+    const bool targetReached = readableAfter >= target;
+    const bool shouldLog = wouldBlocks > 0 || !targetReached ||
+                           readableBefore <= kDecodeLowWatermarkBlocks;
+
+    const std::string loadedPath =
+        s.m_pSound ? s.m_pSound->GetLoadedFilePath() : "<null>";
+    if (trace != nullptr) {
+      trace->path = loadedPath;
+      trace->readableBefore = readableBefore;
+      trace->readableAfter = readableAfter;
+      trace->writableBefore = writableBefore;
+      trace->writableAfter = writableAfter;
+      trace->target = target;
+      trace->elapsedUsec = nowUsec - startUsec;
+      trace->writes = writes;
+      trace->wouldBlocks = wouldBlocks;
+      trace->terminalRet = terminalRet;
+      trace->state = s.m_State;
+      trace->targetReached = targetReached;
+      trace->shouldLog = traceEnabled && shouldLog;
+    }
+
+    if (traceEnabled && strcmp(reason, "decode_thread") != 0 && shouldLog) {
+      LOG->Info(
+          "UNDERRUN_TRACE: refill reason=%s sound='%s' readable=%u->%u "
+          "writable=%u->%u target=%u writes=%d would_block=%d "
+          "target_reached=%d terminal_ret=%d elapsed_us=%" PRIu64 " state=%d",
+          reason, loadedPath.c_str(), readableBefore, readableAfter,
+          writableBefore, writableAfter, target, writes, wouldBlocks,
+          targetReached ? 1 : 0, terminalRet, nowUsec - startUsec, s.m_State);
+    }
+  }
+
+  return wroteAnyData;
 }
 
 void RageSoundDriver::Update() {
@@ -342,6 +644,7 @@ void RageSoundDriver::Update() {
 }
 
 void RageSoundDriver::StartMixing(RageSoundBase* pSound) {
+  const bool traceEnabled = IsUnderrunTraceEnabled();
   /* Lock available m_Sounds[], and reserve a slot. */
   m_SoundListMutex.Lock();
 
@@ -353,6 +656,9 @@ void RageSoundDriver::StartMixing(RageSoundBase* pSound) {
   }
   if (i == ARRAYLEN(m_Sounds)) {
     m_SoundListMutex.Unlock();
+    if (traceEnabled) {
+      LOG->Warn("UNDERRUN_TRACE: start_mixing_no_available_slot");
+    }
     return;
   }
 
@@ -375,17 +681,32 @@ void RageSoundDriver::StartMixing(RageSoundBase* pSound) {
   //	LOG->Trace("StartMixing(%s) (%p)",
   // s.m_pSound->GetLoadedFilePath().c_str(), s.m_pSound );
 
-  /* Prebuffer some frames before changing the sound to PLAYING. */
-  while (s.m_Buffer.num_writable()) {
-    //		LOG->Trace("StartMixing: (#%i) buffering %i (%i writable) (%p)",
-    // i, (int) frames_to_buffer, s.buffer.num_writable(), s.m_pSound );
-    int iWrote = GetDataForSound(s);
-    if (iWrote < 0) {
-      break;
-    }
+  const std::string loadedPath = s.m_pSound->GetLoadedFilePath();
+  const bool useStrongPrebuffer = s.m_pSound->PrefersStrongPrebuffer();
+  const unsigned prebufferTarget = useStrongPrebuffer
+                                       ? kDecodeStartPrebufferTargetBlocks
+                                       : kDecodeShortSoundPrebufferTargetBlocks;
+  const int wouldBlockRetries =
+      useStrongPrebuffer ? kStartPrebufferWouldBlockRetries : 0;
+  const int retrySleepUsec =
+      useStrongPrebuffer ? kStartPrebufferRetrySleepUsec : 0;
+
+  RefillSoundBufferToTarget(
+      s, prebufferTarget, "start_mixing", wouldBlockRetries, retrySleepUsec);
+
+  if (s.m_State == Sound::BUFFERING) {
+    s.m_State = Sound::PLAYING;
   }
 
-  s.m_State = Sound::PLAYING;
+  if (traceEnabled) {
+    LOG->Info(
+        "UNDERRUN_TRACE: start_mixing_ready sound='%s' state=%d "
+        "readable_blocks=%u writable_blocks=%u prebuffer_target=%u "
+        "strong_prebuffer=%d retries=%d retry_sleep_us=%d",
+        loadedPath.c_str(), s.m_State, s.m_Buffer.num_readable(),
+        s.m_Buffer.num_writable(), prebufferTarget, useStrongPrebuffer ? 1 : 0,
+        wouldBlockRetries, retrySleepUsec);
+  }
 
   //	LOG->Trace("StartMixing: (#%i) finished prebuffering(%s) (%p)", i,
   // s.m_pSound->GetLoadedFilePath().c_str(), s.m_pSound );
