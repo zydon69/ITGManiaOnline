@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "AnnouncerManager.h"
@@ -96,6 +97,10 @@ std::vector<std::string> g_SoundsToPlayOnceFromDir;
 std::vector<std::string> g_SoundsToPlayOnceFromAnnouncer;
 // This should get updated to unordered_map when once C++11 is supported
 std::map<std::string, std::vector<int>> g_DirSoundOrder;
+std::map<std::string, std::vector<RageSound*>> g_PlayOnceSoundPool;
+std::map<std::string, size_t> g_PlayOnceSoundRoundRobin;
+
+constexpr int kPlayOncePoolVoices = 4;
 
 struct MusicToPlay {
   std::string m_sFile, m_sTimingFile;
@@ -301,12 +306,42 @@ static void StartMusic(MusicToPlay& ToPlay) {
 }
 
 static void DoPlayOnce(std::string sPath) {
-  /* We want this to start quickly, so don't try to prebuffer it. */
-  RageSound* pSound = new RageSound;
-  pSound->Load(sPath, false);
+  if (sPath.empty()) {
+    return;
+  }
 
-  pSound->Play(false);
-  pSound->DeleteSelfWhenFinishedPlaying();
+  auto it = g_PlayOnceSoundPool.find(sPath);
+  if (it == g_PlayOnceSoundPool.end()) {
+    std::vector<RageSound*> sounds;
+    sounds.reserve(kPlayOncePoolVoices);
+    for (int i = 0; i < kPlayOncePoolVoices; ++i) {
+      RageSound* pSound = new RageSound;
+      pSound->Load(sPath, true);
+      sounds.push_back(pSound);
+    }
+    it = g_PlayOnceSoundPool.insert({sPath, std::move(sounds)}).first;
+    g_PlayOnceSoundRoundRobin[sPath] = 0;
+  }
+
+  std::vector<RageSound*>& pool = it->second;
+  RageSound* chosen = nullptr;
+  for (RageSound* candidate : pool) {
+    if (!candidate->IsPlaying()) {
+      chosen = candidate;
+      break;
+    }
+  }
+
+  if (chosen == nullptr) {
+    size_t& cursor = g_PlayOnceSoundRoundRobin[sPath];
+    if (cursor >= pool.size()) {
+      cursor = 0;
+    }
+    chosen = pool[cursor];
+    cursor = (cursor + 1) % pool.size();
+  }
+
+  chosen->Play(false);
 }
 
 static void DoPlayOnceFromDir(std::string sPath) {
@@ -485,6 +520,16 @@ GameSoundManager::~GameSoundManager() {
   g_Mutex->Unlock();
   MusicThread.Wait();
   LOG->Trace("Music start thread shut down.");
+
+  for (auto& pathAndPool : g_PlayOnceSoundPool) {
+    for (RageSound* sound : pathAndPool.second) {
+      delete sound;
+    }
+    pathAndPool.second.clear();
+  }
+  g_PlayOnceSoundPool.clear();
+  g_PlayOnceSoundRoundRobin.clear();
+  g_DirSoundOrder.clear();
 
   RageUtil::SafeDelete(g_Playing);
   RageUtil::SafeDelete(g_Mutex);
