@@ -179,7 +179,7 @@ std::string RageSoundDriver_AU::Init() {
 
   // Keep a larger decode buffer on macOS to reduce intermittent underruns
   // observed during heavy screen transitions.
-  int decodeBufferFrames = 24576;
+  int decodeBufferFrames = 32768;
   if (PREFSMAN->m_iSoundWriteAhead > 0) {
     decodeBufferFrames = std::max(decodeBufferFrames, PREFSMAN->m_iSoundWriteAhead.Get());
   }
@@ -214,7 +214,7 @@ int64_t RageSoundDriver_AU::GetPosition() const {
 
 void RageSoundDriver_AU::SetupDecodingThread() {
   /* Increase the scheduling precedence of the decoder thread. */
-  const std::string sError = SetThreadPrecedence(0.9f);
+  const std::string sError = SetThreadPrecedence(0.95f);
   if (!sError.empty()) {
     LOG->Warn("Could not set precedence of the decoding thread: %s", sError.c_str());
   }

@@ -312,7 +312,20 @@ void RageSoundDriver::Update() {
   if (RageTimer::GetTimeSinceStartMicroseconds() >= fNextUsecs) {
     /* Lockless: only Mix() can write to underruns. */
     int current_underruns = underruns;
-    if (current_underruns > logged_underruns) {
+    bool has_active_playback = false;
+    for (unsigned i = 0; i < ARRAYLEN(m_Sounds); ++i) {
+      auto state = m_Sounds[i].m_State;
+      if (state == Sound::PLAYING || state == Sound::STOPPING ||
+          state == Sound::BUFFERING) {
+        has_active_playback = true;
+        break;
+      }
+    }
+
+    if (!has_active_playback) {
+      // Ignore startup/shutdown underruns when nothing is actively playing.
+      logged_underruns = current_underruns;
+    } else if (current_underruns > logged_underruns) {
       LOG->MapLog(
           "GenericMixingUnderruns", "Mixing underruns: %i",
           current_underruns - logged_underruns);

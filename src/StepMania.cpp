@@ -28,6 +28,7 @@
 #include "RageDisplay.h"
 #include "RageInput.h"
 #include "RageLog.h"
+#include "RageSound.h"
 #include "RageSoundManager.h"
 #include "RageSurface.h"
 #include "RageSurface_Load.h"
@@ -907,16 +908,49 @@ int sm_main(int argc, char* argv[]) {
     delete pSurface;
   }
 
-  if (PREFSMAN->m_iSoundWriteAhead) {
-    LOG->Info(
-        "Sound writeahead has been overridden to %i",
-        PREFSMAN->m_iSoundWriteAhead.Get());
-  }
+  // Enforce conservative audio runtime values even if metrics/preferences are
+  // misconfigured on disk.
+  constexpr int kForcedSoundWriteAheadFrames = 32768;
+  constexpr int kForcedPreferredSampleRate = 48000;
+  PREFSMAN->m_iSoundWriteAhead.Set(kForcedSoundWriteAheadFrames);
+  PREFSMAN->m_iSoundPreferredSampleRate.Set(kForcedPreferredSampleRate);
+  LOG->Info(
+      "Forcing audio runtime config: SoundWriteAhead=%d, "
+      "SoundPreferredSampleRate=%d",
+      PREFSMAN->m_iSoundWriteAhead.Get(),
+      PREFSMAN->m_iSoundPreferredSampleRate.Get());
 
   SOUNDMAN = new RageSoundManager;
   SOUNDMAN->Init();
   SOUNDMAN->SetMixVolume();
   SOUND = new GameSoundManager;
+
+  // Pre-warm frequently used UI transition sounds to reduce first-hit
+  // decode spikes and startup/transition underruns.
+  {
+    static const char* kWarmSounds[][2] = {
+        {"Common", "start"},
+        {"Common", "invalid"},
+        {"ScreenSelectMaster", "change"},
+        {"", "MenuTimer tick"},
+        {"MusicWheel", "change"},
+        {"MusicWheel", "sort"},
+        {"MusicWheel", "expand"},
+        {"MusicWheel", "locked"},
+        {"", "_change value"},
+        {"", "_next row"},
+        {"", "_prev row"},
+        {"", "_harder"},
+        {"", "_easier"},
+        {"", "fold"},
+        {"", "_silence"},
+    };
+    for (const auto& sound : kWarmSounds) {
+      RageSound warm;
+      warm.Load(THEME->GetPathS(sound[0], sound[1]), true);
+    }
+  }
+
   BOOKKEEPER = new Bookkeeper;
   LIGHTSMAN = new LightsManager;
   INPUTFILTER = new InputFilter;

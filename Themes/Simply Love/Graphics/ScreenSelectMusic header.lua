@@ -112,32 +112,46 @@ af[#af+1] = LoadFont("Common Header")..{
 	end
 }
 
--- P1 pad
-af[#af+1] = LoadActor( THEME:GetPathB("ScreenSelectStyle", "underlay/pad.lua"), {nil, nil, 1, nil} )..{
-	InitCommand=function(self)
-		self:x(_screen.w - (PREFSMAN:GetPreference("MenuTimer") and SL_WideScale(90, 105) or SL_WideScale(35, 41)))
-		self:y( SL_WideScale(22, 23.5) ):zoom(0.24)
-		self:playcommand("Set", {Player=PLAYER_1})
-	end,
-	PlayerJoinedMessageCommand=function(self, params)
-		if params.Player == PLAYER_1 then
-			self:playcommand("Set", {Player=PLAYER_1})
-		end
-	end
-}
+local function HeaderPlayerIndicator(player, x_pos)
+	return Def.ActorFrame{
+		InitCommand=function(self) self:x(x_pos):y(SL_WideScale(22, 23.5)) end,
+		PlayerJoinedMessageCommand=function(self, params)
+			if params.Player == player then self:playcommand("Refresh") end
+		end,
+		PlayerUnjoinedMessageCommand=function(self, params)
+			if params.Player == player then self:playcommand("Refresh") end
+		end,
+		RefreshCommand=function(self)
+			local joined = GAMESTATE:IsHumanPlayer(player)
+			local fill = self:GetChild("Fill")
+			if fill then
+				fill:diffuse(joined and color("#66ff99") or color("#505050"))
+			end
+		end,
+		OnCommand=function(self) self:playcommand("Refresh") end,
 
--- P2 pad
-af[#af+1] = LoadActor( THEME:GetPathB("ScreenSelectStyle", "underlay/pad.lua"), {nil, nil, 2, nil} )..{
-	InitCommand=function(self)
-		self:x(_screen.w - (PREFSMAN:GetPreference("MenuTimer") and SL_WideScale(70, 81) or SL_WideScale(15, 17)))
-		self:y( SL_WideScale(22, 23.5) ):zoom(0.24)
-		self:playcommand("Set", {Player=PLAYER_2})
-	end,
-	PlayerJoinedMessageCommand=function(self, params)
-		if params.Player == PLAYER_2 then
-			self:playcommand("Set", {Player=PLAYER_2})
-		end
-	end
-}
+		Def.Quad{
+			Name="Border",
+			InitCommand=function(self)
+				self:zoomto(12,12):diffuse(color("#1a1a1a")):diffusealpha(0.95)
+			end
+		},
+		Def.Quad{
+			Name="Fill",
+			InitCommand=function(self)
+				self:zoomto(8,8)
+			end
+		}
+	}
+end
+
+af[#af+1] = HeaderPlayerIndicator(
+	PLAYER_1,
+	_screen.w - (PREFSMAN:GetPreference("MenuTimer") and SL_WideScale(90, 105) or SL_WideScale(35, 41))
+)
+af[#af+1] = HeaderPlayerIndicator(
+	PLAYER_2,
+	_screen.w - (PREFSMAN:GetPreference("MenuTimer") and SL_WideScale(70, 81) or SL_WideScale(15, 17))
+)
 
 return af

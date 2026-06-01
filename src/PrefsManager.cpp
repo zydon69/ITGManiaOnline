@@ -304,7 +304,9 @@ PrefsManager::PrefsManager()
       m_sVideoRenderers(
           "VideoRenderers", ""),  // StepMania.cpp sets these on first run:
       m_bSmoothLines("SmoothLines", true),
-      m_iSoundWriteAhead("SoundWriteAhead", 0),
+      // Stability-first default for online/perf testing:
+      // large write-ahead greatly reduces mixing underruns at the cost of latency.
+      m_iSoundWriteAhead("SoundWriteAhead", 32768),
       m_iSoundDevice("SoundDevice", ""),
       m_iSoundPreferredSampleRate("SoundPreferredSampleRate", 0),
       m_sLightsStepsDifficulty("LightsStepsDifficulty", "hard,medium"),

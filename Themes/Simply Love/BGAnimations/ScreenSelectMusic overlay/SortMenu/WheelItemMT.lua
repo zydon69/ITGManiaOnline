@@ -1,6 +1,5 @@
 local sortmenu_dimensions = unpack(...)
 local row_height = 36
-local folder_icon_texture = THEME:GetPathB("ScreenSelectMusic overlay/SortMenu", "folder-solid.png")
 
 -- the metatable for an item in the sort_wheel
 return {
@@ -48,11 +47,10 @@ return {
 				end,
 
 				-- folder icon
-				Def.Sprite{
+				LoadActor("./folder-solid.png")..{
 					Name="folder icon",
 					InitCommand=function(subself)
 						self.folder_icon = subself
-						subself:Load(folder_icon_texture)
 						subself:visible(false):vertalign(top)
 						subself:zoom(0.4):xy(28, -16)
 					end,
