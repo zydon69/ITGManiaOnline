@@ -928,10 +928,53 @@ int sm_main(int argc, char* argv[]) {
       PREFSMAN->m_iSoundWriteAhead.Get(),
       PREFSMAN->m_iSoundPreferredSampleRate.Get());
 
+  std::string playOnceSmokeCountArg;
+  const bool runPlayOnceSmokeTest =
+      GetCommandlineArgument("playonce-smoke-test", &playOnceSmokeCountArg);
+  if (runPlayOnceSmokeTest) {
+    Preference<std::string>* soundDrivers =
+        Preference<std::string>::GetPreferenceByName("SoundDrivers");
+    if (soundDrivers != nullptr) {
+      soundDrivers->Set("Null");
+      LOG->Info("PlayOnce runtime smoke forcing SoundDrivers=Null");
+    } else {
+      LOG->Warn("PlayOnce runtime smoke could not force SoundDrivers=Null");
+    }
+  }
+
   SOUNDMAN = new RageSoundManager;
   SOUNDMAN->Init();
   SOUNDMAN->SetMixVolume();
   SOUND = new GameSoundManager;
+
+  const bool enablePlayOnceDebugTools =
+      GetCommandlineArgument("playonce-debug-tools") ||
+      GetCommandlineArgument("playonce-stress") || runPlayOnceSmokeTest;
+  SOUND->SetPlayOnceDebugToolsEnabled(enablePlayOnceDebugTools);
+
+  if (runPlayOnceSmokeTest) {
+    int smokeCount = StringToInt(playOnceSmokeCountArg);
+    if (smokeCount <= 0) {
+      smokeCount = 8;
+    }
+    const bool ok = SOUND->RunPlayOnceRuntimeSmokeTest(
+        THEME->GetPathS("Common", "start"), smokeCount);
+    RageUtil::SafeDelete(pLoadingWindow);
+    ShutdownGame();
+    return ok ? 0 : 2;
+  }
+
+  // Optional runtime stress test for PlayOnce pool diagnostics.
+  std::string playOnceStressCountArg;
+  if (GetCommandlineArgument("playonce-stress", &playOnceStressCountArg)) {
+    int stressCount = StringToInt(playOnceStressCountArg);
+    if (stressCount <= 0) {
+      stressCount = 1000;
+    }
+    SOUND->LogPlayOnceDiagnostics("startup_before_stress");
+    SOUND->StressTestPlayOnce(THEME->GetPathS("Common", "start"), stressCount);
+    SOUND->LogPlayOnceDiagnostics("startup_after_stress");
+  }
 
   // Pre-warm frequently used UI transition sounds to reduce first-hit
   // decode spikes and startup/transition underruns.
@@ -954,8 +997,19 @@ int sm_main(int argc, char* argv[]) {
         {"", "_silence"},
     };
     for (const auto& sound : kWarmSounds) {
+      const std::string path = THEME->GetPathS(sound[0], sound[1]);
+      if (FILEMAN != nullptr && !FILEMAN->IsAFile(path)) {
+        LOG->Trace(
+            "Audio warmup skipped missing sound: group='%s' name='%s' path='%s'",
+            sound[0], sound[1], path.c_str());
+        continue;
+      }
       RageSound warm;
-      warm.Load(THEME->GetPathS(sound[0], sound[1]), true);
+      if (!warm.Load(path, true)) {
+        LOG->Warn(
+            "Audio warmup failed: group='%s' name='%s' path='%s' error='%s'",
+            sound[0], sound[1], path.c_str(), warm.GetError().c_str());
+      }
     }
   }
 

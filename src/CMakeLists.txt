@@ -584,6 +584,19 @@ endif()
 
 target_include_directories("${SM_EXE_NAME}" PUBLIC ${SM_INCLUDE_DIRS})
 
+if(BUILD_TESTING)
+  add_test(
+    NAME audio_playonce_runtime_smoke
+    COMMAND "$<TARGET_FILE:${SM_EXE_NAME}>" "--playonce-smoke-test=8")
+  set_tests_properties(
+    audio_playonce_runtime_smoke
+    PROPERTIES
+      LABELS "audio"
+      RUN_SERIAL TRUE
+      TIMEOUT 45
+      WORKING_DIRECTORY "${SM_ROOT_DIR}")
+endif()
+
 if(WIN32)
   set(SM_INSTALL_DESTINATION ".")
 elseif(APPLE)
