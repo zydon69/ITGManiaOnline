@@ -1,6 +1,7 @@
 #include "NoteSkinManager.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
@@ -18,6 +19,7 @@
 #include "RageException.h"
 #include "RageFileManager.h"
 #include "RageLog.h"
+#include "RageTimer.h"
 #include "RageUtil.h"
 #include "SpecialFiles.h"
 #include "Sprite.h"
@@ -63,6 +65,71 @@ namespace {
 static std::map<std::string, NoteSkinData> g_mapNameToData;
 static std::map<std::string, std::vector<std::string>>
     g_mapParentNameToVariantNames;
+
+struct NoteSkinActorTemplateNodeCacheStats {
+  size_t requests;
+  size_t hits;
+  size_t misses;
+  size_t builds;
+  size_t failures;
+  uint64_t luaBuildUsec;
+  uint64_t cloneUsec;
+
+  NoteSkinActorTemplateNodeCacheStats()
+      : requests(0),
+        hits(0),
+        misses(0),
+        builds(0),
+        failures(0),
+        luaBuildUsec(0),
+        cloneUsec(0) {}
+};
+
+static std::map<std::string, std::unique_ptr<XNode>> g_ActorTemplateNodeCache;
+static NoteSkinActorTemplateNodeCacheStats g_ActorTemplateNodeCacheStats;
+
+static std::string NoteSkinActorTemplateNodeCacheKey(
+    const std::string& sNoteSkin, const std::string& sButton,
+    const std::string& sElement, const PlayerNumber pn, const GameController gc,
+    const bool bSpriteOnly, const std::string& sColor) {
+  return ssprintf(
+      "%s\x1f%s\x1f%s\x1f%d\x1f%d\x1f%d\x1f%s", sNoteSkin.c_str(),
+      sButton.c_str(), sElement.c_str(), static_cast<int>(pn),
+      static_cast<int>(gc), bSpriteOnly ? 1 : 0, sColor.c_str());
+}
+
+static void LogNoteSkinActorTemplateNodeCacheStats(
+    const char* reason, bool force) {
+  const NoteSkinActorTemplateNodeCacheStats& stats =
+      g_ActorTemplateNodeCacheStats;
+  if (!force && stats.requests != 1 && stats.requests != 10 &&
+      stats.requests != 50 && stats.requests != 100 &&
+      stats.requests % 250 != 0) {
+    return;
+  }
+  if (stats.requests == 0 && g_ActorTemplateNodeCache.empty()) {
+    return;
+  }
+
+  const double hitRate =
+      stats.requests == 0 ? 0.0
+                          : (100.0 * static_cast<double>(stats.hits) /
+                             static_cast<double>(stats.requests));
+  LOG->Info(
+      "NoteSkin actor XNode cache stats (%s): entries=%zu requests=%zu "
+      "hits=%zu misses=%zu builds=%zu failures=%zu hit_rate=%.1f%% "
+      "lua_build_ms=%.3f clone_ms=%.3f",
+      reason, g_ActorTemplateNodeCache.size(), stats.requests, stats.hits,
+      stats.misses, stats.builds, stats.failures, hitRate,
+      static_cast<double>(stats.luaBuildUsec) / 1000.0,
+      static_cast<double>(stats.cloneUsec) / 1000.0);
+}
+
+static void ClearNoteSkinActorTemplateNodeCache(const char* reason) {
+  LogNoteSkinActorTemplateNodeCacheStats(reason, true);
+  g_ActorTemplateNodeCache.clear();
+  g_ActorTemplateNodeCacheStats = NoteSkinActorTemplateNodeCacheStats();
+}
 };  // namespace
 
 NoteSkinManager::NoteSkinManager() {
@@ -84,6 +151,7 @@ NoteSkinManager::~NoteSkinManager() {
   // Unregister with Lua.
   LUA->UnsetGlobal("NOTESKIN");
 
+  ClearNoteSkinActorTemplateNodeCache("shutdown");
   g_mapNameToData.clear();
 }
 
@@ -102,6 +170,7 @@ void NoteSkinManager::RefreshNoteSkinData(const Game* pGame, bool force) {
 
   // clear path cache
   g_PathCache.clear();
+  ClearNoteSkinActorTemplateNodeCache("refresh");
 
   std::string sBaseSkinFolder =
       SpecialFiles::NOTESKINS_DIR + pGame->m_szName + "/";
@@ -624,22 +693,58 @@ bool NoteSkinManager::PushActorTemplate(
 Actor* NoteSkinManager::LoadActor(
     const std::string& sButton, const std::string& sElement, Actor* pParent,
     bool bSpriteOnly, const std::string& sColor) {
-  Lua* L = LUA->Get();
+  const std::string cacheKey = NoteSkinActorTemplateNodeCacheKey(
+      m_sCurrentNoteSkin, sButton, sElement, m_PlayerNumber, m_GameController,
+      bSpriteOnly, sColor);
+  g_ActorTemplateNodeCacheStats.requests++;
 
-  if (!PushActorTemplate(L, sButton, sElement, bSpriteOnly, sColor)) {
+  std::unique_ptr<XNode> pNode;
+  std::map<std::string, std::unique_ptr<XNode>>::const_iterator cached =
+      g_ActorTemplateNodeCache.find(cacheKey);
+  if (cached != g_ActorTemplateNodeCache.end()) {
+    const uint64_t cloneStartUsec =
+        RageTimer::GetTimeSinceStartMicroseconds();
+    pNode.reset(new XNode(*cached->second));
+    g_ActorTemplateNodeCacheStats.cloneUsec +=
+        RageTimer::GetTimeSinceStartMicroseconds() - cloneStartUsec;
+    g_ActorTemplateNodeCacheStats.hits++;
+  } else {
+    g_ActorTemplateNodeCacheStats.misses++;
+
+    Lua* L = LUA->Get();
+    const uint64_t luaStartUsec = RageTimer::GetTimeSinceStartMicroseconds();
+    if (!PushActorTemplate(L, sButton, sElement, bSpriteOnly, sColor)) {
+      g_ActorTemplateNodeCacheStats.luaBuildUsec +=
+          RageTimer::GetTimeSinceStartMicroseconds() - luaStartUsec;
+      g_ActorTemplateNodeCacheStats.failures++;
+      LogNoteSkinActorTemplateNodeCacheStats("load_failure", true);
+      LUA->Release(L);
+      // ActorUtil will warn about the error
+      return Sprite::NewBlankSprite();
+    }
+
+    pNode.reset(XmlFileUtil::XNodeFromTable(L));
+    g_ActorTemplateNodeCacheStats.luaBuildUsec +=
+        RageTimer::GetTimeSinceStartMicroseconds() - luaStartUsec;
     LUA->Release(L);
-    // ActorUtil will warn about the error
-    return Sprite::NewBlankSprite();
+
+    if (pNode.get() == nullptr) {
+      g_ActorTemplateNodeCacheStats.failures++;
+      LogNoteSkinActorTemplateNodeCacheStats("xnode_failure", true);
+      // XNode will warn about the error
+      return Sprite::NewBlankSprite();
+    }
+
+    g_ActorTemplateNodeCache[cacheKey].reset(new XNode(*pNode));
+    g_ActorTemplateNodeCacheStats.builds++;
+    LOG->Trace(
+        "NoteSkin actor XNode cache miss: note_skin=%s button=%s element=%s "
+        "sprite_only=%d color=%s entries=%zu",
+        m_sCurrentNoteSkin.c_str(), sButton.c_str(), sElement.c_str(),
+        bSpriteOnly ? 1 : 0, sColor.c_str(), g_ActorTemplateNodeCache.size());
   }
 
-  std::unique_ptr<XNode> pNode(XmlFileUtil::XNodeFromTable(L));
-  if (pNode.get() == nullptr) {
-    LUA->Release(L);
-    // XNode will warn about the error
-    return Sprite::NewBlankSprite();
-  }
-
-  LUA->Release(L);
+  LogNoteSkinActorTemplateNodeCacheStats("runtime", false);
 
   Actor* pRet = ActorUtil::LoadFromNode(pNode.get(), pParent);
 
