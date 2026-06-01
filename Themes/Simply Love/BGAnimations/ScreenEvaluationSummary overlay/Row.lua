@@ -116,9 +116,13 @@ end
 
 -- Finally, load the actors that will populate the actual player-specific stats.
 for player in ivalues( PlayerNumber ) do
+	local pn = ToEnumShortString(player)
+	local has_stage_stats = SL[pn] and SL[pn].Stages and SL[pn].Stages.Stats and #SL[pn].Stages.Stats > 0
+	if has_stage_stats then
 	-- PlayerStageStats.lua handles player-specific things
 	-- like stepchart difficulty, stepartist, letter grade, and judgment breakdown
-	t[#t+1] = LoadActor("./PlayerStageStats.lua", {player, displayProfileNames})
+		t[#t+1] = LoadActor("./PlayerStageStats.lua", {player, displayProfileNames})
+	end
 end
 
 return t

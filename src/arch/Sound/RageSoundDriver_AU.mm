@@ -177,7 +177,9 @@ std::string RageSoundDriver_AU::Init() {
     return ssprintf("Could not initialize the AudioUnit: %s", FormatOSError(error));
   }
 
-  int decodeBufferFrames = 8192;
+  // Keep a larger decode buffer on macOS to reduce intermittent underruns
+  // observed during heavy screen transitions.
+  int decodeBufferFrames = 24576;
   if (PREFSMAN->m_iSoundWriteAhead > 0) {
     decodeBufferFrames = std::max(decodeBufferFrames, PREFSMAN->m_iSoundWriteAhead.Get());
   }

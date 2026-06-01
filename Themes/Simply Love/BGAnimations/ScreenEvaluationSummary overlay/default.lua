@@ -119,6 +119,7 @@ t[#t+1] = LoadFont("Common Bold")..{
 
 t[#t+1] = Def.ActorFrame{
 	Name="OnlineFinalRanking",
+	polling_active=false,
 	InitCommand=function(self)
 		self:xy(_screen.w - 190, _screen.cy - 110):visible(false)
 	end,
@@ -135,6 +136,7 @@ t[#t+1] = Def.ActorFrame{
 		local rows = online_final_results()
 		local show = #rows > 0
 		self:visible(show)
+		self.polling_active = show
 
 		if show then
 			self:GetChild("Title"):settext("Online final ranking")
@@ -155,7 +157,9 @@ t[#t+1] = Def.ActorFrame{
 			end
 		end
 
-		self:sleep(0.5):queuecommand("Refresh")
+		if self.polling_active then
+			self:sleep(0.5):queuecommand("Refresh")
+		end
 	end,
 	LoadFont("Common Bold")..{
 		Name="Title",

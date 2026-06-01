@@ -50,26 +50,51 @@ elseif #players == 1 then
 	-- check if some expensive calculations have already been run, and refer to the ComputedData
 	-- table to get the results.
 	local ComputedData = {}
+	local proxyable_panes = {
+		[4] = true,
+		[5] = true,
+		[7] = true,
+		[8] = true
+	}
 
 	local mpn = GAMESTATE:GetMasterPlayerNumber()
 
 	for i=1, NumPanes do
 		local left_pane  = LoadActor("./Pane"..i, {mpn, PLAYER_1, ComputedData})
-		local right_pane = LoadActor("./Pane"..i, {mpn, PLAYER_2, ComputedData})
-
-		-- These need to be wrapped in an extra AF to offset left and right.
-		-- Panes can be nil, however, so don't add extra AFs with nil children
-		if left_pane and right_pane then
+		if left_pane then
 			af[#af+1] = Def.ActorFrame{
 				Name="Pane"..i.."_SideP1",
 				InitCommand=function(self) self:x(offset.PlayerNumber_P1) end,
 				left_pane
 			}
-			af[#af+1] = Def.ActorFrame{
-				Name="Pane"..i.."_SideP2",
-				InitCommand=function(self) self:x(offset.PlayerNumber_P2) end,
-				right_pane
-			}
+
+			if proxyable_panes[i] then
+				local source_name = "Pane"..i.."_SideP1"
+				af[#af+1] = Def.ActorFrame{
+					Name="Pane"..i.."_SideP2",
+					InitCommand=function(self) self:x(offset.PlayerNumber_P2) end,
+					Def.ActorProxy{
+						InitCommand=function(self)
+							local source = self:GetParent():GetParent():GetChild(source_name)
+							if source then
+								self:SetTarget(source)
+								self:visible(true)
+							else
+								self:visible(false)
+							end
+						end
+					}
+				}
+			else
+				local right_pane = LoadActor("./Pane"..i, {mpn, PLAYER_2, ComputedData})
+				if right_pane then
+					af[#af+1] = Def.ActorFrame{
+						Name="Pane"..i.."_SideP2",
+						InitCommand=function(self) self:x(offset.PlayerNumber_P2) end,
+						right_pane
+					}
+				end
+			end
 		end
 	end
 end

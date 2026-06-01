@@ -27,6 +27,10 @@ local layouts = {
 -- -----------------------------------------------------------------------
 
 local pad = Def.ActorFrame{}
+pad[#pad+1] = LoadActor("rounded-square.png")..{
+	Name="RoundedSquareSource",
+	InitCommand=function(self) self:visible(false) end
+}
 
 for row=0,2 do
 	for col=0,2 do
@@ -51,8 +55,14 @@ for row=0,2 do
 			self:GetParent():playcommand("Reassess", layout)
 		end
 
-		panel_af[#panel_af+1] = LoadActor("rounded-square.png")..{
-			InitCommand=function(self) init_panel(self, col, row, zoom) end,
+		panel_af[#panel_af+1] = Def.ActorProxy{
+			InitCommand=function(self)
+				local source = self:GetParent():GetParent():GetChild("RoundedSquareSource")
+				if source then
+					self:SetTarget(source)
+					init_panel(self, col, row, zoom)
+				end
+			end,
 			ReassessCommand=function(self, layout)
 				if layout[panel_index] then
 					self:diffuse(color_used)

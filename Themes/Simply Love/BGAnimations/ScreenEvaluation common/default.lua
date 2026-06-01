@@ -217,31 +217,32 @@ t[#t+1] = LoadActor("./Panes/default.lua", NumPanes)
 -- Since this actor also spawns the event overlay it must go on top of everything else
 t[#t+1] = LoadActor("./Shared/AutoSubmitScore.lua")
 
-t[#t+1] = LoadFont("Common Normal")..{
-	Name="ITGOnlineConnectionStatus",
-	Text="",
-	InitCommand=function(self)
-		self:xy(_screen.w - 14, _screen.h - 18):halign(1):zoom(0.45):diffuse(Color.White):shadowlength(1)
-	end,
-	OnCommand=function(self)
-		self:queuecommand("RefreshOnlineStatus")
-	end,
-	RefreshOnlineStatusCommand=function(self)
-		if not ITGOnline or not ITGOnline.currentRoomId then
-			self:settext("")
+if OnlineEvaluationActive() then
+	t[#t+1] = LoadFont("Common Normal")..{
+		Name="ITGOnlineConnectionStatus",
+		Text="",
+		InitCommand=function(self)
+			self:xy(_screen.w - 14, _screen.h - 18):halign(1):zoom(0.45):diffuse(Color.White):shadowlength(1)
+		end,
+		OnCommand=function(self)
+			self:queuecommand("RefreshOnlineStatus")
+		end,
+		RefreshOnlineStatusCommand=function(self)
+			if not ITGOnline or not ITGOnline.currentRoomId then
+				self:settext("")
+				self:sleep(0.5):queuecommand("RefreshOnlineStatus")
+				return
+			end
+
+			local handler = GetOnlineHandlerInstance and GetOnlineHandlerInstance() or nil
+			local connected = handler and handler.connected and handler.socket ~= nil
+			self:settext(connected and "ITG Online: connected" or "ITG Online: reconnecting")
+			self:diffuse(connected and color("#66ff99") or Color.Yellow)
 			self:sleep(0.5):queuecommand("RefreshOnlineStatus")
-			return
 		end
+	}
 
-		local handler = GetOnlineHandlerInstance and GetOnlineHandlerInstance() or nil
-		local connected = handler and handler.connected and handler.socket ~= nil
-		self:settext(connected and "ITG Online: connected" or "ITG Online: reconnecting")
-		self:diffuse(connected and color("#66ff99") or Color.Yellow)
-		self:sleep(0.5):queuecommand("RefreshOnlineStatus")
-	end
-}
-
-t[#t+1] = Def.ActorFrame{
+	t[#t+1] = Def.ActorFrame{
 	Name="ITGOnlineResultsWait",
 	InitCommand=function(self)
 		self:Center():visible(false)
@@ -346,6 +347,7 @@ t[#t+1] = Def.ActorFrame{
 			self:settext(table.concat(lines, "\n"))
 		end,
 	},
-}
+	}
+end
 
 return t

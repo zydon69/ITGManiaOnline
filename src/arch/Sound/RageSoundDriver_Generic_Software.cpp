@@ -307,7 +307,7 @@ void RageSoundDriver::Update() {
     // m_Sounds[i].m_pSound);
   }
 
-  constexpr uint64_t iUsecs = 1000000;
+  constexpr uint64_t iUsecs = 10000000;
   static uint64_t fNextUsecs = 0;
   if (RageTimer::GetTimeSinceStartMicroseconds() >= fNextUsecs) {
     /* Lockless: only Mix() can write to underruns. */
@@ -319,7 +319,7 @@ void RageSoundDriver::Update() {
       LOG->Trace("Mixing underruns: %i", current_underruns - logged_underruns);
       logged_underruns = current_underruns;
 
-      /* Don't log again for at least a second, or we'll burst output
+      /* Don't log again for at least 10 seconds, or we'll burst output
        * and possibly cause more underruns. */
       fNextUsecs = RageTimer::GetTimeSinceStartMicroseconds() + iUsecs;
     }

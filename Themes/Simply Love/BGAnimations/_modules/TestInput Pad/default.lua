@@ -45,6 +45,18 @@ end
 
 
 local pad = Def.ActorFrame{}
+local highlight_source_names = {}
+
+for _, values in pairs(Highlights) do
+	local source_name = "HighlightSource_" .. values.graphic:gsub("[^%w]", "_")
+	if not highlight_source_names[source_name] then
+		highlight_source_names[source_name] = values.graphic
+		pad[#pad+1] = LoadActor(values.graphic)..{
+			Name=source_name,
+			InitCommand=function(self) self:visible(false) end
+		}
+	end
+end
 
 if show_player_label then
 	pad[#pad+1] = LoadFont("Common Bold")..{
@@ -67,8 +79,13 @@ if show_menu_buttons then
 end
 
 for panel, values in pairs(Highlights) do
-	pad[#pad+1] = LoadActor( values.graphic )..{
-		InitCommand=function(self) self:xy(values.x, values.y):rotationz(values.rotationz):zoom(values.zoom):visible(false) end,
+	pad[#pad+1] = Def.ActorProxy{
+		InitCommand=function(self)
+			local source_name = "HighlightSource_" .. values.graphic:gsub("[^%w]", "_")
+			local source = self:GetParent():GetChild(source_name)
+			if source then self:SetTarget(source) end
+			self:xy(values.x, values.y):rotationz(values.rotationz):zoom(values.zoom):visible(false)
+		end,
 		TestInputEventMessageCommand=function(self, event)
 			local style = GAMESTATE:GetCurrentStyle()
 			local styletype = style and style:GetStyleType() or nil
