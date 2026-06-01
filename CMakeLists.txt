@@ -18,4 +18,9 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_SOURCE_DIR}/CMake/CheckAudioRefactorInvariants.cmake)
+  add_test(
+    NAME noteskin_runtime_cache_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckNoteSkinRuntimeCacheInvariants.cmake)
 endif()
