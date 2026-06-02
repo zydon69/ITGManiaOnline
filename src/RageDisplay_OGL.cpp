@@ -74,6 +74,46 @@ static int g_gluVersion;
 static int g_iMaxTextureUnits = 0;
 static Preference<float> g_fPerfTraceSlowDisplayEndFrameMs(
     "PerfTraceSlowDisplayEndFrameMs", 20.0f);
+#ifdef __APPLE__
+static Preference<bool> g_bOpenGLFinishAfterSwap(
+    "OpenGLFinishAfterSwap", false);
+#else
+static Preference<bool> g_bOpenGLFinishAfterSwap(
+    "OpenGLFinishAfterSwap", true);
+#endif
+static Preference<int> g_iOpenGLFinishEveryNFrames(
+    "OpenGLFinishEveryNFrames", 0);
+static uint64_t g_iOpenGLFramesSinceFinish = 0;
+#ifdef __APPLE__
+static Preference<bool> g_bOpenGLPreFramePacingSync(
+    "OpenGLPreFramePacingSync", true);
+static Preference<bool> g_bOpenGLPreFramePacingFinishOnBackpressure(
+    "OpenGLPreFramePacingFinishOnBackpressure", true);
+static Preference<int> g_iOpenGLPreFramePacingFinishFrames(
+    "OpenGLPreFramePacingFinishFrames", 2);
+static Preference<int> g_iOpenGLPreFramePacingMaxReactiveFinishFrames(
+    "OpenGLPreFramePacingMaxReactiveFinishFrames", 2);
+static Preference<bool> g_bOpenGLPreFramePacingProactiveFinish(
+    "OpenGLPreFramePacingProactiveFinish", true);
+static Preference<int> g_iOpenGLPreFramePacingProactiveFinishEveryNFrames(
+    "OpenGLPreFramePacingProactiveFinishEveryNFrames", 240);
+static Preference<int> g_iOpenGLPreFramePacingProactiveFinishFrames(
+    "OpenGLPreFramePacingProactiveFinishFrames", 1);
+static Preference<int> g_iOpenGLPreFramePacingProactiveFinishMinRate(
+    "OpenGLPreFramePacingProactiveFinishMinRate", 90);
+static Preference<bool> g_bOpenGLPreFramePacingContinuousFinish(
+    "OpenGLPreFramePacingContinuousFinish", false);
+static Preference<int> g_iOpenGLPreFramePacingContinuousFinishMinRate(
+    "OpenGLPreFramePacingContinuousFinishMinRate", 90);
+static Preference<int> g_iOpenGLPreFramePacingContinuousFinishLogEveryNFrames(
+    "OpenGLPreFramePacingContinuousFinishLogEveryNFrames", 240);
+static Preference<float> g_fPerfTraceSlowOpenGLPreFramePacingSyncMs(
+    "PerfTraceSlowOpenGLPreFramePacingSyncMs", 2.0f);
+static int g_iOpenGLPreFramePacingFinishFramesRemaining = 0;
+static uint64_t g_iOpenGLPreFramePacingFrames = 0;
+static uint64_t g_iOpenGLPreFramePacingProactiveFinishes = 0;
+static uint64_t g_iOpenGLPreFramePacingContinuousFinishes = 0;
+#endif
 
 static float ExpectedFrameMsForRate(int rate) {
   return rate > 0 ? 1000.0f / static_cast<float>(rate) : 0.0f;
@@ -86,14 +126,28 @@ static int MissedIntervalsForElapsedMs(float elapsedMs, float expectedMs) {
   return std::max(0, static_cast<int>(std::ceil(elapsedMs / expectedMs)) - 1);
 }
 
+#ifdef __APPLE__
+static int OpenGLPreFramePacingReactiveFinishFrames() {
+  const int requestedFrames =
+      std::clamp(g_iOpenGLPreFramePacingFinishFrames.Get(), 0, 120);
+  const int maxFrames =
+      std::clamp(g_iOpenGLPreFramePacingMaxReactiveFinishFrames.Get(), 0, 30);
+  return std::min(requestedFrames, maxFrames);
+}
+#endif
+
 static const char* ClassifyDisplayEndFrame(
-    float totalMs, float offscreenMs, float frameLimitBeforeMs,
-    float swapBuffersMs, float frameLimitAfterMs, float glFinishMs,
-    float windowUpdateMs, float statsMs, float expectedFrameMs) {
+    float totalMs, float offscreenMs, float preFramePacingSyncMs,
+    float frameLimitBeforeMs, float swapBuffersMs, float frameLimitAfterMs,
+    float glFinishMs, float glFlushMs, float windowUpdateMs, float statsMs,
+    float expectedFrameMs) {
   const float effectiveExpectedMs =
       expectedFrameMs > 0.0f ? expectedFrameMs : 16.667f;
   if (swapBuffersMs >= effectiveExpectedMs * 0.9f) {
     return "swap_block";
+  }
+  if (preFramePacingSyncMs >= 4.0f) {
+    return "pre_frame_pacing_sync";
   }
   if (frameLimitBeforeMs >= effectiveExpectedMs * 0.9f &&
       swapBuffersMs < effectiveExpectedMs * 0.5f) {
@@ -101,6 +155,9 @@ static const char* ClassifyDisplayEndFrame(
   }
   if (glFinishMs >= 4.0f) {
     return "gl_finish";
+  }
+  if (glFlushMs >= 4.0f) {
+    return "gl_flush";
   }
   if (windowUpdateMs >= 4.0f) {
     return "window_update";
@@ -948,13 +1005,39 @@ void RageDisplay_Legacy::EndFrame() {
   RageTimer totalTimer;
   RageTimer phaseTimer;
   float offscreenMs = 0.0f;
+  float preFramePacingSyncMs = 0.0f;
   float frameLimitBeforeMs = 0.0f;
   float swapBuffersMs = 0.0f;
   float frameLimitAfterMs = 0.0f;
   float glFinishMs = 0.0f;
+  float glFlushMs = 0.0f;
   float windowUpdateMs = 0.0f;
   float statsMs = 0.0f;
+  const char* preFramePacingSyncMode = "none";
+  const char* glSyncMode = "flush";
   const ActualVideoModeParams mode = g_pWind->GetActualVideoModeParams();
+  const float expectedFrameMs = ExpectedFrameMsForRate(mode.rate);
+#ifdef __APPLE__
+  bool preFramePacingProactiveArmed = false;
+  bool preFramePacingDidFinish = false;
+  bool preFramePacingContinuousFinish = false;
+  const int reactiveFinishFrames =
+      OpenGLPreFramePacingReactiveFinishFrames();
+  g_iOpenGLPreFramePacingFinishFramesRemaining = std::min(
+      g_iOpenGLPreFramePacingFinishFramesRemaining, reactiveFinishFrames);
+  int preFramePacingFinishRemainingBefore =
+      g_iOpenGLPreFramePacingFinishFramesRemaining;
+  const int proactiveFinishMinRate = std::clamp(
+      g_iOpenGLPreFramePacingProactiveFinishMinRate.Get(), 1, 1000);
+  const int proactiveFinishEveryNFrames = std::clamp(
+      g_iOpenGLPreFramePacingProactiveFinishEveryNFrames.Get(), 1, 36000);
+  const int proactiveFinishFrames = std::clamp(
+      g_iOpenGLPreFramePacingProactiveFinishFrames.Get(), 0, 30);
+  const int continuousFinishMinRate = std::clamp(
+      g_iOpenGLPreFramePacingContinuousFinishMinRate.Get(), 1, 1000);
+  const int continuousFinishLogEveryNFrames = std::clamp(
+      g_iOpenGLPreFramePacingContinuousFinishLogEveryNFrames.Get(), 1, 36000);
+#endif
 
   if (UseOffscreenRenderTarget()) {
     offscreenRenderTarget->FinishRenderingTo();
@@ -975,24 +1058,114 @@ void RageDisplay_Legacy::EndFrame() {
   }
   offscreenMs = phaseTimer.GetDeltaTime() * 1000.0f;
 
+#ifdef __APPLE__
+  if (g_bOpenGLPreFramePacingSync.Get()) {
+    ++g_iOpenGLPreFramePacingFrames;
+    if (g_bOpenGLPreFramePacingProactiveFinish.Get() &&
+        proactiveFinishFrames > 0 && mode.rate >= proactiveFinishMinRate &&
+        (g_iOpenGLPreFramePacingFrames %
+         static_cast<uint64_t>(proactiveFinishEveryNFrames)) == 0) {
+      g_iOpenGLPreFramePacingFinishFramesRemaining = std::max(
+          g_iOpenGLPreFramePacingFinishFramesRemaining,
+          proactiveFinishFrames);
+      preFramePacingProactiveArmed = true;
+      ++g_iOpenGLPreFramePacingProactiveFinishes;
+    }
+
+    RageTimer syncTimer;
+    preFramePacingContinuousFinish =
+        g_bOpenGLPreFramePacingContinuousFinish.Get() &&
+        mode.rate >= continuousFinishMinRate;
+    if (preFramePacingContinuousFinish) {
+      glFinish();
+      preFramePacingSyncMode = "finish_continuous";
+      preFramePacingDidFinish = true;
+      ++g_iOpenGLPreFramePacingContinuousFinishes;
+      if (g_iOpenGLPreFramePacingFinishFramesRemaining > 0) {
+        --g_iOpenGLPreFramePacingFinishFramesRemaining;
+      }
+    } else if (g_bOpenGLPreFramePacingFinishOnBackpressure.Get() &&
+        g_iOpenGLPreFramePacingFinishFramesRemaining > 0) {
+      glFinish();
+      preFramePacingSyncMode =
+          preFramePacingProactiveArmed ? "finish_proactive"
+                                       : "finish_backpressure";
+      preFramePacingDidFinish = true;
+      --g_iOpenGLPreFramePacingFinishFramesRemaining;
+    } else {
+      glFlush();
+      preFramePacingSyncMode = "flush";
+    }
+    preFramePacingSyncMs = syncTimer.GetDeltaTime() * 1000.0f;
+    const bool shouldLogContinuousFinish =
+        preFramePacingContinuousFinish &&
+        (g_iOpenGLPreFramePacingFrames %
+         static_cast<uint64_t>(continuousFinishLogEveryNFrames)) == 0;
+    if (preFramePacingSyncMs >=
+            g_fPerfTraceSlowOpenGLPreFramePacingSyncMs.Get() ||
+        shouldLogContinuousFinish || preFramePacingProactiveArmed ||
+        (!preFramePacingContinuousFinish && preFramePacingDidFinish)) {
+      LOG->Trace(
+          "PERF_TRACE: opengl_pre_frame_pacing_sync total_ms=%.3f mode=%s "
+          "finish_remaining_before=%d finish_remaining_after=%d rate=%d "
+          "expected_frame_ms=%.3f proactive_armed=%d "
+          "reactive_requested_frames=%d reactive_effective_frames=%d "
+          "proactive_every_n=%d proactive_frames=%d "
+          "proactive_min_rate=%d proactive_count=%llu "
+          "continuous_finish=%d continuous_min_rate=%d "
+          "continuous_log_every_n=%d continuous_count=%llu frame=%llu",
+          preFramePacingSyncMs, preFramePacingSyncMode,
+          preFramePacingFinishRemainingBefore,
+          g_iOpenGLPreFramePacingFinishFramesRemaining, mode.rate,
+          expectedFrameMs, preFramePacingProactiveArmed ? 1 : 0,
+          std::clamp(g_iOpenGLPreFramePacingFinishFrames.Get(), 0, 120),
+          reactiveFinishFrames,
+          proactiveFinishEveryNFrames, proactiveFinishFrames,
+          proactiveFinishMinRate,
+          static_cast<unsigned long long>(
+              g_iOpenGLPreFramePacingProactiveFinishes),
+          preFramePacingContinuousFinish ? 1 : 0,
+          continuousFinishMinRate, continuousFinishLogEveryNFrames,
+          static_cast<unsigned long long>(
+              g_iOpenGLPreFramePacingContinuousFinishes),
+          static_cast<unsigned long long>(g_iOpenGLPreFramePacingFrames));
+    }
+  }
+#endif
+
   FrameLimitBeforeVsync(mode.rate);
   frameLimitBeforeMs = phaseTimer.GetDeltaTime() * 1000.0f;
   g_pWind->SwapBuffers();
   swapBuffersMs = phaseTimer.GetDeltaTime() * 1000.0f;
+
+#ifdef __APPLE__
+  const bool swapBackpressure =
+      expectedFrameMs > 0.0f && swapBuffersMs >= expectedFrameMs * 0.9f;
+  if (swapBackpressure &&
+      g_bOpenGLPreFramePacingFinishOnBackpressure.Get()) {
+    g_iOpenGLPreFramePacingFinishFramesRemaining = reactiveFinishFrames;
+  }
+#endif
+
   FrameLimitAfterVsync(swapBuffersMs);
   frameLimitAfterMs = phaseTimer.GetDeltaTime() * 1000.0f;
 
-  // Some would advise against glFinish(), ever. Those people don't realize
-  // the degree of freedom GL hosts are permitted in queueing commands.
-  // If left to its own devices, the host could lag behind several frames' worth
-  // of commands.
-  // glFlush() only forces the host to not wait to execute all commands
-  // sent so far; it does NOT block on those commands until they finish.
-  // glFinish() blocks. We WANT to block. Why? This puts the engine state
-  // reflected by the next frame as close as possible to the on-screen
-  // appearance of that frame.
-  glFinish();
-  glFinishMs = phaseTimer.GetDeltaTime() * 1000.0f;
+  const int finishEveryNFrames =
+      std::max(0, g_iOpenGLFinishEveryNFrames.Get());
+  const bool periodicFinish =
+      finishEveryNFrames > 0 &&
+      (++g_iOpenGLFramesSinceFinish %
+       static_cast<uint64_t>(finishEveryNFrames)) == 0;
+  if (g_bOpenGLFinishAfterSwap.Get() || periodicFinish) {
+    glFinish();
+    glFinishMs = phaseTimer.GetDeltaTime() * 1000.0f;
+    glSyncMode = periodicFinish && !g_bOpenGLFinishAfterSwap.Get()
+                     ? "periodic_finish"
+                     : "finish";
+  } else {
+    glFlush();
+    glFlushMs = phaseTimer.GetDeltaTime() * 1000.0f;
+  }
 
   g_pWind->Update();
   windowUpdateMs = phaseTimer.GetDeltaTime() * 1000.0f;
@@ -1002,28 +1175,56 @@ void RageDisplay_Legacy::EndFrame() {
 
   const float totalMs = totalTimer.GetDeltaTime() * 1000.0f;
   if (totalMs >= g_fPerfTraceSlowDisplayEndFrameMs.Get()) {
-    const float expectedFrameMs = ExpectedFrameMsForRate(mode.rate);
     const int missedSwapIntervals =
         MissedIntervalsForElapsedMs(swapBuffersMs, expectedFrameMs);
     const int missedTotalIntervals =
         MissedIntervalsForElapsedMs(totalMs, expectedFrameMs);
     LOG->Trace(
-        "PERF_TRACE: display_end_frame total_ms=%.3f offscreen_ms=%.3f "
+      "PERF_TRACE: display_end_frame total_ms=%.3f offscreen_ms=%.3f "
+        "pre_frame_pacing_sync_ms=%.3f pre_frame_pacing_sync_mode=%s "
         "frame_limit_before_ms=%.3f swap_buffers_ms=%.3f "
-        "frame_limit_after_ms=%.3f gl_finish_ms=%.3f window_update_ms=%.3f "
+        "frame_limit_after_ms=%.3f gl_finish_ms=%.3f gl_flush_ms=%.3f "
+        "gl_sync_mode=%s window_update_ms=%.3f "
         "stats_ms=%.3f classification=%s rate=%d vsync=%d windowed=%d "
         "render_offscreen=%d "
+#ifdef __APPLE__
+        "pre_frame_finish_remaining_before=%d "
+        "pre_frame_finish_remaining_after=%d "
+        "pre_frame_finish_proactive_armed=%d "
+        "pre_frame_finish_proactive_count=%llu "
+        "pre_frame_pacing_frame=%llu "
+        "pre_frame_reactive_requested_frames=%d "
+        "pre_frame_reactive_effective_frames=%d "
+        "pre_frame_continuous_finish=%d "
+        "pre_frame_continuous_count=%llu "
+#endif
         "expected_frame_ms=%.3f missed_swap_intervals=%d "
         "missed_total_intervals=%d render_size=%dx%d window_size=%dx%d",
-        totalMs, offscreenMs, frameLimitBeforeMs, swapBuffersMs,
-        frameLimitAfterMs, glFinishMs, windowUpdateMs, statsMs,
+        totalMs, offscreenMs, preFramePacingSyncMs, preFramePacingSyncMode,
+        frameLimitBeforeMs, swapBuffersMs, frameLimitAfterMs, glFinishMs,
+        glFlushMs, glSyncMode, windowUpdateMs,
+        statsMs,
         ClassifyDisplayEndFrame(
-            totalMs, offscreenMs, frameLimitBeforeMs, swapBuffersMs,
-            frameLimitAfterMs, glFinishMs, windowUpdateMs, statsMs,
-            expectedFrameMs),
+            totalMs, offscreenMs, preFramePacingSyncMs, frameLimitBeforeMs,
+            swapBuffersMs, frameLimitAfterMs, glFinishMs, glFlushMs,
+            windowUpdateMs, statsMs, expectedFrameMs),
         mode.rate,
         mode.vsync ? 1 : 0, mode.windowed ? 1 : 0,
-        mode.renderOffscreen ? 1 : 0, expectedFrameMs, missedSwapIntervals,
+        mode.renderOffscreen ? 1 : 0,
+#ifdef __APPLE__
+        preFramePacingFinishRemainingBefore,
+        g_iOpenGLPreFramePacingFinishFramesRemaining,
+        preFramePacingProactiveArmed ? 1 : 0,
+        static_cast<unsigned long long>(
+            g_iOpenGLPreFramePacingProactiveFinishes),
+        static_cast<unsigned long long>(g_iOpenGLPreFramePacingFrames),
+        std::clamp(g_iOpenGLPreFramePacingFinishFrames.Get(), 0, 120),
+        reactiveFinishFrames,
+        preFramePacingContinuousFinish ? 1 : 0,
+        static_cast<unsigned long long>(
+            g_iOpenGLPreFramePacingContinuousFinishes),
+#endif
+        expectedFrameMs, missedSwapIntervals,
         missedTotalIntervals, mode.width, mode.height, mode.windowWidth,
         mode.windowHeight);
   }
