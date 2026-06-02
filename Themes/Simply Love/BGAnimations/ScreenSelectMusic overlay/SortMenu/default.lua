@@ -625,6 +625,10 @@ local t = Def.ActorFrame {
 			end
 		end
 	},
+	LoadActor("./folder-solid.png")..{
+		Name="SortMenuFolderIconSource",
+		InitCommand=function(self) self:visible(false) end,
+	},
 	-- this returns an ActorFrame ( see: ./Scripts/Consensual-sick_wheel.lua )
 	sort_wheel:create_actors( "Sort Menu", 9, wheel_item_mt, _screen.cx, _screen.cy )
 }

@@ -120,6 +120,14 @@ struct NoteFieldRenderArgs {
   float selection_glow;
   float fail_fade;
   float fade_before_targets;
+  int perf_visible_taps;
+  int perf_visible_holds;
+  int perf_visible_mines;
+  int perf_visible_lifts;
+  int perf_visible_fakes;
+  int perf_visible_attacks;
+  int perf_visible_autokeysounds;
+  int perf_visible_total;
 };
 
 // NCSplineHandler exists to allow NoteColumnRenderer to have separate

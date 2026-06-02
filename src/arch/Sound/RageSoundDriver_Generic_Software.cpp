@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cinttypes>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 
@@ -12,6 +13,8 @@
 #include "RageSoundReader.h"
 #include "RageThreads.h"
 #include "RageUtil.h"
+#include "Screen.h"
+#include "ScreenManager.h"
 #include "config.hpp"
 #include "global.h"
 
@@ -38,9 +41,14 @@ static int chunksize() { return 512; }
 static int underruns = 0, logged_underruns = 0;
 static std::atomic<bool> g_bUnderrunTraceEnabled{false};
 static std::once_flag g_UnderrunTraceInitOnce;
+static std::atomic<int> g_iUnderrunScreenContext{0};
+static std::atomic<int> g_iUnderrunScreenType{ScreenType_Invalid};
+static std::atomic<uint64_t> g_iUnderrunScreenContextUsec{0};
+static std::atomic<uint64_t> g_iSoundDebugSerial{0};
 static constexpr unsigned kDecodeLowWatermarkBlocks = 2;
 static constexpr unsigned kDecodeRefillTargetBlocks = 16;
 static constexpr unsigned kDecodeStartPrebufferTargetBlocks = 16;
+static constexpr unsigned kDecodeStrongStartMinimumBlocks = 4;
 static constexpr unsigned kDecodeShortSoundPrebufferTargetBlocks = 4;
 static constexpr int kDecodeEmergencySleepUsec = 125;
 static constexpr int kDecodeLowWatermarkSleepUsec = 250;
@@ -48,8 +56,103 @@ static constexpr uint64_t kDecodeEmergencyModeMaxUsec = 200000;
 static constexpr int kDecodeEmergencyRecoverySleepUsec = 500;
 static constexpr uint64_t kDecodeSchedulerStatsLogPeriodUsec = 3000000;
 static constexpr int kDecodeThreadWouldBlockRetries = 0;
-static constexpr int kStartPrebufferWouldBlockRetries = 80;
+static constexpr int kStartPrebufferWouldBlockRetries = 240;
 static constexpr int kStartPrebufferRetrySleepUsec = 1000;
+static constexpr int kStrongStartLastChanceWouldBlockRetries = 500;
+static constexpr uint64_t kMixerStarvationTracePeriodUsec = 250000;
+
+enum UnderrunScreenContext {
+  UNDERRUN_SCREEN_UNKNOWN = 0,
+  UNDERRUN_SCREEN_NONE,
+  UNDERRUN_SCREEN_GAMEPLAY,
+  UNDERRUN_SCREEN_EVALUATION,
+  UNDERRUN_SCREEN_SELECT_MUSIC,
+  UNDERRUN_SCREEN_PLAYER_OPTIONS,
+  UNDERRUN_SCREEN_SELECT_STYLE,
+  UNDERRUN_SCREEN_MENU,
+  UNDERRUN_SCREEN_ATTRACT,
+  UNDERRUN_SCREEN_SYSTEM,
+  UNDERRUN_SCREEN_OTHER
+};
+
+static const char* UnderrunScreenContextName(int context) {
+  switch (context) {
+    case UNDERRUN_SCREEN_NONE:
+      return "none";
+    case UNDERRUN_SCREEN_GAMEPLAY:
+      return "gameplay";
+    case UNDERRUN_SCREEN_EVALUATION:
+      return "evaluation";
+    case UNDERRUN_SCREEN_SELECT_MUSIC:
+      return "select_music";
+    case UNDERRUN_SCREEN_PLAYER_OPTIONS:
+      return "player_options";
+    case UNDERRUN_SCREEN_SELECT_STYLE:
+      return "select_style";
+    case UNDERRUN_SCREEN_MENU:
+      return "menu";
+    case UNDERRUN_SCREEN_ATTRACT:
+      return "attract";
+    case UNDERRUN_SCREEN_SYSTEM:
+      return "system";
+    case UNDERRUN_SCREEN_OTHER:
+      return "other";
+    default:
+      return "unknown";
+  }
+}
+
+static int ClassifyUnderrunScreenContext(
+    const std::string& screenName, ScreenType screenType) {
+  if (screenName.empty()) {
+    return UNDERRUN_SCREEN_NONE;
+  }
+  if (screenType == gameplay) {
+    return UNDERRUN_SCREEN_GAMEPLAY;
+  }
+  if (BeginsWith(screenName, "ScreenEvaluation")) {
+    return UNDERRUN_SCREEN_EVALUATION;
+  }
+  if (screenName == "ScreenSelectMusic") {
+    return UNDERRUN_SCREEN_SELECT_MUSIC;
+  }
+  if (screenName == "ScreenPlayerOptions") {
+    return UNDERRUN_SCREEN_PLAYER_OPTIONS;
+  }
+  if (screenName == "ScreenSelectStyle") {
+    return UNDERRUN_SCREEN_SELECT_STYLE;
+  }
+  if (screenType == game_menu) {
+    return UNDERRUN_SCREEN_MENU;
+  }
+  if (screenType == attract) {
+    return UNDERRUN_SCREEN_ATTRACT;
+  }
+  if (screenType == system_menu) {
+    return UNDERRUN_SCREEN_SYSTEM;
+  }
+  return UNDERRUN_SCREEN_OTHER;
+}
+
+static void UpdateUnderrunScreenContext() {
+  int context = UNDERRUN_SCREEN_NONE;
+  int screenType = ScreenType_Invalid;
+
+  if (SCREENMAN != nullptr) {
+    Screen* topScreen = SCREENMAN->GetTopScreen();
+    if (topScreen != nullptr) {
+      const ScreenType topScreenType = topScreen->GetScreenType();
+      context =
+          ClassifyUnderrunScreenContext(topScreen->GetName(), topScreenType);
+      screenType = topScreenType;
+    }
+  }
+
+  g_iUnderrunScreenType.store(screenType, std::memory_order_release);
+  g_iUnderrunScreenContext.store(context, std::memory_order_release);
+  g_iUnderrunScreenContextUsec.store(
+      RageTimer::GetTimeSinceStartMicroseconds(), std::memory_order_release);
+}
 
 static void EnsureUnderrunTraceInitialized() {
   std::call_once(g_UnderrunTraceInitOnce, []() {
@@ -68,8 +171,36 @@ static bool IsUnderrunTraceEnabled() {
 
 RageSoundDriver::Sound::Sound() {
   m_pSound = nullptr;
+  ClearDebugIdentity();
   m_State = AVAILABLE;
   m_bPaused = false;
+}
+
+void RageSoundDriver::Sound::ClearDebugIdentity() {
+  m_szDebugPath[0] = '\0';
+  m_iDebugSerial = 0;
+  m_iDebugStartUsec = 0;
+  m_iDebugPrebufferTarget = 0;
+  m_iDebugPrebufferReadable = 0;
+  m_iDebugPrebufferWritable = 0;
+  m_bDebugStrongPrebuffer = false;
+}
+
+void RageSoundDriver::Sound::SetDebugIdentity(
+    const std::string& path, uint64_t serial, uint64_t startUsec) {
+  std::snprintf(
+      m_szDebugPath, ARRAYLEN(m_szDebugPath), "%s",
+      path.empty() ? "<empty-path>" : path.c_str());
+  m_iDebugSerial = serial;
+  m_iDebugStartUsec = startUsec;
+  m_iDebugPrebufferTarget = 0;
+  m_iDebugPrebufferReadable = 0;
+  m_iDebugPrebufferWritable = 0;
+  m_bDebugStrongPrebuffer = false;
+}
+
+const char* RageSoundDriver::Sound::GetDebugPath() const {
+  return m_szDebugPath[0] == '\0' ? "<unassigned-slot>" : m_szDebugPath;
 }
 
 void RageSoundDriver::Sound::Allocate(int iFrames) {
@@ -200,22 +331,63 @@ RageSoundMixBuffer& RageSoundDriver::MixIntoBuffer(
     /* If we don't have enough to fill the buffer, we've underrun. */
     if (iGotFrames < iFrames && s.m_State == Sound::PLAYING) {
       ++underruns;
-      if (traceEnabled) {
-        static uint64_t sLastUnderrunTraceUsec = 0;
-        const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
-        if (sLastUnderrunTraceUsec == 0 ||
-            nowUsec - sLastUnderrunTraceUsec >= 250000) {
-          sLastUnderrunTraceUsec = nowUsec;
-          const std::string loadedPath =
-              s.m_pSound ? s.m_pSound->GetLoadedFilePath() : "<null>";
-          LOG->Warn(
-              "UNDERRUN_TRACE: sound='%s' state=%d got=%d need=%d missing=%d "
-              "frames_left=%d readable_blocks=%u writable_blocks=%u "
-              "mix_frame=%" PRId64 " hw_frame=%" PRId64,
-              loadedPath.c_str(), s.m_State, iGotFrames, iFrames,
-              iFrames - iGotFrames, iFramesLeft, s.m_Buffer.num_readable(),
-              s.m_Buffer.num_writable(), iFrameNumber, iCurrentFrame);
+      static uint64_t sLastUnderrunTraceUsec = 0;
+      const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+      if (sLastUnderrunTraceUsec == 0 ||
+          nowUsec - sLastUnderrunTraceUsec >= kMixerStarvationTracePeriodUsec) {
+        sLastUnderrunTraceUsec = nowUsec;
+        const int context =
+            g_iUnderrunScreenContext.load(std::memory_order_acquire);
+        const int screenType =
+            g_iUnderrunScreenType.load(std::memory_order_acquire);
+        const uint64_t contextUsec =
+            g_iUnderrunScreenContextUsec.load(std::memory_order_acquire);
+        const uint64_t contextAgeUsec =
+            contextUsec == 0 || nowUsec < contextUsec ? 0 : nowUsec - contextUsec;
+        unsigned activeSounds = 0;
+        std::string activeSlotSummary;
+        for (unsigned activeIndex = 0; activeIndex < ARRAYLEN(m_Sounds);
+             ++activeIndex) {
+          const int activeState = m_Sounds[activeIndex].m_State;
+          if (activeState == Sound::PLAYING ||
+              activeState == Sound::STOPPING ||
+              activeState == Sound::BUFFERING) {
+            ++activeSounds;
+            if (activeSlotSummary.size() < 900) {
+              if (!activeSlotSummary.empty()) {
+                activeSlotSummary += "|";
+              }
+              activeSlotSummary += ssprintf(
+                  "%u#%" PRIu64 ":s%d:r%u:w%u:%s", activeIndex,
+                  m_Sounds[activeIndex].m_iDebugSerial, activeState,
+                  m_Sounds[activeIndex].m_Buffer.num_readable(),
+                  m_Sounds[activeIndex].m_Buffer.num_writable(),
+                  m_Sounds[activeIndex].GetDebugPath());
+            }
+          }
         }
+        LOG->Warn(
+            "UNDERRUN_TRACE: mixer_starvation sound='%s' slot=%u serial=%" PRIu64
+            " state=%d "
+            "context=%s screen_type=%d context_age_us=%" PRIu64
+            " got=%d need=%d missing=%d frames_left=%d readable_blocks=%u "
+            "writable_blocks=%u active_sounds=%u sample_rate=%d "
+            "prebuffer_target=%u prebuffer_readable=%u prebuffer_writable=%u "
+            "strong_prebuffer=%d slot_age_us=%" PRIu64
+            " mix_frame=%" PRId64 " hw_frame=%" PRId64
+            " verbose=%d active_slots='%s'",
+            s.GetDebugPath(), i, s.m_iDebugSerial, s.m_State,
+            UnderrunScreenContextName(context), screenType, contextAgeUsec,
+            iGotFrames, iFrames, iFrames - iGotFrames, iFramesLeft,
+            s.m_Buffer.num_readable(), s.m_Buffer.num_writable(), activeSounds,
+            GetSampleRate(), s.m_iDebugPrebufferTarget,
+            s.m_iDebugPrebufferReadable, s.m_iDebugPrebufferWritable,
+            s.m_bDebugStrongPrebuffer ? 1 : 0,
+            s.m_iDebugStartUsec == 0 || nowUsec < s.m_iDebugStartUsec
+                ? 0
+                : nowUsec - s.m_iDebugStartUsec,
+            iFrameNumber, iCurrentFrame, traceEnabled ? 1 : 0,
+            activeSlotSummary.c_str());
       }
     }
   }
@@ -535,8 +707,7 @@ bool RageSoundDriver::RefillSoundBufferToTarget(
     const bool shouldLog = wouldBlocks > 0 || !targetReached ||
                            readableBefore <= kDecodeLowWatermarkBlocks;
 
-    const std::string loadedPath =
-        s.m_pSound ? s.m_pSound->GetLoadedFilePath() : "<null>";
+    const std::string loadedPath = s.GetDebugPath();
     if (trace != nullptr) {
       trace->path = loadedPath;
       trace->readableBefore = readableBefore;
@@ -568,6 +739,8 @@ bool RageSoundDriver::RefillSoundBufferToTarget(
 }
 
 void RageSoundDriver::Update() {
+  UpdateUnderrunScreenContext();
+
   m_Mutex.Lock();
   for (unsigned i = 0; i < ARRAYLEN(m_Sounds); ++i) {
     {
@@ -584,6 +757,7 @@ void RageSoundDriver::Update() {
     switch (m_Sounds[i].m_State) {
       case Sound::STOPPED:
         m_Sounds[i].Deallocate();
+        m_Sounds[i].ClearDebugIdentity();
         m_Sounds[i].m_State = Sound::AVAILABLE;
         continue;
       case Sound::STOPPING:
@@ -670,6 +844,13 @@ void RageSoundDriver::StartMixing(RageSoundBase* pSound) {
   m_SoundListMutex.Unlock();
 
   s.m_pSound = pSound;
+  std::string loadedPath = pSound->GetLoadedFilePath();
+  if (loadedPath.empty()) {
+    loadedPath = ssprintf("<empty-path:%p>", static_cast<void*>(pSound));
+  }
+  s.SetDebugIdentity(
+      loadedPath, g_iSoundDebugSerial.fetch_add(1, std::memory_order_relaxed) + 1,
+      RageTimer::GetTimeSinceStartMicroseconds());
   s.m_StartTime = pSound->GetStartTime();
   s.m_Buffer.clear();
 
@@ -681,11 +862,14 @@ void RageSoundDriver::StartMixing(RageSoundBase* pSound) {
   //	LOG->Trace("StartMixing(%s) (%p)",
   // s.m_pSound->GetLoadedFilePath().c_str(), s.m_pSound );
 
-  const std::string loadedPath = s.m_pSound->GetLoadedFilePath();
   const bool useStrongPrebuffer = s.m_pSound->PrefersStrongPrebuffer();
   const unsigned prebufferTarget = useStrongPrebuffer
                                        ? kDecodeStartPrebufferTargetBlocks
                                        : kDecodeShortSoundPrebufferTargetBlocks;
+  const unsigned strongStartMinimum =
+      useStrongPrebuffer
+          ? std::min(kDecodeStrongStartMinimumBlocks, prebufferTarget)
+          : 0;
   const int wouldBlockRetries =
       useStrongPrebuffer ? kStartPrebufferWouldBlockRetries : 0;
   const int retrySleepUsec =
@@ -694,18 +878,57 @@ void RageSoundDriver::StartMixing(RageSoundBase* pSound) {
   RefillSoundBufferToTarget(
       s, prebufferTarget, "start_mixing", wouldBlockRetries, retrySleepUsec);
 
+  s.m_iDebugPrebufferTarget = prebufferTarget;
+  s.m_iDebugPrebufferReadable = s.m_Buffer.num_readable();
+  s.m_iDebugPrebufferWritable = s.m_Buffer.num_writable();
+  s.m_bDebugStrongPrebuffer = useStrongPrebuffer;
+
+  if (useStrongPrebuffer && s.m_State == Sound::BUFFERING &&
+      s.m_Buffer.num_readable() < strongStartMinimum &&
+      s.m_Buffer.num_writable() > 0) {
+    LOG->Warn(
+        "UNDERRUN_TRACE: start_mixing_strong_prebuffer_wait sound='%s' slot=%u "
+        "serial=%" PRIu64 " readable_blocks=%u writable_blocks=%u target=%u "
+        "minimum=%u retries=%d retry_sleep_us=%d",
+        s.GetDebugPath(), i, s.m_iDebugSerial, s.m_Buffer.num_readable(),
+        s.m_Buffer.num_writable(), prebufferTarget, strongStartMinimum,
+        kStrongStartLastChanceWouldBlockRetries, kStartPrebufferRetrySleepUsec);
+
+    RefillSoundBufferToTarget(
+        s, prebufferTarget, "start_mixing_strong_last_chance",
+        kStrongStartLastChanceWouldBlockRetries, kStartPrebufferRetrySleepUsec);
+
+    s.m_iDebugPrebufferReadable = s.m_Buffer.num_readable();
+    s.m_iDebugPrebufferWritable = s.m_Buffer.num_writable();
+
+    if (s.m_State == Sound::BUFFERING &&
+        s.m_Buffer.num_readable() < strongStartMinimum &&
+        s.m_Buffer.num_writable() > 0) {
+      LOG->Warn(
+          "UNDERRUN_TRACE: start_mixing_strong_prebuffer_timeout sound='%s' "
+          "slot=%u serial=%" PRIu64
+          " readable_blocks=%u writable_blocks=%u target=%u minimum=%u",
+          s.GetDebugPath(), i, s.m_iDebugSerial, s.m_Buffer.num_readable(),
+          s.m_Buffer.num_writable(), prebufferTarget, strongStartMinimum);
+    }
+  }
+
   if (s.m_State == Sound::BUFFERING) {
     s.m_State = Sound::PLAYING;
   }
 
-  if (traceEnabled) {
+  if (traceEnabled || useStrongPrebuffer ||
+      BeginsWith(loadedPath, "<empty-path:")) {
     LOG->Info(
-        "UNDERRUN_TRACE: start_mixing_ready sound='%s' state=%d "
+        "UNDERRUN_TRACE: start_mixing_ready sound='%s' slot=%u serial=%" PRIu64
+        " state=%d "
         "readable_blocks=%u writable_blocks=%u prebuffer_target=%u "
+        "minimum_blocks=%u "
         "strong_prebuffer=%d retries=%d retry_sleep_us=%d",
-        loadedPath.c_str(), s.m_State, s.m_Buffer.num_readable(),
-        s.m_Buffer.num_writable(), prebufferTarget, useStrongPrebuffer ? 1 : 0,
-        wouldBlockRetries, retrySleepUsec);
+        s.GetDebugPath(), i, s.m_iDebugSerial, s.m_State,
+        s.m_Buffer.num_readable(), s.m_Buffer.num_writable(), prebufferTarget,
+        strongStartMinimum, useStrongPrebuffer ? 1 : 0, wouldBlockRetries,
+        retrySleepUsec);
   }
 
   //	LOG->Trace("StartMixing: (#%i) finished prebuffering(%s) (%p)", i,

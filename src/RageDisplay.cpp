@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "DisplaySpec.h"
@@ -32,6 +33,10 @@
 
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
+#endif
+
+#ifdef __APPLE__
+#include <mach/mach_time.h>
 #endif
 
 // Statistics stuff
@@ -66,6 +71,580 @@ RageDisplay* DISPLAY =
 
 Preference<bool> LOG_FPS("LogFPS", false);
 Preference<float> g_fFrameLimitPercent("FrameLimitPercent", 0.0f);
+Preference<float> g_fFramePacingTargetHz("FramePacingTargetHz", 0.0f);
+Preference<float> g_fFramePacingSleepMarginMs(
+    "FramePacingSleepMarginMs", 1.0f);
+Preference<float> g_fFramePacingMaxSleepChunkMs(
+    "FramePacingMaxSleepChunkMs", 1.0f);
+Preference<float> g_fFramePacingFineWaitMs("FramePacingFineWaitMs", 0.5f);
+Preference<bool> g_bFramePacingAdaptiveMargin(
+    "FramePacingAdaptiveMargin", true);
+Preference<float> g_fFramePacingAdaptiveMaxMarginMs(
+    "FramePacingAdaptiveMaxMarginMs", 8.0f);
+Preference<float> g_fFramePacingAdaptiveStepUpMs(
+    "FramePacingAdaptiveStepUpMs", 1.0f);
+Preference<float> g_fFramePacingAdaptiveStepDownMs(
+    "FramePacingAdaptiveStepDownMs", 0.25f);
+Preference<float> g_fFramePacingAdaptiveLateMs(
+    "FramePacingAdaptiveLateMs", 4.0f);
+Preference<float> g_fFramePacingAdaptiveWakeLateMs(
+    "FramePacingAdaptiveWakeLateMs", 2.0f);
+Preference<float> g_fFramePacingPhaseResyncMs(
+    "FramePacingPhaseResyncMs", 8.0f);
+Preference<int> g_iFramePacingAdaptiveWarmupFrames(
+    "FramePacingAdaptiveWarmupFrames", 45);
+Preference<int> g_iFramePacingAdaptiveLateFrames(
+    "FramePacingAdaptiveLateFrames", 3);
+Preference<int> g_iFramePacingAdaptiveStableFrames(
+    "FramePacingAdaptiveStableFrames", 180);
+Preference<float> g_fPerfTraceFramePacingLateMs(
+    "PerfTraceFramePacingLateMs", 8.0f);
+
+namespace {
+static uint64_t g_iFramePacerNextPresentUsec = 0;
+static uint64_t g_iFramePacerFrames = 0;
+static uint64_t g_iFramePacerLastPlannedWaitUsec = 0;
+static uint64_t g_iFramePacerLastSleepUsec = 0;
+static uint64_t g_iFramePacerLastActualSleepUsec = 0;
+static uint64_t g_iFramePacerLastSleepOvershootUsec = 0;
+static uint64_t g_iFramePacerLastFineWaitUsec = 0;
+static uint64_t g_iFramePacerLastSpinWaitUsec = 0;
+static uint64_t g_iFramePacerAdaptiveMarginUsec = 0;
+static uint64_t g_iFramePacerLastBaseMarginUsec = 0;
+static uint64_t g_iFramePacerLastEffectiveMarginUsec = 0;
+static uint64_t g_iFramePacerLastNextMarginUsec = 0;
+static uint64_t g_iFramePacerLastMaxMarginUsec = 0;
+static uint64_t g_iFramePacerLastSwapBuffersUsec = 0;
+static int64_t g_iFramePacerLastAdaptiveAdjustUsec = 0;
+static int64_t g_iFramePacerLastLateBeforeUsec = 0;
+static int64_t g_iFramePacerLastLateAfterWaitUsec = 0;
+static int64_t g_iFramePacerLastWakeLateUsec = 0;
+static int g_iFramePacerLastSleepChunks = 0;
+static int g_iFramePacerStableFrames = 0;
+static int g_iFramePacerConsecutiveLateFrames = 0;
+static int g_iFramePacerWarmupFramesRemaining = 0;
+static bool g_bFramePacerLoggedEnable = false;
+static bool g_bFramePacerWasEnabled = false;
+static bool g_bFramePacerLastAdaptiveChanged = false;
+static const char* g_szFramePacerLastAdaptiveReason = "init";
+static const char* g_szFramePacerLastClassification = "init";
+
+static float ClampFramePacingHz(float targetHz) {
+  if (!std::isfinite(targetHz) || targetHz <= 0.0f) {
+    return 0.0f;
+  }
+  return std::clamp(targetHz, 10.0f, 1000.0f);
+}
+
+static uint64_t FramePacingIntervalUsec(float targetHz) {
+  return static_cast<uint64_t>(
+      std::llround(1000000.0 / static_cast<double>(targetHz)));
+}
+
+static uint64_t FramePacingMarginUsec(uint64_t intervalUsec) {
+  const float marginMs =
+      std::max(0.0f, g_fFramePacingSleepMarginMs.Get());
+  const uint64_t requestedUsec =
+      static_cast<uint64_t>(std::llround(marginMs * 1000.0f));
+  return std::min(requestedUsec, intervalUsec / 2);
+}
+
+static uint64_t FramePacingAdaptiveMaxMarginUsec(
+    uint64_t intervalUsec, uint64_t baseMarginUsec) {
+  const float maxMs = g_fFramePacingAdaptiveMaxMarginMs.Get();
+  const uint64_t fallbackUsec = 8000;
+  uint64_t requestedUsec = fallbackUsec;
+  if (std::isfinite(maxMs) && maxMs > 0.0f) {
+    requestedUsec =
+        static_cast<uint64_t>(std::llround(maxMs * 1000.0f));
+  }
+
+  const uint64_t maxUsec =
+      std::min<uint64_t>(requestedUsec, intervalUsec / 2);
+  return std::max(baseMarginUsec, maxUsec);
+}
+
+static uint64_t FramePacingStepUsec(
+    float requestedMs, uint64_t intervalUsec, uint64_t fallbackUsec) {
+  if (!std::isfinite(requestedMs) || requestedMs <= 0.0f) {
+    return fallbackUsec;
+  }
+
+  const uint64_t requestedUsec =
+      static_cast<uint64_t>(std::llround(requestedMs * 1000.0f));
+  return std::clamp<uint64_t>(requestedUsec, 100, intervalUsec / 4);
+}
+
+static uint64_t FramePacingAdaptiveStepUpUsec(uint64_t intervalUsec) {
+  return FramePacingStepUsec(
+      g_fFramePacingAdaptiveStepUpMs.Get(), intervalUsec, 1000);
+}
+
+static uint64_t FramePacingAdaptiveStepDownUsec(uint64_t intervalUsec) {
+  return FramePacingStepUsec(
+      g_fFramePacingAdaptiveStepDownMs.Get(), intervalUsec, 250);
+}
+
+static uint64_t FramePacingAdaptiveLateThresholdUsec(
+    uint64_t intervalUsec) {
+  return FramePacingStepUsec(
+      g_fFramePacingAdaptiveLateMs.Get(), intervalUsec, 4000);
+}
+
+static uint64_t FramePacingAdaptiveWakeLateThresholdUsec(
+    uint64_t intervalUsec) {
+  return FramePacingStepUsec(
+      g_fFramePacingAdaptiveWakeLateMs.Get(), intervalUsec, 2000);
+}
+
+static uint64_t FramePacingPhaseResyncThresholdUsec(uint64_t intervalUsec) {
+  const float requestedMs = g_fFramePacingPhaseResyncMs.Get();
+  const uint64_t fallbackUsec =
+      std::max<uint64_t>(4000, intervalUsec / 2);
+  if (!std::isfinite(requestedMs) || requestedMs <= 0.0f) {
+    return fallbackUsec;
+  }
+
+  const uint64_t requestedUsec =
+      static_cast<uint64_t>(std::llround(requestedMs * 1000.0f));
+  return std::clamp<uint64_t>(requestedUsec, 1000, intervalUsec * 2);
+}
+
+static int FramePacingAdaptiveWarmupFrames() {
+  return std::clamp(g_iFramePacingAdaptiveWarmupFrames.Get(), 0, 600);
+}
+
+static int FramePacingAdaptiveLateFrames() {
+  return std::clamp(g_iFramePacingAdaptiveLateFrames.Get(), 1, 30);
+}
+
+static int FramePacingAdaptiveStableFrames() {
+  return std::clamp(g_iFramePacingAdaptiveStableFrames.Get(), 30, 1800);
+}
+
+static uint64_t FramePacingEffectiveMarginUsec(uint64_t intervalUsec) {
+  const uint64_t baseMarginUsec = FramePacingMarginUsec(intervalUsec);
+  const uint64_t maxMarginUsec =
+      FramePacingAdaptiveMaxMarginUsec(intervalUsec, baseMarginUsec);
+  g_iFramePacerLastBaseMarginUsec = baseMarginUsec;
+  g_iFramePacerLastMaxMarginUsec = maxMarginUsec;
+
+  if (!g_bFramePacingAdaptiveMargin.Get()) {
+    g_iFramePacerAdaptiveMarginUsec = baseMarginUsec;
+    g_iFramePacerLastEffectiveMarginUsec = baseMarginUsec;
+    g_iFramePacerLastNextMarginUsec = baseMarginUsec;
+    return baseMarginUsec;
+  }
+
+  if (g_iFramePacerAdaptiveMarginUsec == 0) {
+    g_iFramePacerAdaptiveMarginUsec = baseMarginUsec;
+  }
+  g_iFramePacerAdaptiveMarginUsec = std::clamp<uint64_t>(
+      g_iFramePacerAdaptiveMarginUsec, baseMarginUsec, maxMarginUsec);
+  g_iFramePacerLastEffectiveMarginUsec = g_iFramePacerAdaptiveMarginUsec;
+  g_iFramePacerLastNextMarginUsec = g_iFramePacerAdaptiveMarginUsec;
+  return g_iFramePacerAdaptiveMarginUsec;
+}
+
+static uint64_t FramePacingMaxSleepChunkUsec(uint64_t intervalUsec) {
+  const float chunkMs = g_fFramePacingMaxSleepChunkMs.Get();
+  const uint64_t fallbackUsec = 1000;
+  if (!std::isfinite(chunkMs) || chunkMs <= 0.0f) {
+    return fallbackUsec;
+  }
+
+  const uint64_t requestedUsec =
+      static_cast<uint64_t>(std::llround(chunkMs * 1000.0f));
+  return std::clamp<uint64_t>(requestedUsec, 100, intervalUsec / 2);
+}
+
+static uint64_t FramePacingFineWaitUsec(uint64_t intervalUsec) {
+  const float fineMs = g_fFramePacingFineWaitMs.Get();
+  const uint64_t fallbackUsec = 500;
+  if (!std::isfinite(fineMs) || fineMs <= 0.0f) {
+    return fallbackUsec;
+  }
+
+  const uint64_t requestedUsec =
+      static_cast<uint64_t>(std::llround(fineMs * 1000.0f));
+  return std::clamp<uint64_t>(requestedUsec, 100, intervalUsec / 4);
+}
+
+static uint64_t FramePacingResyncThresholdUsec(uint64_t intervalUsec) {
+  return intervalUsec * 4;
+}
+
+static bool FramePacingSwapLikelyBlocked(
+    uint64_t swapBuffersUsec, uint64_t intervalUsec) {
+  if (swapBuffersUsec == 0 || intervalUsec == 0) {
+    return false;
+  }
+
+  const uint64_t nearIntervalUsec =
+      intervalUsec > 1000 ? intervalUsec - 1000 : intervalUsec;
+  return swapBuffersUsec >= nearIntervalUsec;
+}
+
+static const char* ClassifyFramePacing(
+    int64_t presentLateUsec, int64_t wakeLateUsec, uint64_t swapBuffersUsec,
+    uint64_t sleepOvershootUsec, uint64_t intervalUsec, int skippedIntervals,
+    bool hardResynced, bool phaseResynced) {
+  if (hardResynced || skippedIntervals > 0) {
+    return "phase_skip";
+  }
+  if (FramePacingSwapLikelyBlocked(swapBuffersUsec, intervalUsec)) {
+    return "swap_block";
+  }
+  if (phaseResynced ||
+      presentLateUsec >
+          static_cast<int64_t>(FramePacingPhaseResyncThresholdUsec(
+              intervalUsec))) {
+    return "present_phase_late";
+  }
+  if (presentLateUsec >
+      static_cast<int64_t>(FramePacingAdaptiveLateThresholdUsec(
+          intervalUsec))) {
+    return "present_late";
+  }
+  if (wakeLateUsec >
+      static_cast<int64_t>(FramePacingAdaptiveWakeLateThresholdUsec(
+          intervalUsec))) {
+    return "pacing_wake_late";
+  }
+  if (sleepOvershootUsec >
+      FramePacingAdaptiveWakeLateThresholdUsec(intervalUsec)) {
+    return "sleep_overshoot";
+  }
+  return "stable";
+}
+
+static const char* FramePacingWaitStrategyName() {
+#ifdef __APPLE__
+  return "macos_single_absolute";
+#else
+  return "chunked_sleep";
+#endif
+}
+
+struct FramePacingWaitStats {
+  uint64_t requested_sleep_usec = 0;
+  uint64_t actual_sleep_usec = 0;
+  uint64_t sleep_overshoot_usec = 0;
+  uint64_t fine_wait_usec = 0;
+  uint64_t spin_wait_usec = 0;
+  int sleep_chunks = 0;
+};
+
+static void FramePacingSleepUsec(uint64_t usec) {
+  if (usec == 0) {
+    return;
+  }
+
+  usleep(static_cast<unsigned int>(std::min<uint64_t>(usec, 1000000)));
+}
+
+static void FramePacingWaitUntilUsec(uint64_t targetUsec) {
+  const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  if (targetUsec <= nowUsec) {
+    return;
+  }
+
+#ifdef __APPLE__
+  static mach_timebase_info_data_t timebase = {0, 0};
+  if (timebase.denom == 0) {
+    mach_timebase_info(&timebase);
+  }
+  if (timebase.numer == 0 || timebase.denom == 0) {
+    FramePacingSleepUsec(targetUsec - nowUsec);
+    return;
+  }
+
+  const uint64_t remainingUsec = targetUsec - nowUsec;
+  const double ticks =
+      static_cast<double>(remainingUsec) * 1000.0 *
+      static_cast<double>(timebase.denom) /
+      static_cast<double>(timebase.numer);
+  mach_wait_until(
+      mach_absolute_time() +
+      std::max<uint64_t>(1, static_cast<uint64_t>(std::llround(ticks))));
+#else
+  FramePacingSleepUsec(targetUsec - nowUsec);
+#endif
+}
+
+static FramePacingWaitStats WaitUntilFramePacingWakeUsec(
+    uint64_t wakeUsec, uint64_t fineWaitUsec, uint64_t maxSleepChunkUsec,
+    bool appHasFocus) {
+  FramePacingWaitStats stats;
+  uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+
+  if (!appHasFocus) {
+    if (wakeUsec > nowUsec) {
+      const uint64_t requestedUsec =
+          std::max<uint64_t>(wakeUsec - nowUsec, 10000);
+      const uint64_t sleepStartUsec = nowUsec;
+      FramePacingWaitUntilUsec(nowUsec + requestedUsec);
+      nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+      stats.requested_sleep_usec = requestedUsec;
+      stats.actual_sleep_usec = nowUsec - sleepStartUsec;
+      stats.sleep_chunks = 1;
+    }
+  } else {
+    constexpr uint64_t kBusySpinWindowUsec = 200;
+
+#ifdef __APPLE__
+    (void)maxSleepChunkUsec;
+    const uint64_t sleepTargetUsec =
+        wakeUsec > fineWaitUsec ? wakeUsec - fineWaitUsec : wakeUsec;
+    if (sleepTargetUsec > nowUsec) {
+      const uint64_t requestedUsec = sleepTargetUsec - nowUsec;
+      const uint64_t sleepStartUsec = nowUsec;
+      FramePacingWaitUntilUsec(sleepTargetUsec);
+      nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+      stats.requested_sleep_usec = requestedUsec;
+      stats.actual_sleep_usec = nowUsec - sleepStartUsec;
+      stats.sleep_chunks = 1;
+    }
+
+    while (nowUsec < wakeUsec) {
+      const uint64_t remainingUsec = wakeUsec - nowUsec;
+
+      if (remainingUsec > kBusySpinWindowUsec) {
+        const uint64_t yieldStartUsec = nowUsec;
+        std::this_thread::yield();
+        nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+        stats.fine_wait_usec += nowUsec - yieldStartUsec;
+        continue;
+      }
+
+      const uint64_t spinStartUsec = nowUsec;
+      do {
+        nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+      } while (nowUsec < wakeUsec);
+      stats.spin_wait_usec += nowUsec - spinStartUsec;
+      break;
+    }
+#else
+    while (nowUsec < wakeUsec) {
+      const uint64_t remainingUsec = wakeUsec - nowUsec;
+
+      if (remainingUsec > fineWaitUsec) {
+        const uint64_t requestedUsec =
+            std::min(remainingUsec - fineWaitUsec, maxSleepChunkUsec);
+        const uint64_t sleepStartUsec = nowUsec;
+        FramePacingWaitUntilUsec(nowUsec + requestedUsec);
+        nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+        stats.requested_sleep_usec += requestedUsec;
+        stats.actual_sleep_usec += nowUsec - sleepStartUsec;
+        ++stats.sleep_chunks;
+        continue;
+      }
+
+      if (remainingUsec > kBusySpinWindowUsec) {
+        const uint64_t yieldStartUsec = nowUsec;
+        std::this_thread::yield();
+        nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+        stats.fine_wait_usec += nowUsec - yieldStartUsec;
+        continue;
+      }
+
+      const uint64_t spinStartUsec = nowUsec;
+      do {
+        nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+      } while (nowUsec < wakeUsec);
+      stats.spin_wait_usec += nowUsec - spinStartUsec;
+      break;
+    }
+#endif
+  }
+
+  if (stats.actual_sleep_usec > stats.requested_sleep_usec) {
+    stats.sleep_overshoot_usec =
+        stats.actual_sleep_usec - stats.requested_sleep_usec;
+  }
+
+  return stats;
+}
+
+static uint64_t FramePacingSwapBuffersUsec(float swapBuffersMs) {
+  if (!std::isfinite(swapBuffersMs) || swapBuffersMs < 0.0f) {
+    return 0;
+  }
+
+  return static_cast<uint64_t>(std::llround(swapBuffersMs * 1000.0f));
+}
+
+static void UpdateFramePacingAdaptiveMargin(
+    uint64_t intervalUsec, int64_t presentLateUsec, int skippedIntervals,
+    bool hardResynced, bool phaseResynced, uint64_t swapBuffersUsec) {
+  const uint64_t baseMarginUsec = FramePacingMarginUsec(intervalUsec);
+  const uint64_t maxMarginUsec =
+      FramePacingAdaptiveMaxMarginUsec(intervalUsec, baseMarginUsec);
+  const uint64_t lateThresholdUsec =
+      FramePacingAdaptiveLateThresholdUsec(intervalUsec);
+  const uint64_t wakeLateThresholdUsec =
+      FramePacingAdaptiveWakeLateThresholdUsec(intervalUsec);
+  const uint64_t stepUpUsec =
+      FramePacingAdaptiveStepUpUsec(intervalUsec);
+  const uint64_t stepDownUsec =
+      FramePacingAdaptiveStepDownUsec(intervalUsec);
+  const int64_t positivePresentLateUsec =
+      std::max<int64_t>(presentLateUsec, 0);
+  const int64_t positiveWakeLateUsec =
+      std::max<int64_t>(g_iFramePacerLastWakeLateUsec, 0);
+
+  g_iFramePacerLastSwapBuffersUsec = swapBuffersUsec;
+  g_iFramePacerLastBaseMarginUsec = baseMarginUsec;
+  g_iFramePacerLastMaxMarginUsec = maxMarginUsec;
+  g_iFramePacerLastAdaptiveAdjustUsec = 0;
+  g_bFramePacerLastAdaptiveChanged = false;
+  g_szFramePacerLastAdaptiveReason = "stable";
+  g_szFramePacerLastClassification = ClassifyFramePacing(
+      presentLateUsec, g_iFramePacerLastWakeLateUsec, swapBuffersUsec,
+      g_iFramePacerLastSleepOvershootUsec, intervalUsec, skippedIntervals,
+      hardResynced, phaseResynced);
+
+  if (!g_bFramePacingAdaptiveMargin.Get()) {
+    g_iFramePacerAdaptiveMarginUsec = baseMarginUsec;
+    g_iFramePacerLastNextMarginUsec = baseMarginUsec;
+    g_iFramePacerStableFrames = 0;
+    g_iFramePacerConsecutiveLateFrames = 0;
+    g_szFramePacerLastAdaptiveReason = "disabled";
+    return;
+  }
+
+  if (g_iFramePacerAdaptiveMarginUsec == 0) {
+    g_iFramePacerAdaptiveMarginUsec = baseMarginUsec;
+  }
+  g_iFramePacerAdaptiveMarginUsec = std::clamp<uint64_t>(
+      g_iFramePacerAdaptiveMarginUsec, baseMarginUsec, maxMarginUsec);
+
+  const uint64_t oldMarginUsec = g_iFramePacerAdaptiveMarginUsec;
+  if (g_iFramePacerWarmupFramesRemaining > 0) {
+    --g_iFramePacerWarmupFramesRemaining;
+    g_iFramePacerStableFrames = 0;
+    g_iFramePacerConsecutiveLateFrames = 0;
+    g_iFramePacerLastNextMarginUsec = g_iFramePacerAdaptiveMarginUsec;
+    g_szFramePacerLastAdaptiveReason = "warmup";
+    return;
+  }
+
+  const bool missedPresent = skippedIntervals > 0 || hardResynced;
+  const bool presentLate =
+      positivePresentLateUsec > static_cast<int64_t>(lateThresholdUsec);
+  const bool wakeLate =
+      positiveWakeLateUsec > static_cast<int64_t>(wakeLateThresholdUsec);
+  const bool phaseLate = phaseResynced;
+  const bool swapLikelyBlocked =
+      FramePacingSwapLikelyBlocked(swapBuffersUsec, intervalUsec);
+  const bool severeLate =
+      missedPresent ||
+      positivePresentLateUsec > static_cast<int64_t>(intervalUsec) ||
+      swapBuffersUsec > intervalUsec;
+  const bool lateThisFrame =
+      missedPresent || phaseLate || presentLate || wakeLate || swapLikelyBlocked;
+
+  if (lateThisFrame) {
+    ++g_iFramePacerConsecutiveLateFrames;
+  } else {
+    g_iFramePacerConsecutiveLateFrames = 0;
+  }
+
+  const bool shouldIncrease =
+      severeLate ||
+      g_iFramePacerConsecutiveLateFrames >= FramePacingAdaptiveLateFrames();
+
+  if (shouldIncrease) {
+    uint64_t targetMarginUsec =
+        std::min(maxMarginUsec, oldMarginUsec + stepUpUsec);
+
+    if (missedPresent) {
+      targetMarginUsec = std::min<uint64_t>(
+          maxMarginUsec,
+          targetMarginUsec +
+              stepUpUsec * static_cast<uint64_t>(
+                                std::clamp(skippedIntervals, 1, 3)));
+    }
+    if (phaseLate || presentLate) {
+      targetMarginUsec =
+          std::min<uint64_t>(maxMarginUsec, targetMarginUsec + stepUpUsec);
+    }
+    if (wakeLate) {
+      targetMarginUsec =
+          std::min<uint64_t>(maxMarginUsec, targetMarginUsec + stepUpUsec);
+    }
+    if (swapLikelyBlocked) {
+      targetMarginUsec =
+          std::min<uint64_t>(maxMarginUsec, targetMarginUsec + stepUpUsec);
+    }
+
+    g_iFramePacerAdaptiveMarginUsec =
+        std::clamp<uint64_t>(targetMarginUsec, baseMarginUsec, maxMarginUsec);
+    g_iFramePacerStableFrames = 0;
+    g_szFramePacerLastAdaptiveReason =
+        missedPresent       ? "missed_present"
+        : phaseLate         ? "phase_late"
+        : swapLikelyBlocked ? "swap_block"
+        : presentLate       ? "present_late"
+        : wakeLate          ? "wake_late"
+                            : "late_streak";
+  } else {
+    if (lateThisFrame) {
+      g_iFramePacerStableFrames = 0;
+      g_szFramePacerLastAdaptiveReason = "late_observed";
+    } else {
+      ++g_iFramePacerStableFrames;
+    }
+    if (g_iFramePacerStableFrames >= FramePacingAdaptiveStableFrames() &&
+        oldMarginUsec > baseMarginUsec) {
+      g_iFramePacerAdaptiveMarginUsec =
+          oldMarginUsec > baseMarginUsec + stepDownUsec
+              ? oldMarginUsec - stepDownUsec
+              : baseMarginUsec;
+      g_iFramePacerStableFrames = 0;
+      g_szFramePacerLastAdaptiveReason = "stable_decay";
+    }
+  }
+
+  g_iFramePacerLastNextMarginUsec = g_iFramePacerAdaptiveMarginUsec;
+  if (g_iFramePacerAdaptiveMarginUsec != oldMarginUsec) {
+    g_iFramePacerLastAdaptiveAdjustUsec =
+        static_cast<int64_t>(g_iFramePacerAdaptiveMarginUsec) -
+        static_cast<int64_t>(oldMarginUsec);
+    g_bFramePacerLastAdaptiveChanged = true;
+  }
+}
+
+static void ResetFramePacer() {
+  g_iFramePacerNextPresentUsec = 0;
+  g_iFramePacerFrames = 0;
+  g_iFramePacerLastPlannedWaitUsec = 0;
+  g_iFramePacerLastSleepUsec = 0;
+  g_iFramePacerLastActualSleepUsec = 0;
+  g_iFramePacerLastSleepOvershootUsec = 0;
+  g_iFramePacerLastFineWaitUsec = 0;
+  g_iFramePacerLastSpinWaitUsec = 0;
+  g_iFramePacerAdaptiveMarginUsec = 0;
+  g_iFramePacerLastBaseMarginUsec = 0;
+  g_iFramePacerLastEffectiveMarginUsec = 0;
+  g_iFramePacerLastNextMarginUsec = 0;
+  g_iFramePacerLastMaxMarginUsec = 0;
+  g_iFramePacerLastSwapBuffersUsec = 0;
+  g_iFramePacerLastAdaptiveAdjustUsec = 0;
+  g_iFramePacerLastLateBeforeUsec = 0;
+  g_iFramePacerLastLateAfterWaitUsec = 0;
+  g_iFramePacerLastWakeLateUsec = 0;
+  g_iFramePacerLastSleepChunks = 0;
+  g_iFramePacerStableFrames = 0;
+  g_iFramePacerConsecutiveLateFrames = 0;
+  g_iFramePacerWarmupFramesRemaining = 0;
+  g_bFramePacerLoggedEnable = false;
+  g_bFramePacerWasEnabled = false;
+  g_bFramePacerLastAdaptiveChanged = false;
+  g_szFramePacerLastAdaptiveReason = "reset";
+  g_szFramePacerLastClassification = "reset";
+}
+}  // namespace
 
 static const char* RagePixelFormatNames[] = {
     "RGBA8", "BGRA8", "RGBA4", "RGB5A1", "RGB5",
@@ -838,6 +1417,116 @@ void RageDisplay::DrawCircle(const RageSpriteVertex& v, float radius) {
 void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
   ASSERT(iFPS != 0);
 
+  const float targetHz = ClampFramePacingHz(g_fFramePacingTargetHz.Get());
+  if (targetHz > 0.0f) {
+    const uint64_t intervalUsec = FramePacingIntervalUsec(targetHz);
+    const uint64_t marginUsec = FramePacingEffectiveMarginUsec(intervalUsec);
+    const uint64_t maxSleepChunkUsec =
+        FramePacingMaxSleepChunkUsec(intervalUsec);
+    const uint64_t fineWaitUsec = FramePacingFineWaitUsec(intervalUsec);
+    const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+
+    if (!g_bFramePacerWasEnabled || g_iFramePacerNextPresentUsec == 0) {
+      g_iFramePacerNextPresentUsec = nowUsec + intervalUsec;
+      g_bFramePacerWasEnabled = true;
+      g_bFramePacerLoggedEnable = false;
+      if (g_iFramePacerWarmupFramesRemaining == 0) {
+        g_iFramePacerWarmupFramesRemaining =
+            FramePacingAdaptiveWarmupFrames();
+      }
+    }
+
+    if (!g_bFramePacerLoggedEnable) {
+      LOG->Trace(
+          "FRAME_PACING: enabled target_hz=%.3f interval_us=%llu "
+          "sleep_margin_us=%llu effective_margin_us=%llu "
+          "adaptive_margin=%d adaptive_max_margin_us=%llu "
+          "adaptive_warmup_frames=%d adaptive_late_frames=%d "
+          "adaptive_wake_late_us=%llu phase_resync_us=%llu "
+          "max_sleep_chunk_us=%llu fine_wait_us=%llu wait_strategy=%s "
+          "legacy_frame_limit_percent=%.3f mode_rate=%d",
+          targetHz, static_cast<unsigned long long>(intervalUsec),
+          static_cast<unsigned long long>(g_iFramePacerLastBaseMarginUsec),
+          static_cast<unsigned long long>(marginUsec),
+          g_bFramePacingAdaptiveMargin.Get() ? 1 : 0,
+          static_cast<unsigned long long>(g_iFramePacerLastMaxMarginUsec),
+          FramePacingAdaptiveWarmupFrames(),
+          FramePacingAdaptiveLateFrames(),
+          static_cast<unsigned long long>(
+              FramePacingAdaptiveWakeLateThresholdUsec(intervalUsec)),
+          static_cast<unsigned long long>(
+              FramePacingPhaseResyncThresholdUsec(intervalUsec)),
+          static_cast<unsigned long long>(maxSleepChunkUsec),
+          static_cast<unsigned long long>(fineWaitUsec),
+          FramePacingWaitStrategyName(),
+          g_fFrameLimitPercent.Get(), iFPS);
+      g_bFramePacerLoggedEnable = true;
+    }
+
+    int64_t lateUsec =
+        static_cast<int64_t>(nowUsec) -
+        static_cast<int64_t>(g_iFramePacerNextPresentUsec);
+    if (lateUsec >
+        static_cast<int64_t>(FramePacingResyncThresholdUsec(intervalUsec))) {
+      LOG->Trace(
+          "FRAME_PACING: resync phase=before_swap reason=very_late "
+          "late_us=%lld target_hz=%.3f interval_us=%llu",
+          static_cast<long long>(lateUsec), targetHz,
+          static_cast<unsigned long long>(intervalUsec));
+      g_iFramePacerNextPresentUsec = nowUsec + intervalUsec;
+      lateUsec = 0;
+    } else if (
+        lateUsec >
+        static_cast<int64_t>(FramePacingPhaseResyncThresholdUsec(
+            intervalUsec))) {
+      LOG->Trace(
+          "FRAME_PACING: resync phase=before_swap reason=phase_late "
+          "late_us=%lld target_hz=%.3f interval_us=%llu threshold_us=%llu",
+          static_cast<long long>(lateUsec), targetHz,
+          static_cast<unsigned long long>(intervalUsec),
+          static_cast<unsigned long long>(
+              FramePacingPhaseResyncThresholdUsec(intervalUsec)));
+      g_iFramePacerNextPresentUsec = nowUsec + intervalUsec;
+      lateUsec = 0;
+    }
+
+    const uint64_t wakeUsec =
+        g_iFramePacerNextPresentUsec > marginUsec
+            ? g_iFramePacerNextPresentUsec - marginUsec
+            : g_iFramePacerNextPresentUsec;
+    int64_t plannedWaitUsec =
+        static_cast<int64_t>(wakeUsec) - static_cast<int64_t>(nowUsec);
+
+    FramePacingWaitStats waitStats;
+    if (plannedWaitUsec > 0) {
+      waitStats = WaitUntilFramePacingWakeUsec(
+          wakeUsec, fineWaitUsec, maxSleepChunkUsec, HOOKS->AppHasFocus());
+    }
+
+    const uint64_t afterWaitUsec =
+        RageTimer::GetTimeSinceStartMicroseconds();
+    g_iFramePacerLastPlannedWaitUsec =
+        plannedWaitUsec > 0 ? static_cast<uint64_t>(plannedWaitUsec) : 0;
+    g_iFramePacerLastSleepUsec = waitStats.requested_sleep_usec;
+    g_iFramePacerLastActualSleepUsec = waitStats.actual_sleep_usec;
+    g_iFramePacerLastSleepOvershootUsec = waitStats.sleep_overshoot_usec;
+    g_iFramePacerLastFineWaitUsec = waitStats.fine_wait_usec;
+    g_iFramePacerLastSpinWaitUsec = waitStats.spin_wait_usec;
+    g_iFramePacerLastLateBeforeUsec = lateUsec;
+    g_iFramePacerLastLateAfterWaitUsec =
+        static_cast<int64_t>(afterWaitUsec) -
+        static_cast<int64_t>(g_iFramePacerNextPresentUsec);
+    g_iFramePacerLastWakeLateUsec =
+        static_cast<int64_t>(afterWaitUsec) - static_cast<int64_t>(wakeUsec);
+    g_iFramePacerLastSleepChunks = waitStats.sleep_chunks;
+    return;
+  }
+
+  if (g_bFramePacerWasEnabled) {
+    LOG->Trace("FRAME_PACING: disabled");
+    ResetFramePacer();
+  }
+
   int iDelayMicroseconds = 0;
   if (g_fFrameLimitPercent.Get() > 0.0f && !g_LastFrameEndedAt.IsZero()) {
     float fFrameTime = g_LastFrameEndedAt.GetDeltaTime();
@@ -865,12 +1554,132 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
   }
 }
 
-void RageDisplay::FrameLimitAfterVsync() {
+void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
+  const float targetHz = ClampFramePacingHz(g_fFramePacingTargetHz.Get());
+  if (targetHz > 0.0f) {
+    const uint64_t intervalUsec = FramePacingIntervalUsec(targetHz);
+    const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+    const uint64_t swapBuffersUsec =
+        FramePacingSwapBuffersUsec(swapBuffersMs);
+    const int64_t presentLateUsec =
+        g_iFramePacerNextPresentUsec == 0
+            ? 0
+            : static_cast<int64_t>(nowUsec) -
+                  static_cast<int64_t>(g_iFramePacerNextPresentUsec);
+    const float traceLateMs =
+        std::max(0.0f, g_fPerfTraceFramePacingLateMs.Get());
+    const int64_t traceLateUsec =
+        static_cast<int64_t>(std::llround(traceLateMs * 1000.0f));
+
+    ++g_iFramePacerFrames;
+    uint64_t nextPresentUsec = g_iFramePacerNextPresentUsec + intervalUsec;
+    int skippedIntervals = 0;
+    while (nextPresentUsec <= nowUsec && skippedIntervals < 4) {
+      nextPresentUsec += intervalUsec;
+      ++skippedIntervals;
+    }
+
+    bool hardResynced = false;
+    bool phaseResynced = false;
+    if (presentLateUsec >
+            static_cast<int64_t>(FramePacingResyncThresholdUsec(intervalUsec)) ||
+        nextPresentUsec <= nowUsec) {
+      nextPresentUsec = nowUsec + intervalUsec;
+      hardResynced = true;
+    } else if (
+        presentLateUsec >
+        static_cast<int64_t>(FramePacingPhaseResyncThresholdUsec(
+            intervalUsec))) {
+      nextPresentUsec = nowUsec + intervalUsec;
+      phaseResynced = true;
+    }
+
+    UpdateFramePacingAdaptiveMargin(
+        intervalUsec, presentLateUsec, skippedIntervals, hardResynced,
+        phaseResynced,
+        swapBuffersUsec);
+
+    const int64_t absPresentLateUsec =
+        presentLateUsec < 0 ? -presentLateUsec : presentLateUsec;
+    const int64_t absWakeLateUsec =
+        g_iFramePacerLastWakeLateUsec < 0
+            ? -g_iFramePacerLastWakeLateUsec
+            : g_iFramePacerLastWakeLateUsec;
+    if (absPresentLateUsec >= traceLateUsec ||
+        absWakeLateUsec >= traceLateUsec ||
+        g_iFramePacerLastSleepOvershootUsec >=
+            static_cast<uint64_t>(traceLateUsec) ||
+        skippedIntervals > 0 || hardResynced || phaseResynced ||
+        g_bFramePacerLastAdaptiveChanged || g_iFramePacerFrames <= 5 ||
+        g_iFramePacerFrames % 240 == 0) {
+      LOG->Trace(
+          "FRAME_PACING: present frame=%llu target_hz=%.3f "
+          "base_margin_us=%llu effective_margin_us=%llu next_margin_us=%llu "
+          "max_margin_us=%llu adaptive_adjust_us=%lld "
+          "adaptive_reason=%s stable_frames=%d swap_buffers_us=%llu "
+          "late_streak=%d warmup_remaining=%d classification=%s "
+          "planned_wait_us=%llu sleep_us=%llu actual_sleep_us=%llu "
+          "sleep_overshoot_us=%llu sleep_chunks=%d fine_wait_us=%llu "
+          "spin_wait_us=%llu wake_late_us=%lld late_before_us=%lld "
+          "late_after_wait_us=%lld present_late_us=%lld "
+          "next_interval_us=%llu skipped_intervals=%d resynced=%d "
+          "hard_resynced=%d phase_resynced=%d",
+          static_cast<unsigned long long>(g_iFramePacerFrames), targetHz,
+          static_cast<unsigned long long>(g_iFramePacerLastBaseMarginUsec),
+          static_cast<unsigned long long>(
+              g_iFramePacerLastEffectiveMarginUsec),
+          static_cast<unsigned long long>(g_iFramePacerLastNextMarginUsec),
+          static_cast<unsigned long long>(g_iFramePacerLastMaxMarginUsec),
+          static_cast<long long>(g_iFramePacerLastAdaptiveAdjustUsec),
+          g_szFramePacerLastAdaptiveReason, g_iFramePacerStableFrames,
+          static_cast<unsigned long long>(g_iFramePacerLastSwapBuffersUsec),
+          g_iFramePacerConsecutiveLateFrames,
+          g_iFramePacerWarmupFramesRemaining,
+          g_szFramePacerLastClassification,
+          static_cast<unsigned long long>(g_iFramePacerLastPlannedWaitUsec),
+          static_cast<unsigned long long>(g_iFramePacerLastSleepUsec),
+          static_cast<unsigned long long>(g_iFramePacerLastActualSleepUsec),
+          static_cast<unsigned long long>(
+              g_iFramePacerLastSleepOvershootUsec),
+          g_iFramePacerLastSleepChunks,
+          static_cast<unsigned long long>(g_iFramePacerLastFineWaitUsec),
+          static_cast<unsigned long long>(g_iFramePacerLastSpinWaitUsec),
+          static_cast<long long>(g_iFramePacerLastWakeLateUsec),
+          static_cast<long long>(g_iFramePacerLastLateBeforeUsec),
+          static_cast<long long>(g_iFramePacerLastLateAfterWaitUsec),
+          static_cast<long long>(presentLateUsec),
+          static_cast<unsigned long long>(intervalUsec), skippedIntervals,
+          (hardResynced || phaseResynced) ? 1 : 0,
+          hardResynced ? 1 : 0, phaseResynced ? 1 : 0);
+    }
+
+    g_iFramePacerNextPresentUsec = nextPresentUsec;
+    return;
+  }
+
   if (g_fFrameLimitPercent.Get() == 0.0f) {
     return;
   }
 
   g_LastFrameEndedAt.Touch();
+}
+
+void RageDisplay::ResetFramePacing(const char* reason) {
+  const float targetHz = ClampFramePacingHz(g_fFramePacingTargetHz.Get());
+  const bool wasEnabled =
+      g_bFramePacerWasEnabled || g_iFramePacerNextPresentUsec != 0;
+  ResetFramePacer();
+
+  if (targetHz <= 0.0f) {
+    return;
+  }
+
+  g_iFramePacerWarmupFramesRemaining = FramePacingAdaptiveWarmupFrames();
+  LOG->Trace(
+      "FRAME_PACING: reset reason=%s target_hz=%.3f warmup_frames=%d "
+      "was_enabled=%d",
+      reason != nullptr ? reason : "manual", targetHz,
+      g_iFramePacerWarmupFramesRemaining, wasEnabled ? 1 : 0);
 }
 
 RageCompiledGeometry::~RageCompiledGeometry() { m_bNeedsNormals = false; }

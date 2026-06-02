@@ -1,6 +1,27 @@
 local position_on_screen = ...
 
 local SongOrCourse, StageNum
+local fallback_banner_source_name = "SummaryFallbackBannerSource"
+
+local function FindParentChild(actor, name)
+	local parent = actor
+	for _=1,8 do
+		if not parent then return nil end
+		local ok_child, child = pcall(function() return parent:GetChild(name) end)
+		if ok_child and child then return child end
+		local ok_parent, next_parent = pcall(function() return parent:GetParent() end)
+		if not ok_parent then return nil end
+		parent = next_parent
+	end
+	return nil
+end
+
+local function SetFallbackBannerTarget(proxy)
+	local source = FindParentChild(proxy, fallback_banner_source_name)
+	if source then
+		pcall(function() proxy:SetTarget(source) end)
+	end
+end
 
 -- -----------------------------------------------------------------------
 -- this ActorFrame contains elements shared by both players
@@ -32,10 +53,16 @@ t[#t+1] = Def.Quad{
 }
 
 --fallback banner
-t[#t+1] = LoadActor(GetFallbackBanner())..{
+t[#t+1] = Def.ActorProxy{
 	Name="FallbackBanner",
-	InitCommand=function(self) self:y(-6):zoom(0.333) end,
-	DrawStageCommand=function(self) self:visible(SongOrCourse ~= nil and not SongOrCourse:HasBanner()) end
+	InitCommand=function(self)
+		SetFallbackBannerTarget(self)
+		self:y(-6):zoom(0.333)
+	end,
+	DrawStageCommand=function(self)
+		SetFallbackBannerTarget(self)
+		self:visible(SongOrCourse ~= nil and not SongOrCourse:HasBanner())
+	end
 }
 
 -- the banner, if there is one

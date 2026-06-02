@@ -327,7 +327,18 @@ void AutoKeysounds::FinishLoading() {
     m_pChain = apSounds[0];
   }
 
-  m_sSound.LoadSoundReader(m_pChain);
+  std::string sDebugPath = "AutoKeysounds";
+  if (pSong != nullptr) {
+    sDebugPath += ":";
+    sDebugPath += pSong->GetTranslitMainTitle();
+    const std::string sMusicPath = pSong->GetMusicPath();
+    if (!sMusicPath.empty()) {
+      sDebugPath += ":";
+      sDebugPath += sMusicPath;
+    }
+  }
+  m_sSound.LoadSoundReader(m_pChain, sDebugPath);
+  m_sSound.SetPrefersStrongPrebuffer(true);
 }
 
 void AutoKeysounds::Update(float fDelta) {

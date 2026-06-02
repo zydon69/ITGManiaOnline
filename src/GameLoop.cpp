@@ -22,12 +22,16 @@
 #include "RageThreads.h"
 #include "RageTimer.h"
 #include "RageUtil.h"
+#include "Screen.h"
 #include "ScreenManager.h"
 #include "ThemeManager.h"
 #include "arch/ArchHooks/ArchHooks.h"
 #include "global.h"
 
 static RageTimer g_GameplayTimer;
+static constexpr float kPerfTraceFrameHitchSeconds = 0.025f;
+static constexpr float kPerfTraceSlowUpdateMs = 12.0f;
+static constexpr float kPerfTraceSlowDrawMs = 12.0f;
 
 static Preference<bool> g_bNeverBoostAppPriority(
     "NeverBoostAppPriority", false);
@@ -43,6 +47,107 @@ static float g_fUpdateRate = 1;
 void GameLoop::SetUpdateRate(float fUpdateRate) { g_fUpdateRate = fUpdateRate; }
 
 float GameLoop::GetUpdateRate() { return g_fUpdateRate; }
+
+namespace {
+struct LoopPerfSnapshot {
+  float incomingDeltaSeconds = 0.0f;
+  float totalUpdateMs = 0.0f;
+  float soundManagerMs = 0.0f;
+  float gameSoundMs = 0.0f;
+  float textureMs = 0.0f;
+  float gameStateMs = 0.0f;
+  float networkMs = 0.0f;
+  float screenMs = 0.0f;
+  float memcardMs = 0.0f;
+  float inputMs = 0.0f;
+  float lightsMs = 0.0f;
+  float drawMs = 0.0f;
+  std::string startScreen = "NoScreen";
+  std::string endScreen = "NoScreen";
+};
+
+static LoopPerfSnapshot g_LastLoopPerf;
+static bool g_HasLastLoopPerf = false;
+static uint64_t g_LastLoopPerfTraceUsec = 0;
+
+static float TimerMs(RageTimer& timer) {
+  return timer.GetDeltaTime() * 1000.0f;
+}
+
+static std::string GetTopScreenNameForPerf() {
+  if (SCREENMAN == nullptr) {
+    return "NoScreen";
+  }
+
+  Screen* screen = SCREENMAN->GetTopScreen();
+  return screen == nullptr ? "NoScreen" : screen->GetName();
+}
+
+static bool PerfTraceRateLimit(uint64_t nowUsec) {
+  if (g_LastLoopPerfTraceUsec != 0 &&
+      nowUsec - g_LastLoopPerfTraceUsec < 250000) {
+    return false;
+  }
+
+  g_LastLoopPerfTraceUsec = nowUsec;
+  return true;
+}
+
+static const char* ClassifyLoopPerfSnapshot(
+    const char* reason, const LoopPerfSnapshot& snapshot) {
+  if (snapshot.inputMs >= kPerfTraceSlowUpdateMs &&
+      snapshot.inputMs >= snapshot.screenMs &&
+      snapshot.inputMs >= snapshot.drawMs) {
+    return "input_hitch";
+  }
+  if (snapshot.screenMs >= kPerfTraceSlowUpdateMs &&
+      snapshot.screenMs >= snapshot.inputMs) {
+    return "screen_update";
+  }
+  if (snapshot.networkMs >= kPerfTraceSlowUpdateMs) {
+    return "network_update";
+  }
+  if (snapshot.textureMs >= kPerfTraceSlowUpdateMs) {
+    return "texture_update";
+  }
+  if (snapshot.soundManagerMs + snapshot.gameSoundMs >= kPerfTraceSlowUpdateMs) {
+    return "audio_update";
+  }
+  if (snapshot.drawMs >= kPerfTraceSlowDrawMs) {
+    return "draw_or_present";
+  }
+  if (std::string(reason) == "incoming_delta_hitch") {
+    return "previous_frame_over_budget";
+  }
+  return "mixed_update";
+}
+
+static void LogLoopPerfSnapshot(
+    const char* reason, const LoopPerfSnapshot& snapshot, bool force = false) {
+  const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  if (!force && !PerfTraceRateLimit(nowUsec)) {
+    return;
+  }
+
+  if (force) {
+    g_LastLoopPerfTraceUsec = nowUsec;
+  }
+
+  LOG->Trace(
+      "PERF_TRACE: frame reason=%s incoming_delta=%.6f update_ms=%.3f "
+      "draw_ms=%.3f soundman_ms=%.3f gamesound_ms=%.3f texture_ms=%.3f "
+      "gamestate_ms=%.3f network_ms=%.3f screen_ms=%.3f memcard_ms=%.3f "
+      "input_ms=%.3f lights_ms=%.3f classification=%s start_screen=%s "
+      "end_screen=%s",
+      reason, snapshot.incomingDeltaSeconds, snapshot.totalUpdateMs,
+      snapshot.drawMs,
+      snapshot.soundManagerMs, snapshot.gameSoundMs, snapshot.textureMs,
+      snapshot.gameStateMs, snapshot.networkMs, snapshot.screenMs,
+      snapshot.memcardMs, snapshot.inputMs, snapshot.lightsMs,
+      ClassifyLoopPerfSnapshot(reason, snapshot),
+      snapshot.startScreen.c_str(), snapshot.endScreen.c_str());
+}
+}  // namespace
 
 static void CheckGameLoopTimerSkips(float fDeltaTime) {
   static int iLastFPS = 0;
@@ -257,6 +362,11 @@ void GameLoop::UpdateAllButDraw(bool bRunningFromVBLANK) {
   float fDeltaTime = (g_fConstantUpdateDeltaSeconds > 0)
                          ? g_fConstantUpdateDeltaSeconds
                          : g_GameplayTimer.GetDeltaTime();
+  const float rawDeltaTime = fDeltaTime;
+
+  if (g_HasLastLoopPerf && rawDeltaTime >= kPerfTraceFrameHitchSeconds) {
+    LogLoopPerfSnapshot("incoming_delta_hitch", g_LastLoopPerf, true);
+  }
 
   // Use a static boolean to check the preference once per game launch.
   // This is a rarely used debug feature, so we try to skip it if possible.
@@ -267,27 +377,51 @@ void GameLoop::UpdateAllButDraw(bool bRunningFromVBLANK) {
 
   fDeltaTime *= g_fUpdateRate;
 
+  LoopPerfSnapshot currentPerf;
+  currentPerf.incomingDeltaSeconds = rawDeltaTime;
+  currentPerf.startScreen = GetTopScreenNameForPerf();
+  RageTimer totalUpdateTimer;
+  RageTimer phaseTimer;
+
   // Update SOUNDMAN early (before any RageSound::GetPosition calls), to flush
   // position data.
   SOUNDMAN->Update();
+  currentPerf.soundManagerMs = TimerMs(phaseTimer);
 
   /* Update song beat information -before- calling update on all the classes
    * that depend on it. If you don't do this first, the classes are all acting
    * on old information and will lag. (but no longer fatally, due to
    * timestamping -glenn) */
   SOUND->Update(fDeltaTime);
+  currentPerf.gameSoundMs = TimerMs(phaseTimer);
   TEXTUREMAN->Update(fDeltaTime);
+  currentPerf.textureMs = TimerMs(phaseTimer);
   GAMESTATE->Update(fDeltaTime);
+  currentPerf.gameStateMs = TimerMs(phaseTimer);
   NETWORK->Update();
+  currentPerf.networkMs = TimerMs(phaseTimer);
   SCREENMAN->Update(fDeltaTime);
+  currentPerf.screenMs = TimerMs(phaseTimer);
   MEMCARDMAN->Update();
+  currentPerf.memcardMs = TimerMs(phaseTimer);
 
   /* Important: Process input AFTER updating game logic, or input will be
    * acting on song beat from last frame */
   HandleInputEvents(fDeltaTime);
+  currentPerf.inputMs = TimerMs(phaseTimer);
 
   // Update the lights
   LIGHTSMAN->Update(fDeltaTime);
+  currentPerf.lightsMs = TimerMs(phaseTimer);
+
+  currentPerf.totalUpdateMs = TimerMs(totalUpdateTimer);
+  currentPerf.endScreen = GetTopScreenNameForPerf();
+  if (currentPerf.totalUpdateMs >= kPerfTraceSlowUpdateMs) {
+    LogLoopPerfSnapshot("slow_update", currentPerf);
+  }
+
+  g_LastLoopPerf = currentPerf;
+  g_HasLastLoopPerf = true;
 }
 
 void GameLoop::RunGameLoop() {
@@ -311,7 +445,13 @@ void GameLoop::RunGameLoop() {
 
     CallEveryNFrames(500, CheckInputDevices);
 
+    RageTimer drawTimer;
     SCREENMAN->Draw();
+    const float drawMs = TimerMs(drawTimer);
+    g_LastLoopPerf.drawMs = drawMs;
+    if (drawMs >= kPerfTraceSlowDrawMs) {
+      LogLoopPerfSnapshot("slow_draw", g_LastLoopPerf);
+    }
   }
 
   // If we ended mid-game, finish up.

@@ -94,6 +94,10 @@ class ActorFrame : public Actor {
   virtual void DrawPrimitives();
   virtual void EndDraw();
 
+  static void PushDrawPerfTraceScope(
+      const char* scopeName, float slowActorThresholdMs);
+  static void PopDrawPerfTraceScope();
+
   // propagated commands
   virtual void SetZTestMode(ZTestMode mode);
   virtual void SetZWrite(bool b);

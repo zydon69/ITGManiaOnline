@@ -44,6 +44,41 @@ static Preference<bool> g_bRenderEarlierNotesOnTop(
 static const double PI_180 = PI / 180.0;
 static const double PI_180R = 180.0 / PI;
 
+static void CountVisibleNoteCandidate(
+    NoteFieldRenderArgs* args, const TapNote& tn) {
+  if (args == nullptr) {
+    return;
+  }
+
+  ++args->perf_visible_total;
+  switch (tn.type) {
+    case TapNoteType_Tap:
+    case TapNoteType_HoldTail:
+      ++args->perf_visible_taps;
+      break;
+    case TapNoteType_HoldHead:
+      ++args->perf_visible_holds;
+      break;
+    case TapNoteType_Mine:
+      ++args->perf_visible_mines;
+      break;
+    case TapNoteType_Lift:
+      ++args->perf_visible_lifts;
+      break;
+    case TapNoteType_Attack:
+      ++args->perf_visible_attacks;
+      break;
+    case TapNoteType_AutoKeysound:
+      ++args->perf_visible_autokeysounds;
+      break;
+    case TapNoteType_Fake:
+      ++args->perf_visible_fakes;
+      break;
+    default:
+      break;
+  }
+}
+
 const std::string& NoteNotePartToString(NotePart i);
 /** @brief A foreach loop going through the different NoteParts. */
 #define FOREACH_NotePart(i) FOREACH_ENUM(NotePart, i)
@@ -1681,11 +1716,13 @@ void NoteColumnRenderer::DrawPrimitives() {
       case TapNoteType_AutoKeysound:
       case TapNoteType_Fake:
         if (!tn.result.bHidden) {
+          CountVisibleNoteCandidate(m_field_render_args, tn);
           taps[tn.pn].push_back(begin);
         }
         break;
       case TapNoteType_HoldHead:
         if (tn.HoldResult.hns != HNS_Held) {
+          CountVisibleNoteCandidate(m_field_render_args, tn);
           holds[tn.pn].push_back(begin);
         }
         break;

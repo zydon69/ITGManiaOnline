@@ -77,6 +77,13 @@ void HoldJudgment::SetHoldJudgment(HoldNoteScore hns) {
   }
 }
 
+bool HoldJudgment::IsActiveForPerf() {
+  return m_sprJudgment.IsLoaded() &&
+         (m_sprJudgment->GetTweenTimeLeft() > 0.0f ||
+          m_sprJudgment->GetEffect() != Actor::no_effect ||
+          m_sprJudgment->GetDiffuseAlpha() > 0.01f);
+}
+
 void HoldJudgment::LoadFromMultiPlayer(MultiPlayer mp) {
   ASSERT(m_mpToTrack == MultiPlayer_Invalid);  // assert only load once
   m_mpToTrack = mp;

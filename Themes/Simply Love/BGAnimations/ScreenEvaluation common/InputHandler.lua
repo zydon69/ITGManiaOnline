@@ -25,6 +25,31 @@ local mpn = GAMESTATE:GetMasterPlayerNumber()
 local primary_i   = clamp(SL[ToEnumShortString(mpn)].EvalPanePrimary,   1, num_panes)
 local secondary_i = clamp(SL[ToEnumShortString(mpn)].EvalPaneSecondary, 1, num_panes)
 
+local function HasCommand(actor, command)
+	if not actor then return false end
+	local ok, actor_command = pcall(function() return actor:GetCommand(command) end)
+	return ok and actor_command ~= nil
+end
+
+local function EnsurePaneLoaded(pane)
+	if HasCommand(pane, "EnsureLoaded") then
+		pane:playcommand("EnsureLoaded")
+	end
+end
+
+local function SetPaneVisible(pane, visible)
+	if not pane then return end
+	if visible then EnsurePaneLoaded(pane) end
+	pane:visible(visible)
+end
+
+local function PaneExpandsForDouble(pane)
+	EnsurePaneLoaded(pane)
+	local ok, child = pcall(function() return pane:GetChild("") end)
+	if not ok or not child then return false end
+	return HasCommand(child, "ExpandForDouble")
+end
+
 -- -----------------------------------------------------------------------
 -- initialize local tables (panes, active_pane) for the the input handling function to use
 
@@ -39,23 +64,24 @@ for controller=1,2 do
 		local pane = af:GetChild("Panes"):GetChild( ("Pane%i_SideP%i"):format(i, controller) )
 
 		if pane ~= nil then
+			local pane_list_index = #panes[controller] + 1
 			-- single, double
 			-- initialize the side ("controller") the player is joined as to their profile's EvalPanePrimary
 			-- and the other side as their profile's EvalPaneSecondary
 			if #players==1 then
 				if ("P"..controller)==ToEnumShortString(mpn) then
 					if i == primary_i then
-						pane:visible(true)
-						active_pane[controller] = #panes[controller] + 1
+						SetPaneVisible(pane, true)
+						active_pane[controller] = pane_list_index
 					else
-						pane:visible(false)
+						SetPaneVisible(pane, false)
 					end
 				elseif ("P"..controller)==ToEnumShortString(OtherPlayer[mpn]) then
 					if i == secondary_i then
-						pane:visible(true)
-						active_pane[controller] = #panes[controller] + 1
+						SetPaneVisible(pane, true)
+						active_pane[controller] = pane_list_index
 					else
-						pane:visible(false)
+						SetPaneVisible(pane, false)
 					end
 				end
 
@@ -64,12 +90,19 @@ for controller=1,2 do
 				-- initialize this player's active_pane to their profile's EvalPanePrimary
 				-- will be 1 if no profile/"Guest" profile
 				local p = clamp(SL["P"..controller].EvalPanePrimary, 1, num_panes)
-				pane:visible(i == p)
-				active_pane[controller] = p
+				SetPaneVisible(pane, i == p)
+				if i == p then
+					active_pane[controller] = pane_list_index
+				end
 			end
 
 		 	table.insert(panes[controller], pane)
 		end
+	end
+
+	if not active_pane[controller] and #panes[controller] > 0 then
+		active_pane[controller] = 1
+		SetPaneVisible(panes[controller][1], true)
 	end
 end
 
@@ -84,28 +117,28 @@ if style == "OnePlayerTwoSides" then
 	local ocn = (cn % 2) + 1
 
 	-- if the player wanted their primary pane to be something that is full-width in double
-	if panes[cn][active_pane[cn]]:GetChild(""):GetCommand("ExpandForDouble") then
+	if PaneExpandsForDouble(panes[cn][active_pane[cn]]) then
 		-- hide all panes for the other controller
 		for pane in ivalues(panes[ocn]) do
-			pane:visible(false)
+			SetPaneVisible(pane, false)
 		end
 		-- and only show the one full-width pane
-		panes[cn][active_pane[cn]]:visible(true)
+		SetPaneVisible(panes[cn][active_pane[cn]], true)
 	end
 
 	-- if the player wanted their secondary pane to be something that is full-width in double
-	if panes[cn][active_pane[ocn]]:GetChild(""):GetCommand("ExpandForDouble") then
+	if PaneExpandsForDouble(panes[ocn][active_pane[ocn]]) then
 		-- arbitrarily opt to hide the secondary pane
-		panes[ocn][active_pane[ocn]]:visible(false)
+		SetPaneVisible(panes[ocn][active_pane[ocn]], false)
 
 		-- and show the next available pane that doesn't match primary and isn't also full-width
 		for i=1,#panes[ocn] do
 			active_pane[ocn] = (active_pane[ocn] % #panes[ocn]) + 1
 
 			if active_pane[ocn] ~= active_pane[cn]
-			and not panes[cn][active_pane[ocn]]:GetChild(""):GetCommand("ExpandForDouble")
+			and not PaneExpandsForDouble(panes[ocn][active_pane[ocn]])
 			then
-				panes[ocn][active_pane[ocn]]:visible(true)
+				SetPaneVisible(panes[ocn][active_pane[ocn]], true)
 				break
 			end
 		end
@@ -158,38 +191,38 @@ return function(event)
 			-- double
 			if style == "OnePlayerTwoSides" then
 				-- if this controller is switching to Pane3 or Pane6, both of which take over both pane widths
-				if panes[cn][active_pane[cn]]:GetChild(""):GetCommand("ExpandForDouble") then
+				if PaneExpandsForDouble(panes[cn][active_pane[cn]]) then
 
 					-- hide all panes for both controllers
 					for controller=1,2 do
 						for pane in ivalues(panes[controller]) do
-							pane:visible(false)
+							SetPaneVisible(pane, false)
 						end
 					end
 					-- and only show the one full-width pane
-					panes[cn][active_pane[cn]]:visible(true)
+					SetPaneVisible(panes[cn][active_pane[cn]], true)
 
 
 				-- if this controller is switching panes while the OTHER controller was viewing Pane3 or Pane6
-				elseif panes[ocn][active_pane[ocn]]:GetChild(""):GetCommand("ExpandForDouble") then
-					panes[ocn][active_pane[ocn]]:visible(false)
-					panes[cn][active_pane[cn]]:visible(true)
+				elseif PaneExpandsForDouble(panes[ocn][active_pane[ocn]]) then
+					SetPaneVisible(panes[ocn][active_pane[ocn]], false)
+					SetPaneVisible(panes[cn][active_pane[cn]], true)
 					-- atribitarily choose to decrement other controller pane
 					active_pane[ocn] = ((active_pane[ocn] - 2) % #panes[ocn]) + 1
 					if active_pane[cn] == active_pane[ocn] then
 						active_pane[ocn] = ((active_pane[ocn] - 2) % #panes[ocn]) + 1
 					end
-					panes[ocn][active_pane[ocn]]:visible(true)
+					SetPaneVisible(panes[ocn][active_pane[ocn]], true)
 
 				else
 
 					-- hide all panes for this side
 					for i=1,#panes[cn] do
-						panes[cn][i]:visible(false)
+						SetPaneVisible(panes[cn][i], false)
 					end
 					-- show the panes we want on both sides
-					panes[cn][active_pane[cn]]:visible(true)
-					panes[ocn][active_pane[ocn]]:visible(true)
+					SetPaneVisible(panes[cn][active_pane[cn]], true)
+					SetPaneVisible(panes[ocn][active_pane[ocn]], true)
 				end
 
 
@@ -197,10 +230,10 @@ return function(event)
 			else
 				-- hide all panes for this side
 				for i=1,#panes[cn] do
-					panes[cn][i]:visible(false)
+					SetPaneVisible(panes[cn][i], false)
 				end
 				-- only show the pane we want on this side
-				panes[cn][active_pane[cn]]:visible(true)
+				SetPaneVisible(panes[cn][active_pane[cn]], true)
 			end
 
 			af:queuecommand("PaneSwitch")

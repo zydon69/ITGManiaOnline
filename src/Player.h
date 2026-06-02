@@ -45,6 +45,49 @@ AutoScreenMessage(SM_ComboContinuing);
  * score for the player. */
 class Player : public ActorFrame {
  public:
+  struct GameplayPerfStats {
+    int visible_taps;
+    int visible_holds;
+    int visible_mines;
+    int visible_lifts;
+    int visible_fakes;
+    int visible_attacks;
+    int visible_autokeysounds;
+    int visible_total;
+    int active_receptors;
+    int active_ghosts;
+    int active_tap_judgments;
+    int active_hold_judgments;
+    int active_combo;
+    int tap_judgments_since_last_snapshot;
+    int hold_judgments_since_last_snapshot;
+    int mine_judgments_since_last_snapshot;
+    float life;
+    bool in_danger;
+    bool failing;
+
+    GameplayPerfStats()
+        : visible_taps(0),
+          visible_holds(0),
+          visible_mines(0),
+          visible_lifts(0),
+          visible_fakes(0),
+          visible_attacks(0),
+          visible_autokeysounds(0),
+          visible_total(0),
+          active_receptors(0),
+          active_ghosts(0),
+          active_tap_judgments(0),
+          active_hold_judgments(0),
+          active_combo(0),
+          tap_judgments_since_last_snapshot(0),
+          hold_judgments_since_last_snapshot(0),
+          mine_judgments_since_last_snapshot(0),
+          life(-1.0f),
+          in_danger(false),
+          failing(false) {}
+  };
+
   // The passed in NoteData isn't touched until Load() is called.
   Player(NoteData& nd, bool bVisibleParts = true);
   ~Player();
@@ -116,6 +159,8 @@ class Player : public ActorFrame {
   static float GetWindowSeconds(TimingWindow tw);
   const NoteData& GetNoteData() const { return m_NoteData; }
   bool HasVisibleParts() const { return m_pNoteField != nullptr; }
+  GameplayPerfStats GetGameplayPerfStats();
+  void ResetGameplayPerfCounters();
 
   void SetActorWithJudgmentPosition(Actor* pActor) {
     m_pActorWithJudgmentPosition = pActor;
@@ -268,6 +313,9 @@ class Player : public ActorFrame {
 
   bool m_bSendJudgmentAndComboMessages;
   bool m_bTickHolds;
+  int m_iPerfTapJudgmentsSinceLastSnapshot;
+  int m_iPerfHoldJudgmentsSinceLastSnapshot;
+  int m_iPerfMineJudgmentsSinceLastSnapshot;
   // This exists so that the board can be drawn underneath combo/judge. -Kyz
   bool m_drawing_notefield_board;
 };
