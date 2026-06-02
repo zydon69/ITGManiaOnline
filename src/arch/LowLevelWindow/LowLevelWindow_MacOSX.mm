@@ -1,11 +1,16 @@
 #import "LowLevelWindow_MacOSX.h"
 #import "DisplaySpec.h"
+#import "Preference.h"
 #import "RageDisplay_OGL_Helpers.h"
+#import "RageLog.h"
 #import "RageThreads.h"
+#import "RageTimer.h"
 #import "RageUtil.h"
 #import "arch/ArchHooks/ArchHooks.h"
 #import "global.h"
 
+#include <algorithm>
+#include <cmath>
 #include <dlfcn.h>
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +31,19 @@ static bool g_bResized;
 static int g_iWidth;
 static int g_iHeight;
 static RageMutex g_ResizeLock("Window resize lock.");
+static Preference<float> g_fPerfTraceSlowMacSwapBuffersMs(
+    "PerfTraceSlowMacSwapBuffersMs", 20.0f);
+
+static float ExpectedFrameMsForRate(int rate) {
+  return rate > 0 ? 1000.0f / static_cast<float>(rate) : 0.0f;
+}
+
+static int MissedIntervalsForElapsedMs(float elapsedMs, float expectedMs) {
+  if (expectedMs <= 0.0f || elapsedMs <= 0.0f) {
+    return 0;
+  }
+  return std::max(0, static_cast<int>(std::ceil(elapsedMs / expectedMs)) - 1);
+}
 
 // Simple helper class
 class AutoreleasePool {
@@ -380,6 +398,14 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
     [m_Context makeCurrentContext];
     m_CurrentParams.windowed = true;
     SetActualParamsFromMode(CGDisplayCurrentMode(kCGDirectMainDisplay));
+    if (p.rate != REFRESH_DEFAULT) {
+      if (m_CurrentParams.rate != p.rate) {
+        LOG->Trace(
+            "Windowed refresh pacing override: display_rate=%d requested_rate=%d",
+            m_CurrentParams.rate, p.rate);
+      }
+      m_CurrentParams.rate = p.rate;
+    }
 
     if (bChangeVsync) {
       GLint swap = p.vsync ? 1 : 0;
@@ -617,7 +643,27 @@ void LowLevelWindow_MacOSX::GetDisplaySpecs(DisplaySpecs& specs) const {
   specs.insert(s);
 }
 
-void LowLevelWindow_MacOSX::SwapBuffers() { CGLFlushDrawable(CGLGetCurrentContext()); }
+void LowLevelWindow_MacOSX::SwapBuffers() {
+  RageTimer timer;
+  CGLContextObj context = CGLGetCurrentContext();
+  const CGLError error = CGLFlushDrawable(context);
+  const float elapsedMs = timer.GetDeltaTime() * 1000.0f;
+
+  if (elapsedMs >= g_fPerfTraceSlowMacSwapBuffersMs.Get() ||
+      error != kCGLNoError) {
+    const float expectedFrameMs = ExpectedFrameMsForRate(m_CurrentParams.rate);
+    const int missedIntervals =
+        MissedIntervalsForElapsedMs(elapsedMs, expectedFrameMs);
+    LOG->Trace(
+        "PERF_TRACE: macos_swap_buffers total_ms=%.3f error=%d vsync=%d "
+        "rate=%d windowed=%d expected_frame_ms=%.3f missed_intervals=%d "
+        "requested_size=%dx%d",
+        elapsedMs, static_cast<int>(error), m_CurrentParams.vsync ? 1 : 0,
+        m_CurrentParams.rate, m_CurrentParams.windowed ? 1 : 0,
+        expectedFrameMs, missedIntervals, m_CurrentParams.width,
+        m_CurrentParams.height);
+  }
+}
 
 void LowLevelWindow_MacOSX::Update() {
   // Keep the system from sleeping or the screen saver from activating.

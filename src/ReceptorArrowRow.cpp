@@ -113,6 +113,16 @@ void ReceptorArrowRow::SetNoteUpcoming(int iCol, bool b) {
   m_ReceptorArrow[iCol]->SetNoteUpcoming(b);
 }
 
+int ReceptorArrowRow::GetActiveAnimationCount() const {
+  int count = 0;
+  for (ReceptorArrow* receptor : m_ReceptorArrow) {
+    if (receptor && receptor->HasActiveAnimation()) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 /*
  * (c) 2001-2003 Chris Danford
  * All rights reserved.

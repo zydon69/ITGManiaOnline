@@ -468,6 +468,7 @@ class RageDisplay {
 
   // Lua
   void PushSelf(lua_State* L);
+  void ResetFramePacing(const char* reason = nullptr);
 
  protected:
   RageMatrix GetPerspectiveMatrix(
@@ -495,7 +496,7 @@ class RageDisplay {
   // To limit the framerate, call FrameLimitBeforeVsync before waiting
   // for vsync and FrameLimitAfterVsync after.
   void FrameLimitBeforeVsync(int iFPS);
-  void FrameLimitAfterVsync();
+  void FrameLimitAfterVsync(float swapBuffersMs = -1.0f);
 };
 
 extern RageDisplay*

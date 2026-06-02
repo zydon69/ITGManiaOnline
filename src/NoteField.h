@@ -21,6 +21,36 @@
 
 struct Attack;
 class NoteData;
+
+struct NoteFieldDrawStats {
+  int first_row;
+  int last_row;
+  int visible_taps;
+  int visible_holds;
+  int visible_mines;
+  int visible_lifts;
+  int visible_fakes;
+  int visible_attacks;
+  int visible_autokeysounds;
+  int visible_total;
+  int active_receptors;
+  int active_ghosts;
+
+  NoteFieldDrawStats()
+      : first_row(0),
+        last_row(0),
+        visible_taps(0),
+        visible_holds(0),
+        visible_mines(0),
+        visible_lifts(0),
+        visible_fakes(0),
+        visible_attacks(0),
+        visible_autokeysounds(0),
+        visible_total(0),
+        active_receptors(0),
+        active_ghosts(0) {}
+};
+
 /** @brief An Actor that renders NoteData. */
 class NoteField : public ActorFrame {
  public:
@@ -67,6 +97,9 @@ class NoteField : public ActorFrame {
   LuaReference m_DidHoldNoteCallback;
 
   const PlayerState* GetPlayerState() const { return m_pPlayerState; }
+  const NoteFieldDrawStats& GetLastDrawStats() const {
+    return m_LastDrawStats;
+  }
 
   int m_iBeginMarker, m_iEndMarker;  // only used with MODE_EDIT
 
@@ -128,6 +161,7 @@ class NoteField : public ActorFrame {
   };
 
   NoteFieldRenderArgs m_FieldRenderArgs;
+  NoteFieldDrawStats m_LastDrawStats;
 
   /* All loaded note displays, mapped by their name. */
   std::map<std::string, NoteDisplayCols*> m_NoteDisplays;

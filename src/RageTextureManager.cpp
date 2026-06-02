@@ -29,6 +29,7 @@
 #include <utility>
 
 #include "ActorUtil.h"
+#include "Preference.h"
 #include "RageBitmapTexture.h"
 #include "RageDisplay.h"
 #include "RageException.h"
@@ -36,6 +37,7 @@
 #include "RageTexture.h"
 #include "RageTextureID.h"
 #include "RageThreads.h"
+#include "RageTimer.h"
 #include "RageUtil.h"
 #include "LuaManager.h"
 #include "arch/MovieTexture/MovieTexture.h"
@@ -48,6 +50,8 @@ namespace {
 std::map<RageTextureID, RageTexture*> m_mapPathToTexture;
 std::map<RageTextureID, RageTexture*> m_textures_to_update;
 std::map<RageTexture*, RageTextureID> m_texture_ids_by_pointer;
+Preference<int> g_iTextureGCMaxDeletesPerScreenChange(
+    "TextureGCMaxDeletesPerScreenChange", 48);
 };  // namespace
 
 RageTextureManager::RageTextureManager()
@@ -266,13 +270,21 @@ void RageTextureManager::DeleteTexture(RageTexture* t) {
 
 void RageTextureManager::GarbageCollect(GCType type) {
   // Search for old textures with refcount==0 to unload
-  LOG->Trace("Performing texture garbage collection.");
+  RageTimer gcTimer;
+  const int deleteBudget =
+      type == screen_changed
+          ? std::max(0, g_iTextureGCMaxDeletesPerScreenChange.Get())
+          : 0;
+  int visited = 0;
+  int deleted = 0;
+  bool deferred = false;
 
   for (std::map<RageTextureID, RageTexture*>::iterator i =
            m_mapPathToTexture.begin();
        i != m_mapPathToTexture.end();) {
     std::map<RageTextureID, RageTexture*>::iterator j = i;
     i++;
+    ++visited;
 
     std::string sPath = j->first.filename;
     RageTexture* t = j->second;
@@ -307,8 +319,22 @@ void RageTextureManager::GarbageCollect(GCType type) {
     }
 
     if (bDeleteThis) {
+      if (deleteBudget > 0 && deleted >= deleteBudget) {
+        deferred = true;
+        break;
+      }
       DeleteTexture(t);
+      ++deleted;
     }
+  }
+
+  const float elapsedMs = gcTimer.GetDeltaTime() * 1000.0f;
+  if (deleted > 0 || deferred || elapsedMs >= 2.0f) {
+    LOG->Trace(
+        "PERF_TRACE: texture_gc type=%s visited=%d deleted=%d deferred=%d "
+        "budget=%d elapsed_ms=%.3f",
+        type == screen_changed ? "screen_changed" : "delayed_delete", visited,
+        deleted, deferred ? 1 : 0, deleteBudget, elapsedMs);
   }
 }
 

@@ -11,11 +11,11 @@
 #include "RageTimer.h"
 
 // NOTE(sukibaby): The number of frames we should keep pos_map data for.
-// File bitrate, metadata, etc will factor in here. 80k is a safe value
-// to provide a good balance of stability and low latency. It is stable
-// up to 200k, but increased latency is the main reason not to increase
-// this to a very large number.
-static int pos_map_backlog_frames = 80000;
+// This maps hardware frames back to decoded stream/source frames. It is not
+// an audio output buffer, so increasing it does not add playback latency; it
+// keeps more timing history available when CoreAudio scheduling or device
+// latency gets uneven mid-gameplay.
+static int pos_map_backlog_frames = 480000;
 
 struct pos_map_t {
   int64_t m_iSourceFrame;
@@ -152,13 +152,26 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame) const {
    *    SoundStopped has been called.
    * 3. Underflow; we'll be given a larger frame number than we know about.
    */
+  const pos_map_t& first = m_pImpl->m_Queue.front();
+  const pos_map_t& lastEntry = m_pImpl->m_Queue.back();
+  const int64_t firstStart = first.m_iSourceFrame;
+  const int64_t firstEnd = first.m_iSourceFrame + first.m_iFrames;
+  const int64_t lastStart = lastEntry.m_iSourceFrame;
+  const int64_t lastEnd = lastEntry.m_iSourceFrame + lastEntry.m_iFrames;
+  const char* relation =
+      iSourceFrame < firstStart ? "before" :
+      iSourceFrame >= lastEnd ? "after" : "gap";
+
   static RageTimer last;
   if (last.Ago() >= 10.0f) {
     last.Touch();
     LOG->Trace(
         "Audio position mismatch: frame %" PRId64
-        " outside buffered range (normal during start/stop)",
-        iSourceFrame);
+        " outside buffered range relation=%s closest_dist=%" PRId64
+        " entries=%zu first=[%" PRId64 ",%" PRId64 ") last=[%" PRId64
+        ",%" PRId64 ")",
+        iSourceFrame, relation, iClosestPositionDist,
+        m_pImpl->m_Queue.size(), firstStart, firstEnd, lastStart, lastEnd);
   }
 
   return iClosestPosition;

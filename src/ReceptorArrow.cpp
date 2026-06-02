@@ -80,6 +80,13 @@ void ReceptorArrow::SetNoteUpcoming(bool b) {
   m_pReceptor->PlayCommand(b ? "ShowNoteUpcoming" : "HideNoteUpcoming");
 }
 
+bool ReceptorArrow::HasActiveAnimation() {
+  return m_pReceptor.IsLoaded() &&
+         (m_bIsPressed || m_bWasPressed ||
+          m_pReceptor->GetTweenTimeLeft() > 0.0f ||
+          m_pReceptor->GetEffect() != Actor::no_effect);
+}
+
 /*
  * (c) 2001-2004 Ben Nordstrom, Chris Danford
  * All rights reserved.
