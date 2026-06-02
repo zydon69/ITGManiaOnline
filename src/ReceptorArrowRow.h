@@ -23,6 +23,7 @@ class ReceptorArrowRow : public ActorFrame {
   void Step(int iCol, TapNoteScore score);
   void SetPressed(int iCol);
   void SetNoteUpcoming(int iCol, bool b);
+  int GetActiveAnimationCount() const;
 
   void SetFadeToFailPercent(float fFadeToFailPercent) {
     m_fFadeToFailPercent = fFadeToFailPercent;

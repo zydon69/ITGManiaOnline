@@ -155,6 +155,19 @@ void GhostArrowRow::SetHoldShowing(int iCol, const TapNote& tn) {
   m_bHoldShowing[iCol] = tn.subType;
 }
 
+int GhostArrowRow::GetActiveGhostCount() const {
+  int count = 0;
+  for (Actor* ghost : m_Ghost) {
+    if (ghost &&
+        (ghost->GetTweenTimeLeft() > 0.0f ||
+         ghost->GetEffect() != Actor::no_effect ||
+         ghost->GetDiffuseAlpha() > 0.01f)) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 /*
  * (c) 2001-2004 Chris Danford
  * All rights reserved.

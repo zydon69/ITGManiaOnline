@@ -17,6 +17,7 @@
 #include "EnumHelper.h"
 #include "LocalizedString.h"
 #include "ModelTypes.h"
+#include "Preference.h"
 #include "RageDisplay.h"
 #include "RageDisplay_OGL_Helpers.h"
 #include "RageException.h"
@@ -28,6 +29,7 @@
 #include "RageTextureID.h"
 #include "RageTextureManager.h"
 #include "RageTextureRenderTarget.h"
+#include "RageTimer.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
 #include "RageUtil/Endian.h"
@@ -70,6 +72,53 @@ static int g_glVersion;
 static int g_gluVersion;
 
 static int g_iMaxTextureUnits = 0;
+static Preference<float> g_fPerfTraceSlowDisplayEndFrameMs(
+    "PerfTraceSlowDisplayEndFrameMs", 20.0f);
+
+static float ExpectedFrameMsForRate(int rate) {
+  return rate > 0 ? 1000.0f / static_cast<float>(rate) : 0.0f;
+}
+
+static int MissedIntervalsForElapsedMs(float elapsedMs, float expectedMs) {
+  if (expectedMs <= 0.0f || elapsedMs <= 0.0f) {
+    return 0;
+  }
+  return std::max(0, static_cast<int>(std::ceil(elapsedMs / expectedMs)) - 1);
+}
+
+static const char* ClassifyDisplayEndFrame(
+    float totalMs, float offscreenMs, float frameLimitBeforeMs,
+    float swapBuffersMs, float frameLimitAfterMs, float glFinishMs,
+    float windowUpdateMs, float statsMs, float expectedFrameMs) {
+  const float effectiveExpectedMs =
+      expectedFrameMs > 0.0f ? expectedFrameMs : 16.667f;
+  if (swapBuffersMs >= effectiveExpectedMs * 0.9f) {
+    return "swap_block";
+  }
+  if (frameLimitBeforeMs >= effectiveExpectedMs * 0.9f &&
+      swapBuffersMs < effectiveExpectedMs * 0.5f) {
+    return "pacing_wait";
+  }
+  if (glFinishMs >= 4.0f) {
+    return "gl_finish";
+  }
+  if (windowUpdateMs >= 4.0f) {
+    return "window_update";
+  }
+  if (offscreenMs >= 4.0f) {
+    return "offscreen";
+  }
+  if (frameLimitAfterMs >= 4.0f) {
+    return "pacing_after";
+  }
+  if (statsMs >= 4.0f) {
+    return "stats";
+  }
+  if (totalMs >= effectiveExpectedMs * 1.4f) {
+    return "mixed_present";
+  }
+  return "unknown";
+}
 
 /* We don't actually use normals (we don't turn on lighting), there's just
  * no GL_T2F_C4F_V3F. */
@@ -896,6 +945,17 @@ bool RageDisplay_Legacy::BeginFrame() {
 }
 
 void RageDisplay_Legacy::EndFrame() {
+  RageTimer totalTimer;
+  RageTimer phaseTimer;
+  float offscreenMs = 0.0f;
+  float frameLimitBeforeMs = 0.0f;
+  float swapBuffersMs = 0.0f;
+  float frameLimitAfterMs = 0.0f;
+  float glFinishMs = 0.0f;
+  float windowUpdateMs = 0.0f;
+  float statsMs = 0.0f;
+  const ActualVideoModeParams mode = g_pWind->GetActualVideoModeParams();
+
   if (UseOffscreenRenderTarget()) {
     offscreenRenderTarget->FinishRenderingTo();
     Sprite fullscreenSprite;
@@ -913,10 +973,14 @@ void RageDisplay_Legacy::EndFrame() {
     fullscreenSprite.Draw();
     CameraPopMatrix();
   }
+  offscreenMs = phaseTimer.GetDeltaTime() * 1000.0f;
 
-  FrameLimitBeforeVsync(g_pWind->GetActualVideoModeParams().rate);
+  FrameLimitBeforeVsync(mode.rate);
+  frameLimitBeforeMs = phaseTimer.GetDeltaTime() * 1000.0f;
   g_pWind->SwapBuffers();
-  FrameLimitAfterVsync();
+  swapBuffersMs = phaseTimer.GetDeltaTime() * 1000.0f;
+  FrameLimitAfterVsync(swapBuffersMs);
+  frameLimitAfterMs = phaseTimer.GetDeltaTime() * 1000.0f;
 
   // Some would advise against glFinish(), ever. Those people don't realize
   // the degree of freedom GL hosts are permitted in queueing commands.
@@ -928,10 +992,41 @@ void RageDisplay_Legacy::EndFrame() {
   // reflected by the next frame as close as possible to the on-screen
   // appearance of that frame.
   glFinish();
+  glFinishMs = phaseTimer.GetDeltaTime() * 1000.0f;
 
   g_pWind->Update();
+  windowUpdateMs = phaseTimer.GetDeltaTime() * 1000.0f;
 
   RageDisplay::EndFrame();
+  statsMs = phaseTimer.GetDeltaTime() * 1000.0f;
+
+  const float totalMs = totalTimer.GetDeltaTime() * 1000.0f;
+  if (totalMs >= g_fPerfTraceSlowDisplayEndFrameMs.Get()) {
+    const float expectedFrameMs = ExpectedFrameMsForRate(mode.rate);
+    const int missedSwapIntervals =
+        MissedIntervalsForElapsedMs(swapBuffersMs, expectedFrameMs);
+    const int missedTotalIntervals =
+        MissedIntervalsForElapsedMs(totalMs, expectedFrameMs);
+    LOG->Trace(
+        "PERF_TRACE: display_end_frame total_ms=%.3f offscreen_ms=%.3f "
+        "frame_limit_before_ms=%.3f swap_buffers_ms=%.3f "
+        "frame_limit_after_ms=%.3f gl_finish_ms=%.3f window_update_ms=%.3f "
+        "stats_ms=%.3f classification=%s rate=%d vsync=%d windowed=%d "
+        "render_offscreen=%d "
+        "expected_frame_ms=%.3f missed_swap_intervals=%d "
+        "missed_total_intervals=%d render_size=%dx%d window_size=%dx%d",
+        totalMs, offscreenMs, frameLimitBeforeMs, swapBuffersMs,
+        frameLimitAfterMs, glFinishMs, windowUpdateMs, statsMs,
+        ClassifyDisplayEndFrame(
+            totalMs, offscreenMs, frameLimitBeforeMs, swapBuffersMs,
+            frameLimitAfterMs, glFinishMs, windowUpdateMs, statsMs,
+            expectedFrameMs),
+        mode.rate,
+        mode.vsync ? 1 : 0, mode.windowed ? 1 : 0,
+        mode.renderOffscreen ? 1 : 0, expectedFrameMs, missedSwapIntervals,
+        missedTotalIntervals, mode.width, mode.height, mode.windowWidth,
+        mode.windowHeight);
+  }
 }
 
 RageSurface* RageDisplay_Legacy::CreateScreenshot() {

@@ -257,6 +257,11 @@ bool RageSound::Load(
 }
 
 void RageSound::LoadSoundReader(RageSoundReader* pSound) {
+  LoadSoundReader(pSound, "");
+}
+
+void RageSound::LoadSoundReader(
+    RageSoundReader* pSound, const std::string& sDebugFilePath) {
   Unload();
 
   m_iStreamFrame = m_iStoppedSourceFrame = 0;
@@ -270,6 +275,10 @@ void RageSound::LoadSoundReader(RageSoundReader* pSound) {
   }
 
   m_pSource = pSound;
+  m_sFilePath = sDebugFilePath;
+  if (!m_sFilePath.empty()) {
+    m_Mutex.SetName(ssprintf("RageSound (%s)", Basename(m_sFilePath).c_str()));
+  }
 }
 
 /*

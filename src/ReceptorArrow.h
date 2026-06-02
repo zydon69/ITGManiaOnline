@@ -17,6 +17,7 @@ class ReceptorArrow : public ActorFrame {
   void Step(TapNoteScore score);
   void SetPressed() { m_bIsPressed = true; };
   void SetNoteUpcoming(bool b);
+  bool HasActiveAnimation();
 
  private:
   const PlayerState* m_pPlayerState;

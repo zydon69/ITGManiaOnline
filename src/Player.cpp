@@ -341,6 +341,9 @@ Player::Player(NoteData& nd, bool bVisibleParts) : m_NoteData(nd) {
   m_pJudgedRows = new JudgedRows;
 
   m_bSendJudgmentAndComboMessages = true;
+  m_iPerfTapJudgmentsSinceLastSnapshot = 0;
+  m_iPerfHoldJudgmentsSinceLastSnapshot = 0;
+  m_iPerfMineJudgmentsSinceLastSnapshot = 0;
 }
 
 Player::~Player() {
@@ -1816,6 +1819,66 @@ void Player::DrawNoteFieldBoard() {
   m_drawing_notefield_board = true;
   Draw();
   m_drawing_notefield_board = false;
+}
+
+static bool ActorIsActiveForPerf(Actor* actor) {
+  return actor != nullptr &&
+         (actor->GetTweenTimeLeft() > 0.0f ||
+          actor->GetEffect() != Actor::no_effect ||
+          actor->GetDiffuseAlpha() > 0.01f);
+}
+
+Player::GameplayPerfStats Player::GetGameplayPerfStats() {
+  GameplayPerfStats stats;
+
+  if (m_pNoteField) {
+    const NoteFieldDrawStats& noteStats = m_pNoteField->GetLastDrawStats();
+    stats.visible_taps = noteStats.visible_taps;
+    stats.visible_holds = noteStats.visible_holds;
+    stats.visible_mines = noteStats.visible_mines;
+    stats.visible_lifts = noteStats.visible_lifts;
+    stats.visible_fakes = noteStats.visible_fakes;
+    stats.visible_attacks = noteStats.visible_attacks;
+    stats.visible_autokeysounds = noteStats.visible_autokeysounds;
+    stats.visible_total = noteStats.visible_total;
+    stats.active_receptors = noteStats.active_receptors;
+    stats.active_ghosts = noteStats.active_ghosts;
+  }
+
+  if (m_sprJudgment.IsLoaded() && ActorIsActiveForPerf(m_sprJudgment)) {
+    stats.active_tap_judgments = 1;
+  }
+
+  for (HoldJudgment* judgment : m_vpHoldJudgment) {
+    if (judgment && judgment->IsActiveForPerf()) {
+      ++stats.active_hold_judgments;
+    }
+  }
+
+  if (m_sprCombo.IsLoaded() && ActorIsActiveForPerf(m_sprCombo)) {
+    stats.active_combo = 1;
+  }
+
+  stats.tap_judgments_since_last_snapshot =
+      m_iPerfTapJudgmentsSinceLastSnapshot;
+  stats.hold_judgments_since_last_snapshot =
+      m_iPerfHoldJudgmentsSinceLastSnapshot;
+  stats.mine_judgments_since_last_snapshot =
+      m_iPerfMineJudgmentsSinceLastSnapshot;
+
+  if (m_pLifeMeter) {
+    stats.life = m_pLifeMeter->GetLife();
+    stats.in_danger = m_pLifeMeter->IsInDanger();
+    stats.failing = m_pLifeMeter->IsFailing();
+  }
+
+  return stats;
+}
+
+void Player::ResetGameplayPerfCounters() {
+  m_iPerfTapJudgmentsSinceLastSnapshot = 0;
+  m_iPerfHoldJudgmentsSinceLastSnapshot = 0;
+  m_iPerfMineJudgmentsSinceLastSnapshot = 0;
 }
 
 Player::PlayerNoteFieldPositioner::PlayerNoteFieldPositioner(
@@ -3433,6 +3496,7 @@ void Player::CacheAllUsedNoteSkins() {
 }
 
 void Player::SetMineJudgment(TapNoteScore tns, int iTrack) {
+  ++m_iPerfMineJudgmentsSinceLastSnapshot;
   if (m_bSendJudgmentAndComboMessages) {
     Message msg("Judgment");
     msg.SetParam("Player", m_pPlayerState->m_PlayerNumber);
@@ -3452,6 +3516,7 @@ void Player::SetMineJudgment(TapNoteScore tns, int iTrack) {
 void Player::SetJudgment(
     int iRow, int iTrack, const TapNote& tn, TapNoteScore tns,
     float fTapNoteOffset) {
+  ++m_iPerfTapJudgmentsSinceLastSnapshot;
   if (m_bSendJudgmentAndComboMessages) {
     Message msg("Judgment");
     msg.SetParam("Player", m_pPlayerState->m_PlayerNumber);
@@ -3498,6 +3563,7 @@ void Player::SetJudgment(
 
 void Player::SetHoldJudgment(TapNote& tn, int iTrack) {
   ASSERT(iTrack < (int)m_vpHoldJudgment.size());
+  ++m_iPerfHoldJudgmentsSinceLastSnapshot;
   if (m_vpHoldJudgment[iTrack]) {
     m_vpHoldJudgment[iTrack]->SetHoldJudgment(tn.HoldResult.hns);
   }

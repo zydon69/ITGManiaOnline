@@ -172,8 +172,19 @@ class RageSoundDriver : public RageDriver {
     Sound();
     void Allocate(int iFrames);
     void Deallocate();
+    void ClearDebugIdentity();
+    void SetDebugIdentity(
+        const std::string& path, uint64_t serial, uint64_t startUsec);
+    const char* GetDebugPath() const;
 
     RageSoundBase* m_pSound;
+    char m_szDebugPath[256];
+    uint64_t m_iDebugSerial;
+    uint64_t m_iDebugStartUsec;
+    unsigned m_iDebugPrebufferTarget;
+    unsigned m_iDebugPrebufferReadable;
+    unsigned m_iDebugPrebufferWritable;
+    bool m_bDebugStrongPrebuffer;
     RageTimer m_StartTime;
     CircBuf<sound_block> m_Buffer;
 

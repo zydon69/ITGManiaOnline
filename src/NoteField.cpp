@@ -105,6 +105,14 @@ NoteField::NoteField() {
   m_iBeginMarker = m_iEndMarker = -1;
 
   m_FieldRenderArgs.fail_fade = -1;
+  m_FieldRenderArgs.perf_visible_taps = 0;
+  m_FieldRenderArgs.perf_visible_holds = 0;
+  m_FieldRenderArgs.perf_visible_mines = 0;
+  m_FieldRenderArgs.perf_visible_lifts = 0;
+  m_FieldRenderArgs.perf_visible_fakes = 0;
+  m_FieldRenderArgs.perf_visible_attacks = 0;
+  m_FieldRenderArgs.perf_visible_autokeysounds = 0;
+  m_FieldRenderArgs.perf_visible_total = 0;
 
   m_StepCallback.SetFromNil();
   m_SetPressedCallback.SetFromNil();
@@ -869,6 +877,14 @@ void NoteField::DrawPrimitives() {
 
   m_FieldRenderArgs.first_row = BeatToNoteRow(first_beat_to_draw);
   m_FieldRenderArgs.last_row = BeatToNoteRow(last_beat_to_draw);
+  m_FieldRenderArgs.perf_visible_taps = 0;
+  m_FieldRenderArgs.perf_visible_holds = 0;
+  m_FieldRenderArgs.perf_visible_mines = 0;
+  m_FieldRenderArgs.perf_visible_lifts = 0;
+  m_FieldRenderArgs.perf_visible_fakes = 0;
+  m_FieldRenderArgs.perf_visible_attacks = 0;
+  m_FieldRenderArgs.perf_visible_autokeysounds = 0;
+  m_FieldRenderArgs.perf_visible_total = 0;
 
   // LOG->Trace( "start = %f.1, end = %f.1", first_beat_to_draw-fSongBeat,
   // last_beat_to_draw-fSongBeat ); LOG->Trace( "Drawing elements %d through
@@ -1134,6 +1150,21 @@ void NoteField::DrawPrimitives() {
   }
 
   cur->m_GhostArrowRow.Draw();
+
+  m_LastDrawStats.first_row = m_FieldRenderArgs.first_row;
+  m_LastDrawStats.last_row = m_FieldRenderArgs.last_row;
+  m_LastDrawStats.visible_taps = m_FieldRenderArgs.perf_visible_taps;
+  m_LastDrawStats.visible_holds = m_FieldRenderArgs.perf_visible_holds;
+  m_LastDrawStats.visible_mines = m_FieldRenderArgs.perf_visible_mines;
+  m_LastDrawStats.visible_lifts = m_FieldRenderArgs.perf_visible_lifts;
+  m_LastDrawStats.visible_fakes = m_FieldRenderArgs.perf_visible_fakes;
+  m_LastDrawStats.visible_attacks = m_FieldRenderArgs.perf_visible_attacks;
+  m_LastDrawStats.visible_autokeysounds =
+      m_FieldRenderArgs.perf_visible_autokeysounds;
+  m_LastDrawStats.visible_total = m_FieldRenderArgs.perf_visible_total;
+  m_LastDrawStats.active_receptors =
+      cur->m_ReceptorArrowRow.GetActiveAnimationCount();
+  m_LastDrawStats.active_ghosts = cur->m_GhostArrowRow.GetActiveGhostCount();
 }
 
 void NoteField::DrawBoardPrimitive() {

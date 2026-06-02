@@ -8,11 +8,55 @@ style  = style  or (GAMESTATE:GetCurrentStyle() and GAMESTATE:GetCurrentStyle():
 
 local zoom = SL_WideScale(0.435, 0.525)
 local game = GAMESTATE:GetCurrentGame():GetName()
+local panel_spacing = 64
+local panel_size = 58
+local panel_radius = 7
+local panel_corner_segments = 5
+
 local init_panel = function(self, col, row, z)
 	self:zoom(z)
-	self:x(z * self:GetWidth() * (col-1))
-	self:y(z * self:GetHeight() * (row-2))
+	self:x(z * panel_spacing * (col-1))
+	self:y(z * panel_spacing * (row-2))
 	return self
+end
+
+local vertex_cache = {}
+
+local color_key = function(color)
+	return table.concat(color, ",")
+end
+
+local rounded_panel_vertices = function(color)
+	local key = color_key(color)
+	if vertex_cache[key] then return vertex_cache[key] end
+
+	local h = panel_size / 2
+	local r = math.min(panel_radius, h)
+	local inset = h - r
+	local verts = { {{0, 0, 0}, color} }
+	local first_perimeter_vert = nil
+
+	local corners = {
+		{ inset, -inset, -90,   0 },
+		{ inset,  inset,   0,  90 },
+		{-inset,  inset,  90, 180 },
+		{-inset, -inset, 180, 270 },
+	}
+
+	for corner in ivalues(corners) do
+		local cx, cy, start_angle, end_angle = unpack(corner)
+		for i=0,panel_corner_segments do
+			local t = i / panel_corner_segments
+			local angle = math.rad(start_angle + ((end_angle - start_angle) * t))
+			local vertex = {{ cx + math.cos(angle) * r, cy + math.sin(angle) * r, 0 }, color}
+			if not first_perimeter_vert then first_perimeter_vert = vertex end
+			verts[#verts+1] = vertex
+		end
+	end
+
+	verts[#verts+1] = first_perimeter_vert
+	vertex_cache[key] = verts
+	return verts
 end
 
 local layouts = {
@@ -50,16 +94,18 @@ for row=0,2 do
 			self:GetParent():playcommand("Reassess", layout)
 		end
 
-		panel_af[#panel_af+1] = LoadActor("rounded-square.png")..{
+		panel_af[#panel_af+1] = Def.ActorMultiVertex{
 			InitCommand=function(self)
+				self:SetDrawState({Mode="DrawMode_Fan"})
 				init_panel(self, col, row, zoom)
 			end,
 			ReassessCommand=function(self, layout)
+				local color = color_unused
 				if layout[panel_index] then
-					self:diffuse(color_used)
-				else
-					self:diffuse(color_unused)
+					color = color_used
 				end
+				local verts = rounded_panel_vertices(color)
+				self:SetNumVertices(#verts):SetVertices(verts)
 			end
 		}
 

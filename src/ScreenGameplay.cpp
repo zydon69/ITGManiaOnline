@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -117,6 +118,86 @@ AutoScreenMessage(SM_PlayGo);
 
 static constexpr float ITGONLINE_EVALUATION_HOLD_MAX_SECONDS = 30.0f;
 
+struct GameplayVisualPerfSnapshot {
+  bool valid;
+  float draw_ms;
+  float song_background_ms;
+  float notefield_board_ms;
+  float clear_zbuffer_ms;
+  float screen_elements_ms;
+  float max_notefield_board_ms;
+  std::string max_notefield_board_player;
+  std::string max_visible_notes_player;
+  int visible_taps;
+  int visible_holds;
+  int visible_mines;
+  int visible_lifts;
+  int visible_fakes;
+  int visible_attacks;
+  int visible_autokeysounds;
+  int visible_total;
+  int max_player_visible_total;
+  int active_receptors;
+  int active_ghosts;
+  int active_tap_judgments;
+  int active_hold_judgments;
+  int active_combo;
+  int tap_judgments_since_last_snapshot;
+  int hold_judgments_since_last_snapshot;
+  int mine_judgments_since_last_snapshot;
+  int danger_players;
+  int failing_players;
+  float min_life;
+
+  GameplayVisualPerfSnapshot()
+      : valid(false),
+        draw_ms(0.0f),
+        song_background_ms(0.0f),
+        notefield_board_ms(0.0f),
+        clear_zbuffer_ms(0.0f),
+        screen_elements_ms(0.0f),
+        max_notefield_board_ms(0.0f),
+        max_notefield_board_player("none"),
+        max_visible_notes_player("none"),
+        visible_taps(0),
+        visible_holds(0),
+        visible_mines(0),
+        visible_lifts(0),
+        visible_fakes(0),
+        visible_attacks(0),
+        visible_autokeysounds(0),
+        visible_total(0),
+        max_player_visible_total(0),
+        active_receptors(0),
+        active_ghosts(0),
+        active_tap_judgments(0),
+        active_hold_judgments(0),
+        active_combo(0),
+        tap_judgments_since_last_snapshot(0),
+        hold_judgments_since_last_snapshot(0),
+        mine_judgments_since_last_snapshot(0),
+        danger_players(0),
+        failing_players(0),
+        min_life(-1.0f) {}
+};
+
+static GameplayVisualPerfSnapshot g_LastGameplayVisualPerf;
+
+static const char* HealthStateName(HealthState hs) {
+  switch (hs) {
+    case HealthState_Hot:
+      return "Hot";
+    case HealthState_Alive:
+      return "Alive";
+    case HealthState_Danger:
+      return "Danger";
+    case HealthState_Dead:
+      return "Dead";
+    default:
+      return "Invalid";
+  }
+}
+
 static bool GetITGOnlineSecondsUntilScheduledStart(float& secondsUntilStart) {
   if (LUA == nullptr) {
     return false;
@@ -204,6 +285,10 @@ AutoScreenMessage(SM_BattleTrickLevel3);
 static Preference<bool> g_bCenter1Player("Center1Player", false);
 static Preference<bool> g_bShowLyrics("ShowLyrics", true);
 static Preference<bool> g_bEasterEggs("EasterEggs", true);
+static Preference<float> g_fPerfTraceSlowGameplayDrawMs(
+    "PerfTraceSlowGameplayDrawMs", 4.0f);
+static Preference<float> g_fPerfTraceSlowGameplayActorDrawMs(
+    "PerfTraceSlowGameplayActorDrawMs", 2.0f);
 
 PlayerInfo::PlayerInfo()
     : m_pn(PLAYER_INVALID),
@@ -1812,6 +1897,46 @@ void ScreenGameplay::Update(float fDeltaTime) {
     return;
   }
 
+  if (fDeltaTime >= 0.025f) {
+    static uint64_t sLastGameplayHitchLogUsec = 0;
+    const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+    if (sLastGameplayHitchLogUsec == 0 ||
+        nowUsec - sLastGameplayHitchLogUsec >= 250000) {
+      sLastGameplayHitchLogUsec = nowUsec;
+      const GameplayVisualPerfSnapshot& perf = g_LastGameplayVisualPerf;
+      LOG->Trace(
+          "GAMEPLAY_FRAME_HITCH: delta=%.6f music=%.6f beat=%.6f fps=%d "
+          "perf_valid=%d last_draw_ms=%.3f song_background_ms=%.3f "
+          "notefield_board_ms=%.3f clear_zbuffer_ms=%.3f "
+          "screen_elements_ms=%.3f max_notefield_player=%s "
+          "max_notefield_ms=%.3f visible_notes=%d visible_taps=%d "
+          "visible_holds=%d visible_mines=%d visible_lifts=%d "
+          "visible_fakes=%d visible_attacks=%d visible_autokeysounds=%d "
+          "max_visible_player=%s max_visible_notes=%d active_receptors=%d "
+          "active_ghosts=%d active_tap_judgments=%d "
+          "active_hold_judgments=%d active_combo=%d "
+          "tap_judgments_since_snapshot=%d hold_judgments_since_snapshot=%d "
+          "mine_judgments_since_snapshot=%d danger_players=%d "
+          "failing_players=%d min_life=%.3f",
+          fDeltaTime, GAMESTATE->m_Position.m_fMusicSeconds,
+          GAMESTATE->m_Position.m_fSongBeat, DISPLAY->GetFPS(),
+          perf.valid ? 1 : 0, perf.draw_ms, perf.song_background_ms,
+          perf.notefield_board_ms, perf.clear_zbuffer_ms,
+          perf.screen_elements_ms, perf.max_notefield_board_player.c_str(),
+          perf.max_notefield_board_ms, perf.visible_total, perf.visible_taps,
+          perf.visible_holds, perf.visible_mines, perf.visible_lifts,
+          perf.visible_fakes, perf.visible_attacks,
+          perf.visible_autokeysounds, perf.max_visible_notes_player.c_str(),
+          perf.max_player_visible_total, perf.active_receptors,
+          perf.active_ghosts, perf.active_tap_judgments,
+          perf.active_hold_judgments, perf.active_combo,
+          perf.tap_judgments_since_last_snapshot,
+          perf.hold_judgments_since_last_snapshot,
+          perf.mine_judgments_since_last_snapshot, perf.danger_players,
+          perf.failing_players, perf.min_life);
+    }
+  }
+
   UpdateSongPosition(fDeltaTime);
 
   if (m_bZeroDeltaOnNextUpdate) {
@@ -1866,6 +1991,16 @@ void ScreenGameplay::Update(float fDeltaTime) {
     }
 
     if (hs != OldHealthState) {
+      LOG->Trace(
+          "LIFE_TRACE: player=%s old=%s new=%s life=%.3f in_danger=%d "
+          "failing=%d music=%.6f beat=%.6f",
+          pi->GetName().c_str(), HealthStateName(OldHealthState),
+          HealthStateName(hs),
+          pi->m_pLifeMeter ? pi->m_pLifeMeter->GetLife() : -1.0f,
+          pi->m_pLifeMeter && pi->m_pLifeMeter->IsInDanger() ? 1 : 0,
+          pi->m_pLifeMeter && pi->m_pLifeMeter->IsFailing() ? 1 : 0,
+          GAMESTATE->m_Position.m_fMusicSeconds,
+          GAMESTATE->m_Position.m_fSongBeat);
       Message msg("HealthStateChanged");
       msg.SetParam("PlayerNumber", pi->m_pn);
       msg.SetParam("HealthState", hs);
@@ -2171,18 +2306,125 @@ void ScreenGameplay::DrawPrimitives() {
   // This also solves the problem of the ComboUnderField metric putting the
   // combo underneath the opaque notefield board.
   // -Kyz
+  RageTimer totalTimer;
+  RageTimer phaseTimer;
+  float songBackgroundMs = 0.0f;
+  float noteFieldBoardMs = 0.0f;
+  float maxNoteFieldBoardMs = 0.0f;
+  std::string maxNoteFieldBoardPlayer = "none";
+  float clearZBufferMs = 0.0f;
+  float screenElementsMs = 0.0f;
+
   if (m_pSongBackground) {
     m_pSongBackground->m_disable_draw = false;
     m_pSongBackground->Draw();
     m_pSongBackground->m_disable_draw = true;
   }
+  songBackgroundMs = phaseTimer.GetDeltaTime() * 1000.0f;
+
   FOREACH_EnabledPlayerNumberInfo(m_vPlayerInfo, pi) {
+    RageTimer playerTimer;
     pi->m_pPlayer->DrawNoteFieldBoard();
+    const float onePlayerMs = playerTimer.GetDeltaTime() * 1000.0f;
+    noteFieldBoardMs += onePlayerMs;
+    if (onePlayerMs > maxNoteFieldBoardMs) {
+      maxNoteFieldBoardMs = onePlayerMs;
+      maxNoteFieldBoardPlayer = pi->GetName();
+    }
   }
+
   // Clear the z buffer so 3D notes aren't hidden by anything in the underlay
   // using masking. -Kyz
   DISPLAY->ClearZBuffer();
+  clearZBufferMs = phaseTimer.GetDeltaTime() * 1000.0f;
+
+  ActorFrame::PushDrawPerfTraceScope(
+      "ScreenGameplayElements",
+      std::max(0.0f, g_fPerfTraceSlowGameplayActorDrawMs.Get()));
   ScreenWithMenuElements::DrawPrimitives();
+  ActorFrame::PopDrawPerfTraceScope();
+  screenElementsMs = phaseTimer.GetDeltaTime() * 1000.0f;
+
+  const float totalMs = totalTimer.GetDeltaTime() * 1000.0f;
+  GameplayVisualPerfSnapshot perf;
+  perf.valid = true;
+  perf.draw_ms = totalMs;
+  perf.song_background_ms = songBackgroundMs;
+  perf.notefield_board_ms = noteFieldBoardMs;
+  perf.clear_zbuffer_ms = clearZBufferMs;
+  perf.screen_elements_ms = screenElementsMs;
+  perf.max_notefield_board_ms = maxNoteFieldBoardMs;
+  perf.max_notefield_board_player = maxNoteFieldBoardPlayer;
+
+  FOREACH_EnabledPlayerNumberInfo(m_vPlayerInfo, pi) {
+    Player::GameplayPerfStats playerStats =
+        pi->m_pPlayer->GetGameplayPerfStats();
+    perf.visible_taps += playerStats.visible_taps;
+    perf.visible_holds += playerStats.visible_holds;
+    perf.visible_mines += playerStats.visible_mines;
+    perf.visible_lifts += playerStats.visible_lifts;
+    perf.visible_fakes += playerStats.visible_fakes;
+    perf.visible_attacks += playerStats.visible_attacks;
+    perf.visible_autokeysounds += playerStats.visible_autokeysounds;
+    perf.visible_total += playerStats.visible_total;
+    perf.active_receptors += playerStats.active_receptors;
+    perf.active_ghosts += playerStats.active_ghosts;
+    perf.active_tap_judgments += playerStats.active_tap_judgments;
+    perf.active_hold_judgments += playerStats.active_hold_judgments;
+    perf.active_combo += playerStats.active_combo;
+    perf.tap_judgments_since_last_snapshot +=
+        playerStats.tap_judgments_since_last_snapshot;
+    perf.hold_judgments_since_last_snapshot +=
+        playerStats.hold_judgments_since_last_snapshot;
+    perf.mine_judgments_since_last_snapshot +=
+        playerStats.mine_judgments_since_last_snapshot;
+    if (playerStats.visible_total > perf.max_player_visible_total) {
+      perf.max_player_visible_total = playerStats.visible_total;
+      perf.max_visible_notes_player = pi->GetName();
+    }
+    if (playerStats.in_danger) {
+      ++perf.danger_players;
+    }
+    if (playerStats.failing) {
+      ++perf.failing_players;
+    }
+    if (playerStats.life >= 0.0f &&
+        (perf.min_life < 0.0f || playerStats.life < perf.min_life)) {
+      perf.min_life = playerStats.life;
+    }
+    pi->m_pPlayer->ResetGameplayPerfCounters();
+  }
+
+  g_LastGameplayVisualPerf = perf;
+
+  const float traceThresholdMs =
+      std::max(0.0f, g_fPerfTraceSlowGameplayDrawMs.Get());
+  if (totalMs >= traceThresholdMs) {
+    LOG->Trace(
+        "PERF_TRACE: gameplay_draw total_ms=%.3f song_background_ms=%.3f "
+        "notefield_board_ms=%.3f clear_zbuffer_ms=%.3f "
+        "screen_elements_ms=%.3f max_notefield_player=%s "
+        "max_notefield_ms=%.3f visible_notes=%d visible_taps=%d "
+        "visible_holds=%d visible_mines=%d visible_lifts=%d "
+        "visible_fakes=%d visible_attacks=%d visible_autokeysounds=%d "
+        "max_visible_player=%s max_visible_notes=%d active_receptors=%d "
+        "active_ghosts=%d active_tap_judgments=%d active_hold_judgments=%d "
+        "active_combo=%d tap_judgments_since_snapshot=%d "
+        "hold_judgments_since_snapshot=%d mine_judgments_since_snapshot=%d "
+        "danger_players=%d failing_players=%d min_life=%.3f",
+        totalMs, songBackgroundMs, noteFieldBoardMs, clearZBufferMs,
+        screenElementsMs, maxNoteFieldBoardPlayer.c_str(),
+        maxNoteFieldBoardMs, perf.visible_total, perf.visible_taps,
+        perf.visible_holds, perf.visible_mines, perf.visible_lifts,
+        perf.visible_fakes, perf.visible_attacks, perf.visible_autokeysounds,
+        perf.max_visible_notes_player.c_str(), perf.max_player_visible_total,
+        perf.active_receptors, perf.active_ghosts,
+        perf.active_tap_judgments, perf.active_hold_judgments,
+        perf.active_combo, perf.tap_judgments_since_last_snapshot,
+        perf.hold_judgments_since_last_snapshot,
+        perf.mine_judgments_since_last_snapshot, perf.danger_players,
+        perf.failing_players, perf.min_life);
+  }
 }
 
 void ScreenGameplay::FailFadeRemovePlayer(PlayerInfo* pi) {

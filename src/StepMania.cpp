@@ -163,7 +163,7 @@ static void StoreActualGraphicOptions() {
     PREFSMAN->m_iDisplayHeight.Set(params.height);
   }
   PREFSMAN->m_iDisplayColorDepth.Set(params.bpp);
-  if (PREFSMAN->m_iRefreshRate != REFRESH_DEFAULT) {
+  if (!params.windowed && PREFSMAN->m_iRefreshRate != REFRESH_DEFAULT) {
     PREFSMAN->m_iRefreshRate.Set(params.rate);
   }
   PREFSMAN->m_bVsync.Set(params.vsync);

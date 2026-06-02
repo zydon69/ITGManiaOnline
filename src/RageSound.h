@@ -114,6 +114,8 @@ class RageSound : public RageSoundBase {
   /* Load a RageSoundReader that you've set up yourself. Sample rate conversion
    * will be set up only if needed. Doesn't fail. */
   void LoadSoundReader(RageSoundReader* pSound);
+  void LoadSoundReader(
+      RageSoundReader* pSound, const std::string& sDebugFilePath);
 
   // Get the loaded RageSoundReader. While playing, only properties can be set.
   RageSoundReader* GetSoundReader() { return m_pSource; }

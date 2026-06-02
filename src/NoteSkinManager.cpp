@@ -55,6 +55,7 @@ struct NoteSkinData {
   IniFile metrics;
   VariantNoteSkinData variant_data;
   bool bIsVariant;
+  bool bUsesColorVariable;
   // When looking for an element, search these dirs from head to tail.
   std::vector<std::string> vsDirSearchOrder;
 
@@ -72,6 +73,7 @@ struct NoteSkinActorTemplateNodeCacheStats {
   size_t misses;
   size_t builds;
   size_t failures;
+  size_t colorAgnosticRequests;
   uint64_t luaBuildUsec;
   uint64_t cloneUsec;
 
@@ -81,6 +83,7 @@ struct NoteSkinActorTemplateNodeCacheStats {
         misses(0),
         builds(0),
         failures(0),
+        colorAgnosticRequests(0),
         luaBuildUsec(0),
         cloneUsec(0) {}
 };
@@ -91,11 +94,52 @@ static NoteSkinActorTemplateNodeCacheStats g_ActorTemplateNodeCacheStats;
 static std::string NoteSkinActorTemplateNodeCacheKey(
     const std::string& sNoteSkin, const std::string& sButton,
     const std::string& sElement, const PlayerNumber pn, const GameController gc,
-    const bool bSpriteOnly, const std::string& sColor) {
+    const bool bSpriteOnly, const std::string& sColor,
+    const bool bColorSensitive) {
   return ssprintf(
       "%s\x1f%s\x1f%s\x1f%d\x1f%d\x1f%d\x1f%s", sNoteSkin.c_str(),
       sButton.c_str(), sElement.c_str(), static_cast<int>(pn),
-      static_cast<int>(gc), bSpriteOnly ? 1 : 0, sColor.c_str());
+      static_cast<int>(gc), bSpriteOnly ? 1 : 0,
+      bColorSensitive ? sColor.c_str() : "");
+}
+
+static bool LuaScriptReferencesNoteColorVariable(const std::string& sScript) {
+  std::string compact;
+  compact.reserve(sScript.size());
+  for (const char c : sScript) {
+    if (c != ' ' && c != '\t' && c != '\r' && c != '\n') {
+      compact += c;
+    }
+  }
+
+  return compact.find("Var\"Color\"") != std::string::npos ||
+         compact.find("Var'Color'") != std::string::npos ||
+         compact.find("Var(\"Color\")") != std::string::npos ||
+         compact.find("Var('Color')") != std::string::npos;
+}
+
+static bool NoteSkinDirectoryUsesColorVariable(const std::string& sDir) {
+  std::vector<std::string> luaFiles;
+  GetDirListing(sDir + "*.lua", luaFiles, false, true);
+  for (const std::string& luaFile : luaFiles) {
+    std::string script;
+    if (!GetFileContents(luaFile, script)) {
+      continue;
+    }
+    if (LuaScriptReferencesNoteColorVariable(script)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool NoteSkinUsesColorVariable(const NoteSkinData& data) {
+  for (const std::string& dir : data.vsDirSearchOrder) {
+    if (NoteSkinDirectoryUsesColorVariable(dir)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 static void LogNoteSkinActorTemplateNodeCacheStats(
@@ -118,9 +162,10 @@ static void LogNoteSkinActorTemplateNodeCacheStats(
   LOG->Info(
       "NoteSkin actor XNode cache stats (%s): entries=%zu requests=%zu "
       "hits=%zu misses=%zu builds=%zu failures=%zu hit_rate=%.1f%% "
-      "lua_build_ms=%.3f clone_ms=%.3f",
+      "color_agnostic=%zu lua_build_ms=%.3f clone_ms=%.3f",
       reason, g_ActorTemplateNodeCache.size(), stats.requests, stats.hits,
       stats.misses, stats.builds, stats.failures, hitRate,
+      stats.colorAgnosticRequests,
       static_cast<double>(stats.luaBuildUsec) / 1000.0,
       static_cast<double>(stats.cloneUsec) / 1000.0);
 }
@@ -229,6 +274,7 @@ bool NoteSkinManager::LoadNoteSkinData(
     const std::string& sNoteSkinName, NoteSkinData& data_out) {
   data_out.sName = sNoteSkinName;
   data_out.metrics.Clear();
+  data_out.bUsesColorVariable = true;
   data_out.vsDirSearchOrder.clear();
 
   // Read the current NoteSkin and all of its fallbacks
@@ -371,6 +417,7 @@ bool NoteSkinManager::LoadNoteSkinDataRecursive(
     LUA->Release(L);
   }
   data_out.m_Loader = refScript;
+  data_out.bUsesColorVariable = NoteSkinUsesColorVariable(data_out);
   return true;
 }
 
@@ -693,10 +740,17 @@ bool NoteSkinManager::PushActorTemplate(
 Actor* NoteSkinManager::LoadActor(
     const std::string& sButton, const std::string& sElement, Actor* pParent,
     bool bSpriteOnly, const std::string& sColor) {
+  std::map<std::string, NoteSkinData>::const_iterator dataIt =
+      g_mapNameToData.find(m_sCurrentNoteSkin);
+  const bool bColorSensitive =
+      dataIt == g_mapNameToData.end() || dataIt->second.bUsesColorVariable;
   const std::string cacheKey = NoteSkinActorTemplateNodeCacheKey(
       m_sCurrentNoteSkin, sButton, sElement, m_PlayerNumber, m_GameController,
-      bSpriteOnly, sColor);
+      bSpriteOnly, sColor, bColorSensitive);
   g_ActorTemplateNodeCacheStats.requests++;
+  if (!bColorSensitive) {
+    g_ActorTemplateNodeCacheStats.colorAgnosticRequests++;
+  }
 
   std::unique_ptr<XNode> pNode;
   std::map<std::string, std::unique_ptr<XNode>>::const_iterator cached =
@@ -737,11 +791,6 @@ Actor* NoteSkinManager::LoadActor(
 
     g_ActorTemplateNodeCache[cacheKey].reset(new XNode(*pNode));
     g_ActorTemplateNodeCacheStats.builds++;
-    LOG->Trace(
-        "NoteSkin actor XNode cache miss: note_skin=%s button=%s element=%s "
-        "sprite_only=%d color=%s entries=%zu",
-        m_sCurrentNoteSkin.c_str(), sButton.c_str(), sElement.c_str(),
-        bSpriteOnly ? 1 : 0, sColor.c_str(), g_ActorTemplateNodeCache.size());
   }
 
   LogNoteSkinActorTemplateNodeCacheStats("runtime", false);
