@@ -26,14 +26,11 @@ return Def.ActorFrame{
 				self:visible(false)
 				return
 			end
-			self:linear(0.125):diffusealpha(0):queuecommand("NewText")
-		end,
-		NewTextCommand=function(self)
-			if onlineFlowSuppressesPrompt() then
-				self:visible(false)
-				return
-			end
-			self:hibernate(0.1):settext(THEME:GetString("ScreenSelectMusic", "Entering Options...")):linear(0.125):diffusealpha(1):sleep(1)
+			self:stoptweening()
+				:visible(true)
+				:diffusealpha(1)
+				:settext(THEME:GetString("ScreenSelectMusic", "Entering Options..."))
+				:sleep(1)
 		end
 	}
 }
