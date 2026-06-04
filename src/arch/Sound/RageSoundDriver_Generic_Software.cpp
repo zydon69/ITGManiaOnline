@@ -1106,6 +1106,7 @@ int64_t RageSoundDriver::GetHardwareFrame(
   do {
     iStartTime = RageTimer::GetTimeSinceStartMicroseconds();
     iPositionFrames = GetPosition();
+    pTimestamp->Touch();
     uint64_t elapsedTime =
         RageTimer::GetTimeSinceStartMicroseconds() - iStartTime;
     if (elapsedTime <= iThreshold) {
