@@ -24,10 +24,6 @@
 #endif
 #endif
 
-/* Assume TLS doesn't work until told otherwise.  It's ArchHooks's job to set
- * this. */
-bool RageThread::s_bSystemSupportsTLS = false;
-
 // Set in Dialog.cpp via SetIsShowingDialog, but read in RageThread.cpp.
 std::atomic<bool> RageThread::s_bIsShowingDialog(false);
 
