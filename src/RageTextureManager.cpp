@@ -29,6 +29,7 @@
 #include <utility>
 
 #include "ActorUtil.h"
+#include "PerfDiagnostics.h"
 #include "Preference.h"
 #include "RageBitmapTexture.h"
 #include "RageDisplay.h"
@@ -329,7 +330,8 @@ void RageTextureManager::GarbageCollect(GCType type) {
   }
 
   const float elapsedMs = gcTimer.GetDeltaTime() * 1000.0f;
-  if (deleted > 0 || deferred || elapsedMs >= 2.0f) {
+  if (PerfDiagnosticsEnabled() &&
+      (deleted > 0 || deferred || elapsedMs >= 2.0f)) {
     LOG->Trace(
         "PERF_TRACE: texture_gc type=%s visited=%d deleted=%d deferred=%d "
         "budget=%d elapsed_ms=%.3f",

@@ -51,6 +51,7 @@
 #include "PlayerNumber.h"
 #include "PlayerOptions.h"
 #include "PlayerState.h"
+#include "PerfDiagnostics.h"
 #include "Preference.h"
 #include "PrefsManager.h"
 #include "Profile.h"  // for replay data stuff
@@ -2375,7 +2376,9 @@ void ScreenGameplay::DrawPrimitives() {
 
   ActorFrame::PushDrawPerfTraceScope(
       "ScreenGameplayElements",
-      std::max(0.0f, g_fPerfTraceSlowGameplayActorDrawMs.Get()));
+      PerfDiagnosticsEnabled()
+          ? std::max(0.0f, g_fPerfTraceSlowGameplayActorDrawMs.Get())
+          : 0.0f);
   ScreenWithMenuElements::DrawPrimitives();
   ActorFrame::PopDrawPerfTraceScope();
   screenElementsMs = phaseTimer.GetDeltaTime() * 1000.0f;
@@ -2434,7 +2437,8 @@ void ScreenGameplay::DrawPrimitives() {
 
   const float traceThresholdMs =
       std::max(0.0f, g_fPerfTraceSlowGameplayDrawMs.Get());
-  if (totalMs >= traceThresholdMs) {
+  if (PerfDiagnosticsEnabled() && traceThresholdMs > 0.0f &&
+      totalMs >= traceThresholdMs) {
     LOG->Trace(
         "PERF_TRACE: gameplay_draw total_ms=%.3f song_background_ms=%.3f "
         "notefield_board_ms=%.3f clear_zbuffer_ms=%.3f "

@@ -34,6 +34,8 @@ endfunction()
 
 read_source("src/RageSound.h" rage_sound_h)
 read_source("src/RageSound.cpp" rage_sound_cpp)
+read_source("src/PerfDiagnostics.cpp" perf_diagnostics_cpp)
+read_source("src/PerfDiagnostics.h" perf_diagnostics_h)
 read_source("src/RageSoundPosMap.cpp" rage_sound_pos_map_cpp)
 read_source("src/arch/Sound/RageSoundDriver.h" rage_sound_driver_h)
 read_source("src/arch/Sound/RageSoundDriver_Generic_Software.cpp" rage_sound_driver_generic_cpp)
@@ -43,8 +45,33 @@ read_source("src/StepMania.cpp" stepmania_cpp)
 read_source("src/RageDisplay.cpp" rage_display_cpp)
 read_source("src/arch/LowLevelWindow/LowLevelWindow_MacOSX.mm" macos_window_cpp)
 read_source("src/CMakeLists.txt" src_cmake_lists)
+read_source("src/CMakeData-rage.cmake" cmake_data_rage)
 
 require_contains("${rage_sound_h}" "#include <atomic>" "RageSound uses atomics")
+require_contains(
+  "${perf_diagnostics_h}"
+  "bool PerfDiagnosticsEnabled();"
+  "Perf diagnostics exposes a single master switch helper")
+require_contains(
+  "${perf_diagnostics_cpp}"
+  "Preference<bool> g_bPerfDiagnostics(\"PerfDiagnostics\", false)"
+  "Perf diagnostics are disabled by default and enabled by one preference")
+require_contains(
+  "${cmake_data_rage}"
+  "PerfDiagnostics.cpp"
+  "Perf diagnostics implementation is compiled into the game")
+require_not_contains(
+  "${perf_diagnostics_h}"
+  "PerfDiagnosticsTraceThreshold"
+  "Perf diagnostics exposes only the shared master switch")
+require_contains(
+  "${rage_sound_driver_generic_cpp}"
+  "PerfDiagnosticsEnabled()"
+  "Audio underrun tracing follows the shared perf diagnostics switch")
+require_contains(
+  "${macos_window_cpp}"
+  "PerfDiagnosticsEnabled()"
+  "macOS present tracing follows the shared perf diagnostics switch")
 require_contains(
   "${rage_sound_h}"
   "std::atomic_bool m_bPlaying;"
@@ -183,10 +210,10 @@ require_contains(
   "${macos_window_cpp}"
   "MacOSOpenGLFencePacingWaitMs"
   "macOS OpenGL fence wait is a pacing feature, not a diagnostics flag")
-require_contains(
+require_not_contains(
   "${macos_window_cpp}"
-  "MacOSOpenGLFenceTrace"
-  "macOS OpenGL fence trace is separated from the pacing wait")
+  "Preference<bool> g_bMacOSOpenGLFenceTrace"
+  "macOS OpenGL fence trace must use the shared PerfDiagnostics switch")
 require_not_contains(
   "${macos_window_cpp}"
   "MacOSOpenGLFenceDiagnostics"

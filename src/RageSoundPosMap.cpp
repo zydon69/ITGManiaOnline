@@ -7,6 +7,7 @@
 #include <limits>
 #include <utility>
 
+#include "PerfDiagnostics.h"
 #include "RageLog.h"
 #include "RageTimer.h"
 
@@ -191,7 +192,7 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
         kSustainedMinorPositionDriftSearches;
     if (sustainedDrift) {
       static RageTimer lastSustainedMinor;
-      if (lastSustainedMinor.Ago() >= 10.0f) {
+      if (PerfDiagnosticsEnabled() && lastSustainedMinor.Ago() >= 10.0f) {
         lastSustainedMinor.Touch();
         LOG->Trace(
             "Audio position mismatch: sustained minor drift frame %" PRId64
@@ -208,7 +209,8 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
       return iClosestPosition;
     }
 
-    if (lastMinor.Ago() >= kMinorPositionDriftTraceSeconds) {
+    if (PerfDiagnosticsEnabled() &&
+        lastMinor.Ago() >= kMinorPositionDriftTraceSeconds) {
       lastMinor.Touch();
       LOG->Trace(
           "Audio position map minor drift: frame %" PRId64
@@ -226,7 +228,7 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
 
   static RageTimer lastMismatch;
   m_pImpl->m_iConsecutiveMinorDrifts = 0;
-  if (lastMismatch.Ago() >= 10.0f) {
+  if (PerfDiagnosticsEnabled() && lastMismatch.Ago() >= 10.0f) {
     lastMismatch.Touch();
     LOG->Trace(
         "Audio position mismatch: frame %" PRId64

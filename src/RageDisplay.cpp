@@ -15,6 +15,7 @@
 #include "LocalizedString.h"
 #include "LuaManager.h"
 #include "ModelTypes.h"
+#include "PerfDiagnostics.h"
 #include "Preference.h"
 #include "RageFile.h"
 #include "RageLog.h"
@@ -2407,7 +2408,7 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
       }
     }
 
-    if (!g_bFramePacerLoggedEnable) {
+    if (!g_bFramePacerLoggedEnable && PerfDiagnosticsEnabled()) {
       LOG->Trace(
           "FRAME_PACING: enabled target_hz=%.3f interval_us=%llu "
           "sleep_margin_us=%llu effective_margin_us=%llu "
@@ -2468,8 +2469,8 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
 	          g_bFramePacerMacOSSafeMode ? 1 : 0
 	#endif
 	          );
-      g_bFramePacerLoggedEnable = true;
     }
+    g_bFramePacerLoggedEnable = true;
 
     int64_t lateUsec =
         static_cast<int64_t>(nowUsec) -
@@ -2478,23 +2479,27 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
     g_iFramePacerLastBeforeSwapPhaseErrorUsec = lateUsec;
     if (lateUsec >
         static_cast<int64_t>(FramePacingResyncThresholdUsec(intervalUsec))) {
-      LOG->Trace(
-          "FRAME_PACING: resync phase=before_swap reason=very_late_no_wait "
-          "late_us=%lld target_hz=%.3f interval_us=%llu",
-          static_cast<long long>(lateUsec), targetHz,
-          static_cast<unsigned long long>(intervalUsec));
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "FRAME_PACING: resync phase=before_swap reason=very_late_no_wait "
+            "late_us=%lld target_hz=%.3f interval_us=%llu",
+            static_cast<long long>(lateUsec), targetHz,
+            static_cast<unsigned long long>(intervalUsec));
+      }
       g_szFramePacerLastBeforeSwapResyncReason = "very_late_no_wait";
     } else if (
         lateUsec >
         static_cast<int64_t>(FramePacingPhaseResyncThresholdUsec(
             intervalUsec))) {
-      LOG->Trace(
-          "FRAME_PACING: resync phase=before_swap reason=phase_late_no_wait "
-          "late_us=%lld target_hz=%.3f interval_us=%llu threshold_us=%llu",
-          static_cast<long long>(lateUsec), targetHz,
-          static_cast<unsigned long long>(intervalUsec),
-          static_cast<unsigned long long>(
-              FramePacingPhaseResyncThresholdUsec(intervalUsec)));
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "FRAME_PACING: resync phase=before_swap reason=phase_late_no_wait "
+            "late_us=%lld target_hz=%.3f interval_us=%llu threshold_us=%llu",
+            static_cast<long long>(lateUsec), targetHz,
+            static_cast<unsigned long long>(intervalUsec),
+            static_cast<unsigned long long>(
+                FramePacingPhaseResyncThresholdUsec(intervalUsec)));
+      }
       g_szFramePacerLastBeforeSwapResyncReason = "phase_late_no_wait";
     } else {
       const int64_t leadUsec =
@@ -2502,12 +2507,14 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
           static_cast<int64_t>(nowUsec);
       const uint64_t maxLeadUsec = intervalUsec + waitMarginUsec;
       if (leadUsec > static_cast<int64_t>(maxLeadUsec)) {
-        LOG->Trace(
-            "FRAME_PACING: resync phase=before_swap reason=phase_ahead "
-            "lead_us=%lld target_hz=%.3f interval_us=%llu max_lead_us=%llu",
-            static_cast<long long>(leadUsec), targetHz,
-            static_cast<unsigned long long>(intervalUsec),
-            static_cast<unsigned long long>(maxLeadUsec));
+        if (PerfDiagnosticsEnabled()) {
+          LOG->Trace(
+              "FRAME_PACING: resync phase=before_swap reason=phase_ahead "
+              "lead_us=%lld target_hz=%.3f interval_us=%llu max_lead_us=%llu",
+              static_cast<long long>(leadUsec), targetHz,
+              static_cast<unsigned long long>(intervalUsec),
+              static_cast<unsigned long long>(maxLeadUsec));
+        }
         g_iFramePacerNextPresentUsec = nowUsec + intervalUsec;
         lateUsec = -static_cast<int64_t>(intervalUsec);
         g_iFramePacerLastBeforeSwapPhaseErrorUsec = -leadUsec;
@@ -2525,17 +2532,19 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
         intervalUsec + std::max<uint64_t>(500, intervalUsec / 8);
 	    if (plannedWaitUsec >
 	        static_cast<int64_t>(maxPlannedWaitUsec)) {
-      LOG->Trace(
-          "FRAME_PACING: resync phase=before_swap "
-          "reason=planned_wait_over_budget planned_wait_us=%lld "
-          "target_hz=%.3f interval_us=%llu margin_us=%llu "
-          "wait_margin_us=%llu "
-          "max_planned_wait_us=%llu",
-          static_cast<long long>(plannedWaitUsec), targetHz,
-          static_cast<unsigned long long>(intervalUsec),
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "FRAME_PACING: resync phase=before_swap "
+            "reason=planned_wait_over_budget planned_wait_us=%lld "
+            "target_hz=%.3f interval_us=%llu margin_us=%llu "
+            "wait_margin_us=%llu "
+            "max_planned_wait_us=%llu",
+            static_cast<long long>(plannedWaitUsec), targetHz,
+            static_cast<unsigned long long>(intervalUsec),
           static_cast<unsigned long long>(marginUsec),
           static_cast<unsigned long long>(waitMarginUsec),
           static_cast<unsigned long long>(maxPlannedWaitUsec));
+      }
       g_iFramePacerNextPresentUsec = nowUsec + intervalUsec;
       wakeUsec = g_iFramePacerNextPresentUsec > waitMarginUsec
                      ? g_iFramePacerNextPresentUsec - waitMarginUsec
@@ -2648,7 +2657,9 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
   }
 
   if (g_bFramePacerWasEnabled) {
-    LOG->Trace("FRAME_PACING: disabled");
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace("FRAME_PACING: disabled");
+    }
     ResetFramePacer();
   }
 
@@ -2773,18 +2784,19 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
         g_iFramePacerLastWakeLateUsec < 0
             ? -g_iFramePacerLastWakeLateUsec
             : g_iFramePacerLastWakeLateUsec;
-    if (absPresentLateUsec >= traceLateUsec ||
-        absWakeLateUsec >= traceLateUsec ||
-        g_iFramePacerLastSleepOvershootUsec >=
-            static_cast<uint64_t>(traceLateUsec) ||
-        skippedIntervals > 0 || hardResynced || phaseResynced ||
-        waitResynced ||
-        g_bFramePacerLastAdaptiveChanged ||
+    if (PerfDiagnosticsEnabled() &&
+        (absPresentLateUsec >= traceLateUsec ||
+         absWakeLateUsec >= traceLateUsec ||
+         g_iFramePacerLastSleepOvershootUsec >=
+             static_cast<uint64_t>(traceLateUsec) ||
+         skippedIntervals > 0 || hardResynced || phaseResynced ||
+         waitResynced ||
+         g_bFramePacerLastAdaptiveChanged ||
 #ifdef __APPLE__
-        g_bFramePacerLastMacOSAdaptiveLeadChanged ||
+         g_bFramePacerLastMacOSAdaptiveLeadChanged ||
 #endif
-	        g_iFramePacerFrames <= 5 ||
-        g_iFramePacerFrames % 240 == 0) {
+         g_iFramePacerFrames <= 5 ||
+         g_iFramePacerFrames % 240 == 0)) {
       LOG->Trace(
           "FRAME_PACING: present frame=%llu target_hz=%.3f "
           "base_margin_us=%llu effective_margin_us=%llu next_margin_us=%llu "
@@ -3021,11 +3033,13 @@ void RageDisplay::ResetFramePacing(const char* reason) {
   }
 
   g_iFramePacerWarmupFramesRemaining = FramePacingAdaptiveWarmupFrames();
-  LOG->Trace(
-      "FRAME_PACING: reset reason=%s target_hz=%.3f warmup_frames=%d "
-      "was_enabled=%d",
-      reason != nullptr ? reason : "manual", targetHz,
-      g_iFramePacerWarmupFramesRemaining, wasEnabled ? 1 : 0);
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "FRAME_PACING: reset reason=%s target_hz=%.3f warmup_frames=%d "
+        "was_enabled=%d",
+        reason != nullptr ? reason : "manual", targetHz,
+        g_iFramePacerWarmupFramesRemaining, wasEnabled ? 1 : 0);
+  }
 }
 
 RageCompiledGeometry::~RageCompiledGeometry() { m_bNeedsNormals = false; }

@@ -33,6 +33,7 @@
 #include "RageTypes.h"
 #include "RageUtil.h"
 #include "RageUtil/Endian.h"
+#include "PerfDiagnostics.h"
 #include "Screen.h"
 #include "ScreenManager.h"
 #include "Sprite.h"
@@ -177,6 +178,10 @@ static void RecordOpenGLPreFramePacingTrace(
 }
 
 static bool ShouldLogOpenGLPreFramePacingSummary() {
+  if (!PerfDiagnosticsEnabled()) {
+    return false;
+  }
+
   const float everyMs = g_fPerfTraceOpenGLPreFramePacingSummaryEveryMs.Get();
   if (std::isfinite(everyMs) && everyMs > 0.0f) {
     const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
@@ -521,6 +526,10 @@ static void LogDisplayEndFramePerfBucket(
 }
 
 static void LogDisplayEndFramePerfSummary() {
+  if (!PerfDiagnosticsEnabled()) {
+    return;
+  }
+
   if (g_DisplayEndFramePerfSummary.all.frames == 0) {
     return;
   }
@@ -1614,10 +1623,11 @@ void RageDisplay_Legacy::EndFrame() {
     const bool shouldLogProactiveFinish =
         preFramePacingProactiveArmed &&
         g_bPerfTraceOpenGLPreFramePacingProactiveDetails.Get();
-    if (preFramePacingSyncMs >=
-            g_fPerfTraceSlowOpenGLPreFramePacingSyncMs.Get() ||
-        shouldLogContinuousFinish || shouldLogProactiveFinish ||
-        isBackpressureFinish) {
+    if (PerfDiagnosticsEnabled() &&
+        (preFramePacingSyncMs >=
+             g_fPerfTraceSlowOpenGLPreFramePacingSyncMs.Get() ||
+         shouldLogContinuousFinish || shouldLogProactiveFinish ||
+         isBackpressureFinish)) {
       LOG->Trace(
           "PERF_TRACE: opengl_pre_frame_pacing_sync total_ms=%.3f mode=%s "
           "finish_remaining_before=%d finish_remaining_after=%d rate=%d "
@@ -1758,7 +1768,8 @@ void RageDisplay_Legacy::EndFrame() {
       totalMs, swapBuffersMs, frameLimitBeforeMs, presentReturnIntervalMs,
       expectedFrameMs, missedSwapIntervals, missedTotalIntervals,
       frameClassification, currentScreenName);
-  if (effectiveTraceMs > 0.0f && totalMs >= effectiveTraceMs) {
+  if (PerfDiagnosticsEnabled() && effectiveTraceMs > 0.0f &&
+      totalMs >= effectiveTraceMs) {
     const float renderBeforeSwapMs =
         offscreenMs + preFramePacingSyncMs + frameLimitBeforeMs;
     const float presentAndSyncMs =
