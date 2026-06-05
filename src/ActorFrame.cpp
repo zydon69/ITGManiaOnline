@@ -11,6 +11,7 @@
 #include "LuaBinding.h"
 #include "LuaManager.h"
 #include "MessageManager.h"
+#include "PerfDiagnostics.h"
 #include "RageLog.h"
 #include "RageTimer.h"
 #include "RageDisplay.h"
@@ -38,7 +39,8 @@ struct DrawPerfTraceScope {
 std::vector<DrawPerfTraceScope> g_vDrawPerfTraceScopes;
 
 static bool IsDrawPerfTraceActive() {
-  return !g_vDrawPerfTraceScopes.empty() &&
+  return PerfDiagnosticsEnabled() &&
+         !g_vDrawPerfTraceScopes.empty() &&
          g_vDrawPerfTraceScopes.back().slowActorMs > 0.0f;
 }
 

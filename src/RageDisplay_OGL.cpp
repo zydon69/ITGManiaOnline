@@ -33,9 +33,16 @@
 #include "RageTypes.h"
 #include "RageUtil.h"
 #include "RageUtil/Endian.h"
+#include "PerfDiagnostics.h"
+#include "Screen.h"
+#include "ScreenManager.h"
 #include "Sprite.h"
 #include "arch/LowLevelWindow/LowLevelWindow.h"
 #include "global.h"
+
+#ifdef __APPLE__
+#include "arch/LowLevelWindow/MacOSFramePacing.h"
+#endif
 
 using namespace RageDisplay_Legacy_Helpers;
 
@@ -74,6 +81,8 @@ static int g_gluVersion;
 static int g_iMaxTextureUnits = 0;
 static Preference<float> g_fPerfTraceSlowDisplayEndFrameMs(
     "PerfTraceSlowDisplayEndFrameMs", 20.0f);
+static Preference<float> g_fPerfTraceDisplayEndFrameBudgetMultiplier(
+    "PerfTraceDisplayEndFrameBudgetMultiplier", 2.0f);
 #ifdef __APPLE__
 static Preference<bool> g_bOpenGLFinishAfterSwap(
     "OpenGLFinishAfterSwap", false);
@@ -85,35 +94,471 @@ static Preference<int> g_iOpenGLFinishEveryNFrames(
     "OpenGLFinishEveryNFrames", 0);
 static uint64_t g_iOpenGLFramesSinceFinish = 0;
 #ifdef __APPLE__
-static Preference<bool> g_bOpenGLPreFramePacingSync(
-    "OpenGLPreFramePacingSync", true);
-static Preference<bool> g_bOpenGLPreFramePacingFinishOnBackpressure(
-    "OpenGLPreFramePacingFinishOnBackpressure", true);
-static Preference<int> g_iOpenGLPreFramePacingFinishFrames(
-    "OpenGLPreFramePacingFinishFrames", 2);
-static Preference<int> g_iOpenGLPreFramePacingMaxReactiveFinishFrames(
-    "OpenGLPreFramePacingMaxReactiveFinishFrames", 2);
-static Preference<bool> g_bOpenGLPreFramePacingProactiveFinish(
-    "OpenGLPreFramePacingProactiveFinish", true);
-static Preference<int> g_iOpenGLPreFramePacingProactiveFinishEveryNFrames(
-    "OpenGLPreFramePacingProactiveFinishEveryNFrames", 240);
-static Preference<int> g_iOpenGLPreFramePacingProactiveFinishFrames(
-    "OpenGLPreFramePacingProactiveFinishFrames", 1);
-static Preference<int> g_iOpenGLPreFramePacingProactiveFinishMinRate(
-    "OpenGLPreFramePacingProactiveFinishMinRate", 90);
-static Preference<bool> g_bOpenGLPreFramePacingContinuousFinish(
-    "OpenGLPreFramePacingContinuousFinish", false);
-static Preference<int> g_iOpenGLPreFramePacingContinuousFinishMinRate(
-    "OpenGLPreFramePacingContinuousFinishMinRate", 90);
-static Preference<int> g_iOpenGLPreFramePacingContinuousFinishLogEveryNFrames(
-    "OpenGLPreFramePacingContinuousFinishLogEveryNFrames", 240);
+template<typename T>
+struct FixedOpenGLPacingValue {
+  explicit constexpr FixedOpenGLPacingValue(T value_) : value(value_) {}
+  constexpr T Get() const { return value; }
+  const T value;
+};
+
+static constexpr FixedOpenGLPacingValue<bool> g_bOpenGLPreFramePacingSync(true);
+static constexpr FixedOpenGLPacingValue<bool>
+    g_bOpenGLPreFramePacingFinishOnBackpressure(true);
+static constexpr FixedOpenGLPacingValue<int> g_iOpenGLPreFramePacingFinishFrames(
+    2);
+static constexpr FixedOpenGLPacingValue<int>
+    g_iOpenGLPreFramePacingMaxReactiveFinishFrames(2);
+static constexpr FixedOpenGLPacingValue<int>
+    g_iOpenGLPreFramePacingHighRefreshMaxReactiveFinishFrames(1);
+static constexpr FixedOpenGLPacingValue<int>
+    g_iOpenGLPreFramePacingHighRefreshMinRate(90);
+static constexpr FixedOpenGLPacingValue<bool>
+    g_bOpenGLPreFramePacingProactiveFinish(true);
+static constexpr FixedOpenGLPacingValue<int>
+    g_iOpenGLPreFramePacingProactiveFinishEveryNFrames(240);
+static constexpr FixedOpenGLPacingValue<int>
+    g_iOpenGLPreFramePacingHighRefreshMaxProactiveFinishEveryNFrames(15);
+static constexpr FixedOpenGLPacingValue<int>
+    g_iOpenGLPreFramePacingProactiveFinishFrames(1);
+static constexpr FixedOpenGLPacingValue<int>
+    g_iOpenGLPreFramePacingProactiveFinishMinRate(90);
+static constexpr FixedOpenGLPacingValue<bool>
+    g_bOpenGLPreFramePacingContinuousFinish(false);
+static constexpr FixedOpenGLPacingValue<int>
+    g_iOpenGLPreFramePacingContinuousFinishMinRate(90);
+static constexpr FixedOpenGLPacingValue<int>
+    g_iOpenGLPreFramePacingContinuousFinishLogEveryNFrames(240);
 static Preference<float> g_fPerfTraceSlowOpenGLPreFramePacingSyncMs(
     "PerfTraceSlowOpenGLPreFramePacingSyncMs", 2.0f);
+static Preference<bool> g_bPerfTraceOpenGLPreFramePacingProactiveDetails(
+    "PerfTraceOpenGLPreFramePacingProactiveDetails", false);
+static Preference<int> g_iPerfTraceOpenGLPreFramePacingSummaryEveryN(
+    "PerfTraceOpenGLPreFramePacingSummaryEveryN", 0);
+static Preference<float> g_fPerfTraceOpenGLPreFramePacingSummaryEveryMs(
+    "PerfTraceOpenGLPreFramePacingSummaryEveryMs", 0.0f);
+static constexpr int kOpenGLPreFramePacingHighRefreshProactiveMaxEveryNFrames =
+    15;
 static int g_iOpenGLPreFramePacingFinishFramesRemaining = 0;
 static uint64_t g_iOpenGLPreFramePacingFrames = 0;
 static uint64_t g_iOpenGLPreFramePacingProactiveFinishes = 0;
 static uint64_t g_iOpenGLPreFramePacingContinuousFinishes = 0;
+static uint64_t g_iOpenGLPreFramePacingLastSummaryUsec = 0;
+
+struct OpenGLPreFramePacingTraceStats {
+  uint64_t samples = 0;
+  uint64_t flushes = 0;
+  uint64_t proactiveFinishes = 0;
+  uint64_t backpressureFinishes = 0;
+  uint64_t continuousFinishes = 0;
+  float totalMs = 0.0f;
+  float maxMs = 0.0f;
+  const char* maxMode = "none";
+};
+
+static OpenGLPreFramePacingTraceStats g_OpenGLPreFramePacingTraceStats;
+
+static void RecordOpenGLPreFramePacingTrace(
+    const char* mode, float elapsedMs) {
+  ++g_OpenGLPreFramePacingTraceStats.samples;
+  g_OpenGLPreFramePacingTraceStats.totalMs += elapsedMs;
+  if (elapsedMs > g_OpenGLPreFramePacingTraceStats.maxMs) {
+    g_OpenGLPreFramePacingTraceStats.maxMs = elapsedMs;
+    g_OpenGLPreFramePacingTraceStats.maxMode = mode;
+  }
+
+  if (strcmp(mode, "finish_proactive") == 0) {
+    ++g_OpenGLPreFramePacingTraceStats.proactiveFinishes;
+  } else if (strcmp(mode, "finish_backpressure") == 0) {
+    ++g_OpenGLPreFramePacingTraceStats.backpressureFinishes;
+  } else if (strcmp(mode, "finish_continuous") == 0) {
+    ++g_OpenGLPreFramePacingTraceStats.continuousFinishes;
+  } else if (strcmp(mode, "flush") == 0) {
+    ++g_OpenGLPreFramePacingTraceStats.flushes;
+  }
+}
+
+static bool ShouldLogOpenGLPreFramePacingSummary() {
+  if (!PerfDiagnosticsEnabled()) {
+    return false;
+  }
+
+  const float everyMs = g_fPerfTraceOpenGLPreFramePacingSummaryEveryMs.Get();
+  if (std::isfinite(everyMs) && everyMs > 0.0f) {
+    const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+    if (g_iOpenGLPreFramePacingLastSummaryUsec == 0) {
+      g_iOpenGLPreFramePacingLastSummaryUsec = nowUsec;
+      return false;
+    }
+    const uint64_t everyUsec =
+        static_cast<uint64_t>(std::llround(everyMs * 1000.0f));
+    if (everyUsec > 0 &&
+        nowUsec - g_iOpenGLPreFramePacingLastSummaryUsec >= everyUsec) {
+      g_iOpenGLPreFramePacingLastSummaryUsec = nowUsec;
+      return g_OpenGLPreFramePacingTraceStats.samples > 0;
+    }
+    return false;
+  }
+
+  const int everyN =
+      std::clamp(g_iPerfTraceOpenGLPreFramePacingSummaryEveryN.Get(), 0, 36000);
+  return everyN > 0 && g_OpenGLPreFramePacingTraceStats.samples > 0 &&
+         (g_iOpenGLPreFramePacingFrames % static_cast<uint64_t>(everyN)) == 0;
+}
+
+static void LogAndResetOpenGLPreFramePacingSummary(
+    int rate, int proactiveEveryNFramesConfigured,
+    int proactiveEveryNFramesEffective, int highRefreshProactiveMaxEveryNFrames,
+    bool highRefreshProactiveCapActive) {
+  const OpenGLPreFramePacingTraceStats& stats =
+      g_OpenGLPreFramePacingTraceStats;
+  const float avgMs =
+      stats.samples > 0 ? stats.totalMs / static_cast<float>(stats.samples)
+                        : 0.0f;
+  LOG->Trace(
+      "PERF_TRACE: opengl_pre_frame_pacing_summary samples=%llu "
+      "avg_ms=%.3f max_ms=%.3f max_mode=%s flushes=%llu "
+      "proactive_finishes=%llu backpressure_finishes=%llu "
+      "continuous_finishes=%llu rate=%d "
+      "proactive_every_n_configured=%d proactive_every_n_effective=%d "
+      "proactive_high_refresh_max_every_n=%d "
+      "proactive_high_refresh_cap_active=%d frame=%llu",
+      static_cast<unsigned long long>(stats.samples), avgMs, stats.maxMs,
+      stats.maxMode, static_cast<unsigned long long>(stats.flushes),
+      static_cast<unsigned long long>(stats.proactiveFinishes),
+      static_cast<unsigned long long>(stats.backpressureFinishes),
+      static_cast<unsigned long long>(stats.continuousFinishes),
+      rate,
+      proactiveEveryNFramesConfigured, proactiveEveryNFramesEffective,
+      highRefreshProactiveMaxEveryNFrames,
+      highRefreshProactiveCapActive ? 1 : 0,
+      static_cast<unsigned long long>(g_iOpenGLPreFramePacingFrames));
+  g_OpenGLPreFramePacingTraceStats = OpenGLPreFramePacingTraceStats();
+}
 #endif
+
+struct DisplayEndFramePerfBucket {
+  uint64_t frames = 0;
+  uint64_t over12ms = 0;
+  uint64_t over16ms = 0;
+  uint64_t over20ms = 0;
+  uint64_t swapBlockFrames = 0;
+  uint64_t pacingWaitFrames = 0;
+  uint64_t hardwareVsyncWaitFrames = 0;
+  uint64_t mixedPresentFrames = 0;
+  uint64_t unknownFrames = 0;
+  uint64_t swapOverBudgetFrames = 0;
+  uint64_t swapOver12ms = 0;
+  uint64_t swapOver16ms = 0;
+  uint64_t swapOver20ms = 0;
+  uint64_t presentIntervalFrames = 0;
+  uint64_t presentIntervalOverBudgetFrames = 0;
+  uint64_t presentIntervalOverDoubleBudgetFrames = 0;
+  float presentIntervalMsSum = 0.0f;
+  float maxPresentIntervalMs = 0.0f;
+  uint64_t fenceWaitFrames = 0;
+  uint64_t fenceWaitSaturatedFrames = 0;
+  uint64_t fenceWaitActualUsecSum = 0;
+  uint64_t fenceWaitActualUsecMax = 0;
+  uint64_t fenceWaitBudgetUsecMax = 0;
+  float maxTotalMs = 0.0f;
+  float maxSwapMs = 0.0f;
+  float maxFrameLimitBeforeMs = 0.0f;
+  int maxMissedSwapIntervals = 0;
+  int maxMissedTotalIntervals = 0;
+  std::string worstScreen = "none";
+  std::string worstClassification = "none";
+};
+
+struct DisplayEndFramePerfSummary {
+  DisplayEndFramePerfBucket all;
+  DisplayEndFramePerfBucket gameplay;
+  DisplayEndFramePerfBucket evaluationStage;
+  DisplayEndFramePerfBucket selectMusic;
+  DisplayEndFramePerfBucket selectStyle;
+  DisplayEndFramePerfBucket other;
+  uint64_t firstSampleUsec = 0;
+  uint64_t lastSampleUsec = 0;
+};
+
+static DisplayEndFramePerfSummary g_DisplayEndFramePerfSummary;
+static uint64_t g_iLastPresentReturnUsec = 0;
+
+static const char* CurrentTopScreenName() {
+  if (SCREENMAN == nullptr || SCREENMAN->GetTopScreen() == nullptr) {
+    return "NoScreen";
+  }
+  return SCREENMAN->GetTopScreen()->GetName().c_str();
+}
+
+static bool IsGameplayScreenName(const char* screenName) {
+  return screenName != nullptr && strcmp(screenName, "ScreenGameplay") == 0;
+}
+
+static bool IsEvaluationStageScreenName(const char* screenName) {
+  return screenName != nullptr &&
+         strcmp(screenName, "ScreenEvaluationStage") == 0;
+}
+
+static bool IsSelectMusicScreenName(const char* screenName) {
+  return screenName != nullptr && strcmp(screenName, "ScreenSelectMusic") == 0;
+}
+
+static bool IsSelectStyleScreenName(const char* screenName) {
+  return screenName != nullptr && strcmp(screenName, "ScreenSelectStyle") == 0;
+}
+
+static void RecordDisplayEndFramePerfBucket(
+    DisplayEndFramePerfBucket& bucket, float totalMs, float swapBuffersMs,
+    float frameLimitBeforeMs, float presentReturnIntervalMs,
+    float expectedFrameMs,
+    int missedSwapIntervals, int missedTotalIntervals,
+    const char* classification, const char* screenName
+#ifdef __APPLE__
+    ,
+    const MacOSOpenGLFenceWaitStats* fenceStats
+#endif
+    ) {
+  ++bucket.frames;
+  bucket.over12ms += totalMs >= 12.0f ? 1 : 0;
+  bucket.over16ms += totalMs >= 16.0f ? 1 : 0;
+  bucket.over20ms += totalMs >= 20.0f ? 1 : 0;
+  bucket.swapOverBudgetFrames +=
+      expectedFrameMs > 0.0f && swapBuffersMs >= expectedFrameMs ? 1 : 0;
+  bucket.swapOver12ms += swapBuffersMs >= 12.0f ? 1 : 0;
+  bucket.swapOver16ms += swapBuffersMs >= 16.0f ? 1 : 0;
+  bucket.swapOver20ms += swapBuffersMs >= 20.0f ? 1 : 0;
+  if (presentReturnIntervalMs > 0.0f) {
+    ++bucket.presentIntervalFrames;
+    bucket.presentIntervalMsSum += presentReturnIntervalMs;
+    bucket.maxPresentIntervalMs =
+        std::max(bucket.maxPresentIntervalMs, presentReturnIntervalMs);
+    bucket.presentIntervalOverBudgetFrames +=
+        expectedFrameMs > 0.0f && presentReturnIntervalMs >= expectedFrameMs * 1.5f
+            ? 1
+            : 0;
+    bucket.presentIntervalOverDoubleBudgetFrames +=
+        expectedFrameMs > 0.0f && presentReturnIntervalMs >= expectedFrameMs * 2.0f
+            ? 1
+            : 0;
+  }
+#ifdef __APPLE__
+  if (fenceStats != nullptr && fenceStats->available &&
+      fenceStats->pacing_wait_enabled && fenceStats->fence_created &&
+      fenceStats->wait_budget_usec > 0) {
+    ++bucket.fenceWaitFrames;
+    bucket.fenceWaitSaturatedFrames += fenceStats->wait_saturated ? 1 : 0;
+    bucket.fenceWaitActualUsecSum += fenceStats->wait_actual_usec;
+    bucket.fenceWaitActualUsecMax =
+        std::max(bucket.fenceWaitActualUsecMax, fenceStats->wait_actual_usec);
+    bucket.fenceWaitBudgetUsecMax =
+        std::max(bucket.fenceWaitBudgetUsecMax, fenceStats->wait_budget_usec);
+  }
+#endif
+  bucket.maxSwapMs = std::max(bucket.maxSwapMs, swapBuffersMs);
+  bucket.maxFrameLimitBeforeMs =
+      std::max(bucket.maxFrameLimitBeforeMs, frameLimitBeforeMs);
+  bucket.maxMissedSwapIntervals =
+      std::max(bucket.maxMissedSwapIntervals, missedSwapIntervals);
+  bucket.maxMissedTotalIntervals =
+      std::max(bucket.maxMissedTotalIntervals, missedTotalIntervals);
+
+  if (classification == nullptr) {
+    classification = "unknown";
+  }
+  if (strcmp(classification, "swap_block") == 0) {
+    ++bucket.swapBlockFrames;
+  } else if (strcmp(classification, "pacing_wait") == 0) {
+    ++bucket.pacingWaitFrames;
+  } else if (strcmp(classification, "hardware_vsync_wait") == 0) {
+    ++bucket.hardwareVsyncWaitFrames;
+  } else if (strcmp(classification, "mixed_present") == 0) {
+    ++bucket.mixedPresentFrames;
+  } else {
+    ++bucket.unknownFrames;
+  }
+
+  if (totalMs > bucket.maxTotalMs) {
+    bucket.maxTotalMs = totalMs;
+    bucket.worstScreen = screenName != nullptr ? screenName : "unknown";
+    bucket.worstClassification = classification;
+  }
+}
+
+static void RecordDisplayEndFramePerf(
+    float totalMs, float swapBuffersMs, float frameLimitBeforeMs,
+    float presentReturnIntervalMs, float expectedFrameMs,
+    int missedSwapIntervals, int missedTotalIntervals,
+    const char* classification, const char* screenName) {
+  const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  if (g_DisplayEndFramePerfSummary.firstSampleUsec == 0) {
+    g_DisplayEndFramePerfSummary.firstSampleUsec = nowUsec;
+  }
+  g_DisplayEndFramePerfSummary.lastSampleUsec = nowUsec;
+
+#ifdef __APPLE__
+  MacOSOpenGLFenceWaitStats fenceStats;
+  MacOSOpenGLGetLastFenceWaitStats(&fenceStats);
+#endif
+
+  RecordDisplayEndFramePerfBucket(
+      g_DisplayEndFramePerfSummary.all, totalMs, swapBuffersMs,
+      frameLimitBeforeMs, presentReturnIntervalMs, expectedFrameMs,
+      missedSwapIntervals, missedTotalIntervals, classification, screenName
+#ifdef __APPLE__
+      ,
+      &fenceStats
+#endif
+      );
+  if (IsGameplayScreenName(screenName)) {
+    RecordDisplayEndFramePerfBucket(
+        g_DisplayEndFramePerfSummary.gameplay, totalMs, swapBuffersMs,
+        frameLimitBeforeMs, presentReturnIntervalMs, expectedFrameMs,
+        missedSwapIntervals, missedTotalIntervals, classification, screenName
+#ifdef __APPLE__
+        ,
+        &fenceStats
+#endif
+        );
+  } else if (IsEvaluationStageScreenName(screenName)) {
+    RecordDisplayEndFramePerfBucket(
+        g_DisplayEndFramePerfSummary.evaluationStage, totalMs, swapBuffersMs,
+        frameLimitBeforeMs, presentReturnIntervalMs, expectedFrameMs,
+        missedSwapIntervals, missedTotalIntervals, classification, screenName
+#ifdef __APPLE__
+        ,
+        &fenceStats
+#endif
+        );
+  } else if (IsSelectMusicScreenName(screenName)) {
+    RecordDisplayEndFramePerfBucket(
+        g_DisplayEndFramePerfSummary.selectMusic, totalMs, swapBuffersMs,
+        frameLimitBeforeMs, presentReturnIntervalMs, expectedFrameMs,
+        missedSwapIntervals, missedTotalIntervals, classification, screenName
+#ifdef __APPLE__
+        ,
+        &fenceStats
+#endif
+        );
+  } else if (IsSelectStyleScreenName(screenName)) {
+    RecordDisplayEndFramePerfBucket(
+        g_DisplayEndFramePerfSummary.selectStyle, totalMs, swapBuffersMs,
+        frameLimitBeforeMs, presentReturnIntervalMs, expectedFrameMs,
+        missedSwapIntervals, missedTotalIntervals, classification, screenName
+#ifdef __APPLE__
+        ,
+        &fenceStats
+#endif
+        );
+  } else {
+    RecordDisplayEndFramePerfBucket(
+        g_DisplayEndFramePerfSummary.other, totalMs, swapBuffersMs,
+        frameLimitBeforeMs, presentReturnIntervalMs, expectedFrameMs,
+        missedSwapIntervals, missedTotalIntervals, classification, screenName
+#ifdef __APPLE__
+        ,
+        &fenceStats
+#endif
+        );
+  }
+}
+
+static void LogDisplayEndFramePerfBucket(
+    const char* label, const DisplayEndFramePerfBucket& bucket) {
+  const double fenceSaturatedPct =
+      bucket.fenceWaitFrames > 0
+          ? (100.0 * static_cast<double>(bucket.fenceWaitSaturatedFrames) /
+             static_cast<double>(bucket.fenceWaitFrames))
+          : 0.0;
+  const double fenceWaitActualAvgUsec =
+      bucket.fenceWaitFrames > 0
+          ? (static_cast<double>(bucket.fenceWaitActualUsecSum) /
+             static_cast<double>(bucket.fenceWaitFrames))
+          : 0.0;
+  const double presentIntervalAvgMs =
+      bucket.presentIntervalFrames > 0
+          ? (static_cast<double>(bucket.presentIntervalMsSum) /
+             static_cast<double>(bucket.presentIntervalFrames))
+          : 0.0;
+  LOG->Trace(
+      "PERF_SUMMARY: display_end_frame scope=%s frames=%llu over12ms=%llu "
+      "over16ms=%llu over20ms=%llu swap_block_frames=%llu "
+      "pacing_wait_frames=%llu hardware_vsync_wait_frames=%llu "
+      "mixed_present_frames=%llu "
+      "unknown_frames=%llu swap_over_budget_frames=%llu "
+      "swap_over12ms=%llu swap_over16ms=%llu swap_over20ms=%llu "
+      "fence_wait_frames=%llu fence_saturated_frames=%llu "
+      "fence_saturated_pct=%.3f fence_wait_actual_avg_us=%.1f "
+      "fence_wait_actual_max_us=%llu fence_wait_budget_max_us=%llu "
+      "present_interval_frames=%llu present_interval_over_budget_frames=%llu "
+      "present_interval_over_double_budget_frames=%llu "
+      "present_interval_avg_ms=%.3f max_present_interval_ms=%.3f "
+      "max_total_ms=%.3f max_swap_ms=%.3f "
+      "max_frame_limit_before_ms=%.3f max_missed_swap_intervals=%d "
+      "max_missed_total_intervals=%d worst_screen=%s "
+      "worst_classification=%s",
+      label != nullptr ? label : "unknown",
+      static_cast<unsigned long long>(bucket.frames),
+      static_cast<unsigned long long>(bucket.over12ms),
+      static_cast<unsigned long long>(bucket.over16ms),
+      static_cast<unsigned long long>(bucket.over20ms),
+      static_cast<unsigned long long>(bucket.swapBlockFrames),
+      static_cast<unsigned long long>(bucket.pacingWaitFrames),
+      static_cast<unsigned long long>(bucket.hardwareVsyncWaitFrames),
+      static_cast<unsigned long long>(bucket.mixedPresentFrames),
+      static_cast<unsigned long long>(bucket.unknownFrames),
+      static_cast<unsigned long long>(bucket.swapOverBudgetFrames),
+      static_cast<unsigned long long>(bucket.swapOver12ms),
+      static_cast<unsigned long long>(bucket.swapOver16ms),
+      static_cast<unsigned long long>(bucket.swapOver20ms),
+      static_cast<unsigned long long>(bucket.fenceWaitFrames),
+      static_cast<unsigned long long>(bucket.fenceWaitSaturatedFrames),
+      fenceSaturatedPct, fenceWaitActualAvgUsec,
+      static_cast<unsigned long long>(bucket.fenceWaitActualUsecMax),
+      static_cast<unsigned long long>(bucket.fenceWaitBudgetUsecMax),
+      static_cast<unsigned long long>(bucket.presentIntervalFrames),
+      static_cast<unsigned long long>(bucket.presentIntervalOverBudgetFrames),
+      static_cast<unsigned long long>(
+          bucket.presentIntervalOverDoubleBudgetFrames),
+      presentIntervalAvgMs, bucket.maxPresentIntervalMs,
+      bucket.maxTotalMs, bucket.maxSwapMs, bucket.maxFrameLimitBeforeMs,
+      bucket.maxMissedSwapIntervals, bucket.maxMissedTotalIntervals,
+      bucket.worstScreen.c_str(), bucket.worstClassification.c_str());
+}
+
+static void LogDisplayEndFramePerfSummary() {
+  if (!PerfDiagnosticsEnabled()) {
+    return;
+  }
+
+  if (g_DisplayEndFramePerfSummary.all.frames == 0) {
+    return;
+  }
+
+  const uint64_t durationUsec =
+      g_DisplayEndFramePerfSummary.lastSampleUsec >
+              g_DisplayEndFramePerfSummary.firstSampleUsec
+          ? g_DisplayEndFramePerfSummary.lastSampleUsec -
+                g_DisplayEndFramePerfSummary.firstSampleUsec
+          : 0;
+  LOG->Trace(
+      "PERF_SUMMARY: display_session duration_ms=%.3f all_frames=%llu "
+      "gameplay_frames=%llu",
+      static_cast<double>(durationUsec) / 1000.0,
+      static_cast<unsigned long long>(
+          g_DisplayEndFramePerfSummary.all.frames),
+      static_cast<unsigned long long>(
+          g_DisplayEndFramePerfSummary.gameplay.frames));
+  LogDisplayEndFramePerfBucket("all", g_DisplayEndFramePerfSummary.all);
+  LogDisplayEndFramePerfBucket(
+      "gameplay", g_DisplayEndFramePerfSummary.gameplay);
+  LogDisplayEndFramePerfBucket(
+      "evaluation_stage", g_DisplayEndFramePerfSummary.evaluationStage);
+  LogDisplayEndFramePerfBucket(
+      "select_music", g_DisplayEndFramePerfSummary.selectMusic);
+  LogDisplayEndFramePerfBucket(
+      "select_style", g_DisplayEndFramePerfSummary.selectStyle);
+  LogDisplayEndFramePerfBucket("other", g_DisplayEndFramePerfSummary.other);
+}
 
 static float ExpectedFrameMsForRate(int rate) {
   return rate > 0 ? 1000.0f / static_cast<float>(rate) : 0.0f;
@@ -127,12 +572,36 @@ static int MissedIntervalsForElapsedMs(float elapsedMs, float expectedMs) {
 }
 
 #ifdef __APPLE__
-static int OpenGLPreFramePacingReactiveFinishFrames() {
+static int OpenGLPreFramePacingReactiveFinishFrames(int rate) {
   const int requestedFrames =
       std::clamp(g_iOpenGLPreFramePacingFinishFrames.Get(), 0, 120);
-  const int maxFrames =
+  int maxFrames =
       std::clamp(g_iOpenGLPreFramePacingMaxReactiveFinishFrames.Get(), 0, 30);
+  const int highRefreshMinRate =
+      std::clamp(g_iOpenGLPreFramePacingHighRefreshMinRate.Get(), 1, 1000);
+  if (rate >= highRefreshMinRate) {
+    maxFrames = std::min(
+        maxFrames,
+        std::clamp(
+            g_iOpenGLPreFramePacingHighRefreshMaxReactiveFinishFrames.Get(),
+            0, 30));
+  }
   return std::min(requestedFrames, maxFrames);
+}
+
+static int OpenGLPreFramePacingProactiveFinishEveryNFrames(int rate) {
+  const int requestedEveryNFrames = std::clamp(
+      g_iOpenGLPreFramePacingProactiveFinishEveryNFrames.Get(), 1, 36000);
+  const int proactiveFinishMinRate = std::clamp(
+      g_iOpenGLPreFramePacingProactiveFinishMinRate.Get(), 1, 1000);
+  if (rate < proactiveFinishMinRate) {
+    return requestedEveryNFrames;
+  }
+
+  const int highRefreshMaxEveryNFrames = std::clamp(
+      g_iOpenGLPreFramePacingHighRefreshMaxProactiveFinishEveryNFrames.Get(),
+      1, kOpenGLPreFramePacingHighRefreshProactiveMaxEveryNFrames);
+  return std::min(requestedEveryNFrames, highRefreshMaxEveryNFrames);
 }
 #endif
 
@@ -373,9 +842,9 @@ RageDisplay_Legacy::RageDisplay_Legacy() {
   FixLittleEndian();
   RageDisplay_Legacy_Helpers::Init();
 
-  g_pWind = nullptr;
-  g_bTextureMatrixShader = 0;
-  offscreenRenderTarget = nullptr;
+	g_pWind = nullptr;
+	g_bTextureMatrixShader = 0;
+	offscreenRenderTarget = nullptr;
 }
 
 std::string GetInfoLog(GLhandleARB h) {
@@ -708,7 +1177,11 @@ std::string RageDisplay_Legacy::Init(
   return std::string();
 }
 
-RageDisplay_Legacy::~RageDisplay_Legacy() { delete g_pWind; }
+RageDisplay_Legacy::~RageDisplay_Legacy() {
+  ReleaseOffscreenRenderTarget();
+  LogDisplayEndFramePerfSummary();
+  delete g_pWind;
+}
 
 void RageDisplay_Legacy::GetDisplaySpecs(DisplaySpecs& out) const {
   out.clear();
@@ -867,31 +1340,64 @@ bool RageDisplay_Legacy::UseOffscreenRenderTarget() {
     return false;
   }
 
-  if (!offscreenRenderTarget) {
-    RenderTargetParam param;
-    param.bWithDepthBuffer = true;
-    param.bWithAlpha = true;
-    param.bFloat = false;
-    param.iWidth = GetActualVideoModeParams().width;
-    param.iHeight = GetActualVideoModeParams().height;
-    RageTextureID id(
-        ssprintf("FullscreenTexture%dx%d", param.iWidth, param.iHeight));
-    // See if we have this texture loaded already
-    // (not GC'd yet). If it exists and we try to recreate
-    // it, we'll get an error
-    if (TEXTUREMAN->IsTextureRegistered(id)) {
-      offscreenRenderTarget =
-          static_cast<RageTextureRenderTarget*>(TEXTUREMAN->LoadTexture(id));
-    } else {
-      offscreenRenderTarget = new RageTextureRenderTarget(id, param);
-      TEXTUREMAN->RegisterTexture(id, offscreenRenderTarget);
+  if (!SupportsRenderToTexture()) {
+    static bool s_bWarnedUnsupportedOffscreenPresent = false;
+    if (!s_bWarnedUnsupportedOffscreenPresent) {
+      LOG->Warn(
+          "OpenGL offscreen present requested but render-to-texture is not "
+          "supported; falling back to direct backbuffer rendering.");
+      s_bWarnedUnsupportedOffscreenPresent = true;
     }
+    return false;
   }
-  return true;
+
+	if (!offscreenRenderTarget) {
+		RenderTargetParam param;
+		param.bWithDepthBuffer = true;
+		param.bWithAlpha = true;
+		param.bFloat = false;
+		param.iWidth = GetActualVideoModeParams().width;
+		param.iHeight = GetActualVideoModeParams().height;
+		RageTextureID id(
+				ssprintf("FullscreenTexture%dx%d", param.iWidth, param.iHeight));
+		// See if we have this texture loaded already (not GC'd yet). If it exists
+		// and we try to recreate it, we'll get an error.
+		if (TEXTUREMAN->IsTextureRegistered(id)) {
+			offscreenRenderTarget =
+					static_cast<RageTextureRenderTarget*>(TEXTUREMAN->LoadTexture(id));
+		} else {
+			offscreenRenderTarget = new RageTextureRenderTarget(id, param);
+			TEXTUREMAN->RegisterTexture(id, offscreenRenderTarget);
+		}
+		LOG->Trace(
+				"OpenGL offscreen present target ready: mode=single_buffer "
+				"size=%dx%d texture_size=%dx%d fbo=%d platform_rtt=%d",
+				param.iWidth, param.iHeight, offscreenRenderTarget->GetTextureWidth(),
+				offscreenRenderTarget->GetTextureHeight(),
+				GLEW_EXT_framebuffer_object ? 1 : 0,
+				g_pWind->SupportsRenderToTexture() ? 1 : 0);
+	}
+	return true;
+}
+
+void RageDisplay_Legacy::ReleaseOffscreenRenderTarget() {
+	if (offscreenRenderTarget && TEXTUREMAN) {
+		TEXTUREMAN->UnloadTexture(offscreenRenderTarget);
+		offscreenRenderTarget = nullptr;
+	}
+}
+
+void RageDisplay_Legacy::PrepareForTextureManagerShutdown() {
+	ReleaseOffscreenRenderTarget();
+}
+
+void RageDisplay_Legacy::ResetFramePresentationTelemetry() {
+  g_iLastPresentReturnUsec = 0;
 }
 
 void RageDisplay_Legacy::ResolutionChanged() {
   // LOG->Warn( "RageDisplay_Legacy::ResolutionChanged" );
+  ResetFramePresentationTelemetry();
 
   /* Clear any junk that's in the framebuffer. */
   if (BeginFrame()) {
@@ -900,10 +1406,7 @@ void RageDisplay_Legacy::ResolutionChanged() {
 
   RageDisplay::ResolutionChanged();
 
-  if (offscreenRenderTarget && TEXTUREMAN) {
-    TEXTUREMAN->UnloadTexture(offscreenRenderTarget);
-    offscreenRenderTarget = nullptr;
-  }
+	ReleaseOffscreenRenderTarget();
 }
 
 // Return true if mode change was successful.
@@ -993,10 +1496,10 @@ bool RageDisplay_Legacy::BeginFrame() {
   SetZWrite(true);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  bool beginFrame = RageDisplay::BeginFrame();
-  if (beginFrame && UseOffscreenRenderTarget()) {
-    offscreenRenderTarget->BeginRenderingTo(false);
-  }
+	bool beginFrame = RageDisplay::BeginFrame();
+	if (beginFrame && UseOffscreenRenderTarget()) {
+		offscreenRenderTarget->BeginRenderingTo(false);
+	}
 
   return beginFrame;
 }
@@ -1019,18 +1522,36 @@ void RageDisplay_Legacy::EndFrame() {
   const float expectedFrameMs = ExpectedFrameMsForRate(mode.rate);
 #ifdef __APPLE__
   bool preFramePacingProactiveArmed = false;
-  bool preFramePacingDidFinish = false;
   bool preFramePacingContinuousFinish = false;
   const int reactiveFinishFrames =
-      OpenGLPreFramePacingReactiveFinishFrames();
+      OpenGLPreFramePacingReactiveFinishFrames(mode.rate);
+  const int highRefreshReactiveCap =
+      std::clamp(
+          g_iOpenGLPreFramePacingHighRefreshMaxReactiveFinishFrames.Get(), 0,
+          30);
+  const int highRefreshMinRate =
+      std::clamp(g_iOpenGLPreFramePacingHighRefreshMinRate.Get(), 1, 1000);
+  const bool highRefreshReactiveCapActive =
+      mode.rate >= highRefreshMinRate &&
+      reactiveFinishFrames <= highRefreshReactiveCap;
   g_iOpenGLPreFramePacingFinishFramesRemaining = std::min(
       g_iOpenGLPreFramePacingFinishFramesRemaining, reactiveFinishFrames);
   int preFramePacingFinishRemainingBefore =
       g_iOpenGLPreFramePacingFinishFramesRemaining;
   const int proactiveFinishMinRate = std::clamp(
       g_iOpenGLPreFramePacingProactiveFinishMinRate.Get(), 1, 1000);
-  const int proactiveFinishEveryNFrames = std::clamp(
+  const int proactiveFinishEveryNFramesConfigured = std::clamp(
       g_iOpenGLPreFramePacingProactiveFinishEveryNFrames.Get(), 1, 36000);
+  const int proactiveFinishEveryNFrames =
+      OpenGLPreFramePacingProactiveFinishEveryNFrames(mode.rate);
+  const int proactiveFinishEveryNFramesEffective =
+      proactiveFinishEveryNFrames;
+  const int highRefreshProactiveMaxEveryNFrames = std::clamp(
+      g_iOpenGLPreFramePacingHighRefreshMaxProactiveFinishEveryNFrames.Get(),
+      1, kOpenGLPreFramePacingHighRefreshProactiveMaxEveryNFrames);
+  const bool highRefreshProactiveCapActive =
+      mode.rate >= proactiveFinishMinRate &&
+      proactiveFinishEveryNFrames < proactiveFinishEveryNFramesConfigured;
   const int proactiveFinishFrames = std::clamp(
       g_iOpenGLPreFramePacingProactiveFinishFrames.Get(), 0, 30);
   const int continuousFinishMinRate = std::clamp(
@@ -1039,23 +1560,20 @@ void RageDisplay_Legacy::EndFrame() {
       g_iOpenGLPreFramePacingContinuousFinishLogEveryNFrames.Get(), 1, 36000);
 #endif
 
-  if (UseOffscreenRenderTarget()) {
-    offscreenRenderTarget->FinishRenderingTo();
-    Sprite fullscreenSprite;
-    // We've got a hold of this, don't want sprite deleting it when
-    // it's deleted
-    offscreenRenderTarget->m_iRefCount++;
-    fullscreenSprite.SetTexture(offscreenRenderTarget);
-    fullscreenSprite.SetHorizAlign(align_left);
-    fullscreenSprite.SetVertAlign(align_top);
-    CameraPushMatrix();
+	if (UseOffscreenRenderTarget()) {
+		offscreenRenderTarget->FinishRenderingTo();
+		Sprite fullscreenSprite;
+		fullscreenSprite.SetTexture(TEXTUREMAN->CopyTexture(offscreenRenderTarget));
+		fullscreenSprite.SetHorizAlign(align_left);
+		fullscreenSprite.SetVertAlign(align_top);
+		CameraPushMatrix();
     LoadMenuPerspective(
         0, GetActualVideoModeParams().width, GetActualVideoModeParams().height,
         static_cast<float>(GetActualVideoModeParams().width) / 2.f,
         static_cast<float>(GetActualVideoModeParams().height) / 2.f);
-    fullscreenSprite.Draw();
-    CameraPopMatrix();
-  }
+		fullscreenSprite.Draw();
+		CameraPopMatrix();
+	}
   offscreenMs = phaseTimer.GetDeltaTime() * 1000.0f;
 
 #ifdef __APPLE__
@@ -1064,14 +1582,13 @@ void RageDisplay_Legacy::EndFrame() {
     if (g_bOpenGLPreFramePacingProactiveFinish.Get() &&
         proactiveFinishFrames > 0 && mode.rate >= proactiveFinishMinRate &&
         (g_iOpenGLPreFramePacingFrames %
-         static_cast<uint64_t>(proactiveFinishEveryNFrames)) == 0) {
+         static_cast<uint64_t>(proactiveFinishEveryNFramesEffective)) == 0) {
       g_iOpenGLPreFramePacingFinishFramesRemaining = std::max(
           g_iOpenGLPreFramePacingFinishFramesRemaining,
           proactiveFinishFrames);
       preFramePacingProactiveArmed = true;
       ++g_iOpenGLPreFramePacingProactiveFinishes;
     }
-
     RageTimer syncTimer;
     preFramePacingContinuousFinish =
         g_bOpenGLPreFramePacingContinuousFinish.Get() &&
@@ -1079,7 +1596,6 @@ void RageDisplay_Legacy::EndFrame() {
     if (preFramePacingContinuousFinish) {
       glFinish();
       preFramePacingSyncMode = "finish_continuous";
-      preFramePacingDidFinish = true;
       ++g_iOpenGLPreFramePacingContinuousFinishes;
       if (g_iOpenGLPreFramePacingFinishFramesRemaining > 0) {
         --g_iOpenGLPreFramePacingFinishFramesRemaining;
@@ -1090,27 +1606,41 @@ void RageDisplay_Legacy::EndFrame() {
       preFramePacingSyncMode =
           preFramePacingProactiveArmed ? "finish_proactive"
                                        : "finish_backpressure";
-      preFramePacingDidFinish = true;
       --g_iOpenGLPreFramePacingFinishFramesRemaining;
     } else {
       glFlush();
       preFramePacingSyncMode = "flush";
     }
     preFramePacingSyncMs = syncTimer.GetDeltaTime() * 1000.0f;
+    RecordOpenGLPreFramePacingTrace(
+        preFramePacingSyncMode, preFramePacingSyncMs);
     const bool shouldLogContinuousFinish =
         preFramePacingContinuousFinish &&
         (g_iOpenGLPreFramePacingFrames %
          static_cast<uint64_t>(continuousFinishLogEveryNFrames)) == 0;
-    if (preFramePacingSyncMs >=
-            g_fPerfTraceSlowOpenGLPreFramePacingSyncMs.Get() ||
-        shouldLogContinuousFinish || preFramePacingProactiveArmed ||
-        (!preFramePacingContinuousFinish && preFramePacingDidFinish)) {
+    const bool isBackpressureFinish =
+        strcmp(preFramePacingSyncMode, "finish_backpressure") == 0;
+    const bool shouldLogProactiveFinish =
+        preFramePacingProactiveArmed &&
+        g_bPerfTraceOpenGLPreFramePacingProactiveDetails.Get();
+    if (PerfDiagnosticsEnabled() &&
+        (preFramePacingSyncMs >=
+             g_fPerfTraceSlowOpenGLPreFramePacingSyncMs.Get() ||
+         shouldLogContinuousFinish || shouldLogProactiveFinish ||
+         isBackpressureFinish)) {
       LOG->Trace(
           "PERF_TRACE: opengl_pre_frame_pacing_sync total_ms=%.3f mode=%s "
           "finish_remaining_before=%d finish_remaining_after=%d rate=%d "
           "expected_frame_ms=%.3f proactive_armed=%d "
           "reactive_requested_frames=%d reactive_effective_frames=%d "
-          "proactive_every_n=%d proactive_frames=%d "
+          "reactive_high_refresh_cap_frames=%d "
+          "reactive_high_refresh_min_rate=%d "
+          "reactive_high_refresh_cap_active=%d "
+          "proactive_every_n_configured=%d "
+          "proactive_every_n_effective=%d "
+          "proactive_high_refresh_max_every_n=%d "
+          "proactive_high_refresh_cap_active=%d "
+          "proactive_frames=%d "
           "proactive_min_rate=%d proactive_count=%llu "
           "continuous_finish=%d continuous_min_rate=%d "
           "continuous_log_every_n=%d continuous_count=%llu frame=%llu",
@@ -1120,7 +1650,14 @@ void RageDisplay_Legacy::EndFrame() {
           expectedFrameMs, preFramePacingProactiveArmed ? 1 : 0,
           std::clamp(g_iOpenGLPreFramePacingFinishFrames.Get(), 0, 120),
           reactiveFinishFrames,
-          proactiveFinishEveryNFrames, proactiveFinishFrames,
+          highRefreshReactiveCap,
+          highRefreshMinRate,
+          highRefreshReactiveCapActive ? 1 : 0,
+          proactiveFinishEveryNFramesConfigured,
+          proactiveFinishEveryNFramesEffective,
+          highRefreshProactiveMaxEveryNFrames,
+          highRefreshProactiveCapActive ? 1 : 0,
+          proactiveFinishFrames,
           proactiveFinishMinRate,
           static_cast<unsigned long long>(
               g_iOpenGLPreFramePacingProactiveFinishes),
@@ -1130,12 +1667,37 @@ void RageDisplay_Legacy::EndFrame() {
               g_iOpenGLPreFramePacingContinuousFinishes),
           static_cast<unsigned long long>(g_iOpenGLPreFramePacingFrames));
     }
+    if (ShouldLogOpenGLPreFramePacingSummary()) {
+      LogAndResetOpenGLPreFramePacingSummary(
+          mode.rate, proactiveFinishEveryNFramesConfigured,
+          proactiveFinishEveryNFramesEffective,
+          highRefreshProactiveMaxEveryNFrames,
+          highRefreshProactiveCapActive);
+    }
   }
 #endif
 
-  FrameLimitBeforeVsync(mode.rate);
+#ifdef __APPLE__
+  const bool hardwareVsyncOwnsPacing = mode.vsync;
+#else
+  const bool hardwareVsyncOwnsPacing = false;
+#endif
+  if (!hardwareVsyncOwnsPacing) {
+    FrameLimitBeforeVsync(mode.rate);
+  }
   frameLimitBeforeMs = phaseTimer.GetDeltaTime() * 1000.0f;
+#ifdef __APPLE__
+  ReportFramePacingPreSwapLoad(
+      offscreenMs + preFramePacingSyncMs + frameLimitBeforeMs);
+#endif
   g_pWind->SwapBuffers();
+  const uint64_t presentReturnUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  const float presentReturnIntervalMs =
+      g_iLastPresentReturnUsec != 0 && presentReturnUsec > g_iLastPresentReturnUsec
+          ? static_cast<float>(presentReturnUsec - g_iLastPresentReturnUsec) /
+                1000.0f
+          : 0.0f;
+  g_iLastPresentReturnUsec = presentReturnUsec;
   swapBuffersMs = phaseTimer.GetDeltaTime() * 1000.0f;
 
 #ifdef __APPLE__
@@ -1174,59 +1736,109 @@ void RageDisplay_Legacy::EndFrame() {
   statsMs = phaseTimer.GetDeltaTime() * 1000.0f;
 
   const float totalMs = totalTimer.GetDeltaTime() * 1000.0f;
-  if (totalMs >= g_fPerfTraceSlowDisplayEndFrameMs.Get()) {
-    const int missedSwapIntervals =
-        MissedIntervalsForElapsedMs(swapBuffersMs, expectedFrameMs);
-    const int missedTotalIntervals =
-        MissedIntervalsForElapsedMs(totalMs, expectedFrameMs);
+  const float budgetMultiplier =
+      std::max(0.0f, g_fPerfTraceDisplayEndFrameBudgetMultiplier.Get());
+  const float budgetTraceMs =
+      expectedFrameMs > 0.0f && budgetMultiplier > 0.0f
+          ? expectedFrameMs * budgetMultiplier
+          : 0.0f;
+  const float configuredTraceMs =
+      std::max(0.0f, g_fPerfTraceSlowDisplayEndFrameMs.Get());
+  const float effectiveTraceMs =
+      budgetTraceMs > 0.0f && configuredTraceMs > 0.0f
+          ? std::min(budgetTraceMs, configuredTraceMs)
+          : std::max(budgetTraceMs, configuredTraceMs);
+  const int missedSwapIntervals =
+      MissedIntervalsForElapsedMs(swapBuffersMs, expectedFrameMs);
+  const int missedTotalIntervals =
+      MissedIntervalsForElapsedMs(totalMs, expectedFrameMs);
+  const char* currentScreenName = CurrentTopScreenName();
+  const char* frameClassification = ClassifyDisplayEndFrame(
+      totalMs, offscreenMs, preFramePacingSyncMs, frameLimitBeforeMs,
+      swapBuffersMs, frameLimitAfterMs, glFinishMs, glFlushMs,
+      windowUpdateMs, statsMs, expectedFrameMs);
+#ifdef __APPLE__
+  if (hardwareVsyncOwnsPacing && swapBuffersMs >= expectedFrameMs * 0.5f &&
+      presentReturnIntervalMs > 0.0f &&
+      presentReturnIntervalMs < expectedFrameMs * 1.5f) {
+    frameClassification = "hardware_vsync_wait";
+  }
+#endif
+  RecordDisplayEndFramePerf(
+      totalMs, swapBuffersMs, frameLimitBeforeMs, presentReturnIntervalMs,
+      expectedFrameMs, missedSwapIntervals, missedTotalIntervals,
+      frameClassification, currentScreenName);
+  if (PerfDiagnosticsEnabled() && effectiveTraceMs > 0.0f &&
+      totalMs >= effectiveTraceMs) {
+    const float renderBeforeSwapMs =
+        offscreenMs + preFramePacingSyncMs + frameLimitBeforeMs;
+    const float presentAndSyncMs =
+        swapBuffersMs + frameLimitAfterMs + glFinishMs + glFlushMs;
     LOG->Trace(
       "PERF_TRACE: display_end_frame total_ms=%.3f offscreen_ms=%.3f "
+        "render_before_swap_ms=%.3f present_and_sync_ms=%.3f "
         "pre_frame_pacing_sync_ms=%.3f pre_frame_pacing_sync_mode=%s "
         "frame_limit_before_ms=%.3f swap_buffers_ms=%.3f "
         "frame_limit_after_ms=%.3f gl_finish_ms=%.3f gl_flush_ms=%.3f "
         "gl_sync_mode=%s window_update_ms=%.3f "
         "stats_ms=%.3f classification=%s rate=%d vsync=%d windowed=%d "
         "render_offscreen=%d "
+        "hardware_vsync_owns_pacing=%d present_return_interval_ms=%.3f "
 #ifdef __APPLE__
         "pre_frame_finish_remaining_before=%d "
         "pre_frame_finish_remaining_after=%d "
         "pre_frame_finish_proactive_armed=%d "
         "pre_frame_finish_proactive_count=%llu "
+        "pre_frame_finish_proactive_every_n_configured=%d "
+        "pre_frame_finish_proactive_every_n_effective=%d "
+        "pre_frame_finish_proactive_high_refresh_max_every_n=%d "
+        "pre_frame_finish_proactive_high_refresh_cap_active=%d "
         "pre_frame_pacing_frame=%llu "
         "pre_frame_reactive_requested_frames=%d "
         "pre_frame_reactive_effective_frames=%d "
+        "pre_frame_reactive_high_refresh_cap_frames=%d "
+        "pre_frame_reactive_high_refresh_min_rate=%d "
+        "pre_frame_reactive_high_refresh_cap_active=%d "
         "pre_frame_continuous_finish=%d "
         "pre_frame_continuous_count=%llu "
 #endif
         "expected_frame_ms=%.3f missed_swap_intervals=%d "
-        "missed_total_intervals=%d render_size=%dx%d window_size=%dx%d",
-        totalMs, offscreenMs, preFramePacingSyncMs, preFramePacingSyncMode,
+        "missed_total_intervals=%d trace_threshold_ms=%.3f "
+        "budget_multiplier=%.3f render_size=%dx%d window_size=%dx%d",
+        totalMs, offscreenMs, renderBeforeSwapMs, presentAndSyncMs,
+        preFramePacingSyncMs, preFramePacingSyncMode,
         frameLimitBeforeMs, swapBuffersMs, frameLimitAfterMs, glFinishMs,
         glFlushMs, glSyncMode, windowUpdateMs,
         statsMs,
-        ClassifyDisplayEndFrame(
-            totalMs, offscreenMs, preFramePacingSyncMs, frameLimitBeforeMs,
-            swapBuffersMs, frameLimitAfterMs, glFinishMs, glFlushMs,
-            windowUpdateMs, statsMs, expectedFrameMs),
+        frameClassification,
         mode.rate,
         mode.vsync ? 1 : 0, mode.windowed ? 1 : 0,
         mode.renderOffscreen ? 1 : 0,
+        hardwareVsyncOwnsPacing ? 1 : 0,
+        presentReturnIntervalMs,
 #ifdef __APPLE__
         preFramePacingFinishRemainingBefore,
         g_iOpenGLPreFramePacingFinishFramesRemaining,
         preFramePacingProactiveArmed ? 1 : 0,
         static_cast<unsigned long long>(
             g_iOpenGLPreFramePacingProactiveFinishes),
+        proactiveFinishEveryNFramesConfigured,
+        proactiveFinishEveryNFramesEffective,
+        highRefreshProactiveMaxEveryNFrames,
+        highRefreshProactiveCapActive ? 1 : 0,
         static_cast<unsigned long long>(g_iOpenGLPreFramePacingFrames),
         std::clamp(g_iOpenGLPreFramePacingFinishFrames.Get(), 0, 120),
         reactiveFinishFrames,
+        highRefreshReactiveCap,
+        highRefreshMinRate,
+        highRefreshReactiveCapActive ? 1 : 0,
         preFramePacingContinuousFinish ? 1 : 0,
         static_cast<unsigned long long>(
             g_iOpenGLPreFramePacingContinuousFinishes),
 #endif
         expectedFrameMs, missedSwapIntervals,
-        missedTotalIntervals, mode.width, mode.height, mode.windowWidth,
-        mode.windowHeight);
+        missedTotalIntervals, effectiveTraceMs, budgetMultiplier, mode.width,
+        mode.height, mode.windowWidth, mode.windowHeight);
   }
 }
 
@@ -1235,12 +1847,12 @@ RageSurface* RageDisplay_Legacy::CreateScreenshot() {
   int height = g_pWind->GetActualVideoModeParams().height;
 
   RageSurface* image = nullptr;
-  if (offscreenRenderTarget) {
-    RageSurface* raw = GetTexture(offscreenRenderTarget->GetTexHandle());
-    image = CreateSurface(
-        offscreenRenderTarget->GetImageWidth(),
-        offscreenRenderTarget->GetImageHeight(), raw->fmt.BitsPerPixel,
-        raw->fmt.Rmask, raw->fmt.Gmask, raw->fmt.Bmask, raw->fmt.Amask);
+	if (offscreenRenderTarget) {
+		RageSurface* raw = GetTexture(offscreenRenderTarget->GetTexHandle());
+		image = CreateSurface(
+				offscreenRenderTarget->GetImageWidth(),
+				offscreenRenderTarget->GetImageHeight(), raw->fmt.BitsPerPixel,
+				raw->fmt.Rmask, raw->fmt.Gmask, raw->fmt.Bmask, raw->fmt.Amask);
     RageSurfaceUtils::Blit(raw, image);
     delete raw;
   } else {

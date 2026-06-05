@@ -34,9 +34,23 @@ struct MacOSFramePacingDisplayLinkStats {
   int64_t output_late_usec = 0;
   bool final_wait_capped = false;
   bool output_phase_accepted = false;
+  int output_aligned_present_mode = 1;
+  bool output_aligned_present_enabled = false;
   bool output_aligned_present = false;
+  bool output_aligned_cap_rejected = false;
   const char* selected_output_source = "none";
   const char* status = "unavailable";
+};
+
+struct MacOSOpenGLFenceWaitStats {
+  bool available = false;
+  bool pacing_wait_enabled = false;
+  bool trace_enabled = false;
+  bool fence_created = false;
+  bool gpu_busy = false;
+  bool wait_saturated = false;
+  uint64_t wait_actual_usec = 0;
+  uint64_t wait_budget_usec = 0;
 };
 
 bool MacOSFramePacingDisplayLinkEnabled();
@@ -45,5 +59,6 @@ bool MacOSFramePacingWaitForDisplayLink(
     uint64_t presentLeadOverrideUsec,
     MacOSFramePacingDisplayLinkStats* stats);
 void MacOSFramePacingResetDisplayLink(const char* reason);
+bool MacOSOpenGLGetLastFenceWaitStats(MacOSOpenGLFenceWaitStats* stats);
 
 #endif

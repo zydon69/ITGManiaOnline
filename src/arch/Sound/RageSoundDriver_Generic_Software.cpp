@@ -6,6 +6,7 @@
 #include <cstring>
 #include <mutex>
 
+#include "PerfDiagnostics.h"
 #include "RageLog.h"
 #include "RageSound.h"
 #include "RageSoundDriver.h"
@@ -56,6 +57,9 @@ static constexpr uint64_t kDecodeEmergencyModeMaxUsec = 200000;
 static constexpr int kDecodeEmergencyRecoverySleepUsec = 500;
 static constexpr uint64_t kDecodeSchedulerStatsLogPeriodUsec = 3000000;
 static constexpr int kDecodeThreadWouldBlockRetries = 0;
+// Strong music prebuffering is synchronous in StartMixing by design. Keep these
+// bounds high enough to avoid start-of-song underruns, and treat ScreenInit
+// spikes as a separate UX optimization problem.
 static constexpr int kStartPrebufferWouldBlockRetries = 240;
 static constexpr int kStartPrebufferRetrySleepUsec = 1000;
 static constexpr int kStrongStartLastChanceWouldBlockRetries = 500;
@@ -166,13 +170,14 @@ static void EnsureUnderrunTraceInitialized() {
 
 static bool IsUnderrunTraceEnabled() {
   EnsureUnderrunTraceInitialized();
-  return g_bUnderrunTraceEnabled.load(std::memory_order_acquire);
+  return g_bUnderrunTraceEnabled.load(std::memory_order_acquire) ||
+         PerfDiagnosticsEnabled();
 }
 
 RageSoundDriver::Sound::Sound() {
   m_pSound = nullptr;
   ClearDebugIdentity();
-  m_State = AVAILABLE;
+  SetState(AVAILABLE, std::memory_order_relaxed);
   m_bPaused = false;
 }
 
@@ -235,17 +240,18 @@ RageSoundMixBuffer& RageSoundDriver::MixIntoBuffer(
   for (unsigned i = 0; i < ARRAYLEN(m_Sounds); ++i) {
     /* s.m_pSound can not safely be accessed from here. */
     Sound& s = m_Sounds[i];
-    if (s.m_State == Sound::HALTING) {
+    const Sound::State state = s.GetState();
+    if (state == Sound::HALTING) {
       /* This indicates that this stream can be reused. */
       s.m_bPaused = false;
-      s.m_State = Sound::STOPPED;
+      s.SetState(Sound::STOPPED);
 
       //			LOG->Trace("set %p from HALTING to STOPPED",
       // m_Sounds[i].m_pSound);
       continue;
     }
 
-    if (s.m_State != Sound::STOPPING && s.m_State != Sound::PLAYING) {
+    if (state != Sound::STOPPING && state != Sound::PLAYING) {
       continue;
     }
 
@@ -329,12 +335,14 @@ RageSoundMixBuffer& RageSoundDriver::MixIntoBuffer(
     }
 
     /* If we don't have enough to fill the buffer, we've underrun. */
-    if (iGotFrames < iFrames && s.m_State == Sound::PLAYING) {
+    if (iGotFrames < iFrames && s.GetState() == Sound::PLAYING) {
       ++underruns;
       static uint64_t sLastUnderrunTraceUsec = 0;
       const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
-      if (sLastUnderrunTraceUsec == 0 ||
-          nowUsec - sLastUnderrunTraceUsec >= kMixerStarvationTracePeriodUsec) {
+      if (traceEnabled &&
+          (sLastUnderrunTraceUsec == 0 ||
+           nowUsec - sLastUnderrunTraceUsec >=
+               kMixerStarvationTracePeriodUsec)) {
         sLastUnderrunTraceUsec = nowUsec;
         const int context =
             g_iUnderrunScreenContext.load(std::memory_order_acquire);
@@ -348,7 +356,7 @@ RageSoundMixBuffer& RageSoundDriver::MixIntoBuffer(
         std::string activeSlotSummary;
         for (unsigned activeIndex = 0; activeIndex < ARRAYLEN(m_Sounds);
              ++activeIndex) {
-          const int activeState = m_Sounds[activeIndex].m_State;
+          const Sound::State activeState = m_Sounds[activeIndex].GetState();
           if (activeState == Sound::PLAYING ||
               activeState == Sound::STOPPING ||
               activeState == Sound::BUFFERING) {
@@ -376,7 +384,8 @@ RageSoundMixBuffer& RageSoundDriver::MixIntoBuffer(
             "strong_prebuffer=%d slot_age_us=%" PRIu64
             " mix_frame=%" PRId64 " hw_frame=%" PRId64
             " verbose=%d active_slots='%s'",
-            s.GetDebugPath(), i, s.m_iDebugSerial, s.m_State,
+            s.GetDebugPath(), i, s.m_iDebugSerial,
+            static_cast<int>(s.GetState()),
             UnderrunScreenContextName(context), screenType, contextAgeUsec,
             iGotFrames, iFrames, iFrames - iGotFrames, iFramesLeft,
             s.m_Buffer.num_readable(), s.m_Buffer.num_writable(), activeSounds,
@@ -445,14 +454,14 @@ void RageSoundDriver::DecodeThread() {
       //		LOG->Trace("begin mix");
 
       for (unsigned i = 0; i < ARRAYLEN(m_Sounds); ++i) {
-        if (m_Sounds[i].m_State != Sound::PLAYING &&
-            m_Sounds[i].m_State != Sound::BUFFERING &&
-            m_Sounds[i].m_State != Sound::STOPPING) {
+        const Sound::State state = m_Sounds[i].GetState();
+        if (state != Sound::PLAYING && state != Sound::BUFFERING &&
+            state != Sound::STOPPING) {
           continue;
         }
 
         has_active_sound = true;
-        if (m_Sounds[i].m_State != Sound::PLAYING) {
+        if (state != Sound::PLAYING) {
           continue;
         }
         Sound* pSound = &m_Sounds[i];
@@ -482,13 +491,13 @@ void RageSoundDriver::DecodeThread() {
 
         const unsigned readableAfterDecode = pSound->m_Buffer.num_readable();
         const unsigned writableAfterDecode = pSound->m_Buffer.num_writable();
-        if (pSound->m_State == Sound::PLAYING &&
+        if (pSound->GetState() == Sound::PLAYING &&
             writableAfterDecode > 0 &&
             readableAfterDecode < kDecodeRefillTargetBlocks) {
           still_needs_decode = true;
         }
 
-        if (pSound->m_State == Sound::PLAYING && !pSound->m_bPaused) {
+        if (pSound->GetState() == Sound::PLAYING && !pSound->m_bPaused) {
           if (readableAfterDecode == 0 && writableAfterDecode > 0) {
             has_critical_starvation = true;
           } else if (readableAfterDecode <= kDecodeLowWatermarkBlocks &&
@@ -670,7 +679,8 @@ bool RageSoundDriver::RefillSoundBufferToTarget(
   int terminalRet = 0;
   bool wroteAnyData = false;
 
-  while ((s.m_State == Sound::PLAYING || s.m_State == Sound::BUFFERING) &&
+  while ((s.GetState() == Sound::PLAYING ||
+          s.GetState() == Sound::BUFFERING) &&
          s.m_Buffer.num_readable() < target && s.m_Buffer.num_writable() > 0) {
     const int iWrote = GetDataForSound(s);
     if (iWrote == RageSoundReader::WOULD_BLOCK) {
@@ -688,7 +698,7 @@ bool RageSoundDriver::RefillSoundBufferToTarget(
 
     if (iWrote < 0) {
       terminalRet = iWrote;
-      s.m_State = Sound::STOPPING;
+      s.SetState(Sound::STOPPING);
       break;
     }
 
@@ -719,7 +729,7 @@ bool RageSoundDriver::RefillSoundBufferToTarget(
       trace->writes = writes;
       trace->wouldBlocks = wouldBlocks;
       trace->terminalRet = terminalRet;
-      trace->state = s.m_State;
+      trace->state = static_cast<int>(s.GetState());
       trace->targetReached = targetReached;
       trace->shouldLog = traceEnabled && shouldLog;
     }
@@ -731,7 +741,8 @@ bool RageSoundDriver::RefillSoundBufferToTarget(
           "target_reached=%d terminal_ret=%d elapsed_us=%" PRIu64 " state=%d",
           reason, loadedPath.c_str(), readableBefore, readableAfter,
           writableBefore, writableAfter, target, writes, wouldBlocks,
-          targetReached ? 1 : 0, terminalRet, nowUsec - startUsec, s.m_State);
+          targetReached ? 1 : 0, terminalRet, nowUsec - startUsec,
+          static_cast<int>(s.GetState()));
     }
   }
 
@@ -754,11 +765,11 @@ void RageSoundDriver::Update() {
       }
     }
 
-    switch (m_Sounds[i].m_State) {
+    switch (m_Sounds[i].GetState()) {
       case Sound::STOPPED:
         m_Sounds[i].Deallocate();
         m_Sounds[i].ClearDebugIdentity();
-        m_Sounds[i].m_State = Sound::AVAILABLE;
+        m_Sounds[i].SetState(Sound::AVAILABLE);
         continue;
       case Sound::STOPPING:
         break;
@@ -778,7 +789,7 @@ void RageSoundDriver::Update() {
     /* This sound is done.  Set it to HALTING, since the mixer thread might
      * be accessing it; it'll change it back to STOPPED once it's ready to
      * be used again. */
-    m_Sounds[i].m_State = Sound::HALTING;
+    m_Sounds[i].SetState(Sound::HALTING);
     //		LOG->Trace("set (#%i) %p from STOPPING to HALTING", i,
     // m_Sounds[i].m_pSound);
   }
@@ -790,7 +801,7 @@ void RageSoundDriver::Update() {
     int current_underruns = underruns;
     bool has_active_playback = false;
     for (unsigned i = 0; i < ARRAYLEN(m_Sounds); ++i) {
-      auto state = m_Sounds[i].m_State;
+      const Sound::State state = m_Sounds[i].GetState();
       if (state == Sound::PLAYING || state == Sound::STOPPING ||
           state == Sound::BUFFERING) {
         has_active_playback = true;
@@ -802,10 +813,13 @@ void RageSoundDriver::Update() {
       // Ignore startup/shutdown underruns when nothing is actively playing.
       logged_underruns = current_underruns;
     } else if (current_underruns > logged_underruns) {
-      LOG->MapLog(
-          "GenericMixingUnderruns", "Mixing underruns: %i",
-          current_underruns - logged_underruns);
-      LOG->Trace("Mixing underruns: %i", current_underruns - logged_underruns);
+      if (IsUnderrunTraceEnabled()) {
+        LOG->MapLog(
+            "GenericMixingUnderruns", "Mixing underruns: %i",
+            current_underruns - logged_underruns);
+        LOG->Trace(
+            "Mixing underruns: %i", current_underruns - logged_underruns);
+      }
       logged_underruns = current_underruns;
 
       /* Don't log again for at least 10 seconds, or we'll burst output
@@ -824,7 +838,7 @@ void RageSoundDriver::StartMixing(RageSoundBase* pSound) {
 
   unsigned i;
   for (i = 0; i < ARRAYLEN(m_Sounds); ++i) {
-    if (m_Sounds[i].m_State == Sound::AVAILABLE) {
+    if (m_Sounds[i].GetState() == Sound::AVAILABLE) {
       break;
     }
   }
@@ -837,7 +851,7 @@ void RageSoundDriver::StartMixing(RageSoundBase* pSound) {
   }
 
   Sound& s = m_Sounds[i];
-  s.m_State = Sound::BUFFERING;
+  s.SetState(Sound::BUFFERING);
 
   /* We've reserved our slot; we can safely unlock now.  Don't hold onto it
    * longer than needed, since prebuffering might take some time. */
@@ -883,16 +897,20 @@ void RageSoundDriver::StartMixing(RageSoundBase* pSound) {
   s.m_iDebugPrebufferWritable = s.m_Buffer.num_writable();
   s.m_bDebugStrongPrebuffer = useStrongPrebuffer;
 
-  if (useStrongPrebuffer && s.m_State == Sound::BUFFERING &&
+  if (useStrongPrebuffer && s.GetState() == Sound::BUFFERING &&
       s.m_Buffer.num_readable() < strongStartMinimum &&
       s.m_Buffer.num_writable() > 0) {
-    LOG->Warn(
-        "UNDERRUN_TRACE: start_mixing_strong_prebuffer_wait sound='%s' slot=%u "
-        "serial=%" PRIu64 " readable_blocks=%u writable_blocks=%u target=%u "
-        "minimum=%u retries=%d retry_sleep_us=%d",
-        s.GetDebugPath(), i, s.m_iDebugSerial, s.m_Buffer.num_readable(),
-        s.m_Buffer.num_writable(), prebufferTarget, strongStartMinimum,
-        kStrongStartLastChanceWouldBlockRetries, kStartPrebufferRetrySleepUsec);
+    if (traceEnabled) {
+      LOG->Warn(
+          "UNDERRUN_TRACE: start_mixing_strong_prebuffer_wait sound='%s' "
+          "slot=%u serial=%" PRIu64
+          " readable_blocks=%u writable_blocks=%u target=%u "
+          "minimum=%u retries=%d retry_sleep_us=%d",
+          s.GetDebugPath(), i, s.m_iDebugSerial, s.m_Buffer.num_readable(),
+          s.m_Buffer.num_writable(), prebufferTarget, strongStartMinimum,
+          kStrongStartLastChanceWouldBlockRetries,
+          kStartPrebufferRetrySleepUsec);
+    }
 
     RefillSoundBufferToTarget(
         s, prebufferTarget, "start_mixing_strong_last_chance",
@@ -901,31 +919,33 @@ void RageSoundDriver::StartMixing(RageSoundBase* pSound) {
     s.m_iDebugPrebufferReadable = s.m_Buffer.num_readable();
     s.m_iDebugPrebufferWritable = s.m_Buffer.num_writable();
 
-    if (s.m_State == Sound::BUFFERING &&
+    if (s.GetState() == Sound::BUFFERING &&
         s.m_Buffer.num_readable() < strongStartMinimum &&
         s.m_Buffer.num_writable() > 0) {
-      LOG->Warn(
-          "UNDERRUN_TRACE: start_mixing_strong_prebuffer_timeout sound='%s' "
-          "slot=%u serial=%" PRIu64
-          " readable_blocks=%u writable_blocks=%u target=%u minimum=%u",
-          s.GetDebugPath(), i, s.m_iDebugSerial, s.m_Buffer.num_readable(),
-          s.m_Buffer.num_writable(), prebufferTarget, strongStartMinimum);
+      if (traceEnabled) {
+        LOG->Warn(
+            "UNDERRUN_TRACE: start_mixing_strong_prebuffer_timeout sound='%s' "
+            "slot=%u serial=%" PRIu64
+            " readable_blocks=%u writable_blocks=%u target=%u minimum=%u",
+            s.GetDebugPath(), i, s.m_iDebugSerial, s.m_Buffer.num_readable(),
+            s.m_Buffer.num_writable(), prebufferTarget, strongStartMinimum);
+      }
     }
   }
 
-  if (s.m_State == Sound::BUFFERING) {
-    s.m_State = Sound::PLAYING;
+  if (s.GetState() == Sound::BUFFERING) {
+    s.SetState(Sound::PLAYING);
   }
 
-  if (traceEnabled || useStrongPrebuffer ||
-      BeginsWith(loadedPath, "<empty-path:")) {
+  if (traceEnabled) {
     LOG->Info(
         "UNDERRUN_TRACE: start_mixing_ready sound='%s' slot=%u serial=%" PRIu64
         " state=%d "
         "readable_blocks=%u writable_blocks=%u prebuffer_target=%u "
         "minimum_blocks=%u "
         "strong_prebuffer=%d retries=%d retry_sleep_us=%d",
-        s.GetDebugPath(), i, s.m_iDebugSerial, s.m_State,
+        s.GetDebugPath(), i, s.m_iDebugSerial,
+        static_cast<int>(s.GetState()),
         s.m_Buffer.num_readable(), s.m_Buffer.num_writable(), prebufferTarget,
         strongStartMinimum, useStrongPrebuffer ? 1 : 0, wouldBlockRetries,
         retrySleepUsec);
@@ -943,7 +963,7 @@ void RageSoundDriver::StopMixing(RageSoundBase* pSound) {
   /* Find the sound. */
   unsigned i;
   for (i = 0; i < ARRAYLEN(m_Sounds); ++i) {
-    if (m_Sounds[i].m_State != Sound::AVAILABLE &&
+    if (m_Sounds[i].GetState() != Sound::AVAILABLE &&
         m_Sounds[i].m_pSound == pSound) {
       break;
     }
@@ -955,7 +975,7 @@ void RageSoundDriver::StopMixing(RageSoundBase* pSound) {
   }
 
   /* If we're already in STOPPED, there's nothing to do. */
-  if (m_Sounds[i].m_State == Sound::STOPPED) {
+  if (m_Sounds[i].GetState() == Sound::STOPPED) {
     m_Mutex.Unlock();
     LOG->Trace("not stopping a sound because it's already in STOPPED");
     return;
@@ -966,7 +986,7 @@ void RageSoundDriver::StopMixing(RageSoundBase* pSound) {
 
   /* Tell the mixing thread to flush the buffer.  We don't have to worry about
    * the decoding thread, since we've locked m_Mutex. */
-  m_Sounds[i].m_State = Sound::HALTING;
+  m_Sounds[i].SetState(Sound::HALTING);
 
   /* Invalidate the m_pSound pointer to guarantee we don't make any further
    * references to it.  Once this call returns, the sound may no longer exist.
@@ -985,7 +1005,7 @@ bool RageSoundDriver::PauseMixing(RageSoundBase* pSound, bool bStop) {
   /* Find the sound. */
   unsigned i;
   for (i = 0; i < ARRAYLEN(m_Sounds); ++i) {
-    if (m_Sounds[i].m_State != Sound::AVAILABLE &&
+    if (m_Sounds[i].GetState() != Sound::AVAILABLE &&
         m_Sounds[i].m_pSound == pSound) {
       break;
     }
@@ -994,8 +1014,9 @@ bool RageSoundDriver::PauseMixing(RageSoundBase* pSound, bool bStop) {
   /* A sound can be paused in PLAYING or STOPPING.  (STOPPING means the sound
    * has been decoded to the end, and we're waiting for that data to finish, so
    * externally it looks and acts like PLAYING.) */
-  if (i == ARRAYLEN(m_Sounds) || (m_Sounds[i].m_State != Sound::PLAYING &&
-                                  m_Sounds[i].m_State != Sound::STOPPING)) {
+  if (i == ARRAYLEN(m_Sounds) ||
+      (m_Sounds[i].GetState() != Sound::PLAYING &&
+       m_Sounds[i].GetState() != Sound::STOPPING)) {
     LOG->Trace("not pausing a sound because it's not playing");
     return false;
   }

@@ -15,6 +15,7 @@
 #include "LocalizedString.h"
 #include "LuaManager.h"
 #include "ModelTypes.h"
+#include "PerfDiagnostics.h"
 #include "Preference.h"
 #include "RageFile.h"
 #include "RageLog.h"
@@ -83,34 +84,45 @@ Preference<float> g_fFramePacingFineWaitMs("FramePacingFineWaitMs", 0.5f);
 Preference<float> g_fFramePacingWaitResyncMs(
     "FramePacingWaitResyncMs", 4.0f);
 #ifdef __APPLE__
+template<typename T>
+struct FixedFramePacingValue {
+  explicit constexpr FixedFramePacingValue(T value_) : value(value_) {}
+  constexpr T Get() const { return value; }
+  const T value;
+};
+
 Preference<float> g_fFramePacingMacMaxSpinMs(
     "FramePacingMacMaxSpinMs", 2.0f);
-Preference<bool> g_bFramePacingMacOSAdaptiveLead(
-    "FramePacingMacOSAdaptiveLead", true);
-Preference<float> g_fFramePacingMacOSAdaptiveLeadBaseMs(
-    "FramePacingMacOSAdaptiveLeadBaseMs", 2.0f);
-Preference<float> g_fFramePacingMacOSAdaptiveLeadMaxMs(
-    "FramePacingMacOSAdaptiveLeadMaxMs", 6.0f);
-Preference<float> g_fFramePacingMacOSAdaptiveLeadStepUpMs(
-    "FramePacingMacOSAdaptiveLeadStepUpMs", 0.5f);
-Preference<float> g_fFramePacingMacOSAdaptiveLeadStepDownMs(
-    "FramePacingMacOSAdaptiveLeadStepDownMs", 0.25f);
-Preference<int> g_iFramePacingMacOSAdaptiveLeadSwapBlockFrames(
-    "FramePacingMacOSAdaptiveLeadSwapBlockFrames", 2);
-Preference<int> g_iFramePacingMacOSAdaptiveLeadSafeFrames(
-    "FramePacingMacOSAdaptiveLeadSafeFrames", 6);
-Preference<int> g_iFramePacingMacOSAdaptiveLeadStableFrames(
-    "FramePacingMacOSAdaptiveLeadStableFrames", 240);
-Preference<bool> g_bFramePacingMacOSAdaptiveLeadEarlyBackpressure(
-    "FramePacingMacOSAdaptiveLeadEarlyBackpressure", true);
-Preference<bool> g_bFramePacingMacOSPostSwapRecovery(
-    "FramePacingMacOSPostSwapRecovery", true);
-Preference<float> g_fFramePacingMacOSPostSwapRecoveryLeadMs(
-    "FramePacingMacOSPostSwapRecoveryLeadMs", 1.0f);
-Preference<int> g_iFramePacingMacOSPostSwapRecoveryFrames(
-    "FramePacingMacOSPostSwapRecoveryFrames", 2);
-Preference<int> g_iFramePacingMacOSPostSwapRecoveryMinRate(
-    "FramePacingMacOSPostSwapRecoveryMinRate", 90);
+Preference<float> g_fFramePacingMacOSHighRefreshAdaptiveMaxMarginMs(
+    "FramePacingMacOSHighRefreshAdaptiveMaxMarginMs", 2.5f);
+static constexpr FixedFramePacingValue<float>
+    g_fFramePacingMacOSAdaptiveLeadBaseMs(1.5f);
+static constexpr FixedFramePacingValue<float>
+    g_fFramePacingMacOSAdaptiveLeadMaxMs(2.5f);
+static constexpr FixedFramePacingValue<float>
+    g_fFramePacingMacOSHighRefreshSwapPressureLeadMaxMs(3.25f);
+static constexpr FixedFramePacingValue<int>
+    g_iFramePacingMacOSSwapPressureLeadMode(1);
+static constexpr FixedFramePacingValue<int>
+    g_iFramePacingMacOSSwapPressureTransientFrames(2);
+static constexpr FixedFramePacingValue<float>
+    g_fFramePacingMacOSAdaptiveLeadStepUpMs(0.25f);
+static constexpr FixedFramePacingValue<float>
+    g_fFramePacingMacOSAdaptiveLeadStepDownMs(0.25f);
+static constexpr FixedFramePacingValue<float>
+    g_fFramePacingMacOSAdaptiveLeadWaitCapMs(3.0f);
+static constexpr FixedFramePacingValue<float>
+    g_fFramePacingMacOSAdaptiveLeadWaitStepDownMs(0.50f);
+static constexpr FixedFramePacingValue<int>
+    g_iFramePacingMacOSAdaptiveLeadSwapBlockFrames(2);
+static constexpr FixedFramePacingValue<int>
+    g_iFramePacingMacOSAdaptiveLeadSafeFrames(6);
+static constexpr FixedFramePacingValue<int>
+    g_iFramePacingMacOSAdaptiveLeadStableFrames(240);
+static constexpr FixedFramePacingValue<bool>
+    g_bFramePacingMacOSAdaptiveLeadEarlyBackpressure(true);
+Preference<float> g_fFramePacingMacOSPreSwapLoadThresholdMs(
+    "FramePacingMacOSPreSwapLoadThresholdMs", 6.5f);
 #endif
 Preference<bool> g_bFramePacingAdaptiveMargin(
     "FramePacingAdaptiveMargin", true);
@@ -185,7 +197,10 @@ static bool g_bFramePacerLastDisplayLinkUsed = false;
 static bool g_bFramePacerLastDisplayLinkTimedOut = false;
 static bool g_bFramePacerLastDisplayLinkFinalWaitCapped = false;
 static bool g_bFramePacerLastDisplayLinkOutputPhaseAccepted = false;
+static bool g_bFramePacerLastDisplayLinkOutputAlignedPresentEnabled = false;
 static bool g_bFramePacerLastDisplayLinkOutputAlignedPresent = false;
+static bool g_bFramePacerLastDisplayLinkOutputCapRejected = false;
+static int g_iFramePacerLastDisplayLinkOutputAlignedPresentMode = 1;
 static bool g_bFramePacerLastDisplayLinkPhaseAligned = false;
 static int64_t g_iFramePacerLastDisplayLinkPhaseAlignUsec = 0;
 static const char* g_szFramePacerLastDisplayLinkSelectedOutputSource = "none";
@@ -196,25 +211,26 @@ static uint64_t g_iFramePacerLastMacOSAdaptiveLeadMaxUsec = 0;
 static int64_t g_iFramePacerLastMacOSAdaptiveLeadAdjustUsec = 0;
 static int g_iFramePacerMacOSSwapBlockStreak = 0;
 static int g_iFramePacerMacOSSevereSwapBlockStreak = 0;
+static int g_iFramePacerMacOSSwapBlockPressure = 0;
+static int g_iFramePacerMacOSWaitOvershootPressure = 0;
+static int g_iFramePacerMacOSSwapPressureTransientFrames = 0;
 static int g_iFramePacerMacOSLeadStableFrames = 0;
 static bool g_bFramePacerMacOSSafeMode = false;
 static bool g_bFramePacerLastMacOSEarlySwapBackpressure = false;
+static bool g_bFramePacerLastMacOSWaitOvershootPressure = false;
+static bool g_bFramePacerLastMacOSPreSwapLoadPressure = false;
+static uint64_t g_iFramePacerLastMacOSPreSwapLoadUsec = 0;
+static uint64_t g_iFramePacerLastMacOSPreSwapLoadThresholdUsec = 0;
+static int g_iFramePacerMacOSPreSwapLoadPressureFrames = 0;
+static uint64_t g_iFramePacerLastMacOSWaitCapUsec = 0;
 static bool g_bFramePacerLastMacOSAdaptiveLeadChanged = false;
 static const char* g_szFramePacerLastMacOSAdaptiveLeadReason = "init";
-static int g_iFramePacerMacOSPostSwapRecoveryFramesRemaining = 0;
-static int g_iFramePacerLastMacOSPostSwapRecoveryFramesBefore = 0;
-static int g_iFramePacerLastMacOSPostSwapRecoveryFramesAfter = 0;
-static uint64_t g_iFramePacerLastMacOSPostSwapRecoveryLeadUsec = 0;
-static uint64_t g_iFramePacerLastMacOSPostSwapRecoverySwapUsec = 0;
-static bool g_bFramePacerLastMacOSPostSwapRecoveryUsed = false;
-static bool g_bFramePacerLastMacOSPostSwapRecoveryArmed = false;
-static bool g_bFramePacerLastMacOSPostSwapRecoveryCancelled = false;
-static const char* g_szFramePacerLastMacOSPostSwapRecoveryReason = "init";
 #endif
 static uint64_t g_iFramePacerAdaptiveMarginUsec = 0;
 static uint64_t g_iFramePacerLastBaseMarginUsec = 0;
 static uint64_t g_iFramePacerLastEffectiveMarginUsec = 0;
 static uint64_t g_iFramePacerLastNextMarginUsec = 0;
+static uint64_t g_iFramePacerLastWaitMarginUsec = 0;
 static uint64_t g_iFramePacerLastMaxMarginUsec = 0;
 static uint64_t g_iFramePacerLastSwapBuffersUsec = 0;
 static int64_t g_iFramePacerLastAdaptiveAdjustUsec = 0;
@@ -243,6 +259,20 @@ static float ClampFramePacingHz(float targetHz) {
   return std::clamp(targetHz, 10.0f, 1000.0f);
 }
 
+static float EffectiveFramePacingTargetHz(int fallbackHz) {
+  const float configuredHz = ClampFramePacingHz(g_fFramePacingTargetHz.Get());
+  if (configuredHz > 0.0f) {
+    return configuredHz;
+  }
+#ifdef __APPLE__
+  return fallbackHz > 0
+             ? ClampFramePacingHz(static_cast<float>(fallbackHz))
+             : 0.0f;
+#else
+  return 0.0f;
+#endif
+}
+
 static uint64_t FramePacingIntervalUsec(float targetHz) {
   return static_cast<uint64_t>(
       std::llround(1000000.0 / static_cast<double>(targetHz)));
@@ -267,7 +297,16 @@ static uint64_t FramePacingAdaptiveMaxMarginUsec(
   }
 
 #ifdef __APPLE__
-  const uint64_t intervalCapUsec = (intervalUsec * 3) / 4;
+  uint64_t intervalCapUsec = (intervalUsec * 3) / 4;
+  constexpr uint64_t kHighRefreshIntervalUsec = 11111;  // 90 Hz and above.
+  const float highRefreshMaxMs =
+      g_fFramePacingMacOSHighRefreshAdaptiveMaxMarginMs.Get();
+  if (intervalUsec <= kHighRefreshIntervalUsec &&
+      std::isfinite(highRefreshMaxMs) && highRefreshMaxMs > 0.0f) {
+    const uint64_t highRefreshCapUsec =
+        static_cast<uint64_t>(std::llround(highRefreshMaxMs * 1000.0f));
+    intervalCapUsec = std::min(intervalCapUsec, highRefreshCapUsec);
+  }
 #else
   const uint64_t intervalCapUsec = intervalUsec / 2;
 #endif
@@ -322,19 +361,34 @@ static uint64_t FramePacingMacOSAdaptiveLeadBaseUsec(
 
 static uint64_t FramePacingMacOSAdaptiveLeadMaxUsec(
     uint64_t intervalUsec, uint64_t baseLeadUsec) {
-  const uint64_t requestedMaxUsec =
+  uint64_t requestedMaxUsec =
       FramePacingMacOSLeadPreferenceUsec(
-          g_fFramePacingMacOSAdaptiveLeadMaxMs.Get(), intervalUsec, 6000,
+          g_fFramePacingMacOSAdaptiveLeadMaxMs.Get(), intervalUsec, 2500,
           baseLeadUsec, std::max<uint64_t>(baseLeadUsec, intervalUsec));
+
+  constexpr uint64_t kHighRefreshIntervalUsec = 11111;  // 90 Hz and above.
+  const float pressureMaxMs =
+      g_fFramePacingMacOSHighRefreshSwapPressureLeadMaxMs.Get();
+  if (intervalUsec <= kHighRefreshIntervalUsec &&
+      std::isfinite(pressureMaxMs) && pressureMaxMs > 0.0f) {
+    const uint64_t pressureMaxUsec =
+        FramePacingMacOSLeadPreferenceUsec(
+            pressureMaxMs, intervalUsec, 5500, baseLeadUsec,
+            std::max<uint64_t>(baseLeadUsec, (intervalUsec * 3) / 4));
+    requestedMaxUsec = std::max(requestedMaxUsec, pressureMaxUsec);
+  }
+
+  const uint64_t leadCapUsec =
+      std::max<uint64_t>(baseLeadUsec, (intervalUsec * 3) / 4);
+  requestedMaxUsec = std::min<uint64_t>(requestedMaxUsec, leadCapUsec);
   return std::clamp<uint64_t>(
-      requestedMaxUsec, baseLeadUsec,
-      std::max<uint64_t>(baseLeadUsec, (intervalUsec * 3) / 4));
+      requestedMaxUsec, baseLeadUsec, leadCapUsec);
 }
 
 static uint64_t FramePacingMacOSAdaptiveLeadStepUpUsec(
     uint64_t intervalUsec) {
   return FramePacingMacOSLeadPreferenceUsec(
-      g_fFramePacingMacOSAdaptiveLeadStepUpMs.Get(), intervalUsec, 500, 100,
+      g_fFramePacingMacOSAdaptiveLeadStepUpMs.Get(), intervalUsec, 250, 100,
       std::max<uint64_t>(100, intervalUsec / 4));
 }
 
@@ -343,6 +397,38 @@ static uint64_t FramePacingMacOSAdaptiveLeadStepDownUsec(
   return FramePacingMacOSLeadPreferenceUsec(
       g_fFramePacingMacOSAdaptiveLeadStepDownMs.Get(), intervalUsec, 250, 50,
       std::max<uint64_t>(50, intervalUsec / 8));
+}
+
+static int FramePacingMacOSSwapPressureLeadMode() {
+  // Mode 2 was useful diagnostically, but it made compositor-bound stalls worse
+  // on macOS/OpenGL by presenting too early into the compositor phase. Keep the
+  // controller conservative on the known-good baseline.
+  return std::clamp(g_iFramePacingMacOSSwapPressureLeadMode.Get(), 1, 1);
+}
+
+static bool FramePacingMacOSAdaptiveLeadEnabled() {
+  // Local Preferences.ini can carry stale diagnostic values from previous
+  // experiments. Use a fixed low lead on the known-good macOS/OpenGL baseline.
+  return false;
+}
+
+static int FramePacingMacOSSwapPressureTransientFrames() {
+  return std::clamp(
+      g_iFramePacingMacOSSwapPressureTransientFrames.Get(), 1, 30);
+}
+
+static uint64_t FramePacingMacOSAdaptiveLeadWaitCapUsec(
+    uint64_t intervalUsec, uint64_t baseLeadUsec, uint64_t maxLeadUsec) {
+  return FramePacingMacOSLeadPreferenceUsec(
+      g_fFramePacingMacOSAdaptiveLeadWaitCapMs.Get(), intervalUsec, 6000,
+      baseLeadUsec, maxLeadUsec);
+}
+
+static uint64_t FramePacingMacOSAdaptiveLeadWaitStepDownUsec(
+    uint64_t intervalUsec) {
+  return FramePacingMacOSLeadPreferenceUsec(
+      g_fFramePacingMacOSAdaptiveLeadWaitStepDownMs.Get(), intervalUsec, 500,
+      100, std::max<uint64_t>(100, intervalUsec / 4));
 }
 
 static int FramePacingMacOSAdaptiveLeadSwapBlockFrames() {
@@ -360,33 +446,51 @@ static int FramePacingMacOSAdaptiveLeadStableFrames() {
       g_iFramePacingMacOSAdaptiveLeadStableFrames.Get(), 30, 3600);
 }
 
-static uint64_t FramePacingMacOSPostSwapRecoveryLeadUsec(
+static uint64_t FramePacingMacOSPreSwapLoadThresholdUsec(
     uint64_t intervalUsec) {
-  float requestedMs = g_fFramePacingMacOSPostSwapRecoveryLeadMs.Get();
-  uint64_t requestedUsec = 1000;
-  if (std::isfinite(requestedMs) && requestedMs >= 0.0f) {
-    requestedUsec =
-        static_cast<uint64_t>(std::llround(requestedMs * 1000.0f));
+  const float requestedMs = g_fFramePacingMacOSPreSwapLoadThresholdMs.Get();
+  const uint64_t fallbackUsec =
+      intervalUsec > 0 ? (intervalUsec * 78) / 100 : 6500;
+  if (!std::isfinite(requestedMs) || requestedMs <= 0.0f) {
+    return fallbackUsec;
   }
-  return std::clamp<uint64_t>(
-      requestedUsec, 0, std::max<uint64_t>(500, intervalUsec / 2));
+
+  const uint64_t requestedUsec =
+      static_cast<uint64_t>(std::llround(requestedMs * 1000.0f));
+  const uint64_t minUsec = std::max<uint64_t>(1000, intervalUsec / 2);
+  return std::clamp<uint64_t>(requestedUsec, minUsec, intervalUsec);
 }
 
-static int FramePacingMacOSPostSwapRecoveryFrames() {
-  return std::clamp(
-      g_iFramePacingMacOSPostSwapRecoveryFrames.Get(), 0, 30);
+static uint64_t FramePacingMacOSRiskySwapThresholdUsec(
+    uint64_t intervalUsec) {
+  if (intervalUsec == 0) {
+    return 0;
+  }
+
+  return intervalUsec + std::max<uint64_t>(1000, intervalUsec / 5);
 }
 
-static int FramePacingMacOSPostSwapRecoveryMinRate() {
-  return std::clamp(
-      g_iFramePacingMacOSPostSwapRecoveryMinRate.Get(), 1, 1000);
+static uint64_t FramePacingMacOSSevereSwapThresholdUsec(
+    uint64_t intervalUsec) {
+  if (intervalUsec == 0) {
+    return 0;
+  }
+
+  return intervalUsec + std::max<uint64_t>(1500, intervalUsec / 3);
 }
 
-static bool FramePacingMacOSPostSwapRecoveryEnabled(float targetHz) {
-  return g_bFramePacingMacOSPostSwapRecovery.Get() &&
-         targetHz >=
-             static_cast<float>(FramePacingMacOSPostSwapRecoveryMinRate()) &&
-         MacOSFramePacingDisplayLinkEnabled();
+static bool FramePacingMacOSRiskySwapBlocked(
+    uint64_t swapBuffersUsec, uint64_t intervalUsec) {
+  return intervalUsec > 0 && swapBuffersUsec >=
+                                FramePacingMacOSRiskySwapThresholdUsec(
+                                    intervalUsec);
+}
+
+static bool FramePacingMacOSSevereSwapBlocked(
+    uint64_t swapBuffersUsec, uint64_t intervalUsec) {
+  return intervalUsec > 0 && swapBuffersUsec >=
+                                FramePacingMacOSSevereSwapThresholdUsec(
+                                    intervalUsec);
 }
 
 static bool FramePacingMacOSEarlySwapBackpressure(
@@ -409,7 +513,7 @@ static uint64_t FramePacingMacOSAdaptiveLeadUsec(
   g_iFramePacerLastMacOSAdaptiveLeadBaseUsec = baseLeadUsec;
   g_iFramePacerLastMacOSAdaptiveLeadMaxUsec = maxLeadUsec;
 
-  if (!g_bFramePacingMacOSAdaptiveLead.Get()) {
+  if (!FramePacingMacOSAdaptiveLeadEnabled()) {
     g_iFramePacerMacOSAdaptiveLeadUsec = baseLeadUsec;
     g_iFramePacerLastMacOSAdaptiveLeadAdjustUsec = 0;
     g_bFramePacerLastMacOSAdaptiveLeadChanged = false;
@@ -675,7 +779,10 @@ struct FramePacingWaitStats {
   int64_t display_link_output_late_usec = 0;
   bool display_link_final_wait_capped = false;
   bool display_link_output_phase_accepted = false;
+  int display_link_output_aligned_present_mode = 1;
+  bool display_link_output_aligned_present_enabled = false;
   bool display_link_output_aligned_present = false;
+  bool display_link_output_cap_rejected = false;
   const char* display_link_selected_output_source = "none";
   const char* display_link_status = "unavailable";
 #endif
@@ -793,8 +900,14 @@ static FramePacingWaitStats WaitUntilFramePacingWakeUsec(
           displayLinkStats.final_wait_capped;
       stats.display_link_output_phase_accepted =
           displayLinkStats.output_phase_accepted;
+      stats.display_link_output_aligned_present_mode =
+          displayLinkStats.output_aligned_present_mode;
+      stats.display_link_output_aligned_present_enabled =
+          displayLinkStats.output_aligned_present_enabled;
       stats.display_link_output_aligned_present =
           displayLinkStats.output_aligned_present;
+      stats.display_link_output_cap_rejected =
+          displayLinkStats.output_aligned_cap_rejected;
       stats.display_link_selected_output_source =
           displayLinkStats.selected_output_source;
       stats.display_link_status = displayLinkStats.status;
@@ -818,10 +931,15 @@ static FramePacingWaitStats WaitUntilFramePacingWakeUsec(
 #ifdef __APPLE__
     while (nowUsec < wakeUsec) {
       const uint64_t remainingUsec = wakeUsec - nowUsec;
+      const uint64_t yieldWindowUsec = std::min<uint64_t>(
+          intervalUsec,
+          std::max<uint64_t>(5000, fineWaitUsec + maxSpinUsec));
+      const uint64_t sleepChunkUsec =
+          std::min<uint64_t>(maxSleepChunkUsec, 500);
 
-      if (remainingUsec > maxSpinUsec) {
+      if (remainingUsec > yieldWindowUsec) {
         const uint64_t requestedUsec =
-            std::min(remainingUsec - maxSpinUsec, maxSleepChunkUsec);
+            std::min(remainingUsec - yieldWindowUsec, sleepChunkUsec);
         const uint64_t sleepStartUsec = nowUsec;
         FramePacingWaitUntilUsec(sleepStartUsec + requestedUsec);
         nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
@@ -831,6 +949,19 @@ static FramePacingWaitStats WaitUntilFramePacingWakeUsec(
 
         if (nowUsec >= wakeUsec) {
           stats.abort_reason = "sleep_overshoot";
+          break;
+        }
+        continue;
+      }
+
+      if (remainingUsec > maxSpinUsec) {
+        const uint64_t yieldStartUsec = nowUsec;
+        std::this_thread::yield();
+        nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+        stats.fine_wait_usec += nowUsec - yieldStartUsec;
+
+        if (nowUsec >= wakeUsec) {
+          stats.abort_reason = "yield_overshoot";
           break;
         }
         continue;
@@ -1088,16 +1219,25 @@ static void UpdateFramePacingMacOSAdaptiveLead(
   g_bFramePacerLastMacOSAdaptiveLeadChanged = false;
   g_szFramePacerLastMacOSAdaptiveLeadReason = "stable";
 
-  if (!g_bFramePacingMacOSAdaptiveLead.Get()) {
+  if (!FramePacingMacOSAdaptiveLeadEnabled()) {
     g_iFramePacerMacOSAdaptiveLeadUsec = baseLeadUsec;
     g_iFramePacerMacOSSwapBlockStreak = 0;
     g_iFramePacerMacOSSevereSwapBlockStreak = 0;
+    g_iFramePacerMacOSSwapBlockPressure = 0;
+    g_iFramePacerMacOSWaitOvershootPressure = 0;
+    g_iFramePacerMacOSSwapPressureTransientFrames = 0;
     g_iFramePacerMacOSLeadStableFrames = 0;
     g_bFramePacerMacOSSafeMode = false;
-    g_bFramePacerLastMacOSEarlySwapBackpressure = false;
-    g_szFramePacerLastMacOSAdaptiveLeadReason = "disabled";
-    return;
-  }
+	  g_bFramePacerLastMacOSEarlySwapBackpressure = false;
+	  g_bFramePacerLastMacOSWaitOvershootPressure = false;
+	  g_bFramePacerLastMacOSPreSwapLoadPressure = false;
+	  g_iFramePacerLastMacOSPreSwapLoadUsec = 0;
+	  g_iFramePacerLastMacOSPreSwapLoadThresholdUsec = 0;
+	  g_iFramePacerMacOSPreSwapLoadPressureFrames = 0;
+	  g_iFramePacerLastMacOSWaitCapUsec = 0;
+	  g_szFramePacerLastMacOSAdaptiveLeadReason = "disabled";
+	  return;
+	}
 
   if (g_iFramePacerMacOSAdaptiveLeadUsec == 0) {
     g_iFramePacerMacOSAdaptiveLeadUsec = baseLeadUsec;
@@ -1107,8 +1247,10 @@ static void UpdateFramePacingMacOSAdaptiveLead(
   const uint64_t oldLeadUsec = g_iFramePacerMacOSAdaptiveLeadUsec;
   const bool swapBlocked =
       FramePacingSwapLikelyBlocked(swapBuffersUsec, intervalUsec);
+  const bool riskySwapBlocked =
+      FramePacingMacOSRiskySwapBlocked(swapBuffersUsec, intervalUsec);
   const bool severeSwapBlocked =
-      swapBuffersUsec > intervalUsec + intervalUsec / 2;
+      FramePacingMacOSSevereSwapBlocked(swapBuffersUsec, intervalUsec);
   const bool missedPresent = skippedIntervals > 0 || hardResynced;
   const bool phaseLate = phaseResynced;
   const bool presentLate =
@@ -1116,20 +1258,64 @@ static void UpdateFramePacingMacOSAdaptiveLead(
   const bool finalWaitOverslept =
       g_iFramePacerLastDisplayLinkFinalWaitOvershootUsec >
       std::max<uint64_t>(1000, intervalUsec / 4);
-  const bool earlySwapBackpressure =
+  const int64_t positiveWakeLateUsec =
+      std::max<int64_t>(0, g_iFramePacerLastWakeLateUsec);
+  const bool genericWaitOverslept =
+      g_iFramePacerLastSleepOvershootUsec >
+      std::max<uint64_t>(1000, intervalUsec / 4);
+  const bool waitTimingSlipped =
+      positiveWakeLateUsec > static_cast<int64_t>(
+                                 std::max<uint64_t>(1000, intervalUsec / 4)) ||
+      genericWaitOverslept || finalWaitOverslept;
+  const bool waitOvershootPressure =
+      waitTimingSlipped && !swapBlocked &&
+      (presentLateUsec > 0 || phaseLate || missedPresent);
+  // Pre-swap load is telemetry only. The sampled value includes the intentional
+  // frame-pacing wait before CGLFlushDrawable, so it must not drive policy.
+  const bool rawEarlySwapBackpressure =
       FramePacingMacOSEarlySwapBackpressure(swapBuffersUsec, intervalUsec);
+  const bool earlySwapBackpressure =
+      rawEarlySwapBackpressure && !missedPresent && !phaseLate &&
+      !presentLate && !riskySwapBlocked && !severeSwapBlocked &&
+      !waitOvershootPressure;
   const bool severeFrame =
       severeSwapBlocked || missedPresent || finalWaitOverslept;
+  const bool riskyLeadPressure =
+      riskySwapBlocked && !severeFrame && !earlySwapBackpressure &&
+      !waitOvershootPressure;
   const bool stableFrame =
-      !swapBlocked && !severeFrame && !phaseLate && !presentLate;
-  const bool severeLeadPressure = severeFrame && !earlySwapBackpressure;
+      !swapBlocked && !severeFrame && !phaseLate && !presentLate &&
+      !waitOvershootPressure;
+  const bool severeLeadPressure =
+      severeFrame && !earlySwapBackpressure && !waitOvershootPressure;
+  const int swapPressureLeadMode = FramePacingMacOSSwapPressureLeadMode();
 
   g_bFramePacerLastMacOSEarlySwapBackpressure = earlySwapBackpressure;
+  g_bFramePacerLastMacOSWaitOvershootPressure = waitOvershootPressure;
+  g_bFramePacerLastMacOSPreSwapLoadPressure = false;
+  g_iFramePacerLastMacOSWaitCapUsec =
+      FramePacingMacOSAdaptiveLeadWaitCapUsec(
+          intervalUsec, baseLeadUsec, maxLeadUsec);
 
   if (swapBlocked) {
     ++g_iFramePacerMacOSSwapBlockStreak;
-  } else if (g_iFramePacerMacOSSwapBlockStreak > 0) {
-    --g_iFramePacerMacOSSwapBlockStreak;
+    const int pressureAdd = severeSwapBlocked ? 4 : riskySwapBlocked ? 3 : 2;
+    g_iFramePacerMacOSSwapBlockPressure = std::min(
+        FramePacingMacOSAdaptiveLeadSafeFrames() * 4,
+        g_iFramePacerMacOSSwapBlockPressure + pressureAdd);
+    if (swapPressureLeadMode == 2) {
+      g_iFramePacerMacOSSwapPressureTransientFrames =
+          FramePacingMacOSSwapPressureTransientFrames();
+    }
+  } else {
+    if (g_iFramePacerMacOSSwapBlockStreak > 0) {
+      --g_iFramePacerMacOSSwapBlockStreak;
+    }
+
+    const int pressureDecay =
+        waitOvershootPressure ? 4 : stableFrame ? 2 : 1;
+    g_iFramePacerMacOSSwapBlockPressure = std::max(
+        0, g_iFramePacerMacOSSwapBlockPressure - pressureDecay);
   }
 
   if (severeLeadPressure) {
@@ -1146,9 +1332,38 @@ static void UpdateFramePacingMacOSAdaptiveLead(
 
   if (stableFrame) {
     ++g_iFramePacerMacOSLeadStableFrames;
+    if (g_iFramePacerMacOSLeadStableFrames %
+            std::max(1, FramePacingMacOSAdaptiveLeadStableFrames() / 3) ==
+        0) {
+      g_iFramePacerMacOSSwapBlockPressure =
+          std::max(0, g_iFramePacerMacOSSwapBlockPressure - 1);
+      g_iFramePacerMacOSWaitOvershootPressure =
+          std::max(0, g_iFramePacerMacOSWaitOvershootPressure - 1);
+    }
   } else {
     g_iFramePacerMacOSLeadStableFrames = 0;
   }
+
+  if (waitOvershootPressure) {
+    g_iFramePacerMacOSWaitOvershootPressure = std::min(
+        FramePacingMacOSAdaptiveLeadSafeFrames() * 4,
+        g_iFramePacerMacOSWaitOvershootPressure + 3);
+  } else if (g_iFramePacerMacOSWaitOvershootPressure > 0 &&
+             !swapBlocked) {
+    --g_iFramePacerMacOSWaitOvershootPressure;
+  }
+
+  const int swapBlockPressureThreshold =
+      FramePacingMacOSAdaptiveLeadSwapBlockFrames() * 2;
+  const bool swapPressureReady =
+      g_iFramePacerMacOSSwapBlockPressure >= swapBlockPressureThreshold;
+  const int waitOvershootPressureThreshold =
+      std::max(1, FramePacingMacOSAdaptiveLeadSwapBlockFrames());
+  const bool waitOvershootPressureReady =
+      g_iFramePacerMacOSWaitOvershootPressure >=
+      waitOvershootPressureThreshold;
+  const bool swapPressureCanRaiseLead =
+      swapPressureReady && !waitOvershootPressureReady;
 
   if (g_iFramePacerMacOSSevereSwapBlockStreak >=
       FramePacingMacOSAdaptiveLeadSafeFrames()) {
@@ -1162,7 +1377,12 @@ static void UpdateFramePacingMacOSAdaptiveLead(
   }
 
   uint64_t targetLeadUsec = oldLeadUsec;
-  if (earlySwapBackpressure && oldLeadUsec > baseLeadUsec) {
+  if (swapPressureLeadMode == 0) {
+    targetLeadUsec = baseLeadUsec;
+    g_bFramePacerMacOSSafeMode = false;
+    g_iFramePacerMacOSSwapPressureTransientFrames = 0;
+    g_szFramePacerLastMacOSAdaptiveLeadReason = "swap_pressure_disabled";
+  } else if (earlySwapBackpressure && oldLeadUsec > baseLeadUsec) {
     const uint64_t stepDownUsec =
         FramePacingMacOSAdaptiveLeadStepDownUsec(intervalUsec);
     const uint64_t earlyBackpressureStepUsec = std::max<uint64_t>(
@@ -1174,23 +1394,62 @@ static void UpdateFramePacingMacOSAdaptiveLead(
     g_bFramePacerMacOSSafeMode = false;
     g_iFramePacerMacOSLeadStableFrames = 0;
     g_szFramePacerLastMacOSAdaptiveLeadReason = "early_swap_backpressure";
+  } else if (
+      waitOvershootPressureReady &&
+      oldLeadUsec > g_iFramePacerLastMacOSWaitCapUsec) {
+    const uint64_t stepDownUsec = std::max<uint64_t>(
+        FramePacingMacOSAdaptiveLeadStepDownUsec(intervalUsec),
+        FramePacingMacOSAdaptiveLeadWaitStepDownUsec(intervalUsec));
+    targetLeadUsec =
+        oldLeadUsec > g_iFramePacerLastMacOSWaitCapUsec + stepDownUsec
+            ? oldLeadUsec - stepDownUsec
+            : g_iFramePacerLastMacOSWaitCapUsec;
+    g_bFramePacerMacOSSafeMode = false;
+    g_iFramePacerMacOSLeadStableFrames = 0;
+    g_iFramePacerMacOSSevereSwapBlockStreak =
+        std::max(0, g_iFramePacerMacOSSevereSwapBlockStreak - 1);
+    g_szFramePacerLastMacOSAdaptiveLeadReason = "wait_overshoot_cap";
   } else if (g_bFramePacerMacOSSafeMode) {
     targetLeadUsec = maxLeadUsec;
     g_szFramePacerLastMacOSAdaptiveLeadReason = "safe_mode";
-  } else if (severeLeadPressure || swapBlocked) {
+  } else if (
+      swapPressureLeadMode == 2 &&
+      g_iFramePacerMacOSSwapPressureTransientFrames > 0) {
+    const uint64_t transientLeadUsec = std::min<uint64_t>(
+        maxLeadUsec,
+        std::max<uint64_t>(
+            baseLeadUsec + FramePacingMacOSAdaptiveLeadStepUpUsec(intervalUsec),
+            FramePacingMacOSAdaptiveLeadWaitCapUsec(
+                intervalUsec, baseLeadUsec, maxLeadUsec)));
+    targetLeadUsec = transientLeadUsec;
+    --g_iFramePacerMacOSSwapPressureTransientFrames;
+    g_szFramePacerLastMacOSAdaptiveLeadReason = "swap_pressure_transient";
+  } else if (
+      severeLeadPressure || riskyLeadPressure || swapPressureCanRaiseLead) {
     const uint64_t stepUsec =
         FramePacingMacOSAdaptiveLeadStepUpUsec(intervalUsec);
     const uint64_t multiplier =
-        severeLeadPressure ? 2
-                           : std::max(1, g_iFramePacerMacOSSwapBlockStreak);
+        swapPressureLeadMode == 2
+            ? 1
+            : severeLeadPressure
+                ? 2
+                : riskyLeadPressure
+                    ? 1
+            : std::clamp(
+                  g_iFramePacerMacOSSwapBlockPressure /
+                      std::max(1, swapBlockPressureThreshold),
+                  1, 3);
     targetLeadUsec = std::min<uint64_t>(
         maxLeadUsec, oldLeadUsec + stepUsec * multiplier);
     g_szFramePacerLastMacOSAdaptiveLeadReason =
-        severeLeadPressure ? "severe_swap" : "swap_block";
+        severeLeadPressure
+            ? "severe_swap"
+            : riskyLeadPressure ? "risky_swap" : "swap_pressure";
   } else if (
       stableFrame &&
       g_iFramePacerMacOSLeadStableFrames >=
           FramePacingMacOSAdaptiveLeadStableFrames() &&
+      g_iFramePacerMacOSSwapBlockPressure == 0 &&
       oldLeadUsec > baseLeadUsec) {
     const uint64_t stepDownUsec =
         FramePacingMacOSAdaptiveLeadStepDownUsec(intervalUsec);
@@ -1259,7 +1518,10 @@ static void ResetFramePacer() {
   g_bFramePacerLastDisplayLinkTimedOut = false;
   g_bFramePacerLastDisplayLinkFinalWaitCapped = false;
   g_bFramePacerLastDisplayLinkOutputPhaseAccepted = false;
+  g_bFramePacerLastDisplayLinkOutputAlignedPresentEnabled = false;
   g_bFramePacerLastDisplayLinkOutputAlignedPresent = false;
+  g_bFramePacerLastDisplayLinkOutputCapRejected = false;
+  g_iFramePacerLastDisplayLinkOutputAlignedPresentMode = 1;
   g_bFramePacerLastDisplayLinkPhaseAligned = false;
   g_iFramePacerLastDisplayLinkPhaseAlignUsec = 0;
   g_szFramePacerLastDisplayLinkSelectedOutputSource = "none";
@@ -1269,25 +1531,26 @@ static void ResetFramePacer() {
   g_iFramePacerLastMacOSAdaptiveLeadAdjustUsec = 0;
   g_iFramePacerMacOSSwapBlockStreak = 0;
   g_iFramePacerMacOSSevereSwapBlockStreak = 0;
+  g_iFramePacerMacOSSwapBlockPressure = 0;
+  g_iFramePacerMacOSWaitOvershootPressure = 0;
+  g_iFramePacerMacOSSwapPressureTransientFrames = 0;
   g_iFramePacerMacOSLeadStableFrames = 0;
   g_bFramePacerMacOSSafeMode = false;
-  g_bFramePacerLastMacOSEarlySwapBackpressure = false;
-  g_bFramePacerLastMacOSAdaptiveLeadChanged = false;
-  g_szFramePacerLastMacOSAdaptiveLeadReason = "reset";
-  g_iFramePacerMacOSPostSwapRecoveryFramesRemaining = 0;
-  g_iFramePacerLastMacOSPostSwapRecoveryFramesBefore = 0;
-  g_iFramePacerLastMacOSPostSwapRecoveryFramesAfter = 0;
-  g_iFramePacerLastMacOSPostSwapRecoveryLeadUsec = 0;
-  g_iFramePacerLastMacOSPostSwapRecoverySwapUsec = 0;
-  g_bFramePacerLastMacOSPostSwapRecoveryUsed = false;
-  g_bFramePacerLastMacOSPostSwapRecoveryArmed = false;
-  g_bFramePacerLastMacOSPostSwapRecoveryCancelled = false;
-  g_szFramePacerLastMacOSPostSwapRecoveryReason = "reset";
+	  g_bFramePacerLastMacOSEarlySwapBackpressure = false;
+	  g_bFramePacerLastMacOSWaitOvershootPressure = false;
+	  g_bFramePacerLastMacOSPreSwapLoadPressure = false;
+	  g_iFramePacerLastMacOSPreSwapLoadUsec = 0;
+	  g_iFramePacerLastMacOSPreSwapLoadThresholdUsec = 0;
+	  g_iFramePacerMacOSPreSwapLoadPressureFrames = 0;
+  g_iFramePacerLastMacOSWaitCapUsec = 0;
+	  g_bFramePacerLastMacOSAdaptiveLeadChanged = false;
+	  g_szFramePacerLastMacOSAdaptiveLeadReason = "reset";
 #endif
   g_iFramePacerAdaptiveMarginUsec = 0;
   g_iFramePacerLastBaseMarginUsec = 0;
   g_iFramePacerLastEffectiveMarginUsec = 0;
   g_iFramePacerLastNextMarginUsec = 0;
+  g_iFramePacerLastWaitMarginUsec = 0;
   g_iFramePacerLastMaxMarginUsec = 0;
   g_iFramePacerLastSwapBuffersUsec = 0;
   g_iFramePacerLastAdaptiveAdjustUsec = 0;
@@ -1309,7 +1572,39 @@ static void ResetFramePacer() {
   g_szFramePacerLastWaitAbortReason = "none";
   g_szFramePacerLastAfterSwapResyncReason = "none";
 }
+
 }  // namespace
+
+void RageDisplay::ReportFramePacingPreSwapLoad(float renderBeforeSwapMs) {
+#ifdef __APPLE__
+  g_iFramePacerMacOSPreSwapLoadPressureFrames = 0;
+  g_bFramePacerLastMacOSPreSwapLoadPressure = false;
+
+  if (!std::isfinite(renderBeforeSwapMs) || renderBeforeSwapMs <= 0.0f) {
+    g_iFramePacerLastMacOSPreSwapLoadUsec = 0;
+    g_iFramePacerLastMacOSPreSwapLoadThresholdUsec = 0;
+    return;
+  }
+
+  const float targetHz =
+      EffectiveFramePacingTargetHz(GetActualVideoModeParams().rate);
+  if (targetHz < 90.0f) {
+    g_iFramePacerLastMacOSPreSwapLoadUsec = 0;
+    g_iFramePacerLastMacOSPreSwapLoadThresholdUsec = 0;
+    return;
+  }
+
+  const uint64_t intervalUsec = FramePacingIntervalUsec(targetHz);
+  const uint64_t loadUsec =
+      static_cast<uint64_t>(std::llround(renderBeforeSwapMs * 1000.0f));
+  const uint64_t thresholdUsec =
+      FramePacingMacOSPreSwapLoadThresholdUsec(intervalUsec);
+  g_iFramePacerLastMacOSPreSwapLoadUsec = loadUsec;
+  g_iFramePacerLastMacOSPreSwapLoadThresholdUsec = thresholdUsec;
+#else
+  (void)renderBeforeSwapMs;
+#endif
+}
 
 static const char* RagePixelFormatNames[] = {
     "RGBA8", "BGRA8", "RGBA4", "RGB5A1", "RGB5",
@@ -1871,6 +2166,10 @@ void RageDisplay::ResolutionChanged() {
   UpdateCentering();
 }
 
+void RageDisplay::PrepareForTextureManagerShutdown() {}
+
+void RageDisplay::ResetFramePresentationTelemetry() {}
+
 void RageDisplay::CenteringPushMatrix() {
   g_CenteringStack.push_back(g_CenteringStack.back());
   ASSERT(g_CenteringStack.size() < 100);  // overflow
@@ -2082,48 +2381,21 @@ void RageDisplay::DrawCircle(const RageSpriteVertex& v, float radius) {
 void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
   ASSERT(iFPS != 0);
 
-  const float targetHz = ClampFramePacingHz(g_fFramePacingTargetHz.Get());
+  const float targetHz = EffectiveFramePacingTargetHz(iFPS);
   if (targetHz > 0.0f) {
     const uint64_t intervalUsec = FramePacingIntervalUsec(targetHz);
     const uint64_t marginUsec = FramePacingEffectiveMarginUsec(intervalUsec);
-    const uint64_t maxSleepChunkUsec =
-        FramePacingMaxSleepChunkUsec(intervalUsec);
-    const uint64_t fineWaitUsec = FramePacingFineWaitUsec(intervalUsec);
-#ifdef __APPLE__
-    uint64_t macOSPresentLeadUsec =
-        FramePacingMacOSAdaptiveLeadUsec(intervalUsec);
-    g_iFramePacerLastMacOSPostSwapRecoveryFramesBefore =
-        g_iFramePacerMacOSPostSwapRecoveryFramesRemaining;
-    g_iFramePacerLastMacOSPostSwapRecoveryFramesAfter =
-        g_iFramePacerMacOSPostSwapRecoveryFramesRemaining;
-    g_iFramePacerLastMacOSPostSwapRecoveryLeadUsec =
-        FramePacingMacOSPostSwapRecoveryLeadUsec(intervalUsec);
-    g_bFramePacerLastMacOSPostSwapRecoveryUsed = false;
-    g_bFramePacerLastMacOSPostSwapRecoveryArmed = false;
-    g_bFramePacerLastMacOSPostSwapRecoveryCancelled = false;
-    g_szFramePacerLastMacOSPostSwapRecoveryReason =
-        g_iFramePacerMacOSPostSwapRecoveryFramesRemaining > 0 ? "pending"
-                                                             : "none";
-    if (!FramePacingMacOSPostSwapRecoveryEnabled(targetHz)) {
-      if (g_iFramePacerMacOSPostSwapRecoveryFramesRemaining > 0) {
-        g_bFramePacerLastMacOSPostSwapRecoveryCancelled = true;
-        g_szFramePacerLastMacOSPostSwapRecoveryReason = "disabled_cancel";
-      }
-      g_iFramePacerMacOSPostSwapRecoveryFramesRemaining = 0;
-      g_iFramePacerLastMacOSPostSwapRecoveryFramesAfter = 0;
-    } else if (g_iFramePacerMacOSPostSwapRecoveryFramesRemaining > 0) {
-      macOSPresentLeadUsec = std::min<uint64_t>(
-          macOSPresentLeadUsec,
-          g_iFramePacerLastMacOSPostSwapRecoveryLeadUsec);
-      --g_iFramePacerMacOSPostSwapRecoveryFramesRemaining;
-      g_iFramePacerLastMacOSPostSwapRecoveryFramesAfter =
-          g_iFramePacerMacOSPostSwapRecoveryFramesRemaining;
-      g_bFramePacerLastMacOSPostSwapRecoveryUsed = true;
-      g_szFramePacerLastMacOSPostSwapRecoveryReason = "active";
-    }
-#else
-    const uint64_t macOSPresentLeadUsec = 0;
-#endif
+    uint64_t waitMarginUsec = marginUsec;
+	    const uint64_t maxSleepChunkUsec =
+	        FramePacingMaxSleepChunkUsec(intervalUsec);
+	    const uint64_t fineWaitUsec = FramePacingFineWaitUsec(intervalUsec);
+	#ifdef __APPLE__
+	    uint64_t macOSPresentLeadUsec =
+	        FramePacingMacOSAdaptiveLeadUsec(intervalUsec);
+	#else
+	    const uint64_t macOSPresentLeadUsec = 0;
+	#endif
+    g_iFramePacerLastWaitMarginUsec = waitMarginUsec;
     const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
 
     if (!g_bFramePacerWasEnabled || g_iFramePacerNextPresentUsec == 0) {
@@ -2136,7 +2408,7 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
       }
     }
 
-    if (!g_bFramePacerLoggedEnable) {
+    if (!g_bFramePacerLoggedEnable && PerfDiagnosticsEnabled()) {
       LOG->Trace(
           "FRAME_PACING: enabled target_hz=%.3f interval_us=%llu "
           "sleep_margin_us=%llu effective_margin_us=%llu "
@@ -2146,17 +2418,15 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
           "adaptive_wake_late_step_us=%llu phase_resync_us=%llu "
           "wait_resync_us=%llu max_sleep_chunk_us=%llu "
           "fine_wait_us=%llu spin_cap_us=%llu wait_strategy=%s "
-          "legacy_frame_limit_percent=%.3f mode_rate=%d"
+          "configured_target_hz=%.3f legacy_frame_limit_percent=%.3f "
+          "mode_rate=%d"
 #ifdef __APPLE__
           " macos_display_link_enabled=%d "
           "macos_adaptive_lead=%d macos_lead_us=%llu "
-          "macos_lead_base_us=%llu macos_lead_max_us=%llu "
-          "macos_lead_safe=%d "
-          "macos_post_swap_recovery=%d "
-          "macos_post_swap_recovery_lead_us=%llu "
-          "macos_post_swap_recovery_frames=%d "
-          "macos_post_swap_recovery_min_rate=%d"
-#endif
+	          "macos_lead_base_us=%llu macos_lead_max_us=%llu "
+	          "macos_wait_cap_us=%llu macos_wait_step_down_us=%llu "
+	          "macos_lead_safe=%d"
+	#endif
           ,
           targetHz, static_cast<unsigned long long>(intervalUsec),
           static_cast<unsigned long long>(g_iFramePacerLastBaseMarginUsec),
@@ -2179,26 +2449,28 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
           static_cast<unsigned long long>(
               FramePacingMaxSpinUsec(fineWaitUsec)),
           FramePacingWaitStrategyName(),
+          ClampFramePacingHz(g_fFramePacingTargetHz.Get()),
           g_fFrameLimitPercent.Get(), iFPS
 #ifdef __APPLE__
           ,
           MacOSFramePacingDisplayLinkEnabled() ? 1 : 0,
-          g_bFramePacingMacOSAdaptiveLead.Get() ? 1 : 0,
+          FramePacingMacOSAdaptiveLeadEnabled() ? 1 : 0,
           static_cast<unsigned long long>(macOSPresentLeadUsec),
           static_cast<unsigned long long>(
               g_iFramePacerLastMacOSAdaptiveLeadBaseUsec),
           static_cast<unsigned long long>(
               g_iFramePacerLastMacOSAdaptiveLeadMaxUsec),
-          g_bFramePacerMacOSSafeMode ? 1 : 0,
-          g_bFramePacingMacOSPostSwapRecovery.Get() ? 1 : 0,
           static_cast<unsigned long long>(
-              FramePacingMacOSPostSwapRecoveryLeadUsec(intervalUsec)),
-          FramePacingMacOSPostSwapRecoveryFrames(),
-          FramePacingMacOSPostSwapRecoveryMinRate()
-#endif
-          );
-      g_bFramePacerLoggedEnable = true;
+              FramePacingMacOSAdaptiveLeadWaitCapUsec(
+                  intervalUsec, g_iFramePacerLastMacOSAdaptiveLeadBaseUsec,
+                  g_iFramePacerLastMacOSAdaptiveLeadMaxUsec)),
+	          static_cast<unsigned long long>(
+	              FramePacingMacOSAdaptiveLeadWaitStepDownUsec(intervalUsec)),
+	          g_bFramePacerMacOSSafeMode ? 1 : 0
+	#endif
+	          );
     }
+    g_bFramePacerLoggedEnable = true;
 
     int64_t lateUsec =
         static_cast<int64_t>(nowUsec) -
@@ -2207,36 +2479,42 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
     g_iFramePacerLastBeforeSwapPhaseErrorUsec = lateUsec;
     if (lateUsec >
         static_cast<int64_t>(FramePacingResyncThresholdUsec(intervalUsec))) {
-      LOG->Trace(
-          "FRAME_PACING: resync phase=before_swap reason=very_late_no_wait "
-          "late_us=%lld target_hz=%.3f interval_us=%llu",
-          static_cast<long long>(lateUsec), targetHz,
-          static_cast<unsigned long long>(intervalUsec));
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "FRAME_PACING: resync phase=before_swap reason=very_late_no_wait "
+            "late_us=%lld target_hz=%.3f interval_us=%llu",
+            static_cast<long long>(lateUsec), targetHz,
+            static_cast<unsigned long long>(intervalUsec));
+      }
       g_szFramePacerLastBeforeSwapResyncReason = "very_late_no_wait";
     } else if (
         lateUsec >
         static_cast<int64_t>(FramePacingPhaseResyncThresholdUsec(
             intervalUsec))) {
-      LOG->Trace(
-          "FRAME_PACING: resync phase=before_swap reason=phase_late_no_wait "
-          "late_us=%lld target_hz=%.3f interval_us=%llu threshold_us=%llu",
-          static_cast<long long>(lateUsec), targetHz,
-          static_cast<unsigned long long>(intervalUsec),
-          static_cast<unsigned long long>(
-              FramePacingPhaseResyncThresholdUsec(intervalUsec)));
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "FRAME_PACING: resync phase=before_swap reason=phase_late_no_wait "
+            "late_us=%lld target_hz=%.3f interval_us=%llu threshold_us=%llu",
+            static_cast<long long>(lateUsec), targetHz,
+            static_cast<unsigned long long>(intervalUsec),
+            static_cast<unsigned long long>(
+                FramePacingPhaseResyncThresholdUsec(intervalUsec)));
+      }
       g_szFramePacerLastBeforeSwapResyncReason = "phase_late_no_wait";
     } else {
       const int64_t leadUsec =
           static_cast<int64_t>(g_iFramePacerNextPresentUsec) -
           static_cast<int64_t>(nowUsec);
-      const uint64_t maxLeadUsec = intervalUsec + marginUsec;
+      const uint64_t maxLeadUsec = intervalUsec + waitMarginUsec;
       if (leadUsec > static_cast<int64_t>(maxLeadUsec)) {
-        LOG->Trace(
-            "FRAME_PACING: resync phase=before_swap reason=phase_ahead "
-            "lead_us=%lld target_hz=%.3f interval_us=%llu max_lead_us=%llu",
-            static_cast<long long>(leadUsec), targetHz,
-            static_cast<unsigned long long>(intervalUsec),
-            static_cast<unsigned long long>(maxLeadUsec));
+        if (PerfDiagnosticsEnabled()) {
+          LOG->Trace(
+              "FRAME_PACING: resync phase=before_swap reason=phase_ahead "
+              "lead_us=%lld target_hz=%.3f interval_us=%llu max_lead_us=%llu",
+              static_cast<long long>(leadUsec), targetHz,
+              static_cast<unsigned long long>(intervalUsec),
+              static_cast<unsigned long long>(maxLeadUsec));
+        }
         g_iFramePacerNextPresentUsec = nowUsec + intervalUsec;
         lateUsec = -static_cast<int64_t>(intervalUsec);
         g_iFramePacerLastBeforeSwapPhaseErrorUsec = -leadUsec;
@@ -2244,14 +2522,42 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
       }
     }
 
-    const uint64_t wakeUsec =
-        g_iFramePacerNextPresentUsec > marginUsec
-            ? g_iFramePacerNextPresentUsec - marginUsec
+    uint64_t wakeUsec =
+        g_iFramePacerNextPresentUsec > waitMarginUsec
+            ? g_iFramePacerNextPresentUsec - waitMarginUsec
             : g_iFramePacerNextPresentUsec;
     int64_t plannedWaitUsec =
         static_cast<int64_t>(wakeUsec) - static_cast<int64_t>(nowUsec);
+    const uint64_t maxPlannedWaitUsec =
+        intervalUsec + std::max<uint64_t>(500, intervalUsec / 8);
+	    if (plannedWaitUsec >
+	        static_cast<int64_t>(maxPlannedWaitUsec)) {
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "FRAME_PACING: resync phase=before_swap "
+            "reason=planned_wait_over_budget planned_wait_us=%lld "
+            "target_hz=%.3f interval_us=%llu margin_us=%llu "
+            "wait_margin_us=%llu "
+            "max_planned_wait_us=%llu",
+            static_cast<long long>(plannedWaitUsec), targetHz,
+            static_cast<unsigned long long>(intervalUsec),
+          static_cast<unsigned long long>(marginUsec),
+          static_cast<unsigned long long>(waitMarginUsec),
+          static_cast<unsigned long long>(maxPlannedWaitUsec));
+      }
+      g_iFramePacerNextPresentUsec = nowUsec + intervalUsec;
+      wakeUsec = g_iFramePacerNextPresentUsec > waitMarginUsec
+                     ? g_iFramePacerNextPresentUsec - waitMarginUsec
+                     : g_iFramePacerNextPresentUsec;
+      plannedWaitUsec =
+          static_cast<int64_t>(wakeUsec) - static_cast<int64_t>(nowUsec);
+      g_iFramePacerLastBeforeSwapPhaseErrorUsec =
+          -static_cast<int64_t>(intervalUsec);
+	      g_szFramePacerLastBeforeSwapResyncReason =
+	          "planned_wait_over_budget";
+	    }
 
-    FramePacingWaitStats waitStats;
+	    FramePacingWaitStats waitStats;
     if (plannedWaitUsec > 0) {
       waitStats = WaitUntilFramePacingWakeUsec(
           wakeUsec, g_iFramePacerNextPresentUsec, intervalUsec, fineWaitUsec,
@@ -2323,8 +2629,14 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
         waitStats.display_link_final_wait_capped;
     g_bFramePacerLastDisplayLinkOutputPhaseAccepted =
         waitStats.display_link_output_phase_accepted;
+    g_iFramePacerLastDisplayLinkOutputAlignedPresentMode =
+        waitStats.display_link_output_aligned_present_mode;
+    g_bFramePacerLastDisplayLinkOutputAlignedPresentEnabled =
+        waitStats.display_link_output_aligned_present_enabled;
     g_bFramePacerLastDisplayLinkOutputAlignedPresent =
         waitStats.display_link_output_aligned_present;
+    g_bFramePacerLastDisplayLinkOutputCapRejected =
+        waitStats.display_link_output_cap_rejected;
     g_szFramePacerLastDisplayLinkSelectedOutputSource =
         waitStats.display_link_selected_output_source != nullptr
             ? waitStats.display_link_selected_output_source
@@ -2345,7 +2657,9 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
   }
 
   if (g_bFramePacerWasEnabled) {
-    LOG->Trace("FRAME_PACING: disabled");
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace("FRAME_PACING: disabled");
+    }
     ResetFramePacer();
   }
 
@@ -2377,7 +2691,8 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
 }
 
 void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
-  const float targetHz = ClampFramePacingHz(g_fFramePacingTargetHz.Get());
+  const float targetHz =
+      EffectiveFramePacingTargetHz(GetActualVideoModeParams().rate);
   if (targetHz > 0.0f) {
     const uint64_t intervalUsec = FramePacingIntervalUsec(targetHz);
     const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
@@ -2411,22 +2726,6 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
         static_cast<int64_t>(std::llround(traceLateMs * 1000.0f));
     const bool swapLikelyBlocked =
         FramePacingSwapLikelyBlocked(swapBuffersUsec, intervalUsec);
-#ifdef __APPLE__
-    const bool macOSPostSwapRecoveryEnabled =
-        FramePacingMacOSPostSwapRecoveryEnabled(targetHz);
-    const bool macOSEarlySwapBackpressure =
-        FramePacingMacOSEarlySwapBackpressure(swapBuffersUsec, intervalUsec);
-    g_bFramePacerLastMacOSPostSwapRecoveryArmed = false;
-    g_bFramePacerLastMacOSPostSwapRecoveryCancelled = false;
-    g_iFramePacerLastMacOSPostSwapRecoverySwapUsec = swapBuffersUsec;
-    if (!macOSPostSwapRecoveryEnabled &&
-        g_iFramePacerMacOSPostSwapRecoveryFramesRemaining > 0) {
-      g_iFramePacerMacOSPostSwapRecoveryFramesRemaining = 0;
-      g_iFramePacerLastMacOSPostSwapRecoveryFramesAfter = 0;
-      g_bFramePacerLastMacOSPostSwapRecoveryCancelled = true;
-      g_szFramePacerLastMacOSPostSwapRecoveryReason = "disabled_cancel";
-    }
-#endif
 
     ++g_iFramePacerFrames;
     uint64_t nextPresentUsec = g_iFramePacerNextPresentUsec + intervalUsec;
@@ -2470,32 +2769,6 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
                           : g_szFramePacerLastWaitAbortReason;
     }
 
-#ifdef __APPLE__
-    if (macOSPostSwapRecoveryEnabled && swapLikelyBlocked) {
-      const int recoveryFrames = FramePacingMacOSPostSwapRecoveryFrames();
-      if (recoveryFrames > 0) {
-        g_iFramePacerMacOSPostSwapRecoveryFramesRemaining =
-            std::max(g_iFramePacerMacOSPostSwapRecoveryFramesRemaining,
-                     recoveryFrames);
-        g_iFramePacerLastMacOSPostSwapRecoveryFramesAfter =
-            g_iFramePacerMacOSPostSwapRecoveryFramesRemaining;
-        g_bFramePacerLastMacOSPostSwapRecoveryArmed = true;
-        g_szFramePacerLastMacOSPostSwapRecoveryReason =
-            macOSEarlySwapBackpressure ? "early_swap_backpressure"
-            : swapBuffersUsec > intervalUsec + intervalUsec / 2
-                ? "severe_swap"
-                : "swap_block";
-      }
-    } else if (
-        g_bFramePacerLastMacOSPostSwapRecoveryUsed &&
-        presentLateUsec > static_cast<int64_t>(intervalUsec / 2)) {
-      g_iFramePacerMacOSPostSwapRecoveryFramesRemaining = 0;
-      g_iFramePacerLastMacOSPostSwapRecoveryFramesAfter = 0;
-      g_bFramePacerLastMacOSPostSwapRecoveryCancelled = true;
-      g_szFramePacerLastMacOSPostSwapRecoveryReason = "late_cancel";
-    }
-#endif
-
     UpdateFramePacingAdaptiveMargin(
         intervalUsec, presentLateUsec, skippedIntervals, hardResynced,
         phaseResynced, swapBuffersUsec);
@@ -2511,25 +2784,23 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
         g_iFramePacerLastWakeLateUsec < 0
             ? -g_iFramePacerLastWakeLateUsec
             : g_iFramePacerLastWakeLateUsec;
-    if (absPresentLateUsec >= traceLateUsec ||
-        absWakeLateUsec >= traceLateUsec ||
-        g_iFramePacerLastSleepOvershootUsec >=
-            static_cast<uint64_t>(traceLateUsec) ||
-        skippedIntervals > 0 || hardResynced || phaseResynced ||
-        waitResynced ||
-        g_bFramePacerLastAdaptiveChanged ||
+    if (PerfDiagnosticsEnabled() &&
+        (absPresentLateUsec >= traceLateUsec ||
+         absWakeLateUsec >= traceLateUsec ||
+         g_iFramePacerLastSleepOvershootUsec >=
+             static_cast<uint64_t>(traceLateUsec) ||
+         skippedIntervals > 0 || hardResynced || phaseResynced ||
+         waitResynced ||
+         g_bFramePacerLastAdaptiveChanged ||
 #ifdef __APPLE__
-	        g_bFramePacerLastMacOSAdaptiveLeadChanged ||
-	        g_bFramePacerLastMacOSPostSwapRecoveryUsed ||
-	        g_bFramePacerLastMacOSPostSwapRecoveryArmed ||
-	        g_bFramePacerLastMacOSPostSwapRecoveryCancelled ||
+         g_bFramePacerLastMacOSAdaptiveLeadChanged ||
 #endif
-	        g_iFramePacerFrames <= 5 ||
-        g_iFramePacerFrames % 240 == 0) {
+         g_iFramePacerFrames <= 5 ||
+         g_iFramePacerFrames % 240 == 0)) {
       LOG->Trace(
           "FRAME_PACING: present frame=%llu target_hz=%.3f "
           "base_margin_us=%llu effective_margin_us=%llu next_margin_us=%llu "
-          "max_margin_us=%llu adaptive_adjust_us=%lld "
+          "wait_margin_us=%llu max_margin_us=%llu adaptive_adjust_us=%lld "
           "adaptive_reason=%s stable_frames=%d swap_buffers_us=%llu "
           "late_streak=%d wake_late_streak=%d warmup_remaining=%d "
           "classification=%s "
@@ -2550,18 +2821,24 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
           "macos_adaptive_lead_reason=%s "
           "macos_swap_block_streak=%d "
           "macos_severe_swap_streak=%d "
-          "macos_lead_stable_frames=%d "
-          "macos_safe_mode=%d "
-          "macos_early_swap_backpressure=%d"
-          " macos_post_swap_recovery_used=%d "
-          "macos_post_swap_recovery_armed=%d "
-          "macos_post_swap_recovery_cancelled=%d "
-          "macos_post_swap_recovery_frames_before=%d "
-          "macos_post_swap_recovery_frames_after=%d "
-          "macos_post_swap_recovery_lead_us=%llu "
-          "macos_post_swap_recovery_swap_us=%llu "
-          "macos_post_swap_recovery_reason=%s"
-          " display_link_used=%d display_link_status=%s "
+          "macos_swap_block_pressure=%d "
+          "macos_swap_pressure_lead_mode=%d "
+          "macos_swap_pressure_transient_frames=%d "
+          "macos_risky_swap=%d "
+          "macos_severe_swap=%d "
+          "macos_risky_swap_threshold_us=%llu "
+          "macos_severe_swap_threshold_us=%llu "
+	          "macos_wait_overshoot_pressure=%d "
+	          "macos_wait_overshoot_active=%d "
+	          "macos_wait_cap_us=%llu "
+		          "macos_lead_stable_frames=%d "
+		          "macos_safe_mode=%d "
+	          "macos_early_swap_backpressure=%d "
+	          "macos_pre_swap_load_pressure=%d "
+	          "macos_pre_swap_load_frames=%d "
+	          "macos_pre_swap_load_us=%llu "
+	          "macos_pre_swap_load_threshold_us=%llu"
+	          " display_link_used=%d display_link_status=%s "
           "display_link_timed_out=%d display_link_period_us=%llu "
           "display_link_ticks=%llu display_link_ticks_wait=%llu "
           "display_link_wait_us=%llu display_link_final_wait_us=%llu "
@@ -2580,7 +2857,10 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
           "display_link_selected_output_source=%s "
           "display_link_final_wait_capped=%d "
           "display_link_output_phase_accepted=%d "
+          "display_link_output_aligned_present_mode=%d "
+          "display_link_output_aligned_present_enabled=%d "
           "display_link_output_aligned_present=%d "
+          "display_link_output_cap_rejected=%d "
           "display_link_phase_aligned=%d "
           "display_link_phase_align_us=%lld "
           "display_link_output_to_target_us=%lld "
@@ -2593,6 +2873,7 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
           static_cast<unsigned long long>(
               g_iFramePacerLastEffectiveMarginUsec),
           static_cast<unsigned long long>(g_iFramePacerLastNextMarginUsec),
+          static_cast<unsigned long long>(g_iFramePacerLastWaitMarginUsec),
           static_cast<unsigned long long>(g_iFramePacerLastMaxMarginUsec),
           static_cast<long long>(g_iFramePacerLastAdaptiveAdjustUsec),
           g_szFramePacerLastAdaptiveReason, g_iFramePacerStableFrames,
@@ -2638,20 +2919,35 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
           g_szFramePacerLastMacOSAdaptiveLeadReason,
           g_iFramePacerMacOSSwapBlockStreak,
           g_iFramePacerMacOSSevereSwapBlockStreak,
-          g_iFramePacerMacOSLeadStableFrames,
-          g_bFramePacerMacOSSafeMode ? 1 : 0,
-          g_bFramePacerLastMacOSEarlySwapBackpressure ? 1 : 0,
-          g_bFramePacerLastMacOSPostSwapRecoveryUsed ? 1 : 0,
-          g_bFramePacerLastMacOSPostSwapRecoveryArmed ? 1 : 0,
-          g_bFramePacerLastMacOSPostSwapRecoveryCancelled ? 1 : 0,
-          g_iFramePacerLastMacOSPostSwapRecoveryFramesBefore,
-          g_iFramePacerLastMacOSPostSwapRecoveryFramesAfter,
+          g_iFramePacerMacOSSwapBlockPressure,
+          FramePacingMacOSSwapPressureLeadMode(),
+          g_iFramePacerMacOSSwapPressureTransientFrames,
+          FramePacingMacOSRiskySwapBlocked(
+              g_iFramePacerLastSwapBuffersUsec, intervalUsec)
+              ? 1
+              : 0,
+          FramePacingMacOSSevereSwapBlocked(
+              g_iFramePacerLastSwapBuffersUsec, intervalUsec)
+              ? 1
+              : 0,
           static_cast<unsigned long long>(
-              g_iFramePacerLastMacOSPostSwapRecoveryLeadUsec),
+              FramePacingMacOSRiskySwapThresholdUsec(intervalUsec)),
           static_cast<unsigned long long>(
-              g_iFramePacerLastMacOSPostSwapRecoverySwapUsec),
-          g_szFramePacerLastMacOSPostSwapRecoveryReason,
-          g_bFramePacerLastDisplayLinkUsed ? 1 : 0,
+              FramePacingMacOSSevereSwapThresholdUsec(intervalUsec)),
+          g_iFramePacerMacOSWaitOvershootPressure,
+	          g_bFramePacerLastMacOSWaitOvershootPressure ? 1 : 0,
+	          static_cast<unsigned long long>(
+	              g_iFramePacerLastMacOSWaitCapUsec),
+	          g_iFramePacerMacOSLeadStableFrames,
+	          g_bFramePacerMacOSSafeMode ? 1 : 0,
+	          g_bFramePacerLastMacOSEarlySwapBackpressure ? 1 : 0,
+	          g_bFramePacerLastMacOSPreSwapLoadPressure ? 1 : 0,
+	          g_iFramePacerMacOSPreSwapLoadPressureFrames,
+	          static_cast<unsigned long long>(
+	              g_iFramePacerLastMacOSPreSwapLoadUsec),
+	          static_cast<unsigned long long>(
+	              g_iFramePacerLastMacOSPreSwapLoadThresholdUsec),
+	          g_bFramePacerLastDisplayLinkUsed ? 1 : 0,
           g_szFramePacerLastDisplayLinkStatus,
           g_bFramePacerLastDisplayLinkTimedOut ? 1 : 0,
           static_cast<unsigned long long>(
@@ -2693,7 +2989,10 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
           g_szFramePacerLastDisplayLinkSelectedOutputSource,
           g_bFramePacerLastDisplayLinkFinalWaitCapped ? 1 : 0,
           g_bFramePacerLastDisplayLinkOutputPhaseAccepted ? 1 : 0,
+          g_iFramePacerLastDisplayLinkOutputAlignedPresentMode,
+          g_bFramePacerLastDisplayLinkOutputAlignedPresentEnabled ? 1 : 0,
           g_bFramePacerLastDisplayLinkOutputAlignedPresent ? 1 : 0,
+          g_bFramePacerLastDisplayLinkOutputCapRejected ? 1 : 0,
           g_bFramePacerLastDisplayLinkPhaseAligned ? 1 : 0,
           static_cast<long long>(
               g_iFramePacerLastDisplayLinkPhaseAlignUsec),
@@ -2719,10 +3018,12 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
 }
 
 void RageDisplay::ResetFramePacing(const char* reason) {
-  const float targetHz = ClampFramePacingHz(g_fFramePacingTargetHz.Get());
+  const float targetHz =
+      EffectiveFramePacingTargetHz(GetActualVideoModeParams().rate);
   const bool wasEnabled =
       g_bFramePacerWasEnabled || g_iFramePacerNextPresentUsec != 0;
   ResetFramePacer();
+  ResetFramePresentationTelemetry();
 #ifdef __APPLE__
   MacOSFramePacingResetDisplayLink(reason != nullptr ? reason : "manual");
 #endif
@@ -2732,11 +3033,13 @@ void RageDisplay::ResetFramePacing(const char* reason) {
   }
 
   g_iFramePacerWarmupFramesRemaining = FramePacingAdaptiveWarmupFrames();
-  LOG->Trace(
-      "FRAME_PACING: reset reason=%s target_hz=%.3f warmup_frames=%d "
-      "was_enabled=%d",
-      reason != nullptr ? reason : "manual", targetHz,
-      g_iFramePacerWarmupFramesRemaining, wasEnabled ? 1 : 0);
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "FRAME_PACING: reset reason=%s target_hz=%.3f warmup_frames=%d "
+        "was_enabled=%d",
+        reason != nullptr ? reason : "manual", targetHz,
+        g_iFramePacerWarmupFramesRemaining, wasEnabled ? 1 : 0);
+  }
 }
 
 RageCompiledGeometry::~RageCompiledGeometry() { m_bNeedsNormals = false; }

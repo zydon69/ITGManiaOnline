@@ -1,6 +1,7 @@
 #import "LowLevelWindow_MacOSX.h"
 #import "DisplaySpec.h"
 #import "MacOSFramePacing.h"
+#import "PerfDiagnostics.h"
 #import "Preference.h"
 #import "RageDisplay_OGL_Helpers.h"
 #import "RageLog.h"
@@ -42,31 +43,29 @@ static RageMutex g_ResizeLock("Window resize lock.");
 constexpr float kMacOSFramePacingDisplayLinkTimeoutMs = 33.0f;
 constexpr float kMacOSFramePacingDisplayLinkPresentLeadMs = 2.0f;
 constexpr float kMacOSFramePacingDisplayLinkLateToleranceMs = 1.0f;
-constexpr float kMacOSFramePacingDisplayLinkFinalSleepChunkMs = 1.0f;
-constexpr float kMacOSFramePacingDisplayLinkFinalYieldMs = 2.0f;
-constexpr float kMacOSFramePacingDisplayLinkFinalSpinMs = 1.0f;
+constexpr float kMacOSFramePacingDisplayLinkFinalSleepChunkMs = 0.5f;
+constexpr float kMacOSFramePacingDisplayLinkFinalYieldMs = 5.0f;
+constexpr float kMacOSFramePacingDisplayLinkFinalSpinMs = 1.5f;
+constexpr float kMacOSOpenGLFenceAutoWaitHighRefreshMs = 1.5f;
+constexpr float kMacOSOpenGLFenceAutoMinRefreshHz = 90.0f;
+constexpr float kMacOSOpenGLFenceTraceMinMs = 12.0f;
 static Preference<float> g_fPerfTraceSlowMacSwapBuffersMs(
     "PerfTraceSlowMacSwapBuffersMs", 20.0f);
-static Preference<bool> g_bMacOSFramePacingOwnsSwapInterval(
-    "MacOSFramePacingOwnsSwapInterval", true);
-static Preference<bool> g_bMacOSFramePacingUseDisplayLink(
-    "MacOSFramePacingUseDisplayLink", true);
-static Preference<float> g_fMacOSFramePacingDisplayLinkTimeoutMs(
-    "MacOSFramePacingDisplayLinkTimeoutMs", 33.0f);
-static Preference<float> g_fMacOSFramePacingDisplayLinkPresentLeadMs(
-    "MacOSFramePacingDisplayLinkPresentLeadMs", 2.0f);
-static Preference<float> g_fMacOSFramePacingDisplayLinkLateToleranceMs(
-    "MacOSFramePacingDisplayLinkLateToleranceMs", 1.0f);
-static Preference<float> g_fMacOSFramePacingDisplayLinkFinalSleepChunkMs(
-    "MacOSFramePacingDisplayLinkFinalSleepChunkMs", 1.0f);
-static Preference<float> g_fMacOSFramePacingDisplayLinkFinalYieldMs(
-    "MacOSFramePacingDisplayLinkFinalYieldMs", 2.0f);
-static Preference<float> g_fMacOSFramePacingDisplayLinkFinalSpinMs(
-    "MacOSFramePacingDisplayLinkFinalSpinMs", 1.0f);
-
+// -1 means "auto": on high-refresh macOS/OpenGL, wait on the GPU fence until it
+// signals, but only up to a small budget.  This is not a blind sleep; it returns
+// as soon as GPU work is complete, and prevents CGLFlushDrawable from becoming
+// the first place that discovers unfinished GPU work.
+static Preference<float> g_fMacOSOpenGLFencePacingWaitMs(
+    "MacOSOpenGLFencePacingWaitMs", -1.0f);
 extern Preference<float> g_fFramePacingTargetHz;
 
+static MacOSOpenGLFenceWaitStats g_LastOpenGLFenceWaitStats;
+
 namespace {
+bool MacOSFramePacingUseDisplayLinkEnabled() {
+  return true;
+}
+
 float MacOSFramePacingDisplayLinkTimeoutMs() {
   return kMacOSFramePacingDisplayLinkTimeoutMs;
 }
@@ -89,6 +88,10 @@ float MacOSFramePacingDisplayLinkFinalYieldMs() {
 
 float MacOSFramePacingDisplayLinkFinalSpinMs() {
   return kMacOSFramePacingDisplayLinkFinalSpinMs;
+}
+
+int MacOSFramePacingOutputAlignedPresentMode() {
+  return 1;
 }
 }  // namespace
 
@@ -182,19 +185,24 @@ struct DisplayLinkFinalWaitStats {
 };
 
 uint64_t DisplayLinkFinalSleepChunkUsec(uint64_t intervalUsec) {
+  const uint64_t maxSleepUsec =
+      std::max<uint64_t>(100, std::min<uint64_t>(500, intervalUsec / 8));
   return ClampedDisplayLinkUsecPreference(
-      MacOSFramePacingDisplayLinkFinalSleepChunkMs(), 1000, 100,
-      std::max<uint64_t>(100, std::min<uint64_t>(2000, intervalUsec / 2)));
+      MacOSFramePacingDisplayLinkFinalSleepChunkMs(), 500, 100,
+      maxSleepUsec);
 }
 
 uint64_t DisplayLinkFinalYieldWindowUsec(
     uint64_t periodUsec, uint64_t intervalUsec) {
   const uint64_t effectivePeriodUsec =
       periodUsec != 0 ? periodUsec : intervalUsec;
-  return ClampedDisplayLinkUsecPreference(
-      MacOSFramePacingDisplayLinkFinalYieldMs(), 2000, 250,
-      std::max<uint64_t>(250, std::min<uint64_t>(4000,
-                                                 effectivePeriodUsec / 2)));
+  const uint64_t maxYieldUsec = std::max<uint64_t>(
+      5000, std::min<uint64_t>(7000, (effectivePeriodUsec * 3) / 4));
+  const uint64_t requestedYieldUsec =
+      ClampedDisplayLinkUsecPreference(
+          MacOSFramePacingDisplayLinkFinalYieldMs(), 5000, 1000,
+          maxYieldUsec);
+  return std::max<uint64_t>(5000, requestedYieldUsec);
 }
 
 uint64_t DisplayLinkFinalSpinWindowUsec(
@@ -204,11 +212,13 @@ uint64_t DisplayLinkFinalSpinWindowUsec(
       periodUsec != 0 ? periodUsec : intervalUsec;
   const uint64_t maxSpinUsec = std::min<uint64_t>(
       std::max<uint64_t>(100, yieldWindowUsec),
-      std::max<uint64_t>(100, std::min<uint64_t>(1000,
-                                                 effectivePeriodUsec / 8)));
-  return ClampedDisplayLinkUsecPreference(
-      MacOSFramePacingDisplayLinkFinalSpinMs(), 250, 0,
-      maxSpinUsec);
+      std::max<uint64_t>(1500, std::min<uint64_t>(2500,
+                                                  effectivePeriodUsec / 4)));
+  const uint64_t requestedSpinUsec =
+      ClampedDisplayLinkUsecPreference(
+          MacOSFramePacingDisplayLinkFinalSpinMs(), 1500, 0,
+          maxSpinUsec);
+  return std::max<uint64_t>(1500, requestedSpinUsec);
 }
 
 DisplayLinkFinalWaitStats WaitUntilDisplayLinkPresentUsec(
@@ -374,6 +384,9 @@ uint64_t CappedDisplayLinkDesiredPresentUsec(
 
 bool DisplayLinkUseOutputAlignedPresent(
     uint64_t periodUsec, uint64_t intervalUsec) {
+  if (MacOSFramePacingOutputAlignedPresentMode() == 0) {
+    return false;
+  }
   if (periodUsec == 0 || intervalUsec == 0) {
     return false;
   }
@@ -395,6 +408,39 @@ struct DisplayLinkOutputPhase {
   bool valid = false;
   bool phase_accepted = false;
 };
+
+bool DisplayLinkOutputAlignedPresentWouldCap(
+    const DisplayLinkOutputPhase& outputPhase, uint64_t presentLeadUsec,
+    uint64_t latestPresentUsec, uint64_t phaseToleranceUsec,
+    uint64_t displayLinkTickCount, int outputAlignedPresentMode) {
+  if (!outputPhase.valid || !outputPhase.phase_accepted ||
+      outputPhase.output_usec <= presentLeadUsec) {
+    return false;
+  }
+
+  const uint64_t desiredPresentUsec =
+      outputPhase.output_usec - presentLeadUsec;
+  if (desiredPresentUsec <= latestPresentUsec) {
+    return false;
+  }
+
+  if (outputAlignedPresentMode != 3) {
+    return false;
+  }
+
+  constexpr uint64_t kWarmupDisplayLinkTicks = 45;
+  if (displayLinkTickCount <= kWarmupDisplayLinkTicks) {
+    return false;
+  }
+
+  const uint64_t aheadUsec =
+      outputPhase.output_to_target_usec > 0
+          ? static_cast<uint64_t>(outputPhase.output_to_target_usec)
+          : 0;
+  const uint64_t strictAheadThresholdUsec =
+      std::max<uint64_t>(1500, (phaseToleranceUsec * 3) / 4);
+  return aheadUsec >= strictAheadThresholdUsec;
+}
 
 void ConsiderDisplayLinkOutputCandidate(
     uint64_t candidateUsec, const char* source, uint64_t targetPresentUsec,
@@ -427,7 +473,8 @@ void ConsiderDisplayLinkOutputCandidate(
 
 DisplayLinkOutputPhase SelectDisplayLinkOutputForTarget(
     uint64_t lastOutputUsec, uint64_t targetPresentUsec,
-    uint64_t periodUsec, uint64_t phaseToleranceUsec) {
+    uint64_t periodUsec, uint64_t phaseToleranceUsec,
+    bool allowNextOutput) {
   DisplayLinkOutputPhase best;
   if (lastOutputUsec == 0) {
     return best;
@@ -441,7 +488,8 @@ DisplayLinkOutputPhase SelectDisplayLinkOutputForTarget(
   ConsiderDisplayLinkOutputCandidate(
       lastOutputUsec, "current", targetPresentUsec, phaseToleranceUsec,
       &best);
-  if (periodUsec != 0 && lastOutputUsec <= UINT64_MAX - periodUsec) {
+  if (allowNextOutput && periodUsec != 0 &&
+      lastOutputUsec <= UINT64_MAX - periodUsec) {
     ConsiderDisplayLinkOutputCandidate(
         lastOutputUsec + periodUsec, "next", targetPresentUsec,
         phaseToleranceUsec, &best);
@@ -466,7 +514,7 @@ class MacOSDisplayLinkPacer {
       uint64_t presentLeadOverrideUsec,
       MacOSFramePacingDisplayLinkStats* stats) {
     FillBaseStats(stats);
-    if (!g_bMacOSFramePacingUseDisplayLink.Get()) {
+    if (!MacOSFramePacingUseDisplayLinkEnabled()) {
       if (stats != nullptr) {
         stats->status = "disabled";
       }
@@ -502,6 +550,8 @@ class MacOSDisplayLinkPacer {
             initialPeriodUsec, intervalUsec, presentLeadOverrideUsec);
     const uint64_t initialLateToleranceUsec =
         DisplayLinkLateToleranceUsec(initialPeriodUsec, intervalUsec);
+    const int outputAlignedPresentMode =
+        MacOSFramePacingOutputAlignedPresentMode();
     const bool initialOutputAlignedPresent =
         DisplayLinkUseOutputAlignedPresent(initialPeriodUsec, intervalUsec);
     const uint64_t latestAllowedUsec =
@@ -517,14 +567,32 @@ class MacOSDisplayLinkPacer {
           m_LastPeriodUsec != 0 ? m_LastPeriodUsec : intervalUsec;
       const uint64_t phaseToleranceUsec =
           DisplayLinkPhaseToleranceUsec(currentPeriodUsec, intervalUsec);
+      const uint64_t currentPresentLeadUsec =
+          DisplayLinkPresentLeadUsec(
+              currentPeriodUsec, intervalUsec, presentLeadOverrideUsec);
+      const uint64_t currentLateToleranceUsec =
+          DisplayLinkLateToleranceUsec(currentPeriodUsec, intervalUsec);
+      const uint64_t currentLatestPresentUsec =
+          (targetPresentUsec > currentPresentLeadUsec
+               ? targetPresentUsec - currentPresentLeadUsec
+               : targetPresentUsec) +
+          currentLateToleranceUsec;
       const bool outputAlignedPresent =
           DisplayLinkUseOutputAlignedPresent(currentPeriodUsec, intervalUsec);
       const DisplayLinkOutputPhase outputPhase =
           SelectDisplayLinkOutputForTarget(
               m_LastOutputRageUsec, targetPresentUsec,
-              currentPeriodUsec, phaseToleranceUsec);
+              currentPeriodUsec, phaseToleranceUsec,
+              outputAlignedPresentMode < 2);
+      const bool outputAlignedCapRejected =
+          outputAlignedPresentMode == 3 &&
+          DisplayLinkOutputAlignedPresentWouldCap(
+              outputPhase, currentPresentLeadUsec,
+              currentLatestPresentUsec, phaseToleranceUsec,
+              m_TickCount, outputAlignedPresentMode);
 
-      if (outputAlignedPresent && outputPhase.phase_accepted) {
+      if (outputAlignedPresent && outputPhase.phase_accepted &&
+          !outputAlignedCapRejected) {
         status = "output_aligned";
         break;
       }
@@ -575,14 +643,23 @@ class MacOSDisplayLinkPacer {
     const DisplayLinkOutputPhase outputPhase =
         SelectDisplayLinkOutputForTarget(
             lastOutputUsec, targetPresentUsec, periodUsec,
-            phaseToleranceUsec);
+            phaseToleranceUsec, outputAlignedPresentMode < 2);
     const bool outputAlignedPresent =
         DisplayLinkUseOutputAlignedPresent(periodUsec, intervalUsec) &&
-        outputPhase.phase_accepted;
+        outputPhase.phase_accepted &&
+        !(outputAlignedPresentMode == 3 &&
+          DisplayLinkOutputAlignedPresentWouldCap(
+              outputPhase, presentLeadUsec, latestPresentUsec,
+              phaseToleranceUsec, tickCount, outputAlignedPresentMode));
+    const bool outputAlignedCapRejected =
+        DisplayLinkUseOutputAlignedPresent(periodUsec, intervalUsec) &&
+        outputPhase.phase_accepted && !outputAlignedPresent &&
+        outputAlignedPresentMode == 3;
     const bool selectedOutputPhaseAccepted =
         outputPhase.phase_accepted;
     uint64_t desiredPresentUsec =
-        selectedOutputPhaseAccepted && outputPhase.output_usec > presentLeadUsec
+        outputAlignedPresent && selectedOutputPhaseAccepted &&
+                outputPhase.output_usec > presentLeadUsec
             ? outputPhase.output_usec - presentLeadUsec
             : targetPresentUsec > presentLeadUsec
                   ? targetPresentUsec - presentLeadUsec
@@ -592,6 +669,8 @@ class MacOSDisplayLinkPacer {
         desiredPresentUsec, latestPresentUsec, &finalWaitCapped);
     if (!timedOut && outputAlignedPresent) {
       status = "output_aligned";
+    } else if (!timedOut && outputAlignedCapRejected) {
+      status = "output_cap_rejected";
     } else if (!timedOut && !selectedOutputPhaseAccepted &&
         std::strcmp(status, "target_cap") != 0) {
       status = "phase_miss";
@@ -645,7 +724,11 @@ class MacOSDisplayLinkPacer {
                     static_cast<int64_t>(outputPhase.output_usec);
       stats->final_wait_capped = finalWaitCapped;
       stats->output_phase_accepted = selectedOutputPhaseAccepted;
+      stats->output_aligned_present_mode = outputAlignedPresentMode;
       stats->output_aligned_present = outputAlignedPresent;
+      stats->output_aligned_cap_rejected = outputAlignedCapRejected;
+      stats->output_aligned_present_enabled =
+          outputAlignedPresentMode != 0;
       stats->selected_output_source = outputPhase.source;
       stats->status = status;
     }
@@ -656,13 +739,30 @@ class MacOSDisplayLinkPacer {
     std::lock_guard<std::mutex> lock(m_Mutex);
     m_TickCount = 0;
     m_LastOutputRageUsec = 0;
-    LOG->Trace(
-        "MACOS_DISPLAY_LINK: reset reason=%s started=%d failed=%d",
-        reason != nullptr ? reason : "manual", m_Started ? 1 : 0,
-        m_Failed ? 1 : 0);
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "MACOS_DISPLAY_LINK: reset reason=%s started=%d failed=%d",
+          reason != nullptr ? reason : "manual", m_Started ? 1 : 0,
+          m_Failed ? 1 : 0);
+    }
   }
 
-  bool Enabled() const { return g_bMacOSFramePacingUseDisplayLink.Get(); }
+  bool Enabled() const { return MacOSFramePacingUseDisplayLinkEnabled(); }
+
+  bool GetLastOutputSnapshot(
+      uint64_t* lastOutputUsec, uint64_t* periodUsec) {
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    if (m_LastOutputRageUsec == 0) {
+      return false;
+    }
+    if (lastOutputUsec != nullptr) {
+      *lastOutputUsec = m_LastOutputRageUsec;
+    }
+    if (periodUsec != nullptr) {
+      *periodUsec = m_LastPeriodUsec;
+    }
+    return true;
+  }
 
  private:
   static CVReturn Callback(
@@ -748,11 +848,13 @@ class MacOSDisplayLinkPacer {
           static_cast<uint64_t>(std::llround(actualPeriod * 1000000.0));
       m_LastPeriodUsec = actualPeriodUsec;
     }
-    LOG->Trace(
-        "MACOS_DISPLAY_LINK: started actual_period_us=%llu "
-        "current_context=%p bind_result=%d",
-        static_cast<unsigned long long>(actualPeriodUsec),
-        m_BoundContext, static_cast<int>(m_LastBindResult));
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "MACOS_DISPLAY_LINK: started actual_period_us=%llu "
+          "current_context=%p bind_result=%d",
+          static_cast<unsigned long long>(actualPeriodUsec),
+          m_BoundContext, static_cast<int>(m_LastBindResult));
+    }
     return true;
   }
 
@@ -779,9 +881,11 @@ class MacOSDisplayLinkPacer {
     m_LastBindResult = CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(
         displayLink, currentContext, pixelFormat);
     m_BoundContext = currentContext;
-    LOG->Trace(
-        "MACOS_DISPLAY_LINK: bound_context context=%p result=%d",
-        currentContext, static_cast<int>(m_LastBindResult));
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "MACOS_DISPLAY_LINK: bound_context context=%p result=%d",
+          currentContext, static_cast<int>(m_LastBindResult));
+    }
   }
 
   void FillBaseStats(MacOSFramePacingDisplayLinkStats* stats) const {
@@ -789,7 +893,7 @@ class MacOSDisplayLinkPacer {
       return;
     }
     stats->available = true;
-    stats->enabled = g_bMacOSFramePacingUseDisplayLink.Get();
+    stats->enabled = MacOSFramePacingUseDisplayLinkEnabled();
     stats->started = m_Started;
     stats->status =
         !stats->enabled ? "disabled" : m_Failed ? "failed" : "available";
@@ -817,6 +921,12 @@ bool MacOSFramePacingDisplayLinkEnabled() {
   return DisplayLinkPacer().Enabled();
 }
 
+static bool MacOSFramePacingGetLastDisplayLinkOutput(
+    uint64_t* lastOutputUsec, uint64_t* periodUsec) {
+  return DisplayLinkPacer().GetLastOutputSnapshot(
+      lastOutputUsec, periodUsec);
+}
+
 bool MacOSFramePacingWaitForDisplayLink(
     uint64_t targetPresentUsec, uint64_t intervalUsec, bool appHasFocus,
     uint64_t presentLeadOverrideUsec,
@@ -830,6 +940,14 @@ void MacOSFramePacingResetDisplayLink(const char* reason) {
   DisplayLinkPacer().Reset(reason);
 }
 
+bool MacOSOpenGLGetLastFenceWaitStats(MacOSOpenGLFenceWaitStats* stats) {
+  if (stats == nullptr) {
+    return false;
+  }
+  *stats = g_LastOpenGLFenceWaitStats;
+  return stats->available;
+}
+
 static float ExpectedFrameMsForRate(int rate) {
   return rate > 0 ? 1000.0f / static_cast<float>(rate) : 0.0f;
 }
@@ -841,17 +959,50 @@ static int MissedIntervalsForElapsedMs(float elapsedMs, float expectedMs) {
   return std::max(0, static_cast<int>(std::ceil(elapsedMs / expectedMs)) - 1);
 }
 
-static bool MacOSFramePacingOwnsSwapInterval() {
-  const float targetHz = g_fFramePacingTargetHz.Get();
-  return g_bMacOSFramePacingOwnsSwapInterval.Get() &&
-         std::isfinite(targetHz) && targetHz > 0.0f;
+static float ClampMacOSFramePacingHz(float targetHz) {
+  if (!std::isfinite(targetHz) || targetHz <= 0.0f) {
+    return 0.0f;
+  }
+  return std::clamp(targetHz, 10.0f, 1000.0f);
+}
+
+static float EffectiveMacOSFramePacingTargetHz(const VideoModeParams& params) {
+  const float configuredHz =
+      ClampMacOSFramePacingHz(g_fFramePacingTargetHz.Get());
+  if (configuredHz > 0.0f) {
+    return configuredHz;
+  }
+  return params.rate > 0
+             ? ClampMacOSFramePacingHz(static_cast<float>(params.rate))
+             : 0.0f;
+}
+
+static int MacOSOpenGLOffscreenPresentMode() {
+  return 1;
+}
+
+static const char* MacOSOpenGLOffscreenPresentModeName(int mode) {
+  switch (mode) {
+    case 0:
+      return "off";
+    case 1:
+      return "auto";
+    case 2:
+      return "always";
+    default:
+      return "unknown";
+  }
+}
+
+static int MacOSOpenGLOffscreenPresentMinRate() {
+  return 90;
 }
 
 static GLint DesiredMacOSSwapInterval(const VideoModeParams& params) {
   if (!params.vsync) {
     return 0;
   }
-  return MacOSFramePacingOwnsSwapInterval() ? 0 : 1;
+  return EffectiveMacOSFramePacingTargetHz(params) > 0.0f ? 0 : 1;
 }
 
 static GLint CurrentMacOSSwapInterval(NSOpenGLContext* context) {
@@ -867,6 +1018,90 @@ static GLint CurrentMacOSSwapInterval(NSOpenGLContext* context) {
   return swap;
 }
 
+static GLint DesiredMacOSMPSwapsInFlight() {
+  return 1;
+}
+
+static bool MacOSOpenGLHardwareVsyncForcedEnabled() {
+  return false;
+}
+
+static uint64_t MacOSOpenGLFencePacingWaitUsec(
+    const VideoModeParams& params) {
+  const float requestedMs = g_fMacOSOpenGLFencePacingWaitMs.Get();
+  if (!std::isfinite(requestedMs)) {
+    return 0;
+  }
+
+  float effectiveMs = requestedMs;
+  if (requestedMs < 0.0f) {
+    const float targetHz = EffectiveMacOSFramePacingTargetHz(params);
+    const bool highRefresh =
+        (targetHz >= kMacOSOpenGLFenceAutoMinRefreshHz) ||
+        (params.rate >= static_cast<int>(kMacOSOpenGLFenceAutoMinRefreshHz));
+    effectiveMs = highRefresh ? kMacOSOpenGLFenceAutoWaitHighRefreshMs : 0.0f;
+  }
+  if (effectiveMs <= 0.0f) {
+    return 0;
+  }
+  return std::min<uint64_t>(
+      5000,
+      static_cast<uint64_t>(std::llround(effectiveMs * 1000.0f)));
+}
+
+static const char* MacOSOpenGLFenceWaitStatusName(GLenum status) {
+  switch (status) {
+    case GL_ALREADY_SIGNALED:
+      return "already_signaled";
+    case GL_CONDITION_SATISFIED:
+      return "condition_satisfied";
+    case GL_TIMEOUT_EXPIRED:
+      return "timeout";
+    case GL_WAIT_FAILED:
+      return "wait_failed";
+    default:
+      return "unknown";
+  }
+}
+
+static GLint CurrentMacOSMPSwapsInFlight(NSOpenGLContext* context) {
+  if (context == nil) {
+    return -1;
+  }
+
+  GLint swapsInFlight = -1;
+  if (CGLGetParameter(
+          [context CGLContextObj], kCGLCPMPSwapsInFlight,
+          &swapsInFlight) != kCGLNoError) {
+    return -1;
+  }
+  return swapsInFlight;
+}
+
+static GLint ApplyMacOSMPSwapsInFlight(NSOpenGLContext* context) {
+  const GLint requestedSwapsInFlight = DesiredMacOSMPSwapsInFlight();
+  const GLint previousSwapsInFlight = CurrentMacOSMPSwapsInFlight(context);
+  if (context == nil || requestedSwapsInFlight <= 0) {
+    LOG->Trace(
+        "MacOS OpenGL MP swaps in flight configured: requested=%d actual=%d "
+        "previous=%d enabled=%d error=%d",
+        requestedSwapsInFlight, previousSwapsInFlight, previousSwapsInFlight,
+        0, 0);
+    return previousSwapsInFlight;
+  }
+
+  GLint appliedSwapsInFlight = requestedSwapsInFlight;
+  const CGLError error = CGLSetParameter(
+      [context CGLContextObj], kCGLCPMPSwapsInFlight, &appliedSwapsInFlight);
+  const GLint actualSwapsInFlight = CurrentMacOSMPSwapsInFlight(context);
+  LOG->Trace(
+      "MacOS OpenGL MP swaps in flight configured: requested=%d actual=%d "
+      "previous=%d enabled=%d error=%d",
+      requestedSwapsInFlight, actualSwapsInFlight, previousSwapsInFlight, 1,
+      static_cast<int>(error));
+  return actualSwapsInFlight;
+}
+
 static GLint ApplyMacOSSwapInterval(
     NSOpenGLContext* context, const VideoModeParams& params, bool windowed) {
   const GLint previousSwap = CurrentMacOSSwapInterval(context);
@@ -878,10 +1113,17 @@ static GLint ApplyMacOSSwapInterval(
       "MacOS swap interval configured: requested_vsync=%d "
       "desired_swap_interval=%d actual_swap_interval=%d "
       "previous_swap_interval=%d frame_pacing_owns_swap=%d "
-      "frame_pacing_target_hz=%.3f windowed=%d error=%d",
+      "hardware_vsync_forced=%d "
+      "frame_pacing_target_hz=%.3f configured_frame_pacing_target_hz=%.3f "
+      "windowed=%d error=%d",
       params.vsync ? 1 : 0, desiredSwap, actualSwap, previousSwap,
-      MacOSFramePacingOwnsSwapInterval() ? 1 : 0,
-      g_fFramePacingTargetHz.Get(), windowed ? 1 : 0,
+      actualSwap == 0 &&
+              EffectiveMacOSFramePacingTargetHz(params) > 0.0f
+          ? 1
+          : 0,
+      MacOSOpenGLHardwareVsyncForcedEnabled() ? 1 : 0,
+      EffectiveMacOSFramePacingTargetHz(params), g_fFramePacingTargetHz.Get(),
+      windowed ? 1 : 0,
       static_cast<int>(error));
   return actualSwap;
 }
@@ -1169,6 +1411,27 @@ LowLevelWindow_MacOSX::~LowLevelWindow_MacOSX() {
   [m_WindowDelegate release];
 }
 
+bool LowLevelWindow_MacOSX::ShouldRenderOffscreen() const {
+  const int mode = MacOSOpenGLOffscreenPresentMode();
+  if (mode == 0) {
+    return false;
+  }
+
+  const float targetHz = EffectiveMacOSFramePacingTargetHz(m_CurrentParams);
+  if (mode == 2) {
+    return true;
+  }
+
+  return targetHz >= static_cast<float>(MacOSOpenGLOffscreenPresentMinRate());
+}
+
+const ActualVideoModeParams LowLevelWindow_MacOSX::GetActualVideoModeParams()
+    const {
+  return ActualVideoModeParams(
+      m_CurrentParams, m_CurrentParams.width, m_CurrentParams.height,
+      ShouldRenderOffscreen());
+}
+
 void* LowLevelWindow_MacOSX::GetProcAddress(std::string s) {
   // dlsym returns NULL if symbol not found
   static void* glHandle = nullptr;
@@ -1194,10 +1457,16 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
 #undef X
   const GLint desiredSwapInterval = DesiredMacOSSwapInterval(p);
   const GLint currentSwapInterval = CurrentMacOSSwapInterval(m_Context);
+  const GLint desiredMPSwapsInFlight = DesiredMacOSMPSwapsInFlight();
+  const GLint currentMPSwapsInFlight = CurrentMacOSMPSwapsInFlight(m_Context);
   const bool bChangeVsync =
       bRebuildContext || currentSwapInterval != desiredSwapInterval;
+  const bool bChangeMPSwapsInFlight =
+      bRebuildContext ||
+      (desiredMPSwapsInFlight > 0 &&
+       currentMPSwapsInFlight != desiredMPSwapsInFlight);
 
-  if (!bChangeMode && !bChangeVsync) {
+  if (!bChangeMode && !bChangeVsync && !bChangeMPSwapsInFlight) {
     return std::string();
   }
 
@@ -1256,6 +1525,19 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
           ApplyMacOSSwapInterval(m_Context, p, true);
       m_CurrentParams.vsync = actualSwap != 0;
     }
+    if (bChangeMPSwapsInFlight) {
+      ApplyMacOSMPSwapsInFlight(m_Context);
+    }
+
+    LOG->Trace(
+        "MacOS OpenGL offscreen present policy: mode=%s mode_value=%d "
+        "enabled=%d target_hz=%.3f min_rate=%d windowed=%d size=%dx%d",
+        MacOSOpenGLOffscreenPresentModeName(
+            MacOSOpenGLOffscreenPresentMode()),
+        MacOSOpenGLOffscreenPresentMode(), ShouldRenderOffscreen() ? 1 : 0,
+        EffectiveMacOSFramePacingTargetHz(m_CurrentParams),
+        MacOSOpenGLOffscreenPresentMinRate(), 1, m_CurrentParams.width,
+        m_CurrentParams.height);
 
     return std::string();
   }
@@ -1302,6 +1584,18 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
         ApplyMacOSSwapInterval(m_Context, p, false);
     m_CurrentParams.vsync = actualSwap != 0;
   }
+  if (bChangeMPSwapsInFlight) {
+    ApplyMacOSMPSwapsInFlight(m_Context);
+  }
+
+  LOG->Trace(
+      "MacOS OpenGL offscreen present policy: mode=%s mode_value=%d enabled=%d "
+      "target_hz=%.3f min_rate=%d windowed=%d size=%dx%d",
+      MacOSOpenGLOffscreenPresentModeName(MacOSOpenGLOffscreenPresentMode()),
+      MacOSOpenGLOffscreenPresentMode(), ShouldRenderOffscreen() ? 1 : 0,
+      EffectiveMacOSFramePacingTargetHz(m_CurrentParams),
+      MacOSOpenGLOffscreenPresentMinRate(), 0, m_CurrentParams.width,
+      m_CurrentParams.height);
 
   return std::string();
 }
@@ -1489,29 +1783,154 @@ void LowLevelWindow_MacOSX::GetDisplaySpecs(DisplaySpecs& specs) const {
 
 void LowLevelWindow_MacOSX::SwapBuffers() {
   RageTimer timer;
+  g_LastOpenGLFenceWaitStats = MacOSOpenGLFenceWaitStats();
   CGLContextObj context = CGLGetCurrentContext();
   GLint swapInterval = -1;
+  GLint swapsInFlight = -1;
   if (context != nullptr) {
     CGLGetParameter(context, kCGLCPSwapInterval, &swapInterval);
+    CGLGetParameter(context, kCGLCPMPSwapsInFlight, &swapsInFlight);
+  }
+  const uint64_t fenceWaitUsec =
+      context != nullptr ? MacOSOpenGLFencePacingWaitUsec(m_CurrentParams) : 0;
+  const bool fencePacingWait = context != nullptr && fenceWaitUsec > 0;
+  const bool fenceTraceEnabled = context != nullptr && PerfDiagnosticsEnabled();
+  const bool fenceEnabled = fencePacingWait || fenceTraceEnabled;
+  bool fenceCreated = false;
+  GLenum fenceImmediateStatus = GL_WAIT_FAILED;
+  GLenum fenceWaitStatus = GL_WAIT_FAILED;
+  float fenceImmediateMs = 0.0f;
+  float fenceWaitMs = 0.0f;
+  GLsync fence = nullptr;
+  uint64_t displayLinkOutputUsec = 0;
+  uint64_t displayLinkPeriodUsec = 0;
+  const bool displayLinkSnapshot =
+      MacOSFramePacingGetLastDisplayLinkOutput(
+          &displayLinkOutputUsec, &displayLinkPeriodUsec);
+  if (fenceEnabled) {
+    fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    fenceCreated = fence != nullptr;
+    if (fenceCreated) {
+      RageTimer fenceImmediateTimer;
+      fenceImmediateStatus =
+          glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+      fenceImmediateMs = fenceImmediateTimer.GetDeltaTime() * 1000.0f;
+      fenceWaitStatus = fenceImmediateStatus;
+      if (fenceImmediateStatus == GL_TIMEOUT_EXPIRED && fencePacingWait) {
+        RageTimer fenceWaitTimer;
+        fenceWaitStatus =
+            glClientWaitSync(fence, 0, fenceWaitUsec * 1000);
+        fenceWaitMs = fenceWaitTimer.GetDeltaTime() * 1000.0f;
+      }
+    }
   }
   const CGLError error = CGLFlushDrawable(context);
+  const uint64_t flushReturnUsec =
+      RageTimer::GetTimeSinceStartMicroseconds();
   const float elapsedMs = timer.GetDeltaTime() * 1000.0f;
+  if (fenceCreated) {
+    glDeleteSync(fence);
+  }
+  const float expectedFrameMs = ExpectedFrameMsForRate(m_CurrentParams.rate);
+  const float configuredTraceMs =
+      std::max(0.0f, g_fPerfTraceSlowMacSwapBuffersMs.Get());
+  const float frameBudgetTraceMs =
+      expectedFrameMs > 0.0f ? expectedFrameMs : 8.0f;
+  const float effectiveTraceMs =
+      configuredTraceMs > 0.0f ? configuredTraceMs : frameBudgetTraceMs;
+  const float fenceTraceMs =
+      std::max(kMacOSOpenGLFenceTraceMinMs, frameBudgetTraceMs * 1.5f);
+  const bool fenceIndicatesGpuBusy =
+      fenceCreated && fenceImmediateStatus == GL_TIMEOUT_EXPIRED;
+  const uint64_t fenceWaitActualUsec =
+      static_cast<uint64_t>(std::llround(std::max(0.0f, fenceWaitMs) * 1000.0f));
+  const bool fenceWaitSaturated =
+      fenceWaitUsec > 0 && fenceWaitActualUsec + 50 >= fenceWaitUsec &&
+      fenceWaitStatus == GL_TIMEOUT_EXPIRED;
+  const bool fenceSlowTrace =
+      fenceTraceEnabled && elapsedMs >= fenceTraceMs;
+  int64_t flushReturnToOutputUsec = 0;
+  int64_t flushReturnPhaseUsec = 0;
+  if (displayLinkSnapshot) {
+    flushReturnToOutputUsec =
+        static_cast<int64_t>(flushReturnUsec) -
+        static_cast<int64_t>(displayLinkOutputUsec);
+    if (displayLinkPeriodUsec != 0) {
+      const int64_t period =
+          static_cast<int64_t>(displayLinkPeriodUsec);
+      flushReturnPhaseUsec = flushReturnToOutputUsec % period;
+      if (flushReturnPhaseUsec < 0) {
+        flushReturnPhaseUsec += period;
+      }
+    }
+  }
+  g_LastOpenGLFenceWaitStats.available = true;
+  g_LastOpenGLFenceWaitStats.pacing_wait_enabled = fencePacingWait;
+  g_LastOpenGLFenceWaitStats.trace_enabled = fenceTraceEnabled;
+  g_LastOpenGLFenceWaitStats.fence_created = fenceCreated;
+  g_LastOpenGLFenceWaitStats.gpu_busy = fenceIndicatesGpuBusy;
+  g_LastOpenGLFenceWaitStats.wait_saturated = fenceWaitSaturated;
+  g_LastOpenGLFenceWaitStats.wait_actual_usec = fenceWaitActualUsec;
+  g_LastOpenGLFenceWaitStats.wait_budget_usec = fenceWaitUsec;
 
-  if (elapsedMs >= g_fPerfTraceSlowMacSwapBuffersMs.Get() ||
-      error != kCGLNoError) {
-    const float expectedFrameMs = ExpectedFrameMsForRate(m_CurrentParams.rate);
+  if (!PerfDiagnosticsEnabled() && error != kCGLNoError) {
+    LOG->Warn(
+        "CGLFlushDrawable failed: error=%d vsync=%d swap_interval=%d "
+        "mps_swaps_in_flight=%d requested_size=%dx%d",
+        static_cast<int>(error), m_CurrentParams.vsync ? 1 : 0,
+        swapInterval, swapsInFlight, g_iWidth, g_iHeight);
+  }
+
+  if (PerfDiagnosticsEnabled() &&
+      (elapsedMs >= effectiveTraceMs || error != kCGLNoError ||
+       fenceSlowTrace)) {
     const int missedIntervals =
         MissedIntervalsForElapsedMs(elapsedMs, expectedFrameMs);
     LOG->Trace(
         "PERF_TRACE: macos_swap_buffers total_ms=%.3f error=%d vsync=%d "
-        "swap_interval=%d frame_pacing_owns_swap=%d "
+        "swap_interval=%d mps_swaps_in_flight=%d "
+        "fence_pacing_wait=%d fence_trace=%d fence_created=%d "
+        "fence_immediate_status=%s "
+        "fence_immediate_ms=%.3f fence_wait_status=%s fence_wait_ms=%.3f "
+        "fence_wait_actual_us=%llu fence_wait_budget_us=%llu "
+        "fence_wait_saturated=%d fence_gpu_busy=%d "
+        "frame_pacing_owns_swap=%d "
+        "hardware_vsync_forced=%d "
+        "display_link_snapshot=%d display_link_output_us=%llu "
+        "display_link_period_us=%llu flush_return_us=%llu "
+        "flush_return_to_output_us=%lld flush_return_phase_us=%lld "
         "frame_pacing_target_hz=%.3f rate=%d windowed=%d "
-        "expected_frame_ms=%.3f missed_intervals=%d requested_size=%dx%d",
+        "expected_frame_ms=%.3f trace_threshold_ms=%.3f "
+        "configured_trace_threshold_ms=%.3f missed_intervals=%d "
+        "requested_size=%dx%d",
         elapsedMs, static_cast<int>(error), m_CurrentParams.vsync ? 1 : 0,
-        swapInterval, MacOSFramePacingOwnsSwapInterval() ? 1 : 0,
-        g_fFramePacingTargetHz.Get(), m_CurrentParams.rate,
-        m_CurrentParams.windowed ? 1 : 0, expectedFrameMs, missedIntervals,
-        m_CurrentParams.width, m_CurrentParams.height);
+        swapInterval, swapsInFlight, fencePacingWait ? 1 : 0,
+        fenceTraceEnabled ? 1 : 0,
+        fenceCreated ? 1 : 0,
+        MacOSOpenGLFenceWaitStatusName(fenceImmediateStatus),
+        fenceImmediateMs,
+        MacOSOpenGLFenceWaitStatusName(fenceWaitStatus),
+        fenceWaitMs,
+        static_cast<unsigned long long>(fenceWaitActualUsec),
+        static_cast<unsigned long long>(fenceWaitUsec),
+        fenceWaitSaturated ? 1 : 0,
+        fenceIndicatesGpuBusy ? 1 : 0,
+        swapInterval == 0 &&
+                EffectiveMacOSFramePacingTargetHz(m_CurrentParams) > 0.0f
+            ? 1
+            : 0,
+        MacOSOpenGLHardwareVsyncForcedEnabled() ? 1 : 0,
+        displayLinkSnapshot ? 1 : 0,
+        static_cast<unsigned long long>(displayLinkOutputUsec),
+        static_cast<unsigned long long>(displayLinkPeriodUsec),
+        static_cast<unsigned long long>(flushReturnUsec),
+        static_cast<long long>(flushReturnToOutputUsec),
+        static_cast<long long>(flushReturnPhaseUsec),
+        EffectiveMacOSFramePacingTargetHz(m_CurrentParams),
+        m_CurrentParams.rate,
+        m_CurrentParams.windowed ? 1 : 0, expectedFrameMs, effectiveTraceMs,
+        configuredTraceMs, missedIntervals, m_CurrentParams.width,
+        m_CurrentParams.height);
   }
 }
 

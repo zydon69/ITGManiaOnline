@@ -30,9 +30,7 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   void SwapBuffers();
   void Update();
 
-  const ActualVideoModeParams GetActualVideoModeParams() const {
-    return m_CurrentParams;
-  }
+  const ActualVideoModeParams GetActualVideoModeParams() const;
 
   bool SupportsRenderToTexture() const { return true; }
   RenderTarget* CreateRenderTarget();
@@ -44,6 +42,7 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   void ShutDownFullScreen();
   int ChangeDisplayMode(const VideoModeParams& p);
   void SetActualParamsFromMode(CFDictionaryRef mode);
+  bool ShouldRenderOffscreen() const;
 };
 
 #ifdef ARCH_LOW_LEVEL_WINDOW

@@ -51,6 +51,7 @@
 #include "PlayerNumber.h"
 #include "PlayerOptions.h"
 #include "PlayerState.h"
+#include "PerfDiagnostics.h"
 #include "Preference.h"
 #include "PrefsManager.h"
 #include "Profile.h"  // for replay data stuff
@@ -117,6 +118,34 @@ static ThemeMetric<bool> FORCE_IMMEDIATE_FAIL_FOR_BATTERY(
 AutoScreenMessage(SM_PlayGo);
 
 static constexpr float ITGONLINE_EVALUATION_HOLD_MAX_SECONDS = 30.0f;
+
+static bool HasActiveITGOnlineRoom() {
+  if (LUA == nullptr) {
+    return false;
+  }
+
+  Lua* L = LUA->Get();
+  const bool ran = LuaHelpers::RunExpression(
+      L, "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil",
+      "ScreenGameplay::HasActiveITGOnlineRoom");
+  const bool active = ran && lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  LUA->Release(L);
+
+  return active;
+}
+
+static void DisableAutoplayForITGOnline(PlayerState* playerState) {
+  if (playerState == nullptr) {
+    return;
+  }
+
+  auto& options = playerState->m_PlayerOptions;
+  PO_GROUP_ASSIGN(options, ModsLevel_Preferred, m_fPlayerAutoPlay, 0.0f);
+  PO_GROUP_ASSIGN(options, ModsLevel_Stage, m_fPlayerAutoPlay, 0.0f);
+  PO_GROUP_ASSIGN(options, ModsLevel_Song, m_fPlayerAutoPlay, 0.0f);
+  playerState->m_PlayerController = PC_HUMAN;
+}
 
 struct GameplayVisualPerfSnapshot {
   bool valid;
@@ -1421,9 +1450,16 @@ void ScreenGameplay::LoadNextSong() {
           &pi->m_pPlayer->GetNoteData());
     }
 
+    const bool bDisableAutoplayForITGOnline = HasActiveITGOnlineRoom();
+
     // Don't mess with the PlayerController of the Dummy player
     if (!pi->m_bIsDummy) {
-      if (GAMESTATE->m_bDemonstrationOrJukebox) {
+      if (bDisableAutoplayForITGOnline) {
+        DisableAutoplayForITGOnline(pi->GetPlayerState());
+        LOG->Trace("ITG Online: disabled autoplay for gameplay player=%s",
+                   PlayerNumberToString(pi->GetPlayerState()->m_PlayerNumber)
+                       .c_str());
+      } else if (GAMESTATE->m_bDemonstrationOrJukebox) {
         pi->GetPlayerState()->m_PlayerController = PC_CPU;
         pi->GetPlayerState()->m_iCpuSkill = 5;
       } else if (GAMESTATE->IsCpuPlayer(pi->GetStepsAndTrailIndex())) {
@@ -2340,7 +2376,9 @@ void ScreenGameplay::DrawPrimitives() {
 
   ActorFrame::PushDrawPerfTraceScope(
       "ScreenGameplayElements",
-      std::max(0.0f, g_fPerfTraceSlowGameplayActorDrawMs.Get()));
+      PerfDiagnosticsEnabled()
+          ? std::max(0.0f, g_fPerfTraceSlowGameplayActorDrawMs.Get())
+          : 0.0f);
   ScreenWithMenuElements::DrawPrimitives();
   ActorFrame::PopDrawPerfTraceScope();
   screenElementsMs = phaseTimer.GetDeltaTime() * 1000.0f;
@@ -2399,7 +2437,8 @@ void ScreenGameplay::DrawPrimitives() {
 
   const float traceThresholdMs =
       std::max(0.0f, g_fPerfTraceSlowGameplayDrawMs.Get());
-  if (totalMs >= traceThresholdMs) {
+  if (PerfDiagnosticsEnabled() && traceThresholdMs > 0.0f &&
+      totalMs >= traceThresholdMs) {
     LOG->Trace(
         "PERF_TRACE: gameplay_draw total_ms=%.3f song_background_ms=%.3f "
         "notefield_board_ms=%.3f clear_zbuffer_ms=%.3f "
