@@ -11,6 +11,7 @@
 #include "LuaManager.h"
 #include "MemoryCardManager.h"
 #include "NetworkManager.h"
+#include "PerfDiagnostics.h"
 #include "PeriodicCaller.h"
 #include "Preference.h"
 #include "PrefsManager.h"
@@ -124,6 +125,10 @@ static const char* ClassifyLoopPerfSnapshot(
 
 static void LogLoopPerfSnapshot(
     const char* reason, const LoopPerfSnapshot& snapshot, bool force = false) {
+  if (!PerfDiagnosticsEnabled()) {
+    return;
+  }
+
   const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
   if (!force && !PerfTraceRateLimit(nowUsec)) {
     return;

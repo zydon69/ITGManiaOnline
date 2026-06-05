@@ -75,6 +75,7 @@
 #include "InputEventPlus.h"
 #include "LuaManager.h"
 #include "MessageManager.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "Preference.h"
 #include "RageDisplay.h"
@@ -227,6 +228,10 @@ static void LogDrawBreakdownPerfBucket(
 }
 
 static void LogDrawBreakdownPerfSummary() {
+  if (!PerfDiagnosticsEnabled()) {
+    return;
+  }
+
   if (g_DrawBreakdownPerfSummary.all.frames == 0) {
     return;
   }
@@ -406,7 +411,7 @@ void AfterDeleteScreen() {
   SONGMAN->Cleanup();
   const float songCleanupMs = cleanupTimer.GetDeltaTime() * 1000.0f;
 
-  if (textureCleanupMs + songCleanupMs >= 2.0f) {
+  if (PerfDiagnosticsEnabled() && textureCleanupMs + songCleanupMs >= 2.0f) {
     LOG->Trace(
         "PERF_TRACE: screen_cleanup texture_gc_ms=%.3f song_cleanup_ms=%.3f",
         textureCleanupMs, songCleanupMs);
@@ -794,7 +799,8 @@ void ScreenManager::Draw() {
 
   const float traceThresholdMs =
       std::max(0.0f, g_fPerfTraceSlowDrawBreakdownMs.Get());
-  if (totalDrawMs >= traceThresholdMs) {
+  if (PerfDiagnosticsEnabled() && traceThresholdMs > 0.0f &&
+      totalDrawMs >= traceThresholdMs) {
     LOG->Trace(
         "PERF_TRACE: draw_breakdown total_ms=%.3f begin_frame_ms=%.3f "
         "shared_bga_ms=%.3f screen_ms=%.3f overlay_ms=%.3f end_frame_ms=%.3f "

@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "LocalizedString.h"
+#include "PerfDiagnostics.h"
 #include "Preference.h"
 #include "RageException.h"
 #include "RageLog.h"
@@ -140,7 +141,7 @@ void RageSoundManager::Update() {
   g_SoundManMutex.Unlock(); /* finished with m_mapPreloadedSounds */
 
   const float cleanupMs = cleanupTimer.GetDeltaTime() * 1000.0f;
-  if (deletedSounds > 0 || cleanupMs >= 2.0f) {
+  if (PerfDiagnosticsEnabled() && (deletedSounds > 0 || cleanupMs >= 2.0f)) {
     LOG->Trace(
         "PERF_TRACE: sound_gc deleted=%d deferred=%d budget=%d elapsed_ms=%.3f "
         "last='%s'",

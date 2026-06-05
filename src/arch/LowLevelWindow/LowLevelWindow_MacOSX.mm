@@ -1,6 +1,7 @@
 #import "LowLevelWindow_MacOSX.h"
 #import "DisplaySpec.h"
 #import "MacOSFramePacing.h"
+#import "PerfDiagnostics.h"
 #import "Preference.h"
 #import "RageDisplay_OGL_Helpers.h"
 #import "RageLog.h"
@@ -50,8 +51,6 @@ constexpr float kMacOSOpenGLFenceAutoMinRefreshHz = 90.0f;
 constexpr float kMacOSOpenGLFenceTraceMinMs = 12.0f;
 static Preference<float> g_fPerfTraceSlowMacSwapBuffersMs(
     "PerfTraceSlowMacSwapBuffersMs", 20.0f);
-static Preference<bool> g_bMacOSOpenGLFenceTrace(
-    "MacOSOpenGLFenceTrace", false);
 // -1 means "auto": on high-refresh macOS/OpenGL, wait on the GPU fence until it
 // signals, but only up to a small budget.  This is not a blind sleep; it returns
 // as soon as GPU work is complete, and prevents CGLFlushDrawable from becoming
@@ -740,10 +739,12 @@ class MacOSDisplayLinkPacer {
     std::lock_guard<std::mutex> lock(m_Mutex);
     m_TickCount = 0;
     m_LastOutputRageUsec = 0;
-    LOG->Trace(
-        "MACOS_DISPLAY_LINK: reset reason=%s started=%d failed=%d",
-        reason != nullptr ? reason : "manual", m_Started ? 1 : 0,
-        m_Failed ? 1 : 0);
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "MACOS_DISPLAY_LINK: reset reason=%s started=%d failed=%d",
+          reason != nullptr ? reason : "manual", m_Started ? 1 : 0,
+          m_Failed ? 1 : 0);
+    }
   }
 
   bool Enabled() const { return MacOSFramePacingUseDisplayLinkEnabled(); }
@@ -847,11 +848,13 @@ class MacOSDisplayLinkPacer {
           static_cast<uint64_t>(std::llround(actualPeriod * 1000000.0));
       m_LastPeriodUsec = actualPeriodUsec;
     }
-    LOG->Trace(
-        "MACOS_DISPLAY_LINK: started actual_period_us=%llu "
-        "current_context=%p bind_result=%d",
-        static_cast<unsigned long long>(actualPeriodUsec),
-        m_BoundContext, static_cast<int>(m_LastBindResult));
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "MACOS_DISPLAY_LINK: started actual_period_us=%llu "
+          "current_context=%p bind_result=%d",
+          static_cast<unsigned long long>(actualPeriodUsec),
+          m_BoundContext, static_cast<int>(m_LastBindResult));
+    }
     return true;
   }
 
@@ -878,9 +881,11 @@ class MacOSDisplayLinkPacer {
     m_LastBindResult = CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(
         displayLink, currentContext, pixelFormat);
     m_BoundContext = currentContext;
-    LOG->Trace(
-        "MACOS_DISPLAY_LINK: bound_context context=%p result=%d",
-        currentContext, static_cast<int>(m_LastBindResult));
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "MACOS_DISPLAY_LINK: bound_context context=%p result=%d",
+          currentContext, static_cast<int>(m_LastBindResult));
+    }
   }
 
   void FillBaseStats(MacOSFramePacingDisplayLinkStats* stats) const {
@@ -1789,8 +1794,7 @@ void LowLevelWindow_MacOSX::SwapBuffers() {
   const uint64_t fenceWaitUsec =
       context != nullptr ? MacOSOpenGLFencePacingWaitUsec(m_CurrentParams) : 0;
   const bool fencePacingWait = context != nullptr && fenceWaitUsec > 0;
-  const bool fenceTraceEnabled =
-      context != nullptr && g_bMacOSOpenGLFenceTrace.Get();
+  const bool fenceTraceEnabled = context != nullptr && PerfDiagnosticsEnabled();
   const bool fenceEnabled = fencePacingWait || fenceTraceEnabled;
   bool fenceCreated = false;
   GLenum fenceImmediateStatus = GL_WAIT_FAILED;
@@ -1869,8 +1873,17 @@ void LowLevelWindow_MacOSX::SwapBuffers() {
   g_LastOpenGLFenceWaitStats.wait_actual_usec = fenceWaitActualUsec;
   g_LastOpenGLFenceWaitStats.wait_budget_usec = fenceWaitUsec;
 
-  if (elapsedMs >= effectiveTraceMs || error != kCGLNoError ||
-      fenceSlowTrace) {
+  if (!PerfDiagnosticsEnabled() && error != kCGLNoError) {
+    LOG->Warn(
+        "CGLFlushDrawable failed: error=%d vsync=%d swap_interval=%d "
+        "mps_swaps_in_flight=%d requested_size=%dx%d",
+        static_cast<int>(error), m_CurrentParams.vsync ? 1 : 0,
+        swapInterval, swapsInFlight, g_iWidth, g_iHeight);
+  }
+
+  if (PerfDiagnosticsEnabled() &&
+      (elapsedMs >= effectiveTraceMs || error != kCGLNoError ||
+       fenceSlowTrace)) {
     const int missedIntervals =
         MissedIntervalsForElapsedMs(elapsedMs, expectedFrameMs);
     LOG->Trace(

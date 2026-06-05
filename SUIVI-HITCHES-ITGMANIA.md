@@ -20,8 +20,8 @@ nouvelle mesure comparative.
   `MacOSOpenGLOffscreenPresentMode=1`, min rate `90`.
 - Fence GPU fonctionnelle en mode auto:
   `MacOSOpenGLFencePacingWaitMs=-1`.
-- Trace fence separee et optionnelle:
-  `MacOSOpenGLFenceTrace=false`.
+- Les traces fence/present sont controlees par le switch global:
+  `PerfDiagnostics=0/1`.
 - Adaptive lead macOS desactive.
 - Continuous `glFinish()` rejete.
 
@@ -70,6 +70,19 @@ Le script `CMake/CheckAudioRefactorInvariants.cmake` doit echouer si:
 - les valeurs audio forcees sortent du bloc macOS.
 
 ## Lecture des logs
+
+Les logs de diagnostic de cette branche sont coupes par defaut.
+
+Pour demander a un joueur de produire un log complet, lui faire ajouter dans
+`Preferences.ini`:
+
+```ini
+PerfDiagnostics=1
+```
+
+Puis lui demander de relancer le jeu et de reproduire le probleme. Les
+correctifs de pacing/audio restent actifs quand `PerfDiagnostics=0`; cette
+preference ne controle que l'instrumentation verbeuse.
 
 Indicateurs principaux:
 

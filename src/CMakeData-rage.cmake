@@ -31,6 +31,7 @@ source_group("Rage\\\\Utils"
              ${SMDATA_RAGE_UTILS_HPP})
 
 list(APPEND SMDATA_RAGE_MISC_SRC
+            "PerfDiagnostics.cpp"
             "RageException.cpp"
             "RageInput.cpp"
             "RageInputDevice.cpp"
@@ -41,6 +42,7 @@ list(APPEND SMDATA_RAGE_MISC_SRC
             "RageTimer.cpp")
 
 list(APPEND SMDATA_RAGE_MISC_HPP
+            "PerfDiagnostics.h"
             "RageException.h"
             "RageInput.h"
             "RageInputDevice.h"

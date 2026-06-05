@@ -6,6 +6,7 @@
 #include <cstring>
 #include <mutex>
 
+#include "PerfDiagnostics.h"
 #include "RageLog.h"
 #include "RageSound.h"
 #include "RageSoundDriver.h"
@@ -169,7 +170,8 @@ static void EnsureUnderrunTraceInitialized() {
 
 static bool IsUnderrunTraceEnabled() {
   EnsureUnderrunTraceInitialized();
-  return g_bUnderrunTraceEnabled.load(std::memory_order_acquire);
+  return g_bUnderrunTraceEnabled.load(std::memory_order_acquire) ||
+         PerfDiagnosticsEnabled();
 }
 
 RageSoundDriver::Sound::Sound() {
@@ -337,8 +339,10 @@ RageSoundMixBuffer& RageSoundDriver::MixIntoBuffer(
       ++underruns;
       static uint64_t sLastUnderrunTraceUsec = 0;
       const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
-      if (sLastUnderrunTraceUsec == 0 ||
-          nowUsec - sLastUnderrunTraceUsec >= kMixerStarvationTracePeriodUsec) {
+      if (traceEnabled &&
+          (sLastUnderrunTraceUsec == 0 ||
+           nowUsec - sLastUnderrunTraceUsec >=
+               kMixerStarvationTracePeriodUsec)) {
         sLastUnderrunTraceUsec = nowUsec;
         const int context =
             g_iUnderrunScreenContext.load(std::memory_order_acquire);
@@ -809,10 +813,13 @@ void RageSoundDriver::Update() {
       // Ignore startup/shutdown underruns when nothing is actively playing.
       logged_underruns = current_underruns;
     } else if (current_underruns > logged_underruns) {
-      LOG->MapLog(
-          "GenericMixingUnderruns", "Mixing underruns: %i",
-          current_underruns - logged_underruns);
-      LOG->Trace("Mixing underruns: %i", current_underruns - logged_underruns);
+      if (IsUnderrunTraceEnabled()) {
+        LOG->MapLog(
+            "GenericMixingUnderruns", "Mixing underruns: %i",
+            current_underruns - logged_underruns);
+        LOG->Trace(
+            "Mixing underruns: %i", current_underruns - logged_underruns);
+      }
       logged_underruns = current_underruns;
 
       /* Don't log again for at least 10 seconds, or we'll burst output
@@ -893,13 +900,17 @@ void RageSoundDriver::StartMixing(RageSoundBase* pSound) {
   if (useStrongPrebuffer && s.GetState() == Sound::BUFFERING &&
       s.m_Buffer.num_readable() < strongStartMinimum &&
       s.m_Buffer.num_writable() > 0) {
-    LOG->Warn(
-        "UNDERRUN_TRACE: start_mixing_strong_prebuffer_wait sound='%s' slot=%u "
-        "serial=%" PRIu64 " readable_blocks=%u writable_blocks=%u target=%u "
-        "minimum=%u retries=%d retry_sleep_us=%d",
-        s.GetDebugPath(), i, s.m_iDebugSerial, s.m_Buffer.num_readable(),
-        s.m_Buffer.num_writable(), prebufferTarget, strongStartMinimum,
-        kStrongStartLastChanceWouldBlockRetries, kStartPrebufferRetrySleepUsec);
+    if (traceEnabled) {
+      LOG->Warn(
+          "UNDERRUN_TRACE: start_mixing_strong_prebuffer_wait sound='%s' "
+          "slot=%u serial=%" PRIu64
+          " readable_blocks=%u writable_blocks=%u target=%u "
+          "minimum=%u retries=%d retry_sleep_us=%d",
+          s.GetDebugPath(), i, s.m_iDebugSerial, s.m_Buffer.num_readable(),
+          s.m_Buffer.num_writable(), prebufferTarget, strongStartMinimum,
+          kStrongStartLastChanceWouldBlockRetries,
+          kStartPrebufferRetrySleepUsec);
+    }
 
     RefillSoundBufferToTarget(
         s, prebufferTarget, "start_mixing_strong_last_chance",
@@ -911,12 +922,14 @@ void RageSoundDriver::StartMixing(RageSoundBase* pSound) {
     if (s.GetState() == Sound::BUFFERING &&
         s.m_Buffer.num_readable() < strongStartMinimum &&
         s.m_Buffer.num_writable() > 0) {
-      LOG->Warn(
-          "UNDERRUN_TRACE: start_mixing_strong_prebuffer_timeout sound='%s' "
-          "slot=%u serial=%" PRIu64
-          " readable_blocks=%u writable_blocks=%u target=%u minimum=%u",
-          s.GetDebugPath(), i, s.m_iDebugSerial, s.m_Buffer.num_readable(),
-          s.m_Buffer.num_writable(), prebufferTarget, strongStartMinimum);
+      if (traceEnabled) {
+        LOG->Warn(
+            "UNDERRUN_TRACE: start_mixing_strong_prebuffer_timeout sound='%s' "
+            "slot=%u serial=%" PRIu64
+            " readable_blocks=%u writable_blocks=%u target=%u minimum=%u",
+            s.GetDebugPath(), i, s.m_iDebugSerial, s.m_Buffer.num_readable(),
+            s.m_Buffer.num_writable(), prebufferTarget, strongStartMinimum);
+      }
     }
   }
 
@@ -924,8 +937,7 @@ void RageSoundDriver::StartMixing(RageSoundBase* pSound) {
     s.SetState(Sound::PLAYING);
   }
 
-  if (traceEnabled || useStrongPrebuffer ||
-      BeginsWith(loadedPath, "<empty-path:")) {
+  if (traceEnabled) {
     LOG->Info(
         "UNDERRUN_TRACE: start_mixing_ready sound='%s' slot=%u serial=%" PRIu64
         " state=%d "
