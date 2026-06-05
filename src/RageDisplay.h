@@ -248,6 +248,8 @@ class RageDisplay {
 
   // Call this when the resolution has been changed externally:
   virtual void ResolutionChanged();
+  virtual void ResetFramePresentationTelemetry();
+  virtual void PrepareForTextureManagerShutdown();
 
   virtual bool BeginFrame();
   virtual void EndFrame();
@@ -469,6 +471,7 @@ class RageDisplay {
   // Lua
   void PushSelf(lua_State* L);
   void ResetFramePacing(const char* reason = nullptr);
+  void ReportFramePacingPreSwapLoad(float renderBeforeSwapMs);
 
  protected:
   RageMatrix GetPerspectiveMatrix(

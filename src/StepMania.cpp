@@ -303,6 +303,9 @@ void ShutdownGame() {
   RageUtil::SafeDelete(LIGHTSMAN);
   RageUtil::SafeDelete(SOUNDMAN);
   RageUtil::SafeDelete(FONT);
+  if (DISPLAY) {
+    DISPLAY->PrepareForTextureManagerShutdown();
+  }
   RageUtil::SafeDelete(TEXTUREMAN);
   RageUtil::SafeDelete(DISPLAY);
   Dialog::Shutdown();
@@ -916,8 +919,9 @@ int sm_main(int argc, char* argv[]) {
     delete pSurface;
   }
 
-  // Enforce conservative audio runtime values even if metrics/preferences are
-  // misconfigured on disk.
+  // Enforce conservative macOS audio runtime values even if local preferences
+  // are stale from tuning runs. Other platforms keep their configured defaults.
+#if defined(__APPLE__)
   constexpr int kForcedSoundWriteAheadFrames = 32768;
   constexpr int kForcedPreferredSampleRate = 48000;
   PREFSMAN->m_iSoundWriteAhead.Set(kForcedSoundWriteAheadFrames);
@@ -927,6 +931,7 @@ int sm_main(int argc, char* argv[]) {
       "SoundPreferredSampleRate=%d",
       PREFSMAN->m_iSoundWriteAhead.Get(),
       PREFSMAN->m_iSoundPreferredSampleRate.Get());
+#endif
 
   std::string playOnceSmokeCountArg;
   const bool runPlayOnceSmokeTest =
