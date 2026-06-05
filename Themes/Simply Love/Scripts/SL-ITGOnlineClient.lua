@@ -2864,6 +2864,9 @@ function ITGOnline:BuildCurrentScoreSnapshot()
 	local formattedScore = FormatPercentScore and tonumber(FormatPercentScore(dancePoints):sub(1, -2)) or nil
 	local scorePercent = math.max(0, math.min(100, formattedScore or (dancePoints * 100)))
 	local displayedPercent = showExScore and exScore or scorePercent
+	if (tonumber(displayedPercent) or 0) <= 0 and scorePercent > 0 then
+		displayedPercent = scorePercent
+	end
 	local combo = 0
 	local comboOk, comboValue = pcall(function() return stats:GetCurrentCombo() end)
 	if comboOk and tonumber(comboValue) then combo = tonumber(comboValue) end
@@ -2907,11 +2910,45 @@ function ITGOnline:QueueLiveScore(snapshot)
 		online_flow_trace("ignored_live_score_multiple_local_players")
 		return false
 	end
+	local scorePercent = tonumber(snapshot.scorePercent or snapshot.ScorePercent) or 0
+	local exScorePercent = tonumber(snapshot.exScorePercent or snapshot.ExScorePercent) or 0
+	local displayedPercent = tonumber(snapshot.displayedPercent or snapshot.DisplayedPercent)
+	if displayedPercent == nil or (displayedPercent <= 0 and scorePercent > 0) then
+		displayedPercent = scorePercent
+	end
+	local combo = tonumber(snapshot.combo or snapshot.Combo) or 0
+	snapshot = {
+		Player = snapshot.Player,
+		ScorePercent = scorePercent,
+		ExScorePercent = exScorePercent,
+		DisplayedPercent = displayedPercent,
+		Combo = combo,
+		scorePercent = scorePercent,
+		exScorePercent = exScorePercent,
+		displayedPercent = displayedPercent,
+		combo = combo,
+	}
 	self.lastDisplayedScoreSnapshot = snapshot
 	self.lastDisplayedScoreSnapshotAt = GetTimeSinceStart()
 	self.pendingLiveScoreRoundKey = self.PlayStateKey and self:PlayStateKey() or tostring(self.currentRoomId or "")
 	self.pendingLiveScoreSnapshot = snapshot
 	return true
+end
+
+function ITGOnline:RememberLiveScoreSnapshot(snapshot)
+	return self:QueueLiveScore(snapshot)
+end
+
+function ITGOnline:QueueLiveScoreTickIfDue(snapshot)
+	if type(snapshot) == "table" then
+		self:RememberLiveScoreSnapshot(snapshot)
+	elseif self.pendingLiveScoreSnapshot == nil and self.BuildCurrentScoreSnapshot then
+		local currentSnapshot = self:BuildCurrentScoreSnapshot()
+		if currentSnapshot then
+			self:RememberLiveScoreSnapshot(currentSnapshot)
+		end
+	end
+	return self:HasPendingLiveScore()
 end
 
 function ITGOnline:HasPendingLiveScore()
@@ -2990,6 +3027,9 @@ function ITGOnline:FlushLiveScore()
 	local snapshot = self.pendingLiveScoreSnapshot
 	if snapshot == nil then return false end
 	local roomPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+	if roomPhase == "starting" then
+		return true
+	end
 	if roomPhase ~= "playing" then
 		self.pendingLiveScoreSnapshot = nil
 		self.pendingLiveScoreRoundKey = ""
@@ -3187,6 +3227,15 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	end
 	if displayedScorePercent == nil then
 		displayedScorePercent = showExScore and exScorePercent or ((tonumber(dancePoints) or 0) * 100)
+	end
+	if (tonumber(displayedScorePercent) or 0) <= 0 then
+		local snapshotScorePercent = tonumber(snapshot and snapshot.scorePercent)
+		local danceScorePercent = (tonumber(dancePoints) or 0) * 100
+		if snapshotScorePercent and snapshotScorePercent > 0 then
+			displayedScorePercent = snapshotScorePercent
+		elseif danceScorePercent > 0 then
+			displayedScorePercent = danceScorePercent
+		end
 	end
 	displayedScorePercent = math.max(0, math.min(100, tonumber(displayedScorePercent) or 0))
 	local judgments = self:ServerJudgments(player)
