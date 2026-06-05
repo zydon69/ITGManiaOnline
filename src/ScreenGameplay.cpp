@@ -118,6 +118,34 @@ AutoScreenMessage(SM_PlayGo);
 
 static constexpr float ITGONLINE_EVALUATION_HOLD_MAX_SECONDS = 30.0f;
 
+static bool HasActiveITGOnlineRoom() {
+  if (LUA == nullptr) {
+    return false;
+  }
+
+  Lua* L = LUA->Get();
+  const bool ran = LuaHelpers::RunExpression(
+      L, "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil",
+      "ScreenGameplay::HasActiveITGOnlineRoom");
+  const bool active = ran && lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  LUA->Release(L);
+
+  return active;
+}
+
+static void DisableAutoplayForITGOnline(PlayerState* playerState) {
+  if (playerState == nullptr) {
+    return;
+  }
+
+  auto& options = playerState->m_PlayerOptions;
+  PO_GROUP_ASSIGN(options, ModsLevel_Preferred, m_fPlayerAutoPlay, 0.0f);
+  PO_GROUP_ASSIGN(options, ModsLevel_Stage, m_fPlayerAutoPlay, 0.0f);
+  PO_GROUP_ASSIGN(options, ModsLevel_Song, m_fPlayerAutoPlay, 0.0f);
+  playerState->m_PlayerController = PC_HUMAN;
+}
+
 struct GameplayVisualPerfSnapshot {
   bool valid;
   float draw_ms;
@@ -1421,9 +1449,16 @@ void ScreenGameplay::LoadNextSong() {
           &pi->m_pPlayer->GetNoteData());
     }
 
+    const bool bDisableAutoplayForITGOnline = HasActiveITGOnlineRoom();
+
     // Don't mess with the PlayerController of the Dummy player
     if (!pi->m_bIsDummy) {
-      if (GAMESTATE->m_bDemonstrationOrJukebox) {
+      if (bDisableAutoplayForITGOnline) {
+        DisableAutoplayForITGOnline(pi->GetPlayerState());
+        LOG->Trace("ITG Online: disabled autoplay for gameplay player=%s",
+                   PlayerNumberToString(pi->GetPlayerState()->m_PlayerNumber)
+                       .c_str());
+      } else if (GAMESTATE->m_bDemonstrationOrJukebox) {
         pi->GetPlayerState()->m_PlayerController = PC_CPU;
         pi->GetPlayerState()->m_iCpuSkill = 5;
       } else if (GAMESTATE->IsCpuPlayer(pi->GetStepsAndTrailIndex())) {

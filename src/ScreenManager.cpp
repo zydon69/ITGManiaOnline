@@ -62,6 +62,7 @@
 #include "ScreenManager.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <map>
 #include <set>
@@ -96,6 +97,150 @@ static Preference<bool> g_bDelayedScreenLoad("DelayedScreenLoad", false);
 static Preference<float> g_fPerfTraceSlowDrawBreakdownMs(
     "PerfTraceSlowDrawBreakdownMs", 16.0f);
 // static Preference<bool> g_bPruneFonts( "PruneFonts", true );
+
+struct DrawBreakdownPerfBucket {
+  uint64_t frames = 0;
+  uint64_t over12ms = 0;
+  uint64_t over16ms = 0;
+  uint64_t over20ms = 0;
+  float maxTotalMs = 0.0f;
+  float maxBeginFrameMs = 0.0f;
+  float maxSharedBgaMs = 0.0f;
+  float maxScreenMs = 0.0f;
+  float maxOverlayMs = 0.0f;
+  float maxEndFrameMs = 0.0f;
+  std::string worstTopScreen = "none";
+  std::string worstMaxScreen = "none";
+  std::string worstClassification = "none";
+};
+
+struct DrawBreakdownPerfSummary {
+  DrawBreakdownPerfBucket all;
+  DrawBreakdownPerfBucket gameplay;
+  DrawBreakdownPerfBucket evaluationStage;
+  DrawBreakdownPerfBucket selectMusic;
+  DrawBreakdownPerfBucket selectStyle;
+  DrawBreakdownPerfBucket other;
+};
+
+static DrawBreakdownPerfSummary g_DrawBreakdownPerfSummary;
+
+static bool ScreenNameEquals(const std::string& screenName, const char* name) {
+  return name != nullptr && screenName == name;
+}
+
+static void RecordDrawBreakdownPerfBucket(
+    DrawBreakdownPerfBucket& bucket,
+    float totalMs,
+    float beginFrameMs,
+    float sharedBgaMs,
+    float screenDrawMs,
+    float overlayDrawMs,
+    float endFrameMs,
+    const std::string& topScreenName,
+    const std::string& maxScreenName,
+    const char* classification) {
+  ++bucket.frames;
+  bucket.over12ms += totalMs >= 12.0f ? 1 : 0;
+  bucket.over16ms += totalMs >= 16.0f ? 1 : 0;
+  bucket.over20ms += totalMs >= 20.0f ? 1 : 0;
+  bucket.maxBeginFrameMs = std::max(bucket.maxBeginFrameMs, beginFrameMs);
+  bucket.maxSharedBgaMs = std::max(bucket.maxSharedBgaMs, sharedBgaMs);
+  bucket.maxScreenMs = std::max(bucket.maxScreenMs, screenDrawMs);
+  bucket.maxOverlayMs = std::max(bucket.maxOverlayMs, overlayDrawMs);
+  bucket.maxEndFrameMs = std::max(bucket.maxEndFrameMs, endFrameMs);
+
+  if (totalMs > bucket.maxTotalMs) {
+    bucket.maxTotalMs = totalMs;
+    bucket.worstTopScreen = topScreenName;
+    bucket.worstMaxScreen = maxScreenName;
+    bucket.worstClassification =
+        classification != nullptr ? classification : "unknown";
+  }
+}
+
+static void RecordDrawBreakdownPerf(
+    float totalMs,
+    float beginFrameMs,
+    float sharedBgaMs,
+    float screenDrawMs,
+    float overlayDrawMs,
+    float endFrameMs,
+    const std::string& topScreenName,
+    const std::string& maxScreenName,
+    const char* classification) {
+  RecordDrawBreakdownPerfBucket(
+      g_DrawBreakdownPerfSummary.all, totalMs, beginFrameMs, sharedBgaMs,
+      screenDrawMs, overlayDrawMs, endFrameMs, topScreenName, maxScreenName,
+      classification);
+
+  if (ScreenNameEquals(topScreenName, "ScreenGameplay")) {
+    RecordDrawBreakdownPerfBucket(
+        g_DrawBreakdownPerfSummary.gameplay, totalMs, beginFrameMs,
+        sharedBgaMs, screenDrawMs, overlayDrawMs, endFrameMs, topScreenName,
+        maxScreenName, classification);
+  } else if (ScreenNameEquals(topScreenName, "ScreenEvaluationStage")) {
+    RecordDrawBreakdownPerfBucket(
+        g_DrawBreakdownPerfSummary.evaluationStage, totalMs, beginFrameMs,
+        sharedBgaMs, screenDrawMs, overlayDrawMs, endFrameMs, topScreenName,
+        maxScreenName, classification);
+  } else if (ScreenNameEquals(topScreenName, "ScreenSelectMusic")) {
+    RecordDrawBreakdownPerfBucket(
+        g_DrawBreakdownPerfSummary.selectMusic, totalMs, beginFrameMs,
+        sharedBgaMs, screenDrawMs, overlayDrawMs, endFrameMs, topScreenName,
+        maxScreenName, classification);
+  } else if (ScreenNameEquals(topScreenName, "ScreenSelectStyle")) {
+    RecordDrawBreakdownPerfBucket(
+        g_DrawBreakdownPerfSummary.selectStyle, totalMs, beginFrameMs,
+        sharedBgaMs, screenDrawMs, overlayDrawMs, endFrameMs, topScreenName,
+        maxScreenName, classification);
+  } else {
+    RecordDrawBreakdownPerfBucket(
+        g_DrawBreakdownPerfSummary.other, totalMs, beginFrameMs, sharedBgaMs,
+        screenDrawMs, overlayDrawMs, endFrameMs, topScreenName, maxScreenName,
+        classification);
+  }
+}
+
+static void LogDrawBreakdownPerfBucket(
+    const char* label, const DrawBreakdownPerfBucket& bucket) {
+  LOG->Trace(
+      "PERF_SUMMARY: draw_breakdown scope=%s frames=%llu over12ms=%llu "
+      "over16ms=%llu over20ms=%llu max_total_ms=%.3f "
+      "max_begin_frame_ms=%.3f max_shared_bga_ms=%.3f max_screen_ms=%.3f "
+      "max_overlay_ms=%.3f max_end_frame_ms=%.3f worst_top_screen=%s "
+      "worst_max_screen=%s worst_classification=%s",
+      label != nullptr ? label : "unknown",
+      static_cast<unsigned long long>(bucket.frames),
+      static_cast<unsigned long long>(bucket.over12ms),
+      static_cast<unsigned long long>(bucket.over16ms),
+      static_cast<unsigned long long>(bucket.over20ms),
+      bucket.maxTotalMs,
+      bucket.maxBeginFrameMs,
+      bucket.maxSharedBgaMs,
+      bucket.maxScreenMs,
+      bucket.maxOverlayMs,
+      bucket.maxEndFrameMs,
+      bucket.worstTopScreen.c_str(),
+      bucket.worstMaxScreen.c_str(),
+      bucket.worstClassification.c_str());
+}
+
+static void LogDrawBreakdownPerfSummary() {
+  if (g_DrawBreakdownPerfSummary.all.frames == 0) {
+    return;
+  }
+
+  LogDrawBreakdownPerfBucket("all", g_DrawBreakdownPerfSummary.all);
+  LogDrawBreakdownPerfBucket("gameplay", g_DrawBreakdownPerfSummary.gameplay);
+  LogDrawBreakdownPerfBucket(
+      "evaluation_stage", g_DrawBreakdownPerfSummary.evaluationStage);
+  LogDrawBreakdownPerfBucket(
+      "select_music", g_DrawBreakdownPerfSummary.selectMusic);
+  LogDrawBreakdownPerfBucket(
+      "select_style", g_DrawBreakdownPerfSummary.selectStyle);
+  LogDrawBreakdownPerfBucket("other", g_DrawBreakdownPerfSummary.other);
+}
 
 // Screen registration
 static std::map<std::string, CreateScreenFn>* g_pmapRegistrees = nullptr;
@@ -338,6 +483,7 @@ ScreenManager::ScreenManager() {
 
 ScreenManager::~ScreenManager() {
   LOG->Trace("ScreenManager::~ScreenManager()");
+  LogDrawBreakdownPerfSummary();
   LOG->UnmapLog("ScreenManager::TopScreen");
 
   RageUtil::SafeDelete(g_pSharedBGA);
@@ -639,6 +785,13 @@ void ScreenManager::Draw() {
   endFrameMs = phaseTimer.GetDeltaTime() * 1000.0f;
 
   const float totalDrawMs = totalTimer.GetDeltaTime() * 1000.0f;
+  const char* drawClassification = ClassifyDrawBreakdown(
+      totalDrawMs, beginFrameMs, sharedBgaMs, screenDrawMs, overlayDrawMs,
+      endFrameMs, maxScreenMs, maxOverlayMs);
+  RecordDrawBreakdownPerf(
+      totalDrawMs, beginFrameMs, sharedBgaMs, screenDrawMs, overlayDrawMs,
+      endFrameMs, topScreenName, maxScreenName, drawClassification);
+
   const float traceThresholdMs =
       std::max(0.0f, g_fPerfTraceSlowDrawBreakdownMs.Get());
   if (totalDrawMs >= traceThresholdMs) {
@@ -649,9 +802,7 @@ void ScreenManager::Draw() {
         "max_screen_ms=%.3f max_overlay=%s max_overlay_ms=%.3f",
         totalDrawMs, beginFrameMs, sharedBgaMs, screenDrawMs, overlayDrawMs,
         endFrameMs,
-        ClassifyDrawBreakdown(
-            totalDrawMs, beginFrameMs, sharedBgaMs, screenDrawMs,
-            overlayDrawMs, endFrameMs, maxScreenMs, maxOverlayMs),
+        drawClassification,
         g_ScreenStack.size(), g_OverlayScreens.size(),
         topScreenName.c_str(), maxScreenName.c_str(), maxScreenMs,
         maxOverlayName.c_str(), maxOverlayMs);

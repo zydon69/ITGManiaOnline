@@ -528,8 +528,13 @@ int RageSound::GetSourceFrameFromHardwareFrame(int64_t iHardwareFrame) const {
     return 0;
   }
 
-  int64_t iStreamFrame = m_HardwareToStreamMap.Search(iHardwareFrame);
-  return static_cast<int>(m_StreamToSourceMap.Search(iStreamFrame));
+  const int driverSampleRate = SOUNDMAN->GetDriverSampleRate();
+  const int sourceSampleRate =
+      m_pSource != nullptr ? m_pSource->GetSampleRate() : 0;
+  int64_t iStreamFrame =
+      m_HardwareToStreamMap.Search(iHardwareFrame, driverSampleRate);
+  return static_cast<int>(
+      m_StreamToSourceMap.Search(iStreamFrame, sourceSampleRate));
 }
 
 /* If non-nullptr, approximate is set to true if the returned time is

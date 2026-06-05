@@ -1,6 +1,7 @@
 #ifndef RAGE_SOUND_DRIVER
 #define RAGE_SOUND_DRIVER
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -198,7 +199,7 @@ class RageSoundDriver : public RageDriver {
 
     CircBuf<QueuedPosMap> m_PosMapQueue;
 
-    enum {
+    enum State {
       AVAILABLE,
       BUFFERING,
       STOPPED, /* idle */
@@ -210,7 +211,19 @@ class RageSoundDriver : public RageDriver {
 
       HALTING, /* stop immediately */
       PLAYING
-    } m_State;
+    };
+
+    State GetState(
+        std::memory_order order = std::memory_order_acquire) const {
+      return m_State.load(order);
+    }
+    void SetState(
+        State state,
+        std::memory_order order = std::memory_order_release) {
+      m_State.store(state, order);
+    }
+
+    std::atomic<State> m_State;
   };
 
   /* List of currently playing sounds: XXX no vector */

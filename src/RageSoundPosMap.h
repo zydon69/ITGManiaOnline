@@ -21,7 +21,7 @@ class pos_map_queue {
       double fSourceToDestRatio = 1.0);
 
   /* Return the iDestFrame for the given iSourceFrame. */
-  int64_t Search(int64_t iSourceFrame) const;
+  int64_t Search(int64_t iSourceFrame, int iFrameRate) const;
 
   /* Erase all mappings. */
   void Clear();
