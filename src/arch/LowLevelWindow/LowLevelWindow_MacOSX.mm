@@ -1432,6 +1432,7 @@ LowLevelWindow_MacOSX::LowLevelWindow_MacOSX()
       m_bMetalBridgeFrameActive(false),
       m_bLoggedMetalBridgeFirstFrame(false),
       m_bLoggedMetalBridgeFirstBlit(false),
+      m_bMetalDirectPresentSubmittedThisFrame(false),
       m_bMetalBridgeValidationPending(false),
       m_iMetalBridgeValidationFrameCountdown(0) {
   POOL;
@@ -1533,6 +1534,7 @@ void LowLevelWindow_MacOSX::ReleaseMetalOpenGLBridge() {
   m_iMetalBridgeRenderSurfaceIndex = -1;
   m_bLoggedMetalBridgeFirstFrame = false;
   m_bLoggedMetalBridgeFirstBlit = false;
+  m_bMetalDirectPresentSubmittedThisFrame = false;
   ReleaseMetalOpenGLBridgeResources(m_MetalOpenGLBridge.get());
   m_MetalOpenGLBridge.reset();
   while (glGetError() != GL_NO_ERROR);
@@ -1781,6 +1783,7 @@ void LowLevelWindow_MacOSX::EndMetalPresentBridgeFrame() {
   }
   glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
   glViewport(0, 0, m_CurrentParams.width, m_CurrentParams.height);
+  m_bMetalDirectPresentSubmittedThisFrame = false;
   if (g_bMacOSMetalDirectPresentValidation.Get() && m_MetalPresenter) {
     GLsync metalReadFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     GLenum metalReadFenceStatus = GL_WAIT_FAILED;
@@ -1793,7 +1796,8 @@ void LowLevelWindow_MacOSX::EndMetalPresentBridgeFrame() {
       }
       glDeleteSync(metalReadFence);
     }
-    m_MetalPresenter->PresentInteropSurfaceAt(
+    m_bMetalDirectPresentSubmittedThisFrame =
+        m_MetalPresenter->PresentInteropSurfaceAt(
         m_iMetalBridgeRenderSurfaceIndex,
         EffectiveMacOSFramePacingTargetHz(m_CurrentParams));
     static bool s_bLoggedDirectPresentFence = false;
@@ -2231,6 +2235,43 @@ void LowLevelWindow_MacOSX::SwapBuffers() {
     CGLGetParameter(context, kCGLCPSwapInterval, &swapInterval);
     CGLGetParameter(context, kCGLCPMPSwapsInFlight, &swapsInFlight);
   }
+  if (m_bMetalDirectPresentSubmittedThisFrame &&
+      g_bMacOSMetalDirectPresentValidation.Get()) {
+    const uint64_t flushReturnUsec =
+        RageTimer::GetTimeSinceStartMicroseconds();
+    const float elapsedMs = timer.GetDeltaTime() * 1000.0f;
+    g_LastOpenGLFenceWaitStats.available = true;
+    g_LastOpenGLFenceWaitStats.pacing_wait_enabled = false;
+    g_LastOpenGLFenceWaitStats.trace_enabled = PerfDiagnosticsEnabled();
+    g_LastOpenGLFenceWaitStats.fence_created = false;
+    g_LastOpenGLFenceWaitStats.gpu_busy = false;
+    g_LastOpenGLFenceWaitStats.wait_saturated = false;
+    g_LastOpenGLFenceWaitStats.wait_actual_usec = 0;
+    g_LastOpenGLFenceWaitStats.wait_budget_usec = 0;
+    static uint64_t s_iMetalDirectPresentSkipFrames = 0;
+    ++s_iMetalDirectPresentSkipFrames;
+    const bool traceSkipFrame =
+        PerfDiagnosticsEnabled() &&
+        (s_iMetalDirectPresentSkipFrames <= 5 ||
+         s_iMetalDirectPresentSkipFrames % 600 == 0);
+    if (traceSkipFrame) {
+      LOG->Trace(
+          "PERF_TRACE: macos_swap_buffers skipped_for_metal_direct_present=1 "
+          "total_ms=%.3f error=0 vsync=%d swap_interval=%d "
+          "mps_swaps_in_flight=%d frame_pacing_target_hz=%.3f rate=%d "
+          "windowed=%d flush_return_us=%llu skipped_frames=%llu "
+          "requested_size=%dx%d",
+          elapsedMs, m_CurrentParams.vsync ? 1 : 0, swapInterval,
+          swapsInFlight, EffectiveMacOSFramePacingTargetHz(m_CurrentParams),
+          m_CurrentParams.rate, m_CurrentParams.windowed ? 1 : 0,
+          static_cast<unsigned long long>(flushReturnUsec),
+          static_cast<unsigned long long>(s_iMetalDirectPresentSkipFrames),
+          m_CurrentParams.width, m_CurrentParams.height);
+    }
+    m_bMetalDirectPresentSubmittedThisFrame = false;
+    return;
+  }
+  m_bMetalDirectPresentSubmittedThisFrame = false;
   const uint64_t fenceWaitUsec =
       context != nullptr ? MacOSOpenGLFencePacingWaitUsec(m_CurrentParams) : 0;
   const bool fencePacingWait = context != nullptr && fenceWaitUsec > 0;
