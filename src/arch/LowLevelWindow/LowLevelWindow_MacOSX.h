@@ -51,6 +51,7 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   bool ResumeMetalPresentBridgeFrame();
   void MarkMetalPresentBridgeFallbackFrame();
   void EndMetalPresentBridgeFrame();
+  bool PresentOpenGLBackbufferViaMetal();
 
   bool SupportsThreadedRendering() { return m_BGContext; }
   void BeginConcurrentRendering();

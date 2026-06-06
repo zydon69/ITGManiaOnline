@@ -1512,8 +1512,7 @@ bool RageDisplay_Legacy::BeginFrame() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	bool beginFrame = RageDisplay::BeginFrame();
-  m_bUsingMetalPresentBridgeFrame =
-      beginFrame && g_pWind->BeginMetalPresentBridgeFrame();
+  m_bUsingMetalPresentBridgeFrame = false;
 	if (beginFrame && !m_bUsingMetalPresentBridgeFrame && UseOffscreenRenderTarget()) {
 		offscreenRenderTarget->BeginRenderingTo(false);
 	}
@@ -1710,6 +1709,7 @@ void RageDisplay_Legacy::EndFrame() {
   ReportFramePacingPreSwapLoad(
       offscreenMs + preFramePacingSyncMs + frameLimitBeforeMs);
 #endif
+  g_pWind->PresentOpenGLBackbufferViaMetal();
   g_pWind->SwapBuffers();
   const uint64_t presentReturnUsec = RageTimer::GetTimeSinceStartMicroseconds();
   const float presentReturnIntervalMs =

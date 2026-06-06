@@ -1916,6 +1916,136 @@ void LowLevelWindow_MacOSX::EndMetalPresentBridgeFrame() {
   m_bMetalBridgeFrameActive = false;
 }
 
+bool LowLevelWindow_MacOSX::PresentOpenGLBackbufferViaMetal() {
+  if (!MacOSMetalDirectPresentEnabled() || !m_MetalPresenter ||
+      !m_MetalOpenGLBridge || m_MetalOpenGLBridge->surfaces.empty() ||
+      m_bMetalBridgeFrameActive) {
+    return false;
+  }
+
+  using GLBlitFramebufferEXTProc = void (*)(
+      GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield,
+      GLenum);
+  auto* blitFramebuffer =
+      reinterpret_cast<GLBlitFramebufferEXTProc>(
+          GetProcAddress("glBlitFramebufferEXT"));
+  if (blitFramebuffer == nullptr) {
+    return false;
+  }
+
+  const int surfaceCount =
+      static_cast<int>(m_MetalOpenGLBridge->surfaces.size());
+  int nextSurfaceIndex = -1;
+  constexpr int kSurfaceWaitAttempts = 80;
+  constexpr int kSurfaceWaitAttemptUsec = 100;
+  for (int waitAttempt = 0;
+       waitAttempt < kSurfaceWaitAttempts && nextSurfaceIndex < 0;
+       ++waitAttempt) {
+    for (int offset = 1; offset <= surfaceCount; ++offset) {
+      const int candidate =
+          (m_iMetalBridgeRenderSurfaceIndex + offset) % surfaceCount;
+      if (!m_MetalPresenter->IsInteropSurfaceBusy(candidate)) {
+        nextSurfaceIndex = candidate;
+        break;
+      }
+    }
+    if (nextSurfaceIndex < 0) {
+      std::this_thread::sleep_for(
+          std::chrono::microseconds(kSurfaceWaitAttemptUsec));
+    }
+  }
+
+  if (nextSurfaceIndex < 0) {
+    if (PerfDiagnosticsEnabled()) {
+      static uint64_t s_iMetalBackbufferBusySurfaceFrames = 0;
+      ++s_iMetalBackbufferBusySurfaceFrames;
+      if (s_iMetalBackbufferBusySurfaceFrames <= 3 ||
+          s_iMetalBackbufferBusySurfaceFrames % 5000 == 0) {
+        LOG->Trace(
+            "PERF_TRACE: macos_metal_backbuffer_present_unavailable "
+            "reason=busy_iosurfaces surface_count=%d wait_budget_us=%d "
+            "frames=%llu",
+            surfaceCount,
+            kSurfaceWaitAttempts * kSurfaceWaitAttemptUsec,
+            static_cast<unsigned long long>(
+                s_iMetalBackbufferBusySurfaceFrames));
+      }
+    }
+    return false;
+  }
+
+  m_iMetalBridgeRenderSurfaceIndex = nextSurfaceIndex;
+  const MacOSMetalOpenGLBridgeSurface& surface =
+      m_MetalOpenGLBridge->surfaces[m_iMetalBridgeRenderSurfaceIndex];
+  if (surface.framebuffer == 0) {
+    return false;
+  }
+
+  glBindFramebufferEXT(GL_READ_FRAMEBUFFER_EXT, 0);
+  glReadBuffer(GL_BACK);
+  glBindFramebufferEXT(GL_DRAW_FRAMEBUFFER_EXT, surface.framebuffer);
+  glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
+  blitFramebuffer(
+      0, 0, m_CurrentParams.width, m_CurrentParams.height,
+      0, 0, m_MetalOpenGLBridge->width, m_MetalOpenGLBridge->height,
+      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+  glReadBuffer(GL_BACK);
+  glDrawBuffer(GL_BACK);
+  glViewport(0, 0, m_CurrentParams.width, m_CurrentParams.height);
+
+  GLsync metalReadFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+  GLenum metalReadFenceStatus = GL_WAIT_FAILED;
+  if (metalReadFence != nullptr) {
+    metalReadFenceStatus =
+        glClientWaitSync(metalReadFence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+    if (metalReadFenceStatus == GL_TIMEOUT_EXPIRED) {
+      metalReadFenceStatus = glClientWaitSync(metalReadFence, 0, 1500 * 1000);
+    }
+    glDeleteSync(metalReadFence);
+  }
+
+  const bool metalReadFenceReady =
+      metalReadFenceStatus == GL_ALREADY_SIGNALED ||
+      metalReadFenceStatus == GL_CONDITION_SATISFIED;
+  if (!metalReadFenceReady) {
+    if (PerfDiagnosticsEnabled()) {
+      static uint64_t s_iMetalBackbufferFenceFallbackFrames = 0;
+      ++s_iMetalBackbufferFenceFallbackFrames;
+      if (s_iMetalBackbufferFenceFallbackFrames <= 3 ||
+          s_iMetalBackbufferFenceFallbackFrames % 5000 == 0) {
+        LOG->Trace(
+            "PERF_TRACE: macos_metal_backbuffer_present_unavailable "
+            "reason=gl_fence_not_ready status=0x%x wait_budget_us=1500 "
+            "frames=%llu",
+            metalReadFenceStatus,
+            static_cast<unsigned long long>(
+                s_iMetalBackbufferFenceFallbackFrames));
+      }
+    }
+    return false;
+  }
+
+  m_bMetalDirectPresentSubmittedThisFrame =
+      m_MetalPresenter->PresentInteropSurfaceAt(
+          m_iMetalBridgeRenderSurfaceIndex,
+          EffectiveMacOSFramePacingTargetHz(m_CurrentParams));
+  if (m_bMetalDirectPresentSubmittedThisFrame &&
+      PerfDiagnosticsEnabled()) {
+    static bool s_bLoggedBackbufferPresent = false;
+    if (!s_bLoggedBackbufferPresent) {
+      LOG->Trace(
+          "MacOS Metal backbuffer present active: surface_count=%d "
+          "size=%dx%d source_size=%dx%d",
+          surfaceCount, m_MetalOpenGLBridge->width,
+          m_MetalOpenGLBridge->height, m_CurrentParams.width,
+          m_CurrentParams.height);
+      s_bLoggedBackbufferPresent = true;
+    }
+  }
+  return m_bMetalDirectPresentSubmittedThisFrame;
+}
+
 std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& newDeviceOut) {
   // Always set these params.
   m_CurrentParams.bSmoothLines = p.bSmoothLines;
