@@ -29,18 +29,18 @@ PackSync.status = {
 }
 
 PackSync.statusText = {
-	unknown = "Ready",
-	ready = "Ready",
-	manager_browsing_unknown_pack = "Browsing unknown pack",
-	searching_local_charts = "Searching local charts",
-	local_chart_match_found = "Compatible chart found",
-	no_compatible_chart_found = "No compatible chart found",
-	download_requested = "Download requested",
-	download_in_progress = "Download in progress",
-	download_failed = "Download failed",
-	reloading_songs = "Reloading songs",
-	downloaded_ok = "Downloaded OK",
-	chart_mismatch = "Chart mismatch",
+	unknown = "Pret",
+	ready = "Pret",
+	manager_browsing_unknown_pack = "Pack inconnu",
+	searching_local_charts = "Recherche locale",
+	local_chart_match_found = "Chart compatible trouvee",
+	no_compatible_chart_found = "Aucune chart compatible",
+	download_requested = "Telechargement demande",
+	download_in_progress = "Telechargement en cours",
+	download_failed = "Telechargement echoue",
+	reloading_songs = "Rechargement chansons",
+	downloaded_ok = "Telechargement OK",
+	chart_mismatch = "Chart differente",
 }
 
 local function trace(message)
@@ -284,7 +284,7 @@ function PackSync:UpdateStatus(status, message, progress, callback)
 	trace("Status " .. status .. (message and (" - " .. tostring(message)) or ""))
 
 	if not (ITGOnline and ITGOnline.Request and ITGOnline.currentRoomId) then
-		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
+		if callback then callback(false, nil, { errorMessage = "Aucun salon online actif." }) end
 		return
 	end
 
@@ -685,7 +685,7 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 			if built then payload[#payload + 1] = built end
 		end
 		callback(false, nil, {
-			errorMessage = #payload == 0 and "No StepManiaOnline pack matched." or "StepManiaOnline pack search is ambiguous.",
+			errorMessage = #payload == 0 and "Aucun pack StepManiaOnline ne correspond." or "La recherche StepManiaOnline est ambigue.",
 			candidates = dedupe_candidates(payload),
 		})
 	end
@@ -699,7 +699,7 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 
 		search("artist", artist, function(artistOk, artistDecoded)
 			if not artistOk then
-				callback(false, nil, { errorMessage = "StepManiaOnline artist search failed." })
+				callback(false, nil, { errorMessage = "La recherche artiste StepManiaOnline a echoue." })
 				return
 			end
 
@@ -735,12 +735,12 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 							if built then payload[#payload + 1] = built end
 						end
 						callback(false, nil, {
-							errorMessage = "StepManiaOnline chart key matched multiple packs.",
+							errorMessage = "La chart StepManiaOnline correspond a plusieurs packs.",
 							candidates = dedupe_candidates(payload),
 						})
 						return
 					end
-					callback(false, nil, { errorMessage = "StepManiaOnline chart key did not match the selected pack." })
+					callback(false, nil, { errorMessage = "La chart StepManiaOnline ne correspond pas au pack selectionne." })
 				return
 			end
 			self:SearchStepManiaOnline({
@@ -757,13 +757,13 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 				if title ~= "" then
 					search("title", title, function(titleOk, titleDecoded)
 						if not titleOk then
-							callback(false, nil, { errorMessage = "StepManiaOnline pack and title searches failed." })
+							callback(false, nil, { errorMessage = "Les recherches pack et titre StepManiaOnline ont echoue." })
 							return
 						end
 						finish_title_results(titleDecoded)
 					end)
 				else
-					callback(false, nil, { errorMessage = "StepManiaOnline pack search failed." })
+					callback(false, nil, { errorMessage = "La recherche de pack StepManiaOnline a echoue." })
 				end
 				return
 			end
@@ -800,7 +800,7 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 				return
 			elseif #packCandidatesPayload > 1 then
 				callback(false, nil, {
-					errorMessage = "StepManiaOnline pack search matched multiple packs.",
+					errorMessage = "La recherche de pack StepManiaOnline correspond a plusieurs packs.",
 					candidates = packCandidatesPayload,
 				})
 				return
@@ -820,11 +820,11 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 						})
 					elseif #packCandidatesPayload > 1 then
 						callback(false, nil, {
-							errorMessage = "StepManiaOnline title search failed.",
+							errorMessage = "La recherche titre StepManiaOnline a echoue.",
 							candidates = packCandidatesPayload,
 						})
 					else
-						callback(false, nil, { errorMessage = "StepManiaOnline title search failed." })
+						callback(false, nil, { errorMessage = "La recherche titre StepManiaOnline a echoue." })
 					end
 					return
 				end
@@ -833,23 +833,23 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 		end)
 	elseif title ~= "" then
 		search("title", title, function(ok, decoded)
-			if not ok then callback(false, nil, { errorMessage = "StepManiaOnline title search failed." }); return end
+			if not ok then callback(false, nil, { errorMessage = "La recherche titre StepManiaOnline a echoue." }); return end
 			finish_title_results(decoded)
 		end)
 	else
-		callback(false, nil, { errorMessage = "No pack or title available for StepManiaOnline search." })
+		callback(false, nil, { errorMessage = "Aucun pack ou titre disponible pour la recherche StepManiaOnline." })
 	end
 end
 
 function PackSync:DownloadPackByCandidate(songInfo, pack, callback)
 	if not pack or not pack.id then
-		if callback then callback(false, "Invalid pack candidate.") end
+		if callback then callback(false, "Pack candidat invalide.") end
 		return
 	end
 
 	local packId = tonumber(pack.id)
 	if not packId or math.floor(packId) ~= packId or packId < 1 then
-		if callback then callback(false, "StepManiaOnline returned an invalid pack id.") end
+		if callback then callback(false, "StepManiaOnline a renvoye un identifiant de pack invalide.") end
 		return
 	end
 
@@ -860,7 +860,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback)
 	local targetSongsPath = "/Songs/"
 
 	local url = stepmaniaonline_origin() .. "/download/pack/" .. tostring(packId) .. "/"
-	local downloadMessage = "Downloading " .. tostring(packName)
+	local downloadMessage = "Telechargement de " .. tostring(packName)
 	trace("Download started pack=" .. tostring(packName) .. " id=" .. tostring(packId))
 	self:UpdateStatus(self.status.DownloadInProgress, downloadMessage, 0)
 	self.lastProgressStatusAt = 0
@@ -950,7 +950,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback)
 			trace("Reload Songs after download pack=" .. tostring(packName))
 			self.pendingPostReloadSongInfo = songInfo
 			self.pendingQuarantinePath = ""
-			self:UpdateStatus(self.status.ReloadingSongs, "Reloading songs")
+			self:UpdateStatus(self.status.ReloadingSongs, "Rechargement des chansons")
 			transition_to_reload_songs()
 			if callback then callback(true) end
 		end,
@@ -959,7 +959,7 @@ end
 
 function PackSync:DownloadSelectedPack(songInfo, callback)
 	if not songInfo then
-		if callback then callback(false, "No selected song.") end
+		if callback then callback(false, "Aucune chanson selectionnee.") end
 		return
 	end
 
@@ -970,7 +970,7 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 	end
 	if downloadKey == "" then downloadKey = tostring(songInfo) end
 	if self.downloadInFlightKey == downloadKey then
-		local message = "Download already in progress."
+		local message = "Telechargement deja en cours."
 		trace(message)
 		if callback then callback(false, message) end
 		return
@@ -1001,7 +1001,7 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 					end
 					return
 				end
-				local message = searchError and searchError.errorMessage or "StepManiaOnline pack search failed."
+				local message = searchError and searchError.errorMessage or "La recherche de pack StepManiaOnline a echoue."
 				trace("Download failed search=" .. tostring(message))
 				fail_download(message)
 				return

@@ -34,6 +34,7 @@ return Def.Actor{
 		storage.grade = pss:GetGrade()
 		storage.score = pss:GetPercentDancePoints()
 		storage.exscore = CalculateExScore(player)
+		storage.hardexscore = CalculateHardExScore(player)
 		storage.judgments = {
 			W1 = pss:GetTapNoteScores(TNSTypes[1]),
 			W2 = pss:GetTapNoteScores(TNSTypes[2]),
@@ -43,13 +44,17 @@ return Def.Actor{
 			Miss = pss:GetTapNoteScores(TNSTypes[6])
 		}
 		
-		if (mods.ShowFaPlusWindow and mods.ShowFaPlusPane) or mods.ShowExScore then
+		if (mods.ShowFaPlusWindow and mods.ShowFaPlusPane) or mods.ShowExScore or mods.ShowHardEXScore then
 			local counts = GetExJudgmentCounts(player)
 			storage.judgments.W0 = counts.W0
+			storage.judgments.W010 = counts.W010
+			storage.judgments.W110 = counts.W110
 			storage.judgments.W1 = counts.W1
 			storage.showex = mods.ShowExScore
+			storage.showhardex = mods.ShowHardEXScore
 		else
 			storage.showex = false
+			storage.showhardex = false
 		end
 
 		if GAMESTATE:IsCourseMode() then

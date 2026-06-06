@@ -15,20 +15,20 @@ return Def.ActorFrame{
 	},
 	LoadFont("Common Bold")..{
 		Name="PrivateJoinTitle",
-		Text="Player wants to join",
+			Text="Un joueur veut rejoindre",
 		InitCommand=function(self)
 			self:y(-104):zoom(0.76)
 		end
 	},
 	LoadFont("Common Normal")..{
 		Name="PrivateJoinDetail",
-		Text="Private lobby",
+			Text="Salon prive",
 		InitCommand=function(self)
 			self:y(-74):zoom(0.56):maxwidth(760)
 		end
 	},
 	LoadFont("Common Normal")..{
-		Text="Choose a reply. Decline reason is sent only to that player.",
+			Text="Choisissez une reponse. Le motif de refus est envoye uniquement a ce joueur.",
 		InitCommand=function(self)
 			self:y(-48):zoom(0.48):diffuse(0.8,0.8,0.8,1)
 		end

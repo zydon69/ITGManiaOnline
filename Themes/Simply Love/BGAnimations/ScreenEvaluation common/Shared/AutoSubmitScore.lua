@@ -2,6 +2,18 @@ if not IsServiceAllowed(SL.GrooveStats.AutoSubmit) or GAMESTATE:IsCourseMode() t
 
 local NumEntries = 10
 
+local IsOnlineEvaluation = function()
+	return ITGOnline and ITGOnline.currentRoomId ~= nil
+end
+
+local GrooveStatsSubmitTrace = function(message)
+	if not IsOnlineEvaluation() then return end
+
+	if Trace then
+		Trace("ITG Online external_submit groovestats " .. tostring(message or ""))
+	end
+end
+
 local SetEntryText = function(rank, name, score, date, actor)
 	if actor == nil then return end
 
@@ -136,6 +148,8 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 	local P2SubmitText = overlay:GetChild("AutoSubmitMaster"):GetChild("P2SubmitText")
 
 	if res.error or res.statusCode ~= 200 then
+		GrooveStatsSubmitTrace("result=failed status=" .. tostring(res.statusCode)
+			.. " error=" .. tostring(res.error and ToEnumShortString(res.error) or "nil"))
 		local error = res.error and ToEnumShortString(res.error) or nil
 		if error == "Timeout" then
 			if P1SubmitText then P1SubmitText:queuecommand("TimedOut") end
@@ -146,6 +160,8 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 		end
 		return
 	end
+
+	GrooveStatsSubmitTrace("result=ok status=" .. tostring(res.statusCode))
 
 	local panes = overlay:GetChild("Panes")
 	local shouldDisplayOverlay = false
@@ -367,6 +383,10 @@ local af = Def.ActorFrame {
 			}
 			local body = {}
 
+			GrooveStatsSubmitTrace("screen=ScreenEvaluationStage room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " rate=" .. tostring(SL.Global.ActiveModifiers.MusicRate)
+				.. " players=" .. tostring(GAMESTATE:GetNumSidesJoined()))
+
 			local rate = tonumber(string.format("%.0f", SL.Global.ActiveModifiers.MusicRate * 100))
 			for i=1,2 do
 				local player = "PlayerNumber_P"..i
@@ -376,17 +396,16 @@ local af = Def.ActorFrame {
 					local _, valid, _ = ValidForGrooveStats(player)
 					local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 					local submitForPlayer = false
+					local failed = stats:GetFailed()
+					local isPadPlayer = SL[pn].IsPadPlayer == true
+					local hasApiKey = SL[pn].ApiKey ~= ""
+					local hasHash = SL[pn].Streams.Hash ~= ""
 
-					if valid and not stats:GetFailed() and SL[pn].IsPadPlayer then
+					if valid and not failed and isPadPlayer then
 						local percentDP = stats:GetPercentDancePoints()
 						local score = tonumber(("%.0f"):format(percentDP * 10000))
 
-						local profileName = ""
-						if PROFILEMAN:IsPersistentProfile(player) and PROFILEMAN:GetProfile(player) then
-							profileName = PROFILEMAN:GetProfile(player):GetDisplayName()
-						end
-
-						if SL[pn].ApiKey ~= "" and SL[pn].Streams.Hash ~= "" then
+						if hasApiKey and hasHash then
 							query["chartHashP"..i] = SL[pn].Streams.Hash
 							headers["x-api-key-player-"..i] = SL[pn].ApiKey
 
@@ -401,7 +420,25 @@ local af = Def.ActorFrame {
 							}
 							sendRequest = true
 							submitForPlayer = true
+							GrooveStatsSubmitTrace("player=" .. pn .. " action=submit"
+								.. " hash=" .. tostring(SL[pn].Streams.Hash)
+								.. " score=" .. tostring(score)
+								.. " online=true")
+						else
+							GrooveStatsSubmitTrace("player=" .. pn .. " action=skip"
+								.. " reason=" .. (not hasApiKey and "missing_api_key" or "missing_chart_hash")
+								.. " valid=" .. tostring(valid)
+								.. " failed=" .. tostring(failed)
+								.. " pad=" .. tostring(isPadPlayer))
 						end
+					else
+						GrooveStatsSubmitTrace("player=" .. pn .. " action=skip"
+							.. " reason=" .. (not valid and "invalid_for_groovestats" or failed and "failed" or "not_pad_player")
+							.. " valid=" .. tostring(valid)
+							.. " failed=" .. tostring(failed)
+							.. " pad=" .. tostring(isPadPlayer)
+							.. " key=" .. tostring(hasApiKey)
+							.. " hash=" .. tostring(hasHash))
 					end
 
 					if not submitForPlayer then
@@ -413,13 +450,13 @@ local af = Def.ActorFrame {
 					end
 				end
 			end
+
 			-- Only send the request if it's applicable.
 			if sendRequest then
 				-- Unjoined players won't have the text displayed.
-
 				self:GetParent():GetChild("P1SubmitText"):settext(THEME:GetString("GrooveStats", "Submitting"))
 				self:GetParent():GetChild("P2SubmitText"):settext(THEME:GetString("GrooveStats", "Submitting"))
-					
+
 				self:playcommand("MakeGrooveStatsRequest", {
 					endpoint="?action=scoreSubmit&"..NETWORK:EncodeQueryParameters(query),
 					method="POST",
@@ -429,6 +466,8 @@ local af = Def.ActorFrame {
 					callback=AutoSubmitRequestProcessor,
 					args=SCREENMAN:GetTopScreen():GetChild("Overlay"):GetChild("ScreenEval Common"),
 				})
+			else
+				GrooveStatsSubmitTrace("action=no_request")
 			end
 		end
 	}

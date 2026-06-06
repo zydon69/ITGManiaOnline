@@ -13,13 +13,13 @@ return Def.ActorFrame{
 	},
 	LoadFont("Common Bold")..{
 		Name="PlayerActionTitle",
-		Text="Player",
+			Text="Joueur",
 		InitCommand=function(self)
 			self:y(-138):zoom(0.8)
 		end
 	},
 	LoadFont("Common Normal")..{
-		Text="&MENULEFT;/&MENURIGHT; to Choose | &START; to Confirm | &SELECT; to Cancel",
+			Text="&MENULEFT;/&MENURIGHT; pour choisir | &START; pour confirmer | &SELECT; pour annuler",
 		InitCommand=function(self)
 			self:y(-108):zoom(0.5)
 		end

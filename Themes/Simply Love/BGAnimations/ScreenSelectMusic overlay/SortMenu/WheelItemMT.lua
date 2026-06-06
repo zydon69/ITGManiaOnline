@@ -1,26 +1,5 @@
 local sortmenu_dimensions = unpack(...)
 local row_height = 36
-local folder_icon_source_name = "SortMenuFolderIconSource"
-
-local function FindParentChild(actor, name)
-	local parent = actor
-	for _=1,8 do
-		if not parent then return nil end
-		local ok_child, child = pcall(function() return parent:GetChild(name) end)
-		if ok_child and child then return child end
-		local ok_parent, next_parent = pcall(function() return parent:GetParent() end)
-		if not ok_parent then return nil end
-		parent = next_parent
-	end
-	return nil
-end
-
-local function SetFolderIconTarget(proxy)
-	local source = FindParentChild(proxy, folder_icon_source_name)
-	if source then
-		pcall(function() proxy:SetTarget(source) end)
-	end
-end
 
 -- the metatable for an item in the sort_wheel
 return {
@@ -68,16 +47,14 @@ return {
 				end,
 
 				-- folder icon
-				Def.ActorProxy{
+				LoadActor("./folder-solid.png")..{
 					Name="folder icon",
 					InitCommand=function(subself)
 						self.folder_icon = subself
-						SetFolderIconTarget(subself)
 						subself:visible(false):vertalign(top)
 						subself:zoom(0.4):xy(28, -16)
 					end,
 					ShowFolderCommand=function(subself)
-						SetFolderIconTarget(subself)
 						subself:visible(true)
 					end,
 					HideFolderCommand=function(subself)
@@ -97,7 +74,7 @@ return {
 					Font="Common Normal",
 					InitCommand=function(subself)
 						self.top_text = subself
-						subself:zoom(1.15):xy(33,-8):diffusealpha(0)
+						subself:zoom(1.15):xy(33,-8):diffusealpha(0):maxwidth(360)
 						subself:horizalign(left)
 					end,
 					OnCommand=function(subself)

@@ -44,7 +44,7 @@ NetworkManager* NETWORK =
 namespace {
 #ifndef ITGMANIA_HTTP_ALLOW_HOSTS_DEFAULT
 #define ITGMANIA_HTTP_ALLOW_HOSTS_DEFAULT \
-  "*.groovestats.com,*.itgmania.com,itgonline.fr,*.itgonline.fr,stepmaniaonline.net,www.stepmaniaonline.net"
+  "*.groovestats.com,*.itgmania.com,itgonline.fr,*.itgonline.fr,stepmaniaonline.net,www.stepmaniaonline.net,*.arrowcloud.dance"
 #endif
 
 #ifndef ITGMANIA_HTTP_PUBLIC_KEY_PINS_DEFAULT
@@ -59,8 +59,8 @@ namespace {
 
 constexpr const char* BUILT_IN_HTTP_ALLOW_HOSTS =
     ITGMANIA_HTTP_ALLOW_HOSTS_DEFAULT;
-constexpr const char* REQUIRED_ITG_ONLINE_ALLOW_HOSTS =
-    "itgonline.fr,*.itgonline.fr,stepmaniaonline.net,www.stepmaniaonline.net";
+constexpr const char* REQUIRED_BUNDLED_ONLINE_ALLOW_HOSTS =
+    "itgonline.fr,*.itgonline.fr,stepmaniaonline.net,www.stepmaniaonline.net,*.arrowcloud.dance";
 constexpr const char* SIGNED_HTTP_SECURITY_OVERRIDE_PATH =
     "Save/ITGOnlineNetworkSecurity.ini";
 
@@ -596,13 +596,12 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
 
   // Older installs can already have Save/Preferences.ini with a stale
   // HttpAllowHosts value, which would otherwise override the safer compiled
-  // default and block the official ITG Online service. Keep HttpDenyHosts
-  // authoritative above, but never let stale local preferences brick the
-  // production online endpoint.
+  // default and block bundled online services. Keep HttpDenyHosts authoritative
+  // above, but never let stale local preferences brick production endpoints.
   static std::string cachedRequiredRaw;
   static std::vector<std::string> cachedRequiredHosts;
   const auto& requiredHosts = CachedHostList(
-      REQUIRED_ITG_ONLINE_ALLOW_HOSTS, cachedRequiredRaw, cachedRequiredHosts);
+      REQUIRED_BUNDLED_ONLINE_ALLOW_HOSTS, cachedRequiredRaw, cachedRequiredHosts);
 
   for (const auto& requiredHost : requiredHosts) {
     if (HostMatchesPattern(host, requiredHost)) {

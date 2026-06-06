@@ -9,6 +9,7 @@ sort_wheel.custom_functions = {}
 local sortmenu_input = LoadActor("SortMenu_InputHandler.lua", sort_wheel)
 local testinput_input = LoadActor("TestInput_InputHandler.lua")
 local leaderboard_input = LoadActor("Leaderboard_InputHandler.lua")
+local acleaderboard_input = LoadActor("ACLeaderboard_InputHandler.lua")
 -- "MT" is my personal means of denoting that this thing (the file, the variable, whatever)
 -- has something to do with a Lua metatable.
 --
@@ -49,52 +50,75 @@ local GetBpmTier = function(bpm)
 	return math.floor((bpm + 0.5) / 10) * 10
 end
 
+local Trim = function(text)
+	return tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local NormalizeSearchTerm = function(text)
+	text = Trim(text):lower()
+	return (#text > 0) and text or nil
+end
+
+local PlainContains = function(haystack, needle)
+	if not needle then return true end
+	return tostring(haystack or ""):lower():find(needle, 1, true) ~= nil
+end
+
+local ParseSongSearchInput = function(input)
+	local searchText = tostring(input or ""):lower()
+	local query = {
+		difficulty = nil,
+		bpmTier = nil,
+		packName = nil,
+		songText = nil,
+	}
+
+	for match in searchText:gmatch("%[(%d+)]") do
+		local value = tonumber(match)
+		if value then
+			if value <= 35 then
+				query.difficulty = value
+			else
+				query.bpmTier = GetBpmTier(value)
+			end
+		end
+	end
+
+	searchText = Trim(searchText:gsub("%[%d+]", ""))
+
+	local slashIndex = searchText:find("/", 1, true)
+	if slashIndex then
+		query.packName = NormalizeSearchTerm(searchText:sub(1, slashIndex - 1))
+		query.songText = NormalizeSearchTerm(searchText:sub(slashIndex + 1))
+	else
+		query.songText = NormalizeSearchTerm(searchText)
+	end
+
+	return query
+end
+
+local SongMatchesText = function(song, term)
+	if not term then return true end
+
+	return PlainContains(song:GetDisplayFullTitle(), term)
+		or PlainContains(song:GetTranslitFullTitle(), term)
+		or PlainContains(song:GetDisplaySubTitle(), term)
+		or PlainContains(song:GetTranslitSubTitle(), term)
+		or PlainContains(song:GetDisplayArtist(), term)
+		or PlainContains(song:GetTranslitArtist(), term)
+end
+
 local SongSearchSettings = {
-	Question="'pack/song' format will search for songs in specific packs\n'[###]' format will search for BPMs/Difficulties",
+	Question="Search title/subtitle/artist\nUse 'pack/song' to limit by pack, '[12]' for difficulty, '[180]' for BPM",
 	InitialAnswer="",
 	MaxInputLength=30,
 	OnOK=function(input)
 		if #input == 0 then return end
 
-		-- Lowercase the input text for comparison
-		local searchText = input:lower()
-
-		-- First extract out the "numbers".
-		-- Anything <= 35 is considered a difficulty, otherwise it's a bpm.
-		local difficulty = nil
-		local bpmTier = nil
-
-		for match in searchText:gmatch("%[(%d+)]") do
-			local value = tonumber(match)
-			if value <= 35 then
-				difficulty = value
-			else
-				-- Determine the "tier".
-				bpmTier = GetBpmTier(value)
-			end
-		end
-
-		-- Remove the parsed atoms, and then strip leading/trailing whitespace.
-		searchText = searchText:gsub("%[%d+]", ""):gsub("^%s*(.-)%s*$", "%1")
-
-		-- The we separate out the pack and song into their own search terms.
-		local packName = nil
-		local songName = nil
-
-		local forwardSlashIdx = searchText:find('/')
-		if not forwardSlashIdx then
-			songName = searchText
-		else
-			packName = searchText:sub(1, forwardSlashIdx - 1)
-			songName = searchText:sub(forwardSlashIdx + 1)
-		end
-
-		-- Normalize empty strings to nil.
-		if packName and #packName == 0 then packName = nil end
-		if songName and #songName == 0 then songName = nil end
+		local query = ParseSongSearchInput(input)
 
 		-- If we have no search criteria, then return early.
-		if not (packName or songName or difficulty or bpmTier) then return end
+		if not (query.packName or query.songText or query.difficulty or query.bpmTier) then return end
 
 		-- Start with the complete song list.
 		local candidates = SONGMAN:GetAllSongs()
@@ -103,24 +127,21 @@ local SongSearchSettings = {
 		-- Only add valid candidates if there are steps in the current mode.
 		FilterTable(candidates, function(song) return song:HasStepsType(stepsType) end)
 
-		if songName then
-			FilterTable(candidates, function(song)
-				return (song:GetDisplayFullTitle():lower():find(songName) ~= nil or
-						song:GetTranslitFullTitle():lower():find(songName) ~= nil)
-			end)
+		if query.songText then
+			FilterTable(candidates, function(song) return SongMatchesText(song, query.songText) end)
 		end
 
-		if packName then
-			FilterTable(candidates, function(song) return song:GetGroupName():lower():find(packName) end)
+		if query.packName then
+			FilterTable(candidates, function(song) return PlainContains(song:GetGroupName(), query.packName) end)
 		end
 
-		if difficulty then
+		if query.difficulty then
 			FilterTable(candidates, function(song)
 				local allSteps = song:GetStepsByStepsType(stepsType)
 				for steps in ivalues(allSteps) do
 					-- Don't consider edits.
 					if steps:GetDifficulty() ~= "Difficulty_Edit" then
-						if steps:GetMeter() == difficulty then
+						if steps:GetMeter() == query.difficulty then
 							return true
 						end
 					end
@@ -129,18 +150,18 @@ local SongSearchSettings = {
 			end)
 		end
 
-		if bpmTier then
+		if query.bpmTier then
 			FilterTable(candidates, function(song)
 				-- NOTE(teejusb): Not handling split bpms now, sorry.
 				local bpms = song:GetDisplayBpms()
 				if bpms[2]-bpms[1] == 0 then
 					-- If only one BPM, then check to see if it's in the same tier.
-					return bpmTier == GetBpmTier(bpms[1])
+					return query.bpmTier == GetBpmTier(bpms[1])
 				else
 					-- Otherwise check and see if the bpm is in the span of the tier.
 					local lowTier = GetBpmTier(bpms[1])
 					local highTier = GetBpmTier(bpms[2])
-					return lowTier <= bpmTier and bpmTier <= highTier
+					return lowTier <= query.bpmTier and query.bpmTier <= highTier
 				end
 			end)
 		end
@@ -159,6 +180,7 @@ local DirectInputToEngine = function(self)
 	screen:RemoveInputCallback(sortmenu_input)
 	screen:RemoveInputCallback(testinput_input)
 	screen:RemoveInputCallback(leaderboard_input)
+	screen:RemoveInputCallback(acleaderboard_input)
 
 	for player in ivalues(PlayerNumber) do
 		SCREENMAN:set_input_redirected(player, false)
@@ -166,6 +188,7 @@ local DirectInputToEngine = function(self)
 	self:playcommand("HideSortMenu")
 	overlay:playcommand("HideTestInput")
 	overlay:playcommand("HideLeaderboard")
+	overlay:playcommand("HideACLeaderboard")
 end
 
 ------------------------------------------------------------
@@ -443,6 +466,7 @@ local t = Def.ActorFrame {
 		local overlay = self:GetParent()
 		screen:RemoveInputCallback(testinput_input)
 		screen:RemoveInputCallback(leaderboard_input)
+		screen:RemoveInputCallback(acleaderboard_input)
 		screen:AddInputCallback(sortmenu_input)
 		for player in ivalues(PlayerNumber) do
 			SCREENMAN:set_input_redirected(player, true)
@@ -452,11 +476,13 @@ local t = Def.ActorFrame {
 		self:queuecommand("AssessAvailableChoices"):queuecommand("ShowSortMenu")
 		overlay:playcommand("HideTestInput")
 		overlay:playcommand("HideLeaderboard")
+		overlay:playcommand("HideACLeaderboard")
 	end,
 	DirectInputToTestInputCommand=function(self)
 		local screen = SCREENMAN:GetTopScreen()
 		local overlay = self:GetParent()
 		screen:RemoveInputCallback(sortmenu_input)
+		screen:RemoveInputCallback(acleaderboard_input)
 		screen:AddInputCallback(testinput_input)
 		for player in ivalues(PlayerNumber) do
 			SCREENMAN:set_input_redirected(player, true)
@@ -469,6 +495,7 @@ local t = Def.ActorFrame {
 		local screen = SCREENMAN:GetTopScreen()
 		local overlay = self:GetParent()
 		screen:RemoveInputCallback(sortmenu_input)
+		screen:RemoveInputCallback(acleaderboard_input)
 		screen:AddInputCallback(leaderboard_input)
 		for player in ivalues(PlayerNumber) do
 			SCREENMAN:set_input_redirected(player, true)
@@ -476,6 +503,19 @@ local t = Def.ActorFrame {
 		self:playcommand("HideSortMenu")
 		
 		overlay:playcommand("ShowLeaderboard")
+	end,
+	DirectInputToACLeaderboardCommand=function(self)
+		local screen = SCREENMAN:GetTopScreen()
+		local overlay = self:GetParent()
+		screen:RemoveInputCallback(sortmenu_input)
+		screen:RemoveInputCallback(leaderboard_input)
+		screen:AddInputCallback(acleaderboard_input)
+		for player in ivalues(PlayerNumber) do
+			SCREENMAN:set_input_redirected(player, true)
+		end
+		self:playcommand("HideSortMenu")
+
+		overlay:playcommand("ShowACLeaderboard")
 	end,
 	-- this returns input back to the engine and its ScreenSelectMusic
 	DirectInputToEngineCommand=function(self)
@@ -624,10 +664,6 @@ local t = Def.ActorFrame {
 				self:Center():valign(0):y(self:GetY()+sortmenu_dimensions.h/2 + 15):zoom(0.3):diffuse(0.7,0.7,0.7,1)
 			end
 		end
-	},
-	LoadActor("./folder-solid.png")..{
-		Name="SortMenuFolderIconSource",
-		InitCommand=function(self) self:visible(false) end,
 	},
 	-- this returns an ActorFrame ( see: ./Scripts/Consensual-sick_wheel.lua )
 	sort_wheel:create_actors( "Sort Menu", 9, wheel_item_mt, _screen.cx, _screen.cy )

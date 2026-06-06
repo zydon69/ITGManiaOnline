@@ -1,6 +1,6 @@
 local active_index = 0
 local list_selected = false
-local options = { "Available Lobbies", "Online Players", "Refresh List", "Create Lobby", "Go Back" }
+local options = { "Salons disponibles", "Joueurs en ligne", "Rafraichir", "Creer un salon", "Retour" }
 local t = nil
 local connected = false
 local has_error = false
@@ -33,15 +33,15 @@ local pack_choice_last_song_info = nil
 local pack_choice_last_selected_pack_id = nil
 local pack_choice_all_candidates_exhausted = false
 local private_join_options = {
-	{label="Accept", accept=true, reason=""},
-	{label="Decline", accept=false, reason=""},
-	{label="Busy", accept=false, reason="Busy right now."},
-	{label="Maybe Later", accept=false, reason="Maybe later."},
+	{label="Accepter", accept=true, reason=""},
+	{label="Refuser", accept=false, reason=""},
+	{label="Occupe", accept=false, reason="Occupe pour le moment."},
+	{label="Plus tard", accept=false, reason="Plus tard."},
 }
 local room_invitation_options = {
-	{label="Accept Invitation", accept=true},
-	{label="Decline Invitation", accept=false},
-	{label="Dismiss", dismiss=true},
+	{label="Accepter l'invitation", accept=true},
+	{label="Refuser l'invitation", accept=false},
+	{label="Fermer", dismiss=true},
 }
 local pending_join_action_id = 0
 local pending_join_deadline = 0
@@ -79,6 +79,7 @@ local joined_any_player_missing_song
 local joined_all_players_ready
 local last_start_visibility_debug_key = ""
 local last_select_song_visibility_debug_key = ""
+local last_auto_start_focus_key = ""
 
 local function lobby_debug_enabled()
 	if ITGOnline and ITGOnline.debugReadyFlow ~= nil then
@@ -354,22 +355,22 @@ end
 local function build_player_action_options(user)
 	if not user then return {} end
 	if user.isSelf then
-		return {{label="This Is You", action="cancel"}, {label="Cancel", action="cancel"}}
+		return {{label="C'est vous", action="cancel"}, {label="Annuler", action="cancel"}}
 	end
 	if user.room and user.room.visibility == "public" then
 		if user.room.id then
-			return {{label="Join Public Lobby", action="join_public_room", room_id=user.room.id}, {label="Cancel", action="cancel"}}
+			return {{label="Rejoindre le salon public", action="join_public_room", room_id=user.room.id}, {label="Annuler", action="cancel"}}
 		end
 
-		return {{label="Join Public Lobby", action="join_user_room"}, {label="Cancel", action="cancel"}}
+		return {{label="Rejoindre le salon public", action="join_user_room"}, {label="Annuler", action="cancel"}}
 	end
 	if user.room and user.room.visibility == "private" then
-		return {{label="Ask To Join Private Lobby", action="join_user_room"}, {label="Cancel", action="cancel"}}
+		return {{label="Demander a rejoindre le salon prive", action="join_user_room"}, {label="Annuler", action="cancel"}}
 	end
 	return {
-		{label="Invite To Private Lobby", action="invite_private"},
-		{label="Invite To Public Lobby", action="invite_public"},
-		{label="Cancel", action="cancel"},
+		{label="Inviter dans un salon prive", action="invite_private"},
+		{label="Inviter dans un salon public", action="invite_public"},
+		{label="Annuler", action="cancel"},
 	}
 end
 
@@ -411,7 +412,7 @@ end
 		t:GetChild("JoinedLobbyContent"):visible(false)
 		t:queuecommand("UpdateLobbyView")
 		t:playcommand("SetStatus", {
-			text=message or "Lobby join timed out. Refreshing lobbies...",
+			text=message or "La tentative de rejoindre le salon a expire. Rafraichissement...",
 			showSpinner=false,
 			showPrompt=false
 		})
@@ -429,23 +430,23 @@ local function execute_player_action(option, user)
 	if option.action == "invite_private" then
 		t:GetChild("LobbyContent"):visible(false)
 		t:GetChild("OnlinePlayersContent"):visible(false)
-		t:playcommand("SetStatus", {text="Creating private lobby and sending invite...", showSpinner=true, showPrompt=false})
+			t:playcommand("SetStatus", {text="Creation du salon prive et envoi de l'invitation...", showSpinner=true, showPrompt=false})
 		MESSAGEMAN:Broadcast("InviteOnlinePlayer", {user_id=user.id, visibility="private"})
 	elseif option.action == "invite_public" then
 		t:GetChild("LobbyContent"):visible(false)
 		t:GetChild("OnlinePlayersContent"):visible(false)
-		t:playcommand("SetStatus", {text="Creating public lobby and sending invite...", showSpinner=true, showPrompt=false})
+			t:playcommand("SetStatus", {text="Creation du salon public et envoi de l'invitation...", showSpinner=true, showPrompt=false})
 		MESSAGEMAN:Broadcast("InviteOnlinePlayer", {user_id=user.id, visibility="public"})
 	elseif option.action == "join_user_room" then
 		t:GetChild("LobbyContent"):visible(false)
 		t:GetChild("OnlinePlayersContent"):visible(false)
-		t:playcommand("SetStatus", {text="Contacting player lobby...", showSpinner=true, showPrompt=false})
+			t:playcommand("SetStatus", {text="Contact du salon du joueur...", showSpinner=true, showPrompt=false})
 		begin_join_timeout(t)
 		MESSAGEMAN:Broadcast("JoinOnlinePlayerRoom", {user_id=user.id})
 	elseif option.action == "join_public_room" and option.room_id then
 		t:GetChild("LobbyContent"):visible(false)
 		t:GetChild("OnlinePlayersContent"):visible(false)
-		t:playcommand("SetStatus", {text="Joining public lobby...", showSpinner=true, showPrompt=false})
+			t:playcommand("SetStatus", {text="Connexion au salon public...", showSpinner=true, showPrompt=false})
 		begin_join_timeout(t)
 		MESSAGEMAN:Broadcast("JoinLobby", {code=option.room_id})
 	end
@@ -469,7 +470,7 @@ local function update_pack_choice_menu()
 	if not menu then return end
 	local title = menu:GetChild("PackChoiceTitle")
 	local options = menu:GetChild("PackChoiceOptions")
-	if title then title:settext("Choose Pack To Download") end
+		if title then title:settext("Choisir le pack a telecharger") end
 	if options then
 		local lines = {}
 		if pack_choice_message and trim_text(pack_choice_message) ~= "" then
@@ -479,11 +480,11 @@ local function update_pack_choice_menu()
 		for i, candidate in ipairs(pack_choice_candidates) do
 			local prefix = (i == pack_choice_index) and "> " or "  "
 			local songsCount = tonumber(candidate.songs_count) or 0
-			lines[#lines + 1] = prefix .. tostring(candidate.name or ("Pack " .. tostring(candidate.id)))
-				.. " (" .. tostring(songsCount) .. " songs)"
+				lines[#lines + 1] = prefix .. tostring(candidate.name or ("Pack " .. tostring(candidate.id)))
+					.. " (" .. tostring(songsCount) .. " chansons)"
 		end
 		lines[#lines + 1] = ""
-		lines[#lines + 1] = "Use Left/Right to choose, Start to download, Select to cancel."
+			lines[#lines + 1] = "Gauche/Droite pour choisir, START pour telecharger, Select pour annuler."
 		options:settext(table.concat(lines, "\n"))
 	end
 	menu:visible(true)
@@ -539,7 +540,7 @@ local InputHandler = function(event)
 					t:GetChild("JoinedLobbyContent"):visible(false)
 					t:queuecommand("UpdateLobbyView")
 					t:playcommand("SetStatus", {
-						text="Leaving lobby...",
+							text="Sortie du salon...",
 						showSpinner=true,
 						showPrompt=false
 					})
@@ -645,14 +646,14 @@ local InputHandler = function(event)
 						end
 						close_pack_choice_menu()
 						t:playcommand("SetStatus", {
-							text="Starting pack download...",
+								text="Demarrage du telechargement du pack...",
 							showSpinner=true,
 							showPrompt=false
 						})
 						ITGOnline.PackSync:DownloadPackByCandidate(pack_choice_song_info or joined_missing_song_info or joined_song_preview, candidate, function(ok, message)
 							if ok and t then
 								t:playcommand("SetStatus", {
-									text="Download complete. Extracting and reloading songs...",
+										text="Telechargement termine. Extraction et rechargement des chansons...",
 									showSpinner=true,
 									showPrompt=false
 								})
@@ -678,7 +679,7 @@ local InputHandler = function(event)
 
 		if pending_join_action_id > 0 and (event.GameButton == "Select" or event.GameButton == "Back") then
 			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-			cancel_pending_join("Join cancelled. Refreshing lobbies...")
+				cancel_pending_join("Connexion annulee. Rafraichissement des salons...")
 			return false
 		end
 
@@ -702,7 +703,7 @@ local InputHandler = function(event)
 					elseif joined_active_index == 2 and joined_is_manager then
 						if not joined_phase_allows_song_selection() then
 							t:playcommand("SetStatus", {
-								text="The current round is still finalizing. Wait for results before selecting another song.",
+									text="La manche actuelle se termine encore. Attendez les resultats avant de choisir une autre chanson.",
 								showSpinner=false,
 								showPrompt=true
 							})
@@ -740,7 +741,7 @@ local InputHandler = function(event)
 							MESSAGEMAN:Broadcast("StartOnlineRoom")
 						else
 							t:playcommand("SetStatus", {
-								text=joined_any_player_missing_song() and "Cannot start yet. A player has not confirmed the selected song." or "Cannot start yet. Select a song and wait until every player is ready.",
+									text=joined_any_player_missing_song() and "Impossible de lancer. Un joueur n'a pas confirme la chanson selectionnee." or "Impossible de lancer. Choisissez une chanson et attendez que chaque joueur soit pret.",
 								showSpinner=false,
 								showPrompt=true
 								})
@@ -825,7 +826,7 @@ local InputHandler = function(event)
 				local onlineHandler = GetOnlineHandlerInstance()
 				if onlineHandler and onlineHandler.connected then
 					t:playcommand("SetStatus", {
-						text="Searching lobbies...",
+							text="Recherche des salons...",
 						showSpinner=true,
 						showPrompt=false
 					})
@@ -838,7 +839,7 @@ local InputHandler = function(event)
 					t:GetChild("LobbyContent"):visible(false)
 					t:GetChild("OnlinePlayersContent"):visible(false)
 					t:playcommand("SetStatus", {
-						text="Refreshing lobby list...",
+							text="Rafraichissement de la liste des salons...",
 						showSpinner=true,
 						showPrompt=false
 					})
@@ -856,7 +857,7 @@ local InputHandler = function(event)
 				t:GetChild("LobbyContent"):visible(false)
 				t:GetChild("OnlinePlayersContent"):visible(false)
 				t:playcommand("SetStatus", {
-					text="Creating lobby...",
+						text="Creation du salon...",
 					showSpinner=true,
 					showPrompt=false
 				})
@@ -894,7 +895,7 @@ local af = Def.ActorFrame{
 			input_added = true
 		end
 			self:playcommand("SetStatus", {
-				text="Initializing online connection...",
+					text="Initialisation de la connexion en ligne...",
 				showSpinner=true
 			})
 		self:queuecommand("CheckConnect")
@@ -917,7 +918,7 @@ local af = Def.ActorFrame{
 		Name="JoinTimeoutTimer",
 		CheckJoinTimeoutCommand=function(self)
 			if pending_join_action_id > 0 and GetTimeSinceStart() >= pending_join_deadline then
-				cancel_pending_join("Lobby join timed out. Refreshing lobbies...")
+					cancel_pending_join("La tentative de rejoindre le salon a expire. Rafraichissement...")
 			end
 		end
 	},
@@ -941,12 +942,12 @@ local af = Def.ActorFrame{
 			local selected = (list_selected and lobby_view == "players" and i == online_player_index) and "> " or "  "
 			local room = user.room and user.room.name and (" " .. room_visibility_label(user.room) .. " " .. tostring(user.room.name)) or ""
 			local status = user.status and (" [" .. tostring(user.status) .. "]") or ""
-			lines[#lines + 1] = selected .. i .. ". " .. tostring(user.name or "Player") .. status .. room
+				lines[#lines + 1] = selected .. i .. ". " .. tostring(user.name or "Joueur") .. status .. room
 		end
 
 		local playersList = playersContent:GetChild("OnlinePlayersList")
 		if playersList then
-			playersList:settext(#lines > 0 and table.concat(lines, "\n") or "No connected players found.")
+				playersList:settext(#lines > 0 and table.concat(lines, "\n") or "Aucun joueur connecte trouve.")
 		end
 
 		local playerCount = playersContent:GetChild("OnlinePlayersCount")
@@ -972,7 +973,7 @@ local af = Def.ActorFrame{
 		local toggleButton = lobbyContent and lobbyContent:GetChild("OnlinePlayersButton")
 		local toggleText = toggleButton and toggleButton:GetChild("OnlinePlayersButtonText")
 		if toggleText then
-			toggleText:settext("Online Players")
+				toggleText:settext("Joueurs en ligne")
 		end
 
 		self:queuecommand("UpdateOnlinePlayers")
@@ -993,7 +994,7 @@ local af = Def.ActorFrame{
 		if not menu then return end
 		local title = menu:GetChild("PlayerActionTitle")
 		if title then
-			title:settext(player_action_user and tostring(player_action_user.name or "Player") or "Player")
+				title:settext(player_action_user and tostring(player_action_user.name or "Joueur") or "Joueur")
 		end
 		local body = {}
 		for i, option in ipairs(player_action_options) do
@@ -1011,15 +1012,15 @@ local af = Def.ActorFrame{
 		local title = prompt:GetChild("PrivateJoinTitle")
 		if title then
 			if private_join_prompt_kind == "invitation" then
-				title:settext(tostring(inviter.name or "A player") .. " invited you")
-			else
-				title:settext(tostring(requester.name or "A player") .. " wants to join")
+					title:settext(tostring(inviter.name or "Un joueur") .. " vous invite")
+				else
+					title:settext(tostring(requester.name or "Un joueur") .. " veut rejoindre")
+				end
 			end
-		end
-		local detail = prompt:GetChild("PrivateJoinDetail")
-		if detail then
-			detail:settext(tostring(room.visibility == "private" and "Private lobby: " or "Lobby: ") .. tostring(room.name or "Lobby"))
-		end
+			local detail = prompt:GetChild("PrivateJoinDetail")
+			if detail then
+				detail:settext(tostring(room.visibility == "private" and "Salon prive : " or "Salon : ") .. tostring(room.name or "Salon"))
+			end
 		local lines = {}
 		for i, option in ipairs(active_private_prompt_options()) do
 			lines[#lines + 1] = (i == private_join_prompt_index and "> " or "  ") .. option.label
@@ -1033,20 +1034,21 @@ local af = Def.ActorFrame{
 			if not joinedContent then return end
 			local codeValue = joinedContent:GetChild("JoinedLobbyCodeValue")
 		if codeValue then
-			codeValue:settext(joined_lobby_code ~= "" and joined_lobby_code or "(pending)")
+				codeValue:settext(joined_lobby_code ~= "" and joined_lobby_code or "(en attente)")
 		end
 
 			local lines = {}
 			for i, player in ipairs(joined_lobby_players) do
-				local profile = trim_text(player.profileName or player.name or player.playerId or ("Player "..i))
+					local profile = trim_text(player.profileName or player.name or player.playerId or ("Joueur "..i))
 				local ready = player.ready and " ✔" or ""
-				local missing = player.missingSong and " ⚠ missing song" or ""
-				local packSyncText = pack_sync_display_text(player.packSyncStatus)
-				if packSyncText ~= "" and packSyncText ~= "Ready" then
-					local progress = tonumber(player.packSyncDownloadProgress)
-					if progress and trim_text(player.packSyncStatus) == "download_in_progress" then
-						packSyncText = packSyncText .. " " .. tostring(progress) .. "%"
-					end
+					local missing = player.missingSong and " ⚠ chanson manquante" or ""
+					local packSyncStatus = trim_text(player.packSyncStatus)
+					local packSyncText = pack_sync_display_text(packSyncStatus)
+					if packSyncText ~= "" and packSyncStatus ~= "" and packSyncStatus ~= "unknown" and packSyncStatus ~= "ready" then
+						local progress = tonumber(player.packSyncDownloadProgress)
+						if progress and packSyncStatus == "download_in_progress" then
+							packSyncText = packSyncText .. " " .. tostring(progress) .. "%"
+						end
 					missing = missing .. " · " .. packSyncText
 				end
 				local optionParts = {}
@@ -1057,7 +1059,7 @@ local af = Def.ActorFrame{
 				local stepchart = abbreviate_stepchart(player.stepchart)
 				if stepchart ~= "" then optionParts[#optionParts+1] = stepchart end
 					if missing == "" and joined_song_preview ~= nil and player.songAvailable == false then
-					missing = " … confirming song"
+						missing = " … confirmation chanson"
 				end
 				local maxLineLen = 88
 				local lineHead = i..". "..profile
@@ -1076,7 +1078,7 @@ local af = Def.ActorFrame{
 
 			local playersText = joinedContent:GetChild("JoinedLobbyPlayers")
 		if playersText then
-			playersText:settext(#lines > 0 and table.concat(lines, "\n") or "Waiting for players...")
+				playersText:settext(#lines > 0 and table.concat(lines, "\n") or "En attente des joueurs...")
 		end
 
 			local songStatus = joinedContent and joinedContent:GetChild("JoinedLobbySongStatus")
@@ -1085,24 +1087,24 @@ local af = Def.ActorFrame{
 				local managerName = joined_manager_profile_name()
 				local managerLabel = managerName and (managerName .. " (" .. tostring(joined_manager_user_id or "?") .. ")")
 					or tostring(joined_manager_user_id or "unknown")
-				statusLines[#statusLines + 1] = joined_is_manager and "Role: Manager (you can start the room)"
-					or "Role: Member (only manager can start)"
-				statusLines[#statusLines + 1] = "Manager: " .. managerLabel
+					statusLines[#statusLines + 1] = joined_is_manager and "Role : manager (vous pouvez lancer le salon)"
+						or "Role : membre (seul le manager peut lancer)"
+					statusLines[#statusLines + 1] = "Manager : " .. managerLabel
 
 				local showStartStatus = joined_phase ~= "results"
 				local canStartInPhase = joined_phase_allows_start()
 				local everyoneReady = joined_all_players_ready()
 				local hasMissingSong = joined_any_player_missing_song()
 					local blockers = {}
-					if not joined_is_manager then blockers[#blockers + 1] = "you are not manager" end
-					if not joined_song_confirmed then blockers[#blockers + 1] = "no song selected" end
-					if not canStartInPhase then blockers[#blockers + 1] = "phase is " .. tostring(joined_phase or "unknown") end
-				if hasMissingSong then blockers[#blockers + 1] = "song not confirmed for all players" end
+						if not joined_is_manager then blockers[#blockers + 1] = "vous n'etes pas manager" end
+						if not joined_song_confirmed then blockers[#blockers + 1] = "aucune chanson selectionnee" end
+						if not canStartInPhase then blockers[#blockers + 1] = "phase " .. tostring(joined_phase or "inconnue") end
+					if hasMissingSong then blockers[#blockers + 1] = "chanson non confirmee pour tous les joueurs" end
 				if showStartStatus then
 					if #blockers == 0 then
-						statusLines[#statusLines + 1] = "Start status: available"
-					else
-						statusLines[#statusLines + 1] = "Start status: blocked (" .. table.concat(blockers, "; ") .. ")"
+							statusLines[#statusLines + 1] = "START disponible"
+						else
+							statusLines[#statusLines + 1] = "START bloque (" .. table.concat(blockers, "; ") .. ")"
 					end
 				end
 
@@ -1130,44 +1132,44 @@ local af = Def.ActorFrame{
 						statusLines[#statusLines + 1] = "mais aucune stepchart identique à celle du manager n’a été trouvée."
 						statusLines[#statusLines + 1] = "Vous pouvez télécharger le pack utilisé par le manager."
 					else
-						statusLines[#statusLines + 1] = "Missing or different song pack locally"
+							statusLines[#statusLines + 1] = "Pack de chansons manquant ou different localement"
 					end
 					if missingSongInfo.pack and missingSongInfo.pack ~= "" then
-						statusLines[#statusLines + 1] = "Pack: " .. tostring(missingSongInfo.pack)
-					end
-					statusLines[#statusLines + 1] = "Song: " .. tostring(missingSongInfo.title or "Unknown")
-				elseif joined_song_preview then
-					statusLines[#statusLines + 1] = (joined_song_confirmed and "✔ Song selected" or "Browsing song")
-					if joined_song_preview.pack and joined_song_preview.pack ~= "" then
-						statusLines[#statusLines + 1] = "Pack: " .. tostring(joined_song_preview.pack)
+							statusLines[#statusLines + 1] = "Pack : " .. tostring(missingSongInfo.pack)
+						end
+						statusLines[#statusLines + 1] = "Chanson : " .. tostring(missingSongInfo.title or "Inconnue")
+					elseif joined_song_preview then
+						statusLines[#statusLines + 1] = (joined_song_confirmed and "✔ Chanson selectionnee" or "Choix de chanson en cours")
+						if joined_song_preview.pack and joined_song_preview.pack ~= "" then
+							statusLines[#statusLines + 1] = "Pack : " .. tostring(joined_song_preview.pack)
 					end
 					if joined_preview_unknown_pack and not joined_song_confirmed then
 						statusLines[#statusLines + 1] = "Le manager navigue dans un pack que vous ne possédez pas."
 					end
-					statusLines[#statusLines + 1] = "Song: " .. tostring(joined_song_preview.title or "Unknown")
-					if joined_song_preview.artist and joined_song_preview.artist ~= "" then
-						statusLines[#statusLines + 1] = "Artist: " .. tostring(joined_song_preview.artist)
-					end
-					if joined_phase == "playing" then
-						statusLines[#statusLines + 1] = "Round in progress. Waiting for everyone to finish."
-					elseif joined_phase == "results" then
-						statusLines[#statusLines + 1] = joined_is_manager and "Results ready. Select Music for the next song."
-							or "Results ready. Waiting for the manager to choose the next song."
-					elseif joined_phase == "starting" then
-						local seconds = ITGOnline and ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or nil
-						statusLines[#statusLines + 1] = seconds and ("Starting in " .. tostring(math.ceil(math.max(0, seconds))) .. "...") or "Starting..."
-					elseif joined_phase == "config" or joined_phase == "lobby_ready" then
-						if joined_any_player_missing_song() then
-							statusLines[#statusLines + 1] = "Waiting for every player to confirm the selected song."
-						else
-							statusLines[#statusLines + 1] = joined_is_manager and "Song confirmed. Press Start."
-								or "Song confirmed. Waiting for the manager to start."
+						statusLines[#statusLines + 1] = "Chanson : " .. tostring(joined_song_preview.title or "Inconnue")
+						if joined_song_preview.artist and joined_song_preview.artist ~= "" then
+							statusLines[#statusLines + 1] = "Artiste : " .. tostring(joined_song_preview.artist)
 						end
-					end
-			elseif joined_is_manager then
-				statusLines[#statusLines + 1] = "Choose a song to start the round."
-			else
-					statusLines[#statusLines + 1] = "Waiting for the lobby creator to choose a song."
+						if joined_phase == "playing" then
+							statusLines[#statusLines + 1] = "Manche en cours. En attente de la fin pour tous."
+						elseif joined_phase == "results" then
+							statusLines[#statusLines + 1] = joined_is_manager and "Resultats prets. Choisissez la prochaine chanson."
+								or "Resultats prets. En attente du choix du manager."
+						elseif joined_phase == "starting" then
+							local seconds = ITGOnline and ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or nil
+							statusLines[#statusLines + 1] = seconds and ("Demarrage dans " .. tostring(math.ceil(math.max(0, seconds))) .. "...") or "Demarrage..."
+						elseif joined_phase == "config" or joined_phase == "lobby_ready" then
+							if joined_any_player_missing_song() then
+								statusLines[#statusLines + 1] = "En attente de confirmation de la chanson par tous les joueurs."
+							else
+								statusLines[#statusLines + 1] = joined_is_manager and "Chanson confirmee. Appuyez sur START."
+									or "Chanson confirmee. En attente du lancement par le manager."
+							end
+						end
+				elseif joined_is_manager then
+					statusLines[#statusLines + 1] = "Choisissez une chanson pour lancer la manche."
+				else
+						statusLines[#statusLines + 1] = "En attente du choix de chanson par le createur du salon."
 				end
 				songStatus:settext(table.concat(statusLines, "\n"))
 				songStatus:diffuse(joined_missing_song and Color.Red or joined_song_confirmed and Color.Green or Color.White)
@@ -1227,7 +1229,7 @@ local af = Def.ActorFrame{
 				reloadSongsButton:visible(joined_missing_song)
 				local label = reloadSongsButton:GetChild("ReloadSongsLabel")
 				if label then
-					label:settext(joined_can_download_pack and "Download pack" or "Reload Songs")
+						label:settext(joined_can_download_pack and "Telecharger pack" or "Recharger chansons")
 				end
 			end
 
@@ -1250,19 +1252,36 @@ local af = Def.ActorFrame{
 					visible and "1" or "0",
 					ready_summary(),
 				}, "|")
-				if debugKey ~= last_start_visibility_debug_key then
-					last_start_visibility_debug_key = debugKey
-					lobby_debug("start_button visible=" .. tostring(visible)
+					if debugKey ~= last_start_visibility_debug_key then
+						last_start_visibility_debug_key = debugKey
+						lobby_debug("start_button visible=" .. tostring(visible)
 						.. " phase=" .. tostring(joined_phase)
 						.. " isManager=" .. tostring(joined_is_manager)
 						.. " managerUserId=" .. tostring(joined_manager_user_id)
 						.. " players=" .. tostring(#joined_lobby_players)
 						.. " everyoneReady=" .. tostring(everyoneReady)
-						.. " missingSong=" .. tostring(hasMissingSong)
-						.. " readyStates=[" .. ready_summary() .. "]")
+							.. " missingSong=" .. tostring(hasMissingSong)
+							.. " readyStates=[" .. ready_summary() .. "]")
+					end
+
+					if visible then
+						local autoFocusKey = table.concat({
+							tostring(joined_lobby_code or ""),
+							tostring(joined_phase or ""),
+							tostring(joined_song_selected_key or ""),
+							ready_summary(),
+							hasMissingSong and "1" or "0",
+						}, "|")
+						if autoFocusKey ~= last_auto_start_focus_key then
+							last_auto_start_focus_key = autoFocusKey
+							joined_active_index = 4
+							self:queuecommand("Hover")
+						end
+					else
+						last_auto_start_focus_key = ""
+					end
 				end
-			end
-		end,
+			end,
 		SetStatusCommand=function(self, params)
 			if showing_pack_choice_menu then
 				return
@@ -1277,7 +1296,7 @@ local af = Def.ActorFrame{
 			-- Only try once per screen load to avoid infinite loops of trying to connect.
 			if not attempted and (not onlineHandler.socket or onlineHandler.errorMsg ~= nil) then
 				self:playcommand("SetStatus", {
-					text="Connecting to online service...",
+						text="Connexion au service en ligne...",
 					showSpinner=true
 				})
 				MESSAGEMAN:Broadcast("ConnectOnline")
@@ -1287,7 +1306,7 @@ local af = Def.ActorFrame{
 			if not onlineHandler.connected and onlineHandler.errorMsg == nil then
 				wait_time = wait_time + 1
 				self:playcommand("SetStatus", {
-					text="Connecting to online service... ("..wait_time.."s)",
+						text="Connexion au service en ligne... ("..wait_time.."s)",
 					showSpinner=true
 				})
 				self:sleep(1):queuecommand("CheckConnect")
@@ -1296,7 +1315,7 @@ local af = Def.ActorFrame{
 			end
 		else
 			self:playcommand("SetStatus", {
-				text="Initializing online handler...",
+					text="Initialisation du gestionnaire en ligne...",
 				showSpinner=true
 			})
 			self:sleep(0.25):queuecommand("CheckConnect")
@@ -1309,14 +1328,14 @@ local af = Def.ActorFrame{
 				connected = true
 				has_error = false
 					self:playcommand("SetStatus", {
-						text="Connected to online service.",
+							text="Connecte au service en ligne.",
 						showSpinner=false,
 						showPrompt=false
 					})
 					self:GetChild("NetworkStatus"):visible(false)
 							if ITGOnline and ITGOnline.Sync then
 								self:playcommand("SetStatus", {
-									text="Synchronizing online state...",
+										text="Synchronisation de l'etat en ligne...",
 									showSpinner=true,
 									showPrompt=false
 								})
@@ -1329,7 +1348,7 @@ local af = Def.ActorFrame{
 								end)
 							elseif ITGOnline and ITGOnline.currentRoomId then
 								self:playcommand("SetStatus", {
-									text="Restoring current lobby...",
+										text="Restauration du salon actuel...",
 									showSpinner=true,
 									showPrompt=false
 								})
@@ -1342,7 +1361,7 @@ local af = Def.ActorFrame{
 								end)
 						elseif ITGOnline and ITGOnline.FetchCurrentRoom then
 							self:playcommand("SetStatus", {
-								text="Restoring current lobby...",
+									text="Restauration du salon actuel...",
 								showSpinner=true,
 								showPrompt=false
 							})
@@ -1364,10 +1383,10 @@ local af = Def.ActorFrame{
 				connected = false
 				has_error = true
 				self:playcommand("SetStatus", {
-					text="Error connecting to online service:\n"..onlineHandler.errorMsg,
+						text="Erreur de connexion au service en ligne :\n"..onlineHandler.errorMsg,
 					showSpinner=false,
 					showPrompt=true,
-					promptText="Press &START; to return to the main menu."
+						promptText="Appuyez sur &START; pour revenir au menu principal."
 				})
 				self:GetChild("LobbyContent"):visible(false)
 				self:GetChild("OnlinePlayersContent"):visible(false)
@@ -1517,10 +1536,10 @@ local af = Def.ActorFrame{
 					})
 				end
 			end
-			normalize_joined_active_index()
-			self:queuecommand("UpdateJoinedLobbyText")
-			self:queuecommand("Hover")
-		end,
+					set_joined_default_active_index()
+				self:queuecommand("UpdateJoinedLobbyText")
+				self:queuecommand("Hover")
+			end,
 			OnlineSongAvailableMessageCommand=function(self)
 				local wasMissing = joined_missing_song
 				joined_missing_song = false
@@ -1544,7 +1563,7 @@ local af = Def.ActorFrame{
 				self:GetChild("LobbyContent"):visible(false)
 			self:GetChild("OnlinePlayersContent"):visible(false)
 			self:playcommand("SetStatus", {
-				text="Joining lobby...",
+					text="Connexion au salon...",
 				showSpinner=true,
 				showPrompt=false
 			})
@@ -1568,7 +1587,7 @@ local af = Def.ActorFrame{
 			self:queuecommand("UpdateLobbyView")
 			self:GetChild("NetworkStatus"):visible(false)
 			self:playcommand("SetStatus", {
-				text="Left lobby.",
+					text="Salon quitte.",
 				showSpinner=false,
 				showPrompt=false
 			})
@@ -1616,14 +1635,14 @@ local af = Def.ActorFrame{
 			self:GetChild("JoinedLobbyContent"):visible(false)
 			self:queuecommand("UpdateLobbyView")
 			self:playcommand("SetStatus", {
-				text=params.message and ("Create lobby failed:\n"..params.message) or "Create lobby failed.",
+					text=params.message and ("Echec de creation du salon :\n"..params.message) or "Echec de creation du salon.",
 				showSpinner=false,
 				showPrompt=false
 			})
 				elseif params and params.event == "joinLobby" and params.success == true then
 					begin_join_timeout(self, 60)
 					self:playcommand("SetStatus", {
-						text=(params.message or "Join request sent. Waiting for the room manager.") .. "\nPress Select or Back to cancel.",
+							text=(params.message or "Demande envoyee. En attente du manager du salon.") .. "\nAppuyez sur Select ou Back pour annuler.",
 						showSpinner=false,
 						showPrompt=false
 					})
@@ -1633,7 +1652,7 @@ local af = Def.ActorFrame{
 				self:GetChild("JoinedLobbyContent"):visible(false)
 			self:queuecommand("UpdateLobbyView")
 			self:playcommand("SetStatus", {
-				text=params.message and ("Join lobby failed:\n"..params.message) or "Join lobby failed.",
+					text=params.message and ("Echec de connexion au salon :\n"..params.message) or "Echec de connexion au salon.",
 				showSpinner=false,
 				showPrompt=false
 			})
@@ -1647,14 +1666,14 @@ local af = Def.ActorFrame{
 			self:GetChild("OnlinePlayersContent"):visible(false)
 			self:queuecommand("UpdateJoinedLobbyText")
 			self:playcommand("SetStatus", {
-				text=params.message and ("Leave lobby failed:\n"..params.message) or "Leave lobby failed.",
+					text=params.message and ("Echec de sortie du salon :\n"..params.message) or "Echec de sortie du salon.",
 				showSpinner=false,
 				showPrompt=false
 			})
 		elseif params and params.event == "invitePlayer" then
 			if params.success then
 				self:playcommand("SetStatus", {
-					text=params.message or "Invitation sent.",
+						text=params.message or "Invitation envoyee.",
 					showSpinner=false,
 					showPrompt=false
 				})
@@ -1663,20 +1682,20 @@ local af = Def.ActorFrame{
 				self:GetChild("JoinedLobbyContent"):visible(false)
 				self:queuecommand("UpdateLobbyView")
 				self:playcommand("SetStatus", {
-					text=params.message and ("Invitation failed:\n"..params.message) or "Invitation failed.",
+						text=params.message and ("Echec de l'invitation :\n"..params.message) or "Echec de l'invitation.",
 					showSpinner=false,
 					showPrompt=false
 				})
 			end
 		elseif params and params.event == "privateJoinAnswer" then
 			self:playcommand("SetStatus", {
-				text=params.message or "Join request answered.",
+					text=params.message or "Demande traitee.",
 				showSpinner=false,
 				showPrompt=false
 			})
 		elseif params and params.event == "roomInvitationAnswer" then
 			self:playcommand("SetStatus", {
-				text=params.message or "Invitation answered.",
+					text=params.message or "Invitation traitee.",
 				showSpinner=false,
 				showPrompt=false
 			})
@@ -1690,7 +1709,7 @@ local af = Def.ActorFrame{
 		end,
   
 		LoadFont("Common Normal")..{
-			Text="&MENULEFT;/&MENURIGHT; to Choose | &START; to Select | &SELECT; or &MENULEFT;+&MENURIGHT; to Return",
+				Text="&MENULEFT;/&MENURIGHT; pour choisir | &START; pour valider | &SELECT; ou &MENULEFT;+&MENURIGHT; pour revenir",
 			InitCommand=function(self)
 				self:y(180)
 			end
@@ -1733,7 +1752,7 @@ local af = Def.ActorFrame{
 			},
 
 			LoadFont("Common Bold")..{
-				Text="Available Lobbies",
+					Text="Salons disponibles",
 				InitCommand=function(self)
 					self:horizalign(left):x(-170):y(-170):zoom(0.5)
 				end,
@@ -1758,7 +1777,7 @@ local af = Def.ActorFrame{
 
 		LoadFont("Common Normal")..{
 			Name="EmptyStateText",
-			Text="No lobbies found.",
+				Text="Aucun salon trouve.",
 			InitCommand=function(self)
 				self:horizalign(center):xy(-120, -120):zoom(1.4):diffuse(Color.White):visible(false)
 			end
@@ -1796,7 +1815,7 @@ local af = Def.ActorFrame{
 
 			LoadFont("Common Bold")..{
 				Name="OnlinePlayersButtonText",
-				Text="Online Players",
+					Text="Joueurs en ligne",
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -1853,7 +1872,7 @@ local af = Def.ActorFrame{
 			},
 
 			LoadFont("Common Bold")..{
-				Text="Refresh List",
+					Text="Rafraichir",
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -1910,7 +1929,7 @@ local af = Def.ActorFrame{
 			},
 
 			LoadFont("Common Bold")..{
-				Text="Create Lobby",
+					Text="Creer un salon",
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -1967,7 +1986,7 @@ local af = Def.ActorFrame{
 			},
 
 			LoadFont("Common Bold")..{
-				Text="Go Back",
+					Text="Retour",
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -2004,7 +2023,7 @@ local af = Def.ActorFrame{
 		end,
 
 		LoadFont("Common Normal")..{
-			Text="&MENULEFT;/&MENURIGHT; to Choose | &START; to Select",
+				Text="&MENULEFT;/&MENURIGHT; pour choisir | &START; pour valider",
 			InitCommand=function(self)
 				self:y(180)
 			end
@@ -2045,7 +2064,7 @@ local af = Def.ActorFrame{
 			end
 		},
 		LoadFont("Common Bold")..{
-			Text="Online Players",
+				Text="Joueurs en ligne",
 			InitCommand=function(self)
 				self:horizalign(left):x(-290):y(-170):zoom(0.5)
 			end
@@ -2059,7 +2078,7 @@ local af = Def.ActorFrame{
 		},
 		LoadFont("Common Normal")..{
 			Name="OnlinePlayersList",
-			Text="No connected players found.",
+				Text="Aucun joueur connecte trouve.",
 			InitCommand=function(self)
 				self:horizalign(left):vertalign(top):xy(-290, -132):zoom(0.82):maxwidth(620)
 			end
@@ -2093,7 +2112,7 @@ local af = Def.ActorFrame{
 				end
 			},
 			LoadFont("Common Bold")..{
-				Text="Available Lobbies",
+					Text="Salons disponibles",
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -2146,7 +2165,7 @@ local af = Def.ActorFrame{
 				end
 			},
 			LoadFont("Common Bold")..{
-				Text="Refresh List",
+					Text="Rafraichir",
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -2195,7 +2214,7 @@ local af = Def.ActorFrame{
 				end
 			},
 			LoadFont("Common Bold")..{
-				Text="Create Lobby",
+					Text="Creer un salon",
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -2244,7 +2263,7 @@ local af = Def.ActorFrame{
 				end
 			},
 			LoadFont("Common Bold")..{
-				Text="Go Back",
+					Text="Retour",
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -2288,35 +2307,35 @@ local af = Def.ActorFrame{
 			end
 		},
 		LoadFont("Common Bold")..{
-			Text="Joined Lobby",
+				Text="Salon rejoint",
 			InitCommand=function(self)
 				self:horizalign(left):x(-290):y(-170):zoom(0.5)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedLobbyCodeLabel",
-			Text="Lobby Code:",
+				Text="Code du salon :",
 			InitCommand=function(self)
 				self:horizalign(right):x(-10):y(-170):zoom(1)
 			end
 		},
 		LoadFont("Common Bold")..{
 			Name="JoinedLobbyCodeValue",
-			Text="(pending)",
+				Text="(en attente)",
 			InitCommand=function(self)
 				self:horizalign(right):x(50):y(-170):zoom(0.5)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedLobbyPlayers",
-			Text="Waiting for players...",
+				Text="En attente des joueurs...",
 			InitCommand=function(self)
 				self:horizalign(left):x(-290):y(-100):zoom(1):maxwidth(560)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedLobbySongStatus",
-			Text="Waiting for song...",
+				Text="En attente de la chanson...",
 			InitCommand=function(self)
 				self:horizalign(left):vertalign(top):xy(-290, 20):zoom(0.62):maxwidth(580)
 			end
@@ -2340,7 +2359,7 @@ local af = Def.ActorFrame{
 				end
 			},
 			LoadFont("Common Bold")..{
-				Text="Leave Lobby",
+					Text="Quitter le salon",
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -2370,7 +2389,7 @@ local af = Def.ActorFrame{
 				end
 			},
 			LoadFont("Common Bold")..{
-				Text="Select Music",
+					Text="Choisir musique",
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -2402,7 +2421,7 @@ local af = Def.ActorFrame{
 				},
 				LoadFont("Common Bold")..{
 					Name="ReloadSongsLabel",
-					Text="Download pack",
+						Text="Telecharger pack",
 					InitCommand=function(self)
 						self:zoom(0.5)
 					end,
@@ -2433,7 +2452,7 @@ local af = Def.ActorFrame{
 					end
 				},
 				LoadFont("Common Bold")..{
-					Text="Start",
+						Text="START",
 					InitCommand=function(self)
 						self:zoom(0.5)
 					end,
@@ -2465,7 +2484,7 @@ local af = Def.ActorFrame{
 			end
 		},
 		LoadFont("Common Normal")..{
-			Text="Disconnect from the lobby?",
+				Text="Se deconnecter du salon ?",
 			InitCommand=function(self)
 				self:y(-42):zoom(1)
 			end
@@ -2490,7 +2509,7 @@ local af = Def.ActorFrame{
 				end
 			},
 			LoadFont("Common Bold")..{
-				Text="Cancel",
+					Text="Annuler",
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -2519,7 +2538,7 @@ local af = Def.ActorFrame{
 				end
 			},
 			LoadFont("Common Bold")..{
-				Text="Disconnect",
+					Text="Deconnecter",
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,

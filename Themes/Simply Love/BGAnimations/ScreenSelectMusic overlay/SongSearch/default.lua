@@ -8,6 +8,9 @@ local paneWidth = 319
 local borderWidth = 2
 
 local textHeight = 15
+local detailSpacingY = 21
+local detailStartY = -paneHeight/2 + 30
+local SearchFont = (ThemePrefs.Get("ThemeFont") or "Common") .. " Normal"
 
 local af = Def.ActorFrame {
 	Name="SongSearch",
@@ -97,7 +100,7 @@ local overlay = Def.ActorFrame {
 		end,
 	},
 
-	LoadFont("Common Normal").. {
+	LoadFont(SearchFont).. {
 		Text="Search Results For:",
 		InitCommand=function(self)
 			self:diffuse(Color.White)
@@ -105,7 +108,7 @@ local overlay = Def.ActorFrame {
 		end,
 	},
 
-	LoadFont("Common Normal").. {
+	LoadFont(SearchFont).. {
 		Name="SearchText",
 		InitCommand=function(self)
 			self:diffuse(Color.White)
@@ -117,7 +120,7 @@ local overlay = Def.ActorFrame {
 		end,
 	},
 
-	LoadFont("Common Normal").. {
+	LoadFont(SearchFont).. {
 		Name="NumResults",
 		InitCommand=function(self)
 			self:diffuse(Color.White)
@@ -136,6 +139,7 @@ local songDetails = {
 	{ "Pack", function(song) return song:GetGroupName() end },
 	{ "Song", function(song) return song:GetDisplayMainTitle() end },
 	{ "Subtitle", function(song) return song:GetDisplaySubTitle() end },
+	{ "Artist", function(song) return song:GetDisplayArtist() end },
 	{ "BPMs", function(song)
 		local bpms = song:GetDisplayBpms()
 		if bpms[2]-bpms[1] == 0 then
@@ -167,13 +171,13 @@ local songDetails = {
 for i, details in ipairs(songDetails) do
 	local name = details[1]
 	local formatter = details[2]
-	overlay[#overlay+1] = LoadFont("Common Normal").. {
+	overlay[#overlay+1] = LoadFont(SearchFont).. {
 		Name=name,
 		Text=name..": ",
 		InitCommand=function(self)
 			local zoom = 0.8
 			self:diffuse(color("#aaaaff")):zoom(zoom):maxwidth(145/zoom):horizalign(left)
-			self:xy(10, -paneHeight/2 + textHeight * zoom * (i*2-1) + 8*(i*2-1))
+			self:xy(10, detailStartY + detailSpacingY * (i - 1))
 		end,
 		UpdateSearchResultMessageCommand=function(self, params)
 			local songOrExit = params.songOrExit
@@ -185,13 +189,13 @@ for i, details in ipairs(songDetails) do
 		end,
 	}
 
-	overlay[#overlay+1] = LoadFont("Common Normal").. {
+	overlay[#overlay+1] = LoadFont(SearchFont).. {
 		Name=name.."Text",
 		Text=name,
 		InitCommand=function(self)
 			local zoom = 0.8
 			self:diffuse(Color.White):zoom(zoom):maxwidth(115/zoom):horizalign(left)
-			self:xy(40, -paneHeight/2 + textHeight * zoom * (i*2) + 8*(i*2))
+			self:xy(78, detailStartY + detailSpacingY * (i - 1))
 		end,
 		UpdateSearchResultMessageCommand=function(self, params)
 			local songOrExit = params.songOrExit

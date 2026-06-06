@@ -1,0 +1,1217 @@
+-- Abort for courses; ArrowCloud + GS only on song wheel
+if GAMESTATE:IsCourseMode() then return end
+
+-- Respect the existing Simply Love preference for where score data appears.
+if ThemePrefs.Get("MusicWheelGS") ~= "Scorebox" then return end
+
+local player = ...
+local pn = ToEnumShortString(player)
+local n = player==PLAYER_1 and "1" or "2"
+
+local AC_BASE_URL = "https://api.arrowcloud.dance"
+local AC_REQUEST_TIMEOUT = 5
+local SCOREBOX_TAG = "[ArrowCloud-Scorebox]"
+
+local function scoreboxTrace(message, force)
+	local debugEnabled = (ThemePrefs and ThemePrefs.Get and ThemePrefs.Get("ArrowCloudDebugLogs") == true)
+		or (SL and SL.ArrowCloud and SL.ArrowCloud.DebugScorebox == true)
+	if Trace and (force or debugEnabled) then
+		Trace(SCOREBOX_TAG .. " " .. tostring(message))
+	end
+end
+
+local function isArrowCloudEnabled()
+	return ThemePrefs and ThemePrefs.Get and ThemePrefs.Get("EnableArrowCloud") == true
+end
+
+local function ensureArrowCloudRuntime()
+	SL.ArrowCloud = SL.ArrowCloud or {}
+	SL.ArrowCloud.Enabled = isArrowCloudEnabled()
+	SL.ArrowCloud.BaseURL = SL.ArrowCloud.BaseURL or AC_BASE_URL
+	SL.ArrowCloud.RequestTimeout = SL.ArrowCloud.RequestTimeout or AC_REQUEST_TIMEOUT
+end
+
+local function readArrowCloudApiKey()
+	if SL[pn] and SL[pn].ArrowCloudApiKey and #SL[pn].ArrowCloudApiKey > 0 then
+		return SL[pn].ArrowCloudApiKey
+	end
+
+	if not PROFILEMAN or not IniFile then return "" end
+	local profileDir = PROFILEMAN:GetProfileDir(player == PLAYER_1 and 0 or 1)
+	if not profileDir or profileDir == "" then return "" end
+
+	local path = profileDir .. "ArrowCloud.ini"
+	if not FILEMAN:DoesFileExist(path) then return "" end
+
+	local contents = IniFile.ReadFile(path) or {}
+	local apiKey = contents["ArrowCloud"] and contents["ArrowCloud"]["ApiKey"] or ""
+	if SL[pn] then
+		SL[pn].ArrowCloudApiKey = apiKey or ""
+	end
+	return apiKey or ""
+end
+
+ensureArrowCloudRuntime()
+
+-- Previous logic returned if GrooveStats wasn't available. We now allow
+-- ArrowCloud-only operation. We'll only skip entirely if BOTH services are unusable.
+local gsUnavailable = (not IsServiceAllowed(SL.GrooveStats.GetScores)) or SL[pn].ApiKey == ""
+local arrowcloudUnavailable = (not SL.ArrowCloud) or (not SL.ArrowCloud.Enabled) or readArrowCloudApiKey() == ""
+if gsUnavailable and arrowcloudUnavailable then
+	scoreboxTrace("disabled for " .. pn ..
+		" gs_unavailable=" .. tostring(gsUnavailable) ..
+		" ac_enabled=" .. tostring(SL.ArrowCloud and SL.ArrowCloud.Enabled) ..
+		" ac_key=" .. tostring(readArrowCloudApiKey() ~= ""))
+	return
+end
+
+local IsNotWide = (GetScreenAspectRatio() < 16/9)
+local NoteFieldIsCentered = (GetNotefieldX(player) == _screen.cx)
+-- GrooveStats shows 5 rows; ArrowCloud now returns 7. We render 7 rows total
+-- (GS will leave rows 6-7 blank) to keep the layout simple and consistent.
+local NumEntries = 7
+
+local border = 5
+local width = 162
+-- Keep original box height so GS visuals are unchanged; we'll compress text for AC
+local height = 80
+
+-- Row display policy: GS/events show 5 rows; ArrowCloud shows 7 within same height
+local GS_ROWS = 5
+local AC_ROWS = 7
+local function RowsForStyle(style)
+	return (style >= 4) and AC_ROWS or GS_ROWS
+end
+local function RowSpacingForStyle(style)
+	return height / RowsForStyle(style)
+end
+local function TextZoomForStyle(style)
+	return (style >= 4) and 0.75 or 0.87
+end
+local function CrownZoomForStyle(style)
+	return (style >= 4) and 0.075 or 0.09
+end
+
+local cur_style = 0
+-- We reserve style indices:
+-- 1/2: GrooveStats ITG / EX (ordering dynamic)
+-- 3: RPG (event)
+-- 4: ITL (event)
+-- 5: ArrowCloud ITG
+-- 6: ArrowCloud EX
+-- 7: ArrowCloud HardEX
+-- Rotation logic treats styles with has_data=false as skipped.
+local num_styles = 7
+
+	local GrooveStatsBlue = color("#007b85")
+	local RpgYellow = color("1,0.972,0.792,1")
+	local ItlPink = color("1,0.2,0.406,1")
+	local BoogieStatsPurple = color("#8000ff")
+	local ArrowCloudITG = Color.White
+	local ArrowCloudEX = (SL.JudgmentColors["FA+"] and SL.JudgmentColors["FA+"][1]) or color("#21CCE8")
+	local ArrowCloudHardEX = (SL.JudgmentColors["FA+"] and SL.JudgmentColors["FA+"][7]) or color("#ff00cc")
+
+local currentHash = "nothing"
+
+local style_color = {
+	[0] = GrooveStatsBlue,  -- GS ITG/EX slot A
+	[1] = GrooveStatsBlue,  -- GS ITG/EX slot B
+	[2] = RpgYellow,
+	[3] = ItlPink,
+		[4] = ArrowCloudITG,
+		[5] = ArrowCloudEX,
+		[6] = ArrowCloudHardEX,
+	}
+
+local self_color = color("#a1ff94")
+local rival_color = color("#c29cff")
+
+local loop_seconds = 5
+local transition_seconds = 0.5
+local anim_seconds = transition_seconds
+local pendingRequests = 0
+local ScoreboxFont = "Common"
+
+local all_data = {}
+
+local ResetAllData = function()
+	all_data = {}
+	SL[pn].Rival = {}
+	SL[pn].Rival.Score = 0
+	SL[pn].Rival.ExScore = 0
+	SL[pn].Rival.WRScore = 0
+	SL[pn].Rival.WRExScore = 0
+
+		for i=1,num_styles do
+			local data = { has_data=false, scores={}, mode_label="" }
+		for j=1,NumEntries do
+			data.scores[j] = {
+				rank="",
+				name="",
+				score="",
+				isSelf=false,
+				isRival=false,
+				isFail=false,
+				isEx=false,
+			}
+		end
+		all_data[i] = data
+	end
+end
+
+-- Initialize the all_data object.
+ResetAllData()
+
+-- Checks to see if any data is available.
+local hideGrooveStats = ThemePrefs.Get("HideGrooveStats")
+local HasData = function(idx)
+	-- idx 3 is ITL, which should still be shown even if GrooveStats is hidden
+	if hideGrooveStats and idx <= 2 then return false end
+	return all_data[idx+1] and all_data[idx+1].has_data
+end
+
+	local SetScoreData = function(data_idx, score_idx, rank, name, score, isSelf, isRival, isFail, isEx, modeLabel)
+		if score_idx > NumEntries then return end
+		all_data[data_idx].has_data = true
+		if modeLabel and modeLabel ~= "" then
+			all_data[data_idx].mode_label = modeLabel
+		end
+
+		local score_data = all_data[data_idx]["scores"][score_idx]
+	score_data.rank = rank..((#rank > 0) and "." or "")
+	score_data.name = name
+	score_data.score = score
+	score_data.isSelf = isSelf
+	score_data.isRival = isRival
+	score_data.isFail = isFail
+	score_data.isEx = isEx
+
+	if not isFail and (isRival or isSelf) then
+		if data_idx == 3 then
+			if tonumber(score) > SL[pn].Rival.ExScore then
+				SL[pn].Rival.ExScore = tonumber(score)
+			end
+		else
+			if tonumber(score) > SL[pn].Rival.Score then
+				SL[pn].Rival.Score = tonumber(score)
+			end
+		end
+	end
+
+	if score_data.rank == 1 then
+		if data_idx == 3 then
+			SL[pn].Rival.WRExScore = tonumber(score)
+		else
+			if tonumber(score) > SL[pn].Rival.WRScore then
+				SL[pn].Rival.WRScore = tonumber(score)
+			end
+		end
+	end
+end
+
+local LeaderboardRequestProcessor = function(res, master)
+	local function finishRequest()
+		pendingRequests = pendingRequests - 1
+		if pendingRequests <= 0 and master ~= nil then
+			master:queuecommand("CheckScorebox")
+		end
+	end
+
+	if master == nil then
+		scoreboxTrace("master is nil, aborting", true)
+		return
+	end
+
+	scoreboxTrace("response statusCode=" .. tostring(res and res.statusCode or "nil")
+		.. " error=" .. tostring(res and res.error or "nil"))
+
+	if not res or res.error or res.statusCode ~= 200 then
+		local error = res and res.error and ToEnumShortString(res.error) or nil
+		local text = ""
+		if error == "Timeout" then
+			text = "Timed Out"
+		elseif error or (res and res.statusCode ~= nil and res.statusCode ~= 200) then
+			text = "Failed to Load 😞"
+		end
+		SetScoreData(1, 1, "", text, "", false, false, false, false)
+		finishRequest()
+		return
+	end
+
+	local playerStr = "player"..n
+	local ok, data = pcall(JsonDecode, res.body or "")
+	if not ok or type(data) ~= "table" then
+		scoreboxTrace("invalid GrooveStats JSON", true)
+		SetScoreData(1, 1, "", "Failed to Load 😞", "", false, false, false, false)
+		finishRequest()
+		return
+	end
+
+	-- BoogieStats integration
+	-- Find out whether this chart is ranked on GrooveStats.
+	-- If it is unranked, alter groovestats logo and the box border color to the BoogieStats theme
+	local headers = res.headers or {}
+	local boogie = false
+	local boogie_ex = false
+	if headers["bs-leaderboard-player-" .. n] == "BS" then
+		boogie = true
+	elseif headers["bs-leaderboard-player-" .. n] == "BS-EX" then
+		boogie_ex = true
+	end
+	if not SCREENMAN:GetTopScreen():GetChild("Overlay") then
+		finishRequest()
+		return
+	end
+	local gsBox = SCREENMAN:GetTopScreen():GetChild("Overlay"):GetChild("PerPlayer"):GetChild("ScoreBox" .. pn):GetChild("GrooveStatsLogo")
+	local bsBox = SCREENMAN:GetTopScreen():GetChild("Overlay"):GetChild("PerPlayer"):GetChild("ScoreBox" .. pn):GetChild("BoogieStatsLogo")
+	local bsExBox = SCREENMAN:GetTopScreen():GetChild("Overlay"):GetChild("PerPlayer"):GetChild("ScoreBox" .. pn):GetChild("BoogieStatsEXLogo")
+
+		if boogie or boogie_ex then
+			style_color[0] = BoogieStatsPurple
+			style_color[1] = BoogieStatsPurple
+			bsBox:visible(boogie)
+			bsExBox:visible(boogie_ex)
+			gsBox:visible(false)
+		else
+			style_color[0] = GrooveStatsBlue
+			style_color[1] = GrooveStatsBlue
+			bsBox:visible(false)
+			bsExBox:visible(false)
+			gsBox:visible(true)
+	end
+
+
+	-- First check to see if the leaderboard even exists.
+	if data and data[playerStr] then
+		if SL[pn].Streams.Hash ~= data[playerStr]["chartHash"] then
+			scoreboxTrace("ignored stale GrooveStats response for " .. pn)
+			finishRequest()
+			return
+		end
+		currentHash = SL[pn].Streams.Hash
+		-- These will get overwritten if we have any entries in the leaderboard below.
+		SetScoreData(1, 1, "", "No Scores", "", false, false, false, false)
+		SetScoreData(2, 1, "", "No Scores", "", false, false, false, false)
+
+		all_data[1].has_data = false
+		all_data[2].has_data = false
+
+		local showITG = SL["P"..n].ActiveModifiers.SBITGScore
+		local showEX = SL["P"..n].ActiveModifiers.SBExScore
+		local showEvents = SL["P"..n].ActiveModifiers.SBEvents
+
+		cur_style = 0
+
+		local numEntries = 0
+		if SL["P"..n].ActiveModifiers.ShowExScore then
+			-- If the player is using EX scoring, then we want to display the EX leaderboard first.
+			if showEX then
+				if data[playerStr]["exLeaderboard"] then
+					local added = {}
+					numEntries = 0
+					for entry in ivalues(data[playerStr]["exLeaderboard"]) do
+						if not added[entry["name"]] then
+							added[entry["name"]] = true
+							numEntries = numEntries + 1
+							SetScoreData(1, numEntries,
+											tostring(entry["rank"]),
+											entry["name"],
+											string.format("%.2f", entry["score"]/100),
+											entry["isSelf"],
+											entry["isRival"],
+											entry["isFail"],
+											true
+										)
+						end
+					end
+					numEntries = numEntries + 1
+					for i=math.max(2,numEntries),NumEntries,1 do
+						SetScoreData(1, i, "", "", "", "", "", "", true)
+					end
+				end
+			end
+
+			if showITG then
+				if data[playerStr]["gsLeaderboard"] then
+					numEntries = 0
+					local added = {}
+					for entry in ivalues(data[playerStr]["gsLeaderboard"]) do
+						if not added[entry["name"]] then
+							added[entry["name"]] = true
+							numEntries = numEntries + 1
+							SetScoreData(2, numEntries,
+											tostring(entry["rank"]),
+											entry["name"],
+											string.format("%.2f", entry["score"]/100),
+											entry["isSelf"],
+											entry["isRival"],
+											entry["isFail"],
+											boogie_ex
+										)
+						end
+					end
+					numEntries = numEntries + 1
+					for i=math.max(2,numEntries),NumEntries,1 do
+						SetScoreData(2, i, "", "", "", "", "", "", boogie_ex)
+					end
+				end
+			end
+		else
+			-- Display the main GrooveStats leaderboard first if player is not using EX scoring.
+			if showITG then
+				if data[playerStr]["gsLeaderboard"] then
+					numEntries = 0
+					local added = {}
+					for entry in ivalues(data[playerStr]["gsLeaderboard"]) do
+						if not added[entry["name"]] then
+							added[entry["name"]] = true
+							numEntries = numEntries + 1
+							SetScoreData(1, numEntries,
+											tostring(entry["rank"]),
+											entry["name"],
+											string.format("%.2f", entry["score"]/100),
+											entry["isSelf"],
+											entry["isRival"],
+											entry["isFail"],
+											boogie_ex
+										)
+						end
+					end
+					numEntries = numEntries + 1
+					for i=math.max(2,numEntries),NumEntries,1 do
+						SetScoreData(1, i, "", "", "", "", "", "", boogie_ex)
+					end
+				end
+			end
+
+			if showEX then
+				if data[playerStr]["exLeaderboard"] then
+					numEntries = 0
+					local added = {}
+					for entry in ivalues(data[playerStr]["exLeaderboard"]) do
+						if not added[entry["name"]] then
+							added[entry["name"]] = true
+							numEntries = numEntries + 1
+							SetScoreData(2, numEntries,
+											tostring(entry["rank"]),
+											entry["name"],
+											string.format("%.2f", entry["score"]/100),
+											entry["isSelf"],
+											entry["isRival"],
+											entry["isFail"],
+											true
+										)
+						end
+					end
+					numEntries = numEntries + 1
+					for i=math.max(2,numEntries),NumEntries,1 do
+						SetScoreData(2, i, "", "", "", "", "", "", true)
+					end
+				end
+			end
+		end
+
+		-- Display event boxes first if they are applicable
+		if showEvents then
+			if data[playerStr]["rpg"] then
+				cur_style = 3
+				local numEntries = 0
+				local added = {}
+				SetScoreData(3, 1, "", "No Scores", "", false, false, false)
+
+				if data[playerStr]["rpg"]["rpgLeaderboard"] then
+					for entry in ivalues(data[playerStr]["rpg"]["rpgLeaderboard"]) do
+						if not added[entry["name"]] then
+							added[entry["name"]] = true
+							numEntries = numEntries + 1
+							SetScoreData(3, numEntries,
+											tostring(entry["rank"]),
+											entry["name"],
+											string.format("%.2f", entry["score"]/100),
+											entry["isSelf"],
+											entry["isRival"],
+											entry["isFail"],
+											false
+										)
+						end
+					end
+					numEntries = numEntries + 1
+					for i=numEntries,NumEntries,1 do
+						SetScoreData(3, i,
+										"",
+										"",
+										"",
+										false,
+										false,
+										false)
+					end
+				end
+			end
+
+			if data[playerStr]["itl"] then
+				cur_style = 4
+				local numEntries = 0
+				local added = {}
+				SetScoreData(4, 1, "", "No Scores", "", false, false, false)
+
+				if data[playerStr]["itl"]["itlLeaderboard"] then
+					for entry in ivalues(data[playerStr]["itl"]["itlLeaderboard"]) do
+						if not added[entry["name"]] then
+							added[entry["name"]] = true
+							if entry["isSelf"] then
+								UpdateItlExScore(player, SL[pn].Streams.Hash, entry["score"])
+								SL["P"..n].itlScore = entry["score"]
+							end
+							numEntries = numEntries + 1
+							SetScoreData(4, numEntries,
+											tostring(entry["rank"]),
+											entry["name"],
+											string.format("%.2f", entry["score"]/100),
+											entry["isSelf"],
+											entry["isRival"],
+											entry["isFail"],
+											true
+										)
+						end
+					end
+					numEntries = numEntries + 1
+					for i=numEntries,NumEntries,1 do
+						SetScoreData(4, i,
+										"",
+										"",
+										"",
+										false,
+										false,
+										false)
+					end
+				end
+			end
+		end
+	end
+	finishRequest()
+end
+
+-- ArrowCloud integration --------------------------------------------------
+
+local ArrowCloudRequestProcessor = function(res, expectedHash)
+	if expectedHash ~= nil and expectedHash ~= "" and SL[pn].Streams.Hash ~= expectedHash then
+		scoreboxTrace("ignored stale ArrowCloud response for " .. pn ..
+			" expected=" .. tostring(expectedHash) ..
+			" current=" .. tostring(SL[pn].Streams.Hash))
+		return
+	end
+
+	-- Expect res.statusCode and res.body (raw JSON string)
+	if not res then
+		scoreboxTrace("response missing")
+		return
+	end
+	scoreboxTrace("response status=" .. tostring(res.statusCode) ..
+		(res.error and (" error=" .. tostring(ToEnumShortString(res.error))) or ""))
+	if res.statusCode ~= 200 then return end
+	if not res.body then
+		scoreboxTrace("response body missing")
+		return
+	end
+	local ok, parsed = pcall(JsonDecode, res.body)
+	if not ok or type(parsed) ~= "table" then
+		scoreboxTrace("response JSON invalid")
+		return
+	end
+	if type(parsed.leaderboards) ~= "table" then
+		scoreboxTrace("response has no leaderboards table")
+		return
+	end
+
+		local function normalizeArrowCloudBoardType(boardType)
+			local raw = tostring(boardType or "")
+			local key = raw:lower():gsub("[^a-z0-9]", "")
+			if key == "itg" or key == "money" then
+				return 5, "ITG", false
+			end
+			if key == "ex" then
+				return 6, "EX", true
+			end
+			if key == "hex" or key == "hardex" or (key:find("hard", 1, true) and key:find("ex", 1, true)) then
+				return 7, "H.EX", true
+			end
+			return nil, "", false
+		end
+
+		for _, board in ipairs(parsed.leaderboards) do
+			local style_index, modeLabel, isExType = normalizeArrowCloudBoardType(board.type)
+			scoreboxTrace("ArrowCloud board type=" .. tostring(board.type) ..
+				" style=" .. tostring(style_index) ..
+				" label=" .. tostring(modeLabel))
+			if style_index and all_data[style_index] then
+				local slot = 1
+				local any = false
+				if type(board.scores) == "table" then
+				for _, entry in ipairs(board.scores) do
+					if slot > NumEntries then break end
+					any = true
+					local rank = tostring(entry.rank or "")
+					local name = tostring(entry.alias or "--")
+					local score = tostring(entry.score or "")
+					local isSelf = not not entry.isSelf
+					local isRival = not not entry.isRival
+					-- ArrowCloud scores are already formatted server-side; pass through.
+					SetScoreData(style_index, slot, rank, name, score, isSelf, isRival, false, isExType, modeLabel)
+					slot = slot + 1
+				end
+			end
+			if not any then
+				-- Present but empty leaderboard -> show No Scores
+				SetScoreData(style_index, 1, "", "No Scores", "", false, false, false, isExType, modeLabel)
+				slot = 2
+			end
+			for i=slot, NumEntries do
+				SetScoreData(style_index, i, "", "", "", false, false, false, isExType, modeLabel)
+			end
+		end
+	end
+end
+
+local af = Def.ActorFrame{
+	Name="ScoreBox"..pn,
+	InitCommand=function(self)
+		if #GAMESTATE:GetHumanPlayers() == 1 then
+			self:x(_screen.cx + 80):y(_screen.cy + 160)
+			if pn == "P2" then
+				self:y(_screen.cy*1.65 - 55)
+			end
+		else
+			if pn == "P1" then
+				self:zoom(0.65):x(_screen.cx - 65):y(_screen.cy + 178)
+				if IsNotWide then
+					self:x(_screen.cx - 48)
+				end
+			else
+				self:zoom(0.65):x(_screen.cx + 371):y(_screen.cy + 178)
+				if IsNotWide then
+					self:x(_screen.cx + 279)
+				end
+			end
+		end
+		self.isFirst = true
+	end,
+	ResetCommand=function(self) self:stoptweening() end,
+	OffCommand=function(self) self:stoptweening() end,
+	PlayerJoinedMessageCommand=function(self, params)
+		if pn == "P1" then
+			self:zoom(0.65):x(_screen.cx - 65):y(_screen.cy + 178)
+			if IsNotWide then
+				self:x(_screen.cx - 48)
+			end
+		else
+			self:zoom(0.65):x(_screen.cx + 371):y(_screen.cy + 178)
+			if IsNotWide then
+				self:x(_screen.cx + 279)
+			end
+		end
+	end,
+	PlayerUnjoinedMessageCommand=function(self, params)
+		if params.Player == player then
+			self:visible(false)
+		end
+		self:x(_screen.cx + 80):y(_screen.cy + 160):zoom(1)
+		if pn == "P2" then
+			self:y(_screen.cy*1.65 - 55)
+		end
+	end,
+	CurrentSongChangedMessageCommand=function(self)
+		self:finishtweening():visible(false)
+		self.isFirst = true
+	end,
+	CheckScoreboxCommand=function(self)
+		if GAMESTATE:GetCurrentSong() and GAMESTATE:GetCurrentSteps(player) then
+			self:queuecommand("LoopScorebox")
+		end
+	end,
+	LoopScoreboxCommand=function(self)
+		self:visible(true)
+
+		local has_data = false
+		if #all_data == 0 then return end
+		for i=1,num_styles do
+			if all_data[i].has_data then
+				has_data = true
+				break
+			end
+		end
+		if not has_data then return end
+
+		self:finishtweening()
+
+		-- On first display, use zero animation time so content appears instantly.
+		anim_seconds = self.isFirst and 0 or transition_seconds
+
+			self:GetChild("GrooveStatsLogo"):stopeffect()
+		self:GetChild("BoogieStatsLogo"):stopeffect()
+		self:GetChild("BoogieStatsEXLogo"):stopeffect()
+		self:GetChild("SRPGLogo"):visible(true)
+		self:GetChild("ITLLogo"):visible(true)
+			self:GetChild("ACLogo"):visible(true)
+			self:GetChild("ACModeLabel"):visible(true)
+		self:GetChild("Outline"):visible(true)
+		self:GetChild("Background"):linear(anim_seconds/2):diffusealpha(1):visible(true)
+
+		local start = cur_style
+
+		cur_style = (cur_style + 1) % num_styles
+		if cur_style ~= start or self.isFirst then
+			-- Make sure we have the next set of data.
+			while cur_style ~= start do
+				if HasData(cur_style) then
+					-- If this is the first time we're looping, update the start variable
+					-- since it may be different than the default
+					if self.isFirst then
+						start = cur_style
+						self.isFirst = false
+						-- Continue looping to figure out the next style.
+					else
+						break
+					end
+				end
+				cur_style = (cur_style + 1) % num_styles
+			end
+		end
+
+			for i=1,NumEntries do
+				local show = (i <= RowsForStyle(cur_style))
+				self:GetChild("Name"..i):visible(show)
+				self:GetChild("Score"..i):visible(show)
+				self:GetChild("Rank"..i):visible(show)
+			end
+			self:playcommand("RefreshScoreboxVisuals")
+
+			-- Loop only if there's something new to loop to.
+		if start ~= cur_style then
+			self:sleep(loop_seconds):queuecommand("LoopScorebox")
+		end
+	end,
+
+	RequestResponseActor(0, 0)..{
+		OnCommand=function(self)
+			self:queuecommand("MakeRequest")
+			-- Create variables for both players, even if they're not currently active.
+			self.IsParsing = {false, false}
+		end,
+		-- Broadcasted from ./PerPlayer/DensityGraph.lua
+		P1ChartParsingMessageCommand=function(self)	self.IsParsing[1] = true end,
+		P2ChartParsingMessageCommand=function(self)	self.IsParsing[2] = true end,
+		P1ChartParsedMessageCommand=function(self)
+			self.IsParsing[1] = false
+			if pn == "P1" then
+				self:queuecommand("ChartParsed")
+			end
+		end,
+		P2ChartParsedMessageCommand=function(self)
+			self.IsParsing[2] = false
+			if pn == "P2" then
+				self:queuecommand("ChartParsed")
+			end
+		end,
+		ChartParsedCommand=function(self)
+			if not self.leaving_screen then
+				self:queuecommand("MakeRequest")
+			end
+		end,
+		MakeRequestCommand=function(self)
+			local sendRequest = false
+			local headers = {}
+			-- GrooveStats remains at 5 results regardless of AC's 7
+			local query = {
+				maxLeaderboardResults=GS_ROWS,
+			}
+
+			if SL[pn].ApiKey ~= "" and SL[pn].Streams.Hash ~= "" then
+				query["chartHashP"..n] = SL[pn].Streams.Hash
+				headers["x-api-key-player-"..n] = SL[pn].ApiKey
+				sendRequest = true
+			end
+
+			-- We technically will send two requests in ultrawide versus mode since
+			-- both players will have their own individual scoreboxes.
+			-- Should be fine though.
+			-- Break ArrowCloud readiness into explicit booleans so the final value is never nil.
+			ensureArrowCloudRuntime()
+			local acApiKey = readArrowCloudApiKey()
+			local acEnabled = (SL.ArrowCloud and SL.ArrowCloud.Enabled) or false
+			local acKey = (#acApiKey > 0)
+			local acHash = (SL[pn] and SL[pn].Streams and SL[pn].Streams.Hash and #SL[pn].Streams.Hash > 0) or false
+			local willDoArrowCloud = acEnabled and acKey and acHash
+				scoreboxTrace("request gate " .. pn ..
+					" gs=" .. tostring(sendRequest) ..
+					" ac=" .. tostring(willDoArrowCloud) ..
+					" ac_enabled=" .. tostring(acEnabled) ..
+				" ac_key=" .. tostring(acKey) ..
+				" ac_hash=" .. tostring(acHash))
+				if sendRequest or willDoArrowCloud then
+					if self.IsParsing[1] or self.IsParsing[2] then return end
+					if currentHash == SL[pn].Streams.Hash and not willDoArrowCloud then
+						self:GetParent():visible(true)
+						self:GetParent():queuecommand("CheckScorebox")
+						return
+					end
+
+					-- Count pending requests so we only show the scorebox once all responses arrive.
+					pendingRequests = 0
+					if willDoArrowCloud then pendingRequests = pendingRequests + 1 end
+					if sendRequest then pendingRequests = pendingRequests + 1 end
+
+					RemoveStaleCachedRequests()
+					ResetAllData()
+
+					-- ArrowCloud direct request (independent of GS). We perform a separate HTTP call.
+					if willDoArrowCloud then
+						local ach = SL[pn].Streams.Hash
+					local acHeaders = {}
+					acHeaders["Authorization"] = "Bearer " .. acApiKey
+					scoreboxTrace("request " .. pn .. " hash=" .. tostring(ach))
+					-- ArrowCloud HTTP request
+					NETWORK:HttpRequest{
+						url = SL.ArrowCloud.BaseURL .. "/v1/chart/" .. ach .. "/leaderboards",
+						method = "GET",
+						headers = acHeaders,
+							connectTimeout = SL.ArrowCloud.RequestTimeout,
+							transferTimeout = SL.ArrowCloud.RequestTimeout,
+							onResponse = function(acres)
+								ArrowCloudRequestProcessor(acres, ach)
+								pendingRequests = pendingRequests - 1
+								if pendingRequests <= 0 then
+									self:GetParent():queuecommand("CheckScorebox")
+							end
+						end
+						}
+					end
+
+					self:GetParent():visible(true)
+				for i=1,NumEntries do
+					local parent = self:GetParent()
+					parent:GetChild("Name"..i):settext(""):visible(false)
+					parent:GetChild("Score"..i):settext(""):visible(false)
+					local rankChild = parent:GetChild("Rank"..i)
+					if rankChild then
+						if i == 1 then
+							-- Crown sprite: no settext
+							rankChild:diffusealpha(0):visible(false)
+						else
+							rankChild:settext(""):visible(false)
+						end
+					end
+				end
+				self:GetParent():GetChild("GrooveStatsLogo"):visible(true):diffusealpha(0.5):glowshift({color("#C8FFFF"), color("#6BF0FF")})
+				self:GetParent():GetChild("BoogieStatsLogo"):visible(false)
+				self:GetParent():GetChild("BoogieStatsEXLogo"):visible(false)
+				self:GetParent():GetChild("SRPGLogo"):diffusealpha(0):visible(false)
+				self:GetParent():GetChild("ITLLogo"):diffusealpha(0):visible(false)
+				self:GetParent():GetChild("ACLogo"):diffusealpha(0):visible(false)
+				self:GetParent():GetChild("ACModeLabel"):diffusealpha(0):visible(false)
+				self:GetParent():GetChild("Outline"):diffusealpha(0):visible(false)
+				self:GetParent():GetChild("Background"):diffusealpha(0):visible(false)
+
+				if IsItlSong(player) then
+					UpdatePathMap(player, SL[pn].Streams.Hash)
+				end
+
+					if sendRequest then
+					-- GS HTTP request
+					self:playcommand("MakeGrooveStatsRequest", {
+            endpoint="?action=playerLeaderboards&"..NETWORK:EncodeQueryParameters(query),
+            method="GET",
+            headers=headers,
+            timeout=10,
+            callback=LeaderboardRequestProcessor,
+            args=self:GetParent(),
+					})
+				end
+			end
+		end
+	},
+
+	-- Outline
+	Def.Quad{
+		Name="Outline",
+		InitCommand=function(self)
+			self:diffuse(GrooveStatsBlue):setsize(width + border, height + border)
+			if IsNotWide and #GAMESTATE:GetHumanPlayers() > 1 then
+				self:setsize(width + border - 40, height + border)
+			end
+		end,
+		PlayerJoinedMessageCommand=function(self,params)
+			if IsNotWide then
+				self:setsize(width + border - 40, height + border)
+			else
+				self:setsize(width + border, height + border)
+			end
+		end,
+		PlayerUnjoinedMessageCommand=function(self,params)
+			self:setsize(width + border, height + border)
+		end,
+			RefreshScoreboxVisualsCommand=function(self)
+				self:stoptweening()
+				self:linear(anim_seconds):diffuse(style_color[cur_style])
+			end,
+		ResetCommand=function(self) self:stoptweening() end,
+		OffCommand=function(self) self:stoptweening() end
+	},
+	-- Main body
+	Def.Quad{
+		Name="Background",
+		InitCommand=function(self)
+			self:diffuse(color("#000000")):setsize(width, height)
+			if IsNotWide and #GAMESTATE:GetHumanPlayers() > 1 then
+				self:setsize(width - 40, height)
+			end
+		end,
+		PlayerJoinedMessageCommand=function(self,params)
+			if IsNotWide then
+				self:setsize(width - 40, height)
+			else
+				self:setsize(width, height)
+			end
+		end,
+		PlayerUnjoinedMessageCommand=function(self,params)
+			self:setsize(width, height)
+		end,
+	},
+	-- GrooveStats Logo
+	Def.Sprite{
+		Texture=THEME:GetPathG("", "GrooveStats.png"),
+		Name="GrooveStatsLogo",
+		InitCommand=function(self)
+			self:zoom(0.8):diffusealpha(0.5)
+		end,
+			RefreshScoreboxVisualsCommand=function(self)
+				self:stoptweening()
+				if cur_style == 0 or cur_style == 1 then
+					self:sleep(anim_seconds/2):linear(anim_seconds/2):diffusealpha(0.5)
+				else
+					self:linear(anim_seconds/2):diffusealpha(0)
+				end
+		end,
+		ResetCommand=function(self) self:stoptweening() end,
+		OffCommand=function(self) self:stoptweening():stopeffect() end
+	},
+	-- BoogieStats Logo
+	Def.Sprite{
+		Texture=THEME:GetPathG("", "BoogieStats.png"),
+		Name="BoogieStatsLogo",
+		InitCommand=function(self)
+			self:zoom(0.8):diffusealpha(0.5)
+		end,
+			RefreshScoreboxVisualsCommand=function(self)
+				self:stoptweening()
+				if cur_style == 0 or cur_style == 1 then
+					self:sleep(anim_seconds/2):linear(anim_seconds/2):diffusealpha(0.5)
+				else
+					self:linear(anim_seconds/2):diffusealpha(0)
+				end
+		end,
+		ResetCommand=function(self) self:stoptweening() end,
+		OffCommand=function(self) self:stoptweening():stopeffect() end
+	},
+	-- BoogieStats EX Logo
+	Def.Sprite{
+		Texture=THEME:GetPathG("", "BoogieStatsEX.png"),
+		Name="BoogieStatsEXLogo",
+		InitCommand=function(self)
+			self:zoom(0.8):diffusealpha(0.5)
+		end,
+			RefreshScoreboxVisualsCommand=function(self)
+				self:stoptweening()
+				if cur_style == 0 then
+					self:sleep(anim_seconds/2):linear(anim_seconds/2):diffusealpha(0.5)
+				else
+					self:linear(anim_seconds/2):diffusealpha(0)
+				end
+		end,
+		ResetCommand=function(self) self:stoptweening() end,
+		OffCommand=function(self) self:stoptweening():stopeffect() end
+	},
+	-- EX Text
+	Def.BitmapText{
+		Font=ScoreboxFont .. " Normal",
+		Text="EX",
+		InitCommand=function(self)
+			self:diffusealpha(0):x(2):y(-5)
+		end,
+			RefreshScoreboxVisualsCommand=function(self)
+				self:stoptweening()
+				if (cur_style == 1 and not SL["P"..n].ActiveModifiers.ShowExScore) or (cur_style == 0 and SL["P"..n].ActiveModifiers.ShowExScore) then
+					self:sleep(anim_seconds/2):linear(anim_seconds/2):diffusealpha(0.3)
+				else
+					self:linear(anim_seconds/2):diffusealpha(0)
+				end
+		end,
+		ResetCommand=function(self) self:stoptweening() end,
+		OffCommand=function(self) self:stoptweening():stopeffect() end
+	},
+	-- SRPG Logo
+	Def.Sprite{
+		Texture=THEME:GetPathG("", "_VisualStyles/SRPG9/logo_alt (doubleres).png"),
+		Name="SRPGLogo",
+		InitCommand=function(self)
+			self:diffusealpha(0.4):zoom(0.07):diffusealpha(0)
+		end,
+			RefreshScoreboxVisualsCommand=function(self)
+				self:stoptweening()
+				if cur_style == 2 then
+					self:linear(anim_seconds/2):diffusealpha(0.5)
+				else
+					self:sleep(anim_seconds/2):linear(anim_seconds/2):diffusealpha(0)
+				end
+		end,
+		ResetCommand=function(self) self:stoptweening() end,
+		OffCommand=function(self) self:stoptweening() end
+	},
+	-- ITL Logo
+	Def.Sprite{
+		Texture=THEME:GetPathG("", "ITL.png"),
+		Name="ITLLogo",
+		InitCommand=function(self)
+			self:diffusealpha(0.2):zoom(0.45):diffusealpha(0)
+		end,
+			RefreshScoreboxVisualsCommand=function(self)
+				self:stoptweening()
+				if cur_style == 3 then
+					self:linear(anim_seconds/2):diffusealpha(0.2)
+				else
+					self:sleep(anim_seconds/2):linear(anim_seconds/2):diffusealpha(0)
+				end
+		end,
+		ResetCommand=function(self) self:stoptweening() end,
+		OffCommand=function(self) self:stoptweening() end
+	},
+
+	-- ArrowCloud Logo
+	Def.Sprite{
+		Texture=THEME:GetPathG("", "Arrow Cloud/ac logo.png"),
+		Name="ACLogo",
+		InitCommand=function(self)
+			-- Reduced scale (was 0.42); 0.14 approximates one-third the previous size
+			self:diffusealpha(0):zoom(0.08):xy(0,0)
+		end,
+			RefreshScoreboxVisualsCommand=function(self)
+				self:stoptweening()
+				if cur_style >= 4 then
+					self:sleep(anim_seconds/2):linear(anim_seconds/2):diffusealpha(0.25)
+				else
+					self:linear(anim_seconds/2):diffusealpha(0)
+				end
+		end,
+		ResetCommand=function(self) self:stoptweening() end,
+		OffCommand=function(self) self:stoptweening() end
+	},
+
+	-- ArrowCloud Mode Text (bottom-right ITG / EX / H.EX)
+	LoadFont(ScoreboxFont .. " Normal")..{
+		Name="ACModeLabel",
+		Text="",
+		InitCommand=function(self)
+			self:diffusealpha(0):zoom(1.0):horizalign(center):vertalign(middle)
+			self:xy(0,0)
+		end,
+			RefreshScoreboxVisualsCommand=function(self)
+				self:stoptweening()
+				local label = ""
+				if     cur_style == 4 then label = "ITG"
+				elseif cur_style == 5 then label = "EX"
+				elseif cur_style == 6 then label = "H.EX" end
+				if label ~= "" then
+					self:diffuse(style_color[cur_style] or Color.White)
+					self:settext(label)
+				self:sleep(anim_seconds/2):linear(anim_seconds/2):diffusealpha(0.65)
+			else
+				self:linear(anim_seconds/2):diffusealpha(0)
+			end
+		end,
+		ResetCommand=function(self) self:stoptweening() end,
+		OffCommand=function(self) self:stoptweening() end
+	},
+}
+
+for i=1,NumEntries do
+	local y = -height/2 + 16 * i - 8
+	local zoom = 0.87
+
+	-- Rank 1 gets a crown.
+	if i == 1 then
+		af[#af+1] = Def.Sprite{
+			Name="Rank"..i,
+			Texture=THEME:GetPathG("", "crown.png"),
+			InitCommand=function(self)
+				self:zoom(0.09):xy(-width/2 + 14, y):diffusealpha(0)
+				if IsNotWide and #GAMESTATE:GetHumanPlayers() > 1 then
+					self:x(-width/2 + 32)
+				end
+			end,
+			PlayerJoinedMessageCommand=function(self,params)
+				if IsNotWide then
+					self:x(-width/2 + 32)
+				else
+					self:x(-width/2 + 14)
+				end
+			end,
+			PlayerUnjoinedMessageCommand=function(self,params)
+				self:x(-width/2 + 14)
+			end,
+				RefreshScoreboxVisualsCommand=function(self)
+					self:stoptweening()
+					self:linear(anim_seconds/2):diffusealpha(0):queuecommand("SetScorebox")
+				end,
+			SetScoreboxCommand=function(self)
+				local displayRows = RowsForStyle(cur_style)
+				if i > displayRows then self:visible(false) return end
+				local spacing = RowSpacingForStyle(cur_style)
+				local yy = -height/2 + spacing * i - spacing/2
+				self:y(yy):zoom(CrownZoomForStyle(cur_style)):visible(true)
+				local score = all_data[cur_style+1]["scores"][i]
+				if score.rank ~= "" then
+					self:linear(anim_seconds/2):diffusealpha(1)
+				else
+					self:diffusealpha(0)
+				end
+			end,
+			ResetCommand=function(self) self:stoptweening() end,
+			OffCommand=function(self) self:stoptweening() end
+		}
+	else
+		af[#af+1] = LoadFont(ScoreboxFont .. " Normal")..{
+			Name="Rank"..i,
+			Text="",
+			InitCommand=function(self)
+				self:diffuse(Color.White):xy(-width/2 + 27, y):maxwidth(30):horizalign(right):zoom(zoom)
+				if IsNotWide and #GAMESTATE:GetHumanPlayers() > 1 then
+					self:x(-width/2 + 42)
+				end
+			end,
+			PlayerJoinedMessageCommand=function(self,params)
+				if IsNotWide then
+					self:x(-width/2 + 42)
+				else
+					self:x(-width/2 + 27)
+				end
+			end,
+			PlayerUnjoinedMessageCommand=function(self,params)
+				self:x(-width/2 + 27)
+			end,
+				RefreshScoreboxVisualsCommand=function(self)
+					self:stoptweening()
+					self:linear(anim_seconds/2):diffusealpha(0):queuecommand("SetScorebox")
+				end,
+			SetScoreboxCommand=function(self)
+				local displayRows = RowsForStyle(cur_style)
+				if i > displayRows then self:visible(false) return end
+				local spacing = RowSpacingForStyle(cur_style)
+				local yy = -height/2 + spacing * i - spacing/2
+				self:y(yy):zoom(TextZoomForStyle(cur_style)):visible(true)
+				local score = all_data[cur_style+1]["scores"][i]
+				local clr = Color.White
+				if score.isSelf then
+					clr = self_color
+				elseif score.isRival then
+					clr = rival_color
+				end
+				self:settext(score.rank)
+				self:linear(anim_seconds/2):diffusealpha(1):diffuse(clr)
+			end,
+			ResetCommand=function(self) self:stoptweening() end,
+			OffCommand=function(self) self:stoptweening() end
+		}
+	end
+
+	af[#af+1] = LoadFont(ScoreboxFont .. " Normal")..{
+		Name="Name"..i,
+		Text="",
+		InitCommand=function(self)
+			self:diffuse(Color.White):xy(-width/2 + 30, y):maxwidth(100):horizalign(left):zoom(zoom)
+			if IsNotWide and #GAMESTATE:GetHumanPlayers() > 1 then
+				self:x(-width/2 + 45):maxwidth(70)
+			end
+		end,
+		PlayerJoinedMessageCommand=function(self,params)
+			if IsNotWide then
+				self:x(-width/2 + 45):maxwidth(70)
+			else
+				self:x(-width/2 + 30):maxwidth(100)
+			end
+		end,
+		PlayerUnjoinedMessageCommand=function(self,params)
+			self:x(-width/2 + 30):maxwidth(100)
+		end,
+			RefreshScoreboxVisualsCommand=function(self)
+				self:stoptweening()
+				self:linear(anim_seconds/2):diffusealpha(0):queuecommand("SetScorebox")
+			end,
+		SetScoreboxCommand=function(self)
+			local displayRows = RowsForStyle(cur_style)
+			if i > displayRows then self:visible(false) return end
+			local spacing = RowSpacingForStyle(cur_style)
+			local yy = -height/2 + spacing * i - spacing/2
+			self:y(yy):zoom(TextZoomForStyle(cur_style)):visible(true)
+			local score = all_data[cur_style+1]["scores"][i]
+			local clr = Color.White
+			if score.isSelf then
+				clr = self_color
+			elseif score.isRival then
+				clr = rival_color
+			end
+			self:settext(score.name)
+			self:linear(anim_seconds/2):diffusealpha(1):diffuse(clr)
+		end,
+		ResetCommand=function(self) self:stoptweening() end,
+		OffCommand=function(self) self:stoptweening() end
+	}
+
+	af[#af+1] = LoadFont(ScoreboxFont .. " Normal")..{
+		Name="Score"..i,
+		Text="",
+		InitCommand=function(self)
+			self:diffuse(Color.White):xy(-width/2 + 160, y):horizalign(right):zoom(zoom)
+			if IsNotWide and #GAMESTATE:GetHumanPlayers() > 1 then
+				self:x(-width/2 + 140)
+			end
+		end,
+		PlayerJoinedMessageCommand=function(self,params)
+			if IsNotWide then
+				self:x(-width/2 + 140)
+			else
+				self:x(-width/2 + 160)
+			end
+		end,
+		PlayerUnjoinedMessageCommand=function(self,params)
+			self:x(-width/2 + 160)
+		end,
+			RefreshScoreboxVisualsCommand=function(self)
+				self:stoptweening()
+				self:linear(anim_seconds/2):diffusealpha(0):queuecommand("SetScorebox")
+			end,
+		SetScoreboxCommand=function(self)
+			local displayRows = RowsForStyle(cur_style)
+			if i > displayRows then self:visible(false) return end
+			local spacing = RowSpacingForStyle(cur_style)
+			local yy = -height/2 + spacing * i - spacing/2
+			self:y(yy):zoom(TextZoomForStyle(cur_style)):visible(true)
+				local score = all_data[cur_style+1]["scores"][i]
+				local clr = Color.White
+				if score.isFail then
+					clr = Color.Red
+				elseif cur_style >= 4 then
+					clr = style_color[cur_style] or Color.White
+				elseif score.isEx then
+					clr = ArrowCloudEX
+				elseif score.isSelf then
+					clr = self_color
+			elseif score.isRival then
+				clr = rival_color
+			end
+			self:settext(score.score)
+			self:linear(anim_seconds/2):diffusealpha(1):diffuse(clr)
+		end,
+		ResetCommand=function(self) self:stoptweening() end,
+		OffCommand=function(self) self:stoptweening() end
+	}
+end
+return af

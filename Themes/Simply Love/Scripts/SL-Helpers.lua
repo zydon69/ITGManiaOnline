@@ -612,6 +612,26 @@ IsW0Judgment = function(params, player)
 end
 
 -- -----------------------------------------------------------------------
+-- ArrowCloud HardEX splits the top ITG Fantastic window again at +/-10ms.
+-- This is display/scoring interpretation only; it does not change the
+-- engine's immutable raw judgment result.
+IsW010Judgment = function(params, player)
+	if params.Player ~= player then return false end
+	if params.HoldNoteScore then return false end
+	if params.TapNoteScore ~= "TapNoteScore_W1" then return false end
+	if SL.Global.GameMode ~= "ITG" then return false end
+
+	local prefs = SL.Preferences["FA+"]
+	local scale = PREFSMAN:GetPreference("TimingWindowScale")
+	local timingWindowAdd = prefs and prefs["TimingWindowAdd"] or 0
+	-- ArrowCloud uses 8.5ms plus the ITG/FA+ 1.5ms TimingWindowAdd, for
+	-- the documented effective 10ms HardEX inner Fantastic window.
+	local W010 = 0.0085 * scale + timingWindowAdd
+
+	return math.abs(params.TapNoteOffset) <= W010
+end
+
+-- -----------------------------------------------------------------------
 -- Gets the fully populated judgment counts for a player.
 -- This includes the FA+ window (W0). Decents/WayOffs (W4/W5) will only exist in the
 -- resultant table if the windows were active.
@@ -647,18 +667,23 @@ GetExJudgmentCounts = function(player)
 
 	local TNS = { "W1", "W2", "W3", "W4", "W5", "Miss" }
 
-    if SL.Global.GameMode == "ITG" then
+	if SL.Global.GameMode == "ITG" then
 		for window in ivalues(TNS) do
 			-- Get the count.
 			local number = stats:GetTapNoteScores( "TapNoteScore_"..window )
 			-- We need to extract the W0 count in ITG mode.
 			if window == "W1" then
-				local faPlus = SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1].ex_counts.W0_total
+				local stageStats = SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
+				local exCounts = stageStats and stageStats.ex_counts or {}
+				local faPlus = exCounts.W0_total or 0
+				local faPlus10 = exCounts.W010_total or 0
 				-- Subtract FA+ count from the overall fantastic window count.
 				number = number - faPlus
-				-- Populate the two numbers.
+				-- Populate the split top-window numbers.
 				counts["W0"] = faPlus
 				counts["W1"] = number
+				counts["W010"] = faPlus10
+				counts["W110"] = math.max(0, stats:GetTapNoteScores("TapNoteScore_W1") - faPlus10)
 			else
 				if ((window ~= "W4" and window ~= "W5") or
 						-- Only populate decent and way off windows if they're active.
@@ -725,6 +750,7 @@ CalculateExScore = function(player, ex_counts, use_actual_w0_weight)
 	-- No EX scores in Casual mode, just return some dummy number early.
 	if SL.Global.GameMode == "Casual" then return 0 end
 	local StepsOrTrail = (GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(player)) or GAMESTATE:GetCurrentSteps(player)
+	if not StepsOrTrail then return 0, 0, 0 end
 
 	local totalSteps = StepsOrTrail:GetRadarValues(player):GetValue( "RadarCategory_TapsAndHolds" )
 	local totalHolds = StepsOrTrail:GetRadarValues(player):GetValue( "RadarCategory_Holds" )
@@ -745,15 +771,20 @@ CalculateExScore = function(player, ex_counts, use_actual_w0_weight)
 		total_points = total_points + totalMines * SL.ExWeights["HitMine"];
 	end
 
-		local keys = { "W0", "W1", "W2", "W3", "W4", "W5", "Miss", "Held", "LetGo", "HitMine" }
-		local playerKey = ToEnumShortString(player)
-		local playerState = SL[playerKey]
-		local stages = playerState and playerState.Stages
-		local stats = stages and stages.Stats
-		local stageStats = stats and stats[SL.Global.Stages.PlayedThisGame + 1]
-		local counts = ex_counts or (stageStats and stageStats.ex_counts)
+	local keys = { "W0", "W1", "W2", "W3", "W4", "W5", "Miss", "Held", "LetGo", "HitMine" }
+	local playerKey = ToEnumShortString(player)
+	local playerState = SL[playerKey]
+	local stages = playerState and playerState.Stages
+	local stats = stages and stages.Stats
+	local stageStats = stats and stats[SL.Global.Stages.PlayedThisGame + 1]
+	local counts = ex_counts or (stageStats and stageStats.ex_counts)
 	-- Just for validation, but shouldn't happen in normal gameplay.
 	if counts == nil then return 0 end
+
+	if ex_counts then
+		counts["Held"] = counts["Held"] or (counts["Holds"] or 0) + (counts["Rolls"] or 0)
+		counts["HitMine"] = counts["HitMine"] or counts["Mines"] or 0
+	end
 
 	for key in ivalues(keys) do
 		local value = counts[key]
@@ -763,6 +794,53 @@ CalculateExScore = function(player, ex_counts, use_actual_w0_weight)
 	end
 
 	return math.max(0, math.floor(total_points/total_possible * 10000) / 100), total_points, total_possible
+end
+
+-- -----------------------------------------------------------------------
+-- Calculate ArrowCloud HardEX score. HardEX uses a +/-10ms inner Fantastic
+-- split and stricter weights:
+-- 10ms=3.5, white Fantastic=3, Excellent=1, Great/Decent/WayOff/Miss=0.
+CalculateHardExScore = function(player, ex_counts, use_actual_w0_weight)
+	if SL.Global.GameMode == "Casual" then return 0 end
+	local StepsOrTrail = (GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(player)) or GAMESTATE:GetCurrentSteps(player)
+	if not StepsOrTrail then return 0, 0, 0 end
+
+	local totalSteps = StepsOrTrail:GetRadarValues(player):GetValue("RadarCategory_TapsAndHolds")
+	local totalHolds = StepsOrTrail:GetRadarValues(player):GetValue("RadarCategory_Holds")
+	local totalRolls = StepsOrTrail:GetRadarValues(player):GetValue("RadarCategory_Rolls")
+	local W010Weight = SL.HardExWeights["W010"]
+	local total_possible = totalSteps * W010Weight + (totalHolds + totalRolls) * SL.HardExWeights["Held"]
+	if total_possible <= 0 then return 0, 0, 0 end
+
+	local total_points = 0
+	local po = GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Preferred")
+	if po:NoMines() then
+		local totalMines = StepsOrTrail:GetRadarValues(player):GetValue("RadarCategory_Mines")
+		total_points = total_points + totalMines * SL.HardExWeights["HitMine"]
+	end
+
+	local keys = { "W010", "W110", "W2", "W3", "W4", "W5", "Miss", "Held", "LetGo", "HitMine" }
+	local playerKey = ToEnumShortString(player)
+	local playerState = SL[playerKey]
+	local stages = playerState and playerState.Stages
+	local stats = stages and stages.Stats
+	local stageStats = stats and stats[SL.Global.Stages.PlayedThisGame + 1]
+	local counts = ex_counts or (stageStats and stageStats.ex_counts)
+	if counts == nil then return 0 end
+
+	if ex_counts then
+		counts["Held"] = counts["Held"] or (counts["Holds"] or 0) + (counts["Rolls"] or 0)
+		counts["HitMine"] = counts["HitMine"] or counts["Mines"] or 0
+	end
+
+	for key in ivalues(keys) do
+		local value = counts[key]
+		if value ~= nil then
+			total_points = total_points + value * SL.HardExWeights[key]
+		end
+	end
+
+	return math.max(0, math.floor(total_points / total_possible * 10000) / 100), total_points, total_possible
 end
 
 -- -----------------------------------------------------------------------
