@@ -1,6 +1,7 @@
 #include "MacOSMetalPresenter.h"
 
 #include "RageLog.h"
+#include "RageTimer.h"
 
 #import <AppKit/AppKit.h>
 #import <IOSurface/IOSurface.h>
@@ -8,11 +9,18 @@
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <cmath>
 
 namespace {
 
 constexpr int kMetalInteropSurfaceCount = 3;
+constexpr float kMetalSlowNextDrawableMs = 2.0f;
+constexpr float kMetalSlowCommandBufferMs = 12.0f;
+
+std::atomic<uint64_t> g_iMetalDirectPresentSubmittedFrames{0};
+std::atomic<uint64_t> g_iMetalDirectPresentCompletedFrames{0};
 
 uint32_t FourCC(char a, char b, char c, char d) {
   return (static_cast<uint32_t>(a) << 24) |
@@ -401,7 +409,10 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
     return false;
   }
 
+  RageTimer nextDrawableTimer;
   id<CAMetalDrawable> drawable = [impl->layer nextDrawable];
+  const float nextDrawableMs =
+      nextDrawableTimer.GetDeltaTime() * 1000.0f;
   if (drawable == nil) {
     static bool s_warnedNoDrawable = false;
     if (!s_warnedNoDrawable) {
@@ -414,6 +425,7 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
   }
 
   const MacOSMetalInteropSurface& surface = impl->surfaces[index];
+  RageTimer submitTimer;
   id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
   if (commandBuffer == nil) {
     return false;
@@ -443,15 +455,47 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
   } else {
     [commandBuffer presentDrawable:drawable];
   }
+  const uint64_t frameIndex =
+      g_iMetalDirectPresentSubmittedFrames.fetch_add(1) + 1;
+  const uint64_t submitUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  const float encodeSubmitMs = submitTimer.GetDeltaTime() * 1000.0f;
+  [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedCommandBuffer) {
+    const uint64_t completedIndex =
+        g_iMetalDirectPresentCompletedFrames.fetch_add(1) + 1;
+    const uint64_t completedUsec = RageTimer::GetTimeSinceStartMicroseconds();
+    const float commandBufferMs =
+        (completedUsec >= submitUsec)
+            ? static_cast<float>(completedUsec - submitUsec) / 1000.0f
+            : 0.0f;
+    const bool traceCompletion =
+        completedIndex <= 5 || completedIndex % 600 == 0 ||
+        commandBufferMs >= kMetalSlowCommandBufferMs;
+    if (traceCompletion) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_direct_present_completed "
+          "frame=%llu completed=%llu status=%lu command_buffer_ms=%.3f "
+          "next_drawable_ms=%.3f encode_submit_ms=%.3f target_hz=%.3f",
+          static_cast<unsigned long long>(frameIndex),
+          static_cast<unsigned long long>(completedIndex),
+          static_cast<unsigned long>([completedCommandBuffer status]),
+          commandBufferMs, nextDrawableMs, encodeSubmitMs, targetHz);
+    }
+  }];
   [commandBuffer commit];
 
-  if (!impl->loggedFirstDirectPresent) {
+  const bool traceSubmit =
+      !impl->loggedFirstDirectPresent || frameIndex <= 5 ||
+      frameIndex % 600 == 0 || nextDrawableMs >= kMetalSlowNextDrawableMs;
+  if (traceSubmit) {
     LOG->Trace(
         "MacOS Metal direct-present validation submitted: surface_index=%d "
         "size=%dx%d target_hz=%.3f minimum_duration_ms=%.3f "
-        "orientation=native",
+        "orientation=native frame=%llu next_drawable_ms=%.3f "
+        "encode_submit_ms=%.3f",
         index, surface.width, surface.height, targetHz,
-        minimumDuration * 1000.0);
+        minimumDuration * 1000.0,
+        static_cast<unsigned long long>(frameIndex), nextDrawableMs,
+        encodeSubmitMs);
     impl->loggedFirstDirectPresent = true;
   }
   return true;
