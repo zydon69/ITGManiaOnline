@@ -123,7 +123,7 @@ id<MTLRenderPipelineState> CreatePresentPipeline(
        "    float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)\n"
        "  };\n"
        "  const float2 texcoords[3] = {\n"
-       "    float2(1.0, 1.0), float2(-1.0, 1.0), float2(1.0, -1.0)\n"
+       "    float2(0.0, 0.0), float2(2.0, 0.0), float2(0.0, 2.0)\n"
        "  };\n"
        "  VertexOut out;\n"
        "  out.position = float4(positions[vertexID], 0.0, 1.0);\n"
@@ -449,7 +449,7 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
     LOG->Trace(
         "MacOS Metal direct-present validation submitted: surface_index=%d "
         "size=%dx%d target_hz=%.3f minimum_duration_ms=%.3f "
-        "orientation=flip_x_flip_y",
+        "orientation=native",
         index, surface.width, surface.height, targetHz,
         minimumDuration * 1000.0);
     impl->loggedFirstDirectPresent = true;
