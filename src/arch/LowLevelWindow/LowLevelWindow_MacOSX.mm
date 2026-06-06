@@ -1720,7 +1720,7 @@ bool LowLevelWindow_MacOSX::PresentOpenGLBackbufferViaMetal() {
   const int surfaceCount =
       static_cast<int>(m_MetalOpenGLBridge->surfaces.size());
   int nextSurfaceIndex = -1;
-  constexpr int kSurfaceWaitAttempts = 80;
+  constexpr int kSurfaceWaitAttempts = 16;
   constexpr int kSurfaceWaitAttemptUsec = 100;
   for (int waitAttempt = 0;
        waitAttempt < kSurfaceWaitAttempts && nextSurfaceIndex < 0;

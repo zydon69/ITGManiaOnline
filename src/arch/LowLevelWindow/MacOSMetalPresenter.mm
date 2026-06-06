@@ -467,7 +467,7 @@ bool MacOSMetalPresenter::Initialize(
     impl->layer.colorspace = srgbColorSpace;
     CGColorSpaceRelease(srgbColorSpace);
   }
-  impl->layer.framebufferOnly = NO;
+  impl->layer.framebufferOnly = YES;
   impl->layer.displaySyncEnabled = YES;
   impl->layer.allowsNextDrawableTimeout = YES;
   impl->layer.maximumDrawableCount = 3;
@@ -614,10 +614,6 @@ bool MacOSMetalPresenter::AttachLayerToWindow(void* nsWindow) {
   if (impl->layer == nil) {
     return false;
   }
-  if (impl->layerView != nil) {
-    return true;
-  }
-
   NSWindow* window = (__bridge NSWindow*)nsWindow;
   NSView* contentView = [window contentView];
   if (contentView == nil) {
@@ -627,6 +623,15 @@ bool MacOSMetalPresenter::AttachLayerToWindow(void* nsWindow) {
   }
 
   const NSRect bounds = [contentView bounds];
+  if (impl->layerView != nil) {
+    StopDrawablePrefetcher(impl);
+    [impl->layerView setFrame:bounds];
+    impl->layer.frame = bounds;
+    [impl->layerView setHidden:NO];
+    StartDrawablePrefetcher(impl);
+    return true;
+  }
+
   NSView* layerView = [[NSView alloc] initWithFrame:bounds];
   [layerView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
   [layerView setWantsLayer:YES];
