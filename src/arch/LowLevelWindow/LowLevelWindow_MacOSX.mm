@@ -1737,6 +1737,25 @@ bool LowLevelWindow_MacOSX::BeginMetalPresentBridgeFrame() {
   return true;
 }
 
+bool LowLevelWindow_MacOSX::ResumeMetalPresentBridgeFrame() {
+  if (!m_bMetalBridgeFrameActive || !m_MetalOpenGLBridge ||
+      m_iMetalBridgeRenderSurfaceIndex < 0 ||
+      m_iMetalBridgeRenderSurfaceIndex >=
+          static_cast<int>(m_MetalOpenGLBridge->surfaces.size())) {
+    return false;
+  }
+
+  const MacOSMetalOpenGLBridgeSurface& surface =
+      m_MetalOpenGLBridge->surfaces[m_iMetalBridgeRenderSurfaceIndex];
+  if (surface.framebuffer == 0) {
+    return false;
+  }
+
+  glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, surface.framebuffer);
+  glViewport(0, 0, m_MetalOpenGLBridge->width, m_MetalOpenGLBridge->height);
+  return true;
+}
+
 void LowLevelWindow_MacOSX::EndMetalPresentBridgeFrame() {
   if (!m_bMetalBridgeFrameActive || !m_MetalOpenGLBridge ||
       m_iMetalBridgeRenderSurfaceIndex < 0 ||

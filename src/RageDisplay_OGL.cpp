@@ -3559,6 +3559,9 @@ void RageDisplay_Legacy::SetRenderTarget(
       g_pCurrentRenderTarget->FinishRenderingTo();
     }
     g_pCurrentRenderTarget = nullptr;
+    if (m_bUsingMetalPresentBridgeFrame) {
+      g_pWind->ResumeMetalPresentBridgeFrame();
+    }
     return;
   }
 

@@ -47,6 +47,7 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   bool SupportsRenderToTexture() const { return true; }
   RenderTarget* CreateRenderTarget();
   bool BeginMetalPresentBridgeFrame();
+  bool ResumeMetalPresentBridgeFrame();
   void EndMetalPresentBridgeFrame();
 
   bool SupportsThreadedRendering() { return m_BGContext; }
