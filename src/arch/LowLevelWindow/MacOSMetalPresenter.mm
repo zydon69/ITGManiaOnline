@@ -347,7 +347,8 @@ id<MTLRenderPipelineState> CreatePresentPipeline(
        "                              texture2d<float> source [[texture(0)]]) {\n"
        "  constexpr sampler sourceSampler(address::clamp_to_edge,\n"
        "                                  filter::nearest);\n"
-       "  return source.sample(sourceSampler, in.texcoord);\n"
+       "  const float4 color = source.sample(sourceSampler, in.texcoord);\n"
+       "  return float4(color.rgb, 1.0);\n"
        "}\n";
 
   NSError* error = nil;
@@ -447,6 +448,7 @@ bool MacOSMetalPresenter::Initialize(
   impl->layer = [[CAMetalLayer layer] retain];
   impl->layer.device = impl->device;
   impl->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+  impl->layer.opaque = YES;
   CGColorSpaceRef srgbColorSpace =
       CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
   if (srgbColorSpace != nullptr) {
