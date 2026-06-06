@@ -42,6 +42,7 @@
 
 #ifdef __APPLE__
 #include "arch/LowLevelWindow/MacOSFramePacing.h"
+#include "arch/LowLevelWindow/MacOSMetalPresenter.h"
 #endif
 
 using namespace RageDisplay_Legacy_Helpers;
@@ -1182,6 +1183,17 @@ RageDisplay_Legacy::~RageDisplay_Legacy() {
   ReleaseOffscreenRenderTarget();
   LogDisplayEndFramePerfSummary();
   delete g_pWind;
+}
+
+std::string RageDisplay_Legacy::GetApiDescription() const {
+  std::string description = "OpenGL";
+#ifdef __APPLE__
+  const std::string metalStats = MacOSMetalPresenterGetRuntimeStatsLine();
+  if (!metalStats.empty()) {
+    description += "\n" + metalStats;
+  }
+#endif
+  return description;
 }
 
 void RageDisplay_Legacy::GetDisplaySpecs(DisplaySpecs& out) const {

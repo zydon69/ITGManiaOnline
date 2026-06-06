@@ -3,6 +3,16 @@
 
 #include <string>
 
+struct MacOSMetalPresenterRuntimeStats {
+  unsigned long long submittedFrames = 0;
+  unsigned long long completedFrames = 0;
+  unsigned long long prefetchedDrawables = 0;
+  unsigned long long consumedDrawables = 0;
+  unsigned long long slowDrawableAcquires = 0;
+  unsigned long long drawableMisses = 0;
+  unsigned long long skippedNoPrefetchedDrawableFrames = 0;
+};
+
 class MacOSMetalPresenter {
  public:
   MacOSMetalPresenter();
@@ -27,5 +37,8 @@ class MacOSMetalPresenter {
   bool m_Available;
   std::string m_FailureReason;
 };
+
+MacOSMetalPresenterRuntimeStats MacOSMetalPresenterGetRuntimeStats();
+std::string MacOSMetalPresenterGetRuntimeStatsLine();
 
 #endif

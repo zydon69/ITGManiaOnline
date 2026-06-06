@@ -1,7 +1,9 @@
 #include "MacOSMetalPresenter.h"
 
+#include "PerfDiagnostics.h"
 #include "RageLog.h"
 #include "RageTimer.h"
+#include "RageUtil.h"
 
 #import <AppKit/AppKit.h>
 #import <IOSurface/IOSurface.h>
@@ -10,17 +12,39 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <cmath>
+#include <mutex>
+#include <thread>
 
 namespace {
 
 constexpr int kMetalInteropSurfaceCount = 3;
-constexpr float kMetalSlowNextDrawableMs = 2.0f;
+constexpr float kMetalSlowNextDrawableSummaryMs = 8.0f;
+constexpr float kMetalTraceNextDrawableMs = 16.0f;
 constexpr float kMetalSlowCommandBufferMs = 12.0f;
+constexpr uint64_t kMetalInitialTraceFrames = 3;
+constexpr uint64_t kMetalRareSkipTraceInterval = 5000;
 
 std::atomic<uint64_t> g_iMetalDirectPresentSubmittedFrames{0};
 std::atomic<uint64_t> g_iMetalDirectPresentCompletedFrames{0};
+std::atomic<uint64_t> g_iMetalDirectPresentSkippedNoDrawableFrames{0};
+std::atomic<uint64_t> g_iMetalPrefetchedDrawables{0};
+std::atomic<uint64_t> g_iMetalConsumedDrawables{0};
+std::atomic<uint64_t> g_iMetalSlowDrawableAcquires{0};
+std::atomic<uint64_t> g_iMetalDrawableMisses{0};
+
+void ResetMetalRuntimeStats() {
+  g_iMetalDirectPresentSubmittedFrames.store(0, std::memory_order_relaxed);
+  g_iMetalDirectPresentCompletedFrames.store(0, std::memory_order_relaxed);
+  g_iMetalDirectPresentSkippedNoDrawableFrames.store(
+      0, std::memory_order_relaxed);
+  g_iMetalPrefetchedDrawables.store(0, std::memory_order_relaxed);
+  g_iMetalConsumedDrawables.store(0, std::memory_order_relaxed);
+  g_iMetalSlowDrawableAcquires.store(0, std::memory_order_relaxed);
+  g_iMetalDrawableMisses.store(0, std::memory_order_relaxed);
+}
 
 uint32_t FourCC(char a, char b, char c, char d) {
   return (static_cast<uint32_t>(a) << 24) |
@@ -43,9 +67,188 @@ struct MacOSMetalPresenterImpl {
   CAMetalLayer* layer = nil;
   NSView* layerView = nil;
   std::array<MacOSMetalInteropSurface, kMetalInteropSurfaceCount> surfaces;
+  std::mutex drawableMutex;
+  std::condition_variable drawableCondition;
+  std::thread drawablePrefetchThread;
+  id<CAMetalDrawable> prefetchedDrawable = nil;
+  float prefetchedDrawableAcquireMs = 0.0f;
+  uint64_t prefetchedDrawableSerial = 0;
+  uint64_t prefetchedDrawableConsumed = 0;
+  uint64_t prefetchedDrawableMisses = 0;
+  uint64_t prefetchedDrawableSlowAcquires = 0;
+  uint64_t directPresentSkippedNoDrawable = 0;
+  bool drawablePrefetchStarted = false;
+  bool drawablePrefetchStop = false;
   bool interopReady = false;
   bool loggedFirstDirectPresent = false;
 };
+
+void StartDrawablePrefetcher(MacOSMetalPresenterImpl* impl) {
+  if (impl == nullptr || impl->layer == nil || impl->drawablePrefetchStarted) {
+    return;
+  }
+
+  impl->drawablePrefetchStop = false;
+  impl->drawablePrefetchStarted = true;
+  impl->drawablePrefetchThread = std::thread([impl]() {
+    @autoreleasepool {
+      for (;;) {
+        {
+          std::unique_lock<std::mutex> lock(impl->drawableMutex);
+          impl->drawableCondition.wait(lock, [impl]() {
+            return impl->drawablePrefetchStop ||
+                   impl->prefetchedDrawable == nil;
+          });
+          if (impl->drawablePrefetchStop) {
+            break;
+          }
+        }
+
+        CAMetalLayer* layer = nil;
+        {
+          std::lock_guard<std::mutex> lock(impl->drawableMutex);
+          layer = [impl->layer retain];
+        }
+        if (layer == nil) {
+          std::lock_guard<std::mutex> lock(impl->drawableMutex);
+          if (impl->drawablePrefetchStop) {
+            break;
+          }
+          continue;
+        }
+
+        RageTimer acquireTimer;
+        id<CAMetalDrawable> drawable = [layer nextDrawable];
+        const float acquireMs = acquireTimer.GetDeltaTime() * 1000.0f;
+        [layer release];
+
+        if (drawable == nil) {
+          std::lock_guard<std::mutex> lock(impl->drawableMutex);
+          if (impl->drawablePrefetchStop) {
+            break;
+          }
+          ++impl->prefetchedDrawableMisses;
+          g_iMetalDrawableMisses.store(impl->prefetchedDrawableMisses);
+          continue;
+        }
+
+        [drawable retain];
+        bool shouldTrace = false;
+        uint64_t serial = 0;
+        uint64_t misses = 0;
+        uint64_t slowAcquires = 0;
+        {
+          std::lock_guard<std::mutex> lock(impl->drawableMutex);
+          if (impl->drawablePrefetchStop) {
+            [drawable release];
+            break;
+          }
+          if (impl->prefetchedDrawable != nil) {
+            [drawable release];
+            continue;
+          }
+          impl->prefetchedDrawable = drawable;
+          impl->prefetchedDrawableAcquireMs = acquireMs;
+          serial = ++impl->prefetchedDrawableSerial;
+          g_iMetalPrefetchedDrawables.store(serial);
+          if (acquireMs >= kMetalSlowNextDrawableSummaryMs) {
+            slowAcquires = ++impl->prefetchedDrawableSlowAcquires;
+            g_iMetalSlowDrawableAcquires.store(slowAcquires);
+          } else {
+            slowAcquires = impl->prefetchedDrawableSlowAcquires;
+          }
+          misses = impl->prefetchedDrawableMisses;
+          shouldTrace =
+              serial <= kMetalInitialTraceFrames ||
+              acquireMs >= kMetalTraceNextDrawableMs;
+        }
+
+        if (PerfDiagnosticsEnabled() && shouldTrace) {
+          LOG->Trace(
+              "PERF_TRACE: macos_metal_drawable_prefetched serial=%llu "
+              "acquire_ms=%.3f slow_acquires=%llu misses=%llu",
+              static_cast<unsigned long long>(serial), acquireMs,
+              static_cast<unsigned long long>(slowAcquires),
+              static_cast<unsigned long long>(misses));
+        }
+      }
+    }
+  });
+
+  impl->drawableCondition.notify_all();
+}
+
+void StopDrawablePrefetcher(MacOSMetalPresenterImpl* impl) {
+  if (impl == nullptr || !impl->drawablePrefetchStarted) {
+    return;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(impl->drawableMutex);
+    impl->drawablePrefetchStop = true;
+  }
+  impl->drawableCondition.notify_all();
+  if (impl->drawablePrefetchThread.joinable()) {
+    impl->drawablePrefetchThread.join();
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(impl->drawableMutex);
+    if (impl->prefetchedDrawable != nil) {
+      [impl->prefetchedDrawable release];
+      impl->prefetchedDrawable = nil;
+    }
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "PERF_SUMMARY: macos_metal_drawable_prefetch acquired=%llu "
+          "consumed=%llu skipped_no_prefetched=%llu slow_acquires=%llu "
+          "misses=%llu slow_threshold_ms=%.3f trace_threshold_ms=%.3f",
+          static_cast<unsigned long long>(impl->prefetchedDrawableSerial),
+          static_cast<unsigned long long>(impl->prefetchedDrawableConsumed),
+          static_cast<unsigned long long>(
+              impl->directPresentSkippedNoDrawable),
+          static_cast<unsigned long long>(
+              impl->prefetchedDrawableSlowAcquires),
+          static_cast<unsigned long long>(impl->prefetchedDrawableMisses),
+          kMetalSlowNextDrawableSummaryMs, kMetalTraceNextDrawableMs);
+    }
+    impl->prefetchedDrawableAcquireMs = 0.0f;
+    impl->drawablePrefetchStarted = false;
+    impl->drawablePrefetchStop = false;
+  }
+}
+
+id<CAMetalDrawable> TakePrefetchedDrawable(
+    MacOSMetalPresenterImpl* impl, float* acquireMs, uint64_t* serial,
+    uint64_t* misses) {
+  if (impl == nullptr) {
+    return nil;
+  }
+
+  id<CAMetalDrawable> drawable = nil;
+  {
+    std::lock_guard<std::mutex> lock(impl->drawableMutex);
+    drawable = impl->prefetchedDrawable;
+    impl->prefetchedDrawable = nil;
+    if (acquireMs != nullptr) {
+      *acquireMs = impl->prefetchedDrawableAcquireMs;
+    }
+    if (serial != nullptr) {
+      *serial = impl->prefetchedDrawableSerial;
+    }
+    if (misses != nullptr) {
+      *misses = impl->prefetchedDrawableMisses;
+    }
+    if (drawable != nil) {
+      ++impl->prefetchedDrawableConsumed;
+      g_iMetalConsumedDrawables.store(impl->prefetchedDrawableConsumed);
+    }
+    impl->prefetchedDrawableAcquireMs = 0.0f;
+  }
+
+  impl->drawableCondition.notify_one();
+  return drawable;
+}
 
 void ReleaseInteropSurface(MacOSMetalInteropSurface* surface) {
   if (surface == nullptr) {
@@ -202,6 +405,7 @@ MacOSMetalPresenter::~MacOSMetalPresenter() {
 bool MacOSMetalPresenter::Initialize(
     void* nsWindow, int width, int height, double targetHz) {
   Shutdown();
+  ResetMetalRuntimeStats();
 
   MacOSMetalPresenterImpl* impl = new MacOSMetalPresenterImpl();
   impl->device = MTLCreateSystemDefaultDevice();
@@ -245,6 +449,7 @@ bool MacOSMetalPresenter::Initialize(
   impl->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
   impl->layer.framebufferOnly = NO;
   impl->layer.displaySyncEnabled = YES;
+  impl->layer.allowsNextDrawableTimeout = YES;
   impl->layer.maximumDrawableCount = 3;
   impl->layer.frame = bounds;
   impl->layer.drawableSize = CGSizeMake(width, height);
@@ -290,6 +495,7 @@ void MacOSMetalPresenter::Shutdown() {
 
   MacOSMetalPresenterImpl* impl =
       static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  StopDrawablePrefetcher(impl);
   DetachLayer();
   for (auto& surface : impl->surfaces) {
     ReleaseInteropSurface(&surface);
@@ -366,6 +572,7 @@ bool MacOSMetalPresenter::AttachLayerToWindow(void* nsWindow) {
   [contentView addSubview:layerView positioned:NSWindowAbove relativeTo:nil];
   impl->layerView = layerView;
   impl->layer.frame = bounds;
+  StartDrawablePrefetcher(impl);
 
   LOG->Trace(
       "MacOS Metal presenter layer attached: view_size=%dx%d "
@@ -389,6 +596,7 @@ void MacOSMetalPresenter::DetachLayer() {
   }
   MacOSMetalPresenterImpl* impl =
       static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  StopDrawablePrefetcher(impl);
   if (impl->layerView != nil) {
     [impl->layerView removeFromSuperview];
     [impl->layerView release];
@@ -409,17 +617,23 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
     return false;
   }
 
-  RageTimer nextDrawableTimer;
-  id<CAMetalDrawable> drawable = [impl->layer nextDrawable];
-  const float nextDrawableMs =
-      nextDrawableTimer.GetDeltaTime() * 1000.0f;
+  float nextDrawableMs = 0.0f;
+  uint64_t drawableSerial = 0;
+  uint64_t drawableMisses = 0;
+  id<CAMetalDrawable> drawable = TakePrefetchedDrawable(
+      impl, &nextDrawableMs, &drawableSerial, &drawableMisses);
   if (drawable == nil) {
-    static bool s_warnedNoDrawable = false;
-    if (!s_warnedNoDrawable) {
-      LOG->Warn(
-          "MacOS Metal direct-present validation skipped: "
-          "CAMetalLayer returned no drawable.");
-      s_warnedNoDrawable = true;
+    const uint64_t skippedFrames = ++impl->directPresentSkippedNoDrawable;
+    g_iMetalDirectPresentSkippedNoDrawableFrames.store(
+        skippedFrames, std::memory_order_relaxed);
+    if (PerfDiagnosticsEnabled() &&
+        (skippedFrames <= kMetalInitialTraceFrames ||
+         skippedFrames % kMetalRareSkipTraceInterval == 0)) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_direct_present skipped_no_prefetched_drawable=1 "
+          "skipped_frames=%llu prefetch_misses=%llu target_hz=%.3f",
+          static_cast<unsigned long long>(skippedFrames),
+          static_cast<unsigned long long>(drawableMisses), targetHz);
     }
     return false;
   }
@@ -428,6 +642,7 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
   RageTimer submitTimer;
   id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
   if (commandBuffer == nil) {
+    [drawable release];
     return false;
   }
 
@@ -440,6 +655,7 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
   id<MTLRenderCommandEncoder> encoder =
       [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
   if (encoder == nil) {
+    [drawable release];
     return false;
   }
   [encoder setRenderPipelineState:impl->presentPipeline];
@@ -459,6 +675,7 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
       g_iMetalDirectPresentSubmittedFrames.fetch_add(1) + 1;
   const uint64_t submitUsec = RageTimer::GetTimeSinceStartMicroseconds();
   const float encodeSubmitMs = submitTimer.GetDeltaTime() * 1000.0f;
+  id<CAMetalDrawable> completionDrawable = [drawable retain];
   [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedCommandBuffer) {
     const uint64_t completedIndex =
         g_iMetalDirectPresentCompletedFrames.fetch_add(1) + 1;
@@ -468,9 +685,9 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
             ? static_cast<float>(completedUsec - submitUsec) / 1000.0f
             : 0.0f;
     const bool traceCompletion =
-        completedIndex <= 5 || completedIndex % 600 == 0 ||
+        completedIndex <= kMetalInitialTraceFrames ||
         commandBufferMs >= kMetalSlowCommandBufferMs;
-    if (traceCompletion) {
+    if (PerfDiagnosticsEnabled() && traceCompletion) {
       LOG->Trace(
           "PERF_TRACE: macos_metal_direct_present_completed "
           "frame=%llu completed=%llu status=%lu command_buffer_ms=%.3f "
@@ -480,24 +697,29 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
           static_cast<unsigned long>([completedCommandBuffer status]),
           commandBufferMs, nextDrawableMs, encodeSubmitMs, targetHz);
     }
+    [completionDrawable release];
   }];
   [commandBuffer commit];
+  [drawable release];
 
   const bool traceSubmit =
-      !impl->loggedFirstDirectPresent || frameIndex <= 5 ||
-      frameIndex % 600 == 0 || nextDrawableMs >= kMetalSlowNextDrawableMs;
-  if (traceSubmit) {
+      !impl->loggedFirstDirectPresent ||
+      frameIndex <= kMetalInitialTraceFrames ||
+      nextDrawableMs >= kMetalTraceNextDrawableMs;
+  if (PerfDiagnosticsEnabled() && traceSubmit) {
     LOG->Trace(
-        "MacOS Metal direct-present validation submitted: surface_index=%d "
+        "PERF_TRACE: macos_metal_direct_present_submitted surface_index=%d "
         "size=%dx%d target_hz=%.3f minimum_duration_ms=%.3f "
-        "orientation=native frame=%llu next_drawable_ms=%.3f "
-        "encode_submit_ms=%.3f",
+        "orientation=native frame=%llu prefetched_drawable_serial=%llu "
+        "prefetch_misses=%llu next_drawable_ms=%.3f encode_submit_ms=%.3f",
         index, surface.width, surface.height, targetHz,
         minimumDuration * 1000.0,
-        static_cast<unsigned long long>(frameIndex), nextDrawableMs,
+        static_cast<unsigned long long>(frameIndex),
+        static_cast<unsigned long long>(drawableSerial),
+        static_cast<unsigned long long>(drawableMisses), nextDrawableMs,
         encodeSubmitMs);
-    impl->loggedFirstDirectPresent = true;
   }
+  impl->loggedFirstDirectPresent = true;
   return true;
 }
 
@@ -537,4 +759,41 @@ int MacOSMetalPresenter::InteropSurfaceHeight() const {
 
 const std::string& MacOSMetalPresenter::FailureReason() const {
   return m_FailureReason;
+}
+
+MacOSMetalPresenterRuntimeStats MacOSMetalPresenterGetRuntimeStats() {
+  MacOSMetalPresenterRuntimeStats stats;
+  stats.submittedFrames =
+      g_iMetalDirectPresentSubmittedFrames.load(std::memory_order_relaxed);
+  stats.completedFrames =
+      g_iMetalDirectPresentCompletedFrames.load(std::memory_order_relaxed);
+  stats.prefetchedDrawables =
+      g_iMetalPrefetchedDrawables.load(std::memory_order_relaxed);
+  stats.consumedDrawables =
+      g_iMetalConsumedDrawables.load(std::memory_order_relaxed);
+  stats.slowDrawableAcquires =
+      g_iMetalSlowDrawableAcquires.load(std::memory_order_relaxed);
+  stats.drawableMisses =
+      g_iMetalDrawableMisses.load(std::memory_order_relaxed);
+  stats.skippedNoPrefetchedDrawableFrames =
+      g_iMetalDirectPresentSkippedNoDrawableFrames.load(
+          std::memory_order_relaxed);
+  return stats;
+}
+
+std::string MacOSMetalPresenterGetRuntimeStatsLine() {
+  const MacOSMetalPresenterRuntimeStats stats =
+      MacOSMetalPresenterGetRuntimeStats();
+  if (stats.submittedFrames == 0 && stats.prefetchedDrawables == 0 &&
+      stats.skippedNoPrefetchedDrawableFrames == 0) {
+    return std::string();
+  }
+
+  return ssprintf(
+      "Metal present: submitted=%llu completed=%llu skipped=%llu "
+      "prefetched=%llu consumed=%llu slow=%llu misses=%llu",
+      stats.submittedFrames, stats.completedFrames,
+      stats.skippedNoPrefetchedDrawableFrames, stats.prefetchedDrawables,
+      stats.consumedDrawables, stats.slowDrawableAcquires,
+      stats.drawableMisses);
 }

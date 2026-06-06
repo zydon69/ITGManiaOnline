@@ -43,7 +43,7 @@ class RageDisplay_Legacy : public RageDisplay {
   virtual std::string Init(
       const VideoModeParams& p, bool bAllowUnacceleratedRenderer);
 
-  virtual std::string GetApiDescription() const { return "OpenGL"; }
+  virtual std::string GetApiDescription() const;
   virtual void GetDisplaySpecs(DisplaySpecs& out) const;
   void ResolutionChanged();
   void ResetFramePresentationTelemetry();
