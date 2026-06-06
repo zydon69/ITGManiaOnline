@@ -1713,9 +1713,47 @@ bool LowLevelWindow_MacOSX::BeginMetalPresentBridgeFrame() {
     return false;
   }
 
-  m_iMetalBridgeRenderSurfaceIndex =
-      (m_iMetalBridgeRenderSurfaceIndex + 1) %
+  const int surfaceCount =
       static_cast<int>(m_MetalOpenGLBridge->surfaces.size());
+  int nextSurfaceIndex = -1;
+  constexpr int kSurfaceWaitAttempts = 80;
+  constexpr int kSurfaceWaitAttemptUsec = 100;
+  for (int waitAttempt = 0;
+       waitAttempt < kSurfaceWaitAttempts && nextSurfaceIndex < 0;
+       ++waitAttempt) {
+    for (int offset = 1; offset <= surfaceCount; ++offset) {
+      const int candidate =
+          (m_iMetalBridgeRenderSurfaceIndex + offset) % surfaceCount;
+      if (!m_MetalPresenter ||
+          !m_MetalPresenter->IsInteropSurfaceBusy(candidate)) {
+        nextSurfaceIndex = candidate;
+        break;
+      }
+    }
+    if (nextSurfaceIndex < 0) {
+      std::this_thread::sleep_for(
+          std::chrono::microseconds(kSurfaceWaitAttemptUsec));
+    }
+  }
+
+  if (nextSurfaceIndex < 0) {
+    if (PerfDiagnosticsEnabled()) {
+      static uint64_t s_iMetalBridgeBusySurfaceFrames = 0;
+      ++s_iMetalBridgeBusySurfaceFrames;
+      if (s_iMetalBridgeBusySurfaceFrames <= 3 ||
+          s_iMetalBridgeBusySurfaceFrames % 5000 == 0) {
+        LOG->Trace(
+            "PERF_TRACE: macos_metal_bridge_surface_unavailable "
+            "surface_count=%d wait_budget_us=%d frames=%llu",
+            surfaceCount,
+            kSurfaceWaitAttempts * kSurfaceWaitAttemptUsec,
+            static_cast<unsigned long long>(s_iMetalBridgeBusySurfaceFrames));
+      }
+    }
+    return false;
+  }
+
+  m_iMetalBridgeRenderSurfaceIndex = nextSurfaceIndex;
   const MacOSMetalOpenGLBridgeSurface& surface =
       m_MetalOpenGLBridge->surfaces[m_iMetalBridgeRenderSurfaceIndex];
   if (surface.framebuffer == 0) {

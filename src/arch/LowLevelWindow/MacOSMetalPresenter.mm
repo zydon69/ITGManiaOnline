@@ -62,6 +62,16 @@ struct MacOSMetalInteropSurface {
   int height = 0;
 };
 
+struct MacOSMetalSurfaceBusyFlags {
+  MacOSMetalSurfaceBusyFlags() {
+    for (std::atomic_bool& flag : busy) {
+      flag.store(false, std::memory_order_relaxed);
+    }
+  }
+
+  std::array<std::atomic_bool, kMetalInteropSurfaceCount> busy;
+};
+
 struct MacOSMetalPresenterImpl {
   id<MTLDevice> device = nil;
   id<MTLCommandQueue> commandQueue = nil;
@@ -69,6 +79,7 @@ struct MacOSMetalPresenterImpl {
   CAMetalLayer* layer = nil;
   NSView* layerView = nil;
   std::array<MacOSMetalInteropSurface, kMetalInteropSurfaceCount> surfaces;
+  std::shared_ptr<MacOSMetalSurfaceBusyFlags> surfaceBusy;
   std::mutex drawableMutex;
   std::condition_variable drawableCondition;
   std::thread drawablePrefetchThread;
@@ -411,6 +422,7 @@ bool MacOSMetalPresenter::Initialize(
   ResetMetalRuntimeStats();
 
   MacOSMetalPresenterImpl* impl = new MacOSMetalPresenterImpl();
+  impl->surfaceBusy = std::make_shared<MacOSMetalSurfaceBusyFlags>();
   impl->device = MTLCreateSystemDefaultDevice();
   if (impl->device == nil) {
     m_FailureReason = "Metal is not available on this Mac.";
@@ -551,6 +563,20 @@ bool MacOSMetalPresenter::IsLayerAttached() const {
   return static_cast<MacOSMetalPresenterImpl*>(m_Impl)->layerView != nil;
 }
 
+bool MacOSMetalPresenter::IsInteropSurfaceBusy(int index) const {
+  if (!IsInteropReady() || index < 0 || index >= kMetalInteropSurfaceCount) {
+    return false;
+  }
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  if (!impl->surfaceBusy) {
+    return false;
+  }
+
+  return impl->surfaceBusy->busy[index].load(std::memory_order_acquire);
+}
+
 bool MacOSMetalPresenter::AttachLayerToWindow(void* nsWindow) {
   if (![NSThread isMainThread]) {
     __block bool attached = false;
@@ -657,9 +683,34 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
   }
 
   const MacOSMetalInteropSurface& surface = impl->surfaces[index];
+  std::shared_ptr<MacOSMetalSurfaceBusyFlags> busyFlags = impl->surfaceBusy;
+  if (busyFlags &&
+      busyFlags->busy[index].exchange(true, std::memory_order_acq_rel)) {
+    if (PerfDiagnosticsEnabled()) {
+      static uint64_t s_iMetalDirectPresentBusySurfaceFrames = 0;
+      ++s_iMetalDirectPresentBusySurfaceFrames;
+      if (s_iMetalDirectPresentBusySurfaceFrames <= kMetalInitialTraceFrames ||
+          s_iMetalDirectPresentBusySurfaceFrames %
+                  kMetalRareSkipTraceInterval ==
+              0) {
+        LOG->Trace(
+            "PERF_TRACE: macos_metal_direct_present "
+            "skipped_busy_iosurface=1 surface_index=%d frames=%llu",
+            index,
+            static_cast<unsigned long long>(
+                s_iMetalDirectPresentBusySurfaceFrames));
+      }
+    }
+    [drawable release];
+    return false;
+  }
+
   RageTimer submitTimer;
   id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
   if (commandBuffer == nil) {
+    if (busyFlags) {
+      busyFlags->busy[index].store(false, std::memory_order_release);
+    }
     [drawable release];
     return false;
   }
@@ -673,6 +724,9 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
   id<MTLRenderCommandEncoder> encoder =
       [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
   if (encoder == nil) {
+    if (busyFlags) {
+      busyFlags->busy[index].store(false, std::memory_order_release);
+    }
     [drawable release];
     return false;
   }
@@ -714,6 +768,9 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
           static_cast<unsigned long long>(completedIndex),
           static_cast<unsigned long>([completedCommandBuffer status]),
           commandBufferMs, nextDrawableMs, encodeSubmitMs, targetHz);
+    }
+    if (busyFlags) {
+      busyFlags->busy[index].store(false, std::memory_order_release);
     }
     [completionDrawable release];
   }];
