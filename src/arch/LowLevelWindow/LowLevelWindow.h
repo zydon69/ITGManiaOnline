@@ -38,6 +38,7 @@ class LowLevelWindow {
   virtual RenderTarget* CreateRenderTarget() { return nullptr; }
   virtual bool BeginMetalPresentBridgeFrame() { return false; }
   virtual bool ResumeMetalPresentBridgeFrame() { return false; }
+  virtual void MarkMetalPresentBridgeFallbackFrame() {}
   virtual void EndMetalPresentBridgeFrame() {}
 
   virtual bool SupportsFullscreenBorderlessWindow() const { return false; };

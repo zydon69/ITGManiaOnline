@@ -29,6 +29,7 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   bool m_bLoggedMetalBridgeFirstFrame;
   bool m_bLoggedMetalBridgeFirstBlit;
   bool m_bMetalDirectPresentSubmittedThisFrame;
+  bool m_bMetalBridgeForceOpenGLFallbackThisFrame;
   bool m_bMetalBridgeBuildPending;
   int m_iMetalBridgeBuildFrameCountdown;
 
@@ -48,6 +49,7 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   RenderTarget* CreateRenderTarget();
   bool BeginMetalPresentBridgeFrame();
   bool ResumeMetalPresentBridgeFrame();
+  void MarkMetalPresentBridgeFallbackFrame();
   void EndMetalPresentBridgeFrame();
 
   bool SupportsThreadedRendering() { return m_BGContext; }

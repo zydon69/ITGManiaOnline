@@ -3582,6 +3582,10 @@ void RageDisplay_Legacy::SetRenderTarget(
     return;
   }
 
+  if (m_bUsingMetalPresentBridgeFrame) {
+    g_pWind->MarkMetalPresentBridgeFallbackFrame();
+  }
+
   /* If we already had a render target, disable it. */
   if (g_pCurrentRenderTarget != nullptr) {
     SetRenderTarget(0, true);

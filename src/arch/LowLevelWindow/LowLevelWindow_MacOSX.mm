@@ -1433,6 +1433,7 @@ LowLevelWindow_MacOSX::LowLevelWindow_MacOSX()
       m_bLoggedMetalBridgeFirstFrame(false),
       m_bLoggedMetalBridgeFirstBlit(false),
       m_bMetalDirectPresentSubmittedThisFrame(false),
+      m_bMetalBridgeForceOpenGLFallbackThisFrame(false),
       m_bMetalBridgeBuildPending(false),
       m_iMetalBridgeBuildFrameCountdown(0) {
   POOL;
@@ -1535,6 +1536,7 @@ void LowLevelWindow_MacOSX::ReleaseMetalOpenGLBridge() {
   m_bLoggedMetalBridgeFirstFrame = false;
   m_bLoggedMetalBridgeFirstBlit = false;
   m_bMetalDirectPresentSubmittedThisFrame = false;
+  m_bMetalBridgeForceOpenGLFallbackThisFrame = false;
   ReleaseMetalOpenGLBridgeResources(m_MetalOpenGLBridge.get());
   m_MetalOpenGLBridge.reset();
   while (glGetError() != GL_NO_ERROR);
@@ -1725,6 +1727,7 @@ bool LowLevelWindow_MacOSX::BeginMetalPresentBridgeFrame() {
   glClearColor(0, 0, 0, 0);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   m_bMetalBridgeFrameActive = true;
+  m_bMetalBridgeForceOpenGLFallbackThisFrame = false;
   if (!m_bLoggedMetalBridgeFirstFrame) {
     LOG->Trace(
         "MacOS Metal bridge rendering frame into IOSurface FBO: "
@@ -1756,6 +1759,12 @@ bool LowLevelWindow_MacOSX::ResumeMetalPresentBridgeFrame() {
   return true;
 }
 
+void LowLevelWindow_MacOSX::MarkMetalPresentBridgeFallbackFrame() {
+  if (m_bMetalBridgeFrameActive) {
+    m_bMetalBridgeForceOpenGLFallbackThisFrame = true;
+  }
+}
+
 void LowLevelWindow_MacOSX::EndMetalPresentBridgeFrame() {
   if (!m_bMetalBridgeFrameActive || !m_MetalOpenGLBridge ||
       m_iMetalBridgeRenderSurfaceIndex < 0 ||
@@ -1767,7 +1776,21 @@ void LowLevelWindow_MacOSX::EndMetalPresentBridgeFrame() {
   const MacOSMetalOpenGLBridgeSurface& surface =
       m_MetalOpenGLBridge->surfaces[m_iMetalBridgeRenderSurfaceIndex];
   m_bMetalDirectPresentSubmittedThisFrame = false;
-  if (MacOSMetalDirectPresentEnabled() && m_MetalPresenter) {
+  if (m_bMetalBridgeForceOpenGLFallbackThisFrame &&
+      PerfDiagnosticsEnabled()) {
+    static uint64_t s_iMetalNestedRenderTargetFallbackFrames = 0;
+    ++s_iMetalNestedRenderTargetFallbackFrames;
+    if (s_iMetalNestedRenderTargetFallbackFrames <= 3 ||
+        s_iMetalNestedRenderTargetFallbackFrames % 5000 == 0) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_direct_present_fallback "
+          "reason=nested_render_target fallback_frames=%llu",
+          static_cast<unsigned long long>(
+              s_iMetalNestedRenderTargetFallbackFrames));
+    }
+  }
+  if (!m_bMetalBridgeForceOpenGLFallbackThisFrame &&
+      MacOSMetalDirectPresentEnabled() && m_MetalPresenter) {
     GLsync metalReadFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     GLenum metalReadFenceStatus = GL_WAIT_FAILED;
     if (metalReadFence != nullptr) {
