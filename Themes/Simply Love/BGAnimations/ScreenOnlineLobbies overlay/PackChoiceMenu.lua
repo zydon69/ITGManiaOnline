@@ -13,13 +13,13 @@ return Def.ActorFrame{
 	},
 	LoadFont("Common Bold")..{
 		Name="PackChoiceTitle",
-		Text="Choose Pack To Download",
+			Text="Choisir le pack a telecharger",
 		InitCommand=function(self)
 			self:y(-146):zoom(0.78)
 		end
 	},
 	LoadFont("Common Normal")..{
-		Text="&MENULEFT;/&MENURIGHT; to Choose | &START; to Download | &SELECT; to Cancel",
+			Text="&MENULEFT;/&MENURIGHT; pour choisir | &START; pour telecharger | &SELECT; pour annuler",
 		InitCommand=function(self)
 			self:y(-114):zoom(0.5)
 		end

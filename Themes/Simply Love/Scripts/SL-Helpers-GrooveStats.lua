@@ -969,6 +969,7 @@ CreateGrooveStatsPlayerOptionKeys = function()
 		["HideEarlyDecentWayOffFlash"] = CreateKey("boolean"),
 		["ShowFaPlusWindow"] = CreateKey("boolean"),
 		["ShowExScore"] = CreateKey("boolean"),
+		["ShowHardEXScore"] = CreateKey("boolean"),
 		["ShowFaPlusPane"] = CreateKey("boolean"),
 		["NoteFieldOffsetX"] = CreateKey("number"),
 		["NoteFieldOffsetY"] = CreateKey("number"),

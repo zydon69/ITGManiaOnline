@@ -82,6 +82,7 @@ local af = Def.ActorFrame{
 	-- The GrooveStats leaderboard that can (maybe) be accessed from the SortMenu
 	-- This is only added in "dance" mode and if the service is available.
 	LoadActor("./Leaderboard.lua"),
+	LoadActor("./ACLeaderboard.lua"),
 
 	LoadActor("./SongSearch/default.lua"),
 }

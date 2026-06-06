@@ -16,6 +16,8 @@ local storage = SL[ToEnumShortString(player)].Stages.Stats[SL.Global.Stages.Play
 local valid_tns = {
 	-- Emulated, not a real TNS.
 	W0 = true,
+	W010 = true,
+	W110 = true,
 
 	-- Actual TNS's
 	W1 = true,
@@ -38,7 +40,9 @@ return Def.Actor{
 			-- These counts are only tracked while a player hasn't failed.
 			-- This is so that the EX score stops changing once they've failed.
 			W0 = 0,
+			W010 = 0,
 			W1 = 0,
+			W110 = 0,
 			W2 = 0,
 			W3 = 0,
 			W4 = 0,
@@ -53,7 +57,8 @@ return Def.Actor{
 			-- The W0 count displayed in the pane in ScreenEvaluation should
 			-- still display the total count (whether or not the player has failed).
 			-- Track that separately.
-			W0_total = 0
+			W0_total = 0,
+			W010_total = 0
 		}
 	end,
 	JudgmentMessageCommand=function(self, params)
@@ -80,17 +85,31 @@ return Def.Actor{
 
 			if SL.Global.GameMode == "ITG" then
 				if TNS == "W1" then
-					-- Check if this W1 is actually in the W0 window
+					-- Split the engine's top ITG window into:
+					-- W010: ArrowCloud HardEX +/-10ms
+					-- W0:   FA+/EX inner Fantastic
+					-- W1:   remaining white Fantastic
+					local is_W010 = IsW010Judgment(params, player)
 					local is_W0 = IsW0Judgment(params, player)
-					if is_W0 then
+					if is_W010 then
 						if not stats:GetFailed() then
 							storage.ex_counts.W0 = storage.ex_counts.W0 + 1
+							storage.ex_counts.W010 = storage.ex_counts.W010 + 1
+							count_updated = true
+						end
+						storage.ex_counts.W0_total = storage.ex_counts.W0_total + 1
+						storage.ex_counts.W010_total = storage.ex_counts.W010_total + 1
+					elseif is_W0 then
+						if not stats:GetFailed() then
+							storage.ex_counts.W0 = storage.ex_counts.W0 + 1
+							storage.ex_counts.W110 = storage.ex_counts.W110 + 1
 							count_updated = true
 						end
 						storage.ex_counts.W0_total = storage.ex_counts.W0_total + 1
 					else
 						if not stats:GetFailed() then
 							storage.ex_counts.W1 = storage.ex_counts.W1 + 1
+							storage.ex_counts.W110 = storage.ex_counts.W110 + 1
 							count_updated = true
 						end
 					end
@@ -104,8 +123,8 @@ return Def.Actor{
 					end
 				end
 			else
-				adjusted_TNS = TNS
-				tier = string.match(TNS, "W(%d)")
+				local adjusted_TNS = TNS
+				local tier = string.match(TNS, "W(%d)")
 
 				-- In FA+ mode, we need to shift the windows up 1 so that the key we're using is accurate.
 				-- E.g. W1 window becomes W0, W2 becomes W1, etc.
@@ -125,6 +144,7 @@ return Def.Actor{
 		if count_updated then
 			-- Broadcast so other elements on ScreenGameplay can process the updated count.
 			local ExScore, ActualPoints, ActualPossible = CalculateExScore(player)
+			local HardExScore = CalculateHardExScore(player)
 
 			MESSAGEMAN:Broadcast(
 				"ExCountsChanged",
@@ -132,6 +152,7 @@ return Def.Actor{
 					Player=player,
 					ExCounts=storage.ex_counts,
 					ExScore=ExScore,
+					HardExScore=HardExScore,
 					ActualPoints=ActualPoints,
 					ActualPossible=ActualPossible
 				}

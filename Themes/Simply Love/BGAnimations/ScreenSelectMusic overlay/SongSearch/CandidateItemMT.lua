@@ -1,5 +1,6 @@
 local paneHeight = 319
 local paneWidth = 319
+local ThemeFont = (ThemePrefs.Get("ThemeFont") or "Common")
 
 -- the metatable for an item in the song search results.
 return {
@@ -17,12 +18,12 @@ return {
 				end,
 			}
 
-			-- Song Name
-			af[#af+1] = Def.BitmapText{
-				Font="Common Normal",
-				Name="Song",
-				InitCommand=function(subself)
-					self.song_name = subself
+				-- Song Name
+				af[#af+1] = Def.BitmapText{
+					Font=ThemeFont .. " Normal",
+					Name="Song",
+					InitCommand=function(subself)
+						self.song_name = subself
 					subself:y(0):diffusealpha(0):maxwidth(155)
 				end,
 				OnCommand=function(subself)
@@ -30,11 +31,11 @@ return {
 				end
 			}
 
-			-- Song Name
-			af[#af+1] = Def.BitmapText{
-				Font="Common Bold",
-				Name="Exit",
-				Text="Exit",
+				-- Song Name
+				af[#af+1] = Def.BitmapText{
+					Font=ThemeFont .. " Bold",
+					Name="Exit",
+					Text="Exit",
 				InitCommand=function(subself)
 					self.exit_text = subself
 					subself:y(0):diffusealpha(0):maxwidth(155):zoom(0.5):diffuse(Color.Red)

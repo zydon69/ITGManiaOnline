@@ -65,6 +65,7 @@ local permitted_profile_settings = {
 
 	ShowFaPlusWindow     = "boolean",
 	ShowExScore          = "boolean",
+	ShowHardEXScore      = "boolean",
 	ShowFaPlusPane       = "boolean",
 
 	HideEarlyDecentWayOffJudgments = "boolean",
@@ -166,11 +167,15 @@ LoadProfileCustom = function(profile, dir)
 					SL[pn].PlayerOptionsString = GAMESTATE:GetPlayerState(player):GetPlayerOptionsString("ModsLevel_Preferred")
 				end
 			end
+			end
 		end
-	end
 
-	return true
-end
+		if pn and SL[pn].ActiveModifiers.ShowHardEXScore then
+			SL[pn].ActiveModifiers.ShowExScore = false
+		end
+
+		return true
+	end
 
 -- function assigned to "CustomSaveFunction" under [Profile] in metrics.ini
 SaveProfileCustom = function(profile, dir)
@@ -181,13 +186,17 @@ SaveProfileCustom = function(profile, dir)
 		if profile == PROFILEMAN:GetProfile(player) then
 			local pn = ToEnumShortString(player)
 			local output = {}
-			for k,v in pairs(SL[pn].ActiveModifiers) do
-				if permitted_profile_settings[k] and type(v)==permitted_profile_settings[k] then
-					output[k] = v
+				for k,v in pairs(SL[pn].ActiveModifiers) do
+					if permitted_profile_settings[k] and type(v)==permitted_profile_settings[k] then
+						output[k] = v
+					end
 				end
-			end
 
-			-- these values are saved outside the SL[pn].ActiveModifiers tables
+				if output.ShowHardEXScore then
+					output.ShowExScore = false
+				end
+
+				-- these values are saved outside the SL[pn].ActiveModifiers tables
 			-- and thus won't be handled in the loop above
 			output.PlayerOptionsString = SL[pn].PlayerOptionsString
 

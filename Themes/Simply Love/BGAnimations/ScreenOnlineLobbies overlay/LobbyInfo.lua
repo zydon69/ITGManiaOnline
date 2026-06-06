@@ -99,7 +99,7 @@ for i=1,num_rows+2 do
   }
 
   af[#af+1] = LoadFont("Common Normal")..{
-    Text="Lobby Code",
+	    Text="Code salon",
     InitCommand=function(self)
       self:x(-120):y(-10)
     end,
@@ -118,7 +118,7 @@ for i=1,num_rows+2 do
   }
 
   af[#af+1] = LoadFont("Common Normal")..{
-    Text="Players In Lobby",
+	    Text="Joueurs",
     InitCommand=function(self)
       self:y(-10)
     end,

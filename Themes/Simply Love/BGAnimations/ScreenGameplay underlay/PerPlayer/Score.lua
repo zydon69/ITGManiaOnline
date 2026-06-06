@@ -5,6 +5,7 @@ local mods = SL[pn].ActiveModifiers
 local IsUltraWide = (GetScreenAspectRatio() > 21/9)
 local NumPlayers = #GAMESTATE:GetHumanPlayers()
 local IsEX = SL[pn].ActiveModifiers.ShowExScore
+local IsHardEX = SL[pn].ActiveModifiers.ShowHardEXScore
 
 -- -----------------------------------------------------------------------
 -- first, check for conditions where we might not draw the score actor at all
@@ -59,7 +60,9 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 	InitCommand=function(self)
 		self:valign(1):horizalign(right)
 		self:zoom(0.5)
-		if IsEX then
+		if IsHardEX then
+			self:diffuse((SL.JudgmentColors["FA+"] and SL.JudgmentColors["FA+"][7]) or color("#ff00cc"))
+		elseif IsEX then
 			-- If EX Score, let's diffuse it to be the same as the ITG top window.
 			-- This will make it consistent with the EX Score Pane.
 			self:diffuse(SL.JudgmentColors["ITG"][1])
@@ -134,17 +137,21 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 	end,
 	RedrawScoreCommand=function(self)
 		local exPercent = CalculateExScore(player)
+		local hardExPercent = CalculateHardExScore(player)
 		local dance_points = pss:GetPercentDancePoints()
 		local percent = FormatPercentScore( dance_points ):sub(1,-2)
-		local displayedPercent = IsEX and tonumber(exPercent) or tonumber(percent)
-		if not IsEX then
+		local displayedPercent = IsHardEX and tonumber(hardExPercent) or (IsEX and tonumber(exPercent) or tonumber(percent))
+
+		if not IsEX and not IsHardEX then
 			self:settext(percent)
 		end
+
 		if ITGOnline and ITGOnline.currentRoomId then
 			MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
 				Player = player,
 				ScorePercent = tonumber(percent),
-				ExScorePercent = exPercent,
+				ExScorePercent = tonumber(exPercent),
+				HardExScorePercent = tonumber(hardExPercent),
 				DisplayedPercent = displayedPercent,
 				Combo = pss:GetCurrentCombo() or 0,
 			})
@@ -153,19 +160,25 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 	ExCountsChangedMessageCommand=function(self, params)
 		if params.Player ~= player then return end
 
-		if IsEX then
+		if IsHardEX then
+			self:settext(("%.02f"):format(params.HardExScore))
+		elseif IsEX then
 			self:settext(("%.02f"):format(params.ExScore))
-			if ITGOnline and ITGOnline.currentRoomId then
-				local dance_points = pss:GetPercentDancePoints()
-				local percent = FormatPercentScore( dance_points ):sub(1,-2)
-				MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
-					Player = player,
-					ScorePercent = tonumber(percent),
-					ExScorePercent = tonumber(params.ExScore),
-					DisplayedPercent = tonumber(params.ExScore),
-					Combo = pss:GetCurrentCombo() or 0,
-				})
-			end
+		else
+			return
+		end
+
+		if ITGOnline and ITGOnline.currentRoomId then
+			local dance_points = pss:GetPercentDancePoints()
+			local percent = FormatPercentScore( dance_points ):sub(1,-2)
+			MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
+				Player = player,
+				ScorePercent = tonumber(percent),
+				ExScorePercent = tonumber(params.ExScore),
+				HardExScorePercent = tonumber(params.HardExScore),
+				DisplayedPercent = IsHardEX and tonumber(params.HardExScore) or tonumber(params.ExScore),
+				Combo = pss:GetCurrentCombo() or 0,
+			})
 		end
 	end,
 }

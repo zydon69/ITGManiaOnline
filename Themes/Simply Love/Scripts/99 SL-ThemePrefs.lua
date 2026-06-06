@@ -316,19 +316,38 @@ SL_CustomPrefs.Get = function()
 			Default = true,
 			Choices =  { THEME:GetString("ThemePrefs","Yes"), THEME:GetString("ThemePrefs", "No") },
 			Values  = { true, false }
-		},
-		-- - - - - - - - - - - - - - - - - - - -
-		EnableGrooveStats = {
-			Default = false,
-			Choices =  { THEME:GetString("ThemePrefs","Yes"), THEME:GetString("ThemePrefs", "No") },
-			Values  = { true, false }
-		},
+			},
+			-- - - - - - - - - - - - - - - - - - - -
+			EnableGrooveStats = {
+				Default = false,
+				Choices =  { THEME:GetString("ThemePrefs","Yes"), THEME:GetString("ThemePrefs", "No") },
+				Values  = { true, false }
+			},
 
-		AutoDownloadUnlocks = {
-			Default = false,
-			Choices =  { THEME:GetString("ThemePrefs","Yes"), THEME:GetString("ThemePrefs", "No") },
-			Values  = { true, false }
-		},
+			-- ArrowCloud's optional SongSearch/Scorebox actors expect these
+			-- preferences from the full ArrowCloud theme. Define them here with
+			-- conservative Simply Love defaults so copied actors remain optional.
+			ThemeFont = {
+				Default = "Common",
+				Choices = { "Common" }
+			},
+
+			MusicWheelGS = {
+				Default = "Scorebox",
+				Choices = { "Scorebox", "Pane", "Off" }
+			},
+
+			HideGrooveStats = {
+				Default = false,
+				Choices =  { THEME:GetString("ThemePrefs","Yes"), THEME:GetString("ThemePrefs", "No") },
+				Values  = { true, false }
+			},
+
+			AutoDownloadUnlocks = {
+				Default = false,
+				Choices =  { THEME:GetString("ThemePrefs","Yes"), THEME:GetString("ThemePrefs", "No") },
+				Values  = { true, false }
+			},
 
 		SeparateUnlocksByPlayer = {
 			Default = false,
@@ -350,6 +369,18 @@ SL_CustomPrefs.Get = function()
 			Default = true,
 			Choices =  { THEME:GetString("ThemePrefs","Yes"), THEME:GetString("ThemePrefs", "No") },
 			Values  = { true, false }
+		},
+
+		EnableArrowCloud = {
+			Default = true,
+			Choices =  { THEME:GetString("ThemePrefs","Yes"), THEME:GetString("ThemePrefs", "No") },
+			Values  = { true, false }
+		},
+
+		ArrowCloudDebugLogs = {
+			Default = false,
+			Choices =  { THEME:GetString("ThemePrefs","No"), THEME:GetString("ThemePrefs", "Yes") },
+			Values  = { false, true }
 		},
 	}
 end
