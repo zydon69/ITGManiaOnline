@@ -1015,7 +1015,15 @@ static bool MacOSMetalPresentRequested() {
 }
 
 static const char* MacOSEffectivePresentBackendName() {
-  return "opengl";
+  return MacOSMetalPresentRequested() ? "metal" : "opengl";
+}
+
+static bool MacOSMetalBridgeEnabled() {
+  return MacOSMetalPresentRequested();
+}
+
+static bool MacOSMetalDirectPresentEnabled() {
+  return MacOSMetalPresentRequested();
 }
 
 static int MacOSOpenGLOffscreenPresentMode() {
@@ -1784,7 +1792,7 @@ void LowLevelWindow_MacOSX::EndMetalPresentBridgeFrame() {
   glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
   glViewport(0, 0, m_CurrentParams.width, m_CurrentParams.height);
   m_bMetalDirectPresentSubmittedThisFrame = false;
-  if (g_bMacOSMetalDirectPresentValidation.Get() && m_MetalPresenter) {
+  if (MacOSMetalDirectPresentEnabled() && m_MetalPresenter) {
     GLsync metalReadFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     GLenum metalReadFenceStatus = GL_WAIT_FAILED;
     if (metalReadFence != nullptr) {
@@ -1813,16 +1821,6 @@ void LowLevelWindow_MacOSX::EndMetalPresentBridgeFrame() {
 }
 
 std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& newDeviceOut) {
-  static bool s_bWarnedMetalPresentFallback = false;
-  if (MacOSMetalPresentRequested() && !s_bWarnedMetalPresentFallback) {
-    LOG->Warn(
-        "MacOSPresentBackend=metal was requested. The Metal presentation "
-        "bridge is still experimental and remains opt-in through validation "
-        "flags; keeping the OpenGL presentation path as the effective "
-        "fallback.");
-    s_bWarnedMetalPresentFallback = true;
-  }
-
   // Always set these params.
   m_CurrentParams.bSmoothLines = p.bSmoothLines;
   m_CurrentParams.bTrilinearFiltering = p.bTrilinearFiltering;
@@ -1845,8 +1843,7 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
       bRebuildContext ||
       (desiredMPSwapsInFlight > 0 &&
        currentMPSwapsInFlight != desiredMPSwapsInFlight);
-  const bool bMetalBridgeValidationRequested =
-      MacOSMetalPresentRequested() && g_bMacOSMetalBridgeValidation.Get();
+  const bool bMetalBridgeValidationRequested = MacOSMetalBridgeEnabled();
   const bool bChangePresentBackend =
       bMetalBridgeValidationRequested
           ? (m_MetalPresenter && !m_MetalPresenter->IsAvailable())
@@ -1870,7 +1867,7 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
         });
       }
       if (m_MetalPresenter->IsInteropReady()) {
-        if (g_bMacOSMetalDirectPresentValidation.Get()) {
+        if (MacOSMetalDirectPresentEnabled()) {
           m_MetalPresenter->AttachLayerToWindow((void*)delegate->m_Window);
         } else {
           m_MetalPresenter->DetachLayer();
@@ -1910,7 +1907,7 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
         MacOSOpenGLOffscreenPresentMinRate(), windowed ? 1 : 0,
         m_CurrentParams.width, m_CurrentParams.height,
         bMetalBridgeValidationRequested ? 1 : 0,
-        g_bMacOSMetalDirectPresentValidation.Get() ? 1 : 0);
+        MacOSMetalDirectPresentEnabled() ? 1 : 0);
   };
 
   if (!bChangeMode && !bChangeVsync && !bChangeMPSwapsInFlight) {
@@ -2236,7 +2233,7 @@ void LowLevelWindow_MacOSX::SwapBuffers() {
     CGLGetParameter(context, kCGLCPMPSwapsInFlight, &swapsInFlight);
   }
   if (m_bMetalDirectPresentSubmittedThisFrame &&
-      g_bMacOSMetalDirectPresentValidation.Get()) {
+      MacOSMetalDirectPresentEnabled()) {
     const uint64_t flushReturnUsec =
         RageTimer::GetTimeSinceStartMicroseconds();
     const float elapsedMs = timer.GetDeltaTime() * 1000.0f;
