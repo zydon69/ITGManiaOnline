@@ -656,6 +656,8 @@ static GLhandleARB g_bTextureMatrixShader = 0;
 
 static std::map<uintptr_t, RenderTarget*> g_mapRenderTargets;
 static RenderTarget* g_pCurrentRenderTarget = nullptr;
+static constexpr uintptr_t kMetalPresentBridgeRenderTarget =
+    static_cast<uintptr_t>(~static_cast<uintptr_t>(0));
 
 static LowLevelWindow* g_pWind;
 
@@ -3538,11 +3540,29 @@ uintptr_t RageDisplay_Legacy::GetRenderTarget() {
       return it->first;
     }
   }
+  if (m_bUsingMetalPresentBridgeFrame) {
+    return kMetalPresentBridgeRenderTarget;
+  }
   return 0;
 }
 
 void RageDisplay_Legacy::SetRenderTarget(
     uintptr_t iTexture, bool bPreserveTexture) {
+  if (iTexture == kMetalPresentBridgeRenderTarget) {
+    g_bInvertY = false;
+    glFrontFace(GL_CCW);
+
+    /* Pop matrixes affected by SetDefaultRenderStates. */
+    DISPLAY->CameraPopMatrix();
+
+    if (g_pCurrentRenderTarget) {
+      g_pCurrentRenderTarget->FinishRenderingTo();
+    }
+    g_pCurrentRenderTarget = nullptr;
+    g_pWind->ResumeMetalPresentBridgeFrame();
+    return;
+  }
+
   if (iTexture == 0) {
     g_bInvertY = false;
     glFrontFace(GL_CCW);
@@ -3559,9 +3579,6 @@ void RageDisplay_Legacy::SetRenderTarget(
       g_pCurrentRenderTarget->FinishRenderingTo();
     }
     g_pCurrentRenderTarget = nullptr;
-    if (m_bUsingMetalPresentBridgeFrame) {
-      g_pWind->ResumeMetalPresentBridgeFrame();
-    }
     return;
   }
 
