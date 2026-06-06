@@ -295,6 +295,25 @@ OperatorMenuOptionRows.VideoRenderer = function()
 	}
 end
 
+OperatorMenuOptionRows.MacOSPresentBackend = function()
+	return {
+		Name = "MacOSPresentBackend",
+		Choices = { "OpenGL", "Metal" },
+		LayoutType = "ShowAllInRow",
+		SelectType = "SelectOne",
+		OneChoiceForAllPlayers = true,
+		ExportOnChange = false,
+		LoadSelections = function(self, list, pn)
+			local pref = PREFSMAN:GetPreference("MacOSPresentBackend")
+			local i = (type(pref) == "string" and pref:lower() == "metal") and 2 or 1
+			list[i] = true
+		end,
+		SaveSelections = function(self, list, pn)
+			PREFSMAN:SetPreference("MacOSPresentBackend", list[2] and "metal" or "opengl")
+		end,
+	}
+end
+
 function offsetMS(pref, low, high)
 	local val = PREFSMAN:GetPreference(pref)
 	local ms = round(val * 1000)	-- convert seconds to milliseconds

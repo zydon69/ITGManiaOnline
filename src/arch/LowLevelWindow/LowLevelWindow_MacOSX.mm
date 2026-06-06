@@ -1,5 +1,6 @@
 #import "LowLevelWindow_MacOSX.h"
 #import "DisplaySpec.h"
+#import "MacOSMetalPresenter.h"
 #import "MacOSFramePacing.h"
 #import "PerfDiagnostics.h"
 #import "Preference.h"
@@ -24,6 +25,7 @@
 
 #import <Cocoa/Cocoa.h>
 #import <CoreVideo/CoreVideo.h>
+#import <IOSurface/IOSurface.h>
 #import <OpenGL/OpenGL.h>
 #import <OpenGL/gl.h>
 #include <mach/mach_time.h>
@@ -57,6 +59,10 @@ static Preference<float> g_fPerfTraceSlowMacSwapBuffersMs(
 // the first place that discovers unfinished GPU work.
 static Preference<float> g_fMacOSOpenGLFencePacingWaitMs(
     "MacOSOpenGLFencePacingWaitMs", -1.0f);
+static Preference<std::string> g_sMacOSPresentBackend(
+    "MacOSPresentBackend", "opengl");
+static Preference<bool> g_bMacOSMetalBridgeValidation(
+    "MacOSMetalBridgeValidation", false);
 extern Preference<float> g_fFramePacingTargetHz;
 
 static MacOSOpenGLFenceWaitStats g_LastOpenGLFenceWaitStats;
@@ -977,6 +983,14 @@ static float EffectiveMacOSFramePacingTargetHz(const VideoModeParams& params) {
              : 0.0f;
 }
 
+static bool MacOSMetalPresentRequested() {
+  return CompareNoCase(g_sMacOSPresentBackend.Get(), "metal") == 0;
+}
+
+static const char* MacOSEffectivePresentBackendName() {
+  return "opengl";
+}
+
 static int MacOSOpenGLOffscreenPresentMode() {
   return 1;
 }
@@ -1382,7 +1396,11 @@ void RenderTarget_MacOSX::FinishRenderingTo() {
 }
 
 LowLevelWindow_MacOSX::LowLevelWindow_MacOSX()
-    : m_Context(nil), m_BGContext(nil), m_CurrentDisplayMode(nil), m_DisplayID(0) {
+    : m_Context(nil),
+      m_BGContext(nil),
+      m_CurrentDisplayMode(nil),
+      m_DisplayID(0),
+      m_MetalPresenter(new MacOSMetalPresenter()) {
   POOL;
   m_WindowDelegate = [[SMWindowDelegate alloc] init];
   [m_WindowDelegate performSelectorOnMainThread:@selector(setupWindow)
@@ -1402,6 +1420,9 @@ LowLevelWindow_MacOSX::~LowLevelWindow_MacOSX() {
   ShutDownFullScreen();
 
   [m_Context clearDrawable];
+  if (m_MetalPresenter) {
+    m_MetalPresenter->Shutdown();
+  }
   [m_Context release];
   [m_BGContext clearDrawable];
   [m_BGContext release];
@@ -1442,7 +1463,130 @@ void* LowLevelWindow_MacOSX::GetProcAddress(std::string s) {
   return dlsym(glHandle, s.c_str());
 }
 
+bool LowLevelWindow_MacOSX::ValidateMetalIOSurfaceOpenGLBridge() {
+  if (!m_MetalPresenter || !m_MetalPresenter->IsInteropReady()) {
+    return false;
+  }
+
+  using CGLTexImageIOSurface2DProc = CGLError (*)(
+      CGLContextObj, GLenum, GLenum, GLsizei, GLsizei, GLenum, GLenum,
+      IOSurfaceRef, GLuint);
+  auto* cglTexImageIOSurface2D =
+      reinterpret_cast<CGLTexImageIOSurface2DProc>(
+          GetProcAddress("CGLTexImageIOSurface2D"));
+  if (cglTexImageIOSurface2D == nullptr) {
+    LOG->Warn(
+        "MacOS Metal presenter OpenGL bridge unavailable: "
+        "CGLTexImageIOSurface2D was not found.");
+    return false;
+  }
+
+  CGLContextObj context = CGLGetCurrentContext();
+  IOSurfaceRef ioSurface = static_cast<IOSurfaceRef>(
+      m_MetalPresenter->InteropIOSurfaceAt(0));
+  const int width = m_MetalPresenter->InteropSurfaceWidth();
+  const int height = m_MetalPresenter->InteropSurfaceHeight();
+  if (context == nullptr || ioSurface == nullptr || width <= 0 || height <= 0) {
+    LOG->Warn(
+        "MacOS Metal presenter OpenGL bridge unavailable: invalid context or "
+        "IOSurface dimensions context=%p surface=%p size=%dx%d.",
+        context, ioSurface, width, height);
+    return false;
+  }
+
+  GLuint texture = 0;
+  GLuint framebuffer = 0;
+  GLuint depth = 0;
+  GLenum textureTarget = GL_TEXTURE_2D;
+  bool ok = false;
+
+  while (glGetError() != GL_NO_ERROR);
+  glGenTextures(1, &texture);
+  glBindTexture(textureTarget, texture);
+  glTexParameteri(textureTarget, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(textureTarget, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(textureTarget, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(textureTarget, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+  CGLError imageError = cglTexImageIOSurface2D(
+      context, textureTarget, GL_RGBA, width, height, GL_BGRA,
+      GL_UNSIGNED_INT_8_8_8_8_REV, ioSurface, 0);
+  if (imageError != kCGLNoError) {
+    glBindTexture(textureTarget, 0);
+    textureTarget = GL_TEXTURE_RECTANGLE_ARB;
+    glBindTexture(textureTarget, texture);
+    glTexParameteri(textureTarget, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(textureTarget, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(textureTarget, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(textureTarget, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    imageError = cglTexImageIOSurface2D(
+        context, textureTarget, GL_RGBA, width, height, GL_BGRA,
+        GL_UNSIGNED_INT_8_8_8_8_REV, ioSurface, 0);
+  }
+  if (imageError != kCGLNoError) {
+    LOG->Warn(
+        "MacOS Metal presenter OpenGL bridge unavailable: "
+        "CGLTexImageIOSurface2D failed error=%d size=%dx%d after 2D and "
+        "rectangle attempts.",
+        static_cast<int>(imageError), width, height);
+    goto cleanup;
+  }
+
+  glGenFramebuffersEXT(1, &framebuffer);
+  glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, framebuffer);
+  glFramebufferTexture2DEXT(
+      GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, textureTarget, texture, 0);
+
+  glGenRenderbuffersEXT(1, &depth);
+  glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, depth);
+  glRenderbufferStorageEXT(
+      GL_RENDERBUFFER_EXT, GL_DEPTH_COMPONENT16, width, height);
+  glFramebufferRenderbufferEXT(
+      GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT, depth);
+
+  if (glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT) !=
+      GL_FRAMEBUFFER_COMPLETE_EXT) {
+    LOG->Warn(
+        "MacOS Metal presenter OpenGL bridge unavailable: IOSurface FBO is "
+        "incomplete status=%d.",
+        static_cast<int>(glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT)));
+    goto cleanup;
+  }
+
+  ok = true;
+  LOG->Trace(
+      "MacOS Metal presenter OpenGL bridge validated: surface_count=%d "
+      "size=%dx%d texture_target=0x%x texture=%u framebuffer=%u",
+      m_MetalPresenter->InteropSurfaceCount(), width, height, texture,
+      static_cast<unsigned int>(textureTarget), framebuffer);
+
+cleanup:
+  glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+  glBindTexture(textureTarget, 0);
+  glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, 0);
+  if (depth != 0) {
+    glDeleteRenderbuffersEXT(1, &depth);
+  }
+  if (framebuffer != 0) {
+    glDeleteFramebuffersEXT(1, &framebuffer);
+  }
+  if (texture != 0) {
+    glDeleteTextures(1, &texture);
+  }
+  while (glGetError() != GL_NO_ERROR);
+  return ok;
+}
+
 std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& newDeviceOut) {
+  static bool s_bWarnedMetalPresentFallback = false;
+  if (MacOSMetalPresentRequested() && !s_bWarnedMetalPresentFallback) {
+    LOG->Warn(
+        "MacOSPresentBackend=metal was requested, but the Metal presentation "
+        "bridge is not implemented in this build yet. Falling back to the "
+        "OpenGL presentation path.");
+    s_bWarnedMetalPresentFallback = true;
+  }
+
   // Always set these params.
   m_CurrentParams.bSmoothLines = p.bSmoothLines;
   m_CurrentParams.bTrilinearFiltering = p.bTrilinearFiltering;
@@ -1529,9 +1673,26 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
       ApplyMacOSMPSwapsInFlight(m_Context);
     }
 
+    if (MacOSMetalPresentRequested() && m_MetalPresenter) {
+      dispatch_sync(dispatch_get_main_queue(), ^{
+        m_MetalPresenter->Initialize(
+            (void*)((SMWindowDelegate*)m_WindowDelegate)->m_Window,
+            m_CurrentParams.width, m_CurrentParams.height,
+            EffectiveMacOSFramePacingTargetHz(m_CurrentParams));
+      });
+      if (g_bMacOSMetalBridgeValidation.Get() &&
+          m_MetalPresenter->IsInteropReady()) {
+        ValidateMetalIOSurfaceOpenGLBridge();
+      }
+    } else if (m_MetalPresenter) {
+      m_MetalPresenter->Shutdown();
+    }
+
     LOG->Trace(
-        "MacOS OpenGL offscreen present policy: mode=%s mode_value=%d "
+        "MacOS present backend: requested=%s effective=%s. "
+        "OpenGL offscreen present policy: mode=%s mode_value=%d "
         "enabled=%d target_hz=%.3f min_rate=%d windowed=%d size=%dx%d",
+        g_sMacOSPresentBackend.Get().c_str(), MacOSEffectivePresentBackendName(),
         MacOSOpenGLOffscreenPresentModeName(
             MacOSOpenGLOffscreenPresentMode()),
         MacOSOpenGLOffscreenPresentMode(), ShouldRenderOffscreen() ? 1 : 0,
@@ -1588,9 +1749,21 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
     ApplyMacOSMPSwapsInFlight(m_Context);
   }
 
+  if (MacOSMetalPresentRequested()) {
+    LOG->Warn(
+        "MacOSPresentBackend=metal is currently available only for the "
+        "windowed Metal-presenter bootstrap. Full-screen exclusive mode keeps "
+        "the OpenGL presentation path until the IOSurface bridge is implemented.");
+  }
+  if (m_MetalPresenter) {
+    m_MetalPresenter->Shutdown();
+  }
+
   LOG->Trace(
-      "MacOS OpenGL offscreen present policy: mode=%s mode_value=%d enabled=%d "
+      "MacOS present backend: requested=%s effective=%s. "
+      "OpenGL offscreen present policy: mode=%s mode_value=%d enabled=%d "
       "target_hz=%.3f min_rate=%d windowed=%d size=%dx%d",
+      g_sMacOSPresentBackend.Get().c_str(), MacOSEffectivePresentBackendName(),
       MacOSOpenGLOffscreenPresentModeName(MacOSOpenGLOffscreenPresentMode()),
       MacOSOpenGLOffscreenPresentMode(), ShouldRenderOffscreen() ? 1 : 0,
       EffectiveMacOSFramePacingTargetHz(m_CurrentParams),

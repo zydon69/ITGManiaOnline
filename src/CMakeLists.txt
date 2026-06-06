@@ -484,7 +484,10 @@ elseif(APPLE)
               ${MAC_FRAME_CARBON}
               ${MAC_FRAME_COCOA}
               ${MAC_FRAME_IOKIT}
+              ${MAC_FRAME_IOSURFACE}
               ${MAC_FRAME_OPENGL}
+              ${MAC_FRAME_METAL}
+              ${MAC_FRAME_QUARTZCORE}
               ${MAC_FRAME_SECURITY}
               ${MAC_FRAME_COREFOUNDATION}
               ${MAC_FRAME_AUDIOTOOLBOX}

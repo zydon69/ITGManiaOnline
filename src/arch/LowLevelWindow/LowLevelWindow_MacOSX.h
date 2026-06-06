@@ -4,6 +4,7 @@
 #include <objc/objc.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 #include "LowLevelWindow.h"
@@ -11,6 +12,7 @@
 
 typedef const struct __CFDictionary* CFDictionaryRef;
 typedef uint32_t CGDirectDisplayID;
+class MacOSMetalPresenter;
 
 class LowLevelWindow_MacOSX : public LowLevelWindow {
   VideoModeParams m_CurrentParams;
@@ -19,6 +21,7 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   id m_BGContext;
   CFDictionaryRef m_CurrentDisplayMode;
   CGDirectDisplayID m_DisplayID;
+  std::unique_ptr<MacOSMetalPresenter> m_MetalPresenter;
 
  public:
   LowLevelWindow_MacOSX();
@@ -43,6 +46,7 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   int ChangeDisplayMode(const VideoModeParams& p);
   void SetActualParamsFromMode(CFDictionaryRef mode);
   bool ShouldRenderOffscreen() const;
+  bool ValidateMetalIOSurfaceOpenGLBridge();
 };
 
 #ifdef ARCH_LOW_LEVEL_WINDOW
