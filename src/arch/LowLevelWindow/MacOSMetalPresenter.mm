@@ -577,6 +577,25 @@ bool MacOSMetalPresenter::IsInteropSurfaceBusy(int index) const {
   return impl->surfaceBusy->busy[index].load(std::memory_order_acquire);
 }
 
+void MacOSMetalPresenter::SetLayerVisible(bool visible) {
+  if (![NSThread isMainThread]) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      SetLayerVisible(visible);
+    });
+    return;
+  }
+
+  if (m_Impl == nullptr) {
+    return;
+  }
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  if (impl->layerView != nil) {
+    [impl->layerView setHidden:visible ? NO : YES];
+  }
+}
+
 bool MacOSMetalPresenter::AttachLayerToWindow(void* nsWindow) {
   if (![NSThread isMainThread]) {
     __block bool attached = false;

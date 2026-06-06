@@ -25,11 +25,7 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   std::unique_ptr<MacOSMetalPresenter> m_MetalPresenter;
   std::unique_ptr<MacOSMetalOpenGLBridge> m_MetalOpenGLBridge;
   int m_iMetalBridgeRenderSurfaceIndex;
-  bool m_bMetalBridgeFrameActive;
-  bool m_bLoggedMetalBridgeFirstFrame;
-  bool m_bLoggedMetalBridgeFirstBlit;
   bool m_bMetalDirectPresentSubmittedThisFrame;
-  bool m_bMetalBridgeForceOpenGLFallbackThisFrame;
   bool m_bMetalBridgeBuildPending;
   int m_iMetalBridgeBuildFrameCountdown;
 
@@ -47,10 +43,6 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
 
   bool SupportsRenderToTexture() const { return true; }
   RenderTarget* CreateRenderTarget();
-  bool BeginMetalPresentBridgeFrame();
-  bool ResumeMetalPresentBridgeFrame();
-  void MarkMetalPresentBridgeFallbackFrame();
-  void EndMetalPresentBridgeFrame();
   bool PresentOpenGLBackbufferViaMetal();
 
   bool SupportsThreadedRendering() { return m_BGContext; }

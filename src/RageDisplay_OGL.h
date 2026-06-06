@@ -142,7 +142,6 @@ class RageDisplay_Legacy : public RageDisplay {
  private:
   void ReleaseOffscreenRenderTarget();
   RageTextureRenderTarget* offscreenRenderTarget;
-  bool m_bUsingMetalPresentBridgeFrame;
 };
 
 #endif

@@ -656,8 +656,6 @@ static GLhandleARB g_bTextureMatrixShader = 0;
 
 static std::map<uintptr_t, RenderTarget*> g_mapRenderTargets;
 static RenderTarget* g_pCurrentRenderTarget = nullptr;
-static constexpr uintptr_t kMetalPresentBridgeRenderTarget =
-    static_cast<uintptr_t>(~static_cast<uintptr_t>(0));
 
 static LowLevelWindow* g_pWind;
 
@@ -848,7 +846,6 @@ RageDisplay_Legacy::RageDisplay_Legacy() {
 	g_pWind = nullptr;
 	g_bTextureMatrixShader = 0;
 	offscreenRenderTarget = nullptr;
-  m_bUsingMetalPresentBridgeFrame = false;
 }
 
 std::string GetInfoLog(GLhandleARB h) {
@@ -1512,8 +1509,7 @@ bool RageDisplay_Legacy::BeginFrame() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	bool beginFrame = RageDisplay::BeginFrame();
-  m_bUsingMetalPresentBridgeFrame = false;
-	if (beginFrame && !m_bUsingMetalPresentBridgeFrame && UseOffscreenRenderTarget()) {
+	if (beginFrame && UseOffscreenRenderTarget()) {
 		offscreenRenderTarget->BeginRenderingTo(false);
 	}
 
@@ -1576,10 +1572,7 @@ void RageDisplay_Legacy::EndFrame() {
       g_iOpenGLPreFramePacingContinuousFinishLogEveryNFrames.Get(), 1, 36000);
 #endif
 
-	if (m_bUsingMetalPresentBridgeFrame) {
-    g_pWind->EndMetalPresentBridgeFrame();
-    m_bUsingMetalPresentBridgeFrame = false;
-  } else if (UseOffscreenRenderTarget()) {
+	if (UseOffscreenRenderTarget()) {
 		offscreenRenderTarget->FinishRenderingTo();
 		Sprite fullscreenSprite;
 		fullscreenSprite.SetTexture(TEXTUREMAN->CopyTexture(offscreenRenderTarget));
@@ -1709,7 +1702,11 @@ void RageDisplay_Legacy::EndFrame() {
   ReportFramePacingPreSwapLoad(
       offscreenMs + preFramePacingSyncMs + frameLimitBeforeMs);
 #endif
-  g_pWind->PresentOpenGLBackbufferViaMetal();
+  const bool metalBackbufferPresented =
+      g_pWind->PresentOpenGLBackbufferViaMetal();
+  if (metalBackbufferPresented) {
+    glSyncMode = "metal_backbuffer";
+  }
   g_pWind->SwapBuffers();
   const uint64_t presentReturnUsec = RageTimer::GetTimeSinceStartMicroseconds();
   const float presentReturnIntervalMs =
@@ -3540,29 +3537,11 @@ uintptr_t RageDisplay_Legacy::GetRenderTarget() {
       return it->first;
     }
   }
-  if (m_bUsingMetalPresentBridgeFrame) {
-    return kMetalPresentBridgeRenderTarget;
-  }
   return 0;
 }
 
 void RageDisplay_Legacy::SetRenderTarget(
     uintptr_t iTexture, bool bPreserveTexture) {
-  if (iTexture == kMetalPresentBridgeRenderTarget) {
-    g_bInvertY = false;
-    glFrontFace(GL_CCW);
-
-    /* Pop matrixes affected by SetDefaultRenderStates. */
-    DISPLAY->CameraPopMatrix();
-
-    if (g_pCurrentRenderTarget) {
-      g_pCurrentRenderTarget->FinishRenderingTo();
-    }
-    g_pCurrentRenderTarget = nullptr;
-    g_pWind->ResumeMetalPresentBridgeFrame();
-    return;
-  }
-
   if (iTexture == 0) {
     g_bInvertY = false;
     glFrontFace(GL_CCW);
@@ -3580,10 +3559,6 @@ void RageDisplay_Legacy::SetRenderTarget(
     }
     g_pCurrentRenderTarget = nullptr;
     return;
-  }
-
-  if (m_bUsingMetalPresentBridgeFrame) {
-    g_pWind->MarkMetalPresentBridgeFallbackFrame();
   }
 
   /* If we already had a render target, disable it. */
