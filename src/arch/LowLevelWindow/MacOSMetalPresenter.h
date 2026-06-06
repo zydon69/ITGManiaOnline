@@ -23,6 +23,7 @@ class MacOSMetalPresenter {
 
   bool IsAvailable() const;
   bool IsInteropReady() const;
+  bool IsLayerAttached() const;
   bool AttachLayerToWindow(void* nsWindow);
   void DetachLayer();
   bool PresentInteropSurfaceAt(int index, double targetHz);

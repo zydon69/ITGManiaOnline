@@ -34,6 +34,7 @@ std::atomic<uint64_t> g_iMetalPrefetchedDrawables{0};
 std::atomic<uint64_t> g_iMetalConsumedDrawables{0};
 std::atomic<uint64_t> g_iMetalSlowDrawableAcquires{0};
 std::atomic<uint64_t> g_iMetalDrawableMisses{0};
+std::atomic_bool g_bMetalPresenterRuntimeActive{false};
 
 void ResetMetalRuntimeStats() {
   g_iMetalDirectPresentSubmittedFrames.store(0, std::memory_order_relaxed);
@@ -440,10 +441,8 @@ bool MacOSMetalPresenter::Initialize(
   NSView* contentView = [window contentView];
   const NSRect bounds = contentView != nil ? [contentView bounds] : NSZeroRect;
 
-  // Phase 2 infrastructure only: create the layer object and validate the Metal
-  // device/queue, but do not attach it yet. Attaching the layer before the
-  // OpenGL->IOSurface->Metal path exists would replace the current OpenGL
-  // presentation surface and break the stable renderer.
+  // The renderer still draws with OpenGL.  This layer only owns the macOS
+  // presentation stage for the OpenGL -> IOSurface -> Metal bridge.
   impl->layer = [[CAMetalLayer layer] retain];
   impl->layer.device = impl->device;
   impl->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
@@ -476,6 +475,7 @@ bool MacOSMetalPresenter::Initialize(
   m_Impl = impl;
   m_Available = true;
   m_FailureReason.clear();
+  g_bMetalPresenterRuntimeActive.store(true, std::memory_order_release);
 
   LOG->Trace(
       "MacOS Metal presenter initialized: device='%s' target_hz=%.3f "
@@ -520,6 +520,8 @@ void MacOSMetalPresenter::Shutdown() {
 
   m_Impl = nullptr;
   m_Available = false;
+  g_bMetalPresenterRuntimeActive.store(false, std::memory_order_release);
+  ResetMetalRuntimeStats();
 }
 
 bool MacOSMetalPresenter::IsAvailable() const {
@@ -531,6 +533,13 @@ bool MacOSMetalPresenter::IsInteropReady() const {
     return false;
   }
   return static_cast<MacOSMetalPresenterImpl*>(m_Impl)->interopReady;
+}
+
+bool MacOSMetalPresenter::IsLayerAttached() const {
+  if (m_Impl == nullptr) {
+    return false;
+  }
+  return static_cast<MacOSMetalPresenterImpl*>(m_Impl)->layerView != nil;
 }
 
 bool MacOSMetalPresenter::AttachLayerToWindow(void* nsWindow) {
@@ -782,6 +791,10 @@ MacOSMetalPresenterRuntimeStats MacOSMetalPresenterGetRuntimeStats() {
 }
 
 std::string MacOSMetalPresenterGetRuntimeStatsLine() {
+  if (!g_bMetalPresenterRuntimeActive.load(std::memory_order_acquire)) {
+    return std::string();
+  }
+
   const MacOSMetalPresenterRuntimeStats stats =
       MacOSMetalPresenterGetRuntimeStats();
   if (stats.submittedFrames == 0 && stats.prefetchedDrawables == 0 &&

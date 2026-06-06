@@ -63,10 +63,6 @@ static Preference<float> g_fMacOSOpenGLFencePacingWaitMs(
     "MacOSOpenGLFencePacingWaitMs", -1.0f);
 static Preference<std::string> g_sMacOSPresentBackend(
     "MacOSPresentBackend", "opengl");
-static Preference<bool> g_bMacOSMetalBridgeValidation(
-    "MacOSMetalBridgeValidation", false);
-static Preference<bool> g_bMacOSMetalDirectPresentValidation(
-    "MacOSMetalDirectPresentValidation", false);
 extern Preference<float> g_fFramePacingTargetHz;
 
 static MacOSOpenGLFenceWaitStats g_LastOpenGLFenceWaitStats;
@@ -1014,10 +1010,6 @@ static bool MacOSMetalPresentRequested() {
   return CompareNoCase(g_sMacOSPresentBackend.Get(), "metal") == 0;
 }
 
-static const char* MacOSEffectivePresentBackendName() {
-  return MacOSMetalPresentRequested() ? "metal" : "opengl";
-}
-
 static bool MacOSMetalBridgeEnabled() {
   return MacOSMetalPresentRequested();
 }
@@ -1441,8 +1433,8 @@ LowLevelWindow_MacOSX::LowLevelWindow_MacOSX()
       m_bLoggedMetalBridgeFirstFrame(false),
       m_bLoggedMetalBridgeFirstBlit(false),
       m_bMetalDirectPresentSubmittedThisFrame(false),
-      m_bMetalBridgeValidationPending(false),
-      m_iMetalBridgeValidationFrameCountdown(0) {
+      m_bMetalBridgeBuildPending(false),
+      m_iMetalBridgeBuildFrameCountdown(0) {
   POOL;
   m_WindowDelegate = [[SMWindowDelegate alloc] init];
   [m_WindowDelegate performSelectorOnMainThread:@selector(setupWindow)
@@ -1466,8 +1458,8 @@ LowLevelWindow_MacOSX::~LowLevelWindow_MacOSX() {
   if (m_MetalPresenter) {
     m_MetalPresenter->Shutdown();
   }
-  m_bMetalBridgeValidationPending = false;
-  m_iMetalBridgeValidationFrameCountdown = 0;
+  m_bMetalBridgeBuildPending = false;
+  m_iMetalBridgeBuildFrameCountdown = 0;
   [m_Context release];
   [m_BGContext clearDrawable];
   [m_BGContext release];
@@ -1755,6 +1747,39 @@ void LowLevelWindow_MacOSX::EndMetalPresentBridgeFrame() {
 
   const MacOSMetalOpenGLBridgeSurface& surface =
       m_MetalOpenGLBridge->surfaces[m_iMetalBridgeRenderSurfaceIndex];
+  m_bMetalDirectPresentSubmittedThisFrame = false;
+  if (MacOSMetalDirectPresentEnabled() && m_MetalPresenter) {
+    GLsync metalReadFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    GLenum metalReadFenceStatus = GL_WAIT_FAILED;
+    if (metalReadFence != nullptr) {
+      metalReadFenceStatus =
+          glClientWaitSync(metalReadFence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+      if (metalReadFenceStatus == GL_TIMEOUT_EXPIRED) {
+        metalReadFenceStatus =
+            glClientWaitSync(metalReadFence, 0, 1500 * 1000);
+      }
+      glDeleteSync(metalReadFence);
+    }
+    m_bMetalDirectPresentSubmittedThisFrame =
+        m_MetalPresenter->PresentInteropSurfaceAt(
+            m_iMetalBridgeRenderSurfaceIndex,
+            EffectiveMacOSFramePacingTargetHz(m_CurrentParams));
+    static bool s_bLoggedDirectPresentFence = false;
+    if (!s_bLoggedDirectPresentFence) {
+      LOG->Trace(
+          "MacOS Metal direct-present GL fence completed: "
+          "status=0x%x wait_budget_us=1500",
+          metalReadFenceStatus);
+      s_bLoggedDirectPresentFence = true;
+    }
+    if (m_bMetalDirectPresentSubmittedThisFrame) {
+      glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+      glViewport(0, 0, m_CurrentParams.width, m_CurrentParams.height);
+      m_bMetalBridgeFrameActive = false;
+      return;
+    }
+  }
+
   using GLBlitFramebufferEXTProc = void (*)(
       GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield,
       GLenum);
@@ -1791,32 +1816,6 @@ void LowLevelWindow_MacOSX::EndMetalPresentBridgeFrame() {
   }
   glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
   glViewport(0, 0, m_CurrentParams.width, m_CurrentParams.height);
-  m_bMetalDirectPresentSubmittedThisFrame = false;
-  if (MacOSMetalDirectPresentEnabled() && m_MetalPresenter) {
-    GLsync metalReadFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-    GLenum metalReadFenceStatus = GL_WAIT_FAILED;
-    if (metalReadFence != nullptr) {
-      metalReadFenceStatus =
-          glClientWaitSync(metalReadFence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
-      if (metalReadFenceStatus == GL_TIMEOUT_EXPIRED) {
-        metalReadFenceStatus =
-            glClientWaitSync(metalReadFence, 0, 1500 * 1000);
-      }
-      glDeleteSync(metalReadFence);
-    }
-    m_bMetalDirectPresentSubmittedThisFrame =
-        m_MetalPresenter->PresentInteropSurfaceAt(
-        m_iMetalBridgeRenderSurfaceIndex,
-        EffectiveMacOSFramePacingTargetHz(m_CurrentParams));
-    static bool s_bLoggedDirectPresentFence = false;
-    if (!s_bLoggedDirectPresentFence) {
-      LOG->Trace(
-          "MacOS Metal direct-present validation GL fence completed: "
-          "status=0x%x wait_budget_us=1500",
-          metalReadFenceStatus);
-      s_bLoggedDirectPresentFence = true;
-    }
-  }
   m_bMetalBridgeFrameActive = false;
 }
 
@@ -1843,14 +1842,14 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
       bRebuildContext ||
       (desiredMPSwapsInFlight > 0 &&
        currentMPSwapsInFlight != desiredMPSwapsInFlight);
-  const bool bMetalBridgeValidationRequested = MacOSMetalBridgeEnabled();
+  const bool bMetalBridgeRequested = MacOSMetalBridgeEnabled();
   const bool bChangePresentBackend =
-      bMetalBridgeValidationRequested
+      bMetalBridgeRequested
           ? (m_MetalPresenter && !m_MetalPresenter->IsAvailable())
           : (m_MetalPresenter && m_MetalPresenter->IsAvailable());
 
   auto configurePresentBackend = [&](bool windowed) {
-    if (bMetalBridgeValidationRequested && m_MetalPresenter && windowed) {
+    if (bMetalBridgeRequested && m_MetalPresenter && windowed) {
       SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
       ReleaseMetalOpenGLBridge();
       if ([NSThread isMainThread]) {
@@ -1872,11 +1871,11 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
         } else {
           m_MetalPresenter->DetachLayer();
         }
-        m_bMetalBridgeValidationPending = true;
-        m_iMetalBridgeValidationFrameCountdown = 5;
+        m_bMetalBridgeBuildPending = true;
+        m_iMetalBridgeBuildFrameCountdown = 5;
         LOG->Trace(
-            "MacOS Metal bridge validation queued: frames_until_validation=%d",
-            m_iMetalBridgeValidationFrameCountdown);
+            "MacOS Metal bridge build queued: frames_until_build=%d",
+            m_iMetalBridgeBuildFrameCountdown);
       }
     } else {
       if (MacOSMetalPresentRequested() && !windowed) {
@@ -1890,24 +1889,31 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
       if (m_MetalPresenter) {
         m_MetalPresenter->Shutdown();
       }
-      m_bMetalBridgeValidationPending = false;
-      m_iMetalBridgeValidationFrameCountdown = 0;
+      m_bMetalBridgeBuildPending = false;
+      m_iMetalBridgeBuildFrameCountdown = 0;
     }
 
+    const bool effectiveMetal =
+        m_MetalPresenter && m_MetalPresenter->IsAvailable() &&
+        m_MetalPresenter->IsInteropReady() &&
+        m_MetalPresenter->IsLayerAttached() && windowed;
     LOG->Trace(
         "MacOS present backend: requested=%s effective=%s. "
         "OpenGL offscreen present policy: mode=%s mode_value=%d "
         "enabled=%d target_hz=%.3f min_rate=%d windowed=%d size=%dx%d "
-        "metal_bridge_validation=%d metal_direct_present_validation=%d",
-        g_sMacOSPresentBackend.Get().c_str(), MacOSEffectivePresentBackendName(),
+        "metal_bridge_requested=%d metal_direct_present_enabled=%d "
+        "metal_layer_attached=%d",
+        g_sMacOSPresentBackend.Get().c_str(),
+        effectiveMetal ? "metal" : "opengl",
         MacOSOpenGLOffscreenPresentModeName(
             MacOSOpenGLOffscreenPresentMode()),
         MacOSOpenGLOffscreenPresentMode(), ShouldRenderOffscreen() ? 1 : 0,
         EffectiveMacOSFramePacingTargetHz(m_CurrentParams),
         MacOSOpenGLOffscreenPresentMinRate(), windowed ? 1 : 0,
         m_CurrentParams.width, m_CurrentParams.height,
-        bMetalBridgeValidationRequested ? 1 : 0,
-        MacOSMetalDirectPresentEnabled() ? 1 : 0);
+        bMetalBridgeRequested ? 1 : 0,
+        MacOSMetalDirectPresentEnabled() ? 1 : 0,
+        effectiveMetal ? 1 : 0);
   };
 
   if (!bChangeMode && !bChangeVsync && !bChangeMPSwapsInFlight) {
@@ -2217,12 +2223,12 @@ void LowLevelWindow_MacOSX::SwapBuffers() {
   RageTimer timer;
   g_LastOpenGLFenceWaitStats = MacOSOpenGLFenceWaitStats();
   CGLContextObj context = CGLGetCurrentContext();
-  if (m_bMetalBridgeValidationPending && context != nullptr) {
-    --m_iMetalBridgeValidationFrameCountdown;
-    if (m_iMetalBridgeValidationFrameCountdown <= 0) {
-      m_bMetalBridgeValidationPending = false;
+  if (m_bMetalBridgeBuildPending && context != nullptr) {
+    --m_iMetalBridgeBuildFrameCountdown;
+    if (m_iMetalBridgeBuildFrameCountdown <= 0) {
+      m_bMetalBridgeBuildPending = false;
       LOG->Trace(
-          "MacOS Metal bridge validation running after deferred frames.");
+          "MacOS Metal bridge build running after deferred frames.");
       BuildMetalOpenGLBridge();
     }
   }

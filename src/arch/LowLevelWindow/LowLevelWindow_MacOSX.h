@@ -29,8 +29,8 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   bool m_bLoggedMetalBridgeFirstFrame;
   bool m_bLoggedMetalBridgeFirstBlit;
   bool m_bMetalDirectPresentSubmittedThisFrame;
-  bool m_bMetalBridgeValidationPending;
-  int m_iMetalBridgeValidationFrameCountdown;
+  bool m_bMetalBridgeBuildPending;
+  int m_iMetalBridgeBuildFrameCountdown;
 
  public:
   LowLevelWindow_MacOSX();
