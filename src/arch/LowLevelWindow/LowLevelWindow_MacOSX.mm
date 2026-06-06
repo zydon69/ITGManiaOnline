@@ -1760,10 +1760,27 @@ void LowLevelWindow_MacOSX::EndMetalPresentBridgeFrame() {
       }
       glDeleteSync(metalReadFence);
     }
-    m_bMetalDirectPresentSubmittedThisFrame =
-        m_MetalPresenter->PresentInteropSurfaceAt(
-            m_iMetalBridgeRenderSurfaceIndex,
-            EffectiveMacOSFramePacingTargetHz(m_CurrentParams));
+    const bool metalReadFenceReady =
+        metalReadFenceStatus == GL_ALREADY_SIGNALED ||
+        metalReadFenceStatus == GL_CONDITION_SATISFIED;
+    if (metalReadFenceReady) {
+      m_bMetalDirectPresentSubmittedThisFrame =
+          m_MetalPresenter->PresentInteropSurfaceAt(
+              m_iMetalBridgeRenderSurfaceIndex,
+              EffectiveMacOSFramePacingTargetHz(m_CurrentParams));
+    } else if (PerfDiagnosticsEnabled()) {
+      static uint64_t s_iMetalFenceFallbackFrames = 0;
+      ++s_iMetalFenceFallbackFrames;
+      if (s_iMetalFenceFallbackFrames <= 3 ||
+          s_iMetalFenceFallbackFrames % 5000 == 0) {
+        LOG->Trace(
+            "PERF_TRACE: macos_metal_direct_present_fallback "
+            "reason=gl_fence_not_ready status=0x%x wait_budget_us=1500 "
+            "fallback_frames=%llu",
+            metalReadFenceStatus,
+            static_cast<unsigned long long>(s_iMetalFenceFallbackFrames));
+      }
+    }
     static bool s_bLoggedDirectPresentFence = false;
     if (!s_bLoggedDirectPresentFence) {
       LOG->Trace(

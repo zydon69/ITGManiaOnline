@@ -6,6 +6,7 @@
 #include "RageUtil.h"
 
 #import <AppKit/AppKit.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <IOSurface/IOSurface.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -446,6 +447,12 @@ bool MacOSMetalPresenter::Initialize(
   impl->layer = [[CAMetalLayer layer] retain];
   impl->layer.device = impl->device;
   impl->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+  CGColorSpaceRef srgbColorSpace =
+      CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+  if (srgbColorSpace != nullptr) {
+    impl->layer.colorspace = srgbColorSpace;
+    CGColorSpaceRelease(srgbColorSpace);
+  }
   impl->layer.framebufferOnly = NO;
   impl->layer.displaySyncEnabled = YES;
   impl->layer.allowsNextDrawableTimeout = YES;
