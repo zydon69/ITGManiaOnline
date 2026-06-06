@@ -22,10 +22,12 @@
 #include <dlfcn.h>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #import <Cocoa/Cocoa.h>
 #import <CoreVideo/CoreVideo.h>
 #import <IOSurface/IOSurface.h>
+#import <OpenGL/CGLIOSurface.h>
 #import <OpenGL/OpenGL.h>
 #import <OpenGL/gl.h>
 #include <mach/mach_time.h>
@@ -66,6 +68,22 @@ static Preference<bool> g_bMacOSMetalBridgeValidation(
 extern Preference<float> g_fFramePacingTargetHz;
 
 static MacOSOpenGLFenceWaitStats g_LastOpenGLFenceWaitStats;
+
+struct MacOSMetalOpenGLBridgeSurface {
+  GLuint texture = 0;
+  GLuint framebuffer = 0;
+  GLuint depth = 0;
+};
+
+struct MacOSMetalOpenGLBridge {
+  std::vector<MacOSMetalOpenGLBridgeSurface> surfaces;
+  GLenum textureTarget = GL_TEXTURE_RECTANGLE_ARB;
+  GLenum internalFormat = GL_RGBA;
+  GLenum format = GL_BGRA;
+  GLenum type = GL_UNSIGNED_INT_8_8_8_8_REV;
+  int width = 0;
+  int height = 0;
+};
 
 namespace {
 bool MacOSFramePacingUseDisplayLinkEnabled() {
@@ -1400,7 +1418,9 @@ LowLevelWindow_MacOSX::LowLevelWindow_MacOSX()
       m_BGContext(nil),
       m_CurrentDisplayMode(nil),
       m_DisplayID(0),
-      m_MetalPresenter(new MacOSMetalPresenter()) {
+      m_MetalPresenter(new MacOSMetalPresenter()),
+      m_bMetalBridgeValidationPending(false),
+      m_iMetalBridgeValidationFrameCountdown(0) {
   POOL;
   m_WindowDelegate = [[SMWindowDelegate alloc] init];
   [m_WindowDelegate performSelectorOnMainThread:@selector(setupWindow)
@@ -1420,9 +1440,12 @@ LowLevelWindow_MacOSX::~LowLevelWindow_MacOSX() {
   ShutDownFullScreen();
 
   [m_Context clearDrawable];
+  ReleaseMetalOpenGLBridge();
   if (m_MetalPresenter) {
     m_MetalPresenter->Shutdown();
   }
+  m_bMetalBridgeValidationPending = false;
+  m_iMetalBridgeValidationFrameCountdown = 0;
   [m_Context release];
   [m_BGContext clearDrawable];
   [m_BGContext release];
@@ -1453,6 +1476,28 @@ const ActualVideoModeParams LowLevelWindow_MacOSX::GetActualVideoModeParams()
       ShouldRenderOffscreen());
 }
 
+static void ReleaseMetalOpenGLBridgeResources(
+    MacOSMetalOpenGLBridge* bridge) {
+  if (bridge == nullptr) {
+    return;
+  }
+
+  for (MacOSMetalOpenGLBridgeSurface& surface : bridge->surfaces) {
+    if (surface.depth != 0) {
+      glDeleteRenderbuffersEXT(1, &surface.depth);
+      surface.depth = 0;
+    }
+    if (surface.framebuffer != 0) {
+      glDeleteFramebuffersEXT(1, &surface.framebuffer);
+      surface.framebuffer = 0;
+    }
+    if (surface.texture != 0) {
+      glDeleteTextures(1, &surface.texture);
+      surface.texture = 0;
+    }
+  }
+}
+
 void* LowLevelWindow_MacOSX::GetProcAddress(std::string s) {
   // dlsym returns NULL if symbol not found
   static void* glHandle = nullptr;
@@ -1463,21 +1508,19 @@ void* LowLevelWindow_MacOSX::GetProcAddress(std::string s) {
   return dlsym(glHandle, s.c_str());
 }
 
-bool LowLevelWindow_MacOSX::ValidateMetalIOSurfaceOpenGLBridge() {
-  if (!m_MetalPresenter || !m_MetalPresenter->IsInteropReady()) {
-    return false;
+void LowLevelWindow_MacOSX::ReleaseMetalOpenGLBridge() {
+  if (!m_MetalOpenGLBridge) {
+    return;
   }
 
-  using CGLTexImageIOSurface2DProc = CGLError (*)(
-      CGLContextObj, GLenum, GLenum, GLsizei, GLsizei, GLenum, GLenum,
-      IOSurfaceRef, GLuint);
-  auto* cglTexImageIOSurface2D =
-      reinterpret_cast<CGLTexImageIOSurface2DProc>(
-          GetProcAddress("CGLTexImageIOSurface2D"));
-  if (cglTexImageIOSurface2D == nullptr) {
-    LOG->Warn(
-        "MacOS Metal presenter OpenGL bridge unavailable: "
-        "CGLTexImageIOSurface2D was not found.");
+  ReleaseMetalOpenGLBridgeResources(m_MetalOpenGLBridge.get());
+  m_MetalOpenGLBridge.reset();
+  while (glGetError() != GL_NO_ERROR);
+}
+
+bool LowLevelWindow_MacOSX::BuildMetalOpenGLBridge() {
+  if (!m_MetalPresenter || !m_MetalPresenter->IsInteropReady()) {
+    ReleaseMetalOpenGLBridge();
     return false;
   }
 
@@ -1494,6 +1537,16 @@ bool LowLevelWindow_MacOSX::ValidateMetalIOSurfaceOpenGLBridge() {
     return false;
   }
 
+  if (m_MetalOpenGLBridge &&
+      m_MetalOpenGLBridge->width == width &&
+      m_MetalOpenGLBridge->height == height &&
+      static_cast<int>(m_MetalOpenGLBridge->surfaces.size()) ==
+          m_MetalPresenter->InteropSurfaceCount()) {
+    return true;
+  }
+
+  ReleaseMetalOpenGLBridge();
+
   struct BridgeAttempt {
     GLenum textureTarget;
     GLenum internalFormat;
@@ -1503,104 +1556,123 @@ bool LowLevelWindow_MacOSX::ValidateMetalIOSurfaceOpenGLBridge() {
   };
 
   // Apple's CGLIOSurface header documents GL_TEXTURE_RECTANGLE_ARB as the
-  // supported target for CGLTexImageIOSurface2D.  Try that first, then keep a
-  // small compatibility matrix for newer drivers that also accept GL_TEXTURE_2D.
+  // supported target for CGLTexImageIOSurface2D.  The standalone interop POC
+  // confirmed that rectangle textures work on Apple Silicon while GL_TEXTURE_2D
+  // returns kCGLBadValue (10008), so the engine only probes the safe rectangle
+  // path.
   const BridgeAttempt attempts[] = {
       {GL_TEXTURE_RECTANGLE_ARB, GL_RGBA, GL_BGRA,
        GL_UNSIGNED_INT_8_8_8_8_REV, "rect_rgba_bgra8888rev"},
       {GL_TEXTURE_RECTANGLE_ARB, GL_RGBA8, GL_BGRA,
        GL_UNSIGNED_INT_8_8_8_8_REV, "rect_rgba8_bgra8888rev"},
-      {GL_TEXTURE_2D, GL_RGBA, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV,
-       "2d_rgba_bgra8888rev"},
-      {GL_TEXTURE_2D, GL_RGBA8, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV,
-       "2d_rgba8_bgra8888rev"},
   };
 
   while (glGetError() != GL_NO_ERROR);
 
   for (const BridgeAttempt& attempt : attempts) {
-    GLuint texture = 0;
-    GLuint framebuffer = 0;
-    GLuint depth = 0;
-    CGLError imageError = kCGLNoError;
-    GLenum glErrorAfterImage = GL_NO_ERROR;
-    GLenum fboStatus = GL_FRAMEBUFFER_COMPLETE_EXT;
+    std::unique_ptr<MacOSMetalOpenGLBridge> bridge(
+        new MacOSMetalOpenGLBridge());
+    bridge->textureTarget = attempt.textureTarget;
+    bridge->internalFormat = attempt.internalFormat;
+    bridge->format = attempt.format;
+    bridge->type = attempt.type;
+    bridge->width = width;
+    bridge->height = height;
+    bridge->surfaces.resize(m_MetalPresenter->InteropSurfaceCount());
 
-    glGenTextures(1, &texture);
-    glBindTexture(attempt.textureTarget, texture);
-    glTexParameteri(attempt.textureTarget, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(attempt.textureTarget, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(attempt.textureTarget, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(attempt.textureTarget, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    bool attemptOk = true;
+    for (int i = 0; i < m_MetalPresenter->InteropSurfaceCount(); ++i) {
+      IOSurfaceRef attemptSurface = static_cast<IOSurfaceRef>(
+          m_MetalPresenter->InteropIOSurfaceAt(i));
+      MacOSMetalOpenGLBridgeSurface& bridgeSurface = bridge->surfaces[i];
+      CGLError imageError = kCGLNoError;
+      GLenum glErrorAfterImage = GL_NO_ERROR;
+      GLenum fboStatus = GL_FRAMEBUFFER_COMPLETE_EXT;
 
-    imageError = cglTexImageIOSurface2D(
-        context, attempt.textureTarget, attempt.internalFormat, width, height,
-        attempt.format, attempt.type, ioSurface, 0);
-    glErrorAfterImage = glGetError();
+      glGenTextures(1, &bridgeSurface.texture);
+      glBindTexture(attempt.textureTarget, bridgeSurface.texture);
+      glTexParameteri(
+          attempt.textureTarget, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(
+          attempt.textureTarget, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      glTexParameteri(
+          attempt.textureTarget, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameteri(
+          attempt.textureTarget, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    if (imageError == kCGLNoError && glErrorAfterImage == GL_NO_ERROR) {
-      glGenFramebuffersEXT(1, &framebuffer);
-      glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, framebuffer);
-      glFramebufferTexture2DEXT(
-          GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, attempt.textureTarget,
-          texture, 0);
+      LOG->Trace(
+          "MacOS Metal presenter OpenGL bridge attempt starting: attempt=%s "
+          "surface_index=%d size=%dx%d target=0x%x internal=0x%x "
+          "format=0x%x type=0x%x surface=%p texture=%u",
+          attempt.name, i, width, height,
+          static_cast<unsigned int>(attempt.textureTarget),
+          static_cast<unsigned int>(attempt.internalFormat),
+          static_cast<unsigned int>(attempt.format),
+          static_cast<unsigned int>(attempt.type), attemptSurface,
+          bridgeSurface.texture);
 
-      glGenRenderbuffersEXT(1, &depth);
-      glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, depth);
-      glRenderbufferStorageEXT(
-          GL_RENDERBUFFER_EXT, GL_DEPTH_COMPONENT16, width, height);
-      glFramebufferRenderbufferEXT(
-          GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT,
-          depth);
+      imageError = CGLTexImageIOSurface2D(
+          context, attempt.textureTarget, attempt.internalFormat, width, height,
+          attempt.format, attempt.type, attemptSurface, 0);
+      glErrorAfterImage = glGetError();
 
-      fboStatus = glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
-      if (fboStatus == GL_FRAMEBUFFER_COMPLETE_EXT) {
+      if (imageError == kCGLNoError && glErrorAfterImage == GL_NO_ERROR) {
+        glGenFramebuffersEXT(1, &bridgeSurface.framebuffer);
+        glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, bridgeSurface.framebuffer);
+        glFramebufferTexture2DEXT(
+            GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT,
+            attempt.textureTarget, bridgeSurface.texture, 0);
+
+        glGenRenderbuffersEXT(1, &bridgeSurface.depth);
+        glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, bridgeSurface.depth);
+        glRenderbufferStorageEXT(
+            GL_RENDERBUFFER_EXT, GL_DEPTH_COMPONENT16, width, height);
+        glFramebufferRenderbufferEXT(
+            GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT,
+            bridgeSurface.depth);
+
+        fboStatus = glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
+      }
+
+      if (imageError != kCGLNoError || glErrorAfterImage != GL_NO_ERROR ||
+          fboStatus != GL_FRAMEBUFFER_COMPLETE_EXT) {
+        attemptOk = false;
         LOG->Trace(
-            "MacOS Metal presenter OpenGL bridge validated: attempt=%s "
-            "surface_count=%d size=%dx%d target=0x%x internal=0x%x "
-            "format=0x%x type=0x%x texture=%u framebuffer=%u",
-            attempt.name, m_MetalPresenter->InteropSurfaceCount(), width,
-            height, static_cast<unsigned int>(attempt.textureTarget),
+            "MacOS Metal presenter OpenGL bridge attempt failed: attempt=%s "
+            "surface_index=%d cgl_error=%d gl_error_after_image=0x%x "
+            "fbo_status=0x%x size=%dx%d target=0x%x internal=0x%x "
+            "format=0x%x type=0x%x",
+            attempt.name, i, static_cast<int>(imageError),
+            static_cast<unsigned int>(glErrorAfterImage),
+            static_cast<unsigned int>(fboStatus), width, height,
+            static_cast<unsigned int>(attempt.textureTarget),
             static_cast<unsigned int>(attempt.internalFormat),
             static_cast<unsigned int>(attempt.format),
-            static_cast<unsigned int>(attempt.type), texture, framebuffer);
-
-        glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
-        glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, 0);
-        glBindTexture(attempt.textureTarget, 0);
-        glDeleteRenderbuffersEXT(1, &depth);
-        glDeleteFramebuffersEXT(1, &framebuffer);
-        glDeleteTextures(1, &texture);
-        while (glGetError() != GL_NO_ERROR);
-        return true;
+            static_cast<unsigned int>(attempt.type));
+        break;
       }
     }
-
-    LOG->Trace(
-        "MacOS Metal presenter OpenGL bridge attempt failed: attempt=%s "
-        "cgl_error=%d gl_error_after_image=0x%x fbo_status=0x%x "
-        "size=%dx%d target=0x%x internal=0x%x format=0x%x type=0x%x",
-        attempt.name, static_cast<int>(imageError),
-        static_cast<unsigned int>(glErrorAfterImage),
-        static_cast<unsigned int>(fboStatus), width, height,
-        static_cast<unsigned int>(attempt.textureTarget),
-        static_cast<unsigned int>(attempt.internalFormat),
-        static_cast<unsigned int>(attempt.format),
-        static_cast<unsigned int>(attempt.type));
 
     glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
     glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, 0);
     glBindTexture(attempt.textureTarget, 0);
-    if (depth != 0) {
-      glDeleteRenderbuffersEXT(1, &depth);
-    }
-    if (framebuffer != 0) {
-      glDeleteFramebuffersEXT(1, &framebuffer);
-    }
-    if (texture != 0) {
-      glDeleteTextures(1, &texture);
-    }
     while (glGetError() != GL_NO_ERROR);
+
+    if (attemptOk) {
+      LOG->Trace(
+          "MacOS Metal presenter OpenGL bridge ready: attempt=%s "
+          "surface_count=%d size=%dx%d target=0x%x internal=0x%x "
+          "format=0x%x type=0x%x",
+          attempt.name, static_cast<int>(bridge->surfaces.size()), width,
+          height, static_cast<unsigned int>(attempt.textureTarget),
+          static_cast<unsigned int>(attempt.internalFormat),
+          static_cast<unsigned int>(attempt.format),
+          static_cast<unsigned int>(attempt.type));
+      m_MetalOpenGLBridge = std::move(bridge);
+      return true;
+    }
+
+    ReleaseMetalOpenGLBridgeResources(bridge.get());
   }
 
   LOG->Warn(
@@ -1653,6 +1725,7 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
   auto configurePresentBackend = [&](bool windowed) {
     if (bMetalBridgeValidationRequested && m_MetalPresenter && windowed) {
       SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
+      ReleaseMetalOpenGLBridge();
       if ([NSThread isMainThread]) {
         m_MetalPresenter->Initialize(
             (void*)delegate->m_Window, m_CurrentParams.width,
@@ -1667,12 +1740,11 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
         });
       }
       if (m_MetalPresenter->IsInteropReady()) {
-        LOG->Warn(
-            "MacOS Metal bridge validation initialized the IOSurface ring, but "
-            "the in-engine CGLTexImageIOSurface2D bind test is intentionally "
-            "skipped. That bind is crash-prone while the bridge is still a "
-            "prototype; use the standalone Metal/OpenGL interop POC for the "
-            "next validation step.");
+        m_bMetalBridgeValidationPending = true;
+        m_iMetalBridgeValidationFrameCountdown = 5;
+        LOG->Trace(
+            "MacOS Metal bridge validation queued: frames_until_validation=%d",
+            m_iMetalBridgeValidationFrameCountdown);
       }
     } else {
       if (MacOSMetalPresentRequested() && !windowed) {
@@ -1682,9 +1754,12 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
             "keeps the OpenGL presentation path until the IOSurface bridge is "
             "implemented.");
       }
+      ReleaseMetalOpenGLBridge();
       if (m_MetalPresenter) {
         m_MetalPresenter->Shutdown();
       }
+      m_bMetalBridgeValidationPending = false;
+      m_iMetalBridgeValidationFrameCountdown = 0;
     }
 
     LOG->Trace(
@@ -2009,6 +2084,15 @@ void LowLevelWindow_MacOSX::SwapBuffers() {
   RageTimer timer;
   g_LastOpenGLFenceWaitStats = MacOSOpenGLFenceWaitStats();
   CGLContextObj context = CGLGetCurrentContext();
+  if (m_bMetalBridgeValidationPending && context != nullptr) {
+    --m_iMetalBridgeValidationFrameCountdown;
+    if (m_iMetalBridgeValidationFrameCountdown <= 0) {
+      m_bMetalBridgeValidationPending = false;
+      LOG->Trace(
+          "MacOS Metal bridge validation running after deferred frames.");
+      BuildMetalOpenGLBridge();
+    }
+  }
   GLint swapInterval = -1;
   GLint swapsInFlight = -1;
   if (context != nullptr) {

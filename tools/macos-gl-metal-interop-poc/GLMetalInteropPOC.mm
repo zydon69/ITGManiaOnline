@@ -61,6 +61,7 @@ const char* NameForFBOStatus(GLenum value) {
 struct Options {
   int width = 1496;
   int height = 935;
+  bool windowedContext = false;
 };
 
 Options ParseArgs(int argc, char** argv) {
@@ -78,9 +79,12 @@ Options ParseArgs(int argc, char** argv) {
       nextInt(&options.width);
     } else if (arg == "--height") {
       nextInt(&options.height);
+    } else if (arg == "--windowed-context") {
+      options.windowedContext = true;
     } else if (arg == "--help" || arg == "-h") {
       std::cout
-          << "Usage: gl_metal_interop_poc [--width N] [--height N]\n";
+          << "Usage: gl_metal_interop_poc [--width N] [--height N] "
+             "[--windowed-context]\n";
       std::exit(0);
     } else {
       std::cerr << "Unknown argument: " << arg << "\n";
@@ -186,7 +190,9 @@ int main(int argc, char** argv) {
     }
 
     NSOpenGLPixelFormatAttribute attributes[] = {
+        NSOpenGLPFANoRecovery,
         NSOpenGLPFAAccelerated,
+        NSOpenGLPFAMinimumPolicy,
         NSOpenGLPFAColorSize,
         24,
         NSOpenGLPFAAlphaSize,
@@ -205,8 +211,27 @@ int main(int argc, char** argv) {
         [[NSOpenGLContext alloc] initWithFormat:pixelFormat shareContext:nil];
     [pixelFormat release];
     if (context == nil) {
-      std::cerr << "Failed to create NSOpenGLContext\n";
+        std::cerr << "Failed to create NSOpenGLContext\n";
       return 1;
+    }
+
+    NSWindow* window = nil;
+    if (options.windowedContext) {
+      [NSApplication sharedApplication];
+      const NSRect rect =
+          NSMakeRect(0, 0, options.width, options.height);
+      window = [[NSWindow alloc]
+          initWithContentRect:rect
+                    styleMask:(NSWindowStyleMaskTitled |
+                               NSWindowStyleMaskClosable |
+                               NSWindowStyleMaskResizable)
+                      backing:NSBackingStoreBuffered
+                        defer:NO];
+      [window setReleasedWhenClosed:NO];
+      [window setTitle:@"GL/Metal Interop POC"];
+      [context setView:[window contentView]];
+      [context update];
+      [window orderFrontRegardless];
     }
     [context makeCurrentContext];
 
@@ -253,6 +278,7 @@ int main(int argc, char** argv) {
 
     std::cout << "GL_METAL_INTEROP_START"
               << " size=" << options.width << "x" << options.height
+              << " windowed_context=" << (options.windowedContext ? 1 : 0)
               << " gl_renderer=\"" << glGetString(GL_RENDERER) << "\""
               << " gl_version=\"" << glGetString(GL_VERSION) << "\""
               << " metal_device=\"" << [[device name] UTF8String] << "\"\n";
@@ -283,6 +309,10 @@ int main(int argc, char** argv) {
     CFRelease(surface);
     [context clearDrawable];
     [context release];
+    if (window != nil) {
+      [window close];
+      [window release];
+    }
     return anyOk ? 0 : 1;
   }
 }

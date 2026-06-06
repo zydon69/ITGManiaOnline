@@ -13,6 +13,7 @@
 typedef const struct __CFDictionary* CFDictionaryRef;
 typedef uint32_t CGDirectDisplayID;
 class MacOSMetalPresenter;
+struct MacOSMetalOpenGLBridge;
 
 class LowLevelWindow_MacOSX : public LowLevelWindow {
   VideoModeParams m_CurrentParams;
@@ -22,6 +23,9 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   CFDictionaryRef m_CurrentDisplayMode;
   CGDirectDisplayID m_DisplayID;
   std::unique_ptr<MacOSMetalPresenter> m_MetalPresenter;
+  std::unique_ptr<MacOSMetalOpenGLBridge> m_MetalOpenGLBridge;
+  bool m_bMetalBridgeValidationPending;
+  int m_iMetalBridgeValidationFrameCountdown;
 
  public:
   LowLevelWindow_MacOSX();
@@ -46,7 +50,8 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   int ChangeDisplayMode(const VideoModeParams& p);
   void SetActualParamsFromMode(CFDictionaryRef mode);
   bool ShouldRenderOffscreen() const;
-  bool ValidateMetalIOSurfaceOpenGLBridge();
+  void ReleaseMetalOpenGLBridge();
+  bool BuildMetalOpenGLBridge();
 };
 
 #ifdef ARCH_LOW_LEVEL_WINDOW
