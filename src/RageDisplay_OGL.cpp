@@ -845,6 +845,7 @@ RageDisplay_Legacy::RageDisplay_Legacy() {
 	g_pWind = nullptr;
 	g_bTextureMatrixShader = 0;
 	offscreenRenderTarget = nullptr;
+  m_bUsingMetalPresentBridgeFrame = false;
 }
 
 std::string GetInfoLog(GLhandleARB h) {
@@ -1497,7 +1498,9 @@ bool RageDisplay_Legacy::BeginFrame() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	bool beginFrame = RageDisplay::BeginFrame();
-	if (beginFrame && UseOffscreenRenderTarget()) {
+  m_bUsingMetalPresentBridgeFrame =
+      beginFrame && g_pWind->BeginMetalPresentBridgeFrame();
+	if (beginFrame && !m_bUsingMetalPresentBridgeFrame && UseOffscreenRenderTarget()) {
 		offscreenRenderTarget->BeginRenderingTo(false);
 	}
 
@@ -1560,7 +1563,10 @@ void RageDisplay_Legacy::EndFrame() {
       g_iOpenGLPreFramePacingContinuousFinishLogEveryNFrames.Get(), 1, 36000);
 #endif
 
-	if (UseOffscreenRenderTarget()) {
+	if (m_bUsingMetalPresentBridgeFrame) {
+    g_pWind->EndMetalPresentBridgeFrame();
+    m_bUsingMetalPresentBridgeFrame = false;
+  } else if (UseOffscreenRenderTarget()) {
 		offscreenRenderTarget->FinishRenderingTo();
 		Sprite fullscreenSprite;
 		fullscreenSprite.SetTexture(TEXTUREMAN->CopyTexture(offscreenRenderTarget));

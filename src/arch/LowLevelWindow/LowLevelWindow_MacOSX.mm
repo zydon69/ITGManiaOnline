@@ -69,6 +69,13 @@ extern Preference<float> g_fFramePacingTargetHz;
 
 static MacOSOpenGLFenceWaitStats g_LastOpenGLFenceWaitStats;
 
+#ifndef GL_READ_FRAMEBUFFER_EXT
+#define GL_READ_FRAMEBUFFER_EXT 0x8CA8
+#endif
+#ifndef GL_DRAW_FRAMEBUFFER_EXT
+#define GL_DRAW_FRAMEBUFFER_EXT 0x8CA9
+#endif
+
 struct MacOSMetalOpenGLBridgeSurface {
   GLuint texture = 0;
   GLuint framebuffer = 0;
@@ -1419,6 +1426,10 @@ LowLevelWindow_MacOSX::LowLevelWindow_MacOSX()
       m_CurrentDisplayMode(nil),
       m_DisplayID(0),
       m_MetalPresenter(new MacOSMetalPresenter()),
+      m_iMetalBridgeRenderSurfaceIndex(-1),
+      m_bMetalBridgeFrameActive(false),
+      m_bLoggedMetalBridgeFirstFrame(false),
+      m_bLoggedMetalBridgeFirstBlit(false),
       m_bMetalBridgeValidationPending(false),
       m_iMetalBridgeValidationFrameCountdown(0) {
   POOL;
@@ -1513,6 +1524,13 @@ void LowLevelWindow_MacOSX::ReleaseMetalOpenGLBridge() {
     return;
   }
 
+  if (m_bMetalBridgeFrameActive) {
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+    m_bMetalBridgeFrameActive = false;
+  }
+  m_iMetalBridgeRenderSurfaceIndex = -1;
+  m_bLoggedMetalBridgeFirstFrame = false;
+  m_bLoggedMetalBridgeFirstBlit = false;
   ReleaseMetalOpenGLBridgeResources(m_MetalOpenGLBridge.get());
   m_MetalOpenGLBridge.reset();
   while (glGetError() != GL_NO_ERROR);
@@ -1681,6 +1699,87 @@ bool LowLevelWindow_MacOSX::BuildMetalOpenGLBridge() {
       "size=%dx%d surface_count=%d.",
       width, height, m_MetalPresenter->InteropSurfaceCount());
   return false;
+}
+
+bool LowLevelWindow_MacOSX::BeginMetalPresentBridgeFrame() {
+  if (!m_MetalOpenGLBridge || m_MetalOpenGLBridge->surfaces.empty() ||
+      m_bMetalBridgeFrameActive) {
+    return false;
+  }
+
+  m_iMetalBridgeRenderSurfaceIndex =
+      (m_iMetalBridgeRenderSurfaceIndex + 1) %
+      static_cast<int>(m_MetalOpenGLBridge->surfaces.size());
+  const MacOSMetalOpenGLBridgeSurface& surface =
+      m_MetalOpenGLBridge->surfaces[m_iMetalBridgeRenderSurfaceIndex];
+  if (surface.framebuffer == 0) {
+    return false;
+  }
+
+  glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, surface.framebuffer);
+  glViewport(0, 0, m_MetalOpenGLBridge->width, m_MetalOpenGLBridge->height);
+  glClearColor(0, 0, 0, 0);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  m_bMetalBridgeFrameActive = true;
+  if (!m_bLoggedMetalBridgeFirstFrame) {
+    LOG->Trace(
+        "MacOS Metal bridge rendering frame into IOSurface FBO: "
+        "surface_index=%d framebuffer=%u texture=%u size=%dx%d",
+        m_iMetalBridgeRenderSurfaceIndex, surface.framebuffer,
+        surface.texture, m_MetalOpenGLBridge->width,
+        m_MetalOpenGLBridge->height);
+    m_bLoggedMetalBridgeFirstFrame = true;
+  }
+  return true;
+}
+
+void LowLevelWindow_MacOSX::EndMetalPresentBridgeFrame() {
+  if (!m_bMetalBridgeFrameActive || !m_MetalOpenGLBridge ||
+      m_iMetalBridgeRenderSurfaceIndex < 0 ||
+      m_iMetalBridgeRenderSurfaceIndex >=
+          static_cast<int>(m_MetalOpenGLBridge->surfaces.size())) {
+    return;
+  }
+
+  const MacOSMetalOpenGLBridgeSurface& surface =
+      m_MetalOpenGLBridge->surfaces[m_iMetalBridgeRenderSurfaceIndex];
+  using GLBlitFramebufferEXTProc = void (*)(
+      GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield,
+      GLenum);
+  auto* blitFramebuffer =
+      reinterpret_cast<GLBlitFramebufferEXTProc>(
+          GetProcAddress("glBlitFramebufferEXT"));
+  if (blitFramebuffer == nullptr) {
+    static bool s_bWarnedMissingBlit = false;
+    if (!s_bWarnedMissingBlit) {
+      LOG->Warn(
+          "MacOS Metal bridge frame could not be copied to the OpenGL "
+          "backbuffer: glBlitFramebufferEXT is unavailable.");
+      s_bWarnedMissingBlit = true;
+    }
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+    m_bMetalBridgeFrameActive = false;
+    return;
+  }
+
+  glBindFramebufferEXT(GL_READ_FRAMEBUFFER_EXT, surface.framebuffer);
+  glBindFramebufferEXT(GL_DRAW_FRAMEBUFFER_EXT, 0);
+  blitFramebuffer(
+      0, 0, m_MetalOpenGLBridge->width, m_MetalOpenGLBridge->height,
+      0, 0, m_CurrentParams.width, m_CurrentParams.height,
+      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  if (!m_bLoggedMetalBridgeFirstBlit) {
+    LOG->Trace(
+        "MacOS Metal bridge copied IOSurface FBO to OpenGL backbuffer: "
+        "surface_index=%d framebuffer=%u size=%dx%d dst_size=%dx%d",
+        m_iMetalBridgeRenderSurfaceIndex, surface.framebuffer,
+        m_MetalOpenGLBridge->width, m_MetalOpenGLBridge->height,
+        m_CurrentParams.width, m_CurrentParams.height);
+    m_bLoggedMetalBridgeFirstBlit = true;
+  }
+  glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+  glViewport(0, 0, m_CurrentParams.width, m_CurrentParams.height);
+  m_bMetalBridgeFrameActive = false;
 }
 
 std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& newDeviceOut) {

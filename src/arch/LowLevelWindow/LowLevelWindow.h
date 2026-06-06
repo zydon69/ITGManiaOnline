@@ -36,6 +36,8 @@ class LowLevelWindow {
 
   virtual bool SupportsRenderToTexture() const { return false; }
   virtual RenderTarget* CreateRenderTarget() { return nullptr; }
+  virtual bool BeginMetalPresentBridgeFrame() { return false; }
+  virtual void EndMetalPresentBridgeFrame() {}
 
   virtual bool SupportsFullscreenBorderlessWindow() const { return false; };
 
