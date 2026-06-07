@@ -16,8 +16,37 @@
 
 #import <Foundation/Foundation.h>
 
+static bool EnsureDirectoryExists(NSFileManager* fileManager, NSString* path) {
+  if (path == nil) {
+    return false;
+  }
+
+  NSError* error = nil;
+  [fileManager createDirectoryAtPath:path
+         withIntermediateDirectories:YES
+                          attributes:nil
+                               error:&error];
+  return error == nil;
+}
+
 std::string CrashHandler::GetLogsDirectory() {
   NSFileManager* fileManager = [NSFileManager defaultManager];
+
+  NSString* bundleParent =
+      [[[NSBundle mainBundle] bundlePath] stringByDeletingLastPathComponent];
+  NSString* portablePath =
+      [bundleParent stringByAppendingPathComponent:@"Portable.ini"];
+
+  BOOL isPortable = [fileManager fileExistsAtPath:portablePath];
+  if (isPortable) {
+    NSString* portableLogsPath =
+        [bundleParent stringByAppendingPathComponent:@"Logs"];
+    if (!EnsureDirectoryExists(fileManager, portableLogsPath)) {
+      return "/tmp";
+    }
+    return std::string([portableLogsPath UTF8String]);
+  }
+
   NSURL* url = [fileManager URLForDirectory:NSLibraryDirectory
                                    inDomain:NSUserDomainMask
                           appropriateForURL:nil
@@ -30,15 +59,8 @@ std::string CrashHandler::GetLogsDirectory() {
   std::string path =
       std::string([url fileSystemRepresentation]) + "/Logs/" PRODUCT_ID;
   NSString* pathString = [NSString stringWithUTF8String:path.c_str()];
-  if (pathString != nil) {
-    NSError* error = nil;
-    [fileManager createDirectoryAtPath:pathString
-           withIntermediateDirectories:YES
-                            attributes:nil
-                                 error:&error];
-    if (error != nil) {
-      return "/tmp";
-    }
+  if (!EnsureDirectoryExists(fileManager, pathString)) {
+    return "/tmp";
   }
 
   return std::string(path.c_str());
