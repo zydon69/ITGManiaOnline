@@ -180,6 +180,17 @@ RageVector2 TransformTextureCoord(
           texcoord.y * (1.0f - textureMatrixScale.y));
 }
 
+RageVector2 SphereMapTextureCoord(const RageVector3& normal) {
+  const RageVector3 n =
+      NormalizeOrDefault(normal, RageVector3(0.0f, 0.0f, 1.0f));
+  const float denominator =
+      2.0f * std::sqrt(n.x * n.x + n.y * n.y + (n.z + 1.0f) * (n.z + 1.0f));
+  if (denominator <= 0.000001f) {
+    return RageVector2(0.5f, 0.5f);
+  }
+  return RageVector2(n.x / denominator + 0.5f, n.y / denominator + 0.5f);
+}
+
 MacOSMetalSolidVertex ToMetalSolidVertex(
     const RageVector3& position, const RageVector2& texcoord,
     const RageVColor& color, const RageVector2& textureMatrixScale,
@@ -309,8 +320,12 @@ void RageCompiledGeometryMetal::EmitTo(
       } else if (display->m_iCelShadedStage == 2) {
         litColor.a = 1.0f;
       }
+      const RageVector2 texcoord =
+          batch.sphereMapping
+              ? SphereMapTextureCoord(transformedNormal)
+              : modelVertex.t;
       batch.vertices.push_back(ToMetalSolidVertex(
-          position, modelVertex.t, ToVertexColor(litColor),
+          position, texcoord, ToVertexColor(litColor),
           modelVertex.TextureMatrixScale, modelViewProjection, textureMatrix,
           batch.zBias));
     }
@@ -323,6 +338,7 @@ RageDisplay_Metal::RageDisplay_Metal()
       m_TextureMode(TextureMode_Modulate),
       m_EffectMode(EffectMode_Normal),
       m_iCelShadedStage(0),
+      m_bSphereMapping(false),
       m_fZBias(0.0f),
       m_ZTestMode(ZTEST_OFF),
       m_CullMode(CULL_NONE),
@@ -675,16 +691,10 @@ void RageDisplay_Metal::SetLightDirectional(
 
 void RageDisplay_Metal::SetSphereEnvironmentMapping(
     TextureUnit tu, bool enabled) {
-  if (tu != TextureUnit_1 || !enabled) {
+  if (tu != TextureUnit_1) {
     return;
   }
-  static bool s_bWarnedSphereMapping = false;
-  if (!s_bWarnedSphereMapping) {
-    LOG->Warn(
-        "RageDisplay_Metal: sphere environment mapping is not implemented in "
-        "the experimental native renderer.");
-    s_bWarnedSphereMapping = true;
-  }
+  m_bSphereMapping = enabled;
 }
 
 void RageDisplay_Metal::SetCelShaded(int stage) {
@@ -701,6 +711,7 @@ RageDisplay_Metal::DrawBatch& RageDisplay_Metal::ActiveBatch() {
       m_DrawBatches.back().textureMode != m_TextureMode ||
       m_DrawBatches.back().effectMode != m_EffectMode ||
       m_DrawBatches.back().celStage != m_iCelShadedStage ||
+      m_DrawBatches.back().sphereMapping != m_bSphereMapping ||
       m_DrawBatches.back().zBias != m_fZBias ||
       m_DrawBatches.back().zTestMode != m_ZTestMode ||
       m_DrawBatches.back().cullMode != m_CullMode ||
@@ -714,6 +725,7 @@ RageDisplay_Metal::DrawBatch& RageDisplay_Metal::ActiveBatch() {
     batch.textureMode = m_TextureMode;
     batch.effectMode = m_EffectMode;
     batch.celStage = m_iCelShadedStage;
+    batch.sphereMapping = m_bSphereMapping;
     batch.zBias = m_fZBias;
     batch.zTestMode = m_ZTestMode;
     batch.cullMode = m_CullMode;

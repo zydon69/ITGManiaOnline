@@ -116,6 +116,7 @@ class RageDisplay_Metal : public RageDisplay {
     TextureMode textureMode = TextureMode_Modulate;
     EffectMode effectMode = EffectMode_Normal;
     int celStage = 0;
+    bool sphereMapping = false;
     float zBias = 0.0f;
     ZTestMode zTestMode = ZTEST_OFF;
     CullMode cullMode = CULL_NONE;
@@ -148,6 +149,7 @@ class RageDisplay_Metal : public RageDisplay {
   TextureMode m_TextureMode;
   EffectMode m_EffectMode;
   int m_iCelShadedStage;
+  bool m_bSphereMapping;
   float m_fZBias;
   ZTestMode m_ZTestMode;
   CullMode m_CullMode;
