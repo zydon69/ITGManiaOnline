@@ -10,6 +10,13 @@ local anim_data = {
 	texcoordvelocity = {{0.03,0.01},{0.03,0.02},{0.03,0.01},{0.02,0.02},{0.03,0.03},{0.02,0.02},{0.03,0.01},{-0.03,0.01},{0.05,0.03},{0.03,0.04}}
 }
 
+local function LoadSharedBackground(sprite, path)
+	sprite:Load(nil)
+	if path then
+		sprite:Load(path)
+	end
+end
+
 local t = Def.ActorFrame {
 	InitCommand=function(self)
 		local style = ThemePrefs.Get("VisualStyle")
@@ -22,12 +29,13 @@ local t = Def.ActorFrame {
 		local style = ThemePrefs.Get("VisualStyle")
 
 		if ThemePrefs.Get("RainbowMode") or style == "SRPG9" or style == "Technique" then
+			self:RunCommandsOnChildren(function(child) LoadSharedBackground(child, nil) end)
 			self:linear(0.6):diffusealpha(0):queuecommand("Hide")
 		else
 			self:visible(true):linear(0.6):diffusealpha(1)
 
 			local new_file = THEME:GetPathG("", "_VisualStyles/" .. style .. "/SharedBackground.png")
-			self:RunCommandsOnChildren(function(child) child:Load(new_file) end)
+			self:RunCommandsOnChildren(function(child) LoadSharedBackground(child, new_file) end)
 		end
 	end
 }
@@ -44,7 +52,7 @@ for i=1,10 do
 		end,
 		OnCommand=function(self)
 			if ShouldShowNormal() then
-				self:Load(file)
+				LoadSharedBackground(self, file)
 			end
 			self:zoom(1.3):xy(anim_data.xy[i], anim_data.xy[i])
 			:customtexturerect(0,0,1,1):texcoordvelocity(anim_data.texcoordvelocity[i][1], anim_data.texcoordvelocity[i][2])
