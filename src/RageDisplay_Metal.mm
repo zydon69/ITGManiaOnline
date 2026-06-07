@@ -103,7 +103,13 @@ void AppendTriangle(
 }
 
 RageDisplay_Metal::RageDisplay_Metal()
-    : m_iActiveTextureHandle(0), m_iNextTextureHandle(1), m_bReady(false) {
+    : m_iActiveTextureHandle(0),
+      m_BlendMode(BLEND_NORMAL),
+      m_TextureMode(TextureMode_Modulate),
+      m_bTextureWrapping(false),
+      m_bTextureFiltering(true),
+      m_iNextTextureHandle(1),
+      m_bReady(false) {
   m_Textures.resize(1);
   LOG->MapLog("renderer", "Current renderer: metal");
 }
@@ -291,11 +297,50 @@ void RageDisplay_Metal::SetTexture(TextureUnit tu, uintptr_t iTexture) {
   m_iActiveTextureHandle = iTexture;
 }
 
+void RageDisplay_Metal::SetBlendMode(BlendMode mode) {
+  if (mode < 0 || mode >= NUM_BlendMode) {
+    mode = BLEND_NORMAL;
+  }
+  m_BlendMode = mode;
+}
+
+void RageDisplay_Metal::SetTextureMode(TextureUnit tu, TextureMode mode) {
+  if (tu != TextureUnit_1) {
+    return;
+  }
+  if (mode < 0 || mode >= NUM_TextureMode) {
+    mode = TextureMode_Modulate;
+  }
+  m_TextureMode = mode;
+}
+
+void RageDisplay_Metal::SetTextureWrapping(TextureUnit tu, bool wrapping) {
+  if (tu != TextureUnit_1) {
+    return;
+  }
+  m_bTextureWrapping = wrapping;
+}
+
+void RageDisplay_Metal::SetTextureFiltering(TextureUnit tu, bool filtering) {
+  if (tu != TextureUnit_1) {
+    return;
+  }
+  m_bTextureFiltering = filtering;
+}
+
 RageDisplay_Metal::DrawBatch& RageDisplay_Metal::ActiveBatch() {
   if (m_DrawBatches.empty() ||
-      m_DrawBatches.back().textureHandle != m_iActiveTextureHandle) {
+      m_DrawBatches.back().textureHandle != m_iActiveTextureHandle ||
+      m_DrawBatches.back().blendMode != m_BlendMode ||
+      m_DrawBatches.back().textureMode != m_TextureMode ||
+      m_DrawBatches.back().textureWrapping != m_bTextureWrapping ||
+      m_DrawBatches.back().textureFiltering != m_bTextureFiltering) {
     DrawBatch batch;
     batch.textureHandle = m_iActiveTextureHandle;
+    batch.blendMode = m_BlendMode;
+    batch.textureMode = m_TextureMode;
+    batch.textureWrapping = m_bTextureWrapping;
+    batch.textureFiltering = m_bTextureFiltering;
     m_DrawBatches.push_back(batch);
   }
   return m_DrawBatches.back();
@@ -328,7 +373,9 @@ void RageDisplay_Metal::EndFrame() {
         texture = m_Textures[batch.textureHandle].texture;
       }
       metalBatches.push_back(
-          {batch.vertices.data(), batch.vertices.size(), texture});
+          {batch.vertices.data(), batch.vertices.size(), texture,
+           batch.blendMode, batch.textureMode, batch.textureWrapping,
+           batch.textureFiltering});
     }
     const bool presented = m_Presenter->PresentSolidBatches(
         metalBatches.data(), metalBatches.size(), 0.04, 0.055, 0.075, 1.0,

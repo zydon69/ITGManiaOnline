@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <string>
 
+#include "RageTypes.h"
+
 struct MacOSMetalSolidVertex {
   float x = 0.0f;
   float y = 0.0f;
@@ -30,6 +32,10 @@ struct MacOSMetalDrawBatch {
   const MacOSMetalSolidVertex* vertices = nullptr;
   size_t vertexCount = 0;
   void* texture = nullptr;
+  BlendMode blendMode = BLEND_NORMAL;
+  TextureMode textureMode = TextureMode_Modulate;
+  bool textureWrapping = false;
+  bool textureFiltering = true;
 };
 
 class MacOSMetalPresenter {

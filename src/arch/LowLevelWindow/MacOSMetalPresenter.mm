@@ -73,10 +73,18 @@ struct MacOSMetalSurfaceBusyFlags {
 };
 
 struct MacOSMetalPresenterImpl {
+  MacOSMetalPresenterImpl() {
+    solidPipelines.fill(nil);
+    for (auto& row : samplerStates) {
+      row.fill(nil);
+    }
+  }
+
   id<MTLDevice> device = nil;
   id<MTLCommandQueue> commandQueue = nil;
   id<MTLRenderPipelineState> presentPipeline = nil;
-  id<MTLRenderPipelineState> solidPipeline = nil;
+  std::array<id<MTLRenderPipelineState>, NUM_BlendMode> solidPipelines;
+  std::array<std::array<id<MTLSamplerState>, 2>, 2> samplerStates;
   id<MTLTexture> whiteTexture = nil;
   CAMetalLayer* layer = nil;
   NSView* layerView = nil;
@@ -421,8 +429,85 @@ id<MTLRenderPipelineState> CreatePresentPipeline(
   return pipeline;
 }
 
+void ConfigureBlendAttachment(
+    MTLRenderPipelineColorAttachmentDescriptor* attachment,
+    BlendMode blendMode) {
+  attachment.blendingEnabled = YES;
+
+  MTLBlendFactor sourceRGB = MTLBlendFactorSourceAlpha;
+  MTLBlendFactor destRGB = MTLBlendFactorOneMinusSourceAlpha;
+  MTLBlendFactor sourceAlpha = MTLBlendFactorOne;
+  MTLBlendFactor destAlpha = MTLBlendFactorOneMinusSourceAlpha;
+  MTLBlendOperation rgbOperation = MTLBlendOperationAdd;
+  MTLBlendOperation alphaOperation = MTLBlendOperationAdd;
+
+  switch (blendMode) {
+    case BLEND_NORMAL:
+      break;
+    case BLEND_ADD:
+      sourceRGB = MTLBlendFactorSourceAlpha;
+      destRGB = MTLBlendFactorOne;
+      break;
+    case BLEND_SUBTRACT:
+      sourceRGB = MTLBlendFactorSourceAlpha;
+      destRGB = MTLBlendFactorOneMinusSourceAlpha;
+      rgbOperation = MTLBlendOperationReverseSubtract;
+      break;
+    case BLEND_MODULATE:
+      sourceRGB = MTLBlendFactorZero;
+      destRGB = MTLBlendFactorSourceColor;
+      break;
+    case BLEND_COPY_SRC:
+      sourceRGB = MTLBlendFactorOne;
+      destRGB = MTLBlendFactorZero;
+      sourceAlpha = MTLBlendFactorOne;
+      destAlpha = MTLBlendFactorZero;
+      break;
+    case BLEND_ALPHA_MASK:
+      sourceRGB = MTLBlendFactorZero;
+      destRGB = MTLBlendFactorOne;
+      sourceAlpha = MTLBlendFactorZero;
+      destAlpha = MTLBlendFactorSourceAlpha;
+      break;
+    case BLEND_ALPHA_KNOCK_OUT:
+      sourceRGB = MTLBlendFactorZero;
+      destRGB = MTLBlendFactorOne;
+      sourceAlpha = MTLBlendFactorZero;
+      destAlpha = MTLBlendFactorOneMinusSourceAlpha;
+      break;
+    case BLEND_ALPHA_MULTIPLY:
+      sourceRGB = MTLBlendFactorSourceAlpha;
+      destRGB = MTLBlendFactorZero;
+      break;
+    case BLEND_WEIGHTED_MULTIPLY:
+      sourceRGB = MTLBlendFactorDestinationColor;
+      destRGB = MTLBlendFactorSourceColor;
+      break;
+    case BLEND_INVERT_DEST:
+      sourceRGB = MTLBlendFactorOne;
+      destRGB = MTLBlendFactorOne;
+      rgbOperation = MTLBlendOperationSubtract;
+      break;
+    case BLEND_NO_EFFECT:
+      sourceRGB = MTLBlendFactorZero;
+      destRGB = MTLBlendFactorOne;
+      sourceAlpha = MTLBlendFactorZero;
+      destAlpha = MTLBlendFactorOne;
+      break;
+    default:
+      break;
+  }
+
+  attachment.sourceRGBBlendFactor = sourceRGB;
+  attachment.destinationRGBBlendFactor = destRGB;
+  attachment.rgbBlendOperation = rgbOperation;
+  attachment.sourceAlphaBlendFactor = sourceAlpha;
+  attachment.destinationAlphaBlendFactor = destAlpha;
+  attachment.alphaBlendOperation = alphaOperation;
+}
+
 id<MTLRenderPipelineState> CreateSolidPipeline(
-    id<MTLDevice> device, std::string* failureReason) {
+    id<MTLDevice> device, BlendMode blendMode, std::string* failureReason) {
   static NSString* const shaderSource =
       @"#include <metal_stdlib>\n"
        "using namespace metal;\n"
@@ -449,10 +534,17 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
        "  return out;\n"
        "}\n"
        "fragment float4 solid_fragment(VertexOut in [[stage_in]],\n"
-       "                             texture2d<float> source [[texture(0)]]) {\n"
-       "  constexpr sampler sourceSampler(address::clamp_to_edge,\n"
-       "                                  filter::linear);\n"
-       "  return source.sample(sourceSampler, in.texcoord) * in.color;\n"
+       "                             texture2d<float> source [[texture(0)]],\n"
+       "                             sampler sourceSampler [[sampler(0)]],\n"
+       "                             constant uint& textureMode [[buffer(1)]]) {\n"
+       "  const float4 sampleColor = source.sample(sourceSampler, in.texcoord);\n"
+       "  if (textureMode == 1) {\n"
+       "    return float4(in.color.rgb, sampleColor.a * in.color.a);\n"
+       "  }\n"
+       "  if (textureMode == 2) {\n"
+       "    return saturate(sampleColor + in.color);\n"
+       "  }\n"
+       "  return sampleColor * in.color;\n"
        "}\n";
 
   NSError* error = nil;
@@ -486,17 +578,7 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
   descriptor.vertexFunction = vertexFunction;
   descriptor.fragmentFunction = fragmentFunction;
   descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-  descriptor.colorAttachments[0].blendingEnabled = YES;
-  descriptor.colorAttachments[0].sourceRGBBlendFactor =
-      MTLBlendFactorSourceAlpha;
-  descriptor.colorAttachments[0].destinationRGBBlendFactor =
-      MTLBlendFactorOneMinusSourceAlpha;
-  descriptor.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
-  descriptor.colorAttachments[0].sourceAlphaBlendFactor =
-      MTLBlendFactorSourceAlpha;
-  descriptor.colorAttachments[0].destinationAlphaBlendFactor =
-      MTLBlendFactorOneMinusSourceAlpha;
-  descriptor.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+  ConfigureBlendAttachment(descriptor.colorAttachments[0], blendMode);
 
   id<MTLRenderPipelineState> pipeline =
       [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
@@ -533,6 +615,26 @@ id<MTLTexture> CreateWhiteTexture(id<MTLDevice> device) {
                withBytes:whitePixel
              bytesPerRow:4];
   return texture;
+}
+
+id<MTLSamplerState> CreateSamplerState(
+    id<MTLDevice> device, bool wrapping, bool filtering) {
+  if (device == nil) {
+    return nil;
+  }
+
+  MTLSamplerDescriptor* descriptor =
+      [[[MTLSamplerDescriptor alloc] init] autorelease];
+  descriptor.sAddressMode =
+      wrapping ? MTLSamplerAddressModeRepeat : MTLSamplerAddressModeClampToEdge;
+  descriptor.tAddressMode =
+      wrapping ? MTLSamplerAddressModeRepeat : MTLSamplerAddressModeClampToEdge;
+  descriptor.minFilter =
+      filtering ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
+  descriptor.magFilter =
+      filtering ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
+  descriptor.mipFilter = MTLSamplerMipFilterNotMipmapped;
+  return [device newSamplerStateWithDescriptor:descriptor];
 }
 
 }  // namespace
@@ -580,19 +682,35 @@ bool MacOSMetalPresenter::Initialize(
         pipelineFailure.c_str());
   }
 
-  std::string solidPipelineFailure;
-  impl->solidPipeline =
-      CreateSolidPipeline(impl->device, &solidPipelineFailure);
-  if (impl->solidPipeline == nil) {
-    LOG->Warn(
-        "MacOS Metal presenter solid pipeline unavailable: %s",
-        solidPipelineFailure.c_str());
+  for (int i = 0; i < NUM_BlendMode; ++i) {
+    std::string solidPipelineFailure;
+    impl->solidPipelines[i] = CreateSolidPipeline(
+        impl->device, static_cast<BlendMode>(i), &solidPipelineFailure);
+    if (impl->solidPipelines[i] == nil) {
+      LOG->Warn(
+          "MacOS Metal presenter solid pipeline unavailable for blend=%d: %s",
+          i, solidPipelineFailure.c_str());
+    }
+  }
+  for (int wrapping = 0; wrapping < 2; ++wrapping) {
+    for (int filtering = 0; filtering < 2; ++filtering) {
+      impl->samplerStates[wrapping][filtering] =
+          CreateSamplerState(impl->device, wrapping != 0, filtering != 0);
+      if (impl->samplerStates[wrapping][filtering] == nil) {
+        LOG->Warn(
+            "MacOS Metal presenter sampler unavailable: wrapping=%d "
+            "filtering=%d",
+            wrapping, filtering);
+      }
+    }
   }
   impl->whiteTexture = CreateWhiteTexture(impl->device);
   if (impl->whiteTexture == nil) {
     m_FailureReason = "Failed to create native Metal fallback texture.";
-    if (impl->solidPipeline != nil) {
-      [impl->solidPipeline release];
+    for (id<MTLRenderPipelineState>& pipeline : impl->solidPipelines) {
+      if (pipeline != nil) {
+        [pipeline release];
+      }
     }
     if (impl->presentPipeline != nil) {
       [impl->presentPipeline release];
@@ -688,9 +806,19 @@ void MacOSMetalPresenter::Shutdown() {
     [impl->presentPipeline release];
     impl->presentPipeline = nil;
   }
-  if (impl->solidPipeline != nil) {
-    [impl->solidPipeline release];
-    impl->solidPipeline = nil;
+  for (id<MTLRenderPipelineState>& pipeline : impl->solidPipelines) {
+    if (pipeline != nil) {
+      [pipeline release];
+      pipeline = nil;
+    }
+  }
+  for (auto& row : impl->samplerStates) {
+    for (id<MTLSamplerState>& sampler : row) {
+      if (sampler != nil) {
+        [sampler release];
+        sampler = nil;
+      }
+    }
   }
   if (impl->whiteTexture != nil) {
     [impl->whiteTexture release];
@@ -1002,7 +1130,7 @@ bool MacOSMetalPresenter::PresentSolidBatches(
   MacOSMetalPresenterImpl* impl =
       static_cast<MacOSMetalPresenterImpl*>(m_Impl);
   if (impl->layer == nil || impl->layerView == nil ||
-      impl->commandQueue == nil || impl->solidPipeline == nil) {
+      impl->commandQueue == nil || impl->solidPipelines[BLEND_NORMAL] == nil) {
     return false;
   }
 
@@ -1059,10 +1187,20 @@ bool MacOSMetalPresenter::PresentSolidBatches(
 
   NSMutableArray* retainedBuffers = [NSMutableArray arrayWithCapacity:batchCount];
   NSMutableArray* retainedTextures = [NSMutableArray arrayWithCapacity:batchCount];
-  [encoder setRenderPipelineState:impl->solidPipeline];
   for (size_t i = 0; i < batchCount; ++i) {
     const MacOSMetalDrawBatch& batch = batches[i];
     if (batch.vertices == nullptr || batch.vertexCount == 0) {
+      continue;
+    }
+    const BlendMode blendMode =
+        batch.blendMode >= 0 && batch.blendMode < NUM_BlendMode
+            ? batch.blendMode
+            : BLEND_NORMAL;
+    id<MTLRenderPipelineState> pipeline = impl->solidPipelines[blendMode];
+    if (pipeline == nil) {
+      pipeline = impl->solidPipelines[BLEND_NORMAL];
+    }
+    if (pipeline == nil) {
       continue;
     }
     const NSUInteger vertexBufferLength = static_cast<NSUInteger>(
@@ -1077,11 +1215,26 @@ bool MacOSMetalPresenter::PresentSolidBatches(
     id<MTLTexture> sourceTexture =
         batch.texture != nullptr ? (id<MTLTexture>)batch.texture
                                  : impl->whiteTexture;
+    const int wrappingIndex = batch.textureWrapping ? 1 : 0;
+    const int filteringIndex = batch.textureFiltering ? 1 : 0;
+    id<MTLSamplerState> sampler =
+        impl->samplerStates[wrappingIndex][filteringIndex];
     [sourceTexture retain];
     [retainedBuffers addObject:vertexBuffer];
     [retainedTextures addObject:sourceTexture];
+    const uint32_t textureMode =
+        batch.textureMode == TextureMode_Glow
+            ? 1
+            : (batch.textureMode == TextureMode_Add ? 2 : 0);
+    [encoder setRenderPipelineState:pipeline];
     [encoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
+    [encoder setFragmentBytes:&textureMode
+                       length:sizeof(textureMode)
+                      atIndex:1];
     [encoder setFragmentTexture:sourceTexture atIndex:0];
+    if (sampler != nil) {
+      [encoder setFragmentSamplerState:sampler atIndex:0];
+    }
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                 vertexStart:0
                 vertexCount:static_cast<NSUInteger>(batch.vertexCount)];

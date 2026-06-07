@@ -36,7 +36,7 @@ class RageDisplay_Metal : public RageDisplay {
   ActualVideoModeParams GetActualVideoModeParams() const override {
     return m_Params;
   }
-  void SetBlendMode(BlendMode) override {}
+  void SetBlendMode(BlendMode mode) override;
   bool SupportsTextureFormat(
       RagePixelFormat pixfmt, bool realtime = false) override;
   bool SupportsPerVertexMatrixScale() override { return false; }
@@ -51,10 +51,10 @@ class RageDisplay_Metal : public RageDisplay {
   void ClearAllTextures() override;
   int GetNumTextureUnits() override { return 1; }
   void SetTexture(TextureUnit, uintptr_t iTexture) override;
-  void SetTextureMode(TextureUnit, TextureMode) override {}
-  void SetTextureWrapping(TextureUnit, bool) override {}
+  void SetTextureMode(TextureUnit tu, TextureMode mode) override;
+  void SetTextureWrapping(TextureUnit tu, bool wrapping) override;
   int GetMaxTextureSize() const override { return 16384; }
-  void SetTextureFiltering(TextureUnit, bool) override {}
+  void SetTextureFiltering(TextureUnit tu, bool filtering) override;
 
   bool IsZWriteEnabled() const override { return false; }
   bool IsZTestEnabled() const override { return false; }
@@ -108,6 +108,10 @@ class RageDisplay_Metal : public RageDisplay {
 
   struct DrawBatch {
     uintptr_t textureHandle = 0;
+    BlendMode blendMode = BLEND_NORMAL;
+    TextureMode textureMode = TextureMode_Modulate;
+    bool textureWrapping = false;
+    bool textureFiltering = true;
     std::vector<MacOSMetalSolidVertex> vertices;
   };
 
@@ -124,6 +128,10 @@ class RageDisplay_Metal : public RageDisplay {
   std::vector<DrawBatch> m_DrawBatches;
   std::vector<MetalTexture> m_Textures;
   uintptr_t m_iActiveTextureHandle;
+  BlendMode m_BlendMode;
+  TextureMode m_TextureMode;
+  bool m_bTextureWrapping;
+  bool m_bTextureFiltering;
   uintptr_t m_iNextTextureHandle;
   bool m_bReady;
 };
