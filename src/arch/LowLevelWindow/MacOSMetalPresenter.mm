@@ -843,6 +843,115 @@ id<MTLSamplerState> CreateSamplerState(
   return [device newSamplerStateWithDescriptor:descriptor];
 }
 
+bool EncodeSolidBatches(
+    MacOSMetalPresenterImpl* impl, id<MTLRenderCommandEncoder> encoder,
+    const MacOSMetalDrawBatch* batches, size_t batchCount,
+    NSMutableArray* retainedBuffers, NSMutableArray* retainedTextures) {
+  if (impl == nullptr || encoder == nil || batches == nullptr) {
+    return false;
+  }
+
+  bool encodedAny = false;
+  for (size_t i = 0; i < batchCount; ++i) {
+    const MacOSMetalDrawBatch& batch = batches[i];
+    if (batch.vertices == nullptr || batch.vertexCount == 0) {
+      continue;
+    }
+    const BlendMode blendMode =
+        batch.blendMode >= 0 && batch.blendMode < NUM_BlendMode
+            ? batch.blendMode
+            : BLEND_NORMAL;
+    const ZTestMode zTestMode =
+        batch.zTestMode >= 0 && batch.zTestMode < NUM_ZTestMode
+            ? batch.zTestMode
+            : ZTEST_OFF;
+    const CullMode cullMode =
+        batch.cullMode >= 0 && batch.cullMode < NUM_CullMode
+            ? batch.cullMode
+            : CULL_NONE;
+    id<MTLRenderPipelineState> pipeline =
+        batch.effectMode == EffectMode_DistanceField
+            ? impl->distanceFieldPipelines[blendMode]
+            : impl->solidPipelines[blendMode];
+    if (pipeline == nil) {
+      pipeline = impl->solidPipelines[BLEND_NORMAL];
+    }
+    if (pipeline == nil) {
+      continue;
+    }
+
+    const NSUInteger vertexBufferLength = static_cast<NSUInteger>(
+        sizeof(MacOSMetalSolidVertex) * batch.vertexCount);
+    id<MTLBuffer> vertexBuffer =
+        [impl->device newBufferWithBytes:batch.vertices
+                                  length:vertexBufferLength
+                                 options:MTLResourceStorageModeShared];
+    if (vertexBuffer == nil) {
+      continue;
+    }
+
+    id<MTLTexture> sourceTexture =
+        batch.texture != nullptr ? (id<MTLTexture>)batch.texture
+                                 : impl->whiteTexture;
+    const int wrappingIndex = batch.textureWrapping ? 1 : 0;
+    const int filteringIndex = batch.textureFiltering ? 1 : 0;
+    id<MTLSamplerState> sampler =
+        impl->samplerStates[wrappingIndex][filteringIndex];
+    id<MTLDepthStencilState> depthState =
+        impl->depthStates[zTestMode][batch.zWrite ? 1 : 0];
+    [sourceTexture retain];
+    [retainedBuffers addObject:vertexBuffer];
+    [retainedTextures addObject:sourceTexture];
+
+    const uint32_t textureMode =
+        batch.textureMode == TextureMode_Glow
+            ? 1
+            : (batch.textureMode == TextureMode_Add ? 2 : 0);
+    const uint32_t alphaTest = batch.alphaTest ? 1 : 0;
+    const uint32_t celStage =
+        batch.celStage > 0 ? static_cast<uint32_t>(batch.celStage) : 0;
+
+    [encoder setRenderPipelineState:pipeline];
+    if (depthState != nil) {
+      [encoder setDepthStencilState:depthState];
+    }
+    [encoder setFrontFacingWinding:MTLWindingCounterClockwise];
+    switch (cullMode) {
+      case CULL_BACK:
+        [encoder setCullMode:MTLCullModeBack];
+        break;
+      case CULL_FRONT:
+        [encoder setCullMode:MTLCullModeFront];
+        break;
+      case CULL_NONE:
+      default:
+        [encoder setCullMode:MTLCullModeNone];
+        break;
+    }
+    [encoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
+    [encoder setFragmentBytes:&textureMode
+                       length:sizeof(textureMode)
+                      atIndex:1];
+    [encoder setFragmentBytes:&alphaTest
+                       length:sizeof(alphaTest)
+                      atIndex:2];
+    [encoder setFragmentBytes:&celStage
+                       length:sizeof(celStage)
+                      atIndex:3];
+    [encoder setFragmentTexture:sourceTexture atIndex:0];
+    if (sampler != nil) {
+      [encoder setFragmentSamplerState:sampler atIndex:0];
+    }
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                vertexStart:0
+                vertexCount:static_cast<NSUInteger>(batch.vertexCount)];
+    [vertexBuffer release];
+    [sourceTexture release];
+    encodedAny = true;
+  }
+  return encodedAny;
+}
+
 }  // namespace
 
 MacOSMetalPresenter::MacOSMetalPresenter()
@@ -1618,98 +1727,8 @@ bool MacOSMetalPresenter::PresentSolidBatches(
 
   NSMutableArray* retainedBuffers = [NSMutableArray arrayWithCapacity:batchCount];
   NSMutableArray* retainedTextures = [NSMutableArray arrayWithCapacity:batchCount];
-  for (size_t i = 0; i < batchCount; ++i) {
-    const MacOSMetalDrawBatch& batch = batches[i];
-    if (batch.vertices == nullptr || batch.vertexCount == 0) {
-      continue;
-    }
-    const BlendMode blendMode =
-        batch.blendMode >= 0 && batch.blendMode < NUM_BlendMode
-            ? batch.blendMode
-            : BLEND_NORMAL;
-    const ZTestMode zTestMode =
-        batch.zTestMode >= 0 && batch.zTestMode < NUM_ZTestMode
-            ? batch.zTestMode
-            : ZTEST_OFF;
-    const CullMode cullMode =
-        batch.cullMode >= 0 && batch.cullMode < NUM_CullMode
-            ? batch.cullMode
-            : CULL_NONE;
-    id<MTLRenderPipelineState> pipeline =
-        batch.effectMode == EffectMode_DistanceField
-            ? impl->distanceFieldPipelines[blendMode]
-            : impl->solidPipelines[blendMode];
-    if (pipeline == nil) {
-      pipeline = impl->solidPipelines[BLEND_NORMAL];
-    }
-    if (pipeline == nil) {
-      continue;
-    }
-    const NSUInteger vertexBufferLength = static_cast<NSUInteger>(
-        sizeof(MacOSMetalSolidVertex) * batch.vertexCount);
-    id<MTLBuffer> vertexBuffer =
-        [impl->device newBufferWithBytes:batch.vertices
-                                  length:vertexBufferLength
-                                 options:MTLResourceStorageModeShared];
-    if (vertexBuffer == nil) {
-      continue;
-    }
-    id<MTLTexture> sourceTexture =
-        batch.texture != nullptr ? (id<MTLTexture>)batch.texture
-                                 : impl->whiteTexture;
-    const int wrappingIndex = batch.textureWrapping ? 1 : 0;
-    const int filteringIndex = batch.textureFiltering ? 1 : 0;
-    id<MTLSamplerState> sampler =
-        impl->samplerStates[wrappingIndex][filteringIndex];
-    id<MTLDepthStencilState> depthState =
-        impl->depthStates[zTestMode][batch.zWrite ? 1 : 0];
-    [sourceTexture retain];
-    [retainedBuffers addObject:vertexBuffer];
-    [retainedTextures addObject:sourceTexture];
-    const uint32_t textureMode =
-        batch.textureMode == TextureMode_Glow
-            ? 1
-            : (batch.textureMode == TextureMode_Add ? 2 : 0);
-    const uint32_t alphaTest = batch.alphaTest ? 1 : 0;
-    const uint32_t celStage =
-        batch.celStage > 0 ? static_cast<uint32_t>(batch.celStage) : 0;
-    [encoder setRenderPipelineState:pipeline];
-    if (depthState != nil) {
-      [encoder setDepthStencilState:depthState];
-    }
-    [encoder setFrontFacingWinding:MTLWindingCounterClockwise];
-    switch (cullMode) {
-      case CULL_BACK:
-        [encoder setCullMode:MTLCullModeBack];
-        break;
-      case CULL_FRONT:
-        [encoder setCullMode:MTLCullModeFront];
-        break;
-      case CULL_NONE:
-      default:
-        [encoder setCullMode:MTLCullModeNone];
-        break;
-    }
-    [encoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
-    [encoder setFragmentBytes:&textureMode
-                       length:sizeof(textureMode)
-                      atIndex:1];
-    [encoder setFragmentBytes:&alphaTest
-                       length:sizeof(alphaTest)
-                      atIndex:2];
-    [encoder setFragmentBytes:&celStage
-                       length:sizeof(celStage)
-                      atIndex:3];
-    [encoder setFragmentTexture:sourceTexture atIndex:0];
-    if (sampler != nil) {
-      [encoder setFragmentSamplerState:sampler atIndex:0];
-    }
-    [encoder drawPrimitives:MTLPrimitiveTypeTriangle
-                vertexStart:0
-                vertexCount:static_cast<NSUInteger>(batch.vertexCount)];
-    [vertexBuffer release];
-    [sourceTexture release];
-  }
+  EncodeSolidBatches(
+      impl, encoder, batches, batchCount, retainedBuffers, retainedTextures);
   [encoder endEncoding];
 
   const double minimumDuration =
@@ -1779,6 +1798,133 @@ bool MacOSMetalPresenter::PresentSolidBatches(
         encodeSubmitMs, batchCount, totalVertexCount);
   }
   impl->loggedFirstDirectPresent = true;
+  return true;
+}
+
+void* MacOSMetalPresenter::CreateBGRA8RenderTargetTexture(
+    int width, int height) {
+  ScopedAutoreleasePool autoreleasePool;
+
+  if (!IsAvailable() || width <= 0 || height <= 0) {
+    return nullptr;
+  }
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  if (impl->device == nil) {
+    return nullptr;
+  }
+
+  MTLTextureDescriptor* descriptor =
+      [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                         width:width
+                                                        height:height
+                                                     mipmapped:NO];
+  descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
+  descriptor.storageMode = MTLStorageModePrivate;
+  return [impl->device newTextureWithDescriptor:descriptor];
+}
+
+void* MacOSMetalPresenter::CreateDepthRenderTargetTexture(
+    int width, int height) {
+  ScopedAutoreleasePool autoreleasePool;
+
+  if (!IsAvailable() || width <= 0 || height <= 0) {
+    return nullptr;
+  }
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  return CreateDepthTexture(impl->device, width, height);
+}
+
+bool MacOSMetalPresenter::RenderSolidBatchesToTexture(
+    void* colorTexture, void* depthTexture,
+    const MacOSMetalDrawBatch* batches, size_t batchCount,
+    bool preserveColor, bool clearDepth,
+    double clearRed, double clearGreen, double clearBlue, double clearAlpha,
+    int viewportWidth, int viewportHeight) {
+  ScopedAutoreleasePool autoreleasePool;
+  RageTimer timer;
+
+  if (!IsAvailable() || colorTexture == nullptr ||
+      (batches == nullptr && batchCount > 0) ||
+      viewportWidth <= 0 || viewportHeight <= 0) {
+    return false;
+  }
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  if (impl->commandQueue == nil || impl->solidPipelines[BLEND_NORMAL] == nil) {
+    return false;
+  }
+
+  id<MTLTexture> targetTexture = (id<MTLTexture>)colorTexture;
+  id<MTLTexture> targetDepth = (id<MTLTexture>)depthTexture;
+  id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
+  if (commandBuffer == nil) {
+    return false;
+  }
+
+  MTLRenderPassDescriptor* passDescriptor =
+      [MTLRenderPassDescriptor renderPassDescriptor];
+  passDescriptor.colorAttachments[0].texture = targetTexture;
+  passDescriptor.colorAttachments[0].loadAction =
+      preserveColor ? MTLLoadActionLoad : MTLLoadActionClear;
+  passDescriptor.colorAttachments[0].clearColor =
+      MTLClearColorMake(clearRed, clearGreen, clearBlue, clearAlpha);
+  passDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+  if (targetDepth != nil) {
+    passDescriptor.depthAttachment.texture = targetDepth;
+    passDescriptor.depthAttachment.loadAction =
+        clearDepth ? MTLLoadActionClear : MTLLoadActionLoad;
+    passDescriptor.depthAttachment.clearDepth = 1.0;
+    passDescriptor.depthAttachment.storeAction = MTLStoreActionStore;
+  }
+
+  id<MTLRenderCommandEncoder> encoder =
+      [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
+  if (encoder == nil) {
+    return false;
+  }
+
+  MTLViewport viewport;
+  viewport.originX = 0.0;
+  viewport.originY = 0.0;
+  viewport.width = static_cast<double>(viewportWidth);
+  viewport.height = static_cast<double>(viewportHeight);
+  viewport.znear = 0.0;
+  viewport.zfar = 1.0;
+  [encoder setViewport:viewport];
+
+  NSMutableArray* retainedBuffers = [NSMutableArray arrayWithCapacity:batchCount];
+  NSMutableArray* retainedTextures = [NSMutableArray arrayWithCapacity:batchCount];
+  EncodeSolidBatches(
+      impl, encoder, batches, batchCount, retainedBuffers, retainedTextures);
+  [encoder endEncoding];
+
+  NSArray* completionBuffers = [retainedBuffers copy];
+  NSArray* completionTextures = [retainedTextures copy];
+  [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer>) {
+    [completionBuffers release];
+    [completionTextures release];
+  }];
+  [commandBuffer commit];
+  if (PerfDiagnosticsEnabled()) {
+    static uint64_t s_RenderTargetSubmits = 0;
+    ++s_RenderTargetSubmits;
+    const float submitMs = timer.Ago() * 1000.0f;
+    if (s_RenderTargetSubmits <= kMetalInitialTraceFrames ||
+        s_RenderTargetSubmits % 600 == 0 || submitMs >= 2.0f) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_render_target_submitted serial=%llu "
+          "batches=%zu preserve=%d clear_depth=%d viewport=%dx%d "
+          "submit_ms=%.3f",
+          static_cast<unsigned long long>(s_RenderTargetSubmits), batchCount,
+          preserveColor ? 1 : 0, clearDepth ? 1 : 0,
+          viewportWidth, viewportHeight, submitMs);
+    }
+  }
   return true;
 }
 

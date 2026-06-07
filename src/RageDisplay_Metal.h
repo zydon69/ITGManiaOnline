@@ -57,6 +57,13 @@ class RageDisplay_Metal : public RageDisplay {
   void SetTextureFiltering(TextureUnit tu, bool filtering) override;
   void SetEffectMode(EffectMode effect) override;
   bool IsEffectModeSupported(EffectMode effect) override;
+  bool SupportsRenderToTexture() const override { return true; }
+  uintptr_t CreateRenderTarget(
+      const RenderTargetParam& param, int& iTextureWidthOut,
+      int& iTextureHeightOut) override;
+  uintptr_t GetRenderTarget() override;
+  void SetRenderTarget(
+      uintptr_t iHandle, bool bPreserveTexture = true) override;
 
   bool IsZWriteEnabled() const override { return m_bZWrite; }
   bool IsZTestEnabled() const override { return m_ZTestMode != ZTEST_OFF; }
@@ -106,8 +113,17 @@ class RageDisplay_Metal : public RageDisplay {
 
   struct MetalTexture {
     void* texture = nullptr;
+    void* depthTexture = nullptr;
     int width = 0;
     int height = 0;
+    int renderWidth = 0;
+    int renderHeight = 0;
+    bool renderTarget = false;
+    bool requestedDepth = false;
+    bool requestedAlpha = false;
+    bool requestedFloat = false;
+    bool hasRendered = false;
+    bool preserveNextRender = false;
   };
 
   struct DrawBatch {
@@ -131,6 +147,10 @@ class RageDisplay_Metal : public RageDisplay {
   RageMatrix CurrentTextureMatrix() const;
   RageColor ComputeModelColor(const RageVector3& normal) const;
   DrawBatch& ActiveBatch();
+  void FlushBatches();
+  void BuildMetalBatches(
+      const std::vector<DrawBatch>& batches,
+      std::vector<MacOSMetalDrawBatch>* metalBatches) const;
   void ReleaseTexture(MetalTexture* texture);
   void DestroyAllTextures();
   bool UploadTexturePixels(
@@ -158,6 +178,7 @@ class RageDisplay_Metal : public RageDisplay {
   bool m_bZWrite;
   bool m_bAlphaTest;
   bool m_bClearDepthNextFrame;
+  uintptr_t m_iCurrentRenderTargetHandle;
   RageColor m_MaterialDiffuse;
   RageColor m_MaterialAmbient;
   RageColor m_MaterialEmissive;

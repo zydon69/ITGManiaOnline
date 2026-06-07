@@ -251,10 +251,15 @@ OperatorMenuOptionRows.VideoRenderer = function()
 	local choices = { "opengl" }
 	local values  = { "opengl" }
 
+	local architecture = HOOKS:GetArchName():lower()
+	if architecture:match("mac") then
+		table.insert(choices, "metal")
+		values = { "opengl", "metal,opengl" }
+	end
+
 	-- Windows also has d3d as a VideoRenderer on ITGm.
 	-- The convention(?) there is to list both available
 	-- backends in Preferences.ini, but only use the first
-	local architecture = HOOKS:GetArchName():lower()
 	if architecture:match("windows") then
 		table.insert(choices, "d3d")
 		values = { "opengl,d3d", "d3d,opengl" }
@@ -268,7 +273,7 @@ OperatorMenuOptionRows.VideoRenderer = function()
 		OneChoiceForAllPlayers = true,
 		ExportOnChange = false,
 		LoadSelections = function(self, list, pn)
-			local pref = PREFSMAN:GetPreference("VideoRenderers")
+			local pref = PREFSMAN:GetPreference("VideoRenderers") or ""
 
 			-- Multiple comma-delimited VideoRenderers may be listed, but
 			-- we only want the first because that's the one actually in use.

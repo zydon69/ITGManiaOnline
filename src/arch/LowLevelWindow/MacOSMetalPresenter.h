@@ -70,6 +70,14 @@ class MacOSMetalPresenter {
       bool clearDepth,
       double clearRed, double clearGreen, double clearBlue, double clearAlpha,
       double targetHz);
+  void* CreateBGRA8RenderTargetTexture(int width, int height);
+  void* CreateDepthRenderTargetTexture(int width, int height);
+  bool RenderSolidBatchesToTexture(
+      void* colorTexture, void* depthTexture,
+      const MacOSMetalDrawBatch* batches, size_t batchCount,
+      bool preserveColor, bool clearDepth,
+      double clearRed, double clearGreen, double clearBlue, double clearAlpha,
+      int viewportWidth, int viewportHeight);
   void* CreateRGBA8Texture(
       int width, int height, const void* pixels, size_t bytesPerRow);
   bool UpdateRGBA8Texture(

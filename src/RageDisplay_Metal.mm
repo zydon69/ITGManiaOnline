@@ -347,6 +347,7 @@ RageDisplay_Metal::RageDisplay_Metal()
       m_bZWrite(false),
       m_bAlphaTest(false),
       m_bClearDepthNextFrame(true),
+      m_iCurrentRenderTargetHandle(0),
       m_MaterialDiffuse(1.0f, 1.0f, 1.0f, 1.0f),
       m_MaterialAmbient(0.0f, 0.0f, 0.0f, 1.0f),
       m_MaterialEmissive(0.0f, 0.0f, 0.0f, 1.0f),
@@ -433,9 +434,21 @@ void RageDisplay_Metal::ReleaseTexture(MetalTexture* texture) {
   if (texture->texture != nullptr && m_Presenter) {
     m_Presenter->ReleaseTexture(texture->texture);
   }
+  if (texture->depthTexture != nullptr && m_Presenter) {
+    m_Presenter->ReleaseTexture(texture->depthTexture);
+  }
   texture->texture = nullptr;
+  texture->depthTexture = nullptr;
   texture->width = 0;
   texture->height = 0;
+  texture->renderWidth = 0;
+  texture->renderHeight = 0;
+  texture->renderTarget = false;
+  texture->requestedDepth = false;
+  texture->requestedAlpha = false;
+  texture->requestedFloat = false;
+  texture->hasRendered = false;
+  texture->preserveNextRender = false;
 }
 
 bool RageDisplay_Metal::UploadTexturePixels(
@@ -529,6 +542,12 @@ void RageDisplay_Metal::UpdateTexture(
   if (texture.texture == nullptr) {
     return;
   }
+  if (texture.renderTarget) {
+    LOG->Warn(
+        "RageDisplay_Metal: ignoring UpdateTexture on render target handle=%lu.",
+        static_cast<unsigned long>(iTexHandle));
+    return;
+  }
 
   if (xoffset < 0 || yoffset < 0 || width <= 0 || height <= 0 ||
       xoffset + width > texture.width || yoffset + height > texture.height) {
@@ -548,9 +567,136 @@ void RageDisplay_Metal::UpdateTexture(
   }
 }
 
+uintptr_t RageDisplay_Metal::CreateRenderTarget(
+    const RenderTargetParam& param, int& iTextureWidthOut,
+    int& iTextureHeightOut) {
+  iTextureWidthOut = 0;
+  iTextureHeightOut = 0;
+  if (m_Presenter == nullptr || param.iWidth <= 0 || param.iHeight <= 0) {
+    return 0;
+  }
+
+  const int textureWidth = power_of_two(param.iWidth);
+  const int textureHeight = power_of_two(param.iHeight);
+  void* colorTexture =
+      m_Presenter->CreateBGRA8RenderTargetTexture(textureWidth, textureHeight);
+  if (colorTexture == nullptr) {
+    LOG->Warn(
+        "RageDisplay_Metal: failed to create render target color texture "
+        "%dx%d.",
+        textureWidth, textureHeight);
+    return 0;
+  }
+
+  void* depthTexture =
+      m_Presenter->CreateDepthRenderTargetTexture(textureWidth, textureHeight);
+  if (depthTexture == nullptr) {
+    LOG->Warn(
+        "RageDisplay_Metal: failed to create render target depth texture "
+        "%dx%d.",
+        textureWidth, textureHeight);
+    m_Presenter->ReleaseTexture(colorTexture);
+    return 0;
+  }
+
+  const uintptr_t handle = m_iNextTextureHandle++;
+  if (handle >= m_Textures.size()) {
+    m_Textures.resize(handle + 1);
+  }
+
+  MetalTexture& texture = m_Textures[handle];
+  ReleaseTexture(&texture);
+  texture.texture = colorTexture;
+  texture.depthTexture = depthTexture;
+  texture.width = textureWidth;
+  texture.height = textureHeight;
+  texture.renderWidth = param.iWidth;
+  texture.renderHeight = param.iHeight;
+  texture.renderTarget = true;
+  texture.requestedDepth = param.bWithDepthBuffer;
+  texture.requestedAlpha = param.bWithAlpha;
+  texture.requestedFloat = param.bFloat;
+  texture.hasRendered = false;
+  texture.preserveNextRender = false;
+
+  iTextureWidthOut = textureWidth;
+  iTextureHeightOut = textureHeight;
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: metal_render_target_created handle=%lu logical=%dx%d "
+        "texture=%dx%d requested_depth=%d requested_alpha=%d "
+        "requested_float=%d actual_depth=1 actual_format=BGRA8Unorm",
+        static_cast<unsigned long>(handle), param.iWidth, param.iHeight,
+        textureWidth, textureHeight, param.bWithDepthBuffer ? 1 : 0,
+        param.bWithAlpha ? 1 : 0, param.bFloat ? 1 : 0);
+  }
+  return handle;
+}
+
+uintptr_t RageDisplay_Metal::GetRenderTarget() {
+  return m_iCurrentRenderTargetHandle;
+}
+
+void RageDisplay_Metal::SetRenderTarget(
+    uintptr_t iHandle, bool bPreserveTexture) {
+  const uintptr_t previousHandle = m_iCurrentRenderTargetHandle;
+
+  FlushBatches();
+
+  if (iHandle == 0) {
+    m_iCurrentRenderTargetHandle = 0;
+    if (PerfDiagnosticsEnabled() && previousHandle != 0) {
+      LOG->Trace(
+          "PERF_TRACE: metal_render_target_set previous=%lu current=0",
+          static_cast<unsigned long>(previousHandle));
+    }
+    return;
+  }
+
+  if (iHandle >= m_Textures.size() || !m_Textures[iHandle].renderTarget ||
+      m_Textures[iHandle].texture == nullptr) {
+    LOG->Warn(
+        "RageDisplay_Metal: invalid render target handle=%lu.",
+        static_cast<unsigned long>(iHandle));
+    m_iCurrentRenderTargetHandle = 0;
+    return;
+  }
+
+  MetalTexture& texture = m_Textures[iHandle];
+  texture.preserveNextRender = bPreserveTexture && texture.hasRendered;
+  m_iCurrentRenderTargetHandle = iHandle;
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: metal_render_target_set previous=%lu current=%lu "
+        "preserve_requested=%d preserve_effective=%d has_rendered=%d "
+        "logical=%dx%d texture=%dx%d requested_depth=%d requested_alpha=%d "
+        "requested_float=%d",
+        static_cast<unsigned long>(previousHandle),
+        static_cast<unsigned long>(iHandle), bPreserveTexture ? 1 : 0,
+        texture.preserveNextRender ? 1 : 0, texture.hasRendered ? 1 : 0,
+        texture.renderWidth, texture.renderHeight, texture.width,
+        texture.height, texture.requestedDepth ? 1 : 0,
+        texture.requestedAlpha ? 1 : 0, texture.requestedFloat ? 1 : 0);
+  }
+  SetDefaultRenderStates();
+}
+
 void RageDisplay_Metal::DeleteTexture(uintptr_t iTexHandle) {
   if (iTexHandle == 0 || iTexHandle >= m_Textures.size()) {
     return;
+  }
+  if (m_iCurrentRenderTargetHandle == iTexHandle) {
+    FlushBatches();
+    m_iCurrentRenderTargetHandle = 0;
+  }
+  const MetalTexture& texture = m_Textures[iTexHandle];
+  if (PerfDiagnosticsEnabled() && texture.renderTarget) {
+    LOG->Trace(
+        "PERF_TRACE: metal_render_target_deleted handle=%lu has_rendered=%d "
+        "logical=%dx%d texture=%dx%d",
+        static_cast<unsigned long>(iTexHandle), texture.hasRendered ? 1 : 0,
+        texture.renderWidth, texture.renderHeight, texture.width,
+        texture.height);
   }
   ReleaseTexture(&m_Textures[iTexHandle]);
 }
@@ -566,6 +712,7 @@ void RageDisplay_Metal::DestroyAllTextures() {
   m_Textures.clear();
   m_Textures.resize(1);
   m_iActiveTextureHandle = 0;
+  m_iCurrentRenderTargetHandle = 0;
   m_iNextTextureHandle = 1;
 }
 
@@ -738,30 +885,103 @@ RageDisplay_Metal::DrawBatch& RageDisplay_Metal::ActiveBatch() {
   return m_DrawBatches.back();
 }
 
-void RageDisplay_Metal::EndFrame() {
-  if (m_bReady && m_Presenter) {
-    const double targetHz =
-        m_Params.rate > 1 ? static_cast<double>(m_Params.rate) : 60.0;
-    std::vector<DrawBatch> batches;
-    batches.swap(m_DrawBatches);
-    std::vector<MacOSMetalDrawBatch> metalBatches;
-    metalBatches.reserve(batches.size());
-    for (const DrawBatch& batch : batches) {
-      if (batch.vertices.empty()) {
-        continue;
-      }
-      void* texture = nullptr;
-      if (batch.textureHandle > 0 && batch.textureHandle < m_Textures.size()) {
+void RageDisplay_Metal::BuildMetalBatches(
+    const std::vector<DrawBatch>& batches,
+    std::vector<MacOSMetalDrawBatch>* metalBatches) const {
+  if (metalBatches == nullptr) {
+    return;
+  }
+
+  metalBatches->clear();
+  metalBatches->reserve(batches.size());
+  for (const DrawBatch& batch : batches) {
+    if (batch.vertices.empty()) {
+      continue;
+    }
+    void* texture = nullptr;
+    if (batch.textureHandle > 0 && batch.textureHandle < m_Textures.size()) {
+      if (m_iCurrentRenderTargetHandle == 0 ||
+          batch.textureHandle != m_iCurrentRenderTargetHandle) {
         texture = m_Textures[batch.textureHandle].texture;
       }
-      metalBatches.push_back(
-          {batch.vertices.data(), batch.vertices.size(), texture,
-           batch.blendMode, batch.textureMode, batch.effectMode,
-           batch.celStage,
-           batch.zTestMode,
-           batch.cullMode, batch.textureWrapping, batch.textureFiltering,
-           batch.zWrite, batch.alphaTest});
     }
+    metalBatches->push_back(
+        {batch.vertices.data(), batch.vertices.size(), texture,
+         batch.blendMode, batch.textureMode, batch.effectMode,
+         batch.celStage,
+         batch.zTestMode,
+         batch.cullMode, batch.textureWrapping, batch.textureFiltering,
+         batch.zWrite, batch.alphaTest});
+  }
+}
+
+void RageDisplay_Metal::FlushBatches() {
+  if (!m_bReady || m_Presenter == nullptr) {
+    m_DrawBatches.clear();
+    return;
+  }
+
+  std::vector<DrawBatch> batches;
+  batches.swap(m_DrawBatches);
+  std::vector<MacOSMetalDrawBatch> metalBatches;
+  BuildMetalBatches(batches, &metalBatches);
+
+  if (m_iCurrentRenderTargetHandle > 0 &&
+      m_iCurrentRenderTargetHandle < m_Textures.size()) {
+    MetalTexture& target = m_Textures[m_iCurrentRenderTargetHandle];
+    if (!target.renderTarget || target.texture == nullptr) {
+      LOG->Warn(
+          "RageDisplay_Metal: active render target became invalid handle=%lu.",
+          static_cast<unsigned long>(m_iCurrentRenderTargetHandle));
+      m_iCurrentRenderTargetHandle = 0;
+      return;
+    }
+    const bool preserveColor = target.preserveNextRender && target.hasRendered;
+    const int viewportWidth =
+        std::min(target.renderWidth > 0 ? target.renderWidth : target.width,
+                 target.width);
+    const int viewportHeight =
+        std::min(target.renderHeight > 0 ? target.renderHeight : target.height,
+                 target.height);
+    const bool rendered = m_Presenter->RenderSolidBatchesToTexture(
+        target.texture, target.depthTexture, metalBatches.data(),
+        metalBatches.size(), preserveColor, true,
+        0.0, 0.0, 0.0, 0.0, viewportWidth, viewportHeight);
+    if (rendered) {
+      target.hasRendered = true;
+      target.preserveNextRender = true;
+    } else {
+      LOG->Warn(
+          "RageDisplay_Metal: render target submit failed handle=%lu "
+          "batches=%zu.",
+          static_cast<unsigned long>(m_iCurrentRenderTargetHandle),
+          metalBatches.size());
+      target.preserveNextRender = preserveColor;
+    }
+    m_bClearDepthNextFrame = false;
+    return;
+  }
+
+  const double targetHz =
+      m_Params.rate > 1 ? static_cast<double>(m_Params.rate) : 60.0;
+  const bool presented = m_Presenter->PresentSolidBatches(
+      metalBatches.data(), metalBatches.size(), true,
+      0.04, 0.055, 0.075, 1.0, targetHz);
+  m_bClearDepthNextFrame = false;
+  if (!presented) {
+    static uint64_t s_iSkippedClearFrames = 0;
+    ++s_iSkippedClearFrames;
+    if (s_iSkippedClearFrames <= 3 || s_iSkippedClearFrames % 600 == 0) {
+      LOG->Warn(
+          "RageDisplay_Metal: clear present skipped; frames=%llu.",
+          static_cast<unsigned long long>(s_iSkippedClearFrames));
+    }
+  }
+}
+
+void RageDisplay_Metal::EndFrame() {
+  if (m_bReady && m_Presenter) {
+    const std::vector<DrawBatch>& batches = m_DrawBatches;
     static uint64_t s_iMetalFrames = 0;
     ++s_iMetalFrames;
     if (PerfDiagnosticsEnabled() &&
@@ -821,19 +1041,7 @@ void RageDisplay_Metal::EndFrame() {
           finiteVertexCount > 0 ? maxY : 0.0f,
           finiteVertexCount > 0 ? maxZ : 0.0f);
     }
-    const bool presented = m_Presenter->PresentSolidBatches(
-        metalBatches.data(), metalBatches.size(), true,
-        0.04, 0.055, 0.075, 1.0, targetHz);
-    m_bClearDepthNextFrame = false;
-    if (!presented) {
-      static uint64_t s_iSkippedClearFrames = 0;
-      ++s_iSkippedClearFrames;
-      if (s_iSkippedClearFrames <= 3 || s_iSkippedClearFrames % 600 == 0) {
-        LOG->Warn(
-            "RageDisplay_Metal: clear present skipped; frames=%llu.",
-            static_cast<unsigned long long>(s_iSkippedClearFrames));
-      }
-    }
+    FlushBatches();
   }
   if (m_Window) {
     m_Window->Update();
