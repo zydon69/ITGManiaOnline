@@ -53,16 +53,96 @@ static RageDisplay::RagePixelFormatDesc PIXEL_FORMAT_DESC[NUM_RagePixelFormat] =
       16,
       {0x7C00, 0x03E0, 0x001F, 0x0000}}};
 
-class RageCompiledGeometryMetalStub : public RageCompiledGeometry {
- public:
-  void Allocate(const std::vector<msMesh>&) override {}
-  void Change(const std::vector<msMesh>&) override {}
-  void Draw(int /* iMeshIndex */) const override {}
-};
-
 float ByteColorToFloat(uint8_t value) {
   return static_cast<float>(value) / 255.0f;
 }
+
+uint8_t FloatColorToByte(float value) {
+  return static_cast<uint8_t>(
+      std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
+}
+
+RageVColor ToVertexColor(const RageColor& color) {
+  RageVColor out;
+  out.r = FloatColorToByte(color.r);
+  out.g = FloatColorToByte(color.g);
+  out.b = FloatColorToByte(color.b);
+  out.a = FloatColorToByte(color.a);
+  return out;
+}
+
+class RageCompiledGeometryMetal : public RageCompiledGeometry {
+ public:
+  void Allocate(const std::vector<msMesh>& /* vMeshes */) override {
+    const unsigned int verticesCount =
+        std::max<unsigned int>(1u, GetTotalVertices());
+    const unsigned int trianglesCount =
+        std::max<unsigned int>(1u, GetTotalTriangles());
+
+    m_vVertices.resize(verticesCount);
+    m_vTriangles.resize(trianglesCount);
+  }
+
+  void Change(const std::vector<msMesh>& vMeshes) override {
+    for (size_t i = 0; i < vMeshes.size(); ++i) {
+      const MeshInfo& meshInfo = m_vMeshInfo[i];
+      const msMesh& mesh = vMeshes[i];
+
+      for (size_t j = 0; j < mesh.Vertices.size(); ++j) {
+        m_vVertices[meshInfo.iVertexStart + j] = mesh.Vertices[j];
+      }
+
+      for (size_t j = 0; j < mesh.Triangles.size(); ++j) {
+        for (int k = 0; k < 3; ++k) {
+          const int vertexIndex =
+              meshInfo.iVertexStart + mesh.Triangles[j].nVertexIndices[k];
+          m_vTriangles[meshInfo.iTriangleStart + j].nVertexIndices[k] =
+              static_cast<uint16_t>(vertexIndex);
+        }
+      }
+    }
+  }
+
+  void Draw(int /* iMeshIndex */) const override {}
+
+  void EmitTo(
+      RageDisplay_Metal* display, int iMeshIndex,
+      const RageVColor& color) const {
+    if (display == nullptr || iMeshIndex < 0 ||
+        static_cast<size_t>(iMeshIndex) >= m_vMeshInfo.size()) {
+      return;
+    }
+
+    const MeshInfo& meshInfo = m_vMeshInfo[iMeshIndex];
+    if (meshInfo.iTriangleCount <= 0) {
+      return;
+    }
+
+    std::vector<RageSpriteVertex> vertices;
+    vertices.reserve(static_cast<size_t>(meshInfo.iTriangleCount) * 3);
+    for (int i = 0; i < meshInfo.iTriangleCount; ++i) {
+      const msTriangle& tri =
+          m_vTriangles[meshInfo.iTriangleStart + static_cast<size_t>(i)];
+      for (int k = 0; k < 3; ++k) {
+        const uint16_t vertexIndex = tri.nVertexIndices[k];
+        if (vertexIndex >= m_vVertices.size()) {
+          continue;
+        }
+        const RageModelVertex& modelVertex = m_vVertices[vertexIndex];
+        RageSpriteVertex spriteVertex;
+        spriteVertex.p = modelVertex.p;
+        spriteVertex.t = modelVertex.t;
+        spriteVertex.c = color;
+        vertices.push_back(spriteVertex);
+      }
+    }
+    display->DrawCompiledTriangles(vertices);
+  }
+
+ private:
+  std::vector<RageModelVertex> m_vVertices;
+  std::vector<msTriangle> m_vTriangles;
+};
 
 RageMatrix RageDisplay_Metal::CurrentModelViewProjection() const {
   RageMatrix projection;
@@ -109,6 +189,7 @@ RageDisplay_Metal::RageDisplay_Metal()
       m_TextureMode(TextureMode_Modulate),
       m_bTextureWrapping(false),
       m_bTextureFiltering(true),
+      m_MaterialDiffuse(1.0f, 1.0f, 1.0f, 1.0f),
       m_iNextTextureHandle(1),
       m_bReady(false) {
   m_Textures.resize(1);
@@ -329,6 +410,13 @@ void RageDisplay_Metal::SetTextureFiltering(TextureUnit tu, bool filtering) {
   m_bTextureFiltering = filtering;
 }
 
+void RageDisplay_Metal::SetMaterial(
+    const RageColor& /* emissive */, const RageColor& /* ambient */,
+    const RageColor& diffuse, const RageColor& /* specular */,
+    float /* shininess */) {
+  m_MaterialDiffuse = diffuse;
+}
+
 RageDisplay_Metal::DrawBatch& RageDisplay_Metal::ActiveBatch() {
   if (m_DrawBatches.empty() ||
       m_DrawBatches.back().textureHandle != m_iActiveTextureHandle ||
@@ -510,6 +598,32 @@ void RageDisplay_Metal::DrawTrianglesInternal(
   }
 }
 
+void RageDisplay_Metal::DrawCompiledTriangles(
+    const std::vector<RageSpriteVertex>& vertices) {
+  if (vertices.empty()) {
+    return;
+  }
+  DrawTrianglesInternal(vertices.data(), static_cast<int>(vertices.size()));
+}
+
+void RageDisplay_Metal::DrawCompiledGeometryInternal(
+    const RageCompiledGeometry* p, int iMeshIndex) {
+  const RageCompiledGeometryMetal* metalGeometry =
+      dynamic_cast<const RageCompiledGeometryMetal*>(p);
+  if (metalGeometry == nullptr) {
+    static bool s_bWarnedForeignCompiledGeometry = false;
+    if (!s_bWarnedForeignCompiledGeometry) {
+      LOG->Warn(
+          "RageDisplay_Metal: ignoring compiled geometry from another "
+          "renderer implementation.");
+      s_bWarnedForeignCompiledGeometry = true;
+    }
+    return;
+  }
+
+  metalGeometry->EmitTo(this, iMeshIndex, ToVertexColor(m_MaterialDiffuse));
+}
+
 void RageDisplay_Metal::DrawLineStripInternal(
     const RageSpriteVertex v[], int iNumVerts, float LineWidth) {
   if (v == nullptr || iNumVerts < 2 || LineWidth <= 0.0f) {
@@ -547,7 +661,7 @@ void RageDisplay_Metal::DrawSymmetricQuadStripInternal(
 }
 
 RageCompiledGeometry* RageDisplay_Metal::CreateCompiledGeometry() {
-  return new RageCompiledGeometryMetalStub;
+  return new RageCompiledGeometryMetal;
 }
 
 void RageDisplay_Metal::DeleteCompiledGeometry(RageCompiledGeometry* p) {

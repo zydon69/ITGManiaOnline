@@ -67,7 +67,7 @@ class RageDisplay_Metal : public RageDisplay {
   void SetMaterial(
       const RageColor& emissive, const RageColor& ambient,
       const RageColor& diffuse, const RageColor& specular,
-      float shininess) override {}
+      float shininess) override;
   void SetLighting(bool) override {}
   void SetLightOff(int index) override {}
   void SetLightDirectional(
@@ -90,7 +90,7 @@ class RageDisplay_Metal : public RageDisplay {
   void DrawTrianglesInternal(
       const RageSpriteVertex v[], int iNumVerts) override;
   void DrawCompiledGeometryInternal(
-      const RageCompiledGeometry* p, int iMeshIndex) override {}
+      const RageCompiledGeometry* p, int iMeshIndex) override;
   void DrawLineStripInternal(
       const RageSpriteVertex v[], int iNumVerts, float LineWidth) override;
   void DrawSymmetricQuadStripInternal(
@@ -100,6 +100,8 @@ class RageDisplay_Metal : public RageDisplay {
       const VideoModeParams& p, bool& bNewDeviceOut) override;
 
  private:
+  friend class RageCompiledGeometryMetal;
+
   struct MetalTexture {
     void* texture = nullptr;
     int width = 0;
@@ -121,6 +123,8 @@ class RageDisplay_Metal : public RageDisplay {
   bool UploadTexturePixels(
       MetalTexture* texture, RageSurface* img, int xoffset, int yoffset,
       int width, int height);
+  void DrawCompiledTriangles(
+      const std::vector<RageSpriteVertex>& vertices);
 
   ActualVideoModeParams m_Params;
   std::unique_ptr<LowLevelWindow> m_Window;
@@ -132,6 +136,7 @@ class RageDisplay_Metal : public RageDisplay {
   TextureMode m_TextureMode;
   bool m_bTextureWrapping;
   bool m_bTextureFiltering;
+  RageColor m_MaterialDiffuse;
   uintptr_t m_iNextTextureHandle;
   bool m_bReady;
 };
