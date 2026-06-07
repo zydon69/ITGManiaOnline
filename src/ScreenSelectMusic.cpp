@@ -196,6 +196,7 @@ void ScreenSelectMusic::Init() {
     m_bSelectIsDown[p] = false;  // used by UpdateSelectButton
     m_bAcceptSelectRelease[p] = false;
   }
+  m_bPreviewSuspendedForPrompt = false;
 
   ScreenWithMenuElements::Init();
 
@@ -365,6 +366,10 @@ ScreenSelectMusic::~ScreenSelectMusic() {
 // If bForce is true, the next request will be started even if it might cause a
 // skip.
 void ScreenSelectMusic::CheckBackgroundRequests(bool bForce) {
+  if (m_bPreviewSuspendedForPrompt) {
+    return;
+  }
+
   if (g_bCDTitleWaiting) {
     // The CDTitle is normally very small, so we don't bother waiting to display
     // it.
@@ -447,24 +452,31 @@ void ScreenSelectMusic::CheckBackgroundRequests(bool bForce) {
     }
 
     g_bSampleMusicWaiting = false;
-
-    GameSoundManager::PlayMusicParams PlayParams;
-    PlayParams.sFile = HandleLuaMusicFile(m_sSampleMusicToPlay);
-    PlayParams.pTiming = m_pSampleMusicTimingData;
-    PlayParams.bForceLoop = SAMPLE_MUSIC_LOOPS;
-    PlayParams.fStartSecond = m_fSampleStartSeconds;
-    PlayParams.fLengthSeconds = m_fSampleLengthSeconds;
-    PlayParams.fFadeOutLengthSeconds = SAMPLE_MUSIC_FADE_OUT_SECONDS;
-    PlayParams.bAlignBeat = ALIGN_MUSIC_BEATS;
-    PlayParams.bApplyMusicRate = true;
-
-    GameSoundManager::PlayMusicParams FallbackMusic;
-    FallbackMusic.sFile = m_sLoopMusicPath;
-    FallbackMusic.fFadeInLengthSeconds = SAMPLE_MUSIC_FALLBACK_FADE_IN_SECONDS;
-    FallbackMusic.bAlignBeat = ALIGN_MUSIC_BEATS;
-
-    SOUND->PlayMusic(PlayParams, FallbackMusic);
+    StartSampleMusicPreviewNow();
   }
+}
+
+void ScreenSelectMusic::StartSampleMusicPreviewNow() {
+  if (m_sSampleMusicToPlay.empty()) {
+    return;
+  }
+
+  GameSoundManager::PlayMusicParams PlayParams;
+  PlayParams.sFile = HandleLuaMusicFile(m_sSampleMusicToPlay);
+  PlayParams.pTiming = m_pSampleMusicTimingData;
+  PlayParams.bForceLoop = SAMPLE_MUSIC_LOOPS;
+  PlayParams.fStartSecond = m_fSampleStartSeconds;
+  PlayParams.fLengthSeconds = m_fSampleLengthSeconds;
+  PlayParams.fFadeOutLengthSeconds = SAMPLE_MUSIC_FADE_OUT_SECONDS;
+  PlayParams.bAlignBeat = ALIGN_MUSIC_BEATS;
+  PlayParams.bApplyMusicRate = true;
+
+  GameSoundManager::PlayMusicParams FallbackMusic;
+  FallbackMusic.sFile = m_sLoopMusicPath;
+  FallbackMusic.fFadeInLengthSeconds = SAMPLE_MUSIC_FALLBACK_FADE_IN_SECONDS;
+  FallbackMusic.bAlignBeat = ALIGN_MUSIC_BEATS;
+
+  SOUND->PlayMusic(PlayParams, FallbackMusic);
 }
 
 void ScreenSelectMusic::Update(float fDeltaTime) {
@@ -1242,6 +1254,9 @@ void ScreenSelectMusic::HandleScreenMessage(const ScreenMessage SM) {
   } else if (SM == SM_ConfirmExit) {
     if (ScreenPrompt::s_LastAnswer == ANSWER_YES) {
       ConfirmedCancel(SM_GoToPrevScreen);
+    } else {
+      m_bPreviewSuspendedForPrompt = false;
+      StartSampleMusicPreviewNow();
     }
   }
 
@@ -1591,6 +1606,12 @@ bool ScreenSelectMusic::MenuBack(const InputEventPlus& /* input */) {
 
 void ScreenSelectMusic::Cancel(ScreenMessage smSendWhenDone) {
   if (CONFIRM_EXIT) {
+    m_bPreviewSuspendedForPrompt = true;
+    g_bCDTitleWaiting = false;
+    g_bBannerWaiting = false;
+    g_bSampleMusicWaiting = false;
+    m_BackgroundLoader.Abort();
+    SOUND->StopMusic();
     m_MusicWheel.Move(0);
     ScreenPrompt::Prompt(
         SM_ConfirmExit, PROMPT_BEFORE_EXITING.GetValue().c_str(),
@@ -1601,6 +1622,7 @@ void ScreenSelectMusic::Cancel(ScreenMessage smSendWhenDone) {
 }
 
 void ScreenSelectMusic::ConfirmedCancel(ScreenMessage smSendWhenDone) {
+  m_bPreviewSuspendedForPrompt = false;
   m_BackgroundLoader.Abort();
   ScreenWithMenuElements::Cancel(smSendWhenDone);
 }
@@ -2037,7 +2059,7 @@ void ScreenSelectMusic::AfterMusicChange() {
 
   // Don't stop music if it's already playing the right file.
   g_bSampleMusicWaiting = false;
-  if (!m_MusicWheel.IsRouletting() &&
+  if (!m_bPreviewSuspendedForPrompt && !m_MusicWheel.IsRouletting() &&
       SOUND->GetMusicPath() != m_sSampleMusicToPlay) {
     SOUND->StopMusic();
     // some SampleMusicPreviewModes don't want the sample music immediately.

@@ -1,4 +1,4 @@
-local choices, choice_actors = {}, {}
+local choices, choice_actors, choice_backgrounds = {}, {}, {}
 local TopScreen = nil
 local MPN = GAMESTATE:GetMasterPlayerNumber()
 local last_description_key = nil
@@ -15,12 +15,63 @@ local cursor = {
 	width = 90,
 }
 
+local function ChoiceWidth(index)
+	local actor = choice_actors[index]
+	if not actor then return cursor.min_w end
+	return clamp(actor:GetWidth()/1.4, cursor.min_w, cursor.max_w)
+end
+
+local function RefreshChoiceBackground(index, tween)
+	local actor = choice_backgrounds[index]
+	if not actor then return end
+
+	local exists = choices[index] ~= nil
+	actor:visible(exists)
+	if not exists then return end
+
+	actor:stoptweening()
+	if tween then actor:linear(0.1) end
+	actor:zoomtowidth(ChoiceWidth(index))
+end
+
+local function RefreshChoiceBackgrounds(tween)
+	for i=1,4 do
+		RefreshChoiceBackground(i, tween)
+	end
+end
+
+local function RefreshCurrentChoiceLayout()
+	current_choice = choices[cursor.index+1]
+
+	local actor = choice_actors[cursor.index+1]
+	if actor then
+		cursor.width = ChoiceWidth(cursor.index+1)
+	else
+		cursor.width = cursor.min_w
+	end
+end
+
+local function ChoiceBackground(index)
+	return Def.Quad{
+		InitCommand=function(self)
+			choice_backgrounds[index] = self
+			self:diffuse(0.2,0.2,0.2,1)
+				:x(-188)
+				:y(-60 + (cursor.h * (index-1)))
+				:zoomto(cursor.min_w, 38)
+		end,
+		OnCommand=function(self) RefreshChoiceBackground(index, false) end,
+		UpdateCommand=function(self) RefreshChoiceBackground(index, true) end,
+		OffCommand=function(self) self:sleep(0.5 - index*0.1):linear(0.1):diffusealpha(0) end
+	}
+end
+
 local Update = function(af)
 	if not TopScreen then return end
 	local index = TopScreen:GetSelectionIndex(MPN)
 	if index ~= cursor.index then
 		cursor.index = index
-		current_choice = choices[cursor.index+1]
+		RefreshCurrentChoiceLayout()
 
 		-- queue the appropriate command to the faux playfield, if needed
 		if ScreenName=="ScreenSelectPlayMode2" then
@@ -33,10 +84,7 @@ local Update = function(af)
 
 		-- queue an "Update" to the AF containing the cursor, description text, score, and lifemeter actors
 		-- since they are children of that AF, they will also listen for that command
-		local actor = choice_actors[cursor.index+1]
-		if actor then
-			cursor.width = clamp(actor:GetWidth()/1.4, cursor.min_w, cursor.max_w)
-		end
+		RefreshChoiceBackgrounds(true)
 		af:queuecommand("Update")
 	end
 end
@@ -91,9 +139,17 @@ local t = Def.ActorFrame{
 			choices[#choices+1] = choice
 			choice_actors[#choice_actors+1] = TopScreen:GetChild("IconChoice"..choice)
 		end
-		current_choice = choices[cursor.index+1]
+		RefreshCurrentChoiceLayout()
     	TopScreen:AddInputCallback(InputHandler)
 
+		RefreshChoiceBackgrounds(false)
+		self:queuecommand("Update")
+		self:sleep(0):queuecommand("RefreshInitialChoiceLayout")
+		self:sleep(0.05):queuecommand("RefreshInitialChoiceLayout")
+	end,
+	RefreshInitialChoiceLayoutCommand=function(self)
+		RefreshCurrentChoiceLayout()
+		RefreshChoiceBackgrounds(false)
 		self:queuecommand("Update")
 	end,
 	OffCommand=function(self)
@@ -103,6 +159,7 @@ local t = Def.ActorFrame{
 		TopScreen = nil
 		choices = {}
 		choice_actors = {}
+		choice_backgrounds = {}
 		current_choice = nil
 		last_description_key = nil
 	end,
@@ -117,25 +174,10 @@ local t = Def.ActorFrame{
 
 	-- gray backgrounds
 	Def.ActorFrame{
-		InitCommand=function(self) self:x(-188) end,
-		Def.Quad{
-			InitCommand=function(self) self:diffuse(0.2,0.2,0.2,1):zoomto(90,38):y(-60) end,
-			OffCommand=function(self) self:sleep(0.4):linear(0.1):diffusealpha(0) end
-		},
-		Def.Quad{
-			InitCommand=function(self) self:diffuse(0.2,0.2,0.2,1):zoomto(90,38):y(-20) end,
-			OffCommand=function(self) self:sleep(0.3):linear(0.1):diffusealpha(0) end
-		},
-		Def.Quad{
-			InitCommand=function(self) self:diffuse(0.2,0.2,0.2,1):zoomto(90,38):y(20) end,
-			OnCommand=function(self) if choices[3]==nil then self:visible(false) end end,
-			OffCommand=function(self) self:sleep(0.2):linear(0.1):diffusealpha(0) end
-		},
-		Def.Quad{
-			InitCommand=function(self) self:diffuse(0.2,0.2,0.2,1):zoomto(90,38):y(60) end,
-			OnCommand=function(self) if choices[4]==nil then self:visible(false) end end,
-			OffCommand=function(self) self:sleep(0.1):linear(0.1):diffusealpha(0) end
-		},
+		ChoiceBackground(1),
+		ChoiceBackground(2),
+		ChoiceBackground(3),
+		ChoiceBackground(4),
 	},
 
 	-- border
@@ -185,6 +227,7 @@ local t = Def.ActorFrame{
 			if ScreenName == "ScreenSelectPlayMode" then
 				cursor.index = (FindInTable(ThemePrefs.Get("DefaultGameMode"), choices) or 2) - 1
 			end
+			RefreshCurrentChoiceLayout()
 			self:x(-150):y( -60 + (cursor.h * cursor.index) )
 		end,
 		UpdateCommand=function(self)

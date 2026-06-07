@@ -22,8 +22,7 @@ local reverseOffset = THEME:GetMetric("Player", "ReceptorArrowsYReverse")
 local fadeTime = 0.15
 local curIndex = 1
 local updatedFirstTime = false
-local breakTime = 0
-local text = nil
+local activeColumnCues = {}
 
 local font = mods.ComboFont
 if font == "Wendy" or font == "Wendy (Cursed)" then
@@ -32,12 +31,54 @@ else
 	font = "_Combo Fonts/" .. font .. "/"
 end
 
+local function GetCueAlpha(curTime, cue)
+	local elapsed = curTime - cue.startTime
+	local remaining = cue.endTime - curTime
+	if elapsed < 0 or remaining <= 0 then return 0 end
+	if elapsed < fadeTime then return elapsed / fadeTime end
+	if remaining < fadeTime then return remaining / fadeTime end
+	return 1
+end
+
+local function UpdateColumnCueVisuals(self, curTime)
+	for col=1,numColumns do
+		local column = self:GetChild("Column"..col)
+		local flash = column and column:GetChild("ColumnFlash")
+		local countdown = column and column:GetChild("ColumnText")
+		local cue = activeColumnCues[col]
+
+		if cue and curTime < cue.endTime then
+			local alpha = GetCueAlpha(curTime, cue)
+			if flash then
+				if cue.isMine then
+					flash:diffuse(1, 0, 0, 0.12 * alpha)
+				else
+					flash:diffuse(0.3, 1, 1, 0.12 * alpha)
+				end
+			end
+
+			if countdown then
+				local remaining = cue.endTime - curTime
+				if cue.showCountdown and remaining > 0.5 then
+					countdown:settext(round(remaining)):diffuse(Color.White)
+				else
+					countdown:diffuse(0,0,0,0)
+				end
+			end
+		else
+			activeColumnCues[col] = nil
+			if flash then flash:diffuse(0,0,0,0) end
+			if countdown then countdown:diffuse(0,0,0,0) end
+		end
+	end
+end
+
 local Update = function(self, delta)
 	local topScreen = SCREENMAN:GetTopScreen()
 	if topScreen and topScreen.IsPaused and topScreen:IsPaused() then return end
 
+	local curTime = playerState:GetSongPosition():GetMusicSecondsVisible()
 	if curIndex <= #columnCues then
-		local curTime = playerState:GetSongPosition():GetMusicSecondsVisible()
 		local columnCue = columnCues[curIndex]
 		local startTime = columnCue.startTime
 		local duration = columnCue.duration
@@ -56,25 +97,26 @@ local Update = function(self, delta)
 			updatedFirstTime = true
 		end
 		if startTime <= curTime then
-			-- Get the current music rate.
-			-- Note that Lua files might change the rate mode so this might not be accurate.
-			-- It's hard to handle that case since we don't exactly know when a file will apply a rate mod.
-			local rate = SL.Global.ActiveModifiers.MusicRate
-			local scaledDuration = duration / rate
-			-- Make sure there's still something to display after any potential scaling.
-			if scaledDuration > 2 * fadeTime then
+			-- Recompute visual state from MusicSecondsVisible every update instead
+			-- of using sleep/tween timing. This keeps cues tied to chart time and
+			-- prevents TAB haste from accelerating the cue animation.
+			if duration > 2 * fadeTime then
 				for col_mine in ivalues(columnCue.columns) do
 					local col = columnMapping[col_mine.colNum]
 					local isMine = col_mine.isMine
-					self:GetChild("Column"..col):GetChild("ColumnFlash"):playcommand("Flash", {
-						duration=scaledDuration,
-						isMine=isMine
-					})
+					activeColumnCues[col] = {
+						startTime=startTime,
+						endTime=startTime + duration,
+						isMine=isMine,
+						showCountdown=duration >= 5,
+					}
 				end
 			end
 			curIndex = curIndex + 1
 		end
 	end
+
+	UpdateColumnCueVisuals(self, curTime)
 end
 
 local af = Def.ActorFrame{
@@ -105,9 +147,11 @@ local af = Def.ActorFrame{
 		columnCues = SL[pn].Streams.ColumnCues
 		curIndex = 1
 		updatedFirstTime = false
+		activeColumnCues = {}
 	end,
 	PlayingCommand=function(self)
 		curIndex = 1
+		activeColumnCues = {}
 	end,
 }
 
@@ -171,26 +215,8 @@ for columnIndex=1,numColumns do
 				end
 			end,
 			FlashCommand=function(self, params)
-				local flashDuration = params.duration
 				local clr = params.isMine and color("1,0,0,0.12") or color("0.3,1,1,0.12")
-				self:stoptweening()
-					:decelerate(fadeTime)
-					:diffuse(clr)
-					:sleep(flashDuration - 2*fadeTime)
-					:accelerate(fadeTime)
-					:diffuse(0,0,0,0)
-
-				if flashDuration >= 5 then
-					breakTime = flashDuration
-					if text ~= nil then
-						text:stoptweening()
-							:x((columnIndex - (numColumns/2 + 0.5)) * (width/numColumns))
-							:decelerate(fadeTime)
-							:diffuse(Color.White)
-							:settext(round(flashDuration, 1))
-							:playcommand("UpdateBreak")
-					end
-				end
+				self:stoptweening():diffuse(clr)
 			end
 		},
 		Def.BitmapText {
@@ -209,23 +235,6 @@ for columnIndex=1,numColumns do
 					self:y(260)
 				else
 					self:y(80)
-				end
-					
-				text = self
-			end,
-			UpdateBreakCommand=function(self)
-				-- if BreakTime == nil then BreakTime = 0 end
-				if breakTime > 0.5 then
-					breakTime = breakTime - 0.1
-					if breakTime > 0.5 then
-						self:sleep(0.1)
-							:settext(round(breakTime))
-							:queuecommand("UpdateBreak")
-					else
-						self:diffuse(0,0,0,0)
-					end
-				else
-					self:diffuse(0,0,0,0)
 				end
 			end,
 		}

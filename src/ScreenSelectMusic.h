@@ -84,6 +84,7 @@ class ScreenSelectMusic : public ScreenWithMenuElements {
   void AfterMusicChange();
 
   void CheckBackgroundRequests(bool bForce);
+  void StartSampleMusicPreviewNow();
   bool DetectCodes(const InputEventPlus& input);
 
   std::vector<Steps*> m_vpSteps;
@@ -176,6 +177,7 @@ class ScreenSelectMusic : public ScreenWithMenuElements {
   bool m_bAllowOptionsMenu, m_bAllowOptionsMenuRepeat;
   bool m_bSelectIsDown[NUM_PLAYERS];
   bool m_bAcceptSelectRelease[NUM_PLAYERS];
+  bool m_bPreviewSuspendedForPrompt;
 
   bool m_bPreviewDisabled;
 

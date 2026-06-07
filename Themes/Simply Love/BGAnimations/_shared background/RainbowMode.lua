@@ -12,6 +12,13 @@ local index = SL.Global.ActiveColorIndex
 -- change this variable in the AF's OnCommand so that color-shifts tween appropriately
 local delay = 0
 
+local function LoadSharedBackground(sprite, path)
+	sprite:Load(nil)
+	if path then
+		sprite:Load(path)
+	end
+end
+
 local af1 = Def.ActorFrame{
 	InitCommand=function(self)
 		local style = ThemePrefs.Get("VisualStyle")
@@ -46,7 +53,9 @@ local af2 = Def.ActorFrame{
 	VisualStyleSelectedMessageCommand=function(self)
 		if ThemePrefs.Get("RainbowMode") then
 			local new_file = THEME:GetPathG("", "_VisualStyles/" .. ThemePrefs.Get("VisualStyle") .. "/SharedBackground.png")
-			self:RunCommandsOnChildren(function(child) child:Load(new_file) end)
+			self:RunCommandsOnChildren(function(child) LoadSharedBackground(child, new_file) end)
+		else
+			self:RunCommandsOnChildren(function(child) LoadSharedBackground(child, nil) end)
 		end
 	end,
 
@@ -80,7 +89,7 @@ for i=1,25 do
 		end,
 		OnCommand=function(self)
 			if ShouldShowRainbow() then
-				self:Load(file)
+				LoadSharedBackground(self, file)
 			end
 			self:customtexturerect(0,0,1,1)
 			    :texcoordvelocity(anim_data.tv_x[i], anim_data.tv_y[i])
