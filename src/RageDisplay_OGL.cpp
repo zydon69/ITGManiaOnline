@@ -1043,8 +1043,27 @@ void InitShaders() {
   g_hYUYV422Shader = LoadShader(
       GL_FRAGMENT_SHADER_ARB, "Data/Shaders/GLSL/YUYV422.frag", asDefines);
 
+#if defined(MACOSX)
+  if (g_bTextureMatrixShader) {
+    LOG->Warn(
+        "Scaling shader disabled on macOS OpenGL: vertex attribute binding is "
+        "unstable on this context.");
+    glDeleteObjectARB(g_bTextureMatrixShader);
+    g_bTextureMatrixShader = 0;
+  }
+#endif
+
   // Bind attributes.
   if (g_bTextureMatrixShader) {
+    if (glGetAttribLocationARB == nullptr || glVertexAttrib2fARB == nullptr) {
+      LOG->Warn(
+          "Scaling shader disabled: required vertex attribute functions are "
+          "not available in this OpenGL context.");
+      glDeleteObjectARB(g_bTextureMatrixShader);
+      g_bTextureMatrixShader = 0;
+      return;
+    }
+
     FlushGLErrors();
     g_iAttribTextureMatrixScale =
         glGetAttribLocationARB(g_bTextureMatrixShader, "TextureMatrixScale");
@@ -1411,10 +1430,16 @@ void RageDisplay_Legacy::ResolutionChanged() {
   // LOG->Warn( "RageDisplay_Legacy::ResolutionChanged" );
   ResetFramePresentationTelemetry();
 
-  /* Clear any junk that's in the framebuffer. */
-  if (BeginFrame()) {
-    EndFrame();
-  }
+  /*
+   * Clear any junk that's in the framebuffer without going through EndFrame().
+   * The full presentation path can depend on runtime pacing state that is not
+   * fully established during the initial video-mode transition.
+   */
+  const ActualVideoModeParams mode = g_pWind->GetActualVideoModeParams();
+  glViewport(0, 0, mode.windowWidth, mode.windowHeight);
+  glClearColor(0, 0, 0, 0);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  glFlush();
 
   RageDisplay::ResolutionChanged();
 
