@@ -426,11 +426,8 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
       @"#include <metal_stdlib>\n"
        "using namespace metal;\n"
        "struct VertexIn {\n"
-       "  float2 position;\n"
+       "  float3 position;\n"
        "  float4 color;\n"
-       "};\n"
-       "struct Uniforms {\n"
-       "  float2 viewport;\n"
        "};\n"
        "struct VertexOut {\n"
        "  float4 position [[position]];\n"
@@ -438,14 +435,12 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
        "};\n"
        "vertex VertexOut solid_vertex(\n"
        "    const device VertexIn* vertices [[buffer(0)]],\n"
-       "    constant Uniforms& uniforms [[buffer(1)]],\n"
        "    uint vertexID [[vertex_id]]) {\n"
        "  const VertexIn in = vertices[vertexID];\n"
-       "  const float2 ndc = float2(\n"
-       "      (in.position.x / uniforms.viewport.x) * 2.0 - 1.0,\n"
-       "      1.0 - (in.position.y / uniforms.viewport.y) * 2.0);\n"
        "  VertexOut out;\n"
-       "  out.position = float4(ndc, 0.0, 1.0);\n"
+       "  out.position = float4(in.position.xy,\n"
+       "                        in.position.z * 0.5 + 0.5,\n"
+       "                        1.0);\n"
        "  out.color = in.color;\n"
        "  return out;\n"
        "}\n"
@@ -983,15 +978,6 @@ bool MacOSMetalPresenter::PresentSolidVertices(
     }
   }
 
-  struct SolidUniforms {
-    float viewport[2];
-  };
-  const SolidUniforms uniforms = {{
-      static_cast<float>(std::max<CGFloat>(1.0, impl->layer.drawableSize.width)),
-      static_cast<float>(
-          std::max<CGFloat>(1.0, impl->layer.drawableSize.height)),
-  }};
-
   RageTimer submitTimer;
   id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
   if (commandBuffer == nil) {
@@ -1027,7 +1013,6 @@ bool MacOSMetalPresenter::PresentSolidVertices(
 
   [encoder setRenderPipelineState:impl->solidPipeline];
   [encoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
-  [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
   [encoder drawPrimitives:MTLPrimitiveTypeTriangle
               vertexStart:0
               vertexCount:static_cast<NSUInteger>(vertexCount)];

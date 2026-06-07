@@ -11,6 +11,7 @@
 #include "ModelTypes.h"
 #include "RageDisplay.h"
 #include "RageLog.h"
+#include "RageMath.h"
 #include "arch/LowLevelWindow/LowLevelWindow.h"
 #include "arch/LowLevelWindow/MacOSMetalPresenter.h"
 #include "global.h"
@@ -58,10 +59,27 @@ float ByteColorToFloat(uint8_t value) {
   return static_cast<float>(value) / 255.0f;
 }
 
-MacOSMetalSolidVertex ToMetalSolidVertex(const RageSpriteVertex& v) {
+RageMatrix RageDisplay_Metal::CurrentModelViewProjection() const {
+  RageMatrix projection;
+  RageMatrixMultiply(&projection, GetCentering(), GetProjectionTop());
+
+  RageMatrix modelView;
+  RageMatrixMultiply(&modelView, GetViewTop(), GetWorldTop());
+
+  RageMatrix modelViewProjection;
+  RageMatrixMultiply(&modelViewProjection, &modelView, &projection);
+  return modelViewProjection;
+}
+
+MacOSMetalSolidVertex ToMetalSolidVertex(
+    const RageSpriteVertex& v, const RageMatrix& modelViewProjection) {
+  RageVector3 transformed;
+  RageVec3TransformCoord(&transformed, &v.p, &modelViewProjection);
+
   MacOSMetalSolidVertex out;
-  out.x = v.p.x;
-  out.y = v.p.y;
+  out.x = transformed.x;
+  out.y = transformed.y;
+  out.z = transformed.z;
   out.r = ByteColorToFloat(v.c.r);
   out.g = ByteColorToFloat(v.c.g);
   out.b = ByteColorToFloat(v.c.b);
@@ -72,10 +90,10 @@ MacOSMetalSolidVertex ToMetalSolidVertex(const RageSpriteVertex& v) {
 void AppendTriangle(
     std::vector<MacOSMetalSolidVertex>* vertices,
     const RageSpriteVertex& a, const RageSpriteVertex& b,
-    const RageSpriteVertex& c) {
-  vertices->push_back(ToMetalSolidVertex(a));
-  vertices->push_back(ToMetalSolidVertex(b));
-  vertices->push_back(ToMetalSolidVertex(c));
+    const RageSpriteVertex& c, const RageMatrix& modelViewProjection) {
+  vertices->push_back(ToMetalSolidVertex(a, modelViewProjection));
+  vertices->push_back(ToMetalSolidVertex(b, modelViewProjection));
+  vertices->push_back(ToMetalSolidVertex(c, modelViewProjection));
 }
 
 RageDisplay_Metal::RageDisplay_Metal()
@@ -137,9 +155,9 @@ void RageDisplay_Metal::EndFrame() {
     std::vector<MacOSMetalSolidVertex> vertices;
     vertices.swap(m_SolidVertices);
     if (vertices.empty()) {
-      vertices.push_back({32.0f, 32.0f, 0.15f, 0.85f, 1.0f, 1.0f});
-      vertices.push_back({192.0f, 32.0f, 1.0f, 0.35f, 0.55f, 1.0f});
-      vertices.push_back({32.0f, 192.0f, 0.95f, 0.95f, 0.2f, 1.0f});
+      vertices.push_back({-0.95f, 0.95f, 0.0f, 0.15f, 0.85f, 1.0f, 1.0f});
+      vertices.push_back({-0.70f, 0.95f, 0.0f, 1.0f, 0.35f, 0.55f, 1.0f});
+      vertices.push_back({-0.95f, 0.70f, 0.0f, 0.95f, 0.95f, 0.2f, 1.0f});
     }
     const bool presented = m_Presenter->PresentSolidVertices(
         vertices.data(), vertices.size(), 0.04, 0.055, 0.075, 1.0, targetHz);
@@ -167,9 +185,70 @@ void RageDisplay_Metal::DrawQuadsInternal(
 
   m_SolidVertices.reserve(
       m_SolidVertices.size() + static_cast<size_t>(iNumVerts / 4) * 6);
+  const RageMatrix modelViewProjection = CurrentModelViewProjection();
   for (int i = 0; i + 3 < iNumVerts; i += 4) {
-    AppendTriangle(&m_SolidVertices, v[i + 0], v[i + 1], v[i + 2]);
-    AppendTriangle(&m_SolidVertices, v[i + 2], v[i + 1], v[i + 3]);
+    AppendTriangle(
+        &m_SolidVertices, v[i + 0], v[i + 1], v[i + 2],
+        modelViewProjection);
+    AppendTriangle(
+        &m_SolidVertices, v[i + 2], v[i + 1], v[i + 3],
+        modelViewProjection);
+  }
+}
+
+void RageDisplay_Metal::DrawQuadStripInternal(
+    const RageSpriteVertex v[], int iNumVerts) {
+  if (v == nullptr || iNumVerts < 4) {
+    return;
+  }
+
+  m_SolidVertices.reserve(
+      m_SolidVertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
+  const RageMatrix modelViewProjection = CurrentModelViewProjection();
+  for (int i = 0; i + 3 < iNumVerts; i += 2) {
+    AppendTriangle(
+        &m_SolidVertices, v[i + 0], v[i + 1], v[i + 2],
+        modelViewProjection);
+    AppendTriangle(
+        &m_SolidVertices, v[i + 2], v[i + 1], v[i + 3],
+        modelViewProjection);
+  }
+}
+
+void RageDisplay_Metal::DrawFanInternal(
+    const RageSpriteVertex v[], int iNumVerts) {
+  if (v == nullptr || iNumVerts < 3) {
+    return;
+  }
+
+  m_SolidVertices.reserve(
+      m_SolidVertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
+  const RageMatrix modelViewProjection = CurrentModelViewProjection();
+  for (int i = 1; i + 1 < iNumVerts; ++i) {
+    AppendTriangle(
+        &m_SolidVertices, v[0], v[i], v[i + 1], modelViewProjection);
+  }
+}
+
+void RageDisplay_Metal::DrawStripInternal(
+    const RageSpriteVertex v[], int iNumVerts) {
+  if (v == nullptr || iNumVerts < 3) {
+    return;
+  }
+
+  m_SolidVertices.reserve(
+      m_SolidVertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
+  const RageMatrix modelViewProjection = CurrentModelViewProjection();
+  for (int i = 0; i + 2 < iNumVerts; ++i) {
+    if ((i % 2) == 0) {
+      AppendTriangle(
+          &m_SolidVertices, v[i], v[i + 1], v[i + 2],
+          modelViewProjection);
+    } else {
+      AppendTriangle(
+          &m_SolidVertices, v[i + 1], v[i], v[i + 2],
+          modelViewProjection);
+    }
   }
 }
 
@@ -181,8 +260,11 @@ void RageDisplay_Metal::DrawTrianglesInternal(
 
   m_SolidVertices.reserve(
       m_SolidVertices.size() + static_cast<size_t>(iNumVerts));
+  const RageMatrix modelViewProjection = CurrentModelViewProjection();
   for (int i = 0; i + 2 < iNumVerts; i += 3) {
-    AppendTriangle(&m_SolidVertices, v[i + 0], v[i + 1], v[i + 2]);
+    AppendTriangle(
+        &m_SolidVertices, v[i + 0], v[i + 1], v[i + 2],
+        modelViewProjection);
   }
 }
 

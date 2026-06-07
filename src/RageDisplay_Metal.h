@@ -12,6 +12,7 @@
 #include "arch/LowLevelWindow/MacOSMetalPresenter.h"
 
 class LowLevelWindow;
+struct RageMatrix;
 
 /*
  * This class is intentionally only a renderer-registration skeleton for now.
@@ -86,9 +87,9 @@ class RageDisplay_Metal : public RageDisplay {
   void DrawQuadsInternal(
       const RageSpriteVertex v[], int iNumVerts) override;
   void DrawQuadStripInternal(
-      const RageSpriteVertex v[], int iNumVerts) override {}
-  void DrawFanInternal(const RageSpriteVertex v[], int iNumVerts) override {}
-  void DrawStripInternal(const RageSpriteVertex v[], int iNumVerts) override {}
+      const RageSpriteVertex v[], int iNumVerts) override;
+  void DrawFanInternal(const RageSpriteVertex v[], int iNumVerts) override;
+  void DrawStripInternal(const RageSpriteVertex v[], int iNumVerts) override;
   void DrawTrianglesInternal(
       const RageSpriteVertex v[], int iNumVerts) override;
   void DrawCompiledGeometryInternal(
@@ -102,6 +103,8 @@ class RageDisplay_Metal : public RageDisplay {
       const VideoModeParams& p, bool& bNewDeviceOut) override;
 
  private:
+  RageMatrix CurrentModelViewProjection() const;
+
   ActualVideoModeParams m_Params;
   std::unique_ptr<LowLevelWindow> m_Window;
   std::unique_ptr<MacOSMetalPresenter> m_Presenter;
