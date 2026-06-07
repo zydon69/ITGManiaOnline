@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -377,6 +378,23 @@ void RageDisplay_Metal::EndFrame() {
            batch.blendMode, batch.textureMode, batch.textureWrapping,
            batch.textureFiltering});
     }
+    static uint64_t s_iMetalFrames = 0;
+    ++s_iMetalFrames;
+    if (s_iMetalFrames <= 5 || s_iMetalFrames % 600 == 0) {
+      size_t vertexCount = 0;
+      std::set<uintptr_t> textureHandles;
+      for (const DrawBatch& batch : batches) {
+        vertexCount += batch.vertices.size();
+        if (batch.textureHandle != 0) {
+          textureHandles.insert(batch.textureHandle);
+        }
+      }
+      LOG->Trace(
+          "RageDisplay_Metal frame: frame=%llu batches=%zu vertices=%zu "
+          "textures=%zu",
+          static_cast<unsigned long long>(s_iMetalFrames), batches.size(),
+          vertexCount, textureHandles.size());
+    }
     const bool presented = m_Presenter->PresentSolidBatches(
         metalBatches.data(), metalBatches.size(), 0.04, 0.055, 0.075, 1.0,
         targetHz);
@@ -488,6 +506,42 @@ void RageDisplay_Metal::DrawTrianglesInternal(
   for (int i = 0; i + 2 < iNumVerts; i += 3) {
     AppendTriangle(
         &batch.vertices, v[i + 0], v[i + 1], v[i + 2],
+        modelViewProjection);
+  }
+}
+
+void RageDisplay_Metal::DrawLineStripInternal(
+    const RageSpriteVertex v[], int iNumVerts, float LineWidth) {
+  if (v == nullptr || iNumVerts < 2 || LineWidth <= 0.0f) {
+    return;
+  }
+  RageDisplay::DrawLineStripInternal(v, iNumVerts, LineWidth);
+}
+
+void RageDisplay_Metal::DrawSymmetricQuadStripInternal(
+    const RageSpriteVertex v[], int iNumVerts) {
+  if (v == nullptr || iNumVerts < 6) {
+    return;
+  }
+
+  const int iNumPieces = (iNumVerts - 3) / 3;
+  DrawBatch& batch = ActiveBatch();
+  batch.vertices.reserve(
+      batch.vertices.size() + static_cast<size_t>(iNumPieces) * 12);
+  const RageMatrix modelViewProjection = CurrentModelViewProjection();
+  for (int i = 0; i < iNumPieces; ++i) {
+    const int base = i * 3;
+    AppendTriangle(
+        &batch.vertices, v[base + 1], v[base + 3], v[base + 0],
+        modelViewProjection);
+    AppendTriangle(
+        &batch.vertices, v[base + 1], v[base + 4], v[base + 3],
+        modelViewProjection);
+    AppendTriangle(
+        &batch.vertices, v[base + 1], v[base + 5], v[base + 4],
+        modelViewProjection);
+    AppendTriangle(
+        &batch.vertices, v[base + 1], v[base + 2], v[base + 5],
         modelViewProjection);
   }
 }

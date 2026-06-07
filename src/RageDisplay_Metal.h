@@ -92,9 +92,9 @@ class RageDisplay_Metal : public RageDisplay {
   void DrawCompiledGeometryInternal(
       const RageCompiledGeometry* p, int iMeshIndex) override {}
   void DrawLineStripInternal(
-      const RageSpriteVertex v[], int iNumVerts, float LineWidth) override {}
+      const RageSpriteVertex v[], int iNumVerts, float LineWidth) override;
   void DrawSymmetricQuadStripInternal(
-      const RageSpriteVertex v[], int iNumVerts) override {}
+      const RageSpriteVertex v[], int iNumVerts) override;
 
   std::string TryVideoMode(
       const VideoModeParams& p, bool& bNewDeviceOut) override;
