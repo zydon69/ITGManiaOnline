@@ -187,8 +187,13 @@ RageDisplay_Metal::RageDisplay_Metal()
     : m_iActiveTextureHandle(0),
       m_BlendMode(BLEND_NORMAL),
       m_TextureMode(TextureMode_Modulate),
+      m_ZTestMode(ZTEST_OFF),
+      m_CullMode(CULL_NONE),
       m_bTextureWrapping(false),
       m_bTextureFiltering(true),
+      m_bZWrite(false),
+      m_bAlphaTest(false),
+      m_bClearDepthNextFrame(true),
       m_MaterialDiffuse(1.0f, 1.0f, 1.0f, 1.0f),
       m_iNextTextureHandle(1),
       m_bReady(false) {
@@ -410,6 +415,32 @@ void RageDisplay_Metal::SetTextureFiltering(TextureUnit tu, bool filtering) {
   m_bTextureFiltering = filtering;
 }
 
+void RageDisplay_Metal::SetZWrite(bool write) {
+  m_bZWrite = write;
+}
+
+void RageDisplay_Metal::SetZTestMode(ZTestMode mode) {
+  if (mode < 0 || mode >= NUM_ZTestMode) {
+    mode = ZTEST_OFF;
+  }
+  m_ZTestMode = mode;
+}
+
+void RageDisplay_Metal::ClearZBuffer() {
+  m_bClearDepthNextFrame = true;
+}
+
+void RageDisplay_Metal::SetCullMode(CullMode mode) {
+  if (mode < 0 || mode >= NUM_CullMode) {
+    mode = CULL_NONE;
+  }
+  m_CullMode = mode;
+}
+
+void RageDisplay_Metal::SetAlphaTest(bool enabled) {
+  m_bAlphaTest = enabled;
+}
+
 void RageDisplay_Metal::SetMaterial(
     const RageColor& /* emissive */, const RageColor& /* ambient */,
     const RageColor& diffuse, const RageColor& /* specular */,
@@ -422,14 +453,22 @@ RageDisplay_Metal::DrawBatch& RageDisplay_Metal::ActiveBatch() {
       m_DrawBatches.back().textureHandle != m_iActiveTextureHandle ||
       m_DrawBatches.back().blendMode != m_BlendMode ||
       m_DrawBatches.back().textureMode != m_TextureMode ||
+      m_DrawBatches.back().zTestMode != m_ZTestMode ||
+      m_DrawBatches.back().cullMode != m_CullMode ||
       m_DrawBatches.back().textureWrapping != m_bTextureWrapping ||
-      m_DrawBatches.back().textureFiltering != m_bTextureFiltering) {
+      m_DrawBatches.back().textureFiltering != m_bTextureFiltering ||
+      m_DrawBatches.back().zWrite != m_bZWrite ||
+      m_DrawBatches.back().alphaTest != m_bAlphaTest) {
     DrawBatch batch;
     batch.textureHandle = m_iActiveTextureHandle;
     batch.blendMode = m_BlendMode;
     batch.textureMode = m_TextureMode;
+    batch.zTestMode = m_ZTestMode;
+    batch.cullMode = m_CullMode;
     batch.textureWrapping = m_bTextureWrapping;
     batch.textureFiltering = m_bTextureFiltering;
+    batch.zWrite = m_bZWrite;
+    batch.alphaTest = m_bAlphaTest;
     m_DrawBatches.push_back(batch);
   }
   return m_DrawBatches.back();
@@ -463,8 +502,9 @@ void RageDisplay_Metal::EndFrame() {
       }
       metalBatches.push_back(
           {batch.vertices.data(), batch.vertices.size(), texture,
-           batch.blendMode, batch.textureMode, batch.textureWrapping,
-           batch.textureFiltering});
+           batch.blendMode, batch.textureMode, batch.zTestMode,
+           batch.cullMode, batch.textureWrapping, batch.textureFiltering,
+           batch.zWrite, batch.alphaTest});
     }
     static uint64_t s_iMetalFrames = 0;
     ++s_iMetalFrames;
@@ -484,8 +524,9 @@ void RageDisplay_Metal::EndFrame() {
           vertexCount, textureHandles.size());
     }
     const bool presented = m_Presenter->PresentSolidBatches(
-        metalBatches.data(), metalBatches.size(), 0.04, 0.055, 0.075, 1.0,
-        targetHz);
+        metalBatches.data(), metalBatches.size(), m_bClearDepthNextFrame,
+        0.04, 0.055, 0.075, 1.0, targetHz);
+    m_bClearDepthNextFrame = false;
     if (!presented) {
       static uint64_t s_iSkippedClearFrames = 0;
       ++s_iSkippedClearFrames;

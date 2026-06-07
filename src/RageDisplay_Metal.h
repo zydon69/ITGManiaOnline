@@ -56,14 +56,14 @@ class RageDisplay_Metal : public RageDisplay {
   int GetMaxTextureSize() const override { return 16384; }
   void SetTextureFiltering(TextureUnit tu, bool filtering) override;
 
-  bool IsZWriteEnabled() const override { return false; }
-  bool IsZTestEnabled() const override { return false; }
-  void SetZWrite(bool) override {}
+  bool IsZWriteEnabled() const override { return m_bZWrite; }
+  bool IsZTestEnabled() const override { return m_ZTestMode != ZTEST_OFF; }
+  void SetZWrite(bool write) override;
   void SetZBias(float) override {}
-  void SetZTestMode(ZTestMode) override {}
-  void ClearZBuffer() override {}
-  void SetCullMode(CullMode) override {}
-  void SetAlphaTest(bool) override {}
+  void SetZTestMode(ZTestMode mode) override;
+  void ClearZBuffer() override;
+  void SetCullMode(CullMode mode) override;
+  void SetAlphaTest(bool enabled) override;
   void SetMaterial(
       const RageColor& emissive, const RageColor& ambient,
       const RageColor& diffuse, const RageColor& specular,
@@ -112,8 +112,12 @@ class RageDisplay_Metal : public RageDisplay {
     uintptr_t textureHandle = 0;
     BlendMode blendMode = BLEND_NORMAL;
     TextureMode textureMode = TextureMode_Modulate;
+    ZTestMode zTestMode = ZTEST_OFF;
+    CullMode cullMode = CULL_NONE;
     bool textureWrapping = false;
     bool textureFiltering = true;
+    bool zWrite = false;
+    bool alphaTest = false;
     std::vector<MacOSMetalSolidVertex> vertices;
   };
 
@@ -134,8 +138,13 @@ class RageDisplay_Metal : public RageDisplay {
   uintptr_t m_iActiveTextureHandle;
   BlendMode m_BlendMode;
   TextureMode m_TextureMode;
+  ZTestMode m_ZTestMode;
+  CullMode m_CullMode;
   bool m_bTextureWrapping;
   bool m_bTextureFiltering;
+  bool m_bZWrite;
+  bool m_bAlphaTest;
+  bool m_bClearDepthNextFrame;
   RageColor m_MaterialDiffuse;
   uintptr_t m_iNextTextureHandle;
   bool m_bReady;

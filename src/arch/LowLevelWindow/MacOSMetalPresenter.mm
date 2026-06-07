@@ -75,6 +75,9 @@ struct MacOSMetalSurfaceBusyFlags {
 struct MacOSMetalPresenterImpl {
   MacOSMetalPresenterImpl() {
     solidPipelines.fill(nil);
+    for (auto& row : depthStates) {
+      row.fill(nil);
+    }
     for (auto& row : samplerStates) {
       row.fill(nil);
     }
@@ -84,8 +87,10 @@ struct MacOSMetalPresenterImpl {
   id<MTLCommandQueue> commandQueue = nil;
   id<MTLRenderPipelineState> presentPipeline = nil;
   std::array<id<MTLRenderPipelineState>, NUM_BlendMode> solidPipelines;
+  std::array<std::array<id<MTLDepthStencilState>, 2>, NUM_ZTestMode> depthStates;
   std::array<std::array<id<MTLSamplerState>, 2>, 2> samplerStates;
   id<MTLTexture> whiteTexture = nil;
+  id<MTLTexture> depthTexture = nil;
   CAMetalLayer* layer = nil;
   NSView* layerView = nil;
   std::array<MacOSMetalInteropSurface, kMetalInteropSurfaceCount> surfaces;
@@ -536,8 +541,12 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
        "fragment float4 solid_fragment(VertexOut in [[stage_in]],\n"
        "                             texture2d<float> source [[texture(0)]],\n"
        "                             sampler sourceSampler [[sampler(0)]],\n"
-       "                             constant uint& textureMode [[buffer(1)]]) {\n"
+       "                             constant uint& textureMode [[buffer(1)]],\n"
+       "                             constant uint& alphaTest [[buffer(2)]]) {\n"
        "  const float4 sampleColor = source.sample(sourceSampler, in.texcoord);\n"
+       "  if (alphaTest != 0 && sampleColor.a <= 0.00390625) {\n"
+       "    discard_fragment();\n"
+       "  }\n"
        "  if (textureMode == 1) {\n"
        "    return float4(in.color.rgb, sampleColor.a * in.color.a);\n"
        "  }\n"
@@ -578,6 +587,7 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
   descriptor.vertexFunction = vertexFunction;
   descriptor.fragmentFunction = fragmentFunction;
   descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+  descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
   ConfigureBlendAttachment(descriptor.colorAttachments[0], blendMode);
 
   id<MTLRenderPipelineState> pipeline =
@@ -615,6 +625,47 @@ id<MTLTexture> CreateWhiteTexture(id<MTLDevice> device) {
                withBytes:whitePixel
              bytesPerRow:4];
   return texture;
+}
+
+id<MTLTexture> CreateDepthTexture(id<MTLDevice> device, int width, int height) {
+  if (device == nil || width <= 0 || height <= 0) {
+    return nil;
+  }
+
+  MTLTextureDescriptor* descriptor =
+      [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
+                                                         width:width
+                                                        height:height
+                                                     mipmapped:NO];
+  descriptor.usage = MTLTextureUsageRenderTarget;
+  descriptor.storageMode = MTLStorageModePrivate;
+  return [device newTextureWithDescriptor:descriptor];
+}
+
+id<MTLDepthStencilState> CreateDepthState(
+    id<MTLDevice> device, ZTestMode mode, bool write) {
+  if (device == nil) {
+    return nil;
+  }
+
+  MTLDepthStencilDescriptor* descriptor =
+      [[[MTLDepthStencilDescriptor alloc] init] autorelease];
+  descriptor.depthWriteEnabled = write ? YES : NO;
+  switch (mode) {
+    case ZTEST_OFF:
+      descriptor.depthCompareFunction = MTLCompareFunctionAlways;
+      break;
+    case ZTEST_WRITE_ON_PASS:
+      descriptor.depthCompareFunction = MTLCompareFunctionLessEqual;
+      break;
+    case ZTEST_WRITE_ON_FAIL:
+      descriptor.depthCompareFunction = MTLCompareFunctionGreater;
+      break;
+    default:
+      descriptor.depthCompareFunction = MTLCompareFunctionAlways;
+      break;
+  }
+  return [device newDepthStencilStateWithDescriptor:descriptor];
 }
 
 id<MTLSamplerState> CreateSamplerState(
@@ -692,6 +743,18 @@ bool MacOSMetalPresenter::Initialize(
           i, solidPipelineFailure.c_str());
     }
   }
+  for (int mode = 0; mode < NUM_ZTestMode; ++mode) {
+    for (int write = 0; write < 2; ++write) {
+      impl->depthStates[mode][write] = CreateDepthState(
+          impl->device, static_cast<ZTestMode>(mode), write != 0);
+      if (impl->depthStates[mode][write] == nil) {
+        LOG->Warn(
+            "MacOS Metal presenter depth state unavailable: mode=%d "
+            "write=%d",
+            mode, write);
+      }
+    }
+  }
   for (int wrapping = 0; wrapping < 2; ++wrapping) {
     for (int filtering = 0; filtering < 2; ++filtering) {
       impl->samplerStates[wrapping][filtering] =
@@ -707,6 +770,52 @@ bool MacOSMetalPresenter::Initialize(
   impl->whiteTexture = CreateWhiteTexture(impl->device);
   if (impl->whiteTexture == nil) {
     m_FailureReason = "Failed to create native Metal fallback texture.";
+    for (auto& row : impl->samplerStates) {
+      for (id<MTLSamplerState>& sampler : row) {
+        if (sampler != nil) {
+          [sampler release];
+        }
+      }
+    }
+    for (auto& row : impl->depthStates) {
+      for (id<MTLDepthStencilState>& state : row) {
+        if (state != nil) {
+          [state release];
+        }
+      }
+    }
+    for (id<MTLRenderPipelineState>& pipeline : impl->solidPipelines) {
+      if (pipeline != nil) {
+        [pipeline release];
+      }
+    }
+    if (impl->presentPipeline != nil) {
+      [impl->presentPipeline release];
+    }
+    [impl->commandQueue release];
+    [impl->device release];
+    delete impl;
+    LOG->Warn("MacOS Metal presenter unavailable: %s", m_FailureReason.c_str());
+    return false;
+  }
+  impl->depthTexture = CreateDepthTexture(impl->device, width, height);
+  if (impl->depthTexture == nil) {
+    m_FailureReason = "Failed to create native Metal depth texture.";
+    [impl->whiteTexture release];
+    for (auto& row : impl->samplerStates) {
+      for (id<MTLSamplerState>& sampler : row) {
+        if (sampler != nil) {
+          [sampler release];
+        }
+      }
+    }
+    for (auto& row : impl->depthStates) {
+      for (id<MTLDepthStencilState>& state : row) {
+        if (state != nil) {
+          [state release];
+        }
+      }
+    }
     for (id<MTLRenderPipelineState>& pipeline : impl->solidPipelines) {
       if (pipeline != nil) {
         [pipeline release];
@@ -820,9 +929,21 @@ void MacOSMetalPresenter::Shutdown() {
       }
     }
   }
+  for (auto& row : impl->depthStates) {
+    for (id<MTLDepthStencilState>& state : row) {
+      if (state != nil) {
+        [state release];
+        state = nil;
+      }
+    }
+  }
   if (impl->whiteTexture != nil) {
     [impl->whiteTexture release];
     impl->whiteTexture = nil;
+  }
+  if (impl->depthTexture != nil) {
+    [impl->depthTexture release];
+    impl->depthTexture = nil;
   }
   if (impl->device != nil) {
     [impl->device release];
@@ -1112,6 +1233,7 @@ bool MacOSMetalPresenter::PresentClearFrame(
 
 bool MacOSMetalPresenter::PresentSolidBatches(
     const MacOSMetalDrawBatch* batches, size_t batchCount,
+    bool clearDepth,
     double clearRed, double clearGreen, double clearBlue, double clearAlpha,
     double targetHz) {
   if (!IsAvailable() || batches == nullptr || batchCount == 0) {
@@ -1177,6 +1299,13 @@ bool MacOSMetalPresenter::PresentSolidBatches(
   passDescriptor.colorAttachments[0].clearColor =
       MTLClearColorMake(clearRed, clearGreen, clearBlue, clearAlpha);
   passDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+  if (impl->depthTexture != nil) {
+    passDescriptor.depthAttachment.texture = impl->depthTexture;
+    passDescriptor.depthAttachment.loadAction =
+        clearDepth ? MTLLoadActionClear : MTLLoadActionLoad;
+    passDescriptor.depthAttachment.clearDepth = 1.0;
+    passDescriptor.depthAttachment.storeAction = MTLStoreActionStore;
+  }
 
   id<MTLRenderCommandEncoder> encoder =
       [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
@@ -1196,6 +1325,14 @@ bool MacOSMetalPresenter::PresentSolidBatches(
         batch.blendMode >= 0 && batch.blendMode < NUM_BlendMode
             ? batch.blendMode
             : BLEND_NORMAL;
+    const ZTestMode zTestMode =
+        batch.zTestMode >= 0 && batch.zTestMode < NUM_ZTestMode
+            ? batch.zTestMode
+            : ZTEST_OFF;
+    const CullMode cullMode =
+        batch.cullMode >= 0 && batch.cullMode < NUM_CullMode
+            ? batch.cullMode
+            : CULL_NONE;
     id<MTLRenderPipelineState> pipeline = impl->solidPipelines[blendMode];
     if (pipeline == nil) {
       pipeline = impl->solidPipelines[BLEND_NORMAL];
@@ -1219,6 +1356,8 @@ bool MacOSMetalPresenter::PresentSolidBatches(
     const int filteringIndex = batch.textureFiltering ? 1 : 0;
     id<MTLSamplerState> sampler =
         impl->samplerStates[wrappingIndex][filteringIndex];
+    id<MTLDepthStencilState> depthState =
+        impl->depthStates[zTestMode][batch.zWrite ? 1 : 0];
     [sourceTexture retain];
     [retainedBuffers addObject:vertexBuffer];
     [retainedTextures addObject:sourceTexture];
@@ -1226,11 +1365,30 @@ bool MacOSMetalPresenter::PresentSolidBatches(
         batch.textureMode == TextureMode_Glow
             ? 1
             : (batch.textureMode == TextureMode_Add ? 2 : 0);
+    const uint32_t alphaTest = batch.alphaTest ? 1 : 0;
     [encoder setRenderPipelineState:pipeline];
+    if (depthState != nil) {
+      [encoder setDepthStencilState:depthState];
+    }
+    switch (cullMode) {
+      case CULL_BACK:
+        [encoder setCullMode:MTLCullModeBack];
+        break;
+      case CULL_FRONT:
+        [encoder setCullMode:MTLCullModeFront];
+        break;
+      case CULL_NONE:
+      default:
+        [encoder setCullMode:MTLCullModeNone];
+        break;
+    }
     [encoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
     [encoder setFragmentBytes:&textureMode
                        length:sizeof(textureMode)
                       atIndex:1];
+    [encoder setFragmentBytes:&alphaTest
+                       length:sizeof(alphaTest)
+                      atIndex:2];
     [encoder setFragmentTexture:sourceTexture atIndex:0];
     if (sampler != nil) {
       [encoder setFragmentSamplerState:sampler atIndex:0];

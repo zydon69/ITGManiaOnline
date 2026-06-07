@@ -34,8 +34,12 @@ struct MacOSMetalDrawBatch {
   void* texture = nullptr;
   BlendMode blendMode = BLEND_NORMAL;
   TextureMode textureMode = TextureMode_Modulate;
+  ZTestMode zTestMode = ZTEST_OFF;
+  CullMode cullMode = CULL_NONE;
   bool textureWrapping = false;
   bool textureFiltering = true;
+  bool zWrite = false;
+  bool alphaTest = false;
 };
 
 class MacOSMetalPresenter {
@@ -57,6 +61,7 @@ class MacOSMetalPresenter {
       double red, double green, double blue, double alpha, double targetHz);
   bool PresentSolidBatches(
       const MacOSMetalDrawBatch* batches, size_t batchCount,
+      bool clearDepth,
       double clearRed, double clearGreen, double clearBlue, double clearAlpha,
       double targetHz);
   void* CreateRGBA8Texture(
