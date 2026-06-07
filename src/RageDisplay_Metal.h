@@ -15,9 +15,8 @@ class LowLevelWindow;
 struct RageMatrix;
 
 /*
- * This class is intentionally only a renderer-registration skeleton for now.
- * It lets VideoRenderers=metal,opengl exercise the factory path and fall back
- * to OpenGL cleanly until the native Metal state machine is implemented.
+ * Experimental native Metal renderer.  OpenGL remains the production default;
+ * this backend is advanced in small, testable milestones.
  */
 class RageDisplay_Metal : public RageDisplay {
  public:
@@ -39,21 +38,19 @@ class RageDisplay_Metal : public RageDisplay {
   }
   void SetBlendMode(BlendMode) override {}
   bool SupportsTextureFormat(
-      RagePixelFormat, bool /* realtime */ = false) override {
-    return true;
-  }
+      RagePixelFormat pixfmt, bool realtime = false) override;
   bool SupportsPerVertexMatrixScale() override { return false; }
 
   uintptr_t CreateTexture(
       RagePixelFormat, RageSurface* /* img */,
       bool /* bGenerateMipMaps */) override;
   void UpdateTexture(
-      uintptr_t /* iTexHandle */, RageSurface* /* img */, int /* xoffset */,
-      int /* yoffset */, int /* width */, int /* height */) override {}
-  void DeleteTexture(uintptr_t /* iTexHandle */) override {}
-  void ClearAllTextures() override {}
+      uintptr_t iTexHandle, RageSurface* img, int xoffset,
+      int yoffset, int width, int height) override;
+  void DeleteTexture(uintptr_t iTexHandle) override;
+  void ClearAllTextures() override;
   int GetNumTextureUnits() override { return 1; }
-  void SetTexture(TextureUnit, uintptr_t /* iTexture */) override {}
+  void SetTexture(TextureUnit, uintptr_t iTexture) override;
   void SetTextureMode(TextureUnit, TextureMode) override {}
   void SetTextureWrapping(TextureUnit, bool) override {}
   int GetMaxTextureSize() const override { return 16384; }
@@ -103,12 +100,30 @@ class RageDisplay_Metal : public RageDisplay {
       const VideoModeParams& p, bool& bNewDeviceOut) override;
 
  private:
+  struct MetalTexture {
+    void* texture = nullptr;
+    int width = 0;
+    int height = 0;
+  };
+
+  struct DrawBatch {
+    uintptr_t textureHandle = 0;
+    std::vector<MacOSMetalSolidVertex> vertices;
+  };
+
   RageMatrix CurrentModelViewProjection() const;
+  DrawBatch& ActiveBatch();
+  void ReleaseTexture(MetalTexture* texture);
+  bool UploadTexturePixels(
+      MetalTexture* texture, RageSurface* img, int xoffset, int yoffset,
+      int width, int height);
 
   ActualVideoModeParams m_Params;
   std::unique_ptr<LowLevelWindow> m_Window;
   std::unique_ptr<MacOSMetalPresenter> m_Presenter;
-  std::vector<MacOSMetalSolidVertex> m_SolidVertices;
+  std::vector<DrawBatch> m_DrawBatches;
+  std::vector<MetalTexture> m_Textures;
+  uintptr_t m_iActiveTextureHandle;
   uintptr_t m_iNextTextureHandle;
   bool m_bReady;
 };

@@ -8,6 +8,8 @@ struct MacOSMetalSolidVertex {
   float x = 0.0f;
   float y = 0.0f;
   float z = 0.0f;
+  float u = 0.0f;
+  float v = 0.0f;
   float r = 1.0f;
   float g = 1.0f;
   float b = 1.0f;
@@ -22,6 +24,12 @@ struct MacOSMetalPresenterRuntimeStats {
   unsigned long long slowDrawableAcquires = 0;
   unsigned long long drawableMisses = 0;
   unsigned long long skippedNoPrefetchedDrawableFrames = 0;
+};
+
+struct MacOSMetalDrawBatch {
+  const MacOSMetalSolidVertex* vertices = nullptr;
+  size_t vertexCount = 0;
+  void* texture = nullptr;
 };
 
 class MacOSMetalPresenter {
@@ -41,10 +49,13 @@ class MacOSMetalPresenter {
   void DetachLayer();
   bool PresentClearFrame(
       double red, double green, double blue, double alpha, double targetHz);
-  bool PresentSolidVertices(
-      const MacOSMetalSolidVertex* vertices, size_t vertexCount,
+  bool PresentSolidBatches(
+      const MacOSMetalDrawBatch* batches, size_t batchCount,
       double clearRed, double clearGreen, double clearBlue, double clearAlpha,
       double targetHz);
+  void* CreateRGBA8Texture(
+      int width, int height, const void* pixels, size_t bytesPerRow);
+  void ReleaseTexture(void* texture);
   bool PresentInteropSurfaceAt(int index, double targetHz);
   int InteropSurfaceCount() const;
   void* InteropIOSurfaceAt(int index) const;

@@ -77,6 +77,7 @@ struct MacOSMetalPresenterImpl {
   id<MTLCommandQueue> commandQueue = nil;
   id<MTLRenderPipelineState> presentPipeline = nil;
   id<MTLRenderPipelineState> solidPipeline = nil;
+  id<MTLTexture> whiteTexture = nil;
   CAMetalLayer* layer = nil;
   NSView* layerView = nil;
   std::array<MacOSMetalInteropSurface, kMetalInteropSurfaceCount> surfaces;
@@ -427,10 +428,12 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
        "using namespace metal;\n"
        "struct VertexIn {\n"
        "  float3 position;\n"
+       "  float2 texcoord;\n"
        "  float4 color;\n"
        "};\n"
        "struct VertexOut {\n"
        "  float4 position [[position]];\n"
+       "  float2 texcoord;\n"
        "  float4 color;\n"
        "};\n"
        "vertex VertexOut solid_vertex(\n"
@@ -441,11 +444,15 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
        "  out.position = float4(in.position.xy,\n"
        "                        in.position.z * 0.5 + 0.5,\n"
        "                        1.0);\n"
+       "  out.texcoord = in.texcoord;\n"
        "  out.color = in.color;\n"
        "  return out;\n"
        "}\n"
-       "fragment float4 solid_fragment(VertexOut in [[stage_in]]) {\n"
-       "  return in.color;\n"
+       "fragment float4 solid_fragment(VertexOut in [[stage_in]],\n"
+       "                             texture2d<float> source [[texture(0)]]) {\n"
+       "  constexpr sampler sourceSampler(address::clamp_to_edge,\n"
+       "                                  filter::linear);\n"
+       "  return source.sample(sourceSampler, in.texcoord) * in.color;\n"
        "}\n";
 
   NSError* error = nil;
@@ -504,6 +511,30 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
   return pipeline;
 }
 
+id<MTLTexture> CreateWhiteTexture(id<MTLDevice> device) {
+  if (device == nil) {
+    return nil;
+  }
+
+  MTLTextureDescriptor* descriptor =
+      [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                         width:1
+                                                        height:1
+                                                     mipmapped:NO];
+  descriptor.usage = MTLTextureUsageShaderRead;
+  id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
+  if (texture == nil) {
+    return nil;
+  }
+
+  const uint8_t whitePixel[4] = {255, 255, 255, 255};
+  [texture replaceRegion:MTLRegionMake2D(0, 0, 1, 1)
+             mipmapLevel:0
+               withBytes:whitePixel
+             bytesPerRow:4];
+  return texture;
+}
+
 }  // namespace
 
 MacOSMetalPresenter::MacOSMetalPresenter()
@@ -556,6 +587,21 @@ bool MacOSMetalPresenter::Initialize(
     LOG->Warn(
         "MacOS Metal presenter solid pipeline unavailable: %s",
         solidPipelineFailure.c_str());
+  }
+  impl->whiteTexture = CreateWhiteTexture(impl->device);
+  if (impl->whiteTexture == nil) {
+    m_FailureReason = "Failed to create native Metal fallback texture.";
+    if (impl->solidPipeline != nil) {
+      [impl->solidPipeline release];
+    }
+    if (impl->presentPipeline != nil) {
+      [impl->presentPipeline release];
+    }
+    [impl->commandQueue release];
+    [impl->device release];
+    delete impl;
+    LOG->Warn("MacOS Metal presenter unavailable: %s", m_FailureReason.c_str());
+    return false;
   }
 
   NSWindow* window = (__bridge NSWindow*)nsWindow;
@@ -645,6 +691,10 @@ void MacOSMetalPresenter::Shutdown() {
   if (impl->solidPipeline != nil) {
     [impl->solidPipeline release];
     impl->solidPipeline = nil;
+  }
+  if (impl->whiteTexture != nil) {
+    [impl->whiteTexture release];
+    impl->whiteTexture = nil;
   }
   if (impl->device != nil) {
     [impl->device release];
@@ -932,11 +982,19 @@ bool MacOSMetalPresenter::PresentClearFrame(
   return true;
 }
 
-bool MacOSMetalPresenter::PresentSolidVertices(
-    const MacOSMetalSolidVertex* vertices, size_t vertexCount,
+bool MacOSMetalPresenter::PresentSolidBatches(
+    const MacOSMetalDrawBatch* batches, size_t batchCount,
     double clearRed, double clearGreen, double clearBlue, double clearAlpha,
     double targetHz) {
-  if (!IsAvailable() || vertices == nullptr || vertexCount == 0) {
+  if (!IsAvailable() || batches == nullptr || batchCount == 0) {
+    return PresentClearFrame(clearRed, clearGreen, clearBlue, clearAlpha,
+                             targetHz);
+  }
+  size_t totalVertexCount = 0;
+  for (size_t i = 0; i < batchCount; ++i) {
+    totalVertexCount += batches[i].vertexCount;
+  }
+  if (totalVertexCount == 0) {
     return PresentClearFrame(clearRed, clearGreen, clearBlue, clearAlpha,
                              targetHz);
   }
@@ -969,10 +1027,10 @@ bool MacOSMetalPresenter::PresentSolidVertices(
         LOG->Trace(
             "PERF_TRACE: macos_metal_solid_present skipped_no_drawable=1 "
             "skipped_frames=%llu prefetch_misses=%llu target_hz=%.3f "
-            "next_drawable_ms=%.3f vertices=%zu",
+            "next_drawable_ms=%.3f batches=%zu vertices=%zu",
             static_cast<unsigned long long>(skippedFrames),
             static_cast<unsigned long long>(drawableMisses), targetHz,
-            nextDrawableMs, vertexCount);
+            nextDrawableMs, batchCount, totalVertexCount);
       }
       return false;
     }
@@ -984,17 +1042,6 @@ bool MacOSMetalPresenter::PresentSolidVertices(
     [drawable release];
     return false;
   }
-  const NSUInteger vertexBufferLength =
-      static_cast<NSUInteger>(sizeof(MacOSMetalSolidVertex) * vertexCount);
-  id<MTLBuffer> vertexBuffer =
-      [impl->device newBufferWithBytes:vertices
-                                length:vertexBufferLength
-                               options:MTLResourceStorageModeShared];
-  if (vertexBuffer == nil) {
-    [drawable release];
-    return false;
-  }
-
   MTLRenderPassDescriptor* passDescriptor =
       [MTLRenderPassDescriptor renderPassDescriptor];
   passDescriptor.colorAttachments[0].texture = [drawable texture];
@@ -1006,16 +1053,41 @@ bool MacOSMetalPresenter::PresentSolidVertices(
   id<MTLRenderCommandEncoder> encoder =
       [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
   if (encoder == nil) {
-    [vertexBuffer release];
     [drawable release];
     return false;
   }
 
+  NSMutableArray* retainedBuffers = [NSMutableArray arrayWithCapacity:batchCount];
+  NSMutableArray* retainedTextures = [NSMutableArray arrayWithCapacity:batchCount];
   [encoder setRenderPipelineState:impl->solidPipeline];
-  [encoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
-  [encoder drawPrimitives:MTLPrimitiveTypeTriangle
-              vertexStart:0
-              vertexCount:static_cast<NSUInteger>(vertexCount)];
+  for (size_t i = 0; i < batchCount; ++i) {
+    const MacOSMetalDrawBatch& batch = batches[i];
+    if (batch.vertices == nullptr || batch.vertexCount == 0) {
+      continue;
+    }
+    const NSUInteger vertexBufferLength = static_cast<NSUInteger>(
+        sizeof(MacOSMetalSolidVertex) * batch.vertexCount);
+    id<MTLBuffer> vertexBuffer =
+        [impl->device newBufferWithBytes:batch.vertices
+                                  length:vertexBufferLength
+                                 options:MTLResourceStorageModeShared];
+    if (vertexBuffer == nil) {
+      continue;
+    }
+    id<MTLTexture> sourceTexture =
+        batch.texture != nullptr ? (id<MTLTexture>)batch.texture
+                                 : impl->whiteTexture;
+    [sourceTexture retain];
+    [retainedBuffers addObject:vertexBuffer];
+    [retainedTextures addObject:sourceTexture];
+    [encoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
+    [encoder setFragmentTexture:sourceTexture atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                vertexStart:0
+                vertexCount:static_cast<NSUInteger>(batch.vertexCount)];
+    [vertexBuffer release];
+    [sourceTexture release];
+  }
   [encoder endEncoding];
 
   const double minimumDuration =
@@ -1032,7 +1104,8 @@ bool MacOSMetalPresenter::PresentSolidVertices(
   const uint64_t submitUsec = RageTimer::GetTimeSinceStartMicroseconds();
   const float encodeSubmitMs = submitTimer.GetDeltaTime() * 1000.0f;
   id<CAMetalDrawable> completionDrawable = [drawable retain];
-  id<MTLBuffer> completionVertexBuffer = [vertexBuffer retain];
+  NSArray* completionBuffers = [retainedBuffers copy];
+  NSArray* completionTextures = [retainedTextures copy];
   [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedCommandBuffer) {
     const uint64_t completedIndex =
         g_iMetalDirectPresentCompletedFrames.fetch_add(1) + 1;
@@ -1054,13 +1127,13 @@ bool MacOSMetalPresenter::PresentSolidVertices(
           static_cast<unsigned long long>(completedIndex),
           static_cast<unsigned long>([completedCommandBuffer status]),
           commandBufferMs, nextDrawableMs, encodeSubmitMs, targetHz,
-          vertexCount);
+          totalVertexCount);
     }
-    [completionVertexBuffer release];
+    [completionBuffers release];
+    [completionTextures release];
     [completionDrawable release];
   }];
   [commandBuffer commit];
-  [vertexBuffer release];
   [drawable release];
 
   const bool traceSubmit =
@@ -1072,15 +1145,53 @@ bool MacOSMetalPresenter::PresentSolidVertices(
         "PERF_TRACE: macos_metal_solid_present_submitted "
         "target_hz=%.3f minimum_duration_ms=%.3f frame=%llu "
         "prefetched_drawable_serial=%llu prefetch_misses=%llu "
-        "next_drawable_ms=%.3f encode_submit_ms=%.3f vertices=%zu",
+        "next_drawable_ms=%.3f encode_submit_ms=%.3f batches=%zu "
+        "vertices=%zu",
         targetHz, minimumDuration * 1000.0,
         static_cast<unsigned long long>(frameIndex),
         static_cast<unsigned long long>(drawableSerial),
         static_cast<unsigned long long>(drawableMisses), nextDrawableMs,
-        encodeSubmitMs, vertexCount);
+        encodeSubmitMs, batchCount, totalVertexCount);
   }
   impl->loggedFirstDirectPresent = true;
   return true;
+}
+
+void* MacOSMetalPresenter::CreateRGBA8Texture(
+    int width, int height, const void* pixels, size_t bytesPerRow) {
+  if (!IsAvailable() || width <= 0 || height <= 0 || pixels == nullptr) {
+    return nullptr;
+  }
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  if (impl->device == nil) {
+    return nullptr;
+  }
+
+  MTLTextureDescriptor* descriptor =
+      [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                         width:width
+                                                        height:height
+                                                     mipmapped:NO];
+  descriptor.usage = MTLTextureUsageShaderRead;
+  id<MTLTexture> texture = [impl->device newTextureWithDescriptor:descriptor];
+  if (texture == nil) {
+    return nullptr;
+  }
+
+  [texture replaceRegion:MTLRegionMake2D(0, 0, width, height)
+             mipmapLevel:0
+               withBytes:pixels
+             bytesPerRow:bytesPerRow];
+  return texture;
+}
+
+void MacOSMetalPresenter::ReleaseTexture(void* texture) {
+  if (texture == nullptr) {
+    return;
+  }
+  [(id<MTLTexture>)texture release];
 }
 
 bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {

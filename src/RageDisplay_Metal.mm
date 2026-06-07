@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -12,6 +13,9 @@
 #include "RageDisplay.h"
 #include "RageLog.h"
 #include "RageMath.h"
+#include "RageSurface.h"
+#include "RageSurfaceUtils.h"
+#include "RageUtil.h"
 #include "arch/LowLevelWindow/LowLevelWindow.h"
 #include "arch/LowLevelWindow/MacOSMetalPresenter.h"
 #include "global.h"
@@ -80,6 +84,8 @@ MacOSMetalSolidVertex ToMetalSolidVertex(
   out.x = transformed.x;
   out.y = transformed.y;
   out.z = transformed.z;
+  out.u = v.t.x;
+  out.v = v.t.y;
   out.r = ByteColorToFloat(v.c.r);
   out.g = ByteColorToFloat(v.c.g);
   out.b = ByteColorToFloat(v.c.b);
@@ -97,11 +103,13 @@ void AppendTriangle(
 }
 
 RageDisplay_Metal::RageDisplay_Metal()
-    : m_iNextTextureHandle(1), m_bReady(false) {
+    : m_iActiveTextureHandle(0), m_iNextTextureHandle(1), m_bReady(false) {
+  m_Textures.resize(1);
   LOG->MapLog("renderer", "Current renderer: metal");
 }
 
 RageDisplay_Metal::~RageDisplay_Metal() {
+  ClearAllTextures();
   if (m_Presenter) {
     m_Presenter->Shutdown();
   }
@@ -142,25 +150,189 @@ const RageDisplay::RagePixelFormatDesc* RageDisplay_Metal::GetPixelFormatDesc(
   return &PIXEL_FORMAT_DESC[pf];
 }
 
+bool RageDisplay_Metal::SupportsTextureFormat(
+    RagePixelFormat pixfmt, bool /* realtime */) {
+  switch (pixfmt) {
+    case RagePixelFormat_RGBA8:
+    case RagePixelFormat_BGRA8:
+    case RagePixelFormat_RGB8:
+    case RagePixelFormat_BGR8:
+      return true;
+    default:
+      return false;
+  }
+}
+
+void RageDisplay_Metal::ReleaseTexture(MetalTexture* texture) {
+  if (texture == nullptr) {
+    return;
+  }
+  if (texture->texture != nullptr && m_Presenter) {
+    m_Presenter->ReleaseTexture(texture->texture);
+  }
+  texture->texture = nullptr;
+  texture->width = 0;
+  texture->height = 0;
+}
+
+bool RageDisplay_Metal::UploadTexturePixels(
+    MetalTexture* texture, RageSurface* img, int xoffset, int yoffset,
+    int width, int height) {
+  if (texture == nullptr || img == nullptr || m_Presenter == nullptr ||
+      width <= 0 || height <= 0 || texture->width <= 0 ||
+      texture->height <= 0) {
+    return false;
+  }
+
+  const RagePixelFormatDesc* rgbaDesc =
+      GetPixelFormatDesc(RagePixelFormat_RGBA8);
+  std::vector<uint8_t> pixels(
+      static_cast<size_t>(texture->width) * texture->height * 4, 0);
+  if (img->pixels != nullptr) {
+    RageSurface* rgba = CreateSurface(
+        width, height, rgbaDesc->bpp, rgbaDesc->masks[0], rgbaDesc->masks[1],
+        rgbaDesc->masks[2], rgbaDesc->masks[3]);
+    if (rgba == nullptr) {
+      return false;
+    }
+    RageSurfaceUtils::Blit(img, rgba, width, height);
+    for (int y = 0; y < height; ++y) {
+      const uint8_t* src = rgba->pixels + static_cast<size_t>(y) * rgba->pitch;
+      uint8_t* dst =
+          pixels.data() +
+          (static_cast<size_t>(y + yoffset) * texture->width + xoffset) * 4;
+      std::memcpy(dst, src, static_cast<size_t>(width) * 4);
+    }
+    delete rgba;
+  }
+
+  void* metalTexture = m_Presenter->CreateRGBA8Texture(
+      texture->width, texture->height, pixels.data(),
+      static_cast<size_t>(texture->width) * 4);
+  if (metalTexture == nullptr) {
+    return false;
+  }
+
+  ReleaseTexture(texture);
+  texture->texture = metalTexture;
+  return true;
+}
+
 uintptr_t RageDisplay_Metal::CreateTexture(
-    RagePixelFormat /* pixfmt */, RageSurface* /* img */,
+    RagePixelFormat pixfmt, RageSurface* img,
     bool /* bGenerateMipMaps */) {
-  return m_iNextTextureHandle++;
+  if (!SupportsTextureFormat(pixfmt) || img == nullptr || img->w <= 0 ||
+      img->h <= 0) {
+    return 0;
+  }
+
+  const uintptr_t handle = m_iNextTextureHandle++;
+  if (handle >= m_Textures.size()) {
+    m_Textures.resize(handle + 1);
+  }
+
+  MetalTexture& texture = m_Textures[handle];
+  texture.width = power_of_two(img->w);
+  texture.height = power_of_two(img->h);
+  if (!UploadTexturePixels(&texture, img, 0, 0, img->w, img->h)) {
+    ReleaseTexture(&texture);
+    return 0;
+  }
+
+  return handle;
+}
+
+void RageDisplay_Metal::UpdateTexture(
+    uintptr_t iTexHandle, RageSurface* img, int xoffset, int yoffset,
+    int width, int height) {
+  if (iTexHandle == 0 || iTexHandle >= m_Textures.size()) {
+    return;
+  }
+  MetalTexture& texture = m_Textures[iTexHandle];
+  if (texture.texture == nullptr) {
+    return;
+  }
+
+  if (xoffset != 0 || yoffset != 0 || width != texture.width ||
+      height != texture.height) {
+    static bool s_bWarnedPartialTextureUpdate = false;
+    if (!s_bWarnedPartialTextureUpdate) {
+      LOG->Warn(
+          "RageDisplay_Metal: partial texture updates are rebuilt as full "
+          "textures in the experimental renderer.");
+      s_bWarnedPartialTextureUpdate = true;
+    }
+  }
+  texture.width = power_of_two(width);
+  texture.height = power_of_two(height);
+  UploadTexturePixels(&texture, img, 0, 0, width, height);
+}
+
+void RageDisplay_Metal::DeleteTexture(uintptr_t iTexHandle) {
+  if (iTexHandle == 0 || iTexHandle >= m_Textures.size()) {
+    return;
+  }
+  ReleaseTexture(&m_Textures[iTexHandle]);
+}
+
+void RageDisplay_Metal::ClearAllTextures() {
+  for (MetalTexture& texture : m_Textures) {
+    ReleaseTexture(&texture);
+  }
+  m_Textures.clear();
+  m_Textures.resize(1);
+  m_iActiveTextureHandle = 0;
+}
+
+void RageDisplay_Metal::SetTexture(TextureUnit tu, uintptr_t iTexture) {
+  if (tu != TextureUnit_1) {
+    return;
+  }
+  m_iActiveTextureHandle = iTexture;
+}
+
+RageDisplay_Metal::DrawBatch& RageDisplay_Metal::ActiveBatch() {
+  if (m_DrawBatches.empty() ||
+      m_DrawBatches.back().textureHandle != m_iActiveTextureHandle) {
+    DrawBatch batch;
+    batch.textureHandle = m_iActiveTextureHandle;
+    m_DrawBatches.push_back(batch);
+  }
+  return m_DrawBatches.back();
 }
 
 void RageDisplay_Metal::EndFrame() {
   if (m_bReady && m_Presenter) {
     const double targetHz =
         m_Params.rate > 1 ? static_cast<double>(m_Params.rate) : 60.0;
-    std::vector<MacOSMetalSolidVertex> vertices;
-    vertices.swap(m_SolidVertices);
-    if (vertices.empty()) {
-      vertices.push_back({-0.95f, 0.95f, 0.0f, 0.15f, 0.85f, 1.0f, 1.0f});
-      vertices.push_back({-0.70f, 0.95f, 0.0f, 1.0f, 0.35f, 0.55f, 1.0f});
-      vertices.push_back({-0.95f, 0.70f, 0.0f, 0.95f, 0.95f, 0.2f, 1.0f});
+    std::vector<DrawBatch> batches;
+    batches.swap(m_DrawBatches);
+    if (batches.empty()) {
+      DrawBatch batch;
+      batch.vertices.push_back(
+          {-0.95f, 0.95f, 0.0f, 0.0f, 0.0f, 0.15f, 0.85f, 1.0f, 1.0f});
+      batch.vertices.push_back(
+          {-0.70f, 0.95f, 0.0f, 0.0f, 0.0f, 1.0f, 0.35f, 0.55f, 1.0f});
+      batch.vertices.push_back(
+          {-0.95f, 0.70f, 0.0f, 0.0f, 0.0f, 0.95f, 0.95f, 0.2f, 1.0f});
+      batches.push_back(batch);
     }
-    const bool presented = m_Presenter->PresentSolidVertices(
-        vertices.data(), vertices.size(), 0.04, 0.055, 0.075, 1.0, targetHz);
+    std::vector<MacOSMetalDrawBatch> metalBatches;
+    metalBatches.reserve(batches.size());
+    for (const DrawBatch& batch : batches) {
+      if (batch.vertices.empty()) {
+        continue;
+      }
+      void* texture = nullptr;
+      if (batch.textureHandle > 0 && batch.textureHandle < m_Textures.size()) {
+        texture = m_Textures[batch.textureHandle].texture;
+      }
+      metalBatches.push_back(
+          {batch.vertices.data(), batch.vertices.size(), texture});
+    }
+    const bool presented = m_Presenter->PresentSolidBatches(
+        metalBatches.data(), metalBatches.size(), 0.04, 0.055, 0.075, 1.0,
+        targetHz);
     if (!presented) {
       static uint64_t s_iSkippedClearFrames = 0;
       ++s_iSkippedClearFrames;
@@ -183,15 +355,16 @@ void RageDisplay_Metal::DrawQuadsInternal(
     return;
   }
 
-  m_SolidVertices.reserve(
-      m_SolidVertices.size() + static_cast<size_t>(iNumVerts / 4) * 6);
+  DrawBatch& batch = ActiveBatch();
+  batch.vertices.reserve(
+      batch.vertices.size() + static_cast<size_t>(iNumVerts / 4) * 6);
   const RageMatrix modelViewProjection = CurrentModelViewProjection();
   for (int i = 0; i + 3 < iNumVerts; i += 4) {
     AppendTriangle(
-        &m_SolidVertices, v[i + 0], v[i + 1], v[i + 2],
+        &batch.vertices, v[i + 0], v[i + 1], v[i + 2],
         modelViewProjection);
     AppendTriangle(
-        &m_SolidVertices, v[i + 2], v[i + 1], v[i + 3],
+        &batch.vertices, v[i + 2], v[i + 1], v[i + 3],
         modelViewProjection);
   }
 }
@@ -202,15 +375,16 @@ void RageDisplay_Metal::DrawQuadStripInternal(
     return;
   }
 
-  m_SolidVertices.reserve(
-      m_SolidVertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
+  DrawBatch& batch = ActiveBatch();
+  batch.vertices.reserve(
+      batch.vertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
   const RageMatrix modelViewProjection = CurrentModelViewProjection();
   for (int i = 0; i + 3 < iNumVerts; i += 2) {
     AppendTriangle(
-        &m_SolidVertices, v[i + 0], v[i + 1], v[i + 2],
+        &batch.vertices, v[i + 0], v[i + 1], v[i + 2],
         modelViewProjection);
     AppendTriangle(
-        &m_SolidVertices, v[i + 2], v[i + 1], v[i + 3],
+        &batch.vertices, v[i + 2], v[i + 1], v[i + 3],
         modelViewProjection);
   }
 }
@@ -221,12 +395,13 @@ void RageDisplay_Metal::DrawFanInternal(
     return;
   }
 
-  m_SolidVertices.reserve(
-      m_SolidVertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
+  DrawBatch& batch = ActiveBatch();
+  batch.vertices.reserve(
+      batch.vertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
   const RageMatrix modelViewProjection = CurrentModelViewProjection();
   for (int i = 1; i + 1 < iNumVerts; ++i) {
     AppendTriangle(
-        &m_SolidVertices, v[0], v[i], v[i + 1], modelViewProjection);
+        &batch.vertices, v[0], v[i], v[i + 1], modelViewProjection);
   }
 }
 
@@ -236,17 +411,18 @@ void RageDisplay_Metal::DrawStripInternal(
     return;
   }
 
-  m_SolidVertices.reserve(
-      m_SolidVertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
+  DrawBatch& batch = ActiveBatch();
+  batch.vertices.reserve(
+      batch.vertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
   const RageMatrix modelViewProjection = CurrentModelViewProjection();
   for (int i = 0; i + 2 < iNumVerts; ++i) {
     if ((i % 2) == 0) {
       AppendTriangle(
-          &m_SolidVertices, v[i], v[i + 1], v[i + 2],
+          &batch.vertices, v[i], v[i + 1], v[i + 2],
           modelViewProjection);
     } else {
       AppendTriangle(
-          &m_SolidVertices, v[i + 1], v[i], v[i + 2],
+          &batch.vertices, v[i + 1], v[i], v[i + 2],
           modelViewProjection);
     }
   }
@@ -258,12 +434,13 @@ void RageDisplay_Metal::DrawTrianglesInternal(
     return;
   }
 
-  m_SolidVertices.reserve(
-      m_SolidVertices.size() + static_cast<size_t>(iNumVerts));
+  DrawBatch& batch = ActiveBatch();
+  batch.vertices.reserve(
+      batch.vertices.size() + static_cast<size_t>(iNumVerts));
   const RageMatrix modelViewProjection = CurrentModelViewProjection();
   for (int i = 0; i + 2 < iNumVerts; i += 3) {
     AppendTriangle(
-        &m_SolidVertices, v[i + 0], v[i + 1], v[i + 2],
+        &batch.vertices, v[i + 0], v[i + 1], v[i + 2],
         modelViewProjection);
   }
 }
@@ -283,12 +460,14 @@ std::string RageDisplay_Metal::TryVideoMode(
   }
 
   m_bReady = false;
+  ClearAllTextures();
   m_Presenter->Shutdown();
 
   std::string err = m_Window->TryVideoMode(p, bNewDeviceOut);
   if (!err.empty()) {
     return err;
   }
+  bNewDeviceOut = true;
 
   m_Params = m_Window->GetActualVideoModeParams();
   void* nativeWindow = m_Window->GetNativeWindowHandle();
