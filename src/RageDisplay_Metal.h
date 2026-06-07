@@ -3,10 +3,14 @@
 #ifndef RAGE_DISPLAY_METAL_H
 #define RAGE_DISPLAY_METAL_H
 
+#include <memory>
 #include <string>
 
 #include "RageDisplay.h"
 #include "RageTypes.h"
+
+class LowLevelWindow;
+class MacOSMetalPresenter;
 
 /*
  * This class is intentionally only a renderer-registration skeleton for now.
@@ -16,6 +20,7 @@
 class RageDisplay_Metal : public RageDisplay {
  public:
   RageDisplay_Metal();
+  ~RageDisplay_Metal() override;
 
   std::string Init(
       const VideoModeParams& p, bool bAllowUnacceleratedRenderer) override;
@@ -25,7 +30,7 @@ class RageDisplay_Metal : public RageDisplay {
   const RagePixelFormatDesc* GetPixelFormatDesc(RagePixelFormat pf)
       const override;
 
-  bool BeginFrame() override { return false; }
+  bool BeginFrame() override { return m_bReady; }
   void EndFrame() override;
   ActualVideoModeParams GetActualVideoModeParams() const override {
     return m_Params;
@@ -33,25 +38,23 @@ class RageDisplay_Metal : public RageDisplay {
   void SetBlendMode(BlendMode) override {}
   bool SupportsTextureFormat(
       RagePixelFormat, bool /* realtime */ = false) override {
-    return false;
+    return true;
   }
   bool SupportsPerVertexMatrixScale() override { return false; }
 
   uintptr_t CreateTexture(
       RagePixelFormat, RageSurface* /* img */,
-      bool /* bGenerateMipMaps */) override {
-    return 0;
-  }
+      bool /* bGenerateMipMaps */) override;
   void UpdateTexture(
       uintptr_t /* iTexHandle */, RageSurface* /* img */, int /* xoffset */,
       int /* yoffset */, int /* width */, int /* height */) override {}
   void DeleteTexture(uintptr_t /* iTexHandle */) override {}
   void ClearAllTextures() override {}
-  int GetNumTextureUnits() override { return 0; }
+  int GetNumTextureUnits() override { return 1; }
   void SetTexture(TextureUnit, uintptr_t /* iTexture */) override {}
   void SetTextureMode(TextureUnit, TextureMode) override {}
   void SetTextureWrapping(TextureUnit, bool) override {}
-  int GetMaxTextureSize() const override { return 0; }
+  int GetMaxTextureSize() const override { return 16384; }
   void SetTextureFiltering(TextureUnit, bool) override {}
 
   bool IsZWriteEnabled() const override { return false; }
@@ -99,6 +102,10 @@ class RageDisplay_Metal : public RageDisplay {
 
  private:
   ActualVideoModeParams m_Params;
+  std::unique_ptr<LowLevelWindow> m_Window;
+  std::unique_ptr<MacOSMetalPresenter> m_Presenter;
+  uintptr_t m_iNextTextureHandle;
+  bool m_bReady;
 };
 
 #endif

@@ -1566,6 +1566,11 @@ const ActualVideoModeParams LowLevelWindow_MacOSX::GetActualVideoModeParams()
       ShouldRenderOffscreen());
 }
 
+void* LowLevelWindow_MacOSX::GetNativeWindowHandle() const {
+  SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
+  return delegate != nil ? (void*)delegate->m_Window : nullptr;
+}
+
 static void ReleaseMetalOpenGLBridgeResources(
     MacOSMetalOpenGLBridge* bridge) {
   if (bridge == nullptr) {

@@ -708,6 +708,132 @@ void MacOSMetalPresenter::DetachLayer() {
   }
 }
 
+bool MacOSMetalPresenter::PresentClearFrame(
+    double red, double green, double blue, double alpha, double targetHz) {
+  if (!IsAvailable()) {
+    return false;
+  }
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  if (impl->layer == nil || impl->layerView == nil ||
+      impl->commandQueue == nil) {
+    return false;
+  }
+
+  float nextDrawableMs = 0.0f;
+  uint64_t drawableSerial = 0;
+  uint64_t drawableMisses = 0;
+  id<CAMetalDrawable> drawable = TakePrefetchedDrawable(
+      impl, &nextDrawableMs, &drawableSerial, &drawableMisses);
+  if (drawable == nil) {
+    RageTimer acquireTimer;
+    drawable = [impl->layer nextDrawable];
+    nextDrawableMs = acquireTimer.GetDeltaTime() * 1000.0f;
+    if (drawable != nil) {
+      [drawable retain];
+    } else {
+      const uint64_t skippedFrames = ++impl->directPresentSkippedNoDrawable;
+      g_iMetalDirectPresentSkippedNoDrawableFrames.store(
+          skippedFrames, std::memory_order_relaxed);
+      if (PerfDiagnosticsEnabled() &&
+          (skippedFrames <= kMetalInitialTraceFrames ||
+           skippedFrames % kMetalRareSkipTraceInterval == 0)) {
+        LOG->Trace(
+            "PERF_TRACE: macos_metal_clear_present "
+            "skipped_no_drawable=1 skipped_frames=%llu "
+            "prefetch_misses=%llu target_hz=%.3f next_drawable_ms=%.3f",
+            static_cast<unsigned long long>(skippedFrames),
+            static_cast<unsigned long long>(drawableMisses), targetHz,
+            nextDrawableMs);
+      }
+      return false;
+    }
+  }
+
+  RageTimer submitTimer;
+  id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
+  if (commandBuffer == nil) {
+    [drawable release];
+    return false;
+  }
+
+  MTLRenderPassDescriptor* passDescriptor =
+      [MTLRenderPassDescriptor renderPassDescriptor];
+  passDescriptor.colorAttachments[0].texture = [drawable texture];
+  passDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
+  passDescriptor.colorAttachments[0].clearColor =
+      MTLClearColorMake(red, green, blue, alpha);
+  passDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+
+  id<MTLRenderCommandEncoder> encoder =
+      [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
+  if (encoder == nil) {
+    [drawable release];
+    return false;
+  }
+  [encoder endEncoding];
+
+  const double minimumDuration =
+      targetHz > 1.0 ? (1.0 / targetHz) : (1.0 / 60.0);
+  if (@available(macOS 10.15, *)) {
+    [commandBuffer presentDrawable:drawable
+               afterMinimumDuration:minimumDuration];
+  } else {
+    [commandBuffer presentDrawable:drawable];
+  }
+
+  const uint64_t frameIndex =
+      g_iMetalDirectPresentSubmittedFrames.fetch_add(1) + 1;
+  const uint64_t submitUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  const float encodeSubmitMs = submitTimer.GetDeltaTime() * 1000.0f;
+  id<CAMetalDrawable> completionDrawable = [drawable retain];
+  [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedCommandBuffer) {
+    const uint64_t completedIndex =
+        g_iMetalDirectPresentCompletedFrames.fetch_add(1) + 1;
+    const uint64_t completedUsec = RageTimer::GetTimeSinceStartMicroseconds();
+    const float commandBufferMs =
+        completedUsec >= submitUsec
+            ? static_cast<float>(completedUsec - submitUsec) / 1000.0f
+            : 0.0f;
+    const bool traceCompletion =
+        completedIndex <= kMetalInitialTraceFrames ||
+        commandBufferMs >= kMetalSlowCommandBufferMs;
+    if (PerfDiagnosticsEnabled() && traceCompletion) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_clear_present_completed "
+          "frame=%llu completed=%llu status=%lu command_buffer_ms=%.3f "
+          "next_drawable_ms=%.3f encode_submit_ms=%.3f target_hz=%.3f",
+          static_cast<unsigned long long>(frameIndex),
+          static_cast<unsigned long long>(completedIndex),
+          static_cast<unsigned long>([completedCommandBuffer status]),
+          commandBufferMs, nextDrawableMs, encodeSubmitMs, targetHz);
+    }
+    [completionDrawable release];
+  }];
+  [commandBuffer commit];
+  [drawable release];
+
+  const bool traceSubmit =
+      !impl->loggedFirstDirectPresent ||
+      frameIndex <= kMetalInitialTraceFrames ||
+      nextDrawableMs >= kMetalTraceNextDrawableMs;
+  if (PerfDiagnosticsEnabled() && traceSubmit) {
+    LOG->Trace(
+        "PERF_TRACE: macos_metal_clear_present_submitted "
+        "target_hz=%.3f minimum_duration_ms=%.3f frame=%llu "
+        "prefetched_drawable_serial=%llu prefetch_misses=%llu "
+        "next_drawable_ms=%.3f encode_submit_ms=%.3f",
+        targetHz, minimumDuration * 1000.0,
+        static_cast<unsigned long long>(frameIndex),
+        static_cast<unsigned long long>(drawableSerial),
+        static_cast<unsigned long long>(drawableMisses), nextDrawableMs,
+        encodeSubmitMs);
+  }
+  impl->loggedFirstDirectPresent = true;
+  return true;
+}
+
 bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
   if (!IsInteropReady() || index < 0 || index >= kMetalInteropSurfaceCount) {
     return false;

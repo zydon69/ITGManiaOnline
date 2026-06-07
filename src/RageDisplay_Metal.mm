@@ -2,6 +2,8 @@
 
 #include "RageDisplay_Metal.h"
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -9,6 +11,8 @@
 #include "ModelTypes.h"
 #include "RageDisplay.h"
 #include "RageLog.h"
+#include "arch/LowLevelWindow/LowLevelWindow.h"
+#include "arch/LowLevelWindow/MacOSMetalPresenter.h"
 #include "global.h"
 
 static RageDisplay::RagePixelFormatDesc PIXEL_FORMAT_DESC[NUM_RagePixelFormat] =
@@ -50,23 +54,44 @@ class RageCompiledGeometryMetalStub : public RageCompiledGeometry {
   void Draw(int /* iMeshIndex */) const override {}
 };
 
-RageDisplay_Metal::RageDisplay_Metal() {
+RageDisplay_Metal::RageDisplay_Metal()
+    : m_iNextTextureHandle(1), m_bReady(false) {
   LOG->MapLog("renderer", "Current renderer: metal");
 }
 
-std::string RageDisplay_Metal::Init(
-    const VideoModeParams& /* p */,
-    bool /* bAllowUnacceleratedRenderer */) {
-  const std::string reason =
-      "Native Metal renderer is registered but not implemented yet. "
-      "Falling back to the next configured video renderer.";
+RageDisplay_Metal::~RageDisplay_Metal() {
+  if (m_Presenter) {
+    m_Presenter->Shutdown();
+  }
+}
 
-  LOG->Warn("RageDisplay_Metal: %s", reason.c_str());
-  return reason;
+std::string RageDisplay_Metal::Init(
+    const VideoModeParams& p,
+    bool /* bAllowUnacceleratedRenderer */) {
+  m_Window.reset(LowLevelWindow::Create());
+  m_Presenter.reset(new MacOSMetalPresenter());
+  m_bReady = false;
+
+  bool needReloadTextures = false;
+  const std::string err = SetVideoMode(p, needReloadTextures);
+  if (!err.empty()) {
+    return err;
+  }
+
+  LOG->Trace(
+      "RageDisplay_Metal initialized in hello-frame mode: size=%dx%d "
+      "rate=%d windowed=%d",
+      m_Params.width, m_Params.height, m_Params.rate,
+      m_Params.windowed ? 1 : 0);
+  return std::string();
 }
 
 void RageDisplay_Metal::GetDisplaySpecs(DisplaySpecs& out) const {
-  out.clear();
+  if (m_Window) {
+    m_Window->GetDisplaySpecs(out);
+  } else {
+    out.clear();
+  }
 }
 
 const RageDisplay::RagePixelFormatDesc* RageDisplay_Metal::GetPixelFormatDesc(
@@ -75,7 +100,33 @@ const RageDisplay::RagePixelFormatDesc* RageDisplay_Metal::GetPixelFormatDesc(
   return &PIXEL_FORMAT_DESC[pf];
 }
 
-void RageDisplay_Metal::EndFrame() { ProcessStatsOnFlip(); }
+uintptr_t RageDisplay_Metal::CreateTexture(
+    RagePixelFormat /* pixfmt */, RageSurface* /* img */,
+    bool /* bGenerateMipMaps */) {
+  return m_iNextTextureHandle++;
+}
+
+void RageDisplay_Metal::EndFrame() {
+  if (m_bReady && m_Presenter) {
+    const double targetHz =
+        m_Params.rate > 1 ? static_cast<double>(m_Params.rate) : 60.0;
+    const bool presented =
+        m_Presenter->PresentClearFrame(0.04, 0.055, 0.075, 1.0, targetHz);
+    if (!presented) {
+      static uint64_t s_iSkippedClearFrames = 0;
+      ++s_iSkippedClearFrames;
+      if (s_iSkippedClearFrames <= 3 || s_iSkippedClearFrames % 600 == 0) {
+        LOG->Warn(
+            "RageDisplay_Metal: clear present skipped; frames=%llu.",
+            static_cast<unsigned long long>(s_iSkippedClearFrames));
+      }
+    }
+  }
+  if (m_Window) {
+    m_Window->Update();
+  }
+  ProcessStatsOnFlip();
+}
 
 RageCompiledGeometry* RageDisplay_Metal::CreateCompiledGeometry() {
   return new RageCompiledGeometryMetalStub;
@@ -87,7 +138,39 @@ void RageDisplay_Metal::DeleteCompiledGeometry(RageCompiledGeometry* p) {
 
 std::string RageDisplay_Metal::TryVideoMode(
     const VideoModeParams& p, bool& bNewDeviceOut) {
-  m_Params = ActualVideoModeParams(p);
-  bNewDeviceOut = false;
-  return "Native Metal renderer video mode setup is not implemented yet.";
+  if (!m_Window || !m_Presenter) {
+    return "Native Metal renderer internal window/presenter is not ready.";
+  }
+
+  m_bReady = false;
+  m_Presenter->Shutdown();
+
+  std::string err = m_Window->TryVideoMode(p, bNewDeviceOut);
+  if (!err.empty()) {
+    return err;
+  }
+
+  m_Params = m_Window->GetActualVideoModeParams();
+  void* nativeWindow = m_Window->GetNativeWindowHandle();
+  if (nativeWindow == nullptr) {
+    return "Native Metal renderer could not access the macOS window.";
+  }
+
+  const double targetHz =
+      m_Params.rate > 1 ? static_cast<double>(m_Params.rate) : 60.0;
+  if (!m_Presenter->Initialize(
+          nativeWindow, std::max(1, m_Params.width),
+          std::max(1, m_Params.height), targetHz)) {
+    return m_Presenter->FailureReason().empty()
+               ? "Native Metal presenter initialization failed."
+               : m_Presenter->FailureReason();
+  }
+  if (!m_Presenter->AttachLayerToWindow(nativeWindow)) {
+    return m_Presenter->FailureReason().empty()
+               ? "Native Metal presenter layer attachment failed."
+               : m_Presenter->FailureReason();
+  }
+
+  m_bReady = true;
+  return std::string();
 }
