@@ -1570,6 +1570,12 @@ void RageDisplay_Legacy::EndFrame() {
       g_iOpenGLPreFramePacingContinuousFinishMinRate.Get(), 1, 1000);
   const int continuousFinishLogEveryNFrames = std::clamp(
       g_iOpenGLPreFramePacingContinuousFinishLogEveryNFrames.Get(), 1, 36000);
+  const MacOSMetalPresenterRuntimeStats metalPresenterRuntimeStats =
+      MacOSMetalPresenterGetRuntimeStats();
+  const bool metalDirectPresentRuntimeActive =
+      metalPresenterRuntimeStats.submittedFrames > 0;
+  const bool proactiveFinishAllowed =
+      !metalDirectPresentRuntimeActive;
 #endif
 
 	if (UseOffscreenRenderTarget()) {
@@ -1591,7 +1597,8 @@ void RageDisplay_Legacy::EndFrame() {
 #ifdef __APPLE__
   if (g_bOpenGLPreFramePacingSync.Get()) {
     ++g_iOpenGLPreFramePacingFrames;
-    if (g_bOpenGLPreFramePacingProactiveFinish.Get() &&
+    if (proactiveFinishAllowed &&
+        g_bOpenGLPreFramePacingProactiveFinish.Get() &&
         proactiveFinishFrames > 0 && mode.rate >= proactiveFinishMinRate &&
         (g_iOpenGLPreFramePacingFrames %
          static_cast<uint64_t>(proactiveFinishEveryNFramesEffective)) == 0) {
@@ -1654,6 +1661,7 @@ void RageDisplay_Legacy::EndFrame() {
           "proactive_high_refresh_cap_active=%d "
           "proactive_frames=%d "
           "proactive_min_rate=%d proactive_count=%llu "
+          "metal_direct_present_active=%d proactive_allowed=%d "
           "continuous_finish=%d continuous_min_rate=%d "
           "continuous_log_every_n=%d continuous_count=%llu frame=%llu",
           preFramePacingSyncMs, preFramePacingSyncMode,
@@ -1673,6 +1681,8 @@ void RageDisplay_Legacy::EndFrame() {
           proactiveFinishMinRate,
           static_cast<unsigned long long>(
               g_iOpenGLPreFramePacingProactiveFinishes),
+          metalDirectPresentRuntimeActive ? 1 : 0,
+          proactiveFinishAllowed ? 1 : 0,
           preFramePacingContinuousFinish ? 1 : 0,
           continuousFinishMinRate, continuousFinishLogEveryNFrames,
           static_cast<unsigned long long>(

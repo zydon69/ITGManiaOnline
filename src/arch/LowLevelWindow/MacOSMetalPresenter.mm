@@ -101,6 +101,7 @@ void StartDrawablePrefetcher(MacOSMetalPresenterImpl* impl) {
     return;
   }
 
+  RageTimer startTimer;
   impl->drawablePrefetchStop = false;
   impl->drawablePrefetchStarted = true;
   impl->drawablePrefetchThread = std::thread([impl]() {
@@ -189,6 +190,11 @@ void StartDrawablePrefetcher(MacOSMetalPresenterImpl* impl) {
   });
 
   impl->drawableCondition.notify_all();
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: macos_metal_drawable_prefetch_start total_ms=%.3f",
+        startTimer.GetDeltaTime() * 1000.0f);
+  }
 }
 
 void StopDrawablePrefetcher(MacOSMetalPresenterImpl* impl) {
@@ -196,6 +202,7 @@ void StopDrawablePrefetcher(MacOSMetalPresenterImpl* impl) {
     return;
   }
 
+  RageTimer stopTimer;
   {
     std::lock_guard<std::mutex> lock(impl->drawableMutex);
     impl->drawablePrefetchStop = true;
@@ -228,6 +235,11 @@ void StopDrawablePrefetcher(MacOSMetalPresenterImpl* impl) {
     impl->prefetchedDrawableAcquireMs = 0.0f;
     impl->drawablePrefetchStarted = false;
     impl->drawablePrefetchStop = false;
+  }
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: macos_metal_drawable_prefetch_stop total_ms=%.3f",
+        stopTimer.GetDeltaTime() * 1000.0f);
   }
 }
 
@@ -418,6 +430,7 @@ MacOSMetalPresenter::~MacOSMetalPresenter() {
 
 bool MacOSMetalPresenter::Initialize(
     void* nsWindow, int width, int height, double targetHz) {
+  RageTimer initTimer;
   Shutdown();
   ResetMetalRuntimeStats();
 
@@ -501,10 +514,11 @@ bool MacOSMetalPresenter::Initialize(
   LOG->Trace(
       "MacOS Metal presenter initialized: device='%s' target_hz=%.3f "
       "requested_size=%dx%d layer_size=%dx%d attached=0 "
-      "iosurface_ring=%d iosurface_count=%d",
+      "iosurface_ring=%d iosurface_count=%d total_ms=%.3f",
       [[impl->device name] UTF8String], targetHz, width, height,
       static_cast<int>(bounds.size.width), static_cast<int>(bounds.size.height),
-      impl->interopReady ? 1 : 0, kMetalInteropSurfaceCount);
+      impl->interopReady ? 1 : 0, kMetalInteropSurfaceCount,
+      initTimer.GetDeltaTime() * 1000.0f);
   return true;
 }
 
@@ -514,6 +528,7 @@ void MacOSMetalPresenter::Shutdown() {
     return;
   }
 
+  RageTimer shutdownTimer;
   MacOSMetalPresenterImpl* impl =
       static_cast<MacOSMetalPresenterImpl*>(m_Impl);
   StopDrawablePrefetcher(impl);
@@ -543,6 +558,11 @@ void MacOSMetalPresenter::Shutdown() {
   m_Available = false;
   g_bMetalPresenterRuntimeActive.store(false, std::memory_order_release);
   ResetMetalRuntimeStats();
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: macos_metal_presenter_shutdown total_ms=%.3f",
+        shutdownTimer.GetDeltaTime() * 1000.0f);
+  }
 }
 
 bool MacOSMetalPresenter::IsAvailable() const {
@@ -597,6 +617,7 @@ void MacOSMetalPresenter::SetLayerVisible(bool visible) {
 }
 
 bool MacOSMetalPresenter::AttachLayerToWindow(void* nsWindow) {
+  RageTimer attachTimer;
   if (![NSThread isMainThread]) {
     __block bool attached = false;
     dispatch_sync(dispatch_get_main_queue(), ^{
@@ -629,6 +650,16 @@ bool MacOSMetalPresenter::AttachLayerToWindow(void* nsWindow) {
     impl->layer.frame = bounds;
     [impl->layerView setHidden:NO];
     StartDrawablePrefetcher(impl);
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_layer_reattached total_ms=%.3f "
+          "view_size=%dx%d drawable_size=%dx%d",
+          attachTimer.GetDeltaTime() * 1000.0f,
+          static_cast<int>(bounds.size.width),
+          static_cast<int>(bounds.size.height),
+          static_cast<int>(impl->layer.drawableSize.width),
+          static_cast<int>(impl->layer.drawableSize.height));
+    }
     return true;
   }
 
@@ -644,14 +675,16 @@ bool MacOSMetalPresenter::AttachLayerToWindow(void* nsWindow) {
 
   LOG->Trace(
       "MacOS Metal presenter layer attached: view_size=%dx%d "
-      "drawable_size=%dx%d",
+      "drawable_size=%dx%d total_ms=%.3f",
       static_cast<int>(bounds.size.width), static_cast<int>(bounds.size.height),
       static_cast<int>(impl->layer.drawableSize.width),
-      static_cast<int>(impl->layer.drawableSize.height));
+      static_cast<int>(impl->layer.drawableSize.height),
+      attachTimer.GetDeltaTime() * 1000.0f);
   return true;
 }
 
 void MacOSMetalPresenter::DetachLayer() {
+  RageTimer detachTimer;
   if (![NSThread isMainThread]) {
     dispatch_sync(dispatch_get_main_queue(), ^{
       DetachLayer();
@@ -669,7 +702,9 @@ void MacOSMetalPresenter::DetachLayer() {
     [impl->layerView removeFromSuperview];
     [impl->layerView release];
     impl->layerView = nil;
-    LOG->Trace("MacOS Metal presenter layer detached.");
+    LOG->Trace(
+        "MacOS Metal presenter layer detached. total_ms=%.3f",
+        detachTimer.GetDeltaTime() * 1000.0f);
   }
 }
 
