@@ -54,6 +54,30 @@ class RageCompiledGeometryMetalStub : public RageCompiledGeometry {
   void Draw(int /* iMeshIndex */) const override {}
 };
 
+float ByteColorToFloat(uint8_t value) {
+  return static_cast<float>(value) / 255.0f;
+}
+
+MacOSMetalSolidVertex ToMetalSolidVertex(const RageSpriteVertex& v) {
+  MacOSMetalSolidVertex out;
+  out.x = v.p.x;
+  out.y = v.p.y;
+  out.r = ByteColorToFloat(v.c.r);
+  out.g = ByteColorToFloat(v.c.g);
+  out.b = ByteColorToFloat(v.c.b);
+  out.a = ByteColorToFloat(v.c.a);
+  return out;
+}
+
+void AppendTriangle(
+    std::vector<MacOSMetalSolidVertex>* vertices,
+    const RageSpriteVertex& a, const RageSpriteVertex& b,
+    const RageSpriteVertex& c) {
+  vertices->push_back(ToMetalSolidVertex(a));
+  vertices->push_back(ToMetalSolidVertex(b));
+  vertices->push_back(ToMetalSolidVertex(c));
+}
+
 RageDisplay_Metal::RageDisplay_Metal()
     : m_iNextTextureHandle(1), m_bReady(false) {
   LOG->MapLog("renderer", "Current renderer: metal");
@@ -110,8 +134,15 @@ void RageDisplay_Metal::EndFrame() {
   if (m_bReady && m_Presenter) {
     const double targetHz =
         m_Params.rate > 1 ? static_cast<double>(m_Params.rate) : 60.0;
-    const bool presented =
-        m_Presenter->PresentClearFrame(0.04, 0.055, 0.075, 1.0, targetHz);
+    std::vector<MacOSMetalSolidVertex> vertices;
+    vertices.swap(m_SolidVertices);
+    if (vertices.empty()) {
+      vertices.push_back({32.0f, 32.0f, 0.15f, 0.85f, 1.0f, 1.0f});
+      vertices.push_back({192.0f, 32.0f, 1.0f, 0.35f, 0.55f, 1.0f});
+      vertices.push_back({32.0f, 192.0f, 0.95f, 0.95f, 0.2f, 1.0f});
+    }
+    const bool presented = m_Presenter->PresentSolidVertices(
+        vertices.data(), vertices.size(), 0.04, 0.055, 0.075, 1.0, targetHz);
     if (!presented) {
       static uint64_t s_iSkippedClearFrames = 0;
       ++s_iSkippedClearFrames;
@@ -126,6 +157,33 @@ void RageDisplay_Metal::EndFrame() {
     m_Window->Update();
   }
   ProcessStatsOnFlip();
+}
+
+void RageDisplay_Metal::DrawQuadsInternal(
+    const RageSpriteVertex v[], int iNumVerts) {
+  if (v == nullptr || iNumVerts < 4) {
+    return;
+  }
+
+  m_SolidVertices.reserve(
+      m_SolidVertices.size() + static_cast<size_t>(iNumVerts / 4) * 6);
+  for (int i = 0; i + 3 < iNumVerts; i += 4) {
+    AppendTriangle(&m_SolidVertices, v[i + 0], v[i + 1], v[i + 2]);
+    AppendTriangle(&m_SolidVertices, v[i + 2], v[i + 1], v[i + 3]);
+  }
+}
+
+void RageDisplay_Metal::DrawTrianglesInternal(
+    const RageSpriteVertex v[], int iNumVerts) {
+  if (v == nullptr || iNumVerts < 3) {
+    return;
+  }
+
+  m_SolidVertices.reserve(
+      m_SolidVertices.size() + static_cast<size_t>(iNumVerts));
+  for (int i = 0; i + 2 < iNumVerts; i += 3) {
+    AppendTriangle(&m_SolidVertices, v[i + 0], v[i + 1], v[i + 2]);
+  }
 }
 
 RageCompiledGeometry* RageDisplay_Metal::CreateCompiledGeometry() {

@@ -5,12 +5,13 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "RageDisplay.h"
 #include "RageTypes.h"
+#include "arch/LowLevelWindow/MacOSMetalPresenter.h"
 
 class LowLevelWindow;
-class MacOSMetalPresenter;
 
 /*
  * This class is intentionally only a renderer-registration skeleton for now.
@@ -83,13 +84,13 @@ class RageDisplay_Metal : public RageDisplay {
 
  protected:
   void DrawQuadsInternal(
-      const RageSpriteVertex v[], int iNumVerts) override {}
+      const RageSpriteVertex v[], int iNumVerts) override;
   void DrawQuadStripInternal(
       const RageSpriteVertex v[], int iNumVerts) override {}
   void DrawFanInternal(const RageSpriteVertex v[], int iNumVerts) override {}
   void DrawStripInternal(const RageSpriteVertex v[], int iNumVerts) override {}
   void DrawTrianglesInternal(
-      const RageSpriteVertex v[], int iNumVerts) override {}
+      const RageSpriteVertex v[], int iNumVerts) override;
   void DrawCompiledGeometryInternal(
       const RageCompiledGeometry* p, int iMeshIndex) override {}
   void DrawLineStripInternal(
@@ -104,6 +105,7 @@ class RageDisplay_Metal : public RageDisplay {
   ActualVideoModeParams m_Params;
   std::unique_ptr<LowLevelWindow> m_Window;
   std::unique_ptr<MacOSMetalPresenter> m_Presenter;
+  std::vector<MacOSMetalSolidVertex> m_SolidVertices;
   uintptr_t m_iNextTextureHandle;
   bool m_bReady;
 };

@@ -76,6 +76,7 @@ struct MacOSMetalPresenterImpl {
   id<MTLDevice> device = nil;
   id<MTLCommandQueue> commandQueue = nil;
   id<MTLRenderPipelineState> presentPipeline = nil;
+  id<MTLRenderPipelineState> solidPipeline = nil;
   CAMetalLayer* layer = nil;
   NSView* layerView = nil;
   std::array<MacOSMetalInteropSurface, kMetalInteropSurfaceCount> surfaces;
@@ -419,6 +420,95 @@ id<MTLRenderPipelineState> CreatePresentPipeline(
   return pipeline;
 }
 
+id<MTLRenderPipelineState> CreateSolidPipeline(
+    id<MTLDevice> device, std::string* failureReason) {
+  static NSString* const shaderSource =
+      @"#include <metal_stdlib>\n"
+       "using namespace metal;\n"
+       "struct VertexIn {\n"
+       "  float2 position;\n"
+       "  float4 color;\n"
+       "};\n"
+       "struct Uniforms {\n"
+       "  float2 viewport;\n"
+       "};\n"
+       "struct VertexOut {\n"
+       "  float4 position [[position]];\n"
+       "  float4 color;\n"
+       "};\n"
+       "vertex VertexOut solid_vertex(\n"
+       "    const device VertexIn* vertices [[buffer(0)]],\n"
+       "    constant Uniforms& uniforms [[buffer(1)]],\n"
+       "    uint vertexID [[vertex_id]]) {\n"
+       "  const VertexIn in = vertices[vertexID];\n"
+       "  const float2 ndc = float2(\n"
+       "      (in.position.x / uniforms.viewport.x) * 2.0 - 1.0,\n"
+       "      1.0 - (in.position.y / uniforms.viewport.y) * 2.0);\n"
+       "  VertexOut out;\n"
+       "  out.position = float4(ndc, 0.0, 1.0);\n"
+       "  out.color = in.color;\n"
+       "  return out;\n"
+       "}\n"
+       "fragment float4 solid_fragment(VertexOut in [[stage_in]]) {\n"
+       "  return in.color;\n"
+       "}\n";
+
+  NSError* error = nil;
+  id<MTLLibrary> library = [device newLibraryWithSource:shaderSource
+                                                options:nil
+                                                  error:&error];
+  if (library == nil) {
+    if (failureReason != nullptr) {
+      *failureReason = error != nil ? [[error localizedDescription] UTF8String]
+                                    : "Metal solid shader compilation failed.";
+    }
+    return nil;
+  }
+
+  id<MTLFunction> vertexFunction =
+      [library newFunctionWithName:@"solid_vertex"];
+  id<MTLFunction> fragmentFunction =
+      [library newFunctionWithName:@"solid_fragment"];
+  if (vertexFunction == nil || fragmentFunction == nil) {
+    if (failureReason != nullptr) {
+      *failureReason = "Metal solid shader entry point lookup failed.";
+    }
+    [vertexFunction release];
+    [fragmentFunction release];
+    [library release];
+    return nil;
+  }
+
+  MTLRenderPipelineDescriptor* descriptor =
+      [[[MTLRenderPipelineDescriptor alloc] init] autorelease];
+  descriptor.vertexFunction = vertexFunction;
+  descriptor.fragmentFunction = fragmentFunction;
+  descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+  descriptor.colorAttachments[0].blendingEnabled = YES;
+  descriptor.colorAttachments[0].sourceRGBBlendFactor =
+      MTLBlendFactorSourceAlpha;
+  descriptor.colorAttachments[0].destinationRGBBlendFactor =
+      MTLBlendFactorOneMinusSourceAlpha;
+  descriptor.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+  descriptor.colorAttachments[0].sourceAlphaBlendFactor =
+      MTLBlendFactorSourceAlpha;
+  descriptor.colorAttachments[0].destinationAlphaBlendFactor =
+      MTLBlendFactorOneMinusSourceAlpha;
+  descriptor.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+
+  id<MTLRenderPipelineState> pipeline =
+      [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+  if (pipeline == nil && failureReason != nullptr) {
+    *failureReason = error != nil ? [[error localizedDescription] UTF8String]
+                                  : "Metal solid pipeline creation failed.";
+  }
+
+  [vertexFunction release];
+  [fragmentFunction release];
+  [library release];
+  return pipeline;
+}
+
 }  // namespace
 
 MacOSMetalPresenter::MacOSMetalPresenter()
@@ -462,6 +552,15 @@ bool MacOSMetalPresenter::Initialize(
     LOG->Warn(
         "MacOS Metal presenter direct-present pipeline unavailable: %s",
         pipelineFailure.c_str());
+  }
+
+  std::string solidPipelineFailure;
+  impl->solidPipeline =
+      CreateSolidPipeline(impl->device, &solidPipelineFailure);
+  if (impl->solidPipeline == nil) {
+    LOG->Warn(
+        "MacOS Metal presenter solid pipeline unavailable: %s",
+        solidPipelineFailure.c_str());
   }
 
   NSWindow* window = (__bridge NSWindow*)nsWindow;
@@ -547,6 +646,10 @@ void MacOSMetalPresenter::Shutdown() {
   if (impl->presentPipeline != nil) {
     [impl->presentPipeline release];
     impl->presentPipeline = nil;
+  }
+  if (impl->solidPipeline != nil) {
+    [impl->solidPipeline release];
+    impl->solidPipeline = nil;
   }
   if (impl->device != nil) {
     [impl->device release];
@@ -829,6 +932,167 @@ bool MacOSMetalPresenter::PresentClearFrame(
         static_cast<unsigned long long>(drawableSerial),
         static_cast<unsigned long long>(drawableMisses), nextDrawableMs,
         encodeSubmitMs);
+  }
+  impl->loggedFirstDirectPresent = true;
+  return true;
+}
+
+bool MacOSMetalPresenter::PresentSolidVertices(
+    const MacOSMetalSolidVertex* vertices, size_t vertexCount,
+    double clearRed, double clearGreen, double clearBlue, double clearAlpha,
+    double targetHz) {
+  if (!IsAvailable() || vertices == nullptr || vertexCount == 0) {
+    return PresentClearFrame(clearRed, clearGreen, clearBlue, clearAlpha,
+                             targetHz);
+  }
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  if (impl->layer == nil || impl->layerView == nil ||
+      impl->commandQueue == nil || impl->solidPipeline == nil) {
+    return false;
+  }
+
+  float nextDrawableMs = 0.0f;
+  uint64_t drawableSerial = 0;
+  uint64_t drawableMisses = 0;
+  id<CAMetalDrawable> drawable = TakePrefetchedDrawable(
+      impl, &nextDrawableMs, &drawableSerial, &drawableMisses);
+  if (drawable == nil) {
+    RageTimer acquireTimer;
+    drawable = [impl->layer nextDrawable];
+    nextDrawableMs = acquireTimer.GetDeltaTime() * 1000.0f;
+    if (drawable != nil) {
+      [drawable retain];
+    } else {
+      const uint64_t skippedFrames = ++impl->directPresentSkippedNoDrawable;
+      g_iMetalDirectPresentSkippedNoDrawableFrames.store(
+          skippedFrames, std::memory_order_relaxed);
+      if (PerfDiagnosticsEnabled() &&
+          (skippedFrames <= kMetalInitialTraceFrames ||
+           skippedFrames % kMetalRareSkipTraceInterval == 0)) {
+        LOG->Trace(
+            "PERF_TRACE: macos_metal_solid_present skipped_no_drawable=1 "
+            "skipped_frames=%llu prefetch_misses=%llu target_hz=%.3f "
+            "next_drawable_ms=%.3f vertices=%zu",
+            static_cast<unsigned long long>(skippedFrames),
+            static_cast<unsigned long long>(drawableMisses), targetHz,
+            nextDrawableMs, vertexCount);
+      }
+      return false;
+    }
+  }
+
+  struct SolidUniforms {
+    float viewport[2];
+  };
+  const SolidUniforms uniforms = {{
+      static_cast<float>(std::max<CGFloat>(1.0, impl->layer.drawableSize.width)),
+      static_cast<float>(
+          std::max<CGFloat>(1.0, impl->layer.drawableSize.height)),
+  }};
+
+  RageTimer submitTimer;
+  id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
+  if (commandBuffer == nil) {
+    [drawable release];
+    return false;
+  }
+  const NSUInteger vertexBufferLength =
+      static_cast<NSUInteger>(sizeof(MacOSMetalSolidVertex) * vertexCount);
+  id<MTLBuffer> vertexBuffer =
+      [impl->device newBufferWithBytes:vertices
+                                length:vertexBufferLength
+                               options:MTLResourceStorageModeShared];
+  if (vertexBuffer == nil) {
+    [drawable release];
+    return false;
+  }
+
+  MTLRenderPassDescriptor* passDescriptor =
+      [MTLRenderPassDescriptor renderPassDescriptor];
+  passDescriptor.colorAttachments[0].texture = [drawable texture];
+  passDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
+  passDescriptor.colorAttachments[0].clearColor =
+      MTLClearColorMake(clearRed, clearGreen, clearBlue, clearAlpha);
+  passDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+
+  id<MTLRenderCommandEncoder> encoder =
+      [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
+  if (encoder == nil) {
+    [vertexBuffer release];
+    [drawable release];
+    return false;
+  }
+
+  [encoder setRenderPipelineState:impl->solidPipeline];
+  [encoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
+  [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
+  [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+              vertexStart:0
+              vertexCount:static_cast<NSUInteger>(vertexCount)];
+  [encoder endEncoding];
+
+  const double minimumDuration =
+      targetHz > 1.0 ? (1.0 / targetHz) : (1.0 / 60.0);
+  if (@available(macOS 10.15, *)) {
+    [commandBuffer presentDrawable:drawable
+               afterMinimumDuration:minimumDuration];
+  } else {
+    [commandBuffer presentDrawable:drawable];
+  }
+
+  const uint64_t frameIndex =
+      g_iMetalDirectPresentSubmittedFrames.fetch_add(1) + 1;
+  const uint64_t submitUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  const float encodeSubmitMs = submitTimer.GetDeltaTime() * 1000.0f;
+  id<CAMetalDrawable> completionDrawable = [drawable retain];
+  id<MTLBuffer> completionVertexBuffer = [vertexBuffer retain];
+  [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedCommandBuffer) {
+    const uint64_t completedIndex =
+        g_iMetalDirectPresentCompletedFrames.fetch_add(1) + 1;
+    const uint64_t completedUsec = RageTimer::GetTimeSinceStartMicroseconds();
+    const float commandBufferMs =
+        completedUsec >= submitUsec
+            ? static_cast<float>(completedUsec - submitUsec) / 1000.0f
+            : 0.0f;
+    const bool traceCompletion =
+        completedIndex <= kMetalInitialTraceFrames ||
+        commandBufferMs >= kMetalSlowCommandBufferMs;
+    if (PerfDiagnosticsEnabled() && traceCompletion) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_solid_present_completed "
+          "frame=%llu completed=%llu status=%lu command_buffer_ms=%.3f "
+          "next_drawable_ms=%.3f encode_submit_ms=%.3f target_hz=%.3f "
+          "vertices=%zu",
+          static_cast<unsigned long long>(frameIndex),
+          static_cast<unsigned long long>(completedIndex),
+          static_cast<unsigned long>([completedCommandBuffer status]),
+          commandBufferMs, nextDrawableMs, encodeSubmitMs, targetHz,
+          vertexCount);
+    }
+    [completionVertexBuffer release];
+    [completionDrawable release];
+  }];
+  [commandBuffer commit];
+  [vertexBuffer release];
+  [drawable release];
+
+  const bool traceSubmit =
+      !impl->loggedFirstDirectPresent ||
+      frameIndex <= kMetalInitialTraceFrames ||
+      nextDrawableMs >= kMetalTraceNextDrawableMs;
+  if (PerfDiagnosticsEnabled() && traceSubmit) {
+    LOG->Trace(
+        "PERF_TRACE: macos_metal_solid_present_submitted "
+        "target_hz=%.3f minimum_duration_ms=%.3f frame=%llu "
+        "prefetched_drawable_serial=%llu prefetch_misses=%llu "
+        "next_drawable_ms=%.3f encode_submit_ms=%.3f vertices=%zu",
+        targetHz, minimumDuration * 1000.0,
+        static_cast<unsigned long long>(frameIndex),
+        static_cast<unsigned long long>(drawableSerial),
+        static_cast<unsigned long long>(drawableMisses), nextDrawableMs,
+        encodeSubmitMs, vertexCount);
   }
   impl->loggedFirstDirectPresent = true;
   return true;
