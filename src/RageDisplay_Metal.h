@@ -31,7 +31,7 @@ class RageDisplay_Metal : public RageDisplay {
   const RagePixelFormatDesc* GetPixelFormatDesc(RagePixelFormat pf)
       const override;
 
-  bool BeginFrame() override { return m_bReady; }
+  bool BeginFrame() override;
   void EndFrame() override;
   ActualVideoModeParams GetActualVideoModeParams() const override {
     return m_Params;
@@ -39,7 +39,7 @@ class RageDisplay_Metal : public RageDisplay {
   void SetBlendMode(BlendMode mode) override;
   bool SupportsTextureFormat(
       RagePixelFormat pixfmt, bool realtime = false) override;
-  bool SupportsPerVertexMatrixScale() override { return false; }
+  bool SupportsPerVertexMatrixScale() override { return true; }
 
   uintptr_t CreateTexture(
       RagePixelFormat, RageSurface* /* img */,
@@ -55,11 +55,13 @@ class RageDisplay_Metal : public RageDisplay {
   void SetTextureWrapping(TextureUnit tu, bool wrapping) override;
   int GetMaxTextureSize() const override { return 16384; }
   void SetTextureFiltering(TextureUnit tu, bool filtering) override;
+  void SetEffectMode(EffectMode effect) override;
+  bool IsEffectModeSupported(EffectMode effect) override;
 
   bool IsZWriteEnabled() const override { return m_bZWrite; }
   bool IsZTestEnabled() const override { return m_ZTestMode != ZTEST_OFF; }
   void SetZWrite(bool write) override;
-  void SetZBias(float) override {}
+  void SetZBias(float bias) override;
   void SetZTestMode(ZTestMode mode) override;
   void ClearZBuffer() override;
   void SetCullMode(CullMode mode) override;
@@ -68,13 +70,13 @@ class RageDisplay_Metal : public RageDisplay {
       const RageColor& emissive, const RageColor& ambient,
       const RageColor& diffuse, const RageColor& specular,
       float shininess) override;
-  void SetLighting(bool) override {}
-  void SetLightOff(int index) override {}
+  void SetLighting(bool enabled) override;
+  void SetLightOff(int index) override;
   void SetLightDirectional(
       int index, const RageColor& ambient, const RageColor& diffuse,
-      const RageColor& specular, const RageVector3& dir) override {}
-  void SetSphereEnvironmentMapping(TextureUnit tu, bool b) override {}
-  void SetCelShaded(int stage) override {}
+      const RageColor& specular, const RageVector3& dir) override;
+  void SetSphereEnvironmentMapping(TextureUnit tu, bool b) override;
+  void SetCelShaded(int stage) override;
 
   RageCompiledGeometry* CreateCompiledGeometry() override;
   void DeleteCompiledGeometry(RageCompiledGeometry*) override;
@@ -112,6 +114,9 @@ class RageDisplay_Metal : public RageDisplay {
     uintptr_t textureHandle = 0;
     BlendMode blendMode = BLEND_NORMAL;
     TextureMode textureMode = TextureMode_Modulate;
+    EffectMode effectMode = EffectMode_Normal;
+    int celStage = 0;
+    float zBias = 0.0f;
     ZTestMode zTestMode = ZTEST_OFF;
     CullMode cullMode = CULL_NONE;
     bool textureWrapping = false;
@@ -122,8 +127,11 @@ class RageDisplay_Metal : public RageDisplay {
   };
 
   RageMatrix CurrentModelViewProjection() const;
+  RageMatrix CurrentTextureMatrix() const;
+  RageColor ComputeModelColor(const RageVector3& normal) const;
   DrawBatch& ActiveBatch();
   void ReleaseTexture(MetalTexture* texture);
+  void DestroyAllTextures();
   bool UploadTexturePixels(
       MetalTexture* texture, RageSurface* img, int xoffset, int yoffset,
       int width, int height);
@@ -138,6 +146,9 @@ class RageDisplay_Metal : public RageDisplay {
   uintptr_t m_iActiveTextureHandle;
   BlendMode m_BlendMode;
   TextureMode m_TextureMode;
+  EffectMode m_EffectMode;
+  int m_iCelShadedStage;
+  float m_fZBias;
   ZTestMode m_ZTestMode;
   CullMode m_CullMode;
   bool m_bTextureWrapping;
@@ -146,6 +157,16 @@ class RageDisplay_Metal : public RageDisplay {
   bool m_bAlphaTest;
   bool m_bClearDepthNextFrame;
   RageColor m_MaterialDiffuse;
+  RageColor m_MaterialAmbient;
+  RageColor m_MaterialEmissive;
+  bool m_bLighting;
+  struct DirectionalLight {
+    bool enabled = false;
+    RageColor ambient = RageColor(0.0f, 0.0f, 0.0f, 1.0f);
+    RageColor diffuse = RageColor(1.0f, 1.0f, 1.0f, 1.0f);
+    RageVector3 direction = RageVector3(0.0f, 0.0f, 1.0f);
+  };
+  std::vector<DirectionalLight> m_Lights;
   uintptr_t m_iNextTextureHandle;
   bool m_bReady;
 };

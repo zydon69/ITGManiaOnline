@@ -10,6 +10,7 @@ struct MacOSMetalSolidVertex {
   float x = 0.0f;
   float y = 0.0f;
   float z = 0.0f;
+  float w = 1.0f;
   float u = 0.0f;
   float v = 0.0f;
   float r = 1.0f;
@@ -34,6 +35,8 @@ struct MacOSMetalDrawBatch {
   void* texture = nullptr;
   BlendMode blendMode = BLEND_NORMAL;
   TextureMode textureMode = TextureMode_Modulate;
+  EffectMode effectMode = EffectMode_Normal;
+  int celStage = 0;
   ZTestMode zTestMode = ZTEST_OFF;
   CullMode cullMode = CULL_NONE;
   bool textureWrapping = false;
@@ -47,7 +50,9 @@ class MacOSMetalPresenter {
   MacOSMetalPresenter();
   ~MacOSMetalPresenter();
 
-  bool Initialize(void* nsWindow, int width, int height, double targetHz);
+  bool Initialize(
+      void* nsWindow, int width, int height, double targetHz,
+      bool createInteropSurfaces = true);
   void Shutdown();
 
   bool IsAvailable() const;
@@ -56,6 +61,7 @@ class MacOSMetalPresenter {
   bool IsInteropSurfaceBusy(int index) const;
   void SetLayerVisible(bool visible);
   bool AttachLayerToWindow(void* nsWindow);
+  bool AttachLayerAsContentView(void* nsWindow);
   void DetachLayer();
   bool PresentClearFrame(
       double red, double green, double blue, double alpha, double targetHz);
@@ -66,6 +72,9 @@ class MacOSMetalPresenter {
       double targetHz);
   void* CreateRGBA8Texture(
       int width, int height, const void* pixels, size_t bytesPerRow);
+  bool UpdateRGBA8Texture(
+      void* texture, int xoffset, int yoffset, int width, int height,
+      const void* pixels, size_t bytesPerRow);
   void ReleaseTexture(void* texture);
   bool PresentInteropSurfaceAt(int index, double targetHz);
   int InteropSurfaceCount() const;

@@ -13,11 +13,22 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cmath>
+#include <memory>
 #include <mutex>
 #include <thread>
+
+@interface SMMetalLayerView : NSView
+@end
+
+@implementation SMMetalLayerView
+- (CALayer*)makeBackingLayer {
+  return [CAMetalLayer layer];
+}
+@end
 
 namespace {
 
@@ -27,6 +38,8 @@ constexpr float kMetalTraceNextDrawableMs = 16.0f;
 constexpr float kMetalSlowCommandBufferMs = 12.0f;
 constexpr uint64_t kMetalInitialTraceFrames = 3;
 constexpr uint64_t kMetalRareSkipTraceInterval = 5000;
+constexpr int kMetalMaxSolidFramesInFlight = 3;
+constexpr int kMetalFrameLimiterWaitMs = 8;
 
 std::atomic<uint64_t> g_iMetalDirectPresentSubmittedFrames{0};
 std::atomic<uint64_t> g_iMetalDirectPresentCompletedFrames{0};
@@ -72,9 +85,64 @@ struct MacOSMetalSurfaceBusyFlags {
   std::array<std::atomic_bool, kMetalInteropSurfaceCount> busy;
 };
 
+struct ScopedAutoreleasePool {
+  ScopedAutoreleasePool() : pool([[NSAutoreleasePool alloc] init]) {}
+  ~ScopedAutoreleasePool() { [pool drain]; }
+
+  NSAutoreleasePool* pool = nil;
+};
+
+struct MacOSMetalFrameLimiter {
+  std::mutex mutex;
+  std::condition_variable condition;
+  int framesInFlight = 0;
+};
+
+bool AcquireMetalFrameSlot(
+    const std::shared_ptr<MacOSMetalFrameLimiter>& limiter,
+    const char* label) {
+  if (!limiter) {
+    return true;
+  }
+
+  std::unique_lock<std::mutex> lock(limiter->mutex);
+  const bool ready = limiter->condition.wait_for(
+      lock, std::chrono::milliseconds(kMetalFrameLimiterWaitMs),
+      [&limiter]() {
+        return limiter->framesInFlight < kMetalMaxSolidFramesInFlight;
+      });
+  if (!ready) {
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Warn(
+          "MacOS Metal presenter skipped %s frame: %d frames are still in "
+          "flight after %dms.",
+          label, limiter->framesInFlight, kMetalFrameLimiterWaitMs);
+    }
+    return false;
+  }
+  ++limiter->framesInFlight;
+  return true;
+}
+
+void ReleaseMetalFrameSlot(
+    const std::shared_ptr<MacOSMetalFrameLimiter>& limiter) {
+  if (!limiter) {
+    return;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(limiter->mutex);
+    if (limiter->framesInFlight > 0) {
+      --limiter->framesInFlight;
+    }
+  }
+  limiter->condition.notify_one();
+}
+
 struct MacOSMetalPresenterImpl {
   MacOSMetalPresenterImpl() {
     solidPipelines.fill(nil);
+    distanceFieldPipelines.fill(nil);
     for (auto& row : depthStates) {
       row.fill(nil);
     }
@@ -87,14 +155,19 @@ struct MacOSMetalPresenterImpl {
   id<MTLCommandQueue> commandQueue = nil;
   id<MTLRenderPipelineState> presentPipeline = nil;
   std::array<id<MTLRenderPipelineState>, NUM_BlendMode> solidPipelines;
+  std::array<id<MTLRenderPipelineState>, NUM_BlendMode>
+      distanceFieldPipelines;
   std::array<std::array<id<MTLDepthStencilState>, 2>, NUM_ZTestMode> depthStates;
   std::array<std::array<id<MTLSamplerState>, 2>, 2> samplerStates;
   id<MTLTexture> whiteTexture = nil;
   id<MTLTexture> depthTexture = nil;
   CAMetalLayer* layer = nil;
   NSView* layerView = nil;
+  NSView* replacedContentView = nil;
   std::array<MacOSMetalInteropSurface, kMetalInteropSurfaceCount> surfaces;
   std::shared_ptr<MacOSMetalSurfaceBusyFlags> surfaceBusy;
+  std::shared_ptr<MacOSMetalFrameLimiter> solidFrameLimiter =
+      std::make_shared<MacOSMetalFrameLimiter>();
   std::mutex drawableMutex;
   std::condition_variable drawableCondition;
   std::thread drawablePrefetchThread;
@@ -107,12 +180,64 @@ struct MacOSMetalPresenterImpl {
   uint64_t directPresentSkippedNoDrawable = 0;
   bool drawablePrefetchStarted = false;
   bool drawablePrefetchStop = false;
+  bool useDrawablePrefetch = false;
   bool interopReady = false;
+  bool layerOwnsContentView = false;
   bool loggedFirstDirectPresent = false;
 };
 
+void ConfigureMetalLayer(
+    MacOSMetalPresenterImpl* impl, CAMetalLayer* layer, NSRect bounds,
+    CGSize drawableSize) {
+  if (impl == nullptr || layer == nil) {
+    return;
+  }
+
+  layer.device = impl->device;
+  layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+  layer.opaque = YES;
+  CGColorSpaceRef srgbColorSpace =
+      CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+  if (srgbColorSpace != nullptr) {
+    layer.colorspace = srgbColorSpace;
+    CGColorSpaceRelease(srgbColorSpace);
+  }
+  layer.framebufferOnly = YES;
+  layer.displaySyncEnabled = YES;
+  layer.allowsNextDrawableTimeout = YES;
+  layer.maximumDrawableCount = 3;
+  layer.frame = bounds;
+  layer.drawableSize = drawableSize;
+}
+
+bool AdoptLayerFromView(
+    MacOSMetalPresenterImpl* impl, NSView* layerView, NSRect bounds) {
+  if (impl == nullptr || layerView == nil) {
+    return false;
+  }
+
+  [layerView setWantsLayer:YES];
+  CALayer* backingLayer = [layerView layer];
+  if (![backingLayer isKindOfClass:[CAMetalLayer class]]) {
+    return false;
+  }
+
+  CAMetalLayer* metalLayer = (CAMetalLayer*)backingLayer;
+  const CGSize drawableSize =
+      impl->layer != nil ? impl->layer.drawableSize
+                         : CGSizeMake(bounds.size.width, bounds.size.height);
+  [metalLayer retain];
+  if (impl->layer != nil) {
+    [impl->layer release];
+  }
+  impl->layer = metalLayer;
+  ConfigureMetalLayer(impl, impl->layer, [layerView bounds], drawableSize);
+  return true;
+}
+
 void StartDrawablePrefetcher(MacOSMetalPresenterImpl* impl) {
-  if (impl == nullptr || impl->layer == nil || impl->drawablePrefetchStarted) {
+  if (impl == nullptr || impl->layer == nil || impl->drawablePrefetchStarted ||
+      !impl->useDrawablePrefetch) {
     return;
   }
 
@@ -512,14 +637,16 @@ void ConfigureBlendAttachment(
 }
 
 id<MTLRenderPipelineState> CreateSolidPipeline(
-    id<MTLDevice> device, BlendMode blendMode, std::string* failureReason) {
+    id<MTLDevice> device, BlendMode blendMode, EffectMode effectMode,
+    std::string* failureReason) {
+  const bool useDistanceField = effectMode == EffectMode_DistanceField;
   static NSString* const shaderSource =
       @"#include <metal_stdlib>\n"
        "using namespace metal;\n"
        "struct VertexIn {\n"
-       "  float3 position;\n"
-       "  float2 texcoord;\n"
-       "  float4 color;\n"
+       "  packed_float4 position;\n"
+       "  packed_float2 texcoord;\n"
+       "  packed_float4 color;\n"
        "};\n"
        "struct VertexOut {\n"
        "  float4 position [[position]];\n"
@@ -531,9 +658,10 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
        "    uint vertexID [[vertex_id]]) {\n"
        "  const VertexIn in = vertices[vertexID];\n"
        "  VertexOut out;\n"
-       "  out.position = float4(in.position.xy,\n"
-       "                        in.position.z * 0.5 + 0.5,\n"
-       "                        1.0);\n"
+       "  out.position = float4(in.position.x,\n"
+       "                        in.position.y,\n"
+       "                        in.position.z,\n"
+       "                        in.position.w);\n"
        "  out.texcoord = in.texcoord;\n"
        "  out.color = in.color;\n"
        "  return out;\n"
@@ -542,7 +670,11 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
        "                             texture2d<float> source [[texture(0)]],\n"
        "                             sampler sourceSampler [[sampler(0)]],\n"
        "                             constant uint& textureMode [[buffer(1)]],\n"
-       "                             constant uint& alphaTest [[buffer(2)]]) {\n"
+       "                             constant uint& alphaTest [[buffer(2)]],\n"
+       "                             constant uint& celStage [[buffer(3)]]) {\n"
+       "  if (celStage == 1) {\n"
+       "    return float4(0.25, 0.125, 0.125, 1.0);\n"
+       "  }\n"
        "  const float4 sampleColor = source.sample(sourceSampler, in.texcoord);\n"
        "  if (alphaTest != 0 && sampleColor.a <= 0.00390625) {\n"
        "    discard_fragment();\n"
@@ -551,9 +683,31 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
        "    return float4(in.color.rgb, sampleColor.a * in.color.a);\n"
        "  }\n"
        "  if (textureMode == 2) {\n"
-       "    return saturate(sampleColor + in.color);\n"
+       "    return float4(saturate(sampleColor.rgb + in.color.rgb),\n"
+       "                  sampleColor.a * in.color.a);\n"
        "  }\n"
        "  return sampleColor * in.color;\n"
+       "}\n"
+       "float sdf_median_rgb(float r, float g, float b) {\n"
+       "  return max(min(r, g), min(max(r, g), b));\n"
+       "}\n"
+       "fragment float4 distance_field_fragment(VertexOut in [[stage_in]],\n"
+       "                                      texture2d<float> source [[texture(0)]],\n"
+       "                                      sampler sourceSampler [[sampler(0)]],\n"
+       "                                      constant uint& textureMode [[buffer(1)]],\n"
+       "                                      constant uint& alphaTest [[buffer(2)]],\n"
+       "                                      constant uint& celStage [[buffer(3)]]) {\n"
+       "  const float4 sampleColor = source.sample(sourceSampler, in.texcoord);\n"
+       "  const float dist = sdf_median_rgb(sampleColor.r, sampleColor.g, sampleColor.b);\n"
+       "  const float afwidth = 0.75 * length(float2(dfdx(dist), dfdy(dist)));\n"
+       "  const float coverage = smoothstep(0.5 - afwidth, 0.5 + afwidth, dist);\n"
+       "  if (alphaTest != 0 && coverage <= 0.00390625) {\n"
+       "    discard_fragment();\n"
+       "  }\n"
+       "  if (textureMode == 2) {\n"
+       "    return saturate(float4(in.color.rgb, in.color.a * coverage) + in.color);\n"
+       "  }\n"
+       "  return float4(in.color.rgb, in.color.a * coverage);\n"
        "}\n";
 
   NSError* error = nil;
@@ -571,7 +725,8 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
   id<MTLFunction> vertexFunction =
       [library newFunctionWithName:@"solid_vertex"];
   id<MTLFunction> fragmentFunction =
-      [library newFunctionWithName:@"solid_fragment"];
+      [library newFunctionWithName:useDistanceField ? @"distance_field_fragment"
+                                                    : @"solid_fragment"];
   if (vertexFunction == nil || fragmentFunction == nil) {
     if (failureReason != nullptr) {
       *failureReason = "Metal solid shader entry point lookup failed.";
@@ -698,7 +853,8 @@ MacOSMetalPresenter::~MacOSMetalPresenter() {
 }
 
 bool MacOSMetalPresenter::Initialize(
-    void* nsWindow, int width, int height, double targetHz) {
+    void* nsWindow, int width, int height, double targetHz,
+    bool createInteropSurfaces) {
   RageTimer initTimer;
   Shutdown();
   ResetMetalRuntimeStats();
@@ -736,11 +892,22 @@ bool MacOSMetalPresenter::Initialize(
   for (int i = 0; i < NUM_BlendMode; ++i) {
     std::string solidPipelineFailure;
     impl->solidPipelines[i] = CreateSolidPipeline(
-        impl->device, static_cast<BlendMode>(i), &solidPipelineFailure);
+        impl->device, static_cast<BlendMode>(i), EffectMode_Normal,
+        &solidPipelineFailure);
     if (impl->solidPipelines[i] == nil) {
       LOG->Warn(
           "MacOS Metal presenter solid pipeline unavailable for blend=%d: %s",
           i, solidPipelineFailure.c_str());
+    }
+    std::string distanceFieldPipelineFailure;
+    impl->distanceFieldPipelines[i] = CreateSolidPipeline(
+        impl->device, static_cast<BlendMode>(i), EffectMode_DistanceField,
+        &distanceFieldPipelineFailure);
+    if (impl->distanceFieldPipelines[i] == nil) {
+      LOG->Warn(
+          "MacOS Metal presenter distance-field pipeline unavailable for "
+          "blend=%d: %s",
+          i, distanceFieldPipelineFailure.c_str());
     }
   }
   for (int mode = 0; mode < NUM_ZTestMode; ++mode) {
@@ -789,6 +956,12 @@ bool MacOSMetalPresenter::Initialize(
         [pipeline release];
       }
     }
+    for (id<MTLRenderPipelineState>& pipeline :
+         impl->distanceFieldPipelines) {
+      if (pipeline != nil) {
+        [pipeline release];
+      }
+    }
     if (impl->presentPipeline != nil) {
       [impl->presentPipeline release];
     }
@@ -821,6 +994,12 @@ bool MacOSMetalPresenter::Initialize(
         [pipeline release];
       }
     }
+    for (id<MTLRenderPipelineState>& pipeline :
+         impl->distanceFieldPipelines) {
+      if (pipeline != nil) {
+        [pipeline release];
+      }
+    }
     if (impl->presentPipeline != nil) {
       [impl->presentPipeline release];
     }
@@ -835,43 +1014,31 @@ bool MacOSMetalPresenter::Initialize(
   NSView* contentView = [window contentView];
   const NSRect bounds = contentView != nil ? [contentView bounds] : NSZeroRect;
 
-  // The renderer still draws with OpenGL.  This layer only owns the macOS
-  // presentation stage for the OpenGL -> IOSurface -> Metal bridge.
   impl->layer = [[CAMetalLayer layer] retain];
-  impl->layer.device = impl->device;
-  impl->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-  impl->layer.opaque = YES;
-  CGColorSpaceRef srgbColorSpace =
-      CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-  if (srgbColorSpace != nullptr) {
-    impl->layer.colorspace = srgbColorSpace;
-    CGColorSpaceRelease(srgbColorSpace);
-  }
-  impl->layer.framebufferOnly = YES;
-  impl->layer.displaySyncEnabled = YES;
-  impl->layer.allowsNextDrawableTimeout = YES;
-  impl->layer.maximumDrawableCount = 3;
-  impl->layer.frame = bounds;
-  impl->layer.drawableSize = CGSizeMake(width, height);
+  ConfigureMetalLayer(impl, impl->layer, bounds, CGSizeMake(width, height));
 
-  std::string interopFailure;
-  bool interopReady = true;
-  for (auto& surface : impl->surfaces) {
-    if (!CreateInteropSurface(
-            impl->device, width, height, &surface, &interopFailure)) {
-      interopReady = false;
-      break;
+  bool interopReady = false;
+  if (createInteropSurfaces) {
+    std::string interopFailure;
+    interopReady = true;
+    for (auto& surface : impl->surfaces) {
+      if (!CreateInteropSurface(
+              impl->device, width, height, &surface, &interopFailure)) {
+        interopReady = false;
+        break;
+      }
+    }
+    if (!interopReady) {
+      for (auto& surface : impl->surfaces) {
+        ReleaseInteropSurface(&surface);
+      }
+      LOG->Warn(
+          "MacOS Metal presenter IOSurface ring unavailable: %s",
+          interopFailure.c_str());
     }
   }
   impl->interopReady = interopReady;
-  if (!interopReady) {
-    for (auto& surface : impl->surfaces) {
-      ReleaseInteropSurface(&surface);
-    }
-    LOG->Warn(
-        "MacOS Metal presenter IOSurface ring unavailable: %s",
-        interopFailure.c_str());
-  }
+  impl->useDrawablePrefetch = createInteropSurfaces;
 
   m_Impl = impl;
   m_Available = true;
@@ -884,7 +1051,8 @@ bool MacOSMetalPresenter::Initialize(
       "iosurface_ring=%d iosurface_count=%d total_ms=%.3f",
       [[impl->device name] UTF8String], targetHz, width, height,
       static_cast<int>(bounds.size.width), static_cast<int>(bounds.size.height),
-      impl->interopReady ? 1 : 0, kMetalInteropSurfaceCount,
+      impl->interopReady ? 1 : 0,
+      createInteropSurfaces ? kMetalInteropSurfaceCount : 0,
       initTimer.GetDeltaTime() * 1000.0f);
   return true;
 }
@@ -916,6 +1084,13 @@ void MacOSMetalPresenter::Shutdown() {
     impl->presentPipeline = nil;
   }
   for (id<MTLRenderPipelineState>& pipeline : impl->solidPipelines) {
+    if (pipeline != nil) {
+      [pipeline release];
+      pipeline = nil;
+    }
+  }
+  for (id<MTLRenderPipelineState>& pipeline :
+       impl->distanceFieldPipelines) {
     if (pipeline != nil) {
       [pipeline release];
       pipeline = nil;
@@ -1044,7 +1219,7 @@ bool MacOSMetalPresenter::AttachLayerToWindow(void* nsWindow) {
   if (impl->layerView != nil) {
     StopDrawablePrefetcher(impl);
     [impl->layerView setFrame:bounds];
-    impl->layer.frame = bounds;
+    impl->layer.frame = [impl->layerView bounds];
     [impl->layerView setHidden:NO];
     StartDrawablePrefetcher(impl);
     if (PerfDiagnosticsEnabled()) {
@@ -1060,20 +1235,108 @@ bool MacOSMetalPresenter::AttachLayerToWindow(void* nsWindow) {
     return true;
   }
 
-  NSView* layerView = [[NSView alloc] initWithFrame:bounds];
+  NSView* layerView = [[SMMetalLayerView alloc] initWithFrame:bounds];
   [layerView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-  [layerView setWantsLayer:YES];
-  [layerView setLayer:impl->layer];
+  if (!AdoptLayerFromView(impl, layerView, [layerView bounds])) {
+    [layerView release];
+    m_FailureReason = "Cannot attach Metal layer: SMMetalLayerView did not create a CAMetalLayer.";
+    LOG->Warn("MacOS Metal presenter unavailable: %s", m_FailureReason.c_str());
+    return false;
+  }
   [layerView setHidden:NO];
   [contentView addSubview:layerView positioned:NSWindowAbove relativeTo:nil];
   impl->layerView = layerView;
-  impl->layer.frame = bounds;
   StartDrawablePrefetcher(impl);
 
   LOG->Trace(
       "MacOS Metal presenter layer attached: view_size=%dx%d "
       "drawable_size=%dx%d total_ms=%.3f",
       static_cast<int>(bounds.size.width), static_cast<int>(bounds.size.height),
+      static_cast<int>(impl->layer.drawableSize.width),
+      static_cast<int>(impl->layer.drawableSize.height),
+      attachTimer.GetDeltaTime() * 1000.0f);
+  return true;
+}
+
+bool MacOSMetalPresenter::AttachLayerAsContentView(void* nsWindow) {
+  RageTimer attachTimer;
+  if (![NSThread isMainThread]) {
+    __block bool attached = false;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+      attached = AttachLayerAsContentView(nsWindow);
+    });
+    return attached;
+  }
+
+  if (!IsAvailable() || nsWindow == nullptr) {
+    return false;
+  }
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  if (impl->layer == nil) {
+    return false;
+  }
+
+  NSWindow* window = (__bridge NSWindow*)nsWindow;
+  NSView* contentView = [window contentView];
+  if (contentView == nil) {
+    m_FailureReason =
+        "Cannot attach native Metal layer: window has no content view.";
+    LOG->Warn("MacOS Metal presenter unavailable: %s", m_FailureReason.c_str());
+    return false;
+  }
+
+  const NSRect bounds = [contentView bounds];
+  if (impl->layerView != nil && impl->layerOwnsContentView &&
+      [window contentView] == impl->layerView) {
+    StopDrawablePrefetcher(impl);
+    [impl->layerView setFrame:bounds];
+    impl->layer.frame = [impl->layerView bounds];
+    [impl->layerView setHidden:NO];
+    StartDrawablePrefetcher(impl);
+    LOG->Trace(
+        "MacOS Metal presenter content layer reattached: view_size=%dx%d "
+        "drawable_size=%dx%d total_ms=%.3f",
+        static_cast<int>(bounds.size.width),
+        static_cast<int>(bounds.size.height),
+        static_cast<int>(impl->layer.drawableSize.width),
+        static_cast<int>(impl->layer.drawableSize.height),
+        attachTimer.GetDeltaTime() * 1000.0f);
+    return true;
+  }
+
+  StopDrawablePrefetcher(impl);
+  if (impl->layerView != nil) {
+    [impl->layerView removeFromSuperview];
+    [impl->layerView release];
+    impl->layerView = nil;
+  }
+  if (impl->replacedContentView == nil) {
+    impl->replacedContentView = [contentView retain];
+  }
+
+  NSView* layerView = [[SMMetalLayerView alloc] initWithFrame:bounds];
+  [layerView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+  if (!AdoptLayerFromView(impl, layerView, [layerView bounds])) {
+    [layerView release];
+    m_FailureReason =
+        "Cannot attach native Metal layer: SMMetalLayerView did not create a CAMetalLayer.";
+    LOG->Warn("MacOS Metal presenter unavailable: %s", m_FailureReason.c_str());
+    return false;
+  }
+  [layerView setHidden:NO];
+  impl->layerView = layerView;
+  impl->layerOwnsContentView = true;
+  [window setContentView:layerView];
+  StartDrawablePrefetcher(impl);
+
+  LOG->Trace(
+      "MacOS Metal presenter content layer attached: old_content_class=%s "
+      "view_size=%dx%d drawable_size=%dx%d total_ms=%.3f",
+      [[[impl->replacedContentView class] description] UTF8String],
+      static_cast<int>(bounds.size.width),
+      static_cast<int>(bounds.size.height),
       static_cast<int>(impl->layer.drawableSize.width),
       static_cast<int>(impl->layer.drawableSize.height),
       attachTimer.GetDeltaTime() * 1000.0f);
@@ -1095,18 +1358,34 @@ void MacOSMetalPresenter::DetachLayer() {
   MacOSMetalPresenterImpl* impl =
       static_cast<MacOSMetalPresenterImpl*>(m_Impl);
   StopDrawablePrefetcher(impl);
+  NSWindow* owningWindow =
+      impl->layerView != nil ? [impl->layerView window] : nil;
+  if (impl->layerOwnsContentView && owningWindow != nil &&
+      [owningWindow contentView] == impl->layerView &&
+      impl->replacedContentView != nil) {
+    [owningWindow setContentView:impl->replacedContentView];
+  }
   if (impl->layerView != nil) {
-    [impl->layerView removeFromSuperview];
+    if (!impl->layerOwnsContentView) {
+      [impl->layerView removeFromSuperview];
+    }
     [impl->layerView release];
     impl->layerView = nil;
+    impl->layerOwnsContentView = false;
     LOG->Trace(
         "MacOS Metal presenter layer detached. total_ms=%.3f",
         detachTimer.GetDeltaTime() * 1000.0f);
+  }
+  if (impl->replacedContentView != nil) {
+    [impl->replacedContentView release];
+    impl->replacedContentView = nil;
   }
 }
 
 bool MacOSMetalPresenter::PresentClearFrame(
     double red, double green, double blue, double alpha, double targetHz) {
+  ScopedAutoreleasePool autoreleasePool;
+
   if (!IsAvailable()) {
     return false;
   }
@@ -1115,6 +1394,12 @@ bool MacOSMetalPresenter::PresentClearFrame(
       static_cast<MacOSMetalPresenterImpl*>(m_Impl);
   if (impl->layer == nil || impl->layerView == nil ||
       impl->commandQueue == nil) {
+    return false;
+  }
+
+  std::shared_ptr<MacOSMetalFrameLimiter> frameLimiter =
+      impl->solidFrameLimiter;
+  if (!AcquireMetalFrameSlot(frameLimiter, "clear")) {
     return false;
   }
 
@@ -1144,6 +1429,7 @@ bool MacOSMetalPresenter::PresentClearFrame(
             static_cast<unsigned long long>(drawableMisses), targetHz,
             nextDrawableMs);
       }
+      ReleaseMetalFrameSlot(frameLimiter);
       return false;
     }
   }
@@ -1152,6 +1438,7 @@ bool MacOSMetalPresenter::PresentClearFrame(
   id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
   if (commandBuffer == nil) {
     [drawable release];
+    ReleaseMetalFrameSlot(frameLimiter);
     return false;
   }
 
@@ -1167,6 +1454,7 @@ bool MacOSMetalPresenter::PresentClearFrame(
       [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
   if (encoder == nil) {
     [drawable release];
+    ReleaseMetalFrameSlot(frameLimiter);
     return false;
   }
   [encoder endEncoding];
@@ -1185,6 +1473,8 @@ bool MacOSMetalPresenter::PresentClearFrame(
   const uint64_t submitUsec = RageTimer::GetTimeSinceStartMicroseconds();
   const float encodeSubmitMs = submitTimer.GetDeltaTime() * 1000.0f;
   id<CAMetalDrawable> completionDrawable = [drawable retain];
+  std::shared_ptr<MacOSMetalFrameLimiter> completionFrameLimiter =
+      frameLimiter;
   [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedCommandBuffer) {
     const uint64_t completedIndex =
         g_iMetalDirectPresentCompletedFrames.fetch_add(1) + 1;
@@ -1207,6 +1497,7 @@ bool MacOSMetalPresenter::PresentClearFrame(
           commandBufferMs, nextDrawableMs, encodeSubmitMs, targetHz);
     }
     [completionDrawable release];
+    ReleaseMetalFrameSlot(completionFrameLimiter);
   }];
   [commandBuffer commit];
   [drawable release];
@@ -1236,6 +1527,8 @@ bool MacOSMetalPresenter::PresentSolidBatches(
     bool clearDepth,
     double clearRed, double clearGreen, double clearBlue, double clearAlpha,
     double targetHz) {
+  ScopedAutoreleasePool autoreleasePool;
+
   if (!IsAvailable() || batches == nullptr || batchCount == 0) {
     return PresentClearFrame(clearRed, clearGreen, clearBlue, clearAlpha,
                              targetHz);
@@ -1253,6 +1546,12 @@ bool MacOSMetalPresenter::PresentSolidBatches(
       static_cast<MacOSMetalPresenterImpl*>(m_Impl);
   if (impl->layer == nil || impl->layerView == nil ||
       impl->commandQueue == nil || impl->solidPipelines[BLEND_NORMAL] == nil) {
+    return false;
+  }
+
+  std::shared_ptr<MacOSMetalFrameLimiter> frameLimiter =
+      impl->solidFrameLimiter;
+  if (!AcquireMetalFrameSlot(frameLimiter, "solid")) {
     return false;
   }
 
@@ -1282,6 +1581,7 @@ bool MacOSMetalPresenter::PresentSolidBatches(
             static_cast<unsigned long long>(drawableMisses), targetHz,
             nextDrawableMs, batchCount, totalVertexCount);
       }
+      ReleaseMetalFrameSlot(frameLimiter);
       return false;
     }
   }
@@ -1290,6 +1590,7 @@ bool MacOSMetalPresenter::PresentSolidBatches(
   id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
   if (commandBuffer == nil) {
     [drawable release];
+    ReleaseMetalFrameSlot(frameLimiter);
     return false;
   }
   MTLRenderPassDescriptor* passDescriptor =
@@ -1311,6 +1612,7 @@ bool MacOSMetalPresenter::PresentSolidBatches(
       [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
   if (encoder == nil) {
     [drawable release];
+    ReleaseMetalFrameSlot(frameLimiter);
     return false;
   }
 
@@ -1333,7 +1635,10 @@ bool MacOSMetalPresenter::PresentSolidBatches(
         batch.cullMode >= 0 && batch.cullMode < NUM_CullMode
             ? batch.cullMode
             : CULL_NONE;
-    id<MTLRenderPipelineState> pipeline = impl->solidPipelines[blendMode];
+    id<MTLRenderPipelineState> pipeline =
+        batch.effectMode == EffectMode_DistanceField
+            ? impl->distanceFieldPipelines[blendMode]
+            : impl->solidPipelines[blendMode];
     if (pipeline == nil) {
       pipeline = impl->solidPipelines[BLEND_NORMAL];
     }
@@ -1366,10 +1671,13 @@ bool MacOSMetalPresenter::PresentSolidBatches(
             ? 1
             : (batch.textureMode == TextureMode_Add ? 2 : 0);
     const uint32_t alphaTest = batch.alphaTest ? 1 : 0;
+    const uint32_t celStage =
+        batch.celStage > 0 ? static_cast<uint32_t>(batch.celStage) : 0;
     [encoder setRenderPipelineState:pipeline];
     if (depthState != nil) {
       [encoder setDepthStencilState:depthState];
     }
+    [encoder setFrontFacingWinding:MTLWindingCounterClockwise];
     switch (cullMode) {
       case CULL_BACK:
         [encoder setCullMode:MTLCullModeBack];
@@ -1389,6 +1697,9 @@ bool MacOSMetalPresenter::PresentSolidBatches(
     [encoder setFragmentBytes:&alphaTest
                        length:sizeof(alphaTest)
                       atIndex:2];
+    [encoder setFragmentBytes:&celStage
+                       length:sizeof(celStage)
+                      atIndex:3];
     [encoder setFragmentTexture:sourceTexture atIndex:0];
     if (sampler != nil) {
       [encoder setFragmentSamplerState:sampler atIndex:0];
@@ -1417,6 +1728,8 @@ bool MacOSMetalPresenter::PresentSolidBatches(
   id<CAMetalDrawable> completionDrawable = [drawable retain];
   NSArray* completionBuffers = [retainedBuffers copy];
   NSArray* completionTextures = [retainedTextures copy];
+  std::shared_ptr<MacOSMetalFrameLimiter> completionFrameLimiter =
+      frameLimiter;
   [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedCommandBuffer) {
     const uint64_t completedIndex =
         g_iMetalDirectPresentCompletedFrames.fetch_add(1) + 1;
@@ -1443,6 +1756,7 @@ bool MacOSMetalPresenter::PresentSolidBatches(
     [completionBuffers release];
     [completionTextures release];
     [completionDrawable release];
+    ReleaseMetalFrameSlot(completionFrameLimiter);
   }];
   [commandBuffer commit];
   [drawable release];
@@ -1470,6 +1784,8 @@ bool MacOSMetalPresenter::PresentSolidBatches(
 
 void* MacOSMetalPresenter::CreateRGBA8Texture(
     int width, int height, const void* pixels, size_t bytesPerRow) {
+  ScopedAutoreleasePool autoreleasePool;
+
   if (!IsAvailable() || width <= 0 || height <= 0 || pixels == nullptr) {
     return nullptr;
   }
@@ -1498,6 +1814,27 @@ void* MacOSMetalPresenter::CreateRGBA8Texture(
   return texture;
 }
 
+bool MacOSMetalPresenter::UpdateRGBA8Texture(
+    void* texture, int xoffset, int yoffset, int width, int height,
+    const void* pixels, size_t bytesPerRow) {
+  if (texture == nullptr || pixels == nullptr || width <= 0 || height <= 0 ||
+      xoffset < 0 || yoffset < 0) {
+    return false;
+  }
+
+  id<MTLTexture> metalTexture = (id<MTLTexture>)texture;
+  if (xoffset + width > static_cast<int>([metalTexture width]) ||
+      yoffset + height > static_cast<int>([metalTexture height])) {
+    return false;
+  }
+
+  [metalTexture replaceRegion:MTLRegionMake2D(xoffset, yoffset, width, height)
+                  mipmapLevel:0
+                    withBytes:pixels
+                  bytesPerRow:bytesPerRow];
+  return true;
+}
+
 void MacOSMetalPresenter::ReleaseTexture(void* texture) {
   if (texture == nullptr) {
     return;
@@ -1506,6 +1843,8 @@ void MacOSMetalPresenter::ReleaseTexture(void* texture) {
 }
 
 bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
+  ScopedAutoreleasePool autoreleasePool;
+
   if (!IsInteropReady() || index < 0 || index >= kMetalInteropSurfaceCount) {
     return false;
   }
