@@ -849,10 +849,17 @@ id<MTLBuffer> PrepareSolidVertexBuffer(
   return buffer;
 }
 
+void TrackTextureForCommandBuffer(
+    NSMutableSet* retainedTextures, id<MTLTexture> texture) {
+  if (retainedTextures != nil && texture != nil) {
+    [retainedTextures addObject:texture];
+  }
+}
+
 bool EncodeSolidBatches(
     MacOSMetalPresenterImpl* impl, id<MTLRenderCommandEncoder> encoder,
     const MacOSMetalDrawBatch* batches, size_t batchCount,
-    NSMutableArray* retainedBuffers, NSMutableArray* retainedTextures,
+    NSMutableArray* retainedBuffers, NSMutableSet* retainedTextures,
     int frameSlot = -1) {
   if (impl == nullptr || encoder == nil || batches == nullptr) {
     return false;
@@ -928,10 +935,8 @@ bool EncodeSolidBatches(
         impl->samplerStates[wrappingIndex][filteringIndex];
     id<MTLDepthStencilState> depthState =
         impl->depthStates[zTestMode][batch.zWrite ? 1 : 0];
-    [sourceTexture retain];
-    [sourceTexture2 retain];
-    [retainedTextures addObject:sourceTexture];
-    [retainedTextures addObject:sourceTexture2];
+    TrackTextureForCommandBuffer(retainedTextures, sourceTexture);
+    TrackTextureForCommandBuffer(retainedTextures, sourceTexture2);
 
     const uint32_t textureMode =
         batch.textureMode == TextureMode_Glow
@@ -987,8 +992,6 @@ bool EncodeSolidBatches(
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                 vertexStart:0
                 vertexCount:static_cast<NSUInteger>(batch.vertexCount)];
-    [sourceTexture release];
-    [sourceTexture2 release];
     encodedAny = true;
   }
   return encodedAny;
@@ -1793,7 +1796,8 @@ bool MacOSMetalPresenter::PresentSolidBatches(
   }
 
   NSMutableArray* retainedBuffers = [NSMutableArray arrayWithCapacity:batchCount];
-  NSMutableArray* retainedTextures = [NSMutableArray arrayWithCapacity:batchCount];
+  NSMutableSet* retainedTextures =
+      [NSMutableSet setWithCapacity:batchCount * 2];
   EncodeSolidBatches(
       impl, encoder, batches, batchCount, retainedBuffers, retainedTextures,
       frameSlot);
@@ -1814,7 +1818,7 @@ bool MacOSMetalPresenter::PresentSolidBatches(
   const float encodeSubmitMs = submitTimer.GetDeltaTime() * 1000.0f;
   id<CAMetalDrawable> completionDrawable = [drawable retain];
   NSArray* completionBuffers = [retainedBuffers copy];
-  NSArray* completionTextures = [retainedTextures copy];
+  NSSet* completionTextures = [retainedTextures copy];
   std::shared_ptr<MacOSMetalFrameLimiter> completionFrameLimiter =
       frameLimiter;
   const int completionFrameSlot = frameSlot;
@@ -1968,13 +1972,14 @@ bool MacOSMetalPresenter::RenderSolidBatchesToTexture(
   [encoder setViewport:viewport];
 
   NSMutableArray* retainedBuffers = [NSMutableArray arrayWithCapacity:batchCount];
-  NSMutableArray* retainedTextures = [NSMutableArray arrayWithCapacity:batchCount];
+  NSMutableSet* retainedTextures =
+      [NSMutableSet setWithCapacity:batchCount * 2];
   EncodeSolidBatches(
       impl, encoder, batches, batchCount, retainedBuffers, retainedTextures);
   [encoder endEncoding];
 
   NSArray* completionBuffers = [retainedBuffers copy];
-  NSArray* completionTextures = [retainedTextures copy];
+  NSSet* completionTextures = [retainedTextures copy];
   [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer>) {
     [completionBuffers release];
     [completionTextures release];
