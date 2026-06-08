@@ -498,6 +498,7 @@ class RageDisplay {
 
   // To limit the framerate, call FrameLimitBeforeVsync before waiting
   // for vsync and FrameLimitAfterVsync after.
+  void SetRuntimeFramePacingTargetHz(float targetHz);
   void FrameLimitBeforeVsync(int iFPS);
   void FrameLimitAfterVsync(float swapBuffersMs = -1.0f);
 };

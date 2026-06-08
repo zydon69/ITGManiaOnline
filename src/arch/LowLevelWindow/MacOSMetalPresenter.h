@@ -73,6 +73,7 @@ class MacOSMetalPresenter {
   bool IsInteropReady() const;
   bool IsLayerAttached() const;
   bool IsInteropSurfaceBusy(int index) const;
+  double DisplayPacingTargetHz(double fallbackHz, double headroomFactor);
   void SetLayerVisible(bool visible);
   bool AttachLayerToWindow(void* nsWindow);
   bool AttachLayerAsContentView(void* nsWindow);

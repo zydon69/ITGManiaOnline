@@ -47,6 +47,7 @@ constexpr int kMetalReconfigureDrainWaitMs = 24;
 constexpr int kMetalShutdownDrainWaitMs = 250;
 constexpr int kMetalDrawablePrefetchRenderWaitUs = 500;
 constexpr int kMetalInteropDrawablePrefetchRenderWaitUs = 500;
+constexpr uint64_t kMetalDisplayPacingRefreshUsec = 2000000;
 
 bool ShouldTraceMetalRenderThreadPrefetchWait(float waitMs, int waitUsec) {
   return waitUsec > 0 && waitMs >= static_cast<float>(waitUsec) / 1000.0f;
@@ -323,6 +324,9 @@ struct MacOSMetalPresenterImpl {
   uint64_t directPresentPrefetchWaits = 0;
   uint64_t directPresentPrefetchWaitHits = 0;
   uint64_t directPresentBusySurfaceFrames = 0;
+  uint64_t displayPacingLastQueryUsec = 0;
+  double displayPacingMaxHz = 0.0;
+  double displayPacingTargetHz = 0.0;
   uint64_t stagingCopySerial = 0;
   uint64_t renderTargetSubmitSerial = 0;
   bool drawablePrefetchStarted = false;
@@ -343,6 +347,50 @@ struct MacOSMetalDrawableAcquireInfo {
   bool fromPrefetch = false;
   bool waitedForPrefetch = false;
 };
+
+double DetectMetalPresenterScreenMaxHz(MacOSMetalPresenterImpl* impl) {
+  if (impl == nullptr) {
+    return 0.0;
+  }
+
+  NSScreen* screen = nil;
+  if (impl->layerView != nil && [impl->layerView window] != nil) {
+    screen = [[impl->layerView window] screen];
+  }
+  if (screen == nil) {
+    screen = [NSScreen mainScreen];
+  }
+
+  double detectedHz = 0.0;
+  if (@available(macOS 12.0, *)) {
+    if (screen != nil &&
+        [screen respondsToSelector:@selector(maximumFramesPerSecond)]) {
+      const NSInteger maxFps = [screen maximumFramesPerSecond];
+      if (maxFps > 1) {
+        detectedHz = static_cast<double>(maxFps);
+      }
+    }
+  }
+
+  if (detectedHz <= 1.0 && screen != nil) {
+    NSNumber* screenNumber =
+        [[screen deviceDescription] objectForKey:@"NSScreenNumber"];
+    if (screenNumber != nil) {
+      const CGDirectDisplayID displayID =
+          static_cast<CGDirectDisplayID>([screenNumber unsignedIntValue]);
+      CGDisplayModeRef mode = CGDisplayCopyDisplayMode(displayID);
+      if (mode != nullptr) {
+        const double refreshRate = CGDisplayModeGetRefreshRate(mode);
+        if (refreshRate > 1.0) {
+          detectedHz = refreshRate;
+        }
+        CGDisplayModeRelease(mode);
+      }
+    }
+  }
+
+  return detectedHz;
+}
 
 void RecordMetalTiming(MacOSMetalTimingBuckets* buckets, float ms) {
   if (buckets == nullptr || ms < 0.0f) {
@@ -1103,7 +1151,7 @@ bool EnsureWindowedOffscreenTextures(
   impl->windowedOffscreenHeight = height;
   if (PerfDiagnosticsEnabled()) {
     LOG->Trace(
-        "PERF_TRACE: macos_metal_windowed_offscreen_recreated size=%dx%d",
+        "PERF_TRACE: macos_metal_offscreen_present_recreated size=%dx%d",
         width, height);
   }
   return true;
@@ -1516,7 +1564,7 @@ bool MacOSMetalPresenter::Initialize(
             &offscreenPipelineFailure);
     if (impl->windowedOffscreenPresentPipelines[i] == nil) {
       LOG->Warn(
-          "MacOS Metal presenter windowed offscreen pipeline unavailable: "
+          "MacOS Metal presenter offscreen-present pipeline unavailable: "
           "mode=%d vertex=%s error=%s",
           i, WindowedOffscreenPresentVertexFunctionName(i),
           offscreenPipelineFailure.c_str());
@@ -1879,6 +1927,44 @@ bool MacOSMetalPresenter::IsInteropSurfaceBusy(int index) const {
   }
 
   return impl->surfaceBusy->busy[index].load(std::memory_order_acquire);
+}
+
+double MacOSMetalPresenter::DisplayPacingTargetHz(
+    double fallbackHz, double headroomFactor) {
+  const double safeFallbackHz =
+      std::isfinite(fallbackHz) && fallbackHz > 1.0 ? fallbackHz : 60.0;
+  const double safeHeadroomFactor =
+      std::isfinite(headroomFactor) && headroomFactor > 0.0
+          ? headroomFactor
+          : 1.0;
+  if (m_Impl == nullptr) {
+    return safeFallbackHz * safeHeadroomFactor;
+  }
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  if (impl->displayPacingMaxHz <= 1.0 ||
+      impl->displayPacingLastQueryUsec == 0 ||
+      nowUsec - impl->displayPacingLastQueryUsec >=
+          kMetalDisplayPacingRefreshUsec) {
+    const double detectedHz = DetectMetalPresenterScreenMaxHz(impl);
+    impl->displayPacingMaxHz =
+        detectedHz > 1.0 ? detectedHz : safeFallbackHz;
+    impl->displayPacingLastQueryUsec = nowUsec;
+  }
+
+  const double targetHz = impl->displayPacingMaxHz * safeHeadroomFactor;
+  if (PerfDiagnosticsEnabled() &&
+      std::abs(impl->displayPacingTargetHz - targetHz) >= 0.5) {
+    LOG->Trace(
+        "PERF_TRACE: macos_metal_display_pacing "
+        "screen_hz=%.3f target_hz=%.3f fallback_hz=%.3f headroom=%.3f",
+        impl->displayPacingMaxHz, targetHz, safeFallbackHz,
+        safeHeadroomFactor);
+  }
+  impl->displayPacingTargetHz = targetHz;
+  return targetHz;
 }
 
 void MacOSMetalPresenter::SetLayerVisible(bool visible) {
@@ -2628,7 +2714,7 @@ bool MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
   const int height = std::max(1, static_cast<int>(drawableSize.height));
   if (!EnsureWindowedOffscreenTextures(impl, width, height)) {
     LOG->Warn(
-        "MacOS Metal windowed offscreen present unavailable: size=%dx%d.",
+        "MacOS Metal offscreen present unavailable: size=%dx%d.",
         width, height);
     return false;
   }
@@ -2646,8 +2732,8 @@ bool MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
       impl, &drawableInfo, 0);
   if (drawable == nil && impl->windowedOffscreenSubmittedFrames == 0) {
     /*
-     * Allow the first windowed frame to block if needed so the window is not
-     * left blank.  Later frames are present-opportunistic and never call the
+     * Allow the first frame to block if needed so the Metal layer is not left
+     * blank.  Later frames are present-opportunistic and never call the
      * synchronous nextDrawable path from the render thread.
      */
     drawable = AcquireDrawableForPresent(impl, &drawableInfo);
@@ -2658,7 +2744,7 @@ bool MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
         (skippedFrames <= kMetalInitialTraceFrames ||
          skippedFrames % kMetalRareSkipTraceInterval == 0)) {
       LOG->Trace(
-          "PERF_TRACE: macos_metal_windowed_offscreen_present "
+          "PERF_TRACE: macos_metal_offscreen_present "
           "skipped_no_drawable=1 skipped_frames=%llu "
           "prefetch_misses=%llu target_hz=%.3f size=%dx%d",
           static_cast<unsigned long long>(skippedFrames),
@@ -2671,7 +2757,7 @@ bool MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
   std::shared_ptr<MacOSMetalFrameLimiter> frameLimiter =
       impl->solidFrameLimiter;
   int frameSlot = -1;
-  if (!AcquireMetalFrameSlot(frameLimiter, "windowed_offscreen_present",
+  if (!AcquireMetalFrameSlot(frameLimiter, "offscreen_present",
                              &frameSlot)) {
     [drawable release];
     const uint64_t skippedFrames = ++impl->windowedOffscreenSkippedNoDrawable;
@@ -2679,7 +2765,7 @@ bool MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
         (skippedFrames <= kMetalInitialTraceFrames ||
          skippedFrames % kMetalRareSkipTraceInterval == 0)) {
       LOG->Trace(
-          "PERF_TRACE: macos_metal_windowed_offscreen_present "
+          "PERF_TRACE: macos_metal_offscreen_present "
           "skipped_frame_limiter=1 skipped_frames=%llu target_hz=%.3f "
           "size=%dx%d",
           static_cast<unsigned long long>(skippedFrames), targetHz,
@@ -2750,7 +2836,7 @@ bool MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
         commandBufferMs >= kMetalSlowCommandBufferMs;
     if (PerfDiagnosticsEnabled() && traceCompletion) {
       LOG->Trace(
-          "PERF_TRACE: macos_metal_windowed_offscreen_present_completed "
+          "PERF_TRACE: macos_metal_offscreen_present_completed "
           "frame=%llu frame_slot=%d status=%lu command_buffer_ms=%.3f "
           "flip_mode=%d drawable_source=%s render_thread_next_drawable_ms=%.3f "
           "encode_submit_ms=%.3f target_hz=%.3f",
@@ -2773,7 +2859,7 @@ bool MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
       encodeSubmitMs >= 2.0f;
   if (PerfDiagnosticsEnabled() && traceSubmit) {
     LOG->Trace(
-        "PERF_TRACE: macos_metal_windowed_offscreen_present_submitted "
+        "PERF_TRACE: macos_metal_offscreen_present_submitted "
         "frame=%llu frame_slot=%d target_hz=%.3f "
         "minimum_duration_ms=%.3f flip_mode=%d drawable_source=%s "
         "prefetch_misses=%llu prefetch_acquire_ms=%.3f "

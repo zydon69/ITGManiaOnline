@@ -27,6 +27,8 @@
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
 
+constexpr double kMetalDisplayPacingHeadroomFactor = 1.2;
+
 static RageDisplay::RagePixelFormatDesc PIXEL_FORMAT_DESC[NUM_RagePixelFormat] =
     {{/* R8G8B8A8 */
       32,
@@ -68,6 +70,17 @@ uint8_t FloatColorToByte(float value) {
       std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
 }
 
+double MetalDisplayPacingTargetHz(
+    const std::unique_ptr<MacOSMetalPresenter>& presenter,
+    const VideoModeParams& params) {
+  const double fallbackHz =
+      params.rate > 1 ? static_cast<double>(params.rate) : 60.0;
+  return presenter
+             ? presenter->DisplayPacingTargetHz(
+                   fallbackHz, kMetalDisplayPacingHeadroomFactor)
+             : fallbackHz * kMetalDisplayPacingHeadroomFactor;
+}
+
 RageVColor ToVertexColor(const RageColor& color) {
   RageVColor out;
   out.r = FloatColorToByte(color.r);
@@ -94,17 +107,6 @@ const char* MacOSNativePresentationReasonNameForMetal(int reason) {
     default:
       return "unknown";
   }
-}
-
-bool MacOSWindowIsNativeFullscreenForMetal(void* nativeWindow) {
-  if (nativeWindow == nullptr) {
-    return false;
-  }
-  NSWindow* window = (__bridge NSWindow*)nativeWindow;
-  if (window == nil) {
-    return false;
-  }
-  return ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
 }
 
 RageColor ClampColor(const RageColor& color) {
@@ -498,6 +500,7 @@ RageDisplay_Metal::RageDisplay_Metal()
 }
 
 RageDisplay_Metal::~RageDisplay_Metal() {
+  SetRuntimeFramePacingTargetHz(0.0f);
   if (m_Presenter) {
     m_Presenter->Shutdown();
   }
@@ -514,6 +517,7 @@ std::string RageDisplay_Metal::Init(
   bool needReloadTextures = false;
   const std::string err = SetVideoMode(p, needReloadTextures);
   if (!err.empty()) {
+    SetRuntimeFramePacingTargetHz(0.0f);
     return err;
   }
 
@@ -1324,21 +1328,27 @@ void RageDisplay_Metal::FlushBatches() {
     return;
   }
 
-  const double targetHz =
-      m_Params.rate > 1 ? static_cast<double>(m_Params.rate) : 60.0;
+  const double targetHz = MetalDisplayPacingTargetHz(m_Presenter, m_Params);
+  SetRuntimeFramePacingTargetHz(static_cast<float>(targetHz));
+  FrameLimitBeforeVsync(m_Params.rate > 1 ? m_Params.rate : 60);
   const bool clearDepth = m_bClearDepthNextFrame;
-  const bool nativeFullscreen = MacOSWindowIsNativeFullscreenForMetal(
-      m_Window->GetNativeWindowHandle());
-  const bool useWindowedOffscreenPresent =
-      m_Params.windowed && !nativeFullscreen;
-  const bool presented =
-      useWindowedOffscreenPresent
-          ? m_Presenter->PresentSolidBatchesOffscreenFirst(
-                m_MetalDrawBatches.data(), m_MetalDrawBatches.size(),
-                clearDepth, 0.0, 0.0, 0.0, 1.0, targetHz)
-          : m_Presenter->PresentSolidBatches(
-                m_MetalDrawBatches.data(), m_MetalDrawBatches.size(),
-                clearDepth, 0.0, 0.0, 0.0, 1.0, targetHz);
+  /*
+   * Present through an offscreen render target for both native windowed and
+   * native fullscreen modes.  This keeps CAMetalLayer::nextDrawable off the hot
+   * render path: the frame is rendered first, then we consume a prefetched
+   * drawable opportunistically.  Direct-to-drawable present remains the fallback
+   * inside the presenter when the offscreen present pipeline is unavailable.
+   */
+  const bool presented = m_Presenter->PresentSolidBatchesOffscreenFirst(
+      m_MetalDrawBatches.data(), m_MetalDrawBatches.size(), clearDepth, 0.0,
+      0.0, 0.0, 1.0, targetHz);
+  /*
+   * Metal present is asynchronous; the useful per-frame timings are reported by
+   * MacOSMetalPresenter.  Do not feed submit/acquire time into the legacy
+   * swap-buffer classifier, otherwise Metal backpressure is reported as if it
+   * were an OpenGL CGLFlushDrawable block.
+   */
+  FrameLimitAfterVsync(0.0f);
   ClearActiveBatches();
   m_MetalDrawBatches.clear();
   m_bClearDepthNextFrame = false;
@@ -1697,8 +1707,7 @@ std::string RageDisplay_Metal::TryVideoMode(
       return false;
     }
 
-    const double targetHz =
-        m_Params.rate > 1 ? static_cast<double>(m_Params.rate) : 60.0;
+    const double targetHz = MetalDisplayPacingTargetHz(m_Presenter, m_Params);
     if (!m_Presenter->Initialize(
             nativeWindow, std::max(1, m_Params.width),
             std::max(1, m_Params.height), targetHz, false)) {
@@ -1717,11 +1726,15 @@ std::string RageDisplay_Metal::TryVideoMode(
       }
       return false;
     }
+    const double attachedTargetHz =
+        MetalDisplayPacingTargetHz(m_Presenter, m_Params);
+    SetRuntimeFramePacingTargetHz(static_cast<float>(attachedTargetHz));
     return true;
   };
 
   auto rollbackToPreviousMode = [&](const std::string& originalError) {
     if (!hadWorkingPresenter) {
+      SetRuntimeFramePacingTargetHz(0.0f);
       return originalError;
     }
 
@@ -1730,6 +1743,7 @@ std::string RageDisplay_Metal::TryVideoMode(
         m_Window->TryVideoMode(previousParams, rollbackNewDevice);
     if (!rollbackErr.empty()) {
       m_bReady = false;
+      SetRuntimeFramePacingTargetHz(0.0f);
       return originalError + " Rollback to the previous Metal video mode also "
                              "failed: " +
              rollbackErr;
@@ -1738,6 +1752,7 @@ std::string RageDisplay_Metal::TryVideoMode(
     std::string presenterErr;
     if (!initializePresenterForCurrentMode(&presenterErr)) {
       m_bReady = false;
+      SetRuntimeFramePacingTargetHz(0.0f);
       return originalError + " Rollback to the previous Metal presenter also "
                              "failed: " +
              presenterErr;

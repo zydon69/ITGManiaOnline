@@ -76,6 +76,7 @@ RageDisplay* DISPLAY =
 Preference<bool> LOG_FPS("LogFPS", false);
 Preference<float> g_fFrameLimitPercent("FrameLimitPercent", 0.0f);
 Preference<float> g_fFramePacingTargetHz("FramePacingTargetHz", 0.0f);
+static float g_fFramePacingRuntimeTargetHz = 0.0f;
 Preference<float> g_fFramePacingSleepMarginMs(
     "FramePacingSleepMarginMs", 1.0f);
 Preference<float> g_fFramePacingMaxSleepChunkMs(
@@ -260,6 +261,10 @@ static float ClampFramePacingHz(float targetHz) {
 }
 
 static float EffectiveFramePacingTargetHz(int fallbackHz) {
+  const float runtimeHz = ClampFramePacingHz(g_fFramePacingRuntimeTargetHz);
+  if (runtimeHz > 0.0f) {
+    return runtimeHz;
+  }
   const float configuredHz = ClampFramePacingHz(g_fFramePacingTargetHz.Get());
   if (configuredHz > 0.0f) {
     return configuredHz;
@@ -2376,6 +2381,10 @@ void RageDisplay::DrawSymmetricQuadStrip(
 
 void RageDisplay::DrawCircle(const RageSpriteVertex& v, float radius) {
   this->DrawCircleInternal(v, radius);
+}
+
+void RageDisplay::SetRuntimeFramePacingTargetHz(float targetHz) {
+  g_fFramePacingRuntimeTargetHz = ClampFramePacingHz(targetHz);
 }
 
 void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
