@@ -1413,17 +1413,22 @@ void RageDisplay_Metal::FlushBatches() {
   size_t directVertexCount = 0;
   size_t largestBatchVertexCount = 0;
   size_t largestBatchVertexCapacity = 0;
+  size_t smallBatchCount = 0;
   for (size_t i = 0; i < activeBatchCount; ++i) {
     const std::vector<MacOSMetalSolidVertex>& vertices =
         m_DrawBatches[i].vertices;
+    const size_t batchVertexCount =
+        std::max(vertices.size(), m_DrawBatches[i].vertexCount);
     stagedVertexCount += vertices.size();
     stagedVertexCapacity += vertices.capacity();
     directVertexCount += m_DrawBatches[i].vertexCount;
     largestBatchVertexCount =
-        std::max(largestBatchVertexCount,
-                 std::max(vertices.size(), m_DrawBatches[i].vertexCount));
+        std::max(largestBatchVertexCount, batchVertexCount);
     largestBatchVertexCapacity =
         std::max(largestBatchVertexCapacity, vertices.capacity());
+    if (batchVertexCount > 0 && batchVertexCount <= 12) {
+      ++smallBatchCount;
+    }
   }
 
   const bool renderingToTarget = m_iCurrentRenderTargetHandle > 0;
@@ -1443,14 +1448,18 @@ void RageDisplay_Metal::FlushBatches() {
           "PERF_TRACE: metal_cpu_staging frame=%llu active_batches=%zu "
           "metal_batches=%zu vertices=%zu staged_bytes=%zu "
           "vertex_capacity=%zu capacity_bytes=%zu largest_batch=%zu "
-          "largest_capacity=%zu direct_vertices=%zu direct_frame=%d "
-          "build_batches_ms=%.3f",
+          "largest_capacity=%zu small_batches=%zu avg_vertices_per_batch=%.2f "
+          "direct_vertices=%zu direct_frame=%d build_batches_ms=%.3f",
           static_cast<unsigned long long>(m_iMetalStagingFrames),
           activeBatchCount, m_MetalDrawBatches.size(), stagedVertexCount,
           stagedVertexCount * sizeof(MacOSMetalSolidVertex),
           stagedVertexCapacity,
           stagedVertexCapacity * sizeof(MacOSMetalSolidVertex),
-          largestBatchVertexCount, largestBatchVertexCapacity,
+          largestBatchVertexCount, largestBatchVertexCapacity, smallBatchCount,
+          activeBatchCount > 0
+              ? static_cast<double>(stagedVertexCount + directVertexCount) /
+                    static_cast<double>(activeBatchCount)
+              : 0.0,
           directVertexCount, useDirectVertexFrame ? 1 : 0,
           buildBatchesMs);
     }

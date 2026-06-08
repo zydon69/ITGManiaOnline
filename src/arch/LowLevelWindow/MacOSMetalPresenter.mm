@@ -42,7 +42,7 @@ constexpr float kMetalSlowCommandBufferMs = 12.0f;
 constexpr uint64_t kMetalInitialTraceFrames = 3;
 constexpr uint64_t kMetalRareSkipTraceInterval = 5000;
 constexpr int kMetalMaxSolidFramesInFlight = 3;
-constexpr int kMetalFrameLimiterWaitMs = 8;
+constexpr int kMetalFrameLimiterWaitMs = 4;
 constexpr int kMetalReconfigureDrainWaitMs = 24;
 constexpr int kMetalShutdownDrainWaitMs = 250;
 constexpr int kMetalDrawablePrefetchRenderWaitUs = 500;
@@ -156,6 +156,9 @@ struct MacOSMetalFrameLimiter {
   std::mutex mutex;
   std::condition_variable condition;
   int framesInFlight = 0;
+  uint64_t acquiredFrames = 0;
+  uint64_t releasedFrames = 0;
+  uint64_t invalidReleases = 0;
   std::array<bool, kMetalMaxSolidFramesInFlight> slotBusy;
 };
 
@@ -207,6 +210,7 @@ bool AcquireMetalFrameSlot(
   for (int i = 0; i < kMetalMaxSolidFramesInFlight; ++i) {
     if (!limiter->slotBusy[i]) {
       limiter->slotBusy[i] = true;
+      ++limiter->acquiredFrames;
       if (slotOut != nullptr) {
         *slotOut = i;
       }
@@ -234,11 +238,43 @@ void ReleaseMetalFrameSlot(
 
   {
     std::lock_guard<std::mutex> lock(limiter->mutex);
+    bool releasedOwnedFrame = false;
     if (slot >= 0 && slot < kMetalMaxSolidFramesInFlight) {
+      if (!limiter->slotBusy[slot]) {
+        ++limiter->invalidReleases;
+        LOG->Warn(
+            "MacOS Metal presenter frame slot accounting mismatch: release "
+            "requested for idle slot=%d frames_in_flight=%d acquired=%llu "
+            "released=%llu invalid_releases=%llu.",
+            slot, limiter->framesInFlight,
+            static_cast<unsigned long long>(limiter->acquiredFrames),
+            static_cast<unsigned long long>(limiter->releasedFrames),
+            static_cast<unsigned long long>(limiter->invalidReleases));
+      } else {
+        ++limiter->releasedFrames;
+        releasedOwnedFrame = true;
+      }
       limiter->slotBusy[slot] = false;
+    } else if (slot >= 0) {
+      ++limiter->invalidReleases;
+      LOG->Warn(
+          "MacOS Metal presenter frame slot accounting mismatch: release "
+          "requested for out-of-range slot=%d frames_in_flight=%d "
+          "invalid_releases=%llu.",
+          slot, limiter->framesInFlight,
+          static_cast<unsigned long long>(limiter->invalidReleases));
+    } else {
+      ++limiter->releasedFrames;
+      releasedOwnedFrame = true;
     }
-    if (limiter->framesInFlight > 0) {
+    if (releasedOwnedFrame && limiter->framesInFlight > 0) {
       --limiter->framesInFlight;
+    } else if (releasedOwnedFrame) {
+      ++limiter->invalidReleases;
+      LOG->Warn(
+          "MacOS Metal presenter frame slot accounting mismatch: release "
+          "requested with zero frames in flight slot=%d invalid_releases=%llu.",
+          slot, static_cast<unsigned long long>(limiter->invalidReleases));
     }
   }
   limiter->condition.notify_one();
@@ -309,6 +345,8 @@ struct MacOSMetalPresenterImpl {
   std::array<MacOSMetalInteropSurface, kMetalInteropSurfaceCount> surfaces;
   std::shared_ptr<MacOSMetalSurfaceBusyFlags> surfaceBusy;
   std::shared_ptr<MacOSMetalFrameLimiter> solidFrameLimiter =
+      std::make_shared<MacOSMetalFrameLimiter>();
+  std::shared_ptr<MacOSMetalFrameLimiter> offscreenPresentFrameLimiter =
       std::make_shared<MacOSMetalFrameLimiter>();
   std::shared_ptr<MacOSMetalFrameLimiter> renderTargetFrameLimiter =
       std::make_shared<MacOSMetalFrameLimiter>();
@@ -391,11 +429,15 @@ bool ConsumeVertexFrameForCompletion(
 
   std::shared_ptr<MacOSMetalFrameLimiter> limiter =
       FrameLimiterForVertexFrame(impl, *frame);
-  const int frameSlot = frame->frameSlot;
-  ClearVertexFrameToken(frame);
   if (!limiter) {
+    LOG->Warn(
+        "MacOS Metal presenter could not consume vertex frame token: missing "
+        "frame limiter for slot=%d render_target=%d.",
+        frame->frameSlot, frame->renderTarget ? 1 : 0);
     return false;
   }
+  const int frameSlot = frame->frameSlot;
+  ClearVertexFrameToken(frame);
   if (limiterOut != nullptr) {
     *limiterOut = limiter;
   }
@@ -721,6 +763,23 @@ void StopDrawablePrefetcher(MacOSMetalPresenterImpl* impl) {
   }
 }
 
+void AppendMetalFrameLimiterSummary(
+    std::string* summary, const char* label,
+    const std::shared_ptr<MacOSMetalFrameLimiter>& limiter) {
+  if (summary == nullptr || !limiter) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(limiter->mutex);
+  *summary += ssprintf(
+      " %s_acquired=%llu %s_released=%llu %s_invalid_releases=%llu "
+      "%s_in_flight=%d",
+      label, static_cast<unsigned long long>(limiter->acquiredFrames),
+      label, static_cast<unsigned long long>(limiter->releasedFrames),
+      label, static_cast<unsigned long long>(limiter->invalidReleases),
+      label, limiter->framesInFlight);
+}
+
 void LogMetalPresenterTimingSummary(MacOSMetalPresenterImpl* impl) {
   if (impl == nullptr || !PerfDiagnosticsEnabled()) {
     return;
@@ -765,6 +824,15 @@ void LogMetalPresenterTimingSummary(MacOSMetalPresenterImpl* impl) {
     AppendMetalTimingSummary(
         &summary, "command_buffer", timingState->commandBufferTimings);
   }
+  AppendMetalFrameLimiterSummary(
+      &summary, "solid_limiter", impl->solidFrameLimiter);
+  AppendMetalFrameLimiterSummary(
+      &summary, "offscreen_present_limiter",
+      impl->offscreenPresentFrameLimiter);
+  AppendMetalFrameLimiterSummary(
+      &summary, "render_target_limiter", impl->renderTargetFrameLimiter);
+  AppendMetalFrameLimiterSummary(
+      &summary, "interop_limiter", impl->interopFrameLimiter);
   LOG->Trace("%s", summary.c_str());
 }
 
@@ -1962,6 +2030,9 @@ void MacOSMetalPresenter::Shutdown() {
       impl->solidFrameLimiter, kMetalShutdownDrainWaitMs, "solid",
       "shutdown timed out");
   WaitForMetalFrameLimiterIdle(
+      impl->offscreenPresentFrameLimiter, kMetalShutdownDrainWaitMs,
+      "offscreen_present", "shutdown timed out");
+  WaitForMetalFrameLimiterIdle(
       impl->renderTargetFrameLimiter, kMetalShutdownDrainWaitMs,
       "render_target", "shutdown timed out");
   WaitForMetalFrameLimiterIdle(
@@ -2351,6 +2422,9 @@ bool MacOSMetalPresenter::ReconfigureAttachedLayer(
   WaitForMetalFrameLimiterIdle(
       impl->solidFrameLimiter, kMetalReconfigureDrainWaitMs, "solid",
       "reconfigure timed out");
+  WaitForMetalFrameLimiterIdle(
+      impl->offscreenPresentFrameLimiter, kMetalReconfigureDrainWaitMs,
+      "offscreen_present", "reconfigure timed out");
 
   const NSRect bounds = [geometryView bounds];
   [impl->layerView setFrame:bounds];
@@ -2477,7 +2551,7 @@ bool MacOSMetalPresenter::PresentClearFrame(
   }
 
   std::shared_ptr<MacOSMetalFrameLimiter> frameLimiter =
-      impl->solidFrameLimiter;
+      impl->offscreenPresentFrameLimiter;
   int frameSlot = -1;
   if (!AcquireMetalFrameSlot(frameLimiter, "clear", &frameSlot)) {
     return false;
@@ -2915,7 +2989,7 @@ bool MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
   }
 
   std::shared_ptr<MacOSMetalFrameLimiter> frameLimiter =
-      impl->solidFrameLimiter;
+      impl->offscreenPresentFrameLimiter;
   int frameSlot = -1;
   if (!AcquireMetalFrameSlot(frameLimiter, "offscreen_present", &frameSlot)) {
     [drawable release];
