@@ -132,14 +132,20 @@ struct ScopedAutoreleasePool {
 };
 
 struct MacOSMetalFrameLimiter {
+  MacOSMetalFrameLimiter() { slotBusy.fill(false); }
+
   std::mutex mutex;
   std::condition_variable condition;
   int framesInFlight = 0;
+  std::array<bool, kMetalMaxSolidFramesInFlight> slotBusy;
 };
 
 bool AcquireMetalFrameSlot(
     const std::shared_ptr<MacOSMetalFrameLimiter>& limiter,
-    const char* label) {
+    const char* label, int* slotOut = nullptr) {
+  if (slotOut != nullptr) {
+    *slotOut = -1;
+  }
   if (!limiter) {
     return true;
   }
@@ -160,17 +166,39 @@ bool AcquireMetalFrameSlot(
     return false;
   }
   ++limiter->framesInFlight;
-  return true;
+  for (int i = 0; i < kMetalMaxSolidFramesInFlight; ++i) {
+    if (!limiter->slotBusy[i]) {
+      limiter->slotBusy[i] = true;
+      if (slotOut != nullptr) {
+        *slotOut = i;
+      }
+      return true;
+    }
+  }
+
+  --limiter->framesInFlight;
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Warn(
+        "MacOS Metal presenter skipped %s frame: no free frame slot after "
+        "limiter acquisition.",
+        label);
+  }
+  limiter->condition.notify_one();
+  return false;
 }
 
 void ReleaseMetalFrameSlot(
-    const std::shared_ptr<MacOSMetalFrameLimiter>& limiter) {
+    const std::shared_ptr<MacOSMetalFrameLimiter>& limiter,
+    int slot = -1) {
   if (!limiter) {
     return;
   }
 
   {
     std::lock_guard<std::mutex> lock(limiter->mutex);
+    if (slot >= 0 && slot < kMetalMaxSolidFramesInFlight) {
+      limiter->slotBusy[slot] = false;
+    }
     if (limiter->framesInFlight > 0) {
       --limiter->framesInFlight;
     }
@@ -198,6 +226,10 @@ struct MacOSMetalPresenterImpl {
       distanceFieldPipelines;
   std::array<std::array<id<MTLDepthStencilState>, 2>, NUM_ZTestMode> depthStates;
   std::array<std::array<id<MTLSamplerState>, 2>, 2> samplerStates;
+  std::array<id<MTLBuffer>, kMetalMaxSolidFramesInFlight> solidVertexBuffers =
+      {};
+  std::array<NSUInteger, kMetalMaxSolidFramesInFlight>
+      solidVertexBufferCapacities = {};
   id<MTLTexture> whiteTexture = nil;
   id<MTLTexture> depthTexture = nil;
   CAMetalLayer* layer = nil;
@@ -775,10 +807,53 @@ id<MTLSamplerState> CreateSamplerState(
   return [device newSamplerStateWithDescriptor:descriptor];
 }
 
+id<MTLBuffer> PrepareSolidVertexBuffer(
+    MacOSMetalPresenterImpl* impl, NSUInteger requiredLength, int frameSlot,
+    NSMutableArray* retainedBuffers) {
+  if (impl == nullptr || impl->device == nil || requiredLength == 0) {
+    return nil;
+  }
+
+  if (frameSlot >= 0 && frameSlot < kMetalMaxSolidFramesInFlight) {
+    id<MTLBuffer>& buffer = impl->solidVertexBuffers[frameSlot];
+    NSUInteger& capacity = impl->solidVertexBufferCapacities[frameSlot];
+    if (buffer == nil || capacity < requiredLength) {
+      if (buffer != nil) {
+        [buffer release];
+        buffer = nil;
+      }
+      const NSUInteger grownCapacity =
+          std::max<NSUInteger>(requiredLength, std::max<NSUInteger>(
+                                                   capacity * 2, 256 * 1024));
+      buffer = [impl->device newBufferWithLength:grownCapacity
+                                         options:MTLResourceStorageModeShared];
+      capacity = buffer != nil ? grownCapacity : 0;
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "PERF_TRACE: macos_metal_vertex_ring_resize slot=%d "
+            "required_bytes=%lu capacity_bytes=%lu ok=%d",
+            frameSlot, static_cast<unsigned long>(requiredLength),
+            static_cast<unsigned long>(capacity), buffer != nil ? 1 : 0);
+      }
+    }
+    return buffer;
+  }
+
+  id<MTLBuffer> buffer =
+      [impl->device newBufferWithLength:requiredLength
+                                options:MTLResourceStorageModeShared];
+  if (buffer != nil && retainedBuffers != nil) {
+    [retainedBuffers addObject:buffer];
+    [buffer release];
+  }
+  return buffer;
+}
+
 bool EncodeSolidBatches(
     MacOSMetalPresenterImpl* impl, id<MTLRenderCommandEncoder> encoder,
     const MacOSMetalDrawBatch* batches, size_t batchCount,
-    NSMutableArray* retainedBuffers, NSMutableArray* retainedTextures) {
+    NSMutableArray* retainedBuffers, NSMutableArray* retainedTextures,
+    int frameSlot = -1) {
   if (impl == nullptr || encoder == nil || batches == nullptr) {
     return false;
   }
@@ -796,9 +871,8 @@ bool EncodeSolidBatches(
 
   const NSUInteger vertexBufferLength = static_cast<NSUInteger>(
       sizeof(MacOSMetalSolidVertex) * totalVertexCount);
-  id<MTLBuffer> frameVertexBuffer =
-      [impl->device newBufferWithLength:vertexBufferLength
-                                options:MTLResourceStorageModeShared];
+  id<MTLBuffer> frameVertexBuffer = PrepareSolidVertexBuffer(
+      impl, vertexBufferLength, frameSlot, retainedBuffers);
   if (frameVertexBuffer == nil) {
     return false;
   }
@@ -806,7 +880,6 @@ bool EncodeSolidBatches(
   MacOSMetalSolidVertex* frameVertices =
       static_cast<MacOSMetalSolidVertex*>([frameVertexBuffer contents]);
   size_t frameVertexOffset = 0;
-  [retainedBuffers addObject:frameVertexBuffer];
 
   bool encodedAny = false;
   for (size_t i = 0; i < batchCount; ++i) {
@@ -918,7 +991,6 @@ bool EncodeSolidBatches(
     [sourceTexture2 release];
     encodedAny = true;
   }
-  [frameVertexBuffer release];
   return encodedAny;
 }
 
@@ -1176,6 +1248,13 @@ void MacOSMetalPresenter::Shutdown() {
   if (impl->presentPipeline != nil) {
     [impl->presentPipeline release];
     impl->presentPipeline = nil;
+  }
+  for (int i = 0; i < kMetalMaxSolidFramesInFlight; ++i) {
+    if (impl->solidVertexBuffers[i] != nil) {
+      [impl->solidVertexBuffers[i] release];
+      impl->solidVertexBuffers[i] = nil;
+    }
+    impl->solidVertexBufferCapacities[i] = 0;
   }
   for (id<MTLRenderPipelineState>& pipeline : impl->solidPipelines) {
     if (pipeline != nil) {
@@ -1493,7 +1572,8 @@ bool MacOSMetalPresenter::PresentClearFrame(
 
   std::shared_ptr<MacOSMetalFrameLimiter> frameLimiter =
       impl->solidFrameLimiter;
-  if (!AcquireMetalFrameSlot(frameLimiter, "clear")) {
+  int frameSlot = -1;
+  if (!AcquireMetalFrameSlot(frameLimiter, "clear", &frameSlot)) {
     return false;
   }
 
@@ -1523,7 +1603,7 @@ bool MacOSMetalPresenter::PresentClearFrame(
             static_cast<unsigned long long>(drawableMisses), targetHz,
             nextDrawableMs);
       }
-      ReleaseMetalFrameSlot(frameLimiter);
+      ReleaseMetalFrameSlot(frameLimiter, frameSlot);
       return false;
     }
   }
@@ -1532,7 +1612,7 @@ bool MacOSMetalPresenter::PresentClearFrame(
   id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
   if (commandBuffer == nil) {
     [drawable release];
-    ReleaseMetalFrameSlot(frameLimiter);
+    ReleaseMetalFrameSlot(frameLimiter, frameSlot);
     return false;
   }
 
@@ -1548,7 +1628,7 @@ bool MacOSMetalPresenter::PresentClearFrame(
       [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
   if (encoder == nil) {
     [drawable release];
-    ReleaseMetalFrameSlot(frameLimiter);
+    ReleaseMetalFrameSlot(frameLimiter, frameSlot);
     return false;
   }
   [encoder endEncoding];
@@ -1569,6 +1649,7 @@ bool MacOSMetalPresenter::PresentClearFrame(
   id<CAMetalDrawable> completionDrawable = [drawable retain];
   std::shared_ptr<MacOSMetalFrameLimiter> completionFrameLimiter =
       frameLimiter;
+  const int completionFrameSlot = frameSlot;
   [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedCommandBuffer) {
     const uint64_t completedIndex =
         g_iMetalDirectPresentCompletedFrames.fetch_add(1) + 1;
@@ -1591,7 +1672,7 @@ bool MacOSMetalPresenter::PresentClearFrame(
           commandBufferMs, nextDrawableMs, encodeSubmitMs, targetHz);
     }
     [completionDrawable release];
-    ReleaseMetalFrameSlot(completionFrameLimiter);
+    ReleaseMetalFrameSlot(completionFrameLimiter, completionFrameSlot);
   }];
   [commandBuffer commit];
   [drawable release];
@@ -1604,10 +1685,10 @@ bool MacOSMetalPresenter::PresentClearFrame(
     LOG->Trace(
         "PERF_TRACE: macos_metal_clear_present_submitted "
         "target_hz=%.3f minimum_duration_ms=%.3f frame=%llu "
-        "prefetched_drawable_serial=%llu prefetch_misses=%llu "
+        "frame_slot=%d prefetched_drawable_serial=%llu prefetch_misses=%llu "
         "next_drawable_ms=%.3f encode_submit_ms=%.3f",
         targetHz, minimumDuration * 1000.0,
-        static_cast<unsigned long long>(frameIndex),
+        static_cast<unsigned long long>(frameIndex), frameSlot,
         static_cast<unsigned long long>(drawableSerial),
         static_cast<unsigned long long>(drawableMisses), nextDrawableMs,
         encodeSubmitMs);
@@ -1645,7 +1726,8 @@ bool MacOSMetalPresenter::PresentSolidBatches(
 
   std::shared_ptr<MacOSMetalFrameLimiter> frameLimiter =
       impl->solidFrameLimiter;
-  if (!AcquireMetalFrameSlot(frameLimiter, "solid")) {
+  int frameSlot = -1;
+  if (!AcquireMetalFrameSlot(frameLimiter, "solid", &frameSlot)) {
     return false;
   }
 
@@ -1675,7 +1757,7 @@ bool MacOSMetalPresenter::PresentSolidBatches(
             static_cast<unsigned long long>(drawableMisses), targetHz,
             nextDrawableMs, batchCount, totalVertexCount);
       }
-      ReleaseMetalFrameSlot(frameLimiter);
+      ReleaseMetalFrameSlot(frameLimiter, frameSlot);
       return false;
     }
   }
@@ -1684,7 +1766,7 @@ bool MacOSMetalPresenter::PresentSolidBatches(
   id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
   if (commandBuffer == nil) {
     [drawable release];
-    ReleaseMetalFrameSlot(frameLimiter);
+    ReleaseMetalFrameSlot(frameLimiter, frameSlot);
     return false;
   }
   MTLRenderPassDescriptor* passDescriptor =
@@ -1706,14 +1788,15 @@ bool MacOSMetalPresenter::PresentSolidBatches(
       [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
   if (encoder == nil) {
     [drawable release];
-    ReleaseMetalFrameSlot(frameLimiter);
+    ReleaseMetalFrameSlot(frameLimiter, frameSlot);
     return false;
   }
 
   NSMutableArray* retainedBuffers = [NSMutableArray arrayWithCapacity:batchCount];
   NSMutableArray* retainedTextures = [NSMutableArray arrayWithCapacity:batchCount];
   EncodeSolidBatches(
-      impl, encoder, batches, batchCount, retainedBuffers, retainedTextures);
+      impl, encoder, batches, batchCount, retainedBuffers, retainedTextures,
+      frameSlot);
   [encoder endEncoding];
 
   const double minimumDuration =
@@ -1734,6 +1817,7 @@ bool MacOSMetalPresenter::PresentSolidBatches(
   NSArray* completionTextures = [retainedTextures copy];
   std::shared_ptr<MacOSMetalFrameLimiter> completionFrameLimiter =
       frameLimiter;
+  const int completionFrameSlot = frameSlot;
   [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedCommandBuffer) {
     const uint64_t completedIndex =
         g_iMetalDirectPresentCompletedFrames.fetch_add(1) + 1;
@@ -1748,10 +1832,11 @@ bool MacOSMetalPresenter::PresentSolidBatches(
     if (PerfDiagnosticsEnabled() && traceCompletion) {
       LOG->Trace(
           "PERF_TRACE: macos_metal_solid_present_completed "
-          "frame=%llu completed=%llu status=%lu command_buffer_ms=%.3f "
+          "frame=%llu frame_slot=%d completed=%llu status=%lu "
+          "command_buffer_ms=%.3f "
           "next_drawable_ms=%.3f encode_submit_ms=%.3f target_hz=%.3f "
           "vertices=%zu",
-          static_cast<unsigned long long>(frameIndex),
+          static_cast<unsigned long long>(frameIndex), completionFrameSlot,
           static_cast<unsigned long long>(completedIndex),
           static_cast<unsigned long>([completedCommandBuffer status]),
           commandBufferMs, nextDrawableMs, encodeSubmitMs, targetHz,
@@ -1760,7 +1845,7 @@ bool MacOSMetalPresenter::PresentSolidBatches(
     [completionBuffers release];
     [completionTextures release];
     [completionDrawable release];
-    ReleaseMetalFrameSlot(completionFrameLimiter);
+    ReleaseMetalFrameSlot(completionFrameLimiter, completionFrameSlot);
   }];
   [commandBuffer commit];
   [drawable release];
@@ -1772,12 +1857,12 @@ bool MacOSMetalPresenter::PresentSolidBatches(
   if (PerfDiagnosticsEnabled() && traceSubmit) {
     LOG->Trace(
         "PERF_TRACE: macos_metal_solid_present_submitted "
-        "target_hz=%.3f minimum_duration_ms=%.3f frame=%llu "
+        "target_hz=%.3f minimum_duration_ms=%.3f frame=%llu frame_slot=%d "
         "prefetched_drawable_serial=%llu prefetch_misses=%llu "
         "next_drawable_ms=%.3f encode_submit_ms=%.3f batches=%zu "
         "vertices=%zu",
         targetHz, minimumDuration * 1000.0,
-        static_cast<unsigned long long>(frameIndex),
+        static_cast<unsigned long long>(frameIndex), frameSlot,
         static_cast<unsigned long long>(drawableSerial),
         static_cast<unsigned long long>(drawableMisses), nextDrawableMs,
         encodeSubmitMs, batchCount, totalVertexCount);
