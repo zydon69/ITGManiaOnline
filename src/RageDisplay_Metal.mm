@@ -430,13 +430,25 @@ void RageCompiledGeometryMetal::EmitTo(
     return;
   }
 
-  RageDisplay_Metal::DrawBatch& batch = display->ActiveBatch();
-  batch.vertices.reserve(
-      batch.vertices.size() +
-      static_cast<size_t>(meshInfo.iTriangleCount) * 3);
+  const size_t outputVertexCount =
+      static_cast<size_t>(meshInfo.iTriangleCount) * 3;
+  RageDisplay_Metal::DrawBatch* directBatch = nullptr;
+  MacOSMetalSolidVertex* directVertices = nullptr;
+  const bool useDirectVertices = display->ReserveDirectVertices(
+      outputVertexCount, &directBatch, &directVertices);
+  RageDisplay_Metal::DrawBatch* fallbackBatch = nullptr;
+  if (!useDirectVertices) {
+    fallbackBatch = &display->ActiveBatch(
+        display->m_iActiveDrawBatchCount > 0 &&
+        display->m_DrawBatches[display->m_iActiveDrawBatchCount - 1]
+            .vertexBuffer != nullptr);
+    fallbackBatch->vertices.reserve(
+        fallbackBatch->vertices.size() + outputVertexCount);
+  }
 
   RageMatrix modelView;
   RageMatrixMultiply(&modelView, display->GetViewTop(), display->GetWorldTop());
+  size_t out = 0;
   for (int i = 0; i < meshInfo.iTriangleCount; ++i) {
     const msTriangle& tri =
         m_vTriangles[meshInfo.iTriangleStart + static_cast<size_t>(i)];
@@ -457,13 +469,27 @@ void RageCompiledGeometryMetal::EmitTo(
         litColor = display->ComputeCelModelColor(transformedNormal);
       }
       const RageVector2 texcoord =
-          batch.sphereMapping
+          (useDirectVertices ? directBatch->sphereMapping
+                             : fallbackBatch->sphereMapping)
               ? SphereMapTextureCoord(transformedNormal)
               : modelVertex.t;
-      batch.vertices.push_back(ToMetalSolidVertex(
+      const MacOSMetalSolidVertex vertex = ToMetalSolidVertex(
           position, texcoord, ToVertexColor(litColor),
-          modelVertex.TextureMatrixScale));
+          modelVertex.TextureMatrixScale);
+      if (useDirectVertices) {
+        directVertices[out++] = vertex;
+      } else {
+        fallbackBatch->vertices.push_back(vertex);
+      }
     }
+  }
+  if (useDirectVertices && out < outputVertexCount) {
+    RageDisplay_Metal::VertexWriterState& writer =
+        display->m_iCurrentRenderTargetHandle > 0
+            ? display->m_RenderTargetVertexWriter
+            : display->m_MainVertexWriter;
+    directBatch->vertexCount -= outputVertexCount - out;
+    writer.usedVertices -= outputVertexCount - out;
   }
 }
 
@@ -492,6 +518,8 @@ RageDisplay_Metal::RageDisplay_Metal()
       m_iMetalFrames(0),
       m_iMetalStagingFrames(0),
       m_iSkippedPresentFrames(0),
+      m_iLastMainDirectVertexCapacity(65536),
+      m_iLastRenderTargetDirectVertexCapacity(16384),
       m_bReady(false) {
   m_TextureModes.fill(TextureMode_Modulate);
   m_TextureFiltering.fill(true);
@@ -1088,8 +1116,8 @@ void RageDisplay_Metal::SetCelShaded(int stage) {
   m_iCelShadedStage = stage;
 }
 
-RageDisplay_Metal::DrawBatch& RageDisplay_Metal::ActiveBatch() {
-  if (m_iActiveDrawBatchCount > 0) {
+RageDisplay_Metal::DrawBatch& RageDisplay_Metal::ActiveBatch(bool forceNew) {
+  if (!forceNew && m_iActiveDrawBatchCount > 0) {
     DrawBatch& last = m_DrawBatches[m_iActiveDrawBatchCount - 1];
     const MacOSMetalTransformUniforms currentTransform =
         BuildTransformUniforms(
@@ -1135,8 +1163,126 @@ RageDisplay_Metal::DrawBatch& RageDisplay_Metal::ActiveBatch() {
   batch.transform = BuildTransformUniforms(
       CurrentModelViewProjection(), CurrentTextureMatrix(), m_fZBias);
   m_bClearDepthNextFrame = false;
+  batch.vertexBuffer = nullptr;
+  batch.vertexBufferOffsetBytes = 0;
+  batch.vertexCount = 0;
   batch.vertices.clear();
   return batch;
+}
+
+bool RageDisplay_Metal::ReserveDirectVertices(
+    size_t vertexCount, DrawBatch** batchOut,
+    MacOSMetalSolidVertex** verticesOut) {
+  if (batchOut != nullptr) {
+    *batchOut = nullptr;
+  }
+  if (verticesOut != nullptr) {
+    *verticesOut = nullptr;
+  }
+  if (m_Presenter == nullptr || vertexCount == 0 ||
+      batchOut == nullptr || verticesOut == nullptr) {
+    return false;
+  }
+
+  VertexWriterState& writer =
+      m_iCurrentRenderTargetHandle > 0 ? m_RenderTargetVertexWriter
+                                       : m_MainVertexWriter;
+  if (writer.disabled) {
+    return false;
+  }
+
+  if (!writer.active) {
+    writer.renderTarget = m_iCurrentRenderTargetHandle > 0;
+    const size_t previousCapacity =
+        writer.renderTarget ? m_iLastRenderTargetDirectVertexCapacity
+                            : m_iLastMainDirectVertexCapacity;
+    const size_t requestedCapacity =
+        std::max(previousCapacity, std::max<size_t>(vertexCount, 4096));
+    const bool began =
+        writer.renderTarget
+            ? m_Presenter->BeginRenderTargetVertexFrame(
+                  requestedCapacity, &writer.frame, &writer.vertices)
+            : m_Presenter->BeginSolidVertexFrame(
+                  requestedCapacity, &writer.frame, &writer.vertices);
+    if (!began || writer.vertices == nullptr ||
+        writer.frame.vertexBuffer == nullptr) {
+      writer.disabled = true;
+      return false;
+    }
+    writer.capacityVertices = requestedCapacity;
+    writer.usedVertices = 0;
+    writer.active = true;
+  }
+
+  if (writer.usedVertices + vertexCount > writer.capacityVertices) {
+    writer.overflowRequiredVertices = std::max(
+        writer.overflowRequiredVertices, writer.usedVertices + vertexCount);
+    writer.disabled = true;
+    return false;
+  }
+
+  const size_t vertexOffset = writer.usedVertices;
+  DrawBatch& batch = ActiveBatch(
+      m_iActiveDrawBatchCount > 0 &&
+      (!m_DrawBatches[m_iActiveDrawBatchCount - 1].vertices.empty() ||
+       (m_DrawBatches[m_iActiveDrawBatchCount - 1].vertexBuffer != nullptr &&
+        m_DrawBatches[m_iActiveDrawBatchCount - 1].vertexBuffer !=
+            writer.frame.vertexBuffer)));
+  if (batch.vertexBuffer == nullptr && batch.vertexCount == 0) {
+    batch.vertexBuffer = writer.frame.vertexBuffer;
+    batch.vertexBufferOffsetBytes =
+        vertexOffset * sizeof(MacOSMetalSolidVertex);
+  } else if (
+      batch.vertexBuffer != writer.frame.vertexBuffer ||
+      batch.vertexBufferOffsetBytes +
+              batch.vertexCount * sizeof(MacOSMetalSolidVertex) !=
+          vertexOffset * sizeof(MacOSMetalSolidVertex)) {
+    DrawBatch& newBatch = ActiveBatch(true);
+    newBatch.vertexBuffer = writer.frame.vertexBuffer;
+    newBatch.vertexBufferOffsetBytes =
+        vertexOffset * sizeof(MacOSMetalSolidVertex);
+    *batchOut = &newBatch;
+    *verticesOut = writer.vertices + vertexOffset;
+    writer.usedVertices += vertexCount;
+    newBatch.vertexCount += vertexCount;
+    return true;
+  }
+
+  *batchOut = &batch;
+  *verticesOut = writer.vertices + vertexOffset;
+  writer.usedVertices += vertexCount;
+  batch.vertexCount += vertexCount;
+  return true;
+}
+
+void RageDisplay_Metal::ResetVertexWriter(
+    VertexWriterState* writer, bool cancelFrame) {
+  if (writer == nullptr) {
+    return;
+  }
+  if (writer->active) {
+    const size_t nextCapacityFloor =
+        std::max(writer->usedVertices, writer->overflowRequiredVertices);
+    if (writer->renderTarget) {
+      m_iLastRenderTargetDirectVertexCapacity =
+          std::max(m_iLastRenderTargetDirectVertexCapacity,
+                   nextCapacityFloor);
+    } else {
+      m_iLastMainDirectVertexCapacity =
+          std::max(m_iLastMainDirectVertexCapacity, nextCapacityFloor);
+    }
+  }
+  if (cancelFrame && writer->frame.frameSlot >= 0 && m_Presenter != nullptr) {
+    m_Presenter->CancelVertexFrame(&writer->frame);
+  }
+  writer->frame = MacOSMetalVertexFrame();
+  writer->vertices = nullptr;
+  writer->usedVertices = 0;
+  writer->capacityVertices = 0;
+  writer->overflowRequiredVertices = 0;
+  writer->active = false;
+  writer->disabled = false;
+  writer->renderTarget = false;
 }
 
 void RageDisplay_Metal::BuildMetalBatches(
@@ -1151,7 +1297,8 @@ void RageDisplay_Metal::BuildMetalBatches(
   const size_t safeBatchCount = std::min(batchCount, batches.size());
   for (size_t i = 0; i < safeBatchCount; ++i) {
     const DrawBatch& batch = batches[i];
-    if (batch.vertices.empty() && !batch.clearDepthBefore) {
+    if (batch.vertices.empty() && batch.vertexCount == 0 &&
+        !batch.clearDepthBefore) {
       continue;
     }
     void* texture = nullptr;
@@ -1176,9 +1323,13 @@ void RageDisplay_Metal::BuildMetalBatches(
             std::max(1, m_Textures[batch.textureHandles[TextureUnit_2]].width);
       }
     }
+    const MacOSMetalSolidVertex* cpuVertices =
+        batch.vertices.empty() ? nullptr : batch.vertices.data();
     metalBatches->push_back(
-        {batch.vertices.empty() ? nullptr : batch.vertices.data(),
-         batch.vertices.size(), texture, textureWidth,
+        {cpuVertices,
+         batch.vertexBuffer, batch.vertexBufferOffsetBytes,
+         batch.vertexCount > 0 ? batch.vertexCount : batch.vertices.size(),
+         texture, textureWidth,
          texture2, texture2Width,
          batch.blendMode, batch.textureModes[TextureUnit_1], batch.effectMode,
          batch.celStage,
@@ -1195,6 +1346,9 @@ void RageDisplay_Metal::ClearActiveBatches() {
       std::min(m_iActiveDrawBatchCount, m_DrawBatches.size());
   for (size_t i = 0; i < safeBatchCount; ++i) {
     m_DrawBatches[i].vertices.clear();
+    m_DrawBatches[i].vertexBuffer = nullptr;
+    m_DrawBatches[i].vertexBufferOffsetBytes = 0;
+    m_DrawBatches[i].vertexCount = 0;
   }
   m_iActiveDrawBatchCount = 0;
 }
@@ -1211,10 +1365,14 @@ void RageDisplay_Metal::MoveActiveBatchesTo(
   destination->reserve(destination->size() + safeBatchCount);
   for (size_t i = 0; i < safeBatchCount; ++i) {
     if (!m_DrawBatches[i].vertices.empty() ||
+        m_DrawBatches[i].vertexCount > 0 ||
         m_DrawBatches[i].clearDepthBefore) {
       destination->push_back(std::move(m_DrawBatches[i]));
     } else {
       m_DrawBatches[i].vertices.clear();
+      m_DrawBatches[i].vertexBuffer = nullptr;
+      m_DrawBatches[i].vertexBufferOffsetBytes = 0;
+      m_DrawBatches[i].vertexCount = 0;
     }
   }
   m_iActiveDrawBatchCount = 0;
@@ -1242,6 +1400,8 @@ void RageDisplay_Metal::RestorePendingMainBatches() {
 
 void RageDisplay_Metal::FlushBatches() {
   if (!m_bReady || m_Presenter == nullptr) {
+    ResetVertexWriter(&m_MainVertexWriter, true);
+    ResetVertexWriter(&m_RenderTargetVertexWriter, true);
     ClearActiveBatches();
     return;
   }
@@ -1250,6 +1410,7 @@ void RageDisplay_Metal::FlushBatches() {
       std::min(m_iActiveDrawBatchCount, m_DrawBatches.size());
   size_t stagedVertexCount = 0;
   size_t stagedVertexCapacity = 0;
+  size_t directVertexCount = 0;
   size_t largestBatchVertexCount = 0;
   size_t largestBatchVertexCapacity = 0;
   for (size_t i = 0; i < activeBatchCount; ++i) {
@@ -1257,15 +1418,22 @@ void RageDisplay_Metal::FlushBatches() {
         m_DrawBatches[i].vertices;
     stagedVertexCount += vertices.size();
     stagedVertexCapacity += vertices.capacity();
+    directVertexCount += m_DrawBatches[i].vertexCount;
     largestBatchVertexCount =
-        std::max(largestBatchVertexCount, vertices.size());
+        std::max(largestBatchVertexCount,
+                 std::max(vertices.size(), m_DrawBatches[i].vertexCount));
     largestBatchVertexCapacity =
         std::max(largestBatchVertexCapacity, vertices.capacity());
   }
 
+  const bool renderingToTarget = m_iCurrentRenderTargetHandle > 0;
+  VertexWriterState& activeWriter =
+      renderingToTarget ? m_RenderTargetVertexWriter : m_MainVertexWriter;
+  const bool useDirectVertexFrame =
+      activeWriter.active && activeWriter.frame.frameSlot >= 0 &&
+      directVertexCount > 0;
   RageTimer buildTimer;
-  BuildMetalBatches(
-      m_DrawBatches, m_iActiveDrawBatchCount, &m_MetalDrawBatches);
+  BuildMetalBatches(m_DrawBatches, m_iActiveDrawBatchCount, &m_MetalDrawBatches);
   const float buildBatchesMs = buildTimer.Ago() * 1000.0f;
   if (PerfDiagnosticsEnabled()) {
     ++m_iMetalStagingFrames;
@@ -1275,13 +1443,15 @@ void RageDisplay_Metal::FlushBatches() {
           "PERF_TRACE: metal_cpu_staging frame=%llu active_batches=%zu "
           "metal_batches=%zu vertices=%zu staged_bytes=%zu "
           "vertex_capacity=%zu capacity_bytes=%zu largest_batch=%zu "
-          "largest_capacity=%zu build_batches_ms=%.3f",
+          "largest_capacity=%zu direct_vertices=%zu direct_frame=%d "
+          "build_batches_ms=%.3f",
           static_cast<unsigned long long>(m_iMetalStagingFrames),
           activeBatchCount, m_MetalDrawBatches.size(), stagedVertexCount,
           stagedVertexCount * sizeof(MacOSMetalSolidVertex),
           stagedVertexCapacity,
           stagedVertexCapacity * sizeof(MacOSMetalSolidVertex),
           largestBatchVertexCount, largestBatchVertexCapacity,
+          directVertexCount, useDirectVertexFrame ? 1 : 0,
           buildBatchesMs);
     }
   }
@@ -1294,6 +1464,9 @@ void RageDisplay_Metal::FlushBatches() {
           "RageDisplay_Metal: active render target became invalid handle=%lu.",
           static_cast<unsigned long>(m_iCurrentRenderTargetHandle));
       m_iCurrentRenderTargetHandle = 0;
+      if (useDirectVertexFrame) {
+        ResetVertexWriter(&activeWriter, true);
+      }
       ClearActiveBatches();
       m_MetalDrawBatches.clear();
       return;
@@ -1310,7 +1483,13 @@ void RageDisplay_Metal::FlushBatches() {
     const bool rendered = m_Presenter->RenderSolidBatchesToTexture(
         target.texture, target.depthTexture, m_MetalDrawBatches.data(),
         m_MetalDrawBatches.size(), preserveColor, clearDepth,
-        0.0, 0.0, 0.0, 0.0, viewportWidth, viewportHeight);
+        0.0, 0.0, 0.0, 0.0, viewportWidth, viewportHeight,
+        useDirectVertexFrame ? &activeWriter.frame : nullptr);
+    if (useDirectVertexFrame && activeWriter.frame.frameSlot >= 0) {
+      ResetVertexWriter(&activeWriter, true);
+    } else {
+      ResetVertexWriter(&activeWriter, false);
+    }
     if (rendered) {
       target.hasRendered = true;
       target.preserveNextRender = true;
@@ -1342,7 +1521,13 @@ void RageDisplay_Metal::FlushBatches() {
    */
   const bool presented = m_Presenter->PresentSolidBatchesOffscreenFirst(
       m_MetalDrawBatches.data(), m_MetalDrawBatches.size(), clearDepth, 0.0,
-      0.0, 0.0, 1.0, targetHz);
+      0.0, 0.0, 1.0, targetHz,
+      useDirectVertexFrame ? &activeWriter.frame : nullptr);
+  if (useDirectVertexFrame && activeWriter.frame.frameSlot >= 0) {
+    ResetVertexWriter(&activeWriter, true);
+  } else {
+    ResetVertexWriter(&activeWriter, false);
+  }
   /*
    * Metal present is asynchronous; the useful per-frame timings are reported by
    * MacOSMetalPresenter.  Do not feed submit/acquire time into the legacy
@@ -1378,7 +1563,8 @@ void RageDisplay_Metal::EndFrame() {
     ++m_iMetalFrames;
     if (PerfDiagnosticsEnabled() &&
         (m_iMetalFrames <= 5 || m_iMetalFrames % 600 == 0)) {
-      size_t vertexCount = 0;
+      size_t directVertexCount = 0;
+      size_t fallbackVertexCount = 0;
       size_t finiteVertexCount = 0;
       size_t insideClipVertexCount = 0;
       float minX = std::numeric_limits<float>::infinity();
@@ -1391,7 +1577,8 @@ void RageDisplay_Metal::EndFrame() {
       for (size_t batchIndex = 0; batchIndex < activeBatchCount;
            ++batchIndex) {
         const DrawBatch& batch = batches[batchIndex];
-        vertexCount += batch.vertices.size();
+        directVertexCount += batch.vertexCount;
+        fallbackVertexCount += batch.vertices.size();
         for (uintptr_t textureHandle : batch.textureHandles) {
           if (textureHandle != 0) {
             textureHandles.insert(textureHandle);
@@ -1429,10 +1616,12 @@ void RageDisplay_Metal::EndFrame() {
       }
       LOG->Trace(
           "PERF_TRACE: RageDisplay_Metal frame=%llu batches=%zu vertices=%zu "
-          "textures=%zu finite=%zu inside_clip=%zu "
-          "bounds=(%.3f,%.3f,%.3f)..(%.3f,%.3f,%.3f)",
+          "direct_vertices=%zu fallback_vertices=%zu textures=%zu "
+          "fallback_finite=%zu fallback_inside_clip=%zu "
+          "fallback_bounds=(%.3f,%.3f,%.3f)..(%.3f,%.3f,%.3f)",
           static_cast<unsigned long long>(m_iMetalFrames), activeBatchCount,
-          vertexCount, textureHandles.size(), finiteVertexCount,
+          directVertexCount + fallbackVertexCount, directVertexCount,
+          fallbackVertexCount, textureHandles.size(), finiteVertexCount,
           insideClipVertexCount,
           finiteVertexCount > 0 ? minX : 0.0f,
           finiteVertexCount > 0 ? minY : 0.0f,
@@ -1462,9 +1651,28 @@ void RageDisplay_Metal::DrawQuadsInternal(
     return;
   }
 
-  DrawBatch& batch = ActiveBatch();
+  const size_t outputVertexCount = static_cast<size_t>(iNumVerts / 4) * 6;
+  DrawBatch* directBatch = nullptr;
+  MacOSMetalSolidVertex* directVertices = nullptr;
+  if (ReserveDirectVertices(
+          outputVertexCount, &directBatch, &directVertices)) {
+    size_t out = 0;
+    for (int i = 0; i + 3 < iNumVerts; i += 4) {
+      directVertices[out++] = ToMetalSolidVertex(v[i + 0]);
+      directVertices[out++] = ToMetalSolidVertex(v[i + 1]);
+      directVertices[out++] = ToMetalSolidVertex(v[i + 2]);
+      directVertices[out++] = ToMetalSolidVertex(v[i + 2]);
+      directVertices[out++] = ToMetalSolidVertex(v[i + 3]);
+      directVertices[out++] = ToMetalSolidVertex(v[i + 0]);
+    }
+    return;
+  }
+
+  DrawBatch& batch = ActiveBatch(
+      m_iActiveDrawBatchCount > 0 &&
+      m_DrawBatches[m_iActiveDrawBatchCount - 1].vertexBuffer != nullptr);
   batch.vertices.reserve(
-      batch.vertices.size() + static_cast<size_t>(iNumVerts / 4) * 6);
+      batch.vertices.size() + outputVertexCount);
   for (int i = 0; i + 3 < iNumVerts; i += 4) {
     AppendTriangle(&batch.vertices, v[i + 0], v[i + 1], v[i + 2]);
     AppendTriangle(&batch.vertices, v[i + 2], v[i + 3], v[i + 0]);
@@ -1477,7 +1685,31 @@ void RageDisplay_Metal::DrawQuadStripInternal(
     return;
   }
 
-  DrawBatch& batch = ActiveBatch();
+  const size_t outputVertexCount = static_cast<size_t>(iNumVerts - 2) * 3;
+  DrawBatch* directBatch = nullptr;
+  MacOSMetalSolidVertex* directVertices = nullptr;
+  if (ReserveDirectVertices(
+          outputVertexCount, &directBatch, &directVertices)) {
+    size_t out = 0;
+    for (int i = 0; i + 3 < iNumVerts; i += 2) {
+      directVertices[out++] = ToMetalSolidVertex(v[i + 0]);
+      directVertices[out++] = ToMetalSolidVertex(v[i + 1]);
+      directVertices[out++] = ToMetalSolidVertex(v[i + 2]);
+      directVertices[out++] = ToMetalSolidVertex(v[i + 1]);
+      directVertices[out++] = ToMetalSolidVertex(v[i + 2]);
+      directVertices[out++] = ToMetalSolidVertex(v[i + 3]);
+    }
+    directBatch->vertexCount -= outputVertexCount - out;
+    VertexWriterState& writer =
+        m_iCurrentRenderTargetHandle > 0 ? m_RenderTargetVertexWriter
+                                         : m_MainVertexWriter;
+    writer.usedVertices -= outputVertexCount - out;
+    return;
+  }
+
+  DrawBatch& batch = ActiveBatch(
+      m_iActiveDrawBatchCount > 0 &&
+      m_DrawBatches[m_iActiveDrawBatchCount - 1].vertexBuffer != nullptr);
   batch.vertices.reserve(
       batch.vertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
   for (int i = 0; i + 3 < iNumVerts; i += 2) {
@@ -1492,7 +1724,23 @@ void RageDisplay_Metal::DrawFanInternal(
     return;
   }
 
-  DrawBatch& batch = ActiveBatch();
+  const size_t outputVertexCount = static_cast<size_t>(iNumVerts - 2) * 3;
+  DrawBatch* directBatch = nullptr;
+  MacOSMetalSolidVertex* directVertices = nullptr;
+  if (ReserveDirectVertices(
+          outputVertexCount, &directBatch, &directVertices)) {
+    size_t out = 0;
+    for (int i = 1; i + 1 < iNumVerts; ++i) {
+      directVertices[out++] = ToMetalSolidVertex(v[0]);
+      directVertices[out++] = ToMetalSolidVertex(v[i]);
+      directVertices[out++] = ToMetalSolidVertex(v[i + 1]);
+    }
+    return;
+  }
+
+  DrawBatch& batch = ActiveBatch(
+      m_iActiveDrawBatchCount > 0 &&
+      m_DrawBatches[m_iActiveDrawBatchCount - 1].vertexBuffer != nullptr);
   batch.vertices.reserve(
       batch.vertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
   for (int i = 1; i + 1 < iNumVerts; ++i) {
@@ -1506,7 +1754,29 @@ void RageDisplay_Metal::DrawStripInternal(
     return;
   }
 
-  DrawBatch& batch = ActiveBatch();
+  const size_t outputVertexCount = static_cast<size_t>(iNumVerts - 2) * 3;
+  DrawBatch* directBatch = nullptr;
+  MacOSMetalSolidVertex* directVertices = nullptr;
+  if (ReserveDirectVertices(
+          outputVertexCount, &directBatch, &directVertices)) {
+    size_t out = 0;
+    for (int i = 0; i + 2 < iNumVerts; ++i) {
+      if ((i % 2) == 0) {
+        directVertices[out++] = ToMetalSolidVertex(v[i]);
+        directVertices[out++] = ToMetalSolidVertex(v[i + 1]);
+        directVertices[out++] = ToMetalSolidVertex(v[i + 2]);
+      } else {
+        directVertices[out++] = ToMetalSolidVertex(v[i + 1]);
+        directVertices[out++] = ToMetalSolidVertex(v[i]);
+        directVertices[out++] = ToMetalSolidVertex(v[i + 2]);
+      }
+    }
+    return;
+  }
+
+  DrawBatch& batch = ActiveBatch(
+      m_iActiveDrawBatchCount > 0 &&
+      m_DrawBatches[m_iActiveDrawBatchCount - 1].vertexBuffer != nullptr);
   batch.vertices.reserve(
       batch.vertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
   for (int i = 0; i + 2 < iNumVerts; ++i) {
@@ -1524,7 +1794,23 @@ void RageDisplay_Metal::DrawTrianglesInternal(
     return;
   }
 
-  DrawBatch& batch = ActiveBatch();
+  const size_t outputVertexCount = static_cast<size_t>((iNumVerts / 3) * 3);
+  DrawBatch* directBatch = nullptr;
+  MacOSMetalSolidVertex* directVertices = nullptr;
+  if (ReserveDirectVertices(
+          outputVertexCount, &directBatch, &directVertices)) {
+    size_t out = 0;
+    for (int i = 0; i + 2 < iNumVerts; i += 3) {
+      directVertices[out++] = ToMetalSolidVertex(v[i + 0]);
+      directVertices[out++] = ToMetalSolidVertex(v[i + 1]);
+      directVertices[out++] = ToMetalSolidVertex(v[i + 2]);
+    }
+    return;
+  }
+
+  DrawBatch& batch = ActiveBatch(
+      m_iActiveDrawBatchCount > 0 &&
+      m_DrawBatches[m_iActiveDrawBatchCount - 1].vertexBuffer != nullptr);
   batch.vertices.reserve(
       batch.vertices.size() + static_cast<size_t>(iNumVerts));
   for (int i = 0; i + 2 < iNumVerts; i += 3) {
@@ -1570,6 +1856,40 @@ void RageDisplay_Metal::DrawCompiledGeometryInternal(
 }
 
 RageSurface* RageDisplay_Metal::CreateScreenshot() {
+  if (m_Presenter != nullptr) {
+    std::vector<uint8_t> pixels;
+    int width = 0;
+    int height = 0;
+    if (m_Presenter->ReadBackOffscreenPresentTextureBGRA8(
+            &pixels, &width, &height) &&
+        width > 0 && height > 0 &&
+        pixels.size() == static_cast<size_t>(width) *
+                         static_cast<size_t>(height) * 4) {
+      RageSurface* image = CreateSurface(
+          width, height, 32,
+          PIXEL_FORMAT_DESC[RagePixelFormat_BGRA8].masks[0],
+          PIXEL_FORMAT_DESC[RagePixelFormat_BGRA8].masks[1],
+          PIXEL_FORMAT_DESC[RagePixelFormat_BGRA8].masks[2],
+          PIXEL_FORMAT_DESC[RagePixelFormat_BGRA8].masks[3]);
+      if (image != nullptr && image->pixels != nullptr) {
+        const size_t srcPitch = static_cast<size_t>(width) * 4;
+        if (image->pitch < 0 ||
+            static_cast<size_t>(image->pitch) < srcPitch) {
+          delete image;
+          return nullptr;
+        }
+        for (int row = 0; row < height; ++row) {
+          std::memcpy(
+              image->pixels + static_cast<size_t>(row) * image->pitch,
+              pixels.data() + static_cast<size_t>(row) * srcPitch,
+              srcPitch);
+        }
+        return image;
+      }
+      delete image;
+    }
+  }
+
   if (m_Window == nullptr) {
     return nullptr;
   }
@@ -1579,8 +1899,9 @@ RageSurface* RageDisplay_Metal::CreateScreenshot() {
     return nullptr;
   }
 
-  // Native Metal screenshots currently capture the composited window. This
-  // preserves the final on-screen image, but is not an exact backbuffer readback.
+  // Fallback for early startup or unusual paths where no Metal offscreen
+  // present texture has been rendered yet.  This is best-effort only because
+  // macOS may require Screen Recording permission for window capture.
   CGImageRef captured = CGWindowListCreateImage(
       CGRectNull, kCGWindowListOptionIncludingWindow,
       static_cast<CGWindowID>([window windowNumber]),
@@ -1597,9 +1918,9 @@ RageSurface* RageDisplay_Metal::CreateScreenshot() {
     }
     LOG->Warn(
         "RageDisplay_Metal::CreateScreenshot: window capture failed%s. "
-        "Native Metal currently uses macOS window capture for screenshots; "
-        "grant Screen Recording permission to ITGmania, then restart the game, "
-        "or switch to OpenGL for strict backbuffer screenshots.",
+        "Metal backbuffer readback was unavailable and the composite fallback "
+        "also failed; grant Screen Recording permission to ITGmania, then "
+        "restart the game.",
         screenCaptureDenied ? " (Screen Recording permission is not granted)"
                             : "");
     return nullptr;
@@ -1661,9 +1982,35 @@ void RageDisplay_Metal::DrawSymmetricQuadStripInternal(
   }
 
   const int iNumPieces = (iNumVerts - 3) / 3;
-  DrawBatch& batch = ActiveBatch();
+  const size_t outputVertexCount = static_cast<size_t>(iNumPieces) * 12;
+  DrawBatch* directBatch = nullptr;
+  MacOSMetalSolidVertex* directVertices = nullptr;
+  if (ReserveDirectVertices(
+          outputVertexCount, &directBatch, &directVertices)) {
+    size_t out = 0;
+    for (int i = 0; i < iNumPieces; ++i) {
+      const int base = i * 3;
+      directVertices[out++] = ToMetalSolidVertex(v[base + 1]);
+      directVertices[out++] = ToMetalSolidVertex(v[base + 3]);
+      directVertices[out++] = ToMetalSolidVertex(v[base + 0]);
+      directVertices[out++] = ToMetalSolidVertex(v[base + 1]);
+      directVertices[out++] = ToMetalSolidVertex(v[base + 4]);
+      directVertices[out++] = ToMetalSolidVertex(v[base + 3]);
+      directVertices[out++] = ToMetalSolidVertex(v[base + 1]);
+      directVertices[out++] = ToMetalSolidVertex(v[base + 5]);
+      directVertices[out++] = ToMetalSolidVertex(v[base + 4]);
+      directVertices[out++] = ToMetalSolidVertex(v[base + 1]);
+      directVertices[out++] = ToMetalSolidVertex(v[base + 2]);
+      directVertices[out++] = ToMetalSolidVertex(v[base + 5]);
+    }
+    return;
+  }
+
+  DrawBatch& batch = ActiveBatch(
+      m_iActiveDrawBatchCount > 0 &&
+      m_DrawBatches[m_iActiveDrawBatchCount - 1].vertexBuffer != nullptr);
   batch.vertices.reserve(
-      batch.vertices.size() + static_cast<size_t>(iNumPieces) * 12);
+      batch.vertices.size() + outputVertexCount);
   for (int i = 0; i < iNumPieces; ++i) {
     const int base = i * 3;
     AppendTriangle(&batch.vertices, v[base + 1], v[base + 3], v[base + 0]);

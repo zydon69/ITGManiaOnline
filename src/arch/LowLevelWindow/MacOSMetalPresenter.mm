@@ -357,6 +357,63 @@ struct MacOSMetalDrawableAcquireInfo {
   bool waitedForPrefetch = false;
 };
 
+std::shared_ptr<MacOSMetalFrameLimiter> FrameLimiterForVertexFrame(
+    MacOSMetalPresenterImpl* impl, const MacOSMetalVertexFrame& frame) {
+  if (impl == nullptr) {
+    return nullptr;
+  }
+  return frame.renderTarget ? impl->renderTargetFrameLimiter
+                            : impl->solidFrameLimiter;
+}
+
+void ClearVertexFrameToken(MacOSMetalVertexFrame* frame) {
+  if (frame == nullptr) {
+    return;
+  }
+  frame->vertexBuffer = nullptr;
+  frame->frameSlot = -1;
+  frame->capacityVertices = 0;
+  frame->renderTarget = false;
+}
+
+bool ConsumeVertexFrameForCompletion(
+    MacOSMetalPresenterImpl* impl, MacOSMetalVertexFrame* frame,
+    std::shared_ptr<MacOSMetalFrameLimiter>* limiterOut, int* frameSlotOut) {
+  if (limiterOut != nullptr) {
+    *limiterOut = nullptr;
+  }
+  if (frameSlotOut != nullptr) {
+    *frameSlotOut = -1;
+  }
+  if (impl == nullptr || frame == nullptr || frame->frameSlot < 0) {
+    return false;
+  }
+
+  std::shared_ptr<MacOSMetalFrameLimiter> limiter =
+      FrameLimiterForVertexFrame(impl, *frame);
+  const int frameSlot = frame->frameSlot;
+  ClearVertexFrameToken(frame);
+  if (!limiter) {
+    return false;
+  }
+  if (limiterOut != nullptr) {
+    *limiterOut = limiter;
+  }
+  if (frameSlotOut != nullptr) {
+    *frameSlotOut = frameSlot;
+  }
+  return true;
+}
+
+void ReleaseVertexFrameNow(
+    MacOSMetalPresenterImpl* impl, MacOSMetalVertexFrame* frame) {
+  std::shared_ptr<MacOSMetalFrameLimiter> limiter;
+  int frameSlot = -1;
+  if (ConsumeVertexFrameForCompletion(impl, frame, &limiter, &frameSlot)) {
+    ReleaseMetalFrameSlot(limiter, frameSlot);
+  }
+}
+
 double DetectMetalPresenterScreenMaxHz(MacOSMetalPresenterImpl* impl) {
   if (impl == nullptr) {
     return 0.0;
@@ -1323,10 +1380,17 @@ bool EncodeSolidBatches(
   }
 
   size_t totalVertexCount = 0;
+  size_t cpuVertexCount = 0;
   for (size_t i = 0; i < batchCount; ++i) {
     const MacOSMetalDrawBatch& batch = batches[i];
-    if (batch.vertices != nullptr && batch.vertexCount > 0) {
+    if (batch.vertexCount == 0) {
+      continue;
+    }
+    if (batch.vertexBuffer != nullptr || batch.vertices != nullptr) {
       totalVertexCount += batch.vertexCount;
+      if (batch.vertexBuffer == nullptr) {
+        cpuVertexCount += batch.vertexCount;
+      }
     }
   }
   if (totalVertexCount == 0) {
@@ -1336,21 +1400,30 @@ bool EncodeSolidBatches(
   const size_t initialVertexOffset =
       frameVertexOffsetInOut != nullptr ? *frameVertexOffsetInOut : 0;
   const size_t requiredVertexCount =
-      std::max(requiredVertexCapacity, initialVertexOffset + totalVertexCount);
-  const NSUInteger vertexBufferLength = static_cast<NSUInteger>(
-      sizeof(MacOSMetalSolidVertex) * requiredVertexCount);
-  id<MTLBuffer> frameVertexBuffer = PrepareSolidVertexBuffer(
-      impl, vertexBufferLength, frameSlot, retainedBuffers, ringBuffers,
-      ringCapacities, ringLabel);
-  if (frameVertexBuffer == nil) {
-    return false;
+      std::max(requiredVertexCapacity, initialVertexOffset + cpuVertexCount);
+  id<MTLBuffer> frameVertexBuffer = nil;
+  MacOSMetalSolidVertex* frameVertices = nullptr;
+  if (cpuVertexCount > 0) {
+    const NSUInteger vertexBufferLength = static_cast<NSUInteger>(
+        sizeof(MacOSMetalSolidVertex) * requiredVertexCount);
+    frameVertexBuffer = PrepareSolidVertexBuffer(
+        impl, vertexBufferLength, frameSlot, retainedBuffers, ringBuffers,
+        ringCapacities, ringLabel);
+    if (frameVertexBuffer == nil) {
+      return false;
+    }
+    frameVertices =
+        static_cast<MacOSMetalSolidVertex*>([frameVertexBuffer contents]);
+    if (frameVertices == nullptr) {
+      return false;
+    }
   }
 
-  MacOSMetalSolidVertex* frameVertices =
-      static_cast<MacOSMetalSolidVertex*>([frameVertexBuffer contents]);
   size_t frameVertexOffset = initialVertexOffset;
   size_t copiedVertexCount = 0;
   size_t copiedBatchCount = 0;
+  size_t directVertexCount = 0;
+  size_t directBatchCount = 0;
   RageTimer stagingCopyTimer;
 
   id<MTLRenderPipelineState> currentPipeline = nil;
@@ -1374,7 +1447,8 @@ bool EncodeSolidBatches(
   bool encodedAny = false;
   for (size_t i = 0; i < batchCount; ++i) {
     const MacOSMetalDrawBatch& batch = batches[i];
-    if (batch.vertices == nullptr || batch.vertexCount == 0) {
+    if (batch.vertexCount == 0 ||
+        (batch.vertexBuffer == nullptr && batch.vertices == nullptr)) {
       continue;
     }
     const BlendMode blendMode =
@@ -1400,13 +1474,32 @@ bool EncodeSolidBatches(
       continue;
     }
 
-    const size_t batchVertexOffset = frameVertexOffset;
-    std::memcpy(
-        frameVertices + batchVertexOffset, batch.vertices,
-        sizeof(MacOSMetalSolidVertex) * batch.vertexCount);
-    frameVertexOffset += batch.vertexCount;
-    copiedVertexCount += batch.vertexCount;
-    ++copiedBatchCount;
+    id<MTLBuffer> drawVertexBuffer = nil;
+    NSUInteger drawVertexBufferOffset = 0;
+    if (batch.vertexBuffer != nullptr) {
+      drawVertexBuffer = (id<MTLBuffer>)batch.vertexBuffer;
+      drawVertexBufferOffset =
+          static_cast<NSUInteger>(batch.vertexBufferOffsetBytes);
+      if (retainedBuffers != nil) {
+        [retainedBuffers addObject:drawVertexBuffer];
+      }
+      directVertexCount += batch.vertexCount;
+      ++directBatchCount;
+    } else {
+      const size_t batchVertexOffset = frameVertexOffset;
+      std::memcpy(
+          frameVertices + batchVertexOffset, batch.vertices,
+          sizeof(MacOSMetalSolidVertex) * batch.vertexCount);
+      frameVertexOffset += batch.vertexCount;
+      copiedVertexCount += batch.vertexCount;
+      ++copiedBatchCount;
+      drawVertexBuffer = frameVertexBuffer;
+      drawVertexBufferOffset =
+          sizeof(MacOSMetalSolidVertex) * batchVertexOffset;
+    }
+    if (drawVertexBuffer == nil) {
+      continue;
+    }
 
     id<MTLTexture> sourceTexture =
         batch.texture != nullptr ? (id<MTLTexture>)batch.texture
@@ -1461,8 +1554,8 @@ bool EncodeSolidBatches(
       currentCullMode = metalCullMode;
       hasCurrentCullMode = true;
     }
-    [encoder setVertexBuffer:frameVertexBuffer
-                      offset:sizeof(MacOSMetalSolidVertex) * batchVertexOffset
+    [encoder setVertexBuffer:drawVertexBuffer
+                      offset:drawVertexBufferOffset
                      atIndex:0];
     if (!hasCurrentTransform ||
         std::memcmp(
@@ -1529,11 +1622,12 @@ bool EncodeSolidBatches(
       LOG->Trace(
           "PERF_TRACE: macos_metal_staging_copy serial=%llu ring=%s "
           "frame_slot=%d input_batches=%zu copied_batches=%zu vertices=%zu "
-          "bytes=%zu copy_ms=%.3f",
+          "bytes=%zu direct_batches=%zu direct_vertices=%zu copy_ms=%.3f",
           static_cast<unsigned long long>(stagingCopySerial),
           ringLabel != nullptr ? ringLabel : "unknown", frameSlot, batchCount,
           copiedBatchCount, copiedVertexCount,
-          copiedVertexCount * sizeof(MacOSMetalSolidVertex), stagingCopyMs);
+          copiedVertexCount * sizeof(MacOSMetalSolidVertex),
+          directBatchCount, directVertexCount, stagingCopyMs);
     }
   }
   if (frameVertexOffsetInOut != nullptr) {
@@ -2602,7 +2696,9 @@ bool MacOSMetalPresenter::PresentSolidBatches(
     for (size_t i = passStart; i < passEnd; ++i) {
       passHasVertices =
           passHasVertices ||
-          (batches[i].vertices != nullptr && batches[i].vertexCount > 0);
+          ((batches[i].vertices != nullptr ||
+            batches[i].vertexBuffer != nullptr) &&
+           batches[i].vertexCount > 0);
     }
 
     MTLRenderPassDescriptor* passDescriptor =
@@ -2755,7 +2851,8 @@ bool MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
     const MacOSMetalDrawBatch* batches, size_t batchCount,
     bool clearDepth,
     double clearRed, double clearGreen, double clearBlue, double clearAlpha,
-    double targetHz) {
+    double targetHz,
+    MacOSMetalVertexFrame* preparedVertexFrame) {
   ScopedAutoreleasePool autoreleasePool;
 
   if (!IsAvailable() || (batches == nullptr && batchCount > 0)) {
@@ -2790,7 +2887,7 @@ bool MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
           impl->offscreenPresentTexture,
           impl->offscreenPresentDepthTexture, batches, batchCount,
           false, clearDepth, clearRed, clearGreen, clearBlue, clearAlpha,
-          width, height)) {
+          width, height, nullptr, preparedVertexFrame)) {
     return false;
   }
 
@@ -2820,8 +2917,7 @@ bool MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
   std::shared_ptr<MacOSMetalFrameLimiter> frameLimiter =
       impl->solidFrameLimiter;
   int frameSlot = -1;
-  if (!AcquireMetalFrameSlot(frameLimiter, "offscreen_present",
-                             &frameSlot)) {
+  if (!AcquireMetalFrameSlot(frameLimiter, "offscreen_present", &frameSlot)) {
     [drawable release];
     const uint64_t skippedFrames =
         ++impl->offscreenPresentSkippedFrameLimiter;
@@ -2946,6 +3042,158 @@ bool MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
   return true;
 }
 
+bool MacOSMetalPresenter::BeginSolidVertexFrame(
+    size_t vertexCapacity, MacOSMetalVertexFrame* frame,
+    MacOSMetalSolidVertex** vertices) {
+  if (frame != nullptr && frame->frameSlot >= 0) {
+    LOG->Warn(
+        "MacOS Metal solid vertex writer refused to overwrite an active "
+        "frame token slot=%d.",
+        frame->frameSlot);
+    if (vertices != nullptr) {
+      *vertices = nullptr;
+    }
+    return false;
+  }
+  if (frame != nullptr) {
+    frame->vertexBuffer = nullptr;
+    frame->frameSlot = -1;
+    frame->capacityVertices = 0;
+    frame->renderTarget = false;
+  }
+  if (vertices != nullptr) {
+    *vertices = nullptr;
+  }
+  if (!IsAvailable() || frame == nullptr || vertices == nullptr ||
+      vertexCapacity == 0) {
+    return false;
+  }
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  if (impl == nullptr || impl->device == nil) {
+    return false;
+  }
+  if (vertexCapacity >
+      std::numeric_limits<NSUInteger>::max() /
+          sizeof(MacOSMetalSolidVertex)) {
+    return false;
+  }
+
+  int frameSlot = -1;
+  std::shared_ptr<MacOSMetalFrameLimiter> frameLimiter =
+      impl->solidFrameLimiter;
+  if (!AcquireMetalFrameSlot(frameLimiter, "solid_vertex_writer",
+                             &frameSlot)) {
+    return false;
+  }
+
+  const NSUInteger requiredLength = static_cast<NSUInteger>(
+      sizeof(MacOSMetalSolidVertex) * vertexCapacity);
+  id<MTLBuffer> vertexBuffer = PrepareSolidVertexBuffer(
+      impl, requiredLength, frameSlot, nil, &impl->solidVertexBuffers,
+      &impl->solidVertexBufferCapacities, "solid_direct");
+  if (vertexBuffer == nil) {
+    ReleaseMetalFrameSlot(frameLimiter, frameSlot);
+    return false;
+  }
+
+  MacOSMetalSolidVertex* writableVertices =
+      static_cast<MacOSMetalSolidVertex*>([vertexBuffer contents]);
+  if (writableVertices == nullptr) {
+    ReleaseMetalFrameSlot(frameLimiter, frameSlot);
+    return false;
+  }
+
+  frame->vertexBuffer = vertexBuffer;
+  frame->frameSlot = frameSlot;
+  frame->capacityVertices = vertexCapacity;
+  frame->renderTarget = false;
+  *vertices = writableVertices;
+  return true;
+}
+
+bool MacOSMetalPresenter::BeginRenderTargetVertexFrame(
+    size_t vertexCapacity, MacOSMetalVertexFrame* frame,
+    MacOSMetalSolidVertex** vertices) {
+  if (frame != nullptr && frame->frameSlot >= 0) {
+    LOG->Warn(
+        "MacOS Metal render-target vertex writer refused to overwrite an "
+        "active frame token slot=%d.",
+        frame->frameSlot);
+    if (vertices != nullptr) {
+      *vertices = nullptr;
+    }
+    return false;
+  }
+  if (frame != nullptr) {
+    frame->vertexBuffer = nullptr;
+    frame->frameSlot = -1;
+    frame->capacityVertices = 0;
+    frame->renderTarget = true;
+  }
+  if (vertices != nullptr) {
+    *vertices = nullptr;
+  }
+  if (!IsAvailable() || frame == nullptr || vertices == nullptr ||
+      vertexCapacity == 0) {
+    return false;
+  }
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  if (impl == nullptr || impl->device == nil) {
+    return false;
+  }
+  if (vertexCapacity >
+      std::numeric_limits<NSUInteger>::max() /
+          sizeof(MacOSMetalSolidVertex)) {
+    return false;
+  }
+
+  int frameSlot = -1;
+  std::shared_ptr<MacOSMetalFrameLimiter> frameLimiter =
+      impl->renderTargetFrameLimiter;
+  if (!AcquireMetalFrameSlot(frameLimiter, "render_target_vertex_writer",
+                             &frameSlot)) {
+    return false;
+  }
+
+  const NSUInteger requiredLength = static_cast<NSUInteger>(
+      sizeof(MacOSMetalSolidVertex) * vertexCapacity);
+  id<MTLBuffer> vertexBuffer = PrepareSolidVertexBuffer(
+      impl, requiredLength, frameSlot, nil, &impl->renderTargetVertexBuffers,
+      &impl->renderTargetVertexBufferCapacities, "render_target_direct");
+  if (vertexBuffer == nil) {
+    ReleaseMetalFrameSlot(frameLimiter, frameSlot);
+    return false;
+  }
+
+  MacOSMetalSolidVertex* writableVertices =
+      static_cast<MacOSMetalSolidVertex*>([vertexBuffer contents]);
+  if (writableVertices == nullptr) {
+    ReleaseMetalFrameSlot(frameLimiter, frameSlot);
+    return false;
+  }
+
+  frame->vertexBuffer = vertexBuffer;
+  frame->frameSlot = frameSlot;
+  frame->capacityVertices = vertexCapacity;
+  frame->renderTarget = true;
+  *vertices = writableVertices;
+  return true;
+}
+
+void MacOSMetalPresenter::CancelVertexFrame(
+    MacOSMetalVertexFrame* frame) {
+  if (!IsAvailable() || frame == nullptr || frame->frameSlot < 0) {
+    return;
+  }
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  ReleaseVertexFrameNow(impl, frame);
+}
+
 void* MacOSMetalPresenter::CreateBGRA8RenderTargetTexture(
     int width, int height) {
   ScopedAutoreleasePool autoreleasePool;
@@ -2988,7 +3236,9 @@ bool MacOSMetalPresenter::RenderSolidBatchesToTexture(
     const MacOSMetalDrawBatch* batches, size_t batchCount,
     bool preserveColor, bool clearDepth,
     double clearRed, double clearGreen, double clearBlue, double clearAlpha,
-    int viewportWidth, int viewportHeight) {
+    int viewportWidth, int viewportHeight,
+    MacOSMetalVertexFrame* preparedVertexFrame,
+    MacOSMetalVertexFrame* externalVertexFrameToRelease) {
   ScopedAutoreleasePool autoreleasePool;
   RageTimer timer;
 
@@ -3004,12 +3254,30 @@ bool MacOSMetalPresenter::RenderSolidBatchesToTexture(
     return false;
   }
 
+  std::shared_ptr<MacOSMetalFrameLimiter> externalFrameLimiter;
+  int externalFrameSlot = -1;
+  const bool hasExternalVertexFrame =
+      ConsumeVertexFrameForCompletion(
+          impl, externalVertexFrameToRelease, &externalFrameLimiter,
+          &externalFrameSlot);
+  auto releaseExternalVertexFrameNow = [&]() {
+    if (hasExternalVertexFrame) {
+      ReleaseMetalFrameSlot(externalFrameLimiter, externalFrameSlot);
+    }
+  };
+
   size_t totalVertexCount = 0;
+  size_t cpuVertexCount = 0;
   bool hasExplicitClearCommand = false;
   for (size_t i = 0; i < batchCount; ++i) {
-    totalVertexCount += batches[i].vertexCount;
+    const MacOSMetalDrawBatch& batch = batches[i];
+    totalVertexCount += batch.vertexCount;
+    if (batch.vertexCount > 0 && batch.vertexBuffer == nullptr &&
+        batch.vertices != nullptr) {
+      cpuVertexCount += batch.vertexCount;
+    }
     hasExplicitClearCommand = hasExplicitClearCommand ||
-                              batches[i].clearDepthBefore;
+                              batch.clearDepthBefore;
   }
   const bool hasDepthTexture = depthTexture != nullptr;
   const bool shouldEncodeClearOnlyPass =
@@ -3017,18 +3285,32 @@ bool MacOSMetalPresenter::RenderSolidBatchesToTexture(
       (hasDepthTexture && hasExplicitClearCommand);
   if (totalVertexCount == 0 && batchCount == 0 &&
       !shouldEncodeClearOnlyPass) {
+    releaseExternalVertexFrameNow();
     return false;
   }
   if (totalVertexCount == 0 && batchCount > 0 &&
       !hasExplicitClearCommand && !shouldEncodeClearOnlyPass) {
+    releaseExternalVertexFrameNow();
     return false;
   }
 
   std::shared_ptr<MacOSMetalFrameLimiter> frameLimiter =
       impl->renderTargetFrameLimiter;
-  int frameSlot = -1;
-  if (!AcquireMetalFrameSlot(frameLimiter, "render_target", &frameSlot)) {
+  const bool usingPreparedVertexFrame =
+      preparedVertexFrame != nullptr && preparedVertexFrame->renderTarget &&
+      preparedVertexFrame->frameSlot >= 0;
+  int frameSlot =
+      usingPreparedVertexFrame ? preparedVertexFrame->frameSlot : -1;
+  if (!usingPreparedVertexFrame &&
+      !AcquireMetalFrameSlot(frameLimiter, "render_target", &frameSlot)) {
+    releaseExternalVertexFrameNow();
     return false;
+  }
+  if (usingPreparedVertexFrame) {
+    preparedVertexFrame->vertexBuffer = nullptr;
+    preparedVertexFrame->frameSlot = -1;
+    preparedVertexFrame->capacityVertices = 0;
+    preparedVertexFrame->renderTarget = false;
   }
 
   id<MTLTexture> targetTexture = (id<MTLTexture>)colorTexture;
@@ -3036,6 +3318,7 @@ bool MacOSMetalPresenter::RenderSolidBatchesToTexture(
   id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
   if (commandBuffer == nil) {
     ReleaseMetalFrameSlot(frameLimiter, frameSlot);
+    releaseExternalVertexFrameNow();
     return false;
   }
 
@@ -3066,6 +3349,7 @@ bool MacOSMetalPresenter::RenderSolidBatchesToTexture(
         [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
     if (encoder == nil) {
       ReleaseMetalFrameSlot(frameLimiter, frameSlot);
+      releaseExternalVertexFrameNow();
       return false;
     }
     MTLViewport viewport;
@@ -3089,7 +3373,9 @@ bool MacOSMetalPresenter::RenderSolidBatchesToTexture(
     for (size_t i = passStart; i < passEnd; ++i) {
       passHasVertices =
           passHasVertices ||
-          (batches[i].vertices != nullptr && batches[i].vertexCount > 0);
+          ((batches[i].vertices != nullptr ||
+            batches[i].vertexBuffer != nullptr) &&
+           batches[i].vertexCount > 0);
     }
 
     MTLRenderPassDescriptor* passDescriptor =
@@ -3114,6 +3400,7 @@ bool MacOSMetalPresenter::RenderSolidBatchesToTexture(
         [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
     if (encoder == nil) {
       ReleaseMetalFrameSlot(frameLimiter, frameSlot);
+      releaseExternalVertexFrameNow();
       return false;
     }
 
@@ -3128,15 +3415,36 @@ bool MacOSMetalPresenter::RenderSolidBatchesToTexture(
 
     const bool encodedPass =
         !passHasVertices ||
-        EncodeSolidBatches(
-            impl, encoder, batches + passStart, passEnd - passStart,
-            retainedBuffers, retainedTextures, frameSlot,
-            &impl->renderTargetVertexBuffers,
-            &impl->renderTargetVertexBufferCapacities, "render_target",
-            &frameVertexOffset, totalVertexCount);
+        [&]() {
+          /*
+           * When direct render-target vertices are already stored in the frame
+           * slot buffer, CPU fallback vertices must not be copied into the same
+           * slot.  A resize or memcpy at offset zero would overwrite the direct
+           * data that these batches reference.  Use a transient retained buffer
+           * for the fallback portion in that mixed frame.
+           */
+          const bool mixedPreparedAndCpuFallback =
+              usingPreparedVertexFrame && cpuVertexCount > 0;
+          return EncodeSolidBatches(
+              impl, encoder, batches + passStart, passEnd - passStart,
+              retainedBuffers, retainedTextures,
+              mixedPreparedAndCpuFallback ? -1 : frameSlot,
+              mixedPreparedAndCpuFallback
+                  ? nullptr
+                  : &impl->renderTargetVertexBuffers,
+              mixedPreparedAndCpuFallback
+                  ? nullptr
+                  : &impl->renderTargetVertexBufferCapacities,
+              mixedPreparedAndCpuFallback ? "render_target_fallback"
+                                          : "render_target",
+              &frameVertexOffset,
+              mixedPreparedAndCpuFallback ? cpuVertexCount
+                                          : totalVertexCount);
+        }();
     [encoder endEncoding];
     if (!encodedPass) {
       ReleaseMetalFrameSlot(frameLimiter, frameSlot);
+      releaseExternalVertexFrameNow();
       return false;
     }
     encoded = true;
@@ -3145,6 +3453,7 @@ bool MacOSMetalPresenter::RenderSolidBatchesToTexture(
   }
   if (!encoded) {
     ReleaseMetalFrameSlot(frameLimiter, frameSlot);
+    releaseExternalVertexFrameNow();
     return false;
   }
 
@@ -3156,12 +3465,20 @@ bool MacOSMetalPresenter::RenderSolidBatchesToTexture(
   std::shared_ptr<MacOSMetalFrameLimiter> completionFrameLimiter =
       frameLimiter;
   const int completionFrameSlot = frameSlot;
+  std::shared_ptr<MacOSMetalFrameLimiter> completionExternalFrameLimiter =
+      externalFrameLimiter;
+  const int completionExternalFrameSlot = externalFrameSlot;
+  const bool completionHasExternalFrame = hasExternalVertexFrame;
   [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer>) {
     [completionBuffers release];
     [completionTextures release];
     [completionDepthAttachment release];
     [completionColorAttachment release];
     ReleaseMetalFrameSlot(completionFrameLimiter, completionFrameSlot);
+    if (completionHasExternalFrame) {
+      ReleaseMetalFrameSlot(
+          completionExternalFrameLimiter, completionExternalFrameSlot);
+    }
   }];
   [commandBuffer commit];
   if (PerfDiagnosticsEnabled()) {
@@ -3180,6 +3497,143 @@ bool MacOSMetalPresenter::RenderSolidBatchesToTexture(
           viewportWidth, viewportHeight, submitMs);
     }
   }
+  return true;
+}
+
+bool MacOSMetalPresenter::ReadBackOffscreenPresentTextureBGRA8(
+    std::vector<uint8_t>* pixels, int* width, int* height) {
+  ScopedAutoreleasePool autoreleasePool;
+
+  if (!IsAvailable() || pixels == nullptr || width == nullptr ||
+      height == nullptr) {
+    return false;
+  }
+
+  pixels->clear();
+  *width = 0;
+  *height = 0;
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  if (impl == nullptr || impl->commandQueue == nil ||
+      impl->offscreenPresentTexture == nil) {
+    return false;
+  }
+
+  id<MTLTexture> sourceTexture = [impl->offscreenPresentTexture retain];
+  const NSUInteger textureWidth = [sourceTexture width];
+  const NSUInteger textureHeight = [sourceTexture height];
+  if (textureWidth == 0 || textureHeight == 0 ||
+      textureWidth > static_cast<NSUInteger>(std::numeric_limits<int>::max()) ||
+      textureHeight > static_cast<NSUInteger>(std::numeric_limits<int>::max())) {
+    [sourceTexture release];
+    return false;
+  }
+
+  constexpr NSUInteger kMetalReadbackRowAlignment = 256;
+  const NSUInteger compactBytesPerRow = textureWidth * 4;
+  if (compactBytesPerRow / 4 != textureWidth) {
+    [sourceTexture release];
+    return false;
+  }
+  const NSUInteger alignedBytesPerRow =
+      (compactBytesPerRow + kMetalReadbackRowAlignment - 1) &
+      ~(kMetalReadbackRowAlignment - 1);
+  if (alignedBytesPerRow < compactBytesPerRow ||
+      textureHeight >
+          std::numeric_limits<NSUInteger>::max() / alignedBytesPerRow) {
+    [sourceTexture release];
+    return false;
+  }
+  const NSUInteger readbackLength = alignedBytesPerRow * textureHeight;
+  id<MTLBuffer> readbackBuffer =
+      [impl->device newBufferWithLength:readbackLength
+                                options:MTLResourceStorageModeShared];
+  if (readbackBuffer == nil) {
+    [sourceTexture release];
+    return false;
+  }
+
+  id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
+  if (commandBuffer == nil) {
+    [readbackBuffer release];
+    [sourceTexture release];
+    return false;
+  }
+
+  id<MTLBlitCommandEncoder> blitEncoder = [commandBuffer blitCommandEncoder];
+  if (blitEncoder == nil) {
+    [readbackBuffer release];
+    [sourceTexture release];
+    return false;
+  }
+
+  [blitEncoder
+        copyFromTexture:sourceTexture
+            sourceSlice:0
+            sourceLevel:0
+           sourceOrigin:MTLOriginMake(0, 0, 0)
+             sourceSize:MTLSizeMake(textureWidth, textureHeight, 1)
+               toBuffer:readbackBuffer
+      destinationOffset:0
+ destinationBytesPerRow:alignedBytesPerRow
+destinationBytesPerImage:alignedBytesPerRow * textureHeight];
+  [blitEncoder endEncoding];
+  [commandBuffer commit];
+  [commandBuffer waitUntilCompleted];
+
+  const bool completed =
+      [commandBuffer status] == MTLCommandBufferStatusCompleted;
+  if (!completed) {
+    LOG->Warn(
+        "MacOS Metal screenshot readback failed: command buffer status=%lu.",
+        static_cast<unsigned long>([commandBuffer status]));
+    [readbackBuffer release];
+    [sourceTexture release];
+    return false;
+  }
+
+  const uint8_t* src =
+      static_cast<const uint8_t*>([readbackBuffer contents]);
+  if (src == nullptr) {
+    [readbackBuffer release];
+    [sourceTexture release];
+    return false;
+  }
+
+  std::vector<uint8_t> compactPixels;
+  compactPixels.resize(static_cast<size_t>(compactBytesPerRow * textureHeight));
+  const int presentFlipMode = OffscreenPresentFlipMode();
+  const bool flipX = presentFlipMode == 1 || presentFlipMode == 3;
+  const bool flipY = presentFlipMode == 2 || presentFlipMode == 3;
+  for (NSUInteger row = 0; row < textureHeight; ++row) {
+    const NSUInteger sourceRow = flipY ? textureHeight - 1 - row : row;
+    std::memcpy(
+        compactPixels.data() + static_cast<size_t>(row * compactBytesPerRow),
+        src + static_cast<size_t>(sourceRow * alignedBytesPerRow),
+        static_cast<size_t>(compactBytesPerRow));
+  }
+  if (flipX) {
+    for (NSUInteger row = 0; row < textureHeight; ++row) {
+      uint8_t* rowStart =
+          compactPixels.data() + static_cast<size_t>(row * compactBytesPerRow);
+      for (NSUInteger left = 0, right = textureWidth - 1; left < right;
+           ++left, --right) {
+        uint8_t* leftPixel = rowStart + static_cast<size_t>(left * 4);
+        uint8_t* rightPixel = rowStart + static_cast<size_t>(right * 4);
+        for (int channel = 0; channel < 4; ++channel) {
+          std::swap(leftPixel[channel], rightPixel[channel]);
+        }
+      }
+    }
+  }
+
+  *width = static_cast<int>(textureWidth);
+  *height = static_cast<int>(textureHeight);
+  *pixels = std::move(compactPixels);
+
+  [readbackBuffer release];
+  [sourceTexture release];
   return true;
 }
 

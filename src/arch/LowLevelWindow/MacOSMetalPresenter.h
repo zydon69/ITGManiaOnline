@@ -2,7 +2,9 @@
 #define MACOS_METAL_PRESENTER_H
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include "RageTypes.h"
 
@@ -43,6 +45,8 @@ struct MacOSMetalPresenterRuntimeStats {
 
 struct MacOSMetalDrawBatch {
   const MacOSMetalSolidVertex* vertices = nullptr;
+  void* vertexBuffer = nullptr;
+  size_t vertexBufferOffsetBytes = 0;
   size_t vertexCount = 0;
   void* texture = nullptr;
   int textureWidth = 1;
@@ -60,6 +64,13 @@ struct MacOSMetalDrawBatch {
   bool alphaTest = false;
   bool clearDepthBefore = false;
   MacOSMetalTransformUniforms transform;
+};
+
+struct MacOSMetalVertexFrame {
+  void* vertexBuffer = nullptr;
+  int frameSlot = -1;
+  size_t capacityVertices = 0;
+  bool renderTarget = false;
 };
 
 class MacOSMetalPresenter {
@@ -93,7 +104,15 @@ class MacOSMetalPresenter {
       const MacOSMetalDrawBatch* batches, size_t batchCount,
       bool clearDepth,
       double clearRed, double clearGreen, double clearBlue, double clearAlpha,
-      double targetHz);
+      double targetHz,
+      MacOSMetalVertexFrame* preparedVertexFrame = nullptr);
+  bool BeginSolidVertexFrame(
+      size_t vertexCapacity, MacOSMetalVertexFrame* frame,
+      MacOSMetalSolidVertex** vertices);
+  bool BeginRenderTargetVertexFrame(
+      size_t vertexCapacity, MacOSMetalVertexFrame* frame,
+      MacOSMetalSolidVertex** vertices);
+  void CancelVertexFrame(MacOSMetalVertexFrame* frame);
   void* CreateBGRA8RenderTargetTexture(int width, int height);
   void* CreateDepthRenderTargetTexture(int width, int height);
   bool RenderSolidBatchesToTexture(
@@ -101,7 +120,11 @@ class MacOSMetalPresenter {
       const MacOSMetalDrawBatch* batches, size_t batchCount,
       bool preserveColor, bool clearDepth,
       double clearRed, double clearGreen, double clearBlue, double clearAlpha,
-      int viewportWidth, int viewportHeight);
+      int viewportWidth, int viewportHeight,
+      MacOSMetalVertexFrame* preparedVertexFrame = nullptr,
+      MacOSMetalVertexFrame* externalVertexFrameToRelease = nullptr);
+  bool ReadBackOffscreenPresentTextureBGRA8(
+      std::vector<uint8_t>* pixels, int* width, int* height);
   void* CreateRGBA8Texture(
       int width, int height, const void* pixels, size_t bytesPerRow);
   bool UpdateRGBA8Texture(

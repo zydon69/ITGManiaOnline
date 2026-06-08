@@ -145,14 +145,32 @@ class RageDisplay_Metal : public RageDisplay {
     bool alphaTest = false;
     bool clearDepthBefore = false;
     MacOSMetalTransformUniforms transform;
+    void* vertexBuffer = nullptr;
+    size_t vertexBufferOffsetBytes = 0;
+    size_t vertexCount = 0;
     std::vector<MacOSMetalSolidVertex> vertices;
+  };
+
+  struct VertexWriterState {
+    MacOSMetalVertexFrame frame;
+    MacOSMetalSolidVertex* vertices = nullptr;
+    size_t usedVertices = 0;
+    size_t capacityVertices = 0;
+    size_t overflowRequiredVertices = 0;
+    bool active = false;
+    bool disabled = false;
+    bool renderTarget = false;
   };
 
   RageMatrix CurrentModelViewProjection() const;
   RageMatrix CurrentTextureMatrix() const;
   RageColor ComputeModelColor(const RageVector3& normal) const;
   RageColor ComputeCelModelColor(const RageVector3& normal) const;
-  DrawBatch& ActiveBatch();
+  DrawBatch& ActiveBatch(bool forceNew = false);
+  bool ReserveDirectVertices(
+      size_t vertexCount, DrawBatch** batchOut,
+      MacOSMetalSolidVertex** verticesOut);
+  void ResetVertexWriter(VertexWriterState* writer, bool cancelFrame);
   void ClearActiveBatches();
   void MoveActiveBatchesTo(std::vector<DrawBatch>* destination);
   void RestorePendingMainBatches();
@@ -177,6 +195,8 @@ class RageDisplay_Metal : public RageDisplay {
   std::vector<DrawBatch> m_PendingMainDrawBatches;
   size_t m_iActiveDrawBatchCount = 0;
   std::vector<MacOSMetalDrawBatch> m_MetalDrawBatches;
+  VertexWriterState m_MainVertexWriter;
+  VertexWriterState m_RenderTargetVertexWriter;
   std::vector<MetalTexture> m_Textures;
   std::vector<uintptr_t> m_FreeTextureHandles;
   std::array<uintptr_t, NUM_TextureUnit> m_TextureHandles;
@@ -209,6 +229,8 @@ class RageDisplay_Metal : public RageDisplay {
   uint64_t m_iMetalFrames;
   uint64_t m_iMetalStagingFrames;
   uint64_t m_iSkippedPresentFrames;
+  size_t m_iLastMainDirectVertexCapacity;
+  size_t m_iLastRenderTargetDirectVertexCapacity;
   bool m_bReady;
 };
 
