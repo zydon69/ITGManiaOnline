@@ -47,9 +47,9 @@ local function RequestScreenshot(pn)
 		Trace("ScreenEvaluation screenshot file save failed; rendering preview texture only.")
 	end
 
-	-- Native Metal does not implement DISPLAY:CreateScreenshot() yet, so the
-	-- file save can fail while render-to-texture is still available.  Still
-	-- render the preview texture so the evaluation screenshot animation and
+	-- Native Metal implements DISPLAY:CreateScreenshot() via window capture, but
+	-- the file save can still fail independently of the render-to-texture preview.
+	-- Always render the preview texture so the evaluation screenshot animation and
 	-- Metal render target path remain testable.
 	player = pn
 	MESSAGEMAN:Broadcast("ScreenshotCurrentScreen")

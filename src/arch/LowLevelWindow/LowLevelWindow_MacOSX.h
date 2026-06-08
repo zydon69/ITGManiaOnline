@@ -16,6 +16,14 @@ class MacOSMetalPresenter;
 struct MacOSMetalOpenGLBridge;
 
 class LowLevelWindow_MacOSX : public LowLevelWindow {
+  struct MacOSMetalBridgeDiagnostics {
+    uint64_t busySurfaceFrames = 0;
+    uint64_t fenceFallbackFrames = 0;
+    uint64_t presentFailedFrames = 0;
+    uint64_t presentedFrames = 0;
+    bool loggedFirstPresent = false;
+  };
+
   VideoModeParams m_CurrentParams;
   id m_WindowDelegate;
   id m_Context;
@@ -28,6 +36,8 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   bool m_bMetalDirectPresentSubmittedThisFrame;
   bool m_bMetalBridgeBuildPending;
   int m_iMetalBridgeBuildFrameCountdown;
+  int m_iMetalBridgeBuildAttempts;
+  MacOSMetalBridgeDiagnostics m_MetalBridgeDiagnostics;
 
  public:
   LowLevelWindow_MacOSX();

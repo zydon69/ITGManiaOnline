@@ -13,10 +13,19 @@ struct MacOSMetalSolidVertex {
   float w = 1.0f;
   float u = 0.0f;
   float v = 0.0f;
+  float textureMatrixScaleX = 1.0f;
+  float textureMatrixScaleY = 1.0f;
   float r = 1.0f;
   float g = 1.0f;
   float b = 1.0f;
   float a = 1.0f;
+};
+
+struct MacOSMetalTransformUniforms {
+  float modelViewProjection[16] = {};
+  float textureMatrix[16] = {};
+  float zBias = 0.0f;
+  float padding[3] = {};
 };
 
 struct MacOSMetalPresenterRuntimeStats {
@@ -46,6 +55,8 @@ struct MacOSMetalDrawBatch {
   bool textureFiltering = true;
   bool zWrite = false;
   bool alphaTest = false;
+  bool clearDepthBefore = false;
+  MacOSMetalTransformUniforms transform;
 };
 
 class MacOSMetalPresenter {

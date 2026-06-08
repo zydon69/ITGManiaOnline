@@ -4,7 +4,15 @@ using namespace metal;
 struct VertexIn {
   packed_float4 position;
   packed_float2 texcoord;
+  packed_float2 textureMatrixScale;
   packed_float4 color;
+};
+
+struct TransformUniforms {
+  float4x4 modelViewProjection;
+  float4x4 textureMatrix;
+  float zBias;
+  float3 padding;
 };
 
 struct VertexOut {
@@ -15,12 +23,29 @@ struct VertexOut {
 
 vertex VertexOut solid_vertex(
     const device VertexIn* vertices [[buffer(0)]],
+    constant TransformUniforms& transform [[buffer(1)]],
     uint vertexID [[vertex_id]]) {
   const VertexIn in = vertices[vertexID];
-  VertexOut out;
-  out.position = float4(
+  float4 position = transform.modelViewProjection * float4(
       in.position.x, in.position.y, in.position.z, in.position.w);
-  out.texcoord = in.texcoord;
+  if (position.w != 0.0) {
+    const float nearDepth = mix(0.05, 0.0, transform.zBias);
+    const float farDepth = mix(1.0, 0.95, transform.zBias);
+    const float normalizedDepth = clamp(
+        (position.z / position.w) * 0.5 + 0.5, 0.0, 1.0);
+    position.z = mix(nearDepth, farDepth, normalizedDepth) * position.w;
+  }
+
+  const float2 texcoord = float2(in.texcoord.x, in.texcoord.y);
+  const float4 transformedTexcoord =
+      transform.textureMatrix * float4(texcoord.x, texcoord.y, 0.0, 1.0);
+  const float2 textureMatrixScale =
+      float2(in.textureMatrixScale.x, in.textureMatrixScale.y);
+
+  VertexOut out;
+  out.position = position;
+  out.texcoord = transformedTexcoord.xy * textureMatrixScale +
+                 texcoord * (1.0 - textureMatrixScale);
   out.color = in.color;
   return out;
 }

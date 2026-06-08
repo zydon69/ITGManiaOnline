@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <array>
+#include <cstdint>
 #include <vector>
 
 #include "RageDisplay.h"
@@ -142,6 +143,8 @@ class RageDisplay_Metal : public RageDisplay {
     std::array<bool, NUM_TextureUnit> textureFiltering = {};
     bool zWrite = false;
     bool alphaTest = false;
+    bool clearDepthBefore = false;
+    MacOSMetalTransformUniforms transform;
     std::vector<MacOSMetalSolidVertex> vertices;
   };
 
@@ -150,10 +153,14 @@ class RageDisplay_Metal : public RageDisplay {
   RageColor ComputeModelColor(const RageVector3& normal) const;
   DrawBatch& ActiveBatch();
   void ClearActiveBatches();
+  void MoveActiveBatchesTo(std::vector<DrawBatch>* destination);
+  void RestorePendingMainBatches();
   void FlushBatches();
   void BuildMetalBatches(
       const std::vector<DrawBatch>& batches, size_t batchCount,
       std::vector<MacOSMetalDrawBatch>* metalBatches) const;
+  uintptr_t AllocateTextureHandle();
+  void RecycleTextureHandle(uintptr_t handle);
   void ReleaseTexture(MetalTexture* texture);
   void DestroyAllTextures();
   bool UploadTexturePixels(
@@ -166,9 +173,11 @@ class RageDisplay_Metal : public RageDisplay {
   std::unique_ptr<LowLevelWindow> m_Window;
   std::unique_ptr<MacOSMetalPresenter> m_Presenter;
   std::vector<DrawBatch> m_DrawBatches;
+  std::vector<DrawBatch> m_PendingMainDrawBatches;
   size_t m_iActiveDrawBatchCount = 0;
   std::vector<MacOSMetalDrawBatch> m_MetalDrawBatches;
   std::vector<MetalTexture> m_Textures;
+  std::vector<uintptr_t> m_FreeTextureHandles;
   std::array<uintptr_t, NUM_TextureUnit> m_TextureHandles;
   BlendMode m_BlendMode;
   std::array<TextureMode, NUM_TextureUnit> m_TextureModes;
@@ -196,6 +205,9 @@ class RageDisplay_Metal : public RageDisplay {
   };
   std::vector<DirectionalLight> m_Lights;
   uintptr_t m_iNextTextureHandle;
+  uint64_t m_iMetalFrames;
+  uint64_t m_iMetalStagingFrames;
+  uint64_t m_iSkippedPresentFrames;
   bool m_bReady;
 };
 

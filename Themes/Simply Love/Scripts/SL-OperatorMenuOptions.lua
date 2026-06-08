@@ -253,10 +253,9 @@ OperatorMenuOptionRows.VideoRenderer = function()
 
 	local architecture = HOOKS:GetArchName():lower()
 	if architecture:match("mac") then
-		choices = { "OpenGL", "OpenGL + Metal Present", "Metal" }
+		choices = { "OpenGL", "Metal" }
 		values = {
 			{ VideoRenderers="opengl", MacOSPresentBackend="opengl" },
-			{ VideoRenderers="opengl", MacOSPresentBackend="metal" },
 			{ VideoRenderers="metal,opengl", MacOSPresentBackend="opengl" },
 		}
 	end
@@ -295,9 +294,9 @@ OperatorMenuOptionRows.VideoRenderer = function()
 			if architecture:match("mac") then
 				local present = PREFSMAN:GetPreference("MacOSPresentBackend")
 				if pref == "metal" then
-					i = 3
-				elseif type(present) == "string" and present:lower() == "metal" then
 					i = 2
+				elseif type(present) == "string" and present:lower() == "metal" then
+					i = 1
 				end
 			else
 				i = FindInTable(pref, self.Choices) or 1

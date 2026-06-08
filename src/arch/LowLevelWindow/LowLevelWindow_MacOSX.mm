@@ -65,7 +65,13 @@ static Preference<float> g_fMacOSOpenGLFencePacingWaitMs(
     "MacOSOpenGLFencePacingWaitMs", -1.0f);
 static Preference<std::string> g_sMacOSPresentBackend(
     "MacOSPresentBackend", "opengl");
+static Preference<bool> g_bMacOSOpenGLMetalPresentBridge(
+    "MacOSOpenGLMetalPresentBridge", false);
 extern Preference<float> g_fFramePacingTargetHz;
+
+constexpr int kMetalBridgeInitialBuildDelayFrames = 5;
+constexpr int kMetalBridgeRetryDelayFrames = 30;
+constexpr int kMetalBridgeMaxBuildAttempts = 3;
 
 static MacOSOpenGLFenceWaitStats g_LastOpenGLFenceWaitStats;
 
@@ -1042,11 +1048,12 @@ static bool MacOSMetalPresentRequested() {
 }
 
 static bool MacOSMetalBridgeEnabled() {
-  return MacOSMetalPresentRequested();
+  return MacOSMetalPresentRequested() &&
+         g_bMacOSOpenGLMetalPresentBridge.Get();
 }
 
 static bool MacOSMetalDirectPresentEnabled() {
-  return MacOSMetalPresentRequested();
+  return MacOSMetalBridgeEnabled();
 }
 
 static int MacOSOpenGLOffscreenPresentMode() {
@@ -1510,7 +1517,8 @@ LowLevelWindow_MacOSX::LowLevelWindow_MacOSX()
       m_iMetalBridgeRenderSurfaceIndex(-1),
       m_bMetalDirectPresentSubmittedThisFrame(false),
       m_bMetalBridgeBuildPending(false),
-      m_iMetalBridgeBuildFrameCountdown(0) {
+      m_iMetalBridgeBuildFrameCountdown(0),
+      m_iMetalBridgeBuildAttempts(0) {
   POOL;
   m_WindowDelegate = [[SMWindowDelegate alloc] init];
   [m_WindowDelegate performSelectorOnMainThread:@selector(setupWindow)
@@ -1536,6 +1544,7 @@ LowLevelWindow_MacOSX::~LowLevelWindow_MacOSX() {
   }
   m_bMetalBridgeBuildPending = false;
   m_iMetalBridgeBuildFrameCountdown = 0;
+  m_iMetalBridgeBuildAttempts = 0;
   [m_Context release];
   [m_BGContext clearDrawable];
   [m_BGContext release];
@@ -1604,6 +1613,7 @@ void* LowLevelWindow_MacOSX::GetProcAddress(std::string s) {
 }
 
 void LowLevelWindow_MacOSX::ReleaseMetalOpenGLBridge() {
+  m_MetalBridgeDiagnostics = MacOSMetalBridgeDiagnostics();
   if (!m_MetalOpenGLBridge) {
     return;
   }
@@ -1710,16 +1720,18 @@ bool LowLevelWindow_MacOSX::BuildMetalOpenGLBridge() {
       glTexParameteri(
           attempt.textureTarget, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-      LOG->Trace(
-          "MacOS Metal presenter OpenGL bridge attempt starting: attempt=%s "
-          "surface_index=%d size=%dx%d target=0x%x internal=0x%x "
-          "format=0x%x type=0x%x surface=%p texture=%u",
-          attempt.name, i, width, height,
-          static_cast<unsigned int>(attempt.textureTarget),
-          static_cast<unsigned int>(attempt.internalFormat),
-          static_cast<unsigned int>(attempt.format),
-          static_cast<unsigned int>(attempt.type), attemptSurface,
-          bridgeSurface.texture);
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "MacOS Metal presenter OpenGL bridge attempt starting: attempt=%s "
+            "surface_index=%d size=%dx%d target=0x%x internal=0x%x "
+            "format=0x%x type=0x%x surface=%p texture=%u",
+            attempt.name, i, width, height,
+            static_cast<unsigned int>(attempt.textureTarget),
+            static_cast<unsigned int>(attempt.internalFormat),
+            static_cast<unsigned int>(attempt.format),
+            static_cast<unsigned int>(attempt.type), attemptSurface,
+            bridgeSurface.texture);
+      }
 
       imageError = CGLTexImageIOSurface2D(
           context, attempt.textureTarget, attempt.internalFormat, width, height,
@@ -1733,32 +1745,26 @@ bool LowLevelWindow_MacOSX::BuildMetalOpenGLBridge() {
             GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT,
             attempt.textureTarget, bridgeSurface.texture, 0);
 
-        glGenRenderbuffersEXT(1, &bridgeSurface.depth);
-        glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, bridgeSurface.depth);
-        glRenderbufferStorageEXT(
-            GL_RENDERBUFFER_EXT, GL_DEPTH_COMPONENT16, width, height);
-        glFramebufferRenderbufferEXT(
-            GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT,
-            bridgeSurface.depth);
-
         fboStatus = glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
       }
 
       if (imageError != kCGLNoError || glErrorAfterImage != GL_NO_ERROR ||
           fboStatus != GL_FRAMEBUFFER_COMPLETE_EXT) {
         attemptOk = false;
-        LOG->Trace(
-            "MacOS Metal presenter OpenGL bridge attempt failed: attempt=%s "
-            "surface_index=%d cgl_error=%d gl_error_after_image=0x%x "
-            "fbo_status=0x%x size=%dx%d target=0x%x internal=0x%x "
-            "format=0x%x type=0x%x",
-            attempt.name, i, static_cast<int>(imageError),
-            static_cast<unsigned int>(glErrorAfterImage),
-            static_cast<unsigned int>(fboStatus), width, height,
-            static_cast<unsigned int>(attempt.textureTarget),
-            static_cast<unsigned int>(attempt.internalFormat),
-            static_cast<unsigned int>(attempt.format),
-            static_cast<unsigned int>(attempt.type));
+        if (PerfDiagnosticsEnabled()) {
+          LOG->Trace(
+              "MacOS Metal presenter OpenGL bridge attempt failed: attempt=%s "
+              "surface_index=%d cgl_error=%d gl_error_after_image=0x%x "
+              "fbo_status=0x%x size=%dx%d target=0x%x internal=0x%x "
+              "format=0x%x type=0x%x",
+              attempt.name, i, static_cast<int>(imageError),
+              static_cast<unsigned int>(glErrorAfterImage),
+              static_cast<unsigned int>(fboStatus), width, height,
+              static_cast<unsigned int>(attempt.textureTarget),
+              static_cast<unsigned int>(attempt.internalFormat),
+              static_cast<unsigned int>(attempt.format),
+              static_cast<unsigned int>(attempt.type));
+        }
         break;
       }
     }
@@ -1769,16 +1775,18 @@ bool LowLevelWindow_MacOSX::BuildMetalOpenGLBridge() {
     while (glGetError() != GL_NO_ERROR);
 
     if (attemptOk) {
-      LOG->Trace(
-          "MacOS Metal presenter OpenGL bridge ready: attempt=%s "
-          "surface_count=%d size=%dx%d target=0x%x internal=0x%x "
-          "format=0x%x type=0x%x total_ms=%.3f",
-          attempt.name, static_cast<int>(bridge->surfaces.size()), width,
-          height, static_cast<unsigned int>(attempt.textureTarget),
-          static_cast<unsigned int>(attempt.internalFormat),
-          static_cast<unsigned int>(attempt.format),
-          static_cast<unsigned int>(attempt.type),
-          bridgeTimer.GetDeltaTime() * 1000.0f);
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "MacOS Metal presenter OpenGL bridge ready: attempt=%s "
+            "surface_count=%d size=%dx%d target=0x%x internal=0x%x "
+            "format=0x%x type=0x%x total_ms=%.3f",
+            attempt.name, static_cast<int>(bridge->surfaces.size()), width,
+            height, static_cast<unsigned int>(attempt.textureTarget),
+            static_cast<unsigned int>(attempt.internalFormat),
+            static_cast<unsigned int>(attempt.format),
+            static_cast<unsigned int>(attempt.type),
+            bridgeTimer.GetDeltaTime() * 1000.0f);
+      }
       m_MetalOpenGLBridge = std::move(bridge);
       return true;
     }
@@ -1796,6 +1804,7 @@ bool LowLevelWindow_MacOSX::BuildMetalOpenGLBridge() {
 }
 
 bool LowLevelWindow_MacOSX::PresentOpenGLBackbufferViaMetal() {
+  RageTimer bridgePresentTimer;
   if (!MacOSMetalDirectPresentEnabled() || !m_MetalPresenter ||
       !m_MetalOpenGLBridge || m_MetalOpenGLBridge->surfaces.empty() ||
       !m_MetalPresenter->IsLayerAttached()) {
@@ -1808,9 +1817,12 @@ bool LowLevelWindow_MacOSX::PresentOpenGLBackbufferViaMetal() {
   using GLBlitFramebufferEXTProc = void (*)(
       GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield,
       GLenum);
-  auto* blitFramebuffer =
-      reinterpret_cast<GLBlitFramebufferEXTProc>(
-          GetProcAddress("glBlitFramebufferEXT"));
+  static GLBlitFramebufferEXTProc s_blitFramebuffer = nullptr;
+  if (s_blitFramebuffer == nullptr) {
+    s_blitFramebuffer = reinterpret_cast<GLBlitFramebufferEXTProc>(
+        GetProcAddress("glBlitFramebufferEXT"));
+  }
+  auto* blitFramebuffer = s_blitFramebuffer;
   if (blitFramebuffer == nullptr) {
     m_MetalPresenter->SetLayerVisible(false);
     return false;
@@ -1821,6 +1833,7 @@ bool LowLevelWindow_MacOSX::PresentOpenGLBackbufferViaMetal() {
   int nextSurfaceIndex = -1;
   constexpr int kSurfaceWaitAttempts = 16;
   constexpr int kSurfaceWaitAttemptUsec = 100;
+  RageTimer surfaceWaitTimer;
   for (int waitAttempt = 0;
        waitAttempt < kSurfaceWaitAttempts && nextSurfaceIndex < 0;
        ++waitAttempt) {
@@ -1837,13 +1850,13 @@ bool LowLevelWindow_MacOSX::PresentOpenGLBackbufferViaMetal() {
           std::chrono::microseconds(kSurfaceWaitAttemptUsec));
     }
   }
+  const float surfaceWaitMs = surfaceWaitTimer.GetDeltaTime() * 1000.0f;
 
   if (nextSurfaceIndex < 0) {
     if (PerfDiagnosticsEnabled()) {
-      static uint64_t s_iMetalBackbufferBusySurfaceFrames = 0;
-      ++s_iMetalBackbufferBusySurfaceFrames;
-      if (s_iMetalBackbufferBusySurfaceFrames <= 3 ||
-          s_iMetalBackbufferBusySurfaceFrames % 5000 == 0) {
+      ++m_MetalBridgeDiagnostics.busySurfaceFrames;
+      if (m_MetalBridgeDiagnostics.busySurfaceFrames <= 3 ||
+          m_MetalBridgeDiagnostics.busySurfaceFrames % 5000 == 0) {
         LOG->Trace(
             "PERF_TRACE: macos_metal_backbuffer_present_unavailable "
             "reason=busy_iosurfaces surface_count=%d wait_budget_us=%d "
@@ -1851,7 +1864,7 @@ bool LowLevelWindow_MacOSX::PresentOpenGLBackbufferViaMetal() {
             surfaceCount,
             kSurfaceWaitAttempts * kSurfaceWaitAttemptUsec,
             static_cast<unsigned long long>(
-                s_iMetalBackbufferBusySurfaceFrames));
+                m_MetalBridgeDiagnostics.busySurfaceFrames));
       }
     }
     m_MetalPresenter->SetLayerVisible(false);
@@ -1881,6 +1894,7 @@ bool LowLevelWindow_MacOSX::PresentOpenGLBackbufferViaMetal() {
 
   GLsync metalReadFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
   GLenum metalReadFenceStatus = GL_WAIT_FAILED;
+  RageTimer fenceWaitTimer;
   if (metalReadFence != nullptr) {
     metalReadFenceStatus =
         glClientWaitSync(metalReadFence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
@@ -1889,23 +1903,25 @@ bool LowLevelWindow_MacOSX::PresentOpenGLBackbufferViaMetal() {
     }
     glDeleteSync(metalReadFence);
   }
+  const float fenceWaitMs = fenceWaitTimer.GetDeltaTime() * 1000.0f;
 
   const bool metalReadFenceReady =
       metalReadFenceStatus == GL_ALREADY_SIGNALED ||
       metalReadFenceStatus == GL_CONDITION_SATISFIED;
   if (!metalReadFenceReady) {
     if (PerfDiagnosticsEnabled()) {
-      static uint64_t s_iMetalBackbufferFenceFallbackFrames = 0;
-      ++s_iMetalBackbufferFenceFallbackFrames;
-      if (s_iMetalBackbufferFenceFallbackFrames <= 3 ||
-          s_iMetalBackbufferFenceFallbackFrames % 5000 == 0) {
+      ++m_MetalBridgeDiagnostics.fenceFallbackFrames;
+      if (m_MetalBridgeDiagnostics.fenceFallbackFrames <= 3 ||
+          m_MetalBridgeDiagnostics.fenceFallbackFrames % 5000 == 0) {
         LOG->Trace(
             "PERF_TRACE: macos_metal_backbuffer_present_unavailable "
             "reason=gl_fence_not_ready status=0x%x wait_budget_us=1500 "
+            "surface_wait_ms=%.3f fence_wait_ms=%.3f bridge_present_ms=%.3f "
             "frames=%llu",
-            metalReadFenceStatus,
+            metalReadFenceStatus, surfaceWaitMs, fenceWaitMs,
+            bridgePresentTimer.GetDeltaTime() * 1000.0f,
             static_cast<unsigned long long>(
-                s_iMetalBackbufferFenceFallbackFrames));
+                m_MetalBridgeDiagnostics.fenceFallbackFrames));
       }
     }
     m_MetalPresenter->SetLayerVisible(false);
@@ -1916,17 +1932,54 @@ bool LowLevelWindow_MacOSX::PresentOpenGLBackbufferViaMetal() {
       m_MetalPresenter->PresentInteropSurfaceAt(
           m_iMetalBridgeRenderSurfaceIndex,
           EffectiveMacOSFramePacingTargetHz(m_CurrentParams));
+  const float bridgePresentMs = bridgePresentTimer.GetDeltaTime() * 1000.0f;
+  if (!m_bMetalDirectPresentSubmittedThisFrame &&
+      PerfDiagnosticsEnabled()) {
+    ++m_MetalBridgeDiagnostics.presentFailedFrames;
+    if (m_MetalBridgeDiagnostics.presentFailedFrames <= 3 ||
+        m_MetalBridgeDiagnostics.presentFailedFrames % 5000 == 0 ||
+        bridgePresentMs >= 2.0f || surfaceWaitMs >= 0.5f ||
+        fenceWaitMs >= 0.5f) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_backbuffer_present_unavailable "
+          "reason=present_failed path=opengl_interop surface_index=%d "
+          "surface_wait_ms=%.3f fence_wait_ms=%.3f bridge_present_ms=%.3f "
+          "fence_status=0x%x source_size=%dx%d target_size=%dx%d frames=%llu",
+          m_iMetalBridgeRenderSurfaceIndex, surfaceWaitMs, fenceWaitMs,
+          bridgePresentMs, metalReadFenceStatus, m_CurrentParams.width,
+          m_CurrentParams.height, m_MetalOpenGLBridge->width,
+          m_MetalOpenGLBridge->height,
+          static_cast<unsigned long long>(
+              m_MetalBridgeDiagnostics.presentFailedFrames));
+    }
+  }
   if (m_bMetalDirectPresentSubmittedThisFrame &&
       PerfDiagnosticsEnabled()) {
-    static bool s_bLoggedBackbufferPresent = false;
-    if (!s_bLoggedBackbufferPresent) {
+    ++m_MetalBridgeDiagnostics.presentedFrames;
+    if (!m_MetalBridgeDiagnostics.loggedFirstPresent) {
       LOG->Trace(
           "MacOS Metal backbuffer present active: surface_count=%d "
           "size=%dx%d source_size=%dx%d",
           surfaceCount, m_MetalOpenGLBridge->width,
           m_MetalOpenGLBridge->height, m_CurrentParams.width,
           m_CurrentParams.height);
-      s_bLoggedBackbufferPresent = true;
+      m_MetalBridgeDiagnostics.loggedFirstPresent = true;
+    }
+    if (m_MetalBridgeDiagnostics.presentedFrames <= 5 ||
+        m_MetalBridgeDiagnostics.presentedFrames % 600 == 0 ||
+        bridgePresentMs >= 2.0f || surfaceWaitMs >= 0.5f ||
+        fenceWaitMs >= 0.5f) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_backbuffer_present path=opengl_interop "
+          "frame=%llu surface_index=%d surface_wait_ms=%.3f "
+          "fence_wait_ms=%.3f bridge_present_ms=%.3f fence_status=0x%x "
+          "source_size=%dx%d target_size=%dx%d",
+          static_cast<unsigned long long>(
+              m_MetalBridgeDiagnostics.presentedFrames),
+          m_iMetalBridgeRenderSurfaceIndex, surfaceWaitMs, fenceWaitMs,
+          bridgePresentMs, metalReadFenceStatus, m_CurrentParams.width,
+          m_CurrentParams.height, m_MetalOpenGLBridge->width,
+          m_MetalOpenGLBridge->height);
     }
   }
   m_MetalPresenter->SetLayerVisible(m_bMetalDirectPresentSubmittedThisFrame);
@@ -1989,13 +2042,13 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
         m_MetalPresenter->Initialize(
             (void*)delegate->m_Window, m_CurrentParams.width,
             m_CurrentParams.height,
-            EffectiveMacOSFramePacingTargetHz(m_CurrentParams));
+            EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
       } else {
         dispatch_sync(dispatch_get_main_queue(), ^{
           m_MetalPresenter->Initialize(
               (void*)delegate->m_Window, m_CurrentParams.width,
               m_CurrentParams.height,
-              EffectiveMacOSFramePacingTargetHz(m_CurrentParams));
+              EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
         });
       }
       const float initMs = initTimer.GetDeltaTime() * 1000.0f;
@@ -2009,10 +2062,16 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
         }
         attachMs = attachTimer.GetDeltaTime() * 1000.0f;
         m_bMetalBridgeBuildPending = true;
-        m_iMetalBridgeBuildFrameCountdown = 5;
-        LOG->Trace(
-            "MacOS Metal bridge build queued: frames_until_build=%d",
-            m_iMetalBridgeBuildFrameCountdown);
+        m_iMetalBridgeBuildFrameCountdown =
+            kMetalBridgeInitialBuildDelayFrames;
+        m_iMetalBridgeBuildAttempts = 0;
+        if (PerfDiagnosticsEnabled()) {
+          LOG->Trace(
+              "MacOS Metal bridge build queued: frames_until_build=%d "
+              "max_attempts=%d retry_delay_frames=%d",
+              m_iMetalBridgeBuildFrameCountdown, kMetalBridgeMaxBuildAttempts,
+              kMetalBridgeRetryDelayFrames);
+        }
       }
       if (PerfDiagnosticsEnabled()) {
         LOG->Trace(
@@ -2028,10 +2087,9 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
     } else {
       if (MacOSMetalPresentRequested() && !windowed) {
         LOG->Warn(
-            "MacOSPresentBackend=metal is currently available only for the "
-            "windowed Metal-presenter bootstrap. Full-screen exclusive mode "
-            "keeps the OpenGL presentation path until the IOSurface bridge is "
-            "implemented.");
+            "OpenGL + Metal Present is currently available only for windowed "
+            "OpenGL. Full-screen OpenGL keeps the historical presentation path; "
+            "use VideoRenderer=metal for the native Metal renderer.");
       }
       RageTimer releaseBridgeTimer;
       ReleaseMetalOpenGLBridge();
@@ -2044,6 +2102,7 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
       }
       m_bMetalBridgeBuildPending = false;
       m_iMetalBridgeBuildFrameCountdown = 0;
+      m_iMetalBridgeBuildAttempts = 0;
       if (PerfDiagnosticsEnabled()) {
         LOG->Trace(
             "PERF_TRACE: macos_present_backend_config path=opengl total_ms=%.3f "
@@ -2459,10 +2518,35 @@ void LowLevelWindow_MacOSX::SwapBuffers() {
   if (m_bMetalBridgeBuildPending && context != nullptr) {
     --m_iMetalBridgeBuildFrameCountdown;
     if (m_iMetalBridgeBuildFrameCountdown <= 0) {
-      m_bMetalBridgeBuildPending = false;
-      LOG->Trace(
-          "MacOS Metal bridge build running after deferred frames.");
-      BuildMetalOpenGLBridge();
+      ++m_iMetalBridgeBuildAttempts;
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "MacOS Metal bridge build running after deferred frames: "
+            "attempt=%d/%d.",
+            m_iMetalBridgeBuildAttempts, kMetalBridgeMaxBuildAttempts);
+      }
+      const bool bridgeReady = BuildMetalOpenGLBridge();
+      if (bridgeReady) {
+        m_bMetalBridgeBuildPending = false;
+        m_iMetalBridgeBuildFrameCountdown = 0;
+        m_iMetalBridgeBuildAttempts = 0;
+      } else if (m_iMetalBridgeBuildAttempts < kMetalBridgeMaxBuildAttempts) {
+        m_iMetalBridgeBuildFrameCountdown = kMetalBridgeRetryDelayFrames;
+        if (PerfDiagnosticsEnabled()) {
+          LOG->Trace(
+              "MacOS Metal bridge build retry queued: next_attempt=%d/%d "
+              "frames_until_build=%d.",
+              m_iMetalBridgeBuildAttempts + 1, kMetalBridgeMaxBuildAttempts,
+              m_iMetalBridgeBuildFrameCountdown);
+        }
+      } else {
+        m_bMetalBridgeBuildPending = false;
+        m_iMetalBridgeBuildFrameCountdown = 0;
+        LOG->Warn(
+            "MacOS Metal bridge build failed after %d attempts; falling back "
+            "to OpenGL presentation until the video mode/backend changes.",
+            kMetalBridgeMaxBuildAttempts);
+      }
     }
   }
   GLint swapInterval = -1;
@@ -2715,13 +2799,13 @@ void LowLevelWindow_MacOSX::Update() {
       m_MetalPresenter->Initialize(
           (void*)delegate->m_Window, m_CurrentParams.width,
           m_CurrentParams.height,
-          EffectiveMacOSFramePacingTargetHz(m_CurrentParams));
+          EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
     } else {
       dispatch_sync(dispatch_get_main_queue(), ^{
         m_MetalPresenter->Initialize(
             (void*)delegate->m_Window, m_CurrentParams.width,
             m_CurrentParams.height,
-            EffectiveMacOSFramePacingTargetHz(m_CurrentParams));
+            EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
       });
     }
     if (m_MetalPresenter->IsInteropReady()) {
@@ -2731,7 +2815,8 @@ void LowLevelWindow_MacOSX::Update() {
         m_MetalPresenter->DetachLayer();
       }
       m_bMetalBridgeBuildPending = true;
-      m_iMetalBridgeBuildFrameCountdown = 5;
+      m_iMetalBridgeBuildFrameCountdown = kMetalBridgeInitialBuildDelayFrames;
+      m_iMetalBridgeBuildAttempts = 0;
     }
     metalReconfigureMs = metalReconfigureTimer.GetDeltaTime() * 1000.0f;
   }
