@@ -29,17 +29,40 @@ the checklist below.
 
 ## Manual Checklist
 
-- [ ] Title/menu visual parity
-- [ ] Song Select left pane, banners, jackets, score panels
-- [ ] Song Select preview music/video behavior
-- [ ] Gameplay noteskins, receptors, holds, mines, judgments, combo
-- [ ] Dense chart gameplay
-- [ ] BGA/video chart gameplay
-- [ ] Failed chart flow
-- [ ] Evaluation screen panes and screenshot animation
-- [ ] Render-to-texture visual styles / ActorFrameTexture
-- [ ] One 3D/background/model scene
-- [ ] Fullscreen and windowed visual parity
+- [x] Title/menu visual parity
+- [x] Song Select left pane, banners, jackets, score panels
+- [x] Song Select preview music/video behavior
+- [x] Gameplay noteskins, receptors, holds, mines, judgments, combo
+- [x] Dense chart gameplay
+- [x] BGA/video chart gameplay
+- [x] Failed chart flow
+- [x] Evaluation screen panes and screenshot animation
+- [x] Render-to-texture visual styles / ActorFrameTexture
+- [x] One 3D/background/model scene
+- [x] Fullscreen and windowed visual parity
+
+Validated by user playtesting on 2026-06-08. The latest reviewed Metal log shows
+a complete session through gameplay, failed evaluation, profile save, title menu,
+and exit with:
+
+- `RageDisplay_Metal initialized`;
+- `Current renderer: metal`;
+- no targeted Metal shader/pipeline errors;
+- no crash markers;
+- no `Mixing underruns` marker in the reviewed session.
+
+The `failed` log entries in this run are gameplay result/state markers, not
+renderer failures.
+
+## Phase 8 Result
+
+Phase 8 is accepted for the current Apple Silicon test machine.
+
+Remaining validation belongs to later gates:
+
+- Phase 9 performance and pacing comparison against OpenGL;
+- multi-machine validation, especially another Apple Silicon Mac and ideally an
+  Intel Mac before considering Metal as a default.
 
 ## Acceptance Rule
 
