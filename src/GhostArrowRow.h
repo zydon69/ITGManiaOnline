@@ -23,6 +23,7 @@ class GhostArrowRow : public ActorFrame {
   void DidTapNote(int iCol, TapNoteScore tns, bool bBright);
   void DidHoldNote(int iCol, HoldNoteScore hns, bool bBright);
   void SetHoldShowing(int iCol, const TapNote& tn);
+  int GetActiveGhostCount() const;
 
  protected:
   float m_fYReverseOffsetPixels;

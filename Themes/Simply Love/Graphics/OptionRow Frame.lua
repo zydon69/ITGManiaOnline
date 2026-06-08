@@ -116,6 +116,38 @@ t[#t+1] = Def.Quad {
 
 local rows_with_proxies = { "NoteSkin", "NoteSkinVariant", "JudgmentGraphic", "ComboFont", "HoldJudgment", "MusicRate" }
 
+local function GetJudgmentGraphicPath(stripped_name)
+	if not stripped_name then return end
+
+	for judgment_filename in ivalues(GetJudgmentGraphics()) do
+		if judgment_filename ~= "None" and StripSpriteHints(judgment_filename) == stripped_name then
+			return THEME:GetPathG("", "_judgments/" .. judgment_filename)
+		end
+	end
+end
+
+local function TryLoadDeferredJudgmentGraphic(overlay, actor_name, stripped_name)
+	if not overlay or not stripped_name or stripped_name == "None" then return end
+
+	local path = GetJudgmentGraphicPath(stripped_name)
+	if not path then return end
+
+	local ok, added = pcall(function()
+		return overlay:AddChildFromPathWithName(path, actor_name)
+	end)
+	if not (ok and added) then return end
+
+	local actor = overlay:GetChild(actor_name)
+	if actor then
+		actor:visible(false):animate(false)
+		if Trace then
+			Trace(("ScreenPlayerOptions deferred preview loaded: %s"):format(actor_name))
+		end
+	end
+
+	return actor
+end
+
 for player in ivalues( GAMESTATE:GetHumanPlayers() ) do
 	local pn = ToEnumShortString(player)
 
@@ -155,7 +187,19 @@ for player in ivalues( GAMESTATE:GetHumanPlayers() ) do
 				offscreen_actor_name = ("%s_%s"):format(params.Name, params.Value)
 			end
 			-- attempt to find the offscreen actor added by ./BGAnimations/ScreenPlayerOptions overlay.lua
-			local offscreen_actor = SCREENMAN:GetTopScreen():GetChild("Overlay"):GetChild(offscreen_actor_name)
+			local overlay = SCREENMAN:GetTopScreen():GetChild("Overlay")
+			local offscreen_actor = overlay and overlay:GetChild(offscreen_actor_name)
+			if not offscreen_actor and params.Name=="JudgmentGraphic" and overlay then
+				offscreen_actor = TryLoadDeferredJudgmentGraphic(overlay, offscreen_actor_name, params.Value)
+			end
+			if not offscreen_actor and params.Name=="NoteSkinVariant" and overlay then
+				local mods = SL[pn] and SL[pn].ActiveModifiers
+				local fallback_noteskin = mods and mods.NoteSkin
+				if fallback_noteskin then
+					offscreen_actor = overlay:GetChild(("NoteSkinVariant_%s"):format(fallback_noteskin))
+						or overlay:GetChild(("NoteSkin_%s"):format(fallback_noteskin))
+				end
+			end
 			-- ensure that that actor exists before attempting to set it as the target of this ActorProxy
 			if offscreen_actor then self:SetTarget( offscreen_actor ) end
 		end

@@ -31,6 +31,7 @@ source_group("Rage\\\\Utils"
              ${SMDATA_RAGE_UTILS_HPP})
 
 list(APPEND SMDATA_RAGE_MISC_SRC
+            "PerfDiagnostics.cpp"
             "RageException.cpp"
             "RageInput.cpp"
             "RageInputDevice.cpp"
@@ -41,6 +42,7 @@ list(APPEND SMDATA_RAGE_MISC_SRC
             "RageTimer.cpp")
 
 list(APPEND SMDATA_RAGE_MISC_HPP
+            "PerfDiagnostics.h"
             "RageException.h"
             "RageInput.h"
             "RageInputDevice.h"
@@ -112,6 +114,9 @@ list(APPEND SMDATA_RAGE_GRAPHICS_HPP
 if(WIN32)
   list(APPEND SMDATA_RAGE_GRAPHICS_SRC "RageDisplay_D3D.cpp")
   list(APPEND SMDATA_RAGE_GRAPHICS_HPP "RageDisplay_D3D.h")
+elseif(APPLE)
+  list(APPEND SMDATA_RAGE_GRAPHICS_SRC "RageDisplay_Metal.mm")
+  list(APPEND SMDATA_RAGE_GRAPHICS_HPP "RageDisplay_Metal.h")
 elseif(LINUX)
   if(WITH_GLES2)
     list(APPEND SMDATA_RAGE_GRAPHICS_SRC "RageDisplay_GLES2.cpp")

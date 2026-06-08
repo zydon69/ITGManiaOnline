@@ -1,6 +1,7 @@
 #ifndef RAGE_SOUND_DRIVER
 #define RAGE_SOUND_DRIVER
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -172,8 +173,19 @@ class RageSoundDriver : public RageDriver {
     Sound();
     void Allocate(int iFrames);
     void Deallocate();
+    void ClearDebugIdentity();
+    void SetDebugIdentity(
+        const std::string& path, uint64_t serial, uint64_t startUsec);
+    const char* GetDebugPath() const;
 
     RageSoundBase* m_pSound;
+    char m_szDebugPath[256];
+    uint64_t m_iDebugSerial;
+    uint64_t m_iDebugStartUsec;
+    unsigned m_iDebugPrebufferTarget;
+    unsigned m_iDebugPrebufferReadable;
+    unsigned m_iDebugPrebufferWritable;
+    bool m_bDebugStrongPrebuffer;
     RageTimer m_StartTime;
     CircBuf<sound_block> m_Buffer;
 
@@ -187,7 +199,7 @@ class RageSoundDriver : public RageDriver {
 
     CircBuf<QueuedPosMap> m_PosMapQueue;
 
-    enum {
+    enum State {
       AVAILABLE,
       BUFFERING,
       STOPPED, /* idle */
@@ -199,7 +211,19 @@ class RageSoundDriver : public RageDriver {
 
       HALTING, /* stop immediately */
       PLAYING
-    } m_State;
+    };
+
+    State GetState(
+        std::memory_order order = std::memory_order_acquire) const {
+      return m_State.load(order);
+    }
+    void SetState(
+        State state,
+        std::memory_order order = std::memory_order_release) {
+      m_State.store(state, order);
+    }
+
+    std::atomic<State> m_State;
   };
 
   /* List of currently playing sounds: XXX no vector */
@@ -218,6 +242,25 @@ class RageSoundDriver : public RageDriver {
   RageThread m_DecodeThread;
 
   int GetDataForSound(Sound& s);
+  struct RefillTrace {
+    std::string path;
+    unsigned readableBefore = 0;
+    unsigned readableAfter = 0;
+    unsigned writableBefore = 0;
+    unsigned writableAfter = 0;
+    unsigned target = 0;
+    uint64_t elapsedUsec = 0;
+    int writes = 0;
+    int wouldBlocks = 0;
+    int terminalRet = 0;
+    int state = 0;
+    bool targetReached = false;
+    bool shouldLog = false;
+  };
+  bool RefillSoundBufferToTarget(
+      Sound& s, unsigned readableTargetBlocks, const char* reason,
+      int maxWouldBlockRetries, int retrySleepUsec,
+      RefillTrace* trace = nullptr);
 };
 
 // Can't use Create##name because many of these have -sw suffixes.

@@ -484,7 +484,10 @@ elseif(APPLE)
               ${MAC_FRAME_CARBON}
               ${MAC_FRAME_COCOA}
               ${MAC_FRAME_IOKIT}
+              ${MAC_FRAME_IOSURFACE}
               ${MAC_FRAME_OPENGL}
+              ${MAC_FRAME_METAL}
+              ${MAC_FRAME_QUARTZCORE}
               ${MAC_FRAME_SECURITY}
               ${MAC_FRAME_COREFOUNDATION}
               ${MAC_FRAME_AUDIOTOOLBOX}
@@ -580,6 +583,19 @@ else()
 endif()
 
 target_include_directories("${SM_EXE_NAME}" PUBLIC ${SM_INCLUDE_DIRS})
+
+if(BUILD_TESTING)
+  add_test(
+    NAME audio_playonce_runtime_smoke
+    COMMAND "$<TARGET_FILE:${SM_EXE_NAME}>" "--playonce-smoke-test=8")
+  set_tests_properties(
+    audio_playonce_runtime_smoke
+    PROPERTIES
+      LABELS "audio"
+      RUN_SERIAL TRUE
+      TIMEOUT 45
+      WORKING_DIRECTORY "${SM_ROOT_DIR}")
+endif()
 
 if(WIN32)
   set(SM_INSTALL_DESTINATION ".")

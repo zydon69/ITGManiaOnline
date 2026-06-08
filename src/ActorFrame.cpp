@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <string>
+#include <typeinfo>
 #include <vector>
 
 #include "Actor.h"
@@ -10,6 +11,9 @@
 #include "LuaBinding.h"
 #include "LuaManager.h"
 #include "MessageManager.h"
+#include "PerfDiagnostics.h"
+#include "RageLog.h"
+#include "RageTimer.h"
 #include "RageDisplay.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
@@ -25,6 +29,62 @@
 // REGISTER_ACTOR_CLASS( ActorFrame );
 REGISTER_ACTOR_CLASS_WITH_NAME(ActorFrameAutoDeleteChildren, ActorFrame);
 ActorFrame* ActorFrame::Copy() const { return new ActorFrame(*this); }
+
+namespace {
+struct DrawPerfTraceScope {
+  std::string name;
+  float slowActorMs = 0.0f;
+};
+
+std::vector<DrawPerfTraceScope> g_vDrawPerfTraceScopes;
+
+static bool IsDrawPerfTraceActive() {
+  return PerfDiagnosticsEnabled() &&
+         !g_vDrawPerfTraceScopes.empty() &&
+         g_vDrawPerfTraceScopes.back().slowActorMs > 0.0f;
+}
+
+static const char* SafeActorName(const Actor* actor) {
+  if (actor == nullptr || actor->GetName().empty()) {
+    return "<unnamed>";
+  }
+  return actor->GetName().c_str();
+}
+
+static void DrawChildWithOptionalPerfTrace(
+    ActorFrame* parent, Actor* child, unsigned index) {
+  if (!IsDrawPerfTraceActive()) {
+    child->Draw();
+    return;
+  }
+
+  RageTimer timer;
+  child->Draw();
+  const float elapsedMs = timer.GetDeltaTime() * 1000.0f;
+  const DrawPerfTraceScope& scope = g_vDrawPerfTraceScopes.back();
+  if (elapsedMs >= scope.slowActorMs) {
+    LOG->Trace(
+        "PERF_TRACE: slow_actor_draw scope=%s parent=%s child=%s "
+        "child_index=%u child_type=%s elapsed_ms=%.3f threshold_ms=%.3f",
+        scope.name.c_str(), SafeActorName(parent), SafeActorName(child),
+        index, typeid(*child).name(), elapsedMs, scope.slowActorMs);
+  }
+}
+}  // namespace
+
+void ActorFrame::PushDrawPerfTraceScope(
+    const char* scopeName, float slowActorThresholdMs) {
+  DrawPerfTraceScope scope;
+  scope.name = scopeName == nullptr ? "" : scopeName;
+  scope.slowActorMs = std::max(0.0f, slowActorThresholdMs);
+  g_vDrawPerfTraceScopes.push_back(scope);
+}
+
+void ActorFrame::PopDrawPerfTraceScope() {
+  if (!g_vDrawPerfTraceScopes.empty()) {
+    g_vDrawPerfTraceScopes.pop_back();
+  }
+}
 
 ActorFrame::ActorFrame() {
   m_bPropagateCommands = false;
@@ -265,13 +325,13 @@ void ActorFrame::DrawPrimitives() {
     for (unsigned i = 0; i < subs.size(); i++) {
       subs[i]->SetInternalDiffuse(diffuse);
       subs[i]->SetInternalGlow(glow);
-      subs[i]->Draw();
+      DrawChildWithOptionalPerfTrace(this, subs[i], i);
     }
   } else {
     for (unsigned i = 0; i < m_SubActors.size(); i++) {
       m_SubActors[i]->SetInternalDiffuse(diffuse);
       m_SubActors[i]->SetInternalGlow(glow);
-      m_SubActors[i]->Draw();
+      DrawChildWithOptionalPerfTrace(this, m_SubActors[i], i);
     }
   }
 }
@@ -719,6 +779,18 @@ class LunaActorFrame : public Luna<ActorFrame> {
     return 1;
   }
 
+  static int AddChildFromPathWithName(T* p, lua_State* L) {
+    Actor* pActor = ActorUtil::MakeActor(SArg(1));
+    if (pActor == nullptr) {
+      lua_pushboolean(L, 0);
+      return 1;
+    }
+    pActor->SetName(SArg(2));
+    p->AddChild(pActor);
+    lua_pushboolean(L, 1);
+    return 1;
+  }
+
   static int RemoveChild(T* p, lua_State* L) {
     Actor* child = p->GetChild(SArg(1));
     if (child) {
@@ -757,6 +829,7 @@ class LunaActorFrame : public Luna<ActorFrame> {
     ADD_METHOD(SetSpecularLightColor);
     ADD_METHOD(SetLightDirection);
     ADD_METHOD(AddChildFromPath);
+    ADD_METHOD(AddChildFromPathWithName);
     ADD_METHOD(RemoveChild);
     ADD_METHOD(RemoveAllChildren);
   }

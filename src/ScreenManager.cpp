@@ -62,6 +62,7 @@
 #include "ScreenManager.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <map>
 #include <set>
@@ -74,6 +75,7 @@
 #include "InputEventPlus.h"
 #include "LuaManager.h"
 #include "MessageManager.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "Preference.h"
 #include "RageDisplay.h"
@@ -93,7 +95,157 @@ ScreenManager* SCREENMAN =
     nullptr;  // global and accessible from anywhere in our program
 
 static Preference<bool> g_bDelayedScreenLoad("DelayedScreenLoad", false);
+static Preference<float> g_fPerfTraceSlowDrawBreakdownMs(
+    "PerfTraceSlowDrawBreakdownMs", 16.0f);
 // static Preference<bool> g_bPruneFonts( "PruneFonts", true );
+
+struct DrawBreakdownPerfBucket {
+  uint64_t frames = 0;
+  uint64_t over12ms = 0;
+  uint64_t over16ms = 0;
+  uint64_t over20ms = 0;
+  float maxTotalMs = 0.0f;
+  float maxBeginFrameMs = 0.0f;
+  float maxSharedBgaMs = 0.0f;
+  float maxScreenMs = 0.0f;
+  float maxOverlayMs = 0.0f;
+  float maxEndFrameMs = 0.0f;
+  std::string worstTopScreen = "none";
+  std::string worstMaxScreen = "none";
+  std::string worstClassification = "none";
+};
+
+struct DrawBreakdownPerfSummary {
+  DrawBreakdownPerfBucket all;
+  DrawBreakdownPerfBucket gameplay;
+  DrawBreakdownPerfBucket evaluationStage;
+  DrawBreakdownPerfBucket selectMusic;
+  DrawBreakdownPerfBucket selectStyle;
+  DrawBreakdownPerfBucket other;
+};
+
+static DrawBreakdownPerfSummary g_DrawBreakdownPerfSummary;
+
+static bool ScreenNameEquals(const std::string& screenName, const char* name) {
+  return name != nullptr && screenName == name;
+}
+
+static void RecordDrawBreakdownPerfBucket(
+    DrawBreakdownPerfBucket& bucket,
+    float totalMs,
+    float beginFrameMs,
+    float sharedBgaMs,
+    float screenDrawMs,
+    float overlayDrawMs,
+    float endFrameMs,
+    const std::string& topScreenName,
+    const std::string& maxScreenName,
+    const char* classification) {
+  ++bucket.frames;
+  bucket.over12ms += totalMs >= 12.0f ? 1 : 0;
+  bucket.over16ms += totalMs >= 16.0f ? 1 : 0;
+  bucket.over20ms += totalMs >= 20.0f ? 1 : 0;
+  bucket.maxBeginFrameMs = std::max(bucket.maxBeginFrameMs, beginFrameMs);
+  bucket.maxSharedBgaMs = std::max(bucket.maxSharedBgaMs, sharedBgaMs);
+  bucket.maxScreenMs = std::max(bucket.maxScreenMs, screenDrawMs);
+  bucket.maxOverlayMs = std::max(bucket.maxOverlayMs, overlayDrawMs);
+  bucket.maxEndFrameMs = std::max(bucket.maxEndFrameMs, endFrameMs);
+
+  if (totalMs > bucket.maxTotalMs) {
+    bucket.maxTotalMs = totalMs;
+    bucket.worstTopScreen = topScreenName;
+    bucket.worstMaxScreen = maxScreenName;
+    bucket.worstClassification =
+        classification != nullptr ? classification : "unknown";
+  }
+}
+
+static void RecordDrawBreakdownPerf(
+    float totalMs,
+    float beginFrameMs,
+    float sharedBgaMs,
+    float screenDrawMs,
+    float overlayDrawMs,
+    float endFrameMs,
+    const std::string& topScreenName,
+    const std::string& maxScreenName,
+    const char* classification) {
+  RecordDrawBreakdownPerfBucket(
+      g_DrawBreakdownPerfSummary.all, totalMs, beginFrameMs, sharedBgaMs,
+      screenDrawMs, overlayDrawMs, endFrameMs, topScreenName, maxScreenName,
+      classification);
+
+  if (ScreenNameEquals(topScreenName, "ScreenGameplay")) {
+    RecordDrawBreakdownPerfBucket(
+        g_DrawBreakdownPerfSummary.gameplay, totalMs, beginFrameMs,
+        sharedBgaMs, screenDrawMs, overlayDrawMs, endFrameMs, topScreenName,
+        maxScreenName, classification);
+  } else if (ScreenNameEquals(topScreenName, "ScreenEvaluationStage")) {
+    RecordDrawBreakdownPerfBucket(
+        g_DrawBreakdownPerfSummary.evaluationStage, totalMs, beginFrameMs,
+        sharedBgaMs, screenDrawMs, overlayDrawMs, endFrameMs, topScreenName,
+        maxScreenName, classification);
+  } else if (ScreenNameEquals(topScreenName, "ScreenSelectMusic")) {
+    RecordDrawBreakdownPerfBucket(
+        g_DrawBreakdownPerfSummary.selectMusic, totalMs, beginFrameMs,
+        sharedBgaMs, screenDrawMs, overlayDrawMs, endFrameMs, topScreenName,
+        maxScreenName, classification);
+  } else if (ScreenNameEquals(topScreenName, "ScreenSelectStyle")) {
+    RecordDrawBreakdownPerfBucket(
+        g_DrawBreakdownPerfSummary.selectStyle, totalMs, beginFrameMs,
+        sharedBgaMs, screenDrawMs, overlayDrawMs, endFrameMs, topScreenName,
+        maxScreenName, classification);
+  } else {
+    RecordDrawBreakdownPerfBucket(
+        g_DrawBreakdownPerfSummary.other, totalMs, beginFrameMs, sharedBgaMs,
+        screenDrawMs, overlayDrawMs, endFrameMs, topScreenName, maxScreenName,
+        classification);
+  }
+}
+
+static void LogDrawBreakdownPerfBucket(
+    const char* label, const DrawBreakdownPerfBucket& bucket) {
+  LOG->Trace(
+      "PERF_SUMMARY: draw_breakdown scope=%s frames=%llu over12ms=%llu "
+      "over16ms=%llu over20ms=%llu max_total_ms=%.3f "
+      "max_begin_frame_ms=%.3f max_shared_bga_ms=%.3f max_screen_ms=%.3f "
+      "max_overlay_ms=%.3f max_end_frame_ms=%.3f worst_top_screen=%s "
+      "worst_max_screen=%s worst_classification=%s",
+      label != nullptr ? label : "unknown",
+      static_cast<unsigned long long>(bucket.frames),
+      static_cast<unsigned long long>(bucket.over12ms),
+      static_cast<unsigned long long>(bucket.over16ms),
+      static_cast<unsigned long long>(bucket.over20ms),
+      bucket.maxTotalMs,
+      bucket.maxBeginFrameMs,
+      bucket.maxSharedBgaMs,
+      bucket.maxScreenMs,
+      bucket.maxOverlayMs,
+      bucket.maxEndFrameMs,
+      bucket.worstTopScreen.c_str(),
+      bucket.worstMaxScreen.c_str(),
+      bucket.worstClassification.c_str());
+}
+
+static void LogDrawBreakdownPerfSummary() {
+  if (!PerfDiagnosticsEnabled()) {
+    return;
+  }
+
+  if (g_DrawBreakdownPerfSummary.all.frames == 0) {
+    return;
+  }
+
+  LogDrawBreakdownPerfBucket("all", g_DrawBreakdownPerfSummary.all);
+  LogDrawBreakdownPerfBucket("gameplay", g_DrawBreakdownPerfSummary.gameplay);
+  LogDrawBreakdownPerfBucket(
+      "evaluation_stage", g_DrawBreakdownPerfSummary.evaluationStage);
+  LogDrawBreakdownPerfBucket(
+      "select_music", g_DrawBreakdownPerfSummary.selectMusic);
+  LogDrawBreakdownPerfBucket(
+      "select_style", g_DrawBreakdownPerfSummary.selectStyle);
+  LogDrawBreakdownPerfBucket("other", g_DrawBreakdownPerfSummary.other);
+}
 
 // Screen registration
 static std::map<std::string, CreateScreenFn>* g_pmapRegistrees = nullptr;
@@ -152,6 +304,40 @@ void LogResourceSnapshotForScreenTransition(
 
   TEXTUREMAN->LogResourceSnapshot(
       ssprintf("%s:%s->%s", action.c_str(), previous.c_str(), next.c_str()));
+}
+
+void ResetFramePacingForScreenTransition(
+    const std::string& action, const std::string& previous,
+    const std::string& next) {
+  if (DISPLAY == nullptr) {
+    return;
+  }
+
+  const std::string reason =
+      ssprintf("%s:%s->%s", action.c_str(), previous.c_str(), next.c_str());
+  DISPLAY->ResetFramePacing(reason.c_str());
+}
+
+const char* ClassifyDrawBreakdown(
+    float totalDrawMs, float beginFrameMs, float sharedBgaMs,
+    float screenDrawMs, float overlayDrawMs, float endFrameMs,
+    float maxScreenMs, float maxOverlayMs) {
+  if (endFrameMs >= totalDrawMs * 0.75f) {
+    return "present_or_pacing";
+  }
+  if (maxScreenMs >= totalDrawMs * 0.5f || screenDrawMs >= 8.0f) {
+    return "screen_cpu";
+  }
+  if (maxOverlayMs >= totalDrawMs * 0.5f || overlayDrawMs >= 8.0f) {
+    return "overlay_cpu";
+  }
+  if (sharedBgaMs >= 4.0f) {
+    return "shared_bga";
+  }
+  if (beginFrameMs >= 4.0f) {
+    return "begin_frame";
+  }
+  return "mixed";
 }
 
 // Add a screen to g_ScreenStack. This is the only function that adds to
@@ -213,13 +399,23 @@ void BeforeDeleteScreen() {
 /* If we're deleting a screen, it's probably releasing texture and other
  * resources, so trigger cleanups. */
 void AfterDeleteScreen() {
+  RageTimer cleanupTimer;
+
   /* Now that we've actually deleted a screen, it makes sense to clear out
    * cached textures. */
   TEXTUREMAN->DeleteCachedTextures();
+  const float textureCleanupMs = cleanupTimer.GetDeltaTime() * 1000.0f;
 
   /* Cleanup song data. This can free up a fair bit of memory, so do it
    * after deleting screens. */
   SONGMAN->Cleanup();
+  const float songCleanupMs = cleanupTimer.GetDeltaTime() * 1000.0f;
+
+  if (PerfDiagnosticsEnabled() && textureCleanupMs + songCleanupMs >= 2.0f) {
+    LOG->Trace(
+        "PERF_TRACE: screen_cleanup texture_gc_ms=%.3f song_cleanup_ms=%.3f",
+        textureCleanupMs, songCleanupMs);
+  }
 }
 
 /* Take ownership of all screens and backgrounds that are owned by
@@ -292,6 +488,7 @@ ScreenManager::ScreenManager() {
 
 ScreenManager::~ScreenManager() {
   LOG->Trace("ScreenManager::~ScreenManager()");
+  LogDrawBreakdownPerfSummary();
   LOG->UnmapLog("ScreenManager::TopScreen");
 
   RageUtil::SafeDelete(g_pSharedBGA);
@@ -466,6 +663,8 @@ void ScreenManager::Update(float fDeltaTime) {
         GetTopScreen() != nullptr ? GetTopScreen()->GetName() : "NoScreen";
     LogResourceSnapshotForScreenTransition(
         "screen_pop", sPreviousScreenName, sNextScreenName);
+    ResetFramePacingForScreenTransition(
+        "screen_pop", sPreviousScreenName, sNextScreenName);
   }
 
   /* Screens take some time to load.  If we don't do this, then screens
@@ -493,7 +692,9 @@ void ScreenManager::Update(float fDeltaTime) {
    * Screen's first update.  Clamp the first update delta so that the
    * animations don't jump. */
   if (pScreen && m_bZeroNextUpdate) {
-    LOG->Trace("Zeroing this update.  Was %f", fDeltaTime);
+    LOG->Trace(
+        "Zeroing this update.  Was %f screen=%s", fDeltaTime,
+        pScreen->GetName().c_str());
     fDeltaTime = 0;
     m_bZeroNextUpdate = false;
   }
@@ -534,26 +735,84 @@ void ScreenManager::Draw() {
     return;
   }
 
+  RageTimer totalTimer;
+  RageTimer phaseTimer;
+  float beginFrameMs = 0.0f;
+  float sharedBgaMs = 0.0f;
+  float screenDrawMs = 0.0f;
+  float overlayDrawMs = 0.0f;
+  float endFrameMs = 0.0f;
+  float maxScreenMs = 0.0f;
+  float maxOverlayMs = 0.0f;
+  std::string maxScreenName = "none";
+  std::string maxOverlayName = "none";
+  const std::string topScreenName =
+      g_ScreenStack.empty() || g_ScreenStack.back().m_pScreen == nullptr
+          ? "NoScreen"
+          : g_ScreenStack.back().m_pScreen->GetName();
+
   if (!DISPLAY->BeginFrame()) {
     return;
   }
+  beginFrameMs = phaseTimer.GetDeltaTime() * 1000.0f;
 
   DISPLAY->CameraPushMatrix();
   DISPLAY->LoadMenuPerspective(
       0, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_CENTER_X, SCREEN_CENTER_Y);
   g_pSharedBGA->Draw();
   DISPLAY->CameraPopMatrix();
+  sharedBgaMs = phaseTimer.GetDeltaTime() * 1000.0f;
 
   for (const LoadedScreen& screen :
        g_ScreenStack) {  // Draw all screens bottom to top
+    RageTimer screenTimer;
     screen.m_pScreen->Draw();
+    const float oneScreenMs = screenTimer.GetDeltaTime() * 1000.0f;
+    screenDrawMs += oneScreenMs;
+    if (oneScreenMs > maxScreenMs) {
+      maxScreenMs = oneScreenMs;
+      maxScreenName = screen.m_pScreen->GetName();
+    }
   }
 
   for (Screen* overlayScreen : g_OverlayScreens) {
+    RageTimer overlayTimer;
     overlayScreen->Draw();
+    const float oneOverlayMs = overlayTimer.GetDeltaTime() * 1000.0f;
+    overlayDrawMs += oneOverlayMs;
+    if (oneOverlayMs > maxOverlayMs) {
+      maxOverlayMs = oneOverlayMs;
+      maxOverlayName = overlayScreen->GetName();
+    }
   }
 
   DISPLAY->EndFrame();
+  endFrameMs = phaseTimer.GetDeltaTime() * 1000.0f;
+
+  const float totalDrawMs = totalTimer.GetDeltaTime() * 1000.0f;
+  const char* drawClassification = ClassifyDrawBreakdown(
+      totalDrawMs, beginFrameMs, sharedBgaMs, screenDrawMs, overlayDrawMs,
+      endFrameMs, maxScreenMs, maxOverlayMs);
+  RecordDrawBreakdownPerf(
+      totalDrawMs, beginFrameMs, sharedBgaMs, screenDrawMs, overlayDrawMs,
+      endFrameMs, topScreenName, maxScreenName, drawClassification);
+
+  const float traceThresholdMs =
+      std::max(0.0f, g_fPerfTraceSlowDrawBreakdownMs.Get());
+  if (PerfDiagnosticsEnabled() && traceThresholdMs > 0.0f &&
+      totalDrawMs >= traceThresholdMs) {
+    LOG->Trace(
+        "PERF_TRACE: draw_breakdown total_ms=%.3f begin_frame_ms=%.3f "
+        "shared_bga_ms=%.3f screen_ms=%.3f overlay_ms=%.3f end_frame_ms=%.3f "
+        "classification=%s screens=%zu overlays=%zu top_screen=%s max_screen=%s "
+        "max_screen_ms=%.3f max_overlay=%s max_overlay_ms=%.3f",
+        totalDrawMs, beginFrameMs, sharedBgaMs, screenDrawMs, overlayDrawMs,
+        endFrameMs,
+        drawClassification,
+        g_ScreenStack.size(), g_OverlayScreens.size(),
+        topScreenName.c_str(), maxScreenName.c_str(), maxScreenMs,
+        maxOverlayName.c_str(), maxOverlayMs);
+  }
 }
 
 void ScreenManager::Input(const InputEventPlus& input) {
@@ -814,6 +1073,8 @@ void ScreenManager::LoadDelayedScreen() {
 
   LogResourceSnapshotForScreenTransition(
       "screen_changed", sPreviousScreenName, sScreenName);
+  ResetFramePacingForScreenTransition(
+      "screen_changed", sPreviousScreenName, sScreenName);
 }
 
 void ScreenManager::AddNewScreenToTop(
@@ -841,6 +1102,8 @@ void ScreenManager::AddNewScreenToTop(
   PushLoadedScreen(ls);
 
   LogResourceSnapshotForScreenTransition(
+      "screen_push", sPreviousScreenName, sScreenName);
+  ResetFramePacingForScreenTransition(
       "screen_push", sPreviousScreenName, sScreenName);
 }
 

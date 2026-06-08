@@ -7,15 +7,34 @@
 #include <limits>
 #include <utility>
 
+#include "PerfDiagnostics.h"
 #include "RageLog.h"
 #include "RageTimer.h"
 
 // NOTE(sukibaby): The number of frames we should keep pos_map data for.
-// File bitrate, metadata, etc will factor in here. 80k is a safe value
-// to provide a good balance of stability and low latency. It is stable
-// up to 200k, but increased latency is the main reason not to increase
-// this to a very large number.
-static int pos_map_backlog_frames = 80000;
+// This maps hardware frames back to decoded stream/source frames. It is not
+// an audio output buffer, so increasing it does not add playback latency; it
+// keeps more timing history available when CoreAudio scheduling or device
+// latency gets uneven mid-gameplay.
+static int pos_map_backlog_frames = 480000;
+// CoreAudio and other backends can report a hardware cursor that is a small
+// buffer quantum ahead/behind the newest committed position while a sound is
+// starting or flushing. Treat that as timing jitter, not a real map failure.
+// Keep the tolerance in time, then convert to frames for the rate being mapped
+// so 44.1k, 48k, and high-rate devices behave consistently.
+static constexpr double kMinorPositionDriftToleranceMs = 46.0;
+static constexpr float kMinorPositionDriftTraceSeconds = 60.0f;
+static constexpr int kSustainedMinorPositionDriftSearches = 120;
+
+static int64_t MinorPositionDriftFramesForRate(int iFrameRate) {
+  if (iFrameRate <= 0) {
+    iFrameRate = 44100;
+  }
+  return static_cast<int64_t>(
+      (static_cast<double>(iFrameRate) * kMinorPositionDriftToleranceMs /
+       1000.0) +
+      0.5);
+}
 
 struct pos_map_t {
   int64_t m_iSourceFrame;
@@ -33,6 +52,7 @@ struct pos_map_t {
 
 struct pos_map_impl {
   std::deque<pos_map_t> m_Queue;
+  mutable int m_iConsecutiveMinorDrifts = 0;
   void Cleanup();
 };
 
@@ -41,7 +61,6 @@ pos_map_queue::pos_map_queue() { m_pImpl = new pos_map_impl; }
 pos_map_queue::~pos_map_queue() { delete m_pImpl; }
 
 pos_map_queue::pos_map_queue(const pos_map_queue& cpy) {
-  *this = cpy;
   m_pImpl = new pos_map_impl(*cpy.m_pImpl);
 }
 
@@ -106,10 +125,12 @@ void pos_map_impl::Cleanup() {
   m_Queue.erase(m_Queue.begin(), it);
 }
 
-int64_t pos_map_queue::Search(int64_t iSourceFrame) const {
+int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
   if (IsEmpty()) {
     return 0;
   }
+  const int64_t minorPositionDriftFrames =
+      MinorPositionDriftFramesForRate(iFrameRate);
 
   // iSourceFrame is probably in pos_map.  Search to figure out what position it
   // maps to.
@@ -119,6 +140,7 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame) const {
     // Loop over the queue until we know generally where iSourceFrame is
     if (iSourceFrame >= pm.m_iSourceFrame &&
         iSourceFrame < pm.m_iSourceFrame + pm.m_iFrames) {
+      m_pImpl->m_iConsecutiveMinorDrifts = 0;
       // If we are in the correct block, calculate its current position
       int64_t iDiff = static_cast<int64_t>(iSourceFrame - pm.m_iSourceFrame);
       iDiff = static_cast<int64_t>((iDiff * pm.m_fSourceToDestRatio) + 0.5);
@@ -152,19 +174,79 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame) const {
    *    SoundStopped has been called.
    * 3. Underflow; we'll be given a larger frame number than we know about.
    */
-  static RageTimer last;
-  if (last.Ago() >= 10.0f) {
-    last.Touch();
+  const pos_map_t& first = m_pImpl->m_Queue.front();
+  const pos_map_t& lastEntry = m_pImpl->m_Queue.back();
+  const int64_t firstStart = first.m_iSourceFrame;
+  const int64_t firstEnd = first.m_iSourceFrame + first.m_iFrames;
+  const int64_t lastStart = lastEntry.m_iSourceFrame;
+  const int64_t lastEnd = lastEntry.m_iSourceFrame + lastEntry.m_iFrames;
+  const char* relation =
+      iSourceFrame < firstStart ? "before" :
+      iSourceFrame >= lastEnd ? "after" : "gap";
+
+  static RageTimer lastMinor;
+  if (iClosestPositionDist <= minorPositionDriftFrames) {
+    ++m_pImpl->m_iConsecutiveMinorDrifts;
+    const bool sustainedDrift =
+        m_pImpl->m_iConsecutiveMinorDrifts >
+        kSustainedMinorPositionDriftSearches;
+    if (sustainedDrift) {
+      static RageTimer lastSustainedMinor;
+      if (PerfDiagnosticsEnabled() && lastSustainedMinor.Ago() >= 10.0f) {
+        lastSustainedMinor.Touch();
+        LOG->Trace(
+            "Audio position mismatch: sustained minor drift frame %" PRId64
+            " outside buffered range relation=%s closest_dist=%" PRId64
+            " tolerance=%" PRId64 " tolerance_ms=%.3f frame_rate=%d "
+            "consecutive_searches=%d entries=%zu "
+            "first=[%" PRId64 ",%" PRId64 ") last=[%" PRId64 ",%" PRId64
+            ")",
+            iSourceFrame, relation, iClosestPositionDist,
+            minorPositionDriftFrames, kMinorPositionDriftToleranceMs,
+            iFrameRate, m_pImpl->m_iConsecutiveMinorDrifts,
+            m_pImpl->m_Queue.size(), firstStart, firstEnd, lastStart, lastEnd);
+      }
+      return iClosestPosition;
+    }
+
+    if (PerfDiagnosticsEnabled() &&
+        lastMinor.Ago() >= kMinorPositionDriftTraceSeconds) {
+      lastMinor.Touch();
+      LOG->Trace(
+          "Audio position map minor drift: frame %" PRId64
+          " outside buffered range relation=%s closest_dist=%" PRId64
+          " tolerance=%" PRId64 " tolerance_ms=%.3f frame_rate=%d "
+          "consecutive_searches=%d entries=%zu "
+          "first=[%" PRId64 ",%" PRId64 ") last=[%" PRId64 ",%" PRId64 ")",
+          iSourceFrame, relation, iClosestPositionDist,
+          minorPositionDriftFrames, kMinorPositionDriftToleranceMs,
+          iFrameRate, m_pImpl->m_iConsecutiveMinorDrifts,
+          m_pImpl->m_Queue.size(), firstStart, firstEnd, lastStart, lastEnd);
+    }
+    return iClosestPosition;
+  }
+
+  static RageTimer lastMismatch;
+  m_pImpl->m_iConsecutiveMinorDrifts = 0;
+  if (PerfDiagnosticsEnabled() && lastMismatch.Ago() >= 10.0f) {
+    lastMismatch.Touch();
     LOG->Trace(
         "Audio position mismatch: frame %" PRId64
-        " outside buffered range (normal during start/stop)",
-        iSourceFrame);
+        " outside buffered range relation=%s closest_dist=%" PRId64
+        " tolerance=%" PRId64 " tolerance_ms=%.3f frame_rate=%d entries=%zu "
+        "first=[%" PRId64 ",%" PRId64 ") last=[%" PRId64 ",%" PRId64 ")",
+        iSourceFrame, relation, iClosestPositionDist,
+        minorPositionDriftFrames, kMinorPositionDriftToleranceMs, iFrameRate,
+        m_pImpl->m_Queue.size(), firstStart, firstEnd, lastStart, lastEnd);
   }
 
   return iClosestPosition;
 }
 
-void pos_map_queue::Clear() { m_pImpl->m_Queue.clear(); }
+void pos_map_queue::Clear() {
+  m_pImpl->m_Queue.clear();
+  m_pImpl->m_iConsecutiveMinorDrifts = 0;
+}
 
 bool pos_map_queue::IsEmpty() const { return m_pImpl->m_Queue.empty(); }
 

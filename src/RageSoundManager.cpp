@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "LocalizedString.h"
+#include "PerfDiagnostics.h"
 #include "Preference.h"
 #include "RageException.h"
 #include "RageLog.h"
@@ -42,6 +43,8 @@
 static RageMutex g_SoundManMutex("SoundMan");
 static Preference<std::string> g_sSoundDrivers(
     "SoundDrivers", "");  // "" == DEFAULT_SOUND_DRIVER_LIST
+static Preference<int> g_iSoundGCMaxDeletesPerUpdate(
+    "SoundGCMaxDeletesPerUpdate", 4);
 
 RageSoundManager* SOUNDMAN = nullptr;
 
@@ -107,15 +110,28 @@ int64_t RageSoundManager::GetPosition(RageTimer* pTimer) const {
 void RageSoundManager::Update() {
   /* Scan m_mapPreloadedSounds for sounds that are no longer loaded, and delete
    * them. */
+  RageTimer cleanupTimer;
+  int deletedSounds = 0;
+  bool deferredSounds = false;
+  std::string lastDeletedSound;
+  const int maxDeletesPerUpdate =
+      std::max(0, g_iSoundGCMaxDeletesPerUpdate.Get());
+
   g_SoundManMutex
       .Lock(); /* lock for access to m_mapPreloadedSounds, owned_sounds */
   {
     for (auto it = m_mapPreloadedSounds.begin();
          it != m_mapPreloadedSounds.end();) {
       if (it->second->GetReferenceCount() == 1) {
-        LOG->Trace("Deleted old sound \"%s\"", it->first.c_str());
+        if (maxDeletesPerUpdate > 0 && deletedSounds >= maxDeletesPerUpdate) {
+          deferredSounds = true;
+          break;
+        }
+
+        lastDeletedSound = it->first;
         delete it->second;
         it = m_mapPreloadedSounds.erase(it);
+        ++deletedSounds;
       } else {
         ++it;
       }
@@ -123,6 +139,15 @@ void RageSoundManager::Update() {
   }
 
   g_SoundManMutex.Unlock(); /* finished with m_mapPreloadedSounds */
+
+  const float cleanupMs = cleanupTimer.GetDeltaTime() * 1000.0f;
+  if (PerfDiagnosticsEnabled() && (deletedSounds > 0 || cleanupMs >= 2.0f)) {
+    LOG->Trace(
+        "PERF_TRACE: sound_gc deleted=%d deferred=%d budget=%d elapsed_ms=%.3f "
+        "last='%s'",
+        deletedSounds, deferredSounds ? 1 : 0, maxDeletesPerUpdate, cleanupMs,
+        lastDeletedSound.c_str());
+  }
 
   if (m_pDriver != nullptr) {
     m_pDriver->Update();

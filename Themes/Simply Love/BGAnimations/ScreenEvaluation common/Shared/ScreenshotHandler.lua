@@ -4,6 +4,57 @@ if SL.Global.GameMode == "Casual" then return end
 
 local player = nil
 
+local function RequestScreenshot(pn)
+	if not pn then return end
+
+	-- format a localized month string like "06-June" or "12-Diciembre"
+	local month = ("%02d-%s"):format(MonthOfYear()+1, THEME:GetString("Months", "Month"..MonthOfYear()+1))
+
+	-- get the FullTitle of the song or course that was just played
+	local title = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentCourse():GetDisplayFullTitle() or GAMESTATE:GetCurrentSong():GetDisplayFullTitle()
+
+	-- song titles can be very long, and the engine's SaveScreenshot() function
+	-- is already hardcoded to make the filename long via DateTime::GetNowDateTime()
+	-- so, let's use only the first 10 characters of the title in the screenshot filename
+	title = title:utf8sub(1,10)
+
+	-- substitute all symbols with underscores to avoid file name conflicts
+	title = title:gsub("%W", "_")
+
+	-- organize screenshots Love into directories, like...
+	--      ./Screenshots/Simply_Love/2020/04-April/DVNO-2020-04-22_175951.png
+	-- note that the engine's SaveScreenshot() function will convert whitespace
+	-- characters to underscores, so we might as well just use underscores here
+	local prefix = "Simply_Love/" .. Year() .. "/" .. month .. "/" .. title .. "_"
+
+	-- attempt to write a screenshot to disk
+	-- arg1 is playernumber that requsted the screenshot; if they are using a profile, the screenshot will be saved there
+	-- arg2 is a boolean for whether to use lossy compression on the screenshot before writing to disk
+	-- arg3 is a boolean for whther to have CRYPTMAN use the machine's private key to sign the screenshot
+	--      (there is currently no online system in place that I know that would benefit from that^)
+	-- arg4 is an optional string to prefix the filename with
+	-- arg5 is an optional string to append to the end of the filename
+	--
+	-- first return value is boolean indicating success/failure to write to disk
+	-- second return value is
+	--     (directory + filename) if write to disk was successful
+	--     (filename)             if write to disk failed
+	local success, path = SaveScreenshot(pn, false, false , prefix)
+
+	if success then
+		Trace("ScreenEvaluation screenshot saved: " .. tostring(path))
+	else
+		Trace("ScreenEvaluation screenshot file save failed; rendering preview texture only.")
+	end
+
+	-- Native Metal implements DISPLAY:CreateScreenshot() via window capture, but
+	-- the file save can still fail independently of the render-to-texture preview.
+	-- Always render the preview texture so the evaluation screenshot animation and
+	-- Metal render target path remain testable.
+	player = pn
+	MESSAGEMAN:Broadcast("ScreenshotCurrentScreen")
+end
+
 local spr = Def.Sprite{ InitCommand=function(self) self:draworder(200) end }
 
 -- -----------------------------------------------------------------------
@@ -15,45 +66,7 @@ local spr = Def.Sprite{ InitCommand=function(self) self:draworder(200) end }
 
 spr.CodeMessageCommand=function(self, params)
 	if params.Name == "Screenshot" then
-
-		-- format a localized month string like "06-June" or "12-Diciembre"
-		local month = ("%02d-%s"):format(MonthOfYear()+1, THEME:GetString("Months", "Month"..MonthOfYear()+1))
-
-		-- get the FullTitle of the song or course that was just played
-		local title = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentCourse():GetDisplayFullTitle() or GAMESTATE:GetCurrentSong():GetDisplayFullTitle()
-
-		-- song titles can be very long, and the engine's SaveScreenshot() function
-		-- is already hardcoded to make the filename long via DateTime::GetNowDateTime()
-		-- so, let's use only the first 10 characters of the title in the screenshot filename
-		title = title:utf8sub(1,10)
-
-		-- substitute all symbols with underscores to avoid file name conflicts
-		title = title:gsub("%W", "_")
-
-		-- organize screenshots Love into directories, like...
-		--      ./Screenshots/Simply_Love/2020/04-April/DVNO-2020-04-22_175951.png
-		-- note that the engine's SaveScreenshot() function will convert whitespace
-		-- characters to underscores, so we might as well just use underscores here
-		local prefix = "Simply_Love/" .. Year() .. "/" .. month .. "/" .. title .. "_"
-
-		-- attempt to write a screenshot to disk
-		-- arg1 is playernumber that requsted the screenshot; if they are using a profile, the screenshot will be saved there
-		-- arg2 is a boolean for whether to use lossy compression on the screenshot before writing to disk
-		-- arg3 is a boolean for whther to have CRYPTMAN use the machine's private key to sign the screenshot
-		--      (there is currently no online system in place that I know that would benefit from that^)
-		-- arg4 is an optional string to prefix the filename with
-		-- arg5 is an optional string to append to the end of the filename
-		--
-		-- first return value is boolean indicating success/failure to write to disk
-		-- second return value is
-		--     (directory + filename) if write to disk was successful
-		--     (filename)             if write to disk failed
-		local success, path = SaveScreenshot(params.PlayerNumber, false, false , prefix)
-
-		if success then
-			player = params.PlayerNumber
-			MESSAGEMAN:Broadcast("ScreenshotCurrentScreen")
-		end
+		RequestScreenshot(params.PlayerNumber)
 	end
 	if params.Name == "Favorite1" or params.Name == "Favorite2" then
 		addOrRemoveFavorite(params.PlayerNumber)
@@ -83,6 +96,7 @@ end
 spr.AnimateScreenshotCommand=function(self)
 	-- (re)set these upon attempting to take a screenshot since we can
 	-- reuse this same sprite for multiple screenshot animations
+	SOUND:PlayOnce(THEME:GetPathS("", "Common screenshot"))
 	self:finishtweening()
 	self:Center():zoomto(_screen.w, _screen.h)
 	self:SetTexture(SL.Global.ScreenshotTexture)

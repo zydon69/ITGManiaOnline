@@ -33,9 +33,11 @@ class LowLevelWindow {
   virtual void Update() {}
 
   virtual const ActualVideoModeParams GetActualVideoModeParams() const = 0;
+  virtual void* GetNativeWindowHandle() const { return nullptr; }
 
   virtual bool SupportsRenderToTexture() const { return false; }
   virtual RenderTarget* CreateRenderTarget() { return nullptr; }
+  virtual bool PresentOpenGLBackbufferViaMetal() { return false; }
 
   virtual bool SupportsFullscreenBorderlessWindow() const { return false; };
 

@@ -1,18 +1,36 @@
 #import "LowLevelWindow_MacOSX.h"
 #import "DisplaySpec.h"
+#import "MacOSMetalPresenter.h"
+#import "MacOSFramePacing.h"
+#import "PerfDiagnostics.h"
+#import "Preference.h"
 #import "RageDisplay_OGL_Helpers.h"
+#import "RageLog.h"
 #import "RageThreads.h"
+#import "RageTimer.h"
 #import "RageUtil.h"
 #import "arch/ArchHooks/ArchHooks.h"
 #import "global.h"
 
-#include <dlfcn.h>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <dlfcn.h>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 #import <Cocoa/Cocoa.h>
+#import <CoreVideo/CoreVideo.h>
+#import <IOSurface/IOSurface.h>
+#import <OpenGL/CGLIOSurface.h>
 #import <OpenGL/OpenGL.h>
 #import <OpenGL/gl.h>
+#include <mach/mach_time.h>
 
 // Bad header!
 extern "C" {
@@ -23,9 +41,1171 @@ static const unsigned int g_iStyleMask = NSWindowStyleMaskTitled | NSWindowStyle
                                          NSWindowStyleMaskMiniaturizable |
                                          NSWindowStyleMaskResizable;
 static bool g_bResized;
+static bool g_bNativeWindowPresentationChanged;
+static int g_iNativeWindowPresentationChangeReason;
 static int g_iWidth;
 static int g_iHeight;
 static RageMutex g_ResizeLock("Window resize lock.");
+constexpr float kMacOSFramePacingDisplayLinkTimeoutMs = 33.0f;
+constexpr float kMacOSFramePacingDisplayLinkPresentLeadMs = 2.0f;
+constexpr float kMacOSFramePacingDisplayLinkLateToleranceMs = 1.0f;
+constexpr float kMacOSFramePacingDisplayLinkFinalSleepChunkMs = 0.5f;
+constexpr float kMacOSFramePacingDisplayLinkFinalYieldMs = 5.0f;
+constexpr float kMacOSFramePacingDisplayLinkFinalSpinMs = 1.5f;
+constexpr float kMacOSOpenGLFenceAutoWaitHighRefreshMs = 1.5f;
+constexpr float kMacOSOpenGLFenceAutoMinRefreshHz = 90.0f;
+constexpr float kMacOSOpenGLFenceTraceMinMs = 12.0f;
+static Preference<float> g_fPerfTraceSlowMacSwapBuffersMs(
+    "PerfTraceSlowMacSwapBuffersMs", 20.0f);
+// -1 means "auto": on high-refresh macOS/OpenGL, wait on the GPU fence until it
+// signals, but only up to a small budget.  This is not a blind sleep; it returns
+// as soon as GPU work is complete, and prevents CGLFlushDrawable from becoming
+// the first place that discovers unfinished GPU work.
+static Preference<float> g_fMacOSOpenGLFencePacingWaitMs(
+    "MacOSOpenGLFencePacingWaitMs", -1.0f);
+static Preference<std::string> g_sMacOSPresentBackend(
+    "MacOSPresentBackend", "opengl");
+static Preference<bool> g_bMacOSOpenGLMetalPresentBridge(
+    "MacOSOpenGLMetalPresentBridge", false);
+extern Preference<float> g_fFramePacingTargetHz;
+
+constexpr int kMetalBridgeInitialBuildDelayFrames = 5;
+constexpr int kMetalBridgeRetryDelayFrames = 30;
+constexpr int kMetalBridgeMaxBuildAttempts = 3;
+
+static MacOSOpenGLFenceWaitStats g_LastOpenGLFenceWaitStats;
+
+enum MacOSNativeWindowPresentationChangeReason {
+  kMacOSNativeWindowPresentationNone = 0,
+  kMacOSNativeWindowPresentationWillEnterFullscreen,
+  kMacOSNativeWindowPresentationDidEnterFullscreen,
+  kMacOSNativeWindowPresentationWillExitFullscreen,
+  kMacOSNativeWindowPresentationDidExitFullscreen,
+  kMacOSNativeWindowPresentationScreenChanged,
+  kMacOSNativeWindowPresentationBackingChanged,
+};
+
+static const char* MacOSNativeWindowPresentationReasonName(int reason) {
+  switch (reason) {
+    case kMacOSNativeWindowPresentationWillEnterFullscreen:
+      return "will_enter_fullscreen";
+    case kMacOSNativeWindowPresentationDidEnterFullscreen:
+      return "did_enter_fullscreen";
+    case kMacOSNativeWindowPresentationWillExitFullscreen:
+      return "will_exit_fullscreen";
+    case kMacOSNativeWindowPresentationDidExitFullscreen:
+      return "did_exit_fullscreen";
+    case kMacOSNativeWindowPresentationScreenChanged:
+      return "screen_changed";
+    case kMacOSNativeWindowPresentationBackingChanged:
+      return "backing_changed";
+    default:
+      return "none";
+  }
+}
+
+#ifndef GL_READ_FRAMEBUFFER_EXT
+#define GL_READ_FRAMEBUFFER_EXT 0x8CA8
+#endif
+#ifndef GL_DRAW_FRAMEBUFFER_EXT
+#define GL_DRAW_FRAMEBUFFER_EXT 0x8CA9
+#endif
+
+struct MacOSMetalOpenGLBridgeSurface {
+  GLuint texture = 0;
+  GLuint framebuffer = 0;
+  GLuint depth = 0;
+};
+
+struct MacOSMetalOpenGLBridge {
+  std::vector<MacOSMetalOpenGLBridgeSurface> surfaces;
+  GLenum textureTarget = GL_TEXTURE_RECTANGLE_ARB;
+  GLenum internalFormat = GL_RGBA;
+  GLenum format = GL_BGRA;
+  GLenum type = GL_UNSIGNED_INT_8_8_8_8_REV;
+  int width = 0;
+  int height = 0;
+};
+
+namespace {
+bool MacOSFramePacingUseDisplayLinkEnabled() {
+  return true;
+}
+
+float MacOSFramePacingDisplayLinkTimeoutMs() {
+  return kMacOSFramePacingDisplayLinkTimeoutMs;
+}
+
+float MacOSFramePacingDisplayLinkPresentLeadMs() {
+  return kMacOSFramePacingDisplayLinkPresentLeadMs;
+}
+
+float MacOSFramePacingDisplayLinkLateToleranceMs() {
+  return kMacOSFramePacingDisplayLinkLateToleranceMs;
+}
+
+float MacOSFramePacingDisplayLinkFinalSleepChunkMs() {
+  return kMacOSFramePacingDisplayLinkFinalSleepChunkMs;
+}
+
+float MacOSFramePacingDisplayLinkFinalYieldMs() {
+  return kMacOSFramePacingDisplayLinkFinalYieldMs;
+}
+
+float MacOSFramePacingDisplayLinkFinalSpinMs() {
+  return kMacOSFramePacingDisplayLinkFinalSpinMs;
+}
+
+int MacOSFramePacingOutputAlignedPresentMode() {
+  return 1;
+}
+}  // namespace
+
+namespace {
+uint64_t HostTimeToUsec(uint64_t hostTime) {
+  static mach_timebase_info_data_t timebase = {0, 0};
+  if (timebase.denom == 0) {
+    mach_timebase_info(&timebase);
+  }
+  if (timebase.numer == 0 || timebase.denom == 0) {
+    return 0;
+  }
+
+  const double usec =
+      static_cast<double>(hostTime) * static_cast<double>(timebase.numer) /
+      (1000.0 * static_cast<double>(timebase.denom));
+  return static_cast<uint64_t>(std::max(0.0, usec));
+}
+
+uint64_t UsecToHostTime(uint64_t hostUsec) {
+  static mach_timebase_info_data_t timebase = {0, 0};
+  if (timebase.denom == 0) {
+    mach_timebase_info(&timebase);
+  }
+  if (timebase.numer == 0 || timebase.denom == 0) {
+    return 0;
+  }
+
+  const double ticks =
+      static_cast<double>(hostUsec) * 1000.0 *
+      static_cast<double>(timebase.denom) /
+      static_cast<double>(timebase.numer);
+  return static_cast<uint64_t>(
+      std::max<long long>(1, std::llround(ticks)));
+}
+
+uint64_t RageStartHostUsec() {
+  const int64_t hostNowUsec = ArchHooks::GetSystemTimeInMicroseconds();
+  const uint64_t rageNowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  if (hostNowUsec <= 0 ||
+      static_cast<uint64_t>(hostNowUsec) <= rageNowUsec) {
+    return 0;
+  }
+  return static_cast<uint64_t>(hostNowUsec) - rageNowUsec;
+}
+
+void WaitUntilRageUsec(uint64_t targetRageUsec) {
+  const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  if (targetRageUsec <= nowUsec) {
+    return;
+  }
+
+  const uint64_t startHostUsec = RageStartHostUsec();
+  if (startHostUsec == 0) {
+    std::this_thread::sleep_for(
+        std::chrono::microseconds(targetRageUsec - nowUsec));
+    return;
+  }
+
+  const uint64_t targetHostTime =
+      UsecToHostTime(startHostUsec + targetRageUsec);
+  if (targetHostTime == 0) {
+    std::this_thread::sleep_for(
+        std::chrono::microseconds(targetRageUsec - nowUsec));
+    return;
+  }
+
+  mach_wait_until(targetHostTime);
+}
+
+uint64_t ClampedDisplayLinkUsecPreference(
+    float requestedMs, uint64_t fallbackUsec, uint64_t minimumUsec,
+    uint64_t maximumUsec) {
+  uint64_t requestedUsec = fallbackUsec;
+  if (std::isfinite(requestedMs) && requestedMs >= 0.0f) {
+    requestedUsec =
+        static_cast<uint64_t>(std::llround(requestedMs * 1000.0f));
+  }
+  return std::clamp<uint64_t>(
+      requestedUsec, minimumUsec, std::max(minimumUsec, maximumUsec));
+}
+
+struct DisplayLinkFinalWaitStats {
+  uint64_t total_usec = 0;
+  uint64_t sleep_usec = 0;
+  uint64_t yield_usec = 0;
+  uint64_t spin_usec = 0;
+  uint64_t overshoot_usec = 0;
+  int sleep_chunks = 0;
+  int yields = 0;
+};
+
+uint64_t DisplayLinkFinalSleepChunkUsec(uint64_t intervalUsec) {
+  const uint64_t maxSleepUsec =
+      std::max<uint64_t>(100, std::min<uint64_t>(500, intervalUsec / 8));
+  return ClampedDisplayLinkUsecPreference(
+      MacOSFramePacingDisplayLinkFinalSleepChunkMs(), 500, 100,
+      maxSleepUsec);
+}
+
+uint64_t DisplayLinkFinalYieldWindowUsec(
+    uint64_t periodUsec, uint64_t intervalUsec) {
+  const uint64_t effectivePeriodUsec =
+      periodUsec != 0 ? periodUsec : intervalUsec;
+  const uint64_t maxYieldUsec = std::max<uint64_t>(
+      5000, std::min<uint64_t>(7000, (effectivePeriodUsec * 3) / 4));
+  const uint64_t requestedYieldUsec =
+      ClampedDisplayLinkUsecPreference(
+          MacOSFramePacingDisplayLinkFinalYieldMs(), 5000, 1000,
+          maxYieldUsec);
+  return std::max<uint64_t>(5000, requestedYieldUsec);
+}
+
+uint64_t DisplayLinkFinalSpinWindowUsec(
+    uint64_t periodUsec, uint64_t intervalUsec,
+    uint64_t yieldWindowUsec) {
+  const uint64_t effectivePeriodUsec =
+      periodUsec != 0 ? periodUsec : intervalUsec;
+  const uint64_t maxSpinUsec = std::min<uint64_t>(
+      std::max<uint64_t>(100, yieldWindowUsec),
+      std::max<uint64_t>(1500, std::min<uint64_t>(2500,
+                                                  effectivePeriodUsec / 4)));
+  const uint64_t requestedSpinUsec =
+      ClampedDisplayLinkUsecPreference(
+          MacOSFramePacingDisplayLinkFinalSpinMs(), 1500, 0,
+          maxSpinUsec);
+  return std::max<uint64_t>(1500, requestedSpinUsec);
+}
+
+DisplayLinkFinalWaitStats WaitUntilDisplayLinkPresentUsec(
+    uint64_t targetUsec, uint64_t periodUsec, uint64_t intervalUsec) {
+  DisplayLinkFinalWaitStats stats;
+  const uint64_t startUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  uint64_t nowUsec = startUsec;
+  if (targetUsec <= nowUsec) {
+    return stats;
+  }
+
+  const uint64_t yieldWindowUsec =
+      DisplayLinkFinalYieldWindowUsec(periodUsec, intervalUsec);
+  const uint64_t spinWindowUsec =
+      DisplayLinkFinalSpinWindowUsec(
+          periodUsec, intervalUsec, yieldWindowUsec);
+  const uint64_t sleepChunkUsec =
+      DisplayLinkFinalSleepChunkUsec(intervalUsec);
+
+  while (nowUsec < targetUsec) {
+    const uint64_t remainingUsec = targetUsec - nowUsec;
+    if (remainingUsec > yieldWindowUsec) {
+      const uint64_t sleepLimitUsec = targetUsec - yieldWindowUsec;
+      const uint64_t sleepTargetUsec =
+          std::min<uint64_t>(nowUsec + sleepChunkUsec, sleepLimitUsec);
+      const uint64_t sleepStartUsec = nowUsec;
+      WaitUntilRageUsec(sleepTargetUsec);
+      nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+      stats.sleep_usec += nowUsec - sleepStartUsec;
+      ++stats.sleep_chunks;
+      continue;
+    }
+
+    if (remainingUsec > spinWindowUsec) {
+      const uint64_t yieldStartUsec = nowUsec;
+      std::this_thread::yield();
+      nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+      stats.yield_usec += nowUsec - yieldStartUsec;
+      ++stats.yields;
+      continue;
+    }
+
+    const uint64_t spinStartUsec = nowUsec;
+    do {
+      nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+    } while (nowUsec < targetUsec);
+    stats.spin_usec += nowUsec - spinStartUsec;
+    break;
+  }
+
+  stats.total_usec = nowUsec - startUsec;
+  if (nowUsec > targetUsec) {
+    stats.overshoot_usec = nowUsec - targetUsec;
+  }
+  return stats;
+}
+
+uint64_t HostTimeToRageUsec(uint64_t hostTime) {
+  const uint64_t hostUsec = HostTimeToUsec(hostTime);
+  const uint64_t startHostUsec = RageStartHostUsec();
+  if (hostUsec == 0 || startHostUsec == 0 || hostUsec <= startHostUsec) {
+    return RageTimer::GetTimeSinceStartMicroseconds();
+  }
+  return hostUsec - startHostUsec;
+}
+
+uint64_t PeriodFromTimestampUsec(const CVTimeStamp* outputTime) {
+  if (outputTime == nullptr || outputTime->videoTimeScale <= 0 ||
+      outputTime->videoRefreshPeriod <= 0) {
+    return 0;
+  }
+
+  const double periodUsec =
+      (static_cast<double>(outputTime->videoRefreshPeriod) * 1000000.0) /
+      static_cast<double>(outputTime->videoTimeScale);
+  if (!std::isfinite(periodUsec) || periodUsec <= 0.0) {
+    return 0;
+  }
+  return static_cast<uint64_t>(std::llround(periodUsec));
+}
+
+uint64_t DisplayLinkTimeoutUsec(uint64_t intervalUsec) {
+  const float timeoutMs = MacOSFramePacingDisplayLinkTimeoutMs();
+  uint64_t requestedUsec = 33000;
+  if (std::isfinite(timeoutMs) && timeoutMs > 0.0f) {
+    requestedUsec =
+        static_cast<uint64_t>(std::llround(timeoutMs * 1000.0f));
+  }
+  return std::clamp<uint64_t>(
+      requestedUsec, std::max<uint64_t>(1000, intervalUsec / 2),
+      std::max<uint64_t>(5000, intervalUsec * 4));
+}
+
+uint64_t DisplayLinkPresentLeadUsec(
+    uint64_t periodUsec, uint64_t intervalUsec,
+    uint64_t overrideUsec) {
+  uint64_t requestedUsec = overrideUsec;
+  if (requestedUsec == 0) {
+    const float requestedMs =
+        MacOSFramePacingDisplayLinkPresentLeadMs();
+    requestedUsec = 2000;
+    if (std::isfinite(requestedMs) && requestedMs >= 0.0f) {
+      requestedUsec =
+          static_cast<uint64_t>(std::llround(requestedMs * 1000.0f));
+    }
+  }
+
+  const uint64_t effectivePeriodUsec =
+      periodUsec != 0 ? periodUsec : intervalUsec;
+  const uint64_t maxLeadUsec =
+      overrideUsec != 0
+          ? std::min<uint64_t>(
+                8000, std::max<uint64_t>(
+                          500, (effectivePeriodUsec * 3) / 4))
+          : std::min<uint64_t>(
+                5000,
+                std::max<uint64_t>(500, effectivePeriodUsec / 2));
+  return std::clamp<uint64_t>(requestedUsec, 0, maxLeadUsec);
+}
+
+uint64_t DisplayLinkPhaseToleranceUsec(
+    uint64_t periodUsec, uint64_t intervalUsec) {
+  const uint64_t effectivePeriodUsec =
+      periodUsec != 0 ? periodUsec : intervalUsec;
+  return std::clamp<uint64_t>(
+      effectivePeriodUsec / 2, 500,
+      std::max<uint64_t>(500, effectivePeriodUsec));
+}
+
+uint64_t DisplayLinkLateToleranceUsec(
+    uint64_t periodUsec, uint64_t intervalUsec) {
+  const float requestedMs =
+      MacOSFramePacingDisplayLinkLateToleranceMs();
+  uint64_t requestedUsec = 1000;
+  if (std::isfinite(requestedMs) && requestedMs >= 0.0f) {
+    requestedUsec =
+        static_cast<uint64_t>(std::llround(requestedMs * 1000.0f));
+  }
+
+  const uint64_t effectivePeriodUsec =
+      periodUsec != 0 ? periodUsec : intervalUsec;
+  const uint64_t maxToleranceUsec =
+      std::max<uint64_t>(500, std::min(effectivePeriodUsec / 2,
+                                       std::max<uint64_t>(500,
+                                                          intervalUsec / 4)));
+  return std::clamp<uint64_t>(requestedUsec, 0, maxToleranceUsec);
+}
+
+uint64_t CappedDisplayLinkDesiredPresentUsec(
+    uint64_t desiredPresentUsec, uint64_t latestPresentUsec,
+    bool* capped) {
+  if (capped != nullptr) {
+    *capped = false;
+  }
+  if (desiredPresentUsec > latestPresentUsec) {
+    if (capped != nullptr) {
+      *capped = true;
+    }
+    return latestPresentUsec;
+  }
+  return desiredPresentUsec;
+}
+
+bool DisplayLinkUseOutputAlignedPresent(
+    uint64_t periodUsec, uint64_t intervalUsec) {
+  if (MacOSFramePacingOutputAlignedPresentMode() == 0) {
+    return false;
+  }
+  if (periodUsec == 0 || intervalUsec == 0) {
+    return false;
+  }
+
+  const uint64_t toleranceUsec =
+      std::max<uint64_t>(500, std::min<uint64_t>(periodUsec / 8, 1500));
+  return intervalUsec + toleranceUsec >= periodUsec &&
+         intervalUsec <= periodUsec + toleranceUsec;
+}
+
+uint64_t AbsDeltaUsec(uint64_t a, uint64_t b) {
+  return a > b ? a - b : b - a;
+}
+
+struct DisplayLinkOutputPhase {
+  uint64_t output_usec = 0;
+  int64_t output_to_target_usec = 0;
+  const char* source = "none";
+  bool valid = false;
+  bool phase_accepted = false;
+};
+
+bool DisplayLinkOutputAlignedPresentWouldCap(
+    const DisplayLinkOutputPhase& outputPhase, uint64_t presentLeadUsec,
+    uint64_t latestPresentUsec, uint64_t phaseToleranceUsec,
+    uint64_t displayLinkTickCount, int outputAlignedPresentMode) {
+  if (!outputPhase.valid || !outputPhase.phase_accepted ||
+      outputPhase.output_usec <= presentLeadUsec) {
+    return false;
+  }
+
+  const uint64_t desiredPresentUsec =
+      outputPhase.output_usec - presentLeadUsec;
+  if (desiredPresentUsec <= latestPresentUsec) {
+    return false;
+  }
+
+  if (outputAlignedPresentMode != 3) {
+    return false;
+  }
+
+  constexpr uint64_t kWarmupDisplayLinkTicks = 45;
+  if (displayLinkTickCount <= kWarmupDisplayLinkTicks) {
+    return false;
+  }
+
+  const uint64_t aheadUsec =
+      outputPhase.output_to_target_usec > 0
+          ? static_cast<uint64_t>(outputPhase.output_to_target_usec)
+          : 0;
+  const uint64_t strictAheadThresholdUsec =
+      std::max<uint64_t>(1500, (phaseToleranceUsec * 3) / 4);
+  return aheadUsec >= strictAheadThresholdUsec;
+}
+
+void ConsiderDisplayLinkOutputCandidate(
+    uint64_t candidateUsec, const char* source, uint64_t targetPresentUsec,
+    uint64_t phaseToleranceUsec, DisplayLinkOutputPhase* best) {
+  if (candidateUsec == 0 || best == nullptr) {
+    return;
+  }
+
+  const uint64_t candidateDelta =
+      AbsDeltaUsec(candidateUsec, targetPresentUsec);
+  const uint64_t bestDelta =
+      best->valid ? AbsDeltaUsec(best->output_usec, targetPresentUsec)
+                  : UINT64_MAX;
+  const bool candidateIsFutureOrTarget =
+      candidateUsec >= targetPresentUsec;
+  const bool bestIsFutureOrTarget =
+      best->valid && best->output_usec >= targetPresentUsec;
+  if (!best->valid || candidateDelta < bestDelta ||
+      (candidateDelta == bestDelta &&
+       candidateIsFutureOrTarget && !bestIsFutureOrTarget)) {
+    best->output_usec = candidateUsec;
+    best->output_to_target_usec =
+        static_cast<int64_t>(candidateUsec) -
+        static_cast<int64_t>(targetPresentUsec);
+    best->source = source;
+    best->valid = true;
+    best->phase_accepted = candidateDelta <= phaseToleranceUsec;
+  }
+}
+
+DisplayLinkOutputPhase SelectDisplayLinkOutputForTarget(
+    uint64_t lastOutputUsec, uint64_t targetPresentUsec,
+    uint64_t periodUsec, uint64_t phaseToleranceUsec,
+    bool allowNextOutput) {
+  DisplayLinkOutputPhase best;
+  if (lastOutputUsec == 0) {
+    return best;
+  }
+
+  if (periodUsec != 0 && lastOutputUsec > periodUsec) {
+    ConsiderDisplayLinkOutputCandidate(
+        lastOutputUsec - periodUsec, "previous", targetPresentUsec,
+        phaseToleranceUsec, &best);
+  }
+  ConsiderDisplayLinkOutputCandidate(
+      lastOutputUsec, "current", targetPresentUsec, phaseToleranceUsec,
+      &best);
+  if (allowNextOutput && periodUsec != 0 &&
+      lastOutputUsec <= UINT64_MAX - periodUsec) {
+    ConsiderDisplayLinkOutputCandidate(
+        lastOutputUsec + periodUsec, "next", targetPresentUsec,
+        phaseToleranceUsec, &best);
+  }
+  return best;
+}
+
+class MacOSDisplayLinkPacer {
+ public:
+  ~MacOSDisplayLinkPacer() {
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    if (m_DisplayLink != nullptr) {
+      CVDisplayLinkStop(m_DisplayLink);
+      CVDisplayLinkRelease(m_DisplayLink);
+      m_DisplayLink = nullptr;
+      m_Started = false;
+    }
+  }
+
+  bool WaitForTarget(
+      uint64_t targetPresentUsec, uint64_t intervalUsec, bool appHasFocus,
+      uint64_t presentLeadOverrideUsec,
+      MacOSFramePacingDisplayLinkStats* stats) {
+    FillBaseStats(stats);
+    if (!MacOSFramePacingUseDisplayLinkEnabled()) {
+      if (stats != nullptr) {
+        stats->status = "disabled";
+      }
+      return false;
+    }
+    if (!appHasFocus) {
+      if (stats != nullptr) {
+        stats->status = "not_focused";
+      }
+      return false;
+    }
+    if (!EnsureStarted()) {
+      if (stats != nullptr) {
+        FillBaseStats(stats);
+      }
+      return false;
+    }
+
+    CGLContextObj currentContext = CGLGetCurrentContext();
+    BindCurrentContext(currentContext);
+
+    const uint64_t startUsec = RageTimer::GetTimeSinceStartMicroseconds();
+    const uint64_t timeoutUsec = DisplayLinkTimeoutUsec(intervalUsec);
+    const uint64_t timeoutDeadlineUsec =
+        startUsec + std::max<uint64_t>(timeoutUsec, intervalUsec / 2);
+
+    std::unique_lock<std::mutex> lock(m_Mutex);
+    const uint64_t startTick = m_TickCount;
+    const uint64_t initialPeriodUsec =
+        m_LastPeriodUsec != 0 ? m_LastPeriodUsec : intervalUsec;
+    const uint64_t initialPresentLeadUsec =
+        DisplayLinkPresentLeadUsec(
+            initialPeriodUsec, intervalUsec, presentLeadOverrideUsec);
+    const uint64_t initialLateToleranceUsec =
+        DisplayLinkLateToleranceUsec(initialPeriodUsec, intervalUsec);
+    const int outputAlignedPresentMode =
+        MacOSFramePacingOutputAlignedPresentMode();
+    const bool initialOutputAlignedPresent =
+        DisplayLinkUseOutputAlignedPresent(initialPeriodUsec, intervalUsec);
+    const uint64_t latestAllowedUsec =
+        (targetPresentUsec > initialPresentLeadUsec
+             ? targetPresentUsec - initialPresentLeadUsec
+             : targetPresentUsec) +
+        initialLateToleranceUsec;
+    bool timedOut = false;
+    const char* status = "ok";
+    for (;;) {
+      const bool hasFreshTick = m_TickCount > startTick;
+      const uint64_t currentPeriodUsec =
+          m_LastPeriodUsec != 0 ? m_LastPeriodUsec : intervalUsec;
+      const uint64_t phaseToleranceUsec =
+          DisplayLinkPhaseToleranceUsec(currentPeriodUsec, intervalUsec);
+      const uint64_t currentPresentLeadUsec =
+          DisplayLinkPresentLeadUsec(
+              currentPeriodUsec, intervalUsec, presentLeadOverrideUsec);
+      const uint64_t currentLateToleranceUsec =
+          DisplayLinkLateToleranceUsec(currentPeriodUsec, intervalUsec);
+      const uint64_t currentLatestPresentUsec =
+          (targetPresentUsec > currentPresentLeadUsec
+               ? targetPresentUsec - currentPresentLeadUsec
+               : targetPresentUsec) +
+          currentLateToleranceUsec;
+      const bool outputAlignedPresent =
+          DisplayLinkUseOutputAlignedPresent(currentPeriodUsec, intervalUsec);
+      const DisplayLinkOutputPhase outputPhase =
+          SelectDisplayLinkOutputForTarget(
+              m_LastOutputRageUsec, targetPresentUsec,
+              currentPeriodUsec, phaseToleranceUsec,
+              outputAlignedPresentMode < 2);
+      const bool outputAlignedCapRejected =
+          outputAlignedPresentMode == 3 &&
+          DisplayLinkOutputAlignedPresentWouldCap(
+              outputPhase, currentPresentLeadUsec,
+              currentLatestPresentUsec, phaseToleranceUsec,
+              m_TickCount, outputAlignedPresentMode);
+
+      if (outputAlignedPresent && outputPhase.phase_accepted &&
+          !outputAlignedCapRejected) {
+        status = "output_aligned";
+        break;
+      }
+      if (hasFreshTick && outputPhase.phase_accepted) {
+        break;
+      }
+
+      const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+      if (!initialOutputAlignedPresent && nowUsec >= latestAllowedUsec) {
+        status = "target_cap";
+        break;
+      }
+      if (nowUsec >= timeoutDeadlineUsec) {
+        timedOut = true;
+        status = "timeout";
+        break;
+      }
+
+      const uint64_t effectiveDeadlineUsec =
+          initialOutputAlignedPresent
+              ? timeoutDeadlineUsec
+              : std::min<uint64_t>(timeoutDeadlineUsec,
+                                   latestAllowedUsec);
+      const uint64_t waitUsec =
+          std::min<uint64_t>(effectiveDeadlineUsec - nowUsec, 1000);
+      m_Cond.wait_for(lock, std::chrono::microseconds(waitUsec));
+    }
+
+    const uint64_t tickCount = m_TickCount;
+    const uint64_t ticksDuringWait = tickCount - startTick;
+    const uint64_t lastOutputUsec = m_LastOutputRageUsec;
+    const uint64_t periodUsec =
+        m_LastPeriodUsec != 0 ? m_LastPeriodUsec : intervalUsec;
+    lock.unlock();
+
+    const uint64_t presentLeadUsec =
+        DisplayLinkPresentLeadUsec(
+            periodUsec, intervalUsec, presentLeadOverrideUsec);
+    const uint64_t phaseToleranceUsec =
+        DisplayLinkPhaseToleranceUsec(periodUsec, intervalUsec);
+    const uint64_t lateToleranceUsec =
+        DisplayLinkLateToleranceUsec(periodUsec, intervalUsec);
+    const uint64_t latestPresentUsec =
+        (targetPresentUsec > presentLeadUsec
+             ? targetPresentUsec - presentLeadUsec
+             : targetPresentUsec) +
+        lateToleranceUsec;
+    const DisplayLinkOutputPhase outputPhase =
+        SelectDisplayLinkOutputForTarget(
+            lastOutputUsec, targetPresentUsec, periodUsec,
+            phaseToleranceUsec, outputAlignedPresentMode < 2);
+    const bool outputAlignedPresent =
+        DisplayLinkUseOutputAlignedPresent(periodUsec, intervalUsec) &&
+        outputPhase.phase_accepted &&
+        !(outputAlignedPresentMode == 3 &&
+          DisplayLinkOutputAlignedPresentWouldCap(
+              outputPhase, presentLeadUsec, latestPresentUsec,
+              phaseToleranceUsec, tickCount, outputAlignedPresentMode));
+    const bool outputAlignedCapRejected =
+        DisplayLinkUseOutputAlignedPresent(periodUsec, intervalUsec) &&
+        outputPhase.phase_accepted && !outputAlignedPresent &&
+        outputAlignedPresentMode == 3;
+    const bool selectedOutputPhaseAccepted =
+        outputPhase.phase_accepted;
+    uint64_t desiredPresentUsec =
+        outputAlignedPresent && selectedOutputPhaseAccepted &&
+                outputPhase.output_usec > presentLeadUsec
+            ? outputPhase.output_usec - presentLeadUsec
+            : targetPresentUsec > presentLeadUsec
+                  ? targetPresentUsec - presentLeadUsec
+                  : targetPresentUsec;
+    bool finalWaitCapped = false;
+    desiredPresentUsec = CappedDisplayLinkDesiredPresentUsec(
+        desiredPresentUsec, latestPresentUsec, &finalWaitCapped);
+    if (!timedOut && outputAlignedPresent) {
+      status = "output_aligned";
+    } else if (!timedOut && outputAlignedCapRejected) {
+      status = "output_cap_rejected";
+    } else if (!timedOut && !selectedOutputPhaseAccepted &&
+        std::strcmp(status, "target_cap") != 0) {
+      status = "phase_miss";
+    }
+    const uint64_t finalWaitStartUsec =
+        RageTimer::GetTimeSinceStartMicroseconds();
+    DisplayLinkFinalWaitStats finalWaitStats;
+    if (!timedOut &&
+        desiredPresentUsec > finalWaitStartUsec) {
+      finalWaitStats = WaitUntilDisplayLinkPresentUsec(
+          desiredPresentUsec, periodUsec, intervalUsec);
+    }
+
+    const uint64_t afterUsec = RageTimer::GetTimeSinceStartMicroseconds();
+    if (stats != nullptr) {
+      FillBaseStats(stats);
+      stats->waited = true;
+      stats->timed_out = timedOut;
+      stats->tick_count = tickCount;
+      stats->ticks_during_wait = ticksDuringWait;
+      stats->period_usec = periodUsec;
+      stats->wait_requested_usec =
+          desiredPresentUsec > startUsec ? desiredPresentUsec - startUsec : 0;
+      stats->wait_actual_usec = afterUsec - startUsec;
+      stats->final_wait_usec = finalWaitStats.total_usec;
+      stats->final_wait_sleep_usec = finalWaitStats.sleep_usec;
+      stats->final_wait_yield_usec = finalWaitStats.yield_usec;
+      stats->final_wait_spin_usec = finalWaitStats.spin_usec;
+      stats->final_wait_overshoot_usec = finalWaitStats.overshoot_usec;
+      stats->final_wait_sleep_chunks = finalWaitStats.sleep_chunks;
+      stats->final_wait_yields = finalWaitStats.yields;
+      stats->present_lead_usec = presentLeadUsec;
+      stats->late_tolerance_usec = lateToleranceUsec;
+      stats->phase_tolerance_usec = phaseToleranceUsec;
+      stats->target_present_usec = targetPresentUsec;
+      stats->desired_present_usec = desiredPresentUsec;
+      stats->latest_present_usec = latestPresentUsec;
+      stats->last_output_usec = lastOutputUsec;
+      stats->selected_output_usec = outputPhase.output_usec;
+      stats->output_to_target_usec =
+          lastOutputUsec == 0
+              ? 0
+              : static_cast<int64_t>(lastOutputUsec) -
+                    static_cast<int64_t>(targetPresentUsec);
+      stats->selected_output_to_target_usec =
+          outputPhase.valid ? outputPhase.output_to_target_usec : 0;
+      stats->output_late_usec =
+          outputPhase.output_usec == 0
+              ? 0
+              : static_cast<int64_t>(afterUsec) -
+                    static_cast<int64_t>(outputPhase.output_usec);
+      stats->final_wait_capped = finalWaitCapped;
+      stats->output_phase_accepted = selectedOutputPhaseAccepted;
+      stats->output_aligned_present_mode = outputAlignedPresentMode;
+      stats->output_aligned_present = outputAlignedPresent;
+      stats->output_aligned_cap_rejected = outputAlignedCapRejected;
+      stats->output_aligned_present_enabled =
+          outputAlignedPresentMode != 0;
+      stats->selected_output_source = outputPhase.source;
+      stats->status = status;
+    }
+    return true;
+  }
+
+  void Reset(const char* reason) {
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    m_TickCount = 0;
+    m_LastOutputRageUsec = 0;
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "MACOS_DISPLAY_LINK: reset reason=%s started=%d failed=%d",
+          reason != nullptr ? reason : "manual", m_Started ? 1 : 0,
+          m_Failed ? 1 : 0);
+    }
+  }
+
+  bool Enabled() const { return MacOSFramePacingUseDisplayLinkEnabled(); }
+
+  bool GetLastOutputSnapshot(
+      uint64_t* lastOutputUsec, uint64_t* periodUsec) {
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    if (m_LastOutputRageUsec == 0) {
+      return false;
+    }
+    if (lastOutputUsec != nullptr) {
+      *lastOutputUsec = m_LastOutputRageUsec;
+    }
+    if (periodUsec != nullptr) {
+      *periodUsec = m_LastPeriodUsec;
+    }
+    return true;
+  }
+
+ private:
+  static CVReturn Callback(
+      CVDisplayLinkRef displayLink, const CVTimeStamp* now,
+      const CVTimeStamp* outputTime, CVOptionFlags flagsIn,
+      CVOptionFlags* flagsOut, void* displayLinkContext) {
+    (void)displayLink;
+    (void)now;
+    (void)flagsIn;
+    (void)flagsOut;
+    auto* pacer =
+        static_cast<MacOSDisplayLinkPacer*>(displayLinkContext);
+    pacer->OnTick(outputTime);
+    return kCVReturnSuccess;
+  }
+
+  void OnTick(const CVTimeStamp* outputTime) {
+    uint64_t outputRageUsec = RageTimer::GetTimeSinceStartMicroseconds();
+    uint64_t periodUsec = 0;
+    if (outputTime != nullptr && outputTime->hostTime != 0) {
+      outputRageUsec = HostTimeToRageUsec(outputTime->hostTime);
+      periodUsec = PeriodFromTimestampUsec(outputTime);
+    }
+
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    ++m_TickCount;
+    m_LastOutputRageUsec = outputRageUsec;
+    if (periodUsec != 0) {
+      m_LastPeriodUsec = periodUsec;
+    }
+    m_Cond.notify_all();
+  }
+
+  bool EnsureStarted() {
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    if (m_Started) {
+      return true;
+    }
+    if (m_Failed) {
+      return false;
+    }
+
+    CVDisplayLinkRef displayLink = nullptr;
+    CVReturn result = CVDisplayLinkCreateWithActiveCGDisplays(&displayLink);
+    if (result != kCVReturnSuccess || displayLink == nullptr) {
+      m_Failed = true;
+      LOG->Warn(
+          "MACOS_DISPLAY_LINK: create_failed result=%d",
+          static_cast<int>(result));
+      return false;
+    }
+
+    result = CVDisplayLinkSetOutputCallback(
+        displayLink, &MacOSDisplayLinkPacer::Callback, this);
+    if (result != kCVReturnSuccess) {
+      CVDisplayLinkRelease(displayLink);
+      m_Failed = true;
+      LOG->Warn(
+          "MACOS_DISPLAY_LINK: callback_failed result=%d",
+          static_cast<int>(result));
+      return false;
+    }
+
+    BindCurrentContextLocked(displayLink, CGLGetCurrentContext());
+
+    result = CVDisplayLinkStart(displayLink);
+    if (result != kCVReturnSuccess) {
+      CVDisplayLinkRelease(displayLink);
+      m_Failed = true;
+      LOG->Warn(
+          "MACOS_DISPLAY_LINK: start_failed result=%d",
+          static_cast<int>(result));
+      return false;
+    }
+
+    m_DisplayLink = displayLink;
+    m_Started = true;
+    double actualPeriod = CVDisplayLinkGetActualOutputVideoRefreshPeriod(
+        m_DisplayLink);
+    uint64_t actualPeriodUsec = 0;
+    if (std::isfinite(actualPeriod) && actualPeriod > 0.0) {
+      actualPeriodUsec =
+          static_cast<uint64_t>(std::llround(actualPeriod * 1000000.0));
+      m_LastPeriodUsec = actualPeriodUsec;
+    }
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "MACOS_DISPLAY_LINK: started actual_period_us=%llu "
+          "current_context=%p bind_result=%d",
+          static_cast<unsigned long long>(actualPeriodUsec),
+          m_BoundContext, static_cast<int>(m_LastBindResult));
+    }
+    return true;
+  }
+
+  void BindCurrentContext(CGLContextObj currentContext) {
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    if (!m_Started || m_DisplayLink == nullptr ||
+        currentContext == m_BoundContext) {
+      return;
+    }
+    BindCurrentContextLocked(m_DisplayLink, currentContext);
+  }
+
+  void BindCurrentContextLocked(
+      CVDisplayLinkRef displayLink, CGLContextObj currentContext) {
+    if (displayLink == nullptr || currentContext == nullptr) {
+      return;
+    }
+
+    CGLPixelFormatObj pixelFormat = CGLGetPixelFormat(currentContext);
+    if (pixelFormat == nullptr) {
+      return;
+    }
+
+    m_LastBindResult = CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(
+        displayLink, currentContext, pixelFormat);
+    m_BoundContext = currentContext;
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "MACOS_DISPLAY_LINK: bound_context context=%p result=%d",
+          currentContext, static_cast<int>(m_LastBindResult));
+    }
+  }
+
+  void FillBaseStats(MacOSFramePacingDisplayLinkStats* stats) const {
+    if (stats == nullptr) {
+      return;
+    }
+    stats->available = true;
+    stats->enabled = MacOSFramePacingUseDisplayLinkEnabled();
+    stats->started = m_Started;
+    stats->status =
+        !stats->enabled ? "disabled" : m_Failed ? "failed" : "available";
+  }
+
+  std::mutex m_Mutex;
+  std::condition_variable m_Cond;
+  CVDisplayLinkRef m_DisplayLink = nullptr;
+  CGLContextObj m_BoundContext = nullptr;
+  CVReturn m_LastBindResult = kCVReturnSuccess;
+  uint64_t m_TickCount = 0;
+  uint64_t m_LastOutputRageUsec = 0;
+  uint64_t m_LastPeriodUsec = 0;
+  bool m_Started = false;
+  bool m_Failed = false;
+};
+
+MacOSDisplayLinkPacer& DisplayLinkPacer() {
+  static MacOSDisplayLinkPacer pacer;
+  return pacer;
+}
+}  // namespace
+
+bool MacOSFramePacingDisplayLinkEnabled() {
+  return DisplayLinkPacer().Enabled();
+}
+
+static bool MacOSFramePacingGetLastDisplayLinkOutput(
+    uint64_t* lastOutputUsec, uint64_t* periodUsec) {
+  return DisplayLinkPacer().GetLastOutputSnapshot(
+      lastOutputUsec, periodUsec);
+}
+
+bool MacOSFramePacingWaitForDisplayLink(
+    uint64_t targetPresentUsec, uint64_t intervalUsec, bool appHasFocus,
+    uint64_t presentLeadOverrideUsec,
+    MacOSFramePacingDisplayLinkStats* stats) {
+  return DisplayLinkPacer().WaitForTarget(
+      targetPresentUsec, intervalUsec, appHasFocus,
+      presentLeadOverrideUsec, stats);
+}
+
+void MacOSFramePacingResetDisplayLink(const char* reason) {
+  DisplayLinkPacer().Reset(reason);
+}
+
+bool MacOSOpenGLGetLastFenceWaitStats(MacOSOpenGLFenceWaitStats* stats) {
+  if (stats == nullptr) {
+    return false;
+  }
+  *stats = g_LastOpenGLFenceWaitStats;
+  return stats->available;
+}
+
+static float ExpectedFrameMsForRate(int rate) {
+  return rate > 0 ? 1000.0f / static_cast<float>(rate) : 0.0f;
+}
+
+static int MissedIntervalsForElapsedMs(float elapsedMs, float expectedMs) {
+  if (expectedMs <= 0.0f || elapsedMs <= 0.0f) {
+    return 0;
+  }
+  return std::max(0, static_cast<int>(std::ceil(elapsedMs / expectedMs)) - 1);
+}
+
+static float ClampMacOSFramePacingHz(float targetHz) {
+  if (!std::isfinite(targetHz) || targetHz <= 0.0f) {
+    return 0.0f;
+  }
+  return std::clamp(targetHz, 10.0f, 1000.0f);
+}
+
+static float EffectiveMacOSFramePacingTargetHz(const VideoModeParams& params) {
+  const float configuredHz =
+      ClampMacOSFramePacingHz(g_fFramePacingTargetHz.Get());
+  if (configuredHz > 0.0f) {
+    return configuredHz;
+  }
+  return params.rate > 0
+             ? ClampMacOSFramePacingHz(static_cast<float>(params.rate))
+             : 0.0f;
+}
+
+static bool MacOSMetalPresentRequested() {
+  return CompareNoCase(g_sMacOSPresentBackend.Get(), "metal") == 0;
+}
+
+static bool MacOSMetalBridgeEnabled() {
+  return MacOSMetalPresentRequested() &&
+         g_bMacOSOpenGLMetalPresentBridge.Get();
+}
+
+static bool MacOSMetalDirectPresentEnabled() {
+  return MacOSMetalBridgeEnabled();
+}
+
+static int MacOSOpenGLOffscreenPresentMode() {
+  return 1;
+}
+
+static const char* MacOSOpenGLOffscreenPresentModeName(int mode) {
+  switch (mode) {
+    case 0:
+      return "off";
+    case 1:
+      return "auto";
+    case 2:
+      return "always";
+    default:
+      return "unknown";
+  }
+}
+
+static int MacOSOpenGLOffscreenPresentMinRate() {
+  return 90;
+}
+
+static GLint DesiredMacOSSwapInterval(const VideoModeParams& params) {
+  if (!params.vsync) {
+    return 0;
+  }
+  return EffectiveMacOSFramePacingTargetHz(params) > 0.0f ? 0 : 1;
+}
+
+static GLint CurrentMacOSSwapInterval(NSOpenGLContext* context) {
+  if (context == nil) {
+    return -1;
+  }
+
+  GLint swap = -1;
+  if (CGLGetParameter([context CGLContextObj], kCGLCPSwapInterval, &swap) !=
+      kCGLNoError) {
+    return -1;
+  }
+  return swap;
+}
+
+static GLint DesiredMacOSMPSwapsInFlight() {
+  return 1;
+}
+
+static bool MacOSOpenGLHardwareVsyncForcedEnabled() {
+  return false;
+}
+
+static uint64_t MacOSOpenGLFencePacingWaitUsec(
+    const VideoModeParams& params) {
+  const float requestedMs = g_fMacOSOpenGLFencePacingWaitMs.Get();
+  if (!std::isfinite(requestedMs)) {
+    return 0;
+  }
+
+  float effectiveMs = requestedMs;
+  if (requestedMs < 0.0f) {
+    const float targetHz = EffectiveMacOSFramePacingTargetHz(params);
+    const bool highRefresh =
+        (targetHz >= kMacOSOpenGLFenceAutoMinRefreshHz) ||
+        (params.rate >= static_cast<int>(kMacOSOpenGLFenceAutoMinRefreshHz));
+    effectiveMs = highRefresh ? kMacOSOpenGLFenceAutoWaitHighRefreshMs : 0.0f;
+  }
+  if (effectiveMs <= 0.0f) {
+    return 0;
+  }
+  return std::min<uint64_t>(
+      5000,
+      static_cast<uint64_t>(std::llround(effectiveMs * 1000.0f)));
+}
+
+static const char* MacOSOpenGLFenceWaitStatusName(GLenum status) {
+  switch (status) {
+    case GL_ALREADY_SIGNALED:
+      return "already_signaled";
+    case GL_CONDITION_SATISFIED:
+      return "condition_satisfied";
+    case GL_TIMEOUT_EXPIRED:
+      return "timeout";
+    case GL_WAIT_FAILED:
+      return "wait_failed";
+    default:
+      return "unknown";
+  }
+}
+
+static GLint CurrentMacOSMPSwapsInFlight(NSOpenGLContext* context) {
+  if (context == nil) {
+    return -1;
+  }
+
+  GLint swapsInFlight = -1;
+  if (CGLGetParameter(
+          [context CGLContextObj], kCGLCPMPSwapsInFlight,
+          &swapsInFlight) != kCGLNoError) {
+    return -1;
+  }
+  return swapsInFlight;
+}
+
+static GLint ApplyMacOSMPSwapsInFlight(NSOpenGLContext* context) {
+  const GLint requestedSwapsInFlight = DesiredMacOSMPSwapsInFlight();
+  const GLint previousSwapsInFlight = CurrentMacOSMPSwapsInFlight(context);
+  if (context == nil || requestedSwapsInFlight <= 0) {
+    LOG->Trace(
+        "MacOS OpenGL MP swaps in flight configured: requested=%d actual=%d "
+        "previous=%d enabled=%d error=%d",
+        requestedSwapsInFlight, previousSwapsInFlight, previousSwapsInFlight,
+        0, 0);
+    return previousSwapsInFlight;
+  }
+
+  GLint appliedSwapsInFlight = requestedSwapsInFlight;
+  const CGLError error = CGLSetParameter(
+      [context CGLContextObj], kCGLCPMPSwapsInFlight, &appliedSwapsInFlight);
+  const GLint actualSwapsInFlight = CurrentMacOSMPSwapsInFlight(context);
+  LOG->Trace(
+      "MacOS OpenGL MP swaps in flight configured: requested=%d actual=%d "
+      "previous=%d enabled=%d error=%d",
+      requestedSwapsInFlight, actualSwapsInFlight, previousSwapsInFlight, 1,
+      static_cast<int>(error));
+  return actualSwapsInFlight;
+}
+
+static GLint ApplyMacOSSwapInterval(
+    NSOpenGLContext* context, const VideoModeParams& params, bool windowed) {
+  const GLint previousSwap = CurrentMacOSSwapInterval(context);
+  GLint desiredSwap = DesiredMacOSSwapInterval(params);
+  const CGLError error =
+      CGLSetParameter([context CGLContextObj], kCGLCPSwapInterval, &desiredSwap);
+  const GLint actualSwap = CurrentMacOSSwapInterval(context);
+  LOG->Trace(
+      "MacOS swap interval configured: requested_vsync=%d "
+      "desired_swap_interval=%d actual_swap_interval=%d "
+      "previous_swap_interval=%d frame_pacing_owns_swap=%d "
+      "hardware_vsync_forced=%d "
+      "frame_pacing_target_hz=%.3f configured_frame_pacing_target_hz=%.3f "
+      "windowed=%d error=%d",
+      params.vsync ? 1 : 0, desiredSwap, actualSwap, previousSwap,
+      actualSwap == 0 &&
+              EffectiveMacOSFramePacingTargetHz(params) > 0.0f
+          ? 1
+          : 0,
+      MacOSOpenGLHardwareVsyncForcedEnabled() ? 1 : 0,
+      EffectiveMacOSFramePacingTargetHz(params), g_fFramePacingTargetHz.Get(),
+      windowed ? 1 : 0,
+      static_cast<int>(error));
+  return actualSwap;
+}
 
 // Simple helper class
 class AutoreleasePool {
@@ -49,8 +1229,12 @@ class AutoreleasePool {
 - (void)windowDidResignKey:(NSNotification*)aNotification;
 - (void)windowWillClose:(NSNotification*)aNotification;
 - (void)windowDidResize:(NSNotification*)aNotification;
-// XXX maybe use whichever screen contains the window? Hard for me to test though.
-//- (void) windowDidChangeScreen:(NSNotification *)aNotification;
+- (void)windowWillEnterFullScreen:(NSNotification*)aNotification;
+- (void)windowDidEnterFullScreen:(NSNotification*)aNotification;
+- (void)windowWillExitFullScreen:(NSNotification*)aNotification;
+- (void)windowDidExitFullScreen:(NSNotification*)aNotification;
+- (void)windowDidChangeScreen:(NSNotification*)aNotification;
+- (void)windowDidChangeBackingProperties:(NSNotification*)aNotification;
 
 // Helper methods to perform actions on the main thread.
 - (void)setupWindow;
@@ -59,6 +1243,20 @@ class AutoreleasePool {
 @end
 
 @implementation SMWindowDelegate
+
+- (void)markNativePresentationChanged:(NSNotification*)aNotification
+                               reason:(int)reason {
+  id window = [aNotification object];
+  NSSize size =
+      [NSWindow contentRectForFrameRect:[window frame] styleMask:g_iStyleMask]
+          .size;
+
+  LockMut(g_ResizeLock);
+  g_bNativeWindowPresentationChanged = true;
+  g_iNativeWindowPresentationChangeReason = reason;
+  g_iWidth = int(size.width);
+  g_iHeight = int(size.height);
+}
 
 - (void)windowDidBecomeKey:(NSNotification*)aNotification {
   HOOKS->SetHasFocus(true);
@@ -80,6 +1278,36 @@ class AutoreleasePool {
   g_bResized = true;
   g_iWidth = int(size.width);
   g_iHeight = int(size.height);
+}
+
+- (void)windowWillEnterFullScreen:(NSNotification*)aNotification {
+  [self markNativePresentationChanged:aNotification
+                               reason:kMacOSNativeWindowPresentationWillEnterFullscreen];
+}
+
+- (void)windowDidEnterFullScreen:(NSNotification*)aNotification {
+  [self markNativePresentationChanged:aNotification
+                               reason:kMacOSNativeWindowPresentationDidEnterFullscreen];
+}
+
+- (void)windowWillExitFullScreen:(NSNotification*)aNotification {
+  [self markNativePresentationChanged:aNotification
+                               reason:kMacOSNativeWindowPresentationWillExitFullscreen];
+}
+
+- (void)windowDidExitFullScreen:(NSNotification*)aNotification {
+  [self markNativePresentationChanged:aNotification
+                               reason:kMacOSNativeWindowPresentationDidExitFullscreen];
+}
+
+- (void)windowDidChangeScreen:(NSNotification*)aNotification {
+  [self markNativePresentationChanged:aNotification
+                               reason:kMacOSNativeWindowPresentationScreenChanged];
+}
+
+- (void)windowDidChangeBackingProperties:(NSNotification*)aNotification {
+  [self markNativePresentationChanged:aNotification
+                               reason:kMacOSNativeWindowPresentationBackingChanged];
 }
 
 - (void)setupWindow {
@@ -281,7 +1509,16 @@ void RenderTarget_MacOSX::FinishRenderingTo() {
 }
 
 LowLevelWindow_MacOSX::LowLevelWindow_MacOSX()
-    : m_Context(nil), m_BGContext(nil), m_CurrentDisplayMode(nil), m_DisplayID(0) {
+    : m_Context(nil),
+      m_BGContext(nil),
+      m_CurrentDisplayMode(nil),
+      m_DisplayID(0),
+      m_MetalPresenter(new MacOSMetalPresenter()),
+      m_iMetalBridgeRenderSurfaceIndex(-1),
+      m_bMetalDirectPresentSubmittedThisFrame(false),
+      m_bMetalBridgeBuildPending(false),
+      m_iMetalBridgeBuildFrameCountdown(0),
+      m_iMetalBridgeBuildAttempts(0) {
   POOL;
   m_WindowDelegate = [[SMWindowDelegate alloc] init];
   [m_WindowDelegate performSelectorOnMainThread:@selector(setupWindow)
@@ -301,6 +1538,13 @@ LowLevelWindow_MacOSX::~LowLevelWindow_MacOSX() {
   ShutDownFullScreen();
 
   [m_Context clearDrawable];
+  ReleaseMetalOpenGLBridge();
+  if (m_MetalPresenter) {
+    m_MetalPresenter->Shutdown();
+  }
+  m_bMetalBridgeBuildPending = false;
+  m_iMetalBridgeBuildFrameCountdown = 0;
+  m_iMetalBridgeBuildAttempts = 0;
   [m_Context release];
   [m_BGContext clearDrawable];
   [m_BGContext release];
@@ -308,6 +1552,54 @@ LowLevelWindow_MacOSX::~LowLevelWindow_MacOSX() {
                                      withObject:nil
                                   waitUntilDone:YES];
   [m_WindowDelegate release];
+}
+
+bool LowLevelWindow_MacOSX::ShouldRenderOffscreen() const {
+  const int mode = MacOSOpenGLOffscreenPresentMode();
+  if (mode == 0) {
+    return false;
+  }
+
+  const float targetHz = EffectiveMacOSFramePacingTargetHz(m_CurrentParams);
+  if (mode == 2) {
+    return true;
+  }
+
+  return targetHz >= static_cast<float>(MacOSOpenGLOffscreenPresentMinRate());
+}
+
+const ActualVideoModeParams LowLevelWindow_MacOSX::GetActualVideoModeParams()
+    const {
+  return ActualVideoModeParams(
+      m_CurrentParams, m_CurrentParams.width, m_CurrentParams.height,
+      ShouldRenderOffscreen());
+}
+
+void* LowLevelWindow_MacOSX::GetNativeWindowHandle() const {
+  SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
+  return delegate != nil ? (void*)delegate->m_Window : nullptr;
+}
+
+static void ReleaseMetalOpenGLBridgeResources(
+    MacOSMetalOpenGLBridge* bridge) {
+  if (bridge == nullptr) {
+    return;
+  }
+
+  for (MacOSMetalOpenGLBridgeSurface& surface : bridge->surfaces) {
+    if (surface.depth != 0) {
+      glDeleteRenderbuffersEXT(1, &surface.depth);
+      surface.depth = 0;
+    }
+    if (surface.framebuffer != 0) {
+      glDeleteFramebuffersEXT(1, &surface.framebuffer);
+      surface.framebuffer = 0;
+    }
+    if (surface.texture != 0) {
+      glDeleteTextures(1, &surface.texture);
+      surface.texture = 0;
+    }
+  }
 }
 
 void* LowLevelWindow_MacOSX::GetProcAddress(std::string s) {
@@ -320,7 +1612,382 @@ void* LowLevelWindow_MacOSX::GetProcAddress(std::string s) {
   return dlsym(glHandle, s.c_str());
 }
 
+void LowLevelWindow_MacOSX::ReleaseMetalOpenGLBridge() {
+  m_MetalBridgeDiagnostics = MacOSMetalBridgeDiagnostics();
+  if (!m_MetalOpenGLBridge) {
+    return;
+  }
+
+  m_iMetalBridgeRenderSurfaceIndex = -1;
+  m_bMetalDirectPresentSubmittedThisFrame = false;
+  ReleaseMetalOpenGLBridgeResources(m_MetalOpenGLBridge.get());
+  m_MetalOpenGLBridge.reset();
+  while (glGetError() != GL_NO_ERROR);
+}
+
+bool LowLevelWindow_MacOSX::BuildMetalOpenGLBridge() {
+  RageTimer bridgeTimer;
+  if (!m_MetalPresenter || !m_MetalPresenter->IsInteropReady()) {
+    ReleaseMetalOpenGLBridge();
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_bridge_build skipped reason=not_ready "
+          "total_ms=%.3f",
+          bridgeTimer.GetDeltaTime() * 1000.0f);
+    }
+    return false;
+  }
+
+  CGLContextObj context = CGLGetCurrentContext();
+  IOSurfaceRef ioSurface = static_cast<IOSurfaceRef>(
+      m_MetalPresenter->InteropIOSurfaceAt(0));
+  const int width = m_MetalPresenter->InteropSurfaceWidth();
+  const int height = m_MetalPresenter->InteropSurfaceHeight();
+  if (context == nullptr || ioSurface == nullptr || width <= 0 || height <= 0) {
+    LOG->Warn(
+        "MacOS Metal presenter OpenGL bridge unavailable: invalid context or "
+        "IOSurface dimensions context=%p surface=%p size=%dx%d.",
+        context, ioSurface, width, height);
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_bridge_build failed reason=invalid_context "
+          "total_ms=%.3f",
+          bridgeTimer.GetDeltaTime() * 1000.0f);
+    }
+    return false;
+  }
+
+  if (m_MetalOpenGLBridge &&
+      m_MetalOpenGLBridge->width == width &&
+      m_MetalOpenGLBridge->height == height &&
+      static_cast<int>(m_MetalOpenGLBridge->surfaces.size()) ==
+          m_MetalPresenter->InteropSurfaceCount()) {
+    return true;
+  }
+
+  ReleaseMetalOpenGLBridge();
+
+  struct BridgeAttempt {
+    GLenum textureTarget;
+    GLenum internalFormat;
+    GLenum format;
+    GLenum type;
+    const char* name;
+  };
+
+  // Apple's CGLIOSurface header documents GL_TEXTURE_RECTANGLE_ARB as the
+  // supported target for CGLTexImageIOSurface2D.  The standalone interop POC
+  // confirmed that rectangle textures work on Apple Silicon while GL_TEXTURE_2D
+  // returns kCGLBadValue (10008), so the engine only probes the safe rectangle
+  // path.
+  const BridgeAttempt attempts[] = {
+      {GL_TEXTURE_RECTANGLE_ARB, GL_RGBA, GL_BGRA,
+       GL_UNSIGNED_INT_8_8_8_8_REV, "rect_rgba_bgra8888rev"},
+      {GL_TEXTURE_RECTANGLE_ARB, GL_RGBA8, GL_BGRA,
+       GL_UNSIGNED_INT_8_8_8_8_REV, "rect_rgba8_bgra8888rev"},
+  };
+
+  while (glGetError() != GL_NO_ERROR);
+
+  for (const BridgeAttempt& attempt : attempts) {
+    std::unique_ptr<MacOSMetalOpenGLBridge> bridge(
+        new MacOSMetalOpenGLBridge());
+    bridge->textureTarget = attempt.textureTarget;
+    bridge->internalFormat = attempt.internalFormat;
+    bridge->format = attempt.format;
+    bridge->type = attempt.type;
+    bridge->width = width;
+    bridge->height = height;
+    bridge->surfaces.resize(m_MetalPresenter->InteropSurfaceCount());
+
+    bool attemptOk = true;
+    for (int i = 0; i < m_MetalPresenter->InteropSurfaceCount(); ++i) {
+      IOSurfaceRef attemptSurface = static_cast<IOSurfaceRef>(
+          m_MetalPresenter->InteropIOSurfaceAt(i));
+      MacOSMetalOpenGLBridgeSurface& bridgeSurface = bridge->surfaces[i];
+      CGLError imageError = kCGLNoError;
+      GLenum glErrorAfterImage = GL_NO_ERROR;
+      GLenum fboStatus = GL_FRAMEBUFFER_COMPLETE_EXT;
+
+      glGenTextures(1, &bridgeSurface.texture);
+      glBindTexture(attempt.textureTarget, bridgeSurface.texture);
+      glTexParameteri(
+          attempt.textureTarget, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(
+          attempt.textureTarget, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      glTexParameteri(
+          attempt.textureTarget, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameteri(
+          attempt.textureTarget, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "MacOS Metal presenter OpenGL bridge attempt starting: attempt=%s "
+            "surface_index=%d size=%dx%d target=0x%x internal=0x%x "
+            "format=0x%x type=0x%x surface=%p texture=%u",
+            attempt.name, i, width, height,
+            static_cast<unsigned int>(attempt.textureTarget),
+            static_cast<unsigned int>(attempt.internalFormat),
+            static_cast<unsigned int>(attempt.format),
+            static_cast<unsigned int>(attempt.type), attemptSurface,
+            bridgeSurface.texture);
+      }
+
+      imageError = CGLTexImageIOSurface2D(
+          context, attempt.textureTarget, attempt.internalFormat, width, height,
+          attempt.format, attempt.type, attemptSurface, 0);
+      glErrorAfterImage = glGetError();
+
+      if (imageError == kCGLNoError && glErrorAfterImage == GL_NO_ERROR) {
+        glGenFramebuffersEXT(1, &bridgeSurface.framebuffer);
+        glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, bridgeSurface.framebuffer);
+        glFramebufferTexture2DEXT(
+            GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT,
+            attempt.textureTarget, bridgeSurface.texture, 0);
+
+        fboStatus = glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
+      }
+
+      if (imageError != kCGLNoError || glErrorAfterImage != GL_NO_ERROR ||
+          fboStatus != GL_FRAMEBUFFER_COMPLETE_EXT) {
+        attemptOk = false;
+        if (PerfDiagnosticsEnabled()) {
+          LOG->Trace(
+              "MacOS Metal presenter OpenGL bridge attempt failed: attempt=%s "
+              "surface_index=%d cgl_error=%d gl_error_after_image=0x%x "
+              "fbo_status=0x%x size=%dx%d target=0x%x internal=0x%x "
+              "format=0x%x type=0x%x",
+              attempt.name, i, static_cast<int>(imageError),
+              static_cast<unsigned int>(glErrorAfterImage),
+              static_cast<unsigned int>(fboStatus), width, height,
+              static_cast<unsigned int>(attempt.textureTarget),
+              static_cast<unsigned int>(attempt.internalFormat),
+              static_cast<unsigned int>(attempt.format),
+              static_cast<unsigned int>(attempt.type));
+        }
+        break;
+      }
+    }
+
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+    glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, 0);
+    glBindTexture(attempt.textureTarget, 0);
+    while (glGetError() != GL_NO_ERROR);
+
+    if (attemptOk) {
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "MacOS Metal presenter OpenGL bridge ready: attempt=%s "
+            "surface_count=%d size=%dx%d target=0x%x internal=0x%x "
+            "format=0x%x type=0x%x total_ms=%.3f",
+            attempt.name, static_cast<int>(bridge->surfaces.size()), width,
+            height, static_cast<unsigned int>(attempt.textureTarget),
+            static_cast<unsigned int>(attempt.internalFormat),
+            static_cast<unsigned int>(attempt.format),
+            static_cast<unsigned int>(attempt.type),
+            bridgeTimer.GetDeltaTime() * 1000.0f);
+      }
+      m_MetalOpenGLBridge = std::move(bridge);
+      return true;
+    }
+
+    ReleaseMetalOpenGLBridgeResources(bridge.get());
+  }
+
+  LOG->Warn(
+      "MacOS Metal presenter OpenGL bridge unavailable: "
+      "CGLTexImageIOSurface2D/FBO validation failed for all attempts "
+      "size=%dx%d surface_count=%d total_ms=%.3f.",
+      width, height, m_MetalPresenter->InteropSurfaceCount(),
+      bridgeTimer.GetDeltaTime() * 1000.0f);
+  return false;
+}
+
+bool LowLevelWindow_MacOSX::PresentOpenGLBackbufferViaMetal() {
+  RageTimer bridgePresentTimer;
+  if (!MacOSMetalDirectPresentEnabled() || !m_MetalPresenter ||
+      !m_MetalOpenGLBridge || m_MetalOpenGLBridge->surfaces.empty() ||
+      !m_MetalPresenter->IsLayerAttached()) {
+    if (m_MetalPresenter) {
+      m_MetalPresenter->SetLayerVisible(false);
+    }
+    return false;
+  }
+
+  using GLBlitFramebufferEXTProc = void (*)(
+      GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield,
+      GLenum);
+  static GLBlitFramebufferEXTProc s_blitFramebuffer = nullptr;
+  if (s_blitFramebuffer == nullptr) {
+    s_blitFramebuffer = reinterpret_cast<GLBlitFramebufferEXTProc>(
+        GetProcAddress("glBlitFramebufferEXT"));
+  }
+  auto* blitFramebuffer = s_blitFramebuffer;
+  if (blitFramebuffer == nullptr) {
+    m_MetalPresenter->SetLayerVisible(false);
+    return false;
+  }
+
+  const int surfaceCount =
+      static_cast<int>(m_MetalOpenGLBridge->surfaces.size());
+  int nextSurfaceIndex = -1;
+  constexpr int kSurfaceWaitAttempts = 16;
+  constexpr int kSurfaceWaitAttemptUsec = 100;
+  RageTimer surfaceWaitTimer;
+  for (int waitAttempt = 0;
+       waitAttempt < kSurfaceWaitAttempts && nextSurfaceIndex < 0;
+       ++waitAttempt) {
+    for (int offset = 1; offset <= surfaceCount; ++offset) {
+      const int candidate =
+          (m_iMetalBridgeRenderSurfaceIndex + offset) % surfaceCount;
+      if (!m_MetalPresenter->IsInteropSurfaceBusy(candidate)) {
+        nextSurfaceIndex = candidate;
+        break;
+      }
+    }
+    if (nextSurfaceIndex < 0) {
+      std::this_thread::sleep_for(
+          std::chrono::microseconds(kSurfaceWaitAttemptUsec));
+    }
+  }
+  const float surfaceWaitMs = surfaceWaitTimer.GetDeltaTime() * 1000.0f;
+
+  if (nextSurfaceIndex < 0) {
+    if (PerfDiagnosticsEnabled()) {
+      ++m_MetalBridgeDiagnostics.busySurfaceFrames;
+      if (m_MetalBridgeDiagnostics.busySurfaceFrames <= 3 ||
+          m_MetalBridgeDiagnostics.busySurfaceFrames % 5000 == 0) {
+        LOG->Trace(
+            "PERF_TRACE: macos_metal_backbuffer_present_unavailable "
+            "reason=busy_iosurfaces surface_count=%d wait_budget_us=%d "
+            "frames=%llu",
+            surfaceCount,
+            kSurfaceWaitAttempts * kSurfaceWaitAttemptUsec,
+            static_cast<unsigned long long>(
+                m_MetalBridgeDiagnostics.busySurfaceFrames));
+      }
+    }
+    m_MetalPresenter->SetLayerVisible(false);
+    return false;
+  }
+
+  m_iMetalBridgeRenderSurfaceIndex = nextSurfaceIndex;
+  const MacOSMetalOpenGLBridgeSurface& surface =
+      m_MetalOpenGLBridge->surfaces[m_iMetalBridgeRenderSurfaceIndex];
+  if (surface.framebuffer == 0) {
+    m_MetalPresenter->SetLayerVisible(false);
+    return false;
+  }
+
+  glBindFramebufferEXT(GL_READ_FRAMEBUFFER_EXT, 0);
+  glReadBuffer(GL_BACK);
+  glBindFramebufferEXT(GL_DRAW_FRAMEBUFFER_EXT, surface.framebuffer);
+  glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
+  blitFramebuffer(
+      0, 0, m_CurrentParams.width, m_CurrentParams.height,
+      0, 0, m_MetalOpenGLBridge->width, m_MetalOpenGLBridge->height,
+      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+  glReadBuffer(GL_BACK);
+  glDrawBuffer(GL_BACK);
+  glViewport(0, 0, m_CurrentParams.width, m_CurrentParams.height);
+
+  GLsync metalReadFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+  GLenum metalReadFenceStatus = GL_WAIT_FAILED;
+  RageTimer fenceWaitTimer;
+  if (metalReadFence != nullptr) {
+    metalReadFenceStatus =
+        glClientWaitSync(metalReadFence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+    if (metalReadFenceStatus == GL_TIMEOUT_EXPIRED) {
+      metalReadFenceStatus = glClientWaitSync(metalReadFence, 0, 1500 * 1000);
+    }
+    glDeleteSync(metalReadFence);
+  }
+  const float fenceWaitMs = fenceWaitTimer.GetDeltaTime() * 1000.0f;
+
+  const bool metalReadFenceReady =
+      metalReadFenceStatus == GL_ALREADY_SIGNALED ||
+      metalReadFenceStatus == GL_CONDITION_SATISFIED;
+  if (!metalReadFenceReady) {
+    if (PerfDiagnosticsEnabled()) {
+      ++m_MetalBridgeDiagnostics.fenceFallbackFrames;
+      if (m_MetalBridgeDiagnostics.fenceFallbackFrames <= 3 ||
+          m_MetalBridgeDiagnostics.fenceFallbackFrames % 5000 == 0) {
+        LOG->Trace(
+            "PERF_TRACE: macos_metal_backbuffer_present_unavailable "
+            "reason=gl_fence_not_ready status=0x%x wait_budget_us=1500 "
+            "surface_wait_ms=%.3f fence_wait_ms=%.3f bridge_present_ms=%.3f "
+            "frames=%llu",
+            metalReadFenceStatus, surfaceWaitMs, fenceWaitMs,
+            bridgePresentTimer.GetDeltaTime() * 1000.0f,
+            static_cast<unsigned long long>(
+                m_MetalBridgeDiagnostics.fenceFallbackFrames));
+      }
+    }
+    m_MetalPresenter->SetLayerVisible(false);
+    return false;
+  }
+
+  m_bMetalDirectPresentSubmittedThisFrame =
+      m_MetalPresenter->PresentInteropSurfaceAt(
+          m_iMetalBridgeRenderSurfaceIndex,
+          EffectiveMacOSFramePacingTargetHz(m_CurrentParams));
+  const float bridgePresentMs = bridgePresentTimer.GetDeltaTime() * 1000.0f;
+  if (!m_bMetalDirectPresentSubmittedThisFrame &&
+      PerfDiagnosticsEnabled()) {
+    ++m_MetalBridgeDiagnostics.presentFailedFrames;
+    if (m_MetalBridgeDiagnostics.presentFailedFrames <= 3 ||
+        m_MetalBridgeDiagnostics.presentFailedFrames % 5000 == 0 ||
+        bridgePresentMs >= 2.0f || surfaceWaitMs >= 0.5f ||
+        fenceWaitMs >= 0.5f) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_backbuffer_present_unavailable "
+          "reason=present_failed path=opengl_interop surface_index=%d "
+          "surface_wait_ms=%.3f fence_wait_ms=%.3f bridge_present_ms=%.3f "
+          "fence_status=0x%x source_size=%dx%d target_size=%dx%d frames=%llu",
+          m_iMetalBridgeRenderSurfaceIndex, surfaceWaitMs, fenceWaitMs,
+          bridgePresentMs, metalReadFenceStatus, m_CurrentParams.width,
+          m_CurrentParams.height, m_MetalOpenGLBridge->width,
+          m_MetalOpenGLBridge->height,
+          static_cast<unsigned long long>(
+              m_MetalBridgeDiagnostics.presentFailedFrames));
+    }
+  }
+  if (m_bMetalDirectPresentSubmittedThisFrame &&
+      PerfDiagnosticsEnabled()) {
+    ++m_MetalBridgeDiagnostics.presentedFrames;
+    if (!m_MetalBridgeDiagnostics.loggedFirstPresent) {
+      LOG->Trace(
+          "MacOS Metal backbuffer present active: surface_count=%d "
+          "size=%dx%d source_size=%dx%d",
+          surfaceCount, m_MetalOpenGLBridge->width,
+          m_MetalOpenGLBridge->height, m_CurrentParams.width,
+          m_CurrentParams.height);
+      m_MetalBridgeDiagnostics.loggedFirstPresent = true;
+    }
+    if (m_MetalBridgeDiagnostics.presentedFrames <= 5 ||
+        m_MetalBridgeDiagnostics.presentedFrames % 600 == 0 ||
+        bridgePresentMs >= 2.0f || surfaceWaitMs >= 0.5f ||
+        fenceWaitMs >= 0.5f) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_backbuffer_present path=opengl_interop "
+          "frame=%llu surface_index=%d surface_wait_ms=%.3f "
+          "fence_wait_ms=%.3f bridge_present_ms=%.3f fence_status=0x%x "
+          "source_size=%dx%d target_size=%dx%d",
+          static_cast<unsigned long long>(
+              m_MetalBridgeDiagnostics.presentedFrames),
+          m_iMetalBridgeRenderSurfaceIndex, surfaceWaitMs, fenceWaitMs,
+          bridgePresentMs, metalReadFenceStatus, m_CurrentParams.width,
+          m_CurrentParams.height, m_MetalOpenGLBridge->width,
+          m_MetalOpenGLBridge->height);
+    }
+  }
+  m_MetalPresenter->SetLayerVisible(m_bMetalDirectPresentSubmittedThisFrame);
+  return m_bMetalDirectPresentSubmittedThisFrame;
+}
+
 std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& newDeviceOut) {
+  RageTimer tryVideoModeTimer;
   // Always set these params.
   m_CurrentParams.bSmoothLines = p.bSmoothLines;
   m_CurrentParams.bTrilinearFiltering = p.bTrilinearFiltering;
@@ -332,10 +1999,153 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
 #define X(x) p.x != m_CurrentParams.x
   const bool bRebuildContext = X(bpp) || X(windowed) || !m_Context;
   const bool bChangeMode = X(width) || X(height) || X(rate) || bRebuildContext;
-  const bool bChangeVsync = X(vsync) || bRebuildContext;
 #undef X
+  const GLint desiredSwapInterval = DesiredMacOSSwapInterval(p);
+  const GLint currentSwapInterval = CurrentMacOSSwapInterval(m_Context);
+  const GLint desiredMPSwapsInFlight = DesiredMacOSMPSwapsInFlight();
+  const GLint currentMPSwapsInFlight = CurrentMacOSMPSwapsInFlight(m_Context);
+  const bool bChangeVsync =
+      bRebuildContext || currentSwapInterval != desiredSwapInterval;
+  const bool bChangeMPSwapsInFlight =
+      bRebuildContext ||
+      (desiredMPSwapsInFlight > 0 &&
+       currentMPSwapsInFlight != desiredMPSwapsInFlight);
+  const bool bMetalBridgeRequested = MacOSMetalBridgeEnabled();
+  const bool bChangePresentBackend =
+      bMetalBridgeRequested
+          ? (m_MetalPresenter && !m_MetalPresenter->IsAvailable())
+          : (m_MetalPresenter && m_MetalPresenter->IsAvailable());
 
-  if (!bChangeMode && !bChangeVsync) {
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: macos_try_video_mode_start requested_windowed=%d "
+        "current_windowed=%d requested_size=%dx%d current_size=%dx%d "
+        "requested_rate=%d current_rate=%d rebuild_context=%d change_mode=%d "
+        "change_vsync=%d change_mp_swaps=%d change_present_backend=%d "
+        "metal_requested=%d",
+        p.windowed ? 1 : 0, m_CurrentParams.windowed ? 1 : 0, p.width,
+        p.height, m_CurrentParams.width, m_CurrentParams.height, p.rate,
+        m_CurrentParams.rate, bRebuildContext ? 1 : 0, bChangeMode ? 1 : 0,
+        bChangeVsync ? 1 : 0, bChangeMPSwapsInFlight ? 1 : 0,
+        bChangePresentBackend ? 1 : 0, bMetalBridgeRequested ? 1 : 0);
+  }
+
+  auto configurePresentBackend = [&](bool windowed) {
+    RageTimer backendTimer;
+    if (bMetalBridgeRequested && m_MetalPresenter && windowed) {
+      SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
+      RageTimer releaseBridgeTimer;
+      ReleaseMetalOpenGLBridge();
+      const float releaseBridgeMs = releaseBridgeTimer.GetDeltaTime() * 1000.0f;
+      RageTimer initTimer;
+      if ([NSThread isMainThread]) {
+        m_MetalPresenter->Initialize(
+            (void*)delegate->m_Window, m_CurrentParams.width,
+            m_CurrentParams.height,
+            EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
+      } else {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          m_MetalPresenter->Initialize(
+              (void*)delegate->m_Window, m_CurrentParams.width,
+              m_CurrentParams.height,
+              EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
+        });
+      }
+      const float initMs = initTimer.GetDeltaTime() * 1000.0f;
+      float attachMs = 0.0f;
+      if (m_MetalPresenter->IsInteropReady()) {
+        RageTimer attachTimer;
+        if (MacOSMetalDirectPresentEnabled()) {
+          m_MetalPresenter->AttachLayerToWindow((void*)delegate->m_Window);
+        } else {
+          m_MetalPresenter->DetachLayer();
+        }
+        attachMs = attachTimer.GetDeltaTime() * 1000.0f;
+        m_bMetalBridgeBuildPending = true;
+        m_iMetalBridgeBuildFrameCountdown =
+            kMetalBridgeInitialBuildDelayFrames;
+        m_iMetalBridgeBuildAttempts = 0;
+        if (PerfDiagnosticsEnabled()) {
+          LOG->Trace(
+              "MacOS Metal bridge build queued: frames_until_build=%d "
+              "max_attempts=%d retry_delay_frames=%d",
+              m_iMetalBridgeBuildFrameCountdown, kMetalBridgeMaxBuildAttempts,
+              kMetalBridgeRetryDelayFrames);
+        }
+      }
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "PERF_TRACE: macos_present_backend_config path=metal total_ms=%.3f "
+            "release_bridge_ms=%.3f initialize_ms=%.3f attach_or_detach_ms=%.3f "
+            "windowed=%d interop_ready=%d layer_attached=%d size=%dx%d",
+            backendTimer.GetDeltaTime() * 1000.0f, releaseBridgeMs, initMs,
+            attachMs, windowed ? 1 : 0,
+            m_MetalPresenter->IsInteropReady() ? 1 : 0,
+            m_MetalPresenter->IsLayerAttached() ? 1 : 0,
+            m_CurrentParams.width, m_CurrentParams.height);
+      }
+    } else {
+      if (MacOSMetalPresentRequested() && !windowed) {
+        LOG->Warn(
+            "OpenGL + Metal Present is currently available only for windowed "
+            "OpenGL. Full-screen OpenGL keeps the historical presentation path; "
+            "use VideoRenderer=metal for the native Metal renderer.");
+      }
+      RageTimer releaseBridgeTimer;
+      ReleaseMetalOpenGLBridge();
+      const float releaseBridgeMs = releaseBridgeTimer.GetDeltaTime() * 1000.0f;
+      float shutdownMs = 0.0f;
+      if (m_MetalPresenter) {
+        RageTimer shutdownTimer;
+        m_MetalPresenter->Shutdown();
+        shutdownMs = shutdownTimer.GetDeltaTime() * 1000.0f;
+      }
+      m_bMetalBridgeBuildPending = false;
+      m_iMetalBridgeBuildFrameCountdown = 0;
+      m_iMetalBridgeBuildAttempts = 0;
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "PERF_TRACE: macos_present_backend_config path=opengl total_ms=%.3f "
+            "release_bridge_ms=%.3f shutdown_ms=%.3f windowed=%d "
+            "metal_requested=%d",
+            backendTimer.GetDeltaTime() * 1000.0f, releaseBridgeMs, shutdownMs,
+            windowed ? 1 : 0,
+            MacOSMetalPresentRequested() ? 1 : 0);
+      }
+    }
+
+    const bool effectiveMetal =
+        m_MetalPresenter && m_MetalPresenter->IsAvailable() &&
+        m_MetalPresenter->IsInteropReady() &&
+        m_MetalPresenter->IsLayerAttached() && windowed;
+    LOG->Trace(
+        "MacOS present backend: requested=%s effective=%s. "
+        "OpenGL offscreen present policy: mode=%s mode_value=%d "
+        "enabled=%d target_hz=%.3f min_rate=%d windowed=%d size=%dx%d "
+        "metal_bridge_requested=%d metal_direct_present_enabled=%d "
+        "metal_layer_attached=%d",
+        g_sMacOSPresentBackend.Get().c_str(),
+        effectiveMetal ? "metal" : "opengl",
+        MacOSOpenGLOffscreenPresentModeName(
+            MacOSOpenGLOffscreenPresentMode()),
+        MacOSOpenGLOffscreenPresentMode(), ShouldRenderOffscreen() ? 1 : 0,
+        EffectiveMacOSFramePacingTargetHz(m_CurrentParams),
+        MacOSOpenGLOffscreenPresentMinRate(), windowed ? 1 : 0,
+        m_CurrentParams.width, m_CurrentParams.height,
+        bMetalBridgeRequested ? 1 : 0,
+        MacOSMetalDirectPresentEnabled() ? 1 : 0,
+        effectiveMetal ? 1 : 0);
+  };
+
+  if (!bChangeMode && !bChangeVsync && !bChangeMPSwapsInFlight) {
+    if (bChangePresentBackend) {
+      configurePresentBackend(m_CurrentParams.windowed);
+    }
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "PERF_TRACE: macos_try_video_mode_end result=unchanged total_ms=%.3f",
+          tryVideoModeTimer.GetDeltaTime() * 1000.0f);
+    }
     return std::string();
   }
 
@@ -346,15 +2156,26 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
 
   // If we don't have focus, we cannot be full screen.
   if (p.windowed || !HOOKS->AppHasFocus()) {
+    RageTimer windowedPathTimer;
+    float createContextMs = 0.0f;
+    float shutdownFullscreenMs = 0.0f;
+    float setParamsMs = 0.0f;
+    float setViewMs = 0.0f;
+    float configureBackendMs = 0.0f;
     if (bRebuildContext) {
+      RageTimer createContextTimer;
       bool bShared;
       NSOpenGLContext* newContext = CreateOGLContext(
           WINDOWED, p.bpp == 16 ? 16 : 24, p.bpp == 16 ? 1 : 8, 16, m_Context, bShared);
+      createContextMs += createContextTimer.GetDeltaTime() * 1000.0f;
 
       if (!newContext) {
         return "Failed to create OGL context.";
       }
+      RageTimer shutdownFullscreenTimer;
       ShutDownFullScreen();
+      shutdownFullscreenMs =
+          shutdownFullscreenTimer.GetDeltaTime() * 1000.0f;
       [m_Context release];
       m_Context = newContext;
       newDeviceOut = !bShared;
@@ -363,6 +2184,8 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
       m_BGContext = nil;
       m_BGContext = CreateOGLContext(
           WINDOWED, p.bpp == 16 ? 16 : 24, p.bpp == 16 ? 1 : 8, 16, m_Context, bShared);
+      createContextMs += createContextTimer.GetDeltaTime() * 1000.0f -
+                         createContextMs;
 
       if (m_BGContext && !bShared) {
         [m_BGContext release];
@@ -370,39 +2193,87 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
       }
     }
 
+    RageTimer setParamsTimer;
     [m_WindowDelegate performSelectorOnMainThread:@selector(setParams:)
                                        withObject:[NSValue valueWithPointer:&p]
                                     waitUntilDone:YES];
+    setParamsMs = setParamsTimer.GetDeltaTime() * 1000.0f;
+    RageTimer setViewTimer;
     dispatch_sync(dispatch_get_main_queue(), ^{
       [m_Context setView:[((SMWindowDelegate*)m_WindowDelegate)->m_Window contentView]];
       [m_Context update];
     });
+    setViewMs = setViewTimer.GetDeltaTime() * 1000.0f;
     [m_Context makeCurrentContext];
     m_CurrentParams.windowed = true;
     SetActualParamsFromMode(CGDisplayCurrentMode(kCGDirectMainDisplay));
-
-    if (bChangeVsync) {
-      GLint swap = p.vsync ? 1 : 0;
-      CGLSetParameter([m_Context CGLContextObj], kCGLCPSwapInterval, &swap);
-      m_CurrentParams.vsync = p.vsync;
+    if (p.rate != REFRESH_DEFAULT) {
+      if (m_CurrentParams.rate != p.rate) {
+        LOG->Trace(
+            "Windowed refresh pacing override: display_rate=%d requested_rate=%d",
+            m_CurrentParams.rate, p.rate);
+      }
+      m_CurrentParams.rate = p.rate;
     }
 
+    if (bChangeVsync) {
+      const GLint actualSwap =
+          ApplyMacOSSwapInterval(m_Context, p, true);
+      m_CurrentParams.vsync = actualSwap != 0;
+    }
+    if (bChangeMPSwapsInFlight) {
+      ApplyMacOSMPSwapsInFlight(m_Context);
+    }
+
+    RageTimer configureBackendTimer;
+    configurePresentBackend(true);
+    configureBackendMs = configureBackendTimer.GetDeltaTime() * 1000.0f;
+
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "PERF_TRACE: macos_try_video_mode_end result=windowed total_ms=%.3f "
+          "path_ms=%.3f create_context_ms=%.3f shutdown_fullscreen_ms=%.3f "
+          "set_params_ms=%.3f set_view_ms=%.3f configure_backend_ms=%.3f "
+          "new_device=%d actual_size=%dx%d actual_rate=%d",
+          tryVideoModeTimer.GetDeltaTime() * 1000.0f,
+          windowedPathTimer.GetDeltaTime() * 1000.0f, createContextMs,
+          shutdownFullscreenMs, setParamsMs, setViewMs, configureBackendMs,
+          newDeviceOut ? 1 : 0, m_CurrentParams.width, m_CurrentParams.height,
+          m_CurrentParams.rate);
+    }
     return std::string();
   }
   if (bChangeMode) {
+    RageTimer changeModeTimer;
     int result = ChangeDisplayMode(p);
+    const float changeModeMs = changeModeTimer.GetDeltaTime() * 1000.0f;
 
     if (result) {
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "PERF_TRACE: macos_try_video_mode_end result=fullscreen_error "
+            "change_display_mode_ms=%.3f total_ms=%.3f error=%d",
+            changeModeMs, tryVideoModeTimer.GetDeltaTime() * 1000.0f, result);
+      }
       return ssprintf(
           "Failed to switch to full screen:%d x %d @ %d. Error %d.", p.width, p.height, p.rate,
           result);
     }
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "PERF_TRACE: macos_change_display_mode_done total_ms=%.3f",
+          changeModeMs);
+    }
   }
 
+  float createFullscreenContextMs = 0.0f;
   if (bRebuildContext) {
+    RageTimer createFullscreenContextTimer;
     bool bShared;
     NSOpenGLContext* newContext = CreateOGLContext(
         FULL_SCREEN, p.bpp == 16 ? 16 : 24, p.bpp == 16 ? 1 : 8, 16, m_Context, bShared);
+    createFullscreenContextMs +=
+        createFullscreenContextTimer.GetDeltaTime() * 1000.0f;
 
     if (!newContext) {
       return "Failed to create full screen OGL context.";
@@ -415,24 +2286,47 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
     [m_BGContext release];
     m_BGContext = CreateOGLContext(
         FULL_SCREEN, p.bpp == 16 ? 16 : 24, p.bpp == 16 ? 1 : 8, 16, m_Context, bShared);
+    createFullscreenContextMs =
+        createFullscreenContextTimer.GetDeltaTime() * 1000.0f;
 
     if (m_BGContext && !bShared) {
       [m_BGContext release];
       m_BGContext = nil;
     }
   }
+  RageTimer setFullscreenTimer;
   dispatch_sync(dispatch_get_main_queue(), ^{
     [m_Context setFullScreen];
     [m_Context update];
   });
+  const float setFullscreenMs = setFullscreenTimer.GetDeltaTime() * 1000.0f;
   [m_Context makeCurrentContext];
 
   if (bChangeVsync) {
-    GLint swap = p.vsync ? 1 : 0;
-    CGLSetParameter([m_Context CGLContextObj], kCGLCPSwapInterval, &swap);
-    m_CurrentParams.vsync = p.vsync;
+    const GLint actualSwap =
+        ApplyMacOSSwapInterval(m_Context, p, false);
+    m_CurrentParams.vsync = actualSwap != 0;
+  }
+  if (bChangeMPSwapsInFlight) {
+    ApplyMacOSMPSwapsInFlight(m_Context);
   }
 
+  RageTimer configureFullscreenBackendTimer;
+  configurePresentBackend(false);
+  const float configureFullscreenBackendMs =
+      configureFullscreenBackendTimer.GetDeltaTime() * 1000.0f;
+
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: macos_try_video_mode_end result=fullscreen total_ms=%.3f "
+        "create_context_ms=%.3f set_fullscreen_ms=%.3f "
+        "configure_backend_ms=%.3f new_device=%d actual_size=%dx%d "
+        "actual_rate=%d",
+        tryVideoModeTimer.GetDeltaTime() * 1000.0f,
+        createFullscreenContextMs, setFullscreenMs,
+        configureFullscreenBackendMs, newDeviceOut ? 1 : 0,
+        m_CurrentParams.width, m_CurrentParams.height, m_CurrentParams.rate);
+  }
   return std::string();
 }
 
@@ -617,28 +2511,334 @@ void LowLevelWindow_MacOSX::GetDisplaySpecs(DisplaySpecs& specs) const {
   specs.insert(s);
 }
 
-void LowLevelWindow_MacOSX::SwapBuffers() { CGLFlushDrawable(CGLGetCurrentContext()); }
+void LowLevelWindow_MacOSX::SwapBuffers() {
+  RageTimer timer;
+  g_LastOpenGLFenceWaitStats = MacOSOpenGLFenceWaitStats();
+  CGLContextObj context = CGLGetCurrentContext();
+  if (m_bMetalBridgeBuildPending && context != nullptr) {
+    --m_iMetalBridgeBuildFrameCountdown;
+    if (m_iMetalBridgeBuildFrameCountdown <= 0) {
+      ++m_iMetalBridgeBuildAttempts;
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "MacOS Metal bridge build running after deferred frames: "
+            "attempt=%d/%d.",
+            m_iMetalBridgeBuildAttempts, kMetalBridgeMaxBuildAttempts);
+      }
+      const bool bridgeReady = BuildMetalOpenGLBridge();
+      if (bridgeReady) {
+        m_bMetalBridgeBuildPending = false;
+        m_iMetalBridgeBuildFrameCountdown = 0;
+        m_iMetalBridgeBuildAttempts = 0;
+      } else if (m_iMetalBridgeBuildAttempts < kMetalBridgeMaxBuildAttempts) {
+        m_iMetalBridgeBuildFrameCountdown = kMetalBridgeRetryDelayFrames;
+        if (PerfDiagnosticsEnabled()) {
+          LOG->Trace(
+              "MacOS Metal bridge build retry queued: next_attempt=%d/%d "
+              "frames_until_build=%d.",
+              m_iMetalBridgeBuildAttempts + 1, kMetalBridgeMaxBuildAttempts,
+              m_iMetalBridgeBuildFrameCountdown);
+        }
+      } else {
+        m_bMetalBridgeBuildPending = false;
+        m_iMetalBridgeBuildFrameCountdown = 0;
+        LOG->Warn(
+            "MacOS Metal bridge build failed after %d attempts; falling back "
+            "to OpenGL presentation until the video mode/backend changes.",
+            kMetalBridgeMaxBuildAttempts);
+      }
+    }
+  }
+  GLint swapInterval = -1;
+  GLint swapsInFlight = -1;
+  if (context != nullptr) {
+    CGLGetParameter(context, kCGLCPSwapInterval, &swapInterval);
+    CGLGetParameter(context, kCGLCPMPSwapsInFlight, &swapsInFlight);
+  }
+  if (m_bMetalDirectPresentSubmittedThisFrame &&
+      MacOSMetalDirectPresentEnabled()) {
+    const uint64_t flushReturnUsec =
+        RageTimer::GetTimeSinceStartMicroseconds();
+    const float elapsedMs = timer.GetDeltaTime() * 1000.0f;
+    g_LastOpenGLFenceWaitStats.available = true;
+    g_LastOpenGLFenceWaitStats.pacing_wait_enabled = false;
+    g_LastOpenGLFenceWaitStats.trace_enabled = PerfDiagnosticsEnabled();
+    g_LastOpenGLFenceWaitStats.fence_created = false;
+    g_LastOpenGLFenceWaitStats.gpu_busy = false;
+    g_LastOpenGLFenceWaitStats.wait_saturated = false;
+    g_LastOpenGLFenceWaitStats.wait_actual_usec = 0;
+    g_LastOpenGLFenceWaitStats.wait_budget_usec = 0;
+    static uint64_t s_iMetalDirectPresentSkipFrames = 0;
+    ++s_iMetalDirectPresentSkipFrames;
+    const bool traceSkipFrame =
+        PerfDiagnosticsEnabled() &&
+        (s_iMetalDirectPresentSkipFrames <= 5 ||
+         s_iMetalDirectPresentSkipFrames % 600 == 0);
+    if (traceSkipFrame) {
+      LOG->Trace(
+          "PERF_TRACE: macos_swap_buffers skipped_for_metal_direct_present=1 "
+          "total_ms=%.3f error=0 vsync=%d swap_interval=%d "
+          "mps_swaps_in_flight=%d frame_pacing_target_hz=%.3f rate=%d "
+          "windowed=%d flush_return_us=%llu skipped_frames=%llu "
+          "requested_size=%dx%d",
+          elapsedMs, m_CurrentParams.vsync ? 1 : 0, swapInterval,
+          swapsInFlight, EffectiveMacOSFramePacingTargetHz(m_CurrentParams),
+          m_CurrentParams.rate, m_CurrentParams.windowed ? 1 : 0,
+          static_cast<unsigned long long>(flushReturnUsec),
+          static_cast<unsigned long long>(s_iMetalDirectPresentSkipFrames),
+          m_CurrentParams.width, m_CurrentParams.height);
+    }
+    m_bMetalDirectPresentSubmittedThisFrame = false;
+    return;
+  }
+  m_bMetalDirectPresentSubmittedThisFrame = false;
+  const uint64_t fenceWaitUsec =
+      context != nullptr ? MacOSOpenGLFencePacingWaitUsec(m_CurrentParams) : 0;
+  const bool fencePacingWait = context != nullptr && fenceWaitUsec > 0;
+  const bool fenceTraceEnabled = context != nullptr && PerfDiagnosticsEnabled();
+  const bool fenceEnabled = fencePacingWait || fenceTraceEnabled;
+  bool fenceCreated = false;
+  GLenum fenceImmediateStatus = GL_WAIT_FAILED;
+  GLenum fenceWaitStatus = GL_WAIT_FAILED;
+  float fenceImmediateMs = 0.0f;
+  float fenceWaitMs = 0.0f;
+  GLsync fence = nullptr;
+  uint64_t displayLinkOutputUsec = 0;
+  uint64_t displayLinkPeriodUsec = 0;
+  const bool displayLinkSnapshot =
+      MacOSFramePacingGetLastDisplayLinkOutput(
+          &displayLinkOutputUsec, &displayLinkPeriodUsec);
+  if (fenceEnabled) {
+    fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    fenceCreated = fence != nullptr;
+    if (fenceCreated) {
+      RageTimer fenceImmediateTimer;
+      fenceImmediateStatus =
+          glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+      fenceImmediateMs = fenceImmediateTimer.GetDeltaTime() * 1000.0f;
+      fenceWaitStatus = fenceImmediateStatus;
+      if (fenceImmediateStatus == GL_TIMEOUT_EXPIRED && fencePacingWait) {
+        RageTimer fenceWaitTimer;
+        fenceWaitStatus =
+            glClientWaitSync(fence, 0, fenceWaitUsec * 1000);
+        fenceWaitMs = fenceWaitTimer.GetDeltaTime() * 1000.0f;
+      }
+    }
+  }
+  const CGLError error = CGLFlushDrawable(context);
+  const uint64_t flushReturnUsec =
+      RageTimer::GetTimeSinceStartMicroseconds();
+  const float elapsedMs = timer.GetDeltaTime() * 1000.0f;
+  if (fenceCreated) {
+    glDeleteSync(fence);
+  }
+  const float expectedFrameMs = ExpectedFrameMsForRate(m_CurrentParams.rate);
+  const float configuredTraceMs =
+      std::max(0.0f, g_fPerfTraceSlowMacSwapBuffersMs.Get());
+  const float frameBudgetTraceMs =
+      expectedFrameMs > 0.0f ? expectedFrameMs : 8.0f;
+  const float effectiveTraceMs =
+      configuredTraceMs > 0.0f ? configuredTraceMs : frameBudgetTraceMs;
+  const float fenceTraceMs =
+      std::max(kMacOSOpenGLFenceTraceMinMs, frameBudgetTraceMs * 1.5f);
+  const bool fenceIndicatesGpuBusy =
+      fenceCreated && fenceImmediateStatus == GL_TIMEOUT_EXPIRED;
+  const uint64_t fenceWaitActualUsec =
+      static_cast<uint64_t>(std::llround(std::max(0.0f, fenceWaitMs) * 1000.0f));
+  const bool fenceWaitSaturated =
+      fenceWaitUsec > 0 && fenceWaitActualUsec + 50 >= fenceWaitUsec &&
+      fenceWaitStatus == GL_TIMEOUT_EXPIRED;
+  const bool fenceSlowTrace =
+      fenceTraceEnabled && elapsedMs >= fenceTraceMs;
+  int64_t flushReturnToOutputUsec = 0;
+  int64_t flushReturnPhaseUsec = 0;
+  if (displayLinkSnapshot) {
+    flushReturnToOutputUsec =
+        static_cast<int64_t>(flushReturnUsec) -
+        static_cast<int64_t>(displayLinkOutputUsec);
+    if (displayLinkPeriodUsec != 0) {
+      const int64_t period =
+          static_cast<int64_t>(displayLinkPeriodUsec);
+      flushReturnPhaseUsec = flushReturnToOutputUsec % period;
+      if (flushReturnPhaseUsec < 0) {
+        flushReturnPhaseUsec += period;
+      }
+    }
+  }
+  g_LastOpenGLFenceWaitStats.available = true;
+  g_LastOpenGLFenceWaitStats.pacing_wait_enabled = fencePacingWait;
+  g_LastOpenGLFenceWaitStats.trace_enabled = fenceTraceEnabled;
+  g_LastOpenGLFenceWaitStats.fence_created = fenceCreated;
+  g_LastOpenGLFenceWaitStats.gpu_busy = fenceIndicatesGpuBusy;
+  g_LastOpenGLFenceWaitStats.wait_saturated = fenceWaitSaturated;
+  g_LastOpenGLFenceWaitStats.wait_actual_usec = fenceWaitActualUsec;
+  g_LastOpenGLFenceWaitStats.wait_budget_usec = fenceWaitUsec;
+
+  if (!PerfDiagnosticsEnabled() && error != kCGLNoError) {
+    LOG->Warn(
+        "CGLFlushDrawable failed: error=%d vsync=%d swap_interval=%d "
+        "mps_swaps_in_flight=%d requested_size=%dx%d",
+        static_cast<int>(error), m_CurrentParams.vsync ? 1 : 0,
+        swapInterval, swapsInFlight, g_iWidth, g_iHeight);
+  }
+
+  if (PerfDiagnosticsEnabled() &&
+      (elapsedMs >= effectiveTraceMs || error != kCGLNoError ||
+       fenceSlowTrace)) {
+    const int missedIntervals =
+        MissedIntervalsForElapsedMs(elapsedMs, expectedFrameMs);
+    LOG->Trace(
+        "PERF_TRACE: macos_swap_buffers total_ms=%.3f error=%d vsync=%d "
+        "swap_interval=%d mps_swaps_in_flight=%d "
+        "fence_pacing_wait=%d fence_trace=%d fence_created=%d "
+        "fence_immediate_status=%s "
+        "fence_immediate_ms=%.3f fence_wait_status=%s fence_wait_ms=%.3f "
+        "fence_wait_actual_us=%llu fence_wait_budget_us=%llu "
+        "fence_wait_saturated=%d fence_gpu_busy=%d "
+        "frame_pacing_owns_swap=%d "
+        "hardware_vsync_forced=%d "
+        "display_link_snapshot=%d display_link_output_us=%llu "
+        "display_link_period_us=%llu flush_return_us=%llu "
+        "flush_return_to_output_us=%lld flush_return_phase_us=%lld "
+        "frame_pacing_target_hz=%.3f rate=%d windowed=%d "
+        "expected_frame_ms=%.3f trace_threshold_ms=%.3f "
+        "configured_trace_threshold_ms=%.3f missed_intervals=%d "
+        "requested_size=%dx%d",
+        elapsedMs, static_cast<int>(error), m_CurrentParams.vsync ? 1 : 0,
+        swapInterval, swapsInFlight, fencePacingWait ? 1 : 0,
+        fenceTraceEnabled ? 1 : 0,
+        fenceCreated ? 1 : 0,
+        MacOSOpenGLFenceWaitStatusName(fenceImmediateStatus),
+        fenceImmediateMs,
+        MacOSOpenGLFenceWaitStatusName(fenceWaitStatus),
+        fenceWaitMs,
+        static_cast<unsigned long long>(fenceWaitActualUsec),
+        static_cast<unsigned long long>(fenceWaitUsec),
+        fenceWaitSaturated ? 1 : 0,
+        fenceIndicatesGpuBusy ? 1 : 0,
+        swapInterval == 0 &&
+                EffectiveMacOSFramePacingTargetHz(m_CurrentParams) > 0.0f
+            ? 1
+            : 0,
+        MacOSOpenGLHardwareVsyncForcedEnabled() ? 1 : 0,
+        displayLinkSnapshot ? 1 : 0,
+        static_cast<unsigned long long>(displayLinkOutputUsec),
+        static_cast<unsigned long long>(displayLinkPeriodUsec),
+        static_cast<unsigned long long>(flushReturnUsec),
+        static_cast<long long>(flushReturnToOutputUsec),
+        static_cast<long long>(flushReturnPhaseUsec),
+        EffectiveMacOSFramePacingTargetHz(m_CurrentParams),
+        m_CurrentParams.rate,
+        m_CurrentParams.windowed ? 1 : 0, expectedFrameMs, effectiveTraceMs,
+        configuredTraceMs, missedIntervals, m_CurrentParams.width,
+        m_CurrentParams.height);
+  }
+}
 
 void LowLevelWindow_MacOSX::Update() {
   // Keep the system from sleeping or the screen saver from activating.
   UpdateSystemActivity(IdleActivity);
 
+  int resizedWidth = 0;
+  int resizedHeight = 0;
+  bool didResize = false;
+  bool didNativePresentationChange = false;
+  int nativePresentationReason = kMacOSNativeWindowPresentationNone;
+  RageTimer resizeTimer;
   LockMutex lock(g_ResizeLock);
-  if (likely(!g_bResized)) {
+  if (likely(!g_bResized && !g_bNativeWindowPresentationChanged)) {
     return;
   }
+  didResize = g_bResized;
+  didNativePresentationChange = g_bNativeWindowPresentationChanged;
+  nativePresentationReason = g_iNativeWindowPresentationChangeReason;
   g_bResized = false;
-  if (m_CurrentParams.width == g_iWidth && m_CurrentParams.height == g_iHeight) {
-    return;
+  g_bNativeWindowPresentationChanged = false;
+  g_iNativeWindowPresentationChangeReason = kMacOSNativeWindowPresentationNone;
+  resizedWidth = g_iWidth;
+  resizedHeight = g_iHeight;
+  const bool sizeChanged =
+      resizedWidth > 0 && resizedHeight > 0 &&
+      (m_CurrentParams.width != resizedWidth ||
+       m_CurrentParams.height != resizedHeight);
+  if (sizeChanged) {
+    m_CurrentParams.width = resizedWidth;
+    m_CurrentParams.height = resizedHeight;
   }
-  m_CurrentParams.width = g_iWidth;
-  m_CurrentParams.height = g_iHeight;
   lock.Unlock();  // Unlock before calling ResolutionChanged().
-  dispatch_sync(dispatch_get_main_queue(), ^{
-    [m_Context update];
-  });
 
-  DISPLAY->ResolutionChanged();
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: macos_window_presentation_change detected "
+        "resize=%d native_presentation_change=%d native_reason=%s "
+        "size_changed=%d size=%dx%d windowed=%d metal_requested=%d",
+        didResize ? 1 : 0, didNativePresentationChange ? 1 : 0,
+        MacOSNativeWindowPresentationReasonName(nativePresentationReason),
+        sizeChanged ? 1 : 0,
+        resizedWidth, resizedHeight, m_CurrentParams.windowed ? 1 : 0,
+        MacOSMetalBridgeEnabled() ? 1 : 0);
+  }
+
+  RageTimer contextTimer;
+  if ([NSThread isMainThread]) {
+    [m_Context update];
+  } else {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+      [m_Context update];
+    });
+  }
+  const float contextUpdateMs = contextTimer.GetDeltaTime() * 1000.0f;
+
+  float metalReconfigureMs = 0.0f;
+  if (MacOSMetalBridgeEnabled() && m_MetalPresenter &&
+      m_CurrentParams.windowed) {
+    RageTimer metalReconfigureTimer;
+    SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
+    ReleaseMetalOpenGLBridge();
+    if ([NSThread isMainThread]) {
+      m_MetalPresenter->Initialize(
+          (void*)delegate->m_Window, m_CurrentParams.width,
+          m_CurrentParams.height,
+          EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
+    } else {
+      dispatch_sync(dispatch_get_main_queue(), ^{
+        m_MetalPresenter->Initialize(
+            (void*)delegate->m_Window, m_CurrentParams.width,
+            m_CurrentParams.height,
+            EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
+      });
+    }
+    if (m_MetalPresenter->IsInteropReady()) {
+      if (MacOSMetalDirectPresentEnabled()) {
+        m_MetalPresenter->AttachLayerToWindow((void*)delegate->m_Window);
+      } else {
+        m_MetalPresenter->DetachLayer();
+      }
+      m_bMetalBridgeBuildPending = true;
+      m_iMetalBridgeBuildFrameCountdown = kMetalBridgeInitialBuildDelayFrames;
+      m_iMetalBridgeBuildAttempts = 0;
+    }
+    metalReconfigureMs = metalReconfigureTimer.GetDeltaTime() * 1000.0f;
+  }
+
+  if (sizeChanged) {
+    DISPLAY->ResolutionChanged();
+  }
+  DISPLAY->ResetFramePacing(
+      didNativePresentationChange ? "macos_native_window_presentation_change"
+                                  : "window_resize");
+
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: macos_window_presentation_change handled total_ms=%.3f "
+        "context_update_ms=%.3f metal_reconfigure_ms=%.3f "
+        "resolution_changed=%d frame_pacing_reset=1 native_reason=%s "
+        "size=%dx%d",
+        resizeTimer.GetDeltaTime() * 1000.0f, contextUpdateMs,
+        metalReconfigureMs, sizeChanged ? 1 : 0,
+        MacOSNativeWindowPresentationReasonName(nativePresentationReason),
+        resizedWidth, resizedHeight);
+  }
 }
 
 RenderTarget* LowLevelWindow_MacOSX::CreateRenderTarget() {

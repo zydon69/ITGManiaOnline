@@ -3,6 +3,7 @@
 #ifndef RAGE_SOUND_H
 #define RAGE_SOUND_H
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -24,6 +25,7 @@ class RageSoundBase {
       int64_t iFrameno, int64_t iPosition, int iBytesRead) = 0;
   virtual RageTimer GetStartTime() const { return RageZeroTimer; }
   virtual std::string GetLoadedFilePath() const = 0;
+  virtual bool PrefersStrongPrebuffer() const { return false; }
 };
 
 /**
@@ -112,6 +114,8 @@ class RageSound : public RageSoundBase {
   /* Load a RageSoundReader that you've set up yourself. Sample rate conversion
    * will be set up only if needed. Doesn't fail. */
   void LoadSoundReader(RageSoundReader* pSound);
+  void LoadSoundReader(
+      RageSoundReader* pSound, const std::string& sDebugFilePath);
 
   // Get the loaded RageSoundReader. While playing, only properties can be set.
   RageSoundReader* GetSoundReader() { return m_pSource; }
@@ -136,12 +140,15 @@ class RageSound : public RageSoundBase {
   float GetLengthSeconds();
   float GetPositionSeconds(RageTimer* Timestamp = nullptr) const;
   std::string GetLoadedFilePath() const { return m_sFilePath; }
-  bool IsPlaying() const { return m_bPlaying; }
+  bool PrefersStrongPrebuffer() const;
+  bool IsPlaying() const { return m_bPlaying.load(std::memory_order_acquire); }
+  bool IsPlayingThreadSafe() const;
 
   float GetPlaybackRate() const;
   RageTimer GetStartTime() const;
   void SetParams(const RageSoundParams& p);
   const RageSoundParams& GetParams() const { return m_Param; }
+  void SetPrefersStrongPrebuffer(bool prefer);
   bool SetProperty(const std::string& sProperty, float fValue);
   bool SetPositionSeconds(float seconds);
   void SetStopModeFromString(const std::string& sStopMode);
@@ -176,8 +183,9 @@ class RageSound : public RageSoundBase {
    * position when stopped, and when playing but pos_map hasn't yet been filled.
    */
   int m_iStoppedSourceFrame;
-  bool m_bPlaying;
+  std::atomic_bool m_bPlaying;
   bool m_bDeleteWhenFinished;
+  bool m_bPreferStrongPrebuffer;
 
   std::string m_sError;
 

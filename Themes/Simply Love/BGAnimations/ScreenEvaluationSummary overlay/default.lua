@@ -3,6 +3,7 @@ local numStages = SL.Global.Stages.PlayedThisGame
 local page = 1
 local pages = math.ceil(numStages/4)
 local next_page
+local visible_stage_rows = math.min(4, math.max(numStages, 0))
 
 -- start by assuming that the player has dedicated MenuButtons
 local buttons = {
@@ -180,13 +181,17 @@ end
 
 
 t[#t+1] = LoadActor("./LetterGrades.lua")
+t[#t+1] = LoadActor(GetFallbackBanner())..{
+	Name="SummaryFallbackBannerSource",
+	InitCommand=function(self) self:visible(false) end
+}
 
 -- -----------------------------------------------------------------------
 -- 4 rows
 -- i will increment so that we progress down the screen from top to bottom
 -- first song of the round at the top, more recently played song at the bottom
 
-for i=1,4 do
+for i=1,visible_stage_rows do
 
 	t[#t+1] = LoadActor("Row.lua", i)..{
 		Name="StageStats_"..i,

@@ -19,6 +19,7 @@ class HoldJudgment : public ActorFrame {
   void SetHoldJudgment(HoldNoteScore hns);
   void LoadFromMultiPlayer(MultiPlayer mp);
   virtual void HandleMessage(const Message& msg);
+  bool IsActiveForPerf();
 
   // Lua
   virtual void PushSelf(lua_State* L);
