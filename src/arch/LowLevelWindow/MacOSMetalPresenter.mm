@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -888,6 +889,22 @@ bool EncodeSolidBatches(
       static_cast<MacOSMetalSolidVertex*>([frameVertexBuffer contents]);
   size_t frameVertexOffset = 0;
 
+  id<MTLRenderPipelineState> currentPipeline = nil;
+  id<MTLDepthStencilState> currentDepthState = nil;
+  id<MTLTexture> currentTexture0 = nil;
+  id<MTLTexture> currentTexture1 = nil;
+  id<MTLSamplerState> currentSampler = nil;
+  MTLCullMode currentCullMode = MTLCullModeNone;
+  bool hasCurrentDepthState = false;
+  bool hasCurrentCullMode = false;
+  uint32_t currentTextureMode = std::numeric_limits<uint32_t>::max();
+  uint32_t currentAlphaTest = std::numeric_limits<uint32_t>::max();
+  uint32_t currentCelStage = std::numeric_limits<uint32_t>::max();
+  uint32_t currentEffectMode = std::numeric_limits<uint32_t>::max();
+  uint32_t currentTextureWidth = std::numeric_limits<uint32_t>::max();
+
+  [encoder setFrontFacingWinding:MTLWindingCounterClockwise];
+
   bool encodedAny = false;
   for (size_t i = 0; i < batchCount; ++i) {
     const MacOSMetalDrawBatch& batch = batches[i];
@@ -949,45 +966,77 @@ bool EncodeSolidBatches(
     const uint32_t textureWidth =
         static_cast<uint32_t>(std::max(1, batch.textureWidth));
 
-    [encoder setRenderPipelineState:pipeline];
-    if (depthState != nil) {
-      [encoder setDepthStencilState:depthState];
+    if (pipeline != currentPipeline) {
+      [encoder setRenderPipelineState:pipeline];
+      currentPipeline = pipeline;
     }
-    [encoder setFrontFacingWinding:MTLWindingCounterClockwise];
+    if (!hasCurrentDepthState || depthState != currentDepthState) {
+      [encoder setDepthStencilState:depthState];
+      currentDepthState = depthState;
+      hasCurrentDepthState = true;
+    }
+    MTLCullMode metalCullMode = MTLCullModeNone;
     switch (cullMode) {
       case CULL_BACK:
-        [encoder setCullMode:MTLCullModeBack];
+        metalCullMode = MTLCullModeBack;
         break;
       case CULL_FRONT:
-        [encoder setCullMode:MTLCullModeFront];
+        metalCullMode = MTLCullModeFront;
         break;
       case CULL_NONE:
       default:
-        [encoder setCullMode:MTLCullModeNone];
+        metalCullMode = MTLCullModeNone;
         break;
+    }
+    if (!hasCurrentCullMode || metalCullMode != currentCullMode) {
+      [encoder setCullMode:metalCullMode];
+      currentCullMode = metalCullMode;
+      hasCurrentCullMode = true;
     }
     [encoder setVertexBuffer:frameVertexBuffer
                       offset:sizeof(MacOSMetalSolidVertex) * batchVertexOffset
                      atIndex:0];
-    [encoder setFragmentBytes:&textureMode
-                       length:sizeof(textureMode)
-                      atIndex:1];
-    [encoder setFragmentBytes:&alphaTest
-                       length:sizeof(alphaTest)
-                      atIndex:2];
-    [encoder setFragmentBytes:&celStage
-                       length:sizeof(celStage)
-                      atIndex:3];
-    [encoder setFragmentBytes:&effectMode
-                       length:sizeof(effectMode)
-                      atIndex:4];
-    [encoder setFragmentBytes:&textureWidth
-                       length:sizeof(textureWidth)
-                      atIndex:5];
-    [encoder setFragmentTexture:sourceTexture atIndex:0];
-    [encoder setFragmentTexture:sourceTexture2 atIndex:1];
-    if (sampler != nil) {
+    if (textureMode != currentTextureMode) {
+      [encoder setFragmentBytes:&textureMode
+                         length:sizeof(textureMode)
+                        atIndex:1];
+      currentTextureMode = textureMode;
+    }
+    if (alphaTest != currentAlphaTest) {
+      [encoder setFragmentBytes:&alphaTest
+                         length:sizeof(alphaTest)
+                        atIndex:2];
+      currentAlphaTest = alphaTest;
+    }
+    if (celStage != currentCelStage) {
+      [encoder setFragmentBytes:&celStage
+                         length:sizeof(celStage)
+                        atIndex:3];
+      currentCelStage = celStage;
+    }
+    if (effectMode != currentEffectMode) {
+      [encoder setFragmentBytes:&effectMode
+                         length:sizeof(effectMode)
+                        atIndex:4];
+      currentEffectMode = effectMode;
+    }
+    if (textureWidth != currentTextureWidth) {
+      [encoder setFragmentBytes:&textureWidth
+                         length:sizeof(textureWidth)
+                        atIndex:5];
+      currentTextureWidth = textureWidth;
+    }
+    if (sourceTexture != currentTexture0) {
+      [encoder setFragmentTexture:sourceTexture atIndex:0];
+      currentTexture0 = sourceTexture;
+    }
+    if (sourceTexture2 != currentTexture1) {
+      [encoder setFragmentTexture:sourceTexture2 atIndex:1];
+      currentTexture1 = sourceTexture2;
+    }
+    if (sampler != nil && sampler != currentSampler) {
       [encoder setFragmentSamplerState:sampler atIndex:0];
+      currentSampler = sampler;
     }
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                 vertexStart:0
