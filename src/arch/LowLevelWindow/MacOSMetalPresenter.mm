@@ -921,6 +921,9 @@ bool EncodeSolidBatches(
   MacOSMetalSolidVertex* frameVertices =
       static_cast<MacOSMetalSolidVertex*>([frameVertexBuffer contents]);
   size_t frameVertexOffset = 0;
+  size_t copiedVertexCount = 0;
+  size_t copiedBatchCount = 0;
+  RageTimer stagingCopyTimer;
 
   id<MTLRenderPipelineState> currentPipeline = nil;
   id<MTLDepthStencilState> currentDepthState = nil;
@@ -972,6 +975,8 @@ bool EncodeSolidBatches(
         frameVertices + batchVertexOffset, batch.vertices,
         sizeof(MacOSMetalSolidVertex) * batch.vertexCount);
     frameVertexOffset += batch.vertexCount;
+    copiedVertexCount += batch.vertexCount;
+    ++copiedBatchCount;
 
     id<MTLTexture> sourceTexture =
         batch.texture != nullptr ? (id<MTLTexture>)batch.texture
@@ -1075,6 +1080,22 @@ bool EncodeSolidBatches(
                 vertexStart:0
                 vertexCount:static_cast<NSUInteger>(batch.vertexCount)];
     encodedAny = true;
+  }
+  const float stagingCopyMs = stagingCopyTimer.Ago() * 1000.0f;
+  if (PerfDiagnosticsEnabled()) {
+    static uint64_t s_iMetalStagingCopies = 0;
+    ++s_iMetalStagingCopies;
+    if (s_iMetalStagingCopies <= kMetalInitialTraceFrames ||
+        s_iMetalStagingCopies % 600 == 0 || stagingCopyMs >= 1.0f) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_staging_copy serial=%llu ring=%s "
+          "frame_slot=%d input_batches=%zu copied_batches=%zu vertices=%zu "
+          "bytes=%zu copy_ms=%.3f",
+          static_cast<unsigned long long>(s_iMetalStagingCopies),
+          ringLabel != nullptr ? ringLabel : "unknown", frameSlot, batchCount,
+          copiedBatchCount, copiedVertexCount,
+          copiedVertexCount * sizeof(MacOSMetalSolidVertex), stagingCopyMs);
+    }
   }
   return encodedAny;
 }

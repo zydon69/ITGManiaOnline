@@ -16,6 +16,7 @@
 #include "RageDisplay.h"
 #include "RageLog.h"
 #include "RageMath.h"
+#include "RageTimer.h"
 #include "RageSurface.h"
 #include "RageSurfaceUtils.h"
 #include "RageUtil.h"
@@ -1016,8 +1017,46 @@ void RageDisplay_Metal::FlushBatches() {
     return;
   }
 
+  const size_t activeBatchCount =
+      std::min(m_iActiveDrawBatchCount, m_DrawBatches.size());
+  size_t stagedVertexCount = 0;
+  size_t stagedVertexCapacity = 0;
+  size_t largestBatchVertexCount = 0;
+  size_t largestBatchVertexCapacity = 0;
+  for (size_t i = 0; i < activeBatchCount; ++i) {
+    const std::vector<MacOSMetalSolidVertex>& vertices =
+        m_DrawBatches[i].vertices;
+    stagedVertexCount += vertices.size();
+    stagedVertexCapacity += vertices.capacity();
+    largestBatchVertexCount =
+        std::max(largestBatchVertexCount, vertices.size());
+    largestBatchVertexCapacity =
+        std::max(largestBatchVertexCapacity, vertices.capacity());
+  }
+
+  RageTimer buildTimer;
   BuildMetalBatches(m_DrawBatches, m_iActiveDrawBatchCount,
                     &m_MetalDrawBatches);
+  const float buildBatchesMs = buildTimer.Ago() * 1000.0f;
+  if (PerfDiagnosticsEnabled()) {
+    static uint64_t s_iMetalStagingFrames = 0;
+    ++s_iMetalStagingFrames;
+    if (s_iMetalStagingFrames <= 5 || s_iMetalStagingFrames % 600 == 0 ||
+        buildBatchesMs >= 1.0f) {
+      LOG->Trace(
+          "PERF_TRACE: metal_cpu_staging frame=%llu active_batches=%zu "
+          "metal_batches=%zu vertices=%zu staged_bytes=%zu "
+          "vertex_capacity=%zu capacity_bytes=%zu largest_batch=%zu "
+          "largest_capacity=%zu build_batches_ms=%.3f",
+          static_cast<unsigned long long>(s_iMetalStagingFrames),
+          activeBatchCount, m_MetalDrawBatches.size(), stagedVertexCount,
+          stagedVertexCount * sizeof(MacOSMetalSolidVertex),
+          stagedVertexCapacity,
+          stagedVertexCapacity * sizeof(MacOSMetalSolidVertex),
+          largestBatchVertexCount, largestBatchVertexCapacity,
+          buildBatchesMs);
+    }
+  }
 
   if (m_iCurrentRenderTargetHandle > 0 &&
       m_iCurrentRenderTargetHandle < m_Textures.size()) {
