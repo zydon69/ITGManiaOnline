@@ -32,8 +32,12 @@ local function PaneIsAvailable(i, player)
 		return game == "dance" or game == "pump" or game == "techno"
 	end
 
-	if i == 8 then
+	if i == 8 or i == 9 or i == 10 then
 		return IsServiceAllowed(SL.GrooveStats.AutoSubmit)
+	end
+
+	if i == 11 then
+		return not GAMESTATE:IsCourseMode()
 	end
 
 	return true

@@ -257,7 +257,7 @@ OperatorMenuOptionRows.VideoRenderer = function()
 		values = {
 			{ VideoRenderers="opengl", MacOSPresentBackend="opengl" },
 			{ VideoRenderers="opengl", MacOSPresentBackend="metal" },
-			{ VideoRenderers="metal,opengl", MacOSPresentBackend="opengl" },
+			{ VideoRenderers="metal,opengl", MacOSPresentBackend="native" },
 		}
 	end
 

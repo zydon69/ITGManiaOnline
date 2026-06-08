@@ -27,11 +27,11 @@ Principe de travail :
 | Menu Left+Right / SortMenu ArrowCloud | Insertion d'une entree ArrowCloud/Login dans le menu Song Select | Partiellement integre, avec alignement UI corrige | Eleve | Moyen | Garder et tester | Recupere |
 | Leaderboard ArrowCloud complet | Vrai panneau `ACLeaderboard.lua` avec input handler dedie | Integre dans le SortMenu Song Select avec lecture API key/hash autonome | Tres eleve | Moyen | Garder et tester en jeu | Recupere |
 | Recherche Song Select avancee | Recherche enrichie autour titre/artiste et logique menu differente | Integree proprement : titre, sous-titre, artiste, translit, pack/song, difficulte, BPM | Moyen | Moyen | Garder notre version robuste | Recupere |
-| Ecran evaluation enrichi | Panes supplementaires, scatter plots, stream info, graphes | Non integre | Moyen | Eleve | Porter seulement par morceaux | A faire |
-| Ghost data / target score | `TrackGhostData`, `GetTargetScore`, `SaveGhostData`, target/ghost tracking | Non integre | Moyen | Eleve | Interessant mais pas prioritaire | A faire |
+| Ecran evaluation enrichi | Panes supplementaires, scatter plots, stream info, graphes | Integre par morceaux : panes GrooveStats RPG/ITL, scatter details, StepArtist, StreamBreakdown, LetterGrade, RecordTexts, alimentation lazy-safe | Moyen | Moyen | Garder sans copier les overlays gameplay lourds | Recupere |
+| Ghost data / target score | `TrackGhostData`, `GetTargetScore`, `SaveGhostData`, target/ghost tracking | Integre proprement : courbes ghost locales ITG/EX, sauvegarde profil, option Target Score `Ghost Data`, pacemaker live | Moyen | Moyen | Garder, tester en jeu sur profil local explicite | Recupere |
 | Gameplay StepStatistics enrichi | Scorebox gameplay, GIFs, density graph, offset calc, banner2 | Non integre | Faible a moyen | Eleve perf/hitches | Ne pas porter en bloc | En attente |
 | Notefield mods / per-column graphics | `NotefieldMods.lua`, `PerColumnJudgmentGraphics.lua` | Non integre | Faible a moyen | Eleve gameplay/perf | Eviter sauf besoin precis | En attente |
-| Polish visuel ArrowCloud | Logos, fonts, petites decorations, textes dedies | Partiellement integre : logo principal uniquement | Moyen | Faible | Recuperer progressivement | A faire |
+| Polish visuel ArrowCloud | Logos, fonts, petites decorations, textes dedies | Integre en v1 legere : logo texte ArrowCloud dans le leaderboard detaille, asset logo+texte disponible, pictogramme feet-diagram dans le pane scatter, textes localises | Moyen | Faible | Garder uniquement ce polish utile, sans importer fonts/assets lourds | Recupere |
 | Fonts supplementaires | Mega, Unprofessional, variantes Miso, combos | Non integre | Faible | Moyen, bruit repo | Ne pas importer sans besoin | En attente |
 | Judgment/hold assets supplementaires | Nombreux packs visuels de jugements/holds | Non integre | Faible | Moyen a eleve | Eviter pour l'instant | En attente |
 | Micro-optimisations Lua | Certains updates espaces avec `sleep(0.2)`, graphes non recalcules chaque frame | Non repris specifiquement | Faible | Faible | S'en inspirer au cas par cas | En attente |
@@ -73,3 +73,6 @@ Conclusion : recuperer leurs features ArrowCloud/score progressivement, mais ne 
 | 2026-06-05 | Creation du registre de suivi ArrowCloud | Base de decision creee |
 | 2026-06-05 | Portage du leaderboard ArrowCloud complet Song Select | `ACLeaderboard.lua` et input handler integres, test en jeu requis |
 | 2026-06-05 | Portage recherche Song Select avancee | Recherche plain-text robuste sur titre/sous-titre/artiste + detail artiste dans les resultats |
+| 2026-06-09 | Portage evaluation/ghost ArrowCloud par morceaux | Panes RPG/ITL, scatter details, tracking/sauvegarde ghost ITG/EX et option Target Score `Ghost Data` ajoutes sans importer le theme complet |
+| 2026-06-09 | Polish visuel ArrowCloud v1 | Ajout des assets logo texte, signature discrete du leaderboard detaille et habillage leger du pane scatter avec libelles localises |
+| 2026-06-09 | Polish evaluation cible | Adaptation de `StepArtist`, `StreamBreakdown`, `LetterGrade` et `RecordTexts` au layout Simply Love sans importer l'ecran ArrowCloud complet |

@@ -97,7 +97,7 @@ end
 
 -- ---------------------------------------------------------------
 -- possible target grades, as defined in ./Scripts/SL-PlayerOptions.lua within TargetScore.Values()
--- { 'C-', 'C', 'C+', 'B-', 'B', 'B+', 'A-', 'A', 'A+', 'S-', 'S', 'S+', '☆', '☆☆', '☆☆☆', '☆☆☆☆', 'Machine best', 'Personal best' }
+-- { 'C-', 'C', 'C+', 'B-', 'B', 'B+', 'A-', 'A', 'A+', 'S-', 'S', 'S+', '☆', '☆☆', '☆☆☆', '☆☆☆☆', 'Machine best', 'Personal best', 'Ghost Data' }
 
 -- the index of the target score chosen in the PlayerOptions menu
 local target_grade_index = tonumber(SL[pn].ActiveModifiers.TargetScore)
@@ -112,6 +112,11 @@ if (target_grade_index == 17) then
 elseif (target_grade_index == 18) then
 	-- player set TargetGrade as Personal best
 	target_grade_score = GetTopScore("Personal")
+
+elseif (target_grade_index == 19) then
+	-- Ghost Data is resolved dynamically while judgments arrive.  Use S as a
+	-- harmless initial graph target until TrackGhostData emits live values.
+	target_grade_score = THEME:GetMetric("PlayerStageStats", "GradePercentTier06")
 else
 	-- player set TargetGrade as a particular letter grade
 	-- anything from C- to ☆☆☆☆

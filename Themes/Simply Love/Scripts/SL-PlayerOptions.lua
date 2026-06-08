@@ -533,6 +533,7 @@ local Overrides = {
 			end
 			table.insert(t, "Machine best")
 			table.insert(t, "Personal best")
+			table.insert(t, "Ghost Data")
 			return t
 		end,
 		LoadSelections = function(self, list, pn)

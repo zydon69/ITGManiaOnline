@@ -23,7 +23,64 @@ local SetEntryText = function(rank, name, score, date, actor)
 	actor:GetChild("Date"):settext(date)
 end
 
-local GetMachineTag = function(gsEntry)
+local GetMachineTag
+
+local GetLazyPaneContent = function(panes, paneIndex, side)
+	if not panes then return nil end
+
+	local sidePane = panes:GetChild(("Pane%i_SideP%i"):format(paneIndex, side))
+	if not sidePane then return nil end
+
+	local ok, command = pcall(function() return sidePane:GetCommand("EnsureLoaded") end)
+	if ok and command then
+		sidePane:playcommand("EnsureLoaded")
+	end
+
+	local childOk, content = pcall(function()
+		return sidePane:GetChild("")
+	end)
+	return childOk and content or nil
+end
+
+local PopulateGrooveStatsLeaderboardPane = function(pane, leaderboard, scoreColor)
+	if not pane or type(leaderboard) ~= "table" then return false end
+
+	local highScoreList = pane:GetChild("HighScoreList")
+	if not highScoreList then return false end
+
+	local entryNum = 1
+	for gsEntry in ivalues(leaderboard) do
+		local entry = highScoreList:GetChild("HighScoreEntry"..entryNum)
+		if not entry then break end
+
+		entry:stoptweening()
+		entry:diffuse(Color.White)
+		SetEntryText(
+			tostring(gsEntry["rank"] or entryNum)..".",
+			GetMachineTag(gsEntry),
+			string.format("%.2f%%", tonumber(gsEntry["score"] or 0) / 100),
+			ParseGrooveStatsDate(gsEntry["date"]),
+			entry
+		)
+
+		entry:GetChild("Score"):diffuse(scoreColor or Color.White)
+		if gsEntry["isRival"] then
+			entry:diffuse(color("#BD94FF"))
+		elseif gsEntry["isSelf"] then
+			entry:diffuse(color("#A1FF94"))
+		end
+
+		if gsEntry["isFail"] then
+			entry:GetChild("Score"):diffuse(Color.Red)
+		end
+
+		entryNum = entryNum + 1
+	end
+
+	return entryNum > 1
+end
+
+GetMachineTag = function(gsEntry)
 	if not gsEntry then return end
 	if gsEntry["machineTag"] then
 		-- Make sure we only use up to 4 characters for space concerns.
@@ -174,8 +231,10 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 			local entryNum = 1
 			local rivalNum = 1
 			-- Pane 8 is the groovestats highscores pane.
-			local highScorePane = panes:GetChild("Pane8_SideP"..i):GetChild("")
-			local QRPane = panes:GetChild("Pane7_SideP"..i):GetChild("")
+			local highScorePane = GetLazyPaneContent(panes, 8, i)
+			local QRPane = GetLazyPaneContent(panes, 7, i)
+			local RPGPane = GetLazyPaneContent(panes, 9, i)
+			local ITLPane = GetLazyPaneContent(panes, 10, i)
 
 			-- If only one player is joined, we then need to update both panes with only
 			-- one players' data.
@@ -203,7 +262,7 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 						leaderboardData = data[playerStr]["gsLeaderboard"]
 					end
 
-					if leaderboardData then
+					if leaderboardData and highScorePane then
 						for gsEntry in ivalues(leaderboardData) do
 							local entry = highScorePane:GetChild("HighScoreList"):GetChild("HighScoreEntry"..entryNum)
 							entry:stoptweening()
@@ -238,13 +297,33 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 							entryNum = entryNum + 1
 						end
 
-						QRPane:GetChild("QRCode"):queuecommand("Hide")
-						QRPane:GetChild("HelpText"):settext(THEME:GetString("GrooveStats", "ScoreAlreadySubmitted"))
+						if QRPane then
+							local qrCode = QRPane:GetChild("QRCode")
+							local helpText = QRPane:GetChild("HelpText")
+							if qrCode then qrCode:queuecommand("Hide") end
+							if helpText then helpText:settext(THEME:GetString("GrooveStats", "ScoreAlreadySubmitted")) end
+						end
 						if i == 1 and P1SubmitText then
 							P1SubmitText:queuecommand("Submit")
 						elseif i == 2 and P2SubmitText then
 							P2SubmitText:queuecommand("Submit")
 						end
+					end
+
+					if data[playerStr]["rpg"] then
+						PopulateGrooveStatsLeaderboardPane(
+							RPGPane,
+							data[playerStr]["rpg"]["rpgLeaderboard"],
+							Color.White
+						)
+					end
+
+					if data[playerStr]["itl"] then
+						PopulateGrooveStatsLeaderboardPane(
+							ITLPane,
+							data[playerStr]["itl"]["itlLeaderboard"],
+							SL.JudgmentColors["FA+"][1]
+						)
 					end
 
 					-- Only display the overlay on the sides that are actually joined.

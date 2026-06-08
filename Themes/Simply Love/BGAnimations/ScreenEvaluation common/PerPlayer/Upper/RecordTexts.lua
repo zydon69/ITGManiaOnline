@@ -17,7 +17,8 @@ local SongOrCourse = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentCourse() o
 local StepsOrTrail = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(player) or GAMESTATE:GetCurrentSteps(player)
 
 local MaxMachineHighScores = PREFSMAN:GetPreference("MaxHighScoresPerListForMachine")
-local MachineHighScores = PROFILEMAN:GetMachineProfile():GetHighScoreList(SongOrCourse,StepsOrTrail):GetHighScores()
+local MachineHighScoreList = SongOrCourse and StepsOrTrail and PROFILEMAN:GetMachineProfile():GetHighScoreList(SongOrCourse, StepsOrTrail) or nil
+local MachineHighScores = MachineHighScoreList and MachineHighScoreList:GetHighScores() or {}
 
 local EarnedMachineHighScoreInEventMode = function()
 	-- if no DancePoints were earned, it's not a HighScore
@@ -70,6 +71,7 @@ local EarnedPersonalRecord = ( HighScoreIndex.Personal ~= -1 ) and pss:GetPercen
 -- this player earned some record and the ability to enter a high score name
 -- we'll check for this flag later in ./BGAnimations/ScreenNameEntryTradtional underlay/default.lua
 if EarnedMachineRecord or EarnedPersonalRecord then
+	SL[pn].HighScores = SL[pn].HighScores or {}
 	SL[pn].HighScores.EnteringName = true
 end
 

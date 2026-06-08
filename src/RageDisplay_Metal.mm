@@ -1325,6 +1325,17 @@ void RageDisplay_Metal::BuildMetalBatches(
     }
     const MacOSMetalSolidVertex* cpuVertices =
         batch.vertices.empty() ? nullptr : batch.vertices.data();
+    const bool preserveLinearFiltering =
+        batch.effectMode == EffectMode_DistanceField ||
+        batch.effectMode == EffectMode_YUYV422 ||
+        batch.effectMode == EffectMode_ColorBurn ||
+        batch.effectMode == EffectMode_ColorDodge ||
+        batch.effectMode == EffectMode_VividLight ||
+        batch.effectMode == EffectMode_HardMix ||
+        batch.effectMode == EffectMode_Overlay ||
+        batch.effectMode == EffectMode_Screen;
+    const bool metalTextureFiltering =
+        preserveLinearFiltering && batch.textureFiltering[TextureUnit_1];
     metalBatches->push_back(
         {cpuVertices,
          batch.vertexBuffer, batch.vertexBufferOffsetBytes,
@@ -1335,7 +1346,7 @@ void RageDisplay_Metal::BuildMetalBatches(
          batch.celStage,
          batch.zTestMode,
          batch.cullMode, batch.textureWrapping[TextureUnit_1],
-         batch.textureFiltering[TextureUnit_1],
+         metalTextureFiltering,
          batch.zWrite, batch.alphaTest, batch.clearDepthBefore,
          batch.transform});
   }

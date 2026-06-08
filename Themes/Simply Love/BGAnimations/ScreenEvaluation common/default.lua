@@ -1,5 +1,5 @@
 local Players = GAMESTATE:GetHumanPlayers()
-local NumPanes = SL.Global.GameMode=="Casual" and 1 or 8
+local NumPanes = SL.Global.GameMode=="Casual" and 1 or 11
 
 local InputHandler = nil
 local EventOverlayInputHandler = nil
@@ -203,6 +203,9 @@ for player in ivalues(Players) do
 	-- Generate the .itl file for the player.
 	-- When the event isn't active, this actor is nil.
 	t[#t+1] = LoadActor("./PerPlayer/ItlFile.lua", player)
+
+	-- Save best local ghost data for future pacemaker comparisons.
+	t[#t+1] = LoadActor("./PerPlayer/SaveGhostData.lua", player)
 end
 
 -- -----------------------------------------------------------------------

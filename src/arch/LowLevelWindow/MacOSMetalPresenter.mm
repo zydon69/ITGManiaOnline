@@ -236,20 +236,34 @@ void ReleaseMetalFrameSlot(
     return;
   }
 
+  struct ReleaseWarning {
+    enum Type {
+      None,
+      IdleSlot,
+      OutOfRangeSlot,
+      ZeroFramesInFlight,
+    };
+    Type type = None;
+    int slot = -1;
+    int framesInFlight = 0;
+    uint64_t acquiredFrames = 0;
+    uint64_t releasedFrames = 0;
+    uint64_t invalidReleases = 0;
+  };
+  ReleaseWarning warning;
   {
     std::lock_guard<std::mutex> lock(limiter->mutex);
     bool releasedOwnedFrame = false;
     if (slot >= 0 && slot < kMetalMaxSolidFramesInFlight) {
       if (!limiter->slotBusy[slot]) {
         ++limiter->invalidReleases;
-        LOG->Warn(
-            "MacOS Metal presenter frame slot accounting mismatch: release "
-            "requested for idle slot=%d frames_in_flight=%d acquired=%llu "
-            "released=%llu invalid_releases=%llu.",
-            slot, limiter->framesInFlight,
-            static_cast<unsigned long long>(limiter->acquiredFrames),
-            static_cast<unsigned long long>(limiter->releasedFrames),
-            static_cast<unsigned long long>(limiter->invalidReleases));
+        warning = {
+            ReleaseWarning::IdleSlot,
+            slot,
+            limiter->framesInFlight,
+            limiter->acquiredFrames,
+            limiter->releasedFrames,
+            limiter->invalidReleases};
       } else {
         ++limiter->releasedFrames;
         releasedOwnedFrame = true;
@@ -257,12 +271,13 @@ void ReleaseMetalFrameSlot(
       limiter->slotBusy[slot] = false;
     } else if (slot >= 0) {
       ++limiter->invalidReleases;
-      LOG->Warn(
-          "MacOS Metal presenter frame slot accounting mismatch: release "
-          "requested for out-of-range slot=%d frames_in_flight=%d "
-          "invalid_releases=%llu.",
-          slot, limiter->framesInFlight,
-          static_cast<unsigned long long>(limiter->invalidReleases));
+      warning = {
+          ReleaseWarning::OutOfRangeSlot,
+          slot,
+          limiter->framesInFlight,
+          limiter->acquiredFrames,
+          limiter->releasedFrames,
+          limiter->invalidReleases};
     } else {
       ++limiter->releasedFrames;
       releasedOwnedFrame = true;
@@ -271,11 +286,43 @@ void ReleaseMetalFrameSlot(
       --limiter->framesInFlight;
     } else if (releasedOwnedFrame) {
       ++limiter->invalidReleases;
+      warning = {
+          ReleaseWarning::ZeroFramesInFlight,
+          slot,
+          limiter->framesInFlight,
+          limiter->acquiredFrames,
+          limiter->releasedFrames,
+          limiter->invalidReleases};
+    }
+  }
+  switch (warning.type) {
+    case ReleaseWarning::IdleSlot:
+      LOG->Warn(
+          "MacOS Metal presenter frame slot accounting mismatch: release "
+          "requested for idle slot=%d frames_in_flight=%d acquired=%llu "
+          "released=%llu invalid_releases=%llu.",
+          warning.slot, warning.framesInFlight,
+          static_cast<unsigned long long>(warning.acquiredFrames),
+          static_cast<unsigned long long>(warning.releasedFrames),
+          static_cast<unsigned long long>(warning.invalidReleases));
+      break;
+    case ReleaseWarning::OutOfRangeSlot:
+      LOG->Warn(
+          "MacOS Metal presenter frame slot accounting mismatch: release "
+          "requested for out-of-range slot=%d frames_in_flight=%d "
+          "invalid_releases=%llu.",
+          warning.slot, warning.framesInFlight,
+          static_cast<unsigned long long>(warning.invalidReleases));
+      break;
+    case ReleaseWarning::ZeroFramesInFlight:
       LOG->Warn(
           "MacOS Metal presenter frame slot accounting mismatch: release "
           "requested with zero frames in flight slot=%d invalid_releases=%llu.",
-          slot, static_cast<unsigned long long>(limiter->invalidReleases));
-    }
+          warning.slot,
+          static_cast<unsigned long long>(warning.invalidReleases));
+      break;
+    case ReleaseWarning::None:
+      break;
   }
   limiter->condition.notify_one();
 }
@@ -2262,7 +2309,7 @@ bool MacOSMetalPresenter::AttachLayerToWindow(void* nsWindow) {
           static_cast<int>(impl->layer.drawableSize.width),
           static_cast<int>(impl->layer.drawableSize.height));
     }
-    return false;
+    return true;
   }
 
   NSView* layerView = [[SMMetalLayerView alloc] initWithFrame:bounds];

@@ -1,5 +1,6 @@
 local player, pss, isTwoPlayers, graph, target_score = unpack(...)
 local pn = ToEnumShortString(player)
+local usesGhostData = tonumber(SL[pn].ActiveModifiers.TargetScore) == 19
 
 local pacemaker = Def.BitmapText{
 	Font="Common Bold",
@@ -7,11 +8,36 @@ local pacemaker = Def.BitmapText{
 		self:queuecommand("Update")
 	end,
 
+	GhostDataUpdatedMessageCommand=function(self, params)
+		if not usesGhostData or not params or params.player ~= player then return end
+
+		local possible = tonumber(params.possible or 0)
+		if possible <= 0 then return end
+
+		local percentDifference = (tonumber(params.current or 0) - tonumber(params.target or 0)) / possible
+		local places = 2
+		while (math.abs(percentDifference) < 0.1995 / math.pow(10, places))
+			and (possible >= 2 * math.pow(10, places + 2)) and (places < 4) do
+			places = places + 1
+		end
+
+		self:settext(string.format("%+."..places.."f", percentDifference * 100))
+	end,
+
+	NoGhostDataMessageCommand=function(self, params)
+		if not usesGhostData or not params or params.player ~= player then return end
+		self:settext("No ghost")
+		self:diffusealpha(0.65)
+	end,
+
 	-- common logic used for both the Pacemaker text and the ActionOnTargetMissed mod
 	UpdateCommand=function(self)
+		if usesGhostData then return end
+
 		local DPCurr = pss:GetActualDancePoints()
 		local DPCurrMax = pss:GetCurrentPossibleDancePoints()
 		local DPMax = pss:GetPossibleDancePoints()
+		if DPMax <= 0 then return end
 
 		local percentDifference = (DPCurr - (target_score * DPCurrMax)) / DPMax
 

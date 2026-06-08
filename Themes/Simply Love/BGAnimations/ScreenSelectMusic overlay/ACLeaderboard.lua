@@ -10,6 +10,7 @@ local HeaderColor = color("#2a6099")
 local FontName = "Common Normal"
 local AC_BASE_URL = "https://api.arrowcloud.dance"
 local AC_TIMEOUT = 5
+local AC_HEADER_LOGO = THEME:GetPathG("", "Arrow Cloud/text-t.png")
 
 local function getPaneWidth()
 	return math.min(820, _screen.w - 96)
@@ -516,6 +517,15 @@ for player in ivalues(PlayerNumber) do
 		Def.Quad{ InitCommand = function(self) self:diffuse(Color.White):y(-PaneHeight / 2 + RowHeight / 2) end, RefreshCommand = function(self) self:zoomto(self:GetParent():GetWidth() + BorderWidth, RowHeight + BorderWidth) end },
 		Def.Quad{ InitCommand = function(self) self:diffuse(HeaderColor):y(-PaneHeight / 2 + RowHeight / 2) end, RefreshCommand = function(self) self:zoomto(self:GetParent():GetWidth(), RowHeight) end },
 
+		Def.Sprite{
+			Texture = AC_HEADER_LOGO,
+			InitCommand = function(self)
+				self:zoom(0.036):y(-PaneHeight / 2 + RowHeight / 2):diffusealpha(0.82)
+			end,
+			RefreshCommand = function(self)
+				self:x(-self:GetParent():GetWidth() / 2 + 52)
+			end,
+		},
 		LoadFont(FontName)..{
 			Name = "Header",
 			Text = "Arrow Cloud",
