@@ -464,6 +464,15 @@ void StopDrawablePrefetcher(MacOSMetalPresenterImpl* impl) {
 id<CAMetalDrawable> TakePrefetchedDrawable(
     MacOSMetalPresenterImpl* impl, float* acquireMs, uint64_t* serial,
     uint64_t* misses) {
+  if (acquireMs != nullptr) {
+    *acquireMs = 0.0f;
+  }
+  if (serial != nullptr) {
+    *serial = 0;
+  }
+  if (misses != nullptr) {
+    *misses = 0;
+  }
   if (impl == nullptr) {
     return nil;
   }
@@ -473,16 +482,16 @@ id<CAMetalDrawable> TakePrefetchedDrawable(
     std::lock_guard<std::mutex> lock(impl->drawableMutex);
     drawable = impl->prefetchedDrawable;
     impl->prefetchedDrawable = nil;
-    if (acquireMs != nullptr) {
-      *acquireMs = impl->prefetchedDrawableAcquireMs;
-    }
-    if (serial != nullptr) {
-      *serial = impl->prefetchedDrawableSerial;
-    }
     if (misses != nullptr) {
       *misses = impl->prefetchedDrawableMisses;
     }
     if (drawable != nil) {
+      if (acquireMs != nullptr) {
+        *acquireMs = impl->prefetchedDrawableAcquireMs;
+      }
+      if (serial != nullptr) {
+        *serial = impl->prefetchedDrawableSerial;
+      }
       ++impl->prefetchedDrawableConsumed;
       g_iMetalConsumedDrawables.store(impl->prefetchedDrawableConsumed);
     }
@@ -1310,7 +1319,13 @@ bool MacOSMetalPresenter::Initialize(
     }
   }
   impl->interopReady = interopReady;
-  impl->useDrawablePrefetch = createInteropSurfaces;
+  /*
+   * Native Metal rendering also benefits from one drawable prefetched off the
+   * render thread.  Keeping this tied to IOSurface interop made full-engine
+   * Metal call CAMetalLayer::nextDrawable synchronously, which turns WindowServer
+   * drawable stalls into visible frame hitches.
+   */
+  impl->useDrawablePrefetch = true;
 
   m_Impl = impl;
   m_Available = true;
@@ -1320,11 +1335,13 @@ bool MacOSMetalPresenter::Initialize(
   LOG->Trace(
       "MacOS Metal presenter initialized: device='%s' target_hz=%.3f "
       "requested_size=%dx%d layer_size=%dx%d attached=0 "
-      "iosurface_ring=%d iosurface_count=%d total_ms=%.3f",
+      "iosurface_ring=%d iosurface_count=%d drawable_prefetch=%d "
+      "total_ms=%.3f",
       [[impl->device name] UTF8String], targetHz, width, height,
       static_cast<int>(bounds.size.width), static_cast<int>(bounds.size.height),
       impl->interopReady ? 1 : 0,
       createInteropSurfaces ? kMetalInteropSurfaceCount : 0,
+      impl->useDrawablePrefetch ? 1 : 0,
       initTimer.GetDeltaTime() * 1000.0f);
   return true;
 }
