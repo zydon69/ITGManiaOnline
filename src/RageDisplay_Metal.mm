@@ -911,49 +911,59 @@ void RageDisplay_Metal::SetCelShaded(int stage) {
 }
 
 RageDisplay_Metal::DrawBatch& RageDisplay_Metal::ActiveBatch() {
-  if (m_DrawBatches.empty() ||
-      m_DrawBatches.back().textureHandles != m_TextureHandles ||
-      m_DrawBatches.back().blendMode != m_BlendMode ||
-      m_DrawBatches.back().textureModes != m_TextureModes ||
-      m_DrawBatches.back().effectMode != m_EffectMode ||
-      m_DrawBatches.back().celStage != m_iCelShadedStage ||
-      m_DrawBatches.back().sphereMapping != m_bSphereMapping ||
-      m_DrawBatches.back().zBias != m_fZBias ||
-      m_DrawBatches.back().zTestMode != m_ZTestMode ||
-      m_DrawBatches.back().cullMode != m_CullMode ||
-      m_DrawBatches.back().textureWrapping != m_TextureWrapping ||
-      m_DrawBatches.back().textureFiltering != m_TextureFiltering ||
-      m_DrawBatches.back().zWrite != m_bZWrite ||
-      m_DrawBatches.back().alphaTest != m_bAlphaTest) {
-    DrawBatch batch;
-    batch.textureHandles = m_TextureHandles;
-    batch.blendMode = m_BlendMode;
-    batch.textureModes = m_TextureModes;
-    batch.effectMode = m_EffectMode;
-    batch.celStage = m_iCelShadedStage;
-    batch.sphereMapping = m_bSphereMapping;
-    batch.zBias = m_fZBias;
-    batch.zTestMode = m_ZTestMode;
-    batch.cullMode = m_CullMode;
-    batch.textureWrapping = m_TextureWrapping;
-    batch.textureFiltering = m_TextureFiltering;
-    batch.zWrite = m_bZWrite;
-    batch.alphaTest = m_bAlphaTest;
-    m_DrawBatches.push_back(batch);
+  if (m_iActiveDrawBatchCount > 0) {
+    DrawBatch& last = m_DrawBatches[m_iActiveDrawBatchCount - 1];
+    if (last.textureHandles == m_TextureHandles &&
+        last.blendMode == m_BlendMode &&
+        last.textureModes == m_TextureModes &&
+        last.effectMode == m_EffectMode &&
+        last.celStage == m_iCelShadedStage &&
+        last.sphereMapping == m_bSphereMapping &&
+        last.zBias == m_fZBias &&
+        last.zTestMode == m_ZTestMode &&
+        last.cullMode == m_CullMode &&
+        last.textureWrapping == m_TextureWrapping &&
+        last.textureFiltering == m_TextureFiltering &&
+        last.zWrite == m_bZWrite &&
+        last.alphaTest == m_bAlphaTest) {
+      return last;
+    }
   }
-  return m_DrawBatches.back();
+
+  if (m_iActiveDrawBatchCount == m_DrawBatches.size()) {
+    m_DrawBatches.emplace_back();
+  }
+
+  DrawBatch& batch = m_DrawBatches[m_iActiveDrawBatchCount++];
+  batch.textureHandles = m_TextureHandles;
+  batch.blendMode = m_BlendMode;
+  batch.textureModes = m_TextureModes;
+  batch.effectMode = m_EffectMode;
+  batch.celStage = m_iCelShadedStage;
+  batch.sphereMapping = m_bSphereMapping;
+  batch.zBias = m_fZBias;
+  batch.zTestMode = m_ZTestMode;
+  batch.cullMode = m_CullMode;
+  batch.textureWrapping = m_TextureWrapping;
+  batch.textureFiltering = m_TextureFiltering;
+  batch.zWrite = m_bZWrite;
+  batch.alphaTest = m_bAlphaTest;
+  batch.vertices.clear();
+  return batch;
 }
 
 void RageDisplay_Metal::BuildMetalBatches(
-    const std::vector<DrawBatch>& batches,
+    const std::vector<DrawBatch>& batches, size_t batchCount,
     std::vector<MacOSMetalDrawBatch>* metalBatches) const {
   if (metalBatches == nullptr) {
     return;
   }
 
   metalBatches->clear();
-  metalBatches->reserve(batches.size());
-  for (const DrawBatch& batch : batches) {
+  metalBatches->reserve(batchCount);
+  const size_t safeBatchCount = std::min(batchCount, batches.size());
+  for (size_t i = 0; i < safeBatchCount; ++i) {
+    const DrawBatch& batch = batches[i];
     if (batch.vertices.empty()) {
       continue;
     }
@@ -991,15 +1001,23 @@ void RageDisplay_Metal::BuildMetalBatches(
   }
 }
 
+void RageDisplay_Metal::ClearActiveBatches() {
+  const size_t safeBatchCount =
+      std::min(m_iActiveDrawBatchCount, m_DrawBatches.size());
+  for (size_t i = 0; i < safeBatchCount; ++i) {
+    m_DrawBatches[i].vertices.clear();
+  }
+  m_iActiveDrawBatchCount = 0;
+}
+
 void RageDisplay_Metal::FlushBatches() {
   if (!m_bReady || m_Presenter == nullptr) {
-    m_DrawBatches.clear();
+    ClearActiveBatches();
     return;
   }
 
-  m_FlushDrawBatches.clear();
-  m_FlushDrawBatches.swap(m_DrawBatches);
-  BuildMetalBatches(m_FlushDrawBatches, &m_MetalDrawBatches);
+  BuildMetalBatches(m_DrawBatches, m_iActiveDrawBatchCount,
+                    &m_MetalDrawBatches);
 
   if (m_iCurrentRenderTargetHandle > 0 &&
       m_iCurrentRenderTargetHandle < m_Textures.size()) {
@@ -1009,7 +1027,7 @@ void RageDisplay_Metal::FlushBatches() {
           "RageDisplay_Metal: active render target became invalid handle=%lu.",
           static_cast<unsigned long>(m_iCurrentRenderTargetHandle));
       m_iCurrentRenderTargetHandle = 0;
-      m_FlushDrawBatches.clear();
+      ClearActiveBatches();
       m_MetalDrawBatches.clear();
       return;
     }
@@ -1035,7 +1053,7 @@ void RageDisplay_Metal::FlushBatches() {
           m_MetalDrawBatches.size());
       target.preserveNextRender = preserveColor;
     }
-    m_FlushDrawBatches.clear();
+    ClearActiveBatches();
     m_MetalDrawBatches.clear();
     m_bClearDepthNextFrame = false;
     return;
@@ -1046,7 +1064,7 @@ void RageDisplay_Metal::FlushBatches() {
   const bool presented = m_Presenter->PresentSolidBatches(
       m_MetalDrawBatches.data(), m_MetalDrawBatches.size(), true,
       0.04, 0.055, 0.075, 1.0, targetHz);
-  m_FlushDrawBatches.clear();
+  ClearActiveBatches();
   m_MetalDrawBatches.clear();
   m_bClearDepthNextFrame = false;
   if (!presented) {
@@ -1063,6 +1081,8 @@ void RageDisplay_Metal::FlushBatches() {
 void RageDisplay_Metal::EndFrame() {
   if (m_bReady && m_Presenter) {
     const std::vector<DrawBatch>& batches = m_DrawBatches;
+    const size_t activeBatchCount =
+        std::min(m_iActiveDrawBatchCount, batches.size());
     static uint64_t s_iMetalFrames = 0;
     ++s_iMetalFrames;
     if (PerfDiagnosticsEnabled() &&
@@ -1077,7 +1097,9 @@ void RageDisplay_Metal::EndFrame() {
       float maxY = -std::numeric_limits<float>::infinity();
       float maxZ = -std::numeric_limits<float>::infinity();
       std::set<uintptr_t> textureHandles;
-      for (const DrawBatch& batch : batches) {
+      for (size_t batchIndex = 0; batchIndex < activeBatchCount;
+           ++batchIndex) {
+        const DrawBatch& batch = batches[batchIndex];
         vertexCount += batch.vertices.size();
         for (uintptr_t textureHandle : batch.textureHandles) {
           if (textureHandle != 0) {
@@ -1114,7 +1136,7 @@ void RageDisplay_Metal::EndFrame() {
           "PERF_TRACE: RageDisplay_Metal frame=%llu batches=%zu vertices=%zu "
           "textures=%zu finite=%zu inside_clip=%zu "
           "bounds=(%.3f,%.3f,%.3f)..(%.3f,%.3f,%.3f)",
-          static_cast<unsigned long long>(s_iMetalFrames), batches.size(),
+          static_cast<unsigned long long>(s_iMetalFrames), activeBatchCount,
           vertexCount, textureHandles.size(), finiteVertexCount,
           insideClipVertexCount,
           finiteVertexCount > 0 ? minX : 0.0f,

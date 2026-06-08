@@ -149,9 +149,10 @@ class RageDisplay_Metal : public RageDisplay {
   RageMatrix CurrentTextureMatrix() const;
   RageColor ComputeModelColor(const RageVector3& normal) const;
   DrawBatch& ActiveBatch();
+  void ClearActiveBatches();
   void FlushBatches();
   void BuildMetalBatches(
-      const std::vector<DrawBatch>& batches,
+      const std::vector<DrawBatch>& batches, size_t batchCount,
       std::vector<MacOSMetalDrawBatch>* metalBatches) const;
   void ReleaseTexture(MetalTexture* texture);
   void DestroyAllTextures();
@@ -165,7 +166,7 @@ class RageDisplay_Metal : public RageDisplay {
   std::unique_ptr<LowLevelWindow> m_Window;
   std::unique_ptr<MacOSMetalPresenter> m_Presenter;
   std::vector<DrawBatch> m_DrawBatches;
-  std::vector<DrawBatch> m_FlushDrawBatches;
+  size_t m_iActiveDrawBatchCount = 0;
   std::vector<MacOSMetalDrawBatch> m_MetalDrawBatches;
   std::vector<MetalTexture> m_Textures;
   std::array<uintptr_t, NUM_TextureUnit> m_TextureHandles;
