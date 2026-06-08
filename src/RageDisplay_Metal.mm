@@ -77,6 +77,36 @@ RageVColor ToVertexColor(const RageColor& color) {
   return out;
 }
 
+const char* MacOSNativePresentationReasonNameForMetal(int reason) {
+  switch (reason) {
+    case 1:
+      return "will_enter_fullscreen";
+    case 2:
+      return "did_enter_fullscreen";
+    case 3:
+      return "will_exit_fullscreen";
+    case 4:
+      return "did_exit_fullscreen";
+    case 5:
+      return "screen_changed";
+    case 6:
+      return "backing_changed";
+    default:
+      return "unknown";
+  }
+}
+
+bool MacOSWindowIsNativeFullscreenForMetal(void* nativeWindow) {
+  if (nativeWindow == nullptr) {
+    return false;
+  }
+  NSWindow* window = (__bridge NSWindow*)nativeWindow;
+  if (window == nil) {
+    return false;
+  }
+  return ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
+}
+
 RageColor ClampColor(const RageColor& color) {
   return RageColor(
       std::clamp(color.r, 0.0f, 1.0f),
@@ -344,6 +374,44 @@ RageColor RageDisplay_Metal::ComputeModelColor(const RageVector3& normal) const 
   return ClampColor(lit);
 }
 
+RageColor RageDisplay_Metal::ComputeCelModelColor(
+    const RageVector3& normal) const {
+  const RageVector3 normalizedNormal =
+      NormalizeOrDefault(normal, RageVector3(0.0f, 0.0f, 1.0f));
+  RageVector3 lightDirection(0.0f, 0.0f, 1.0f);
+  for (const DirectionalLight& light : m_Lights) {
+    if (light.enabled) {
+      lightDirection =
+          NormalizeOrDefault(light.direction, RageVector3(0.0f, 0.0f, 1.0f));
+      break;
+    }
+  }
+
+  const float ambient = std::sqrt(
+      m_MaterialAmbient.r * m_MaterialAmbient.r +
+      m_MaterialAmbient.g * m_MaterialAmbient.g +
+      m_MaterialAmbient.b * m_MaterialAmbient.b);
+  float intensity = std::max(
+      0.0f, normalizedNormal.x * lightDirection.x +
+                normalizedNormal.y * lightDirection.y +
+                normalizedNormal.z * lightDirection.z);
+
+  RageColor multiplier(1.0f, 1.0f, 1.0f, 1.0f);
+  if (intensity < 0.5f) {
+    intensity *= 0.5f;
+    multiplier.r *= 0.6f;
+    multiplier.g *= 0.75f;
+    multiplier.b *= 0.9f;
+  }
+  intensity =
+      std::min(std::clamp(intensity, ambient, 1.0f) + 0.25f, 1.0f);
+  multiplier.r *= intensity;
+  multiplier.g *= intensity;
+  multiplier.b *= intensity;
+  multiplier.a = 1.0f;
+  return ClampColor(multiplier);
+}
+
 void RageCompiledGeometryMetal::EmitTo(
     RageDisplay_Metal* display, int iMeshIndex,
     const RageVColor& fallbackColor) const {
@@ -384,7 +452,7 @@ void RageCompiledGeometryMetal::EmitTo(
         position += modelVertex.n * 0.125f;
         litColor = RageColor(0.25f, 0.125f, 0.125f, 1.0f);
       } else if (display->m_iCelShadedStage == 2) {
-        litColor.a = 1.0f;
+        litColor = display->ComputeCelModelColor(transformedNormal);
       }
       const RageVector2 texcoord =
           batch.sphereMapping
@@ -529,23 +597,28 @@ bool RageDisplay_Metal::UploadTexturePixels(
       texture->height <= 0) {
     return false;
   }
+  if (img->pixels == nullptr || img->format == nullptr) {
+    LOG->Warn(
+        "RageDisplay_Metal: refusing texture upload with missing pixels or "
+        "format offset=%d,%d size=%dx%d texture=%dx%d.",
+        xoffset, yoffset, width, height, texture->width, texture->height);
+    return false;
+  }
 
   std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4, 0);
-  if (img->pixels != nullptr) {
-    for (int y = 0; y < height; ++y) {
-      const uint8_t* src = img->pixels + static_cast<size_t>(y) * img->pitch;
-      uint8_t* dst = pixels.data() + static_cast<size_t>(y) * width * 4;
-      for (int x = 0; x < width; ++x) {
-        uint8_t rgbaPixel[4] = {0, 0, 0, 0};
-        RageSurfaceUtils::GetRGBAV(
-            src + static_cast<size_t>(x) * img->format->BytesPerPixel, img,
-            rgbaPixel);
-        const size_t dstOffset = static_cast<size_t>(x) * 4;
-        dst[dstOffset + 0] = rgbaPixel[0];
-        dst[dstOffset + 1] = rgbaPixel[1];
-        dst[dstOffset + 2] = rgbaPixel[2];
-        dst[dstOffset + 3] = rgbaPixel[3];
-      }
+  for (int y = 0; y < height; ++y) {
+    const uint8_t* src = img->pixels + static_cast<size_t>(y) * img->pitch;
+    uint8_t* dst = pixels.data() + static_cast<size_t>(y) * width * 4;
+    for (int x = 0; x < width; ++x) {
+      uint8_t rgbaPixel[4] = {0, 0, 0, 0};
+      RageSurfaceUtils::GetRGBAV(
+          src + static_cast<size_t>(x) * img->format->BytesPerPixel, img,
+          rgbaPixel);
+      const size_t dstOffset = static_cast<size_t>(x) * 4;
+      dst[dstOffset + 0] = rgbaPixel[0];
+      dst[dstOffset + 1] = rgbaPixel[1];
+      dst[dstOffset + 2] = rgbaPixel[2];
+      dst[dstOffset + 3] = rgbaPixel[3];
     }
   }
 
@@ -602,6 +675,10 @@ void RageDisplay_Metal::RecycleTextureHandle(uintptr_t handle) {
   }
   if (m_Textures[handle].texture != nullptr ||
       m_Textures[handle].depthTexture != nullptr) {
+    return;
+  }
+  if (std::find(m_FreeTextureHandles.begin(), m_FreeTextureHandles.end(),
+                handle) != m_FreeTextureHandles.end()) {
     return;
   }
   m_FreeTextureHandles.push_back(handle);
@@ -1250,9 +1327,18 @@ void RageDisplay_Metal::FlushBatches() {
   const double targetHz =
       m_Params.rate > 1 ? static_cast<double>(m_Params.rate) : 60.0;
   const bool clearDepth = m_bClearDepthNextFrame;
-  const bool presented = m_Presenter->PresentSolidBatches(
-      m_MetalDrawBatches.data(), m_MetalDrawBatches.size(), clearDepth,
-      0.0, 0.0, 0.0, 1.0, targetHz);
+  const bool nativeFullscreen = MacOSWindowIsNativeFullscreenForMetal(
+      m_Window->GetNativeWindowHandle());
+  const bool useWindowedOffscreenPresent =
+      m_Params.windowed && !nativeFullscreen;
+  const bool presented =
+      useWindowedOffscreenPresent
+          ? m_Presenter->PresentSolidBatchesOffscreenFirst(
+                m_MetalDrawBatches.data(), m_MetalDrawBatches.size(),
+                clearDepth, 0.0, 0.0, 0.0, 1.0, targetHz)
+          : m_Presenter->PresentSolidBatches(
+                m_MetalDrawBatches.data(), m_MetalDrawBatches.size(),
+                clearDepth, 0.0, 0.0, 0.0, 1.0, targetHz);
   ClearActiveBatches();
   m_MetalDrawBatches.clear();
   m_bClearDepthNextFrame = false;
@@ -1348,6 +1434,13 @@ void RageDisplay_Metal::EndFrame() {
   }
   if (m_Window) {
     m_Window->Update();
+    const int nativePresentationReason =
+        MacOSMetalPresenterConsumeNativePresentationChangeReason();
+    if (nativePresentationReason != 0 && m_Presenter && m_bReady) {
+      m_Presenter->ReconfigureAttachedLayer(
+          m_Window->GetNativeWindowHandle(),
+          MacOSNativePresentationReasonNameForMetal(nativePresentationReason));
+    }
   }
   ProcessStatsOnFlip();
 }
@@ -1482,7 +1575,22 @@ RageSurface* RageDisplay_Metal::CreateScreenshot() {
       static_cast<CGWindowID>([window windowNumber]),
       kCGWindowImageBoundsIgnoreFraming);
   if (captured == nullptr) {
-    LOG->Warn("RageDisplay_Metal::CreateScreenshot: window capture failed.");
+    bool screenCaptureDenied = false;
+    if (@available(macOS 10.15, *)) {
+      static bool s_bRequestedScreenCaptureAccess = false;
+      screenCaptureDenied = !CGPreflightScreenCaptureAccess();
+      if (screenCaptureDenied && !s_bRequestedScreenCaptureAccess) {
+        s_bRequestedScreenCaptureAccess = true;
+        CGRequestScreenCaptureAccess();
+      }
+    }
+    LOG->Warn(
+        "RageDisplay_Metal::CreateScreenshot: window capture failed%s. "
+        "Native Metal currently uses macOS window capture for screenshots; "
+        "grant Screen Recording permission to ITGmania, then restart the game, "
+        "or switch to OpenGL for strict backbuffer screenshots.",
+        screenCaptureDenied ? " (Screen Recording permission is not granted)"
+                            : "");
     return nullptr;
   }
 

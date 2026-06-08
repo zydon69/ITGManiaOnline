@@ -1,12 +1,19 @@
 #include "RageTextureRenderTarget.h"
 
 #include "RageDisplay.h"
+#include "RageLog.h"
 #include "RageTexture.h"
 #include "RageTextureID.h"
 
 RageTextureRenderTarget::RageTextureRenderTarget(
     RageTextureID name, const RenderTargetParam& param)
-    : RageTexture(name), m_Param(param) {
+    : RageTexture(name),
+      m_Param(param),
+      m_iTexHandle(0),
+      m_iPreviousRenderTarget(0),
+      m_bValid(false),
+      m_bRendering(false),
+      m_bWarnedInvalidUse(false) {
   Create();
 }
 
@@ -22,6 +29,13 @@ void RageTextureRenderTarget::Reload() {
  * loaded elsewhere. Render targets can't be loaded blindly like a regular
  * texture, anyway, since something has to render into it. */
 void RageTextureRenderTarget::Create() {
+  m_iTexHandle = 0;
+  m_iTextureWidth = 0;
+  m_iTextureHeight = 0;
+  m_bValid = false;
+  m_bRendering = false;
+  m_bWarnedInvalidUse = false;
+
   /* All render targets support non-power-of-two targets,
    * but some require that the resulting texture dimensions be powers of two.
    * CreateRenderTarget returns the actual resolution. */
@@ -35,15 +49,45 @@ void RageTextureRenderTarget::Create() {
   m_iFramesWide = m_iFramesHigh = 1;
 
   CreateFrameRects();
+
+  m_bValid =
+      m_iTexHandle != 0 && m_iTextureWidth > 0 && m_iTextureHeight > 0;
+  if (!m_bValid) {
+    LOG->Warn(
+        "RageTextureRenderTarget: failed to create render target '%s' "
+        "requested=%dx%d depth=%d alpha=%d float=%d. Rendering to this "
+        "target will be skipped instead of falling back to the main "
+        "framebuffer.",
+        GetID().filename.c_str(), m_Param.iWidth, m_Param.iHeight,
+        m_Param.bWithDepthBuffer ? 1 : 0, m_Param.bWithAlpha ? 1 : 0,
+        m_Param.bFloat ? 1 : 0);
+  }
 }
 
 void RageTextureRenderTarget::Destroy() {
-  DISPLAY->DeleteTexture(m_iTexHandle);
+  if (m_iTexHandle != 0) {
+    DISPLAY->DeleteTexture(m_iTexHandle);
+  }
+  m_iTexHandle = 0;
+  m_bValid = false;
+  m_bRendering = false;
 }
 
 void RageTextureRenderTarget::BeginRenderingTo(bool bPreserveTexture) {
+  if (!m_bValid) {
+    if (!m_bWarnedInvalidUse) {
+      LOG->Warn(
+          "RageTextureRenderTarget: ignoring BeginRenderingTo() for invalid "
+          "render target '%s'.",
+          GetID().filename.c_str());
+      m_bWarnedInvalidUse = true;
+    }
+    return;
+  }
+
   m_iPreviousRenderTarget = DISPLAY->GetRenderTarget();
   DISPLAY->SetRenderTarget(m_iTexHandle, bPreserveTexture);
+  m_bRendering = true;
 
   /* We're rendering to a texture, not the framebuffer.
    * Stash away the centering matrix, and set it to identity. */
@@ -61,12 +105,17 @@ void RageTextureRenderTarget::BeginRenderingTo(bool bPreserveTexture) {
 }
 
 void RageTextureRenderTarget::FinishRenderingTo() {
+  if (!m_bRendering) {
+    return;
+  }
+
   // Restore the matrixes.
   DISPLAY->CenteringPopMatrix();
   DISPLAY->CameraPopMatrix();
   DISPLAY->PopMatrix();
 
   DISPLAY->SetRenderTarget(m_iPreviousRenderTarget);
+  m_bRendering = false;
 }
 
 // lua start

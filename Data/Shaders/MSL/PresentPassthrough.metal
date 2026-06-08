@@ -19,6 +19,45 @@ vertex VertexOut vertex_main(uint vertexID [[vertex_id]]) {
   return out;
 }
 
+vertex VertexOut vertex_main_flip_x(uint vertexID [[vertex_id]]) {
+  const float2 positions[3] = {
+    float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)
+  };
+  const float2 texcoords[3] = {
+    float2(1.0, 0.0), float2(-1.0, 0.0), float2(1.0, 2.0)
+  };
+  VertexOut out;
+  out.position = float4(positions[vertexID], 0.0, 1.0);
+  out.texcoord = texcoords[vertexID];
+  return out;
+}
+
+vertex VertexOut vertex_main_flip_y(uint vertexID [[vertex_id]]) {
+  const float2 positions[3] = {
+    float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)
+  };
+  const float2 texcoords[3] = {
+    float2(0.0, 1.0), float2(2.0, 1.0), float2(0.0, -1.0)
+  };
+  VertexOut out;
+  out.position = float4(positions[vertexID], 0.0, 1.0);
+  out.texcoord = texcoords[vertexID];
+  return out;
+}
+
+vertex VertexOut vertex_main_flip_xy(uint vertexID [[vertex_id]]) {
+  const float2 positions[3] = {
+    float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)
+  };
+  const float2 texcoords[3] = {
+    float2(1.0, 1.0), float2(-1.0, 1.0), float2(1.0, -1.0)
+  };
+  VertexOut out;
+  out.position = float4(positions[vertexID], 0.0, 1.0);
+  out.texcoord = texcoords[vertexID];
+  return out;
+}
+
 fragment float4 fragment_main(
     VertexOut in [[stage_in]],
     texture2d<float> source [[texture(0)]]) {

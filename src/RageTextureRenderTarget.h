@@ -14,7 +14,11 @@ class RageTextureRenderTarget : public RageTexture {
  public:
   RageTextureRenderTarget(RageTextureID name, const RenderTargetParam& param);
   virtual ~RageTextureRenderTarget();
-  virtual void Invalidate() { m_iTexHandle = 0; /* don't Destroy() */ }
+  virtual void Invalidate() {
+    m_iTexHandle = 0; /* don't Destroy() */
+    m_bValid = false;
+    m_bRendering = false;
+  }
   virtual void Reload();
   virtual uintptr_t GetTexHandle() const { return m_iTexHandle; }
 
@@ -30,6 +34,9 @@ class RageTextureRenderTarget : public RageTexture {
   void Destroy();
   uintptr_t m_iTexHandle;
   uintptr_t m_iPreviousRenderTarget;
+  bool m_bValid;
+  bool m_bRendering;
+  bool m_bWarnedInvalidUse;
 };
 
 #endif

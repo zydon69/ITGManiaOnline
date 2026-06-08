@@ -151,6 +151,7 @@ class RageDisplay_Metal : public RageDisplay {
   RageMatrix CurrentModelViewProjection() const;
   RageMatrix CurrentTextureMatrix() const;
   RageColor ComputeModelColor(const RageVector3& normal) const;
+  RageColor ComputeCelModelColor(const RageVector3& normal) const;
   DrawBatch& ActiveBatch();
   void ClearActiveBatches();
   void MoveActiveBatchesTo(std::vector<DrawBatch>* destination);

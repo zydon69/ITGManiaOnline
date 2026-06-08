@@ -65,8 +65,6 @@ static Preference<float> g_fMacOSOpenGLFencePacingWaitMs(
     "MacOSOpenGLFencePacingWaitMs", -1.0f);
 static Preference<std::string> g_sMacOSPresentBackend(
     "MacOSPresentBackend", "opengl");
-static Preference<bool> g_bMacOSOpenGLMetalPresentBridge(
-    "MacOSOpenGLMetalPresentBridge", false);
 extern Preference<float> g_fFramePacingTargetHz;
 
 constexpr int kMetalBridgeInitialBuildDelayFrames = 5;
@@ -1048,8 +1046,7 @@ static bool MacOSMetalPresentRequested() {
 }
 
 static bool MacOSMetalBridgeEnabled() {
-  return MacOSMetalPresentRequested() &&
-         g_bMacOSOpenGLMetalPresentBridge.Get();
+  return MacOSMetalPresentRequested();
 }
 
 static bool MacOSMetalDirectPresentEnabled() {
@@ -2823,6 +2820,9 @@ void LowLevelWindow_MacOSX::Update() {
 
   if (sizeChanged) {
     DISPLAY->ResolutionChanged();
+  }
+  if (didNativePresentationChange) {
+    MacOSMetalPresenterMarkNativePresentationChange(nativePresentationReason);
   }
   DISPLAY->ResetFramePacing(
       didNativePresentationChange ? "macos_native_window_presentation_change"

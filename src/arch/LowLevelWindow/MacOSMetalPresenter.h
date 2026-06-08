@@ -76,10 +76,16 @@ class MacOSMetalPresenter {
   void SetLayerVisible(bool visible);
   bool AttachLayerToWindow(void* nsWindow);
   bool AttachLayerAsContentView(void* nsWindow);
+  bool ReconfigureAttachedLayer(void* nsWindow, const char* reason);
   void DetachLayer();
   bool PresentClearFrame(
       double red, double green, double blue, double alpha, double targetHz);
   bool PresentSolidBatches(
+      const MacOSMetalDrawBatch* batches, size_t batchCount,
+      bool clearDepth,
+      double clearRed, double clearGreen, double clearBlue, double clearAlpha,
+      double targetHz);
+  bool PresentSolidBatchesOffscreenFirst(
       const MacOSMetalDrawBatch* batches, size_t batchCount,
       bool clearDepth,
       double clearRed, double clearGreen, double clearBlue, double clearAlpha,
@@ -113,5 +119,7 @@ class MacOSMetalPresenter {
 
 MacOSMetalPresenterRuntimeStats MacOSMetalPresenterGetRuntimeStats();
 std::string MacOSMetalPresenterGetRuntimeStatsLine();
+void MacOSMetalPresenterMarkNativePresentationChange(int reason);
+int MacOSMetalPresenterConsumeNativePresentationChangeReason();
 
 #endif

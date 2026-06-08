@@ -43,8 +43,9 @@ constexpr uint64_t kMetalInitialTraceFrames = 3;
 constexpr uint64_t kMetalRareSkipTraceInterval = 5000;
 constexpr int kMetalMaxSolidFramesInFlight = 3;
 constexpr int kMetalFrameLimiterWaitMs = 8;
+constexpr int kMetalReconfigureDrainWaitMs = 24;
 constexpr int kMetalShutdownDrainWaitMs = 250;
-constexpr int kMetalDrawablePrefetchRenderWaitUs = 0;
+constexpr int kMetalDrawablePrefetchRenderWaitUs = 500;
 constexpr int kMetalInteropDrawablePrefetchRenderWaitUs = 500;
 
 bool ShouldTraceMetalRenderThreadPrefetchWait(float waitMs, int waitUsec) {
@@ -96,6 +97,7 @@ std::atomic<uint64_t> g_iMetalConsumedDrawables{0};
 std::atomic<uint64_t> g_iMetalSlowDrawableAcquires{0};
 std::atomic<uint64_t> g_iMetalDrawableMisses{0};
 std::atomic_bool g_bMetalPresenterRuntimeActive{false};
+std::atomic<int> g_iMetalNativePresentationChangeReason{0};
 
 void ResetMetalRuntimeStats() {
   g_iMetalDirectPresentSubmittedFrames.store(0, std::memory_order_relaxed);
@@ -235,7 +237,7 @@ void ReleaseMetalFrameSlot(
 
 bool WaitForMetalFrameLimiterIdle(
     const std::shared_ptr<MacOSMetalFrameLimiter>& limiter, int timeoutMs,
-    const char* label) {
+    const char* label, const char* action) {
   if (!limiter) {
     return true;
   }
@@ -247,10 +249,11 @@ bool WaitForMetalFrameLimiterIdle(
       });
   if (!idle) {
     LOG->Warn(
-        "MacOS Metal presenter shutdown while %s frames remain in flight: %d "
-        "after %dms.",
-        label != nullptr ? label : "unknown", limiter->framesInFlight,
-        timeoutMs);
+        "MacOS Metal presenter %s while %s frames remain in flight: %d after "
+        "%dms.",
+        action != nullptr ? action : "wait timed out",
+        label != nullptr ? label : "unknown",
+        limiter->framesInFlight, timeoutMs);
   }
   return idle;
 }
@@ -258,6 +261,7 @@ bool WaitForMetalFrameLimiterIdle(
 struct MacOSMetalPresenterImpl {
   MacOSMetalPresenterImpl() {
     solidPipelines.fill(nil);
+    windowedOffscreenPresentPipelines.fill(nil);
     distanceFieldPipelines.fill(nil);
     for (auto& row : depthStates) {
       row.fill(nil);
@@ -270,6 +274,7 @@ struct MacOSMetalPresenterImpl {
   id<MTLDevice> device = nil;
   id<MTLCommandQueue> commandQueue = nil;
   id<MTLRenderPipelineState> presentPipeline = nil;
+  std::array<id<MTLRenderPipelineState>, 4> windowedOffscreenPresentPipelines;
   std::array<id<MTLRenderPipelineState>, NUM_BlendMode> solidPipelines;
   std::array<id<MTLRenderPipelineState>, NUM_BlendMode>
       distanceFieldPipelines;
@@ -285,6 +290,10 @@ struct MacOSMetalPresenterImpl {
       renderTargetVertexBufferCapacities = {};
   id<MTLTexture> whiteTexture = nil;
   id<MTLTexture> depthTexture = nil;
+  id<MTLTexture> windowedOffscreenTexture = nil;
+  id<MTLTexture> windowedOffscreenDepthTexture = nil;
+  int windowedOffscreenWidth = 0;
+  int windowedOffscreenHeight = 0;
   CAMetalLayer* layer = nil;
   NSView* layerView = nil;
   NSView* replacedContentView = nil;
@@ -308,6 +317,8 @@ struct MacOSMetalPresenterImpl {
   uint64_t prefetchedDrawableMisses = 0;
   uint64_t prefetchedDrawableSlowAcquires = 0;
   uint64_t directPresentSkippedNoDrawable = 0;
+  uint64_t windowedOffscreenSkippedNoDrawable = 0;
+  uint64_t windowedOffscreenSubmittedFrames = 0;
   uint64_t directPresentSyncDrawableAcquires = 0;
   uint64_t directPresentPrefetchWaits = 0;
   uint64_t directPresentPrefetchWaitHits = 0;
@@ -407,6 +418,30 @@ void ConfigureMetalLayer(
   layer.maximumDrawableCount = 3;
   layer.frame = bounds;
   layer.drawableSize = drawableSize;
+}
+
+CGSize DrawableSizeForLayerView(NSView* layerView) {
+  if (layerView == nil) {
+    return CGSizeMake(1, 1);
+  }
+  const NSRect bounds = [layerView bounds];
+  return CGSizeMake(
+      std::max<CGFloat>(1, bounds.size.width),
+      std::max<CGFloat>(1, bounds.size.height));
+}
+
+void PurgePrefetchedDrawable(MacOSMetalPresenterImpl* impl) {
+  if (impl == nullptr) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(impl->drawableMutex);
+  if (impl->prefetchedDrawable != nil) {
+    [impl->prefetchedDrawable release];
+    impl->prefetchedDrawable = nil;
+  }
+  impl->prefetchedDrawableAcquireMs = 0.0f;
+  impl->drawableCondition.notify_all();
 }
 
 bool AdoptLayerFromView(
@@ -764,7 +799,9 @@ bool CreateInteropSurface(
 }
 
 id<MTLRenderPipelineState> CreatePresentPipeline(
-    id<MTLDevice> device, std::string* failureReason) {
+    id<MTLDevice> device,
+    const char* vertexFunctionName,
+    std::string* failureReason) {
   NSError* error = nil;
   id<MTLLibrary> library = LoadMetalLibrary(
       device, "Data/Shaders/MSL/PresentPassthrough.metal", failureReason);
@@ -773,12 +810,17 @@ id<MTLRenderPipelineState> CreatePresentPipeline(
   }
 
   id<MTLFunction> vertexFunction =
-      [library newFunctionWithName:@"vertex_main"];
+      [library newFunctionWithName:[NSString stringWithUTF8String:
+                                      vertexFunctionName != nullptr
+                                          ? vertexFunctionName
+                                          : "vertex_main"]];
   id<MTLFunction> fragmentFunction =
       [library newFunctionWithName:@"fragment_main"];
   if (vertexFunction == nil || fragmentFunction == nil) {
     if (failureReason != nullptr) {
-      *failureReason = "Metal present shader entry point lookup failed.";
+      *failureReason = ssprintf(
+          "Metal present shader entry point lookup failed: vertex=%s.",
+          vertexFunctionName != nullptr ? vertexFunctionName : "vertex_main");
     }
     [vertexFunction release];
     [fragmentFunction release];
@@ -803,6 +845,39 @@ id<MTLRenderPipelineState> CreatePresentPipeline(
   [fragmentFunction release];
   [library release];
   return pipeline;
+}
+
+id<MTLRenderPipelineState> CreatePresentPipeline(
+    id<MTLDevice> device, std::string* failureReason) {
+  return CreatePresentPipeline(device, "vertex_main", failureReason);
+}
+
+const char* WindowedOffscreenPresentVertexFunctionName(int flipMode) {
+  switch (flipMode) {
+    case 0:
+      return "vertex_main";
+    case 1:
+      return "vertex_main_flip_x";
+    case 2:
+      return "vertex_main_flip_y";
+    case 3:
+      return "vertex_main_flip_xy";
+    default:
+      return "vertex_main_flip_x";
+  }
+}
+
+int WindowedOffscreenPresentFlipMode() {
+  return 2;
+}
+
+id<MTLRenderPipelineState> WindowedOffscreenPresentPipeline(
+    MacOSMetalPresenterImpl* impl) {
+  if (impl == nullptr) {
+    return nil;
+  }
+  const int flipMode = WindowedOffscreenPresentFlipMode();
+  return impl->windowedOffscreenPresentPipelines[flipMode];
 }
 
 void ConfigureBlendAttachment(
@@ -966,6 +1041,72 @@ id<MTLTexture> CreateDepthTexture(id<MTLDevice> device, int width, int height) {
   descriptor.usage = MTLTextureUsageRenderTarget;
   descriptor.storageMode = MTLStorageModePrivate;
   return [device newTextureWithDescriptor:descriptor];
+}
+
+id<MTLTexture> CreateBGRA8OffscreenTexture(
+    id<MTLDevice> device, int width, int height) {
+  if (device == nil || width <= 0 || height <= 0) {
+    return nil;
+  }
+
+  MTLTextureDescriptor* descriptor =
+      [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                         width:width
+                                                        height:height
+                                                     mipmapped:NO];
+  descriptor.usage =
+      MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+  descriptor.storageMode = MTLStorageModePrivate;
+  return [device newTextureWithDescriptor:descriptor];
+}
+
+void ReleaseWindowedOffscreenTextures(MacOSMetalPresenterImpl* impl) {
+  if (impl == nullptr) {
+    return;
+  }
+  if (impl->windowedOffscreenTexture != nil) {
+    [impl->windowedOffscreenTexture release];
+    impl->windowedOffscreenTexture = nil;
+  }
+  if (impl->windowedOffscreenDepthTexture != nil) {
+    [impl->windowedOffscreenDepthTexture release];
+    impl->windowedOffscreenDepthTexture = nil;
+  }
+  impl->windowedOffscreenWidth = 0;
+  impl->windowedOffscreenHeight = 0;
+}
+
+bool EnsureWindowedOffscreenTextures(
+    MacOSMetalPresenterImpl* impl, int width, int height) {
+  if (impl == nullptr || impl->device == nil || width <= 0 || height <= 0) {
+    return false;
+  }
+  if (impl->windowedOffscreenTexture != nil &&
+      impl->windowedOffscreenDepthTexture != nil &&
+      impl->windowedOffscreenWidth == width &&
+      impl->windowedOffscreenHeight == height) {
+    return true;
+  }
+
+  ReleaseWindowedOffscreenTextures(impl);
+  impl->windowedOffscreenTexture =
+      CreateBGRA8OffscreenTexture(impl->device, width, height);
+  impl->windowedOffscreenDepthTexture =
+      CreateDepthTexture(impl->device, width, height);
+  if (impl->windowedOffscreenTexture == nil ||
+      impl->windowedOffscreenDepthTexture == nil) {
+    ReleaseWindowedOffscreenTextures(impl);
+    return false;
+  }
+
+  impl->windowedOffscreenWidth = width;
+  impl->windowedOffscreenHeight = height;
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: macos_metal_windowed_offscreen_recreated size=%dx%d",
+        width, height);
+  }
+  return true;
 }
 
 id<MTLDepthStencilState> CreateDepthState(
@@ -1335,6 +1476,8 @@ bool MacOSMetalPresenter::Initialize(
   RageTimer initTimer;
   Shutdown();
   ResetMetalRuntimeStats();
+  g_iMetalNativePresentationChangeReason.store(
+      0, std::memory_order_release);
 
   MacOSMetalPresenterImpl* impl = new MacOSMetalPresenterImpl();
   impl->surfaceBusy = std::make_shared<MacOSMetalSurfaceBusyFlags>();
@@ -1364,6 +1507,20 @@ bool MacOSMetalPresenter::Initialize(
     LOG->Warn(
         "MacOS Metal presenter direct-present pipeline unavailable: %s",
         pipelineFailure.c_str());
+  }
+  for (int i = 0; i < 4; ++i) {
+    std::string offscreenPipelineFailure;
+    impl->windowedOffscreenPresentPipelines[i] =
+        CreatePresentPipeline(
+            impl->device, WindowedOffscreenPresentVertexFunctionName(i),
+            &offscreenPipelineFailure);
+    if (impl->windowedOffscreenPresentPipelines[i] == nil) {
+      LOG->Warn(
+          "MacOS Metal presenter windowed offscreen pipeline unavailable: "
+          "mode=%d vertex=%s error=%s",
+          i, WindowedOffscreenPresentVertexFunctionName(i),
+          offscreenPipelineFailure.c_str());
+    }
   }
 
   std::string fixedFunctionLibraryFailure;
@@ -1474,9 +1631,17 @@ bool MacOSMetalPresenter::Initialize(
       [impl->depthTexture release];
       impl->depthTexture = nil;
     }
+    ReleaseWindowedOffscreenTextures(impl);
     if (impl->presentPipeline != nil) {
       [impl->presentPipeline release];
       impl->presentPipeline = nil;
+    }
+    for (id<MTLRenderPipelineState>& pipeline :
+         impl->windowedOffscreenPresentPipelines) {
+      if (pipeline != nil) {
+        [pipeline release];
+        pipeline = nil;
+      }
     }
     if (impl->commandQueue != nil) {
       [impl->commandQueue release];
@@ -1554,13 +1719,13 @@ bool MacOSMetalPresenter::Initialize(
   }
   impl->interopReady = interopReady;
   /*
-   * The OpenGL->Metal presentation bridge consumes prefetched drawables because
-   * it has no synchronous fallback in PresentInteropSurfaceAt().  Native Metal
-   * rendering keeps the simpler direct acquisition path: fullscreen traces show
-   * prefetch almost never wins there, while the extra thread can block in
-   * CAMetalLayer independently of the render thread.
+   * Keep drawable acquisition off the render thread for both native Metal and
+   * the OpenGL->Metal bridge.  CAMetalLayer::nextDrawable can block for one or
+   * more refresh intervals during native macOS fullscreen/window transitions;
+   * prefetching lets the render thread consume a ready drawable and only wait a
+   * small bounded budget before falling back to synchronous acquisition.
    */
-  impl->useDrawablePrefetch = createInteropSurfaces;
+  impl->useDrawablePrefetch = true;
 
   m_Impl = impl;
   m_Available = true;
@@ -1592,12 +1757,14 @@ void MacOSMetalPresenter::Shutdown() {
       static_cast<MacOSMetalPresenterImpl*>(m_Impl);
   StopDrawablePrefetcher(impl);
   WaitForMetalFrameLimiterIdle(
-      impl->solidFrameLimiter, kMetalShutdownDrainWaitMs, "solid");
+      impl->solidFrameLimiter, kMetalShutdownDrainWaitMs, "solid",
+      "shutdown timed out");
   WaitForMetalFrameLimiterIdle(
       impl->renderTargetFrameLimiter, kMetalShutdownDrainWaitMs,
-      "render_target");
+      "render_target", "shutdown timed out");
   WaitForMetalFrameLimiterIdle(
-      impl->interopFrameLimiter, kMetalShutdownDrainWaitMs, "interop");
+      impl->interopFrameLimiter, kMetalShutdownDrainWaitMs, "interop",
+      "shutdown timed out");
   LogMetalPresenterTimingSummary(impl);
   DetachLayer();
   for (auto& surface : impl->surfaces) {
@@ -1614,6 +1781,13 @@ void MacOSMetalPresenter::Shutdown() {
   if (impl->presentPipeline != nil) {
     [impl->presentPipeline release];
     impl->presentPipeline = nil;
+  }
+  for (id<MTLRenderPipelineState>& pipeline :
+       impl->windowedOffscreenPresentPipelines) {
+    if (pipeline != nil) {
+      [pipeline release];
+      pipeline = nil;
+    }
   }
   ReleaseVertexBufferRing(
       &impl->solidVertexBuffers, &impl->solidVertexBufferCapacities);
@@ -1657,6 +1831,7 @@ void MacOSMetalPresenter::Shutdown() {
     [impl->depthTexture release];
     impl->depthTexture = nil;
   }
+  ReleaseWindowedOffscreenTextures(impl);
   if (impl->device != nil) {
     [impl->device release];
     impl->device = nil;
@@ -1890,6 +2065,112 @@ bool MacOSMetalPresenter::AttachLayerAsContentView(void* nsWindow) {
       static_cast<int>(impl->layer.drawableSize.width),
       static_cast<int>(impl->layer.drawableSize.height),
       attachTimer.GetDeltaTime() * 1000.0f);
+  return true;
+}
+
+bool MacOSMetalPresenter::ReconfigureAttachedLayer(
+    void* nsWindow, const char* reason) {
+  RageTimer reconfigureTimer;
+  if (![NSThread isMainThread]) {
+    __block bool reconfigured = false;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+      reconfigured = ReconfigureAttachedLayer(nsWindow, reason);
+    });
+    return reconfigured;
+  }
+
+  if (!IsAvailable() || nsWindow == nullptr) {
+    return false;
+  }
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  if (impl->layer == nil || impl->layerView == nil) {
+    return false;
+  }
+
+  NSWindow* window = (__bridge NSWindow*)nsWindow;
+  NSView* contentView = [window contentView];
+  NSView* geometryView = impl->layerOwnsContentView ? impl->layerView
+                                                    : contentView;
+  if (geometryView == nil) {
+    return false;
+  }
+
+  const NSRect beforeFrame = impl->layer.frame;
+  const CGSize beforeDrawableSize = impl->layer.drawableSize;
+  const bool wasPrefetchStarted = impl->drawablePrefetchStarted;
+
+  StopDrawablePrefetcher(impl);
+  WaitForMetalFrameLimiterIdle(
+      impl->solidFrameLimiter, kMetalReconfigureDrainWaitMs, "solid",
+      "reconfigure timed out");
+
+  const NSRect bounds = [geometryView bounds];
+  [impl->layerView setFrame:bounds];
+  [impl->layerView setHidden:NO];
+  impl->layerVisible.store(true, std::memory_order_release);
+
+  const CGSize drawableSize = DrawableSizeForLayerView(impl->layerView);
+  ConfigureMetalLayer(impl, impl->layer, [impl->layerView bounds], drawableSize);
+
+  const bool depthSizeChanged =
+      impl->depthTexture == nil ||
+      static_cast<int>(beforeDrawableSize.width) !=
+          static_cast<int>(drawableSize.width) ||
+      static_cast<int>(beforeDrawableSize.height) !=
+          static_cast<int>(drawableSize.height);
+  if (depthSizeChanged) {
+    id<MTLTexture> replacementDepth = CreateDepthTexture(
+        impl->device, static_cast<int>(drawableSize.width),
+        static_cast<int>(drawableSize.height));
+    if (replacementDepth != nil) {
+      if (impl->depthTexture != nil) {
+        [impl->depthTexture release];
+      }
+      impl->depthTexture = replacementDepth;
+    } else {
+      LOG->Warn(
+          "MacOS Metal presenter could not recreate depth texture after "
+          "window presentation change: size=%dx%d.",
+          static_cast<int>(drawableSize.width),
+          static_cast<int>(drawableSize.height));
+    }
+    ReleaseWindowedOffscreenTextures(impl);
+  }
+
+  PurgePrefetchedDrawable(impl);
+  if (wasPrefetchStarted || impl->useDrawablePrefetch) {
+    StartDrawablePrefetcher(impl);
+  }
+
+  if (PerfDiagnosticsEnabled()) {
+    NSScreen* screen = [window screen];
+    const CGFloat backingScale =
+        screen != nil ? [screen backingScaleFactor] : [window backingScaleFactor];
+    LOG->Trace(
+        "PERF_TRACE: macos_metal_layer_reconfigured reason=%s "
+        "total_ms=%.3f before_frame=%dx%d after_frame=%dx%d "
+        "before_drawable=%dx%d after_drawable=%dx%d backing_scale=%.3f "
+        "depth_recreated=%d drain_budget_ms=%d prefetch_was_started=%d "
+        "prefetch_started=%d",
+        reason != nullptr ? reason : "unknown",
+        reconfigureTimer.GetDeltaTime() * 1000.0f,
+        static_cast<int>(beforeFrame.size.width),
+        static_cast<int>(beforeFrame.size.height),
+        static_cast<int>(impl->layer.frame.size.width),
+        static_cast<int>(impl->layer.frame.size.height),
+        static_cast<int>(beforeDrawableSize.width),
+        static_cast<int>(beforeDrawableSize.height),
+        static_cast<int>(impl->layer.drawableSize.width),
+        static_cast<int>(impl->layer.drawableSize.height),
+        static_cast<double>(backingScale),
+        depthSizeChanged ? 1 : 0,
+        kMetalReconfigureDrainWaitMs,
+        wasPrefetchStarted ? 1 : 0,
+        impl->drawablePrefetchStarted ? 1 : 0);
+  }
+
   return true;
 }
 
@@ -2314,6 +2595,200 @@ bool MacOSMetalPresenter::PresentSolidBatches(
         totalVertexCount);
   }
   impl->loggedFirstDirectPresent = true;
+  return true;
+}
+
+bool MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
+    const MacOSMetalDrawBatch* batches, size_t batchCount,
+    bool clearDepth,
+    double clearRed, double clearGreen, double clearBlue, double clearAlpha,
+    double targetHz) {
+  ScopedAutoreleasePool autoreleasePool;
+
+  if (!IsAvailable() || (batches == nullptr && batchCount > 0)) {
+    return false;
+  }
+
+  MacOSMetalPresenterImpl* impl =
+      static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+  if (impl->layer == nil || impl->layerView == nil ||
+      impl->commandQueue == nil) {
+    return false;
+  }
+  id<MTLRenderPipelineState> presentPipeline =
+      WindowedOffscreenPresentPipeline(impl);
+  if (presentPipeline == nil) {
+    return PresentSolidBatches(
+        batches, batchCount, clearDepth, clearRed, clearGreen, clearBlue,
+        clearAlpha, targetHz);
+  }
+
+  const CGSize drawableSize = impl->layer.drawableSize;
+  const int width = std::max(1, static_cast<int>(drawableSize.width));
+  const int height = std::max(1, static_cast<int>(drawableSize.height));
+  if (!EnsureWindowedOffscreenTextures(impl, width, height)) {
+    LOG->Warn(
+        "MacOS Metal windowed offscreen present unavailable: size=%dx%d.",
+        width, height);
+    return false;
+  }
+
+  if (!RenderSolidBatchesToTexture(
+          impl->windowedOffscreenTexture,
+          impl->windowedOffscreenDepthTexture, batches, batchCount,
+          false, clearDepth, clearRed, clearGreen, clearBlue, clearAlpha,
+          width, height)) {
+    return false;
+  }
+
+  MacOSMetalDrawableAcquireInfo drawableInfo;
+  id<CAMetalDrawable> drawable = TakePrefetchedDrawable(
+      impl, &drawableInfo, 0);
+  if (drawable == nil && impl->windowedOffscreenSubmittedFrames == 0) {
+    /*
+     * Allow the first windowed frame to block if needed so the window is not
+     * left blank.  Later frames are present-opportunistic and never call the
+     * synchronous nextDrawable path from the render thread.
+     */
+    drawable = AcquireDrawableForPresent(impl, &drawableInfo);
+  }
+  if (drawable == nil) {
+    const uint64_t skippedFrames = ++impl->windowedOffscreenSkippedNoDrawable;
+    if (PerfDiagnosticsEnabled() &&
+        (skippedFrames <= kMetalInitialTraceFrames ||
+         skippedFrames % kMetalRareSkipTraceInterval == 0)) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_windowed_offscreen_present "
+          "skipped_no_drawable=1 skipped_frames=%llu "
+          "prefetch_misses=%llu target_hz=%.3f size=%dx%d",
+          static_cast<unsigned long long>(skippedFrames),
+          static_cast<unsigned long long>(drawableInfo.misses), targetHz,
+          width, height);
+    }
+    return true;
+  }
+
+  std::shared_ptr<MacOSMetalFrameLimiter> frameLimiter =
+      impl->solidFrameLimiter;
+  int frameSlot = -1;
+  if (!AcquireMetalFrameSlot(frameLimiter, "windowed_offscreen_present",
+                             &frameSlot)) {
+    [drawable release];
+    const uint64_t skippedFrames = ++impl->windowedOffscreenSkippedNoDrawable;
+    if (PerfDiagnosticsEnabled() &&
+        (skippedFrames <= kMetalInitialTraceFrames ||
+         skippedFrames % kMetalRareSkipTraceInterval == 0)) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_windowed_offscreen_present "
+          "skipped_frame_limiter=1 skipped_frames=%llu target_hz=%.3f "
+          "size=%dx%d",
+          static_cast<unsigned long long>(skippedFrames), targetHz,
+          width, height);
+    }
+    return true;
+  }
+
+  RageTimer submitTimer;
+  id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
+  if (commandBuffer == nil) {
+    [drawable release];
+    ReleaseMetalFrameSlot(frameLimiter, frameSlot);
+    return false;
+  }
+
+  id<MTLTexture> sourceTexture = [impl->windowedOffscreenTexture retain];
+  MTLRenderPassDescriptor* passDescriptor =
+      [MTLRenderPassDescriptor renderPassDescriptor];
+  passDescriptor.colorAttachments[0].texture = [drawable texture];
+  passDescriptor.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+  passDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+  id<MTLRenderCommandEncoder> encoder =
+      [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
+  if (encoder == nil) {
+    [sourceTexture release];
+    [drawable release];
+    ReleaseMetalFrameSlot(frameLimiter, frameSlot);
+    return false;
+  }
+  [encoder setRenderPipelineState:presentPipeline];
+  [encoder setFragmentTexture:sourceTexture atIndex:0];
+  [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+  [encoder endEncoding];
+
+  const double minimumDuration =
+      targetHz > 1.0 ? (1.0 / targetHz) : (1.0 / 60.0);
+  if (@available(macOS 10.15, *)) {
+    [commandBuffer presentDrawable:drawable
+               afterMinimumDuration:minimumDuration];
+  } else {
+    [commandBuffer presentDrawable:drawable];
+  }
+
+  const uint64_t frameIndex = ++impl->windowedOffscreenSubmittedFrames;
+  const uint64_t submitUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  const float encodeSubmitMs = submitTimer.GetDeltaTime() * 1000.0f;
+  const std::shared_ptr<MacOSMetalTimingState> completionTimingState =
+      impl->timingState;
+  RecordMetalTiming(
+      completionTimingState, &MacOSMetalTimingState::encodeSubmitTimings,
+      encodeSubmitMs);
+  std::shared_ptr<MacOSMetalFrameLimiter> completionFrameLimiter =
+      frameLimiter;
+  const int completionFrameSlot = frameSlot;
+  id<CAMetalDrawable> completionDrawable = [drawable retain];
+  [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedCommandBuffer) {
+    const uint64_t completedUsec = RageTimer::GetTimeSinceStartMicroseconds();
+    const float commandBufferMs =
+        completedUsec >= submitUsec
+            ? static_cast<float>(completedUsec - submitUsec) / 1000.0f
+            : 0.0f;
+    RecordMetalTiming(
+        completionTimingState,
+        &MacOSMetalTimingState::commandBufferTimings, commandBufferMs);
+    const bool traceCompletion =
+        frameIndex <= kMetalInitialTraceFrames ||
+        commandBufferMs >= kMetalSlowCommandBufferMs;
+    if (PerfDiagnosticsEnabled() && traceCompletion) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_windowed_offscreen_present_completed "
+          "frame=%llu frame_slot=%d status=%lu command_buffer_ms=%.3f "
+          "flip_mode=%d drawable_source=%s render_thread_next_drawable_ms=%.3f "
+          "encode_submit_ms=%.3f target_hz=%.3f",
+          static_cast<unsigned long long>(frameIndex), completionFrameSlot,
+          static_cast<unsigned long>([completedCommandBuffer status]),
+          commandBufferMs, WindowedOffscreenPresentFlipMode(),
+          drawableInfo.fromPrefetch ? "prefetch" : "sync",
+          drawableInfo.renderThreadNextDrawableMs, encodeSubmitMs, targetHz);
+    }
+    [sourceTexture release];
+    [completionDrawable release];
+    ReleaseMetalFrameSlot(completionFrameLimiter, completionFrameSlot);
+  }];
+  [commandBuffer commit];
+  [drawable release];
+
+  const bool traceSubmit =
+      frameIndex <= kMetalInitialTraceFrames ||
+      drawableInfo.renderThreadNextDrawableMs >= kMetalTraceNextDrawableMs ||
+      encodeSubmitMs >= 2.0f;
+  if (PerfDiagnosticsEnabled() && traceSubmit) {
+    LOG->Trace(
+        "PERF_TRACE: macos_metal_windowed_offscreen_present_submitted "
+        "frame=%llu frame_slot=%d target_hz=%.3f "
+        "minimum_duration_ms=%.3f flip_mode=%d drawable_source=%s "
+        "prefetch_misses=%llu prefetch_acquire_ms=%.3f "
+        "render_thread_next_drawable_ms=%.3f encode_submit_ms=%.3f "
+        "size=%dx%d skipped_no_drawable=%llu",
+        static_cast<unsigned long long>(frameIndex), frameSlot, targetHz,
+        minimumDuration * 1000.0, WindowedOffscreenPresentFlipMode(),
+        drawableInfo.fromPrefetch ? "prefetch" : "sync",
+        static_cast<unsigned long long>(drawableInfo.misses),
+        drawableInfo.prefetchAcquireMs,
+        drawableInfo.renderThreadNextDrawableMs, encodeSubmitMs,
+        width, height,
+        static_cast<unsigned long long>(
+            impl->windowedOffscreenSkippedNoDrawable));
+  }
   return true;
 }
 
@@ -2875,4 +3350,14 @@ std::string MacOSMetalPresenterGetRuntimeStatsLine() {
       stats.skippedNoPrefetchedDrawableFrames, stats.prefetchedDrawables,
       stats.consumedDrawables, stats.slowDrawableAcquires,
       stats.drawableMisses);
+}
+
+void MacOSMetalPresenterMarkNativePresentationChange(int reason) {
+  g_iMetalNativePresentationChangeReason.store(
+      reason, std::memory_order_release);
+}
+
+int MacOSMetalPresenterConsumeNativePresentationChangeReason() {
+  return g_iMetalNativePresentationChangeReason.exchange(
+      0, std::memory_order_acq_rel);
 }
