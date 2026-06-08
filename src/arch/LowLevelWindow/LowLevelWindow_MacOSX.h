@@ -4,6 +4,7 @@
 #include <objc/objc.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 #include "LowLevelWindow.h"
@@ -11,14 +12,32 @@
 
 typedef const struct __CFDictionary* CFDictionaryRef;
 typedef uint32_t CGDirectDisplayID;
+class MacOSMetalPresenter;
+struct MacOSMetalOpenGLBridge;
 
 class LowLevelWindow_MacOSX : public LowLevelWindow {
+  struct MacOSMetalBridgeDiagnostics {
+    uint64_t busySurfaceFrames = 0;
+    uint64_t fenceFallbackFrames = 0;
+    uint64_t presentFailedFrames = 0;
+    uint64_t presentedFrames = 0;
+    bool loggedFirstPresent = false;
+  };
+
   VideoModeParams m_CurrentParams;
   id m_WindowDelegate;
   id m_Context;
   id m_BGContext;
   CFDictionaryRef m_CurrentDisplayMode;
   CGDirectDisplayID m_DisplayID;
+  std::unique_ptr<MacOSMetalPresenter> m_MetalPresenter;
+  std::unique_ptr<MacOSMetalOpenGLBridge> m_MetalOpenGLBridge;
+  int m_iMetalBridgeRenderSurfaceIndex;
+  bool m_bMetalDirectPresentSubmittedThisFrame;
+  bool m_bMetalBridgeBuildPending;
+  int m_iMetalBridgeBuildFrameCountdown;
+  int m_iMetalBridgeBuildAttempts;
+  MacOSMetalBridgeDiagnostics m_MetalBridgeDiagnostics;
 
  public:
   LowLevelWindow_MacOSX();
@@ -35,6 +54,7 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
 
   bool SupportsRenderToTexture() const { return true; }
   RenderTarget* CreateRenderTarget();
+  bool PresentOpenGLBackbufferViaMetal();
 
   bool SupportsThreadedRendering() { return m_BGContext; }
   void BeginConcurrentRendering();
@@ -44,6 +64,8 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   int ChangeDisplayMode(const VideoModeParams& p);
   void SetActualParamsFromMode(CFDictionaryRef mode);
   bool ShouldRenderOffscreen() const;
+  void ReleaseMetalOpenGLBridge();
+  bool BuildMetalOpenGLBridge();
 };
 
 #ifdef ARCH_LOW_LEVEL_WINDOW

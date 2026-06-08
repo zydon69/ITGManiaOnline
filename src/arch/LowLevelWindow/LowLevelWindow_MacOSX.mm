@@ -1,5 +1,6 @@
 #import "LowLevelWindow_MacOSX.h"
 #import "DisplaySpec.h"
+#import "MacOSMetalPresenter.h"
 #import "MacOSFramePacing.h"
 #import "PerfDiagnostics.h"
 #import "Preference.h"
@@ -21,9 +22,12 @@
 #include <dlfcn.h>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #import <Cocoa/Cocoa.h>
 #import <CoreVideo/CoreVideo.h>
+#import <IOSurface/IOSurface.h>
+#import <OpenGL/CGLIOSurface.h>
 #import <OpenGL/OpenGL.h>
 #import <OpenGL/gl.h>
 #include <mach/mach_time.h>
@@ -37,6 +41,8 @@ static const unsigned int g_iStyleMask = NSWindowStyleMaskTitled | NSWindowStyle
                                          NSWindowStyleMaskMiniaturizable |
                                          NSWindowStyleMaskResizable;
 static bool g_bResized;
+static bool g_bNativeWindowPresentationChanged;
+static int g_iNativeWindowPresentationChangeReason;
 static int g_iWidth;
 static int g_iHeight;
 static RageMutex g_ResizeLock("Window resize lock.");
@@ -57,9 +63,69 @@ static Preference<float> g_fPerfTraceSlowMacSwapBuffersMs(
 // the first place that discovers unfinished GPU work.
 static Preference<float> g_fMacOSOpenGLFencePacingWaitMs(
     "MacOSOpenGLFencePacingWaitMs", -1.0f);
+static Preference<std::string> g_sMacOSPresentBackend(
+    "MacOSPresentBackend", "opengl");
+static Preference<bool> g_bMacOSOpenGLMetalPresentBridge(
+    "MacOSOpenGLMetalPresentBridge", false);
 extern Preference<float> g_fFramePacingTargetHz;
 
+constexpr int kMetalBridgeInitialBuildDelayFrames = 5;
+constexpr int kMetalBridgeRetryDelayFrames = 30;
+constexpr int kMetalBridgeMaxBuildAttempts = 3;
+
 static MacOSOpenGLFenceWaitStats g_LastOpenGLFenceWaitStats;
+
+enum MacOSNativeWindowPresentationChangeReason {
+  kMacOSNativeWindowPresentationNone = 0,
+  kMacOSNativeWindowPresentationWillEnterFullscreen,
+  kMacOSNativeWindowPresentationDidEnterFullscreen,
+  kMacOSNativeWindowPresentationWillExitFullscreen,
+  kMacOSNativeWindowPresentationDidExitFullscreen,
+  kMacOSNativeWindowPresentationScreenChanged,
+  kMacOSNativeWindowPresentationBackingChanged,
+};
+
+static const char* MacOSNativeWindowPresentationReasonName(int reason) {
+  switch (reason) {
+    case kMacOSNativeWindowPresentationWillEnterFullscreen:
+      return "will_enter_fullscreen";
+    case kMacOSNativeWindowPresentationDidEnterFullscreen:
+      return "did_enter_fullscreen";
+    case kMacOSNativeWindowPresentationWillExitFullscreen:
+      return "will_exit_fullscreen";
+    case kMacOSNativeWindowPresentationDidExitFullscreen:
+      return "did_exit_fullscreen";
+    case kMacOSNativeWindowPresentationScreenChanged:
+      return "screen_changed";
+    case kMacOSNativeWindowPresentationBackingChanged:
+      return "backing_changed";
+    default:
+      return "none";
+  }
+}
+
+#ifndef GL_READ_FRAMEBUFFER_EXT
+#define GL_READ_FRAMEBUFFER_EXT 0x8CA8
+#endif
+#ifndef GL_DRAW_FRAMEBUFFER_EXT
+#define GL_DRAW_FRAMEBUFFER_EXT 0x8CA9
+#endif
+
+struct MacOSMetalOpenGLBridgeSurface {
+  GLuint texture = 0;
+  GLuint framebuffer = 0;
+  GLuint depth = 0;
+};
+
+struct MacOSMetalOpenGLBridge {
+  std::vector<MacOSMetalOpenGLBridgeSurface> surfaces;
+  GLenum textureTarget = GL_TEXTURE_RECTANGLE_ARB;
+  GLenum internalFormat = GL_RGBA;
+  GLenum format = GL_BGRA;
+  GLenum type = GL_UNSIGNED_INT_8_8_8_8_REV;
+  int width = 0;
+  int height = 0;
+};
 
 namespace {
 bool MacOSFramePacingUseDisplayLinkEnabled() {
@@ -977,6 +1043,19 @@ static float EffectiveMacOSFramePacingTargetHz(const VideoModeParams& params) {
              : 0.0f;
 }
 
+static bool MacOSMetalPresentRequested() {
+  return CompareNoCase(g_sMacOSPresentBackend.Get(), "metal") == 0;
+}
+
+static bool MacOSMetalBridgeEnabled() {
+  return MacOSMetalPresentRequested() &&
+         g_bMacOSOpenGLMetalPresentBridge.Get();
+}
+
+static bool MacOSMetalDirectPresentEnabled() {
+  return MacOSMetalBridgeEnabled();
+}
+
 static int MacOSOpenGLOffscreenPresentMode() {
   return 1;
 }
@@ -1150,8 +1229,12 @@ class AutoreleasePool {
 - (void)windowDidResignKey:(NSNotification*)aNotification;
 - (void)windowWillClose:(NSNotification*)aNotification;
 - (void)windowDidResize:(NSNotification*)aNotification;
-// XXX maybe use whichever screen contains the window? Hard for me to test though.
-//- (void) windowDidChangeScreen:(NSNotification *)aNotification;
+- (void)windowWillEnterFullScreen:(NSNotification*)aNotification;
+- (void)windowDidEnterFullScreen:(NSNotification*)aNotification;
+- (void)windowWillExitFullScreen:(NSNotification*)aNotification;
+- (void)windowDidExitFullScreen:(NSNotification*)aNotification;
+- (void)windowDidChangeScreen:(NSNotification*)aNotification;
+- (void)windowDidChangeBackingProperties:(NSNotification*)aNotification;
 
 // Helper methods to perform actions on the main thread.
 - (void)setupWindow;
@@ -1160,6 +1243,20 @@ class AutoreleasePool {
 @end
 
 @implementation SMWindowDelegate
+
+- (void)markNativePresentationChanged:(NSNotification*)aNotification
+                               reason:(int)reason {
+  id window = [aNotification object];
+  NSSize size =
+      [NSWindow contentRectForFrameRect:[window frame] styleMask:g_iStyleMask]
+          .size;
+
+  LockMut(g_ResizeLock);
+  g_bNativeWindowPresentationChanged = true;
+  g_iNativeWindowPresentationChangeReason = reason;
+  g_iWidth = int(size.width);
+  g_iHeight = int(size.height);
+}
 
 - (void)windowDidBecomeKey:(NSNotification*)aNotification {
   HOOKS->SetHasFocus(true);
@@ -1181,6 +1278,36 @@ class AutoreleasePool {
   g_bResized = true;
   g_iWidth = int(size.width);
   g_iHeight = int(size.height);
+}
+
+- (void)windowWillEnterFullScreen:(NSNotification*)aNotification {
+  [self markNativePresentationChanged:aNotification
+                               reason:kMacOSNativeWindowPresentationWillEnterFullscreen];
+}
+
+- (void)windowDidEnterFullScreen:(NSNotification*)aNotification {
+  [self markNativePresentationChanged:aNotification
+                               reason:kMacOSNativeWindowPresentationDidEnterFullscreen];
+}
+
+- (void)windowWillExitFullScreen:(NSNotification*)aNotification {
+  [self markNativePresentationChanged:aNotification
+                               reason:kMacOSNativeWindowPresentationWillExitFullscreen];
+}
+
+- (void)windowDidExitFullScreen:(NSNotification*)aNotification {
+  [self markNativePresentationChanged:aNotification
+                               reason:kMacOSNativeWindowPresentationDidExitFullscreen];
+}
+
+- (void)windowDidChangeScreen:(NSNotification*)aNotification {
+  [self markNativePresentationChanged:aNotification
+                               reason:kMacOSNativeWindowPresentationScreenChanged];
+}
+
+- (void)windowDidChangeBackingProperties:(NSNotification*)aNotification {
+  [self markNativePresentationChanged:aNotification
+                               reason:kMacOSNativeWindowPresentationBackingChanged];
 }
 
 - (void)setupWindow {
@@ -1382,7 +1509,16 @@ void RenderTarget_MacOSX::FinishRenderingTo() {
 }
 
 LowLevelWindow_MacOSX::LowLevelWindow_MacOSX()
-    : m_Context(nil), m_BGContext(nil), m_CurrentDisplayMode(nil), m_DisplayID(0) {
+    : m_Context(nil),
+      m_BGContext(nil),
+      m_CurrentDisplayMode(nil),
+      m_DisplayID(0),
+      m_MetalPresenter(new MacOSMetalPresenter()),
+      m_iMetalBridgeRenderSurfaceIndex(-1),
+      m_bMetalDirectPresentSubmittedThisFrame(false),
+      m_bMetalBridgeBuildPending(false),
+      m_iMetalBridgeBuildFrameCountdown(0),
+      m_iMetalBridgeBuildAttempts(0) {
   POOL;
   m_WindowDelegate = [[SMWindowDelegate alloc] init];
   [m_WindowDelegate performSelectorOnMainThread:@selector(setupWindow)
@@ -1402,6 +1538,13 @@ LowLevelWindow_MacOSX::~LowLevelWindow_MacOSX() {
   ShutDownFullScreen();
 
   [m_Context clearDrawable];
+  ReleaseMetalOpenGLBridge();
+  if (m_MetalPresenter) {
+    m_MetalPresenter->Shutdown();
+  }
+  m_bMetalBridgeBuildPending = false;
+  m_iMetalBridgeBuildFrameCountdown = 0;
+  m_iMetalBridgeBuildAttempts = 0;
   [m_Context release];
   [m_BGContext clearDrawable];
   [m_BGContext release];
@@ -1432,6 +1575,33 @@ const ActualVideoModeParams LowLevelWindow_MacOSX::GetActualVideoModeParams()
       ShouldRenderOffscreen());
 }
 
+void* LowLevelWindow_MacOSX::GetNativeWindowHandle() const {
+  SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
+  return delegate != nil ? (void*)delegate->m_Window : nullptr;
+}
+
+static void ReleaseMetalOpenGLBridgeResources(
+    MacOSMetalOpenGLBridge* bridge) {
+  if (bridge == nullptr) {
+    return;
+  }
+
+  for (MacOSMetalOpenGLBridgeSurface& surface : bridge->surfaces) {
+    if (surface.depth != 0) {
+      glDeleteRenderbuffersEXT(1, &surface.depth);
+      surface.depth = 0;
+    }
+    if (surface.framebuffer != 0) {
+      glDeleteFramebuffersEXT(1, &surface.framebuffer);
+      surface.framebuffer = 0;
+    }
+    if (surface.texture != 0) {
+      glDeleteTextures(1, &surface.texture);
+      surface.texture = 0;
+    }
+  }
+}
+
 void* LowLevelWindow_MacOSX::GetProcAddress(std::string s) {
   // dlsym returns NULL if symbol not found
   static void* glHandle = nullptr;
@@ -1442,7 +1612,382 @@ void* LowLevelWindow_MacOSX::GetProcAddress(std::string s) {
   return dlsym(glHandle, s.c_str());
 }
 
+void LowLevelWindow_MacOSX::ReleaseMetalOpenGLBridge() {
+  m_MetalBridgeDiagnostics = MacOSMetalBridgeDiagnostics();
+  if (!m_MetalOpenGLBridge) {
+    return;
+  }
+
+  m_iMetalBridgeRenderSurfaceIndex = -1;
+  m_bMetalDirectPresentSubmittedThisFrame = false;
+  ReleaseMetalOpenGLBridgeResources(m_MetalOpenGLBridge.get());
+  m_MetalOpenGLBridge.reset();
+  while (glGetError() != GL_NO_ERROR);
+}
+
+bool LowLevelWindow_MacOSX::BuildMetalOpenGLBridge() {
+  RageTimer bridgeTimer;
+  if (!m_MetalPresenter || !m_MetalPresenter->IsInteropReady()) {
+    ReleaseMetalOpenGLBridge();
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_bridge_build skipped reason=not_ready "
+          "total_ms=%.3f",
+          bridgeTimer.GetDeltaTime() * 1000.0f);
+    }
+    return false;
+  }
+
+  CGLContextObj context = CGLGetCurrentContext();
+  IOSurfaceRef ioSurface = static_cast<IOSurfaceRef>(
+      m_MetalPresenter->InteropIOSurfaceAt(0));
+  const int width = m_MetalPresenter->InteropSurfaceWidth();
+  const int height = m_MetalPresenter->InteropSurfaceHeight();
+  if (context == nullptr || ioSurface == nullptr || width <= 0 || height <= 0) {
+    LOG->Warn(
+        "MacOS Metal presenter OpenGL bridge unavailable: invalid context or "
+        "IOSurface dimensions context=%p surface=%p size=%dx%d.",
+        context, ioSurface, width, height);
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_bridge_build failed reason=invalid_context "
+          "total_ms=%.3f",
+          bridgeTimer.GetDeltaTime() * 1000.0f);
+    }
+    return false;
+  }
+
+  if (m_MetalOpenGLBridge &&
+      m_MetalOpenGLBridge->width == width &&
+      m_MetalOpenGLBridge->height == height &&
+      static_cast<int>(m_MetalOpenGLBridge->surfaces.size()) ==
+          m_MetalPresenter->InteropSurfaceCount()) {
+    return true;
+  }
+
+  ReleaseMetalOpenGLBridge();
+
+  struct BridgeAttempt {
+    GLenum textureTarget;
+    GLenum internalFormat;
+    GLenum format;
+    GLenum type;
+    const char* name;
+  };
+
+  // Apple's CGLIOSurface header documents GL_TEXTURE_RECTANGLE_ARB as the
+  // supported target for CGLTexImageIOSurface2D.  The standalone interop POC
+  // confirmed that rectangle textures work on Apple Silicon while GL_TEXTURE_2D
+  // returns kCGLBadValue (10008), so the engine only probes the safe rectangle
+  // path.
+  const BridgeAttempt attempts[] = {
+      {GL_TEXTURE_RECTANGLE_ARB, GL_RGBA, GL_BGRA,
+       GL_UNSIGNED_INT_8_8_8_8_REV, "rect_rgba_bgra8888rev"},
+      {GL_TEXTURE_RECTANGLE_ARB, GL_RGBA8, GL_BGRA,
+       GL_UNSIGNED_INT_8_8_8_8_REV, "rect_rgba8_bgra8888rev"},
+  };
+
+  while (glGetError() != GL_NO_ERROR);
+
+  for (const BridgeAttempt& attempt : attempts) {
+    std::unique_ptr<MacOSMetalOpenGLBridge> bridge(
+        new MacOSMetalOpenGLBridge());
+    bridge->textureTarget = attempt.textureTarget;
+    bridge->internalFormat = attempt.internalFormat;
+    bridge->format = attempt.format;
+    bridge->type = attempt.type;
+    bridge->width = width;
+    bridge->height = height;
+    bridge->surfaces.resize(m_MetalPresenter->InteropSurfaceCount());
+
+    bool attemptOk = true;
+    for (int i = 0; i < m_MetalPresenter->InteropSurfaceCount(); ++i) {
+      IOSurfaceRef attemptSurface = static_cast<IOSurfaceRef>(
+          m_MetalPresenter->InteropIOSurfaceAt(i));
+      MacOSMetalOpenGLBridgeSurface& bridgeSurface = bridge->surfaces[i];
+      CGLError imageError = kCGLNoError;
+      GLenum glErrorAfterImage = GL_NO_ERROR;
+      GLenum fboStatus = GL_FRAMEBUFFER_COMPLETE_EXT;
+
+      glGenTextures(1, &bridgeSurface.texture);
+      glBindTexture(attempt.textureTarget, bridgeSurface.texture);
+      glTexParameteri(
+          attempt.textureTarget, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(
+          attempt.textureTarget, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      glTexParameteri(
+          attempt.textureTarget, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameteri(
+          attempt.textureTarget, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "MacOS Metal presenter OpenGL bridge attempt starting: attempt=%s "
+            "surface_index=%d size=%dx%d target=0x%x internal=0x%x "
+            "format=0x%x type=0x%x surface=%p texture=%u",
+            attempt.name, i, width, height,
+            static_cast<unsigned int>(attempt.textureTarget),
+            static_cast<unsigned int>(attempt.internalFormat),
+            static_cast<unsigned int>(attempt.format),
+            static_cast<unsigned int>(attempt.type), attemptSurface,
+            bridgeSurface.texture);
+      }
+
+      imageError = CGLTexImageIOSurface2D(
+          context, attempt.textureTarget, attempt.internalFormat, width, height,
+          attempt.format, attempt.type, attemptSurface, 0);
+      glErrorAfterImage = glGetError();
+
+      if (imageError == kCGLNoError && glErrorAfterImage == GL_NO_ERROR) {
+        glGenFramebuffersEXT(1, &bridgeSurface.framebuffer);
+        glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, bridgeSurface.framebuffer);
+        glFramebufferTexture2DEXT(
+            GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT,
+            attempt.textureTarget, bridgeSurface.texture, 0);
+
+        fboStatus = glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
+      }
+
+      if (imageError != kCGLNoError || glErrorAfterImage != GL_NO_ERROR ||
+          fboStatus != GL_FRAMEBUFFER_COMPLETE_EXT) {
+        attemptOk = false;
+        if (PerfDiagnosticsEnabled()) {
+          LOG->Trace(
+              "MacOS Metal presenter OpenGL bridge attempt failed: attempt=%s "
+              "surface_index=%d cgl_error=%d gl_error_after_image=0x%x "
+              "fbo_status=0x%x size=%dx%d target=0x%x internal=0x%x "
+              "format=0x%x type=0x%x",
+              attempt.name, i, static_cast<int>(imageError),
+              static_cast<unsigned int>(glErrorAfterImage),
+              static_cast<unsigned int>(fboStatus), width, height,
+              static_cast<unsigned int>(attempt.textureTarget),
+              static_cast<unsigned int>(attempt.internalFormat),
+              static_cast<unsigned int>(attempt.format),
+              static_cast<unsigned int>(attempt.type));
+        }
+        break;
+      }
+    }
+
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+    glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, 0);
+    glBindTexture(attempt.textureTarget, 0);
+    while (glGetError() != GL_NO_ERROR);
+
+    if (attemptOk) {
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "MacOS Metal presenter OpenGL bridge ready: attempt=%s "
+            "surface_count=%d size=%dx%d target=0x%x internal=0x%x "
+            "format=0x%x type=0x%x total_ms=%.3f",
+            attempt.name, static_cast<int>(bridge->surfaces.size()), width,
+            height, static_cast<unsigned int>(attempt.textureTarget),
+            static_cast<unsigned int>(attempt.internalFormat),
+            static_cast<unsigned int>(attempt.format),
+            static_cast<unsigned int>(attempt.type),
+            bridgeTimer.GetDeltaTime() * 1000.0f);
+      }
+      m_MetalOpenGLBridge = std::move(bridge);
+      return true;
+    }
+
+    ReleaseMetalOpenGLBridgeResources(bridge.get());
+  }
+
+  LOG->Warn(
+      "MacOS Metal presenter OpenGL bridge unavailable: "
+      "CGLTexImageIOSurface2D/FBO validation failed for all attempts "
+      "size=%dx%d surface_count=%d total_ms=%.3f.",
+      width, height, m_MetalPresenter->InteropSurfaceCount(),
+      bridgeTimer.GetDeltaTime() * 1000.0f);
+  return false;
+}
+
+bool LowLevelWindow_MacOSX::PresentOpenGLBackbufferViaMetal() {
+  RageTimer bridgePresentTimer;
+  if (!MacOSMetalDirectPresentEnabled() || !m_MetalPresenter ||
+      !m_MetalOpenGLBridge || m_MetalOpenGLBridge->surfaces.empty() ||
+      !m_MetalPresenter->IsLayerAttached()) {
+    if (m_MetalPresenter) {
+      m_MetalPresenter->SetLayerVisible(false);
+    }
+    return false;
+  }
+
+  using GLBlitFramebufferEXTProc = void (*)(
+      GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield,
+      GLenum);
+  static GLBlitFramebufferEXTProc s_blitFramebuffer = nullptr;
+  if (s_blitFramebuffer == nullptr) {
+    s_blitFramebuffer = reinterpret_cast<GLBlitFramebufferEXTProc>(
+        GetProcAddress("glBlitFramebufferEXT"));
+  }
+  auto* blitFramebuffer = s_blitFramebuffer;
+  if (blitFramebuffer == nullptr) {
+    m_MetalPresenter->SetLayerVisible(false);
+    return false;
+  }
+
+  const int surfaceCount =
+      static_cast<int>(m_MetalOpenGLBridge->surfaces.size());
+  int nextSurfaceIndex = -1;
+  constexpr int kSurfaceWaitAttempts = 16;
+  constexpr int kSurfaceWaitAttemptUsec = 100;
+  RageTimer surfaceWaitTimer;
+  for (int waitAttempt = 0;
+       waitAttempt < kSurfaceWaitAttempts && nextSurfaceIndex < 0;
+       ++waitAttempt) {
+    for (int offset = 1; offset <= surfaceCount; ++offset) {
+      const int candidate =
+          (m_iMetalBridgeRenderSurfaceIndex + offset) % surfaceCount;
+      if (!m_MetalPresenter->IsInteropSurfaceBusy(candidate)) {
+        nextSurfaceIndex = candidate;
+        break;
+      }
+    }
+    if (nextSurfaceIndex < 0) {
+      std::this_thread::sleep_for(
+          std::chrono::microseconds(kSurfaceWaitAttemptUsec));
+    }
+  }
+  const float surfaceWaitMs = surfaceWaitTimer.GetDeltaTime() * 1000.0f;
+
+  if (nextSurfaceIndex < 0) {
+    if (PerfDiagnosticsEnabled()) {
+      ++m_MetalBridgeDiagnostics.busySurfaceFrames;
+      if (m_MetalBridgeDiagnostics.busySurfaceFrames <= 3 ||
+          m_MetalBridgeDiagnostics.busySurfaceFrames % 5000 == 0) {
+        LOG->Trace(
+            "PERF_TRACE: macos_metal_backbuffer_present_unavailable "
+            "reason=busy_iosurfaces surface_count=%d wait_budget_us=%d "
+            "frames=%llu",
+            surfaceCount,
+            kSurfaceWaitAttempts * kSurfaceWaitAttemptUsec,
+            static_cast<unsigned long long>(
+                m_MetalBridgeDiagnostics.busySurfaceFrames));
+      }
+    }
+    m_MetalPresenter->SetLayerVisible(false);
+    return false;
+  }
+
+  m_iMetalBridgeRenderSurfaceIndex = nextSurfaceIndex;
+  const MacOSMetalOpenGLBridgeSurface& surface =
+      m_MetalOpenGLBridge->surfaces[m_iMetalBridgeRenderSurfaceIndex];
+  if (surface.framebuffer == 0) {
+    m_MetalPresenter->SetLayerVisible(false);
+    return false;
+  }
+
+  glBindFramebufferEXT(GL_READ_FRAMEBUFFER_EXT, 0);
+  glReadBuffer(GL_BACK);
+  glBindFramebufferEXT(GL_DRAW_FRAMEBUFFER_EXT, surface.framebuffer);
+  glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
+  blitFramebuffer(
+      0, 0, m_CurrentParams.width, m_CurrentParams.height,
+      0, 0, m_MetalOpenGLBridge->width, m_MetalOpenGLBridge->height,
+      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+  glReadBuffer(GL_BACK);
+  glDrawBuffer(GL_BACK);
+  glViewport(0, 0, m_CurrentParams.width, m_CurrentParams.height);
+
+  GLsync metalReadFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+  GLenum metalReadFenceStatus = GL_WAIT_FAILED;
+  RageTimer fenceWaitTimer;
+  if (metalReadFence != nullptr) {
+    metalReadFenceStatus =
+        glClientWaitSync(metalReadFence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+    if (metalReadFenceStatus == GL_TIMEOUT_EXPIRED) {
+      metalReadFenceStatus = glClientWaitSync(metalReadFence, 0, 1500 * 1000);
+    }
+    glDeleteSync(metalReadFence);
+  }
+  const float fenceWaitMs = fenceWaitTimer.GetDeltaTime() * 1000.0f;
+
+  const bool metalReadFenceReady =
+      metalReadFenceStatus == GL_ALREADY_SIGNALED ||
+      metalReadFenceStatus == GL_CONDITION_SATISFIED;
+  if (!metalReadFenceReady) {
+    if (PerfDiagnosticsEnabled()) {
+      ++m_MetalBridgeDiagnostics.fenceFallbackFrames;
+      if (m_MetalBridgeDiagnostics.fenceFallbackFrames <= 3 ||
+          m_MetalBridgeDiagnostics.fenceFallbackFrames % 5000 == 0) {
+        LOG->Trace(
+            "PERF_TRACE: macos_metal_backbuffer_present_unavailable "
+            "reason=gl_fence_not_ready status=0x%x wait_budget_us=1500 "
+            "surface_wait_ms=%.3f fence_wait_ms=%.3f bridge_present_ms=%.3f "
+            "frames=%llu",
+            metalReadFenceStatus, surfaceWaitMs, fenceWaitMs,
+            bridgePresentTimer.GetDeltaTime() * 1000.0f,
+            static_cast<unsigned long long>(
+                m_MetalBridgeDiagnostics.fenceFallbackFrames));
+      }
+    }
+    m_MetalPresenter->SetLayerVisible(false);
+    return false;
+  }
+
+  m_bMetalDirectPresentSubmittedThisFrame =
+      m_MetalPresenter->PresentInteropSurfaceAt(
+          m_iMetalBridgeRenderSurfaceIndex,
+          EffectiveMacOSFramePacingTargetHz(m_CurrentParams));
+  const float bridgePresentMs = bridgePresentTimer.GetDeltaTime() * 1000.0f;
+  if (!m_bMetalDirectPresentSubmittedThisFrame &&
+      PerfDiagnosticsEnabled()) {
+    ++m_MetalBridgeDiagnostics.presentFailedFrames;
+    if (m_MetalBridgeDiagnostics.presentFailedFrames <= 3 ||
+        m_MetalBridgeDiagnostics.presentFailedFrames % 5000 == 0 ||
+        bridgePresentMs >= 2.0f || surfaceWaitMs >= 0.5f ||
+        fenceWaitMs >= 0.5f) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_backbuffer_present_unavailable "
+          "reason=present_failed path=opengl_interop surface_index=%d "
+          "surface_wait_ms=%.3f fence_wait_ms=%.3f bridge_present_ms=%.3f "
+          "fence_status=0x%x source_size=%dx%d target_size=%dx%d frames=%llu",
+          m_iMetalBridgeRenderSurfaceIndex, surfaceWaitMs, fenceWaitMs,
+          bridgePresentMs, metalReadFenceStatus, m_CurrentParams.width,
+          m_CurrentParams.height, m_MetalOpenGLBridge->width,
+          m_MetalOpenGLBridge->height,
+          static_cast<unsigned long long>(
+              m_MetalBridgeDiagnostics.presentFailedFrames));
+    }
+  }
+  if (m_bMetalDirectPresentSubmittedThisFrame &&
+      PerfDiagnosticsEnabled()) {
+    ++m_MetalBridgeDiagnostics.presentedFrames;
+    if (!m_MetalBridgeDiagnostics.loggedFirstPresent) {
+      LOG->Trace(
+          "MacOS Metal backbuffer present active: surface_count=%d "
+          "size=%dx%d source_size=%dx%d",
+          surfaceCount, m_MetalOpenGLBridge->width,
+          m_MetalOpenGLBridge->height, m_CurrentParams.width,
+          m_CurrentParams.height);
+      m_MetalBridgeDiagnostics.loggedFirstPresent = true;
+    }
+    if (m_MetalBridgeDiagnostics.presentedFrames <= 5 ||
+        m_MetalBridgeDiagnostics.presentedFrames % 600 == 0 ||
+        bridgePresentMs >= 2.0f || surfaceWaitMs >= 0.5f ||
+        fenceWaitMs >= 0.5f) {
+      LOG->Trace(
+          "PERF_TRACE: macos_metal_backbuffer_present path=opengl_interop "
+          "frame=%llu surface_index=%d surface_wait_ms=%.3f "
+          "fence_wait_ms=%.3f bridge_present_ms=%.3f fence_status=0x%x "
+          "source_size=%dx%d target_size=%dx%d",
+          static_cast<unsigned long long>(
+              m_MetalBridgeDiagnostics.presentedFrames),
+          m_iMetalBridgeRenderSurfaceIndex, surfaceWaitMs, fenceWaitMs,
+          bridgePresentMs, metalReadFenceStatus, m_CurrentParams.width,
+          m_CurrentParams.height, m_MetalOpenGLBridge->width,
+          m_MetalOpenGLBridge->height);
+    }
+  }
+  m_MetalPresenter->SetLayerVisible(m_bMetalDirectPresentSubmittedThisFrame);
+  return m_bMetalDirectPresentSubmittedThisFrame;
+}
+
 std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& newDeviceOut) {
+  RageTimer tryVideoModeTimer;
   // Always set these params.
   m_CurrentParams.bSmoothLines = p.bSmoothLines;
   m_CurrentParams.bTrilinearFiltering = p.bTrilinearFiltering;
@@ -1465,8 +2010,142 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
       bRebuildContext ||
       (desiredMPSwapsInFlight > 0 &&
        currentMPSwapsInFlight != desiredMPSwapsInFlight);
+  const bool bMetalBridgeRequested = MacOSMetalBridgeEnabled();
+  const bool bChangePresentBackend =
+      bMetalBridgeRequested
+          ? (m_MetalPresenter && !m_MetalPresenter->IsAvailable())
+          : (m_MetalPresenter && m_MetalPresenter->IsAvailable());
+
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: macos_try_video_mode_start requested_windowed=%d "
+        "current_windowed=%d requested_size=%dx%d current_size=%dx%d "
+        "requested_rate=%d current_rate=%d rebuild_context=%d change_mode=%d "
+        "change_vsync=%d change_mp_swaps=%d change_present_backend=%d "
+        "metal_requested=%d",
+        p.windowed ? 1 : 0, m_CurrentParams.windowed ? 1 : 0, p.width,
+        p.height, m_CurrentParams.width, m_CurrentParams.height, p.rate,
+        m_CurrentParams.rate, bRebuildContext ? 1 : 0, bChangeMode ? 1 : 0,
+        bChangeVsync ? 1 : 0, bChangeMPSwapsInFlight ? 1 : 0,
+        bChangePresentBackend ? 1 : 0, bMetalBridgeRequested ? 1 : 0);
+  }
+
+  auto configurePresentBackend = [&](bool windowed) {
+    RageTimer backendTimer;
+    if (bMetalBridgeRequested && m_MetalPresenter && windowed) {
+      SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
+      RageTimer releaseBridgeTimer;
+      ReleaseMetalOpenGLBridge();
+      const float releaseBridgeMs = releaseBridgeTimer.GetDeltaTime() * 1000.0f;
+      RageTimer initTimer;
+      if ([NSThread isMainThread]) {
+        m_MetalPresenter->Initialize(
+            (void*)delegate->m_Window, m_CurrentParams.width,
+            m_CurrentParams.height,
+            EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
+      } else {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          m_MetalPresenter->Initialize(
+              (void*)delegate->m_Window, m_CurrentParams.width,
+              m_CurrentParams.height,
+              EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
+        });
+      }
+      const float initMs = initTimer.GetDeltaTime() * 1000.0f;
+      float attachMs = 0.0f;
+      if (m_MetalPresenter->IsInteropReady()) {
+        RageTimer attachTimer;
+        if (MacOSMetalDirectPresentEnabled()) {
+          m_MetalPresenter->AttachLayerToWindow((void*)delegate->m_Window);
+        } else {
+          m_MetalPresenter->DetachLayer();
+        }
+        attachMs = attachTimer.GetDeltaTime() * 1000.0f;
+        m_bMetalBridgeBuildPending = true;
+        m_iMetalBridgeBuildFrameCountdown =
+            kMetalBridgeInitialBuildDelayFrames;
+        m_iMetalBridgeBuildAttempts = 0;
+        if (PerfDiagnosticsEnabled()) {
+          LOG->Trace(
+              "MacOS Metal bridge build queued: frames_until_build=%d "
+              "max_attempts=%d retry_delay_frames=%d",
+              m_iMetalBridgeBuildFrameCountdown, kMetalBridgeMaxBuildAttempts,
+              kMetalBridgeRetryDelayFrames);
+        }
+      }
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "PERF_TRACE: macos_present_backend_config path=metal total_ms=%.3f "
+            "release_bridge_ms=%.3f initialize_ms=%.3f attach_or_detach_ms=%.3f "
+            "windowed=%d interop_ready=%d layer_attached=%d size=%dx%d",
+            backendTimer.GetDeltaTime() * 1000.0f, releaseBridgeMs, initMs,
+            attachMs, windowed ? 1 : 0,
+            m_MetalPresenter->IsInteropReady() ? 1 : 0,
+            m_MetalPresenter->IsLayerAttached() ? 1 : 0,
+            m_CurrentParams.width, m_CurrentParams.height);
+      }
+    } else {
+      if (MacOSMetalPresentRequested() && !windowed) {
+        LOG->Warn(
+            "OpenGL + Metal Present is currently available only for windowed "
+            "OpenGL. Full-screen OpenGL keeps the historical presentation path; "
+            "use VideoRenderer=metal for the native Metal renderer.");
+      }
+      RageTimer releaseBridgeTimer;
+      ReleaseMetalOpenGLBridge();
+      const float releaseBridgeMs = releaseBridgeTimer.GetDeltaTime() * 1000.0f;
+      float shutdownMs = 0.0f;
+      if (m_MetalPresenter) {
+        RageTimer shutdownTimer;
+        m_MetalPresenter->Shutdown();
+        shutdownMs = shutdownTimer.GetDeltaTime() * 1000.0f;
+      }
+      m_bMetalBridgeBuildPending = false;
+      m_iMetalBridgeBuildFrameCountdown = 0;
+      m_iMetalBridgeBuildAttempts = 0;
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "PERF_TRACE: macos_present_backend_config path=opengl total_ms=%.3f "
+            "release_bridge_ms=%.3f shutdown_ms=%.3f windowed=%d "
+            "metal_requested=%d",
+            backendTimer.GetDeltaTime() * 1000.0f, releaseBridgeMs, shutdownMs,
+            windowed ? 1 : 0,
+            MacOSMetalPresentRequested() ? 1 : 0);
+      }
+    }
+
+    const bool effectiveMetal =
+        m_MetalPresenter && m_MetalPresenter->IsAvailable() &&
+        m_MetalPresenter->IsInteropReady() &&
+        m_MetalPresenter->IsLayerAttached() && windowed;
+    LOG->Trace(
+        "MacOS present backend: requested=%s effective=%s. "
+        "OpenGL offscreen present policy: mode=%s mode_value=%d "
+        "enabled=%d target_hz=%.3f min_rate=%d windowed=%d size=%dx%d "
+        "metal_bridge_requested=%d metal_direct_present_enabled=%d "
+        "metal_layer_attached=%d",
+        g_sMacOSPresentBackend.Get().c_str(),
+        effectiveMetal ? "metal" : "opengl",
+        MacOSOpenGLOffscreenPresentModeName(
+            MacOSOpenGLOffscreenPresentMode()),
+        MacOSOpenGLOffscreenPresentMode(), ShouldRenderOffscreen() ? 1 : 0,
+        EffectiveMacOSFramePacingTargetHz(m_CurrentParams),
+        MacOSOpenGLOffscreenPresentMinRate(), windowed ? 1 : 0,
+        m_CurrentParams.width, m_CurrentParams.height,
+        bMetalBridgeRequested ? 1 : 0,
+        MacOSMetalDirectPresentEnabled() ? 1 : 0,
+        effectiveMetal ? 1 : 0);
+  };
 
   if (!bChangeMode && !bChangeVsync && !bChangeMPSwapsInFlight) {
+    if (bChangePresentBackend) {
+      configurePresentBackend(m_CurrentParams.windowed);
+    }
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "PERF_TRACE: macos_try_video_mode_end result=unchanged total_ms=%.3f",
+          tryVideoModeTimer.GetDeltaTime() * 1000.0f);
+    }
     return std::string();
   }
 
@@ -1477,15 +2156,26 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
 
   // If we don't have focus, we cannot be full screen.
   if (p.windowed || !HOOKS->AppHasFocus()) {
+    RageTimer windowedPathTimer;
+    float createContextMs = 0.0f;
+    float shutdownFullscreenMs = 0.0f;
+    float setParamsMs = 0.0f;
+    float setViewMs = 0.0f;
+    float configureBackendMs = 0.0f;
     if (bRebuildContext) {
+      RageTimer createContextTimer;
       bool bShared;
       NSOpenGLContext* newContext = CreateOGLContext(
           WINDOWED, p.bpp == 16 ? 16 : 24, p.bpp == 16 ? 1 : 8, 16, m_Context, bShared);
+      createContextMs += createContextTimer.GetDeltaTime() * 1000.0f;
 
       if (!newContext) {
         return "Failed to create OGL context.";
       }
+      RageTimer shutdownFullscreenTimer;
       ShutDownFullScreen();
+      shutdownFullscreenMs =
+          shutdownFullscreenTimer.GetDeltaTime() * 1000.0f;
       [m_Context release];
       m_Context = newContext;
       newDeviceOut = !bShared;
@@ -1494,6 +2184,8 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
       m_BGContext = nil;
       m_BGContext = CreateOGLContext(
           WINDOWED, p.bpp == 16 ? 16 : 24, p.bpp == 16 ? 1 : 8, 16, m_Context, bShared);
+      createContextMs += createContextTimer.GetDeltaTime() * 1000.0f -
+                         createContextMs;
 
       if (m_BGContext && !bShared) {
         [m_BGContext release];
@@ -1501,13 +2193,17 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
       }
     }
 
+    RageTimer setParamsTimer;
     [m_WindowDelegate performSelectorOnMainThread:@selector(setParams:)
                                        withObject:[NSValue valueWithPointer:&p]
                                     waitUntilDone:YES];
+    setParamsMs = setParamsTimer.GetDeltaTime() * 1000.0f;
+    RageTimer setViewTimer;
     dispatch_sync(dispatch_get_main_queue(), ^{
       [m_Context setView:[((SMWindowDelegate*)m_WindowDelegate)->m_Window contentView]];
       [m_Context update];
     });
+    setViewMs = setViewTimer.GetDeltaTime() * 1000.0f;
     [m_Context makeCurrentContext];
     m_CurrentParams.windowed = true;
     SetActualParamsFromMode(CGDisplayCurrentMode(kCGDirectMainDisplay));
@@ -1529,32 +2225,55 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
       ApplyMacOSMPSwapsInFlight(m_Context);
     }
 
-    LOG->Trace(
-        "MacOS OpenGL offscreen present policy: mode=%s mode_value=%d "
-        "enabled=%d target_hz=%.3f min_rate=%d windowed=%d size=%dx%d",
-        MacOSOpenGLOffscreenPresentModeName(
-            MacOSOpenGLOffscreenPresentMode()),
-        MacOSOpenGLOffscreenPresentMode(), ShouldRenderOffscreen() ? 1 : 0,
-        EffectiveMacOSFramePacingTargetHz(m_CurrentParams),
-        MacOSOpenGLOffscreenPresentMinRate(), 1, m_CurrentParams.width,
-        m_CurrentParams.height);
+    RageTimer configureBackendTimer;
+    configurePresentBackend(true);
+    configureBackendMs = configureBackendTimer.GetDeltaTime() * 1000.0f;
 
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "PERF_TRACE: macos_try_video_mode_end result=windowed total_ms=%.3f "
+          "path_ms=%.3f create_context_ms=%.3f shutdown_fullscreen_ms=%.3f "
+          "set_params_ms=%.3f set_view_ms=%.3f configure_backend_ms=%.3f "
+          "new_device=%d actual_size=%dx%d actual_rate=%d",
+          tryVideoModeTimer.GetDeltaTime() * 1000.0f,
+          windowedPathTimer.GetDeltaTime() * 1000.0f, createContextMs,
+          shutdownFullscreenMs, setParamsMs, setViewMs, configureBackendMs,
+          newDeviceOut ? 1 : 0, m_CurrentParams.width, m_CurrentParams.height,
+          m_CurrentParams.rate);
+    }
     return std::string();
   }
   if (bChangeMode) {
+    RageTimer changeModeTimer;
     int result = ChangeDisplayMode(p);
+    const float changeModeMs = changeModeTimer.GetDeltaTime() * 1000.0f;
 
     if (result) {
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "PERF_TRACE: macos_try_video_mode_end result=fullscreen_error "
+            "change_display_mode_ms=%.3f total_ms=%.3f error=%d",
+            changeModeMs, tryVideoModeTimer.GetDeltaTime() * 1000.0f, result);
+      }
       return ssprintf(
           "Failed to switch to full screen:%d x %d @ %d. Error %d.", p.width, p.height, p.rate,
           result);
     }
+    if (PerfDiagnosticsEnabled()) {
+      LOG->Trace(
+          "PERF_TRACE: macos_change_display_mode_done total_ms=%.3f",
+          changeModeMs);
+    }
   }
 
+  float createFullscreenContextMs = 0.0f;
   if (bRebuildContext) {
+    RageTimer createFullscreenContextTimer;
     bool bShared;
     NSOpenGLContext* newContext = CreateOGLContext(
         FULL_SCREEN, p.bpp == 16 ? 16 : 24, p.bpp == 16 ? 1 : 8, 16, m_Context, bShared);
+    createFullscreenContextMs +=
+        createFullscreenContextTimer.GetDeltaTime() * 1000.0f;
 
     if (!newContext) {
       return "Failed to create full screen OGL context.";
@@ -1567,16 +2286,20 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
     [m_BGContext release];
     m_BGContext = CreateOGLContext(
         FULL_SCREEN, p.bpp == 16 ? 16 : 24, p.bpp == 16 ? 1 : 8, 16, m_Context, bShared);
+    createFullscreenContextMs =
+        createFullscreenContextTimer.GetDeltaTime() * 1000.0f;
 
     if (m_BGContext && !bShared) {
       [m_BGContext release];
       m_BGContext = nil;
     }
   }
+  RageTimer setFullscreenTimer;
   dispatch_sync(dispatch_get_main_queue(), ^{
     [m_Context setFullScreen];
     [m_Context update];
   });
+  const float setFullscreenMs = setFullscreenTimer.GetDeltaTime() * 1000.0f;
   [m_Context makeCurrentContext];
 
   if (bChangeVsync) {
@@ -1588,15 +2311,22 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
     ApplyMacOSMPSwapsInFlight(m_Context);
   }
 
-  LOG->Trace(
-      "MacOS OpenGL offscreen present policy: mode=%s mode_value=%d enabled=%d "
-      "target_hz=%.3f min_rate=%d windowed=%d size=%dx%d",
-      MacOSOpenGLOffscreenPresentModeName(MacOSOpenGLOffscreenPresentMode()),
-      MacOSOpenGLOffscreenPresentMode(), ShouldRenderOffscreen() ? 1 : 0,
-      EffectiveMacOSFramePacingTargetHz(m_CurrentParams),
-      MacOSOpenGLOffscreenPresentMinRate(), 0, m_CurrentParams.width,
-      m_CurrentParams.height);
+  RageTimer configureFullscreenBackendTimer;
+  configurePresentBackend(false);
+  const float configureFullscreenBackendMs =
+      configureFullscreenBackendTimer.GetDeltaTime() * 1000.0f;
 
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: macos_try_video_mode_end result=fullscreen total_ms=%.3f "
+        "create_context_ms=%.3f set_fullscreen_ms=%.3f "
+        "configure_backend_ms=%.3f new_device=%d actual_size=%dx%d "
+        "actual_rate=%d",
+        tryVideoModeTimer.GetDeltaTime() * 1000.0f,
+        createFullscreenContextMs, setFullscreenMs,
+        configureFullscreenBackendMs, newDeviceOut ? 1 : 0,
+        m_CurrentParams.width, m_CurrentParams.height, m_CurrentParams.rate);
+  }
   return std::string();
 }
 
@@ -1721,11 +2451,6 @@ void LowLevelWindow_MacOSX::SetActualParamsFromMode(CFDictionaryRef mode) {
   m_CurrentParams.bpp = GetDisplayBitsPerPixel(kCGDirectMainDisplay);
 }
 
-void* LowLevelWindow_MacOSX::GetNativeWindowHandle() const {
-  SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
-  return delegate != nil ? (void*)delegate->m_Window : nullptr;
-}
-
 static int GetIntValue(CFTypeRef r) {
   int ret;
 
@@ -1790,12 +2515,83 @@ void LowLevelWindow_MacOSX::SwapBuffers() {
   RageTimer timer;
   g_LastOpenGLFenceWaitStats = MacOSOpenGLFenceWaitStats();
   CGLContextObj context = CGLGetCurrentContext();
+  if (m_bMetalBridgeBuildPending && context != nullptr) {
+    --m_iMetalBridgeBuildFrameCountdown;
+    if (m_iMetalBridgeBuildFrameCountdown <= 0) {
+      ++m_iMetalBridgeBuildAttempts;
+      if (PerfDiagnosticsEnabled()) {
+        LOG->Trace(
+            "MacOS Metal bridge build running after deferred frames: "
+            "attempt=%d/%d.",
+            m_iMetalBridgeBuildAttempts, kMetalBridgeMaxBuildAttempts);
+      }
+      const bool bridgeReady = BuildMetalOpenGLBridge();
+      if (bridgeReady) {
+        m_bMetalBridgeBuildPending = false;
+        m_iMetalBridgeBuildFrameCountdown = 0;
+        m_iMetalBridgeBuildAttempts = 0;
+      } else if (m_iMetalBridgeBuildAttempts < kMetalBridgeMaxBuildAttempts) {
+        m_iMetalBridgeBuildFrameCountdown = kMetalBridgeRetryDelayFrames;
+        if (PerfDiagnosticsEnabled()) {
+          LOG->Trace(
+              "MacOS Metal bridge build retry queued: next_attempt=%d/%d "
+              "frames_until_build=%d.",
+              m_iMetalBridgeBuildAttempts + 1, kMetalBridgeMaxBuildAttempts,
+              m_iMetalBridgeBuildFrameCountdown);
+        }
+      } else {
+        m_bMetalBridgeBuildPending = false;
+        m_iMetalBridgeBuildFrameCountdown = 0;
+        LOG->Warn(
+            "MacOS Metal bridge build failed after %d attempts; falling back "
+            "to OpenGL presentation until the video mode/backend changes.",
+            kMetalBridgeMaxBuildAttempts);
+      }
+    }
+  }
   GLint swapInterval = -1;
   GLint swapsInFlight = -1;
   if (context != nullptr) {
     CGLGetParameter(context, kCGLCPSwapInterval, &swapInterval);
     CGLGetParameter(context, kCGLCPMPSwapsInFlight, &swapsInFlight);
   }
+  if (m_bMetalDirectPresentSubmittedThisFrame &&
+      MacOSMetalDirectPresentEnabled()) {
+    const uint64_t flushReturnUsec =
+        RageTimer::GetTimeSinceStartMicroseconds();
+    const float elapsedMs = timer.GetDeltaTime() * 1000.0f;
+    g_LastOpenGLFenceWaitStats.available = true;
+    g_LastOpenGLFenceWaitStats.pacing_wait_enabled = false;
+    g_LastOpenGLFenceWaitStats.trace_enabled = PerfDiagnosticsEnabled();
+    g_LastOpenGLFenceWaitStats.fence_created = false;
+    g_LastOpenGLFenceWaitStats.gpu_busy = false;
+    g_LastOpenGLFenceWaitStats.wait_saturated = false;
+    g_LastOpenGLFenceWaitStats.wait_actual_usec = 0;
+    g_LastOpenGLFenceWaitStats.wait_budget_usec = 0;
+    static uint64_t s_iMetalDirectPresentSkipFrames = 0;
+    ++s_iMetalDirectPresentSkipFrames;
+    const bool traceSkipFrame =
+        PerfDiagnosticsEnabled() &&
+        (s_iMetalDirectPresentSkipFrames <= 5 ||
+         s_iMetalDirectPresentSkipFrames % 600 == 0);
+    if (traceSkipFrame) {
+      LOG->Trace(
+          "PERF_TRACE: macos_swap_buffers skipped_for_metal_direct_present=1 "
+          "total_ms=%.3f error=0 vsync=%d swap_interval=%d "
+          "mps_swaps_in_flight=%d frame_pacing_target_hz=%.3f rate=%d "
+          "windowed=%d flush_return_us=%llu skipped_frames=%llu "
+          "requested_size=%dx%d",
+          elapsedMs, m_CurrentParams.vsync ? 1 : 0, swapInterval,
+          swapsInFlight, EffectiveMacOSFramePacingTargetHz(m_CurrentParams),
+          m_CurrentParams.rate, m_CurrentParams.windowed ? 1 : 0,
+          static_cast<unsigned long long>(flushReturnUsec),
+          static_cast<unsigned long long>(s_iMetalDirectPresentSkipFrames),
+          m_CurrentParams.width, m_CurrentParams.height);
+    }
+    m_bMetalDirectPresentSubmittedThisFrame = false;
+    return;
+  }
+  m_bMetalDirectPresentSubmittedThisFrame = false;
   const uint64_t fenceWaitUsec =
       context != nullptr ? MacOSOpenGLFencePacingWaitUsec(m_CurrentParams) : 0;
   const bool fencePacingWait = context != nullptr && fenceWaitUsec > 0;
@@ -1943,22 +2739,106 @@ void LowLevelWindow_MacOSX::Update() {
   // Keep the system from sleeping or the screen saver from activating.
   UpdateSystemActivity(IdleActivity);
 
+  int resizedWidth = 0;
+  int resizedHeight = 0;
+  bool didResize = false;
+  bool didNativePresentationChange = false;
+  int nativePresentationReason = kMacOSNativeWindowPresentationNone;
+  RageTimer resizeTimer;
   LockMutex lock(g_ResizeLock);
-  if (likely(!g_bResized)) {
+  if (likely(!g_bResized && !g_bNativeWindowPresentationChanged)) {
     return;
   }
+  didResize = g_bResized;
+  didNativePresentationChange = g_bNativeWindowPresentationChanged;
+  nativePresentationReason = g_iNativeWindowPresentationChangeReason;
   g_bResized = false;
-  if (m_CurrentParams.width == g_iWidth && m_CurrentParams.height == g_iHeight) {
-    return;
+  g_bNativeWindowPresentationChanged = false;
+  g_iNativeWindowPresentationChangeReason = kMacOSNativeWindowPresentationNone;
+  resizedWidth = g_iWidth;
+  resizedHeight = g_iHeight;
+  const bool sizeChanged =
+      resizedWidth > 0 && resizedHeight > 0 &&
+      (m_CurrentParams.width != resizedWidth ||
+       m_CurrentParams.height != resizedHeight);
+  if (sizeChanged) {
+    m_CurrentParams.width = resizedWidth;
+    m_CurrentParams.height = resizedHeight;
   }
-  m_CurrentParams.width = g_iWidth;
-  m_CurrentParams.height = g_iHeight;
   lock.Unlock();  // Unlock before calling ResolutionChanged().
-  dispatch_sync(dispatch_get_main_queue(), ^{
-    [m_Context update];
-  });
 
-  DISPLAY->ResolutionChanged();
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: macos_window_presentation_change detected "
+        "resize=%d native_presentation_change=%d native_reason=%s "
+        "size_changed=%d size=%dx%d windowed=%d metal_requested=%d",
+        didResize ? 1 : 0, didNativePresentationChange ? 1 : 0,
+        MacOSNativeWindowPresentationReasonName(nativePresentationReason),
+        sizeChanged ? 1 : 0,
+        resizedWidth, resizedHeight, m_CurrentParams.windowed ? 1 : 0,
+        MacOSMetalBridgeEnabled() ? 1 : 0);
+  }
+
+  RageTimer contextTimer;
+  if ([NSThread isMainThread]) {
+    [m_Context update];
+  } else {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+      [m_Context update];
+    });
+  }
+  const float contextUpdateMs = contextTimer.GetDeltaTime() * 1000.0f;
+
+  float metalReconfigureMs = 0.0f;
+  if (MacOSMetalBridgeEnabled() && m_MetalPresenter &&
+      m_CurrentParams.windowed) {
+    RageTimer metalReconfigureTimer;
+    SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
+    ReleaseMetalOpenGLBridge();
+    if ([NSThread isMainThread]) {
+      m_MetalPresenter->Initialize(
+          (void*)delegate->m_Window, m_CurrentParams.width,
+          m_CurrentParams.height,
+          EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
+    } else {
+      dispatch_sync(dispatch_get_main_queue(), ^{
+        m_MetalPresenter->Initialize(
+            (void*)delegate->m_Window, m_CurrentParams.width,
+            m_CurrentParams.height,
+            EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
+      });
+    }
+    if (m_MetalPresenter->IsInteropReady()) {
+      if (MacOSMetalDirectPresentEnabled()) {
+        m_MetalPresenter->AttachLayerToWindow((void*)delegate->m_Window);
+      } else {
+        m_MetalPresenter->DetachLayer();
+      }
+      m_bMetalBridgeBuildPending = true;
+      m_iMetalBridgeBuildFrameCountdown = kMetalBridgeInitialBuildDelayFrames;
+      m_iMetalBridgeBuildAttempts = 0;
+    }
+    metalReconfigureMs = metalReconfigureTimer.GetDeltaTime() * 1000.0f;
+  }
+
+  if (sizeChanged) {
+    DISPLAY->ResolutionChanged();
+  }
+  DISPLAY->ResetFramePacing(
+      didNativePresentationChange ? "macos_native_window_presentation_change"
+                                  : "window_resize");
+
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: macos_window_presentation_change handled total_ms=%.3f "
+        "context_update_ms=%.3f metal_reconfigure_ms=%.3f "
+        "resolution_changed=%d frame_pacing_reset=1 native_reason=%s "
+        "size=%dx%d",
+        resizeTimer.GetDeltaTime() * 1000.0f, contextUpdateMs,
+        metalReconfigureMs, sizeChanged ? 1 : 0,
+        MacOSNativeWindowPresentationReasonName(nativePresentationReason),
+        resizedWidth, resizedHeight);
+  }
 }
 
 RenderTarget* LowLevelWindow_MacOSX::CreateRenderTarget() {
