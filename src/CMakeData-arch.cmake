@@ -134,8 +134,10 @@ if(WIN32)
               "arch/LowLevelWindow/LowLevelWindow_Win32.h")
 elseif(APPLE)
   list(APPEND SMDATA_ARCH_LOWLEVEL_SRC
+              "arch/LowLevelWindow/MacOSMetalPresenter.mm"
               "arch/LowLevelWindow/LowLevelWindow_MacOSX.mm")
   list(APPEND SMDATA_ARCH_LOWLEVEL_HPP
+              "arch/LowLevelWindow/MacOSMetalPresenter.h"
               "arch/LowLevelWindow/LowLevelWindow_MacOSX.h")
 else(UNIX)
   if(X11_FOUND)

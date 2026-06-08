@@ -249,15 +249,26 @@ OperatorMenuOptionRows.VideoRenderer = function()
 	-- If there is a method available to Lua to get available renderers
 	-- from the engine, I haven't found it yet.
 	local choices = { "opengl" }
-	local values  = { "opengl" }
+	local values  = { { VideoRenderers="opengl" } }
+
+	local architecture = HOOKS:GetArchName():lower()
+	if architecture:match("mac") then
+		choices = { "OpenGL", "Metal" }
+		values = {
+			{ VideoRenderers="opengl", MacOSPresentBackend="opengl" },
+			{ VideoRenderers="metal,opengl", MacOSPresentBackend="opengl" },
+		}
+	end
 
 	-- Windows also has d3d as a VideoRenderer on ITGm.
 	-- The convention(?) there is to list both available
 	-- backends in Preferences.ini, but only use the first
-	local architecture = HOOKS:GetArchName():lower()
 	if architecture:match("windows") then
 		table.insert(choices, "d3d")
-		values = { "opengl,d3d", "d3d,opengl" }
+		values = {
+			{ VideoRenderers="opengl,d3d" },
+			{ VideoRenderers="d3d,opengl" },
+		}
 	end
 
 	return {
@@ -268,7 +279,7 @@ OperatorMenuOptionRows.VideoRenderer = function()
 		OneChoiceForAllPlayers = true,
 		ExportOnChange = false,
 		LoadSelections = function(self, list, pn)
-			local pref = PREFSMAN:GetPreference("VideoRenderers")
+			local pref = PREFSMAN:GetPreference("VideoRenderers") or ""
 
 			-- Multiple comma-delimited VideoRenderers may be listed, but
 			-- we only want the first because that's the one actually in use.
@@ -279,15 +290,26 @@ OperatorMenuOptionRows.VideoRenderer = function()
 				break
 			end
 
-			if not pref then return end
-
-			local i = FindInTable(pref, self.Choices) or 1
+			local i = 1
+			if architecture:match("mac") then
+				local present = PREFSMAN:GetPreference("MacOSPresentBackend")
+				if pref == "metal" then
+					i = 2
+				elseif type(present) == "string" and present:lower() == "metal" then
+					i = 1
+				end
+			else
+				i = FindInTable(pref, self.Choices) or 1
+			end
 			list[i] = true
 		end,
 		SaveSelections = function(self, list, pn)
 			for i=1, #list do
 				if list[i] then
-					PREFSMAN:SetPreference("VideoRenderers", values[i])
+					PREFSMAN:SetPreference("VideoRenderers", values[i].VideoRenderers)
+					if values[i].MacOSPresentBackend then
+						PREFSMAN:SetPreference("MacOSPresentBackend", values[i].MacOSPresentBackend)
+					end
 					break
 				end
 			end

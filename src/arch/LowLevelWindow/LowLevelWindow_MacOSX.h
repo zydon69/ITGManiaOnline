@@ -33,6 +33,7 @@ class LowLevelWindow_MacOSX : public LowLevelWindow {
   const ActualVideoModeParams GetActualVideoModeParams() const {
     return m_CurrentParams;
   }
+  void* GetNativeWindowHandle() const;
 
   bool SupportsRenderToTexture() const { return true; }
   RenderTarget* CreateRenderTarget();

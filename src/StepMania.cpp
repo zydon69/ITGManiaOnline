@@ -372,6 +372,10 @@ std::string StepMania::GetSelectMusicScreen() {
 #include "RageDisplay_GLES2.h"
 #endif
 
+#if defined(__APPLE__)
+#include "RageDisplay_Metal.h"
+#endif
+
 #include "RageDisplay_Null.h"
 
 struct VideoCardDefaults {
@@ -561,7 +565,11 @@ RageDisplay* CreateDisplay() {
   for (unsigned i = 0; i < asRenderers.size(); i++) {
     std::string sRenderer = asRenderers[i];
 
-    if (CompareNoCase(sRenderer, "opengl") == 0) {
+    if (CompareNoCase(sRenderer, "metal") == 0) {
+#if defined(__APPLE__)
+      pRet = new RageDisplay_Metal;
+#endif
+    } else if (CompareNoCase(sRenderer, "opengl") == 0) {
 #if defined(SUPPORT_OPENGL)
       pRet = new RageDisplay_Legacy;
 #endif
