@@ -1336,8 +1336,9 @@ void RageDisplay_Metal::FlushBatches() {
    * Present through an offscreen render target for both native windowed and
    * native fullscreen modes.  This keeps CAMetalLayer::nextDrawable off the hot
    * render path: the frame is rendered first, then we consume a prefetched
-   * drawable opportunistically.  Direct-to-drawable present remains the fallback
-   * inside the presenter when the offscreen present pipeline is unavailable.
+   * drawable opportunistically.  The native Metal renderer requires this
+   * offscreen present path during initialization, so missing pipeline state is an
+   * initialization failure instead of a runtime direct-drawable fallback.
    */
   const bool presented = m_Presenter->PresentSolidBatchesOffscreenFirst(
       m_MetalDrawBatches.data(), m_MetalDrawBatches.size(), clearDepth, 0.0,

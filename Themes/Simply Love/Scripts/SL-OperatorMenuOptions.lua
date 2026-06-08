@@ -291,15 +291,15 @@ OperatorMenuOptionRows.VideoRenderer = function()
 				break
 			end
 
-				local i = 1
-				if architecture:match("mac") then
-					local present = PREFSMAN:GetPreference("MacOSPresentBackend")
-					if pref == "metal" then
-						i = 3
-					elseif type(present) == "string" and present:lower() == "metal" then
-						i = 2
-					end
-				else
+			local i = 1
+			if architecture:match("mac") then
+				local present = PREFSMAN:GetPreference("MacOSPresentBackend")
+				if pref == "metal" then
+					i = 3
+				elseif type(present) == "string" and present:lower() == "metal" then
+					i = 2
+				end
+			else
 				i = FindInTable(pref, self.Choices) or 1
 			end
 			list[i] = true

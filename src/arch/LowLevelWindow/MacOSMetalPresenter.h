@@ -31,11 +31,14 @@ struct MacOSMetalTransformUniforms {
 struct MacOSMetalPresenterRuntimeStats {
   unsigned long long submittedFrames = 0;
   unsigned long long completedFrames = 0;
+  unsigned long long offscreenSubmittedFrames = 0;
   unsigned long long prefetchedDrawables = 0;
   unsigned long long consumedDrawables = 0;
   unsigned long long slowDrawableAcquires = 0;
   unsigned long long drawableMisses = 0;
   unsigned long long skippedNoPrefetchedDrawableFrames = 0;
+  unsigned long long offscreenSkippedNoDrawableFrames = 0;
+  unsigned long long offscreenSkippedFrameLimiterFrames = 0;
 };
 
 struct MacOSMetalDrawBatch {
