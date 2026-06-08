@@ -165,6 +165,8 @@ class RageDisplay_Metal : public RageDisplay {
   std::unique_ptr<LowLevelWindow> m_Window;
   std::unique_ptr<MacOSMetalPresenter> m_Presenter;
   std::vector<DrawBatch> m_DrawBatches;
+  std::vector<DrawBatch> m_FlushDrawBatches;
+  std::vector<MacOSMetalDrawBatch> m_MetalDrawBatches;
   std::vector<MetalTexture> m_Textures;
   std::array<uintptr_t, NUM_TextureUnit> m_TextureHandles;
   BlendMode m_BlendMode;

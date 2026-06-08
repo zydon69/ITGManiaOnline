@@ -997,10 +997,9 @@ void RageDisplay_Metal::FlushBatches() {
     return;
   }
 
-  std::vector<DrawBatch> batches;
-  batches.swap(m_DrawBatches);
-  std::vector<MacOSMetalDrawBatch> metalBatches;
-  BuildMetalBatches(batches, &metalBatches);
+  m_FlushDrawBatches.clear();
+  m_FlushDrawBatches.swap(m_DrawBatches);
+  BuildMetalBatches(m_FlushDrawBatches, &m_MetalDrawBatches);
 
   if (m_iCurrentRenderTargetHandle > 0 &&
       m_iCurrentRenderTargetHandle < m_Textures.size()) {
@@ -1010,6 +1009,8 @@ void RageDisplay_Metal::FlushBatches() {
           "RageDisplay_Metal: active render target became invalid handle=%lu.",
           static_cast<unsigned long>(m_iCurrentRenderTargetHandle));
       m_iCurrentRenderTargetHandle = 0;
+      m_FlushDrawBatches.clear();
+      m_MetalDrawBatches.clear();
       return;
     }
     const bool preserveColor = target.preserveNextRender && target.hasRendered;
@@ -1020,8 +1021,8 @@ void RageDisplay_Metal::FlushBatches() {
         std::min(target.renderHeight > 0 ? target.renderHeight : target.height,
                  target.height);
     const bool rendered = m_Presenter->RenderSolidBatchesToTexture(
-        target.texture, target.depthTexture, metalBatches.data(),
-        metalBatches.size(), preserveColor, true,
+        target.texture, target.depthTexture, m_MetalDrawBatches.data(),
+        m_MetalDrawBatches.size(), preserveColor, true,
         0.0, 0.0, 0.0, 0.0, viewportWidth, viewportHeight);
     if (rendered) {
       target.hasRendered = true;
@@ -1031,9 +1032,11 @@ void RageDisplay_Metal::FlushBatches() {
           "RageDisplay_Metal: render target submit failed handle=%lu "
           "batches=%zu.",
           static_cast<unsigned long>(m_iCurrentRenderTargetHandle),
-          metalBatches.size());
+          m_MetalDrawBatches.size());
       target.preserveNextRender = preserveColor;
     }
+    m_FlushDrawBatches.clear();
+    m_MetalDrawBatches.clear();
     m_bClearDepthNextFrame = false;
     return;
   }
@@ -1041,8 +1044,10 @@ void RageDisplay_Metal::FlushBatches() {
   const double targetHz =
       m_Params.rate > 1 ? static_cast<double>(m_Params.rate) : 60.0;
   const bool presented = m_Presenter->PresentSolidBatches(
-      metalBatches.data(), metalBatches.size(), true,
+      m_MetalDrawBatches.data(), m_MetalDrawBatches.size(), true,
       0.04, 0.055, 0.075, 1.0, targetHz);
+  m_FlushDrawBatches.clear();
+  m_MetalDrawBatches.clear();
   m_bClearDepthNextFrame = false;
   if (!presented) {
     static uint64_t s_iSkippedClearFrames = 0;
