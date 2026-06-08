@@ -33,6 +33,9 @@ struct MacOSMetalDrawBatch {
   const MacOSMetalSolidVertex* vertices = nullptr;
   size_t vertexCount = 0;
   void* texture = nullptr;
+  int textureWidth = 1;
+  void* texture2 = nullptr;
+  int texture2Width = 1;
   BlendMode blendMode = BLEND_NORMAL;
   TextureMode textureMode = TextureMode_Modulate;
   EffectMode effectMode = EffectMode_Normal;

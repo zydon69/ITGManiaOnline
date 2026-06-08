@@ -249,12 +249,16 @@ OperatorMenuOptionRows.VideoRenderer = function()
 	-- If there is a method available to Lua to get available renderers
 	-- from the engine, I haven't found it yet.
 	local choices = { "opengl" }
-	local values  = { "opengl" }
+	local values  = { { VideoRenderers="opengl" } }
 
 	local architecture = HOOKS:GetArchName():lower()
 	if architecture:match("mac") then
-		table.insert(choices, "metal")
-		values = { "opengl", "metal,opengl" }
+		choices = { "OpenGL", "OpenGL + Metal Present", "Metal" }
+		values = {
+			{ VideoRenderers="opengl", MacOSPresentBackend="opengl" },
+			{ VideoRenderers="opengl", MacOSPresentBackend="metal" },
+			{ VideoRenderers="metal,opengl", MacOSPresentBackend="opengl" },
+		}
 	end
 
 	-- Windows also has d3d as a VideoRenderer on ITGm.
@@ -262,7 +266,10 @@ OperatorMenuOptionRows.VideoRenderer = function()
 	-- backends in Preferences.ini, but only use the first
 	if architecture:match("windows") then
 		table.insert(choices, "d3d")
-		values = { "opengl,d3d", "d3d,opengl" }
+		values = {
+			{ VideoRenderers="opengl,d3d" },
+			{ VideoRenderers="d3d,opengl" },
+		}
 	end
 
 	return {
@@ -284,37 +291,29 @@ OperatorMenuOptionRows.VideoRenderer = function()
 				break
 			end
 
-			if not pref then return end
-
-			local i = FindInTable(pref, self.Choices) or 1
+			local i = 1
+			if architecture:match("mac") then
+				local present = PREFSMAN:GetPreference("MacOSPresentBackend")
+				if pref == "metal" then
+					i = 3
+				elseif type(present) == "string" and present:lower() == "metal" then
+					i = 2
+				end
+			else
+				i = FindInTable(pref, self.Choices) or 1
+			end
 			list[i] = true
 		end,
 		SaveSelections = function(self, list, pn)
 			for i=1, #list do
 				if list[i] then
-					PREFSMAN:SetPreference("VideoRenderers", values[i])
+					PREFSMAN:SetPreference("VideoRenderers", values[i].VideoRenderers)
+					if values[i].MacOSPresentBackend then
+						PREFSMAN:SetPreference("MacOSPresentBackend", values[i].MacOSPresentBackend)
+					end
 					break
 				end
 			end
-		end,
-	}
-end
-
-OperatorMenuOptionRows.MacOSPresentBackend = function()
-	return {
-		Name = "MacOSPresentBackend",
-		Choices = { "OpenGL", "Metal" },
-		LayoutType = "ShowAllInRow",
-		SelectType = "SelectOne",
-		OneChoiceForAllPlayers = true,
-		ExportOnChange = false,
-		LoadSelections = function(self, list, pn)
-			local pref = PREFSMAN:GetPreference("MacOSPresentBackend")
-			local i = (type(pref) == "string" and pref:lower() == "metal") and 2 or 1
-			list[i] = true
-		end,
-		SaveSelections = function(self, list, pn)
-			PREFSMAN:SetPreference("MacOSPresentBackend", list[2] and "metal" or "opengl")
 		end,
 	}
 end

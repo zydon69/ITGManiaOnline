@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <string>
+#include <array>
 #include <vector>
 
 #include "RageDisplay.h"
@@ -47,9 +48,10 @@ class RageDisplay_Metal : public RageDisplay {
   void UpdateTexture(
       uintptr_t iTexHandle, RageSurface* img, int xoffset,
       int yoffset, int width, int height) override;
+  RageTextureLock* CreateTextureLock() override;
   void DeleteTexture(uintptr_t iTexHandle) override;
   void ClearAllTextures() override;
-  int GetNumTextureUnits() override { return 1; }
+  int GetNumTextureUnits() override { return 2; }
   void SetTexture(TextureUnit, uintptr_t iTexture) override;
   void SetTextureMode(TextureUnit tu, TextureMode mode) override;
   void SetTextureWrapping(TextureUnit tu, bool wrapping) override;
@@ -87,7 +89,7 @@ class RageDisplay_Metal : public RageDisplay {
 
   RageCompiledGeometry* CreateCompiledGeometry() override;
   void DeleteCompiledGeometry(RageCompiledGeometry*) override;
-  RageSurface* CreateScreenshot() override { return nullptr; }
+  RageSurface* CreateScreenshot() override;
 
  protected:
   void DrawQuadsInternal(
@@ -127,17 +129,17 @@ class RageDisplay_Metal : public RageDisplay {
   };
 
   struct DrawBatch {
-    uintptr_t textureHandle = 0;
+    std::array<uintptr_t, NUM_TextureUnit> textureHandles = {};
     BlendMode blendMode = BLEND_NORMAL;
-    TextureMode textureMode = TextureMode_Modulate;
+    std::array<TextureMode, NUM_TextureUnit> textureModes = {};
     EffectMode effectMode = EffectMode_Normal;
     int celStage = 0;
     bool sphereMapping = false;
     float zBias = 0.0f;
     ZTestMode zTestMode = ZTEST_OFF;
     CullMode cullMode = CULL_NONE;
-    bool textureWrapping = false;
-    bool textureFiltering = true;
+    std::array<bool, NUM_TextureUnit> textureWrapping = {};
+    std::array<bool, NUM_TextureUnit> textureFiltering = {};
     bool zWrite = false;
     bool alphaTest = false;
     std::vector<MacOSMetalSolidVertex> vertices;
@@ -164,17 +166,17 @@ class RageDisplay_Metal : public RageDisplay {
   std::unique_ptr<MacOSMetalPresenter> m_Presenter;
   std::vector<DrawBatch> m_DrawBatches;
   std::vector<MetalTexture> m_Textures;
-  uintptr_t m_iActiveTextureHandle;
+  std::array<uintptr_t, NUM_TextureUnit> m_TextureHandles;
   BlendMode m_BlendMode;
-  TextureMode m_TextureMode;
+  std::array<TextureMode, NUM_TextureUnit> m_TextureModes;
   EffectMode m_EffectMode;
   int m_iCelShadedStage;
   bool m_bSphereMapping;
   float m_fZBias;
   ZTestMode m_ZTestMode;
   CullMode m_CullMode;
-  bool m_bTextureWrapping;
-  bool m_bTextureFiltering;
+  std::array<bool, NUM_TextureUnit> m_TextureWrapping;
+  std::array<bool, NUM_TextureUnit> m_TextureFiltering;
   bool m_bZWrite;
   bool m_bAlphaTest;
   bool m_bClearDepthNextFrame;

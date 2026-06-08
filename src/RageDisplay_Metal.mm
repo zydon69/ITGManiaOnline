@@ -23,6 +23,9 @@
 #include "arch/LowLevelWindow/MacOSMetalPresenter.h"
 #include "global.h"
 
+#import <AppKit/AppKit.h>
+#import <CoreGraphics/CoreGraphics.h>
+
 static RageDisplay::RagePixelFormatDesc PIXEL_FORMAT_DESC[NUM_RagePixelFormat] =
     {{/* R8G8B8A8 */
       32,
@@ -134,6 +137,39 @@ class RageCompiledGeometryMetal : public RageCompiledGeometry {
  private:
   std::vector<RageModelVertex> m_vVertices;
   std::vector<msTriangle> m_vTriangles;
+};
+
+class RageTextureLockMetal : public RageTextureLock {
+ public:
+  void Lock(uintptr_t textureHandle, RageSurface* surface) override {
+    ASSERT(m_TextureHandle == 0);
+    ASSERT(surface != nullptr);
+    ASSERT(surface->pixels == nullptr);
+
+    m_TextureHandle = textureHandle;
+    const size_t bufferSize =
+        static_cast<size_t>(std::max(0, surface->h)) *
+        static_cast<size_t>(std::max(0, surface->pitch));
+    m_Buffer.assign(bufferSize, 0);
+    surface->pixels = m_Buffer.empty() ? nullptr : m_Buffer.data();
+    surface->pixels_owned = false;
+  }
+
+  void Unlock(RageSurface* surface, bool changed = true) override {
+    ASSERT(surface != nullptr);
+    if (changed && m_TextureHandle != 0 && surface->pixels != nullptr) {
+      DISPLAY->UpdateTexture(
+          m_TextureHandle, surface, 0, 0, surface->w, surface->h);
+    }
+
+    surface->pixels = nullptr;
+    m_TextureHandle = 0;
+    m_Buffer.clear();
+  }
+
+ private:
+  uintptr_t m_TextureHandle = 0;
+  std::vector<uint8_t> m_Buffer;
 };
 
 RageMatrix RageDisplay_Metal::CurrentModelViewProjection() const {
@@ -333,17 +369,17 @@ void RageCompiledGeometryMetal::EmitTo(
 }
 
 RageDisplay_Metal::RageDisplay_Metal()
-    : m_iActiveTextureHandle(0),
+    : m_TextureHandles{},
       m_BlendMode(BLEND_NORMAL),
-      m_TextureMode(TextureMode_Modulate),
+      m_TextureModes{},
       m_EffectMode(EffectMode_Normal),
       m_iCelShadedStage(0),
       m_bSphereMapping(false),
       m_fZBias(0.0f),
       m_ZTestMode(ZTEST_OFF),
       m_CullMode(CULL_NONE),
-      m_bTextureWrapping(false),
-      m_bTextureFiltering(true),
+      m_TextureWrapping{},
+      m_TextureFiltering{},
       m_bZWrite(false),
       m_bAlphaTest(false),
       m_bClearDepthNextFrame(true),
@@ -355,6 +391,8 @@ RageDisplay_Metal::RageDisplay_Metal()
       m_Lights(4),
       m_iNextTextureHandle(1),
       m_bReady(false) {
+  m_TextureModes.fill(TextureMode_Modulate);
+  m_TextureFiltering.fill(true);
   m_Textures.resize(1);
   LOG->MapLog("renderer", "Current renderer: metal");
 }
@@ -567,6 +605,10 @@ void RageDisplay_Metal::UpdateTexture(
   }
 }
 
+RageTextureLock* RageDisplay_Metal::CreateTextureLock() {
+  return new RageTextureLockMetal;
+}
+
 uintptr_t RageDisplay_Metal::CreateRenderTarget(
     const RenderTargetParam& param, int& iTextureWidthOut,
     int& iTextureHeightOut) {
@@ -702,7 +744,7 @@ void RageDisplay_Metal::DeleteTexture(uintptr_t iTexHandle) {
 }
 
 void RageDisplay_Metal::ClearAllTextures() {
-  m_iActiveTextureHandle = 0;
+  m_TextureHandles.fill(0);
 }
 
 void RageDisplay_Metal::DestroyAllTextures() {
@@ -711,16 +753,16 @@ void RageDisplay_Metal::DestroyAllTextures() {
   }
   m_Textures.clear();
   m_Textures.resize(1);
-  m_iActiveTextureHandle = 0;
+  m_TextureHandles.fill(0);
   m_iCurrentRenderTargetHandle = 0;
   m_iNextTextureHandle = 1;
 }
 
 void RageDisplay_Metal::SetTexture(TextureUnit tu, uintptr_t iTexture) {
-  if (tu != TextureUnit_1) {
+  if (tu < 0 || tu >= NUM_TextureUnit) {
     return;
   }
-  m_iActiveTextureHandle = iTexture;
+  m_TextureHandles[tu] = iTexture;
 }
 
 void RageDisplay_Metal::SetBlendMode(BlendMode mode) {
@@ -731,32 +773,40 @@ void RageDisplay_Metal::SetBlendMode(BlendMode mode) {
 }
 
 void RageDisplay_Metal::SetTextureMode(TextureUnit tu, TextureMode mode) {
-  if (tu != TextureUnit_1) {
+  if (tu < 0 || tu >= NUM_TextureUnit) {
     return;
   }
   if (mode < 0 || mode >= NUM_TextureMode) {
     mode = TextureMode_Modulate;
   }
-  m_TextureMode = mode;
+  m_TextureModes[tu] = mode;
 }
 
 void RageDisplay_Metal::SetTextureWrapping(TextureUnit tu, bool wrapping) {
-  if (tu != TextureUnit_1) {
+  if (tu < 0 || tu >= NUM_TextureUnit) {
     return;
   }
-  m_bTextureWrapping = wrapping;
+  m_TextureWrapping[tu] = wrapping;
 }
 
 void RageDisplay_Metal::SetTextureFiltering(TextureUnit tu, bool filtering) {
-  if (tu != TextureUnit_1) {
+  if (tu < 0 || tu >= NUM_TextureUnit) {
     return;
   }
-  m_bTextureFiltering = filtering;
+  m_TextureFiltering[tu] = filtering;
 }
 
 void RageDisplay_Metal::SetEffectMode(EffectMode effect) {
   switch (effect) {
     case EffectMode_Normal:
+    case EffectMode_Unpremultiply:
+    case EffectMode_ColorBurn:
+    case EffectMode_ColorDodge:
+    case EffectMode_VividLight:
+    case EffectMode_HardMix:
+    case EffectMode_Overlay:
+    case EffectMode_Screen:
+    case EffectMode_YUYV422:
     case EffectMode_DistanceField:
       m_EffectMode = effect;
       break;
@@ -767,7 +817,16 @@ void RageDisplay_Metal::SetEffectMode(EffectMode effect) {
 }
 
 bool RageDisplay_Metal::IsEffectModeSupported(EffectMode effect) {
-  return effect == EffectMode_Normal || effect == EffectMode_DistanceField;
+  return effect == EffectMode_Normal ||
+         effect == EffectMode_Unpremultiply ||
+         effect == EffectMode_ColorBurn ||
+         effect == EffectMode_ColorDodge ||
+         effect == EffectMode_VividLight ||
+         effect == EffectMode_HardMix ||
+         effect == EffectMode_Overlay ||
+         effect == EffectMode_Screen ||
+         effect == EffectMode_YUYV422 ||
+         effect == EffectMode_DistanceField;
 }
 
 void RageDisplay_Metal::SetZWrite(bool write) {
@@ -838,7 +897,7 @@ void RageDisplay_Metal::SetLightDirectional(
 
 void RageDisplay_Metal::SetSphereEnvironmentMapping(
     TextureUnit tu, bool enabled) {
-  if (tu != TextureUnit_1) {
+  if (tu < 0 || tu >= NUM_TextureUnit) {
     return;
   }
   m_bSphereMapping = enabled;
@@ -853,31 +912,31 @@ void RageDisplay_Metal::SetCelShaded(int stage) {
 
 RageDisplay_Metal::DrawBatch& RageDisplay_Metal::ActiveBatch() {
   if (m_DrawBatches.empty() ||
-      m_DrawBatches.back().textureHandle != m_iActiveTextureHandle ||
+      m_DrawBatches.back().textureHandles != m_TextureHandles ||
       m_DrawBatches.back().blendMode != m_BlendMode ||
-      m_DrawBatches.back().textureMode != m_TextureMode ||
+      m_DrawBatches.back().textureModes != m_TextureModes ||
       m_DrawBatches.back().effectMode != m_EffectMode ||
       m_DrawBatches.back().celStage != m_iCelShadedStage ||
       m_DrawBatches.back().sphereMapping != m_bSphereMapping ||
       m_DrawBatches.back().zBias != m_fZBias ||
       m_DrawBatches.back().zTestMode != m_ZTestMode ||
       m_DrawBatches.back().cullMode != m_CullMode ||
-      m_DrawBatches.back().textureWrapping != m_bTextureWrapping ||
-      m_DrawBatches.back().textureFiltering != m_bTextureFiltering ||
+      m_DrawBatches.back().textureWrapping != m_TextureWrapping ||
+      m_DrawBatches.back().textureFiltering != m_TextureFiltering ||
       m_DrawBatches.back().zWrite != m_bZWrite ||
       m_DrawBatches.back().alphaTest != m_bAlphaTest) {
     DrawBatch batch;
-    batch.textureHandle = m_iActiveTextureHandle;
+    batch.textureHandles = m_TextureHandles;
     batch.blendMode = m_BlendMode;
-    batch.textureMode = m_TextureMode;
+    batch.textureModes = m_TextureModes;
     batch.effectMode = m_EffectMode;
     batch.celStage = m_iCelShadedStage;
     batch.sphereMapping = m_bSphereMapping;
     batch.zBias = m_fZBias;
     batch.zTestMode = m_ZTestMode;
     batch.cullMode = m_CullMode;
-    batch.textureWrapping = m_bTextureWrapping;
-    batch.textureFiltering = m_bTextureFiltering;
+    batch.textureWrapping = m_TextureWrapping;
+    batch.textureFiltering = m_TextureFiltering;
     batch.zWrite = m_bZWrite;
     batch.alphaTest = m_bAlphaTest;
     m_DrawBatches.push_back(batch);
@@ -899,18 +958,35 @@ void RageDisplay_Metal::BuildMetalBatches(
       continue;
     }
     void* texture = nullptr;
-    if (batch.textureHandle > 0 && batch.textureHandle < m_Textures.size()) {
+    int textureWidth = 1;
+    if (batch.textureHandles[TextureUnit_1] > 0 &&
+        batch.textureHandles[TextureUnit_1] < m_Textures.size()) {
       if (m_iCurrentRenderTargetHandle == 0 ||
-          batch.textureHandle != m_iCurrentRenderTargetHandle) {
-        texture = m_Textures[batch.textureHandle].texture;
+          batch.textureHandles[TextureUnit_1] != m_iCurrentRenderTargetHandle) {
+        texture = m_Textures[batch.textureHandles[TextureUnit_1]].texture;
+        textureWidth =
+            std::max(1, m_Textures[batch.textureHandles[TextureUnit_1]].width);
+      }
+    }
+    void* texture2 = nullptr;
+    int texture2Width = 1;
+    if (batch.textureHandles[TextureUnit_2] > 0 &&
+        batch.textureHandles[TextureUnit_2] < m_Textures.size()) {
+      if (m_iCurrentRenderTargetHandle == 0 ||
+          batch.textureHandles[TextureUnit_2] != m_iCurrentRenderTargetHandle) {
+        texture2 = m_Textures[batch.textureHandles[TextureUnit_2]].texture;
+        texture2Width =
+            std::max(1, m_Textures[batch.textureHandles[TextureUnit_2]].width);
       }
     }
     metalBatches->push_back(
-        {batch.vertices.data(), batch.vertices.size(), texture,
-         batch.blendMode, batch.textureMode, batch.effectMode,
+        {batch.vertices.data(), batch.vertices.size(), texture, textureWidth,
+         texture2, texture2Width,
+         batch.blendMode, batch.textureModes[TextureUnit_1], batch.effectMode,
          batch.celStage,
          batch.zTestMode,
-         batch.cullMode, batch.textureWrapping, batch.textureFiltering,
+         batch.cullMode, batch.textureWrapping[TextureUnit_1],
+         batch.textureFiltering[TextureUnit_1],
          batch.zWrite, batch.alphaTest});
   }
 }
@@ -998,8 +1074,10 @@ void RageDisplay_Metal::EndFrame() {
       std::set<uintptr_t> textureHandles;
       for (const DrawBatch& batch : batches) {
         vertexCount += batch.vertices.size();
-        if (batch.textureHandle != 0) {
-          textureHandles.insert(batch.textureHandle);
+        for (uintptr_t textureHandle : batch.textureHandles) {
+          if (textureHandle != 0) {
+            textureHandles.insert(textureHandle);
+          }
         }
         for (const MacOSMetalSolidVertex& vertex : batch.vertices) {
           if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y) ||
@@ -1186,6 +1264,66 @@ void RageDisplay_Metal::DrawCompiledGeometryInternal(
     m_CullMode = previousCullMode;
     m_bZWrite = previousZWrite;
   }
+}
+
+RageSurface* RageDisplay_Metal::CreateScreenshot() {
+  if (m_Window == nullptr) {
+    return nullptr;
+  }
+
+  NSWindow* window = (__bridge NSWindow*)m_Window->GetNativeWindowHandle();
+  if (window == nil) {
+    return nullptr;
+  }
+
+  CGImageRef captured = CGWindowListCreateImage(
+      CGRectNull, kCGWindowListOptionIncludingWindow,
+      static_cast<CGWindowID>([window windowNumber]),
+      kCGWindowImageBoundsIgnoreFraming);
+  if (captured == nullptr) {
+    LOG->Warn("RageDisplay_Metal::CreateScreenshot: window capture failed.");
+    return nullptr;
+  }
+
+  const size_t width = CGImageGetWidth(captured);
+  const size_t height = CGImageGetHeight(captured);
+  if (width == 0 || height == 0 ||
+      width > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+      height > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    CGImageRelease(captured);
+    return nullptr;
+  }
+
+  RageSurface* image = CreateSurface(
+      static_cast<int>(width), static_cast<int>(height), 32,
+      0xFF000000, 0x00FF0000, 0x0000FF00, 0x000000FF);
+  if (image == nullptr || image->pixels == nullptr) {
+    delete image;
+    CGImageRelease(captured);
+    return nullptr;
+  }
+
+  CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+  CGContextRef context = CGBitmapContextCreate(
+      image->pixels, width, height, 8, image->pitch, colorSpace,
+      kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+  if (context == nullptr) {
+    CGColorSpaceRelease(colorSpace);
+    delete image;
+    CGImageRelease(captured);
+    return nullptr;
+  }
+
+  CGContextDrawImage(
+      context,
+      CGRectMake(
+          0, 0, static_cast<CGFloat>(width), static_cast<CGFloat>(height)),
+      captured);
+  CGContextRelease(context);
+  CGColorSpaceRelease(colorSpace);
+  CGImageRelease(captured);
+
+  return image;
 }
 
 void RageDisplay_Metal::DrawLineStripInternal(

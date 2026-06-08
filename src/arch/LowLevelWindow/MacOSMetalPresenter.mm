@@ -11,12 +11,14 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -40,6 +42,43 @@ constexpr uint64_t kMetalInitialTraceFrames = 3;
 constexpr uint64_t kMetalRareSkipTraceInterval = 5000;
 constexpr int kMetalMaxSolidFramesInFlight = 3;
 constexpr int kMetalFrameLimiterWaitMs = 8;
+
+id<MTLLibrary> LoadMetalLibrary(
+    id<MTLDevice> device, const std::string& path, std::string* failureReason) {
+  if (device == nil) {
+    if (failureReason != nullptr) {
+      *failureReason = "Metal device is not available.";
+    }
+    return nil;
+  }
+
+  std::string shaderSource;
+  if (!GetFileContents(path, shaderSource)) {
+    if (failureReason != nullptr) {
+      *failureReason = "Failed to read " + path + ".";
+    }
+    return nil;
+  }
+
+  NSError* error = nil;
+  NSString* source = [NSString stringWithUTF8String:shaderSource.c_str()];
+  if (source == nil) {
+    if (failureReason != nullptr) {
+      *failureReason = path + ": Metal shader source is not valid UTF-8.";
+    }
+    return nil;
+  }
+  id<MTLLibrary> library = [device newLibraryWithSource:source
+                                                options:nil
+                                                  error:&error];
+  if (library == nil && failureReason != nullptr) {
+    *failureReason =
+        path + ": " +
+        (error != nil ? [[error localizedDescription] UTF8String]
+                      : "Metal shader compilation failed.");
+  }
+  return library;
+}
 
 std::atomic<uint64_t> g_iMetalDirectPresentSubmittedFrames{0};
 std::atomic<uint64_t> g_iMetalDirectPresentCompletedFrames{0};
@@ -487,42 +526,10 @@ bool CreateInteropSurface(
 
 id<MTLRenderPipelineState> CreatePresentPipeline(
     id<MTLDevice> device, std::string* failureReason) {
-  static NSString* const shaderSource =
-      @"#include <metal_stdlib>\n"
-       "using namespace metal;\n"
-       "struct VertexOut {\n"
-       "  float4 position [[position]];\n"
-       "  float2 texcoord;\n"
-       "};\n"
-       "vertex VertexOut vertex_main(uint vertexID [[vertex_id]]) {\n"
-       "  const float2 positions[3] = {\n"
-       "    float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)\n"
-       "  };\n"
-       "  const float2 texcoords[3] = {\n"
-       "    float2(0.0, 0.0), float2(2.0, 0.0), float2(0.0, 2.0)\n"
-       "  };\n"
-       "  VertexOut out;\n"
-       "  out.position = float4(positions[vertexID], 0.0, 1.0);\n"
-       "  out.texcoord = texcoords[vertexID];\n"
-       "  return out;\n"
-       "}\n"
-       "fragment float4 fragment_main(VertexOut in [[stage_in]],\n"
-       "                              texture2d<float> source [[texture(0)]]) {\n"
-       "  constexpr sampler sourceSampler(address::clamp_to_edge,\n"
-       "                                  filter::nearest);\n"
-       "  const float4 color = source.sample(sourceSampler, in.texcoord);\n"
-       "  return float4(color.rgb, 1.0);\n"
-       "}\n";
-
   NSError* error = nil;
-  id<MTLLibrary> library = [device newLibraryWithSource:shaderSource
-                                                options:nil
-                                                  error:&error];
+  id<MTLLibrary> library = LoadMetalLibrary(
+      device, "Data/Shaders/MSL/PresentPassthrough.metal", failureReason);
   if (library == nil) {
-    if (failureReason != nullptr) {
-      *failureReason = error != nil ? [[error localizedDescription] UTF8String]
-                                    : "Metal shader compilation failed.";
-    }
     return nil;
   }
 
@@ -636,91 +643,18 @@ void ConfigureBlendAttachment(
   attachment.alphaBlendOperation = alphaOperation;
 }
 
-id<MTLRenderPipelineState> CreateSolidPipeline(
-    id<MTLDevice> device, BlendMode blendMode, EffectMode effectMode,
-    std::string* failureReason) {
-  const bool useDistanceField = effectMode == EffectMode_DistanceField;
-  static NSString* const shaderSource =
-      @"#include <metal_stdlib>\n"
-       "using namespace metal;\n"
-       "struct VertexIn {\n"
-       "  packed_float4 position;\n"
-       "  packed_float2 texcoord;\n"
-       "  packed_float4 color;\n"
-       "};\n"
-       "struct VertexOut {\n"
-       "  float4 position [[position]];\n"
-       "  float2 texcoord;\n"
-       "  float4 color;\n"
-       "};\n"
-       "vertex VertexOut solid_vertex(\n"
-       "    const device VertexIn* vertices [[buffer(0)]],\n"
-       "    uint vertexID [[vertex_id]]) {\n"
-       "  const VertexIn in = vertices[vertexID];\n"
-       "  VertexOut out;\n"
-       "  out.position = float4(in.position.x,\n"
-       "                        in.position.y,\n"
-       "                        in.position.z,\n"
-       "                        in.position.w);\n"
-       "  out.texcoord = in.texcoord;\n"
-       "  out.color = in.color;\n"
-       "  return out;\n"
-       "}\n"
-       "fragment float4 solid_fragment(VertexOut in [[stage_in]],\n"
-       "                             texture2d<float> source [[texture(0)]],\n"
-       "                             sampler sourceSampler [[sampler(0)]],\n"
-       "                             constant uint& textureMode [[buffer(1)]],\n"
-       "                             constant uint& alphaTest [[buffer(2)]],\n"
-       "                             constant uint& celStage [[buffer(3)]]) {\n"
-       "  if (celStage == 1) {\n"
-       "    return float4(0.25, 0.125, 0.125, 1.0);\n"
-       "  }\n"
-       "  const float4 sampleColor = source.sample(sourceSampler, in.texcoord);\n"
-       "  if (alphaTest != 0 && sampleColor.a <= 0.00390625) {\n"
-       "    discard_fragment();\n"
-       "  }\n"
-       "  if (textureMode == 1) {\n"
-       "    return float4(in.color.rgb, sampleColor.a * in.color.a);\n"
-       "  }\n"
-       "  if (textureMode == 2) {\n"
-       "    return float4(saturate(sampleColor.rgb + in.color.rgb),\n"
-       "                  sampleColor.a * in.color.a);\n"
-       "  }\n"
-       "  return sampleColor * in.color;\n"
-       "}\n"
-       "float sdf_median_rgb(float r, float g, float b) {\n"
-       "  return max(min(r, g), min(max(r, g), b));\n"
-       "}\n"
-       "fragment float4 distance_field_fragment(VertexOut in [[stage_in]],\n"
-       "                                      texture2d<float> source [[texture(0)]],\n"
-       "                                      sampler sourceSampler [[sampler(0)]],\n"
-       "                                      constant uint& textureMode [[buffer(1)]],\n"
-       "                                      constant uint& alphaTest [[buffer(2)]],\n"
-       "                                      constant uint& celStage [[buffer(3)]]) {\n"
-       "  const float4 sampleColor = source.sample(sourceSampler, in.texcoord);\n"
-       "  const float dist = sdf_median_rgb(sampleColor.r, sampleColor.g, sampleColor.b);\n"
-       "  const float afwidth = 0.75 * length(float2(dfdx(dist), dfdy(dist)));\n"
-       "  const float coverage = smoothstep(0.5 - afwidth, 0.5 + afwidth, dist);\n"
-       "  if (alphaTest != 0 && coverage <= 0.00390625) {\n"
-       "    discard_fragment();\n"
-       "  }\n"
-       "  if (textureMode == 2) {\n"
-       "    return saturate(float4(in.color.rgb, in.color.a * coverage) + in.color);\n"
-       "  }\n"
-       "  return float4(in.color.rgb, in.color.a * coverage);\n"
-       "}\n";
-
-  NSError* error = nil;
-  id<MTLLibrary> library = [device newLibraryWithSource:shaderSource
-                                                options:nil
-                                                  error:&error];
-  if (library == nil) {
+id<MTLRenderPipelineState> CreateSolidPipelineFromLibrary(
+    id<MTLDevice> device, id<MTLLibrary> library, BlendMode blendMode,
+    EffectMode effectMode, std::string* failureReason) {
+  if (device == nil || library == nil) {
     if (failureReason != nullptr) {
-      *failureReason = error != nil ? [[error localizedDescription] UTF8String]
-                                    : "Metal solid shader compilation failed.";
+      *failureReason = "Metal fixed-function shader library is not available.";
     }
     return nil;
   }
+
+  const bool useDistanceField = effectMode == EffectMode_DistanceField;
+  NSError* error = nil;
 
   id<MTLFunction> vertexFunction =
       [library newFunctionWithName:@"solid_vertex"];
@@ -733,7 +667,6 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
     }
     [vertexFunction release];
     [fragmentFunction release];
-    [library release];
     return nil;
   }
 
@@ -754,7 +687,6 @@ id<MTLRenderPipelineState> CreateSolidPipeline(
 
   [vertexFunction release];
   [fragmentFunction release];
-  [library release];
   return pipeline;
 }
 
@@ -851,6 +783,31 @@ bool EncodeSolidBatches(
     return false;
   }
 
+  size_t totalVertexCount = 0;
+  for (size_t i = 0; i < batchCount; ++i) {
+    const MacOSMetalDrawBatch& batch = batches[i];
+    if (batch.vertices != nullptr && batch.vertexCount > 0) {
+      totalVertexCount += batch.vertexCount;
+    }
+  }
+  if (totalVertexCount == 0) {
+    return false;
+  }
+
+  const NSUInteger vertexBufferLength = static_cast<NSUInteger>(
+      sizeof(MacOSMetalSolidVertex) * totalVertexCount);
+  id<MTLBuffer> frameVertexBuffer =
+      [impl->device newBufferWithLength:vertexBufferLength
+                                options:MTLResourceStorageModeShared];
+  if (frameVertexBuffer == nil) {
+    return false;
+  }
+
+  MacOSMetalSolidVertex* frameVertices =
+      static_cast<MacOSMetalSolidVertex*>([frameVertexBuffer contents]);
+  size_t frameVertexOffset = 0;
+  [retainedBuffers addObject:frameVertexBuffer];
+
   bool encodedAny = false;
   for (size_t i = 0; i < batchCount; ++i) {
     const MacOSMetalDrawBatch& batch = batches[i];
@@ -880,19 +837,18 @@ bool EncodeSolidBatches(
       continue;
     }
 
-    const NSUInteger vertexBufferLength = static_cast<NSUInteger>(
+    const size_t batchVertexOffset = frameVertexOffset;
+    std::memcpy(
+        frameVertices + batchVertexOffset, batch.vertices,
         sizeof(MacOSMetalSolidVertex) * batch.vertexCount);
-    id<MTLBuffer> vertexBuffer =
-        [impl->device newBufferWithBytes:batch.vertices
-                                  length:vertexBufferLength
-                                 options:MTLResourceStorageModeShared];
-    if (vertexBuffer == nil) {
-      continue;
-    }
+    frameVertexOffset += batch.vertexCount;
 
     id<MTLTexture> sourceTexture =
         batch.texture != nullptr ? (id<MTLTexture>)batch.texture
                                  : impl->whiteTexture;
+    id<MTLTexture> sourceTexture2 =
+        batch.texture2 != nullptr ? (id<MTLTexture>)batch.texture2
+                                  : impl->whiteTexture;
     const int wrappingIndex = batch.textureWrapping ? 1 : 0;
     const int filteringIndex = batch.textureFiltering ? 1 : 0;
     id<MTLSamplerState> sampler =
@@ -900,8 +856,9 @@ bool EncodeSolidBatches(
     id<MTLDepthStencilState> depthState =
         impl->depthStates[zTestMode][batch.zWrite ? 1 : 0];
     [sourceTexture retain];
-    [retainedBuffers addObject:vertexBuffer];
+    [sourceTexture2 retain];
     [retainedTextures addObject:sourceTexture];
+    [retainedTextures addObject:sourceTexture2];
 
     const uint32_t textureMode =
         batch.textureMode == TextureMode_Glow
@@ -910,6 +867,9 @@ bool EncodeSolidBatches(
     const uint32_t alphaTest = batch.alphaTest ? 1 : 0;
     const uint32_t celStage =
         batch.celStage > 0 ? static_cast<uint32_t>(batch.celStage) : 0;
+    const uint32_t effectMode = static_cast<uint32_t>(batch.effectMode);
+    const uint32_t textureWidth =
+        static_cast<uint32_t>(std::max(1, batch.textureWidth));
 
     [encoder setRenderPipelineState:pipeline];
     if (depthState != nil) {
@@ -928,7 +888,9 @@ bool EncodeSolidBatches(
         [encoder setCullMode:MTLCullModeNone];
         break;
     }
-    [encoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
+    [encoder setVertexBuffer:frameVertexBuffer
+                      offset:sizeof(MacOSMetalSolidVertex) * batchVertexOffset
+                     atIndex:0];
     [encoder setFragmentBytes:&textureMode
                        length:sizeof(textureMode)
                       atIndex:1];
@@ -938,17 +900,25 @@ bool EncodeSolidBatches(
     [encoder setFragmentBytes:&celStage
                        length:sizeof(celStage)
                       atIndex:3];
+    [encoder setFragmentBytes:&effectMode
+                       length:sizeof(effectMode)
+                      atIndex:4];
+    [encoder setFragmentBytes:&textureWidth
+                       length:sizeof(textureWidth)
+                      atIndex:5];
     [encoder setFragmentTexture:sourceTexture atIndex:0];
+    [encoder setFragmentTexture:sourceTexture2 atIndex:1];
     if (sampler != nil) {
       [encoder setFragmentSamplerState:sampler atIndex:0];
     }
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                 vertexStart:0
                 vertexCount:static_cast<NSUInteger>(batch.vertexCount)];
-    [vertexBuffer release];
     [sourceTexture release];
+    [sourceTexture2 release];
     encodedAny = true;
   }
+  [frameVertexBuffer release];
   return encodedAny;
 }
 
@@ -998,26 +968,41 @@ bool MacOSMetalPresenter::Initialize(
         pipelineFailure.c_str());
   }
 
+  std::string fixedFunctionLibraryFailure;
+  id<MTLLibrary> fixedFunctionLibrary = LoadMetalLibrary(
+      impl->device, "Data/Shaders/MSL/FixedFunction.metal",
+      &fixedFunctionLibraryFailure);
+  if (fixedFunctionLibrary == nil) {
+    LOG->Warn(
+        "MacOS Metal presenter fixed-function shader library unavailable: %s",
+        fixedFunctionLibraryFailure.c_str());
+  }
+
   for (int i = 0; i < NUM_BlendMode; ++i) {
-    std::string solidPipelineFailure;
-    impl->solidPipelines[i] = CreateSolidPipeline(
-        impl->device, static_cast<BlendMode>(i), EffectMode_Normal,
-        &solidPipelineFailure);
-    if (impl->solidPipelines[i] == nil) {
-      LOG->Warn(
-          "MacOS Metal presenter solid pipeline unavailable for blend=%d: %s",
-          i, solidPipelineFailure.c_str());
+    if (fixedFunctionLibrary != nil) {
+      std::string solidPipelineFailure;
+      impl->solidPipelines[i] = CreateSolidPipelineFromLibrary(
+          impl->device, fixedFunctionLibrary, static_cast<BlendMode>(i),
+          EffectMode_Normal, &solidPipelineFailure);
+      if (impl->solidPipelines[i] == nil) {
+        LOG->Warn(
+            "MacOS Metal presenter solid pipeline unavailable for blend=%d: %s",
+            i, solidPipelineFailure.c_str());
+      }
+      std::string distanceFieldPipelineFailure;
+      impl->distanceFieldPipelines[i] = CreateSolidPipelineFromLibrary(
+          impl->device, fixedFunctionLibrary, static_cast<BlendMode>(i),
+          EffectMode_DistanceField, &distanceFieldPipelineFailure);
+      if (impl->distanceFieldPipelines[i] == nil) {
+        LOG->Warn(
+            "MacOS Metal presenter distance-field pipeline unavailable for "
+            "blend=%d: %s",
+            i, distanceFieldPipelineFailure.c_str());
+      }
     }
-    std::string distanceFieldPipelineFailure;
-    impl->distanceFieldPipelines[i] = CreateSolidPipeline(
-        impl->device, static_cast<BlendMode>(i), EffectMode_DistanceField,
-        &distanceFieldPipelineFailure);
-    if (impl->distanceFieldPipelines[i] == nil) {
-      LOG->Warn(
-          "MacOS Metal presenter distance-field pipeline unavailable for "
-          "blend=%d: %s",
-          i, distanceFieldPipelineFailure.c_str());
-    }
+  }
+  if (fixedFunctionLibrary != nil) {
+    [fixedFunctionLibrary release];
   }
   for (int mode = 0; mode < NUM_ZTestMode; ++mode) {
     for (int write = 0; write < 2; ++write) {
