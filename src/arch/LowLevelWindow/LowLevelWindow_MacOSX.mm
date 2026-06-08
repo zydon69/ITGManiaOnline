@@ -557,6 +557,11 @@ void LowLevelWindow_MacOSX::SetActualParamsFromMode(CFDictionaryRef mode) {
   m_CurrentParams.bpp = GetDisplayBitsPerPixel(kCGDirectMainDisplay);
 }
 
+void* LowLevelWindow_MacOSX::GetNativeWindowHandle() const {
+  SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
+  return delegate != nil ? (void*)delegate->m_Window : nullptr;
+}
+
 static int GetIntValue(CFTypeRef r) {
   int ret;
 
