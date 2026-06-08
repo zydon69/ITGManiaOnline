@@ -28,6 +28,27 @@ local function ChoiceWidth(index)
 	return clamp(width/1.4, cursor.min_w, cursor.max_w)
 end
 
+local function RefreshCursorWidth()
+	local new_width = ChoiceWidth(cursor.index+1)
+	if new_width == cursor.width then return false end
+
+	cursor.width = new_width
+	return true
+end
+
+local function SetCursorIndex(index)
+	if not index or #choices == 0 then return false end
+
+	index = clamp(index, 0, #choices - 1)
+	local changed = index ~= cursor.index
+
+	cursor.index = index
+	current_choice = choices[cursor.index+1]
+	local width_changed = RefreshCursorWidth()
+
+	return changed, width_changed
+end
+
 local function RefreshChoiceBackground(index, tween)
 	local actor = choice_backgrounds[index]
 	if not actor then return end
@@ -47,16 +68,6 @@ local function RefreshChoiceBackgrounds(tween)
 	end
 end
 
-local function RefreshCurrentChoiceLayout(tween_backgrounds)
-	current_choice = choices[cursor.index+1]
-
-	local new_width = ChoiceWidth(cursor.index+1)
-	local changed = new_width ~= cursor.width
-	cursor.width = new_width
-	RefreshChoiceBackgrounds(tween_backgrounds == true)
-	return changed
-end
-
 local function ChoiceBackground(index)
 	return Def.Quad{
 		InitCommand=function(self)
@@ -72,24 +83,10 @@ local function ChoiceBackground(index)
 	}
 end
 
-local function SetCursorIndex(index)
-	if not index or #choices == 0 then return false end
-
-	index = clamp(index, 0, #choices - 1)
-	local changed = index ~= cursor.index
-
-	cursor.index = index
-	current_choice = choices[cursor.index+1]
-	RefreshCurrentChoiceLayout(false)
-
-	return changed
-end
-
 local Update = function(af)
 	if not TopScreen then return end
 	local index = TopScreen:GetSelectionIndex(MPN)
-	local index_changed = SetCursorIndex(index)
-	local width_changed = RefreshCurrentChoiceLayout(false)
+	local index_changed, width_changed = SetCursorIndex(index)
 
 	if index_changed then
 		-- queue the appropriate command to the faux playfield, if needed
@@ -104,7 +101,9 @@ local Update = function(af)
 		-- queue an "Update" to the AF containing the cursor, description text, score, and lifemeter actors
 		-- since they are children of that AF, they will also listen for that command
 		RefreshChoiceBackgrounds(true)
+		af:queuecommand("Update")
 	elseif width_changed then
+		RefreshChoiceBackgrounds(false)
 		af:queuecommand("Update")
 	end
 end
@@ -168,14 +167,13 @@ local t = Def.ActorFrame{
 
     	TopScreen:AddInputCallback(InputHandler)
 
-		RefreshCurrentChoiceLayout(false)
 		RefreshChoiceBackgrounds(false)
 		self:queuecommand("Update")
 		self:sleep(0):queuecommand("RefreshInitialChoiceLayout")
 		self:sleep(0.05):queuecommand("RefreshInitialChoiceLayout")
 	end,
 	RefreshInitialChoiceLayoutCommand=function(self)
-		RefreshCurrentChoiceLayout(false)
+		SetCursorIndex(cursor.index)
 		RefreshChoiceBackgrounds(false)
 		self:queuecommand("Update")
 	end,
@@ -253,6 +251,8 @@ local t = Def.ActorFrame{
 			-- to match the value of ThemePrefs.Get("DefaultGameMode") in the choices table
 			if ScreenName == "ScreenSelectPlayMode" then
 				SetCursorIndex((FindInTable(ThemePrefs.Get("DefaultGameMode"), choices) or 2) - 1)
+			else
+				SetCursorIndex(cursor.index)
 			end
 			self:x(-150):y( -60 + (cursor.h * cursor.index) )
 		end,

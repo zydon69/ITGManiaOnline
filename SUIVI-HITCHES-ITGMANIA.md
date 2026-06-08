@@ -165,3 +165,46 @@ presentation programmee serait la solution structurelle pour aller plus loin.
 - Horizon de sortie: refonte dediee `async music prebuffer before ScreenGameplay`
   si les spikes `ScreenInit` restent perceptibles apres stabilisation
   macOS/OpenGL. Ne pas traiter dans le correctif anti-hitch gameplay actuel.
+
+### RA-002 - Chemin Metal avec copie backbuffer et fence CPU plafonnee
+
+- Statut: connu assume.
+- Owner: backend presentation macOS.
+- Perimetre:
+  `src/arch/LowLevelWindow/LowLevelWindow_MacOSX.mm`,
+  `src/arch/LowLevelWindow/MacOSMetalPresenter.mm`.
+- Risque: le chemin Metal actuel copie chaque frame du backbuffer OpenGL vers
+  une IOSurface, puis attend une fence GL plafonnee avant d'encoder la
+  presentation Metal. Cela ajoute une copie GPU plein ecran et une petite
+  synchronisation CPU sur le chemin critique.
+- Impact attendu: cout d'optimisation, pas un risque de correctness. Les logs
+  doivent rester surveilles via `PerfDiagnostics=1`:
+  `macos_metal_backbuffer_present_unavailable`, `encode_submit_ms`,
+  `command_buffer_ms`, `present_return_interval_ms`.
+- Justification: le rendu direct dans un FBO IOSurface a cree des artefacts
+  visuels sur les fonds 3D. La copie backbuffer garde le rendu OpenGL stable et
+  limite Metal a la presentation.
+- Garde-fous: le polling des IOSurfaces est borne court et le fallback cache la
+  layer Metal pour laisser OpenGL presenter proprement si le chemin Metal n'est
+  pas pret.
+- Horizon de sortie: remplacer cette synchro CPU/copie par un handoff GPU-GPU
+  (`MTLSharedEvent` ou equivalent valide pour l'interop GL/Metal) puis retester
+  le rendu direct IOSurface sur scenes 3D avant toute activation par defaut.
+
+### RA-003 - Selection du device Metal sur Mac multi-GPU
+
+- Statut: connu assume.
+- Owner: backend presentation macOS.
+- Perimetre: `src/arch/LowLevelWindow/MacOSMetalPresenter.mm`.
+- Risque: `MTLCreateSystemDefaultDevice()` peut ne pas correspondre au GPU du
+  contexte OpenGL sur anciens Mac Intel multi-GPU/eGPU, ce qui peut introduire
+  une copie cross-device implicite.
+- Impact attendu: nul sur Apple Silicon mono-GPU; potentiel cout performance
+  ou incompatibilite interop sur configurations Intel/dGPU non testees.
+- Justification: la branche Metal vise d'abord Apple Silicon/ProMotion, qui est
+  la machine de mesure actuelle et le cas ou les hitches 120 Hz ont ete
+  reproduits.
+- Garde-fous: conserver OpenGL comme fallback first-class et ne pas activer
+  Metal par defaut sur Intel sans validation dediee.
+- Horizon de sortie: ajouter une selection/verification explicite device GL ↔
+  Metal lors d'une campagne de test Intel/dGPU.
