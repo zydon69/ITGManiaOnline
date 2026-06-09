@@ -3805,7 +3805,22 @@ end
 function ITGOnline:ShouldBlockEvaluationAutoAdvance()
 	if not self.currentRoomId or self.onlineEvaluationExitRequested then return false end
 	local phase = self.currentRoom and self:NormalizeRoomPhase(self.currentRoom.phase) or ""
-	return phase == "playing" or phase == "results"
+	if phase ~= "playing" and phase ~= "results" then
+		return false
+	end
+
+	-- If the authoritative play-state says that everyone is already terminal,
+	-- do not keep blocking evaluation auto-advance just because the room phase
+	-- is still momentarily stuck on "playing" or "results".
+	local summary = self:PlayStateSummary(self.currentRoom)
+	if summary and summary.allTerminal then
+		online_flow_trace("evaluation_auto_advance_unblocked summary_all_terminal=true phase=" .. tostring(phase)
+			.. " players=" .. tostring(summary.players)
+			.. " terminal=" .. tostring(summary.terminal))
+		return false
+	end
+
+	return true
 end
 
 function ITGOnline:LocalUserId()
