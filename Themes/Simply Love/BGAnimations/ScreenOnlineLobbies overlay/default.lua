@@ -168,6 +168,10 @@ local function global_options_summary()
 	return global_score_label(options.scoreMode) .. " / " .. string.format("%.2fx", options.musicRate)
 end
 
+local function global_options_button_label()
+	return "Options globales\n(" .. global_options_summary() .. ")"
+end
+
 local function rebuild_global_options_choices()
 	global_options_choices = {
 		{ label="Score: ITG", scoreMode="itg" },
@@ -281,13 +285,13 @@ local function update_joined_song_card(joinedContent)
 	local artist = joinedContent:GetChild("JoinedSongArtist")
 	if artist then
 		local artistText = hasSong and trim_text(songInfo.artist) or ""
-		artist:settext(artistText ~= "" and clamp_text(artistText, 44) or "Artiste inconnu")
+		artist:settext("Artiste : " .. (artistText ~= "" and clamp_text(artistText, 44) or "Artiste inconnu"))
 	end
 
 	local pack = joinedContent:GetChild("JoinedSongPack")
 	if pack then
 		local packText = hasSong and trim_text(songInfo.pack) or ""
-		pack:settext(packText ~= "" and clamp_text(packText, 46) or "")
+		pack:settext(packText ~= "" and ("Pack : " .. clamp_text(packText, 46)) or "")
 	end
 
 	local banner = joinedContent:GetChild("JoinedSongBanner")
@@ -1281,8 +1285,6 @@ local af = Def.ActorFrame{
 				local optionParts = {}
 				local speedMod = trim_text(player.speedMod)
 				if speedMod ~= "" then optionParts[#optionParts+1] = speedMod end
-				local musicRate = trim_text(player.musicRateBpm)
-				if musicRate ~= "" then optionParts[#optionParts+1] = musicRate end
 				local stepchart = abbreviate_stepchart(player.stepchart)
 				if stepchart ~= "" then optionParts[#optionParts+1] = stepchart end
 					if missing == "" and joined_song_preview ~= nil and player.songAvailable == false then
@@ -1315,28 +1317,7 @@ local af = Def.ActorFrame{
 				local managerName = joined_manager_profile_name()
 				local managerLabel = managerName and (managerName .. " (" .. tostring(joined_manager_user_id or "?") .. ")")
 					or tostring(joined_manager_user_id or "unknown")
-					statusLines[#statusLines + 1] = joined_is_manager and "Role : manager (vous pouvez lancer le salon)"
-						or "Role : membre (seul le manager peut lancer)"
 					statusLines[#statusLines + 1] = "Manager : " .. managerLabel
-					statusLines[#statusLines + 1] = "Options globales : " .. global_options_summary()
-
-				local showStartStatus = joined_phase ~= "results"
-				local canStartInPhase = joined_phase_allows_start()
-				local everyoneReady = joined_all_players_ready()
-				local hasMissingSong = joined_any_player_missing_song()
-					local blockers = {}
-						if not joined_is_manager then blockers[#blockers + 1] = "vous n'etes pas manager" end
-						if not joined_song_confirmed then blockers[#blockers + 1] = "aucune chanson selectionnee" end
-						if not canStartInPhase then blockers[#blockers + 1] = "phase " .. tostring(joined_phase or "inconnue") end
-						if not everyoneReady then blockers[#blockers + 1] = "attente de confirmation de tous les joueurs" end
-					if hasMissingSong then blockers[#blockers + 1] = "chanson non confirmee pour tous les joueurs" end
-				if showStartStatus then
-					if #blockers == 0 then
-							statusLines[#statusLines + 1] = "START disponible"
-						else
-							statusLines[#statusLines + 1] = "START bloque (" .. table.concat(blockers, "; ") .. ")"
-					end
-				end
 
 				local missingSongInfo = joined_missing_song_info or joined_song_preview
 				if joined_missing_song and missingSongInfo then
@@ -1458,7 +1439,7 @@ local af = Def.ActorFrame{
 				globalOptionsButton:visible(visible)
 				local label = globalOptionsButton:GetChild("GlobalOptionsLabel")
 				if label then
-					label:settext("Options globales\n" .. global_options_summary())
+					label:settext(global_options_button_label())
 				end
 			end
 
@@ -2542,41 +2523,41 @@ local af = Def.ActorFrame{
 			Name="JoinedSongBannerLabel",
 			Text="BANNIERE",
 			InitCommand=function(self)
-				self:xy(-232, 28):zoom(0.24):diffuse(Color.White):visible(false)
+				self:xy(-232, 34):zoom(0.24):diffuse(Color.White):visible(false)
 			end
 		},
 		Def.Banner{
 			Name="JoinedSongBanner",
 			InitCommand=function(self)
-				self:xy(-232, 28):scaletoclipped(112, 44):visible(false)
-			end
-		},
-		LoadFont("Common Bold")..{
-			Name="JoinedSongTitle",
-			Text="Aucune chanson selectionnee",
-			InitCommand=function(self)
-				self:horizalign(left):xy(-168, 3):zoom(0.42):maxwidth(480)
-			end
-		},
-		LoadFont("Common Normal")..{
-			Name="JoinedSongArtist",
-			Text="",
-			InitCommand=function(self)
-				self:horizalign(left):xy(-168, 27):zoom(0.36):maxwidth(500)
+				self:xy(-232, 34):scaletoclipped(112, 44):visible(false)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedSongPack",
 			Text="",
 			InitCommand=function(self)
-				self:horizalign(left):xy(-168, 49):zoom(0.30):maxwidth(520):diffuse(0.75,0.75,0.75,1)
+				self:horizalign(left):xy(-290, 5):zoom(0.30):maxwidth(760):diffuse(0.75,0.75,0.75,1)
+			end
+		},
+		LoadFont("Common Bold")..{
+			Name="JoinedSongTitle",
+			Text="Aucune chanson selectionnee",
+			InitCommand=function(self)
+				self:horizalign(left):xy(-168, 19):zoom(0.42):maxwidth(480)
+			end
+		},
+		LoadFont("Common Normal")..{
+			Name="JoinedSongArtist",
+			Text="",
+			InitCommand=function(self)
+				self:horizalign(left):xy(-168, 44):zoom(0.42):maxwidth(500)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedLobbySongStatus",
 				Text="En attente de la chanson...",
 			InitCommand=function(self)
-				self:horizalign(left):vertalign(top):xy(-290, 98):zoom(0.44):maxwidth(800)
+				self:horizalign(left):vertalign(top):xy(-290, 102):zoom(0.44):maxwidth(800)
 			end
 		},
 		Def.ActorFrame{
@@ -2679,7 +2660,7 @@ local af = Def.ActorFrame{
 				end,
 				Def.Quad{
 					InitCommand=function(self)
-						self:zoomto(180, 42):diffuse(Color.White)
+						self:zoomto(180, 38):diffuse(Color.White)
 					end,
 					HoverCommand=function(self)
 						self:diffuse(joined_active_index == self:GetParent().idx and Color.Yellow or Color.White)
@@ -2687,14 +2668,14 @@ local af = Def.ActorFrame{
 				},
 				Def.Quad{
 					InitCommand=function(self)
-						self:zoomto(178, 40):diffuse(Color.Black)
+						self:zoomto(178, 36):diffuse(Color.Black)
 					end
 				},
 				LoadFont("Common Bold")..{
 					Name="GlobalOptionsLabel",
 					Text="Options globales",
 					InitCommand=function(self)
-						self:zoom(0.32)
+						self:zoom(0.30):vertspacing(-8)
 					end,
 					HoverCommand=function(self)
 						self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
