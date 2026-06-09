@@ -72,7 +72,11 @@ uint8_t FloatColorToByte(float value) {
 
 double MetalDisplayPacingTargetHz(
     const std::unique_ptr<MacOSMetalPresenter>& presenter,
-    const VideoModeParams& params) {
+    const VideoModeParams& params, int requestedRefreshRate) {
+  if (requestedRefreshRate != REFRESH_DEFAULT && requestedRefreshRate > 1) {
+    return static_cast<double>(requestedRefreshRate);
+  }
+
   const double fallbackHz =
       params.rate > 1 ? static_cast<double>(params.rate) : 60.0;
   return presenter
@@ -520,6 +524,7 @@ RageDisplay_Metal::RageDisplay_Metal()
       m_iSkippedPresentFrames(0),
       m_iLastMainDirectVertexCapacity(65536),
       m_iLastRenderTargetDirectVertexCapacity(16384),
+      m_iRequestedRefreshRate(REFRESH_DEFAULT),
       m_bReady(false) {
   m_TextureModes.fill(TextureMode_Modulate);
   m_TextureFiltering.fill(true);
@@ -1527,9 +1532,12 @@ void RageDisplay_Metal::FlushBatches() {
     return;
   }
 
-  const double targetHz = MetalDisplayPacingTargetHz(m_Presenter, m_Params);
+  const double targetHz = MetalDisplayPacingTargetHz(
+      m_Presenter, m_Params, m_iRequestedRefreshRate);
   SetRuntimeFramePacingTargetHz(static_cast<float>(targetHz));
-  FrameLimitBeforeVsync(m_Params.rate > 1 ? m_Params.rate : 60);
+  const int frameLimitHz =
+      std::max(1, static_cast<int>(std::lround(targetHz)));
+  FrameLimitBeforeVsync(frameLimitHz);
   const bool clearDepth = m_bClearDepthNextFrame;
   /*
    * Present through an offscreen render target for both native windowed and
@@ -2055,6 +2063,8 @@ std::string RageDisplay_Metal::TryVideoMode(
   }
 
   const ActualVideoModeParams previousParams = m_Params;
+  const int previousRequestedRefreshRate = m_iRequestedRefreshRate;
+  const int requestedRefreshRate = p.rate;
   const bool hadWorkingPresenter =
       m_bReady && previousParams.width > 0 && previousParams.height > 0;
   m_bReady = false;
@@ -2065,7 +2075,8 @@ std::string RageDisplay_Metal::TryVideoMode(
     return err;
   }
 
-  auto initializePresenterForCurrentMode = [&](std::string* failureOut) -> bool {
+  auto initializePresenterForCurrentMode =
+      [&](int pacingRefreshRate, std::string* failureOut) -> bool {
     m_Params = m_Window->GetActualVideoModeParams();
     void* nativeWindow = m_Window->GetNativeWindowHandle();
     if (nativeWindow == nullptr) {
@@ -2075,7 +2086,8 @@ std::string RageDisplay_Metal::TryVideoMode(
       return false;
     }
 
-    const double targetHz = MetalDisplayPacingTargetHz(m_Presenter, m_Params);
+    const double targetHz =
+        MetalDisplayPacingTargetHz(m_Presenter, m_Params, pacingRefreshRate);
     if (!m_Presenter->Initialize(
             nativeWindow, std::max(1, m_Params.width),
             std::max(1, m_Params.height), targetHz, false)) {
@@ -2095,13 +2107,14 @@ std::string RageDisplay_Metal::TryVideoMode(
       return false;
     }
     const double attachedTargetHz =
-        MetalDisplayPacingTargetHz(m_Presenter, m_Params);
+        MetalDisplayPacingTargetHz(m_Presenter, m_Params, pacingRefreshRate);
     SetRuntimeFramePacingTargetHz(static_cast<float>(attachedTargetHz));
     return true;
   };
 
   auto rollbackToPreviousMode = [&](const std::string& originalError) {
     if (!hadWorkingPresenter) {
+      m_iRequestedRefreshRate = previousRequestedRefreshRate;
       SetRuntimeFramePacingTargetHz(0.0f);
       return originalError;
     }
@@ -2111,6 +2124,7 @@ std::string RageDisplay_Metal::TryVideoMode(
         m_Window->TryVideoMode(previousParams, rollbackNewDevice);
     if (!rollbackErr.empty()) {
       m_bReady = false;
+      m_iRequestedRefreshRate = previousRequestedRefreshRate;
       SetRuntimeFramePacingTargetHz(0.0f);
       return originalError + " Rollback to the previous Metal video mode also "
                              "failed: " +
@@ -2118,8 +2132,10 @@ std::string RageDisplay_Metal::TryVideoMode(
     }
 
     std::string presenterErr;
-    if (!initializePresenterForCurrentMode(&presenterErr)) {
+    if (!initializePresenterForCurrentMode(
+            previousRequestedRefreshRate, &presenterErr)) {
       m_bReady = false;
+      m_iRequestedRefreshRate = previousRequestedRefreshRate;
       SetRuntimeFramePacingTargetHz(0.0f);
       return originalError + " Rollback to the previous Metal presenter also "
                              "failed: " +
@@ -2127,6 +2143,7 @@ std::string RageDisplay_Metal::TryVideoMode(
     }
 
     m_bReady = true;
+    m_iRequestedRefreshRate = previousRequestedRefreshRate;
     LOG->Warn(
         "RageDisplay_Metal: video mode change failed and previous mode was "
         "restored: %s",
@@ -2135,7 +2152,8 @@ std::string RageDisplay_Metal::TryVideoMode(
   };
 
   std::string presenterErr;
-  if (!initializePresenterForCurrentMode(&presenterErr)) {
+  if (!initializePresenterForCurrentMode(
+          requestedRefreshRate, &presenterErr)) {
     return rollbackToPreviousMode(presenterErr);
   }
 
@@ -2144,5 +2162,6 @@ std::string RageDisplay_Metal::TryVideoMode(
   bNewDeviceOut = true;
 
   m_bReady = true;
+  m_iRequestedRefreshRate = requestedRefreshRate;
   return std::string();
 }

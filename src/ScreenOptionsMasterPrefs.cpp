@@ -629,7 +629,8 @@ static void MovieColorDepth(
 
 static void RefreshRate(int& sel, bool ToSel, const ConfOption* pConfOption) {
   const int mapping[] = {
-      (int)REFRESH_DEFAULT, 60, 75, 85, 100, 120, 144, 165, 180, 240, 360};
+      (int)REFRESH_DEFAULT, 60, 75, 85, 100, 120, 144, 165, 180, 240,
+      360,                  480, 500};
   MoveMap(sel, pConfOption, ToSel, mapping, ARRAYLEN(mapping));
 }
 
@@ -1003,7 +1004,7 @@ static void InitializeConfOptions() {
   g_ConfOptions.back().m_iEffects = OPT_APPLY_GRAPHICS;
   ADD(ConfOption(
       "RefreshRate", RefreshRate, "Default", "|60", "|75", "|85", "|100",
-      "|120", "|144", "|165", "|180", "|240", "|360"));
+      "|120", "|144", "|165", "|180", "|240", "|360", "|480", "|500"));
   g_ConfOptions.back().m_iEffects = OPT_APPLY_GRAPHICS;
   ADD(ConfOption("Vsync", MovePref<bool>, "No", "Yes"));
   g_ConfOptions.back().m_iEffects = OPT_APPLY_GRAPHICS;

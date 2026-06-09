@@ -231,6 +231,7 @@ class RageDisplay_Metal : public RageDisplay {
   uint64_t m_iSkippedPresentFrames;
   size_t m_iLastMainDirectVertexCapacity;
   size_t m_iLastRenderTargetDirectVertexCapacity;
+  int m_iRequestedRefreshRate;
   bool m_bReady;
 };
 
