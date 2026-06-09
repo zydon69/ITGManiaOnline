@@ -1973,6 +1973,18 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 
 	online_flow_trace("navigate target=" .. tostring(target) .. " preferred=" .. tostring(preferred) .. " from=" .. tostring(topScreen:GetName()))
 	topScreen:SetNextScreenName(target)
+	if preferred == "evaluation" and self:IsOnlineGameplayScreen(topScreen:GetName()) then
+		-- Let ScreenGameplay perform its normal end-of-song cleanup instead of
+		-- jumping screens directly.  Direct SM_GoToNextScreen can leave gameplay
+		-- state half-alive when every online player has failed.
+		online_flow_trace("navigate_via_gameplay_message message=SM_LeaveGameplay target=" .. tostring(target))
+		if topScreen.PostScreenMessage then
+			topScreen:PostScreenMessage("SM_LeaveGameplay", 0)
+		else
+			topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+		end
+		return true
+	end
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 	return true
 end

@@ -19,19 +19,53 @@ local function online_gameplay_routes_back_to_lobby()
 		and (phase == "starting" or phase == "playing" or phase == "results")
 end
 
+local function route_online_gameplay_to_lobby()
+	if ITGOnline and ITGOnline.MarkReturnedToLobby then
+		ITGOnline:MarkReturnedToLobby()
+	end
+	local topScreen = SCREENMAN:GetTopScreen()
+	if not topScreen then return end
+
+	topScreen:SetPrevScreenName("ScreenOnlineLobbies")
+	topScreen:SetNextScreenName("ScreenOnlineLobbies")
+	if topScreen.begin_backing_out then
+		topScreen:begin_backing_out()
+	else
+		topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+	end
+end
+
+local function online_gameplay_should_route_to_evaluation()
+	if not ITGOnline or not ITGOnline.currentRoomId then return false end
+	if online_gameplay_phase() ~= "results" then return false end
+	local topScreen = SCREENMAN:GetTopScreen()
+	if not topScreen then return false end
+	if ITGOnline.IsOnlineGameplayScreen and not ITGOnline:IsOnlineGameplayScreen(topScreen:GetName()) then return false end
+	if ITGOnline.ShouldHoldGameplayForEvaluation and ITGOnline:ShouldHoldGameplayForEvaluation() then return false end
+	return true
+end
+
+local function route_online_gameplay_to_evaluation()
+	local topScreen = SCREENMAN:GetTopScreen()
+	if not topScreen then return end
+	local target = GAMESTATE:IsCourseMode() and "ScreenEvaluationNonstop" or "ScreenEvaluationStage"
+	if ITGOnline and ITGOnline.MarkGameplayCompleteForEvaluation then
+		ITGOnline:MarkGameplayCompleteForEvaluation("gameplay_phase_watchdog")
+	end
+	topScreen:SetNextScreenName(target)
+	if topScreen.PostScreenMessage then
+		topScreen:PostScreenMessage("SM_LeaveGameplay", 0)
+	else
+		topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+	end
+end
+
 local RestartHandler = function(event)
 	if not event then return end
 
 	if event.type == "InputEventType_FirstPress" then
 		if event.GameButton == "Back" and online_gameplay_routes_back_to_lobby() then
-			if ITGOnline and ITGOnline.MarkReturnedToLobby then
-				ITGOnline:MarkReturnedToLobby()
-			end
-			local topScreen = SCREENMAN:GetTopScreen()
-			if topScreen then
-				topScreen:SetNextScreenName("ScreenOnlineLobbies")
-				topScreen:StartTransitioningScreen("SM_GoToNextScreen")
-			end
+			route_online_gameplay_to_lobby()
 			return true
 		end
 
@@ -54,11 +88,21 @@ local t = Def.ActorFrame{
 	OnCommand=function(self)
 		if ITGOnline and ITGOnline.currentRoomId then
 			SCREENMAN:GetTopScreen():AddInputCallback(RestartHandler)
+			self:sleep(0.25):queuecommand("OnlinePhaseCheck")
 			return
 		end
 
 		if ThemePrefs.Get("KeyboardFeatures") and PREFSMAN:GetPreference("EventMode") and not GAMESTATE:IsCourseMode() then
 			SCREENMAN:GetTopScreen():AddInputCallback(RestartHandler)
+		end
+	end,
+	OnlinePhaseCheckCommand=function(self)
+		if online_gameplay_should_route_to_evaluation() then
+			route_online_gameplay_to_evaluation()
+			return
+		end
+		if ITGOnline and ITGOnline.currentRoomId then
+			self:sleep(0.25):queuecommand("OnlinePhaseCheck")
 		end
 	end
 }

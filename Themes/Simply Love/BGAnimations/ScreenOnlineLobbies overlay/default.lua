@@ -379,7 +379,6 @@ local function joined_phase_allows_song_selection()
 	return phase == "lobby"
 		or phase == "lobby_ready"
 		or phase == "config"
-		or phase == "results"
 end
 
 local function joined_phase_allows_start()
@@ -447,6 +446,13 @@ end
 
 local function sync_local_missing_song_from_joined_players()
 	if not joined_lobby_players or not ITGOnline or not ITGOnline.user then return end
+	if joined_phase == "results" then
+		joined_missing_song = false
+		joined_missing_song_info = nil
+		joined_can_download_pack = false
+		joined_missing_song_reason = nil
+		return
+	end
 
 	local selfId = tostring(ITGOnline.user.id or "")
 	if selfId == "" then return end
@@ -473,6 +479,7 @@ local function sync_local_missing_song_from_joined_players()
 end
 
 joined_any_player_missing_song = function()
+	if joined_phase == "results" then return false end
 	for player in ivalues(joined_lobby_players) do
 		if player.missingSong or (joined_song_preview ~= nil and player.songAvailable == false) then return true end
 	end
@@ -1272,7 +1279,7 @@ local af = Def.ActorFrame{
 			for i, player in ipairs(joined_lobby_players) do
 					local profile = trim_text(player.profileName or player.name or player.playerId or ("Joueur "..i))
 				local ready = player.ready and " ✔" or ""
-					local missing = player.missingSong and " ⚠ chanson manquante" or ""
+					local missing = (joined_phase ~= "results" and player.missingSong) and " ⚠ chanson manquante" or ""
 					local packSyncStatus = trim_text(player.packSyncStatus)
 					local packSyncText = pack_sync_display_text(packSyncStatus)
 					if packSyncText ~= "" and packSyncStatus ~= "" and packSyncStatus ~= "unknown" and packSyncStatus ~= "ready" then
