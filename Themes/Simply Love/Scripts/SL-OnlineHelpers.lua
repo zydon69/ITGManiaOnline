@@ -248,7 +248,18 @@ local InputHandler = function(event)
 	local topScreen = SCREENMAN:GetTopScreen()
 	if topScreen and isWaiting and event.PlayerNumber then
 		local pn = ToEnumShortString(event.PlayerNumber)
-		if event.type == "InputEventType_FirstPress" and event.GameButton == "Start" then
+		if event.type == "InputEventType_FirstPress" and event.GameButton == "Back" then
+			isWaiting = false
+			UnlockOnlineInput()
+			if ITGOnline and ITGOnline.MarkReturnedToLobby then
+				ITGOnline:MarkReturnedToLobby()
+			end
+			if topScreen:GetName() ~= "ScreenOnlineLobbies" then
+				topScreen:SetNextScreenName("ScreenOnlineLobbies")
+				topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+			end
+			return true
+		elseif event.type == "InputEventType_FirstPress" and event.GameButton == "Start" then
 			startHoldTime[pn] = GetTimeSinceStart()
 			lastDisconnectCountdown = nil
 			if topScreen:GetName() == "ScreenGameplay" then
@@ -272,6 +283,9 @@ local InputHandler = function(event)
 						local topScreen = SCREENMAN:GetTopScreen()
 						if topScreen and topScreen:GetName() == "ScreenGameplay" then
 							SetGameplayPaused(topScreen, false)
+						end
+						if ITGOnline and ITGOnline.MarkReturnedToLobby then
+							ITGOnline:MarkReturnedToLobby()
 						end
 						MESSAGEMAN:Broadcast("DisconnectOnline", {leaveRoom=true})
 					end

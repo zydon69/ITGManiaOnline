@@ -185,6 +185,16 @@ Branch.AfterGameplay = function()
 		online_trace("FLOW branch=AfterGameplay room=" .. tostring(ITGOnline.currentRoomId) .. " phase=" .. tostring(phase))
 	end
 
+	if ITGOnline
+		and ITGOnline.currentRoomId
+		and ITGOnline.ShouldHoldGameplayForEvaluation
+		and ITGOnline:ShouldHoldGameplayForEvaluation() then
+		return GAMESTATE:GetCurrentStyle()
+			and GAMESTATE:GetCurrentStyle():GetName() == "routine"
+			and "ScreenGameplayShared"
+			or "ScreenGameplay"
+	end
+
 	if THEME:GetMetric("ScreenHeartEntry", "HeartEntryEnabled") then
 		local go_to_heart= false
 		for i, pn in ipairs(GAMESTATE:GetEnabledPlayers()) do

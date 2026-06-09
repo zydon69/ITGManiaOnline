@@ -374,6 +374,7 @@ class ScreenGameplay : public ScreenWithMenuElements {
   bool m_bOnlineEvaluationHoldStarted;
   bool m_bLoggedStageEndState;
   bool m_bLoggedOnlineEvaluationHold;
+  bool m_bMarkedOnlineFailedEarly;
 };
 
 std::vector<PlayerInfo>::iterator GetNextEnabledPlayerInfo(

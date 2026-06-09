@@ -295,6 +295,28 @@ static bool GetITGOnlineShouldHoldGameplayForStart() {
   return shouldHold;
 }
 
+static bool MarkITGOnlineFailedEarly() {
+  if (LUA == nullptr) {
+    return false;
+  }
+
+  Lua* L = LUA->Get();
+  const bool ran = LuaHelpers::RunExpression(
+      L,
+      "ITGOnline ~= nil and ITGOnline.MarkPlayFailedEarly ~= nil "
+      "and ITGOnline:MarkPlayFailedEarly('engine_begin_failed') or false",
+      "ScreenGameplay::MarkITGOnlineFailedEarly");
+
+  const bool marked = ran && lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  LUA->Release(L);
+
+  if (!ran) {
+    LOG->Warn("ITG Online: failed-state notification failed.");
+  }
+  return marked;
+}
+
 // received while STATE_DANCING
 AutoScreenMessage(SM_LoadNextSong);
 AutoScreenMessage(SM_StartLoadingNextSong);
@@ -568,6 +590,7 @@ ScreenGameplay::ScreenGameplay() {
   m_bOnlineEvaluationHoldStarted = false;
   m_bLoggedStageEndState = false;
   m_bLoggedOnlineEvaluationHold = false;
+  m_bMarkedOnlineFailedEarly = false;
   GAMESTATE->m_AdjustTokensBySongCostForFinalStageCheck = false;
 }
 
@@ -3446,6 +3469,17 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
     // We might have turned the song timer off. Be sure to turn it back on.
     SOUND->HandleSongTimer(true);
   } else if (SM == SM_BeginFailed) {
+    if (GetITGOnlineIsActive()) {
+      if (!m_bMarkedOnlineFailedEarly) {
+        m_bMarkedOnlineFailedEarly = true;
+        MarkITGOnlineFailedEarly();
+        LOG->Trace(
+            "ITG Online: player failed but ScreenGameplay is kept active.");
+      }
+      ResetGiveUpTimers(false);
+      return;
+    }
+
     m_DancingState = STATE_OUTRO;
     ResetGiveUpTimers(false);
     m_GameplayAssist.StopPlaying();  // Stop any queued assist ticks.
