@@ -68,6 +68,7 @@ local showing_global_options_menu = false
 local global_options_index = 1
 local joined_global_options = { scoreMode="itg", musicRate=1.0 }
 local global_options_choices = {}
+local joined_focus_initialized = false
 
 local join_lobby_code = ""
 
@@ -417,8 +418,15 @@ local function move_joined_button(delta)
 	joined_active_index = indices[nextIndex] or 1
 end
 
-local function set_joined_default_active_index()
+local function set_joined_default_active_index(force)
 	local indices = joined_button_indices()
+	if not force then
+		for _, index in ipairs(indices) do
+			if joined_active_index == index then
+				return
+			end
+		end
+	end
 	if joined_is_manager and joined_phase_allows_song_selection() then
 		for _, index in ipairs(indices) do
 			if index == 2 then
@@ -1434,8 +1442,10 @@ local af = Def.ActorFrame{
 						}, "|")
 						if autoFocusKey ~= last_auto_start_focus_key then
 							last_auto_start_focus_key = autoFocusKey
-							joined_active_index = 5
-							self:queuecommand("Hover")
+							if joined_active_index ~= 5 then
+								joined_active_index = 5
+								self:queuecommand("Hover")
+							end
 						end
 					else
 						last_auto_start_focus_key = ""
@@ -1584,6 +1594,7 @@ local af = Def.ActorFrame{
 		self:queuecommand("Hover")
 	end,
 		OnlineLobbyStateMessageCommand=function(self, params)
+			local previousLobbyCode = joined_lobby_code
 			clear_pending_join()
 			mode = "joined"
 		leaving_lobby = false
@@ -1591,6 +1602,9 @@ local af = Def.ActorFrame{
 		list_selected = false
 		join_lobby_code = ""
 			joined_lobby_code = params and params.code or ""
+			if joined_lobby_code ~= previousLobbyCode then
+				joined_focus_initialized = false
+			end
 			joined_lobby_players = params and params.players or {}
 			joined_is_manager = params and params.isManager or false
 			joined_manager_user_id = params and params.manager and params.manager.id or nil
@@ -1629,7 +1643,8 @@ local af = Def.ActorFrame{
 				end
 			end
 				sync_local_missing_song_from_joined_players()
-				set_joined_default_active_index()
+				set_joined_default_active_index(not joined_focus_initialized)
+				joined_focus_initialized = true
 			lobby_debug("lobby_state room=" .. tostring(joined_lobby_code)
 				.. " phase=" .. tostring(joined_phase)
 				.. " isManager=" .. tostring(joined_is_manager)
