@@ -304,6 +304,7 @@ local function joined_room_can_start()
 	return joined_is_manager
 		and joined_song_confirmed
 		and joined_phase_allows_start()
+		and joined_all_players_ready()
 		and not joined_any_player_missing_song()
 end
 
@@ -1257,6 +1258,7 @@ local af = Def.ActorFrame{
 						if not joined_is_manager then blockers[#blockers + 1] = "vous n'etes pas manager" end
 						if not joined_song_confirmed then blockers[#blockers + 1] = "aucune chanson selectionnee" end
 						if not canStartInPhase then blockers[#blockers + 1] = "phase " .. tostring(joined_phase or "inconnue") end
+						if not everyoneReady then blockers[#blockers + 1] = "attente de confirmation de tous les joueurs" end
 					if hasMissingSong then blockers[#blockers + 1] = "chanson non confirmee pour tous les joueurs" end
 				if showStartStatus then
 					if #blockers == 0 then
