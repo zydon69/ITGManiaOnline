@@ -3476,8 +3476,16 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
         LOG->Trace(
             "ITG Online: player failed but ScreenGameplay is kept active.");
       }
-      ResetGiveUpTimers(false);
-      return;
+
+      if (OnlineShouldHoldBeforeEvaluation()) {
+        ResetGiveUpTimers(false);
+        this->PostScreenMessage(SM_BeginFailed, 0.25f);
+        return;
+      }
+
+      LOG->Trace(
+          "ITG Online: failed player released from ScreenGameplay to "
+          "evaluation.");
     }
 
     m_DancingState = STATE_OUTRO;
