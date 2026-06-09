@@ -7,8 +7,8 @@ local loaded = 0
 for noteskin in ivalues( CustomOptionRow("NoteSkin").Choices ) do
 	t[#t+1] = LoadActor(preview_path, {
 		noteskin_name=noteskin,
-		preview_zoom=0.65,
-		freeze_preview=true
+		preview_zoom=0.80,
+		freeze_preview=false
 	})
 	loaded = loaded + 1
 end

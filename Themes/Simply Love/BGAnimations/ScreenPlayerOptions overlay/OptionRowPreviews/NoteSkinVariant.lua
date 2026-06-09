@@ -37,8 +37,8 @@ local function add_preview(noteskin)
 	t[#t+1] = LoadActor(preview_path, {
 		noteskin_name=noteskin,
 		using_variant=true,
-		preview_zoom=0.65,
-		freeze_preview=true
+		preview_zoom=0.80,
+		freeze_preview=false
 	})
 	variant_count = variant_count + 1
 end

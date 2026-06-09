@@ -24,7 +24,15 @@ local RestartHandler = function(event)
 
 	if event.type == "InputEventType_FirstPress" then
 		if event.GameButton == "Back" and online_gameplay_routes_back_to_lobby() then
-			SCREENMAN:GetTopScreen():SetNextScreenName("ScreenOnlineLobbies")
+			if ITGOnline and ITGOnline.MarkReturnedToLobby then
+				ITGOnline:MarkReturnedToLobby()
+			end
+			local topScreen = SCREENMAN:GetTopScreen()
+			if topScreen then
+				topScreen:SetNextScreenName("ScreenOnlineLobbies")
+				topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+			end
+			return true
 		end
 
 		if event.DeviceInput.button == "DeviceButton_left ctrl" then

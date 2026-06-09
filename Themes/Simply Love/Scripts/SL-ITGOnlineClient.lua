@@ -1971,12 +1971,6 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 
 	if not target or topScreen:GetName() == target then return false end
 
-	if preferred == "evaluation" and self:IsOnlineGameplayScreen(topScreen:GetName()) then
-		online_flow_trace("navigate_skipped reason=gameplay_engine_owns_evaluation_transition target="
-			.. tostring(target) .. " from=" .. tostring(topScreen:GetName()))
-		return false
-	end
-
 	online_flow_trace("navigate target=" .. tostring(target) .. " preferred=" .. tostring(preferred) .. " from=" .. tostring(topScreen:GetName()))
 	topScreen:SetNextScreenName(target)
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
@@ -2058,6 +2052,12 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 		-- If a player leaves gameplay early, force the online flow back to the room lobby.
 		online_flow_trace("mark_returned_to_lobby reason=gameplay_to_select_music roomPhase=" .. tostring(roomPhase))
 		self:MarkReturnedToLobby()
+		local topScreen = SCREENMAN:GetTopScreen()
+		if topScreen and topScreen:GetName() == nextScreenName then
+			online_flow_trace("navigate target=ScreenOnlineLobbies preferred=lobby reason=gameplay_to_select_music_redirect")
+			topScreen:SetNextScreenName("ScreenOnlineLobbies")
+			topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+		end
 	end
 end
 
