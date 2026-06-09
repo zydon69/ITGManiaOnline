@@ -582,6 +582,23 @@ local function current_music_rate()
 	return math.max(0.25, math.min(3.0, rate))
 end
 
+local function apply_music_rate(rate)
+	rate = math.max(0.25, math.min(3.0, tonumber(rate) or 1.0))
+	if SL and SL.Global and SL.Global.ActiveModifiers then
+		SL.Global.ActiveModifiers.MusicRate = rate
+	end
+	if not GAMESTATE or not GAMESTATE.GetSongOptionsObject then return rate end
+
+	for _, level in ipairs({ "ModsLevel_Preferred", "ModsLevel_Song" }) do
+		local ok, options = pcall(function() return GAMESTATE:GetSongOptionsObject(level) end)
+		if ok and options and options.MusicRate then
+			pcall(function() options:MusicRate(rate) end)
+		end
+	end
+
+	return rate
+end
+
 local function current_speed_mod_label()
 	local player = first_enabled_player()
 	local pn = player and ToEnumShortString(player) or "P1"
@@ -1445,6 +1462,51 @@ function ITGOnline:ApplyRoomPhase(incomingPhase, source)
 	self.currentRoom.phase = normalizedPhase
 end
 
+function ITGOnline:NormalizeGlobalOptions(options)
+	options = type(options) == "table" and options or {}
+	local scoreMode = tostring(options.score_mode or options.scoreMode or "itg"):lower()
+	if scoreMode ~= "ex" and scoreMode ~= "hardex" then
+		scoreMode = "itg"
+	end
+
+	local musicRate = tonumber(options.music_rate or options.musicRate) or 1.0
+	musicRate = math.max(0.25, math.min(3.0, musicRate))
+
+	return {
+		score_mode = scoreMode,
+		music_rate = musicRate,
+		scoreMode = scoreMode,
+		musicRate = musicRate,
+	}
+end
+
+function ITGOnline:CurrentGlobalOptions()
+	return self:NormalizeGlobalOptions(self.currentRoom and self.currentRoom.global_options)
+end
+
+function ITGOnline:ApplyGlobalOptionsToLocalState(room, source)
+	local options = self:NormalizeGlobalOptions(room and room.global_options)
+	apply_music_rate(options.music_rate)
+
+	for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
+		local pn = ToEnumShortString(player)
+		if pn and SL and SL[pn] and SL[pn].ActiveModifiers then
+			SL[pn].ActiveModifiers.ShowExScore = options.score_mode == "ex"
+			SL[pn].ActiveModifiers.ShowHardEXScore = options.score_mode == "hardex"
+		end
+	end
+
+	local key = tostring(options.score_mode) .. "|" .. string.format("%.3f", options.music_rate)
+	if self.lastAppliedGlobalOptionsKey ~= key then
+		self.lastAppliedGlobalOptionsKey = key
+		online_flow_trace("global_options_applied source=" .. tostring(source or "unknown")
+			.. " score_mode=" .. tostring(options.score_mode)
+			.. " music_rate=" .. string.format("%.3f", options.music_rate))
+	end
+
+	return options
+end
+
 function ITGOnline:ApplyRoomSnapshot(room, source)
 	if not room then return nil end
 	local previousRoom = self.currentRoom
@@ -1474,6 +1536,7 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 
 	self.currentRoomId = room.id
 	self.currentRoom = room
+	self:ApplyGlobalOptionsToLocalState(room, source)
 	if self:NormalizeRoomPhase(room.phase) ~= "config" then
 		self:ClearOnlineOptionsReadyDeadline("room_snapshot_" .. tostring(room.phase or "unknown"))
 	end
@@ -2568,7 +2631,8 @@ function ITGOnline:BuildSongPayloadFor(song, steps)
 	if not musicName or not songFileName then return nil end
 	local chartHash = self:ChartHashForSteps(steps)
 	local chartKey = steps and steps.GetChartKey and tostring(steps:GetChartKey() or "") or ""
-	local rate = current_music_rate()
+	local globalOptions = self:CurrentGlobalOptions()
+	local rate = tonumber(globalOptions and globalOptions.music_rate) or current_music_rate()
 	local noteCount = current_chart_note_count(steps)
 	if not noteCount then return nil end
 
@@ -2723,6 +2787,48 @@ function ITGOnline:SelectSong(callback)
 	end)
 end
 
+function ITGOnline:UpdateGlobalOptions(options, callback)
+	if not self.currentRoomId then
+		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
+		return
+	end
+
+	options = type(options) == "table" and options or {}
+	local normalized = self:NormalizeGlobalOptions(options)
+	local payload = {}
+	if options.score_mode ~= nil or options.scoreMode ~= nil then
+		payload.score_mode = normalized.score_mode
+	end
+	if options.music_rate ~= nil or options.musicRate ~= nil then
+		payload.music_rate = normalized.music_rate
+	end
+	if payload.score_mode == nil and payload.music_rate == nil then
+		payload.score_mode = normalized.score_mode
+		payload.music_rate = normalized.music_rate
+	end
+
+	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/global-options", payload, function(ok, decoded, response)
+		if ok and decoded and decoded.room then
+			local room = self:ApplyRoomSnapshot(decoded.room, "global_options")
+			decoded.room = room or decoded.room
+			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = "globalOptions",
+				success = true,
+				message = "Options globales mises a jour."
+			})
+		else
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = "globalOptions",
+				success = false,
+				message = response_message(response, decoded, "Impossible de mettre a jour les options globales.")
+			})
+		end
+
+		if callback then callback(ok, decoded, response) end
+	end)
+end
+
 function ITGOnline:SelectSongAndMarkLobbyReady(callback)
 	if not self.currentRoomId then
 		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
@@ -2859,12 +2965,23 @@ function ITGOnline:BuildCurrentScoreSnapshot()
 		if exOk and tonumber(exValue) then exScore = tonumber(exValue) end
 	end
 
-	local pn = ToEnumShortString(player)
-	local showExScore = SL and pn and SL[pn] and SL[pn].ActiveModifiers and SL[pn].ActiveModifiers.ShowExScore == true
+	local hardExScore = 0
+	if CalculateHardExScore then
+		local hardExOk, hardExValue = pcall(function() return CalculateHardExScore(player) end)
+		if hardExOk and tonumber(hardExValue) then hardExScore = tonumber(hardExValue) end
+	end
+
+	local globalOptions = self:CurrentGlobalOptions()
+	local scoreMode = tostring(globalOptions.score_mode or "itg")
 	local formattedScore = FormatPercentScore and tonumber(FormatPercentScore(dancePoints):sub(1, -2)) or nil
 	local scorePercent = math.max(0, math.min(100, formattedScore or (dancePoints * 100)))
-	local displayedPercent = showExScore and exScore or scorePercent
-	if (tonumber(displayedPercent) or 0) <= 0 and scorePercent > 0 then
+	local displayedPercent = scorePercent
+	if scoreMode == "hardex" then
+		displayedPercent = hardExScore
+	elseif scoreMode == "ex" then
+		displayedPercent = exScore
+	end
+	if scoreMode == "itg" and (tonumber(displayedPercent) or 0) <= 0 and scorePercent > 0 then
 		displayedPercent = scorePercent
 	end
 	local combo = 0
@@ -2876,12 +2993,14 @@ function ITGOnline:BuildCurrentScoreSnapshot()
 		if nowSecond ~= tonumber(self.lastHudScoreTraceSecond) then
 			self.lastHudScoreTraceSecond = nowSecond
 			online_trace(string.format(
-				"hud-score room=%s round=%s displayed=%.3f score=%.3f ex=%.3f combo=%d",
+				"hud-score room=%s round=%s mode=%s displayed=%.3f score=%.3f ex=%.3f hardex=%.3f combo=%d",
 				tostring(self.currentRoomId or ""),
 				tostring(self.PlayStateKey and self:PlayStateKey() or ""),
+				tostring(scoreMode),
 				tonumber(displayedPercent) or 0,
 				tonumber(scorePercent) or 0,
 				tonumber(exScore) or 0,
+				tonumber(hardExScore) or 0,
 				tonumber(combo) or 0
 			))
 		end
@@ -2891,11 +3010,15 @@ function ITGOnline:BuildCurrentScoreSnapshot()
 		Player = player,
 		ScorePercent = scorePercent,
 		ExScorePercent = exScore,
+		HardExScorePercent = hardExScore,
 		DisplayedPercent = displayedPercent,
+		ScoreMode = scoreMode,
 		Combo = combo,
 		scorePercent = scorePercent,
 		exScorePercent = exScore,
+		hardExScorePercent = hardExScore,
 		displayedPercent = displayedPercent,
+		scoreMode = scoreMode,
 		combo = combo,
 	}
 end
@@ -2912,8 +3035,10 @@ function ITGOnline:QueueLiveScore(snapshot)
 	end
 	local scorePercent = tonumber(snapshot.scorePercent or snapshot.ScorePercent) or 0
 	local exScorePercent = tonumber(snapshot.exScorePercent or snapshot.ExScorePercent) or 0
+	local hardExScorePercent = tonumber(snapshot.hardExScorePercent or snapshot.HardExScorePercent) or 0
+	local scoreMode = tostring(snapshot.scoreMode or snapshot.ScoreMode or (self:CurrentGlobalOptions().score_mode or "itg"))
 	local displayedPercent = tonumber(snapshot.displayedPercent or snapshot.DisplayedPercent)
-	if displayedPercent == nil or (displayedPercent <= 0 and scorePercent > 0) then
+	if displayedPercent == nil or (scoreMode == "itg" and displayedPercent <= 0 and scorePercent > 0) then
 		displayedPercent = scorePercent
 	end
 	local combo = tonumber(snapshot.combo or snapshot.Combo) or 0
@@ -2921,11 +3046,15 @@ function ITGOnline:QueueLiveScore(snapshot)
 		Player = snapshot.Player,
 		ScorePercent = scorePercent,
 		ExScorePercent = exScorePercent,
+		HardExScorePercent = hardExScorePercent,
 		DisplayedPercent = displayedPercent,
+		ScoreMode = scoreMode,
 		Combo = combo,
 		scorePercent = scorePercent,
 		exScorePercent = exScorePercent,
+		hardExScorePercent = hardExScorePercent,
 		displayedPercent = displayedPercent,
+		scoreMode = scoreMode,
 		combo = combo,
 	}
 	self.lastDisplayedScoreSnapshot = snapshot
@@ -3164,6 +3293,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 	local dancePoints = stats:GetPercentDancePoints()
 	local exScore = CalculateExScore(player) or 0
+	local hardExScore = CalculateHardExScore and CalculateHardExScore(player) or 0
 	local songPositionState = GAMESTATE:GetPlayerState(player):GetSongPosition()
 	local songPosition = songPositionState:GetMusicSeconds()
 	local visibleOk, visibleSeconds = pcall(function() return songPositionState:GetMusicSecondsVisible() end)
@@ -3216,19 +3346,29 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 
 	local selectedMaxScore = tonumber(scoreSongPayload.max_score) or server_max_score_for_note_count(scoreSongPayload.chart_note_count)
 	local exScorePercent = tonumber(snapshot and snapshot.exScorePercent) or tonumber(exScore) or 0
+	local hardExScorePercent = tonumber(snapshot and snapshot.hardExScorePercent) or tonumber(hardExScore) or 0
 	local normalizedExScore = math.max(0, math.min(100, exScorePercent)) / 100
-	local pn = ToEnumShortString(player)
-	local showExScore = SL and pn and SL[pn] and SL[pn].ActiveModifiers and SL[pn].ActiveModifiers.ShowExScore == true
+	local scoreMode = tostring((self:CurrentGlobalOptions() or {}).score_mode or "itg")
 	local displayedScorePercent = tonumber(snapshot and snapshot.displayedPercent)
 	if displayedScorePercent == nil then
-		displayedScorePercent = showExScore
-		and tonumber(snapshot and snapshot.exScorePercent)
-		or tonumber(snapshot and snapshot.scorePercent)
+		if scoreMode == "hardex" then
+			displayedScorePercent = hardExScorePercent
+		elseif scoreMode == "ex" then
+			displayedScorePercent = exScorePercent
+		else
+			displayedScorePercent = tonumber(snapshot and snapshot.scorePercent)
+		end
 	end
 	if displayedScorePercent == nil then
-		displayedScorePercent = showExScore and exScorePercent or ((tonumber(dancePoints) or 0) * 100)
+		if scoreMode == "hardex" then
+			displayedScorePercent = hardExScorePercent
+		elseif scoreMode == "ex" then
+			displayedScorePercent = exScorePercent
+		else
+			displayedScorePercent = (tonumber(dancePoints) or 0) * 100
+		end
 	end
-	if (tonumber(displayedScorePercent) or 0) <= 0 then
+	if scoreMode == "itg" and (tonumber(displayedScorePercent) or 0) <= 0 then
 		local snapshotScorePercent = tonumber(snapshot and snapshot.scorePercent)
 		local danceScorePercent = (tonumber(dancePoints) or 0) * 100
 		if snapshotScorePercent and snapshotScorePercent > 0 then
@@ -3263,12 +3403,14 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	local outgoingPercent = selectedMaxScore > 0 and ((outgoingScore / selectedMaxScore) * 100) or 0
 	if self.debugScoreTrace == true then
 		online_trace(string.format(
-			"score-trace room=%s displayed=%.3f outgoing=%.3f snapshot(score=%.3f ex=%.3f shown=%.3f) max=%d combo=%d",
+			"score-trace room=%s mode=%s displayed=%.3f outgoing=%.3f snapshot(score=%.3f ex=%.3f hardex=%.3f shown=%.3f) max=%d combo=%d",
 			tostring(self.currentRoomId or ""),
+			tostring(scoreMode),
 			tonumber(displayedScorePercent) or 0,
 			tonumber(outgoingPercent) or 0,
 			tonumber(snapshot and snapshot.scorePercent) or -1,
 			tonumber(snapshot and snapshot.exScorePercent) or -1,
+			tonumber(snapshot and snapshot.hardExScorePercent) or -1,
 			tonumber(snapshot and snapshot.displayedPercent) or -1,
 			tonumber(selectedMaxScore) or 0,
 			tonumber(liveCombo) or 0
@@ -3318,6 +3460,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		chart_hash = scoreSongPayload.chart_hash,
 		failed = outgoingFailed,
 		final = final and true or false,
+		score_mode = scoreMode,
 		judgments = judgments,
 	}, function(ok, decoded, response)
 		local errorCode = response_error_code(response, decoded)
@@ -4757,6 +4900,7 @@ function ITGOnline:LobbyStatePayload(room)
 	if not room then return { code = "", players = {} } end
 	self:UpdateScheduledStart(room)
 	self:MaybeAckScheduledStart(room)
+	local globalOptions = self:NormalizeGlobalOptions(room.global_options)
 
 	local readyByUserId = {}
 	if room.ready_states then
@@ -4858,6 +5002,7 @@ function ITGOnline:LobbyStatePayload(room)
 				chartType = room.selected_song.chart_type or "",
 			difficulty = room.selected_song.difficulty or "",
 			meter = room.selected_song.meter,
+			rate = room.selected_song.rate or globalOptions.music_rate,
 		}
 	end
 
@@ -4879,6 +5024,7 @@ function ITGOnline:LobbyStatePayload(room)
 			secondsUntilStart = self:SecondsUntilScheduledStart(),
 			manager = room.manager,
 			isManager = self.user and room.manager and tonumber(room.manager.id) == tonumber(self.user.id) or false,
+			globalOptions = globalOptions,
 			players = players,
 		songInfo = songInfo,
 	}

@@ -429,7 +429,7 @@ local Overrides = {
 				return { "ShowFaPlusWindow" }
 			end
 
-			return { "ShowFaPlusWindow", "ShowExScore", "ShowHardEXScore", "ShowFaPlusPane", "SmallerWhite" }
+			return { "ShowFaPlusWindow", "ShowFaPlusPane", "SmallerWhite" }
 		end,
 		LoadSelections = function(self, list, pn)
 			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
@@ -438,12 +438,9 @@ local Overrides = {
 				return list
 			end
 
-			local hardEx = mods.ShowHardEXScore or false
 			list[1] = mods.ShowFaPlusWindow or false
-			list[2] = hardEx and false or (mods.ShowExScore or false)
-			list[3] = hardEx
-			list[4] = mods.ShowFaPlusPane and true
-			list[5] = mods.SmallerWhite or false
+			list[2] = mods.ShowFaPlusPane and true
+			list[3] = mods.SmallerWhite or false
 			return list
 		end,
 		SaveSelections = function(self, list, pn)
@@ -458,16 +455,67 @@ local Overrides = {
 				mods.SmallerWhite = false
 				-- Default to FA+ pane in Tournament Mode
 				sl_pn.EvalPanePrimary = 2
+				Trace(("FA_PLUS_OPTIONS: pn=%s tournament=1 window=%s ex=%s hardex=%s pane=%s smaller_white=%s eval_pane=%s"):format(
+					ToEnumShortString(pn),
+					tostring(mods.ShowFaPlusWindow),
+					tostring(mods.ShowExScore),
+					tostring(mods.ShowHardEXScore),
+					tostring(mods.ShowFaPlusPane),
+					tostring(mods.SmallerWhite),
+					tostring(sl_pn.EvalPanePrimary)
+				))
 				return
 			end
 
 			mods.ShowFaPlusWindow = list[1]
-			mods.ShowHardEXScore = list[3] == true
-			mods.ShowExScore = (not mods.ShowHardEXScore) and list[2] == true
-			mods.ShowFaPlusPane = list[4]
-			mods.SmallerWhite = list[5] == true
+			mods.ShowFaPlusPane = list[2]
+			mods.SmallerWhite = list[3] == true
 			-- Default to FA+ pane if either options are active.
-			sl_pn.EvalPanePrimary = ((list[1] or list[2] or list[3]) and list[4]) and 2 or 1
+			sl_pn.EvalPanePrimary = ((mods.ShowFaPlusWindow or mods.ShowExScore or mods.ShowHardEXScore) and mods.ShowFaPlusPane) and 2 or 1
+			Trace(("FA_PLUS_OPTIONS: pn=%s window=%s ex=%s hardex=%s pane=%s smaller_white=%s eval_pane=%s"):format(
+				ToEnumShortString(pn),
+				tostring(mods.ShowFaPlusWindow),
+				tostring(mods.ShowExScore),
+				tostring(mods.ShowHardEXScore),
+				tostring(mods.ShowFaPlusPane),
+				tostring(mods.SmallerWhite),
+				tostring(sl_pn.EvalPanePrimary)
+			))
+		end
+	},
+	ExScoreMode = {
+		SelectType = "SelectOne",
+		Values = { "Off", "ShowExScore", "ShowHardEXScore" },
+		LoadSelections = function(self, list, pn)
+			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+			if mods.ShowHardEXScore then
+				list[3] = true
+			elseif mods.ShowExScore then
+				list[2] = true
+			else
+				list[1] = true
+			end
+			return list
+		end,
+		SaveSelections = function(self, list, pn)
+			local sl_pn = SL[ToEnumShortString(pn)]
+			local mods = sl_pn.ActiveModifiers
+			mods.ShowExScore = list[2] == true
+			mods.ShowHardEXScore = list[3] == true
+			if mods.ShowHardEXScore then
+				mods.ShowExScore = false
+			end
+			sl_pn.EvalPanePrimary = ((mods.ShowFaPlusWindow or mods.ShowExScore or mods.ShowHardEXScore) and mods.ShowFaPlusPane) and 2 or 1
+			Trace(("FA_PLUS_SCORE_MODE: pn=%s mode=%s window=%s ex=%s hardex=%s pane=%s smaller_white=%s eval_pane=%s"):format(
+				ToEnumShortString(pn),
+				mods.ShowHardEXScore and "hardex" or (mods.ShowExScore and "ex" or "off"),
+				tostring(mods.ShowFaPlusWindow),
+				tostring(mods.ShowExScore),
+				tostring(mods.ShowHardEXScore),
+				tostring(mods.ShowFaPlusPane),
+				tostring(mods.SmallerWhite),
+				tostring(sl_pn.EvalPanePrimary)
+			))
 		end
 	},
 	-------------------------------------------------------------------------

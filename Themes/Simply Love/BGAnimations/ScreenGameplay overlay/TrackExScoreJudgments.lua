@@ -12,6 +12,7 @@ local player = ...
 
 local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 local storage = SL[ToEnumShortString(player)].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
+local mods = SL[ToEnumShortString(player)].ActiveModifiers
 
 local valid_tns = {
 	-- Emulated, not a real TNS.
@@ -60,6 +61,14 @@ return Def.Actor{
 			W0_total = 0,
 			W010_total = 0
 		}
+		Trace(("FA_PLUS_ACTIVE: pn=%s window=%s ex=%s hardex=%s pane=%s smaller_white=%s"):format(
+			ToEnumShortString(player),
+			tostring(mods.ShowFaPlusWindow),
+			tostring(mods.ShowExScore),
+			tostring(mods.ShowHardEXScore),
+			tostring(mods.ShowFaPlusPane),
+			tostring(mods.SmallerWhite)
+		))
 	end,
 	JudgmentMessageCommand=function(self, params)
 		if params.Player ~= player then return end
@@ -158,5 +167,20 @@ return Def.Actor{
 				}
 			)
 		end
+	end,
+	OffCommand=function(self)
+		local counts = storage.ex_counts or {}
+		Trace(("FA_PLUS_SUMMARY: pn=%s w010=%s w0=%s w1=%s w2=%s w3=%s miss=%s held=%s letgo=%s smaller_white=%s"):format(
+			ToEnumShortString(player),
+			tostring(counts.W010_total or counts.W010 or 0),
+			tostring(counts.W0_total or counts.W0 or 0),
+			tostring(counts.W1 or 0),
+			tostring(counts.W2 or 0),
+			tostring(counts.W3 or 0),
+			tostring(counts.Miss or 0),
+			tostring(counts.Held or 0),
+			tostring(counts.LetGo or 0),
+			tostring(mods.SmallerWhite)
+		))
 	end,
 }

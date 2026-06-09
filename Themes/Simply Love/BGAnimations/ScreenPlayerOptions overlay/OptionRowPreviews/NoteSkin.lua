@@ -5,7 +5,11 @@ local loaded = 0
 -- Add noteskin actors to the primary AF and hide them immediately.
 -- We'll refer to these later via ActorProxy in ./Graphics/OptionRow Frame.lua
 for noteskin in ivalues( CustomOptionRow("NoteSkin").Choices ) do
-	t[#t+1] = LoadActor(preview_path, {noteskin_name=noteskin})
+	t[#t+1] = LoadActor(preview_path, {
+		noteskin_name=noteskin,
+		preview_zoom=0.65,
+		freeze_preview=true
+	})
 	loaded = loaded + 1
 end
 

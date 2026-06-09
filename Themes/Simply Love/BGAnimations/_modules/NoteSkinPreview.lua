@@ -9,6 +9,8 @@
 local args = ...
 local noteskin_name = args.noteskin_name or ""
 local using_variant = args.using_variant or false
+local preview_zoom = args.preview_zoom or 1
+local freeze_preview = args.freeze_preview or false
 local actor_name_prefix = using_variant and "NoteSkinVariant_" or "NoteSkin_"
 -- prepare a dummy Actor using the name of NoteSkin in case errors are
 -- encountered so that a valid (inert, not-drawing) actor still gets returned
@@ -72,9 +74,17 @@ if okay and noteskin_actor then
 		noteskin_actor.InitCommand = nil
 	end
 
-	return noteskin_actor..{
+	local child = noteskin_actor..{
+		InitCommand=function(self)
+			self:visible(true):zoom(preview_zoom)
+			if freeze_preview then self:animate(false) end
+		end
+	}
+
+	return Def.ActorFrame{
 		Name=actor_name_prefix..noteskin_name,
-		InitCommand=function(self) self:visible(false) end
+		InitCommand=function(self) self:visible(false) end,
+		child
 	}
 end
 

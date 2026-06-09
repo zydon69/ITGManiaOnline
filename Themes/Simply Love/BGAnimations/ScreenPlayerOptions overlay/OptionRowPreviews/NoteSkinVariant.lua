@@ -34,7 +34,12 @@ local function add_preview(noteskin)
 	if not noteskin or loaded_previews[noteskin] then return end
 
 	loaded_previews[noteskin] = true
-	t[#t+1] = LoadActor(preview_path, {noteskin_name=noteskin, using_variant=true})
+	t[#t+1] = LoadActor(preview_path, {
+		noteskin_name=noteskin,
+		using_variant=true,
+		preview_zoom=0.65,
+		freeze_preview=true
+	})
 	variant_count = variant_count + 1
 end
 

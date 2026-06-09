@@ -3,6 +3,68 @@ local function onlineFlowSuppressesPrompt()
 	return (ITGOnline and ITGOnline.currentRoomId) or onlineEnabled
 end
 
+local function optionsPromptSeconds()
+	local seconds = tonumber(THEME:GetMetric("ScreenSelectMusic", "ShowOptionsMessageSeconds")) or 3
+	return math.max(0.25, seconds)
+end
+
+local segment_count = 24
+local radius = 42
+
+local countdown_segments = Def.ActorFrame{
+	Name="CountdownSegments",
+	InitCommand=function(self)
+		self:xy(_screen.cx, _screen.cy + 62):visible(false)
+	end,
+	ShowPressStartForOptionsCommand=function(self)
+		if onlineFlowSuppressesPrompt() then
+			self:visible(false)
+			return
+		end
+		self:stoptweening():visible(true):diffusealpha(1)
+		self:playcommand("StartCountdown", {Seconds=optionsPromptSeconds()})
+	end,
+	ShowEnteringOptionsCommand=function(self)
+		self:stoptweening():linear(0.12):diffusealpha(0)
+	end,
+	HidePressStartForOptionsCommand=function(self)
+		self:stoptweening():linear(0.12):diffusealpha(0)
+	end,
+	CountdownExpiredCommand=function(self)
+		self:stoptweening():linear(0.12):diffusealpha(0)
+	end,
+}
+
+for i=1,segment_count do
+	local angle = ((i - 1) / segment_count) * math.pi * 2 - math.pi / 2
+	local degrees = ((i - 1) / segment_count) * 360
+	countdown_segments[#countdown_segments+1] = Def.Quad{
+		InitCommand=function(self)
+			self:xy(math.cos(angle) * radius, math.sin(angle) * radius)
+				:rotationz(degrees)
+				:zoomto(3, 10)
+				:diffuse(Color.White)
+				:diffusealpha(0)
+		end,
+		StartCountdownCommand=function(self, params)
+			local seconds = tonumber(params and params.Seconds) or 1.5
+			local delay = seconds * ((i - 1) / segment_count)
+			self:stoptweening()
+				:diffuse(GetHexColor(SL.Global.ActiveColorIndex))
+				:diffusealpha(0.95)
+				:sleep(delay)
+				:linear(math.min(0.08, seconds / segment_count))
+				:diffusealpha(0.12)
+		end,
+		EnteringOptionsCommand=function(self)
+			self:stoptweening():linear(0.08):diffusealpha(0)
+		end,
+		CountdownExpiredCommand=function(self)
+			self:stoptweening():linear(0.08):diffusealpha(0)
+		end
+	}
+end
+
 return Def.ActorFrame{
 	InitCommand=function(self) self:draworder(200) end,
 
@@ -11,26 +73,139 @@ return Def.ActorFrame{
 		OffCommand=function(self) self:linear(0.3):cropbottom(-0.5):diffusealpha(1) end
 	},
 
-	LoadFont("Common Bold")..{
-		Text=THEME:GetString("ScreenSelectMusic", "Press Start for Options"),
-		InitCommand=function(self) self:visible(false):Center():zoom(0.75) end,
+	Def.ActorFrame{
+		Name="OptionsPromptCountdown",
+		InitCommand=function(self)
+			self:Center():visible(false)
+		end,
 		ShowPressStartForOptionsCommand=function(self)
 			if onlineFlowSuppressesPrompt() then
 				self:visible(false)
 				return
 			end
-			self:visible(true)
+			self:stoptweening():visible(true):diffusealpha(1)
+			self:playcommand("StartCountdown", {Seconds=optionsPromptSeconds()})
 		end,
 		ShowEnteringOptionsCommand=function(self)
 			if onlineFlowSuppressesPrompt() then
 				self:visible(false)
 				return
 			end
-			self:stoptweening()
-				:visible(true)
-				:diffusealpha(1)
-				:settext(THEME:GetString("ScreenSelectMusic", "Entering Options..."))
-				:sleep(1)
-		end
-	}
+			self:stoptweening():visible(true):diffusealpha(1)
+			self:playcommand("EnteringOptions")
+		end,
+		HidePressStartForOptionsCommand=function(self)
+			self:stoptweening():linear(0.12):diffusealpha(0)
+		end,
+
+		Def.Quad{
+			Name="PromptFill",
+			InitCommand=function(self)
+				self:y(0):zoomto(500, 54):diffuse(0,0,0,0)
+			end,
+			StartCountdownCommand=function(self)
+				self:stoptweening():diffuse(0,0,0,0)
+			end,
+			EnteringOptionsCommand=function(self)
+				self:stoptweening():linear(0.08):diffusealpha(0)
+			end
+		},
+		Def.Quad{
+			Name="PromptBorder",
+			InitCommand=function(self)
+				self:y(0):zoomto(502, 56):diffuse(Color.White):diffusealpha(0)
+			end,
+			StartCountdownCommand=function(self)
+				self:stoptweening():diffuse(Color.White):diffusealpha(0)
+			end,
+			EnteringOptionsCommand=function(self)
+				self:stoptweening():linear(0.08):diffusealpha(0)
+			end
+		},
+
+		LoadFont("Common Bold")..{
+			Name="PrimaryText",
+			Text=THEME:GetString("ScreenSelectMusic", "Press Start for Options"),
+			InitCommand=function(self)
+				self:y(0):zoom(0.72):diffuse(Color.White):shadowlength(1)
+			end,
+			StartCountdownCommand=function(self)
+				self:stoptweening()
+					:settext(THEME:GetString("ScreenSelectMusic", "Press Start for Options"))
+					:diffuse(Color.White)
+					:diffusealpha(1)
+			end,
+			CountdownExpiredCommand=function(self)
+				self:stoptweening()
+					:settext(THEME:GetString("ScreenSelectMusic", "Options Locked"))
+					:diffuse(0.75,0.75,0.75,1)
+			end,
+			EnteringOptionsCommand=function(self)
+				self:stoptweening()
+					:settext(THEME:GetString("ScreenSelectMusic", "Entering Options..."))
+					:diffuse(Color.White)
+			end
+		},
+
+		LoadFont("Common Normal")..{
+			Name="SecondaryText",
+			Text="",
+			InitCommand=function(self)
+				self:y(62):zoom(0.78):diffuse(GetHexColor(SL.Global.ActiveColorIndex)):shadowlength(1)
+			end,
+			StartCountdownCommand=function(self, params)
+				local seconds = math.ceil(tonumber(params and params.Seconds) or 0)
+				self:stoptweening()
+					:zoom(0.78)
+					:settext(seconds > 0 and tostring(seconds) or "")
+					:diffuse(GetHexColor(SL.Global.ActiveColorIndex))
+					:diffusealpha(1)
+			end,
+			CountdownExpiredCommand=function(self)
+				self:stoptweening()
+					:settext(THEME:GetString("ScreenSelectMusic", "Song Starting"))
+					:zoom(0.42)
+					:diffuse(0.62,0.62,0.62,1)
+			end,
+			EnteringOptionsCommand=function(self)
+				self:stoptweening():settext("")
+			end
+		},
+
+		Def.Actor{
+			Name="CountdownTicker",
+			StartCountdownCommand=function(self, params)
+				self:stoptweening()
+				self.remaining = tonumber(params and params.Seconds) or optionsPromptSeconds()
+				self.deadline = GetTimeSinceStart() + self.remaining
+				self:SetUpdateFunction(function(actor)
+					local left = math.max(0, (actor.deadline or 0) - GetTimeSinceStart())
+					local parent = actor:GetParent()
+					local secondary = parent and parent:GetChild("SecondaryText") or nil
+					if secondary then
+						secondary:settext(left > 0 and tostring(math.ceil(left)) or "")
+					end
+					if left <= 0 then
+						actor:SetUpdateFunction(nil)
+						if parent then parent:playcommand("CountdownExpired") end
+					end
+				end)
+			end,
+			EnteringOptionsCommand=function(self)
+				self:SetUpdateFunction(nil)
+			end,
+			HidePressStartForOptionsCommand=function(self)
+				self:SetUpdateFunction(nil)
+			end
+		},
+
+		CountdownExpiredCommand=function(self)
+			self:stoptweening():sleep(0.18):linear(0.22):diffusealpha(0)
+		end,
+		EnteringOptionsCommand=function(self)
+			self:stoptweening():diffusealpha(1):sleep(1)
+		end,
+	},
+
+	countdown_segments
 }

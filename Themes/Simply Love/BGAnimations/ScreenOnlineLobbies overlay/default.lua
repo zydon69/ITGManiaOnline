@@ -64,6 +64,10 @@ local joined_preview_unknown_pack = false
 local leaving_lobby = false
 local showing_leave_confirm = false
 local leave_confirm_index = 0
+local showing_global_options_menu = false
+local global_options_index = 1
+local joined_global_options = { scoreMode="itg", musicRate=1.0 }
+local global_options_choices = {}
 
 local join_lobby_code = ""
 
@@ -109,6 +113,101 @@ local function ready_summary()
 		end
 	end
 	return table.concat(parts, ",")
+end
+
+local function normalize_global_options(options)
+	options = type(options) == "table" and options or {}
+	local scoreMode = tostring(options.scoreMode or options.score_mode or "itg"):lower()
+	if scoreMode ~= "ex" and scoreMode ~= "hardex" then
+		scoreMode = "itg"
+	end
+	local musicRate = tonumber(options.musicRate or options.music_rate) or 1.0
+	musicRate = math.max(0.25, math.min(3.0, musicRate))
+	return { scoreMode=scoreMode, score_mode=scoreMode, musicRate=musicRate, music_rate=musicRate }
+end
+
+local function global_score_label(mode)
+	mode = tostring(mode or "itg"):lower()
+	if mode == "hardex" then return "HardEX" end
+	if mode == "ex" then return "EX" end
+	return "ITG"
+end
+
+local function global_options_summary()
+	local options = normalize_global_options(joined_global_options)
+	return global_score_label(options.scoreMode) .. " / " .. string.format("%.2fx", options.musicRate)
+end
+
+local function rebuild_global_options_choices()
+	global_options_choices = {
+		{ label="Score: ITG", scoreMode="itg" },
+		{ label="Score: EX", scoreMode="ex" },
+		{ label="Score: HardEX", scoreMode="hardex" },
+		{ label="Rate: 0.75x", musicRate=0.75 },
+		{ label="Rate: 1.00x", musicRate=1.0 },
+		{ label="Rate: 1.10x", musicRate=1.1 },
+		{ label="Rate: 1.20x", musicRate=1.2 },
+		{ label="Rate: 1.50x", musicRate=1.5 },
+	}
+	global_options_index = math.min(math.max(1, global_options_index), #global_options_choices)
+end
+
+local function select_current_global_score_choice()
+	local current = normalize_global_options(joined_global_options)
+	for i, choice in ipairs(global_options_choices) do
+		if choice.scoreMode and choice.scoreMode == current.scoreMode then
+			global_options_index = i
+			return
+		end
+	end
+	global_options_index = math.min(math.max(1, global_options_index), #global_options_choices)
+end
+
+local function open_global_options_menu()
+	rebuild_global_options_choices()
+	select_current_global_score_choice()
+	showing_global_options_menu = true
+	if t then
+		local menu = t:GetChild("GlobalOptionsMenu")
+		if menu then menu:visible(true) end
+		t:queuecommand("UpdateGlobalOptionsMenu")
+	end
+end
+
+local function close_global_options_menu()
+	showing_global_options_menu = false
+	if t then
+		local menu = t:GetChild("GlobalOptionsMenu")
+		if menu then menu:visible(false) end
+	end
+end
+
+local function move_global_options_choice(delta)
+	if #global_options_choices == 0 then rebuild_global_options_choices() end
+	global_options_index = global_options_index + delta
+	if global_options_index < 1 then global_options_index = #global_options_choices end
+	if global_options_index > #global_options_choices then global_options_index = 1 end
+	if t then t:queuecommand("UpdateGlobalOptionsMenu") end
+end
+
+local function apply_global_options_choice()
+	local choice = global_options_choices[global_options_index]
+	if not choice or not ITGOnline or not ITGOnline.UpdateGlobalOptions then return end
+	local current = normalize_global_options(joined_global_options)
+	local payload = {
+		score_mode = choice.scoreMode or current.scoreMode,
+		music_rate = choice.musicRate or current.musicRate,
+	}
+	ITGOnline:UpdateGlobalOptions(payload, function(ok)
+		if ok then
+			joined_global_options = normalize_global_options(payload)
+			close_global_options_menu()
+			if t then
+				t:queuecommand("UpdateJoinedLobbyText")
+				t:queuecommand("Hover")
+			end
+		end
+	end)
 end
 
 local function text_or_empty(value)
@@ -215,8 +314,11 @@ local function joined_button_indices()
 	if joined_missing_song then
 		indices[#indices + 1] = 3
 	end
-	if joined_room_can_start() then
+	if joined_is_manager and joined_phase_allows_song_selection() then
 		indices[#indices + 1] = 4
+	end
+	if joined_room_can_start() then
+		indices[#indices + 1] = 5
 	end
 	return indices
 end
@@ -657,7 +759,7 @@ local InputHandler = function(event)
 									showSpinner=true,
 									showPrompt=false
 								})
-							elseif not ok and t then
+	elseif not ok and t then
 								t:playcommand("SetStatus", {
 									text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
 									showSpinner=false,
@@ -680,6 +782,20 @@ local InputHandler = function(event)
 		if pending_join_action_id > 0 and (event.GameButton == "Select" or event.GameButton == "Back") then
 			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
 				cancel_pending_join("Connexion annulee. Rafraichissement des salons...")
+			return false
+		end
+
+		if showing_global_options_menu then
+			if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
+				move_global_options_choice(event.GameButton == "MenuRight" and 1 or -1)
+				SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+			elseif event.GameButton == "Start" then
+				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+				apply_global_options_choice()
+			elseif event.GameButton == "Select" or event.GameButton == "Back" then
+				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+				close_global_options_menu()
+			end
 			return false
 		end
 
@@ -714,29 +830,39 @@ local InputHandler = function(event)
 							topScreen:SetNextScreenName("ScreenSelectMusic")
 							topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 						end
-						elseif joined_active_index == 3 and joined_missing_song then
-							if joined_can_download_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadSelectedPack then
-								ITGOnline.PackSync:DownloadSelectedPack(joined_missing_song_info or joined_song_preview, function(ok, message)
-									if not ok and type(message) == "table" and message.kind == "pack_candidates" then
-										open_pack_choice_menu(
-											joined_missing_song_info or joined_song_preview,
-											message.candidates,
-											message.message or "Plusieurs packs correspondent. Choisissez-en un."
-										)
-										return
-									end
-									if not ok and t then
-										t:playcommand("SetStatus", {
-											text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
-											showSpinner=false,
-										showPrompt=true
-									})
+					elseif joined_active_index == 3 and joined_missing_song then
+						if joined_can_download_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadSelectedPack then
+							ITGOnline.PackSync:DownloadSelectedPack(joined_missing_song_info or joined_song_preview, function(ok, message)
+								if not ok and type(message) == "table" and message.kind == "pack_candidates" then
+									open_pack_choice_menu(
+										joined_missing_song_info or joined_song_preview,
+										message.candidates,
+										message.message or "Plusieurs packs correspondent. Choisissez-en un."
+									)
+									return
 								end
+								if not ok and t then
+									t:playcommand("SetStatus", {
+										text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
+										showSpinner=false,
+											showPrompt=true
+										})
+									end
 							end)
 						else
 							transition_to_online_song_reload()
 						end
 					elseif joined_active_index == 4 and joined_is_manager then
+						if joined_phase_allows_song_selection() then
+							open_global_options_menu()
+						else
+							t:playcommand("SetStatus", {
+								text="Les options globales ne peuvent pas changer pendant la manche.",
+								showSpinner=false,
+								showPrompt=true
+							})
+						end
+					elseif joined_active_index == 5 and joined_is_manager then
 						if joined_room_can_start() then
 							MESSAGEMAN:Broadcast("StartOnlineRoom")
 						else
@@ -1003,6 +1129,29 @@ local af = Def.ActorFrame{
 		local text = menu:GetChild("PlayerActionOptions")
 		if text then text:settext(table.concat(body, "\n")) end
 	end,
+	UpdateGlobalOptionsMenuCommand=function(self)
+		local menu = self:GetChild("GlobalOptionsMenu")
+		if not menu then return end
+		rebuild_global_options_choices()
+		local title = menu:GetChild("GlobalOptionsTitle")
+		if title then title:settext("Options globales") end
+		local detail = menu:GetChild("GlobalOptionsDetail")
+		if detail then
+			detail:settext("Applique au salon entier : score leaderboard et vitesse de musique.")
+		end
+		local lines = {}
+		for i, choice in ipairs(global_options_choices) do
+			local selected = i == global_options_index
+			local current = normalize_global_options(joined_global_options)
+			local active = (choice.scoreMode ~= nil and choice.scoreMode == current.scoreMode)
+				or (choice.musicRate ~= nil and math.abs((tonumber(choice.musicRate) or 0) - current.musicRate) < 0.001)
+			lines[#lines + 1] = (selected and "> " or "  ")
+				.. tostring(choice.label)
+				.. (active and "  *" or "")
+		end
+		local text = menu:GetChild("GlobalOptionsChoices")
+		if text then text:settext(table.concat(lines, "\n")) end
+	end,
 	UpdatePrivateJoinPromptCommand=function(self)
 		local prompt = self:GetChild("PrivateJoinPrompt")
 		if not prompt then return end
@@ -1090,6 +1239,7 @@ local af = Def.ActorFrame{
 					statusLines[#statusLines + 1] = joined_is_manager and "Role : manager (vous pouvez lancer le salon)"
 						or "Role : membre (seul le manager peut lancer)"
 					statusLines[#statusLines + 1] = "Manager : " .. managerLabel
+					statusLines[#statusLines + 1] = "Options globales : " .. global_options_summary()
 
 				local showStartStatus = joined_phase ~= "results"
 				local canStartInPhase = joined_phase_allows_start()
@@ -1233,6 +1383,16 @@ local af = Def.ActorFrame{
 				end
 			end
 
+			local globalOptionsButton = joinedContent and joinedContent:GetChild("GlobalOptionsButton")
+			if globalOptionsButton then
+				local visible = joined_is_manager and joined_phase_allows_song_selection()
+				globalOptionsButton:visible(visible)
+				local label = globalOptionsButton:GetChild("GlobalOptionsLabel")
+				if label then
+					label:settext("Options globales\n" .. global_options_summary())
+				end
+			end
+
 			local startRoomButton = joinedContent and joinedContent:GetChild("StartRoomButton")
 			if startRoomButton then
 					local canStartInPhase = joined_phase_allows_start()
@@ -1274,7 +1434,7 @@ local af = Def.ActorFrame{
 						}, "|")
 						if autoFocusKey ~= last_auto_start_focus_key then
 							last_auto_start_focus_key = autoFocusKey
-							joined_active_index = 4
+							joined_active_index = 5
 							self:queuecommand("Hover")
 						end
 					else
@@ -1435,6 +1595,7 @@ local af = Def.ActorFrame{
 			joined_is_manager = params and params.isManager or false
 			joined_manager_user_id = params and params.manager and params.manager.id or nil
 			joined_phase = params and params.phase or nil
+			joined_global_options = normalize_global_options(params and params.globalOptions or nil)
 			if joined_phase == "results" then
 				joined_song_preview = nil
 				joined_song_confirmed = false
@@ -2432,10 +2593,42 @@ local af = Def.ActorFrame{
 			},
 
 			Def.ActorFrame{
-				Name="StartRoomButton",
+				Name="GlobalOptionsButton",
 				InitCommand=function(self)
 					self:xy(180, 180)
 					self.idx = 4
+					self:visible(false)
+				end,
+				Def.Quad{
+					InitCommand=function(self)
+						self:zoomto(200, 48):diffuse(Color.White)
+					end,
+					HoverCommand=function(self)
+						self:diffuse(joined_active_index == self:GetParent().idx and Color.Yellow or Color.White)
+					end
+				},
+				Def.Quad{
+					InitCommand=function(self)
+						self:zoomto(198, 46):diffuse(Color.Black)
+					end
+				},
+				LoadFont("Common Bold")..{
+					Name="GlobalOptionsLabel",
+					Text="Options globales",
+					InitCommand=function(self)
+						self:zoom(0.42)
+					end,
+					HoverCommand=function(self)
+						self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
+					end
+				}
+			},
+
+			Def.ActorFrame{
+				Name="StartRoomButton",
+				InitCommand=function(self)
+					self:xy(180, 240)
+					self.idx = 5
 					self:visible(false)
 				end,
 				Def.Quad{
@@ -2552,6 +2745,55 @@ local af = Def.ActorFrame{
 	-- Rendered late on purpose so this modal always sits above lobby panes/buttons.
 	LoadActor("PlayerActionMenu.lua"),
 	LoadActor("PackChoiceMenu.lua"),
+
+	Def.ActorFrame{
+		Name="GlobalOptionsMenu",
+		InitCommand=function(self)
+			self:visible(false)
+		end,
+		Def.Quad{
+			InitCommand=function(self)
+				self:zoomto(SCREEN_WIDTH, SCREEN_HEIGHT):diffuse(0,0,0,0.62)
+			end
+		},
+		Def.Quad{
+			InitCommand=function(self)
+				self:zoomto(520, 330):diffuse(0,0,0,0.88)
+			end
+		},
+		Def.Quad{
+			InitCommand=function(self)
+				self:zoomto(522, 332):diffuse(Color.White):diffusealpha(0.22)
+			end
+		},
+		LoadFont("Common Bold")..{
+			Name="GlobalOptionsTitle",
+			Text="Options globales",
+			InitCommand=function(self)
+				self:xy(0, -130):zoom(0.7):diffuse(Color.White)
+			end
+		},
+		LoadFont("Common Normal")..{
+			Name="GlobalOptionsDetail",
+			Text="",
+			InitCommand=function(self)
+				self:xy(0, -96):zoom(0.45):maxwidth(940):diffuse(0.85,0.85,0.85,1)
+			end
+		},
+		LoadFont("Common Normal")..{
+			Name="GlobalOptionsChoices",
+			Text="",
+			InitCommand=function(self)
+				self:xy(-180, -48):horizalign(left):vertalign(top):zoom(0.55):maxwidth(680):diffuse(Color.White)
+			end
+		},
+		LoadFont("Common Normal")..{
+			Text="Gauche/Droite : choisir   Valider : appliquer   Retour : fermer",
+			InitCommand=function(self)
+				self:xy(0, 135):zoom(0.38):maxwidth(1180):diffuse(0.7,0.7,0.7,1)
+			end
+		}
+	},
 
 
 
