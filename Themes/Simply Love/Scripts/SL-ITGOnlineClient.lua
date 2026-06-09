@@ -1823,6 +1823,15 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 	local now = GetTimeSinceStart()
 	local minimumVisibleHoldSeconds = 2.25
 
+	if summary and summary.players > 0 and summary.allTerminal == true and not waiting then
+		self.onlineGameplayEvaluationHoldStartedKey = roundKey
+		self.onlineGameplayEvaluationMinimumHoldUntil = 0
+		self.onlineGameplayAllTerminalHoldKey = roundKey
+		self.onlineGameplayAllTerminalHoldUntil = 0
+		online_flow_trace("hold_gameplay_release reason=all_players_terminal")
+		return false
+	end
+
 	if validRoundKey and self.onlineGameplayEvaluationHoldStartedKey ~= roundKey then
 		self.onlineGameplayEvaluationHoldStartedKey = roundKey
 		self.onlineGameplayEvaluationMinimumHoldUntil = now + minimumVisibleHoldSeconds

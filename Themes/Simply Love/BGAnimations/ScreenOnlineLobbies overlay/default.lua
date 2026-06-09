@@ -2543,7 +2543,7 @@ local af = Def.ActorFrame{
 			Name="JoinedSongPack",
 			Text="",
 			InitCommand=function(self)
-				self:horizalign(left):xy(-290, 5):zoom(0.30):maxwidth(760):diffuse(0.75,0.75,0.75,1)
+				self:horizalign(left):xy(-290, 3):zoom(0.38):maxwidth(760):diffuse(0.85,0.85,0.85,1)
 			end
 		},
 		LoadFont("Common Bold")..{
@@ -2682,7 +2682,7 @@ local af = Def.ActorFrame{
 					Name="GlobalOptionsLabel",
 					Text="Options globales",
 					InitCommand=function(self)
-						self:zoom(0.30):vertspacing(-8)
+						self:zoom(0.30):vertspacing(-14)
 					end,
 					HoverCommand=function(self)
 						self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
