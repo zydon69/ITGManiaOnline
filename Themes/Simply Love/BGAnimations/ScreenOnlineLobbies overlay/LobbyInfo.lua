@@ -76,7 +76,7 @@ for i=1,num_rows+2 do
 
   af[#af+1] = Def.Quad{
     InitCommand=function(self)
-      self:zoomto(350, 50):diffuse(Color.White)
+      self:zoomto(220, 50):diffuse(Color.White)
       self.focus = false
     end,
     GainFocusCommand=function(self)
@@ -94,21 +94,21 @@ for i=1,num_rows+2 do
 
   af[#af+1] = Def.Quad{
     InitCommand=function(self)
-      self:zoomto(350-2, 50-2):diffuse(Color.Black)
+      self:zoomto(220-2, 50-2):diffuse(Color.Black)
     end
   }
 
   af[#af+1] = LoadFont("Common Normal")..{
 	    Text="Code salon",
     InitCommand=function(self)
-      self:x(-120):y(-10)
+      self:zoom(0.58):x(-72):y(-10)
     end,
   }
 
   af[#af+1] = LoadFont("Common Bold")..{
     Text="",
     InitCommand=function(self)
-			self:zoom(0.5):x(-120):y(10)
+			self:zoom(0.44):x(-72):y(10)
     end,
     UpdateSelfCommand=function(self)
       if i + offset <= #data then
@@ -120,14 +120,14 @@ for i=1,num_rows+2 do
   af[#af+1] = LoadFont("Common Normal")..{
 	    Text="Joueurs",
     InitCommand=function(self)
-      self:y(-10)
+      self:zoom(0.58):y(-10)
     end,
   }
 
   af[#af+1] = LoadFont("Common Bold")..{
     Text="",
     InitCommand=function(self)
-			self:zoom(0.5):y(10)
+			self:zoom(0.44):y(10)
     end,
     UpdateSelfCommand=function(self)
       if i + offset <= #data then
@@ -139,14 +139,14 @@ for i=1,num_rows+2 do
   af[#af+1] = LoadFont("Common Normal")..{
     Text="Phase",
     InitCommand=function(self)
-      self:x(120):y(-10)
+      self:zoom(0.58):x(72):y(-10)
     end,
   }
 
   af[#af+1] = LoadFont("Common Bold")..{
     Text="",
     InitCommand=function(self)
-      self:zoom(0.5):x(120):y(10)
+      self:zoom(0.44):x(72):y(10)
     end,
     UpdateSelfCommand=function(self)
       if i + offset <= #data then

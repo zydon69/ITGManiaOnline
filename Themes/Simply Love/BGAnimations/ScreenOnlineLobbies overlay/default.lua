@@ -86,6 +86,35 @@ local last_start_visibility_debug_key = ""
 local last_select_song_visibility_debug_key = ""
 local last_auto_start_focus_key = ""
 
+local browse_lobby_x = -205
+local browse_players_x = 35
+local browse_button_x = 245
+local browse_panel_y = -20
+local browse_panel_width = 230
+local browse_panel_height = 340
+local browse_button_width = 145
+local browse_button_height = 34
+local browse_button_spacing = 12
+
+local function browse_button_y(idx)
+	local first = 3
+	local offset = idx - first
+	return -62 + offset * (browse_button_height + browse_button_spacing)
+end
+
+local function focus_selected_browse_list(root)
+	if not root then return end
+	if lobby_view == "players" then
+		local players = root:GetChild("OnlinePlayersContent")
+		local border = players and players:GetChild("OnlinePlayersBorder")
+		if border then border:playcommand("GainFocus") end
+	else
+		local lobby = root:GetChild("LobbyContent")
+		local list = lobby and lobby:GetChild("LobbyList")
+		if list then list:playcommand("GainFocus") end
+	end
+end
+
 local function lobby_debug_enabled()
 	if ITGOnline and ITGOnline.debugReadyFlow ~= nil then
 		return ITGOnline.debugReadyFlow == true
@@ -227,6 +256,59 @@ local function clamp_text(value, maxLen)
 	return value:sub(1, maxLen - 1) .. "…"
 end
 
+local function find_online_song(songInfo)
+	if not SONGMAN or not SONGMAN.FindSong or type(songInfo) ~= "table" then return nil end
+	local songPath = trim_text(songInfo.songPath or songInfo.folder_name or songInfo.folderName)
+	local song = songPath ~= "" and SONGMAN:FindSong(songPath) or nil
+	if song then return song end
+	local relative = songPath:match("^[^/]+/(.+)$")
+	return relative and SONGMAN:FindSong(relative) or nil
+end
+
+local function update_joined_song_card(joinedContent)
+	if not joinedContent then return end
+	local songInfo = joined_missing_song_info or joined_song_preview
+	local hasSong = type(songInfo) == "table"
+	local card = joinedContent:GetChild("JoinedSongCard")
+	if card then card:visible(hasSong) end
+
+	local title = joinedContent:GetChild("JoinedSongTitle")
+	if title then
+		local titleText = hasSong and trim_text(songInfo.title) or ""
+		title:settext(hasSong and clamp_text(titleText ~= "" and titleText or "Chanson inconnue", 42) or "Aucune chanson selectionnee")
+	end
+
+	local artist = joinedContent:GetChild("JoinedSongArtist")
+	if artist then
+		local artistText = hasSong and trim_text(songInfo.artist) or ""
+		artist:settext(artistText ~= "" and clamp_text(artistText, 44) or "Artiste inconnu")
+	end
+
+	local pack = joinedContent:GetChild("JoinedSongPack")
+	if pack then
+		local packText = hasSong and trim_text(songInfo.pack) or ""
+		pack:settext(packText ~= "" and clamp_text(packText, 46) or "")
+	end
+
+	local banner = joinedContent:GetChild("JoinedSongBanner")
+	local bannerFallback = joinedContent:GetChild("JoinedSongBannerFallback")
+	local bannerLabel = joinedContent:GetChild("JoinedSongBannerLabel")
+	local bannerLoaded = false
+	if banner then
+		banner:visible(false)
+		if hasSong then
+			local song = find_online_song(songInfo)
+			if song and song.HasBanner and song:HasBanner() and song.GetBannerPath and song:GetBannerPath() then
+				banner:LoadFromCachedBanner(song:GetBannerPath())
+				banner:visible(true)
+				bannerLoaded = true
+			end
+		end
+	end
+	if bannerFallback then bannerFallback:visible(hasSong and not bannerLoaded) end
+	if bannerLabel then bannerLabel:visible(hasSong and not bannerLoaded) end
+end
+
 local function abbreviate_stepchart(value)
 	local chart = trim_text(value)
 	if chart == "" then return "" end
@@ -313,11 +395,11 @@ local function joined_button_indices()
 	if joined_is_manager and joined_phase_allows_song_selection() then
 		indices[#indices + 1] = 2
 	end
-	if joined_missing_song then
-		indices[#indices + 1] = 3
-	end
 	if joined_is_manager and joined_phase_allows_song_selection() then
 		indices[#indices + 1] = 4
+	end
+	if joined_missing_song then
+		indices[#indices + 1] = 3
 	end
 	if joined_room_can_start() then
 		indices[#indices + 1] = 5
@@ -938,23 +1020,16 @@ local InputHandler = function(event)
 				return false
 			end
 
-			if active_index == 0 then
+			if active_index == 0 or active_index == 1 then
+				lobby_view = active_index == 1 and "players" or "lobbies"
 				if (lobby_view == "lobbies" and #candidates > 0) or (lobby_view == "players" and #online_users > 0) then
 					list_selected = true
 					SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-					t:queuecommand("GainFocus")
-					t:queuecommand("Selected")
+					focus_selected_browse_list(t)
 					t:queuecommand("UpdateOnlinePlayers")
 				else
 					SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
 				end
-			elseif active_index == 1 then
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-				list_selected = false
-				lobby_view = lobby_view == "players" and "lobbies" or "players"
-				t:queuecommand("LoseFocus")
-				t:queuecommand("UpdateLobbyView")
-				t:queuecommand("Hover")
 			elseif active_index == 2 then
 				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
 
@@ -1077,7 +1152,7 @@ local af = Def.ActorFrame{
 			local selected = (list_selected and lobby_view == "players" and i == online_player_index) and "> " or "  "
 			local room = user.room and user.room.name and (" " .. room_visibility_label(user.room) .. " " .. tostring(user.room.name)) or ""
 			local status = user.status and (" [" .. tostring(user.status) .. "]") or ""
-				lines[#lines + 1] = selected .. i .. ". " .. tostring(user.name or "Joueur") .. status .. room
+				lines[#lines + 1] = clamp_text(selected .. i .. ". " .. tostring(user.name or "Joueur") .. status .. room, 44)
 		end
 
 		local playersList = playersContent:GetChild("OnlinePlayersList")
@@ -1094,21 +1169,15 @@ local af = Def.ActorFrame{
 		local lobbyContent = self:GetChild("LobbyContent")
 		local playersContent = self:GetChild("OnlinePlayersContent")
 		if lobbyContent then
-			lobbyContent:visible(mode ~= "joined" and lobby_view == "lobbies")
+			lobbyContent:visible(mode ~= "joined")
 			local lobbyList = lobbyContent:GetChild("LobbyList")
-			if lobbyList then lobbyList:visible(lobby_view == "lobbies") end
+			if lobbyList then lobbyList:visible(true) end
 		end
-		if playersContent then playersContent:visible(mode ~= "joined" and lobby_view == "players") end
+		if playersContent then playersContent:visible(mode ~= "joined") end
 
 		local emptyText = lobbyContent and lobbyContent:GetChild("EmptyStateText")
 		if emptyText then
-			emptyText:visible(lobby_view == "lobbies" and #candidates == 0)
-		end
-
-		local toggleButton = lobbyContent and lobbyContent:GetChild("OnlinePlayersButton")
-		local toggleText = toggleButton and toggleButton:GetChild("OnlinePlayersButtonText")
-		if toggleText then
-				toggleText:settext("Joueurs en ligne")
+			emptyText:visible(#candidates == 0)
 		end
 
 		self:queuecommand("UpdateOnlinePlayers")
@@ -1238,6 +1307,7 @@ local af = Def.ActorFrame{
 		if playersText then
 				playersText:settext(#lines > 0 and table.concat(lines, "\n") or "En attente des joueurs...")
 		end
+			update_joined_song_card(joinedContent)
 
 			local songStatus = joinedContent and joinedContent:GetChild("JoinedLobbySongStatus")
 			if songStatus then
@@ -1294,22 +1364,11 @@ local af = Def.ActorFrame{
 					else
 							statusLines[#statusLines + 1] = "Pack de chansons manquant ou different localement"
 					end
-					if missingSongInfo.pack and missingSongInfo.pack ~= "" then
-							statusLines[#statusLines + 1] = "Pack : " .. tostring(missingSongInfo.pack)
-						end
-						statusLines[#statusLines + 1] = "Chanson : " .. tostring(missingSongInfo.title or "Inconnue")
 					elseif joined_song_preview then
 						statusLines[#statusLines + 1] = (joined_song_confirmed and "✔ Chanson selectionnee" or "Choix de chanson en cours")
-						if joined_song_preview.pack and joined_song_preview.pack ~= "" then
-							statusLines[#statusLines + 1] = "Pack : " .. tostring(joined_song_preview.pack)
-					end
 					if joined_preview_unknown_pack and not joined_song_confirmed then
 						statusLines[#statusLines + 1] = "Le manager navigue dans un pack que vous ne possédez pas."
 					end
-						statusLines[#statusLines + 1] = "Chanson : " .. tostring(joined_song_preview.title or "Inconnue")
-						if joined_song_preview.artist and joined_song_preview.artist ~= "" then
-							statusLines[#statusLines + 1] = "Artiste : " .. tostring(joined_song_preview.artist)
-						end
 						if joined_phase == "playing" then
 							statusLines[#statusLines + 1] = "Manche en cours. En attente de la fin pour tous."
 						elseif joined_phase == "results" then
@@ -1584,7 +1643,7 @@ local af = Def.ActorFrame{
 
 			local emptyText = lobbyContent:GetChild("EmptyStateText")
 			if emptyText then
-				emptyText:visible(lobby_view == "lobbies" and #candidates == 0)
+				emptyText:visible(#candidates == 0)
 			end
 		end
 
@@ -1889,14 +1948,14 @@ local af = Def.ActorFrame{
 		LoadFont("Common Normal")..{
 				Text="&MENULEFT;/&MENURIGHT; pour choisir | &START; pour valider | &SELECT; ou &MENULEFT;+&MENURIGHT; pour revenir",
 			InitCommand=function(self)
-				self:y(180)
+				self:y(185):zoom(0.72)
 			end
 		},
 
 		Def.ActorFrame{
 			Name="LobbyList",
 			InitCommand=function(self)
-				self:x(-120)
+				self:x(browse_lobby_x)
 				self.idx = 0
 			end,
 			OnCommand=function(self)
@@ -1905,7 +1964,7 @@ local af = Def.ActorFrame{
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(360,340):y(-20):diffuse(Color.White)
+					self:zoomto(browse_panel_width,browse_panel_height):y(browse_panel_y):diffuse(Color.White)
 				end,
 				HoverCommand=function(self)
 					if not list_selected then
@@ -1919,20 +1978,20 @@ local af = Def.ActorFrame{
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(360-2,340-2):y(-20):diffuse(Color.Black)
+					self:zoomto(browse_panel_width-2,browse_panel_height-2):y(browse_panel_y):diffuse(Color.Black)
 				end
 			},
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(350, 1):y(-150):diffuse(Color.White)
+					self:zoomto(browse_panel_width-10, 1):y(-150):diffuse(Color.White)
 				end
 			},
 
 			LoadFont("Common Bold")..{
 					Text="Salons disponibles",
 				InitCommand=function(self)
-					self:horizalign(left):x(-170):y(-170):zoom(0.5)
+					self:horizalign(left):x(-(browse_panel_width/2)+8):y(-170):zoom(0.42)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
@@ -1943,7 +2002,7 @@ local af = Def.ActorFrame{
 				Name="LobbyCount",
 				Text="0/0",
 				InitCommand=function(self)
-					self:horizalign(right):x(170):y(-170)
+					self:horizalign(right):x((browse_panel_width/2)-8):y(-170):zoom(0.58)
 				end,
 				UpdateIndexCommand=function(self, params)
 					self:settext(params.idx .. "/" .. params.total)
@@ -1957,21 +2016,15 @@ local af = Def.ActorFrame{
 			Name="EmptyStateText",
 				Text="Aucun salon trouve.",
 			InitCommand=function(self)
-				self:horizalign(center):xy(-120, -120):zoom(1.4):diffuse(Color.White):visible(false)
+				self:horizalign(center):xy(browse_lobby_x, -118):zoom(0.72):diffuse(Color.White):visible(false)
 			end
 		},
 
 		Def.ActorFrame{
 			Name="OnlinePlayersButton",
 			InitCommand=function(self)
-				local idx = 2
-				local width = 200
-				local height = 40
-				local spacing = 20
-				local mid = #options / 2
-				self:y((idx - 1 - mid) * (spacing + height))
-				self:x(180)
-				self.idx = idx - 1
+				self:visible(false)
+				self.idx = 1
 			end,
 			Def.Quad{
 				InitCommand=function(self)
@@ -2022,18 +2075,14 @@ local af = Def.ActorFrame{
 		Def.ActorFrame{
 			InitCommand=function(self)
 				local idx = 3
-				local width = 200
-				local height = 40
-				local spacing = 20
-				local mid = #options / 2
-				self:y((idx - 1 - mid) * (spacing + height))
-				self:x(180)
+				self:y(browse_button_y(idx))
+				self:x(browse_button_x)
 				self.idx = idx - 1
 			end,
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(200, 40):diffuse(Color.White)
+					self:zoomto(browse_button_width, browse_button_height):diffuse(Color.White)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(active_index == self:GetParent().idx and Color.Yellow or Color.White)
@@ -2045,14 +2094,14 @@ local af = Def.ActorFrame{
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(198, 38):diffuse(Color.Black)
+					self:zoomto(browse_button_width-2, browse_button_height-2):diffuse(Color.Black)
 				end
 			},
 
 			LoadFont("Common Bold")..{
 					Text="Rafraichir",
 				InitCommand=function(self)
-					self:zoom(0.5)
+					self:zoom(0.42)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
@@ -2060,7 +2109,7 @@ local af = Def.ActorFrame{
 			},
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(200, 40):diffuse(color("#424242")):diffusealpha(0)
+					self:zoomto(browse_button_width, browse_button_height):diffuse(color("#424242")):diffusealpha(0)
 				end,
 				SelectedCommand=function(self)
 					if active_index ~= self:GetParent().idx then
@@ -2079,18 +2128,14 @@ local af = Def.ActorFrame{
 		Def.ActorFrame{
 			InitCommand=function(self)
 				local idx = 4
-				local width = 200
-				local height = 40
-				local spacing = 20
-				local mid = #options / 2
-				self:y((idx - 1 - mid) * (spacing + height))
-				self:x(180)
+				self:y(browse_button_y(idx))
+				self:x(browse_button_x)
 				self.idx = idx - 1
 			end,
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(200, 40):diffuse(Color.White)
+					self:zoomto(browse_button_width, browse_button_height):diffuse(Color.White)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(active_index == self:GetParent().idx and Color.Yellow or Color.White)
@@ -2102,14 +2147,14 @@ local af = Def.ActorFrame{
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(198, 38):diffuse(Color.Black)
+					self:zoomto(browse_button_width-2, browse_button_height-2):diffuse(Color.Black)
 				end
 			},
 
 			LoadFont("Common Bold")..{
 					Text="Creer un salon",
 				InitCommand=function(self)
-					self:zoom(0.5)
+					self:zoom(0.38)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
@@ -2117,7 +2162,7 @@ local af = Def.ActorFrame{
 			},
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(200, 40):diffuse(color("#424242")):diffusealpha(0)
+					self:zoomto(browse_button_width, browse_button_height):diffuse(color("#424242")):diffusealpha(0)
 				end,
 				SelectedCommand=function(self)
 					if active_index ~= self:GetParent().idx then
@@ -2136,18 +2181,14 @@ local af = Def.ActorFrame{
 		Def.ActorFrame{
 			InitCommand=function(self)
 				local idx = 5
-				local width = 200
-				local height = 40
-				local spacing = 20
-				local mid = #options / 2
-				self:y((idx - 1 - mid) * (spacing + height))
-				self:x(180)
+				self:y(browse_button_y(idx))
+				self:x(browse_button_x)
 				self.idx = idx - 1
 			end,
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(200, 40):diffuse(Color.White)
+					self:zoomto(browse_button_width, browse_button_height):diffuse(Color.White)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(active_index == self:GetParent().idx and Color.Yellow or Color.White)
@@ -2159,14 +2200,14 @@ local af = Def.ActorFrame{
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(198, 38):diffuse(Color.Black)
+					self:zoomto(browse_button_width-2, browse_button_height-2):diffuse(Color.Black)
 				end
 			},
 
 			LoadFont("Common Bold")..{
 					Text="Retour",
 				InitCommand=function(self)
-					self:zoom(0.5)
+					self:zoom(0.42)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
@@ -2174,7 +2215,7 @@ local af = Def.ActorFrame{
 			},
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(200, 40):diffuse(color("#424242")):diffusealpha(0)
+					self:zoomto(browse_button_width, browse_button_height):diffuse(color("#424242")):diffusealpha(0)
 				end,
 				SelectedCommand=function(self)
 					if active_index ~= self:GetParent().idx then
@@ -2195,27 +2236,24 @@ local af = Def.ActorFrame{
 		InitCommand=function(self)
 			self:visible(false)
 		end,
-		HoverCommand=function(self)
-			local toggleButton = self:GetChild("AvailableLobbiesButton")
-			if toggleButton then toggleButton:playcommand("Hover") end
-		end,
+		HoverCommand=function(self) end,
 
 		LoadFont("Common Normal")..{
 				Text="&MENULEFT;/&MENURIGHT; pour choisir | &START; pour valider",
 			InitCommand=function(self)
-				self:y(180)
+				self:visible(false)
 			end
 		},
 
 		Def.Quad{
 			Name="OnlinePlayersBorder",
 			InitCommand=function(self)
-				self:zoomto(360,340):x(-120):y(-20):diffuse(Color.White)
+				self:zoomto(browse_panel_width,browse_panel_height):x(browse_players_x):y(browse_panel_y):diffuse(Color.White)
 			end,
 			HoverCommand=function(self)
 				if list_selected and lobby_view == "players" then
 					self:diffuse(Color.Green)
-				elseif active_index == 0 then
+				elseif active_index == 1 then
 					self:diffuse(Color.Yellow)
 				else
 					self:diffuse(Color.White)
@@ -2233,44 +2271,39 @@ local af = Def.ActorFrame{
 		},
 		Def.Quad{
 			InitCommand=function(self)
-				self:zoomto(358,338):x(-120):y(-20):diffuse(Color.Black)
+				self:zoomto(browse_panel_width-2,browse_panel_height-2):x(browse_players_x):y(browse_panel_y):diffuse(Color.Black)
 			end
 		},
 		Def.Quad{
 			InitCommand=function(self)
-				self:zoomto(350, 1):x(-120):y(-150):diffuse(Color.White)
+				self:zoomto(browse_panel_width-10, 1):x(browse_players_x):y(-150):diffuse(Color.White)
 			end
 		},
 		LoadFont("Common Bold")..{
 				Text="Joueurs en ligne",
 			InitCommand=function(self)
-				self:horizalign(left):x(-290):y(-170):zoom(0.5)
+				self:horizalign(left):x(browse_players_x-(browse_panel_width/2)+8):y(-170):zoom(0.42)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="OnlinePlayersCount",
 			Text="0",
 			InitCommand=function(self)
-				self:horizalign(right):x(50):y(-170):zoom(0.8)
+				self:horizalign(right):x(browse_players_x+(browse_panel_width/2)-8):y(-170):zoom(0.58)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="OnlinePlayersList",
 				Text="Aucun joueur connecte trouve.",
 			InitCommand=function(self)
-				self:horizalign(left):vertalign(top):xy(-290, -132):zoom(0.82):maxwidth(620)
+				self:horizalign(left):vertalign(top):xy(browse_players_x-(browse_panel_width/2)+10, -132):zoom(0.48):maxwidth(420)
 			end
 		},
 		Def.ActorFrame{
 			Name="AvailableLobbiesButton",
 			InitCommand=function(self)
+				self:visible(false)
 				local idx = 2
-				local width = 200
-				local height = 40
-				local spacing = 20
-				local mid = #options / 2
-				self:y((idx - 1 - mid) * (spacing + height))
-				self:x(180)
 				self.idx = idx - 1
 			end,
 			Def.Quad{
@@ -2317,14 +2350,8 @@ local af = Def.ActorFrame{
 		Def.ActorFrame{
 			Name="OnlinePlayersRefreshButton",
 			InitCommand=function(self)
-				local idx = 3
-				local width = 200
-				local height = 40
-				local spacing = 20
-				local mid = #options / 2
-				self:y((idx - 1 - mid) * (spacing + height))
-				self:x(180)
-				self.idx = idx - 1
+				self:visible(false)
+				self.idx = 2
 			end,
 			Def.Quad{
 				InitCommand=function(self)
@@ -2366,14 +2393,8 @@ local af = Def.ActorFrame{
 		Def.ActorFrame{
 			Name="OnlinePlayersCreateButton",
 			InitCommand=function(self)
-				local idx = 4
-				local width = 200
-				local height = 40
-				local spacing = 20
-				local mid = #options / 2
-				self:y((idx - 1 - mid) * (spacing + height))
-				self:x(180)
-				self.idx = idx - 1
+				self:visible(false)
+				self.idx = 3
 			end,
 			Def.Quad{
 				InitCommand=function(self)
@@ -2415,14 +2436,8 @@ local af = Def.ActorFrame{
 		Def.ActorFrame{
 			Name="OnlinePlayersBackButton",
 			InitCommand=function(self)
-				local idx = 5
-				local width = 200
-				local height = 40
-				local spacing = 20
-				local mid = #options / 2
-				self:y((idx - 1 - mid) * (spacing + height))
-				self:x(180)
-				self.idx = idx - 1
+				self:visible(false)
+				self.idx = 4
 			end,
 			Def.Quad{
 				InitCommand=function(self)
@@ -2487,45 +2502,91 @@ local af = Def.ActorFrame{
 		LoadFont("Common Bold")..{
 				Text="Salon rejoint",
 			InitCommand=function(self)
-				self:horizalign(left):x(-290):y(-170):zoom(0.5)
+				self:horizalign(left):x(-290):y(-170):zoom(0.40)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedLobbyCodeLabel",
 				Text="Code du salon :",
 			InitCommand=function(self)
-				self:horizalign(right):x(-10):y(-170):zoom(1)
+				self:horizalign(right):x(-10):y(-170):zoom(0.72)
 			end
 		},
 		LoadFont("Common Bold")..{
 			Name="JoinedLobbyCodeValue",
 				Text="(en attente)",
 			InitCommand=function(self)
-				self:horizalign(right):x(50):y(-170):zoom(0.5)
+				self:horizalign(right):x(50):y(-170):zoom(0.42)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedLobbyPlayers",
 				Text="En attente des joueurs...",
 			InitCommand=function(self)
-				self:horizalign(left):x(-290):y(-100):zoom(1):maxwidth(560)
+				self:horizalign(left):x(-290):y(-112):zoom(0.72):maxwidth(760)
+			end
+		},
+		Def.Quad{
+			Name="JoinedSongCard",
+			InitCommand=function(self)
+				self:xy(-120, 28):zoomto(330, 86):diffuse(0,0,0,0.82):visible(false)
+			end
+		},
+		Def.Quad{
+			Name="JoinedSongBannerFallback",
+			InitCommand=function(self)
+				self:xy(-232, 28):zoomto(112, 44):diffuse(0.08,0.08,0.08,1):visible(false)
+			end
+		},
+		LoadFont("Common Bold")..{
+			Name="JoinedSongBannerLabel",
+			Text="BANNIERE",
+			InitCommand=function(self)
+				self:xy(-232, 28):zoom(0.24):diffuse(Color.White):visible(false)
+			end
+		},
+		Def.Banner{
+			Name="JoinedSongBanner",
+			InitCommand=function(self)
+				self:xy(-232, 28):scaletoclipped(112, 44):visible(false)
+			end
+		},
+		LoadFont("Common Bold")..{
+			Name="JoinedSongTitle",
+			Text="Aucune chanson selectionnee",
+			InitCommand=function(self)
+				self:horizalign(left):xy(-168, 3):zoom(0.42):maxwidth(480)
+			end
+		},
+		LoadFont("Common Normal")..{
+			Name="JoinedSongArtist",
+			Text="",
+			InitCommand=function(self)
+				self:horizalign(left):xy(-168, 27):zoom(0.36):maxwidth(500)
+			end
+		},
+		LoadFont("Common Normal")..{
+			Name="JoinedSongPack",
+			Text="",
+			InitCommand=function(self)
+				self:horizalign(left):xy(-168, 49):zoom(0.30):maxwidth(520):diffuse(0.75,0.75,0.75,1)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedLobbySongStatus",
 				Text="En attente de la chanson...",
 			InitCommand=function(self)
-				self:horizalign(left):vertalign(top):xy(-290, 20):zoom(0.62):maxwidth(580)
+				self:horizalign(left):vertalign(top):xy(-290, 98):zoom(0.44):maxwidth(800)
 			end
 		},
 		Def.ActorFrame{
 			InitCommand=function(self)
-				self:xy(180, 0)
+				self:xy(180, -18)
 				self.idx = 1
 			end,
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(200, 40):diffuse(Color.White)
+					self:zoomto(180, 36):diffuse(Color.White)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(joined_active_index == self:GetParent().idx and Color.Yellow or Color.White)
@@ -2533,13 +2594,13 @@ local af = Def.ActorFrame{
 			},
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(198, 38):diffuse(Color.Black)
+					self:zoomto(178, 34):diffuse(Color.Black)
 				end
 			},
 			LoadFont("Common Bold")..{
 					Text="Quitter le salon",
 				InitCommand=function(self)
-					self:zoom(0.5)
+					self:zoom(0.38)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
@@ -2550,12 +2611,12 @@ local af = Def.ActorFrame{
 			Def.ActorFrame{
 				Name="SelectSongButton",
 				InitCommand=function(self)
-					self:xy(180, 60)
+					self:xy(180, 34)
 					self.idx = 2
 			end,
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(200, 40):diffuse(Color.White)
+					self:zoomto(180, 36):diffuse(Color.White)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(joined_active_index == self:GetParent().idx and Color.Yellow or Color.White)
@@ -2563,13 +2624,13 @@ local af = Def.ActorFrame{
 			},
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(198, 38):diffuse(Color.Black)
+					self:zoomto(178, 34):diffuse(Color.Black)
 				end
 			},
 			LoadFont("Common Bold")..{
 					Text="Choisir musique",
 				InitCommand=function(self)
-					self:zoom(0.5)
+					self:zoom(0.38)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
@@ -2580,13 +2641,13 @@ local af = Def.ActorFrame{
 			Def.ActorFrame{
 				Name="ReloadSongsButton",
 				InitCommand=function(self)
-					self:xy(180, 120)
+					self:xy(180, 138)
 					self.idx = 3
 					self:visible(false)
 				end,
 				Def.Quad{
 					InitCommand=function(self)
-						self:zoomto(200, 40):diffuse(Color.White)
+						self:zoomto(180, 36):diffuse(Color.White)
 					end,
 					HoverCommand=function(self)
 						self:diffuse(joined_active_index == self:GetParent().idx and Color.Yellow or Color.White)
@@ -2594,14 +2655,14 @@ local af = Def.ActorFrame{
 				},
 				Def.Quad{
 					InitCommand=function(self)
-						self:zoomto(198, 38):diffuse(Color.Black)
+						self:zoomto(178, 34):diffuse(Color.Black)
 					end
 				},
 				LoadFont("Common Bold")..{
 					Name="ReloadSongsLabel",
 						Text="Telecharger pack",
 					InitCommand=function(self)
-						self:zoom(0.5)
+						self:zoom(0.36)
 					end,
 					HoverCommand=function(self)
 						self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
@@ -2612,13 +2673,13 @@ local af = Def.ActorFrame{
 			Def.ActorFrame{
 				Name="GlobalOptionsButton",
 				InitCommand=function(self)
-					self:xy(180, 180)
+					self:xy(180, 86)
 					self.idx = 4
 					self:visible(false)
 				end,
 				Def.Quad{
 					InitCommand=function(self)
-						self:zoomto(200, 48):diffuse(Color.White)
+						self:zoomto(180, 42):diffuse(Color.White)
 					end,
 					HoverCommand=function(self)
 						self:diffuse(joined_active_index == self:GetParent().idx and Color.Yellow or Color.White)
@@ -2626,14 +2687,14 @@ local af = Def.ActorFrame{
 				},
 				Def.Quad{
 					InitCommand=function(self)
-						self:zoomto(198, 46):diffuse(Color.Black)
+						self:zoomto(178, 40):diffuse(Color.Black)
 					end
 				},
 				LoadFont("Common Bold")..{
 					Name="GlobalOptionsLabel",
 					Text="Options globales",
 					InitCommand=function(self)
-						self:zoom(0.42)
+						self:zoom(0.32)
 					end,
 					HoverCommand=function(self)
 						self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
@@ -2644,13 +2705,13 @@ local af = Def.ActorFrame{
 			Def.ActorFrame{
 				Name="StartRoomButton",
 				InitCommand=function(self)
-					self:xy(180, 240)
+					self:xy(180, 190)
 					self.idx = 5
 					self:visible(false)
 				end,
 				Def.Quad{
 					InitCommand=function(self)
-						self:zoomto(200, 40):diffuse(Color.White)
+						self:zoomto(180, 36):diffuse(Color.White)
 					end,
 					HoverCommand=function(self)
 						self:diffuse(joined_active_index == self:GetParent().idx and Color.Yellow or Color.White)
@@ -2658,13 +2719,13 @@ local af = Def.ActorFrame{
 				},
 				Def.Quad{
 					InitCommand=function(self)
-						self:zoomto(198, 38):diffuse(Color.Black)
+						self:zoomto(178, 34):diffuse(Color.Black)
 					end
 				},
 				LoadFont("Common Bold")..{
 						Text="START",
 					InitCommand=function(self)
-						self:zoom(0.5)
+						self:zoom(0.40)
 					end,
 					HoverCommand=function(self)
 						self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)

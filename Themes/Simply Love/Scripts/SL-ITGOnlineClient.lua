@@ -3985,6 +3985,7 @@ function ITGOnline:MarkReturnedToLobby(callback)
 	if self:PlayStateKeyIsValid(key) then
 		self.onlineGameplayReturnedInFlightKey = key
 	end
+	self:ApplyLocalPlayState("returned_to_lobby", "returned_to_lobby_local")
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/play/returned-to-lobby", {}, function(ok, decoded, response)
 		if self.onlineGameplayReturnedInFlightKey == key then
 			self.onlineGameplayReturnedInFlightKey = ""

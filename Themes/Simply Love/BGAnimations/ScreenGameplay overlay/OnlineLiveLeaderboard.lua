@@ -96,7 +96,7 @@ local function update_rows(frame, rows)
 		if row and data then
 			local label = row:GetChild("Label")
 			local status = row:GetChild("Status")
-			local statusText = data.failed and "F" or (data.exited and "X" or (data.finished and "OK" or ""))
+			local statusText = data.exited and "X" or (data.failed and "F" or (data.finished and "OK" or ""))
 			local rowColor = color("#ffffff")
 			if data.failed or data.exited then
 				rowColor = color("#ff3b30")
