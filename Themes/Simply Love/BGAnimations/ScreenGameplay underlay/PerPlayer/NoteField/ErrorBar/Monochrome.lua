@@ -68,7 +68,7 @@ local function DisplayTick(self, params)
 
         -- Check if we need to adjust the color for the white fantastic window.
         if mods.ShowFaPlusWindow and ToEnumShortString(params.TapNoteScore) == "W1" and
-            not IsW0Judgment(params, player) then
+            not IsW010Judgment(params, player) and (mods.SmallerWhite or not IsW0Judgment(params, player)) then
             color = SL.JudgmentColors["FA+"][2]
         end
 
@@ -183,7 +183,7 @@ for i = 1, #enabledTimingWindows do
     
     if mods.ShowFaPlusWindow and wi == 1 then
         -- Split the Fantastic window
-        timing[#timing + 1] = GetTimingWindow(1, "FA+")
+        timing[#timing + 1] = GetTimingWindow(1, "FA+", mods.SmallerWhite)
         timing[#timing + 1] = GetTimingWindow(2, "FA+")
     else
         timing[#timing + 1] = GetTimingWindow(wi)

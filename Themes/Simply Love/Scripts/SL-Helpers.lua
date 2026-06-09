@@ -50,7 +50,13 @@ end
 -- -----------------------------------------------------------------------
 -- get timing window in milliseconds
 
-GetTimingWindow = function(n, mode)
+GetTimingWindow = function(n, mode, useHardExInnerWindow)
+	if n == 1 and mode == "FA+" and useHardExInnerWindow then
+		local prefs = SL.Preferences["FA+"]
+		local scale = PREFSMAN:GetPreference("TimingWindowScale")
+		return 0.0085 * scale + (prefs and prefs.TimingWindowAdd or 0)
+	end
+
 	local prefs = SL.Preferences[mode or SL.Global.GameMode]
 	local scale = PREFSMAN:GetPreference("TimingWindowScale")
 	return prefs["TimingWindowSecondsW"..n] * scale + prefs.TimingWindowAdd
@@ -621,14 +627,7 @@ IsW010Judgment = function(params, player)
 	if params.TapNoteScore ~= "TapNoteScore_W1" then return false end
 	if SL.Global.GameMode ~= "ITG" then return false end
 
-	local prefs = SL.Preferences["FA+"]
-	local scale = PREFSMAN:GetPreference("TimingWindowScale")
-	local timingWindowAdd = prefs and prefs["TimingWindowAdd"] or 0
-	-- ArrowCloud uses 8.5ms plus the ITG/FA+ 1.5ms TimingWindowAdd, for
-	-- the documented effective 10ms HardEX inner Fantastic window.
-	local W010 = 0.0085 * scale + timingWindowAdd
-
-	return math.abs(params.TapNoteOffset) <= W010
+	return math.abs(params.TapNoteOffset) <= GetTimingWindow(1, "FA+", true)
 end
 
 -- -----------------------------------------------------------------------

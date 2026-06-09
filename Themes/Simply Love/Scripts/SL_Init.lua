@@ -56,6 +56,7 @@ local PlayerDefaults = {
 				ShowExScore = false,
 				ShowHardEXScore = false,
 				ShowFaPlusPane = true,
+				SmallerWhite = false,
 
 				NoteFieldOffsetX = 0,
 				NoteFieldOffsetY = 0,

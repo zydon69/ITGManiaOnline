@@ -228,7 +228,7 @@ SL_CustomPrefs.Get = function()
 		-- Enable/Disable Certain Screens
 		AllowScreenSelectProfile =
 		{
-			Default = false,
+			Default = true,
 			Choices = { THEME:GetString("ThemePrefs","Yes"), THEME:GetString("ThemePrefs", "No") },
 			Values  = { true, false }
 		},

@@ -138,12 +138,15 @@ for index, window in ipairs(TNS.Types) do
 			-- Check the top window case for ShowFaPlusWindow.
 			if ShowFaPlusWindow and ToEnumShortString(params.TapNoteScore) == "W1" then
 				local is_W0 = IsW0Judgment(params, player)
-				if is_W0 and window == "W0" then
+				local is_W010 = IsW010Judgment(params, player)
+				local isTopSplit = SL[pn].ActiveModifiers.SmallerWhite and is_W010 or is_W0
+
+				if isTopSplit and window == "W0" then
 					TNS.Judgments[window] = TNS.Judgments[window] + 1
 					incremented = true
 				end
 
-				if not is_W0 and window == "W1" then
+				if not isTopSplit and window == "W1" then
 					TNS.Judgments[window] = TNS.Judgments[window] + 1
 					incremented = true
 				end

@@ -971,6 +971,7 @@ CreateGrooveStatsPlayerOptionKeys = function()
 		["ShowExScore"] = CreateKey("boolean"),
 		["ShowHardEXScore"] = CreateKey("boolean"),
 		["ShowFaPlusPane"] = CreateKey("boolean"),
+		["SmallerWhite"] = CreateKey("boolean"),
 		["NoteFieldOffsetX"] = CreateKey("number"),
 		["NoteFieldOffsetY"] = CreateKey("number"),
 

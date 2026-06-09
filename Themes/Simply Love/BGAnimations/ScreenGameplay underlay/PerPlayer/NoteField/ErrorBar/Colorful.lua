@@ -35,7 +35,7 @@ local function DisplayTick(self, params)
         local window = score
         local isTopWindow = score == "W1"
         if mods.ShowFaPlusWindow then
-            if IsW0Judgment(params, player) then
+            if IsW010Judgment(params, player) or (not mods.SmallerWhite and IsW0Judgment(params, player)) then
                 window = "W0"
             else
                 isTopWindow = false
@@ -141,7 +141,7 @@ for i = 1, #enabledTimingWindows do
     
     if mods.ShowFaPlusWindow and wi == 1 then
         -- Split the Fantastic window
-        windows.timing[#windows.timing + 1] = GetTimingWindow(1, "FA+")
+        windows.timing[#windows.timing + 1] = GetTimingWindow(1, "FA+", mods.SmallerWhite)
         windows.color[#windows.color + 1] = SL.JudgmentColors["FA+"][1]
 
         windows.timing[#windows.timing + 1] = GetTimingWindow(2, "FA+")
