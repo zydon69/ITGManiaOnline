@@ -148,6 +148,15 @@ void ScreenOptionsMaster::HandleScreenMessage(const ScreenMessage SM) {
       PREFSMAN->SavePrefsToDisk();
     }
 
+    if (m_iChangeMask & OPT_APPLY_LOGGING) {
+      LOG->SetShowLogOutput(PREFSMAN->m_bShowLogOutput);
+      LOG->SetLogToDisk(PREFSMAN->m_bLogToDisk);
+      LOG->SetInfoToDisk(PREFSMAN->m_bLogToDisk);
+      LOG->SetUserLogToDisk(PREFSMAN->m_bLogToDisk);
+      LOG->SetFlushing(PREFSMAN->m_bForceLogFlush);
+      Checkpoints::LogCheckpoints(PREFSMAN->m_bLogCheckpoints);
+    }
+
     if (m_iChangeMask & OPT_CHANGE_GAME) {
       GameLoop::ChangeGame(PREFSMAN->GetCurrentGame());
     }

@@ -63,7 +63,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstdlib>
 #include <map>
 #include <set>
 #include <string>
@@ -290,11 +289,7 @@ std::vector<Actor*> g_vPreparedBackgrounds;
 void LogResourceSnapshotForScreenTransition(
     const std::string& action, const std::string& previous,
     const std::string& next) {
-  static const bool shouldTraceResourceSnapshots = []() {
-    const char* value = std::getenv("ITG_TRACE_RESOURCE_SNAPSHOTS");
-    return value != nullptr && std::string(value) == "1";
-  }();
-  if (!shouldTraceResourceSnapshots) {
+  if (!LogResourceSnapshotDiagnosticsEnabled()) {
     return;
   }
 

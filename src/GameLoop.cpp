@@ -373,10 +373,7 @@ void GameLoop::UpdateAllButDraw(bool bRunningFromVBLANK) {
     LogLoopPerfSnapshot("incoming_delta_hitch", g_LastLoopPerf, true);
   }
 
-  // Use a static boolean to check the preference once per game launch.
-  // This is a rarely used debug feature, so we try to skip it if possible.
-  static bool bLogSkips = PREFSMAN->m_bLogSkips;
-  if (bLogSkips) {
+  if (PREFSMAN->m_bLogSkips) {
     CheckGameLoopTimerSkips(fDeltaTime);
   }
 

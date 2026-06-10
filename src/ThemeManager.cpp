@@ -17,6 +17,7 @@
 #include "IniFile.h"
 #include "LocalizedString.h"
 #include "LuaManager.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "PrefsManager.h"
 #include "Profile.h"
@@ -528,7 +529,9 @@ void ThemeManager::RunLuaScripts(const std::string& sMask, bool bUseThemeDir) {
     // load Lua files
     for (unsigned i = 0; i < asElementPaths.size(); ++i) {
       const std::string& sPath = asElementPaths[i];
-      LOG->Trace("Loading \"%s\" ...", sPath.c_str());
+      if (LogThemeLuaDiagnosticsEnabled()) {
+        LOG->Trace("THEME_TRACE: lua_script_load path='%s'", sPath.c_str());
+      }
       LuaHelpers::RunScriptFile(sPath);
     }
   } while (iter != g_vThemes.begin());

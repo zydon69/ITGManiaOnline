@@ -318,6 +318,41 @@ OperatorMenuOptionRows.VideoRenderer = function()
 	}
 end
 
+-- -----------------------------------------------------------------------
+-- Clears the entire contents of log.txt so logging starts from a clean base.
+-- "Reset Now" calls the engine's lua.ResetLog() when leaving the screen.
+
+OperatorMenuOptionRows.ResetLogs = function()
+	return {
+		Name = "ResetLogs",
+		Choices = {
+			THEME:GetString("ScreenLogOptions", "Keep"),
+			THEME:GetString("ScreenLogOptions", "ResetNow"),
+		},
+		LayoutType = "ShowAllInRow",
+		SelectType = "SelectOne",
+		OneChoiceForAllPlayers = true,
+		ExportOnChange = false,
+		LoadSelections = function(self, list, pn)
+			-- Always default to "Keep" so clearing the log stays a deliberate action.
+			list[1] = true
+		end,
+		SaveSelections = function(self, list, pn)
+			-- list[2] == "Reset Now": truncate log.txt and confirm on screen.
+			if list[2] then
+				-- ResetLog() is registered by the engine in the "lua" namespace
+				-- (alongside Trace/Warn/Flush) and also exposed globally. Resolve
+				-- both ways and guard in case an older engine lacks it.
+				local reset = ResetLog or (lua and lua.ResetLog)
+				if reset then
+					reset()
+				end
+				SCREENMAN:SystemMessage( THEME:GetString("ScreenLogOptions", "LogsReset") )
+			end
+		end,
+	}
+end
+
 OperatorMenuOptionRows.SoundDriver = function()
 
 	local choices = { "WASAPI", "DirectSound-sw", "WaveOut", "WDMKS" }

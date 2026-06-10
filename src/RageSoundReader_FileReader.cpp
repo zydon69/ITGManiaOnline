@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "ActorUtil.h"
+#include "PerfDiagnostics.h"
 #include "RageFile.h"
 #include "RageLog.h"
 #include "RageSoundReader_MP3.h"
@@ -44,7 +45,11 @@ RageSoundReader_FileReader* RageSoundReader_FileReader::TryOpenFile(
   std::string err = Sample->GetError();
   delete Sample;
 
-  LOG->Trace("Format %s failed: %s", format.c_str(), err.c_str());
+  if (LogContentLoadDiagnosticsEnabled()) {
+    LOG->Trace(
+        "CONTENT_TRACE: sound_reader_format_failed format=%s error='%s'",
+        format.c_str(), err.c_str());
+  }
 
   /*
    * The file failed to open, or failed to read.  This indicates a problem that

@@ -153,6 +153,30 @@ void RageLog::SetLogToDisk(bool b) {
   }
 }
 
+void RageLog::ResetFile() {
+  // Nothing on disk to reset when file logging is disabled.
+  if (!m_bLogToDisk) {
+    return;
+  }
+
+  {
+    LockMut(*g_Mutex);
+    if (g_fileLog->IsOpen()) {
+      g_fileLog->Close();
+    }
+    // Reopening in WRITE mode truncates the existing file to empty.
+    if (!g_fileLog->Open(LOG_PATH, RageFile::WRITE | RageFile::STREAMED)) {
+      fprintf(
+          stderr, "Couldn't reset %s: %s\n", LOG_PATH,
+          g_fileLog->GetError().c_str());
+      return;
+    }
+  }
+
+  // First line of the fresh log, written after releasing the lock above.
+  Trace("log.txt was reset from the Log Options screen.");
+}
+
 void RageLog::SetInfoToDisk(bool b) {
   if (m_bInfoToDisk == b) {
     return;

@@ -171,7 +171,7 @@ static void EnsureUnderrunTraceInitialized() {
 static bool IsUnderrunTraceEnabled() {
   EnsureUnderrunTraceInitialized();
   return g_bUnderrunTraceEnabled.load(std::memory_order_acquire) ||
-         PerfDiagnosticsEnabled();
+         LogAudioUnderrunDiagnosticsEnabled();
 }
 
 RageSoundDriver::Sound::Sound() {

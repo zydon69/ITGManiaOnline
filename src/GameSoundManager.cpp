@@ -22,6 +22,7 @@
 #include "NoteTypes.h"
 #include "NotesLoaderSM.h"
 #include "NotesLoaderSSC.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "Preference.h"
 #include "PrefsManager.h"
@@ -979,7 +980,11 @@ void GameSoundManager::Update(float fDeltaTime) {
   static uint64_t sLastEvictedPools = 0;
   static uint64_t sLastInvalidLoads = 0;
 
-  g_PlayOnceStatsLogTimer += fDeltaTime;
+  if (LogPlayOnceDiagnosticsEnabled()) {
+    g_PlayOnceStatsLogTimer += fDeltaTime;
+  } else {
+    g_PlayOnceStatsLogTimer = 0.0f;
+  }
   if (g_PlayOnceStatsLogTimer >= 10.0f) {
     g_PlayOnceStatsLogTimer = 0.0f;
     size_t poolCount = 0;
@@ -1411,7 +1416,7 @@ bool GameSoundManager::RunPlayOnceRuntimeSmokeTest(
 void GameSoundManager::LogPlayOnceDiagnostics(const std::string& reason) {
   {
     LockMutex playOnceLock(g_PlayOnceDataMutex);
-    if (!g_bPlayOnceDebugToolsEnabled) {
+    if (!g_bPlayOnceDebugToolsEnabled && !LogPlayOnceDiagnosticsEnabled()) {
       if (!g_bLoggedPlayOnceDebugToolsDenied) {
         LOG->Warn(
             "PlayOnce diagnostics are disabled (enable via --playonce-stress "

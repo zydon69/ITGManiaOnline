@@ -16,6 +16,7 @@
 #include "GameConstantsAndTypes.h"
 #include "ImageCache.h"
 #include "MsdFile.h"
+#include "PerfDiagnostics.h"
 #include "PlayerOptions.h"
 #include "PrefsManager.h"
 #include "RadarValues.h"
@@ -256,12 +257,16 @@ bool CourseLoaderCRS::LoadFromCRSFile(const std::string& _sPath, Course& out) {
 
   if (bUseCache) {
     std::string sCacheFile = out.GetCacheFilePath();
-    LOG->Trace(
-        "CourseLoaderCRS::LoadFromCRSFile(\"%s\") (\"%s\")", sPath.c_str(),
-        sCacheFile.c_str());
+    if (LogContentLoadDiagnosticsEnabled()) {
+      LOG->Trace(
+          "CONTENT_TRACE: course_load path='%s' cache='%s'", sPath.c_str(),
+          sCacheFile.c_str());
+    }
     sPath = sCacheFile;
   } else {
-    LOG->Trace("CourseLoaderCRS::LoadFromCRSFile(\"%s\")", sPath.c_str());
+    if (LogContentLoadDiagnosticsEnabled()) {
+      LOG->Trace("CONTENT_TRACE: course_load path='%s' cache=none", sPath.c_str());
+    }
   }
 
   MsdFile msd;

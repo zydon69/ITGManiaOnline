@@ -4,6 +4,7 @@
 #include "GameInput.h"
 #include "InputMapper.h"
 #include "LuaManager.h"
+#include "PerfDiagnostics.h"
 #include "Preference.h"
 #include "RageInput.h"
 #include "RageInputDevice.h"
@@ -274,6 +275,19 @@ void InputFilter::CheckButtonChange(
 }
 
 void InputFilter::ReportButtonChange(const DeviceInput& di, InputEventType t) {
+  if (LogInputDiagnosticsEnabled()) {
+    GameInput gi;
+    const bool mapped = INPUTMAPPER != nullptr &&
+                        INPUTMAPPER->DeviceToGame(di, gi);
+    LOG->Trace(
+        "INPUT_TRACE: type=%s device=%s level=%.3f mapped=%d game=%s "
+        "buttons_held=%zu",
+        InputEventTypeToString(t).c_str(), di.ToString().c_str(), di.level,
+        mapped ? 1 : 0,
+        mapped ? gi.ToString(INPUTMAPPER->GetInputScheme()).c_str() : "none",
+        g_CurrentState.size());
+  }
+
   queue.push_back(InputEvent());
   InputEvent& ie = queue.back();
   ie.type = t;

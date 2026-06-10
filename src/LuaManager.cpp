@@ -1071,6 +1071,11 @@ static int Flush(lua_State* L) {
   LOG->Flush();
   return 0;
 }
+static int ResetLog(lua_State* L) {
+  // Truncate log.txt so the user can start from a clean base.
+  LOG->ResetFile();
+  return 0;
+}
 static int CheckType(lua_State* L) {
   std::string sType = SArg(1);
   bool bRet = LuaBinding::CheckLuaObjectType(L, 2, sType.c_str());
@@ -1150,6 +1155,7 @@ const luaL_Reg luaTable[] = {
     LIST_METHOD(Trace),
     LIST_METHOD(Warn),
     LIST_METHOD(Flush),
+    LIST_METHOD(ResetLog),
     LIST_METHOD(CheckType),
     LIST_METHOD(ReadFile),
     LIST_METHOD(RunWithThreadVariables),

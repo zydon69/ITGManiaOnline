@@ -14,6 +14,7 @@
 #include "MsdFile.h"  // No JSON here.
 #include "NoteTypes.h"
 #include "NotesLoaderSM.h"  // For programming shortcuts.
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "RadarValues.h"
 #include "RageFileManager.h"
@@ -888,7 +889,9 @@ void SSCLoader::ProcessScrolls(TimingData& out, const std::string sParam) {
 
 bool SSCLoader::LoadNoteDataFromSimfile(
     const std::string& cachePath, Steps& out) {
-  LOG->Trace("Loading notes from %s", cachePath.c_str());
+  if (LogContentLoadDiagnosticsEnabled()) {
+    LOG->Trace("CONTENT_TRACE: notes_load path='%s'", cachePath.c_str());
+  }
 
   MsdFile msd;
   if (!msd.ReadFile(cachePath, true)) {
@@ -990,7 +993,11 @@ bool SSCLoader::LoadNoteDataFromSimfile(
 
 bool SSCLoader::LoadFromSimfile(
     const std::string& sPath, Song& out, bool bFromCache) {
-  // LOG->Trace( "Song::LoadFromSSCFile(%s)", sPath.c_str() );
+  if (LogContentLoadDiagnosticsEnabled()) {
+    LOG->Trace(
+        "CONTENT_TRACE: ssc_load path='%s' cache=%d", sPath.c_str(),
+        bFromCache ? 1 : 0);
+  }
 
   MsdFile msd;
   if (!msd.ReadFile(sPath, true)) {

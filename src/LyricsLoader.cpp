@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "LuaManager.h"
+#include "PerfDiagnostics.h"
 #include "RageFile.h"
 #include "RageLog.h"
 #include "RageTypes.h"
@@ -27,7 +28,9 @@ static int CompareLyricSegments(
 }
 
 bool LyricsLoader::LoadFromLRCFile(const std::string& sPath, Song& out) {
-  LOG->Trace("LyricsLoader::LoadFromLRCFile(%s)", sPath.c_str());
+  if (LogContentLoadDiagnosticsEnabled()) {
+    LOG->Trace("CONTENT_TRACE: lyrics_load path='%s'", sPath.c_str());
+  }
 
   RageFile input;
   if (!input.Open(sPath)) {
@@ -82,9 +85,11 @@ bool LyricsLoader::LoadFromLRCFile(const std::string& sPath, Song& out) {
       // According to the Dance With Intensity readme, one can set up to
       // ten colors in a line and access them via "{cX}", where X is 0-9.
       if (result != 3) {
-        LOG->Trace(
-            "The color value '%s' in '%s' is invalid.", sValueData.c_str(),
-            sPath.c_str());
+        if (LogContentLoadDiagnosticsEnabled()) {
+          LOG->Trace(
+              "CONTENT_TRACE: lyrics_invalid_color path='%s' value='%s'",
+              sPath.c_str(), sValueData.c_str());
+        }
         continue;
       }
 
@@ -115,7 +120,11 @@ bool LyricsLoader::LoadFromLRCFile(const std::string& sPath, Song& out) {
   sort(
       out.m_LyricSegments.begin(), out.m_LyricSegments.end(),
       CompareLyricSegments);
-  LOG->Trace("LyricsLoader::LoadFromLRCFile done");
+  if (LogContentLoadDiagnosticsEnabled()) {
+    LOG->Trace(
+        "CONTENT_TRACE: lyrics_load_done path='%s' segments=%zu",
+        sPath.c_str(), out.m_LyricSegments.size());
+  }
 
   return true;
 }

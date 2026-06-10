@@ -10,6 +10,7 @@
 #include "MsdFile.h"
 #include "NoteTypes.h"
 #include "NotesLoaderSM.h"  // may need this.
+#include "PerfDiagnostics.h"
 #include "RageLog.h"
 #include "RageUtil.h"
 #include "Song.h"
@@ -154,7 +155,11 @@ void SMALoader::ProcessSpeeds(
 
 bool SMALoader::LoadFromSimfile(
     const std::string& sPath, Song& out, bool bFromCache) {
-  LOG->Trace("Song::LoadFromSMAFile(%s)", sPath.c_str());
+  if (LogContentLoadDiagnosticsEnabled()) {
+    LOG->Trace(
+        "CONTENT_TRACE: sma_load path='%s' cache=%d", sPath.c_str(),
+        bFromCache ? 1 : 0);
+  }
 
   MsdFile msd;
   if (!msd.ReadFile(sPath, true))  // unescape

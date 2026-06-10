@@ -1012,6 +1012,27 @@ static void InitializeConfOptions() {
   ADD(ConfOption("ShowStats", MovePref<bool>, "Off", "On"));
   ADD(ConfOption("ShowBanners", MovePref<bool>, "Off", "On"));
 
+  // Log and diagnostic options
+  ADD(ConfOption("LogToDisk", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
+  ADD(ConfOption("ShowLogOutput", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
+  ADD(ConfOption("ForceLogFlush", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
+  ADD(ConfOption("LogSkips", MovePref<bool>, "Off", "On"));
+  ADD(ConfOption("LogCheckpoints", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
+  ADD(ConfOption("PerfDiagnostics", MovePref<bool>, "Off", "On"));
+  ADD(ConfOption("LogAudioUnderrunDiagnostics", MovePref<bool>, "Off", "On"));
+  ADD(ConfOption("LogTextureUploadDiagnostics", MovePref<bool>, "Off", "On"));
+  ADD(ConfOption("LogResourceSnapshotDiagnostics", MovePref<bool>, "Off", "On"));
+  ADD(ConfOption("LogPlayOnceDiagnostics", MovePref<bool>, "Off", "On"));
+  ADD(ConfOption("LogNoteSkinDiagnostics", MovePref<bool>, "Off", "On"));
+  ADD(ConfOption("LogInputDiagnostics", MovePref<bool>, "Off", "On"));
+  ADD(ConfOption("LogMemoryCardDiagnostics", MovePref<bool>, "Off", "On"));
+  ADD(ConfOption("LogContentLoadDiagnostics", MovePref<bool>, "Off", "On"));
+  ADD(ConfOption("LogThemeLuaDiagnostics", MovePref<bool>, "Off", "On"));
+
   // Sound options
   ADD(ConfOption(
       "AttractSoundFrequency", MovePref<AttractSoundFrequency>, "Never",
@@ -1081,7 +1102,8 @@ void ConfOption::MakeOptionsList(std::vector<std::string>& out) const {
 static const char* OptEffectNames[] = {
     "SavePreferences",  "ApplyGraphics", "ApplyTheme",
     "ChangeGame",       "ApplySound",    "ApplySong",
-    "ApplyAspectRatio", "ApplyProfiles", "ReloadSongs"};
+    "ApplyAspectRatio", "ApplyProfiles", "ReloadSongs",
+    "ApplyLogging"};
 XToString(OptEffect);
 StringToX(OptEffect);
 LuaXType(OptEffect);

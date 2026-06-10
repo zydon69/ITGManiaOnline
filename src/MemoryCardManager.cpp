@@ -9,6 +9,7 @@
 #include "GameConstantsAndTypes.h"
 #include "LuaManager.h"
 #include "MessageManager.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "Preference.h"
 #include "RageFileDriver.h"
@@ -360,22 +361,29 @@ void MemoryCardManager::UpdateAssignments() {
       if (it != m_vStorageDevices.end()) {
         /* The player has a card, and it's still plugged in. Update any
          * changed state, such as m_State. */
-        LOG->Trace(
-            "Player %d already has a card: '%s'", p + 1,
-            assigned_device.sOsMountDir.c_str());
+        if (LogMemoryCardDiagnosticsEnabled()) {
+          LOG->Trace(
+              "MEMCARD_TRACE: player=%d already_has_card path='%s'", p + 1,
+              assigned_device.sOsMountDir.c_str());
+        }
         assigned_device = *it;
         continue;
       }
 
       // The assigned card has been removed; clear it and re-search.
-      LOG->Trace(
-          "Player %i: disconnected bus %d port %d device %d path %s", p + 1,
-          assigned_device.iBus, assigned_device.iPort, assigned_device.iLevel,
-          assigned_device.sOsMountDir.c_str());
+      if (LogMemoryCardDiagnosticsEnabled()) {
+        LOG->Trace(
+            "MEMCARD_TRACE: player=%i disconnected bus=%d port=%d level=%d "
+            "path='%s'",
+            p + 1, assigned_device.iBus, assigned_device.iPort,
+            assigned_device.iLevel, assigned_device.sOsMountDir.c_str());
+      }
       assigned_device.MakeBlank();
     }
 
-    LOG->Trace("Looking for a card for Player %d", p + 1);
+    if (LogMemoryCardDiagnosticsEnabled()) {
+      LOG->Trace("MEMCARD_TRACE: looking_for_card player=%d", p + 1);
+    }
 
     for (std::vector<UsbStorageDevice>::iterator d = vUnassignedDevices.begin();
          d != vUnassignedDevices.end(); ++d) {
@@ -400,7 +408,11 @@ void MemoryCardManager::UpdateAssignments() {
         continue;  // not a match
       }
 
-      LOG->Trace("Player %i: matched %s", p + 1, d->sDevice.c_str());
+      if (LogMemoryCardDiagnosticsEnabled()) {
+        LOG->Trace(
+            "MEMCARD_TRACE: player=%i matched device='%s' mount='%s'", p + 1,
+            d->sDevice.c_str(), d->sOsMountDir.c_str());
+      }
 
       assigned_device = *d;  // save a copy
       vUnassignedDevices.erase(
@@ -528,12 +540,15 @@ void MemoryCardManager::WaitForCheckingToComplete() {
      * waiting for a heartbeat, give up. */
     if (!bLogged) {
       bLogged = true;
-      LOG->Trace(
-          "One or more cards are in STATE_CHECKING; waiting for them ...");
+      if (LogMemoryCardDiagnosticsEnabled()) {
+        LOG->Trace("MEMCARD_TRACE: waiting_for_state_checking");
+      }
     }
 
     if (!g_pWorker->WaitForOneHeartbeat()) {
-      LOG->Trace("STATE_CHECKING wait timed out");
+      if (LogMemoryCardDiagnosticsEnabled()) {
+        LOG->Trace("MEMCARD_TRACE: state_checking_wait_timed_out");
+      }
       break;
     }
   }
@@ -577,7 +592,9 @@ void MemoryCardManager::UnlockCard(PlayerNumber pn) {
 
 // Called just before reading or writing to the memory card. Should block.
 bool MemoryCardManager::MountCard(PlayerNumber pn, int iTimeout) {
-  LOG->Trace("MemoryCardManager::MountCard(%i)", pn);
+  if (LogMemoryCardDiagnosticsEnabled()) {
+    LOG->Trace("MEMCARD_TRACE: mount player=%i timeout=%d", pn, iTimeout);
+  }
   if (GetCardState(pn) != MemoryCardState_Ready) {
     return false;
   }
@@ -593,7 +610,9 @@ bool MemoryCardManager::MountCard(PlayerNumber pn, int iTimeout) {
   }
 
   if (!g_pWorker->Mount(&m_Device[pn])) {
-    LOG->Trace("MemoryCardManager::MountCard: mount failed");
+    if (LogMemoryCardDiagnosticsEnabled()) {
+      LOG->Trace("MEMCARD_TRACE: mount_failed player=%i", pn);
+    }
     if (bStartingMemoryCardAccess) {
       this->UnPauseMountingThread();
     }
@@ -636,8 +655,10 @@ bool MemoryCardManager::MountCard(
 /* Called when finished accessing a memory card.  If writes have been performed,
  * will block until flushed. */
 void MemoryCardManager::UnmountCard(PlayerNumber pn) {
-  LOG->Trace(
-      "MemoryCardManager::UnmountCard(%i) (mounted: %i)", pn, m_bMounted[pn]);
+  if (LogMemoryCardDiagnosticsEnabled()) {
+    LOG->Trace(
+        "MEMCARD_TRACE: unmount player=%i mounted=%i", pn, m_bMounted[pn]);
+  }
   if (m_Device[pn].IsBlank()) {
     return;
   }
@@ -686,7 +707,9 @@ std::string MemoryCardManager::GetName(PlayerNumber pn) const {
 }
 
 void MemoryCardManager::PauseMountingThread(int iTimeout) {
-  LOG->Trace("MemoryCardManager::PauseMountingThread");
+  if (LogMemoryCardDiagnosticsEnabled()) {
+    LOG->Trace("MEMCARD_TRACE: pause_mounting_thread timeout=%d", iTimeout);
+  }
 
   g_pWorker->SetMountThreadState(ThreadedMemoryCardWorker::paused);
 
@@ -696,7 +719,9 @@ void MemoryCardManager::PauseMountingThread(int iTimeout) {
 }
 
 void MemoryCardManager::UnPauseMountingThread() {
-  LOG->Trace("MemoryCardManager::UnPauseMountingThread");
+  if (LogMemoryCardDiagnosticsEnabled()) {
+    LOG->Trace("MEMCARD_TRACE: unpause_mounting_thread");
+  }
 
   g_pWorker->SetMountThreadState(ThreadedMemoryCardWorker::detect_and_mount);
 

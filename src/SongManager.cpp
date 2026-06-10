@@ -34,6 +34,7 @@
 #include "NotesLoaderDWI.h"
 #include "NotesLoaderSM.h"
 #include "NotesLoaderSSC.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "Preference.h"
 #include "PrefsManager.h"
@@ -475,7 +476,9 @@ void SongManager::LoadSongDir(
   if (threadCount <= 0) {
     threadCount = 1;
   }
-  LOG->Trace("Loading songs using %d threads", threadCount);
+  if (LogContentLoadDiagnosticsEnabled()) {
+    LOG->Trace("CONTENT_TRACE: song_load_threads count=%d", threadCount);
+  }
 
   // We need to keep track of previously loaded groups so we don't delete them
   // if we're only loading additions.
@@ -486,9 +489,12 @@ void SongManager::LoadSongDir(
   for (const auto& [sGroupDirName, arraySongDirs] :
        mapGroupSongDirs)  // foreach dir in /Songs/
   {
-    LOG->Trace(
-        "Attempting to load %i songs from \"%s\"", int(arraySongDirs.size()),
-        (sDir + sGroupDirName).c_str());
+    if (LogContentLoadDiagnosticsEnabled()) {
+      LOG->Trace(
+          "CONTENT_TRACE: group_scan group='%s' path='%s' song_dirs=%i",
+          sGroupDirName.c_str(), (sDir + sGroupDirName).c_str(),
+          int(arraySongDirs.size()));
+    }
 
     for (unsigned j = 0; j < arraySongDirs.size(); ++j)  // for each song dir
     {
@@ -527,9 +533,12 @@ void SongManager::LoadSongDir(
   std::unique_ptr<SongLoadResult[]> loadedSongs(
       new SongLoadResult[songsToLoad.size()]);
 
-  LOG->Trace(
-      "Loading all %d songs across %d groups across %d threads",
-      (int)(songsToLoad.size()), (int)(mapGroupSongDirs.size()), threadCount);
+  if (LogContentLoadDiagnosticsEnabled()) {
+    LOG->Trace(
+        "CONTENT_TRACE: song_load_batch songs=%d groups=%d threads=%d",
+        (int)(songsToLoad.size()), (int)(mapGroupSongDirs.size()),
+        threadCount);
+  }
 
   // Create the pool of threads that will load songs.
   std::vector<std::thread> threads{};
@@ -549,8 +558,11 @@ void SongManager::LoadSongDir(
 
       SongToLoad& songToLoad = songsToLoad[songToLoadIndex];
 
-      // Is the LOG framework thread safe ?
-      LOG->Trace("Loading %s", songToLoad.sSongDirName.c_str());
+      if (LogContentLoadDiagnosticsEnabled()) {
+        LOG->Trace(
+            "CONTENT_TRACE: song_load path='%s'",
+            songToLoad.sSongDirName.c_str());
+      }
 
       Song* pNewSong = new Song;
       if (!pNewSong->LoadFromSongDir(songToLoad.sSongDirName)) {

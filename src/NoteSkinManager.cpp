@@ -14,6 +14,7 @@
 #include "GameState.h"
 #include "IniFile.h"
 #include "LuaManager.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "PrefsManager.h"
 #include "RageException.h"
@@ -144,6 +145,10 @@ static bool NoteSkinUsesColorVariable(const NoteSkinData& data) {
 
 static void LogNoteSkinActorTemplateNodeCacheStats(
     const char* reason, bool force) {
+  if (!LogNoteSkinDiagnosticsEnabled()) {
+    return;
+  }
+
   const NoteSkinActorTemplateNodeCacheStats& stats =
       g_ActorTemplateNodeCacheStats;
   if (!force && stats.requests != 1 && stats.requests != 10 &&

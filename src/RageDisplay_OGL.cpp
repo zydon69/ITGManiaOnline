@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <cstdlib>
 #include <map>
 #include <set>
 #include <string>
@@ -662,11 +661,7 @@ static LowLevelWindow* g_pWind;
 static bool g_bInvertY = false;
 
 static bool ShouldTraceGlTextureUploads() {
-  static const bool enabled = []() {
-    const char* value = std::getenv("ITG_TRACE_GL_UPLOADS");
-    return value != nullptr && std::string(value) == "1";
-  }();
-  return enabled;
+  return LogTextureUploadDiagnosticsEnabled();
 }
 
 static void InvalidateObjects();

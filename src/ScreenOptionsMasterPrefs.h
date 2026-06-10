@@ -17,7 +17,8 @@ enum OptEffect {
   OPT_APPLY_ASPECT_RATIO = (1 << 6),
   OPT_APPLY_PROFILES = (1 << 7),
   OPT_RELOAD_SONGS = (1 << 8),
-  NUM_OptEffect = 9,
+  OPT_APPLY_LOGGING = (1 << 9),
+  NUM_OptEffect = 10,
   OptEffect_Invalid = MAX_OPTIONS + 1
 };
 const std::string& OptEffectToString(OptEffect e);
