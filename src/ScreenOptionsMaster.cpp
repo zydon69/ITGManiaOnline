@@ -8,6 +8,7 @@
 #include "GameState.h"
 #include "LuaManager.h"
 #include "OptionRowHandler.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "PrefsManager.h"
 #include "ProfileManager.h"
@@ -149,6 +150,7 @@ void ScreenOptionsMaster::HandleScreenMessage(const ScreenMessage SM) {
     }
 
     if (m_iChangeMask & OPT_APPLY_LOGGING) {
+      RefreshPerfDiagnosticsPreferenceCache();
       LOG->SetShowLogOutput(PREFSMAN->m_bShowLogOutput);
       LOG->SetLogToDisk(PREFSMAN->m_bLogToDisk);
       LOG->SetInfoToDisk(PREFSMAN->m_bLogToDisk);

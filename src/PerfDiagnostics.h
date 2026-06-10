@@ -2,6 +2,7 @@
 #define PERF_DIAGNOSTICS_H
 
 bool PerfDiagnosticsEnabled();
+void RefreshPerfDiagnosticsPreferenceCache();
 bool LogAudioUnderrunDiagnosticsEnabled();
 bool LogTextureUploadDiagnosticsEnabled();
 bool LogResourceSnapshotDiagnosticsEnabled();

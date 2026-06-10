@@ -344,10 +344,11 @@ OperatorMenuOptionRows.ResetLogs = function()
 				-- (alongside Trace/Warn/Flush) and also exposed globally. Resolve
 				-- both ways and guard in case an older engine lacks it.
 				local reset = ResetLog or (lua and lua.ResetLog)
+				local ok = false
 				if reset then
-					reset()
+					ok = reset() and true or false
 				end
-				SCREENMAN:SystemMessage( THEME:GetString("ScreenLogOptions", "LogsReset") )
+				SCREENMAN:SystemMessage( THEME:GetString("ScreenLogOptions", ok and "LogsReset" or "LogsResetFailed") )
 			end
 		end,
 	}

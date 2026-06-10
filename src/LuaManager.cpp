@@ -1073,8 +1073,8 @@ static int Flush(lua_State* L) {
 }
 static int ResetLog(lua_State* L) {
   // Truncate log.txt so the user can start from a clean base.
-  LOG->ResetFile();
-  return 0;
+  LuaHelpers::Push(L, LOG->ResetFile());
+  return 1;
 }
 static int CheckType(lua_State* L) {
   std::string sType = SArg(1);

@@ -72,6 +72,7 @@
 #include "ModelManager.h"
 #include "NetworkManager.h"
 #include "NoteSkinManager.h"
+#include "PerfDiagnostics.h"
 #include "PrefsManager.h"
 #include "Profile.h"
 #include "ProfileManager.h"
@@ -769,6 +770,7 @@ static void WriteLogHeader() {
 }
 
 static void ApplyLogPreferences() {
+  RefreshPerfDiagnosticsPreferenceCache();
   LOG->SetShowLogOutput(PREFSMAN->m_bShowLogOutput);
   LOG->SetLogToDisk(PREFSMAN->m_bLogToDisk);
   LOG->SetInfoToDisk(PREFSMAN->m_bLogToDisk);

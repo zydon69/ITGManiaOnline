@@ -153,14 +153,11 @@ void RageLog::SetLogToDisk(bool b) {
   }
 }
 
-void RageLog::ResetFile() {
-  // Nothing on disk to reset when file logging is disabled.
-  if (!m_bLogToDisk) {
-    return;
-  }
-
+bool RageLog::ResetFile() {
+  bool keepLogOpen = false;
   {
     LockMut(*g_Mutex);
+    keepLogOpen = m_bLogToDisk;
     if (g_fileLog->IsOpen()) {
       g_fileLog->Close();
     }
@@ -169,12 +166,18 @@ void RageLog::ResetFile() {
       fprintf(
           stderr, "Couldn't reset %s: %s\n", LOG_PATH,
           g_fileLog->GetError().c_str());
-      return;
+      return false;
+    }
+    if (!keepLogOpen) {
+      g_fileLog->Close();
     }
   }
 
-  // First line of the fresh log, written after releasing the lock above.
-  Trace("log.txt was reset from the Log Options screen.");
+  if (keepLogOpen) {
+    // First line of the fresh log, written after releasing the lock above.
+    Trace("log.txt was reset from the Log Options screen.");
+  }
+  return true;
 }
 
 void RageLog::SetInfoToDisk(bool b) {
@@ -337,8 +340,10 @@ void RageLog::Write(int where, const std::string& sLine) {
       AddToInfo(sStr);
     }
 #else
-    if (where & WRITE_TO_INFO) {
+    if (m_bShowLogOutput || (where & WRITE_TO_INFO)) {
       puts(sStr.c_str());
+    }
+    if (where & WRITE_TO_INFO) {
       AddToInfo(sStr);
     }
 #endif

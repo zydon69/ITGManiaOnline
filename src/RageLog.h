@@ -23,7 +23,7 @@ class RageLog {
   void Flush();
   // Truncate log.txt to an empty file so logging starts from a clean base.
   // Intended to be triggered from the Log Options screen.
-  void ResetFile();
+  bool ResetFile();
 
   void MapLog(const std::string& key, const char* fmt, ...) PRINTF(3, 4);
   void UnmapLog(const std::string& key);

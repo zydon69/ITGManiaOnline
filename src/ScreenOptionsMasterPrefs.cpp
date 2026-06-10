@@ -1023,15 +1023,25 @@ static void InitializeConfOptions() {
   ADD(ConfOption("LogCheckpoints", MovePref<bool>, "Off", "On"));
   g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("PerfDiagnostics", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogAudioUnderrunDiagnostics", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogTextureUploadDiagnostics", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogResourceSnapshotDiagnostics", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogPlayOnceDiagnostics", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogNoteSkinDiagnostics", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogInputDiagnostics", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogMemoryCardDiagnostics", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogContentLoadDiagnostics", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogThemeLuaDiagnostics", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
 
   // Sound options
   ADD(ConfOption(
