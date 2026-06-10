@@ -353,6 +353,38 @@ local function pack_sync_busy()
 	return status == "download_requested" or status == "download_in_progress" or status == "reloading_songs"
 end
 
+local function pack_sync_status_for_joined_song()
+	if not (ITGOnline and ITGOnline.PackSync) then return "" end
+	if not joined_song_confirmed or joined_song_selected_key == "" then return "" end
+
+	local packSync = ITGOnline.PackSync
+	local songInfo = packSync.currentSongInfo
+	if type(songInfo) ~= "table" then return "" end
+
+	local selectedAt = trim_text(songInfo.selectedAt or songInfo.selected_at)
+	if selectedAt == "" or selectedAt ~= joined_song_selected_key then return "" end
+
+	return trim_text(packSync.currentStatus)
+end
+
+local function pack_sync_confirms_joined_song()
+	local status = pack_sync_status_for_joined_song()
+	return status == "local_chart_match_found"
+		or status == "ready"
+		or status == "downloaded_ok"
+end
+
+local function pack_sync_is_checking_joined_song()
+	local status = pack_sync_status_for_joined_song()
+	return status == "searching_local_charts"
+		or status == "local_chart_match_found"
+		or status == "download_requested"
+		or status == "download_in_progress"
+		or status == "reloading_songs"
+		or status == "downloaded_ok"
+		or status == "ready"
+end
+
 local function can_download_pack_for_reason(reason)
 	reason = trim_text(reason)
 	return reason == "missing_local_song"
@@ -460,14 +492,19 @@ local function sync_local_missing_song_from_joined_players()
 	for _, player in ipairs(joined_lobby_players) do
 		if tostring(player and player.playerId or "") == selfId then
 			local selfMissing = player.missingSong == true
-			if selfMissing then
+			if pack_sync_confirms_joined_song() then
+				joined_missing_song = false
+				joined_missing_song_info = nil
+				joined_can_download_pack = false
+				joined_missing_song_reason = nil
+			elseif selfMissing and not pack_sync_is_checking_joined_song() then
 				joined_missing_song = true
 				joined_missing_song_reason = player.missingSongReason or joined_missing_song_reason or "missing_local_song"
 				if joined_missing_song_info == nil then
 					joined_missing_song_info = joined_song_preview
 				end
 				joined_can_download_pack = joined_can_download_pack or can_download_pack_for_reason(joined_missing_song_reason)
-			elseif joined_missing_song and player.songAvailable == true then
+			elseif joined_missing_song and (player.songAvailable == true or pack_sync_is_checking_joined_song()) then
 				joined_missing_song = false
 				joined_missing_song_info = nil
 				joined_can_download_pack = false
@@ -478,10 +515,23 @@ local function sync_local_missing_song_from_joined_players()
 	end
 end
 
+local function player_is_current_user(player)
+	if not (ITGOnline and ITGOnline.user) then return false end
+	return tostring(player and player.playerId or "") == tostring(ITGOnline.user.id or "")
+end
+
+local function player_missing_song_for_ui(player)
+	if joined_phase == "results" then return false end
+	if player_is_current_user(player) and pack_sync_is_checking_joined_song() then
+		return false
+	end
+	return player and (player.missingSong or (joined_song_preview ~= nil and player.songAvailable == false)) or false
+end
+
 joined_any_player_missing_song = function()
 	if joined_phase == "results" then return false end
 	for player in ivalues(joined_lobby_players) do
-		if player.missingSong or (joined_song_preview ~= nil and player.songAvailable == false) then return true end
+		if player_missing_song_for_ui(player) then return true end
 	end
 	return false
 end
@@ -1279,7 +1329,7 @@ local af = Def.ActorFrame{
 			for i, player in ipairs(joined_lobby_players) do
 					local profile = trim_text(player.profileName or player.name or player.playerId or ("Joueur "..i))
 				local ready = player.ready and " ✔" or ""
-					local missing = (joined_phase ~= "results" and player.missingSong) and " ⚠ chanson manquante" or ""
+					local missing = player_missing_song_for_ui(player) and " ⚠ chanson manquante" or ""
 					local packSyncStatus = trim_text(player.packSyncStatus)
 					local packSyncText = pack_sync_display_text(packSyncStatus)
 					if packSyncText ~= "" and packSyncStatus ~= "" and packSyncStatus ~= "unknown" and packSyncStatus ~= "ready" then
@@ -1294,7 +1344,7 @@ local af = Def.ActorFrame{
 				if speedMod ~= "" then optionParts[#optionParts+1] = speedMod end
 				local stepchart = abbreviate_stepchart(player.stepchart)
 				if stepchart ~= "" then optionParts[#optionParts+1] = stepchart end
-					if missing == "" and joined_song_preview ~= nil and player.songAvailable == false then
+					if missing == "" and joined_song_preview ~= nil and player.songAvailable == false and not player_is_current_user(player) then
 						missing = " … confirmation chanson"
 				end
 				local maxLineLen = 88
