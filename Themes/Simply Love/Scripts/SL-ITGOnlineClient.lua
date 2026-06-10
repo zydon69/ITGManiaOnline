@@ -1565,6 +1565,39 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	return self.currentRoom
 end
 
+function ITGOnline:BroadcastLeaderboardFromRoom(room, source)
+	room = room or self.currentRoom
+	if not room then return false end
+
+	local leaderboard = room.live_scores or room.top_scores or room.leaderboard
+	if not leaderboard or #leaderboard == 0 then return false end
+
+	local roomId = room.id or self.currentRoomId
+	local version = tonumber(room.leaderboard_version_ms or room.live_score_version_ms or room.updated_version_ms) or 0
+	local versionKey = tostring(roomId or "")
+	if version > 0 and versionKey ~= "" then
+		local previousVersion = tonumber(self.lastLeaderboardVersionByRoomId[versionKey]) or 0
+		if version < previousVersion then
+			online_flow_trace("ignored_stale_room_leaderboard source=" .. tostring(source or "unknown")
+				.. " version=" .. tostring(version)
+				.. " previous=" .. tostring(previousVersion))
+			return false
+		end
+		self.lastLeaderboardVersionByRoomId[versionKey] = version
+	end
+
+	online_flow_trace("broadcast_room_leaderboard source=" .. tostring(source or "unknown")
+		.. " rows=" .. tostring(#leaderboard)
+		.. " phase=" .. tostring(room.phase or "nil")
+		.. " version=" .. tostring(version))
+	MESSAGEMAN:Broadcast("ITGOnlineLeaderboardUpdated", {
+		leaderboard = leaderboard,
+		room_id = roomId,
+		leaderboard_version_ms = version,
+	})
+	return true
+end
+
 function ITGOnline:CurrentUserPlayState(room)
 	if not room or not self.user then return nil end
 	local userId = tonumber(self.user.id)
@@ -1593,6 +1626,7 @@ function ITGOnline:PlayStateSummary(room)
 	room = room or self.currentRoom
 	local playState = room and room.play_state or nil
 	local sessions = playState and playState.sessions or {}
+	local finalResults = playState and playState.final_results or {}
 	local players = tonumber(playState and playState.players_count) or #(sessions or {})
 	local terminal = tonumber(playState and playState.terminal_players_count)
 
@@ -1620,6 +1654,8 @@ function ITGOnline:PlayStateSummary(room)
 		terminal = terminal,
 		playing = playing,
 		allTerminal = allTerminal,
+		finalResults = #(finalResults or {}),
+		finalResultsReady = players > 0 and #(finalResults or {}) >= players,
 		sessions = sessions or {},
 	}
 end
@@ -1641,7 +1677,10 @@ function ITGOnline:ShouldWaitForOnlineResults(room)
 	if not localRoundEnded and not self:IsTerminalPlayState(state) then return false end
 
 	local summary = self:PlayStateSummary(room)
-	return summary.players > 0 and not summary.allTerminal
+	if summary.players <= 0 then return false end
+	if not summary.allTerminal then return true end
+	if phase ~= "results" then return true end
+	return not summary.finalResultsReady
 end
 
 function ITGOnline:MarkGameplayCompleteForEvaluation(source)
@@ -1839,11 +1878,13 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 			.. " until=" .. tostring(self.onlineGameplayEvaluationMinimumHoldUntil))
 	end
 
-	online_flow_trace_throttled("hold_gameplay_before_evaluation", 1.0, "hold_gameplay_before_evaluation waiting=" .. tostring(waiting == true)
-		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
-		.. " terminal=" .. tostring(summary and summary.terminal or "nil")
-		.. " players=" .. tostring(summary and summary.players or "nil")
-		.. " allTerminal=" .. tostring(summary and summary.allTerminal == true))
+		online_flow_trace_throttled("hold_gameplay_before_evaluation", 1.0, "hold_gameplay_before_evaluation waiting=" .. tostring(waiting == true)
+			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+			.. " terminal=" .. tostring(summary and summary.terminal or "nil")
+			.. " players=" .. tostring(summary and summary.players or "nil")
+			.. " allTerminal=" .. tostring(summary and summary.allTerminal == true)
+			.. " finalResults=" .. tostring(summary and summary.finalResults or "nil")
+			.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true))
 
 	if waiting and self.FetchPlayState then
 		if not self.onlineGameplayHoldFetchAt or (now - self.onlineGameplayHoldFetchAt) >= 0.75 then
@@ -4844,14 +4885,15 @@ end
 			success = false,
 			message = "Song loading timed out. Returning to lobby."
 		})
-	elseif name and name:match("^room%.") then
-		local roomId = payload.room_id
-			or (payload.room and payload.room.id)
-			or (event.target and event.target.id)
-			or payload.id
-			or self.currentRoomId
-			or self.pendingJoinRoomId
-		if not room_event_is_relevant(roomId) then return end
+		elseif name and name:match("^room%.") then
+			local roomId = payload.room_id
+				or (payload.room and payload.room.id)
+				or (event.target and event.target.id)
+				or payload.id
+				or self.currentRoomId
+				or self.pendingJoinRoomId
+
+			if not room_event_is_relevant(roomId) then return end
 			if payload.room then
 				local versionRoomId = tostring(roomId or payload.room.id or "")
 				if eventId and eventId > 0 and versionRoomId ~= "" then
@@ -4872,28 +4914,31 @@ end
 				local room = self:ApplyRoomSnapshot(payload.room, "realtime_room_event:" .. tostring(name))
 				self:MaybeAutoReadyManager(room)
 				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(room or self.currentRoom or payload.room))
+				self:BroadcastLeaderboardFromRoom(room or payload.room, "realtime_room_event:" .. tostring(name))
 				if name == "room.join_request.created" then
 					self:BroadcastPendingJoinRequestsFromRoom(room or payload.room)
 				end
 				if room and room.play_state then
 					MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", room.play_state)
 				end
-		elseif roomId then
-			online_flow_trace("realtime_room_event_fetch name=" .. tostring(name)
-				.. " roomId=" .. tostring(roomId)
-				.. " eventId=" .. tostring(eventId))
-			self:FetchRoom(roomId, function(ok, decoded)
-				if ok and decoded and decoded.room then
-					online_flow_trace("realtime_room_event_fetch_result name=" .. tostring(name)
-						.. " roomId=" .. tostring(roomId)
-						.. " phase=" .. tostring(decoded.room.phase))
-					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or decoded.room))
-					if name == "room.join_request.created" then
-						self:BroadcastPendingJoinRequestsFromRoom(self.currentRoom or decoded.room)
+			elseif roomId then
+				online_flow_trace("realtime_room_event_fetch name=" .. tostring(name)
+					.. " roomId=" .. tostring(roomId)
+					.. " eventId=" .. tostring(eventId))
+				self:FetchRoom(roomId, function(ok, decoded)
+					if ok and decoded and decoded.room then
+						online_flow_trace("realtime_room_event_fetch_result name=" .. tostring(name)
+							.. " roomId=" .. tostring(roomId)
+							.. " phase=" .. tostring(decoded.room.phase))
+						local room = self:ApplyRoomSnapshot(decoded.room, "realtime_room_event_fetch:" .. tostring(name))
+						MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(room or self.currentRoom or decoded.room))
+						self:BroadcastLeaderboardFromRoom(room or decoded.room, "realtime_room_event_fetch:" .. tostring(name))
+						if name == "room.join_request.created" then
+							self:BroadcastPendingJoinRequestsFromRoom(room or self.currentRoom or decoded.room)
+						end
 					end
-				end
-			end)
-		end
+				end)
+			end
 	else
 		online_trace("Unhandled realtime event: " .. tostring(name))
 	end
