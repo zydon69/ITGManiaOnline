@@ -318,6 +318,45 @@ OperatorMenuOptionRows.VideoRenderer = function()
 	}
 end
 
+OperatorMenuOptionRows.SoundDriver = function()
+
+	local choices = { "WASAPI", "DirectSound-sw", "WaveOut", "WDMKS" }
+	local values = {
+		{ SoundDrivers="WASAPI,DirectSound-sw,WaveOut,WDMKS,Null" },
+		{ SoundDrivers="DirectSound-sw,WASAPI,WaveOut,WDMKS,Null" },
+		{ SoundDrivers="WaveOut,WASAPI,DirectSound-sw,WDMKS,Null" },
+		{ SoundDrivers="WDMKS,WASAPI,DirectSound-sw,WaveOut,Null" },
+	}
+
+	return {
+		Name = "SoundDriver",
+		Choices = choices,
+		LayoutType = "ShowAllInRow",
+		SelectType = "SelectOne",
+		OneChoiceForAllPlayers = true,
+		ExportOnChange = false,
+		LoadSelections = function(self, list, pn)
+			local pref = PREFSMAN:GetPreference("SoundDrivers") or ""
+
+			for driver in pref:gmatch("([^,]+),?") do
+				pref = driver
+				break
+			end
+
+			local i = FindInTable(pref, self.Choices) or 1
+			list[i] = true
+		end,
+		SaveSelections = function(self, list, pn)
+			for i=1, #list do
+				if list[i] then
+					PREFSMAN:SetPreference("SoundDrivers", values[i].SoundDrivers)
+					break
+				end
+			end
+		end,
+	}
+end
+
 function offsetMS(pref, low, high)
 	local val = PREFSMAN:GetPreference(pref)
 	local ms = round(val * 1000)	-- convert seconds to milliseconds
