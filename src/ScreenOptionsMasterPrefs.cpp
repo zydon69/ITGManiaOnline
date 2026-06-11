@@ -1017,6 +1017,9 @@ static void InitializeConfOptions() {
   g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("ShowLogOutput", MovePref<bool>, "Off", "On"));
   g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
+  ADD(ConfOption(
+      "ShowPopups", MovePref<bool>, "PopupsLogOnly", "PopupsAllow"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("ForceLogFlush", MovePref<bool>, "Off", "On"));
   g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogSkips", MovePref<bool>, "Off", "On"));

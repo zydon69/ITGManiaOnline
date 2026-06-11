@@ -49,8 +49,6 @@ static const bool g_bEnvLogAudioUnderrun =
     EnvFlagEnabled("ITG_LOG_AUDIO_UNDERRUN");
 static const bool g_bEnvLogTextureUpload =
     EnvFlagEnabled("ITG_LOG_TEXTURE_UPLOAD");
-static const bool g_bEnvLogResourceSnapshot =
-    EnvFlagEnabled("ITG_LOG_RESOURCE_SNAPSHOT");
 static const bool g_bEnvLogPlayOnce = EnvFlagEnabled("ITG_LOG_PLAY_ONCE");
 static const bool g_bEnvLogNoteSkin = EnvFlagEnabled("ITG_LOG_NOTESKIN");
 static const bool g_bEnvLogInput = EnvFlagEnabled("ITG_LOG_INPUT");
@@ -59,9 +57,6 @@ static const bool g_bEnvLogContentLoad = EnvFlagEnabled("ITG_LOG_CONTENT_LOAD");
 static const bool g_bEnvLogThemeLua = EnvFlagEnabled("ITG_LOG_THEME_LUA");
 static const bool g_bEnvLegacyTraceGlUploads =
     EnvFlagEnabled("ITG_TRACE_GL_UPLOADS");
-static const bool g_bEnvLegacyTraceResourceSnapshots =
-    EnvFlagEnabled("ITG_TRACE_RESOURCE_SNAPSHOTS");
-
 bool PerfDiagnosticsEnabled() {
   return g_bPerfDiagnosticsCached.load(std::memory_order_acquire);
 }
@@ -73,8 +68,9 @@ void RefreshPerfDiagnosticsPreferenceCache() {
       g_bLogAudioUnderrunDiagnostics.Get(), std::memory_order_release);
   g_bLogTextureUploadDiagnosticsCached.store(
       g_bLogTextureUploadDiagnostics.Get(), std::memory_order_release);
-  g_bLogResourceSnapshotDiagnosticsCached.store(
-      g_bLogResourceSnapshotDiagnostics.Get(), std::memory_order_release);
+  // Memory leak detection relies on these snapshots, so keep them enabled
+  // regardless of the preference value.
+  g_bLogResourceSnapshotDiagnosticsCached.store(true, std::memory_order_release);
   g_bLogPlayOnceDiagnosticsCached.store(
       g_bLogPlayOnceDiagnostics.Get(), std::memory_order_release);
   g_bLogNoteSkinDiagnosticsCached.store(
@@ -121,11 +117,7 @@ bool LogTextureUploadDiagnosticsEnabled() {
       g_bEnvLegacyTraceGlUploads);
 }
 
-bool LogResourceSnapshotDiagnosticsEnabled() {
-  return CategoryEnabled(
-      g_bLogResourceSnapshotDiagnosticsCached, g_bEnvLogResourceSnapshot,
-      g_bEnvLegacyTraceResourceSnapshots);
-}
+bool LogResourceSnapshotDiagnosticsEnabled() { return true; }
 
 bool LogPlayOnceDiagnosticsEnabled() {
   return CategoryEnabled(g_bLogPlayOnceDiagnosticsCached, g_bEnvLogPlayOnce);

@@ -343,6 +343,7 @@ PrefsManager::PrefsManager()
       m_bForceLogFlush("ForceLogFlush", true),
       m_bShowLogOutput("ShowLogOutput", false),
 #endif
+      m_bShowPopups("ShowPopups", false),
       m_bLogSkips("LogSkips", false),
       m_bLogCheckpoints("LogCheckpoints", false),
       m_bShowLoadingWindow("ShowLoadingWindow", true),

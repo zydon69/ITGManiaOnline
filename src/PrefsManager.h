@@ -362,6 +362,7 @@ class PrefsManager {
   Preference<bool> m_bLogToDisk;
   Preference<bool> m_bForceLogFlush;
   Preference<bool> m_bShowLogOutput;
+  Preference<bool> m_bShowPopups;
   Preference<bool> m_bLogSkips;
   Preference<bool> m_bLogCheckpoints;
   Preference<bool> m_bShowLoadingWindow;
