@@ -271,6 +271,50 @@ local function secure_password_delete(apiBaseUrl, email)
 	return result and result.ok
 end
 
+local function secure_access_token_account(apiBaseUrl, deviceName)
+	local account = normalize_base_url(apiBaseUrl) .. "|" .. trim(deviceName)
+	return account == "|" and "" or account
+end
+
+local function secure_access_token_get(apiBaseUrl, deviceName)
+	if not secure_credentials_available() then return nil, false end
+
+	local account = secure_access_token_account(apiBaseUrl, deviceName)
+	if account == "" then return nil, false end
+
+	local result = NETWORK:SecureCredentialGet(ITGOnline.accessTokenService, account)
+	if result and result.ok and tostring(result.secret or "") ~= "" then
+		return tostring(result.secret), true
+	end
+
+	return nil, false
+end
+
+local function secure_access_token_set(apiBaseUrl, deviceName, accessToken)
+	if not secure_credentials_available() then return false end
+
+	local account = secure_access_token_account(apiBaseUrl, deviceName)
+	if account == "" or tostring(accessToken or "") == "" then return false end
+
+	local result = NETWORK:SecureCredentialSet(ITGOnline.accessTokenService, account, tostring(accessToken))
+	if not result or not result.ok then
+		online_trace("Secure access token save failed using " .. secure_credentials_backend() .. ": " .. tostring(result and result.error or "unknown"))
+		return false
+	end
+
+	return true
+end
+
+local function secure_access_token_delete(apiBaseUrl, deviceName)
+	if not secure_credentials_available() then return false end
+
+	local account = secure_access_token_account(apiBaseUrl, deviceName)
+	if account == "" then return false end
+
+	local result = NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, account)
+	return result and result.ok
+end
+
 local function safe_decode(body)
 	if type(body) ~= "string" or body == "" then return nil end
 	local ok, decoded = pcall(JsonDecode, body)
@@ -696,6 +740,7 @@ local function read_config(loadPassword)
 	local section = raw["ITGOnline"] or {}
 	local apiBaseUrl = normalize_base_url(section["ApiBaseUrl"])
 	local email = trim(section["Email"])
+	local deviceName = trim(section["DeviceName"]) ~= "" and trim(section["DeviceName"]) or ITGOnline.defaults.deviceName
 	local securePassword, securePasswordStored = nil, false
 	if loadPassword then
 		securePassword, securePasswordStored = secure_password_get(apiBaseUrl, email)
@@ -712,6 +757,7 @@ local function read_config(loadPassword)
 			end
 		end
 	end
+	local accessToken, accessTokenStored = secure_access_token_get(apiBaseUrl, deviceName)
 
 	return {
 		apiBaseUrl = apiBaseUrl,
@@ -719,8 +765,10 @@ local function read_config(loadPassword)
 		email = email,
 		password = tostring(securePassword or ""),
 		passwordStoredSecurely = securePasswordStored,
+		accessToken = tostring(accessToken or ""),
+		accessTokenStoredSecurely = accessTokenStored,
 		secureCredentialsBackend = secure_credentials_backend(),
-		deviceName = trim(section["DeviceName"]) ~= "" and trim(section["DeviceName"]) or ITGOnline.defaults.deviceName,
+		deviceName = deviceName,
 	}
 end
 
@@ -732,6 +780,8 @@ local function copy_connection_config(config)
 		email = config.email or "",
 		password = "",
 		passwordStoredSecurely = config.passwordStoredSecurely == true,
+		accessToken = config.accessToken or "",
+		accessTokenStoredSecurely = config.accessTokenStoredSecurely == true,
 		secureCredentialsBackend = config.secureCredentialsBackend or secure_credentials_backend(),
 		deviceName = config.deviceName or ITGOnline.defaults.deviceName,
 	}
@@ -760,6 +810,14 @@ local function hydrate_config_password(config)
 	end
 
 	config.passwordStoredSecurely = false
+	local accessToken, accessTokenStored = secure_access_token_get(config.apiBaseUrl, config.deviceName)
+	if accessTokenStored and tostring(accessToken or "") ~= "" then
+		config.accessToken = tostring(accessToken or "")
+		config.accessTokenStoredSecurely = true
+		return config
+	end
+
+	config.accessTokenStoredSecurely = false
 	return config
 end
 
@@ -880,6 +938,96 @@ function ITGOnline:ClearTransientSecrets()
 	end
 end
 
+function ITGOnline:HasStoredAccessToken()
+	local config = self:ConnectionConfig()
+	if tostring(config.accessToken or "") ~= "" then return true end
+	local accessToken = secure_access_token_get(config.apiBaseUrl, config.deviceName)
+	return accessToken ~= nil and tostring(accessToken or "") ~= ""
+end
+
+function ITGOnline:StoreAccessToken(accessToken)
+	local config = self:Config()
+	local stored = secure_access_token_set(config.apiBaseUrl, config.deviceName, accessToken)
+	if stored then
+		self.config = self.config or config
+		self.config.accessToken = tostring(accessToken or "")
+		self.config.accessTokenStoredSecurely = true
+		self.connectionConfig = copy_connection_config(self.config)
+	end
+	return stored
+end
+
+function ITGOnline:ClearStoredAccessToken()
+	local config = self:ConnectionConfig()
+	secure_access_token_delete(config.apiBaseUrl, config.deviceName)
+	if self.config then
+		self.config.accessToken = ""
+		self.config.accessTokenStoredSecurely = false
+	end
+	if self.connectionConfig then
+		self.connectionConfig.accessToken = ""
+		self.connectionConfig.accessTokenStoredSecurely = false
+	end
+end
+
+function ITGOnline:LoadAuthenticatedUser(callback)
+	if tostring(self.token or "") == "" then
+		if callback then callback(false, nil, { errorMessage = "No access token available." }) end
+		return
+	end
+
+	self:Request("GET", "/me", nil, function(ok, decoded, response)
+		if ok and decoded and decoded.user then
+			self.user = decoded.user
+			self.sessionExpired = false
+			if callback then callback(true, decoded.user, decoded) end
+			return
+		end
+
+		if callback then callback(false, nil, response or decoded or { errorMessage = "Failed to load authenticated user." }) end
+	end, true)
+end
+
+function ITGOnline:ApplyAccessToken(accessToken, callback)
+	accessToken = tostring(accessToken or "")
+	if accessToken == "" then
+		if callback then callback(false, nil, { errorMessage = "No access token provided." }) end
+		return
+	end
+
+	self.token = accessToken
+	self.user = nil
+	self.sessionExpired = false
+
+	self:LoadAuthenticatedUser(function(ok, user, decodedOrResponse)
+		if not ok then
+			self.token = nil
+			self.user = nil
+			if callback then callback(false, nil, decodedOrResponse) end
+			return
+		end
+
+		self:StoreAccessToken(accessToken)
+		if callback then callback(true, user, decodedOrResponse) end
+	end)
+end
+
+function ITGOnline:StartDeviceLogin(callback)
+	local config = self:ConnectionConfig()
+	self:Request("POST", "/device-login/start", {
+		machineLabel = config.deviceName,
+		clientVersion = "ITGMania",
+		themeVersion = THEME and THEME.GetThemeDisplayName and THEME:GetThemeDisplayName() or "Simply Love",
+	}, callback, true, { cancelOnScreenChange = true })
+end
+
+function ITGOnline:PollDeviceLogin(sessionId, pollToken, callback)
+	self:Request("POST", "/device-login/poll", {
+		sessionId = sessionId,
+		pollToken = pollToken,
+	}, callback, true, { cancelOnScreenChange = true })
+end
+
 function ITGOnline:ResetRealtimeState()
 	self.lastEventCursor = 0
 	self.fetchRoomInFlightByRoomId = {}
@@ -909,6 +1057,7 @@ end
 
 function ITGOnline:HasStoredCredentials()
 	local config = self:ConnectionConfig()
+	if tostring(config.accessToken or "") ~= "" then return true end
 	if config.email == "" then return false end
 
 	local transientPassword = tostring(self.transientPassword or "")
@@ -2364,6 +2513,24 @@ function ITGOnline:Connect(callbacks)
 		return
 	end
 
+	if self.token and not self.sessionExpired then
+		self:LoadAuthenticatedUser(function(ok, _user, response)
+			if not ok then
+				if callbacks and callbacks.error then callbacks.error(response_message(nil, response, "Failed to load user profile.")) end
+				return
+			end
+			self:ConnectWebSocket(callbacks)
+		end)
+		return
+	end
+
+	local config = self:Config()
+	if tostring(config.accessToken or "") ~= "" then
+		self.token = tostring(config.accessToken)
+		self:Connect(callbacks)
+		return
+	end
+
 	self:Login(function(ok, errorMessage)
 		if not ok then
 			if callbacks and callbacks.error then callbacks.error(errorMessage) end
@@ -2381,6 +2548,7 @@ function ITGOnline:Disconnect()
 		self:Request("POST", "/auth/logout", {}, function() end)
 		self.token = token
 	end
+	self:ClearStoredAccessToken()
 	if self.socket then
 		self.socket:Close()
 	end
@@ -4371,6 +4539,9 @@ function ITGOnline:Heartbeat(status, force)
 		self.heartbeatInFlight = false
 		local queuedStatus = self.heartbeatQueuedStatus
 		self.heartbeatQueuedStatus = nil
+		if self.currentScreenName == "ScreenOnlineLobbies" and not self.disconnecting then
+			self:QueueLobbyRefresh()
+		end
 		if queuedStatus then
 			self:Heartbeat(queuedStatus)
 		end
@@ -4747,6 +4918,25 @@ end
 		elseif name == "presence.pruned" then
 			-- Server-side cleanup notification. The next sync/lobby refresh carries the durable state.
 			return
+		elseif name == "room.left" then
+			local roomId = tonumber(payload.room_id or -1)
+			if roomId ~= tonumber(self.currentRoomId or -1) then
+				return
+			end
+
+			local reason = tostring(payload.reason or "")
+			self:LeaveRoom(function(ok)
+				if not ok then return end
+				MESSAGEMAN:Broadcast("OnlineLobbyLeft", {left=true})
+				MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+					event = "leaveLobby",
+					success = true,
+					message = reason == "pack_sync_timeout"
+						and "Vous avez ete ejecte du salon car le telechargement du pack n'a pas commence a temps."
+						or "Vous avez quitte le salon."
+				})
+			end)
+			return
 		elseif name == "lobby.updated" then
 			self:QueueLobbyRefresh()
 	elseif name == "room.invitation.created" then
@@ -5049,6 +5239,9 @@ function ITGOnline:LobbyStatePayload(room)
 				ready = readyByUserId[userId] == true,
 				missingSong = member.missing_song and true or false,
 				missingSongReason = member.missing_song_reason,
+				missingSongAt = member.missing_song_at,
+				packSyncDownloadStartedAt = member.pack_sync_download_started_at,
+				packSyncDownloadDeadlineMs = member.pack_sync_download_deadline_ms,
 				songAvailable = member.song_available and true or false,
 				packSyncStatus = member.pack_sync_status or "unknown",
 				packSyncMessage = member.pack_sync_message,

@@ -14,13 +14,12 @@ Email=player@example.com
 DeviceName=itgmania-client
 ```
 
-The file is local to the machine. Do not commit it. The password is entered
-through the login screen and is never written to `Save/ITGOnline.ini`. When the
-platform secure store is available, it is kept in native secure storage
-(Keychain / Credential Manager) so the client can recover from a revoked access
-token with a fresh login. This is tracked as a transitional auth-model risk in
-the project-wide accepted-risk register (`server/docs/registre_risques_assumes.md`)
-until the server exposes a refresh-token flow.
+The file is local to the machine. Do not commit it. The cabinet no longer types
+its password on the game screen: the game starts a device login, shows a QR
+code, and the player approves the sign-in on a phone. The resulting access
+token is stored in native secure storage when available (Keychain / Credential
+Manager), so the cabinet can reconnect without re-entering credentials until
+the token is revoked.
 
 On Windows, secure credential persistence uses the Unicode Credential Manager APIs
 (`CredWriteW` / `CredReadW` / `CredDeleteW`) so non-ASCII account identifiers are
@@ -68,11 +67,12 @@ Certificate renewals that keep the same public key do not require a client updat
 
 ## Current flow
 
-- The normal play flow now adds a Local / Online choice after Standard / Marathon.
+- The normal play flow adds a Local / Online choice after Standard / Marathon.
 - Local continues to the usual offline profile/song flow.
-- Online opens the ITG Online login screen, then sends the player to Online Lobbies.
-- The login screen logs in with `/api/v1/auth/login`.
-- It requests a WebSocket ticket from `/api/v1/websocket/tickets`.
+- Online opens the ITG Online login screen.
+- The login screen starts a device-login session, displays a QR code, and waits for the player to approve it from a phone.
+- The phone-side approval returns an access token that the cabinet stores securely when possible.
+- Once authenticated, the client requests a WebSocket ticket from `/api/v1/websocket/tickets`.
 - It connects to the WebSocket using the `itgmania_ws_ticket` cookie and a fixed
   `Sec-WebSocket-Protocol: itgmania-ticket` value.
 - Lobby creation maps to a public server room.
@@ -81,5 +81,4 @@ Certificate renewals that keep the same public key do not require a client updat
 
 Password-protected lobbies are not implemented on the server and are intentionally hidden in the game UI.
 Two local players with two distinct ITG Online accounts are not wired yet; the first in-game login pass connects one account for the cabinet/session.
-The online login/register actions block this case explicitly and show the
-two-player unsupported notice.
+The online login/register actions block this case explicitly and show the two-player unsupported notice.
