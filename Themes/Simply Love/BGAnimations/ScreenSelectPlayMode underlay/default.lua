@@ -6,6 +6,25 @@ local current_choice = nil
 -- give this a value now, before the TopScreen has been prepared and we can fetch its name
 -- we'll reassign it appropriately below, once the TopScreen is available
 local ScreenName = "ScreenSelectPlayMode"
+local function IsOnlineModeScreen()
+	return ScreenName == "ScreenSelectOnlineMode"
+end
+
+local function PlayModeLayoutX()
+	if IsOnlineModeScreen() then
+		return _screen.cx + 30
+	end
+
+	return _screen.cx + 90
+end
+
+local function PlayModeLayoutZoom()
+	if IsOnlineModeScreen() then
+		return 1.05
+	end
+
+	return 1.25
+end
 
 local cursor = {
 	h = 40,
@@ -139,8 +158,8 @@ end
 local t = Def.ActorFrame{
 	InitCommand=function(self)
 		self:SetUpdateFunction( Update )
-			:xy(_screen.cx+90, _screen.cy)
-			:zoom(1.25)
+			:xy(PlayModeLayoutX(), _screen.cy)
+			:zoom(PlayModeLayoutZoom())
 	end,
 	OnCommand=function(self)
 		-- Get the Topscreen and its name, now that that TopScreen itself actually exists

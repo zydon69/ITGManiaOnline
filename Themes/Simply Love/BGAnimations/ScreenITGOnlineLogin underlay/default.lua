@@ -61,6 +61,14 @@ local state = {
 	connecting = false,
 }
 
+local function safe_screen_text_width()
+	return math.max(280, math.min(760, _screen.w - 80))
+end
+
+local function safe_qr_panel_width()
+	return math.max(260, math.min(300, _screen.w - 40))
+end
+
 local function refresh()
 	MESSAGEMAN:Broadcast("ITGOnlineLoginStateChanged")
 end
@@ -384,22 +392,22 @@ local t = Def.ActorFrame{
 
 	LoadFont("Common Bold")..{
 		Text=THEME:GetString("ScreenITGOnlineLogin", "Title"),
-		InitCommand=function(self) self:xy(_screen.cx, _screen.cy - 160):zoom(0.62):diffuse(PlayerColor(PLAYER_1)) end
+		InitCommand=function(self) self:xy(0, -160):horizalign(center):zoom(0.62):maxwidth(safe_screen_text_width()):diffuse(PlayerColor(PLAYER_1)) end
 	},
 
 	LoadFont("Common Normal")..{
 		Text=THEME:GetString("ScreenITGOnlineLogin", "QrInstructions"),
-		InitCommand=function(self) self:xy(_screen.cx, _screen.cy - 122):zoom(0.72):maxwidth(760) end,
+		InitCommand=function(self) self:xy(0, -122):horizalign(center):zoom(0.72):maxwidth(safe_screen_text_width()) end,
 	},
 
 	Def.ActorFrame{
 		Name="QrPanel",
-		InitCommand=function(self) self:xy(_screen.cx, _screen.cy - 6) end,
-		Def.Quad{ InitCommand=function(self) self:zoomto(300, 270):diffuse(1,1,1,0.12) end },
-		Def.Quad{ InitCommand=function(self) self:zoomto(296, 266):diffuse(0.09,0.09,0.1,0.98) end },
-		Def.Quad{ InitCommand=function(self) self:y(-112):zoomto(300, 32):diffuse(0.14,0.14,0.16,1) end },
+		InitCommand=function(self) self:xy(0, -6) end,
+		Def.Quad{ InitCommand=function(self) self:zoomto(safe_qr_panel_width(), 270):diffuse(1,1,1,0.12) end },
+		Def.Quad{ InitCommand=function(self) self:zoomto(math.max(256, safe_qr_panel_width() - 4), 266):diffuse(0.09,0.09,0.1,0.98) end },
+		Def.Quad{ InitCommand=function(self) self:y(-112):zoomto(safe_qr_panel_width(), 32):diffuse(0.14,0.14,0.16,1) end },
 		LoadFont("Common Bold")..{
-			InitCommand=function(self) self:y(-112):zoom(0.5):settext(THEME:GetString("ScreenITGOnlineLogin", "Title")) end
+			InitCommand=function(self) self:y(-112):zoom(0.5):maxwidth(safe_qr_panel_width() - 32):settext(THEME:GetString("ScreenITGOnlineLogin", "Title")) end
 		},
 		Def.Quad{ Name="QROuter", InitCommand=function(self) self:zoomto(144, 144):xy(0, -10):diffuse(Color.Black):visible(false) end },
 		Def.Quad{ Name="QRInset", InitCommand=function(self) self:zoomto(136, 136):xy(0, -10):diffuse(Color.Black):visible(false) end },
@@ -410,26 +418,26 @@ local t = Def.ActorFrame{
 		},
 		LoadFont("Common Normal")..{
 			Name="Status",
-			InitCommand=function(self) self:xy(0, 88):zoom(0.56):maxwidth(250):settext("") end
+			InitCommand=function(self) self:xy(0, 88):horizalign(center):zoom(0.56):maxwidth(250):settext("") end
 		},
 		LoadFont("Common Normal")..{
 			Name="Code",
-			InitCommand=function(self) self:xy(0, 116):zoom(0.48):maxwidth(250):settext("") end
+			InitCommand=function(self) self:xy(0, 116):horizalign(center):zoom(0.48):maxwidth(250):settext("") end
 		},
 		LoadFont("Common Normal")..{
 			Name="Url",
-			InitCommand=function(self) self:xy(0, 136):zoom(0.34):maxwidth(250):settext("") end
+			InitCommand=function(self) self:xy(0, 136):horizalign(center):zoom(0.34):maxwidth(250):settext("") end
 		},
 	},
 
 	LoadFont("Common Normal")..{
 		Text=THEME:GetString("ScreenITGOnlineLogin", "Help"),
-		InitCommand=function(self) self:xy(_screen.cx, _screen.cy + 134):zoom(0.56):maxwidth(760):diffuse(0.8,0.8,0.8,1) end,
+		InitCommand=function(self) self:xy(0, 134):horizalign(center):zoom(0.56):maxwidth(safe_screen_text_width()):diffuse(0.8,0.8,0.8,1) end,
 	},
 
 	LoadFont("Common Normal")..{
 		Name="MenuRow",
-		InitCommand=function(self) self:xy(_screen.cx, _screen.cy + 168):zoom(0.72):maxwidth(760) end,
+		InitCommand=function(self) self:xy(0, 168):horizalign(center):zoom(0.72):maxwidth(safe_screen_text_width()) end,
 		ITGOnlineLoginStateChangedMessageCommand=function(self) self:playcommand("Refresh") end,
 	},
 }
