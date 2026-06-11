@@ -1664,6 +1664,9 @@ bool EncodeSolidBatches(
         metalCullMode = MTLCullModeNone;
         break;
     }
+    if (celStage > 0) {
+      metalCullMode = MTLCullModeNone;
+    }
     if (!hasCurrentCullMode || metalCullMode != currentCullMode) {
       [encoder setCullMode:metalCullMode];
       currentCullMode = metalCullMode;

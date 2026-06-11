@@ -1351,6 +1351,17 @@ class LunaProfileManager : public Luna<ProfileManager> {
     lua_pushstring(L, dir.c_str());
     return 1;
   }
+  static int CreateLocalProfile(T* p, lua_State* L) {
+    std::string sProfileID;
+    bool ok = p->CreateLocalProfile(SArg(1), sProfileID);
+    lua_pushboolean(L, ok);
+    lua_pushstring(L, sProfileID.c_str());
+    return 2;
+  }
+  static int RefreshLocalProfilesFromDisk(T* p, lua_State* L) {
+    p->RefreshLocalProfilesFromDisk();
+    return 0;
+  }
   static int SaveProfile(T* p, lua_State* L) {
     lua_pushboolean(L, p->SaveProfile(Enum::Check<PlayerNumber>(L, 1)));
     return 1;
@@ -1408,6 +1419,8 @@ class LunaProfileManager : public Luna<ProfileManager> {
     ADD_METHOD(GetLocalProfileIDs);
     ADD_METHOD(GetLocalProfileDisplayNames);
     ADD_METHOD(LocalProfileIDToDir);
+    ADD_METHOD(CreateLocalProfile);
+    ADD_METHOD(RefreshLocalProfilesFromDisk);
   }
 };
 

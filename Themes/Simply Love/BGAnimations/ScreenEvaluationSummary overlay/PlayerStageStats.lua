@@ -17,15 +17,15 @@ local Colors = {
 -- variables for positioning and horizalign, dependent on playernumber
 local col1x, col2x, gradex, align1, align2
 if player == PLAYER_1 then
-	col1x =  -90
-	col2x =  -_screen.w/2.5
-	gradex = -_screen.w/3.33
+	col1x =  -SL_WideScale(90, 120)
+	col2x =  -SL_WideScale(_screen.w/2.5, _screen.w/2.35)
+	gradex = -SL_WideScale(_screen.w/3.33, _screen.w/3.15)
 	align1 = right
 	align2 = left
 elseif player == PLAYER_2 then
-	col1x = 90
-	col2x = _screen.w/2.5
-	gradex = _screen.w/3.33
+	col1x = SL_WideScale(90, 120)
+	col2x = SL_WideScale(_screen.w/2.5, _screen.w/2.35)
+	gradex = SL_WideScale(_screen.w/3.33, _screen.w/3.15)
 	align1 = left
 	align2 = right
 end
@@ -177,7 +177,7 @@ af[#af+1] = LoadFont("Common Normal")..{
 -- letter grade
 af[#af+1] = Def.ActorProxy{
 	InitCommand=function(self)
-		self:zoom(WideScale(0.275,0.3)):x( WideScale(194,250) * (player==PLAYER_1 and -1 or 1) ):y(-6)
+		self:zoom(WideScale(0.275,0.3)):x( SL_WideScale(194,250) * (player==PLAYER_1 and -1 or 1) ):y(-6)
 	end,
 	DrawStageCommand=function(self)
 		if playerStats and grade then

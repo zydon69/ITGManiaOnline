@@ -324,6 +324,12 @@ SL_CustomPrefs.Get = function()
 				Values  = { true, false }
 			},
 
+			HideGrooveStats = {
+				Default = false,
+				Choices =  { THEME:GetString("ThemePrefs","Yes"), THEME:GetString("ThemePrefs", "No") },
+				Values  = { true, false }
+			},
+
 			-- ArrowCloud's optional SongSearch/Scorebox actors expect these
 			-- preferences from the full ArrowCloud theme. Define them here with
 			-- conservative Simply Love defaults so copied actors remain optional.
@@ -335,12 +341,6 @@ SL_CustomPrefs.Get = function()
 			MusicWheelGS = {
 				Default = "Scorebox",
 				Choices = { "Scorebox", "Pane", "Off" }
-			},
-
-			HideGrooveStats = {
-				Default = false,
-				Choices =  { THEME:GetString("ThemePrefs","Yes"), THEME:GetString("ThemePrefs", "No") },
-				Values  = { true, false }
 			},
 
 			AutoDownloadUnlocks = {
@@ -363,12 +363,6 @@ SL_CustomPrefs.Get = function()
 				THEME:GetString("ThemePrefs", "Never"),
 			},
 			Values = { "Always", "Sometimes", "Never" }
-		},
-
-		EnableOnlineLobbies = {
-			Default = true,
-			Choices =  { THEME:GetString("ThemePrefs","Yes"), THEME:GetString("ThemePrefs", "No") },
-			Values  = { true, false }
 		},
 
 		EnableArrowCloud = {

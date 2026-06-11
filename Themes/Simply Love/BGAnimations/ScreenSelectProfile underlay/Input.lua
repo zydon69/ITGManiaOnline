@@ -41,6 +41,36 @@ for profile in ivalues(profile_data) do
 end
 
 local AutoStyle = ThemePrefs.Get("AutoStyle")
+local function is_create_profile(info)
+	return type(info) == "table" and info.isCreateProfile == true
+end
+
+local function prompt_for_new_profile(player)
+	SCREENMAN:AddNewScreenToTop("ScreenTextEntry")
+	SCREENMAN:GetTopScreen():Load({
+		Question = THEME:GetString("ScreenOptionsManageProfiles", "Enter a name for the profile."),
+		InitialAnswer = "",
+		MaxInputLength = 32,
+		Validate = function(answer)
+			local trimmed = (answer or ""):gsub("^%s+", ""):gsub("%s+$", "")
+			if trimmed == "" then
+				return false, THEME:GetString("ScreenTextEntry", "AnswerBlank")
+			end
+
+			local ok, profile_id = PROFILEMAN:CreateLocalProfile(trimmed)
+			if not ok then
+				return false, THEME:GetString("ScreenTextEntry", "AnswerBlank")
+			end
+
+			PROFILEMAN:RefreshLocalProfilesFromDisk()
+			SL.Global.SelectProfileCreatedProfileID = profile_id
+			return true
+		end,
+		OnOK = function()
+			SCREENMAN:SetNewScreen("ScreenSelectProfile")
+		end,
+	})
+end
 
 local Handle = {}
 
@@ -89,6 +119,12 @@ Handle.Start = function(event)
 	else
 
 		local other_player = event.PlayerNumber == PLAYER_1 and PLAYER_2 or PLAYER_1
+		local info = scrollers[event.PlayerNumber]:get_info_at_focus_pos()
+
+		if is_create_profile(info) and event.GameButton == "Start" then
+			prompt_for_new_profile(event.PlayerNumber)
+			return
+		end
 
 		-- we only bother checking scrollers to see if both players are
 		-- trying to choose the same profile if there are scrollers because
@@ -132,11 +168,16 @@ Handle.MenuLeft = function(event)
 		local info = scrollers[event.PlayerNumber]:get_info_at_focus_pos()
 		local index = type(info)=="table" and info.index or 0
 
-		if index - 1 >= 0 then
+		-- Allow moving from [Guest] to the special "Create Profile" entry,
+		-- but do not let the selection travel above that sentinel row.
+		if (index - 1 >= 0) or (index == 0 and not (type(info) == "table" and info.isCreateProfile)) then
 			MESSAGEMAN:Broadcast("DirectionButton")
 			scrollers[event.PlayerNumber]:scroll_by_amount(-1)
 
-			local data = profile_data[index+index_padding-1]
+			local new_info = scrollers[event.PlayerNumber]:get_info_at_focus_pos()
+			local data = type(new_info) == "table" and new_info.isCreateProfile
+				and new_info
+				or profile_data[(type(new_info) == "table" and new_info.index or 0) + index_padding]
 			local frame = af:GetChild(ToEnumShortString(event.PlayerNumber) .. 'Frame')
 			frame:GetChild("SelectedProfileText"):settext(data and data.displayname or "")
 			frame:playcommand("Set", data)
@@ -158,7 +199,10 @@ Handle.MenuRight = function(event)
 			MESSAGEMAN:Broadcast("DirectionButton")
 			scrollers[event.PlayerNumber]:scroll_by_amount(1)
 
-			local data = profile_data[index+index_padding+1]
+			local new_info = scrollers[event.PlayerNumber]:get_info_at_focus_pos()
+			local data = type(new_info) == "table" and new_info.isCreateProfile
+				and new_info
+				or profile_data[(type(new_info) == "table" and new_info.index or 0) + index_padding]
 			local frame = af:GetChild(ToEnumShortString(event.PlayerNumber) .. 'Frame')
 			frame:GetChild("SelectedProfileText"):settext(data and data.displayname or "")
 			frame:playcommand("Set", data)

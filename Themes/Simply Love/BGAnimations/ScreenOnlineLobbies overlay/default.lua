@@ -394,6 +394,31 @@ local function can_download_pack_for_reason(reason)
 		or reason == "chart_hash_mismatch"
 end
 
+local function joined_missing_song_countdown_seconds()
+	if not (ITGOnline and ITGOnline.currentRoom) then return nil end
+	local roomTimeMs = nil
+	if ITGOnline.serverClockOffsetSeconds then
+		roomTimeMs = math.floor((GetTimeSinceStart() + tonumber(ITGOnline.serverClockOffsetSeconds)) * 1000)
+	else
+		roomTimeMs = tonumber(ITGOnline.currentRoom.server_time_ms)
+	end
+	if not roomTimeMs then return nil end
+	local currentUserId = tostring(ITGOnline.user and ITGOnline.user.id or "")
+	if currentUserId == "" then return nil end
+
+	for _, player in ipairs(joined_lobby_players or {}) do
+		if tostring(player.playerId or "") == currentUserId then
+			local deadlineMs = tonumber(player.packSyncDownloadDeadlineMs)
+			if deadlineMs and deadlineMs > roomTimeMs then
+				return math.max(1, math.ceil((deadlineMs - roomTimeMs) / 1000))
+			end
+			return nil
+		end
+	end
+
+	return nil
+end
+
 local function local_pack_exists(songInfo)
 	local pack = trim_text(songInfo and songInfo.pack)
 	return pack ~= "" and SONGMAN and SONGMAN.DoesSongGroupExist and SONGMAN:DoesSongGroupExist(pack)
@@ -411,6 +436,7 @@ local function joined_phase_allows_song_selection()
 	return phase == "lobby"
 		or phase == "lobby_ready"
 		or phase == "config"
+		or phase == "results"
 end
 
 local function joined_phase_allows_start()
@@ -1401,6 +1427,10 @@ local af = Def.ActorFrame{
 						statusLines[#statusLines + 1] = "Vous pouvez télécharger le pack utilisé par le manager."
 					else
 							statusLines[#statusLines + 1] = "Pack de chansons manquant ou different localement"
+					end
+					local countdownSeconds = joined_missing_song_countdown_seconds()
+					if countdownSeconds and joined_can_download_pack and not pack_sync_busy() then
+						statusLines[#statusLines + 1] = "Cliquez sur \"Telecharger pack\" dans " .. tostring(countdownSeconds) .. " s."
 					end
 					elseif joined_song_preview then
 						statusLines[#statusLines + 1] = (joined_song_confirmed and "✔ Chanson selectionnee" or "Choix de chanson en cours")
@@ -2567,54 +2597,54 @@ local af = Def.ActorFrame{
 		Def.Quad{
 			Name="JoinedSongCard",
 			InitCommand=function(self)
-				self:xy(-120, 28):zoomto(330, 86):diffuse(0,0,0,0.82):visible(false)
+				self:xy(-120, -58):zoomto(330, 86):diffuse(0,0,0,0.82):visible(false)
 			end
 		},
 		Def.Quad{
 			Name="JoinedSongBannerFallback",
 			InitCommand=function(self)
-				self:xy(-232, 28):zoomto(112, 44):diffuse(0.08,0.08,0.08,1):visible(false)
+				self:xy(-232, -58):zoomto(112, 44):diffuse(0.08,0.08,0.08,1):visible(false)
 			end
 		},
 		LoadFont("Common Bold")..{
 			Name="JoinedSongBannerLabel",
 			Text="BANNIERE",
 			InitCommand=function(self)
-				self:xy(-232, 34):zoom(0.24):diffuse(Color.White):visible(false)
+				self:xy(-232, -52):zoom(0.24):diffuse(Color.White):visible(false)
 			end
 		},
 		Def.Banner{
 			Name="JoinedSongBanner",
 			InitCommand=function(self)
-				self:xy(-232, 34):scaletoclipped(112, 44):visible(false)
+				self:xy(-232, -52):scaletoclipped(112, 44):visible(false)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedSongPack",
 			Text="",
 			InitCommand=function(self)
-				self:horizalign(left):xy(-290, 3):zoom(0.38):maxwidth(760):diffuse(0.85,0.85,0.85,1)
+				self:horizalign(left):xy(-290, -87):zoom(0.38):maxwidth(760):diffuse(0.85,0.85,0.85,1)
 			end
 		},
 		LoadFont("Common Bold")..{
 			Name="JoinedSongTitle",
 			Text="Aucune chanson selectionnee",
 			InitCommand=function(self)
-				self:horizalign(left):xy(-168, 19):zoom(0.42):maxwidth(480)
+				self:horizalign(left):xy(-168, -70):zoom(WideScale(0.46, 0.50)):maxwidth(480)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedSongArtist",
 			Text="",
 			InitCommand=function(self)
-				self:horizalign(left):xy(-168, 44):zoom(0.42):maxwidth(500)
+				self:horizalign(left):xy(-168, -46):zoom(WideScale(0.46, 0.50)):maxwidth(500)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedLobbySongStatus",
 				Text="En attente de la chanson...",
 			InitCommand=function(self)
-				self:horizalign(left):vertalign(top):xy(-290, 102):zoom(0.44):maxwidth(800)
+				self:horizalign(left):vertalign(top):xy(-290, 58):zoom(0.44):maxwidth(800)
 			end
 		},
 		Def.ActorFrame{
@@ -2732,7 +2762,7 @@ local af = Def.ActorFrame{
 					Name="GlobalOptionsLabel",
 					Text="Options globales",
 					InitCommand=function(self)
-						self:zoom(0.30):vertspacing(-14)
+						self:zoom(WideScale(0.27, 0.29)):vertspacing(-20)
 					end,
 					HoverCommand=function(self)
 						self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)

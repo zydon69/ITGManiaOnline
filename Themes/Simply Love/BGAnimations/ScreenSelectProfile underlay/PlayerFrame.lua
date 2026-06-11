@@ -31,7 +31,7 @@ local avatar_dim = info.w - (info.padding * 2.25)
 -- account for the possibility that there are no local profiles and
 -- we want "[ Guest ]" to start in the middle, with focus
 if PROFILEMAN:GetNumLocalProfiles() <= 0 then
-	scroller.y = row_height * -4
+	scroller.y = row_height * -3.5
 end
 -- -----------------------------------------------------------------------
 
@@ -66,6 +66,12 @@ elseif PREFSMAN:GetPreference("DefaultLocalProfileID"..pn) ~= "" then
 
 	pos = pos or 0
 	initial_data = profile_data[pos]
+elseif SL.Global.SelectProfileCreatedProfileID then
+	local created_index = PROFILEMAN:GetLocalProfileIndexFromID(SL.Global.SelectProfileCreatedProfileID)
+	if created_index and created_index >= 0 then
+		pos = created_index + 1
+		initial_data = profile_data[pos]
+	end
 end
 
 
@@ -176,6 +182,9 @@ return Def.ActorFrame{
 	Def.ActorFrame {
 		Name='ScrollerFrame',
 		InitCommand=function(self)
+			-- Add a special entry above [Guest] that lets the player create a new local profile.
+			local create_profile = { displayname = THEME:GetString("ScreenSelectProfile", "CreateProfile"), isCreateProfile = true }
+
 			-- Create the info needed for the "[Guest]" scroller item.
 			-- It won't map to any real local profile (as desired!), so we'll hardcode
 			-- an index of 0, and handle it later, on ScreenSelectProfile's FinishCommand
@@ -185,7 +194,7 @@ return Def.ActorFrame{
 			-- here, we are padding the scroller_data table with dummy scroller items to accommodate
 			-- the peculiar scroller behavior of starting low, starting on item#2, not wrapping, etc.
 			-- see also: https://youtu.be/bXZhTb0eUqA?t=116
-			local scroller_data = {{}, {}, {}, guest_profile}
+			local scroller_data = {{}, {}, {}, create_profile, guest_profile}
 
 			-- add actual profile data into the scroller_data table
 			for profile in ivalues(profile_data) do
@@ -286,7 +295,9 @@ return Def.ActorFrame{
 								self:valign(0):zoom(0.815):diffusealpha(0.9):xy(self:GetWidth()*0.5 + 13, 67)
 							end,
 							SetCommand=function(self, params)
-								if params == nil then
+								if params and params.isCreateProfile then
+									self:settext(THEME:GetString("ScreenSelectProfile", "CreateProfile"))
+								elseif params == nil then
 									self:settext(THEME:GetString("ScreenSelectProfile", "GuestProfile"))
 								else
 									self:settext(THEME:GetString("ProfileAvatar", "NoAvatar"))

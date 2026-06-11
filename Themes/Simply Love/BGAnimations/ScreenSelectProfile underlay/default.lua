@@ -292,4 +292,6 @@ end
 LoadActor("./JudgmentGraphicPreviews.lua", {af=t, profile_data=profile_data})
 LoadActor("./NoteSkinPreviews.lua", {af=t, profile_data=profile_data})
 
+SL.Global.SelectProfileCreatedProfileID = nil
+
 return t

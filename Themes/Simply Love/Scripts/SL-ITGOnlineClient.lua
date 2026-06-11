@@ -337,6 +337,17 @@ local function response_error_code(response, decoded)
 	return ""
 end
 
+local function apply_authenticated_user_state(client, user)
+	local previousUserId = client.lastAuthenticatedUserId or (client.user and client.user.id) or nil
+	local nextUserId = user and user.id or nil
+	if nextUserId and tostring(previousUserId or "") ~= "" and tostring(previousUserId) ~= tostring(nextUserId) then
+		client:ResetRealtimeState()
+	end
+	client.lastAuthenticatedUserId = nextUserId
+	client.user = user
+	client.sessionExpired = false
+end
+
 function online_trace(message)
 	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
 		return
@@ -1007,6 +1018,7 @@ function ITGOnline:ApplyAccessToken(accessToken, callback)
 			return
 		end
 
+		apply_authenticated_user_state(self, user)
 		self:StoreAccessToken(accessToken)
 		if callback then callback(true, user, decodedOrResponse) end
 	end)
@@ -2298,15 +2310,8 @@ function ITGOnline:Login(callback)
 
 		self:ClearTransientSecrets()
 
-		local previousUserId = self.lastAuthenticatedUserId or (self.user and self.user.id) or nil
-		local nextUserId = decoded.user and decoded.user.id or nil
-		if nextUserId and tostring(previousUserId or "") ~= "" and tostring(previousUserId) ~= tostring(nextUserId) then
-			self:ResetRealtimeState()
-		end
-		self.lastAuthenticatedUserId = nextUserId
+		apply_authenticated_user_state(self, decoded.user)
 		self.token = decoded.access_token
-		self.user = decoded.user
-		self.sessionExpired = false
 		if callback then callback(true) end
 	end)
 end
@@ -2514,11 +2519,12 @@ function ITGOnline:Connect(callbacks)
 	end
 
 	if self.token and not self.sessionExpired then
-		self:LoadAuthenticatedUser(function(ok, _user, response)
+		self:LoadAuthenticatedUser(function(ok, user, response)
 			if not ok then
 				if callbacks and callbacks.error then callbacks.error(response_message(nil, response, "Failed to load user profile.")) end
 				return
 			end
+			apply_authenticated_user_state(self, user)
 			self:ConnectWebSocket(callbacks)
 		end)
 		return
@@ -2526,8 +2532,13 @@ function ITGOnline:Connect(callbacks)
 
 	local config = self:Config()
 	if tostring(config.accessToken or "") ~= "" then
-		self.token = tostring(config.accessToken)
-		self:Connect(callbacks)
+		self:ApplyAccessToken(tostring(config.accessToken), function(ok, _user, response)
+			if not ok then
+				if callbacks and callbacks.error then callbacks.error(response_message(nil, response, "Failed to load user profile.")) end
+				return
+			end
+			self:ConnectWebSocket(callbacks)
+		end)
 		return
 	end
 
@@ -2548,7 +2559,6 @@ function ITGOnline:Disconnect()
 		self:Request("POST", "/auth/logout", {}, function() end)
 		self.token = token
 	end
-	self:ClearStoredAccessToken()
 	if self.socket then
 		self.socket:Close()
 	end

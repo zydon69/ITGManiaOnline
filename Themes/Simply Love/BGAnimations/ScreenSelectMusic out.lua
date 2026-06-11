@@ -10,11 +10,12 @@ end
 
 local segment_count = 24
 local radius = 42
+local prompt_y = 76
 
 local countdown_segments = Def.ActorFrame{
 	Name="CountdownSegments",
 	InitCommand=function(self)
-		self:xy(_screen.cx, _screen.cy + 62):visible(false)
+		self:xy(_screen.cx, _screen.cy + prompt_y):visible(false)
 	end,
 	ShowPressStartForOptionsCommand=function(self)
 		if onlineFlowSuppressesPrompt() then
@@ -157,7 +158,7 @@ return Def.ActorFrame{
 				local seconds = math.ceil(tonumber(params and params.Seconds) or 0)
 				self:stoptweening()
 					:zoom(0.78)
-					:settext(seconds > 0 and tostring(seconds) or "")
+					:settext(seconds > 0 and tostring(seconds) .. "s" or "0s")
 					:diffuse(GetHexColor(SL.Global.ActiveColorIndex))
 					:diffusealpha(1)
 			end,
@@ -183,7 +184,7 @@ return Def.ActorFrame{
 					local parent = actor:GetParent()
 					local secondary = parent and parent:GetChild("SecondaryText") or nil
 					if secondary then
-						secondary:settext(left > 0 and tostring(math.ceil(left)) or "")
+						secondary:settext(left > 0 and (tostring(math.ceil(left)) .. "s") or "0s")
 					end
 					if left <= 0 then
 						actor:SetUpdateFunction(nil)
