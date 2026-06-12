@@ -606,17 +606,30 @@ void GameState::LoadProfiles(bool bLoadEdits) {
       continue;
     }
 
-    MEMCARDMAN->MountCard(pn);
-    bool bSuccess = PROFILEMAN->LoadFirstAvailableProfile(
-        pn, bLoadEdits);  // load full profile
-    MEMCARDMAN->UnmountCard(pn);
+    bool bSuccess = false;
+    if (MEMCARDMAN->GetCardState(pn) == MemoryCardState_Ready) {
+      if (MEMCARDMAN->MountCard(pn)) {
+        bSuccess = PROFILEMAN->LoadProfileFromMemoryCard(
+            pn, bLoadEdits);  // load full USB profile
+        MEMCARDMAN->UnmountCard(pn);
+      } else {
+        LOG->Warn(
+            "Failed to mount P%d memory card while loading profile", pn + 1);
+      }
+    }
+
+    if (!bSuccess) {
+      bSuccess = PROFILEMAN->LoadLocalProfileFromMachine(pn);
+    }
 
     if (!bSuccess) {
       continue;
     }
 
-    // Lock the card on successful load, so we won't allow it to be changed.
-    MEMCARDMAN->LockCard(pn);
+    // Lock the card on successful USB load, so we won't allow it to be changed.
+    if (PROFILEMAN->ProfileWasLoadedFromMemoryCard(pn)) {
+      MEMCARDMAN->LockCard(pn);
+    }
 
     LoadCurrentSettingsFromProfile(pn);
 
@@ -645,9 +658,14 @@ void GameState::SavePlayerProfile(PlayerNumber pn) {
 
   bool bWasMemoryCard = PROFILEMAN->ProfileWasLoadedFromMemoryCard(pn);
   if (bWasMemoryCard) {
-    MEMCARDMAN->MountCard(pn);
+    if (!MEMCARDMAN->MountCard(pn)) {
+      LOG->Warn("Skipping P%d memory card profile save; mount failed", pn + 1);
+      return;
+    }
   }
-  PROFILEMAN->SaveProfile(pn);
+  if (!PROFILEMAN->SaveProfile(pn)) {
+    LOG->Warn("Failed to save P%d profile", pn + 1);
+  }
   if (bWasMemoryCard) {
     MEMCARDMAN->UnmountCard(pn);
   }

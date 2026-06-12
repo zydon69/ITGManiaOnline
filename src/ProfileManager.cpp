@@ -261,6 +261,7 @@ bool ProfileManager::LoadProfileFromMemoryCard(
   std::vector<std::string> asDirsToTry;
   GetMemoryCardProfileDirectoriesToTry(asDirsToTry);
   m_bNewProfile[pn] = true;
+  bool bLoadedProfile = false;
 
   for (unsigned i = 0; i < asDirsToTry.size(); ++i) {
     const std::string& sSubdir = asDirsToTry[i];
@@ -277,6 +278,7 @@ bool ProfileManager::LoadProfileFromMemoryCard(
     ProfileLoadResult res = LoadProfile(pn, sDir, true);
     if (res == ProfileLoadResult_Success) {
       m_bNewProfile[pn] = false;
+      bLoadedProfile = true;
       /* If importing, store the directory we imported from, for display
        * purposes. */
       if (i > 0) {
@@ -289,6 +291,15 @@ bool ProfileManager::LoadProfileFromMemoryCard(
       m_bNewProfile[pn] = false;
       break;
     }
+  }
+
+  if (!bLoadedProfile) {
+    LOG->Warn(
+        "Memory card profile for P%d did not load; refusing to treat it as a "
+        "writable profile",
+        pn + 1);
+    UnloadProfile(pn);
+    return false;
   }
 
   /* If we imported a profile fallback directory, change the memory card
@@ -312,8 +323,7 @@ bool ProfileManager::LoadProfileFromMemoryCard(
     }
   }
 
-  return true;  // If a card is inserted, we want to use the memory card to save
-                // - even if the Profile load failed.
+  return true;
 }
 
 bool ProfileManager::LoadFirstAvailableProfile(
