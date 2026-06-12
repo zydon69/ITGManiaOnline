@@ -310,7 +310,11 @@ static bool Deserialize(Steps& o, const Json::Value& root) {
   return true;
 }
 
-static void Deserialize(Song& out, const Json::Value& root) {
+static bool Deserialize(Song& out, const Json::Value& root) {
+  if (!root.isObject()) {
+    LOG->Warn("SRC_AUDIT_FIX JSON song root is not an object; load rejected.");
+    return false;
+  }
   out.SetSongDir(root["SongDir"].asString());
   out.m_sGroupName = root["GroupName"].asString();
   out.m_sMainTitle = root["Title"].asString();
@@ -379,6 +383,11 @@ static void Deserialize(Song& out, const Json::Value& root) {
       }
     }
   }
+  if (out.GetAllSteps().empty() && root.isMember("Charts")) {
+    LOG->Warn("SRC_AUDIT_FIX JSON song has no loadable charts; load rejected.");
+    return false;
+  }
+  return true;
 }
 
 bool NotesLoaderJson::LoadFromJsonFile(const std::string& sPath, Song& out) {
@@ -387,9 +396,7 @@ bool NotesLoaderJson::LoadFromJsonFile(const std::string& sPath, Song& out) {
     return false;
   }
 
-  Deserialize(out, root);
-
-  return true;
+  return Deserialize(out, root);
 }
 
 bool NotesLoaderJson::LoadFromDir(const std::string& sPath, Song& out) {

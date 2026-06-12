@@ -134,3 +134,7 @@ require_contains(
   "${notes_writer_json_cpp}"
   "RadarValuesByPlayer"
   "JSON writer writes per-player radar values")
+require_contains(
+  "${notes_loader_json_cpp}"
+  "JSON song root is not an object; load rejected"
+  "JSON loader rejects non-object song roots")
