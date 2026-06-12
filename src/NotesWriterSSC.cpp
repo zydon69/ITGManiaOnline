@@ -28,6 +28,136 @@
 #include "TimingSegments.h"
 #include "global.h"
 
+namespace {
+class CheckedFileWriter {
+ public:
+  CheckedFileWriter(RageFileBasic& file, const char* context)
+    : m_file(file), m_context(context), m_failed(false) {}
+
+  int Write(const std::string& s) {
+    if (m_failed) {
+      return -1;
+    }
+    const int ret = m_file.Write(s);
+    Record(ret);
+    return ret;
+  }
+
+  int PutLine(const std::string& s) {
+    if (m_failed) {
+      return -1;
+    }
+    const int ret = m_file.PutLine(s);
+    Record(ret);
+    return ret;
+  }
+
+  int Flush() {
+    if (m_failed) {
+      return -1;
+    }
+    const int ret = m_file.Flush();
+    Record(ret);
+    return ret;
+  }
+
+  bool Failed() const { return m_failed; }
+  std::string GetError() const { return m_file.GetError(); }
+
+ private:
+  void Record(int ret) {
+    if (ret != -1) {
+      return;
+    }
+    m_failed = true;
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s write failed: %s", m_context,
+        m_file.GetError().c_str());
+  }
+
+  RageFileBasic& m_file;
+  const char* m_context;
+  bool m_failed;
+};
+
+static std::string SanitizeSSCLabelForWrite(const std::string& label) {
+  std::string sanitized = label;
+  bool changed = false;
+  for (char& c : sanitized) {
+    if (c == ',' || c == '=' || c == '\r' || c == '\n') {
+      c = ' ';
+      changed = true;
+    }
+  }
+  if (changed) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: SSC writer sanitized a timing label containing a "
+        "#LABELS delimiter.");
+  }
+  return SmEscape(sanitized);
+}
+
+static std::vector<std::string> GetTimingVectorForWrite(
+    const TimingData& timing, TimingSegmentType type, int dec) {
+  const std::vector<TimingSegment*>& segs = timing.GetTimingSegments(type);
+  std::vector<std::string> out;
+  if (type == SEGMENT_LABEL) {
+    for (TimingSegment* seg : segs) {
+      const LabelSegment* label = ToLabel(seg);
+      if (!label->GetLabel().empty()) {
+        out.push_back(ssprintf(
+            "%.6f=%s", label->GetBeat(),
+            SanitizeSSCLabelForWrite(label->GetLabel()).c_str()));
+      }
+    }
+    if (out.empty()) {
+      out.push_back("0.000000=Song Start");
+    }
+    return out;
+  }
+
+  if (!segs.empty()) {
+    return timing.ToVectorString(type, dec);
+  }
+
+  switch (type) {
+    case SEGMENT_BPM:
+      LOG->Warn(
+          "SRC_AUDIT_FIX: SSC writer provided fallback BPM because TimingData "
+          "had no BPM segments.");
+      out.push_back(BPMSegment(0, 60).ToString(dec));
+      break;
+    case SEGMENT_TIME_SIG:
+      LOG->Warn(
+          "SRC_AUDIT_FIX: SSC writer provided fallback time signature because "
+          "TimingData had none.");
+      out.push_back(TimeSignatureSegment(0).ToString(dec));
+      break;
+    case SEGMENT_TICKCOUNT:
+      LOG->Warn(
+          "SRC_AUDIT_FIX: SSC writer provided fallback tickcount because "
+          "TimingData had none.");
+      out.push_back(TickcountSegment(0).ToString(dec));
+      break;
+    case SEGMENT_COMBO:
+      LOG->Warn(
+          "SRC_AUDIT_FIX: SSC writer provided fallback combo because TimingData "
+          "had none.");
+      out.push_back(ComboSegment(0).ToString(dec));
+      break;
+    case SEGMENT_SPEED:
+      out.push_back(SpeedSegment(0).ToString(dec));
+      break;
+    case SEGMENT_SCROLL:
+      out.push_back(ScrollSegment(0).ToString(dec));
+      break;
+    default:
+      break;
+  }
+  return out;
+}
+}  // namespace
+
 /**
  * @brief Turn a vector of lines into a single line joined by newline
  * characters.
@@ -81,6 +211,9 @@ struct TimingTagWriter {
       const int row, const float a, const float b, const unsigned short c) {
     Write(row, ssprintf("%.6f=%.6f=%hd", a, b, c).c_str());
   }
+  void WriteLabel(const int row, const std::string& value) {
+    Write(row, SanitizeSSCLabelForWrite(value).c_str());
+  }
 
   void Init(const std::string sTag) { m_sNext = "#" + sTag + ":"; }
   void Finish() {
@@ -100,6 +233,13 @@ static void GetTimingTags(
   w.Init("BPMS");
   const std::vector<TimingSegment*>& bpms =
       timing.GetTimingSegments(SEGMENT_BPM);
+  if (bpms.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: SSC step timing writer provided fallback BPM because "
+        "TimingData had no BPM segments.");
+    BPMSegment bs(0, 60);
+    w.Write(bs.GetRow(), bs.GetBPM());
+  }
   for (; i < bpms.size(); i++) {
     const BPMSegment* bs = ToBPM(bpms[i]);
     w.Write(bs->GetRow(), bs->GetBPM());
@@ -135,8 +275,14 @@ static void GetTimingTags(
 
   const std::vector<TimingSegment*>& tSigs =
       timing.GetTimingSegments(SEGMENT_TIME_SIG);
-  ASSERT(!tSigs.empty());
   w.Init("TIMESIGNATURES");
+  if (tSigs.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: SSC step timing writer provided fallback time "
+        "signature because TimingData had none.");
+    TimeSignatureSegment ts(0);
+    w.Write(ts.GetRow(), ts.GetNum(), ts.GetDen());
+  }
   for (i = 0; i < tSigs.size(); i++) {
     const TimeSignatureSegment* ts = ToTimeSignature(tSigs[i]);
     w.Write(ts->GetRow(), ts->GetNum(), ts->GetDen());
@@ -145,8 +291,14 @@ static void GetTimingTags(
 
   const std::vector<TimingSegment*>& ticks =
       timing.GetTimingSegments(SEGMENT_TICKCOUNT);
-  ASSERT(!ticks.empty());
   w.Init("TICKCOUNTS");
+  if (ticks.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: SSC step timing writer provided fallback tickcount "
+        "because TimingData had none.");
+    TickcountSegment ts(0);
+    w.Write(ts.GetRow(), ts.GetTicks());
+  }
   for (i = 0; i < ticks.size(); i++) {
     const TickcountSegment* ts = ToTickcount(ticks[i]);
     w.Write(ts->GetRow(), ts->GetTicks());
@@ -155,8 +307,14 @@ static void GetTimingTags(
 
   const std::vector<TimingSegment*>& combos =
       timing.GetTimingSegments(SEGMENT_COMBO);
-  ASSERT(!combos.empty());
   w.Init("COMBOS");
+  if (combos.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: SSC step timing writer provided fallback combo because "
+        "TimingData had none.");
+    ComboSegment cs(0);
+    w.Write(cs.GetRow(), cs.GetCombo());
+  }
   for (i = 0; i < combos.size(); i++) {
     const ComboSegment* cs = ToCombo(combos[i]);
     if (cs->GetCombo() == cs->GetMissCombo()) {
@@ -203,17 +361,17 @@ static void GetTimingTags(
   for (i = 0; i < labels.size(); i++) {
     LabelSegment* ls = static_cast<LabelSegment*>(labels[i]);
     if (!ls->GetLabel().empty()) {
-      w.Write(ls->GetRow(), ls->GetLabel().c_str());
+      w.WriteLabel(ls->GetRow(), ls->GetLabel());
     }
   }
   w.Finish();
 }
 
 static void WriteTimingTags(
-    RageFile& f, const TimingData& timing, bool bIsSong = false) {
+    CheckedFileWriter& f, const TimingData& timing, bool bIsSong = false) {
   f.PutLine(ssprintf(
       "#BPMS:%s;",
-      join(",\r\n", timing.ToVectorString(SEGMENT_BPM, 6)).c_str()));
+      join(",\r\n", GetTimingVectorForWrite(timing, SEGMENT_BPM, 6)).c_str()));
   f.PutLine(ssprintf(
       "#STOPS:%s;",
       join(",\r\n", timing.ToVectorString(SEGMENT_STOP, 6)).c_str()));
@@ -225,32 +383,37 @@ static void WriteTimingTags(
       join(",\r\n", timing.ToVectorString(SEGMENT_WARP, 6)).c_str()));
   f.PutLine(ssprintf(
       "#TIMESIGNATURES:%s;",
-      join(",\r\n", timing.ToVectorString(SEGMENT_TIME_SIG, 6)).c_str()));
+      join(",\r\n", GetTimingVectorForWrite(timing, SEGMENT_TIME_SIG, 6))
+          .c_str()));
   f.PutLine(ssprintf(
       "#TICKCOUNTS:%s;",
-      join(",\r\n", timing.ToVectorString(SEGMENT_TICKCOUNT, 6)).c_str()));
+      join(",\r\n", GetTimingVectorForWrite(timing, SEGMENT_TICKCOUNT, 6))
+          .c_str()));
   f.PutLine(ssprintf(
       "#COMBOS:%s;",
-      join(",\r\n", timing.ToVectorString(SEGMENT_COMBO, 6)).c_str()));
+      join(",\r\n", GetTimingVectorForWrite(timing, SEGMENT_COMBO, 6)).c_str()));
   f.PutLine(ssprintf(
       "#SPEEDS:%s;",
-      join(",\r\n", timing.ToVectorString(SEGMENT_SPEED, 6)).c_str()));
+      join(",\r\n", GetTimingVectorForWrite(timing, SEGMENT_SPEED, 6)).c_str()));
   f.PutLine(ssprintf(
       "#SCROLLS:%s;",
-      join(",\r\n", timing.ToVectorString(SEGMENT_SCROLL, 6)).c_str()));
-  f.PutLine(ssprintf(
-      "#FAKES:%s;",
-      join(",\r\n", timing.ToVectorString(SEGMENT_FAKE, 6)).c_str()));
+      join(",\r\n", GetTimingVectorForWrite(timing, SEGMENT_SCROLL, 6))
+          .c_str()));
+  if (!bIsSong) {
+    f.PutLine(ssprintf(
+        "#FAKES:%s;",
+        join(",\r\n", timing.ToVectorString(SEGMENT_FAKE, 6)).c_str()));
+  }
   f.PutLine(ssprintf(
       "#LABELS:%s;",
-      join(",\r\n", timing.ToVectorString(SEGMENT_LABEL, 6)).c_str()));
+      join(",\r\n", GetTimingVectorForWrite(timing, SEGMENT_LABEL, 6)).c_str()));
 }
 
 /**
  * @brief Write out the common tags for .SSC files.
  * @param f the file in question.
  * @param out the Song in question. */
-static void WriteGlobalTags(RageFile& f, const Song& out) {
+static bool WriteGlobalTags(CheckedFileWriter& f, const Song& out) {
   f.PutLine(ssprintf("#VERSION:%.2f;", STEPFILE_VERSION_NUMBER));
   f.PutLine(ssprintf("#TITLE:%s;", SmEscape(out.m_sMainTitle).c_str()));
   f.PutLine(ssprintf("#SUBTITLE:%s;", SmEscape(out.m_sSubTitle).c_str()));
@@ -294,8 +457,12 @@ static void WriteGlobalTags(RageFile& f, const Song& out) {
   f.Write("#SELECTABLE:");
   switch (out.m_SelectionDisplay) {
     default:
-      ASSERT_M(0, "An invalid selectable value was found for this song!");
-      [[fallthrough]];
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid SSC selection display %i while writing '%s'; "
+          "falling back to YES.",
+          out.m_SelectionDisplay, out.GetSongDir().c_str());
+      f.Write("YES");
+      break;
     case Song::SHOW_ALWAYS:
       f.Write("YES");
       break;
@@ -402,6 +569,7 @@ static void WriteGlobalTags(RageFile& f, const Song& out) {
   }
   f.Write(";");
   f.PutLine("");
+  return !f.Failed();
 }
 
 /**
@@ -512,7 +680,7 @@ static std::string GetSSCNoteData(
         in.GetAllNpsPerMeasures();
     std::vector<std::string> npsPerMeasureStrings;
     npsPerMeasureStrings.reserve(allNpsPerMeasures.size());
-    for (std::vector<float> npsPerMeasure : allNpsPerMeasures) {
+    for (const std::vector<float>& npsPerMeasure : allNpsPerMeasures) {
       npsPerMeasureStrings.push_back(serialize(npsPerMeasure, ",", 3));
     }
     lines.push_back(ssprintf(
@@ -522,7 +690,7 @@ static std::string GetSSCNoteData(
         in.GetAllNotesPerMeasures();
     std::vector<std::string> notesPerMeasureStrings;
     notesPerMeasureStrings.reserve(allNotesPerMeasures.size());
-    for (std::vector<int> notesPerMeasure : allNotesPerMeasures) {
+    for (const std::vector<int>& notesPerMeasure : allNotesPerMeasures) {
       notesPerMeasureStrings.push_back(serialize(notesPerMeasure, ","));
     }
 
@@ -581,26 +749,29 @@ bool NotesWriterSSC::Write(
     return false;
   }
 
-  WriteGlobalTags(f, out);
+  CheckedFileWriter writer(f, "NotesWriterSSC");
+  if (!WriteGlobalTags(writer, out)) {
+    return false;
+  }
 
   if (bSavingCache) {
-    f.PutLine(ssprintf("// cache tags:"));
-    f.PutLine(ssprintf("#FIRSTSECOND:%.6f;", out.GetFirstSecond()));
-    f.PutLine(ssprintf("#LASTSECOND:%.6f;", out.GetLastSecond()));
-    f.PutLine(
+    writer.PutLine(ssprintf("// cache tags:"));
+    writer.PutLine(ssprintf("#FIRSTSECOND:%.6f;", out.GetFirstSecond()));
+    writer.PutLine(ssprintf("#LASTSECOND:%.6f;", out.GetLastSecond()));
+    writer.PutLine(
         ssprintf("#SONGFILENAME:%s;", SmEscape(out.m_sSongFileName).c_str()));
-    f.PutLine(ssprintf("#HASMUSIC:%i;", out.m_bHasMusic));
-    f.PutLine(ssprintf("#HASBANNER:%i;", out.m_bHasBanner));
-    f.PutLine(ssprintf("#MUSICLENGTH:%.6f;", out.m_fMusicLengthSeconds));
-    f.PutLine(ssprintf("// end cache tags"));
+    writer.PutLine(ssprintf("#HASMUSIC:%i;", out.m_bHasMusic));
+    writer.PutLine(ssprintf("#HASBANNER:%i;", out.m_bHasBanner));
+    writer.PutLine(ssprintf("#MUSICLENGTH:%.6f;", out.m_fMusicLengthSeconds));
+    writer.PutLine(ssprintf("// end cache tags"));
   }
 
   // Save specified Steps to this file
   for (const Steps* pSteps : vpStepsToSave) {
     std::string sTag = GetSSCNoteData(out, *pSteps, bSavingCache);
-    f.PutLine(sTag);
+    writer.PutLine(sTag);
   }
-  if (f.Flush() == -1) {
+  if (writer.Flush() == -1) {
     return false;
   }
 
@@ -618,7 +789,7 @@ void NotesWriterSSC::GetEditFileContents(
   if (asParts.size()) {
     sDir = join("/", asParts.begin() + 1, asParts.end());
   }
-  sOut += ssprintf("#SONG:%s;\r\n", sDir.c_str());
+  sOut += ssprintf("#SONG:%s;\r\n", SmEscape(sDir).c_str());
   sOut += GetSSCNoteData(*pSong, *pSteps, false);
 }
 
@@ -681,7 +852,17 @@ bool NotesWriterSSC::WriteEditFileToMachine(
    * lose data on error. */
 
   if (bFileNameChanging) {
-    FILEMAN->Remove(pSteps->GetFilename());
+    if (!FILEMAN->Remove(pSteps->GetFilename()) &&
+        DoesFileExist(pSteps->GetFilename())) {
+      sErrorOut = ssprintf(
+          "Error removing old edit file '%s'.",
+          pSteps->GetFilename().c_str());
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Failed to remove old SSC edit file '%s' after "
+          "writing '%s'.",
+          pSteps->GetFilename().c_str(), sPath.c_str());
+      return false;
+    }
   }
   pSteps->SetFilename(sPath);
 
