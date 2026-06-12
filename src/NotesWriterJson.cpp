@@ -21,12 +21,46 @@
 
 static void Serialize(const TimingSegment& seg, Json::Value& root) {
   root["Beat"] = seg.GetBeat();
-  if (seg.GetType() == SEGMENT_BPM) {
-    root["BPM"] =
-        static_cast<BPMSegment&>(const_cast<TimingSegment&>(seg)).GetBPM();
-  } else {
-    root["Seconds"] =
-        static_cast<StopSegment&>(const_cast<TimingSegment&>(seg)).GetPause();
+  switch (seg.GetType()) {
+    case SEGMENT_BPM:
+      root["BPM"] = ToBPM(&seg)->GetBPM();
+      break;
+    case SEGMENT_STOP:
+      root["Seconds"] = ToStop(&seg)->GetPause();
+      break;
+    case SEGMENT_DELAY:
+      root["Seconds"] = ToDelay(&seg)->GetPause();
+      break;
+    case SEGMENT_TIME_SIG:
+      root["Numerator"] = ToTimeSignature(&seg)->GetNum();
+      root["Denominator"] = ToTimeSignature(&seg)->GetDen();
+      break;
+    case SEGMENT_WARP:
+      root["Length"] = ToWarp(&seg)->GetLength();
+      break;
+    case SEGMENT_LABEL:
+      root["Label"] = ToLabel(&seg)->GetLabel();
+      break;
+    case SEGMENT_TICKCOUNT:
+      root["Ticks"] = ToTickcount(&seg)->GetTicks();
+      break;
+    case SEGMENT_COMBO:
+      root["Combo"] = ToCombo(&seg)->GetCombo();
+      root["MissCombo"] = ToCombo(&seg)->GetMissCombo();
+      break;
+    case SEGMENT_SPEED:
+      root["Ratio"] = ToSpeed(&seg)->GetRatio();
+      root["Delay"] = ToSpeed(&seg)->GetDelay();
+      root["Unit"] = (int)ToSpeed(&seg)->GetUnit();
+      break;
+    case SEGMENT_SCROLL:
+      root["Ratio"] = ToScroll(&seg)->GetRatio();
+      break;
+    case SEGMENT_FAKE:
+      root["Length"] = ToFake(&seg)->GetLength();
+      break;
+    default:
+      break;
   }
 }
 
@@ -35,6 +69,26 @@ static void Serialize(const TimingData& td, Json::Value& root) {
       td.GetTimingSegments(SEGMENT_BPM), Serialize, root["BpmSegments"]);
   JsonUtil::SerializeVectorPointers(
       td.GetTimingSegments(SEGMENT_STOP), Serialize, root["StopSegments"]);
+  JsonUtil::SerializeVectorPointers(
+      td.GetTimingSegments(SEGMENT_DELAY), Serialize, root["DelaySegments"]);
+  JsonUtil::SerializeVectorPointers(
+      td.GetTimingSegments(SEGMENT_TIME_SIG), Serialize,
+      root["TimeSignatureSegments"]);
+  JsonUtil::SerializeVectorPointers(
+      td.GetTimingSegments(SEGMENT_WARP), Serialize, root["WarpSegments"]);
+  JsonUtil::SerializeVectorPointers(
+      td.GetTimingSegments(SEGMENT_LABEL), Serialize, root["LabelSegments"]);
+  JsonUtil::SerializeVectorPointers(
+      td.GetTimingSegments(SEGMENT_TICKCOUNT), Serialize,
+      root["TickcountSegments"]);
+  JsonUtil::SerializeVectorPointers(
+      td.GetTimingSegments(SEGMENT_COMBO), Serialize, root["ComboSegments"]);
+  JsonUtil::SerializeVectorPointers(
+      td.GetTimingSegments(SEGMENT_SPEED), Serialize, root["SpeedSegments"]);
+  JsonUtil::SerializeVectorPointers(
+      td.GetTimingSegments(SEGMENT_SCROLL), Serialize, root["ScrollSegments"]);
+  JsonUtil::SerializeVectorPointers(
+      td.GetTimingSegments(SEGMENT_FAKE), Serialize, root["FakeSegments"]);
 }
 
 static void Serialize(const LyricSegment& o, Json::Value& root) {
@@ -124,6 +178,10 @@ static void Serialize(const Steps& o, Json::Value& root) {
   if (o.GetDisplayBPM() == DISPLAY_BPM_SPECIFIED) {
     root["SpecifiedBpmMin"] = o.GetMinBPM();
     root["SpecifiedBpmMax"] = o.GetMaxBPM();
+  }
+  if (!o.m_Timing.empty()) {
+    root["TimingData"]["Offset"] = o.m_Timing.m_fBeat0OffsetInSeconds;
+    Serialize(o.m_Timing, root["TimingData"]);
   }
 }
 

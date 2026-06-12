@@ -27,46 +27,103 @@ void NotesLoaderJson::GetApplicableFiles(
   GetDirListing(sPath + std::string("*.json"), out);
 }
 
-static void Deserialize(TimingSegment* seg, const Json::Value& root) {
-  switch (seg->GetType()) {
-    case SEGMENT_BPM: {
-      float fBPM = root["BPM"].asDouble();
-      static_cast<BPMSegment*>(seg)->SetBPM(fBPM);
-      break;
-    }
-    case SEGMENT_STOP: {
-      float fStop = root["Seconds"].asDouble();
-      static_cast<StopSegment*>(seg)->SetPause(fStop);
-      break;
-    }
-    default:
-      break;  // The rest are unused.
-  }
-}
-
 static void Deserialize(BPMSegment& seg, const Json::Value& root) {
-  Deserialize(static_cast<TimingSegment*>(&seg), root);
+  seg.SetBeat((float)root["Beat"].asDouble());
+  seg.SetBPM((float)root["BPM"].asDouble());
 }
 
 static void Deserialize(StopSegment& seg, const Json::Value& root) {
-  Deserialize(static_cast<TimingSegment*>(&seg), root);
+  seg.SetBeat((float)root["Beat"].asDouble());
+  seg.SetPause((float)root["Seconds"].asDouble());
+}
+
+static void Deserialize(DelaySegment& seg, const Json::Value& root) {
+  seg.SetBeat((float)root["Beat"].asDouble());
+  seg.SetPause((float)root["Seconds"].asDouble());
+}
+
+static void Deserialize(TimeSignatureSegment& seg, const Json::Value& root) {
+  seg.SetBeat((float)root["Beat"].asDouble());
+  seg.SetNum(root["Numerator"].asInt());
+  seg.SetDen(root["Denominator"].asInt());
+}
+
+static void Deserialize(WarpSegment& seg, const Json::Value& root) {
+  seg.SetBeat((float)root["Beat"].asDouble());
+  seg.SetLength((float)root["Length"].asDouble());
+}
+
+static void Deserialize(LabelSegment& seg, const Json::Value& root) {
+  seg.SetBeat((float)root["Beat"].asDouble());
+  seg.SetLabel(root["Label"].asString());
+}
+
+static void Deserialize(TickcountSegment& seg, const Json::Value& root) {
+  seg.SetBeat((float)root["Beat"].asDouble());
+  seg.SetTicks(root["Ticks"].asInt());
+}
+
+static void Deserialize(ComboSegment& seg, const Json::Value& root) {
+  seg.SetBeat((float)root["Beat"].asDouble());
+  seg.SetCombo(root["Combo"].asInt());
+  seg.SetMissCombo(root.isMember("MissCombo") ? root["MissCombo"].asInt()
+                                              : root["Combo"].asInt());
+}
+
+static void Deserialize(SpeedSegment& seg, const Json::Value& root) {
+  seg.SetBeat((float)root["Beat"].asDouble());
+  seg.SetRatio((float)root["Ratio"].asDouble());
+  seg.SetDelay((float)root["Delay"].asDouble());
+  seg.SetUnit(
+      root["Unit"].asInt() == 0 ? SpeedSegment::UNIT_BEATS
+                                : SpeedSegment::UNIT_SECONDS);
+}
+
+static void Deserialize(ScrollSegment& seg, const Json::Value& root) {
+  seg.SetBeat((float)root["Beat"].asDouble());
+  seg.SetRatio((float)root["Ratio"].asDouble());
+}
+
+static void Deserialize(FakeSegment& seg, const Json::Value& root) {
+  seg.SetBeat((float)root["Beat"].asDouble());
+  seg.SetLength((float)root["Length"].asDouble());
+}
+
+template <class Segment>
+static void DeserializeTimingSegmentArray(
+    TimingData& td, const Json::Value& root, const char* key) {
+  const Json::Value& segments = root[key];
+  if (!segments.isArray()) {
+    return;
+  }
+  for (unsigned i = 0; i < segments.size(); ++i) {
+    Segment segment;
+    Deserialize(segment, segments[i]);
+    td.AddSegment(segment);
+  }
 }
 
 static void Deserialize(TimingData& td, const Json::Value& root) {
-  std::vector<BPMSegment*> vBPMs;
-  std::vector<StopSegment*> vStops;
-  JsonUtil::DeserializeVectorPointers(vBPMs, Deserialize, root["BpmSegments"]);
-  JsonUtil::DeserializeVectorPointers(
-      vStops, Deserialize, root["StopSegments"]);
-
-  for (unsigned i = 0; i < vBPMs.size(); ++i) {
-    td.AddSegment(*vBPMs[i]);
-    delete vBPMs[i];
+  if (!root.isObject()) {
+    LOG->Warn("SRC_AUDIT_FIX JSON TimingData is not an object; ignored.");
+    return;
   }
-  for (unsigned i = 0; i < vStops.size(); ++i) {
-    td.AddSegment(*vStops[i]);
-    delete vStops[i];
+  if (root.isMember("Offset")) {
+    td.m_fBeat0OffsetInSeconds = (float)root["Offset"].asDouble();
   }
+  DeserializeTimingSegmentArray<BPMSegment>(td, root, "BpmSegments");
+  DeserializeTimingSegmentArray<StopSegment>(td, root, "StopSegments");
+  DeserializeTimingSegmentArray<DelaySegment>(td, root, "DelaySegments");
+  DeserializeTimingSegmentArray<TimeSignatureSegment>(
+      td, root, "TimeSignatureSegments");
+  DeserializeTimingSegmentArray<WarpSegment>(td, root, "WarpSegments");
+  DeserializeTimingSegmentArray<LabelSegment>(td, root, "LabelSegments");
+  DeserializeTimingSegmentArray<TickcountSegment>(
+      td, root, "TickcountSegments");
+  DeserializeTimingSegmentArray<ComboSegment>(td, root, "ComboSegments");
+  DeserializeTimingSegmentArray<SpeedSegment>(td, root, "SpeedSegments");
+  DeserializeTimingSegmentArray<ScrollSegment>(td, root, "ScrollSegments");
+  DeserializeTimingSegmentArray<FakeSegment>(td, root, "FakeSegments");
 }
 
 static void Deserialize(LyricSegment& o, const Json::Value& root) {
@@ -229,6 +286,9 @@ static bool Deserialize(Steps& o, const Json::Value& root) {
       o.SetMinBPM((float)root["SpecifiedBpmMin"].asDouble());
       o.SetMaxBPM((float)root["SpecifiedBpmMax"].asDouble());
     }
+  }
+  if (root.isMember("TimingData")) {
+    Deserialize(o.m_Timing, root["TimingData"]);
   }
   return true;
 }

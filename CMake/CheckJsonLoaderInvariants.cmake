@@ -59,3 +59,70 @@ require_contains(
   "${notes_loader_json_cpp}"
   "DisplayBPMToString(DISPLAY_BPM_RANDOM)"
   "JSON loader recognizes enum display BPM strings written by NotesWriterJson")
+require_contains(
+  "${notes_loader_json_cpp}"
+  "DeserializeTimingSegmentArray<DelaySegment>"
+  "JSON loader reads delay timing segments")
+require_contains(
+  "${notes_loader_json_cpp}"
+  "DeserializeTimingSegmentArray<TimeSignatureSegment>"
+  "JSON loader reads time signature timing segments")
+require_contains(
+  "${notes_loader_json_cpp}"
+  "DeserializeTimingSegmentArray<WarpSegment>"
+  "JSON loader reads warp timing segments")
+require_contains(
+  "${notes_loader_json_cpp}"
+  "DeserializeTimingSegmentArray<TickcountSegment>"
+  "JSON loader reads tickcount timing segments")
+require_contains(
+  "${notes_loader_json_cpp}"
+  "DeserializeTimingSegmentArray<ComboSegment>"
+  "JSON loader reads combo timing segments")
+require_contains(
+  "${notes_loader_json_cpp}"
+  "DeserializeTimingSegmentArray<SpeedSegment>"
+  "JSON loader reads speed timing segments")
+require_contains(
+  "${notes_loader_json_cpp}"
+  "DeserializeTimingSegmentArray<ScrollSegment>"
+  "JSON loader reads scroll timing segments")
+require_contains(
+  "${notes_loader_json_cpp}"
+  "DeserializeTimingSegmentArray<FakeSegment>"
+  "JSON loader reads fake timing segments")
+
+read_source("src/NotesWriterJson.cpp" notes_writer_json_cpp)
+
+require_contains(
+  "${notes_writer_json_cpp}"
+  "root[\"DelaySegments\"]"
+  "JSON writer writes delay timing segments")
+require_contains(
+  "${notes_writer_json_cpp}"
+  "root[\"TimeSignatureSegments\"]"
+  "JSON writer writes time signature timing segments")
+require_contains(
+  "${notes_writer_json_cpp}"
+  "root[\"WarpSegments\"]"
+  "JSON writer writes warp timing segments")
+require_contains(
+  "${notes_writer_json_cpp}"
+  "root[\"TickcountSegments\"]"
+  "JSON writer writes tickcount timing segments")
+require_contains(
+  "${notes_writer_json_cpp}"
+  "root[\"ComboSegments\"]"
+  "JSON writer writes combo timing segments")
+require_contains(
+  "${notes_writer_json_cpp}"
+  "root[\"SpeedSegments\"]"
+  "JSON writer writes speed timing segments")
+require_contains(
+  "${notes_writer_json_cpp}"
+  "root[\"ScrollSegments\"]"
+  "JSON writer writes scroll timing segments")
+require_contains(
+  "${notes_writer_json_cpp}"
+  "root[\"FakeSegments\"]"
+  "JSON writer writes fake timing segments")
