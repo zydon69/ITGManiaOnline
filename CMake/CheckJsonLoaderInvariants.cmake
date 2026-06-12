@@ -55,3 +55,7 @@ require_contains(
   "${notes_loader_json_cpp}"
   "RageUtil::SafeDelete(step);"
   "JSON loader deletes chart objects rejected during deserialization")
+require_contains(
+  "${notes_loader_json_cpp}"
+  "DisplayBPMToString(DISPLAY_BPM_RANDOM)"
+  "JSON loader recognizes enum display BPM strings written by NotesWriterJson")

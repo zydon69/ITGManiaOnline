@@ -179,6 +179,25 @@ static void Deserialize(RadarValues& o, const Json::Value& root) {
   }
 }
 
+static DisplayBPM DeserializeDisplayBPM(const Json::Value& root) {
+  const std::string sDisplayBPMType = root.asString();
+  if (EqualsNoCase(sDisplayBPMType, DisplayBPMToString(DISPLAY_BPM_ACTUAL))) {
+    return DISPLAY_BPM_ACTUAL;
+  }
+  if (EqualsNoCase(
+          sDisplayBPMType, DisplayBPMToString(DISPLAY_BPM_SPECIFIED))) {
+    return DISPLAY_BPM_SPECIFIED;
+  }
+  if (EqualsNoCase(sDisplayBPMType, DisplayBPMToString(DISPLAY_BPM_RANDOM)) ||
+      sDisplayBPMType == "*") {
+    return DISPLAY_BPM_RANDOM;
+  }
+  LOG->Warn(
+      "SRC_AUDIT_FIX JSON has unknown DisplayBpmType '%s'; using Actual.",
+      sDisplayBPMType.c_str());
+  return DISPLAY_BPM_ACTUAL;
+}
+
 static bool Deserialize(Steps& o, const Json::Value& root) {
   o.m_StepsType = GAMEMAN->StringToStepsType(root["StepsType"].asString());
   if (o.m_StepsType == StepsType_Invalid) {
@@ -204,6 +223,13 @@ static bool Deserialize(Steps& o, const Json::Value& root) {
   RadarValues rv[NUM_PLAYERS];
   FOREACH_PlayerNumber(pn) { Deserialize(rv[pn], root["RadarValues"]); }
   o.SetRadarValues(rv);
+  if (root.isMember("DisplayBpmType")) {
+    o.SetDisplayBPM(DeserializeDisplayBPM(root["DisplayBpmType"]));
+    if (o.GetDisplayBPM() == DISPLAY_BPM_SPECIFIED) {
+      o.SetMinBPM((float)root["SpecifiedBpmMin"].asDouble());
+      o.SetMaxBPM((float)root["SpecifiedBpmMax"].asDouble());
+    }
+  }
   return true;
 }
 
@@ -237,12 +263,7 @@ static void Deserialize(Song& out, const Json::Value& root) {
   out.m_bHasBanner = root["HasBanner"].asBool();
   out.m_fMusicLengthSeconds = (float)root["MusicLengthSeconds"].asDouble();
 
-  std::string sDisplayBPMType = root["DisplayBpmType"].asString();
-  if (sDisplayBPMType == "*") {
-    out.m_DisplayBPMType = DISPLAY_BPM_RANDOM;
-  } else {
-    out.m_DisplayBPMType = DISPLAY_BPM_SPECIFIED;
-  }
+  out.m_DisplayBPMType = DeserializeDisplayBPM(root["DisplayBpmType"]);
 
   if (out.m_DisplayBPMType == DISPLAY_BPM_SPECIFIED) {
     out.m_fSpecifiedBPMMin = (float)root["SpecifiedBpmMin"].asDouble();

@@ -120,6 +120,11 @@ static void Serialize(const Steps& o, Json::Value& root) {
   root["Difficulty"] = DifficultyToString(o.GetDifficulty());
   root["Meter"] = o.GetMeter();
   Serialize(o.GetRadarValues(PLAYER_1), root["RadarValues"]);
+  root["DisplayBpmType"] = StringConversion::ToString(o.GetDisplayBPM());
+  if (o.GetDisplayBPM() == DISPLAY_BPM_SPECIFIED) {
+    root["SpecifiedBpmMin"] = o.GetMinBPM();
+    root["SpecifiedBpmMax"] = o.GetMaxBPM();
+  }
 }
 
 bool NotesWriterJson::WriteSong(
