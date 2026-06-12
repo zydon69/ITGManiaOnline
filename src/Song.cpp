@@ -365,7 +365,12 @@ const std::string& Song::GetSongFilePath() const {
 bool Song::LoadFromSongDir(
     std::string sDir, bool load_autosave, ProfileSlot from_profile) {
   //	LOG->Trace( "Song::LoadFromSongDir(%s)", sDir.c_str() );
-  ASSERT_M(sDir != "", "Songs can't be loaded from an empty directory!");
+  if (sDir.empty()) {
+    LOG->UserLog(
+        "Song", sDir,
+        "SRC_AUDIT_FIX rejected attempt to load from an empty directory.");
+    return false;
+  }
 
   // make sure there is a trailing slash at the end of sDir
   if (Right(sDir, 1) != "/") {
@@ -377,21 +382,8 @@ bool Song::LoadFromSongDir(
 
   bool use_cache = true;
 
-  std::vector<std::string> sDirectoryParts;
-  split(m_sSongDir, "/", sDirectoryParts, false);
-  m_sSongName = sDirectoryParts[sDirectoryParts.size() - 2];
-  ASSERT(m_sSongName != "");
-  // save group name
-  if (from_profile == ProfileSlot_Invalid) {
-    ASSERT(sDirectoryParts.size() >= 4); /* e.g. "/Songs/Slow/Taps/" */
-    m_sGroupName =
-        sDirectoryParts[sDirectoryParts.size() - 3];  // second from last item
-    ASSERT(m_sGroupName != "");
-  } else {
-    LOG->Trace("Loading song from profile2.");
-    m_LoadedFromProfile = from_profile;
-    m_sGroupName = sDir.substr(1, sDir.find('/', 1) - 1);
-    use_cache = false;
+  if (!ApplySongPathFields(*this, m_sSongDir, from_profile, use_cache)) {
+    return false;
   }
 
   std::string cache_file_path;
@@ -429,6 +421,10 @@ bool Song::LoadFromSongDir(
           "Couldn't load cache for '%s'; falling back to source simfiles.",
           m_sSongDir.c_str());
       Reset();
+      m_sSongDir = sDir;
+      if (!ApplySongPathFields(*this, m_sSongDir, from_profile, use_cache)) {
+        return false;
+      }
       use_cache = false;
     }
 
@@ -468,9 +464,14 @@ bool Song::LoadFromSongDir(
         return false;
       }
       // Make sure we have a future filename figured out.
-      std::vector<std::string> folders;
-      split(sDir, "/", folders);
-      std::string songName = folders[2] + ".ssc";
+      std::string songName = m_sSongName.empty() ? Basename(sDir) : m_sSongName;
+      if (songName.empty()) {
+        LOG->UserLog(
+            "Song", sDir,
+            "SRC_AUDIT_FIX could not derive fallback SSC filename.");
+        return false;
+      }
+      songName += ".ssc";
       this->m_sSongFileName = sDir + songName;
       // Continue on with a blank Song so that people can make adjustments using
       // the editor.
@@ -567,13 +568,17 @@ bool Song::ReloadFromSongDir(std::string sDir) {
   // Also invalidate the cache entry so the next load sees the previous removal.
   FILEMAN->FlushDirCache(Dirname(GetCacheFilePath()));
 
+  Song copy;
+  if (!copy.LoadFromSongDir(sDir)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Reload of '%s' failed; keeping existing song state.",
+        sDir.c_str());
+    return false;
+  }
+
   RemoveAutoGenNotes();
   std::vector<Steps*> vOldSteps = m_vpSteps;
 
-  Song copy;
-  if (!copy.LoadFromSongDir(sDir)) {
-    return false;
-  }
   copy.RemoveAutoGenNotes();
   *this = copy;
 
