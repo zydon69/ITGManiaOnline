@@ -42,6 +42,10 @@ require_contains(
   "does not establish a normal BPM before beat 0.  Defaulting to 60"
   "ProcessBPMsAndStops logs fallback when the first future BPM is not normal")
 require_contains(
+  "${notes_loader_sm_cpp}"
+  "if (aFileNames.empty())"
+  "SMLoader::LoadFromDir guards against direct calls with no applicable simfile")
+require_contains(
   "${notes_loader_ssc_cpp}"
   "fComboBeat < 0 || iCombos <= 0 || iMisses <= 0"
   "SSC #COMBOS rejects negative beats and non-positive score multipliers")

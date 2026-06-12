@@ -256,6 +256,12 @@ bool SMLoader::LoadFromDir(
     const std::string& sPath, Song& out, bool load_autosave) {
   std::vector<std::string> aFileNames;
   GetApplicableFiles(sPath, aFileNames, load_autosave);
+  if (aFileNames.empty()) {
+    LOG->UserLog(
+        "Song file", sPath,
+        "SRC_AUDIT_FIX found no applicable SM simfile for direct LoadFromDir.");
+    return false;
+  }
   return LoadFromSimfile(sPath + aFileNames[0], out);
 }
 
