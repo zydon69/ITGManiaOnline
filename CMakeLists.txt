@@ -23,4 +23,9 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_SOURCE_DIR}/CMake/CheckNoteSkinRuntimeCacheInvariants.cmake)
+  add_test(
+    NAME step_parity_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckStepParityInvariants.cmake)
 endif()

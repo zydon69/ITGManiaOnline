@@ -64,7 +64,10 @@ std::string SongCacheIndex::GetCacheFilePath(
       sCacheName.c_str());
 }
 
-SongCacheIndex::SongCacheIndex() : Mutex("SongCacheIndex") { ReadCacheIndex(); }
+SongCacheIndex::SongCacheIndex()
+    : Mutex("SongCacheIndex"), delay_save_cache(false) {
+  ReadCacheIndex();
+}
 
 SongCacheIndex::~SongCacheIndex() {}
 
@@ -144,10 +147,8 @@ unsigned SongCacheIndex::GetCacheHash(const std::string& path) const {
 }
 
 std::string SongCacheIndex::MangleName(const std::string& Name) {
-  /* We store paths in an INI.  We can't store '='. */
-  std::string ret = Name;
-  Replace(ret, "=", "");
-  return ret;
+  // Store cache index paths under filename-safe, collision-resistant INI keys.
+  return BinaryToHex(CryptManager::GetSHA1ForString(Name));
 }
 
 /*

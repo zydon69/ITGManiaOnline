@@ -343,6 +343,10 @@ void StepParityGenerator::CreateRows(const NoteData& in) {
       continue;
     }
 
+    if (note.warped) {
+      continue;
+    }
+
     if (note.type == TapNoteType_Mine) {
       // If this mine occurs on the same row as everything else that's been
       // counted (in other words, if this note doesn't represent the start of a

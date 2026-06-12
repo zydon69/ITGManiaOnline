@@ -40,7 +40,7 @@ static std::string JoinLineList(std::vector<std::string>& lines) {
 
   // Skip leading blanks.
   unsigned j = 0;
-  while (j < lines.size() && lines.size() == 0) {
+  while (j < lines.size() && lines[j].empty()) {
     ++j;
   }
 

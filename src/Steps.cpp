@@ -85,6 +85,29 @@ std::optional<StepParity::StageLayout> getLayout(StepsType ty) {
               {5, 1}   // P2 Right
           },
           {2, 6}, {1, 5}, {0, 3, 4, 7});
+
+    case StepsType_dance_solo:
+      return StepParity::StageLayout(
+          StepsType_dance_solo,
+          {
+              {0, 1},  // Left
+              {0, 2},  // UpLeft
+              {1, 0},  // Down
+              {1, 2},  // Up
+              {2, 2},  // UpRight
+              {2, 1}   // Right
+          },
+          {1, 3, 4}, {2}, {0, 5});
+
+    case StepsType_dance_threepanel:
+      return StepParity::StageLayout(
+          StepsType_dance_threepanel,
+          {
+              {0, 1},  // UpLeft
+              {1, 0},  // Down
+              {2, 1}   // UpRight
+          },
+          {0, 2}, {1}, {});
     default:
       return std::nullopt;
   }
@@ -435,7 +458,7 @@ void Steps::CalculateMeasureInfo(const NoteData& tempNoteData) {
     const int tracks = tempNoteData.GetNumTracks() / 2;
     p1.SetNumTracks(tracks);
     MeasureInfo::CalculateMeasureInfo(
-        tempNoteData, timing, measureInfoPerPlayer[PLAYER_1]);
+        p1, timing, measureInfoPerPlayer[PLAYER_1]);
     NoteData p2 = tempNoteData;
     NoteDataUtil::ShiftTracks(p2, tracks);
     p2.SetNumTracks(tracks);

@@ -461,6 +461,7 @@ void SongManager::LoadSongDir(
       mapGroupSongDirs[sGroupDirName] = arraySongDirs;
       songCount += arraySongDirs.size();
     }
+    ++sanity_index;
   }
 
   if (songCount == 0) {
@@ -2203,9 +2204,10 @@ void SongManager::LoadStepEditsFromProfileDir(
 
   // Pass 1: Flat folder (old style)
   std::vector<std::string> vsFiles;
-  int size = std::min(
-      (int)vsFiles.size(), MAX_EDIT_STEPS_PER_PROFILE - iNumEditsLoaded);
   GetDirListing(sDir + "*.edit", vsFiles, false, true);
+  int remainingEdits =
+      std::max(0, MAX_EDIT_STEPS_PER_PROFILE - iNumEditsLoaded);
+  int size = std::min((int)vsFiles.size(), remainingEdits);
 
   // XXX: If some edits are invalid and they're close to the edit limit, this
   // may erroneously skip some edits, and won't warn.
@@ -2219,7 +2221,7 @@ void SongManager::LoadStepEditsFromProfileDir(
     }
   }
 
-  if ((int)vsFiles.size() > MAX_EDIT_STEPS_PER_PROFILE - iNumEditsLoaded) {
+  if ((int)vsFiles.size() > remainingEdits) {
     LuaHelpers::ReportScriptErrorFmt(
         "Profile %s has too many edits; some have been skipped.",
         ProfileSlotToString(slot).c_str());
@@ -2252,8 +2254,9 @@ void SongManager::LoadStepEditsFromProfileDir(
       // couldn't infer the song from the path", which is what we want in that
       // case anyway.
       GetDirListing(sDir + sSongDir + "/*.edit", vsEdits, false, true);
-      size = std::min(
-          (int)vsEdits.size(), MAX_EDIT_STEPS_PER_PROFILE - iNumEditsLoaded);
+      remainingEdits =
+          std::max(0, MAX_EDIT_STEPS_PER_PROFILE - iNumEditsLoaded);
+      size = std::min((int)vsEdits.size(), remainingEdits);
 
       for (int k = 0; k < size; k++) {
         std::string fn = vsEdits[k];
@@ -2264,7 +2267,7 @@ void SongManager::LoadStepEditsFromProfileDir(
         }
       }
 
-      if ((int)vsEdits.size() > MAX_EDIT_STEPS_PER_PROFILE - iNumEditsLoaded) {
+      if ((int)vsEdits.size() > remainingEdits) {
         LuaHelpers::ReportScriptErrorFmt(
             "Profile %s has too many edits; some have been skipped.",
             ProfileSlotToString(slot).c_str());
