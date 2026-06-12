@@ -188,13 +188,33 @@ static void DWIcharToNoteCol(
   DWIcharToNote(c, i, note1, note2, sPath);
 
   if (note1 != DANCE_NOTE_NONE) {
-    col1Out = mapDanceNoteToNoteDataColumn.at(note1);
+    const auto col = mapDanceNoteToNoteDataColumn.find(note1);
+    if (col == mapDanceNoteToNoteDataColumn.end()) {
+      LOG->UserLog(
+          "Song file", sPath,
+          "SRC_AUDIT_FIX ignored DWI note character '%c' because it targets a "
+          "column not present in this chart style.",
+          c);
+      col1Out = -1;
+    } else {
+      col1Out = col->second;
+    }
   } else {
     col1Out = -1;
   }
 
   if (note2 != DANCE_NOTE_NONE) {
-    col2Out = mapDanceNoteToNoteDataColumn.at(note2);
+    const auto col = mapDanceNoteToNoteDataColumn.find(note2);
+    if (col == mapDanceNoteToNoteDataColumn.end()) {
+      LOG->UserLog(
+          "Song file", sPath,
+          "SRC_AUDIT_FIX ignored DWI note character '%c' because it targets a "
+          "column not present in this chart style.",
+          c);
+      col2Out = -1;
+    } else {
+      col2Out = col->second;
+    }
   } else {
     col2Out = -1;
   }
@@ -275,17 +295,18 @@ Difficulty DwiCompatibleStringToDifficulty(const std::string& sDC) {
 }
 
 static StepsType GetTypeFromMode(const std::string& mode) {
-  if (mode == "SINGLE") {
+  std::string normalizedMode = mode;
+  MakeUpper(normalizedMode);
+  if (normalizedMode == "SINGLE") {
     return StepsType_dance_single;
-  } else if (mode == "DOUBLE") {
+  } else if (normalizedMode == "DOUBLE") {
     return StepsType_dance_double;
-  } else if (mode == "COUPLE") {
+  } else if (normalizedMode == "COUPLE") {
     return StepsType_dance_couple;
-  } else if (mode == "SOLO") {
+  } else if (normalizedMode == "SOLO") {
     return StepsType_dance_solo;
   }
-  ASSERT_M(0, "Unrecognized DWI notes format " + mode + "!");
-  return StepsType_Invalid;  // just in case.
+  return StepsType_Invalid;
 }
 
 static NoteData ParseNoteData(
@@ -324,7 +345,12 @@ static NoteData ParseNoteData(
       mapDanceNoteToNoteDataColumn[DANCE_NOTE_PAD1_UPRIGHT] = 4;
       mapDanceNoteToNoteDataColumn[DANCE_NOTE_PAD1_RIGHT] = 5;
       break;
-      DEFAULT_FAIL(out.m_StepsType);
+    default:
+      LOG->UserLog(
+          "Song file", path,
+          "SRC_AUDIT_FIX has unsupported DWI StepsType %i. Chart ignored.",
+          out.m_StepsType);
+      return NoteData();
   }
 
   NoteData newNoteData;
@@ -398,6 +424,14 @@ static NoteData ParseNoteData(
 
             /* It's a jump.
              * We need to keep reading notes until we hit a >. */
+            if (i >= sStepData.size()) {
+              LOG->UserLog(
+                  "Song file", path,
+                  "SRC_AUDIT_FIX has a truncated DWI jump marker in \"%s\". "
+                  "Corrupt jump ignored.",
+                  DifficultyToString(out.GetDifficulty()).c_str());
+              break;
+            }
             jump = true;
             c = sStepData[i++];
           }
@@ -431,6 +465,14 @@ static NoteData ParseNoteData(
 
             if (sStepData[i] == '!') {
               i++;
+              if (i >= sStepData.size()) {
+                LOG->UserLog(
+                    "Song file", path,
+                    "SRC_AUDIT_FIX has a truncated DWI hold marker in \"%s\" "
+                    "at row %i. Hold ignored.",
+                    DifficultyToString(out.GetDifficulty()).c_str(), iIndex);
+                break;
+              }
               const char holdChar = sStepData[i++];
 
               DWIcharToNoteCol(
@@ -489,7 +531,6 @@ static NoteData ParseNoteData(
     }
   }
 
-  ASSERT(newNoteData.GetNumTracks() > 0);
   return newNoteData;
 }
 
@@ -522,6 +563,14 @@ static bool LoadFromDWITokens(
     return false;
   }
   out.m_StepsType = GetTypeFromMode(sMode);
+  if (out.m_StepsType == StepsType_Invalid) {
+    LOG->UserLog(
+        "Song file", sPath,
+        "SRC_AUDIT_FIX has an unsupported DWI chart mode \"%s\". Skipping "
+        "chart.",
+        sMode.c_str());
+    return false;
+  }
 
   // if the meter is empty, force it to 1.
   if (sNumFeet.empty()) {
@@ -532,7 +581,17 @@ static bool LoadFromDWITokens(
 
   out.SetDifficulty(DwiCompatibleStringToDifficulty(sDescription));
 
-  out.SetNoteData(ParseNoteData(sStepData1, sStepData2, out, sPath));
+  NoteData noteData = ParseNoteData(sStepData1, sStepData2, out, sPath);
+  if (noteData.GetNumTracks() <= 0) {
+    LOG->UserLog(
+        "Song file", sPath,
+        "SRC_AUDIT_FIX produced no DWI tracks for chart %s:%s:%s. Skipping "
+        "chart.",
+        sMode.c_str(), sDescription.c_str(), sNumFeet.c_str());
+    out.m_StepsType = StepsType_Invalid;
+    return false;
+  }
+  out.SetNoteData(noteData);
 
   out.TidyUpData();
 
@@ -609,7 +668,15 @@ bool DWILoader::LoadNoteDataFromSimfile(const std::string& path, Steps& out) {
       }
       std::string step1 = params[3];
       std::string step2 = (iNumParams == 5) ? params[4] : std::string("");
-      out.SetNoteData(ParseNoteData(step1, step2, out, path));
+      NoteData noteData = ParseNoteData(step1, step2, out, path);
+      if (noteData.GetNumTracks() <= 0) {
+        LOG->UserLog(
+            "Song file", path,
+            "SRC_AUDIT_FIX produced no DWI tracks while loading cached note "
+            "data. Chart ignored.");
+        return false;
+      }
+      out.SetNoteData(noteData);
       return true;
     }
   }
@@ -629,9 +696,12 @@ bool DWILoader::LoadFromDir(
     return false;
   }
 
-  /* We should have exactly one; if we had none, we shouldn't have been called
-   * to begin with. */
-  ASSERT(aFileNames.size() == 1);
+  if (aFileNames.empty()) {
+    LOG->UserLog(
+        "Song", sPath_,
+        "SRC_AUDIT_FIX found no applicable DWI simfile for direct LoadFromDir.");
+    return false;
+  }
   const std::string sPath = sPath_ + aFileNames[0];
 
   LOG->Trace("Song::LoadFromDWIFile(%s)", sPath.c_str());
@@ -755,6 +825,13 @@ bool DWILoader::LoadFromDir(
         int iFreezeRow =
             BeatToNoteRow(StringToFloat(arrayFreezeValues[0]) / 4.0f);
         float fFreezeSeconds = StringToFloat(arrayFreezeValues[1]) / 1000.0f;
+        if (iFreezeRow < 0 || fFreezeSeconds <= 0.0f) {
+          LOG->UserLog(
+              "Song file", sPath,
+              "SRC_AUDIT_FIX has an invalid FREEZE at row %i, seconds %f.",
+              iFreezeRow, fFreezeSeconds);
+          continue;
+        }
 
         out.m_SongTiming.AddSegment(StopSegment(iFreezeRow, fFreezeSeconds));
         //				LOG->Trace( "Adding a freeze segment:
@@ -798,9 +875,13 @@ bool DWILoader::LoadFromDir(
         EqualsNoCase(sValueName, "COUPLE") ||
         EqualsNoCase(sValueName, "SOLO")) {
       Steps* pNewNotes = out.CreateSteps();
-      LoadFromDWITokens(
+      if (!LoadFromDWITokens(
           sParams[0], sParams[1], sParams[2], sParams[3],
-          (iNumParams == 5) ? sParams[4] : std::string(""), *pNewNotes, sPath);
+          (iNumParams == 5) ? sParams[4] : std::string(""), *pNewNotes,
+          sPath)) {
+        delete pNewNotes;
+        continue;
+      }
       if (pNewNotes->m_StepsType != StepsType_Invalid) {
         pNewNotes->SetFilename(sPath);
         out.AddSteps(pNewNotes);
