@@ -72,7 +72,12 @@ std::string MovieTexture_Generic::Init() {
 
     int ret = decoder_->DecodeMovie();
     if (ret == -1) {
-      failure_ = true;
+      SetDecodeFailed();
+    } else if (ret == -2) {
+      SetDecodeFailed(false);
+    } else if (ret != 0) {
+      LOG->Warn("MovieDecoder::DecodeMovie returned unexpected value %d", ret);
+      SetDecodeFailed();
     }
 
     LOG->Trace(
@@ -92,7 +97,9 @@ std::string MovieTexture_Generic::Init() {
 MovieTexture_Generic::~MovieTexture_Generic() {
   if (decoder_) {
     decoder_->Cancel();
-    decoding_thread_->join();
+    if (decoding_thread_ && decoding_thread_->joinable()) {
+      decoding_thread_->join();
+    }
     decoder_->Close();
   }
 
@@ -314,7 +321,7 @@ float MovieTexture_Generic::CheckFrameTime() {
 
 void MovieTexture_Generic::UpdateMovie(float seconds) {
   // Quick exit in case we failed to decode the movie.
-  if (failure_) {
+  if (HasDecodeFailed()) {
     return;
   }
   clock_ += seconds * rate_;

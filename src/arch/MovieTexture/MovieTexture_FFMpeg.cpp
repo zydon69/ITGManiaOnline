@@ -131,7 +131,7 @@ MovieDecoder_FFMpeg::MovieDecoder_FFMpeg() {
 
   av_format_context_ = nullptr;
   av_stream_ = nullptr;
-  total_frames_ = 0;
+  total_frames_.store(0, std::memory_order_release);
   end_of_file_ = 0;
   // Hardcoded frame buffer size of 50. Roughly translates to 100mb of ram.
   for (int i = 0; i < 50; i++) {
@@ -162,24 +162,26 @@ MovieDecoder_FFMpeg::~MovieDecoder_FFMpeg() {
 
 void MovieDecoder_FFMpeg::Init() {
   end_of_file_ = 0;
-  display_frame_num_ = 0;
+  display_frame_num_.store(0, std::memory_order_release);
   av_sws_context_ = nullptr;
   av_io_context_ = nullptr;
   av_buffer_ = nullptr;
 }
 
 float MovieDecoder_FFMpeg::GetTimestamp() const {
+  const std::size_t displayFrame =
+      display_frame_num_.load(std::memory_order_acquire);
   // Always display the first frame.
-  if (display_frame_num_ == 0) {
+  if (displayFrame == 0) {
     return 0;
   }
 
   // In a logical situation, this means that display is outpacing decoding.
-  if (display_frame_num_ >= packet_buffer_.size()) {
+  if (displayFrame >= packet_buffer_.size()) {
     return 0;
   }
 
-  PacketHolder* packet = packet_buffer_[display_frame_num_].get();
+  PacketHolder* packet = packet_buffer_[displayFrame].get();
 
   // Sanity check.
   if (packet == nullptr) {
@@ -191,15 +193,16 @@ float MovieDecoder_FFMpeg::GetTimestamp() const {
 }
 
 bool MovieDecoder_FFMpeg::IsCurrentFrameReady() {
+  const std::size_t displayFrame =
+      display_frame_num_.load(std::memory_order_acquire);
   // We're displaying faster than decoding. Do not even try to display the
   // frame.
-  if (display_frame_num_ >= packet_buffer_.size()) {
+  if (displayFrame >= packet_buffer_.size()) {
     return false;
   }
 
   FrameHolder* frame =
-      frame_buffer_[(display_frame_num_ + offset_) % frame_buffer_.size()]
-          .get();
+      frame_buffer_[(displayFrame + offset_) % frame_buffer_.size()].get();
   // To make sure the frame doesn't change from under us.
   std::lock_guard<std::mutex> lock(frame->lock);
 
@@ -208,8 +211,8 @@ bool MovieDecoder_FFMpeg::IsCurrentFrameReady() {
   // been displayed, then it hasn't been overwritten and reset yet.
   if (frame->displayed) {
     LOG->Info(
-        "Frame %zu not decoded, total frames: %zu", display_frame_num_,
-        total_frames_);
+        "Frame %zu not decoded, total frames: %zu", displayFrame,
+        total_frames_.load(std::memory_order_acquire));
   }
   return !frame->displayed;
 }
@@ -236,10 +239,11 @@ int MovieDecoder_FFMpeg::HandleNextPacket() {
       // If we had to approximate the number of frames, set the actual
       // total number of frames. This is benign even if we did have an
       // accurate frame count at the start.
-      total_frames_ = packet_buffer_.size();
-      if (total_frames_ < frame_buffer_.size()) {
+      const std::size_t frameCount = packet_buffer_.size();
+      total_frames_.store(frameCount, std::memory_order_release);
+      if (frameCount < frame_buffer_.size()) {
         LOG->Trace("Video shorter than frame buffer, shrinking the buffer.");
-        frame_buffer_.resize(total_frames_);
+        frame_buffer_.resize(frameCount);
       }
       return 1;
     }
@@ -256,12 +260,18 @@ int MovieDecoder_FFMpeg::DecodeFrame() {
 
   status = DecodePacketToFrame();
   frame_buffer_position_ = (frame_buffer_position_ + 1) % frame_buffer_.size();
-  packet_buffer_position_ = (packet_buffer_position_ + 1) % total_frames_;
+  const std::size_t totalFrames = total_frames_.load(std::memory_order_acquire);
+  if (totalFrames == 0) {
+    return -1;
+  }
+  packet_buffer_position_ = (packet_buffer_position_ + 1) % totalFrames;
   return status;
 }
 
 void MovieDecoder_FFMpeg::HandleReset() {
-  reset_ = false;
+  if (!reset_.exchange(false, std::memory_order_acq_rel)) {
+    return;
+  }
 
   for (std::unique_ptr<FrameHolder>& frame : frame_buffer_) {
     frame->displayed = true;
@@ -274,7 +284,7 @@ void MovieDecoder_FFMpeg::HandleReset() {
   }
   offset_ = 0;
   next_offset_ = 0;
-  display_frame_num_ = 0;
+  display_frame_num_.store(0, std::memory_order_release);
   packet_buffer_position_ = 0;
   frame_buffer_position_ = 0;
 }
@@ -282,10 +292,13 @@ void MovieDecoder_FFMpeg::HandleReset() {
 int MovieDecoder_FFMpeg::DecodeMovie() {
   // Never exit when the movie is looping. Otherwise exit when the last frame
   // is added to the FrameBuffer.
-  while (looping_ || (!looping_ && display_frame_num_ < total_frames_)) {
-    if (reset_) {
-      HandleReset();
+  while (looping_.load(std::memory_order_acquire) ||
+         display_frame_num_.load(std::memory_order_acquire) <
+             total_frames_.load(std::memory_order_acquire)) {
+    if (cancel_.load(std::memory_order_acquire)) {
+      return -2;
     }
+    HandleReset();
 
     int status = DecodeFrame();
 
@@ -298,8 +311,11 @@ int MovieDecoder_FFMpeg::DecodeMovie() {
     // This means when opening the file, less frames were detected than
     // there actually are. Increment to keep up so we don't end the video
     // early during display.
-    if (packet_buffer_position_ >= total_frames_ - 1 && !end_of_file_) {
-      total_frames_++;
+    const std::size_t totalFrames =
+        total_frames_.load(std::memory_order_acquire);
+    if (totalFrames > 0 && packet_buffer_position_ >= totalFrames - 1 &&
+        !end_of_file_) {
+      total_frames_.fetch_add(1, std::memory_order_acq_rel);
     }
   }
 
@@ -307,7 +323,7 @@ int MovieDecoder_FFMpeg::DecodeMovie() {
 }
 
 int MovieDecoder_FFMpeg::SendPacketToBuffer() {
-  if (cancel_) {
+  if (cancel_.load(std::memory_order_acquire)) {
     return -2;
   }
   if (end_of_file_ > 0) {
@@ -332,12 +348,16 @@ int MovieDecoder_FFMpeg::SendPacketToBuffer() {
 }
 
 int MovieDecoder_FFMpeg::DecodePacketToFrame() {
-  if (cancel_) {
+  if (cancel_.load(std::memory_order_acquire)) {
     return -2;
   }
 
   frame_buffer_position_ %= frame_buffer_.size();
-  packet_buffer_position_ %= total_frames_;
+  const std::size_t totalFrames = total_frames_.load(std::memory_order_acquire);
+  if (totalFrames == 0) {
+    return -1;
+  }
+  packet_buffer_position_ %= totalFrames;
   FrameHolder* frame = frame_buffer_[frame_buffer_position_].get();
   PacketHolder* packet = packet_buffer_[packet_buffer_position_].get();
 
@@ -347,10 +367,10 @@ int MovieDecoder_FFMpeg::DecodePacketToFrame() {
     while (!frame->displayed) {
       // Sleep so the CPU performance stays happy.
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      if (cancel_) {
+      if (cancel_.load(std::memory_order_acquire)) {
         return -2;
       }
-      if (reset_) {
+      if (reset_.load(std::memory_order_acquire)) {
         return 0;
       }
     }
@@ -440,6 +460,8 @@ int MovieDecoder_FFMpeg::DecodePacketToFrame() {
 }
 
 int MovieDecoder_FFMpeg::GetFrame(RageSurface* surface_out) {
+  const std::size_t displayFrame =
+      display_frame_num_.load(std::memory_order_acquire);
   avcodec::AVFrame pict;
   pict.data[0] = (unsigned char*)surface_out->pixels;
   pict.linesize[0] = surface_out->pitch;
@@ -462,14 +484,14 @@ int MovieDecoder_FFMpeg::GetFrame(RageSurface* surface_out) {
   }
 
   std::size_t display_frame_in_buffer =
-      (display_frame_num_ + offset_) % frame_buffer_.size();
+      (displayFrame + offset_) % frame_buffer_.size();
   std::lock_guard<std::mutex> lock(
       frame_buffer_[display_frame_in_buffer]->lock);
   int scale_status = 0;
 
   // Sanity check.
   if (frame_buffer_[display_frame_in_buffer]->packet_num ==
-      display_frame_num_) {
+      displayFrame) {
     scale_status = avcodec::sws_scale(
         av_sws_context_, frame_buffer_[display_frame_in_buffer]->frame->data,
         frame_buffer_[display_frame_in_buffer]->frame->linesize, 0, GetHeight(),
@@ -478,7 +500,7 @@ int MovieDecoder_FFMpeg::GetFrame(RageSurface* surface_out) {
     LOG->Warn(
         "Unexpected frame trying to display! display_frame_num_ = %zu, "
         "packet_num = %zu",
-        display_frame_num_, frame_buffer_[display_frame_in_buffer]->packet_num);
+        displayFrame, frame_buffer_[display_frame_in_buffer]->packet_num);
   }
 
   // Even if scale_status returns a failure, we mark displayed as true. The
@@ -486,11 +508,11 @@ int MovieDecoder_FFMpeg::GetFrame(RageSurface* surface_out) {
   frame_buffer_[display_frame_in_buffer]->displayed = true;
 
   if (LastFrame()) {
-    end_of_movie_ = true;
+    end_of_movie_.store(true, std::memory_order_release);
     return scale_status;
   }
-  end_of_movie_ = false;
-  display_frame_num_++;
+  end_of_movie_.store(false, std::memory_order_release);
+  display_frame_num_.store(displayFrame + 1, std::memory_order_release);
   return scale_status;
 }
 
@@ -598,14 +620,14 @@ std::string MovieDecoder_FFMpeg::Open(std::string file) {
   LOG->Trace(
       "Codec pixel format: %s",
       avcodec::av_get_pix_fmt_name(av_stream_codec_->pix_fmt));
-  total_frames_ = av_stream_->nb_frames;
+  int64_t detectedFrames = av_stream_->nb_frames;
 
   // Sometimes we might not get a correct frame count.
   // In that case, approximate and fix it later.
-  if (total_frames_ <= 0) {
-    total_frames_ = av_format_context_->duration  // microseconds
-                    * (av_stream_->avg_frame_rate.num) /
-                    (av_stream_->avg_frame_rate.den) / (1000000);
+  if (detectedFrames <= 0 && av_stream_->avg_frame_rate.den != 0) {
+    detectedFrames = av_format_context_->duration  // microseconds
+                     * (av_stream_->avg_frame_rate.num) /
+                     (av_stream_->avg_frame_rate.den) / (1000000);
     LOG->Trace("Number of frames provided is inaccurate, estimating.");
   }
 
@@ -613,17 +635,19 @@ std::string MovieDecoder_FFMpeg::Open(std::string file) {
   // might still be playable. Set total_frames_ to an arbitrary value and
   // the code will expand or shrink it later. Empty packets are cheap to
   // store, so it's fine if this value overshoots.
-  if (total_frames_ <= 0) {
+  if (detectedFrames <= 0) {
     LOG->Trace(
         "Unable to estimate the total number of frames. Setting to 2000.");
-    total_frames_ = 2000;
+    detectedFrames = 2000;
   }
 
-  if (total_frames_ < frame_buffer_.size()) {
+  const std::size_t frameCount = static_cast<std::size_t>(detectedFrames);
+  total_frames_.store(frameCount, std::memory_order_release);
+  if (frameCount < frame_buffer_.size()) {
     LOG->Trace("Video shorter than frame buffer, shrinking the buffer.");
-    frame_buffer_.resize(total_frames_);
+    frame_buffer_.resize(frameCount);
   }
-  LOG->Trace("Number of frames detected: %zu", total_frames_);
+  LOG->Trace("Number of frames detected: %zu", frameCount);
 
   return std::string();
 }
@@ -671,12 +695,12 @@ void MovieDecoder_FFMpeg::Close() {
 }
 
 void MovieDecoder_FFMpeg::Rewind() {
-  display_frame_num_ = 0;
-  reset_ = true;
+  display_frame_num_.store(0, std::memory_order_release);
+  reset_.store(true, std::memory_order_release);
 }
 
 void MovieDecoder_FFMpeg::Rollover() {
-  display_frame_num_ = 0;
+  display_frame_num_.store(0, std::memory_order_release);
   offset_ = next_offset_;
   next_offset_ = 0;
 }

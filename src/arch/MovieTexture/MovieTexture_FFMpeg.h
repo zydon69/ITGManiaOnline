@@ -3,6 +3,7 @@
 #ifndef RAGE_MOVIE_TEXTURE_FFMPEG_H
 #define RAGE_MOVIE_TEXTURE_FFMPEG_H
 
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <mutex>
@@ -121,16 +122,22 @@ class MovieDecoder_FFMpeg : public MovieDecoder {
   float GetTimestamp() const;
 
   // Cancel decoding.
-  void Cancel() { cancel_ = true; };
+  void Cancel() { cancel_.store(true, std::memory_order_release); };
 
   // Called by the MovieTexture to tell the decoder if the movie loops.
-  void SetLooping(bool loop) { looping_ = loop; }
+  void SetLooping(bool loop) { looping_.store(loop, std::memory_order_release); }
 
   // Are we displaying the last frame?
-  bool LastFrame() { return display_frame_num_ == (total_frames_ - 1); }
+  bool LastFrame() {
+    const std::size_t totalFrames =
+        total_frames_.load(std::memory_order_acquire);
+    return totalFrames > 0 &&
+           display_frame_num_.load(std::memory_order_acquire) ==
+               (totalFrames - 1);
+  }
 
   // The signal if the final frame of the movie was just displayed.
-  bool EndOfMovie() { return end_of_movie_; }
+  bool EndOfMovie() { return end_of_movie_.load(std::memory_order_acquire); }
 
  private:
   void Init();
@@ -151,7 +158,7 @@ class MovieDecoder_FFMpeg : public MovieDecoder {
   avcodec::SwsContext* av_sws_context_;
   avcodec::AVCodecContext* av_stream_codec_;
   avcodec::AVFormatContext* av_format_context_;
-  std::size_t total_frames_;  // Total number of frames in the movie.
+  std::atomic<std::size_t> total_frames_;  // Total number of frames in the movie.
 
   unsigned char* av_buffer_;
   avcodec::AVIOContext* av_io_context_;
@@ -176,17 +183,17 @@ class MovieDecoder_FFMpeg : public MovieDecoder {
 
   // display_frame_num_ will often be the start of the sliding window,
   // or the oldest Frame that is currently decoded.
-  std::size_t display_frame_num_ = 0;
+  std::atomic<std::size_t> display_frame_num_{0};
 
   // 0 = no EOF
   // 1 = EOF while decoding
   int end_of_file_;
 
   // The various flags used to signal the decoding thread to do something.
-  bool cancel_ = false;
-  bool looping_ = false;
-  bool reset_ = false;
-  bool end_of_movie_ = false;
+  std::atomic<bool> cancel_{false};
+  std::atomic<bool> looping_{false};
+  std::atomic<bool> reset_{false};
+  std::atomic<bool> end_of_movie_{false};
 };
 
 static struct AVPixelFormat_t {

@@ -1,6 +1,7 @@
 #ifndef RAGE_MOVIE_TEXTURE_GENERIC_H
 #define RAGE_MOVIE_TEXTURE_GENERIC_H
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -106,6 +107,10 @@ class MovieTexture_Generic : public RageMovieTexture {
   virtual void UpdateMovie(float seconds);
   virtual void SetPlaybackRate(float rate) { rate_ = rate; }
   void SetLooping(bool looping = true) { loop_ = looping; }
+  bool HasDecodeFailed() const { return failure_.load(std::memory_order_acquire); }
+  void SetDecodeFailed(bool failed = true) {
+    failure_.store(failed, std::memory_order_release);
+  }
   uintptr_t GetTexHandle() const;
 
   static EffectMode GetEffectMode(MovieDecoderPixelFormatYCbCr fmt);
@@ -120,7 +125,7 @@ class MovieTexture_Generic : public RageMovieTexture {
   bool finished_ = false;
 
   // If true, halts all decoding and display.
-  bool failure_ = false;
+  std::atomic<bool> failure_{false};
 
   uintptr_t texture_handle_;
   std::unique_ptr<RageTextureRenderTarget> render_target_;
