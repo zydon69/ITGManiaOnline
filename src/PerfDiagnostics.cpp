@@ -13,6 +13,8 @@ static Preference<bool> g_bLogTextureUploadDiagnostics(
     "LogTextureUploadDiagnostics", false);
 static Preference<bool> g_bLogResourceSnapshotDiagnostics(
     "LogResourceSnapshotDiagnostics", false);
+static Preference<bool> g_bLogBackgroundDiagnostics(
+    "LogBackgroundDiagnostics", false);
 static Preference<bool> g_bLogPlayOnceDiagnostics(
     "LogPlayOnceDiagnostics", false);
 static Preference<bool> g_bLogNoteSkinDiagnostics(
@@ -30,6 +32,7 @@ static std::atomic<bool> g_bPerfDiagnosticsCached{false};
 static std::atomic<bool> g_bLogAudioUnderrunDiagnosticsCached{false};
 static std::atomic<bool> g_bLogTextureUploadDiagnosticsCached{false};
 static std::atomic<bool> g_bLogResourceSnapshotDiagnosticsCached{false};
+static std::atomic<bool> g_bLogBackgroundDiagnosticsCached{false};
 static std::atomic<bool> g_bLogPlayOnceDiagnosticsCached{false};
 static std::atomic<bool> g_bLogNoteSkinDiagnosticsCached{false};
 static std::atomic<bool> g_bLogInputDiagnosticsCached{false};
@@ -55,6 +58,7 @@ static const bool g_bEnvLogInput = EnvFlagEnabled("ITG_LOG_INPUT");
 static const bool g_bEnvLogMemoryCard = EnvFlagEnabled("ITG_LOG_MEMORY_CARD");
 static const bool g_bEnvLogContentLoad = EnvFlagEnabled("ITG_LOG_CONTENT_LOAD");
 static const bool g_bEnvLogThemeLua = EnvFlagEnabled("ITG_LOG_THEME_LUA");
+static const bool g_bEnvLogBackground = EnvFlagEnabled("ITG_LOG_BACKGROUND");
 static const bool g_bEnvLegacyTraceGlUploads =
     EnvFlagEnabled("ITG_TRACE_GL_UPLOADS");
 bool PerfDiagnosticsEnabled() {
@@ -71,6 +75,8 @@ void RefreshPerfDiagnosticsPreferenceCache() {
   // Memory leak detection relies on these snapshots, so keep them enabled
   // regardless of the preference value.
   g_bLogResourceSnapshotDiagnosticsCached.store(true, std::memory_order_release);
+  g_bLogBackgroundDiagnosticsCached.store(
+      g_bLogBackgroundDiagnostics.Get(), std::memory_order_release);
   g_bLogPlayOnceDiagnosticsCached.store(
       g_bLogPlayOnceDiagnostics.Get(), std::memory_order_release);
   g_bLogNoteSkinDiagnosticsCached.store(
@@ -118,6 +124,11 @@ bool LogTextureUploadDiagnosticsEnabled() {
 }
 
 bool LogResourceSnapshotDiagnosticsEnabled() { return true; }
+
+bool LogBackgroundDiagnosticsEnabled() {
+  return CategoryEnabled(
+      g_bLogBackgroundDiagnosticsCached, g_bEnvLogBackground);
+}
 
 bool LogPlayOnceDiagnosticsEnabled() {
   return CategoryEnabled(g_bLogPlayOnceDiagnosticsCached, g_bEnvLogPlayOnce);

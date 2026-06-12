@@ -6,6 +6,7 @@ void RefreshPerfDiagnosticsPreferenceCache();
 bool LogAudioUnderrunDiagnosticsEnabled();
 bool LogTextureUploadDiagnosticsEnabled();
 bool LogResourceSnapshotDiagnosticsEnabled();
+bool LogBackgroundDiagnosticsEnabled();
 bool LogPlayOnceDiagnosticsEnabled();
 bool LogNoteSkinDiagnosticsEnabled();
 bool LogInputDiagnosticsEnabled();

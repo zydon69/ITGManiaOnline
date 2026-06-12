@@ -96,6 +96,8 @@ ScreenManager* SCREENMAN =
 static Preference<bool> g_bDelayedScreenLoad("DelayedScreenLoad", false);
 static Preference<float> g_fPerfTraceSlowDrawBreakdownMs(
     "PerfTraceSlowDrawBreakdownMs", 16.0f);
+static Preference<float> g_fPerfTraceFirstUpdateHitchMs(
+    "PerfTraceFirstUpdateHitchMs", 1000.0f);
 // static Preference<bool> g_bPruneFonts( "PruneFonts", true );
 
 struct DrawBreakdownPerfBucket {
@@ -687,6 +689,21 @@ void ScreenManager::Update(float fDeltaTime) {
    * Screen's first update.  Clamp the first update delta so that the
    * animations don't jump. */
   if (pScreen && m_bZeroNextUpdate) {
+    const float fDeltaMs = fDeltaTime * 1000.0f;
+    const float fTraceThresholdMs =
+        std::max(0.0f, g_fPerfTraceFirstUpdateHitchMs.Get());
+    if (PerfDiagnosticsEnabled() && fTraceThresholdMs > 0.0f &&
+        fDeltaMs >= fTraceThresholdMs) {
+      const std::string renderer =
+          DISPLAY != nullptr ? DISPLAY->GetApiDescription() : "unknown";
+      LOG->Trace(
+          "PERF_TRACE: first_update_hitch screen=%s delta_ms=%.3f "
+          "renderer=%s stack=%zu overlays=%zu",
+          pScreen->GetName().c_str(), fDeltaMs, renderer.c_str(),
+          g_ScreenStack.size(), g_OverlayScreens.size());
+      LogResourceSnapshotForScreenTransition(
+          "first_update_hitch", pScreen->GetName(), pScreen->GetName());
+    }
     LOG->Trace(
         "Zeroing this update.  Was %f screen=%s", fDeltaTime,
         pScreen->GetName().c_str());

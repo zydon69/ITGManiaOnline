@@ -1033,6 +1033,8 @@ static void InitializeConfOptions() {
   g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogResourceSnapshotDiagnostics", MovePref<bool>, "Off", "On"));
   g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
+  ADD(ConfOption("LogBackgroundDiagnostics", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogPlayOnceDiagnostics", MovePref<bool>, "Off", "On"));
   g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogNoteSkinDiagnostics", MovePref<bool>, "Off", "On"));

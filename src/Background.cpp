@@ -21,14 +21,17 @@
 #include "LuaManager.h"
 #include "MessageManager.h"
 #include "NoteTypes.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "PlayerState.h"
 #include "Preference.h"
 #include "PrefsManager.h"
 #include "Quad.h"
 #include "RageDisplay.h"
+#include "RageLog.h"
 #include "RageTextureID.h"
 #include "RageTextureManager.h"
+#include "RageTimer.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
 #include "RageUtil/RandomNumbers.h"
@@ -69,6 +72,11 @@ static Preference<bool> g_bSongBackgrounds("SongBackgrounds", true);
 
 // Width of the region separating the left and right brightness areas:
 static float g_fBackgroundCenterWidth = 40;
+
+static bool IsMovieBackgroundDef(const BackgroundDef& bd) {
+  return ActorUtil::GetFileType(bd.m_sFile1) == FT_Movie ||
+         ActorUtil::GetFileType(bd.m_sFile2) == FT_Movie;
+}
 
 class BrightnessOverlay : public ActorFrame {
  public:
@@ -142,7 +150,11 @@ class BackgroundImpl : public ActorFrame {
     int FindBGSegmentForBeat(float fBeat) const;
     void UpdateCurBGChange(
         const Song* pSong, float fLastMusicSeconds, float fCurrentTime,
-        const std::map<std::string, BackgroundTransition>& mapNameToTransition);
+        const std::map<std::string, BackgroundTransition>& mapNameToTransition,
+        const BackgroundDef& fallbackDef, Actor* pParent);
+    bool LoadBackgroundIfNeeded(
+        const Song* pSong, const BackgroundDef& bd, Actor* pParent);
+    void PruneUnusedBackgrounds();
 
     std::map<BackgroundDef, Actor*> m_BGAnimations;
     std::vector<BackgroundChange> m_aBGChanges;
@@ -627,26 +639,6 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
         BackgroundChange change = bgc;
         BackgroundDef& bd = change.m_def;
 
-        bool bIsAlreadyLoaded =
-            layer.m_BGAnimations.find(bd) != layer.m_BGAnimations.end();
-
-        if (bd.m_sFile1 != RANDOM_BACKGROUND_FILE && !bIsAlreadyLoaded) {
-          if (layer.CreateBackground(m_pSong, bd, this)) {
-            ;  // do nothing.  Create was successful.
-          } else {
-            if (i == BACKGROUND_LAYER_1) {
-              // The background was not found. Try to use a random one instead.
-              // Don't use the BackgroundDef's effect, because it may be an
-              // effect that requires 2 files, and random BGA will only supply
-              // one file
-              bd = layer.CreateRandomBGA(pSong, "", m_RandomBGAnimations, this);
-              if (bd.IsEmpty()) {
-                bd = m_StaticBackgroundDef;
-              }
-            }
-          }
-        }
-
         if (!bd.IsEmpty()) {
           layer.m_aBGChanges.push_back(change);
         }
@@ -738,6 +730,59 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
   // Re-sort.
   BackgroundUtil::SortBackgroundChangesArray(mainlayer.m_aBGChanges);
 
+  if (LogBackgroundDiagnosticsEnabled()) {
+    int totalChanges = 0;
+    int movieChanges = 0;
+    int randomMarkers = 0;
+    FOREACH_BackgroundLayer(i) {
+      const Layer& layer = m_Layer[i];
+      totalChanges += static_cast<int>(layer.m_aBGChanges.size());
+      for (const BackgroundChange& bgc : layer.m_aBGChanges) {
+        if (bgc.m_def.m_sFile1 == RANDOM_BACKGROUND_FILE) {
+          ++randomMarkers;
+        }
+        if (IsMovieBackgroundDef(bgc.m_def)) {
+          ++movieChanges;
+        }
+      }
+    }
+    LOG->Trace(
+        "BGA_TRACE: song_summary title=%s dir=%s bgchanges=%d "
+        "movie_bgchanges=%d random_markers=%d random_pool=%zu "
+        "static_background=%s",
+        pSong->GetTranslitFullTitle().c_str(), pSong->GetSongDir().c_str(),
+        totalChanges, movieChanges, randomMarkers, m_RandomBGAnimations.size(),
+        m_StaticBackgroundDef.m_sFile1.c_str());
+  }
+
+  // Preload only the currently visible background for each layer.  Older code
+  // created every song-specified BGChange actor here, which can open many
+  // movie decoders and upload many GL textures before gameplay starts.
+  FOREACH_BackgroundLayer(i) {
+    Layer& layer = m_Layer[i];
+    const int iInitialChange = layer.FindBGSegmentForBeat(0.0f);
+    if (iInitialChange < 0) {
+      continue;
+    }
+
+    BackgroundDef& bd = layer.m_aBGChanges[iInitialChange].m_def;
+    if (bd.m_sFile1 == RANDOM_BACKGROUND_FILE) {
+      continue;
+    }
+    if (layer.LoadBackgroundIfNeeded(m_pSong, bd, this)) {
+      continue;
+    }
+
+    if (i == BACKGROUND_LAYER_1) {
+      LOG->Warn(
+          "Initial BGChange \"%s\" could not be loaded; using the song "
+          "background.",
+          bd.m_sFile1.c_str());
+      bd = m_StaticBackgroundDef;
+      layer.LoadBackgroundIfNeeded(m_pSong, bd, this);
+    }
+  }
+
   TEXTUREMAN->EnableOddDimensionWarning();
 
   if (m_pDancingCharacters) {
@@ -769,7 +814,8 @@ int BackgroundImpl::Layer::FindBGSegmentForBeat(float fBeat) const {
 /* If the BG segment has changed, move focus to it. Send Update() calls. */
 void BackgroundImpl::Layer::UpdateCurBGChange(
     const Song* pSong, float fLastMusicSeconds, float fCurrentTime,
-    const std::map<std::string, BackgroundTransition>& mapNameToTransition) {
+    const std::map<std::string, BackgroundTransition>& mapNameToTransition,
+    const BackgroundDef& fallbackDef, Actor* pParent) {
   ASSERT(fCurrentTime != GameState::MUSIC_SECONDS_INVALID);
 
   if (m_aBGChanges.size() == 0) {
@@ -807,10 +853,25 @@ void BackgroundImpl::Layer::UpdateCurBGChange(
 
     m_pFadingBGA = m_pCurrentBGA;
 
+    if (!LoadBackgroundIfNeeded(pSong, change.m_def, pParent)) {
+      LOG->Warn(
+          "BGChange \"%s\" could not be loaded at beat %.3f; using the song "
+          "background.",
+          change.GetTextDescription().c_str(), change.m_fStartBeat);
+      if (!LoadBackgroundIfNeeded(pSong, fallbackDef, pParent)) {
+        m_pCurrentBGA = nullptr;
+        return;
+      }
+    }
+
+    const BackgroundDef& activeDef =
+        m_BGAnimations.find(change.m_def) != m_BGAnimations.end()
+            ? change.m_def
+            : fallbackDef;
     std::map<BackgroundDef, Actor*>::const_iterator iter =
-        m_BGAnimations.find(change.m_def);
+        m_BGAnimations.find(activeDef);
     if (iter == m_BGAnimations.end()) {
-      XNode* pNode = change.m_def.CreateNode();
+      XNode* pNode = activeDef.CreateNode();
       std::string xml = XmlFileUtil::GetXML(pNode);
       Trim(xml);
       LuaHelpers::ReportScriptErrorFmt(
@@ -863,6 +924,7 @@ void BackgroundImpl::Layer::UpdateCurBGChange(
   if (m_pFadingBGA) {
     if (m_pFadingBGA->GetTweenTimeLeft() == 0) {
       m_pFadingBGA = nullptr;
+      PruneUnusedBackgrounds();
     }
   }
 
@@ -874,6 +936,45 @@ void BackgroundImpl::Layer::UpdateCurBGChange(
   }
   if (m_pFadingBGA) {
     m_pFadingBGA->Update(fDeltaTimeNoMusicRate);
+  }
+}
+
+bool BackgroundImpl::Layer::LoadBackgroundIfNeeded(
+    const Song* pSong, const BackgroundDef& bd, Actor* pParent) {
+  if (bd.IsEmpty() || m_BGAnimations.find(bd) != m_BGAnimations.end()) {
+    return true;
+  }
+  if (bd.m_sFile1 == RANDOM_BACKGROUND_FILE) {
+    return false;
+  }
+  RageTimer loadTimer;
+  TEXTUREMAN->DisableOddDimensionWarning();
+  const bool bLoaded = CreateBackground(pSong, bd, pParent);
+  TEXTUREMAN->EnableOddDimensionWarning();
+  const float elapsedMs = loadTimer.GetDeltaTime() * 1000.0f;
+  if (LogBackgroundDiagnosticsEnabled() ||
+      (PerfDiagnosticsEnabled() && elapsedMs >= 16.0f)) {
+    LOG->Trace(
+        "BGA_TRACE: load_background result=%s elapsed_ms=%.3f file1=%s "
+        "file2=%s effect=%s type1=%s type2=%s loaded_backgrounds=%zu",
+        bLoaded ? "ok" : "failed", elapsedMs, bd.m_sFile1.c_str(),
+        bd.m_sFile2.c_str(), bd.m_sEffect.c_str(),
+        FileTypeToString(ActorUtil::GetFileType(bd.m_sFile1)).c_str(),
+        FileTypeToString(ActorUtil::GetFileType(bd.m_sFile2)).c_str(),
+        m_BGAnimations.size());
+  }
+  return bLoaded;
+}
+
+void BackgroundImpl::Layer::PruneUnusedBackgrounds() {
+  for (auto iter = m_BGAnimations.begin(); iter != m_BGAnimations.end();) {
+    Actor* pActor = iter->second;
+    if (pActor == m_pCurrentBGA || pActor == m_pFadingBGA) {
+      ++iter;
+      continue;
+    }
+    delete pActor;
+    iter = m_BGAnimations.erase(iter);
   }
 }
 
@@ -896,7 +997,7 @@ void BackgroundImpl::Update(float fDeltaTime) {
     Layer& layer = m_Layer[i];
     layer.UpdateCurBGChange(
         m_pSong, m_fLastMusicSeconds, GAMESTATE->m_Position.m_fMusicSeconds,
-        m_mapNameToTransition);
+        m_mapNameToTransition, m_StaticBackgroundDef, this);
   }
   m_fLastMusicSeconds = GAMESTATE->m_Position.m_fMusicSeconds;
 }

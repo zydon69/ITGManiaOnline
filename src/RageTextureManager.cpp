@@ -410,13 +410,24 @@ void RageTextureManager::LogResourceSnapshot(const std::string& label) const {
   int totalRefs = 0;
   int defaultTextures = 0;
   int volatileTextures = 0;
+  int movieTextures = 0;
   int maxRefCount = 0;
+  int64_t totalTexels = 0;
+  int64_t movieTexels = 0;
   std::string maxRefTexture;
 
   for (const auto& i : m_mapPathToTexture) {
     const RageTexture* texture = i.second;
     const int refCount = texture->m_iRefCount;
+    const int64_t texels = static_cast<int64_t>(texture->GetTextureWidth()) *
+                           static_cast<int64_t>(texture->GetTextureHeight());
     totalRefs += refCount;
+    totalTexels += texels;
+
+    if (texture->IsAMovie()) {
+      ++movieTextures;
+      movieTexels += texels;
+    }
 
     if (texture->GetPolicy() == RageTextureID::TEX_VOLATILE) {
       ++volatileTextures;
@@ -432,10 +443,12 @@ void RageTextureManager::LogResourceSnapshot(const std::string& label) const {
 
   LOG->Trace(
       "ITG Resource: label=%s textures=%zu default=%d volatile=%d "
-      "update_queue=%zu refs=%d max_ref=%d max_ref_texture=%s",
+      "movies=%d update_queue=%zu refs=%d texels=%lld movie_texels=%lld "
+      "max_ref=%d max_ref_texture=%s",
       label.c_str(), m_mapPathToTexture.size(), defaultTextures,
-      volatileTextures, m_textures_to_update.size(), totalRefs, maxRefCount,
-      maxRefTexture.c_str());
+      volatileTextures, movieTextures, m_textures_to_update.size(), totalRefs,
+      static_cast<long long>(totalTexels), static_cast<long long>(movieTexels),
+      maxRefCount, maxRefTexture.c_str());
 }
 
 static int LuaFunc_ITGOnlineLogResourceSnapshot(lua_State* L) {
