@@ -212,7 +212,8 @@ void InputHandler_NSEvent::HandleEvent(NSEvent* e) {
     return;
   }
 
-  RageTimer now;
+  uint64_t usecs = uint64_t([e timestamp] * 1000000.0);
+  RageTimer eventTime(usecs / 1000000ULL, usecs % 1000000ULL);
   unsigned short keyCode = [e keyCode];
   float zval = (type == NSEventTypeKeyDown ? 1.0 : 0.0);
   wchar_t typedCharacter = FirstCharacterFromEvent(e);
@@ -230,7 +231,7 @@ void InputHandler_NSEvent::HandleEvent(NSEvent* e) {
         }
       }
       if (button != DeviceButton_Invalid) {
-        ButtonPressed(DeviceInput(DEVICE_KEYBOARD, button, zval, now));
+        ButtonPressed(DeviceInput(DEVICE_KEYBOARD, button, zval, eventTime));
       }
       break;
 
@@ -240,36 +241,36 @@ void InputHandler_NSEvent::HandleEvent(NSEvent* e) {
         case kVK_CapsLock:
           ButtonPressed(DeviceInput(
               DEVICE_KEYBOARD, m_NSKeyCodeMap[keyCode],
-              DownOrUp(flags & NSEventModifierFlagCapsLock), now));
+              DownOrUp(flags & NSEventModifierFlagCapsLock), eventTime));
           break;
         case kVK_Shift:
         case kVK_RightShift:
           ButtonPressed(DeviceInput(
               DEVICE_KEYBOARD, m_NSKeyCodeMap[keyCode], DownOrUp(flags & NSEventModifierFlagShift),
-              now));
+              eventTime));
           break;
         case kVK_Control:
         case kVK_RightControl:
           ButtonPressed(DeviceInput(
               DEVICE_KEYBOARD, m_NSKeyCodeMap[keyCode],
-              DownOrUp(flags & NSEventModifierFlagControl), now));
+              DownOrUp(flags & NSEventModifierFlagControl), eventTime));
           break;
         case kVK_Option:
         case kVK_RightOption:
           ButtonPressed(DeviceInput(
               DEVICE_KEYBOARD, m_NSKeyCodeMap[keyCode], DownOrUp(flags & NSEventModifierFlagOption),
-              now));
+              eventTime));
           break;
         case kVK_Command:
         case kVK_RightCommand:
           ButtonPressed(DeviceInput(
               DEVICE_KEYBOARD, m_NSKeyCodeMap[keyCode],
-              DownOrUp(flags & NSEventModifierFlagCommand), now));
+              DownOrUp(flags & NSEventModifierFlagCommand), eventTime));
           break;
         case kVK_Function:
           ButtonPressed(DeviceInput(
               DEVICE_KEYBOARD, m_NSKeyCodeMap[keyCode],
-              DownOrUp(flags & NSEventModifierFlagFunction), now));
+              DownOrUp(flags & NSEventModifierFlagFunction), eventTime));
           break;
       }
     } break;

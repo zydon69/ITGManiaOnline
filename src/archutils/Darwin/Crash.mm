@@ -47,7 +47,7 @@ std::string CrashHandler::GetLogsDirectory() {
     return std::string([portableLogsPath UTF8String]);
   }
 
-  NSURL* url = [fileManager URLForDirectory:NSLibraryDirectory
+  NSURL* url = [fileManager URLForDirectory:NSApplicationSupportDirectory
                                    inDomain:NSUserDomainMask
                           appropriateForURL:nil
                                      create:NO
@@ -57,7 +57,7 @@ std::string CrashHandler::GetLogsDirectory() {
   }
 
   std::string path =
-      std::string([url fileSystemRepresentation]) + "/Logs/" PRODUCT_ID;
+      std::string([url fileSystemRepresentation]) + "/" PRODUCT_ID "/Logs";
   NSString* pathString = [NSString stringWithUTF8String:path.c_str()];
   if (!EnsureDirectoryExists(fileManager, pathString)) {
     return "/tmp";
