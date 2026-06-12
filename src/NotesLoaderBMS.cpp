@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <numeric>
 #include <map>
 #include <string>
 #include <vector>
@@ -181,6 +183,10 @@ const int MaxBMSElements = 1296;  // ZZ in b36
 typedef std::map<std::string, std::string> BMSHeaders;
 typedef std::map<int, BMSMeasure> BMSMeasures;
 typedef std::vector<BMSObject> BMSObjects;
+
+static bool IsValidPositiveBMSValue(float value) {
+  return std::isfinite(value) && value > 0.0f;
+}
 
 class BMSChart {
  public:
@@ -388,8 +394,7 @@ struct bmsCommandTree {
     evaluateNode(&root, headersOut, linesOut);
   }
 
-  void doStatement(
-      std::string statement, std::map<int, bool>& referencedTracks) {
+  void doStatement(std::string statement) {
     line++;
 
     if (statement.length() == 0) {  // Skip.
@@ -501,13 +506,7 @@ struct bmsCommandTree {
           ('0' <= statement[3] && statement[3] <= '9') &&
           ('0' <= statement[4] && statement[4] <= '9') &&
           ('0' <= statement[5] && statement[5] <= '9') && statement[6] == ':') {
-        int channel = atoi(statement.substr(4, 2).c_str());
         currentNode->ChannelCommands.push_back(statement);
-
-        if ((11 <= channel && channel <= 19) ||
-            (21 <= channel && channel <= 29)) {
-          referencedTracks[channel] = true;
-        }
 
       } else {
         currentNode->Commands[name] = value;
@@ -540,7 +539,7 @@ bool BMSChart::Load(const std::string& chartPath) {
 
     StripCrnl(line);
 
-    Tree.doStatement(line, referencedTracks);
+    Tree.doStatement(line);
   }
 
   std::vector<std::string> lines;
@@ -553,12 +552,27 @@ bool BMSChart::Load(const std::string& chartPath) {
     bool flag = false;
     if (channel == 2) {
       // special channel: time signature
-      BMSMeasure m = {StringToFloat(data)};
+      const float size = StringToFloat(data);
+      if (!IsValidPositiveBMSValue(size)) {
+        LOG->UserLog(
+            "Song file", path,
+            "SRC_AUDIT_FIX ignored invalid BMS measure size in measure %d: %f.",
+            measure, size);
+        continue;
+      }
+      BMSMeasure m = {size};
       this->measures[measure] = m;
     } else {
       if (channel >= 51) {
         channel -= 40;
         flag = true;
+      }
+      if (data.size() % 2 != 0) {
+        LOG->UserLog(
+            "Song file", path,
+            "SRC_AUDIT_FIX ignored trailing half-object in BMS channel %02d, "
+            "measure %03d.",
+            channel, measure);
       }
       int count = data.size() / 2;
       for (int i = 0; i < count; i++) {
@@ -567,6 +581,10 @@ bool BMSChart::Load(const std::string& chartPath) {
           MakeLower(value);
           BMSObject o = {channel, measure, (float)i / count, flag, value};
           objects.push_back(o);
+          if ((11 <= channel && channel <= 19) ||
+              (21 <= channel && channel <= 29)) {
+            referencedTracks[channel] = true;
+          }
         }
       }
     }
@@ -794,6 +812,9 @@ BMSChartReader::BMSChartReader(
   this->out = steps;
   this->song = bmsSong;
   this->nonEmptyTracks = chart->referencedTracks;
+  initialBPM = 60.0f;
+  player = 1;
+  lntype = 1;
 }
 
 bool BMSChartReader::Read() {
@@ -828,7 +849,15 @@ void BMSChartReader::ReadHeaders() {
     } else if (it->first == "#stagefile") {
       info.stageFile = it->second;
     } else if (it->first == "#bpm") {
-      initialBPM = StringToFloat(it->second);
+      const float bpm = StringToFloat(it->second);
+      if (IsValidPositiveBMSValue(bpm)) {
+        initialBPM = bpm;
+      } else {
+        LOG->UserLog(
+            "Song file", in->path,
+            "SRC_AUDIT_FIX ignored invalid initial BMS BPM \"%s\". Using 60.",
+            it->second.c_str());
+      }
     } else if (it->first == "#lntype") {
       int myLntype = atoi(it->second.c_str());
       if (myLntype == 1) {
@@ -839,7 +868,7 @@ void BMSChartReader::ReadHeaders() {
       lnobj = it->second;
       MakeLower(lnobj);
     } else if (it->first == "#playlevel") {
-      out->SetMeter(StringToInt(it->second));
+      out->SetMeter(std::max(StringToInt(it->second), 1));
     } else if (it->first == "#difficulty") {
       // only set the difficulty if the #difficulty tag is between 1 and 6
       // (beginner~edit)
@@ -1022,20 +1051,23 @@ struct bmFrac {
 };
 
 bmFrac toFraction(double f) {
-  double df;
-  long long upper = 1LL, lower = 1LL;
-  df = 1;
+  long long bestNum = 1;
+  long long bestDen = 1;
+  double bestError = std::abs(f - 1.0);
 
-  while (std::abs(df - f) > 0.000001) {
-    if (df < f) {
-      upper++;
-    } else {
-      lower++;
+  for (long long den = 1; den <= 192; ++den) {
+    long long num = std::max(1LL, static_cast<long long>(std::llround(f * den)));
+    const double candidate = static_cast<double>(num) / den;
+    const double error = std::abs(candidate - f);
+    if (error < bestError) {
+      bestError = error;
+      bestNum = num;
+      bestDen = den;
     }
-    df = (double)upper / lower;
   }
 
-  return bmFrac(upper, lower);
+  const long long divisor = std::gcd(bestNum, bestDen);
+  return bmFrac(bestNum / divisor, bestDen / divisor);
 }
 
 bool BMSChartReader::ReadNoteData() {
@@ -1044,27 +1076,26 @@ bool BMSChartReader::ReadNoteData() {
     return false;
   }
 
-  float currentBPM;
+  float currentBPM = initialBPM;
   int tracks = GAMEMAN->GetStepsTypeInfo(out->m_StepsType).iNumTracks;
+  if (tracks <= 0) {
+    LOG->UserLog(
+        "Song file", in->path,
+        "SRC_AUDIT_FIX cannot parse BMS chart with %i tracks.", tracks);
+    return false;
+  }
 
   NoteData nd;
   TimingData td;
 
   td.m_fBeat0OffsetInSeconds = out->m_Timing.m_fBeat0OffsetInSeconds;
   nd.SetNumTracks(tracks);
-  td.SetBPMAtRow(0, currentBPM = initialBPM);
+  td.SetBPMAtRow(0, currentBPM);
 
   // set up note transformation vector.
-  int* transform = new int[tracks];
-  int* holdStart = new int[tracks];
-  int* lastNote = new int[tracks];
-
-  for (int i = 0; i < tracks; i++) {
-    holdStart[i] = -1;
-  }
-  for (int i = 0; i < tracks; i++) {
-    lastNote[i] = -1;
-  }
+  std::vector<int> transform(tracks, -1);
+  std::vector<int> holdStart(tracks, -1);
+  std::vector<int> lastNote(tracks, -1);
 
   switch (out->m_StepsType) {
     case StepsType_dance_single:
@@ -1200,10 +1231,11 @@ bool BMSChartReader::ReadNoteData() {
       transform[15] = BMS_RAW_P2_TURN;
       break;
     default:
-      ASSERT_M(
-          0,
-          ssprintf(
-              "Invalid StepsType when parsing BMS file %s!", in->path.c_str()));
+      LOG->UserLog(
+          "Song file", in->path,
+          "SRC_AUDIT_FIX cannot parse BMS chart with invalid StepsType %i.",
+          out->m_StepsType);
+      return false;
   }
 
   int reverseTransform[30];
@@ -1211,6 +1243,14 @@ bool BMSChartReader::ReadNoteData() {
     reverseTransform[i] = -1;
   }
   for (int i = 0; i < tracks; i++) {
+    if (transform[i] < 0 || transform[i] >= 30) {
+      LOG->UserLog(
+          "Song file", in->path,
+          "SRC_AUDIT_FIX cannot parse BMS chart with invalid lane transform "
+          "%i.",
+          transform[i]);
+      return false;
+    }
     reverseTransform[transform[i]] = i;
   }
 
@@ -1242,6 +1282,14 @@ bool BMSChartReader::ReadNoteData() {
       BMSMeasures::iterator it = in->measures.find(trackMeasure);
       if (it != in->measures.end()) {
         measureSize = it->second.size * 4.0;
+      }
+      if (!std::isfinite(measureSize) || measureSize <= 0.0) {
+        LOG->UserLog(
+            "Song file", in->path,
+            "SRC_AUDIT_FIX ignored invalid BMS adjusted measure size %f at "
+            "measure %i.",
+            measureSize, trackMeasure);
+        measureSize = 4.0f;
       }
       adjustedMeasureSize = measureSize;
       if (trackMeasure < firstNoteMeasure) {
@@ -1278,8 +1326,15 @@ bool BMSChartReader::ReadNoteData() {
     {
       unsigned int bpm;
       if (sscanf(obj.value.c_str(), "%x", &bpm) == 1) {
-        if (bpm > 0) {
-          td.SetBPMAtRow(row, measureAdjust * (currentBPM = bpm));
+        const float newBPM = measureAdjust * static_cast<float>(bpm);
+        if (IsValidPositiveBMSValue(newBPM)) {
+          currentBPM = newBPM;
+          td.SetBPMAtRow(row, currentBPM);
+        } else {
+          LOG->UserLog(
+              "Song file", in->path,
+              "SRC_AUDIT_FIX ignored invalid BMS channel 03 BPM \"%s\".",
+              obj.value.c_str());
         }
       }
     } else if (channel == 4)  // bga change
@@ -1319,8 +1374,17 @@ bool BMSChartReader::ReadNoteData() {
       std::string search = ssprintf("#bpm%s", obj.value.c_str());
       BMSHeaders::iterator it = in->headers.find(search);
       if (it != in->headers.end()) {
-        td.SetBPMAtRow(
-            row, measureAdjust * (currentBPM = StringToFloat(it->second)));
+        const float newBPM = measureAdjust * StringToFloat(it->second);
+        if (IsValidPositiveBMSValue(newBPM)) {
+          currentBPM = newBPM;
+          td.SetBPMAtRow(row, currentBPM);
+        } else {
+          LOG->UserLog(
+              "Song file", in->path,
+              "SRC_AUDIT_FIX ignored invalid extended BMS BPM \"%s\" for tag "
+              "\"%s\".",
+              it->second.c_str(), search.c_str());
+        }
       } else {
         LOG->UserLog(
             "Song file", in->path.c_str(),
@@ -1331,8 +1395,16 @@ bool BMSChartReader::ReadNoteData() {
       std::string search = ssprintf("#stop%s", obj.value.c_str());
       BMSHeaders::iterator it = in->headers.find(search);
       if (it != in->headers.end()) {
-        td.SetStopAtRow(
-            row, (StringToFloat(it->second) / 48.0f) * (60.0f / currentBPM));
+        const float stopValue = StringToFloat(it->second);
+        if (!IsValidPositiveBMSValue(stopValue) ||
+            !IsValidPositiveBMSValue(currentBPM)) {
+          LOG->UserLog(
+              "Song file", in->path,
+              "SRC_AUDIT_FIX ignored invalid BMS stop \"%s\" at BPM %f.",
+              it->second.c_str(), currentBPM);
+        } else {
+          td.SetStopAtRow(row, (stopValue / 48.0f) * (60.0f / currentBPM));
+        }
       } else {
         LOG->UserLog(
             "Song file", in->path.c_str(),
@@ -1347,7 +1419,14 @@ bool BMSChartReader::ReadNoteData() {
         TapNote tn = nd.GetTapNote(track, holdStart[track]);
         tn.type = TapNoteType_HoldHead;
         tn.subType = TapNoteSubType_Hold;
-        nd.AddHoldNote(track, holdStart[track], row, tn);
+        if (row < holdStart[track]) {
+          LOG->UserLog(
+              "Song file", in->path,
+              "SRC_AUDIT_FIX ignored BMS hold tail before its head on track %i.",
+              track);
+        } else {
+          nd.AddHoldNote(track, holdStart[track], row, tn);
+        }
         holdStart[track] = -1;
         lastNote[track] = -1;
       } else if (obj.value == lnobj && lastNote[track] != -1) {
@@ -1356,7 +1435,15 @@ bool BMSChartReader::ReadNoteData() {
         TapNote tn = nd.GetTapNote(track, lastNote[track]);
         tn.type = TapNoteType_HoldHead;
         tn.subType = TapNoteSubType_Hold;
-        nd.AddHoldNote(track, lastNote[track], row, tn);
+        if (row < lastNote[track]) {
+          LOG->UserLog(
+              "Song file", in->path,
+              "SRC_AUDIT_FIX ignored BMS LNOBJ tail before its head on track "
+              "%i.",
+              track);
+        } else {
+          nd.AddHoldNote(track, lastNote[track], row, tn);
+        }
         holdStart[track] = -1;
         lastNote[track] = -1;
       } else {
@@ -1398,10 +1485,6 @@ bool BMSChartReader::ReadNoteData() {
     }
   }
 
-  delete[] transform;
-  delete[] holdStart;
-  delete[] lastNote;
-
   td.TidyUpData(false);
   out->SetNoteData(nd);
   out->m_Timing = td;
@@ -1428,6 +1511,7 @@ class BMSSongLoader {
   BMSSongLoader(std::string songDir, Song* outSong);
   bool Load(std::string fileName);
   void AddToSong();
+  bool HasLoadedSteps() const;
 };
 
 BMSSongLoader::BMSSongLoader(std::string songDir, Song* outSong)
@@ -1459,6 +1543,8 @@ bool BMSSongLoader::Load(std::string fileName) {
 
   return true;
 }
+
+bool BMSSongLoader::HasLoadedSteps() const { return !loadedSteps.empty(); }
 
 void BMSSongLoader::AddToSong() {
   if (loadedSteps.size() == 0) {
@@ -1604,9 +1690,8 @@ void BMSSongLoader::AddToSong() {
           BACKGROUND_LAYER_1,
           BackgroundChange(
               NoteRowToBeat(it->first), it->second, "", 1.f,
-              it->second.substr(it->second.length() - 4) == ".lua"
-                  ? SBE_Centered
-                  : SBE_StretchNoLoop));
+              EndsWith(it->second, ".lua") ? SBE_Centered
+                                           : SBE_StretchNoLoop));
     }
 
     out->m_sMusicFile = main.info.musicFile;
@@ -1676,18 +1761,33 @@ bool BMSLoader::LoadNoteDataFromSimfile(
 bool BMSLoader::LoadFromDir(const std::string& sDir, Song& out) {
   LOG->Trace("Song::LoadFromBMSDir(%s)", sDir.c_str());
 
-  ASSERT(out.m_vsKeysoundFile.empty());
+  if (!out.m_vsKeysoundFile.empty()) {
+    LOG->UserLog(
+        "Song", sDir,
+        "SRC_AUDIT_FIX cannot load BMS into a Song that already has "
+        "keysounds.");
+    return false;
+  }
 
   std::vector<std::string> arrayBMSFileNames;
   GetApplicableFiles(sDir, arrayBMSFileNames);
 
-  /* We should have at least one; if we had none, we shouldn't have been
-   * called to begin with. */
-  ASSERT(arrayBMSFileNames.size() != 0);
+  if (arrayBMSFileNames.empty()) {
+    LOG->UserLog(
+        "Song", sDir,
+        "SRC_AUDIT_FIX found no applicable BMS simfile for direct LoadFromDir.");
+    return false;
+  }
 
   BMSSongLoader loader(sDir, &out);
   for (unsigned i = 0; i < arrayBMSFileNames.size(); i++) {
     loader.Load(arrayBMSFileNames[i]);
+  }
+  if (!loader.HasLoadedSteps()) {
+    LOG->UserLog(
+        "Song", sDir,
+        "SRC_AUDIT_FIX found no loadable BMS charts in directory.");
+    return false;
   }
   loader.AddToSong();
 
