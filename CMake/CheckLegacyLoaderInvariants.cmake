@@ -56,6 +56,33 @@ require_contains(
   "fFreezeSeconds <= 0.0f"
   "DWI FREEZE segments reject non-positive durations")
 
+read_source("src/NotesWriterDWI.cpp" notes_writer_dwi_cpp)
+
+require_not_contains(
+  "${notes_writer_dwi_cpp}"
+  "ASSERT"
+  "DWI writer must reject invalid export state without ASSERT")
+require_not_contains(
+  "${notes_writer_dwi_cpp}"
+  "FAIL_M"
+  "DWI writer must reject invalid export state without FAIL_M")
+require_contains(
+  "${notes_writer_dwi_cpp}"
+  "bpms.empty()"
+  "DWI writer checks for missing BPM segments before indexing")
+require_contains(
+  "${notes_writer_dwi_cpp}"
+  "firstBPM->GetRow() != 0"
+  "DWI writer validates the initial BPM row")
+require_contains(
+  "${notes_writer_dwi_cpp}"
+  "#DISPLAYBPM:*;"
+  "DWI writer terminates random display BPM tag")
+require_contains(
+  "${notes_writer_dwi_cpp}"
+  "FinishWrite(f, sPath)"
+  "DWI writer flushes and checks final write status")
+
 read_source("src/NotesLoaderKSF.cpp" notes_loader_ksf_cpp)
 
 require_contains(
