@@ -161,6 +161,12 @@ static void Serialize(const RadarValues& o, Json::Value& root) {
   FOREACH_ENUM(RadarCategory, rc) { root[RadarCategoryToString(rc)] = o[rc]; }
 }
 
+static void SerializeRadarValuesByPlayer(const Steps& o, Json::Value& root) {
+  root = Json::Value(Json::arrayValue);
+  root.resize(NUM_PLAYERS);
+  FOREACH_PlayerNumber(pn) { Serialize(o.GetRadarValues(pn), root[pn]); }
+}
+
 static void Serialize(const Steps& o, Json::Value& root) {
   root["StepsType"] = StringConversion::ToString(o.m_StepsType);
 
@@ -174,6 +180,7 @@ static void Serialize(const Steps& o, Json::Value& root) {
   root["Difficulty"] = DifficultyToString(o.GetDifficulty());
   root["Meter"] = o.GetMeter();
   Serialize(o.GetRadarValues(PLAYER_1), root["RadarValues"]);
+  SerializeRadarValuesByPlayer(o, root["RadarValuesByPlayer"]);
   root["DisplayBpmType"] = StringConversion::ToString(o.GetDisplayBPM());
   if (o.GetDisplayBPM() == DISPLAY_BPM_SPECIFIED) {
     root["SpecifiedBpmMin"] = o.GetMinBPM();

@@ -236,6 +236,21 @@ static void Deserialize(RadarValues& o, const Json::Value& root) {
   }
 }
 
+static void DeserializeRadarValuesByPlayer(
+    RadarValues (&rv)[NUM_PLAYERS], const Json::Value& root) {
+  if (root.isArray()) {
+    FOREACH_PlayerNumber(pn) {
+      if ((unsigned)pn < root.size()) {
+        Deserialize(rv[pn], root[pn]);
+      }
+    }
+    return;
+  }
+
+  // Backward compatibility for JSON written before per-player radar values.
+  FOREACH_PlayerNumber(pn) { Deserialize(rv[pn], root); }
+}
+
 static DisplayBPM DeserializeDisplayBPM(const Json::Value& root) {
   const std::string sDisplayBPMType = root.asString();
   if (EqualsNoCase(sDisplayBPMType, DisplayBPMToString(DISPLAY_BPM_ACTUAL))) {
@@ -278,7 +293,9 @@ static bool Deserialize(Steps& o, const Json::Value& root) {
   o.SetMeter(root["Meter"].asInt());
 
   RadarValues rv[NUM_PLAYERS];
-  FOREACH_PlayerNumber(pn) { Deserialize(rv[pn], root["RadarValues"]); }
+  DeserializeRadarValuesByPlayer(
+      rv, root.isMember("RadarValuesByPlayer") ? root["RadarValuesByPlayer"]
+                                               : root["RadarValues"]);
   o.SetRadarValues(rv);
   if (root.isMember("DisplayBpmType")) {
     o.SetDisplayBPM(DeserializeDisplayBPM(root["DisplayBpmType"]));

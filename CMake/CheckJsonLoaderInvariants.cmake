@@ -126,3 +126,11 @@ require_contains(
   "${notes_writer_json_cpp}"
   "root[\"FakeSegments\"]"
   "JSON writer writes fake timing segments")
+require_contains(
+  "${notes_loader_json_cpp}"
+  "RadarValuesByPlayer"
+  "JSON loader reads per-player radar values")
+require_contains(
+  "${notes_writer_json_cpp}"
+  "RadarValuesByPlayer"
+  "JSON writer writes per-player radar values")
