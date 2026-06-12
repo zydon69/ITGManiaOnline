@@ -284,15 +284,50 @@ MusicWheel::~MusicWheel() {
 }
 
 void MusicWheel::ReloadSongList() {
-  int songIdxToPreserve = m_iSelection;
+  const MusicWheelItemData* previousSelection =
+      m_CurWheelItemData.empty() ? nullptr : GetCurWheelItemData(m_iSelection);
+  const WheelItemDataType previousType =
+      previousSelection != nullptr ? previousSelection->m_Type
+                                   : WheelItemDataType_Invalid;
+  const Song* songToPreserve =
+      previousType == WheelItemDataType_Song ? previousSelection->m_pSong
+                                             : nullptr;
+  const Course* courseToPreserve =
+      previousType == WheelItemDataType_Course ? previousSelection->m_pCourse
+                                               : nullptr;
+  const std::string sectionToPreserve =
+      previousSelection != nullptr ? previousSelection->m_sText : "";
+  const std::string expandedSectionToPreserve = m_sExpandedSectionName;
+  const int fallbackIndexToPreserve = m_iSelection;
+
   // Remove the song from any sorting caches:
   FOREACH_ENUM(SortOrder, so) { m_WheelItemDatasStatus[so] = INVALID; }
   // rebuild the info associated with this sort order
   readyWheelItemsData(GAMESTATE->m_SortOrder);
-  // re-open the section to refresh song counts, etc.
-  SetOpenSection(m_sExpandedSectionName);
-  // navigate to the song nearest to what was previously selected
-  m_iSelection = songIdxToPreserve;
+
+  bool restoredSelection = false;
+  if (songToPreserve != nullptr) {
+    restoredSelection = SelectSong(songToPreserve);
+  } else if (courseToPreserve != nullptr) {
+    restoredSelection = SelectCourse(courseToPreserve);
+  }
+
+  if (!restoredSelection) {
+    // Re-open the section to refresh song counts, etc.  Preserve the selected
+    // item by identity where possible; preserving only the index can desync the
+    // visible row from the banner when a pack is added in-session.
+    SetOpenSection(expandedSectionToPreserve);
+    if (previousType == WheelItemDataType_Section &&
+        !sectionToPreserve.empty()) {
+      restoredSelection = SelectSection(sectionToPreserve);
+    }
+  }
+
+  if (!restoredSelection && !m_CurWheelItemData.empty()) {
+    const int lastIndex = static_cast<int>(m_CurWheelItemData.size()) - 1;
+    m_iSelection = std::max(0, std::min(fallbackIndexToPreserve, lastIndex));
+  }
+
   RebuildWheelItems();
   // refresh the song preview
   SCREENMAN->PostMessageToTopScreen(SM_SongChanged, 0);
