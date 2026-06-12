@@ -59,12 +59,14 @@ void RageSoundDriver::Sound::Allocate(int iFrames) {
   const int iFramesPerBlock = samples_per_block / channels;
   const int iBlocksToPrebuffer = iFrames / iFramesPerBlock;
   m_Buffer.reserve(iBlocksToPrebuffer + 1);
-  m_PosMapQueue.reserve(32);
+  m_MixedPositionQueue.reserve(32);
+  m_PlaybackHistory.clear();
 }
 
 void RageSoundDriver::Sound::Deallocate() {
   m_Buffer.reserve(0);
-  m_PosMapQueue.reserve(0);
+  m_MixedPositionQueue.reserve(0);
+  m_PlaybackHistory.clear();
 }
 
 int RageSoundDriver::DecodeThread_start(void* p) {
@@ -273,19 +275,100 @@ int RageSoundDriver::GetDataForSound(Sound& s) {
   return iRet;
 }
 
-void RageSoundDriver::Update() {
-  m_Mutex.Lock();
-  for (unsigned i = 0; i < ARRAYLEN(m_Sounds); ++i) {
-    {
-      Sound::QueuedPosMap p;
-      while (m_Sounds[i].m_PosMapQueue.read(&p, 1)) {
-        RageSoundBase* pSound = m_Sounds[i].m_pSound;
-        if (pSound != nullptr) {
-          pSound->CommitPlayingPosition(
-              p.iStreamFrame, p.iHardwareFrame, p.iFrames);
-        }
+void RageSoundDriver::PlaybackQueueDrain(Sound& s) {
+  Sound::PlaybackPositionInfo position;
+  while (s.m_MixedPositionQueue.read(&position, 1)) {
+    if (!s.m_PlaybackHistory.empty()) {
+      Sound::PlaybackPositionInfo& previous = s.m_PlaybackHistory.back();
+      const int64_t iExpectedHardwareFrame =
+          previous.iHardwareFrame + previous.iFrames;
+      const int64_t iExpectedSourceFrame =
+          previous.iSourceFrame +
+          StreamFramesToSourceFrames(
+              previous.iFrames, previous.m_fSourceToStreamRatio);
+      if (previous.m_fSourceToStreamRatio == position.m_fSourceToStreamRatio &&
+          iExpectedHardwareFrame == position.iHardwareFrame &&
+          iExpectedSourceFrame == position.iSourceFrame) {
+        previous.iFrames += position.iFrames;
+        continue;
       }
     }
+
+    s.m_PlaybackHistory.push_back(position);
+  }
+}
+
+void RageSoundDriver::PlaybackHistoryCleanup(
+    Sound& s, int64_t iCurrentHardwareFrame) {
+  while (s.m_PlaybackHistory.size() > 1) {
+    if (s.m_PlaybackHistory[1].iHardwareFrame > iCurrentHardwareFrame) {
+      break;
+    }
+    s.m_PlaybackHistory.pop_front();
+  }
+}
+
+bool RageSoundDriver::GetSourceFrameForHardwareFrame(
+    const Sound& s, int64_t iHardwareFrame, int& iSourceFrame) const {
+  if (s.m_PlaybackHistory.empty()) {
+    return false;
+  }
+
+  const Sound::PlaybackPositionInfo* pClosest = nullptr;
+  for (const Sound::PlaybackPositionInfo& position : s.m_PlaybackHistory) {
+    if (iHardwareFrame < position.iHardwareFrame) {
+      break;
+    }
+
+    pClosest = &position;
+    if (iHardwareFrame < position.iHardwareFrame + position.iFrames) {
+      iSourceFrame = static_cast<int>(
+          position.iSourceFrame +
+          StreamFramesToSourceFrames(
+              static_cast<int>(iHardwareFrame - position.iHardwareFrame),
+              position.m_fSourceToStreamRatio));
+      return true;
+    }
+  }
+
+  if (pClosest == nullptr) {
+    return false;
+  }
+
+  iSourceFrame = static_cast<int>(
+      pClosest->iSourceFrame +
+      StreamFramesToSourceFrames(
+          pClosest->iFrames, pClosest->m_fSourceToStreamRatio));
+  return true;
+}
+
+bool RageSoundDriver::GetPlayingPosition(
+    const RageSoundBase* pSound, int& iSourceFrame, RageTimer* pTimer) {
+  const int64_t iCurrentHardwareFrame = GetHardwareFrame(pTimer);
+
+  LockMut(m_Mutex);
+  for (unsigned i = 0; i < ARRAYLEN(m_Sounds); ++i) {
+    Sound& sound = m_Sounds[i];
+    if (sound.m_State == Sound::AVAILABLE || sound.m_pSound != pSound) {
+      continue;
+    }
+
+    PlaybackQueueDrain(sound);
+    PlaybackHistoryCleanup(sound, iCurrentHardwareFrame);
+    return GetSourceFrameForHardwareFrame(
+        sound, iCurrentHardwareFrame, iSourceFrame);
+  }
+
+  return false;
+}
+
+void RageSoundDriver::Update() {
+  const int64_t iCurrentHardwareFrame = GetHardwareFrame(nullptr);
+
+  m_Mutex.Lock();
+  for (unsigned i = 0; i < ARRAYLEN(m_Sounds); ++i) {
+    PlaybackQueueDrain(m_Sounds[i]);
+    PlaybackHistoryCleanup(m_Sounds[i], iCurrentHardwareFrame);
 
     switch (m_Sounds[i].m_State) {
       case Sound::STOPPED:
@@ -361,6 +444,8 @@ void RageSoundDriver::StartMixing(RageSoundBase* pSound) {
   s.m_pSound = pSound;
   s.m_StartTime = pSound->GetStartTime();
   s.m_Buffer.clear();
+  s.m_MixedPositionQueue.clear();
+  s.m_PlaybackHistory.clear();
 
   /* Initialize the sound buffer. */
   int BufferSize = frames_to_buffer;
@@ -391,6 +476,8 @@ void RageSoundDriver::StopMixing(RageSoundBase* pSound) {
    * do this. */
   m_Mutex.Lock();
 
+  const int64_t iCurrentHardwareFrame = GetHardwareFrame(nullptr);
+
   /* Find the sound. */
   unsigned i;
   for (i = 0; i < ARRAYLEN(m_Sounds); ++i) {
@@ -415,6 +502,12 @@ void RageSoundDriver::StopMixing(RageSoundBase* pSound) {
   //	LOG->Trace("StopMixing: set %p (%s) to HALTING", m_Sounds[i].m_pSound,
   // m_Sounds[i].m_pSound->GetLoadedFilePath().c_str());
 
+  PlaybackQueueDrain(m_Sounds[i]);
+  PlaybackHistoryCleanup(m_Sounds[i], iCurrentHardwareFrame);
+  int iSourceFrame = -1;
+  GetSourceFrameForHardwareFrame(
+      m_Sounds[i], iCurrentHardwareFrame, iSourceFrame);
+
   /* Tell the mixing thread to flush the buffer.  We don't have to worry about
    * the decoding thread, since we've locked m_Mutex. */
   m_Sounds[i].m_State = Sound::HALTING;
@@ -427,7 +520,7 @@ void RageSoundDriver::StopMixing(RageSoundBase* pSound) {
 
   m_Mutex.Unlock();
 
-  pSound->SoundIsFinishedPlaying();
+  pSound->SoundIsFinishedPlaying(iSourceFrame);
 }
 
 bool RageSoundDriver::PauseMixing(RageSoundBase* pSound, bool bStop) {
