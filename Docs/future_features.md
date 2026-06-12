@@ -262,3 +262,101 @@ WebRTC demande une phase de prototype dédiée. Le serveur Laravel peut être pr
 rapidement, mais l'expérience ne doit pas être livrée tant que le client natif
 n'est pas stable.
 
+## Gestion des packs de chansons depuis une borne
+
+### Objectif
+
+Permettre à un exploitant de borne arcade ou d'événement d'importer ou de retirer
+des packs de chansons sans clavier, souris, internet ou ordinateur externe.
+
+### Décision technique proposée
+
+Commencer par une approche locale USB, désactivée par défaut et accessible
+uniquement depuis le menu opérateur.
+
+Créer un menu opérateur dédié, par exemple `Song Management`, avec deux actions:
+
+- `Import packs`
+- `Delete packs`
+
+L'import doit utiliser une préférence dédiée, par exemple `ImportSongsPath`,
+pointant vers un chemin local ou une clé USB montée:
+
+- Linux: `/mnt/usb`
+- Windows: `Z:\`
+- macOS: `/Volumes/<drive>`
+
+Structure attendue sur le support externe:
+
+```text
+<ImportSongsPath>/
+  Packs/
+    Pack A/
+    Pack B.zip
+```
+
+Le menu d'import doit lister un pack par entrée, avec une option `All` pour tout
+importer.
+
+### Flux d'import robuste
+
+1. Scanner uniquement `ImportSongsPath/Packs`.
+2. Afficher les packs détectés.
+3. Copier le pack sélectionné vers un dossier temporaire.
+4. Valider le contenu avant installation.
+5. Déplacer atomiquement le pack validé vers `/Songs`.
+6. Recharger la liste des chansons.
+7. Écrire un log clair pour chaque étape.
+
+### Suppression de packs
+
+Le menu `Delete packs` doit lister uniquement les packs visibles dans `/Songs`.
+
+La suppression doit être protégée:
+
+- confirmation obligatoire;
+- idéalement déplacement vers une quarantaine ou une corbeille interne;
+- log de l'opération;
+- aucune suppression silencieuse.
+
+### Position sur l'approche distante
+
+Ne pas réutiliser `ContentServerURL` comme chemin d'import USB. Un chemin local et
+une URL distante n'ont pas les mêmes contraintes, erreurs, permissions et risques.
+
+Si une source distante est ajoutée plus tard, elle doit utiliser une préférence
+séparée, par exemple:
+
+- `ImportSongsPath` pour USB/local;
+- `RemoteSongsCatalogURL` ou `PackCatalogURL` pour un catalogue serveur.
+
+### Risques
+
+- Path traversal dans les archives zip (`../`, chemins absolus).
+- Symlinks malveillants.
+- Zip bombs ou archives trop volumineuses.
+- Fichiers trop nombreux.
+- Collision avec un pack déjà installé.
+- Pack incomplet ou simfiles invalides.
+- Permissions système incohérentes selon Windows, Linux et macOS.
+- Gel du jeu pendant la copie ou le reload.
+- Suppression accidentelle si la confirmation est trop faible.
+
+### Critères d'acceptation
+
+- L'import ne lit jamais hors de `ImportSongsPath/Packs`.
+- Une archive contenant un chemin dangereux est refusée.
+- Un pack importé est installé atomiquement dans `/Songs`.
+- Un échec d'import laisse le dossier `/Songs` dans son état précédent.
+- Le reload des chansons se déclenche après import réussi.
+- La suppression demande une confirmation explicite.
+- Chaque import, refus, erreur et suppression est écrit dans les logs.
+- La fonctionnalité reste désactivée par défaut.
+
+### Décision actuelle
+
+Statut: retenu comme future feature, non implémenté.
+
+Raison du report: la valeur arcade est claire, mais l'import USB touche au
+système de fichiers et doit être livré avec validation stricte, logs et garde-fous
+anti-suppression accidentelle.
