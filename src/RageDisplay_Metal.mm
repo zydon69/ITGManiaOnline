@@ -338,7 +338,8 @@ void AppendTriangle(
   vertices->push_back(ToMetalSolidVertex(c));
 }
 
-RageColor RageDisplay_Metal::ComputeModelColor(const RageVector3& normal) const {
+RageColor RageDisplay_Metal::ComputeModelColor(
+    const RageVector3& normal, const RageMatrix& modelView) const {
   if (!m_bLighting) {
     RageColor color = m_MaterialDiffuse;
     color.r += m_MaterialEmissive.r + m_MaterialAmbient.r;
@@ -381,7 +382,7 @@ RageColor RageDisplay_Metal::ComputeModelColor(const RageVector3& normal) const 
 }
 
 RageColor RageDisplay_Metal::ComputeCelModelColor(
-    const RageVector3& normal) const {
+    const RageVector3& normal, const RageMatrix& modelView) const {
   const RageVector3 normalizedNormal =
       NormalizeOrDefault(normal, RageVector3(0.0f, 0.0f, 1.0f));
   RageVector3 lightDirection(0.0f, 0.0f, 1.0f);
@@ -465,12 +466,13 @@ void RageCompiledGeometryMetal::EmitTo(
       RageVector3 transformedNormal;
       RageVec3TransformNormal(&transformedNormal, &modelVertex.n, &modelView);
       RageVector3 position = modelVertex.p;
-      RageColor litColor = display->ComputeModelColor(transformedNormal);
+      RageColor litColor =
+          display->ComputeModelColor(transformedNormal, modelView);
       if (display->m_iCelShadedStage == 1) {
         position += modelVertex.n * 0.125f;
         litColor = RageColor(0.25f, 0.125f, 0.125f, 1.0f);
       } else if (display->m_iCelShadedStage == 2) {
-        litColor = display->ComputeCelModelColor(transformedNormal);
+        litColor = display->ComputeCelModelColor(transformedNormal, modelView);
       }
       const RageVector2 texcoord =
           (useDirectVertices ? directBatch->sphereMapping
@@ -622,6 +624,7 @@ void RageDisplay_Metal::ReleaseTexture(MetalTexture* texture) {
   texture->requestedDepth = false;
   texture->requestedAlpha = false;
   texture->requestedFloat = false;
+  texture->generateMipMaps = false;
   texture->hasRendered = false;
   texture->preserveNextRender = false;
 }
@@ -678,13 +681,19 @@ bool RageDisplay_Metal::UploadTexturePixels(
 
   void* metalTexture = m_Presenter->CreateRGBA8Texture(
       texture->width, texture->height, fullPixels.data(),
-      static_cast<size_t>(texture->width) * 4);
+      static_cast<size_t>(texture->width) * 4, texture->generateMipMaps);
   if (metalTexture == nullptr) {
     return false;
   }
 
+  const int newWidth = texture->width;
+  const int newHeight = texture->height;
+  const bool newGenerateMipMaps = texture->generateMipMaps;
   ReleaseTexture(texture);
   texture->texture = metalTexture;
+  texture->width = newWidth;
+  texture->height = newHeight;
+  texture->generateMipMaps = newGenerateMipMaps;
   return true;
 }
 
@@ -723,7 +732,7 @@ void RageDisplay_Metal::RecycleTextureHandle(uintptr_t handle) {
 
 uintptr_t RageDisplay_Metal::CreateTexture(
     RagePixelFormat pixfmt, RageSurface* img,
-    bool /* bGenerateMipMaps */) {
+    bool bGenerateMipMaps) {
   if (!SupportsTextureFormat(pixfmt) || img == nullptr || img->w <= 0 ||
       img->h <= 0) {
     return 0;
@@ -733,6 +742,7 @@ uintptr_t RageDisplay_Metal::CreateTexture(
   MetalTexture& texture = m_Textures[handle];
   texture.width = img->w;
   texture.height = img->h;
+  texture.generateMipMaps = bGenerateMipMaps;
   if (!UploadTexturePixels(&texture, img, 0, 0, img->w, img->h)) {
     ReleaseTexture(&texture);
     RecycleTextureHandle(handle);
@@ -1319,6 +1329,7 @@ void RageDisplay_Metal::BuildMetalBatches(
     }
     void* texture2 = nullptr;
     int texture2Width = 1;
+    bool hasTexture2 = false;
     if (batch.textureHandles[TextureUnit_2] > 0 &&
         batch.textureHandles[TextureUnit_2] < m_Textures.size()) {
       if (m_iCurrentRenderTargetHandle == 0 ||
@@ -1326,27 +1337,19 @@ void RageDisplay_Metal::BuildMetalBatches(
         texture2 = m_Textures[batch.textureHandles[TextureUnit_2]].texture;
         texture2Width =
             std::max(1, m_Textures[batch.textureHandles[TextureUnit_2]].width);
+        hasTexture2 = texture2 != nullptr;
       }
     }
     const MacOSMetalSolidVertex* cpuVertices =
         batch.vertices.empty() ? nullptr : batch.vertices.data();
-    const bool preserveLinearFiltering =
-        batch.effectMode == EffectMode_DistanceField ||
-        batch.effectMode == EffectMode_YUYV422 ||
-        batch.effectMode == EffectMode_ColorBurn ||
-        batch.effectMode == EffectMode_ColorDodge ||
-        batch.effectMode == EffectMode_VividLight ||
-        batch.effectMode == EffectMode_HardMix ||
-        batch.effectMode == EffectMode_Overlay ||
-        batch.effectMode == EffectMode_Screen;
-    const bool metalTextureFiltering =
-        preserveLinearFiltering && batch.textureFiltering[TextureUnit_1];
+    const bool metalTextureFiltering = batch.textureFiltering[TextureUnit_1];
     metalBatches->push_back(
         {cpuVertices,
          batch.vertexBuffer, batch.vertexBufferOffsetBytes,
          batch.vertexCount > 0 ? batch.vertexCount : batch.vertices.size(),
          texture, textureWidth,
          texture2, texture2Width,
+         batch.textureModes[TextureUnit_2], hasTexture2,
          batch.blendMode, batch.textureModes[TextureUnit_1], batch.effectMode,
          batch.celStage,
          batch.zTestMode,
@@ -1872,15 +1875,15 @@ void RageDisplay_Metal::DrawCompiledGeometryInternal(
   const bool translucentModel = m_MaterialDiffuse.a < 0.999f;
   const CullMode previousCullMode = m_CullMode;
   const bool previousZWrite = m_bZWrite;
-  if (translucentModel) {
+  if (translucentModel || m_iCelShadedStage != 0) {
     m_CullMode = CULL_NONE;
+  }
+  if (translucentModel) {
     m_bZWrite = false;
   }
   metalGeometry->EmitTo(this, iMeshIndex, ToVertexColor(m_MaterialDiffuse));
-  if (translucentModel) {
-    m_CullMode = previousCullMode;
-    m_bZWrite = previousZWrite;
-  }
+  m_CullMode = previousCullMode;
+  m_bZWrite = previousZWrite;
 }
 
 RageSurface* RageDisplay_Metal::CreateScreenshot() {

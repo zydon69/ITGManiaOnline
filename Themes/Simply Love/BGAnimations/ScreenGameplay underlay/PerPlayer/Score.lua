@@ -60,9 +60,7 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 	InitCommand=function(self)
 		self:valign(1):horizalign(right)
 		self:zoom(0.5)
-		if IsHardEX then
-			self:diffuse((SL.JudgmentColors["FA+"] and SL.JudgmentColors["FA+"][7]) or color("#ff00cc"))
-		elseif IsEX then
+		if IsEX then
 			-- If EX Score, let's diffuse it to be the same as the ITG top window.
 			-- This will make it consistent with the EX Score Pane.
 			self:diffuse(SL.JudgmentColors["ITG"][1])
@@ -142,7 +140,7 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 		local percent = FormatPercentScore( dance_points ):sub(1,-2)
 		local displayedPercent = IsHardEX and tonumber(hardExPercent) or (IsEX and tonumber(exPercent) or tonumber(percent))
 
-		if not IsEX and not IsHardEX then
+		if not IsEX then
 			self:settext(percent)
 		end
 
@@ -160,11 +158,9 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 	ExCountsChangedMessageCommand=function(self, params)
 		if params.Player ~= player then return end
 
-		if IsHardEX then
-			self:settext(("%.02f"):format(params.HardExScore))
-		elseif IsEX then
+		if IsEX then
 			self:settext(("%.02f"):format(params.ExScore))
-		else
+		elseif not IsHardEX then
 			return
 		end
 

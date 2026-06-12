@@ -67,16 +67,25 @@ Branch.AfterSelectProfile = function()
 	-- If we only want to sometimes display QR Login, only do so if at least one
 	-- of the chosen profiles doesn't already have an API key saved.
 	local allApiKeys = true
+	local needsArrowCloudLogin = false
 	for player in ivalues(GAMESTATE:GetHumanPlayers()) do
 		local pn = ToEnumShortString(player)
 		if SL[pn].ApiKey == "" then
 			allApiKeys = false
-			break
+		end
+
+		if ThemePrefs.Get("EnableArrowCloud") == true and PROFILEMAN:IsPersistentProfile(player) then
+			ParseArrowCloudIni(player)
+			if not SL[pn].ArrowCloudApiKey or SL[pn].ArrowCloudApiKey == "" then
+				needsArrowCloudLogin = true
+			end
 		end
 	end
+
 	if (SL.GrooveStats.IsConnected and
 	    (ThemePrefs.Get("QRLogin") == "Always" or
-			 (ThemePrefs.Get("QRLogin") == "Sometimes" and not allApiKeys))) then
+			 (ThemePrefs.Get("QRLogin") == "Sometimes" and not allApiKeys)))
+		or needsArrowCloudLogin then
 		return "ScreenGrooveStatsLogin"
 	else
 		return Branch.AllowScreenSelectColor()
@@ -138,8 +147,18 @@ Branch.AllowScreenSelectPlayMode2 = function()
 	if SL.Global.GameMode == "ITG" and ThemePrefs.Get("AllowScreenSelectPlayMode2") then
 		return "ScreenSelectPlayMode2"
 	else
+		return Branch.AllowScreenSelectOnlineMode()
+	end
+end
+
+Branch.AllowScreenSelectOnlineMode = function()
+	if ThemePrefs.Get("AllowScreenSelectOnlineMode") then
 		return "ScreenSelectOnlineMode"
 	end
+
+	SL.Global.ITGOnline = SL.Global.ITGOnline or {}
+	SL.Global.ITGOnline.Enabled = false
+	return "ScreenProfileLoad"
 end
 
 Branch.AfterSelectOnlineMode = function()

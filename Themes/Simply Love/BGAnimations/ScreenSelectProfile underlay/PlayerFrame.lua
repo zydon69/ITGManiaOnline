@@ -91,7 +91,7 @@ local FrameBackground = function(c, player, w)
 
 		-- top mask to hide scroller text
 		Def.Quad{
-			InitCommand=function(self) self:horizalign(left):vertalign(bottom):setsize(540,50):xy(-self:GetWidth()/2, -107):MaskSource() end
+			InitCommand=function(self) self:horizalign(left):vertalign(bottom):setsize(540,50):xy(-self:GetWidth()/2, -107):MaskSource(true) end
 		},
 		-- bottom mask to hide scroller text
 		Def.Quad{
@@ -202,29 +202,34 @@ return Def.ActorFrame{
 			end
 
 			scroller.focus_pos = 5
-			-- initialize to the guest profile in case we don't have a default profile
 			scroller:set_info_set(scroller_data, 1)
-			scroller:scroll_by_amount(-1)
 
-			-- Scroll to the current player profile, if any
-			if pos then
-				local curr_index = scroller:get_info_at_focus_pos().index
-				scroller:scroll_by_amount(pos - curr_index)
+			local target_data = guest_profile
+
+			-- Scroll to the current player profile, if any.
+			if pos and profile_data[pos] then
+				target_data = profile_data[pos]
 			else
 				local pn = ToEnumShortString(player)
 				if PREFSMAN:GetPreference("DefaultLocalProfileID"..pn) ~= "" then
 					local default_profile_id = PREFSMAN:GetPreference("DefaultLocalProfileID"..pn)
 					local profile_dir = PROFILEMAN:LocalProfileIDToDir(default_profile_id)
-					for i, profile_item in ipairs(scroller_data) do
-						if profile_item.dir == profile_dir then
-							scroller:scroll_by_amount(i-4)
-							initial_data = profile_data[i-4]
+					for profile in ivalues(profile_data) do
+						if profile.dir == profile_dir then
+							target_data = profile
 							break
 						end
 					end
 				end
 			end
-		end,
+
+			local curr_index = scroller:get_info_at_focus_pos().index or 0
+			local target_index = target_data.index or 0
+			if target_index ~= curr_index then
+				scroller:scroll_by_amount(target_index - curr_index)
+			end
+			initial_data = target_data
+			end,
 
 		FrameBackground(PlayerColor(player), player, frame.w * 1.1),
 

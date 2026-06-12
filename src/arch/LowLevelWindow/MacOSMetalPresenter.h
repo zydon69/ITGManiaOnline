@@ -52,6 +52,8 @@ struct MacOSMetalDrawBatch {
   int textureWidth = 1;
   void* texture2 = nullptr;
   int texture2Width = 1;
+  TextureMode textureMode2 = TextureMode_Modulate;
+  bool hasTexture2 = false;
   BlendMode blendMode = BLEND_NORMAL;
   TextureMode textureMode = TextureMode_Modulate;
   EffectMode effectMode = EffectMode_Normal;
@@ -126,7 +128,8 @@ class MacOSMetalPresenter {
   bool ReadBackOffscreenPresentTextureBGRA8(
       std::vector<uint8_t>* pixels, int* width, int* height);
   void* CreateRGBA8Texture(
-      int width, int height, const void* pixels, size_t bytesPerRow);
+      int width, int height, const void* pixels, size_t bytesPerRow,
+      bool generateMipMaps);
   bool UpdateRGBA8Texture(
       void* texture, int xoffset, int yoffset, int width, int height,
       const void* pixels, size_t bytesPerRow);

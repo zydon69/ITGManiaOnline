@@ -10,7 +10,7 @@ end
 
 local segment_count = 24
 local radius = 42
-local prompt_y = 76
+local prompt_y = 104
 
 local countdown_segments = Def.ActorFrame{
 	Name="CountdownSegments",
@@ -152,24 +152,16 @@ return Def.ActorFrame{
 			Name="SecondaryText",
 			Text="",
 			InitCommand=function(self)
-				self:y(62):zoom(0.78):diffuse(GetHexColor(SL.Global.ActiveColorIndex)):shadowlength(1)
+				self:visible(false):settext("")
 			end,
-			StartCountdownCommand=function(self, params)
-				local seconds = math.ceil(tonumber(params and params.Seconds) or 0)
-				self:stoptweening()
-					:zoom(0.78)
-					:settext(seconds > 0 and tostring(seconds) .. "s" or "0s")
-					:diffuse(GetHexColor(SL.Global.ActiveColorIndex))
-					:diffusealpha(1)
+			StartCountdownCommand=function(self)
+				self:stoptweening():visible(false):settext("")
 			end,
 			CountdownExpiredCommand=function(self)
-				self:stoptweening()
-					:settext(THEME:GetString("ScreenSelectMusic", "Song Starting"))
-					:zoom(0.42)
-					:diffuse(0.62,0.62,0.62,1)
+				self:stoptweening():visible(false):settext("")
 			end,
 			EnteringOptionsCommand=function(self)
-				self:stoptweening():settext("")
+				self:stoptweening():visible(false):settext("")
 			end
 		},
 
@@ -182,10 +174,6 @@ return Def.ActorFrame{
 				self:SetUpdateFunction(function(actor)
 					local left = math.max(0, (actor.deadline or 0) - GetTimeSinceStart())
 					local parent = actor:GetParent()
-					local secondary = parent and parent:GetChild("SecondaryText") or nil
-					if secondary then
-						secondary:settext(left > 0 and (tostring(math.ceil(left)) .. "s") or "0s")
-					end
 					if left <= 0 then
 						actor:SetUpdateFunction(nil)
 						if parent then parent:playcommand("CountdownExpired") end

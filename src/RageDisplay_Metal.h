@@ -52,7 +52,7 @@ class RageDisplay_Metal : public RageDisplay {
   RageTextureLock* CreateTextureLock() override;
   void DeleteTexture(uintptr_t iTexHandle) override;
   void ClearAllTextures() override;
-  int GetNumTextureUnits() override { return 2; }
+  int GetNumTextureUnits() override { return 1; }
   void SetTexture(TextureUnit, uintptr_t iTexture) override;
   void SetTextureMode(TextureUnit tu, TextureMode mode) override;
   void SetTextureWrapping(TextureUnit tu, bool wrapping) override;
@@ -125,6 +125,7 @@ class RageDisplay_Metal : public RageDisplay {
     bool requestedDepth = false;
     bool requestedAlpha = false;
     bool requestedFloat = false;
+    bool generateMipMaps = false;
     bool hasRendered = false;
     bool preserveNextRender = false;
   };
@@ -164,8 +165,10 @@ class RageDisplay_Metal : public RageDisplay {
 
   RageMatrix CurrentModelViewProjection() const;
   RageMatrix CurrentTextureMatrix() const;
-  RageColor ComputeModelColor(const RageVector3& normal) const;
-  RageColor ComputeCelModelColor(const RageVector3& normal) const;
+  RageColor ComputeModelColor(
+      const RageVector3& normal, const RageMatrix& modelView) const;
+  RageColor ComputeCelModelColor(
+      const RageVector3& normal, const RageMatrix& modelView) const;
   DrawBatch& ActiveBatch(bool forceNew = false);
   bool ReserveDirectVertices(
       size_t vertexCount, DrawBatch** batchOut,

@@ -59,6 +59,8 @@ local state = {
 	expiresAt = nil,
 	polling = false,
 	connecting = false,
+	startRequestedAt = 0,
+	startAttempts = 0,
 }
 
 local function safe_screen_text_width()
@@ -74,7 +76,9 @@ local function refresh()
 end
 
 local function set_status(text)
-	state.status = tostring(text or "")
+	text = tostring(text or "")
+	if state.status == text then return end
+	state.status = text
 	refresh()
 end
 
@@ -98,6 +102,8 @@ local function go_back()
 	SCREENMAN:SetNewScreen("ScreenSelectOnlineMode")
 end
 
+local start_device_login
+
 local function connect_to_lobbies()
 	ITGOnline:ConnectWebSocket({
 		open = function()
@@ -112,6 +118,7 @@ local function connect_to_lobbies()
 			clear_session()
 			state.mode = "idle"
 			set_status(tostring(message or THEME:GetString("ScreenITGOnlineLogin", "ConnectionFailed")))
+			start_device_login()
 		end,
 		close = function(reason)
 			state.connecting = false
@@ -136,6 +143,7 @@ local function connect_with_token(accessToken)
 			clear_session()
 			state.mode = "idle"
 			set_status(tostring((response and response.message) or THEME:GetString("ScreenITGOnlineLogin", "ConnectionFailed")))
+			start_device_login()
 			return
 		end
 
@@ -143,17 +151,23 @@ local function connect_with_token(accessToken)
 	end)
 end
 
-local function start_device_login()
+start_device_login = function(resetAttempts)
 	if state.connecting or state.polling then return end
 	if is_two_player_online_requested() then
 		set_status(THEME:GetString("ScreenITGOnlineLogin", "TwoPlayerNotice"))
 		return
 	end
 
+	if resetAttempts then
+		state.startAttempts = 0
+	end
 	state.mode = "starting"
 	clear_session()
+	state.startAttempts = (tonumber(state.startAttempts) or 0) + 1
+	state.startRequestedAt = GetTimeSinceStart()
 	set_status(THEME:GetString("ScreenITGOnlineLogin", "QrStarting"))
 	ITGOnline:StartDeviceLogin(function(ok, decoded, response)
+		state.startRequestedAt = 0
 		if not ok or not decoded then
 			state.mode = "failed"
 			set_status(tostring((decoded and decoded.message) or (response and response.errorMessage) or THEME:GetString("ScreenITGOnlineLogin", "DeviceLoginUnavailable")))
@@ -221,11 +235,11 @@ local function action_connect()
 		return
 	end
 
-	start_device_login()
+	start_device_login(true)
 end
 
 local function action_disconnect()
-	ITGOnline:Disconnect()
+	ITGOnline:Disconnect({ revokeToken = true })
 	ITGOnline:ClearStoredAccessToken()
 	clear_session()
 	state.mode = "idle"
@@ -241,6 +255,15 @@ local function current_rows()
 end
 
 local selection = 1
+local lastMenuText = nil
+local lastQrUrl = nil
+local lastQrVerts = nil
+local lastQrPixelSize = nil
+local lastRenderedQrUrl = nil
+local lastRenderedQrVisible = nil
+local lastStatusText = nil
+local lastCodeText = nil
+local lastUrlText = nil
 
 local function refresh_selection()
 	local rows = current_rows()
@@ -266,38 +289,65 @@ local function render_qr(panel)
 
 	local showQr = state.mode == "waiting" and state.verificationUrl and state.verificationUrl ~= ""
 	if showQr then
-		local verts, pixelSize = build_qr_vertices(state.verificationUrl, 124)
-		if verts and data then
-			if outer then outer:visible(true) end
-			if border then border:visible(true) end
-			if inset then inset:visible(true) end
-			data:visible(true)
-			data:SetVertices(verts)
-			data:zoom(pixelSize)
+		if state.verificationUrl ~= lastQrUrl then
+			lastQrUrl = state.verificationUrl
+			lastQrVerts, lastQrPixelSize = build_qr_vertices(state.verificationUrl, 124)
+			lastRenderedQrUrl = nil
+		end
+
+		if lastQrVerts and data then
+			if lastRenderedQrVisible ~= true then
+				if outer then outer:visible(true) end
+				if border then border:visible(true) end
+				if inset then inset:visible(true) end
+				data:visible(true)
+				lastRenderedQrVisible = true
+			end
+			if lastRenderedQrUrl ~= state.verificationUrl then
+				data:SetVertices(lastQrVerts)
+				data:zoom(lastQrPixelSize)
+				lastRenderedQrUrl = state.verificationUrl
+			end
 		end
 	else
-		if outer then outer:visible(false) end
-		if border then border:visible(false) end
-		if inset then inset:visible(false) end
-		if data then data:visible(false) end
+		if lastRenderedQrVisible ~= false then
+			if outer then outer:visible(false) end
+			if border then border:visible(false) end
+			if inset then inset:visible(false) end
+			if data then data:visible(false) end
+			lastRenderedQrVisible = false
+		end
 	end
 
 	if status then
+		local statusText
 		if state.status ~= "" then
-			status:settext(state.status)
+			statusText = state.status
 		elseif is_connected() then
-			status:settext(THEME:GetString("ScreenITGOnlineLogin", "ConnectedAs"):format(tostring(ITGOnline.user and (ITGOnline.user.name or ITGOnline.user.email) or "ITG Online")))
+			statusText = THEME:GetString("ScreenITGOnlineLogin", "ConnectedAs"):format(tostring(ITGOnline.user and (ITGOnline.user.name or ITGOnline.user.email) or "ITG Online"))
 		else
-			status:settext(THEME:GetString("ScreenITGOnlineLogin", "NotConnected"))
+			statusText = THEME:GetString("ScreenITGOnlineLogin", "NotConnected")
+		end
+		if statusText ~= lastStatusText then
+			status:settext(statusText)
+			lastStatusText = statusText
 		end
 	end
 
 	if code then
-		code:settext(state.shortCode ~= "" and ("Code: " .. state.shortCode) or "")
+		local codeText = state.shortCode ~= "" and ("Code: " .. state.shortCode) or ""
+		if codeText ~= lastCodeText then
+			code:settext(codeText)
+			lastCodeText = codeText
+		end
 	end
 
 	if url then
-		url:settext(showQr and state.verificationUrl or "")
+		local urlText = showQr and state.verificationUrl or ""
+		if urlText ~= lastUrlText then
+			url:settext(urlText)
+			lastUrlText = urlText
+		end
 	end
 end
 
@@ -334,6 +384,11 @@ local t = Def.ActorFrame{
 			topScreen:AddInputCallback(input)
 		end
 		selection = 1
+		self:sleep(0.2):queuecommand("AutoConnect")
+		self:playcommand("Refresh")
+		self:sleep(0.25):queuecommand("Tick")
+	end,
+	AutoConnectCommand=function(self)
 		if is_connected() then
 			state.mode = "connected"
 			set_status(THEME:GetString("ScreenITGOnlineLogin", "Connected"))
@@ -342,10 +397,9 @@ local t = Def.ActorFrame{
 			set_status(THEME:GetString("ScreenITGOnlineLogin", "Connecting"))
 			connect_with_token((ITGOnline:Config().accessToken or ""))
 		else
-			start_device_login()
+			start_device_login(true)
 		end
 		self:playcommand("Refresh")
-		self:sleep(0.25):queuecommand("Tick")
 	end,
 	ITGOnlineLoginStateChangedMessageCommand=function(self)
 		self:playcommand("Refresh")
@@ -359,13 +413,31 @@ local t = Def.ActorFrame{
 	CancelCommand=function(self)
 		go_back()
 	end,
-	TickCommand=function(self)
-		if state.mode == "waiting" then
-			poll_device_login()
+		TickCommand=function(self)
+		if state.mode == "starting"
+			and (tonumber(state.startRequestedAt) or 0) > 0
+			and GetTimeSinceStart() - (tonumber(state.startRequestedAt) or 0) > 2.0
+		then
+			if (tonumber(state.startAttempts) or 0) < 3 then
+				clear_session()
+				state.mode = "idle"
+				start_device_login()
+			else
+				state.startRequestedAt = 0
+				state.mode = "failed"
+				set_status(THEME:GetString("ScreenITGOnlineLogin", "DeviceLoginUnavailable"))
+			end
 		end
-		refresh_selection()
-		self:sleep(0.25):queuecommand("Tick")
-	end,
+			if state.mode == "waiting" then
+				poll_device_login()
+			end
+			local rows = current_rows()
+			if selection > #rows then
+				selection = #rows
+				refresh()
+			end
+			self:sleep(0.25):queuecommand("Tick")
+		end,
 	RefreshCommand=function(self)
 		local panel = self:GetChild("QrPanel")
 		if panel then
@@ -380,11 +452,13 @@ local t = Def.ActorFrame{
 			end
 			labels[#labels + 1] = label
 		end
-		local menu = self:GetChild("MenuRow")
-		if menu then
-			menu:settext(table.concat(labels, "    "))
-		end
-	end,
+			local menu = self:GetChild("MenuRow")
+			local menuText = table.concat(labels, "    ")
+			if menu and menuText ~= lastMenuText then
+				menu:settext(menuText)
+				lastMenuText = menuText
+			end
+		end,
 
 	Def.Quad{
 		InitCommand=function(self) self:FullScreen():diffuse(0,0,0,0.82) end

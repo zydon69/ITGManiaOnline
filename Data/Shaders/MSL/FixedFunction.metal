@@ -117,14 +117,27 @@ fragment float4 solid_fragment(
     constant uint& alphaTest [[buffer(2)]],
     constant uint& celStage [[buffer(3)]],
     constant uint& effectMode [[buffer(4)]],
-    constant uint& textureWidth [[buffer(5)]]) {
+    constant uint& textureWidth [[buffer(5)]],
+    constant uint& textureMode2 [[buffer(6)]],
+    constant uint& hasTexture2 [[buffer(7)]]) {
   if (celStage == 1) {
     return float4(0.25, 0.125, 0.125, 1.0);
   }
 
-  const float4 sampleColor = source.sample(sourceSampler, in.texcoord);
-  if (alphaTest != 0 && sampleColor.a <= 0.00390625) {
+  float4 sampleColor = source.sample(sourceSampler, in.texcoord);
+  if (celStage == 0 && alphaTest != 0 && sampleColor.a <= 0.00390625) {
     discard_fragment();
+  }
+
+  if (effectMode == 0 && hasTexture2 != 0 && textureMode2 == 2) {
+    const float4 sampleColor2 = source2.sample(sourceSampler, in.texcoord);
+    sampleColor = float4(
+        saturate(sampleColor.rgb + sampleColor2.rgb),
+        sampleColor.a * sampleColor2.a);
+  }
+
+  if (celStage == 2) {
+    return float4(sampleColor.rgb * in.color.rgb, 1.0);
   }
 
   if (effectMode == 1) {
@@ -177,13 +190,15 @@ fragment float4 distance_field_fragment(
     constant uint& alphaTest [[buffer(2)]],
     constant uint& celStage [[buffer(3)]],
     constant uint& effectMode [[buffer(4)]],
-    constant uint& textureWidth [[buffer(5)]]) {
+    constant uint& textureWidth [[buffer(5)]],
+    constant uint& textureMode2 [[buffer(6)]],
+    constant uint& hasTexture2 [[buffer(7)]]) {
   const float4 sampleColor = source.sample(sourceSampler, in.texcoord);
   const float dist = sdf_median_rgb(
       sampleColor.r, sampleColor.g, sampleColor.b);
   const float afwidth = 0.75 * length(float2(dfdx(dist), dfdy(dist)));
   const float coverage = smoothstep(0.5 - afwidth, 0.5 + afwidth, dist);
-  if (alphaTest != 0 && coverage <= 0.00390625) {
+  if (celStage == 0 && alphaTest != 0 && coverage <= 0.00390625) {
     discard_fragment();
   }
   if (textureMode == 2) {

@@ -358,8 +358,10 @@ struct MacOSMetalPresenterImpl {
     for (auto& row : depthStates) {
       row.fill(nil);
     }
-    for (auto& row : samplerStates) {
-      row.fill(nil);
+    for (auto& wrappingRow : samplerStates) {
+      for (auto& filteringRow : wrappingRow) {
+        filteringRow.fill(nil);
+      }
     }
   }
 
@@ -371,7 +373,8 @@ struct MacOSMetalPresenterImpl {
   std::array<id<MTLRenderPipelineState>, NUM_BlendMode>
       distanceFieldPipelines;
   std::array<std::array<id<MTLDepthStencilState>, 2>, NUM_ZTestMode> depthStates;
-  std::array<std::array<id<MTLSamplerState>, 2>, 2> samplerStates;
+  std::array<std::array<std::array<id<MTLSamplerState>, 2>, 2>, 2>
+      samplerStates;
   std::array<id<MTLBuffer>, kMetalMaxSolidFramesInFlight> solidVertexBuffers =
       {};
   std::array<NSUInteger, kMetalMaxSolidFramesInFlight>
@@ -1389,7 +1392,7 @@ id<MTLDepthStencilState> CreateDepthState(
 }
 
 id<MTLSamplerState> CreateSamplerState(
-    id<MTLDevice> device, bool wrapping, bool filtering) {
+    id<MTLDevice> device, bool wrapping, bool filtering, bool mipmapped) {
   if (device == nil) {
     return nil;
   }
@@ -1404,7 +1407,11 @@ id<MTLSamplerState> CreateSamplerState(
       filtering ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
   descriptor.magFilter =
       filtering ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
-  descriptor.mipFilter = MTLSamplerMipFilterNotMipmapped;
+  descriptor.mipFilter =
+      mipmapped
+          ? (filtering ? MTLSamplerMipFilterLinear
+                       : MTLSamplerMipFilterNearest)
+          : MTLSamplerMipFilterNotMipmapped;
   return [device newSamplerStateWithDescriptor:descriptor];
 }
 
@@ -1550,14 +1557,16 @@ bool EncodeSolidBatches(
   bool hasCurrentDepthState = false;
   bool hasCurrentCullMode = false;
   uint32_t currentTextureMode = std::numeric_limits<uint32_t>::max();
+  uint32_t currentTextureMode2 = std::numeric_limits<uint32_t>::max();
   uint32_t currentAlphaTest = std::numeric_limits<uint32_t>::max();
   uint32_t currentCelStage = std::numeric_limits<uint32_t>::max();
   uint32_t currentEffectMode = std::numeric_limits<uint32_t>::max();
   uint32_t currentTextureWidth = std::numeric_limits<uint32_t>::max();
+  uint32_t currentHasTexture2 = std::numeric_limits<uint32_t>::max();
   MacOSMetalTransformUniforms currentTransform;
   bool hasCurrentTransform = false;
 
-  [encoder setFrontFacingWinding:MTLWindingCounterClockwise];
+  [encoder setFrontFacingWinding:MTLWindingClockwise];
 
   bool encodedAny = false;
   for (size_t i = 0; i < batchCount; ++i) {
@@ -1624,8 +1633,11 @@ bool EncodeSolidBatches(
                                   : impl->whiteTexture;
     const int wrappingIndex = batch.textureWrapping ? 1 : 0;
     const int filteringIndex = batch.textureFiltering ? 1 : 0;
+    const bool textureHasMipmaps =
+        sourceTexture != nil && [sourceTexture mipmapLevelCount] > 1;
     id<MTLSamplerState> sampler =
-        impl->samplerStates[wrappingIndex][filteringIndex];
+        impl->samplerStates[wrappingIndex][filteringIndex]
+                            [textureHasMipmaps ? 1 : 0];
     id<MTLDepthStencilState> depthState =
         impl->depthStates[zTestMode][batch.zWrite ? 1 : 0];
     TrackTextureForCommandBuffer(retainedTextures, sourceTexture);
@@ -1635,12 +1647,17 @@ bool EncodeSolidBatches(
         batch.textureMode == TextureMode_Glow
             ? 1
             : (batch.textureMode == TextureMode_Add ? 2 : 0);
+    const uint32_t textureMode2 =
+        batch.textureMode2 == TextureMode_Glow
+            ? 1
+            : (batch.textureMode2 == TextureMode_Add ? 2 : 0);
     const uint32_t alphaTest = batch.alphaTest ? 1 : 0;
     const uint32_t celStage =
         batch.celStage > 0 ? static_cast<uint32_t>(batch.celStage) : 0;
     const uint32_t effectMode = static_cast<uint32_t>(batch.effectMode);
     const uint32_t textureWidth =
         static_cast<uint32_t>(std::max(1, batch.textureWidth));
+    const uint32_t hasTexture2 = batch.hasTexture2 ? 1 : 0;
 
     if (pipeline != currentPipeline) {
       [encoder setRenderPipelineState:pipeline];
@@ -1663,9 +1680,6 @@ bool EncodeSolidBatches(
       default:
         metalCullMode = MTLCullModeNone;
         break;
-    }
-    if (celStage > 0) {
-      metalCullMode = MTLCullModeNone;
     }
     if (!hasCurrentCullMode || metalCullMode != currentCullMode) {
       [encoder setCullMode:metalCullMode];
@@ -1691,6 +1705,12 @@ bool EncodeSolidBatches(
                         atIndex:1];
       currentTextureMode = textureMode;
     }
+    if (textureMode2 != currentTextureMode2) {
+      [encoder setFragmentBytes:&textureMode2
+                         length:sizeof(textureMode2)
+                        atIndex:6];
+      currentTextureMode2 = textureMode2;
+    }
     if (alphaTest != currentAlphaTest) {
       [encoder setFragmentBytes:&alphaTest
                          length:sizeof(alphaTest)
@@ -1714,6 +1734,12 @@ bool EncodeSolidBatches(
                          length:sizeof(textureWidth)
                         atIndex:5];
       currentTextureWidth = textureWidth;
+    }
+    if (hasTexture2 != currentHasTexture2) {
+      [encoder setFragmentBytes:&hasTexture2
+                         length:sizeof(hasTexture2)
+                        atIndex:7];
+      currentHasTexture2 = hasTexture2;
     }
     if (sourceTexture != currentTexture0) {
       [encoder setFragmentTexture:sourceTexture atIndex:0];
@@ -1894,13 +1920,16 @@ bool MacOSMetalPresenter::Initialize(
   }
   for (int wrapping = 0; wrapping < 2; ++wrapping) {
     for (int filtering = 0; filtering < 2; ++filtering) {
-      impl->samplerStates[wrapping][filtering] =
-          CreateSamplerState(impl->device, wrapping != 0, filtering != 0);
-      if (impl->samplerStates[wrapping][filtering] == nil) {
-        LOG->Warn(
-            "MacOS Metal presenter sampler unavailable: wrapping=%d "
-            "filtering=%d",
-            wrapping, filtering);
+      for (int mipmapped = 0; mipmapped < 2; ++mipmapped) {
+        impl->samplerStates[wrapping][filtering][mipmapped] =
+            CreateSamplerState(
+                impl->device, wrapping != 0, filtering != 0, mipmapped != 0);
+        if (impl->samplerStates[wrapping][filtering][mipmapped] == nil) {
+          LOG->Warn(
+              "MacOS Metal presenter sampler unavailable: wrapping=%d "
+              "filtering=%d mipmapped=%d",
+              wrapping, filtering, mipmapped);
+        }
       }
     }
   }
@@ -1927,11 +1956,13 @@ bool MacOSMetalPresenter::Initialize(
         pipeline = nil;
       }
     }
-    for (auto& row : impl->samplerStates) {
-      for (id<MTLSamplerState>& sampler : row) {
-        if (sampler != nil) {
-          [sampler release];
-          sampler = nil;
+    for (auto& wrappingRow : impl->samplerStates) {
+      for (auto& filteringRow : wrappingRow) {
+        for (id<MTLSamplerState>& sampler : filteringRow) {
+          if (sampler != nil) {
+            [sampler release];
+            sampler = nil;
+          }
         }
       }
     }
@@ -2130,11 +2161,13 @@ void MacOSMetalPresenter::Shutdown() {
       pipeline = nil;
     }
   }
-  for (auto& row : impl->samplerStates) {
-    for (id<MTLSamplerState>& sampler : row) {
-      if (sampler != nil) {
-        [sampler release];
-        sampler = nil;
+  for (auto& wrappingRow : impl->samplerStates) {
+    for (auto& filteringRow : wrappingRow) {
+      for (id<MTLSamplerState>& sampler : filteringRow) {
+        if (sampler != nil) {
+          [sampler release];
+          sampler = nil;
+        }
       }
     }
   }
@@ -3762,7 +3795,8 @@ destinationBytesPerImage:alignedBytesPerRow * textureHeight];
 }
 
 void* MacOSMetalPresenter::CreateRGBA8Texture(
-    int width, int height, const void* pixels, size_t bytesPerRow) {
+    int width, int height, const void* pixels, size_t bytesPerRow,
+    bool generateMipMaps) {
   ScopedAutoreleasePool autoreleasePool;
 
   if (!IsAvailable() || width <= 0 || height <= 0 || pixels == nullptr) {
@@ -3779,7 +3813,7 @@ void* MacOSMetalPresenter::CreateRGBA8Texture(
       [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
                                                          width:width
                                                         height:height
-                                                     mipmapped:NO];
+                                                     mipmapped:generateMipMaps ? YES : NO];
   descriptor.usage = MTLTextureUsageShaderRead;
   id<MTLTexture> texture = [impl->device newTextureWithDescriptor:descriptor];
   if (texture == nil) {
@@ -3790,6 +3824,32 @@ void* MacOSMetalPresenter::CreateRGBA8Texture(
              mipmapLevel:0
                withBytes:pixels
              bytesPerRow:bytesPerRow];
+
+  if (generateMipMaps && [texture mipmapLevelCount] > 1) {
+    id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
+    if (commandBuffer == nil) {
+      [texture release];
+      return nullptr;
+    }
+
+    id<MTLBlitCommandEncoder> blitEncoder = [commandBuffer blitCommandEncoder];
+    if (blitEncoder == nil) {
+      [texture release];
+      return nullptr;
+    }
+
+    [blitEncoder generateMipmapsForTexture:texture];
+    [blitEncoder endEncoding];
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
+    if ([commandBuffer status] != MTLCommandBufferStatusCompleted) {
+      LOG->Warn(
+          "MacOS Metal texture mipmap generation failed for %dx%d texture; "
+          "continuing with base level only.",
+          width, height);
+    }
+  }
+
   return texture;
 }
 
@@ -3811,6 +3871,23 @@ bool MacOSMetalPresenter::UpdateRGBA8Texture(
                   mipmapLevel:0
                     withBytes:pixels
                   bytesPerRow:bytesPerRow];
+
+  if ([metalTexture mipmapLevelCount] > 1) {
+    MacOSMetalPresenterImpl* impl =
+        static_cast<MacOSMetalPresenterImpl*>(m_Impl);
+    if (impl != nullptr && impl->commandQueue != nil) {
+      id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
+      if (commandBuffer != nil) {
+        id<MTLBlitCommandEncoder> blitEncoder = [commandBuffer blitCommandEncoder];
+        if (blitEncoder != nil) {
+          [blitEncoder generateMipmapsForTexture:metalTexture];
+          [blitEncoder endEncoding];
+          [commandBuffer commit];
+          [commandBuffer waitUntilCompleted];
+        }
+      }
+    }
+  }
   return true;
 }
 

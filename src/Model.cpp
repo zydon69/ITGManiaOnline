@@ -329,8 +329,7 @@ void Model::DrawCelShaded() {
   // First pass: shell. We only want the backfaces for this.
   DISPLAY->SetCelShaded(1);
   DISPLAY->SetCullMode(CULL_FRONT);
-  this->SetZWrite(
-      false);  // XXX: Why on earth isn't the culling working? -Colby
+  this->SetZWrite(false);
   this->Draw();
 
   // Second pass: cel shading

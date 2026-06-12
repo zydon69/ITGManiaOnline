@@ -40,6 +40,9 @@ local PlayerDefaults = {
 				TiltMultiplier = 1,
 				ColumnCues = true,
 				DisplayScorebox = true,
+				SBITGScore = true,
+				SBExScore = true,
+				SBEvents = true,
 
 				ErrorBar = "None",
 				ErrorBarUp = false,
@@ -110,6 +113,9 @@ local PlayerDefaults = {
 			-- The GrooveStats API key loaded for this player
 			self.ApiKey = ""
 			self.GrooveStatsUsername = ""
+			-- The ArrowCloud API key loaded for this player
+			self.ArrowCloudApiKey = ""
+			self.ArrowCloudAllowAutoplay = false
 			-- Whether or not the player is playing on pad.
 			self.IsPadPlayer = false
 			self.Favorites = {}
@@ -492,6 +498,12 @@ SL = {
 		-- LoadUnlocksCache() is defined in SL-Helpers-GrooveStats.lua so that must
 		-- be loaded before this file.
 		UnlocksCache = LoadUnlocksCache(),
+	},
+	ArrowCloud = {
+		Enabled = ThemePrefs.Get("EnableArrowCloud") == true,
+		BaseURL = "https://api.arrowcloud.dance",
+		RequestTimeout = 5,
+		LogPath = THEME:GetCurrentThemeDirectory() .. "Other/ArrowCloud_Responses.ndjson",
 	},
 	-- Stores all active/failed downloads.
 	-- Each entry is keyed on a string UUID which maps to a table with the

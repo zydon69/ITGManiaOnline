@@ -45,29 +45,178 @@ local function is_create_profile(info)
 	return type(info) == "table" and info.isCreateProfile == true
 end
 
+local function trimmed_profile_name(answer)
+	return (answer or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function screen_string(key, fallback)
+	local text = THEME:GetString("ScreenSelectProfile", key)
+	if not text or text == "" or text == key then
+		return fallback
+	end
+	return text
+end
+
+local function profile_create_log(message)
+	Trace("[SL_PROFILE_CREATE] " .. tostring(message))
+end
+
+local function count_profile_data()
+	local count = 0
+	for _ in ivalues(profile_data) do
+		count = count + 1
+	end
+	return count
+end
+
+local function total_songs_text(num_songs)
+	local key = num_songs == 1 and "SingularSongPlayed" or "SeveralSongsPlayed"
+	local template = screen_string(key, "%d Songs Played")
+	return template:format(num_songs)
+end
+
+local function build_scroller_data()
+	local create_profile = { displayname = THEME:GetString("ScreenSelectProfile", "CreateProfile"), isCreateProfile = true }
+	local guest_profile = { index = 0, displayname = THEME:GetString("ScreenSelectProfile", "GuestProfile") }
+	local scroller_data = {{}, {}, {}, create_profile, guest_profile}
+
+	for profile in ivalues(profile_data) do
+		table.insert(scroller_data, profile)
+	end
+
+	return scroller_data
+end
+
+local function rebuild_profile_data_from_manager()
+	local existing_by_dir = {}
+	for profile in ivalues(profile_data) do
+		if profile.dir then
+			existing_by_dir[profile.dir] = profile
+		end
+	end
+
+	for key in pairs(profile_data) do
+		profile_data[key] = nil
+	end
+
+	for i = 1, PROFILEMAN:GetNumLocalProfiles() do
+		local manager_index = i - 1
+		local id = PROFILEMAN:GetLocalProfileIDFromIndex(manager_index)
+		local dir = PROFILEMAN:LocalProfileIDToDir(id)
+		local profile = PROFILEMAN:GetLocalProfileFromIndex(manager_index)
+		local data = existing_by_dir[dir] or {}
+
+		data.index = i
+		data.dir = dir
+		data.displayname = profile:GetDisplayName()
+		data.totalsongs = total_songs_text(profile:GetNumTotalSongsPlayed())
+		data.guid = profile:GetGUID()
+
+		table.insert(profile_data, data)
+	end
+
+	profile_create_log(("rebuild_profile_data_from_manager count=%d manager_count=%s"):format(
+		count_profile_data(),
+		tostring(PROFILEMAN:GetNumLocalProfiles())
+	))
+end
+
+local function set_player_frame_data(player, data)
+	local frame = af:GetChild(ToEnumShortString(player) .. "Frame")
+	if not frame then return end
+
+	local selected_text = frame:GetChild("SelectedProfileText")
+	if selected_text then
+		selected_text:settext(data and data.displayname or "")
+	end
+end
+
+local function refresh_profile_scrollers(created_profile_id, creating_player)
+	profile_create_log(("refresh_begin profile_id=%s creating_player=%s num_before=%s data_before=%d"):format(
+		tostring(created_profile_id),
+		tostring(creating_player),
+		tostring(PROFILEMAN:GetNumLocalProfiles()),
+		count_profile_data()
+	))
+
+	rebuild_profile_data_from_manager()
+
+	local created_index = PROFILEMAN:GetLocalProfileIndexFromID(created_profile_id)
+	profile_create_log(("created_index profile_id=%s index=%s"):format(tostring(created_profile_id), tostring(created_index)))
+	if not created_index or created_index < 0 then
+		return false
+	end
+
+	local created_data = profile_data[created_index + 1]
+	profile_create_log(("created_data exists=%s displayname=%s index=%s"):format(
+		tostring(created_data ~= nil),
+		created_data and tostring(created_data.displayname) or "nil",
+		created_data and tostring(created_data.index) or "nil"
+	))
+	if not created_data then
+		return false
+	end
+
+	local scroller_data = build_scroller_data()
+	profile_create_log(("scroller_data_count=%d"):format(#scroller_data))
+	for player, scroller in pairs(scrollers) do
+		profile_create_log(("updating_scroller player=%s is_creator=%s"):format(tostring(player), tostring(player == creating_player)))
+		scroller:set_info_set(scroller_data, 1)
+		if player == creating_player then
+			scroller:scroll_by_amount(created_data.index)
+			set_player_frame_data(player, created_data)
+		else
+			local focused = scroller:get_info_at_focus_pos()
+			set_player_frame_data(player, focused)
+		end
+	end
+
+	profile_create_log("refresh_success")
+	return true
+end
+
 local function prompt_for_new_profile(player)
+	profile_create_log(("prompt_open player=%s num_profiles=%s data_count=%d"):format(
+		tostring(player),
+		tostring(PROFILEMAN:GetNumLocalProfiles()),
+		count_profile_data()
+	))
 	SCREENMAN:AddNewScreenToTop("ScreenTextEntry")
 	SCREENMAN:GetTopScreen():Load({
-		Question = THEME:GetString("ScreenOptionsManageProfiles", "Enter a name for the profile."),
+		Question = screen_string("CreateProfilePrompt", "Enter a name for the profile."),
 		InitialAnswer = "",
 		MaxInputLength = 32,
 		Validate = function(answer)
-			local trimmed = (answer or ""):gsub("^%s+", ""):gsub("%s+$", "")
+			local trimmed = trimmed_profile_name(answer)
+			profile_create_log(("validate raw='%s' trimmed='%s'"):format(tostring(answer), tostring(trimmed)))
 			if trimmed == "" then
-				return false, THEME:GetString("ScreenTextEntry", "AnswerBlank")
+				profile_create_log("validate_failed blank_name")
+				return false, screen_string("ProfileNameBlank", "Profile name cannot be blank.")
 			end
 
-			local ok, profile_id = PROFILEMAN:CreateLocalProfile(trimmed)
-			if not ok then
-				return false, THEME:GetString("ScreenTextEntry", "AnswerBlank")
-			end
-
-			PROFILEMAN:RefreshLocalProfilesFromDisk()
-			SL.Global.SelectProfileCreatedProfileID = profile_id
-			return true
+			profile_create_log("validate_success")
+			return true, ""
 		end,
-		OnOK = function()
-			SCREENMAN:SetNewScreen("ScreenSelectProfile")
+		OnOK = function(answer)
+			local trimmed = trimmed_profile_name(answer)
+			profile_create_log(("on_ok_begin name='%s' num_before=%s"):format(tostring(trimmed), tostring(PROFILEMAN:GetNumLocalProfiles())))
+			local ok, profile_id = PROFILEMAN:CreateLocalProfile(trimmed)
+			profile_create_log(("create_result ok=%s profile_id=%s num_after_create=%s"):format(
+				tostring(ok),
+				tostring(profile_id),
+				tostring(PROFILEMAN:GetNumLocalProfiles())
+			))
+			if not ok or not profile_id or profile_id == "" then
+				profile_create_log("create_failed")
+				SCREENMAN:SystemMessage(screen_string("ProfileCreateFailed", "The profile could not be created. Check that the game can write to the Save folder."))
+				return
+			end
+
+			SL.Global.SelectProfileCreatedProfileID = profile_id
+			if not refresh_profile_scrollers(profile_id, player) then
+				profile_create_log("refresh_failed")
+				SCREENMAN:SystemMessage(screen_string("ProfileCreateFailed", "The profile was created, but the profile list could not be refreshed."))
+			end
 		end,
 	})
 end

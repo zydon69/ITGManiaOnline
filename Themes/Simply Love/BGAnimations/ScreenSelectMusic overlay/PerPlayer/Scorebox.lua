@@ -7,6 +7,12 @@ if ThemePrefs.Get("MusicWheelGS") ~= "Scorebox" then return end
 local player = ...
 local pn = ToEnumShortString(player)
 
+SL.ArrowCloud = SL.ArrowCloud or {}
+SL.ArrowCloud.Enabled = ThemePrefs.Get("EnableArrowCloud") == true
+SL.ArrowCloud.BaseURL = SL.ArrowCloud.BaseURL or "https://api.arrowcloud.dance"
+SL.ArrowCloud.RequestTimeout = SL.ArrowCloud.RequestTimeout or 5
+SL.ArrowCloud.LogPath = SL.ArrowCloud.LogPath or (THEME:GetCurrentThemeDirectory() .. "Other/ArrowCloud_Responses.ndjson")
+
 -- Previous logic returned if GrooveStats wasn't available. We now allow
 -- ArrowCloud-only operation. We'll only skip entirely if BOTH services are unusable.
 local gsUnavailable = (not IsServiceAllowed(SL.GrooveStats.GetScores)) or SL[pn].ApiKey == ""
@@ -56,6 +62,9 @@ local GrooveStatsBlue = color("#007b85")
 local RpgYellow = color("1,0.972,0.792,1")
 local ItlPink = color("1,0.2,0.406,1")
 local BoogieStatsPurple = color("#8000ff")
+local ArrowCloudITGColor = Color.White
+local ArrowCloudEXColor = SL.JudgmentColors["FA+"][1]
+local ArrowCloudHardEXColor = color("#ff00cc")
 
 local currentHash = "nothing"
 
@@ -64,9 +73,9 @@ local style_color = {
 	[1] = GrooveStatsBlue,  -- GS ITG/EX slot B
 	[2] = RpgYellow,
 	[3] = ItlPink,
-	[4] = SL.JudgmentColors["FA+"][2], -- AC ITG
-	[5] = SL.JudgmentColors["FA+"][1], -- AC EX
-	[6] = SL.JudgmentColors["FA+"][7], -- AC HardEX
+	[4] = ArrowCloudITGColor,    -- AC ITG
+	[5] = ArrowCloudEXColor,     -- AC EX
+	[6] = ArrowCloudHardEXColor, -- AC HardEX
 }
 
 local self_color = color("#a1ff94")
@@ -182,7 +191,7 @@ local LeaderboardRequestProcessor = function(res, master)
 	-- BoogieStats integration
 	-- Find out whether this chart is ranked on GrooveStats.
 	-- If it is unranked, alter groovestats logo and the box border color to the BoogieStats theme
-	local headers = res.headers
+	local headers = res.headers or {}
 	local boogie = false
 	local boogie_ex = false
 	if headers["bs-leaderboard-player-" .. n] == "BS" then
@@ -190,10 +199,12 @@ local LeaderboardRequestProcessor = function(res, master)
 	elseif headers["bs-leaderboard-player-" .. n] == "BS-EX" then
 		boogie_ex = true
 	end
-	if not SCREENMAN:GetTopScreen():GetChild("Overlay") then return end
-	local gsBox = SCREENMAN:GetTopScreen():GetChild("Overlay"):GetChild("PerPlayer"):GetChild("ScoreBox" .. pn):GetChild("GrooveStatsLogo")
-	local bsBox = SCREENMAN:GetTopScreen():GetChild("Overlay"):GetChild("PerPlayer"):GetChild("ScoreBox" .. pn):GetChild("BoogieStatsLogo")
-	local bsExBox = SCREENMAN:GetTopScreen():GetChild("Overlay"):GetChild("PerPlayer"):GetChild("ScoreBox" .. pn):GetChild("BoogieStatsEXLogo")
+	local scoreBox = master
+	if not scoreBox then return end
+	local gsBox = scoreBox:GetChild("GrooveStatsLogo")
+	local bsBox = scoreBox:GetChild("BoogieStatsLogo")
+	local bsExBox = scoreBox:GetChild("BoogieStatsEXLogo")
+	if not gsBox or not bsBox or not bsExBox then return end
 
 	if boogie then
 		style_color[0] = BoogieStatsPurple
@@ -211,7 +222,13 @@ local LeaderboardRequestProcessor = function(res, master)
 
 	-- First check to see if the leaderboard even exists.
 	if data and data[playerStr] then
-		if SL[pn].Streams.Hash ~= data[playerStr]["chartHash"] then return end
+		if SL[pn].Streams.Hash ~= data[playerStr]["chartHash"] then
+			pendingRequests = pendingRequests - 1
+			if pendingRequests <= 0 and master ~= nil then
+				master:queuecommand("CheckScorebox")
+			end
+			return
+		end
 		currentHash = SL[pn].Streams.Hash
 		-- These will get overwritten if we have any entries in the leaderboard below.
 		SetScoreData(1, 1, "", "No Scores", "", false, false, false, false)
@@ -220,9 +237,9 @@ local LeaderboardRequestProcessor = function(res, master)
 		all_data[1].has_data = false
 		all_data[2].has_data = false
 
-		local showITG = SL["P"..n].ActiveModifiers.SBITGScore
-		local showEX = SL["P"..n].ActiveModifiers.SBExScore
-		local showEvents = SL["P"..n].ActiveModifiers.SBEvents
+		local showITG = SL["P"..n].ActiveModifiers.SBITGScore ~= false
+		local showEX = SL["P"..n].ActiveModifiers.SBExScore ~= false
+		local showEvents = SL["P"..n].ActiveModifiers.SBEvents ~= false
 
 		cur_style = 0
 
@@ -420,6 +437,14 @@ end
 
 -- ArrowCloud integration --------------------------------------------------
 
+local NormalizeArrowCloudLeaderboardType = function(board_type)
+	local normalized = tostring(board_type or ""):upper():gsub("[^A-Z0-9]", "")
+	if normalized == "ITG" then return "ITG" end
+	if normalized == "EX" then return "EX" end
+	if normalized == "HARDEX" or normalized == "HEX" then return "HardEX" end
+	return nil
+end
+
 local ArrowCloudRequestProcessor = function(res)
 	-- Expect res.statusCode and res.body (raw JSON string)
 	if not res then return end
@@ -432,9 +457,10 @@ local ArrowCloudRequestProcessor = function(res)
 	-- Map ArrowCloud types to style indices (5..7); only process what the API returned.
 	local index_map = { ITG = 5, EX = 6, HardEX = 7 }
 	for _, board in ipairs(parsed.leaderboards) do
-		local style_index = index_map[board.type]
+		local board_type = NormalizeArrowCloudLeaderboardType(board.type)
+		local style_index = index_map[board_type]
 		if style_index and all_data[style_index] then
-			local isExType = (board.type == "EX" or board.type == "HardEX")
+			local isExType = (board_type == "EX" or board_type == "HardEX")
 			local slot = 1
 			local any = false
 			if type(board.scores) == "table" then
@@ -642,28 +668,6 @@ local af = Def.ActorFrame{
 				if willDoArrowCloud then pendingRequests = pendingRequests + 1 end
 				if sendRequest then pendingRequests = pendingRequests + 1 end
 
-				-- ArrowCloud direct request (independent of GS). We perform a separate HTTP call.
-						if willDoArrowCloud then
-					local ach = SL[pn].Streams.Hash
-					local acHeaders = {}
-					acHeaders["Authorization"] = "Bearer " .. SL[pn].ArrowCloudApiKey
-					-- ArrowCloud HTTP request
-					NETWORK:HttpRequest{
-						url = SL.ArrowCloud.BaseURL .. "/v1/chart/" .. ach .. "/leaderboards",
-						method = "GET",
-						headers = acHeaders,
-						connectTimeout = SL.ArrowCloud.RequestTimeout,
-						transferTimeout = SL.ArrowCloud.RequestTimeout,
-						onResponse = function(acres)
-							ArrowCloudRequestProcessor(acres)
-							pendingRequests = pendingRequests - 1
-							if pendingRequests <= 0 then
-								self:GetParent():queuecommand("CheckScorebox")
-							end
-						end
-					}
-				end
-
 				RemoveStaleCachedRequests()
 				ResetAllData()
 
@@ -692,11 +696,31 @@ local af = Def.ActorFrame{
 				self:GetParent():GetChild("Outline"):diffusealpha(0):visible(false)
 				self:GetParent():GetChild("Background"):diffusealpha(0):visible(false)
 
+				-- ArrowCloud direct request (independent of GS). We perform a separate HTTP call.
+				if willDoArrowCloud then
+					local ach = SL[pn].Streams.Hash
+					local acHeaders = {}
+					acHeaders["Authorization"] = "Bearer " .. SL[pn].ArrowCloudApiKey
+					-- ArrowCloud HTTP request
+					NETWORK:HttpRequest{
+						url = SL.ArrowCloud.BaseURL .. "/v1/chart/" .. ach .. "/leaderboards",
+						method = "GET",
+						headers = acHeaders,
+						connectTimeout = SL.ArrowCloud.RequestTimeout,
+						transferTimeout = SL.ArrowCloud.RequestTimeout,
+						onResponse = function(acres)
+							ArrowCloudRequestProcessor(acres)
+							pendingRequests = pendingRequests - 1
+							if pendingRequests <= 0 then
+								self:GetParent():queuecommand("CheckScorebox")
+							end
+						end
+					}
+				end
+
 				if IsItlSong(player) then
 					UpdatePathMap(player, SL[pn].Streams.Hash)
 				end
-
-				ResetAllData()
 				if sendRequest then
 					-- GS HTTP request
 					self:playcommand("MakeGrooveStatsRequest", {
@@ -879,28 +903,21 @@ local af = Def.ActorFrame{
 		OffCommand=function(self) self:stoptweening() end
 	},
 
-	-- ArrowCloud Mode Text (bottom-right ITG / EX / H.EX)
+	-- ArrowCloud Mode Text (bottom-right ITG / EX / HardEX)
 	LoadFont(ThemePrefs.Get("ThemeFont") .. " Normal")..{
 		Name="ACModeLabel",
 		Text="",
 		InitCommand=function(self)
-			self:diffusealpha(0):zoom(1.0):horizalign(center):vertalign(middle)
+			self:diffusealpha(0):zoom(1.0):horizalign(center):vertalign(middle):maxwidth(90)
 			self:xy(0,0)
 		end,
 		LoopScoreboxCommand=function(self)
 			local label = ""
 			if     cur_style == 4 then label = "ITG"
 			elseif cur_style == 5 then label = "EX"
-			elseif cur_style == 6 then label = "H.EX" end
+			elseif cur_style == 6 then label = "HardEX" end
 			if label ~= "" then
-				-- Explicit colors per request
-				if label == "ITG" then
-					self:diffuse(SL.JudgmentColors["FA+"][2])
-				elseif label == "EX" then
-					self:diffuse(SL.JudgmentColors["FA+"][1])
-				elseif label == "H.EX" then
-					self:diffuse(SL.JudgmentColors["FA+"][7])
-				end
+				self:diffuse(style_color[cur_style])
 				self:settext(label)
 				self:sleep(anim_seconds/2):linear(anim_seconds/2):diffusealpha(0.65)
 			else
@@ -1076,10 +1093,10 @@ for i=1,NumEntries do
 				clr = Color.Red
 			elseif cur_style == 6 then
 				-- HardEX pane: render scores in pink
-				clr = SL.JudgmentColors["FA+"][7]
+				clr = ArrowCloudHardEXColor
 			elseif score.isEx then
-				-- EX scoring (non-HardEX) in red
-				clr = SL.JudgmentColors["FA+"][1]
+				-- EX scoring (non-HardEX) in blue
+				clr = ArrowCloudEXColor
 			elseif score.isSelf then
 				clr = self_color
 			elseif score.isRival then

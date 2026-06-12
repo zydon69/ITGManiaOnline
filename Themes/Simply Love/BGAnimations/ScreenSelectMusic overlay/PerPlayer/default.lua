@@ -1,4 +1,6 @@
-local t = Def.ActorFrame{}
+local t = Def.ActorFrame{
+	Name="PerPlayer"
+}
 
 -- Always instantiate per-player actors for every side.  Some online/profile flows
 -- can join or restore players after this overlay is initialized; individual actors

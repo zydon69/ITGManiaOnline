@@ -11,6 +11,7 @@ ITGOnline = ITGOnline or {}
 ITGOnline.configPath = "/Save/ITGOnline.ini"
 ITGOnline.debugConfigPath = "/Save/ITGOnlineDebug.ini"
 ITGOnline.passwordService = "ITG Online Password"
+ITGOnline.accessTokenService = "ITG Online Access Token"
 ITGOnline.defaults = {
 	apiBaseUrl = "https://itgonline.fr/api/v1",
 	webSocketUrl = "wss://ws.itgonline.fr",
@@ -226,6 +227,89 @@ local function secure_credentials_backend()
 	return "unavailable"
 end
 
+local function active_online_player()
+	if GAMESTATE then
+		for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
+			if GAMESTATE:IsHumanPlayer(player) then return player end
+		end
+		if GAMESTATE:IsSideJoined(PLAYER_1) then return PLAYER_1 end
+		if GAMESTATE:IsSideJoined(PLAYER_2) then return PLAYER_2 end
+	end
+
+	return PLAYER_1
+end
+
+local function online_profile_slot(player)
+	if player == PLAYER_2 then return "ProfileSlot_Player2" end
+	return "ProfileSlot_Player1"
+end
+
+local function active_profile_auth_path()
+	if not PROFILEMAN then return nil, nil end
+
+	local player = active_online_player()
+	local ok, dir = pcall(function()
+		return PROFILEMAN:GetProfileDir(online_profile_slot(player))
+	end)
+	if not ok or trim(dir) == "" then return nil, nil end
+
+	return dir .. "ITGOnline.ini", dir
+end
+
+local function access_token_scope(apiBaseUrl, deviceName)
+	local _, profileDir = active_profile_auth_path()
+	if profileDir then
+		return "profile:" .. profileDir
+	end
+
+	return "machine:" .. normalize_base_url(apiBaseUrl) .. "|" .. trim(deviceName)
+end
+
+local function read_profile_access_token(apiBaseUrl)
+	local path = active_profile_auth_path()
+	if not path or not FILEMAN:DoesFileExist(path) then return nil, false end
+
+	local contents = IniFile.ReadFile(path) or {}
+	local section = contents["ITGOnline"] or {}
+	if normalize_base_url(section["ApiBaseUrl"]) ~= normalize_base_url(apiBaseUrl) then
+		return nil, false
+	end
+
+	local token = tostring(section["AccessToken"] or "")
+	if token == "" then return nil, false end
+
+	return token, true
+end
+
+local function write_profile_access_token(apiBaseUrl, deviceName, accessToken, user)
+	local path = active_profile_auth_path()
+	if not path or tostring(accessToken or "") == "" then return false end
+
+	local contents = FILEMAN:DoesFileExist(path) and (IniFile.ReadFile(path) or {}) or {}
+	contents["ITGOnline"] = contents["ITGOnline"] or {}
+	contents["ITGOnline"]["ApiBaseUrl"] = normalize_base_url(apiBaseUrl)
+	contents["ITGOnline"]["DeviceName"] = trim(deviceName)
+	contents["ITGOnline"]["AccessToken"] = tostring(accessToken)
+	if type(user) == "table" then
+		contents["ITGOnline"]["UserID"] = tostring(user.id or user.user_id or "")
+		contents["ITGOnline"]["Username"] = tostring(user.name or user.username or "")
+	end
+
+	IniFile.WriteFile(path, contents)
+	return true
+end
+
+local function clear_profile_access_token()
+	local path = active_profile_auth_path()
+	if not path or not FILEMAN:DoesFileExist(path) then return false end
+
+	local contents = IniFile.ReadFile(path) or {}
+	contents["ITGOnline"] = contents["ITGOnline"] or {}
+	contents["ITGOnline"]["AccessToken"] = ""
+	IniFile.WriteFile(path, contents)
+	return true
+end
+
 local function secure_password_account(apiBaseUrl, email)
 	email = trim(email):lower()
 	if email == "" then return "" end
@@ -272,12 +356,21 @@ local function secure_password_delete(apiBaseUrl, email)
 end
 
 local function secure_access_token_account(apiBaseUrl, deviceName)
+	local account = normalize_base_url(apiBaseUrl) .. "|" .. access_token_scope(apiBaseUrl, deviceName)
+	return account == "|" and "" or account
+end
+
+local function legacy_secure_access_token_account(apiBaseUrl, deviceName)
 	local account = normalize_base_url(apiBaseUrl) .. "|" .. trim(deviceName)
 	return account == "|" and "" or account
 end
 
 local function secure_access_token_get(apiBaseUrl, deviceName)
-	if not secure_credentials_available() then return nil, false end
+	if not secure_credentials_available() then
+		local profileToken, profileStored = read_profile_access_token(apiBaseUrl)
+		if profileStored then return profileToken, false end
+		return nil, false
+	end
 
 	local account = secure_access_token_account(apiBaseUrl, deviceName)
 	if account == "" then return nil, false end
@@ -287,11 +380,24 @@ local function secure_access_token_get(apiBaseUrl, deviceName)
 		return tostring(result.secret), true
 	end
 
+	local legacyAccount = legacy_secure_access_token_account(apiBaseUrl, deviceName)
+	if legacyAccount ~= "" and legacyAccount ~= account then
+		result = NETWORK:SecureCredentialGet(ITGOnline.accessTokenService, legacyAccount)
+		if result and result.ok and tostring(result.secret or "") ~= "" then
+			return tostring(result.secret), true
+		end
+	end
+
+	local profileToken, profileStored = read_profile_access_token(apiBaseUrl)
+	if profileStored then return profileToken, false end
+
 	return nil, false
 end
 
-local function secure_access_token_set(apiBaseUrl, deviceName, accessToken)
-	if not secure_credentials_available() then return false end
+local function secure_access_token_set(apiBaseUrl, deviceName, accessToken, user)
+	if not secure_credentials_available() then
+		return write_profile_access_token(apiBaseUrl, deviceName, accessToken, user)
+	end
 
 	local account = secure_access_token_account(apiBaseUrl, deviceName)
 	if account == "" or tostring(accessToken or "") == "" then return false end
@@ -299,20 +405,37 @@ local function secure_access_token_set(apiBaseUrl, deviceName, accessToken)
 	local result = NETWORK:SecureCredentialSet(ITGOnline.accessTokenService, account, tostring(accessToken))
 	if not result or not result.ok then
 		online_trace("Secure access token save failed using " .. secure_credentials_backend() .. ": " .. tostring(result and result.error or "unknown"))
-		return false
+		return write_profile_access_token(apiBaseUrl, deviceName, accessToken, user)
+	end
+
+	clear_profile_access_token()
+
+	local legacyAccount = legacy_secure_access_token_account(apiBaseUrl, deviceName)
+	if legacyAccount ~= "" and legacyAccount ~= account then
+		NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, legacyAccount)
 	end
 
 	return true
 end
 
 local function secure_access_token_delete(apiBaseUrl, deviceName)
+	clear_profile_access_token()
 	if not secure_credentials_available() then return false end
 
 	local account = secure_access_token_account(apiBaseUrl, deviceName)
-	if account == "" then return false end
+	local deleted = false
+	if account ~= "" then
+		local result = NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, account)
+		deleted = result and result.ok
+	end
 
-	local result = NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, account)
-	return result and result.ok
+	local legacyAccount = legacy_secure_access_token_account(apiBaseUrl, deviceName)
+	if legacyAccount ~= "" and legacyAccount ~= account then
+		local result = NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, legacyAccount)
+		deleted = deleted or (result and result.ok)
+	end
+
+	return deleted
 end
 
 local function safe_decode(body)
@@ -778,6 +901,7 @@ local function read_config(loadPassword)
 		passwordStoredSecurely = securePasswordStored,
 		accessToken = tostring(accessToken or ""),
 		accessTokenStoredSecurely = accessTokenStored,
+		accessTokenScope = access_token_scope(apiBaseUrl, deviceName),
 		secureCredentialsBackend = secure_credentials_backend(),
 		deviceName = deviceName,
 	}
@@ -793,6 +917,7 @@ local function copy_connection_config(config)
 		passwordStoredSecurely = config.passwordStoredSecurely == true,
 		accessToken = config.accessToken or "",
 		accessTokenStoredSecurely = config.accessTokenStoredSecurely == true,
+		accessTokenScope = config.accessTokenScope or access_token_scope(config.apiBaseUrl, config.deviceName),
 		secureCredentialsBackend = config.secureCredentialsBackend or secure_credentials_backend(),
 		deviceName = config.deviceName or ITGOnline.defaults.deviceName,
 	}
@@ -800,31 +925,45 @@ end
 
 local function hydrate_config_password(config)
 	config = config or {}
-	if tostring(config.password or "") ~= "" then return config end
-
-	local securePassword, securePasswordStored = secure_password_get(config.apiBaseUrl, config.email)
-	if securePasswordStored and tostring(securePassword or "") ~= "" then
-		config.password = tostring(securePassword or "")
-		config.passwordStoredSecurely = true
-		return config
+	local currentAccessTokenScope = access_token_scope(config.apiBaseUrl, config.deviceName)
+	if config.accessTokenScope ~= currentAccessTokenScope then
+		config.accessToken = ""
+		config.accessTokenStoredSecurely = false
+		config.accessTokenScope = currentAccessTokenScope
 	end
 
-	local transientAccount = ITGOnline and ITGOnline.transientPasswordAccount or nil
-	local currentAccount = secure_password_account(config.apiBaseUrl, config.email)
-	if (currentAccount ~= "" and transientAccount == currentAccount)
-		or (transientAccount == "" and tostring(ITGOnline.transientPassword or "") ~= "")
-	then
-		local transientPassword = tostring(ITGOnline.transientPassword or "")
-		if transientPassword ~= "" then
-			config.password = transientPassword
+	if tostring(config.password or "") == "" then
+		local securePassword, securePasswordStored = secure_password_get(config.apiBaseUrl, config.email)
+		if securePasswordStored and tostring(securePassword or "") ~= "" then
+			config.password = tostring(securePassword or "")
+			config.passwordStoredSecurely = true
+		else
+			local transientAccount = ITGOnline and ITGOnline.transientPasswordAccount or nil
+			local currentAccount = secure_password_account(config.apiBaseUrl, config.email)
+			if (currentAccount ~= "" and transientAccount == currentAccount)
+				or (transientAccount == "" and tostring(ITGOnline.transientPassword or "") ~= "")
+			then
+				local transientPassword = tostring(ITGOnline.transientPassword or "")
+				if transientPassword ~= "" then
+					config.password = transientPassword
+				end
+			end
+
+			config.passwordStoredSecurely = false
 		end
 	end
 
-	config.passwordStoredSecurely = false
 	local accessToken, accessTokenStored = secure_access_token_get(config.apiBaseUrl, config.deviceName)
 	if accessTokenStored and tostring(accessToken or "") ~= "" then
 		config.accessToken = tostring(accessToken or "")
 		config.accessTokenStoredSecurely = true
+		config.accessTokenScope = currentAccessTokenScope
+		return config
+	end
+	if tostring(accessToken or "") ~= "" then
+		config.accessToken = tostring(accessToken)
+		config.accessTokenStoredSecurely = false
+		config.accessTokenScope = currentAccessTokenScope
 		return config
 	end
 
@@ -857,6 +996,22 @@ end
 
 function ITGOnline:ConnectionConfig()
 	if self.connectionConfig then
+		local currentAccessTokenScope = access_token_scope(self.connectionConfig.apiBaseUrl, self.connectionConfig.deviceName)
+		if self.connectionConfig.accessTokenScope ~= currentAccessTokenScope then
+			self.connectionConfig.accessToken = ""
+			self.connectionConfig.accessTokenStoredSecurely = false
+			self.connectionConfig.accessTokenScope = currentAccessTokenScope
+		end
+		if tostring(self.connectionConfig.accessToken or "") == "" then
+			local accessToken, accessTokenStored = secure_access_token_get(
+				self.connectionConfig.apiBaseUrl,
+				self.connectionConfig.deviceName
+			)
+			if tostring(accessToken or "") ~= "" then
+				self.connectionConfig.accessToken = tostring(accessToken)
+				self.connectionConfig.accessTokenStoredSecurely = accessTokenStored == true
+			end
+		end
 		return self.connectionConfig
 	end
 
@@ -925,6 +1080,9 @@ function ITGOnline:SaveConfig(values)
 
 	nextConfig.password = nextPassword
 	nextConfig.passwordStoredSecurely = securePasswordStored
+	nextConfig.accessToken = ""
+	nextConfig.accessTokenStoredSecurely = false
+	nextConfig.accessTokenScope = access_token_scope(nextConfig.apiBaseUrl, nextConfig.deviceName)
 	nextConfig.secureCredentialsBackend = secure_credentials_backend()
 
 	IniFile.WriteFile(ITGOnline.configPath, {
@@ -956,13 +1114,15 @@ function ITGOnline:HasStoredAccessToken()
 	return accessToken ~= nil and tostring(accessToken or "") ~= ""
 end
 
-function ITGOnline:StoreAccessToken(accessToken)
+function ITGOnline:StoreAccessToken(accessToken, user)
 	local config = self:Config()
-	local stored = secure_access_token_set(config.apiBaseUrl, config.deviceName, accessToken)
+	local stored = secure_access_token_set(config.apiBaseUrl, config.deviceName, accessToken, user)
 	if stored then
+		local _, storedSecurely = secure_access_token_get(config.apiBaseUrl, config.deviceName)
 		self.config = self.config or config
 		self.config.accessToken = tostring(accessToken or "")
-		self.config.accessTokenStoredSecurely = true
+		self.config.accessTokenStoredSecurely = storedSecurely == true
+		self.config.accessTokenScope = access_token_scope(config.apiBaseUrl, config.deviceName)
 		self.connectionConfig = copy_connection_config(self.config)
 	end
 	return stored
@@ -1019,7 +1179,7 @@ function ITGOnline:ApplyAccessToken(accessToken, callback)
 		end
 
 		apply_authenticated_user_state(self, user)
-		self:StoreAccessToken(accessToken)
+		self:StoreAccessToken(accessToken, user)
 		if callback then callback(true, user, decodedOrResponse) end
 	end)
 end
@@ -2312,6 +2472,7 @@ function ITGOnline:Login(callback)
 
 		apply_authenticated_user_state(self, decoded.user)
 		self.token = decoded.access_token
+		self:StoreAccessToken(self.token, decoded.user)
 		if callback then callback(true) end
 	end)
 end
@@ -2405,6 +2566,7 @@ function ITGOnline:Relogin(callback)
 			self.sessionExpired = false
 			self.authRefreshFailureCount = 0
 			self.authRefreshNextAttemptAt = 0
+			self:StoreAccessToken(self.token, decoded.user)
 			for cb in ivalues(callbacks) do
 				if cb then cb(true) end
 			end
@@ -2551,10 +2713,13 @@ function ITGOnline:Connect(callbacks)
 	end)
 end
 
-function ITGOnline:Disconnect()
+function ITGOnline:Disconnect(options)
+	options = options or {}
+	local revokeToken = options.revokeToken == true
+
 	self.disconnecting = true
 	self:CancelPendingRequests()
-	if self.token then
+	if revokeToken and self.token then
 		local token = self.token
 		self:Request("POST", "/auth/logout", {}, function() end)
 		self.token = token
