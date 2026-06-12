@@ -840,6 +840,7 @@ local function normalize_chart_type(value)
 		["dance-double"] = "dance-double",
 		["dance-couple"] = "dance-couple",
 		["dance-solo"] = "dance-solo",
+		["dance-threepanel"] = "dance-threepanel",
 		["pump-single"] = "pump-single",
 		["pump-double"] = "pump-double",
 	}
@@ -851,6 +852,7 @@ local function normalize_chart_type(value)
 		double = game .. "-double",
 		couple = game .. "-couple",
 		solo = game .. "-solo",
+		threepanel = game .. "-threepanel",
 	}
 	if short[lower] then return short[lower] end
 

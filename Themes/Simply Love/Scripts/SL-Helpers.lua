@@ -128,9 +128,10 @@ GetNotefieldX = function( player )
 	local game = GAMESTATE:GetCurrentGame():GetName()
 
 	local IsPlayingDanceSolo = (style:GetStepsType() == "StepsType_Dance_Solo")
+	local IsPlayingDanceThreePanel = (style:GetName() == "threepanel")
 	local NumPlayersEnabled  = GAMESTATE:GetNumPlayersEnabled()
 	local NumSidesJoined     = GAMESTATE:GetNumSidesJoined()
-	local IsUsingSoloSingles = PREFSMAN:GetPreference('Center1Player') or IsPlayingDanceSolo or (NumSidesJoined==1 and (game=="techno" or game=="kb7"))
+	local IsUsingSoloSingles = PREFSMAN:GetPreference('Center1Player') or IsPlayingDanceSolo or IsPlayingDanceThreePanel or (NumSidesJoined==1 and (game=="techno" or game=="kb7"))
 
 	-- dance solo is always centered
 	if IsUsingSoloSingles and NumPlayersEnabled == 1 and NumSidesJoined == 1 then return _screen.cx end
@@ -154,10 +155,10 @@ local NoteFieldWidth = {
 		versus  = 256,
 		double  = 512,
 		solo    = 384,
+		threepanel = 192,
 		routine = 512,
-		-- couple and threepanel not supported in Simply Love at this time D:
+		-- couple not supported in Simply Love at this time D:
 		-- couple = 256,
-		-- threepanel = 192
 	},
 	-- pump's values are very similar to those used in dance, but curiously smaller
 	pump = {

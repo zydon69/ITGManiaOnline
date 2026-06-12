@@ -409,15 +409,15 @@ static const Style g_Style_Dance_ThreePanel = {
         // m_ColumnInfo[NUM_PLAYERS][MAX_COLS_PER_PLAYER];
         {
             // PLAYER_1
-            {TRACK_1, -DANCE_COL_SPACING * 1.0f, nullptr},
-            {TRACK_2, +DANCE_COL_SPACING * 0.0f, nullptr},
-            {TRACK_3, +DANCE_COL_SPACING * 1.0f, nullptr},
+            {TRACK_1, -DANCE_COL_SPACING * 1.0f, "UpLeft"},
+            {TRACK_2, +DANCE_COL_SPACING * 0.0f, "Down"},
+            {TRACK_3, +DANCE_COL_SPACING * 1.0f, "UpRight"},
         },
         {
             // PLAYER_2
-            {TRACK_1, -DANCE_COL_SPACING * 1.0f, nullptr},
-            {TRACK_2, +DANCE_COL_SPACING * 0.0f, nullptr},
-            {TRACK_3, +DANCE_COL_SPACING * 1.0f, nullptr},
+            {TRACK_1, -DANCE_COL_SPACING * 1.0f, "UpLeft"},
+            {TRACK_2, +DANCE_COL_SPACING * 0.0f, "Down"},
+            {TRACK_3, +DANCE_COL_SPACING * 1.0f, "UpRight"},
         },
     },
     {// m_iInputColumn[NUM_GameController][NUM_GameButton]

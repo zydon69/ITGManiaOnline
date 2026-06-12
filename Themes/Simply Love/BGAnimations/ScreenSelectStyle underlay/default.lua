@@ -31,10 +31,11 @@ local choices = {
 }
 
 if current_game=="dance" and ThemePrefs.Get("AllowDanceSolo") then
-	choices[1].x = _screen.cx - SL_WideScale(210,245)
-	choices[2].x = _screen.cx - SL_WideScale(75,90)
-	choices[3].x = _screen.cx + SL_WideScale(75,90)
-	choices[4] = { name="solo", pads={ {color=GetHexColor(SL.Global.ActiveColorIndex, true), offset=0}}, x=_screen.cx + SL_WideScale(210,245) }
+	choices[1].x = _screen.cx - SL_WideScale(240,290)
+	choices[2].x = _screen.cx - SL_WideScale(120,145)
+	choices[3].x = _screen.cx
+	choices[4] = { name="solo", pads={ {color=GetHexColor(SL.Global.ActiveColorIndex, true), offset=0}}, x=_screen.cx + SL_WideScale(120,145) }
+	choices[5] = { name="threepanel", pads={ {color=GetHexColor(SL.Global.ActiveColorIndex, true), offset=0}}, x=_screen.cx + SL_WideScale(240,290) }
 
 -- double is not a valid style in kb7 and para
 elseif current_game=="kb7" or current_game=="para" then
@@ -101,6 +102,7 @@ local EnableChoices = function()
 	-- dance solo
 	if current_game=="dance" and ThemePrefs.Get("AllowDanceSolo") then
 		af:GetChild("")[4]:aux(1)
+		af:GetChild("")[5]:aux(1)
 	end
 end
 

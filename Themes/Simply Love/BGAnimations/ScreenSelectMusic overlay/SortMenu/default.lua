@@ -280,6 +280,7 @@ local function GetChangeableStyles()
 		-- Check number of players
 		if ThemePrefs.Get("AllowDanceSolo") then
 			table.insert(available_styles, {{"ChangeStyle", "Solo"}, GAMESTATE:GetNumPlayersEnabled() == 1  })
+			table.insert(available_styles, {{"ChangeStyle", "ThreePanel"}, GAMESTATE:GetNumPlayersEnabled() == 1  })
 		end
 		table.insert(available_styles, {{"ChangeStyle", "Single"}, GAMESTATE:GetNumPlayersEnabled() == 1  })
 
@@ -293,15 +294,22 @@ local function GetChangeableStyles()
 				table.insert(available_styles, {{"ChangeStyle", "Double"}})
 				if ThemePrefs.Get("AllowDanceSolo") then
 					table.insert(available_styles, {{"ChangeStyle", "Solo"}})
+					table.insert(available_styles, {{"ChangeStyle", "ThreePanel"}})
 				end
 			elseif style == "double" then
 				table.insert(available_styles, {{"ChangeStyle", "Single"}})
 				if ThemePrefs.Get("AllowDanceSolo") then
 					table.insert(available_styles, {{"ChangeStyle", "Solo"}})
+					table.insert(available_styles, {{"ChangeStyle", "ThreePanel"}})
 				end
 			elseif style == "solo" then
 				table.insert(available_styles, {{"ChangeStyle", "Single"}})
 				table.insert(available_styles, {{"ChangeStyle", "Double"}})
+				table.insert(available_styles, {{"ChangeStyle", "ThreePanel"}})
+			elseif style == "threepanel" then
+				table.insert(available_styles, {{"ChangeStyle", "Single"}})
+				table.insert(available_styles, {{"ChangeStyle", "Double"}})
+				table.insert(available_styles, {{"ChangeStyle", "Solo"}})
 			-- Couple doesn't have enough content for people to be able to switch into it
 			-- However, if for some reason you end up in couples mode, you should be able to
 			-- escape

@@ -64,6 +64,7 @@ local layouts = {
 	pump     = { true,  false, true,  false, true,  false, true,  false, true  },
 	techno   = { true,  true,  true,  true,  false, true,  true,  true,  true  },
 	solo     = { true,  true,  true,  true,  false, true,  false, true,  false },
+	threepanel = { true, false, true, false, false, false, false, true, false },
 	inactive = { false, false, false, false, false, false, false, false, false }
 }
 
@@ -82,6 +83,8 @@ for row=0,2 do
 
 			if game=="dance" and style=="solo" then
 				layout = layouts.solo
+			elseif game=="dance" and style=="threepanel" then
+				layout = layouts.threepanel
 			end
 
 			if  params and params.Player
