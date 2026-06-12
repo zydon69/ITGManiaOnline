@@ -460,6 +460,11 @@ void SongManager::LoadSongDir(
 
       mapGroupSongDirs[sGroupDirName] = arraySongDirs;
       songCount += arraySongDirs.size();
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: skipped invalid song group directory '%s' instead "
+          "of aborting song load.",
+          (sDir + sGroupDirName).c_str());
     }
     ++sanity_index;
   }
@@ -2208,6 +2213,13 @@ void SongManager::LoadStepEditsFromProfileDir(
   int remainingEdits =
       std::max(0, MAX_EDIT_STEPS_PER_PROFILE - iNumEditsLoaded);
   int size = std::min((int)vsFiles.size(), remainingEdits);
+  if ((int)vsFiles.size() > remainingEdits) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: clamping old-style profile edits for %s: files=%i, "
+        "already_loaded=%i, remaining=%i, loading=%i.",
+        ProfileSlotToString(slot).c_str(), (int)vsFiles.size(),
+        iNumEditsLoaded, remainingEdits, size);
+  }
 
   // XXX: If some edits are invalid and they're close to the edit limit, this
   // may erroneously skip some edits, and won't warn.

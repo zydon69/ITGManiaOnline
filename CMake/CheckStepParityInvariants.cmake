@@ -23,7 +23,7 @@ read_source("src/Steps.cpp" steps_cpp)
 
 require_contains(
   "${step_parity_generator_cpp}"
-  "if (note.warped) {\n      continue;\n    }"
+  "if (note.warped) {\n      ++skippedWarpedNotes;\n      continue;\n    }"
   "StepParity ignores warped-over notes before building rows")
 require_contains(
   "${steps_cpp}"

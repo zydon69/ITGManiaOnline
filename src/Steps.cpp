@@ -424,6 +424,12 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
   if (!layout) {
     return;
   }
+  if (this->m_StepsType == StepsType_dance_solo ||
+      this->m_StepsType == StepsType_dance_threepanel) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX: calculating tech counts with %s StageLayout support.",
+        m_StepsTypeStr.c_str());
+  }
   TimingData* timing = this->GetTimingData();
   StepParity::StepParityGenerator gen =
       StepParity::StepParityGenerator(&*layout, timing);
@@ -456,6 +462,10 @@ void Steps::CalculateMeasureInfo(const NoteData& tempNoteData) {
     NoteData p1 = tempNoteData;
     // XXX: Assumption that couple will always have an even number of notes.
     const int tracks = tempNoteData.GetNumTracks() / 2;
+    LOG->Trace(
+        "SRC_AUDIT_FIX: calculating couple MeasureInfo per player: "
+        "total_tracks=%i, tracks_per_player=%i.",
+        tempNoteData.GetNumTracks(), tracks);
     p1.SetNumTracks(tracks);
     MeasureInfo::CalculateMeasureInfo(
         p1, timing, measureInfoPerPlayer[PLAYER_1]);

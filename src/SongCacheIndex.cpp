@@ -66,6 +66,9 @@ std::string SongCacheIndex::GetCacheFilePath(
 
 SongCacheIndex::SongCacheIndex()
     : Mutex("SongCacheIndex"), delay_save_cache(false) {
+  LOG->Trace(
+      "SRC_AUDIT_FIX: SongCacheIndex initialized with SHA1 cache key mapping "
+      "and delay_save_cache=false.");
   ReadCacheIndex();
 }
 

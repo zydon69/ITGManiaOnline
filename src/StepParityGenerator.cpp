@@ -337,6 +337,7 @@ void StepParityGenerator::CreateRows(const NoteData& in) {
 
   CreateIntermediateNoteData(in, noteData);
 
+  int skippedWarpedNotes = 0;
   for (IntermediateNoteData note : noteData) {
     if (note.type == TapNoteType_Empty ||
         note.type == TapNoteType_AutoKeysound) {
@@ -344,6 +345,7 @@ void StepParityGenerator::CreateRows(const NoteData& in) {
     }
 
     if (note.warped) {
+      ++skippedWarpedNotes;
       continue;
     }
 
@@ -427,6 +429,12 @@ void StepParityGenerator::CreateRows(const NoteData& in) {
   }
 
   AddRow(counter);
+  if (skippedWarpedNotes > 0) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX: StepParity ignored %i notes inside warped timing "
+        "rows.",
+        skippedWarpedNotes);
+  }
 }
 
 void StepParityGenerator::AddRow(RowCounter& counter) {
