@@ -1,6 +1,7 @@
 #include "NotesWriterSM.h"
 
 #include <cerrno>
+#include <cmath>
 #include <cstring>
 #include <map>
 #include <string>
@@ -29,11 +30,64 @@
 
 ThemeMetric<bool> USE_CREDIT("NotesWriterSM", "DescriptionUsesCreditField");
 
+namespace {
+class CheckedFileWriter {
+ public:
+  CheckedFileWriter(RageFileBasic& file, const char* context)
+    : m_file(file), m_context(context), m_failed(false) {}
+
+  int Write(const std::string& s) {
+    if (m_failed) {
+      return -1;
+    }
+    const int ret = m_file.Write(s);
+    Record(ret);
+    return ret;
+  }
+
+  int PutLine(const std::string& s) {
+    if (m_failed) {
+      return -1;
+    }
+    const int ret = m_file.PutLine(s);
+    Record(ret);
+    return ret;
+  }
+
+  int Flush() {
+    if (m_failed) {
+      return -1;
+    }
+    const int ret = m_file.Flush();
+    Record(ret);
+    return ret;
+  }
+
+  bool Failed() const { return m_failed; }
+  std::string GetError() const { return m_file.GetError(); }
+
+ private:
+  void Record(int ret) {
+    if (ret != -1) {
+      return;
+    }
+    m_failed = true;
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s write failed: %s", m_context,
+        m_file.GetError().c_str());
+  }
+
+  RageFileBasic& m_file;
+  const char* m_context;
+  bool m_failed;
+};
+}  // namespace
+
 /**
  * @brief Write out the common tags for .SM files.
  * @param f the file in question.
  * @param out the Song in question. */
-static void WriteGlobalTags(RageFileBasic& f, Song& out) {
+static bool WriteGlobalTags(CheckedFileWriter& f, Song& out) {
   TimingData& timing = out.m_SongTiming;
   f.PutLine(ssprintf("#TITLE:%s;", SmEscape(out.m_sMainTitle).c_str()));
   f.PutLine(ssprintf("#SUBTITLE:%s;", SmEscape(out.m_sSubTitle).c_str()));
@@ -64,7 +118,12 @@ static void WriteGlobalTags(RageFileBasic& f, Song& out) {
   f.Write("#SELECTABLE:");
   switch (out.m_SelectionDisplay) {
     default:
-      FAIL_M(ssprintf("Invalid selection display: %i", out.m_SelectionDisplay));
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid SM selection display %i while writing '%s'; "
+          "falling back to YES.",
+          out.m_SelectionDisplay, out.GetSongDir().c_str());
+      f.Write("YES");
+      break;
     case Song::SHOW_ALWAYS:
       f.Write("YES");
       break;
@@ -106,6 +165,13 @@ static void WriteGlobalTags(RageFileBasic& f, Song& out) {
       f.Write(",");
     }
   }
+  if (bpms.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: SM writer provided fallback BPM for '%s' because "
+        "TimingData had no BPM segments.",
+        out.GetSongDir().c_str());
+    f.PutLine("0.000000=60.000000");
+  }
   f.PutLine(";");
 
   const std::vector<TimingSegment*>& stops =
@@ -121,7 +187,15 @@ static void WriteGlobalTags(RageFileBasic& f, Song& out) {
     for (unsigned i = 0; i < wSize; i++) {
       const WarpSegment* ws = static_cast<WarpSegment*>(warps[i]);
       int iRow = ws->GetRow();
-      float fBPS = 60 / out.m_SongTiming.GetBPMAtRow(iRow);
+      float fBPM = out.m_SongTiming.GetBPMAtRow(iRow);
+      if (!std::isfinite(fBPM) || fBPM <= 0.0f) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: SM writer skipped warp-to-stop conversion at beat "
+            "%.6f for '%s' because BPM %.6f is invalid.",
+            ws->GetBeat(), out.GetSongDir().c_str(), fBPM);
+        continue;
+      }
+      float fBPS = 60.0f / fBPM;
       float fSkip = fBPS * ws->GetLength();
       allPauses.insert(std::pair<float, float>(ws->GetBeat(), -fSkip));
     }
@@ -141,7 +215,15 @@ static void WriteGlobalTags(RageFileBasic& f, Song& out) {
   }
   // Delays can't be negative: thus, no effect.
   for (const TimingSegment* ss : delays) {
-    float fBeat = NoteRowToBeat(ss->GetRow() - 1);
+    int iRow = ss->GetRow();
+    if (iRow <= 0) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: SM writer clamped delay at row %i to beat 0 for '%s' "
+          "to avoid serializing a negative stop beat.",
+          iRow, out.GetSongDir().c_str());
+      iRow = 1;
+    }
+    float fBeat = NoteRowToBeat(iRow - 1);
     float fPause = ToDelay(ss)->GetPause();
     std::map<float, float>::iterator already_exists = allPauses.find(fBeat);
     if (already_exists != allPauses.end()) {
@@ -204,6 +286,7 @@ static void WriteGlobalTags(RageFileBasic& f, Song& out) {
   f.PutLine(";");
 
   f.PutLine(ssprintf("#ATTACKS:%s;", out.GetAttackString().c_str()));
+  return !f.Failed();
 }
 
 /**
@@ -292,13 +375,16 @@ bool NotesWriterSM::Write(
 
 bool NotesWriterSM::Write(
     RageFileBasic& f, Song& out, const std::vector<Steps*>& vpStepsToSave) {
-  WriteGlobalTags(f, out);
+  CheckedFileWriter writer(f, "NotesWriterSM");
+  if (!WriteGlobalTags(writer, out)) {
+    return false;
+  }
 
   for (const Steps* pSteps : vpStepsToSave) {
     std::string sTag = GetSMNotesTag(out, *pSteps);
-    f.PutLine(sTag);
+    writer.PutLine(sTag);
   }
-  if (f.Flush() == -1) {
+  if (writer.Flush() == -1) {
     return false;
   }
 
@@ -316,7 +402,7 @@ void NotesWriterSM::GetEditFileContents(
   if (asParts.size()) {
     sDir = join("/", asParts.begin() + 1, asParts.end());
   }
-  sOut += ssprintf("#SONG:%s;\r\n", sDir.c_str());
+  sOut += ssprintf("#SONG:%s;\r\n", SmEscape(sDir).c_str());
   sOut += GetSMNotesTag(*pSong, *pSteps);
 }
 
@@ -379,7 +465,17 @@ bool NotesWriterSM::WriteEditFileToMachine(
    * lose data on error. */
 
   if (bFileNameChanging) {
-    FILEMAN->Remove(pSteps->GetFilename());
+    if (!FILEMAN->Remove(pSteps->GetFilename()) &&
+        DoesFileExist(pSteps->GetFilename())) {
+      sErrorOut = ssprintf(
+          "Error removing old edit file '%s'.",
+          pSteps->GetFilename().c_str());
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Failed to remove old SM edit file '%s' after writing "
+          "'%s'.",
+          pSteps->GetFilename().c_str(), sPath.c_str());
+      return false;
+    }
   }
   pSteps->SetFilename(sPath);
 
