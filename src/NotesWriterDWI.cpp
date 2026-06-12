@@ -27,7 +27,7 @@ std::string OptimizeDWIString(std::string holds, std::string taps);
  * @param c1 the first character.
  * @param c2 the second character.
  * @return the one singular character. */
-static char OptimizeDWIPair(char c1, char c2) {
+static bool OptimizeDWIPair(char c1, char c2, char& out) {
   typedef std::pair<char, char> cpair;
   static std::map<cpair, char> joins;
   static bool Initialized = false;
@@ -56,9 +56,30 @@ static char OptimizeDWIPair(char c1, char c2) {
   }
 
   std::map<cpair, char>::const_iterator it = joins.find(cpair(c1, c2));
-  ASSERT(it != joins.end());
+  if (it == joins.end()) {
+    return false;
+  }
 
-  return it->second;
+  out = it->second;
+  return true;
+}
+
+static bool WriteChecked(RageFile& f, const std::string& s) {
+  return f.Write(s) == static_cast<int>(s.size());
+}
+
+static bool PutLineChecked(RageFile& f, const std::string& s) {
+  return f.PutLine(s) != -1;
+}
+
+static bool FinishWrite(RageFile& f, const std::string& sPath) {
+  if (f.Flush() == -1) {
+    LOG->UserLog(
+        "Song file", sPath, "couldn't be fully written: %s",
+        f.GetError().c_str());
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -78,26 +99,34 @@ std::string OptimizeDWIString(std::string holds, std::string taps) {
 
   /* 24 -> 1 */
   while (taps.size() > 1) {
-    comb_taps += OptimizeDWIPair(taps[0], taps[1]);
+    char optimized = 0;
+    if (!OptimizeDWIPair(taps[0], taps[1], optimized)) {
+      break;
+    }
+    comb_taps += optimized;
     taps.erase(0, 2);
   }
 
   /* 2!24!4 -> 1!1 */
   while (holds.size() > 1) {
-    const char to = OptimizeDWIPair(holds[0], holds[1]);
+    char to = 0;
+    if (!OptimizeDWIPair(holds[0], holds[1], to)) {
+      break;
+    }
     holds.erase(0, 2);
     comb_holds += ssprintf("%c!%c", to, to);
   }
 
-  ASSERT(taps.size() <= 1);
-  ASSERT(holds.size() <= 1);
-
   /* 24!4 -> 1!4 */
   while (holds.size() == 1 && taps.size() == 1) {
-    const char to = OptimizeDWIPair(taps[0], holds[0]);
-    comb_holds += ssprintf("%c!%c", to, holds[0]);
-    taps.erase(0, 1);
-    holds.erase(0, 1);
+    char to = 0;
+    if (OptimizeDWIPair(taps[0], holds[0], to)) {
+      comb_holds += ssprintf("%c!%c", to, holds[0]);
+      taps.erase(0, 1);
+      holds.erase(0, 1);
+    } else {
+      break;
+    }
   }
 
   /* Now we have at most one single tap and one hold remaining, and any
@@ -105,8 +134,8 @@ std::string OptimizeDWIString(std::string holds, std::string taps) {
   std::string ret;
   ret += taps;
   ret += comb_taps;
-  if (holds.size() == 1) {
-    ret += ssprintf("%c!%c", holds[0], holds[0]);
+  for (size_t i = 0; i < holds.size(); ++i) {
+    ret += ssprintf("%c!%c", holds[i], holds[i]);
   }
   ret += comb_holds;
 
@@ -193,7 +222,8 @@ static const int BEATS_PER_MEASURE = 4;
  * @param f the file to write out to.
  * @param out the Steps in question.
  * @param start the starting position. */
-static void WriteDWINotesField(RageFile& f, const Steps& out, int start) {
+static bool WriteDWINotesField(
+    RageFile& f, const Steps& out, int start, const std::string& sPath) {
   NoteData notedata;
   out.GetNoteData(notedata);
   NoteDataUtil::InsertHoldTails(notedata);
@@ -211,16 +241,13 @@ static void WriteDWINotesField(RageFile& f, const Steps& out, int start) {
         break;
       case NOTE_TYPE_12TH:
       case NOTE_TYPE_24TH:
-        f.Write("[");
         fCurrentIncrementer = 1.0 / 24 * BEATS_PER_MEASURE;
         break;
       case NOTE_TYPE_16TH:
-        f.Write("(");
         fCurrentIncrementer = 1.0 / 16 * BEATS_PER_MEASURE;
         break;
       case NOTE_TYPE_32ND:
       case NOTE_TYPE_64TH:
-        f.Write("{");
         fCurrentIncrementer = 1.0 / 64 * BEATS_PER_MEASURE;
         break;
       case NOTE_TYPE_48TH:
@@ -228,11 +255,39 @@ static void WriteDWINotesField(RageFile& f, const Steps& out, int start) {
       case NoteType_Invalid:
         // since, for whatever reason, the only way to do
         // 48ths is through a block of 192nds...
-        f.Write("`");
+        if (!WriteChecked(f, "`")) {
+          return false;
+        }
         fCurrentIncrementer = 1.0 / 192 * BEATS_PER_MEASURE;
         break;
       default:
-        ASSERT_M(0, ssprintf("nt = %d", nt));
+        LOG->UserLog(
+            "Song file", sPath,
+            "SRC_AUDIT_FIX cannot export DWI chart with unsupported note type "
+            "%d.",
+            nt);
+        return false;
+    }
+
+    switch (nt) {
+      case NOTE_TYPE_12TH:
+      case NOTE_TYPE_24TH:
+        if (!WriteChecked(f, "[")) {
+          return false;
+        }
+        break;
+      case NOTE_TYPE_16TH:
+        if (!WriteChecked(f, "(")) {
+          return false;
+        }
+        break;
+      case NOTE_TYPE_32ND:
+      case NOTE_TYPE_64TH:
+        if (!WriteChecked(f, "{")) {
+          return false;
+        }
+        break;
+      default:
         break;
     }
 
@@ -279,10 +334,15 @@ static void WriteDWINotesField(RageFile& f, const Steps& out, int start) {
           notedata.SetTapNote(start + 5, row, TAP_EMPTY);
           break;
         default:
-          FAIL_M(
-              ssprintf("StepsType not supported by DWI: %i", out.m_StepsType));
+          LOG->UserLog(
+              "Song file", sPath,
+              "SRC_AUDIT_FIX cannot export unsupported DWI StepsType %i.",
+              out.m_StepsType);
+          return false;
       }
-      f.Write(str);
+      if (!WriteChecked(f, str)) {
+        return false;
+      }
     }
 
     switch (nt) {
@@ -291,25 +351,41 @@ static void WriteDWINotesField(RageFile& f, const Steps& out, int start) {
         break;
       case NOTE_TYPE_12TH:
       case NOTE_TYPE_24TH:
-        f.Write("]");
+        if (!WriteChecked(f, "]")) {
+          return false;
+        }
         break;
       case NOTE_TYPE_16TH:
-        f.Write(")");
+        if (!WriteChecked(f, ")")) {
+          return false;
+        }
         break;
       case NOTE_TYPE_32ND:
       case NOTE_TYPE_64TH:
-        f.Write("}");
+        if (!WriteChecked(f, "}")) {
+          return false;
+        }
         break;
       case NOTE_TYPE_48TH:
       case NOTE_TYPE_192ND:
       case NoteType_Invalid:
-        f.Write("'");
+        if (!WriteChecked(f, "'")) {
+          return false;
+        }
         break;
       default:
-        FAIL_M(ssprintf("Invalid note type: %i", nt));
+        LOG->UserLog(
+            "Song file", sPath,
+            "SRC_AUDIT_FIX cannot close DWI chart block with unsupported note "
+            "type %i.",
+            nt);
+        return false;
     }
-    f.PutLine("");
+    if (!PutLineChecked(f, "")) {
+      return false;
+    }
   }
+  return true;
 }
 
 /**
@@ -317,7 +393,8 @@ static void WriteDWINotesField(RageFile& f, const Steps& out, int start) {
  * @param f the file to write out to.
  * @param out the Steps in question.
  * @return its success or failure. */
-static bool WriteDWINotesTag(RageFile& f, const Steps& out) {
+static bool WriteDWINotesTag(
+    RageFile& f, const Steps& out, const std::string& sPath) {
   if (out.GetDifficulty() == Difficulty_Edit) {
     return false;  // not supported by DWI
   }
@@ -326,44 +403,62 @@ static bool WriteDWINotesTag(RageFile& f, const Steps& out) {
 
   switch (out.m_StepsType) {
     case StepsType_dance_single:
-      f.Write("#SINGLE:");
+      if (!WriteChecked(f, "#SINGLE:")) {
+        return false;
+      }
       break;
     case StepsType_dance_couple:
-      f.Write("#COUPLE:");
+      if (!WriteChecked(f, "#COUPLE:")) {
+        return false;
+      }
       break;
     case StepsType_dance_double:
-      f.Write("#DOUBLE:");
+      if (!WriteChecked(f, "#DOUBLE:")) {
+        return false;
+      }
       break;
     case StepsType_dance_solo:
-      f.Write("#SOLO:");
       break;
     default:
-      return false;  // not a type supported by DWI
+      return false;
   }
 
   Difficulty d = out.GetDifficulty();
   switch (d) {
     case Difficulty_Beginner:
-      f.Write("BEGINNER:");
+      if (!WriteChecked(f, "BEGINNER:")) {
+        return false;
+      }
       break;
     case Difficulty_Easy:
-      f.Write("BASIC:");
+      if (!WriteChecked(f, "BASIC:")) {
+        return false;
+      }
       break;
     case Difficulty_Medium:
-      f.Write("ANOTHER:");
+      if (!WriteChecked(f, "ANOTHER:")) {
+        return false;
+      }
       break;
     case Difficulty_Hard:
-      f.Write("MANIAC:");
+      if (!WriteChecked(f, "MANIAC:")) {
+        return false;
+      }
       break;
     case Difficulty_Challenge:
-      f.Write("SMANIAC:");
+      if (!WriteChecked(f, "SMANIAC:")) {
+        return false;
+      }
       break;
     default:
-      FAIL_M(ssprintf("Invalid difficulty: %i", d));
+      LOG->UserLog(
+          "Song file", sPath,
+          "SRC_AUDIT_FIX cannot export DWI chart with invalid difficulty %i.",
+          d);
+      return false;
   }
 
-  f.PutLine(ssprintf("%d:", out.GetMeter()));
-  return true;
+  return PutLineChecked(f, ssprintf("%d:", out.GetMeter()));
 }
 
 bool NotesWriterDWI::Write(std::string sPath, const Song& out) {
@@ -377,28 +472,60 @@ bool NotesWriterDWI::Write(std::string sPath, const Song& out) {
 
   /* Write transliterations, if we have them, since DWI doesn't support UTF-8.
    */
-  f.PutLine(
-      ssprintf("#TITLE:%s;", DwiEscape(out.GetTranslitFullTitle()).c_str()));
-  f.PutLine(
-      ssprintf("#ARTIST:%s;", DwiEscape(out.GetTranslitArtist()).c_str()));
+  if (!PutLineChecked(
+          f,
+          ssprintf("#TITLE:%s;", DwiEscape(out.GetTranslitFullTitle()).c_str())) ||
+      !PutLineChecked(
+          f,
+          ssprintf("#ARTIST:%s;", DwiEscape(out.GetTranslitArtist()).c_str()))) {
+    LOG->UserLog(
+        "Song file", sPath, "couldn't be written: %s", f.GetError().c_str());
+    return false;
+  }
 
   const std::vector<TimingSegment*>& bpms =
       out.m_SongTiming.GetTimingSegments(SEGMENT_BPM);
-  ASSERT_M(
-      bpms[0]->GetRow() == 0,
-      ssprintf(
-          "The first BPM Segment must be defined at row 0, not %d!",
-          bpms[0]->GetRow()));
-  f.PutLine(ssprintf("#FILE:%s;", DwiEscape(out.m_sMusicFile).c_str()));
-  f.PutLine(
-      ssprintf("#BPM:%.3f;", static_cast<BPMSegment*>(bpms[0])->GetBPM()));
-  f.PutLine(ssprintf(
-      "#GAP:%ld;",
-      -std::lrint(out.m_SongTiming.m_fBeat0OffsetInSeconds * 1000)));
-  f.PutLine(ssprintf("#SAMPLESTART:%.3f;", out.m_fMusicSampleStartSeconds));
-  f.PutLine(ssprintf("#SAMPLELENGTH:%.3f;", out.m_fMusicSampleLengthSeconds));
+  if (bpms.empty()) {
+    LOG->UserLog(
+        "Song file", sPath,
+        "SRC_AUDIT_FIX cannot export DWI without a BPM segment.");
+    return false;
+  }
+
+  const BPMSegment* firstBPM = static_cast<BPMSegment*>(bpms[0]);
+  if (firstBPM->GetRow() != 0 || !std::isfinite(firstBPM->GetBPM()) ||
+      firstBPM->GetBPM() <= 0.0f) {
+    LOG->UserLog(
+        "Song file", sPath,
+        "SRC_AUDIT_FIX cannot export DWI with invalid initial BPM row %i, BPM "
+        "%f.",
+        firstBPM->GetRow(), firstBPM->GetBPM());
+    return false;
+  }
+
+  if (!PutLineChecked(f, ssprintf("#FILE:%s;", DwiEscape(out.m_sMusicFile).c_str())) ||
+      !PutLineChecked(f, ssprintf("#BPM:%.3f;", firstBPM->GetBPM())) ||
+      !PutLineChecked(
+          f, ssprintf(
+                 "#GAP:%ld;",
+                 -std::lrint(
+                     out.m_SongTiming.m_fBeat0OffsetInSeconds * 1000))) ||
+      !PutLineChecked(
+          f, ssprintf("#SAMPLESTART:%.3f;", out.m_fMusicSampleStartSeconds)) ||
+      !PutLineChecked(
+          f, ssprintf("#SAMPLELENGTH:%.3f;", out.m_fMusicSampleLengthSeconds))) {
+    LOG->UserLog(
+        "Song file", sPath, "couldn't be written: %s", f.GetError().c_str());
+    return false;
+  }
   if (out.m_sCDTitleFile.size()) {
-    f.PutLine(ssprintf("#CDTITLE:%s;", DwiEscape(out.m_sCDTitleFile).c_str()));
+    if (!PutLineChecked(
+            f,
+            ssprintf("#CDTITLE:%s;", DwiEscape(out.m_sCDTitleFile).c_str()))) {
+      LOG->UserLog(
+          "Song file", sPath, "couldn't be written: %s", f.GetError().c_str());
+      return false;
+    }
   }
   switch (out.m_DisplayBPMType) {
     case DISPLAY_BPM_ACTUAL:
@@ -406,15 +533,25 @@ bool NotesWriterDWI::Write(std::string sPath, const Song& out) {
       break;
     case DISPLAY_BPM_SPECIFIED:
       if (out.m_fSpecifiedBPMMin == out.m_fSpecifiedBPMMax) {
-        f.PutLine(ssprintf("#DISPLAYBPM:%i;\n", (int)out.m_fSpecifiedBPMMin));
+        if (!PutLineChecked(
+                f,
+                ssprintf("#DISPLAYBPM:%i;", (int)out.m_fSpecifiedBPMMin))) {
+          return false;
+        }
       } else {
-        f.PutLine(ssprintf(
-            "#DISPLAYBPM:%i..%i;\n", (int)out.m_fSpecifiedBPMMin,
-            (int)out.m_fSpecifiedBPMMax));
+        if (!PutLineChecked(
+                f,
+                ssprintf(
+                    "#DISPLAYBPM:%i..%i;", (int)out.m_fSpecifiedBPMMin,
+                    (int)out.m_fSpecifiedBPMMax))) {
+          return false;
+        }
       }
       break;
     case DISPLAY_BPM_RANDOM:
-      f.PutLine("#DISPLAYBPM:*");
+      if (!PutLineChecked(f, "#DISPLAYBPM:*;")) {
+        return false;
+      }
       break;
     default:
       break;
@@ -424,31 +561,66 @@ bool NotesWriterDWI::Write(std::string sPath, const Song& out) {
   const std::vector<TimingSegment*>& stops =
       out.m_SongTiming.GetTimingSegments(SEGMENT_STOP);
   if (!stops.empty()) {
-    f.Write("#FREEZE:");
+    bool wroteFreeze = false;
 
     for (unsigned i = 0; i < stops.size(); i++) {
       const StopSegment* fs = static_cast<StopSegment*>(stops[i]);
-      f.Write(ssprintf(
-          "%.3f=%.3f", fs->GetRow() * 4.0f / ROWS_PER_BEAT,
-          std::round(fs->GetPause() * 1000)));
-      if (i != stops.size() - 1) {
-        f.Write(",");
+      if (fs->GetRow() < 0 || !std::isfinite(fs->GetPause()) ||
+          fs->GetPause() <= 0.0f) {
+        LOG->UserLog(
+            "Song file", sPath,
+            "SRC_AUDIT_FIX skipped invalid DWI stop at row %i, seconds %f.",
+            fs->GetRow(), fs->GetPause());
+        continue;
       }
+      if (!wroteFreeze && !WriteChecked(f, "#FREEZE:")) {
+        return false;
+      }
+      if (wroteFreeze && !WriteChecked(f, ",")) {
+        return false;
+      }
+      if (!WriteChecked(
+              f, ssprintf(
+                     "%.3f=%.3f", fs->GetRow() * 4.0f / ROWS_PER_BEAT,
+                     std::round(fs->GetPause() * 1000)))) {
+        return false;
+      }
+      wroteFreeze = true;
     }
-    f.PutLine(";");
+    if (wroteFreeze && !PutLineChecked(f, ";")) {
+      return false;
+    }
   }
 
   if (bpms.size() > 1) {
-    f.Write("#CHANGEBPM:");
+    bool wroteBPMChange = false;
     for (unsigned i = 1; i < bpms.size(); i++) {
       const BPMSegment* bs = static_cast<BPMSegment*>(bpms[i]);
-      f.Write(ssprintf(
-          "%.3f=%.3f", bs->GetRow() * 4.0f / ROWS_PER_BEAT, bs->GetBPM()));
-      if (i != bpms.size() - 1) {
-        f.Write(",");
+      if (bs->GetRow() < 0 || !std::isfinite(bs->GetBPM()) ||
+          bs->GetBPM() <= 0.0f) {
+        LOG->UserLog(
+            "Song file", sPath,
+            "SRC_AUDIT_FIX skipped invalid DWI BPM change at row %i, BPM %f.",
+            bs->GetRow(), bs->GetBPM());
+        continue;
       }
+      if (!wroteBPMChange && !WriteChecked(f, "#CHANGEBPM:")) {
+        return false;
+      }
+      if (wroteBPMChange && !WriteChecked(f, ",")) {
+        return false;
+      }
+      if (!WriteChecked(
+              f, ssprintf(
+                     "%.3f=%.3f", bs->GetRow() * 4.0f / ROWS_PER_BEAT,
+                     bs->GetBPM()))) {
+        return false;
+      }
+      wroteBPMChange = true;
     }
-    f.PutLine(";");
+    if (wroteBPMChange && !PutLineChecked(f, ";")) {
+      return false;
+    }
   }
 
   const std::vector<Steps*>& vpSteps = out.GetAllSteps();
@@ -458,21 +630,33 @@ bool NotesWriterDWI::Write(std::string sPath, const Song& out) {
       continue;  // don't save autogen notes
     }
 
-    if (!WriteDWINotesTag(f, *pSteps)) {
+    if (!WriteDWINotesTag(f, *pSteps, sPath)) {
       continue;
     }
 
-    WriteDWINotesField(f, *pSteps, 0);
+    if (!WriteDWINotesField(f, *pSteps, 0, sPath)) {
+      return false;
+    }
     if (pSteps->m_StepsType == StepsType_dance_double ||
         pSteps->m_StepsType == StepsType_dance_couple) {
-      f.PutLine(":");
-      WriteDWINotesField(f, *pSteps, 4);
+      if (!PutLineChecked(f, ":") ||
+          !WriteDWINotesField(f, *pSteps, 4, sPath)) {
+        return false;
+      }
     }
 
-    f.PutLine(";");
+    if (!PutLineChecked(f, ";")) {
+      return false;
+    }
   }
 
-  return true;
+  if (f.GetError() != "") {
+    LOG->UserLog(
+        "Song file", sPath, "couldn't be written: %s", f.GetError().c_str());
+    return false;
+  }
+
+  return FinishWrite(f, sPath);
 }
 
 /*
