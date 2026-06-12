@@ -52,7 +52,7 @@ std::string TechCounts::ToString(int iMaxValues) const {
 
   std::vector<std::string> asTechCounts;
   for (int r = 0; r < iMaxValues; r++) {
-    asTechCounts.push_back(ssprintf("%.3f", (*this)[r]));
+    asTechCounts.push_back(ssprintf("%.6f", (*this)[r]));
   }
 
   return join(",", asTechCounts);
@@ -67,7 +67,9 @@ void TechCounts::FromString(std::string sTechCounts) {
     return;
   }
 
-  FOREACH_ENUM(RadarCategory, rc) { (*this)[rc] = StringToFloat(saValues[rc]); }
+  FOREACH_ENUM(TechCountsCategory, tc) {
+    (*this)[tc] = StringToFloat(saValues[tc]);
+  }
 }
 
 void TechCounts::CalculateTechCountsFromRows(

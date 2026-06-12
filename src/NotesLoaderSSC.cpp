@@ -321,13 +321,30 @@ void SetMeter(StepsTagInfo& info) {
   info.ssc_format = true;
 }
 void SetRadarValues(StepsTagInfo& info) {
+  info.ssc_format = true;
   if (info.from_cache || info.for_load_edit) {
     std::vector<std::string> values;
     split((*info.params)[1], ",", values, true);
     // Instead of trying to use the version to figure out how many
     // categories to expect, look at the number of values and split them
     // evenly. -Kyz
+    if (values.empty() || values.size() % NUM_PlayerNumber != 0) {
+      LOG->Warn(
+          "Ignoring malformed #RADARVALUES in '%s': value count %zu is not "
+          "divisible by player count %d",
+          info.path.c_str(), values.size(), NUM_PlayerNumber);
+      return;
+    }
+
     size_t cats_per_player = values.size() / NUM_PlayerNumber;
+    if (cats_per_player > NUM_RadarCategory) {
+      LOG->Warn(
+          "Ignoring malformed #RADARVALUES in '%s': expected at most %d "
+          "values per player, got %zu",
+          info.path.c_str(), NUM_RadarCategory, cats_per_player);
+      return;
+    }
+
     RadarValues v[NUM_PLAYERS];
     FOREACH_PlayerNumber(pn) {
       for (size_t i = 0; i < cats_per_player; ++i) {
@@ -338,14 +355,24 @@ void SetRadarValues(StepsTagInfo& info) {
   } else {
     // just recalc at time.
   }
-  info.ssc_format = true;
 }
 
 void SetTechCounts(StepsTagInfo& info) {
+  info.ssc_format = true;
   if (info.from_cache || info.for_load_edit) {
     std::vector<std::string> values;
     split((*info.params)[1], ",", values, true);
-    std::size_t cats_per_player = values.size() / NUM_PlayerNumber;
+    constexpr std::size_t cats_per_player = NUM_TechCountsCategory;
+    constexpr std::size_t expected_values =
+        NUM_PlayerNumber * cats_per_player;
+    if (values.size() != expected_values) {
+      LOG->Warn(
+          "Ignoring malformed #TECHCOUNTS in '%s': expected %zu values, got "
+          "%zu",
+          info.path.c_str(), expected_values, values.size());
+      return;
+    }
+
     TechCounts v[NUM_PLAYERS];
     FOREACH_PlayerNumber(pn) {
       for (std::size_t i = 0; i < cats_per_player; ++i) {
@@ -356,7 +383,6 @@ void SetTechCounts(StepsTagInfo& info) {
   } else {
     // just recalc at time.
   }
-  info.ssc_format = true;
 }
 
 void SetNpsPerMeasure(StepsTagInfo& info) {
@@ -1034,6 +1060,13 @@ bool SSCLoader::LoadFromSimfile(
         }
         // This tag will get us to the next section.
         else if (sValueName == "NOTEDATA") {
+          if (pNewNotes != nullptr) {
+            LOG->UserLog(
+                "Song file", sPath,
+                "has a #NOTEDATA section without a closing #NOTES or "
+                "#STEPFILENAME; ignored.");
+            RageUtil::SafeDelete(pNewNotes);
+          }
           state = GETTING_STEP_INFO;
           pNewNotes = out.CreateSteps();
           stepsTiming = TimingData(out.m_SongTiming.m_fBeat0OffsetInSeconds);
@@ -1061,6 +1094,7 @@ bool SSCLoader::LoadFromSimfile(
           pNewNotes->TidyUpData();
           pNewNotes->SetFilename(sPath);
           out.AddSteps(pNewNotes);
+          pNewNotes = nullptr;
         } else if (sValueName == "STEPFILENAME") {
           state = GETTING_SONG_INFO;
           if (reused_steps_info.has_own_timing) {
@@ -1069,12 +1103,20 @@ bool SSCLoader::LoadFromSimfile(
           reused_steps_info.has_own_timing = false;
           pNewNotes->SetFilename(sParams[1]);
           out.AddSteps(pNewNotes);
+          pNewNotes = nullptr;
         } else {
           // Silently ignore unrecognized tags, as was done before. -Kyz
         }
         break;
       }
     }
+  }
+  if (pNewNotes != nullptr) {
+    LOG->UserLog(
+        "Song file", sPath,
+        "ended inside a #NOTEDATA section without #NOTES or #STEPFILENAME; "
+        "ignored.");
+    RageUtil::SafeDelete(pNewNotes);
   }
   out.m_fVersion = STEPFILE_VERSION_NUMBER;
   TidyUpData(out, bFromCache);
@@ -1131,7 +1173,16 @@ bool SSCLoader::LoadEditFromMsd(
           handler != parser_helper.steps_tag_handlers.end()) {
         handler->second(reused_steps_info);
       } else if (sValueName == "NOTEDATA") {
+        if (pNewNotes != nullptr) {
+          LOG->UserLog(
+              "Edit file", sEditFilePath,
+              "has a #NOTEDATA section without a closing #NOTES tag; "
+              "ignored.");
+          RageUtil::SafeDelete(pNewNotes);
+        }
         pNewNotes = pSong->CreateSteps();
+        stepsTiming = TimingData(pSong->m_SongTiming.m_fBeat0OffsetInSeconds);
+        reused_steps_info.has_own_timing = false;
         reused_steps_info.steps = pNewNotes;
         reused_steps_info.ssc_format = true;
       } else if (sValueName == "NOTES") {
@@ -1151,12 +1202,11 @@ bool SSCLoader::LoadEditFromMsd(
           continue;
         }
 
-        // I have no idea what the purpose of this bAddStepsToSong flag is.
-        // It looks like it causes LoadEditFromMsd to just throw away
-        // whatever steps data was loaded, possibly leaking the memory used
-        // by pNewNotes.  It was here before I rewrote LoadEditFromMsd to
-        // use a map instead of an else if chain, so I preserved it. -Kyz
+        // Some callers only validate whether an edit can be loaded, without
+        // adding it to the song.  Discard the temporary Steps cleanly in that
+        // case.
         if (!bAddStepsToSong) {
+          RageUtil::SafeDelete(pNewNotes);
           return true;
         }
 
@@ -1192,6 +1242,7 @@ bool SSCLoader::LoadEditFromMsd(
         pNewNotes->SetFilename(sEditFilePath);
 
         pSong->AddSteps(pNewNotes);
+        pNewNotes = nullptr;
         return true;  // Only allow one Steps per edit file!
       } else {
         LOG->UserLog(
@@ -1231,6 +1282,7 @@ bool SSCLoader::LoadEditFromMsd(
       }
     }
   }
+  RageUtil::SafeDelete(pNewNotes);
   // Edit had no valid #NOTES sections
   return false;
 }

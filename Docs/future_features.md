@@ -360,3 +360,92 @@ Statut: retenu comme future feature, non implémenté.
 Raison du report: la valeur arcade est claire, mais l'import USB touche au
 système de fichiers et doit être livré avec validation stricte, logs et garde-fous
 anti-suppression accidentelle.
+
+## Tech parser: compteurs plus spécifiques
+
+### Objectif
+
+Étendre les valeurs calculées par le tech parser et écrites dans le cache
+`#TECHCOUNTS` afin de disposer de métriques plus fines pour l'analyse des
+charts.
+
+Nouveaux compteurs demandés:
+
+- `LeftSideswitches`
+- `RightSideswitches`
+- `ForcedDoublesteps`
+- `UnforcedDoublesteps`
+
+Ordre cible proposé:
+
+```text
+Crossovers
+HalfCrossovers
+FullCrossovers
+Footswitches
+UpFootswitches
+DownFootswitches
+Sideswitches
+LeftSideswitches
+RightSideswitches
+Jacks
+Brackets
+Doublesteps
+ForcedDoublesteps
+UnforcedDoublesteps
+```
+
+### Décision technique proposée
+
+Traiter cette évolution comme une modification de format de cache, pas comme un
+simple ajout d'énumérations.
+
+`LeftSideswitches` et `RightSideswitches` sont les plus simples à ajouter: le
+parser connaît déjà les flèches latérales et la position `x` des panneaux dans
+`StageLayout`. Ces sous-compteurs doivent toujours s'additionner à
+`Sideswitches`.
+
+`ForcedDoublesteps` et `UnforcedDoublesteps` demandent plus de prudence. Le
+générateur de parité connaît les holds, mines et coûts, mais la définition exacte
+de "forced" doit être testée pour ne pas produire une métrique trompeuse.
+
+### Point de vigilance repéré
+
+`TechCounts::FromString()` utilise actuellement `RadarCategory` au lieu de
+`TechCountsCategory` pour remplir ses valeurs. Le loader `#TECHCOUNTS` ne semble
+pas appeler directement cette méthode aujourd'hui, mais c'est fragile et doit
+être corrigé avant ou pendant toute évolution de `TechCounts`.
+
+### Compatibilité cache
+
+Le champ `#TECHCOUNTS` est positionnel. Insérer de nouvelles valeurs au milieu
+peut décaler les anciens caches et faire lire `Jacks`, `Brackets` ou
+`Doublesteps` dans les mauvaises catégories.
+
+Le loader doit accepter au minimum:
+
+- ancien format à 10 valeurs par joueur;
+- nouveau format à 14 valeurs par joueur;
+- valeurs invalides ou nombre inattendu: recalcul ou `MakeUnknown()`, jamais
+  interprétation silencieuse.
+
+Une hausse de version du cache chanson doit être prévue si le format écrit
+change.
+
+### Critères d'acceptation
+
+- Les anciens caches `#TECHCOUNTS` restent lisibles sans décalage de champs.
+- Les nouveaux caches écrivent les 14 compteurs dans l'ordre documenté.
+- `LeftSideswitches + RightSideswitches == Sideswitches`.
+- `ForcedDoublesteps + UnforcedDoublesteps == Doublesteps`.
+- `TechCounts::FromString()` itère sur `TechCountsCategory`.
+- Les accès Lua par nom continuent à fonctionner pour les anciens compteurs.
+- Les nouveaux compteurs sont accessibles via Lua.
+
+### Décision actuelle
+
+Statut: retenu comme future feature, non implémenté.
+
+Raison du report: la valeur analytique est réelle, mais la compatibilité du cache
+et la définition des doublesteps forcés/non forcés doivent être verrouillées par
+des tests avant intégration.
