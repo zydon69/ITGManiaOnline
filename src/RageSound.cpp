@@ -253,6 +253,32 @@ void RageSound::LoadSoundReader(RageSoundReader* pSound) {
   m_pSource = pSound;
 }
 
+namespace {
+void AppendMixPosition(
+    RageSoundMixPosition* pPositions, int iMaxPositions, int& iPositionCount,
+    int64_t iSourceFrame, int iGotFrames, float fRate) {
+  if (iPositionCount > 0) {
+    RageSoundMixPosition& previous = pPositions[iPositionCount - 1];
+    const int64_t iExpectedSourceFrame =
+        previous.m_iSourceFrame +
+        static_cast<int64_t>(std::llround(
+            previous.m_iFrames *
+            static_cast<double>(previous.m_fSourceToStreamRatio)));
+    if (previous.m_fSourceToStreamRatio == fRate &&
+        iExpectedSourceFrame == iSourceFrame) {
+      previous.m_iFrames += iGotFrames;
+      return;
+    }
+  }
+
+  ASSERT_M(iPositionCount < iMaxPositions, ssprintf("%d", iMaxPositions));
+  RageSoundMixPosition& position = pPositions[iPositionCount++];
+  position.m_iSourceFrame = iSourceFrame;
+  position.m_iFrames = iGotFrames;
+  position.m_fSourceToStreamRatio = fRate;
+}
+}  // namespace
+
 /*
  * Retrieve audio data, for mixing.  At the time of this call, the frameno at
  * which the sound will be played doesn't have to be known.  Once committed, and
@@ -305,14 +331,9 @@ int RageSound::GetDataToPlay(
       }
     }
 
-    // Scoped global audio mutex lock while updating the position maps.
-    {
-      LockMut(m_Mutex);
-      m_StreamToSourceMap.Insert(
-          m_iStreamFrame, iGotFrames, iSourceFrame, fRate);
-      m_iStreamFrame += iGotFrames;
-    }
-
+    AppendMixPosition(
+        pPositions, iMaxPositions, iPositionCount, iSourceFrame, iGotFrames,
+        fRate);
     iFramesStored += iGotFrames;
     iFrames -= iGotFrames;
   }
