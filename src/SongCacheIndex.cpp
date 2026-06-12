@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "CommonMetrics.h"
+#include "CryptManager.h"
 #include "RageFileManager.h"
 #include "RageLog.h"
 #include "RageThreads.h"
@@ -51,19 +52,16 @@ std::string SongCacheIndex::GetCacheFilePath(
   } else {
     s = sPath;
   }
-  /* Change slashes and invalid utf-8 characters to _.
-   * http://en.wikipedia.org/wiki/UTF-8
-   * macOS doesn't support precomposed unicode characters in files names and
-   * so we should probably replace them with combining diacritics.
-   * XXX How do we do this and is it even worth it? */
-  const char* invalid = "/\xc0\xc1\xfe\xff\xf8\xf9\xfa\xfb\xfc\xfd\xf5\xf6\xf7";
-  for (size_t pos = s.find_first_of(invalid); pos != std::string::npos;
-       pos = s.find_first_of(invalid, pos)) {
-    s[pos] = '_';
-  }
+
+  // Cache filenames must be a lossless mapping from song/course/image paths.
+  // Replacing separators with '_' makes paths like foo/bar_baz and foo_bar/baz
+  // collide, so use a stable filename-safe digest of the normalized path.
+  const std::string sCacheName =
+      BinaryToHex(CryptManager::GetSHA1ForString(s));
   // CACHE_DIR ends with a /.
   return ssprintf(
-      "%s%s/%s", SpecialFiles::CACHE_DIR.c_str(), sGroup.c_str(), s.c_str());
+      "%s%s/%s", SpecialFiles::CACHE_DIR.c_str(), sGroup.c_str(),
+      sCacheName.c_str());
 }
 
 SongCacheIndex::SongCacheIndex() : Mutex("SongCacheIndex") { ReadCacheIndex(); }
