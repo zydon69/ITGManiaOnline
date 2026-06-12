@@ -483,7 +483,17 @@ struct bmsCommandTree {
         randomStack.push_back(0);
       }
 
-      randomStack[currentNode->branchHeight] = rand() % StringToInt(value) + 1;
+      const int randomMax = StringToInt(value);
+      if (randomMax <= 0) {
+        LOG->UserLog(
+            "Song file", path,
+            "Line %d: #RANDOM value \"%s\" is invalid; branch will be "
+            "considered false.",
+            line, value.c_str());
+        randomStack[currentNode->branchHeight] = 0;
+      } else {
+        randomStack[currentNode->branchHeight] = rand() % randomMax + 1;
+      }
     } else {
       if (statement.size() >= 7 &&
           ('0' <= statement[1] && statement[1] <= '9') &&
