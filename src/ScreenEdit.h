@@ -255,6 +255,8 @@ class ScreenEdit : public ScreenWithMenuElements {
 
   void TransitionEditState(EditState em);
   void ScrollTo(float fDestinationBeat);
+  bool IsGameplayColumnInputPressed() const;
+  void UpdateGameplayInputReleaseGuard();
   void PlayTicks();
   void PlayPreviewMusic();
 
@@ -406,6 +408,7 @@ class ScreenEdit : public ScreenWithMenuElements {
   // for MODE_RECORD and MODE_PLAY
   int m_iStartPlayingAt, m_iStopPlayingAt;
   float m_fBeatToReturnTo;
+  bool m_bIgnoreGameplayInputUntilRelease;
 
   AutoKeysounds m_AutoKeysounds;
   RageSound* m_pSoundMusic;

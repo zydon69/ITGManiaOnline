@@ -1749,6 +1749,7 @@ void ScreenEdit::Init() {
   m_iShiftAnchor = -1;
   m_iStartPlayingAt = -1;
   m_iStopPlayingAt = -1;
+  m_bIgnoreGameplayInputUntilRelease = false;
 
   attackInProcess = -1;
   modInProcess = -1;
@@ -1992,7 +1993,10 @@ void ScreenEdit::Update(float fDeltaTime) {
     }
   }
 
-  if (m_EditState == STATE_RECORDING) {
+  UpdateGameplayInputReleaseGuard();
+
+  if (m_EditState == STATE_RECORDING &&
+      !m_bIgnoreGameplayInputUntilRelease) {
     // TODO: Find a way to prevent STATE_RECORDING when in Song Timing.
 
     for (int t = 0;
@@ -2067,19 +2071,8 @@ void ScreenEdit::Update(float fDeltaTime) {
      * the end of the range.  We won't allow placing anything outside of the
      * range.
      */
-    bool bButtonIsBeingPressed = false;
-    for (int t = 0;
-         t < GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber())
-                 ->m_iColsPerPlayer;
-         t++)  // for each track
-    {
-      std::vector<GameInput> GameI;
-      GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber())
-          ->StyleInputToGameInput(t, PLAYER_1, GameI);
-      if (INPUTMAPPER->IsBeingPressed(GameI)) {
-        bButtonIsBeingPressed = true;
-      }
-    }
+    bool bButtonIsBeingPressed =
+        !m_bIgnoreGameplayInputUntilRelease && IsGameplayColumnInputPressed();
 
     float fLastBeat = NoteRowToBeat(m_iStopPlayingAt);
     if (bButtonIsBeingPressed && m_EditState == STATE_RECORDING) {
@@ -3638,6 +3631,11 @@ bool ScreenEdit::InputRecord(const InputEventPlus& input, EditButton EditB) {
     return false;
   }
 
+  if (m_bIgnoreGameplayInputUntilRelease) {
+    UpdateGameplayInputReleaseGuard();
+    return true;
+  }
+
   switch (input.type) {
     DEFAULT_FAIL(input.type);
     case IET_FIRST_PRESS: {
@@ -3746,6 +3744,12 @@ bool ScreenEdit::InputPlay(const InputEventPlus& input, EditButton EditB) {
 
   GameButtonType gbt =
       GAMESTATE->m_pCurGame->GetPerButtonInfo(input.GameI.button)->m_gbt;
+
+  if (m_bIgnoreGameplayInputUntilRelease && gbt == GameButtonType_Step) {
+    UpdateGameplayInputReleaseGuard();
+    return true;
+  }
+
   if (player_manager_.HandleGameplayInput(input, gbt)) {
     return true;
   };
@@ -4013,6 +4017,47 @@ void ScreenEdit::TransitionEditState(EditState em) {
   }
 
   m_EditState = em;
+
+  if (bStateChanging && (em == STATE_RECORDING || em == STATE_PLAYING)) {
+    m_bIgnoreGameplayInputUntilRelease = IsGameplayColumnInputPressed();
+    if (m_bIgnoreGameplayInputUntilRelease) {
+      LOG->Trace(
+          "ScreenEdit: ignoring held gameplay columns until release after "
+          "entering %s",
+          EditStateToString(em).c_str());
+    }
+  } else if (em != STATE_RECORDING && em != STATE_PLAYING) {
+    m_bIgnoreGameplayInputUntilRelease = false;
+  }
+}
+
+bool ScreenEdit::IsGameplayColumnInputPressed() const {
+  const Style* style =
+      GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber());
+  if (style == nullptr) {
+    return false;
+  }
+
+  for (int t = 0; t < style->m_iColsPerPlayer; ++t) {
+    std::vector<GameInput> gameInputs;
+    style->StyleInputToGameInput(t, PLAYER_1, gameInputs);
+    if (INPUTMAPPER->IsBeingPressed(gameInputs)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void ScreenEdit::UpdateGameplayInputReleaseGuard() {
+  if (!m_bIgnoreGameplayInputUntilRelease) {
+    return;
+  }
+
+  if (!IsGameplayColumnInputPressed()) {
+    m_bIgnoreGameplayInputUntilRelease = false;
+    LOG->Trace("ScreenEdit: gameplay column input release guard cleared");
+  }
 }
 
 void ScreenEdit::ScrollTo(float fDestinationBeat) {
