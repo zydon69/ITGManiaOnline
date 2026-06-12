@@ -1404,6 +1404,10 @@ void HandleInputEvents(float fDeltaTime) {
     return;
   }
 
+  if (!ieArray.empty()) {
+    GameLoop::ResetInputIdleTimer();
+  }
+
   for (unsigned i = 0; i < ieArray.size(); i++) {
     InputEventPlus input;
     input.DeviceI = ieArray[i].di;
