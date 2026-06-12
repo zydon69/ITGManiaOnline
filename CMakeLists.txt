@@ -38,4 +38,9 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_SOURCE_DIR}/CMake/CheckBMSLoaderInvariants.cmake)
+  add_test(
+    NAME json_loader_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckJsonLoaderInvariants.cmake)
 endif()

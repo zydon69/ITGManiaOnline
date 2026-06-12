@@ -13,6 +13,7 @@
 #include "NoteTypes.h"
 #include "PlayerNumber.h"
 #include "RadarValues.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "Song.h"
 #include "StdString.h"
@@ -90,33 +91,86 @@ static void Deserialize(BackgroundChange& o, const Json::Value& root) {
 
 static void Deserialize(TapNote& o, const Json::Value& root) {
   if (root.isInt()) {
-    o.type = (TapNoteType)root["Type"].asInt();
+    o.type = (TapNoteType)root.asInt();
+    return;
   }
 
-  // TODO should all of this also be within the if statement?
-  // It was not in the if statement previously, but that may have been
-  // unintentional.
-  o.subType = (TapNoteSubType)root["SubType"].asInt();
-  o.sAttackModifiers = root["AttackModifiers"].asString();
-  o.fAttackDurationSeconds = (float)root["AttackDurationSeconds"].asDouble();
-  o.iKeysoundIndex = root["KeysoundIndex"].asInt();
-  o.iDuration = root["Duration"].asInt();
-  o.pn = (PlayerNumber)root["PlayerNumber"].asInt();
+  if (!root.isObject()) {
+    return;
+  }
+
+  // NotesWriterJson omits Type for normal taps, so an object without Type
+  // still represents a tap rather than an empty note.
+  o.type = root.isMember("Type") ? (TapNoteType)root["Type"].asInt()
+                                 : TapNoteType_Tap;
+  if (o.type < TapNoteType_Empty || o.type >= NUM_TapNoteType) {
+    LOG->Warn("SRC_AUDIT_FIX JSON note has invalid TapNoteType %i; treating "
+              "it as empty.",
+              (int)o.type);
+    o = TAP_EMPTY;
+    return;
+  }
+
+  if (root.isMember("SubType")) {
+    o.subType = (TapNoteSubType)root["SubType"].asInt();
+  } else if (o.type == TapNoteType_HoldHead) {
+    o.subType = TapNoteSubType_Hold;
+  }
+  if (root.isMember("AttackModifiers")) {
+    o.sAttackModifiers = root["AttackModifiers"].asString();
+  }
+  if (root.isMember("AttackDurationSeconds")) {
+    o.fAttackDurationSeconds = (float)root["AttackDurationSeconds"].asDouble();
+  }
+  if (root.isMember("KeysoundIndex")) {
+    o.iKeysoundIndex = root["KeysoundIndex"].asInt();
+  }
+  if (root.isMember("Duration")) {
+    o.iDuration = root["Duration"].asInt();
+  }
+  if (root.isMember("PlayerNumber")) {
+    o.pn = (PlayerNumber)root["PlayerNumber"].asInt();
+  }
 }
 
-static void Deserialize(StepsType st, NoteData& nd, const Json::Value& root) {
-  int iTracks = nd.GetNumTracks();
+static bool Deserialize(StepsType st, NoteData& nd, const Json::Value& root) {
+  if (st == StepsType_Invalid) {
+    LOG->Warn("SRC_AUDIT_FIX JSON chart has invalid StepsType; notes ignored.");
+    return false;
+  }
+
+  const int iTracks = GAMEMAN->GetStepsTypeInfo(st).iNumTracks;
   nd.SetNumTracks(iTracks);
+  if (!root.isArray()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX JSON chart NoteData is not an array; notes ignored.");
+    return false;
+  }
+
   for (unsigned i = 0; i < root.size(); i++) {
     Json::Value root2 = root[i];
+    if (!root2.isArray() || root2.size() < 3) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX JSON chart note entry %u is malformed; skipped.", i);
+      continue;
+    }
     float fBeat = (float)root2[(unsigned)0].asDouble();
     int iRow = BeatToNoteRow(fBeat);
     int iTrack = root2[1].asInt();
+    if (iTrack < 0 || iTrack >= iTracks) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX JSON chart note entry %u has invalid track %i for %i "
+          "tracks; "
+          "skipped.",
+          i, iTrack, iTracks);
+      continue;
+    }
     const Json::Value& root3 = root2[2];
     TapNote tn;
     Deserialize(tn, root3);
     nd.SetTapNote(iTrack, iRow, tn);
   }
+  return true;
 }
 
 static void Deserialize(RadarValues& o, const Json::Value& root) {
@@ -125,13 +179,22 @@ static void Deserialize(RadarValues& o, const Json::Value& root) {
   }
 }
 
-static void Deserialize(Steps& o, const Json::Value& root) {
+static bool Deserialize(Steps& o, const Json::Value& root) {
   o.m_StepsType = GAMEMAN->StringToStepsType(root["StepsType"].asString());
+  if (o.m_StepsType == StepsType_Invalid) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX JSON chart has unknown StepsType '%s'; chart ignored.",
+        root["StepsType"].asString().c_str());
+    return false;
+  }
+  o.m_StepsTypeStr = GAMEMAN->GetStepsTypeInfo(o.m_StepsType).szName;
 
   o.Decompress();
 
   NoteData nd;
-  Deserialize(o.m_StepsType, nd, root["NoteData"]);
+  if (!Deserialize(o.m_StepsType, nd, root["NoteData"])) {
+    return false;
+  }
   o.SetNoteData(nd);
   // o.SetHash( root["Hash"].asInt() );
   o.SetDescription(root["Description"].asString());
@@ -141,6 +204,7 @@ static void Deserialize(Steps& o, const Json::Value& root) {
   RadarValues rv[NUM_PLAYERS];
   FOREACH_PlayerNumber(pn) { Deserialize(rv[pn], root["RadarValues"]); }
   o.SetRadarValues(rv);
+  return true;
 }
 
 static void Deserialize(Song& out, const Json::Value& root) {
@@ -207,11 +271,14 @@ static void Deserialize(Song& out, const Json::Value& root) {
   out.m_vsKeysoundFile = JsonUtil::DeserializeArrayStrings(root["KeySounds"]);
 
   {
-    std::vector<Steps*> vpSteps;
-    JsonUtil::DeserializeVectorPointersParam<Steps, Song*>(
-        vpSteps, Deserialize, root["Charts"], &out);
-    for (Steps* step : vpSteps) {
-      out.AddSteps(step);
+    const Json::Value& charts = root["Charts"];
+    for (unsigned i = 0; i < charts.size(); ++i) {
+      Steps* step = new Steps(&out);
+      if (Deserialize(*step, charts[i])) {
+        out.AddSteps(step);
+      } else {
+        RageUtil::SafeDelete(step);
+      }
     }
   }
 }
