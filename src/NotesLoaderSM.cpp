@@ -559,14 +559,23 @@ void SMLoader::ProcessBPMsAndStops(
       LOG->UserLog(
           "Song file", this->GetSongTitle(),
           "has no valid BPMs.  Defaulting to 60.");
-    } else {
-      // Yep.  Get the next BPM.
-      ibpm++;
+    } else if (ibpm->second > 0 && ibpm->second <= FAST_BPM_WARP) {
+      // Yep.  Use the first future BPM as the initial BPM, then consume it
+      // because the same BPM value at its original beat would be redundant.
+      const float nextBpmBeat = ibpm->first;
       bpm = ibpm->second;
+      ++ibpm;
       LOG->UserLog(
           "Song file", this->GetSongTitle(),
-          "does not establish a BPM before beat 0.  "
-          "Using the value from the next BPM change.");
+          "does not establish a BPM before beat 0.  Using BPM %.6f from beat "
+          "%.6f as the initial BPM.",
+          bpm, nextBpmBeat);
+    } else {
+      bpm = 60;
+      LOG->UserLog(
+          "Song file", this->GetSongTitle(),
+          "does not establish a normal BPM before beat 0.  Defaulting to 60 "
+          "until the first timing change.");
     }
   }
   // We always want to have an initial BPM.  If we start out warping, this
