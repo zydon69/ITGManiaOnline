@@ -4182,8 +4182,13 @@ void ScreenEdit::HandleScreenMessage(const ScreenMessage SM) {
     HandleTimingDataChangeChoice(
         (TimingDataChangeChoice)ScreenMiniMenu::s_iLastRowCode,
         ScreenMiniMenu::s_viLastAnswers);
-  } else if (SM == SM_BackFromDifficultyMeterChange) {
+  } else if (
+      SM == SM_BackFromDifficultyMeterChange &&
+      !ScreenTextEntry::s_bCancelledLast) {
     int i = StringToInt(ScreenTextEntry::s_sLastAnswer);
+    if (i < 1) {
+      return;
+    }
     GAMESTATE->m_pCurSteps[PLAYER_1]->SetMeter(i);
     SetDirty(true);
   } else if (
