@@ -133,7 +133,8 @@ bool FadingBanner::LoadFromCachedBanner(const std::string& path) {
    * which will cause the fade-in to be further delayed. */
 
   RageTextureID ID;
-  bool bLowRes = (PREFSMAN->m_ImageCache != IMGCACHE_FULL);
+  const bool bIsMovie = ActorUtil::GetFileType(path) == FT_Movie;
+  bool bLowRes = !bIsMovie && (PREFSMAN->m_ImageCache != IMGCACHE_FULL);
   if (!bLowRes) {
     ID = Sprite::SongBannerTexture(path);
   } else {

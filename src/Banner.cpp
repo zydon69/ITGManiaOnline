@@ -67,7 +67,8 @@ void Banner::LoadFromCachedBanner(const std::string& sPath) {
   }
 
   RageTextureID ID;
-  bool bLowRes = (PREFSMAN->m_ImageCache != IMGCACHE_FULL);
+  const bool bIsMovie = ActorUtil::GetFileType(sPath) == FT_Movie;
+  bool bLowRes = !bIsMovie && (PREFSMAN->m_ImageCache != IMGCACHE_FULL);
   if (!bLowRes) {
     ID = Sprite::SongBannerTexture(sPath);
   } else {

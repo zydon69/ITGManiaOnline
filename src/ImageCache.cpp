@@ -7,6 +7,7 @@
 #include <map>
 #include <string>
 
+#include "ActorUtil.h"
 #include "Preference.h"
 #include "PrefsManager.h"
 #include "RageDisplay.h"
@@ -59,6 +60,10 @@ ImageCache* IMAGECACHE;  // global and accessible from anywhere in our program
 
 static std::map<std::string, RageSurface*> g_ImagePathToImage;
 static int g_iDemandRefcount = 0;
+
+static bool IsCacheableImagePath(const std::string& sImagePath) {
+  return ActorUtil::GetFileType(sImagePath) == FT_Bitmap;
+}
 
 /* Synchronizes access to g_ImagePathToImage and ImageCache::ImageData. */
 static RageMutex g_ImageCacheMutex("ImageCache");
@@ -120,6 +125,9 @@ void ImageCache::Undemand(std::string sImageDir) {
 void ImageCache::LoadImage(std::string sImageDir, std::string sImagePath) {
   if (sImagePath == "") {
     return;  // nothing to do
+  }
+  if (!IsCacheableImagePath(sImagePath)) {
+    return;
   }
   if (PREFSMAN->m_ImageCache != IMGCACHE_LOW_RES_PRELOAD &&
       PREFSMAN->m_ImageCache != IMGCACHE_LOW_RES_LOAD_ON_DEMAND) {
@@ -293,6 +301,9 @@ RageTextureID ImageCache::LoadCachedImage(
   if (sImagePath == "" || Found != std::string::npos) {
     return ID;
   }
+  if (!IsCacheableImagePath(sImagePath)) {
+    return ID;
+  }
 
   // LOG->Trace( "ImageCache::LoadCachedImage(%s): %s", sImagePath.c_str(),
   // ID.filename.c_str() );
@@ -358,6 +369,9 @@ static inline int closest(int num, int n1, int n2) {
 void ImageCache::CacheImage(std::string sImageDir, std::string sImagePath) {
   if (PREFSMAN->m_ImageCache != IMGCACHE_LOW_RES_PRELOAD &&
       PREFSMAN->m_ImageCache != IMGCACHE_LOW_RES_LOAD_ON_DEMAND) {
+    return;
+  }
+  if (!IsCacheableImagePath(sImagePath)) {
     return;
   }
 

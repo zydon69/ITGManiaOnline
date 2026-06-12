@@ -21,6 +21,19 @@ local try_diffusealpha = function(af, alpha)
 	af:diffusealpha(alpha)
 end
 
+local update_winner = function()
+	if p1_dp == p2_dp then
+		try_diffusealpha(p1_score, 1)
+		try_diffusealpha(p2_score, 1)
+	elseif p1_dp > p2_dp then
+		try_diffusealpha(p1_score, 1)
+		try_diffusealpha(p2_score, 0.65)
+	elseif p2_dp > p1_dp then
+		try_diffusealpha(p1_score, 0.65)
+		try_diffusealpha(p2_score, 1)
+	end
+end
+
 return Def.Actor{
 	OnCommand=function(self)
 		local underlay = SCREENMAN:GetTopScreen():GetChild("Underlay")
@@ -36,7 +49,7 @@ return Def.Actor{
 			elseif params.Player == PLAYER_2 then
 				p2_dp = p2_pss:GetActualDancePoints() / p2_pss:GetPossibleDancePoints()
 			end
-			self:queuecommand("Winning")
+			update_winner()
 		end
 	end,
 	ExCountsChangedMessageCommand=function(self, params)
@@ -46,19 +59,7 @@ return Def.Actor{
 			elseif params.Player == PLAYER_2 then
 				p2_dp = params.ExScore
 			end
-			self:queuecommand("Winning")
-		end
-	end,
-	WinningCommand=function(self)
-		if p1_dp == p2_dp then
-			try_diffusealpha(p1_score, 1)
-			try_diffusealpha(p2_score, 1)
-		elseif p1_dp > p2_dp then
-			try_diffusealpha(p1_score, 1)
-			try_diffusealpha(p2_score, 0.65)
-		elseif p2_dp > p1_dp then
-			try_diffusealpha(p1_score, 0.65)
-			try_diffusealpha(p2_score, 1)
+			update_winner()
 		end
 	end
 }
