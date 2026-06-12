@@ -179,6 +179,9 @@ class RageSoundDriver : public RageDriver {
     float m_Buffer[samples_per_block];
     float* m_BufferNext;   // beginning of the unread data
     int m_FramesInBuffer;  // total number of frames at m_BufferNext
+    // A span is one contiguous decoded segment with a known source-frame
+    // range. The mixer uses these spans to map hardware playback time back to
+    // the original sound position, even when one buffer contains several cuts.
     MixingPositionInfo m_PositionSpans[samples_per_block];
     int m_iPositionSpanCount;
     int m_iCurrentPositionSpan;
