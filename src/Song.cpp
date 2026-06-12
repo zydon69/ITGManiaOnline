@@ -75,6 +75,88 @@ static Preference<float> g_fMarathonVerSongSeconds(
     "MarathonVerSongSeconds", 60 * 5.f);
 static Preference<bool> g_BackUpAllSongSaves("BackUpAllSongSaves", false);
 
+namespace {
+bool IsValidBackgroundLayer(BackgroundLayer layer) {
+  return layer >= BACKGROUND_LAYER_1 && layer < NUM_BackgroundLayer;
+}
+
+bool IsValidStepsTypeIndex(StepsType st) {
+  return st == StepsType_Invalid || (st >= 0 && st < NUM_StepsType);
+}
+
+bool IsPlayableStepsTypeIndex(StepsType st) {
+  return st >= 0 && st < NUM_StepsType;
+}
+
+bool IsValidInstrumentTrackIndex(InstrumentTrack it) {
+  return it >= 0 && it < NUM_InstrumentTrack;
+}
+
+bool IsAbsoluteSongAssetPath(const std::string& path) {
+  if (path.empty()) {
+    return false;
+  }
+  if (path[0] == '/' || path[0] == '\\') {
+    return true;
+  }
+  return path.size() >= 2 && std::isalpha(static_cast<unsigned char>(path[0])) &&
+         path[1] == ':';
+}
+
+std::vector<std::string> GetNonEmptyPathParts(const std::string& path) {
+  std::vector<std::string> raw;
+  std::vector<std::string> parts;
+  split(path, "/", raw, false);
+  for (const std::string& part : raw) {
+    if (!part.empty()) {
+      parts.push_back(part);
+    }
+  }
+  return parts;
+}
+
+bool ApplySongPathFields(
+    Song& song, const std::string& path, ProfileSlot from_profile,
+    bool& use_cache) {
+  const std::vector<std::string> parts = GetNonEmptyPathParts(path);
+  if (parts.empty()) {
+    LOG->UserLog(
+        "Song", path,
+        "SRC_AUDIT_FIX rejected song directory with no path components.");
+    return false;
+  }
+
+  song.m_sSongName = parts.back();
+  if (song.m_sSongName.empty()) {
+    LOG->UserLog(
+        "Song", path, "SRC_AUDIT_FIX rejected song directory with no name.");
+    return false;
+  }
+
+  if (from_profile == ProfileSlot_Invalid) {
+    if (parts.size() < 3) {
+      LOG->UserLog(
+          "Song", path,
+          "SRC_AUDIT_FIX rejected song directory outside a group folder.");
+      return false;
+    }
+    song.m_sGroupName = parts[parts.size() - 2];
+    if (song.m_sGroupName.empty()) {
+      LOG->UserLog(
+          "Song", path,
+          "SRC_AUDIT_FIX rejected song directory with empty group name.");
+      return false;
+    }
+  } else {
+    song.m_LoadedFromProfile = from_profile;
+    song.m_sGroupName = parts.front();
+    use_cache = false;
+  }
+
+  return true;
+}
+}  // namespace
+
 static const char* InstrumentTrackNames[] = {
     "Guitar",
     "Rhythm",
@@ -178,6 +260,14 @@ void Song::Reset() {
 }
 
 void Song::AddBackgroundChange(BackgroundLayer iLayer, BackgroundChange seg) {
+  if (!IsValidBackgroundLayer(iLayer)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Ignoring background change for invalid layer %i in "
+        "'%s'.",
+        iLayer, m_sSongDir.c_str());
+    return;
+  }
+
   // Delete old background change at this start beat, if any.
   auto& changes = GetBackgroundChanges(iLayer);
   for (std::vector<BackgroundChange>::iterator bgc = changes.begin();
@@ -188,7 +278,6 @@ void Song::AddBackgroundChange(BackgroundLayer iLayer, BackgroundChange seg) {
     }
   }
 
-  ASSERT(iLayer >= 0 && iLayer < NUM_BackgroundLayer);
   BackgroundUtil::AddBackgroundChange(GetBackgroundChanges(iLayer), seg);
 }
 
@@ -227,12 +316,30 @@ void Song::GetDisplayBpms(DisplayBpms& AddTo) const {
 
 const BackgroundChange& Song::GetBackgroundAtBeat(
     BackgroundLayer iLayer, float fBeat) const {
-  for (unsigned i = 0; i < GetBackgroundChanges(iLayer).size() - 1; i++) {
-    if (GetBackgroundChanges(iLayer)[i + 1].m_fStartBeat > fBeat) {
-      return GetBackgroundChanges(iLayer)[i];
+  static const BackgroundChange empty_change;
+  if (!IsValidBackgroundLayer(iLayer)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Requested background at beat %.6f for invalid layer %i "
+        "in '%s'.",
+        fBeat, iLayer, m_sSongDir.c_str());
+    return empty_change;
+  }
+
+  const auto& changes = GetBackgroundChanges(iLayer);
+  if (changes.empty()) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX: Requested background at beat %.6f for '%s' with no "
+        "background changes.",
+        fBeat, m_sSongDir.c_str());
+    return empty_change;
+  }
+
+  for (unsigned i = 0; i + 1 < changes.size(); i++) {
+    if (changes[i + 1].m_fStartBeat > fBeat) {
+      return changes[i];
     }
   }
-  return GetBackgroundChanges(iLayer)[0];
+  return changes.back();
 }
 
 std::string Song::GetCacheFilePath() const {
@@ -1204,6 +1311,17 @@ bool Song::HasStepsTypeAndDifficulty(StepsType st, Difficulty dc) const {
   return SongUtil::GetOneSteps(this, st, dc) != nullptr;
 }
 
+const std::vector<Steps*>& Song::GetStepsByStepsType(StepsType st) const {
+  static const std::vector<Steps*> empty;
+  if (!IsPlayableStepsTypeIndex(st)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid StepsType %i requested for '%s'.", st,
+        m_sSongDir.c_str());
+    return empty;
+  }
+  return m_vpStepsByType[st];
+}
+
 void Song::Save(bool autosave) {
   LOG->Trace("Song::SaveToSongFile()");
 
@@ -1550,6 +1668,12 @@ bool Song::HasBanner() const {
   return m_sBannerFile != "" && IsAFile(GetBannerPath());
 }
 bool Song::HasInstrumentTrack(InstrumentTrack it) const {
+  if (!IsValidInstrumentTrackIndex(it)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid instrument track index %i requested for '%s'.",
+        it, m_sSongDir.c_str());
+    return false;
+  }
   return m_sInstrumentTrackFile[it] != "" &&
          IsAFile(GetInstrumentTrackPath(it));
 }
@@ -1586,9 +1710,24 @@ bool Song::HasPreviewVid() const {
 
 const std::vector<BackgroundChange>& Song::GetBackgroundChanges(
     BackgroundLayer bl) const {
+  static const std::vector<BackgroundChange> empty;
+  if (!IsValidBackgroundLayer(bl)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid background layer %i requested for '%s'.", bl,
+        m_sSongDir.c_str());
+    return empty;
+  }
   return *(m_BackgroundChanges[bl]);
 }
 std::vector<BackgroundChange>& Song::GetBackgroundChanges(BackgroundLayer bl) {
+  static std::vector<BackgroundChange> ignored;
+  if (!IsValidBackgroundLayer(bl)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid mutable background layer %i requested for '%s'.",
+        bl, m_sSongDir.c_str());
+    ignored.clear();
+    return ignored;
+  }
   return *(m_BackgroundChanges[bl].Get());
 }
 
@@ -1741,6 +1880,13 @@ std::string Song::GetMusicPath() const {
 }
 
 std::string Song::GetInstrumentTrackPath(InstrumentTrack it) const {
+  if (!IsValidInstrumentTrackIndex(it)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid instrument track path index %i requested for "
+        "'%s'.",
+        it, m_sSongDir.c_str());
+    return std::string();
+  }
   return GetSongAssetPath(m_sInstrumentTrackFile[it], m_sSongDir);
 }
 
