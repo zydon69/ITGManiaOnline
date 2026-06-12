@@ -1,6 +1,7 @@
 #include "NotesLoaderKSF.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,110 @@ static void HandleBunki(
   timing.AddSegment(BPMSegment(BeatToNoteRow(beat), fCurBPM));
 }
 
+static bool IsValidPositiveBPM(float bpm) {
+  return std::isfinite(bpm) && bpm > 0.0f;
+}
+
+static bool AddValidatedBPMAtRow(
+    TimingData& timing, int row, float bpm, const std::string& path,
+    const char* context) {
+  if (!IsValidPositiveBPM(bpm)) {
+    LOG->UserLog(
+        "Song file", path,
+        "SRC_AUDIT_FIX ignored invalid KSF BPM in %s at row %i: %f.", context,
+        row, bpm);
+    return false;
+  }
+
+  timing.AddSegment(BPMSegment(row, bpm));
+  return true;
+}
+
+static bool SetValidatedBPMAtBeat(
+    TimingData& timing, float beat, float bpm, const std::string& path,
+    const char* context) {
+  if (!IsValidPositiveBPM(bpm)) {
+    LOG->UserLog(
+        "Song file", path,
+        "SRC_AUDIT_FIX ignored invalid KSF BPM in %s at beat %f: %f.", context,
+        beat, bpm);
+    return false;
+  }
+
+  timing.SetBPMAtBeat(beat, bpm);
+  return true;
+}
+
+static bool AddValidatedBunki(
+    TimingData& timing, const float fEarlyBPM, const float fCurBPM,
+    const float fGap, const float fPos, const std::string& path,
+    const char* context) {
+  if (!IsValidPositiveBPM(fEarlyBPM) || !IsValidPositiveBPM(fCurBPM) ||
+      !std::isfinite(fPos) || fPos <= 0.0f) {
+    LOG->UserLog(
+        "Song file", path,
+        "SRC_AUDIT_FIX ignored invalid KSF BUNKI in %s: previous BPM %f, new "
+        "BPM %f, position %f.",
+        context, fEarlyBPM, fCurBPM, fPos);
+    return false;
+  }
+
+  HandleBunki(timing, fEarlyBPM, fCurBPM, fGap, fPos);
+  return true;
+}
+
+static bool NormalizeTickCount(
+    int rawTicks, int& ticksOut, const std::string& path, const char* context,
+    bool rejectNonPositive) {
+  if (rawTicks <= 0) {
+    LOG->UserLog(
+        "Song file", path,
+        "SRC_AUDIT_FIX ignored invalid KSF tick count in %s: %d.", context,
+        rawTicks);
+    if (rejectNonPositive) {
+      return false;
+    }
+    return false;
+  }
+
+  ticksOut = std::min(rawTicks, ROWS_PER_BEAT);
+  if (ticksOut != rawTicks) {
+    LOG->UserLog(
+        "Song file", path,
+        "SRC_AUDIT_FIX clamped KSF tick count in %s from %d to %d.", context,
+        rawTicks, ticksOut);
+  }
+  return true;
+}
+
+static bool ExtractDirectMoveValue(
+    const std::string& row, std::string& valueOut, const std::string& path) {
+  if (row.size() <= 2) {
+    LOG->UserLog(
+        "Song file", path,
+        "SRC_AUDIT_FIX ignored malformed KSF DirectMove command \"%s\".",
+        row.c_str());
+    return false;
+  }
+
+  valueOut = row.substr(2);
+  Trim(valueOut);
+  if (!valueOut.empty() && valueOut.back() == ';') {
+    valueOut.pop_back();
+    Trim(valueOut);
+  }
+
+  if (valueOut.empty()) {
+    LOG->UserLog(
+        "Song file", path,
+        "SRC_AUDIT_FIX ignored KSF DirectMove command \"%s\" with an empty "
+        "value.",
+        row.c_str());
+    return false;
+  }
+  return true;
+}
+
 static bool LoadFromKSFFile(
     const std::string& sPath, Steps& out, Song& song, bool bKIUCompliant) {
   LOG->Trace("Steps::LoadFromKSFFile( '%s' )", sPath.c_str());
@@ -52,6 +157,7 @@ static bool LoadFromKSFFile(
   bool bDoublesChart = false;
 
   TimingData stepsTiming;
+  bool hasValidBPM = false;
   float SMGap1 = 0, SMGap2 = 0, BPM1 = -1, BPMPos2 = -1, BPM2 = -1,
         BPMPos3 = -1, BPM3 = -1;
 
@@ -66,52 +172,37 @@ static bool LoadFromKSFFile(
         EndsWith(sValueName, "FILE")) {
     } else if (sValueName == "BPM") {
       BPM1 = StringToFloat(sParams[1]);
-      stepsTiming.AddSegment(BPMSegment(0, BPM1));
+      hasValidBPM = AddValidatedBPMAtRow(stepsTiming, 0, BPM1, sPath, "#BPM") ||
+                    hasValidBPM;
     } else if (sValueName == "BPM2") {
-      if (bKIUCompliant) {
-        BPM2 = StringToFloat(sParams[1]);
-      } else {
-        // LOG an error.
-      }
+      bKIUCompliant = true;
+      BPM2 = StringToFloat(sParams[1]);
     } else if (sValueName == "BPM3") {
-      if (bKIUCompliant) {
-        BPM3 = StringToFloat(sParams[1]);
-      } else {
-        // LOG an error.
-      }
+      bKIUCompliant = true;
+      BPM3 = StringToFloat(sParams[1]);
     } else if (sValueName == "BUNKI") {
-      if (bKIUCompliant) {
-        BPMPos2 = StringToFloat(sParams[1]) / 100.0f;
-      } else {
-        // LOG an error.
-      }
+      bKIUCompliant = true;
+      BPMPos2 = StringToFloat(sParams[1]) / 100.0f;
     } else if (sValueName == "BUNKI2") {
-      if (bKIUCompliant) {
-        BPMPos3 = StringToFloat(sParams[1]) / 100.0f;
-      } else {
-        // LOG an error.
-      }
+      bKIUCompliant = true;
+      BPMPos3 = StringToFloat(sParams[1]) / 100.0f;
     } else if (sValueName == "STARTTIME") {
       SMGap1 = -StringToFloat(sParams[1]) / 100;
       stepsTiming.m_fBeat0OffsetInSeconds = SMGap1;
     }
     // This is currently required for more accurate KIU BPM changes.
     else if (sValueName == "STARTTIME2") {
-      if (bKIUCompliant) {
-        SMGap2 = -StringToFloat(sParams[1]) / 100;
-      } else {
-        // LOG an error.
-      }
+      bKIUCompliant = true;
+      SMGap2 = -StringToFloat(sParams[1]) / 100;
     } else if (sValueName == "STARTTIME3") {
       // STARTTIME3 only ensures this is a KIU compliant simfile.
       bKIUCompliant = true;
     }
 
     else if (sValueName == "TICKCOUNT") {
-      iTickCount = StringToInt(sParams[1]);
-      if (iTickCount <= 0) {
-        LOG->UserLog(
-            "Song file", sPath, "has an invalid tick count: %d.", iTickCount);
+      int parsedTickCount = StringToInt(sParams[1]);
+      if (!NormalizeTickCount(
+              parsedTickCount, iTickCount, sPath, "#TICKCOUNT", true)) {
         return false;
       }
       stepsTiming.AddSegment(TickcountSegment(0, iTickCount));
@@ -143,15 +234,32 @@ static bool LoadFromKSFFile(
         iTickCount);
   }
 
+  if (!hasValidBPM) {
+    LOG->UserLog(
+        "Song file", sPath,
+        "SRC_AUDIT_FIX has no valid KSF BPM. Defaulting chart timing to 60.");
+    BPM1 = 60.0f;
+    stepsTiming.AddSegment(BPMSegment(0, BPM1));
+  }
+
   // Prepare BPM stuff already if the file uses KSF syntax.
   if (bKIUCompliant) {
-    if (BPM2 > 0 && BPMPos2 > 0) {
-      HandleBunki(stepsTiming, BPM1, BPM2, SMGap1, BPMPos2);
+    if (BPM2 != -1 || BPMPos2 != -1) {
+      AddValidatedBunki(
+          stepsTiming, BPM1, BPM2, SMGap1, BPMPos2, sPath, "BPM2/BUNKI");
     }
 
-    if (BPM3 > 0 && BPMPos3 > 0) {
-      HandleBunki(stepsTiming, BPM2, BPM3, SMGap2, BPMPos3);
+    if (BPM3 != -1 || BPMPos3 != -1) {
+      AddValidatedBunki(
+          stepsTiming, BPM2, BPM3, SMGap2, BPMPos3, sPath, "BPM3/BUNKI2");
     }
+  }
+
+  if (vNoteRows.empty()) {
+    LOG->UserLog(
+        "Song file", sPath,
+        "SRC_AUDIT_FIX has no KSF STEP data. Chart ignored.");
+    return false;
   }
 
   NoteData notedata;  // read it into here
@@ -265,7 +373,11 @@ static bool LoadFromKSFFile(
       notedata.SetNumTracks(6);
       break;
     default:
-      FAIL_M(ssprintf("%i", out.m_StepsType));
+      LOG->UserLog(
+          "Song file", sPath,
+          "SRC_AUDIT_FIX has unsupported KSF StepsType %i. Chart ignored.",
+          out.m_StepsType);
+      return false;
   }
 
   int t = 0;
@@ -333,17 +445,25 @@ static bool LoadFromKSFFile(
       // I'm making some experiments, please spare me...
       // continue;
 
-      std::string temp = sRowString.substr(2, sRowString.size() - 3);
+      std::string temp;
+      if (!ExtractDirectMoveValue(sRowString, temp, sPath)) {
+        continue;
+      }
       float numTemp = StringToFloat(temp);
       if (BeginsWith(sRowString, "|T")) {
         // duh
-        iTickCount = static_cast<int>(numTemp);
+        int parsedTickCount = static_cast<int>(numTemp);
+        int normalizedTickCount = iTickCount;
+        if (!NormalizeTickCount(
+                parsedTickCount, normalizedTickCount, sPath, "|T", false)) {
+          continue;
+        }
+        iTickCount = normalizedTickCount;
         // I have been owned by the man -DaisuMaster
-        stepsTiming.SetTickcountAtBeat(
-            fCurBeat, std::clamp(iTickCount, 0, ROWS_PER_BEAT));
+        stepsTiming.SetTickcountAtBeat(fCurBeat, iTickCount);
       } else if (BeginsWith(sRowString, "|B")) {
         // BPM
-        stepsTiming.SetBPMAtBeat(fCurBeat, numTemp);
+        SetValidatedBPMAtBeat(stepsTiming, fCurBeat, numTemp, sPath, "|B");
       } else if (BeginsWith(sRowString, "|E")) {
         // DelayBeat
         float fCurDelay =
@@ -357,6 +477,14 @@ static bool LoadFromKSFFile(
         stepsTiming.SetDelayAtBeat(fCurBeat, fCurDelay);
       } else if (BeginsWith(sRowString, "|M") || BeginsWith(sRowString, "|C")) {
         // multipliers/combo
+        if (numTemp <= 0) {
+          LOG->UserLog(
+              "Song file", sPath,
+              "SRC_AUDIT_FIX ignored invalid KSF combo multiplier at beat %f: "
+              "%f.",
+              fCurBeat, numTemp);
+          continue;
+        }
         ComboSegment seg(BeatToNoteRow(fCurBeat), int(numTemp));
         stepsTiming.AddSegment(seg);
       } else if (BeginsWith(sRowString, "|S")) {
@@ -376,6 +504,15 @@ static bool LoadFromKSFFile(
     // Half-doubles is offset; "0011111100000".
     if (out.m_StepsType == StepsType_pump_halfdouble) {
       sRowString.erase(0, 2);
+    }
+
+    if (static_cast<int>(sRowString.size()) < notedata.GetNumTracks()) {
+      LOG->UserLog(
+          "Song file", sPath,
+          "SRC_AUDIT_FIX has a short KSF row \"%s\" for %i tracks. Chart "
+          "ignored.",
+          sRowString.c_str(), notedata.GetNumTracks());
+      return false;
     }
 
     // Update TICKCOUNT for Direct Move files.
@@ -496,14 +633,13 @@ static void LoadTags(const std::string& str, Song& out) {
 }
 
 static void ProcessTickcounts(
-    const std::string& value, int& ticks, TimingData& timing) {
+    const std::string& value, int& ticks, TimingData& timing,
+    const std::string& path) {
   /* TICKCOUNT will be used below if there are DM compliant BPM changes
    * and stops. It will be called again in LoadFromKSFFile for the
    * actual steps. */
-  ticks = StringToInt(value);
-  rage_clamp(ticks, 0, ROWS_PER_BEAT);
-
-  if (ticks == 0) {
+  const int parsedTicks = StringToInt(value);
+  if (!NormalizeTickCount(parsedTicks, ticks, path, "#TICKCOUNT", false)) {
     ticks = TickcountSegment::DEFAULT_TICK_COUNT;
   }
 
@@ -536,6 +672,7 @@ static bool LoadGlobalData(
   float SMGap1 = 0, SMGap2 = 0, BPM1 = -1, BPMPos2 = -1, BPM2 = -1,
         BPMPos3 = -1, BPM3 = -1;
   int iTickCount = -1;
+  bool hasValidBPM = false;
   bKIUCompliant = false;
   std::vector<std::string> vNoteRows;
 
@@ -549,7 +686,9 @@ static bool LoadGlobalData(
       LoadTags(sParams[1], out);
     } else if (sValueName == "BPM") {
       BPM1 = StringToFloat(sParams[1]);
-      out.m_SongTiming.AddSegment(BPMSegment(0, BPM1));
+      hasValidBPM =
+          AddValidatedBPMAtRow(out.m_SongTiming, 0, BPM1, sPath, "#BPM") ||
+          hasValidBPM;
     } else if (sValueName == "BPM2") {
       bKIUCompliant = true;
       BPM2 = StringToFloat(sParams[1]);
@@ -572,9 +711,9 @@ static bool LoadGlobalData(
       SMGap2 = -StringToFloat(sParams[1]) / 100;
     } else if (sValueName == "STARTTIME3") {
       // STARTTIME3 only ensures this is a KIU compliant simfile.
-      // bKIUCompliant = true;
+      bKIUCompliant = true;
     } else if (sValueName == "TICKCOUNT") {
-      ProcessTickcounts(sParams[1], iTickCount, out.m_SongTiming);
+      ProcessTickcounts(sParams[1], iTickCount, out.m_SongTiming, sPath);
     } else if (sValueName == "STEP") {
       /* STEP will always be the last header in a KSF file by design. Due to
        * the Direct Move syntax, it is best to get the rows of notes here. */
@@ -611,17 +750,34 @@ static bool LoadGlobalData(
   // intro length in piu mixes is generally 7 seconds
   out.m_fMusicSampleLengthSeconds = 7.0f;
 
+  if (iTickCount == -1) {
+    iTickCount = TickcountSegment::DEFAULT_TICK_COUNT;
+  }
+
+  if (!hasValidBPM) {
+    LOG->UserLog(
+        "Song file", sPath,
+        "SRC_AUDIT_FIX has no valid global KSF BPM. Defaulting song timing to "
+        "60.");
+    BPM1 = 60.0f;
+    out.m_SongTiming.AddSegment(BPMSegment(0, BPM1));
+  }
+
   /* BPM Change checks are done here.  If bKIUCompliant, it's short and sweet.
    * Otherwise, the whole file has to be processed.  Right now, this is only
    * called once, for the initial file (often the Crazy steps).  Hopefully that
    * will end up changing soon. */
   if (bKIUCompliant) {
-    if (BPM2 > 0 && BPMPos2 > 0) {
-      HandleBunki(out.m_SongTiming, BPM1, BPM2, SMGap1, BPMPos2);
+    if (BPM2 != -1 || BPMPos2 != -1) {
+      AddValidatedBunki(
+          out.m_SongTiming, BPM1, BPM2, SMGap1, BPMPos2, sPath,
+          "BPM2/BUNKI");
     }
 
-    if (BPM3 > 0 && BPMPos3 > 0) {
-      HandleBunki(out.m_SongTiming, BPM2, BPM3, SMGap2, BPMPos3);
+    if (BPM3 != -1 || BPMPos3 != -1) {
+      AddValidatedBunki(
+          out.m_SongTiming, BPM2, BPM3, SMGap2, BPMPos3, sPath,
+          "BPM3/BUNKI2");
     }
   } else {
     float fCurBeat = 0.0f;
@@ -663,7 +819,12 @@ static bool LoadGlobalData(
     std::vector<std::string> asBits;
     split(sPath, "/", asBits, true);
 
-    ASSERT(asBits.size() > 1);
+    if (asBits.size() <= 1) {
+      LOG->UserLog(
+          "Song file", sPath,
+          "SRC_AUDIT_FIX could not infer KSF title from path.");
+      return true;
+    }
     LoadTags(asBits[asBits.size() - 2], out);
   }
 
@@ -698,7 +859,12 @@ bool KSFLoader::LoadFromDir(const std::string& sDir, Song& out) {
   GetDirListing(sDir + std::string("*.ksf"), arrayKSFFileNames);
 
   // We shouldn't have been called to begin with if there were no KSFs.
-  ASSERT(arrayKSFFileNames.size() != 0);
+  if (arrayKSFFileNames.empty()) {
+    LOG->UserLog(
+        "Song", sDir,
+        "SRC_AUDIT_FIX found no applicable KSF simfile for direct LoadFromDir.");
+    return false;
+  }
 
   bool bKIUCompliant = false;
   /* With Split Timing, there has to be a backup Song Timing in case
