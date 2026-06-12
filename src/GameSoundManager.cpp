@@ -603,7 +603,6 @@ void GameSoundManager::Update(float fDeltaTime) {
     return;
   }
 
-  const float fAdjust = GetFrameTimingAdjustment(fDeltaTime);
   if (!g_Playing->m_Music->IsPlaying()) {
     /* There's no song playing.  Fake it. */
     CHECKPOINT_M(ssprintf(
@@ -660,8 +659,7 @@ void GameSoundManager::Update(float fDeltaTime) {
         GAMESTATE->m_Position.m_fMusicSeconds + fDeltaTime,
         g_Playing->m_Timing);
   } else {
-    GAMESTATE->UpdateSongPosition(
-        fSeconds + fAdjust, g_Playing->m_Timing, tm + fAdjust);
+    GAMESTATE->UpdateSongPosition(fSeconds, g_Playing->m_Timing, tm);
   }
 
   // Send crossed messages

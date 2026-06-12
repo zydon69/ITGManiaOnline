@@ -1635,9 +1635,8 @@ void ScreenGameplay::UpdateSongPosition(float fDeltaTime) {
 
   RageTimer tm;
   const float fSeconds = m_pSoundMusic->GetPositionSeconds(&tm);
-  const float fAdjust = SOUND->GetFrameTimingAdjustment(fDeltaTime);
   GAMESTATE->UpdateSongPosition(
-      fSeconds + fAdjust, GAMESTATE->m_pCurSong->m_SongTiming, tm + fAdjust);
+      fSeconds, GAMESTATE->m_pCurSong->m_SongTiming, tm);
 }
 
 void ScreenGameplay::BeginScreen() {
