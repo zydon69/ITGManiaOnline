@@ -865,18 +865,16 @@ int GetFrameLimitIntervalAsMicroseconds(
 
   return iDelayMicroseconds;
 }
+
+void RageDisplay::FrameLimitBeforeVsync() {
+  const int iDelayMicroseconds =
+      GetFrameLimitIntervalAsMicroseconds(GetActualVideoModeParams());
   if (iDelayMicroseconds > 0) {
     usleep(iDelayMicroseconds);
   }
 }
 
-void RageDisplay::FrameLimitAfterVsync() {
-  if (g_fFrameLimitPercent.Get() == 0.0f) {
-    return;
-  }
-
-  g_LastFrameEndedAt.Touch();
-}
+void RageDisplay::FrameLimitAfterVsync() { g_LastFrameEndedAt.Touch(); }
 
 RageCompiledGeometry::~RageCompiledGeometry() { m_bNeedsNormals = false; }
 
