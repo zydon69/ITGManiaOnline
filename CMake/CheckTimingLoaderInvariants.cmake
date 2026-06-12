@@ -26,6 +26,8 @@ function(require_not_contains haystack needle label)
 endfunction()
 
 read_source("src/NotesLoaderSM.cpp" notes_loader_sm_cpp)
+read_source("src/NotesLoaderSMA.cpp" notes_loader_sma_cpp)
+read_source("src/NotesLoaderSSC.cpp" notes_loader_ssc_cpp)
 
 require_not_contains(
   "${notes_loader_sm_cpp}"
@@ -39,3 +41,11 @@ require_contains(
   "${notes_loader_sm_cpp}"
   "does not establish a normal BPM before beat 0.  Defaulting to 60"
   "ProcessBPMsAndStops logs fallback when the first future BPM is not normal")
+require_contains(
+  "${notes_loader_ssc_cpp}"
+  "fComboBeat < 0 || iCombos <= 0 || iMisses <= 0"
+  "SSC #COMBOS rejects negative beats and non-positive score multipliers")
+require_contains(
+  "${notes_loader_sma_cpp}"
+  "fComboBeat < 0 || iCombos <= 0 || iMisses <= 0"
+  "SMA #MULTIPLIER rejects negative beats and non-positive score multipliers")

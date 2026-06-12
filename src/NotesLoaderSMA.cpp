@@ -42,6 +42,14 @@ void SMALoader::ProcessMultipliers(
     const int iMisses =
         (size == 2 || size == 4 ? iCombos
                                 : StringToInt(arrayMultiplierValues[2]));
+    if (fComboBeat < 0 || iCombos <= 0 || iMisses <= 0) {
+      LOG->UserLog(
+          "Song file", this->GetSongTitle(),
+          "SRC_AUDIT_FIX rejected invalid #MULTIPLIER at beat %f, combo %i, "
+          "miss combo %i.",
+          fComboBeat, iCombos, iMisses);
+      continue;
+    }
     out.AddSegment(ComboSegment(BeatToNoteRow(fComboBeat), iCombos, iMisses));
   }
 }

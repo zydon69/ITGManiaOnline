@@ -880,6 +880,14 @@ void SSCLoader::ProcessCombos(
     const int iCombos = StringToInt(arrayComboValues[1]);
     const int iMisses =
         (size == 2 ? iCombos : StringToInt(arrayComboValues[2]));
+    if (fComboBeat < 0 || iCombos <= 0 || iMisses <= 0) {
+      LOG->UserLog(
+          "Song file", this->GetSongTitle(),
+          "SRC_AUDIT_FIX rejected invalid #COMBOS at beat %f, combo %i, "
+          "miss combo %i.",
+          fComboBeat, iCombos, iMisses);
+      continue;
+    }
     out.AddSegment(ComboSegment(BeatToNoteRow(fComboBeat), iCombos, iMisses));
   }
 }
