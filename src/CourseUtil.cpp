@@ -423,7 +423,11 @@ bool EditCourseUtil::Save(Course* pCourse) {
 }
 
 bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
-  ASSERT(!sNewName.empty());
+  Trim(sNewName);
+  if (sNewName.empty()) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-133: refusing to save course with empty name");
+    return false;
+  }
 
   EditCourseUtil::s_bNewCourseNeedsName = false;
 
@@ -506,13 +510,15 @@ static LocalizedString EDIT_NAME_CANNOT_CONTAIN(
     "The course name cannot contain any of the following characters: %s");
 bool EditCourseUtil::ValidateEditCourseName(
     const std::string& sAnswer, std::string& sErrorOut) {
-  if (sAnswer.empty()) {
+  std::string sTrimmedAnswer = sAnswer;
+  Trim(sTrimmedAnswer);
+  if (sTrimmedAnswer.empty()) {
     sErrorOut = YOU_MUST_SUPPLY_NAME;
     return false;
   }
 
   static const std::string sInvalidChars = "\\/:*?\"<>|";
-  if (strpbrk(sAnswer.c_str(), sInvalidChars.c_str()) != nullptr) {
+  if (strpbrk(sTrimmedAnswer.c_str(), sInvalidChars.c_str()) != nullptr) {
     sErrorOut = ssprintf(
         EDIT_NAME_CANNOT_CONTAIN.GetValue().c_str(), sInvalidChars.c_str());
     return false;
@@ -526,7 +532,7 @@ bool EditCourseUtil::ValidateEditCourseName(
       continue;  // don't comepare name against ourself
     }
 
-    if (p->GetDisplayFullTitle() == sAnswer) {
+    if (CompareNoCase(p->GetDisplayFullTitle(), sTrimmedAnswer) == 0) {
       sErrorOut = EDIT_NAME_CONFLICTS;
       return false;
     }
