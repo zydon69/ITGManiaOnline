@@ -1314,6 +1314,13 @@ void Song::ReCalculateStepStatsAndLastSecond(bool wipeNoteData) {
 
 // Return whether the song is playable in the given style.
 bool Song::SongCompleteForStyle(const Style* st) const {
+  if (st == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-607: SongCompleteForStyle called with null style "
+        "for '%s'.",
+        m_sSongDir.c_str());
+    return false;
+  }
   return HasStepsType(st->m_StepsType);
 }
 
@@ -2230,6 +2237,13 @@ bool Song::IsEditAlreadyLoaded(Steps* pSteps) const {
 }
 
 bool Song::IsStepsUsingDifferentTiming(Steps* pSteps) const {
+  if (pSteps == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-607: IsStepsUsingDifferentTiming called with null "
+        "steps for '%s'.",
+        m_sSongDir.c_str());
+    return false;
+  }
   // XXX This no longer depends on Song at all
   return !pSteps->m_Timing.empty();
 }
