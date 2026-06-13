@@ -1808,8 +1808,9 @@ std::string Song::GetCacheFile(std::string sType) {
   PreDefs["Disc"] = GetDiscPath();
 
   // Check if Predefined images exist, And return function if they do.
-  if (PreDefs[sType.c_str()].c_str()) {
-    return PreDefs[sType.c_str()];
+  const auto predefined = PreDefs.find(sType);
+  if (predefined != PreDefs.end() && !predefined->second.empty()) {
+    return predefined->second;
   }
 
   // Get all image files and put them into a vector.
@@ -1818,9 +1819,8 @@ std::string Song::GetCacheFile(std::string sType) {
   std::vector<std::string> image_list;
   std::vector<std::string> fill_exts =
       ActorUtil::GetTypeExtensionList(FT_Bitmap);
-  for (std::string Image : song_dir_listing) {
-    std::string FileExt = GetExtension(Image);
-    transform(FileExt.begin(), FileExt.end(), FileExt.begin(), ::tolower);
+  for (const std::string& Image : song_dir_listing) {
+    std::string FileExt = MakeLower(GetExtension(Image));
     for (std::string FindExt : fill_exts) {
       if (FileExt == FindExt) {
         image_list.push_back(Image);
@@ -1842,19 +1842,21 @@ std::string Song::GetCacheFile(std::string sType) {
   PreSets["Disc"][1] = " disc";
   PreSets["Disc"][2] = " title";
 
-  for (std::string Image : image_list) {
+  std::string lowerType = MakeLower(sType);
+  for (const std::string& Image : image_list) {
     // We want to make it lower case.
-    transform(Image.begin(), Image.end(), Image.begin(), ::tolower);
-    for (std::pair<const int, std::string> PreSet : PreSets[sType.c_str()]) {
+    std::string lowerImage = Image;
+    MakeLower(lowerImage);
+    for (const std::pair<const int, std::string>& PreSet : PreSets[sType]) {
       // Search for image using PreSets.
-      size_t Found = Image.find(PreSet.second.c_str());
+      size_t Found = lowerImage.find(PreSet.second.c_str());
       if (Found != std::string::npos) {
         return GetSongAssetPath(Image, m_sSongDir);
       }
     }
     // Search for the image directly if it doesnt exist in PreSets,
     // Or incase we define our own stuff.
-    size_t Found = Image.find(sType.c_str());
+    size_t Found = lowerImage.find(lowerType.c_str());
     if (Found != std::string::npos) {
       return GetSongAssetPath(Image, m_sSongDir);
     }
@@ -1880,32 +1882,32 @@ std::string Song::GetSongAssetPath(
     return std::string();
   }
 
+  FixSlashesInPlace(sPath);
+  if (IsAbsoluteSongAssetPath(sPath)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Rejected absolute song asset path '%s' for song '%s'.",
+        sPath.c_str(), sSongPath.c_str());
+    return std::string();
+  }
+
   std::string sRelPath = sSongPath + sPath;
+  CollapsePath(sRelPath);
+
+  std::string sSongRoot = sSongPath;
+  CollapsePath(sSongRoot);
+  if (!BeginsWith(sRelPath, sSongRoot)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Rejected song asset path '%s' escaping song directory "
+        "'%s'.",
+        sPath.c_str(), sSongPath.c_str());
+    return std::string();
+  }
+
   if (DoesFileExist(sRelPath)) {
     return sRelPath;
   }
 
-  /* If there's no path in the file, the file is in the same directory as the
-   * song. (This is the preferred configuration.) */
-  if (sPath.find('/') == std::string::npos) {
-    return sRelPath;
-  }
-
-  // The song contains a path; treat it as relative to the top SM directory.
-  if (Left(sPath, 3) == "../") {
-    // The path begins with "../".  Resolve it wrt. the song directory.
-    sPath = sRelPath;
-  }
-
-  CollapsePath(sPath);
-
-  /* If the path still begins with "../", then there were an unreasonable number
-   * of them at the beginning of the path. Ignore the path entirely. */
-  if (Left(sPath, 3) == "../") {
-    return std::string();
-  }
-
-  return sPath;
+  return sRelPath;
 }
 
 /* Note that supplying a path relative to the top-level directory is only for
