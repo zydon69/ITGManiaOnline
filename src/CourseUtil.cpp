@@ -806,8 +806,21 @@ bool EditCourseUtil::ValidateEditCourseName(
 }
 
 void EditCourseUtil::UpdateAndSetTrail() {
-  ASSERT(GAMESTATE->GetCurrentStyle(PLAYER_INVALID) != nullptr);
-  StepsType st = GAMESTATE->GetCurrentStyle(PLAYER_INVALID)->m_StepsType;
+  if (GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-676: cannot update edit course trail without "
+        "GAMESTATE.");
+    return;
+  }
+  const Style* pStyle = GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
+  if (pStyle == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-676: cannot update edit course trail without current "
+        "style.");
+    GAMESTATE->m_pCurTrail[PLAYER_1].Set(nullptr);
+    return;
+  }
+  StepsType st = pStyle->m_StepsType;
   Trail* pTrail = nullptr;
   if (GAMESTATE->m_pCurCourse) {
     pTrail = GAMESTATE->m_pCurCourse->GetTrailForceRegenCache(st);
@@ -816,16 +829,29 @@ void EditCourseUtil::UpdateAndSetTrail() {
 }
 
 void EditCourseUtil::PrepareForPlay() {
+  if (GAMESTATE == nullptr || PROFILEMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-676: cannot prepare edit course play without "
+        "GAMESTATE or PROFILEMAN.");
+    return;
+  }
+  Profile* pProfile = PROFILEMAN->GetProfile(ProfileSlot_Player1);
+  Course* pCourse = GAMESTATE->m_pCurCourse;
+  if (pProfile == nullptr || pCourse == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-676: cannot prepare edit course play without player "
+        "profile or current course.");
+    return;
+  }
+
   GAMESTATE->m_pCurSong.Set(
       nullptr);  // CurSong will be set if we back out.  Set it back to nullptr
                  // so that ScreenStage won't show the last song.
   GAMESTATE->m_PlayMode.Set(PLAY_MODE_ENDLESS);
   GAMESTATE->m_bSideIsJoined[0] = true;
 
-  PROFILEMAN->GetProfile(ProfileSlot_Player1)->m_GoalType = GoalType_Time;
-  Course* pCourse = GAMESTATE->m_pCurCourse;
-  PROFILEMAN->GetProfile(ProfileSlot_Player1)->m_iGoalSeconds =
-      static_cast<int>(pCourse->m_fGoalSeconds);
+  pProfile->m_GoalType = GoalType_Time;
+  pProfile->m_iGoalSeconds = static_cast<int>(pCourse->m_fGoalSeconds);
 }
 
 void EditCourseUtil::GetAllEditCourses(std::vector<Course*>& vpCoursesOut) {
