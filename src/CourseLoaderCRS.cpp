@@ -808,8 +808,18 @@ bool CourseLoaderCRS::ParseRangedValue(
         sParamName.c_str(), values.size());
     return false;
   }
-  float first_val = StringToFloat(values.front());
-  float last_val = StringToFloat(values.back());
+  Trim(values.front());
+  Trim(values.back());
+  float first_val = 0.0f;
+  float last_val = 0.0f;
+  if (!StringToFloat(values.front(), first_val) ||
+      !StringToFloat(values.back(), last_val)) {
+    LOG->UserLog(
+        "Course file", sPath,
+        "has an invalid %s parameter value '%s': expected numeric range values.",
+        sParamName.c_str(), sParamValue.c_str());
+    return false;
+  }
   if (first_val > last_val) {
     LOG->UserLog(
         "Course file", sPath,
