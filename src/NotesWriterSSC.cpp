@@ -732,6 +732,15 @@ static std::string GetSSCNoteData(
 bool NotesWriterSSC::Write(
     std::string sPath, const Song& out,
     const std::vector<Steps*>& vpStepsToSave, bool bSavingCache) {
+  for (const Steps* pSteps : vpStepsToSave) {
+    if (pSteps == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-582: refusing to write SSC '%s' with null steps.",
+          sPath.c_str());
+      return false;
+    }
+  }
+
   int flags = RageFile::WRITE;
 
   /* If we're not saving cache, we're saving real data, so enable SLOW_FLUSH
@@ -781,6 +790,12 @@ bool NotesWriterSSC::Write(
 void NotesWriterSSC::GetEditFileContents(
     const Song* pSong, const Steps* pSteps, std::string& sOut) {
   sOut = "";
+  if (pSong == nullptr || pSteps == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-582: refusing to build SSC edit contents with null "
+        "song/steps.");
+    return;
+  }
   std::string sDir = pSong->GetSongDir();
 
   // "Songs/foo/bar"; strip off "Songs/".
@@ -795,6 +810,13 @@ void NotesWriterSSC::GetEditFileContents(
 
 std::string NotesWriterSSC::GetEditFileName(
     const Song* pSong, const Steps* pSteps) {
+  if (pSong == nullptr || pSteps == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-582: refusing to build SSC edit filename with null "
+        "song/steps.");
+    return std::string();
+  }
+
   /* Try to make a unique name. This isn't guaranteed. Edit descriptions are
    * case-sensitive, filenames on disk are usually not, and we decimate certain
    * characters for FAT filesystems. */
@@ -819,10 +841,24 @@ static LocalizedString ERROR_WRITING_FILE(
     "NotesWriterSSC", "Error writing file '%s'.");
 bool NotesWriterSSC::WriteEditFileToMachine(
     const Song* pSong, Steps* pSteps, std::string& sErrorOut) {
+  if (pSong == nullptr || pSteps == nullptr || PROFILEMAN == nullptr) {
+    sErrorOut = "Invalid song, steps, or profile manager for SSC edit save.";
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-582: refusing to write SSC edit with null "
+        "song/steps/profile manager.");
+    return false;
+  }
+
   std::string sDir =
       PROFILEMAN->GetProfileDir(ProfileSlot_Machine) + EDIT_STEPS_SUBDIR;
 
   std::string sPath = sDir + GetEditFileName(pSong, pSteps);
+  if (sPath == sDir) {
+    sErrorOut = "Could not derive SSC edit filename.";
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-582: refusing to write SSC edit without filename.");
+    return false;
+  }
 
   // Check to make sure that we're not clobering an existing file before
   // opening.
