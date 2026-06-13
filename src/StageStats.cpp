@@ -246,6 +246,68 @@ static HighScore FillInHighScore(
   return hs;
 }
 
+static bool CanFillHighScore(PlayerNumber p, const char* context) {
+  if (!IsValidPlayerNumber(p) || GAMESTATE->m_pPlayerState[p] == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s skipped player %i because PlayerState is missing.",
+        context, p);
+    return false;
+  }
+  return true;
+}
+
+static bool CanFillHighScore(MultiPlayer mp, const char* context) {
+  if (!IsValidMultiPlayer(mp) ||
+      GAMESTATE->m_pMultiPlayerState[mp] == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s skipped multiplayer %i because PlayerState is "
+        "missing.",
+        context, mp);
+    return false;
+  }
+  return true;
+}
+
+static const Style* GetScoreStyle(PlayerNumber p, const char* context) {
+  if (!IsValidPlayerNumber(p)) {
+    return nullptr;
+  }
+  const Style* pStyle = GAMESTATE->GetCurrentStyle(p);
+  if (pStyle == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s skipped player %i because current style is "
+        "missing.",
+        context, p);
+  }
+  return pStyle;
+}
+
+static bool HasSongScoreContext(
+    const Song* pSong, const Steps* pSteps, PlayerNumber p,
+    const char* context) {
+  if (pSong == nullptr || pSteps == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s skipped player %i because song=%p steps=%p.",
+        context, p, static_cast<const void*>(pSong),
+        static_cast<const void*>(pSteps));
+    return false;
+  }
+  return true;
+}
+
+static bool HasCourseScoreContext(
+    const Course* pCourse, const Trail* pTrail, PlayerNumber p,
+    const char* context) {
+  if (pCourse == nullptr || pTrail == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s skipped player %i because course=%p trail=%p.",
+        context, p, static_cast<const void*>(pCourse),
+        static_cast<const void*>(pTrail));
+    return false;
+  }
+  return true;
+}
+
 void StageStats::FinalizeScores(bool bSummary) {
   switch (GAMESTATE->m_PlayMode) {
     case PLAY_MODE_BATTLE:
@@ -274,6 +336,9 @@ void StageStats::FinalizeScores(bool bSummary) {
   // whether or not to save scores when the stage was failed depends on if this
   // is a course or not... it's handled below in the switch.
   FOREACH_HumanPlayer(p) {
+    if (!CanFillHighScore(p, "StageStats::FinalizeScores")) {
+      continue;
+    }
     std::string sPlayerGuid = PROFILEMAN->IsPersistentProfile(p)
                                   ? PROFILEMAN->GetProfile(p)->m_sGuid
                                   : std::string("");
@@ -282,6 +347,9 @@ void StageStats::FinalizeScores(bool bSummary) {
         RANKING_TO_FILL_IN_MARKER[p], sPlayerGuid);
   }
   FOREACH_EnabledMultiPlayer(mp) {
+    if (!CanFillHighScore(mp, "StageStats::FinalizeScores")) {
+      continue;
+    }
     std::string sPlayerGuid = "00000000-0000-0000-0000-000000000000";  // FIXME
     m_multiPlayer[mp].m_HighScore = FillInHighScore(
         m_multiPlayer[mp], *GAMESTATE->m_pMultiPlayerState[mp], "",
@@ -290,7 +358,11 @@ void StageStats::FinalizeScores(bool bSummary) {
 
   FOREACH_HumanPlayer(p) {
     const HighScore& hs = m_player[p].m_HighScore;
-    StepsType st = GAMESTATE->GetCurrentStyle(p)->m_StepsType;
+    const Style* pStyle = GetScoreStyle(p, "StageStats::FinalizeScores");
+    if (pStyle == nullptr) {
+      continue;
+    }
+    StepsType st = pStyle->m_StepsType;
 
     const Song* pSong = GAMESTATE->m_pCurSong;
     const Steps* pSteps = GAMESTATE->m_pCurSteps[p];
@@ -324,14 +396,20 @@ void StageStats::FinalizeScores(bool bSummary) {
     } else if (GAMESTATE->IsCourseMode()) {
       // Save this stage to recent scores
       Course* pCourse = GAMESTATE->m_pCurCourse;
-      ASSERT(pCourse != nullptr);
       Trail* pTrail = GAMESTATE->m_pCurTrail[p];
+      if (!HasCourseScoreContext(
+              pCourse, pTrail, p, "StageStats::FinalizeScores")) {
+        continue;
+      }
 
       PROFILEMAN->AddCourseScore(
           pCourse, pTrail, p, hs, m_player[p].m_iPersonalHighScoreIndex,
           m_player[p].m_iMachineHighScoreIndex);
     } else {
-      ASSERT(pSteps != nullptr);
+      if (!HasSongScoreContext(
+              pSong, pSteps, p, "StageStats::FinalizeScores")) {
+        continue;
+      }
 
       PROFILEMAN->AddStepsScore(
           pSong, pSteps, p, hs, m_player[p].m_iPersonalHighScoreIndex,
@@ -349,20 +427,33 @@ void StageStats::FinalizeScores(bool bSummary) {
 
     HighScore& hs = m_player[p].m_HighScore;
     Profile* pProfile = PROFILEMAN->GetMachineProfile();
-    StepsType st = GAMESTATE->GetCurrentStyle(p)->m_StepsType;
+    const Style* pStyle = GetScoreStyle(p, "StageStats::FinalizeScores");
+    if (pStyle == nullptr) {
+      m_player[p].m_iMachineHighScoreIndex = -1;
+      continue;
+    }
+    StepsType st = pStyle->m_StepsType;
 
     const HighScoreList* pHSL = nullptr;
     if (bSummary) {
       pHSL = &pProfile->GetCategoryHighScoreList(st, m_player[p].m_rc);
     } else if (GAMESTATE->IsCourseMode()) {
       Course* pCourse = GAMESTATE->m_pCurCourse;
-      ASSERT(pCourse != nullptr);
       Trail* pTrail = GAMESTATE->m_pCurTrail[p];
-      ASSERT(pTrail != nullptr);
+      if (!HasCourseScoreContext(
+              pCourse, pTrail, p, "StageStats::FinalizeScores")) {
+        m_player[p].m_iMachineHighScoreIndex = -1;
+        continue;
+      }
       pHSL = &pProfile->GetCourseHighScoreList(pCourse, pTrail);
     } else {
       Song* pSong = GAMESTATE->m_pCurSong;
       Steps* pSteps = GAMESTATE->m_pCurSteps[p];
+      if (!HasSongScoreContext(
+              pSong, pSteps, p, "StageStats::FinalizeScores")) {
+        m_player[p].m_iMachineHighScoreIndex = -1;
+        continue;
+      }
       pHSL = &pProfile->GetStepsHighScoreList(pSong, pSteps);
     }
 
