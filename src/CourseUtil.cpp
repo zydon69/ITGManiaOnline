@@ -370,6 +370,13 @@ void CourseUtil::SortCoursePointerArrayByAvgDifficulty(
 
 void CourseUtil::SortCoursePointerArrayByNumPlays(
     std::vector<Course*>& vpCoursesInOut, ProfileSlot slot, bool bDescending) {
+  if (PROFILEMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-669: course play-count sort requested without "
+        "PROFILEMAN; falling back to title sort.");
+    SortCoursePointerArrayByTitle(vpCoursesInOut);
+    return;
+  }
   if (!PROFILEMAN->IsPersistentProfile(slot)) {
     return;  // nothing to do since we don't have data
   }
@@ -380,7 +387,13 @@ void CourseUtil::SortCoursePointerArrayByNumPlays(
 void CourseUtil::SortCoursePointerArrayByNumPlays(
     std::vector<Course*>& vpCoursesInOut, const Profile* pProfile,
     bool bDescending) {
-  ASSERT(pProfile != nullptr);
+  if (pProfile == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-669: course play-count sort requested without "
+        "profile; falling back to title sort.");
+    SortCoursePointerArrayByTitle(vpCoursesInOut);
+    return;
+  }
   course_sort_val.clear();
   for (unsigned i = 0; i < vpCoursesInOut.size(); ++i) {
     course_sort_val[vpCoursesInOut[i]] =
@@ -395,7 +408,15 @@ void CourseUtil::SortCoursePointerArrayByNumPlays(
 
 void CourseUtil::SortByMostRecentlyPlayedForMachine(
     std::vector<Course*>& vpCoursesInOut) {
-  Profile* pProfile = PROFILEMAN->GetMachineProfile();
+  Profile* pProfile =
+      PROFILEMAN == nullptr ? nullptr : PROFILEMAN->GetMachineProfile();
+  if (pProfile == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-669: recent course sort requested without machine "
+        "profile; falling back to title sort.");
+    SortCoursePointerArrayByTitle(vpCoursesInOut);
+    return;
+  }
 
   course_sort_val.clear();
   for (const Course* c : vpCoursesInOut) {
