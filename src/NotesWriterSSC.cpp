@@ -1,8 +1,10 @@
 #include "NotesWriterSSC.h"
 
 #include <cerrno>
+#include <cmath>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Attack.h"
@@ -175,6 +177,43 @@ static std::string SanitizeStepMetadataForWrite(
         format);
   }
   return SmEscape(sanitized);
+}
+
+static DisplayBPM SanitizeDisplayBPMForWrite(
+    const Song& song, float& minBPM, float& maxBPM, const char* format) {
+  minBPM = song.m_fSpecifiedBPMMin;
+  maxBPM = song.m_fSpecifiedBPMMax;
+  switch (song.m_DisplayBPMType) {
+    case DISPLAY_BPM_ACTUAL:
+    case DISPLAY_BPM_RANDOM:
+      return song.m_DisplayBPMType;
+    case DISPLAY_BPM_SPECIFIED:
+      break;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-587 SRC-596: invalid %s DisplayBPM type %i for "
+          "'%s'; falling back to actual.",
+          format, song.m_DisplayBPMType, song.GetSongDir().c_str());
+      return DISPLAY_BPM_ACTUAL;
+  }
+
+  if (!std::isfinite(minBPM) || !std::isfinite(maxBPM) || minBPM <= 0.0f ||
+      maxBPM <= 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-587 SRC-596: invalid %s specified DisplayBPM "
+        "%.6f:%.6f for '%s'; falling back to actual.",
+        format, minBPM, maxBPM, song.GetSongDir().c_str());
+    return DISPLAY_BPM_ACTUAL;
+  }
+
+  if (minBPM > maxBPM) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-587 SRC-596: swapped inverted %s DisplayBPM range "
+        "%.6f:%.6f for '%s'.",
+        format, minBPM, maxBPM, song.GetSongDir().c_str());
+    std::swap(minBPM, maxBPM);
+  }
+  return DISPLAY_BPM_SPECIFIED;
 }
 
 static std::vector<std::string> GetTimingVectorForWrite(
@@ -557,17 +596,19 @@ static bool WriteGlobalTags(CheckedFileWriter& f, const Song& out) {
   }
   f.PutLine(";");
 
-  switch (out.m_DisplayBPMType) {
+  float displayBPMMin = 0.0f;
+  float displayBPMMax = 0.0f;
+  switch (SanitizeDisplayBPMForWrite(
+      out, displayBPMMin, displayBPMMax, "SSC")) {
     case DISPLAY_BPM_ACTUAL:
       // write nothing
       break;
     case DISPLAY_BPM_SPECIFIED:
-      if (out.m_fSpecifiedBPMMin == out.m_fSpecifiedBPMMax) {
-        f.PutLine(ssprintf("#DISPLAYBPM:%.6f;", out.m_fSpecifiedBPMMin));
+      if (displayBPMMin == displayBPMMax) {
+        f.PutLine(ssprintf("#DISPLAYBPM:%.6f;", displayBPMMin));
       } else {
         f.PutLine(ssprintf(
-            "#DISPLAYBPM:%.6f:%.6f;", out.m_fSpecifiedBPMMin,
-            out.m_fSpecifiedBPMMax));
+            "#DISPLAYBPM:%.6f:%.6f;", displayBPMMin, displayBPMMax));
       }
       break;
     case DISPLAY_BPM_RANDOM:
