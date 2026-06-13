@@ -10,6 +10,7 @@
 #include "PlayerNumber.h"
 #include "Profile.h"
 #include "ProfileManager.h"
+#include "RageLog.h"
 #include "Screen.h"
 #include "ScreenManager.h"
 #include "ScreenMessage.h"
@@ -22,16 +23,24 @@ enum EditProfileRow {
 
 REGISTER_SCREEN_CLASS(ScreenOptionsEditProfile);
 
+static Profile* GetProfileBeingEdited() {
+  return PROFILEMAN->GetLocalProfile(GAMESTATE->m_sEditLocalProfileID);
+}
+
 void ScreenOptionsEditProfile::Init() { ScreenOptions::Init(); }
 
 void ScreenOptionsEditProfile::BeginScreen() {
-  m_Original = *GAMESTATE->GetEditLocalProfile();
+  Profile* pProfile = GetProfileBeingEdited();
+  if (pProfile == nullptr) {
+    LOG->Warn(
+        "ScreenOptionsEditProfile::BeginScreen: profile '%s' does not exist",
+        GAMESTATE->m_sEditLocalProfileID.Get().c_str());
+    m_Original.InitAll();
+  } else {
+    m_Original = *pProfile;
+  }
 
   std::vector<OptionRowHandler*> vHands;
-
-  Profile* pProfile =
-      PROFILEMAN->GetLocalProfile(GAMESTATE->m_sEditLocalProfileID);
-  ASSERT(pProfile != nullptr);
 
   {
     vHands.push_back(OptionRowHandlerUtil::MakeNull());
@@ -63,9 +72,13 @@ ScreenOptionsEditProfile::~ScreenOptionsEditProfile() {}
 
 void ScreenOptionsEditProfile::ImportOptions(
     int iRow, const std::vector<PlayerNumber>& vpns) {
-  Profile* pProfile =
-      PROFILEMAN->GetLocalProfile(GAMESTATE->m_sEditLocalProfileID);
-  ASSERT(pProfile != nullptr);
+  Profile* pProfile = GetProfileBeingEdited();
+  if (pProfile == nullptr) {
+    LOG->Warn(
+        "ScreenOptionsEditProfile::ImportOptions: profile '%s' does not exist",
+        GAMESTATE->m_sEditLocalProfileID.Get().c_str());
+    return;
+  }
   OptionRow& row = *m_pRows[iRow];
 
   switch (iRow) {
@@ -77,9 +90,13 @@ void ScreenOptionsEditProfile::ImportOptions(
 
 void ScreenOptionsEditProfile::ExportOptions(
     int iRow, const std::vector<PlayerNumber>& vpns) {
-  Profile* pProfile =
-      PROFILEMAN->GetLocalProfile(GAMESTATE->m_sEditLocalProfileID);
-  ASSERT(pProfile != nullptr);
+  Profile* pProfile = GetProfileBeingEdited();
+  if (pProfile == nullptr) {
+    LOG->Warn(
+        "ScreenOptionsEditProfile::ExportOptions: profile '%s' does not exist",
+        GAMESTATE->m_sEditLocalProfileID.Get().c_str());
+    return;
+  }
   OptionRow& row = *m_pRows[iRow];
   int iIndex = row.GetOneSharedSelection(true);
   std::string sValue;
@@ -102,7 +119,10 @@ void ScreenOptionsEditProfile::HandleScreenMessage(const ScreenMessage SM) {
   if (SM == SM_GoToNextScreen) {
     PROFILEMAN->SaveLocalProfile(GAMESTATE->m_sEditLocalProfileID);
   } else if (SM == SM_GoToPrevScreen) {
-    *GAMESTATE->GetEditLocalProfile() = m_Original;
+    Profile* pProfile = GetProfileBeingEdited();
+    if (pProfile != nullptr) {
+      *pProfile = m_Original;
+    }
   }
 
   ScreenOptions::HandleScreenMessage(SM);
