@@ -266,12 +266,12 @@ class Steps {
   /** @brief The Song these Steps are associated with */
   Song* m_pSong;
 
-  void SetDisplayBPM(const DisplayBPM type) { this->displayBPMType = type; }
-  DisplayBPM GetDisplayBPM() const { return this->displayBPMType; }
-  void SetMinBPM(const float f) { this->specifiedBPMMin = f; }
-  float GetMinBPM() const { return this->specifiedBPMMin; }
-  void SetMaxBPM(const float f) { this->specifiedBPMMax = f; }
-  float GetMaxBPM() const { return this->specifiedBPMMax; }
+  void SetDisplayBPM(const DisplayBPM type);
+  DisplayBPM GetDisplayBPM() const;
+  void SetMinBPM(const float f);
+  float GetMinBPM() const;
+  void SetMaxBPM(const float f);
+  float GetMaxBPM() const;
   void GetDisplayBpms(DisplayBpms& addTo) const;
 
   std::string GetAttackString() const {

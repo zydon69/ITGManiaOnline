@@ -374,7 +374,15 @@ float Steps::PredictMeter() const {
 
   const float DifficultyCoeffs[NUM_Difficulty] = {-0.877f, -0.877f, 0,
                                                   0.722f,  0.722f,  0};
-  pMeter += DifficultyCoeffs[this->GetDifficulty()];
+  const Difficulty difficulty = this->GetDifficulty();
+  if (IsValidDifficultyIndex(difficulty)) {
+    pMeter += DifficultyCoeffs[difficulty];
+  } else {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid Difficulty %i in Steps::PredictMeter for "
+        "'%s'; ignoring difficulty coefficient.",
+        difficulty, m_sFilename.c_str());
+  }
 
   // Init non-radar values
   const float SV = rv[RadarCategory_Stream] * rv[RadarCategory_Voltage];
@@ -858,6 +866,79 @@ bool Steps::MakeValidEditDescription(std::string& sPreferredDescription) {
 void Steps::SetMeter(int meter) {
   DeAutogen();
   m_iMeter = meter;
+}
+
+void Steps::SetDisplayBPM(const DisplayBPM type) {
+  DeAutogen();
+  if (!IsValidDisplayBPM(type)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid DisplayBPM %i for '%s'; using Actual.",
+        type, m_sFilename.c_str());
+    displayBPMType = DISPLAY_BPM_ACTUAL;
+    return;
+  }
+  displayBPMType = type;
+}
+
+DisplayBPM Steps::GetDisplayBPM() const {
+  if (!IsValidDisplayBPM(Real()->displayBPMType)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid stored DisplayBPM %i for '%s'; treating as "
+        "Actual.",
+        Real()->displayBPMType, Real()->m_sFilename.c_str());
+    return DISPLAY_BPM_ACTUAL;
+  }
+  if (Real()->displayBPMType == DISPLAY_BPM_SPECIFIED &&
+      (!IsPositiveFinite(Real()->specifiedBPMMin) ||
+       !IsPositiveFinite(Real()->specifiedBPMMax))) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid specified DisplayBPM range %.6f..%.6f for "
+        "'%s'; treating as Actual.",
+        Real()->specifiedBPMMin, Real()->specifiedBPMMax,
+        Real()->m_sFilename.c_str());
+    return DISPLAY_BPM_ACTUAL;
+  }
+  return Real()->displayBPMType;
+}
+
+void Steps::SetMinBPM(const float f) {
+  DeAutogen();
+  if (!std::isfinite(f) || f < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid minimum DisplayBPM %.6f for '%s'; using 0.",
+        f, m_sFilename.c_str());
+    specifiedBPMMin = 0.0f;
+    return;
+  }
+  specifiedBPMMin = f;
+}
+
+float Steps::GetMinBPM() const {
+  if (!std::isfinite(Real()->specifiedBPMMin) ||
+      Real()->specifiedBPMMin < 0.0f) {
+    return 0.0f;
+  }
+  return Real()->specifiedBPMMin;
+}
+
+void Steps::SetMaxBPM(const float f) {
+  DeAutogen();
+  if (!std::isfinite(f) || f < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid maximum DisplayBPM %.6f for '%s'; using 0.",
+        f, m_sFilename.c_str());
+    specifiedBPMMax = 0.0f;
+    return;
+  }
+  specifiedBPMMax = f;
+}
+
+float Steps::GetMaxBPM() const {
+  if (!std::isfinite(Real()->specifiedBPMMax) ||
+      Real()->specifiedBPMMax < 0.0f) {
+    return 0.0f;
+  }
+  return Real()->specifiedBPMMax;
 }
 
 const TimingData* Steps::GetTimingData() const {
