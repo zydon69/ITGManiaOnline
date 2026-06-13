@@ -310,8 +310,26 @@ float GetActualVoltageRadarValue(
    * length of the longest recorded combo. This is only subtly different:
    * it's the percent of the song the longest combo took to get. */
   const PlayerStageStats::Combo_t MaxCombo = pss.GetMaxCombo();
+  if (!std::isfinite(MaxCombo.m_fSizeSeconds) ||
+      MaxCombo.m_fSizeSeconds <= 0.0f) {
+    if (!std::isfinite(MaxCombo.m_fSizeSeconds) ||
+        MaxCombo.m_fSizeSeconds < 0.0f) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: NoteDataWithScoring clamped invalid max combo "
+          "seconds %f to 0.",
+          MaxCombo.m_fSizeSeconds);
+    }
+    return 0.0f;
+  }
   float fComboPercent =
       SCALE(MaxCombo.m_fSizeSeconds, 0, fSongSeconds, 0.0f, 1.0f);
+  if (!std::isfinite(fComboPercent)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: NoteDataWithScoring clamped non-finite voltage %f to "
+        "0.",
+        fComboPercent);
+    return 0.0f;
+  }
   return std::clamp(fComboPercent, 0.0f, 1.0f);
 }
 
@@ -322,9 +340,23 @@ float GetActualChaosRadarValue(
   if (iPossibleDP == 0) {
     return 1;
   }
+  if (iPossibleDP < 0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: NoteDataWithScoring clamped negative possible dance "
+        "points %i for chaos radar.",
+        iPossibleDP);
+    return 0.0f;
+  }
 
   const int ActualDP = pss.m_iActualDancePoints;
-  return std::clamp(float(ActualDP) / iPossibleDP, 0.0f, 1.0f);
+  const float chaos = float(ActualDP) / iPossibleDP;
+  if (!std::isfinite(chaos)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: NoteDataWithScoring clamped non-finite chaos %f to 0.",
+        chaos);
+    return 0.0f;
+  }
+  return std::clamp(chaos, 0.0f, 1.0f);
 }
 }  // namespace
 
@@ -398,21 +430,29 @@ struct garv_state {
 static void DoRowEndRadarActualCalc(garv_state& state, RadarValues& out) {
   if (state.judgable && state.last_tns_on_row != TapNoteScore_Invalid) {
     if (state.num_notes_on_curr_row >= 1) {
-      state.taps_hit += (state.last_tns_on_row >= state.taps_tns);
+      state.taps_hit = IncrementIf(
+          state.taps_hit, state.last_tns_on_row >= state.taps_tns, "taps_hit");
     }
     if (state.num_notes_on_curr_row >= 2) {
-      state.jumps_hit_for_air += (state.last_tns_on_row >= state.air_tns);
-      state.jumps_hit += (state.last_tns_on_row >= state.jumps_tns);
+      state.jumps_hit_for_air = IncrementIf(
+          state.jumps_hit_for_air, state.last_tns_on_row >= state.air_tns,
+          "jumps_hit_for_air");
+      state.jumps_hit = IncrementIf(
+          state.jumps_hit, state.last_tns_on_row >= state.jumps_tns,
+          "jumps_hit");
     }
-    if (state.num_notes_on_curr_row +
-            (state.hold_ends.size() - state.num_holds_on_curr_row) >=
-        3) {
+    const int active_hold_count =
+        std::max(0, static_cast<int>(state.hold_ends.size()) -
+                        state.num_holds_on_curr_row);
+    if (state.num_notes_on_curr_row + active_hold_count >= 3) {
       if (state.worst_tns_on_row >= state.hands_tns) {
         size_t holds_down = 0;
         for (size_t n = 0; n < state.hold_ends.size(); ++n) {
           holds_down += (state.curr_row <= state.hold_ends[n].last_held_row);
         }
-        state.hands_hit += (holds_down == state.hold_ends.size());
+        state.hands_hit = IncrementIf(
+            state.hands_hit, holds_down == state.hold_ends.size(),
+            "hands_hit");
       }
     }
   }
@@ -524,33 +564,64 @@ void NoteDataWithScoring::GetActualRadarValues(
         case TapNoteType_Attack:
         case TapNoteType_Lift:
           UpdateHittable(state.curr_row, first_hittable_row, last_hittable_row);
-          ++state.num_notes_on_curr_row;
-          state.notes_hit_for_stream +=
-              (curr_note->result.tns >= state.stream_tns);
-          state.notes_hit += (curr_note->result.tns >= state.taps_tns);
-          if (curr_note->result.tns < state.worst_tns_on_row) {
-            state.worst_tns_on_row = curr_note->result.tns;
-          }
-          if (curr_note->result.fTapNoteOffset > state.last_time_on_row) {
-            state.last_time_on_row = curr_note->result.fTapNoteOffset;
-            state.last_tns_on_row = curr_note->result.tns;
+          state.num_notes_on_curr_row =
+              AddSaturatedInt(state.num_notes_on_curr_row, 1, "row notes");
+          {
+            TapNoteScore tns = NormalizeTapNoteScore(
+                curr_note->result.tns, TNS_None, "actual radar tap");
+            state.notes_hit_for_stream = IncrementIf(
+                state.notes_hit_for_stream, tns >= state.stream_tns,
+                "notes_hit_for_stream");
+            state.notes_hit =
+                IncrementIf(state.notes_hit, tns >= state.taps_tns, "notes_hit");
+            if (tns < state.worst_tns_on_row) {
+              state.worst_tns_on_row = tns;
+            }
+            const float offset = NormalizeTapOffset(
+                curr_note->result.fTapNoteOffset, "actual radar tap");
+            if (offset > state.last_time_on_row) {
+              state.last_time_on_row = offset;
+              state.last_tns_on_row = tns;
+            }
           }
           if (curr_note->type == TapNoteType_HoldHead) {
             if (curr_note->subType == TapNoteSubType_Hold) {
-              state.holds_held += (curr_note->HoldResult.hns == HNS_Held);
+              state.holds_held = IncrementIf(
+                  state.holds_held, curr_note->HoldResult.hns == HNS_Held,
+                  "holds_held");
             } else if (curr_note->subType == TapNoteSubType_Roll) {
-              state.rolls_held += (curr_note->HoldResult.hns == HNS_Held);
+              state.rolls_held = IncrementIf(
+                  state.rolls_held, curr_note->HoldResult.hns == HNS_Held,
+                  "rolls_held");
             }
-            state.hold_ends.push_back(hold_status(
-                state.curr_row + curr_note->iDuration,
-                curr_note->HoldResult.iLastHeldRow));
-            ++state.num_holds_on_curr_row;
+            const int hold_end =
+                SafeHoldEndRow(state.curr_row, curr_note->iDuration);
+            if (hold_end >= state.curr_row) {
+              int last_held_row = curr_note->HoldResult.iLastHeldRow;
+              if (last_held_row < state.curr_row) {
+                last_held_row = state.curr_row - 1;
+              } else if (last_held_row > hold_end) {
+                LOG->Warn(
+                    "SRC_AUDIT_FIX: NoteDataWithScoring clamped hold last "
+                    "held row %i to end row %i.",
+                    last_held_row, hold_end);
+                last_held_row = hold_end;
+              }
+              state.hold_ends.push_back(hold_status(hold_end, last_held_row));
+              state.num_holds_on_curr_row = AddSaturatedInt(
+                  state.num_holds_on_curr_row, 1, "row hold starts");
+            }
           } else if (curr_note->type == TapNoteType_Lift) {
-            state.lifts_hit += (curr_note->result.tns >= state.lifts_tns);
+            TapNoteScore tns = NormalizeTapNoteScore(
+                curr_note->result.tns, TNS_None, "actual radar lift");
+            state.lifts_hit =
+                IncrementIf(state.lifts_hit, tns >= state.lifts_tns, "lifts_hit");
           }
           break;
         case TapNoteType_Mine:
-          state.mines_avoided += (curr_note->result.tns == TNS_AvoidMine);
+          state.mines_avoided = IncrementIf(
+              state.mines_avoided, curr_note->result.tns == TNS_AvoidMine,
+              "mines_avoided");
           break;
         case TapNoteType_Fake:
         default:
