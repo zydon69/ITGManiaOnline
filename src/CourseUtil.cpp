@@ -704,11 +704,33 @@ bool EditCourseUtil::RemoveAndDeleteFile(Course* pCourse) {
     LOG->Warn("SRC_AUDIT_FIX SRC-135: refusing to delete a null course");
     return false;
   }
-  if (!FILEMAN->Remove(pCourse->m_sPath)) {
+  if (FILEMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-674: refusing to delete course '%s' without FILEMAN.",
+        pCourse->m_sPath.c_str());
     return false;
   }
-  FILEMAN->Remove(pCourse->GetCacheFilePath());
+  if (!FILEMAN->Remove(pCourse->m_sPath)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-674: failed to delete course file '%s'.",
+        pCourse->m_sPath.c_str());
+    return false;
+  }
+  const std::string sCachePath = pCourse->GetCacheFilePath();
+  if (!sCachePath.empty() && !FILEMAN->Remove(sCachePath)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-674: deleted course '%s' but could not remove cache "
+        "'%s'.",
+        pCourse->m_sPath.c_str(), sCachePath.c_str());
+  }
   if (pCourse->IsAnEdit()) {
+    if (PROFILEMAN == nullptr || SONGMAN == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-674: deleted edit course '%s' but cannot reload "
+          "edits without PROFILEMAN or SONGMAN.",
+          pCourse->m_sPath.c_str());
+      return true;
+    }
     const ProfileSlot slot = pCourse->GetLoadedFromProfileSlot();
     if (PROFILEMAN->IsPersistentProfile(slot)) {
       const std::string sProfileDir = PROFILEMAN->GetProfileDir(slot);
@@ -722,6 +744,13 @@ bool EditCourseUtil::RemoveAndDeleteFile(Course* pCourse) {
           pCourse->m_sPath.c_str(), slot);
     }
   } else {
+    if (SONGMAN == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-674: deleted course '%s' but cannot remove loaded "
+          "course without SONGMAN.",
+          pCourse->m_sPath.c_str());
+      return true;
+    }
     SONGMAN->DeleteCourse(pCourse);
     delete pCourse;
   }
