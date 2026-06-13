@@ -94,8 +94,8 @@ Grade StringToGrade(const std::string& sGrade) {
 
   // new style
   int iTier;
-  if (sscanf(sGrade.c_str(), "Tier%02d", &iTier) == 1 && iTier >= 0 &&
-      iTier < NUM_Grade) {
+  if (sscanf(sGrade.c_str(), "Tier%02d", &iTier) == 1 && iTier >= 1 &&
+      iTier <= (int)Grade_Failed) {
     return (Grade)(iTier - 1);
   } else if (s == "FAILED") {
     return Grade_Failed;
