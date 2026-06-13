@@ -69,6 +69,17 @@ static CourseDifficulty CRSStringToDifficulty(const std::string& s) {
   return Difficulty_Invalid;
 }
 
+static void InitCourseForPath(Course& out, const std::string& sPath) {
+  out.Init();
+  out.m_sPath = sPath;
+
+  std::vector<std::string> parts;
+  split(sPath, "/", parts, false);
+  if (parts.size() >= 4) {  // e.g. "/Courses/blah/fun.crs"
+    out.m_sGroupName = parts[parts.size() - 2];
+  }
+}
+
 bool CourseLoaderCRS::LoadFromBuffer(
     const std::string& sPath, const std::string& sBuffer, Course& out) {
   MsdFile msd;
@@ -222,7 +233,10 @@ bool CourseLoaderCRS::LoadFromMsd(
   /* Cache and load the course banner. Only bother doing this if at least one
    * song was found in the course. */
   if (out.m_vEntries.empty()) {
-    return true;
+    LOG->UserLog(
+        "Course file", sPath,
+        "contains no playable #SONG or #SONGSELECT entries and will be ignored.");
+    return false;
   }
   if (out.m_sBannerPath != "") {
     IMAGECACHE->CacheImage("Banner", out.GetBannerPath());
@@ -238,20 +252,10 @@ bool CourseLoaderCRS::LoadFromMsd(
 }
 
 bool CourseLoaderCRS::LoadFromCRSFile(const std::string& _sPath, Course& out) {
-  std::string sPath = _sPath;
+  const std::string sOriginalPath = _sPath;
+  std::string sPath = sOriginalPath;
 
-  out.Init();
-
-  out.m_sPath = sPath;  // save path
-
-  // save group name
-  {
-    std::vector<std::string> parts;
-    split(sPath, "/", parts, false);
-    if (parts.size() >= 4) {  // e.g. "/Courses/blah/fun.crs"
-      out.m_sGroupName = parts[parts.size() - 2];
-    }
-  }
+  InitCourseForPath(out, sOriginalPath);
 
   bool bUseCache = true;
   {
@@ -283,9 +287,22 @@ bool CourseLoaderCRS::LoadFromCRSFile(const std::string& _sPath, Course& out) {
   }
 
   MsdFile msd;
-  if (!msd.ReadFile(
-          sPath, false))  // don't unescape here, it gets handled later
+  bool bReadOK =
+      msd.ReadFile(sPath, false);  // don't unescape here, it gets handled later
+  if (!bReadOK)
   {
+    if (bUseCache) {
+      LOG->Warn(
+          "Course cache '%s' could not be opened, falling back to '%s': %s",
+          sPath.c_str(), sOriginalPath.c_str(), msd.GetError().c_str());
+      bUseCache = false;
+      sPath = sOriginalPath;
+      msd = MsdFile();
+      bReadOK = msd.ReadFile(sPath, false);
+    }
+  }
+
+  if (!bReadOK) {
     LOG->UserLog(
         "Course file", sPath, "couldn't be opened: %s.",
         msd.GetError().c_str());
@@ -293,7 +310,26 @@ bool CourseLoaderCRS::LoadFromCRSFile(const std::string& _sPath, Course& out) {
   }
 
   if (!LoadFromMsd(sPath, msd, out, bUseCache)) {
-    return false;
+    if (bUseCache) {
+      LOG->Warn(
+          "Course cache '%s' was invalid, falling back to '%s'.", sPath.c_str(),
+          sOriginalPath.c_str());
+      InitCourseForPath(out, sOriginalPath);
+      bUseCache = false;
+      sPath = sOriginalPath;
+      msd = MsdFile();
+      if (!msd.ReadFile(sPath, false)) {
+        LOG->UserLog(
+            "Course file", sPath, "couldn't be opened: %s.",
+            msd.GetError().c_str());
+        return false;
+      }
+      if (!LoadFromMsd(sPath, msd, out, false)) {
+        return false;
+      }
+    } else {
+      return false;
+    }
   }
 
   if (!bUseCache) {
