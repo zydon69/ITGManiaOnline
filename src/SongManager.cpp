@@ -300,9 +300,12 @@ bool SongManager::SanityCheckGroupDir(std::string sDir) const {
   const std::vector<std::string>& audio_exts =
       ActorUtil::GetTypeExtensionList(FT_Sound);
   for (std::string& fname : arrayFiles) {
-    const std::string ext = GetExtension(fname);
+    std::string ext = GetExtension(fname);
+    MakeLower(ext);
     for (const std::string& aud : audio_exts) {
-      if (ext == aud) {
+      std::string audio_ext = aud;
+      MakeLower(audio_ext);
+      if (ext == audio_ext) {
         LOG->Warn(FOLDER_CONTAINS_MUSIC_FILES.GetValue().c_str(), sDir.c_str());
         return false;
       }
