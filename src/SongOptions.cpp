@@ -6,6 +6,7 @@
 
 #include "CommonMetrics.h"
 #include "EnumHelper.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "RageUtil/Regex.h"
 #include "StdString.h"
@@ -144,7 +145,11 @@ void SongOptions::FromString(const std::string& sMultipleMods) {
   split(sTemp, ",", vs, true);
   std::string sThrowAway;
   for (std::string& s : vs) {
-    FromOneModString(s, sThrowAway);
+    if (!FromOneModString(s, sThrowAway)) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX: Ignoring invalid SongOptions mod '%s'%s%s.",
+          s.c_str(), sThrowAway.empty() ? "" : ": ", sThrowAway.c_str());
+    }
   }
 }
 
