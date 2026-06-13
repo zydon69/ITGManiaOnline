@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -231,7 +232,18 @@ void StageLayout::preGeneratePermutations() {
   // to return an empty array
   permuteCache[0] = {};
 
-  for (unsigned int i = 0; i < pow(2, columnCount); i++) {
+  if (columnCount < 0 || columnCount > MAX_COLUMNS ||
+      columnCount >=
+          static_cast<int>(std::numeric_limits<unsigned int>::digits)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-645: refusing to pre-generate permutations for "
+        "invalid column count %d.",
+        columnCount);
+    return;
+  }
+
+  const unsigned int permutationLimit = 1u << columnCount;
+  for (unsigned int i = 0; i < permutationLimit; i++) {
     int bits = popcount(i);
     if (bits > 4) {
       continue;
@@ -310,7 +322,13 @@ std::vector<FootPlacement> StageLayout::PermuteFootPlacements(
   // (BREACH PROTOCOL doubles has  a row 0311 1000 which isn't bracketable
   // while still holding p1 down)
   std::vector<FootPlacement> permutations;
-  bool active = (mask & (0x1 << column)) != 0;
+  if (column >= std::numeric_limits<unsigned int>::digits) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-645: refusing permutation shift for column %lu.",
+        column);
+    return permutations;
+  }
+  bool active = (mask & (1u << column)) != 0;
 
   if (active) {
     for (StepParity::Foot foot : FEET) {
