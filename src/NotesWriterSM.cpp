@@ -81,6 +81,29 @@ class CheckedFileWriter {
   const char* m_context;
   bool m_failed;
 };
+
+static std::string SanitizeKeysoundForWrite(
+    const std::string& file, const char* format) {
+  std::string sanitized = file;
+  bool changed = false;
+  for (char& c : sanitized) {
+    if (c == ',' || c == ';' || c == ':' || c == '\r' || c == '\n') {
+      c = ' ';
+      changed = true;
+    }
+  }
+  if (!sanitized.empty() && sanitized[0] == '#') {
+    sanitized.insert(sanitized.begin(), '\\');
+    changed = true;
+  }
+  if (changed) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-584 SRC-593: sanitized %s keysound filename "
+        "containing MSD delimiters.",
+        format);
+  }
+  return SmEscape(sanitized);
+}
 }  // namespace
 
 /**
@@ -278,7 +301,7 @@ static bool WriteGlobalTags(CheckedFileWriter& f, Song& out) {
 
   f.Write("#KEYSOUNDS:");
   for (unsigned i = 0; i < out.m_vsKeysoundFile.size(); i++) {
-    f.Write(out.m_vsKeysoundFile[i]);
+    f.Write(SanitizeKeysoundForWrite(out.m_vsKeysoundFile[i], "SM"));
     if (i != out.m_vsKeysoundFile.size() - 1) {
       f.Write(",");
     }

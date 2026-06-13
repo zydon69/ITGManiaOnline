@@ -97,6 +97,29 @@ static std::string SanitizeSSCLabelForWrite(const std::string& label) {
   return SmEscape(sanitized);
 }
 
+static std::string SanitizeKeysoundForWrite(
+    const std::string& file, const char* format) {
+  std::string sanitized = file;
+  bool changed = false;
+  for (char& c : sanitized) {
+    if (c == ',' || c == ';' || c == ':' || c == '\r' || c == '\n') {
+      c = ' ';
+      changed = true;
+    }
+  }
+  if (!sanitized.empty() && sanitized[0] == '#') {
+    sanitized.insert(sanitized.begin(), '\\');
+    changed = true;
+  }
+  if (changed) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-584 SRC-593: sanitized %s keysound filename "
+        "containing MSD delimiters.",
+        format);
+  }
+  return SmEscape(sanitized);
+}
+
 static std::vector<std::string> GetTimingVectorForWrite(
     const TimingData& timing, TimingSegmentType type, int dec) {
   const std::vector<TimingSegment*>& segs = timing.GetTimingSegments(type);
@@ -539,15 +562,7 @@ static bool WriteGlobalTags(CheckedFileWriter& f, const Song& out) {
 
   f.Write("#KEYSOUNDS:");
   for (unsigned i = 0; i < out.m_vsKeysoundFile.size(); i++) {
-    // some keysound files has the first sound that starts with #,
-    // which makes MsdFile fail parsing the whole declaration.
-    // in this case, add a backslash at the front
-    // (#KEYSOUNDS:\#bgm.wav,01.wav,02.wav,..) and handle that on load.
-    if (i == 0 && out.m_vsKeysoundFile[i].size() > 0 &&
-        out.m_vsKeysoundFile[i][0] == '#') {
-      f.Write("\\");
-    }
-    f.Write(out.m_vsKeysoundFile[i]);
+    f.Write(SanitizeKeysoundForWrite(out.m_vsKeysoundFile[i], "SSC"));
     if (i != out.m_vsKeysoundFile.size() - 1) {
       f.Write(",");
     }
