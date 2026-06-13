@@ -18,10 +18,18 @@ ScoreKeeperShared::ScoreKeeperShared(
     : ScoreKeeperNormal(pPlayerState, pPlayerStageStats) {}
 
 bool ScoreKeeperShared::IsMasterScoreKeeper() const {
-  if (m_pPlayerState == nullptr) {
+  if (m_pPlayerState == nullptr || m_pPlayerStageStats == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperShared ignored callback with null "
-        "PlayerState.");
+        "SRC_AUDIT_FIX: ScoreKeeperShared ignored callback with incomplete "
+        "scoring state: PlayerState=%p PlayerStageStats=%p.",
+        static_cast<void*>(m_pPlayerState),
+        static_cast<void*>(m_pPlayerStageStats));
+    return false;
+  }
+  if (GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperShared ignored callback because GAMESTATE "
+        "is null.");
     return false;
   }
   return m_pPlayerState->m_PlayerNumber == GAMESTATE->GetMasterPlayerNumber();
