@@ -2424,9 +2424,21 @@ void SongManager::LoadCourseEditsFromProfileDir(
   std::vector<std::string> vsFiles;
   GetDirListing(sDir + "*.crs", vsFiles, false, true);
 
-  int iNumEditsLoaded = GetNumEditsLoadedFromProfile(slot);
-  int size = std::min(
-      (int)vsFiles.size(), MAX_EDIT_COURSES_PER_PROFILE - iNumEditsLoaded);
+  const int iNumCourseEditsLoaded =
+      std::count_if(m_pCourses.begin(), m_pCourses.end(), [slot](Course* c) {
+        return c != nullptr && c->GetLoadedFromProfileSlot() == slot;
+      });
+  const int remainingCourses =
+      std::max(0, MAX_EDIT_COURSES_PER_PROFILE - iNumCourseEditsLoaded);
+  int size = std::min((int)vsFiles.size(), remainingCourses);
+
+  if ((int)vsFiles.size() > remainingCourses) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-111: clamping profile course edits for %s: "
+        "files=%i, already_loaded=%i, remaining=%i, loading=%i.",
+        ProfileSlotToString(slot).c_str(), (int)vsFiles.size(),
+        iNumCourseEditsLoaded, remainingCourses, size);
+  }
 
   for (int i = 0; i < size; i++) {
     std::string fn = vsFiles[i];
