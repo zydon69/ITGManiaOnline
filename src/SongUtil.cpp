@@ -1117,7 +1117,13 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
     case SORT_DOUBLE_CHALLENGE_METER: {
       StepsType st;
       Difficulty dc;
-      SongUtil::GetStepsTypeAndDifficultyFromSortOrder(so, st, dc);
+      if (!SongUtil::GetStepsTypeAndDifficultyFromSortOrder(so, st, dc)) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-658: unable to resolve sort order %i for "
+            "section name; using not-available section.",
+            so);
+        return SORT_NOT_AVAILABLE.GetValue();
+      }
 
       Steps* pSteps = GetStepsByDifficulty(pSong, st, dc);
       if (pSteps && !UNLOCKMAN->StepsIsLocked(pSong, pSteps)) {
@@ -1134,7 +1140,11 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
     case SORT_ONI_COURSES:
     case SORT_ENDLESS_COURSES:
     default:
-      FAIL_M(ssprintf("Invalid SortOrder: %i", so));
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-658: invalid song section sort order %i; using "
+          "empty section.",
+          so);
+      return std::string();
   }
 }
 
