@@ -97,17 +97,32 @@ std::string BackgroundChange::GetTextDescription() const {
 }
 
 std::string BackgroundChange::ToString() const {
-  /* TODO:  Technically we need to double-escape the filename
-   * (because it might contain '=') and then unescape the value
-   * returned by the MsdFile. */
+  const auto sanitizeField = [](std::string value, const char* field) {
+    bool changed = false;
+    for (char& c : value) {
+      if (c == '=' || c == ',' || c == ';' || c == '\r' || c == '\n') {
+        c = ' ';
+        changed = true;
+      }
+    }
+    if (changed) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-583 SRC-592: sanitized BGChange %s containing "
+          "MSD delimiters.",
+          field);
+    }
+    return SmEscape(value);
+  };
+
   return ssprintf(
       "%.3f=%s=%.3f=%d=%d=%d=%s=%s=%s=%s=%s", this->m_fStartBeat,
-      SmEscape(this->m_def.m_sFile1).c_str(), this->m_fRate,
+      sanitizeField(this->m_def.m_sFile1, "File1").c_str(), this->m_fRate,
       this->m_sTransition == SBT_CrossFade,        // backward compat
       this->m_def.m_sEffect == SBE_StretchRewind,  // backward compat
       this->m_def.m_sEffect != SBE_StretchNoLoop,  // backward compat
-      this->m_def.m_sEffect.c_str(), this->m_def.m_sFile2.c_str(),
-      this->m_sTransition.c_str(),
+      sanitizeField(this->m_def.m_sEffect, "Effect").c_str(),
+      sanitizeField(this->m_def.m_sFile2, "File2").c_str(),
+      sanitizeField(this->m_sTransition, "Transition").c_str(),
       SmEscape(RageColor::NormalizeColorString(this->m_def.m_sColor1)).c_str(),
       SmEscape(RageColor::NormalizeColorString(this->m_def.m_sColor2)).c_str());
 }
