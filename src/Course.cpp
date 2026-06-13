@@ -222,7 +222,10 @@ void Course::SetCourseType(CourseType ct) {
 
   switch (ct) {
     default:
-      FAIL_M(ssprintf("Invalid course type: %i", ct));
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-125: refusing invalid course type %i for '%s'", ct,
+          m_sPath.c_str());
+      return;
     case COURSE_TYPE_NONSTOP:
       break;
     case COURSE_TYPE_ONI:
@@ -251,7 +254,11 @@ PlayMode Course::GetPlayMode() const {
     case COURSE_TYPE_NONSTOP:
       return PLAY_MODE_NONSTOP;
     default:
-      FAIL_M(ssprintf("Invalid course type: %i", ct));
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-125: falling back from invalid course type %i for "
+          "'%s'",
+          ct, m_sPath.c_str());
+      return PLAY_MODE_NONSTOP;
   }
 }
 
