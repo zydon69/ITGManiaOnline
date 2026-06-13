@@ -416,8 +416,11 @@ void Steps::TidyUpData() {
   // delete them. -Kyz
   if (m_StepsType == StepsType_Invalid) {
     LOG->Warn(
-        "Detected steps with unknown style '%s' in '%s'",
-        m_StepsTypeStr.c_str(), m_pSong->m_sSongFileName.c_str());
+        "SRC_AUDIT_FIX SRC-604: detected steps with unknown style '%s' in "
+        "'%s'.",
+        m_StepsTypeStr.c_str(),
+        m_pSong != nullptr ? m_pSong->m_sSongFileName.c_str()
+                           : m_sFilename.c_str());
   } else if (m_StepsTypeStr == "") {
     m_StepsTypeStr = GAMEMAN->GetStepsTypeInfo(m_StepsType).szName;
   }
@@ -962,7 +965,17 @@ float Steps::GetMaxBPM() const {
 }
 
 const TimingData* Steps::GetTimingData() const {
-  return m_Timing.empty() ? &m_pSong->m_SongTiming : &m_Timing;
+  if (!m_Timing.empty()) {
+    return &m_Timing;
+  }
+  if (m_pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-604: steps '%s' have no parent song timing; using "
+        "local timing.",
+        m_sFilename.c_str());
+    return &m_Timing;
+  }
+  return &m_pSong->m_SongTiming;
 }
 
 bool Steps::HasSignificantTimingChanges() const {
@@ -972,7 +985,7 @@ bool Steps::HasSignificantTimingChanges() const {
     return true;
   }
 
-  if (timing->HasBpmChanges()) {
+  if (timing->HasBpmChanges() && m_pSong != nullptr) {
     // check to see if these changes are significant.
     DisplayBpms bpms;
     m_pSong->GetDisplayBpms(bpms);
@@ -985,6 +998,13 @@ bool Steps::HasSignificantTimingChanges() const {
 }
 
 const std::string Steps::GetMusicPath() const {
+  if (m_pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-604: steps '%s' have no parent song for music "
+        "path.",
+        m_sFilename.c_str());
+    return std::string();
+  }
   return Song::GetSongAssetPath(
       m_MusicFile.empty() ? m_pSong->m_sMusicFile : m_MusicFile,
       m_pSong->GetSongDir());
