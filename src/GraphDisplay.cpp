@@ -9,6 +9,7 @@
 #include "ActorFrame.h"
 #include "ActorUtil.h"
 #include "LuaManager.h"
+#include "RageLog.h"
 #include "RageDisplay.h"
 #include "RageMath.h"
 #include "RageTexture.h"
@@ -45,11 +46,14 @@ class GraphLine : public Actor {
       m_pCircles[i].c = this->m_pTempState->diffuse[0];
     }
 
-    DISPLAY->DrawQuads(&m_Quads[0], m_Quads.size());
+    if (!m_Quads.empty()) {
+      DISPLAY->DrawQuads(m_Quads.data(), m_Quads.size());
+    }
 
     int iFans = m_pCircles.size() / iCircleVertices;
     for (int i = 0; i < iFans; ++i) {
-      DISPLAY->DrawFan(&m_pCircles[0] + iCircleVertices * i, iCircleVertices);
+      DISPLAY->DrawFan(
+          m_pCircles.data() + iCircleVertices * i, iCircleVertices);
     }
   }
 
@@ -69,6 +73,14 @@ class GraphLine : public Actor {
   }
 
   void Set(const RageSpriteVertex* m_LineStrip, int iSize) {
+    m_pCircles.clear();
+    m_Quads.clear();
+    if (m_LineStrip == nullptr || iSize <= 0) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX SRC-257: GraphLine received empty line strip.");
+      return;
+    }
+
     m_pCircles.resize(iSize * iCircleVertices);
 
     for (int i = 0; i < iSize; ++i) {
@@ -78,7 +90,10 @@ class GraphLine : public Actor {
     }
 
     int iNumLines = iSize - 1;
-    m_Quads.resize(iNumLines * 4);
+    if (iNumLines <= 0) {
+      return;
+    }
+    m_Quads.reserve(iNumLines * 4);
     for (int i = 0; i < iNumLines; ++i) {
       const RageSpriteVertex& p1 = m_LineStrip[i];
       const RageSpriteVertex& p2 = m_LineStrip[i + 1];
@@ -86,11 +101,17 @@ class GraphLine : public Actor {
       float opp = p2.p.x - p1.p.x;
       float adj = p2.p.y - p1.p.y;
       float hyp = std::pow(opp * opp + adj * adj, 0.5f);
+      if (!std::isfinite(hyp) || hyp <= 0.0001f) {
+        LOG->Trace(
+            "SRC_AUDIT_FIX SRC-258: GraphLine skipped invalid segment hyp=%f.",
+            hyp);
+        continue;
+      }
 
       float lsin = opp / hyp;
       float lcos = adj / hyp;
 
-      RageSpriteVertex* v = &m_Quads[i * 4];
+      RageSpriteVertex v[4];
       v[0] = v[1] = p1;
       v[2] = v[3] = p2;
 
@@ -106,6 +127,7 @@ class GraphLine : public Actor {
       v[2].p.y += ydist;
       v[3].p.x += xdist;
       v[3].p.y -= ydist;
+      m_Quads.insert(m_Quads.end(), v, v + 4);
     }
   }
 
@@ -120,7 +142,12 @@ REGISTER_ACTOR_CLASS(GraphLine);
 class GraphBody : public Actor {
  public:
   GraphBody(std::string sFile) {
-    m_pTexture = TEXTUREMAN->LoadTexture(sFile);
+    m_pTexture = sFile.empty() ? nullptr : TEXTUREMAN->LoadTexture(sFile);
+    if (m_pTexture == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-259: GraphBody could not load texture '%s'.",
+          sFile.c_str());
+    }
 
     for (int i = 0; i < 2 * VALUE_RESOLUTION; ++i) {
       m_Slices[i].c = RageColor(1, 1, 1, 1);
@@ -133,6 +160,9 @@ class GraphBody : public Actor {
   }
 
   void DrawPrimitives() {
+    if (m_pTexture == nullptr) {
+      return;
+    }
     Actor::SetGlobalRenderStates();  // set Actor-specified render states
 
     DISPLAY->ClearAllTextures();
@@ -165,13 +195,32 @@ GraphDisplay::~GraphDisplay() {
 }
 
 void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
-  float fTotalStepSeconds = ss.GetTotalPossibleStepsSeconds();
+  for (Actor* p : m_vpSongBoundaries) {
+    RemoveChild(p);
+    RageUtil::SafeDelete(p);
+  }
+  m_vpSongBoundaries.clear();
 
-  m_Values.resize(VALUE_RESOLUTION);
+  float fTotalStepSeconds = ss.GetTotalPossibleStepsSeconds();
+  if (!std::isfinite(fTotalStepSeconds) || fTotalStepSeconds <= 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-261: GraphDisplay received invalid total seconds "
+        "%f.",
+        fTotalStepSeconds);
+    fTotalStepSeconds = 1.0f;
+  }
+
+  m_Values.assign(VALUE_RESOLUTION, 0.0f);
   pss.GetLifeRecord(
-      &m_Values[0], VALUE_RESOLUTION, ss.GetTotalPossibleStepsSeconds());
-  for (unsigned i = 0; i < ARRAYLEN(m_Values); i++) {
-    rage_clamp(m_Values[i], 0.f, 1.f);
+      m_Values.data(), VALUE_RESOLUTION, fTotalStepSeconds);
+  for (float& value : m_Values) {
+    if (!std::isfinite(value)) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX SRC-260: GraphDisplay corrected non-finite life "
+          "value.");
+      value = 0.0f;
+    }
+    rage_clamp(value, 0.f, 1.f);
   }
 
   UpdateVerts();
@@ -180,18 +229,34 @@ void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
   float fSec = 0;
   const std::vector<Song*>& possibleSongs = ss.m_vpPossibleSongs;
 
-  std::for_each(
-      possibleSongs.begin(), possibleSongs.end() - 1, [&](Song* song) {
-        fSec += song->GetStepsSeconds();
+  if (possibleSongs.size() > 1) {
+    std::for_each(
+        possibleSongs.begin(), possibleSongs.end() - 1, [&](Song* song) {
+          if (song == nullptr) {
+            LOG->Trace(
+                "SRC_AUDIT_FIX SRC-261: GraphDisplay skipped null song "
+                "boundary.");
+            return;
+          }
+          const float songSeconds = song->GetStepsSeconds();
+          if (!std::isfinite(songSeconds) || songSeconds < 0.0f) {
+            LOG->Trace(
+                "SRC_AUDIT_FIX SRC-261: GraphDisplay skipped invalid song "
+                "seconds %f.",
+                songSeconds);
+            return;
+          }
+          fSec += songSeconds;
 
-        Actor* p = m_sprSongBoundary->Copy();
-        m_vpSongBoundaries.push_back(p);
-        float fX = SCALE(
-            fSec, 0, fTotalStepSeconds, m_quadVertices.left,
-            m_quadVertices.right);
-        p->SetX(fX);
-        this->AddChild(p);
-      });
+          Actor* p = m_sprSongBoundary->Copy();
+          m_vpSongBoundaries.push_back(p);
+          float fX = SCALE(
+              fSec, 0, fTotalStepSeconds, m_quadVertices.left,
+              m_quadVertices.right);
+          p->SetX(fX);
+          this->AddChild(p);
+        });
+  }
 
   if (!pss.m_bFailed) {
     // Search for the min life record to show "Just Barely!"
@@ -211,10 +276,12 @@ void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
           float(iMinLifeSoFarAt), 0.0f, float(VALUE_RESOLUTION - 1),
           m_quadVertices.left, m_quadVertices.right);
       m_sprBarely->SetX(fX);
+      m_sprBarely->SetVisible(true);
     } else {
       m_sprBarely->SetVisible(false);
     }
-    this->AddChild(m_sprBarely);
+  } else {
+    m_sprBarely->SetVisible(false);
   }
 }
 
@@ -227,7 +294,7 @@ void GraphDisplay::Load(std::string sMetricsGroup) {
   m_sprBacking->ZoomToHeight(m_size.y);
   this->AddChild(m_sprBacking);
 
-  m_pGraphBody = new GraphBody(THEME->GetPathG(sMetricsGroup, "Body"));
+  m_pGraphBody = new GraphBody(THEME->GetPathG(sMetricsGroup, "Body", true));
   this->AddChild(m_pGraphBody);
 
   m_pGraphLine = new GraphLine;
@@ -238,9 +305,20 @@ void GraphDisplay::Load(std::string sMetricsGroup) {
   m_sprSongBoundary.Load(THEME->GetPathG(sMetricsGroup, "SongBoundary"));
 
   m_sprBarely.Load(THEME->GetPathG(sMetricsGroup, "Barely"));
+  m_sprBarely->SetVisible(false);
+  this->AddChild(m_sprBarely);
 }
 
 void GraphDisplay::UpdateVerts() {
+  if (m_pGraphBody == nullptr || m_pGraphLine == nullptr ||
+      m_pGraphBody->m_pTexture == nullptr ||
+      m_Values.size() != VALUE_RESOLUTION) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-262: GraphDisplay skipped vertex update before "
+        "complete load.");
+    return;
+  }
+
   m_quadVertices.left = -m_size.x / 2;
   m_quadVertices.right = m_size.x / 2;
   m_quadVertices.top = -m_size.y / 2;
