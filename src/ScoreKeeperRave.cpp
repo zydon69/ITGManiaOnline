@@ -13,6 +13,7 @@
 #include "PlayerState.h"
 #include "Preference.h"
 #include "PrefsManager.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "RageUtil/RandomNumbers.h"
 #include "ScoreKeeper.h"
@@ -98,7 +99,6 @@ void ScoreKeeperRave::HandleTapRowScore(const NoteData& nd, int iRow) {
     return;
   }
   switch (scoreOfLastTap) {
-    DEFAULT_FAIL(scoreOfLastTap);
     case TNS_W1:
       fPercentToMove = g_fSuperMeterPercentChange[SE_W1];
       break;
@@ -117,6 +117,18 @@ void ScoreKeeperRave::HandleTapRowScore(const NoteData& nd, int iRow) {
     case TNS_Miss:
       fPercentToMove = g_fSuperMeterPercentChange[SE_Miss];
       break;
+    case TNS_None:
+    case TNS_AvoidMine:
+    case TNS_HitMine:
+    case TNS_CheckpointHit:
+    case TNS_CheckpointMiss:
+      fPercentToMove = 0.0f;
+      break;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperRave ignored invalid tap row score %i.",
+          scoreOfLastTap);
+      return;
   }
   AddSuperMeterDelta(fPercentToMove);
 }
