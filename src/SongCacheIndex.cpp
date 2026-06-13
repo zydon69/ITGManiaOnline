@@ -39,19 +39,25 @@
 SongCacheIndex*
     SONGINDEX;  // global and accessible from anywhere in our program
 
+static std::string NormalizeCacheKeyPath(std::string sPath) {
+  FixSlashesInPlace(sPath);
+  CollapsePath(sPath, true);
+
+  if (sPath.size() > 1 && sPath[0] == '/') {
+    sPath.erase(0, 1);
+  }
+  while (sPath.size() > 1 && sPath[sPath.size() - 1] == '/') {
+    sPath.erase(sPath.size() - 1);
+  }
+
+  return sPath;
+}
+
 std::string SongCacheIndex::GetCacheFilePath(
     const std::string& sGroup, const std::string& sPath) {
   /* Don't use GetHashForFile, since we don't want to spend time
    * checking the file size and date. */
-  std::string s;
-
-  if (sPath.size() > 2 && sPath[0] == '/' && sPath[sPath.size() - 1] == '/') {
-    s.assign(sPath, 1, sPath.size() - 2);
-  } else if (sPath.size() > 1 && sPath[0] == '/') {
-    s.assign(sPath, 1, sPath.size() - 1);
-  } else {
-    s = sPath;
-  }
+  const std::string s = NormalizeCacheKeyPath(sPath);
 
   // Cache filenames must be a lossless mapping from song/course/image paths.
   // Replacing separators with '_' makes paths like foo/bar_baz and foo_bar/baz
@@ -171,7 +177,8 @@ unsigned SongCacheIndex::GetCacheHash(const std::string& path) const {
 
 std::string SongCacheIndex::MangleName(const std::string& Name) {
   // Store cache index paths under filename-safe, collision-resistant INI keys.
-  return BinaryToHex(CryptManager::GetSHA1ForString(Name));
+  return BinaryToHex(
+      CryptManager::GetSHA1ForString(NormalizeCacheKeyPath(Name)));
 }
 
 /*
