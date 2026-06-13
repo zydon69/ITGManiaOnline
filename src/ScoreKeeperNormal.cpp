@@ -143,15 +143,10 @@ void ScoreKeeperNormal::Load(
         ndPost, *pTiming, m_pPlayerState->m_PlayerOptions.GetStage(),
         pSteps->m_StepsType);
 
-    GAMESTATE->SetProcessedTimingData(
-        pSteps->GetTimingData());  // XXX: Not sure why but
-                                   // NoteDataUtil::CalculateRadarValues
-                                   // segfaults without this
     iTotalPossibleDancePoints += this->GetPossibleDancePoints(
         &ndPre, &ndPost, pTiming, pSong->m_fMusicLengthSeconds);
     iTotalPossibleGradePoints += this->GetPossibleGradePoints(
         &ndPre, &ndPost, pTiming, pSong->m_fMusicLengthSeconds);
-    GAMESTATE->SetProcessedTimingData(nullptr);
   }
 
   m_pPlayerStageStats->m_iPossibleDancePoints = iTotalPossibleDancePoints;
@@ -682,7 +677,7 @@ int ScoreKeeperNormal::GetPossibleDancePoints(
    * W2 will be used instead. */
   // XXX: That's not actually implemented!
   RadarValues radars;
-  NoteDataUtil::CalculateRadarValues(*nd, fSongSeconds, radars);
+  NoteDataUtil::CalculateRadarValues(*nd, fSongSeconds, td, radars);
 
   int ret = 0;
 
@@ -717,7 +712,7 @@ int ScoreKeeperNormal::GetPossibleGradePoints(
    * W2 will be used instead. */
   // XXX: That's not actually implemented!
   RadarValues radars;
-  NoteDataUtil::CalculateRadarValues(*nd, fSongSeconds, radars);
+  NoteDataUtil::CalculateRadarValues(*nd, fSongSeconds, td, radars);
 
   int ret = 0;
 
