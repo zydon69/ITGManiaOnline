@@ -1442,11 +1442,18 @@ bool Profile::SaveAllToDir(std::string sDir, bool bSignData) const {
   m_sLastPlayedMachineGuid = PROFILEMAN->GetMachineProfile()->m_sGuid;
   m_LastPlayedDate = DateTime::GetNowDate();
 
+  bool bSaved = SaveStatsXmlToDir(sDir, bSignData);
+  if (!bSaved) {
+    LOG->Warn(
+        "Profile::SaveAllToDir: refusing to write auxiliary profile files "
+        "because Stats.xml failed for '%s'",
+        sDir.c_str());
+    return false;
+  }
+
   SaveTypeToDir(sDir);
   // Save editable.ini
   SaveEditableDataToDir(sDir);
-
-  bool bSaved = SaveStatsXmlToDir(sDir, bSignData);
 
   SaveStatsWebPageToDir(sDir);
 
