@@ -470,10 +470,31 @@ void StageStats::FinalizeScores(bool bSummary) {
 }
 
 bool StageStats::PlayerHasHighScore(PlayerNumber pn) const {
+  if (!IsValidPlayerNumber(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: StageStats::PlayerHasHighScore ignored invalid "
+        "player %i.",
+        pn);
+    return false;
+  }
+  if (m_vpPlayedSongs.empty() || m_vpPlayedSongs[0] == nullptr ||
+      m_player[pn].m_vpPossibleSteps.empty() ||
+      m_player[pn].m_vpPossibleSteps[0] == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: StageStats::PlayerHasHighScore missing stats for "
+        "player %i.",
+        pn);
+    return false;
+  }
   const Song* pSong = m_vpPlayedSongs[0];
   const Steps* pSteps = m_player[pn].m_vpPossibleSteps[0];
   const Course* pCourse = GAMESTATE->m_pCurCourse;
   const Trail* pTrail = GAMESTATE->m_pCurTrail[pn];
+  if (GAMESTATE->IsCourseMode() &&
+      !HasCourseScoreContext(
+          pCourse, pTrail, pn, "StageStats::PlayerHasHighScore")) {
+    return false;
+  }
 
   // Don't show high scores for tutorial songs.
   if (pSong->IsTutorial() == Song::SHOW_NEVER) {
@@ -504,7 +525,14 @@ bool StageStats::PlayerHasHighScore(PlayerNumber pn) const {
 
 unsigned int StageStats::GetMinimumMissCombo() const {
   unsigned int iMin = INT_MAX;
-  FOREACH_HumanPlayer(p) iMin = std::min(iMin, m_player[p].m_iCurMissCombo);
+  bool bSawHumanPlayer = false;
+  FOREACH_HumanPlayer(p) {
+    bSawHumanPlayer = true;
+    iMin = std::min(iMin, m_player[p].m_iCurMissCombo);
+  }
+  if (!bSawHumanPlayer) {
+    return 0;
+  }
   return iMin;
 }
 
@@ -525,6 +553,13 @@ class LunaStageStats : public Luna<StageStats> {
   static int GetPlayedSongs(T* p, lua_State* L) {
     lua_newtable(L);
     for (int i = 0; i < (int)p->m_vpPlayedSongs.size(); ++i) {
+      if (p->m_vpPlayedSongs[i] == nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: StageStats:GetPlayedSongs skipped null song at "
+            "index %i.",
+            i);
+        continue;
+      }
       p->m_vpPlayedSongs[i]->PushSelf(L);
       lua_rawseti(L, -2, i + 1);
     }
@@ -533,6 +568,13 @@ class LunaStageStats : public Luna<StageStats> {
   static int GetPossibleSongs(T* p, lua_State* L) {
     lua_newtable(L);
     for (int i = 0; i < (int)p->m_vpPossibleSongs.size(); ++i) {
+      if (p->m_vpPossibleSongs[i] == nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: StageStats:GetPossibleSongs skipped null song at "
+            "index %i.",
+            i);
+        continue;
+      }
       p->m_vpPossibleSongs[i]->PushSelf(L);
       lua_rawseti(L, -2, i + 1);
     }
