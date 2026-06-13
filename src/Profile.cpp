@@ -2713,10 +2713,10 @@ std::string Profile::MakeUniqueFileNameNoExtension(
 
   int iIndex = 0;
 
-  for (int i = files.size() - 1; i >= 0; --i) {
+  for (auto file = files.rbegin(); file != files.rend(); ++file) {
     static Regex re("^" + sFileNameBeginning + "([0-9]{5})\\....$");
     std::vector<std::string> matches;
-    if (!re.Compare(files[i], matches)) {
+    if (!re.Compare(*file, matches)) {
       continue;
     }
 
