@@ -970,7 +970,23 @@ void SMLoader::ProcessTickcounts(
             arrayTickcountExpressions[f], iTicks)) {
       continue;
     }
-    iTicks = std::clamp(iTicks, 0, ROWS_PER_BEAT);
+
+    if (fTickcountBeat < 0) {
+      LOG->UserLog(
+          "Song file", this->GetSongTitle(),
+          "SRC_AUDIT_FIX rejected invalid #TICKCOUNTS beat %f in \"%s\".",
+          fTickcountBeat, arrayTickcountExpressions[f].c_str());
+      continue;
+    }
+
+    if (iTicks < 1 || iTicks > ROWS_PER_BEAT) {
+      LOG->UserLog(
+          "Song file", this->GetSongTitle(),
+          "SRC_AUDIT_FIX rejected invalid #TICKCOUNTS tick count %i in "
+          "\"%s\".",
+          iTicks, arrayTickcountExpressions[f].c_str());
+      continue;
+    }
 
     out.AddSegment(TickcountSegment(BeatToNoteRow(fTickcountBeat), iTicks));
   }
@@ -1066,6 +1082,14 @@ void SMLoader::ProcessFakes(
         !ParseSMFloat(
             *this, "FAKES", "beats", arrayFakeValues[1],
             arrayFakeExpressions[b], fSkippedBeats)) {
+      continue;
+    }
+
+    if (fBeat < 0) {
+      LOG->UserLog(
+          "Song file", this->GetSongTitle(),
+          "SRC_AUDIT_FIX rejected invalid #FAKES beat %f in \"%s\".", fBeat,
+          arrayFakeExpressions[b].c_str());
       continue;
     }
 
