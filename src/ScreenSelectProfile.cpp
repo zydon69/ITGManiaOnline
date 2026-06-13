@@ -246,27 +246,58 @@ bool ScreenSelectProfile::Finish() {
     PROFILEMAN->UnloadProfile(p);
   }
 
+  auto abortProfileLoad = []() {
+    FOREACH_PlayerNumber(p) {
+      MEMCARDMAN->UnlockCard(p);
+      MEMCARDMAN->UnmountCard(p);
+      PROFILEMAN->UnloadProfile(p);
+    }
+    return false;
+  };
+
   // all ok - load profiles and go to next screen
   FOREACH_PlayerNumber(p) {
     if (m_iSelectedProfiles[p] > 0) {
-      PROFILEMAN->m_sDefaultLocalProfileID[p].Set(
-          PROFILEMAN->GetLocalProfileIDFromIndex(m_iSelectedProfiles[p] - 1));
-      PROFILEMAN->LoadLocalProfileFromMachine(p);
+      std::string sProfileID =
+          PROFILEMAN->GetLocalProfileIDFromIndex(m_iSelectedProfiles[p] - 1);
+      if (sProfileID.empty()) {
+        LOG->Warn(
+            "ScreenSelectProfile::Finish: no local profile at index %d",
+            m_iSelectedProfiles[p] - 1);
+        return abortProfileLoad();
+      }
+      PROFILEMAN->m_sDefaultLocalProfileID[p].Set(sProfileID);
+      if (!PROFILEMAN->LoadLocalProfileFromMachine(p)) {
+        LOG->Warn(
+            "ScreenSelectProfile::Finish: failed to load local profile '%s'",
+            sProfileID.c_str());
+        return abortProfileLoad();
+      }
       GAMESTATE->LoadCurrentSettingsFromProfile(p);
     }
     if (m_iSelectedProfiles[p] == 0) {
       MEMCARDMAN->WaitForCheckingToComplete();
 
-      MEMCARDMAN->MountCard(p);
+      if (!MEMCARDMAN->MountCard(p)) {
+        LOG->Warn(
+            "ScreenSelectProfile::Finish: failed to mount memory card for P%d",
+            p + 1);
+        return abortProfileLoad();
+      }
       bool bSuccess =
           PROFILEMAN->LoadProfileFromMemoryCard(p, true);  // load full profile
       MEMCARDMAN->UnmountCard(p);
+      if (!bSuccess) {
+        LOG->Warn(
+            "ScreenSelectProfile::Finish: failed to load memory card profile "
+            "for P%d",
+            p + 1);
+        return abortProfileLoad();
+      }
 
       // Lock the card on successful load, so we won't allow it to be changed.
-      if (bSuccess) {
-        GAMESTATE->LoadCurrentSettingsFromProfile(p);
-        MEMCARDMAN->LockCard(p);
-      }
+      GAMESTATE->LoadCurrentSettingsFromProfile(p);
+      MEMCARDMAN->LockCard(p);
     }
 
     // If the player picked a profile (>= 0) or chose to play as a guest (-3),
