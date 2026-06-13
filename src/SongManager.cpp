@@ -2448,38 +2448,37 @@ void SongManager::LoadStepEditsFromProfileDir(
   SMLoader loaderSM;
   int iNumEditsLoaded = GetNumEditsLoadedFromProfile(slot);
 
-  // Pass 1: Flat folder (old style)
-  std::vector<std::string> vsFiles;
-  GetDirListing(sDir + "*.edit", vsFiles, false, true);
-  int remainingEdits =
-      std::max(0, MAX_EDIT_STEPS_PER_PROFILE - iNumEditsLoaded);
-  int size = std::min((int)vsFiles.size(), remainingEdits);
-  if ((int)vsFiles.size() > remainingEdits) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX: clamping old-style profile edits for %s: files=%i, "
-        "already_loaded=%i, remaining=%i, loading=%i.",
-        ProfileSlotToString(slot).c_str(), (int)vsFiles.size(),
-        iNumEditsLoaded, remainingEdits, size);
-  }
+	  // Pass 1: Flat folder (old style)
+	  std::vector<std::string> vsFiles;
+	  GetDirListing(sDir + "*.edit", vsFiles, false, true);
+	  int skippedEditsByLimit = 0;
+	  for (unsigned i = 0; i < vsFiles.size(); i++) {
+	    int remainingEdits =
+	        std::max(0, MAX_EDIT_STEPS_PER_PROFILE - iNumEditsLoaded);
+	    if (remainingEdits <= 0) {
+	      ++skippedEditsByLimit;
+	      continue;
+	    }
+	    std::string fn = vsFiles[i];
+	    bool bLoadedFromSSC = loaderSSC.LoadEditFromFile(fn, slot, true);
+	    // If we don't load the edit from a .ssc-style .edit, then we should
+	    // also try the .sm-style edit file. -aj
+	    if (!bLoadedFromSSC) {
+	      loaderSM.LoadEditFromFile(fn, slot, true);
+	    }
+	    iNumEditsLoaded = GetNumEditsLoadedFromProfile(slot);
+	  }
 
-  // XXX: If some edits are invalid and they're close to the edit limit, this
-  // may erroneously skip some edits, and won't warn.
-  for (int i = 0; i < size; i++) {
-    std::string fn = vsFiles[i];
-    bool bLoadedFromSSC = loaderSSC.LoadEditFromFile(fn, slot, true);
-    // If we don't load the edit from a .ssc-style .edit, then we should
-    // also try the .sm-style edit file. -aj
-    if (!bLoadedFromSSC) {
-      loaderSM.LoadEditFromFile(fn, slot, true);
-    }
-  }
-
-  if ((int)vsFiles.size() > remainingEdits) {
-    LuaHelpers::ReportScriptErrorFmt(
-        "Profile %s has too many edits; some have been skipped.",
-        ProfileSlotToString(slot).c_str());
-    return;
-  }
+	  if (skippedEditsByLimit > 0) {
+	    LOG->Warn(
+	        "SRC_AUDIT_FIX SRC-625: skipped %i old-style profile edits for %s "
+	        "after reaching MAX_EDIT_STEPS_PER_PROFILE.",
+	        skippedEditsByLimit, ProfileSlotToString(slot).c_str());
+	    LuaHelpers::ReportScriptErrorFmt(
+	        "Profile %s has too many edits; some have been skipped.",
+	        ProfileSlotToString(slot).c_str());
+	    return;
+	  }
 
   // Some .edit files may have been invalid, so re-query instead of just +=
   // size.
@@ -2496,36 +2495,44 @@ void SongManager::LoadStepEditsFromProfileDir(
     std::vector<std::string> vsSongs;
     GetDirListing(sDir + sGroupDir + "*", vsSongs, true, false);
 
-    for (unsigned j = 0; j < vsSongs.size(); j++) {
-      std::vector<std::string> vsEdits;
-      std::string sSongDir = sGroupDir + vsSongs[j] + "/";
-      // XXX There doesn't appear to be a songdir const?
+	    for (unsigned j = 0; j < vsSongs.size(); j++) {
+	      std::vector<std::string> vsEdits;
+	      std::string sSongDir = sGroupDir + vsSongs[j] + "/";
+	      // XXX There doesn't appear to be a songdir const?
 	      Song* given = GetSongFromDir(SpecialFiles::SONGS_DIR + sSongDir);
       // NOTE: We don't have to check the return value of GetSongFromDir here,
       // because if it fails, it returns nullptr, which is then passed to
       // NotesLoader*.LoadEditFromFile(), which will interpret that as "we
       // couldn't infer the song from the path", which is what we want in that
-      // case anyway.
-      GetDirListing(sDir + sSongDir + "/*.edit", vsEdits, false, true);
-      remainingEdits =
-          std::max(0, MAX_EDIT_STEPS_PER_PROFILE - iNumEditsLoaded);
-      size = std::min((int)vsEdits.size(), remainingEdits);
+	      // case anyway.
+	      GetDirListing(sDir + sSongDir + "/*.edit", vsEdits, false, true);
 
-      for (int k = 0; k < size; k++) {
-        std::string fn = vsEdits[k];
-        bool bLoadedFromSSC = loaderSSC.LoadEditFromFile(fn, slot, true, given);
-        // And try again with SM
-        if (!bLoadedFromSSC) {
-          loaderSM.LoadEditFromFile(fn, slot, true, given);
-        }
-      }
+	      for (unsigned k = 0; k < vsEdits.size(); k++) {
+	        int remainingEdits =
+	            std::max(0, MAX_EDIT_STEPS_PER_PROFILE - iNumEditsLoaded);
+	        if (remainingEdits <= 0) {
+	          ++skippedEditsByLimit;
+	          continue;
+	        }
+	        std::string fn = vsEdits[k];
+	        bool bLoadedFromSSC = loaderSSC.LoadEditFromFile(fn, slot, true, given);
+	        // And try again with SM
+	        if (!bLoadedFromSSC) {
+	          loaderSM.LoadEditFromFile(fn, slot, true, given);
+	        }
+	        iNumEditsLoaded = GetNumEditsLoadedFromProfile(slot);
+	      }
 
-      if ((int)vsEdits.size() > remainingEdits) {
-        LuaHelpers::ReportScriptErrorFmt(
-            "Profile %s has too many edits; some have been skipped.",
-            ProfileSlotToString(slot).c_str());
-        return;
-      }
+	      if (skippedEditsByLimit > 0) {
+	        LOG->Warn(
+	            "SRC_AUDIT_FIX SRC-625: skipped %i nested profile edits for %s "
+	            "after reaching MAX_EDIT_STEPS_PER_PROFILE.",
+	            skippedEditsByLimit, ProfileSlotToString(slot).c_str());
+	        LuaHelpers::ReportScriptErrorFmt(
+	            "Profile %s has too many edits; some have been skipped.",
+	            ProfileSlotToString(slot).c_str());
+	        return;
+	      }
 
       // Some .edit files may have been invalid, so re-query instead of just +=
       // size.
