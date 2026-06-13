@@ -107,6 +107,19 @@ static bool CompareCoursePointersByRanking(
   return iNum1 < iNum2;
 }
 
+static bool GetCurrentCourseStepsType(StepsType& stOut, const char* sContext) {
+  const Style* pStyle = GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
+  if (pStyle == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-134: %s requested without a current style; falling "
+        "back to title sort",
+        sContext);
+    return false;
+  }
+  stOut = pStyle->m_StepsType;
+  return true;
+}
+
 void CourseUtil::SortCoursePointerArrayByDifficulty(
     std::vector<Course*>& vpCoursesInOut) {
   sort(
@@ -116,9 +129,13 @@ void CourseUtil::SortCoursePointerArrayByDifficulty(
 
 void CourseUtil::SortCoursePointerArrayByRanking(
     std::vector<Course*>& vpCoursesInOut) {
+  StepsType st = StepsType_Invalid;
+  if (!GetCurrentCourseStepsType(st, "SortCoursePointerArrayByRanking")) {
+    SortCoursePointerArrayByTitle(vpCoursesInOut);
+    return;
+  }
   for (unsigned i = 0; i < vpCoursesInOut.size(); i++) {
-    vpCoursesInOut[i]->UpdateCourseStats(
-        GAMESTATE->GetCurrentStyle(PLAYER_INVALID)->m_StepsType);
+    vpCoursesInOut[i]->UpdateCourseStats(st);
   }
   sort(
       vpCoursesInOut.begin(), vpCoursesInOut.end(),
@@ -127,9 +144,13 @@ void CourseUtil::SortCoursePointerArrayByRanking(
 
 void CourseUtil::SortCoursePointerArrayByTotalDifficulty(
     std::vector<Course*>& vpCoursesInOut) {
+  StepsType st = StepsType_Invalid;
+  if (!GetCurrentCourseStepsType(st, "SortCoursePointerArrayByTotalDifficulty")) {
+    SortCoursePointerArrayByTitle(vpCoursesInOut);
+    return;
+  }
   for (unsigned i = 0; i < vpCoursesInOut.size(); i++) {
-    vpCoursesInOut[i]->UpdateCourseStats(
-        GAMESTATE->GetCurrentStyle(PLAYER_INVALID)->m_StepsType);
+    vpCoursesInOut[i]->UpdateCourseStats(st);
   }
   sort(
       vpCoursesInOut.begin(), vpCoursesInOut.end(),
@@ -206,11 +227,14 @@ void CourseUtil::SortCoursePointerArrayByTitle(
 void CourseUtil::SortCoursePointerArrayByAvgDifficulty(
     std::vector<Course*>& vpCoursesInOut) {
   RageTimer foo;
+  StepsType st = StepsType_Invalid;
+  if (!GetCurrentCourseStepsType(st, "SortCoursePointerArrayByAvgDifficulty")) {
+    SortCoursePointerArrayByTitle(vpCoursesInOut);
+    return;
+  }
   course_sort_val.clear();
   for (unsigned i = 0; i < vpCoursesInOut.size(); ++i) {
-    int iMeter = vpCoursesInOut[i]->GetMeter(
-        GAMESTATE->GetCurrentStyle(PLAYER_INVALID)->m_StepsType,
-        Difficulty_Medium);
+    int iMeter = vpCoursesInOut[i]->GetMeter(st, Difficulty_Medium);
     course_sort_val[vpCoursesInOut[i]] = ssprintf("%06i", iMeter);
   }
   sort(
