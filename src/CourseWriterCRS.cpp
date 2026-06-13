@@ -42,8 +42,20 @@ bool CourseWriterCRS::Write(
 
 void CourseWriterCRS::GetEditFileContents(
     const Course* pCourse, std::string& sOut) {
+  if (pCourse == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-120: null course passed to GetEditFileContents");
+    sOut.clear();
+    return;
+  }
+
   RageFileObjMem mem;
-  CourseWriterCRS::Write(*pCourse, mem, true);
+  if (!CourseWriterCRS::Write(*pCourse, mem, true)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-120: failed to serialize edit course '%s'",
+        pCourse->GetDisplayFullTitle().c_str());
+    sOut.clear();
+    return;
+  }
   sOut = mem.GetString();
 }
 
