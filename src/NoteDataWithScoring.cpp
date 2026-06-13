@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <vector>
 
 #include "EnumHelper.h"
@@ -28,7 +29,122 @@ namespace {
 static ThemeMetric<TapNoteScore> MIN_SCORE_TO_MAINTAIN_COMBO(
     "Gameplay", "MinScoreToMaintainCombo");
 
+bool IsValidTapNoteScore(TapNoteScore tns) {
+  return tns >= TNS_None && tns < NUM_TapNoteScore;
+}
+
+bool IsValidPlayerNumberForScoring(PlayerNumber pn) {
+  return pn == PLAYER_INVALID || (pn >= PLAYER_1 && pn < NUM_PLAYERS);
+}
+
+bool IsValidScoringRow(unsigned row) {
+  return row <= MAX_NOTE_ROW;
+}
+
+bool HasScoringTapType(const TapNote& tn) {
+  return tn.type != TapNoteType_Empty && tn.type != TapNoteType_Mine &&
+         tn.type != TapNoteType_Fake &&
+         tn.type != TapNoteType_AutoKeysound;
+}
+
+TapNoteScore NormalizeTapNoteScore(
+    TapNoteScore tns, TapNoteScore fallback, const char* context) {
+  if (IsValidTapNoteScore(tns)) {
+    return tns;
+  }
+  LOG->Warn(
+      "SRC_AUDIT_FIX: NoteDataWithScoring ignored invalid TapNoteScore %i in "
+      "%s.",
+      static_cast<int>(tns), context);
+  return fallback;
+}
+
+TapNoteScore NormalizeThreshold(
+    TapNoteScore tns, TapNoteScore fallback, const char* context) {
+  if (IsValidTapNoteScore(tns)) {
+    return tns;
+  }
+  LOG->Warn(
+      "SRC_AUDIT_FIX: NoteDataWithScoring replaced invalid threshold %i in "
+      "%s with %s.",
+      static_cast<int>(tns), context, TapNoteScoreToString(fallback).c_str());
+  return fallback;
+}
+
+float NormalizeTapOffset(float offset, const char* context) {
+  if (std::isfinite(offset)) {
+    return offset;
+  }
+  LOG->Warn(
+      "SRC_AUDIT_FIX: NoteDataWithScoring replaced non-finite tap offset %f "
+      "in %s with 0.",
+      offset, context);
+  return 0.0f;
+}
+
+int AddSaturatedInt(int current, int add, const char* context) {
+  if (add <= 0) {
+    return current;
+  }
+  if (current > std::numeric_limits<int>::max() - add) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: NoteDataWithScoring saturated %s counter %i + %i.",
+        context, current, add);
+    return std::numeric_limits<int>::max();
+  }
+  return current + add;
+}
+
+int IncrementIf(int current, bool condition, const char* context) {
+  return condition ? AddSaturatedInt(current, 1, context) : current;
+}
+
+int ClampRadarCount(float value, RadarCategory rc) {
+  if (!std::isfinite(value) || value <= 0.0f) {
+    if (value < 0.0f || !std::isfinite(value)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: NoteDataWithScoring clamped invalid possible radar "
+          "%s value %f to 0.",
+          RadarCategoryToString(rc).c_str(), value);
+    }
+    return 0;
+  }
+  const float maxInt = static_cast<float>(std::numeric_limits<int>::max());
+  if (value > maxInt) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: NoteDataWithScoring saturated possible radar %s value "
+        "%f.",
+        RadarCategoryToString(rc).c_str(), value);
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(value);
+}
+
+int SafeHoldEndRow(int row, int duration) {
+  if (duration <= 0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: NoteDataWithScoring ignored invalid hold duration %i "
+        "at row %i.",
+        duration, row);
+    return -1;
+  }
+  if (duration > MAX_NOTE_ROW - row) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: NoteDataWithScoring clamped overflowing hold end row "
+        "%i + %i.",
+        row, duration);
+    return MAX_NOTE_ROW;
+  }
+  return row + duration;
+}
+
 bool NoteBelongsToPlayer(const TapNote& tn, PlayerNumber pn) {
+  if (!IsValidPlayerNumberForScoring(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: NoteDataWithScoring ignored invalid PlayerNumber %i.",
+        static_cast<int>(pn));
+    return false;
+  }
   return pn == PLAYER_INVALID || tn.pn == PLAYER_INVALID || tn.pn == pn;
 }
 
@@ -36,26 +152,34 @@ bool NoteBelongsToPlayer(const TapNote& tn, PlayerNumber pn) {
  * the row.  If the row has no tap notes, return -1.  If any tap notes aren't
  * graded (any tap is TNS_None) or are missed (TNS_Miss), return it. */
 int LastTapNoteScoreTrack(const NoteData& in, unsigned iRow, PlayerNumber pn) {
+  if (!IsValidScoringRow(iRow) || !IsValidPlayerNumberForScoring(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: NoteDataWithScoring rejected row helper request row=%u "
+        "player=%i.",
+        iRow, static_cast<int>(pn));
+    return -1;
+  }
   float scoretime = -9999;
   int best_track = -1;
   for (int t = 0; t < in.GetNumTracks(); t++) {
     /* Skip empty tracks and mines */
     const TapNote& tn = in.GetTapNote(t, iRow);
-    if (tn.type == TapNoteType_Empty || tn.type == TapNoteType_Mine ||
-        tn.type == TapNoteType_Fake || tn.type == TapNoteType_AutoKeysound) {
+    if (!HasScoringTapType(tn)) {
       continue;
     }
     if (!NoteBelongsToPlayer(tn, pn)) {
       continue;
     }
 
-    TapNoteScore tns = tn.result.tns;
+    TapNoteScore tns = NormalizeTapNoteScore(
+        tn.result.tns, TNS_None, "LastTapNoteScoreTrack");
 
     if (tns == TNS_Miss || tns == TNS_None) {
       return t;
     }
 
-    float tm = tn.result.fTapNoteOffset;
+    float tm =
+        NormalizeTapOffset(tn.result.fTapNoteOffset, "LastTapNoteScoreTrack");
     if (tm < scoretime) {
       continue;
     }
@@ -142,18 +266,25 @@ const TapNote& NoteDataWithScoring::LastTapNoteWithResult(
 TapNoteScore NoteDataWithScoring::MinTapNoteScore(
     const NoteData& in, unsigned row, PlayerNumber plnum) {
   // LOG->Trace("Hey I'm NoteDataWithScoring::MinTapNoteScore");
+  if (!IsValidScoringRow(row) || !IsValidPlayerNumberForScoring(plnum)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: NoteDataWithScoring rejected MinTapNoteScore row=%u "
+        "player=%i.",
+        row, static_cast<int>(plnum));
+    return TNS_None;
+  }
   TapNoteScore score = TNS_W1;
   bool foundScoredNote = false;
   for (int t = 0; t < in.GetNumTracks(); t++) {
     // Ignore mines (and fake arrows), or the score will always be TNS_None.
     const TapNote& tn = in.GetTapNote(t, row);
-    if (tn.type == TapNoteType_Empty || tn.type == TapNoteType_Mine ||
-        tn.type == TapNoteType_Fake || tn.type == TapNoteType_AutoKeysound ||
-        !NoteBelongsToPlayer(tn, plnum)) {
+    if (!HasScoringTapType(tn) || !NoteBelongsToPlayer(tn, plnum)) {
       continue;
     }
+    TapNoteScore tns =
+        NormalizeTapNoteScore(tn.result.tns, TNS_None, "MinTapNoteScore");
     foundScoredNote = true;
-    score = std::min(score, tn.result.tns);
+    score = std::min(score, tns);
   }
 
   // LOG->Trace( ssprintf("OMG score is??
@@ -311,8 +442,26 @@ void NoteDataWithScoring::GetActualRadarValues(
   // Some of this logic is similar or identical to
   // NoteDataUtil::CalculateRadarValues because I couldn't figure out a good
   // way to combine them into one. -Kyz
-  PlayerNumber pn = pss.m_player_number;
+  PlayerNumber pn = pss.m_for_multiplayer ? PLAYER_INVALID : pss.m_player_number;
+  if (!IsValidPlayerNumberForScoring(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: NoteDataWithScoring using PLAYER_INVALID for invalid "
+        "actual radar player %i.",
+        static_cast<int>(pn));
+    pn = PLAYER_INVALID;
+  }
   garv_state state;
+  state.stream_tns =
+      NormalizeThreshold(state.stream_tns, TNS_W2, "actual radar stream");
+  state.air_tns = NormalizeThreshold(state.air_tns, TNS_W2, "actual radar air");
+  state.taps_tns =
+      NormalizeThreshold(state.taps_tns, TNS_W4, "actual radar taps");
+  state.jumps_tns =
+      NormalizeThreshold(state.jumps_tns, TNS_W4, "actual radar jumps");
+  state.hands_tns =
+      NormalizeThreshold(state.hands_tns, TNS_W4, "actual radar hands");
+  state.lifts_tns =
+      NormalizeThreshold(state.lifts_tns, TNS_W4, "actual radar lifts");
 
   NoteData::all_tracks_const_iterator curr_note =
       in.GetTapNoteRangeAllTracks(0, MAX_NOTE_ROW);
@@ -412,9 +561,9 @@ void NoteDataWithScoring::GetActualRadarValues(
   }
   DoRowEndRadarActualCalc(state, out);
 
-  int note_count = possible[RadarCategory_Notes];
-  int jump_count = possible[RadarCategory_Jumps];
-  int hold_count = possible[RadarCategory_Holds];
+  int note_count = ClampRadarCount(possible[RadarCategory_Notes], RadarCategory_Notes);
+  int jump_count = ClampRadarCount(possible[RadarCategory_Jumps], RadarCategory_Jumps);
+  int hold_count = ClampRadarCount(possible[RadarCategory_Holds], RadarCategory_Holds);
   float hittable_steps_length = 0.0f;
   if (first_hittable_row != -1 && last_hittable_row != -1) {
     if (timing != nullptr) {
