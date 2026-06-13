@@ -1,5 +1,7 @@
 #include "Inventory.h"
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -9,6 +11,7 @@
 #include "PlayerNumber.h"
 #include "PlayerState.h"
 #include "PrefsManager.h"
+#include "RageLog.h"
 #include "RageSound.h"
 #include "RageTimer.h"
 #include "RageUtil.h"
@@ -22,9 +25,7 @@
 
 void ReloadItems();
 
-#define NUM_ITEM_TYPES THEME->GetMetricF("Inventory", "NumItemTypes")
-#define ITEM_DURATION_SECONDS \
-  THEME->GetMetricF("Inventory", "ItemDurationSeconds")
+#define ITEM_DURATION_SECONDS THEME->GetMetricF("Inventory", "ItemDurationSeconds")
 #define ITEM_COMBO(i) \
   THEME->GetMetricI("Inventory", ssprintf("Item%dCombo", i + 1))
 #define ITEM_EFFECT(i) \
@@ -33,8 +34,6 @@ void ReloadItems();
   THEME->GetMetricI("Inventory", ssprintf("Item%dLevel", i + 1))
 ThemeMetric<float> ITEM_USE_RATE_SECONDS("Inventory", "ItemUseRateSeconds");
 
-#define ITEM_USE_PROBABILITY (1.f / ITEM_USE_RATE_SECONDS)
-
 struct Item {
   AttackLevel level;
   unsigned int iCombo;
@@ -42,39 +41,72 @@ struct Item {
 };
 static std::vector<Item> g_Items;
 
+static bool IsValidInventoryPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+static bool IsValidInventoryAttackLevel(AttackLevel level) {
+  return level >= ATTACK_LEVEL_1 && level < NUM_ATTACK_LEVELS;
+}
+
+static void ClearUseItemSounds(std::vector<RageSound*>& sounds) {
+  for (RageSound* sound : sounds) {
+    delete sound;
+  }
+  sounds.clear();
+}
+
+static int GetSafeNumItemTypes() {
+  if (THEME == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Inventory has no theme manager.");
+    return 0;
+  }
+  const float value = THEME->GetMetricF("Inventory", "NumItemTypes");
+  if (!std::isfinite(value) || value < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid Inventory NumItemTypes %f; using 0.", value);
+    return 0;
+  }
+  return std::clamp(static_cast<int>(std::floor(value)), 0, 128);
+}
+
 void ReloadItems() {
   g_Items.clear();
-  for (int i = 0; i < NUM_ITEM_TYPES; i++) {
+  for (int i = 0; i < GetSafeNumItemTypes(); i++) {
     Item item;
     item.level = (AttackLevel)(ITEM_LEVEL(i) - 1);
+    if (!IsValidInventoryAttackLevel(item.level)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Ignoring inventory item %i with invalid level %i.",
+          i, item.level);
+      continue;
+    }
     item.iCombo = ITEM_COMBO(i);
     item.sModifier = ITEM_EFFECT(i);
+    if (item.sModifier.empty()) {
+      LOG->Warn("SRC_AUDIT_FIX: Ignoring inventory item %i with empty effect.", i);
+      continue;
+    }
     g_Items.push_back(item);
   }
 }
 
-Inventory::Inventory() {
-  PlayMode mode = GAMESTATE->m_PlayMode;
-  switch (mode) {
-    case PLAY_MODE_BATTLE:
-      break;
-    default:
-      FAIL_M(ssprintf("Inventory not valid for PlayMode %i", mode));
-  }
-}
+Inventory::Inventory() : m_pPlayerState(nullptr), m_iLastSeenCombo(0) {}
 
 Inventory::~Inventory() {
-  for (unsigned i = 0; i < m_vpSoundUseItem.size(); i++) {
-    delete m_vpSoundUseItem[i];
-  }
-  m_vpSoundUseItem.clear();
+  ClearUseItemSounds(m_vpSoundUseItem);
 }
 
 void Inventory::Load(PlayerState* pPlayerState) {
+  ClearUseItemSounds(m_vpSoundUseItem);
   ReloadItems();
 
   m_pPlayerState = pPlayerState;
   m_iLastSeenCombo = 0;
+  if (m_pPlayerState == nullptr || GAMESTATE == nullptr || THEME == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Inventory::Load missing required context.");
+    return;
+  }
 
   // don't load battle sounds if they're not going to be used
   switch (GAMESTATE->m_PlayMode) {
@@ -95,12 +127,19 @@ void Inventory::Load(PlayerState* pPlayerState) {
 }
 
 void Inventory::Update(float fDelta) {
+  if (m_pPlayerState == nullptr || GAMESTATE == nullptr || STATSMAN == nullptr ||
+      PREFSMAN == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Inventory::Update missing gameplay context.");
+    return;
+  }
+  PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
+  if (!IsValidInventoryPlayer(pn)) {
+    LOG->Warn("SRC_AUDIT_FIX: Inventory::Update invalid player %i.", pn);
+    return;
+  }
   if (m_pPlayerState->m_bAttackEndedThisUpdate) {
     m_soundItemEnding.Play(false);
   }
-
-  // TODO: remove use of PlayerNumber
-  PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
 
   // check to see if they deserve a new item
   if (STATSMAN->m_CurStageStats.m_player[pn].m_iCurCombo != m_iLastSeenCombo) {
@@ -126,18 +165,29 @@ void Inventory::Update(float fDelta) {
     }
   }
 
-  Song& song = *GAMESTATE->m_pCurSong;
+  Song* song = GAMESTATE->m_pCurSong;
+  if (song == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Inventory::Update missing current song.");
+    return;
+  }
   // use items if this player is CPU-controlled
   if (m_pPlayerState->m_PlayerController != PC_HUMAN &&
-      GAMESTATE->m_Position.m_fSongBeat < song.GetLastBeat()) {
+      GAMESTATE->m_Position.m_fSongBeat < song->GetLastBeat()) {
     // every 1 seconds, try to use an item
+    if (!std::isfinite(fDelta) || fDelta < 0.0f) {
+      LOG->Warn("SRC_AUDIT_FIX: Inventory::Update invalid delta %f.", fDelta);
+      return;
+    }
+    const float useRate = ITEM_USE_RATE_SECONDS;
+    const float useProbability =
+        std::isfinite(useRate) && useRate > 0.0f ? 1.0f / useRate : 0.0f;
     int iDelta = static_cast<int>(fDelta);
     int iLastSecond = RageTimer::GetTimeSinceStartSeconds() - iDelta;
     int iThisSecond = RageTimer::GetTimeSinceStartSeconds();
     if (iLastSecond != iThisSecond) {
       for (int s = 0; s < NUM_INVENTORY_SLOTS; s++) {
         if (!m_pPlayerState->m_Inventory[s].IsBlank()) {
-          if (randomf(0, 1) < ITEM_USE_PROBABILITY) {
+          if (randomf(0, 1) < useProbability) {
             UseItem(s);
           }
         }
@@ -147,6 +197,11 @@ void Inventory::Update(float fDelta) {
 }
 
 void Inventory::AwardItem(int iItemIndex) {
+  if (m_pPlayerState == nullptr || iItemIndex < 0 ||
+      iItemIndex >= static_cast<int>(g_Items.size())) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid inventory item index %i.", iItemIndex);
+    return;
+  }
   /* CPU players and replay data are vanity only. They should not effect
    * gameplay by acquiring/launching attacks. */
   if (m_pPlayerState->m_PlayerController == PC_CPU) {
@@ -180,6 +235,12 @@ void Inventory::AwardItem(int iItemIndex) {
     Attack a;
     a.sModifiers = g_Items[iItemIndex].sModifier;
     a.fSecsRemaining = ITEM_DURATION_SECONDS;
+    if (!std::isfinite(a.fSecsRemaining) || a.fSecsRemaining <= 0.0f) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Ignoring inventory item %i with invalid duration %f.",
+          iItemIndex, a.fSecsRemaining);
+      return;
+    }
     a.level = g_Items[iItemIndex].level;
     pInventory[iOpenSlot] = a;
     m_soundAcquireItem.Play(false);
@@ -188,6 +249,11 @@ void Inventory::AwardItem(int iItemIndex) {
 }
 
 void Inventory::UseItem(int iSlot) {
+  if (m_pPlayerState == nullptr || GAMESTATE == nullptr || iSlot < 0 ||
+      iSlot >= NUM_INVENTORY_SLOTS) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid inventory slot %i.", iSlot);
+    return;
+  }
   Attack* pInventory = m_pPlayerState->m_Inventory;  //[NUM_INVENTORY_SLOTS]
 
   if (pInventory[iSlot].IsBlank()) {
@@ -196,17 +262,39 @@ void Inventory::UseItem(int iSlot) {
 
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
   Attack a = pInventory[iSlot];
+  if (!IsValidInventoryPlayer(pn) || !IsValidInventoryAttackLevel(a.level)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Inventory item has invalid player/level %i/%i.", pn,
+        a.level);
+    return;
+  }
 
   // remove the item
   pInventory[iSlot].MakeBlank();
-  m_vpSoundUseItem[a.level]->Play(false);
+  if (a.level < static_cast<int>(m_vpSoundUseItem.size()) &&
+      m_vpSoundUseItem[a.level] != nullptr) {
+    m_vpSoundUseItem[a.level]->Play(false);
+  }
 
   PlayerNumber pnToAttack = OPPOSITE_PLAYER[pn];
+  if (!IsValidInventoryPlayer(pnToAttack) ||
+      GAMESTATE->m_pPlayerState[pnToAttack] == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Inventory item has invalid target %i.", pnToAttack);
+    return;
+  }
   PlayerState* pPlayerStateToAttack = GAMESTATE->m_pPlayerState[pnToAttack];
   pPlayerStateToAttack->LaunchAttack(a);
 
   float fPercentHealthToDrain = (a.level + 1) / 10.f;
-  ASSERT(fPercentHealthToDrain > 0);
+  if (!std::isfinite(fPercentHealthToDrain) || fPercentHealthToDrain <= 0.0f) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid inventory health drain %f.",
+              fPercentHealthToDrain);
+    return;
+  }
+  if (!std::isfinite(GAMESTATE->m_fOpponentHealthPercent)) {
+    LOG->Warn("SRC_AUDIT_FIX: Opponent health was non-finite; resetting.");
+    GAMESTATE->m_fOpponentHealthPercent = 1.0f;
+  }
   GAMESTATE->m_fOpponentHealthPercent -= fPercentHealthToDrain;
   rage_clamp(GAMESTATE->m_fOpponentHealthPercent, 0.f, 1.f);
 
