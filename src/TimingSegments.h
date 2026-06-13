@@ -1,6 +1,7 @@
 #ifndef TIMING_SEGMENTS_H
 #define TIMING_SEGMENTS_H
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -262,13 +263,20 @@ struct TickcountSegment : public TimingSegment {
   TimingSegment* Copy() const { return new TickcountSegment(*this); }
 
   TickcountSegment(int iStartRow = ROW_INVALID, int iTicks = DEFAULT_TICK_COUNT)
-      : TimingSegment(iStartRow), m_iTicksPerBeat(iTicks) {}
+      : TimingSegment(iStartRow) {
+    SetTicks(iTicks);
+  }
 
   TickcountSegment(const TickcountSegment& other)
-      : TimingSegment(other.GetRow()), m_iTicksPerBeat(other.GetTicks()) {}
+      : TimingSegment(other.GetRow()) {
+    SetTicks(other.GetTicks());
+  }
 
   int GetTicks() const { return m_iTicksPerBeat; }
-  void SetTicks(int iTicks) { m_iTicksPerBeat = iTicks; }
+  void SetTicks(int iTicks) {
+    m_iTicksPerBeat =
+        std::clamp(iTicks, 1, static_cast<int>(ROWS_PER_BEAT));
+  }
 
   std::string ToString(int dec) const;
   std::vector<float> GetValues() const {
@@ -315,18 +323,22 @@ struct ComboSegment : public TimingSegment {
   TimingSegment* Copy() const { return new ComboSegment(*this); }
 
   ComboSegment(int iStartRow = ROW_INVALID, int iCombo = 1, int iMissCombo = 1)
-      : TimingSegment(iStartRow), m_iCombo(iCombo), m_iMissCombo(iMissCombo) {}
+      : TimingSegment(iStartRow) {
+    SetCombo(iCombo);
+    SetMissCombo(iMissCombo);
+  }
 
   ComboSegment(const ComboSegment& other)
-      : TimingSegment(other.GetRow()),
-        m_iCombo(other.GetCombo()),
-        m_iMissCombo(other.GetMissCombo()) {}
+      : TimingSegment(other.GetRow()) {
+    SetCombo(other.GetCombo());
+    SetMissCombo(other.GetMissCombo());
+  }
 
   int GetCombo() const { return m_iCombo; }
   int GetMissCombo() const { return m_iMissCombo; }
 
-  void SetCombo(int iCombo) { m_iCombo = iCombo; }
-  void SetMissCombo(int iCombo) { m_iMissCombo = iCombo; }
+  void SetCombo(int iCombo) { m_iCombo = std::max(1, iCombo); }
+  void SetMissCombo(int iCombo) { m_iMissCombo = std::max(1, iCombo); }
 
   std::string ToString(int dec) const;
   std::vector<float> GetValues() const;
@@ -434,13 +446,19 @@ struct BPMSegment : public TimingSegment {
   }
 
   BPMSegment(const BPMSegment& other)
-      : TimingSegment(other.GetRow()), m_fBPS(other.GetBPS()) {}
+      : TimingSegment(other.GetRow()) {
+    SetBPS(other.GetBPS());
+  }
 
   float GetBPS() const { return m_fBPS; }
   float GetBPM() const { return m_fBPS * 60.0f; }
 
-  void SetBPS(float fBPS) { m_fBPS = fBPS; }
-  void SetBPM(float fBPM) { m_fBPS = fBPM / 60.0f; }
+  void SetBPS(float fBPS) {
+    m_fBPS = (std::isfinite(fBPS) && fBPS > 0.0f) ? fBPS : 1.0f;
+  }
+  void SetBPM(float fBPM) {
+    m_fBPS = (std::isfinite(fBPM) && fBPM > 0.0f) ? fBPM / 60.0f : 1.0f;
+  }
 
   std::string ToString(int dec) const;
   std::vector<float> GetValues() const {
@@ -486,22 +504,24 @@ struct TimeSignatureSegment : public TimingSegment {
 
   TimeSignatureSegment(
       int iStartRow = ROW_INVALID, int iNum = 4, int iDenom = 4)
-      : TimingSegment(iStartRow), m_iNumerator(iNum), m_iDenominator(iDenom) {}
+      : TimingSegment(iStartRow) {
+    Set(iNum, iDenom);
+  }
 
   TimeSignatureSegment(const TimeSignatureSegment& other)
-      : TimingSegment(other.GetRow()),
-        m_iNumerator(other.GetNum()),
-        m_iDenominator(other.GetDen()) {}
+      : TimingSegment(other.GetRow()) {
+    Set(other.GetNum(), other.GetDen());
+  }
 
   int GetNum() const { return m_iNumerator; }
-  void SetNum(int num) { m_iNumerator = num; }
+  void SetNum(int num) { m_iNumerator = std::max(1, num); }
 
   int GetDen() const { return m_iDenominator; }
-  void SetDen(int den) { m_iDenominator = den; }
+  void SetDen(int den) { m_iDenominator = std::max(1, den); }
 
   void Set(int num, int den) {
-    m_iNumerator = num;
-    m_iDenominator = den;
+    SetNum(num);
+    SetDen(den);
   }
 
   std::string ToString(int dec) const;
@@ -574,25 +594,33 @@ struct SpeedSegment : public TimingSegment {
   SpeedSegment(
       int iStartRow = ROW_INVALID, float fRatio = 1.0f, float fDelay = 0.0f,
       BaseUnit unit = UNIT_BEATS)
-      : TimingSegment(iStartRow),
-        m_fRatio(fRatio),
-        m_fDelay(fDelay),
-        m_Unit(unit) {}
+      : TimingSegment(iStartRow) {
+    SetRatio(fRatio);
+    SetDelay(fDelay);
+    SetUnit(unit);
+  }
 
   SpeedSegment(const SpeedSegment& other)
-      : TimingSegment(other.GetRow()),
-        m_fRatio(other.GetRatio()),
-        m_fDelay(other.GetDelay()),
-        m_Unit(other.GetUnit()) {}
+      : TimingSegment(other.GetRow()) {
+    SetRatio(other.GetRatio());
+    SetDelay(other.GetDelay());
+    SetUnit(other.GetUnit());
+  }
 
   float GetRatio() const { return m_fRatio; }
-  void SetRatio(float fRatio) { m_fRatio = fRatio; }
+  void SetRatio(float fRatio) {
+    m_fRatio = std::isfinite(fRatio) ? fRatio : 1.0f;
+  }
 
   float GetDelay() const { return m_fDelay; }
-  void SetDelay(float fDelay) { m_fDelay = fDelay; }
+  void SetDelay(float fDelay) {
+    m_fDelay = (std::isfinite(fDelay) && fDelay >= 0.0f) ? fDelay : 0.0f;
+  }
 
   BaseUnit GetUnit() const { return m_Unit; }
-  void SetUnit(BaseUnit unit) { m_Unit = unit; }
+  void SetUnit(BaseUnit unit) {
+    m_Unit = (unit == UNIT_SECONDS) ? UNIT_SECONDS : UNIT_BEATS;
+  }
 
   void Scale(int start, int length, int newLength);
 
@@ -655,13 +683,19 @@ struct ScrollSegment : public TimingSegment {
   TimingSegment* Copy() const { return new ScrollSegment(*this); }
 
   ScrollSegment(int iStartRow = ROW_INVALID, float fRatio = 1.0f)
-      : TimingSegment(iStartRow), m_fRatio(fRatio) {}
+      : TimingSegment(iStartRow) {
+    SetRatio(fRatio);
+  }
 
   ScrollSegment(const ScrollSegment& other)
-      : TimingSegment(other.GetRow()), m_fRatio(other.GetRatio()) {}
+      : TimingSegment(other.GetRow()) {
+    SetRatio(other.GetRatio());
+  }
 
   float GetRatio() const { return m_fRatio; }
-  void SetRatio(float fRatio) { m_fRatio = fRatio; }
+  void SetRatio(float fRatio) {
+    m_fRatio = std::isfinite(fRatio) ? fRatio : 1.0f;
+  }
 
   std::string ToString(int dec) const;
   std::vector<float> GetValues() const {
