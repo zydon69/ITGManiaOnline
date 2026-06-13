@@ -51,6 +51,10 @@ const float LESSON_PASS_THRESHOLD = 0.8f;
 Grade GetGradeFromPercent(float fPercent);
 
 namespace {
+bool IsValidPlayerNumber(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
 int GetSafePercentDecimalPlaces() {
   const int iDecimals = CommonMetrics::PERCENT_SCORE_DECIMAL_PLACES;
   const int iClamped = std::min(std::max(iDecimals, 0), 6);
@@ -424,9 +428,18 @@ void PlayerStageStats::SetLifeRecordAt(float fLife, float fStepsSecond) {
     return;
   }
 
+  if (!std::isfinite(fLife) || !std::isfinite(fStepsSecond)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::SetLifeRecordAt ignored "
+        "non-finite life record life=%f second=%f.",
+        fLife, fStepsSecond);
+    return;
+  }
+
   if (fStepsSecond < 0) {
     return;
   }
+  rage_clamp(fLife, 0.0f, 1.0f);
 
   m_fFirstSecond = std::min(fStepsSecond, m_fFirstSecond);
   m_fLastSecond = std::max(fStepsSecond, m_fLastSecond);
@@ -451,12 +464,19 @@ void PlayerStageStats::SetLifeRecordAt(float fLife, float fStepsSecond) {
   }
   m_fLifeRecord[fStepsSecond] = fLife;
 
-  Message msg(
-      static_cast<MessageID>(
-          Message_LifeMeterChangedP1 + Enum::to_integral(m_player_number)));
-  msg.SetParam("Life", fLife);
-  msg.SetParam("StepsSecond", fStepsSecond);
-  MESSAGEMAN->Broadcast(msg);
+  if (IsValidPlayerNumber(m_player_number)) {
+    Message msg(
+        static_cast<MessageID>(
+            Message_LifeMeterChangedP1 + Enum::to_integral(m_player_number)));
+    msg.SetParam("Life", fLife);
+    msg.SetParam("StepsSecond", fStepsSecond);
+    MESSAGEMAN->Broadcast(msg);
+  } else {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::SetLifeRecordAt skipped life "
+        "message for invalid player %i.",
+        m_player_number);
+  }
 
   // Memory optimization:
   // If we have three consecutive records A, B, and C all with the same fLife,
@@ -532,8 +552,26 @@ float PlayerStageStats::GetLifeRecordLerpAt(float fStepsSecond) const {
 
 void PlayerStageStats::GetLifeRecord(
     float* fLifeOut, int iNumSamples, float fStepsEndSecond) const {
+  if (fLifeOut == nullptr || iNumSamples <= 0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::GetLifeRecord ignored invalid "
+        "output buffer=%p samples=%i.",
+        static_cast<void*>(fLifeOut), iNumSamples);
+    return;
+  }
+  if (!std::isfinite(fStepsEndSecond) || fStepsEndSecond < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::GetLifeRecord normalized invalid "
+        "end second %f.",
+        fStepsEndSecond);
+    fStepsEndSecond = 0.0f;
+  }
+  if (iNumSamples == 1) {
+    fLifeOut[0] = GetLifeRecordLerpAt(0.0f);
+    return;
+  }
   for (int i = 0; i < iNumSamples; ++i) {
-    float from = SCALE(i, 0, (float)iNumSamples, 0.0f, fStepsEndSecond);
+    float from = SCALE(i, 0, (float)iNumSamples - 1.0f, 0.0f, fStepsEndSecond);
     fLifeOut[i] = GetLifeRecordLerpAt(from);
   }
 }
