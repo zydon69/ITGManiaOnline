@@ -788,6 +788,14 @@ void PlayerStageStats::CalcAwards(
 
   m_PeakComboAward = PeakComboAward_Invalid;
 
+  if (!IsValidPlayerNumber(p)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::CalcAwards ignored invalid player "
+        "%i.",
+        p);
+    return;
+  }
+
   if (bGaveUp || bUsedAutoplay) {
     return;
   }
