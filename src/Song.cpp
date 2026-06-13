@@ -88,6 +88,12 @@ bool IsPlayableStepsTypeIndex(StepsType st) {
   return st >= 0 && st < NUM_StepsType;
 }
 
+bool IsValidDisplayBPM(DisplayBPM type) {
+  return type >= 0 && type < NUM_DisplayBPM;
+}
+
+bool IsValidBPMValue(float bpm) { return std::isfinite(bpm) && bpm >= 0.0f; }
+
 bool IsValidInstrumentTrackIndex(InstrumentTrack it) {
   return it >= 0 && it < NUM_InstrumentTrack;
 }
@@ -309,14 +315,49 @@ void Song::InitSteps(Steps* pSteps) {
 }
 
 void Song::GetDisplayBpms(DisplayBpms& AddTo) const {
-  if (m_DisplayBPMType == DISPLAY_BPM_SPECIFIED) {
-    AddTo.Add(m_fSpecifiedBPMMin);
-    AddTo.Add(m_fSpecifiedBPMMax);
-  } else {
+  DisplayBPM displayBPMType = m_DisplayBPMType;
+  if (!IsValidDisplayBPM(displayBPMType)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-612: invalid Song DisplayBPM %d for '%s'; using "
+        "actual BPM.",
+        displayBPMType, m_sSongDir.c_str());
+    displayBPMType = DISPLAY_BPM_ACTUAL;
+  }
+
+  if (displayBPMType == DISPLAY_BPM_SPECIFIED) {
+    float minBPM = m_fSpecifiedBPMMin;
+    float maxBPM = m_fSpecifiedBPMMax;
+    if (!IsValidBPMValue(minBPM) || !IsValidBPMValue(maxBPM)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-612: invalid Song DisplayBPM range %.6f..%.6f "
+          "for '%s'; using actual BPM.",
+          minBPM, maxBPM, m_sSongDir.c_str());
+      displayBPMType = DISPLAY_BPM_ACTUAL;
+    } else {
+      if (maxBPM < minBPM) {
+        std::swap(minBPM, maxBPM);
+      }
+      AddTo.Add(minBPM);
+      AddTo.Add(maxBPM);
+      return;
+    }
+  }
+
+  if (displayBPMType != DISPLAY_BPM_SPECIFIED) {
     float fMinBPM, fMaxBPM;
     m_SongTiming.GetActualBPM(fMinBPM, fMaxBPM);
-    AddTo.Add(fMinBPM);
-    AddTo.Add(fMaxBPM);
+    if (IsValidBPMValue(fMinBPM) && IsValidBPMValue(fMaxBPM)) {
+      if (fMaxBPM < fMinBPM) {
+        std::swap(fMinBPM, fMaxBPM);
+      }
+      AddTo.Add(fMinBPM);
+      AddTo.Add(fMaxBPM);
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-612: actual BPM range %.6f..%.6f is invalid for "
+          "'%s'.",
+          fMinBPM, fMaxBPM, m_sSongDir.c_str());
+    }
   }
 }
 
