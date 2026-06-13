@@ -77,22 +77,30 @@ static LocalizedString PROFILE_NAME_CONFLICTS(
     "name.");
 static bool ValidateLocalProfileName(
     const std::string& sAnswer, std::string& sErrorOut) {
-  if (sAnswer == "") {
+  std::string sNormalizedAnswer = Profile::NormalizeDisplayName(sAnswer);
+  if (sNormalizedAnswer.empty()) {
     sErrorOut = PROFILE_NAME_BLANK;
     return false;
   }
 
   Profile* pProfile =
       PROFILEMAN->GetLocalProfile(GAMESTATE->m_sEditLocalProfileID);
-  if (pProfile != nullptr && sAnswer == pProfile->m_sDisplayName) {
+  if (pProfile != nullptr &&
+      CompareNoCase(sNormalizedAnswer, pProfile->m_sDisplayName) == 0) {
     return true;  // unchanged
   }
 
   std::vector<std::string> vsProfileNames;
   PROFILEMAN->GetLocalProfileDisplayNames(vsProfileNames);
-  bool bAlreadyAProfileWithThisName =
-      find(vsProfileNames.begin(), vsProfileNames.end(), sAnswer) !=
-      vsProfileNames.end();
+  bool bAlreadyAProfileWithThisName = false;
+  for (const std::string& sProfileName : vsProfileNames) {
+    if (CompareNoCase(
+            Profile::NormalizeDisplayName(sProfileName), sNormalizedAnswer) ==
+        0) {
+      bAlreadyAProfileWithThisName = true;
+      break;
+    }
+  }
   if (bAlreadyAProfileWithThisName) {
     sErrorOut = PROFILE_NAME_CONFLICTS;
     return false;
