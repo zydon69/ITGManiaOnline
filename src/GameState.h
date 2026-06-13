@@ -357,6 +357,9 @@ class GameState {
 
   FailType GetPlayerFailType(const PlayerState* pPlayerState) const;
   FailType GetPlayerFailType(PlayerNumber pn) const {
+    if (pn < PLAYER_1 || pn >= NUM_PLAYERS) {
+      return FailType_Immediate;
+    }
     return GetPlayerFailType(m_pPlayerState[pn]);
   }
 
