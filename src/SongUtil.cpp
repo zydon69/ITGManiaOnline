@@ -661,6 +661,29 @@ static bool GetStepsTypeForGradeSort(PlayerNumber pn, StepsType& stOut) {
   return true;
 }
 
+static std::string GetGradeSectionName(
+    const Song* pSong, const Profile* pProfile, StepsType st,
+    const char* context) {
+  if (pProfile == nullptr || st == StepsType_Invalid) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-657: %s section requested without profile or style; "
+        "using no-data section.",
+        context);
+    return GradeToLocalizedString(Grade_NoData);
+  }
+
+  int iCounts[NUM_Grade];
+  pProfile->GetGrades(pSong, st, iCounts);
+
+  for (int i = Grade_Tier01; i < NUM_Grade; ++i) {
+    Grade g = (Grade)i;
+    if (iCounts[i] > 0) {
+      return ssprintf("%4s x %d", GradeToLocalizedString(g).c_str(), iCounts[i]);
+    }
+  }
+  return GradeToLocalizedString(Grade_NoData);
+}
+
 void SongUtil::SortSongPointerArrayByGrades(
     std::vector<Song*>& vpSongsInOut, bool bDescending) {
   /* Optimize by pre-writing a string to compare, since doing
@@ -1053,49 +1076,35 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
           "MusicWheel",
           ssprintf("%s%s", SortOrderToString(so).c_str(), "Text"));
     case SORT_TOP_GRADES_P1: {
-      int iCounts[NUM_Grade];
-      PROFILEMAN->GetProfile(PLAYER_1)->GetGrades(
-          pSong, GAMESTATE->GetCurrentStyle(PLAYER_1)->m_StepsType, iCounts);
-
-      for (int i = Grade_Tier01; i < NUM_Grade; ++i) {
-        Grade g = (Grade)i;
-        if (iCounts[i] > 0) {
-          return ssprintf(
-              "%4s x %d", GradeToLocalizedString(g).c_str(), iCounts[i]);
-        }
+      StepsType st = StepsType_Invalid;
+      const Profile* pProfile = PROFILEMAN == nullptr
+                                    ? nullptr
+                                    : PROFILEMAN->GetProfile(PLAYER_1);
+      if (!GetStepsTypeForGradeSort(PLAYER_1, st)) {
+        st = StepsType_Invalid;
       }
-      return GradeToLocalizedString(Grade_NoData);
+      return GetGradeSectionName(pSong, pProfile, st, "P1 grade");
     }
     case SORT_TOP_GRADES_P2: {
-      int iCounts[NUM_Grade];
-      PROFILEMAN->GetProfile(PLAYER_2)->GetGrades(
-          pSong, GAMESTATE->GetCurrentStyle(PLAYER_2)->m_StepsType, iCounts);
-
-      for (int i = Grade_Tier01; i < NUM_Grade; ++i) {
-        Grade g = (Grade)i;
-        if (iCounts[i] > 0) {
-          return ssprintf(
-              "%4s x %d", GradeToLocalizedString(g).c_str(), iCounts[i]);
-        }
+      StepsType st = StepsType_Invalid;
+      const Profile* pProfile = PROFILEMAN == nullptr
+                                    ? nullptr
+                                    : PROFILEMAN->GetProfile(PLAYER_2);
+      if (!GetStepsTypeForGradeSort(PLAYER_2, st)) {
+        st = StepsType_Invalid;
       }
-      return GradeToLocalizedString(Grade_NoData);
+      return GetGradeSectionName(pSong, pProfile, st, "P2 grade");
     }
     case SORT_TOP_GRADES: {
-      int iCounts[NUM_Grade];
-      PROFILEMAN->GetMachineProfile()->GetGrades(
-          pSong,
-          GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber())
-              ->m_StepsType,
-          iCounts);
-
-      for (int i = Grade_Tier01; i < NUM_Grade; ++i) {
-        Grade g = (Grade)i;
-        if (iCounts[i] > 0) {
-          return ssprintf(
-              "%4s x %d", GradeToLocalizedString(g).c_str(), iCounts[i]);
-        }
+      StepsType st = StepsType_Invalid;
+      const Profile* pProfile =
+          PROFILEMAN == nullptr ? nullptr : PROFILEMAN->GetMachineProfile();
+      const PlayerNumber masterPlayer =
+          GAMESTATE == nullptr ? PLAYER_1 : GAMESTATE->GetMasterPlayerNumber();
+      if (!GetStepsTypeForGradeSort(masterPlayer, st)) {
+        st = StepsType_Invalid;
       }
-      return GradeToLocalizedString(Grade_NoData);
+      return GetGradeSectionName(pSong, pProfile, st, "machine grade");
     }
     case SORT_BEGINNER_METER:
     case SORT_EASY_METER:
