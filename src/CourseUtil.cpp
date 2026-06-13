@@ -33,6 +33,17 @@
 // Sorting stuff
 static bool CompareCoursePointersByName(
     const Course* pCourse1, const Course* pCourse2) {
+  if (pCourse1 == pCourse2) {
+    return false;
+  }
+  if (pCourse1 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return false;
+  }
+  if (pCourse2 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return true;
+  }
   std::string sName1 = pCourse1->GetDisplayFullTitle();
   std::string sName2 = pCourse2->GetDisplayFullTitle();
   return CompareNoCase(sName1, sName2) < 0;
@@ -40,6 +51,17 @@ static bool CompareCoursePointersByName(
 
 static bool CompareCoursePointersByAutogen(
     const Course* pCourse1, const Course* pCourse2) {
+  if (pCourse1 == pCourse2) {
+    return false;
+  }
+  if (pCourse1 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return false;
+  }
+  if (pCourse2 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return true;
+  }
   int b1 = pCourse1->m_bIsAutogen;
   int b2 = pCourse2->m_bIsAutogen;
   if (b1 < b2) {
@@ -53,6 +75,17 @@ static bool CompareCoursePointersByAutogen(
 
 static bool CompareCoursePointersByDifficulty(
     const Course* pCourse1, const Course* pCourse2) {
+  if (pCourse1 == pCourse2) {
+    return false;
+  }
+  if (pCourse1 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return false;
+  }
+  if (pCourse2 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return true;
+  }
   int iNum1 = pCourse1->GetEstimatedNumStages();
   int iNum2 = pCourse2->GetEstimatedNumStages();
   if (iNum1 < iNum2) {
@@ -66,6 +99,17 @@ static bool CompareCoursePointersByDifficulty(
 
 static bool CompareCoursePointersByTotalDifficulty(
     const Course* pCourse1, const Course* pCourse2) {
+  if (pCourse1 == pCourse2) {
+    return false;
+  }
+  if (pCourse1 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return false;
+  }
+  if (pCourse2 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return true;
+  }
   int iNum1 = pCourse1->m_SortOrder_TotalDifficulty;
   int iNum2 = pCourse2->m_SortOrder_TotalDifficulty;
 
@@ -77,6 +121,17 @@ static bool CompareCoursePointersByTotalDifficulty(
 
 static bool MovePlayersBestToEnd(
     const Course* pCourse1, const Course* pCourse2) {
+  if (pCourse1 == pCourse2) {
+    return false;
+  }
+  if (pCourse1 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return false;
+  }
+  if (pCourse2 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return true;
+  }
   bool C1HasBest = pCourse1->CourseHasBestOrWorst();
   bool C2HasBest = pCourse2->CourseHasBestOrWorst();
   if (!C1HasBest && !C2HasBest) {
@@ -93,11 +148,33 @@ static bool MovePlayersBestToEnd(
 }
 
 static bool CompareRandom(const Course* pCourse1, const Course* pCourse2) {
+  if (pCourse1 == pCourse2) {
+    return false;
+  }
+  if (pCourse1 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return false;
+  }
+  if (pCourse2 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return true;
+  }
   return (pCourse1->AllSongsAreFixed() && !pCourse2->AllSongsAreFixed());
 }
 
 static bool CompareCoursePointersByRanking(
     const Course* pCourse1, const Course* pCourse2) {
+  if (pCourse1 == pCourse2) {
+    return false;
+  }
+  if (pCourse1 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return false;
+  }
+  if (pCourse2 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return true;
+  }
   int iNum1 = pCourse1->m_SortOrder_Ranking;
   int iNum2 = pCourse2->m_SortOrder_Ranking;
 
@@ -186,6 +263,17 @@ void SortCoursePointerArrayBySectionName( std::vector<Course*> &vpCoursesInOut, 
 
 static bool CompareCoursePointersByType(
     const Course* pCourse1, const Course* pCourse2) {
+  if (pCourse1 == pCourse2) {
+    return false;
+  }
+  if (pCourse1 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return false;
+  }
+  if (pCourse2 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    return true;
+  }
   return pCourse1->GetPlayMode() < pCourse2->GetPlayMode();
 }
 
