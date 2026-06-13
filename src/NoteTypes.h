@@ -4,6 +4,7 @@
 #define NOTE_TYPES_H
 
 #include <cmath>
+#include <limits>
 #include <string>
 
 #include "EnumHelper.h"
@@ -17,7 +18,12 @@ class XNode;
 struct TapNoteResult {
   /** @brief Set up the TapNoteResult with default values. */
   TapNoteResult()
-      : tns(TNS_None), fTapNoteOffset(0.f), bHidden(false), bHeld(false) {}
+      : tns(TNS_None),
+        earlyTns(TNS_None),
+        fTapNoteOffset(0.f),
+        fEarlyTapNoteOffset(0.f),
+        bHidden(false),
+        bHeld(false) {}
   /** @brief The TapNoteScore that was achieved by the player. */
   TapNoteScore tns;
   /** @brief The TapNoteScore of any early hits of this tap note. */
@@ -223,12 +229,27 @@ struct TapNote {
         iKeysoundIndex(iKeysoundIndex_),
         iDuration(0),
         HoldResult() {
-    if (type_ > TapNoteType_Fake) {
+    if (type_ < TapNoteType_Empty || type_ >= NUM_TapNoteType) {
       LOG->Trace(
-          "Invalid tap note type %s (most likely) due to random vanish issues. "
-          "Assume it doesn't need judging.",
-          TapNoteTypeToString(type_).c_str());
+          "SRC_AUDIT_FIX TapNote corrected invalid tap note type %i.",
+          int(type_));
       type = TapNoteType_Empty;
+    }
+    if (subType_ < TapNoteSubType_Hold || subType_ >= NUM_TapNoteSubType) {
+      subType = TapNoteSubType_Invalid;
+    }
+    if (source_ < TapNoteSource_Original || source_ >= NUM_TapNoteSource) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX TapNote corrected invalid note source %i.",
+          int(source_));
+      source = TapNoteSource_Original;
+    }
+    if (!std::isfinite(fAttackDurationSeconds_) ||
+        fAttackDurationSeconds_ < 0.f) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX TapNote corrected invalid attack duration %f.",
+          fAttackDurationSeconds_);
+      fAttackDurationSeconds = 0.f;
     }
   }
 
@@ -345,6 +366,25 @@ inline int   BeatToNoteRow( float fBeatNum )
  * @param fBeatNum the beat to convert.
  * @return the note row. */
 inline int BeatToNoteRow(float fBeatNum) {
+  if (!std::isfinite(fBeatNum)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX BeatToNoteRow corrected non-finite beat %f.",
+        fBeatNum);
+    return 0;
+  }
+  const double row = double(fBeatNum) * ROWS_PER_BEAT;
+  if (row > MAX_NOTE_ROW) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX BeatToNoteRow clamped huge beat %f to MAX_NOTE_ROW.",
+        fBeatNum);
+    return MAX_NOTE_ROW;
+  }
+  if (row < -MAX_NOTE_ROW) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX BeatToNoteRow clamped huge negative beat %f.",
+        fBeatNum);
+    return -MAX_NOTE_ROW;
+  }
   return std::lrint(fBeatNum * ROWS_PER_BEAT);
 }  // round
 /**
@@ -352,6 +392,25 @@ inline int BeatToNoteRow(float fBeatNum) {
  * @param fBeatNum the beat to convert.
  * @return the note row. */
 inline int BeatToNoteRowNotRounded(float fBeatNum) {
+  if (!std::isfinite(fBeatNum)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX BeatToNoteRowNotRounded corrected non-finite beat %f.",
+        fBeatNum);
+    return 0;
+  }
+  const double row = double(fBeatNum) * ROWS_PER_BEAT;
+  if (row > MAX_NOTE_ROW) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX BeatToNoteRowNotRounded clamped huge beat %f.",
+        fBeatNum);
+    return MAX_NOTE_ROW;
+  }
+  if (row < -MAX_NOTE_ROW) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX BeatToNoteRowNotRounded clamped huge negative beat %f.",
+        fBeatNum);
+    return -MAX_NOTE_ROW;
+  }
   return (int)(fBeatNum * ROWS_PER_BEAT);
 }
 /**
@@ -397,6 +456,16 @@ static inline float ToBeat(float beat) { return beat; }
  */
 template <typename T>
 inline T ScalePosition(T start, T length, T newLength, T position) {
+  if (length <= 0) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX ScalePosition ignored invalid length %g.",
+        static_cast<double>(length));
+    return position;
+  }
+  if (start > std::numeric_limits<T>::max() - length) {
+    LOG->Trace("SRC_AUDIT_FIX ScalePosition avoided range overflow.");
+    return position;
+  }
   if (position < start) {
     return position;
   }

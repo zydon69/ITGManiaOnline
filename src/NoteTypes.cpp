@@ -191,7 +191,24 @@ XNode* TapNoteResult::CreateNode() const {
 }
 
 void TapNoteResult::LoadFromNode(const XNode* pNode) {
-  FAIL_M("TapNoteResult::LoadFromNode() is not implemented");
+  *this = TapNoteResult();
+  if (pNode == nullptr || pNode->GetName() != "TapNoteResult") {
+    LOG->Trace(
+        "SRC_AUDIT_FIX TapNoteResult ignored invalid XML node while loading.");
+    return;
+  }
+
+  std::string sTapNoteScore;
+  if (pNode->GetAttrValue("TapNoteScore", sTapNoteScore)) {
+    tns = StringToTapNoteScore(sTapNoteScore);
+  }
+  pNode->GetAttrValue("TapNoteOffset", fTapNoteOffset);
+  if (!std::isfinite(fTapNoteOffset)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX TapNoteResult corrected non-finite tap offset %f.",
+        fTapNoteOffset);
+    fTapNoteOffset = 0.f;
+  }
 }
 
 XNode* HoldNoteResult::CreateNode() const {
@@ -200,7 +217,31 @@ XNode* HoldNoteResult::CreateNode() const {
 }
 
 void HoldNoteResult::LoadFromNode(const XNode* pNode) {
-  FAIL_M("HoldNoteResult::LoadFromNode() is not implemented");
+  *this = HoldNoteResult();
+  if (pNode == nullptr || pNode->GetName() != "HoldNoteResult") {
+    LOG->Trace(
+        "SRC_AUDIT_FIX HoldNoteResult ignored invalid XML node while loading.");
+    return;
+  }
+
+  std::string sHoldNoteScore;
+  if (pNode->GetAttrValue("HoldNoteScore", sHoldNoteScore)) {
+    hns = StringToHoldNoteScore(sHoldNoteScore);
+  }
+  pNode->GetAttrValue("Life", fLife);
+  pNode->GetAttrValue("LastHeldRow", iLastHeldRow);
+  pNode->GetAttrValue("CheckpointsHit", iCheckpointsHit);
+  pNode->GetAttrValue("CheckpointsMissed", iCheckpointsMissed);
+  if (!std::isfinite(fLife)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX HoldNoteResult corrected non-finite hold life %f.",
+        fLife);
+    fLife = 0.f;
+  }
+  rage_clamp(fLife, 0.f, 1.f);
+  iLastHeldRow = std::max(0, iLastHeldRow);
+  iCheckpointsHit = std::max(0, iCheckpointsHit);
+  iCheckpointsMissed = std::max(0, iCheckpointsMissed);
 }
 
 XNode* TapNote::CreateNode() const {
@@ -213,7 +254,20 @@ XNode* TapNote::CreateNode() const {
 }
 
 void TapNote::LoadFromNode(const XNode* pNode) {
-  FAIL_M("TapNote::LoadFromNode() is not implemented");
+  Init();
+  if (pNode == nullptr || pNode->GetName() != "TapNote") {
+    LOG->Trace("SRC_AUDIT_FIX TapNote ignored invalid XML node while loading.");
+    return;
+  }
+
+  const XNode* pTapResult = pNode->GetChild("TapNoteResult");
+  if (pTapResult != nullptr) {
+    result.LoadFromNode(pTapResult);
+  }
+  const XNode* pHoldResult = pNode->GetChild("HoldNoteResult");
+  if (pHoldResult != nullptr) {
+    HoldResult.LoadFromNode(pHoldResult);
+  }
 }
 
 float HoldNoteResult::GetLastHeldBeat() const {
