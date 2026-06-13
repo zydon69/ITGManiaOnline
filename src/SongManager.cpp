@@ -1509,9 +1509,21 @@ void SongManager::AddCourse(Course* pCourse) {
 }
 
 void SongManager::DeleteCourse(Course* pCourse) {
+  if (pCourse == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-109: refused to delete a null course.");
+    return;
+  }
+
   std::vector<Course*>::iterator iter =
       find(m_pCourses.begin(), m_pCourses.end(), pCourse);
-  ASSERT(iter != m_pCourses.end());
+  if (iter == m_pCourses.end()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-109: refused to delete course '%s' because it is "
+        "not loaded.",
+        pCourse->m_sPath.c_str());
+    return;
+  }
+
   m_pCourses.erase(iter);
   UpdatePopular();
   UpdateShuffled();
