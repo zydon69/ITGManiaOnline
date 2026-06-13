@@ -58,6 +58,10 @@ bool IsValidTapNoteScore(TapNoteScore tns) {
   return tns >= TNS_None && tns < NUM_TapNoteScore;
 }
 
+bool IsValidHoldNoteScore(HoldNoteScore hns) {
+  return hns >= HNS_None && hns < NUM_HoldNoteScore;
+}
+
 TimingData* GetCurrentTimingDataForPlayer(PlayerNumber pn) {
   if (!IsValidPlayerNumber(pn)) {
     LOG->Warn(
@@ -547,6 +551,14 @@ void ScoreKeeperNormal::HandleHoldCheckpointScore(
 
 void ScoreKeeperNormal::HandleTapNoteScoreInternal(
     TapNoteScore tns, TapNoteScore maximum, int row) {
+  if (!IsValidTapNoteScore(tns) || !IsValidTapNoteScore(maximum)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal ignored invalid tap score %i "
+        "maximum %i.",
+        tns, maximum);
+    return;
+  }
+
   // Update dance points.
   if (!m_pPlayerStageStats->m_bFailed) {
     m_pPlayerStageStats->m_iActualDancePoints += TapNoteScoreToDancePoints(tns);
@@ -630,6 +642,13 @@ void ScoreKeeperNormal::GetRowCounts(
       continue;
     }
     TapNoteScore tns = tn.result.tns;
+    if (!IsValidTapNoteScore(tns)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperNormal ignored invalid row tap score %i "
+          "at row %i.",
+          tns, iRow);
+      continue;
+    }
     if (tns >= m_MinScoreToContinueCombo) {
       ++iNumHitContinueCombo;
     } else if (tns >= m_MinScoreToMaintainCombo) {
@@ -727,6 +746,12 @@ void ScoreKeeperNormal::HandleTapRowScore(const NoteData& nd, int iRow) {
 
 void ScoreKeeperNormal::HandleHoldScore(const TapNote& tn) {
   HoldNoteScore holdScore = tn.HoldResult.hns;
+  if (!IsValidHoldNoteScore(holdScore)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal ignored invalid hold score %i.",
+        holdScore);
+    return;
+  }
 
   // update dance points totals
   if (!m_pPlayerStageStats->m_bFailed) {
@@ -835,6 +860,13 @@ int ScoreKeeperNormal::HoldNoteScoreToGradePoints(HoldNoteScore hns) const {
 
 int ScoreKeeperNormal::TapNoteScoreToDancePoints(
     TapNoteScore tns, bool bBeginner) {
+  if (!IsValidTapNoteScore(tns)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal mapped invalid tap score %i to 0 "
+        "dance points.",
+        tns);
+    return 0;
+  }
   if (!GAMESTATE->ShowW1() && tns == TNS_W1) {
     tns = TNS_W2;
   }
@@ -843,8 +875,8 @@ int ScoreKeeperNormal::TapNoteScoreToDancePoints(
    * StageStats::GetGrade. */
   int iWeight = 0;
   switch (tns) {
-    DEFAULT_FAIL(tns);
     case TNS_None:
+    case TNS_AvoidMine:
       iWeight = 0;
       break;
     case TNS_HitMine:
@@ -874,6 +906,13 @@ int ScoreKeeperNormal::TapNoteScoreToDancePoints(
     case TNS_CheckpointMiss:
       iWeight = g_iPercentScoreWeight.GetValue(SE_CheckpointMiss);
       break;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperNormal mapped unexpected tap score %i "
+          "to 0 dance points.",
+          tns);
+      iWeight = 0;
+      break;
   }
   if (bBeginner && PREFSMAN->m_bMercifulBeginner) {
     iWeight = std::max(0, iWeight);
@@ -883,9 +922,16 @@ int ScoreKeeperNormal::TapNoteScoreToDancePoints(
 
 int ScoreKeeperNormal::HoldNoteScoreToDancePoints(
     HoldNoteScore hns, bool bBeginner) {
+  if (!IsValidHoldNoteScore(hns)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal mapped invalid hold score %i to 0 "
+        "dance points.",
+        hns);
+    return 0;
+  }
+
   int iWeight = 0;
   switch (hns) {
-    DEFAULT_FAIL(hns);
     case HNS_None:
       iWeight = 0;
       break;
@@ -898,6 +944,13 @@ int ScoreKeeperNormal::HoldNoteScoreToDancePoints(
     case HNS_Missed:
       iWeight = g_iPercentScoreWeight.GetValue(SE_Missed);
       break;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperNormal mapped unexpected hold score %i "
+          "to 0 dance points.",
+          hns);
+      iWeight = 0;
+      break;
   }
   if (bBeginner && PREFSMAN->m_bMercifulBeginner) {
     iWeight = std::max(0, iWeight);
@@ -907,6 +960,13 @@ int ScoreKeeperNormal::HoldNoteScoreToDancePoints(
 
 int ScoreKeeperNormal::TapNoteScoreToGradePoints(
     TapNoteScore tns, bool bBeginner) {
+  if (!IsValidTapNoteScore(tns)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal mapped invalid tap score %i to 0 "
+        "grade points.",
+        tns);
+    return 0;
+  }
   if (!GAMESTATE->ShowW1() && tns == TNS_W1) {
     tns = TNS_W2;
   }
@@ -915,7 +975,6 @@ int ScoreKeeperNormal::TapNoteScoreToGradePoints(
    * StageStats::GetGrade. */
   int iWeight = 0;
   switch (tns) {
-    DEFAULT_FAIL(tns);
     case TNS_None:
       iWeight = 0;
       break;
@@ -949,6 +1008,13 @@ int ScoreKeeperNormal::TapNoteScoreToGradePoints(
     case TNS_CheckpointMiss:
       iWeight = g_iGradeWeight.GetValue(SE_CheckpointMiss);
       break;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperNormal mapped unexpected tap score %i "
+          "to 0 grade points.",
+          tns);
+      iWeight = 0;
+      break;
   }
   if (bBeginner && PREFSMAN->m_bMercifulBeginner) {
     iWeight = std::max(0, iWeight);
@@ -958,9 +1024,16 @@ int ScoreKeeperNormal::TapNoteScoreToGradePoints(
 
 int ScoreKeeperNormal::HoldNoteScoreToGradePoints(
     HoldNoteScore hns, bool bBeginner) {
+  if (!IsValidHoldNoteScore(hns)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal mapped invalid hold score %i to 0 "
+        "grade points.",
+        hns);
+    return 0;
+  }
+
   int iWeight = 0;
   switch (hns) {
-    DEFAULT_FAIL(hns);
     case HNS_None:
       iWeight = 0;
       break;
@@ -972,6 +1045,13 @@ int ScoreKeeperNormal::HoldNoteScoreToGradePoints(
       break;
     case HNS_Missed:
       iWeight = g_iGradeWeight.GetValue(SE_Missed);
+      break;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperNormal mapped unexpected hold score %i "
+          "to 0 grade points.",
+          hns);
+      iWeight = 0;
       break;
   }
   if (bBeginner && PREFSMAN->m_bMercifulBeginner) {
