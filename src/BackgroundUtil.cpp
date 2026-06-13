@@ -463,9 +463,14 @@ void GetGlobalRandomMoviePaths(
     bool bTryInsideOfSongGroupAndGenreFirst, bool bTryInsideOfSongGroupFirst) {
   // Check for an exact match
   if (!sMatch.empty()) {
-    GetDirListing(
-        SONG_MOVIES_DIR + pSong->m_sGroupName + "/" + sMatch, vsPathsOut, false,
-        true);  // search in SongMovies/SongGroupName/ first
+    if (!IsSafeBackgroundMatch(sMatch, false, "SRC-684")) {
+      return;
+    }
+    if (pSong != nullptr && !pSong->m_sGroupName.empty()) {
+      GetDirListing(
+          SONG_MOVIES_DIR + pSong->m_sGroupName + "/" + sMatch, vsPathsOut,
+          false, true);  // search in SongMovies/SongGroupName/ first
+    }
     GetDirListing(SONG_MOVIES_DIR + sMatch, vsPathsOut, false, true);
     GetDirListing(RANDOMMOVIES_DIR + sMatch, vsPathsOut, false, true);
     if (vsPathsOut.empty() && sMatch != NO_SONG_BG_FILE) {
@@ -481,9 +486,13 @@ void GetGlobalRandomMoviePaths(
   }
 
   std::vector<std::string> vsDirsToTry;
-  if (bTryInsideOfSongGroupFirst && pSong) {
-    ASSERT(!pSong->m_sGroupName.empty());
+  if (bTryInsideOfSongGroupFirst && pSong && !pSong->m_sGroupName.empty()) {
     vsDirsToTry.push_back(RANDOMMOVIES_DIR + pSong->m_sGroupName + "/");
+  } else if (bTryInsideOfSongGroupFirst && pSong != nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-684: random movie lookup for song '%s' has no group; "
+        "skipping group-specific directory.",
+        pSong->GetSongDir().c_str());
   }
   vsDirsToTry.push_back(RANDOMMOVIES_DIR);
 
