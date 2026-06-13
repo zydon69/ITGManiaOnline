@@ -523,7 +523,14 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
   TimingData* timing = this->GetTimingData();
   StepParity::StepParityGenerator gen =
       StepParity::StepParityGenerator(&*layout, timing);
-  gen.analyzeNoteData(tempNoteData);
+  if (!gen.analyzeNoteData(tempNoteData)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-642: StepParity analysis failed for %s; marking "
+        "tech counts unknown.",
+        m_StepsTypeStr.c_str());
+    FOREACH_PlayerNumber(pn) m_TechCounts[pn].MakeUnknown();
+    return;
+  }
   TechCounts::CalculateTechCountsFromRows(gen.rows, &*layout, m_TechCounts[0]);
   std::fill_n(m_TechCounts + 1, NUM_PLAYERS - 1, m_TechCounts[0]);
 }

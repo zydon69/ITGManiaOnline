@@ -461,7 +461,19 @@ void StepParityGenerator::CreateRows(const NoteData& in) {
 }
 
 void StepParityGenerator::AddRow(RowCounter& counter) {
+  if (counter.lastColumnSecond == CLM_SECOND_INVALID) {
+    LOG->Trace("SRC_AUDIT_FIX SRC-642: skipped empty final StepParity row.");
+    return;
+  }
+
   Row newRow = CreateRow(counter);
+  if (newRow.note_mask == 0 && newRow.hold_mask == 0) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-642: skipped StepParity row without notes or "
+        "holds.");
+    return;
+  }
+
   newRow.rowIndex = rows.size();
   rows.push_back(newRow);
 }
