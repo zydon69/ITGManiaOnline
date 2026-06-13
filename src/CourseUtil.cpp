@@ -427,6 +427,8 @@ bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
 
   EditCourseUtil::s_bNewCourseNeedsName = false;
 
+  const std::string sOldFilePath = pCourse->m_sPath;
+  const std::string sOldName = pCourse->m_sMainTitle;
   std::string sNewFilePath;
   if (pCourse->IsAnEdit()) {
     sNewFilePath = PROFILEMAN->GetProfileDir(ProfileSlot_Machine) +
@@ -437,14 +439,27 @@ bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
     sNewFilePath = sDir + sNewName + sExt;
   }
 
-  // remove the old file if the name is changing
-  if (!pCourse->m_sPath.empty() && sNewFilePath != pCourse->m_sPath) {
-    FILEMAN->Remove(pCourse->m_sPath);  // not fatal if this fails
-  }
-
   pCourse->m_sMainTitle = sNewName;
   pCourse->m_sPath = sNewFilePath;
-  return CourseWriterCRS::Write(*pCourse, pCourse->m_sPath, false);
+  if (!CourseWriterCRS::Write(*pCourse, pCourse->m_sPath, false)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-129: failed to save course '%s' to '%s'; keeping "
+        "old path '%s'",
+        sNewName.c_str(), sNewFilePath.c_str(), sOldFilePath.c_str());
+    pCourse->m_sMainTitle = sOldName;
+    pCourse->m_sPath = sOldFilePath;
+    return false;
+  }
+
+  // Remove the old file only after the replacement has been written.
+  if (!sOldFilePath.empty() && sNewFilePath != sOldFilePath &&
+      !FILEMAN->Remove(sOldFilePath)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-129: saved renamed course '%s' but could not remove "
+        "old file '%s'",
+        sNewFilePath.c_str(), sOldFilePath.c_str());
+  }
+  return true;
 }
 
 bool EditCourseUtil::RemoveAndDeleteFile(Course* pCourse) {
