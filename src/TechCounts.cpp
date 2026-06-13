@@ -45,6 +45,41 @@ void TechCounts::Zero() {
   FOREACH_ENUM(TechCountsCategory, rc) { (*this)[rc] = 0; }
 }
 
+bool TechCounts::IsValidCategoryIndex(int cat) {
+  return cat >= 0 && cat < NUM_TechCountsCategory;
+}
+
+float& TechCounts::InvalidMutableValue(int cat) {
+  static float invalidValue = TECHCOUNTS_VAL_UNKNOWN;
+  invalidValue = TECHCOUNTS_VAL_UNKNOWN;
+  LOG->Warn(
+      "SRC_AUDIT_FIX SRC-638: invalid mutable TechCounts index %d.", cat);
+  return invalidValue;
+}
+
+float TechCounts::operator[](TechCountsCategory cat) const {
+  return (*this)[static_cast<int>(cat)];
+}
+
+float& TechCounts::operator[](TechCountsCategory cat) {
+  return (*this)[static_cast<int>(cat)];
+}
+
+float TechCounts::operator[](int cat) const {
+  if (!IsValidCategoryIndex(cat)) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-638: invalid TechCounts index %d.", cat);
+    return TECHCOUNTS_VAL_UNKNOWN;
+  }
+  return m_Values[cat];
+}
+
+float& TechCounts::operator[](int cat) {
+  if (!IsValidCategoryIndex(cat)) {
+    return InvalidMutableValue(cat);
+  }
+  return m_Values[cat];
+}
+
 std::string TechCounts::ToString(int iMaxValues) const {
   if (iMaxValues == -1) {
     iMaxValues = NUM_TechCountsCategory;

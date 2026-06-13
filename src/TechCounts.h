@@ -40,12 +40,14 @@ struct lua_State;
 struct TechCounts {
  private:
   float m_Values[NUM_TechCountsCategory];
+  static bool IsValidCategoryIndex(int cat);
+  static float& InvalidMutableValue(int cat);
 
  public:
-  float operator[](TechCountsCategory cat) const { return m_Values[cat]; }
-  float& operator[](TechCountsCategory cat) { return m_Values[cat]; }
-  float operator[](int cat) const { return m_Values[cat]; }
-  float& operator[](int cat) { return m_Values[cat]; }
+  float operator[](TechCountsCategory cat) const;
+  float& operator[](TechCountsCategory cat);
+  float operator[](int cat) const;
+  float& operator[](int cat);
   TechCounts();
   void MakeUnknown();
   void Zero();
