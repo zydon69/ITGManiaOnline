@@ -1232,13 +1232,15 @@ int SongManager::GetNumLockedSongs() const {
 
 int SongManager::GetNumUnlockedSongs() const {
   return std::count_if(m_pSongs.begin(), m_pSongs.end(), [](const Song* s) {
-    return UNLOCKMAN->SongIsLocked(s) & ~LOCKED_LOCK;
+    return (UNLOCKMAN->SongIsLocked(s) & LOCKED_LOCK) == 0;
   });
 }
 
 int SongManager::GetNumSelectableAndUnlockedSongs() const {
   return std::count_if(m_pSongs.begin(), m_pSongs.end(), [](const Song* s) {
-    return UNLOCKMAN->SongIsLocked(s) & ~(LOCKED_LOCK | LOCKED_SELECTABLE);
+    const int lockFlags = UNLOCKMAN->SongIsLocked(s);
+    return (lockFlags & (LOCKED_LOCK | LOCKED_SELECTABLE | LOCKED_DISABLED)) ==
+           0;
   });
 }
 
