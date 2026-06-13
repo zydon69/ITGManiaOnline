@@ -126,8 +126,11 @@ static void EmptyDir(std::string dir) {
   std::vector<std::string> asCacheFileNames;
   GetDirListing(dir, asCacheFileNames);
   for (unsigned i = 0; i < asCacheFileNames.size(); i++) {
-    if (!IsADirectory(dir + asCacheFileNames[i])) {
-      FILEMAN->Remove(dir + asCacheFileNames[i]);
+    const std::string sCachePath = dir + asCacheFileNames[i];
+    if (!IsADirectory(sCachePath) && !FILEMAN->Remove(sCachePath)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-635: failed to remove stale cache file '%s'.",
+          sCachePath.c_str());
     }
   }
 }
