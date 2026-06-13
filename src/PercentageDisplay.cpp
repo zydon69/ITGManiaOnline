@@ -1,6 +1,8 @@
 #include "PercentageDisplay.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cctype>
 #include <string>
 
 #include "ActorFrame.h"
@@ -20,6 +22,64 @@
 
 REGISTER_ACTOR_CLASS(PercentageDisplay);
 
+namespace {
+int ClampDancePointDigits(int digits, const char* context) {
+  if (digits < 0 || digits > 12) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-271: %s clamped DancePointsDigits %i.",
+        context, digits);
+    return std::max(0, std::min(12, digits));
+  }
+  return digits;
+}
+
+bool IsSafeIntegerFormat(const std::string& format) {
+  if (format.empty() || format.size() > 64) {
+    return false;
+  }
+  for (size_t i = 0; i < format.size(); ++i) {
+    if (format[i] != '%') {
+      continue;
+    }
+    if (i + 1 < format.size() && format[i + 1] == '%') {
+      ++i;
+      continue;
+    }
+    size_t j = i + 1;
+    int width = 0;
+    while (j < format.size() &&
+           std::isdigit(static_cast<unsigned char>(format[j]))) {
+      width = width * 10 + (format[j] - '0');
+      if (width > 12) {
+        return false;
+      }
+      ++j;
+    }
+    while (j < format.size() && !std::isalpha(static_cast<unsigned char>(format[j]))) {
+      ++j;
+    }
+    if (j >= format.size()) {
+      return false;
+    }
+    if (format[j] == 's' || format[j] == 'n' || format[j] == 'p') {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string FormatIntSafely(
+    const std::string& format, int value, const char* context) {
+  if (!IsSafeIntegerFormat(format)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX %s: ignored unsafe integer format '%s'.",
+        context, format.c_str());
+    return ssprintf("%d", value);
+  }
+  return ssprintf(format.c_str(), value);
+}
+}  // namespace
+
 PercentageDisplay::PercentageDisplay() {
   m_pPlayerState = nullptr;
   m_pPlayerStageStats = nullptr;
@@ -34,6 +94,8 @@ PercentageDisplay::PercentageDisplay() {
 
 void PercentageDisplay::LoadFromNode(const XNode* pNode) {
   pNode->GetAttrValue("DancePointsDigits", m_iDancePointsDigits);
+  m_iDancePointsDigits =
+      ClampDancePointDigits(m_iDancePointsDigits, "PercentageDisplay XML");
   pNode->GetAttrValue("AutoRefresh", m_bAutoRefresh);
   {
     Lua* L = LUA->Get();
@@ -70,6 +132,12 @@ void PercentageDisplay::LoadFromNode(const XNode* pNode) {
   pChild = pNode->GetChild("PercentRemainder");
   if (!ShowDancePointsNotPercentage() && pChild != nullptr) {
     m_bUseRemainder = true;
+    if (m_sPercentFormat.empty()) {
+      m_sPercentFormat = "%d";
+    }
+    if (m_sRemainderFormat.empty()) {
+      m_sRemainderFormat = "%d";
+    }
     m_textPercentRemainder.LoadFromNode(pChild);
     this->AddChild(&m_textPercentRemainder);
   }
@@ -83,6 +151,12 @@ void PercentageDisplay::Load(
     const PlayerStageStats* pPlayerStageStats) {
   m_pPlayerState = pPlayerState;
   m_pPlayerStageStats = pPlayerStageStats;
+  if (m_pPlayerState == nullptr || m_pPlayerStageStats == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-270: PercentageDisplay loaded without complete "
+        "player stats.");
+    return;
+  }
 
   Refresh();
 }
@@ -95,6 +169,8 @@ void PercentageDisplay::Load(
   m_bAutoRefresh = bAutoRefresh;
 
   m_iDancePointsDigits = THEME->GetMetricI(sMetricsGroup, "DancePointsDigits");
+  m_iDancePointsDigits =
+      ClampDancePointDigits(m_iDancePointsDigits, sMetricsGroup.c_str());
   m_bUseRemainder = THEME->GetMetricB(sMetricsGroup, "PercentUseRemainder");
   m_FormatPercentScore = THEME->GetMetricR(sMetricsGroup, "Format");
 
@@ -113,11 +189,17 @@ void PercentageDisplay::Load(
   }
 
   if (ShowDancePointsNotPercentage()) {
-    m_textPercent.SetName(
-        "DancePoints" + PlayerNumberToString(m_pPlayerState->m_PlayerNumber));
+    m_textPercent.SetName(m_pPlayerState == nullptr
+                              ? "DancePointsInvalid"
+                              : "DancePoints" + PlayerNumberToString(
+                                                    m_pPlayerState
+                                                        ->m_PlayerNumber));
   } else {
-    m_textPercent.SetName(
-        "Percent" + PlayerNumberToString(m_pPlayerState->m_PlayerNumber));
+    m_textPercent.SetName(m_pPlayerState == nullptr
+                              ? "PercentInvalid"
+                              : "Percent" + PlayerNumberToString(
+                                                m_pPlayerState
+                                                    ->m_PlayerNumber));
   }
 
   m_textPercent.LoadFromFont(THEME->GetPathF(sMetricsGroup, "text"));
@@ -127,17 +209,30 @@ void PercentageDisplay::Load(
 
   if (!ShowDancePointsNotPercentage() && m_bUseRemainder) {
     m_textPercentRemainder.SetName(
-        "PercentRemainder" +
-        PlayerNumberToString(m_pPlayerState->m_PlayerNumber));
+        m_pPlayerState == nullptr
+            ? "PercentRemainderInvalid"
+            : "PercentRemainder" +
+                  PlayerNumberToString(m_pPlayerState->m_PlayerNumber));
     m_textPercentRemainder.LoadFromFont(
         THEME->GetPathF(sMetricsGroup, "remainder"));
     ActorUtil::SetXY(m_textPercentRemainder, sMetricsGroup);
     ActorUtil::LoadAllCommands(m_textPercentRemainder, sMetricsGroup);
-    ASSERT(m_textPercentRemainder.HasCommand("Off"));
+    if (!m_textPercentRemainder.HasCommand("Off")) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-273: PercentageDisplay remainder in [%s] has no "
+          "Off command.",
+          sMetricsGroup.c_str());
+    }
     m_textPercentRemainder.SetText("456");
     this->AddChild(&m_textPercentRemainder);
   }
 
+  if (m_pPlayerState == nullptr || m_pPlayerStageStats == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-270: PercentageDisplay metric load missing player "
+        "stats.");
+    return;
+  }
   Refresh();
 }
 
@@ -150,6 +245,12 @@ void PercentageDisplay::Update(float fDeltaTime) {
 }
 
 void PercentageDisplay::Refresh() {
+  if (m_pPlayerStageStats == nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-270: PercentageDisplay skipped refresh without "
+        "PlayerStageStats.");
+    return;
+  }
   const int iActualDancePoints = m_pPlayerStageStats->m_iActualDancePoints;
   const int iCurPossibleDancePoints =
       m_pPlayerStageStats->m_iCurPossibleDancePoints;
@@ -168,6 +269,13 @@ void PercentageDisplay::Refresh() {
         ssprintf("%*d", m_iDancePointsDigits, std::max(0, iActualDancePoints));
   } else {
     float fPercentDancePoints = m_pPlayerStageStats->GetPercentDancePoints();
+    if (!std::isfinite(fPercentDancePoints)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-274: PercentageDisplay corrected non-finite "
+          "percent %f.",
+          fPercentDancePoints);
+      fPercentDancePoints = 0.0f;
+    }
 
     // clamp percentage - feedback is that negative numbers look weird here.
     rage_clamp(fPercentDancePoints, 0.f, 1.f);
@@ -176,9 +284,12 @@ void PercentageDisplay::Refresh() {
       int iPercentWhole = int(fPercentDancePoints * 100);
       int iPercentRemainder = int(
           (fPercentDancePoints * 100 - int(fPercentDancePoints * 100)) * 10);
-      sNumToDisplay = ssprintf(m_sPercentFormat.c_str(), iPercentWhole);
+      sNumToDisplay = FormatIntSafely(
+          m_sPercentFormat, iPercentWhole, "SRC-275 PercentageDisplay");
       m_textPercentRemainder.SetText(
-          ssprintf(m_sRemainderFormat.c_str(), iPercentRemainder));
+          FormatIntSafely(
+              m_sRemainderFormat, iPercentRemainder,
+              "SRC-275 PercentageDisplay"));
     } else {
       if (m_FormatPercentScore.GetLuaType() == LUA_TFUNCTION) {
         Lua* L = LUA->Get();
