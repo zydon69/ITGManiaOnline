@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -186,7 +187,20 @@ bool StageStats::AllFailed() const {
 float StageStats::GetTotalPossibleStepsSeconds() const {
   float fSecs = 0;
   for (const Song* s : m_vpPlayedSongs) {
+    if (s == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: StageStats::GetTotalPossibleStepsSeconds skipped "
+          "null song.");
+      continue;
+    }
     fSecs += s->GetStepsSeconds();
+  }
+  if (!std::isfinite(m_fMusicRate) || m_fMusicRate <= 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: StageStats::GetTotalPossibleStepsSeconds ignored "
+        "invalid music rate %f.",
+        m_fMusicRate);
+    return fSecs;
   }
   return fSecs / m_fMusicRate;
 }
