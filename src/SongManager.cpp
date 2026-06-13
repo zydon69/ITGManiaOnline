@@ -1717,6 +1717,14 @@ bool CompareNotesPointersForExtra(const Steps* n1, const Steps* n2) {
 
 void SongManager::GetExtraStageInfo(
     bool bExtra2, const Style* sd, Song*& pSongOut, Steps*& pStepsOut) {
+  pSongOut = nullptr;
+  pStepsOut = nullptr;
+
+  if (sd == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-101: extra stage requested without a style.");
+    return;
+  }
+
   std::string sGroup = GAMESTATE->m_sPreferredSongGroup;
   if (sGroup == GROUP_ALL) {
     if (GAMESTATE->m_pCurSong == nullptr) {
@@ -1727,17 +1735,21 @@ void SongManager::GetExtraStageInfo(
           "== nullptr");
       GAMESTATE->m_pCurSong.Set(GetRandomSong());
     }
+    if (GAMESTATE->m_pCurSong == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-101: no current or random song available for "
+          "extra stage group selection.");
+      return;
+    }
     sGroup = GAMESTATE->m_pCurSong->m_sGroupName;
   }
 
-  ASSERT_M(
-      sGroup != "",
-      ssprintf(
-          "%p '%s' '%s'", static_cast<void*>(GAMESTATE->m_pCurSong.Get()),
-          GAMESTATE->m_pCurSong ? GAMESTATE->m_pCurSong->GetSongDir().c_str()
-                                : "",
-          GAMESTATE->m_pCurSong ? GAMESTATE->m_pCurSong->m_sGroupName.c_str()
-                                : ""));
+  if (sGroup.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-101: extra stage requested with an empty song "
+        "group.");
+    return;
+  }
 
   // Check preferred group
   if (GetExtraStageInfoFromCourse(
@@ -1798,11 +1810,14 @@ void SongManager::GetExtraStageInfo(
     pExtra2Notes = pExtra1Notes;
   }
 
-  // If there are any notes at all that match this StepsType, everything should
-  // be filled out. Also, it's guaranteed that there is at least one Steps that
-  // matches the StepsType because the player had to play something before
-  // reaching the extra stage!
-  ASSERT(pExtra2Song && pExtra1Song && pExtra2Notes && pExtra1Notes);
+  if (pExtra1Song == nullptr || pExtra1Notes == nullptr ||
+      pExtra2Song == nullptr || pExtra2Notes == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-101: could not find extra stage notes for group "
+        "'%s' and steps type %s.",
+        sGroup.c_str(), StepsTypeToString(sd->m_StepsType).c_str());
+    return;
+  }
 
   pSongOut = (bExtra2 ? pExtra2Song : pExtra1Song);
   pStepsOut = (bExtra2 ? pExtra2Notes : pExtra1Notes);
