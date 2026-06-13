@@ -68,7 +68,8 @@ class SongManager {
   int GetNumStepsLoadedFromProfile();
   void FreeAllLoadedFromProfile(ProfileSlot slot = ProfileSlot_Invalid);
 
-  void LoadGroupSymLinks(std::string sDir, std::string sGroupFolder);
+  int LoadGroupSymLinks(
+      std::string sDir, std::string sGroupFolder, bool onlyAdditions = false);
 
   /**
    * @brief Initialize all courses from disk
@@ -257,7 +258,7 @@ class SongManager {
   void AddGroup(std::string sDir, std::string sGroupDirName, Group* group);
   int GetNumEditsLoadedFromProfile(ProfileSlot slot) const;
 
-  void AddSongToList(Song* new_song);
+  bool AddSongToList(Song* new_song);
   /** @brief All of the songs that can be played. */
   std::vector<Song*> m_pSongs;
 

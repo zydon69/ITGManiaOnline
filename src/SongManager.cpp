@@ -407,6 +407,22 @@ void SongManager::AddGroup(
 }
 
 static LocalizedString LOADING_SONGS("SongManager", "Loading songs...");
+
+static std::string NormalizeSongManagerPath(std::string path) {
+  FixSlashesInPlace(path);
+  CollapsePath(path, true);
+  if (Right(path, 1) != "/") {
+    path += "/";
+  }
+  return path;
+}
+
+static bool IsSongPathInsideRoot(std::string root, std::string path) {
+  root = NormalizeSongManagerPath(root);
+  path = NormalizeSongManagerPath(path);
+  return path.size() > root.size() && BeginsWith(path, root);
+}
+
 void SongManager::LoadSongDir(
     std::string sDir, LoadingWindow* ld, bool onlyAdditions) {
   if (ld) {
@@ -470,10 +486,6 @@ void SongManager::LoadSongDir(
           (sDir + sGroupDirName).c_str());
     }
     ++sanity_index;
-  }
-
-  if (songCount == 0) {
-    return;
   }
 
   if (ld) {
@@ -598,7 +610,7 @@ void SongManager::LoadSongDir(
   };
 
   // Start the threads.
-  for (int i = 0; i < threadCount; i++) {
+  for (int i = 0; i < threadCount && !songsToLoad.empty(); i++) {
     threads.emplace_back(loadSongFn);
   }
 
@@ -614,7 +626,11 @@ void SongManager::LoadSongDir(
       // These operations didn't appear thread safe to me which is why they are
       // in this post processing step in the main thread. Let me know if that
       // was an incorrect assumption !
-      AddSongToList(loadedSong.pSong);
+      if (!AddSongToList(loadedSong.pSong)) {
+        delete loadedSong.pSong;
+        loadedSongsProcessed++;
+        continue;
+      }
 
       SongToLoad& songToLoad = songsToLoad[loadedSongsProcessed];
       SongPointerVector& index_entry =
@@ -651,7 +667,7 @@ void SongManager::LoadSongDir(
   }
 
   // Wait for all of the threads to exit.
-  for (int i = 0; i < threadCount; i++) {
+  for (int i = 0; i < (int)threads.size(); i++) {
     threads[i].join();
   }
 
@@ -667,6 +683,10 @@ void SongManager::LoadSongDir(
     LOG->Trace(
         "Loaded %d songs from \"%s\"", loadedSongCount,
         (sDir + sGroupDirName).c_str());
+
+    int loadedSymLinkCount =
+        LoadGroupSymLinks(sDir, sGroupDirName, onlyAdditions);
+    loadedSongCount += loadedSymLinkCount;
 
     // If we're only loading additions, already loaded groups should neither be
     // added nor deleted
@@ -688,9 +708,6 @@ void SongManager::LoadSongDir(
       // Cache and load the group banner. (and background if it has one -aj)
       IMAGECACHE->CacheImage("Banner", GetSongGroupBannerPath(sGroupDirName));
     }
-
-    // Load the group sym links (if any)
-    LoadGroupSymLinks(sDir, sGroupDirName);
   }
 
   if (ld) {
@@ -700,22 +717,59 @@ void SongManager::LoadSongDir(
 
 // Instead of "symlinks", songs should have membership in multiple groups.
 // -Chris
-void SongManager::LoadGroupSymLinks(
-    std::string sDir, std::string sGroupFolder) {
+int SongManager::LoadGroupSymLinks(
+    std::string sDir, std::string sGroupFolder, bool onlyAdditions) {
+  if (Right(sDir, 1) != "/") {
+    sDir += "/";
+  }
+
   // Find all symlink files in this folder
   std::vector<std::string> arraySymLinks;
   GetDirListing(sDir + sGroupFolder + "/*.include", arraySymLinks, false);
   SortRStringArray(arraySymLinks);
   SongPointerVector& index_entry = m_mapSongGroupIndex[sGroupFolder];
+  int loadedCount = 0;
   for (unsigned s = 0; s < arraySymLinks.size();
        s++)  // for each symlink in this dir, add it in as a song.
   {
+    const std::string includePath = sDir + sGroupFolder + "/" + arraySymLinks[s];
     MsdFile msdF;
-    msdF.ReadFile(
-        sDir + sGroupFolder + "/" + arraySymLinks[s].c_str(),
-        false);  // don't unescape
+    if (!msdF.ReadFile(includePath, false)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-616: skipped unreadable song include '%s': %s",
+          includePath.c_str(), msdF.GetError().c_str());
+      continue;
+    }
+    if (msdF.GetNumValues() < 1 || msdF.GetNumParams(0) < 2) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-616: skipped malformed song include '%s'.",
+          includePath.c_str());
+      continue;
+    }
     std::string sSymDestination =
         msdF.GetParam(0, 1);  // Should only be 1 value & param...period.
+    FixSlashesInPlace(sSymDestination);
+    CollapsePath(sSymDestination, true);
+    if (sSymDestination.empty() ||
+        !IsSongPathInsideRoot(SpecialFiles::SONGS_DIR, sSymDestination)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-617: skipped song include '%s' with unsafe "
+          "destination '%s'.",
+          includePath.c_str(), sSymDestination.c_str());
+      continue;
+    }
+    if (GetSongFromDir(sSymDestination) != nullptr) {
+      if (onlyAdditions) {
+        LOG->Trace(
+            "SRC_AUDIT_FIX SRC-615: skipped already loaded song include '%s'.",
+            sSymDestination.c_str());
+      } else {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-618: skipped duplicate song include '%s'.",
+            sSymDestination.c_str());
+      }
+      continue;
+    }
 
     Song* pNewSong = new Song;
     if (!pNewSong->LoadFromSongDir(sSymDestination)) {
@@ -731,10 +785,15 @@ void SongManager::LoadGroupSymLinks(
       pNewSong->m_bIsSymLink =
           true;  // Very important so we don't double-parse later
       pNewSong->m_sGroupName = sGroupFolder;
-      AddSongToList(pNewSong);
+      if (!AddSongToList(pNewSong)) {
+        delete pNewSong;
+        continue;
+      }
       index_entry.push_back(pNewSong);
+      ++loadedCount;
     }
   }
+  return loadedCount;
 }
 
 void SongManager::PreloadSongImages() {
@@ -2465,12 +2524,28 @@ int SongManager::GetNumEditsLoadedFromProfile(ProfileSlot slot) const {
   return iCount;
 }
 
-void SongManager::AddSongToList(Song* new_song) {
+bool SongManager::AddSongToList(Song* new_song) {
+  if (new_song == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-618: refused to add a null song.");
+    return false;
+  }
   new_song->SetEnabled(true);
-  m_pSongs.push_back(new_song);
   std::string dir = new_song->GetSongDir();
+  if (Right(dir, 1) != "/") {
+    dir += "/";
+  }
+  FixSlashesInPlace(dir);
+  CollapsePath(dir, true);
   MakeLower(dir);
+  if (m_SongsByDir.find(dir) != m_SongsByDir.end()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-618: refused duplicate song directory '%s'.",
+        new_song->GetSongDir().c_str());
+    return false;
+  }
+  m_pSongs.push_back(new_song);
   m_SongsByDir.insert(std::make_pair(dir, new_song));
+  return true;
 }
 
 void SongManager::FreeAllLoadedFromProfile(ProfileSlot slot) {
