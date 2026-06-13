@@ -804,21 +804,67 @@ void SongManager::FreeSongs() {
 }
 
 void SongManager::UnlistSong(Song* song) {
+  if (song == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-097: refused to unlist a null song.");
+    return;
+  }
+
   // cannot immediately free song data, as it is needed temporarily for smooth
   // audio transitions, etc. Instead, remove it from the m_pSongs list and store
   // it in a special place where it can safely be deleted later.
   m_pDeletedSongs.push_back(song);
 
+  auto erase_song_from_vector = [song](std::vector<Song*>& songs) -> bool {
+    const auto old_size = songs.size();
+    songs.erase(std::remove(songs.begin(), songs.end(), song), songs.end());
+    return songs.size() != old_size;
+  };
+
   // remove all occurences of the song in each of our song vectors
   std::vector<Song*>* songVectors[3] = {
       &m_pSongs, &m_pPopularSongs, &m_pShuffledSongs};
   for (int songVecIdx = 0; songVecIdx < 3; ++songVecIdx) {
-    std::vector<Song*>& v = *songVectors[songVecIdx];
-    for (size_t i = 0; i < v.size(); ++i) {
-      if (v[i] == song) {
-        v.erase(v.begin() + i);
-        --i;
-      }
+    erase_song_from_vector(*songVectors[songVecIdx]);
+  }
+
+  for (auto iter = m_SongsByDir.begin(); iter != m_SongsByDir.end();) {
+    if (iter->second == song) {
+      iter = m_SongsByDir.erase(iter);
+    } else {
+      ++iter;
+    }
+  }
+
+  for (auto iter = m_mapSongGroupIndex.begin();
+       iter != m_mapSongGroupIndex.end();) {
+    erase_song_from_vector(iter->second);
+    if (iter->second.empty()) {
+      iter = m_mapSongGroupIndex.erase(iter);
+    } else {
+      ++iter;
+    }
+  }
+
+  for (auto iter = m_mapSongsByDifficulty.begin();
+       iter != m_mapSongsByDifficulty.end();) {
+    erase_song_from_vector(iter->second);
+    if (iter->second.empty()) {
+      iter = m_mapSongsByDifficulty.erase(iter);
+    } else {
+      ++iter;
+    }
+  }
+
+  for (auto iter = m_vPreferredSongSort.begin();
+       iter != m_vPreferredSongSort.end();) {
+    const std::string sectionName = iter->sName;
+    erase_song_from_vector(iter->vpSongs);
+    if (iter->vpSongs.empty()) {
+      m_mapPreferredSectionToSongs.erase(sectionName);
+      iter = m_vPreferredSongSort.erase(iter);
+    } else {
+      m_mapPreferredSectionToSongs[sectionName] = iter->vpSongs;
+      ++iter;
     }
   }
 }
