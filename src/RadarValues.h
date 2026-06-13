@@ -16,12 +16,21 @@ struct lua_State;
 struct RadarValues {
  private:
   float m_Values[NUM_RadarCategory];
+  static bool IsValidCategory(int cat);
+  static float& InvalidValue();
+  static const float& InvalidConstValue();
 
  public:
-  float operator[](RadarCategory cat) const { return m_Values[cat]; }
-  float& operator[](RadarCategory cat) { return m_Values[cat]; }
-  float operator[](int cat) const { return m_Values[cat]; }
-  float& operator[](int cat) { return m_Values[cat]; }
+  float operator[](RadarCategory cat) const {
+    return (*this)[static_cast<int>(cat)];
+  }
+  float& operator[](RadarCategory cat) { return (*this)[static_cast<int>(cat)]; }
+  float operator[](int cat) const {
+    return IsValidCategory(cat) ? m_Values[cat] : InvalidConstValue();
+  }
+  float& operator[](int cat) {
+    return IsValidCategory(cat) ? m_Values[cat] : InvalidValue();
+  }
 
   RadarValues();
   void MakeUnknown();

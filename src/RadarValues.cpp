@@ -6,6 +6,7 @@
 
 #include "EnumHelper.h"
 #include "GameConstantsAndTypes.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "ThemeMetric.h"
 #include "XmlFile.h"
@@ -17,6 +18,24 @@ ThemeMetric<bool> RadarValues::WRITE_COMPLEX_VALIES(
     "RadarValues", "WriteComplexValues");
 
 RadarValues::RadarValues() { MakeUnknown(); }
+
+bool RadarValues::IsValidCategory(int cat) {
+  return cat >= 0 && cat < NUM_RadarCategory;
+}
+
+float& RadarValues::InvalidValue() {
+  static float invalid = RADAR_VAL_UNKNOWN;
+  LOG->Trace(
+      "SRC_AUDIT_FIX RadarValues ignored invalid mutable category access.");
+  invalid = RADAR_VAL_UNKNOWN;
+  return invalid;
+}
+
+const float& RadarValues::InvalidConstValue() {
+  static const float invalid = RADAR_VAL_UNKNOWN;
+  LOG->Trace("SRC_AUDIT_FIX RadarValues ignored invalid category access.");
+  return invalid;
+}
 
 void RadarValues::MakeUnknown() {
   FOREACH_ENUM(RadarCategory, rc) { (*this)[rc] = RADAR_VAL_UNKNOWN; }
@@ -47,7 +66,12 @@ XNode* RadarValues::CreateNode(
 }
 
 void RadarValues::LoadFromNode(const XNode* pNode) {
-  ASSERT(pNode->GetName() == "RadarValues");
+  if (pNode == nullptr || pNode->GetName() != "RadarValues") {
+    LOG->Trace(
+        "SRC_AUDIT_FIX RadarValues ignored invalid XML node while loading.");
+    MakeUnknown();
+    return;
+  }
 
   Zero();
 
@@ -76,12 +100,24 @@ void RadarValues::FromString(std::string sRadarValues) {
   std::vector<std::string> saValues;
   split(sRadarValues, ",", saValues, true);
 
-  if (saValues.size() != NUM_RadarCategory) {
+  if (saValues.empty()) {
     MakeUnknown();
     return;
   }
 
-  FOREACH_ENUM(RadarCategory, rc) { (*this)[rc] = StringToFloat(saValues[rc]); }
+  MakeUnknown();
+  const size_t valuesToRead = std::min(saValues.size(), (size_t)NUM_RadarCategory);
+  for (size_t rc = 0; rc < valuesToRead; ++rc) {
+    float value = RADAR_VAL_UNKNOWN;
+    if (!StringToFloat(saValues[rc], value)) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX RadarValues rejected malformed cached value '%s'.",
+          saValues[rc].c_str());
+      MakeUnknown();
+      return;
+    }
+    (*this)[static_cast<int>(rc)] = value;
+  }
 }
 
 // lua start
