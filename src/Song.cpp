@@ -1508,9 +1508,16 @@ bool Song::SaveToCacheFile() {
   if (SONGMAN->IsGroupNeverCached(m_sGroupName)) {
     return true;
   }
-  SONGINDEX->AddCacheIndex(m_sSongDir, GetHashForDirectory(m_sSongDir));
   const std::string sPath = GetCacheFilePath();
-  return SaveToSSCFile(sPath, true);
+  if (!SaveToSSCFile(sPath, true)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-601: refused to update cache index after failed "
+        "song cache write '%s'.",
+        sPath.c_str());
+    return false;
+  }
+  SONGINDEX->AddCacheIndex(m_sSongDir, GetHashForDirectory(m_sSongDir));
+  return true;
 }
 
 bool Song::SaveToDWIFile() {
