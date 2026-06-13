@@ -151,11 +151,25 @@ void MemoryCardDriverThreaded_MacOSX::GetUSBStorageDevices(
   // First, get all device paths
   struct statfs* fs;
   int num = getfsstat(nullptr, 0, MNT_NOWAIT);
+  if (num < 0) {
+    LOG->Warn("getfsstat failed while counting filesystems.");
+    m_bChanged = false;
+    return;
+  }
+  if (num == 0) {
+    m_bChanged = false;
+    return;
+  }
 
   fs = new struct statfs[num];
 
   num = getfsstat(fs, num * sizeof(struct statfs), MNT_NOWAIT);
-  ASSERT(num != -1);
+  if (num < 0) {
+    LOG->Warn("getfsstat failed while reading filesystems.");
+    m_bChanged = false;
+    delete[] fs;
+    return;
+  }
 
   for (int i = 0; i < num; ++i) {
     if (strncmp(fs[i].f_mntfromname, _PATH_DEV, strlen(_PATH_DEV))) {

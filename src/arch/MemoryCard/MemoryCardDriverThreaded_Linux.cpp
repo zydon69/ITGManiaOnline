@@ -411,7 +411,11 @@ void MemoryCardDriverThreaded_Linux::GetUSBStorageDevices(
 }
 
 bool MemoryCardDriverThreaded_Linux::Mount(UsbStorageDevice* pDevice) {
-  ASSERT(!pDevice->sDevice.empty());
+  if (pDevice->sDevice.empty()) {
+    LOG->Warn("MemoryCardDriverThreaded_Linux::Mount: empty device path");
+    pDevice->SetError("MountFailed");
+    return false;
+  }
 
   bool bMountedSuccessfully = ExecuteCommand({"mount", pDevice->sDevice});
 
