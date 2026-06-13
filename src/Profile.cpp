@@ -3021,15 +3021,30 @@ class LunaProfile : public Luna<Profile> {
     }
     return 1;
   }
+  static Song* CheckOptionalSongArg(lua_State* L, const char* context) {
+    if (lua_gettop(L) < 1 || lua_isnil(L, 1) ||
+        !LuaBinding::CheckLuaObjectType(
+            L, 1, Luna<Song>::m_sClassName.c_str())) {
+      LOG->Warn("%s: expected Song argument", context);
+      return nullptr;
+    }
+    return Luna<Song>::get(L, 1);
+  }
   static int GetSongNumTimesPlayed(T* p, lua_State* L) {
-    ASSERT(!lua_isnil(L, 1));
-    Song* pS = Luna<Song>::check(L, 1);
+    Song* pS = CheckOptionalSongArg(L, "Profile:GetSongNumTimesPlayed");
+    if (pS == nullptr) {
+      lua_pushnumber(L, 0);
+      return 1;
+    }
     lua_pushnumber(L, p->GetSongNumTimesPlayed(pS));
     return 1;
   }
   static int HasPassedAnyStepsInSong(T* p, lua_State* L) {
-    ASSERT(!lua_isnil(L, 1));
-    Song* pS = Luna<Song>::check(L, 1);
+    Song* pS = CheckOptionalSongArg(L, "Profile:HasPassedAnyStepsInSong");
+    if (pS == nullptr) {
+      lua_pushboolean(L, false);
+      return 1;
+    }
     lua_pushboolean(L, p->HasPassedAnyStepsInSong(pS));
     return 1;
   }
