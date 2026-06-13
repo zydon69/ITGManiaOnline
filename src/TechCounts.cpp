@@ -34,6 +34,87 @@ constexpr float FOOTSWITCH_CUTOFF = 0.3f;
 // Anything slower isn't counted as a doublestep
 constexpr float DOUBLESTEP_CUTOFF = 0.235f;
 
+static bool IsValidLayoutColumn(
+    const StepParity::StageLayout* layout, int column) {
+  return layout != nullptr && column >= 0 && column < layout->columnCount &&
+         column < static_cast<int>(layout->columns.size());
+}
+
+static bool IsValidRowColumn(const StepParity::Row& row, int column) {
+  return column >= 0 && column < static_cast<int>(row.columns.size());
+}
+
+static bool IsValidFootColumn(
+    const StepParity::StageLayout* layout, int column) {
+  return column == StepParity::INVALID_COLUMN ||
+         IsValidLayoutColumn(layout, column);
+}
+
+static bool ValidateLayoutColumns(
+    const StepParity::StageLayout* layout, const std::vector<int>& columns,
+    const char* label) {
+  for (int column : columns) {
+    if (!IsValidLayoutColumn(layout, column)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-649: TechCounts layout has invalid %s column %d.",
+          label, column);
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool ValidateTechCountsInput(
+    const std::vector<StepParity::Row>& rows,
+    const StepParity::StageLayout* layout) {
+  if (layout == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-649: TechCounts requested without layout.");
+    return false;
+  }
+  if (layout->columnCount <= 0 ||
+      layout->columns.size() != static_cast<size_t>(layout->columnCount)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-649: TechCounts layout column count mismatch "
+        "(columnCount=%d, columns=%zu).",
+        layout->columnCount, layout->columns.size());
+    return false;
+  }
+  if (!ValidateLayoutColumns(layout, layout->upArrows, "up") ||
+      !ValidateLayoutColumns(layout, layout->downArrows, "down") ||
+      !ValidateLayoutColumns(layout, layout->sideArrows, "side")) {
+    return false;
+  }
+
+  for (size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex) {
+    const StepParity::Row& row = rows[rowIndex];
+    if (row.columns.size() != static_cast<size_t>(layout->columnCount)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-649: TechCounts row %zu has %zu columns; "
+          "expected %d.",
+          rowIndex, row.columns.size(), layout->columnCount);
+      return false;
+    }
+    if (row.whereTheFeetAre.size() < StepParity::NUM_Foot) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-649: TechCounts row %zu has %zu foot "
+          "placements; expected at least %d.",
+          rowIndex, row.whereTheFeetAre.size(), StepParity::NUM_Foot);
+      return false;
+    }
+    for (StepParity::Foot foot : StepParity::FEET) {
+      if (!IsValidFootColumn(layout, row.whereTheFeetAre[foot])) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-649: TechCounts row %zu has invalid foot "
+            "placement column %d.",
+            rowIndex, row.whereTheFeetAre[foot]);
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 // TechCounts methods
 TechCounts::TechCounts() { MakeUnknown(); }
 
@@ -122,6 +203,11 @@ void TechCounts::FromString(std::string sTechCounts) {
 void TechCounts::CalculateTechCountsFromRows(
     const std::vector<StepParity::Row>& rows,
     const StepParity::StageLayout* layout, TechCounts& out) {
+  if (!ValidateTechCountsInput(rows, layout)) {
+    out.MakeUnknown();
+    return;
+  }
+
   for (unsigned long i = 1; i < rows.size(); i++) {
     const StepParity::Row& currentRow = rows[i];
     const StepParity::Row& previousRow = rows[i - 1];
@@ -287,6 +373,13 @@ void TechCounts::CalculateTechCountsFromRows(
 bool TechCounts::isFootswitch(
     int c, const StepParity::Row& currentRow,
     const StepParity::Row& previousRow, float elapsedTime) {
+  if (!IsValidRowColumn(currentRow, c) || !IsValidRowColumn(previousRow, c)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-649: footswitch check received invalid column %d.",
+        c);
+    return false;
+  }
+
   if (currentRow.columns[c] == StepParity::NONE ||
       previousRow.columns[c] == StepParity::NONE) {
     return false;
