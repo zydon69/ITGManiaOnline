@@ -2216,13 +2216,20 @@ int Song::GetNumStepsLoadedFromProfile(ProfileSlot slot) const {
 }
 
 bool Song::IsEditAlreadyLoaded(Steps* pSteps) const {
-  ASSERT_M(
-      pSteps->GetDifficulty() == Difficulty_Edit,
-      ssprintf(
-          "The %s chart for %s is no edit, thus it can't be checked for "
-          "loading.",
-          DifficultyToString(pSteps->GetDifficulty()).c_str(),
-          this->m_sMainTitle.c_str()));
+  if (pSteps == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-608: IsEditAlreadyLoaded called with null steps "
+        "for '%s'.",
+        m_sSongDir.c_str());
+    return false;
+  }
+  if (pSteps->GetDifficulty() != Difficulty_Edit) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-608: refusing to check non-edit %s chart for '%s'.",
+        DifficultyToString(pSteps->GetDifficulty()).c_str(),
+        this->m_sMainTitle.c_str());
+    return false;
+  }
 
   for (unsigned i = 0; i < m_vpSteps.size(); i++) {
     Steps* pOther = m_vpSteps[i];
