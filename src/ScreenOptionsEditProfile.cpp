@@ -121,7 +121,14 @@ void ScreenOptionsEditProfile::GoToPrevScreen() {}
 
 void ScreenOptionsEditProfile::HandleScreenMessage(const ScreenMessage SM) {
   if (SM == SM_GoToNextScreen) {
-    PROFILEMAN->SaveLocalProfile(GAMESTATE->m_sEditLocalProfileID);
+    if (!PROFILEMAN->SaveLocalProfile(GAMESTATE->m_sEditLocalProfileID)) {
+      LOG->Warn(
+          "ScreenOptionsEditProfile::HandleScreenMessage: failed to save "
+          "profile '%s'",
+          GAMESTATE->m_sEditLocalProfileID.Get().c_str());
+      SCREENMAN->PlayInvalidSound();
+      return;
+    }
   } else if (SM == SM_GoToPrevScreen) {
     Profile* pProfile = GetProfileBeingEdited();
     if (pProfile != nullptr) {
