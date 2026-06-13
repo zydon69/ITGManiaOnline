@@ -1363,11 +1363,23 @@ int ProfileManager::GetLocalProfileIndexFromID(std::string sProfileID) const {
 }
 
 std::string ProfileManager::GetLocalProfileIDFromIndex(int iIndex) {
+  if (iIndex < 0 || iIndex >= int(g_vLocalProfile.size())) {
+    LOG->Warn(
+        "ProfileManager::GetLocalProfileIDFromIndex: index %d out of range",
+        iIndex);
+    return std::string();
+  }
   std::string sID = LocalProfileDirToID(g_vLocalProfile[iIndex].sDir);
   return sID;
 }
 
 Profile* ProfileManager::GetLocalProfileFromIndex(int iIndex) {
+  if (iIndex < 0 || iIndex >= int(g_vLocalProfile.size())) {
+    LOG->Warn(
+        "ProfileManager::GetLocalProfileFromIndex: index %d out of range",
+        iIndex);
+    return nullptr;
+  }
   return &g_vLocalProfile[iIndex].profile;
 }
 
@@ -1437,7 +1449,7 @@ class LunaProfileManager : public Luna<ProfileManager> {
   }
   static int GetLocalProfileFromIndex(T* p, lua_State* L) {
     int index = IArg(1);
-    if (index >= p->GetNumLocalProfiles()) {
+    if (index < 0 || index >= p->GetNumLocalProfiles()) {
       luaL_error(L, "Profile index %d out of range.", index);
     }
     Profile* pProfile = p->GetLocalProfileFromIndex(index);
@@ -1449,7 +1461,7 @@ class LunaProfileManager : public Luna<ProfileManager> {
   }
   static int GetLocalProfileIDFromIndex(T* p, lua_State* L) {
     int index = IArg(1);
-    if (index >= p->GetNumLocalProfiles()) {
+    if (index < 0 || index >= p->GetNumLocalProfiles()) {
       luaL_error(L, "Profile index %d out of range.", index);
     }
     lua_pushstring(L, p->GetLocalProfileIDFromIndex(index).c_str());
