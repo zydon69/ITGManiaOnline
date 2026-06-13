@@ -855,9 +855,18 @@ void EditCourseUtil::PrepareForPlay() {
 }
 
 void EditCourseUtil::GetAllEditCourses(std::vector<Course*>& vpCoursesOut) {
+  if (SONGMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-677: cannot collect edit courses without SONGMAN.");
+    return;
+  }
   std::vector<Course*> vpCoursesTemp;
   SONGMAN->GetAllCourses(vpCoursesTemp, false);
   for (Course* c : vpCoursesTemp) {
+    if (c == nullptr) {
+      LOG->Warn("SRC_AUDIT_FIX SRC-677: skipped null course in edit course list.");
+      continue;
+    }
     if (c->GetLoadedFromProfileSlot() != ProfileSlot_Invalid) {
       vpCoursesOut.push_back(c);
     }
@@ -873,21 +882,47 @@ void EditCourseUtil::LoadDefaults(Course& out) {
   // XXX: Make this localizable
   std::vector<Course*> vpCourses;
   EditCourseUtil::GetAllEditCourses(vpCourses);
+  bool bFoundName = false;
   for (int i = 0; i < 10000; i++) {
     out.m_sMainTitle = ssprintf("Workout %d", i + 1);
 
     const bool bNameTaken =
         std::any_of(vpCourses.begin(), vpCourses.end(), [&](const Course* p) {
+          if (p == nullptr) {
+            LOG->Warn(
+                "SRC_AUDIT_FIX SRC-677: skipped null course while picking "
+                "default edit course name.");
+            return false;
+          }
           return out.m_sMainTitle == p->m_sMainTitle;
         });
     if (!bNameTaken) {
+      bFoundName = true;
       break;
     }
   }
+  if (!bFoundName) {
+    out.m_sMainTitle = "Workout";
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-677: exhausted default edit course names; using "
+        "'Workout'.");
+  }
 
   std::vector<Song*> vpSongs;
+  if (SONGMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-677: cannot seed default edit course entries without "
+        "SONGMAN.");
+    return;
+  }
   SONGMAN->GetPreferredSortSongs(vpSongs);
   for (int i = 0; i < (int)vpSongs.size() && i < 6; i++) {
+    if (vpSongs[i] == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-677: skipped null song while seeding default edit "
+          "course.");
+      continue;
+    }
     CourseEntry ce;
     ce.songID.FromSong(vpSongs[i]);
     ce.stepsCriteria.m_difficulty = Difficulty_Easy;
