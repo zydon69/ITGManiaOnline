@@ -1,5 +1,7 @@
 #include "ScoreDisplayRave.h"
 
+#include <cmath>
+
 #include "ActorUtil.h"
 #include "EnumHelper.h"
 #include "GameConstantsAndTypes.h"
@@ -9,6 +11,12 @@
 #include "RageUtil.h"
 #include "ScoreDisplay.h"
 #include "ThemeManager.h"
+
+namespace {
+bool IsValidScoreDisplayPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+}  // namespace
 
 ScoreDisplayRave::ScoreDisplayRave() {
   LOG->Trace("ScoreDisplayRave::ScoreDisplayRave()");
@@ -30,7 +38,16 @@ void ScoreDisplayRave::Init(
     const PlayerStageStats* pPlayerStageStats) {
   ScoreDisplay::Init(pPlayerState, pPlayerStageStats);
 
-  PlayerNumber pn = pPlayerState->m_PlayerNumber;
+  PlayerNumber pn = PLAYER_1;
+  if (pPlayerState == nullptr ||
+      !IsValidScoreDisplayPlayer(pPlayerState->m_PlayerNumber)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreDisplayRave initialized with invalid "
+        "PlayerState %p; using PLAYER_1 assets.",
+        static_cast<const void*>(pPlayerState));
+  } else {
+    pn = pPlayerState->m_PlayerNumber;
+  }
 
   m_sprFrameBase.Load(
       THEME->GetPathG("ScoreDisplayRave", ssprintf("frame base p%d", pn + 1)));
@@ -58,11 +75,24 @@ void ScoreDisplayRave::Init(
 void ScoreDisplayRave::Update(float fDelta) {
   ScoreDisplay::Update(fDelta);
 
+  if (m_pPlayerState == nullptr) {
+    return;
+  }
+
   float fLevel = m_pPlayerState->m_fSuperMeter;
+  if (!std::isfinite(fLevel)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreDisplayRave ignored non-finite super meter %f.",
+        fLevel);
+    fLevel = 0.0f;
+  }
+  rage_clamp(fLevel, 0.0f, (float)NUM_ATTACK_LEVELS - 0.0001f);
   AttackLevel level = (AttackLevel)(int)fLevel;
 
   if (level != m_lastLevelSeen) {
-    m_sprMeter[m_lastLevelSeen].SetCropRight(1.f);
+    if (m_lastLevelSeen >= ATTACK_LEVEL_1 && m_lastLevelSeen < NUM_ATTACK_LEVELS) {
+      m_sprMeter[m_lastLevelSeen].SetCropRight(1.f);
+    }
     m_lastLevelSeen = level;
     m_textLevel.SetText(ssprintf("%d", level + 1));
   }
