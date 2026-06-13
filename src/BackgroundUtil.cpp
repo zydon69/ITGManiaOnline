@@ -1,6 +1,7 @@
 #include "BackgroundUtil.h"
 
 #include <algorithm>
+#include <cmath>
 #include <set>
 #include <string>
 #include <vector>
@@ -174,8 +175,26 @@ int CompareBackgroundChanges(
   return seg1.m_fStartBeat < seg2.m_fStartBeat;
 }
 
+static bool IsValidBackgroundChangeTiming(const BackgroundChange& seg) {
+  return std::isfinite(seg.m_fStartBeat) && seg.m_fStartBeat >= 0;
+}
+
 void BackgroundUtil::SortBackgroundChangesArray(
     std::vector<BackgroundChange>& vBackgroundChanges) {
+  vBackgroundChanges.erase(
+      std::remove_if(
+          vBackgroundChanges.begin(), vBackgroundChanges.end(),
+          [](const BackgroundChange& seg) {
+            if (IsValidBackgroundChangeTiming(seg)) {
+              return false;
+            }
+            LOG->Warn(
+                "SRC_AUDIT_FIX SRC-680: removed background change with invalid "
+                "start beat %.3f before sorting.",
+                seg.m_fStartBeat);
+            return true;
+          }),
+      vBackgroundChanges.end());
   sort(
       vBackgroundChanges.begin(), vBackgroundChanges.end(),
       CompareBackgroundChanges);
@@ -183,6 +202,13 @@ void BackgroundUtil::SortBackgroundChangesArray(
 
 void BackgroundUtil::AddBackgroundChange(
     std::vector<BackgroundChange>& vBackgroundChanges, BackgroundChange seg) {
+  if (!IsValidBackgroundChangeTiming(seg)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-680: rejected background change with invalid start "
+        "beat %.3f.",
+        seg.m_fStartBeat);
+    return;
+  }
   std::vector<BackgroundChange>::iterator it;
   it = upper_bound(
       vBackgroundChanges.begin(), vBackgroundChanges.end(), seg,
