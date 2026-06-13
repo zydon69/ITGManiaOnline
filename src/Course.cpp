@@ -1272,13 +1272,24 @@ void Course::UpdateCourseStats(StepsType st) {
       m_SortOrder_TotalDifficulty);
 }
 
+static std::string NormalizeCourseRankingPath(std::string sPath) {
+  Replace(sPath, "\\", "/");
+  CollapsePath(sPath, true);
+  while (Left(sPath, 1) == "/") {
+    sPath.erase(sPath.begin());
+  }
+  return sPath;
+}
+
 bool Course::IsRanking() const {
   std::vector<std::string> rankingsongs;
 
   split(THEME->GetMetric("ScreenRanking", "CoursesToShow"), ",", rankingsongs);
 
+  const std::string sCoursePath = NormalizeCourseRankingPath(m_sPath);
   for (unsigned i = 0; i < rankingsongs.size(); i++) {
-    if (EqualsNoCase(rankingsongs[i], m_sPath)) {
+    Trim(rankingsongs[i]);
+    if (EqualsNoCase(NormalizeCourseRankingPath(rankingsongs[i]), sCoursePath)) {
       return true;
     }
   }
