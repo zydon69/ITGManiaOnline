@@ -155,15 +155,28 @@ bool CourseLoaderCRS::LoadFromMsd(
       attacks.clear();
       out.m_vEntries.push_back(new_entry);
     } else if (
-        !EqualsNoCase(sValueName, "DISPLAYCOURSE") ||
-        !EqualsNoCase(sValueName, "COMBO") ||
-        !EqualsNoCase(sValueName, "COMBOMODE")) {
+        EqualsNoCase(sValueName, "DISPLAYCOURSE") ||
+        EqualsNoCase(sValueName, "COMBO") ||
+        EqualsNoCase(sValueName, "COMBOMODE")) {
       // Ignore
     }
 
-    else if (bFromCache && !EqualsNoCase(sValueName, "RADAR")) {
+    else if (bFromCache && EqualsNoCase(sValueName, "RADAR")) {
+      if (sParams.params.size() < 4) {
+        LOG->UserLog(
+            "Course file", sPath, "contains a malformed #RADAR cache tag.");
+        continue;
+      }
       StepsType st = (StepsType)StringToInt(sParams[1]);
       CourseDifficulty cd = (CourseDifficulty)StringToInt(sParams[2]);
+      if (st < 0 || st >= NUM_StepsType || cd < 0 || cd >= NUM_CourseDifficulty) {
+        LOG->UserLog(
+            "Course file", sPath,
+            "contains a #RADAR cache tag with invalid type/difficulty: \"%s\", "
+            "\"%s\"",
+            sParams[1].c_str(), sParams[2].c_str());
+        continue;
+      }
 
       RadarValues rv;
       rv.FromString(sParams[3]);
