@@ -1665,6 +1665,18 @@ void SongUtil::FilterSongs(
 
 void SongUtil::GetPlayableStepsTypes(
     const Song* pSong, std::set<StepsType>& vOut) {
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-663: playable steps types requested without song.");
+    return;
+  }
+  if (GAMESTATE == nullptr || GAMEMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-663: playable steps types requested without "
+        "GAMESTATE or GAMEMAN.");
+    return;
+  }
+
   std::vector<const Style*> vpPossibleStyles;
   // If AutoSetStyle, or a Style hasn't been chosen, check StepsTypes for all
   // Styles.
@@ -1681,13 +1693,25 @@ void SongUtil::GetPlayableStepsTypes(
   if (GAMESTATE->m_bMultiplayer) {
     for (int i = vpPossibleStyles.size() - 1; i >= 0; i--) {
       const Style* pStyle = vpPossibleStyles[i];
+      if (pStyle == nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-663: skipped null style while filtering playable "
+            "steps types.");
+        vpPossibleStyles.erase(vpPossibleStyles.begin() + i);
+        continue;
+      }
       switch (pStyle->m_StyleType) {
-        DEFAULT_FAIL(pStyle->m_StyleType);
         case StyleType_OnePlayerOneSide:
           continue;
         case StyleType_TwoPlayersTwoSides:
         case StyleType_OnePlayerTwoSides:
         case StyleType_TwoPlayersSharedSides:
+          vpPossibleStyles.erase(vpPossibleStyles.begin() + i);
+          break;
+        default:
+          LOG->Warn(
+              "SRC_AUDIT_FIX SRC-663: skipped style with invalid type %i.",
+              pStyle->m_StyleType);
           vpPossibleStyles.erase(vpPossibleStyles.begin() + i);
           break;
       }
@@ -1696,6 +1720,12 @@ void SongUtil::GetPlayableStepsTypes(
 
   std::set<StepsType> vStepsTypes;
   for (const Style* s : vpPossibleStyles) {
+    if (s == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-663: skipped null style while collecting playable "
+          "steps types.");
+      continue;
+    }
     vStepsTypes.insert(s->m_StepsType);
   }
 
@@ -1723,6 +1753,11 @@ void SongUtil::GetPlayableStepsTypes(
 }
 
 void SongUtil::GetPlayableSteps(const Song* pSong, std::vector<Steps*>& vOut) {
+  if (pSong == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-663: playable steps requested without song.");
+    return;
+  }
+
   std::set<StepsType> vStepsType;
   GetPlayableStepsTypes(pSong, vStepsType);
 
@@ -1736,18 +1771,33 @@ void SongUtil::GetPlayableSteps(const Song* pSong, std::vector<Steps*>& vOut) {
 }
 
 bool SongUtil::IsStepsTypePlayable(Song* pSong, StepsType st) {
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-663: steps type playability requested without song.");
+    return false;
+  }
   std::set<StepsType> vStepsType;
   GetPlayableStepsTypes(pSong, vStepsType);
   return vStepsType.find(st) != vStepsType.end();
 }
 
 bool SongUtil::IsStepsPlayable(Song* pSong, Steps* pSteps) {
+  if (pSong == nullptr || pSteps == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-663: steps playability requested without song or "
+        "steps.");
+    return false;
+  }
   std::vector<Steps*> vpSteps;
   GetPlayableSteps(pSong, vpSteps);
   return find(vpSteps.begin(), vpSteps.end(), pSteps) != vpSteps.end();
 }
 
 bool SongUtil::IsSongPlayable(Song* s) {
+  if (s == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-663: song playability requested without song.");
+    return false;
+  }
   const std::vector<Steps*>& steps = s->GetAllSteps();
   // I'm sure there is a foreach loop, but I don't
   return std::any_of(steps.begin(), steps.end(), [&](Steps* step) {
