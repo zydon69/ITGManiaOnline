@@ -493,12 +493,21 @@ void SongManager::LoadSongDir(
     ld->SetTotalWork(songCount);
   }
 
-  int threadCount = std::thread::hardware_concurrency();
-  if (threadCount <= 0) {
-    threadCount = 1;
+  int detectedThreadCount = std::thread::hardware_concurrency();
+  if (detectedThreadCount <= 0) {
+    detectedThreadCount = 1;
+  }
+  int threadCount = 1;
+  if (detectedThreadCount > threadCount) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-613: using single-threaded song loading; detected "
+        "%d hardware threads, but Song::LoadFromSongDir touches global caches.",
+        detectedThreadCount);
   }
   if (LogContentLoadDiagnosticsEnabled()) {
-    LOG->Trace("CONTENT_TRACE: song_load_threads count=%d", threadCount);
+    LOG->Trace(
+        "CONTENT_TRACE: song_load_threads count=%d detected=%d", threadCount,
+        detectedThreadCount);
   }
 
   // We need to keep track of previously loaded groups so we don't delete them
