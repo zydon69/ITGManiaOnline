@@ -88,6 +88,15 @@ static ThemeMetric<int> NUM_FIXED_PROFILES(
   THEME->GetMetric(                   \
       "ProfileManager", ssprintf("FixedProfileCharacterID%d", int(i + 1)))
 
+static bool IsProfilePlayerNumberValid(PlayerNumber pn, const char* context) {
+  if (pn >= 0 && pn < NUM_PLAYERS) {
+    return true;
+  }
+
+  LOG->Warn("%s: invalid player number %d", context, int(pn));
+  return false;
+}
+
 ProfileManager::ProfileManager() : m_stats_prefix("") {
   m_pMachineProfile = new Profile;
   FOREACH_PlayerNumber(pn) m_pMemoryCardProfile[pn] = new Profile;
@@ -154,6 +163,10 @@ ProfileLoadResult ProfileManager::LoadProfile(
   LOG->Trace(
       "LoadingProfile P%d, %s, %d", pn + 1, sProfileDir.c_str(), bIsMemCard);
 
+  if (!IsProfilePlayerNumberValid(pn, "ProfileManager::LoadProfile")) {
+    return ProfileLoadResult_FailedNoProfile;
+  }
+
   ASSERT(!sProfileDir.empty());
   ASSERT(Right(sProfileDir, 1) == "/");
 
@@ -211,6 +224,11 @@ ProfileLoadResult ProfileManager::LoadProfile(
 }
 
 bool ProfileManager::LoadLocalProfileFromMachine(PlayerNumber pn) {
+  if (!IsProfilePlayerNumberValid(
+          pn, "ProfileManager::LoadLocalProfileFromMachine")) {
+    return false;
+  }
+
   std::string sProfileID = m_sDefaultLocalProfileID[pn];
   if (sProfileID.empty()) {
     m_sProfileDir[pn] = "";
@@ -251,6 +269,11 @@ void ProfileManager::GetMemoryCardProfileDirectoriesToTry(
 
 bool ProfileManager::LoadProfileFromMemoryCard(
     PlayerNumber pn, bool bLoadEdits) {
+  if (!IsProfilePlayerNumberValid(
+          pn, "ProfileManager::LoadProfileFromMemoryCard")) {
+    return false;
+  }
+
   UnloadProfile(pn);
 
   // mount slot
@@ -328,6 +351,11 @@ bool ProfileManager::LoadProfileFromMemoryCard(
 
 bool ProfileManager::LoadFirstAvailableProfile(
     PlayerNumber pn, bool bLoadEdits) {
+  if (!IsProfilePlayerNumberValid(
+          pn, "ProfileManager::LoadFirstAvailableProfile")) {
+    return false;
+  }
+
   if (LoadProfileFromMemoryCard(pn, bLoadEdits)) {
     return true;
   }
@@ -362,6 +390,10 @@ bool ProfileManager::FastLoadProfileNameFromMemoryCard(
 }
 
 bool ProfileManager::SaveProfile(PlayerNumber pn) const {
+  if (!IsProfilePlayerNumberValid(pn, "ProfileManager::SaveProfile")) {
+    return false;
+  }
+
   if (m_sProfileDir[pn].empty()) {
     return false;
   }
@@ -394,6 +426,10 @@ bool ProfileManager::SaveLocalProfile(std::string sProfileID) {
 }
 
 void ProfileManager::UnloadProfile(PlayerNumber pn) {
+  if (!IsProfilePlayerNumberValid(pn, "ProfileManager::UnloadProfile")) {
+    return;
+  }
+
   if (m_sProfileDir[pn].empty()) {
     // Don't bother unloading a profile that wasn't loaded in the first place.
     // Saves us an expensive and pointless trip through all the songs.
@@ -410,7 +446,9 @@ void ProfileManager::UnloadProfile(PlayerNumber pn) {
 }
 
 const Profile* ProfileManager::GetProfile(PlayerNumber pn) const {
-  ASSERT(pn >= 0 && pn < NUM_PLAYERS);
+  if (!IsProfilePlayerNumberValid(pn, "ProfileManager::GetProfile")) {
+    return nullptr;
+  }
 
   if (m_sProfileDir[pn].empty()) {
     // return an empty profile
@@ -426,6 +464,14 @@ const Profile* ProfileManager::GetProfile(PlayerNumber pn) const {
 std::string ProfileManager::GetPlayerName(PlayerNumber pn) const {
   const Profile* prof = GetProfile(pn);
   return prof ? prof->GetDisplayNameOrHighScoreName() : std::string();
+}
+
+bool ProfileManager::IsPersistentProfile(PlayerNumber pn) const {
+  if (!IsProfilePlayerNumberValid(
+          pn, "ProfileManager::IsPersistentProfile")) {
+    return false;
+  }
+  return !m_sProfileDir[pn].empty();
 }
 
 void ProfileManager::UnloadAllLocalProfiles() { g_vLocalProfile.clear(); }
@@ -837,18 +883,34 @@ void ProfileManager::LoadMachineProfileEdits() {
 }
 
 bool ProfileManager::ProfileWasLoadedFromMemoryCard(PlayerNumber pn) const {
+  if (!IsProfilePlayerNumberValid(
+          pn, "ProfileManager::ProfileWasLoadedFromMemoryCard")) {
+    return false;
+  }
   return !m_sProfileDir[pn].empty() && m_bWasLoadedFromMemoryCard[pn];
 }
 
 bool ProfileManager::ProfileFromMemoryCardIsNew(PlayerNumber pn) const {
+  if (!IsProfilePlayerNumberValid(
+          pn, "ProfileManager::ProfileFromMemoryCardIsNew")) {
+    return false;
+  }
   return GetProfile(pn) && m_bWasLoadedFromMemoryCard[pn] && m_bNewProfile[pn];
 }
 
 bool ProfileManager::LastLoadWasTamperedOrCorrupt(PlayerNumber pn) const {
+  if (!IsProfilePlayerNumberValid(
+          pn, "ProfileManager::LastLoadWasTamperedOrCorrupt")) {
+    return false;
+  }
   return !m_sProfileDir[pn].empty() && m_bLastLoadWasTamperedOrCorrupt[pn];
 }
 
 bool ProfileManager::LastLoadWasFromLastGood(PlayerNumber pn) const {
+  if (!IsProfilePlayerNumberValid(
+          pn, "ProfileManager::LastLoadWasFromLastGood")) {
+    return false;
+  }
   return !m_sProfileDir[pn].empty() && m_bLastLoadWasFromLastGood[pn];
 }
 

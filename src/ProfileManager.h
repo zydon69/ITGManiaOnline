@@ -87,9 +87,7 @@ class ProfileManager {
   void LoadMachineProfileEdits();
   void SaveMachineProfile() const;
 
-  bool IsPersistentProfile(PlayerNumber pn) const {
-    return !m_sProfileDir[pn].empty();
-  }
+  bool IsPersistentProfile(PlayerNumber pn) const;
   bool IsPersistentProfile(ProfileSlot slot) const;
 
   // return a profile even if !IsUsingProfile
