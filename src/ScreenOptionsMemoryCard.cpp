@@ -11,6 +11,7 @@
 #include "MessageManager.h"
 #include "OptionRowHandler.h"
 #include "PlayerNumber.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "Screen.h"
 #include "ScreenManager.h"
@@ -21,6 +22,10 @@
 #include "arch/MemoryCard/MemoryCardDriver.h"
 
 REGISTER_SCREEN_CLASS(ScreenOptionsMemoryCard);
+
+static bool IsMemoryCardOptionsPlayerValid(PlayerNumber pn) {
+  return pn >= 0 && pn < NUM_PLAYERS;
+}
 
 void ScreenOptionsMemoryCard::Init() {
   ScreenOptions::Init();
@@ -115,7 +120,17 @@ void ScreenOptionsMemoryCard::AfterChangeRow(PlayerNumber pn) {
   if (m_CurrentUsbStorageDevices.empty()) {
     m_textOsMountDir.SetText("");
   } else {
-    int iRow = m_iCurrentRow[GAMESTATE->GetMasterPlayerNumber()];
+    PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+    if (!IsMemoryCardOptionsPlayerValid(master)) {
+      LOG->Warn("ScreenOptionsMemoryCard::AfterChangeRow: invalid master player");
+      m_textOsMountDir.SetText("");
+      return;
+    }
+    int iRow = m_iCurrentRow[master];
+    if (iRow < 0 || iRow >= int(m_CurrentUsbStorageDevices.size())) {
+      m_textOsMountDir.SetText("");
+      return;
+    }
     m_textOsMountDir.SetText(m_CurrentUsbStorageDevices[iRow].sOsMountDir);
   }
 }
@@ -125,9 +140,10 @@ void ScreenOptionsMemoryCard::HandleMessage(const Message& msg) {
     if (!m_Out.IsTransitioning()) {
       /* Remember the old mountpoint. */
       const std::vector<UsbStorageDevice>& v = m_CurrentUsbStorageDevices;
-      int iRow = m_iCurrentRow[GAMESTATE->GetMasterPlayerNumber()];
+      PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+      int iRow = IsMemoryCardOptionsPlayerValid(master) ? m_iCurrentRow[master] : -1;
       std::string sOldMountPoint;
-      if (iRow < int(v.size())) {
+      if (iRow >= 0 && iRow < int(v.size())) {
         const UsbStorageDevice& dev = v[iRow];
         sOldMountPoint = dev.sOsMountDir;
       }
@@ -155,12 +171,20 @@ void ScreenOptionsMemoryCard::ImportOptions(
 
 void ScreenOptionsMemoryCard::ExportOptions(
     int iRow, const std::vector<PlayerNumber>& vpns) {
+  if (iRow < 0 || iRow >= int(m_pRows.size())) {
+    LOG->Warn(
+        "ScreenOptionsMemoryCard::ExportOptions: row %d out of range", iRow);
+    return;
+  }
   OptionRow& row = *m_pRows[iRow];
   if (row.GetRowType() == OptionRow::RowType_Exit) {
     return;
   }
 
   PlayerNumber pn = GAMESTATE->GetMasterPlayerNumber();
+  if (!IsMemoryCardOptionsPlayerValid(pn)) {
+    return;
+  }
   if (m_iCurrentRow[pn] == iRow) {
     const std::vector<UsbStorageDevice>& v = m_CurrentUsbStorageDevices;
     if (iRow < int(v.size())) {
@@ -192,10 +216,16 @@ void ScreenOptionsMemoryCard::ProcessMenuStart(const InputEventPlus&) {
     return;
   }
 
-  int iCurRow = m_iCurrentRow[GAMESTATE->GetMasterPlayerNumber()];
+  PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+  if (!IsMemoryCardOptionsPlayerValid(master)) {
+    SCREENMAN->PlayInvalidSound();
+    return;
+  }
+
+  int iCurRow = m_iCurrentRow[master];
 
   const std::vector<UsbStorageDevice>& v = m_CurrentUsbStorageDevices;
-  if (iCurRow < int(v.size()))  // a card
+  if (iCurRow >= 0 && iCurRow < int(v.size()))  // a card
   {
     // Why is this statement in twice? Doubt it would change right after the if.
     // -Wolfman2000
