@@ -17,7 +17,26 @@
 using namespace StepParity;
 
 bool StepParityGenerator::analyzeNoteData(const NoteData& in) {
+  if (layout == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-639: StepParity analysis has no layout.");
+    return false;
+  }
+
   columnCount_ = in.GetNumTracks();
+  if (columnCount_ <= 0 || columnCount_ > MAX_COLUMNS) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-639: StepParity analysis has invalid track count "
+        "%d.",
+        columnCount_);
+    return false;
+  }
+  if (layout->columnCount != columnCount_) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-639: StepParity track count %d does not match "
+        "layout column count %d.",
+        columnCount_, layout->columnCount);
+    return false;
+  }
 
   CreateRows(in);
 
