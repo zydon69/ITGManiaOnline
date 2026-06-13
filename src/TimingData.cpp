@@ -23,6 +23,10 @@ static const int INVALID_INDEX = -1;
 
 TimingSegment* GetSegmentAtRow(int iNoteRow, TimingSegmentType tst);
 
+static bool IsValidTimingSegmentType(TimingSegmentType tst) {
+  return tst >= SEGMENT_BPM && tst < NUM_TimingSegmentType;
+}
+
 TimingData::TimingData(float fOffset)
     : m_fBeat0OffsetInSeconds(fOffset), m_fBeat0GroupOffsetInSeconds(0.0f) {}
 
@@ -72,6 +76,23 @@ bool TimingData::IsSafeFullTiming() {
     }
   }
   return true;
+}
+
+const std::vector<TimingSegment*>& TimingData::GetTimingSegments(
+    TimingSegmentType tst) const {
+  return const_cast<TimingData*>(this)->GetTimingSegments(tst);
+}
+
+std::vector<TimingSegment*>& TimingData::GetTimingSegments(
+    TimingSegmentType tst) {
+  static std::vector<TimingSegment*> invalidSegments;
+  if (!IsValidTimingSegmentType(tst)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX TimingData ignored invalid timing segment type %i.",
+        static_cast<int>(tst));
+    return invalidSegments;
+  }
+  return m_avpTimingSegments[tst];
 }
 
 TimingData::~TimingData() { Clear(); }
@@ -322,6 +343,11 @@ void TimingData::GetActualBPM(
     fMaxBPMOut = std::clamp(std::max(fBPM, fMaxBPMOut), 0.0f, highest);
     fMinBPMOut = std::min(fBPM, fMinBPMOut);
   }
+
+  if (bpms.empty()) {
+    fMinBPMOut = 0.0f;
+    fMaxBPMOut = 0.0f;
+  }
 }
 
 float TimingData::GetNextSegmentBeatAtRow(
@@ -350,6 +376,13 @@ float TimingData::GetPreviousSegmentBeatAtRow(
 }
 
 int TimingData::GetSegmentIndexAtRow(TimingSegmentType tst, int iRow) const {
+  if (!IsValidTimingSegmentType(tst)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX TimingData ignored invalid segment index lookup type "
+        "%i.",
+        static_cast<int>(tst));
+    return INVALID_INDEX;
+  }
   const std::vector<TimingSegment*>& vSegs = GetTimingSegments(tst);
 
   if (vSegs.empty()) {
@@ -401,7 +434,7 @@ void TimingData::MultiplyBPMInBeatRange(
      * split it into two. */
     if (iStartIndexThisSegment < iStartIndex &&
         iStartIndexNextSegment > iStartIndex) {
-      BPMSegment* b = new BPMSegment(iStartIndexNextSegment, bs->GetBPS());
+      BPMSegment* b = new BPMSegment(iStartIndex, bs->GetBPM());
       bpms.insert(bpms.begin() + i + 1, b);
 
       /* Don't apply the BPM change to the first half of the segment we
@@ -412,7 +445,7 @@ void TimingData::MultiplyBPMInBeatRange(
     // If this BPM segment crosses the end of the range, split it into two.
     if (iStartIndexThisSegment < iEndIndex &&
         iStartIndexNextSegment > iEndIndex) {
-      BPMSegment* b = new BPMSegment(iEndIndex, bs->GetBPS());
+      BPMSegment* b = new BPMSegment(iEndIndex, bs->GetBPM());
       bpms.insert(bpms.begin() + i + 1, b);
     } else if (iStartIndexNextSegment > iEndIndex) {
       continue;
@@ -473,23 +506,30 @@ bool TimingData::IsFakeAtRow(int iNoteRow) const {
  * indiscriminate calls to get segments at arbitrary rows, I think it's the
  * best solution we've got for now.
  *
- * Note that types whose SegmentEffectAreas are "Indefinite" are nullptr here,
- * because they should never need to be used; we always have at least one such
- * segment in the TimingData, and if not, we'll crash anyway. -- vyhd */
+ * Indefinite segments also have safe defaults here because callers can reach
+ * empty TimingData while editing, testing, or loading corrupt cache data. */
 static const TimingSegment* DummySegments[NUM_TimingSegmentType] = {
-    nullptr,  // BPMSegment
+    new BPMSegment(0, 60),
     new StopSegment, new DelaySegment,
-    nullptr,  // TimeSignatureSegment
+    new TimeSignatureSegment(0),
     new WarpSegment,
-    nullptr,  // LabelSegment
-    nullptr,  // TickcountSegment
-    nullptr,  // ComboSegment
-    nullptr,  // SpeedSegment
-    nullptr,  // ScrollSegment
+    new LabelSegment(0, "Song Start"),
+    new TickcountSegment(0),
+    new ComboSegment(0),
+    new SpeedSegment(0),
+    new ScrollSegment(0),
     new FakeSegment};
 
 const TimingSegment* TimingData::GetSegmentAtRow(
     int iNoteRow, TimingSegmentType tst) const {
+  if (!IsValidTimingSegmentType(tst)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX TimingData ignored segment lookup for invalid type %i "
+        "at row %i.",
+        static_cast<int>(tst), iNoteRow);
+    return nullptr;
+  }
+
   const std::vector<TimingSegment*>& vSegments = GetTimingSegments(tst);
 
   if (vSegments.empty()) {
@@ -497,6 +537,9 @@ const TimingSegment* TimingData::GetSegmentAtRow(
   }
 
   int index = GetSegmentIndexAtRow(tst, iNoteRow);
+  if (index == INVALID_INDEX) {
+    return DummySegments[tst];
+  }
   const TimingSegment* seg = vSegments[index];
 
   switch (seg->GetEffectType()) {
@@ -536,6 +579,11 @@ static void EraseSegment(
 // NOTE: the pointer we're passed is a reference to a temporary,
 // so we must deep-copy it (with ::Copy) for new allocations.
 void TimingData::AddSegment(const TimingSegment* seg) {
+  if (seg == nullptr) {
+    LOG->Trace("SRC_AUDIT_FIX TimingData ignored null timing segment.");
+    return;
+  }
+
 #ifdef WITH_LOGGING_TIMING_DATA
   LOG->Trace(
       "AddSegment( %s )", TimingSegmentTypeToString(seg->GetType()).c_str());
@@ -543,6 +591,13 @@ void TimingData::AddSegment(const TimingSegment* seg) {
 #endif
 
   TimingSegmentType tst = seg->GetType();
+  if (!IsValidTimingSegmentType(tst)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX TimingData ignored segment with invalid type %i.",
+        static_cast<int>(tst));
+    return;
+  }
+
   std::vector<TimingSegment*>& vSegs = m_avpTimingSegments[tst];
 
   // OPTIMIZATION: if this is our first segment, push and return.
@@ -552,7 +607,16 @@ void TimingData::AddSegment(const TimingSegment* seg) {
   }
 
   int index = GetSegmentIndexAtRow(tst, seg->GetRow());
-  ASSERT(index != INVALID_INDEX);
+  if (index == INVALID_INDEX) {
+    if (!seg->IsNotable()) {
+      return;
+    }
+    TimingSegment* cpy = seg->Copy();
+    std::vector<TimingSegment*>::iterator it;
+    it = upper_bound(vSegs.begin(), vSegs.end(), cpy, ts_less());
+    vSegs.insert(it, cpy);
+    return;
+  }
   TimingSegment* cur = vSegs[index];
 
   bool bIsNotable = seg->IsNotable();
@@ -730,6 +794,13 @@ void TimingData::GetBeatInternal(
   unsigned int curr_segment = start.bpm + start.warp + start.stop + start.delay;
 
   float bps = GetBPMAtRow(start.last_row) / 60.0f;
+  if (!std::isfinite(bps) || bps <= 0.0f) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX TimingData corrected invalid BPS %f while converting "
+        "elapsed time.",
+        bps);
+    bps = 1.0f;
+  }
   while (curr_segment < max_segment) {
     int event_row = INT_MAX;
     int event_type = NOT_FOUND;
@@ -751,6 +822,13 @@ void TimingData::GetBeatInternal(
         break;
       case FOUND_BPM_CHANGE:
         bps = ToBPM(bpms[start.bpm])->GetBPS();
+        if (!std::isfinite(bps) || bps <= 0.0f) {
+          LOG->Trace(
+              "SRC_AUDIT_FIX TimingData corrected invalid BPS %f at BPM "
+              "segment %u.",
+              bps, start.bpm);
+          bps = 1.0f;
+        }
         ++start.bpm;
         ++curr_segment;
         break;
@@ -835,6 +913,13 @@ float TimingData::GetElapsedTimeInternal(
   unsigned int curr_segment = start.bpm + start.warp + start.stop + start.delay;
 
   float bps = GetBPMAtRow(start.last_row) / 60.0f;
+  if (!std::isfinite(bps) || bps <= 0.0f) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX TimingData corrected invalid BPS %f while converting "
+        "beat time.",
+        bps);
+    bps = 1.0f;
+  }
   bool find_marker = beat < FLT_MAX;
 
   while (curr_segment < max_segment) {
@@ -853,6 +938,13 @@ float TimingData::GetElapsedTimeInternal(
         break;
       case FOUND_BPM_CHANGE:
         bps = ToBPM(bpms[start.bpm])->GetBPS();
+        if (!std::isfinite(bps) || bps <= 0.0f) {
+          LOG->Trace(
+              "SRC_AUDIT_FIX TimingData corrected invalid BPS %f at BPM "
+              "segment %u.",
+              bps, start.bpm);
+          bps = 1.0f;
+        }
         ++start.bpm;
         ++curr_segment;
         break;
@@ -913,6 +1005,9 @@ float TimingData::GetDisplayedBeat(float fBeat) const {
   unsigned i;
   const std::vector<TimingSegment*>& scrolls =
       m_avpTimingSegments[SEGMENT_SCROLL];
+  if (scrolls.empty()) {
+    return fBeat;
+  }
   for (i = 0; i < scrolls.size() - 1; i++) {
     if (scrolls[i + 1]->GetBeat() > fBeat) {
       break;
@@ -927,12 +1022,24 @@ float TimingData::GetDisplayedBeat(float fBeat) const {
 
 void TimingData::ScaleRegion(
     float fScale, int iStartIndex, int iEndIndex, bool bAdjustBPM) {
-  ASSERT(fScale > 0);
-  ASSERT(iStartIndex >= 0);
-  ASSERT(iStartIndex < iEndIndex);
+  if (!std::isfinite(fScale) || fScale <= 0.0f || iStartIndex < 0 ||
+      iStartIndex >= iEndIndex) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX TimingData ignored invalid ScaleRegion scale=%f "
+        "start=%i end=%i.",
+        fScale, iStartIndex, iEndIndex);
+    return;
+  }
 
   int length = iEndIndex - iStartIndex;
   int newLength = std::lrint(fScale * length);
+  if (newLength <= 0) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX TimingData ignored ScaleRegion producing invalid "
+        "length %i.",
+        newLength);
+    return;
+  }
 
   FOREACH_TimingSegmentType(tst) for (unsigned j = 0;
                                       j < m_avpTimingSegments[tst].size(); j++)
@@ -941,6 +1048,12 @@ void TimingData::ScaleRegion(
 
   // adjust BPM changes to preserve timing
   if (bAdjustBPM) {
+    if (m_avpTimingSegments[SEGMENT_BPM].empty()) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX TimingData skipped BPM adjustment for ScaleRegion "
+          "without BPM segments.");
+      return;
+    }
     int iNewEndIndex = iStartIndex + newLength;
     float fEndBPMBeforeScaling = GetBPMAtRow(iNewEndIndex);
     std::vector<TimingSegment*>& bpms = m_avpTimingSegments[SEGMENT_BPM];
@@ -965,6 +1078,13 @@ void TimingData::ScaleRegion(
 }
 
 void TimingData::InsertRows(int iStartRow, int iRowsToAdd) {
+  if (iStartRow < 0 || iRowsToAdd <= 0) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX TimingData ignored invalid InsertRows start=%i rows=%i.",
+        iStartRow, iRowsToAdd);
+    return;
+  }
+
   FOREACH_TimingSegmentType(tst) {
     std::vector<TimingSegment*>& segs = m_avpTimingSegments[tst];
     for (unsigned j = 0; j < segs.size(); j++) {
@@ -980,15 +1100,25 @@ void TimingData::InsertRows(int iStartRow, int iRowsToAdd) {
     /* If we're shifting up at the beginning, we just shifted up the first
      * BPMSegment. That segment must always begin at 0. */
     std::vector<TimingSegment*>& bpms = m_avpTimingSegments[SEGMENT_BPM];
-    ASSERT_M(
-        bpms.size() > 0,
-        "There must be at least one BPM Segment in the chart!");
+    if (bpms.empty()) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX TimingData skipped InsertRows BPM reset because no "
+          "BPM segments exist.");
+      return;
+    }
     bpms[0]->SetRow(0);
   }
 }
 
 // Delete timing changes in [iStartRow, iStartRow + iRowsToDelete) and shift up.
 void TimingData::DeleteRows(int iStartRow, int iRowsToDelete) {
+  if (iStartRow < 0 || iRowsToDelete <= 0) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX TimingData ignored invalid DeleteRows start=%i rows=%i.",
+        iStartRow, iRowsToDelete);
+    return;
+  }
+
   FOREACH_TimingSegmentType(tst) {
     // Don't delete the indefinite segments that are still in effect
     // at the end row; rather, shift them so they start there.
@@ -1014,6 +1144,7 @@ void TimingData::DeleteRows(int iStartRow, int iRowsToDelete) {
       }
       // Inside deleted region:
       if (seg->GetRow() < iStartRow + iRowsToDelete) {
+        RageUtil::SafeDelete(seg);
         segs.erase(segs.begin() + j, segs.begin() + j + 1);
         --j;
         continue;
@@ -1036,6 +1167,9 @@ float TimingData::GetDisplayedSpeedPercent(
   }
 
   const int index = GetSegmentIndexAtBeat(SEGMENT_SPEED, fSongBeat);
+  if (index == INVALID_INDEX) {
+    return 1.0f;
+  }
 
   const SpeedSegment* seg = ToSpeed(speeds[index]);
   float fStartBeat = seg->GetBeat();
@@ -1126,18 +1260,30 @@ void TimingData::TidyUpData(bool allowEmpty) {
 }
 
 void TimingData::SortSegments(TimingSegmentType tst) {
+  if (!IsValidTimingSegmentType(tst)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX TimingData ignored SortSegments for invalid type %i.",
+        static_cast<int>(tst));
+    return;
+  }
   std::vector<TimingSegment*>& vSegments = m_avpTimingSegments[tst];
   sort(vSegments.begin(), vSegments.end());
 }
 
 bool TimingData::HasSpeedChanges() const {
   const std::vector<TimingSegment*>& speeds = GetTimingSegments(SEGMENT_SPEED);
+  if (speeds.empty()) {
+    return false;
+  }
   return (speeds.size() > 1 || ToSpeed(speeds[0])->GetRatio() != 1);
 }
 
 bool TimingData::HasScrollChanges() const {
   const std::vector<TimingSegment*>& scrolls =
       GetTimingSegments(SEGMENT_SCROLL);
+  if (scrolls.empty()) {
+    return false;
+  }
   return (scrolls.size() > 1 || ToScroll(scrolls[0])->GetRatio() != 1);
 }
 
@@ -1153,6 +1299,13 @@ void TimingData::NoteRowToMeasureAndBeat(
         (i + 1 == tSigs.size()) ? INT_MAX : tSigs[i + 1]->GetRow();
 
     int iRowsPerMeasureThisSegment = curSig->GetNoteRowsPerMeasure();
+    if (iRowsPerMeasureThisSegment <= 0) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX TimingData ignored invalid time signature %i/%i at "
+          "row %i.",
+          curSig->GetNum(), curSig->GetDen(), curSig->GetRow());
+      iRowsPerMeasureThisSegment = ROWS_PER_BEAT * 4;
+    }
 
     if (iNoteRow < iSegmentEndRow) {
       // iNoteRow lands in this segment
@@ -1387,7 +1540,12 @@ class LunaTimingData : public Luna<TimingData> {
     return 1;
   }
   static int HasNegativeBPMs(T* p, lua_State* L) {
-    lua_pushboolean(L, p->HasWarps());
+    const std::vector<TimingSegment*>& bpms = p->GetTimingSegments(SEGMENT_BPM);
+    const bool hasNegativeBPM = std::any_of(
+        bpms.begin(), bpms.end(), [](const TimingSegment* bpm) {
+          return ToBPM(bpm)->GetBPM() < 0.0f;
+        });
+    lua_pushboolean(L, hasNegativeBPM);
     return 1;
   }
   // formerly in Song.cpp in sm-ssc private beta 1.x:

@@ -29,10 +29,12 @@ inline T ToDerived(const TimingSegment* t, TimingSegmentType tst) {
 
 #define TimingSegmentToXWithName(Seg, SegName, SegType)   \
   inline const Seg* To##SegName(const TimingSegment* t) { \
+    ASSERT(t != nullptr);                                 \
     ASSERT(t->GetType() == SegType);                      \
     return static_cast<const Seg*>(t);                    \
   }                                                       \
   inline Seg* To##SegName(TimingSegment* t) {             \
+    ASSERT(t != nullptr);                                 \
     ASSERT(t->GetType() == SegType);                      \
     return static_cast<Seg*>(t);                          \
   }
@@ -550,12 +552,8 @@ class TimingData {
   void SortSegments(TimingSegmentType tst);
 
   const std::vector<TimingSegment*>& GetTimingSegments(
-      TimingSegmentType tst) const {
-    return const_cast<TimingData*>(this)->GetTimingSegments(tst);
-  }
-  std::vector<TimingSegment*>& GetTimingSegments(TimingSegmentType tst) {
-    return m_avpTimingSegments[tst];
-  }
+      TimingSegmentType tst) const;
+  std::vector<TimingSegment*>& GetTimingSegments(TimingSegmentType tst);
 
   /**
    * @brief Tidy up the timing data, e.g. provide default BPMs, labels,
