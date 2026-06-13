@@ -1255,7 +1255,10 @@ void Song::TranslateTitles() {
 void Song::ReCalculateStepStatsAndLastSecond(bool wipeNoteData) {
   float localFirst = FLT_MAX;  // inf
   // Make sure we're at least as long as the specified amount below.
-  float localLast = this->specifiedLastSecond;
+  float localLast =
+      std::isfinite(this->specifiedLastSecond) && this->specifiedLastSecond > 0
+          ? this->specifiedLastSecond
+          : 0.0f;
 
   for (unsigned i = 0; i < m_vpSteps.size(); i++) {
     Steps* pSteps = m_vpSteps[i];
@@ -1300,7 +1303,7 @@ void Song::ReCalculateStepStatsAndLastSecond(bool wipeNoteData) {
 
   // Yes, for some reason we can have freaky stuff take place here.
   this->firstSecond = (localFirst < localLast) ? localFirst : 0;
-  this->lastSecond = localLast;
+  this->lastSecond = std::max(0.0f, localLast);
 }
 
 // Return whether the song is playable in the given style.
@@ -1559,6 +1562,13 @@ void Song::AddAutoGenNotes() {
     }
 
     StepsType st = m_vpSteps[i]->m_StepsType;
+    if (!IsPlayableStepsTypeIndex(st)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Skipping autogen source with invalid StepsType %i in "
+          "'%s'.",
+          st, m_sSongDir.c_str());
+      continue;
+    }
     HasNotes[st] = true;
   }
 
@@ -1617,7 +1627,8 @@ void Song::AutoGen(StepsType ntTo, StepsType ntFrom) {
 
 void Song::RemoveAutoGenNotes() {
   FOREACH_ENUM(StepsType, st) {
-    for (int j = m_vpStepsByType[st].size() - 1; j >= 0; j--) {
+    for (int j = static_cast<int>(m_vpStepsByType[st].size()) - 1; j >= 0;
+         j--) {
       if (m_vpStepsByType[st][j]->IsAutogen()) {
         // delete m_vpSteps[j]; // delete below
         m_vpStepsByType[st].erase(m_vpStepsByType[st].begin() + j);
@@ -1625,7 +1636,7 @@ void Song::RemoveAutoGenNotes() {
     }
   }
 
-  for (int j = m_vpSteps.size() - 1; j >= 0; j--) {
+  for (int j = static_cast<int>(m_vpSteps.size()) - 1; j >= 0; j--) {
     if (m_vpSteps[j]->IsAutogen()) {
       delete m_vpSteps[j];
       m_vpSteps.erase(m_vpSteps.begin() + j);
@@ -2020,11 +2031,14 @@ void Song::AddSteps(Steps* pSteps) {
   // Songs of unknown stepstype are saved as a forwards compatibility feature
   // so that editing a simfile made by a future version that has a new style
   // won't delete those steps. -Kyz
-  if (pSteps->m_StepsType != StepsType_Invalid) {
+  if (!IsValidStepsTypeIndex(pSteps->m_StepsType)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Treating out-of-range StepsType %i as unknown style in "
+        "'%s'.",
+        pSteps->m_StepsType, m_sSongDir.c_str());
+    m_UnknownStyleSteps.push_back(pSteps);
+  } else if (pSteps->m_StepsType != StepsType_Invalid) {
     m_vpSteps.push_back(pSteps);
-    ASSERT_M(
-        pSteps->m_StepsType < NUM_StepsType,
-        ssprintf("%i", pSteps->m_StepsType));
     m_vpStepsByType[pSteps->m_StepsType].push_back(pSteps);
   } else {
     m_UnknownStyleSteps.push_back(pSteps);
@@ -2032,7 +2046,30 @@ void Song::AddSteps(Steps* pSteps) {
 }
 
 void Song::DeleteSteps(const Steps* pSteps, bool bReAutoGen) {
-  ASSERT(!pSteps->IsAutogen());
+  if (pSteps == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Ignoring request to delete null Steps.");
+    return;
+  }
+
+  const bool ownedByMain =
+      std::find(m_vpSteps.begin(), m_vpSteps.end(), pSteps) != m_vpSteps.end();
+  const bool ownedByUnknown =
+      std::find(m_UnknownStyleSteps.begin(), m_UnknownStyleSteps.end(), pSteps) !=
+      m_UnknownStyleSteps.end();
+  if (!ownedByMain && !ownedByUnknown) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Ignoring request to delete Steps %p not owned by '%s'.",
+        static_cast<const void*>(pSteps), m_sSongDir.c_str());
+    return;
+  }
+
+  if (pSteps->IsAutogen()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Ignoring direct delete request for autogen Steps %p in "
+        "'%s'.",
+        static_cast<const void*>(pSteps), m_sSongDir.c_str());
+    return;
+  }
 
   // Avoid any stale Note::parent pointers by removing all AutoGen'd Steps,
   // then adding them again.
@@ -2041,21 +2078,40 @@ void Song::DeleteSteps(const Steps* pSteps, bool bReAutoGen) {
     RemoveAutoGenNotes();
   }
 
-  std::vector<Steps*>& vpSteps = m_vpStepsByType[pSteps->m_StepsType];
-  for (int j = vpSteps.size() - 1; j >= 0; j--) {
-    if (vpSteps[j] == pSteps) {
-      // delete vpSteps[j]; // delete below
-      vpSteps.erase(vpSteps.begin() + j);
-      break;
+  auto mainIt = std::find(m_vpSteps.begin(), m_vpSteps.end(), pSteps);
+  auto unknownIt =
+      std::find(m_UnknownStyleSteps.begin(), m_UnknownStyleSteps.end(), pSteps);
+  if (unknownIt != m_UnknownStyleSteps.end()) {
+    delete *unknownIt;
+    m_UnknownStyleSteps.erase(unknownIt);
+  } else {
+    if (mainIt == m_vpSteps.end()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Steps %p disappeared before delete in '%s'.",
+          static_cast<const void*>(pSteps), m_sSongDir.c_str());
+      if (bReAutoGen) {
+        AddAutoGenNotes();
+      }
+      return;
     }
-  }
+    if (!IsPlayableStepsTypeIndex(pSteps->m_StepsType)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Removing Steps %p with invalid StepsType %i from '%s'.",
+          static_cast<const void*>(pSteps), pSteps->m_StepsType,
+          m_sSongDir.c_str());
+    } else {
+      std::vector<Steps*>& vpSteps = m_vpStepsByType[pSteps->m_StepsType];
+      for (int j = static_cast<int>(vpSteps.size()) - 1; j >= 0; j--) {
+        if (vpSteps[j] == pSteps) {
+          // delete vpSteps[j]; // delete below
+          vpSteps.erase(vpSteps.begin() + j);
+          break;
+        }
+      }
+    }
 
-  for (int j = m_vpSteps.size() - 1; j >= 0; j--) {
-    if (m_vpSteps[j] == pSteps) {
-      delete m_vpSteps[j];
-      m_vpSteps.erase(m_vpSteps.begin() + j);
-      break;
-    }
+    delete *mainIt;
+    m_vpSteps.erase(mainIt);
   }
 
   if (bReAutoGen) {
@@ -2085,8 +2141,9 @@ void Song::FreeAllLoadedFromProfile(
     ProfileSlot slot, const std::set<Steps*>* setInUse) {
   /* DeleteSteps will remove and recreate autogen notes, which may reorder
    * m_vpSteps, so be careful not to skip over entries. */
+  RemoveAutoGenNotes();
   std::vector<Steps*> apToRemove;
-  for (int s = m_vpSteps.size() - 1; s >= 0; s--) {
+  for (int s = static_cast<int>(m_vpSteps.size()) - 1; s >= 0; s--) {
     Steps* pSteps = m_vpSteps[s];
     if (!pSteps->WasLoadedFromProfile()) {
       continue;
@@ -2102,7 +2159,10 @@ void Song::FreeAllLoadedFromProfile(
   }
 
   for (unsigned i = 0; i < apToRemove.size(); ++i) {
-    this->DeleteSteps(apToRemove[i]);
+    this->DeleteSteps(apToRemove[i], false);
+  }
+  if (!apToRemove.empty()) {
+    AddAutoGenNotes();
   }
 }
 
