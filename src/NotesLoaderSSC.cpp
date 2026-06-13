@@ -1238,6 +1238,14 @@ bool SSCLoader::LoadFromSimfile(
         "ignored.");
     RageUtil::SafeDelete(pNewNotes);
   }
+
+  if (out.GetAllSteps().empty()) {
+    LOG->UserLog(
+        "Song file", sPath,
+        "SRC_AUDIT_FIX rejected simfile with no playable #NOTES sections.");
+    return false;
+  }
+
   out.m_fVersion = STEPFILE_VERSION_NUMBER;
   TidyUpData(out, bFromCache);
   return true;

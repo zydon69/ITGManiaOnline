@@ -1403,6 +1403,13 @@ bool SMLoader::LoadFromSimfile(
   ProcessBPMsAndStops(
       out.m_SongTiming, reused_song_info.BPMChanges, reused_song_info.Stops);
 
+  if (out.GetAllSteps().empty()) {
+    LOG->UserLog(
+        "Song file", sPath,
+        "SRC_AUDIT_FIX rejected simfile with no playable #NOTES sections.");
+    return false;
+  }
+
   TidyUpData(out, bFromCache);
   return true;
 }
