@@ -292,13 +292,13 @@ void SongManager::InitSongsFromDisk(LoadingWindow* ld, bool onlyAdditions) {
     bool oldSongDelay;
     bool oldImageDelay;
     CacheDelayGuard()
-        : oldSongDelay(SONGINDEX->delay_save_cache),
+        : oldSongDelay(SONGINDEX->GetDelaySaveCache()),
           oldImageDelay(IMAGECACHE->delay_save_cache) {
-      SONGINDEX->delay_save_cache = true;
+      SONGINDEX->SetDelaySaveCache(true);
       IMAGECACHE->delay_save_cache = true;
     }
     ~CacheDelayGuard() {
-      SONGINDEX->delay_save_cache = oldSongDelay;
+      SONGINDEX->SetDelaySaveCache(oldSongDelay);
       IMAGECACHE->delay_save_cache = oldImageDelay;
     }
   } cacheDelayGuard;

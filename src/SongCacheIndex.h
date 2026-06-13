@@ -9,6 +9,7 @@
 class SongCacheIndex {
   IniFile CacheIndex;
   mutable RageMutex Mutex;
+  bool m_bDelaySaveCache;
   static std::string MangleName(const std::string& Name);
 
  public:
@@ -22,7 +23,8 @@ class SongCacheIndex {
   void SaveCacheIndex();
   void AddCacheIndex(const std::string& path, unsigned hash);
   unsigned GetCacheHash(const std::string& path) const;
-  bool delay_save_cache;
+  bool GetDelaySaveCache() const;
+  void SetDelaySaveCache(bool bDelay);
 };
 
 extern SongCacheIndex*

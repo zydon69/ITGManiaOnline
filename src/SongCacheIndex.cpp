@@ -98,7 +98,7 @@ std::string SongCacheIndex::GetCacheFilePath(
 }
 
 SongCacheIndex::SongCacheIndex()
-    : Mutex("SongCacheIndex"), delay_save_cache(false) {
+    : Mutex("SongCacheIndex"), m_bDelaySaveCache(false) {
   LOG->Trace(
       "SRC_AUDIT_FIX: SongCacheIndex initialized with SHA1 cache key mapping "
       "and delay_save_cache=false.");
@@ -194,7 +194,7 @@ void SongCacheIndex::AddCacheIndex(const std::string& path, unsigned hash) {
   }
   CacheIndex.SetValue("Cache", "CacheVersion", FILE_CACHE_VERSION);
   CacheIndex.SetValue("Cache", MangleName(path), hash);
-  if (!delay_save_cache) {
+  if (!m_bDelaySaveCache) {
     const std::string sCacheIndexPath = CACHE_INDEX;
     if (!CacheIndex.WriteFile(sCacheIndexPath)) {
       LOG->Warn(
@@ -215,6 +215,16 @@ unsigned SongCacheIndex::GetCacheHash(const std::string& path) const {
     ++iDirHash; /* no 0 hash values */
   }
   return iDirHash;
+}
+
+bool SongCacheIndex::GetDelaySaveCache() const {
+  LockMutex L(Mutex);
+  return m_bDelaySaveCache;
+}
+
+void SongCacheIndex::SetDelaySaveCache(bool bDelay) {
+  LockMutex L(Mutex);
+  m_bDelaySaveCache = bDelay;
 }
 
 std::string SongCacheIndex::MangleName(const std::string& Name) {
