@@ -893,6 +893,14 @@ const std::string& Steps::GetMusicFile() const { return m_MusicFile; }
 
 void Steps::SetMusicFile(const std::string& file) { m_MusicFile = file; }
 
+const RadarValues& Steps::GetRadarValues(PlayerNumber pn) const {
+  return Real()->m_RadarValues[SafePlayerNumber(pn, "GetRadarValues")];
+}
+
+const TechCounts& Steps::GetTechCounts(PlayerNumber pn) const {
+  return Real()->m_TechCounts[SafePlayerNumber(pn, "GetTechCounts")];
+}
+
 void Steps::SetRadarValues(const RadarValues v[NUM_PLAYERS]) {
   DeAutogen();
   std::copy(v, v + NUM_PLAYERS, m_RadarValues);
@@ -914,6 +922,7 @@ void Steps::SetNotesPerMeasure(std::vector<std::vector<int>>& notesPerMeasure) {
 }
 
 void Steps::SetPeakNps(std::vector<float>& peakNps) {
+  DeAutogen();
   m_PeakNps.assign(peakNps.begin(), peakNps.end());
 }
 
@@ -1124,9 +1133,10 @@ const std::vector<float>& Steps::GetNpsPerMeasure(PlayerNumber pn) const {
   // will be the case for like 99.9% of charts).
 
   static const std::vector<float> EMPTY_VECTOR;
+  pn = SafePlayerNumber(pn, "GetNpsPerMeasure");
   if (Real()->m_NpsPerMeasure.size() == 0) {
     return EMPTY_VECTOR;
-  } else if (Real()->m_NpsPerMeasure.size() <= pn) {
+  } else if (Real()->m_NpsPerMeasure.size() <= static_cast<size_t>(pn)) {
     return Real()->m_NpsPerMeasure[PLAYER_1];
   } else {
     return Real()->m_NpsPerMeasure[pn];
@@ -1139,9 +1149,10 @@ const std::vector<int>& Steps::GetNotesPerMeasure(PlayerNumber pn) const {
   // dance-routine). Otherwise, it will only have one copy of the values (which
   // will be the case for like 99.9% of charts).
   static const std::vector<int> EMPTY_VECTOR;
+  pn = SafePlayerNumber(pn, "GetNotesPerMeasure");
   if (Real()->m_NotesPerMeasure.size() == 0) {
     return EMPTY_VECTOR;
-  } else if (Real()->m_NotesPerMeasure.size() <= pn) {
+  } else if (Real()->m_NotesPerMeasure.size() <= static_cast<size_t>(pn)) {
     return Real()->m_NotesPerMeasure[PLAYER_1];
   } else {
     return Real()->m_NotesPerMeasure[pn];
@@ -1149,9 +1160,10 @@ const std::vector<int>& Steps::GetNotesPerMeasure(PlayerNumber pn) const {
 }
 
 float Steps::GetPeakNps(PlayerNumber pn) const {
+  pn = SafePlayerNumber(pn, "GetPeakNps");
   if (Real()->m_PeakNps.size() == 0) {
     return 0;
-  } else if (Real()->m_PeakNps.size() <= pn) {
+  } else if (Real()->m_PeakNps.size() <= static_cast<size_t>(pn)) {
     return Real()->m_PeakNps[PLAYER_1];
   } else {
     return Real()->m_PeakNps[pn];

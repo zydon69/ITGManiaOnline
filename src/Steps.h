@@ -115,9 +115,7 @@ class Steps {
    * @return the meter used for this edit.
    */
   int GetMeter() const { return Real()->m_iMeter; }
-  const RadarValues& GetRadarValues(PlayerNumber pn) const {
-    return Real()->m_RadarValues[pn];
-  }
+  const RadarValues& GetRadarValues(PlayerNumber pn) const;
   /**
    * @brief Retrieve the author credit used for this edit.
    * @return the author credit used for this edit.
@@ -212,9 +210,7 @@ class Steps {
       float fMusicLengthSeconds, const NoteData& noteData);
 
   void CalculateTechCounts(const NoteData& noteData);
-  const TechCounts& GetTechCounts(PlayerNumber pn) const {
-    return Real()->m_TechCounts[pn];
-  }
+  const TechCounts& GetTechCounts(PlayerNumber pn) const;
 
   void CalculateMeasureInfo(const NoteData& noteData);
 
