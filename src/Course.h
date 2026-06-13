@@ -33,7 +33,7 @@ inline PlayMode CourseTypeToPlayMode(CourseType ct) {
     case COURSE_TYPE_ENDLESS:
       return PLAY_MODE_ENDLESS;
     case COURSE_TYPE_SURVIVAL:
-      return PLAY_MODE_BATTLE;
+      return PLAY_MODE_ONI;
     default:
       break;
   }
