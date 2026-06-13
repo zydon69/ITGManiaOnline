@@ -304,12 +304,24 @@ static std::map<const Course*, std::string> course_sort_val;
 
 bool CompareCoursePointersBySortValueAscending(
     const Course* pSong1, const Course* pSong2) {
-  return course_sort_val[pSong1] < course_sort_val[pSong2];
+  const auto p1 = course_sort_val.find(pSong1);
+  const auto p2 = course_sort_val.find(pSong2);
+  const std::string s1 =
+      p1 == course_sort_val.end() ? std::string() : p1->second;
+  const std::string s2 =
+      p2 == course_sort_val.end() ? std::string() : p2->second;
+  return s1 < s2;
 }
 
 bool CompareCoursePointersBySortValueDescending(
     const Course* pSong1, const Course* pSong2) {
-  return course_sort_val[pSong1] > course_sort_val[pSong2];
+  const auto p1 = course_sort_val.find(pSong1);
+  const auto p2 = course_sort_val.find(pSong2);
+  const std::string s1 =
+      p1 == course_sort_val.end() ? std::string() : p1->second;
+  const std::string s2 =
+      p2 == course_sort_val.end() ? std::string() : p2->second;
+  return s1 > s2;
 }
 
 bool CompareCoursePointersByTitle(
@@ -353,6 +365,7 @@ void CourseUtil::SortCoursePointerArrayByAvgDifficulty(
 
   stable_sort(
       vpCoursesInOut.begin(), vpCoursesInOut.end(), MovePlayersBestToEnd);
+  course_sort_val.clear();
 }
 
 void CourseUtil::SortCoursePointerArrayByNumPlays(
@@ -368,6 +381,7 @@ void CourseUtil::SortCoursePointerArrayByNumPlays(
     std::vector<Course*>& vpCoursesInOut, const Profile* pProfile,
     bool bDescending) {
   ASSERT(pProfile != nullptr);
+  course_sort_val.clear();
   for (unsigned i = 0; i < vpCoursesInOut.size(); ++i) {
     course_sort_val[vpCoursesInOut[i]] =
         ssprintf("%09i", pProfile->GetCourseNumTimesPlayed(vpCoursesInOut[i]));
@@ -383,6 +397,7 @@ void CourseUtil::SortByMostRecentlyPlayedForMachine(
     std::vector<Course*>& vpCoursesInOut) {
   Profile* pProfile = PROFILEMAN->GetMachineProfile();
 
+  course_sort_val.clear();
   for (const Course* c : vpCoursesInOut) {
     int iNumTimesPlayed = pProfile->GetCourseNumTimesPlayed(c);
     std::string val = iNumTimesPlayed
