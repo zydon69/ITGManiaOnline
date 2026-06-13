@@ -1906,10 +1906,13 @@ std::string Song::GetSongAssetPath(
 
   std::string sSongRoot = sSongPath;
   CollapsePath(sSongRoot);
+  if (!sSongRoot.empty() && sSongRoot[sSongRoot.size() - 1] != '/') {
+    sSongRoot += '/';
+  }
   if (!BeginsWith(sRelPath, sSongRoot)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Rejected song asset path '%s' escaping song directory "
-        "'%s'.",
+        "SRC_AUDIT_FIX SRC-600: Rejected song asset path '%s' escaping song "
+        "directory '%s'.",
         sPath.c_str(), sSongPath.c_str());
     return std::string();
   }
