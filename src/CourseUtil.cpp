@@ -525,17 +525,33 @@ void CourseUtil::AutogenNonstopFromGroup(
 void CourseUtil::AutogenOniFromArtist(
     const std::string& sArtistName, std::string sArtistNameTranslit,
     std::vector<Song*> aSongs, Difficulty dc, Course& out) {
+  aSongs.erase(
+      std::remove(aSongs.begin(), aSongs.end(), nullptr), aSongs.end());
+  if (sArtistName.empty() || aSongs.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-672: skipped artist oni autogen for artist '%s' "
+        "with %zu valid songs.",
+        sArtistName.c_str(), aSongs.size());
+    out.m_vEntries.clear();
+    return;
+  }
+  if (dc < Difficulty_Beginner || dc >= NUM_Difficulty) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-672: invalid artist oni difficulty %i for '%s'; "
+        "using Medium.",
+        dc, sArtistName.c_str());
+    dc = Difficulty_Medium;
+  }
+
   out.m_bIsAutogen = true;
   out.m_bRepeat = false;
   out.m_bShuffle = true;
   out.m_bSortByMeter = true;
+  out.m_vEntries.clear();
 
   out.m_iLives = 4;
   FOREACH_ENUM(Difficulty, cd)
   out.m_iCustomMeter[cd] = -1;
-
-  ASSERT(sArtistName != "");
-  ASSERT(aSongs.size() > 0);
 
   /* "Artist Oni" is a little repetitive; "by Artist" stands out less, and
    * lowercasing "by" puts more emphasis on the artist's name. It also sorts
