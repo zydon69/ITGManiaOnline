@@ -197,6 +197,9 @@ class SongManager {
   Course* GetRandomCourse();
   // sm-ssc addition:
   std::string GetSongGroupByIndex(unsigned index) {
+    if (index >= m_sSongGroupNames.size()) {
+      return std::string();
+    }
     return m_sSongGroupNames[index];
   }
   int GetSongRank(Song* pSong);
