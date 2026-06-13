@@ -1826,7 +1826,10 @@ ProfileLoadResult Profile::LoadEditableDataFromDir(std::string sDir) {
 }
 
 void Profile::LoadGeneralDataFromNode(const XNode* pNode) {
-  ASSERT(pNode->GetName() == "GeneralData");
+  if (pNode == nullptr || pNode->GetName() != "GeneralData") {
+    LOG->Warn("Profile::LoadGeneralDataFromNode: invalid GeneralData node");
+    return;
+  }
 
   std::string s;
   const XNode* pTemp;
@@ -2151,7 +2154,10 @@ XNode* Profile::SaveSongScoresCreateNode() const {
 void Profile::LoadSongScoresFromNode(const XNode* pSongScores) {
   CHECKPOINT_M("Loading the node that contains song scores.");
 
-  ASSERT(pSongScores->GetName() == "SongScores");
+  if (pSongScores == nullptr || pSongScores->GetName() != "SongScores") {
+    LOG->Warn("Profile::LoadSongScoresFromNode: invalid SongScores node");
+    return;
+  }
 
   FOREACH_CONST_Child(pSongScores, pSong) {
     if (pSong->GetName() != "Song") {
@@ -2232,7 +2238,10 @@ XNode* Profile::SaveCourseScoresCreateNode() const {
 void Profile::LoadCourseScoresFromNode(const XNode* pCourseScores) {
   CHECKPOINT_M("Loading the node that contains course scores.");
 
-  ASSERT(pCourseScores->GetName() == "CourseScores");
+  if (pCourseScores == nullptr || pCourseScores->GetName() != "CourseScores") {
+    LOG->Warn("Profile::LoadCourseScoresFromNode: invalid CourseScores node");
+    return;
+  }
 
   std::vector<Course*> vpAllCourses;
   SONGMAN->GetAllCourses(vpAllCourses, true);
@@ -2336,7 +2345,12 @@ XNode* Profile::SaveCategoryScoresCreateNode() const {
 void Profile::LoadCategoryScoresFromNode(const XNode* pCategoryScores) {
   CHECKPOINT_M("Loading the node that contains category scores.");
 
-  ASSERT(pCategoryScores->GetName() == "CategoryScores");
+  if (pCategoryScores == nullptr ||
+      pCategoryScores->GetName() != "CategoryScores") {
+    LOG->Warn(
+        "Profile::LoadCategoryScoresFromNode: invalid CategoryScores node");
+    return;
+  }
 
   FOREACH_CONST_Child(pCategoryScores, pStepsType) {
     if (pStepsType->GetName() != "StepsType") {
@@ -2395,7 +2409,12 @@ void Profile::AddScreenshot(const Screenshot& screenshot) {
 void Profile::LoadScreenshotDataFromNode(const XNode* pScreenshotData) {
   CHECKPOINT_M("Loading the node containing screenshot data.");
 
-  ASSERT(pScreenshotData->GetName() == "ScreenshotData");
+  if (pScreenshotData == nullptr ||
+      pScreenshotData->GetName() != "ScreenshotData") {
+    LOG->Warn(
+        "Profile::LoadScreenshotDataFromNode: invalid ScreenshotData node");
+    return;
+  }
   FOREACH_CONST_Child(pScreenshotData, pScreenshot) {
     if (pScreenshot->GetName() != "Screenshot") {
       WARN_AND_CONTINUE_M(pScreenshot->GetName());
@@ -2426,7 +2445,10 @@ XNode* Profile::SaveScreenshotDataCreateNode() const {
 void Profile::LoadCalorieDataFromNode(const XNode* pCalorieData) {
   CHECKPOINT_M("Loading the node containing calorie data.");
 
-  ASSERT(pCalorieData->GetName() == "CalorieData");
+  if (pCalorieData == nullptr || pCalorieData->GetName() != "CalorieData") {
+    LOG->Warn("Profile::LoadCalorieDataFromNode: invalid CalorieData node");
+    return;
+  }
   FOREACH_CONST_Child(pCalorieData, pCaloriesBurned) {
     if (pCaloriesBurned->GetName() != "CaloriesBurned") {
       WARN_AND_CONTINUE_M(pCaloriesBurned->GetName());
