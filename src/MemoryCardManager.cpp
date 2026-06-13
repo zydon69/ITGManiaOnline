@@ -623,11 +623,17 @@ void MemoryCardManager::WaitForCheckingToComplete() {
 }
 
 bool MemoryCardManager::CardInserted(PlayerNumber pn) {
+  if (!IsMemoryCardPlayerNumberValid(pn, "MemoryCardManager::CardInserted")) {
+    return false;
+  }
   return m_Device[pn].m_State == UsbStorageDevice::STATE_CHECKING ||
          m_Device[pn].m_State == UsbStorageDevice::STATE_READY;
 }
 
 void MemoryCardManager::LockCard(PlayerNumber pn) {
+  if (!IsMemoryCardPlayerNumberValid(pn, "MemoryCardManager::LockCard")) {
+    return;
+  }
   if (m_bCardLocked[pn]) {
     return;
   }
@@ -648,6 +654,9 @@ void MemoryCardManager::LockCard(PlayerNumber pn) {
 }
 
 void MemoryCardManager::UnlockCard(PlayerNumber pn) {
+  if (!IsMemoryCardPlayerNumberValid(pn, "MemoryCardManager::UnlockCard")) {
+    return;
+  }
   m_bCardLocked[pn] = false;
 
   g_pWorker->SetMountThreadState(ThreadedMemoryCardWorker::detect_and_mount);
@@ -658,13 +667,21 @@ void MemoryCardManager::UnlockCard(PlayerNumber pn) {
 
 // Called just before reading or writing to the memory card. Should block.
 bool MemoryCardManager::MountCard(PlayerNumber pn, int iTimeout) {
+  if (!IsMemoryCardPlayerNumberValid(pn, "MemoryCardManager::MountCard")) {
+    return false;
+  }
   if (LogMemoryCardDiagnosticsEnabled()) {
     LOG->Trace("MEMCARD_TRACE: mount player=%i timeout=%d", pn, iTimeout);
   }
   if (GetCardState(pn) != MemoryCardState_Ready) {
     return false;
   }
-  ASSERT(!m_Device[pn].IsBlank());
+  if (m_Device[pn].IsBlank() || m_Device[pn].sOsMountDir.empty()) {
+    LOG->Warn(
+        "MemoryCardManager::MountCard: player %d has no mountable device",
+        pn + 1);
+    return false;
+  }
 
   // Pause the mounting thread when we mount the first drive.
   bool bStartingMemoryCardAccess = true;
@@ -728,6 +745,9 @@ bool MemoryCardManager::MountCard(PlayerNumber pn, int iTimeout) {
  * This is used to access cards in the editor. */
 bool MemoryCardManager::MountCard(
     PlayerNumber pn, const UsbStorageDevice& d, int iTimeout) {
+  if (!IsMemoryCardPlayerNumberValid(pn, "MemoryCardManager::MountCard")) {
+    return false;
+  }
   m_Device[pn] = d;
   CheckStateChanges();
   return MountCard(pn, iTimeout);
@@ -736,6 +756,9 @@ bool MemoryCardManager::MountCard(
 /* Called when finished accessing a memory card.  If writes have been performed,
  * will block until flushed. */
 void MemoryCardManager::UnmountCard(PlayerNumber pn) {
+  if (!IsMemoryCardPlayerNumberValid(pn, "MemoryCardManager::UnmountCard")) {
+    return;
+  }
   if (LogMemoryCardDiagnosticsEnabled()) {
     LOG->Trace(
         "MEMCARD_TRACE: unmount player=%i mounted=%i", pn, m_bMounted[pn]);
