@@ -14,6 +14,7 @@
 #include "Steps.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <optional>
 #include <sstream>
@@ -56,6 +57,61 @@
 
 // For hashing hart keys - Mina
 #include "CryptManager.h"
+
+namespace {
+bool IsPlayableStepsType(StepsType st) {
+  return st >= 0 && st < NUM_StepsType;
+}
+
+bool IsValidPlayerNumber(PlayerNumber pn) {
+  return pn >= 0 && pn < NUM_PLAYERS;
+}
+
+bool IsValidDifficultyIndex(Difficulty dc) {
+  return dc >= 0 && dc < NUM_Difficulty;
+}
+
+bool IsValidDisplayBPM(DisplayBPM type) {
+  return type >= 0 && type < NUM_DisplayBPM;
+}
+
+bool IsPositiveFinite(float value) {
+  return std::isfinite(value) && value > 0.0f;
+}
+
+PlayerNumber SafePlayerNumber(PlayerNumber pn, const char* context) {
+  if (IsValidPlayerNumber(pn)) {
+    return pn;
+  }
+
+  LOG->Warn(
+      "SRC_AUDIT_FIX: Invalid PlayerNumber %i in Steps::%s; using PLAYER_1.",
+      pn, context);
+  return PLAYER_1;
+}
+
+int GetTrackCountForStepsType(StepsType st, const char* context) {
+  if (!IsPlayableStepsType(st)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid StepsType %i in Steps::%s; using 0 tracks.",
+        st, context);
+    return 0;
+  }
+  return GAMEMAN->GetStepsTypeInfo(st).iNumTracks;
+}
+
+const StepsTypeInfo* GetSafeStepsTypeInfo(
+    StepsType st, const char* context) {
+  if (!IsPlayableStepsType(st)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid StepsType %i in Steps::%s; skipping typed "
+        "operation.",
+        st, context);
+    return nullptr;
+  }
+  return &GAMEMAN->GetStepsTypeInfo(st);
+}
+}  // namespace
 
 std::optional<StepParity::StageLayout> getLayout(StepsType ty) {
   switch (ty) {
@@ -202,8 +258,7 @@ bool Steps::GetNoteDataFromSimfile() {
       give the user some leeway and search for a .sm replacement
       */
       SMLoader backup_loader;
-      std::string transformedStepFile = stepFile;
-      Replace(transformedStepFile, ".ssc", ".sm");
+      const std::string transformedStepFile = SetExtension(stepFile, "sm");
 
       return backup_loader.LoadNoteDataFromSimfile(transformedStepFile, *this);
     } else {
@@ -237,13 +292,22 @@ bool Steps::GetNoteDataFromSimfile() {
 }
 
 void Steps::SetNoteData(const NoteData& noteDataNew) {
-  ASSERT(
-      noteDataNew.GetNumTracks() ==
-      GAMEMAN->GetStepsTypeInfo(m_StepsType).iNumTracks);
-
   DeAutogen(false);
 
-  *m_pNoteData = noteDataNew;
+  const int expectedTracks =
+      GetTrackCountForStepsType(m_StepsType, "SetNoteData");
+  if (expectedTracks > 0 && noteDataNew.GetNumTracks() != expectedTracks) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Adjusting NoteData tracks for StepsType %i in '%s': "
+        "got %i, expected %i.",
+        m_StepsType, m_sFilename.c_str(), noteDataNew.GetNumTracks(),
+        expectedTracks);
+    NoteData adjusted = noteDataNew;
+    adjusted.SetNumTracks(expectedTracks);
+    *m_pNoteData = adjusted;
+  } else {
+    *m_pNoteData = noteDataNew;
+  }
   m_bNoteDataIsFilled = true;
 
   m_sNoteDataCompressed = std::string();
@@ -257,7 +321,8 @@ void Steps::GetNoteData(NoteData& noteDataOut) const {
     noteDataOut = *m_pNoteData;
   } else {
     noteDataOut.ClearAll();
-    noteDataOut.SetNumTracks(GAMEMAN->GetStepsTypeInfo(m_StepsType).iNumTracks);
+    noteDataOut.SetNumTracks(
+        GetTrackCountForStepsType(m_StepsType, "GetNoteData"));
   }
 }
 
@@ -275,11 +340,17 @@ void Steps::SetSMNoteData(const std::string& notes_comp_) {
   m_iHash = 0;
 }
 
-/* XXX: this function should pull data from m_sFilename, like Decompress() */
 void Steps::GetSMNoteData(std::string& notes_comp_out) const {
   if (m_sNoteDataCompressed.empty()) {
+    if (!m_bNoteDataIsFilled && !m_sFilename.empty()) {
+      Decompress();
+    }
+
     if (!m_bNoteDataIsFilled) {
-      /* no data is no data */
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Returning empty SM note data for '%s' because no "
+          "NoteData could be loaded.",
+          m_sFilename.c_str());
       notes_comp_out = "";
       return;
     }
@@ -380,6 +451,11 @@ void Steps::CalculateRadarValues(
   FOREACH_PlayerNumber(pn) m_RadarValues[pn].Zero();
 
   TimingData* timing = this->GetTimingData();
+  const StepsTypeInfo* stepsTypeInfo =
+      GetSafeStepsTypeInfo(this->m_StepsType, "CalculateRadarValues");
+  if (stepsTypeInfo == nullptr) {
+    return;
+  }
   if (tempNoteData.IsComposite()) {
     std::vector<NoteData> vParts;
 
@@ -390,11 +466,15 @@ void Steps::CalculateRadarValues(
           vParts[pn], fMusicLengthSeconds, timing, m_RadarValues[pn]);
     }
   } else if (
-      GAMEMAN->GetStepsTypeInfo(this->m_StepsType).m_StepsTypeCategory ==
-      StepsTypeCategory_Couple) {
+      stepsTypeInfo->m_StepsTypeCategory == StepsTypeCategory_Couple) {
     NoteData p1 = tempNoteData;
-    // XXX: Assumption that couple will always have an even number of notes.
     const int tracks = tempNoteData.GetNumTracks() / 2;
+    if (tempNoteData.GetNumTracks() % 2 != 0) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Couple RadarValues for '%s' has odd track count %i; "
+          "dropping unmatched final track.",
+          m_sFilename.c_str(), tempNoteData.GetNumTracks());
+    }
     p1.SetNumTracks(tracks);
     NoteDataUtil::CalculateRadarValues(
         p1, fMusicLengthSeconds, timing, m_RadarValues[PLAYER_1]);
@@ -446,6 +526,14 @@ void Steps::CalculateMeasureInfo(const NoteData& tempNoteData) {
   std::vector<MeasureInfo> measureInfoPerPlayer;
 
   TimingData* timing = this->GetTimingData();
+  const StepsTypeInfo* stepsTypeInfo =
+      GetSafeStepsTypeInfo(this->m_StepsType, "CalculateMeasureInfo");
+  if (stepsTypeInfo == nullptr) {
+    m_NotesPerMeasure.clear();
+    m_NpsPerMeasure.clear();
+    m_PeakNps.clear();
+    return;
+  }
   if (tempNoteData.IsComposite()) {
     measureInfoPerPlayer.resize(NUM_PLAYERS);
     std::vector<NoteData> vParts;
@@ -456,12 +544,16 @@ void Steps::CalculateMeasureInfo(const NoteData& tempNoteData) {
           vParts[pn], timing, measureInfoPerPlayer[pn]);
     }
   } else if (
-      GAMEMAN->GetStepsTypeInfo(this->m_StepsType).m_StepsTypeCategory ==
-      StepsTypeCategory_Couple) {
+      stepsTypeInfo->m_StepsTypeCategory == StepsTypeCategory_Couple) {
     measureInfoPerPlayer.resize(NUM_PLAYERS);
     NoteData p1 = tempNoteData;
-    // XXX: Assumption that couple will always have an even number of notes.
     const int tracks = tempNoteData.GetNumTracks() / 2;
+    if (tempNoteData.GetNumTracks() % 2 != 0) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Couple MeasureInfo for '%s' has odd track count %i; "
+          "dropping unmatched final track.",
+          m_sFilename.c_str(), tempNoteData.GetNumTracks());
+    }
     LOG->Trace(
         "SRC_AUDIT_FIX: calculating couple MeasureInfo per player: "
         "total_tracks=%i, tracks_per_player=%i.",
@@ -517,7 +609,12 @@ void Steps::Decompress() {
 
     m_bNoteDataIsFilled = true;
 
-    int iNewTracks = GAMEMAN->GetStepsTypeInfo(m_StepsType).iNumTracks;
+    const int iNewTracks = GetTrackCountForStepsType(m_StepsType, "Decompress");
+    if (iNewTracks <= 0) {
+      m_pNoteData->Init();
+      m_bNoteDataIsFilled = false;
+      return;
+    }
 
     if (this->m_StepsType == StepsType_lights_cabinet) {
       NoteDataUtil::LoadTransformedLights(notedata, *m_pNoteData, iNewTracks);
@@ -559,12 +656,15 @@ void Steps::Decompress() {
     /* there is no data, do nothing */
   } else {
     // load from compressed
+    const StepsTypeInfo* stepsTypeInfo =
+        GetSafeStepsTypeInfo(m_StepsType, "Decompress");
+    if (stepsTypeInfo == nullptr) {
+      return;
+    }
     bool bComposite =
-        GAMEMAN->GetStepsTypeInfo(m_StepsType).m_StepsTypeCategory ==
-        StepsTypeCategory_Routine;
+        stepsTypeInfo->m_StepsTypeCategory == StepsTypeCategory_Routine;
     m_bNoteDataIsFilled = true;
-    m_pNoteData->SetNumTracks(
-        GAMEMAN->GetStepsTypeInfo(m_StepsType).iNumTracks);
+    m_pNoteData->SetNumTracks(stepsTypeInfo->iNumTracks);
 
     NoteDataUtil::LoadFromSMNoteDataString(
         *m_pNoteData, m_sNoteDataCompressed, bComposite);
@@ -647,9 +747,24 @@ void Steps::DeAutogen(bool bCopyNoteData) {
 }
 
 void Steps::AutogenFrom(const Steps* parent_, StepsType ntTo) {
+  if (parent_ == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Refusing to autogen Steps from null parent.");
+    parent = nullptr;
+    m_StepsType = StepsType_Invalid;
+    m_StepsTypeStr.clear();
+    return;
+  }
+  const StepsTypeInfo* stepsTypeInfo =
+      GetSafeStepsTypeInfo(ntTo, "AutogenFrom");
+  if (stepsTypeInfo == nullptr) {
+    parent = nullptr;
+    m_StepsType = StepsType_Invalid;
+    m_StepsTypeStr.clear();
+    return;
+  }
   parent = parent_;
   m_StepsType = ntTo;
-  m_StepsTypeStr = GAMEMAN->GetStepsTypeInfo(ntTo).szName;
+  m_StepsTypeStr = stepsTypeInfo->szName;
   m_Timing = parent->m_Timing;
 }
 
@@ -658,11 +773,28 @@ void Steps::CopyFrom(
     float fMusicLengthSeconds)  // pSource does not have to be of the same
                                 // StepsType
 {
+  const StepsTypeInfo* stepsTypeInfo = GetSafeStepsTypeInfo(ntTo, "CopyFrom");
+  if (stepsTypeInfo == nullptr) {
+    parent = nullptr;
+    m_StepsType = StepsType_Invalid;
+    m_StepsTypeStr.clear();
+    m_pNoteData->Init();
+    m_bNoteDataIsFilled = false;
+    m_sNoteDataCompressed.clear();
+    return;
+  }
+  if (pSource == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: CopyFrom received null source; creating blank.");
+    CreateBlank(ntTo);
+    CalculateStepStats(fMusicLengthSeconds);
+    return;
+  }
+
   m_StepsType = ntTo;
-  m_StepsTypeStr = GAMEMAN->GetStepsTypeInfo(ntTo).szName;
+  m_StepsTypeStr = stepsTypeInfo->szName;
   NoteData noteData;
   pSource->GetNoteData(noteData);
-  noteData.SetNumTracks(GAMEMAN->GetStepsTypeInfo(ntTo).iNumTracks);
+  noteData.SetNumTracks(stepsTypeInfo->iNumTracks);
   parent = nullptr;
   m_Timing = pSource->m_Timing;
   this->m_pSong = pSource->m_pSong;
@@ -676,10 +808,21 @@ void Steps::CopyFrom(
 }
 
 void Steps::CreateBlank(StepsType ntTo) {
+  const StepsTypeInfo* stepsTypeInfo = GetSafeStepsTypeInfo(ntTo, "CreateBlank");
+  if (stepsTypeInfo == nullptr) {
+    parent = nullptr;
+    m_StepsType = StepsType_Invalid;
+    m_StepsTypeStr.clear();
+    m_pNoteData->Init();
+    m_bNoteDataIsFilled = false;
+    m_sNoteDataCompressed.clear();
+    return;
+  }
+
   m_StepsType = ntTo;
-  m_StepsTypeStr = GAMEMAN->GetStepsTypeInfo(ntTo).szName;
+  m_StepsTypeStr = stepsTypeInfo->szName;
   NoteData noteData;
-  noteData.SetNumTracks(GAMEMAN->GetStepsTypeInfo(ntTo).iNumTracks);
+  noteData.SetNumTracks(stepsTypeInfo->iNumTracks);
   this->SetNoteData(noteData);
 }
 
