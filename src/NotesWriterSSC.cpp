@@ -216,6 +216,110 @@ static DisplayBPM SanitizeDisplayBPMForWrite(
   return DISPLAY_BPM_SPECIFIED;
 }
 
+static bool IsValidTimingRowForWrite(
+    int row, const char* format, const char* segment) {
+  if (row >= 0) {
+    return true;
+  }
+  LOG->Warn(
+      "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s %s timing segment at "
+      "negative row %i.",
+      format, segment, row);
+  return false;
+}
+
+static bool IsFiniteTimingValueForWrite(
+    float value, const char* format, const char* segment,
+    const char* valueName) {
+  if (std::isfinite(value)) {
+    return true;
+  }
+  LOG->Warn(
+      "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s %s timing segment with "
+      "non-finite %s %.6f.",
+      format, segment, valueName, value);
+  return false;
+}
+
+static bool IsPositiveTimingValueForWrite(
+    float value, const char* format, const char* segment,
+    const char* valueName) {
+  if (IsFiniteTimingValueForWrite(value, format, segment, valueName) &&
+      value > 0.0f) {
+    return true;
+  }
+  LOG->Warn(
+      "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s %s timing segment with "
+      "non-positive %s %.6f.",
+      format, segment, valueName, value);
+  return false;
+}
+
+static bool ShouldWriteTimingSegment(
+    const TimingSegment* seg, TimingSegmentType type, const char* format) {
+  if (seg == nullptr ||
+      !IsValidTimingRowForWrite(
+          seg->GetRow(), format, TimingSegmentTypeToString(type).c_str())) {
+    return false;
+  }
+
+  switch (type) {
+    case SEGMENT_BPM:
+      return IsPositiveTimingValueForWrite(
+          ToBPM(seg)->GetBPM(), format, "BPM", "bpm");
+    case SEGMENT_STOP:
+      return IsPositiveTimingValueForWrite(
+          ToStop(seg)->GetPause(), format, "STOP", "pause");
+    case SEGMENT_DELAY:
+      return IsPositiveTimingValueForWrite(
+          ToDelay(seg)->GetPause(), format, "DELAY", "pause");
+    case SEGMENT_WARP:
+      return IsPositiveTimingValueForWrite(
+          ToWarp(seg)->GetLength(), format, "WARP", "length");
+    case SEGMENT_FAKE:
+      return IsPositiveTimingValueForWrite(
+          ToFake(seg)->GetLength(), format, "FAKE", "length");
+    case SEGMENT_SPEED:
+      return IsFiniteTimingValueForWrite(
+                 ToSpeed(seg)->GetRatio(), format, "SPEED", "ratio") &&
+             IsFiniteTimingValueForWrite(
+                 ToSpeed(seg)->GetDelay(), format, "SPEED", "delay");
+    case SEGMENT_SCROLL:
+      return IsFiniteTimingValueForWrite(
+          ToScroll(seg)->GetRatio(), format, "SCROLL", "ratio");
+    case SEGMENT_TIME_SIG:
+      if (ToTimeSignature(seg)->GetNum() > 0 &&
+          ToTimeSignature(seg)->GetDen() > 0) {
+        return true;
+      }
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s TIMESIGNATURES timing "
+          "segment with invalid %i/%i.",
+          format, ToTimeSignature(seg)->GetNum(), ToTimeSignature(seg)->GetDen());
+      return false;
+    case SEGMENT_TICKCOUNT:
+      if (ToTickcount(seg)->GetTicks() > 0) {
+        return true;
+      }
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s TICKCOUNTS timing "
+          "segment with invalid tickcount %i.",
+          format, ToTickcount(seg)->GetTicks());
+      return false;
+    case SEGMENT_COMBO:
+      if (ToCombo(seg)->GetCombo() > 0 && ToCombo(seg)->GetMissCombo() > 0) {
+        return true;
+      }
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s COMBOS timing segment "
+          "with invalid combo %i/%i.",
+          format, ToCombo(seg)->GetCombo(), ToCombo(seg)->GetMissCombo());
+      return false;
+    default:
+      return true;
+  }
+}
+
 static std::vector<std::string> GetTimingVectorForWrite(
     const TimingData& timing, TimingSegmentType type, int dec) {
   const std::vector<TimingSegment*>& segs = timing.GetTimingSegments(type);
@@ -235,8 +339,14 @@ static std::vector<std::string> GetTimingVectorForWrite(
     return out;
   }
 
-  if (!segs.empty()) {
-    return timing.ToVectorString(type, dec);
+  for (TimingSegment* seg : segs) {
+    if (ShouldWriteTimingSegment(seg, type, "SSC")) {
+      out.push_back(seg->ToString(dec));
+    }
+  }
+
+  if (!out.empty()) {
+    return out;
   }
 
   switch (type) {
@@ -361,6 +471,9 @@ static void GetTimingTags(
   }
   for (; i < bpms.size(); i++) {
     const BPMSegment* bs = ToBPM(bpms[i]);
+    if (!ShouldWriteTimingSegment(bs, SEGMENT_BPM, "SSC step")) {
+      continue;
+    }
     w.Write(bs->GetRow(), bs->GetBPM());
   }
   w.Finish();
@@ -370,6 +483,9 @@ static void GetTimingTags(
       timing.GetTimingSegments(SEGMENT_STOP);
   for (i = 0; i < stops.size(); i++) {
     const StopSegment* ss = ToStop(stops[i]);
+    if (!ShouldWriteTimingSegment(ss, SEGMENT_STOP, "SSC step")) {
+      continue;
+    }
     w.Write(ss->GetRow(), ss->GetPause());
   }
   w.Finish();
@@ -379,6 +495,9 @@ static void GetTimingTags(
       timing.GetTimingSegments(SEGMENT_DELAY);
   for (i = 0; i < delays.size(); i++) {
     const DelaySegment* ss = ToDelay(delays[i]);
+    if (!ShouldWriteTimingSegment(ss, SEGMENT_DELAY, "SSC step")) {
+      continue;
+    }
     w.Write(ss->GetRow(), ss->GetPause());
   }
   w.Finish();
@@ -388,6 +507,9 @@ static void GetTimingTags(
       timing.GetTimingSegments(SEGMENT_WARP);
   for (i = 0; i < warps.size(); i++) {
     const WarpSegment* ws = ToWarp(warps[i]);
+    if (!ShouldWriteTimingSegment(ws, SEGMENT_WARP, "SSC step")) {
+      continue;
+    }
     w.Write(ws->GetRow(), ws->GetLength());
   }
   w.Finish();
@@ -404,6 +526,9 @@ static void GetTimingTags(
   }
   for (i = 0; i < tSigs.size(); i++) {
     const TimeSignatureSegment* ts = ToTimeSignature(tSigs[i]);
+    if (!ShouldWriteTimingSegment(ts, SEGMENT_TIME_SIG, "SSC step")) {
+      continue;
+    }
     w.Write(ts->GetRow(), ts->GetNum(), ts->GetDen());
   }
   w.Finish();
@@ -420,6 +545,9 @@ static void GetTimingTags(
   }
   for (i = 0; i < ticks.size(); i++) {
     const TickcountSegment* ts = ToTickcount(ticks[i]);
+    if (!ShouldWriteTimingSegment(ts, SEGMENT_TICKCOUNT, "SSC step")) {
+      continue;
+    }
     w.Write(ts->GetRow(), ts->GetTicks());
   }
   w.Finish();
@@ -436,6 +564,9 @@ static void GetTimingTags(
   }
   for (i = 0; i < combos.size(); i++) {
     const ComboSegment* cs = ToCombo(combos[i]);
+    if (!ShouldWriteTimingSegment(cs, SEGMENT_COMBO, "SSC step")) {
+      continue;
+    }
     if (cs->GetCombo() == cs->GetMissCombo()) {
       w.Write(cs->GetRow(), cs->GetCombo());
     } else {
@@ -450,6 +581,9 @@ static void GetTimingTags(
   w.Init("SPEEDS");
   for (i = 0; i < speeds.size(); i++) {
     SpeedSegment* ss = ToSpeed(speeds[i]);
+    if (!ShouldWriteTimingSegment(ss, SEGMENT_SPEED, "SSC step")) {
+      continue;
+    }
     w.Write(ss->GetRow(), ss->GetRatio(), ss->GetDelay(), ss->GetUnit());
   }
   w.Finish();
@@ -459,6 +593,9 @@ static void GetTimingTags(
       timing.GetTimingSegments(SEGMENT_SCROLL);
   for (i = 0; i < scrolls.size(); i++) {
     ScrollSegment* ss = ToScroll(scrolls[i]);
+    if (!ShouldWriteTimingSegment(ss, SEGMENT_SCROLL, "SSC step")) {
+      continue;
+    }
     w.Write(ss->GetRow(), ss->GetRatio());
   }
   w.Finish();
@@ -469,6 +606,9 @@ static void GetTimingTags(
     w.Init("FAKES");
     for (i = 0; i < fakes.size(); i++) {
       FakeSegment* fs = ToFake(fakes[i]);
+      if (!ShouldWriteTimingSegment(fs, SEGMENT_FAKE, "SSC step")) {
+        continue;
+      }
       w.Write(fs->GetRow(), fs->GetLength());
     }
     w.Finish();
@@ -479,7 +619,8 @@ static void GetTimingTags(
       timing.GetTimingSegments(SEGMENT_LABEL);
   for (i = 0; i < labels.size(); i++) {
     LabelSegment* ls = static_cast<LabelSegment*>(labels[i]);
-    if (!ls->GetLabel().empty()) {
+    if (!ls->GetLabel().empty() &&
+        ShouldWriteTimingSegment(ls, SEGMENT_LABEL, "SSC step")) {
       w.WriteLabel(ls->GetRow(), ls->GetLabel());
     }
   }

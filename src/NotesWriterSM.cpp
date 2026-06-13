@@ -179,6 +179,45 @@ static DisplayBPM SanitizeDisplayBPMForWrite(
   }
   return DISPLAY_BPM_SPECIFIED;
 }
+
+static bool IsValidTimingRowForWrite(
+    int row, const char* format, const char* segment) {
+  if (row >= 0) {
+    return true;
+  }
+  LOG->Warn(
+      "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s %s timing segment at "
+      "negative row %i.",
+      format, segment, row);
+  return false;
+}
+
+static bool IsFiniteTimingValueForWrite(
+    float value, const char* format, const char* segment,
+    const char* valueName) {
+  if (std::isfinite(value)) {
+    return true;
+  }
+  LOG->Warn(
+      "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s %s timing segment with "
+      "non-finite %s %.6f.",
+      format, segment, valueName, value);
+  return false;
+}
+
+static bool IsPositiveTimingValueForWrite(
+    float value, const char* format, const char* segment,
+    const char* valueName) {
+  if (IsFiniteTimingValueForWrite(value, format, segment, valueName) &&
+      value > 0.0f) {
+    return true;
+  }
+  LOG->Warn(
+      "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s %s timing segment with "
+      "non-positive %s %.6f.",
+      format, segment, valueName, value);
+  return false;
+}
 }  // namespace
 
 /**
@@ -257,21 +296,24 @@ static bool WriteGlobalTags(CheckedFileWriter& f, Song& out) {
   f.Write("#BPMS:");
   const std::vector<TimingSegment*>& bpms =
       timing.GetTimingSegments(SEGMENT_BPM);
+  std::vector<std::string> bpmLines;
   for (unsigned i = 0; i < bpms.size(); i++) {
     const BPMSegment* bs = ToBPM(bpms[i]);
-
-    f.PutLine(ssprintf("%.6f=%.6f", bs->GetBeat(), bs->GetBPM()));
-    if (i != bpms.size() - 1) {
-      f.Write(",");
+    if (!IsValidTimingRowForWrite(bs->GetRow(), "SM", "BPM") ||
+        !IsPositiveTimingValueForWrite(bs->GetBPM(), "SM", "BPM", "bpm")) {
+      continue;
     }
+
+    bpmLines.push_back(ssprintf("%.6f=%.6f", bs->GetBeat(), bs->GetBPM()));
   }
-  if (bpms.empty()) {
+  if (bpmLines.empty()) {
     LOG->Warn(
         "SRC_AUDIT_FIX: SM writer provided fallback BPM for '%s' because "
-        "TimingData had no BPM segments.",
+        "TimingData had no writable BPM segments.",
         out.GetSongDir().c_str());
-    f.PutLine("0.000000=60.000000");
+    bpmLines.push_back("0.000000=60.000000");
   }
+  f.PutLine(join(",\n", bpmLines));
   f.PutLine(";");
 
   const std::vector<TimingSegment*>& stops =
@@ -286,6 +328,11 @@ static bool WriteGlobalTags(CheckedFileWriter& f, Song& out) {
   if (wSize > 0) {
     for (unsigned i = 0; i < wSize; i++) {
       const WarpSegment* ws = static_cast<WarpSegment*>(warps[i]);
+      if (!IsValidTimingRowForWrite(ws->GetRow(), "SM", "WARP") ||
+          !IsPositiveTimingValueForWrite(
+              ws->GetLength(), "SM", "WARP", "length")) {
+        continue;
+      }
       int iRow = ws->GetRow();
       float fBPM = out.m_SongTiming.GetBPMAtRow(iRow);
       if (!std::isfinite(fBPM) || fBPM <= 0.0f) {
@@ -303,6 +350,10 @@ static bool WriteGlobalTags(CheckedFileWriter& f, Song& out) {
 
   for (unsigned i = 0; i < stops.size(); i++) {
     const StopSegment* fs = ToStop(stops[i]);
+    if (!IsValidTimingRowForWrite(fs->GetRow(), "SM", "STOP") ||
+        !IsPositiveTimingValueForWrite(fs->GetPause(), "SM", "STOP", "pause")) {
+      continue;
+    }
     // Handle warps on the same row by summing the values.  Not sure this
     // plays out the same. -Kyz
     std::map<float, float>::iterator already_exists =
@@ -316,7 +367,14 @@ static bool WriteGlobalTags(CheckedFileWriter& f, Song& out) {
   // Delays can't be negative: thus, no effect.
   for (const TimingSegment* ss : delays) {
     int iRow = ss->GetRow();
-    if (iRow <= 0) {
+    if (iRow < 0) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-588 SRC-597: skipped SM DELAY timing segment at "
+          "negative row %i.",
+          iRow);
+      continue;
+    }
+    if (iRow == 0) {
       LOG->Warn(
           "SRC_AUDIT_FIX: SM writer clamped delay at row %i to beat 0 for '%s' "
           "to avoid serializing a negative stop beat.",
@@ -325,6 +383,9 @@ static bool WriteGlobalTags(CheckedFileWriter& f, Song& out) {
     }
     float fBeat = NoteRowToBeat(iRow - 1);
     float fPause = ToDelay(ss)->GetPause();
+    if (!IsPositiveTimingValueForWrite(fPause, "SM", "DELAY", "pause")) {
+      continue;
+    }
     std::map<float, float>::iterator already_exists = allPauses.find(fBeat);
     if (already_exists != allPauses.end()) {
       already_exists->second += fPause;
@@ -336,6 +397,14 @@ static bool WriteGlobalTags(CheckedFileWriter& f, Song& out) {
   f.Write("#STOPS:");
   std::vector<std::string> stopLines;
   for (std::pair<const float&, const float&> ap : allPauses) {
+    if (!std::isfinite(ap.first) || ap.first < 0.0f ||
+        !std::isfinite(ap.second) || ap.second == 0.0f) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-588 SRC-597: skipped SM serialized stop with "
+          "invalid beat/pause %.6f=%.6f.",
+          ap.first, ap.second);
+      continue;
+    }
     stopLines.push_back(ssprintf("%.6f=%.6f", ap.first, ap.second));
   }
   f.PutLine(join(",\n", stopLines));
