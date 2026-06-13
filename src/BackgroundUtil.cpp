@@ -437,12 +437,15 @@ void BackgroundUtil::GetGlobalBGAnimations(
     std::vector<std::string>& vsPathsOut,
     std::vector<std::string>& vsNamesOut) {
   vsPathsOut.clear();
+  vsNamesOut.clear();
+  if (!IsSafeBackgroundMatch(sMatch, false, "SRC-683")) {
+    return;
+  }
   GetDirListing(BG_ANIMS_DIR + sMatch + "*", vsPathsOut, true, true);
   if (true) {
     GetDirListing(BG_ANIMS_DIR + sMatch + "*.xml", vsPathsOut, false, true);
   }
 
-  vsNamesOut.clear();
   for (const std::string& s : vsPathsOut) {
     vsNamesOut.push_back(Basename(s));
   }
