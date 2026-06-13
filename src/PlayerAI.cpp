@@ -1,5 +1,7 @@
 #include "PlayerAI.h"
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 
 #include "GameConstantsAndTypes.h"
@@ -7,6 +9,7 @@
 #include "IniFile.h"
 #include "LuaManager.h"
 #include "PlayerState.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "RageUtil/RandomNumbers.h"
 #include "XmlFile.h"
@@ -20,7 +23,18 @@ struct TapScoreDistribution {
   void ChangeWeightsToPercents() {
     float sum = 0;
     for (int i = 0; i < NUM_TapNoteScore; ++i) {
+      if (!std::isfinite(fPercent[i]) || fPercent[i] < 0.0f) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: Invalid AI weight %f for score %i; using 0.",
+            fPercent[i], i);
+        fPercent[i] = 0.0f;
+      }
       sum += fPercent[i];
+    }
+    if (!std::isfinite(sum) || sum <= 0.0f) {
+      LOG->Warn("SRC_AUDIT_FIX: Invalid AI weight sum %f; using defaults.", sum);
+      SetDefaultWeights();
+      sum = 1.0f;
     }
     for (int i = 0; i < NUM_TapNoteScore; ++i) {
       fPercent[i] /= sum;
@@ -46,7 +60,10 @@ struct TapScoreDistribution {
       }
     }
     // the fCumulativePercents must sum to 1.0, so we should never get here!
-    ASSERT_M(0, ssprintf("%f,%f", fRand, fCumulativePercent));
+    LOG->Warn(
+        "SRC_AUDIT_FIX: AI distribution did not resolve score (%f/%f); using "
+        "W1.",
+        fRand, fCumulativePercent);
     return TNS_W1;
   }
 };
@@ -101,6 +118,10 @@ void PlayerAI::InitFromDisk() {
 }
 
 TapNoteScore PlayerAI::GetTapNoteScore(const PlayerState* pPlayerState) {
+  if (pPlayerState == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: PlayerAI called without PlayerState.");
+    return TNS_None;
+  }
   if (pPlayerState->m_PlayerController == PC_AUTOPLAY) {
     return TNS_W1;
   }
@@ -113,25 +134,29 @@ TapNoteScore PlayerAI::GetTapNoteScore(const PlayerState* pPlayerState) {
   }
   */
 
-  int iCpuSkill = pPlayerState->m_iCpuSkill;
+  int iCpuSkill = std::clamp(pPlayerState->m_iCpuSkill, 0, NUM_SKILL_LEVELS - 1);
+  if (iCpuSkill != pPlayerState->m_iCpuSkill) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Clamped invalid CPU skill %i to %i.",
+        pPlayerState->m_iCpuSkill, iCpuSkill);
+  }
 
   /* If we're in battle mode, reduce the skill based on the number of modifier
    * attacks against us. If we're in demonstration or jukebox mode with
    * modifiers attached, don't make demonstration miss a lot. */
   // Idea: weight certain modifiers (boomerang, tornado) more? (to simulate
   // readability problems) -aj
-  if (!GAMESTATE->m_bDemonstrationOrJukebox) {
+  if (GAMESTATE != nullptr && !GAMESTATE->m_bDemonstrationOrJukebox) {
     int iSumOfAttackLevels =
         pPlayerState->m_fSecondsUntilAttacksPhasedOut > 0
             ? pPlayerState->m_iLastPositiveSumOfAttackLevels
             : 0;
-
-    ASSERT_M(
-        iCpuSkill >= 0 && iCpuSkill < NUM_SKILL_LEVELS,
-        ssprintf("%i", iCpuSkill));
-    ASSERT_M(
-        pPlayerState->m_PlayerController == PC_CPU,
-        ssprintf("%i", pPlayerState->m_PlayerController));
+    if (pPlayerState->m_PlayerController != PC_CPU) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerAI non-CPU controller %i; using neutral score.",
+          pPlayerState->m_PlayerController);
+      return TNS_None;
+    }
 
     iCpuSkill -= iSumOfAttackLevels * 3;
     rage_clamp(iCpuSkill, 0, NUM_SKILL_LEVELS - 1);
