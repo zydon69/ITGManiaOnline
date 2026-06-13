@@ -8,6 +8,7 @@
 #include "GameConstantsAndTypes.h"
 #include "LuaBinding.h"
 #include "LuaManager.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "StepParityDatastructs.h"
 
@@ -62,13 +63,24 @@ void TechCounts::FromString(std::string sTechCounts) {
   std::vector<std::string> saValues;
   split(sTechCounts, ",", saValues, true);
 
+  MakeUnknown();
   if (saValues.size() != NUM_TechCountsCategory) {
-    MakeUnknown();
-    return;
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-637: TechCounts cache has %zu values; expected %d.",
+        saValues.size(), NUM_TechCountsCategory);
   }
 
-  FOREACH_ENUM(TechCountsCategory, tc) {
-    (*this)[tc] = StringToFloat(saValues[tc]);
+  const size_t valuesToRead =
+      std::min(saValues.size(), static_cast<size_t>(NUM_TechCountsCategory));
+  for (size_t i = 0; i < valuesToRead; ++i) {
+    float value = TECHCOUNTS_VAL_UNKNOWN;
+    if (!StringConversion::FromString<float>(saValues[i], value)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-637: invalid TechCounts value '%s' at index %zu.",
+          saValues[i].c_str(), i);
+      continue;
+    }
+    (*this)[static_cast<int>(i)] = value;
   }
 }
 
