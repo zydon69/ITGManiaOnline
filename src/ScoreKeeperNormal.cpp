@@ -49,6 +49,12 @@ static ThemeMetric1D<int> g_iPercentScoreWeight(
 static ThemeMetric1D<int> g_iGradeWeight(
     "ScoreKeeperNormal", GradeWeightName, NUM_ScoreEvent);
 
+namespace {
+bool IsValidTapNoteScore(TapNoteScore tns) {
+  return tns >= TNS_None && tns < NUM_TapNoteScore;
+}
+}  // namespace
+
 ScoreKeeperNormal::ScoreKeeperNormal(
     PlayerState* pPlayerState, PlayerStageStats* pPlayerStageStats)
     : ScoreKeeper(pPlayerState, pPlayerStageStats) {}
@@ -325,6 +331,20 @@ void ScoreKeeperNormal::HandleTapScoreNone() {
 
 void ScoreKeeperNormal::AddScoreInternal(TapNoteScore score) {
   if (m_UseInternalScoring) {
+    if (!IsValidTapNoteScore(score)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperNormal ignored invalid tap score %i in "
+          "internal scoring.",
+          score);
+      return;
+    }
+    if (m_iNumTapsAndHolds <= 0) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperNormal skipped internal scoring because "
+          "there are no scorable taps or holds.");
+      return;
+    }
+
     unsigned int& iScore = m_pPlayerStageStats->m_iScore;
     unsigned int& iCurMaxScore = m_pPlayerStageStats->m_iCurMaxScore;
 
