@@ -590,6 +590,7 @@ void CourseUtil::WarnOnInvalidMods(std::string sMods) {
   PlayerOptions po;
   SongOptions so;
   std::vector<std::string> vs;
+  std::vector<std::string> invalidMods;
   split(sMods, ",", vs, true);
   for (const std::string& s : vs) {
     bool bValid = false;
@@ -614,8 +615,17 @@ void CourseUtil::WarnOnInvalidMods(std::string sMods) {
         sFullError += ": " + sErrorDetail;
       }
       LOG->UserLog("", "", "%s", sFullError.c_str());
-      Dialog::OK(sFullError, "INVALID_PLAYER_OPTION_WARNING");
+      invalidMods.push_back(sFullError);
     }
+  }
+
+  if (!invalidMods.empty()) {
+    std::string sDialogText = join("\n", invalidMods);
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-673: reporting %zu invalid course mods through the "
+        "global dialog/log policy.",
+        invalidMods.size());
+    Dialog::OK(sDialogText, "INVALID_PLAYER_OPTION_WARNING");
   }
 }
 
