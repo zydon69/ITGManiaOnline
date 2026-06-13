@@ -1021,6 +1021,14 @@ void SSCLoader::ProcessScrolls(TimingData& out, const std::string sParam) {
       continue;
     }
 
+    if (fRatio <= 0.0f) {
+      LOG->UserLog(
+          "Song file", this->GetSongTitle(),
+          "SRC_AUDIT_FIX rejected invalid #SCROLLS ratio %f in \"%s\".",
+          fRatio, s1.c_str());
+      continue;
+    }
+
     out.AddSegment(ScrollSegment(BeatToNoteRow(fBeat), fRatio));
   }
 }
