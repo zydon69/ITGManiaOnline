@@ -15,6 +15,7 @@
 #include "PrefsManager.h"
 #include "Profile.h"
 #include "ProfileManager.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "Screen.h"
 #include "ScreenDimensions.h"
@@ -130,10 +131,17 @@ void ScreenOptionsManageProfiles::BeginScreen() {
   }
 
   PROFILEMAN->GetLocalProfileIDs(m_vsLocalProfileID);
+  std::vector<std::string> vsValidLocalProfileIDs;
 
   for (const std::string& s : m_vsLocalProfileID) {
     Profile* pProfile = PROFILEMAN->GetLocalProfile(s);
-    ASSERT(pProfile != nullptr);
+    if (pProfile == nullptr) {
+      LOG->Warn(
+          "ScreenOptionsManageProfiles::BeginScreen: profile '%s' is missing",
+          s.c_str());
+      continue;
+    }
+    vsValidLocalProfileIDs.push_back(s);
 
     std::string sCommand = ssprintf(
         "gamecommand;screen,ScreenOptionsCustomizeProfile;profileid,%s;name,"
@@ -159,6 +167,7 @@ void ScreenOptionsManageProfiles::BeginScreen() {
     // FIXME
     // gc.Load( iIndex++,  );
   }
+  m_vsLocalProfileID = vsValidLocalProfileIDs;
 
   ScreenOptions::InitMenu(OptionRowHandlers);
 
@@ -284,7 +293,14 @@ void ScreenOptionsManageProfiles::HandleScreenMessage(const ScreenMessage SM) {
     if (!ScreenMiniMenu::s_bCancelled) {
       Profile* pProfile =
           PROFILEMAN->GetLocalProfile(GAMESTATE->m_sEditLocalProfileID);
-      ASSERT(pProfile != nullptr);
+      if (pProfile == nullptr) {
+        LOG->Warn(
+            "ScreenOptionsManageProfiles::HandleScreenMessage: profile '%s' "
+            "is missing",
+            GAMESTATE->m_sEditLocalProfileID.Get().c_str());
+        SCREENMAN->SetNewScreen(this->m_sName);
+        return;
+      }
 
       switch (ScreenMiniMenu::s_iLastRowCode) {
         default:
