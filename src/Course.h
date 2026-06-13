@@ -156,7 +156,7 @@ class Course {
 
   bool ShowInDemonstrationAndRanking() const;
 
-  void RevertFromDisk();
+  bool RevertFromDisk();
   void Init();
 
   bool IsRanking() const;

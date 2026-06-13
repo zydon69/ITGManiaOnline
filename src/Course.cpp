@@ -262,11 +262,20 @@ PlayMode Course::GetPlayMode() const {
   }
 }
 
-void Course::RevertFromDisk() {
+bool Course::RevertFromDisk() {
   // trying to catch invalid an Course
-  ASSERT(!m_sPath.empty());
+  if (m_sPath.empty()) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-126: cannot revert course with empty path");
+    return false;
+  }
 
-  CourseLoaderCRS::LoadFromCRSFile(m_sPath, *this);
+  if (!CourseLoaderCRS::LoadFromCRSFile(m_sPath, *this)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-126: failed to revert course from '%s'",
+        m_sPath.c_str());
+    return false;
+  }
+  return true;
 }
 
 std::string Course::GetCacheFilePath() const {
@@ -1063,7 +1072,11 @@ void Course::Invalidate(const Song* pStaleSong) {
     Song* pSong = e.songID.ToSong();
     if (pSong == pStaleSong)  // a fixed entry that references the stale Song
     {
-      RevertFromDisk();
+      if (!RevertFromDisk()) {
+        m_vEntries.clear();
+        m_RadarCache.clear();
+        InvalidateTrailCache();
+      }
       return;
     }
   }
