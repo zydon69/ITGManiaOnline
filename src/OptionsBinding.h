@@ -60,7 +60,7 @@
     int original_top = lua_gettop(L);              \
     lua_pushnumber(L, p->m_##member);              \
     if (lua_isnumber(L, 1) && original_top >= 1) { \
-      p->m_##member = std::max(0, IArg(1));        \
+      p->m_##member = std::clamp(IArg(1), 0, 100); \
     }                                              \
     OPTIONAL_RETURN_SELF(original_top);            \
     return 1;                                      \
