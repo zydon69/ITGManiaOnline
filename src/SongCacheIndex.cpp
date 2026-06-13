@@ -131,7 +131,12 @@ void SongCacheIndex::ReadCacheIndex() {
 
 void SongCacheIndex::SaveCacheIndex() {
   LockMutex L(Mutex);
-  CacheIndex.WriteFile(CACHE_INDEX);
+  const std::string sCacheIndexPath = CACHE_INDEX;
+  if (!CacheIndex.WriteFile(sCacheIndexPath)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-631: failed to save cache index '%s': %s",
+        sCacheIndexPath.c_str(), CacheIndex.GetError().c_str());
+  }
 }
 
 void SongCacheIndex::AddCacheIndex(const std::string& path, unsigned hash) {
@@ -142,7 +147,13 @@ void SongCacheIndex::AddCacheIndex(const std::string& path, unsigned hash) {
   CacheIndex.SetValue("Cache", "CacheVersion", FILE_CACHE_VERSION);
   CacheIndex.SetValue("Cache", MangleName(path), hash);
   if (!delay_save_cache) {
-    CacheIndex.WriteFile(CACHE_INDEX);
+    const std::string sCacheIndexPath = CACHE_INDEX;
+    if (!CacheIndex.WriteFile(sCacheIndexPath)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-631: failed to save cache index '%s' after "
+          "adding '%s': %s",
+          sCacheIndexPath.c_str(), path.c_str(), CacheIndex.GetError().c_str());
+    }
   }
 }
 
