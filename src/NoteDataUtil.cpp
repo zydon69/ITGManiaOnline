@@ -1,11 +1,13 @@
 #include "NoteDataUtil.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <set>
 #include <string>
 #include <utility>
@@ -34,6 +36,100 @@
 static const int BEATS_PER_MEASURE = 4;
 static const int ROWS_PER_MEASURE = ROWS_PER_BEAT * BEATS_PER_MEASURE;
 
+static bool IsValidNoteTrackCount(int iNumTracks, const char* context) {
+  if (iNumTracks >= 1 && iNumTracks <= MAX_NOTE_TRACKS) {
+    return true;
+  }
+
+  LOG->Trace(
+      "SRC_AUDIT_FIX %s ignored invalid track count %i.",
+      context, iNumTracks);
+  return false;
+}
+
+static bool IsValidNoteTypeForSnap(NoteType nt) {
+  return nt >= NOTE_TYPE_4TH && nt < NUM_NoteType;
+}
+
+static bool CheckedScaledRow(
+    float scale, int row, int* out, const char* context) {
+  if (!std::isfinite(scale) || scale <= 0.f || out == nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX %s ignored invalid scale %f.", context, scale);
+    return false;
+  }
+  const double scaled = double(scale) * row;
+  if (!std::isfinite(scaled) || scaled < 0.0 ||
+      scaled > double(MAX_NOTE_ROW)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX %s refused scaled row %f from row %i scale %f.",
+        context, scaled, row, scale);
+    return false;
+  }
+  *out = int(std::lrint(scaled));
+  return true;
+}
+
+static void GetMeasureRowRange(
+    const TimingData* timing, int iMeasureIndex, int& iMeasureStartRow,
+    int& iMeasureEndRow) {
+  if (timing == nullptr || iMeasureIndex < 0) {
+    iMeasureStartRow = std::max(0, iMeasureIndex) * ROWS_PER_MEASURE;
+    iMeasureEndRow = iMeasureStartRow + ROWS_PER_MEASURE - 1;
+    return;
+  }
+
+  const std::vector<TimingSegment*>& signatures =
+      timing->GetTimingSegments(SEGMENT_TIME_SIG);
+  if (signatures.empty()) {
+    iMeasureStartRow = iMeasureIndex * ROWS_PER_MEASURE;
+    iMeasureEndRow = iMeasureStartRow + ROWS_PER_MEASURE - 1;
+    return;
+  }
+
+  int firstRow = signatures.front()->GetRow();
+  int currentMeasure = 0;
+  for (size_t i = 0; i < signatures.size(); ++i) {
+    TimeSignatureSegment* signature = ToTimeSignature(signatures[i]);
+    if (signature == nullptr) {
+      continue;
+    }
+
+    const int rowsPerMeasure = std::max(1, signature->GetNoteRowsPerMeasure());
+    const int segmentStart = signature->GetRow();
+    const int segmentEnd =
+        i + 1 < signatures.size() ? signatures[i + 1]->GetRow() : INT_MAX;
+    const int segmentRows = std::max(0, segmentEnd - segmentStart);
+    const int measuresInSegment =
+        segmentEnd == INT_MAX
+            ? std::numeric_limits<int>::max()
+            : std::max(1, (segmentRows + rowsPerMeasure - 1) / rowsPerMeasure);
+
+    if (measuresInSegment == std::numeric_limits<int>::max() ||
+        iMeasureIndex - currentMeasure < measuresInSegment) {
+      const int measureOffset = iMeasureIndex - currentMeasure;
+      iMeasureStartRow = segmentStart + measureOffset * rowsPerMeasure;
+      iMeasureEndRow =
+          std::min(segmentEnd - 1, iMeasureStartRow + rowsPerMeasure - 1);
+      return;
+    }
+
+    if (currentMeasure > std::numeric_limits<int>::max() - measuresInSegment) {
+      currentMeasure = std::numeric_limits<int>::max();
+    } else {
+      currentMeasure += measuresInSegment;
+    }
+    firstRow = segmentEnd;
+  }
+
+  LOG->Trace(
+      "SRC_AUDIT_FIX GetMeasureRowRange used fallback for measure %i after "
+      "time signature scan ended at row %i.",
+      iMeasureIndex, firstRow);
+  iMeasureStartRow = iMeasureIndex * ROWS_PER_MEASURE;
+  iMeasureEndRow = iMeasureStartRow + ROWS_PER_MEASURE - 1;
+}
+
 NoteType NoteDataUtil::GetSmallestNoteTypeForMeasure(
     const NoteData& nd, int iMeasureIndex) {
   const int iMeasureStartIndex = iMeasureIndex * ROWS_PER_MEASURE;
@@ -41,6 +137,16 @@ NoteType NoteDataUtil::GetSmallestNoteTypeForMeasure(
 
   return NoteDataUtil::GetSmallestNoteTypeInRange(
       nd, iMeasureStartIndex, iMeasureEndIndex);
+}
+
+NoteType NoteDataUtil::GetSmallestNoteTypeForMeasure(
+    const NoteData& nd, const TimingData* timing, int iMeasureIndex) {
+  int iMeasureStartIndex = 0;
+  int iMeasureEndIndex = 0;
+  GetMeasureRowRange(
+      timing, iMeasureIndex, iMeasureStartIndex, iMeasureEndIndex);
+  return NoteDataUtil::GetSmallestNoteTypeInRange(
+      nd, iMeasureStartIndex, iMeasureEndIndex + 1);
 }
 
 NoteType NoteDataUtil::GetSmallestNoteTypeInRange(
@@ -231,7 +337,7 @@ static void LoadFromSMNoteDataStringWithPlayer(
 #endif
 
         // look for optional keysound index (e.g. "[123]")
-        if (*p == '[') {
+        if (p < endLine && *p == '[') {
           p++;
           int iKeysoundIndex = 0;
           if (1 ==
@@ -379,18 +485,32 @@ void NoteDataUtil::InsertHoldTails(NoteData& inout) {
 
 void NoteDataUtil::GetSMNoteDataString(
     const NoteData& in, std::string& sRet, bool bIncludeMeasureComments) {
+  GetSMNoteDataString(in, nullptr, sRet, bIncludeMeasureComments);
+}
+
+void NoteDataUtil::GetSMNoteDataString(
+    const NoteData& in, const TimingData* timing, std::string& sRet,
+    bool bIncludeMeasureComments) {
   // Get note data
   std::vector<NoteData> parts;
-  float fLastBeat = -1.0f;
+  int iLastRow = 0;
 
   SplitCompositeNoteData(in, parts);
 
   for (NoteData& nd : parts) {
     InsertHoldTails(nd);
-    fLastBeat = std::max(fLastBeat, nd.GetLastBeat());
+    iLastRow = std::max(iLastRow, nd.GetLastRow());
   }
 
-  int iLastMeasure = int(fLastBeat / BEATS_PER_MEASURE);
+  int iLastMeasure = 0;
+  if (timing != nullptr) {
+    int iBeatIndex = 0;
+    int iRowsRemainder = 0;
+    timing->NoteRowToMeasureAndBeat(
+        iLastRow, iLastMeasure, iBeatIndex, iRowsRemainder);
+  } else {
+    iLastMeasure = int(NoteRowToBeat(iLastRow) / BEATS_PER_MEASURE);
+  }
 
   sRet = "";
   int partNum = 0;
@@ -407,7 +527,11 @@ void NoteDataUtil::GetSMNoteDataString(
         sRet += ssprintf("  // measure %d\n", m);
       }
 
-      NoteType nt = GetSmallestNoteTypeForMeasure(nd, m);
+      int iMeasureStartRow = 0;
+      int iMeasureLastRow = 0;
+      GetMeasureRowRange(timing, m, iMeasureStartRow, iMeasureLastRow);
+
+      NoteType nt = GetSmallestNoteTypeForMeasure(nd, timing, m);
       int iRowSpacing;
       if (nt == NoteType_Invalid) {
         iRowSpacing = 1;
@@ -416,10 +540,6 @@ void NoteDataUtil::GetSMNoteDataString(
       }
       // (verify first)
       // iRowSpacing = BeatToNoteRow( NoteTypeToBeat(nt) );
-
-      const int iMeasureStartRow = m * ROWS_PER_MEASURE;
-      const int iMeasureLastRow = (m + 1) * ROWS_PER_MEASURE - 1;
-
       for (int r = iMeasureStartRow; r <= iMeasureLastRow; r += iRowSpacing) {
         for (int t = 0; t < nd.GetNumTracks(); ++t) {
           const TapNote& tn = nd.GetTapNote(t, r);
@@ -509,20 +629,27 @@ void NoteDataUtil::SplitCompositeNoteData(
        occuring to begin with, but at this time, I am unsure how to deal with
        it. Hopefully this hack can be removed soon. -- Jason "Wolfman2000" Felds
        */
-      const Style* curStyle = GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
+      const Style* curStyle =
+          GAMESTATE != nullptr ? GAMESTATE->GetCurrentStyle(PLAYER_INVALID)
+                               : nullptr;
       if ((curStyle == nullptr ||
            curStyle->m_StyleType == StyleType_TwoPlayersSharedSides) &&
-          int(tn.pn) > NUM_PlayerNumber) {
+          (int(tn.pn) < 0 || int(tn.pn) >= NUM_PlayerNumber)) {
+        LOG->Trace(
+            "SRC_AUDIT_FIX SplitCompositeNoteData assigned invalid player %i "
+            "to P1 at row %i track %i.",
+            int(tn.pn), row, t);
         tn.pn = PLAYER_1;
       }
-      unsigned index = int(tn.pn);
+      int index = int(tn.pn);
 
-      ASSERT_M(
-          index < NUM_PlayerNumber,
-          ssprintf(
-              "We have a note not assigned to a player. The note in question "
-              "is on beat %f, column %i.",
-              NoteRowToBeat(row), t + 1));
+      if (index < 0 || index >= NUM_PlayerNumber) {
+        LOG->Trace(
+            "SRC_AUDIT_FIX SplitCompositeNoteData skipped note with invalid "
+            "player %i at beat %f column %i.",
+            int(tn.pn), NoteRowToBeat(row), t + 1);
+        continue;
+      }
       tn.pn = PLAYER_INVALID;
       out[index].SetTapNote(t, row, tn);
     }
@@ -556,6 +683,10 @@ void NoteDataUtil::LoadTransformedSlidingWindow(
     const NoteData& in, NoteData& out, int iNewNumTracks) {
   // reset all notes
   out.Init();
+  if (!IsValidNoteTrackCount(iNewNumTracks, "LoadTransformedSlidingWindow") ||
+      !IsValidNoteTrackCount(in.GetNumTracks(), "LoadTransformedSlidingWindow")) {
+    return;
+  }
 
   if (in.GetNumTracks() > iNewNumTracks) {
     // Use a different algorithm for reducing tracks.
@@ -655,6 +786,11 @@ void PlaceAutoKeysound(NoteData& out, int row, TapNote akTap) {
 
 void NoteDataUtil::LoadOverlapped(
     const NoteData& in, NoteData& out, int iNewNumTracks) {
+  if (!IsValidNoteTrackCount(iNewNumTracks, "LoadOverlapped") ||
+      !IsValidNoteTrackCount(in.GetNumTracks(), "LoadOverlapped")) {
+    out.Init();
+    return;
+  }
   out.SetNumTracks(iNewNumTracks);
 
   /* Keep track of the last source track that put a tap into each destination
@@ -751,10 +887,20 @@ int FindLongestOverlappingHoldNoteForAnyTrack(const NoteData& in, int iRow) {
 // tracks in "out".
 void LightTransformHelper(
     const NoteData& in, NoteData& out, const std::vector<int>& aiTracks) {
-  for (unsigned i = 0; i < aiTracks.size(); ++i) {
-    ASSERT_M(
-        aiTracks[i] < out.GetNumTracks(),
-        ssprintf("%i, %i", aiTracks[i], out.GetNumTracks()));
+  std::vector<int> validTracks;
+  validTracks.reserve(aiTracks.size());
+  for (int track : aiTracks) {
+    if (track < 0 || track >= out.GetNumTracks()) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX LightTransformHelper ignored invalid output track "
+          "%i for %i-track lights data.",
+          track, out.GetNumTracks());
+      continue;
+    }
+    validTracks.push_back(track);
+  }
+  if (validTracks.empty()) {
+    return;
   }
 
   FOREACH_NONEMPTY_ROW_ALL_TRACKS(in, r) {
@@ -774,8 +920,7 @@ void LightTransformHelper(
 
     if (iHoldEnd != -1) {
       // If we found a hold note, add it to all tracks.
-      for (unsigned i = 0; i < aiTracks.size(); ++i) {
-        int t = aiTracks[i];
+      for (int t : validTracks) {
         out.AddHoldNote(t, iHoldStart, iHoldEnd, TAP_ORIGINAL_HOLD_HEAD);
       }
       continue;
@@ -786,8 +931,7 @@ void LightTransformHelper(
     }
 
     // Enable every track in the output.
-    for (unsigned i = 0; i < aiTracks.size(); ++i) {
-      int t = aiTracks[i];
+    for (int t : validTracks) {
       out.SetTapNote(t, r, TAP_ORIGINAL_TAP);
     }
   }
@@ -830,8 +974,15 @@ void NoteDataUtil::LoadTransformedLights(
 #include "LightsManager.h"  // for LIGHT_*
 void NoteDataUtil::LoadTransformedLightsFromTwo(
     const NoteData& marquee, const NoteData& bass, NoteData& out) {
-  ASSERT(marquee.GetNumTracks() >= 4);
-  ASSERT(bass.GetNumTracks() >= 1);
+  if (marquee.GetNumTracks() < 4 || bass.GetNumTracks() < 1) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX LoadTransformedLightsFromTwo ignored invalid source "
+        "track counts marquee=%i bass=%i.",
+        marquee.GetNumTracks(), bass.GetNumTracks());
+    out.Init();
+    out.SetNumTracks(NUM_CabinetLight);
+    return;
+  }
 
   /* For each track in "marquee", enable a track in the marquee lights.
    * This will reinit out. */
@@ -1056,7 +1207,8 @@ static void DoRowEndRadarCalc(crv_state& state, RadarValues& out) {
 
 void NoteDataUtil::CalculateRadarValues(
     const NoteData& in, float fSongSeconds, RadarValues& out) {
-  TimingData* timing = GAMESTATE->GetProcessedTimingData();
+  TimingData* timing =
+      GAMESTATE != nullptr ? GAMESTATE->GetProcessedTimingData() : nullptr;
   CalculateRadarValues(in, fSongSeconds, timing, out);
 }
 
@@ -1091,7 +1243,18 @@ void NoteDataUtil::CalculateRadarValues(
       curr_row = curr_note.Row();
       state.num_notes_on_curr_row = 0;
       state.num_holds_on_curr_row = 0;
-      state.judgable = timing->IsJudgableAtRow(curr_row);
+      if (timing == nullptr) {
+        static bool loggedMissingTiming = false;
+        if (!loggedMissingTiming) {
+          LOG->Trace(
+              "SRC_AUDIT_FIX CalculateRadarValues used judgable fallback "
+              "without timing data.");
+          loggedMissingTiming = true;
+        }
+        state.judgable = true;
+      } else {
+        state.judgable = timing->IsJudgableAtRow(curr_row);
+      }
       for (size_t n = 0; n < state.hold_ends.size(); ++n) {
         if (state.hold_ends[n] < curr_row) {
           state.hold_ends.erase(state.hold_ends.begin() + n);
@@ -1258,6 +1421,13 @@ void NoteDataUtil::RemoveSimultaneousNotes(
     for (NoteData& nd : vParts) {
       RemoveSimultaneousNotes(nd, iMaxSimultaneous, iStartIndex, iEndIndex);
     }
+    if (vParts.empty()) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX RemoveSimultaneousNotes skipped empty composite "
+          "split.");
+      in.Init();
+      return;
+    }
     in.Init();
     in.SetNumTracks(vParts.front().GetNumTracks());
     CombineCompositeNoteData(in, vParts);
@@ -1374,9 +1544,16 @@ void NoteDataUtil::RemoveAllButPlayer(NoteData& inout, PlayerNumber pn) {
 static void GetTrackMapping(
     StepsType st, NoteDataUtil::TrackMapping tt, int NumTracks,
     int* iTakeFromTrack) {
+  if (iTakeFromTrack == nullptr) {
+    LOG->Trace("SRC_AUDIT_FIX GetTrackMapping ignored null mapping output.");
+    return;
+  }
   // Identity transform for cases not handled below.
   for (int t = 0; t < MAX_NOTE_TRACKS; ++t) {
     iTakeFromTrack[t] = t;
+  }
+  if (!IsValidNoteTrackCount(NumTracks, "GetTrackMapping")) {
+    return;
   }
 
   switch (tt) {
@@ -1564,6 +1741,13 @@ static void GetTrackMapping(
         memcpy(iTrack, iTakeFromTrack, sizeof(iTrack));
         for (int t = 0; t < MAX_NOTE_TRACKS; ++t) {
           const int to = iTrack[t];
+          if (to < 0 || to >= MAX_NOTE_TRACKS) {
+            LOG->Trace(
+                "SRC_AUDIT_FIX GetTrackMapping ignored invalid inverse track "
+                "%i.",
+                to);
+            continue;
+          }
           iTakeFromTrack[to] = t;
         }
       }
@@ -1669,8 +1853,17 @@ static void GetTrackMapping(
       int iOrig[MAX_NOTE_TRACKS];
       memcpy(iOrig, iTakeFromTrack, sizeof(iOrig));
 
-      int iShuffleSeed = GAMESTATE->m_iStageSeed;
-      do {
+      if (NumTracks < 2) {
+        LOG->Trace(
+            "SRC_AUDIT_FIX GetTrackMapping skipped shuffle for %i-track "
+            "chart.",
+            NumTracks);
+        break;
+      }
+      const int iOriginalActiveTracks = NumTracks;
+      int iShuffleSeed = GAMESTATE != nullptr ? GAMESTATE->m_iStageSeed : 0;
+      bool changed = false;
+      for (int attempts = 0; attempts < 64 && !changed; ++attempts) {
         RandomGen rnd(iShuffleSeed);
         // ignore turntable in beat mode
         switch (st) {
@@ -1690,10 +1883,16 @@ static void GetTrackMapping(
           }
         }
         iShuffleSeed++;
-      } while (!memcmp(
-          iOrig, iTakeFromTrack,
-          sizeof(iOrig)));  // shuffle again if shuffle managed to shuffle them
-                            // in the same order
+        changed =
+            memcmp(iOrig, iTakeFromTrack, iOriginalActiveTracks * sizeof(int)) !=
+            0;
+      }
+      if (!changed) {
+        LOG->Trace(
+            "SRC_AUDIT_FIX GetTrackMapping kept identity shuffle after "
+            "exhausting attempts for %i tracks.",
+            NumTracks);
+      }
     } break;
     case NoteDataUtil::soft_shuffle: {
       // XXX: this is still pretty much a stub.
@@ -1720,7 +1919,7 @@ static void GetTrackMapping(
       // TRICKY: Shuffle so that both player get the same shuffle mapping
       // in the same round.
 
-      int iShuffleSeed = GAMESTATE->m_iStageSeed;
+      int iShuffleSeed = GAMESTATE != nullptr ? GAMESTATE->m_iStageSeed : 0;
       RandomGen rnd(iShuffleSeed);
       int iRandChoice = (rnd() % 4);
 
@@ -1975,10 +2174,23 @@ static void GetTrackMapping(
     default:
       ASSERT(0);
   }
+
+  for (int t = 0; t < NumTracks; ++t) {
+    if (iTakeFromTrack[t] < 0 || iTakeFromTrack[t] >= NumTracks) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX GetTrackMapping corrected invalid mapping "
+          "dest=%i src=%i for %i tracks.",
+          t, iTakeFromTrack[t], NumTracks);
+      iTakeFromTrack[t] = t;
+    }
+  }
 }
 
 static void HyperShuffleNotes(NoteData& inout, int iStartIndex, int iEndIndex) {
   int iNumTracks = inout.GetNumTracks();
+  if (!IsValidNoteTrackCount(iNumTracks, "HyperShuffleNotes")) {
+    return;
+  }
 
   std::vector<int> viHoldEndRows(iNumTracks, -1);
 
@@ -2037,14 +2249,10 @@ static void HyperShuffleNotes(NoteData& inout, int iStartIndex, int iEndIndex) {
       const TapNote tn1 = inout.GetTapNote(track, r);
       switch (tn1.type) {
         case TapNoteType_HoldTail:
-          ASSERT_M(
-              0,
-              ssprintf(
-                  "Saw a HoldTail during HyperShuffleNotes (row %d, track %d)",
-                  r, track));
-
-          // If asserts are off, treat this HoldTail as if it were an empty
-          // note. If they aren't off, this code can't be reached.
+          LOG->Trace(
+              "SRC_AUDIT_FIX HyperShuffleNotes removed unexpected HoldTail "
+              "at row %d track %d.",
+              r, track);
           inout.SetTapNote(track, r, TAP_EMPTY);
 
           [[fallthrough]];
@@ -2077,7 +2285,15 @@ static void HyperShuffleNotes(NoteData& inout, int iStartIndex, int iEndIndex) {
           break;
         case TapNoteType_Invalid:
         default:
-          ASSERT(0);
+          LOG->Trace(
+              "SRC_AUDIT_FIX HyperShuffleNotes ignored invalid tap type %i "
+              "at row %d track %d.",
+              int(tn1.type), r, track);
+          inout.SetTapNote(track, r, TAP_EMPTY);
+          if (iHoldEndRow == -1) {
+            viTargetTracks.push_back(track);
+          }
+          break;
       }
     }
 
@@ -2091,17 +2307,27 @@ static void HyperShuffleNotes(NoteData& inout, int iStartIndex, int iEndIndex) {
 
     // Go through the tracks in their shuffled order and drop tap notes.
     for (size_t i = 0; i < viTargetTracks.size(); i++) {
+      if (i >= vtnTargetTaps.size()) {
+        LOG->Trace(
+            "SRC_AUDIT_FIX HyperShuffleNotes stopped row %d because taps "
+            "and target tracks desynced.",
+            r);
+        break;
+      }
       const int targetTrack = viTargetTracks[i];
       const TapNote current_tn = vtnTargetTaps[i];
       inout.SetTapNote(targetTrack, r, current_tn);
 
       // If it's a hold, mark this track occupied by a hold until its end.
       if (current_tn.type == TapNoteType_HoldHead) {
-        ASSERT_M(
-            viHoldEndRows[targetTrack] == -1,
-            ssprintf(
-                "Tried to insert a hold into another hold (row %d, track %d)",
-                r, targetTrack));
+        if (viHoldEndRows[targetTrack] != -1) {
+          LOG->Trace(
+              "SRC_AUDIT_FIX HyperShuffleNotes refused hold over active hold "
+              "at row %d track %d.",
+              r, targetTrack);
+          inout.SetTapNote(targetTrack, r, TAP_EMPTY);
+          continue;
+        }
         iFreeTracks--;
         viHoldEndRows[targetTrack] = r + current_tn.iDuration;
       }
@@ -2192,6 +2418,9 @@ static void SuperShuffleTaps(NoteData& inout, int iStartIndex, int iEndIndex) {
 void NoteDataUtil::Turn(
     NoteData& inout, StepsType st, TrackMapping tt, int iStartIndex,
     int iEndIndex) {
+  if (!IsValidNoteTrackCount(inout.GetNumTracks(), "Turn")) {
+    return;
+  }
   NoteData tempNoteData;
 
   if (tt == hyper_shuffle) {
@@ -2229,11 +2458,23 @@ void NoteDataUtil::Backwards(NoteData& inout) {
       int iRowLater = max_row - r;
 
       const TapNote& tnEarlier = inout.GetTapNote(t, iRowEarlier);
+      TapNote tnLater = tnEarlier;
       if (tnEarlier.type == TapNoteType_HoldHead) {
-        iRowLater -= tnEarlier.iDuration;
+        const int oldEndRow = iRowEarlier + tnEarlier.iDuration;
+        const int newStartRow = max_row - oldEndRow;
+        const int newEndRow = max_row - iRowEarlier;
+        if (newStartRow < 0 || newEndRow <= newStartRow) {
+          LOG->Trace(
+              "SRC_AUDIT_FIX Backwards skipped invalid transformed hold "
+              "track=%i row=%i duration=%i max_row=%i.",
+              t, iRowEarlier, tnEarlier.iDuration, max_row);
+          continue;
+        }
+        iRowLater = newStartRow;
+        tnLater.iDuration = newEndRow - newStartRow;
       }
 
-      out.SetTapNote(t, iRowLater, tnEarlier);
+      out.SetTapNote(t, iRowLater, tnLater);
     }
   }
 
@@ -2243,6 +2484,12 @@ void NoteDataUtil::Backwards(NoteData& inout) {
 
 void NoteDataUtil::SwapSides(NoteData& inout) {
   int iOriginalTrackToTakeFrom[MAX_NOTE_TRACKS];
+  if (!IsValidNoteTrackCount(inout.GetNumTracks(), "SwapSides")) {
+    return;
+  }
+  for (int t = 0; t < MAX_NOTE_TRACKS; ++t) {
+    iOriginalTrackToTakeFrom[t] = t;
+  }
   for (int t = 0; t < inout.GetNumTracks() / 2; ++t) {
     int iTrackEarlier = t;
     int iTrackLater = t + inout.GetNumTracks() / 2 + inout.GetNumTracks() % 2;
@@ -2360,8 +2607,15 @@ void NoteDataUtil::Skippy(NoteData& inout, int iStartIndex, int iEndIndex) {
 void NoteDataUtil::InsertIntelligentTaps(
     NoteData& inout, int iWindowSizeRows, int iInsertOffsetRows,
     int iWindowStrideRows, bool bSkippy, int iStartIndex, int iEndIndex) {
-  ASSERT(iInsertOffsetRows <= iWindowSizeRows);
-  ASSERT(iWindowSizeRows <= iWindowStrideRows);
+  if (iWindowSizeRows <= 0 || iWindowStrideRows <= 0 ||
+      iInsertOffsetRows < 0 || iInsertOffsetRows > iWindowSizeRows ||
+      iWindowSizeRows > iWindowStrideRows) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX InsertIntelligentTaps ignored invalid window "
+        "size=%i offset=%i stride=%i.",
+        iWindowSizeRows, iInsertOffsetRows, iWindowStrideRows);
+    return;
+  }
 
   bool bRequireNoteAtBeginningOfWindow = !bSkippy;
   bool bRequireNoteAtEndOfWindow = true;
@@ -2415,7 +2669,14 @@ void NoteDataUtil::InsertIntelligentTaps(
     bool bEarlierHasNonEmptyTrack =
         inout.GetTapFirstNonEmptyTrack(iRowEarlier, iTrackOfNoteEarlier);
     int iTrackOfNoteLater = -1;
-    inout.GetTapFirstNonEmptyTrack(iRowLater, iTrackOfNoteLater);
+    if (!inout.GetTapFirstNonEmptyTrack(iRowLater, iTrackOfNoteLater) ||
+        iTrackOfNoteEarlier < 0 || iTrackOfNoteLater < 0) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX InsertIntelligentTaps skipped row %i with missing "
+          "surrounding tracks.",
+          i);
+      continue;
+    }
     int iTrackOfNoteToAdd = 0;
     if (bSkippy &&
         iTrackOfNoteEarlier !=
@@ -2642,11 +2903,18 @@ void NoteDataUtil::Twister(NoteData& inout, int iStartIndex, int iEndIndex) {
 }
 void NoteDataUtil::ConvertTapsToHolds(
     NoteData& inout, int iSimultaneousHolds, int iStartIndex, int iEndIndex) {
+  if (iSimultaneousHolds <= 0) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX ConvertTapsToHolds ignored invalid simultaneous "
+        "holds %i.",
+        iSimultaneousHolds);
+    return;
+  }
   // Convert all taps to freezes.
   FOREACH_NONEMPTY_ROW_ALL_TRACKS_RANGE(inout, r, iStartIndex, iEndIndex) {
     int iTrackAddedThisRow = 0;
     for (int t = 0; t < inout.GetNumTracks(); t++) {
-      if (iTrackAddedThisRow > iSimultaneousHolds) {
+      if (iTrackAddedThisRow >= iSimultaneousHolds) {
         break;
       }
 
@@ -2699,6 +2967,9 @@ void NoteDataUtil::ConvertTapsToHolds(
 
 void NoteDataUtil::Stomp(
     NoteData& inout, StepsType st, int iStartIndex, int iEndIndex) {
+  if (!IsValidNoteTrackCount(inout.GetNumTracks(), "Stomp")) {
+    return;
+  }
   // Make all non jumps with ample space around them into jumps.
   int iTrackMapping[MAX_NOTE_TRACKS];
   GetTrackMapping(st, stomp, inout.GetNumTracks(), iTrackMapping);
@@ -2748,6 +3019,13 @@ void NoteDataUtil::SnapToNearestNoteType(
     NoteData& inout, NoteType nt1, NoteType nt2, int iStartIndex,
     int iEndIndex) {
   // nt2 is optional and should be NoteType_Invalid if it is not used
+  if (!IsValidNoteTypeForSnap(nt1) ||
+      (nt2 != NoteType_Invalid && !IsValidNoteTypeForSnap(nt2))) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SnapToNearestNoteType ignored invalid note types %i/%i.",
+        int(nt1), int(nt2));
+    return;
+  }
 
   float fSnapInterval1 = NoteTypeToBeat(nt1);
   float fSnapInterval2 =
@@ -2759,8 +3037,17 @@ void NoteDataUtil::SnapToNearestNoteType(
   // iterate over all TapNotes in the interval and snap them
   FOREACH_NONEMPTY_ROW_ALL_TRACKS_RANGE(
       inout, iOldIndex, iStartIndex, iEndIndex) {
-    int iNewIndex1 = Quantize(iOldIndex, BeatToNoteRow(fSnapInterval1));
-    int iNewIndex2 = Quantize(iOldIndex, BeatToNoteRow(fSnapInterval2));
+    const int iSnapRows1 = BeatToNoteRow(fSnapInterval1);
+    const int iSnapRows2 = BeatToNoteRow(fSnapInterval2);
+    if (iSnapRows1 <= 0 || iSnapRows2 <= 0) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX SnapToNearestNoteType stopped on invalid snap rows "
+          "%i/%i.",
+          iSnapRows1, iSnapRows2);
+      return;
+    }
+    int iNewIndex1 = Quantize(iOldIndex, iSnapRows1);
+    int iNewIndex2 = Quantize(iOldIndex, iSnapRows2);
 
     bool bNewBeat1IsCloser =
         std::abs(iNewIndex1 - iOldIndex) < std::abs(iNewIndex2 - iOldIndex);
@@ -2780,11 +3067,16 @@ void NoteDataUtil::SnapToNearestNoteType(
       }
 
       if (tnNew.type == TapNoteType_HoldHead) {
-        /* Quantize the duration.  If the result is empty, just discard the
-         * hold. */
-        tnNew.iDuration =
-            Quantize(tnNew.iDuration, BeatToNoteRow(fSnapInterval1));
-        if (tnNew.iDuration == 0) {
+        const int iOldEndIndex = iOldIndex + tnNew.iDuration;
+        const int iNewEndIndex1 = Quantize(iOldEndIndex, iSnapRows1);
+        const int iNewEndIndex2 = Quantize(iOldEndIndex, iSnapRows2);
+        bool bEndBeat1IsCloser =
+            std::abs(iNewEndIndex1 - iOldEndIndex) <
+            std::abs(iNewEndIndex2 - iOldEndIndex);
+        const int iNewEndIndex =
+            bEndBeat1IsCloser ? iNewEndIndex1 : iNewEndIndex2;
+        tnNew.iDuration = iNewEndIndex - iNewIndex;
+        if (tnNew.iDuration <= 0) {
           continue;
         }
 
@@ -2877,6 +3169,12 @@ void NoteDataUtil::CollapseLeft(NoteData& inout) {
 
 void NoteDataUtil::ShiftTracks(NoteData& inout, int iShiftBy) {
   int iOriginalTrackToTakeFrom[MAX_NOTE_TRACKS];
+  if (!IsValidNoteTrackCount(inout.GetNumTracks(), "ShiftTracks")) {
+    return;
+  }
+  for (int i = 0; i < MAX_NOTE_TRACKS; ++i) {
+    iOriginalTrackToTakeFrom[i] = i;
+  }
   for (int i = 0; i < inout.GetNumTracks(); ++i) {
     int iFrom = i - iShiftBy;
     wrap(iFrom, inout.GetNumTracks());
@@ -2892,6 +3190,9 @@ void NoteDataUtil::ShiftLeft(NoteData& inout) { ShiftTracks(inout, -1); }
 void NoteDataUtil::ShiftRight(NoteData& inout) { ShiftTracks(inout, +1); }
 
 void NoteDataUtil::SwapUpDown(NoteData& inout, StepsType st) {
+  if (!IsValidNoteTrackCount(inout.GetNumTracks(), "SwapUpDown")) {
+    return;
+  }
   int TakeFrom[MAX_NOTE_TRACKS];
   GetTrackMapping(
       st, NoteDataUtil::swap_up_down, inout.GetNumTracks(), TakeFrom);
@@ -2902,6 +3203,22 @@ void NoteDataUtil::SwapUpDown(NoteData& inout, StepsType st) {
 }
 
 void NoteDataUtil::ArbitraryRemap(NoteData& inout, int* mapping) {
+  if (mapping == nullptr) {
+    LOG->Trace("SRC_AUDIT_FIX ArbitraryRemap ignored null mapping.");
+    return;
+  }
+  if (!IsValidNoteTrackCount(inout.GetNumTracks(), "ArbitraryRemap")) {
+    return;
+  }
+  for (int t = 0; t < inout.GetNumTracks(); ++t) {
+    if (mapping[t] < 0 || mapping[t] >= inout.GetNumTracks()) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX ArbitraryRemap ignored invalid mapping dest=%i "
+          "src=%i for %i tracks.",
+          t, mapping[t], inout.GetNumTracks());
+      return;
+    }
+  }
   NoteData tempND;
   tempND.LoadTransformed(inout, inout.GetNumTracks(), mapping);
   inout.CopyAll(tempND);
@@ -2965,6 +3282,10 @@ void NoteDataUtil::RemoveStretch(
 
 bool NoteDataUtil::RowPassesValidMask(
     NoteData& inout, int row, const bool bValidMask[]) {
+  if (bValidMask == nullptr ||
+      !IsValidNoteTrackCount(inout.GetNumTracks(), "RowPassesValidMask")) {
+    return false;
+  }
   for (int t = 0; t < inout.GetNumTracks(); t++) {
     if (!bValidMask[t] && inout.GetTapNote(t, row).type != TapNoteType_Empty) {
       return false;
@@ -2989,6 +3310,12 @@ void NoteDataUtil::ConvertAdditionsToRegular(NoteData& inout) {
 void NoteDataUtil::TransformNoteData(
     NoteData& nd, const TimingData& timing_data, const AttackArray& aa,
     StepsType st, Song* pSong) {
+  if (pSong == nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX TransformNoteData ignored attack transforms without "
+        "a song.");
+    return;
+  }
   for (const Attack& a : aa) {
     PlayerOptions po;
     po.FromString(a.sModifiers);
@@ -3131,6 +3458,10 @@ void NoteDataUtil::TransformNoteData(
 
 void NoteDataUtil::AddTapAttacks(NoteData& nd, Song* pSong) {
   // throw an attack in every 30 seconds
+  if (pSong == nullptr || !IsValidNoteTrackCount(nd.GetNumTracks(), "AddTapAttacks")) {
+    LOG->Trace("SRC_AUDIT_FIX AddTapAttacks ignored invalid song or note data.");
+    return;
+  }
 
   const char* szAttacks[3] = {
       "2x",
@@ -3152,7 +3483,10 @@ void NoteDataUtil::AddTapAttacks(NoteData& nd, Song* pSong) {
 }
 
 void NoteDataUtil::Scale(NoteData& nd, float fScale) {
-  ASSERT(fScale > 0);
+  if (!std::isfinite(fScale) || fScale <= 0.f) {
+    LOG->Trace("SRC_AUDIT_FIX Scale ignored invalid scale %f.", fScale);
+    return;
+  }
 
   NoteData ndOut;
   ndOut.SetNumTracks(nd.GetNumTracks());
@@ -3161,9 +3495,24 @@ void NoteDataUtil::Scale(NoteData& nd, float fScale) {
     for (NoteData::const_iterator iter = nd.begin(t); iter != nd.end(t);
          ++iter) {
       TapNote tn = iter->second;
-      int iNewRow = std::lrint(fScale * iter->first);
-      int iNewDuration = std::lrint(fScale * (iter->first + tn.iDuration));
-      tn.iDuration = iNewDuration;
+      int iNewRow = 0;
+      if (!CheckedScaledRow(fScale, iter->first, &iNewRow, "Scale")) {
+        continue;
+      }
+      if (tn.type == TapNoteType_HoldHead) {
+        int iNewEndRow = 0;
+        if (!CheckedScaledRow(
+                fScale, iter->first + tn.iDuration, &iNewEndRow, "Scale")) {
+          continue;
+        }
+        tn.iDuration = iNewEndRow - iNewRow;
+        if (tn.iDuration <= 0) {
+          LOG->Trace(
+              "SRC_AUDIT_FIX Scale skipped invalid scaled hold at row %i.",
+              iter->first);
+          continue;
+        }
+      }
       ndOut.SetTapNote(t, iNewRow, tn);
     }
   }
@@ -3187,9 +3536,13 @@ static inline int GetScaledRow(
 
 void NoteDataUtil::ScaleRegion(
     NoteData& nd, float fScale, int iStartIndex, int iEndIndex) {
-  ASSERT(fScale > 0);
-  ASSERT(iStartIndex < iEndIndex);
-  ASSERT(iStartIndex >= 0);
+  if (!std::isfinite(fScale) || fScale <= 0.f || iStartIndex < 0 ||
+      iStartIndex >= iEndIndex) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX ScaleRegion ignored invalid scale=%f start=%i end=%i.",
+        fScale, iStartIndex, iEndIndex);
+    return;
+  }
 
   NoteData ndOut;
   ndOut.SetNumTracks(nd.GetNumTracks());
@@ -3204,6 +3557,12 @@ void NoteDataUtil::ScaleRegion(
               fScale, iStartIndex, iEndIndex, iter->first + tn.iDuration) -
           iNewRow;
       tn.iDuration = iNewDuration;
+      if (tn.type == TapNoteType_HoldHead && tn.iDuration <= 0) {
+        LOG->Trace(
+            "SRC_AUDIT_FIX ScaleRegion skipped invalid scaled hold at row %i.",
+            iter->first);
+        continue;
+      }
       ndOut.SetTapNote(t, iNewRow, tn);
     }
   }
@@ -3213,7 +3572,12 @@ void NoteDataUtil::ScaleRegion(
 }
 
 void NoteDataUtil::InsertRows(NoteData& nd, int iStartIndex, int iRowsToAdd) {
-  ASSERT(iRowsToAdd >= 0);
+  if (iStartIndex < 0 || iRowsToAdd < 0) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX InsertRows ignored invalid start=%i rows=%i.",
+        iStartIndex, iRowsToAdd);
+    return;
+  }
 
   NoteData temp;
   temp.SetNumTracks(nd.GetNumTracks());
@@ -3225,7 +3589,12 @@ void NoteDataUtil::InsertRows(NoteData& nd, int iStartIndex, int iRowsToAdd) {
 
 void NoteDataUtil::DeleteRows(
     NoteData& nd, int iStartIndex, int iRowsToDelete) {
-  ASSERT(iRowsToDelete >= 0);
+  if (iStartIndex < 0 || iRowsToDelete < 0) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX DeleteRows ignored invalid start=%i rows=%i.",
+        iStartIndex, iRowsToDelete);
+    return;
+  }
 
   NoteData temp;
   temp.SetNumTracks(nd.GetNumTracks());
@@ -3372,20 +3741,40 @@ bool NoteDataUtil::GetPrevEditorPosition(const NoteData& in, int& rowInOut) {
 
 unsigned int NoteDataUtil::GetTotalHoldTicks(
     NoteData* nd, const TimingData* td) {
+  if (nd == nullptr || td == nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX GetTotalHoldTicks returned 0 for null note/timing "
+        "data.");
+    return 0;
+  }
   unsigned int ret = 0;
   // Last row must be included. -- Matt
   int end = nd->GetLastRow() + 1;
   std::vector<TimingSegment*> segments =
       td->GetTimingSegments(SEGMENT_TICKCOUNT);
+  if (segments.empty()) {
+    const int step = ROWS_PER_BEAT;
+    for (int j = 0; j < end; j += step) {
+      if (nd->GetNumTracksHeldAtRow(j) > 0) {
+        ret++;
+      }
+    }
+    return ret;
+  }
   // We start with the LAST TimingSegment and work our way backwards.
   // This way we can continually update end instead of having to lookup when
   // the next segment starts.
   for (int i = segments.size() - 1; i >= 0; i--) {
-    TickcountSegment* ts = (TickcountSegment*)segments[i];
+    TickcountSegment* ts = ToTickcount(segments[i]);
+    if (ts == nullptr) {
+      LOG->Trace("SRC_AUDIT_FIX GetTotalHoldTicks ignored non-tick segment.");
+      continue;
+    }
     if (ts->GetTicks() > 0) {
+      const int step = std::max(1, ROWS_PER_BEAT / ts->GetTicks());
       // Jump to each point where holds would tick and add the number of holds
       // there to ret.
-      for (int j = ts->GetRow(); j < end; j += ROWS_PER_BEAT / ts->GetTicks()) {
+      for (int j = ts->GetRow(); j < end; j += step) {
         // 1 tick per row.
         if (nd->GetNumTracksHeldAtRow(j) > 0) {
           ret++;

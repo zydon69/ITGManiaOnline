@@ -28,12 +28,17 @@ void LightTransformHelper(
  * and makes it much easier to change NoteData internally in the future. */
 namespace NoteDataUtil {
 NoteType GetSmallestNoteTypeForMeasure(const NoteData& nd, int iMeasureIndex);
+NoteType GetSmallestNoteTypeForMeasure(
+    const NoteData& nd, const TimingData* timing, int iMeasureIndex);
 NoteType GetSmallestNoteTypeInRange(
     const NoteData& nd, int iStartIndex, int iEndIndex);
 void LoadFromSMNoteDataString(
     NoteData& out, const std::string& sSMNoteData, bool bComposite);
 void GetSMNoteDataString(
     const NoteData& in, std::string& notes_out, bool bIncludeMeasureComments);
+void GetSMNoteDataString(
+    const NoteData& in, const TimingData* timing, std::string& notes_out,
+    bool bIncludeMeasureComments);
 void SplitCompositeNoteData(const NoteData& in, std::vector<NoteData>& out);
 void CombineCompositeNoteData(NoteData& out, const std::vector<NoteData>& in);
 /**

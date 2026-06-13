@@ -227,7 +227,8 @@ unsigned Steps::GetHash() const {
       return 0;  // No data, no hash.
     }
     NoteDataUtil::GetSMNoteDataString(
-        *m_pNoteData, m_sNoteDataCompressed, /*bIncludeMeasureComments=*/true);
+        *m_pNoteData, GetTimingData(), m_sNoteDataCompressed,
+        /*bIncludeMeasureComments=*/true);
   }
   m_iHash = GetHashForString(m_sNoteDataCompressed);
   return m_iHash;
@@ -356,7 +357,8 @@ void Steps::GetSMNoteData(std::string& notes_comp_out) const {
     }
 
     NoteDataUtil::GetSMNoteDataString(
-        *m_pNoteData, m_sNoteDataCompressed, /*bIncludeMeasureComments=*/true);
+        *m_pNoteData, GetTimingData(), m_sNoteDataCompressed,
+        /*bIncludeMeasureComments=*/true);
   }
 
   notes_comp_out = m_sNoteDataCompressed;
@@ -713,7 +715,8 @@ void Steps::Compress() const {
       return; /* no data is no data */
     }
     NoteDataUtil::GetSMNoteDataString(
-        *m_pNoteData, m_sNoteDataCompressed, /*bIncludeMeasureComments=*/true);
+        *m_pNoteData, GetTimingData(), m_sNoteDataCompressed,
+        /*bIncludeMeasureComments=*/true);
   }
 
   m_pNoteData->Init();
@@ -1058,7 +1061,7 @@ std::string Steps::MinimizedChartString(const NoteData& noteData) {
   // valid stepchart representation.
   std::string smNoteData = "";
   NoteDataUtil::GetSMNoteDataString(
-      noteData, smNoteData, /*bIncludeMeasureComments=*/false);
+      noteData, GetTimingData(), smNoteData, /*bIncludeMeasureComments=*/false);
 
   if (smNoteData == "") {
     return "";
