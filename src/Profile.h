@@ -471,7 +471,7 @@ class Profile {
   void SaveStatsWebPageToDir(std::string sDir) const;
   void SaveMachinePublicKeyToDir(std::string sDir) const;
 
-  static void MoveBackupToDir(std::string sFromDir, std::string sToDir);
+  static bool MoveBackupToDir(std::string sFromDir, std::string sToDir);
   static std::string MakeUniqueFileNameNoExtension(
       std::string sDir, std::string sFileNameBeginning);
   static std::string MakeFileNameNoExtension(

@@ -2567,28 +2567,61 @@ XNode* Profile::SaveCoinDataCreateNode() const {
   return pNode;
 }
 
-void Profile::MoveBackupToDir(std::string sFromDir, std::string sToDir) {
-  if (FILEMAN->IsAFile(sFromDir + STATS_XML) &&
-      FILEMAN->IsAFile(sFromDir + STATS_XML + SIGNATURE_APPEND)) {
-    FILEMAN->Move(sFromDir + STATS_XML, sToDir + STATS_XML);
-    FILEMAN->Move(
-        sFromDir + STATS_XML + SIGNATURE_APPEND,
-        sToDir + STATS_XML + SIGNATURE_APPEND);
-  } else if (
-      FILEMAN->IsAFile(sFromDir + STATS_XML_GZ) &&
-      FILEMAN->IsAFile(sFromDir + STATS_XML_GZ + SIGNATURE_APPEND)) {
-    FILEMAN->Move(sFromDir + STATS_XML_GZ, sToDir + STATS_XML);
-    FILEMAN->Move(
-        sFromDir + STATS_XML_GZ + SIGNATURE_APPEND,
-        sToDir + STATS_XML + SIGNATURE_APPEND);
+static bool CopyProfileBackupFile(
+    const std::string& sFromDir, const std::string& sToDir,
+    const std::string& sFile) {
+  if (!FILEMAN->IsAFile(sFromDir + sFile)) {
+    return true;
   }
 
-  if (FILEMAN->IsAFile(sFromDir + EDITABLE_INI)) {
-    FILEMAN->Move(sFromDir + EDITABLE_INI, sToDir + EDITABLE_INI);
+  if (FileCopy(sFromDir + sFile, sToDir + sFile)) {
+    return true;
   }
-  if (FILEMAN->IsAFile(sFromDir + DONT_SHARE_SIG)) {
-    FILEMAN->Move(sFromDir + DONT_SHARE_SIG, sToDir + DONT_SHARE_SIG);
+
+  LOG->Warn(
+      "Profile::MoveBackupToDir: failed to copy '%s' to '%s'",
+      (sFromDir + sFile).c_str(), (sToDir + sFile).c_str());
+  return false;
+}
+
+bool Profile::MoveBackupToDir(std::string sFromDir, std::string sToDir) {
+  FILEMAN->CreateDir(sToDir);
+
+  bool bCopiedStats = false;
+  bool bOk = true;
+  if (FILEMAN->IsAFile(sFromDir + STATS_XML)) {
+    bCopiedStats = FileCopy(sFromDir + STATS_XML, sToDir + STATS_XML);
+    if (!bCopiedStats) {
+      LOG->Warn(
+          "Profile::MoveBackupToDir: failed to copy '%s'",
+          (sFromDir + STATS_XML).c_str());
+      bOk = false;
+    }
+    bOk &= CopyProfileBackupFile(
+        sFromDir, sToDir, STATS_XML + SIGNATURE_APPEND);
+  } else if (FILEMAN->IsAFile(sFromDir + STATS_XML_GZ)) {
+    bCopiedStats = FileCopy(sFromDir + STATS_XML_GZ, sToDir + STATS_XML_GZ);
+    if (!bCopiedStats) {
+      LOG->Warn(
+          "Profile::MoveBackupToDir: failed to copy '%s'",
+          (sFromDir + STATS_XML_GZ).c_str());
+      bOk = false;
+    }
+    bOk &= CopyProfileBackupFile(
+        sFromDir, sToDir, STATS_XML_GZ + SIGNATURE_APPEND);
   }
+
+  bOk &= CopyProfileBackupFile(sFromDir, sToDir, EDITABLE_INI);
+  bOk &= CopyProfileBackupFile(sFromDir, sToDir, DONT_SHARE_SIG);
+
+  if (!bCopiedStats) {
+    LOG->Warn(
+        "Profile::MoveBackupToDir: no stats file copied from '%s'",
+        sFromDir.c_str());
+    return false;
+  }
+
+  return bOk;
 }
 
 std::string Profile::MakeUniqueFileNameNoExtension(

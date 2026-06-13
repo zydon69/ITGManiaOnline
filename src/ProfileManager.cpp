@@ -410,9 +410,15 @@ bool ProfileManager::SaveProfile(PlayerNumber pn) const {
    * newly written data.)
    */
   if (m_bNeedToBackUpLastLoad[pn]) {
-    m_bNeedToBackUpLastLoad[pn] = false;
     std::string sBackupDir = m_sProfileDir[pn] + LAST_GOOD_SUBDIR;
-    Profile::MoveBackupToDir(m_sProfileDir[pn], sBackupDir);
+    if (!Profile::MoveBackupToDir(m_sProfileDir[pn], sBackupDir)) {
+      LOG->Warn(
+          "ProfileManager::SaveProfile: refusing to overwrite profile '%s' "
+          "because LastGood backup failed",
+          m_sProfileDir[pn].c_str());
+      return false;
+    }
+    m_bNeedToBackUpLastLoad[pn] = false;
   }
 
   bool b = GetProfile(pn)->SaveAllToDir(
