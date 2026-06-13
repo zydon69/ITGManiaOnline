@@ -703,9 +703,14 @@ XNode* CourseID::CreateNode() const {
 }
 
 void CourseID::LoadFromNode(const XNode* pNode) {
-  ASSERT(pNode->GetName() == "Course");
   sFullTitle = std::string();
   sPath = std::string();
+  if (pNode == nullptr || pNode->GetName() != "Course") {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-136: ignored invalid CourseID XML node '%s'",
+        pNode == nullptr ? "(null)" : pNode->GetName().c_str());
+    return;
+  }
   if (!pNode->GetAttrValue("Path", sPath)) {
     pNode->GetAttrValue("FullTitle", sFullTitle);
   }
