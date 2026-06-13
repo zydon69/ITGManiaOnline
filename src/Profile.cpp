@@ -1113,7 +1113,14 @@ void Profile::LoadCustomFunction(std::string sDir, PlayerNumber pn) {
   LuaReference customLoadFunc =
       THEME->GetMetricR("Profile", "CustomLoadFunction");
   customLoadFunc.PushSelf(L);
-  ASSERT_M(!lua_isnil(L, -1), "CustomLoadFunction not defined");
+  if (lua_isnil(L, -1)) {
+    LOG->Warn(
+        "Profile::LoadCustomFunction: CustomLoadFunction not defined; "
+        "skipping theme profile load hook");
+    lua_pop(L, 1);
+    LUA->Release(L);
+    return;
+  }
 
   // Pass profile and profile directory as arguments
   this->PushSelf(L);
@@ -1464,7 +1471,14 @@ bool Profile::SaveAllToDir(std::string sDir, bool bSignData) const {
   LuaReference customSaveFunc =
       THEME->GetMetricR("Profile", "CustomSaveFunction");
   customSaveFunc.PushSelf(L);
-  ASSERT_M(!lua_isnil(L, -1), "CustomSaveFunction not defined");
+  if (lua_isnil(L, -1)) {
+    LOG->Warn(
+        "Profile::SaveAllToDir: CustomSaveFunction not defined; skipping "
+        "theme profile save hook");
+    lua_pop(L, 1);
+    LUA->Release(L);
+    return bSaved;
+  }
 
   // Pass profile and profile directory as arguments
   const_cast<Profile*>(this)->PushSelf(L);
