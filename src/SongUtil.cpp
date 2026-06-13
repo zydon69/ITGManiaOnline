@@ -47,6 +47,11 @@ ThemeMetric<bool> SHOW_SECTIONS_IN_LENGTH_SORT(
     "MusicWheel", "ShowSectionsInLengthSort");
 
 bool SongCriteria::Matches(const Song* pSong) const {
+  if (pSong == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-650: rejected null song in SongCriteria.");
+    return false;
+  }
+
   if (m_vsGroupNames.size() > 0 &&
       std::find(
           m_vsGroupNames.begin(), m_vsGroupNames.end(), pSong->m_sGroupName) ==
@@ -77,7 +82,7 @@ bool SongCriteria::Matches(const Song* pSong) const {
     return false;
   }
 
-  if (UNLOCKMAN->SongIsLocked(pSong) & LOCKED_DISABLED) {
+  if (UNLOCKMAN && UNLOCKMAN->SongIsLocked(pSong) & LOCKED_DISABLED) {
     return false;
   }
 
@@ -113,7 +118,14 @@ bool SongCriteria::Matches(const Song* pSong) const {
   }
 
   if (m_iMaxStagesForSong != -1 &&
-      GAMESTATE->GetNumStagesMultiplierForSong(pSong) > m_iMaxStagesForSong) {
+      (GAMESTATE == nullptr ||
+       GAMESTATE->GetNumStagesMultiplierForSong(pSong) > m_iMaxStagesForSong)) {
+    if (GAMESTATE == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-650: rejected song '%s' because stage criteria "
+          "requires GAMESTATE.",
+          pSong->GetSongDir().c_str());
+    }
     return false;
   }
 
