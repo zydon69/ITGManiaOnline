@@ -822,7 +822,13 @@ void Song::TidyUpData(bool from_cache) {
 void Song::TidyUpData(
     bool from_cache, const std::set<std::string>& blacklistedImages) {
   // We need to do this before calling any of HasMusic, HasHasCDTitle, etc.
-  ASSERT_M(Left(m_sSongDir, 3) != "../", m_sSongDir);  // meaningless
+  if (Left(m_sSongDir, 3) == "../") {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-611: refused to tidy song data with escaping "
+        "directory '%s'.",
+        m_sSongDir.c_str());
+    return;
+  }
   FixupPath(m_sSongDir, "");
   FixupPath(m_sMusicFile, m_sSongDir);
   FOREACH_ENUM(InstrumentTrack, i) {
