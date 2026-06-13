@@ -5,6 +5,7 @@
 #include "LuaManager.h"
 #include "MessageManager.h"
 #include "PlayerNumber.h"
+#include "RageLog.h"
 #include "RollingNumbers.h"
 #include "StageStats.h"
 #include "StatsManager.h"
@@ -13,7 +14,15 @@
 
 REGISTER_ACTOR_CLASS(ScoreDisplayCalories);
 
-ScoreDisplayCalories::ScoreDisplayCalories() {}
+namespace {
+bool IsValidPlayerNumber(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+}  // namespace
+
+ScoreDisplayCalories::ScoreDisplayCalories() {
+  m_PlayerNumber = PLAYER_INVALID;
+}
 
 ScoreDisplayCalories::~ScoreDisplayCalories() {
   if (m_sMessageOnStep != "") {
@@ -27,8 +36,21 @@ void ScoreDisplayCalories::LoadFromNode(const XNode* pNode) {
   {
     Lua* L = LUA->Get();
     bool b = pNode->PushAttrValue(L, "PlayerNumber");
-    ASSERT(b);
-    LuaHelpers::Pop(L, m_PlayerNumber);
+    if (b) {
+      LuaHelpers::Pop(L, m_PlayerNumber);
+      if (!IsValidPlayerNumber(m_PlayerNumber)) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-237: ScoreDisplayCalories ignored invalid "
+            "PlayerNumber %i.",
+            m_PlayerNumber);
+        m_PlayerNumber = PLAYER_INVALID;
+      }
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-237: ScoreDisplayCalories missing PlayerNumber "
+          "attribute.");
+      m_PlayerNumber = PLAYER_INVALID;
+    }
     LUA->Release(L);
   }
 
@@ -58,6 +80,14 @@ void ScoreDisplayCalories::HandleMessage(const Message& msg) {
 }
 
 void ScoreDisplayCalories::UpdateNumber() {
+  if (!IsValidPlayerNumber(m_PlayerNumber)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-239: ScoreDisplayCalories skipped update with "
+        "invalid PlayerNumber.");
+    SetTargetNumber(0);
+    return;
+  }
+
   float fCals =
       STATSMAN->GetAccumPlayedStageStats()
           .m_player[m_PlayerNumber]

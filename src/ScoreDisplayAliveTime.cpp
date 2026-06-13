@@ -6,6 +6,7 @@
 #include "LuaManager.h"
 #include "MessageManager.h"
 #include "PlayerNumber.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "StageStats.h"
 #include "StatsManager.h"
@@ -13,6 +14,16 @@
 #include "global.h"
 
 REGISTER_ACTOR_CLASS(ScoreDisplayAliveTime);
+
+namespace {
+bool IsValidPlayerNumber(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+bool IsValidMultiPlayer(MultiPlayer mp) {
+  return mp >= MultiPlayer_P1 && mp < NUM_MultiPlayer;
+}
+}  // namespace
 
 ScoreDisplayAliveTime::ScoreDisplayAliveTime() {
   m_PlayerNumber = PLAYER_INVALID;
@@ -30,7 +41,25 @@ void ScoreDisplayAliveTime::LoadFromNode(const XNode* pNode) {
     LuaHelpers::Pop(L, m_PlayerNumber);
     bool b2 = pNode->PushAttrValue(L, "MultiPlayer");
     LuaHelpers::Pop(L, m_MultiPlayer);
-    ASSERT(b || b2);
+    if (!b && !b2) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-237: ScoreDisplayAliveTime missing PlayerNumber "
+          "or MultiPlayer attribute.");
+    }
+    if (b && !IsValidPlayerNumber(m_PlayerNumber)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-237: ScoreDisplayAliveTime ignored invalid "
+          "PlayerNumber %i.",
+          m_PlayerNumber);
+      m_PlayerNumber = PLAYER_INVALID;
+    }
+    if (b2 && !IsValidMultiPlayer(m_MultiPlayer)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-237: ScoreDisplayAliveTime ignored invalid "
+          "MultiPlayer %i.",
+          m_MultiPlayer);
+      m_MultiPlayer = MultiPlayer_Invalid;
+    }
     LUA->Release(L);
   }
 }
@@ -47,9 +76,7 @@ void ScoreDisplayAliveTime::HandleMessage(const Message& msg) {
 
 void ScoreDisplayAliveTime::UpdateNumber() {
   float fSecsIntoPlay = 0;
-  ASSERT(
-      m_PlayerNumber != PLAYER_INVALID || m_MultiPlayer != MultiPlayer_Invalid);
-  if (m_PlayerNumber != PLAYER_INVALID &&
+  if (IsValidPlayerNumber(m_PlayerNumber) &&
       GAMESTATE->IsPlayerEnabled(m_PlayerNumber)) {
     fSecsIntoPlay =
         STATSMAN->GetAccumPlayedStageStats()
@@ -57,7 +84,7 @@ void ScoreDisplayAliveTime::UpdateNumber() {
             .m_fAliveSeconds +
         STATSMAN->m_CurStageStats.m_player[m_PlayerNumber].m_fAliveSeconds;
   }
-  if (m_MultiPlayer != MultiPlayer_Invalid &&
+  if (IsValidMultiPlayer(m_MultiPlayer) &&
       GAMESTATE->IsMultiPlayerEnabled(m_MultiPlayer)) {
     fSecsIntoPlay = STATSMAN->GetAccumPlayedStageStats().m_fGameplaySeconds +
                     STATSMAN->m_CurStageStats.m_fGameplaySeconds;
