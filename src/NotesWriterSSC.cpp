@@ -858,6 +858,7 @@ bool NotesWriterSSC::WriteEditFileToMachine(
 
   std::string sDir =
       PROFILEMAN->GetProfileDir(ProfileSlot_Machine) + EDIT_STEPS_SUBDIR;
+  FILEMAN->CreateDir(sDir);
 
   std::string sPath = sDir + GetEditFileName(pSong, pSteps);
   if (sPath == sDir) {
@@ -908,6 +909,7 @@ bool NotesWriterSSC::WriteEditFileToMachine(
     }
   }
   pSteps->SetFilename(sPath);
+  pSteps->SetSavedToDisk(true);
 
   return true;
 }
