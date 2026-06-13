@@ -79,6 +79,15 @@ const std::string MEM_CARD_MOUNT_POINT[NUM_PLAYERS] = {
     "/@mc2/",
 };
 
+static bool IsMemoryCardPlayerNumberValid(PlayerNumber pn, const char* context) {
+  if (pn >= 0 && pn < NUM_PLAYERS) {
+    return true;
+  }
+
+  LOG->Warn("%s: invalid player number %d", context, int(pn));
+  return false;
+}
+
 static const std::string MEM_CARD_MOUNT_POINT_INTERNAL[NUM_PLAYERS] = {
     // @ is important; see RageFileManager LoadedDriver::GetPath
     "/@mc1int/",
@@ -311,6 +320,34 @@ MemoryCardManager::~MemoryCardManager() {
     FILEMAN->Unmount("", "", MEM_CARD_MOUNT_POINT[pn]);
     FILEMAN->Unmount("", "", MEM_CARD_MOUNT_POINT_INTERNAL[pn]);
   }
+}
+
+MemoryCardState MemoryCardManager::GetCardState(PlayerNumber pn) const {
+  if (!IsMemoryCardPlayerNumberValid(pn, "MemoryCardManager::GetCardState")) {
+    return MemoryCardState_Invalid;
+  }
+  return m_State[pn];
+}
+
+std::string MemoryCardManager::GetCardError(PlayerNumber pn) const {
+  if (!IsMemoryCardPlayerNumberValid(pn, "MemoryCardManager::GetCardError")) {
+    return "InvalidPlayer";
+  }
+  return m_sError[pn];
+}
+
+bool MemoryCardManager::IsMounted(PlayerNumber pn) const {
+  if (!IsMemoryCardPlayerNumberValid(pn, "MemoryCardManager::IsMounted")) {
+    return false;
+  }
+  return m_bMounted[pn];
+}
+
+bool MemoryCardManager::GetCardLocked(PlayerNumber pn) const {
+  if (!IsMemoryCardPlayerNumberValid(pn, "MemoryCardManager::GetCardLocked")) {
+    return false;
+  }
+  return m_bCardLocked[pn];
 }
 
 void MemoryCardManager::Update() {
@@ -743,10 +780,17 @@ bool MemoryCardManager::PathIsMemCard(std::string sDir) const {
 }
 
 bool MemoryCardManager::IsNameAvailable(PlayerNumber pn) const {
+  if (!IsMemoryCardPlayerNumberValid(
+          pn, "MemoryCardManager::IsNameAvailable")) {
+    return false;
+  }
   return m_Device[pn].bIsNameAvailable;
 }
 
 std::string MemoryCardManager::GetName(PlayerNumber pn) const {
+  if (!IsMemoryCardPlayerNumberValid(pn, "MemoryCardManager::GetName")) {
+    return std::string();
+  }
   return m_Device[pn].sName;
 }
 

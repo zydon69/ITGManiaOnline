@@ -19,8 +19,8 @@ class MemoryCardManager {
 
   void Update();
 
-  MemoryCardState GetCardState(PlayerNumber pn) const { return m_State[pn]; }
-  std::string GetCardError(PlayerNumber pn) const { return m_sError[pn]; }
+  MemoryCardState GetCardState(PlayerNumber pn) const;
+  std::string GetCardError(PlayerNumber pn) const;
 
   void WaitForCheckingToComplete();
   bool CardInserted(PlayerNumber pn);
@@ -31,14 +31,14 @@ class MemoryCardManager {
   bool MountCard(PlayerNumber pn, const UsbStorageDevice& d, int iTimeout = 10);
   void UnmountCard(PlayerNumber pn);
 
-  bool IsMounted(PlayerNumber pn) const { return m_bMounted[pn]; }
+  bool IsMounted(PlayerNumber pn) const;
 
   // When paused, no changes in memory card state will be noticed until
   // unpaused.
   void PauseMountingThread(int iTimeout = 20);
   void UnPauseMountingThread();
 
-  bool GetCardLocked(PlayerNumber pn) const { return m_bCardLocked[pn]; }
+  bool GetCardLocked(PlayerNumber pn) const;
 
   bool PathIsMemCard(std::string sDir) const;
 
