@@ -886,6 +886,14 @@ void SSCLoader::ProcessWarps(
             arrayWarpExpressions[b], fNewBeat)) {
       continue;
     }
+    if (fBeat < 0.0f) {
+      LOG->UserLog(
+          "Song file", this->GetSongTitle(),
+          "SRC_AUDIT_FIX rejected invalid #WARPS beat %f in \"%s\".", fBeat,
+          arrayWarpExpressions[b].c_str());
+      continue;
+    }
+
     // Early versions were absolute in beats. They should be relative.
     if ((fVersion < VERSION_SPLIT_TIMING && fNewBeat > fBeat)) {
       out.AddSegment(WarpSegment(BeatToNoteRow(fBeat), fNewBeat - fBeat));
