@@ -276,14 +276,25 @@ void SongManager::InitSongsFromDisk(LoadingWindow* ld, bool onlyAdditions) {
   RageTimer tm;
   // Tell SONGINDEX to not write the cache index file every time a song adds
   // an entry. -Kyz
-  SONGINDEX->delay_save_cache = true;
-  IMAGECACHE->delay_save_cache = true;
+  struct CacheDelayGuard {
+    bool oldSongDelay;
+    bool oldImageDelay;
+    CacheDelayGuard()
+        : oldSongDelay(SONGINDEX->delay_save_cache),
+          oldImageDelay(IMAGECACHE->delay_save_cache) {
+      SONGINDEX->delay_save_cache = true;
+      IMAGECACHE->delay_save_cache = true;
+    }
+    ~CacheDelayGuard() {
+      SONGINDEX->delay_save_cache = oldSongDelay;
+      IMAGECACHE->delay_save_cache = oldImageDelay;
+    }
+  } cacheDelayGuard;
+
   LoadSongDir(SpecialFiles::SONGS_DIR, ld, onlyAdditions);
   LoadEnabledSongsFromPref();
   SONGINDEX->SaveCacheIndex();
-  SONGINDEX->delay_save_cache = false;
   IMAGECACHE->WriteToDisk();
-  IMAGECACHE->delay_save_cache = false;
 
   LOG->Trace(
       "Found %d songs in %f seconds.", (int)m_pSongs.size(), tm.GetDeltaTime());
