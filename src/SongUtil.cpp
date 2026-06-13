@@ -190,6 +190,10 @@ void SongUtil::GetSteps(
     Difficulty dc, int iMeterLow, int iMeterHigh,
     const std::string& sDescription, const std::string& sCredit,
     bool bIncludeAutoGen, unsigned uHash, int iMaxToGet) {
+  if (pSong == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-651: ignored GetSteps() for null song.");
+    return;
+  }
   if (!iMaxToGet) {
     return;
   }
@@ -200,6 +204,12 @@ void SongUtil::GetSteps(
   for (unsigned i = 0; i < vpSteps.size(); i++)  // for each of the Song's Steps
   {
     Steps* pSteps = vpSteps[i];
+    if (pSteps == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-651: skipped null Steps while scanning song '%s'.",
+          pSong->GetSongDir().c_str());
+      continue;
+    }
 
     if (dc != Difficulty_Invalid && dc != pSteps->GetDifficulty()) {
       continue;
@@ -251,12 +261,23 @@ Steps* SongUtil::GetOneSteps(
 
 Steps* SongUtil::GetStepsByDifficulty(
     const Song* pSong, StepsType st, Difficulty dc, bool bIncludeAutoGen) {
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-651: ignored GetStepsByDifficulty() for null song.");
+    return nullptr;
+  }
   const std::vector<Steps*>& vpSteps = (st == StepsType_Invalid)
                                            ? pSong->GetAllSteps()
                                            : pSong->GetStepsByStepsType(st);
   for (unsigned i = 0; i < vpSteps.size(); i++)  // for each of the Song's Steps
   {
     Steps* pSteps = vpSteps[i];
+    if (pSteps == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-651: skipped null Steps while scanning song '%s'.",
+          pSong->GetSongDir().c_str());
+      continue;
+    }
 
     if (dc != Difficulty_Invalid && dc != pSteps->GetDifficulty()) {
       continue;
@@ -273,12 +294,22 @@ Steps* SongUtil::GetStepsByDifficulty(
 
 Steps* SongUtil::GetStepsByMeter(
     const Song* pSong, StepsType st, int iMeterLow, int iMeterHigh) {
+  if (pSong == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-651: ignored GetStepsByMeter() for null song.");
+    return nullptr;
+  }
   const std::vector<Steps*>& vpSteps = (st == StepsType_Invalid)
                                            ? pSong->GetAllSteps()
                                            : pSong->GetStepsByStepsType(st);
   for (unsigned i = 0; i < vpSteps.size(); i++)  // for each of the Song's Steps
   {
     Steps* pSteps = vpSteps[i];
+    if (pSteps == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-651: skipped null Steps while scanning song '%s'.",
+          pSong->GetSongDir().c_str());
+      continue;
+    }
 
     if (iMeterLow > pSteps->GetMeter()) {
       continue;
@@ -317,7 +348,17 @@ Steps* SongUtil::GetStepsByCredit(
 
 Steps* SongUtil::GetClosestNotes(
     const Song* pSong, StepsType st, Difficulty dc, bool bIgnoreLocked) {
-  ASSERT(dc != Difficulty_Invalid);
+  if (pSong == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-651: ignored GetClosestNotes() for null song.");
+    return nullptr;
+  }
+  if (dc == Difficulty_Invalid) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-651: ignored GetClosestNotes() for invalid "
+        "difficulty on song '%s'.",
+        pSong->GetSongDir().c_str());
+    return nullptr;
+  }
 
   const std::vector<Steps*>& vpSteps = (st == StepsType_Invalid)
                                            ? pSong->GetAllSteps()
@@ -327,11 +368,17 @@ Steps* SongUtil::GetClosestNotes(
   for (unsigned i = 0; i < vpSteps.size(); i++)  // for each of the Song's Steps
   {
     Steps* pSteps = vpSteps[i];
+    if (pSteps == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-651: skipped null Steps while scanning song '%s'.",
+          pSong->GetSongDir().c_str());
+      continue;
+    }
 
     if (pSteps->GetDifficulty() == Difficulty_Edit && dc != Difficulty_Edit) {
       continue;
     }
-    if (bIgnoreLocked && UNLOCKMAN->StepsIsLocked(pSong, pSteps)) {
+    if (bIgnoreLocked && UNLOCKMAN && UNLOCKMAN->StepsIsLocked(pSong, pSteps)) {
       continue;
     }
 
