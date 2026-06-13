@@ -957,6 +957,12 @@ void CourseID::FromCourse(const Course* p) {
 }
 
 Course* CourseID::ToCourse() const {
+  if (SONGMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-678: CourseID lookup requested without SONGMAN.");
+    return nullptr;
+  }
+
   Course* pCourse = nullptr;
   if (!sPath.empty()) {
     // HACK for backwards compatibility:
@@ -1021,7 +1027,7 @@ std::string CourseID::ToString() const {
   return std::string();
 }
 
-bool CourseID::IsValid() const { return !sPath.empty() || !sFullTitle.empty(); }
+bool CourseID::IsValid() const { return ToCourse() != nullptr; }
 
 /*
  * (c) 2001-2004 Chris Danford
