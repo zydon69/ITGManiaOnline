@@ -1307,10 +1307,8 @@ Group* SongManager::GetGroupFromName(const std::string& sGroupName) const {
 
 std::vector<std::string> SongManager::GetPreferredSortSectionNames() const {
   std::vector<std::string> sectionNames;
-  // Use m_mapPreferredSectionToSongs
-  for (const std::pair<const std::string, SongPointerVector>& iter :
-       m_mapPreferredSectionToSongs) {
-    sectionNames.push_back(iter.first);
+  for (const PreferredSortSection& section : m_vPreferredSongSort) {
+    sectionNames.push_back(section.sName);
   }
   return sectionNames;
 }
