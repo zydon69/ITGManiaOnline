@@ -50,8 +50,50 @@ static ThemeMetric1D<int> g_iGradeWeight(
     "ScoreKeeperNormal", GradeWeightName, NUM_ScoreEvent);
 
 namespace {
+bool IsValidPlayerNumber(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
 bool IsValidTapNoteScore(TapNoteScore tns) {
   return tns >= TNS_None && tns < NUM_TapNoteScore;
+}
+
+TimingData* GetCurrentTimingDataForPlayer(PlayerNumber pn) {
+  if (!IsValidPlayerNumber(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal missing timing data for invalid "
+        "player %i.",
+        pn);
+    return nullptr;
+  }
+
+  Steps* pSteps = GAMESTATE->m_pCurSteps[pn];
+  if (pSteps == nullptr || pSteps->GetTimingData() == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal missing current timing data for "
+        "player %i.",
+        pn);
+    return nullptr;
+  }
+  return pSteps->GetTimingData();
+}
+
+int GetComboMultiplier(
+    TimingData* pTiming, int iRow, bool bMissComboMultiplier) {
+  if (pTiming == nullptr || iRow == -1) {
+    return 1;
+  }
+
+  ComboSegment* cs = pTiming->GetComboSegmentAtRow(iRow);
+  if (cs == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal missing combo segment at row %i; "
+        "using multiplier 1.",
+        iRow);
+    return 1;
+  }
+
+  return bMissComboMultiplier ? cs->GetMissCombo() : cs->GetCombo();
 }
 }  // namespace
 
@@ -511,13 +553,14 @@ void ScoreKeeperNormal::HandleTapNoteScoreInternal(
   }
 
   // update judged row totals. Respect Combo segments here.
-  TimingData& td =
-      *GAMESTATE->m_pCurSteps[m_pPlayerState->m_PlayerNumber]->GetTimingData();
-  ComboSegment* cs = td.GetComboSegmentAtRow(row);
+  TimingData* pTiming =
+      GetCurrentTimingDataForPlayer(m_pPlayerState->m_PlayerNumber);
   if (tns == TNS_CheckpointHit || tns >= m_MinScoreToContinueCombo) {
-    m_pPlayerStageStats->m_iTapNoteScores[tns] += cs->GetCombo();
+    m_pPlayerStageStats->m_iTapNoteScores[tns] +=
+        GetComboMultiplier(pTiming, row, false);
   } else if (tns == TNS_CheckpointMiss || tns < m_MinScoreToMaintainCombo) {
-    m_pPlayerStageStats->m_iTapNoteScores[tns] += cs->GetMissCombo();
+    m_pPlayerStageStats->m_iTapNoteScores[tns] +=
+        GetComboMultiplier(pTiming, row, true);
   } else {
     m_pPlayerStageStats->m_iTapNoteScores[tns] += 1;
   }
@@ -540,16 +583,14 @@ void ScoreKeeperNormal::HandleComboInternal(
   if (iNumHitContinueCombo > 0 || iNumHitMaintainCombo > 0) {
     m_pPlayerStageStats->m_iCurMissCombo = 0;
   }
-  TimingData& td =
-      *GAMESTATE->m_pCurSteps[m_pPlayerState->m_PlayerNumber]->GetTimingData();
+  TimingData* pTiming =
+      GetCurrentTimingDataForPlayer(m_pPlayerState->m_PlayerNumber);
   if (iNumBreakCombo == 0) {
-    int multiplier =
-        (iRow == -1 ? 1 : td.GetComboSegmentAtRow(iRow)->GetCombo());
+    int multiplier = GetComboMultiplier(pTiming, iRow, false);
     m_pPlayerStageStats->m_iCurCombo += iNumHitContinueCombo * multiplier;
   } else {
     m_pPlayerStageStats->m_iCurCombo = 0;
-    int multiplier =
-        (iRow == -1 ? 1 : td.GetComboSegmentAtRow(iRow)->GetMissCombo());
+    int multiplier = GetComboMultiplier(pTiming, iRow, true);
     m_pPlayerStageStats->m_iCurMissCombo +=
         (m_MissComboIsPerRow ? 1 : iNumBreakCombo) * multiplier;
   }
@@ -560,19 +601,17 @@ void ScoreKeeperNormal::HandleRowComboInternal(
   if (m_ComboIsPerRow) {
     iNumTapsInRow = std::min(iNumTapsInRow, 1);
   }
-  TimingData& td =
-      *GAMESTATE->m_pCurSteps[m_pPlayerState->m_PlayerNumber]->GetTimingData();
+  TimingData* pTiming =
+      GetCurrentTimingDataForPlayer(m_pPlayerState->m_PlayerNumber);
   if (tns >= m_MinScoreToContinueCombo) {
     m_pPlayerStageStats->m_iCurMissCombo = 0;
-    int multiplier =
-        (iRow == -1 ? 1 : td.GetComboSegmentAtRow(iRow)->GetCombo());
+    int multiplier = GetComboMultiplier(pTiming, iRow, false);
     m_pPlayerStageStats->m_iCurCombo += iNumTapsInRow * multiplier;
   } else if (tns < m_MinScoreToMaintainCombo) {
     m_pPlayerStageStats->m_iCurCombo = 0;
 
     if (tns <= m_MaxScoreToIncrementMissCombo) {
-      int multiplier =
-          (iRow == -1 ? 1 : td.GetComboSegmentAtRow(iRow)->GetMissCombo());
+      int multiplier = GetComboMultiplier(pTiming, iRow, true);
       m_pPlayerStageStats->m_iCurMissCombo +=
           (m_MissComboIsPerRow ? 1 : iNumTapsInRow) * multiplier;
     }
