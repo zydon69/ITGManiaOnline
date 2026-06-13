@@ -172,10 +172,10 @@ void PlayerState::Update(float fDelta) {
   for (unsigned s = 0; s < m_ActiveAttacks.size(); s++) {
     Attack& attack = m_ActiveAttacks[s];
 
-    // You must add sattack by calling GameState::LaunchAttack,
-    // or else the sentinel value won't be
-    // converted into the current music time.
-    ASSERT(attack.fStartSecond != ATTACK_STARTS_NOW);
+    if (!NormalizeActiveAttack(attack)) {
+      bRebuildPlayerOptions = true;
+      continue;
+    }
 
     bool bCurrentlyEnabled =
         attack.bGlobal || (attack.fStartSecond < m_Position.m_fMusicSeconds &&
@@ -246,25 +246,47 @@ void PlayerState::ResetToDefaultPlayerOptions(ModsLevel l) {
 void PlayerState::LaunchAttack(const Attack& a) {
   LOG->Trace(
       "Launch attack '%s' against P%d at %f", a.sModifiers.c_str(),
-      m_PlayerNumber + 1, a.fStartSecond);
+      IsUsablePlayerNumber(m_PlayerNumber) ? m_PlayerNumber + 1 : 0,
+      a.fStartSecond);
 
-  Attack attack = a;
+  if (!IsUsablePlayerNumber(m_PlayerNumber) && !IsUsableMultiPlayer(m_mp)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState rejected attack for invalid player %i and "
+        "multiplayer %i.",
+        static_cast<int>(m_PlayerNumber), static_cast<int>(m_mp));
+    return;
+  }
 
   /* If fStartSecond is the sentinel, it means "launch as soon as possible". For
    * m_ActiveAttacks, mark the real time it's starting (now), so Update() can
    * know when the attack started so it can be removed later.  For
    * m_ModsToApply, leave the sentinel in, so Player::Update knows to apply
    * attack transforms correctly. (yuck) */
-  m_ModsToApply.push_back(attack);
-  if (attack.fStartSecond == ATTACK_STARTS_NOW) {
-    attack.fStartSecond = m_Position.m_fMusicSeconds;
+  Attack modToApply = a;
+  if (!std::isfinite(modToApply.fSecsRemaining) ||
+      modToApply.fSecsRemaining < 0.0f) {
+    modToApply.fSecsRemaining = 0.0f;
   }
+  if (!std::isfinite(modToApply.fStartSecond)) {
+    modToApply.fStartSecond = ATTACK_STARTS_NOW;
+  }
+  if (!IsValidAttackLevelForActiveAttack(modToApply.level)) {
+    modToApply.level = ATTACK_LEVEL_1;
+  }
+  m_ModsToApply.push_back(modToApply);
+  Attack attack = NormalizeAttackForLaunch(a, m_Position);
   m_ActiveAttacks.push_back(attack);
 
   RebuildPlayerOptionsFromActiveAttacks();
 }
 
 void PlayerState::RemoveActiveAttacks(AttackLevel al) {
+  if (al != NUM_ATTACK_LEVELS && !IsValidAttackLevelForActiveAttack(al)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState ignored invalid attack level removal %i.",
+        static_cast<int>(al));
+    return;
+  }
   for (unsigned s = 0; s < m_ActiveAttacks.size(); s++) {
     if (al != NUM_ATTACK_LEVELS && al != m_ActiveAttacks[s].level) {
       continue;
@@ -292,17 +314,31 @@ void PlayerState::RemoveAllInventory() {
 void PlayerState::RebuildPlayerOptionsFromActiveAttacks() {
   // rebuild player options
   PlayerOptions po = m_PlayerOptions.GetStage();
-  SongOptions so = GAMESTATE->m_SongOptions.GetStage();
+  SongOptions so;
+  const bool canApplySongOptions = GAMESTATE != nullptr;
+  if (canApplySongOptions) {
+    so = GAMESTATE->m_SongOptions.GetStage();
+  }
   for (unsigned s = 0; s < m_ActiveAttacks.size(); s++) {
     if (!m_ActiveAttacks[s].bOn) {
       continue; /* hasn't started yet */
     }
+    if (m_ActiveAttacks[s].sModifiers.empty()) {
+      LOG->Trace("SRC_AUDIT_FIX: PlayerState skipped empty attack modifiers.");
+      continue;
+    }
     po.FromString(m_ActiveAttacks[s].sModifiers);
-    so.FromString(m_ActiveAttacks[s].sModifiers);
+    if (canApplySongOptions) {
+      so.FromString(m_ActiveAttacks[s].sModifiers);
+    }
   }
   m_PlayerOptions.Assign(ModsLevel_Song, po);
-  if (m_PlayerNumber == GAMESTATE->GetMasterPlayerNumber()) {
+  if (canApplySongOptions && m_PlayerNumber == GAMESTATE->GetMasterPlayerNumber()) {
     GAMESTATE->m_SongOptions.Assign(ModsLevel_Song, so);
+  } else if (!canApplySongOptions) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState rebuilt player attack options without "
+        "GAMESTATE song options.");
   }
 
   int iSumOfAttackLevels = GetSumOfActiveAttackLevels();
@@ -321,7 +357,12 @@ int PlayerState::GetSumOfActiveAttackLevels() const {
 
   for (unsigned s = 0; s < m_ActiveAttacks.size(); s++) {
     if (m_ActiveAttacks[s].fSecsRemaining > 0 &&
-        m_ActiveAttacks[s].level != NUM_ATTACK_LEVELS) {
+        IsValidAttackLevelForActiveAttack(m_ActiveAttacks[s].level)) {
+      if (iSum > std::numeric_limits<int>::max() - m_ActiveAttacks[s].level) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: PlayerState saturated active attack level sum.");
+        return std::numeric_limits<int>::max();
+      }
       iSum += m_ActiveAttacks[s].level;
     }
   }
