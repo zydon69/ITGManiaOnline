@@ -14,7 +14,8 @@ namespace StepParity {
 
 const int INVALID_COLUMN = -1;
 const float CLM_SECOND_INVALID = -1;
-const int MAX_COLUMNS = 16;
+// State::combined_mask stores 3 bits per column in a uint32_t.
+const int MAX_COLUMNS = 10;
 
 enum Foot { NONE = 0, LEFT_HEEL, LEFT_TOE, RIGHT_HEEL, RIGHT_TOE, NUM_Foot };
 
