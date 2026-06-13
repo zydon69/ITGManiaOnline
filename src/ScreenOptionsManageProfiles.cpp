@@ -335,9 +335,11 @@ void ScreenOptionsManageProfiles::HandleScreenMessage(const ScreenMessage SM) {
 
       switch (ScreenMiniMenu::s_iLastRowCode) {
         default:
-          FAIL_M(ssprintf(
-              "Last row code not a valid ProfileAction: %i",
-              ScreenMiniMenu::s_iLastRowCode));
+          LOG->Warn(
+              "ScreenOptionsManageProfiles: last row code %d is not a valid "
+              "ProfileAction",
+              ScreenMiniMenu::s_iLastRowCode);
+          return;
         case ProfileAction_SetDefaultP1:
         case ProfileAction_SetDefaultP2: {
           FOREACH_PlayerNumber(p) if (
