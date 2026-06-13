@@ -402,11 +402,37 @@ float StageLayout::getPlayerAngle(
 
 // Row
 void Row::setFootPlacement(const StepParity::State* state) {
-  for (int c = 0; c < columnCount; c++) {
+  if (state == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-646: setFootPlacement received null state.");
+    return;
+  }
+
+  const int safeColumnCount = std::min(
+      columnCount,
+      static_cast<int>(std::min(notes.size(), columns.size())));
+  if (safeColumnCount != columnCount ||
+      whereTheFeetAre.size() < StepParity::NUM_Foot) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-646: row foot placement has incompatible sizes "
+        "(columnCount=%d, notes=%zu, columns=%zu, feet=%zu).",
+        columnCount, notes.size(), columns.size(), whereTheFeetAre.size());
+    return;
+  }
+
+  for (int c = 0; c < safeColumnCount; c++) {
     if (notes[c].type != TapNoteType_Empty) {
-      notes[c].parity = state->combinedColumns[c];
-      columns[c] = state->combinedColumns[c];
-      whereTheFeetAre[state->combinedColumns[c]] = c;
+      const StepParity::Foot foot = state->combinedColumns[c];
+      if (foot <= StepParity::NONE || foot >= StepParity::NUM_Foot) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-646: ignoring invalid foot placement %d at "
+            "column %d.",
+            static_cast<int>(foot), c);
+        continue;
+      }
+
+      notes[c].parity = foot;
+      columns[c] = foot;
+      whereTheFeetAre[foot] = c;
       noteCount += 1;
     }
   }
