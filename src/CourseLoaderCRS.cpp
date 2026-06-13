@@ -733,7 +733,13 @@ bool CourseLoaderCRS::ParseCourseSongSelect(
     } else if (EqualsNoCase(sParamName, "GAINLIVES")) {
       new_entry.iGainLives = StringToInt(sParamValue);
     } else if (EqualsNoCase(sParamName, "GAINSECONDS")) {
-      new_entry.fGainSeconds = StringToInt(sParamValue);
+      if (!StringToFloat(sParamValue, new_entry.fGainSeconds)) {
+        LOG->UserLog(
+            "Course file", sPath,
+            "has an invalid GAINSECONDS parameter, \"%s\"",
+            sParamValue.c_str());
+        return false;
+      }
     } else if (EqualsNoCase(sParamName, "MODS")) {
       std::vector<std::string> mods;
       split(sParamValue, ",", mods, true);
