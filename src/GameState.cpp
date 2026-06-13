@@ -773,7 +773,12 @@ void GameState::SaveLocalData() {
 int GameState::GetNumStagesMultiplierForSong(const Song* pSong) {
   int iNumStages = 1;
 
-  ASSERT(pSong != nullptr);
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: GetNumStagesMultiplierForSong received null song; "
+        "using multiplier 1.");
+    return iNumStages;
+  }
   if (pSong->IsMarathon()) {
     iNumStages *= 3;
   }
