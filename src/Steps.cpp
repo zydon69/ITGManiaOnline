@@ -239,7 +239,13 @@ unsigned Steps::GetHash() const {
 }
 
 bool Steps::IsNoteDataEmpty() const {
-  return this->m_sNoteDataCompressed.empty();
+  if (!m_sNoteDataCompressed.empty()) {
+    return false;
+  }
+  if (m_bNoteDataIsFilled) {
+    return m_pNoteData->IsEmpty();
+  }
+  return true;
 }
 
 bool Steps::GetNoteDataFromSimfile() {
