@@ -258,7 +258,7 @@ bool CourseWriterCRS::WriteSongSelectCourseEntry(
                  {'\\', ':', ';', '#', ',', '='}));
     songSelectParams.push_back(ssprintf("ARTIST=%s", artistNames.c_str()));
   }
-  if (entry.songCriteria.m_bUseSongAllowedList &&
+  if (entry.songCriteria.m_bUseSongGenreAllowedList &&
       entry.songCriteria.m_vsSongGenreAllowedList.size() > 0) {
     std::string genreNames = join(
         ",", SmEscape(
