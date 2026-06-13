@@ -640,6 +640,27 @@ static bool CompAscending(
   return a.second < b.second;
 }
 
+static bool GetStepsTypeForGradeSort(PlayerNumber pn, StepsType& stOut) {
+  if (GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-653: grade sort requested without GAMESTATE; "
+        "falling back to title sort.");
+    return false;
+  }
+
+  const Style* pStyle = GAMESTATE->GetCurrentStyle(pn);
+  if (pStyle == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-653: grade sort requested without current style for "
+        "player %i; falling back to title sort.",
+        pn);
+    return false;
+  }
+
+  stOut = pStyle->m_StepsType;
+  return true;
+}
+
 void SongUtil::SortSongPointerArrayByGrades(
     std::vector<Song*>& vpSongsInOut, bool bDescending) {
   /* Optimize by pre-writing a string to compare, since doing
@@ -648,17 +669,39 @@ void SongUtil::SortSongPointerArrayByGrades(
   std::vector<val> vals;
   vals.reserve(vpSongsInOut.size());
 
+  if (PROFILEMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-653: machine grade sort requested without "
+        "PROFILEMAN; falling back to title sort.");
+    SortSongPointerArrayByTitle(vpSongsInOut);
+    return;
+  }
+  const Profile* pProfile = PROFILEMAN->GetMachineProfile();
+  if (pProfile == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-653: machine grade sort requested without machine "
+        "profile; falling back to title sort.");
+    SortSongPointerArrayByTitle(vpSongsInOut);
+    return;
+  }
+  StepsType st = StepsType_Invalid;
+  const PlayerNumber masterPlayer =
+      GAMESTATE == nullptr ? PLAYER_1 : GAMESTATE->GetMasterPlayerNumber();
+  if (!GetStepsTypeForGradeSort(masterPlayer, st)) {
+    SortSongPointerArrayByTitle(vpSongsInOut);
+    return;
+  }
+
   for (unsigned i = 0; i < vpSongsInOut.size(); ++i) {
     Song* pSong = vpSongsInOut[i];
+    if (pSong == nullptr) {
+      LOG->Warn("SRC_AUDIT_FIX SRC-653: skipped null song in grade sort.");
+      vals.push_back(val(pSong, std::string()));
+      continue;
+    }
 
     int iCounts[NUM_Grade];
-    const Profile* pProfile = PROFILEMAN->GetMachineProfile();
-    ASSERT(pProfile != nullptr);
-    pProfile->GetGrades(
-        pSong,
-        GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber())
-            ->m_StepsType,
-        iCounts);
+    pProfile->GetGrades(pSong, st, iCounts);
 
     std::string foo;
     foo.reserve(256);
@@ -683,14 +726,39 @@ void SongUtil::SortSongPointerArrayByProfileGrades(
   std::vector<val> vals;
   vals.reserve(vpSongsInOut.size());
 
+  if (PROFILEMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-653: profile grade sort requested without "
+        "PROFILEMAN; falling back to title sort.");
+    SortSongPointerArrayByTitle(vpSongsInOut);
+    return;
+  }
+  const Profile* pProfile = PROFILEMAN->GetProfile(pn);
+  if (pProfile == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-653: profile grade sort requested without profile "
+        "for player %i; falling back to title sort.",
+        pn);
+    SortSongPointerArrayByTitle(vpSongsInOut);
+    return;
+  }
+  StepsType st = StepsType_Invalid;
+  if (!GetStepsTypeForGradeSort(pn, st)) {
+    SortSongPointerArrayByTitle(vpSongsInOut);
+    return;
+  }
+
   for (unsigned i = 0; i < vpSongsInOut.size(); ++i) {
     Song* pSong = vpSongsInOut[i];
+    if (pSong == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-653: skipped null song in profile grade sort.");
+      vals.push_back(val(pSong, std::string()));
+      continue;
+    }
 
     int iCounts[NUM_Grade];
-    const Profile* pProfile = PROFILEMAN->GetProfile(pn);
-    ASSERT(pProfile != nullptr);
-    pProfile->GetGrades(
-        pSong, GAMESTATE->GetCurrentStyle(pn)->m_StepsType, iCounts);
+    pProfile->GetGrades(pSong, st, iCounts);
 
     std::string foo;
     foo.reserve(256);
