@@ -701,6 +701,7 @@ const Profile* ProfileManager::GetLocalProfile(
 bool ProfileManager::CreateLocalProfile(
     std::string sName, std::string& sProfileIDOut) {
   sProfileIDOut = "";
+  sName = Profile::NormalizeDisplayName(sName);
   if (sName.empty()) {
     LOG->Warn("ProfileManager::CreateLocalProfile: empty profile name");
     return false;
@@ -843,6 +844,14 @@ bool ProfileManager::RenameLocalProfile(
   if (pProfile == nullptr) {
     LOG->Warn(
         "ProfileManager::RenameLocalProfile: profile '%s' does not exist",
+        sProfileID.c_str());
+    return false;
+  }
+  sNewName = Profile::NormalizeDisplayName(sNewName);
+  if (sNewName.empty()) {
+    LOG->Warn(
+        "ProfileManager::RenameLocalProfile: empty normalized profile name "
+        "for '%s'",
         sProfileID.c_str());
     return false;
   }

@@ -236,6 +236,27 @@ std::string Profile::GetDisplayNameOrHighScoreName() const {
   }
 }
 
+std::string Profile::NormalizeDisplayName(const std::string& sName) {
+  std::string sClean;
+  sClean.reserve(sName.size());
+  for (unsigned char c : sName) {
+    if (c < 0x20 || c == 0x7f) {
+      continue;
+    }
+    sClean.push_back(static_cast<char>(c));
+  }
+
+  TrimLeft(sClean);
+  TrimRight(sClean);
+
+  std::wstring wstr = RStringToWstring(sClean);
+  if (wstr.size() > PROFILE_MAX_DISPLAY_NAME_LENGTH) {
+    wstr = wstr.substr(0, PROFILE_MAX_DISPLAY_NAME_LENGTH);
+  }
+
+  return WStringToRString(wstr);
+}
+
 Character* Profile::GetCharacter() const {
   std::vector<Character*> vpCharacters;
   CHARMAN->GetCharacters(vpCharacters);
@@ -1759,12 +1780,7 @@ ProfileLoadResult Profile::LoadEditableDataFromDir(std::string sDir) {
   ini.GetValue("Editable", "IsMale", m_IsMale);
 
   // This is data that the user can change, so we have to validate it.
-  std::wstring wstr = RStringToWstring(m_sDisplayName);
-  if (wstr.size() > PROFILE_MAX_DISPLAY_NAME_LENGTH) {
-    wstr = wstr.substr(0, PROFILE_MAX_DISPLAY_NAME_LENGTH);
-  }
-  m_sDisplayName = WStringToRString(wstr);
-  // TODO: strip invalid chars?
+  m_sDisplayName = NormalizeDisplayName(m_sDisplayName);
   if (m_iWeightPounds != 0) {
     rage_clamp(m_iWeightPounds, 20, 1000);
   }

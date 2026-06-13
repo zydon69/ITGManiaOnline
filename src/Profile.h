@@ -170,6 +170,7 @@ class Profile {
 
   // smart accessors
   std::string GetDisplayNameOrHighScoreName() const;
+  static std::string NormalizeDisplayName(const std::string& sName);
   Character* GetCharacter() const;
   void SetCharacter(const std::string sCharacterID);
   std::string GetDisplayTotalCaloriesBurned()
