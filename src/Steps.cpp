@@ -222,15 +222,19 @@ unsigned Steps::GetHash() const {
   if (m_iHash) {
     return m_iHash;
   }
+  std::string noteDataForHash;
   if (m_sNoteDataCompressed.empty()) {
-    if (!m_bNoteDataIsFilled) {
-      return 0;  // No data, no hash.
+    GetSMNoteData(noteDataForHash);
+    if (noteDataForHash.empty()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-602: no note data available while hashing '%s'.",
+          m_sFilename.c_str());
+      return 0;
     }
-    NoteDataUtil::GetSMNoteDataString(
-        *m_pNoteData, GetTimingData(), m_sNoteDataCompressed,
-        /*bIncludeMeasureComments=*/true);
+  } else {
+    noteDataForHash = m_sNoteDataCompressed;
   }
-  m_iHash = GetHashForString(m_sNoteDataCompressed);
+  m_iHash = GetHashForString(noteDataForHash);
   return m_iHash;
 }
 
