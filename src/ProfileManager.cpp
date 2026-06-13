@@ -1395,8 +1395,13 @@ void ProfileManager::SetStatsPrefix(const std::string& prefix) {
   }
   FOREACH_PlayerNumber(pn) {
     if (ProfileWasLoadedFromMemoryCard(pn)) {
-      // This probably runs into a problem if the memory card has been removed.
-      // -Kyz
+      if (!MEMCARDMAN->IsMounted(pn)) {
+        LOG->Warn(
+            "ProfileManager::SetStatsPrefix: skipping memory card profile "
+            "for P%d because the card is not mounted",
+            pn + 1);
+        continue;
+      }
       GetProfile(pn)->HandleStatsPrefixChange(
           m_sProfileDir[pn], PREFSMAN->m_bSignProfileData);
     }
