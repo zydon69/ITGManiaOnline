@@ -1,5 +1,6 @@
 #include "SongCacheIndex.h"
 
+#include <cctype>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -53,6 +54,31 @@ static std::string NormalizeCacheKeyPath(std::string sPath) {
   return sPath;
 }
 
+static std::string NormalizeCacheGroupName(const std::string& sGroup) {
+  std::string sNormalized;
+  sNormalized.reserve(sGroup.size());
+
+  for (char c : sGroup) {
+    const unsigned char uc = static_cast<unsigned char>(c);
+    if (std::isalnum(uc) || c == '_' || c == '-') {
+      sNormalized.push_back(c);
+    } else {
+      sNormalized.push_back('_');
+    }
+  }
+
+  if (sNormalized.empty()) {
+    sNormalized = "General";
+  }
+  if (sNormalized != sGroup) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-633: sanitized cache group '%s' to '%s'.",
+        sGroup.c_str(), sNormalized.c_str());
+  }
+
+  return sNormalized;
+}
+
 std::string SongCacheIndex::GetCacheFilePath(
     const std::string& sGroup, const std::string& sPath) {
   /* Don't use GetHashForFile, since we don't want to spend time
@@ -64,9 +90,10 @@ std::string SongCacheIndex::GetCacheFilePath(
   // collide, so use a stable filename-safe digest of the normalized path.
   const std::string sCacheName =
       BinaryToHex(CryptManager::GetSHA1ForString(s));
+  const std::string sSafeGroup = NormalizeCacheGroupName(sGroup);
   // CACHE_DIR ends with a /.
   return ssprintf(
-      "%s%s/%s", SpecialFiles::CACHE_DIR.c_str(), sGroup.c_str(),
+      "%s%s/%s", SpecialFiles::CACHE_DIR.c_str(), sSafeGroup.c_str(),
       sCacheName.c_str());
 }
 
@@ -122,7 +149,8 @@ void SongCacheIndex::ReadCacheIndex() {
   std::vector<std::string> ImageDir;
   split(CommonMetrics::IMAGES_TO_CACHE, ",", ImageDir);
   for (unsigned c = 0; c < ImageDir.size(); c++) {
-    EmptyDir(SpecialFiles::CACHE_DIR + ImageDir[c] + "/");
+    EmptyDir(
+        SpecialFiles::CACHE_DIR + NormalizeCacheGroupName(ImageDir[c]) + "/");
   }
 
   CacheIndex.Clear();
