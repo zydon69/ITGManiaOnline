@@ -656,10 +656,11 @@ void SMLoader::ProcessBPMsAndStops(
   // Get rid of BPM changes that come before beat 0.  Positive BPMs before
   // the chart don't really do anything, so we just ignore them.  Negative
   // BPMs cause unpredictable behavior, so ignore them as well and issue a
-  // warning.
+  // warning.  BPM changes exactly at beat 0 are left for the main pass so
+  // abnormal values can still start a warp.
   ibpm = vBPMs.begin();
   ibpmend = vBPMs.end();
-  for (/* ibpm */; ibpm != ibpmend && ibpm->first <= 0; ibpm++) {
+  for (/* ibpm */; ibpm != ibpmend && ibpm->first < 0; ibpm++) {
     bpm = ibpm->second;
     if (bpm < 0 && ibpm->first < 0) {
       LOG->UserLog(
