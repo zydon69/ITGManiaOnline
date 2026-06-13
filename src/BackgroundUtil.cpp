@@ -146,6 +146,39 @@ const std::string SBE_StretchNoLoop = "StretchNoLoop";
 const std::string SBE_StretchRewind = "StretchRewind";
 const std::string SBT_CrossFade = "CrossFade";
 
+static bool IsSafeBackgroundMatch(
+    const std::string& sMatch, bool bAllowSubdirectories, const char* context) {
+  if (sMatch.empty()) {
+    return true;
+  }
+  if (sMatch[0] == '/' || sMatch[0] == '\\' ||
+      sMatch.find(':') != std::string::npos) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX %s: rejected absolute background match '%s'.",
+        context, sMatch.c_str());
+    return false;
+  }
+
+  std::string normalized = sMatch;
+  std::replace(normalized.begin(), normalized.end(), '\\', '/');
+  if (!bAllowSubdirectories && normalized.find('/') != std::string::npos) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX %s: rejected background match with subdirectory '%s'.",
+        context, sMatch.c_str());
+    return false;
+  }
+
+  std::vector<std::string> parts;
+  split(normalized, "/", parts, true);
+  if (std::find(parts.begin(), parts.end(), "..") != parts.end()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX %s: rejected background match escaping base dir '%s'.",
+        context, sMatch.c_str());
+    return false;
+  }
+  return true;
+}
+
 static void StripCvsAndSvn(
     std::vector<std::string>& vsPathsToStrip,
     std::vector<std::string>& vsNamesToStrip) {
@@ -265,13 +298,22 @@ void BackgroundUtil::GetSongBGAnimations(
     std::vector<std::string>& vsPathsOut,
     std::vector<std::string>& vsNamesOut) {
   vsPathsOut.clear();
+  vsNamesOut.clear();
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-681: song BG animation listing requested without "
+        "song.");
+    return;
+  }
+  if (!IsSafeBackgroundMatch(sMatch, true, "SRC-681")) {
+    return;
+  }
   if (sMatch.empty()) {
     GetDirListing(pSong->GetSongDir() + "*", vsPathsOut, true, true);
   } else {
     GetDirListing(pSong->GetSongDir() + sMatch, vsPathsOut, true, true);
   }
 
-  vsNamesOut.clear();
   for (const std::string& s : vsPathsOut) {
     vsNamesOut.push_back(Basename(s));
   }
@@ -284,6 +326,15 @@ void BackgroundUtil::GetSongMovies(
     std::vector<std::string>& vsPathsOut,
     std::vector<std::string>& vsNamesOut) {
   vsPathsOut.clear();
+  vsNamesOut.clear();
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-681: song movie listing requested without song.");
+    return;
+  }
+  if (!IsSafeBackgroundMatch(sMatch, true, "SRC-681")) {
+    return;
+  }
   if (sMatch.empty()) {
     FILEMAN->GetDirListingWithMultipleExtensions(
         pSong->GetSongDir() + sMatch, ActorUtil::GetTypeExtensionList(FT_Movie),
@@ -292,7 +343,6 @@ void BackgroundUtil::GetSongMovies(
     GetDirListing(pSong->GetSongDir() + sMatch, vsPathsOut, false, true);
   }
 
-  vsNamesOut.clear();
   for (const std::string& s : vsPathsOut) {
     vsNamesOut.push_back(Basename(s));
   }
@@ -305,6 +355,15 @@ void BackgroundUtil::GetSongBitmaps(
     std::vector<std::string>& vsPathsOut,
     std::vector<std::string>& vsNamesOut) {
   vsPathsOut.clear();
+  vsNamesOut.clear();
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-681: song bitmap listing requested without song.");
+    return;
+  }
+  if (!IsSafeBackgroundMatch(sMatch, true, "SRC-681")) {
+    return;
+  }
   if (sMatch.empty()) {
     FILEMAN->GetDirListingWithMultipleExtensions(
         pSong->GetSongDir() + sMatch,
@@ -313,7 +372,6 @@ void BackgroundUtil::GetSongBitmaps(
     GetDirListing(pSong->GetSongDir() + sMatch, vsPathsOut, false, true);
   }
 
-  vsNamesOut.clear();
   for (const std::string& s : vsPathsOut) {
     vsNamesOut.push_back(Basename(s));
   }
