@@ -1,6 +1,7 @@
 #include "LifeMeterTime.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <string>
 
@@ -10,10 +11,12 @@
 #include "GameState.h"
 #include "LifeMeter.h"
 #include "MessageManager.h"
+#include "PlayerNumber.h"
 #include "PlayerStageStats.h"
 #include "PlayerState.h"
 #include "Preference.h"
 #include "RadarValues.h"
+#include "RageLog.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
 #include "Song.h"
@@ -56,6 +59,31 @@ static void TimeMeterSecondsChangeInit(
 
 static Preference1D<float> g_fTimeMeterSecondsChange(
     TimeMeterSecondsChangeInit, NUM_ScoreEvent);
+
+namespace {
+bool IsValidPlayerNumber(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+bool IsValidTapNoteScore(TapNoteScore score) {
+  return score >= TNS_None && score < NUM_TapNoteScore;
+}
+
+bool IsValidHoldNoteScore(HoldNoteScore score) {
+  return score >= HNS_None && score < NUM_HoldNoteScore;
+}
+
+float SanitizeSeconds(float seconds, const char* context) {
+  if (std::isfinite(seconds)) {
+    return seconds;
+  }
+
+  LOG->Warn(
+      "SRC_AUDIT_FIX %s: corrected non-finite seconds %f to 0.",
+      context, seconds);
+  return 0.0f;
+}
+}  // namespace
 
 LifeMeterTime::LifeMeterTime() {
   m_fLifeTotalGainedSeconds = 0;
@@ -102,23 +130,48 @@ void LifeMeterTime::OnLoadSong() {
   if (GetLifeSeconds() <= 0 && GAMESTATE->GetCourseSongIndex() > 0) {
     return;
   }
+  if (m_pPlayerState == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-253: LifeMeterTime ignored OnLoadSong without "
+        "PlayerState.");
+    return;
+  }
 
   float fOldLife = m_fLifeTotalLostSeconds;
   float fGainSeconds = 0;
   if (GAMESTATE->IsCourseMode()) {
     Course* pCourse = GAMESTATE->m_pCurCourse;
-    ASSERT(pCourse != nullptr);
-    fGainSeconds =
-        pCourse->m_vEntries[GAMESTATE->GetCourseSongIndex()].fGainSeconds;
+    const int courseSongIndex = GAMESTATE->GetCourseSongIndex();
+    if (pCourse == nullptr || courseSongIndex < 0 ||
+        static_cast<size_t>(courseSongIndex) >= pCourse->m_vEntries.size()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-253: LifeMeterTime ignored invalid course entry "
+          "%i of %zu.",
+          courseSongIndex, pCourse == nullptr ? 0 : pCourse->m_vEntries.size());
+      return;
+    }
+    fGainSeconds = pCourse->m_vEntries[courseSongIndex].fGainSeconds;
   } else {
     // Placeholderish, at least this way it won't crash when someone tries it
     // out in non-course mode. -Kyz
     Song* song = GAMESTATE->m_pCurSong;
-    ASSERT(song != nullptr);
+    if (song == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-253: LifeMeterTime ignored OnLoadSong without "
+          "current song.");
+      return;
+    }
     float song_len = song->m_fMusicLengthSeconds;
-    Steps* steps = GAMESTATE->m_pCurSteps[m_pPlayerState->m_PlayerNumber];
-    ASSERT(steps != nullptr);
-    RadarValues radars = steps->GetRadarValues(m_pPlayerState->m_PlayerNumber);
+    PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
+    if (!IsValidPlayerNumber(pn) || GAMESTATE->m_pCurSteps[pn] == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-253: LifeMeterTime ignored OnLoadSong with "
+          "invalid player/steps %i.",
+          pn);
+      return;
+    }
+    Steps* steps = GAMESTATE->m_pCurSteps[pn];
+    RadarValues radars = steps->GetRadarValues(pn);
     float scorable_things =
         radars[RadarCategory_TapsAndHolds] + radars[RadarCategory_Lifts];
     if (g_fTimeMeterSecondsChange[SE_Held] > 0.0f) {
@@ -131,6 +184,7 @@ void LifeMeterTime::OnLoadSong() {
     fGainSeconds = song_len - (gainable_score_time * INITIAL_VALUE);
   }
 
+  fGainSeconds = SanitizeSeconds(fGainSeconds, "SRC-255 LifeMeterTime gain");
   if (MIN_LIFE_TIME > fGainSeconds) {
     fGainSeconds = MIN_LIFE_TIME;
   }
@@ -143,11 +197,20 @@ void LifeMeterTime::ChangeLife(TapNoteScore tns) {
   if (GetLifeSeconds() <= 0) {
     return;
   }
+  if (!IsValidTapNoteScore(tns)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-254: LifeMeterTime ignored invalid TapNoteScore "
+        "%i.",
+        tns);
+    return;
+  }
 
   float fMeterChange = 0;
   switch (tns) {
-    default:
-      FAIL_M(ssprintf("Invalid TapNoteScore: %i", tns));
+    case TNS_None:
+    case TNS_AvoidMine:
+      fMeterChange = 0;
+      break;
     case TNS_W1:
       fMeterChange = g_fTimeMeterSecondsChange[SE_W1];
       break;
@@ -175,6 +238,8 @@ void LifeMeterTime::ChangeLife(TapNoteScore tns) {
     case TNS_CheckpointMiss:
       fMeterChange = g_fTimeMeterSecondsChange[SE_CheckpointMiss];
       break;
+    default:
+      break;
   }
 
   float fOldLife = m_fLifeTotalLostSeconds;
@@ -186,11 +251,19 @@ void LifeMeterTime::ChangeLife(HoldNoteScore hns, TapNoteScore tns) {
   if (GetLifeSeconds() <= 0) {
     return;
   }
+  if (!IsValidHoldNoteScore(hns)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-254: LifeMeterTime ignored invalid HoldNoteScore "
+        "%i.",
+        hns);
+    return;
+  }
+  if (hns == HNS_None) {
+    return;
+  }
 
   float fMeterChange = 0;
   switch (hns) {
-    default:
-      FAIL_M(ssprintf("Invalid HoldNoteScore: %i", hns));
     case HNS_Held:
       fMeterChange = g_fTimeMeterSecondsChange[SE_Held];
       break;
@@ -200,6 +273,8 @@ void LifeMeterTime::ChangeLife(HoldNoteScore hns, TapNoteScore tns) {
     case HNS_Missed:
       fMeterChange = g_fTimeMeterSecondsChange[SE_Missed];
       break;
+    default:
+      break;
   }
 
   float fOldLife = m_fLifeTotalLostSeconds;
@@ -208,12 +283,25 @@ void LifeMeterTime::ChangeLife(HoldNoteScore hns, TapNoteScore tns) {
 }
 
 void LifeMeterTime::ChangeLife(float delta) {
+  if (!std::isfinite(delta)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-255: LifeMeterTime ignored non-finite life delta "
+        "%f.",
+        delta);
+    return;
+  }
   float old_life = m_fLifeTotalLostSeconds;
   m_fLifeTotalLostSeconds -= delta;
   SendLifeChangedMessage(old_life, TapNoteScore_Invalid, HoldNoteScore_Invalid);
 }
 
 void LifeMeterTime::SetLife(float value) {
+  if (!std::isfinite(value)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-255: LifeMeterTime ignored non-finite SetLife %f.",
+        value);
+    return;
+  }
   float old_life = m_fLifeTotalLostSeconds;
   m_fLifeTotalLostSeconds = value;
   SendLifeChangedMessage(old_life, TapNoteScore_Invalid, HoldNoteScore_Invalid);
@@ -225,6 +313,12 @@ void LifeMeterTime::HandleTapScoreNone() {
 
 void LifeMeterTime::SendLifeChangedMessage(
     float fOldLife, TapNoteScore tns, HoldNoteScore hns) {
+  if (m_pPlayerState == nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-256: LifeMeterTime skipped LifeChanged broadcast "
+        "without PlayerState.");
+    return;
+  }
   Message msg("LifeChanged");
   msg.SetParam("Player", m_pPlayerState->m_PlayerNumber);
   msg.SetParam("TapNoteScore", LuaReference::Create(tns));
@@ -236,6 +330,9 @@ void LifeMeterTime::SendLifeChangedMessage(
 }
 
 bool LifeMeterTime::IsInDanger() const {
+  if (m_pStream == nullptr) {
+    return false;
+  }
   return m_pStream->GetPercent() < DANGER_THRESHOLD;
 }
 
@@ -244,6 +341,13 @@ bool LifeMeterTime::IsHot() const { return false; }
 bool LifeMeterTime::IsFailing() const { return GetLifeSeconds() <= 0; }
 
 void LifeMeterTime::Update(float fDeltaTime) {
+  if (m_pStream == nullptr || m_pPlayerState == nullptr ||
+      m_pPlayerStageStats == nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-256: LifeMeterTime skipped update without complete "
+        "state.");
+    return;
+  }
   // update current stage stats so ScoreDisplayLifeTime can show the right thing
   float fSecs = GetLifeSeconds();
   fSecs = std::max(0.0f, fSecs);
@@ -264,13 +368,23 @@ void LifeMeterTime::Update(float fDeltaTime) {
 
 float LifeMeterTime::GetLife() const {
   float fPercent = GetLifeSeconds() / FULL_LIFE_SECONDS;
+  if (!std::isfinite(fPercent)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-255: LifeMeterTime corrected non-finite percent.");
+    fPercent = 0.0f;
+  }
   rage_clamp(fPercent, 0, 1);
   return fPercent;
 }
 
 float LifeMeterTime::GetLifeSeconds() const {
-  return m_fLifeTotalGainedSeconds -
-         (m_fLifeTotalLostSeconds + STATSMAN->m_CurStageStats.m_fStepsSeconds);
+  const float gained =
+      SanitizeSeconds(m_fLifeTotalGainedSeconds, "SRC-255 LifeMeterTime gained");
+  const float lost =
+      SanitizeSeconds(m_fLifeTotalLostSeconds, "SRC-255 LifeMeterTime lost");
+  const float steps = SanitizeSeconds(
+      STATSMAN->m_CurStageStats.m_fStepsSeconds, "SRC-255 LifeMeterTime steps");
+  return gained - (lost + steps);
 }
 
 /*
