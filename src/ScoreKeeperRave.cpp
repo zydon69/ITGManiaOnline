@@ -1,5 +1,7 @@
 #include "ScoreKeeperRave.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <string>
 
@@ -79,6 +81,50 @@ bool IsValidRavePlayer(PlayerNumber pn) {
 bool IsValidAttackLevel(AttackLevel al) {
   return al >= ATTACK_LEVEL_1 && al < NUM_ATTACK_LEVELS;
 }
+
+float ClampFiniteFloat(float value, float low, float high, const char* context) {
+  if (!std::isfinite(value)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s normalized non-finite value %f to %f.",
+        context, value, low);
+    return low;
+  }
+  return std::max(low, std::min(high, value));
+}
+
+float ClampSuperMeterDelta(float value, const char* context) {
+  return ClampFiniteFloat(value, -1.0f, 1.0f, context);
+}
+
+float ClampAttackDuration(float value) {
+  static const float kMaxRaveAttackDurationSeconds = 60.0f;
+  return ClampFiniteFloat(
+      value, 0.0f, kMaxRaveAttackDurationSeconds,
+      "ScoreKeeperRave attack duration");
+}
+
+float GetSafeTugLifePercent() {
+  if (GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperRave used neutral tug life because "
+        "GAMESTATE is null.");
+    return 0.5f;
+  }
+  return ClampFiniteFloat(
+      GAMESTATE->m_fTugLifePercentP1, 0.0f, 1.0f,
+      "ScoreKeeperRave tug life percent");
+}
+
+bool HasRaveGlobals(const char* context) {
+  if (GAMESTATE != nullptr && PREFSMAN != nullptr) {
+    return true;
+  }
+  LOG->Warn(
+      "SRC_AUDIT_FIX: %s ignored callback with missing globals: GAMESTATE=%p "
+      "PREFSMAN=%p.",
+      context, static_cast<void*>(GAMESTATE), static_cast<void*>(PREFSMAN));
+  return false;
+}
 }  // namespace
 
 ScoreKeeperRave::ScoreKeeperRave(
@@ -86,11 +132,16 @@ ScoreKeeperRave::ScoreKeeperRave(
     : ScoreKeeper(pPlayerState, pPlayerStageStats) {}
 
 void ScoreKeeperRave::HandleTapScore(const TapNote& tn) {
+  if (!HasScoringState("ScoreKeeperRave::HandleTapScore")) {
+    return;
+  }
   TapNoteScore score = tn.result.tns;
   float fPercentToMove = 0;
 
   if (score == TNS_HitMine) {
-    fPercentToMove = g_fSuperMeterPercentChange[SE_HitMine];
+    fPercentToMove = ClampSuperMeterDelta(
+        g_fSuperMeterPercentChange[SE_HitMine],
+        "ScoreKeeperRave HitMine super meter delta");
   }
 
   AddSuperMeterDelta(fPercentToMove);
@@ -100,6 +151,9 @@ void ScoreKeeperRave::HandleTapScore(const TapNote& tn) {
 #define CROSSED_ATTACK_LEVEL(level) \
   CROSSED(1.f / NUM_ATTACK_LEVELS * (level + 1))
 void ScoreKeeperRave::HandleTapRowScore(const NoteData& nd, int iRow) {
+  if (!HasScoringState("ScoreKeeperRave::HandleTapRowScore")) {
+    return;
+  }
   TapNoteScore scoreOfLastTap;
   int iNumTapsInRow;
   float fPercentToMove = 0.0f;
@@ -110,22 +164,34 @@ void ScoreKeeperRave::HandleTapRowScore(const NoteData& nd, int iRow) {
   }
   switch (scoreOfLastTap) {
     case TNS_W1:
-      fPercentToMove = g_fSuperMeterPercentChange[SE_W1];
+      fPercentToMove = ClampSuperMeterDelta(
+          g_fSuperMeterPercentChange[SE_W1],
+          "ScoreKeeperRave W1 super meter delta");
       break;
     case TNS_W2:
-      fPercentToMove = g_fSuperMeterPercentChange[SE_W2];
+      fPercentToMove = ClampSuperMeterDelta(
+          g_fSuperMeterPercentChange[SE_W2],
+          "ScoreKeeperRave W2 super meter delta");
       break;
     case TNS_W3:
-      fPercentToMove = g_fSuperMeterPercentChange[SE_W3];
+      fPercentToMove = ClampSuperMeterDelta(
+          g_fSuperMeterPercentChange[SE_W3],
+          "ScoreKeeperRave W3 super meter delta");
       break;
     case TNS_W4:
-      fPercentToMove = g_fSuperMeterPercentChange[SE_W4];
+      fPercentToMove = ClampSuperMeterDelta(
+          g_fSuperMeterPercentChange[SE_W4],
+          "ScoreKeeperRave W4 super meter delta");
       break;
     case TNS_W5:
-      fPercentToMove = g_fSuperMeterPercentChange[SE_W5];
+      fPercentToMove = ClampSuperMeterDelta(
+          g_fSuperMeterPercentChange[SE_W5],
+          "ScoreKeeperRave W5 super meter delta");
       break;
     case TNS_Miss:
-      fPercentToMove = g_fSuperMeterPercentChange[SE_Miss];
+      fPercentToMove = ClampSuperMeterDelta(
+          g_fSuperMeterPercentChange[SE_Miss],
+          "ScoreKeeperRave Miss super meter delta");
       break;
     case TNS_None:
     case TNS_AvoidMine:
@@ -144,12 +210,17 @@ void ScoreKeeperRave::HandleTapRowScore(const NoteData& nd, int iRow) {
 }
 
 void ScoreKeeperRave::HandleHoldScore(const TapNote& tn) {
+  if (!HasScoringState("ScoreKeeperRave::HandleHoldScore")) {
+    return;
+  }
   // todo: should hit mine be handled in HandleTapRow score instead? -aj
   TapNoteScore tapScore = tn.result.tns;
   float fPercentToMove = 0.0f;
   switch (tapScore) {
     case TNS_HitMine:
-      fPercentToMove = g_fSuperMeterPercentChange[SE_HitMine];
+      fPercentToMove = ClampSuperMeterDelta(
+          g_fSuperMeterPercentChange[SE_HitMine],
+          "ScoreKeeperRave hold HitMine super meter delta");
       break;
     default:
       break;
@@ -160,13 +231,19 @@ void ScoreKeeperRave::HandleHoldScore(const TapNote& tn) {
   HoldNoteScore holdScore = tn.HoldResult.hns;
   switch (holdScore) {
     case HNS_Held:
-      fPercentToMove = g_fSuperMeterPercentChange[SE_Held];
+      fPercentToMove = ClampSuperMeterDelta(
+          g_fSuperMeterPercentChange[SE_Held],
+          "ScoreKeeperRave Held super meter delta");
       break;
     case HNS_LetGo:
-      fPercentToMove = g_fSuperMeterPercentChange[SE_LetGo];
+      fPercentToMove = ClampSuperMeterDelta(
+          g_fSuperMeterPercentChange[SE_LetGo],
+          "ScoreKeeperRave LetGo super meter delta");
       break;
     case HNS_Missed:
-      fPercentToMove = g_fSuperMeterPercentChange[SE_Missed];
+      fPercentToMove = ClampSuperMeterDelta(
+          g_fSuperMeterPercentChange[SE_Missed],
+          "ScoreKeeperRave Missed super meter delta");
       break;
     default:
       break;
@@ -176,13 +253,22 @@ void ScoreKeeperRave::HandleHoldScore(const TapNote& tn) {
 
 extern ThemeMetric<bool> PENALIZE_TAP_SCORE_NONE;
 void ScoreKeeperRave::HandleTapScoreNone() {
+  if (!HasScoringState("ScoreKeeperRave::HandleTapScoreNone")) {
+    return;
+  }
   if (PENALIZE_TAP_SCORE_NONE) {
-    float fPercentToMove = g_fSuperMeterPercentChange[SE_Miss];
+    float fPercentToMove = ClampSuperMeterDelta(
+        g_fSuperMeterPercentChange[SE_Miss],
+        "ScoreKeeperRave None super meter delta");
     AddSuperMeterDelta(fPercentToMove);
   }
 }
 
 void ScoreKeeperRave::AddSuperMeterDelta(float fUnscaledPercentChange) {
+  if (!HasScoringState("ScoreKeeperRave::AddSuperMeterDelta") ||
+      !HasRaveGlobals("ScoreKeeperRave::AddSuperMeterDelta")) {
+    return;
+  }
   if (m_pPlayerState == nullptr ||
       !IsValidRavePlayer(m_pPlayerState->m_PlayerNumber)) {
     LOG->Warn(
@@ -191,6 +277,15 @@ void ScoreKeeperRave::AddSuperMeterDelta(float fUnscaledPercentChange) {
         static_cast<void*>(m_pPlayerState));
     return;
   }
+  fUnscaledPercentChange = ClampSuperMeterDelta(
+      fUnscaledPercentChange, "ScoreKeeperRave unscaled super meter delta");
+  m_pPlayerState->m_fSuperMeter = ClampFiniteFloat(
+      m_pPlayerState->m_fSuperMeter, 0.0f,
+      static_cast<float>(NUM_ATTACK_LEVELS) - 0.0001f,
+      "ScoreKeeperRave current super meter");
+  m_pPlayerState->m_fSuperMeterGrowthScale = ClampFiniteFloat(
+      m_pPlayerState->m_fSuperMeterGrowthScale, 0.0f, 10.0f,
+      "ScoreKeeperRave super meter growth scale");
 
   if (PREFSMAN->m_bMercifulDrain && fUnscaledPercentChange < 0) {
     float fSuperPercentage =
@@ -203,10 +298,10 @@ void ScoreKeeperRave::AddSuperMeterDelta(float fUnscaledPercentChange) {
     float fLifePercentage = 0;
     switch (m_pPlayerState->m_PlayerNumber) {
       case PLAYER_1:
-        fLifePercentage = GAMESTATE->m_fTugLifePercentP1;
+        fLifePercentage = GetSafeTugLifePercent();
         break;
       case PLAYER_2:
-        fLifePercentage = 1 - GAMESTATE->m_fTugLifePercentP1;
+        fLifePercentage = 1.0f - GetSafeTugLifePercent();
         break;
       default:
         LOG->Warn(
@@ -215,7 +310,8 @@ void ScoreKeeperRave::AddSuperMeterDelta(float fUnscaledPercentChange) {
             m_pPlayerState->m_PlayerNumber);
         return;
     }
-    rage_clamp(fLifePercentage, 0.f, 1.f);
+    fLifePercentage = ClampFiniteFloat(
+        fLifePercentage, 0.0f, 1.0f, "ScoreKeeperRave life percentage");
     if (fUnscaledPercentChange > 0) {
       fUnscaledPercentChange *= SCALE(fLifePercentage, 0.f, 1.f, 1.7f, 0.3f);
     } else {  // fUnscaledPercentChange <= 0
@@ -250,10 +346,10 @@ void ScoreKeeperRave::AddSuperMeterDelta(float fUnscaledPercentChange) {
     bool bWinning;
     switch (m_pPlayerState->m_PlayerNumber) {
       case PLAYER_1:
-        bWinning = GAMESTATE->m_fTugLifePercentP1 > 0.5f;
+        bWinning = GetSafeTugLifePercent() > 0.5f;
         break;
       case PLAYER_2:
-        bWinning = GAMESTATE->m_fTugLifePercentP1 < 0.5f;
+        bWinning = GetSafeTugLifePercent() < 0.5f;
         break;
       default:
         LOG->Warn(
@@ -269,6 +365,10 @@ void ScoreKeeperRave::AddSuperMeterDelta(float fUnscaledPercentChange) {
 }
 
 void ScoreKeeperRave::LaunchAttack(AttackLevel al) {
+  if (!HasScoringState("ScoreKeeperRave::LaunchAttack") ||
+      !HasRaveGlobals("ScoreKeeperRave::LaunchAttack")) {
+    return;
+  }
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
   if (!IsValidRavePlayer(pn) || !IsValidAttackLevel(al)) {
     LOG->Warn(
@@ -290,8 +390,22 @@ void ScoreKeeperRave::LaunchAttack(AttackLevel al) {
                                      "sudden", "boost", "brake", "wave"};
     sAttackToGive = DefaultAttacks[RandomInt(8)];
   }
+  if (sAttackToGive.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperRave skipped empty attack modifier for "
+        "player %i attack level %i.",
+        pn, al);
+    return;
+  }
 
   PlayerNumber pnToAttack = OPPOSITE_PLAYER[pn];
+  if (!IsValidRavePlayer(pnToAttack)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperRave skipped attack from player %i because "
+        "target player %i is invalid.",
+        pn, pnToAttack);
+    return;
+  }
   PlayerState* pPlayerStateToAttack = GAMESTATE->m_pPlayerState[pnToAttack];
   if (pPlayerStateToAttack == nullptr) {
     LOG->Warn(
@@ -303,7 +417,14 @@ void ScoreKeeperRave::LaunchAttack(AttackLevel al) {
 
   Attack a;
   a.level = al;
-  a.fSecsRemaining = ATTACK_DURATION_SECONDS;
+  a.fSecsRemaining = ClampAttackDuration(ATTACK_DURATION_SECONDS);
+  if (a.fSecsRemaining <= 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperRave skipped attack with non-positive "
+        "duration %f.",
+        a.fSecsRemaining);
+    return;
+  }
   a.sModifiers = sAttackToGive;
 
   // remove current attack (if any)
