@@ -1006,7 +1006,9 @@ int Course::GetMeter(StepsType st, CourseDifficulty cd) const {
 bool Course::HasMods() const {
   return std::any_of(
       m_vEntries.begin(), m_vEntries.end(),
-      [](const CourseEntry& e) { return !e.attacks.empty(); });
+      [](const CourseEntry& e) {
+        return !e.sModifiers.empty() || !e.attacks.empty();
+      });
 }
 
 bool Course::HasTimedMods() const {
