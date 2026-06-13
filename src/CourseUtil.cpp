@@ -476,7 +476,18 @@ bool EditCourseUtil::RemoveAndDeleteFile(Course* pCourse) {
   }
   FILEMAN->Remove(pCourse->GetCacheFilePath());
   if (pCourse->IsAnEdit()) {
-    PROFILEMAN->LoadMachineProfile();
+    const ProfileSlot slot = pCourse->GetLoadedFromProfileSlot();
+    if (PROFILEMAN->IsPersistentProfile(slot)) {
+      const std::string sProfileDir = PROFILEMAN->GetProfileDir(slot);
+      SONGMAN->FreeAllLoadedFromProfile(slot);
+      SONGMAN->LoadStepEditsFromProfileDir(sProfileDir, slot);
+      SONGMAN->LoadCourseEditsFromProfileDir(sProfileDir, slot);
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-131: deleted edit course '%s' but profile slot %i "
+          "is not persistent, so edits were not reloaded",
+          pCourse->m_sPath.c_str(), slot);
+    }
   } else {
     SONGMAN->DeleteCourse(pCourse);
     delete pCourse;
