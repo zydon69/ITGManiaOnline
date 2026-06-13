@@ -1807,6 +1807,9 @@ bool SongUtil::IsSongPlayable(Song* s) {
 
 bool SongUtil::GetStepsTypeAndDifficultyFromSortOrder(
     SortOrder so, StepsType& stOut, Difficulty& dcOut) {
+  stOut = StepsType_Invalid;
+  dcOut = Difficulty_Invalid;
+
   switch (so) {
     case SORT_BEGINNER_METER:
       dcOut = Difficulty_Beginner;
@@ -1839,25 +1842,50 @@ bool SongUtil::GetStepsTypeAndDifficultyFromSortOrder(
       return false;
   }
 
+  if (GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-664: sort order %i requested without GAMESTATE.",
+        so);
+    return false;
+  }
+
+  const Style* pCurrentStyle =
+      GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber());
+  if (pCurrentStyle == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-664: sort order %i requested without current style.",
+        so);
+    return false;
+  }
+
   switch (so) {
-    DEFAULT_FAIL(so);
     case SORT_BEGINNER_METER:
     case SORT_EASY_METER:
     case SORT_MEDIUM_METER:
     case SORT_HARD_METER:
     case SORT_CHALLENGE_METER:
-      stOut = GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber())
-                  ->m_StepsType;
+      stOut = pCurrentStyle->m_StepsType;
       break;
     case SORT_DOUBLE_EASY_METER:
     case SORT_DOUBLE_MEDIUM_METER:
     case SORT_DOUBLE_HARD_METER:
-    case SORT_DOUBLE_CHALLENGE_METER:
-      stOut = GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber())
-                  ->m_StepsType;  // in case we don't find any matches below
+    case SORT_DOUBLE_CHALLENGE_METER: {
+      stOut = pCurrentStyle->m_StepsType;  // in case we don't find any matches below
+      if (GAMEMAN == nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-664: double meter sort requested without "
+            "GAMEMAN; using current style.");
+        break;
+      }
       std::vector<const Style*> vpStyles;
       GAMEMAN->GetStylesForGame(GAMESTATE->m_pCurGame, vpStyles);
       for (const Style* i : vpStyles) {
+        if (i == nullptr) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX SRC-664: skipped null style while resolving double "
+              "meter sort.");
+          continue;
+        }
         if (i->m_StyleType == StyleType_OnePlayerTwoSides) {
           // Ugly hack to ignore pump's half-double.
           bool bContainsHalf =
@@ -1869,6 +1897,14 @@ bool SongUtil::GetStepsTypeAndDifficultyFromSortOrder(
           break;
         }
       }
+      break;
+    }
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-664: unexpected sort order %i after difficulty "
+          "mapping.",
+          so);
+      return false;
   }
 
   return true;
