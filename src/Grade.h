@@ -83,7 +83,8 @@ std::string GradeToLocalizedString(Grade g);
 Grade StringToGrade(const std::string& s);
 LuaDeclareType(Grade);
 extern ThemeMetric<int> NUM_GRADE_TIERS_USED;
-#define NUM_POSSIBLE_GRADES (NUM_GRADE_TIERS_USED + 1)
+int GetNumGradeTiersUsed();
+#define NUM_POSSIBLE_GRADES (GetNumGradeTiersUsed() + 1)
 /**
  * @brief Step through the enumerator one at a time to get the next Grade.
  * @param g the current Grade.

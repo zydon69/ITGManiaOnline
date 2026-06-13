@@ -186,9 +186,17 @@ void PlayerStageStats::AddStats(const PlayerStageStats& other) {
 }
 
 Grade GetGradeFromPercent(float fPercent) {
+  if (!std::isfinite(fPercent)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: GetGradeFromPercent received non-finite percent %f.",
+        fPercent);
+    return Grade_Failed;
+  }
+
   Grade grade = Grade_Failed;
 
-  FOREACH_ENUM(Grade, g) {
+  for (Grade g = Grade_Tier01; g < GetNumGradeTiersUsed();
+       enum_add<Grade>(g, 1)) {
     if (fPercent >= GRADE_PERCENT_TIER(g)) {
       grade = g;
       break;
@@ -208,7 +216,14 @@ Grade PlayerStageStats::GetGrade() const {
 
   bool bIsBeginner = false;
   if (m_iStepsPlayed > 0 && !GAMESTATE->IsCourseMode()) {
-    bIsBeginner = m_vpPossibleSteps[0]->GetDifficulty() == Difficulty_Beginner;
+    if (!m_vpPossibleSteps.empty() && m_vpPossibleSteps[0] != nullptr) {
+      bIsBeginner =
+          m_vpPossibleSteps[0]->GetDifficulty() == Difficulty_Beginner;
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats::GetGrade could not inspect "
+          "beginner difficulty because possible steps are missing.");
+    }
   }
 
   FOREACH_ENUM(TapNoteScore, tns) {

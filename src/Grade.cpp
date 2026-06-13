@@ -1,5 +1,6 @@
 #include "Grade.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -15,10 +16,22 @@ LuaXType(Grade);
 /** @brief The current number of grade tiers being used. */
 ThemeMetric<int> NUM_GRADE_TIERS_USED("PlayerStageStats", "NumGradeTiersUsed");
 
+int GetNumGradeTiersUsed() {
+  const int iThemeTiers = NUM_GRADE_TIERS_USED;
+  const int iClamped = std::min(std::max(iThemeTiers, 1), (int)Grade_Failed);
+  if (iThemeTiers != iClamped) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Clamped invalid NumGradeTiersUsed %i to %i.",
+        iThemeTiers, iClamped);
+  }
+  return iClamped;
+}
+
 Grade GetNextPossibleGrade(Grade g) {
-  if (g < NUM_GRADE_TIERS_USED - 1) {
+  const int iTiersUsed = GetNumGradeTiersUsed();
+  if (g < iTiersUsed - 1) {
     return (Grade)(g + 1);
-  } else if (g == NUM_GRADE_TIERS_USED - 1) {
+  } else if (g == iTiersUsed - 1) {
     return Grade_Failed;
   } else {
     return Grade_Invalid;
@@ -63,10 +76,13 @@ Grade GradeToOldGrade(Grade g) {
   // There used to be 7 grades (plus fail) but grades can now be defined by
   // themes. So we need to re-scale the grade bands based on how many actual
   // grades the theme defines.
-  if (g < NUM_GRADE_TIERS_USED) {
+  const int iTiersUsed = GetNumGradeTiersUsed();
+  if (g >= 0 && g < iTiersUsed) {
+    if (iTiersUsed <= 1) {
+      return Grade_Tier01;
+    }
     g = (Grade)std::lround(
-        (double)g * Enum::to_integral(Grade_Tier07) /
-        (NUM_GRADE_TIERS_USED - 1));
+        (double)g * Enum::to_integral(Grade_Tier07) / (iTiersUsed - 1));
   }
 
   return g;
