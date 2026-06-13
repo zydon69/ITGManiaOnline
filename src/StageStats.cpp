@@ -77,6 +77,13 @@ bool HasUsableStageStats(
         pss.m_vpPossibleSteps.size());
     return false;
   }
+  if (pss.m_vpPossibleSteps.size() < playedSongs.size()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s received too few possible steps: playedSongs=%zu "
+        "possibleSteps=%zu.",
+        context, playedSongs.size(), pss.m_vpPossibleSteps.size());
+    return false;
+  }
   return true;
 }
 }  // namespace
@@ -139,6 +146,7 @@ int StageStats::GetAverageMeter(PlayerNumber pn) const {
 
   // TODO: This isn't correct for courses.
   int iTotalMeter = 0;
+  int iValidMeters = 0;
 
   for (unsigned i = 0; i < m_vpPlayedSongs.size(); i++) {
     const Steps* pSteps = m_player[pn].m_vpPossibleSteps[i];
@@ -150,12 +158,16 @@ int StageStats::GetAverageMeter(PlayerNumber pn) const {
       continue;
     }
     iTotalMeter += pSteps->GetMeter();
+    ++iValidMeters;
   }
-  return iTotalMeter / m_vpPlayedSongs.size();  // round down
+  return iValidMeters > 0 ? iTotalMeter / iValidMeters : 0;  // round down
 }
 
 void StageStats::AddStats(const StageStats& other) {
-  ASSERT(!other.m_vpPlayedSongs.empty());
+  if (other.m_vpPlayedSongs.empty()) {
+    LOG->Warn("SRC_AUDIT_FIX: StageStats::AddStats ignored empty stage stats.");
+    return;
+  }
   for (Song* s : other.m_vpPlayedSongs) {
     m_vpPlayedSongs.push_back(s);
   }
@@ -171,7 +183,20 @@ void StageStats::AddStats(const StageStats& other) {
   m_fGameplaySeconds += other.m_fGameplaySeconds;
   m_fStepsSeconds += other.m_fStepsSeconds;
 
-  FOREACH_EnabledPlayer(p) m_player[p].AddStats(other.m_player[p]);
+  FOREACH_PlayerNumber(p) {
+    if (other.m_player[p].m_bJoined ||
+        !other.m_player[p].m_vpPossibleSteps.empty() ||
+        other.m_player[p].m_iStepsPlayed > 0) {
+      m_player[p].AddStats(other.m_player[p]);
+    }
+  }
+  FOREACH_MultiPlayer(mp) {
+    if (other.m_multiPlayer[mp].m_bJoined ||
+        !other.m_multiPlayer[mp].m_vpPossibleSteps.empty() ||
+        other.m_multiPlayer[mp].m_iStepsPlayed > 0) {
+      m_multiPlayer[mp].AddStats(other.m_multiPlayer[mp]);
+    }
+  }
 }
 
 bool StageStats::OnePassed() const {
@@ -233,7 +258,14 @@ static HighScore FillInHighScore(
 
   hs.SetDateTime(DateTime::GetNowDateTime());
   hs.SetPlayerGuid(sPlayerGuid);
-  hs.SetMachineGuid(PROFILEMAN->GetMachineProfile()->m_sGuid);
+  const Profile* pMachineProfile = PROFILEMAN->GetMachineProfile();
+  if (pMachineProfile != nullptr) {
+    hs.SetMachineGuid(pMachineProfile->m_sGuid);
+  } else {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: FillInHighScore could not set machine guid because "
+        "the machine profile is missing.");
+  }
   hs.SetProductID(PREFSMAN->m_iProductID);
   FOREACH_ENUM(TapNoteScore, tns)
   hs.SetTapNoteScore(tns, pss.m_iTapNoteScores[tns]);
@@ -339,9 +371,11 @@ void StageStats::FinalizeScores(bool bSummary) {
     if (!CanFillHighScore(p, "StageStats::FinalizeScores")) {
       continue;
     }
-    std::string sPlayerGuid = PROFILEMAN->IsPersistentProfile(p)
-                                  ? PROFILEMAN->GetProfile(p)->m_sGuid
-                                  : std::string("");
+    const Profile* pPlayerProfile = PROFILEMAN->GetProfile(p);
+    std::string sPlayerGuid =
+        PROFILEMAN->IsPersistentProfile(p) && pPlayerProfile != nullptr
+            ? pPlayerProfile->m_sGuid
+            : std::string("");
     m_player[p].m_HighScore = FillInHighScore(
         m_player[p], *GAMESTATE->m_pPlayerState[p],
         RANKING_TO_FILL_IN_MARKER[p], sPlayerGuid);
@@ -427,6 +461,13 @@ void StageStats::FinalizeScores(bool bSummary) {
 
     HighScore& hs = m_player[p].m_HighScore;
     Profile* pProfile = PROFILEMAN->GetMachineProfile();
+    if (pProfile == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: StageStats::FinalizeScores cannot reindex machine "
+          "score without machine profile.");
+      m_player[p].m_iMachineHighScoreIndex = -1;
+      continue;
+    }
     const Style* pStyle = GetScoreStyle(p, "StageStats::FinalizeScores");
     if (pStyle == nullptr) {
       m_player[p].m_iMachineHighScoreIndex = -1;
@@ -490,6 +531,13 @@ bool StageStats::PlayerHasHighScore(PlayerNumber pn) const {
   const Steps* pSteps = m_player[pn].m_vpPossibleSteps[0];
   const Course* pCourse = GAMESTATE->m_pCurCourse;
   const Trail* pTrail = GAMESTATE->m_pCurTrail[pn];
+  Profile* pMachineProfile = PROFILEMAN->GetMachineProfile();
+  if (pMachineProfile == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: StageStats::PlayerHasHighScore cannot check machine "
+        "scores without machine profile.");
+    return false;
+  }
   if (GAMESTATE->IsCourseMode() &&
       !HasCourseScoreContext(
           pCourse, pTrail, pn, "StageStats::PlayerHasHighScore")) {
@@ -503,10 +551,8 @@ bool StageStats::PlayerHasHighScore(PlayerNumber pn) const {
 
   const HighScoreList& hsl =
       GAMESTATE->IsCourseMode()
-          ? PROFILEMAN->GetMachineProfile()->GetCourseHighScoreList(
-                pCourse, pTrail)
-          : PROFILEMAN->GetMachineProfile()->GetStepsHighScoreList(
-                pSong, pSteps);
+          ? pMachineProfile->GetCourseHighScoreList(pCourse, pTrail)
+          : pMachineProfile->GetStepsHighScoreList(pSong, pSteps);
 
   const unsigned int iScore = m_player[pn].m_iScore;
   float fPercentDP = m_player[pn].GetPercentDancePoints();
@@ -543,11 +589,21 @@ unsigned int StageStats::GetMinimumMissCombo() const {
 class LunaStageStats : public Luna<StageStats> {
  public:
   static int GetPlayerStageStats(T* p, lua_State* L) {
-    p->m_player[Enum::Check<PlayerNumber>(L, 1)].PushSelf(L);
+    PlayerNumber pn = Enum::Check<PlayerNumber>(L, 1);
+    if (!IsValidPlayerNumber(pn)) {
+      lua_pushnil(L);
+      return 1;
+    }
+    p->m_player[pn].PushSelf(L);
     return 1;
   }
   static int GetMultiPlayerStageStats(T* p, lua_State* L) {
-    p->m_multiPlayer[Enum::Check<MultiPlayer>(L, 1)].PushSelf(L);
+    MultiPlayer mp = Enum::Check<MultiPlayer>(L, 1);
+    if (!IsValidMultiPlayer(mp)) {
+      lua_pushnil(L);
+      return 1;
+    }
+    p->m_multiPlayer[mp].PushSelf(L);
     return 1;
   }
   static int GetPlayedSongs(T* p, lua_State* L) {
