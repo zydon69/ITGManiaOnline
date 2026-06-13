@@ -700,7 +700,11 @@ const Profile* ProfileManager::GetLocalProfile(
 
 bool ProfileManager::CreateLocalProfile(
     std::string sName, std::string& sProfileIDOut) {
-  ASSERT(!sName.empty());
+  sProfileIDOut = "";
+  if (sName.empty()) {
+    LOG->Warn("ProfileManager::CreateLocalProfile: empty profile name");
+    return false;
+  }
 
   // Find a directory directory name that's a number greater than all
   // existing numbers.  This preserves the "order by create date".
@@ -731,28 +735,40 @@ bool ProfileManager::CreateLocalProfile(
   if (profile_number > MAX_ID || profile_number < 0) {
     profile_number = first_free_number;
   }
-  ASSERT_M(
-      profile_number >= 0 && profile_number <= MAX_ID,
-      "Too many profiles, cannot assign ID to new profile.");
+  if (profile_number < 0 || profile_number > MAX_ID) {
+    LOG->Warn(
+        "ProfileManager::CreateLocalProfile: too many profiles, cannot "
+        "assign a new ID");
+    return false;
+  }
   std::string profile_id = ssprintf("%0" ID_DIGITS_STR "d", profile_number);
 
   // make sure this id doesn't already exist
-  ASSERT_M(
-      GetLocalProfile(profile_id) == nullptr,
-      ssprintf(
-          "creating profile with ID \"%s\" that already exists",
-          profile_id.c_str()));
+  if (GetLocalProfile(profile_id) != nullptr) {
+    LOG->Warn(
+        "ProfileManager::CreateLocalProfile: generated duplicate profile ID "
+        "'%s'",
+        profile_id.c_str());
+    return false;
+  }
 
   // Create the new profile.
   Profile* pProfile = new Profile;
   pProfile->m_sDisplayName = sName;
-  pProfile->m_sCharacterID = CHARMAN->GetRandomCharacter()->m_sCharacterID;
+  Character* pCharacter = CHARMAN->GetRandomCharacter();
+  if (pCharacter == nullptr) {
+    LOG->Warn(
+        "ProfileManager::CreateLocalProfile: no character available for new "
+        "profile");
+    delete pProfile;
+    return false;
+  }
+  pProfile->m_sCharacterID = pCharacter->m_sCharacterID;
 
   // Save it to disk.
   std::string sProfileDir = LocalProfileIDToDir(profile_id);
   if (!pProfile->SaveAllToDir(sProfileDir, PREFSMAN->m_bSignProfileData)) {
     delete pProfile;
-    sProfileIDOut = "";
     return false;
   }
 
