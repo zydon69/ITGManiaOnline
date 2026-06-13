@@ -10,14 +10,11 @@ class PlayerStageStats;
 /** @brief The player's life. */
 class LifeMeter : public ActorFrame {
  public:
-  LifeMeter() {};
+  LifeMeter();
   virtual ~LifeMeter() {};
 
   virtual void Load(
-      const PlayerState* pPlayerState, PlayerStageStats* pPlayerStageStats) {
-    m_pPlayerState = pPlayerState;
-    m_pPlayerStageStats = pPlayerStageStats;
-  }
+      const PlayerState* pPlayerState, PlayerStageStats* pPlayerStageStats);
   virtual void OnLoadSong() {};
   virtual void OnSongEnded() {};
   /**

@@ -35,6 +35,11 @@ void ScoreDisplayNormal::Init(
     const PlayerState* pPlayerState,
     const PlayerStageStats* pPlayerStageStats) {
   ScoreDisplay::Init(pPlayerState, pPlayerStageStats);
+  if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-236: ScoreDisplayNormal ignored null init state.");
+    return;
+  }
 
   PlayerState* pPlayerState_ = const_cast<PlayerState*>(pPlayerState);
   PlayerStageStats* pPlayerStageStats_ =

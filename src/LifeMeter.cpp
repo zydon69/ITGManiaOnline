@@ -6,8 +6,26 @@
 #include "LifeMeterTime.h"
 #include "LuaManager.h"
 #include "PlayerOptions.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "global.h"
+
+LifeMeter::LifeMeter() {
+  m_pPlayerState = nullptr;
+  m_pPlayerStageStats = nullptr;
+}
+
+void LifeMeter::Load(
+    const PlayerState* pPlayerState, PlayerStageStats* pPlayerStageStats) {
+  if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-236: LifeMeter loaded with PlayerState=%p "
+        "PlayerStageStats=%p.",
+        pPlayerState, pPlayerStageStats);
+  }
+  m_pPlayerState = pPlayerState;
+  m_pPlayerStageStats = pPlayerStageStats;
+}
 
 LifeMeter* LifeMeter::MakeLifeMeter(LifeType t) {
   switch (t) {
@@ -18,7 +36,9 @@ LifeMeter* LifeMeter::MakeLifeMeter(LifeType t) {
     case LifeType_Time:
       return new LifeMeterTime;
     default:
-      FAIL_M(ssprintf("Unrecognized LifeMeter type: %i", t));
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-235: Invalid LifeMeter type %i; using Bar.", t);
+      return new LifeMeterBar;
   }
 }
 

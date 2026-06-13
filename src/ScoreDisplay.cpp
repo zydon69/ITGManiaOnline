@@ -1,8 +1,21 @@
 #include "ScoreDisplay.h"
 
+#include "RageLog.h"
+
+ScoreDisplay::ScoreDisplay() {
+  m_pPlayerState = nullptr;
+  m_pPlayerStageStats = nullptr;
+}
+
 void ScoreDisplay::Init(
     const PlayerState* pPlayerState,
     const PlayerStageStats* pPlayerStageStats) {
+  if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-236: ScoreDisplay initialized with PlayerState=%p "
+        "PlayerStageStats=%p.",
+        pPlayerState, pPlayerStageStats);
+  }
   m_pPlayerState = pPlayerState;
   m_pPlayerStageStats = pPlayerStageStats;
 }
