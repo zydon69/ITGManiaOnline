@@ -385,11 +385,20 @@ int PlayerStageStats::GetLessonScoreActual() const {
 }
 
 int PlayerStageStats::GetLessonScoreNeeded() const {
+  const PlayerNumber pn =
+      (m_player_number >= PLAYER_1 && m_player_number < NUM_PLAYERS)
+          ? m_player_number
+          : PLAYER_1;
   float fScore = std::accumulate(
       m_vpPossibleSteps.begin(), m_vpPossibleSteps.end(), 0.f,
-      [](float total, const Steps* steps) {
-        return total +
-               steps->GetRadarValues(PLAYER_1)[RadarCategory_TapsAndHolds];
+      [pn](float total, const Steps* steps) {
+        if (steps == nullptr) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX: PlayerStageStats::GetLessonScoreNeeded skipped "
+              "null steps.");
+          return total;
+        }
+        return total + steps->GetRadarValues(pn)[RadarCategory_TapsAndHolds];
       });
   return std::lrint(fScore * LESSON_PASS_THRESHOLD);
 }
