@@ -926,11 +926,18 @@ void SMLoader::ProcessTimeSignatures(
         TimeSignatureSegment(BeatToNoteRow(fBeat), iNumerator, iDenominator));
   }
 
-  // If there are any time signatures defined, but there isn't one
-  // for the very first beat of the song, then add one.
-  // Without it, calls to functions like TimingData::NoteRowToMeasureAndBeat
-  // can fail for charts that are otherwise valid.
-  if (segments.size() > 0 && segments[0].GetRow() > 0) {
+  // If there are any time signatures defined, but there isn't one for the very
+  // first beat of the song, then add one.  Without it, calls to functions like
+  // TimingData::NoteRowToMeasureAndBeat can fail for charts that are otherwise
+  // valid.
+  bool hasStartSignature = false;
+  for (const TimeSignatureSegment& segment : segments) {
+    if (segment.GetRow() == 0) {
+      hasStartSignature = true;
+      break;
+    }
+  }
+  if (!segments.empty() && !hasStartSignature) {
     out.AddSegment(TimeSignatureSegment(0, 4, 4));
   }
 
