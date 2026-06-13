@@ -2215,7 +2215,6 @@ void SongManager::SetPreferredSongs(
   }
 
   PreferredSortSection section;
-  std::map<Song*, float> mapSongToPri;
 
   for (std::string sLine : asLines) {
     bool bSectionDivider = BeginsWith(sLine, "---");
