@@ -575,15 +575,16 @@ void EditCourseUtil::LoadDefaults(Course& out) {
 
   // pick a default name
   // XXX: Make this localizable
+  std::vector<Course*> vpCourses;
+  EditCourseUtil::GetAllEditCourses(vpCourses);
   for (int i = 0; i < 10000; i++) {
     out.m_sMainTitle = ssprintf("Workout %d", i + 1);
 
-    std::vector<Course*> vpCourses;
-    EditCourseUtil::GetAllEditCourses(vpCourses);
-
-    if (std::any_of(vpCourses.begin(), vpCourses.end(), [&](const Course* p) {
+    const bool bNameTaken =
+        std::any_of(vpCourses.begin(), vpCourses.end(), [&](const Course* p) {
           return out.m_sMainTitle == p->m_sMainTitle;
-        })) {
+        });
+    if (!bNameTaken) {
       break;
     }
   }
