@@ -1548,17 +1548,57 @@ bool SongUtil::ValidateCurrentStepsCredit(
 
 static LocalizedString PREVIEW_DOES_NOT_EXIST(
     "SongUtil", "The preview file '%s' does not exist.");
+static LocalizedString FILE_PATH_MUST_BE_RELATIVE_TO_SONG(
+    "SongUtil", "The file path must stay inside the song folder.");
+
+static bool IsSongRelativeAssetPathSafe(const std::string& path) {
+  if (path.empty()) {
+    return true;
+  }
+  if (path[0] == '/' || path[0] == '\\') {
+    return false;
+  }
+  if (path.find(':') != std::string::npos) {
+    return false;
+  }
+
+  std::string normalized = path;
+  std::replace(normalized.begin(), normalized.end(), '\\', '/');
+  std::vector<std::string> parts;
+  split(normalized, "/", parts, true);
+  return std::find(parts.begin(), parts.end(), "..") == parts.end();
+}
+
 bool SongUtil::ValidateCurrentSongPreview(
     const std::string& answer, std::string& error) {
   if (answer.empty()) {
     return true;
   }
-  Song* song = GAMESTATE->m_pCurSong;
+  if (!IsSongRelativeAssetPathSafe(answer)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-662: rejected unsafe song preview path '%s'.",
+        answer.c_str());
+    error = FILE_PATH_MUST_BE_RELATIVE_TO_SONG;
+    return false;
+  }
+
+  Song* song = GAMESTATE == nullptr ? nullptr : GAMESTATE->m_pCurSong;
+  if (song == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-662: preview validation requested without current "
+        "song.");
+    error = NO_CURRENT_STEPS_SELECTED;
+    return false;
+  }
   std::string real_file = song->m_PreviewFile;
+  struct PreviewFileRestorer {
+    Song* song;
+    std::string file;
+    ~PreviewFileRestorer() { song->m_PreviewFile = file; }
+  } restore{song, real_file};
   song->m_PreviewFile = answer;
   std::string path = song->GetPreviewMusicPath();
   bool valid = DoesFileExist(path);
-  song->m_PreviewFile = real_file;
   if (!valid) {
     error = ssprintf(PREVIEW_DOES_NOT_EXIST.GetValue().c_str(), answer.c_str());
   }
@@ -1572,12 +1612,28 @@ bool SongUtil::ValidateCurrentStepsMusic(
   if (answer.empty()) {
     return true;
   }
-  Steps* pSteps = GAMESTATE->m_pCurSteps[PLAYER_1];
+  if (!IsSongRelativeAssetPathSafe(answer)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-662: rejected unsafe steps music path '%s'.",
+        answer.c_str());
+    error = FILE_PATH_MUST_BE_RELATIVE_TO_SONG;
+    return false;
+  }
+
+  Steps* pSteps = GetCurrentPlayerOneStepsForValidation("steps music");
+  if (pSteps == nullptr) {
+    error = NO_CURRENT_STEPS_SELECTED;
+    return false;
+  }
   std::string real_file = pSteps->GetMusicFile();
+  struct StepsMusicRestorer {
+    Steps* steps;
+    std::string file;
+    ~StepsMusicRestorer() { steps->SetMusicFile(file); }
+  } restore{pSteps, real_file};
   pSteps->SetMusicFile(answer);
   std::string path = pSteps->GetMusicPath();
   bool valid = DoesFileExist(path);
-  pSteps->SetMusicFile(real_file);
   if (!valid) {
     error = ssprintf(MUSIC_DOES_NOT_EXIST.GetValue().c_str(), answer.c_str());
   }
