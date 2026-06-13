@@ -26,6 +26,10 @@ namespace {
 static ThemeMetric<TapNoteScore> MIN_SCORE_TO_MAINTAIN_COMBO(
     "Gameplay", "MinScoreToMaintainCombo");
 
+bool NoteBelongsToPlayer(const TapNote& tn, PlayerNumber pn) {
+  return pn == PLAYER_INVALID || tn.pn == PLAYER_INVALID || tn.pn == pn;
+}
+
 /* Return the last tap score of a row: the grade of the tap that completed
  * the row.  If the row has no tap notes, return -1.  If any tap notes aren't
  * graded (any tap is TNS_None) or are missed (TNS_Miss), return it. */
@@ -39,7 +43,7 @@ int LastTapNoteScoreTrack(const NoteData& in, unsigned iRow, PlayerNumber pn) {
         tn.type == TapNoteType_Fake || tn.type == TapNoteType_AutoKeysound) {
       continue;
     }
-    if (tn.pn != PLAYER_INVALID && tn.pn != pn && pn != PLAYER_INVALID) {
+    if (!NoteBelongsToPlayer(tn, pn)) {
       continue;
     }
 
@@ -137,20 +141,22 @@ TapNoteScore NoteDataWithScoring::MinTapNoteScore(
     const NoteData& in, unsigned row, PlayerNumber plnum) {
   // LOG->Trace("Hey I'm NoteDataWithScoring::MinTapNoteScore");
   TapNoteScore score = TNS_W1;
+  bool foundScoredNote = false;
   for (int t = 0; t < in.GetNumTracks(); t++) {
     // Ignore mines (and fake arrows), or the score will always be TNS_None.
     const TapNote& tn = in.GetTapNote(t, row);
     if (tn.type == TapNoteType_Empty || tn.type == TapNoteType_Mine ||
         tn.type == TapNoteType_Fake || tn.type == TapNoteType_AutoKeysound ||
-        (plnum != PlayerNumber_Invalid && tn.pn != plnum)) {
+        !NoteBelongsToPlayer(tn, plnum)) {
       continue;
     }
+    foundScoredNote = true;
     score = std::min(score, tn.result.tns);
   }
 
   // LOG->Trace( ssprintf("OMG score is??
   // %s",TapNoteScoreToString(score).c_str()) );
-  return score;
+  return foundScoredNote ? score : TNS_None;
 }
 
 bool NoteDataWithScoring::IsRowCompletelyJudged(
