@@ -142,7 +142,9 @@ class Player : public ActorFrame {
    *
    * This is primarily for a lua hook.
    * @return the TimingData in question. */
-  TimingData GetPlayerTimingData() const { return *(this->m_Timing); }
+  TimingData GetPlayerTimingData() const {
+    return m_Timing != nullptr ? *m_Timing : TimingData();
+  }
 
   void ScoreAllActiveHoldsLetGo();
   void DoTapScoreNone();
@@ -287,8 +289,6 @@ class Player : public ActorFrame {
   RageSound m_soundAttackEnding;
 
   float m_fActiveRandomAttackStart;
-
-  std::vector<bool> m_vbFretIsDown;
 
   std::vector<RageSound> m_vKeysounds;
 

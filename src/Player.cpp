@@ -92,6 +92,10 @@ class JudgedRows {
   JudgedRows() : m_iStart(0), m_iOffset(0) { Resize(32); }
   // Returns true if the row has already been judged.
   bool JudgeRow(int iRow) {
+    if (iRow < 0 || iRow > MAX_NOTE_ROW) {
+      LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid judged row %i.", iRow);
+      return true;
+    }
     if (iRow < m_iStart) {
       return true;
     }
@@ -129,6 +133,70 @@ std::string ATTACK_DISPLAY_X_NAME(size_t p, size_t both_sides) {
  * TODO: This should be calculated based on the max size of the current judgment
  * windows. */
 static const float StepSearchDistance = 1.0f;
+static const float PlayerReadBpmFallback = 200.0f;
+
+static bool IsValidPlayerNumberForPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+static bool IsValidTapNoteTypeForPlayer(TapNoteType type) {
+  return type >= TapNoteType_Empty && type < NUM_TapNoteType;
+}
+
+static bool IsValidTapNoteSubTypeForPlayer(TapNoteSubType type) {
+  return type >= TapNoteSubType_Hold && type < NUM_TapNoteSubType;
+}
+
+static bool IsValidTapNoteScoreForPlayer(TapNoteScore score) {
+  return score >= TNS_None && score < NUM_TapNoteScore;
+}
+
+static bool IsValidHoldNoteScoreForPlayer(HoldNoteScore score) {
+  return score >= HNS_None && score < NUM_HoldNoteScore;
+}
+
+static float SanitizePlayerMusicRate(float rate, const char* context) {
+  if (!std::isfinite(rate) || rate <= 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid music rate %f in %s; using 1.", rate, context);
+    return 1.0f;
+  }
+  return rate;
+}
+
+static float SanitizePlayerDelta(float delta, const char* context) {
+  if (!std::isfinite(delta) || delta < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid delta %f in %s; using 0.", delta, context);
+    return 0.0f;
+  }
+  return delta;
+}
+
+static int SafeEndRowForPlayer(int startRow, int duration) {
+  if (duration < 0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Negative hold duration %i at row %i; clamping.",
+        duration, startRow);
+    duration = 0;
+  }
+  if (startRow > MAX_NOTE_ROW - duration) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Hold end row overflow at row %i duration %i; "
+        "clamping to MAX_NOTE_ROW.",
+        startRow, duration);
+    return MAX_NOTE_ROW;
+  }
+  return startRow + duration;
+}
+
+static const Style* GetSafePlayerStyle(const PlayerState* playerState) {
+  if (GAMESTATE == nullptr || playerState == nullptr ||
+      !IsValidPlayerNumberForPlayer(playerState->m_PlayerNumber)) {
+    return nullptr;
+  }
+  return GAMESTATE->GetCurrentStyle(playerState->m_PlayerNumber);
+}
 
 void TimingWindowSecondsInit(
     size_t /*TimingWindow*/ i, std::string& sNameOut, float& defaultValueOut) {
@@ -293,9 +361,24 @@ ThemeMetric<float> M_MOD_HIGH_CAP("Player", "MModHighCap");
 ThemeMetric<bool> BATTLE_RAVE_MIRROR("Player", "BattleRaveMirror");
 
 float Player::GetWindowSeconds(TimingWindow tw) {
+  if (tw < 0 || tw >= NUM_TimingWindow) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid timing window %i; using W5 fallback.",
+        static_cast<int>(tw));
+    tw = TW_W5;
+  }
   float fSecs = m_fTimingWindowSeconds[tw];
   fSecs *= m_fTimingWindowScale;
   fSecs += m_fTimingWindowAdd;
+  if (!std::isfinite(fSecs) || fSecs < 0.0f) {
+    float unusedDefault = 0.0f;
+    std::string unusedName;
+    TimingWindowSecondsInit(tw, unusedName, unusedDefault);
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid timing window seconds %f for %s; using %f.",
+        fSecs, unusedName.c_str(), unusedDefault);
+    fSecs = unusedDefault;
+  }
   return fSecs;
 }
 
@@ -307,6 +390,7 @@ Player::Player(NoteData& nd, bool bVisibleParts) : m_NoteData(nd) {
 
   m_pPlayerState = nullptr;
   m_pPlayerStageStats = nullptr;
+  m_Timing = nullptr;
   m_fNoteFieldHeight = 0;
 
   m_pLifeMeter = nullptr;
@@ -316,6 +400,7 @@ Player::Player(NoteData& nd, bool bVisibleParts) : m_NoteData(nd) {
   m_pPrimaryScoreKeeper = nullptr;
   m_pSecondaryScoreKeeper = nullptr;
   m_pInventory = nullptr;
+  m_iFirstUncrossedRow = 0;
   m_pIterNeedsTapJudging = nullptr;
   m_pIterNeedsHoldJudging = nullptr;
   m_pIterUncrossedRows = nullptr;
@@ -326,6 +411,8 @@ Player::Player(NoteData& nd, bool bVisibleParts) : m_NoteData(nd) {
   m_bDelay = false;
 
   m_pAttackDisplay = nullptr;
+  m_pActorWithJudgmentPosition = nullptr;
+  m_pActorWithComboPosition = nullptr;
   if (bVisibleParts) {
     m_pAttackDisplay = new AttackDisplay;
     this->AddChild(m_pAttackDisplay);
@@ -341,6 +428,11 @@ Player::Player(NoteData& nd, bool bVisibleParts) : m_NoteData(nd) {
   m_pJudgedRows = new JudgedRows;
 
   m_bSendJudgmentAndComboMessages = true;
+  m_LastTapNoteScore = TNS_None;
+  m_iLastSeenCombo = 0;
+  m_bSeenComboYet = false;
+  m_bTickHolds = false;
+  m_fActiveRandomAttackStart = -1.0f;
   m_iPerfTapJudgmentsSinceLastSnapshot = 0;
   m_iPerfHoldJudgmentsSinceLastSnapshot = 0;
   m_iPerfMineJudgmentsSinceLastSnapshot = 0;
@@ -384,11 +476,27 @@ void Player::Init(
   DRAW_DISTANCE_BEFORE_TARGET_PIXELS.Load(
       sType, "DrawDistanceBeforeTargetsPixels");
 
+  m_pPlayerState = pPlayerState;
+  m_pPlayerStageStats = pPlayerStageStats;
+  m_pLifeMeter = pLM;
+  m_pCombinedLifeMeter = pCombinedLM;
+  m_pScoreDisplay = pScoreDisplay;
+  m_pSecondaryScoreDisplay = pSecondaryScoreDisplay;
+  m_pInventory = pInventory;
+  m_pPrimaryScoreKeeper = pPrimaryScoreKeeper;
+  m_pSecondaryScoreKeeper = pSecondaryScoreKeeper;
+
+  const Style* style = GetSafePlayerStyle(m_pPlayerState);
+  if (style == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Player::Init missing valid player style; visible "
+        "player parts will not be initialized.");
+    return;
+  }
+
   {
     // Init judgment positions
-    bool bPlayerUsingBothSides =
-        GAMESTATE->GetCurrentStyle(pPlayerState->m_PlayerNumber)
-            ->GetUsesCenteredArrows();
+    bool bPlayerUsingBothSides = style->GetUsesCenteredArrows();
     Actor TempJudgment;
     TempJudgment.SetName("Judgment");
     ActorUtil::LoadCommand(TempJudgment, sType, "Transform");
@@ -444,16 +552,6 @@ void Player::Init(
 
   this->SortByDrawOrder();
 
-  m_pPlayerState = pPlayerState;
-  m_pPlayerStageStats = pPlayerStageStats;
-  m_pLifeMeter = pLM;
-  m_pCombinedLifeMeter = pCombinedLM;
-  m_pScoreDisplay = pScoreDisplay;
-  m_pSecondaryScoreDisplay = pSecondaryScoreDisplay;
-  m_pInventory = pInventory;
-  m_pPrimaryScoreKeeper = pPrimaryScoreKeeper;
-  m_pSecondaryScoreKeeper = pSecondaryScoreKeeper;
-
   m_iLastSeenCombo = 0;
   m_bSeenComboYet = false;
 
@@ -497,11 +595,13 @@ void Player::Init(
     DisplayBpms bpms;
 
     if (GAMESTATE->IsCourseMode()) {
-      ASSERT(GAMESTATE->m_pCurTrail[pn] != nullptr);
-      GAMESTATE->m_pCurTrail[pn]->GetDisplayBpms(bpms);
+      if (GAMESTATE->m_pCurTrail[pn] != nullptr) {
+        GAMESTATE->m_pCurTrail[pn]->GetDisplayBpms(bpms);
+      }
     } else {
-      ASSERT(GAMESTATE->m_pCurSteps[pn] != nullptr);
-      GAMESTATE->m_pCurSteps[pn]->GetDisplayBpms(bpms);
+      if (GAMESTATE->m_pCurSteps[pn] != nullptr) {
+        GAMESTATE->m_pCurSteps[pn]->GetDisplayBpms(bpms);
+      }
     }
 
     float fMaxBPM = 0;
@@ -528,18 +628,34 @@ void Player::Init(
       float fThrowAway = 0;
 
       if (GAMESTATE->IsCourseMode()) {
-        for (const TrailEntry& e : GAMESTATE->m_pCurTrail[pn]->m_vEntries) {
-          float fMaxForEntry;
-          if (M_MOD_HIGH_CAP > 0) {
-            e.pSong->m_SongTiming.GetActualBPM(
-                fThrowAway, fMaxForEntry, M_MOD_HIGH_CAP);
-          } else {
-            e.pSong->m_SongTiming.GetActualBPM(fThrowAway, fMaxForEntry);
+        Trail* trail = GAMESTATE->m_pCurTrail[pn];
+        if (trail == nullptr) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX: Missing trail while calculating read BPM; "
+              "using default.");
+          fMaxBPM = PlayerReadBpmFallback;
+        } else {
+          for (const TrailEntry& e : trail->m_vEntries) {
+            if (e.pSong == nullptr) {
+              continue;
+            }
+            float fMaxForEntry;
+            if (M_MOD_HIGH_CAP > 0) {
+              e.pSong->m_SongTiming.GetActualBPM(
+                  fThrowAway, fMaxForEntry, M_MOD_HIGH_CAP);
+            } else {
+              e.pSong->m_SongTiming.GetActualBPM(fThrowAway, fMaxForEntry);
+            }
+            fMaxBPM = std::max(fMaxForEntry, fMaxBPM);
           }
-          fMaxBPM = std::max(fMaxForEntry, fMaxBPM);
         }
       } else {
-        if (M_MOD_HIGH_CAP > 0) {
+        if (GAMESTATE->m_pCurSong == nullptr) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX: Missing song while calculating read BPM; using "
+              "default.");
+          fMaxBPM = PlayerReadBpmFallback;
+        } else if (M_MOD_HIGH_CAP > 0) {
           GAMESTATE->m_pCurSong->m_SongTiming.GetActualBPM(
               fThrowAway, fMaxBPM, M_MOD_HIGH_CAP);
         } else {
@@ -548,7 +664,12 @@ void Player::Init(
       }
     }
 
-    ASSERT(fMaxBPM > 0);
+    if (!std::isfinite(fMaxBPM) || fMaxBPM <= 0.0f) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid read BPM %f; using default CMod BPM.",
+          fMaxBPM);
+      fMaxBPM = PlayerReadBpmFallback;
+    }
     m_pPlayerState->m_fReadBPM = fMaxBPM;
   }
 
@@ -581,21 +702,20 @@ void Player::Init(
   }
 
   // Load HoldJudgments
-  m_vpHoldJudgment.resize(
-      GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-          ->m_iColsPerPlayer);
-  for (int i = 0;
-       i < GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-               ->m_iColsPerPlayer;
-       ++i) {
+  const int colsPerPlayer =
+      std::clamp(style->m_iColsPerPlayer, 0, MAX_COLS_PER_PLAYER);
+  if (colsPerPlayer != style->m_iColsPerPlayer) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Clamped invalid style column count %i to %i.",
+        style->m_iColsPerPlayer, colsPerPlayer);
+  }
+  m_vpHoldJudgment.resize(colsPerPlayer);
+  for (int i = 0; i < colsPerPlayer; ++i) {
     m_vpHoldJudgment[i] = nullptr;
   }
 
   if (HasVisibleParts()) {
-    for (int i = 0;
-         i < GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-                 ->m_iColsPerPlayer;
-         ++i) {
+    for (int i = 0; i < colsPerPlayer; ++i) {
       HoldJudgment* pJudgment = new HoldJudgment;
       // xxx: assumes sprite; todo: don't force 1x2 -aj
       pJudgment->Load(THEME->GetPathG("HoldJudgment", "label 1x2"));
@@ -611,11 +731,6 @@ void Player::Init(
     this->AddChild(m_pNoteField);
   }
 
-  m_vbFretIsDown.resize(
-      GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-          ->m_iColsPerPlayer);
-  std::fill_n(m_vbFretIsDown.begin(), m_vbFretIsDown.size(), false);
-
   m_fActiveRandomAttackStart = -1.0f;
 }
 /**
@@ -624,7 +739,6 @@ void Player::Init(
  * @return true if it does, false otherwise. */
 static bool NeedsTapJudging(const TapNote& tn) {
   switch (tn.type) {
-    DEFAULT_FAIL(tn.type);
     case TapNoteType_Tap:
     case TapNoteType_HoldHead:
     case TapNoteType_Mine:
@@ -636,6 +750,11 @@ static bool NeedsTapJudging(const TapNote& tn) {
     case TapNoteType_Fake:
     case TapNoteType_Empty:
       return false;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid TapNoteType %i in NeedsTapJudging.",
+          tn.type);
+      return false;
   }
 }
 
@@ -645,7 +764,6 @@ static bool NeedsTapJudging(const TapNote& tn) {
  * @return true if it does, false otherwise. */
 static bool NeedsHoldJudging(const TapNote& tn) {
   switch (tn.type) {
-    DEFAULT_FAIL(tn.type);
     case TapNoteType_HoldHead:
       return tn.HoldResult.hns == HNS_None;
     case TapNoteType_Tap:
@@ -656,6 +774,11 @@ static bool NeedsHoldJudging(const TapNote& tn) {
     case TapNoteType_AutoKeysound:
     case TapNoteType_Fake:
     case TapNoteType_Empty:
+      return false;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid TapNoteType %i in NeedsHoldJudging.",
+          tn.type);
       return false;
   }
 }
@@ -697,6 +820,29 @@ static void GenerateCacheDataStructure(
 }
 
 void Player::Load() {
+  m_bLoaded = false;
+  if (m_pPlayerState == nullptr || GAMESTATE == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Player::Load called without gameplay state.");
+    return;
+  }
+
+  PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
+  const Style* style = GetSafePlayerStyle(m_pPlayerState);
+  if (style == nullptr || GAMESTATE->m_pCurSong == nullptr ||
+      !IsValidPlayerNumberForPlayer(pn) ||
+      GAMESTATE->m_pCurSteps[pn] == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Player::Load missing song, steps, style, or player; "
+        "load aborted.");
+    return;
+  }
+
+  m_Timing = GAMESTATE->m_pCurSteps[pn]->GetTimingData();
+  if (m_Timing == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Player::Load missing timing data; load aborted.");
+    return;
+  }
+
   m_bLoaded = true;
 
   // Figured this is probably a little expensive so let's cache it
@@ -708,9 +854,6 @@ void Player::Load() {
       BeatToNoteRowNotRounded(m_pPlayerState->m_Position.m_fSongBeat);
   m_iFirstUncrossedRow = iNoteRow - 1;
   m_pJudgedRows->Reset(iNoteRow);
-
-  // TODO: Remove use of PlayerNumber.
-  PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
 
   bool bOniDead =
       m_pPlayerState->m_PlayerOptions.GetStage().m_LifeType ==
@@ -739,13 +882,10 @@ void Player::Load() {
   //	if( m_pScore )
   //		m_pScore->Init( pn );
 
-  m_Timing = GAMESTATE->m_pCurSteps[pn]->GetTimingData();
-
   /* Apply transforms. */
   NoteDataUtil::TransformNoteData(
       m_NoteData, *m_Timing, m_pPlayerState->m_PlayerOptions.GetStage(),
-      GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-          ->m_StepsType);
+      style->m_StepsType);
 
   const Song* pSong = GAMESTATE->m_pCurSong;
 
@@ -760,30 +900,26 @@ void Player::Load() {
       // it has to do with there only being four cases. This is a lame
       // workaround, but since only DDR has ever really implemented those
       // modes, it's stayed like this. -aj
-      StepsType st =
-          GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-              ->m_StepsType;
-      NoteDataUtil::TransformNoteData(
-          m_NoteData, *m_Timing, m_pPlayerState->m_PlayerOptions.GetStage(),
-          st);
+      StepsType st = style->m_StepsType;
 
       if (BATTLE_RAVE_MIRROR) {
-        // shuffle either p1 or p2
-        static int count = 0;
-        switch (count) {
+        // Mirror deterministically by player instead of using cross-load
+        // static state that can desync after reloads or editor reuse.
+        const int mirrorSlot = pn == PLAYER_2 ? 1 : 0;
+        switch (mirrorSlot) {
           case 0:
-          case 3:
             NoteDataUtil::Turn(m_NoteData, st, NoteDataUtil::left);
             break;
           case 1:
-          case 2:
             NoteDataUtil::Turn(m_NoteData, st, NoteDataUtil::right);
             break;
           default:
-            FAIL_M(ssprintf("Count %i not in range 0-3", count));
+            LOG->Warn(
+                "SRC_AUDIT_FIX: Invalid battle mirror slot %i; leaving notes "
+                "unmirrored.",
+                mirrorSlot);
+            break;
         }
-        count++;
-        count %= 4;
       }
       break;
     }
@@ -806,8 +942,7 @@ void Player::Load() {
   }
 
   bool bPlayerUsingBothSides =
-      GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-          ->GetUsesCenteredArrows();
+      style->GetUsesCenteredArrows();
   if (m_pAttackDisplay) {
     m_pAttackDisplay->SetX(
         ATTACK_DISPLAY_X.GetValue(pn, bPlayerUsingBothSides) - 40);
@@ -901,6 +1036,7 @@ void Player::SendComboMessages(
 }
 
 void Player::Update(float fDeltaTime) {
+  fDeltaTime = SanitizePlayerDelta(fDeltaTime, "Player::Update");
   const RageTimer now;
   // Don't update if we haven't been loaded yet.
   if (!m_bLoaded) {
@@ -909,7 +1045,12 @@ void Player::Update(float fDeltaTime) {
 
   // LOG->Trace( "Player::Update(%f)", fDeltaTime );
 
-  if (GAMESTATE->m_pCurSong == nullptr || IsOniDead()) {
+  const Style* style = GetSafePlayerStyle(m_pPlayerState);
+  if (GAMESTATE == nullptr || m_pPlayerState == nullptr || m_Timing == nullptr ||
+      style == nullptr || GAMESTATE->m_pCurSong == nullptr || IsOniDead()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Player::Update skipped because gameplay context is "
+        "incomplete.");
     return;
   }
 
@@ -944,7 +1085,8 @@ void Player::Update(float fDeltaTime) {
     if (m_pPlayerState->m_PlayerOptions.GetCurrent().m_fRandAttack) {
       float fCurrentGameTime = STATSMAN->m_CurStageStats.m_fGameplaySeconds;
 
-      const float fAttackRunTime = ATTACK_RUN_TIME_RANDOM;
+      const float fAttackRunTime = SanitizePlayerDelta(
+          ATTACK_RUN_TIME_RANDOM, "Player::Update random attack runtime");
 
       // Don't start until 1 seconds into game, minimum
       if (fCurrentGameTime > 1.0f) {
@@ -981,10 +1123,12 @@ void Player::Update(float fDeltaTime) {
 
     // Update Y positions
     {
-      for (int c = 0;
-           c < GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-                   ->m_iColsPerPlayer;
-           c++) {
+      const int colsPerPlayer =
+          std::min(style->m_iColsPerPlayer, (int)m_vpHoldJudgment.size());
+      for (int c = 0; c < colsPerPlayer; c++) {
+        if (m_vpHoldJudgment[c] == nullptr) {
+          continue;
+        }
         float fPercentReverse = m_pPlayerState->m_PlayerOptions.GetCurrent()
                                     .GetReversePercentForColumn(c);
         float fHoldJudgeYPos = SCALE(
@@ -1057,18 +1201,16 @@ void Player::Update(float fDeltaTime) {
 
   // update pressed flag
   const int iNumCols =
-      GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-          ->m_iColsPerPlayer;
-  ASSERT_M(
-      iNumCols <= MAX_COLS_PER_PLAYER,
-      ssprintf("%i > %i", iNumCols, MAX_COLS_PER_PLAYER));
+      std::clamp(style->m_iColsPerPlayer, 0, MAX_COLS_PER_PLAYER);
+  if (iNumCols != style->m_iColsPerPlayer) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Clamped invalid update column count %i to %i.",
+        style->m_iColsPerPlayer, iNumCols);
+  }
   for (int col = 0; col < iNumCols; ++col) {
-    ASSERT(m_pPlayerState != nullptr);
-
     // TODO: Remove use of PlayerNumber.
     std::vector<GameInput> GameI;
-    GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-        ->StyleInputToGameInput(col, m_pPlayerState->m_PlayerNumber, GameI);
+    style->StyleInputToGameInput(col, m_pPlayerState->m_PlayerNumber, GameI);
 
     bool bIsHoldingButton = INPUTMAPPER->IsBeingPressed(GameI);
 
@@ -1118,12 +1260,19 @@ void Player::Update(float fDeltaTime) {
   // note's exact timing point.
   {
     const float musicPosition = m_pPlayerState->m_Position.m_fMusicSeconds;
-    const float rate = GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
+    const float rate = SanitizePlayerMusicRate(
+        GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate,
+        "Player::Update held miss tracking");
 
     // We have to add 1 here, because GetBeatFromElapsedTime() can round down.
     const int lastCheckRow =
         BeatToNoteRow(m_Timing->GetBeatFromElapsedTime(musicPosition) + 1);
 
+    if (m_pIterNeedsTapJudging == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Missing tap judging iterator in Player::Update.");
+      return;
+    }
     for (auto iter = *m_pIterNeedsTapJudging;
          !iter.IsAtEnd() && iter.Row() <= lastCheckRow; ++iter) {
       TapNote& tn = *iter;
@@ -1160,7 +1309,7 @@ void Player::Update(float fDeltaTime) {
 
       PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
       std::vector<GameInput> inputs;
-      GAMESTATE->GetCurrentStyle(pn)->StyleInputToGameInput(track, pn, inputs);
+      style->StyleInputToGameInput(track, pn, inputs);
 
       // Button must have been held continuously since at least the note time
       // (max time of all inputs mapped to this column).
@@ -1178,6 +1327,11 @@ void Player::Update(float fDeltaTime) {
   {
     // Fast forward to the first that needs hold judging.
     {
+      if (m_pIterNeedsHoldJudging == nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: Missing hold judging iterator in Player::Update.");
+        return;
+      }
       NoteData::all_tracks_iterator& iter = *m_pIterNeedsHoldJudging;
       while (!iter.IsAtEnd() && iter.Row() <= iSongRow &&
              !NeedsHoldJudging(*iter)) {
@@ -1202,7 +1356,6 @@ void Player::Update(float fDeltaTime) {
        * in different ways depending on the SubType. Handle Rolls one at
        * a time and don't mix with holds. */
       switch (tn.subType) {
-        DEFAULT_FAIL(tn.subType);
         case TapNoteSubType_Hold:
           break;
         case TapNoteSubType_Roll: {
@@ -1211,6 +1364,12 @@ void Player::Update(float fDeltaTime) {
           UpdateHoldNotes(iSongRow, fDeltaTime, v);
         }
           continue;  // don't process this below
+        default:
+          LOG->Warn(
+              "SRC_AUDIT_FIX: Invalid TapNoteSubType %i in Player::Update; "
+              "skipping hold note.",
+              tn.subType);
+          continue;
       }
       /*
       case TapNoteSubType_Mine:
@@ -1284,7 +1443,17 @@ void Player::Update(float fDeltaTime) {
 // have the same start row.
 void Player::UpdateHoldNotes(
     int iSongRow, float fDeltaTime, std::vector<TrackRowTapNote>& vTN) {
-  ASSERT(!vTN.empty());
+  fDeltaTime = SanitizePlayerDelta(fDeltaTime, "Player::UpdateHoldNotes");
+  if (vTN.empty() || m_pPlayerState == nullptr || GAMESTATE == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid Player::UpdateHoldNotes context.");
+    return;
+  }
+
+  const Style* style = GetSafePlayerStyle(m_pPlayerState);
+  if (style == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Missing style in Player::UpdateHoldNotes.");
+    return;
+  }
 
   // LOG->Trace("--------------------------------");
   /*
@@ -1299,16 +1468,29 @@ void Player::UpdateHoldNotes(
   TapNoteSubType subType = TapNoteSubType_Invalid;
   for (const TrackRowTapNote& trtn : vTN) {
     int iTrack = trtn.iTrack;
-    ASSERT(iStartRow == trtn.iRow);
+    if (trtn.pTN == nullptr || trtn.iRow != iStartRow) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid grouped hold note at row %i track %i; "
+          "skipping group.",
+          trtn.iRow, iTrack);
+      return;
+    }
     TapNote& tn = *trtn.pTN;
-    int iEndRow = iStartRow + tn.iDuration;
+    int iEndRow = SafeEndRowForPlayer(iStartRow, tn.iDuration);
     if (subType == TapNoteSubType_Invalid) {
       subType = tn.subType;
     }
 
     /* All holds must be of the same subType because fLife is handled
      * in different ways depending on the SubType. */
-    ASSERT(tn.subType == subType);
+    if (tn.subType != subType ||
+        !IsValidTapNoteSubTypeForPlayer(tn.subType)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid or mixed hold subtype %i at row %i; "
+          "skipping group.",
+          tn.subType, trtn.iRow);
+      return;
+    }
 
     if (iEndRow > iMaxEndRow) {
       iMaxEndRow = iEndRow;
@@ -1316,7 +1498,10 @@ void Player::UpdateHoldNotes(
     }
   }
 
-  ASSERT(iFirstTrackWithMaxEndRow != -1);
+  if (iFirstTrackWithMaxEndRow < 0) {
+    LOG->Warn("SRC_AUDIT_FIX: Hold group has no valid end row.");
+    return;
+  }
   // LOG->Trace( ssprintf("start row: %i; max/end row: =
   // %i",iStartRow,iMaxEndRow) ); LOG->Trace( ssprintf("first track with max end
   // row = %i",iFirstTrackWithMaxEndRow) ); LOG->Trace( ssprintf("max end row -
@@ -1416,7 +1601,7 @@ void Player::UpdateHoldNotes(
     // That interacts badly with !IMMEDIATE_HOLD_LET_GO,
     // causing ALL holds to be judged HNS_Held whether they were or not.
     if (!IMMEDIATE_HOLD_LET_GO ||
-        (iStartRow + trtn.pTN->iDuration) > iSongRow) {
+        SafeEndRowForPlayer(iStartRow, trtn.pTN->iDuration) > iSongRow) {
       int iTrack = trtn.iTrack;
 
       // TODO: Remove use of PlayerNumber.
@@ -1432,8 +1617,7 @@ void Player::UpdateHoldNotes(
         }
       } else {
         std::vector<GameInput> GameI;
-        GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-            ->StyleInputToGameInput(iTrack, pn, GameI);
+        style->StyleInputToGameInput(iTrack, pn, GameI);
 
         bIsHoldingButton &=
             INPUTMAPPER->IsBeingPressed(GameI, m_pPlayerState->m_mp);
@@ -1449,7 +1633,7 @@ void Player::UpdateHoldNotes(
      * if the hold note is held all the way. */
     for (const TrackRowTapNote& trtn : vTN) {
       TapNote& tn = *trtn.pTN;
-      int iEndRow = iStartRow + tn.iDuration;
+      int iEndRow = SafeEndRowForPlayer(iStartRow, tn.iDuration);
 
       // LOG->Trace(ssprintf("trying for min between iSongRow (%i) and iEndRow
       // (%i) (duration %i)",iSongRow,iEndRow,tn.iDuration));
@@ -1489,8 +1673,15 @@ void Player::UpdateHoldNotes(
           */
 
           TimingWindow window = m_bTickHolds ? TW_Checkpoint : TW_Hold;
+          const float windowSeconds = GetWindowSeconds(window);
+          if (windowSeconds <= 0.0f) {
+            LOG->Warn(
+                "SRC_AUDIT_FIX: Non-positive hold timing window; preserving "
+                "hold life.");
+            break;
+          }
           // LOG->Trace("fLife before minus: %f",fLife);
-          fLife -= fDeltaTime / GetWindowSeconds(window);
+          fLife -= fDeltaTime / windowSeconds;
           // LOG->Trace("fLife before clamp: %f",fLife);
           fLife = std::max(0.0f, fLife);
           // LOG->Trace("fLife after: %f",fLife);
@@ -1506,7 +1697,16 @@ void Player::UpdateHoldNotes(
         // give positive life in Step(), not here.
 
         // Decrease life
-        fLife -= fDeltaTime / GetWindowSeconds(TW_Roll);
+        {
+          const float windowSeconds = GetWindowSeconds(TW_Roll);
+          if (windowSeconds <= 0.0f) {
+            LOG->Warn(
+                "SRC_AUDIT_FIX: Non-positive roll timing window; preserving "
+                "roll life.");
+            break;
+          }
+          fLife -= fDeltaTime / windowSeconds;
+        }
         fLife = std::max(fLife, 0.0f);  // clamp
         break;
       /*
@@ -1514,7 +1714,10 @@ void Player::UpdateHoldNotes(
               break;
       */
       default:
-        FAIL_M(ssprintf("Invalid tap note subtype: %i", subType));
+        LOG->Warn(
+            "SRC_AUDIT_FIX: Invalid tap note subtype %i in UpdateHoldNotes.",
+            subType);
+        return;
     }
   }
 
@@ -1522,7 +1725,9 @@ void Player::UpdateHoldNotes(
   // time and end time of the hold.
   if (vTN[0].pTN->HoldResult.bActive) {
     float fSecondsActiveSinceLastUpdate =
-        fDeltaTime * GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
+        fDeltaTime * SanitizePlayerMusicRate(
+                         GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate,
+                         "Player::UpdateHoldNotes active seconds");
     if (m_pPrimaryScoreKeeper) {
       m_pPrimaryScoreKeeper->HandleHoldActiveSeconds(
           fSecondsActiveSinceLastUpdate);
@@ -1554,7 +1759,6 @@ void Player::UpdateHoldNotes(
      * unless we check Life == 0, rolls would always be scored as Held. */
     bool bAllowHoldCheckpoints;
     switch (subType) {
-      DEFAULT_FAIL(subType);
       case TapNoteSubType_Hold:
         bAllowHoldCheckpoints = true;
         break;
@@ -1566,6 +1770,11 @@ void Player::UpdateHoldNotes(
                 bAllowHoldCheckpoints = true;
                 break;
         */
+      default:
+        LOG->Warn(
+            "SRC_AUDIT_FIX: Invalid tap note subtype %i while scoring hold.",
+            subType);
+        return;
     }
 
     if (m_bTickHolds && bAllowHoldCheckpoints) {
@@ -1628,7 +1837,11 @@ void Player::UpdateHoldNotes(
     }
   }
 
-  float fLifeFraction = fLife / MAX_HOLD_LIFE;
+  const float maxHoldLife = MAX_HOLD_LIFE;
+  float fLifeFraction =
+      (std::isfinite(maxHoldLife) && maxHoldLife > 0.0f)
+          ? fLife / maxHoldLife
+          : 0.0f;
 
   for (const TrackRowTapNote& trtn : vTN) {
     TapNote& tn = *trtn.pTN;
@@ -1672,6 +1885,15 @@ void Player::UpdateHoldNotes(
 }
 
 void Player::ApplyWaitingTransforms() {
+  const Style* style = GetSafePlayerStyle(m_pPlayerState);
+  if (m_pPlayerState == nullptr || GAMESTATE == nullptr ||
+      GAMESTATE->m_pCurSong == nullptr || m_Timing == nullptr ||
+      style == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Skipping waiting transforms because gameplay context "
+        "is incomplete.");
+    return;
+  }
   for (unsigned j = 0; j < m_pPlayerState->m_ModsToApply.size(); j++) {
     const Attack& mod = m_pPlayerState->m_ModsToApply[j];
     PlayerOptions po;
@@ -1691,22 +1913,24 @@ void Player::ApplyWaitingTransforms() {
     // if re-adding noteskin changes, this is one place to edit -aj
 
     NoteDataUtil::TransformNoteData(
-        m_NoteData, *m_Timing, po,
-        GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-            ->m_StepsType,
+        m_NoteData, *m_Timing, po, style->m_StepsType,
         BeatToNoteRow(fStartBeat), BeatToNoteRow(fEndBeat));
   }
   m_pPlayerState->m_ModsToApply.clear();
 }
 
 void Player::DrawPrimitives() {
+  const Style* style = GetSafePlayerStyle(m_pPlayerState);
+  if (GAMESTATE == nullptr || m_pPlayerState == nullptr || style == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Skipping Player::DrawPrimitives without style.");
+    return;
+  }
   // TODO: Remove use of PlayerNumber.
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
 
   // May have both players in doubles (for battle play); only draw primary
   // player.
-  if (GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-              ->m_StyleType == StyleType_OnePlayerTwoSides &&
+  if (style->m_StyleType == StyleType_OnePlayerTwoSides &&
       pn != GAMESTATE->GetMasterPlayerNumber()) {
     return;
   }
@@ -1904,7 +2128,9 @@ void Player::DrawHoldJudgments() {
     return;
   }
 
-  for (int c = 0; c < m_NoteData.GetNumTracks(); c++) {
+  const int cols =
+      std::min(m_NoteData.GetNumTracks(), (int)m_vpHoldJudgment.size());
+  for (int c = 0; c < cols; c++) {
     if (m_vpHoldJudgment[c]) {
       m_vpHoldJudgment[c]->Draw();
     }
@@ -1912,6 +2138,11 @@ void Player::DrawHoldJudgments() {
 }
 
 void Player::ChangeLife(TapNoteScore tns) {
+  if (m_pPlayerState == nullptr || !IsValidTapNoteScoreForPlayer(tns)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Ignoring invalid ChangeLife tap score %i.", tns);
+    return;
+  }
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
   if (m_pLifeMeter) {
     m_pLifeMeter->ChangeLife(tns);
@@ -1936,6 +2167,13 @@ void Player::ChangeLife(TapNoteScore tns) {
 }
 
 void Player::ChangeLife(HoldNoteScore hns, TapNoteScore tns) {
+  if (m_pPlayerState == nullptr || !IsValidHoldNoteScoreForPlayer(hns) ||
+      !IsValidTapNoteScoreForPlayer(tns)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Ignoring invalid ChangeLife hold/tap score %i/%i.",
+        hns, tns);
+    return;
+  }
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
   if (m_pLifeMeter) {
     m_pLifeMeter->ChangeLife(hns, tns);
@@ -1948,6 +2186,10 @@ void Player::ChangeLife(HoldNoteScore hns, TapNoteScore tns) {
 }
 
 void Player::ChangeLife(float delta) {
+  if (m_pPlayerState == nullptr || !std::isfinite(delta)) {
+    LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid life delta %f.", delta);
+    return;
+  }
   // If ChangeLifeRecord is not called before the change, then the life graph
   // will show a gradual change from the time of the previous step (or
   // change) to the time of this change, instead of the sharp change that
@@ -1964,6 +2206,10 @@ void Player::ChangeLife(float delta) {
 }
 
 void Player::SetLife(float value) {
+  if (m_pPlayerState == nullptr || !std::isfinite(value)) {
+    LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid life value %f.", value);
+    return;
+  }
   // If ChangeLifeRecord is not called before the change, then the life graph
   // will show a gradual change from the time of the previous step (or
   // change) to the time of this change, instead of the sharp change that
@@ -1980,6 +2226,10 @@ void Player::SetLife(float value) {
 }
 
 void Player::ChangeLifeRecord() {
+  if (m_pPlayerState == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Ignoring life record without PlayerState.");
+    return;
+  }
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
   float fLife = -1;
   if (m_pLifeMeter) {
@@ -2001,6 +2251,17 @@ void Player::ChangeLifeRecord() {
 int Player::GetClosestNoteDirectional(
     int col, int iStartRow, int iEndRow, bool bAllowGraded,
     bool bForward) const {
+  if (m_Timing == nullptr || col < 0 || col >= m_NoteData.GetNumTracks()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid closest note search col %i with %i tracks.",
+        col, m_NoteData.GetNumTracks());
+    return -1;
+  }
+  iStartRow = std::clamp(iStartRow, 0, MAX_NOTE_ROW);
+  iEndRow = std::clamp(iEndRow, 0, MAX_NOTE_ROW);
+  if (iEndRow < iStartRow) {
+    std::swap(iStartRow, iEndRow);
+  }
   NoteData::const_iterator begin, end;
   m_NoteData.GetTapNoteRange(col, iStartRow, iEndRow, begin, end);
 
@@ -2042,6 +2303,12 @@ int Player::GetClosestNoteDirectional(
 int Player::GetClosestNote(
     int col, int iNoteRow, int iMaxRowsAhead, int iMaxRowsBehind,
     bool bAllowGraded) const {
+  if (m_Timing == nullptr || col < 0 || col >= m_NoteData.GetNumTracks()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid closest note context col %i with %i tracks.",
+        col, m_NoteData.GetNumTracks());
+    return -1;
+  }
   // Start at iIndexStartLookingAt and search outward.
   int iNextIndex = GetClosestNoteDirectional(
       col, iNoteRow, iNoteRow + iMaxRowsAhead, bAllowGraded, true);
@@ -2068,6 +2335,15 @@ int Player::GetClosestNote(
 
 int Player::GetClosestNonEmptyRowDirectional(
     int iStartRow, int iEndRow, bool /* bAllowGraded */, bool bForward) const {
+  if (m_Timing == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Missing timing in closest row search.");
+    return -1;
+  }
+  iStartRow = std::clamp(iStartRow, 0, MAX_NOTE_ROW);
+  iEndRow = std::clamp(iEndRow, 0, MAX_NOTE_ROW);
+  if (iEndRow < iStartRow) {
+    std::swap(iStartRow, iEndRow);
+  }
   if (bForward) {
     NoteData::all_tracks_iterator iter =
         m_NoteData.GetTapNoteRangeAllTracks(iStartRow, iEndRow);
@@ -2092,6 +2368,10 @@ int Player::GetClosestNonEmptyRowDirectional(
         ++iter;
         continue;
       }
+      if (!m_Timing->IsJudgableAtRow(iter.Row())) {
+        ++iter;
+        continue;
+      }
       return iter.Row();
     }
   }
@@ -2103,6 +2383,10 @@ int Player::GetClosestNonEmptyRowDirectional(
 int Player::GetClosestNonEmptyRow(
     int iNoteRow, int iMaxRowsAhead, int iMaxRowsBehind,
     bool bAllowGraded) const {
+  if (m_Timing == nullptr || m_pPlayerState == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid closest non-empty row context.");
+    return -1;
+  }
   // Start at iIndexStartLookingAt and search outward.
   int iNextRow = GetClosestNonEmptyRowDirectional(
       iNoteRow, iNoteRow + iMaxRowsAhead, bAllowGraded, true);
@@ -2225,13 +2509,25 @@ void Player::PlayKeysound(const TapNote& tn, TapNoteScore score) {
     m_vKeysounds[tn.iKeysoundIndex].Play(false);
     Preference<float>* pVolume =
         Preference<float>::GetPreferenceByName("SoundVolume");
-    float fVol = pVolume->Get();
+    float fVol = pVolume != nullptr ? pVolume->Get() : 1.0f;
     m_vKeysounds[tn.iKeysoundIndex].SetProperty("Volume", fVol);
   }
 }
 
 void Player::Step(
     int col, int row, const RageTimer& tm, bool bHeld, bool bRelease) {
+  const Style* style = GetSafePlayerStyle(m_pPlayerState);
+  if (m_pPlayerState == nullptr || GAMESTATE == nullptr || m_Timing == nullptr ||
+      style == nullptr || col < 0 || col >= m_NoteData.GetNumTracks()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Ignoring invalid Player::Step col %i row %i.", col,
+        row);
+    return;
+  }
+  if (row < -1 || row > MAX_NOTE_ROW) {
+    LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid Player::Step row %i.", row);
+    return;
+  }
   if (IsOniDead()) {
     return;
   }
@@ -2245,6 +2541,8 @@ void Player::Step(
   const float fTimeSinceStep = tm.Ago();
 
   float fSongBeat = m_pPlayerState->m_Position.m_fSongBeat;
+  const float musicRate = SanitizePlayerMusicRate(
+      GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate, "Player::Step");
 
   if (GAMESTATE->m_pCurSong) {
     fSongBeat = GAMESTATE->m_pCurSong->m_SongTiming.GetBeatFromElapsedTime(
@@ -2273,11 +2571,15 @@ void Player::Step(
       }
 
       switch (tn.subType) {
-        DEFAULT_FAIL(tn.subType);
         case TapNoteSubType_Hold:
           continue;
         case TapNoteSubType_Roll:
           break;
+        default:
+          LOG->Warn(
+              "SRC_AUDIT_FIX: Invalid roll subtype %i in Player::Step.",
+              tn.subType);
+          continue;
       }
 
       const int iRow = begin->first;
@@ -2295,7 +2597,7 @@ void Player::Step(
             ((tns != TNS_None && tns != TNS_Miss) ||
              tn.result.earlyTns != TNS_None);  // did they step on the start?
       }
-      const int iEndRow = iRow + tn.iDuration;
+      const int iEndRow = SafeEndRowForPlayer(iRow, tn.iDuration);
 
       if (bInitiatedNote && tn.HoldResult.fLife != 0) {
         /* This hold note is not judged and we stepped on its head.  Update
@@ -2337,12 +2639,15 @@ void Player::Step(
     // TODO: remove use of PlayerNumber
     PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
     Profile* pProfile = PROFILEMAN->GetProfile(pn);
+    if (pProfile == nullptr) {
+      LOG->Warn("SRC_AUDIT_FIX: Missing profile while counting calories.");
+      return;
+    }
 
     int iNumTracksHeld = 0;
     for (int t = 0; t < m_NoteData.GetNumTracks(); t++) {
       std::vector<GameInput> GameI;
-      GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-          ->StyleInputToGameInput(t, pn, GameI);
+      style->StyleInputToGameInput(t, pn, GameI);
       float secs_held = 0.0f;
       for (size_t i = 0; i < GameI.size(); ++i) {
         secs_held = std::max(secs_held, INPUTMAPPER->GetSecsHeld(GameI[i]));
@@ -2419,18 +2724,15 @@ void Player::Step(
        * now. */
       const float fCurrentMusicSeconds =
           m_pPlayerState->m_Position.m_fMusicSeconds +
-          (fLastBeatUpdate *
-           GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate);
+          (fLastBeatUpdate * musicRate);
 
       // ... which means it happened at this point in the music:
       const float fMusicSeconds =
-          fCurrentMusicSeconds -
-          fTimeSinceStep * GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
+          fCurrentMusicSeconds - fTimeSinceStep * musicRate;
 
       // The offset from the actual step in seconds:
-      fNoteOffset = (fStepSeconds - fMusicSeconds) /
-                    GAMESTATE->m_SongOptions.GetCurrent()
-                        .m_fMusicRate;  // account for music rate
+      fNoteOffset =
+          (fStepSeconds - fMusicSeconds) / musicRate;  // account for music rate
                                         /*
                                         LOG->Trace("step was %.3f ago, music is off by %f: %f vs %f, step was %f
                                         off",                                   fTimeSinceStep,
@@ -2445,8 +2747,19 @@ void Player::Step(
     TapNote* pTN = nullptr;
     NoteData::iterator iter =
         m_NoteData.FindTapNote(col, iRowOfOverlappingNoteOrRow);
-    DEBUG_ASSERT(iter != m_NoteData.end(col));
+    if (iter == m_NoteData.end(col)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Player::Step found no note at col %i row %i.", col,
+          iRowOfOverlappingNoteOrRow);
+      return;
+    }
     pTN = &iter->second;
+    if (!IsValidTapNoteTypeForPlayer(pTN->type)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid tap note type %i at col %i row %i.",
+          pTN->type, col, iRowOfOverlappingNoteOrRow);
+      return;
+    }
 
     switch (m_pPlayerState->m_PlayerController) {
       case PC_HUMAN:
@@ -2637,9 +2950,10 @@ void Player::Step(
         */
       }
       default:
-        FAIL_M(ssprintf(
-            "Invalid player controller type: %i",
-            m_pPlayerState->m_PlayerController));
+        LOG->Warn(
+            "SRC_AUDIT_FIX: Invalid player controller type %i in Step.",
+            m_pPlayerState->m_PlayerController);
+        return;
     }
 
     // handle attack notes
@@ -2822,6 +3136,14 @@ void Player::Step(
 }
 
 void Player::UpdateTapNotesMissedOlderThan(float fMissIfOlderThanSeconds) {
+  if (m_pPlayerState == nullptr || m_Timing == nullptr ||
+      m_pIterNeedsTapJudging == nullptr ||
+      !std::isfinite(fMissIfOlderThanSeconds) ||
+      fMissIfOlderThanSeconds < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid UpdateTapNotesMissedOlderThan context/window.");
+    return;
+  }
   // LOG->Trace( "Steps::UpdateTapNotesMissedOlderThan(%f)",
   // fMissIfOlderThanThisBeat );
   int iMissIfOlderThanThisRow;
@@ -2880,6 +3202,12 @@ void Player::UpdateTapNotesMissedOlderThan(float fMissIfOlderThanSeconds) {
 }
 
 void Player::UpdateJudgedRows() {
+  if (m_pPlayerState == nullptr || GAMESTATE == nullptr ||
+      GAMESTATE->GetCurrentGame() == nullptr || m_Timing == nullptr ||
+      m_pIterUnjudgedRows == nullptr || m_pIterUnjudgedMineRows == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid UpdateJudgedRows context.");
+    return;
+  }
   // Look ahead far enough to catch any rows judged early.
   const int iEndRow = BeatToNoteRow(m_Timing->GetBeatFromElapsedTime(
       m_pPlayerState->m_Position.m_fMusicSeconds +
@@ -2966,7 +3294,6 @@ void Player::UpdateJudgedRows() {
       }
 
       switch (tn.result.tns) {
-        DEFAULT_FAIL(tn.result.tns);
         case TNS_None:
           bAllJudged = false;
           continue;
@@ -2977,6 +3304,12 @@ void Player::UpdateJudgedRows() {
         case TNS_HitMine:
           SetMineJudgment(tn.result.tns, iter.Track());
           break;
+        default:
+          LOG->Warn(
+              "SRC_AUDIT_FIX: Invalid mine tap score %i at row %i.",
+              tn.result.tns, iRow);
+          tn.result.bHidden = true;
+          continue;
       }
       if (m_pNoteField) {
         m_pNoteField->DidTapNote(iter.Track(), tn.result.tns, false);
@@ -3068,6 +3401,12 @@ void Player::FlashGhostRow(int iRow) {
 void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
   // LOG->Trace( "Player::CrossedRows   %d    %d", iFirstRowCrossed,
   // iLastRowCrossed );
+  const Style* style = GetSafePlayerStyle(m_pPlayerState);
+  if (m_pPlayerState == nullptr || GAMESTATE == nullptr || m_Timing == nullptr ||
+      m_pIterUncrossedRows == nullptr || style == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid CrossedRows context.");
+    return;
+  }
 
   NoteData::all_tracks_iterator& iter = *m_pIterUncrossedRows;
   int iLastSeenRow = -1;
@@ -3082,8 +3421,7 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
         if (!REQUIRE_STEP_ON_HOLD_HEADS) {
           PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
           std::vector<GameInput> GameI;
-          GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-              ->StyleInputToGameInput(iTrack, pn, GameI);
+          style->StyleInputToGameInput(iTrack, pn, GameI);
           if (PREFSMAN->m_fPadStickSeconds > 0.f) {
             for (size_t i = 0; i < GameI.size(); ++i) {
               float fSecsHeld =
@@ -3107,8 +3445,7 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
         // TODO: Remove use of PlayerNumber.
         PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
         std::vector<GameInput> GameI;
-        GAMESTATE->GetCurrentStyle(GetPlayerState()->m_PlayerNumber)
-            ->StyleInputToGameInput(iTrack, pn, GameI);
+        style->StyleInputToGameInput(iTrack, pn, GameI);
         if (PREFSMAN->m_fPadStickSeconds > 0.0f) {
           for (size_t i = 0; i < GameI.size(); ++i) {
             float fSecsHeld =
@@ -3167,9 +3504,17 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
     // than to calculate from timing segments.
     for (int r = m_iFirstUncrossedRow; r <= iLastRowCrossed; ++r) {
       int tickCurrent = m_Timing->GetTickcountAtRow(r);
+      const int tickInterval =
+          tickCurrent > 0 ? ROWS_PER_BEAT / tickCurrent : 0;
+      if (tickCurrent > 0 && tickInterval <= 0) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: Ignoring invalid tick count %i at row %i.",
+            tickCurrent, r);
+        continue;
+      }
 
       // There is a tick count at this row
-      if (tickCurrent > 0 && r % (ROWS_PER_BEAT / tickCurrent) == 0) {
+      if (tickCurrent > 0 && tickInterval > 0 && r % tickInterval == 0) {
         std::vector<int> viColsWithHold;
         int iNumHoldsHeldThisRow = 0;
         int iNumHoldsMissedThisRow = 0;
@@ -3212,6 +3557,11 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
 }
 
 void Player::HandleTapRowScore(unsigned row) {
+  if (m_pPlayerState == nullptr || GAMESTATE == nullptr || m_Timing == nullptr ||
+      row > (unsigned)MAX_NOTE_ROW) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid HandleTapRowScore context/row %u.", row);
+    return;
+  }
   bool bNoCheating = true;
 #ifdef DEBUG
   bNoCheating = false;
@@ -3339,6 +3689,11 @@ void Player::HandleTapRowScore(unsigned row) {
 void Player::HandleHoldCheckpoint(
     int iRow, int iNumHoldsHeldThisRow, int iNumHoldsMissedThisRow,
     const std::vector<int>& viColsWithHold) {
+  if (m_pPlayerState == nullptr || m_Timing == nullptr ||
+      viColsWithHold.empty()) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid HandleHoldCheckpoint context.");
+    return;
+  }
   bool bNoCheating = true;
 #ifdef DEBUG
   bNoCheating = false;
@@ -3400,8 +3755,18 @@ void Player::HandleHoldCheckpoint(
 }
 
 void Player::HandleHoldScore(const TapNote& tn) {
+  if (m_pPlayerState == nullptr || GAMESTATE == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid HandleHoldScore context.");
+    return;
+  }
   HoldNoteScore holdScore = tn.HoldResult.hns;
   TapNoteScore tapScore = tn.result.tns;
+  if (!IsValidHoldNoteScoreForPlayer(holdScore) ||
+      !IsValidTapNoteScoreForPlayer(tapScore)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid hold score pair %i/%i.", holdScore, tapScore);
+    return;
+  }
   bool bNoCheating = true;
 #ifdef DEBUG
   bNoCheating = false;
@@ -3450,7 +3815,13 @@ float Player::GetMaxStepDistanceSeconds() {
   fMax = std::max(fMax, GetWindowSeconds(TW_Roll));
   fMax = std::max(fMax, GetWindowSeconds(TW_Attack));
   fMax = std::max(fMax, GetWindowSeconds(TW_Checkpoint));
-  float f = GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate * fMax;
+  const float rate =
+      GAMESTATE != nullptr
+          ? SanitizePlayerMusicRate(
+                GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate,
+                "Player::GetMaxStepDistanceSeconds")
+          : 1.0f;
+  float f = rate * fMax;
   return f + m_fMaxInputLatencySeconds;
 }
 
@@ -3470,6 +3841,10 @@ void Player::CacheAllUsedNoteSkins() {
 }
 
 void Player::SetMineJudgment(TapNoteScore tns, int iTrack) {
+  if (m_pPlayerState == nullptr || !IsValidTapNoteScoreForPlayer(tns)) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid SetMineJudgment score %i.", tns);
+    return;
+  }
   ++m_iPerfMineJudgmentsSinceLastSnapshot;
   if (m_bSendJudgmentAndComboMessages) {
     Message msg("Judgment");
@@ -3490,6 +3865,13 @@ void Player::SetMineJudgment(TapNoteScore tns, int iTrack) {
 void Player::SetJudgment(
     int iRow, int iTrack, const TapNote& tn, TapNoteScore tns,
     float fTapNoteOffset) {
+  if (m_pPlayerState == nullptr || LUA == nullptr ||
+      !IsValidTapNoteScoreForPlayer(tns) || iRow < 0 || iRow > MAX_NOTE_ROW) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid SetJudgment row %i track %i score %i.", iRow,
+        iTrack, tns);
+    return;
+  }
   ++m_iPerfTapJudgmentsSinceLastSnapshot;
   if (m_bSendJudgmentAndComboMessages) {
     Message msg("Judgment");
@@ -3522,8 +3904,10 @@ void Player::SetJudgment(
         int iHeadRow;
         if (m_NoteData.IsHoldNoteAtRow(iTrackTmp, iRow, &iHeadRow)) {
           NoteData::iterator hold = m_NoteData.FindTapNote(iTrackTmp, iHeadRow);
-          hold->second.PushSelf(L);
-          lua_rawseti(L, -2, iTrackTmp + 1);
+          if (hold != m_NoteData.end(iTrackTmp)) {
+            hold->second.PushSelf(L);
+            lua_rawseti(L, -2, iTrackTmp + 1);
+          }
         }
       }
     }
@@ -3536,7 +3920,15 @@ void Player::SetJudgment(
 }
 
 void Player::SetHoldJudgment(TapNote& tn, int iTrack) {
-  ASSERT(iTrack < (int)m_vpHoldJudgment.size());
+  if (m_pPlayerState == nullptr || iTrack < 0 ||
+      iTrack >= (int)m_vpHoldJudgment.size() || LUA == nullptr ||
+      !IsValidTapNoteScoreForPlayer(tn.result.tns) ||
+      !IsValidHoldNoteScoreForPlayer(tn.HoldResult.hns)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid SetHoldJudgment track %i scores %i/%i.",
+        iTrack, tn.result.tns, tn.HoldResult.hns);
+    return;
+  }
   ++m_iPerfHoldJudgmentsSinceLastSnapshot;
   if (m_vpHoldJudgment[iTrack]) {
     m_vpHoldJudgment[iTrack]->SetHoldJudgment(tn.HoldResult.hns);
@@ -3562,6 +3954,11 @@ void Player::SetHoldJudgment(TapNote& tn, int iTrack) {
 }
 
 void Player::SetCombo(unsigned int iCombo, unsigned int iMisses) {
+  if (m_pPlayerState == nullptr || GAMESTATE == nullptr ||
+      m_pPlayerStageStats == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: Ignoring SetCombo without gameplay stats.");
+    return;
+  }
   if (!m_bSeenComboYet)  // first update, don't set bIsMilestone=true
   {
     m_bSeenComboYet = true;
@@ -3619,12 +4016,20 @@ void Player::SetCombo(unsigned int iCombo, unsigned int iMisses) {
    *	Or possibly move the logic to a Lua function? -aj */
   bool bPastBeginning = false;
   if (GAMESTATE->IsCourseMode()) {
+    if (GAMESTATE->m_pCurCourse == nullptr) {
+      LOG->Warn("SRC_AUDIT_FIX: Missing course while setting combo.");
+      return;
+    }
     int iSongIndexStartColoring =
         GAMESTATE->m_pCurCourse->GetEstimatedNumStages();
     iSongIndexStartColoring = static_cast<int>(
         std::floor(iSongIndexStartColoring * PERCENT_UNTIL_COLOR_COMBO));
     bPastBeginning = GAMESTATE->GetCourseSongIndex() >= iSongIndexStartColoring;
   } else {
+    if (GAMESTATE->m_pCurSong == nullptr) {
+      LOG->Warn("SRC_AUDIT_FIX: Missing song while setting combo.");
+      return;
+    }
     bPastBeginning = m_pPlayerState->m_Position.m_fMusicSeconds >
                      GAMESTATE->m_pCurSong->m_fMusicLengthSeconds *
                          PERCENT_UNTIL_COLOR_COMBO;
@@ -3698,8 +4103,12 @@ class LunaPlayer : public Luna<Player> {
           "Do not call SetLife from inside LifeChangedMessageCommand because "
           "SetLife causes a LifeChangedMessageCommand.");
     }
+    const float value = FArg(1);
+    if (!std::isfinite(value)) {
+      luaL_error(L, "Invalid life value %f", value);
+    }
     p->m_inside_lua_set_life = true;
-    p->SetLife(FArg(1));
+    p->SetLife(value);
     p->m_inside_lua_set_life = false;
     COMMON_RETURN_SELF;
   }
@@ -3710,8 +4119,12 @@ class LunaPlayer : public Luna<Player> {
           "Do not call ChangeLife from inside LifeChangedMessageCommand "
           "because ChangeLife causes a LifeChangedMessageCommand.");
     }
+    const float value = FArg(1);
+    if (!std::isfinite(value)) {
+      luaL_error(L, "Invalid life delta %f", value);
+    }
     p->m_inside_lua_set_life = true;
-    p->ChangeLife(FArg(1));
+    p->ChangeLife(value);
     p->m_inside_lua_set_life = false;
     COMMON_RETURN_SELF;
   }
