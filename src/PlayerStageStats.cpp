@@ -50,6 +50,19 @@ const float LESSON_PASS_THRESHOLD = 0.8f;
 
 Grade GetGradeFromPercent(float fPercent);
 
+namespace {
+int GetSafePercentDecimalPlaces() {
+  const int iDecimals = CommonMetrics::PERCENT_SCORE_DECIMAL_PLACES;
+  const int iClamped = std::min(std::max(iDecimals, 0), 6);
+  if (iDecimals != iClamped) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Clamped invalid PercentScoreDecimalPlaces %i to %i.",
+        iDecimals, iClamped);
+  }
+  return iClamped;
+}
+}  // namespace
+
 void PlayerStageStats::InternalInit() {
   m_pStyle = nullptr;
   m_for_multiplayer = false;
@@ -284,11 +297,11 @@ Grade PlayerStageStats::GetGrade() const {
 }
 
 float PlayerStageStats::MakePercentScore(int iActual, int iPossible) {
-  if (iPossible == 0) {
+  if (iPossible <= 0) {
     return 0;  // div/0
   }
 
-  if (iActual == iPossible) {
+  if (iActual >= iPossible) {
     return 1;  // correct for rounding error
   }
 
@@ -301,7 +314,7 @@ float PlayerStageStats::MakePercentScore(int iActual, int iPossible) {
   fPercent = std::max(0.0f, fPercent);
 
   int iPercentTotalDigits =
-      3 + CommonMetrics::PERCENT_SCORE_DECIMAL_PLACES;  // "100" + "." + "00"
+      3 + GetSafePercentDecimalPlaces();  // "100" + "." + "00"
 
   // TRICKY: printf will round, but we want to truncate. Otherwise, we may
   // display a percent score that's too high and doesn't match up with the
@@ -317,13 +330,19 @@ float PlayerStageStats::MakePercentScore(int iActual, int iPossible) {
 }
 
 std::string PlayerStageStats::FormatPercentScore(float fPercentDancePoints) {
-  int iPercentTotalDigits =
-      3 + CommonMetrics::PERCENT_SCORE_DECIMAL_PLACES;  // "100" + "." + "00"
+  if (!std::isfinite(fPercentDancePoints)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: FormatPercentScore received non-finite percent %f.",
+        fPercentDancePoints);
+    fPercentDancePoints = 0.0f;
+  }
+  fPercentDancePoints = std::max(0.0f, std::min(1.0f, fPercentDancePoints));
+
+  const int iDecimals = GetSafePercentDecimalPlaces();
+  int iPercentTotalDigits = 3 + iDecimals;  // "100" + "." + "00"
 
   std::string s = ssprintf(
-      "%*.*f%%", iPercentTotalDigits,
-      (int)CommonMetrics::PERCENT_SCORE_DECIMAL_PLACES,
-      fPercentDancePoints * 100);
+      "%*.*f%%", iPercentTotalDigits, iDecimals, fPercentDancePoints * 100);
   return s;
 }
 
@@ -332,18 +351,7 @@ float PlayerStageStats::GetPercentDancePoints() const {
 }
 
 float PlayerStageStats::GetCurMaxPercentDancePoints() const {
-  if (m_iPossibleDancePoints == 0) {
-    return 0;  // div/0
-  }
-
-  if (m_iCurPossibleDancePoints == m_iPossibleDancePoints) {
-    return 1;  // correct for rounding error
-  }
-
-  float fCurMaxPercentDancePoints =
-      m_iCurPossibleDancePoints / (float)m_iPossibleDancePoints;
-
-  return fCurMaxPercentDancePoints;
+  return MakePercentScore(m_iCurPossibleDancePoints, m_iPossibleDancePoints);
 }
 
 // TODO: Make this use lua. Let more judgments be possible. -Wolfman2000
