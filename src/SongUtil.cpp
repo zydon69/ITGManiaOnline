@@ -1371,13 +1371,51 @@ static LocalizedString CHART_NAME_CANNOT_CONTAIN(
 static LocalizedString EDIT_NAME_CANNOT_CONTAIN(
     "SongUtil",
     "The edit name cannot contain any of the following characters: %s");
+static LocalizedString NO_CURRENT_STEPS_SELECTED(
+    "SongUtil", "No current steps are selected.");
+static LocalizedString NO_CURRENT_EDIT_SELECTED(
+    "SongUtil", "No current edit is selected.");
+
+static Steps* GetCurrentPlayerOneStepsForValidation(const char* context) {
+  if (GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-661: %s validation requested without GAMESTATE.",
+        context);
+    return nullptr;
+  }
+
+  Steps* pSteps = GAMESTATE->m_pCurSteps[PLAYER_1];
+  if (pSteps == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-661: %s validation requested without current steps.",
+        context);
+  }
+  return pSteps;
+}
 
 bool SongUtil::ValidateCurrentEditStepsDescription(
     const std::string& sAnswer, std::string& sErrorOut) {
-  Steps* pSteps = GAMESTATE->m_pCurSteps[PLAYER_1];
+  Steps* pSteps = GetCurrentPlayerOneStepsForValidation("edit description");
+  if (pSteps == nullptr) {
+    sErrorOut = NO_CURRENT_STEPS_SELECTED;
+    return false;
+  }
   Song* pSong = pSteps->m_pSong;
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-661: edit description validation requested without "
+        "parent song.");
+    sErrorOut = NO_CURRENT_STEPS_SELECTED;
+    return false;
+  }
 
-  ASSERT(pSteps->IsAnEdit());
+  if (!pSteps->IsAnEdit()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-661: edit description validation requested for "
+        "non-edit steps.");
+    sErrorOut = NO_CURRENT_EDIT_SELECTED;
+    return false;
+  }
 
   if (sAnswer.empty()) {
     sErrorOut = YOU_MUST_SUPPLY_NAME;
@@ -1416,7 +1454,11 @@ bool SongUtil::ValidateCurrentStepsDescription(
 
   /* Don't allow duplicate edit names within the same StepsType; edit names
    * uniquely identify the edit. */
-  Steps* pSteps = GAMESTATE->m_pCurSteps[PLAYER_1];
+  Steps* pSteps = GetCurrentPlayerOneStepsForValidation("steps description");
+  if (pSteps == nullptr) {
+    sErrorOut = NO_CURRENT_STEPS_SELECTED;
+    return false;
+  }
 
   // If unchanged:
   if (pSteps->GetDescription() == sAnswer) {
@@ -1445,13 +1487,24 @@ bool SongUtil::ValidateCurrentStepsChartName(
 
   /* Don't allow duplicate title names within the same StepsType.
    * We need some way of identifying the unique charts. */
-  Steps* pSteps = GAMESTATE->m_pCurSteps[PLAYER_1];
+  Steps* pSteps = GetCurrentPlayerOneStepsForValidation("chart name");
+  if (pSteps == nullptr) {
+    error = NO_CURRENT_STEPS_SELECTED;
+    return false;
+  }
 
   if (pSteps->GetChartName() == answer) {
     return true;
   }
 
   // TODO next commit: borrow code from EditStepsDescription.
+  if (GAMESTATE == nullptr || GAMESTATE->m_pCurSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-661: chart name validation requested without "
+        "current song.");
+    error = NO_CURRENT_STEPS_SELECTED;
+    return false;
+  }
   bool result = SongUtil::IsChartNameUnique(
       GAMESTATE->m_pCurSong, pSteps->m_StepsType, answer, pSteps);
   if (!result) {
@@ -1471,7 +1524,11 @@ bool SongUtil::ValidateCurrentStepsCredit(
     return true;
   }
 
-  Steps* pSteps = GAMESTATE->m_pCurSteps[PLAYER_1];
+  Steps* pSteps = GetCurrentPlayerOneStepsForValidation("steps credit");
+  if (pSteps == nullptr) {
+    sErrorOut = NO_CURRENT_STEPS_SELECTED;
+    return false;
+  }
   // If unchanged:
   if (pSteps->GetCredit() == sAnswer) {
     return true;
