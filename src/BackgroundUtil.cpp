@@ -540,7 +540,18 @@ void BackgroundUtil::GetGlobalRandomMovies(
       bTryInsideOfSongGroupFirst);
 
   for (const std::string& s : vsPathsOut) {
-    std::string sName = Right(s, s.size() - RANDOMMOVIES_DIR.size() - 1);
+    std::string sName;
+    if (BeginsWith(s, RANDOMMOVIES_DIR)) {
+      sName = Right(s, s.size() - RANDOMMOVIES_DIR.size());
+    } else if (BeginsWith(s, SONG_MOVIES_DIR)) {
+      sName = Right(s, s.size() - SONG_MOVIES_DIR.size());
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-685: random movie path '%s' is outside known "
+          "movie roots; using basename.",
+          s.c_str());
+      sName = Basename(s);
+    }
     vsNamesOut.push_back(sName);
   }
   StripCvsAndSvn(vsPathsOut, vsNamesOut);
