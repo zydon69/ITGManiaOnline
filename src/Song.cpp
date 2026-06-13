@@ -787,6 +787,16 @@ bool Song::LoadAutosaveFile() {
   std::string dir = GetSongDir();
   std::string song_timing_file = m_SongTiming.m_sFile;
   std::string song_file = m_sSongFileName;
+
+  Song autosaveProbe;
+  if (!autosaveProbe.LoadFromSongDir(dir, true)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-609: autosave probe failed for '%s'; keeping "
+        "current song state.",
+        dir.c_str());
+    return false;
+  }
+
   // Reset needs to be used to remove all the steps and other things that
   // will be loaded from the autosave. -Kyz
   Reset();
