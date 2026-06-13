@@ -1259,7 +1259,20 @@ void SongUtil::SortByMostRecentlyPlayedForProfile(
 bool SongUtil::IsEditDescriptionUnique(
     const Song* pSong, StepsType st, const std::string& sPreferredDescription,
     const Steps* pExclude) {
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-660: edit description uniqueness requested without "
+        "song.");
+    return false;
+  }
+
   for (const Steps* pSteps : pSong->GetAllSteps()) {
+    if (pSteps == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-660: skipped null steps while checking edit "
+          "description uniqueness.");
+      continue;
+    }
     if (pSteps->GetDifficulty() != Difficulty_Edit) {
       continue;
     }
@@ -1279,7 +1292,19 @@ bool SongUtil::IsEditDescriptionUnique(
 bool SongUtil::IsChartNameUnique(
     const Song* pSong, StepsType st, const std::string& name,
     const Steps* pExclude) {
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-660: chart name uniqueness requested without song.");
+    return false;
+  }
+
   for (const Steps* pSteps : pSong->GetAllSteps()) {
+    if (pSteps == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-660: skipped null steps while checking chart name "
+          "uniqueness.");
+      continue;
+    }
     if (pSteps->m_StepsType != st) {
       continue;
     }
@@ -1295,8 +1320,17 @@ bool SongUtil::IsChartNameUnique(
 
 std::string SongUtil::MakeUniqueEditDescription(
     const Song* pSong, StepsType st, const std::string& sPreferredDescription) {
-  if (IsEditDescriptionUnique(pSong, st, sPreferredDescription, nullptr)) {
-    return sPreferredDescription;
+  const std::string sClampedDescription =
+      Left(sPreferredDescription, MAX_STEPS_DESCRIPTION_LENGTH);
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-660: unique edit description requested without song; "
+        "returning clamped preferred description.");
+    return sClampedDescription;
+  }
+
+  if (IsEditDescriptionUnique(pSong, st, sClampedDescription, nullptr)) {
+    return sClampedDescription;
   }
 
   std::string sTemp;
@@ -1314,8 +1348,11 @@ std::string SongUtil::MakeUniqueEditDescription(
     }
   }
 
-  // Edit limit guards should prevent this
-  FAIL_M("Exceeded limit of 1000 edits per song");
+  LOG->Warn(
+      "SRC_AUDIT_FIX SRC-660: exhausted edit description suffixes for '%s'; "
+      "returning clamped preferred description.",
+      pSong->GetSongDir().c_str());
+  return sClampedDescription;
 }
 
 static LocalizedString YOU_MUST_SUPPLY_NAME(
