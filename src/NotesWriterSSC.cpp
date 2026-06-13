@@ -120,6 +120,44 @@ static std::string SanitizeKeysoundForWrite(
   return SmEscape(sanitized);
 }
 
+static std::string SanitizeAttackModifiersForWrite(
+    const std::string& modifiers, const char* format) {
+  std::string sanitized = modifiers;
+  bool changed = false;
+  for (char& c : sanitized) {
+    if (c == ':' || c == ';' || c == '\r' || c == '\n') {
+      c = ' ';
+      changed = true;
+    }
+  }
+  if (changed) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-585 SRC-594: sanitized %s attack modifiers "
+        "containing MSD delimiters.",
+        format);
+  }
+  return sanitized;
+}
+
+static std::string SanitizeAttackStringForWrite(
+    const std::string& attacks, const char* format) {
+  std::string sanitized = attacks;
+  bool changed = false;
+  for (char& c : sanitized) {
+    if (c == ';' || c == '\r' || c == '\n') {
+      c = ' ';
+      changed = true;
+    }
+  }
+  if (changed) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-585 SRC-594: sanitized %s attack string "
+        "containing MSD tag delimiters.",
+        format);
+  }
+  return sanitized;
+}
+
 static std::vector<std::string> GetTimingVectorForWrite(
     const TimingData& timing, TimingSegmentType type, int dec) {
   const std::vector<TimingSegment*>& segs = timing.GetTimingSegments(type);
@@ -576,7 +614,7 @@ static bool WriteGlobalTags(CheckedFileWriter& f, const Song& out) {
     const Attack& a = out.m_Attacks[j];
     f.Write(ssprintf(
         "  TIME=%.2f:LEN=%.2f:MODS=%s", a.fStartSecond, a.fSecsRemaining,
-        a.sModifiers.c_str()));
+        SanitizeAttackModifiersForWrite(a.sModifiers, "SSC song").c_str()));
 
     if (j + 1 < out.m_Attacks.size()) {
       f.Write(":");
@@ -650,7 +688,9 @@ static std::string GetSSCNoteData(
       stepAttacks =
           Right(stepAttacks, stepAttacks.size() - songAttacks.size() - 1);
     }
-    lines.push_back(ssprintf("#ATTACKS:%s;", stepAttacks.c_str()));
+    lines.push_back(ssprintf(
+        "#ATTACKS:%s;",
+        SanitizeAttackStringForWrite(stepAttacks, "SSC steps").c_str()));
   }
 
   switch (in.GetDisplayBPM()) {

@@ -104,6 +104,25 @@ static std::string SanitizeKeysoundForWrite(
   }
   return SmEscape(sanitized);
 }
+
+static std::string SanitizeAttackStringForWrite(
+    const std::string& attacks, const char* format) {
+  std::string sanitized = attacks;
+  bool changed = false;
+  for (char& c : sanitized) {
+    if (c == ';' || c == '\r' || c == '\n') {
+      c = ' ';
+      changed = true;
+    }
+  }
+  if (changed) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-585 SRC-594: sanitized %s attack string "
+        "containing MSD tag delimiters.",
+        format);
+  }
+  return sanitized;
+}
 }  // namespace
 
 /**
@@ -308,7 +327,9 @@ static bool WriteGlobalTags(CheckedFileWriter& f, Song& out) {
   }
   f.PutLine(";");
 
-  f.PutLine(ssprintf("#ATTACKS:%s;", out.GetAttackString().c_str()));
+  f.PutLine(ssprintf(
+      "#ATTACKS:%s;",
+      SanitizeAttackStringForWrite(out.GetAttackString(), "SM song").c_str()));
   return !f.Failed();
 }
 
