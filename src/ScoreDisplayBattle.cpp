@@ -49,6 +49,13 @@ void ScoreDisplayBattle::Init(
 void ScoreDisplayBattle::Update(float fDelta) {
   ScoreDisplay::Update(fDelta);
 
+  if (m_pPlayerState == nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-240: ScoreDisplayBattle skipped update without "
+        "PlayerState.");
+    return;
+  }
+
   for (int s = 0; s < NUM_INVENTORY_SLOTS; s++) {
     const Attack& attack = m_pPlayerState->m_Inventory[s];
     std::string sNewModifier = attack.sModifiers;
@@ -60,10 +67,18 @@ void ScoreDisplayBattle::Update(float fDelta) {
         m_ItemIcon[s].RunCommands(
             ActorUtil::ParseActorCommands("linear,0.25;zoom,0"));
       } else {
-        // TODO:  Cache all of the icon graphics so we don't load them
-        // dynamically from disk.
-        m_ItemIcon[s].Load(
-            THEME->GetPathG("ScoreDisplayBattle", "icon " + sNewModifier));
+        const std::string iconPath = THEME->GetPathG(
+            "ScoreDisplayBattle", "icon " + sNewModifier, true);
+        if (iconPath.empty()) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX SRC-240: ScoreDisplayBattle missing icon for "
+              "modifier '%s'.",
+              sNewModifier.c_str());
+          m_ItemIcon[s].RunCommands(
+              ActorUtil::ParseActorCommands("linear,0.25;zoom,0"));
+          continue;
+        }
+        m_ItemIcon[s].Load(iconPath);
         m_ItemIcon[s].StopTweening();
         apActorCommands acmds = ActorUtil::ParseActorCommands(
             "diffuse,1,1,1,1;zoom,1;"
