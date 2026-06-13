@@ -358,8 +358,11 @@ class ScreenGameplay : public ScreenWithMenuElements {
   std::vector<PlayerInfo>
       m_vPlayerInfo;  // filled by SGameplay derivatives in FillPlayerInfo
   virtual void FillPlayerInfo(std::vector<PlayerInfo>& vPlayerInfoOut) = 0;
-  virtual PlayerInfo& GetPlayerInfoForInput(const InputEventPlus& iep) {
-    return m_vPlayerInfo[iep.pn];
+  virtual PlayerInfo* GetPlayerInfoForInput(const InputEventPlus& iep) {
+    if (iep.pn < PLAYER_1 || iep.pn >= NUM_PLAYERS) {
+      return nullptr;
+    }
+    return &m_vPlayerInfo[iep.pn];
   }
 
   RageTimer m_timerGameplaySeconds;
@@ -375,6 +378,9 @@ class ScreenGameplay : public ScreenWithMenuElements {
   bool m_bLoggedStageEndState;
   bool m_bLoggedOnlineEvaluationHold;
   bool m_bMarkedOnlineFailedEarly;
+  int m_iLightsRowLastCrossed;
+  int m_iBeatRowLastCrossed;
+  int m_iNoteRowLastCrossed[4];
 };
 
 std::vector<PlayerInfo>::iterator GetNextEnabledPlayerInfo(

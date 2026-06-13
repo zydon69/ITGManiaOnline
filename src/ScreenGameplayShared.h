@@ -9,7 +9,7 @@
 class ScreenGameplayShared : public ScreenGameplay {
  protected:
   virtual void FillPlayerInfo(std::vector<PlayerInfo>& vPlayerInfoOut);
-  virtual PlayerInfo& GetPlayerInfoForInput(const InputEventPlus& iep);
+  virtual PlayerInfo* GetPlayerInfoForInput(const InputEventPlus& iep);
 };
 
 #endif

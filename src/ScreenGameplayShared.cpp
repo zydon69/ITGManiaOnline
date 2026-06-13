@@ -26,9 +26,14 @@ void ScreenGameplayShared::FillPlayerInfo(
       other, MultiPlayer_Invalid, false, Difficulty_Invalid);
 }
 
-PlayerInfo& ScreenGameplayShared::GetPlayerInfoForInput(
+PlayerInfo* ScreenGameplayShared::GetPlayerInfoForInput(
     const InputEventPlus& iep) {
-  return m_vPlayerInfo[GAMESTATE->GetMasterPlayerNumber()];
+  const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+  if (master < PLAYER_1 || master >= NUM_PLAYERS ||
+      master >= static_cast<PlayerNumber>(m_vPlayerInfo.size())) {
+    return nullptr;
+  }
+  return &m_vPlayerInfo[master];
 }
 
 /*
