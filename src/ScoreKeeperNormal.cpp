@@ -783,6 +783,13 @@ void ScoreKeeperNormal::HandleHoldScore(const TapNote& tn) {
 
 int ScoreKeeperNormal::GetPossibleDancePoints(
     NoteData* nd, const TimingData* td, float fSongSeconds) {
+  if (nd == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal::GetPossibleDancePoints received "
+        "null NoteData.");
+    return 0;
+  }
+
   /* Note: If W1 timing is disabled or not active (not course mode),
    * W2 will be used instead. */
   // XXX: That's not actually implemented!
@@ -818,6 +825,13 @@ int ScoreKeeperNormal::GetPossibleDancePoints(
 
 int ScoreKeeperNormal::GetPossibleGradePoints(
     NoteData* nd, const TimingData* td, float fSongSeconds) {
+  if (nd == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal::GetPossibleGradePoints received "
+        "null NoteData.");
+    return 0;
+  }
+
   /* Note: if W1 timing is disabled or not active (not course mode),
    * W2 will be used instead. */
   // XXX: That's not actually implemented!
