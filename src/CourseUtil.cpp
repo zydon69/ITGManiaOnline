@@ -451,10 +451,27 @@ void CourseUtil::MakeDefaultEditCourseEntry(CourseEntry& out) {
 
 void CourseUtil::AutogenEndlessFromGroup(
     const std::string& sGroupName, Difficulty diff, Course& out) {
+  if (SONGMAN == nullptr || THEME == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-671: cannot autogen endless course for group '%s' "
+        "without SONGMAN or THEME.",
+        sGroupName.c_str());
+    out.m_vEntries.clear();
+    return;
+  }
+  if (diff < Difficulty_Beginner || diff >= NUM_Difficulty) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-671: invalid autogen difficulty %i for group '%s'; "
+        "using Medium.",
+        diff, sGroupName.c_str());
+    diff = Difficulty_Medium;
+  }
+
   out.m_bIsAutogen = true;
   out.m_bRepeat = true;
   out.m_bShuffle = true;
   out.m_iLives = -1;
+  out.m_vEntries.clear();
   FOREACH_ENUM(Difficulty, dc)
   out.m_iCustomMeter[dc] = -1;
 
