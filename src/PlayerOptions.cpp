@@ -926,6 +926,11 @@ bool PlayerOptions::FromOneModString(
     m_##opt = level;      \
     m_Speed##opt = speed; \
   }
+#define UNKNOWN_MOD_FAMILY(family)                                      \
+  {                                                                     \
+    sErrorOut = ssprintf("unknown %s token '%s'", family, sBit.c_str()); \
+    return false;                                                       \
+  }
   const bool on = (level > 0.5f);
 
   static Regex mult("^([0-9]+(\\.[0-9]+)?)x$");
@@ -1022,6 +1027,8 @@ bool PlayerOptions::FromOneModString(
       m_HideLightType = HideLightType_HideMarqueeLights;
     } else if (sBit == "hidebasslights") {
       m_HideLightType = HideLightType_HideBassLights;
+    } else {
+      UNKNOWN_MOD_FAMILY("lights")
     }
   } else if (sBit == "boost") {
     SET_FLOAT(fAccels[ACCEL_BOOST])
@@ -1032,6 +1039,8 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fAccels[ACCEL_WAVE])
     } else if (sBit == "waveperiod") {
       SET_FLOAT(fAccels[ACCEL_WAVE_PERIOD])
+    } else {
+      UNKNOWN_MOD_FAMILY("wave")
     }
   } else if (
       (sBit.find("expand") != sBit.npos) ||
@@ -1044,6 +1053,8 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fAccels[ACCEL_TAN_EXPAND])
     } else if (sBit == "tanexpandperiod") {
       SET_FLOAT(fAccels[ACCEL_TAN_EXPAND_PERIOD])
+    } else {
+      UNKNOWN_MOD_FAMILY("expand")
     }
   } else if (sBit == "boomerang") {
     SET_FLOAT(fAccels[ACCEL_BOOMERANG])
@@ -1080,12 +1091,16 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fEffects[EFFECT_TAN_DRUNK_Z_OFFSET])
     } else if (sBit == "tandrunkzperiod") {
       SET_FLOAT(fEffects[EFFECT_TAN_DRUNK_Z_PERIOD])
+    } else {
+      UNKNOWN_MOD_FAMILY("drunk")
     }
   } else if (sBit.find("shrink") != sBit.npos) {
     if (sBit == "shrinklinear") {
       SET_FLOAT(fEffects[EFFECT_SHRINK_TO_LINEAR])
     } else if (sBit == "shrinkmult") {
       SET_FLOAT(fEffects[EFFECT_SHRINK_TO_MULT])
+    } else {
+      UNKNOWN_MOD_FAMILY("shrink")
     }
   } else if (sBit.find("pulse") != sBit.npos) {
     if (sBit == "pulseinner") {
@@ -1096,54 +1111,54 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fEffects[EFFECT_PULSE_OFFSET])
     } else if (sBit == "pulseperiod") {
       SET_FLOAT(fEffects[EFFECT_PULSE_PERIOD])
+    } else {
+      UNKNOWN_MOD_FAMILY("pulse")
     }
   } else if (sBit.find("dizzy") != sBit.npos) {
     if (sBit == "dizzy") {
       SET_FLOAT(fEffects[EFFECT_DIZZY])
     } else if (sBit == "dizzyholds") {
       m_bDizzyHolds = on;
+    } else {
+      UNKNOWN_MOD_FAMILY("dizzy")
     }
   } else if (sBit.find("confusion") != sBit.npos) {
-    if (sBit.find("x") != sBit.npos) {
-      if (sBit == "confusionx") {
-        SET_FLOAT(fEffects[EFFECT_CONFUSION_X])
-      } else if (sBit == "confusionxoffset") {
-        SET_FLOAT(fEffects[EFFECT_CONFUSION_X_OFFSET])
-      } else {
-        for (int i = 0; i < 16; i++) {
-          sMod = ssprintf("confusionxoffset%d", i + 1);
-          if (sBit == sMod) {
-            SET_FLOAT(fConfusionX[i])
-            break;
-          }
-        }
-      }
-    } else if (sBit.find("y") != sBit.npos) {
-      if (sBit == "confusiony") {
-        SET_FLOAT(fEffects[EFFECT_CONFUSION_Y])
-      } else if (sBit == "confusionyoffset") {
-        SET_FLOAT(fEffects[EFFECT_CONFUSION_Y_OFFSET])
-      } else {
-        for (int i = 0; i < 16; i++) {
-          sMod = ssprintf("confusionyoffset%d", i + 1);
-          if (sBit == sMod) {
-            SET_FLOAT(fConfusionY[i])
-            break;
-          }
-        }
-      }
-    }
     if (sBit == "confusion") {
       SET_FLOAT(fEffects[EFFECT_CONFUSION])
     } else if (sBit == "confusionoffset") {
       SET_FLOAT(fEffects[EFFECT_CONFUSION_OFFSET])
+    } else if (sBit == "confusionx") {
+      SET_FLOAT(fEffects[EFFECT_CONFUSION_X])
+    } else if (sBit == "confusionxoffset") {
+      SET_FLOAT(fEffects[EFFECT_CONFUSION_X_OFFSET])
+    } else if (sBit == "confusiony") {
+      SET_FLOAT(fEffects[EFFECT_CONFUSION_Y])
+    } else if (sBit == "confusionyoffset") {
+      SET_FLOAT(fEffects[EFFECT_CONFUSION_Y_OFFSET])
     } else {
+      bool matched = false;
       for (int i = 0; i < 16; i++) {
         sMod = ssprintf("confusionoffset%d", i + 1);
         if (sBit == sMod) {
           SET_FLOAT(fConfusionZ[i])
+          matched = true;
           break;
         }
+        sMod = ssprintf("confusionxoffset%d", i + 1);
+        if (sBit == sMod) {
+          SET_FLOAT(fConfusionX[i])
+          matched = true;
+          break;
+        }
+        sMod = ssprintf("confusionyoffset%d", i + 1);
+        if (sBit == sMod) {
+          SET_FLOAT(fConfusionY[i])
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        UNKNOWN_MOD_FAMILY("confusion")
       }
     }
   } else if (sBit.find("bounce") != sBit.npos) {
@@ -1159,6 +1174,8 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fEffects[EFFECT_BOUNCE_Z_PERIOD])
     } else if (sBit == "bouncezoffset") {
       SET_FLOAT(fEffects[EFFECT_BOUNCE_Z_OFFSET])
+    } else {
+      UNKNOWN_MOD_FAMILY("bounce")
     }
   } else if (sBit == "mini") {
     SET_FLOAT(fEffects[EFFECT_MINI])
@@ -1166,12 +1183,17 @@ bool PlayerOptions::FromOneModString(
     if (sBit == "tiny") {
       SET_FLOAT(fEffects[EFFECT_TINY])
     } else {
+      bool matched = false;
       for (int i = 0; i < 16; i++) {
         sMod = ssprintf("tiny%d", i + 1);
         if (sBit == sMod) {
           SET_FLOAT(fTiny[i])
+          matched = true;
           break;
         }
+      }
+      if (!matched) {
+        UNKNOWN_MOD_FAMILY("tiny")
       }
     }
   } else if (sBit == "flip") {
@@ -1203,6 +1225,8 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fEffects[EFFECT_TAN_TORNADO_Z_PERIOD])
     } else if (sBit == "tantornadozoffset") {
       SET_FLOAT(fEffects[EFFECT_TAN_TORNADO_Z_OFFSET])
+    } else {
+      UNKNOWN_MOD_FAMILY("tornado")
     }
   } else if (sBit.find("tipsy") != sBit.npos) {
     if (sBit == "tipsy") {
@@ -1217,6 +1241,8 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fEffects[EFFECT_TAN_TIPSY_SPEED])
     } else if (sBit == "tantipsyoffset") {
       SET_FLOAT(fEffects[EFFECT_TAN_TIPSY_OFFSET])
+    } else {
+      UNKNOWN_MOD_FAMILY("tipsy")
     }
   } else if (sBit.find("bumpy") != sBit.npos) {
     if (sBit == "bumpy") {
@@ -1244,12 +1270,17 @@ bool PlayerOptions::FromOneModString(
     } else if (sBit == "tanbumpyxperiod") {
       SET_FLOAT(fEffects[EFFECT_TAN_BUMPY_X_PERIOD])
     } else {
+      bool matched = false;
       for (int i = 0; i < 16; i++) {
         sMod = ssprintf("bumpy%d", i + 1);
         if (sBit == sMod) {
           SET_FLOAT(fBumpy[i])
+          matched = true;
           break;
         }
+      }
+      if (!matched) {
+        UNKNOWN_MOD_FAMILY("bumpy")
       }
     }
   } else if (sBit.find("beat") != sBit.npos) {
@@ -1277,6 +1308,8 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fEffects[EFFECT_BEAT_Z_PERIOD])
     } else if (sBit == "beatzmult") {
       SET_FLOAT(fEffects[EFFECT_BEAT_Z_MULT])
+    } else {
+      UNKNOWN_MOD_FAMILY("beat")
     }
   } else if (sBit.find("digital") != sBit.npos) {
     if (sBit == "digital") {
@@ -1311,6 +1344,8 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fEffects[EFFECT_TAN_DIGITAL_Z_PERIOD])
     } else if (sBit == "tandigitalzoffset") {
       SET_FLOAT(fEffects[EFFECT_TAN_DIGITAL_Z_OFFSET])
+    } else {
+      UNKNOWN_MOD_FAMILY("digital")
     }
   } else if (sBit.find("zigzag") != sBit.npos) {
     if (sBit == "zigzag") {
@@ -1325,6 +1360,8 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fEffects[EFFECT_ZIGZAG_Z_PERIOD])
     } else if (sBit == "zigzagzoffset") {
       SET_FLOAT(fEffects[EFFECT_ZIGZAG_Z_OFFSET])
+    } else {
+      UNKNOWN_MOD_FAMILY("zigzag")
     }
   } else if (sBit.find("sawtooth") != sBit.npos) {
     if (sBit == "sawtooth") {
@@ -1335,6 +1372,8 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fEffects[EFFECT_SAWTOOTH_Z])
     } else if (sBit == "sawtoothzperiod") {
       SET_FLOAT(fEffects[EFFECT_SAWTOOTH_Z_PERIOD])
+    } else {
+      UNKNOWN_MOD_FAMILY("sawtooth")
     }
   } else if (sBit.find("square") != sBit.npos) {
     if (sBit == "square") {
@@ -1349,6 +1388,8 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fEffects[EFFECT_SQUARE_Z_OFFSET])
     } else if (sBit == "squarezperiod") {
       SET_FLOAT(fEffects[EFFECT_SQUARE_Z_PERIOD])
+    } else {
+      UNKNOWN_MOD_FAMILY("square")
     }
   } else if (sBit.find("parabola") != sBit.npos) {
     if (sBit == "parabolax") {
@@ -1357,6 +1398,8 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fEffects[EFFECT_PARABOLA_Y])
     } else if (sBit == "parabolaz") {
       SET_FLOAT(fEffects[EFFECT_PARABOLA_Z])
+    } else {
+      UNKNOWN_MOD_FAMILY("parabola")
     }
   } else if (sBit.find("attenuate") != sBit.npos) {
     if (sBit == "attenuatex") {
@@ -1365,6 +1408,8 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fEffects[EFFECT_ATTENUATE_Y])
     } else if (sBit == "attenuatez") {
       SET_FLOAT(fEffects[EFFECT_ATTENUATE_Z])
+    } else {
+      UNKNOWN_MOD_FAMILY("attenuate")
     }
   } else if (sBit == "xmode") {
     SET_FLOAT(fEffects[EFFECT_XMODE])
@@ -1388,12 +1433,17 @@ bool PlayerOptions::FromOneModString(
     } else if (sBit == "stealthpastreceptors") {
       m_bStealthPastReceptors = on;
     } else {
+      bool matched = false;
       for (int i = 0; i < 16; i++) {
         sMod = ssprintf("stealth%d", i + 1);
         if (sBit == sMod) {
           SET_FLOAT(fStealth[i])
+          matched = true;
           break;
         }
+      }
+      if (!matched) {
+        UNKNOWN_MOD_FAMILY("stealth")
       }
     }
   } else if (sBit == "blink") {
@@ -1460,12 +1510,17 @@ bool PlayerOptions::FromOneModString(
     if (sBit == "reverse") {
       SET_FLOAT(fScrolls[SCROLL_REVERSE])
     } else {
+      bool matched = false;
       for (int i = 0; i < 16; i++) {
         sMod = ssprintf("reverse%d", i + 1);
         if (sBit == sMod) {
           SET_FLOAT(fReverse[i])
+          matched = true;
           break;
         }
+      }
+      if (!matched) {
+        UNKNOWN_MOD_FAMILY("reverse")
       }
     }
   } else if (sBit == "split") {
@@ -1492,12 +1547,17 @@ bool PlayerOptions::FromOneModString(
     if (sBit == "dark") {
       SET_FLOAT(fDark)
     } else {
+      bool matched = false;
       for (int i = 0; i < 16; i++) {
         sMod = ssprintf("dark%d", i + 1);
         if (sBit == sMod) {
           SET_FLOAT(fDarks[i])
+          matched = true;
           break;
         }
+      }
+      if (!matched) {
+        UNKNOWN_MOD_FAMILY("dark")
       }
     }
   } else if (sBit == "blind") {
@@ -1563,29 +1623,46 @@ bool PlayerOptions::FromOneModString(
 
   else if (sBit.find("move") != sBit.npos) {
     if (sBit.find("x") != sBit.npos) {
+      bool matched = false;
       for (int i = 0; i < 16; i++) {
         sMod = ssprintf("movex%d", i + 1);
         if (sBit == sMod) {
           SET_FLOAT(fMovesX[i])
+          matched = true;
           break;
         }
       }
+      if (!matched) {
+        UNKNOWN_MOD_FAMILY("move")
+      }
     } else if (sBit.find("y") != sBit.npos) {
+      bool matched = false;
       for (int i = 0; i < 16; i++) {
         sMod = ssprintf("movey%d", i + 1);
         if (sBit == sMod) {
           SET_FLOAT(fMovesY[i])
+          matched = true;
           break;
         }
       }
+      if (!matched) {
+        UNKNOWN_MOD_FAMILY("move")
+      }
     } else if (sBit.find("z") != sBit.npos) {
+      bool matched = false;
       for (int i = 0; i < 16; i++) {
         sMod = ssprintf("movez%d", i + 1);
         if (sBit == sMod) {
           SET_FLOAT(fMovesZ[i])
+          matched = true;
           break;
         }
       }
+      if (!matched) {
+        UNKNOWN_MOD_FAMILY("move")
+      }
+    } else {
+      UNKNOWN_MOD_FAMILY("move")
     }
   } else if (sBit == "zbuffer") {
     m_bZBuffer = on;
@@ -1627,6 +1704,9 @@ bool PlayerOptions::FromOneModString(
     }
     return false;
   }
+
+#undef UNKNOWN_MOD_FAMILY
+#undef SET_FLOAT
 
   return true;
 }
