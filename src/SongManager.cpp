@@ -2161,10 +2161,14 @@ void SongManager::SetPreferredSongs(
   }
 
   // prune empty groups
-  for (int i = m_vPreferredSongSort.size() - 1; i >= 0; i--) {
-    if (m_vPreferredSongSort[i].vpSongs.empty()) {
-      m_vPreferredSongSort.erase(m_vPreferredSongSort.begin() + i);
-      m_mapPreferredSectionToSongs.erase(m_vPreferredSongSort[i].sName);
+  for (auto iter = m_vPreferredSongSort.begin();
+       iter != m_vPreferredSongSort.end();) {
+    if (iter->vpSongs.empty()) {
+      const std::string sectionName = iter->sName;
+      iter = m_vPreferredSongSort.erase(iter);
+      m_mapPreferredSectionToSongs.erase(sectionName);
+    } else {
+      ++iter;
     }
   }
 
