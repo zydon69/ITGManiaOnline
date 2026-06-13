@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <deque>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <string>
@@ -47,6 +48,8 @@ static ThemeMetric<bool> g_MineHitIncrementsMissCombo(
     "Gameplay", "MineHitIncrementsMissCombo");
 
 const float LESSON_PASS_THRESHOLD = 0.8f;
+const size_t MAX_COMBO_LIST_ENTRIES = 10000;
+const int MAX_LUA_LIFE_RECORD_SAMPLES = 4096;
 
 Grade GetGradeFromPercent(float fPercent);
 
@@ -55,8 +58,83 @@ bool IsValidPlayerNumber(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
 }
 
+bool IsValidMultiPlayer(MultiPlayer mp) {
+  return mp >= MultiPlayer_P1 && mp < NUM_MultiPlayer;
+}
+
 bool IsValidFullComboTapScore(TapNoteScore tns) {
   return tns >= TNS_W5 && tns <= TNS_W1;
+}
+
+bool IsValidTapNoteScore(TapNoteScore tns) {
+  return tns >= TNS_None && tns < NUM_TapNoteScore;
+}
+
+bool IsValidHoldNoteScore(HoldNoteScore hns) {
+  return hns >= HNS_None && hns < NUM_HoldNoteScore;
+}
+
+int ClampNonNegativeInt(int value, const char* field) {
+  if (value < 0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats clamped negative %s value %i to 0.",
+        field, value);
+    return 0;
+  }
+  return value;
+}
+
+int AddNonNegativeIntSaturated(int current, int add, const char* field) {
+  current = ClampNonNegativeInt(current, field);
+  add = ClampNonNegativeInt(add, field);
+
+  if (add > std::numeric_limits<int>::max() - current) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats saturated %s integer sum %i + %i.",
+        field, current, add);
+    return std::numeric_limits<int>::max();
+  }
+  return current + add;
+}
+
+unsigned int AddUnsignedSaturated(
+    unsigned int current, unsigned int add, const char* field) {
+  if (add > std::numeric_limits<unsigned int>::max() - current) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats saturated %s unsigned sum %u + %u.",
+        field, current, add);
+    return std::numeric_limits<unsigned int>::max();
+  }
+  return current + add;
+}
+
+float ClampFiniteNonNegativeFloat(float value, const char* field) {
+  if (!std::isfinite(value)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats clamped non-finite %s value %f to 0.",
+        field, value);
+    return 0.0f;
+  }
+  if (value < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats clamped negative %s value %f to 0.",
+        field, value);
+    return 0.0f;
+  }
+  return value;
+}
+
+float AddFiniteNonNegativeFloat(float current, float add, const char* field) {
+  current = ClampFiniteNonNegativeFloat(current, field);
+  add = ClampFiniteNonNegativeFloat(add, field);
+
+  if (add > std::numeric_limits<float>::max() - current) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats saturated %s float sum %f + %f.",
+        field, current, add);
+    return std::numeric_limits<float>::max();
+  }
+  return current + add;
 }
 
 int GetSafePercentDecimalPlaces() {
@@ -118,56 +196,112 @@ void PlayerStageStats::InternalInit() {
 }
 
 void PlayerStageStats::Init(PlayerNumber pn) {
+  InternalInit();
   m_for_multiplayer = false;
+  if (!IsValidPlayerNumber(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::Init received invalid player %i; "
+        "defaulting to PLAYER_1.",
+        pn);
+    pn = PLAYER_1;
+  }
   m_player_number = pn;
 }
 
 void PlayerStageStats::Init(MultiPlayer pn) {
+  InternalInit();
   m_for_multiplayer = true;
+  if (!IsValidMultiPlayer(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::Init received invalid multiplayer "
+        "%i; defaulting to MultiPlayer_P1.",
+        pn);
+    pn = MultiPlayer_P1;
+  }
   m_multiplayer_number = pn;
 }
 
 void PlayerStageStats::AddStats(const PlayerStageStats& other) {
   m_pStyle = other.m_pStyle;
-  m_bJoined = other.m_bJoined;
+  m_bJoined |= other.m_bJoined;
   for (Steps* s : other.m_vpPossibleSteps) {
+    if (s == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats::AddStats skipped null possible "
+          "steps.");
+      continue;
+    }
     m_vpPossibleSteps.push_back(s);
   }
-  m_iStepsPlayed += other.m_iStepsPlayed;
-  m_fAliveSeconds += other.m_fAliveSeconds;
+  m_iStepsPlayed = AddNonNegativeIntSaturated(
+      m_iStepsPlayed, other.m_iStepsPlayed, "steps played");
+  m_fAliveSeconds =
+      AddFiniteNonNegativeFloat(m_fAliveSeconds, other.m_fAliveSeconds,
+                                "alive seconds");
   m_bFailed |= other.m_bFailed;
-  m_iPossibleDancePoints += other.m_iPossibleDancePoints;
-  m_iActualDancePoints += other.m_iActualDancePoints;
-  m_iCurPossibleDancePoints += other.m_iCurPossibleDancePoints;
-  m_iPossibleGradePoints += other.m_iPossibleGradePoints;
+  m_iPossibleDancePoints = AddNonNegativeIntSaturated(
+      m_iPossibleDancePoints, other.m_iPossibleDancePoints,
+      "possible dance points");
+  m_iActualDancePoints = AddNonNegativeIntSaturated(
+      m_iActualDancePoints, other.m_iActualDancePoints, "actual dance points");
+  m_iCurPossibleDancePoints = AddNonNegativeIntSaturated(
+      m_iCurPossibleDancePoints, other.m_iCurPossibleDancePoints,
+      "current possible dance points");
+  m_iPossibleGradePoints = AddNonNegativeIntSaturated(
+      m_iPossibleGradePoints, other.m_iPossibleGradePoints,
+      "possible grade points");
 
   for (int t = 0; t < NUM_TapNoteScore; t++) {
-    m_iTapNoteScores[t] += other.m_iTapNoteScores[t];
+    m_iTapNoteScores[t] = AddNonNegativeIntSaturated(
+        m_iTapNoteScores[t], other.m_iTapNoteScores[t], "tap note score");
   }
   for (int h = 0; h < NUM_HoldNoteScore; h++) {
-    m_iHoldNoteScores[h] += other.m_iHoldNoteScores[h];
+    m_iHoldNoteScores[h] = AddNonNegativeIntSaturated(
+        m_iHoldNoteScores[h], other.m_iHoldNoteScores[h], "hold note score");
   }
-  m_iCurCombo += other.m_iCurCombo;
-  m_iMaxCombo += other.m_iMaxCombo;
-  m_iCurMissCombo += other.m_iCurMissCombo;
-  m_iScore += other.m_iScore;
-  m_iMaxScore += other.m_iMaxScore;
-  m_iCurMaxScore += other.m_iCurMaxScore;
-  m_radarPossible += other.m_radarPossible;
-  m_radarActual += other.m_radarActual;
-  m_iSongsPassed += other.m_iSongsPassed;
-  m_iSongsPlayed += other.m_iSongsPlayed;
-  m_iNumControllerSteps += other.m_iNumControllerSteps;
-  m_fCaloriesBurned += other.m_fCaloriesBurned;
-  m_fLifeRemainingSeconds = other.m_fLifeRemainingSeconds;  // don't accumulate
+  m_iCurCombo =
+      AddUnsignedSaturated(m_iCurCombo, other.m_iCurCombo, "current combo");
+  m_iMaxCombo =
+      AddUnsignedSaturated(m_iMaxCombo, other.m_iMaxCombo, "max combo");
+  m_iCurMissCombo = AddUnsignedSaturated(
+      m_iCurMissCombo, other.m_iCurMissCombo, "current miss combo");
+  m_iScore = AddUnsignedSaturated(m_iScore, other.m_iScore, "score");
+  m_iMaxScore =
+      AddUnsignedSaturated(m_iMaxScore, other.m_iMaxScore, "max score");
+  m_iCurMaxScore = AddUnsignedSaturated(
+      m_iCurMaxScore, other.m_iCurMaxScore, "current max score");
+  FOREACH_ENUM(RadarCategory, rc) {
+    m_radarPossible[rc] = AddFiniteNonNegativeFloat(
+        m_radarPossible[rc], other.m_radarPossible[rc], "possible radar");
+    m_radarActual[rc] = AddFiniteNonNegativeFloat(
+        m_radarActual[rc], other.m_radarActual[rc], "actual radar");
+  }
+  m_iSongsPassed = AddNonNegativeIntSaturated(
+      m_iSongsPassed, other.m_iSongsPassed, "songs passed");
+  m_iSongsPlayed = AddNonNegativeIntSaturated(
+      m_iSongsPlayed, other.m_iSongsPlayed, "songs played");
+  m_iNumControllerSteps = AddFiniteNonNegativeFloat(
+      m_iNumControllerSteps, other.m_iNumControllerSteps, "controller steps");
+  m_fCaloriesBurned = AddFiniteNonNegativeFloat(
+      m_fCaloriesBurned, other.m_fCaloriesBurned, "calories burned");
+  m_fLifeRemainingSeconds = ClampFiniteNonNegativeFloat(
+      other.m_fLifeRemainingSeconds, "life remaining seconds");  // don't accumulate
   m_bDisqualified |= other.m_bDisqualified;
 
   // FirstSecond is always 0, and last second is the time of the last step,
   // so add 1 second between the stages so that the last element of this
   // stage's record isn't overwritten by the first element of the other
   // stage's record. -Kyz
-  const float fOtherFirstSecond = other.m_fFirstSecond + m_fLastSecond + 1.0f;
-  const float fOtherLastSecond = other.m_fLastSecond + m_fLastSecond + 1.0f;
+  const float baseLastSecond =
+      ClampFiniteNonNegativeFloat(m_fLastSecond, "last second");
+  const float otherFirstSecond =
+      other.m_fFirstSecond == FLT_MAX
+          ? 0.0f
+          : ClampFiniteNonNegativeFloat(other.m_fFirstSecond, "first second");
+  const float otherLastSecond =
+      ClampFiniteNonNegativeFloat(other.m_fLastSecond, "last second");
+  const float fOtherFirstSecond = otherFirstSecond + baseLastSecond + 1.0f;
+  const float fOtherLastSecond = otherLastSecond + baseLastSecond + 1.0f;
   m_fLastSecond = fOtherLastSecond;
 
   std::map<float, float>::const_iterator it;
@@ -175,11 +309,28 @@ void PlayerStageStats::AddStats(const PlayerStageStats& other) {
        ++it) {
     const float pos = it->first;
     const float life = it->second;
+    if (!std::isfinite(pos) || !std::isfinite(life)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats::AddStats skipped non-finite life "
+          "record pos=%f life=%f.",
+          pos, life);
+      continue;
+    }
     m_fLifeRecord[fOtherFirstSecond + pos] = life;
   }
 
   for (unsigned i = 0; i < other.m_ComboList.size(); ++i) {
     const Combo_t& combo = other.m_ComboList[i];
+    if (!std::isfinite(combo.m_fStartSecond) ||
+        !std::isfinite(combo.m_fSizeSeconds) || combo.m_fSizeSeconds < 0.0f ||
+        combo.m_cnt < 0 || combo.m_rollover < 0) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats::AddStats skipped invalid combo "
+          "start=%f size=%f count=%i rollover=%i.",
+          combo.m_fStartSecond, combo.m_fSizeSeconds, combo.m_cnt,
+          combo.m_rollover);
+      continue;
+    }
 
     Combo_t newcombo(combo);
     newcombo.m_fStartSecond += fOtherFirstSecond;
@@ -230,6 +381,15 @@ Grade PlayerStageStats::GetGrade() const {
   if (m_bFailed) {
     return Grade_Failed;
   }
+  if (m_iPossibleGradePoints <= 0) {
+    if (m_iPossibleGradePoints < 0) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats::GetGrade ignored negative "
+          "possible grade points %i.",
+          m_iPossibleGradePoints);
+    }
+    return GetGradeFromPercent(0.0f);
+  }
 
   /* XXX: This entire calculation should be in ScoreKeeper, but final evaluation
    * is tricky since at that point the ScoreKeepers no longer exist. */
@@ -248,17 +408,21 @@ Grade PlayerStageStats::GetGrade() const {
   }
 
   FOREACH_ENUM(TapNoteScore, tns) {
+    const int iTapCount =
+        ClampNonNegativeInt(m_iTapNoteScores[tns], "tap grade count");
     int iTapScoreValue =
         ScoreKeeperNormal::TapNoteScoreToGradePoints(tns, bIsBeginner);
-    fActual += m_iTapNoteScores[tns] * iTapScoreValue;
+    fActual += iTapCount * iTapScoreValue;
     // LOG->Trace( "GetGrade actual: %i * %i", m_iTapNoteScores[tns],
     // iTapScoreValue );
   }
 
   FOREACH_ENUM(HoldNoteScore, hns) {
+    const int iHoldCount =
+        ClampNonNegativeInt(m_iHoldNoteScores[hns], "hold grade count");
     int iHoldScoreValue =
         ScoreKeeperNormal::HoldNoteScoreToGradePoints(hns, bIsBeginner);
-    fActual += m_iHoldNoteScores[hns] * iHoldScoreValue;
+    fActual += iHoldCount * iHoldScoreValue;
     // LOG->Trace( "GetGrade actual: %i * %i", m_iHoldNoteScores[hns],
     // iHoldScoreValue );
   }
@@ -266,8 +430,7 @@ Grade PlayerStageStats::GetGrade() const {
   // LOG->Trace( "GetGrade: fActual: %f, fPossible: %d", fActual,
   // m_iPossibleGradePoints );
 
-  float fPercent =
-      (m_iPossibleGradePoints == 0) ? 0 : fActual / m_iPossibleGradePoints;
+  float fPercent = fActual / m_iPossibleGradePoints;
 
   Grade grade = GetGradeFromPercent(fPercent);
 
@@ -406,14 +569,36 @@ int PlayerStageStats::GetLessonScoreNeeded() const {
               "null steps.");
           return total;
         }
-        return total + steps->GetRadarValues(pn)[RadarCategory_TapsAndHolds];
+        const float tapsAndHolds =
+            steps->GetRadarValues(pn)[RadarCategory_TapsAndHolds];
+        if (!std::isfinite(tapsAndHolds) || tapsAndHolds < 0.0f) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX: PlayerStageStats::GetLessonScoreNeeded skipped "
+              "invalid radar total %f.",
+              tapsAndHolds);
+          return total;
+        }
+        return total + tapsAndHolds;
       });
-  return std::lrint(fScore * LESSON_PASS_THRESHOLD);
+  if (!std::isfinite(fScore) || fScore <= 0.0f) {
+    return 0;
+  }
+  const double needed = static_cast<double>(fScore) * LESSON_PASS_THRESHOLD;
+  if (needed > std::numeric_limits<int>::max()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::GetLessonScoreNeeded saturated "
+        "score %f.",
+        needed);
+    return std::numeric_limits<int>::max();
+  }
+  return std::lrint(needed);
 }
 
 void PlayerStageStats::ResetScoreForLesson() {
+  m_iPossibleDancePoints = 0;
   m_iCurPossibleDancePoints = 0;
   m_iActualDancePoints = 0;
+  m_iPossibleGradePoints = 0;
   FOREACH_ENUM(TapNoteScore, tns)
   m_iTapNoteScores[tns] = 0;
   FOREACH_ENUM(HoldNoteScore, hns)
@@ -424,6 +609,15 @@ void PlayerStageStats::ResetScoreForLesson() {
   m_iScore = 0;
   m_iCurMaxScore = 0;
   m_iMaxScore = 0;
+  m_radarPossible.Zero();
+  m_radarActual.Zero();
+  m_fLifeRecord.clear();
+  m_ComboList.clear();
+  m_fFirstSecond = FLT_MAX;
+  m_fLastSecond = 0.0f;
+  m_StageAward = StageAward_Invalid;
+  m_PeakComboAward = PeakComboAward_Invalid;
+  m_bDisqualified = false;
 }
 
 void PlayerStageStats::SetLifeRecordAt(float fLife, float fStepsSecond) {
@@ -463,7 +657,14 @@ void PlayerStageStats::SetLifeRecordAt(float fLife, float fStepsSecond) {
   if (curr != m_fLifeRecord.end()) {
     if (curr->second != fLife) {
       // 2^-8
-      m_fLifeRecord[fStepsSecond - 0.00390625] = curr->second;
+      const float previousSecond = std::max(0.0f, fStepsSecond - 0.00390625f);
+      if (previousSecond == fStepsSecond) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: PlayerStageStats::SetLifeRecordAt replaced life "
+            "record at zero-second duplicate.");
+      } else {
+        m_fLifeRecord[previousSecond] = curr->second;
+      }
     }
   }
   m_fLifeRecord[fStepsSecond] = fLife;
@@ -508,6 +709,13 @@ void PlayerStageStats::SetLifeRecordAt(float fLife, float fStepsSecond) {
 }
 
 float PlayerStageStats::GetLifeRecordAt(float fStepsSecond) const {
+  if (!std::isfinite(fStepsSecond) || fStepsSecond < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::GetLifeRecordAt normalized invalid "
+        "second %f.",
+        fStepsSecond);
+    fStepsSecond = 0.0f;
+  }
   if (m_fLifeRecord.empty()) {
     return 0;
   }
@@ -525,6 +733,13 @@ float PlayerStageStats::GetLifeRecordAt(float fStepsSecond) const {
 }
 
 float PlayerStageStats::GetLifeRecordLerpAt(float fStepsSecond) const {
+  if (!std::isfinite(fStepsSecond) || fStepsSecond < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::GetLifeRecordLerpAt normalized "
+        "invalid second %f.",
+        fStepsSecond);
+    fStepsSecond = 0.0f;
+  }
   if (m_fLifeRecord.empty()) {
     return 0;
   }
@@ -597,7 +812,11 @@ void PlayerStageStats::UpdateComboList(float fSecond, bool bRollover) {
     return;
   }
 
-  if (fSecond < 0) {
+  if (!std::isfinite(fSecond) || fSecond < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::UpdateComboList ignored invalid "
+        "second %f.",
+        fSecond);
     return;
   }
 
@@ -621,6 +840,13 @@ void PlayerStageStats::UpdateComboList(float fSecond, bool bRollover) {
     }
 
     // This is a new combo.
+    if (m_ComboList.size() >= MAX_COMBO_LIST_ENTRIES) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats::UpdateComboList capped combo list "
+          "at %zu entries.",
+          MAX_COMBO_LIST_ENTRIES);
+      return;
+    }
     Combo_t NewCombo;
     /* "start" is the position that the combo started within this song.
      * If we're recording rollover, the combo hasn't started yet (within
@@ -639,7 +865,7 @@ void PlayerStageStats::UpdateComboList(float fSecond, bool bRollover) {
     combo.m_fStartSecond = 0;
   }
 
-  combo.m_fSizeSeconds = fSecond - combo.m_fStartSecond;
+  combo.m_fSizeSeconds = std::max(0.0f, fSecond - combo.m_fStartSecond);
   combo.m_cnt = cnt;
 
   if (bRollover) {
@@ -885,6 +1111,14 @@ bool PlayerStageStats::IsDisqualified() const {
   return m_bDisqualified;
 }
 
+float PlayerStageStats::GetSurvivalSeconds() const {
+  const float aliveSeconds =
+      ClampFiniteNonNegativeFloat(m_fAliveSeconds, "alive seconds");
+  const float lifeRemainingSeconds = ClampFiniteNonNegativeFloat(
+      m_fLifeRemainingSeconds, "life remaining seconds");
+  return aliveSeconds + lifeRemainingSeconds;
+}
+
 LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
     FormatPercentScore, PlayerStageStats::FormatPercentScore(FArg(1)))
 // lua start
@@ -902,10 +1136,6 @@ LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
   DEFINE_METHOD(GetCurrentScoreMultiplier, m_iCurScoreMultiplier)
   DEFINE_METHOD(GetScore, m_iScore)
   DEFINE_METHOD(GetCurMaxScore, m_iCurMaxScore)
-  DEFINE_METHOD(
-      GetTapNoteScores, m_iTapNoteScores[Enum::Check<TapNoteScore>(L, 1)])
-  DEFINE_METHOD(
-      GetHoldNoteScores, m_iHoldNoteScores[Enum::Check<HoldNoteScore>(L, 1)])
   DEFINE_METHOD(FullCombo, FullCombo())
   DEFINE_METHOD(
       FullComboOfScore, FullComboOfScore(Enum::Check<TapNoteScore>(L, 1)))
@@ -936,47 +1166,107 @@ LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
     return 1;
   }
 
+  static int GetTapNoteScores(T* p, lua_State* L) {
+    TapNoteScore tns = Enum::Check<TapNoteScore>(L, 1);
+    if (!IsValidTapNoteScore(tns)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats:GetTapNoteScores ignored invalid "
+          "tap score %i.",
+          tns);
+      lua_pushnumber(L, 0);
+      return 1;
+    }
+    lua_pushnumber(L, p->m_iTapNoteScores[tns]);
+    return 1;
+  }
+
+  static int GetHoldNoteScores(T* p, lua_State* L) {
+    HoldNoteScore hns = Enum::Check<HoldNoteScore>(L, 1);
+    if (!IsValidHoldNoteScore(hns)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats:GetHoldNoteScores ignored invalid "
+          "hold score %i.",
+          hns);
+      lua_pushnumber(L, 0);
+      return 1;
+    }
+    lua_pushnumber(L, p->m_iHoldNoteScores[hns]);
+    return 1;
+  }
+
   static int GetPlayedSteps(T* p, lua_State* L) {
     lua_newtable(L);
-    for (int i = 0;
-         i < (int)std::min(p->m_iStepsPlayed, (int)p->m_vpPossibleSteps.size());
-         ++i) {
-      p->m_vpPossibleSteps[i]->PushSelf(L);
-      lua_rawseti(L, -2, i + 1);
+    const int stepsPlayed = std::max(0, p->m_iStepsPlayed);
+    const int maxSteps =
+        std::min(stepsPlayed, static_cast<int>(p->m_vpPossibleSteps.size()));
+    int luaIndex = 1;
+    for (int i = 0; i < maxSteps; ++i) {
+      Steps* steps = p->m_vpPossibleSteps[i];
+      if (steps == nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: PlayerStageStats:GetPlayedSteps skipped null "
+            "steps at index %i.",
+            i);
+        continue;
+      }
+      steps->PushSelf(L);
+      lua_rawseti(L, -2, luaIndex++);
     }
     return 1;
   }
   static int GetPossibleSteps(T* p, lua_State* L) {
     lua_newtable(L);
+    int luaIndex = 1;
     for (int i = 0; i < (int)p->m_vpPossibleSteps.size(); ++i) {
-      p->m_vpPossibleSteps[i]->PushSelf(L);
-      lua_rawseti(L, -2, i + 1);
+      Steps* steps = p->m_vpPossibleSteps[i];
+      if (steps == nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: PlayerStageStats:GetPossibleSteps skipped null "
+            "steps at index %i.",
+            i);
+        continue;
+      }
+      steps->PushSelf(L);
+      lua_rawseti(L, -2, luaIndex++);
     }
     return 1;
   }
   static int GetComboList(T* p, lua_State* L) {
     lua_createtable(L, p->m_ComboList.size(), 0);
+    int luaIndex = 1;
     for (size_t i = 0; i < p->m_ComboList.size(); ++i) {
+      const PlayerStageStats::Combo_t& combo = p->m_ComboList[i];
+      if (!std::isfinite(combo.m_fStartSecond) ||
+          !std::isfinite(combo.m_fSizeSeconds) ||
+          combo.m_fSizeSeconds < 0.0f || combo.m_cnt < 0 ||
+          combo.m_rollover < 0) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: PlayerStageStats:GetComboList skipped invalid "
+            "combo start=%f size=%f count=%i rollover=%i.",
+            combo.m_fStartSecond, combo.m_fSizeSeconds, combo.m_cnt,
+            combo.m_rollover);
+        continue;
+      }
       lua_createtable(L, 0, 6);
       lua_pushstring(L, "StartSecond");
-      lua_pushnumber(L, p->m_ComboList[i].m_fStartSecond);
+      lua_pushnumber(L, combo.m_fStartSecond);
       lua_rawset(L, -3);
       lua_pushstring(L, "SizeSeconds");
-      lua_pushnumber(L, p->m_ComboList[i].m_fSizeSeconds);
+      lua_pushnumber(L, combo.m_fSizeSeconds);
       lua_rawset(L, -3);
       lua_pushstring(L, "Count");
-      lua_pushnumber(L, p->m_ComboList[i].m_cnt);
+      lua_pushnumber(L, combo.m_cnt);
       lua_rawset(L, -3);
       lua_pushstring(L, "Rollover");
-      lua_pushnumber(L, p->m_ComboList[i].m_rollover);
+      lua_pushnumber(L, combo.m_rollover);
       lua_rawset(L, -3);
       lua_pushstring(L, "StageCount");
-      lua_pushnumber(L, p->m_ComboList[i].GetStageCnt());
+      lua_pushnumber(L, combo.GetStageCnt());
       lua_rawset(L, -3);
       lua_pushstring(L, "IsZero");
-      lua_pushnumber(L, p->m_ComboList[i].IsZero());
+      lua_pushnumber(L, combo.IsZero());
       lua_rawset(L, -3);
-      lua_rawseti(L, -2, i + 1);
+      lua_rawseti(L, -2, luaIndex++);
     }
     return 1;
   }
@@ -998,6 +1288,13 @@ LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
             "0.  Defaulting to 100.");
         samples = 100;
       }
+    }
+    if (samples > MAX_LUA_LIFE_RECORD_SAMPLES) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats:GetLifeRecord clamped samples %i "
+          "to %i.",
+          samples, MAX_LUA_LIFE_RECORD_SAMPLES);
+      samples = MAX_LUA_LIFE_RECORD_SAMPLES;
     }
     lua_createtable(L, samples, 0);
     for (int i = 0; i < samples; ++i) {
@@ -1021,16 +1318,26 @@ LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
     return 1;
   }
   static int SetScore(T* p, lua_State* L) {
-    if (IArg(1) >= 0) {
-      p->m_iScore = IArg(1);
-      return 1;
+    const int score = IArg(1);
+    if (score >= 0) {
+      p->m_iScore = static_cast<unsigned int>(score);
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats:SetScore ignored negative score "
+          "%i.",
+          score);
     }
     COMMON_RETURN_SELF;
   }
   static int SetCurMaxScore(T* p, lua_State* L) {
-    if (IArg(1) >= 0) {
-      p->m_iCurMaxScore = IArg(1);
-      return 1;
+    const int score = IArg(1);
+    if (score >= 0) {
+      p->m_iCurMaxScore = static_cast<unsigned int>(score);
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats:SetCurMaxScore ignored negative "
+          "score %i.",
+          score);
     }
     COMMON_RETURN_SELF;
   }
@@ -1039,12 +1346,17 @@ LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
     int possible = IArg(2);
     if (actual >= 0 && possible > 0) {
       p->m_iPossibleDancePoints = possible;
+      p->m_iCurPossibleDancePoints = possible;
       if (actual <= possible) {
         p->m_iActualDancePoints = actual;
       } else {
         p->m_iActualDancePoints = possible;
       }
-      return 1;
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats:SetDancePointLimits ignored "
+          "invalid limits actual=%i possible=%i.",
+          actual, possible);
     }
     COMMON_RETURN_SELF;
   }

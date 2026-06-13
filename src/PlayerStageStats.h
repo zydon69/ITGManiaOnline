@@ -47,8 +47,7 @@ class PlayerStageStats {
   bool m_bJoined;
   bool m_bPlayerCanAchieveFullCombo;
   std::vector<Steps*> m_vpPossibleSteps;
-  int m_iStepsPlayed;  // how many of m_vpPossibleStepshow many of
-                       // m_vpPossibleSteps were played
+  int m_iStepsPlayed;  // how many of m_vpPossibleSteps were played
   /**
    * @brief How far into the music did the Player last before failing?
    *
@@ -160,9 +159,7 @@ class PlayerStageStats {
   void UpdateComboList(float fSecond, bool rollover);
   Combo_t GetMaxCombo() const;
 
-  float GetSurvivalSeconds() const {
-    return m_fAliveSeconds + m_fLifeRemainingSeconds;
-  }
+  float GetSurvivalSeconds() const;
 
   // Final results:
   void CalcAwards(PlayerNumber p, bool bGaveUp, bool bUsedAutoplay);
