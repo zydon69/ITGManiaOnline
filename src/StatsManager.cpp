@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <climits>
+#include <limits>
 #include <memory>
 #include <set>
 #include <string>
@@ -40,9 +42,68 @@
 StatsManager* STATSMAN =
     nullptr;  // global object accessible from anywhere in the program
 
+namespace {
+bool IsValidPlayerNumber(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+bool IsValidMultiPlayer(MultiPlayer mp) {
+  return mp >= MultiPlayer_P1 && mp < NUM_MultiPlayer;
+}
+
+bool IsValidPlayMode(PlayMode pm) {
+  return pm >= PLAY_MODE_REGULAR && pm < NUM_PlayMode;
+}
+
+bool IsValidDifficulty(Difficulty dc) {
+  return dc >= Difficulty_Beginner && dc < NUM_Difficulty;
+}
+
+bool IsValidGrade(Grade grade) {
+  return grade >= Grade_Tier01 && grade < NUM_Grade;
+}
+
+int SafeNonNegativeInt(float value, const char* context) {
+  if (!std::isfinite(value) || value <= 0.0f) {
+    if (!std::isfinite(value)) {
+      LOG->Warn("SRC_AUDIT_FIX: %s ignored non-finite value %f.", context,
+                value);
+    }
+    return 0;
+  }
+  if (value > static_cast<float>(INT_MAX)) {
+    LOG->Warn("SRC_AUDIT_FIX: %s clamped oversized value %f.", context, value);
+    return INT_MAX;
+  }
+  return static_cast<int>(value);
+}
+
+float SafeFiniteFloat(float value, const char* context) {
+  if (!std::isfinite(value)) {
+    LOG->Warn("SRC_AUDIT_FIX: %s replaced non-finite value %f.", context,
+              value);
+    return 0.0f;
+  }
+  return value;
+}
+
+bool HasSongRecentScoreContext(
+    const StageStats& ss, const PlayerStageStats& pss, const char* context) {
+  if (ss.m_vpPossibleSongs.empty() || ss.m_vpPossibleSongs[0] == nullptr ||
+      pss.m_vpPossibleSteps.empty() || pss.m_vpPossibleSteps[0] == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s skipped incomplete song score context: songs=%zu "
+        "steps=%zu.",
+        context, ss.m_vpPossibleSongs.size(), pss.m_vpPossibleSteps.size());
+    return false;
+  }
+  return true;
+}
+}  // namespace
+
 void AddPlayerStatsToProfile(
     Profile* pProfile, const StageStats& ss, PlayerNumber pn);
-XNode* MakeRecentScoreNode(
+std::unique_ptr<XNode> MakeRecentScoreNode(
     const StageStats& ss, Trail* pTrail, const PlayerStageStats& pss,
     MultiPlayer mp);
 Preference<bool> g_PadmissEnabled("MemoryCardPadmissEnabled", false);
@@ -124,27 +185,78 @@ void StatsManager::CalcAccumPlayedStageStats() {
  * per-player. */
 void AddPlayerStatsToProfile(
     Profile* pProfile, const StageStats& ss, PlayerNumber pn) {
+  if (pProfile == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped null profile for "
+        "player %d.",
+        pn);
+    return;
+  }
+  if (!IsValidPlayerNumber(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped invalid player %d.",
+        pn);
+    return;
+  }
+  if (!IsValidPlayMode(ss.m_playMode)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped invalid play mode %d.",
+        ss.m_playMode);
+    return;
+  }
   ss.AssertValid(pn);
+  const PlayerStageStats& pss = ss.m_player[pn];
+  if (pss.m_pStyle == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped player %d without "
+        "style.",
+        pn);
+    return;
+  }
+  if (pss.m_iStepsPlayed < 0 ||
+      pss.m_vpPossibleSteps.size() < static_cast<size_t>(pss.m_iStepsPlayed)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped player %d with "
+        "invalid steps count %d/%zu.",
+        pn, pss.m_iStepsPlayed, pss.m_vpPossibleSteps.size());
+    return;
+  }
 
   StyleID sID;
-  sID.FromStyle(ss.m_player[pn].m_pStyle);
+  sID.FromStyle(pss.m_pStyle);
 
-  ASSERT((int)ss.m_vpPlayedSongs.size() == ss.m_player[pn].m_iStepsPlayed);
-  for (int i = 0; i < ss.m_player[pn].m_iStepsPlayed; i++) {
-    Steps* pSteps = ss.m_player[pn].m_vpPossibleSteps[i];
+  const int iStepsToCount = std::min(
+      pss.m_iStepsPlayed, static_cast<int>(pss.m_vpPossibleSteps.size()));
+  for (int i = 0; i < iStepsToCount; i++) {
+    Steps* pSteps = pss.m_vpPossibleSteps[i];
+    if (pSteps == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped null steps at %d "
+          "for player %d.",
+          i, pn);
+      continue;
+    }
+    Difficulty dc = pSteps->GetDifficulty();
+    if (!IsValidDifficulty(dc)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped invalid difficulty "
+          "%d for player %d.",
+          dc, pn);
+      continue;
+    }
 
     pProfile->m_iNumSongsPlayedByPlayMode[ss.m_playMode]++;
     pProfile->m_iNumSongsPlayedByStyle[sID]++;
-    pProfile->m_iNumSongsPlayedByDifficulty[pSteps->GetDifficulty()]++;
+    pProfile->m_iNumSongsPlayedByDifficulty[dc]++;
 
     int iMeter = std::clamp(pSteps->GetMeter(), 0, MAX_METER);
     pProfile->m_iNumSongsPlayedByMeter[iMeter]++;
   }
 
-  pProfile->m_iTotalDancePoints += ss.m_player[pn].m_iActualDancePoints;
+  pProfile->m_iTotalDancePoints += pss.m_iActualDancePoints;
 
   if (ss.m_Stage == Stage_Extra1 || ss.m_Stage == Stage_Extra2) {
-    if (ss.m_player[pn].m_bFailed) {
+    if (pss.m_bFailed) {
       ++pProfile->m_iNumExtraStagesFailed;
     } else {
       ++pProfile->m_iNumExtraStagesPassed;
@@ -154,21 +266,37 @@ void AddPlayerStatsToProfile(
   // If you fail in a course, you passed all but the final song.
   // FIXME: Not true.  If playing with 2 players, one player could have failed
   // earlier.
-  if (!ss.m_player[pn].m_bFailed) {
+  if (!pss.m_bFailed) {
     pProfile->m_iNumStagesPassedByPlayMode[ss.m_playMode]++;
-    pProfile->m_iNumStagesPassedByGrade[ss.m_player[pn].GetGrade()]++;
+    Grade grade = pss.GetGrade();
+    if (IsValidGrade(grade)) {
+      pProfile->m_iNumStagesPassedByGrade[grade]++;
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped invalid grade %d "
+          "for player %d.",
+          grade, pn);
+    }
   }
 }
 
-XNode* MakeRecentScoreNode(
+std::unique_ptr<XNode> MakeRecentScoreNode(
     const StageStats& ss, Trail* pTrail, const PlayerStageStats& pss,
     MultiPlayer mp) {
-  XNode* pNode = nullptr;
+  std::unique_ptr<XNode> pNode;
   if (GAMESTATE->IsCourseMode()) {
-    pNode = new XNode("HighScoreForACourseAndTrail");
+    Course* pCourse = GAMESTATE->m_pCurCourse;
+    if (pCourse == nullptr || pTrail == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: MakeRecentScoreNode skipped course score because "
+          "course=%p trail=%p.",
+          static_cast<void*>(pCourse), static_cast<void*>(pTrail));
+      return nullptr;
+    }
+    pNode.reset(new XNode("HighScoreForACourseAndTrail"));
 
     CourseID courseID;
-    courseID.FromCourse(GAMESTATE->m_pCurCourse);
+    courseID.FromCourse(pCourse);
     pNode->AppendChild(courseID.CreateNode());
 
     TrailID trailID;
@@ -176,7 +304,10 @@ XNode* MakeRecentScoreNode(
     pNode->AppendChild(trailID.CreateNode());
 
   } else {
-    pNode = new XNode("HighScoreForASongAndSteps");
+    if (!HasSongRecentScoreContext(ss, pss, "MakeRecentScoreNode")) {
+      return nullptr;
+    }
+    pNode.reset(new XNode("HighScoreForASongAndSteps"));
 
     SongID songID;
     songID.FromSong(ss.m_vpPossibleSongs[0]);
@@ -198,28 +329,53 @@ XNode* MakeRecentScoreNode(
 }
 
 void StatsManager::CommitStatsToProfiles(const StageStats* pSS) {
+  if (pSS == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: CommitStatsToProfiles skipped null StageStats.");
+    return;
+  }
+  Profile* pMachineProfile = PROFILEMAN->GetMachineProfile();
+  if (pMachineProfile == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: CommitStatsToProfiles skipped without machine "
+        "profile.");
+    return;
+  }
+
   // Add step totals.  Use radarActual, since the player might have failed part
   // way through the song, in which case we don't want to give credit for the
   // rest of the song.
   FOREACH_HumanPlayer(pn) {
-    int iNumTapsAndHolds =
-        (int)pSS->m_player[pn].m_radarActual[RadarCategory_TapsAndHolds];
-    int iNumJumps = (int)pSS->m_player[pn].m_radarActual[RadarCategory_Jumps];
-    int iNumHolds = (int)pSS->m_player[pn].m_radarActual[RadarCategory_Holds];
-    int iNumRolls = (int)pSS->m_player[pn].m_radarActual[RadarCategory_Rolls];
-    int iNumMines = (int)pSS->m_player[pn].m_radarActual[RadarCategory_Mines];
-    int iNumHands = (int)pSS->m_player[pn].m_radarActual[RadarCategory_Hands];
-    int iNumLifts = (int)pSS->m_player[pn].m_radarActual[RadarCategory_Lifts];
-    float fCaloriesBurned = pSS->m_player[pn].m_fCaloriesBurned;
+    int iNumTapsAndHolds = SafeNonNegativeInt(
+        pSS->m_player[pn].m_radarActual[RadarCategory_TapsAndHolds],
+        "CommitStatsToProfiles taps");
+    int iNumJumps = SafeNonNegativeInt(
+        pSS->m_player[pn].m_radarActual[RadarCategory_Jumps],
+        "CommitStatsToProfiles jumps");
+    int iNumHolds = SafeNonNegativeInt(
+        pSS->m_player[pn].m_radarActual[RadarCategory_Holds],
+        "CommitStatsToProfiles holds");
+    int iNumRolls = SafeNonNegativeInt(
+        pSS->m_player[pn].m_radarActual[RadarCategory_Rolls],
+        "CommitStatsToProfiles rolls");
+    int iNumMines = SafeNonNegativeInt(
+        pSS->m_player[pn].m_radarActual[RadarCategory_Mines],
+        "CommitStatsToProfiles mines");
+    int iNumHands = SafeNonNegativeInt(
+        pSS->m_player[pn].m_radarActual[RadarCategory_Hands],
+        "CommitStatsToProfiles hands");
+    int iNumLifts = SafeNonNegativeInt(
+        pSS->m_player[pn].m_radarActual[RadarCategory_Lifts],
+        "CommitStatsToProfiles lifts");
+    float fCaloriesBurned = SafeFiniteFloat(
+        pSS->m_player[pn].m_fCaloriesBurned,
+        "CommitStatsToProfiles calories");
     PROFILEMAN->AddStepTotals(
         pn, iNumTapsAndHolds, iNumJumps, iNumHolds, iNumRolls, iNumMines,
         iNumHands, iNumLifts, fCaloriesBurned);
   }
 
-  // Update profile stats
-  Profile* pMachineProfile = PROFILEMAN->GetMachineProfile();
-
-  int iGameplaySeconds = std::trunc(pSS->m_fGameplaySeconds);
+  int iGameplaySeconds = SafeNonNegativeInt(
+      pSS->m_fGameplaySeconds, "CommitStatsToProfiles gameplay seconds");
 
   pMachineProfile->m_iTotalGameplaySeconds += iGameplaySeconds;
   pMachineProfile->m_iNumTotalSongsPlayed += pSS->m_vpPlayedSongs.size();
@@ -259,9 +415,19 @@ void StatsManager::CommitStatsToProfiles(const StageStats* pSS) {
 }
 
 void StatsManager::SaveUploadFile(const StageStats* pSS) {
+  if (pSS == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: SaveUploadFile skipped null StageStats.");
+    return;
+  }
+  Profile* pMachineProfile = PROFILEMAN->GetMachineProfile();
+  if (pMachineProfile == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: SaveUploadFile skipped without machine profile.");
+    return;
+  }
+
   // Save recent scores
   std::unique_ptr<XNode> xml(new XNode("Stats"));
-  xml->AppendChild("MachineGuid", PROFILEMAN->GetMachineProfile()->m_sGuid);
+  xml->AppendChild("MachineGuid", pMachineProfile->m_sGuid);
 
   XNode* recent = nullptr;
   if (GAMESTATE->IsCourseMode()) {
@@ -275,18 +441,27 @@ void StatsManager::SaveUploadFile(const StageStats* pSS) {
       if (pSS->m_player[p].m_HighScore.IsEmpty()) {
         continue;
       }
-      recent->AppendChild(MakeRecentScoreNode(
+      std::unique_ptr<XNode> scoreNode = MakeRecentScoreNode(
           *pSS, GAMESTATE->m_pCurTrail[p], pSS->m_player[p],
-          MultiPlayer_Invalid));
+          MultiPlayer_Invalid);
+      if (scoreNode) {
+        recent->AppendChild(scoreNode.release());
+      }
     }
   } else {
     FOREACH_EnabledMultiPlayer(mp) {
       if (pSS->m_multiPlayer[mp].m_HighScore.IsEmpty()) {
         continue;
       }
-      recent->AppendChild(MakeRecentScoreNode(
-          *pSS, GAMESTATE->m_pCurTrail[GAMESTATE->GetMasterPlayerNumber()],
-          pSS->m_multiPlayer[mp], mp));
+      PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+      Trail* pTrail =
+          IsValidPlayerNumber(master) ? GAMESTATE->m_pCurTrail[master].Get()
+                                      : nullptr;
+      std::unique_ptr<XNode> scoreNode =
+          MakeRecentScoreNode(*pSS, pTrail, pSS->m_multiPlayer[mp], mp);
+      if (scoreNode) {
+        recent->AppendChild(scoreNode.release());
+      }
     }
   }
 
@@ -303,11 +478,51 @@ void StatsManager::SaveUploadFile(const StageStats* pSS) {
   if (bSaved) {
     std::string sStatsXmlSigFile = fn + SIGNATURE_APPEND;
     CryptManager::SignFileToFile(fn, sStatsXmlSigFile);
+  } else {
+    LOG->Warn("SRC_AUDIT_FIX: SaveUploadFile failed to write %s.",
+              fn.c_str());
   }
 }
 
 void StatsManager::SavePadmissScore(const StageStats* pSS, PlayerNumber pn) {
+  if (pSS == nullptr || !IsValidPlayerNumber(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: SavePadmissScore skipped invalid input stats=%p "
+        "player=%d.",
+        static_cast<const void*>(pSS), pn);
+    return;
+  }
+  if (GAMESTATE->m_pPlayerState[pn] == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: SavePadmissScore skipped player %d without "
+        "PlayerState.",
+        pn);
+    return;
+  }
   const PlayerStageStats* playerStats = &pSS->m_player[pn];
+  Profile* pp = PROFILEMAN->GetProfile(playerStats->m_player_number);
+  if (pp == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: SavePadmissScore skipped player %d without profile.",
+        pn);
+    return;
+  }
+  if (playerStats->m_vpPossibleSteps.empty() ||
+      playerStats->m_vpPossibleSteps[0] == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: SavePadmissScore skipped player %d without steps.",
+        pn);
+    return;
+  }
+  Steps* steps = playerStats->m_vpPossibleSteps[0];  // XXX Courses and such
+  Song* song = steps->m_pSong;
+  if (song == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: SavePadmissScore skipped player %d because steps have "
+        "no song.",
+        pn);
+    return;
+  }
 
   std::unique_ptr<XNode> xml(new XNode("SongScore"));
 
@@ -328,14 +543,11 @@ void StatsManager::SavePadmissScore(const StageStats* pSS, PlayerNumber pn) {
   radar_possible->AppendChild(
       playerStats->m_radarPossible.CreateNode(true, false));
 
-  Profile* pp = PROFILEMAN->GetProfile(playerStats->m_player_number);
   xml->AppendChild("ScoreValue", playerStats->GetPercentDancePoints());
   xml->AppendChild("PlayerNumber", playerStats->m_player_number);
   xml->AppendChild("PlayerName", pp->m_sDisplayName);
   xml->AppendChild("PlayerGuid", pp->m_sGuid);
 
-  Steps* steps = playerStats->m_vpPossibleSteps[0];  // XXX Courses and such
-  Song* song = steps->m_pSong;
   steps->Decompress();  // Hashing won't work unless the steps are decompressed
   XNode* stepdata = xml->AppendChild("Steps");
   stepdata->AppendChild("Hash", steps->GetHash());
@@ -360,7 +572,8 @@ void StatsManager::SavePadmissScore(const StageStats* pSS, PlayerNumber pn) {
   const PlayerOptions& opts =
       GAMESTATE->m_pPlayerState[pn]->m_PlayerOptions.Get(ModsLevel_Preferred);
   XNode* mods = xml->AppendChild("Mods");
-  mods->AppendChild("MusicRate", pSS->m_fMusicRate);
+  mods->AppendChild(
+      "MusicRate", SafeFiniteFloat(pSS->m_fMusicRate, "Padmiss music rate"));
 #define ADD_BOOLEAN_OPTION(parent, name, opts) \
   if (opts[PlayerOptions::name]) parent->AppendChild(#name)
 
@@ -402,7 +615,8 @@ void StatsManager::SavePadmissScore(const StageStats* pSS, PlayerNumber pn) {
 
 #define ADD_FLOAT_OPTION(parent, name, opts)          \
   do {                                                \
-    float val = opts[PlayerOptions::name];            \
+    float val = SafeFiniteFloat(                      \
+        opts[PlayerOptions::name], "Padmiss " #name); \
     if (val != 0.0f) parent->AppendChild(#name, val); \
   } while (0)
 
@@ -448,20 +662,24 @@ void StatsManager::SavePadmissScore(const StageStats* pSS, PlayerNumber pn) {
   mods->AppendChild("NoteSkin", opts.m_sNoteSkin);
 
   XNode* perspectives = mods->AppendChild("Perspectives");
-  perspectives->AppendChild("Tilt", opts.m_fPerspectiveTilt);
-  perspectives->AppendChild("Skew", opts.m_fSkew);
+  perspectives->AppendChild(
+      "Tilt", SafeFiniteFloat(opts.m_fPerspectiveTilt, "Padmiss Tilt"));
+  perspectives->AppendChild(
+      "Skew", SafeFiniteFloat(opts.m_fSkew, "Padmiss Skew"));
 
   std::string speedModType;
   float speedModValue;
   if (opts.m_fTimeSpacing) {
     speedModType = "ConstantBPM";
-    speedModValue = opts.m_fScrollBPM;
+    speedModValue =
+        SafeFiniteFloat(opts.m_fScrollBPM, "Padmiss ConstantBPM");
   } else if (opts.m_fMaxScrollBPM) {
     speedModType = "MaxBPM";
-    speedModValue = opts.m_fMaxScrollBPM;
+    speedModValue = SafeFiniteFloat(opts.m_fMaxScrollBPM, "Padmiss MaxBPM");
   } else {
     speedModType = "Multiplier";
-    speedModValue = opts.m_fScrollSpeed;
+    speedModValue =
+        SafeFiniteFloat(opts.m_fScrollSpeed, "Padmiss ScrollSpeed");
   }
   mods->AppendChild("ScrollSpeed", speedModValue)
       ->AppendAttr("Type", speedModType);
@@ -474,10 +692,21 @@ void StatsManager::SavePadmissScore(const StageStats* pSS, PlayerNumber pn) {
   std::string dir = "/Save/Padmiss/";
   std::string fn =
       dir + Profile::MakeUniqueFileNameNoExtension(dir, sDate + " ") + ".xml";
-  XmlFileUtil::SaveToFile(xml.get(), fn, "", true);
+  if (!XmlFileUtil::SaveToFile(xml.get(), fn, "", true)) {
+    LOG->Warn("SRC_AUDIT_FIX: SavePadmissScore failed to write %s.",
+              fn.c_str());
+  }
 }
 
 void StatsManager::UnjoinPlayer(PlayerNumber pn) {
+  if (!IsValidPlayerNumber(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: StatsManager::UnjoinPlayer ignored invalid player "
+        "%d.",
+        pn);
+    return;
+  }
+
   /* A player has been unjoined.  Clear his data from m_vPlayedStageStats, and
    * purge any m_vPlayedStageStats that no longer have any player data because
    * all of the players that were playing at the time have been unjoined. */
@@ -504,14 +733,20 @@ void StatsManager::GetStepsInUse(std::set<Steps*>& apInUseOut) const {
   for (int i = 0; i < (int)m_vPlayedStageStats.size(); ++i) {
     FOREACH_PlayerNumber(pn) {
       const PlayerStageStats& pss = m_vPlayedStageStats[i].m_player[pn];
-      apInUseOut.insert(
-          pss.m_vpPossibleSteps.begin(), pss.m_vpPossibleSteps.end());
+      for (Steps* steps : pss.m_vpPossibleSteps) {
+        if (steps != nullptr) {
+          apInUseOut.insert(steps);
+        }
+      }
     }
 
     FOREACH_MultiPlayer(mp) {
       const PlayerStageStats& pss = m_vPlayedStageStats[i].m_multiPlayer[mp];
-      apInUseOut.insert(
-          pss.m_vpPossibleSteps.begin(), pss.m_vpPossibleSteps.end());
+      for (Steps* steps : pss.m_vpPossibleSteps) {
+        if (steps != nullptr) {
+          apInUseOut.insert(steps);
+        }
+      }
     }
   }
 }
@@ -528,9 +763,22 @@ class LunaStatsManager : public Luna<StatsManager> {
   }
   static int GetPlayedStageStats(T* p, lua_State* L) {
     int iAgo = IArg(1);
-    int iIndex = p->m_vPlayedStageStats.size() - iAgo;
+    if (iAgo <= 0) {
+      lua_pushnil(L);
+      return 1;
+    }
+    if (p->m_vPlayedStageStats.size() >
+        static_cast<size_t>(std::numeric_limits<int>::max())) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: GetPlayedStageStats has too many stage stats: %zu.",
+          p->m_vPlayedStageStats.size());
+      lua_pushnil(L);
+      return 1;
+    }
+    int iIndex = static_cast<int>(p->m_vPlayedStageStats.size()) - iAgo;
     if (iIndex < 0 || iIndex >= (int)p->m_vPlayedStageStats.size()) {
-      return 0;
+      lua_pushnil(L);
+      return 1;
     }
 
     p->m_vPlayedStageStats[iIndex].PushSelf(L);
@@ -553,7 +801,7 @@ class LunaStatsManager : public Luna<StatsManager> {
   static int GetFinalGrade(T* p, lua_State* L) {
     PlayerNumber pn = Enum::Check<PlayerNumber>(L, 1);
 
-    if (!GAMESTATE->IsHumanPlayer(pn)) {
+    if (!IsValidPlayerNumber(pn) || !GAMESTATE->IsHumanPlayer(pn)) {
       lua_pushnumber(L, Grade_NoData);
     } else {
       StageStats stats;
@@ -569,16 +817,28 @@ class LunaStatsManager : public Luna<StatsManager> {
 
   static int GetBestGrade(T* p, lua_State* L) {
     Grade g = NUM_Grade;
-    FOREACH_EnabledPlayer(pn) g =
-        std::min(g, STATSMAN->m_CurStageStats.m_player[pn].GetGrade());
+    bool found = false;
+    FOREACH_EnabledPlayer(pn) {
+      g = std::min(g, STATSMAN->m_CurStageStats.m_player[pn].GetGrade());
+      found = true;
+    }
+    if (!found) {
+      g = Grade_NoData;
+    }
     lua_pushnumber(L, g);
     return 1;
   }
 
   static int GetWorstGrade(T* p, lua_State* L) {
     Grade g = Grade_Tier01;
-    FOREACH_EnabledPlayer(pn) g =
-        std::max(g, STATSMAN->m_CurStageStats.m_player[pn].GetGrade());
+    bool found = false;
+    FOREACH_EnabledPlayer(pn) {
+      g = std::max(g, STATSMAN->m_CurStageStats.m_player[pn].GetGrade());
+      found = true;
+    }
+    if (!found) {
+      g = Grade_NoData;
+    }
     lua_pushnumber(L, g);
     return 1;
   }
