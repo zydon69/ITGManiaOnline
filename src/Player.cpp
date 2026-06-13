@@ -528,6 +528,11 @@ void Player::Init(
     {
       iEnabledPlayerIndex = 0;
       iNumEnabledPlayers = 1;
+    } else if (iEnabledPlayerIndex < 0) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerState was not enabled during Init; using "
+          "fallback enabled player index.");
+      iEnabledPlayerIndex = 0;
     }
 
     for (int i = 0; i < NUM_REVERSE; i++) {
@@ -1903,7 +1908,15 @@ void Player::ApplyWaitingTransforms() {
     float fStartBeat, fEndBeat;
     mod.GetRealtimeAttackBeats(
         GAMESTATE->m_pCurSong, m_pPlayerState, fStartBeat, fEndBeat);
+    if (!std::isfinite(fStartBeat) || !std::isfinite(fEndBeat)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Ignoring transform '%s' with invalid beats %f-%f.",
+          mod.sModifiers.c_str(), fStartBeat, fEndBeat);
+      continue;
+    }
     fEndBeat = std::min(fEndBeat, m_NoteData.GetLastBeat());
+    fStartBeat = std::clamp(fStartBeat, 0.0f, m_NoteData.GetLastBeat());
+    fEndBeat = std::clamp(fEndBeat, fStartBeat, m_NoteData.GetLastBeat());
 
     LOG->Trace(
         "Applying transform '%s' from %f to %f to '%s'", mod.sModifiers.c_str(),
@@ -2449,6 +2462,10 @@ void Player::DoTapScoreNone() {
   }
   // TODO: Remove use of PlayerNumber
   PlayerNumber pn = PLAYER_INVALID;
+  if (m_pPlayerState != nullptr &&
+      IsValidPlayerNumberForPlayer(m_pPlayerState->m_PlayerNumber)) {
+    pn = m_pPlayerState->m_PlayerNumber;
+  }
   if (m_pCombinedLifeMeter) {
     m_pCombinedLifeMeter->HandleTapScoreNone(pn);
   }
@@ -2664,11 +2681,18 @@ void Player::Step(
         iNumTracksHeld = 1;
         [[fallthrough]];
       default: {
-        float fCalsFor100Lbs = SCALE(iNumTracksHeld, 1, 2, 0.023f, 0.077f);
-        float fCalsFor200Lbs = SCALE(iNumTracksHeld, 1, 2, 0.041f, 0.133f);
+        const int tracksForCalories = std::clamp(iNumTracksHeld, 1, 2);
+        float fCalsFor100Lbs =
+            SCALE(tracksForCalories, 1, 2, 0.023f, 0.077f);
+        float fCalsFor200Lbs =
+            SCALE(tracksForCalories, 1, 2, 0.041f, 0.133f);
+        const float weight = pProfile->GetCalculatedWeightPounds();
+        if (!std::isfinite(weight) || weight <= 0.0f) {
+          LOG->Warn("SRC_AUDIT_FIX: Invalid profile weight for calories.");
+          break;
+        }
         fCals = SCALE(
-            pProfile->GetCalculatedWeightPounds(), 100.f, 200.f, fCalsFor100Lbs,
-            fCalsFor200Lbs);
+            weight, 100.f, 200.f, fCalsFor100Lbs, fCalsFor200Lbs);
       } break;
     }
 
@@ -2971,6 +2995,13 @@ void Player::Step(
       // TODO: Remove use of PlayerNumber
       PlayerNumber pnToAttack = OPPOSITE_PLAYER[m_pPlayerState->m_PlayerNumber];
       PlayerState* pPlayerStateToAttack = GAMESTATE->m_pPlayerState[pnToAttack];
+      if (!IsValidPlayerNumberForPlayer(pnToAttack) ||
+          pPlayerStateToAttack == nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: Attack note has no valid target player %i.",
+            pnToAttack);
+        return;
+      }
       pPlayerStateToAttack->LaunchAttack(attack);
 
       // remove all TapAttacks on this row
@@ -3422,14 +3453,17 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
           PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
           std::vector<GameInput> GameI;
           style->StyleInputToGameInput(iTrack, pn, GameI);
-          if (PREFSMAN->m_fPadStickSeconds > 0.f) {
+          const float padStickSeconds =
+              PREFSMAN != nullptr &&
+                      std::isfinite(PREFSMAN->m_fPadStickSeconds.Get())
+                  ? std::max(0.0f, PREFSMAN->m_fPadStickSeconds.Get())
+                  : 0.0f;
+          if (padStickSeconds > 0.f) {
             for (size_t i = 0; i < GameI.size(); ++i) {
               float fSecsHeld =
                   INPUTMAPPER->GetSecsHeld(GameI[i], m_pPlayerState->m_mp);
-              if (fSecsHeld >= PREFSMAN->m_fPadStickSeconds) {
-                Step(
-                    iTrack, -1, now - PREFSMAN->m_fPadStickSeconds, true,
-                    false);
+              if (fSecsHeld >= padStickSeconds) {
+                Step(iTrack, -1, now - padStickSeconds, true, false);
               }
             }
           } else {
@@ -3446,12 +3480,17 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
         PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
         std::vector<GameInput> GameI;
         style->StyleInputToGameInput(iTrack, pn, GameI);
-        if (PREFSMAN->m_fPadStickSeconds > 0.0f) {
+        const float padStickSeconds =
+            PREFSMAN != nullptr &&
+                    std::isfinite(PREFSMAN->m_fPadStickSeconds.Get())
+                ? std::max(0.0f, PREFSMAN->m_fPadStickSeconds.Get())
+                : 0.0f;
+        if (padStickSeconds > 0.0f) {
           for (size_t i = 0; i < GameI.size(); ++i) {
             float fSecsHeld =
                 INPUTMAPPER->GetSecsHeld(GameI[i], m_pPlayerState->m_mp);
-            if (fSecsHeld >= PREFSMAN->m_fPadStickSeconds) {
-              Step(iTrack, -1, now - PREFSMAN->m_fPadStickSeconds, true, false);
+            if (fSecsHeld >= padStickSeconds) {
+              Step(iTrack, -1, now - padStickSeconds, true, false);
             }
           }
         } else if (INPUTMAPPER->IsBeingPressed(GameI, m_pPlayerState->m_mp)) {
