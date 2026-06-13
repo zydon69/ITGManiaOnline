@@ -28,7 +28,7 @@ struct CacheNoteStat {
   int notesUpper;
 };
 
-/** @brief The player's indivdual state. */
+/** @brief The player's individual state. */
 class PlayerState {
  public:
   /** @brief Set up the PlayerState with initial values. */
@@ -77,8 +77,7 @@ class PlayerState {
 
   /**
    * @brief Holds a vector sorted by beat, the cumulative number of notes from
-   *        the start of the song. This will be used by [insert more description
-   * here]
+   *        the start of the song.
    */
   std::vector<CacheNoteStat> m_CacheNoteStat;
 

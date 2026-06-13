@@ -371,6 +371,12 @@ int PlayerState::GetSumOfActiveAttackLevels() const {
 }
 
 const SongPosition& PlayerState::GetDisplayedPosition() const {
+  if (GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState using local displayed position without "
+        "GAMESTATE.");
+    return m_Position;
+  }
   if (GAMESTATE->m_bIsUsingStepTiming) {
     return m_Position;
   }
@@ -378,11 +384,30 @@ const SongPosition& PlayerState::GetDisplayedPosition() const {
 }
 
 const TimingData& PlayerState::GetDisplayedTiming() const {
-  Steps* steps = GAMESTATE->m_pCurSteps[m_PlayerNumber];
-  if (steps == nullptr) {
+  if (GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState using fallback displayed timing without "
+        "GAMESTATE.");
+    return FallbackDisplayedTiming();
+  }
+  if (IsUsablePlayerNumber(m_PlayerNumber)) {
+    Steps* steps = GAMESTATE->m_pCurSteps[m_PlayerNumber];
+    if (steps != nullptr && steps->GetTimingData() != nullptr) {
+      return *steps->GetTimingData();
+    }
+  } else {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState cannot use displayed timing for invalid "
+        "player %i.",
+        static_cast<int>(m_PlayerNumber));
+  }
+  if (GAMESTATE->m_pCurSong != nullptr) {
     return GAMESTATE->m_pCurSong->m_SongTiming;
   }
-  return *steps->GetTimingData();
+  LOG->Warn(
+      "SRC_AUDIT_FIX: PlayerState using fallback displayed timing without "
+      "current song.");
+  return FallbackDisplayedTiming();
 }
 
 // lua start
@@ -392,8 +417,8 @@ const TimingData& PlayerState::GetDisplayedTiming() const {
 class LunaPlayerState : public Luna<PlayerState> {
  public:
   static int ApplyPreferredOptionsToOtherLevels(T* p, lua_State* L) {
-    p->m_PlayerOptions.Assign(
-        ModsLevel_Preferred, p->m_PlayerOptions.Get(ModsLevel_Preferred));
+    const PlayerOptions preferred = p->m_PlayerOptions.Get(ModsLevel_Preferred);
+    p->m_PlayerOptions.Assign(ModsLevel_Preferred, preferred);
     return 0;
   }
   DEFINE_METHOD(GetPlayerNumber, m_PlayerNumber);
@@ -405,6 +430,13 @@ class LunaPlayerState : public Luna<PlayerState> {
   DEFINE_METHOD(GetPlayerController, m_PlayerController);
   static int SetPlayerOptions(T* p, lua_State* L) {
     ModsLevel m = Enum::Check<ModsLevel>(L, 1);
+    if (!IsValidModsLevel(m)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerState Lua rejected invalid ModsLevel %i in "
+          "SetPlayerOptions.",
+          static_cast<int>(m));
+      return 0;
+    }
     PlayerOptions po;
     po.FromString(SArg(2));
     p->m_PlayerOptions.Assign(m, po);
@@ -412,11 +444,25 @@ class LunaPlayerState : public Luna<PlayerState> {
   }
   static int GetPlayerOptions(T* p, lua_State* L) {
     ModsLevel m = Enum::Check<ModsLevel>(L, 1);
+    if (!IsValidModsLevel(m)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerState Lua rejected invalid ModsLevel %i in "
+          "GetPlayerOptions.",
+          static_cast<int>(m));
+      m = ModsLevel_Current;
+    }
     p->m_PlayerOptions.Get(m).PushSelf(L);
     return 1;
   }
   static int GetPlayerOptionsArray(T* p, lua_State* L) {
     ModsLevel m = Enum::Check<ModsLevel>(L, 1);
+    if (!IsValidModsLevel(m)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerState Lua rejected invalid ModsLevel %i in "
+          "GetPlayerOptionsArray.",
+          static_cast<int>(m));
+      m = ModsLevel_Current;
+    }
     std::vector<std::string> s;
     p->m_PlayerOptions.Get(m).GetMods(s);
     LuaHelpers::CreateTableFromArray<std::string>(s, L);
@@ -424,6 +470,13 @@ class LunaPlayerState : public Luna<PlayerState> {
   }
   static int GetPlayerOptionsString(T* p, lua_State* L) {
     ModsLevel m = Enum::Check<ModsLevel>(L, 1);
+    if (!IsValidModsLevel(m)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerState Lua rejected invalid ModsLevel %i in "
+          "GetPlayerOptionsString.",
+          static_cast<int>(m));
+      m = ModsLevel_Current;
+    }
     std::string s = p->m_PlayerOptions.Get(m).GetString();
     LuaHelpers::Push(L, s);
     return 1;
