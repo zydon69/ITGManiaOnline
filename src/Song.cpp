@@ -2141,6 +2141,13 @@ void Song::AddSteps(Steps* pSteps) {
   }
 }
 
+bool Song::OwnsSteps(const Steps* pSteps) const {
+  return std::find(m_vpSteps.begin(), m_vpSteps.end(), pSteps) !=
+             m_vpSteps.end() ||
+         std::find(m_UnknownStyleSteps.begin(), m_UnknownStyleSteps.end(),
+                   pSteps) != m_UnknownStyleSteps.end();
+}
+
 void Song::DeleteSteps(const Steps* pSteps, bool bReAutoGen) {
   if (pSteps == nullptr) {
     LOG->Warn("SRC_AUDIT_FIX: Ignoring request to delete null Steps.");

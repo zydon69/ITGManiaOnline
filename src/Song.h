@@ -456,6 +456,7 @@ class Song {
    * @param pSteps the new steps. */
   void AddSteps(Steps* pSteps);
   void DeleteSteps(const Steps* pSteps, bool bReAutoGen = true);
+  bool OwnsSteps(const Steps* pSteps) const;
 
   void FreeAllLoadedFromProfile(
       ProfileSlot slot = ProfileSlot_Invalid,

@@ -201,6 +201,20 @@ Steps::Steps(Song* song)
 
 Steps::~Steps() {}
 
+const Steps* Steps::Real() const {
+  if (parent == nullptr) {
+    return this;
+  }
+  if (m_pSong == nullptr || !m_pSong->OwnsSteps(parent)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-605: autogen steps '%s' have a stale parent; using "
+        "local data.",
+        m_sFilename.c_str());
+    return this;
+  }
+  return parent;
+}
+
 void Steps::GetDisplayBpms(DisplayBpms& AddTo) const {
   if (this->GetDisplayBPM() == DISPLAY_BPM_SPECIFIED) {
     AddTo.Add(this->GetMinBPM());
