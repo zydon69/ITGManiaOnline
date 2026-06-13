@@ -1869,17 +1869,9 @@ void SongManager::GetExtraStageInfo(
   std::string sGroup = GAMESTATE->m_sPreferredSongGroup;
   if (sGroup == GROUP_ALL) {
     if (GAMESTATE->m_pCurSong == nullptr) {
-      // This normally shouldn't happen, but it's helpful to permit it for
-      // testing.
-      LuaHelpers::ReportScriptErrorFmt(
-          "GetExtraStageInfo() called in GROUP_ALL, but GAMESTATE->m_pCurSong "
-          "== nullptr");
-      GAMESTATE->m_pCurSong.Set(GetRandomSong());
-    }
-    if (GAMESTATE->m_pCurSong == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-101: no current or random song available for "
-          "extra stage group selection.");
+          "SRC_AUDIT_FIX SRC-629: extra stage requested for GROUP_ALL without "
+          "a current song.");
       return;
     }
     sGroup = GAMESTATE->m_pCurSong->m_sGroupName;
