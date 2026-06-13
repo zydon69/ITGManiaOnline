@@ -41,36 +41,38 @@ class NoteData {
   typedef std::map<int, TapNote>::reverse_iterator reverse_iterator;
   typedef std::map<int, TapNote>::const_reverse_iterator const_reverse_iterator;
 
-  NoteData() : m_TapNotes() {}
+  NoteData() : m_TapNotes() { Init(); }
 
-  iterator begin(int iTrack) { return m_TapNotes[iTrack].begin(); }
-  const_iterator begin(int iTrack) const { return m_TapNotes[iTrack].begin(); }
-  reverse_iterator rbegin(int iTrack) { return m_TapNotes[iTrack].rbegin(); }
-  const_reverse_iterator rbegin(int iTrack) const {
-    return m_TapNotes[iTrack].rbegin();
+  iterator begin(int iTrack) { return GetTrackMap(iTrack).begin(); }
+  const_iterator begin(int iTrack) const {
+    return GetTrackMap(iTrack).begin();
   }
-  iterator end(int iTrack) { return m_TapNotes[iTrack].end(); }
-  const_iterator end(int iTrack) const { return m_TapNotes[iTrack].end(); }
-  reverse_iterator rend(int iTrack) { return m_TapNotes[iTrack].rend(); }
+  reverse_iterator rbegin(int iTrack) { return GetTrackMap(iTrack).rbegin(); }
+  const_reverse_iterator rbegin(int iTrack) const {
+    return GetTrackMap(iTrack).rbegin();
+  }
+  iterator end(int iTrack) { return GetTrackMap(iTrack).end(); }
+  const_iterator end(int iTrack) const { return GetTrackMap(iTrack).end(); }
+  reverse_iterator rend(int iTrack) { return GetTrackMap(iTrack).rend(); }
   const_reverse_iterator rend(int iTrack) const {
-    return m_TapNotes[iTrack].rend();
+    return GetTrackMap(iTrack).rend();
   }
   iterator lower_bound(int iTrack, int iRow) {
-    return m_TapNotes[iTrack].lower_bound(iRow);
+    return GetTrackMap(iTrack).lower_bound(iRow);
   }
   const_iterator lower_bound(int iTrack, int iRow) const {
-    return m_TapNotes[iTrack].lower_bound(iRow);
+    return GetTrackMap(iTrack).lower_bound(iRow);
   }
   iterator upper_bound(int iTrack, int iRow) {
-    return m_TapNotes[iTrack].upper_bound(iRow);
+    return GetTrackMap(iTrack).upper_bound(iRow);
   }
   const_iterator upper_bound(int iTrack, int iRow) const {
-    return m_TapNotes[iTrack].upper_bound(iRow);
+    return GetTrackMap(iTrack).upper_bound(iRow);
   }
   void swap(NoteData& nd) {
     m_TapNotes.swap(nd.m_TapNotes);
-    m_atis.swap(nd.m_atis);
-    m_const_atis.swap(nd.m_const_atis);
+    RevalidateATIs(std::vector<int>(), false);
+    nd.RevalidateATIs(std::vector<int>(), false);
   }
 
   // This is ugly to make it templated but I don't want to have to write the
@@ -148,6 +150,11 @@ class NoteData {
   // There's no point in inserting empty notes into the map.
   // Any blank space in the map is defined to be empty.
   std::vector<TrackMap> m_TapNotes;
+  static TrackMap& InvalidTrackMap();
+  static const TrackMap& InvalidConstTrackMap();
+  bool IsValidTrack(int iTrack) const;
+  TrackMap& GetTrackMap(int iTrack);
+  const TrackMap& GetTrackMap(int iTrack) const;
 
   /**
    * @brief Determine whether this note is for Player 1 or Player 2.
@@ -220,6 +227,9 @@ class NoteData {
   /* Return the note at the given track and row.  Row may be out of
    * range; pretend the song goes on with TAP_EMPTYs indefinitely. */
   inline const TapNote& GetTapNote(unsigned track, int row) const {
+    if (!IsValidTrack(static_cast<int>(track))) {
+      return TAP_EMPTY;
+    }
     const TrackMap& mapTrack = m_TapNotes[track];
     TrackMap::const_iterator iter = mapTrack.find(row);
     if (iter != mapTrack.end()) {
@@ -230,12 +240,16 @@ class NoteData {
   }
 
   inline iterator FindTapNote(unsigned iTrack, int iRow) {
-    return m_TapNotes[iTrack].find(iRow);
+    return GetTrackMap(static_cast<int>(iTrack)).find(iRow);
   }
   inline const_iterator FindTapNote(unsigned iTrack, int iRow) const {
-    return m_TapNotes[iTrack].find(iRow);
+    return GetTrackMap(static_cast<int>(iTrack)).find(iRow);
   }
   void RemoveTapNote(unsigned iTrack, iterator it) {
+    if (!IsValidTrack(static_cast<int>(iTrack)) ||
+        it == m_TapNotes[iTrack].end()) {
+      return;
+    }
     m_TapNotes[iTrack].erase(it);
   }
 
@@ -364,7 +378,7 @@ class NoteData {
 
   // statistics
   bool IsEmpty() const;
-  bool IsTrackEmpty(int iTrack) const { return m_TapNotes[iTrack].empty(); }
+  bool IsTrackEmpty(int iTrack) const { return GetTrackMap(iTrack).empty(); }
   int GetFirstRow() const;  // return the beat number of the first note
   int GetLastRow() const;   // return the beat number of the last note
   float GetFirstBeat() const { return NoteRowToBeat(GetFirstRow()); }
