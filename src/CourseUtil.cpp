@@ -443,10 +443,18 @@ int EditCourseUtil::MAX_WORKOUT_MINUTES = 90;
 bool EditCourseUtil::s_bNewCourseNeedsName = false;
 
 bool EditCourseUtil::Save(Course* pCourse) {
+  if (pCourse == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-135: refusing to save a null course");
+    return false;
+  }
   return EditCourseUtil::RenameAndSave(pCourse, pCourse->GetDisplayFullTitle());
 }
 
 bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
+  if (pCourse == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-135: refusing to rename/save a null course");
+    return false;
+  }
   Trim(sNewName);
   if (sNewName.empty()) {
     LOG->Warn("SRC_AUDIT_FIX SRC-133: refusing to save course with empty name");
@@ -499,6 +507,10 @@ bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
 }
 
 bool EditCourseUtil::RemoveAndDeleteFile(Course* pCourse) {
+  if (pCourse == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-135: refusing to delete a null course");
+    return false;
+  }
   if (!FILEMAN->Remove(pCourse->m_sPath)) {
     return false;
   }
