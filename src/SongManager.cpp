@@ -2500,7 +2500,7 @@ void SongManager::LoadStepEditsFromProfileDir(
       std::vector<std::string> vsEdits;
       std::string sSongDir = sGroupDir + vsSongs[j] + "/";
       // XXX There doesn't appear to be a songdir const?
-      Song* given = GetSongFromDir("/Songs/" + sSongDir);
+	      Song* given = GetSongFromDir(SpecialFiles::SONGS_DIR + sSongDir);
       // NOTE: We don't have to check the return value of GetSongFromDir here,
       // because if it fails, it returns nullptr, which is then passed to
       // NotesLoader*.LoadEditFromFile(), which will interpret that as "we
