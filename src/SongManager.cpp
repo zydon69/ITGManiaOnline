@@ -1614,6 +1614,16 @@ void SongManager::GetStepsLoadedFromProfile(
 }
 
 void SongManager::DeleteSteps(Steps* pSteps) {
+  if (pSteps == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-108: refused to delete null steps.");
+    return;
+  }
+  if (pSteps->m_pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-108: refused to delete steps without a parent "
+        "song.");
+    return;
+  }
   pSteps->m_pSong->DeleteSteps(pSteps);
 }
 
