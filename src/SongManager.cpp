@@ -1191,6 +1191,33 @@ const std::vector<Song*>& SongManager::GetSongs(
   return vEmpty;
 }
 
+const std::vector<Song*>& SongManager::GetSongsOfCurrentGame(
+    const std::string& sGroupName) const {
+  static const std::vector<Song*> vEmpty;
+  static std::vector<Song*> vFiltered;
+  vFiltered.clear();
+
+  const Style* style = GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
+  if (style == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-623: requested current-game songs without a current "
+        "style.");
+    return vEmpty;
+  }
+
+  const std::vector<Song*>& songs = GetSongs(sGroupName);
+  for (Song* song : songs) {
+    if (song != nullptr && SongUtil::IsStepsTypePlayable(song, style->m_StepsType)) {
+      vFiltered.push_back(song);
+    }
+  }
+  return vFiltered;
+}
+
+const std::vector<Song*>& SongManager::GetAllSongsOfCurrentGame() const {
+  return GetSongsOfCurrentGame(GROUP_ALL);
+}
+
 void SongManager::GetPreferredSortSongs(std::vector<Song*>& AddTo) const {
   if (m_vPreferredSongSort.empty()) {
     AddTo.insert(AddTo.end(), m_pSongs.begin(), m_pSongs.end());
