@@ -718,9 +718,17 @@ void ScoreKeeperNormal::HandleTapRowScore(const NoteData& nd, int iRow) {
       msg.SetParam("Level", m_cur_toasty_level);
       MESSAGEMAN->Broadcast(msg);
       SCREENMAN->PostMessageToTopScreen(SM_PlayToasty, 0);
-      // TODO: keep a pointer to the Profile.  Don't index with m_PlayerNumber
-      // TODO: Make the profile count the level and combo of the toasty. -Kyz
-      PROFILEMAN->IncrementToastiesCount(m_pPlayerState->m_PlayerNumber);
+      PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
+      if (IsValidPlayerNumber(pn)) {
+        // TODO: keep a pointer to the Profile.
+        // TODO: Make the profile count the level and combo of the toasty. -Kyz
+        PROFILEMAN->IncrementToastiesCount(pn);
+      } else {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: ScoreKeeperNormal skipped Toasty profile update "
+            "for invalid player %i.",
+            pn);
+      }
       m_next_toasty_at = CalcNextToastyAt(m_cur_toasty_level);
     }
   } else {
