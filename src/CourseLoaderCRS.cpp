@@ -514,7 +514,7 @@ bool CourseLoaderCRS::ParseCourseSong(
     Replace(sSong, "\\", "/");
     std::vector<std::string> bits;
     split(sSong, "/", bits);
-    if (bits.size() == 2) {
+    if (bits.size() == 2 && !bits[0].empty()) {
       new_entry.songCriteria.m_vsGroupNames.push_back(bits[0]);
     } else {
       LOG->UserLog(
@@ -522,6 +522,7 @@ bool CourseLoaderCRS::ParseCourseSong(
           "contains a random_within_group entry \"%s\" that is invalid. "
           "Song should be in the format \"<group>/*\".",
           sSong.c_str());
+      return false;
     }
 
     if (!SONGMAN->DoesSongGroupExist(bits[0])) {
