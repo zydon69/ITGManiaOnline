@@ -148,13 +148,24 @@ const std::string SBT_CrossFade = "CrossFade";
 static void StripCvsAndSvn(
     std::vector<std::string>& vsPathsToStrip,
     std::vector<std::string>& vsNamesToStrip) {
-  ASSERT(vsPathsToStrip.size() == vsNamesToStrip.size());
-  for (unsigned i = 0; i < vsNamesToStrip.size(); i++) {
+  if (vsPathsToStrip.size() != vsNamesToStrip.size()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-679: path/name listing size mismatch (%zu/%zu); "
+        "trimming to the shortest list.",
+        vsPathsToStrip.size(), vsNamesToStrip.size());
+    const size_t size = std::min(vsPathsToStrip.size(), vsNamesToStrip.size());
+    vsPathsToStrip.resize(size);
+    vsNamesToStrip.resize(size);
+  }
+
+  for (unsigned i = 0; i < vsNamesToStrip.size();) {
     if (CompareNoCase(Right(vsNamesToStrip[i], 3), "CVS") == 0 ||
         vsNamesToStrip[i] == ".svn") {
       vsPathsToStrip.erase(vsPathsToStrip.begin() + i);
       vsNamesToStrip.erase(vsNamesToStrip.begin() + i);
+      continue;
     }
+    ++i;
   }
 }
 
