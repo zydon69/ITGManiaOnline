@@ -1,6 +1,8 @@
 #include "NotesLoaderSM.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <climits>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -246,6 +248,18 @@ sm_parser_helper_t sm_parser_helper;
 // End sm_parser_helper related functions. -Kyz
 /****************************************************************/
 
+namespace {
+bool ParseSMFloat(
+    SMLoader& loader, const char* tag, const char* field,
+    const std::string& raw, const std::string& expression, float& out);
+bool ParseSMBeat(
+    SMLoader& loader, const char* tag, const std::string& raw,
+    const std::string& expression, int rowsPerBeat, float& out);
+bool ParseSMInt(
+    SMLoader& loader, const char* tag, const char* field,
+    const std::string& raw, const std::string& expression, int& out);
+}  // namespace
+
 void SMLoader::SetSongTitle(const std::string& title) {
   this->songTitle = title;
 }
@@ -448,8 +462,16 @@ void SMLoader::ParseBPMs(
       continue;
     }
 
-    const float fBeat = RowToBeat(arrayBPMChangeValues[0], rowsPerBeat);
-    const float fNewBPM = StringToFloat(arrayBPMChangeValues[1]);
+    float fBeat = 0.0f;
+    float fNewBPM = 0.0f;
+    if (!ParseSMBeat(
+            *this, "BPMS", arrayBPMChangeValues[0],
+            arrayBPMChangeExpressions[b], rowsPerBeat, fBeat) ||
+        !ParseSMFloat(
+            *this, "BPMS", "BPM", arrayBPMChangeValues[1],
+            arrayBPMChangeExpressions[b], fNewBPM)) {
+      continue;
+    }
     if (fNewBPM == 0) {
       LOG->UserLog(
           "Song file", this->GetSongTitle(), "has a zero BPM; ignored.");
@@ -482,8 +504,16 @@ void SMLoader::ParseStops(
       continue;
     }
 
-    const float fFreezeBeat = RowToBeat(arrayFreezeValues[0], rowsPerBeat);
-    const float fFreezeSeconds = StringToFloat(arrayFreezeValues[1]);
+    float fFreezeBeat = 0.0f;
+    float fFreezeSeconds = 0.0f;
+    if (!ParseSMBeat(
+            *this, "STOPS", arrayFreezeValues[0],
+            arrayFreezeExpressions[f], rowsPerBeat, fFreezeBeat) ||
+        !ParseSMFloat(
+            *this, "STOPS", "seconds", arrayFreezeValues[1],
+            arrayFreezeExpressions[f], fFreezeSeconds)) {
+      continue;
+    }
     if (fFreezeSeconds == 0) {
       LOG->UserLog(
           "Song file", this->GetSongTitle(),
@@ -499,6 +529,89 @@ void SMLoader::ParseStops(
 namespace {
 bool compare_first(std::pair<float, float> a, std::pair<float, float> b) {
   return a.first < b.first;
+}
+
+bool ParseSMFloat(
+    SMLoader& loader, const char* tag, const char* field,
+    const std::string& raw, const std::string& expression, float& out) {
+  std::string value = raw;
+  Trim(value);
+  if (StringToFloat(value, out)) {
+    return true;
+  }
+
+  LOG->UserLog(
+      "Song file", loader.GetSongTitle(),
+      "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
+      tag, field, raw.c_str(), expression.c_str());
+  return false;
+}
+
+bool ParseSMBeat(
+    SMLoader& loader, const char* tag, const std::string& raw,
+    const std::string& expression, const int rowsPerBeat, float& out) {
+  std::string value = raw;
+  Trim(value);
+
+  bool isRowValue = false;
+  if (!value.empty() && (value.back() == 'r' || value.back() == 'R')) {
+    isRowValue = true;
+    value.pop_back();
+    Trim(value);
+  }
+
+  float parsed = 0.0f;
+  if (!StringToFloat(value, parsed)) {
+    LOG->UserLog(
+        "Song file", loader.GetSongTitle(),
+        "SRC_AUDIT_FIX ignored invalid #%s beat value \"%s\" in \"%s\".",
+        tag, raw.c_str(), expression.c_str());
+    return false;
+  }
+
+  if (isRowValue) {
+    if (rowsPerBeat <= 0) {
+      LOG->UserLog(
+          "Song file", loader.GetSongTitle(),
+          "SRC_AUDIT_FIX ignored row-based #%s beat value \"%s\" without a "
+          "valid rows-per-beat base in \"%s\".",
+          tag, raw.c_str(), expression.c_str());
+      return false;
+    }
+    parsed /= rowsPerBeat;
+  }
+
+  out = parsed;
+  return true;
+}
+
+bool ParseSMInt(
+    SMLoader& loader, const char* tag, const char* field,
+    const std::string& raw, const std::string& expression, int& out) {
+  std::string value = raw;
+  Trim(value);
+  if (value.empty()) {
+    LOG->UserLog(
+        "Song file", loader.GetSongTitle(),
+        "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
+        tag, field, raw.c_str(), expression.c_str());
+    return false;
+  }
+
+  char* end = nullptr;
+  errno = 0;
+  const long parsed = std::strtol(value.c_str(), &end, 10);
+  if (end == value.c_str() || *end != '\0' || errno == ERANGE ||
+      parsed < INT_MIN || parsed > INT_MAX) {
+    LOG->UserLog(
+        "Song file", loader.GetSongTitle(),
+        "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
+        tag, field, raw.c_str(), expression.c_str());
+    return false;
+  }
+
+  out = static_cast<int>(parsed);
+  return true;
 }
 }  // namespace
 
@@ -730,8 +843,16 @@ void SMLoader::ProcessDelays(
           arrayDelayExpressions[f].c_str());
       continue;
     }
-    const float fFreezeBeat = RowToBeat(arrayDelayValues[0], rowsPerBeat);
-    const float fFreezeSeconds = StringToFloat(arrayDelayValues[1]);
+    float fFreezeBeat = 0.0f;
+    float fFreezeSeconds = 0.0f;
+    if (!ParseSMBeat(
+            *this, "DELAYS", arrayDelayValues[0],
+            arrayDelayExpressions[f], rowsPerBeat, fFreezeBeat) ||
+        !ParseSMFloat(
+            *this, "DELAYS", "seconds", arrayDelayValues[1],
+            arrayDelayExpressions[f], fFreezeSeconds)) {
+      continue;
+    }
     // LOG->Trace( "Adding a delay segment: beat: %f, seconds = %f",
     // new_seg.m_fStartBeat, new_seg.m_fStopSeconds );
 
@@ -764,9 +885,19 @@ void SMLoader::ProcessTimeSignatures(
       continue;
     }
 
-    const float fBeat = RowToBeat(vs2[0], rowsPerBeat);
-    const int iNumerator = StringToInt(vs2[1]);
-    const int iDenominator = StringToInt(vs2[2]);
+    float fBeat = 0.0f;
+    int iNumerator = 0;
+    int iDenominator = 0;
+    if (!ParseSMBeat(
+            *this, "TIMESIGNATURES", vs2[0], s1, rowsPerBeat, fBeat) ||
+        !ParseSMInt(
+            *this, "TIMESIGNATURES", "numerator", vs2[1], s1,
+            iNumerator) ||
+        !ParseSMInt(
+            *this, "TIMESIGNATURES", "denominator", vs2[2], s1,
+            iDenominator)) {
+      continue;
+    }
 
     if (fBeat < 0) {
       LOG->UserLog(
@@ -828,10 +959,17 @@ void SMLoader::ProcessTickcounts(
       continue;
     }
 
-    const float fTickcountBeat =
-        RowToBeat(arrayTickcountValues[0], rowsPerBeat);
-    int iTicks =
-        std::clamp(atoi(arrayTickcountValues[1].c_str()), 0, ROWS_PER_BEAT);
+    float fTickcountBeat = 0.0f;
+    int iTicks = 0;
+    if (!ParseSMBeat(
+            *this, "TICKCOUNTS", arrayTickcountValues[0],
+            arrayTickcountExpressions[f], rowsPerBeat, fTickcountBeat) ||
+        !ParseSMInt(
+            *this, "TICKCOUNTS", "ticks", arrayTickcountValues[1],
+            arrayTickcountExpressions[f], iTicks)) {
+      continue;
+    }
+    iTicks = std::clamp(iTicks, 0, ROWS_PER_BEAT);
 
     out.AddSegment(TickcountSegment(BeatToNoteRow(fTickcountBeat), iTicks));
   }
@@ -863,12 +1001,20 @@ void SMLoader::ProcessSpeeds(
       continue;
     }
 
-    const float fBeat = RowToBeat(vs2[0], rowsPerBeat);
-    const float fRatio = StringToFloat(vs2[1]);
-    const float fDelay = StringToFloat(vs2[2]);
+    float fBeat = 0.0f;
+    float fRatio = 0.0f;
+    float fDelay = 0.0f;
+    if (!ParseSMBeat(*this, "SPEEDS", vs2[0], s1, rowsPerBeat, fBeat) ||
+        !ParseSMFloat(*this, "SPEEDS", "ratio", vs2[1], s1, fRatio) ||
+        !ParseSMFloat(*this, "SPEEDS", "delay", vs2[2], s1, fDelay)) {
+      continue;
+    }
 
     // XXX: ugly...
-    int iUnit = StringToInt(vs2[3]);
+    int iUnit = 0;
+    if (!ParseSMInt(*this, "SPEEDS", "unit", vs2[3], s1, iUnit)) {
+      continue;
+    }
     SpeedSegment::BaseUnit unit =
         (iUnit == 0) ? SpeedSegment::UNIT_BEATS : SpeedSegment::UNIT_SECONDS;
 
@@ -911,8 +1057,16 @@ void SMLoader::ProcessFakes(
       continue;
     }
 
-    const float fBeat = RowToBeat(arrayFakeValues[0], rowsPerBeat);
-    const float fSkippedBeats = StringToFloat(arrayFakeValues[1]);
+    float fBeat = 0.0f;
+    float fSkippedBeats = 0.0f;
+    if (!ParseSMBeat(
+            *this, "FAKES", arrayFakeValues[0],
+            arrayFakeExpressions[b], rowsPerBeat, fBeat) ||
+        !ParseSMFloat(
+            *this, "FAKES", "beats", arrayFakeValues[1],
+            arrayFakeExpressions[b], fSkippedBeats)) {
+      continue;
+    }
 
     if (fSkippedBeats > 0) {
       out.AddSegment(FakeSegment(BeatToNoteRow(fBeat), fSkippedBeats));

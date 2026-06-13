@@ -1,5 +1,7 @@
 #include "NotesLoaderSSC.h"
 
+#include <cerrno>
+#include <climits>
 #include <cstddef>
 #include <cstring>
 #include <map>
@@ -726,6 +728,53 @@ ssc_parser_helper_t parser_helper;
 // End parser_helper related functions. -Kyz
 /****************************************************************/
 
+namespace {
+bool ParseSSCFloat(
+    SSCLoader& loader, const char* tag, const char* field,
+    const std::string& raw, const std::string& expression, float& out) {
+  std::string value = raw;
+  Trim(value);
+  if (StringToFloat(value, out)) {
+    return true;
+  }
+
+  LOG->UserLog(
+      "Song file", loader.GetSongTitle(),
+      "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
+      tag, field, raw.c_str(), expression.c_str());
+  return false;
+}
+
+bool ParseSSCInt(
+    SSCLoader& loader, const char* tag, const char* field,
+    const std::string& raw, const std::string& expression, int& out) {
+  std::string value = raw;
+  Trim(value);
+  if (value.empty()) {
+    LOG->UserLog(
+        "Song file", loader.GetSongTitle(),
+        "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
+        tag, field, raw.c_str(), expression.c_str());
+    return false;
+  }
+
+  char* end = nullptr;
+  errno = 0;
+  const long parsed = std::strtol(value.c_str(), &end, 10);
+  if (end == value.c_str() || *end != '\0' || errno == ERANGE ||
+      parsed < INT_MIN || parsed > INT_MAX) {
+    LOG->UserLog(
+        "Song file", loader.GetSongTitle(),
+        "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
+        tag, field, raw.c_str(), expression.c_str());
+    return false;
+  }
+
+  out = static_cast<int>(parsed);
+  return true;
+}
+}  // namespace
+
 void SSCLoader::ProcessBPMs(TimingData& out, const std::string sParam) {
   std::vector<std::string> arrayBPMExpressions;
   split(sParam, ",", arrayBPMExpressions);
@@ -746,8 +795,16 @@ void SSCLoader::ProcessBPMs(TimingData& out, const std::string sParam) {
       continue;
     }
 
-    const float fBeat = StringToFloat(arrayBPMValues[0]);
-    const float fNewBPM = StringToFloat(arrayBPMValues[1]);
+    float fBeat = 0.0f;
+    float fNewBPM = 0.0f;
+    if (!ParseSSCFloat(
+            *this, "BPMS", "beat", arrayBPMValues[0],
+            arrayBPMExpressions[b], fBeat) ||
+        !ParseSSCFloat(
+            *this, "BPMS", "BPM", arrayBPMValues[1],
+            arrayBPMExpressions[b], fNewBPM)) {
+      continue;
+    }
     if (fBeat >= 0 && fNewBPM > 0) {
       out.AddSegment(BPMSegment(BeatToNoteRow(fBeat), fNewBPM));
     } else {
@@ -778,8 +835,16 @@ void SSCLoader::ProcessStops(TimingData& out, const std::string sParam) {
       continue;
     }
 
-    const float fBeat = StringToFloat(arrayStopValues[0]);
-    const float fNewStop = StringToFloat(arrayStopValues[1]);
+    float fBeat = 0.0f;
+    float fNewStop = 0.0f;
+    if (!ParseSSCFloat(
+            *this, "STOPS", "beat", arrayStopValues[0],
+            arrayStopExpressions[b], fBeat) ||
+        !ParseSSCFloat(
+            *this, "STOPS", "seconds", arrayStopValues[1],
+            arrayStopExpressions[b], fNewStop)) {
+      continue;
+    }
     if (fBeat >= 0 && fNewStop > 0) {
       out.AddSegment(StopSegment(BeatToNoteRow(fBeat), fNewStop));
     } else {
@@ -811,8 +876,16 @@ void SSCLoader::ProcessWarps(
       continue;
     }
 
-    const float fBeat = StringToFloat(arrayWarpValues[0]);
-    const float fNewBeat = StringToFloat(arrayWarpValues[1]);
+    float fBeat = 0.0f;
+    float fNewBeat = 0.0f;
+    if (!ParseSSCFloat(
+            *this, "WARPS", "beat", arrayWarpValues[0],
+            arrayWarpExpressions[b], fBeat) ||
+        !ParseSSCFloat(
+            *this, "WARPS", "beats", arrayWarpValues[1],
+            arrayWarpExpressions[b], fNewBeat)) {
+      continue;
+    }
     // Early versions were absolute in beats. They should be relative.
     if ((fVersion < VERSION_SPLIT_TIMING && fNewBeat > fBeat)) {
       out.AddSegment(WarpSegment(BeatToNoteRow(fBeat), fNewBeat - fBeat));
@@ -846,7 +919,12 @@ void SSCLoader::ProcessLabels(TimingData& out, const std::string sParam) {
       continue;
     }
 
-    const float fBeat = StringToFloat(arrayLabelValues[0]);
+    float fBeat = 0.0f;
+    if (!ParseSSCFloat(
+            *this, "LABELS", "beat", arrayLabelValues[0],
+            arrayLabelExpressions[b], fBeat)) {
+      continue;
+    }
     std::string sLabel = arrayLabelValues[1];
     TrimRight(sLabel);
     if (fBeat >= 0.0f) {
@@ -876,10 +954,24 @@ void SSCLoader::ProcessCombos(
           arrayComboExpressions[f].c_str());
       continue;
     }
-    const float fComboBeat = StringToFloat(arrayComboValues[0]);
-    const int iCombos = StringToInt(arrayComboValues[1]);
-    const int iMisses =
-        (size == 2 ? iCombos : StringToInt(arrayComboValues[2]));
+    float fComboBeat = 0.0f;
+    int iCombos = 0;
+    int iMisses = 0;
+    if (!ParseSSCFloat(
+            *this, "COMBOS", "beat", arrayComboValues[0],
+            arrayComboExpressions[f], fComboBeat) ||
+        !ParseSSCInt(
+            *this, "COMBOS", "combo", arrayComboValues[1],
+            arrayComboExpressions[f], iCombos)) {
+      continue;
+    }
+    if (size == 2) {
+      iMisses = iCombos;
+    } else if (!ParseSSCInt(
+                   *this, "COMBOS", "miss combo", arrayComboValues[2],
+                   arrayComboExpressions[f], iMisses)) {
+      continue;
+    }
     if (fComboBeat < 0 || iCombos <= 0 || iMisses <= 0) {
       LOG->UserLog(
           "Song file", this->GetSongTitle(),
@@ -907,8 +999,12 @@ void SSCLoader::ProcessScrolls(TimingData& out, const std::string sParam) {
       continue;
     }
 
-    const float fBeat = StringToFloat(vs2[0]);
-    const float fRatio = StringToFloat(vs2[1]);
+    float fBeat = 0.0f;
+    float fRatio = 0.0f;
+    if (!ParseSSCFloat(*this, "SCROLLS", "beat", vs2[0], s1, fBeat) ||
+        !ParseSSCFloat(*this, "SCROLLS", "ratio", vs2[1], s1, fRatio)) {
+      continue;
+    }
 
     if (fBeat < 0) {
       LOG->UserLog(
