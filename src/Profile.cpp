@@ -1451,9 +1451,13 @@ bool Profile::SaveAllToDir(std::string sDir, bool bSignData) const {
     return false;
   }
 
-  SaveTypeToDir(sDir);
+  if (!SaveTypeToDir(sDir)) {
+    return false;
+  }
   // Save editable.ini
-  SaveEditableDataToDir(sDir);
+  if (!SaveEditableDataToDir(sDir)) {
+    return false;
+  }
 
   SaveStatsWebPageToDir(sDir);
 
@@ -1572,16 +1576,22 @@ bool Profile::SaveStatsXmlToDir(std::string sDir, bool bSignData) const {
   return true;
 }
 
-void Profile::SaveTypeToDir(std::string dir) const {
+bool Profile::SaveTypeToDir(std::string dir) const {
   IniFile ini;
   ini.SetValue("ListPosition", "Type", ProfileTypeToString(m_Type));
   ini.SetValue("ListPosition", "Priority", m_ListPriority);
   ini.SetValue(
       "ListPosition", "LastPlayedDate", DateTime::GetNowDateTime().GetString());
-  ini.WriteFile(dir + TYPE_INI);
+  if (!ini.WriteFile(dir + TYPE_INI)) {
+    LOG->Warn(
+        "Profile::SaveTypeToDir: failed to write '%s'",
+        (dir + TYPE_INI).c_str());
+    return false;
+  }
+  return true;
 }
 
-void Profile::SaveEditableDataToDir(std::string sDir) const {
+bool Profile::SaveEditableDataToDir(std::string sDir) const {
   IniFile ini;
 
   ini.SetValue("Editable", "DisplayName", m_sDisplayName);
@@ -1594,7 +1604,13 @@ void Profile::SaveEditableDataToDir(std::string sDir) const {
       "Editable", "IgnoreStepCountCalories", m_IgnoreStepCountCalories);
   ini.SetValue("Editable", "IsMale", m_IsMale);
 
-  ini.WriteFile(sDir + EDITABLE_INI);
+  if (!ini.WriteFile(sDir + EDITABLE_INI)) {
+    LOG->Warn(
+        "Profile::SaveEditableDataToDir: failed to write '%s'",
+        (sDir + EDITABLE_INI).c_str());
+    return false;
+  }
+  return true;
 }
 
 XNode* Profile::SaveGeneralDataCreateNode() const {

@@ -456,8 +456,8 @@ class Profile {
   void LoadScreenshotDataFromNode(const XNode* pNode);
   void LoadCalorieDataFromNode(const XNode* pNode);
 
-  void SaveTypeToDir(std::string dir) const;
-  void SaveEditableDataToDir(std::string sDir) const;
+  bool SaveTypeToDir(std::string dir) const;
+  bool SaveEditableDataToDir(std::string sDir) const;
   bool SaveStatsXmlToDir(std::string sDir, bool bSignData) const;
   XNode* SaveStatsXmlCreateNode() const;
   XNode* SaveGeneralDataCreateNode() const;
