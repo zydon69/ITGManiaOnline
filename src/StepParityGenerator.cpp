@@ -21,6 +21,10 @@ bool StepParityGenerator::analyzeNoteData(const NoteData& in) {
     LOG->Warn("SRC_AUDIT_FIX SRC-639: StepParity analysis has no layout.");
     return false;
   }
+  if (timing == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-643: StepParity analysis has no timing data.");
+    return false;
+  }
 
   columnCount_ = in.GetNumTracks();
   if (columnCount_ <= 0 || columnCount_ > MAX_COLUMNS) {
