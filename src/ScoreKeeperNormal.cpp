@@ -1,9 +1,12 @@
 #include "ScoreKeeperNormal.h"
 
 #include <algorithm>
+#include <cinttypes>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -62,7 +65,128 @@ bool IsValidHoldNoteScore(HoldNoteScore hns) {
   return hns >= HNS_None && hns < NUM_HoldNoteScore;
 }
 
+bool ShouldShowW1() {
+  return GAMESTATE == nullptr || GAMESTATE->ShowW1();
+}
+
+int ClampInt64ToInt(int64_t value, const char* context) {
+  if (value > std::numeric_limits<int>::max()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s saturated integer value %" PRId64 " to INT_MAX.",
+        context, value);
+    return std::numeric_limits<int>::max();
+  }
+  if (value < std::numeric_limits<int>::min()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s saturated integer value %" PRId64 " to INT_MIN.",
+        context, value);
+    return std::numeric_limits<int>::min();
+  }
+  return static_cast<int>(value);
+}
+
+int AddIntSaturated(int current, int delta, const char* context) {
+  return ClampInt64ToInt(
+      static_cast<int64_t>(current) + static_cast<int64_t>(delta), context);
+}
+
+int AddNonNegativeIntSaturated(int current, int delta, const char* context) {
+  int value = AddIntSaturated(std::max(0, current), std::max(0, delta), context);
+  if (value < 0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s clamped negative saturated result %i to 0.",
+        context, value);
+    return 0;
+  }
+  return value;
+}
+
+unsigned int AddUnsignedDeltaSaturated(
+    unsigned int current, int64_t delta, const char* context) {
+  const int64_t value = static_cast<int64_t>(current) + delta;
+  if (value < 0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s clamped unsigned score delta %" PRId64
+        " below 0.",
+        context, delta);
+    return 0;
+  }
+  if (value > std::numeric_limits<unsigned int>::max()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s saturated unsigned score value %" PRId64 ".",
+        context, value);
+    return std::numeric_limits<unsigned int>::max();
+  }
+  return static_cast<unsigned int>(value);
+}
+
+int MulIntSaturated(int lhs, int rhs, const char* context) {
+  return ClampInt64ToInt(
+      static_cast<int64_t>(lhs) * static_cast<int64_t>(rhs), context);
+}
+
+int RadarValueToNonNegativeInt(float value, const char* context) {
+  if (!std::isfinite(value) || value <= 0.0f) {
+    if (!std::isfinite(value) || value < 0.0f) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: %s ignored invalid radar value %f.",
+          context, value);
+    }
+    return 0;
+  }
+  if (value > static_cast<float>(std::numeric_limits<int>::max())) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s saturated radar value %f to INT_MAX.",
+        context, value);
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(value);
+}
+
+int UnsignedToIntSaturated(unsigned int value, const char* context) {
+  if (value > static_cast<unsigned int>(std::numeric_limits<int>::max())) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s saturated unsigned value %u to INT_MAX.",
+        context, value);
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(value);
+}
+
+int ClampScoreWeight(int weight, const char* context) {
+  static const int kMaxReasonableWeight = 1000000;
+  if (weight > kMaxReasonableWeight) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s clamped extreme score weight %i to %i.",
+        context, weight, kMaxReasonableWeight);
+    return kMaxReasonableWeight;
+  }
+  if (weight < -kMaxReasonableWeight) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s clamped extreme score weight %i to -%i.",
+        context, weight, kMaxReasonableWeight);
+    return -kMaxReasonableWeight;
+  }
+  return weight;
+}
+
+int ClampComboInput(int count, const char* context) {
+  if (count < 0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s clamped negative combo count %i to 0.",
+        context, count);
+    return 0;
+  }
+  return count;
+}
+
 TimingData* GetCurrentTimingDataForPlayer(PlayerNumber pn) {
+  if (GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal missing timing data because "
+        "GAMESTATE is null.");
+    return nullptr;
+  }
   if (!IsValidPlayerNumber(pn)) {
     LOG->Warn(
         "SRC_AUDIT_FIX: ScoreKeeperNormal missing timing data for invalid "
@@ -97,7 +221,23 @@ int GetComboMultiplier(
     return 1;
   }
 
-  return bMissComboMultiplier ? cs->GetMissCombo() : cs->GetCombo();
+  int multiplier = bMissComboMultiplier ? cs->GetMissCombo() : cs->GetCombo();
+  if (multiplier <= 0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal clamped invalid combo multiplier %i "
+        "at row %i to 1.",
+        multiplier, iRow);
+    return 1;
+  }
+  static const int kMaxComboMultiplier = 1000;
+  if (multiplier > kMaxComboMultiplier) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal clamped huge combo multiplier %i at "
+        "row %i to %i.",
+        multiplier, iRow, kMaxComboMultiplier);
+    return kMaxComboMultiplier;
+  }
+  return multiplier;
 }
 }  // namespace
 
@@ -108,6 +248,10 @@ ScoreKeeperNormal::ScoreKeeperNormal(
 void ScoreKeeperNormal::Load(
     const std::vector<Song*>& apSongs, const std::vector<Steps*>& apSteps,
     const std::vector<AttackArray>& asModifiers) {
+  if (!HasScoringState("ScoreKeeperNormal::Load")) {
+    return;
+  }
+
   m_apSteps = apSteps;
   if (apSongs.size() != apSteps.size() || apSongs.size() != asModifiers.size()) {
     LOG->Warn(
@@ -195,10 +339,16 @@ void ScoreKeeperNormal::Load(
         ndPost, *pTiming, m_pPlayerState->m_PlayerOptions.GetStage(),
         pSteps->m_StepsType);
 
-    iTotalPossibleDancePoints += this->GetPossibleDancePoints(
-        &ndPre, &ndPost, pTiming, pSong->m_fMusicLengthSeconds);
-    iTotalPossibleGradePoints += this->GetPossibleGradePoints(
-        &ndPre, &ndPost, pTiming, pSong->m_fMusicLengthSeconds);
+    iTotalPossibleDancePoints = AddNonNegativeIntSaturated(
+        iTotalPossibleDancePoints,
+        this->GetPossibleDancePoints(
+            &ndPre, &ndPost, pTiming, pSong->m_fMusicLengthSeconds),
+        "ScoreKeeperNormal::Load possible dance points");
+    iTotalPossibleGradePoints = AddNonNegativeIntSaturated(
+        iTotalPossibleGradePoints,
+        this->GetPossibleGradePoints(
+            &ndPre, &ndPost, pTiming, pSong->m_fMusicLengthSeconds),
+        "ScoreKeeperNormal::Load possible grade points");
   }
 
   m_pPlayerStageStats->m_iPossibleDancePoints = iTotalPossibleDancePoints;
@@ -228,6 +378,9 @@ void ScoreKeeperNormal::Load(
 
 void ScoreKeeperNormal::OnNextSong(
     int iSongInCourseIndex, const Steps* pSteps, const NoteData* pNoteData) {
+  if (!HasScoringState("ScoreKeeperNormal::OnNextSong")) {
+    return;
+  }
   if (pSteps == nullptr || pNoteData == nullptr ||
       pSteps->GetTimingData() == nullptr) {
     LOG->Warn(
@@ -263,27 +416,35 @@ void ScoreKeeperNormal::OnNextSong(
   */
   // Calculate the score multiplier
   m_iMaxPossiblePoints = 0;
-  if (GAMESTATE->IsCourseMode()) {
-    const int numSongsInCourse = m_apSteps.size();
-    if (numSongsInCourse <= 0) {
+  const bool isCourseMode = GAMESTATE != nullptr && GAMESTATE->IsCourseMode();
+  if (isCourseMode) {
+    if (m_apSteps.empty() ||
+        m_apSteps.size() >
+            static_cast<size_t>(std::numeric_limits<int>::max())) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal::OnNextSong ignored empty course "
-          "scoring state.");
+          "SRC_AUDIT_FIX: ScoreKeeperNormal::OnNextSong ignored invalid "
+          "course scoring size %zu.",
+          m_apSteps.size());
       m_iPointBonus = 0;
       m_iNumTapsAndHolds = 0;
       return;
     }
 
+    const int numSongsInCourse = static_cast<int>(m_apSteps.size());
     const int iIndex =
         ((iSongInCourseIndex % numSongsInCourse) + numSongsInCourse) %
         numSongsInCourse;
     m_bIsLastSongInCourse = (iIndex + 1 == numSongsInCourse);
 
     if (numSongsInCourse < 10) {
-      const int courseMult = (numSongsInCourse * (numSongsInCourse + 1)) / 2;
-      ASSERT(courseMult >= 0);
+      const int courseMult = MulIntSaturated(
+          numSongsInCourse, numSongsInCourse + 1,
+          "ScoreKeeperNormal::OnNextSong course multiplier");
+      const int divisor = std::max(1, courseMult / 2);
 
-      m_iMaxPossiblePoints = (100000000 * (iIndex + 1)) / courseMult;
+      m_iMaxPossiblePoints = ClampInt64ToInt(
+          (static_cast<int64_t>(100000000) * (iIndex + 1)) / divisor,
+          "ScoreKeeperNormal::OnNextSong max possible course points");
     } else {
       /* When we have lots of songs, the scale above biases too much: in a
        * course with 50 songs, the first song is worth 80k, the last 4mil, which
@@ -294,26 +455,46 @@ void ScoreKeeperNormal::OnNextSong(
     }
   } else {
     // long ver and marathon ver songs have higher max possible scores
-    int iLengthMultiplier =
-        GameState::GetNumStagesMultiplierForSong(GAMESTATE->m_pCurSong);
+    const Song* pSong = pSteps->m_pSong;
+    if (pSong == nullptr && GAMESTATE != nullptr) {
+      pSong = GAMESTATE->m_pCurSong;
+    }
+    int iLengthMultiplier = 1;
+    if (pSong != nullptr) {
+      iLengthMultiplier = GameState::GetNumStagesMultiplierForSong(pSong);
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperNormal::OnNextSong used length "
+          "multiplier 1 because no song was available.");
+    }
+    iLengthMultiplier = std::max(1, iLengthMultiplier);
 
     /* This is no longer just simple additive/subtractive scoring,
      * but start with capping the score at the size of the score counter. */
-    m_iMaxPossiblePoints = 10 * 10000000 * iLengthMultiplier;
+    m_iMaxPossiblePoints = ClampInt64ToInt(
+        static_cast<int64_t>(10) * 10000000 * iLengthMultiplier,
+        "ScoreKeeperNormal::OnNextSong max possible points");
   }
-  ASSERT(m_iMaxPossiblePoints >= 0);
-  m_iMaxScoreSoFar += m_iMaxPossiblePoints;
+  m_iMaxPossiblePoints = std::max(0, m_iMaxPossiblePoints);
+  m_iMaxScoreSoFar = AddNonNegativeIntSaturated(
+      m_iMaxScoreSoFar, m_iMaxPossiblePoints,
+      "ScoreKeeperNormal::OnNextSong max score so far");
 
-  m_iNumTapsAndHolds = pNoteData->GetNumRowsWithTapOrHoldHead() +
-                       pNoteData->GetNumHoldNotes() + pNoteData->GetNumRolls();
+  m_iNumTapsAndHolds = AddNonNegativeIntSaturated(
+      pNoteData->GetNumRowsWithTapOrHoldHead(),
+      AddNonNegativeIntSaturated(
+          pNoteData->GetNumHoldNotes(), pNoteData->GetNumRolls(),
+          "ScoreKeeperNormal::OnNextSong hold totals"),
+      "ScoreKeeperNormal::OnNextSong tap/hold totals");
 
   m_iPointBonus = m_iMaxPossiblePoints;
-  m_pPlayerStageStats->m_iMaxScore = m_iMaxScoreSoFar;
+  m_pPlayerStageStats->m_iMaxScore =
+      static_cast<unsigned int>(std::max(0, m_iMaxScoreSoFar));
 
   /* MercifulBeginner shouldn't clamp weights in course mode, even if a beginner
    * song is in a course, since that makes PlayerStageStats::GetGrade hard. */
   m_bIsBeginner = pSteps->GetDifficulty() == Difficulty_Beginner &&
-                  !GAMESTATE->IsCourseMode();
+                  !isCourseMode;
 
   ASSERT(m_iPointBonus >= 0);
 
@@ -321,6 +502,9 @@ void ScoreKeeperNormal::OnNextSong(
 }
 
 static int GetScore(int p, int Z, int64_t S, int n) {
+  if (S <= 0 || n <= 0 || Z <= 0 || p <= 0) {
+    return 0;
+  }
   /* There's a problem with the scoring system described below. Z/S is truncated
    * to an int. However, in some cases we can end up with very small base
    * scores. Each song in a 50-song nonstop course will be worth 2mil, which is
@@ -337,7 +521,8 @@ static int GetScore(int p, int Z, int64_t S, int n) {
 	return p * (Z / S) * n;
 #elif 1
   // This doesn't round down Z/S.
-  return int(int64_t(p) * n * Z / S);
+  return ClampInt64ToInt(
+      int64_t(p) * n * Z / S, "ScoreKeeperNormal::GetScore");
 #else
   // This also doesn't round down Z/S. Use this if you don't have 64-bit ints.
   return int(p * n * (float(Z) / S));
@@ -363,6 +548,9 @@ void ScoreKeeperNormal::AddTapRowScore(
 extern ThemeMetric<bool> PENALIZE_TAP_SCORE_NONE;
 extern ThemeMetric<bool> TICK_HOLDS;
 void ScoreKeeperNormal::HandleTapScoreNone() {
+  if (!HasScoringState("ScoreKeeperNormal::HandleTapScoreNone")) {
+    return;
+  }
   if (PENALIZE_TAP_SCORE_NONE) {
     m_pPlayerStageStats->m_iCurCombo = 0;
 
@@ -376,6 +564,9 @@ void ScoreKeeperNormal::HandleTapScoreNone() {
 }
 
 void ScoreKeeperNormal::AddScoreInternal(TapNoteScore score) {
+  if (!HasScoringState("ScoreKeeperNormal::AddScoreInternal")) {
+    return;
+  }
   if (m_UseInternalScoring) {
     if (!IsValidTapNoteScore(score)) {
       LOG->Warn(
@@ -413,7 +604,8 @@ void ScoreKeeperNormal::AddScoreInternal(TapNoteScore score) {
         break;
     }
 
-    m_iTapNotesHit++;
+    m_iTapNotesHit = AddNonNegativeIntSaturated(
+        m_iTapNotesHit, 1, "ScoreKeeperNormal::AddScoreInternal tap count");
 
     const int64_t N = uint64_t(m_iNumTapsAndHolds);
     const int64_t sum = (N * (N + 1)) / 2;
@@ -421,7 +613,8 @@ void ScoreKeeperNormal::AddScoreInternal(TapNoteScore score) {
 
     // Don't use a multiplier if the player has failed
     if (m_pPlayerStageStats->m_bFailed) {
-      iScore += p;
+      iScore = AddUnsignedDeltaSaturated(
+          iScore, p, "ScoreKeeperNormal::AddScoreInternal failed score");
       // make score evenly divisible by 5
       // only update this on the next step, to make it less *obvious*
       /* Round to the nearest 5, instead of always rounding down, so a base
@@ -430,42 +623,76 @@ void ScoreKeeperNormal::AddScoreInternal(TapNoteScore score) {
         iScore = ((iScore + 2) / 5) * 5;
       }
     } else {
-      iScore += GetScore(p, Z, sum, m_iTapNotesHit);
-      const int& iCurrentCombo = m_pPlayerStageStats->m_iCurCombo;
-      iScore += m_ComboBonusFactor[score] * iCurrentCombo;
+      iScore = AddUnsignedDeltaSaturated(
+          iScore, GetScore(p, Z, sum, m_iTapNotesHit),
+          "ScoreKeeperNormal::AddScoreInternal tap score");
+      const unsigned int iCurrentCombo = m_pPlayerStageStats->m_iCurCombo;
+      iScore = AddUnsignedDeltaSaturated(
+          iScore,
+          static_cast<int64_t>(m_ComboBonusFactor[score]) * iCurrentCombo,
+          "ScoreKeeperNormal::AddScoreInternal combo bonus");
     }
 
     // Subtract the maximum this step could have been worth from the bonus.
-    m_iPointBonus -= GetScore(10, Z, sum, m_iTapNotesHit);
+    m_iPointBonus = AddIntSaturated(
+        m_iPointBonus, -GetScore(10, Z, sum, m_iTapNotesHit),
+        "ScoreKeeperNormal::AddScoreInternal point bonus");
     // And add the maximum this step could have been worth to the max score up
     // to now.
-    iCurMaxScore += GetScore(10, Z, sum, m_iTapNotesHit);
+    iCurMaxScore = AddUnsignedDeltaSaturated(
+        iCurMaxScore, GetScore(10, Z, sum, m_iTapNotesHit),
+        "ScoreKeeperNormal::AddScoreInternal current max score");
 
     if (m_iTapNotesHit == m_iNumTapsAndHolds && score >= TNS_W2) {
       if (!m_pPlayerStageStats->m_bFailed) {
-        iScore += m_iPointBonus;
+        iScore = AddUnsignedDeltaSaturated(
+            iScore, m_iPointBonus,
+            "ScoreKeeperNormal::AddScoreInternal final point bonus");
       }
       if (m_bIsLastSongInCourse) {
-        iScore += 100000000 - m_iMaxScoreSoFar;
-        iCurMaxScore += 100000000 - m_iMaxScoreSoFar;
+        const int finalCourseBonus =
+            AddIntSaturated(100000000, -m_iMaxScoreSoFar,
+                            "ScoreKeeperNormal::AddScoreInternal course bonus");
+        iScore = AddUnsignedDeltaSaturated(
+            iScore, finalCourseBonus,
+            "ScoreKeeperNormal::AddScoreInternal final course score");
+        iCurMaxScore = AddUnsignedDeltaSaturated(
+            iCurMaxScore, finalCourseBonus,
+            "ScoreKeeperNormal::AddScoreInternal final course max score");
 
         /* If we're in Endless mode, we'll come around here again, so reset
          * the bonus counter. */
         m_iMaxScoreSoFar = 0;
       }
-      iCurMaxScore += m_iPointBonus;
+      iCurMaxScore = AddUnsignedDeltaSaturated(
+          iCurMaxScore, m_iPointBonus,
+          "ScoreKeeperNormal::AddScoreInternal final current max bonus");
     }
 
     // Undo rounding from the last tap, and re-round.
-    iScore += m_iScoreRemainder;
+    iScore = AddUnsignedDeltaSaturated(
+        iScore, m_iScoreRemainder,
+        "ScoreKeeperNormal::AddScoreInternal score remainder");
+    if (m_iRoundTo <= 0) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperNormal reset invalid round-to value %i "
+          "to 1.",
+          m_iRoundTo);
+      m_iRoundTo = 1;
+    }
     m_iScoreRemainder = (iScore % m_iRoundTo);
-    iScore = iScore - m_iScoreRemainder;
+    iScore = AddUnsignedDeltaSaturated(
+        iScore, -m_iScoreRemainder,
+        "ScoreKeeperNormal::AddScoreInternal score rounding");
 
     // LOG->Trace( "score: %i", iScore );
   }
 }
 
 int ScoreKeeperNormal::CalcNextToastyAt(int level) {
+  if (!HasScoringState("ScoreKeeperNormal::CalcNextToastyAt")) {
+    return 250;
+  }
   Lua* L = LUA->Get();
   m_toasty_trigger.PushSelf(L);
   const int default_amount = 250;
@@ -509,19 +736,35 @@ int ScoreKeeperNormal::CalcNextToastyAt(int level) {
   }
   lua_settop(L, 0);
   LUA->Release(L);
-  return m_next_toasty_at + amount;
+  return AddNonNegativeIntSaturated(
+      m_next_toasty_at, amount, "ScoreKeeperNormal::CalcNextToastyAt");
 }
 
 void ScoreKeeperNormal::HandleTapScore(const TapNote& tn) {
+  if (!HasScoringState("ScoreKeeperNormal::HandleTapScore")) {
+    return;
+  }
   TapNoteScore tns = tn.result.tns;
 
   if (tn.type == TapNoteType_Mine) {
+    if (!IsValidTapNoteScore(tns)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperNormal ignored mine with invalid tap "
+          "score %i.",
+          tns);
+      return;
+    }
     if (tns == TNS_HitMine) {
       if (!m_pPlayerStageStats->m_bFailed) {
-        m_pPlayerStageStats->m_iActualDancePoints +=
-            TapNoteScoreToDancePoints(TNS_HitMine);
+        m_pPlayerStageStats->m_iActualDancePoints = AddIntSaturated(
+            m_pPlayerStageStats->m_iActualDancePoints,
+            TapNoteScoreToDancePoints(TNS_HitMine),
+            "ScoreKeeperNormal::HandleTapScore actual dance points");
       }
-      m_pPlayerStageStats->m_iTapNoteScores[TNS_HitMine] += 1;
+      m_pPlayerStageStats->m_iTapNoteScores[TNS_HitMine] =
+          AddNonNegativeIntSaturated(
+              m_pPlayerStageStats->m_iTapNoteScores[TNS_HitMine], 1,
+              "ScoreKeeperNormal::HandleTapScore mine tap count");
       if (m_MineHitIncrementsMissCombo) {
         HandleComboInternal(0, 0, 1);
       }
@@ -543,6 +786,15 @@ void ScoreKeeperNormal::HandleTapScore(const TapNote& tn) {
 void ScoreKeeperNormal::HandleHoldCheckpointScore(
     const NoteData& nd, int iRow, int iNumHoldsHeldThisRow,
     int iNumHoldsMissedThisRow) {
+  if (!HasScoringState("ScoreKeeperNormal::HandleHoldCheckpointScore")) {
+    return;
+  }
+  iNumHoldsHeldThisRow = ClampComboInput(
+      iNumHoldsHeldThisRow,
+      "ScoreKeeperNormal::HandleHoldCheckpointScore held count");
+  iNumHoldsMissedThisRow = ClampComboInput(
+      iNumHoldsMissedThisRow,
+      "ScoreKeeperNormal::HandleHoldCheckpointScore missed count");
   HandleTapNoteScoreInternal(
       iNumHoldsMissedThisRow == 0 ? TNS_CheckpointHit : TNS_CheckpointMiss,
       TNS_CheckpointHit, iRow);
@@ -551,6 +803,9 @@ void ScoreKeeperNormal::HandleHoldCheckpointScore(
 
 void ScoreKeeperNormal::HandleTapNoteScoreInternal(
     TapNoteScore tns, TapNoteScore maximum, int row) {
+  if (!HasScoringState("ScoreKeeperNormal::HandleTapNoteScoreInternal")) {
+    return;
+  }
   if (!IsValidTapNoteScore(tns) || !IsValidTapNoteScore(maximum)) {
     LOG->Warn(
         "SRC_AUDIT_FIX: ScoreKeeperNormal ignored invalid tap score %i "
@@ -561,30 +816,53 @@ void ScoreKeeperNormal::HandleTapNoteScoreInternal(
 
   // Update dance points.
   if (!m_pPlayerStageStats->m_bFailed) {
-    m_pPlayerStageStats->m_iActualDancePoints += TapNoteScoreToDancePoints(tns);
+    m_pPlayerStageStats->m_iActualDancePoints = AddIntSaturated(
+        m_pPlayerStageStats->m_iActualDancePoints,
+        TapNoteScoreToDancePoints(tns),
+        "ScoreKeeperNormal::HandleTapNoteScoreInternal actual dance points");
   }
 
   // update judged row totals. Respect Combo segments here.
   TimingData* pTiming =
       GetCurrentTimingDataForPlayer(m_pPlayerState->m_PlayerNumber);
   if (tns == TNS_CheckpointHit || tns >= m_MinScoreToContinueCombo) {
-    m_pPlayerStageStats->m_iTapNoteScores[tns] +=
-        GetComboMultiplier(pTiming, row, false);
+    m_pPlayerStageStats->m_iTapNoteScores[tns] = AddNonNegativeIntSaturated(
+        m_pPlayerStageStats->m_iTapNoteScores[tns],
+        GetComboMultiplier(pTiming, row, false),
+        "ScoreKeeperNormal::HandleTapNoteScoreInternal tap count");
   } else if (tns == TNS_CheckpointMiss || tns < m_MinScoreToMaintainCombo) {
-    m_pPlayerStageStats->m_iTapNoteScores[tns] +=
-        GetComboMultiplier(pTiming, row, true);
+    m_pPlayerStageStats->m_iTapNoteScores[tns] = AddNonNegativeIntSaturated(
+        m_pPlayerStageStats->m_iTapNoteScores[tns],
+        GetComboMultiplier(pTiming, row, true),
+        "ScoreKeeperNormal::HandleTapNoteScoreInternal tap count");
   } else {
-    m_pPlayerStageStats->m_iTapNoteScores[tns] += 1;
+    m_pPlayerStageStats->m_iTapNoteScores[tns] = AddNonNegativeIntSaturated(
+        m_pPlayerStageStats->m_iTapNoteScores[tns], 1,
+        "ScoreKeeperNormal::HandleTapNoteScoreInternal tap count");
   }
 
   // increment the current total possible dance score
-  m_pPlayerStageStats->m_iCurPossibleDancePoints +=
-      TapNoteScoreToDancePoints(maximum);
+  m_pPlayerStageStats->m_iCurPossibleDancePoints = AddNonNegativeIntSaturated(
+      m_pPlayerStageStats->m_iCurPossibleDancePoints,
+      std::max(0, TapNoteScoreToDancePoints(maximum)),
+      "ScoreKeeperNormal::HandleTapNoteScoreInternal current possible DP");
 }
 
 void ScoreKeeperNormal::HandleComboInternal(
     int iNumHitContinueCombo, int iNumHitMaintainCombo, int iNumBreakCombo,
     int iRow) {
+  if (!HasScoringState("ScoreKeeperNormal::HandleComboInternal")) {
+    return;
+  }
+  iNumHitContinueCombo = ClampComboInput(
+      iNumHitContinueCombo,
+      "ScoreKeeperNormal::HandleComboInternal continue count");
+  iNumHitMaintainCombo = ClampComboInput(
+      iNumHitMaintainCombo,
+      "ScoreKeeperNormal::HandleComboInternal maintain count");
+  iNumBreakCombo = ClampComboInput(
+      iNumBreakCombo, "ScoreKeeperNormal::HandleComboInternal break count");
+
   // Regular combo
   if (m_ComboIsPerRow) {
     iNumHitContinueCombo = std::min(iNumHitContinueCombo, 1);
@@ -599,17 +877,39 @@ void ScoreKeeperNormal::HandleComboInternal(
       GetCurrentTimingDataForPlayer(m_pPlayerState->m_PlayerNumber);
   if (iNumBreakCombo == 0) {
     int multiplier = GetComboMultiplier(pTiming, iRow, false);
-    m_pPlayerStageStats->m_iCurCombo += iNumHitContinueCombo * multiplier;
+    m_pPlayerStageStats->m_iCurCombo = AddUnsignedDeltaSaturated(
+        m_pPlayerStageStats->m_iCurCombo,
+        MulIntSaturated(
+            iNumHitContinueCombo, multiplier,
+            "ScoreKeeperNormal::HandleComboInternal continue combo"),
+        "ScoreKeeperNormal::HandleComboInternal current combo");
   } else {
     m_pPlayerStageStats->m_iCurCombo = 0;
     int multiplier = GetComboMultiplier(pTiming, iRow, true);
-    m_pPlayerStageStats->m_iCurMissCombo +=
-        (m_MissComboIsPerRow ? 1 : iNumBreakCombo) * multiplier;
+    m_pPlayerStageStats->m_iCurMissCombo = AddUnsignedDeltaSaturated(
+        m_pPlayerStageStats->m_iCurMissCombo,
+        MulIntSaturated(
+            m_MissComboIsPerRow ? 1 : iNumBreakCombo, multiplier,
+            "ScoreKeeperNormal::HandleComboInternal miss combo"),
+        "ScoreKeeperNormal::HandleComboInternal current miss combo");
   }
 }
 
 void ScoreKeeperNormal::HandleRowComboInternal(
     TapNoteScore tns, int iNumTapsInRow, int iRow) {
+  if (!HasScoringState("ScoreKeeperNormal::HandleRowComboInternal")) {
+    return;
+  }
+  if (!IsValidTapNoteScore(tns)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal::HandleRowComboInternal ignored "
+        "invalid tap score %i.",
+        tns);
+    return;
+  }
+  iNumTapsInRow =
+      ClampComboInput(iNumTapsInRow,
+                      "ScoreKeeperNormal::HandleRowComboInternal row taps");
   if (m_ComboIsPerRow) {
     iNumTapsInRow = std::min(iNumTapsInRow, 1);
   }
@@ -618,14 +918,23 @@ void ScoreKeeperNormal::HandleRowComboInternal(
   if (tns >= m_MinScoreToContinueCombo) {
     m_pPlayerStageStats->m_iCurMissCombo = 0;
     int multiplier = GetComboMultiplier(pTiming, iRow, false);
-    m_pPlayerStageStats->m_iCurCombo += iNumTapsInRow * multiplier;
+    m_pPlayerStageStats->m_iCurCombo = AddUnsignedDeltaSaturated(
+        m_pPlayerStageStats->m_iCurCombo,
+        MulIntSaturated(
+            iNumTapsInRow, multiplier,
+            "ScoreKeeperNormal::HandleRowComboInternal continue combo"),
+        "ScoreKeeperNormal::HandleRowComboInternal current combo");
   } else if (tns < m_MinScoreToMaintainCombo) {
     m_pPlayerStageStats->m_iCurCombo = 0;
 
     if (tns <= m_MaxScoreToIncrementMissCombo) {
       int multiplier = GetComboMultiplier(pTiming, iRow, true);
-      m_pPlayerStageStats->m_iCurMissCombo +=
-          (m_MissComboIsPerRow ? 1 : iNumTapsInRow) * multiplier;
+      m_pPlayerStageStats->m_iCurMissCombo = AddUnsignedDeltaSaturated(
+          m_pPlayerStageStats->m_iCurMissCombo,
+          MulIntSaturated(
+              m_MissComboIsPerRow ? 1 : iNumTapsInRow, multiplier,
+              "ScoreKeeperNormal::HandleRowComboInternal miss combo"),
+          "ScoreKeeperNormal::HandleRowComboInternal current miss combo");
     }
   }
 }
@@ -634,6 +943,13 @@ void ScoreKeeperNormal::GetRowCounts(
     const NoteData& nd, int iRow, int& iNumHitContinueCombo,
     int& iNumHitMaintainCombo, int& iNumBreakCombo) {
   iNumHitContinueCombo = iNumHitMaintainCombo = iNumBreakCombo = 0;
+  if (iRow < 0 || iRow > MAX_NOTE_ROW) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal::GetRowCounts ignored invalid row "
+        "%i.",
+        iRow);
+    return;
+  }
   for (int track = 0; track < nd.GetNumTracks(); ++track) {
     const TapNote& tn = nd.GetTapNote(track, iRow);
 
@@ -660,12 +976,27 @@ void ScoreKeeperNormal::GetRowCounts(
 }
 
 void ScoreKeeperNormal::HandleTapRowScore(const NoteData& nd, int iRow) {
+  if (!HasScoringState("ScoreKeeperNormal::HandleTapRowScore")) {
+    return;
+  }
+  if (iRow < 0 || iRow > MAX_NOTE_ROW) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal::HandleTapRowScore ignored invalid "
+        "row %i.",
+        iRow);
+    return;
+  }
   int iNumHitContinueCombo, iNumHitMaintainCombo, iNumBreakCombo;
   GetRowCounts(
       nd, iRow, iNumHitContinueCombo, iNumHitMaintainCombo, iNumBreakCombo);
 
   int iNumTapsInRow =
-      iNumHitContinueCombo + iNumHitMaintainCombo + iNumBreakCombo;
+      AddNonNegativeIntSaturated(
+          iNumHitContinueCombo,
+          AddNonNegativeIntSaturated(
+              iNumHitMaintainCombo, iNumBreakCombo,
+              "ScoreKeeperNormal::HandleTapRowScore row hit totals"),
+          "ScoreKeeperNormal::HandleTapRowScore row tap totals");
   if (iNumTapsInRow <= 0) {
     return;
   }
@@ -674,9 +1005,17 @@ void ScoreKeeperNormal::HandleTapRowScore(const NoteData& nd, int iRow) {
 
   TapNoteScore scoreOfLastTap =
       NoteDataWithScoring::LastTapNoteWithResult(nd, iRow).result.tns;
+  if (!IsValidTapNoteScore(scoreOfLastTap)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal::HandleTapRowScore ignored invalid "
+        "last tap score %i at row %i.",
+        scoreOfLastTap, iRow);
+    return;
+  }
   HandleTapNoteScoreInternal(scoreOfLastTap, TNS_W1, iRow);
 
-  if (GAMESTATE->GetCurrentGame()->m_bCountNotesSeparately) {
+  const Game* pGame = GAMESTATE == nullptr ? nullptr : GAMESTATE->GetCurrentGame();
+  if (pGame != nullptr && pGame->m_bCountNotesSeparately) {
     HandleComboInternal(
         iNumHitContinueCombo, iNumHitMaintainCombo, iNumBreakCombo, iRow);
   } else {
@@ -695,7 +1034,8 @@ void ScoreKeeperNormal::HandleTapRowScore(const NoteData& nd, int iRow) {
 #ifndef DEBUG
   if ((GamePreferences::m_AutoPlay != PC_HUMAN ||
        m_pPlayerState->m_PlayerOptions.GetCurrent().m_fPlayerAutoPlay != 0) &&
-      !GAMESTATE->m_bDemonstrationOrJukebox)  // cheaters always prosper >:D -aj
+      (GAMESTATE == nullptr ||
+       !GAMESTATE->m_bDemonstrationOrJukebox))  // cheaters always prosper >:D -aj
                                               // comment edit
   {
     m_cur_toasty_combo = 0;
@@ -705,10 +1045,14 @@ void ScoreKeeperNormal::HandleTapRowScore(const NoteData& nd, int iRow) {
 
   // Toasty combo
   if (scoreOfLastTap >= m_toasty_min_tns) {
-    m_cur_toasty_combo += iNumTapsInRow;
+    m_cur_toasty_combo = AddNonNegativeIntSaturated(
+        m_cur_toasty_combo, iNumTapsInRow,
+        "ScoreKeeperNormal::HandleTapRowScore toasty combo");
     if (m_cur_toasty_combo > m_next_toasty_at &&
-        !GAMESTATE->m_bDemonstrationOrJukebox) {
-      ++m_cur_toasty_level;
+        (GAMESTATE == nullptr || !GAMESTATE->m_bDemonstrationOrJukebox)) {
+      m_cur_toasty_level = AddNonNegativeIntSaturated(
+          m_cur_toasty_level, 1,
+          "ScoreKeeperNormal::HandleTapRowScore toasty level");
       // Broadcast the message before posting the screen message so that the
       // transition layer can catch the message to know the level and respond
       // accordingly. -Kyz
@@ -717,7 +1061,9 @@ void ScoreKeeperNormal::HandleTapRowScore(const NoteData& nd, int iRow) {
       msg.SetParam("ToastyCombo", m_cur_toasty_combo);
       msg.SetParam("Level", m_cur_toasty_level);
       MESSAGEMAN->Broadcast(msg);
-      SCREENMAN->PostMessageToTopScreen(SM_PlayToasty, 0);
+      if (SCREENMAN != nullptr) {
+        SCREENMAN->PostMessageToTopScreen(SM_PlayToasty, 0);
+      }
       PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
       if (IsValidPlayerNumber(pn)) {
         // TODO: keep a pointer to the Profile.
@@ -753,6 +1099,9 @@ void ScoreKeeperNormal::HandleTapRowScore(const NoteData& nd, int iRow) {
 }
 
 void ScoreKeeperNormal::HandleHoldScore(const TapNote& tn) {
+  if (!HasScoringState("ScoreKeeperNormal::HandleHoldScore")) {
+    return;
+  }
   HoldNoteScore holdScore = tn.HoldResult.hns;
   if (!IsValidHoldNoteScore(holdScore)) {
     LOG->Warn(
@@ -763,13 +1112,20 @@ void ScoreKeeperNormal::HandleHoldScore(const TapNote& tn) {
 
   // update dance points totals
   if (!m_pPlayerStageStats->m_bFailed) {
-    m_pPlayerStageStats->m_iActualDancePoints +=
-        HoldNoteScoreToDancePoints(holdScore);
+    m_pPlayerStageStats->m_iActualDancePoints = AddIntSaturated(
+        m_pPlayerStageStats->m_iActualDancePoints,
+        HoldNoteScoreToDancePoints(holdScore),
+        "ScoreKeeperNormal::HandleHoldScore actual dance points");
   }
   // increment the current total possible dance score
-  m_pPlayerStageStats->m_iCurPossibleDancePoints +=
-      HoldNoteScoreToDancePoints(HNS_Held);
-  m_pPlayerStageStats->m_iHoldNoteScores[holdScore]++;
+  m_pPlayerStageStats->m_iCurPossibleDancePoints = AddNonNegativeIntSaturated(
+      m_pPlayerStageStats->m_iCurPossibleDancePoints,
+      std::max(0, HoldNoteScoreToDancePoints(HNS_Held)),
+      "ScoreKeeperNormal::HandleHoldScore current possible DP");
+  m_pPlayerStageStats->m_iHoldNoteScores[holdScore] =
+      AddNonNegativeIntSaturated(
+          m_pPlayerStageStats->m_iHoldNoteScores[holdScore], 1,
+          "ScoreKeeperNormal::HandleHoldScore hold count");
 
   AddHoldScore(holdScore);
 
@@ -789,6 +1145,13 @@ int ScoreKeeperNormal::GetPossibleDancePoints(
         "null NoteData.");
     return 0;
   }
+  if (!std::isfinite(fSongSeconds) || fSongSeconds < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal::GetPossibleDancePoints normalized "
+        "invalid song seconds %f.",
+        fSongSeconds);
+    fSongSeconds = 0.0f;
+  }
 
   /* Note: If W1 timing is disabled or not active (not course mode),
    * W2 will be used instead. */
@@ -798,18 +1161,48 @@ int ScoreKeeperNormal::GetPossibleDancePoints(
 
   int ret = 0;
 
-  ret += int(radars[RadarCategory_TapsAndHolds]) *
-         TapNoteScoreToDancePoints(TNS_W1, false);
+  ret = AddIntSaturated(
+      ret,
+      MulIntSaturated(
+          RadarValueToNonNegativeInt(
+              radars[RadarCategory_TapsAndHolds],
+              "ScoreKeeperNormal::GetPossibleDancePoints taps and holds"),
+          TapNoteScoreToDancePoints(TNS_W1, false),
+          "ScoreKeeperNormal::GetPossibleDancePoints tap DP"),
+      "ScoreKeeperNormal::GetPossibleDancePoints total");
   if (TICK_HOLDS) {
-    ret += NoteDataUtil::GetTotalHoldTicks(nd, td) *
-           g_iPercentScoreWeight.GetValue(SE_CheckpointHit);
+    ret = AddIntSaturated(
+        ret,
+        MulIntSaturated(
+            UnsignedToIntSaturated(
+                NoteDataUtil::GetTotalHoldTicks(nd, td),
+                "ScoreKeeperNormal::GetPossibleDancePoints hold ticks"),
+            ClampScoreWeight(
+                g_iPercentScoreWeight.GetValue(SE_CheckpointHit),
+                "ScoreKeeperNormal::GetPossibleDancePoints checkpoint DP"),
+            "ScoreKeeperNormal::GetPossibleDancePoints hold tick DP"),
+        "ScoreKeeperNormal::GetPossibleDancePoints total");
   }
-  ret += int(radars[RadarCategory_Holds]) *
-         HoldNoteScoreToDancePoints(HNS_Held, false);
-  ret += int(radars[RadarCategory_Rolls]) *
-         HoldNoteScoreToDancePoints(HNS_Held, false);
+  ret = AddIntSaturated(
+      ret,
+      MulIntSaturated(
+          RadarValueToNonNegativeInt(
+              radars[RadarCategory_Holds],
+              "ScoreKeeperNormal::GetPossibleDancePoints holds"),
+          HoldNoteScoreToDancePoints(HNS_Held, false),
+          "ScoreKeeperNormal::GetPossibleDancePoints hold DP"),
+      "ScoreKeeperNormal::GetPossibleDancePoints total");
+  ret = AddIntSaturated(
+      ret,
+      MulIntSaturated(
+          RadarValueToNonNegativeInt(
+              radars[RadarCategory_Rolls],
+              "ScoreKeeperNormal::GetPossibleDancePoints rolls"),
+          HoldNoteScoreToDancePoints(HNS_Held, false),
+          "ScoreKeeperNormal::GetPossibleDancePoints roll DP"),
+      "ScoreKeeperNormal::GetPossibleDancePoints total");
 
-  return ret;
+  return std::max(0, ret);
 }
 
 int ScoreKeeperNormal::GetPossibleDancePoints(
@@ -831,6 +1224,13 @@ int ScoreKeeperNormal::GetPossibleGradePoints(
         "null NoteData.");
     return 0;
   }
+  if (!std::isfinite(fSongSeconds) || fSongSeconds < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal::GetPossibleGradePoints normalized "
+        "invalid song seconds %f.",
+        fSongSeconds);
+    fSongSeconds = 0.0f;
+  }
 
   /* Note: if W1 timing is disabled or not active (not course mode),
    * W2 will be used instead. */
@@ -840,18 +1240,48 @@ int ScoreKeeperNormal::GetPossibleGradePoints(
 
   int ret = 0;
 
-  ret += int(radars[RadarCategory_TapsAndHolds]) *
-         TapNoteScoreToGradePoints(TNS_W1, false);
+  ret = AddIntSaturated(
+      ret,
+      MulIntSaturated(
+          RadarValueToNonNegativeInt(
+              radars[RadarCategory_TapsAndHolds],
+              "ScoreKeeperNormal::GetPossibleGradePoints taps and holds"),
+          TapNoteScoreToGradePoints(TNS_W1, false),
+          "ScoreKeeperNormal::GetPossibleGradePoints tap grade"),
+      "ScoreKeeperNormal::GetPossibleGradePoints total");
   if (TICK_HOLDS) {
-    ret += NoteDataUtil::GetTotalHoldTicks(nd, td) *
-           g_iGradeWeight.GetValue(SE_CheckpointHit);
+    ret = AddIntSaturated(
+        ret,
+        MulIntSaturated(
+            UnsignedToIntSaturated(
+                NoteDataUtil::GetTotalHoldTicks(nd, td),
+                "ScoreKeeperNormal::GetPossibleGradePoints hold ticks"),
+            ClampScoreWeight(
+                g_iGradeWeight.GetValue(SE_CheckpointHit),
+                "ScoreKeeperNormal::GetPossibleGradePoints checkpoint grade"),
+            "ScoreKeeperNormal::GetPossibleGradePoints hold tick grade"),
+        "ScoreKeeperNormal::GetPossibleGradePoints total");
   }
-  ret += int(radars[RadarCategory_Holds]) *
-         HoldNoteScoreToGradePoints(HNS_Held, false);
-  ret += int(radars[RadarCategory_Rolls]) *
-         HoldNoteScoreToGradePoints(HNS_Held, false);
+  ret = AddIntSaturated(
+      ret,
+      MulIntSaturated(
+          RadarValueToNonNegativeInt(
+              radars[RadarCategory_Holds],
+              "ScoreKeeperNormal::GetPossibleGradePoints holds"),
+          HoldNoteScoreToGradePoints(HNS_Held, false),
+          "ScoreKeeperNormal::GetPossibleGradePoints hold grade"),
+      "ScoreKeeperNormal::GetPossibleGradePoints total");
+  ret = AddIntSaturated(
+      ret,
+      MulIntSaturated(
+          RadarValueToNonNegativeInt(
+              radars[RadarCategory_Rolls],
+              "ScoreKeeperNormal::GetPossibleGradePoints rolls"),
+          HoldNoteScoreToGradePoints(HNS_Held, false),
+          "ScoreKeeperNormal::GetPossibleGradePoints roll grade"),
+      "ScoreKeeperNormal::GetPossibleGradePoints total");
 
-  return ret;
+  return std::max(0, ret);
 }
 
 int ScoreKeeperNormal::GetPossibleGradePoints(
@@ -889,7 +1319,7 @@ int ScoreKeeperNormal::TapNoteScoreToDancePoints(
         tns);
     return 0;
   }
-  if (!GAMESTATE->ShowW1() && tns == TNS_W1) {
+  if (!ShouldShowW1() && tns == TNS_W1) {
     tns = TNS_W2;
   }
 
@@ -902,31 +1332,49 @@ int ScoreKeeperNormal::TapNoteScoreToDancePoints(
       iWeight = 0;
       break;
     case TNS_HitMine:
-      iWeight = g_iPercentScoreWeight.GetValue(SE_HitMine);
+      iWeight = ClampScoreWeight(
+          g_iPercentScoreWeight.GetValue(SE_HitMine),
+          "ScoreKeeperNormal::TapNoteScoreToDancePoints HitMine");
       break;
     case TNS_Miss:
-      iWeight = g_iPercentScoreWeight.GetValue(SE_Miss);
+      iWeight = ClampScoreWeight(
+          g_iPercentScoreWeight.GetValue(SE_Miss),
+          "ScoreKeeperNormal::TapNoteScoreToDancePoints Miss");
       break;
     case TNS_W5:
-      iWeight = g_iPercentScoreWeight.GetValue(SE_W5);
+      iWeight = ClampScoreWeight(
+          g_iPercentScoreWeight.GetValue(SE_W5),
+          "ScoreKeeperNormal::TapNoteScoreToDancePoints W5");
       break;
     case TNS_W4:
-      iWeight = g_iPercentScoreWeight.GetValue(SE_W4);
+      iWeight = ClampScoreWeight(
+          g_iPercentScoreWeight.GetValue(SE_W4),
+          "ScoreKeeperNormal::TapNoteScoreToDancePoints W4");
       break;
     case TNS_W3:
-      iWeight = g_iPercentScoreWeight.GetValue(SE_W3);
+      iWeight = ClampScoreWeight(
+          g_iPercentScoreWeight.GetValue(SE_W3),
+          "ScoreKeeperNormal::TapNoteScoreToDancePoints W3");
       break;
     case TNS_W2:
-      iWeight = g_iPercentScoreWeight.GetValue(SE_W2);
+      iWeight = ClampScoreWeight(
+          g_iPercentScoreWeight.GetValue(SE_W2),
+          "ScoreKeeperNormal::TapNoteScoreToDancePoints W2");
       break;
     case TNS_W1:
-      iWeight = g_iPercentScoreWeight.GetValue(SE_W1);
+      iWeight = ClampScoreWeight(
+          g_iPercentScoreWeight.GetValue(SE_W1),
+          "ScoreKeeperNormal::TapNoteScoreToDancePoints W1");
       break;
     case TNS_CheckpointHit:
-      iWeight = g_iPercentScoreWeight.GetValue(SE_CheckpointHit);
+      iWeight = ClampScoreWeight(
+          g_iPercentScoreWeight.GetValue(SE_CheckpointHit),
+          "ScoreKeeperNormal::TapNoteScoreToDancePoints CheckpointHit");
       break;
     case TNS_CheckpointMiss:
-      iWeight = g_iPercentScoreWeight.GetValue(SE_CheckpointMiss);
+      iWeight = ClampScoreWeight(
+          g_iPercentScoreWeight.GetValue(SE_CheckpointMiss),
+          "ScoreKeeperNormal::TapNoteScoreToDancePoints CheckpointMiss");
       break;
     default:
       LOG->Warn(
@@ -936,7 +1384,7 @@ int ScoreKeeperNormal::TapNoteScoreToDancePoints(
       iWeight = 0;
       break;
   }
-  if (bBeginner && PREFSMAN->m_bMercifulBeginner) {
+  if (bBeginner && PREFSMAN != nullptr && PREFSMAN->m_bMercifulBeginner) {
     iWeight = std::max(0, iWeight);
   }
   return iWeight;
@@ -958,13 +1406,19 @@ int ScoreKeeperNormal::HoldNoteScoreToDancePoints(
       iWeight = 0;
       break;
     case HNS_LetGo:
-      iWeight = g_iPercentScoreWeight.GetValue(SE_LetGo);
+      iWeight = ClampScoreWeight(
+          g_iPercentScoreWeight.GetValue(SE_LetGo),
+          "ScoreKeeperNormal::HoldNoteScoreToDancePoints LetGo");
       break;
     case HNS_Held:
-      iWeight = g_iPercentScoreWeight.GetValue(SE_Held);
+      iWeight = ClampScoreWeight(
+          g_iPercentScoreWeight.GetValue(SE_Held),
+          "ScoreKeeperNormal::HoldNoteScoreToDancePoints Held");
       break;
     case HNS_Missed:
-      iWeight = g_iPercentScoreWeight.GetValue(SE_Missed);
+      iWeight = ClampScoreWeight(
+          g_iPercentScoreWeight.GetValue(SE_Missed),
+          "ScoreKeeperNormal::HoldNoteScoreToDancePoints Missed");
       break;
     default:
       LOG->Warn(
@@ -974,7 +1428,7 @@ int ScoreKeeperNormal::HoldNoteScoreToDancePoints(
       iWeight = 0;
       break;
   }
-  if (bBeginner && PREFSMAN->m_bMercifulBeginner) {
+  if (bBeginner && PREFSMAN != nullptr && PREFSMAN->m_bMercifulBeginner) {
     iWeight = std::max(0, iWeight);
   }
   return iWeight;
@@ -989,7 +1443,7 @@ int ScoreKeeperNormal::TapNoteScoreToGradePoints(
         tns);
     return 0;
   }
-  if (!GAMESTATE->ShowW1() && tns == TNS_W1) {
+  if (!ShouldShowW1() && tns == TNS_W1) {
     tns = TNS_W2;
   }
 
@@ -1004,31 +1458,49 @@ int ScoreKeeperNormal::TapNoteScoreToGradePoints(
       iWeight = 0;
       break;
     case TNS_HitMine:
-      iWeight = g_iGradeWeight.GetValue(SE_HitMine);
+      iWeight = ClampScoreWeight(
+          g_iGradeWeight.GetValue(SE_HitMine),
+          "ScoreKeeperNormal::TapNoteScoreToGradePoints HitMine");
       break;
     case TNS_Miss:
-      iWeight = g_iGradeWeight.GetValue(SE_Miss);
+      iWeight = ClampScoreWeight(
+          g_iGradeWeight.GetValue(SE_Miss),
+          "ScoreKeeperNormal::TapNoteScoreToGradePoints Miss");
       break;
     case TNS_W5:
-      iWeight = g_iGradeWeight.GetValue(SE_W5);
+      iWeight = ClampScoreWeight(
+          g_iGradeWeight.GetValue(SE_W5),
+          "ScoreKeeperNormal::TapNoteScoreToGradePoints W5");
       break;
     case TNS_W4:
-      iWeight = g_iGradeWeight.GetValue(SE_W4);
+      iWeight = ClampScoreWeight(
+          g_iGradeWeight.GetValue(SE_W4),
+          "ScoreKeeperNormal::TapNoteScoreToGradePoints W4");
       break;
     case TNS_W3:
-      iWeight = g_iGradeWeight.GetValue(SE_W3);
+      iWeight = ClampScoreWeight(
+          g_iGradeWeight.GetValue(SE_W3),
+          "ScoreKeeperNormal::TapNoteScoreToGradePoints W3");
       break;
     case TNS_W2:
-      iWeight = g_iGradeWeight.GetValue(SE_W2);
+      iWeight = ClampScoreWeight(
+          g_iGradeWeight.GetValue(SE_W2),
+          "ScoreKeeperNormal::TapNoteScoreToGradePoints W2");
       break;
     case TNS_W1:
-      iWeight = g_iGradeWeight.GetValue(SE_W1);
+      iWeight = ClampScoreWeight(
+          g_iGradeWeight.GetValue(SE_W1),
+          "ScoreKeeperNormal::TapNoteScoreToGradePoints W1");
       break;
     case TNS_CheckpointHit:
-      iWeight = g_iGradeWeight.GetValue(SE_CheckpointHit);
+      iWeight = ClampScoreWeight(
+          g_iGradeWeight.GetValue(SE_CheckpointHit),
+          "ScoreKeeperNormal::TapNoteScoreToGradePoints CheckpointHit");
       break;
     case TNS_CheckpointMiss:
-      iWeight = g_iGradeWeight.GetValue(SE_CheckpointMiss);
+      iWeight = ClampScoreWeight(
+          g_iGradeWeight.GetValue(SE_CheckpointMiss),
+          "ScoreKeeperNormal::TapNoteScoreToGradePoints CheckpointMiss");
       break;
     default:
       LOG->Warn(
@@ -1038,7 +1510,7 @@ int ScoreKeeperNormal::TapNoteScoreToGradePoints(
       iWeight = 0;
       break;
   }
-  if (bBeginner && PREFSMAN->m_bMercifulBeginner) {
+  if (bBeginner && PREFSMAN != nullptr && PREFSMAN->m_bMercifulBeginner) {
     iWeight = std::max(0, iWeight);
   }
   return iWeight;
@@ -1060,13 +1532,19 @@ int ScoreKeeperNormal::HoldNoteScoreToGradePoints(
       iWeight = 0;
       break;
     case HNS_LetGo:
-      iWeight = g_iGradeWeight.GetValue(SE_LetGo);
+      iWeight = ClampScoreWeight(
+          g_iGradeWeight.GetValue(SE_LetGo),
+          "ScoreKeeperNormal::HoldNoteScoreToGradePoints LetGo");
       break;
     case HNS_Held:
-      iWeight = g_iGradeWeight.GetValue(SE_Held);
+      iWeight = ClampScoreWeight(
+          g_iGradeWeight.GetValue(SE_Held),
+          "ScoreKeeperNormal::HoldNoteScoreToGradePoints Held");
       break;
     case HNS_Missed:
-      iWeight = g_iGradeWeight.GetValue(SE_Missed);
+      iWeight = ClampScoreWeight(
+          g_iGradeWeight.GetValue(SE_Missed),
+          "ScoreKeeperNormal::HoldNoteScoreToGradePoints Missed");
       break;
     default:
       LOG->Warn(
@@ -1076,7 +1554,7 @@ int ScoreKeeperNormal::HoldNoteScoreToGradePoints(
       iWeight = 0;
       break;
   }
-  if (bBeginner && PREFSMAN->m_bMercifulBeginner) {
+  if (bBeginner && PREFSMAN != nullptr && PREFSMAN->m_bMercifulBeginner) {
     iWeight = std::max(0, iWeight);
   }
   return iWeight;
