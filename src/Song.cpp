@@ -1342,11 +1342,19 @@ void Song::Save(bool autosave) {
   if (autosave) {
     return;
   }
-  SaveToCacheFile();
+  if (!SaveToCacheFile()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Failed to save cache file for '%s'.",
+        m_sSongDir.c_str());
+  }
   // If one of the charts uses split timing, then it cannot be accurately
   // saved in the .sm format.  So saving the .sm is disabled.
   if (!AnyChartUsesSplitTiming()) {
-    SaveToSMFile();
+    if (!SaveToSMFile()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Failed to save SM sidecar for '%s'.",
+          m_sSongDir.c_str());
+    }
   }
   // SaveToDWIFile();
 
@@ -1365,7 +1373,11 @@ void Song::Save(bool autosave) {
       LOG->UserLog("Song file", sOldPath, "couldn't be backed up.");
       // Don't remove.
     } else {
-      FILEMAN->Remove(sOldPath);
+      if (!FILEMAN->Remove(sOldPath) && DoesFileExist(sOldPath)) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: Failed to remove converted legacy simfile '%s'.",
+            sOldPath.c_str());
+      }
     }
   }
 }
@@ -1376,7 +1388,12 @@ bool Song::SaveToSMFile() {
 
   // If the file exists, make a backup.
   if (IsAFile(sPath)) {
-    FileCopy(sPath, sPath + ".old");
+    if (!FileCopy(sPath, sPath + ".old")) {
+      LOG->UserLog(
+          "Song file", sPath,
+          "couldn't be backed up before SM save; aborting save.");
+      return false;
+    }
   }
 
   std::vector<Steps*> vpStepsToSave;
@@ -1412,7 +1429,12 @@ bool Song::SaveToSSCFile(std::string sPath, bool bSavingCache, bool autosave) {
 
   // If the file exists, make a backup.
   if (!bSavingCache && !autosave && IsAFile(path)) {
-    FileCopy(path, path + ".old");
+    if (!FileCopy(path, path + ".old")) {
+      LOG->UserLog(
+          "Song file", path,
+          "couldn't be backed up before SSC save; aborting save.");
+      return false;
+    }
   }
 
   std::vector<Steps*> vpStepsToSave;
@@ -1426,9 +1448,6 @@ bool Song::SaveToSSCFile(std::string sPath, bool bSavingCache, bool autosave) {
       continue;
     }
 
-    if (!bSavingCache) {
-      pSteps->SetFilename(path);
-    }
     vpStepsToSave.push_back(pSteps);
   }
   for (Steps* s : m_UnknownStyleSteps) {
@@ -1470,6 +1489,7 @@ bool Song::SaveToSSCFile(std::string sPath, bool bSavingCache, bool autosave) {
 
   // Mark these steps saved to disk.
   for (Steps* s : vpStepsToSave) {
+    s->SetFilename(path);
     s->SetSavedToDisk(true);
   }
 
@@ -1496,7 +1516,12 @@ bool Song::SaveToDWIFile() {
 
   // If the file exists, make a backup.
   if (IsAFile(sPath)) {
-    FileCopy(sPath, sPath + ".old");
+    if (!FileCopy(sPath, sPath + ".old")) {
+      LOG->UserLog(
+          "Song file", sPath,
+          "couldn't be backed up before DWI save; aborting save.");
+      return false;
+    }
   }
 
   return NotesWriterDWI::Write(sPath, *this);
@@ -1514,7 +1539,12 @@ void Song::RemoveAutosave() {
             SetExtension(m_vpSteps[i]->GetFilename(), extension));
       }
     }
-    FILEMAN->Remove(autosave_path);
+    if (!FILEMAN->Remove(autosave_path) && DoesFileExist(autosave_path)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Failed to remove autosave file '%s'.",
+          autosave_path.c_str());
+      return;
+    }
     m_loaded_from_autosave = false;
   }
 }
