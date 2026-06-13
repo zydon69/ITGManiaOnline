@@ -48,7 +48,15 @@ static Preference<float> g_fConstantUpdateDeltaSeconds(
 void HandleInputEvents(float fDeltaTime);
 
 static float g_fUpdateRate = 1;
-void GameLoop::SetUpdateRate(float fUpdateRate) { g_fUpdateRate = fUpdateRate; }
+void GameLoop::SetUpdateRate(float fUpdateRate) {
+  if (!std::isfinite(fUpdateRate) || fUpdateRate < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Ignoring invalid update rate %.6f.",
+        fUpdateRate);
+    return;
+  }
+  g_fUpdateRate = fUpdateRate;
+}
 
 float GameLoop::GetUpdateRate() { return g_fUpdateRate; }
 
@@ -162,6 +170,9 @@ static void LogLoopPerfSnapshot(
 static void CheckGameLoopTimerSkips(float fDeltaTime) {
   static int iLastFPS = 0;
   int iThisFPS = DISPLAY->GetFPS();
+  if (iThisFPS <= 0) {
+    return;
+  }
 
   /* If vsync is on, and we have a solid framerate (vsync == refresh and we've
    * sustained this for at least one second), we expect the amount of time for
@@ -372,6 +383,12 @@ void GameLoop::UpdateAllButDraw(bool bRunningFromVBLANK) {
   float fDeltaTime = (g_fConstantUpdateDeltaSeconds > 0)
                          ? g_fConstantUpdateDeltaSeconds
                          : g_GameplayTimer.GetDeltaTime();
+  if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: GameLoop clamped invalid delta %.6f.",
+        fDeltaTime);
+    fDeltaTime = 0.0f;
+  }
   const float rawDeltaTime = fDeltaTime;
 
   if (g_HasLastLoopPerf && rawDeltaTime >= kPerfTraceFrameHitchSeconds) {
@@ -509,7 +526,10 @@ ConcurrentRenderer::ConcurrentRenderer() : m_Event("ConcurrentRenderer") {
 
 ConcurrentRenderer::~ConcurrentRenderer() {
   ASSERT(m_State == RENDERING_IDLE);
+  m_Event.Lock();
   m_bShutdown = true;
+  m_Event.Signal();
+  m_Event.Unlock();
   m_Thread.Wait();
 }
 
@@ -542,14 +562,19 @@ void ConcurrentRenderer::Stop() {
 void ConcurrentRenderer::RenderThread() {
   ASSERT(SCREENMAN != nullptr);
 
-  while (!m_bShutdown) {
+  while (true) {
     m_Event.Lock();
     while (m_State == RENDERING_IDLE && !m_bShutdown) {
       m_Event.Wait();
     }
+    if (m_bShutdown) {
+      m_Event.Unlock();
+      break;
+    }
+    State state = m_State;
     m_Event.Unlock();
 
-    if (m_State == RENDERING_START) {
+    if (state == RENDERING_START) {
       /* We're starting to render. Set up, and then kick the event to wake
        * up the calling thread. */
       DISPLAY->BeginConcurrentRendering();
@@ -566,14 +591,23 @@ void ConcurrentRenderer::RenderThread() {
     /* This is started during Update(). The next thing the game loop
      * will do is Draw, so shift operations around to put Draw at the
      * top. This makes sure updates are seamless. */
-    if (m_State == RENDERING_ACTIVE) {
+    m_Event.Lock();
+    state = m_State;
+    m_Event.Unlock();
+    if (state == RENDERING_ACTIVE) {
       SCREENMAN->Draw();
 
       float fDeltaTime = g_GameplayTimer.GetDeltaTime();
+      if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
+        fDeltaTime = 0.0f;
+      }
       SCREENMAN->Update(fDeltaTime);
     }
 
-    if (m_State == RENDERING_END) {
+    m_Event.Lock();
+    state = m_State;
+    m_Event.Unlock();
+    if (state == RENDERING_END) {
       LOG->Trace("ConcurrentRenderer::RenderThread done");
 
       DISPLAY->EndConcurrentRendering();
@@ -598,7 +632,11 @@ void GameLoop::StartConcurrentRendering() {
   g_pConcurrentRenderer->Start();
 }
 
-void GameLoop::FinishConcurrentRendering() { g_pConcurrentRenderer->Stop(); }
+void GameLoop::FinishConcurrentRendering() {
+  if (g_pConcurrentRenderer != nullptr) {
+    g_pConcurrentRenderer->Stop();
+  }
+}
 
 /*
  * (c) 2001-2005 Chris Danford, Glenn Maynard
