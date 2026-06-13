@@ -1,6 +1,7 @@
 #include "NoteDataWithScoring.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <vector>
 
@@ -9,6 +10,7 @@
 #include "GameConstantsAndTypes.h"
 #include "GameState.h"
 #include "NoteData.h"
+#include "NoteDataUtil.h"
 #include "NoteTypes.h"
 #include "PlayerNumber.h"
 #include "PlayerStageStats.h"
@@ -168,6 +170,9 @@ namespace {
 // Return the ratio of actual combo to max combo.
 float GetActualVoltageRadarValue(
     const NoteData& in, float fSongSeconds, const PlayerStageStats& pss) {
+  if (!std::isfinite(fSongSeconds) || fSongSeconds <= 0.0f) {
+    return 0.0f;
+  }
   /* STATSMAN->m_CurStageStats.iMaxCombo is unrelated to GetNumTapNotes:
    * m_bComboContinuesBetweenSongs might be on, and the way combo is counted
    * varies depending on the mode and score keeper. Instead, let's use the
@@ -292,6 +297,14 @@ static void UpdateHittable(int curr_row, int& first, int& last) {
 void NoteDataWithScoring::GetActualRadarValues(
     const NoteData& in, const PlayerStageStats& pss, float song_seconds,
     RadarValues& out) {
+  const TimingData* timing =
+      GAMESTATE != nullptr ? GAMESTATE->GetProcessedTimingData() : nullptr;
+  GetActualRadarValues(in, pss, timing, song_seconds, out);
+}
+
+void NoteDataWithScoring::GetActualRadarValues(
+    const NoteData& in, const PlayerStageStats& pss, const TimingData* timing,
+    float song_seconds, RadarValues& out) {
   // Anybody editing this function should also examine
   // NoteDataUtil::CalculateRadarValues to make sure it handles things the
   // same way.
@@ -303,7 +316,8 @@ void NoteDataWithScoring::GetActualRadarValues(
 
   NoteData::all_tracks_const_iterator curr_note =
       in.GetTapNoteRangeAllTracks(0, MAX_NOTE_ROW);
-  TimingData* timing = GAMESTATE->GetProcessedTimingData();
+  RadarValues possible;
+  NoteDataUtil::CalculateRadarValues(in, song_seconds, timing, possible);
   // first_hittable_row and last_hittable_row exist so that
   // GetActualVoltageRadarValue can be passed the correct song length.
   // GetActualVoltageRadarValue scores based on the max combo, a full combo
@@ -320,7 +334,18 @@ void NoteDataWithScoring::GetActualRadarValues(
       state.curr_row = curr_note.Row();
       state.num_notes_on_curr_row = 0;
       state.num_holds_on_curr_row = 0;
-      state.judgable = timing->IsJudgableAtRow(state.curr_row);
+      if (timing == nullptr) {
+        static bool loggedMissingTiming = false;
+        if (!loggedMissingTiming) {
+          LOG->Trace(
+              "SRC_AUDIT_FIX GetActualRadarValues used judgable fallback "
+              "without timing data.");
+          loggedMissingTiming = true;
+        }
+        state.judgable = true;
+      } else {
+        state.judgable = timing->IsJudgableAtRow(state.curr_row);
+      }
       for (size_t n = 0; n < state.hold_ends.size(); ++n) {
         if (state.hold_ends[n].end_row < state.curr_row) {
           state.hold_ends.erase(state.hold_ends.begin() + n);
@@ -331,8 +356,7 @@ void NoteDataWithScoring::GetActualRadarValues(
       state.last_time_on_row = -9999;
       state.worst_tns_on_row = TapNoteScore_Invalid;
     }
-    bool for_this_player = curr_note->pn == pn || pn == PLAYER_INVALID ||
-                           curr_note->pn == PLAYER_INVALID;
+    bool for_this_player = NoteBelongsToPlayer(*curr_note, pn);
     if (state.judgable && for_this_player) {
       switch (curr_note->type) {
         case TapNoteType_HoldTail:
@@ -388,16 +412,20 @@ void NoteDataWithScoring::GetActualRadarValues(
   }
   DoRowEndRadarActualCalc(state, out);
 
-  // ScreenGameplay passes in the RadarValues that were calculated by
-  // NoteDataUtil::CalculateRadarValues, so those are reused here. -Kyz
-  int note_count = out[RadarCategory_Notes];
-  int jump_count = out[RadarCategory_Jumps];
-  int hold_count = out[RadarCategory_Holds];
-  int tap_count = out[RadarCategory_TapsAndHolds];
-  float hittable_steps_length = std::max(
-      0.0f,
-      timing->GetElapsedTimeFromBeat(NoteRowToBeat(last_hittable_row)) -
-          timing->GetElapsedTimeFromBeat(NoteRowToBeat(first_hittable_row)));
+  int note_count = possible[RadarCategory_Notes];
+  int jump_count = possible[RadarCategory_Jumps];
+  int hold_count = possible[RadarCategory_Holds];
+  float hittable_steps_length = 0.0f;
+  if (first_hittable_row != -1 && last_hittable_row != -1) {
+    if (timing != nullptr) {
+      hittable_steps_length = std::max(
+          0.0f,
+          timing->GetElapsedTimeFromBeat(NoteRowToBeat(last_hittable_row)) -
+              timing->GetElapsedTimeFromBeat(NoteRowToBeat(first_hittable_row)));
+    } else if (std::isfinite(song_seconds) && song_seconds > 0.0f) {
+      hittable_steps_length = song_seconds;
+    }
+  }
   // The for loop and the assert are used to ensure that all fields of
   // RadarValue get set in here.
   FOREACH_ENUM(RadarCategory, rc) {
@@ -450,7 +478,7 @@ void NoteDataWithScoring::GetActualRadarValues(
         out[rc] = state.lifts_hit;
         break;
       case RadarCategory_Fakes:
-        out[rc] = out[rc];
+        out[rc] = 0.0f;
         break;
       case RadarCategory_Notes:
         out[rc] = state.notes_hit;

@@ -7,6 +7,7 @@
 struct RadarValues;
 class NoteData;
 class PlayerStageStats;
+class TimingData;
 struct TapNote;
 
 /** @brief NoteData with scores for each TapNote and HoldNote. */
@@ -30,6 +31,9 @@ const TapNote& LastTapNoteWithResult(
 void GetActualRadarValues(
     const NoteData& in, const PlayerStageStats& pss, float song_seconds,
     RadarValues& out);
+void GetActualRadarValues(
+    const NoteData& in, const PlayerStageStats& pss, const TimingData* timing,
+    float song_seconds, RadarValues& out);
 };  // namespace NoteDataWithScoring
 
 #endif

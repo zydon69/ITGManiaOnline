@@ -3032,14 +3032,12 @@ void ScreenGameplay::SaveStats() {
     PlayerStageStats& pss = *pi->GetPlayerStageStats();
     const NoteData& nd = pi->m_pPlayer->GetNoteData();
     PlayerNumber pn = pi->m_pn;
+    const TimingData* timing = GAMESTATE->m_pCurSteps[pn]->GetTimingData();
 
-    GAMESTATE->SetProcessedTimingData(
-        GAMESTATE->m_pCurSteps[pn]->GetTimingData());
-    NoteDataUtil::CalculateRadarValues(nd, fMusicLen, rv);
+    NoteDataUtil::CalculateRadarValues(nd, fMusicLen, timing, rv);
     pss.m_radarPossible += rv;
-    NoteDataWithScoring::GetActualRadarValues(nd, pss, fMusicLen, rv);
+    NoteDataWithScoring::GetActualRadarValues(nd, pss, timing, fMusicLen, rv);
     pss.m_radarActual += rv;
-    GAMESTATE->SetProcessedTimingData(nullptr);
   }
 }
 
