@@ -996,7 +996,7 @@ int Course::GetMeter(StepsType st, CourseDifficulty cd) const {
   if (m_iCustomMeter[cd] != -1) {
     return m_iCustomMeter[cd];
   }
-  const Trail* pTrail = GetTrail(st);
+  const Trail* pTrail = GetTrail(st, cd);
   if (pTrail != nullptr) {
     return pTrail->GetMeter();
   }
