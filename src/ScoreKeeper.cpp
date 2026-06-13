@@ -17,9 +17,32 @@ ScoreKeeper::ScoreKeeper(
   m_pPlayerStageStats = pPlayerStageStats;
 }
 
+bool ScoreKeeper::HasScoringState(const char* context) const {
+  if (m_pPlayerState != nullptr && m_pPlayerStageStats != nullptr) {
+    return true;
+  }
+
+  LOG->Warn(
+      "SRC_AUDIT_FIX: %s ignored callback with incomplete scoring state: "
+      "PlayerState=%p PlayerStageStats=%p.",
+      context == nullptr ? "ScoreKeeper" : context,
+      static_cast<void*>(m_pPlayerState),
+      static_cast<void*>(m_pPlayerStageStats));
+  return false;
+}
+
 void ScoreKeeper::GetScoreOfLastTapInRow(
     const NoteData& nd, int iRow, TapNoteScore& tnsOut, int& iNumTapsInRowOut) {
   int iNum = 0;
+  if (iRow < 0 || iRow > MAX_NOTE_ROW) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeper ignored invalid row %i while reading row "
+        "score.",
+        iRow);
+    tnsOut = TNS_None;
+    iNumTapsInRowOut = 0;
+    return;
+  }
 
   for (int track = 0; track < nd.GetNumTracks(); ++track) {
     const TapNote& tn = nd.GetTapNote(track, iRow);
@@ -40,6 +63,14 @@ void ScoreKeeper::GetScoreOfLastTapInRow(
 ScoreKeeper* ScoreKeeper::MakeScoreKeeper(
     std::string sClassName, PlayerState* pPlayerState,
     PlayerStageStats* pPlayerStageStats) {
+  if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: MakeScoreKeeper creating '%s' with incomplete scoring "
+        "state: PlayerState=%p PlayerStageStats=%p.",
+        sClassName.c_str(), static_cast<void*>(pPlayerState),
+        static_cast<void*>(pPlayerStageStats));
+  }
+
   if (sClassName == "ScoreKeeperNormal") {
     return new ScoreKeeperNormal(pPlayerState, pPlayerStageStats);
   } else if (sClassName == "ScoreKeeperRave") {

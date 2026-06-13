@@ -30,6 +30,7 @@ class ScoreKeeper {
  protected:
   PlayerState* m_pPlayerState;
   PlayerStageStats* m_pPlayerStageStats;
+  bool HasScoringState(const char* context) const;
 
   // Common toggles that this class handles directly:
 
