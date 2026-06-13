@@ -740,6 +740,13 @@ bool NotesWriterSSC::Write(
       return false;
     }
   }
+  if (!bSavingCache && vpStepsToSave.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-590: refusing to write playable SSC '%s' without "
+        "steps.",
+        sPath.c_str());
+    return false;
+  }
 
   int flags = RageFile::WRITE;
 
