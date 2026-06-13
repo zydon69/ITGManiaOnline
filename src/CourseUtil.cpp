@@ -434,7 +434,14 @@ void CourseUtil::SortByMostRecentlyPlayedForMachine(
 }
 
 void CourseUtil::MakeDefaultEditCourseEntry(CourseEntry& out) {
-  out.songID.FromSong(GAMESTATE->GetDefaultSong());
+  Song* pDefaultSong =
+      GAMESTATE == nullptr ? nullptr : GAMESTATE->GetDefaultSong();
+  if (pDefaultSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-670: default edit course entry requested without "
+        "default song.");
+  }
+  out.songID.FromSong(pDefaultSong);
   out.stepsCriteria.m_difficulty = Difficulty_Medium;
 }
 
