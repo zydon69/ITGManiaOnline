@@ -294,6 +294,12 @@ Steps* Song::CreateSteps() {
 }
 
 void Song::InitSteps(Steps* pSteps) {
+  if (pSteps == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-606: refused to initialize null steps for '%s'.",
+        m_sSongDir.c_str());
+    return;
+  }
   // TimingData is initially empty (i.e. defaults to song timing)
   pSteps->m_sAttackString = this->m_sAttackString;
   pSteps->m_Attacks = this->m_Attacks;
@@ -2038,6 +2044,11 @@ std::string Song::GetTranslitFullTitle() const {
 }
 
 void Song::AddSteps(Steps* pSteps) {
+  if (pSteps == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-606: refused to add null steps to '%s'.",
+              m_sSongDir.c_str());
+    return;
+  }
   // Songs of unknown stepstype are saved as a forwards compatibility feature
   // so that editing a simfile made by a future version that has a new style
   // won't delete those steps. -Kyz
