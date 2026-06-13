@@ -1,6 +1,8 @@
 #include "PlayerState.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -18,6 +20,101 @@
 #include "Steps.h"
 #include "global.h"
 
+namespace {
+bool IsValidPlayerNumberForState(PlayerNumber pn) {
+  return pn == PLAYER_INVALID || (pn >= PLAYER_1 && pn < NUM_PLAYERS);
+}
+
+bool IsUsablePlayerNumber(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+bool IsUsableMultiPlayer(MultiPlayer mp) {
+  return mp >= MultiPlayer_P1 && mp < NUM_MultiPlayer;
+}
+
+bool IsValidModsLevel(ModsLevel level) {
+  return level >= ModsLevel_Preferred && level < NUM_ModsLevel;
+}
+
+bool IsValidAttackLevelForActiveAttack(AttackLevel level) {
+  return level >= ATTACK_LEVEL_1 && level < NUM_ATTACK_LEVELS;
+}
+
+TimingData& FallbackDisplayedTiming() {
+  static TimingData fallbackTiming;
+  return fallbackTiming;
+}
+
+Attack NormalizeAttackForLaunch(const Attack& source, const SongPosition& position) {
+  Attack attack = source;
+  if (!std::isfinite(attack.fSecsRemaining) || attack.fSecsRemaining < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState clamped invalid attack duration %f to 0.",
+        attack.fSecsRemaining);
+    attack.fSecsRemaining = 0.0f;
+  }
+  if (!std::isfinite(attack.fStartSecond)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState replaced non-finite attack start %f.",
+        attack.fStartSecond);
+    attack.fStartSecond = ATTACK_STARTS_NOW;
+  }
+  if (!IsValidAttackLevelForActiveAttack(attack.level)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState replaced invalid attack level %i.",
+        static_cast<int>(attack.level));
+    attack.level = ATTACK_LEVEL_1;
+  }
+  if (attack.fStartSecond == ATTACK_STARTS_NOW) {
+    attack.fStartSecond =
+        std::isfinite(position.m_fMusicSeconds) ? position.m_fMusicSeconds : 0.0f;
+  } else if (attack.fStartSecond < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState clamped negative attack start %f to 0.",
+        attack.fStartSecond);
+    attack.fStartSecond = 0.0f;
+  }
+  return attack;
+}
+
+bool NormalizeActiveAttack(Attack& attack) {
+  bool usable = true;
+  if (attack.fStartSecond == ATTACK_STARTS_NOW) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState converted active attack sentinel start to "
+        "0.");
+    attack.fStartSecond = 0.0f;
+  }
+  if (!std::isfinite(attack.fStartSecond) || attack.fStartSecond < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState disabled active attack with invalid start "
+        "%f.",
+        attack.fStartSecond);
+    usable = false;
+  }
+  if (!std::isfinite(attack.fSecsRemaining) || attack.fSecsRemaining < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState disabled active attack with invalid "
+        "duration %f.",
+        attack.fSecsRemaining);
+    usable = false;
+  }
+  if (!IsValidAttackLevelForActiveAttack(attack.level)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState disabled active attack with invalid level "
+        "%i.",
+        static_cast<int>(attack.level));
+    usable = false;
+  }
+  if (!usable) {
+    attack.bOn = false;
+    attack.fSecsRemaining = 0.0f;
+  }
+  return usable;
+}
+}  // namespace
+
 PlayerState::PlayerState() {
   m_PlayerNumber = PLAYER_INVALID;
   m_mp = MultiPlayer_Invalid;
@@ -26,6 +123,9 @@ PlayerState::PlayerState() {
 
 void PlayerState::Reset() {
   m_NotefieldZoom = 1.0f;
+  m_Position.Reset();
+  m_CacheDisplayedBeat.clear();
+  m_CacheNoteStat.clear();
   m_PlayerOptions.Init();
 
   m_fLastDrawnBeat = -100;
@@ -45,6 +145,7 @@ void PlayerState::Reset() {
 
   m_iTapsHitSinceLastHasteUpdate = 0;
   m_iTapsMissedSinceLastHasteUpdate = 0;
+  m_fReadBPM = 0.0f;
 
   m_fSuperMeter = 0;  // between 0 and NUM_ATTACK_LEVELS
   m_fSuperMeterGrowthScale = 1;
@@ -55,6 +156,11 @@ void PlayerState::Reset() {
 }
 
 void PlayerState::Update(float fDelta) {
+  if (!std::isfinite(fDelta) || fDelta < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState ignored invalid update delta %f.", fDelta);
+    fDelta = 0.0f;
+  }
   // TRICKY: GAMESTATE->Update is run before any of the Screen update's,
   // so we'll clear these flags here and let them get turned on later
   m_bAttackBeganThisUpdate = false;
@@ -105,11 +211,30 @@ void PlayerState::Update(float fDelta) {
 }
 
 void PlayerState::SetPlayerNumber(PlayerNumber pn) {
+  if (!IsValidPlayerNumberForState(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState rejected invalid PlayerNumber %i.",
+        static_cast<int>(pn));
+    pn = PLAYER_INVALID;
+  }
   m_PlayerNumber = pn;
   FOREACH_ENUM(ModsLevel, ml) { m_PlayerOptions.Get(ml).m_pn = pn; }
 }
 
 void PlayerState::ResetToDefaultPlayerOptions(ModsLevel l) {
+  if (!IsValidModsLevel(l)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState rejected invalid ModsLevel %i for default "
+        "options.",
+        static_cast<int>(l));
+    return;
+  }
+  if (GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState cannot reset default options without "
+        "GAMESTATE.");
+    return;
+  }
   PlayerOptions po;
   GAMESTATE->GetDefaultPlayerOptions(po);
   m_PlayerOptions.Assign(l, po);
