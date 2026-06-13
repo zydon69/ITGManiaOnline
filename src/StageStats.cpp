@@ -26,6 +26,60 @@
 #include "Style.h"
 #include "global.h"
 
+namespace {
+bool IsValidPlayerNumber(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+bool IsValidMultiPlayer(MultiPlayer mp) {
+  return mp >= MultiPlayer_P1 && mp < NUM_MultiPlayer;
+}
+
+bool HasUsableStageStats(
+    const PlayerStageStats& pss, const std::vector<Song*>& playedSongs,
+    const std::vector<Song*>& possibleSongs, PlayMode playMode,
+    const char* context) {
+  if (playedSongs.empty() || possibleSongs.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s received empty stage song lists: played=%zu "
+        "possible=%zu.",
+        context, playedSongs.size(), possibleSongs.size());
+    return false;
+  }
+  if (pss.m_iStepsPlayed <= 0 || pss.m_vpPossibleSteps.empty() ||
+      pss.m_vpPossibleSteps[0] == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s received incomplete player stats: stepsPlayed=%i "
+        "possibleSteps=%zu.",
+        context, pss.m_iStepsPlayed, pss.m_vpPossibleSteps.size());
+    return false;
+  }
+  if (playMode < 0 || playMode >= NUM_PlayMode) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s received invalid play mode %i.",
+        context, playMode);
+    return false;
+  }
+  if (pss.m_vpPossibleSteps[0]->GetDifficulty() < 0 ||
+      pss.m_vpPossibleSteps[0]->GetDifficulty() >= NUM_Difficulty) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s received invalid difficulty %i.",
+        context, pss.m_vpPossibleSteps[0]->GetDifficulty());
+    return false;
+  }
+  if (playedSongs.size() != static_cast<size_t>(pss.m_iStepsPlayed) ||
+      possibleSongs.size() != pss.m_vpPossibleSteps.size()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s received mismatched stage stats: playedSongs=%zu "
+        "stepsPlayed=%i possibleSongs=%zu possibleSteps=%zu.",
+        context, playedSongs.size(), pss.m_iStepsPlayed, possibleSongs.size(),
+        pss.m_vpPossibleSteps.size());
+    return false;
+  }
+  return true;
+}
+}  // namespace
+
 /* Arcade:	for the current stage (one song).
  * Nonstop/Oni/Endless:	 for current course (which usually contains multiple
  * songs)
@@ -50,58 +104,50 @@ StageStats::StageStats() {
 void StageStats::Init() { *this = StageStats(); }
 
 void StageStats::AssertValid(PlayerNumber pn) const {
-  ASSERT(m_vpPlayedSongs.size() != 0);
-  ASSERT(m_vpPossibleSongs.size() != 0);
-  if (m_vpPlayedSongs[0]) {
-    CHECKPOINT_M(m_vpPlayedSongs[0]->GetTranslitFullTitle());
+  if (!IsValidPlayerNumber(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: StageStats::AssertValid ignored invalid player %i.",
+        pn);
+    return;
   }
-  ASSERT(m_player[pn].m_iStepsPlayed > 0);
-  ASSERT(m_player[pn].m_vpPossibleSteps.size() != 0);
-  ASSERT(m_player[pn].m_vpPossibleSteps[0] != nullptr);
-  ASSERT_M(m_playMode < NUM_PlayMode, ssprintf("playmode %i", m_playMode));
-  ASSERT_M(
-      m_player[pn].m_vpPossibleSteps[0]->GetDifficulty() < NUM_Difficulty,
-      ssprintf(
-          "Invalid Difficulty %i",
-          m_player[pn].m_vpPossibleSteps[0]->GetDifficulty()));
-  ASSERT_M(
-      (int)m_vpPlayedSongs.size() == m_player[pn].m_iStepsPlayed,
-      ssprintf(
-          "%i Songs Played != %i Steps Played for player %i",
-          (int)m_vpPlayedSongs.size(), (int)m_player[pn].m_iStepsPlayed, pn));
-  ASSERT_M(
-      m_vpPossibleSongs.size() == m_player[pn].m_vpPossibleSteps.size(),
-      ssprintf(
-          "%i Possible Songs != %i Possible Steps for player %i",
-          (int)m_vpPossibleSongs.size(),
-          (int)m_player[pn].m_vpPossibleSteps.size(), pn));
+  HasUsableStageStats(
+      m_player[pn], m_vpPlayedSongs, m_vpPossibleSongs, m_playMode,
+      "StageStats::AssertValid(PlayerNumber)");
 }
 
 void StageStats::AssertValid(MultiPlayer pn) const {
-  ASSERT(m_vpPlayedSongs.size() != 0);
-  ASSERT(m_vpPossibleSongs.size() != 0);
-  if (m_vpPlayedSongs[0]) {
-    CHECKPOINT_M(m_vpPlayedSongs[0]->GetTranslitFullTitle());
+  if (!IsValidMultiPlayer(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: StageStats::AssertValid ignored invalid multiplayer "
+        "%i.",
+        pn);
+    return;
   }
-  ASSERT(m_multiPlayer[pn].m_vpPossibleSteps.size() != 0);
-  ASSERT(m_multiPlayer[pn].m_vpPossibleSteps[0] != nullptr);
-  ASSERT_M(m_playMode < NUM_PlayMode, ssprintf("playmode %i", m_playMode));
-  ASSERT_M(
-      m_player[pn].m_vpPossibleSteps[0]->GetDifficulty() < NUM_Difficulty,
-      ssprintf(
-          "difficulty %i", m_player[pn].m_vpPossibleSteps[0]->GetDifficulty()));
-  ASSERT((int)m_vpPlayedSongs.size() == m_player[pn].m_iStepsPlayed);
-  ASSERT(m_vpPossibleSongs.size() == m_player[pn].m_vpPossibleSteps.size());
+  HasUsableStageStats(
+      m_multiPlayer[pn], m_vpPlayedSongs, m_vpPossibleSongs, m_playMode,
+      "StageStats::AssertValid(MultiPlayer)");
 }
 
 int StageStats::GetAverageMeter(PlayerNumber pn) const {
-  AssertValid(pn);
+  if (!IsValidPlayerNumber(pn) ||
+      !HasUsableStageStats(
+          m_player[pn], m_vpPlayedSongs, m_vpPossibleSongs, m_playMode,
+          "StageStats::GetAverageMeter")) {
+    return 0;
+  }
 
   // TODO: This isn't correct for courses.
   int iTotalMeter = 0;
 
   for (unsigned i = 0; i < m_vpPlayedSongs.size(); i++) {
     const Steps* pSteps = m_player[pn].m_vpPossibleSteps[i];
+    if (pSteps == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: StageStats::GetAverageMeter skipped null steps at "
+          "index %u for player %i.",
+          i, pn);
+      continue;
+    }
     iTotalMeter += pSteps->GetMeter();
   }
   return iTotalMeter / m_vpPlayedSongs.size();  // round down
