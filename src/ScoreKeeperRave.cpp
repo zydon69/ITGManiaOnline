@@ -75,6 +75,10 @@ namespace {
 bool IsValidRavePlayer(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
 }
+
+bool IsValidAttackLevel(AttackLevel al) {
+  return al >= ATTACK_LEVEL_1 && al < NUM_ATTACK_LEVELS;
+}
 }  // namespace
 
 ScoreKeeperRave::ScoreKeeperRave(
@@ -266,12 +270,18 @@ void ScoreKeeperRave::AddSuperMeterDelta(float fUnscaledPercentChange) {
 
 void ScoreKeeperRave::LaunchAttack(AttackLevel al) {
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
+  if (!IsValidRavePlayer(pn) || !IsValidAttackLevel(al)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperRave skipped attack launch for player %i "
+        "attack level %i.",
+        pn, al);
+    return;
+  }
 
-  std::string* asAttacks = GAMESTATE->m_pCurCharacters[pn]
-                               ->m_sAttacks[al];  // [NUM_ATTACKS_PER_LEVEL]
   std::string sAttackToGive;
-
-  if (GAMESTATE->m_pCurCharacters[pn] != nullptr) {
+  Character* pCharacter = GAMESTATE->m_pCurCharacters[pn];
+  if (pCharacter != nullptr) {
+    std::string* asAttacks = pCharacter->m_sAttacks[al];
     sAttackToGive = asAttacks[RandomInt(NUM_ATTACKS_PER_LEVEL)];
   } else {
     // "If you add any noteskins here, you need to make sure they're cached,
@@ -283,6 +293,13 @@ void ScoreKeeperRave::LaunchAttack(AttackLevel al) {
 
   PlayerNumber pnToAttack = OPPOSITE_PLAYER[pn];
   PlayerState* pPlayerStateToAttack = GAMESTATE->m_pPlayerState[pnToAttack];
+  if (pPlayerStateToAttack == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperRave skipped attack from player %i because "
+        "target player state %i is missing.",
+        pn, pnToAttack);
+    return;
+  }
 
   Attack a;
   a.level = al;
