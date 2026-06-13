@@ -1930,6 +1930,11 @@ void SongID::FromSong(const Song* p) {
 }
 
 Song* SongID::ToSong() const {
+  if (SONGMAN == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-665: SongID lookup requested without SONGMAN.");
+    return nullptr;
+  }
+
   Song* pRet = nullptr;
   if (!sDir.empty()) {
     // HACK for backwards compatibility: Re-add the leading "/".
@@ -1950,7 +1955,17 @@ XNode* SongID::CreateNode() const {
 }
 
 void SongID::LoadFromNode(const XNode* pNode) {
-  ASSERT(pNode->GetName() == "Song");
+  sDir.clear();
+  if (pNode == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-665: ignored null SongID XML node.");
+    return;
+  }
+  if (pNode->GetName() != "Song") {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-665: ignored SongID XML node named '%s'.",
+        pNode->GetName().c_str());
+    return;
+  }
   pNode->GetAttrValue("Dir", sDir);
 
   // HACK for backwards compatibility: /AdditionalSongs has been merged into
