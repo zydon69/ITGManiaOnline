@@ -16,6 +16,10 @@
 #include "ThemeManager.h"
 #include "global.h"
 
+static bool IsValidAttackDisplayPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
 std::string GetAttackPieceName(const std::string& sAttack) {
   std::string ret = ssprintf("attack %s", sAttack.c_str());
 
@@ -26,9 +30,10 @@ std::string GetAttackPieceName(const std::string& sAttack) {
   return ret;
 }
 
-AttackDisplay::AttackDisplay() {
-  if (GAMESTATE->m_PlayMode != PLAY_MODE_BATTLE &&
-      GAMESTATE->m_PlayMode != PLAY_MODE_RAVE) {
+AttackDisplay::AttackDisplay() : m_pPlayerState(nullptr) {
+  if (GAMESTATE == nullptr ||
+      (GAMESTATE->m_PlayMode != PLAY_MODE_BATTLE &&
+       GAMESTATE->m_PlayMode != PLAY_MODE_RAVE)) {
     return;
   }
 
@@ -38,9 +43,17 @@ AttackDisplay::AttackDisplay() {
 
 void AttackDisplay::Init(const PlayerState* pPlayerState) {
   m_pPlayerState = pPlayerState;
+  if (m_pPlayerState == nullptr || GAMESTATE == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: AttackDisplay::Init missing gameplay context.");
+    return;
+  }
 
   // TODO: Remove use of PlayerNumber.
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
+  if (!IsValidAttackDisplayPlayer(pn)) {
+    LOG->Warn("SRC_AUDIT_FIX: AttackDisplay::Init invalid player %i.", pn);
+    return;
+  }
   m_sprAttack.SetName(ssprintf("TextP%d", pn + 1));
 
   if (GAMESTATE->m_PlayMode != PLAY_MODE_BATTLE &&
@@ -51,10 +64,16 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
   std::set<std::string> attacks;
   for (int al = 0; al < NUM_ATTACK_LEVELS; al++) {
     const Character* ch = GAMESTATE->m_pCurCharacters[pn];
-    ASSERT(ch != nullptr);
+    if (ch == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: AttackDisplay missing character for player %i.", pn);
+      return;
+    }
     const std::string* asAttacks = ch->m_sAttacks[al];
     for (int att = 0; att < NUM_ATTACKS_PER_LEVEL; ++att) {
-      attacks.insert(asAttacks[att]);
+      if (!asAttacks[att].empty()) {
+        attacks.insert(asAttacks[att]);
+      }
     }
   }
 
@@ -74,8 +93,9 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
 void AttackDisplay::Update(float fDelta) {
   ActorFrame::Update(fDelta);
 
-  if (GAMESTATE->m_PlayMode != PLAY_MODE_BATTLE &&
-      GAMESTATE->m_PlayMode != PLAY_MODE_RAVE) {
+  if (GAMESTATE == nullptr || m_pPlayerState == nullptr ||
+      (GAMESTATE->m_PlayMode != PLAY_MODE_BATTLE &&
+       GAMESTATE->m_PlayMode != PLAY_MODE_RAVE)) {
     return;
   }
 
@@ -86,6 +106,12 @@ void AttackDisplay::Update(float fDelta) {
 
   for (unsigned s = 0; s < m_pPlayerState->m_ActiveAttacks.size(); s++) {
     const Attack& attack = m_pPlayerState->m_ActiveAttacks[s];
+
+    if (!std::isfinite(attack.fStartSecond) ||
+        !std::isfinite(attack.fSecsRemaining)) {
+      LOG->Warn("SRC_AUDIT_FIX: Ignoring non-finite displayed attack.");
+      continue;
+    }
 
     if (attack.fStartSecond >= 0) {
       continue; /* hasn't started yet */
@@ -105,17 +131,27 @@ void AttackDisplay::Update(float fDelta) {
 }
 
 void AttackDisplay::SetAttack(const std::string& sText) {
+  if (sText.empty() || THEME == nullptr || m_pPlayerState == nullptr) {
+    return;
+  }
   const std::string path =
       THEME->GetPathG("AttackDisplay", GetAttackPieceName(sText), true);
   if (path == "") {
+    LOG->Trace("Couldn't find \"%s\"", GetAttackPieceName(sText).c_str());
     return;
   }
 
   m_sprAttack.SetDiffuseAlpha(1);
-  m_sprAttack.Load(path);
+  if (m_sprAttack.GetTexturePath() != path) {
+    m_sprAttack.Load(path);
+  }
 
   // TODO: Remove use of PlayerNumber.
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
+  if (!IsValidAttackDisplayPlayer(pn)) {
+    LOG->Warn("SRC_AUDIT_FIX: AttackDisplay::SetAttack invalid player %i.", pn);
+    return;
+  }
 
   const std::string sName = ssprintf("%sP%i", sText.c_str(), pn + 1);
   m_sprAttack.RunCommands(
