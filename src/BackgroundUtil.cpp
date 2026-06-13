@@ -558,6 +558,13 @@ void BackgroundUtil::GetGlobalRandomMovies(
 }
 
 void BackgroundUtil::BakeAllBackgroundChanges(Song* pSong) {
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-686: refused to bake background changes without "
+        "song.");
+    return;
+  }
+
   Background bg;
   bg.LoadFromSong(pSong);
   std::vector<BackgroundChange>* vBGChanges[NUM_BackgroundLayer];
