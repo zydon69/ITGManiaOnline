@@ -463,6 +463,22 @@ static std::string GetSMNotesTag(const Song& song, const Steps& in) {
 
 bool NotesWriterSM::Write(
     std::string sPath, Song& out, const std::vector<Steps*>& vpStepsToSave) {
+  if (vpStepsToSave.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-599: refusing to write playable SM '%s' without "
+        "steps.",
+        sPath.c_str());
+    return false;
+  }
+  for (const Steps* pSteps : vpStepsToSave) {
+    if (pSteps == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-591: refusing to write SM '%s' with null steps.",
+          sPath.c_str());
+      return false;
+    }
+  }
+
   int flags = RageFile::WRITE;
 
   flags |= RageFile::SLOW_FLUSH;
@@ -480,6 +496,18 @@ bool NotesWriterSM::Write(
 
 bool NotesWriterSM::Write(
     RageFileBasic& f, Song& out, const std::vector<Steps*>& vpStepsToSave) {
+  if (vpStepsToSave.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-599: refusing to write playable SM without steps.");
+    return false;
+  }
+  for (const Steps* pSteps : vpStepsToSave) {
+    if (pSteps == nullptr) {
+      LOG->Warn("SRC_AUDIT_FIX SRC-591: refusing to write SM with null steps.");
+      return false;
+    }
+  }
+
   CheckedFileWriter writer(f, "NotesWriterSM");
   if (!WriteGlobalTags(writer, out)) {
     return false;
@@ -499,6 +527,12 @@ bool NotesWriterSM::Write(
 void NotesWriterSM::GetEditFileContents(
     const Song* pSong, const Steps* pSteps, std::string& sOut) {
   sOut = "";
+  if (pSong == nullptr || pSteps == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-591: refusing to build SM edit contents with null "
+        "song/steps.");
+    return;
+  }
   std::string sDir = pSong->GetSongDir();
 
   // "Songs/foo/bar"; strip off "Songs/".
@@ -513,6 +547,13 @@ void NotesWriterSM::GetEditFileContents(
 
 std::string NotesWriterSM::GetEditFileName(
     const Song* pSong, const Steps* pSteps) {
+  if (pSong == nullptr || pSteps == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-591: refusing to build SM edit filename with null "
+        "song/steps.");
+    return std::string();
+  }
+
   /* Try to make a unique name. This isn't guaranteed. Edit descriptions are
    * case-sensitive, filenames on disk are usually not, and we decimate certain
    * characters for FAT filesystems. */
@@ -537,10 +578,25 @@ static LocalizedString ERROR_WRITING_FILE(
     "NotesWriterSM", "Error writing file '%s'.");
 bool NotesWriterSM::WriteEditFileToMachine(
     const Song* pSong, Steps* pSteps, std::string& sErrorOut) {
+  if (pSong == nullptr || pSteps == nullptr || PROFILEMAN == nullptr) {
+    sErrorOut = "Invalid song, steps, or profile manager for SM edit save.";
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-591: refusing to write SM edit with null "
+        "song/steps/profile manager.");
+    return false;
+  }
+
   std::string sDir =
       PROFILEMAN->GetProfileDir(ProfileSlot_Machine) + EDIT_STEPS_SUBDIR;
+  FILEMAN->CreateDir(sDir);
 
   std::string sPath = sDir + GetEditFileName(pSong, pSteps);
+  if (sPath == sDir) {
+    sErrorOut = "Could not derive SM edit filename.";
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-591: refusing to write SM edit without filename.");
+    return false;
+  }
 
   // Check to make sure that we're not clobering an existing file before
   // opening.
@@ -583,6 +639,7 @@ bool NotesWriterSM::WriteEditFileToMachine(
     }
   }
   pSteps->SetFilename(sPath);
+  pSteps->SetSavedToDisk(true);
 
   return true;
 }
