@@ -1317,7 +1317,13 @@ void SongManager::InitCoursesFromDisk(LoadingWindow* ld, bool onlyAdditions) {
       }
 
       Course* pCourse = new Course;
-      CourseLoaderCRS::LoadFromCRSFile(sCoursePath, *pCourse);
+      if (!CourseLoaderCRS::LoadFromCRSFile(sCoursePath, *pCourse)) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-099: skipped invalid course file '%s'.",
+            sCoursePath.c_str());
+        delete pCourse;
+        continue;
+      }
 
       if (g_bHideIncompleteCourses.Get() && pCourse->m_bIncomplete) {
         delete pCourse;
