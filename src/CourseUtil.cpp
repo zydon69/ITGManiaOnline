@@ -431,8 +431,16 @@ bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
   const std::string sOldName = pCourse->m_sMainTitle;
   std::string sNewFilePath;
   if (pCourse->IsAnEdit()) {
-    sNewFilePath = PROFILEMAN->GetProfileDir(ProfileSlot_Machine) +
-                   EDIT_COURSES_SUBDIR + sNewName + ".crs";
+    const ProfileSlot slot = pCourse->GetLoadedFromProfileSlot();
+    if (!PROFILEMAN->IsPersistentProfile(slot)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-130: cannot save edit course '%s' because profile "
+          "slot %i is not persistent",
+          sNewName.c_str(), slot);
+      return false;
+    }
+    sNewFilePath =
+        PROFILEMAN->GetProfileDir(slot) + EDIT_COURSES_SUBDIR + sNewName + ".crs";
   } else {
     std::string sDir, sName, sExt;
     splitpath(pCourse->m_sPath, sDir, sName, sExt);
