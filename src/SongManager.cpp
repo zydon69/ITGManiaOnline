@@ -1657,13 +1657,31 @@ bool SongManager::GetExtraStageInfoFromCourse(
   std::string sCoursePath = SpecialFiles::SONGS_DIR + sCourseSuffix;
 
   Course course;
-  CourseLoaderCRS::LoadFromCRSFile(sCoursePath, course);
+  if (!CourseLoaderCRS::LoadFromCRSFile(sCoursePath, course)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-100: extra stage course '%s' could not be loaded.",
+        sCoursePath.c_str());
+    return false;
+  }
   if (course.GetEstimatedNumStages() <= 0) {
     return false;
   }
 
   Trail* pTrail = course.GetTrail(stype);
-  if (pTrail->m_vEntries.empty()) {
+  if (pTrail == nullptr || pTrail->m_vEntries.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-100: extra stage course '%s' has no trail for "
+        "steps type %s.",
+        sCoursePath.c_str(), StepsTypeToString(stype).c_str());
+    return false;
+  }
+
+  if (pTrail->m_vEntries[0].pSong == nullptr ||
+      pTrail->m_vEntries[0].pSteps == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-100: extra stage course '%s' has an incomplete "
+        "first trail entry.",
+        sCoursePath.c_str());
     return false;
   }
 
