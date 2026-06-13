@@ -14,6 +14,7 @@
 #include "PlayerNumber.h"
 #include "PlayerStageStats.h"
 #include "PlayerState.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "ThemeManager.h"
 
@@ -25,15 +26,56 @@ LifeMeterBattery::LifeMeterBattery() {
   m_soundLoseLife.Load(THEME->GetPathS("LifeMeterBattery", "lose"), true);
 }
 
+namespace {
+bool IsValidPlayerNumber(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+bool IsValidTapNoteScore(TapNoteScore score) {
+  return score >= TNS_None && score < NUM_TapNoteScore;
+}
+
+bool IsValidHoldNoteScore(HoldNoteScore score) {
+  return score >= HNS_None && score < NUM_HoldNoteScore;
+}
+
+int NormalizeBatteryLives(int lives, const char* context) {
+  if (lives >= 0) {
+    return lives;
+  }
+
+  LOG->Warn(
+      "SRC_AUDIT_FIX %s: corrected negative battery lives %i to 0.",
+      context, lives);
+  return 0;
+}
+}  // namespace
+
 void LifeMeterBattery::Load(
     const PlayerState* pPlayerState, PlayerStageStats* pPlayerStageStats) {
   LifeMeter::Load(pPlayerState, pPlayerStageStats);
 
-  m_iLivesLeft = m_pPlayerState->m_PlayerOptions.GetStage().m_BatteryLives;
+  if (m_pPlayerState == nullptr || pPlayerStageStats == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-249: LifeMeterBattery loaded without complete "
+        "player state.");
+    return;
+  }
+
+  m_iLivesLeft = NormalizeBatteryLives(
+      m_pPlayerState->m_PlayerOptions.GetStage().m_BatteryLives,
+      "SRC-249 LifeMeterBattery::Load");
   m_iTrailingLivesLeft = m_iLivesLeft;
 
   const std::string sType = "LifeMeterBattery";
   PlayerNumber pn = pPlayerState->m_PlayerNumber;
+  const bool validPlayer = IsValidPlayerNumber(pn);
+  if (!validPlayer) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-249: LifeMeterBattery loaded with invalid player "
+        "%i.",
+        pn);
+  }
 
   MIN_SCORE_TO_KEEP_LIFE.Load(sType, "MinScoreToKeepLife");
   MAX_LIVES.Load(sType, "MaxLives");
@@ -46,9 +88,7 @@ void LifeMeterBattery::Load(
 
   LIVES_FORMAT.Load(sType, "NumLivesFormat");
 
-  bool bPlayerEnabled = GAMESTATE->IsPlayerEnabled(pPlayerState);
-  LuaThreadVariable var(
-      "Player", LuaReference::Create(m_pPlayerState->m_PlayerNumber));
+  bool bPlayerEnabled = validPlayer && GAMESTATE->IsPlayerEnabled(pPlayerState);
 
   m_sprFrame.Load(THEME->GetPathG(sType, "frame"));
   this->AddChild(m_sprFrame);
@@ -56,6 +96,7 @@ void LifeMeterBattery::Load(
   m_sprBattery.Load(THEME->GetPathG(sType, "lives"));
   m_sprBattery->SetName(ssprintf("BatteryP%i", int(pn + 1)));
   if (bPlayerEnabled) {
+    LuaThreadVariable var("Player", LuaReference::Create(pn));
     ActorUtil::LoadAllCommandsAndSetXY(m_sprBattery, sType);
     this->AddChild(m_sprBattery);
   }
@@ -63,6 +104,7 @@ void LifeMeterBattery::Load(
   m_textNumLives.LoadFromFont(THEME->GetPathF(sType, "lives"));
   m_textNumLives.SetName(ssprintf("NumLivesP%i", int(pn + 1)));
   if (bPlayerEnabled) {
+    LuaThreadVariable var("Player", LuaReference::Create(pn));
     ActorUtil::LoadAllCommandsAndSetXY(m_textNumLives, sType);
     this->AddChild(&m_textNumLives);
   }
@@ -88,20 +130,38 @@ void LifeMeterBattery::Load(
 }
 
 void LifeMeterBattery::OnSongEnded() {
+  if (m_pPlayerState == nullptr || m_pPlayerStageStats == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-252: LifeMeterBattery ignored OnSongEnded without "
+        "complete player state.");
+    return;
+  }
   if (m_pPlayerStageStats->m_bFailed || m_iLivesLeft == 0) {
     return;
   }
 
-  if (m_iLivesLeft < m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives) {
+  const int totalLives = NormalizeBatteryLives(
+      m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives,
+      "SRC-251 LifeMeterBattery::OnSongEnded");
+  if (m_iLivesLeft < totalLives) {
     m_iTrailingLivesLeft = m_iLivesLeft;
     PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
     const Course* pCourse = GAMESTATE->m_pCurCourse;
+    const int courseSongIndex = GAMESTATE->GetCourseSongIndex();
 
-    if (pCourse &&
-        pCourse->m_vEntries[GAMESTATE->GetCourseSongIndex()].iGainLives > -1) {
-      m_iLivesLeft +=
-          pCourse->m_vEntries[GAMESTATE->GetCourseSongIndex()].iGainLives;
+    if (pCourse && courseSongIndex >= 0 &&
+        static_cast<size_t>(courseSongIndex) < pCourse->m_vEntries.size() &&
+        pCourse->m_vEntries[courseSongIndex].iGainLives > -1) {
+      m_iLivesLeft += pCourse->m_vEntries[courseSongIndex].iGainLives;
     } else {
+      if (pCourse && (courseSongIndex < 0 ||
+                      static_cast<size_t>(courseSongIndex) >=
+                          pCourse->m_vEntries.size())) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-250: LifeMeterBattery ignored out-of-range "
+            "course song index %i of %zu.",
+            courseSongIndex, pCourse->m_vEntries.size());
+      }
       Lua* L = LUA->Get();
       COURSE_SONG_REWARD_LIVES.PushSelf(L);
       PushSelf(L);
@@ -112,8 +172,8 @@ void LifeMeterBattery::OnSongEnded() {
       lua_settop(L, 0);
       LUA->Release(L);
     }
-    m_iLivesLeft = std::min(
-        m_iLivesLeft, m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives);
+    m_iLivesLeft = std::min(m_iLivesLeft, totalLives);
+    m_iLivesLeft = std::max(m_iLivesLeft, 0);
 
     if (m_iTrailingLivesLeft < m_iLivesLeft) {
       m_soundGainLife.Play(false);
@@ -130,6 +190,7 @@ void LifeMeterBattery::SubtractLives(int iLives) {
 
   m_iTrailingLivesLeft = m_iLivesLeft;
   m_iLivesLeft -= iLives;
+  m_iLivesLeft = std::max(m_iLivesLeft, 0);
   m_soundLoseLife.Play(false);
   m_textNumLives.PlayCommand("LoseLife");
 
@@ -140,12 +201,22 @@ void LifeMeterBattery::AddLives(int iLives) {
   if (iLives <= 0) {
     return;
   }
-  if (MAX_LIVES != 0 && m_iLivesLeft >= MAX_LIVES) {
+  if (MAX_LIVES > 0 && m_iLivesLeft >= MAX_LIVES) {
     return;
   }
 
   m_iTrailingLivesLeft = m_iLivesLeft;
   m_iLivesLeft += iLives;
+  if (MAX_LIVES > 0) {
+    m_iLivesLeft = std::min(m_iLivesLeft, MAX_LIVES.GetValue());
+  }
+  if (m_pPlayerState != nullptr) {
+    m_iLivesLeft = std::min(
+        m_iLivesLeft,
+        NormalizeBatteryLives(
+            m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives,
+            "SRC-251 LifeMeterBattery::AddLives"));
+  }
   m_soundGainLife.Play(false);
   m_textNumLives.PlayCommand("GainLife");
 
@@ -161,6 +232,13 @@ void LifeMeterBattery::ChangeLives(int iLifeDiff) {
 }
 
 void LifeMeterBattery::ChangeLife(TapNoteScore score) {
+  if (!IsValidTapNoteScore(score)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-251: LifeMeterBattery ignored invalid TapNoteScore "
+        "%i.",
+        score);
+    return;
+  }
   if (m_iLivesLeft == 0) {
     return;
   }
@@ -181,6 +259,13 @@ void LifeMeterBattery::ChangeLife(TapNoteScore score) {
 }
 
 void LifeMeterBattery::ChangeLife(HoldNoteScore score, TapNoteScore tscore) {
+  if (!IsValidHoldNoteScore(score)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-251: LifeMeterBattery ignored invalid "
+        "HoldNoteScore %i.",
+        score);
+    return;
+  }
   if (m_iLivesLeft == 0) {
     return;
   }
@@ -198,12 +283,26 @@ void LifeMeterBattery::ChangeLife(HoldNoteScore score, TapNoteScore tscore) {
 
 void LifeMeterBattery::SetLife(float value) {
   int new_lives = static_cast<int>(value);
+  new_lives = std::max(new_lives, 0);
+  if (m_pPlayerState != nullptr) {
+    new_lives = std::min(
+        new_lives,
+        NormalizeBatteryLives(
+            m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives,
+            "SRC-251 LifeMeterBattery::SetLife"));
+  }
   bool lost = (new_lives < m_iLivesLeft);
   m_iLivesLeft = new_lives;
   BroadcastLifeChanged(lost);
 }
 
 void LifeMeterBattery::BroadcastLifeChanged(bool lost_life) {
+  if (m_pPlayerState == nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-252: LifeMeterBattery skipped LifeChanged "
+        "broadcast without PlayerState.");
+    return;
+  }
   Message msg("LifeChanged");
   msg.SetParam("Player", m_pPlayerState->m_PlayerNumber);
   msg.SetParam("LifeMeter", LuaReference::CreateFromPush(*this));
@@ -223,28 +322,42 @@ bool LifeMeterBattery::IsInDanger() const {
 }
 
 bool LifeMeterBattery::IsHot() const {
+  if (m_pPlayerState == nullptr) {
+    return false;
+  }
   return m_iLivesLeft ==
-         m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives;
+         NormalizeBatteryLives(
+             m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives,
+             "SRC-252 LifeMeterBattery::IsHot");
 }
 
 bool LifeMeterBattery::IsFailing() const { return m_iLivesLeft == 0; }
 
 float LifeMeterBattery::GetLife() const {
-  if (!m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives) {
+  if (m_pPlayerState == nullptr) {
+    return 0.0f;
+  }
+  const int totalLives = NormalizeBatteryLives(
+      m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives,
+      "SRC-251 LifeMeterBattery::GetLife");
+  if (!totalLives) {
     return 1;
   }
 
-  return float(m_iLivesLeft) /
-         m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives;
+  return std::max(0.0f, std::min(1.0f, float(m_iLivesLeft) / totalLives));
 }
 int LifeMeterBattery::GetRemainingLives() const {
+  if (m_pPlayerState == nullptr) {
+    return 0;
+  }
   if (!m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives) {
     return 1;
   }
 
-  return m_iLivesLeft;
+  return std::max(m_iLivesLeft, 0);
 }
 void LifeMeterBattery::Refresh() {
+  m_iLivesLeft = std::max(m_iLivesLeft, 0);
   m_textNumLives.SetText(
       ssprintf(LIVES_FORMAT.GetValue().c_str(), m_iLivesLeft));
   if (m_iLivesLeft < 0) {
@@ -255,7 +368,15 @@ void LifeMeterBattery::Refresh() {
 }
 
 int LifeMeterBattery::GetTotalLives() {
-  return m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives;
+  if (m_pPlayerState == nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-252: LifeMeterBattery GetTotalLives without "
+        "PlayerState.");
+    return 0;
+  }
+  return NormalizeBatteryLives(
+      m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives,
+      "SRC-252 LifeMeterBattery::GetTotalLives");
 }
 
 void LifeMeterBattery::Update(float fDeltaTime) {
