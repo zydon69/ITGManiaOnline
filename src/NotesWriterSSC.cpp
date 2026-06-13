@@ -158,6 +158,25 @@ static std::string SanitizeAttackStringForWrite(
   return sanitized;
 }
 
+static std::string SanitizeStepMetadataForWrite(
+    const std::string& value, const char* format) {
+  std::string sanitized = value;
+  bool changed = false;
+  for (char& c : sanitized) {
+    if (c == ':' || c == ';' || c == '\r' || c == '\n') {
+      c = ' ';
+      changed = true;
+    }
+  }
+  if (changed) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-586 SRC-595: sanitized %s step metadata "
+        "containing MSD delimiters.",
+        format);
+  }
+  return SmEscape(sanitized);
+}
+
 static std::vector<std::string> GetTimingVectorForWrite(
     const TimingData& timing, TimingSegmentType type, int dec) {
   const std::vector<TimingSegment*>& segs = timing.GetTimingSegments(type);
@@ -638,12 +657,16 @@ static std::string GetSSCNoteData(
   lines.push_back("");
   // Escape to prevent some clown from making a comment of "\r\n;"
   lines.push_back(ssprintf(
-      "//---------------%s - %s----------------", in.m_StepsTypeStr.c_str(),
+      "//---------------%s - %s----------------",
+      SanitizeStepMetadataForWrite(in.m_StepsTypeStr, "SSC comment").c_str(),
       SmEscape(in.GetDescription()).c_str()));
   lines.push_back("#NOTEDATA:;");  // our new separator.
   lines.push_back(
       ssprintf("#CHARTNAME:%s;", SmEscape(in.GetChartName()).c_str()));
-  lines.push_back(ssprintf("#STEPSTYPE:%s;", in.m_StepsTypeStr.c_str()));
+  lines.push_back(ssprintf(
+      "#STEPSTYPE:%s;",
+      SanitizeStepMetadataForWrite(in.m_StepsTypeStr, "SSC STEPSTYPE")
+          .c_str()));
   lines.push_back(
       ssprintf("#DESCRIPTION:%s;", SmEscape(in.GetDescription()).c_str()));
   lines.push_back(
