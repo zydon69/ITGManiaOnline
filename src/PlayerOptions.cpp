@@ -87,13 +87,50 @@ static const float CMOD_DEFAULT = 200.0f;
 // this file, but nothing else has a named constant for its default value.
 // -Kyz
 
+static bool IsValidPlayerNumber(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+static TapNoteScore GetDefaultMinTNSToHideNotes() {
+  return PREFSMAN ? PREFSMAN->m_MinTNSToHideNotes.Get() : TNS_None;
+}
+
+static float SanitizeFinite(
+    float value, float fallback, const char* context, bool allowNegative = true) {
+  if (!std::isfinite(value) || (!allowNegative && value < 0.0f)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid PlayerOptions float %f in %s; using %f.",
+        value, context, fallback);
+    return fallback;
+  }
+  return value;
+}
+
+static float SanitizeTweenSpeed(float value, const char* context) {
+  return SanitizeFinite(value, 1.0f, context, false);
+}
+
+static int ClampBatteryLives(float value) {
+  if (!std::isfinite(value)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Non-finite battery lives %f; using default.", value);
+    return 4;
+  }
+  return std::clamp(static_cast<int>(std::lrint(value)), 0, 100);
+}
+
+template<typename EnumT>
+static bool EnumInRange(EnumT value, int count) {
+  return static_cast<int>(value) >= 0 && static_cast<int>(value) < count;
+}
+
 void PlayerOptions::Init() {
   m_LifeType = LifeType_Bar;
   m_DrainType = DrainType_Normal;
   m_HideLightType = HideLightType_NoHideLights;
   m_ModTimerType = ModTimerType_Default;
   m_BatteryLives = 4;
-  m_MinTNSToHideNotes = PREFSMAN->m_MinTNSToHideNotes;
+  m_MinTNSToHideNotes = GetDefaultMinTNSToHideNotes();
   m_bSetScrollSpeed = false;
   m_fMaxScrollBPM = 0;
   m_SpeedfMaxScrollBPM = 1.0f;
@@ -175,14 +212,28 @@ void PlayerOptions::Init() {
 }
 
 void PlayerOptions::Approach(const PlayerOptions& other, float fDeltaSeconds) {
-  const float fRateMult =
-      PREFSMAN->m_bRateModsAffectTweens
-          ? GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate
-          : 1.0f;
+  if (!std::isfinite(fDeltaSeconds) || fDeltaSeconds < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Ignoring invalid PlayerOptions::Approach delta %f.",
+        fDeltaSeconds);
+    return;
+  }
 
-#define APPROACH(opt) \
-  fapproach(          \
-      m_##opt, other.m_##opt, fRateMult * fDeltaSeconds * other.m_Speed##opt);
+  float fRateMult = 1.0f;
+  if (PREFSMAN && PREFSMAN->m_bRateModsAffectTweens && GAMESTATE) {
+    fRateMult = SanitizeFinite(
+        GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate, 1.0f,
+        "PlayerOptions::Approach music rate", false);
+    if (fRateMult <= 0.0f) {
+      fRateMult = 1.0f;
+    }
+  }
+
+#define APPROACH(opt)                                                        \
+  fapproach(                                                                 \
+      m_##opt, other.m_##opt,                                                \
+      fRateMult * fDeltaSeconds *                                            \
+          SanitizeTweenSpeed(other.m_Speed##opt, "PlayerOptions::Approach"));
 #define DO_COPY(x) x = other.x;
 
   DO_COPY(m_LifeType);
@@ -283,6 +334,13 @@ static void AddPart(
   if (level == 0) {
     return;
   }
+  if (!std::isfinite(level)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Skipping non-finite PlayerOptions mod %s=%f.",
+        name.c_str(), level);
+    return;
+  }
+  level = std::clamp(level, -1000.0f, 1000.0f);
 
   const std::string LevelStr =
       (level == 1) ? std::string("")
@@ -322,7 +380,11 @@ void PlayerOptions::GetMods(
       AddTo.push_back("LifeTime");
       break;
     default:
-      FAIL_M(ssprintf("Invalid LifeType: %i", m_LifeType));
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid LifeType %i while serializing PlayerOptions; "
+          "using Bar.",
+          m_LifeType);
+      break;
   }
 
   switch (m_HideLightType) {
@@ -339,7 +401,12 @@ void PlayerOptions::GetMods(
       AddTo.push_back("HideBassLights");
       break;
     default:
-      FAIL_M(ssprintf("Invalid HideLightType: %i", m_HideLightType));
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid HideLightType %i while serializing "
+          "PlayerOptions; using NoHideLights.",
+          m_HideLightType);
+      AddTo.push_back("NoHideLights");
+      break;
   }
 
   if (!m_fTimeSpacing) {
@@ -377,7 +444,11 @@ void PlayerOptions::GetMods(
     case ModTimerType_Default:
       break;
     default:
-      FAIL_M(ssprintf("Invalid ModTimerType: %i", m_ModTimerType));
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid ModTimerType %i while serializing "
+          "PlayerOptions; ignoring.",
+          m_ModTimerType);
+      break;
   }
 
   AddPart(AddTo, m_fAccels[ACCEL_BOOST], "Boost");
@@ -693,7 +764,11 @@ void PlayerOptions::GetMods(
       AddTo.push_back("FailOff");
       break;
     default:
-      FAIL_M(ssprintf("Invalid FailType: %i", m_FailType));
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid FailType %i while serializing "
+          "PlayerOptions; using immediate fail.",
+          m_FailType);
+      break;
   }
 
   if (m_fSkew == 0 && m_fPerspectiveTilt == 0) {
@@ -767,23 +842,22 @@ void PlayerOptions::FromString(const std::string& sMultipleMods) {
 
     if (!FromOneModString(s, sThrowAway)) {
       LOG->Trace(
-          "Attempted to load a non-existing mod \'%s\' for the Player. "
-          "Ignoring.",
-          s.c_str());
+          "Attempted to load invalid PlayerOptions mod '%s'%s%s. Ignoring.",
+          s.c_str(), sThrowAway.empty() ? "" : ": ", sThrowAway.c_str());
     }
   }
 }
 
 bool PlayerOptions::FromOneModString(
     const std::string& sOneMod, std::string& sErrorOut) {
-  ASSERT_M(
-      NOTESKIN != nullptr,
-      "The Noteskin Manager must be loaded in order to process mods.");
-
   std::string sBit = sOneMod;
   std::string sMod = "";
   MakeLower(sBit);
   Trim(sBit);
+  if (sBit.empty()) {
+    sErrorOut = "empty mod token";
+    return false;
+  }
 
   /* "drunk"
    * "no drunk"
@@ -794,15 +868,26 @@ bool PlayerOptions::FromOneModString(
   float speed = 1;
   std::vector<std::string> asParts;
   split(sBit, " ", asParts, true);
+  if (asParts.empty()) {
+    sErrorOut = "empty mod token";
+    return false;
+  }
 
   for (const std::string& s : asParts) {
+    if (s.empty()) {
+      continue;
+    }
     if (s == "no") {
       level = 0;
-    } else if (isdigit(s[0]) || s[0] == '-') {
+    } else if (isdigit(static_cast<unsigned char>(s[0])) || s[0] == '-') {
       if (EndsWith(s, "ms")) {
         // Strip off the "ms" before parsing and convert to seconds.
         std::string ms_value = s.substr(0, s.size() - 2);
         level = StringToFloat(ms_value) / 1000.0f;
+        if (!std::isfinite(level)) {
+          sErrorOut = ssprintf("non-finite ms value '%s'", s.c_str());
+          return false;
+        }
       }
       /* If the last character is a *, they probably said "123*" when
        * they meant "*123". */
@@ -815,16 +900,26 @@ bool PlayerOptions::FromOneModString(
         return false;
       } else {
         level = StringToFloat(s) / 100.0f;
+        if (!std::isfinite(level)) {
+          sErrorOut = ssprintf("non-finite percent value '%s'", s.c_str());
+          return false;
+        }
       }
     } else if (s[0] == '*') {
       sscanf(s.c_str(), "*%f", &speed);
-      if (!std::isfinite(speed)) {
+      if (!std::isfinite(speed) || speed < 0.0f) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: Invalid PlayerOptions approach speed '%s'; "
+            "using 1.",
+            s.c_str());
         speed = 1.0f;
       }
     }
   }
 
   sBit = asParts.back();
+  level = std::clamp(level, -1000.0f, 1000.0f);
+  speed = std::clamp(speed, 0.0f, 1000.0f);
 
 #define SET_FLOAT(opt)    \
   {                       \
@@ -853,11 +948,12 @@ bool PlayerOptions::FromOneModString(
   }
   // oITG's m-mods
   else if (sscanf(sBit.c_str(), "m%f", &level) == 1) {
-    // OpenITG doesn't have this block:
-    /*
-    if( !std::isfinite(level) || level <= 0.0f )
-            level = CMOD_DEFAULT;
-    */
+    if (!std::isfinite(level) || level <= 0.0f) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid MMod value '%s'; using default CMod BPM.",
+          sBit.c_str());
+      level = CMOD_DEFAULT;
+    }
     SET_FLOAT(fMaxScrollBPM)
     m_fTimeSpacing = 0;
   }
@@ -878,7 +974,7 @@ bool PlayerOptions::FromOneModString(
     SET_FLOAT(fScrollBPM)
   } else if (sBit == "life" || sBit == "lives") {
     // level is a percentage for every other option, so multiply by 100. -Kyz
-    m_BatteryLives = level * 100.0f;
+    m_BatteryLives = ClampBatteryLives(level * 100.0f);
   } else if (sBit.find("modtimer") != sBit.npos) {
     if (sBit == "modtimerdefault") {
       m_ModTimerType = ModTimerType_Default;
@@ -892,12 +988,18 @@ bool PlayerOptions::FromOneModString(
       SET_FLOAT(fModTimerMult)
     } else if (sBit == "modtimeroffset") {
       SET_FLOAT(fModTimerOffset)
+    } else {
+      sErrorOut = ssprintf("unknown modtimer token '%s'", sBit.c_str());
+      return false;
     }
   } else if (sBit.find("drawsize") != sBit.npos) {
     if (sBit == "drawsize") {
       SET_FLOAT(fDrawSize)
     } else if (sBit == "drawsizeback") {
       SET_FLOAT(fDrawSizeBack)
+    } else {
+      sErrorOut = ssprintf("unknown drawsize token '%s'", sBit.c_str());
+      return false;
     }
   } else if (sBit == "bar") {
     m_LifeType = LifeType_Bar;
@@ -1530,6 +1632,10 @@ bool PlayerOptions::FromOneModString(
 }
 
 void NextFloat(float fValues[], int size) {
+  if (fValues == nullptr || size <= 0) {
+    LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid NextFloat call.");
+    return;
+  }
   int index = -1;
   for (int i = 0; i < size; i++) {
     if (fValues[i] == 1) {
@@ -1551,6 +1657,10 @@ void NextFloat(float fValues[], int size) {
 }
 
 void NextBool(bool bValues[], int size) {
+  if (bValues == nullptr || size <= 0) {
+    LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid NextBool call.");
+    return;
+  }
   int index = -1;
   for (int i = 0; i < size; i++) {
     if (bValues[i]) {
@@ -1662,26 +1772,46 @@ PlayerOptions::Scroll PlayerOptions::GetFirstScroll() {
 }
 
 void PlayerOptions::SetOneAccel(Accel a) {
+  if (!EnumInRange(a, NUM_ACCELS)) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid Accel %i in SetOneAccel.", a);
+    return;
+  }
   ZERO(m_fAccels);
   m_fAccels[a] = 1;
 }
 
 void PlayerOptions::SetOneEffect(Effect e) {
+  if (!EnumInRange(e, NUM_EFFECTS)) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid Effect %i in SetOneEffect.", e);
+    return;
+  }
   ZERO(m_fEffects);
   m_fEffects[e] = 1;
 }
 
 void PlayerOptions::SetOneAppearance(Appearance a) {
+  if (!EnumInRange(a, NUM_APPEARANCES)) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid Appearance %i in SetOneAppearance.", a);
+    return;
+  }
   ZERO(m_fAppearances);
   m_fAppearances[a] = 1;
 }
 
 void PlayerOptions::SetOneScroll(Scroll s) {
+  if (!EnumInRange(s, NUM_SCROLLS)) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid Scroll %i in SetOneScroll.", s);
+    return;
+  }
   ZERO(m_fScrolls);
   m_fScrolls[s] = 1;
 }
 
 void PlayerOptions::ToggleOneTurn(Turn t) {
+  if (!EnumInRange(t, NUM_TURNS)) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid Turn %i in ToggleOneTurn.", t);
+    return;
+  }
   bool bWasOn = m_bTurns[t];
   ZERO(m_bTurns);
   m_bTurns[t] = !bWasOn;
@@ -1689,9 +1819,20 @@ void PlayerOptions::ToggleOneTurn(Turn t) {
 
 float PlayerOptions::GetReversePercentForColumn(int iCol) const {
   float f = 0;
-  ASSERT(m_pn == PLAYER_1 || m_pn == PLAYER_2);
-  ASSERT(GAMESTATE->GetCurrentStyle(m_pn) != nullptr);
+  if (!IsValidPlayerNumber(m_pn) || GAMESTATE == nullptr ||
+      GAMESTATE->GetCurrentStyle(m_pn) == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid PlayerOptions reverse context for player %i.",
+        m_pn);
+    return 0.0f;
+  }
   int iNumCols = GAMESTATE->GetCurrentStyle(m_pn)->m_iColsPerPlayer;
+  if (iCol < 0 || iCol >= iNumCols || iCol >= 16) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Invalid reverse column %i for %i columns.", iCol,
+        iNumCols);
+    return 0.0f;
+  }
 
   f += m_fScrolls[SCROLL_REVERSE];
   f += m_fReverse[iCol];
@@ -1716,7 +1857,11 @@ float PlayerOptions::GetReversePercentForColumn(int iCol) const {
   if (f > 1) {
     f = SCALE(f, 1.f, 2.f, 1.f, 0.f);
   }
-  return f;
+  if (!std::isfinite(f)) {
+    LOG->Warn("SRC_AUDIT_FIX: Non-finite reverse percent; using 0.");
+    return 0.0f;
+  }
+  return std::clamp(f, 0.0f, 1.0f);
 }
 
 bool PlayerOptions::operator==(const PlayerOptions& other) const {
@@ -1857,7 +2002,7 @@ PlayerOptions& PlayerOptions::operator=(const PlayerOptions& other) {
   CPY_SPEED(fPlayerAutoPlay);
   CPY_SPEED(fPerspectiveTilt);
   CPY_SPEED(fSkew);
-  if (!other.m_sNoteSkin.empty() &&
+  if (!other.m_sNoteSkin.empty() && NOTESKIN != nullptr &&
       NOTESKIN->DoesNoteSkinExist(other.m_sNoteSkin)) {
     CPY(m_sNoteSkin);
   }
@@ -1919,6 +2064,12 @@ PlayerOptions& PlayerOptions::operator=(const PlayerOptions& other) {
 
 bool PlayerOptions::IsEasierForSongAndSteps(
     Song* pSong, Steps* pSteps, PlayerNumber pn) const {
+  if (pSong == nullptr || pSteps == nullptr || !IsValidPlayerNumber(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Incomplete IsEasierForSongAndSteps context; treating "
+        "options as not easier.");
+    return false;
+  }
   if (m_fTimeSpacing && pSteps->HasSignificantTimingChanges()) {
     return true;
   }
@@ -1989,14 +2140,27 @@ bool PlayerOptions::IsEasierForSongAndSteps(
     //			return true;
 
     DisplayBpms bpms;
-    if (GAMESTATE->IsCourseMode()) {
-      Trail* pTrail = GAMESTATE->m_pCurCourse->GetTrail(
-          GAMESTATE->GetCurrentStyle(m_pn)->m_StepsType);
-      pTrail->GetDisplayBpms(bpms);
-    } else {
+    if (GAMESTATE == nullptr) {
+      pSong->GetDisplayBpms(bpms);
+    } else if (GAMESTATE->IsCourseMode()) {
+      const Style* style = IsValidPlayerNumber(m_pn)
+                               ? GAMESTATE->GetCurrentStyle(m_pn)
+                               : nullptr;
+      Course* course = GAMESTATE->m_pCurCourse;
+      Trail* pTrail =
+          (course != nullptr && style != nullptr)
+              ? course->GetTrail(style->m_StepsType)
+              : nullptr;
+      if (pTrail != nullptr) {
+        pTrail->GetDisplayBpms(bpms);
+      } else {
+        pSong->GetDisplayBpms(bpms);
+      }
+    } else if (GAMESTATE->m_pCurSong != nullptr) {
       GAMESTATE->m_pCurSong->GetDisplayBpms(bpms);
+    } else {
+      pSong->GetDisplayBpms(bpms);
     }
-    pSong->GetDisplayBpms(bpms);
 
     // maximum BPM is obfuscated, so M-mods will set a playable speed.
     if (bpms.GetMax() <= 0) {
@@ -2011,13 +2175,18 @@ bool PlayerOptions::IsEasierForSongAndSteps(
 
 bool PlayerOptions::IsEasierForCourseAndTrail(
     Course* pCourse, Trail* pTrail) const {
-  ASSERT(pCourse != nullptr);
-  ASSERT(pTrail != nullptr);
+  if (pCourse == nullptr || pTrail == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Incomplete IsEasierForCourseAndTrail context; "
+        "treating options as not easier.");
+    return false;
+  }
 
   return std::any_of(
       pTrail->m_vEntries.begin(), pTrail->m_vEntries.end(),
       [&](const TrailEntry& e) {
-        return e.pSong && IsEasierForSongAndSteps(e.pSong, e.pSteps, PLAYER_1);
+        return e.pSong && e.pSteps &&
+               IsEasierForSongAndSteps(e.pSong, e.pSteps, PLAYER_1);
       });
 }
 
@@ -2095,7 +2264,6 @@ void PlayerOptions::ResetPrefs(ResetPrefsType type) {
   PlayerOptions defaults;
 #define CPY(x) this->x = defaults.x;
   switch (type) {
-    DEFAULT_FAIL(type);
     case saved_prefs:
       CPY(m_fTimeSpacing);
       CPY(m_fScrollSpeed);
@@ -2103,6 +2271,11 @@ void PlayerOptions::ResetPrefs(ResetPrefsType type) {
       CPY(m_fMaxScrollBPM);
       break;
     case saved_prefs_invalid_for_course:
+      break;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid ResetPrefsType %i; using course-safe reset.",
+          type);
       break;
   }
   CPY(m_LifeType);
@@ -2519,7 +2692,7 @@ class LunaPlayerOptions : public Luna<PlayerOptions> {
     }
     if (original_top >= 1 && lua_isstring(L, 1)) {
       std::string skin = SArg(1);
-      if (NOTESKIN->DoesNoteSkinExist(skin)) {
+      if (NOTESKIN != nullptr && NOTESKIN->DoesNoteSkinExist(skin)) {
         p->m_sNoteSkin = skin;
         lua_pushboolean(L, true);
       } else {
@@ -2725,10 +2898,13 @@ class LunaPlayerOptions : public Luna<PlayerOptions> {
   static int GetReversePercentForColumn(T* p, lua_State* L) {
     const int colNum = IArg(1);
     const int numColumns =
-        GAMESTATE->GetCurrentStyle(p->m_pn)->m_iColsPerPlayer;
+        (GAMESTATE != nullptr && IsValidPlayerNumber(p->m_pn) &&
+         GAMESTATE->GetCurrentStyle(p->m_pn) != nullptr)
+            ? GAMESTATE->GetCurrentStyle(p->m_pn)->m_iColsPerPlayer
+            : 0;
 
     // We don't want to go outside the bounds.
-    if (colNum < 0 || colNum > numColumns) {
+    if (colNum < 0 || colNum >= numColumns) {
       lua_pushnil(L);
     } else {
       lua_pushnumber(L, p->GetReversePercentForColumn(colNum));

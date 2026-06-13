@@ -125,7 +125,8 @@ class PlayerOptions {
         m_bZBuffer(false),
         m_bCosecant(false),
         m_FailType(FailType_Immediate),
-        m_MinTNSToHideNotes(PREFSMAN->m_MinTNSToHideNotes) {
+        m_MinTNSToHideNotes(
+            PREFSMAN ? PREFSMAN->m_MinTNSToHideNotes.Get() : TNS_None) {
     m_sNoteSkin = "";
     m_fVisualDelay = 0.0f;
     ZERO(m_fAccels);

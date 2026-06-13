@@ -8,6 +8,8 @@
 #ifndef OptionsBinding_H
 #define OptionsBinding_H
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 
 // Functions are designed to combine Get and Set into one, to be less clumsy to
@@ -28,7 +30,7 @@
     lua_pushnumber(L, p->m_Speedf##member);        \
     if (lua_isnumber(L, 1) && original_top >= 1) { \
       float v = FArg(1);                           \
-      if (!valid) {                                \
+      if (!std::isfinite(v) || !valid) {           \
         luaL_error(L, "Invalid value %f", v);      \
       }                                            \
       p->m_f##member = v;                          \
@@ -58,7 +60,7 @@
     int original_top = lua_gettop(L);              \
     lua_pushnumber(L, p->m_##member);              \
     if (lua_isnumber(L, 1) && original_top >= 1) { \
-      p->m_##member = IArg(1);                     \
+      p->m_##member = std::max(0, IArg(1));        \
     }                                              \
     OPTIONAL_RETURN_SELF(original_top);            \
     return 1;                                      \
