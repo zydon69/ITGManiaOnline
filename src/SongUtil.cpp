@@ -991,9 +991,24 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
     case SORT_BPM: {
       if (SHOW_SECTIONS_IN_BPM_SORT) {
         const int iBPMGroupSize = SORT_BPM_DIVISION;
+        if (iBPMGroupSize <= 0) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX SRC-656: invalid SortBPMDivision %i; using "
+              "not-available section.",
+              iBPMGroupSize);
+          return SORT_NOT_AVAILABLE.GetValue();
+        }
         DisplayBpms bpms;
         pSong->GetDisplayBpms(bpms);
-        int iMaxBPM = (int)bpms.GetMax();
+        const float fMaxBPM = bpms.GetMax();
+        if (!std::isfinite(fMaxBPM) || fMaxBPM < 0) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX SRC-656: invalid max BPM %.3f for '%s'; using "
+              "not-available section.",
+              fMaxBPM, pSong->GetSongDir().c_str());
+          return SORT_NOT_AVAILABLE.GetValue();
+        }
+        int iMaxBPM = (int)fMaxBPM;
         iMaxBPM += iBPMGroupSize - (iMaxBPM % iBPMGroupSize) - 1;
         return ssprintf("%03d-%03d", iMaxBPM - (iBPMGroupSize - 1), iMaxBPM);
       } else {
@@ -1003,6 +1018,21 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
     case SORT_LENGTH: {
       if (SHOW_SECTIONS_IN_LENGTH_SORT) {
         const int iSortLengthSize = SORT_LENGTH_DIVISION;
+        if (iSortLengthSize <= 0) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX SRC-656: invalid SortLengthDivision %i; using "
+              "not-available section.",
+              iSortLengthSize);
+          return SORT_NOT_AVAILABLE.GetValue();
+        }
+        if (!std::isfinite(pSong->m_fMusicLengthSeconds) ||
+            pSong->m_fMusicLengthSeconds < 0) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX SRC-656: invalid music length %.3f for '%s'; using "
+              "not-available section.",
+              pSong->m_fMusicLengthSeconds, pSong->GetSongDir().c_str());
+          return SORT_NOT_AVAILABLE.GetValue();
+        }
         int iMaxLength = (int)pSong->m_fMusicLengthSeconds;
         iMaxLength += (iSortLengthSize - (iMaxLength % iSortLengthSize) - 1);
         int iMinLength = iMaxLength - (iSortLengthSize - 1);
