@@ -175,6 +175,10 @@ class SongManager {
       const std::string& sSectionName, std::vector<Song*>& AddTo) const;
   std::vector<Song*> GetSongsByMeter(int iMeter) const;
   const std::vector<Course*>& GetPopularCourses(CourseType ct) const {
+    static const std::vector<Course*> empty;
+    if (ct < 0 || ct >= NUM_CourseType) {
+      return empty;
+    }
     return m_pPopularCourses[ct];
   }
   Song* FindSong(std::string sPath) const;
