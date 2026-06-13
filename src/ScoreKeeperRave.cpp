@@ -71,6 +71,12 @@ static void SuperMeterPercentChangeInit(
 static Preference1D<float> g_fSuperMeterPercentChange(
     SuperMeterPercentChangeInit, NUM_ScoreEvent);
 
+namespace {
+bool IsValidRavePlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+}  // namespace
+
 ScoreKeeperRave::ScoreKeeperRave(
     PlayerState* pPlayerState, PlayerStageStats* pPlayerStageStats)
     : ScoreKeeper(pPlayerState, pPlayerStageStats) {}
@@ -173,6 +179,15 @@ void ScoreKeeperRave::HandleTapScoreNone() {
 }
 
 void ScoreKeeperRave::AddSuperMeterDelta(float fUnscaledPercentChange) {
+  if (m_pPlayerState == nullptr ||
+      !IsValidRavePlayer(m_pPlayerState->m_PlayerNumber)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperRave ignored super meter delta for "
+        "invalid player state %p.",
+        static_cast<void*>(m_pPlayerState));
+    return;
+  }
+
   if (PREFSMAN->m_bMercifulDrain && fUnscaledPercentChange < 0) {
     float fSuperPercentage =
         m_pPlayerState->m_fSuperMeter / Enum::to_integral(NUM_ATTACK_LEVELS);
@@ -190,8 +205,11 @@ void ScoreKeeperRave::AddSuperMeterDelta(float fUnscaledPercentChange) {
         fLifePercentage = 1 - GAMESTATE->m_fTugLifePercentP1;
         break;
       default:
-        FAIL_M(ssprintf(
-            "Invalid player number: %i", m_pPlayerState->m_PlayerNumber));
+        LOG->Warn(
+            "SRC_AUDIT_FIX: ScoreKeeperRave ignored merciful super meter for "
+            "invalid player %i.",
+            m_pPlayerState->m_PlayerNumber);
+        return;
     }
     rage_clamp(fLifePercentage, 0.f, 1.f);
     if (fUnscaledPercentChange > 0) {
@@ -234,9 +252,11 @@ void ScoreKeeperRave::AddSuperMeterDelta(float fUnscaledPercentChange) {
         bWinning = GAMESTATE->m_fTugLifePercentP1 < 0.5f;
         break;
       default:
-        bWinning = false;
-        FAIL_M(ssprintf(
-            "Invalid player number: %i", m_pPlayerState->m_PlayerNumber));
+        LOG->Warn(
+            "SRC_AUDIT_FIX: ScoreKeeperRave skipped losing attack cleanup for "
+            "invalid player %i.",
+            m_pPlayerState->m_PlayerNumber);
+        return;
     }
     if (!bWinning) {
       m_pPlayerState->EndActiveAttacks();
