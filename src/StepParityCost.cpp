@@ -11,6 +11,8 @@
 using namespace StepParity;
 
 namespace {
+constexpr float MIN_ELAPSED_TIME = 0.0001f;
+
 template <typename T>
 bool isEmpty(const std::vector<T>& vec, int columnCount) {
   if (columnCount < 0) {
@@ -32,11 +34,24 @@ bool isEmpty(const std::vector<T>& vec, int columnCount) {
   }
   return true;
 }
+
+float SafeElapsedTime(float elapsedTime) {
+  if (std::isfinite(elapsedTime) && elapsedTime > MIN_ELAPSED_TIME) {
+    return elapsedTime;
+  }
+
+  LOG->Warn(
+      "SRC_AUDIT_FIX SRC-641: invalid StepParity elapsed time %.6f; using "
+      "%.6f for cost calculation.",
+      elapsedTime, MIN_ELAPSED_TIME);
+  return MIN_ELAPSED_TIME;
+}
 }  // namespace
 
 float StepParityCost::getActionCost(
     State* initialState, State* resultState, std::vector<Row>& rows,
     const FootPlacement& columns, int rowIndex, float elapsedTime) {
+  elapsedTime = SafeElapsedTime(elapsedTime);
   Row& row = rows[rowIndex];
   int columnCount = row.columnCount;
 
