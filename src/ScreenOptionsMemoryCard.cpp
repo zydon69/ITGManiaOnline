@@ -27,6 +27,12 @@ static bool IsMemoryCardOptionsPlayerValid(PlayerNumber pn) {
   return pn >= 0 && pn < NUM_PLAYERS;
 }
 
+ScreenOptionsMemoryCard::ScreenOptionsMemoryCard() : m_bOwnsMountedCard(false) {}
+
+ScreenOptionsMemoryCard::~ScreenOptionsMemoryCard() {
+  ReleaseOwnedMountedCard();
+}
+
 void ScreenOptionsMemoryCard::Init() {
   ScreenOptions::Init();
 
@@ -111,7 +117,22 @@ void ScreenOptionsMemoryCard::BeginScreen() {
 }
 
 void ScreenOptionsMemoryCard::HandleScreenMessage(const ScreenMessage SM) {
+  if (SM == SM_GoToPrevScreen) {
+    ReleaseOwnedMountedCard();
+  } else if (SM == SM_GoToNextScreen) {
+    m_bOwnsMountedCard = false;
+  }
+
   ScreenOptions::HandleScreenMessage(SM);
+}
+
+void ScreenOptionsMemoryCard::ReleaseOwnedMountedCard() {
+  if (!m_bOwnsMountedCard) {
+    return;
+  }
+
+  MEMCARDMAN->UnmountCard(PLAYER_1);
+  m_bOwnsMountedCard = false;
 }
 
 void ScreenOptionsMemoryCard::AfterChangeRow(PlayerNumber pn) {
@@ -234,8 +255,10 @@ void ScreenOptionsMemoryCard::ProcessMenuStart(const InputEventPlus&) {
     MEMCARDMAN->m_sEditorMemoryCardOsMountPoint.Set(dev.sOsMountDir);
 
     /* The destination screen must UnmountCard.  XXX: brittle */
+    ReleaseOwnedMountedCard();
     bool bSuccess = MEMCARDMAN->MountCard(PLAYER_1, dev);
     if (bSuccess) {
+      m_bOwnsMountedCard = true;
       SCREENMAN->PlayStartSound();
       this->BeginFadingOut();
     } else {

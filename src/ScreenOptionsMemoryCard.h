@@ -14,6 +14,8 @@
 
 class ScreenOptionsMemoryCard : public ScreenOptions {
  public:
+  ScreenOptionsMemoryCard();
+  virtual ~ScreenOptionsMemoryCard();
   virtual void Init();
   void BeginScreen();
 
@@ -32,11 +34,13 @@ class ScreenOptionsMemoryCard : public ScreenOptions {
 
   void CreateMenu();
   void SelectRowWithMemoryCard(const std::string& sOsMountPoint);
+  void ReleaseOwnedMountedCard();
 
   bool UpdateCurrentUsbStorageDevices();
   std::vector<UsbStorageDevice> m_CurrentUsbStorageDevices;
 
   BitmapText m_textOsMountDir;
+  bool m_bOwnsMountedCard;
 };
 
 #endif
