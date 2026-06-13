@@ -2784,18 +2784,30 @@ class LunaSongManager : public Luna<SongManager> {
     return 1;
   }
 
-  static int GetExtraStageInfo(T* p, lua_State* L) {
-    bool bExtra2 = BArg(1);
-    const Style* pStyle = Luna<Style>::check(L, 2);
-    Song* pSong;
-    Steps* pSteps;
+	  static int GetExtraStageInfo(T* p, lua_State* L) {
+	    bool bExtra2 = BArg(1);
+	    const Style* pStyle = Luna<Style>::check(L, 2);
+	    Song* pSong = nullptr;
+	    Steps* pSteps = nullptr;
 
-    p->GetExtraStageInfo(bExtra2, pStyle, pSong, pSteps);
-    pSong->PushSelf(L);
-    pSteps->PushSelf(L);
+	    p->GetExtraStageInfo(bExtra2, pStyle, pSong, pSteps);
+	    if (pSong != nullptr) {
+	      pSong->PushSelf(L);
+	    } else {
+	      LOG->Warn(
+	          "SRC_AUDIT_FIX SRC-621: Lua GetExtraStageInfo returned no song.");
+	      lua_pushnil(L);
+	    }
+	    if (pSteps != nullptr) {
+	      pSteps->PushSelf(L);
+	    } else {
+	      LOG->Warn(
+	          "SRC_AUDIT_FIX SRC-621: Lua GetExtraStageInfo returned no steps.");
+	      lua_pushnil(L);
+	    }
 
-    return 2;
-  }
+	    return 2;
+	  }
   DEFINE_METHOD(GetSongColor, GetSongColor(Luna<Song>::check(L, 1)))
   DEFINE_METHOD(GetSongGroupColor, GetSongGroupColor(SArg(1)))
   DEFINE_METHOD(GetCourseColor, GetCourseColor(Luna<Course>::check(L, 1)))
