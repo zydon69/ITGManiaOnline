@@ -429,7 +429,12 @@ bool ProfileManager::SaveProfile(PlayerNumber pn) const {
 
 bool ProfileManager::SaveLocalProfile(std::string sProfileID) {
   const Profile* pProfile = GetLocalProfile(sProfileID);
-  ASSERT(pProfile != nullptr);
+  if (pProfile == nullptr) {
+    LOG->Warn(
+        "ProfileManager::SaveLocalProfile: profile '%s' does not exist",
+        sProfileID.c_str());
+    return false;
+  }
   std::string sDir = LocalProfileIDToDir(sProfileID);
   bool b = pProfile->SaveAllToDir(sDir, PREFSMAN->m_bSignProfileData);
   return b;
@@ -813,10 +818,18 @@ void ProfileManager::AddLocalProfileByID(
 
 bool ProfileManager::RenameLocalProfile(
     std::string sProfileID, std::string sNewName) {
-  ASSERT(!sProfileID.empty());
+  if (sProfileID.empty()) {
+    LOG->Warn("ProfileManager::RenameLocalProfile: empty profile id");
+    return false;
+  }
 
   Profile* pProfile = ProfileManager::GetLocalProfile(sProfileID);
-  ASSERT(pProfile != nullptr);
+  if (pProfile == nullptr) {
+    LOG->Warn(
+        "ProfileManager::RenameLocalProfile: profile '%s' does not exist",
+        sProfileID.c_str());
+    return false;
+  }
   pProfile->m_sDisplayName = sNewName;
 
   std::string sProfileDir = LocalProfileIDToDir(sProfileID);
@@ -825,7 +838,12 @@ bool ProfileManager::RenameLocalProfile(
 
 bool ProfileManager::DeleteLocalProfile(std::string sProfileID) {
   Profile* pProfile = ProfileManager::GetLocalProfile(sProfileID);
-  ASSERT(pProfile != nullptr);
+  if (pProfile == nullptr) {
+    LOG->Warn(
+        "ProfileManager::DeleteLocalProfile: profile '%s' does not exist",
+        sProfileID.c_str());
+    return false;
+  }
   std::string sProfileDir = LocalProfileIDToDir(sProfileID);
 
   // flush directory cache in an attempt to get this working
