@@ -1,5 +1,7 @@
 #include "PaneDisplay.h"
 
+#include <cmath>
+#include <cctype>
 #include <string>
 
 #include "ActorFrame.h"
@@ -16,6 +18,7 @@
 #include "ProfileManager.h"
 #include "RadarValues.h"
 #include "RageThreads.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "Song.h"
 #include "Steps.h"
@@ -63,9 +66,65 @@ static const Content_t g_Contents[NUM_PaneCategory] = {
     {NEED_NOTES | NEED_PROFILE, "score"},  // ProfileHighScore
 };
 
+namespace {
+bool IsValidPlayerNumber(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+bool IsSafeCountFormat(const std::string& format) {
+  if (format.empty() || format.size() > 64) {
+    return false;
+  }
+  for (size_t i = 0; i < format.size(); ++i) {
+    if (format[i] != '%' || (i + 1 < format.size() && format[i + 1] == '%')) {
+      if (format[i] == '%') {
+        ++i;
+      }
+      continue;
+    }
+    size_t j = i + 1;
+    while (j < format.size() && !std::isalpha(format[j])) {
+      if (std::isdigit(format[j]) && format[j] > '9') {
+        return false;
+      }
+      ++j;
+    }
+    if (j >= format.size()) {
+      return false;
+    }
+    if (format[j] == 's' || format[j] == 'n' || format[j] == 'p') {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string FormatPaneCount(const std::string& format, float value) {
+  if (!std::isfinite(value)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-269: PaneDisplay corrected non-finite pane count.");
+    value = 0.0f;
+  }
+  if (!IsSafeCountFormat(format)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-269: PaneDisplay ignored unsafe count format '%s'.",
+        format.c_str());
+    return ssprintf("%.0f", value);
+  }
+  return ssprintf(format.c_str(), value);
+}
+}  // namespace
+
 REGISTER_ACTOR_CLASS(PaneDisplay);
 
 void PaneDisplay::Load(const std::string& sMetricsGroup, PlayerNumber pn) {
+  if (!IsValidPlayerNumber(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-267: PaneDisplay loaded with invalid player %i; "
+        "using PLAYER_1 for layout.",
+        pn);
+    pn = PLAYER_1;
+  }
   m_PlayerNumber = pn;
 
   EMPTY_MACHINE_HIGH_SCORE_NAME.Load(
@@ -121,6 +180,13 @@ void PaneDisplay::LoadFromNode(const XNode* pNode) {
         "PaneDisplay must have a PlayerNumber specified.");
   } else {
     LuaHelpers::Pop(L, pn);
+    if (!IsValidPlayerNumber(pn)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-267: PaneDisplay ignored invalid PlayerNumber "
+          "%i from XML.",
+          pn);
+      pn = GAMESTATE->GetMasterPlayerNumber();
+    }
   }
   LUA->Release(L);
 
@@ -131,6 +197,22 @@ void PaneDisplay::LoadFromNode(const XNode* pNode) {
 
 void PaneDisplay::GetPaneTextAndLevel(
     PaneCategory c, std::string& sTextOut, float& fLevelOut) {
+  if (c < PaneCategory_NumSteps || c >= NUM_PaneCategory) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-267: PaneDisplay ignored invalid category %i.", c);
+    sTextOut = NOT_AVAILABLE;
+    fLevelOut = 0;
+    return;
+  }
+  if (!IsValidPlayerNumber(m_PlayerNumber)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-267: PaneDisplay ignored invalid player %i.",
+        m_PlayerNumber);
+    sTextOut = NOT_AVAILABLE;
+    fLevelOut = 0;
+    return;
+  }
+
   const Song* pSong = GAMESTATE->m_pCurSong;
   const Steps* pSteps = GAMESTATE->m_pCurSteps[m_PlayerNumber];
   const Course* pCourse = GAMESTATE->m_pCurCourse;
@@ -207,12 +289,26 @@ void PaneDisplay::GetPaneTextAndLevel(
 
     if (pSteps) {
       rv = pSteps->GetRadarValues(m_PlayerNumber);
-      pHSL =
-          &PROFILEMAN->GetProfile(slot)->GetStepsHighScoreList(pSong, pSteps);
+      Profile* pProfileForScores = PROFILEMAN->GetProfile(slot);
+      if (pProfileForScores == nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-268: PaneDisplay missing profile slot %i.",
+            slot);
+        sTextOut = NOT_AVAILABLE;
+        return;
+      }
+      pHSL = &pProfileForScores->GetStepsHighScoreList(pSong, pSteps);
     } else if (pTrail) {
       rv = pTrail->GetRadarValues();
-      pHSL = &PROFILEMAN->GetProfile(slot)->GetCourseHighScoreList(
-          pCourse, pTrail);
+      Profile* pProfileForScores = PROFILEMAN->GetProfile(slot);
+      if (pProfileForScores == nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-268: PaneDisplay missing profile slot %i.",
+            slot);
+        sTextOut = NOT_AVAILABLE;
+        return;
+      }
+      pHSL = &pProfileForScores->GetCourseHighScoreList(pCourse, pTrail);
     }
 
     switch (c) {
@@ -253,6 +349,10 @@ void PaneDisplay::GetPaneTextAndLevel(
       case PaneCategory_MachineHighScore: {
         CHECKPOINT_M(
             "Getting data from a high score instead of a radar value.");
+        if (pHSL == nullptr) {
+          sTextOut = NOT_AVAILABLE;
+          return;
+        }
         fLevelOut = pHSL->GetTopScore().GetPercentDP();
         break;
       }
@@ -290,7 +390,7 @@ void PaneDisplay::GetPaneTextAndLevel(
         case PaneCategory_Hands:
         case PaneCategory_Lifts:
         case PaneCategory_Fakes:
-          sTextOut = ssprintf(COUNT_FORMAT.GetValue().c_str(), fLevelOut);
+          sTextOut = FormatPaneCount(COUNT_FORMAT.GetValue(), fLevelOut);
           break;
         default:
           break;
