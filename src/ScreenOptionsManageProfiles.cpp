@@ -275,6 +275,14 @@ void ScreenOptionsManageProfiles::HandleScreenMessage(const ScreenMessage SM) {
     }
   } else if (SM == SM_BackFromDeleteConfirm) {
     if (ScreenPrompt::s_LastAnswer == ANSWER_YES) {
+      if (m_vsLocalProfileID.empty()) {
+        LOG->Warn(
+            "ScreenOptionsManageProfiles: delete confirmed with no profiles");
+        GAMESTATE->m_sEditLocalProfileID.Set("");
+        SCREENMAN->SetNewScreen(this->m_sName);
+        return;
+      }
+
       // Select the profile nearest to the one that was just deleted.
       int iIndex = -1;
       std::vector<std::string>::const_iterator iter = find(
@@ -283,7 +291,15 @@ void ScreenOptionsManageProfiles::HandleScreenMessage(const ScreenMessage SM) {
       if (iter != m_vsLocalProfileID.end()) {
         iIndex = iter - m_vsLocalProfileID.begin();
       }
-      rage_clamp(iIndex, 0, m_vsLocalProfileID.size() - 1);
+      if (iIndex < 0) {
+        LOG->Warn(
+            "ScreenOptionsManageProfiles: delete target '%s' is no longer in "
+            "the profile list",
+            GAMESTATE->m_sEditLocalProfileID.Get().c_str());
+        SCREENMAN->SetNewScreen(this->m_sName);
+        return;
+      }
+      rage_clamp(iIndex, 0, int(m_vsLocalProfileID.size()) - 1);
       GAMESTATE->m_sEditLocalProfileID.Set(m_vsLocalProfileID[iIndex]);
 
       PROFILEMAN->DeleteLocalProfile(GetLocalProfileIDWithFocus());
