@@ -30,6 +30,9 @@ class ScoreKeeperShared : public ScoreKeeperNormal {
       const NoteData& nd, int iRow, int iNumHoldsHeldThisRow,
       int iNumHoldsMissedThisRow);
   virtual void HandleTapScoreNone();
+
+ private:
+  bool IsMasterScoreKeeper() const;
 };
 #endif
 

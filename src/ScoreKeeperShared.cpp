@@ -6,6 +6,7 @@
 #include "GameState.h"
 #include "NoteTypes.h"
 #include "PlayerState.h"
+#include "RageLog.h"
 #include "ScoreKeeper.h"
 #include "ScoreKeeperNormal.h"
 
@@ -16,10 +17,20 @@ ScoreKeeperShared::ScoreKeeperShared(
     PlayerState* pPlayerState, PlayerStageStats* pPlayerStageStats)
     : ScoreKeeperNormal(pPlayerState, pPlayerStageStats) {}
 
+bool ScoreKeeperShared::IsMasterScoreKeeper() const {
+  if (m_pPlayerState == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperShared ignored callback with null "
+        "PlayerState.");
+    return false;
+  }
+  return m_pPlayerState->m_PlayerNumber == GAMESTATE->GetMasterPlayerNumber();
+}
+
 void ScoreKeeperShared::Load(
     const std::vector<Song*>& apSongs, const std::vector<Steps*>& apSteps,
     const std::vector<AttackArray>& asModifiers) {
-  if (m_pPlayerState->m_PlayerNumber != GAMESTATE->GetMasterPlayerNumber()) {
+  if (!IsMasterScoreKeeper()) {
     return;
   }
   ScoreKeeperNormal::Load(apSongs, apSteps, asModifiers);
@@ -27,14 +38,14 @@ void ScoreKeeperShared::Load(
 
 // These ScoreKeepers don't get to draw.
 void ScoreKeeperShared::DrawPrimitives() {
-  if (m_pPlayerState->m_PlayerNumber != GAMESTATE->GetMasterPlayerNumber()) {
+  if (!IsMasterScoreKeeper()) {
     return;
   }
   ScoreKeeperNormal::DrawPrimitives();
 }
 
 void ScoreKeeperShared::Update(float fDelta) {
-  if (m_pPlayerState->m_PlayerNumber != GAMESTATE->GetMasterPlayerNumber()) {
+  if (!IsMasterScoreKeeper()) {
     return;
   }
   ScoreKeeperNormal::Update(fDelta);
@@ -42,35 +53,35 @@ void ScoreKeeperShared::Update(float fDelta) {
 
 void ScoreKeeperShared::OnNextSong(
     int iSongInCourseIndex, const Steps* pSteps, const NoteData* pNoteData) {
-  if (m_pPlayerState->m_PlayerNumber != GAMESTATE->GetMasterPlayerNumber()) {
+  if (!IsMasterScoreKeeper()) {
     return;
   }
   ScoreKeeperNormal::OnNextSong(iSongInCourseIndex, pSteps, pNoteData);
 }
 
 void ScoreKeeperShared::HandleTapScore(const TapNote& tn) {
-  if (m_pPlayerState->m_PlayerNumber != GAMESTATE->GetMasterPlayerNumber()) {
+  if (!IsMasterScoreKeeper()) {
     return;
   }
   ScoreKeeperNormal::HandleTapScore(tn);
 }
 
 void ScoreKeeperShared::HandleTapRowScore(const NoteData& nd, int iRow) {
-  if (m_pPlayerState->m_PlayerNumber != GAMESTATE->GetMasterPlayerNumber()) {
+  if (!IsMasterScoreKeeper()) {
     return;
   }
   ScoreKeeperNormal::HandleTapRowScore(nd, iRow);
 }
 
 void ScoreKeeperShared::HandleHoldScore(const TapNote& tn) {
-  if (m_pPlayerState->m_PlayerNumber != GAMESTATE->GetMasterPlayerNumber()) {
+  if (!IsMasterScoreKeeper()) {
     return;
   }
   ScoreKeeperNormal::HandleHoldScore(tn);
 }
 
 void ScoreKeeperShared::HandleHoldActiveSeconds(float fMusicSecondsHeld) {
-  if (m_pPlayerState->m_PlayerNumber != GAMESTATE->GetMasterPlayerNumber()) {
+  if (!IsMasterScoreKeeper()) {
     return;
   }
   ScoreKeeperNormal::HandleHoldActiveSeconds(fMusicSecondsHeld);
@@ -79,7 +90,7 @@ void ScoreKeeperShared::HandleHoldActiveSeconds(float fMusicSecondsHeld) {
 void ScoreKeeperShared::HandleHoldCheckpointScore(
     const NoteData& nd, int iRow, int iNumHoldsHeldThisRow,
     int iNumHoldsMissedThisRow) {
-  if (m_pPlayerState->m_PlayerNumber != GAMESTATE->GetMasterPlayerNumber()) {
+  if (!IsMasterScoreKeeper()) {
     return;
   }
   ScoreKeeperNormal::HandleHoldCheckpointScore(
@@ -87,7 +98,7 @@ void ScoreKeeperShared::HandleHoldCheckpointScore(
 }
 
 void ScoreKeeperShared::HandleTapScoreNone() {
-  if (m_pPlayerState->m_PlayerNumber != GAMESTATE->GetMasterPlayerNumber()) {
+  if (!IsMasterScoreKeeper()) {
     return;
   }
   ScoreKeeperNormal::HandleTapScoreNone();
