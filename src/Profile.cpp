@@ -1566,11 +1566,15 @@ bool Profile::SaveStatsXmlToDir(std::string sDir, bool bSignData) const {
 
   if (bSignData) {
     std::string sStatsXmlSigFile = fn + SIGNATURE_APPEND;
-    CryptManager::SignFileToFile(fn, sStatsXmlSigFile);
+    if (!CryptManager::SignFileToFile(fn, sStatsXmlSigFile)) {
+      return false;
+    }
 
     // Save the "don't share" file
     std::string sDontShareFile = sDir + DONT_SHARE_SIG;
-    CryptManager::SignFileToFile(sStatsXmlSigFile, sDontShareFile);
+    if (!CryptManager::SignFileToFile(sStatsXmlSigFile, sDontShareFile)) {
+      return false;
+    }
   }
 
   return true;

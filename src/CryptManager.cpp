@@ -69,8 +69,10 @@ CryptManager::~CryptManager() {}
 void CryptManager::GenerateRSAKey(
     unsigned int keyLength, std::string privFilename, std::string pubFilename) {
 }
-void CryptManager::SignFileToFile(
-    std::string sPath, std::string sSignatureFile) {}
+bool CryptManager::SignFileToFile(
+    std::string sPath, std::string sSignatureFile) {
+  return true;
+}
 bool CryptManager::VerifyFileWithFile(
     std::string sPath, std::string sSignatureFile, std::string sPublicKeyFile) {
   return true;
@@ -223,7 +225,7 @@ void CryptManager::GenerateRSAKeyToFile(
   }
 }
 
-void CryptManager::SignFileToFile(
+bool CryptManager::SignFileToFile(
     std::string sPath, std::string sSignatureFile) {
   std::string sPrivFilename = PRIVATE_KEY_PATH;
   if (sSignatureFile.empty()) {
@@ -232,15 +234,27 @@ void CryptManager::SignFileToFile(
 
   std::string sPrivKey;
   if (!GetFileContents(sPrivFilename, sPrivKey)) {
-    return;
+    LOG->Warn(
+        "CryptManager::SignFileToFile: missing private key '%s'",
+        sPrivFilename.c_str());
+    return false;
   }
 
   std::string sSignature;
   if (!Sign(sPath, sSignature, sPrivKey)) {
-    return;
+    LOG->Warn(
+        "CryptManager::SignFileToFile: failed to sign '%s'", sPath.c_str());
+    return false;
   }
 
-  WriteFile(sSignatureFile, sSignature);
+  if (!WriteFile(sSignatureFile, sSignature)) {
+    LOG->Warn(
+        "CryptManager::SignFileToFile: failed to write signature '%s'",
+        sSignatureFile.c_str());
+    return false;
+  }
+
+  return true;
 }
 
 bool CryptManager::Sign(

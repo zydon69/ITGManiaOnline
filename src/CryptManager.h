@@ -19,7 +19,7 @@ class CryptManager {
   static void GenerateRSAKeyToFile(
       unsigned int keyLength, std::string privFilename,
       std::string pubFilename);
-  static void SignFileToFile(
+  static bool SignFileToFile(
       std::string sPath, std::string sSignatureFile = "");
   static bool Sign(
       std::string sPath, std::string& sSignatureOut, std::string sPrivateKey);
