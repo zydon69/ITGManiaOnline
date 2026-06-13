@@ -1039,7 +1039,7 @@ RageColor SongManager::GetCourseGroupColor(
   for (const std::pair<const std::string, CourseGroupInfo>& iter :
        m_mapCourseGroupToInfo) {
     if (iter.first == sCourseGroup) {
-      return SONG_GROUP_COLOR.GetValue(iIndex % NUM_SONG_GROUP_COLORS);
+      return COURSE_GROUP_COLOR.GetValue(iIndex % NUM_COURSE_GROUP_COLORS);
     }
     iIndex++;
   }
