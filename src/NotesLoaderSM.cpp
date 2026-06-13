@@ -388,7 +388,16 @@ void SMLoader::ProcessAttackString(
 
 void SMLoader::ProcessAttacks(AttackArray& attacks, MsdFile::value_t params) {
   Attack attack;
-  float end = -9999;
+  float end = 0.0f;
+  bool hasEnd = false;
+  bool attackValid = true;
+
+  auto resetAttack = [&attack, &end, &hasEnd, &attackValid]() {
+    attack.MakeBlank();
+    end = 0.0f;
+    hasEnd = false;
+    attackValid = true;
+  };
 
   for (unsigned j = 1; j < params.params.size(); ++j) {
     std::vector<std::string> sBits;
@@ -402,25 +411,54 @@ void SMLoader::ProcessAttacks(AttackArray& attacks, MsdFile::value_t params) {
     Trim(sBits[0]);
 
     if (!CompareNoCase(sBits[0], "TIME")) {
-      attack.fStartSecond = strtof(sBits[1].c_str(), nullptr);
+      float value = 0.0f;
+      if (ParseSMFloat(*this, "ATTACKS", "TIME", sBits[1], params[j], value)) {
+        attack.fStartSecond = value;
+      } else {
+        attackValid = false;
+      }
     } else if (!CompareNoCase(sBits[0], "LEN")) {
-      attack.fSecsRemaining = strtof(sBits[1].c_str(), nullptr);
+      float value = 0.0f;
+      if (ParseSMFloat(*this, "ATTACKS", "LEN", sBits[1], params[j], value)) {
+        attack.fSecsRemaining = value;
+      } else {
+        attackValid = false;
+      }
     } else if (!CompareNoCase(sBits[0], "END")) {
-      end = strtof(sBits[1].c_str(), nullptr);
+      if (ParseSMFloat(*this, "ATTACKS", "END", sBits[1], params[j], end)) {
+        hasEnd = true;
+      } else {
+        attackValid = false;
+      }
     } else if (!CompareNoCase(sBits[0], "MODS")) {
       Trim(sBits[1]);
       attack.sModifiers = sBits[1];
 
-      if (end != -9999) {
+      if (!attackValid || attack.sModifiers.empty()) {
+        LOG->UserLog(
+            "Song file", this->GetSongTitle(),
+            "SRC_AUDIT_FIX ignored malformed #ATTACKS entry ending at "
+            "\"%s\".",
+            params[j].c_str());
+        resetAttack();
+        continue;
+      }
+
+      if (hasEnd) {
         attack.fSecsRemaining = end - attack.fStartSecond;
-        end = -9999;
+        hasEnd = false;
       }
 
       if (attack.fSecsRemaining < 0.0f) {
+        LOG->UserLog(
+            "Song file", this->GetSongTitle(),
+            "SRC_AUDIT_FIX clamped negative #ATTACKS duration for \"%s\".",
+            params[j].c_str());
         attack.fSecsRemaining = 0.0f;
       }
 
       attacks.push_back(attack);
+      resetAttack();
     }
   }
 }
