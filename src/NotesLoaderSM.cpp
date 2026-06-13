@@ -1152,6 +1152,7 @@ void SMLoader::ProcessFakes(
 bool SMLoader::LoadFromBGChangesVector(
     BackgroundChange& change, std::vector<std::string> aBGChangeValues) {
   aBGChangeValues.resize(std::min((int)aBGChangeValues.size(), 11));
+  const std::string expression = join("=", aBGChangeValues);
 
   switch (aBGChangeValues.size()) {
     case 11:
@@ -1212,10 +1213,23 @@ bool SMLoader::LoadFromBGChangesVector(
       }
       [[fallthrough]];
     case 3:
-      change.m_fRate = StringToFloat(aBGChangeValues[2]);
+      if (!ParseSMFloat(
+              *this, "BGCHANGES", "rate", aBGChangeValues[2], expression,
+              change.m_fRate)) {
+        return false;
+      }
       [[fallthrough]];
     case 2: {
       std::string tmp = aBGChangeValues[1];
+      Trim(tmp);
+      if (tmp.empty()) {
+        LOG->UserLog(
+            "Song file", this->GetSongTitle(),
+            "SRC_AUDIT_FIX ignored #BGCHANGES entry with an empty file in "
+            "\"%s\".",
+            expression.c_str());
+        return false;
+      }
       MakeLower(tmp);
       if ((tmp.find(".ini") != std::string::npos ||
            tmp.find(".xml") != std::string::npos) &&
@@ -1226,10 +1240,36 @@ bool SMLoader::LoadFromBGChangesVector(
       [[fallthrough]];
     }
     case 1:
-      change.m_fStartBeat = StringToFloat(aBGChangeValues[0]);
+      if (!ParseSMFloat(
+              *this, "BGCHANGES", "beat", aBGChangeValues[0], expression,
+              change.m_fStartBeat)) {
+        return false;
+      }
   }
 
-  return aBGChangeValues.size() >= 2;
+  if (aBGChangeValues.size() < 2) {
+    return false;
+  }
+
+  if (change.m_fStartBeat < 0.0f) {
+    LOG->UserLog(
+        "Song file", this->GetSongTitle(),
+        "SRC_AUDIT_FIX ignored #BGCHANGES entry with negative beat %f in "
+        "\"%s\".",
+        change.m_fStartBeat, expression.c_str());
+    return false;
+  }
+
+  if (change.m_fRate <= 0.0f) {
+    LOG->UserLog(
+        "Song file", this->GetSongTitle(),
+        "SRC_AUDIT_FIX ignored #BGCHANGES entry with non-positive rate %f in "
+        "\"%s\".",
+        change.m_fRate, expression.c_str());
+    return false;
+  }
+
+  return true;
 }
 
 bool SMLoader::LoadNoteDataFromSimfile(const std::string& path, Steps& out) {
@@ -1569,11 +1609,22 @@ void SMLoader::TidyUpData(Song& song, bool bFromCache) {
 
 std::vector<std::string> SMLoader::GetSongDirFiles(
     const std::string& sSongDir) {
+  if (m_SongDirFilesPath != sSongDir) {
+    m_SongDirFiles.clear();
+    m_SongDirFilesPath = sSongDir;
+  }
+
   if (!m_SongDirFiles.empty()) {
     return m_SongDirFiles;
   }
 
-  ASSERT(!sSongDir.empty());
+  if (sSongDir.empty()) {
+    LOG->UserLog(
+        "Song file", this->GetSongTitle(),
+        "SRC_AUDIT_FIX parsed BGChanges without a song directory; filename "
+        "matching for commas and equals signs is disabled.");
+    return m_SongDirFiles;
+  }
 
   std::vector<std::string> vsDirs;
   vsDirs.push_back(sSongDir);

@@ -235,6 +235,8 @@ struct SMLoader {
   /** @brief The song title that is being processed. */
   std::string songTitle;
 
+  /** @brief The song directory used to populate m_SongDirFiles. */
+  std::string m_SongDirFilesPath;
   std::vector<std::string> m_SongDirFiles;
 };
 
