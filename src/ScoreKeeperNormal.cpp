@@ -23,6 +23,7 @@
 #include "PlayerState.h"
 #include "PrefsManager.h"
 #include "ProfileManager.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "ScoreKeeper.h"
 #include "ScreenManager.h"
@@ -56,8 +57,12 @@ void ScoreKeeperNormal::Load(
     const std::vector<Song*>& apSongs, const std::vector<Steps*>& apSteps,
     const std::vector<AttackArray>& asModifiers) {
   m_apSteps = apSteps;
-  ASSERT(apSongs.size() == apSteps.size());
-  ASSERT(apSongs.size() == asModifiers.size());
+  if (apSongs.size() != apSteps.size() || apSongs.size() != asModifiers.size()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal::Load received mismatched course "
+        "vectors: songs=%zu steps=%zu modifiers=%zu.",
+        apSongs.size(), apSteps.size(), asModifiers.size());
+  }
 
   // True if a jump is one to combo, false if combo is purely based on tap
   // count.
@@ -79,11 +84,26 @@ void ScoreKeeperNormal::Load(
   // Fill in STATSMAN->m_CurStageStats, calculate multiplier
   int iTotalPossibleDancePoints = 0;
   int iTotalPossibleGradePoints = 0;
-  for (unsigned i = 0; i < apSteps.size(); i++) {
+  const size_t entries =
+      std::min(apSongs.size(), std::min(apSteps.size(), asModifiers.size()));
+  for (size_t i = 0; i < entries; i++) {
     Song* pSong = apSongs[i];
-    ASSERT(pSong != nullptr);
     Steps* pSteps = apSteps[i];
-    ASSERT(pSteps != nullptr);
+    if (pSong == nullptr || pSteps == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperNormal::Load skipped entry %zu because "
+          "song=%p steps=%p.",
+          i, static_cast<void*>(pSong), static_cast<void*>(pSteps));
+      continue;
+    }
+    const TimingData* pTiming = pSteps->GetTimingData();
+    if (pTiming == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperNormal::Load skipped entry %zu because "
+          "steps '%s' has no timing data.",
+          i, pSteps->GetDescription().c_str());
+      continue;
+    }
     const AttackArray& aa = asModifiers[i];
     NoteData ndTemp;
     pSteps->GetNoteData(ndTemp);
@@ -94,6 +114,13 @@ void ScoreKeeperNormal::Load(
 
     const Style* pStyle =
         GAMESTATE->GetCurrentStyle(m_pPlayerState->m_PlayerNumber);
+    if (pStyle == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperNormal::Load skipped entry %zu because "
+          "no current style was available for player %i.",
+          i, m_pPlayerState->m_PlayerNumber);
+      continue;
+    }
     NoteData ndPre;
     pStyle->GetTransformedNoteDataForStyle(
         m_pPlayerState->m_PlayerNumber, ndTemp, ndPre);
@@ -102,7 +129,7 @@ void ScoreKeeperNormal::Load(
      * Course mods and count them in the "pre" RadarValues because they're
      * forced and not chosen by the user. */
     NoteDataUtil::TransformNoteData(
-        ndPre, *(pSteps->GetTimingData()), aa, pSteps->m_StepsType, pSong);
+        ndPre, *pTiming, aa, pSteps->m_StepsType, pSong);
 
     /* Apply user transforms to find out how the notes will really look.
      *
@@ -113,17 +140,17 @@ void ScoreKeeperNormal::Load(
      * but that'd mean moving the queues in ScreenGameplay to GameState ... */
     NoteData ndPost = ndPre;
     NoteDataUtil::TransformNoteData(
-        ndPost, *(pSteps->GetTimingData()),
-        m_pPlayerState->m_PlayerOptions.GetStage(), pSteps->m_StepsType);
+        ndPost, *pTiming, m_pPlayerState->m_PlayerOptions.GetStage(),
+        pSteps->m_StepsType);
 
     GAMESTATE->SetProcessedTimingData(
         pSteps->GetTimingData());  // XXX: Not sure why but
                                    // NoteDataUtil::CalculateRadarValues
                                    // segfaults without this
     iTotalPossibleDancePoints += this->GetPossibleDancePoints(
-        &ndPre, &ndPost, pSteps->GetTimingData(), pSong->m_fMusicLengthSeconds);
+        &ndPre, &ndPost, pTiming, pSong->m_fMusicLengthSeconds);
     iTotalPossibleGradePoints += this->GetPossibleGradePoints(
-        &ndPre, &ndPost, pSteps->GetTimingData(), pSong->m_fMusicLengthSeconds);
+        &ndPre, &ndPost, pTiming, pSong->m_fMusicLengthSeconds);
     GAMESTATE->SetProcessedTimingData(nullptr);
   }
 
