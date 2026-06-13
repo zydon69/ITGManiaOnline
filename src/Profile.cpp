@@ -1175,7 +1175,12 @@ ProfileLoadResult Profile::LoadAllFromDir(
     std::string sDir, bool bRequireSignature) {
   LOG->Trace("Profile::LoadAllFromDir( %s )", sDir.c_str());
 
-  ASSERT(Right(sDir, 1) == "/");
+  if (sDir.empty() || Right(sDir, 1) != "/") {
+    LOG->Warn(
+        "Profile::LoadAllFromDir: refusing invalid profile dir '%s'",
+        sDir.c_str());
+    return ProfileLoadResult_FailedNoProfile;
+  }
 
   InitAll();
 

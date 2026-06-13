@@ -167,8 +167,12 @@ ProfileLoadResult ProfileManager::LoadProfile(
     return ProfileLoadResult_FailedNoProfile;
   }
 
-  ASSERT(!sProfileDir.empty());
-  ASSERT(Right(sProfileDir, 1) == "/");
+  if (sProfileDir.empty() || Right(sProfileDir, 1) != "/") {
+    LOG->Warn(
+        "ProfileManager::LoadProfile: refusing invalid profile dir '%s'",
+        sProfileDir.c_str());
+    return ProfileLoadResult_FailedNoProfile;
+  }
 
   m_sProfileDir[pn] = sProfileDir;
   m_bWasLoadedFromMemoryCard[pn] = bIsMemCard;
