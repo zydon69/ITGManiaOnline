@@ -10,8 +10,31 @@
 #endif
 
 #include "NoteTypes.h"
+#include "RageLog.h"
 
 using namespace StepParity;
+
+namespace {
+bool IsValidLayoutColumn(const StageLayout& layout, int column) {
+  return column >= 0 && column < layout.columnCount &&
+         column < static_cast<int>(layout.columns.size());
+}
+
+bool ValidateLayoutColumnPair(
+    const StageLayout& layout, int leftIndex, int rightIndex,
+    const char* context) {
+  if (!IsValidLayoutColumn(layout, leftIndex) ||
+      !IsValidLayoutColumn(layout, rightIndex)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-644: %s received invalid columns %d/%d "
+        "(columnCount=%d, columns=%zu).",
+        context, leftIndex, rightIndex, layout.columnCount,
+        layout.columns.size());
+    return false;
+  }
+  return true;
+}
+}  // namespace
 
 bool State::operator==(const State& other) const {
   return combined_mask == other.combined_mask &&
@@ -39,6 +62,9 @@ bool StageLayout::isDownArrow(int column) const {
 }
 
 float StageLayout::getDistanceSq(int c1, int c2) const {
+  if (!ValidateLayoutColumnPair(*this, c1, c2, "getDistanceSq")) {
+    return 0;
+  }
   return getDistanceSq(columns[c1], columns[c2]);
 }
 
@@ -51,12 +77,19 @@ float StageLayout::getDistance(int leftIndex, int rightIndex) const {
   if (leftIndex == INVALID_COLUMN || rightIndex == INVALID_COLUMN) {
     return 0;
   }
+  if (!ValidateLayoutColumnPair(*this, leftIndex, rightIndex, "getDistance")) {
+    return 0;
+  }
   int idx = leftIndex * columnCount + rightIndex;
   return distances[idx];
 }
 
 float StageLayout::getXDifference(int leftIndex, int rightIndex) const {
   if (leftIndex == rightIndex) {
+    return 0;
+  }
+  if (!ValidateLayoutColumnPair(
+          *this, leftIndex, rightIndex, "getXDifference")) {
     return 0;
   }
   float dx = columns[rightIndex].x - columns[leftIndex].x;
@@ -80,6 +113,10 @@ float StageLayout::getYDifference(int leftIndex, int rightIndex) const {
   if (leftIndex == rightIndex) {
     return 0;
   }
+  if (!ValidateLayoutColumnPair(
+          *this, leftIndex, rightIndex, "getYDifference")) {
+    return 0;
+  }
   float dx = columns[rightIndex].x - columns[leftIndex].x;
   float dy = columns[rightIndex].y - columns[leftIndex].y;
 
@@ -101,6 +138,10 @@ float StageLayout::getXFacingPenalty(int leftIndex, int rightIndex) const {
   if (leftIndex == INVALID_COLUMN || rightIndex == INVALID_COLUMN) {
     return 0;
   }
+  if (!ValidateLayoutColumnPair(
+          *this, leftIndex, rightIndex, "getXFacingPenalty")) {
+    return 0;
+  }
 
   int idx = leftIndex * columnCount + rightIndex;
   return facingXPenalties[idx];
@@ -108,6 +149,10 @@ float StageLayout::getXFacingPenalty(int leftIndex, int rightIndex) const {
 
 float StageLayout::getYFacingPenalty(int leftIndex, int rightIndex) const {
   if (leftIndex == INVALID_COLUMN || rightIndex == INVALID_COLUMN) {
+    return 0;
+  }
+  if (!ValidateLayoutColumnPair(
+          *this, leftIndex, rightIndex, "getYFacingPenalty")) {
     return 0;
   }
 
@@ -294,16 +339,36 @@ StagePoint StageLayout::averagePoint(int leftIndex, int rightIndex) const {
     return {0, 0};
   }
   if (leftIndex == INVALID_COLUMN) {
+    if (!IsValidLayoutColumn(*this, rightIndex)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-644: averagePoint received invalid right column "
+          "%d.",
+          rightIndex);
+      return {0, 0};
+    }
     return columns[rightIndex];
   }
   if (rightIndex == INVALID_COLUMN) {
+    if (!IsValidLayoutColumn(*this, leftIndex)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-644: averagePoint received invalid left column "
+          "%d.",
+          leftIndex);
+      return {0, 0};
+    }
     return columns[leftIndex];
+  }
+  if (!ValidateLayoutColumnPair(*this, leftIndex, rightIndex, "averagePoint")) {
+    return {0, 0};
   }
   int idx = leftIndex * columnCount + rightIndex;
   return avgPoints[idx];
 }
 
 float StageLayout::getPlayerAngle(int c1, int c2) const {
+  if (!ValidateLayoutColumnPair(*this, c1, c2, "getPlayerAngle")) {
+    return 0;
+  }
   return getPlayerAngle(columns[c1], columns[c2]);
 }
 float StageLayout::getPlayerAngle(
