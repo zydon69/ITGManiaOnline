@@ -941,6 +941,13 @@ LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
   }
   static int GetLifeRecord(T* p, lua_State* L) {
     float last_second = FArg(1);
+    if (!std::isfinite(last_second) || last_second < 0.0f) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats:GetLifeRecord normalized invalid "
+          "last second %f.",
+          last_second);
+      last_second = 0.0f;
+    }
     int samples = 100;
     if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) {
       samples = IArg(2);
@@ -954,7 +961,9 @@ LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
     lua_createtable(L, samples, 0);
     for (int i = 0; i < samples; ++i) {
       // The scale from range is [0, samples-1] because that is i's range.
-      float from = SCALE(i, 0, (float)samples - 1.0f, 0.0f, last_second);
+      float from = samples == 1
+                       ? 0.0f
+                       : SCALE(i, 0, (float)samples - 1.0f, 0.0f, last_second);
       float curr = p->GetLifeRecordLerpAt(from);
       lua_pushnumber(L, curr);
       lua_rawseti(L, -2, i + 1);
