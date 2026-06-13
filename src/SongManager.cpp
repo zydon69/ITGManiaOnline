@@ -1436,6 +1436,14 @@ void SongManager::InitRandomAttacks() {
       for (unsigned i = 0; i < msd.GetNumValues(); i++) {
         int iNumParams = msd.GetNumParams(i);
         const MsdFile::value_t& sParams = msd.GetValue(i);
+        if (iNumParams < 2) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX SRC-098: ignoring RandomAttacks entry %u with "
+              "%d parameter(s). Expected ATTACK:<modifiers>.",
+              i, iNumParams);
+          continue;
+        }
+
         std::string sType = sParams[0];
         std::string sAttack = sParams[1];
 
