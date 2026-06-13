@@ -776,6 +776,7 @@ void SongUtil::SortSongPointerArrayByProfileGrades(
 }
 
 void SongUtil::SortSongPointerArrayByArtist(std::vector<Song*>& vpSongsInOut) {
+  g_mapSongSortVal.clear();
   for (unsigned i = 0; i < vpSongsInOut.size(); ++i) {
     g_mapSongSortVal[vpSongsInOut[i]] =
         MakeSortString(vpSongsInOut[i]->GetTranslitArtist());
@@ -783,12 +784,14 @@ void SongUtil::SortSongPointerArrayByArtist(std::vector<Song*>& vpSongsInOut) {
   stable_sort(
       vpSongsInOut.begin(), vpSongsInOut.end(),
       CompareSongPointersBySortValueAscending);
+  g_mapSongSortVal.clear();
 }
 
 /* This is for internal use, not display; sorting by Unicode codepoints isn't
  * very interesting for display. */
 void SongUtil::SortSongPointerArrayByDisplayArtist(
     std::vector<Song*>& vpSongsInOut) {
+  g_mapSongSortVal.clear();
   for (unsigned i = 0; i < vpSongsInOut.size(); ++i) {
     g_mapSongSortVal[vpSongsInOut[i]] =
         MakeSortString(vpSongsInOut[i]->GetDisplayArtist());
@@ -796,6 +799,7 @@ void SongUtil::SortSongPointerArrayByDisplayArtist(
   stable_sort(
       vpSongsInOut.begin(), vpSongsInOut.end(),
       CompareSongPointersBySortValueAscending);
+  g_mapSongSortVal.clear();
 }
 
 static int CompareSongPointersByGenre(const Song* pSong1, const Song* pSong2) {
@@ -1125,12 +1129,14 @@ void SongUtil::SortSongPointerArrayByStepsTypeAndMeter(
   stable_sort(
       vpSongsInOut.begin(), vpSongsInOut.end(),
       CompareSongPointersBySortValueAscending);
+  g_mapSongSortVal.clear();
 }
 
 void SongUtil::SortByMostRecentlyPlayedForMachine(
     std::vector<Song*>& vpSongsInOut) {
   Profile* pProfile = PROFILEMAN->GetMachineProfile();
 
+  g_mapSongSortVal.clear();
   for (const Song* s : vpSongsInOut) {
     int iNumTimesPlayed = pProfile->GetSongNumTimesPlayed(s);
     std::string val = iNumTimesPlayed
@@ -1148,6 +1154,7 @@ void SongUtil::SortByMostRecentlyPlayedForMachine(
 void SongUtil::SortByMostRecentlyPlayedForProfile(
     std::vector<Song*>& vpSongsInOut, PlayerNumber pn) {
   Profile* pProfile = PROFILEMAN->GetProfile(pn);
+  g_mapSongSortVal.clear();
   for (const Song* s : vpSongsInOut) {
     int iNumTimesPlayed = pProfile->GetSongNumTimesPlayed(s);
     std::string val = iNumTimesPlayed
