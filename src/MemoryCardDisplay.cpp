@@ -14,6 +14,10 @@
 
 REGISTER_ACTOR_CLASS(MemoryCardDisplay);
 
+static bool IsVisibleMemoryCardState(MemoryCardState state) {
+  return state >= 0 && state < NUM_MemoryCardState;
+}
+
 MemoryCardDisplay::MemoryCardDisplay() {
   m_PlayerNumber = PLAYER_INVALID;
   m_LastSeenState = MemoryCardState_Invalid;
@@ -47,11 +51,13 @@ void MemoryCardDisplay::LoadFromNode(const XNode* pNode) {
 void MemoryCardDisplay::Update(float fDelta) {
   MemoryCardState newMcs = MEMCARDMAN->GetCardState(m_PlayerNumber);
   if (m_LastSeenState != newMcs) {
-    if (m_LastSeenState != MemoryCardState_Invalid) {
+    if (IsVisibleMemoryCardState(m_LastSeenState)) {
       m_spr[m_LastSeenState].SetVisible(false);
     }
     m_LastSeenState = newMcs;
-    m_spr[m_LastSeenState].SetVisible(true);
+    if (IsVisibleMemoryCardState(m_LastSeenState)) {
+      m_spr[m_LastSeenState].SetVisible(true);
+    }
   }
 
   ActorFrame::Update(fDelta);
