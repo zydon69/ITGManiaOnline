@@ -818,10 +818,21 @@ void SongUtil::SortSongPointerArrayByGroup(std::vector<Song*>& vpSongsInOut) {
 
 int SongUtil::CompareSongPointersByGroup(
     const Song* pSong1, const Song* pSong2) {
+  if (pSong1 == pSong2) {
+    return false;
+  }
+  if (pSong1 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-655: null song sorted after valid songs.");
+    return false;
+  }
+  if (pSong2 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-655: null song sorted after valid songs.");
+    return true;
+  }
   std::string s1 = "";
   std::string s2 = "";
 
-  if (SONGMAN->GetGroup(pSong1) != nullptr) {
+  if (SONGMAN != nullptr && SONGMAN->GetGroup(pSong1) != nullptr) {
     s1 = SONGMAN->GetGroup(pSong1)->GetSortTitle();
   } else {
     LOG->Warn(
@@ -829,7 +840,7 @@ int SongUtil::CompareSongPointersByGroup(
         pSong1->GetSongDir().c_str());
   }
 
-  if (SONGMAN->GetGroup(pSong2) != nullptr) {
+  if (SONGMAN != nullptr && SONGMAN->GetGroup(pSong2) != nullptr) {
     s2 = SONGMAN->GetGroup(pSong2)->GetSortTitle();
   } else {
     LOG->Warn(
@@ -851,10 +862,21 @@ int SongUtil::CompareSongPointersByGroup(
 
 static int CompareSongPointersByGroupAndTitle(
     const Song* pSong1, const Song* pSong2) {
+  if (pSong1 == pSong2) {
+    return false;
+  }
+  if (pSong1 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-655: null song sorted after valid songs.");
+    return false;
+  }
+  if (pSong2 == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-655: null song sorted after valid songs.");
+    return true;
+  }
   std::string s1 = "";
   std::string s2 = "";
 
-  if (SONGMAN->GetGroup(pSong1) != nullptr) {
+  if (SONGMAN != nullptr && SONGMAN->GetGroup(pSong1) != nullptr) {
     s1 = SONGMAN->GetGroup(pSong1)->GetSortTitle();
   } else {
     LOG->Warn(
@@ -862,7 +884,7 @@ static int CompareSongPointersByGroupAndTitle(
         pSong1->GetSongDir().c_str());
   }
 
-  if (SONGMAN->GetGroup(pSong2) != nullptr) {
+  if (SONGMAN != nullptr && SONGMAN->GetGroup(pSong2) != nullptr) {
     s2 = SONGMAN->GetGroup(pSong2)->GetSortTitle();
   } else {
     LOG->Warn(
