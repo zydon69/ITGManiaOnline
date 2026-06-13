@@ -91,7 +91,16 @@ static void EmptyDir(std::string dir) {
 void SongCacheIndex::ReadCacheIndex() {
   LockMutex L(Mutex);
 
-  CacheIndex.ReadFile(CACHE_INDEX);  // don't care if this fails
+  const std::string sCacheIndexPath = CACHE_INDEX;
+  CacheIndex.Clear();
+  const bool bCacheIndexExists = DoesFileExist(sCacheIndexPath);
+  if (!CacheIndex.ReadFile(sCacheIndexPath)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-630: cache index '%s' could not be read%s%s.",
+        sCacheIndexPath.c_str(), bCacheIndexExists ? ": " : "",
+        bCacheIndexExists ? CacheIndex.GetError().c_str()
+                          : " because it does not exist yet");
+  }
 
   int iCacheVersion = -1;
   CacheIndex.GetValue("Cache", "CacheVersion", iCacheVersion);
