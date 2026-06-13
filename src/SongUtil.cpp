@@ -395,6 +395,11 @@ Steps* SongUtil::GetClosestNotes(
 /* Make any duplicate difficulties edits.  (Note that BMS files do a first pass
  * on this; see BMSLoader::SlideDuplicateDifficulties.) */
 void SongUtil::AdjustDuplicateSteps(Song* pSong) {
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-652: ignored AdjustDuplicateSteps() for null song.");
+    return;
+  }
   FOREACH_ENUM(StepsType, st) {
     FOREACH_ENUM(Difficulty, dc) {
       if (dc == Difficulty_Edit) {
@@ -443,13 +448,36 @@ static std::string RemoveInitialWhitespace(std::string s) {
 
 /* This is called within TidyUpData, before autogen notes are added. */
 void SongUtil::DeleteDuplicateSteps(Song* pSong, std::vector<Steps*>& vSteps) {
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-652: ignored DeleteDuplicateSteps() for null song.");
+    return;
+  }
   /* vSteps have the same StepsType and Difficulty.  Delete them if they have
    * the same m_sDescription, m_sCredit, m_iMeter and SMNoteData. */
   for (unsigned i = 0; i < vSteps.size(); i++) {
     const Steps* s1 = vSteps[i];
+    if (s1 == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-652: removed null Steps from duplicate scan for "
+          "song '%s'.",
+          pSong->GetSongDir().c_str());
+      vSteps.erase(vSteps.begin() + i);
+      --i;
+      continue;
+    }
 
     for (unsigned j = i + 1; j < vSteps.size(); j++) {
       const Steps* s2 = vSteps[j];
+      if (s2 == nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-652: removed null Steps from duplicate scan for "
+            "song '%s'.",
+            pSong->GetSongDir().c_str());
+        vSteps.erase(vSteps.begin() + j);
+        --j;
+        continue;
+      }
 
       if (s1->GetDescription() != s2->GetDescription()) {
         continue;
