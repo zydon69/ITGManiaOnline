@@ -100,8 +100,12 @@ void ScreenOptionsEditProfile::ExportOptions(
   OptionRow& row = *m_pRows[iRow];
   int iIndex = row.GetOneSharedSelection(true);
   std::string sValue;
-  if (iIndex >= 0) {
+  if (iIndex >= 0 && iIndex < int(row.GetRowDef().m_vsChoices.size())) {
     sValue = row.GetRowDef().m_vsChoices[iIndex];
+  } else if (iIndex >= 0) {
+    LOG->Warn(
+        "ScreenOptionsEditProfile::ExportOptions: selection %d out of range",
+        iIndex);
   }
 
   switch (iRow) {
