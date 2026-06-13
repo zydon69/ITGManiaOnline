@@ -9,6 +9,8 @@
 
 #include "MemoryCardManager.h"
 #include "PlayerNumber.h"
+#include "RageFile.h"
+#include "RageFileManager.h"
 #include "RageLog.h"
 #include "RageUtil.h"
 #include "arch/MemoryCard/MemoryCardDriver.h"
@@ -48,8 +50,27 @@ bool MemoryCardDriverThreaded_Folder::FolderExists(std::string path) {
 }
 
 bool MemoryCardDriverThreaded_Folder::TestWrite(UsbStorageDevice* pDevice) {
-  // TODO
+  const std::string test_file = pDevice->sOsMountDir + "/.itgmania_write_test";
+  RageFile f;
+  if (!f.Open(test_file, RageFile::WRITE)) {
+    LOG->Warn(
+        "MemoryCardDriverThreaded_Folder::TestWrite: failed to write '%s': %s",
+        test_file.c_str(), f.GetError().c_str());
+    pDevice->SetError("TestFailed");
+    return false;
+  }
 
+  if (f.Write("test", 4) != 4) {
+    LOG->Warn(
+        "MemoryCardDriverThreaded_Folder::TestWrite: short write to '%s': %s",
+        test_file.c_str(), f.GetError().c_str());
+    f.Close();
+    FILEMAN->Remove(test_file);
+    pDevice->SetError("TestFailed");
+    return false;
+  }
+  f.Close();
+  FILEMAN->Remove(test_file);
   return true;
 }
 
