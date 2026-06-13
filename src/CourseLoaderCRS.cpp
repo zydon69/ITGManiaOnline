@@ -369,7 +369,13 @@ bool CourseLoaderCRS::LoadEditFromFile(
   Course* pCourse = new Course;
 
   pCourse->m_sPath = sEditFilePath;
-  LoadFromMsd(sEditFilePath, msd, *pCourse, true);
+  if (!LoadFromMsd(sEditFilePath, msd, *pCourse, true)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-114: ignored invalid edit course '%s'",
+        sEditFilePath.c_str());
+    delete pCourse;
+    return false;
+  }
 
   pCourse->m_LoadedFromProfile = slot;
 
