@@ -314,6 +314,14 @@ void CourseUtil::AutogenNonstopFromGroup(
 
   out.m_sMainTitle += " Random";
 
+  if (out.m_vEntries.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-128: skipped nonstop autogen entries for empty group "
+        "'%s'",
+        sGroupName.c_str());
+    return;
+  }
+
   // resize to 4
   while (out.m_vEntries.size() < 4) {
     out.m_vEntries.push_back(out.m_vEntries[0]);
