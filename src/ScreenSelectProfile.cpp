@@ -11,12 +11,22 @@
 #include "MessageManager.h"
 #include "PlayerNumber.h"
 #include "ProfileManager.h"
+#include "RageLog.h"
 #include "Screen.h"
 #include "ScreenManager.h"
 #include "ScreenMessage.h"
 #include "ScreenWithMenuElements.h"
 
 REGISTER_SCREEN_CLASS(ScreenSelectProfile);
+
+static bool IsSelectProfilePlayerValid(PlayerNumber pn, const char* context) {
+  if (pn >= 0 && pn < NUM_PLAYERS) {
+    return true;
+  }
+
+  LOG->Warn("%s: invalid player number %d", context, int(pn));
+  return false;
+}
 
 void ScreenSelectProfile::Init() {
   FOREACH_PlayerNumber(p) {
@@ -37,6 +47,9 @@ bool ScreenSelectProfile::Input(const InputEventPlus& input) {
 
 bool ScreenSelectProfile::MenuLeft(const InputEventPlus& input) {
   PlayerNumber pn = input.pn;
+  if (!IsSelectProfilePlayerValid(pn, "ScreenSelectProfile::MenuLeft")) {
+    return false;
+  }
   if (m_fLockInputSecs > 0) {
     return false;
   }
@@ -60,6 +73,9 @@ bool ScreenSelectProfile::MenuLeft(const InputEventPlus& input) {
 
 bool ScreenSelectProfile::MenuRight(const InputEventPlus& input) {
   PlayerNumber pn = input.pn;
+  if (!IsSelectProfilePlayerValid(pn, "ScreenSelectProfile::MenuRight")) {
+    return false;
+  }
   if (m_fLockInputSecs > 0) {
     return false;
   }
@@ -83,6 +99,9 @@ bool ScreenSelectProfile::MenuRight(const InputEventPlus& input) {
 
 bool ScreenSelectProfile::MenuUp(const InputEventPlus& input) {
   PlayerNumber pn = input.pn;
+  if (!IsSelectProfilePlayerValid(pn, "ScreenSelectProfile::MenuUp")) {
+    return false;
+  }
   if (m_fLockInputSecs > 0) {
     return false;
   }
@@ -105,6 +124,9 @@ bool ScreenSelectProfile::MenuUp(const InputEventPlus& input) {
 
 bool ScreenSelectProfile::MenuDown(const InputEventPlus& input) {
   PlayerNumber pn = input.pn;
+  if (!IsSelectProfilePlayerValid(pn, "ScreenSelectProfile::MenuDown")) {
+    return false;
+  }
   if (m_fLockInputSecs > 0) {
     return false;
   }
@@ -127,6 +149,10 @@ bool ScreenSelectProfile::MenuDown(const InputEventPlus& input) {
 }
 
 bool ScreenSelectProfile::SetProfileIndex(PlayerNumber pn, int iProfileIndex) {
+  if (!IsSelectProfilePlayerValid(pn, "ScreenSelectProfile::SetProfileIndex")) {
+    return false;
+  }
+
   if (!GAMESTATE->IsHumanPlayer(pn)) {
     if (iProfileIndex == -1) {
       GAMESTATE->JoinPlayer(pn);
@@ -158,6 +184,13 @@ bool ScreenSelectProfile::SetProfileIndex(PlayerNumber pn, int iProfileIndex) {
   m_iSelectedProfiles[pn] = iProfileIndex;
 
   return true;
+}
+
+int ScreenSelectProfile::GetProfileIndex(PlayerNumber pn) const {
+  if (!IsSelectProfilePlayerValid(pn, "ScreenSelectProfile::GetProfileIndex")) {
+    return -1;
+  }
+  return m_iSelectedProfiles[pn];
 }
 
 bool ScreenSelectProfile::Finish() {
