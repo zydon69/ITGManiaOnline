@@ -176,6 +176,20 @@ void ScoreKeeperNormal::Load(
 
 void ScoreKeeperNormal::OnNextSong(
     int iSongInCourseIndex, const Steps* pSteps, const NoteData* pNoteData) {
+  if (pSteps == nullptr || pNoteData == nullptr ||
+      pSteps->GetTimingData() == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal::OnNextSong ignored invalid input: "
+        "steps=%p notedata=%p timing=%p.",
+        static_cast<const void*>(pSteps), static_cast<const void*>(pNoteData),
+        pSteps == nullptr ? nullptr
+                          : static_cast<const void*>(pSteps->GetTimingData()));
+    m_iMaxPossiblePoints = 0;
+    m_iNumTapsAndHolds = 0;
+    m_iPointBonus = 0;
+    return;
+  }
+
   /*
     Note on NONSTOP Mode scoring
 
@@ -199,9 +213,18 @@ void ScoreKeeperNormal::OnNextSong(
   m_iMaxPossiblePoints = 0;
   if (GAMESTATE->IsCourseMode()) {
     const int numSongsInCourse = m_apSteps.size();
-    ASSERT(numSongsInCourse != 0);
+    if (numSongsInCourse <= 0) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeperNormal::OnNextSong ignored empty course "
+          "scoring state.");
+      m_iPointBonus = 0;
+      m_iNumTapsAndHolds = 0;
+      return;
+    }
 
-    const int iIndex = iSongInCourseIndex % numSongsInCourse;
+    const int iIndex =
+        ((iSongInCourseIndex % numSongsInCourse) + numSongsInCourse) %
+        numSongsInCourse;
     m_bIsLastSongInCourse = (iIndex + 1 == numSongsInCourse);
 
     if (numSongsInCourse < 10) {
@@ -229,9 +252,6 @@ void ScoreKeeperNormal::OnNextSong(
   ASSERT(m_iMaxPossiblePoints >= 0);
   m_iMaxScoreSoFar += m_iMaxPossiblePoints;
 
-  GAMESTATE->SetProcessedTimingData(
-      const_cast<TimingData*>(pSteps->GetTimingData()));
-
   m_iNumTapsAndHolds = pNoteData->GetNumRowsWithTapOrHoldHead() +
                        pNoteData->GetNumHoldNotes() + pNoteData->GetNumRolls();
 
@@ -246,8 +266,6 @@ void ScoreKeeperNormal::OnNextSong(
   ASSERT(m_iPointBonus >= 0);
 
   m_iTapNotesHit = 0;
-
-  GAMESTATE->SetProcessedTimingData(nullptr);
 }
 
 static int GetScore(int p, int Z, int64_t S, int n) {
