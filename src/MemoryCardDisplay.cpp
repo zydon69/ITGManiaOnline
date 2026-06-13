@@ -8,11 +8,16 @@
 #include "LuaManager.h"
 #include "MemoryCardManager.h"
 #include "PlayerNumber.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "ThemeManager.h"
 #include "XmlFile.h"
 
 REGISTER_ACTOR_CLASS(MemoryCardDisplay);
+
+static bool IsValidMemoryCardDisplayPlayer(PlayerNumber pn) {
+  return pn >= 0 && pn < NUM_PLAYERS;
+}
 
 static bool IsVisibleMemoryCardState(MemoryCardState state) {
   return state >= 0 && state < NUM_MemoryCardState;
@@ -24,6 +29,13 @@ MemoryCardDisplay::MemoryCardDisplay() {
 }
 
 void MemoryCardDisplay::Load(PlayerNumber pn) {
+  if (!IsValidMemoryCardDisplayPlayer(pn)) {
+    LOG->Warn(
+        "MemoryCardDisplay::Load: invalid player number %d", int(pn));
+    m_PlayerNumber = PLAYER_INVALID;
+    return;
+  }
+
   m_PlayerNumber = pn;
 
   for (int i = 0; i < NUM_MemoryCardState; i++) {
@@ -37,6 +49,11 @@ void MemoryCardDisplay::Load(PlayerNumber pn) {
 }
 
 void MemoryCardDisplay::LoadFromNode(const XNode* pNode) {
+  if (pNode == nullptr) {
+    LOG->Warn("MemoryCardDisplay::LoadFromNode: null node");
+    return;
+  }
+
   Lua* L = LUA->Get();
   pNode->PushAttrValue(L, "PlayerNumber");
   PlayerNumber pn;
