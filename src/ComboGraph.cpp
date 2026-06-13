@@ -1,6 +1,7 @@
 #include "ComboGraph.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 #include "Actor.h"
@@ -20,9 +21,20 @@ REGISTER_ACTOR_CLASS(ComboGraph);
 ComboGraph::ComboGraph() {
   DeleteChildrenWhenDone(true);
 
+  m_pBacking = nullptr;
   m_pNormalCombo = nullptr;
   m_pMaxCombo = nullptr;
   m_pComboNumber = nullptr;
+}
+
+ComboGraph::~ComboGraph() { ClearGeneratedActors(); }
+
+void ComboGraph::ClearGeneratedActors() {
+  for (Actor* actor : m_vpGeneratedActors) {
+    RemoveChild(actor);
+    RageUtil::SafeDelete(actor);
+  }
+  m_vpGeneratedActors.clear();
 }
 
 void ComboGraph::Load(std::string sMetricsGroup) {
@@ -67,13 +79,30 @@ void ComboGraph::Load(std::string sMetricsGroup) {
     } else {
       LuaHelpers::ReportScriptErrorFmt(
           "ComboGraph: \"sMetricsGroup\" \"ComboNumber\" must be a BitmapText");
+      RageUtil::SafeDelete(pActor);
     }
   }
 }
 
 void ComboGraph::Set(const StageStats& s, const PlayerStageStats& pss) {
+  ClearGeneratedActors();
+
   const float fFirstSecond = 0;
   const float fLastSecond = s.GetTotalPossibleStepsSeconds();
+  if (!std::isfinite(fLastSecond) || fLastSecond <= fFirstSecond) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-264: ComboGraph ignored invalid total seconds %f.",
+        fLastSecond);
+    return;
+  }
+  if (m_pNormalCombo == nullptr || m_pMaxCombo == nullptr ||
+      m_pComboNumber == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-263: ComboGraph missing templates: normal=%p "
+        "max=%p number=%p.",
+        m_pNormalCombo, m_pMaxCombo, m_pComboNumber);
+    return;
+  }
 
   // Find the largest combo.
   int iMaxComboSize = 0;
@@ -88,6 +117,14 @@ void ComboGraph::Set(const StageStats& s, const PlayerStageStats& pss) {
     }
 
     const bool bIsMax = (combo.GetStageCnt() == iMaxComboSize);
+    if (!std::isfinite(combo.m_fStartSecond) ||
+        !std::isfinite(combo.m_fSizeSeconds) || combo.m_fSizeSeconds < 0.0f) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX SRC-264: ComboGraph skipped invalid combo timing "
+          "start=%f size=%f.",
+          combo.m_fStartSecond, combo.m_fSizeSeconds);
+      continue;
+    }
 
     LOG->Trace(
         "combo %i is %f+%f of %f", i, combo.m_fStartSecond,
@@ -105,6 +142,7 @@ void ComboGraph::Set(const StageStats& s, const PlayerStageStats& pss) {
     pSprite->SetCropRight(1 - (fSize + fStart));
 
     this->AddChild(pSprite);
+    m_vpGeneratedActors.push_back(pSprite);
   }
 
   for (unsigned i = 0; i < pss.m_ComboList.size(); ++i) {
@@ -119,6 +157,10 @@ void ComboGraph::Set(const StageStats& s, const PlayerStageStats& pss) {
 
     const bool bIsMax = (combo.GetStageCnt() == iMaxComboSize);
     if (!bIsMax) {
+      continue;
+    }
+    if (!std::isfinite(combo.m_fStartSecond) ||
+        !std::isfinite(combo.m_fSizeSeconds) || combo.m_fSizeSeconds < 0.0f) {
       continue;
     }
 
@@ -137,6 +179,7 @@ void ComboGraph::Set(const StageStats& s, const PlayerStageStats& pss) {
     pText->SetText(ssprintf("%i", combo.GetStageCnt()));
 
     this->AddChild(pText);
+    m_vpGeneratedActors.push_back(pText);
   }
 
   // Hide the templates.
@@ -158,6 +201,12 @@ class LunaComboGraph : public Luna<ComboGraph> {
   static int Set(T* p, lua_State* L) {
     StageStats* pStageStats = Luna<StageStats>::check(L, 1);
     PlayerStageStats* pPlayerStageStats = Luna<PlayerStageStats>::check(L, 2);
+    if (pStageStats == nullptr) {
+      luaL_error(L, "The StageStats passed to ComboGraph:Set are nil.");
+    }
+    if (pPlayerStageStats == nullptr) {
+      luaL_error(L, "The PlayerStageStats passed to ComboGraph:Set are nil.");
+    }
     p->Set(*pStageStats, *pPlayerStageStats);
     COMMON_RETURN_SELF;
   }

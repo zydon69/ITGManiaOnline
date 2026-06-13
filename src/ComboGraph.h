@@ -3,6 +3,7 @@
 #define COMBO_GRAPH_H
 
 #include <string>
+#include <vector>
 
 #include "Actor.h"
 #include "ActorFrame.h"
@@ -15,6 +16,7 @@ class BitmapText;
 class ComboGraph : public ActorFrame {
  public:
   ComboGraph();
+  virtual ~ComboGraph();
   void Load(std::string sMetricsGroup);
   void Set(const StageStats& s, const PlayerStageStats& pss);
   virtual ComboGraph* Copy() const;
@@ -24,12 +26,15 @@ class ComboGraph : public ActorFrame {
   virtual void PushSelf(lua_State* L);
 
  private:
+  void ClearGeneratedActors();
+
   ThemeMetric<float> BODY_WIDTH;
   ThemeMetric<float> BODY_HEIGHT;
   Actor* m_pBacking;
   Actor* m_pNormalCombo;
   Actor* m_pMaxCombo;
   BitmapText* m_pComboNumber;
+  std::vector<Actor*> m_vpGeneratedActors;
 };
 
 #endif
