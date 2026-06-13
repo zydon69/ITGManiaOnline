@@ -461,6 +461,13 @@ void ScreenOptionsManageProfiles::ProcessMenuStart(const InputEventPlus&) {
     this->BeginFadingOut();
   } else  // a profile
   {
+    if (GetLocalProfileIDWithFocus().empty()) {
+      LOG->Warn(
+          "ScreenOptionsManageProfiles::ProcessMenuStart: no profile focused");
+      SCREENMAN->PlayInvalidSound();
+      return;
+    }
+
     g_TempMenu.rows.clear();
 
 #define ADD_ACTION(i)                                                          \
@@ -508,7 +515,14 @@ void ScreenOptionsManageProfiles::ExportOptions(
     int /* iRow */, const std::vector<PlayerNumber>& /* vpns */) {}
 
 int ScreenOptionsManageProfiles::GetLocalProfileIndexWithFocus() const {
-  int iCurRow = m_iCurrentRow[GAMESTATE->GetMasterPlayerNumber()];
+  PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+  if (master < 0 || master >= NUM_PLAYERS) {
+    return -1;
+  }
+  int iCurRow = m_iCurrentRow[master];
+  if (iCurRow < 0 || iCurRow >= int(m_pRows.size())) {
+    return -1;
+  }
   OptionRow& row = *m_pRows[iCurRow];
 
   if (SHOW_CREATE_NEW && iCurRow == 0) {  // "create new"
@@ -519,12 +533,18 @@ int ScreenOptionsManageProfiles::GetLocalProfileIndexWithFocus() const {
 
   // a profile
   int iIndex = iCurRow + (SHOW_CREATE_NEW ? -1 : 0);
+  if (iIndex < 0 || iIndex >= int(m_vsLocalProfileID.size())) {
+    return -1;
+  }
   return iIndex;
 }
 
 std::string ScreenOptionsManageProfiles::GetLocalProfileIDWithFocus() const {
   int iIndex = GetLocalProfileIndexWithFocus();
   if (iIndex == -1) {
+    return std::string();
+  }
+  if (iIndex < 0 || iIndex >= int(m_vsLocalProfileID.size())) {
     return std::string();
   }
   return m_vsLocalProfileID[iIndex];
