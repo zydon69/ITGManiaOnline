@@ -227,7 +227,13 @@ void ScreenOptionsManageProfiles::HandleScreenMessage(const ScreenMessage SM) {
       // is this the correct way to go about checking the return value? -aj
       bool bCreateProfile = PROFILEMAN->CreateLocalProfile(
           ScreenTextEntry::s_sLastAnswer, sProfileID);
-      ASSERT(bCreateProfile);
+      if (!bCreateProfile) {
+        LOG->Warn(
+            "ScreenOptionsManageProfiles: failed to create profile '%s'",
+            ScreenTextEntry::s_sLastAnswer.c_str());
+        SCREENMAN->PlayInvalidSound();
+        return;
+      }
 
       GAMESTATE->m_sEditLocalProfileID.Set(sProfileID);
 
@@ -241,6 +247,7 @@ void ScreenOptionsManageProfiles::HandleScreenMessage(const ScreenMessage SM) {
             iFirstUnused = index;
             break;
           }
+          ++index;
         }
         if (iFirstUnused != -1) {
           PROFILEMAN->m_sDefaultLocalProfileID.m_v[iFirstUnused]->Set(
