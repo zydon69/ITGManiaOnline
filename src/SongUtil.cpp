@@ -1205,7 +1205,15 @@ void SongUtil::SortSongPointerArrayByStepsTypeAndMeter(
 
 void SongUtil::SortByMostRecentlyPlayedForMachine(
     std::vector<Song*>& vpSongsInOut) {
-  Profile* pProfile = PROFILEMAN->GetMachineProfile();
+  Profile* pProfile =
+      PROFILEMAN == nullptr ? nullptr : PROFILEMAN->GetMachineProfile();
+  if (pProfile == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-659: recent machine sort requested without profile; "
+        "falling back to title sort.");
+    SortSongPointerArrayByTitle(vpSongsInOut);
+    return;
+  }
 
   g_mapSongSortVal.clear();
   for (const Song* s : vpSongsInOut) {
@@ -1224,7 +1232,16 @@ void SongUtil::SortByMostRecentlyPlayedForMachine(
 
 void SongUtil::SortByMostRecentlyPlayedForProfile(
     std::vector<Song*>& vpSongsInOut, PlayerNumber pn) {
-  Profile* pProfile = PROFILEMAN->GetProfile(pn);
+  Profile* pProfile =
+      PROFILEMAN == nullptr ? nullptr : PROFILEMAN->GetProfile(pn);
+  if (pProfile == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-659: recent profile sort requested without profile "
+        "for player %i; falling back to title sort.",
+        pn);
+    SortSongPointerArrayByTitle(vpSongsInOut);
+    return;
+  }
   g_mapSongSortVal.clear();
   for (const Song* s : vpSongsInOut) {
     int iNumTimesPlayed = pProfile->GetSongNumTimesPlayed(s);
