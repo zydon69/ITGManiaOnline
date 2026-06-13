@@ -786,7 +786,13 @@ bool EditCourseUtil::ValidateEditCourseName(
   std::vector<Course*> vpCourses;
   EditCourseUtil::GetAllEditCourses(vpCourses);
   for (const Course* p : vpCourses) {
-    if (GAMESTATE->m_pCurCourse == p) {
+    if (p == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-675: skipped null course while validating edit "
+          "course name.");
+      continue;
+    }
+    if (GAMESTATE != nullptr && GAMESTATE->m_pCurCourse == p) {
       continue;  // don't comepare name against ourself
     }
 
