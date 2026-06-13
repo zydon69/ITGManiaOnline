@@ -455,13 +455,13 @@ bool CourseLoaderCRS::ParseCourseSong(
   if (Left(sParams[1], strlen("BEST")) == "BEST") {
     int iChooseIndex =
         StringToInt(Right(sParams[1], sParams[1].size() - strlen("BEST"))) - 1;
-    if (iChooseIndex > iNumSongs) {
+    if (iChooseIndex >= iNumSongs) {
       // looking up a song that doesn't exist.
       LOG->UserLog(
           "Course file", sPath,
           "is trying to load BEST%i with only %i songs installed. "
           "This entry will be ignored.",
-          iChooseIndex, iNumSongs);
+          iChooseIndex + 1, iNumSongs);
       return false;  // skip this #SONG
     }
 
@@ -473,13 +473,13 @@ bool CourseLoaderCRS::ParseCourseSong(
   else if (Left(sParams[1], strlen("WORST")) == "WORST") {
     int iChooseIndex =
         StringToInt(Right(sParams[1], sParams[1].size() - strlen("WORST"))) - 1;
-    if (iChooseIndex > iNumSongs) {
+    if (iChooseIndex >= iNumSongs) {
       // looking up a song that doesn't exist.
       LOG->UserLog(
           "Course file", sPath,
           "is trying to load WORST%i with only %i songs installed. "
           "This entry will be ignored.",
-          iChooseIndex, iNumSongs);
+          iChooseIndex + 1, iNumSongs);
       return false;  // skip this #SONG
     }
 
@@ -839,13 +839,13 @@ bool CourseLoaderCRS::SetCourseSongSort(
 
   int iNumSongs = SONGMAN->GetNumSongs();
   int iChooseIndex = index;
-  if (iChooseIndex > iNumSongs &&
+  if (iChooseIndex >= iNumSongs &&
       (sort == SongSort_MostPlays || sort == SongSort_FewestPlays)) {
     LOG->UserLog(
         "Course file", sPath,
         "is trying to load %s%i with only %i songs installed. "
         "This entry will be ignored.",
-        SongSortToString(sort).c_str(), iChooseIndex, iNumSongs);
+        SongSortToString(sort).c_str(), iChooseIndex + 1, iNumSongs);
     return false;  // skip this #SONG
   }
 
