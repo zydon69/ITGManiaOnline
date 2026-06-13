@@ -66,8 +66,8 @@ require_not_contains(
   "Perf diagnostics exposes only the shared master switch")
 require_contains(
   "${rage_sound_driver_generic_cpp}"
-  "PerfDiagnosticsEnabled()"
-  "Audio underrun tracing follows the shared perf diagnostics switch")
+  "LogAudioUnderrunDiagnosticsEnabled()"
+  "Audio underrun tracing follows the dedicated audio diagnostics switch")
 require_contains(
   "${macos_window_cpp}"
   "PerfDiagnosticsEnabled()"
