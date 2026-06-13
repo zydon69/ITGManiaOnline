@@ -110,7 +110,18 @@ SongCacheIndex::~SongCacheIndex() {}
 void SongCacheIndex::ReadFromDisk() { ReadCacheIndex(); }
 
 static void EmptyDir(std::string dir) {
-  ASSERT(dir[dir.size() - 1] == '/');
+  if (dir.empty()) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-634: refused to empty an empty cache path.");
+    return;
+  }
+  FixSlashesInPlace(dir);
+  if (dir[dir.size() - 1] != '/') {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-634: cache path '%s' lacked trailing slash; "
+        "normalizing before purge.",
+        dir.c_str());
+    dir += '/';
+  }
 
   std::vector<std::string> asCacheFileNames;
   GetDirListing(dir, asCacheFileNames);
