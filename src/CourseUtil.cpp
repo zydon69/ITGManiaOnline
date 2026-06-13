@@ -212,6 +212,12 @@ void CourseUtil::SortCoursePointerArrayByRanking(
     return;
   }
   for (unsigned i = 0; i < vpCoursesInOut.size(); i++) {
+    if (vpCoursesInOut[i] == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-667: skipped null course while updating ranking "
+          "sort stats.");
+      continue;
+    }
     vpCoursesInOut[i]->UpdateCourseStats(st);
   }
   sort(
@@ -227,6 +233,12 @@ void CourseUtil::SortCoursePointerArrayByTotalDifficulty(
     return;
   }
   for (unsigned i = 0; i < vpCoursesInOut.size(); i++) {
+    if (vpCoursesInOut[i] == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-667: skipped null course while updating total "
+          "difficulty sort stats.");
+      continue;
+    }
     vpCoursesInOut[i]->UpdateCourseStats(st);
   }
   sort(
@@ -322,6 +334,13 @@ void CourseUtil::SortCoursePointerArrayByAvgDifficulty(
   }
   course_sort_val.clear();
   for (unsigned i = 0; i < vpCoursesInOut.size(); ++i) {
+    if (vpCoursesInOut[i] == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-667: skipped null course while computing average "
+          "difficulty sort value.");
+      course_sort_val[vpCoursesInOut[i]] = std::string();
+      continue;
+    }
     int iMeter = vpCoursesInOut[i]->GetMeter(st, Difficulty_Medium);
     course_sort_val[vpCoursesInOut[i]] = ssprintf("%06i", iMeter);
   }
