@@ -1129,21 +1129,20 @@ void Steps::SetGrooveStatsHashVersion(int version) {
 }
 
 std::string Steps::GenerateChartKey() {
+  this->Decompress();
   ChartKey = this->GenerateChartKey(*m_pNoteData, this->GetTimingData());
+  this->Compress();
   return ChartKey;
 }
 std::string Steps::GetChartKey() {
   if (ChartKey.empty()) {
-    this->Decompress();
-    ChartKey = this->GenerateChartKey(*m_pNoteData, this->GetTimingData());
-    this->Compress();
+    return GenerateChartKey();
   }
   return ChartKey;
 }
 std::string Steps::GenerateChartKey(NoteData& nd, TimingData* td) {
   std::string k = "";
   std::string o = "";
-  float bpm;
   nd.LogNonEmptyRows();
   std::vector<int>& nerv = nd.GetNonEmptyRowVector();
 
@@ -1162,7 +1161,7 @@ std::string Steps::GenerateChartKey(NoteData& nd, TimingData* td) {
           os << tn.type;
           firstHalf.append(os.str());
         }
-        bpm = td->GetBPMAtRow(row);
+        float bpm = td->GetBPMAtRow(row);
         std::ostringstream os;
         os << static_cast<int>(bpm + 0.374643f);
         firstHalf.append(os.str());
@@ -1179,7 +1178,7 @@ std::string Steps::GenerateChartKey(NoteData& nd, TimingData* td) {
           os << tn.type;
           secondHalf.append(os.str());
         }
-        bpm = td->GetBPMAtRow(row);
+        float bpm = td->GetBPMAtRow(row);
         std::ostringstream os;
         os << static_cast<int>(bpm + 0.374643f);
         secondHalf.append(os.str());
