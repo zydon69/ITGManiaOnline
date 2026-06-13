@@ -232,25 +232,37 @@ void SongManager::Reload(bool bAllowFastLoad, LoadingWindow* ld) {
   // reload scores and unlocks afterward
   PROFILEMAN->LoadMachineProfile();
   MEMCARDMAN->WaitForCheckingToComplete();
-  for (auto& it : rejoinPlayers) {
-    PlayerNumber pn;
-    std::string profileID;
-    bool isMemoryCard;
-    std::tie(pn, profileID, isMemoryCard) = it;
+	  for (auto& it : rejoinPlayers) {
+	    PlayerNumber pn;
+	    std::string profileID;
+	    bool isMemoryCard;
+	    std::tie(pn, profileID, isMemoryCard) = it;
 
-    GAMESTATE->JoinPlayer(pn);
-    if (isMemoryCard) {
-      bool success = MEMCARDMAN->MountCard(pn);
-      if (success) {
-        PROFILEMAN->LoadProfileFromMemoryCard(pn, true);
-        MEMCARDMAN->UnmountCard(pn);
-      }
-    } else {
-      PROFILEMAN->m_sDefaultLocalProfileID[pn].Set(profileID);
-      PROFILEMAN->LoadLocalProfileFromMachine(pn);
-    }
-    GAMESTATE->LoadCurrentSettingsFromProfile(pn);
-  }
+	    GAMESTATE->JoinPlayer(pn);
+	    bool loadedProfile = profileID.empty() && !isMemoryCard;
+	    if (isMemoryCard) {
+	      bool success = MEMCARDMAN->MountCard(pn);
+	      if (success) {
+	        loadedProfile = PROFILEMAN->LoadProfileFromMemoryCard(pn, true);
+	        MEMCARDMAN->UnmountCard(pn);
+	      }
+	    } else {
+	      if (!profileID.empty()) {
+	        PROFILEMAN->m_sDefaultLocalProfileID[pn].Set(profileID);
+	        loadedProfile = PROFILEMAN->LoadLocalProfileFromMachine(pn);
+	      }
+	    }
+	    if (!loadedProfile) {
+	      LOG->Warn(
+	          "SRC_AUDIT_FIX SRC-619: profile reload failed for %s; leaving "
+	          "player unjoined.",
+	          PlayerNumberToString(pn).c_str());
+	      PROFILEMAN->UnloadProfile(pn);
+	      GAMESTATE->UnjoinPlayer(pn);
+	      continue;
+	    }
+	    GAMESTATE->LoadCurrentSettingsFromProfile(pn);
+	  }
   UNLOCKMAN->Reload();
 
   if (!bAllowFastLoad) {
