@@ -7,6 +7,7 @@
 #include "NoteDataWithScoring.h"
 #include "NoteTypes.h"
 #include "PlayerState.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "global.h"
 
@@ -46,7 +47,11 @@ ScoreKeeper* ScoreKeeper::MakeScoreKeeper(
   } else if (sClassName == "ScoreKeeperShared") {
     return new ScoreKeeperShared(pPlayerState, pPlayerStageStats);
   }
-  FAIL_M(ssprintf("Invalid ScoreKeeper named %s!", sClassName.c_str()));
+  LOG->Warn(
+      "SRC_AUDIT_FIX: Invalid ScoreKeeper named '%s'; using "
+      "ScoreKeeperNormal.",
+      sClassName.c_str());
+  return new ScoreKeeperNormal(pPlayerState, pPlayerStageStats);
 }
 
 /*
