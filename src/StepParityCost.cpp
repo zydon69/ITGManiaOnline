@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "NoteTypes.h"
+#include "RageLog.h"
 #include "StepParityDatastructs.h"
 
 using namespace StepParity;
@@ -12,7 +13,19 @@ using namespace StepParity;
 namespace {
 template <typename T>
 bool isEmpty(const std::vector<T>& vec, int columnCount) {
-  for (int i = 0; i < columnCount; i++) {
+  if (columnCount < 0) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-647: negative column count %d.", columnCount);
+    return true;
+  }
+  const int safeColumnCount =
+      std::min(columnCount, static_cast<int>(vec.size()));
+  if (safeColumnCount != columnCount) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-647: vector has %zu values but %d columns were "
+        "requested.",
+        vec.size(), columnCount);
+  }
+  for (int i = 0; i < safeColumnCount; i++) {
     if (static_cast<int>(vec[i]) != 0) {
       return false;
     }
