@@ -2541,9 +2541,9 @@ class LunaSongManager : public Luna<SongManager> {
   static int SetPreferredCourses(T* p, lua_State* L) {
     std::string sPreferredCourses = SArg(1);
     if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) {
-      p->SetPreferredSongs(sPreferredCourses, BArg(2));
+      p->SetPreferredCourses(sPreferredCourses, BArg(2));
     } else {
-      p->SetPreferredSongs(sPreferredCourses);
+      p->SetPreferredCourses(sPreferredCourses);
     }
     COMMON_RETURN_SELF;
   }
