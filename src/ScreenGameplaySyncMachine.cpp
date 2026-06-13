@@ -18,6 +18,7 @@
 #include "NotesLoaderSSC.h"
 #include "PlayerNumber.h"
 #include "PrefsManager.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "Screen.h"
 #include "ScreenGameplay.h"
@@ -32,19 +33,35 @@
 REGISTER_SCREEN_CLASS(ScreenGameplaySyncMachine);
 
 void ScreenGameplaySyncMachine::Init() {
+  if (GAMESTATE == nullptr || GAMEMAN == nullptr || THEME == nullptr ||
+      GAMESTATE->m_pCurGame == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: SyncMachine missing required global state.");
+    return;
+  }
   GAMESTATE->m_PlayMode.Set(PLAY_MODE_REGULAR);
-  GAMESTATE->SetCurrentStyle(
-      GAMEMAN->GetHowToPlayStyleForGame(GAMESTATE->m_pCurGame), PLAYER_INVALID);
+  const Style* style = GAMEMAN->GetHowToPlayStyleForGame(GAMESTATE->m_pCurGame);
+  if (style == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: SyncMachine has no how-to-play style.");
+    return;
+  }
+  GAMESTATE->SetCurrentStyle(style, PLAYER_INVALID);
   AdjustSync::ResetOriginalSyncData();
 
   std::string sFile = THEME->GetPathO("ScreenGameplaySyncMachine", "music");
   // Allow themers to use either a .ssc or .sm file for this. -aj
   SSCLoader loaderSSC;
   SMLoader loaderSM;
+  bool loaded = false;
   if (Right(sFile, 4) == ".ssc") {
-    loaderSSC.LoadFromSimfile(sFile, m_Song);
+    loaded = loaderSSC.LoadFromSimfile(sFile, m_Song);
   } else {
-    loaderSM.LoadFromSimfile(sFile, m_Song);
+    loaded = loaderSM.LoadFromSimfile(sFile, m_Song);
+  }
+  if (!loaded) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: SyncMachine failed to load sync song '%s'.",
+        sFile.c_str());
+    return;
   }
 
   m_Song.SetSongDir(Dirname(sFile));
@@ -54,10 +71,16 @@ void ScreenGameplaySyncMachine::Init() {
   // Needs proper StepsType -freem
   std::vector<Steps*> vpSteps;
   SongUtil::GetPlayableSteps(&m_Song, vpSteps);
-  ASSERT_M(
-      vpSteps.size() > 0, "No playable steps for ScreenGameplaySyncMachine");
+  if (vpSteps.empty() || vpSteps[0] == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: SyncMachine has no playable steps.");
+    return;
+  }
   Steps* pSteps = vpSteps[0];
-  GAMESTATE->m_pCurSteps[GAMESTATE->GetFirstHumanPlayer()].Set(pSteps);
+  PlayerNumber firstHuman = GAMESTATE->GetFirstHumanPlayer();
+  if (firstHuman < PLAYER_1 || firstHuman >= NUM_PLAYERS) {
+    firstHuman = PLAYER_1;
+  }
+  GAMESTATE->m_pCurSteps[firstHuman].Set(pSteps);
 
   GamePreferences::m_AutoPlay.Set(PC_HUMAN);
 
@@ -120,7 +143,9 @@ void ScreenGameplaySyncMachine::HandleScreenMessage(const ScreenMessage SM) {
 }
 
 void ScreenGameplaySyncMachine::ResetAndRestartCurrentSong() {
-  m_pSoundMusic->Stop();
+  if (m_pSoundMusic) {
+    m_pSoundMusic->Stop();
+  }
   ReloadCurrentSong();
   StartPlayingSong(4, 0);
 
