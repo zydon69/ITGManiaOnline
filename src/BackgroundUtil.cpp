@@ -384,11 +384,21 @@ static void GetFilterToFileNames(
     std::set<std::string>& vsPossibleFileNamesOut) {
   vsPossibleFileNamesOut.clear();
 
+  if (pSong == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-682: background mapping requested without song.");
+    return;
+  }
   if (pSong->m_sGenre.empty()) {
     return;
   }
 
-  ASSERT(!pSong->m_sGroupName.empty());
+  if (pSong->m_sGroupName.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-682: background mapping requested for song '%s' "
+        "without group.",
+        pSong->GetSongDir().c_str());
+    return;
+  }
   IniFile ini;
   std::string sPath =
       sBaseDir + pSong->m_sGroupName + "/" + "BackgroundMapping.ini";
@@ -396,7 +406,12 @@ static void GetFilterToFileNames(
     return;
   }
 
-  ini.ReadFile(sPath);
+  if (!ini.ReadFile(sPath)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-682: failed to read background mapping '%s'.",
+        sPath.c_str());
+    return;
+  }
 
   std::string sSection;
   bool bSuccess = ini.GetValue("GenreToSection", pSong->m_sGenre, sSection);
@@ -407,10 +422,10 @@ static void GetFilterToFileNames(
 
   XNode* pSection = ini.GetChild(sSection);
   if (pSection == nullptr) {
-    ASSERT_M(
-        0, ssprintf(
-               "File '%s' refers to a section '%s' that is missing.",
-               sPath.c_str(), sSection.c_str()));
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-682: background mapping '%s' refers to missing "
+        "section '%s'.",
+        sPath.c_str(), sSection.c_str());
     return;
   }
 
