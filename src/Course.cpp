@@ -429,7 +429,13 @@ bool Course::GetTrailSorted(
       bool bOK = GetTrailUnsorted(st, Difficulty_Medium, SortTrail);
 
       /* If we have any other difficulty, we must have Difficulty_Medium. */
-      ASSERT(bOK);
+      if (!bOK) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-121: course '%s' sorted by current difficulty "
+            "because Difficulty_Medium trail is unavailable",
+            m_sPath.c_str());
+        SortTrail = trail;
+      }
     }
     ASSERT_M(
         trail.m_vEntries.size() == SortTrail.m_vEntries.size(),
