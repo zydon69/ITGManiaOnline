@@ -1,5 +1,6 @@
 #include "ScoreDisplayLifeTime.h"
 
+#include <cmath>
 #include <string>
 
 #include "ActorUtil.h"
@@ -55,7 +56,22 @@ void ScoreDisplayLifeTime::Init(
 void ScoreDisplayLifeTime::Update(float fDelta) {
   ScoreDisplay::Update(fDelta);
 
+  if (m_pPlayerStageStats == nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-241: ScoreDisplayLifeTime skipped update without "
+        "PlayerStageStats.");
+    m_textTimeRemaining.SetText(SecondsToMSSMsMs(0));
+    return;
+  }
+
   float fSecs = m_pPlayerStageStats->m_fLifeRemainingSeconds;
+  if (!std::isfinite(fSecs) || fSecs < 0.0f) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-241: ScoreDisplayLifeTime corrected invalid life "
+        "seconds %f.",
+        fSecs);
+    fSecs = 0.0f;
+  }
 
   std::string s = SecondsToMSSMsMs(fSecs);
   m_textTimeRemaining.SetText(s);

@@ -11,6 +11,12 @@
 #include "StatsManager.h"
 #include "ThemeManager.h"
 
+namespace {
+bool IsValidPlayerNumber(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+}  // namespace
+
 ScoreDisplayOni::ScoreDisplayOni() {
   LOG->Trace("ScoreDisplayOni::ScoreDisplayOni()");
 
@@ -34,12 +40,24 @@ void ScoreDisplayOni::Init(
 void ScoreDisplayOni::Update(float fDelta) {
   ScoreDisplay::Update(fDelta);
 
+  if (m_pPlayerState == nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-241: ScoreDisplayOni skipped update without "
+        "PlayerState.");
+    m_text.SetText(SecondsToMMSSMsMs(0));
+    return;
+  }
+
   // TODO: Remove use of PlayerNumber.
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
 
   float fSecsIntoPlay = 0;
-  if (GAMESTATE->IsPlayerEnabled(pn)) {
+  if (IsValidPlayerNumber(pn) && GAMESTATE->IsPlayerEnabled(pn)) {
     fSecsIntoPlay = STATSMAN->m_CurStageStats.m_player[pn].m_fAliveSeconds;
+  } else if (!IsValidPlayerNumber(pn)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-241: ScoreDisplayOni ignored invalid player %i.",
+        pn);
   }
 
   m_text.SetText(SecondsToMMSSMsMs(fSecsIntoPlay));

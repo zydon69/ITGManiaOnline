@@ -2,12 +2,13 @@
 
 #include "PlayerStageStats.h"
 #include "PlayerState.h"
+#include "RageLog.h"
 #include "ScoreDisplay.h"
 #include "ThemeManager.h"
 
 ScoreDisplayPercentage::ScoreDisplayPercentage() {
   // todo: allow ScoreDisplayPercentage to have its own frame? -aj
-  m_sprFrame.Load(THEME->GetPathG("ScoreDisplayNormal", "frame"));
+  m_sprFrame.Load(THEME->GetPathG("ScoreDisplayNormal", "Frame"));
   this->AddChild(m_sprFrame);
 
   m_Percent.SetName("ScoreDisplayPercentage Percent");
@@ -18,6 +19,12 @@ void ScoreDisplayPercentage::Init(
     const PlayerState* pPlayerState,
     const PlayerStageStats* pPlayerStageStats) {
   ScoreDisplay::Init(pPlayerState, pPlayerStageStats);
+  if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-236: ScoreDisplayPercentage ignored null init "
+        "state.");
+    return;
+  }
 
   m_Percent.Load(
       pPlayerState, pPlayerStageStats, "ScoreDisplayPercentage Percent", true);
