@@ -424,12 +424,28 @@ bool Song::LoadFromSongDir(
     sDir += "/";
   }
 
+  const std::string oldSongDir = m_sSongDir;
+  const std::string oldSongName = m_sSongName;
+  const std::string oldGroupName = m_sGroupName;
+  const ProfileSlot oldLoadedFromProfile = m_LoadedFromProfile;
+  const auto restorePathFields = [&]() {
+    m_sSongDir = oldSongDir;
+    m_sSongName = oldSongName;
+    m_sGroupName = oldGroupName;
+    m_LoadedFromProfile = oldLoadedFromProfile;
+  };
+
   // save song dir
   m_sSongDir = sDir;
 
   bool use_cache = true;
 
   if (!ApplySongPathFields(*this, m_sSongDir, from_profile, use_cache)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-610: restoring previous song path state after "
+        "failed load from '%s'.",
+        sDir.c_str());
+    restorePathFields();
     return false;
   }
 
@@ -470,6 +486,11 @@ bool Song::LoadFromSongDir(
       Reset();
       m_sSongDir = sDir;
       if (!ApplySongPathFields(*this, m_sSongDir, from_profile, use_cache)) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-610: restoring previous song path state after "
+            "failed cache fallback for '%s'.",
+            sDir.c_str());
+        restorePathFields();
         return false;
       }
       use_cache = false;
