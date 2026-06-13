@@ -55,6 +55,10 @@ bool IsValidPlayerNumber(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
 }
 
+bool IsValidFullComboTapScore(TapNoteScore tns) {
+  return tns >= TNS_W5 && tns <= TNS_W1;
+}
+
 int GetSafePercentDecimalPlaces() {
   const int iDecimals = CommonMetrics::PERCENT_SCORE_DECIMAL_PLACES;
   const int iClamped = std::min(std::max(iDecimals, 0), 6);
@@ -670,8 +674,13 @@ int PlayerStageStats::GetComboAtStartOfStage() const {
 
 bool PlayerStageStats::FullComboOfScore(
     TapNoteScore tnsAllGreaterOrEqual) const {
-  ASSERT(tnsAllGreaterOrEqual >= TNS_W5);
-  ASSERT(tnsAllGreaterOrEqual <= TNS_W1);
+  if (!IsValidFullComboTapScore(tnsAllGreaterOrEqual)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::FullComboOfScore ignored invalid "
+        "tap score %i.",
+        tnsAllGreaterOrEqual);
+    return false;
+  }
 
   // if we've set MissCombo to anything besides 0, it's not a full combo
   if (!m_bPlayerCanAchieveFullCombo) {
@@ -724,11 +733,25 @@ TapNoteScore PlayerStageStats::GetBestFullComboTapNoteScore() const {
 
 bool PlayerStageStats::SingleDigitsOfScore(
     TapNoteScore tnsAllGreaterOrEqual) const {
+  if (!IsValidFullComboTapScore(tnsAllGreaterOrEqual)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::SingleDigitsOfScore ignored "
+        "invalid tap score %i.",
+        tnsAllGreaterOrEqual);
+    return false;
+  }
   return FullComboOfScore(tnsAllGreaterOrEqual) &&
          m_iTapNoteScores[tnsAllGreaterOrEqual] < 10;
 }
 
 bool PlayerStageStats::OneOfScore(TapNoteScore tnsAllGreaterOrEqual) const {
+  if (!IsValidFullComboTapScore(tnsAllGreaterOrEqual)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::OneOfScore ignored invalid tap "
+        "score %i.",
+        tnsAllGreaterOrEqual);
+    return false;
+  }
   return FullComboOfScore(tnsAllGreaterOrEqual) &&
          m_iTapNoteScores[tnsAllGreaterOrEqual] == 1;
 }
@@ -742,9 +765,19 @@ int PlayerStageStats::GetTotalTaps() const {
 }
 
 float PlayerStageStats::GetPercentageOfTaps(TapNoteScore tns) const {
+  if (tns < TNS_None || tns >= NUM_TapNoteScore) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::GetPercentageOfTaps ignored "
+        "invalid tap score %i.",
+        tns);
+    return 0.0f;
+  }
   int iTotalTaps = 0;
   for (int i = TNS_Miss; i < NUM_TapNoteScore; i++) {
     iTotalTaps += m_iTapNoteScores[i];
+  }
+  if (iTotalTaps <= 0) {
+    return 0.0f;
   }
   return m_iTapNoteScores[tns] / (float)iTotalTaps;
 }
