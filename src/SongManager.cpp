@@ -1011,10 +1011,9 @@ std::string SongManager::GetCourseGroupBannerPath(
   std::map<std::string, CourseGroupInfo>::const_iterator iter =
       m_mapCourseGroupToInfo.find(sCourseGroup);
   if (iter == m_mapCourseGroupToInfo.end()) {
-    ASSERT_M(
-        0, ssprintf(
-               "requested banner for course group '%s' that doesn't exist",
-               sCourseGroup.c_str()));
+    LuaHelpers::ReportScriptErrorFmt(
+        "requested banner for course group '%s' that doesn't exist",
+        sCourseGroup.c_str());
     return std::string();
   } else {
     return iter->second.m_sBannerPath;
@@ -1044,10 +1043,9 @@ RageColor SongManager::GetCourseGroupColor(
     iIndex++;
   }
 
-  ASSERT_M(
-      0, ssprintf(
-             "requested color for course group '%s' that doesn't exist",
-             sCourseGroup.c_str()));
+  LuaHelpers::ReportScriptErrorFmt(
+      "requested color for course group '%s' that doesn't exist",
+      sCourseGroup.c_str());
   return RageColor(1, 1, 1, 1);
 }
 
