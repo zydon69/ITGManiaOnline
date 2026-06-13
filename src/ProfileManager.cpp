@@ -908,8 +908,13 @@ void ProfileManager::SaveMachineProfile() const {
   const_cast<ProfileManager*>(this)->m_pMachineProfile->m_sDisplayName =
       PREFSMAN->m_sMachineName;
 
-  m_pMachineProfile->SaveAllToDir(
-      MACHINE_PROFILE_DIR, false); /* don't sign machine profiles */
+  if (!m_pMachineProfile->SaveAllToDir(
+          MACHINE_PROFILE_DIR, false)) { /* don't sign machine profiles */
+    LOG->Warn(
+        "ProfileManager::SaveMachineProfile: failed to save machine profile "
+        "to '%s'",
+        MACHINE_PROFILE_DIR.c_str());
+  }
 }
 
 void ProfileManager::LoadMachineProfile() {
@@ -917,8 +922,19 @@ void ProfileManager::LoadMachineProfile() {
       m_pMachineProfile->LoadAllFromDir(MACHINE_PROFILE_DIR, false);
   if (lr == ProfileLoadResult_FailedNoProfile) {
     m_pMachineProfile->InitAll();
-    m_pMachineProfile->SaveAllToDir(
-        MACHINE_PROFILE_DIR, false); /* don't sign machine profiles */
+    if (!m_pMachineProfile->SaveAllToDir(
+            MACHINE_PROFILE_DIR, false)) { /* don't sign machine profiles */
+      LOG->Warn(
+          "ProfileManager::LoadMachineProfile: failed to create missing "
+          "machine profile at '%s'",
+          MACHINE_PROFILE_DIR.c_str());
+    }
+  } else if (lr != ProfileLoadResult_Success) {
+    LOG->Warn(
+        "ProfileManager::LoadMachineProfile: machine profile at '%s' failed "
+        "to load with result %d; resetting in-memory profile",
+        MACHINE_PROFILE_DIR.c_str(), lr);
+    m_pMachineProfile->InitAll();
   }
 
   // If the machine name has changed, make sure we use the new name
