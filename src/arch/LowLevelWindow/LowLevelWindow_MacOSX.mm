@@ -1053,6 +1053,11 @@ static bool MacOSMetalDirectPresentEnabled() {
   return MacOSMetalBridgeEnabled();
 }
 
+static bool MacOSWindowIsNativeFullscreen(NSWindow* window) {
+  return window != nil &&
+         ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
+}
+
 static int MacOSOpenGLOffscreenPresentMode() {
   return 1;
 }
@@ -1802,6 +1807,14 @@ bool LowLevelWindow_MacOSX::BuildMetalOpenGLBridge() {
 
 bool LowLevelWindow_MacOSX::PresentOpenGLBackbufferViaMetal() {
   RageTimer bridgePresentTimer;
+  SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
+  if (delegate != nil && MacOSWindowIsNativeFullscreen(delegate->m_Window)) {
+    if (m_MetalPresenter) {
+      m_MetalPresenter->SetLayerVisible(false);
+    }
+    return false;
+  }
+
   if (!MacOSMetalDirectPresentEnabled() || !m_MetalPresenter ||
       !m_MetalOpenGLBridge || m_MetalOpenGLBridge->surfaces.empty() ||
       !m_MetalPresenter->IsLayerAttached()) {
@@ -2029,8 +2042,14 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
 
   auto configurePresentBackend = [&](bool windowed) {
     RageTimer backendTimer;
-    if (bMetalBridgeRequested && m_MetalPresenter && windowed) {
-      SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
+    SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
+    const bool nativeFullscreen =
+        delegate != nil && MacOSWindowIsNativeFullscreen(delegate->m_Window);
+    const bool allowMetalBridge =
+        bMetalBridgeRequested && m_MetalPresenter && windowed &&
+        delegate != nil &&
+        !nativeFullscreen;
+    if (allowMetalBridge) {
       RageTimer releaseBridgeTimer;
       ReleaseMetalOpenGLBridge();
       const float releaseBridgeMs = releaseBridgeTimer.GetDeltaTime() * 1000.0f;
@@ -2082,11 +2101,12 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
             m_CurrentParams.width, m_CurrentParams.height);
       }
     } else {
-      if (MacOSMetalPresentRequested() && !windowed) {
+      if (MacOSMetalPresentRequested() && (!windowed || nativeFullscreen)) {
         LOG->Warn(
-            "OpenGL + Metal Present is currently available only for windowed "
-            "OpenGL. Full-screen OpenGL keeps the historical presentation path; "
-            "use VideoRenderer=metal for the native Metal renderer.");
+            "OpenGL + Metal Present is currently available only for regular "
+            "windowed OpenGL. Full-screen OpenGL keeps the historical "
+            "presentation path; use VideoRenderer=metal for the native Metal "
+            "renderer.");
       }
       RageTimer releaseBridgeTimer;
       ReleaseMetalOpenGLBridge();
@@ -2104,9 +2124,9 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
         LOG->Trace(
             "PERF_TRACE: macos_present_backend_config path=opengl total_ms=%.3f "
             "release_bridge_ms=%.3f shutdown_ms=%.3f windowed=%d "
-            "metal_requested=%d",
+            "native_fullscreen=%d metal_requested=%d",
             backendTimer.GetDeltaTime() * 1000.0f, releaseBridgeMs, shutdownMs,
-            windowed ? 1 : 0,
+            windowed ? 1 : 0, nativeFullscreen ? 1 : 0,
             MacOSMetalPresentRequested() ? 1 : 0);
       }
     }
@@ -2791,29 +2811,37 @@ void LowLevelWindow_MacOSX::Update() {
       m_CurrentParams.windowed) {
     RageTimer metalReconfigureTimer;
     SMWindowDelegate* delegate = (SMWindowDelegate*)m_WindowDelegate;
-    ReleaseMetalOpenGLBridge();
-    if ([NSThread isMainThread]) {
-      m_MetalPresenter->Initialize(
-          (void*)delegate->m_Window, m_CurrentParams.width,
-          m_CurrentParams.height,
-          EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
+    if (delegate == nil || MacOSWindowIsNativeFullscreen(delegate->m_Window)) {
+      ReleaseMetalOpenGLBridge();
+      m_MetalPresenter->Shutdown();
+      m_bMetalBridgeBuildPending = false;
+      m_iMetalBridgeBuildFrameCountdown = 0;
+      m_iMetalBridgeBuildAttempts = 0;
     } else {
-      dispatch_sync(dispatch_get_main_queue(), ^{
+      ReleaseMetalOpenGLBridge();
+      if ([NSThread isMainThread]) {
         m_MetalPresenter->Initialize(
             (void*)delegate->m_Window, m_CurrentParams.width,
             m_CurrentParams.height,
             EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
-      });
-    }
-    if (m_MetalPresenter->IsInteropReady()) {
-      if (MacOSMetalDirectPresentEnabled()) {
-        m_MetalPresenter->AttachLayerToWindow((void*)delegate->m_Window);
       } else {
-        m_MetalPresenter->DetachLayer();
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          m_MetalPresenter->Initialize(
+              (void*)delegate->m_Window, m_CurrentParams.width,
+              m_CurrentParams.height,
+              EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
+        });
       }
-      m_bMetalBridgeBuildPending = true;
-      m_iMetalBridgeBuildFrameCountdown = kMetalBridgeInitialBuildDelayFrames;
-      m_iMetalBridgeBuildAttempts = 0;
+      if (m_MetalPresenter->IsInteropReady()) {
+        if (MacOSMetalDirectPresentEnabled()) {
+          m_MetalPresenter->AttachLayerToWindow((void*)delegate->m_Window);
+        } else {
+          m_MetalPresenter->DetachLayer();
+        }
+        m_bMetalBridgeBuildPending = true;
+        m_iMetalBridgeBuildFrameCountdown = kMetalBridgeInitialBuildDelayFrames;
+        m_iMetalBridgeBuildAttempts = 0;
+      }
     }
     metalReconfigureMs = metalReconfigureTimer.GetDeltaTime() * 1000.0f;
   }
