@@ -57,6 +57,8 @@ static const bool g_bEnvLogNoteSkin = EnvFlagEnabled("ITG_LOG_NOTESKIN");
 static const bool g_bEnvLogInput = EnvFlagEnabled("ITG_LOG_INPUT");
 static const bool g_bEnvLogMemoryCard = EnvFlagEnabled("ITG_LOG_MEMORY_CARD");
 static const bool g_bEnvLogContentLoad = EnvFlagEnabled("ITG_LOG_CONTENT_LOAD");
+static const bool g_bEnvLogVerboseContentLoad =
+    EnvFlagEnabled("ITG_LOG_VERBOSE_CONTENT_LOAD");
 static const bool g_bEnvLogThemeLua = EnvFlagEnabled("ITG_LOG_THEME_LUA");
 static const bool g_bEnvLogBackground = EnvFlagEnabled("ITG_LOG_BACKGROUND");
 static const bool g_bEnvLegacyTraceGlUploads =
@@ -150,6 +152,13 @@ bool LogMemoryCardDiagnosticsEnabled() {
 bool LogContentLoadDiagnosticsEnabled() {
   return CategoryEnabled(
       g_bLogContentLoadDiagnosticsCached, g_bEnvLogContentLoad);
+}
+
+bool LogVerboseContentLoadDiagnosticsEnabled() {
+  // This intentionally does not inherit from PerfDiagnostics.  Per-texture and
+  // per-PNG-row checkpoints can produce thousands of lines in a normal boot,
+  // so they are reserved for targeted low-level asset I/O investigations.
+  return g_bEnvLogVerboseContentLoad;
 }
 
 bool LogThemeLuaDiagnosticsEnabled() {

@@ -1113,8 +1113,6 @@ void GameSoundManager::Update(float fDeltaTime) {
   const float fAdjust = GetFrameTimingAdjustment(fDeltaTime);
   if (!g_Playing->m_Music->IsPlaying()) {
     /* There's no song playing.  Fake it. */
-    CHECKPOINT_M(ssprintf(
-        "%f, delta %f", GAMESTATE->m_Position.m_fMusicSeconds, fDeltaTime));
     GAMESTATE->UpdateSongPosition(
         GAMESTATE->m_Position.m_fMusicSeconds +
             fDeltaTime * g_Playing->m_Music->GetPlaybackRate(),

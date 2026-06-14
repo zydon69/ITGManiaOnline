@@ -12,6 +12,7 @@ bool LogNoteSkinDiagnosticsEnabled();
 bool LogInputDiagnosticsEnabled();
 bool LogMemoryCardDiagnosticsEnabled();
 bool LogContentLoadDiagnosticsEnabled();
+bool LogVerboseContentLoadDiagnosticsEnabled();
 bool LogThemeLuaDiagnosticsEnabled();
 
 #endif

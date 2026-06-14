@@ -477,7 +477,6 @@ void RageSoundDriver::DecodeThread() {
           }
         }
 
-        CHECKPOINT_M("Processing the sound while buffers are available.");
         RefillTrace refillTrace;
         const bool refilled = RefillSoundBufferToTarget(
             *pSound, kDecodeRefillTargetBlocks, "decode_thread",

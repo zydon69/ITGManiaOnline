@@ -71,7 +71,6 @@ void ScrollBar::SetPercentage(float fCenterPercent, float fSizePercent) {
   fStartPercent = std::fmod(fStartPercent + 1, 1);
   fEndPercent = std::fmod(fEndPercent + 1, 1);
 
-  CHECKPOINT_M("Percentages set.");
   float fPartTopY[2], fPartBottomY[2];
 
   if (fStartPercent < fEndPercent)  // we only need to one 1 stretch thumb part

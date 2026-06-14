@@ -10,6 +10,7 @@
 
 #include "RageFile.h"
 #include "RageLog.h"
+#include "PerfDiagnostics.h"
 #include "RageSurface.h"
 #include "RageSurface_Load.h"
 #include "RageThreads.h"
@@ -28,7 +29,9 @@
 
 namespace {
 void RageFile_png_read(png_struct* png, png_byte* p, png_size_t size) {
-  CHECKPOINT_M("Reading the png file.");
+  if (LogVerboseContentLoadDiagnosticsEnabled()) {
+    CHECKPOINT_M("Reading the png file.");
+  }
   RageFile* f = (RageFile*)png_get_io_ptr(png);
 
   int got = f->Read(p, size);
@@ -60,7 +63,9 @@ void PNG_Error(png_struct* png, const char* error) {
 }
 
 void PNG_Warning(png_struct* png, const char* warning) {
-  CHECKPOINT_M(ssprintf("PNG warning during processing: %s", warning));
+  if (LogVerboseContentLoadDiagnosticsEnabled()) {
+    CHECKPOINT_M(ssprintf("PNG warning during processing: %s", warning));
+  }
   error_info* info = (error_info*)png_get_io_ptr(png);
   LOG->Trace("loading \"%s\": warning: %s", info->fn, warning);
 }
@@ -89,7 +94,9 @@ static RageSurface* RageSurface_Load_PNG(
   }
 
   RageSurface* volatile img = nullptr;
-  CHECKPOINT_M("Potential issue with png jump about to be analyzed.");
+  if (LogVerboseContentLoadDiagnosticsEnabled()) {
+    CHECKPOINT_M("PNG longjmp guard installed.");
+  }
 
   png_byte** row_pointers = nullptr;
 
@@ -119,7 +126,9 @@ static RageSurface* RageSurface_Load_PNG(
    * decompress the image.  Just return an empty surface with only the width and
    * height set. */
   if (bHeaderOnly) {
-    CHECKPOINT_M("Header only png about to be processed.");
+    if (LogVerboseContentLoadDiagnosticsEnabled()) {
+      CHECKPOINT_M("PNG header-only load.");
+    }
     img = CreateSurfaceFrom(width, height, 32, 0, 0, 0, 0, nullptr, width * 4);
     png_destroy_read_struct(&png, &info_ptr, nullptr);
     return img;
@@ -170,7 +179,9 @@ static RageSurface* RageSurface_Load_PNG(
       FAIL_M(ssprintf("%i", color_type));
   }
 
-  CHECKPOINT_M("PNG color analysis about to begin.");
+  if (LogVerboseContentLoadDiagnosticsEnabled()) {
+    CHECKPOINT_M("PNG color analysis.");
+  }
   if (color_type == PNG_COLOR_TYPE_GRAY) {
     png_color_16* trans;
     if (png_get_tRNS(png, info_ptr, nullptr, nullptr, &trans) ==
@@ -236,7 +247,10 @@ static RageSurface* RageSurface_Load_PNG(
   ASSERT(img != nullptr);
 
   row_pointers = new png_byte*[height];
-  CHECKPOINT_M(ssprintf("%p", static_cast<void*>(row_pointers)));
+  if (LogVerboseContentLoadDiagnosticsEnabled()) {
+    CHECKPOINT_M(
+        ssprintf("PNG row pointer table %p.", static_cast<void*>(row_pointers)));
+  }
 
   for (unsigned y = 0; y < height; ++y) {
     png_byte* p = (png_byte*)img->pixels;
