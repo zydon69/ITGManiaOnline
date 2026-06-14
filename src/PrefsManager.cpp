@@ -163,7 +163,7 @@ PrefsManager::PrefsManager()
       m_bStretchBackgrounds("StretchBackgrounds", false),
       m_BGFitMode("BackgroundFitMode", BFM_CoverPreserve),
       m_HighResolutionTextures(
-          "HighResolutionTextures", HighResolutionTextures_Auto),
+          "HighResolutionTextures", HighResolutionTextures_ForceOn),
       m_iMaxTextureResolution("MaxTextureResolution", 2048),
       m_iRefreshRate("RefreshRate", REFRESH_DEFAULT),
       m_bAllowMultitexture("AllowMultitexture", true),
@@ -173,11 +173,15 @@ PrefsManager::PrefsManager()
       m_bShowMouseCursor("ShowMouseCursor", false),
 
       m_bHiddenSongs("HiddenSongs", false),
+#if defined(__APPLE__)
+      m_bVsync("Vsync", false),
+#else
       m_bVsync("Vsync", true),
+#endif
       m_FastNoteRendering("FastNoteRendering", false),
       m_bInterlaced("Interlaced", false),
       m_bPAL("PAL", false),
-      m_bDelayedTextureDelete("DelayedTextureDelete", false),
+      m_bDelayedTextureDelete("DelayedTextureDelete", true),
       m_bDelayedModelDelete("DelayedModelDelete", false),
       m_ImageCache("ImageCache", IMGCACHE_LOW_RES_PRELOAD),
       m_bFastLoad("FastLoad", true),
