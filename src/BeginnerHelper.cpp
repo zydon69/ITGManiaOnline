@@ -1,5 +1,6 @@
 #include "BeginnerHelper.h"
 
+#include <cmath>
 #include <string>
 
 #include "ActorFrame.h"
@@ -11,6 +12,7 @@
 #include "PlayerNumber.h"
 #include "PrefsManager.h"
 #include "RageDisplay.h"
+#include "RageLog.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
 #include "Steps.h"
@@ -60,6 +62,24 @@ static std::string GetAnimPath(Animation a) {
   return std::string("Characters/") + anims[a];
 }
 
+namespace {
+bool IsValidBeginnerHelperPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+float GetSafeBeginnerHelperBPS() {
+  if (GAMESTATE == nullptr || !std::isfinite(GAMESTATE->m_Position.m_fCurBPS) ||
+      GAMESTATE->m_Position.m_fCurBPS <= 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-733: BeginnerHelper used fallback BPS because the "
+        "current BPS is invalid.");
+    return 1.0f;
+  }
+
+  return GAMESTATE->m_Position.m_fCurBPS;
+}
+}  // namespace
+
 BeginnerHelper::BeginnerHelper() {
   m_bShowBackground = true;
   m_bInitialized = false;
@@ -75,7 +95,12 @@ BeginnerHelper::~BeginnerHelper() {
 }
 
 bool BeginnerHelper::Init(int iDancePadType) {
-  ASSERT(!m_bInitialized);
+  if (m_bInitialized) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-730: BeginnerHelper::Init ignored duplicate init.");
+    return true;
+  }
+
   if (!CanUse(PLAYER_INVALID)) {
     return false;
   }
@@ -147,6 +172,12 @@ bool BeginnerHelper::Init(int iDancePadType) {
       case 2:
         m_pDancePad->LoadMilkshapeAscii(GetAnimPath(ANIM_DANCE_PADS));
         break;
+      default:
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-732: BeginnerHelper ignored invalid dance pad "
+            "type %d.",
+            iDancePadType);
+        break;
     }
 
     m_pDancePad->SetName("DancePad");
@@ -163,12 +194,28 @@ bool BeginnerHelper::Init(int iDancePadType) {
     }
 
     // Load character data
-    const Character* Character = GAMESTATE->m_pCurCharacters[pl];
-    ASSERT(Character != nullptr);
+    const Character* Character =
+        GAMESTATE != nullptr ? GAMESTATE->m_pCurCharacters[pl] : nullptr;
+    if (Character == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-732: BeginnerHelper disabled player %d because "
+          "no character is assigned.",
+          pl + 1);
+      m_bPlayerEnabled[pl] = false;
+      continue;
+    }
 
     m_pDancer[pl]->SetName(ssprintf("PlayerP%d", pl + 1));
 
     // Load textures
+    if (!DoesFileExist(Character->GetModelPath())) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-732: BeginnerHelper disabled player %d because "
+          "model '%s' is missing.",
+          pl + 1, Character->GetModelPath().c_str());
+      m_bPlayerEnabled[pl] = false;
+      continue;
+    }
     m_pDancer[pl]->LoadMilkshapeAscii(Character->GetModelPath());
 
     // Load needed animations
@@ -179,8 +226,15 @@ bool BeginnerHelper::Init(int iDancePadType) {
         "Step-RIGHT", GetAnimPath(ANIM_RIGHT));
     m_pDancer[pl]->LoadMilkshapeAsciiBones(
         "Step-JUMPLR", GetAnimPath(ANIM_JUMPLR));
-    m_pDancer[pl]->LoadMilkshapeAsciiBones(
-        "rest", Character->GetRestAnimationPath());
+    if (!m_pDancer[pl]->LoadMilkshapeAsciiBones(
+            "rest", Character->GetRestAnimationPath())) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-732: BeginnerHelper disabled player %d because "
+          "rest animation '%s' failed to load.",
+          pl + 1, Character->GetRestAnimationPath().c_str());
+      m_bPlayerEnabled[pl] = false;
+      continue;
+    }
     m_pDancer[pl]->SetDefaultAnimation(
         "rest");  // Stay bouncing after a step has finished animating
     m_pDancer[pl]->PlayAnimation("rest");
@@ -197,6 +251,14 @@ bool BeginnerHelper::Init(int iDancePadType) {
 }
 
 void BeginnerHelper::ShowStepCircle(PlayerNumber pn, int CSTEP) {
+  if (!IsValidBeginnerHelperPlayer(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-733: BeginnerHelper ignored step circle for "
+        "invalid player %d.",
+        static_cast<int>(pn));
+    return;
+  }
+
   int isc = 0;  // Save OR issues within array boundries.. it's worth the extra
                 // few bytes of memory.
   switch (CSTEP) {
@@ -212,27 +274,44 @@ void BeginnerHelper::ShowStepCircle(PlayerNumber pn, int CSTEP) {
     case ST_DOWN:
       isc = 3;
       break;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-733: BeginnerHelper ignored invalid step circle "
+          "mask %d.",
+          CSTEP);
+      return;
   }
 
+  const float bps = GetSafeBeginnerHelperBPS();
   m_sStepCircle[pn][isc].StopEffect();
   m_sStepCircle[pn][isc].SetZoom(2);
   m_sStepCircle[pn][isc].StopTweening();
-  m_sStepCircle[pn][isc].BeginTweening(
-      GAMESTATE->m_Position.m_fCurBPS / 3, TWEEN_LINEAR);
+  m_sStepCircle[pn][isc].BeginTweening(bps / 3, TWEEN_LINEAR);
   m_sStepCircle[pn][isc].SetZoom(0);
 }
 
 void BeginnerHelper::AddPlayer(PlayerNumber pn, const NoteData& ns) {
-  ASSERT(!m_bInitialized);
-  ASSERT(pn >= 0 && pn < NUM_PLAYERS);
-  ASSERT(GAMESTATE->IsHumanPlayer(pn));
+  if (m_bInitialized || !IsValidBeginnerHelperPlayer(pn) ||
+      GAMESTATE == nullptr || !GAMESTATE->IsHumanPlayer(pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-731: BeginnerHelper refused AddPlayer pn=%d "
+        "initialized=%d.",
+        static_cast<int>(pn), m_bInitialized ? 1 : 0);
+    return;
+  }
 
   if (!CanUse(pn)) {
     return;
   }
 
   const Character* Character = GAMESTATE->m_pCurCharacters[pn];
-  ASSERT(Character != nullptr);
+  if (Character == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-731: BeginnerHelper refused AddPlayer pn=%d "
+        "without character.",
+        static_cast<int>(pn));
+    return;
+  }
   if (!DoesFileExist(Character->GetModelPath())) {
     return;
   }
@@ -242,6 +321,13 @@ void BeginnerHelper::AddPlayer(PlayerNumber pn, const NoteData& ns) {
 }
 
 bool BeginnerHelper::CanUse(PlayerNumber pn) {
+  if (GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-730: BeginnerHelper cannot be used without "
+        "GAMESTATE.");
+    return false;
+  }
+
   for (int i = 0; i < NUM_ANIMATIONS; ++i) {
     if (!DoesFileExist(GetAnimPath((Animation)i))) {
       return false;
@@ -252,15 +338,28 @@ bool BeginnerHelper::CanUse(PlayerNumber pn) {
   // only check the first non-nullptr style.  Both styles need to be checked.
   // -Kyz
   if (pn == PLAYER_INVALID) {
-    return GAMESTATE->GetCurrentStyle(PLAYER_1)->m_bCanUseBeginnerHelper ||
-           GAMESTATE->GetCurrentStyle(PLAYER_2)->m_bCanUseBeginnerHelper;
+    const Style* p1Style = GAMESTATE->GetCurrentStyle(PLAYER_1);
+    const Style* p2Style = GAMESTATE->GetCurrentStyle(PLAYER_2);
+    return (p1Style != nullptr && p1Style->m_bCanUseBeginnerHelper) ||
+           (p2Style != nullptr && p2Style->m_bCanUseBeginnerHelper);
   }
-  return GAMESTATE->GetCurrentStyle(pn)->m_bCanUseBeginnerHelper;
+  if (!IsValidBeginnerHelperPlayer(pn)) {
+    return false;
+  }
+
+  const Style* style = GAMESTATE->GetCurrentStyle(pn);
+  return style != nullptr && style->m_bCanUseBeginnerHelper;
 }
 
 void BeginnerHelper::DrawPrimitives() {
   // If not initialized, don't bother with this
   if (!m_bInitialized) {
+    return;
+  }
+  if (PREFSMAN == nullptr || DISPLAY == nullptr || GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-734: BeginnerHelper skipped draw because global "
+        "state is incomplete.");
     return;
   }
 
@@ -295,7 +394,9 @@ void BeginnerHelper::DrawPrimitives() {
 
   // Draw Dancers
   if (DrawCelShaded) {
-    FOREACH_PlayerNumber(pn) if (GAMESTATE->IsHumanPlayer(pn)) m_pDancer[pn]
+    FOREACH_PlayerNumber(pn) if (GAMESTATE->IsHumanPlayer(pn) &&
+                                 m_bPlayerEnabled[pn] &&
+                                 m_pDancer[pn] != nullptr) m_pDancer[pn]
         ->DrawCelShaded();
   } else {
     DISPLAY->SetLighting(true);
@@ -303,7 +404,9 @@ void BeginnerHelper::DrawPrimitives() {
         0, RageColor(0.5f, 0.5f, 0.5f, 1), RageColor(1, 1, 1, 1),
         RageColor(0, 0, 0, 1), RageVector3(0, 0, 1));
 
-    FOREACH_PlayerNumber(pn) if (GAMESTATE->IsHumanPlayer(pn)) m_pDancer[pn]
+    FOREACH_PlayerNumber(pn) if (GAMESTATE->IsHumanPlayer(pn) &&
+                                 m_bPlayerEnabled[pn] &&
+                                 m_pDancer[pn] != nullptr) m_pDancer[pn]
         ->Draw();
 
     DISPLAY->SetLightOff(0);
@@ -312,6 +415,16 @@ void BeginnerHelper::DrawPrimitives() {
 }
 
 void BeginnerHelper::Step(PlayerNumber pn, int CSTEP) {
+  if (!IsValidBeginnerHelperPlayer(pn) || m_pDancer[pn] == nullptr ||
+      !m_bPlayerEnabled[pn]) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-733: BeginnerHelper ignored step for invalid or "
+        "disabled player %d.",
+        static_cast<int>(pn));
+    return;
+  }
+
+  const float bps = GetSafeBeginnerHelperBPS();
   m_pDancer[pn]->StopTweening();
   m_pDancer[pn]->SetRotationY(
       0);  // Make sure we're not still inside of a JUMPUD tween.
@@ -343,23 +456,25 @@ void BeginnerHelper::Step(PlayerNumber pn, int CSTEP) {
       ShowStepCircle(pn, ST_DOWN);
       m_pDancer[pn]->StopTweening();
       m_pDancer[pn]->PlayAnimation("Step-JUMPLR", 1.5f);
-      m_pDancer[pn]->BeginTweening(
-          GAMESTATE->m_Position.m_fCurBPS / 8, TWEEN_LINEAR);
+      m_pDancer[pn]->BeginTweening(bps / 8, TWEEN_LINEAR);
       m_pDancer[pn]->SetRotationY(90);
-      m_pDancer[pn]->BeginTweening(
-          1 /
-          (GAMESTATE->m_Position.m_fCurBPS * 2));  // sleep between jump-frames
-      m_pDancer[pn]->BeginTweening(
-          GAMESTATE->m_Position.m_fCurBPS / 6, TWEEN_LINEAR);
+      m_pDancer[pn]->BeginTweening(1 / (bps * 2));  // sleep between jump-frames
+      m_pDancer[pn]->BeginTweening(bps / 6, TWEEN_LINEAR);
       m_pDancer[pn]->SetRotationY(0);
       break;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-733: BeginnerHelper ignored unsupported step "
+          "mask %d.",
+          CSTEP);
+      return;
   }
 
   m_sFlash.StopEffect();
   m_sFlash.StopTweening();
-  m_sFlash.Sleep(GAMESTATE->m_Position.m_fCurBPS / 16);
+  m_sFlash.Sleep(bps / 16);
   m_sFlash.SetDiffuseAlpha(1);
-  m_sFlash.BeginTweening(1 / GAMESTATE->m_Position.m_fCurBPS * 0.5f);
+  m_sFlash.BeginTweening(1 / bps * 0.5f);
   m_sFlash.SetDiffuseAlpha(0);
 }
 
@@ -367,11 +482,33 @@ void BeginnerHelper::Update(float fDeltaTime) {
   if (!m_bInitialized) {
     return;
   }
+  if (GAMESTATE == nullptr || !std::isfinite(fDeltaTime)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-734: BeginnerHelper skipped update because state "
+        "or delta time is invalid.");
+    return;
+  }
 
   // the row we want to check on this update
   int iCurRow =
       BeatToNoteRowNotRounded(GAMESTATE->m_Position.m_fSongBeat + 0.4f);
-  FOREACH_EnabledPlayer(pn) {
+  if (iCurRow < m_iLastRowChecked) {
+    m_iLastRowChecked = iCurRow;
+    return;
+  }
+
+  static const int MAX_BEGINNER_HELPER_ROWS_PER_UPDATE = ROWS_PER_BEAT * 64;
+  if (iCurRow - m_iLastRowChecked > MAX_BEGINNER_HELPER_ROWS_PER_UPDATE) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-734: BeginnerHelper capped row scan from %d to %d.",
+        m_iLastRowChecked, iCurRow);
+    m_iLastRowChecked = iCurRow - MAX_BEGINNER_HELPER_ROWS_PER_UPDATE;
+  }
+
+  FOREACH_PlayerNumber(pn) {
+    if (!m_bPlayerEnabled[pn] || !GAMESTATE->IsHumanPlayer(pn)) {
+      continue;
+    }
     for (int iRow = m_iLastRowChecked; iRow < iCurRow; iRow++) {
       // Check if there are any notes at all on this row.. If not, save
       // scanning.
@@ -383,6 +520,13 @@ void BeginnerHelper::Update(float fDeltaTime) {
       int iStep = 0;
       const int iNumTracks = m_NoteData[pn].GetNumTracks();
       for (int t = 0; t < iNumTracks; t++) {
+        if (t >= 30) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX SRC-735: BeginnerHelper ignored tracks above "
+              "bitmask capacity for player %d.",
+              static_cast<int>(pn));
+          break;
+        }
         if (m_NoteData[pn].GetTapNote(t, iRow).type == TapNoteType_Tap) {
           iStep |= 1 << t;
         }
@@ -398,12 +542,17 @@ void BeginnerHelper::Update(float fDeltaTime) {
 
   // Update animations
   ActorFrame::Update(fDeltaTime);
-  m_pDancePad->Update(fDeltaTime);
+  if (m_pDancePad != nullptr) {
+    m_pDancePad->Update(fDeltaTime);
+  }
   m_sFlash.Update(fDeltaTime);
 
-  float beat = fDeltaTime * GAMESTATE->m_Position.m_fCurBPS;
+  float beat = fDeltaTime * GetSafeBeginnerHelperBPS();
   // If this is not a human player, the dancer is not shown
   FOREACH_HumanPlayer(pu) {
+    if (!m_bPlayerEnabled[pu] || m_pDancer[pu] == nullptr) {
+      continue;
+    }
     // Update dancer's animation and StepCircles
     m_pDancer[pu]->Update(beat);
     for (int scu = 0; scu < NUM_PLAYERS; scu++) {
