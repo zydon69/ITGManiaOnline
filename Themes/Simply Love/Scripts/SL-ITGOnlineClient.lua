@@ -1143,6 +1143,31 @@ function ITGOnline:ClearStoredAccessToken()
 	end
 end
 
+function ITGOnline:UnlinkLocalProfile()
+	local hadStoredToken = self:HasStoredAccessToken()
+	local hadActiveToken = tostring(self.token or "") ~= ""
+
+	if hadActiveToken then
+		self:Disconnect({ revokeToken = true })
+	else
+		self:ClearStoredAccessToken()
+		self.user = nil
+		self.sessionExpired = false
+	end
+
+	self:ClearStoredAccessToken()
+	online_trace(
+		"Local ITG Online profile link cleared; hadStoredToken=" ..
+		tostring(hadStoredToken) .. " hadActiveToken=" .. tostring(hadActiveToken)
+	)
+	MESSAGEMAN:Broadcast("ITGOnlineLocalProfileUnlinked", {
+		hadStoredToken = hadStoredToken,
+		hadActiveToken = hadActiveToken
+	})
+
+	return hadStoredToken or hadActiveToken
+end
+
 function ITGOnline:LoadAuthenticatedUser(callback)
 	if tostring(self.token or "") == "" then
 		if callback then callback(false, nil, { errorMessage = "No access token available." }) end
