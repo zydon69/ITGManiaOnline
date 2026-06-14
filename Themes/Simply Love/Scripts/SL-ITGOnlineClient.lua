@@ -58,6 +58,7 @@ ITGOnline.lastAcceptedScoreFingerprint = ITGOnline.lastAcceptedScoreFingerprint 
 ITGOnline.scoreInFlightFingerprint = ITGOnline.scoreInFlightFingerprint or nil
 ITGOnline.lastDisplayedScoreSnapshot = ITGOnline.lastDisplayedScoreSnapshot or nil
 ITGOnline.lastDisplayedScoreSnapshotAt = ITGOnline.lastDisplayedScoreSnapshotAt or 0
+ITGOnline.lastScoreJudgmentsByRoundKey = ITGOnline.lastScoreJudgmentsByRoundKey or {}
 ITGOnline.pendingLiveScoreSnapshot = ITGOnline.pendingLiveScoreSnapshot or nil
 ITGOnline.pendingLiveScoreRoundKey = ITGOnline.pendingLiveScoreRoundKey or ""
 ITGOnline.liveScoreInFlight = ITGOnline.liveScoreInFlight or false
@@ -158,6 +159,12 @@ local function parse_bool(value, fallback)
 	if text == "1" or text == "true" or text == "yes" or text == "on" then return true end
 	if text == "0" or text == "false" or text == "no" or text == "off" then return false end
 	return fallback == true
+end
+
+local function query_escape(value)
+	return tostring(value or ""):gsub("([^%w%-%_%.%~])", function(char)
+		return string.format("%%%02X", string.byte(char))
+	end)
 end
 
 local function url_host(value)
@@ -1354,14 +1361,15 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 
 			if response and response.statusCode == 401 and path ~= "/auth/login" and path ~= "/auth/refresh" and not self.disconnecting and not alreadyRetriedAuth then
 				local retryRecord = record
-				if (self.authRefreshFailureCount or 0) >= (self.maxAuthRefreshFailures or 3) then
-					self.sessionExpired = true
-					if self.socket then self.socket:Close() end
-					self.socket = nil
-					self:ClearTransientSecrets()
-					MESSAGEMAN:Broadcast("OnlineSessionExpired")
-					if callback then callback(false, decoded, response) end
-					return
+					if (self.authRefreshFailureCount or 0) >= (self.maxAuthRefreshFailures or 3) then
+						self.sessionExpired = true
+						if self.socket then self.socket:Close() end
+						self.socket = nil
+						self:ClearStoredAccessToken()
+						self:ClearTransientSecrets()
+						MESSAGEMAN:Broadcast("OnlineSessionExpired")
+						if callback then callback(false, decoded, response) end
+						return
 				end
 
 				self:Relogin(function(loginOk)
@@ -1374,12 +1382,13 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 						return
 					end
 
-					self.sessionExpired = true
-					if self.socket then self.socket:Close() end
-					self.socket = nil
-					self:ClearTransientSecrets()
-					MESSAGEMAN:Broadcast("OnlineSessionExpired")
-					if callback then callback(false, decoded, response) end
+						self.sessionExpired = true
+						if self.socket then self.socket:Close() end
+						self.socket = nil
+						self:ClearStoredAccessToken()
+						self:ClearTransientSecrets()
+						MESSAGEMAN:Broadcast("OnlineSessionExpired")
+						if callback then callback(false, decoded, response) end
 				end)
 				return
 			end
@@ -2785,6 +2794,29 @@ end
 function ITGOnline:Disconnect(options)
 	options = options or {}
 	local revokeToken = options.revokeToken == true
+	local roomIdToLeave = self.currentRoomId
+	if roomIdToLeave and self.token and options.leaveRoom ~= false and NETWORK and NETWORK.HttpRequest then
+		local config = self:ConnectionConfig()
+		local leaveUrl = tostring(config.apiBaseUrl or "") .. "/rooms/" .. tostring(roomIdToLeave) .. "/leave"
+		local leaveOk = pcall(function()
+			NETWORK:HttpRequest{
+				url = leaveUrl,
+				method = "POST",
+				body = "{}",
+				headers = self:AuthHeaders(),
+				connectTimeout = 2,
+				transferTimeout = 5,
+				onResponse = function(response)
+					online_trace("POST /rooms/" .. tostring(roomIdToLeave) .. "/leave -> "
+						.. tostring(response and response.statusCode or "no-status")
+						.. " during disconnect")
+				end
+			}
+		end)
+		if not leaveOk then
+			online_trace("POST /rooms/" .. tostring(roomIdToLeave) .. "/leave could not be queued during disconnect")
+		end
+	end
 
 	self.disconnecting = true
 	self:CancelPendingRequests()
@@ -2808,6 +2840,7 @@ function ITGOnline:Disconnect(options)
 	self.activeGameplayRoundKey = ""
 	self.lastDisplayedScoreSnapshot = nil
 	self.lastDisplayedScoreSnapshotAt = 0
+	self.lastScoreJudgmentsByRoundKey = {}
 	self.pendingLiveScoreSnapshot = nil
 	self.liveScoreInFlight = false
 	self.liveScoreNextAttemptAt = 0
@@ -3406,6 +3439,25 @@ function ITGOnline:ServerAccuracyFromJudgments(judgments)
 	return math.max(0, math.min(100, (weightedHits / total) * 100))
 end
 
+function ITGOnline:HasScoredJudgments(judgments)
+	if type(judgments) ~= "table" then return false end
+
+	return (tonumber(judgments.fantastic) or 0)
+		+ (tonumber(judgments.excellent) or 0)
+		+ (tonumber(judgments.great) or 0)
+		+ (tonumber(judgments.decent) or 0)
+		+ (tonumber(judgments.way_off) or 0)
+		+ (tonumber(judgments.miss) or 0) > 0
+end
+
+function ITGOnline:CopyServerJudgments(judgments)
+	local copy = {}
+	for _, key in ipairs({ "fantastic", "excellent", "great", "decent", "way_off", "miss", "mine", "hold_ok", "hold_ng" }) do
+		copy[key] = math.max(0, math.floor(tonumber(judgments and judgments[key]) or 0))
+	end
+	return copy
+end
+
 function ITGOnline:ScoreFingerprint(score, combo, maxCombo, failed, judgments)
 	local j = judgments or {}
 	return table.concat({
@@ -3769,15 +3821,43 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		return
 	end
 
-	local player = first_enabled_player()
-	local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
-	local dancePoints = stats:GetPercentDancePoints()
-	local exScore = CalculateExScore(player) or 0
-	local hardExScore = CalculateHardExScore and CalculateHardExScore(player) or 0
-	local songPositionState = GAMESTATE:GetPlayerState(player):GetSongPosition()
-	local songPosition = songPositionState:GetMusicSeconds()
-	local visibleOk, visibleSeconds = pcall(function() return songPositionState:GetMusicSecondsVisible() end)
-	if visibleOk and tonumber(visibleSeconds) then songPosition = visibleSeconds end
+		local player = snapshot and snapshot.Player or first_enabled_player()
+		local stats = nil
+		if player and STATSMAN and STATSMAN.GetCurStageStats then
+			local statsOk, statsValue = pcall(function()
+				return STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+			end)
+			if statsOk then stats = statsValue end
+		end
+
+		local dancePoints = (tonumber(snapshot and snapshot.scorePercent) or 0) / 100
+		if stats then
+			local danceOk, danceValue = pcall(function() return stats:GetPercentDancePoints() end)
+			if danceOk and tonumber(danceValue) then dancePoints = tonumber(danceValue) end
+		end
+
+		local exScore = tonumber(snapshot and snapshot.exScorePercent) or 0
+		if player and CalculateExScore then
+			local exOk, exValue = pcall(function() return CalculateExScore(player) end)
+			if exOk and tonumber(exValue) then exScore = tonumber(exValue) end
+		end
+
+		local hardExScore = tonumber(snapshot and snapshot.hardExScorePercent) or 0
+		if player and CalculateHardExScore then
+			local hardExOk, hardExValue = pcall(function() return CalculateHardExScore(player) end)
+			if hardExOk and tonumber(hardExValue) then hardExScore = tonumber(hardExValue) end
+		end
+
+		local songPosition = tonumber(self.lastScoreSongPosition) or 0
+		if player and GAMESTATE and GAMESTATE.GetPlayerState then
+			local positionOk, positionValue = pcall(function()
+				local songPositionState = GAMESTATE:GetPlayerState(player):GetSongPosition()
+				local visibleOk, visibleSeconds = pcall(function() return songPositionState:GetMusicSecondsVisible() end)
+				if visibleOk and tonumber(visibleSeconds) then return tonumber(visibleSeconds) end
+				return tonumber(songPositionState:GetMusicSeconds())
+			end)
+			if positionOk and tonumber(positionValue) then songPosition = tonumber(positionValue) end
+		end
 	local positionKey = roundKey
 	if self.lastScorePositionKey ~= positionKey then
 		self.lastScorePositionKey = positionKey
@@ -3813,16 +3893,20 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		songPosition = math.max(songPosition, lastKnownSongPosition)
 	end
 	self.lastScoreSongPosition = songPosition
-	local maxCombo = stats:GetCurrentCombo() or 0
-	for _, methodName in ipairs({ "GetMaxCombo", "MaxCombo" }) do
-		local ok, value = pcall(function() return stats[methodName] and stats[methodName](stats) or nil end)
-		if ok and tonumber(value) then
-			maxCombo = tonumber(value)
-			break
+		local maxCombo = tonumber(snapshot and (snapshot.maxCombo or snapshot.MaxCombo or snapshot.combo or snapshot.Combo)) or 0
+		if stats then
+			local currentComboOk, currentComboValue = pcall(function() return stats:GetCurrentCombo() end)
+			if currentComboOk and tonumber(currentComboValue) then maxCombo = tonumber(currentComboValue) end
+			for _, methodName in ipairs({ "GetMaxCombo", "MaxCombo" }) do
+				local ok, value = pcall(function() return stats[methodName] and stats[methodName](stats) or nil end)
+				if ok and tonumber(value) then
+					maxCombo = tonumber(value)
+					break
+				end
+			end
 		end
-	end
-	local failedOk, failedValue = pcall(function() return stats:GetFailed() end)
-	local failed = failedOk and failedValue == true or false
+		local failedOk, failedValue = stats ~= nil and pcall(function() return stats:GetFailed() end) or false, false
+		local failed = failedOk and failedValue == true or false
 
 	local selectedMaxScore = tonumber(scoreSongPayload.max_score) or server_max_score_for_note_count(scoreSongPayload.chart_note_count)
 	local exScorePercent = tonumber(snapshot and snapshot.exScorePercent) or tonumber(exScore) or 0
@@ -3858,7 +3942,25 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		end
 	end
 	displayedScorePercent = math.max(0, math.min(100, tonumber(displayedScorePercent) or 0))
-	local judgments = self:ServerJudgments(player)
+	local judgments = {}
+	if player then
+		local judgmentsOk, judgmentsValue = pcall(function() return self:ServerJudgments(player) end)
+		if judgmentsOk and type(judgmentsValue) == "table" then judgments = self:CopyServerJudgments(judgmentsValue) end
+	end
+	local judgmentRoundKey = validRoundKey and roundKey or tostring(self.currentRoomId or "")
+	self.lastScoreJudgmentsByRoundKey = self.lastScoreJudgmentsByRoundKey or {}
+	if self:HasScoredJudgments(judgments) then
+		self.lastScoreJudgmentsByRoundKey[judgmentRoundKey] = self:CopyServerJudgments(judgments)
+	elseif final and self.lastScoreJudgmentsByRoundKey[judgmentRoundKey] then
+		judgments = self:CopyServerJudgments(self.lastScoreJudgmentsByRoundKey[judgmentRoundKey])
+	end
+	if final and not self:HasScoredJudgments(judgments) then
+		online_trace("score-final-deferred room=" .. tostring(self.currentRoomId or "")
+			.. " round=" .. tostring(roundKey)
+			.. " reason=missing_judgments")
+		finish(false, nil, { retryAfter = 0.5, errorMessage = "Final score judgments are not ready yet." }, { roundKey = roundKey })
+		return
+	end
 	local accuracyFromJudgments = self:ServerAccuracyFromJudgments(judgments)
 	local accuracy = tonumber(snapshot and snapshot.scorePercent)
 	if accuracyFromJudgments ~= nil then
@@ -3873,10 +3975,15 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		-- Use EX-derived percentage as live accuracy fallback.
 		accuracy = normalizedExScore * 100
 	end
-	local liveCombo = tonumber(snapshot and snapshot.combo)
-	if liveCombo == nil then
-		liveCombo = stats:GetCurrentCombo() or 0
-	end
+		local liveCombo = tonumber(snapshot and snapshot.combo)
+		if liveCombo == nil then
+			if stats then
+				local comboOk, comboValue = pcall(function() return stats:GetCurrentCombo() end)
+				liveCombo = comboOk and tonumber(comboValue) or 0
+			else
+				liveCombo = 0
+			end
+		end
 
 	-- Always transport the score currently shown to the player in gameplay.
 	local outgoingScore = math.max(0, math.floor((displayedScorePercent / 100) * selectedMaxScore + 0.5))
@@ -4498,8 +4605,7 @@ function ITGOnline:MarkReturnedToLobby(callback)
 	if self:PlayStateKeyIsValid(key) then
 		self.onlineGameplayReturnedInFlightKey = key
 	end
-	self:ApplyLocalPlayState("returned_to_lobby", "returned_to_lobby_local")
-	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/play/returned-to-lobby", {}, function(ok, decoded, response)
+		self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/play/returned-to-lobby", {}, function(ok, decoded, response)
 		if self.onlineGameplayReturnedInFlightKey == key then
 			self.onlineGameplayReturnedInFlightKey = ""
 		end
@@ -4612,8 +4718,7 @@ function ITGOnline:MarkPlayFailedEarly(source, callback)
 	end
 
 	self.onlineGameplayFailedEarlyInFlightKey = key
-	self:ApplyLocalPlayState("failed", "failed_early_local")
-	online_flow_trace("mark_failed_early source=" .. tostring(source or "unknown")
+		online_flow_trace("mark_failed_early source=" .. tostring(source or "unknown")
 		.. " phase=" .. tostring(phase)
 		.. " roundKey=" .. tostring(key))
 
@@ -4832,9 +4937,64 @@ function ITGOnline:Heartbeat(status, force)
 end
 
 function ITGOnline:FetchLobby(callback)
-	self:Request("GET", "/lobby", nil, function(ok, decoded, response)
-		if callback then callback(ok, decoded, response) end
-	end)
+	local accumulator = {
+		online_users = {},
+		public_rooms = {},
+		meta = nil,
+	}
+	local onlineCursor = nil
+	local roomsCursor = nil
+	local pagesFetched = 0
+	local maxPages = 20
+
+	local fetchPage
+	fetchPage = function()
+		pagesFetched = pagesFetched + 1
+		local path = "/lobby?online_per_page=250&rooms_per_page=100"
+		if onlineCursor then path = path .. "&online_cursor=" .. query_escape(onlineCursor) end
+		if roomsCursor then path = path .. "&rooms_cursor=" .. query_escape(roomsCursor) end
+
+		self:Request("GET", path, nil, function(ok, decoded, response)
+			if not ok or type(decoded) ~= "table" then
+				if callback then callback(ok, decoded, response) end
+				return
+			end
+
+			for _, user in ipairs(decoded.online_users or {}) do
+				accumulator.online_users[#accumulator.online_users + 1] = user
+			end
+			for _, room in ipairs(decoded.public_rooms or {}) do
+				accumulator.public_rooms[#accumulator.public_rooms + 1] = room
+			end
+
+			local onlineMeta = decoded.meta and decoded.meta.online_users or {}
+			local roomsMeta = decoded.meta and decoded.meta.public_rooms or {}
+			local hasMoreOnline = onlineMeta.has_more == true and tostring(onlineMeta.next_cursor or "") ~= ""
+			local hasMoreRooms = roomsMeta.has_more == true and tostring(roomsMeta.next_cursor or "") ~= ""
+
+			accumulator.meta = decoded.meta or accumulator.meta
+			onlineCursor = hasMoreOnline and tostring(onlineMeta.next_cursor) or nil
+			roomsCursor = hasMoreRooms and tostring(roomsMeta.next_cursor) or nil
+
+			if (onlineCursor or roomsCursor) and pagesFetched < maxPages then
+				fetchPage()
+				return
+			end
+
+			if accumulator.meta then
+				accumulator.meta.online_users = accumulator.meta.online_users or {}
+				accumulator.meta.public_rooms = accumulator.meta.public_rooms or {}
+				accumulator.meta.online_users.has_more = onlineCursor ~= nil
+				accumulator.meta.public_rooms.has_more = roomsCursor ~= nil
+				accumulator.meta.online_users.next_cursor = onlineCursor
+				accumulator.meta.public_rooms.next_cursor = roomsCursor
+			end
+
+			if callback then callback(true, accumulator, response) end
+		end)
+	end
+
+	fetchPage()
 end
 
 function ITGOnline:QueueLobbyRefresh()
@@ -5200,6 +5360,7 @@ end
 			return
 		elseif name == "presence.pruned" then
 			-- Server-side cleanup notification. The next sync/lobby refresh carries the durable state.
+			self:QueueLobbyRefresh()
 			return
 		elseif name == "room.left" then
 			local roomId = tonumber(payload.room_id or -1)
@@ -5388,6 +5549,9 @@ end
 				self:MaybeAutoReadyManager(room)
 				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(room or self.currentRoom or payload.room))
 				self:BroadcastLeaderboardFromRoom(room or payload.room, "realtime_room_event:" .. tostring(name))
+				if name == "room.member_joined" or name == "room.member_left" then
+					self:QueueLobbyRefresh()
+				end
 				if name == "room.join_request.created" then
 					self:BroadcastPendingJoinRequestsFromRoom(room or payload.room)
 				end
@@ -5515,6 +5679,12 @@ function ITGOnline:LobbyStatePayload(room)
 		if displayedPercent == nil then
 			displayedPercent = scorePercent
 		end
+			local songAvailable = nil
+			if member.song_available == true then
+				songAvailable = true
+			elseif member.song_available == false or member.song_available == 0 then
+				songAvailable = false
+			end
 			players[#players + 1] = {
 				playerId = userId,
 				profileName = user.name or ("Player " .. userId),
@@ -5525,7 +5695,7 @@ function ITGOnline:LobbyStatePayload(room)
 				missingSongAt = member.missing_song_at,
 				packSyncDownloadStartedAt = member.pack_sync_download_started_at,
 				packSyncDownloadDeadlineMs = member.pack_sync_download_deadline_ms,
-				songAvailable = member.song_available and true or false,
+				songAvailable = songAvailable,
 				packSyncStatus = member.pack_sync_status or "unknown",
 				packSyncMessage = member.pack_sync_message,
 				packSyncDownloadProgress = member.pack_sync_download_progress,

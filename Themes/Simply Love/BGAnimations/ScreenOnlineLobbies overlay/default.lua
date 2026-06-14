@@ -593,7 +593,7 @@ local function player_missing_song_for_ui(player)
 	if player_is_current_user(player) and pack_sync_is_checking_joined_song() then
 		return false
 	end
-	return player and (player.missingSong or (joined_song_preview ~= nil and player.songAvailable == false)) or false
+	return player and player.missingSong == true or false
 end
 
 joined_any_player_missing_song = function()
@@ -2679,41 +2679,41 @@ local af = Def.ActorFrame{
 		Def.Quad{
 			Name="JoinedSongBannerFallback",
 			InitCommand=function(self)
-				self:xy(104, -110):zoomto(72, 40):diffuse(0.08,0.08,0.08,1):visible(false)
+				self:xy(116, -110):zoomto(72, 40):diffuse(0.08,0.08,0.08,1):visible(false)
 			end
 		},
 		LoadFont("Common Bold")..{
 			Name="JoinedSongBannerLabel",
 			Text="BANNIERE",
 			InitCommand=function(self)
-				self:xy(104, -105):zoom(0.18):diffuse(Color.White):visible(false)
+				self:xy(116, -105):zoom(0.18):diffuse(Color.White):visible(false)
 			end
 		},
 		Def.Banner{
 			Name="JoinedSongBanner",
 			InitCommand=function(self)
-				self:xy(104, -105):scaletoclipped(72, 40):visible(false)
+				self:xy(116, -105):scaletoclipped(72, 40):visible(false)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedSongPack",
 			Text="",
 			InitCommand=function(self)
-				self:horizalign(left):xy(82, -148):zoom(0.38):maxwidth(520):diffuse(0.85,0.85,0.85,1)
+				self:horizalign(left):xy(96, -148):zoom(0.38):maxwidth(500):diffuse(0.85,0.85,0.85,1)
 			end
 		},
 		LoadFont("Common Bold")..{
 			Name="JoinedSongTitle",
 			Text="Aucune chanson selectionnee",
 			InitCommand=function(self)
-				self:horizalign(left):xy(148, -119):zoom(WideScale(0.30, 0.32)):maxwidth(430)
+				self:horizalign(left):xy(160, -119):zoom(WideScale(0.30, 0.32)):maxwidth(405)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedSongArtist",
 			Text="",
 			InitCommand=function(self)
-				self:horizalign(left):xy(148, -96):zoom(WideScale(0.38, 0.40)):maxwidth(340)
+				self:horizalign(left):xy(160, -96):zoom(WideScale(0.38, 0.40)):maxwidth(320)
 			end
 		},
 		LoadFont("Common Normal")..{
