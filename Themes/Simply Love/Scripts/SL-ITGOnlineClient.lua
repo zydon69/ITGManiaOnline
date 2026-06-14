@@ -12,6 +12,7 @@ ITGOnline.configPath = "/Save/ITGOnline.ini"
 ITGOnline.debugConfigPath = "/Save/ITGOnlineDebug.ini"
 ITGOnline.passwordService = "ITG Online Password"
 ITGOnline.accessTokenService = "ITG Online Access Token"
+ITGOnline.profileAccessTokenCache = ITGOnline.profileAccessTokenCache or {}
 ITGOnline.defaults = {
 	apiBaseUrl = "https://itgonline.fr/api/v1",
 	webSocketUrl = "wss://ws.itgonline.fr",
@@ -276,17 +277,50 @@ local function access_token_scope(apiBaseUrl, deviceName)
 	return "machine:" .. normalize_base_url(apiBaseUrl) .. "|" .. trim(deviceName)
 end
 
+local function profile_access_token_cache_entry(path)
+	ITGOnline.profileAccessTokenCache = ITGOnline.profileAccessTokenCache or {}
+	return ITGOnline.profileAccessTokenCache[path]
+end
+
+local function set_profile_access_token_cache(path, apiBaseUrl, token, exists)
+	if not path then return end
+
+	ITGOnline.profileAccessTokenCache = ITGOnline.profileAccessTokenCache or {}
+	ITGOnline.profileAccessTokenCache[path] = {
+		apiBaseUrl = normalize_base_url(apiBaseUrl),
+		token = tostring(token or ""),
+		exists = exists == true,
+	}
+end
+
+local function invalidate_profile_access_token_cache(path)
+	ITGOnline.profileAccessTokenCache = ITGOnline.profileAccessTokenCache or {}
+	if path then
+		ITGOnline.profileAccessTokenCache[path] = nil
+	else
+		ITGOnline.profileAccessTokenCache = {}
+	end
+end
+
 local function read_profile_access_token(apiBaseUrl)
 	local path = active_profile_auth_path()
 	if not path or not FILEMAN:DoesFileExist(path) then return nil, false end
 
+	local normalizedApiBaseUrl = normalize_base_url(apiBaseUrl)
+	local cached = profile_access_token_cache_entry(path)
+	if cached and cached.apiBaseUrl == normalizedApiBaseUrl then
+		local cachedToken = tostring(cached.token or "")
+		return cachedToken ~= "" and cachedToken or nil, cachedToken ~= ""
+	end
+
 	local contents = IniFile.ReadFile(path) or {}
 	local section = contents["ITGOnline"] or {}
-	if normalize_base_url(section["ApiBaseUrl"]) ~= normalize_base_url(apiBaseUrl) then
+	if normalize_base_url(section["ApiBaseUrl"]) ~= normalizedApiBaseUrl then
 		return nil, false
 	end
 
 	local token = tostring(section["AccessToken"] or "")
+	set_profile_access_token_cache(path, normalizedApiBaseUrl, token, true)
 	if token == "" then return nil, false end
 
 	return token, true
@@ -294,12 +328,26 @@ end
 
 local function clear_profile_access_token()
 	local path = active_profile_auth_path()
-	if not path or not FILEMAN:DoesFileExist(path) then return false end
+	if not path or not FILEMAN:DoesFileExist(path) then
+		invalidate_profile_access_token_cache(path)
+		return false
+	end
+
+	local cached = profile_access_token_cache_entry(path)
+	if cached and tostring(cached.token or "") == "" then
+		return false
+	end
 
 	local contents = IniFile.ReadFile(path) or {}
 	contents["ITGOnline"] = contents["ITGOnline"] or {}
+	if tostring(contents["ITGOnline"]["AccessToken"] or "") == "" then
+		set_profile_access_token_cache(path, contents["ITGOnline"]["ApiBaseUrl"] or "", "", true)
+		return false
+	end
+
 	contents["ITGOnline"]["AccessToken"] = ""
 	IniFile.WriteFile(path, contents)
+	set_profile_access_token_cache(path, contents["ITGOnline"]["ApiBaseUrl"] or "", "", true)
 	return true
 end
 
