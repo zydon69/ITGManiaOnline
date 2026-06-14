@@ -996,7 +996,15 @@ bool CreateInteropSurface(
   ReleaseInteropSurface(surface);
 
   const int bytesPerPixel = 4;
-  const int bytesPerRow = width * bytesPerPixel;
+  // Metal validates IOSurface-backed textures very strictly.  The row stride
+  // must satisfy the texture's alignment requirements, so round the compact
+  // width up to a safe 64-byte boundary before creating the IOSurface.
+  constexpr int kMetalIOSurfaceRowAlignment = 64;
+  const int compactBytesPerRow = width * bytesPerPixel;
+  const int bytesPerRow =
+      ((compactBytesPerRow + kMetalIOSurfaceRowAlignment - 1) /
+       kMetalIOSurfaceRowAlignment) *
+      kMetalIOSurfaceRowAlignment;
   NSDictionary* properties = @{
     (NSString*)kIOSurfaceWidth: @(width),
     (NSString*)kIOSurfaceHeight: @(height),
