@@ -237,11 +237,11 @@ static const char* WebSocketMessageTypeNames[] = {
     "Error",
 };
 
-static constexpr int kBaseMainThreadTasksPerUpdate = 128;
-static constexpr float kBaseMainThreadTaskSecondsPerUpdate = 0.002f;
+static constexpr int kBaseMainThreadTasksPerUpdate = 256;
+static constexpr float kBaseMainThreadTaskSecondsPerUpdate = 0.004f;
 static constexpr int kBacklogMainThreadTasksPerUpdate = 512;
-static constexpr float kBacklogMainThreadTaskSecondsPerUpdate = 0.006f;
-static constexpr std::size_t kBacklogAdaptiveThreshold = 24;
+static constexpr float kBacklogMainThreadTaskSecondsPerUpdate = 0.008f;
+static constexpr std::size_t kBacklogAdaptiveThreshold = 8;
 
 static bool HostMatchesPattern(const std::string& host, const std::string& pattern) {
   if (pattern.empty()) {

@@ -135,6 +135,7 @@ ITGOnline.onlineGameplayEvaluationNavigationKey = ITGOnline.onlineGameplayEvalua
 ITGOnline.onlineGameplayEvaluationNavigationAt = ITGOnline.onlineGameplayEvaluationNavigationAt or 0
 ITGOnline.onlineGameplayAllTerminalHoldKey = ITGOnline.onlineGameplayAllTerminalHoldKey or ""
 ITGOnline.onlineGameplayAllTerminalHoldUntil = ITGOnline.onlineGameplayAllTerminalHoldUntil or 0
+ITGOnline.onlineGameplayReleaseLoggedKey = ITGOnline.onlineGameplayReleaseLoggedKey or ""
 ITGOnline.previousScreenName = ITGOnline.previousScreenName or nil
 ITGOnline.heartbeatInFlight = ITGOnline.heartbeatInFlight or false
 ITGOnline.heartbeatQueuedStatus = ITGOnline.heartbeatQueuedStatus or nil
@@ -150,6 +151,7 @@ ITGOnline.debugReadyFlow = ITGOnline.debugReadyFlow == true
 ITGOnline.lastDebugConfigPollAt = ITGOnline.lastDebugConfigPollAt or 0
 ITGOnline.debugConfigPollIntervalSeconds = ITGOnline.debugConfigPollIntervalSeconds or 1.0
 ITGOnline.lastHudScoreTraceSecond = ITGOnline.lastHudScoreTraceSecond or -1
+ITGOnline.cachedLobbySearchPayload = ITGOnline.cachedLobbySearchPayload or { lobbies = {}, onlinePlayers = {} }
 
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -1274,6 +1276,7 @@ end
 function ITGOnline:ResetRealtimeState()
 	self.lastEventCursor = 0
 	self.fetchRoomInFlightByRoomId = {}
+	self.cachedLobbySearchPayload = { lobbies = {}, onlinePlayers = {} }
 	self.lastLeaderboardVersionByRoomId = {}
 	self.lastLeaderboardRealtimeAt = 0
 	self.lastPlayStateVersionByRoomId = {}
@@ -2280,10 +2283,19 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 		self.onlineGameplayEvaluationMinimumHoldUntil = 0
 		self.onlineGameplayAllTerminalHoldKey = roundKey
 		self.onlineGameplayAllTerminalHoldUntil = 0
-		online_flow_trace("hold_gameplay_release reason=" .. (summary.allTerminal == true and "all_players_terminal" or "results_final_results_ready")
-			.. " terminal=" .. tostring(summary.terminal)
-			.. " players=" .. tostring(summary.players)
-			.. " finalResults=" .. tostring(summary.finalResults))
+		local releaseLogKey = validRoundKey and roundKey or table.concat({
+			tostring(self.currentRoomId or ""),
+			tostring(summary.terminal or ""),
+			tostring(summary.players or ""),
+			tostring(summary.finalResults or ""),
+		}, "|")
+		if self.onlineGameplayReleaseLoggedKey ~= releaseLogKey then
+			self.onlineGameplayReleaseLoggedKey = releaseLogKey
+			online_flow_trace("hold_gameplay_release reason=" .. (summary.allTerminal == true and "all_players_terminal" or "results_final_results_ready")
+				.. " terminal=" .. tostring(summary.terminal)
+				.. " players=" .. tostring(summary.players)
+				.. " finalResults=" .. tostring(summary.finalResults))
+		end
 		return false
 	end
 
@@ -2873,6 +2885,7 @@ function ITGOnline:Disconnect(options)
 	self.user = nil
 	self.currentRoomId = nil
 	self.currentRoom = nil
+	self.cachedLobbySearchPayload = { lobbies = {}, onlinePlayers = {} }
 	self.currentSongPayload = nil
 	self.currentRoomRoundKey = ""
 	self.lastResultSongPayload = nil
@@ -4211,11 +4224,10 @@ function ITGOnline:SetReady(phase, isReady, callback)
 		and blockedUntil > nowTs
 		and self.currentRoom
 		and self:NormalizeRoomPhase(self.currentRoom.phase) == currentPhase then
-		online_flow_trace_throttled("ready_request_deferred", 5.0,
+		online_flow_trace_throttled("ready_request_deferred", 10.0,
 			"ready_request_deferred room=" .. tostring(self.currentRoomId)
 			.. " phase=" .. tostring(phase)
-			.. " reason=room_members_song_not_confirmed"
-			.. " retry_in=" .. string.format("%.2f", blockedUntil - nowTs))
+			.. " reason=room_members_song_not_confirmed")
 		if callback then
 			callback(false, {
 				room = self.currentRoom,
@@ -5659,35 +5671,49 @@ end
 
 function ITGOnline:LobbySearchPayload(decoded)
 	local lobbies = {}
-	local rooms = decoded and decoded.public_rooms or {}
-	for room in ivalues(rooms) do
-		lobbies[#lobbies + 1] = {
-			code = tostring(room.id),
-			roomId = room.id,
-			name = room.name,
-			playerCount = room.members_count or 0,
-			phase = room.phase,
-		}
+	local cachedPayload = self.cachedLobbySearchPayload or { lobbies = {}, onlinePlayers = {} }
+	if decoded and decoded.public_rooms ~= nil then
+		for room in ivalues(decoded.public_rooms or {}) do
+			lobbies[#lobbies + 1] = {
+				code = tostring(room.id),
+				roomId = room.id,
+				name = room.name,
+				playerCount = room.members_count or 0,
+				phase = room.phase,
+			}
+		end
+	else
+		for lobby in ivalues(cachedPayload.lobbies or {}) do
+			lobbies[#lobbies + 1] = lobby
+		end
 	end
 
 	local onlinePlayers = {}
-	local users = decoded and decoded.online_users or {}
-	for user in ivalues(users) do
-		local isSelf = self.user and tonumber(user.id) == tonumber(self.user.id)
-		if not isSelf then onlinePlayers[#onlinePlayers + 1] = {
-			id = user.id,
-			name = user.name or ("User " .. tostring(user.id or "?")),
-			status = user.status or "available",
-			room = user.room,
-			lastSeenAt = user.last_seen_at,
-			isSelf = false,
-		} end
+	if decoded and decoded.online_users ~= nil then
+		for user in ivalues(decoded.online_users or {}) do
+			local isSelf = self.user and tonumber(user.id) == tonumber(self.user.id)
+			if not isSelf then onlinePlayers[#onlinePlayers + 1] = {
+				id = user.id,
+				name = user.name or ("User " .. tostring(user.id or "?")),
+				status = user.status or "available",
+				room = user.room,
+				lastSeenAt = user.last_seen_at,
+				isSelf = false,
+			} end
+		end
+	else
+		for player in ivalues(cachedPayload.onlinePlayers or {}) do
+			onlinePlayers[#onlinePlayers + 1] = player
+		end
 	end
 
-	return {
+	local payload = {
 		lobbies = lobbies,
 		onlinePlayers = onlinePlayers,
 	}
+
+	self.cachedLobbySearchPayload = payload
+	return payload
 end
 
 function ITGOnline:LobbyStatePayload(room)
