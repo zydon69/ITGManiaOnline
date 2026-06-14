@@ -33,7 +33,7 @@ void SMALoader::ProcessMultipliers(
           "Song file", this->GetSongTitle(),
           "has an invalid #MULTIPLIER value \"%s\" (must have at least one "
           "'='), ignored.",
-          arrayMultiplierExpressions[f].c_str());
+          SanitizeForLog(arrayMultiplierExpressions[f]).c_str());
       continue;
     }
     const float fComboBeat = RowToBeat(arrayMultiplierValues[0], iRowsPerBeat);
@@ -45,8 +45,8 @@ void SMALoader::ProcessMultipliers(
     if (fComboBeat < 0 || iCombos <= 0 || iMisses <= 0) {
       LOG->UserLog(
           "Song file", this->GetSongTitle(),
-          "SRC_AUDIT_FIX rejected invalid #MULTIPLIER at beat %f, combo %i, "
-          "miss combo %i.",
+          "has an invalid #MULTIPLIER at beat %f, combo %i, miss combo %i; "
+          "ignored while loading, simfile left unchanged.",
           fComboBeat, iCombos, iMisses);
       continue;
     }

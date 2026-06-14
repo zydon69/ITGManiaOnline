@@ -205,29 +205,31 @@ static void StripCvsAndSvn(
 
 int CompareBackgroundChanges(
     const BackgroundChange& seg1, const BackgroundChange& seg2) {
+  const bool seg1Finite = std::isfinite(seg1.m_fStartBeat);
+  const bool seg2Finite = std::isfinite(seg2.m_fStartBeat);
+  if (seg1Finite != seg2Finite) {
+    return seg1Finite;
+  }
+  if (!seg1Finite) {
+    return false;
+  }
   return seg1.m_fStartBeat < seg2.m_fStartBeat;
 }
 
-static bool IsValidBackgroundChangeTiming(const BackgroundChange& seg) {
-  return std::isfinite(seg.m_fStartBeat) && seg.m_fStartBeat >= 0;
+static bool HasFiniteBackgroundChangeTiming(const BackgroundChange& seg) {
+  return std::isfinite(seg.m_fStartBeat);
 }
 
 void BackgroundUtil::SortBackgroundChangesArray(
     std::vector<BackgroundChange>& vBackgroundChanges) {
-  vBackgroundChanges.erase(
-      std::remove_if(
-          vBackgroundChanges.begin(), vBackgroundChanges.end(),
-          [](const BackgroundChange& seg) {
-            if (IsValidBackgroundChangeTiming(seg)) {
-              return false;
-            }
-            LOG->Warn(
-                "SRC_AUDIT_FIX SRC-680: removed background change with invalid "
-                "start beat %.3f before sorting.",
-                seg.m_fStartBeat);
-            return true;
-          }),
-      vBackgroundChanges.end());
+  for (const BackgroundChange& seg : vBackgroundChanges) {
+    if (!HasFiniteBackgroundChangeTiming(seg)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-680: kept BGChange with non-finite start beat %f; "
+          "it will sort after finite BGChanges.",
+          seg.m_fStartBeat);
+    }
+  }
   sort(
       vBackgroundChanges.begin(), vBackgroundChanges.end(),
       CompareBackgroundChanges);
@@ -235,12 +237,10 @@ void BackgroundUtil::SortBackgroundChangesArray(
 
 void BackgroundUtil::AddBackgroundChange(
     std::vector<BackgroundChange>& vBackgroundChanges, BackgroundChange seg) {
-  if (!IsValidBackgroundChangeTiming(seg)) {
+  if (!HasFiniteBackgroundChangeTiming(seg)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-680: rejected background change with invalid start "
-        "beat %.3f.",
+        "SRC_AUDIT_FIX SRC-680: kept BGChange with non-finite start beat %f.",
         seg.m_fStartBeat);
-    return;
   }
   std::vector<BackgroundChange>::iterator it;
   it = upper_bound(

@@ -538,7 +538,7 @@ void SMLoader::ParseStops(
           "Song file", this->GetSongTitle(),
           "has an invalid #STOPS value \"%s\" (must have exactly one '='), "
           "ignored.",
-          arrayFreezeExpressions[f].c_str());
+          SanitizeForLog(arrayFreezeExpressions[f]).c_str());
       continue;
     }
 
@@ -879,7 +879,7 @@ void SMLoader::ProcessDelays(
           "Song file", this->GetSongTitle(),
           "has an invalid #DELAYS value \"%s\" (must have exactly one '='), "
           "ignored.",
-          arrayDelayExpressions[f].c_str());
+          SanitizeForLog(arrayDelayExpressions[f]).c_str());
       continue;
     }
     float fFreezeBeat = 0.0f;
@@ -1001,7 +1001,7 @@ void SMLoader::ProcessTickcounts(
           "Song file", this->GetSongTitle(),
           "has an invalid #TICKCOUNTS value \"%s\" (must have exactly one "
           "'='), ignored.",
-          arrayTickcountExpressions[f].c_str());
+          SanitizeForLog(arrayTickcountExpressions[f]).c_str());
       continue;
     }
 
@@ -1019,17 +1019,18 @@ void SMLoader::ProcessTickcounts(
     if (fTickcountBeat < 0) {
       LOG->UserLog(
           "Song file", this->GetSongTitle(),
-          "SRC_AUDIT_FIX rejected invalid #TICKCOUNTS beat %f in \"%s\".",
-          fTickcountBeat, arrayTickcountExpressions[f].c_str());
+          "has an invalid #TICKCOUNTS beat %f in \"%s\"; ignored while "
+          "loading, simfile left unchanged.",
+          fTickcountBeat, SanitizeForLog(arrayTickcountExpressions[f]).c_str());
       continue;
     }
 
     if (iTicks < 1 || iTicks > ROWS_PER_BEAT) {
       LOG->UserLog(
           "Song file", this->GetSongTitle(),
-          "SRC_AUDIT_FIX rejected invalid #TICKCOUNTS tick count %i in "
-          "\"%s\".",
-          iTicks, arrayTickcountExpressions[f].c_str());
+          "has an invalid #TICKCOUNTS tick count %i in \"%s\"; ignored while "
+          "loading, simfile left unchanged.",
+          iTicks, SanitizeForLog(arrayTickcountExpressions[f]).c_str());
       continue;
     }
 
@@ -1133,8 +1134,9 @@ void SMLoader::ProcessFakes(
     if (fBeat < 0) {
       LOG->UserLog(
           "Song file", this->GetSongTitle(),
-          "SRC_AUDIT_FIX rejected invalid #FAKES beat %f in \"%s\".", fBeat,
-          arrayFakeExpressions[b].c_str());
+          "has an invalid #FAKES beat %f in \"%s\"; ignored while loading, "
+          "simfile left unchanged.",
+          fBeat, arrayFakeExpressions[b].c_str());
       continue;
     }
 
@@ -1406,7 +1408,8 @@ bool SMLoader::LoadFromSimfile(
   if (out.GetAllSteps().empty()) {
     LOG->UserLog(
         "Song file", sPath,
-        "SRC_AUDIT_FIX rejected simfile with no playable #NOTES sections.");
+        "has no playable #NOTES sections; ignored while loading, simfile left "
+        "unchanged.");
     return false;
   }
 

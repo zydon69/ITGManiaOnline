@@ -741,7 +741,8 @@ bool ParseSSCFloat(
   LOG->UserLog(
       "Song file", loader.GetSongTitle(),
       "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
-      tag, field, raw.c_str(), expression.c_str());
+      tag, field, SanitizeForLog(raw).c_str(),
+      SanitizeForLog(expression).c_str());
   return false;
 }
 
@@ -754,7 +755,8 @@ bool ParseSSCInt(
     LOG->UserLog(
         "Song file", loader.GetSongTitle(),
         "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
-        tag, field, raw.c_str(), expression.c_str());
+        tag, field, SanitizeForLog(raw).c_str(),
+        SanitizeForLog(expression).c_str());
     return false;
   }
 
@@ -766,7 +768,8 @@ bool ParseSSCInt(
     LOG->UserLog(
         "Song file", loader.GetSongTitle(),
         "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
-        tag, field, raw.c_str(), expression.c_str());
+        tag, field, SanitizeForLog(raw).c_str(),
+        SanitizeForLog(expression).c_str());
     return false;
   }
 
@@ -889,8 +892,9 @@ void SSCLoader::ProcessWarps(
     if (fBeat < 0.0f) {
       LOG->UserLog(
           "Song file", this->GetSongTitle(),
-          "SRC_AUDIT_FIX rejected invalid #WARPS beat %f in \"%s\".", fBeat,
-          arrayWarpExpressions[b].c_str());
+          "has an invalid #WARPS beat %f in \"%s\"; ignored while loading, "
+          "simfile left unchanged.",
+          fBeat, arrayWarpExpressions[b].c_str());
       continue;
     }
 
@@ -959,7 +963,7 @@ void SSCLoader::ProcessCombos(
           "Song file", this->GetSongTitle(),
           "has an invalid #COMBOS value \"%s\" (must have at least one '='), "
           "ignored.",
-          arrayComboExpressions[f].c_str());
+          SanitizeForLog(arrayComboExpressions[f]).c_str());
       continue;
     }
     float fComboBeat = 0.0f;
@@ -983,8 +987,8 @@ void SSCLoader::ProcessCombos(
     if (fComboBeat < 0 || iCombos <= 0 || iMisses <= 0) {
       LOG->UserLog(
           "Song file", this->GetSongTitle(),
-          "SRC_AUDIT_FIX rejected invalid #COMBOS at beat %f, combo %i, "
-          "miss combo %i.",
+          "has an invalid #COMBOS at beat %f, combo %i, miss combo %i; "
+          "ignored while loading, simfile left unchanged.",
           fComboBeat, iCombos, iMisses);
       continue;
     }
@@ -1024,8 +1028,9 @@ void SSCLoader::ProcessScrolls(TimingData& out, const std::string sParam) {
     if (fRatio <= 0.0f) {
       LOG->UserLog(
           "Song file", this->GetSongTitle(),
-          "SRC_AUDIT_FIX rejected invalid #SCROLLS ratio %f in \"%s\".",
-          fRatio, s1.c_str());
+          "has an invalid #SCROLLS ratio %f in \"%s\"; ignored while loading, "
+          "simfile left unchanged.",
+          fRatio, SanitizeForLog(s1).c_str());
       continue;
     }
 
@@ -1242,7 +1247,8 @@ bool SSCLoader::LoadFromSimfile(
   if (out.GetAllSteps().empty()) {
     LOG->UserLog(
         "Song file", sPath,
-        "SRC_AUDIT_FIX rejected simfile with no playable #NOTES sections.");
+        "has no playable #NOTES sections; ignored while loading, simfile left "
+        "unchanged.");
     return false;
   }
 

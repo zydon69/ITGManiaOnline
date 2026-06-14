@@ -475,6 +475,37 @@ std::string SmUnescape(const std::string& sEscaped) {
   return unescaped;
 }
 
+std::string SanitizeForLog(const std::string& sRaw) {
+  std::string sanitized;
+  sanitized.reserve(sRaw.size());
+
+  for (const unsigned char c : sRaw) {
+    switch (c) {
+      case '\n':
+        sanitized += "\\n";
+        break;
+      case '\r':
+        sanitized += "\\r";
+        break;
+      case '\t':
+        sanitized += "\\t";
+        break;
+      case '\0':
+        sanitized += "\\0";
+        break;
+      default:
+        if (std::iscntrl(c)) {
+          sanitized += ssprintf("\\x%02X", static_cast<unsigned int>(c));
+        } else {
+          sanitized += static_cast<char>(c);
+        }
+        break;
+    }
+  }
+
+  return sanitized;
+}
+
 std::string DwiEscape(const std::string& sUnescaped) {
   return DwiEscape(sUnescaped.c_str(), sUnescaped.size());
 }

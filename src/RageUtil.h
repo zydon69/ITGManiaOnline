@@ -361,6 +361,10 @@ std::vector<std::string> SmEscape(
 
 std::string SmUnescape(const std::string& sEscaped);
 
+// Escapes control characters before writing user-provided snippets to logs.
+// This keeps userlog.txt one-line-per-event without changing source files.
+std::string SanitizeForLog(const std::string& sRaw);
+
 // These methods "escape" a string for .dwi by turning = into -, ] into I, etc.
 // That is "lossy".
 std::string DwiEscape(const std::string& sUnescaped);
