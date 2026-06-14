@@ -2001,7 +2001,16 @@ function ITGOnline:ShouldWaitForOnlineResults(room)
 
 	local summary = self:PlayStateSummary(room)
 	if summary.players <= 0 then return false end
-	if not summary.allTerminal then return true end
+	if not summary.allTerminal then
+		if phase == "results" and summary.finalResultsReady then
+			online_flow_trace("results_wait_released reason=phase_results_with_final_results"
+				.. " terminal=" .. tostring(summary.terminal)
+				.. " players=" .. tostring(summary.players)
+				.. " finalResults=" .. tostring(summary.finalResults))
+			return false
+		end
+		return true
+	end
 	if phase ~= "results" then return true end
 	return not summary.finalResultsReady
 end
@@ -2185,12 +2194,20 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 	local now = GetTimeSinceStart()
 	local minimumVisibleHoldSeconds = 2.25
 
-	if summary and summary.players > 0 and summary.allTerminal == true and not waiting then
+	local releaseWithResults = summary
+		and summary.players > 0
+		and summary.finalResultsReady == true
+		and self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase) == "results"
+
+	if summary and summary.players > 0 and (summary.allTerminal == true or releaseWithResults) and not waiting then
 		self.onlineGameplayEvaluationHoldStartedKey = roundKey
 		self.onlineGameplayEvaluationMinimumHoldUntil = 0
 		self.onlineGameplayAllTerminalHoldKey = roundKey
 		self.onlineGameplayAllTerminalHoldUntil = 0
-		online_flow_trace("hold_gameplay_release reason=all_players_terminal")
+		online_flow_trace("hold_gameplay_release reason=" .. (summary.allTerminal == true and "all_players_terminal" or "results_final_results_ready")
+			.. " terminal=" .. tostring(summary.terminal)
+			.. " players=" .. tostring(summary.players)
+			.. " finalResults=" .. tostring(summary.finalResults))
 		return false
 	end
 
@@ -2228,11 +2245,12 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 		end
 	end
 
-	if summary and summary.players > 0 and summary.allTerminal == true then
+	if summary and summary.players > 0 and (summary.allTerminal == true or releaseWithResults) then
 		if self.onlineGameplayAllTerminalHoldKey ~= roundKey then
 			self.onlineGameplayAllTerminalHoldKey = roundKey
 			self.onlineGameplayAllTerminalHoldUntil = now + 2.0
-			online_flow_trace("hold_gameplay_after_all_terminal start roundKey=" .. tostring(roundKey)
+			online_flow_trace("hold_gameplay_after_terminal_or_results start roundKey=" .. tostring(roundKey)
+				.. " reason=" .. (summary.allTerminal == true and "all_players_terminal" or "results_final_results_ready")
 				.. " until=" .. tostring(self.onlineGameplayAllTerminalHoldUntil))
 		end
 
@@ -4224,6 +4242,13 @@ function ITGOnline:ShouldBlockEvaluationAutoAdvance()
 		online_flow_trace("evaluation_auto_advance_unblocked summary_all_terminal=true phase=" .. tostring(phase)
 			.. " players=" .. tostring(summary.players)
 			.. " terminal=" .. tostring(summary.terminal))
+		return false
+	end
+	if summary and phase == "results" and summary.finalResultsReady then
+		online_flow_trace("evaluation_auto_advance_unblocked final_results_ready=true phase=" .. tostring(phase)
+			.. " players=" .. tostring(summary.players)
+			.. " terminal=" .. tostring(summary.terminal)
+			.. " finalResults=" .. tostring(summary.finalResults))
 		return false
 	end
 
