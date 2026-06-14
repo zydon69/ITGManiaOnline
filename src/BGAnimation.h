@@ -2,6 +2,7 @@
 #define BGANIMATION_H
 
 #include <string>
+#include <vector>
 
 #include "ActorFrame.h"
 
@@ -20,6 +21,9 @@ class BGAnimation : public ActorFrameAutoDeleteChildren {
 
  protected:
   void AddLayersFromAniDir(const std::string& _sAniDir, const XNode* pNode);
+  void AddLayersFromAniDir(
+      const std::string& _sAniDir, const XNode* pNode,
+      std::vector<std::string>& importStack);
 };
 
 #endif
