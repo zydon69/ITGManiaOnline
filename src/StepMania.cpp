@@ -20,6 +20,7 @@
 #include "CodeDetector.h"
 #include "CommandLineActions.h"
 #include "CommonMetrics.h"
+#include "DisplaySpec.h"
 #include "Game.h"
 #include "GameSoundManager.h"
 #include "InputEventPlus.h"
@@ -92,6 +93,7 @@ void HandleInputEvents(float fDeltaTime);
 
 static Preference<bool> g_bAllowMultipleInstances(
     "AllowMultipleInstances", false);
+static bool g_bApplyMaxDisplayResolutionDefault = false;
 
 void StepMania::GetPreferredVideoModeParams(VideoModeParams& paramsOut) {
   // resolution handling code that probably needs fixing
@@ -200,6 +202,56 @@ static void StartDisplay() {
   }
 
   DISPLAY = CreateDisplay();
+
+  if (g_bApplyMaxDisplayResolutionDefault) {
+    DisplaySpecs specs;
+    DISPLAY->GetDisplaySpecs(specs);
+
+    const DisplaySpec* bestSpec = nullptr;
+    const DisplayMode* bestMode = nullptr;
+    for (const DisplaySpec& spec : specs) {
+      const DisplayMode* mode = spec.currentMode();
+      if (mode == nullptr) {
+        continue;
+      }
+
+      if (bestMode == nullptr ||
+          (mode->width * mode->height) >
+              (bestMode->width * bestMode->height)) {
+        bestSpec = &spec;
+        bestMode = mode;
+      }
+    }
+
+    if (bestSpec != nullptr && bestMode != nullptr) {
+      PREFSMAN->m_sDisplayId.Set(bestSpec->id());
+      PREFSMAN->m_iDisplayWidth.Set(static_cast<int>(bestMode->width));
+      PREFSMAN->m_iDisplayHeight.Set(static_cast<int>(bestMode->height));
+      PREFSMAN->m_fDisplayAspectRatio.Set(16 / 10.f);
+
+      VideoModeParams params;
+      StepMania::GetPreferredVideoModeParams(params);
+      bool needReload = false;
+      std::string error = DISPLAY->SetVideoMode(params, needReload);
+      if (error != "") {
+        LOG->Warn(
+            "Could not apply first-run maximum display mode %ux%u on '%s': %s",
+            bestMode->width, bestMode->height, bestSpec->id().c_str(),
+            error.c_str());
+      } else {
+        LOG->Info(
+            "Applied first-run display defaults: resolution=%ux%u "
+            "aspect=16:10 display='%s'",
+            bestMode->width, bestMode->height, bestSpec->id().c_str());
+      }
+    } else {
+      LOG->Warn(
+          "Could not find an active display mode for first-run maximum "
+          "resolution defaults; keeping fallback 1280x800 16:10.");
+    }
+
+    g_bApplyMaxDisplayResolutionDefault = false;
+  }
 
   update_centering();
 
@@ -413,7 +465,7 @@ struct VideoCardDefaults {
     VideoCardDefaults(
         "OpenGL",   // Video card name (generic Mac/Linux)
         "opengl",   // Available renderers
-        1280, 720,  // Default resolution
+        1280, 800,  // Default resolution
         32,         // Display color
         32,         // Texture color
         32,         // Movie color
@@ -423,7 +475,7 @@ struct VideoCardDefaults {
     VideoCardDefaults(
         "",            // Video card name (generic Windows)
         "opengl,d3d",  // Available renderers
-        1280, 720,     // Default resolution
+        1280, 800,     // Default resolution
         32,            // Display color
         32,            // Texture color
         32,            // Movie color
@@ -487,10 +539,8 @@ bool CheckVideoDefaultSettings() {
     PREFSMAN->m_iMovieColorDepth.Set(defaults.iMovieColor);
     PREFSMAN->m_iMaxTextureResolution.Set(defaults.iTextureSize);
     PREFSMAN->m_bSmoothLines.Set(defaults.bSmoothLines);
-    // this only worked when we started in fullscreen by default. -aj
-    // PREFSMAN->m_fDisplayAspectRatio.Set( HOOKS->GetDisplayAspectRatio() );
-    // now that we start in windowed mode, use the new default aspect ratio.
-    PREFSMAN->m_fDisplayAspectRatio.Set(PREFSMAN->m_fDisplayAspectRatio);
+    PREFSMAN->m_fDisplayAspectRatio.Set(16 / 10.f);
+    g_bApplyMaxDisplayResolutionDefault = true;
 
     // Update last seen video card
     PREFSMAN->m_sLastSeenVideoDriver.Set(GetVideoDriverName());
