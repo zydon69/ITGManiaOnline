@@ -20,6 +20,7 @@
 #include "RageLog.h"
 #include "RageUtil.h"
 #include "RageUtil_AutoPtr.h"
+#include "Song.h"
 #include "TimingData.h"
 #include "XmlFile.h"
 #include "global.h"
@@ -68,9 +69,16 @@ static bool IsJudgableAtRowWithCurrentTiming(int row) {
   if (timing == nullptr) {
     static bool loggedMissingTiming = false;
     if (!loggedMissingTiming) {
+      const Song* song =
+          (GAMESTATE != nullptr) ? GAMESTATE->m_pCurSong.Get() : nullptr;
+      const std::string songTitle =
+          song != nullptr ? song->GetDisplayFullTitle() : "(no current song)";
       LOG->Trace(
-          "SRC_AUDIT_FIX NoteData used judgable fallback without processed "
-          "timing data.");
+          "SRC_AUDIT_FIX: NoteData::IsJudgableAtRowWithCurrentTiming used "
+          "judgable fallback without processed timing data; row=%i song=\"%s\". "
+          "This should only happen while inspecting NoteData outside a fully "
+          "prepared gameplay timing context.",
+          row, songTitle.c_str());
       loggedMissingTiming = true;
     }
     return true;

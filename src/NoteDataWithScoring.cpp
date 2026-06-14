@@ -527,8 +527,11 @@ void NoteDataWithScoring::GetActualRadarValues(
         static bool loggedMissingTiming = false;
         if (!loggedMissingTiming) {
           LOG->Trace(
-              "SRC_AUDIT_FIX GetActualRadarValues used judgable fallback "
-              "without timing data.");
+              "SRC_AUDIT_FIX: NoteDataWithScoring::GetActualRadarValues used "
+              "judgable fallback without processed timing data; player=%s "
+              "song_seconds=%f row=%i. This should only happen while scoring "
+              "synthetic or partially-loaded NoteData.",
+              PlayerNumberToString(pn).c_str(), song_seconds, state.curr_row);
           loggedMissingTiming = true;
         }
         state.judgable = true;

@@ -1246,9 +1246,18 @@ void NoteDataUtil::CalculateRadarValues(
       if (timing == nullptr) {
         static bool loggedMissingTiming = false;
         if (!loggedMissingTiming) {
+          const Song* song =
+              (GAMESTATE != nullptr) ? GAMESTATE->m_pCurSong.Get() : nullptr;
+          const std::string songTitle =
+              song != nullptr ? song->GetDisplayFullTitle()
+                              : "(no current song)";
           LOG->Trace(
-              "SRC_AUDIT_FIX CalculateRadarValues used judgable fallback "
-              "without timing data.");
+              "SRC_AUDIT_FIX: NoteDataUtil::CalculateRadarValues used "
+              "judgable fallback without timing data; row=%i tracks=%i "
+              "song_seconds=%f song=\"%s\". This should only happen while "
+              "calculating radar values for synthetic or partially-loaded "
+              "NoteData.",
+              curr_row, in.GetNumTracks(), fSongSeconds, songTitle.c_str());
           loggedMissingTiming = true;
         }
         state.judgable = true;
