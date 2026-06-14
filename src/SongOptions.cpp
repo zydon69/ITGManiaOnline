@@ -137,6 +137,85 @@ std::string SongOptions::GetLocalizedString() const {
   return join(", ", v);
 }
 
+static bool IsExpectedPlayerOnlyModForSongOptions(std::string sMod) {
+  MakeLower(sMod);
+  Trim(sMod);
+  if (sMod.empty()) {
+    return true;
+  }
+
+  std::vector<std::string> asParts;
+  split(sMod, " ", asParts, true);
+  if (asParts.size() > 1) {
+    sMod = asParts[1];
+    Trim(sMod);
+  }
+
+  static const char* PlayerOnlyMods[] = {
+      "accelerate",
+      "beat",
+      "big",
+      "blind",
+      "boost",
+      "bmrize",
+      "boomerang",
+      "brake",
+      "centered",
+      "cel",
+      "confusion",
+      "cover",
+      "dark",
+      "distant",
+      "dizzy",
+      "drunk",
+      "echo",
+      "expand",
+      "flip",
+      "hallway",
+      "hidden",
+      "incoming",
+      "invert",
+      "left",
+      "little",
+      "mirror",
+      "nohands",
+      "noholds",
+      "nohidelights",
+      "nojumps",
+      "nolifts",
+      "nomines",
+      "noquads",
+      "norolls",
+      "nostretch",
+      "overhead",
+      "passmark",
+      "quick",
+      "random",
+      "reverse",
+      "right",
+      "shuffle",
+      "skippy",
+      "space",
+      "split",
+      "stealth",
+      "stomp",
+      "sudden",
+      "tipsy",
+      "wave",
+      "wide",
+  };
+
+  for (const char* mod : PlayerOnlyMods) {
+    if (sMod == mod) {
+      return true;
+    }
+  }
+
+  Regex speed("^([0-9]+(\\.[0-9]+)?)x$");
+  std::vector<std::string> matches;
+  return speed.Compare(sMod, matches);
+}
+
 /* Options are added to the current settings; call Init() beforehand if
  * you don't want this. */
 void SongOptions::FromString(const std::string& sMultipleMods) {
@@ -146,6 +225,9 @@ void SongOptions::FromString(const std::string& sMultipleMods) {
   std::string sThrowAway;
   for (std::string& s : vs) {
     if (!FromOneModString(s, sThrowAway)) {
+      if (IsExpectedPlayerOnlyModForSongOptions(s)) {
+        continue;
+      }
       LOG->Trace(
           "SRC_AUDIT_FIX: Ignoring invalid SongOptions mod '%s'%s%s.",
           s.c_str(), sThrowAway.empty() ? "" : ": ", sThrowAway.c_str());
