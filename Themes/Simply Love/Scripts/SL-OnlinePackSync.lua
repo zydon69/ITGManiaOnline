@@ -443,8 +443,12 @@ function PackSync:FindLocalMatch(songInfo)
 		end
 		if payloadOk then
 			trace("Matching local chart found " .. tostring(source or song:GetSongDir()))
-			self:UpdateStatus(self.status.LocalChartMatchFound, nil)
-			return { ok = true, song = song, steps = steps, payload = payload }
+			local matchSource = source == "manager pack" and "manager_pack" or "alternate_pack"
+			local matchMessage = matchSource == "manager_pack"
+				and "Pack+chart trouvées"
+				or "Pack KO / chart compatible trouvée"
+			self:UpdateStatus(self.status.LocalChartMatchFound, matchMessage)
+			return { ok = true, song = song, steps = steps, payload = payload, matchSource = matchSource, matchMessage = matchMessage }
 		end
 
 		mismatchReason = mismatchReason or reason or "chart_mismatch"
@@ -472,8 +476,9 @@ function PackSync:FindLocalMatch(songInfo)
 			local payloadOk, reason = payload_matches_selected(payload, songInfo)
 			if payloadOk then
 				trace("Matching local chart found via hash index " .. tostring(candidate.song:GetSongDir()))
-				self:UpdateStatus(self.status.LocalChartMatchFound, nil)
-				return { ok = true, song = candidate.song, steps = candidate.steps, payload = payload }
+				local matchMessage = "Pack KO / chart compatible trouvée"
+				self:UpdateStatus(self.status.LocalChartMatchFound, matchMessage)
+				return { ok = true, song = candidate.song, steps = candidate.steps, payload = payload, matchSource = "alternate_pack", matchMessage = matchMessage }
 			end
 			mismatchReason = mismatchReason or reason or "chart_mismatch"
 		end
@@ -499,10 +504,10 @@ function PackSync:ApplySelectedChart(songInfo)
 		MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
 		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
 			ITGOnline:ConfirmSelectedSongAvailability("local_chart_match_found", function(ok)
-				if ok then self:UpdateStatus(self.status.Ready, nil) end
+				if ok then self:UpdateStatus(self.status.Ready, result.matchMessage) end
 			end)
 		else
-			self:UpdateStatus(self.status.Ready, nil)
+			self:UpdateStatus(self.status.Ready, result.matchMessage)
 		end
 		return true
 	end

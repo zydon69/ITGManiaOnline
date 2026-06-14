@@ -168,8 +168,9 @@ local function global_options_summary()
 	return global_score_label(options.scoreMode) .. " / " .. string.format("%.2fx", options.musicRate)
 end
 
-local function global_options_button_label()
-	return "Options globales\n(" .. global_options_summary() .. ")"
+local function global_options_mode_label()
+	local options = normalize_global_options(joined_global_options)
+	return "(" .. global_score_label(options.scoreMode) .. "/" .. string.format("%.2f", options.musicRate) .. ")"
 end
 
 local function rebuild_global_options_choices()
@@ -313,7 +314,8 @@ end
 
 local function update_joined_song_card(joinedContent)
 	if not joinedContent then return end
-	local songInfo = normalize_online_song_info(joined_missing_song_info or joined_song_preview)
+	local roomSongInfo = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song or nil
+	local songInfo = normalize_online_song_info(joined_missing_song_info or joined_song_preview or roomSongInfo)
 	local hasSong = type(songInfo) == "table"
 	local card = joinedContent:GetChild("JoinedSongCard")
 	if card then card:visible(hasSong) end
@@ -321,18 +323,21 @@ local function update_joined_song_card(joinedContent)
 	local title = joinedContent:GetChild("JoinedSongTitle")
 	if title then
 		local titleText = hasSong and song_info_title(songInfo) or ""
-		title:settext(hasSong and clamp_text(titleText ~= "" and titleText or "Chanson inconnue", 42) or "Aucune chanson selectionnee")
+		title:visible(hasSong)
+		title:settext(hasSong and clamp_text(titleText ~= "" and titleText or "Chanson inconnue", 58) or "")
 	end
 
 	local artist = joinedContent:GetChild("JoinedSongArtist")
 	if artist then
 		local artistText = hasSong and song_info_artist(songInfo) or ""
+		artist:visible(hasSong)
 		artist:settext("Artiste : " .. (artistText ~= "" and clamp_text(artistText, 44) or "Artiste inconnu"))
 	end
 
 	local pack = joinedContent:GetChild("JoinedSongPack")
 	if pack then
 		local packText = hasSong and song_info_pack(songInfo) or ""
+		pack:visible(hasSong and packText ~= "")
 		pack:settext(packText ~= "" and ("Pack : " .. clamp_text(packText, 46)) or "")
 	end
 
@@ -594,6 +599,47 @@ local function player_missing_song_for_ui(player)
 		return false
 	end
 	return player and player.missingSong == true or false
+end
+
+local function player_is_manager(player)
+	return joined_manager_user_id ~= nil and tostring(player and player.playerId or "") == tostring(joined_manager_user_id)
+end
+
+local function pack_sync_line_for_player(player)
+	if not player or player_is_manager(player) or joined_phase == "results" then return "" end
+	if joined_song_preview == nil and not (ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song) then return "" end
+
+	local status = trim_text(player.packSyncStatus)
+	local message = trim_text(player.packSyncMessage)
+	local reason = trim_text(player.missingSongReason)
+	local songAvailable = player.songAvailable == true
+
+	if player_missing_song_for_ui(player) then
+		if status == "local_chart_match_found" or songAvailable then
+			return "Pack KO / chart compatible trouvée"
+		end
+		if reason == "missing_local_song"
+			or reason == "no_compatible_chart_found"
+			or reason == "chart_hash_mismatch"
+			or reason == "song_hash_mismatch"
+			or reason == "hash_mismatch"
+			or status == "no_compatible_chart_found"
+			or status == "chart_mismatch" then
+			return "Pack KO / aucune chart compatible trouvée"
+		end
+	end
+
+	if songAvailable or status == "ready" or status == "local_chart_match_found" then
+		if message == "Pack KO / chart compatible trouvée" then return message end
+		if message == "Pack+chart trouvées" then return message end
+		return "Pack+chart trouvées"
+	end
+
+	if status ~= "" and status ~= "unknown" then
+		return pack_sync_display_text(status)
+	end
+
+	return ""
 end
 
 joined_any_player_missing_song = function()
@@ -1410,15 +1456,15 @@ local af = Def.ActorFrame{
 			for i, player in ipairs(joined_lobby_players) do
 					local profile = trim_text(player.profileName or player.name or player.playerId or ("Joueur "..i))
 				local ready = player.ready and " ✔" or ""
-					local missing = player_missing_song_for_ui(player) and " ⚠ chanson manquante" or ""
-					local packSyncStatus = trim_text(player.packSyncStatus)
-					local packSyncText = pack_sync_display_text(packSyncStatus)
-					if packSyncText ~= "" and packSyncStatus ~= "" and packSyncStatus ~= "unknown" and packSyncStatus ~= "ready" then
-						local progress = tonumber(player.packSyncDownloadProgress)
-						if progress and packSyncStatus == "download_in_progress" then
-							packSyncText = packSyncText .. " " .. tostring(progress) .. "%"
-						end
-					missing = missing .. " · " .. packSyncText
+				local missing = ""
+				local packSyncText = pack_sync_line_for_player(player)
+				local packSyncStatus = trim_text(player.packSyncStatus)
+				if packSyncText ~= "" then
+					local progress = tonumber(player.packSyncDownloadProgress)
+					if progress and packSyncStatus == "download_in_progress" then
+						packSyncText = packSyncText .. " " .. tostring(progress) .. "%"
+					end
+					missing = " · " .. packSyncText
 				end
 				local optionParts = {}
 				local speedMod = trim_text(player.speedMod)
@@ -1581,7 +1627,11 @@ local af = Def.ActorFrame{
 				globalOptionsButton:visible(visible)
 				local label = globalOptionsButton:GetChild("GlobalOptionsLabel")
 				if label then
-					label:settext(global_options_button_label())
+					label:settext("Options globales")
+				end
+				local modeLabel = globalOptionsButton:GetChild("GlobalOptionsModeLabel")
+				if modeLabel then
+					modeLabel:settext(global_options_mode_label())
 				end
 			end
 
@@ -2673,7 +2723,7 @@ local af = Def.ActorFrame{
 		Def.Quad{
 			Name="JoinedSongCard",
 			InitCommand=function(self)
-				self:xy(180, -116):zoomto(210, 86):diffuse(0,0,0,0.82):visible(false)
+				self:xy(230, -116):zoomto(330, 92):diffuse(0,0,0,0.82):visible(false)
 			end
 		},
 		Def.Quad{
@@ -2704,9 +2754,9 @@ local af = Def.ActorFrame{
 		},
 		LoadFont("Common Bold")..{
 			Name="JoinedSongTitle",
-			Text="Aucune chanson selectionnee",
+			Text="",
 			InitCommand=function(self)
-				self:horizalign(left):xy(160, -119):zoom(WideScale(0.30, 0.32)):maxwidth(405)
+				self:horizalign(left):xy(160, -119):zoom(WideScale(0.30, 0.32)):maxwidth(600)
 			end
 		},
 		LoadFont("Common Normal")..{
@@ -2838,10 +2888,20 @@ local af = Def.ActorFrame{
 					Name="GlobalOptionsLabel",
 					Text="Options globales",
 					InitCommand=function(self)
-						self:zoom(WideScale(0.25, 0.27)):vertspacing(-34):maxwidth(640)
+						self:y(-5):zoom(WideScale(0.25, 0.27)):vertspacing(-34):maxwidth(640)
 					end,
 					HoverCommand=function(self)
 						self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
+					end
+				},
+				LoadFont("Common Bold")..{
+					Name="GlobalOptionsModeLabel",
+					Text="(ITG/1.00)",
+					InitCommand=function(self)
+						self:y(10):zoom(WideScale(0.22, 0.24)):diffuse(1,0.28,0.72,1)
+					end,
+					HoverCommand=function(self)
+						self:diffuse(1,0.28,0.72,1)
 					end
 				}
 			},
