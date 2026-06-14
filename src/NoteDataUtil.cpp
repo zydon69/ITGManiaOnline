@@ -274,7 +274,10 @@ static void LoadFromSMNoteDataStringWithPlayer(
             int iHeadRow;
             if (!out.IsHoldNoteAtRow(iTrack, iIndex, &iHeadRow)) {
               int n = intptr_t(endLine) - intptr_t(beginLine);
-              LOG->Warn("Unmatched 3 in \"%.*s\"", n, beginLine);
+              LOG->Warn(
+                  "Unmatched hold tail '3' while parsing note data: player=%d "
+                  "measure=%u measure_line=%u row=%d track=%d line=\"%.*s\"",
+                  (int)pn, m, l, iIndex, iTrack, n, beginLine);
             } else {
               out.FindTapNote(iTrack, iHeadRow)->second.iDuration =
                   iIndex - iHeadRow;
