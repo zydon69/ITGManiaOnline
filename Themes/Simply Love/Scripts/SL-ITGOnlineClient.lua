@@ -292,24 +292,6 @@ local function read_profile_access_token(apiBaseUrl)
 	return token, true
 end
 
-local function write_profile_access_token(apiBaseUrl, deviceName, accessToken, user)
-	local path = active_profile_auth_path()
-	if not path or tostring(accessToken or "") == "" then return false end
-
-	local contents = FILEMAN:DoesFileExist(path) and (IniFile.ReadFile(path) or {}) or {}
-	contents["ITGOnline"] = contents["ITGOnline"] or {}
-	contents["ITGOnline"]["ApiBaseUrl"] = normalize_base_url(apiBaseUrl)
-	contents["ITGOnline"]["DeviceName"] = trim(deviceName)
-	contents["ITGOnline"]["AccessToken"] = tostring(accessToken)
-	if type(user) == "table" then
-		contents["ITGOnline"]["UserID"] = tostring(user.id or user.user_id or "")
-		contents["ITGOnline"]["Username"] = tostring(user.name or user.username or "")
-	end
-
-	IniFile.WriteFile(path, contents)
-	return true
-end
-
 local function clear_profile_access_token()
 	local path = active_profile_auth_path()
 	if not path or not FILEMAN:DoesFileExist(path) then return false end
@@ -378,8 +360,7 @@ end
 
 local function secure_access_token_get(apiBaseUrl, deviceName)
 	if not secure_credentials_available() then
-		local profileToken, profileStored = read_profile_access_token(apiBaseUrl)
-		if profileStored then return profileToken, false end
+		clear_profile_access_token()
 		return nil, false
 	end
 
@@ -407,7 +388,9 @@ end
 
 local function secure_access_token_set(apiBaseUrl, deviceName, accessToken, user)
 	if not secure_credentials_available() then
-		return write_profile_access_token(apiBaseUrl, deviceName, accessToken, user)
+		clear_profile_access_token()
+		online_trace("Secure access token save skipped: secure credential storage is unavailable; token stays in memory only.")
+		return false
 	end
 
 	local account = secure_access_token_account(apiBaseUrl, deviceName)
@@ -416,7 +399,8 @@ local function secure_access_token_set(apiBaseUrl, deviceName, accessToken, user
 	local result = NETWORK:SecureCredentialSet(ITGOnline.accessTokenService, account, tostring(accessToken))
 	if not result or not result.ok then
 		online_trace("Secure access token save failed using " .. secure_credentials_backend() .. ": " .. tostring(result and result.error or "unknown"))
-		return write_profile_access_token(apiBaseUrl, deviceName, accessToken, user)
+		clear_profile_access_token()
+		return false
 	end
 
 	clear_profile_access_token()
