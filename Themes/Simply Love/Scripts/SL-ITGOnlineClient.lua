@@ -5070,6 +5070,55 @@ function ITGOnline:QueueLobbyRefresh()
 	end)
 end
 
+function ITGOnline:ApplyLobbyPresencePayload(payload)
+	if type(payload) ~= "table" or type(payload.user) ~= "table" then
+		return false
+	end
+
+	local user = payload.user
+	if self.user and tonumber(user.id) == tonumber(self.user.id) then
+		return false
+	end
+
+	local cachedPayload = self.cachedLobbySearchPayload or { lobbies = {}, onlinePlayers = {} }
+	local onlinePlayers = {}
+	local found = false
+
+	for player in ivalues(cachedPayload.onlinePlayers or {}) do
+		if tostring(player.id or "") == tostring(user.id or "") then
+			onlinePlayers[#onlinePlayers + 1] = {
+				id = user.id,
+				name = user.name or player.name or ("User " .. tostring(user.id or "?")),
+				status = user.status or payload.status or player.status or "available",
+				room = user.room,
+				lastSeenAt = user.last_seen_at or player.lastSeenAt,
+				isSelf = false,
+			}
+			found = true
+		else
+			onlinePlayers[#onlinePlayers + 1] = player
+		end
+	end
+
+	if not found and user.id ~= nil then
+		onlinePlayers[#onlinePlayers + 1] = {
+			id = user.id,
+			name = user.name or ("User " .. tostring(user.id or "?")),
+			status = user.status or payload.status or "available",
+			room = user.room,
+			lastSeenAt = user.last_seen_at,
+			isSelf = false,
+		}
+	end
+
+	self.cachedLobbySearchPayload = {
+		lobbies = cachedPayload.lobbies or {},
+		onlinePlayers = onlinePlayers,
+	}
+
+	return true
+end
+
 function ITGOnline:FetchCurrentRoom(callback)
 	self:Request("GET", "/rooms/current", nil, function(ok, decoded, response)
 			if ok and decoded and decoded.room then
@@ -5448,9 +5497,12 @@ end
 				})
 			end)
 			return
-		elseif name == "lobby.updated" then
-			self:QueueLobbyRefresh()
-	elseif name == "room.invitation.created" then
+			elseif name == "lobby.updated" then
+				if self:ApplyLobbyPresencePayload(payload) then
+					MESSAGEMAN:Broadcast("LobbySearched", self.cachedLobbySearchPayload)
+				end
+				self:QueueLobbyRefresh()
+		elseif name == "room.invitation.created" then
 		MESSAGEMAN:Broadcast("OnlineRoomInvitation", payload)
 		elseif name == "room.join_request.declined" then
 			if payload.room_id == nil or tonumber(payload.room_id) == tonumber(self.pendingJoinRoomId or -1) then

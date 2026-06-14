@@ -1452,7 +1452,7 @@ local af = Def.ActorFrame{
 				for i, player in ipairs(joined_lobby_players) do
 						local profile = trim_text(player.profileName or player.name or player.playerId or ("Joueur "..i))
 					if tostring(player.playerId or "") == tostring(joined_manager_user_id or "") then
-						profile = "♛ " .. profile
+						profile = "[M] " .. profile
 					end
 					local ready = player.ready and " ✔" or ""
 				local missing = ""
@@ -1470,8 +1470,8 @@ local af = Def.ActorFrame{
 				if speedMod ~= "" then optionParts[#optionParts+1] = speedMod end
 				local stepchart = abbreviate_stepchart(player.stepchart)
 				if stepchart ~= "" then optionParts[#optionParts+1] = stepchart end
-					if missing == "" and joined_song_preview ~= nil and player.songAvailable == false and not player_is_current_user(player) then
-						missing = " … confirmation chanson"
+				if missing == "" and joined_song_preview ~= nil and player.songAvailable == false and not player_is_current_user(player) then
+					missing = " - selection en cours"
 				end
 				local maxLineLen = 88
 				local lineHead = i..". "..profile
@@ -1542,7 +1542,7 @@ local af = Def.ActorFrame{
 							statusLines[#statusLines + 1] = seconds and ("Demarrage dans " .. tostring(math.ceil(math.max(0, seconds))) .. "...") or "Demarrage..."
 							elseif joined_phase == "config" or joined_phase == "lobby_ready" then
 								if joined_any_player_missing_song() then
-									statusLines[#statusLines + 1] = "En attente de confirmation de la chanson par tous les joueurs."
+									statusLines[#statusLines + 1] = "Selection en cours."
 								end
 							end
 					elseif joined_is_manager then

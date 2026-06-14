@@ -135,6 +135,34 @@ local function maybe_set_lobby_ready(reason, callback)
 	ITGOnline:SetReady("lobby_ready", true, callback)
 end
 
+local function maybe_preview_current_online_song(force)
+	if not (ITGOnline
+		and ITGOnline.PreviewSong
+		and ITGOnline.currentRoomId
+		and ITGOnline.currentRoom
+		and ITGOnline.user) then
+		return
+	end
+
+	local manager = ITGOnline.currentRoom.manager
+	if not manager or tonumber(manager.id) ~= tonumber(ITGOnline.user.id) then
+		return
+	end
+
+	local song = GAMESTATE:GetCurrentSong()
+	if not song then return end
+
+	local now = GetTimeSinceStart()
+	local key = song:GetSongDir() or song:GetDisplayFullTitle() or ""
+	if not force and key == lastSongPreviewKey and now - lastSongPreviewSentAt < 1.5 then
+		return
+	end
+
+	lastSongPreviewKey = key
+	lastSongPreviewSentAt = now
+	ITGOnline:PreviewSong()
+end
+
 local OnlineStartCountdownText = function()
 	if not (ITGOnline and ITGOnline.SecondsUntilScheduledStart) then return nil end
 
@@ -1393,23 +1421,32 @@ CreateOnlineHandler = function()
 							and tostring(ITGOnline.currentRoom.phase or "") == "lobby_ready" then
 							maybe_set_lobby_ready("screen_select_music")
 						end
+						if screenName == "ScreenSelectMusic" then
+							self:sleep(0.25):queuecommand("PreviewInitialOnlineSong")
+						end
 						MESSAGEMAN:Broadcast("UpdateMachineState")
+		      end,
+					PreviewInitialOnlineSongCommand=function(self)
+						if SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() ~= "ScreenSelectMusic" then
+							return
+						end
+						maybe_preview_current_online_song(true)
+					end,
+	      PlayerJoinedMessageCommand=function(self)
+					if self.connected and self.socket ~= nil and self.inLobby then
+	          ITGOnline:Heartbeat("in_room")
+	        end
 	      end,
-      PlayerJoinedMessageCommand=function(self)
-				if self.connected and self.socket ~= nil and self.inLobby then	
-          ITGOnline:Heartbeat("in_room")
-        end
-      end,
-      PlayerUnjoinedMessageCommand=function(self)
-				if self.connected and self.socket ~= nil and self.inLobby then	
-          ITGOnline:Heartbeat("in_room")
-        end
-      end,
-		UpdateMachineStateMessageCommand=function(self)
-				if self.connected and self.socket ~= nil and self.inLobby then	
-          ITGOnline:Heartbeat("in_room")
-        end
-      end,
+	      PlayerUnjoinedMessageCommand=function(self)
+					if self.connected and self.socket ~= nil and self.inLobby then
+	          ITGOnline:Heartbeat("in_room")
+	        end
+	      end,
+			UpdateMachineStateMessageCommand=function(self)
+					if self.connected and self.socket ~= nil and self.inLobby then
+	          ITGOnline:Heartbeat("in_room")
+	        end
+	      end,
 		      OnlineConfigReadyMessageCommand=function(self)
 						if not (self.connected and self.socket ~= nil and ITGOnline.currentRoomId) then
 							return
@@ -1578,26 +1615,10 @@ CreateOnlineHandler = function()
 	        end
 	      end,
 		      CurrentSongChangedMessageCommand=function(self)
-						if self.connected and self.socket ~= nil and ITGOnline.currentRoomId and ITGOnline.currentRoom and ITGOnline.user then
-						local manager = ITGOnline.currentRoom.manager
-						if not manager or tonumber(manager.id) ~= tonumber(ITGOnline.user.id) then
-							return
-						end
-
-						local song = GAMESTATE:GetCurrentSong()
-						if not song then return end
-
-						local now = GetTimeSinceStart()
-						local key = song:GetSongDir() or song:GetDisplayFullTitle() or ""
-						if key == lastSongPreviewKey and now - lastSongPreviewSentAt < 1.5 then
-							return
-						end
-
-						lastSongPreviewKey = key
-						lastSongPreviewSentAt = now
-						ITGOnline:PreviewSong()
+					if self.connected and self.socket ~= nil then
+						maybe_preview_current_online_song(false)
 					end
-	      end,
+		      end,
 		      JoinLobbyMessageCommand=function(self, params)
 		        if self.connected and self.socket ~= nil then
 						if self.joinLobbyBusy then return end
