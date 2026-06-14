@@ -77,6 +77,7 @@ ITGOnline.lastRoomNotPlayingScoreRejectAt = ITGOnline.lastRoomNotPlayingScoreRej
 ITGOnline.processedRealtimeEventIds = ITGOnline.processedRealtimeEventIds or {}
 ITGOnline.processedRealtimeEventOrder = ITGOnline.processedRealtimeEventOrder or {}
 ITGOnline.processedRealtimeEventLimit = ITGOnline.processedRealtimeEventLimit or 512
+ITGOnline.deletedRoomIds = ITGOnline.deletedRoomIds or {}
 ITGOnline.needsSyncAfterScreenCancel = ITGOnline.needsSyncAfterScreenCancel or false
 ITGOnline.requestCancelGeneration = ITGOnline.requestCancelGeneration or 0
 ITGOnline.songLoadedAckKey = ITGOnline.songLoadedAckKey or ""
@@ -1931,6 +1932,9 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 
 	self.currentRoomId = room.id
 	self.currentRoom = room
+	if room.id then
+		self.deletedRoomIds[tostring(room.id)] = nil
+	end
 	self:ApplyGlobalOptionsToLocalState(room, source)
 	if self:NormalizeRoomPhase(room.phase) ~= "config" then
 		self:ClearOnlineOptionsReadyDeadline("room_snapshot_" .. tostring(room.phase or "unknown"))
@@ -2392,7 +2396,11 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 
 		-- Never auto-jump from lobby/options/music select back into gameplay while a song is already running.
 		-- A player who left/quit mid-song must stay in lobby view and wait for the current round to end.
-		online_flow_trace("preferred=lobby reason=playing_non_gameplay_screen playState=" .. tostring(playState) .. " roundEnded=" .. tostring(localRoundEnded))
+		online_flow_trace_throttled(
+			"preferred_playing_non_gameplay_screen",
+			5.0,
+			"preferred=lobby reason=playing_non_gameplay_screen playState=" .. tostring(playState) .. " roundEnded=" .. tostring(localRoundEnded)
+		)
 		return "lobby"
 	end
 
@@ -4203,7 +4211,7 @@ function ITGOnline:SetReady(phase, isReady, callback)
 		and blockedUntil > nowTs
 		and self.currentRoom
 		and self:NormalizeRoomPhase(self.currentRoom.phase) == currentPhase then
-		online_flow_trace_throttled("ready_request_deferred", 1.0,
+		online_flow_trace_throttled("ready_request_deferred", 5.0,
 			"ready_request_deferred room=" .. tostring(self.currentRoomId)
 			.. " phase=" .. tostring(phase)
 			.. " reason=room_members_song_not_confirmed"
@@ -4231,10 +4239,12 @@ function ITGOnline:SetReady(phase, isReady, callback)
 		callbacks = callback and { callback } or {},
 	}
 
-	Trace("[ITGOnline] ready_request room=" .. tostring(self.currentRoomId)
-		.. " phase=" .. tostring(phase)
-		.. " is_ready=" .. tostring(isReady and true or false)
-		.. " play_key=" .. tostring(self:PlayStateKey()))
+	if self.debugReadyFlow == true then
+		online_trace("[ITGOnline] ready_request room=" .. tostring(self.currentRoomId)
+			.. " phase=" .. tostring(phase)
+			.. " is_ready=" .. tostring(isReady and true or false)
+			.. " play_key=" .. tostring(self:PlayStateKey()))
+	end
 
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/ready", payload, function(ok, decoded, response)
 		self.readyRequestLastResult[requestKey] = {
@@ -4258,11 +4268,13 @@ function ITGOnline:SetReady(phase, isReady, callback)
 		elseif errorCode ~= "room_members_song_not_confirmed" then
 			self.readyRequestBlockedErrors[requestKey] = nil
 		end
-		Trace("[ITGOnline] ready_response room=" .. tostring(self.currentRoomId)
-			.. " phase=" .. tostring(phase)
-			.. " ok=" .. tostring(ok and true or false)
-			.. " room_phase=" .. tostring(roomPhase or "")
-			.. " error=" .. tostring(errorCode or (response and response.errorMessage) or ""))
+		if self.debugReadyFlow == true then
+			online_trace("[ITGOnline] ready_response room=" .. tostring(self.currentRoomId)
+				.. " phase=" .. tostring(phase)
+				.. " ok=" .. tostring(ok and true or false)
+				.. " room_phase=" .. tostring(roomPhase or "")
+				.. " error=" .. tostring(errorCode or (response and response.errorMessage) or ""))
+		end
 		local callbacks = pending and pending.callbacks or {}
 		for cb in ivalues(callbacks) do
 			cb(ok, decoded, response)
@@ -5261,6 +5273,16 @@ function ITGOnline:DeclineJoinRequest(joinRequestId, reason, callback)
 	}, callback)
 end
 
+function ITGOnline:ClearCurrentRoomState(source)
+	self.currentRoomId = nil
+	self.currentRoom = nil
+	self.currentSongPayload = nil
+	self.currentRoomRoundKey = ""
+	self.lastResultSongPayload = nil
+	self.pendingJoinRoomId = nil
+	self:ClearOnlineOptionsReadyDeadline(source or "clear_room")
+end
+
 function ITGOnline:LeaveRoom(callback)
 	if not self.currentRoomId then
 		if callback then callback(true, {}) end
@@ -5270,13 +5292,8 @@ function ITGOnline:LeaveRoom(callback)
 	self:Request("POST", "/rooms/" .. tostring(roomId) .. "/leave", {}, function(ok, decoded, response)
 		local gone = response and (response.statusCode == 404 or response.statusCode == 410)
 		if ok or gone then
-			self.currentRoomId = nil
-			self.currentRoom = nil
-			self.currentSongPayload = nil
-			self.currentRoomRoundKey = ""
-			self.lastResultSongPayload = nil
-			self.pendingJoinRoomId = nil
-			self:ClearOnlineOptionsReadyDeadline("leave_room")
+			self.deletedRoomIds[tostring(roomId)] = gone == true or nil
+			self:ClearCurrentRoomState("leave_room")
 		end
 		if callback then callback(ok or gone, decoded, response) end
 	end)
@@ -5289,6 +5306,12 @@ function ITGOnline:FetchRoom(roomId, callback)
 		return
 	end
 	local roomKey = tostring(roomId)
+	if self.deletedRoomIds[roomKey] then
+		online_flow_trace_throttled("fetch_deleted_room_" .. roomKey, 5.0,
+			"fetch_room_skipped reason=room_deleted roomId=" .. roomKey)
+		if callback then callback(false, nil, { statusCode = 410, errorMessage = "Room was deleted." }) end
+		return
+	end
 	self.fetchRoomInFlightByRoomId = self.fetchRoomInFlightByRoomId or {}
 	local inFlight = self.fetchRoomInFlightByRoomId[roomKey]
 	if inFlight then
@@ -5539,15 +5562,36 @@ end
 				end
 			end
 		end
-	elseif name == "room.load_timeout" then
-		if payload.room then
-			local room = self:ApplyRoomSnapshot(payload.room, "load_timeout")
-			self:MaybeAutoReadyManager(room)
-			self.songLoadedAckKey = ""
-			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(room or payload.room))
-		end
-		MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-			event = "songLoaded",
+		elseif name == "room.deleted" then
+			local roomId = payload.room_id
+				or (event.target and event.target.id)
+				or payload.id
+				or self.currentRoomId
+				or self.pendingJoinRoomId
+			if roomId then
+				local roomKey = tostring(roomId)
+				self.deletedRoomIds[roomKey] = true
+				if tostring(self.currentRoomId or "") == roomKey or tostring(self.pendingJoinRoomId or "") == roomKey then
+					self:ClearCurrentRoomState("room_deleted_event")
+					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(nil))
+					MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+						event = "roomDeleted",
+						success = false,
+						message = "Room closed."
+					})
+				end
+				self:QueueLobbyRefresh()
+				online_flow_trace("room_deleted_event roomId=" .. roomKey)
+			end
+		elseif name == "room.load_timeout" then
+			if payload.room then
+				local room = self:ApplyRoomSnapshot(payload.room, "load_timeout")
+				self:MaybeAutoReadyManager(room)
+				self.songLoadedAckKey = ""
+				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(room or payload.room))
+			end
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = "songLoaded",
 			success = false,
 			message = "Song loading timed out. Returning to lobby."
 		})
