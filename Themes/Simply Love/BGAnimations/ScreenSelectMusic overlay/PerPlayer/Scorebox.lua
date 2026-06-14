@@ -166,10 +166,8 @@ local LeaderboardRequestProcessor = function(res, master)
 		return
 	end
 
-	Trace("[Scorebox] Response statusCode: "..tostring(res.statusCode))
-	Trace("[Scorebox] Response error: "..tostring(res.error))
-
 	if res.error or res.statusCode ~= 200 then
+		Trace("[Scorebox] Request failed statusCode="..tostring(res.statusCode).." error="..tostring(res.error))
 		local error = res.error and ToEnumShortString(res.error) or nil
 		local text = ""
 		if error == "Timeout" then

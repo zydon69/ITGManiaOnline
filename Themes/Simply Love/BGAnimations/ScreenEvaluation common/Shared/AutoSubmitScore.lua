@@ -14,13 +14,20 @@ local GrooveStatsSubmitTrace = function(message)
 	end
 end
 
+local GetChildSafe
+
 local SetEntryText = function(rank, name, score, date, actor)
 	if actor == nil then return end
 
-	actor:GetChild("Rank"):settext(rank)
-	actor:GetChild("Name"):settext(name)
-	actor:GetChild("Score"):settext(score)
-	actor:GetChild("Date"):settext(date)
+	local rankText = GetChildSafe(actor, "Rank")
+	local nameText = GetChildSafe(actor, "Name")
+	local scoreText = GetChildSafe(actor, "Score")
+	local dateText = GetChildSafe(actor, "Date")
+
+	if rankText then rankText:settext(rank) end
+	if nameText then nameText:settext(name) end
+	if scoreText then scoreText:settext(score) end
+	if dateText then dateText:settext(date) end
 end
 
 local GetMachineTag
@@ -42,15 +49,41 @@ local GetLazyPaneContent = function(panes, paneIndex, side)
 	return childOk and content or nil
 end
 
+GetChildSafe = function(actor, name)
+	if not actor then return nil end
+
+	local ok, child = pcall(function()
+		return actor:GetChild(name)
+	end)
+
+	return ok and child or nil
+end
+
+local DecodeResponseBody = function(res)
+	if not res or not res.body or res.body == "" then return nil end
+
+	local ok, data = pcall(function()
+		return JsonDecode(res.body)
+	end)
+
+	if not ok then
+		GrooveStatsSubmitTrace("result=failed reason=json_decode")
+		Trace("GrooveStats auto-submit warning: failed to decode response body")
+		return nil
+	end
+
+	return data
+end
+
 local PopulateGrooveStatsLeaderboardPane = function(pane, leaderboard, scoreColor)
 	if not pane or type(leaderboard) ~= "table" then return false end
 
-	local highScoreList = pane:GetChild("HighScoreList")
+	local highScoreList = GetChildSafe(pane, "HighScoreList")
 	if not highScoreList then return false end
 
 	local entryNum = 1
 	for gsEntry in ivalues(leaderboard) do
-		local entry = highScoreList:GetChild("HighScoreEntry"..entryNum)
+		local entry = GetChildSafe(highScoreList, "HighScoreEntry"..entryNum)
 		if not entry then break end
 
 		entry:stoptweening()
@@ -63,7 +96,8 @@ local PopulateGrooveStatsLeaderboardPane = function(pane, leaderboard, scoreColo
 			entry
 		)
 
-		entry:GetChild("Score"):diffuse(scoreColor or Color.White)
+		local score = GetChildSafe(entry, "Score")
+		if score then score:diffuse(scoreColor or Color.White) end
 		if gsEntry["isRival"] then
 			entry:diffuse(color("#BD94FF"))
 		elseif gsEntry["isSelf"] then
@@ -71,7 +105,7 @@ local PopulateGrooveStatsLeaderboardPane = function(pane, leaderboard, scoreColo
 		end
 
 		if gsEntry["isFail"] then
-			entry:GetChild("Score"):diffuse(Color.Red)
+			if score then score:diffuse(Color.Red) end
 		end
 
 		entryNum = entryNum + 1
@@ -201,17 +235,25 @@ local AttemptDownloads = function(res)
 end
 
 local AutoSubmitRequestProcessor = function(res, overlay)
-	local P1SubmitText = overlay:GetChild("AutoSubmitMaster"):GetChild("P1SubmitText")
-	local P2SubmitText = overlay:GetChild("AutoSubmitMaster"):GetChild("P2SubmitText")
+	local master = GetChildSafe(overlay, "AutoSubmitMaster")
+	if not master then
+		GrooveStatsSubmitTrace("result=ignored reason=missing_auto_submit_master")
+		Trace("GrooveStats auto-submit warning: response ignored because evaluation actors are unavailable")
+		return
+	end
 
-	if res.error or res.statusCode ~= 200 then
-		GrooveStatsSubmitTrace("result=failed status=" .. tostring(res.statusCode)
-			.. " error=" .. tostring(res.error and ToEnumShortString(res.error) or "nil"))
-		local error = res.error and ToEnumShortString(res.error) or nil
+	local P1SubmitText = GetChildSafe(master, "P1SubmitText")
+	local P2SubmitText = GetChildSafe(master, "P2SubmitText")
+
+	if not res or res.error or res.statusCode ~= 200 then
+		local statusCode = res and res.statusCode or nil
+		local error = res and res.error and ToEnumShortString(res.error) or nil
+		GrooveStatsSubmitTrace("result=failed status=" .. tostring(statusCode)
+			.. " error=" .. tostring(error or "nil"))
 		if error == "Timeout" then
 			if P1SubmitText then P1SubmitText:queuecommand("TimedOut") end
 			if P2SubmitText then P2SubmitText:queuecommand("TimedOut") end
-		elseif error or (res.statusCode ~= nil and res.statusCode ~= 200) then
+		elseif error or (statusCode ~= nil and statusCode ~= 200) then
 			if P1SubmitText then P1SubmitText:queuecommand("SubmitFailed") end
 			if P2SubmitText then P2SubmitText:queuecommand("SubmitFailed") end
 		end
@@ -220,12 +262,12 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 
 	GrooveStatsSubmitTrace("result=ok status=" .. tostring(res.statusCode))
 
-	local panes = overlay:GetChild("Panes")
+	local panes = GetChildSafe(overlay, "Panes")
 	local shouldDisplayOverlay = false
 
 	-- Hijack the leaderboard pane to display the GrooveStats leaderboards.
 	if panes then
-		local data = JsonDecode(res.body)
+		local data = DecodeResponseBody(res)
 		for i=1,2 do
 			local playerStr = "player"..i
 			local entryNum = 1
@@ -264,7 +306,9 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 
 					if leaderboardData and highScorePane then
 						for gsEntry in ivalues(leaderboardData) do
-							local entry = highScorePane:GetChild("HighScoreList"):GetChild("HighScoreEntry"..entryNum)
+							local highScoreList = GetChildSafe(highScorePane, "HighScoreList")
+							local entry = highScoreList and GetChildSafe(highScoreList, "HighScoreEntry"..entryNum)
+							if not entry then break end
 							entry:stoptweening()
 							entry:diffuse(Color.White)
 							SetEntryText(
@@ -277,10 +321,11 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 
 							-- TODO(teejusb): Determine how we want to easily display EX scores.
 							-- For now just highlight blue because it's simple.
+							local score = GetChildSafe(entry, "Score")
 							if showExScore then
-								entry:GetChild("Score"):diffuse(SL.JudgmentColors["ITG"][1])
+								if score then score:diffuse(SL.JudgmentColors["ITG"][1]) end
 							else
-								entry:GetChild("Score"):diffuse(Color.White)
+								if score then score:diffuse(Color.White) end
 							end
 
 							if gsEntry["isRival"] then
@@ -292,14 +337,14 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 							end
 
 							if gsEntry["isFail"] then
-								entry:GetChild("Score"):diffuse(Color.Red)
+								if score then score:diffuse(Color.Red) end
 							end
 							entryNum = entryNum + 1
 						end
 
 						if QRPane then
-							local qrCode = QRPane:GetChild("QRCode")
-							local helpText = QRPane:GetChild("HelpText")
+							local qrCode = GetChildSafe(QRPane, "QRCode")
+							local helpText = GetChildSafe(QRPane, "HelpText")
 							if qrCode then qrCode:queuecommand("Hide") end
 							if helpText then helpText:settext(THEME:GetString("GrooveStats", "ScoreAlreadySubmitted")) end
 						end
@@ -328,9 +373,12 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 
 					-- Only display the overlay on the sides that are actually joined.
 					if ToEnumShortString("PLAYER_P"..i) == "P"..side and (data[playerStr]["rpg"] or data[playerStr]["itl"]) then
-						local eventAf = overlay:GetChild("AutoSubmitMaster"):GetChild("EventOverlay"):GetChild("P"..i.."EventAf")
-						eventAf:playcommand("Show", {data=data[playerStr]})
-						shouldDisplayOverlay = true
+						local eventOverlay = GetChildSafe(master, "EventOverlay")
+						local eventAf = eventOverlay and GetChildSafe(eventOverlay, "P"..i.."EventAf")
+						if eventAf then
+							eventAf:playcommand("Show", {data=data[playerStr]})
+							shouldDisplayOverlay = true
+						end
 
 						if data[playerStr]["itl"] then
 							-- Check for downloadFolders
@@ -355,28 +403,30 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 
 					-- Only update PB/WR messages on the side that is joined
 					if ToEnumShortString("PLAYER_P"..i) == "P"..side then
-						local upperPane = overlay:GetChild("P"..side.."_AF_Upper")
+						local upperPane = GetChildSafe(overlay, "P"..side.."_AF_Upper")
 						if upperPane then
 							if data[playerStr]["result"] == "score-added" or data[playerStr]["result"] == "improved" then
-								local recordText = overlay:GetChild("AutoSubmitMaster"):GetChild("P"..side.."RecordText")
-								local GSIcon = overlay:GetChild("AutoSubmitMaster"):GetChild("P"..side.."GrooveStats_Logo")
+								local recordText = GetChildSafe(master, "P"..side.."RecordText")
+								local GSIcon = GetChildSafe(master, "P"..side.."GrooveStats_Logo")
 
-								recordText:visible(true)
-								GSIcon:visible(true)
-								recordText:diffuseshift():effectcolor1(Color.White):effectcolor2(Color.Yellow):effectperiod(3)
-								if personalRank == 1 then
-									local worldRecordText = THEME:GetString("GrooveStats", "WorldRecord")
-									if showExScore then
-										worldRecordText = worldRecordText .. " (EX)"
+								if recordText and GSIcon then
+									recordText:visible(true)
+									GSIcon:visible(true)
+									recordText:diffuseshift():effectcolor1(Color.White):effectcolor2(Color.Yellow):effectperiod(3)
+									if personalRank == 1 then
+										local worldRecordText = THEME:GetString("GrooveStats", "WorldRecord")
+										if showExScore then
+											worldRecordText = worldRecordText .. " (EX)"
+										end
+										recordText:settext(worldRecordText)
+									else
+										recordText:settext(THEME:GetString("GrooveStats", "PersonalBest"))
 									end
-									recordText:settext(worldRecordText)
-								else
-									recordText:settext(THEME:GetString("GrooveStats", "PersonalBest"))
+									local recordTextXStart = recordText:GetX() - recordText:GetWidth()*recordText:GetZoom()/2
+									local GSIconWidth = GSIcon:GetWidth()*GSIcon:GetZoom()
+									-- This will automatically adjust based on the length of the recordText length.
+									GSIcon:xy(recordTextXStart - GSIconWidth/2, recordText:GetY())
 								end
-								local recordTextXStart = recordText:GetX() - recordText:GetWidth()*recordText:GetZoom()/2
-								local GSIconWidth = GSIcon:GetWidth()*GSIcon:GetZoom()
-								-- This will automatically adjust based on the length of the recordText length.
-								GSIcon:xy(recordTextXStart - GSIconWidth/2, recordText:GetY())
 							end
 						end
 					end
@@ -385,9 +435,11 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 
 			-- Empty out any remaining entries on a successful response.
 			-- For failed responses we fallback to the scores available in the machine.
-			if res["status"] == "success" then
+			if res["status"] == "success" and highScorePane then
+				local highScoreList = GetChildSafe(highScorePane, "HighScoreList")
 				for j=entryNum, NumEntries do
-					local entry = highScorePane:GetChild("HighScoreList"):GetChild("HighScoreEntry"..j)
+					local entry = highScoreList and GetChildSafe(highScoreList, "HighScoreEntry"..j)
+					if not entry then break end
 					entry:stoptweening()
 					-- We didn't get any scores if i is still == 1.
 					if j == 1 then
@@ -402,7 +454,9 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 	end
 
 	if shouldDisplayOverlay then
-		overlay:GetChild("AutoSubmitMaster"):GetChild("EventOverlay"):visible(true)
+		local eventOverlay = GetChildSafe(master, "EventOverlay")
+		if not eventOverlay then return end
+		eventOverlay:visible(true)
 		overlay:queuecommand("DirectInputToEventOverlayHandler")
 	end
 
@@ -524,8 +578,8 @@ local af = Def.ActorFrame {
 						-- Hide the submit text if we're not submitting a score for a player.
 						-- For example in versus, if one player fails and the other passes, we
 						-- want to show that the first player score won't be submitted.
-						local submitText = self:GetParent():GetChild("P"..i.."SubmitText")
-						submitText:visible(false)
+						local submitText = GetChildSafe(self:GetParent(), "P"..i.."SubmitText")
+						if submitText then submitText:visible(false) end
 					end
 				end
 			end
@@ -533,8 +587,15 @@ local af = Def.ActorFrame {
 			-- Only send the request if it's applicable.
 			if sendRequest then
 				-- Unjoined players won't have the text displayed.
-				self:GetParent():GetChild("P1SubmitText"):settext(THEME:GetString("GrooveStats", "Submitting"))
-				self:GetParent():GetChild("P2SubmitText"):settext(THEME:GetString("GrooveStats", "Submitting"))
+				local parent = self:GetParent()
+				local p1SubmitText = GetChildSafe(parent, "P1SubmitText")
+				local p2SubmitText = GetChildSafe(parent, "P2SubmitText")
+				if p1SubmitText then p1SubmitText:settext(THEME:GetString("GrooveStats", "Submitting")) end
+				if p2SubmitText then p2SubmitText:settext(THEME:GetString("GrooveStats", "Submitting")) end
+
+				local topScreen = SCREENMAN:GetTopScreen()
+				local overlay = topScreen and GetChildSafe(topScreen, "Overlay")
+				local evalCommon = overlay and GetChildSafe(overlay, "ScreenEval Common")
 
 				self:playcommand("MakeGrooveStatsRequest", {
 					endpoint="?action=scoreSubmit&"..NETWORK:EncodeQueryParameters(query),
@@ -543,7 +604,7 @@ local af = Def.ActorFrame {
 					body=JsonEncode(body),
 					timeout=30,
 					callback=AutoSubmitRequestProcessor,
-					args=SCREENMAN:GetTopScreen():GetChild("Overlay"):GetChild("ScreenEval Common"),
+					args=evalCommon,
 				})
 			else
 				GrooveStatsSubmitTrace("action=no_request")

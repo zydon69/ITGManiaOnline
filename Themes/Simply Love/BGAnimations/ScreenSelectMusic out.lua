@@ -170,21 +170,20 @@ return Def.ActorFrame{
 			StartCountdownCommand=function(self, params)
 				self:stoptweening()
 				self.remaining = tonumber(params and params.Seconds) or optionsPromptSeconds()
-				self.deadline = GetTimeSinceStart() + self.remaining
-				self:SetUpdateFunction(function(actor)
-					local left = math.max(0, (actor.deadline or 0) - GetTimeSinceStart())
-					local parent = actor:GetParent()
-					if left <= 0 then
-						actor:SetUpdateFunction(nil)
-						if parent then parent:playcommand("CountdownExpired") end
-					end
-				end)
+				self:sleep(self.remaining):queuecommand("TickerExpired")
+			end,
+			TickerExpiredCommand=function(self)
+				local parent = self:GetParent()
+				if parent then parent:playcommand("CountdownExpired") end
+			end,
+			CountdownExpiredCommand=function(self)
+				self:stoptweening()
 			end,
 			EnteringOptionsCommand=function(self)
-				self:SetUpdateFunction(nil)
+				self:stoptweening()
 			end,
 			HidePressStartForOptionsCommand=function(self)
-				self:SetUpdateFunction(nil)
+				self:stoptweening()
 			end
 		},
 

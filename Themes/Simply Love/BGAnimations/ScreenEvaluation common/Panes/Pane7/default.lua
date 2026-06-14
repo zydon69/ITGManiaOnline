@@ -7,6 +7,15 @@ local checks, allChecksPassed, badSettings = ValidForGrooveStats(player)
 local url, text = nil, ""
 local X_HasBeenBlinked = false
 
+local EvaluationString = function(name)
+	local value = THEME:GetString("ScreenEvaluation", name)
+	if value == nil or value == "" then
+		Trace("SimplyLove evaluation QR warning: missing ScreenEvaluation string '"..tostring(name).."'")
+		return tostring(name or "")
+	end
+	return value
+end
+
 -- GrooveStatsURL.lua returns a formatted URL with some parameters in the query string
 if allChecksPassed then
 
@@ -20,7 +29,7 @@ if allChecksPassed then
 		if ComputedData then ComputedData.GrooveStatsURL = url end
 	end
 
-	text = ScreenString("QRInstructions")
+	text = EvaluationString("QRInstructions")
 
 else
 	-- hbdi
@@ -31,13 +40,13 @@ else
 			-- the 4th check is GameMode (ITG, Casual, etc.)
 			if i==4 then
 				-- that string has a %s token so we can pass in the current SL GameMode
-				text = text .. ScreenString("QRInvalidScore"..i):format(SL.Global.GameMode) .. "\n"
+				text = text .. EvaluationString("QRInvalidScore"..i):format(SL.Global.GameMode) .. "\n"
 			elseif i == 7 then
 				-- If Metrics/Preferences are incorrect, also list them out.
-				text = text .. ScreenString("QRInvalidScore"..i) .. "\n" .. badSettings .. "\n"
+				text = text .. EvaluationString("QRInvalidScore"..i) .. "\n" .. badSettings .. "\n"
 			else
 				-- other strings can be used as-is
-				text = text .. ScreenString("QRInvalidScore"..i) .. "\n"
+				text = text .. EvaluationString("QRInvalidScore"..i) .. "\n"
 			end
 		end
 	end

@@ -31,6 +31,28 @@ local function isOnlineRoomActive()
   return ITGOnline and ITGOnline.currentRoomId ~= nil
 end
 
+local function getPlayerProfileSlot(player)
+  if player == PLAYER_1 then
+    return "ProfileSlot_Player1"
+  elseif player == PLAYER_2 then
+    return "ProfileSlot_Player2"
+  end
+  return nil
+end
+
+local function getPlayerProfilePath(player)
+  local profileSlot = getPlayerProfileSlot(player)
+  if not profileSlot then
+    return nil
+  end
+
+  local profilePath = PROFILEMAN:GetProfileDir(profileSlot)
+  if not profilePath or profilePath == "" then
+    return nil
+  end
+  return profilePath
+end
+
 -- Dialog Layout Configuration
 --
 -- Customize the leaderboard dialog appearance by modifying these values:
@@ -176,8 +198,7 @@ end
 
 local function getPendingScoresPath(player)
   if not player then return nil end
-  local playerIndex = (player == PLAYER_1) and 0 or 1
-  local profileDir = PROFILEMAN:GetProfileDir(playerIndex)
+  local profileDir = getPlayerProfilePath(player)
   if not profileDir or profileDir == "" then
     return nil
   end
@@ -425,18 +446,6 @@ local function printTable(t, indent)
   end
 end
 
-local function getPlayerIndex(player)
-  return (player == PLAYER_1) and 0 or 1
-end
-
-local function getPlayerProfilePath(player)
-  local profilePath = PROFILEMAN:GetProfileDir(getPlayerIndex(player))
-  if not profilePath or profilePath == "" then
-    return nil
-  end
-  return profilePath
-end
-
 local function getArrowCloudIniPath(player)
   local profilePath = getPlayerProfilePath(player)
   if not profilePath then
@@ -477,8 +486,7 @@ local function writeApiKey(player, apiKey)
 
 	-- Profile and API key management (returns table { apiKey })
 	local function readApiKey(player)
-	  local playerIndex = (player == PLAYER_1) and 0 or 1
-	  local profilePath = PROFILEMAN:GetProfileDir(playerIndex)
+	  local profilePath = getPlayerProfilePath(player)
 	  local filePath = profilePath and (profilePath .. "ArrowCloud.ini") or nil
 	  local apiKey
 
