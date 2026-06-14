@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <deque>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -77,6 +79,78 @@ static bool IsMovieBackgroundDef(const BackgroundDef& bd) {
   return ActorUtil::GetFileType(bd.m_sFile1) == FT_Movie ||
          ActorUtil::GetFileType(bd.m_sFile2) == FT_Movie;
 }
+
+namespace {
+class BackgroundTexturePolicyGuard {
+ public:
+  BackgroundTexturePolicyGuard()
+      : m_active(TEXTUREMAN != nullptr),
+        m_oldPolicy(m_active ? TEXTUREMAN->GetDefaultTexturePolicy()
+                             : RageTextureID::TEX_DEFAULT) {
+    if (m_active) {
+      TEXTUREMAN->SetDefaultTexturePolicy(RageTextureID::TEX_VOLATILE);
+    }
+  }
+
+  ~BackgroundTexturePolicyGuard() {
+    if (m_active && TEXTUREMAN != nullptr) {
+      TEXTUREMAN->SetDefaultTexturePolicy(m_oldPolicy);
+    }
+  }
+
+ private:
+  bool m_active;
+  RageTextureID::TexPolicy m_oldPolicy;
+};
+
+class OddDimensionWarningGuard {
+ public:
+  OddDimensionWarningGuard() : m_active(TEXTUREMAN != nullptr) {
+    if (m_active) {
+      TEXTUREMAN->DisableOddDimensionWarning();
+    }
+  }
+
+  ~OddDimensionWarningGuard() {
+    if (m_active && TEXTUREMAN != nullptr) {
+      TEXTUREMAN->EnableOddDimensionWarning();
+    }
+  }
+
+ private:
+  bool m_active;
+};
+
+float SafeBackgroundRate() {
+  if (GAMESTATE == nullptr) {
+    return 1.0f;
+  }
+
+  const float rate =
+      PREFSMAN != nullptr && PREFSMAN->m_bRateModsAffectTweens
+          ? 1.0f
+          : GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
+  if (!std::isfinite(rate) || rate <= 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-697: Background used fallback rate because music "
+        "rate %.6f is invalid.",
+        rate);
+    return 1.0f;
+  }
+  return rate;
+}
+
+float SafeBackgroundBrightness(float brightness) {
+  if (!std::isfinite(brightness)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-699: Background brightness was non-finite; using "
+        "0.");
+    return 0.0f;
+  }
+  rage_clamp(brightness, 0.0f, 1.0f);
+  return brightness;
+}
+}  // namespace
 
 class BrightnessOverlay : public ActorFrame {
  public:
@@ -177,8 +251,17 @@ class BackgroundImpl : public ActorFrame {
 };
 
 static RageColor GetBrightnessColor(float fBrightnessPercent) {
+  fBrightnessPercent = SafeBackgroundBrightness(fBrightnessPercent);
   RageColor cBrightness = RageColor(0, 0, 0, 1 - fBrightnessPercent);
-  RageColor cClamp = RageColor(0.5f, 0.5f, 0.5f, CLAMP_OUTPUT_PERCENT);
+  float fClamp = CLAMP_OUTPUT_PERCENT;
+  if (!std::isfinite(fClamp)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-699: Background clamp output percent was "
+        "non-finite; using 0.");
+    fClamp = 0.0f;
+  }
+  rage_clamp(fClamp, 0.0f, 1.0f);
+  RageColor cClamp = RageColor(0.5f, 0.5f, 0.5f, fClamp);
 
   // blend the two colors above as if cBrightness is drawn, then cClamp drawn on
   // top
@@ -186,6 +269,11 @@ static RageColor GetBrightnessColor(float fBrightnessPercent) {
 
   RageColor ret;
   ret.a = cBrightness.a + cClamp.a;
+  if (ret.a <= 0.0f || !std::isfinite(ret.a)) {
+    ret.a = 0.0f;
+    ret.r = ret.g = ret.b = 0.0f;
+    return ret;
+  }
   ret.r = (cBrightness.r * cBrightness.a + cClamp.r * cClamp.a) / ret.a;
   ret.g = (cBrightness.g * cBrightness.a + cClamp.g * cClamp.a) / ret.a;
   ret.b = (cBrightness.b * cBrightness.a + cClamp.b * cClamp.a) / ret.a;
@@ -220,7 +308,12 @@ void BackgroundImpl::Init() {
 
   // load transitions
   {
-    ASSERT(m_mapNameToTransition.empty());
+    if (!m_mapNameToTransition.empty()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-687: Background transition map was not empty at "
+          "init; clearing stale entries.");
+      m_mapNameToTransition.clear();
+    }
     std::vector<std::string> vsPaths, vsNames;
     BackgroundUtil::GetBackgroundTransitions("", vsPaths, vsNames);
     for (unsigned i = 0; i < vsPaths.size(); i++) {
@@ -228,32 +321,53 @@ void BackgroundImpl::Init() {
       const std::string& sName = vsNames[i];
 
       XNode xml;
-      XmlFileUtil::LoadFromFileShowErrors(xml, sPath);
-      ASSERT(xml.GetName() == "BackgroundTransition");
-      BackgroundTransition& bgt = m_mapNameToTransition[sName];
+      if (!XmlFileUtil::LoadFromFileShowErrors(xml, sPath)) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-687: Failed to load background transition '%s' "
+            "from '%s'.",
+            sName.c_str(), sPath.c_str());
+        continue;
+      }
+      if (xml.GetName() != "BackgroundTransition") {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-687: Ignoring background transition '%s' "
+            "because '%s' root is not BackgroundTransition.",
+            sName.c_str(), sPath.c_str());
+        continue;
+      }
 
       std::string sCmdLeaves;
-      bool bSuccess = xml.GetAttrValue("LeavesCommand", sCmdLeaves);
-      ASSERT(bSuccess);
-      bgt.cmdLeaves = ActorUtil::ParseActorCommands(sCmdLeaves);
-
       std::string sCmdRoot;
-      bSuccess = xml.GetAttrValue("RootCommand", sCmdRoot);
-      ASSERT(bSuccess);
+      if (!xml.GetAttrValue("LeavesCommand", sCmdLeaves) ||
+          !xml.GetAttrValue("RootCommand", sCmdRoot)) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-687: Ignoring background transition '%s' "
+            "because a command attribute is missing.",
+            sName.c_str());
+        continue;
+      }
+      BackgroundTransition& bgt = m_mapNameToTransition[sName];
+      bgt.cmdLeaves = ActorUtil::ParseActorCommands(sCmdLeaves);
       bgt.cmdRoot = ActorUtil::ParseActorCommands(sCmdRoot);
     }
   }
 
   bool bOneOrMoreChars = false;
   bool bShowingBeginnerHelper = false;
-  FOREACH_HumanPlayer(p) {
-    bOneOrMoreChars = true;
-    // Disable dancing characters if Beginner Helper will be showing.
-    if (PREFSMAN->m_bShowBeginnerHelper && BeginnerHelper::CanUse(p) &&
-        GAMESTATE->m_pCurSteps[p] &&
-        GAMESTATE->m_pCurSteps[p]->GetDifficulty() == Difficulty_Beginner) {
-      bShowingBeginnerHelper = true;
+  if (GAMESTATE != nullptr) {
+    FOREACH_HumanPlayer(p) {
+      bOneOrMoreChars = true;
+      // Disable dancing characters if Beginner Helper will be showing.
+      if (PREFSMAN != nullptr && PREFSMAN->m_bShowBeginnerHelper &&
+          BeginnerHelper::CanUse(p) && GAMESTATE->m_pCurSteps[p] &&
+          GAMESTATE->m_pCurSteps[p]->GetDifficulty() == Difficulty_Beginner) {
+        bShowingBeginnerHelper = true;
+      }
     }
+  } else {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-688: Background initialized without GAMESTATE; "
+        "dancing characters are disabled.");
   }
 
   if (bOneOrMoreChars && !bShowingBeginnerHelper && SHOW_DANCING_CHARACTERS) {
@@ -308,7 +422,13 @@ void BackgroundImpl::Layer::Unload() {
 
 bool BackgroundImpl::Layer::CreateBackground(
     const Song* pSong, const BackgroundDef& bd, Actor* pParent) {
-  ASSERT(m_BGAnimations.find(bd) == m_BGAnimations.end());
+  if (m_BGAnimations.find(bd) != m_BGAnimations.end()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-690: Background '%s' was already loaded; skipping "
+        "duplicate creation.",
+        bd.m_sFile1.c_str());
+    return true;
+  }
 
   // Resolve the background names
   std::vector<std::string> vsToResolve;
@@ -317,7 +437,7 @@ bool BackgroundImpl::Layer::CreateBackground(
 
   std::vector<std::string> vsResolved;
   vsResolved.resize(vsToResolve.size());
-  std::vector<LuaThreadVariable*> vsResolvedRef;
+  std::vector<std::unique_ptr<LuaThreadVariable>> vsResolvedRef;
   vsResolvedRef.resize(vsToResolve.size());
 
   for (unsigned i = 0; i < vsToResolve.size(); i++) {
@@ -340,10 +460,11 @@ bool BackgroundImpl::Layer::CreateBackground(
 
     // Look for BGAnims in the song dir
     if (sToResolve == SONG_BACKGROUND_FILE) {
-      vsPaths.push_back(
-          pSong->HasBackground()
-              ? pSong->GetBackgroundPath()
-              : THEME->GetPathG("Common", "fallback background"));
+      if (pSong != nullptr && pSong->HasBackground()) {
+        vsPaths.push_back(pSong->GetBackgroundPath());
+      } else if (THEME != nullptr) {
+        vsPaths.push_back(THEME->GetPathG("Common", "fallback background"));
+      }
     }
     if (vsPaths.empty()) {
       BackgroundUtil::GetSongBGAnimations(
@@ -371,16 +492,25 @@ bool BackgroundImpl::Layer::CreateBackground(
     } else {
       // If the main background file is missing, we failed.
       if (i == 0) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-689: Could not resolve background asset '%s'.",
+            sToResolve.c_str());
         return false;
       } else {
         sResolved = "../" + ThemeManager::GetBlankGraphicPath();
       }
     }
 
-    ASSERT(!sResolved.empty());
+    if (sResolved.empty()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-690: Background asset '%s' resolved to an empty "
+          "path.",
+          sToResolve.c_str());
+      return false;
+    }
 
-    vsResolvedRef[i] =
-        new LuaThreadVariable(ssprintf("File%d", i + 1), sResolved);
+    vsResolvedRef[i].reset(
+        new LuaThreadVariable(ssprintf("File%d", i + 1), sResolved));
   }
 
   std::string sEffect = bd.m_sEffect;
@@ -412,7 +542,12 @@ bool BackgroundImpl::Layer::CreateBackground(
         break;
     }
   }
-  ASSERT(!sEffect.empty());
+  if (sEffect.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-690: Background '%s' had no usable effect.",
+        bd.m_sFile1.c_str());
+    return false;
+  }
 
   // Set Lua color globals
   LuaThreadVariable sColor1(
@@ -438,7 +573,12 @@ bool BackgroundImpl::Layer::CreateBackground(
       break;
     }
   }
-  ASSERT(!sEffectFile.empty());
+  if (sEffectFile.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-690: BackgroundEffect '%s' could not be resolved.",
+        sEffect.c_str());
+    return false;
+  }
 
   Actor* pActor = ActorUtil::MakeActor(sEffectFile);
 
@@ -446,10 +586,6 @@ bool BackgroundImpl::Layer::CreateBackground(
     pActor = new Actor;
   }
   m_BGAnimations[bd] = pActor;
-
-  for (unsigned i = 0; i < vsResolvedRef.size(); i++) {
-    delete vsResolvedRef[i];
-  }
 
   return true;
 }
@@ -462,7 +598,8 @@ BackgroundDef BackgroundImpl::Layer::CreateRandomBGA(
   }
 
   // Set to not show any BGChanges, whether scripted or random
-  if (GAMESTATE->m_SongOptions.GetCurrent().m_bStaticBackground) {
+  if (GAMESTATE != nullptr &&
+      GAMESTATE->m_SongOptions.GetCurrent().m_bStaticBackground) {
     return BackgroundDef();
   }
 
@@ -486,13 +623,30 @@ BackgroundDef BackgroundImpl::Layer::CreateRandomBGA(
   // create the background if it's not already created
   if (iter == m_BGAnimations.end()) {
     bool bSuccess = CreateBackground(pSong, bd, pParent);
-    ASSERT(bSuccess);  // we fed it valid files, so this shouldn't fail
+    if (!bSuccess) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-690: Random background '%s' failed to load.",
+          bd.m_sFile1.c_str());
+      return BackgroundDef();
+    }
   }
   return bd;
 }
 
 void BackgroundImpl::LoadFromRandom(
     float fFirstBeat, float fEndBeat, const BackgroundChange& change) {
+  if (m_pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-693: Ignoring random backgrounds without a song.");
+    return;
+  }
+  if (!std::isfinite(fFirstBeat) || !std::isfinite(fEndBeat) ||
+      fEndBeat <= fFirstBeat) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-693: Ignoring random background range %.3f-%.3f.",
+        fFirstBeat, fEndBeat);
+    return;
+  }
   int iStartRow = BeatToNoteRow(fFirstBeat);
   int iEndRow = BeatToNoteRow(fEndBeat);
 
@@ -504,12 +658,30 @@ void BackgroundImpl::LoadFromRandom(
 
   for (unsigned i = 0; i < tSigs.size(); i++) {
     TimeSignatureSegment* ts = static_cast<TimeSignatureSegment*>(tSigs[i]);
-    int iSegmentEndRow =
-        (i + 1 == tSigs.size()) ? iEndRow : tSigs[i + 1]->GetRow();
+    if (ts == nullptr || ts->GetNoteRowsPerMeasure() <= 0) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-693: Skipping invalid time signature segment for "
+          "random backgrounds.");
+      continue;
+    }
+    int iSegmentEndRow = iEndRow;
+    if (i + 1 < tSigs.size() && tSigs[i + 1] != nullptr) {
+      iSegmentEndRow = tSigs[i + 1]->GetRow();
+    }
+    const float fChangeMeasures = RAND_BG_CHANGE_MEASURES;
+    const int iStepRows =
+        std::lround(fChangeMeasures * ts->GetNoteRowsPerMeasure());
+    if (!std::isfinite(fChangeMeasures) || iStepRows <= 0) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-692: Random background change interval %.3f "
+          "produced %d rows; skipping segment.",
+          fChangeMeasures, iStepRows);
+      continue;
+    }
 
     int time_signature_start = std::max(ts->GetRow(), iStartRow);
     for (int j = time_signature_start; j < std::min(iEndRow, iSegmentEndRow);
-         j += int(RAND_BG_CHANGE_MEASURES * ts->GetNoteRowsPerMeasure())) {
+         j += iStepRows) {
       // Don't fade. It causes frame rate dip, especially on slower machines.
       BackgroundDef bd = m_Layer[0].CreateRandomBGA(
           m_pSong, change.m_def.m_sEffect, m_RandomBGAnimations, this);
@@ -534,6 +706,10 @@ void BackgroundImpl::LoadFromRandom(
       bool bAtBeginningOfMeasure = false;
       for (unsigned j = 0; j < tSigs.size(); j++) {
         TimeSignatureSegment* ts = static_cast<TimeSignatureSegment*>(tSigs[j]);
+        if (bpms[i] == nullptr || ts == nullptr ||
+            ts->GetNoteRowsPerMeasure() <= 0) {
+          continue;
+        }
         if ((bpms[i]->GetRow() - ts->GetRow()) % ts->GetNoteRowsPerMeasure() ==
             0) {
           bAtBeginningOfMeasure = true;
@@ -571,6 +747,12 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
   m_pSong = pSong;
   m_StaticBackgroundDef.m_sFile1 = SONG_BACKGROUND_FILE;
 
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-694: Background ignored LoadFromSong(nullptr).");
+    return;
+  }
+
   if (g_fBGBrightness == 0.0f) {
     return;
   }
@@ -580,10 +762,10 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
     std::vector<std::string> vsThrowAway, vsNames;
     switch (g_RandomBackgroundMode) {
       default:
-        ASSERT_M(
-            0, ssprintf(
-                   "Invalid RandomBackgroundMode: %i",
-                   int(g_RandomBackgroundMode)));
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-695: Invalid RandomBackgroundMode %i; "
+            "disabling random backgrounds.",
+            int(g_RandomBackgroundMode));
         break;
       case BGMODE_OFF:
         break;
@@ -611,15 +793,14 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
 
   /* Song backgrounds (even just background stills) can get very big; never keep
    * them in memory. */
-  RageTextureID::TexPolicy OldPolicy = TEXTUREMAN->GetDefaultTexturePolicy();
-  TEXTUREMAN->SetDefaultTexturePolicy(RageTextureID::TEX_VOLATILE);
-
-  TEXTUREMAN->DisableOddDimensionWarning();
+  BackgroundTexturePolicyGuard texturePolicyGuard;
+  OddDimensionWarningGuard oddDimensionWarningGuard;
 
   // Set to not show any BGChanges, whether scripted or random if
   // m_bStaticBackground is on
   if (!g_bSongBackgrounds ||
-      GAMESTATE->m_SongOptions.GetCurrent().m_bStaticBackground) {
+      (GAMESTATE != nullptr &&
+       GAMESTATE->m_SongOptions.GetCurrent().m_bStaticBackground)) {
     // Backgrounds are disabled; just display the song background.
     BackgroundChange change;
     change.m_def = m_StaticBackgroundDef;
@@ -630,7 +811,8 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
   // of randomly loaded BGs
   else if (
       pSong->HasBGChanges() &&
-      !GAMESTATE->m_SongOptions.GetCurrent().m_bRandomBGOnly) {
+      (GAMESTATE == nullptr ||
+       !GAMESTATE->m_SongOptions.GetCurrent().m_bRandomBGOnly)) {
     FOREACH_BackgroundLayer(i) {
       Layer& layer = m_Layer[i];
 
@@ -697,7 +879,11 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
     if (!bIsAlreadyLoaded) {
       bool bSuccess =
           mainlayer.CreateBackground(m_pSong, m_StaticBackgroundDef, this);
-      ASSERT(bSuccess);
+      if (!bSuccess) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-694: Static song background could not be "
+            "loaded.");
+      }
     }
   }
 
@@ -724,7 +910,14 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
   // At this point, we shouldn't have any BGChanges to "".  "" is an invalid
   // name.
   for (unsigned i = 0; i < mainlayer.m_aBGChanges.size(); i++) {
-    ASSERT(!mainlayer.m_aBGChanges[i].m_def.m_sFile1.empty());
+    if (mainlayer.m_aBGChanges[i].m_def.m_sFile1.empty()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-694: Removing empty main background change at "
+          "index %u.",
+          i);
+      mainlayer.m_aBGChanges.erase(mainlayer.m_aBGChanges.begin() + i);
+      --i;
+    }
   }
 
   // Re-sort.
@@ -783,13 +976,9 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
     }
   }
 
-  TEXTUREMAN->EnableOddDimensionWarning();
-
   if (m_pDancingCharacters) {
     m_pDancingCharacters->LoadNextSong();
   }
-
-  TEXTUREMAN->SetDefaultTexturePolicy(OldPolicy);
 }
 
 int BackgroundImpl::Layer::FindBGSegmentForBeat(float fBeat) const {
@@ -816,9 +1005,19 @@ void BackgroundImpl::Layer::UpdateCurBGChange(
     const Song* pSong, float fLastMusicSeconds, float fCurrentTime,
     const std::map<std::string, BackgroundTransition>& mapNameToTransition,
     const BackgroundDef& fallbackDef, Actor* pParent) {
-  ASSERT(fCurrentTime != GameState::MUSIC_SECONDS_INVALID);
+  if (pSong == nullptr || GAMESTATE == nullptr) {
+    return;
+  }
+  if (fCurrentTime == GameState::MUSIC_SECONDS_INVALID ||
+      !std::isfinite(fCurrentTime)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-697: Background ignored invalid music seconds "
+        "%.3f.",
+        fCurrentTime);
+    return;
+  }
 
-  if (m_aBGChanges.size() == 0) {
+  if (m_aBGChanges.empty()) {
     return;
   }
 
@@ -828,9 +1027,7 @@ void BackgroundImpl::Layer::UpdateCurBGChange(
 
   // Calls to Update() should *not* be scaled by music rate unless
   // RateModsAffectFGChanges is enabled; fCurrentTime is. Undo it.
-  const float fRate = PREFSMAN->m_bRateModsAffectTweens
-                          ? 1.0f
-                          : GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
+  const float fRate = SafeBackgroundRate();
 
   // Find the BGSegment we're in
   const int i = FindBGSegmentForBeat(beat_info.beat);
@@ -844,7 +1041,10 @@ void BackgroundImpl::Layer::UpdateCurBGChange(
 
     BackgroundChange oldChange;
     if (m_iCurBGChangeIndex != -1) {
-      oldChange = m_aBGChanges[m_iCurBGChangeIndex];
+      if (m_iCurBGChangeIndex >= 0 &&
+          m_iCurBGChangeIndex < static_cast<int>(m_aBGChanges.size())) {
+        oldChange = m_aBGChanges[m_iCurBGChangeIndex];
+      }
     }
 
     m_iCurBGChangeIndex = i;
@@ -906,7 +1106,10 @@ void BackgroundImpl::Layer::UpdateCurBGChange(
       }
     }
 
-    m_pCurrentBGA->SetUpdateRate(change.m_fRate);
+    m_pCurrentBGA->SetUpdateRate(
+        std::isfinite(change.m_fRate) && change.m_fRate > 0.0f
+            ? change.m_fRate
+            : 1.0f);
 
     m_pCurrentBGA->InitState();
     m_pCurrentBGA->PlayCommand("On");
@@ -930,6 +1133,12 @@ void BackgroundImpl::Layer::UpdateCurBGChange(
 
   /* This is unaffected by the music rate. */
   float fDeltaTimeNoMusicRate = std::max(fDeltaTime / fRate, 0.0f);
+  if (!std::isfinite(fDeltaTimeNoMusicRate)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-697: Background clamped invalid delta time %.6f.",
+        fDeltaTimeNoMusicRate);
+    fDeltaTimeNoMusicRate = 0.0f;
+  }
 
   if (m_pCurrentBGA) {
     m_pCurrentBGA->Update(fDeltaTimeNoMusicRate);
@@ -948,9 +1157,8 @@ bool BackgroundImpl::Layer::LoadBackgroundIfNeeded(
     return false;
   }
   RageTimer loadTimer;
-  TEXTUREMAN->DisableOddDimensionWarning();
+  OddDimensionWarningGuard oddDimensionWarningGuard;
   const bool bLoaded = CreateBackground(pSong, bd, pParent);
-  TEXTUREMAN->EnableOddDimensionWarning();
   const float elapsedMs = loadTimer.GetDeltaTime() * 1000.0f;
   if (LogBackgroundDiagnosticsEnabled() ||
       (PerfDiagnosticsEnabled() && elapsedMs >= 16.0f)) {
@@ -979,11 +1187,15 @@ void BackgroundImpl::Layer::PruneUnusedBackgrounds() {
 }
 
 void BackgroundImpl::Update(float fDeltaTime) {
+  if (!std::isfinite(fDeltaTime)) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-698: Background ignored non-finite delta.");
+    return;
+  }
   ActorFrame::Update(fDeltaTime);
 
   {
     bool bVisible = IsDangerAllVisible();
-    if (m_bDangerAllWasVisible != bVisible) {
+    if (m_bDangerAllWasVisible != bVisible && MESSAGEMAN != nullptr) {
       MESSAGEMAN->Broadcast(bVisible ? "ShowDangerAll" : "HideDangerAll");
     }
     m_bDangerAllWasVisible = bVisible;
@@ -991,6 +1203,12 @@ void BackgroundImpl::Update(float fDeltaTime) {
 
   if (m_pDancingCharacters) {
     m_pDancingCharacters->Update(fDeltaTime);
+  }
+
+  if (m_pSong == nullptr || GAMESTATE == nullptr ||
+      GAMESTATE->m_Position.m_fMusicSeconds ==
+          GameState::MUSIC_SECONDS_INVALID) {
+    return;
   }
 
   FOREACH_BackgroundLayer(i) {
@@ -1033,7 +1251,9 @@ void BackgroundImpl::DrawPrimitives() {
 
   if (m_pDancingCharacters) {
     m_pDancingCharacters->Draw();
-    DISPLAY->ClearZBuffer();
+    if (DISPLAY != nullptr) {
+      DISPLAY->ClearZBuffer();
+    }
   }
 
   ActorFrame::DrawPrimitives();
@@ -1041,15 +1261,32 @@ void BackgroundImpl::DrawPrimitives() {
 
 void BackgroundImpl::GetLoadedBackgroundChanges(
     std::vector<BackgroundChange>* pBackgroundChangesOut[NUM_BackgroundLayer]) {
-  FOREACH_BackgroundLayer(i) * pBackgroundChangesOut[i] =
-      m_Layer[i].m_aBGChanges;
+  if (pBackgroundChangesOut == nullptr) {
+    return;
+  }
+  FOREACH_BackgroundLayer(i) {
+    if (pBackgroundChangesOut[i] == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-700: Background changes output slot %d is null.",
+          i);
+      continue;
+    }
+    *pBackgroundChangesOut[i] = m_Layer[i].m_aBGChanges;
+  }
 }
 
 bool BackgroundImpl::IsDangerAllVisible() {
+  if (GAMESTATE == nullptr || STATSMAN == nullptr) {
+    return false;
+  }
   // The players are never in danger in FAIL_OFF.
-  FOREACH_PlayerNumber(p) if (
-      GAMESTATE->GetPlayerFailType(GAMESTATE->m_pPlayerState[p]) ==
-      FailType_Off) return false;
+  FOREACH_PlayerNumber(p) {
+    if (GAMESTATE->m_pPlayerState[p] == nullptr ||
+        GAMESTATE->GetPlayerFailType(GAMESTATE->m_pPlayerState[p]) ==
+            FailType_Off) {
+      return false;
+    }
+  }
   if (!g_bShowDanger) {
     return false;
   }
@@ -1090,15 +1327,24 @@ BrightnessOverlay::BrightnessOverlay() {
 }
 
 void BrightnessOverlay::Update(float fDeltaTime) {
+  if (!std::isfinite(fDeltaTime)) {
+    return;
+  }
   ActorFrame::Update(fDeltaTime);
   /* If we're actually playing, then we're past fades, etc; update the
    * background brightness to follow Cover. */
-  if (!GAMESTATE->m_bGameplayLeadIn) {
+  if (GAMESTATE != nullptr && !GAMESTATE->m_bGameplayLeadIn) {
     SetActualBrightness();
   }
 }
 
 void BrightnessOverlay::SetActualBrightness() {
+  if (GAMESTATE == nullptr ||
+      GAMESTATE->m_pPlayerState[PLAYER_1] == nullptr ||
+      GAMESTATE->m_pPlayerState[PLAYER_2] == nullptr) {
+    Set(0.0f);
+    return;
+  }
   float fLeftBrightness = 1 - GAMESTATE->m_pPlayerState[PLAYER_1]
                                   ->m_PlayerOptions.GetCurrent()
                                   .m_fCover;
@@ -1117,8 +1363,9 @@ void BrightnessOverlay::SetActualBrightness() {
           fBaseBGBrightness = 1.0f;
   */
 
-  fLeftBrightness *= fBaseBGBrightness;
-  fRightBrightness *= fBaseBGBrightness;
+  fLeftBrightness = SafeBackgroundBrightness(fLeftBrightness * fBaseBGBrightness);
+  fRightBrightness =
+      SafeBackgroundBrightness(fRightBrightness * fBaseBGBrightness);
 
   if (!GAMESTATE->IsHumanPlayer(PLAYER_1)) {
     fLeftBrightness = fRightBrightness;
@@ -1137,6 +1384,7 @@ void BrightnessOverlay::SetActualBrightness() {
 }
 
 void BrightnessOverlay::Set(float fBrightness) {
+  fBrightness = SafeBackgroundBrightness(fBrightness);
   RageColor c = GetBrightnessColor(fBrightness);
 
   FOREACH_PlayerNumber(pn) m_quadBGBrightness[pn].SetDiffuse(c);
@@ -1154,21 +1402,42 @@ Background::Background() {
   this->AddChild(m_pImpl);
 }
 Background::~Background() { RageUtil::SafeDelete(m_pImpl); }
-void Background::Init() { m_pImpl->Init(); }
-void Background::LoadFromSong(const Song* pSong) {
-  m_pImpl->LoadFromSong(pSong);
+void Background::Init() {
+  if (m_pImpl != nullptr) {
+    m_pImpl->Init();
+  }
 }
-void Background::Unload() { m_pImpl->Unload(); }
-void Background::FadeToActualBrightness() { m_pImpl->FadeToActualBrightness(); }
+void Background::LoadFromSong(const Song* pSong) {
+  if (m_pImpl != nullptr) {
+    m_pImpl->LoadFromSong(pSong);
+  }
+}
+void Background::Unload() {
+  if (m_pImpl != nullptr) {
+    m_pImpl->Unload();
+  }
+}
+void Background::FadeToActualBrightness() {
+  if (m_pImpl != nullptr) {
+    m_pImpl->FadeToActualBrightness();
+  }
+}
 void Background::SetBrightness(float fBrightness) {
-  m_pImpl->SetBrightness(fBrightness);
+  if (m_pImpl != nullptr) {
+    m_pImpl->SetBrightness(fBrightness);
+  }
 }
 DancingCharacters* Background::GetDancingCharacters() {
+  if (m_pImpl == nullptr) {
+    return nullptr;
+  }
   return m_pImpl->GetDancingCharacters();
 }
 void Background::GetLoadedBackgroundChanges(
     std::vector<BackgroundChange>* pBackgroundChangesOut[NUM_BackgroundLayer]) {
-  m_pImpl->GetLoadedBackgroundChanges(pBackgroundChangesOut);
+  if (m_pImpl != nullptr) {
+    m_pImpl->GetLoadedBackgroundChanges(pBackgroundChangesOut);
+  }
 }
 
 /*
