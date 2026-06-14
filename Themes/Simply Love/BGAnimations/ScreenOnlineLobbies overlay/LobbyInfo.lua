@@ -81,14 +81,14 @@ for i=1,num_rows+2 do
     end,
     GainFocusCommand=function(self)
       self.focus = true
-      self:diffuse(i == focus_pos and Color.Yellow or Color.White)
+      self:diffuse(i == focus_pos and Color.Green or Color.White)
     end,
     LoseFocusCommand=function(self)
       self.focus = false
       self:diffuse(Color.White)
     end,
     UpdateSelfCommand=function(self)
-      self:diffuse(self.focus and i == focus_pos and Color.Yellow or Color.White)
+      self:diffuse(self.focus and i == focus_pos and Color.Green or Color.White)
     end
   }
 

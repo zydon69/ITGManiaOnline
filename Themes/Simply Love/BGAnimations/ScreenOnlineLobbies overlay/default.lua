@@ -260,9 +260,51 @@ local function clamp_text(value, maxLen)
 	return value:sub(1, maxLen - 1) .. "…"
 end
 
+local function song_info_path(songInfo)
+	return trim_text(songInfo and (songInfo.songPath or songInfo.folder_name or songInfo.folderName or songInfo.path))
+end
+
+local function song_info_pack(songInfo)
+	local pack = trim_text(songInfo and (songInfo.pack or songInfo.group or songInfo.group_name or songInfo.groupName))
+	if pack ~= "" then return pack end
+
+	local path = song_info_path(songInfo)
+	return trim_text(path:match("^([^/]+)"))
+end
+
+local function song_info_title(songInfo)
+	local title = trim_text(songInfo and (songInfo.title or songInfo.name or songInfo.songName or songInfo.song_title or songInfo.songTitle))
+	if title ~= "" then return title end
+
+	local path = song_info_path(songInfo)
+	return trim_text(path:match("^[^/]+/(.+)$") or path)
+end
+
+local function song_info_artist(songInfo)
+	return trim_text(songInfo and (songInfo.artist or songInfo.artistName or songInfo.song_artist or songInfo.songArtist))
+end
+
+local function normalize_online_song_info(songInfo)
+	if type(songInfo) ~= "table" then return nil end
+
+	local title = song_info_title(songInfo)
+	local artist = song_info_artist(songInfo)
+	local pack = song_info_pack(songInfo)
+	local path = song_info_path(songInfo)
+	if title == "" and artist == "" and pack == "" and path == "" then return nil end
+
+	songInfo.title = title
+	songInfo.artist = artist
+	songInfo.pack = pack
+	if songInfo.songPath == nil or trim_text(songInfo.songPath) == "" then
+		songInfo.songPath = path
+	end
+	return songInfo
+end
+
 local function find_online_song(songInfo)
 	if not SONGMAN or not SONGMAN.FindSong or type(songInfo) ~= "table" then return nil end
-	local songPath = trim_text(songInfo.songPath or songInfo.folder_name or songInfo.folderName)
+	local songPath = song_info_path(songInfo)
 	local song = songPath ~= "" and SONGMAN:FindSong(songPath) or nil
 	if song then return song end
 	local relative = songPath:match("^[^/]+/(.+)$")
@@ -271,26 +313,26 @@ end
 
 local function update_joined_song_card(joinedContent)
 	if not joinedContent then return end
-	local songInfo = joined_missing_song_info or joined_song_preview
+	local songInfo = normalize_online_song_info(joined_missing_song_info or joined_song_preview)
 	local hasSong = type(songInfo) == "table"
 	local card = joinedContent:GetChild("JoinedSongCard")
 	if card then card:visible(hasSong) end
 
 	local title = joinedContent:GetChild("JoinedSongTitle")
 	if title then
-		local titleText = hasSong and trim_text(songInfo.title) or ""
+		local titleText = hasSong and song_info_title(songInfo) or ""
 		title:settext(hasSong and clamp_text(titleText ~= "" and titleText or "Chanson inconnue", 42) or "Aucune chanson selectionnee")
 	end
 
 	local artist = joinedContent:GetChild("JoinedSongArtist")
 	if artist then
-		local artistText = hasSong and trim_text(songInfo.artist) or ""
+		local artistText = hasSong and song_info_artist(songInfo) or ""
 		artist:settext("Artiste : " .. (artistText ~= "" and clamp_text(artistText, 44) or "Artiste inconnu"))
 	end
 
 	local pack = joinedContent:GetChild("JoinedSongPack")
 	if pack then
-		local packText = hasSong and trim_text(songInfo.pack) or ""
+		local packText = hasSong and song_info_pack(songInfo) or ""
 		pack:settext(packText ~= "" and ("Pack : " .. clamp_text(packText, 46)) or "")
 	end
 
@@ -1235,16 +1277,29 @@ local af = Def.ActorFrame{
 		end
 
 		local lines = {}
+		local selected_start = nil
+		local selected_length = nil
+		local text_length = 0
 		for i, user in ipairs(online_users) do
 			local selected = (list_selected and lobby_view == "players" and i == online_player_index) and "> " or "  "
 			local room = user.room and user.room.name and (" " .. room_visibility_label(user.room) .. " " .. tostring(user.room.name)) or ""
 			local status = user.status and (" [" .. tostring(user.status) .. "]") or ""
-				lines[#lines + 1] = clamp_text(selected .. i .. ". " .. tostring(user.name or "Joueur") .. status .. room, 44)
+			local line = clamp_text(selected .. i .. ". " .. tostring(user.name or "Joueur") .. status .. room, 44)
+			if list_selected and lobby_view == "players" and i == online_player_index then
+				selected_start = text_length
+				selected_length = #line
+			end
+			lines[#lines + 1] = line
+			text_length = text_length + #line + 1
 		end
 
 		local playersList = playersContent:GetChild("OnlinePlayersList")
 		if playersList then
-				playersList:settext(#lines > 0 and table.concat(lines, "\n") or "Aucun joueur connecte trouve.")
+			playersList:settext(#lines > 0 and table.concat(lines, "\n") or "Aucun joueur connecte trouve.")
+			playersList:ClearAttributes()
+			if selected_start and selected_length and selected_length > 0 then
+				playersList:AddAttribute(selected_start, {Length=selected_length, Diffuse={0,1,0,1}})
+			end
 		end
 
 		local playerCount = playersContent:GetChild("OnlinePlayersCount")
@@ -1733,6 +1788,14 @@ local af = Def.ActorFrame{
 			joined_lobby_code = params and params.code or ""
 			if joined_lobby_code ~= previousLobbyCode then
 				joined_focus_initialized = false
+				joined_song_preview = nil
+				joined_song_confirmed = false
+				joined_song_selected_key = ""
+				joined_missing_song = false
+				joined_missing_song_info = nil
+				joined_can_download_pack = false
+				joined_missing_song_reason = nil
+				joined_preview_unknown_pack = false
 			end
 			joined_lobby_players = params and params.players or {}
 			joined_is_manager = params and params.isManager or false
@@ -1750,11 +1813,17 @@ local af = Def.ActorFrame{
 				joined_preview_unknown_pack = false
 			else
 				local previousSelectedKey = joined_song_selected_key
-				joined_song_preview = params and params.songInfo or nil
-				joined_song_confirmed = params and params.songInfo ~= nil or false
-				joined_song_selected_key = joined_song_preview and tostring(joined_song_preview.selectedAt or joined_song_preview.selected_at or "") or ""
+				local selectedSongInfo = normalize_online_song_info(params and params.songInfo or nil)
+				if selectedSongInfo then
+					joined_song_preview = selectedSongInfo
+					joined_song_confirmed = true
+					joined_song_selected_key = tostring(selectedSongInfo.selectedAt or selectedSongInfo.selected_at or "")
+				else
+					joined_song_confirmed = false
+					joined_song_selected_key = ""
+				end
 				joined_preview_unknown_pack = joined_song_preview ~= nil and not local_pack_exists(joined_song_preview)
-				if joined_song_confirmed and joined_song_selected_key ~= previousSelectedKey then
+				if selectedSongInfo and joined_song_selected_key ~= previousSelectedKey then
 					joined_missing_song = false
 					joined_missing_song_info = nil
 					joined_can_download_pack = false
@@ -1920,13 +1989,14 @@ local af = Def.ActorFrame{
 		self:queuecommand("UpdatePrivateJoinPrompt")
 	end,
 	OnlineSongPreviewMessageCommand=function(self, params)
-		if params and params.title then
-			joined_song_preview = params
+		local preview = normalize_online_song_info(params)
+		if preview then
+			joined_song_preview = preview
 			joined_song_confirmed = false
 			joined_song_selected_key = ""
-			joined_preview_unknown_pack = not local_pack_exists(params)
+			joined_preview_unknown_pack = not local_pack_exists(preview)
 			if joined_preview_unknown_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ManagerBrowsingPreview then
-				ITGOnline.PackSync:ManagerBrowsingPreview(params)
+				ITGOnline.PackSync:ManagerBrowsingPreview(preview)
 			end
 			self:queuecommand("UpdateJoinedLobbyText")
 		end
@@ -2035,12 +2105,18 @@ local af = Def.ActorFrame{
 					self:zoomto(browse_panel_width,browse_panel_height):y(browse_panel_y):diffuse(Color.White)
 				end,
 				HoverCommand=function(self)
-					if not list_selected then
+					if list_selected and lobby_view == "lobbies" then
+						self:diffuse(Color.Green)
+					elseif not list_selected then
 						self:diffuse(active_index == self:GetParent().idx and Color.Yellow or Color.White)
 					end
 				end,
 				SelectedCommand=function(self)
-					self:diffuse(active_index == self:GetParent().idx and Color.Green or Color.White)
+					if (list_selected and lobby_view == "lobbies") or active_index == self:GetParent().idx then
+						self:diffuse(Color.Green)
+					else
+						self:diffuse(Color.White)
+					end
 				end
 			},
 
@@ -2591,53 +2667,53 @@ local af = Def.ActorFrame{
 			Name="JoinedLobbyPlayers",
 				Text="En attente des joueurs...",
 			InitCommand=function(self)
-				self:horizalign(left):x(-290):y(-112):zoom(0.72):maxwidth(760)
+				self:horizalign(left):x(-290):y(-112):zoom(0.72):maxwidth(470)
 			end
 		},
 		Def.Quad{
 			Name="JoinedSongCard",
 			InitCommand=function(self)
-				self:xy(-120, -58):zoomto(330, 86):diffuse(0,0,0,0.82):visible(false)
+				self:xy(180, -116):zoomto(210, 86):diffuse(0,0,0,0.82):visible(false)
 			end
 		},
 		Def.Quad{
 			Name="JoinedSongBannerFallback",
 			InitCommand=function(self)
-				self:xy(-232, -58):zoomto(112, 44):diffuse(0.08,0.08,0.08,1):visible(false)
+				self:xy(104, -110):zoomto(72, 40):diffuse(0.08,0.08,0.08,1):visible(false)
 			end
 		},
 		LoadFont("Common Bold")..{
 			Name="JoinedSongBannerLabel",
 			Text="BANNIERE",
 			InitCommand=function(self)
-				self:xy(-232, -52):zoom(0.24):diffuse(Color.White):visible(false)
+				self:xy(104, -105):zoom(0.18):diffuse(Color.White):visible(false)
 			end
 		},
 		Def.Banner{
 			Name="JoinedSongBanner",
 			InitCommand=function(self)
-				self:xy(-232, -52):scaletoclipped(112, 44):visible(false)
+				self:xy(104, -105):scaletoclipped(72, 40):visible(false)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedSongPack",
 			Text="",
 			InitCommand=function(self)
-				self:horizalign(left):xy(-290, -87):zoom(0.38):maxwidth(760):diffuse(0.85,0.85,0.85,1)
+				self:horizalign(left):xy(82, -148):zoom(0.38):maxwidth(520):diffuse(0.85,0.85,0.85,1)
 			end
 		},
 		LoadFont("Common Bold")..{
 			Name="JoinedSongTitle",
 			Text="Aucune chanson selectionnee",
 			InitCommand=function(self)
-				self:horizalign(left):xy(-168, -70):zoom(WideScale(0.46, 0.50)):maxwidth(480)
+				self:horizalign(left):xy(148, -119):zoom(WideScale(0.30, 0.32)):maxwidth(430)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedSongArtist",
 			Text="",
 			InitCommand=function(self)
-				self:horizalign(left):xy(-168, -46):zoom(WideScale(0.46, 0.50)):maxwidth(500)
+				self:horizalign(left):xy(148, -96):zoom(WideScale(0.38, 0.40)):maxwidth(340)
 			end
 		},
 		LoadFont("Common Normal")..{
@@ -2762,7 +2838,7 @@ local af = Def.ActorFrame{
 					Name="GlobalOptionsLabel",
 					Text="Options globales",
 					InitCommand=function(self)
-						self:zoom(WideScale(0.27, 0.29)):vertspacing(-20)
+						self:zoom(WideScale(0.25, 0.27)):vertspacing(-34):maxwidth(640)
 					end,
 					HoverCommand=function(self)
 						self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)

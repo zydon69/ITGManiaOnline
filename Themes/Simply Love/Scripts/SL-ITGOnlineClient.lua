@@ -95,6 +95,8 @@ ITGOnline.managerAutoReadyCompletedKey = ITGOnline.managerAutoReadyCompletedKey 
 ITGOnline.readyRequestInFlight = ITGOnline.readyRequestInFlight or {}
 ITGOnline.readyRequestLastResult = ITGOnline.readyRequestLastResult or {}
 ITGOnline.readyRequestReplayWindowSeconds = ITGOnline.readyRequestReplayWindowSeconds or 1.0
+ITGOnline.readyRequestBlockedRetrySeconds = ITGOnline.readyRequestBlockedRetrySeconds or 2.5
+ITGOnline.readyRequestBlockedErrors = ITGOnline.readyRequestBlockedErrors or {}
 ITGOnline.onlineOptionsReadyDeadlineKey = ITGOnline.onlineOptionsReadyDeadlineKey or ""
 ITGOnline.onlineOptionsReadyDeadlineAt = ITGOnline.onlineOptionsReadyDeadlineAt or 0
 ITGOnline.onlineOptionsReadyTimeoutInFlightKey = ITGOnline.onlineOptionsReadyTimeoutInFlightKey or ""
@@ -126,6 +128,8 @@ ITGOnline.onlineGameplayEvaluationRetryCount = ITGOnline.onlineGameplayEvaluatio
 ITGOnline.onlineGameplayEvaluationNextRetryAt = ITGOnline.onlineGameplayEvaluationNextRetryAt or 0
 ITGOnline.onlineGameplayEvaluationMaxRetries = ITGOnline.onlineGameplayEvaluationMaxRetries or 3
 ITGOnline.onlineGameplayEvaluationTerminalErrorKey = ITGOnline.onlineGameplayEvaluationTerminalErrorKey or ""
+ITGOnline.onlineGameplayEvaluationNavigationKey = ITGOnline.onlineGameplayEvaluationNavigationKey or ""
+ITGOnline.onlineGameplayEvaluationNavigationAt = ITGOnline.onlineGameplayEvaluationNavigationAt or 0
 ITGOnline.onlineGameplayAllTerminalHoldKey = ITGOnline.onlineGameplayAllTerminalHoldKey or ""
 ITGOnline.onlineGameplayAllTerminalHoldUntil = ITGOnline.onlineGameplayAllTerminalHoldUntil or 0
 ITGOnline.previousScreenName = ITGOnline.previousScreenName or nil
@@ -1729,6 +1733,8 @@ function ITGOnline:ClearActiveGameplayRound(source)
 	end
 	self.activeGameplaySongPayload = nil
 	self.activeGameplayRoundKey = ""
+	self.onlineGameplayEvaluationNavigationKey = ""
+	self.onlineGameplayEvaluationNavigationAt = 0
 end
 
 function ITGOnline:RoomSongSelectedAtMs(room)
@@ -2393,6 +2399,24 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 		-- Let ScreenGameplay perform its normal end-of-song cleanup instead of
 		-- jumping screens directly.  Direct SM_GoToNextScreen can leave gameplay
 		-- state half-alive when every online player has failed.
+		local roundKey = self.PlayStateKey and self:PlayStateKey() or ""
+		if not (self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)) then
+			roundKey = tostring(self.activeGameplayRoundKey or "")
+		end
+		local now = GetTimeSinceStart()
+		local previousAt = tonumber(self.onlineGameplayEvaluationNavigationAt) or 0
+		if roundKey ~= ""
+			and self.onlineGameplayEvaluationNavigationKey == roundKey
+			and (now - previousAt) < 1.5 then
+			online_flow_trace_throttled("evaluation_navigation_skipped", 1.0,
+				"navigate_via_gameplay_message_skipped reason=already_posted target=" .. tostring(target)
+				.. " roundKey=" .. tostring(roundKey))
+			return true
+		end
+		if roundKey ~= "" then
+			self.onlineGameplayEvaluationNavigationKey = roundKey
+			self.onlineGameplayEvaluationNavigationAt = now
+		end
 		online_flow_trace("navigate_via_gameplay_message message=SM_LeaveGameplay target=" .. tostring(target))
 		if topScreen.PostScreenMessage then
 			topScreen:PostScreenMessage("SM_LeaveGameplay", 0)
@@ -2807,6 +2831,7 @@ function ITGOnline:Disconnect(options)
 	self.managerAutoReadyCompletedKey = ""
 	self.readyRequestInFlight = {}
 	self.readyRequestLastResult = {}
+	self.readyRequestBlockedErrors = {}
 	self:ClearOnlineOptionsReadyDeadline("disconnect")
 	self.onlineGameplayEnteredKey = ""
 	self.onlineGameplayReturnedKey = ""
@@ -2823,6 +2848,8 @@ function ITGOnline:Disconnect(options)
 	self.onlineGameplayEvaluationRetryCount = 0
 	self.onlineGameplayEvaluationNextRetryAt = 0
 	self.onlineGameplayEvaluationTerminalErrorKey = ""
+	self.onlineGameplayEvaluationNavigationKey = ""
+	self.onlineGameplayEvaluationNavigationAt = 0
 	self.onlineGameplayEvaluationHoldStartedKey = ""
 	self.onlineGameplayEvaluationMinimumHoldUntil = 0
 	self.onlineGameplayAllTerminalHoldKey = ""
@@ -3211,11 +3238,14 @@ function ITGOnline:SelectSong(callback)
 			self.onlineGameplayEvaluationRetryCount = 0
 			self.onlineGameplayEvaluationNextRetryAt = 0
 			self.onlineGameplayEvaluationTerminalErrorKey = ""
+			self.onlineGameplayEvaluationNavigationKey = ""
+			self.onlineGameplayEvaluationNavigationAt = 0
 			self.onlineGameplayEvaluationHoldStartedKey = ""
 			self.onlineGameplayEvaluationMinimumHoldUntil = 0
 			self.onlineGameplayAllTerminalHoldKey = ""
 			self.onlineGameplayAllTerminalHoldUntil = 0
 			self:ClearActiveGameplayRound("song_selection")
+			self.readyRequestBlockedErrors = {}
 			self.lastFinalScoreKey = ""
 			self.lastFinalScoreInFlightKey = ""
 			self.lastAcceptedScoreFingerprint = nil
@@ -4029,6 +4059,26 @@ function ITGOnline:SetReady(phase, isReady, callback)
 		if callback then callback(true, { room = self.currentRoom }, nil) end
 		return
 	end
+	local blockedUntil = tonumber(self.readyRequestBlockedErrors[requestKey] or 0) or 0
+	if isReady
+		and blockedUntil > nowTs
+		and self.currentRoom
+		and self:NormalizeRoomPhase(self.currentRoom.phase) == currentPhase then
+		online_flow_trace_throttled("ready_request_deferred", 1.0,
+			"ready_request_deferred room=" .. tostring(self.currentRoomId)
+			.. " phase=" .. tostring(phase)
+			.. " reason=room_members_song_not_confirmed"
+			.. " retry_in=" .. string.format("%.2f", blockedUntil - nowTs))
+		if callback then
+			callback(false, {
+				room = self.currentRoom,
+				error_code = "room_members_song_not_confirmed",
+				retry_after = math.max(0, blockedUntil - nowTs),
+				deferred = true,
+			}, nil)
+		end
+		return
+	end
 
 	local inflight = self.readyRequestInFlight[requestKey]
 	if inflight then
@@ -4055,6 +4105,7 @@ function ITGOnline:SetReady(phase, isReady, callback)
 		local pending = self.readyRequestInFlight[requestKey]
 		self.readyRequestInFlight[requestKey] = nil
 		if ok and decoded and decoded.room then
+			self.readyRequestBlockedErrors[requestKey] = nil
 			local room = self:ApplyRoomSnapshot(decoded.room, "ready")
 			decoded.room = room or decoded.room
 			if phase == "config_ready" and isReady then
@@ -4063,6 +4114,11 @@ function ITGOnline:SetReady(phase, isReady, callback)
 		end
 		local roomPhase = decoded and decoded.room and decoded.room.phase
 		local errorCode = decoded and decoded.error_code
+		if not ok and isReady and errorCode == "room_members_song_not_confirmed" then
+			self.readyRequestBlockedErrors[requestKey] = GetTimeSinceStart() + (tonumber(self.readyRequestBlockedRetrySeconds) or 2.5)
+		elseif errorCode ~= "room_members_song_not_confirmed" then
+			self.readyRequestBlockedErrors[requestKey] = nil
+		end
 		Trace("[ITGOnline] ready_response room=" .. tostring(self.currentRoomId)
 			.. " phase=" .. tostring(phase)
 			.. " ok=" .. tostring(ok and true or false)
