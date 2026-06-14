@@ -1,6 +1,7 @@
 #include "Foreground.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 #include "Actor.h"
@@ -10,10 +11,58 @@
 #include "GameState.h"
 #include "MessageManager.h"
 #include "PrefsManager.h"
+#include "RageLog.h"
 #include "RageTextureID.h"
 #include "RageTextureManager.h"
 #include "RageUtil.h"
 #include "Song.h"
+
+namespace {
+class ForegroundTexturePolicyGuard {
+ public:
+  ForegroundTexturePolicyGuard()
+      : m_active(TEXTUREMAN != nullptr),
+        m_oldPolicy(m_active ? TEXTUREMAN->GetDefaultTexturePolicy()
+                             : RageTextureID::TEX_DEFAULT) {
+    if (m_active) {
+      TEXTUREMAN->SetDefaultTexturePolicy(RageTextureID::TEX_VOLATILE);
+    }
+  }
+
+  ~ForegroundTexturePolicyGuard() {
+    if (m_active && TEXTUREMAN != nullptr) {
+      TEXTUREMAN->SetDefaultTexturePolicy(m_oldPolicy);
+    }
+  }
+
+ private:
+  bool m_active;
+  RageTextureID::TexPolicy m_oldPolicy;
+};
+
+float SafeForegroundRate() {
+  if (GAMESTATE == nullptr) {
+    return 1.0f;
+  }
+
+  const float rate =
+      PREFSMAN != nullptr && PREFSMAN->m_bRateModsAffectTweens
+          ? 1.0f
+          : GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
+
+  if (!std::isfinite(rate) || rate <= 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-719: Foreground used fallback rate because music "
+        "rate %.6f is invalid.",
+        rate);
+    return 1.0f;
+  }
+
+  return rate;
+}
+}  // namespace
+
+Foreground::Foreground() : m_fLastMusicSeconds(-9999), m_pSong(nullptr) {}
 
 Foreground::~Foreground() { Unload(); }
 
@@ -28,25 +77,44 @@ void Foreground::Unload() {
 }
 
 void Foreground::LoadFromSong(const Song* pSong) {
+  Unload();
+  if (pSong == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-715: Foreground ignored LoadFromSong(nullptr).");
+    return;
+  }
+
   // Song graphics can get very big; never keep them in memory.
-  RageTextureID::TexPolicy OldPolicy = TEXTUREMAN->GetDefaultTexturePolicy();
-  TEXTUREMAN->SetDefaultTexturePolicy(RageTextureID::TEX_VOLATILE);
+  ForegroundTexturePolicyGuard texturePolicyGuard;
 
   m_pSong = pSong;
   for (const BackgroundChange& change : pSong->GetForegroundChanges()) {
-    std::string sBGName = change.m_def.m_sFile1,
-                sLuaFile = pSong->GetSongDir() + sBGName + "/default.lua",
-                sXmlFile = pSong->GetSongDir() + sBGName + "/default.xml";
+    const std::string sBGName = change.m_def.m_sFile1;
+    const std::string sForegroundPath =
+        Song::GetSongAssetPath(sBGName, pSong->GetSongDir());
+    if (sForegroundPath.empty()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-717: Foreground rejected empty or unsafe asset "
+          "'%s'.",
+          sBGName.c_str());
+      continue;
+    }
+    const std::string sLuaFile = sForegroundPath + "/default.lua";
+    const std::string sXmlFile = sForegroundPath + "/default.xml";
 
     LoadedBGA bga;
     if (DoesFileExist(sLuaFile)) {
       bga.m_bga = ActorUtil::MakeActor(sLuaFile, this);
-    } else if (PREFSMAN->m_bQuirksMode && DoesFileExist(sXmlFile)) {
+    } else if (PREFSMAN != nullptr && PREFSMAN->m_bQuirksMode &&
+               DoesFileExist(sXmlFile)) {
       bga.m_bga = ActorUtil::MakeActor(sXmlFile, this);
     } else {
-      bga.m_bga = ActorUtil::MakeActor(pSong->GetSongDir() + sBGName, this);
+      bga.m_bga = ActorUtil::MakeActor(sForegroundPath, this);
     }
     if (bga.m_bga == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-718: Foreground failed to create actor for '%s'.",
+          sForegroundPath.c_str());
       continue;
     }
     bga.m_bga->SetName(sBGName);
@@ -54,6 +122,7 @@ void Foreground::LoadFromSong(const Song* pSong) {
     // LoadFromNode takes care of running the InitCommand, so do not run the
     // InitCommand here. -Kyz
     bga.m_fStartBeat = change.m_fStartBeat;
+    bga.m_fStopBeat = change.m_fStartBeat;
     bga.m_bFinished = false;
 
     bga.m_bga->SetVisible(false);
@@ -62,20 +131,23 @@ void Foreground::LoadFromSong(const Song* pSong) {
     m_BGAnimations.push_back(bga);
   }
 
-  TEXTUREMAN->SetDefaultTexturePolicy(OldPolicy);
-
   this->SortByDrawOrder();
 }
 
 void Foreground::Update(float fDeltaTime) {
+  if (m_pSong == nullptr || GAMESTATE == nullptr || !std::isfinite(fDeltaTime)) {
+    return;
+  }
+
   // Calls to Update() should *not* be scaled by music rate unless
   // RateModsAffectFGChanges is enabled. Undo it.
-  const float fRate = PREFSMAN->m_bRateModsAffectTweens
-                          ? 1.0f
-                          : GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
+  const float fRate = SafeForegroundRate();
 
   for (unsigned i = 0; i < m_BGAnimations.size(); ++i) {
     LoadedBGA& bga = m_BGAnimations[i];
+    if (bga.m_bga == nullptr) {
+      continue;
+    }
 
     if (GAMESTATE->m_Position.m_fSongBeat < bga.m_fStartBeat) {
       // The animation hasn't started yet.
@@ -106,6 +178,11 @@ void Foreground::Update(float fDeltaTime) {
 
     // This shouldn't go down, but be safe:
     lDeltaTime = std::max(lDeltaTime, 0.0f);
+    if (!std::isfinite(lDeltaTime)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-719: Foreground clamped non-finite delta time.");
+      lDeltaTime = 0.0f;
+    }
 
     bga.m_bga->Update(lDeltaTime / fRate);
 

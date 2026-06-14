@@ -11,6 +11,7 @@ class Song;
 /** @brief Foreground in front of notes while playing. */
 class Foreground : public ActorFrame {
  public:
+  Foreground();
   ~Foreground();
   void Unload();
   void LoadFromSong(const Song* pSong);
