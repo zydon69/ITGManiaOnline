@@ -3,6 +3,25 @@
 #include "RageLog.h"
 #include "RageUtil.h"
 
+static std::string CFStringValue(CFTypeRef object) {
+  if (!object || CFGetTypeID(object) != CFStringGetTypeID()) {
+    return "";
+  }
+
+  CFStringRef string = CFStringRef(object);
+  const char* direct = CFStringGetCStringPtr(string, kCFStringEncodingUTF8);
+  if (direct) {
+    return direct;
+  }
+
+  char buffer[512] = "";
+  if (CFStringGetCString(string, buffer, sizeof(buffer), kCFStringEncodingUTF8)) {
+    return buffer;
+  }
+
+  return "";
+}
+
 HIDDevice::HIDDevice()
     : m_Interface(nullptr), m_Queue(nullptr), m_bRunning(false) {}
 
@@ -52,20 +71,20 @@ bool HIDDevice::Open(io_object_t device) {
   if (!IntValue(pidRef, pid)) {
     pid = 0;
   }
+
+  m_sDescription = CFStringValue(object);
+  if (m_sDescription == "") {
+    m_sDescription = ssprintf("%04x:%04x", vid, pid);
+  }
+
   if (!InitDevice(vid, pid)) {
-    LOG->Warn("Couldn't initialize device.");
+    LOG->Warn(
+        "Couldn't initialize HID device %s (vendor=%04x product=%04x).",
+        m_sDescription.c_str(), vid, pid);
     CFRelease(properties);
     return false;
   }
 
-  if (object && CFGetTypeID(object) == CFStringGetTypeID()) {
-    const char* str =
-        CFStringGetCStringPtr(CFStringRef(object), CFStringGetSystemEncoding());
-    m_sDescription = str ? str : "";
-  }
-  if (m_sDescription == "") {
-    m_sDescription = ssprintf("%04x:%04x", vid, pid);
-  }
   LOG->Trace("\t\tDevice description: %s", m_sDescription.c_str());
 
   object = CFDictionaryGetValue(properties, CFSTR(kIOHIDElementKey));
