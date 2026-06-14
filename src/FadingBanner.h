@@ -40,7 +40,12 @@ class FadingBanner : public ActorFrame {
   virtual void DrawPrimitives();
 
   int GetLatestIndex() { return m_iIndexLatest; }
-  Banner GetBanner(int i) { return m_Banner[i]; }
+  Banner GetBanner(int i) {
+    if (i < 0 || i >= NUM_BANNERS) {
+      i = m_iIndexLatest;
+    }
+    return m_Banner[i];
+  }
 
   // Lua
   void PushSelf(lua_State* L);

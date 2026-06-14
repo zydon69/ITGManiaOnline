@@ -1,5 +1,6 @@
 #include "Banner.h"
 
+#include <cmath>
 #include <string>
 
 #include "Actor.h"
@@ -12,6 +13,7 @@
 #include "ImageCache.h"
 #include "LuaManager.h"
 #include "PrefsManager.h"
+#include "RageLog.h"
 #include "RageTextureID.h"
 #include "RageTextureManager.h"
 #include "RageTypes.h"
@@ -30,6 +32,30 @@ ThemeMetric<bool> SCROLL_ROULETTE("Banner", "ScrollRoulette");
 ThemeMetric<bool> SCROLL_MODE("Banner", "ScrollMode");
 ThemeMetric<bool> SCROLL_SORT_ORDER("Banner", "ScrollSortOrder");
 ThemeMetric<float> SCROLL_SPEED_DIVISOR("Banner", "ScrollSpeedDivisor");
+
+namespace {
+class OddDimensionWarningGuard {
+ public:
+  OddDimensionWarningGuard() : m_active(TEXTUREMAN != nullptr) {
+    if (m_active) {
+      TEXTUREMAN->DisableOddDimensionWarning();
+    }
+  }
+
+  ~OddDimensionWarningGuard() {
+    if (m_active && TEXTUREMAN != nullptr) {
+      TEXTUREMAN->EnableOddDimensionWarning();
+    }
+  }
+
+ private:
+  bool m_active;
+};
+
+bool IsFiniteFloat(float value) {
+  return std::isfinite(value);
+}
+}  // namespace
 
 Banner::Banner() {
   m_bScrolling = false;
@@ -55,9 +81,8 @@ void Banner::Load(RageTextureID ID, bool bIsBanner) {
   m_fPercentScrolling = 0;
   m_bScrolling = false;
 
-  TEXTUREMAN->DisableOddDimensionWarning();
+  OddDimensionWarningGuard oddDimensionWarningGuard;
   Sprite::Load(ID);
-  TEXTUREMAN->EnableOddDimensionWarning();
 };
 
 void Banner::LoadFromCachedBanner(const std::string& sPath) {
@@ -68,7 +93,9 @@ void Banner::LoadFromCachedBanner(const std::string& sPath) {
 
   RageTextureID ID;
   const bool bIsMovie = ActorUtil::GetFileType(sPath) == FT_Movie;
-  bool bLowRes = !bIsMovie && (PREFSMAN->m_ImageCache != IMGCACHE_FULL);
+  const bool bLowRes =
+      !bIsMovie && PREFSMAN != nullptr && IMAGECACHE != nullptr &&
+      (PREFSMAN->m_ImageCache != IMGCACHE_FULL);
   if (!bLowRes) {
     ID = Sprite::SongBannerTexture(sPath);
   } else {
@@ -76,7 +103,7 @@ void Banner::LoadFromCachedBanner(const std::string& sPath) {
     ID = IMAGECACHE->LoadCachedImage("Banner", sPath);
   }
 
-  if (TEXTUREMAN->IsTextureRegistered(ID)) {
+  if (TEXTUREMAN != nullptr && TEXTUREMAN->IsTextureRegistered(ID)) {
     Load(ID);
   } else if (IsAFile(sPath)) {
     Load(sPath);
@@ -89,10 +116,29 @@ void Banner::Update(float fDeltaTime) {
   Sprite::Update(fDeltaTime);
 
   if (m_bScrolling) {
-    m_fPercentScrolling += fDeltaTime / (float)SCROLL_SPEED_DIVISOR;
-    m_fPercentScrolling -= (int)m_fPercentScrolling;
+    const float divisor = SCROLL_SPEED_DIVISOR;
+    if (!IsFiniteFloat(divisor) || divisor <= 0.0f ||
+        !IsFiniteFloat(fDeltaTime) || !IsFiniteFloat(m_fPercentScrolling)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-723: Banner disabled invalid scrolling state "
+          "divisor=%.6f delta=%.6f percent=%.6f.",
+          divisor, fDeltaTime, m_fPercentScrolling);
+      m_bScrolling = false;
+      m_fPercentScrolling = 0.0f;
+      return;
+    }
+
+    m_fPercentScrolling += fDeltaTime / divisor;
+    m_fPercentScrolling =
+        m_fPercentScrolling - std::floor(m_fPercentScrolling);
 
     const RectF* pTextureRect = GetCurrentTextureCoordRect();
+    if (pTextureRect == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-723: Banner skipped scrolling because no texture "
+          "coord rect is available.");
+      return;
+    }
 
     float fTexCoords[8] = {
         0 + m_fPercentScrolling, pTextureRect->top,     // top left
@@ -106,7 +152,14 @@ void Banner::Update(float fDeltaTime) {
 
 void Banner::SetScrolling(bool bScroll, float Percent) {
   m_bScrolling = bScroll;
-  m_fPercentScrolling = Percent;
+  if (!IsFiniteFloat(Percent)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-723: Banner clamped non-finite scrolling percent "
+        "%.6f.",
+        Percent);
+    Percent = 0.0f;
+  }
+  m_fPercentScrolling = Percent - std::floor(Percent);
 
   // Set up the texture coord rects for the current state.
   Update(0);
@@ -131,6 +184,16 @@ void Banner::LoadMode() {
 }
 
 void Banner::LoadFromSongGroup(std::string sSongGroup) {
+  if (SONGMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-724: Banner cannot load group '%s' without "
+        "SONGMAN.",
+        sSongGroup.c_str());
+    LoadGroupFallback();
+    m_bScrolling = false;
+    return;
+  }
+
   std::string sGroupBannerPath = SONGMAN->GetSongGroupBannerPath(sSongGroup);
   if (sGroupBannerPath != "") {
     Load(sGroupBannerPath);
@@ -214,6 +277,14 @@ void Banner::LoadCourseFallback() {
 }
 
 void Banner::LoadFallbackCharacterIcon() {
+  if (CHARMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-724: Banner cannot load fallback character icon "
+        "without CHARMAN.");
+    LoadFallback();
+    return;
+  }
+
   Character* pCharacter = CHARMAN->GetDefaultCharacter();
   if (pCharacter && !pCharacter->GetIconPath().empty()) {
     Load(pCharacter->GetIconPath(), false);
@@ -310,10 +381,10 @@ class LunaBanner : public Luna<Banner> {
   }
   static int LoadCardFromCharacter(T* p, lua_State* L) {
     if (lua_isnil(L, 1)) {
-      p->LoadIconFromCharacter(nullptr);
+      p->LoadCardFromCharacter(nullptr);
     } else {
       Character* pC = Luna<Character>::check(L, 1);
-      p->LoadIconFromCharacter(pC);
+      p->LoadCardFromCharacter(pC);
     }
     COMMON_RETURN_SELF;
   }

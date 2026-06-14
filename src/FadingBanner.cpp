@@ -12,6 +12,7 @@
 #include "ImageCache.h"
 #include "LuaManager.h"
 #include "PrefsManager.h"
+#include "RageLog.h"
 #include "RageTexture.h"
 #include "RageTextureID.h"
 #include "RageTextureManager.h"
@@ -134,7 +135,9 @@ bool FadingBanner::LoadFromCachedBanner(const std::string& path) {
 
   RageTextureID ID;
   const bool bIsMovie = ActorUtil::GetFileType(path) == FT_Movie;
-  bool bLowRes = !bIsMovie && (PREFSMAN->m_ImageCache != IMGCACHE_FULL);
+  const bool bLowRes =
+      !bIsMovie && PREFSMAN != nullptr && IMAGECACHE != nullptr &&
+      (PREFSMAN->m_ImageCache != IMGCACHE_FULL);
   if (!bLowRes) {
     ID = Sprite::SongBannerTexture(path);
   } else {
@@ -142,7 +145,7 @@ bool FadingBanner::LoadFromCachedBanner(const std::string& path) {
     ID = IMAGECACHE->LoadCachedImage("Banner", path);
   }
 
-  if (!TEXTUREMAN->IsTextureRegistered(ID)) {
+  if (TEXTUREMAN == nullptr || !TEXTUREMAN->IsTextureRegistered(ID)) {
     /* Oops. We couldn't load a banner quickly. We can load the actual
      * banner, but that's slow, so we don't want to do that when we're moving
      * fast on the music wheel. In that case, we should just keep the banner
@@ -150,6 +153,10 @@ bool FadingBanner::LoadFromCachedBanner(const std::string& path) {
      * we'll get called again and load the real banner. */
 
     if (m_bMovingFast) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX SRC-727: FadingBanner deferred uncached banner '%s' "
+          "while moving fast.",
+          path.c_str());
       return false;
     }
 
@@ -189,6 +196,15 @@ void FadingBanner::LoadMode() {
 }
 
 void FadingBanner::LoadFromSongGroup(std::string sSongGroup) {
+  if (SONGMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-728: FadingBanner cannot load group '%s' without "
+        "SONGMAN.",
+        sSongGroup.c_str());
+    LoadFallback();
+    return;
+  }
+
   const std::string sGroupBannerPath =
       SONGMAN->GetSongGroupBannerPath(sSongGroup);
   LoadFromCachedBanner(sGroupBannerPath);
@@ -248,6 +264,14 @@ void FadingBanner::LoadCourseFallback() {
 }
 
 void FadingBanner::LoadCustom(std::string sBanner) {
+  if (THEME == nullptr || sBanner.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-728: FadingBanner refused custom banner '%s'.",
+        sBanner.c_str());
+    LoadFallback();
+    return;
+  }
+
   BeforeChange();
   m_Banner[m_iIndexLatest].Load(THEME->GetPathG("Banner", sBanner));
   m_Banner[m_iIndexLatest].PlayCommand(sBanner);
