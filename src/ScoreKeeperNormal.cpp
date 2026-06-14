@@ -90,6 +90,15 @@ int AddIntSaturated(int current, int delta, const char* context) {
       static_cast<int64_t>(current) + static_cast<int64_t>(delta), context);
 }
 
+int AddDancePointsClampedNonNegative(
+    int current, int delta, const char* context) {
+  const int value = AddIntSaturated(current, delta, context);
+  if (value < 0) {
+    return 0;
+  }
+  return value;
+}
+
 int AddNonNegativeIntSaturated(int current, int delta, const char* context) {
   int value = AddIntSaturated(std::max(0, current), std::max(0, delta), context);
   if (value < 0) {
@@ -756,10 +765,11 @@ void ScoreKeeperNormal::HandleTapScore(const TapNote& tn) {
     }
     if (tns == TNS_HitMine) {
       if (!m_pPlayerStageStats->m_bFailed) {
-        m_pPlayerStageStats->m_iActualDancePoints = AddIntSaturated(
-            m_pPlayerStageStats->m_iActualDancePoints,
-            TapNoteScoreToDancePoints(TNS_HitMine),
-            "ScoreKeeperNormal::HandleTapScore actual dance points");
+        m_pPlayerStageStats->m_iActualDancePoints =
+            AddDancePointsClampedNonNegative(
+                m_pPlayerStageStats->m_iActualDancePoints,
+                TapNoteScoreToDancePoints(TNS_HitMine),
+                "ScoreKeeperNormal::HandleTapScore actual dance points");
       }
       m_pPlayerStageStats->m_iTapNoteScores[TNS_HitMine] =
           AddNonNegativeIntSaturated(
@@ -816,10 +826,11 @@ void ScoreKeeperNormal::HandleTapNoteScoreInternal(
 
   // Update dance points.
   if (!m_pPlayerStageStats->m_bFailed) {
-    m_pPlayerStageStats->m_iActualDancePoints = AddIntSaturated(
-        m_pPlayerStageStats->m_iActualDancePoints,
-        TapNoteScoreToDancePoints(tns),
-        "ScoreKeeperNormal::HandleTapNoteScoreInternal actual dance points");
+    m_pPlayerStageStats->m_iActualDancePoints =
+        AddDancePointsClampedNonNegative(
+            m_pPlayerStageStats->m_iActualDancePoints,
+            TapNoteScoreToDancePoints(tns),
+            "ScoreKeeperNormal::HandleTapNoteScoreInternal actual dance points");
   }
 
   // update judged row totals. Respect Combo segments here.
@@ -1112,10 +1123,11 @@ void ScoreKeeperNormal::HandleHoldScore(const TapNote& tn) {
 
   // update dance points totals
   if (!m_pPlayerStageStats->m_bFailed) {
-    m_pPlayerStageStats->m_iActualDancePoints = AddIntSaturated(
-        m_pPlayerStageStats->m_iActualDancePoints,
-        HoldNoteScoreToDancePoints(holdScore),
-        "ScoreKeeperNormal::HandleHoldScore actual dance points");
+    m_pPlayerStageStats->m_iActualDancePoints =
+        AddDancePointsClampedNonNegative(
+            m_pPlayerStageStats->m_iActualDancePoints,
+            HoldNoteScoreToDancePoints(holdScore),
+            "ScoreKeeperNormal::HandleHoldScore actual dance points");
   }
   // increment the current total possible dance score
   m_pPlayerStageStats->m_iCurPossibleDancePoints = AddNonNegativeIntSaturated(
