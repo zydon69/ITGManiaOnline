@@ -87,6 +87,12 @@ local function build_scroller_data()
 	return scroller_data
 end
 
+local function data_for_scroller_info(info)
+	if type(info) ~= "table" then return nil end
+	if info.isCreateProfile or info.index == 0 then return info end
+	return profile_data[(info.index or 0) + index_padding]
+end
+
 local function rebuild_profile_data_from_manager()
 	local existing_by_dir = {}
 	for profile in ivalues(profile_data) do
@@ -324,9 +330,7 @@ Handle.MenuLeft = function(event)
 			scrollers[event.PlayerNumber]:scroll_by_amount(-1)
 
 			local new_info = scrollers[event.PlayerNumber]:get_info_at_focus_pos()
-			local data = type(new_info) == "table" and new_info.isCreateProfile
-				and new_info
-				or profile_data[(type(new_info) == "table" and new_info.index or 0) + index_padding]
+			local data = data_for_scroller_info(new_info)
 			local frame = af:GetChild(ToEnumShortString(event.PlayerNumber) .. 'Frame')
 			frame:GetChild("SelectedProfileText"):settext(data and data.displayname or "")
 			frame:playcommand("Set", data)
@@ -343,15 +347,14 @@ Handle.MenuRight = function(event)
 	if GAMESTATE:IsHumanPlayer(event.PlayerNumber) and MEMCARDMAN:GetCardState(event.PlayerNumber) == 'MemoryCardState_none' then
 		local info = scrollers[event.PlayerNumber]:get_info_at_focus_pos()
 		local index = type(info)=="table" and info.index or 0
+		local can_move_to_guest = type(info) == "table" and info.isCreateProfile
 
-		if index+1 <= PROFILEMAN:GetNumLocalProfiles() then
+		if can_move_to_guest or index+1 <= PROFILEMAN:GetNumLocalProfiles() then
 			MESSAGEMAN:Broadcast("DirectionButton")
 			scrollers[event.PlayerNumber]:scroll_by_amount(1)
 
 			local new_info = scrollers[event.PlayerNumber]:get_info_at_focus_pos()
-			local data = type(new_info) == "table" and new_info.isCreateProfile
-				and new_info
-				or profile_data[(type(new_info) == "table" and new_info.index or 0) + index_padding]
+			local data = data_for_scroller_info(new_info)
 			local frame = af:GetChild(ToEnumShortString(event.PlayerNumber) .. 'Frame')
 			frame:GetChild("SelectedProfileText"):settext(data and data.displayname or "")
 			frame:playcommand("Set", data)
