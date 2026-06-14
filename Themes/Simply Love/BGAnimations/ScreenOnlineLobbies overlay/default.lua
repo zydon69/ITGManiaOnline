@@ -102,6 +102,12 @@ local function browse_button_y(idx)
 	return -62 + offset * (browse_button_height + browse_button_spacing)
 end
 
+local function online_menu_button(button)
+	if button == "MenuUp" then return "MenuLeft" end
+	if button == "MenuDown" then return "MenuRight" end
+	return button
+end
+
 local function focus_selected_browse_list(root)
 	if not root then return end
 	if lobby_view == "players" then
@@ -526,17 +532,6 @@ function joined_all_players_ready()
 	return true
 end
 
-local function joined_manager_profile_name()
-	if joined_manager_user_id == nil then return nil end
-	local managerId = tostring(joined_manager_user_id)
-	for _, player in ipairs(joined_lobby_players or {}) do
-		if tostring(player.playerId or "") == managerId then
-			return trim_text(player.profileName or player.name or player.playerId)
-		end
-	end
-	return nil
-end
-
 local function joined_not_ready_player_names()
 	local names = {}
 	for _, player in ipairs(joined_lobby_players or {}) do
@@ -889,6 +884,7 @@ end
 local InputHandler = function(event)
   if not event.PlayerNumber or not event.button then return false end
 	if not t then return false end
+	event.GameButton = online_menu_button(event.GameButton)
 
   if event.type == "InputEventType_FirstPress" then
 		if showing_leave_confirm then
@@ -1452,10 +1448,13 @@ local af = Def.ActorFrame{
 				codeValue:settext(joined_lobby_code ~= "" and joined_lobby_code or "(en attente)")
 		end
 
-			local lines = {}
-			for i, player in ipairs(joined_lobby_players) do
-					local profile = trim_text(player.profileName or player.name or player.playerId or ("Joueur "..i))
-				local ready = player.ready and " ✔" or ""
+				local lines = {}
+				for i, player in ipairs(joined_lobby_players) do
+						local profile = trim_text(player.profileName or player.name or player.playerId or ("Joueur "..i))
+					if tostring(player.playerId or "") == tostring(joined_manager_user_id or "") then
+						profile = "♛ " .. profile
+					end
+					local ready = player.ready and " ✔" or ""
 				local missing = ""
 				local packSyncText = pack_sync_line_for_player(player)
 				local packSyncStatus = trim_text(player.packSyncStatus)
@@ -1495,22 +1494,18 @@ local af = Def.ActorFrame{
 		end
 			update_joined_song_card(joinedContent)
 
-			local songStatus = joinedContent and joinedContent:GetChild("JoinedLobbySongStatus")
-			if songStatus then
-				local statusLines = {}
-				local managerName = joined_manager_profile_name()
-				local managerLabel = managerName and (managerName .. " (" .. tostring(joined_manager_user_id or "?") .. ")")
-					or tostring(joined_manager_user_id or "unknown")
-					statusLines[#statusLines + 1] = "Manager : " .. managerLabel
+				local songStatus = joinedContent and joinedContent:GetChild("JoinedLobbySongStatus")
+				if songStatus then
+					local statusLines = {}
 
-				local missingSongInfo = joined_missing_song_info or joined_song_preview
-				if joined_missing_song and missingSongInfo then
-					if joined_missing_song_reason == "song_hash_mismatch" then
-						statusLines[#statusLines + 1] = "La stepchart existe localement, mais l'audio est différent de celui du manager."
-						statusLines[#statusLines + 1] = "Le mode online exige la même musique et la même stepchart."
-					elseif joined_missing_song_reason == "chart_mismatch" or joined_missing_song_reason == "hash_mismatch" then
-						statusLines[#statusLines + 1] = "La musique ou la stepchart trouvée est différente de celle du manager."
-						statusLines[#statusLines + 1] = "Veuillez supprimer le pack manuellement, recharger Songs, puis télécharger à nouveau le pack."
+					local missingSongInfo = joined_missing_song_info or joined_song_preview
+					if joined_missing_song and missingSongInfo then
+						if joined_missing_song_reason == "song_hash_mismatch" then
+							statusLines[#statusLines + 1] = "La stepchart existe localement, mais l'audio est different de celui du salon."
+							statusLines[#statusLines + 1] = "Le mode online exige la même musique et la même stepchart."
+						elseif joined_missing_song_reason == "chart_mismatch" or joined_missing_song_reason == "hash_mismatch" then
+							statusLines[#statusLines + 1] = "La musique ou la stepchart trouvée est différente de celle du salon."
+							statusLines[#statusLines + 1] = "Veuillez supprimer le pack manuellement, recharger Songs, puis télécharger à nouveau le pack."
 					elseif joined_missing_song_reason == "download_failed" then
 						if pack_choice_all_candidates_exhausted then
 							statusLines[#statusLines + 1] = "Aucun pack candidat ne contient la chart attendue."
@@ -1519,13 +1514,13 @@ local af = Def.ActorFrame{
 							statusLines[#statusLines + 1] = "Le téléchargement du pack a échoué."
 							statusLines[#statusLines + 1] = "Veuillez réessayer ou installer le pack manuellement."
 						end
-					elseif joined_missing_song_reason == "missing_local_song" and joined_can_download_pack then
-						statusLines[#statusLines + 1] = "Vous ne possédez pas ce pack localement."
-						statusLines[#statusLines + 1] = "Vous pouvez télécharger le pack utilisé par le manager."
-					elseif joined_can_download_pack then
-						statusLines[#statusLines + 1] = "Cette chanson existe peut-être dans vos packs,"
-						statusLines[#statusLines + 1] = "mais aucune stepchart identique à celle du manager n’a été trouvée."
-						statusLines[#statusLines + 1] = "Vous pouvez télécharger le pack utilisé par le manager."
+						elseif joined_missing_song_reason == "missing_local_song" and joined_can_download_pack then
+							statusLines[#statusLines + 1] = "Vous ne possédez pas ce pack localement."
+							statusLines[#statusLines + 1] = "Vous pouvez télécharger le pack utilisé par le salon."
+						elseif joined_can_download_pack then
+							statusLines[#statusLines + 1] = "Cette chanson existe peut-être dans vos packs,"
+							statusLines[#statusLines + 1] = "mais aucune stepchart identique à celle du salon n’a été trouvée."
+							statusLines[#statusLines + 1] = "Vous pouvez télécharger le pack utilisé par le salon."
 					else
 							statusLines[#statusLines + 1] = "Pack de chansons manquant ou different localement"
 					end
@@ -1533,33 +1528,29 @@ local af = Def.ActorFrame{
 					if countdownSeconds and joined_can_download_pack and not pack_sync_busy() then
 						statusLines[#statusLines + 1] = "Cliquez sur \"Telecharger pack\" dans " .. tostring(countdownSeconds) .. " s."
 					end
-					elseif joined_song_preview then
-						statusLines[#statusLines + 1] = (joined_song_confirmed and "✔ Chanson selectionnee" or "Choix de chanson en cours")
-					if joined_preview_unknown_pack and not joined_song_confirmed then
-						statusLines[#statusLines + 1] = "Le manager navigue dans un pack que vous ne possédez pas."
-					end
-						if joined_phase == "playing" then
-							statusLines[#statusLines + 1] = "Manche en cours. En attente de la fin pour tous."
-						elseif joined_phase == "results" then
-							statusLines[#statusLines + 1] = joined_is_manager and "Resultats prets. Choisissez la prochaine chanson."
-								or "Resultats prets. En attente du choix du manager."
+						elseif joined_song_preview then
+							statusLines[#statusLines + 1] = (joined_song_confirmed and "✔ Chanson selectionnee" or "Choix de chanson en cours")
+						if joined_preview_unknown_pack and not joined_song_confirmed then
+							statusLines[#statusLines + 1] = "Pack absent localement."
+						end
+							if joined_phase == "playing" then
+								statusLines[#statusLines + 1] = "Manche en cours. En attente de la fin pour tous."
+							elseif joined_phase == "results" then
+								statusLines[#statusLines + 1] = "Resultats prets."
 						elseif joined_phase == "starting" then
 							local seconds = ITGOnline and ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or nil
 							statusLines[#statusLines + 1] = seconds and ("Demarrage dans " .. tostring(math.ceil(math.max(0, seconds))) .. "...") or "Demarrage..."
-						elseif joined_phase == "config" or joined_phase == "lobby_ready" then
-							if joined_any_player_missing_song() then
-								statusLines[#statusLines + 1] = "En attente de confirmation de la chanson par tous les joueurs."
-							else
-								statusLines[#statusLines + 1] = joined_is_manager and "Chanson confirmee. Appuyez sur START."
-									or "Chanson confirmee. En attente du lancement par le manager."
+							elseif joined_phase == "config" or joined_phase == "lobby_ready" then
+								if joined_any_player_missing_song() then
+									statusLines[#statusLines + 1] = "En attente de confirmation de la chanson par tous les joueurs."
+								end
 							end
-						end
-				elseif joined_is_manager then
-					statusLines[#statusLines + 1] = "Choisissez une chanson pour lancer la manche."
-				else
-						statusLines[#statusLines + 1] = "En attente du choix de chanson par le createur du salon."
-				end
-				songStatus:settext(table.concat(statusLines, "\n"))
+					elseif joined_is_manager then
+						statusLines[#statusLines + 1] = "Choisissez une chanson pour lancer la manche."
+					else
+						statusLines[#statusLines + 1] = ""
+					end
+					songStatus:settext(table.concat(statusLines, "\n"):gsub("^%s+", ""):gsub("%s+$", ""))
 				songStatus:diffuse(joined_missing_song and Color.Red or joined_song_confirmed and Color.Green or Color.White)
 			end
 
@@ -1797,11 +1788,16 @@ local af = Def.ActorFrame{
 			end
 		end
 	end,
-	LobbySearchedMessageCommand=function(self, params)
-		candidates = params and params.lobbies or {}
-		online_users = params and params.onlinePlayers or {}
+		LobbySearchedMessageCommand=function(self, params)
+			candidates = params and params.lobbies or {}
+			online_users = params and params.onlinePlayers or {}
+			if #online_users == 0 then
+				online_player_index = 1
+			else
+				online_player_index = math.max(1, math.min(online_player_index, #online_users))
+			end
 
-		local lobbyContent = self:GetChild("LobbyContent")
+			local lobbyContent = self:GetChild("LobbyContent")
 		if lobbyContent then
 			local lobbyList = lobbyContent:GetChild("LobbyList")
 			if lobbyList then
@@ -1822,11 +1818,12 @@ local af = Def.ActorFrame{
 
 		if not pack_sync_busy() then
 			self:GetChild("NetworkStatus"):visible(false)
-		end
-		self:queuecommand("UpdateLobbyView")
-		self:GetChild("JoinedLobbyContent"):visible(mode == "joined")
-		self:queuecommand("Hover")
-	end,
+			end
+			self:queuecommand("UpdateLobbyView")
+			self:queuecommand("UpdateOnlinePlayers")
+			self:GetChild("JoinedLobbyContent"):visible(mode == "joined")
+			self:queuecommand("Hover")
+		end,
 		OnlineLobbyStateMessageCommand=function(self, params)
 			local previousLobbyCode = joined_lobby_code
 			clear_pending_join()
@@ -2133,15 +2130,8 @@ local af = Def.ActorFrame{
 			self:visible(false)
 		end,
   
-		LoadFont("Common Normal")..{
-				Text="&MENULEFT;/&MENURIGHT; pour choisir | &START; pour valider | &SELECT; ou &MENULEFT;+&MENURIGHT; pour revenir",
-			InitCommand=function(self)
-				self:y(185):zoom(0.72)
-			end
-		},
-
-		Def.ActorFrame{
-			Name="LobbyList",
+			Def.ActorFrame{
+				Name="LobbyList",
 			InitCommand=function(self)
 				self:x(browse_lobby_x)
 				self.idx = 0
@@ -2432,15 +2422,8 @@ local af = Def.ActorFrame{
 		end,
 		HoverCommand=function(self) end,
 
-		LoadFont("Common Normal")..{
-				Text="&MENULEFT;/&MENURIGHT; pour choisir | &START; pour valider",
-			InitCommand=function(self)
-				self:visible(false)
-			end
-		},
-
-		Def.Quad{
-			Name="OnlinePlayersBorder",
+			Def.Quad{
+				Name="OnlinePlayersBorder",
 			InitCommand=function(self)
 				self:zoomto(browse_panel_width,browse_panel_height):x(browse_players_x):y(browse_panel_y):diffuse(Color.White)
 			end,
