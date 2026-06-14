@@ -28,11 +28,6 @@ local info = {
 
 local avatar_dim = info.w - (info.padding * 2.25)
 
--- account for the possibility that there are no local profiles and
--- we want "[ Guest ]" to start in the middle, with focus
-if PROFILEMAN:GetNumLocalProfiles() <= 0 then
-	scroller.y = row_height * -3.5
-end
 -- -----------------------------------------------------------------------
 
 local initial_data = profile_data[0]
