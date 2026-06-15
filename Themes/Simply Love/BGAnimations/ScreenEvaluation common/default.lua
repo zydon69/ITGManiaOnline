@@ -176,6 +176,9 @@ t[#t+1] = LoadActor("./Shared/TitleAndBanner.lua")
 -- under the banner
 t[#t+1] = LoadActor("./Shared/SongFeatures.lua")
 
+-- online final ranking, displayed only after the server has validated results
+t[#t+1] = LoadActor("./Shared/OnlineFinalRanking.lua")
+
 -- store some attributes of this playthrough of this song in the global SL table
 -- for later retrieval on ScreenEvaluationSummary
 t[#t+1] = LoadActor("./Shared/GlobalStorage.lua")

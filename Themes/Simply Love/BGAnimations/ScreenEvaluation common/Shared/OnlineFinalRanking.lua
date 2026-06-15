@@ -1,0 +1,131 @@
+local max_rows = 8
+
+local function localized(name, fallback)
+	if THEME:HasString("ScreenEvaluation", name) then
+		return THEME:GetString("ScreenEvaluation", name)
+	end
+	return fallback
+end
+
+local function clamp(value, min_value, max_value)
+	return math.max(min_value, math.min(max_value, value))
+end
+
+local function final_results()
+	if not (ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.play_state) then
+		return {}
+	end
+
+	local results = ITGOnline.currentRoom.play_state.final_results
+	if type(results) ~= "table" then
+		return {}
+	end
+
+	local normalized = {}
+	for index, result in ipairs(results) do
+		if type(result) == "table" then
+			local user = type(result.user) == "table" and result.user or {}
+			normalized[#normalized + 1] = {
+				rank = tonumber(result.rank) or index,
+				name = tostring(user.name or localized("OnlineUnknownPlayer", "Player")),
+				score = math.floor(tonumber(result.score) or 0),
+				score_percent = tonumber(result.score_percent),
+				accuracy = tonumber(result.accuracy),
+				failed = result.failed and true or false,
+			}
+		end
+	end
+
+	table.sort(normalized, function(a, b)
+		return (tonumber(a.rank) or 0) < (tonumber(b.rank) or 0)
+	end)
+
+	return normalized
+end
+
+local width = clamp(_screen.w * 0.16, 230, 320)
+local row_height = clamp(_screen.h * 0.022, 18, 24)
+local panel_height = 32 + (row_height * max_rows)
+local panel_x = _screen.cx + math.min(_screen.w * 0.23, 470)
+local panel_y = clamp(_screen.h * 0.105, 72, 120)
+
+local t = Def.ActorFrame{
+	Name="OnlineFinalRanking",
+	InitCommand=function(self)
+		self:xy(panel_x, panel_y):visible(false)
+	end,
+	OnCommand=function(self)
+		self:queuecommand("Refresh")
+	end,
+	OnlineLobbyStateMessageCommand=function(self)
+		self:queuecommand("Refresh")
+	end,
+	ITGOnlinePlayStateUpdatedMessageCommand=function(self)
+		self:queuecommand("Refresh")
+	end,
+	RefreshCommand=function(self)
+		self:stoptweening()
+		local rows = final_results()
+		local show = #rows > 0
+		self:visible(show)
+		self.polling_active = show
+
+		if show then
+			self:GetChild("Title"):settext(localized("OnlineFinalRanking", "Online ranking"))
+			for i = 1, max_rows do
+				local row = self:GetChild("Row" .. tostring(i))
+				local data = rows[i]
+				if row and data then
+					local percent = data.score_percent or data.accuracy or 0
+					local suffix = data.failed and " F" or ""
+					local line = string.format("%d. %s  %.2f%%%s", data.rank, data.name, percent, suffix)
+					row:settext(line)
+					row:maxwidth(width / 0.42)
+					row:diffuse(data.failed and color("#ff3b30") or Color.White)
+					row:visible(true)
+				elseif row then
+					row:visible(false)
+				end
+			end
+		end
+
+		if self.polling_active then
+			self:sleep(0.5):queuecommand("Refresh")
+		end
+	end,
+
+	Def.Quad{
+		Name="Background",
+		InitCommand=function(self)
+			self:setsize(width, panel_height)
+				:diffuse(color("#101820"))
+				:diffusealpha(0.82)
+		end,
+	},
+
+	LoadFont("Common Bold")..{
+		Name="Title",
+		InitCommand=function(self)
+			self:horizalign(left)
+				:xy(-width / 2 + 10, -panel_height / 2 + 9)
+				:zoom(0.38)
+				:maxwidth((width - 20) / 0.38)
+				:diffuse(color("#00d8ff"))
+		end,
+	},
+}
+
+for i = 1, max_rows do
+	t[#t+1] = LoadFont("Common Normal")..{
+		Name="Row" .. tostring(i),
+		InitCommand=function(self)
+			self:horizalign(left)
+				:xy(-width / 2 + 10, -panel_height / 2 + 31 + ((i - 1) * row_height))
+				:zoom(0.42)
+				:maxwidth((width - 20) / 0.42)
+				:visible(false)
+		end,
+	}
+end
+
+return t
