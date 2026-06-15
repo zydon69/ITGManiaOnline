@@ -95,6 +95,48 @@ static Preference<bool> g_bAllowMultipleInstances(
     "AllowMultipleInstances", false);
 static bool g_bApplyMaxDisplayResolutionDefault = false;
 
+static float SnapDisplayAspectRatioToSupported(float aspectRatio) {
+  static const float kSupportedAspects[] = {
+      3 / 4.f, 1.f, 4 / 3.f, 5 / 4.f, 16 / 10.f, 16 / 9.f, 8 / 3.f};
+
+  if (aspectRatio <= 0.f) {
+    return 16 / 10.f;
+  }
+
+  float bestAspect = kSupportedAspects[0];
+  float bestDistance = std::fabs(aspectRatio - bestAspect);
+  for (unsigned i = 1; i < ARRAYLEN(kSupportedAspects); ++i) {
+    const float candidate = kSupportedAspects[i];
+    const float distance = std::fabs(aspectRatio - candidate);
+    if (distance < bestDistance) {
+      bestAspect = candidate;
+      bestDistance = distance;
+    }
+  }
+
+  return bestAspect;
+}
+
+static float DetectInitialDisplayAspectRatio(unsigned width, unsigned height) {
+  if (width > 0 && height > 0) {
+    return SnapDisplayAspectRatioToSupported(width / static_cast<float>(height));
+  }
+
+  if (HOOKS != nullptr) {
+    return SnapDisplayAspectRatioToSupported(HOOKS->GetDisplayAspectRatio());
+  }
+
+  return 16 / 10.f;
+}
+
+static bool IsMacOS() {
+#if defined(MACOSX)
+  return true;
+#else
+  return false;
+#endif
+}
+
 void StepMania::GetPreferredVideoModeParams(VideoModeParams& paramsOut) {
   // resolution handling code that probably needs fixing
   int iWidth = PREFSMAN->m_iDisplayWidth;
@@ -108,13 +150,16 @@ void StepMania::GetPreferredVideoModeParams(VideoModeParams& paramsOut) {
     iWidth -= iWidth % 2;
   }
 
+  const bool bUseBorderlessFullscreen =
+      PREFSMAN->m_bFullscreenIsBorderlessWindow ||
+      (IsMacOS() && !PREFSMAN->m_bWindowed);
   paramsOut = VideoModeParams(
-      PREFSMAN->m_bWindowed || PREFSMAN->m_bFullscreenIsBorderlessWindow,
+      PREFSMAN->m_bWindowed || bUseBorderlessFullscreen,
       PREFSMAN->m_sDisplayId, iWidth, PREFSMAN->m_iDisplayHeight,
       PREFSMAN->m_iDisplayColorDepth, PREFSMAN->m_iRefreshRate,
       PREFSMAN->m_bVsync, PREFSMAN->m_bInterlaced, PREFSMAN->m_bSmoothLines,
       PREFSMAN->m_bTrilinearFiltering, PREFSMAN->m_bAnisotropicFiltering,
-      !PREFSMAN->m_bWindowed && PREFSMAN->m_bFullscreenIsBorderlessWindow,
+      !PREFSMAN->m_bWindowed && bUseBorderlessFullscreen,
       CommonMetrics::WINDOW_TITLE, THEME->GetPathG("Common", "window icon"),
       PREFSMAN->m_bPAL, PREFSMAN->m_fDisplayAspectRatio);
 }
@@ -133,9 +178,11 @@ static std::string GetActualGraphicOptionsString() {
   const VideoModeParams& params = DISPLAY->GetActualVideoModeParams();
   std::string sFormat = "%s %s %dx%d %d " + COLOR.GetValue() + " %d " +
                         TEXTURE.GetValue() + " %dHz %s %s";
+  const bool bDisplayAsWindowed =
+      params.windowed && !params.bWindowIsFullscreenBorderless;
   std::string sLog = ssprintf(
       sFormat.c_str(), DISPLAY->GetApiDescription().c_str(),
-      (params.windowed ? WINDOWED : FULLSCREEN).GetValue().c_str(),
+      (bDisplayAsWindowed ? WINDOWED : FULLSCREEN).GetValue().c_str(),
       (int)params.width, (int)params.height, (int)params.bpp,
       (int)PREFSMAN->m_iTextureColorDepth, (int)params.rate,
       (params.vsync ? VSYNC : NO_VSYNC).GetValue().c_str(),
@@ -224,10 +271,12 @@ static void StartDisplay() {
     }
 
     if (bestSpec != nullptr && bestMode != nullptr) {
+      const float detectedAspectRatio =
+          DetectInitialDisplayAspectRatio(bestMode->width, bestMode->height);
       PREFSMAN->m_sDisplayId.Set(bestSpec->id());
       PREFSMAN->m_iDisplayWidth.Set(static_cast<int>(bestMode->width));
       PREFSMAN->m_iDisplayHeight.Set(static_cast<int>(bestMode->height));
-      PREFSMAN->m_fDisplayAspectRatio.Set(16 / 10.f);
+      PREFSMAN->m_fDisplayAspectRatio.Set(detectedAspectRatio);
 
       VideoModeParams params;
       StepMania::GetPreferredVideoModeParams(params);
@@ -241,8 +290,9 @@ static void StartDisplay() {
       } else {
         LOG->Info(
             "Applied first-run display defaults: resolution=%ux%u "
-            "aspect=16:10 display='%s'",
-            bestMode->width, bestMode->height, bestSpec->id().c_str());
+            "aspect=%.6f display='%s'",
+            bestMode->width, bestMode->height, detectedAspectRatio,
+            bestSpec->id().c_str());
       }
     } else {
       LOG->Warn(
@@ -531,6 +581,9 @@ bool CheckVideoDefaultSettings() {
   }
 
   if (bSetDefaultVideoParams) {
+    const float detectedAspectRatio = DetectInitialDisplayAspectRatio(
+        static_cast<unsigned>(defaults.iWidth),
+        static_cast<unsigned>(defaults.iHeight));
     PREFSMAN->m_sVideoRenderers.Set(defaults.sVideoRenderers);
     PREFSMAN->m_iDisplayWidth.Set(defaults.iWidth);
     PREFSMAN->m_iDisplayHeight.Set(defaults.iHeight);
@@ -539,7 +592,7 @@ bool CheckVideoDefaultSettings() {
     PREFSMAN->m_iMovieColorDepth.Set(defaults.iMovieColor);
     PREFSMAN->m_iMaxTextureResolution.Set(defaults.iTextureSize);
     PREFSMAN->m_bSmoothLines.Set(defaults.bSmoothLines);
-    PREFSMAN->m_fDisplayAspectRatio.Set(16 / 10.f);
+    PREFSMAN->m_fDisplayAspectRatio.Set(detectedAspectRatio);
     g_bApplyMaxDisplayResolutionDefault = true;
 
     // Update last seen video card

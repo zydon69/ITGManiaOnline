@@ -600,13 +600,18 @@ void GraphicsWindow::GetDisplaySpecs(DisplaySpecs& out) {
     sDeviceName = dd.DeviceName;
     TrimRight(sDeviceName);
 
-    // Make the DisplaySpec Name more friendly by removing the "\\.\" prefix on
-    // most Windows display devices
     std::string modeName;
-    modeName = sDeviceName;
-    TrimLeft(modeName, "\\");
-    TrimLeft(modeName, ".");
-    TrimLeft(modeName, "\\");
+    modeName = dd.DeviceString;
+    TrimRight(modeName);
+
+    if (modeName.empty()) {
+      // Fallback to the Win32 device identifier if Windows doesn't expose a
+      // human-readable display string.
+      modeName = sDeviceName;
+      TrimLeft(modeName, "\\");
+      TrimLeft(modeName, ".");
+      TrimLeft(modeName, "\\");
+    }
 
     // Get the current display mode
     // Set the ENUM_CURRENT_SETTINGS flag so that we only store DisplaySpecs for

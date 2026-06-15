@@ -1334,9 +1334,26 @@ class AutoreleasePool {
   const VideoModeParams& p = *(const VideoModeParams*)[params pointerValue];
   NSRect contentRect = {{0, 0}, {static_cast<CGFloat>(p.width), static_cast<CGFloat>(p.height)}};
 
-  [m_Window setContentSize:contentRect.size];
   [m_Window setTitle:[NSString stringWithUTF8String:p.sWindowTitle.c_str()]];
-  [m_Window center];
+  if (p.bWindowIsFullscreenBorderless) {
+    NSScreen* screen = [m_Window screen] != nil ? [m_Window screen] : [NSScreen mainScreen];
+    NSRect frame = screen != nil ? [screen frame] : contentRect;
+    [m_Window setStyleMask:NSWindowStyleMaskBorderless];
+    [m_Window setLevel:NSMainMenuWindowLevel + 1];
+    [m_Window setFrame:frame display:YES animate:NO];
+    [m_Window setOpaque:YES];
+    [m_Window setBackgroundColor:[NSColor blackColor]];
+    LOG->Trace(
+        "MacOS borderless fullscreen window configured: frame=%.0fx%.0f at %.0f,%.0f "
+        "requested_render_size=%dx%d",
+        frame.size.width, frame.size.height, frame.origin.x, frame.origin.y,
+        p.width, p.height);
+  } else {
+    [m_Window setLevel:NSNormalWindowLevel];
+    [m_Window setStyleMask:g_iStyleMask];
+    [m_Window setContentSize:contentRect.size];
+    [m_Window center];
+  }
   [m_Window makeKeyAndOrderFront:nil];
 }
 @end
@@ -2005,6 +2022,8 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
   m_CurrentParams.interlaced = p.interlaced;
   m_CurrentParams.PAL = p.PAL;
   m_CurrentParams.fDisplayAspectRatio = p.fDisplayAspectRatio;
+  m_CurrentParams.bWindowIsFullscreenBorderless =
+      p.bWindowIsFullscreenBorderless;
 
 #define X(x) p.x != m_CurrentParams.x
   const bool bRebuildContext = X(bpp) || X(windowed) || !m_Context;

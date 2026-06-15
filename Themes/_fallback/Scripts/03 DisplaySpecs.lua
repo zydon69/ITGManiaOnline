@@ -5,7 +5,7 @@ local cachedSpecs = nil
 local function GetDisplaySpecs()
 	if cachedSpecs == nil then
 		local specs = DISPLAY:GetDisplaySpecs()
-		t = {
+		local t = {
 			ById= function(self, id)
 				for i, d in ipairs(self) do
 					if d:GetId() == id or
@@ -27,6 +27,18 @@ local function GetDisplaySpecs()
 	end
 
 	return cachedSpecs
+end
+
+local function ResolveDisplayModeChoice(specs, choices, choice, fallbackDisplay, fallbackWindowed)
+	if choice == nil then
+		choice = fallbackWindowed and #choices or 1
+	end
+
+	if choice == #choices or specs[choice] == nil then
+		return true, fallbackDisplay
+	end
+
+	return false, specs[choice]:GetId()
 end
 
 -- Ease lookup of OptionRow effects masks
@@ -57,13 +69,15 @@ function ConfDisplayMode()
 		LoadSelections= function(self, list, pn)
 			local windowed = PREFSMAN:GetPreference("Windowed")
 			local displayIdx = FindValue(specs, specs:ById(PREFSMAN:GetPreference("DisplayId")))
-			local i = windowed and #self.Choices or displayIdx
+			local i = windowed and #self.Choices or (displayIdx or 1)
+			if specs[i] == nil then
+				i = #self.Choices
+			end
 			list[i] = true
 		end,
 		SaveSelections= function(self, list, pn)
-			local choice = FindSelection(list)
-			local selWindowed = choice == #self.Choices
-			local selDisplay = selWindowed and origDisplay or specs[choice]:GetId()
+			local selWindowed, selDisplay = ResolveDisplayModeChoice(
+				specs, self.Choices, FindSelection(list), origDisplay, origWindowed)
 
 			-- If we've changed from the established preferences in place at our
 			-- instantiation, then we'll return our effects
@@ -77,8 +91,8 @@ function ConfDisplayMode()
 		NotifyOfSelection= function(self, pn, choice)
 			local curDisplay = PREFSMAN:GetPreference("DisplayId")
 			local curWindowed = PREFSMAN:GetPreference("Windowed")
-			local selWindowed = choice == #self.Choices
-			local selDisplay = selWindowed and curDisplay or specs[choice]:GetId()
+			local selWindowed, selDisplay = ResolveDisplayModeChoice(
+				specs, self.Choices, choice, curDisplay, curWindowed)
 			-- If we've changed from what's currently saved in PREFSMAN,
 			-- then we'll broadcast that state
 			if selWindowed ~= curWindowed
