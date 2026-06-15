@@ -31,6 +31,12 @@ local pos = {
 	[PLAYER_2] = { x=(_screen.cx + clamp(_screen.w, 640, 854)/2.75), y=56 },
 }
 
+if IsUltraWide and NumPlayers == 1 then
+	local difficulty_x = _screen.cx - SL_WideScale(292.5, 342.5)
+	local header_gap = clamp(_screen.w * 0.11, 180, 260)
+	pos[PLAYER_1].x = math.max(pos[PLAYER_1].x, difficulty_x + header_gap)
+end
+
 local pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 
 local StepsOrTrail = (GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(player)) or GAMESTATE:GetCurrentSteps(player)
@@ -146,10 +152,6 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 		self:queuecommand("RedrawScore")
 	end,
 	RedrawScoreCommand=function(self)
-		if IsUsingOnlineGameplayColumns and IsUsingOnlineGameplayColumns() then
-			self:playcommand("OnlineColumnLayout")
-		end
-
 		local exPercent = CalculateExScore(player)
 		local hardExPercent = CalculateHardExScore(player)
 		local dance_points = pss:GetPercentDancePoints()

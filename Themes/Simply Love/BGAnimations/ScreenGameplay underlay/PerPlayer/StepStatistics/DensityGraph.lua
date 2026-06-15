@@ -1,4 +1,4 @@
-local player, width, start_offset = unpack(...)
+local player, width, start_offset, header_height = unpack(...)
 
 local style = GAMESTATE:GetCurrentStyle():GetName();
 if style == "double" then width = width * 0.95 end
@@ -15,7 +15,7 @@ local offset = 0
 
 local IsUltraWide = (GetScreenAspectRatio() > 21/9)
 local NoteFieldIsCentered = (GetNotefieldX(player) == _screen.cx)
-local OnlineCompactLayout = ITGOnline and ITGOnline.currentRoomId ~= nil
+local OnlineCompactLayout = IsUsingOnlineGameplayColumns and IsUsingOnlineGameplayColumns()
 
 -- -----------------------------------------------------------------------
 local BothUsingStepStats = (#GAMESTATE:GetHumanPlayers()==2
@@ -43,9 +43,28 @@ local UpdateRate, first_second, last_second
 local af = Def.ActorFrame{
 	InitCommand=function(self)
 		if style ~= "double" then
-			self:xy(start_offset or pos_x, 55)
+			local graph_y = 55
+			if OnlineCompactLayout and style == "single" then
+				local parent_y = _screen.cy + (header_height or 80)
+				graph_y = _screen.h - parent_y - height
+			end
+			self:xy(start_offset or pos_x, graph_y)
 		else
 			self:xy(260, 40)
+		end
+		if Trace then
+			Trace("SL_STEP_STATS_DENSITY_GRAPH"
+				.. " player=" .. tostring(pn)
+				.. " online_compact=" .. tostring(OnlineCompactLayout == true)
+				.. " style=" .. tostring(style)
+				.. " width=" .. tostring(width)
+				.. " height=" .. tostring(height)
+				.. " start_offset=" .. tostring(start_offset)
+				.. " pos_x=" .. tostring(pos_x)
+				.. " local_x=" .. tostring(self:GetX())
+				.. " local_y=" .. tostring(self:GetY())
+				.. " is_ultrawide=" .. tostring(IsUltraWide)
+				.. " note_field_centered=" .. tostring(NoteFieldIsCentered))
 		end
 		self:queuecommand("Update")
 	end,
@@ -110,7 +129,7 @@ local text = LoadFont("Common Normal")..{
 
 		-- flip alignment if ultrawide and both players joined because the pane
 		-- will now appear on the player's side of the screen rather than opposite
-		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
+		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 and not (OnlineCompactLayout and style == "single") then
 			self:halign( PlayerNumber:Reverse()[player] )
 		end
 	end,
@@ -131,7 +150,7 @@ local text = LoadFont("Common Normal")..{
 			if OnlineCompactLayout and style == "single" then
 				self:x(width - 12)
 			end
-			if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
+			if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 and not (OnlineCompactLayout and style == "single") then
 				self:x(52)
 			end
 		else
@@ -142,7 +161,7 @@ local text = LoadFont("Common Normal")..{
 			if OnlineCompactLayout and style == "single" then
 				self:x(12)
 			end
-			if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
+			if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 and not (OnlineCompactLayout and style == "single") then
 				self:x(180)
 			end
 		end

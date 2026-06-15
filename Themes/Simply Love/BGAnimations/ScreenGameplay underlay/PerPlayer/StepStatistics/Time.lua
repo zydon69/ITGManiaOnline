@@ -1,11 +1,13 @@
-local player = ...
+local arg = ...
+local player = type(arg) == "table" and (arg.player or arg[1]) or arg
+local online_panel_width = (type(arg) == "table" and arg.panel_width) or nil
 local PlayerState  = GAMESTATE:GetPlayerState(player)
 local SongPosition = GAMESTATE:GetPlayerState(player):GetSongPosition()
 local rate = SL.Global.ActiveModifiers.MusicRate
 
 local NoteFieldIsCentered = (GetNotefieldX(player) == _screen.cx)
 local IsUltraWide = (GetScreenAspectRatio() > 21/9)
-local OnlineCompactLayout = ITGOnline and ITGOnline.currentRoomId ~= nil
+local OnlineCompactLayout = IsUsingOnlineGameplayColumns and IsUsingOnlineGameplayColumns()
 
 local style = GAMESTATE:GetCurrentStyle():GetName()
 
@@ -135,30 +137,55 @@ end
 -- -----------------------------------------------------------------------
 
 local af = Def.ActorFrame{}
-af.InitCommand=function(self)
+	af.InitCommand=function(self)
 	self:SetUpdateFunction(Update)
 	if style ~= "double" then
 		self:x(SL_WideScale(150,202) * (player==PLAYER_1 and -1 or 1))
 		self:y(-40)
 		if OnlineCompactLayout and style == "single" then
-			self:x(20)
-			self:y(42)
-			self:zoom(0.88)
+			local panel = tonumber(online_panel_width) or 410
+			self:x(clamp(panel * 0.048, 18, 36))
+			self:y(35)
+			self:zoom(0.7)
 		end
 
 		if NoteFieldIsCentered and IsUsingWideScreen() then
 			self:x( 154 * (player==PLAYER_1 and -1 or 1) )
 			if OnlineCompactLayout and style == "single" then
-				self:x(20)
+				local panel = tonumber(online_panel_width) or 410
+				self:x(clamp(panel * 0.048, 18, 36))
+				self:y(35)
+				self:zoom(0.7)
 			end
 		end
 
 		-- flip alignment when ultrawide and both players joined
-		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
+		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 and not (OnlineCompactLayout and style == "single") then
 			self:x(self:GetX() * -1)
+		end
+		if Trace then
+			Trace("SL_STEP_STATS_TIME"
+				.. " player=" .. tostring(ToEnumShortString(player))
+				.. " online_compact=" .. tostring(OnlineCompactLayout == true)
+				.. " style=" .. tostring(style)
+				.. " panel_width=" .. tostring(online_panel_width)
+				.. " local_x=" .. tostring(self:GetX())
+				.. " local_y=" .. tostring(self:GetY())
+				.. " zoom=" .. tostring(self:GetZoom())
+				.. " total_seconds=" .. tostring(totalseconds)
+				.. " is_ultrawide=" .. tostring(IsUltraWide)
+				.. " note_field_centered=" .. tostring(NoteFieldIsCentered))
 		end
 	else
 		self:x(-GetNotefieldWidth() + 150):y(75)
+		if Trace then
+			Trace("SL_STEP_STATS_TIME"
+				.. " player=" .. tostring(ToEnumShortString(player))
+				.. " branch=double"
+				.. " local_x=" .. tostring(self:GetX())
+				.. " local_y=" .. tostring(self:GetY())
+				.. " zoom=" .. tostring(self:GetZoom()))
+		end
 	end
 end
 
@@ -193,7 +220,7 @@ af[#af+1] = LoadFont("Common Normal")..{
 
 		-- flip alignment and adjust for smaller pane size
 		-- when ultrawide and both players joined
-		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
+		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 and not (OnlineCompactLayout and style == "single") then
 			self:halign( PlayerNumber:Reverse()[OtherPlayer[player]] )
 			self:x(50 * (player==PLAYER_1 and -1 or 1))
 		end
@@ -225,7 +252,7 @@ af[#af+1] = LoadFont("Common Normal")..{
 
 		-- flip alignment and adjust for smaller pane size
 		-- when ultrawide and both players joined
-		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
+		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 and not (OnlineCompactLayout and style == "single") then
 			self:halign( PlayerNumber:Reverse()[OtherPlayer[player]] )
 			self:x(50 * (player==PLAYER_1 and -1 or 1))
 		end
@@ -238,7 +265,7 @@ af[#af+1] = LoadFont("Common Normal")..{
 		end
 
 		-- flip offset when ultrawide and both players
-		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
+		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 and not (OnlineCompactLayout and style == "single") then
 			if player==PLAYER_1 then
 				self:x(-86 - (total_width-28))
 			else
@@ -260,7 +287,7 @@ af[#af+1] = LoadFont("Common Normal")..{
 			self:halign(-1.2)
 		end
 		
-		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
+		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 and not (OnlineCompactLayout and style == "single") then
 			self:halign( PlayerNumber:Reverse()[OtherPlayer[player]] )
 			self:x(50 * (player==PLAYER_1 and -1 or 1))
 		end
@@ -281,7 +308,7 @@ af[#af+1] = LoadFont("Common Normal")..{
 			self:halign(1)
 		end
 		
-		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
+		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 and not (OnlineCompactLayout and style == "single") then
 			self:halign( PlayerNumber:Reverse()[OtherPlayer[player]] )
 		end
 
@@ -297,7 +324,7 @@ af[#af+1] = LoadFont("Common Normal")..{
 		self:y(20)
 
 		-- flip offset when ultrawide and both players
-		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
+		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 and not (OnlineCompactLayout and style == "single") then
 			if player==PLAYER_1 then
 				self:x(-86 - (total_width-28))
 			else

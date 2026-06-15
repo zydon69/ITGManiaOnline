@@ -7,6 +7,19 @@ local alpha = clamp(FilterAlpha[SL[ToEnumShortString(player)].ActiveModifiers.Ba
 if style ~= "double" then
 	return Def.Quad{
 		InitCommand=function(self)
+			if Trace then
+				Trace("SL_STEP_STATS_DARK_BACKGROUND"
+					.. " player=" .. tostring(ToEnumShortString(player))
+					.. " style=" .. tostring(style)
+					.. " width=" .. tostring(width)
+					.. " height=" .. tostring(_screen.h)
+					.. " header_height=" .. tostring(header_height)
+					.. " local_x=" .. tostring(self:GetX())
+					.. " local_y=" .. tostring(-header_height)
+					.. " alpha=" .. tostring(alpha)
+					.. " screen_w=" .. tostring(_screen.w)
+					.. " screen_h=" .. tostring(_screen.h))
+			end
 			self:diffuse(Color.Black):diffusealpha(alpha):zoomto(width, _screen.h):y(-header_height)
 		end
 	}

@@ -1,9 +1,11 @@
-local player, has_labels = unpack(...)
+local args, has_labels = ...
+local player = type(args) == "table" and (args.player or args[1]) or args
+local online_panel_width = (type(args) == "table" and args.panel_width) or nil
 local pn = ToEnumShortString(player)
 
 local IsUltraWide = (GetScreenAspectRatio() > 21/9)
 local NoteFieldIsCentered = (GetNotefieldX(player) == _screen.cx)
-local OnlineCompactLayout = ITGOnline and ITGOnline.currentRoomId ~= nil
+local OnlineCompactLayout = IsUsingOnlineGameplayColumns and IsUsingOnlineGameplayColumns()
 
 local style = GAMESTATE:GetCurrentStyle():GetName()
 
@@ -77,26 +79,51 @@ af.InitCommand=function(self)
 		self:zoom(0.8)
 		self:x( SL_WideScale(152,204) * (player==PLAYER_1 and -1 or 1))
 		if OnlineCompactLayout and style == "single" then
-			self:zoom(0.92)
-			self:x(20)
-			self:y(104)
+			self:zoom(0.82)
+			local panel = tonumber(online_panel_width) or 410
+			self:x(clamp(panel * 0.06, 14, 36))
+			self:y(90)
 		end
 
 		if NoteFieldIsCentered and IsUsingWideScreen() then
 			self:x( 156 * (player==PLAYER_1 and -1 or 1))
 			if OnlineCompactLayout and style == "single" then
-				self:x(20)
-				self:y(104)
+				local panel = tonumber(online_panel_width) or 410
+				self:x(clamp(panel * 0.06, 14, 36))
+				self:y(90)
 			end
 		end
 
 		-- adjust for smaller panes when ultrawide and both players joined
-		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
+		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 and not (OnlineCompactLayout and style == "single") then
 			self:x( 154 * (player==PLAYER_1 and 1 or -1))
+		end
+		if Trace then
+			Trace("SL_STEP_STATS_TAP_JUDGMENTS"
+				.. " player=" .. tostring(pn)
+				.. " online_compact=" .. tostring(OnlineCompactLayout == true)
+				.. " style=" .. tostring(style)
+				.. " panel_width=" .. tostring(online_panel_width)
+				.. " x=" .. tostring(self:GetX())
+				.. " y=" .. tostring(self:GetY())
+				.. " zoom=" .. tostring(self:GetZoom())
+				.. " row_height=" .. tostring(row_height)
+				.. " digits=" .. tostring(digits)
+				.. " show_fa_plus=" .. tostring(ShowFaPlusWindow)
+				.. " is_ultrawide=" .. tostring(IsUltraWide)
+				.. " note_field_centered=" .. tostring(NoteFieldIsCentered))
 		end
 	else
 		self:zoom(0.8)
 		self:x(-GetNotefieldWidth() + 75):y(0 + 40)
+		if Trace then
+			Trace("SL_STEP_STATS_TAP_JUDGMENTS"
+				.. " player=" .. tostring(pn)
+				.. " branch=double"
+				.. " x=" .. tostring(self:GetX())
+				.. " y=" .. tostring(self:GetY())
+				.. " zoom=" .. tostring(self:GetZoom()))
+		end
 	end
 end
 
@@ -116,7 +143,7 @@ for index, window in ipairs(TNS.Types) do
 			end
 
 			-- flip alignment when ultrawide and both players joined
-			if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
+			if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 and not (OnlineCompactLayout and style == "single") then
 				self:halign( PlayerNumber:Reverse()[OtherPlayer[player]] )
 			end
 
@@ -197,7 +224,7 @@ for index, window in ipairs(TNS.Types) do
 					self:diffuse( TNS.Colors[index] )
 
 					-- flip alignment when ultrawide and both players joined
-					if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
+					if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 and not (OnlineCompactLayout and style == "single") then
 						self:halign( PlayerNumber:Reverse()[OtherPlayer[player]] )
 						self:x(self:GetX() * -1)
 					end

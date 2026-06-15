@@ -159,9 +159,14 @@ GetOnlineGameplayPanelWidth = function(kind)
 end
 
 GetOnlineGameplayLayout = function()
-	local margin = clamp(_screen.w * 0.055, 44, 86)
+	local margin = clamp(_screen.w * 0.055, 44, 120)
 	local usable_width = math.max(1, _screen.w - (margin * 2))
 	local column_width = usable_width / 3
+	local aspect = GetScreenAspectRatio()
+	local compact_aspect = 4/3
+	local ultra_aspect = 8/3
+	local aspect_factor = clamp((aspect - compact_aspect) / (ultra_aspect - compact_aspect), 0, 1)
+	local leaderboard_ratio = 0.65 + ((1.10 - 0.65) * aspect_factor)
 	local columns = {
 		left = {
 			x = margin + (column_width / 2),
@@ -180,23 +185,72 @@ GetOnlineGameplayLayout = function()
 		},
 	}
 
+	if Trace then
+		Trace("SL_ONLINE_LAYOUT_CALC"
+			.. " screen_w=" .. tostring(_screen.w)
+			.. " screen_h=" .. tostring(_screen.h)
+			.. " screen_cx=" .. tostring(_screen.cx)
+			.. " aspect=" .. tostring(aspect)
+			.. " margin=" .. tostring(margin)
+			.. " usable_width=" .. tostring(usable_width)
+			.. " column_width=" .. tostring(column_width)
+			.. " side_panel_width=" .. tostring(GetNotefieldWidth() or 256)
+			.. " leaderboard_ratio=" .. tostring(leaderboard_ratio)
+			.. " leaderboard_width=" .. tostring(column_width * leaderboard_ratio)
+			.. " left_x=" .. tostring(columns.left.x)
+			.. " center_x=" .. tostring(columns.center.x)
+			.. " right_x=" .. tostring(columns.right.x))
+	end
+
 	return {
 		margin = margin,
 		usable_width = usable_width,
 		column_width = column_width,
 		side_panel_width = GetNotefieldWidth() or 256,
-		leaderboard_width = column_width * 0.90,
+		leaderboard_width = column_width * leaderboard_ratio,
 		columns = columns,
 	}
 end
 
 IsUsingOnlineGameplayColumns = function()
 	local style = GAMESTATE:GetCurrentStyle()
-	return ITGOnline
-		and ITGOnline.currentRoomId ~= nil
+	local top_screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+	local screen_name = top_screen and top_screen:GetName() or ""
+	local has_online_gameplay_context = ITGOnline
+		and (
+			(SL.Global.Online and SL.Global.Online.GameplayLayoutActive == true)
+			or ITGOnline.currentRoomId ~= nil
+			or ITGOnline.currentRoom ~= nil
+			or (screen_name == "ScreenGameplay" and ITGOnline.user ~= nil and ITGOnline.user.id ~= nil)
+			or ITGOnline.currentSongPayload ~= nil
+			or ITGOnline.activeGameplaySongPayload ~= nil
+			or tostring(ITGOnline.activeGameplayRoundKey or "") ~= ""
+			or tostring(ITGOnline.currentRoomRoundKey or "") ~= ""
+		)
+	local result = ITGOnline
+		and has_online_gameplay_context
 		and style
 		and style:GetName() == "single"
-		and GetScreenAspectRatio() < 21/9
+
+	if Trace then
+		Trace("SL_ONLINE_COLUMNS_CHECK"
+			.. " result=" .. tostring(result == true)
+			.. " screen=" .. tostring(screen_name)
+			.. " style=" .. tostring(style and style:GetName() or "nil")
+			.. " has_itgonline=" .. tostring(ITGOnline ~= nil)
+			.. " has_context=" .. tostring(has_online_gameplay_context == true)
+			.. " layout_flag=" .. tostring(SL.Global.Online and SL.Global.Online.GameplayLayoutActive)
+			.. " room_id=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " has_room=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil)
+			.. " has_user=" .. tostring(ITGOnline and ITGOnline.user ~= nil)
+			.. " user_id=" .. tostring(ITGOnline and ITGOnline.user and ITGOnline.user.id or "nil")
+			.. " has_current_song_payload=" .. tostring(ITGOnline and ITGOnline.currentSongPayload ~= nil)
+			.. " has_active_gameplay_song=" .. tostring(ITGOnline and ITGOnline.activeGameplaySongPayload ~= nil)
+			.. " active_round_key=" .. tostring(ITGOnline and ITGOnline.activeGameplayRoundKey or "nil")
+			.. " room_round_key=" .. tostring(ITGOnline and ITGOnline.currentRoomRoundKey or "nil"))
+	end
+
+	return result
 end
 
 GetOnlineGameplayPlayerColumn = function(player)

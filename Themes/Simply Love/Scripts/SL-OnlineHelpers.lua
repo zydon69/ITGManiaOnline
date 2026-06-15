@@ -522,6 +522,8 @@ local TransitionToOnlineGameplay = function()
 
 	local screenName = topScreen:GetName()
 	if screenName == "ScreenGameplay" or screenName == "ScreenGameplayShared" then
+		SL.Global.Online = SL.Global.Online or {}
+		SL.Global.Online.GameplayLayoutActive = true
 		return
 	end
 
@@ -530,6 +532,8 @@ local TransitionToOnlineGameplay = function()
 			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room")
 			.. " pendingRoom=" .. tostring(pendingOnlineStartRoomId))
 	end
+	SL.Global.Online = SL.Global.Online or {}
+	SL.Global.Online.GameplayLayoutActive = true
 	topScreen:SetNextScreenName(OnlineGameplayScreen())
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 end

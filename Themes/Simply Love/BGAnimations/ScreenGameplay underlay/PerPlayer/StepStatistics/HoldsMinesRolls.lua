@@ -1,8 +1,10 @@
-local player = ...
+local arg = ...
+local player = type(arg) == "table" and (arg.player or arg[1]) or arg
+local online_panel_width = (type(arg) == "table" and arg.panel_width) or nil
 
 local IsUltraWide = (GetScreenAspectRatio() > 21/9)
 local NoteFieldIsCentered = (GetNotefieldX(player) == _screen.cx)
-local OnlineCompactLayout = ITGOnline and ITGOnline.currentRoomId ~= nil
+local OnlineCompactLayout = IsUsingOnlineGameplayColumns and IsUsingOnlineGameplayColumns()
 
 local style = GAMESTATE:GetCurrentStyle():GetName()
 
@@ -88,31 +90,78 @@ end
 -- -----------------------------------------------------------------------
 
 local af = Def.ActorFrame{ Name="HoldsMinesRolls" }
+local OnlineSingleStats = OnlineCompactLayout and style == "single"
+
+local function GetOnlineValueAnchorX()
+	if not OnlineSingleStats then return nil end
+	return 0
+end
+
+local online_value_x = GetOnlineValueAnchorX()
+
+local function GetOnlineFrameX()
+	if not OnlineSingleStats then return nil end
+	local panel = tonumber(online_panel_width) or GetNotefieldWidth() or 256
+	local right_pad = clamp(panel * 0.035, 8, 18)
+	return panel - right_pad
+end
+
+local online_frame_x = GetOnlineFrameX()
 
 -- position the ActorFrame
-af.InitCommand=function(self)
+	af.InitCommand=function(self)
 	if style ~= "double" then
 		self:x(player==PLAYER_1 and 155 or -85)
 		self:y(-140)
 		if OnlineCompactLayout and style == "single" then
-			self:x(324)
-			self:y(-60)
-			self:zoom(1.06)
+			self:x(online_frame_x or 220)
+			self:y(-36)
+			self:zoom(0.76)
 		end
 
 		if NoteFieldIsCentered and IsUsingWideScreen() then
 			self:x( player==PLAYER_1 and 155 or -88 )
 			if OnlineCompactLayout and style == "single" then
-				self:x(324)
+				self:x(online_frame_x or 220)
+				self:y(-36)
+				self:zoom(0.76)
 			end
 		end
 
 		-- adjust for smaller panes when ultrawide and both players joined
-		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 then
+		if IsUltraWide and #GAMESTATE:GetHumanPlayers() > 1 and not OnlineSingleStats then
 			self:x( player==PLAYER_1 and 14 or 50 )
+		end
+		if Trace then
+			Trace("SL_STEP_STATS_HOLDS_MINES_ROLLS"
+				.. " player=" .. tostring(ToEnumShortString(player))
+				.. " online_compact=" .. tostring(OnlineCompactLayout == true)
+				.. " online_single_stats=" .. tostring(OnlineSingleStats == true)
+				.. " style=" .. tostring(style)
+				.. " panel_width=" .. tostring(online_panel_width)
+				.. " online_frame_x=" .. tostring(online_frame_x)
+				.. " online_value_x=" .. tostring(online_value_x)
+				.. " local_x=" .. tostring(self:GetX())
+				.. " local_y=" .. tostring(self:GetY())
+				.. " zoom=" .. tostring(self:GetZoom())
+				.. " row_height=" .. tostring(row_height)
+				.. " digits_to_fmt=" .. tostring(digits_to_fmt)
+				.. " possible_holds=" .. tostring(RCPossible.Holds.count)
+				.. " possible_mines=" .. tostring(RCPossible.Mines.count)
+				.. " possible_rolls=" .. tostring(RCPossible.Rolls.count)
+				.. " is_ultrawide=" .. tostring(IsUltraWide)
+				.. " note_field_centered=" .. tostring(NoteFieldIsCentered))
 		end
 	else
 		self:x(-GetNotefieldWidth() + 212):y(-10):zoom(0.8)
+		if Trace then
+			Trace("SL_STEP_STATS_HOLDS_MINES_ROLLS"
+				.. " player=" .. tostring(ToEnumShortString(player))
+				.. " branch=double"
+				.. " local_x=" .. tostring(self:GetX())
+				.. " local_y=" .. tostring(self:GetY())
+				.. " zoom=" .. tostring(self:GetZoom()))
+		end
 	end
 end
 
@@ -133,7 +182,8 @@ for i, category in ipairs(RadarCategories) do
 		end,
 		PositionCommand=function(self, params)
 			if style ~= "double" then
-				self:x((player==PLAYER_1 and -10 or 90) - (params.Offset or 0))
+				local x = online_value_x and (online_value_x - 10) or ((player==PLAYER_1 and -10 or 90))
+				self:x(x - (params.Offset or 0))
 			else
 				self:x(-10 - (params.Offset or 0))
 			end
@@ -146,7 +196,7 @@ for i, category in ipairs(RadarCategories) do
 		InitCommand=function(self)
 			self:zoom(0.4):horizalign( right )
 			if style ~= "double" then
-				self:x(player==PLAYER_1 and 0 or 100)
+				self:x(online_value_x or (player==PLAYER_1 and 0 or 100))
 			else
 				self:x(0)
 			end

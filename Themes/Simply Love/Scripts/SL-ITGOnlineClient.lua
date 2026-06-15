@@ -2506,6 +2506,8 @@ function ITGOnline:NoteScreenChanged(screenName)
 		self.currentScreenName = screenName
 		self.screenGeneration = (self.screenGeneration or 0) + 1
 		online_flow_trace("screen_changed previous=" .. tostring(previous) .. " next=" .. tostring(screenName) .. " generation=" .. tostring(self.screenGeneration))
+		SL.Global.Online = SL.Global.Online or {}
+		SL.Global.Online.GameplayLayoutActive = self:IsOnlineGameplayScreen(screenName)
 		self:CancelScreenBoundRequests()
 		if previous == "ScreenReloadSongsOnline" and screenName == "ScreenOnlineLobbies" then
 			self:ClearFileHashCache()

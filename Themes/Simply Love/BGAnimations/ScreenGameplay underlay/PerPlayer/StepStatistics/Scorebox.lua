@@ -432,6 +432,17 @@ local af = Def.ActorFrame{
 		else
 			self:xy(GetNotefieldWidth() - 140, -115)
 		end
+		if Trace then
+			Trace("SL_STEP_STATS_SCOREBOX"
+				.. " player=" .. tostring(pn)
+				.. " style=" .. tostring(style)
+				.. " local_x=" .. tostring(self:GetX())
+				.. " local_y=" .. tostring(self:GetY())
+				.. " zoom=" .. tostring(self:GetZoom())
+				.. " is_ultrawide=" .. tostring(IsUltraWide)
+				.. " note_field_centered=" .. tostring(NoteFieldIsCentered)
+				.. " human_players=" .. tostring(#GAMESTATE:GetHumanPlayers()))
+		end
 
 		self.isFirst = true
 	end,

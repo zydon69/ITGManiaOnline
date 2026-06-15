@@ -165,6 +165,23 @@ end
 local af = Def.ActorFrame{
 	InitCommand=function(self)
 		self:xy(GetOnlineGameplayColumnX and GetOnlineGameplayColumnX("center") or _screen.cx, _screen.cy - 125):visible(false)
+		if Trace then
+			Trace("SL_ONLINE_LIVE_LEADERBOARD"
+				.. " panel_width=" .. tostring(panel_width)
+				.. " panel_padding=" .. tostring(panel_padding)
+				.. " local_x=" .. tostring(self:GetX())
+				.. " local_y=" .. tostring(self:GetY())
+				.. " marker_x=" .. tostring(marker_x)
+				.. " label_x=" .. tostring(label_x)
+				.. " score_x=" .. tostring(score_x)
+				.. " status_x=" .. tostring(status_x)
+				.. " title_zoom=" .. tostring(title_zoom)
+				.. " row_zoom=" .. tostring(row_zoom)
+				.. " score_zoom=" .. tostring(score_zoom)
+				.. " screen_w=" .. tostring(_screen.w)
+				.. " screen_h=" .. tostring(_screen.h)
+				.. " aspect=" .. tostring(GetScreenAspectRatio()))
+		end
 	end,
 	ITGOnlineLeaderboardUpdatedMessageCommand=function(self, params)
 		update_rows(self, rows_from_leaderboard(params and params.leaderboard or {}))
