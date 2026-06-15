@@ -237,26 +237,6 @@ void DoChangeGame() {
 }  // namespace
 
 void GameLoop::UpdateAllButDraw(bool bRunningFromVBLANK) {
-  // Flag to indicate whether an update has been processed during the VBLANK
-  // period.
-  static bool m_bUpdatedDuringVBLANK = false;
-
-  // If we're running from VBLANK, and we've already updated during the VBLANK
-  // period, don't update again. This is to prevent multiple updates during the
-  // same VBLANK period.
-  if (!bRunningFromVBLANK && m_bUpdatedDuringVBLANK) {
-    m_bUpdatedDuringVBLANK = false;
-    return;
-  }
-
-  // If we're running from VBLANK, indicate we've updated during the VBLANK
-  // period. Otherwise, make sure the flag is cleared.
-  if (bRunningFromVBLANK) {
-    m_bUpdatedDuringVBLANK = true;
-  } else {
-    m_bUpdatedDuringVBLANK = false;
-  }
-
   // If the constant update delta is set, use that value. Otherwise, use the
   // delta time from the gameplay timer.
   float fDeltaTime = (g_fConstantUpdateDeltaSeconds > 0)
