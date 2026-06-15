@@ -236,7 +236,7 @@ void DoChangeGame() {
 }
 }  // namespace
 
-void GameLoop::UpdateAllButDraw(bool bRunningFromVBLANK) {
+void GameLoop::UpdateAllButDraw() {
   // If the constant update delta is set, use that value. Otherwise, use the
   // delta time from the gameplay timer.
   float fDeltaTime = (g_fConstantUpdateDeltaSeconds > 0)
@@ -297,7 +297,7 @@ void GameLoop::RunGameLoop() {
       ArchHooks::SetUserQuit();
     }
 
-    UpdateAllButDraw(false);
+    UpdateAllButDraw();
 
     CallEveryNFrames(500, CheckInputDevices);
 

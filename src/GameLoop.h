@@ -5,7 +5,7 @@
 /** @brief Main rendering and update loop. */
 namespace GameLoop {
 void RunGameLoop();
-void UpdateAllButDraw(bool bRunningFromVBLANK);
+void UpdateAllButDraw();
 void SetUpdateRate(float fUpdateRate);
 float GetUpdateRate();
 void ChangeTheme(const std::string& sNewTheme);
