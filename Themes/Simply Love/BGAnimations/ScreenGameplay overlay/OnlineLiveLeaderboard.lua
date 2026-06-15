@@ -1,10 +1,23 @@
 local max_rows = 8
 local play_state_for_user
+local panel_width = GetOnlineGameplayPanelWidth and GetOnlineGameplayPanelWidth("leaderboard") or 300
+local panel_padding = panel_width * 0.07
+local marker_x = (-panel_width / 2) + panel_padding
+local label_x = (-panel_width / 2) + (panel_width * 0.15)
+local score_x = (panel_width / 2) - (panel_width * 0.12)
+local status_x = (panel_width / 2) - panel_padding
+local title_zoom = 0.40
+local row_zoom = 0.72
+local score_zoom = 0.23
+local status_zoom = 0.38
+local label_maxwidth = math.max(1, (score_x - label_x - (panel_width * 0.12)) / row_zoom)
+local score_maxwidth = math.max(1, (panel_width * 0.27) / score_zoom)
 
 local function compact_name(name)
 	name = tostring(name or "Player")
-	if #name <= 19 then return name end
-	return name:sub(1, 16) .. "..."
+	local max_chars = math.max(8, math.floor(panel_width / 13))
+	if #name <= max_chars then return name end
+	return name:sub(1, max_chars - 3) .. "..."
 end
 
 local function local_user_id()
@@ -151,7 +164,7 @@ end
 
 local af = Def.ActorFrame{
 	InitCommand=function(self)
-		self:xy(_screen.cx, _screen.cy - 125):visible(false)
+		self:xy(GetOnlineGameplayColumnX and GetOnlineGameplayColumnX("center") or _screen.cx, _screen.cy - 125):visible(false)
 	end,
 	ITGOnlineLeaderboardUpdatedMessageCommand=function(self, params)
 		update_rows(self, rows_from_leaderboard(params and params.leaderboard or {}))
@@ -167,7 +180,7 @@ af[#af + 1] = Def.Quad{
 	InitCommand=function(self)
 		local top = -36
 		local bottom = _screen.h - self:GetParent():GetY()
-		self:xy(-4, (top + bottom) / 2):zoomto(196, bottom - top):diffuse(color("#000000")):diffusealpha(0.55)
+		self:xy(0, (top + bottom) / 2):zoomto(panel_width, bottom - top):diffuse(color("#000000")):diffusealpha(0.55)
 	end,
 }
 
@@ -175,7 +188,7 @@ af[#af + 1] = LoadFont("Common Bold")..{
 	Name="Title",
 	Text="Leaderboard",
 	InitCommand=function(self)
-		self:y(-16):horizalign(center):zoom(0.48):shadowlength(1):diffuse(color("#ffffff")):diffusealpha(0.92)
+		self:y(-16):horizalign(center):zoom(title_zoom):maxwidth((panel_width * 0.88) / title_zoom):shadowlength(1):diffuse(color("#ffffff")):diffusealpha(0.92)
 	end,
 }
 
@@ -188,25 +201,25 @@ for i = 1, max_rows do
 		LoadFont("Common Normal")..{
 			Name="Marker",
 			InitCommand=function(self)
-				self:x(-88):horizalign(center):zoom(0.833):shadowlength(1):diffusealpha(0.95)
+				self:x(marker_x):horizalign(center):zoom(row_zoom):shadowlength(1):diffusealpha(0.95)
 			end,
 		},
 		LoadFont("Common Normal")..{
 			Name="Label",
 			InitCommand=function(self)
-				self:x(-76):horizalign(left):zoom(0.833):shadowlength(1):diffusealpha(0.9)
+				self:x(label_x):horizalign(left):zoom(row_zoom):maxwidth(label_maxwidth):shadowlength(1):diffusealpha(0.9)
 			end,
 		},
 		LoadFont("Wendy/_ScreenEvaluation numbers")..{
 			Name="Score",
 			InitCommand=function(self)
-				self:x(82):horizalign(right):zoom(0.26):shadowlength(1):diffusealpha(0.95)
+				self:x(score_x):horizalign(right):zoom(score_zoom):maxwidth(score_maxwidth):shadowlength(1):diffusealpha(0.95)
 			end,
 		},
 		LoadFont("Common Normal")..{
 			Name="Status",
 			InitCommand=function(self)
-				self:x(98):horizalign(center):zoom(0.48):shadowlength(1):diffusealpha(0.95)
+				self:x(status_x):horizalign(center):zoom(status_zoom):maxwidth((panel_width * 0.18) / status_zoom):shadowlength(1):diffusealpha(0.95)
 			end,
 		},
 	}

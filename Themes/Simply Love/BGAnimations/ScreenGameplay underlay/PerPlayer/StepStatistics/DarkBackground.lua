@@ -7,7 +7,7 @@ local alpha = clamp(FilterAlpha[SL[ToEnumShortString(player)].ActiveModifiers.Ba
 if style ~= "double" then
 	return Def.Quad{
 		InitCommand=function(self)
-			self:diffuse(0, 0, 0, alpha):setsize(width, _screen.h):y(-header_height)
+			self:diffuse(Color.Black):diffusealpha(alpha):zoomto(width, _screen.h):y(-header_height)
 		end
 	}
 else

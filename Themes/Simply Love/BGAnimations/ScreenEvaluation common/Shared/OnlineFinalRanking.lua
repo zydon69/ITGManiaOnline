@@ -44,10 +44,17 @@ local function final_results()
 end
 
 local width = clamp(_screen.w * 0.16, 230, 320)
-local row_height = clamp(_screen.h * 0.022, 18, 24)
-local panel_height = 32 + (row_height * max_rows)
-local panel_x = _screen.cx + math.min(_screen.w * 0.23, 470)
-local panel_y = clamp(_screen.h * 0.105, 72, 120)
+local banner_zoom = 0.7
+local banner_width = 418 * banner_zoom
+local banner_height = 164 * banner_zoom
+local banner_title_height = 25 * banner_zoom
+local banner_title_y = (SL and SL.Global and SL.Global.GameMode == "Casual") and 50 or 46
+local banner_y = banner_title_y + 66
+local panel_height = clamp(banner_height + banner_title_height + 12, 108, 164)
+local row_height = math.max(11, (panel_height - 30) / max_rows)
+local panel_x = _screen.cx + (banner_width / 2) + (width / 2) + 10
+local banner_top = banner_y - (banner_height / 2)
+local panel_y = banner_top + (panel_height / 2)
 
 local t = Def.ActorFrame{
 	Name="OnlineFinalRanking",

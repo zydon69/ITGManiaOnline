@@ -32,9 +32,9 @@ local header_height   = 80
 local notefield_width = GetNotefieldWidth()
 local density_graph_width = nil
 local density_graph_start_offset = nil
-local online_panel_start_x = math.min(_screen.w - 120, 520)
 local online_content_offset_x = nil
 local sidepane_width  = _screen.w/2
+local sidepane_background_width = sidepane_width
 local sidepane_pos_x  = _screen.w * (player==PLAYER_1 and 0.75 or 0.25)
 
 if not IsUltraWide then
@@ -63,13 +63,12 @@ else
 end
 
 if OnlineCompactLayout and stylename == "single" then
-	sidepane_width = math.max(120, _screen.w - online_panel_start_x)
-	sidepane_pos_x = player==PLAYER_1
-		and (_screen.w - (sidepane_width / 2))
-		or (sidepane_width / 2)
-	density_graph_width = sidepane_width
-	density_graph_start_offset = -sidepane_width / 2
-	online_content_offset_x = density_graph_start_offset
+	sidepane_background_width = GetOnlineGameplayPanelWidth and GetOnlineGameplayPanelWidth("side") or sidepane_width
+	sidepane_width = sidepane_background_width
+	sidepane_pos_x = GetOnlineGameplayColumnX(GetOnlineGameplayStatsColumn(player))
+	density_graph_width = sidepane_background_width
+	density_graph_start_offset = -sidepane_background_width / 2
+	online_content_offset_x = -sidepane_width / 2
 end
 
 -- -----------------------------------------------------------------------
@@ -81,7 +80,7 @@ af.InitCommand=function(self)
 	self:x(sidepane_pos_x):y(_screen.cy + header_height)
 end
 
-af[#af+1] = LoadActor("./DarkBackground.lua", {player, header_height, sidepane_width})
+af[#af+1] = LoadActor("./DarkBackground.lua", {player, header_height, sidepane_background_width})
 
 -- banner, judgment labels, and judgment numbers will be collectively shrunk
 -- if Center1Player is enabled to accommodate the smaller space

@@ -95,15 +95,15 @@ af.InitCommand=function(self)
 		self:x(player==PLAYER_1 and 155 or -85)
 		self:y(-140)
 		if OnlineCompactLayout and style == "single" then
-			self:x(372)
-			self:y(-132)
+			self:x(324)
+			self:y(-60)
 			self:zoom(1.06)
 		end
 
 		if NoteFieldIsCentered and IsUsingWideScreen() then
 			self:x( player==PLAYER_1 and 155 or -88 )
 			if OnlineCompactLayout and style == "single" then
-				self:x(372)
+				self:x(324)
 			end
 		end
 

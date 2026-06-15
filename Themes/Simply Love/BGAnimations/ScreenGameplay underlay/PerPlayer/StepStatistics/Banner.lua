@@ -16,7 +16,7 @@ return Def.Banner{
 		if style ~= "double" then
 			self:xy(70 * (player==PLAYER_1 and 1 or -1), -200)
 			if OnlineCompactLayout and style == "single" then
-				self:x(300)
+				self:xy(164, -248)
 			end
 
 			self:SetDecodeMovie(ThemePrefs.Get("AnimateBanners"))
@@ -25,7 +25,7 @@ return Def.Banner{
 			if NoteFieldIsCentered and IsUsingWideScreen() then
 				self:x( 72 * (player==PLAYER_1 and 1 or -1) )
 				if OnlineCompactLayout and style == "single" then
-					self:x(300)
+					self:xy(164, -248)
 				end
 			end
 

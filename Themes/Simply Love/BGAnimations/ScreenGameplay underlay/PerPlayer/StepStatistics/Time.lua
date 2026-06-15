@@ -142,7 +142,7 @@ af.InitCommand=function(self)
 		self:y(-40)
 		if OnlineCompactLayout and style == "single" then
 			self:x(20)
-			self:y(-22)
+			self:y(42)
 			self:zoom(0.88)
 		end
 

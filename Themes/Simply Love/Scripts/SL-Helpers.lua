@@ -118,7 +118,7 @@ end
 --   but it is not used to position the notefields themselves
 --   (that's handled in Metrics.ini under [ScreenGameplay])
 
-GetNotefieldX = function( player )
+local function BaseNotefieldX(player)
 	if not player then return end
 
 	local style = GAMESTATE:GetCurrentStyle()
@@ -142,6 +142,91 @@ GetNotefieldX = function( player )
 
 	local NumPlayersAndSides = ToEnumShortString( style:GetStyleType() )
 	return THEME:GetMetric("ScreenGameplay","Player".. p .. NumPlayersAndSides .."X") + PlayerOffset
+end
+
+GetOnlineGameplayColumnX = function(column)
+	local layout = GetOnlineGameplayLayout()
+	local data = layout.columns[column or "center"] or layout.columns.center
+	return data.x
+end
+
+GetOnlineGameplayPanelWidth = function(kind)
+	local layout = GetOnlineGameplayLayout()
+	if kind == "center" or kind == "leaderboard" then
+		return layout.leaderboard_width
+	end
+	return layout.side_panel_width
+end
+
+GetOnlineGameplayLayout = function()
+	local margin = clamp(_screen.w * 0.055, 44, 86)
+	local usable_width = math.max(1, _screen.w - (margin * 2))
+	local column_width = usable_width / 3
+	local columns = {
+		left = {
+			x = margin + (column_width / 2),
+			left = margin,
+			right = margin + column_width,
+		},
+		center = {
+			x = _screen.cx,
+			left = margin + column_width,
+			right = margin + (column_width * 2),
+		},
+		right = {
+			x = _screen.w - margin - (column_width / 2),
+			left = margin + (column_width * 2),
+			right = _screen.w - margin,
+		},
+	}
+
+	return {
+		margin = margin,
+		usable_width = usable_width,
+		column_width = column_width,
+		side_panel_width = GetNotefieldWidth() or 256,
+		leaderboard_width = column_width * 0.90,
+		columns = columns,
+	}
+end
+
+IsUsingOnlineGameplayColumns = function()
+	local style = GAMESTATE:GetCurrentStyle()
+	return ITGOnline
+		and ITGOnline.currentRoomId ~= nil
+		and style
+		and style:GetName() == "single"
+		and GetScreenAspectRatio() < 21/9
+end
+
+GetOnlineGameplayPlayerColumn = function(player)
+	if not player then return "center" end
+	return player == PLAYER_1 and "left" or "right"
+end
+
+GetOnlineGameplayStatsColumn = function(player)
+	if not player then return "center" end
+
+	if #GAMESTATE:GetHumanPlayers() > 1 then
+		return player == PLAYER_1 and "left" or "right"
+	end
+
+	return player == PLAYER_1 and "right" or "left"
+end
+
+GetBaseNotefieldX = function(player)
+	return BaseNotefieldX(player)
+end
+
+GetNotefieldX = function(player)
+	if IsUsingOnlineGameplayColumns() then
+		local pn = player and ToEnumShortString(player) or ""
+		local player_offset = (SL[pn] and SL[pn].ActiveModifiers and SL[pn].ActiveModifiers.NoteFieldOffsetX or 0)
+			* (player == PLAYER_1 and -1 or 1)
+		return GetOnlineGameplayColumnX(GetOnlineGameplayPlayerColumn(player)) + player_offset
+	end
+
+	return BaseNotefieldX(player)
 end
 
 -- -----------------------------------------------------------------------

@@ -21,6 +21,12 @@ then
 	_x = _screen.cx + (player==PLAYER_1 and -1 or 1) * 60
 end
 
+if IsUsingOnlineGameplayColumns and IsUsingOnlineGameplayColumns() then
+	local inner_side = player==PLAYER_1 and 1 or -1
+	local panel_width = GetOnlineGameplayPanelWidth and GetOnlineGameplayPanelWidth("side") or GetNotefieldWidth()
+	_x = GetOnlineGameplayColumnX(GetOnlineGameplayPlayerColumn(player)) + ((panel_width / 2) - 22) * inner_side
+end
+
 -- get SongPosition specific to this player so that
 -- split BPMs are handled if there are any
 local songposition = GAMESTATE:GetPlayerState(player):GetSongPosition()

@@ -2,7 +2,23 @@ local player = ...
 
 local w = 136
 local h = 18
-local _x = _screen.cx + (player==PLAYER_1 and -1 or 1) * SL_WideScale(238, 288)
+local _y = 20
+local side_margin = 4
+
+local function resolve_lifebar_x(player_number)
+	local notefield_x = GetNotefieldX(player_number)
+	local panel_width = GetNotefieldWidth() or w
+	if IsUsingOnlineGameplayColumns and IsUsingOnlineGameplayColumns() then
+		panel_width = GetOnlineGameplayPanelWidth and GetOnlineGameplayPanelWidth("side") or panel_width
+	end
+	if player_number == PLAYER_1 then
+		return (notefield_x - panel_width / 2) + side_margin + w / 2
+	else
+		return (notefield_x + panel_width / 2) - side_margin - w / 2
+	end
+end
+
+local _x = resolve_lifebar_x(player)
 
 -- get SongPosition specific to this player so that
 -- split BPMs are handled if there are any
@@ -18,7 +34,7 @@ end
 
 local meter = Def.ActorFrame{
 
-	InitCommand=function(self) self:y(20):SetUpdateFunction(Update):visible(false) end,
+	InitCommand=function(self) self:y(_y):SetUpdateFunction(Update):visible(false) end,
 	OnCommand=function(self) self:visible(true) end,
 
 	-- frame

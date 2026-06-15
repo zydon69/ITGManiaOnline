@@ -60,7 +60,9 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 	InitCommand=function(self)
 		self:valign(1):horizalign(right)
 		self:zoom(0.5)
-		if IsEX then
+		if IsHardEX then
+			self:diffuse(color("#ff00cc"))
+		elseif IsEX then
 			-- If EX Score, let's diffuse it to be the same as the ITG top window.
 			-- This will make it consistent with the EX Score Pane.
 			self:diffuse(SL.JudgmentColors["ITG"][1])
@@ -68,6 +70,11 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 	end,
 
 	BeginCommand=function(self)
+		if IsUsingOnlineGameplayColumns and IsUsingOnlineGameplayColumns() then
+			self:playcommand("OnlineColumnLayout")
+			return
+		end
+
 		-----------------------------------------------------------------
 		-- ultrawide with both players joined is really its own layout
 		-- hardcode some numbers for now, return early, and call it a day
@@ -130,17 +137,30 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 			end
 		end
 	end,
+	OnlineColumnLayoutCommand=function(self)
+		self:horizalign(center)
+		self:x(GetOnlineGameplayColumnX(GetOnlineGameplayPlayerColumn(player)))
+		self:y(pos[player].y)
+	end,
 	JudgmentMessageCommand=function(self)
 		self:queuecommand("RedrawScore")
 	end,
 	RedrawScoreCommand=function(self)
+		if IsUsingOnlineGameplayColumns and IsUsingOnlineGameplayColumns() then
+			self:playcommand("OnlineColumnLayout")
+		end
+
 		local exPercent = CalculateExScore(player)
 		local hardExPercent = CalculateHardExScore(player)
 		local dance_points = pss:GetPercentDancePoints()
 		local percent = FormatPercentScore( dance_points ):sub(1,-2)
 		local displayedPercent = IsHardEX and tonumber(hardExPercent) or (IsEX and tonumber(exPercent) or tonumber(percent))
 
-		if not IsEX then
+		if IsHardEX then
+			self:settext(("%.02f"):format(hardExPercent))
+		elseif IsEX then
+			self:settext(("%.02f"):format(exPercent))
+		else
 			self:settext(percent)
 		end
 
@@ -158,9 +178,11 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 	ExCountsChangedMessageCommand=function(self, params)
 		if params.Player ~= player then return end
 
-		if IsEX then
+		if IsHardEX then
+			self:settext(("%.02f"):format(params.HardExScore))
+		elseif IsEX then
 			self:settext(("%.02f"):format(params.ExScore))
-		elseif not IsHardEX then
+		else
 			return
 		end
 
