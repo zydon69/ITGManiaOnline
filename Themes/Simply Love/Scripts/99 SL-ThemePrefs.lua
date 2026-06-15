@@ -385,6 +385,21 @@ SL_CustomPrefs.Get = function()
 			Choices =  { THEME:GetString("ThemePrefs","No"), THEME:GetString("ThemePrefs", "Yes") },
 			Values  = { false, true }
 		},
+
+		ITGOnlineRememberToken = {
+			Default = false,
+			Choices = {
+				THEME:GetString("OptionTitles", "OnlineTokenAlwaysAsk"),
+				THEME:GetString("OptionTitles", "OnlineTokenKeep")
+			},
+			Values = { false, true }
+		},
+
+		ITGOnlineGameplayLayoutLogs = {
+			Default = false,
+			Choices =  { THEME:GetString("ThemePrefs","No"), THEME:GetString("ThemePrefs", "Yes") },
+			Values  = { false, true }
+		},
 	}
 end
 

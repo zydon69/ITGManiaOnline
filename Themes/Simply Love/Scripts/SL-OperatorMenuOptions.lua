@@ -1,5 +1,67 @@
 OperatorMenuOptionRows = {}
 
+local function theme_pref_get(name, fallback)
+	if ThemePrefs and ThemePrefs.Get then
+		local ok, value = pcall(function() return ThemePrefs.Get(name) end)
+		if ok and value ~= nil then return value end
+	end
+
+	return fallback
+end
+
+local function theme_pref_set(name, value)
+	if not ThemePrefs or not ThemePrefs.Set then return end
+
+	pcall(function() ThemePrefs.Set(name, value) end)
+	if ThemePrefs.Save then
+		pcall(function() ThemePrefs.Save() end)
+	end
+end
+
+local function profile_slot_for_player(player)
+	if player == PLAYER_2 then return "ProfileSlot_Player2" end
+	return "ProfileSlot_Player1"
+end
+
+local function save_profile_preference(player)
+	if not player or not PROFILEMAN or not PROFILEMAN.IsPersistentProfile then return end
+	if not PROFILEMAN:IsPersistentProfile(player) then return end
+
+	if PROFILEMAN.GetProfile and PROFILEMAN.GetProfileDir and SaveProfileCustom then
+		local saved = false
+		pcall(function()
+			local profile = PROFILEMAN:GetProfile(player)
+			local dir = PROFILEMAN:GetProfileDir(profile_slot_for_player(player))
+			if profile and type(dir) == "string" and dir ~= "" then
+				SaveProfileCustom(profile, dir)
+				saved = true
+			end
+		end)
+		if saved then return end
+	end
+
+	if GAMESTATE and GAMESTATE.SaveProfiles then
+		pcall(function() GAMESTATE:SaveProfiles() end)
+	elseif PROFILEMAN.SaveProfile then
+		pcall(function() PROFILEMAN:SaveProfile(player) end)
+	end
+end
+
+local function option_player_number(pn)
+	local short = "P1"
+
+	if type(pn) == "string" then
+		short = (pn == "P2" or pn == "PlayerNumber_P2") and "P2" or "P1"
+	elseif pn ~= nil and ToEnumShortString then
+		local ok, value = pcall(function() return ToEnumShortString(pn) end)
+		if ok and (value == "P1" or value == "P2") then
+			short = value
+		end
+	end
+
+	return short == "P2" and PLAYER_2 or PLAYER_1, short
+end
+
 -- -----------------------------------------------------------------------
 -- System Options
 
@@ -150,6 +212,93 @@ OperatorMenuOptionRows.DefaultFailType = function()
 					break
 				end
 			end
+		end,
+	}
+end
+
+OperatorMenuOptionRows.ITGOnlineTokenPersistence = function()
+	local choices = {
+		THEME:GetString("OptionTitles", "OnlineTokenAlwaysAsk"),
+		THEME:GetString("OptionTitles", "OnlineTokenKeep"),
+	}
+
+	return {
+		Name = "OnlineTokenPersistence",
+		LayoutType = "ShowOneInRow",
+		SelectType = "SelectOne",
+		OneChoiceForAllPlayers = false,
+		ExportOnChange = false,
+		Choices = choices,
+		LoadSelections = function(self, list, pn)
+			local _, short = option_player_number(pn)
+			local mods = SL[short] and SL[short].ActiveModifiers or nil
+			local rememberToken = theme_pref_get("ITGOnlineRememberToken", false) == true
+
+			if mods and mods.RememberOnlineToken == true then
+				rememberToken = true
+			elseif mods then
+				mods.RememberOnlineToken = rememberToken
+			end
+
+			list[rememberToken and 2 or 1] = true
+		end,
+		SaveSelections = function(self, list, pn)
+			local player, short = option_player_number(pn)
+			local mods = SL[short] and SL[short].ActiveModifiers or nil
+
+			local rememberToken = list[2] == true
+			theme_pref_set("ITGOnlineRememberToken", rememberToken)
+
+			if mods then
+				mods.RememberOnlineToken = rememberToken
+			end
+
+			if ITGOnline and ITGOnline.ClearStoredAccessToken and not rememberToken then
+				ITGOnline:ClearStoredAccessToken()
+			end
+			if ITGOnline and ITGOnline.LogPreferenceChange then
+				ITGOnline:LogPreferenceChange("RememberOnlineToken", rememberToken, short)
+			end
+
+			save_profile_preference(player)
+		end,
+	}
+end
+
+OperatorMenuOptionRows.ITGOnlineDissociateAccount = function()
+	local choices = {
+		THEME:GetString("ThemePrefs", "No"),
+		THEME:GetString("ThemePrefs", "Yes"),
+	}
+
+	return {
+		Name = "DissociateOnlineAccount",
+		LayoutType = "ShowOneInRow",
+		SelectType = "SelectOne",
+		OneChoiceForAllPlayers = true,
+		ExportOnChange = false,
+		Choices = choices,
+		LoadSelections = function(self, list, pn)
+			if SL and SL.Global then
+				SL.Global.ITGOnlineUnlinkRequested = false
+			end
+			list[1] = true
+		end,
+		SaveSelections = function(self, list, pn)
+			if not list[2] then return end
+			if SL and SL.Global and SL.Global.ITGOnlineUnlinkRequested then return end
+			if SL and SL.Global then
+				SL.Global.ITGOnlineUnlinkRequested = true
+			end
+
+			local topScreen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+			if not topScreen then return end
+
+			if Trace then
+				Trace("ITG Online options: unlink confirmation requested")
+			end
+			topScreen:SetNextScreenName("ScreenITGOnlineUnlinkProfile")
+			topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 		end,
 	}
 end

@@ -158,6 +158,12 @@ GetOnlineGameplayPanelWidth = function(kind)
 	return layout.side_panel_width
 end
 
+IsOnlineGameplayLayoutLoggingEnabled = function()
+	return ThemePrefs
+		and ThemePrefs.Get
+		and ThemePrefs.Get("ITGOnlineGameplayLayoutLogs") == true
+end
+
 GetOnlineGameplayLayout = function()
 	local margin = clamp(_screen.w * 0.055, 44, 120)
 	local usable_width = math.max(1, _screen.w - (margin * 2))
@@ -185,7 +191,7 @@ GetOnlineGameplayLayout = function()
 		},
 	}
 
-	if Trace then
+	if Trace and IsOnlineGameplayLayoutLoggingEnabled() then
 		Trace("SL_ONLINE_LAYOUT_CALC"
 			.. " screen_w=" .. tostring(_screen.w)
 			.. " screen_h=" .. tostring(_screen.h)
@@ -232,7 +238,7 @@ IsUsingOnlineGameplayColumns = function()
 		and style
 		and style:GetName() == "single"
 
-	if Trace then
+	if Trace and IsOnlineGameplayLayoutLoggingEnabled() then
 		Trace("SL_ONLINE_COLUMNS_CHECK"
 			.. " result=" .. tostring(result == true)
 			.. " screen=" .. tostring(screen_name)

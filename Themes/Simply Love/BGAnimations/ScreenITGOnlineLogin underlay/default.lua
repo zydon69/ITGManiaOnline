@@ -3,7 +3,11 @@ local function is_connected()
 end
 
 local function has_stored_access_token()
-	return ITGOnline and ITGOnline.HasStoredAccessToken and ITGOnline:HasStoredAccessToken()
+	return ITGOnline
+		and ITGOnline.ShouldRememberTokenForCurrentProfile
+		and ITGOnline:ShouldRememberTokenForCurrentProfile()
+		and ITGOnline.HasStoredAccessToken
+		and ITGOnline:HasStoredAccessToken()
 end
 
 local function is_two_player_online_requested()

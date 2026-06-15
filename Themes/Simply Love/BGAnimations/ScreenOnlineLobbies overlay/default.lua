@@ -1,4 +1,4 @@
-local active_index = 0
+local active_index = 3
 local list_selected = false
 local options = { "Salons disponibles", "Joueurs en ligne", "Rafraichir", "Creer un salon", "Retour" }
 local t = nil
@@ -64,6 +64,7 @@ local joined_preview_unknown_pack = false
 local leaving_lobby = false
 local showing_leave_confirm = false
 local leave_confirm_index = 0
+local leave_confirm_mode = "leave_lobby"
 local showing_global_options_menu = false
 local global_options_index = 1
 local joined_global_options = { scoreMode="itg", musicRate=1.0 }
@@ -106,6 +107,34 @@ local function online_menu_button(button)
 	if button == "MenuUp" then return "MenuLeft" end
 	if button == "MenuDown" then return "MenuRight" end
 	return button
+end
+
+local function reset_browse_focus()
+	active_index = 3
+	list_selected = false
+	lobby_view = "lobbies"
+end
+
+local function open_leave_confirm(mode_name)
+	leave_confirm_mode = mode_name or "leave_lobby"
+	leave_confirm_index = 0
+	showing_leave_confirm = true
+	if t then
+		local prompt = t:GetChild("LeaveConfirmPrompt")
+		if prompt then
+			prompt:visible(true)
+			prompt:playcommand("SyncMode")
+			prompt:playcommand("Hover")
+		end
+	end
+end
+
+local function close_leave_confirm()
+	showing_leave_confirm = false
+	if t then
+		local prompt = t:GetChild("LeaveConfirmPrompt")
+		if prompt then prompt:visible(false) end
+	end
 end
 
 local function focus_selected_browse_list(root)
@@ -890,382 +919,407 @@ local function open_pack_choice_menu(songInfo, candidates, message)
 	return true
 end
 
-local InputHandler = function(event)
-  if not event.PlayerNumber or not event.button then return false end
-	if not t then return false end
-	event.GameButton = online_menu_button(event.GameButton)
-
-  if event.type == "InputEventType_FirstPress" then
-		if showing_leave_confirm then
-			if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
-				leave_confirm_index = (leave_confirm_index + (event.GameButton=="MenuRight" and 1 or -1)) % 2
-				SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
-				t:GetChild("LeaveConfirmPrompt"):playcommand("Hover")
-			elseif event.GameButton == "Start" then
-				if leave_confirm_index == 1 then
-					SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-					showing_leave_confirm = false
-					t:GetChild("LeaveConfirmPrompt"):visible(false)
-					leaving_lobby = true
-					-- Immediate local UX transition: avoid mixed joined/browse visuals
-					-- while waiting for async leave-lobby response.
-					mode = "browse"
-					t:GetChild("JoinedLobbyContent"):visible(false)
-					t:queuecommand("UpdateLobbyView")
-					t:playcommand("SetStatus", {
-							text="Sortie du salon...",
-						showSpinner=true,
-						showPrompt=false
-					})
-					MESSAGEMAN:Broadcast("LeaveLobby")
-				else
-					SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-					showing_leave_confirm = false
-					t:GetChild("LeaveConfirmPrompt"):visible(false)
-				end
-			elseif event.GameButton == "Select" or event.GameButton == "Back" then
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-				showing_leave_confirm = false
-				t:GetChild("LeaveConfirmPrompt"):visible(false)
-			end
-			return false
-		end
-
-		if showing_private_join_prompt then
-			local promptOptions = active_private_prompt_options()
-			if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
-				private_join_prompt_index = ((private_join_prompt_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #promptOptions) + 1
-				SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
-				t:queuecommand("UpdatePrivateJoinPrompt")
-			elseif event.GameButton == "Start" then
-				local option = promptOptions[private_join_prompt_index]
-				if private_join_prompt_kind == "invitation" then
-					local invitation = private_join_request and private_join_request.invitation
-					if option and option.dismiss then
-						showing_private_join_prompt = false
-						t:GetChild("PrivateJoinPrompt"):visible(false)
-						SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-					elseif option and invitation and invitation.id then
-						showing_private_join_prompt = false
-						t:GetChild("PrivateJoinPrompt"):visible(false)
-						MESSAGEMAN:Broadcast("AnswerRoomInvitation", {
-							invitation_id=invitation.id,
-							accept=option.accept,
-						})
-						SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-					end
-				else
-					local request = private_join_request and private_join_request.join_request
-					if option and request and request.id then
-					showing_private_join_prompt = false
-					t:GetChild("PrivateJoinPrompt"):visible(false)
-					MESSAGEMAN:Broadcast("AnswerPrivateJoinRequest", {
-						join_request_id=request.id,
-						accept=option.accept,
-						reason=option.reason,
-					})
-					SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-				end
-				end
-			elseif event.GameButton == "Select" or event.GameButton == "Back" then
-				showing_private_join_prompt = false
-				t:GetChild("PrivateJoinPrompt"):visible(false)
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-			end
-			return false
-		end
-
-			if showing_player_action_menu then
-			if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
-				player_action_index = ((player_action_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #player_action_options) + 1
-				SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
-				t:queuecommand("UpdatePlayerActionMenu")
-			elseif event.GameButton == "Start" then
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-				execute_player_action(player_action_options[player_action_index], player_action_user)
-			elseif event.GameButton == "Select" or event.GameButton == "Back" then
-				showing_player_action_menu = false
-				t:GetChild("PlayerActionMenu"):visible(false)
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-			end
-			return false
-		end
-
-			if has_error and event.GameButton == "Start" then
+local function handle_leave_confirm_input(event)
+	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
+		leave_confirm_index = (leave_confirm_index + (event.GameButton=="MenuRight" and 1 or -1)) % 2
+		SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+		t:GetChild("LeaveConfirmPrompt"):playcommand("Hover")
+	elseif event.GameButton == "Start" then
+		if leave_confirm_index == 1 then
+			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			close_leave_confirm()
+			if leave_confirm_mode == "exit_online" then
 				local topScreen = SCREENMAN:GetTopScreen()
 				if topScreen then
 					topScreen:SetNextScreenName("ScreenTitleMenu")
 					topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 				end
-				return false
-			end
-
-			if showing_pack_choice_menu then
-				if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
-					pack_choice_index = ((pack_choice_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #pack_choice_candidates) + 1
-					SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
-					update_pack_choice_menu()
-				elseif event.GameButton == "Start" then
-					local candidate = pack_choice_candidates[pack_choice_index]
-					if candidate and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadPackByCandidate then
-						SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-						pack_choice_last_selected_pack_id = tonumber(candidate.id)
-						if SL and SL.Global and SL.Global.Online then
-							SL.Global.Online.PackChoiceRecovery = {
-								songInfo = pack_choice_last_song_info or pack_choice_song_info,
-								candidates = pack_choice_last_candidates,
-								selectedPackId = pack_choice_last_selected_pack_id,
-							}
-						end
-						close_pack_choice_menu()
-						t:playcommand("SetStatus", {
-								text="Demarrage du telechargement du pack...",
-							showSpinner=true,
-							showPrompt=false
-						})
-						ITGOnline.PackSync:DownloadPackByCandidate(pack_choice_song_info or joined_missing_song_info or joined_song_preview, candidate, function(ok, message)
-							if ok and t then
-								t:playcommand("SetStatus", {
-										text="Telechargement termine. Extraction et rechargement des chansons...",
-									showSpinner=true,
-									showPrompt=false
-								})
-	elseif not ok and t then
-								t:playcommand("SetStatus", {
-									text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
-									showSpinner=false,
-									showPrompt=true
-								})
-							end
-						end)
-					end
-				elseif event.GameButton == "Select" or event.GameButton == "Back" then
-					SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-					close_pack_choice_menu()
-				end
-				return false
-			end
-
-		if not connected then
-			return false
-		end
-
-		if pending_join_action_id > 0 and (event.GameButton == "Select" or event.GameButton == "Back") then
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-				cancel_pending_join("Connexion annulee. Rafraichissement des salons...")
-			return false
-		end
-
-		if showing_global_options_menu then
-			if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
-				move_global_options_choice(event.GameButton == "MenuRight" and 1 or -1)
-				SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
-			elseif event.GameButton == "Start" then
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-				apply_global_options_choice()
-			elseif event.GameButton == "Select" or event.GameButton == "Back" then
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-				close_global_options_menu()
-			end
-			return false
-		end
-
-			if mode == "joined" then
-				if leaving_lobby then
-					return false
-				end
-
-				if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
-					move_joined_button(event.GameButton == "MenuRight" and 1 or -1)
-					SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
-					t:queuecommand("Hover")
-				elseif event.GameButton == "Start" then
-					normalize_joined_active_index()
-					SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-					if joined_active_index == 1 then
-						leave_confirm_index = 0
-						showing_leave_confirm = true
-						t:GetChild("LeaveConfirmPrompt"):visible(true)
-						t:GetChild("LeaveConfirmPrompt"):playcommand("Hover")
-					elseif joined_active_index == 2 and joined_is_manager then
-						if not joined_phase_allows_song_selection() then
-							t:playcommand("SetStatus", {
-									text="La manche actuelle se termine encore. Attendez les resultats avant de choisir une autre chanson.",
-								showSpinner=false,
-								showPrompt=true
-							})
-							return false
-						end
-						local topScreen = SCREENMAN:GetTopScreen()
-						if topScreen then
-							topScreen:SetNextScreenName("ScreenSelectMusic")
-							topScreen:StartTransitioningScreen("SM_GoToNextScreen")
-						end
-					elseif joined_active_index == 3 and joined_missing_song then
-						if joined_can_download_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadSelectedPack then
-							ITGOnline.PackSync:DownloadSelectedPack(joined_missing_song_info or joined_song_preview, function(ok, message)
-								if not ok and type(message) == "table" and message.kind == "pack_candidates" then
-									open_pack_choice_menu(
-										joined_missing_song_info or joined_song_preview,
-										message.candidates,
-										message.message or "Plusieurs packs correspondent. Choisissez-en un."
-									)
-									return
-								end
-								if not ok and t then
-									t:playcommand("SetStatus", {
-										text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
-										showSpinner=false,
-											showPrompt=true
-										})
-									end
-							end)
-						else
-							transition_to_online_song_reload()
-						end
-					elseif joined_active_index == 4 and joined_is_manager then
-						if joined_phase_allows_song_selection() then
-							open_global_options_menu()
-						else
-							t:playcommand("SetStatus", {
-								text="Les options globales ne peuvent pas changer pendant la manche.",
-								showSpinner=false,
-								showPrompt=true
-							})
-						end
-					elseif joined_active_index == 5 and joined_is_manager then
-						if joined_room_can_start() then
-							MESSAGEMAN:Broadcast("StartOnlineRoom")
-						else
-							t:playcommand("SetStatus", {
-									text=joined_any_player_missing_song() and "Impossible de lancer. Un joueur n'a pas confirme la chanson selectionnee." or "Impossible de lancer. Choisissez une chanson et attendez que chaque joueur soit pret.",
-								showSpinner=false,
-								showPrompt=true
-								})
-							end
-						end
-				end
-				return false
-			end
-
-		if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
-			holding[event.GameButton] = true
-			if holding[event.GameButton == "MenuRight" and "MenuLeft" or "MenuRight"] then
-				-- Same as Select below.
-				if list_selected then
-					list_selected = false
-					SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-					t:queuecommand("LoseFocus")
-					t:queuecommand("Hover")
-				end
 			else
-				if not list_selected then
-					active_index = (active_index + (event.GameButton=="MenuRight" and 1 or -1)) % #options
-					SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
-					t:queuecommand("Hover")
-				else
-					if lobby_view == "players" then
-						if #online_users > 0 then
-							online_player_index = ((online_player_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #online_users) + 1
-							SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
-							t:queuecommand("UpdateOnlinePlayers")
-						end
-					else
-						if event.GameButton == "MenuRight" then
-							t:queuecommand("NextLobby")
-						else
-							t:queuecommand("PrevLobby")
-						end
-					end
-				end
-			end
-		elseif event.GameButton == "Start" then
-			if list_selected then
-				if lobby_view == "players" then
-					if selected_online_user() then
-						SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-						t:queuecommand("OpenPlayerActionMenu")
-					else
-						SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-					end
-				else
-					local lobbyList = t:GetChild("LobbyContent") and t:GetChild("LobbyContent"):GetChild("LobbyList")
-					if lobbyList then
-						SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-						lobbyList:playcommand("SelectLobby")
-					else
-						SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-					end
-				end
-				return false
-			end
-
-			if active_index == 0 or active_index == 1 then
-				lobby_view = active_index == 1 and "players" or "lobbies"
-				if (lobby_view == "lobbies" and #candidates > 0) or (lobby_view == "players" and #online_users > 0) then
-					list_selected = true
-					SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-					focus_selected_browse_list(t)
-					t:queuecommand("UpdateOnlinePlayers")
-				else
-					SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-				end
-			elseif active_index == 2 then
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-
-				local onlineHandler = GetOnlineHandlerInstance()
-				if onlineHandler and onlineHandler.connected then
-					t:playcommand("SetStatus", {
-							text="Recherche des salons...",
-						showSpinner=true,
-						showPrompt=false
-					})
-					MESSAGEMAN:Broadcast("SearchLobby")
-				else
-					connected = false
-					has_error = false
-					attempted = false
-					wait_time = 0
-					t:GetChild("LobbyContent"):visible(false)
-					t:GetChild("OnlinePlayersContent"):visible(false)
-					t:playcommand("SetStatus", {
-							text="Rafraichissement de la liste des salons...",
-						showSpinner=true,
-						showPrompt=false
-					})
-					t:queuecommand("CheckConnect")
-				end
-				elseif active_index == 4 then
-					SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-					local topScreen = SCREENMAN:GetTopScreen()
-					if topScreen then
-						topScreen:SetNextScreenName("ScreenTitleMenu")
-						topScreen:StartTransitioningScreen("SM_GoToNextScreen")
-					end
-				elseif active_index == 3 then
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
-				t:GetChild("LobbyContent"):visible(false)
-				t:GetChild("OnlinePlayersContent"):visible(false)
+				leaving_lobby = true
+				mode = "browse"
+				reset_browse_focus()
+				t:GetChild("JoinedLobbyContent"):visible(false)
+				t:queuecommand("UpdateLobbyView")
 				t:playcommand("SetStatus", {
-						text="Creation du salon...",
+					text="Sortie du salon...",
 					showSpinner=true,
 					showPrompt=false
 				})
-				MESSAGEMAN:Broadcast("CreateLobby", {})
+				MESSAGEMAN:Broadcast("LeaveLobby")
 			end
-		elseif event.GameButton == "Select" or event.GameButton == "Back" then
+		else
+			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+			close_leave_confirm()
+		end
+	elseif event.GameButton == "Select" or event.GameButton == "Back" then
+		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+		close_leave_confirm()
+	end
+	return false
+end
+
+local function handle_private_join_prompt_input(event)
+	local promptOptions = active_private_prompt_options()
+	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
+		private_join_prompt_index = ((private_join_prompt_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #promptOptions) + 1
+		SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+		t:queuecommand("UpdatePrivateJoinPrompt")
+	elseif event.GameButton == "Start" then
+		local option = promptOptions[private_join_prompt_index]
+		if private_join_prompt_kind == "invitation" then
+			local invitation = private_join_request and private_join_request.invitation
+			if option and option.dismiss then
+				showing_private_join_prompt = false
+				t:GetChild("PrivateJoinPrompt"):visible(false)
+				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+			elseif option and invitation and invitation.id then
+				showing_private_join_prompt = false
+				t:GetChild("PrivateJoinPrompt"):visible(false)
+				MESSAGEMAN:Broadcast("AnswerRoomInvitation", {
+					invitation_id=invitation.id,
+					accept=option.accept,
+				})
+				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			end
+		else
+			local request = private_join_request and private_join_request.join_request
+			if option and request and request.id then
+				showing_private_join_prompt = false
+				t:GetChild("PrivateJoinPrompt"):visible(false)
+				MESSAGEMAN:Broadcast("AnswerPrivateJoinRequest", {
+					join_request_id=request.id,
+					accept=option.accept,
+					reason=option.reason,
+				})
+				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			end
+		end
+	elseif event.GameButton == "Select" or event.GameButton == "Back" then
+		showing_private_join_prompt = false
+		t:GetChild("PrivateJoinPrompt"):visible(false)
+		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+	end
+	return false
+end
+
+local function handle_player_action_menu_input(event)
+	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
+		player_action_index = ((player_action_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #player_action_options) + 1
+		SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+		t:queuecommand("UpdatePlayerActionMenu")
+	elseif event.GameButton == "Start" then
+		SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+		execute_player_action(player_action_options[player_action_index], player_action_user)
+	elseif event.GameButton == "Select" or event.GameButton == "Back" then
+		showing_player_action_menu = false
+		t:GetChild("PlayerActionMenu"):visible(false)
+		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+	end
+	return false
+end
+
+local function handle_pack_choice_menu_input(event)
+	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
+		pack_choice_index = ((pack_choice_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #pack_choice_candidates) + 1
+		SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+		update_pack_choice_menu()
+	elseif event.GameButton == "Start" then
+		local candidate = pack_choice_candidates[pack_choice_index]
+		if candidate and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadPackByCandidate then
+			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			pack_choice_last_selected_pack_id = tonumber(candidate.id)
+			if SL and SL.Global and SL.Global.Online then
+				SL.Global.Online.PackChoiceRecovery = {
+					songInfo = pack_choice_last_song_info or pack_choice_song_info,
+					candidates = pack_choice_last_candidates,
+					selectedPackId = pack_choice_last_selected_pack_id,
+				}
+			end
+			close_pack_choice_menu()
+			t:playcommand("SetStatus", {
+				text="Demarrage du telechargement du pack...",
+				showSpinner=true,
+				showPrompt=false
+			})
+			ITGOnline.PackSync:DownloadPackByCandidate(pack_choice_song_info or joined_missing_song_info or joined_song_preview, candidate, function(ok, message)
+				if ok and t then
+					t:playcommand("SetStatus", {
+						text="Telechargement termine. Extraction et rechargement des chansons...",
+						showSpinner=true,
+						showPrompt=false
+					})
+				elseif not ok and t then
+					t:playcommand("SetStatus", {
+						text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
+						showSpinner=false,
+						showPrompt=true
+					})
+				end
+			end)
+		end
+	elseif event.GameButton == "Select" or event.GameButton == "Back" then
+		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+		close_pack_choice_menu()
+	end
+	return false
+end
+
+local function handle_global_options_menu_input(event)
+	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
+		move_global_options_choice(event.GameButton == "MenuRight" and 1 or -1)
+		SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+	elseif event.GameButton == "Start" then
+		SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+		apply_global_options_choice()
+	elseif event.GameButton == "Select" or event.GameButton == "Back" then
+		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+		close_global_options_menu()
+	end
+	return false
+end
+
+local function handle_joined_mode_input(event)
+	if leaving_lobby then
+		return false
+	end
+
+	if event.GameButton == "Back" then
+		SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+		normalize_joined_active_index()
+		joined_active_index = 1
+		open_leave_confirm("leave_lobby")
+		return false
+	end
+
+	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
+		move_joined_button(event.GameButton == "MenuRight" and 1 or -1)
+		SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+		t:queuecommand("Hover")
+	elseif event.GameButton == "Start" then
+		normalize_joined_active_index()
+		SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+		if joined_active_index == 1 then
+			open_leave_confirm("leave_lobby")
+		elseif joined_active_index == 2 and joined_is_manager then
+			if not joined_phase_allows_song_selection() then
+				t:playcommand("SetStatus", {
+					text="La manche actuelle se termine encore. Attendez les resultats avant de choisir une autre chanson.",
+					showSpinner=false,
+					showPrompt=true
+				})
+				return false
+			end
+			local topScreen = SCREENMAN:GetTopScreen()
+			if topScreen then
+				topScreen:SetNextScreenName("ScreenSelectMusic")
+				topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+			end
+		elseif joined_active_index == 3 and joined_missing_song then
+			if joined_can_download_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadSelectedPack then
+				ITGOnline.PackSync:DownloadSelectedPack(joined_missing_song_info or joined_song_preview, function(ok, message)
+					if not ok and type(message) == "table" and message.kind == "pack_candidates" then
+						open_pack_choice_menu(
+							joined_missing_song_info or joined_song_preview,
+							message.candidates,
+							message.message or "Plusieurs packs correspondent. Choisissez-en un."
+						)
+						return
+					end
+					if not ok and t then
+						t:playcommand("SetStatus", {
+							text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
+							showSpinner=false,
+							showPrompt=true
+						})
+					end
+				end)
+			else
+				transition_to_online_song_reload()
+			end
+		elseif joined_active_index == 4 and joined_is_manager then
+			if joined_phase_allows_song_selection() then
+				open_global_options_menu()
+			else
+				t:playcommand("SetStatus", {
+					text="Les options globales ne peuvent pas changer pendant la manche.",
+					showSpinner=false,
+					showPrompt=true
+				})
+			end
+		elseif joined_active_index == 5 and joined_is_manager then
+			if joined_room_can_start() then
+				MESSAGEMAN:Broadcast("StartOnlineRoom")
+			else
+				t:playcommand("SetStatus", {
+					text=joined_any_player_missing_song() and "Impossible de lancer. Un joueur n'a pas confirme la chanson selectionnee." or "Impossible de lancer. Choisissez une chanson et attendez que chaque joueur soit pret.",
+					showSpinner=false,
+					showPrompt=true
+				})
+			end
+		end
+	end
+	return false
+end
+
+local function handle_browse_mode_input(event)
+	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
+		holding[event.GameButton] = true
+		if holding[event.GameButton == "MenuRight" and "MenuLeft" or "MenuRight"] then
 			if list_selected then
 				list_selected = false
 				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
 				t:queuecommand("LoseFocus")
 				t:queuecommand("Hover")
 			end
+		else
+			if not list_selected then
+				active_index = (active_index + (event.GameButton=="MenuRight" and 1 or -1)) % #options
+				SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+				t:queuecommand("Hover")
+			else
+				if lobby_view == "players" then
+					if #online_users > 0 then
+						online_player_index = ((online_player_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #online_users) + 1
+						SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+						t:queuecommand("UpdateOnlinePlayers")
+					end
+				else
+					if event.GameButton == "MenuRight" then
+						t:queuecommand("NextLobby")
+					else
+						t:queuecommand("PrevLobby")
+					end
+				end
+			end
 		end
+	elseif event.GameButton == "Start" then
+		if list_selected then
+			if lobby_view == "players" then
+				if selected_online_user() then
+					SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+					t:queuecommand("OpenPlayerActionMenu")
+				else
+					SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+				end
+			else
+				local lobbyList = t:GetChild("LobbyContent") and t:GetChild("LobbyContent"):GetChild("LobbyList")
+				if lobbyList then
+					SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+					lobbyList:playcommand("SelectLobby")
+				else
+					SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+				end
+			end
+			return false
+		end
+
+		if active_index == 0 or active_index == 1 then
+			lobby_view = active_index == 1 and "players" or "lobbies"
+			if (lobby_view == "lobbies" and #candidates > 0) or (lobby_view == "players" and #online_users > 0) then
+				list_selected = true
+				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+				focus_selected_browse_list(t)
+				t:queuecommand("UpdateOnlinePlayers")
+			else
+				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+			end
+		elseif active_index == 2 then
+			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			local onlineHandler = GetOnlineHandlerInstance()
+			if onlineHandler and onlineHandler.connected then
+				t:playcommand("SetStatus", {
+					text="Recherche des salons...",
+					showSpinner=true,
+					showPrompt=false
+				})
+				MESSAGEMAN:Broadcast("SearchLobby")
+			else
+				connected = false
+				has_error = false
+				attempted = false
+				wait_time = 0
+				t:GetChild("LobbyContent"):visible(false)
+				t:GetChild("OnlinePlayersContent"):visible(false)
+				t:playcommand("SetStatus", {
+					text="Rafraichissement de la liste des salons...",
+					showSpinner=true,
+					showPrompt=false
+				})
+				t:queuecommand("CheckConnect")
+			end
+		elseif active_index == 4 then
+			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			local topScreen = SCREENMAN:GetTopScreen()
+			if topScreen then
+				topScreen:SetNextScreenName("ScreenTitleMenu")
+				topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+			end
+		elseif active_index == 3 then
+			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			t:GetChild("LobbyContent"):visible(false)
+			t:GetChild("OnlinePlayersContent"):visible(false)
+			t:playcommand("SetStatus", {
+				text="Creation du salon...",
+				showSpinner=true,
+				showPrompt=false
+			})
+			MESSAGEMAN:Broadcast("CreateLobby", {})
+		end
+	elseif event.GameButton == "Select" or event.GameButton == "Back" then
+		if list_selected then
+			list_selected = false
+			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+			t:queuecommand("LoseFocus")
+			t:queuecommand("Hover")
+		elseif event.GameButton == "Back" then
+			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			open_leave_confirm("exit_online")
+		end
+	end
+	return false
+end
+
+local function handle_first_press_input(event)
+	if showing_leave_confirm then return handle_leave_confirm_input(event) end
+	if showing_private_join_prompt then return handle_private_join_prompt_input(event) end
+	if showing_player_action_menu then return handle_player_action_menu_input(event) end
+
+	if has_error and event.GameButton == "Start" then
+		local topScreen = SCREENMAN:GetTopScreen()
+		if topScreen then
+			topScreen:SetNextScreenName("ScreenTitleMenu")
+			topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+		end
+		return false
+	end
+
+	if showing_pack_choice_menu then return handle_pack_choice_menu_input(event) end
+	if not connected then return false end
+
+	if pending_join_action_id > 0 and (event.GameButton == "Select" or event.GameButton == "Back") then
+		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+		cancel_pending_join("Connexion annulee. Rafraichissement des salons...")
+		return false
+	end
+
+	if showing_global_options_menu then return handle_global_options_menu_input(event) end
+	if mode == "joined" then return handle_joined_mode_input(event) end
+	return handle_browse_mode_input(event)
+end
+
+local InputHandler = function(event)
+	if not event.PlayerNumber or not event.button then return false end
+	if not t then return false end
+	event.GameButton = online_menu_button(event.GameButton)
+
+	if event.type == "InputEventType_FirstPress" then
+		return handle_first_press_input(event)
 	elseif event.type == "InputEventType_Release" then
 		if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 			holding[event.GameButton] = false
 		end
 	end
+	return false
 end
 
 local wait_time = 0
@@ -1274,6 +1328,9 @@ local input_screen = nil
 local af = Def.ActorFrame{
 	  OnCommand=function(self)
 			t=self
+			reset_browse_focus()
+			leave_confirm_mode = "leave_lobby"
+			showing_leave_confirm = false
 			input_added = false
 			holding.MenuLeft = false
 			holding.MenuRight = false
@@ -1731,6 +1788,7 @@ local af = Def.ActorFrame{
 			if onlineHandler.connected then
 				connected = true
 				has_error = false
+				reset_browse_focus()
 					self:playcommand("SetStatus", {
 							text="Connecte au service en ligne.",
 						showSpinner=false,
@@ -2006,11 +2064,12 @@ local af = Def.ActorFrame{
 			if params == nil or params.left == nil or params.left then
 				clear_pending_join()
 				leaving_lobby = false
-				showing_leave_confirm = false
+				close_leave_confirm()
 			if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ResetLocalState then
 				ITGOnline.PackSync:ResetLocalState("lobby_left")
 			end
 			mode = "browse"
+			reset_browse_focus()
 			joined_lobby_code = ""
 			joined_lobby_players = {}
 			self:GetChild("JoinedLobbyContent"):visible(false)
@@ -2935,6 +2994,24 @@ local af = Def.ActorFrame{
 		InitCommand=function(self)
 			self:visible(false)
 		end,
+		SyncModeCommand=function(self)
+			local title = self:GetChild("PromptTitle")
+			local cancelLabel = self:GetChild("CancelButton") and self:GetChild("CancelButton"):GetChild("CancelLabel")
+			local confirmLabel = self:GetChild("ConfirmButton") and self:GetChild("ConfirmButton"):GetChild("ConfirmLabel")
+			if title then
+				if leave_confirm_mode == "exit_online" then
+					title:settext("Etes-vous sur de vouloir quitter ?")
+				else
+					title:settext("Se deconnecter du salon ?")
+				end
+			end
+			if cancelLabel then
+				cancelLabel:settext(leave_confirm_mode == "exit_online" and "Non" or "Annuler")
+			end
+			if confirmLabel then
+				confirmLabel:settext(leave_confirm_mode == "exit_online" and "Oui" or "Deconnecter")
+			end
+		end,
 		HoverCommand=function(self)
 			self:GetChild("CancelButton"):playcommand("Hover")
 			self:GetChild("ConfirmButton"):playcommand("Hover")
@@ -2951,6 +3028,7 @@ local af = Def.ActorFrame{
 			end
 		},
 		LoadFont("Common Normal")..{
+			Name="PromptTitle",
 				Text="Se deconnecter du salon ?",
 			InitCommand=function(self)
 				self:y(-42):zoom(1)
@@ -2976,6 +3054,7 @@ local af = Def.ActorFrame{
 				end
 			},
 			LoadFont("Common Bold")..{
+				Name="CancelLabel",
 					Text="Annuler",
 				InitCommand=function(self)
 					self:zoom(0.5)
@@ -3005,6 +3084,7 @@ local af = Def.ActorFrame{
 				end
 			},
 			LoadFont("Common Bold")..{
+				Name="ConfirmLabel",
 					Text="Deconnecter",
 				InitCommand=function(self)
 					self:zoom(0.5)

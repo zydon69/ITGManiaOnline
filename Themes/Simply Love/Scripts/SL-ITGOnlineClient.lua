@@ -254,6 +254,34 @@ local function active_online_player()
 	return PLAYER_1
 end
 
+local function active_online_player_modifiers()
+	local player = active_online_player()
+	local pn = player and ToEnumShortString(player) or "P1"
+	return player, pn, SL and SL[pn] and SL[pn].ActiveModifiers or nil
+end
+
+local function profile_prefers_persistent_online_token()
+	local player, pn, modifiers = active_online_player_modifiers()
+	local rememberToken = modifiers and modifiers.RememberOnlineToken == true
+
+	if not rememberToken and ThemePrefs and ThemePrefs.Get then
+		local ok, value = pcall(function()
+			return ThemePrefs.Get("ITGOnlineRememberToken")
+		end)
+		rememberToken = ok and value == true
+		if rememberToken and modifiers then
+			modifiers.RememberOnlineToken = true
+		end
+	end
+
+	if not player or not rememberToken then
+		return false
+	end
+
+	if not PROFILEMAN or not PROFILEMAN.IsPersistentProfile then return false end
+	return PROFILEMAN:IsPersistentProfile(player)
+end
+
 local function online_profile_slot(player)
 	if player == PLAYER_2 then return "ProfileSlot_Player2" end
 	return "ProfileSlot_Player1"
@@ -354,6 +382,23 @@ local function clear_profile_access_token()
 	return true
 end
 
+local function write_profile_access_token(apiBaseUrl, accessToken)
+	local path = active_profile_auth_path()
+	if not path then return false end
+
+	local contents = {}
+	if FILEMAN:DoesFileExist(path) then
+		contents = IniFile.ReadFile(path) or {}
+	end
+
+	contents["ITGOnline"] = contents["ITGOnline"] or {}
+	contents["ITGOnline"]["ApiBaseUrl"] = normalize_base_url(apiBaseUrl)
+	contents["ITGOnline"]["AccessToken"] = tostring(accessToken or "")
+	IniFile.WriteFile(path, contents)
+	set_profile_access_token_cache(path, contents["ITGOnline"]["ApiBaseUrl"], contents["ITGOnline"]["AccessToken"], true)
+	return true
+end
+
 local function secure_password_account(apiBaseUrl, email)
 	email = trim(email):lower()
 	if email == "" then return "" end
@@ -410,8 +455,13 @@ local function legacy_secure_access_token_account(apiBaseUrl, deviceName)
 end
 
 local function secure_access_token_get(apiBaseUrl, deviceName)
+	if not profile_prefers_persistent_online_token() then
+		return nil, false
+	end
+
 	if not secure_credentials_available() then
-		clear_profile_access_token()
+		local profileToken, profileStored = read_profile_access_token(apiBaseUrl)
+		if profileStored then return profileToken, false end
 		return nil, false
 	end
 
@@ -438,10 +488,18 @@ local function secure_access_token_get(apiBaseUrl, deviceName)
 end
 
 local function secure_access_token_set(apiBaseUrl, deviceName, accessToken, user)
-	if not secure_credentials_available() then
+	if not profile_prefers_persistent_online_token() then
 		clear_profile_access_token()
-		online_trace("Secure access token save skipped: secure credential storage is unavailable; token stays in memory only.")
 		return false
+	end
+
+	if not secure_credentials_available() then
+		local savedToProfile = write_profile_access_token(apiBaseUrl, accessToken)
+		online_trace(
+			"Secure access token save skipped: secure credential storage unavailable; " ..
+			(savedToProfile and "stored token in profile file." or "failed to store token in profile file.")
+		)
+		return savedToProfile
 	end
 
 	local account = secure_access_token_account(apiBaseUrl, deviceName)
@@ -1156,6 +1214,10 @@ function ITGOnline:ClearTransientSecrets()
 end
 
 function ITGOnline:HasStoredAccessToken()
+	if not profile_prefers_persistent_online_token() then
+		return false
+	end
+
 	local config = self:ConnectionConfig()
 	if tostring(config.accessToken or "") ~= "" then return true end
 	local accessToken = secure_access_token_get(config.apiBaseUrl, config.deviceName)
@@ -1164,6 +1226,17 @@ end
 
 function ITGOnline:StoreAccessToken(accessToken, user)
 	local config = self:Config()
+	if not profile_prefers_persistent_online_token() then
+		self:ClearStoredAccessToken()
+		self.config = self.config or config
+		self.config.accessToken = ""
+		self.config.accessTokenStoredSecurely = false
+		self.config.accessTokenScope = access_token_scope(config.apiBaseUrl, config.deviceName)
+		self.connectionConfig = copy_connection_config(self.config)
+		online_trace("ITG Online token persistence disabled for active profile; token kept in memory for current session only.")
+		return false
+	end
+
 	local stored = secure_access_token_set(config.apiBaseUrl, config.deviceName, accessToken, user)
 	if stored then
 		local _, storedSecurely = secure_access_token_get(config.apiBaseUrl, config.deviceName)
@@ -1174,6 +1247,18 @@ function ITGOnline:StoreAccessToken(accessToken, user)
 		self.connectionConfig = copy_connection_config(self.config)
 	end
 	return stored
+end
+
+function ITGOnline:ShouldRememberTokenForCurrentProfile()
+	return profile_prefers_persistent_online_token()
+end
+
+function ITGOnline:LogPreferenceChange(name, value, pn)
+	online_trace(
+		"ITG Online preference changed: " .. tostring(name) ..
+		"=" .. tostring(value) .. " player=" .. tostring(pn or "?") ..
+		" persistentProfile=" .. tostring(profile_prefers_persistent_online_token())
+	)
 end
 
 function ITGOnline:ClearStoredAccessToken()

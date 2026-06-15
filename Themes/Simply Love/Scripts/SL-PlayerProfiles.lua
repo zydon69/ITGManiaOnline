@@ -71,6 +71,7 @@ local permitted_profile_settings = {
 	ShowHardEXScore      = "boolean",
 	ShowFaPlusPane       = "boolean",
 	SmallerWhite         = "boolean",
+	RememberOnlineToken  = "boolean",
 
 	HideEarlyDecentWayOffJudgments = "boolean",
 	HideEarlyDecentWayOffFlash     = "boolean",
