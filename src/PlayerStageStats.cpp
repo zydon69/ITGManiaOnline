@@ -658,13 +658,11 @@ void PlayerStageStats::SetLifeRecordAt(float fLife, float fStepsSecond) {
     if (curr->second != fLife) {
       // 2^-8
       const float previousSecond = std::max(0.0f, fStepsSecond - 0.00390625f);
-      if (previousSecond == fStepsSecond) {
-        LOG->Warn(
-            "SRC_AUDIT_FIX: PlayerStageStats::SetLifeRecordAt replaced life "
-            "record at zero-second duplicate.");
-      } else {
+      if (previousSecond != fStepsSecond) {
         m_fLifeRecord[previousSecond] = curr->second;
       }
+      // At exactly 0s, there is no earlier timestamp where the previous life
+      // value can be represented. Replacing the initial value is intentional.
     }
   }
   m_fLifeRecord[fStepsSecond] = fLife;
