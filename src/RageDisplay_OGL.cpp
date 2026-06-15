@@ -1040,7 +1040,7 @@ void InitShaders() {
 
 #if defined(MACOSX)
   if (g_bTextureMatrixShader) {
-    LOG->Warn(
+    LOG->Trace(
         "Scaling shader disabled on macOS OpenGL: vertex attribute binding is "
         "unstable on this context.");
     glDeleteObjectARB(g_bTextureMatrixShader);

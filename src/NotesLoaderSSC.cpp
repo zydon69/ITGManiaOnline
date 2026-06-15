@@ -1026,11 +1026,11 @@ void SSCLoader::ProcessScrolls(TimingData& out, const std::string sParam) {
     }
 
     if (fRatio <= 0.0f) {
-      LOG->UserLog(
-          "Song file", this->GetSongTitle(),
-          "has an invalid #SCROLLS ratio %f in \"%s\"; ignored while loading, "
-          "simfile left unchanged.",
-          fRatio, SanitizeForLog(s1).c_str());
+      LOG->Trace(
+          "SRC_AUDIT_FIX ignored invalid #SCROLLS ratio %f in \"%s\" for "
+          "song \"%s\"; simfile left unchanged.",
+          fRatio, SanitizeForLog(s1).c_str(),
+          this->GetSongTitle().c_str());
       continue;
     }
 

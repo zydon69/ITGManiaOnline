@@ -318,9 +318,8 @@ RageTextureID ImageCache::LoadCachedImage(
 
   /* It's not in a texture.  Do we have it loaded? */
   if (g_ImagePathToImage.find(sImagePath) == g_ImagePathToImage.end()) {
-    /* Oops, the image is missing.  Warn and continue. */
     if (PREFSMAN->m_ImageCache != IMGCACHE_OFF) {
-      LOG->Warn("Image cache for '%s' wasn't loaded", sImagePath.c_str());
+      LOG->Trace("Image cache for '%s' wasn't loaded", sImagePath.c_str());
     }
     return ID;
   }
@@ -335,7 +334,10 @@ RageTextureID ImageCache::LoadCachedImage(
   ImageData.GetValue(sImagePath, "Width", iSourceWidth);
   ImageData.GetValue(sImagePath, "Height", iSourceHeight);
   if (iSourceWidth == 0 || iSourceHeight == 0) {
-    LOG->UserLog("Cache file", sImagePath, "couldn't be loaded.");
+    LOG->Trace(
+        "Image cache metadata for '%s' is missing dimensions; using the "
+        "original texture path.",
+        sImagePath.c_str());
     return ID;
   }
 
@@ -418,6 +420,13 @@ void ImageCache::CacheImageInternal(
   std::string sError;
   RageSurface* pImage = RageSurfaceUtils::LoadFile(sImagePath, sError);
   if (pImage == nullptr) {
+    if (!DoesFileExist(sImagePath)) {
+      LOG->Trace(
+          "Image cache source '%s' no longer exists; cache entry will be "
+          "ignored.",
+          sImagePath.c_str());
+      return;
+    }
     LOG->UserLog(
         "Cache file", sImagePath, "couldn't be loaded: %s", sError.c_str());
     return;

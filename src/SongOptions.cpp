@@ -146,8 +146,8 @@ static bool IsExpectedPlayerOnlyModForSongOptions(std::string sMod) {
 
   std::vector<std::string> asParts;
   split(sMod, " ", asParts, true);
-  if (asParts.size() > 1) {
-    sMod = asParts[1];
+  if (!asParts.empty()) {
+    sMod = asParts.back();
     Trim(sMod);
   }
 
@@ -212,8 +212,12 @@ static bool IsExpectedPlayerOnlyModForSongOptions(std::string sMod) {
   }
 
   Regex speed("^([0-9]+(\\.[0-9]+)?)x$");
+  Regex cmod("^c([0-9]+(\\.[0-9]+)?)$");
+  Regex mmod("^m([0-9]+(\\.[0-9]+)?)$");
   std::vector<std::string> matches;
-  return speed.Compare(sMod, matches);
+  return speed.Compare(sMod, matches) ||
+         cmod.Compare(sMod, matches) ||
+         mmod.Compare(sMod, matches);
 }
 
 /* Options are added to the current settings; call Init() beforehand if

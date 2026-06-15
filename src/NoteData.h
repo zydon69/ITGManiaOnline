@@ -9,6 +9,8 @@
 #include "NoteTypes.h"
 #include "global.h"
 
+class TimingData;
+
 /** @brief Act on each non empty row in the specific track. */
 #define FOREACH_NONEMPTY_ROW_IN_TRACK(nd, track, row) \
   for (int row = -1; (nd).GetNextTapNoteRowForTrack(track, row);)
@@ -169,6 +171,7 @@ class NoteData {
    * @param row the row it lives in.
    * @return true if it's a tap, false otherwise. */
   bool IsTap(const TapNote& tn, const int row) const;
+  bool IsTap(const TapNote& tn, const int row, const TimingData* timing) const;
 
   /**
    * @brief Determine if the note in question should be counted as a mine.
@@ -384,19 +387,30 @@ class NoteData {
   float GetFirstBeat() const { return NoteRowToBeat(GetFirstRow()); }
   float GetLastBeat() const { return NoteRowToBeat(GetLastRow()); }
   int GetNumTapNotes(int iStartIndex = 0, int iEndIndex = MAX_NOTE_ROW) const;
+  int GetNumTapNotes(
+      int iStartIndex, int iEndIndex, const TimingData* timing) const;
   int GetNumTapNotesNoTiming(
       int iStartIndex = 0, int iEndIndex = MAX_NOTE_ROW) const;
   int GetNumTapNotesInRow(int iRow) const;
+  int GetNumTapNotesInRow(int iRow, const TimingData* timing) const;
   int GetNumMinesInRow(int iRow) const;
   int GetNumMines(int iStartIndex = 0, int iEndIndex = MAX_NOTE_ROW) const;
   int GetNumRowsWithTap(
       int iStartIndex = 0, int iEndIndex = MAX_NOTE_ROW) const;
+  int GetNumRowsWithTap(
+      int iStartIndex, int iEndIndex, const TimingData* timing) const;
   int GetNumRowsWithTapOrHoldHead(
       int iStartIndex = 0, int iEndIndex = MAX_NOTE_ROW) const;
+  int GetNumRowsWithTapOrHoldHead(
+      int iStartIndex, int iEndIndex, const TimingData* timing) const;
   /* Optimization: for the default of start to end, use the second (faster).
    * XXX: Second what? -- Steve */
   int GetNumHoldNotes(int iStartIndex = 0, int iEndIndex = MAX_NOTE_ROW) const;
+  int GetNumHoldNotes(
+      int iStartIndex, int iEndIndex, const TimingData* timing) const;
   int GetNumRolls(int iStartIndex = 0, int iEndIndex = MAX_NOTE_ROW) const;
+  int GetNumRolls(
+      int iStartIndex, int iEndIndex, const TimingData* timing) const;
 
   // Count rows that contain iMinTaps or more taps.
   int GetNumRowsWithSimultaneousTaps(

@@ -475,11 +475,6 @@ static std::string JoinLineList(std::vector<std::string>& lines) {
   while (j < lines.size() && lines[j].empty()) {
     ++j;
   }
-  if (j > 0) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX: NotesWriterSM stripped %u leading blank note lines.",
-        j);
-  }
 
   return join("\r\n", lines.begin() + j, lines.end());
 }

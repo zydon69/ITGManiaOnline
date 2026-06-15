@@ -109,6 +109,30 @@ bool IsAbsoluteSongAssetPath(const std::string& path) {
          path[1] == ':';
 }
 
+std::string NormalizeDirectoryRoot(std::string path) {
+  FixSlashesInPlace(path);
+  CollapsePath(path);
+  if (!path.empty() && path[path.size() - 1] != '/') {
+    path += '/';
+  }
+  return path;
+}
+
+std::string GetSongAssetAllowedRoot(const std::string& songPath) {
+  const std::string songRoot = NormalizeDirectoryRoot(songPath);
+  std::string groupRoot = NormalizeDirectoryRoot(Dirname(songRoot));
+
+  /* Many packs keep shared bn/bg assets beside their song folders.  Allow one
+   * parent directory only when the song is inside a real group/pack directory,
+   * e.g. Songs/Pack/Song/ -> Songs/Pack/. */
+  if (!groupRoot.empty() && groupRoot != songRoot &&
+      Dirname(groupRoot) != "./") {
+    return groupRoot;
+  }
+
+  return songRoot;
+}
+
 std::vector<std::string> GetNonEmptyPathParts(const std::string& path) {
   std::vector<std::string> raw;
   std::vector<std::string> parts;
@@ -2003,15 +2027,13 @@ std::string Song::GetSongAssetPath(
   CollapsePath(sRelPath);
 
   std::string sSongRoot = sSongPath;
-  CollapsePath(sSongRoot);
-  if (!sSongRoot.empty() && sSongRoot[sSongRoot.size() - 1] != '/') {
-    sSongRoot += '/';
-  }
-  if (!BeginsWith(sRelPath, sSongRoot)) {
+  sSongRoot = NormalizeDirectoryRoot(sSongRoot);
+  const std::string sAllowedRoot = GetSongAssetAllowedRoot(sSongRoot);
+  if (!BeginsWith(sRelPath, sAllowedRoot)) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-600: Rejected song asset path '%s' escaping song "
-        "directory '%s'.",
-        sPath.c_str(), sSongPath.c_str());
+        "asset root '%s' for song directory '%s'.",
+        sPath.c_str(), sAllowedRoot.c_str(), sSongPath.c_str());
     return std::string();
   }
 

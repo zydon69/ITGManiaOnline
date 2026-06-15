@@ -489,10 +489,13 @@ void ScoreKeeperNormal::OnNextSong(
       m_iMaxScoreSoFar, m_iMaxPossiblePoints,
       "ScoreKeeperNormal::OnNextSong max score so far");
 
+  const TimingData* scoringTiming = pSteps->GetTimingData();
   m_iNumTapsAndHolds = AddNonNegativeIntSaturated(
-      pNoteData->GetNumRowsWithTapOrHoldHead(),
+      pNoteData->GetNumRowsWithTapOrHoldHead(
+          0, MAX_NOTE_ROW, scoringTiming),
       AddNonNegativeIntSaturated(
-          pNoteData->GetNumHoldNotes(), pNoteData->GetNumRolls(),
+          pNoteData->GetNumHoldNotes(0, MAX_NOTE_ROW, scoringTiming),
+          pNoteData->GetNumRolls(0, MAX_NOTE_ROW, scoringTiming),
           "ScoreKeeperNormal::OnNextSong hold totals"),
       "ScoreKeeperNormal::OnNextSong tap/hold totals");
 
