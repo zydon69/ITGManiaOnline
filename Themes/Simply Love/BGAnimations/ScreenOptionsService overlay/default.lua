@@ -50,36 +50,36 @@ if not nextScreenOptRows then
 				-- if the next screen has OptionRows leading deeper to subscreens, present them here as-is
 				local fmt
 
-			-- the choices on the next screen are conf-based OptionRows that set Preferences
-			-- (assumes the "Fallback" metric of each of these literally matches "ScreenOptionsServiceChild"
-			--  which is brittle but works for now, because of how I've set up SL's metrics.)
-				if THEME:GetMetric("Screen"..childscreen_name, "Fallback") == "ScreenOptionsServiceChild" then
-					local _line = THEME:GetMetric("Screen"..childscreen_name, "Line"..optrow_name)
+				-- the choices on the next screen are conf-based OptionRows that set Preferences
+				-- (assumes the "Fallback" metric of each of these literally matches "ScreenOptionsServiceChild"
+				--  which is brittle but works for now, because of how I've set up SL's metrics.)
+					if THEME:GetMetric("Screen"..childscreen_name, "Fallback") == "ScreenOptionsServiceChild" then
+						local _line = THEME:GetMetric("Screen"..childscreen_name, "Line"..optrow_name)
 
-					if _line:match("conf,") then
-						optrow_title = _line:gsub("conf,","")
-					elseif _line:match("lua,") then
+						if _line:match("conf,") then
+							optrow_title = _line:gsub("conf,","")
+						else
+							optrow_title = optrow_name
+						end
+						fmt = "\n• %s"
+
+				-- the choices on the next screen would take us deeper into sub-subscreens
+				-- (assumes the "Fallback" metric of each of these literally matches "ScreenOptionsServiceSub"
+				--  which is brittle but works for now, because of how I've set up SL's metrics.)
+					elseif THEME:GetMetric("Screen"..childscreen_name, "Fallback") == "ScreenOptionsServiceSub" then
 						optrow_title = optrow_name
+						fmt = "\n %s"
 					end
-					fmt = "\n• %s"
 
-			-- the choices on the next screen would take us deeper into sub-subscreens
-			-- (assumes the "Fallback" metric of each of these literally matches "ScreenOptionsServiceSub"
-			--  which is brittle but works for now, because of how I've set up SL's metrics.)
-				elseif THEME:GetMetric("Screen"..childscreen_name, "Fallback") == "ScreenOptionsServiceSub" then
-					optrow_title = optrow_name
-					fmt = "\n %s"
-				end
-
-			-- localize if possible
-				if THEME:HasString("OptionTitles", optrow_title) then
-					-- remove embedded newline characters so that "Allow Players\nTo Fail Set" becomes "Allow Players To Fail Set"
-					s = s .. (fmt):format( THEME:GetString("OptionTitles", optrow_title):gsub("\n", " "))
-				else
-					s = s .. optrow_name
+				-- localize if possible
+					if type(optrow_title) == "string" and THEME:HasString("OptionTitles", optrow_title) then
+						-- remove embedded newline characters so that "Allow Players\nTo Fail Set" becomes "Allow Players To Fail Set"
+						s = s .. (fmt):format( THEME:GetString("OptionTitles", optrow_title):gsub("\n", " "))
+					else
+						s = s .. (fmt or "\n%s"):format(optrow_name)
+					end
 				end
 			end
-		end
 
 		nextScreenOptRows[childscreen_name] = s
 	end

@@ -28,7 +28,10 @@ SL_CustomPrefs.Get = function()
 		visualStyleChoices[#visualStyleChoices+1] = "✨"
 		visualStyleValues[#visualStyleValues+1] = "SRPG9"
 	else
-		local prefs = IniFile.ReadFile("/Save/ThemePrefs.ini")
+		local prefs = {}
+		if FILEMAN and FILEMAN.DoesFileExist and FILEMAN:DoesFileExist("/Save/ThemePrefs.ini") then
+			prefs = IniFile.ReadFile("/Save/ThemePrefs.ini")
+		end
 		local theme = PREFSMAN:GetPreference("Theme")
 		local lastActiveEvent = nil
 		if prefs[theme] and prefs[theme].LastActiveEvent == "SRPG9" then
@@ -386,7 +389,10 @@ SL_CustomPrefs.Get = function()
 end
 
 SL_CustomPrefs.Validate = function()
-	local file = IniFile.ReadFile("Save/ThemePrefs.ini")
+	local file = {}
+	if FILEMAN and FILEMAN.DoesFileExist and FILEMAN:DoesFileExist("Save/ThemePrefs.ini") then
+		file = IniFile.ReadFile("Save/ThemePrefs.ini")
+	end
 	local sl_prefs = SL_CustomPrefs.Get()
 
 	-- If a section for this theme is found in ./Save/ThemePrefs.ini

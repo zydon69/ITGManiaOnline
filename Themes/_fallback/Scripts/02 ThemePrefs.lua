@@ -119,7 +119,10 @@ ThemePrefs =
 		-- create the section if it doesn't exist
 		local section = GetThemeName()
 --		Trace( ("ThemePrefs.Init: Theme name is \"%s\""):format(section) )
-		PrefsTable[section] = PrefsTable[section] and PrefsTable[section] or { }
+		if not PrefsTable[section] then
+			PrefsTable[section] = {}
+			ThemePrefs.NeedsSaved = true
+		end
 
 		--Trace( "Using section " .. section )
 
@@ -128,6 +131,7 @@ ThemePrefs =
 			if PrefsTable[section][k] == nil then
 				Trace( k .. " doesn't exist, creating" )
 				PrefsTable[section][k] = tbl.Default
+				ThemePrefs.NeedsSaved = true
 			end
 		end
 
@@ -136,6 +140,10 @@ ThemePrefs =
 
 	Load = function()
 		if not IniFile then return false end
+		if FILEMAN and FILEMAN.DoesFileExist and not FILEMAN:DoesFileExist(ThemePrefsPath) then
+			PrefsTable = {}
+			return true
+		end
 		PrefsTable = IniFile.ReadFile( ThemePrefsPath )
 		return true
 	end,

@@ -262,7 +262,6 @@ local lastQrPixelSize = nil
 local lastRenderedQrUrl = nil
 local lastRenderedQrVisible = nil
 local lastStatusText = nil
-local lastCodeText = nil
 local lastUrlText = nil
 
 local function refresh_selection()
@@ -284,7 +283,6 @@ local function render_qr(panel)
 	local inset = panel:GetChild("QRInset")
 	local data = panel:GetChild("QRCodeData")
 	local status = panel:GetChild("Status")
-	local code = panel:GetChild("Code")
 	local url = panel:GetChild("Url")
 
 	local showQr = state.mode == "waiting" and state.verificationUrl and state.verificationUrl ~= ""
@@ -331,14 +329,6 @@ local function render_qr(panel)
 		if statusText ~= lastStatusText then
 			status:settext(statusText)
 			lastStatusText = statusText
-		end
-	end
-
-	if code then
-		local codeText = state.shortCode ~= "" and ("Code: " .. state.shortCode) or ""
-		if codeText ~= lastCodeText then
-			code:settext(codeText)
-			lastCodeText = codeText
 		end
 	end
 
@@ -461,7 +451,7 @@ local t = Def.ActorFrame{
 		end,
 
 	Def.Quad{
-		InitCommand=function(self) self:FullScreen():diffuse(0,0,0,0.82) end
+		InitCommand=function(self) self:xy(0, 0):zoomto(_screen.w, _screen.h):diffuse(0,0,0,0.82) end
 	},
 
 	LoadFont("Common Bold")..{
@@ -492,15 +482,11 @@ local t = Def.ActorFrame{
 		},
 		LoadFont("Common Normal")..{
 			Name="Status",
-			InitCommand=function(self) self:xy(0, 88):horizalign(center):zoom(0.56):maxwidth(250):settext("") end
-		},
-		LoadFont("Common Normal")..{
-			Name="Code",
-			InitCommand=function(self) self:xy(0, 116):horizalign(center):zoom(0.48):maxwidth(250):settext("") end
+			InitCommand=function(self) self:xy(0, 96):horizalign(center):zoom(0.56):maxwidth(250):settext("") end
 		},
 		LoadFont("Common Normal")..{
 			Name="Url",
-			InitCommand=function(self) self:xy(0, 136):horizalign(center):zoom(0.34):maxwidth(250):settext("") end
+			InitCommand=function(self) self:xy(0, 128):horizalign(center):zoom(0.34):maxwidth(250):settext("") end
 		},
 	},
 

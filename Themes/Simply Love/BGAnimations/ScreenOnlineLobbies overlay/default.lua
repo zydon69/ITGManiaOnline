@@ -458,6 +458,7 @@ local function joined_missing_song_countdown_seconds()
 	if not roomTimeMs then return nil end
 	local currentUserId = tostring(ITGOnline.user and ITGOnline.user.id or "")
 	if currentUserId == "" then return nil end
+	if joined_manager_user_id ~= nil and tostring(joined_manager_user_id) == currentUserId then return nil end
 
 	for _, player in ipairs(joined_lobby_players or {}) do
 		if tostring(player.playerId or "") == currentUserId then
@@ -559,6 +560,13 @@ local function sync_local_missing_song_from_joined_players()
 
 	for _, player in ipairs(joined_lobby_players) do
 		if tostring(player and player.playerId or "") == selfId then
+			if joined_manager_user_id ~= nil and tostring(joined_manager_user_id) == selfId then
+				joined_missing_song = false
+				joined_missing_song_info = nil
+				joined_can_download_pack = false
+				joined_missing_song_reason = nil
+				return
+			end
 			local selfMissing = player.missingSong == true
 			if pack_sync_confirms_joined_song() then
 				joined_missing_song = false
@@ -590,6 +598,7 @@ end
 
 local function player_missing_song_for_ui(player)
 	if joined_phase == "results" then return false end
+	if joined_manager_user_id ~= nil and tostring(player and player.playerId or "") == tostring(joined_manager_user_id) then return false end
 	if player_is_current_user(player) and pack_sync_is_checking_joined_song() then
 		return false
 	end
