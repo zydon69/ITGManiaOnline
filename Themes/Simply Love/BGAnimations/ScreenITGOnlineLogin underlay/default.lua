@@ -326,7 +326,8 @@ local function render_qr(panel)
 		if state.status ~= "" then
 			statusText = state.status
 		elseif is_connected() then
-			statusText = THEME:GetString("ScreenITGOnlineLogin", "ConnectedAs"):format(tostring(ITGOnline.user and (ITGOnline.user.name or ITGOnline.user.email) or "ITG Online"))
+			local displayName = ITGOnline and ITGOnline.UserDisplayName and ITGOnline:UserDisplayName(ITGOnline.user, ITGOnline.user and ITGOnline.user.email or "ITG Online") or "ITG Online"
+			statusText = THEME:GetString("ScreenITGOnlineLogin", "ConnectedAs"):format(tostring(displayName))
 		else
 			statusText = THEME:GetString("ScreenITGOnlineLogin", "NotConnected")
 		end

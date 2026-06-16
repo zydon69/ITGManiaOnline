@@ -1111,8 +1111,9 @@ DisplayLobbyState = function(data, actor)
 			local scoreText = scorePercent ~= nil
 				and (string.format("%.2f", scorePercent) .. "% (" .. tostring(score) .. " pts)")
 				or (tostring(score) .. " pts")
+			local displayName = ITGOnline and ITGOnline.UserDisplayName and ITGOnline:UserDisplayName(user, "Joueur") or tostring(user.display_name or user.displayName or user.name or "Joueur")
 			lines[#lines+1] = tostring(result.rank or "?")
-					.. ". " .. tostring(user.name or "Joueur")
+					.. ". " .. tostring(displayName)
 				.. " - " .. scoreText
 					.. " precision " .. string.format("%.2f", accuracy) .. "%"
 				.. failedText

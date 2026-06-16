@@ -20,6 +20,14 @@ local function compact_name(name)
 	return name:sub(1, max_chars - 3) .. "..."
 end
 
+local function online_display_name(user, fallback)
+	if ITGOnline and ITGOnline.UserDisplayName then
+		return ITGOnline:UserDisplayName(user, fallback)
+	end
+	user = type(user) == "table" and user or {}
+	return tostring(user.display_name or user.displayName or user.name or fallback or "Player")
+end
+
 local function local_user_id()
 	if ITGOnline and ITGOnline.user and ITGOnline.user.id then
 		return tostring(ITGOnline.user.id)
@@ -85,7 +93,7 @@ local function rows_from_leaderboard(leaderboard)
 		local is_finalized = score.finalized_at ~= nil and tostring(score.finalized_at) ~= ""
 		rows[#rows + 1] = {
 			user_id = user_id,
-			name = tostring(user.name or "Player"),
+			name = online_display_name(user, "Player"),
 			percent = percent or 0,
 			failed = flags.failed,
 			exited = flags.exited,

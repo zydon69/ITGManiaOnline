@@ -9,6 +9,14 @@ local function OnlineEvaluationActive()
 	return ITGOnline and ITGOnline.currentRoomId ~= nil
 end
 
+local function OnlineDisplayName(user, fallback)
+	if ITGOnline and ITGOnline.UserDisplayName then
+		return ITGOnline:UserDisplayName(user, fallback)
+	end
+	user = type(user) == "table" and user or {}
+	return tostring(user.display_name or user.displayName or user.name or fallback or "Player")
+end
+
 local function SetOnlineEvaluationInputRedirected(enabled, reason)
 	if not OnlineEvaluationActive() then return end
 	for player in ivalues(PlayerNumber) do
@@ -340,7 +348,7 @@ if OnlineEvaluationActive() then
 			local lines = {}
 			for session in ivalues(summary.sessions or {}) do
 				local user = session.user or {}
-				local name = tostring(user.name or session.name or "Player")
+				local name = OnlineDisplayName(user, session.name or "Player")
 				local state = tostring(session.state or "pending")
 				local prefix = "…"
 				if state == "finished" then

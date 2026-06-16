@@ -1628,7 +1628,8 @@ local af = Def.ActorFrame{
 			local selected = (list_selected and lobby_view == "players" and i == online_player_index) and "> " or "  "
 			local room = user.room and user.room.name and (" " .. room_visibility_label(user.room) .. " " .. tostring(user.room.name)) or ""
 			local status = user.status and (" [" .. tostring(user.status) .. "]") or ""
-			local line = clamp_text(selected .. i .. ". " .. tostring(user.name or "Joueur") .. status .. room, 44)
+			local display_name = ITGOnline and ITGOnline.UserDisplayName and ITGOnline:UserDisplayName(user, "Joueur") or tostring(user.display_name or user.displayName or user.name or "Joueur")
+			local line = clamp_text(selected .. i .. ". " .. display_name .. status .. room, 44)
 			if list_selected and lobby_view == "players" and i == online_player_index then
 				selected_start = text_length
 				selected_length = #line
@@ -1684,7 +1685,13 @@ local af = Def.ActorFrame{
 		if not menu then return end
 		local title = menu:GetChild("PlayerActionTitle")
 		if title then
-				title:settext(player_action_user and tostring(player_action_user.name or player_action_user.profileName or "Joueur") or "Joueur")
+			local display_name = "Joueur"
+			if player_action_user then
+				display_name = ITGOnline and ITGOnline.UserDisplayName
+					and ITGOnline:UserDisplayName(player_action_user, player_action_user.profileName or "Joueur")
+					or tostring(player_action_user.display_name or player_action_user.displayName or player_action_user.name or player_action_user.profileName or "Joueur")
+			end
+			title:settext(display_name)
 		end
 		local body = {}
 		for i, option in ipairs(player_action_options) do

@@ -11,6 +11,14 @@ local function clamp(value, min_value, max_value)
 	return math.max(min_value, math.min(max_value, value))
 end
 
+local function online_display_name(user, fallback)
+	if ITGOnline and ITGOnline.UserDisplayName then
+		return ITGOnline:UserDisplayName(user, fallback)
+	end
+	user = type(user) == "table" and user or {}
+	return tostring(user.display_name or user.displayName or user.name or fallback or "Player")
+end
+
 local function final_results()
 	if not (ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.play_state) then
 		return {}
@@ -27,7 +35,7 @@ local function final_results()
 			local user = type(result.user) == "table" and result.user or {}
 			normalized[#normalized + 1] = {
 				rank = tonumber(result.rank) or index,
-				name = tostring(user.name or localized("OnlineUnknownPlayer", "Player")),
+				name = online_display_name(user, localized("OnlineUnknownPlayer", "Player")),
 				score = math.floor(tonumber(result.score) or 0),
 				score_percent = tonumber(result.score_percent),
 				accuracy = tonumber(result.accuracy),

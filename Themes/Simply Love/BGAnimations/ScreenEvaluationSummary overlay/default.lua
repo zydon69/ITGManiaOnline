@@ -30,6 +30,14 @@ end
 local page_text = THEME:GetString("ScreenEvaluationSummary", "Page")
 local online_max_rows = 8
 
+local function online_display_name(user, fallback)
+	if ITGOnline and ITGOnline.UserDisplayName then
+		return ITGOnline:UserDisplayName(user, fallback)
+	end
+	user = type(user) == "table" and user or {}
+	return tostring(user.display_name or user.displayName or user.name or fallback or "Player")
+end
+
 -- -----------------------------------------------------------------------
 
 
@@ -58,7 +66,7 @@ local online_final_results = function()
 		local user = result.user or {}
 		normalized[#normalized + 1] = {
 			rank = tonumber(result.rank) or index,
-			name = tostring(user.name or "Player"),
+			name = online_display_name(user, "Player"),
 			score = math.floor(tonumber(result.score) or 0),
 			accuracy = tonumber(result.accuracy) or 0,
 			failed = result.failed and true or false,

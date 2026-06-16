@@ -162,6 +162,18 @@ local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+local function user_display_name(user, fallback)
+	if type(user) ~= "table" then return tostring(fallback or "Player") end
+	local displayName = trim(user.display_name or user.displayName or user.name)
+	if displayName ~= "" then return displayName end
+	if user.id ~= nil then return "User " .. tostring(user.id) end
+	return tostring(fallback or "Player")
+end
+
+function ITGOnline:UserDisplayName(user, fallback)
+	return user_display_name(user, fallback)
+end
+
 local function parse_bool(value, fallback)
 	if value == nil then return fallback == true end
 	local text = trim(value):lower()
@@ -387,8 +399,8 @@ local function write_profile_access_token(apiBaseUrl, deviceName, accessToken, u
 	if user and user.id then
 		contents["ITGOnline"]["UserId"] = tostring(user.id)
 	end
-	if user and user.name then
-		contents["ITGOnline"]["UserName"] = tostring(user.name)
+	if user then
+		contents["ITGOnline"]["UserName"] = user_display_name(user, user.name)
 	end
 
 	IniFile.WriteFile(path, contents)
@@ -4939,7 +4951,7 @@ function ITGOnline:ApplyLocalPlayState(state, source)
 			user_id = tonumber(userId) or userId,
 			user = {
 				id = tonumber(userId) or userId,
-				name = self.user and self.user.name or "Player",
+				name = user_display_name(self.user, "Player"),
 			},
 		}
 		table.insert(self.currentRoom.play_state.sessions, target)
@@ -5495,7 +5507,7 @@ function ITGOnline:ApplyLobbyPresencePayload(payload)
 		if tostring(player.id or "") == tostring(user.id or "") then
 			onlinePlayers[#onlinePlayers + 1] = {
 				id = user.id,
-				name = user.name or player.name or ("User " .. tostring(user.id or "?")),
+				name = user_display_name(user, player.name or ("User " .. tostring(user.id or "?"))),
 				status = user.status or payload.status or player.status or "available",
 				room = user.room,
 				lastSeenAt = user.last_seen_at or player.lastSeenAt,
@@ -5510,7 +5522,7 @@ function ITGOnline:ApplyLobbyPresencePayload(payload)
 	if not found and user.id ~= nil then
 		onlinePlayers[#onlinePlayers + 1] = {
 			id = user.id,
-			name = user.name or ("User " .. tostring(user.id or "?")),
+			name = user_display_name(user, "User " .. tostring(user.id or "?")),
 			status = user.status or payload.status or "available",
 			room = user.room,
 			lastSeenAt = user.last_seen_at,
@@ -6172,7 +6184,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 			local isSelf = self.user and tonumber(user.id) == tonumber(self.user.id)
 			if not isSelf then onlinePlayers[#onlinePlayers + 1] = {
 				id = user.id,
-				name = user.name or ("User " .. tostring(user.id or "?")),
+				name = user_display_name(user, "User " .. tostring(user.id or "?")),
 				status = user.status or "available",
 				room = user.room,
 				lastSeenAt = user.last_seen_at,
@@ -6267,7 +6279,7 @@ function ITGOnline:LobbyStatePayload(room)
 			end
 			players[#players + 1] = {
 				playerId = userId,
-				profileName = user.name or ("Player " .. userId),
+				profileName = user_display_name(user, "Player " .. userId),
 				screenName = memberScreenName,
 				ready = readyByUserId[userId] == true,
 				missingSong = member.missing_song and true or false,
