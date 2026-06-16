@@ -1404,7 +1404,7 @@ CreateOnlineHandler = function()
 								ITGOnline:Heartbeat(status)
 							end
 
-						self:sleep(5):queuecommand("OnlineHeartbeatTick")
+						self:sleep(30):queuecommand("OnlineHeartbeatTick")
 					end,
 					OnlinePlayingCountdownTickCommand=function(self)
 						if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.WatchdogTick then
@@ -1587,17 +1587,17 @@ CreateOnlineHandler = function()
 					end,
 	      PlayerJoinedMessageCommand=function(self)
 					if self.connected and self.socket ~= nil and self.inLobby then
-	          ITGOnline:Heartbeat("in_room")
+	          ITGOnline:Heartbeat("in_room", true)
 	        end
 	      end,
 	      PlayerUnjoinedMessageCommand=function(self)
 					if self.connected and self.socket ~= nil and self.inLobby then
-	          ITGOnline:Heartbeat("in_room")
+	          ITGOnline:Heartbeat("in_room", true)
 	        end
 	      end,
 			UpdateMachineStateMessageCommand=function(self)
 					if self.connected and self.socket ~= nil and self.inLobby then
-	          ITGOnline:Heartbeat("in_room")
+	          ITGOnline:Heartbeat("in_room", true)
 	        end
 	      end,
 		      OnlineConfigReadyMessageCommand=function(self)
