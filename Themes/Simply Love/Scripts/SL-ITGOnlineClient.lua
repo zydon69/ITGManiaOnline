@@ -3699,6 +3699,36 @@ function ITGOnline:UpdateGlobalOptions(options, callback)
 	end)
 end
 
+function ITGOnline:TransferRoomManager(userId, callback)
+	if not self.currentRoomId then
+		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
+		return
+	end
+
+	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/transfer-manager", {
+		user_id = tonumber(userId) or userId,
+	}, function(ok, decoded, response)
+		if ok and decoded and decoded.room then
+			local room = self:ApplyRoomSnapshot(decoded.room, "manager_transfer")
+			decoded.room = room or decoded.room
+			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = "managerTransfer",
+				success = true,
+				message = "Role manager transfere."
+			})
+		else
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = "managerTransfer",
+				success = false,
+				message = response_message(response, decoded, "Impossible de transferer le role manager.")
+			})
+		end
+
+		if callback then callback(ok, decoded, response) end
+	end)
+end
+
 function ITGOnline:SelectSongAndMarkLobbyReady(callback)
 	if not self.currentRoomId then
 		if callback then callback(false, nil, { errorMessage = "No active online room." }) end

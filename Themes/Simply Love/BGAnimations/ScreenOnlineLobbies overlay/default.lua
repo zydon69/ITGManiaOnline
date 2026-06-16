@@ -52,6 +52,8 @@ local joined_is_manager = false
 local joined_phase = nil
 local joined_lobby_code = ""
 local joined_lobby_players = {}
+local joined_player_index = 1
+local joined_players_selected = false
 local joined_manager_user_id = nil
 local joined_song_preview = nil
 local joined_song_confirmed = false
@@ -637,6 +639,34 @@ local function player_is_manager(player)
 	return joined_manager_user_id ~= nil and tostring(player and player.playerId or "") == tostring(joined_manager_user_id)
 end
 
+local function selected_joined_player()
+	if #joined_lobby_players == 0 then return nil end
+	joined_player_index = math.max(1, math.min(joined_player_index, #joined_lobby_players))
+	return joined_lobby_players[joined_player_index]
+end
+
+local function joined_player_can_receive_manager(player)
+	if not joined_is_manager or not player then return false end
+	if player_is_manager(player) then return false end
+	if tostring(player.playerId or "") == "" then return false end
+	return true
+end
+
+local function focus_joined_players()
+	if not joined_is_manager or #joined_lobby_players <= 1 then return false end
+	joined_player_index = math.max(1, math.min(joined_player_index, #joined_lobby_players))
+	if player_is_manager(joined_lobby_players[joined_player_index]) then
+		for i, player in ipairs(joined_lobby_players) do
+			if joined_player_can_receive_manager(player) then
+				joined_player_index = i
+				break
+			end
+		end
+	end
+	joined_players_selected = joined_player_can_receive_manager(joined_lobby_players[joined_player_index])
+	return joined_players_selected
+end
+
 local function pack_sync_line_for_player(player)
 	if not player or player_is_manager(player) or joined_phase == "results" then return "" end
 	if joined_song_preview == nil and not (ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song) then return "" end
@@ -761,6 +791,15 @@ end
 
 local function build_player_action_options(user)
 	if not user then return {} end
+	if user.actionContext == "joined_manager_transfer" then
+		if not joined_player_can_receive_manager(user) then
+			return {{label="Transfert impossible", action="cancel"}, {label="Annuler", action="cancel"}}
+		end
+		return {
+			{label="Transferer manager", action="transfer_manager"},
+			{label="Annuler", action="cancel"},
+		}
+	end
 	if user.isSelf then
 		return {{label="C'est vous", action="cancel"}, {label="Annuler", action="cancel"}}
 	end
@@ -837,7 +876,45 @@ local function execute_player_action(option, user)
 	showing_player_action_menu = false
 	t:GetChild("PlayerActionMenu"):visible(false)
 
-	if option.action == "invite_private" then
+	if option.action == "transfer_manager" then
+		local targetUserId = user.playerId or user.id
+		if not joined_player_can_receive_manager(user) or not ITGOnline or not ITGOnline.TransferRoomManager then
+			t:playcommand("SetStatus", {
+				text="Impossible de transferer le role manager a ce joueur.",
+				showSpinner=false,
+				showPrompt=true
+			})
+			return
+		end
+		t:playcommand("SetStatus", {
+			text="Transfert du role manager...",
+			showSpinner=true,
+			showPrompt=false
+		})
+		ITGOnline:TransferRoomManager(targetUserId, function(ok, decoded, response)
+			if ok then
+				joined_players_selected = false
+				if t then
+					t:playcommand("SetStatus", {
+						text="Role manager transfere.",
+						showSpinner=false,
+						showPrompt=false
+					})
+					t:queuecommand("UpdateJoinedLobbyText")
+					t:queuecommand("Hover")
+				end
+			elseif t then
+				local message = "Impossible de transferer le role manager."
+				if response and response.errorMessage then message = response.errorMessage end
+				if decoded and decoded.message then message = decoded.message end
+				t:playcommand("SetStatus", {
+					text=message,
+					showSpinner=false,
+					showPrompt=true
+				})
+			end
+		end)
+	elseif option.action == "invite_private" then
 		t:GetChild("LobbyContent"):visible(false)
 		t:GetChild("OnlinePlayersContent"):visible(false)
 			t:playcommand("SetStatus", {text="Creation du salon prive et envoi de l'invitation...", showSpinner=true, showPrompt=false})
@@ -1092,6 +1169,46 @@ local function handle_joined_mode_input(event)
 		return false
 	end
 
+	if joined_players_selected then
+		if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
+			if #joined_lobby_players > 0 then
+				local delta = event.GameButton == "MenuRight" and 1 or -1
+				for _ = 1, #joined_lobby_players do
+					joined_player_index = ((joined_player_index - 1 + delta) % #joined_lobby_players) + 1
+					if joined_player_can_receive_manager(joined_lobby_players[joined_player_index]) then
+						break
+					end
+				end
+				SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+				t:queuecommand("UpdateJoinedLobbyText")
+			end
+			return false
+		elseif event.GameButton == "Start" then
+			local player = selected_joined_player()
+			if joined_player_can_receive_manager(player) then
+				player.actionContext = "joined_manager_transfer"
+				player_action_user = player
+				player_action_options = build_player_action_options(player_action_user)
+				player_action_index = 1
+				showing_player_action_menu = #player_action_options > 0
+				local menu = t:GetChild("PlayerActionMenu")
+				if menu then
+					menu:visible(showing_player_action_menu)
+					t:queuecommand("UpdatePlayerActionMenu")
+				end
+				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			else
+				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+			end
+			return false
+		elseif event.GameButton == "Select" or event.GameButton == "Back" then
+			joined_players_selected = false
+			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+			t:queuecommand("UpdateJoinedLobbyText")
+			return false
+		end
+	end
+
 	if event.GameButton == "Back" then
 		SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
 		normalize_joined_active_index()
@@ -1165,6 +1282,13 @@ local function handle_joined_mode_input(event)
 					showPrompt=true
 				})
 			end
+		end
+	elseif event.GameButton == "Select" then
+		if focus_joined_players() then
+			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			t:queuecommand("UpdateJoinedLobbyText")
+		else
+			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
 		end
 	end
 	return false
@@ -1457,7 +1581,7 @@ local af = Def.ActorFrame{
 		if not menu then return end
 		local title = menu:GetChild("PlayerActionTitle")
 		if title then
-				title:settext(player_action_user and tostring(player_action_user.name or "Joueur") or "Joueur")
+				title:settext(player_action_user and tostring(player_action_user.name or player_action_user.profileName or "Joueur") or "Joueur")
 		end
 		local body = {}
 		for i, option in ipairs(player_action_options) do
@@ -1524,6 +1648,18 @@ local af = Def.ActorFrame{
 		end
 
 				local lines = {}
+				local selected_start = nil
+				local selected_length = nil
+				local text_length = 0
+				if #joined_lobby_players == 0 then
+					joined_player_index = 1
+					joined_players_selected = false
+				else
+					joined_player_index = math.max(1, math.min(joined_player_index, #joined_lobby_players))
+					if joined_players_selected and not joined_player_can_receive_manager(joined_lobby_players[joined_player_index]) then
+						joined_players_selected = focus_joined_players()
+					end
+				end
 				for i, player in ipairs(joined_lobby_players) do
 						local profile = trim_text(player.profileName or player.name or player.playerId or ("Joueur "..i))
 					if tostring(player.playerId or "") == tostring(joined_manager_user_id or "") then
@@ -1549,7 +1685,8 @@ local af = Def.ActorFrame{
 					missing = " - selection en cours"
 				end
 				local maxLineLen = 88
-				local lineHead = i..". "..profile
+				local selectedPrefix = joined_players_selected and i == joined_player_index and "> " or "  "
+				local lineHead = selectedPrefix..i..". "..profile
 				local lineTail = ready .. missing
 				local optionsText = table.concat(optionParts, " | ")
 				local options = ""
@@ -1560,12 +1697,29 @@ local af = Def.ActorFrame{
 						options = " [" .. clamp_text(optionsText, optionsBudget) .. "]"
 					end
 				end
-				lines[#lines+1] = clamp_text(lineHead..options..lineTail, maxLineLen)
+				local line = clamp_text(lineHead..options..lineTail, maxLineLen)
+				if joined_players_selected and i == joined_player_index then
+					selected_start = text_length
+					selected_length = #line
+				end
+				lines[#lines+1] = line
+				text_length = text_length + #line + 1
+			end
+			if joined_is_manager and #joined_lobby_players > 1 then
+				local helpLine = joined_players_selected
+					and "START: transferer manager  |  SELECT: revenir"
+					or "SELECT: choisir un joueur pour transferer manager"
+				lines[#lines+1] = ""
+				lines[#lines+1] = helpLine
 			end
 
 			local playersText = joinedContent:GetChild("JoinedLobbyPlayers")
 		if playersText then
 				playersText:settext(#lines > 0 and table.concat(lines, "\n") or "En attente des joueurs...")
+				playersText:ClearAttributes()
+				if selected_start and selected_length and selected_length > 0 then
+					playersText:AddAttribute(selected_start, {Length=selected_length, Diffuse={0,1,0,1}})
+				end
 		end
 			update_joined_song_card(joinedContent)
 
@@ -1909,21 +2063,27 @@ local af = Def.ActorFrame{
 		list_selected = false
 		join_lobby_code = ""
 			joined_lobby_code = params and params.code or ""
-			if joined_lobby_code ~= previousLobbyCode then
-				joined_focus_initialized = false
-				joined_song_preview = nil
-				joined_song_confirmed = false
-				joined_song_selected_key = ""
+				if joined_lobby_code ~= previousLobbyCode then
+					joined_focus_initialized = false
+					joined_player_index = 1
+					joined_players_selected = false
+					joined_song_preview = nil
+					joined_song_confirmed = false
+					joined_song_selected_key = ""
 				joined_missing_song = false
 				joined_missing_song_info = nil
 				joined_can_download_pack = false
 				joined_missing_song_reason = nil
 				joined_preview_unknown_pack = false
 			end
-			joined_lobby_players = params and params.players or {}
-			joined_is_manager = params and params.isManager or false
-			joined_manager_user_id = params and params.manager and params.manager.id or nil
-			joined_phase = params and params.phase or nil
+				joined_lobby_players = params and params.players or {}
+				joined_is_manager = params and params.isManager or false
+				joined_manager_user_id = params and params.manager and params.manager.id or nil
+				if not joined_is_manager then
+					joined_players_selected = false
+				end
+				joined_player_index = math.max(1, math.min(joined_player_index, math.max(1, #joined_lobby_players)))
+				joined_phase = params and params.phase or nil
 			joined_global_options = normalize_global_options(params and params.globalOptions or nil)
 			if joined_phase == "results" then
 				joined_song_preview = nil

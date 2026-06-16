@@ -1615,7 +1615,7 @@ void ScreenSelectMusic::Cancel(ScreenMessage smSendWhenDone) {
     m_MusicWheel.Move(0);
     ScreenPrompt::Prompt(
         SM_ConfirmExit, PROMPT_BEFORE_EXITING.GetValue().c_str(),
-        PROMPT_YES_NO);
+        PROMPT_YES_NO, ANSWER_NO, nullptr, nullptr, nullptr, true);
   } else {
     ConfirmedCancel(smSendWhenDone);
   }

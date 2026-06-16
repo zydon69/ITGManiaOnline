@@ -37,24 +37,29 @@ PromptAnswer g_defaultAnswer;
 void (*g_pOnYes)(void*);
 void (*g_pOnNo)(void*);
 void* g_pCallbackData;
+bool g_bReverseYesNoOrder;
 };  // namespace
 
 void ScreenPrompt::SetPromptSettings(
     const std::string& sText, PromptType type, PromptAnswer defaultAnswer,
-    void (*OnYes)(void*), void (*OnNo)(void*), void* pCallbackData) {
+    void (*OnYes)(void*), void (*OnNo)(void*), void* pCallbackData,
+    bool reverseYesNoOrder) {
   g_sText = sText;
   g_PromptType = type;
   g_defaultAnswer = defaultAnswer;
   g_pOnYes = OnYes;
   g_pOnNo = OnNo;
   g_pCallbackData = pCallbackData;
+  g_bReverseYesNoOrder = reverseYesNoOrder;
 }
 
 void ScreenPrompt::Prompt(
     ScreenMessage smSendOnPop, const std::string& sText, PromptType type,
     PromptAnswer defaultAnswer, void (*OnYes)(void*), void (*OnNo)(void*),
-    void* pCallbackData) {
-  SetPromptSettings(sText, type, defaultAnswer, OnYes, OnNo, pCallbackData);
+    void* pCallbackData, bool reverseYesNoOrder) {
+  SetPromptSettings(
+      sText, type, defaultAnswer, OnYes, OnNo, pCallbackData,
+      reverseYesNoOrder);
 
   SCREENMAN->AddNewScreenToTop("ScreenPrompt", smSendOnPop);
 }
@@ -101,7 +106,13 @@ void ScreenPrompt::BeginScreen() {
   m_sprCursor->PlayCommand("On");
 
   for (int i = 0; i <= g_PromptType; i++) {
-    std::string sElem = ssprintf("Answer%dOf%d", i + 1, g_PromptType + 1);
+    int displayIndex = i + 1;
+    if (IsYesNoOrderReversed()) {
+      displayIndex = i == ANSWER_YES ? 2 : 1;
+    }
+
+    std::string sElem =
+        ssprintf("Answer%dOf%d", displayIndex, g_PromptType + 1);
     m_textAnswer[i].SetName(sElem);
     LOAD_ALL_COMMANDS(m_textAnswer[i]);
     // Side note:  Because LOAD_ALL_COMMANDS occurs here, InitCommand will
@@ -148,6 +159,10 @@ bool ScreenPrompt::Input(const InputEventPlus& input) {
 }
 
 bool ScreenPrompt::CanGoRight() {
+  if (IsYesNoOrderReversed()) {
+    return m_Answer == ANSWER_NO;
+  }
+
   switch (g_PromptType) {
     case PROMPT_OK:
       return false;
@@ -160,9 +175,19 @@ bool ScreenPrompt::CanGoRight() {
   }
 }
 
+bool ScreenPrompt::IsYesNoOrderReversed() const {
+  return g_PromptType == PROMPT_YES_NO && g_bReverseYesNoOrder;
+}
+
 void ScreenPrompt::Change(int dir) {
   m_textAnswer[m_Answer].StopEffect();
-  m_Answer = (PromptAnswer)(m_Answer + dir);
+
+  if (IsYesNoOrderReversed()) {
+    m_Answer = dir < 0 ? ANSWER_NO : ANSWER_YES;
+  } else {
+    m_Answer = (PromptAnswer)(m_Answer + dir);
+  }
+
   ASSERT(m_Answer >= 0 && m_Answer < NUM_PromptAnswer);
 
   PositionCursor();
@@ -171,7 +196,8 @@ void ScreenPrompt::Change(int dir) {
 }
 
 bool ScreenPrompt::MenuLeft(const InputEventPlus& input) {
-  if (CanGoLeft()) {
+  if ((IsYesNoOrderReversed() && m_Answer == ANSWER_YES) ||
+      (!IsYesNoOrderReversed() && CanGoLeft())) {
     Change(-1);
     return true;
   }

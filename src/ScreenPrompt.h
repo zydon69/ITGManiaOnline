@@ -21,12 +21,13 @@ class ScreenPrompt : public ScreenWithMenuElements {
   static void SetPromptSettings(
       const std::string& sText, PromptType type = PROMPT_OK,
       PromptAnswer defaultAnswer = ANSWER_NO, void (*OnYes)(void*) = nullptr,
-      void (*OnNo)(void*) = nullptr, void* pCallbackData = nullptr);
+      void (*OnNo)(void*) = nullptr, void* pCallbackData = nullptr,
+      bool reverseYesNoOrder = false);
   static void Prompt(
       ScreenMessage smSendOnPop, const std::string& sText,
       PromptType type = PROMPT_OK, PromptAnswer defaultAnswer = ANSWER_NO,
       void (*OnYes)(void*) = nullptr, void (*OnNo)(void*) = nullptr,
-      void* pCallbackData = nullptr);
+      void* pCallbackData = nullptr, bool reverseYesNoOrder = false);
 
   virtual void Init();
   virtual void BeginScreen();
@@ -41,6 +42,7 @@ class ScreenPrompt : public ScreenWithMenuElements {
  protected:
   bool CanGoLeft() { return m_Answer > 0; }
   bool CanGoRight();
+  bool IsYesNoOrderReversed() const;
   void Change(int dir);
   bool MenuLeft(const InputEventPlus& input);
   bool MenuRight(const InputEventPlus& input);
