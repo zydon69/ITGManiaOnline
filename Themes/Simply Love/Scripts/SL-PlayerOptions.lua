@@ -840,19 +840,28 @@ local Overrides = {
 	-------------------------------------------------------------------------
 	ScreenAfterPlayerOptions = {
 		Values = function()
-			local finishChoice = (ITGOnline and ITGOnline.currentRoomId) and "Ready" or "Gameplay"
+			if ITGOnline and ITGOnline.currentRoomId then
+				return { "Ready", "Options2", "Options3" }
+			end
+			local finishChoice = "Gameplay"
 			local choices = { finishChoice, "Select Music", "Options2", "Options3"  }
 			if SL.Global.MenuTimer.ScreenSelectMusic < 1  or SL.Global.MusicWheelLocked == true then table.remove(choices, 2) end
 			return choices
 		end,
 		OneChoiceForAllPlayers = true,
 		SaveSelections = function(self, list, pn)
-			if list[1] then
-				if ITGOnline and ITGOnline.currentRoomId then
-					SL.Global.ScreenAfter.PlayerOptions = "ScreenOnlineLobbies"
+			if ITGOnline and ITGOnline.currentRoomId then
+				if list[2] then
+					SL.Global.ScreenAfter.PlayerOptions = "ScreenPlayerOptions2"
+				elseif list[3] then
+					SL.Global.ScreenAfter.PlayerOptions = "ScreenPlayerOptions3"
 				else
-					SL.Global.ScreenAfter.PlayerOptions = Branch.GameplayScreen()
+					SL.Global.ScreenAfter.PlayerOptions = "ScreenOnlineLobbies"
 				end
+				return
+			end
+			if list[1] then
+				SL.Global.ScreenAfter.PlayerOptions = Branch.GameplayScreen()
 			end
 
 			if SL.Global.MenuTimer.ScreenSelectMusic > 1 and SL.Global.MusicWheelLocked == false then
@@ -868,19 +877,28 @@ local Overrides = {
 	-------------------------------------------------------------------------
 	ScreenAfterPlayerOptions2 = {
 		Values = function()
-			local finishChoice = (ITGOnline and ITGOnline.currentRoomId) and "Ready" or "Gameplay"
+			if ITGOnline and ITGOnline.currentRoomId then
+				return { "Ready", "Options1", "Options3" }
+			end
+			local finishChoice = "Gameplay"
 			local choices = { finishChoice, "Select Music", "Options1", "Options3"  }
 			if SL.Global.MenuTimer.ScreenSelectMusic < 1  or SL.Global.MusicWheelLocked == true	 then table.remove(choices, 2) end
 			return choices
 		end,
 		OneChoiceForAllPlayers = true,
 		SaveSelections = function(self, list, pn)
-			if list[1] then
-				if ITGOnline and ITGOnline.currentRoomId then
-					SL.Global.ScreenAfter.PlayerOptions2 = "ScreenOnlineLobbies"
+			if ITGOnline and ITGOnline.currentRoomId then
+				if list[2] then
+					SL.Global.ScreenAfter.PlayerOptions2 = "ScreenPlayerOptions"
+				elseif list[3] then
+					SL.Global.ScreenAfter.PlayerOptions2 = "ScreenPlayerOptions3"
 				else
-					SL.Global.ScreenAfter.PlayerOptions2 = Branch.GameplayScreen()
+					SL.Global.ScreenAfter.PlayerOptions2 = "ScreenOnlineLobbies"
 				end
+				return
+			end
+			if list[1] then
+				SL.Global.ScreenAfter.PlayerOptions2 = Branch.GameplayScreen()
 			end
 
 			if SL.Global.MenuTimer.ScreenSelectMusic > 1 and SL.Global.MusicWheelLocked == false then
@@ -897,19 +915,28 @@ local Overrides = {
 	-- this is so dumb; I need to find time to completely rewrite ScreenPlayerOptions :(
 	ScreenAfterPlayerOptions3 = {
 		Values = function()
-			local finishChoice = (ITGOnline and ITGOnline.currentRoomId) and "Ready" or "Gameplay"
+			if ITGOnline and ITGOnline.currentRoomId then
+				return { "Ready", "Options1", "Options2" }
+			end
+			local finishChoice = "Gameplay"
 			local choices = { finishChoice, "Select Music", "Options1", "Options2"  }
 			if SL.Global.MenuTimer.ScreenSelectMusic < 1  or SL.Global.MusicWheelLocked == true then table.remove(choices, 2) end
 			return choices
 		end,
 		OneChoiceForAllPlayers = true,
 		SaveSelections = function(self, list, pn)
-			if list[1] then
-				if ITGOnline and ITGOnline.currentRoomId then
-					SL.Global.ScreenAfter.PlayerOptions3 = "ScreenOnlineLobbies"
+			if ITGOnline and ITGOnline.currentRoomId then
+				if list[2] then
+					SL.Global.ScreenAfter.PlayerOptions3 = "ScreenPlayerOptions"
+				elseif list[3] then
+					SL.Global.ScreenAfter.PlayerOptions3 = "ScreenPlayerOptions2"
 				else
-					SL.Global.ScreenAfter.PlayerOptions3 = Branch.GameplayScreen()
+					SL.Global.ScreenAfter.PlayerOptions3 = "ScreenOnlineLobbies"
 				end
+				return
+			end
+			if list[1] then
+				SL.Global.ScreenAfter.PlayerOptions3 = Branch.GameplayScreen()
 			end
 
 			if SL.Global.MenuTimer.ScreenSelectMusic > 1 and SL.Global.MusicWheelLocked == false then

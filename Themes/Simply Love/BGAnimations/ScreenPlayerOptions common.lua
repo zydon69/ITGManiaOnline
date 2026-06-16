@@ -11,6 +11,7 @@ local function online_next_screen_for_options(screenName)
 end
 
 local OPTIONS_READY_TIMEOUT_SECONDS = 30
+local online_options_screen_name = nil
 
 local function online_options_timeout_active()
 	return ITGOnline
@@ -30,6 +31,13 @@ end
 
 local af = Def.ActorFrame{
 	OnCommand=function(self)
+		local screen = SCREENMAN:GetTopScreen()
+		online_options_screen_name = screen and screen:GetName() or nil
+		if ITGOnline and ITGOnline.currentRoomId then
+			SL.Global.ScreenAfter.PlayerOptions = "ScreenOnlineLobbies"
+			SL.Global.ScreenAfter.PlayerOptions2 = "ScreenOnlineLobbies"
+			SL.Global.ScreenAfter.PlayerOptions3 = "ScreenOnlineLobbies"
+		end
 		if ITGOnline and ITGOnline.BeginOnlineOptionsReadyDeadline and online_options_timeout_active() then
 			ITGOnline:BeginOnlineOptionsReadyDeadline(OPTIONS_READY_TIMEOUT_SECONDS, "screen_player_options")
 			self:queuecommand("UpdateOptionsReadyTimer")
@@ -52,7 +60,7 @@ local af = Def.ActorFrame{
 		end
 
 		local screen = SCREENMAN:GetTopScreen()
-		local screenName = screen and screen:GetName() or ""
+		local screenName = online_options_screen_name or (screen and screen:GetName()) or ""
 		if online_next_screen_for_options(screenName) ~= "ScreenOnlineLobbies" then
 			return
 		end

@@ -149,6 +149,15 @@ local function maybe_preview_current_online_song(force)
 		return
 	end
 
+	local phase = ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) or tostring(ITGOnline.currentRoom.phase or "")
+	if phase ~= "lobby" then
+		return
+	end
+
+	if ITGOnline.currentRoom.selected_song ~= nil then
+		return
+	end
+
 	local manager = ITGOnline.currentRoom.manager
 	if not manager or tonumber(manager.id) ~= tonumber(ITGOnline.user.id) then
 		return
@@ -163,9 +172,21 @@ local function maybe_preview_current_online_song(force)
 		return
 	end
 
-	lastSongPreviewKey = key
-	lastSongPreviewSentAt = now
-	ITGOnline:PreviewSong()
+	ITGOnline:PreviewSong(function(ok)
+		if ok then
+			lastSongPreviewKey = key
+			lastSongPreviewSentAt = now
+		end
+	end)
+end
+
+local function split_online_song_path(path)
+	path = tostring(path or "")
+	local pack, song = path:match("^([^/]+)/(.+)$")
+	if pack then
+		return pack, song
+	end
+	return path, nil
 end
 
 local OnlineStartCountdownText = function()
@@ -332,6 +353,30 @@ local InputHandler = function(event)
 	return false
 end
 
+local OnlineOptionsInputHandler = function(event)
+	if not (ITGOnline and ITGOnline.currentRoomId) then return false end
+	if not event or event.type ~= "InputEventType_FirstPress" then return false end
+
+	local deviceButton = ""
+	if event.DeviceInput and event.DeviceInput.button then
+		deviceButton = string.lower(tostring(event.DeviceInput.button))
+	end
+
+	local isBack = event.GameButton == "Back" or string.find(deviceButton, "backspace", 1, true) ~= nil
+	local isEscape = string.find(deviceButton, "escape", 1, true) ~= nil
+	if isBack or isEscape then
+		if online_trace then
+			online_trace("FLOW online_options_back_blocked room=" .. tostring(ITGOnline.currentRoomId)
+				.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room")
+				.. " button=" .. tostring(event.GameButton or "")
+				.. " device=" .. tostring(deviceButton))
+		end
+		return true
+	end
+
+	return false
+end
+
 UnlockOnlineInput = function()
 	isWaiting = false
 	for player in ivalues(PlayerNumber) do
@@ -392,9 +437,9 @@ local ApplyOnlineSongSelection = function(songInfo)
 	end
 
 	local song = SONGMAN:FindSong(songInfo.songPath)
-	local parts = songInfo.songPath:split("/")
-	if not song and parts[2] then
-		song = SONGMAN:FindSong(parts[2])
+	local _, songFolder = split_online_song_path(songInfo.songPath)
+	if not song and songFolder then
+		song = SONGMAN:FindSong(songFolder)
 	end
 	if not song then
 		online_flow_trace("legacy_apply_song_selection_missing_song path=" .. tostring(songInfo.songPath))
@@ -1148,8 +1193,9 @@ DisplayLobbyState = function(data, actor)
 			if topScreen and topScreen:GetName() == "ScreenSelectMusic" then
 				local song = SONGMAN:FindSong(data.songInfo.songPath)
 				local wheel = topScreen:GetMusicWheel()
-				if not song and data.songInfo.songPath:split("/")[2] then
-					song = SONGMAN:FindSong(data.songInfo.songPath:split("/")[2])
+				local _, songFolder = split_online_song_path(data.songInfo.songPath)
+				if not song and songFolder then
+					song = SONGMAN:FindSong(songFolder)
 				end
 				if song and wheel then
 					wheel:SelectSong(song)
@@ -1164,9 +1210,9 @@ DisplayLobbyState = function(data, actor)
       if screenName == "ScreenSelectMusic" then
         -- Split the song path into pack and song name for easier reading.
         -- It looks like "<pack>/<song>" so we can just split on the first "/"
-        local songPathParts = data.songInfo.songPath:split("/")
-        local pack = songPathParts[1] or "Inconnu"
-        local song = songPathParts[2] or "Inconnue"
+        local pack, song = split_online_song_path(data.songInfo.songPath)
+        pack = pack or "Inconnu"
+        song = song or "Inconnue"
 
         -- Sometimes the pack or song can get quite long, so add ... if it's too long.
         local maxLength = 30
@@ -1496,6 +1542,9 @@ CreateOnlineHandler = function()
 					if screenName == "ScreenSelectMusic" then
 						UnlockOnlineInput()
 						replace_online_input_callback(screen, "select_music", SelectMusicInputHandler)
+					end
+					if ITGOnline and ITGOnline.IsOnlineOptionsScreen and ITGOnline:IsOnlineOptionsScreen(screenName) then
+						replace_online_input_callback(screen, "online_options", OnlineOptionsInputHandler)
 					end
 					if ITGOnline and ITGOnline.currentRoomId then
 						-- Keep online flow deterministic: finishing options returns to the room lobby.
