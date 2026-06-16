@@ -32,6 +32,7 @@ local pack_choice_last_candidates = {}
 local pack_choice_last_song_info = nil
 local pack_choice_last_selected_pack_id = nil
 local pack_choice_all_candidates_exhausted = false
+local pack_choice_browse_only = false
 local private_join_options = {
 	{label="Accepter", accept=true, reason=""},
 	{label="Refuser", accept=false, reason=""},
@@ -67,6 +68,9 @@ local leaving_lobby = false
 local showing_leave_confirm = false
 local leave_confirm_index = 0
 local leave_confirm_mode = "leave_lobby"
+local showing_browse_pack_download_confirm = false
+local browse_pack_download_confirm_index = 0
+local browse_pack_download_song_info = nil
 local showing_global_options_menu = false
 local global_options_index = 1
 local joined_global_options = { scoreMode="itg", musicRate=1.0 }
@@ -432,9 +436,18 @@ local function pack_sync_display_text(status)
 end
 
 local function pack_sync_busy()
-	if not (ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.currentStatus) then return false end
+	if not (ITGOnline and ITGOnline.PackSync) then return false end
+	if trim_text(ITGOnline.PackSync.downloadInFlightKey) ~= "" then return true end
 	local status = trim_text(ITGOnline.PackSync.currentStatus)
 	return status == "download_requested" or status == "download_in_progress" or status == "reloading_songs"
+end
+
+local function can_download_browsed_pack()
+	return joined_preview_unknown_pack
+		and not joined_song_confirmed
+		and not joined_missing_song
+		and joined_song_preview ~= nil
+		and not pack_sync_busy()
 end
 
 local function pack_sync_status_for_joined_song()
@@ -543,7 +556,7 @@ local function joined_button_indices()
 	if joined_is_manager and joined_phase_allows_song_selection() then
 		indices[#indices + 1] = 4
 	end
-	if joined_missing_song then
+	if joined_missing_song or can_download_browsed_pack() then
 		indices[#indices + 1] = 3
 	end
 	if joined_room_can_start() then
@@ -945,6 +958,7 @@ local function close_pack_choice_menu()
 	pack_choice_candidates = {}
 	pack_choice_song_info = nil
 	pack_choice_message = nil
+	pack_choice_browse_only = false
 	if t then
 		local menu = t:GetChild("PackChoiceMenu")
 		if menu then menu:visible(false) end
@@ -977,7 +991,7 @@ local function update_pack_choice_menu()
 	menu:visible(true)
 end
 
-local function open_pack_choice_menu(songInfo, candidates, message)
+local function open_pack_choice_menu(songInfo, candidates, message, browseOnly)
 	if type(candidates) ~= "table" or #candidates == 0 then return false end
 	showing_player_action_menu = false
 	if t then
@@ -986,6 +1000,7 @@ local function open_pack_choice_menu(songInfo, candidates, message)
 	end
 	pack_choice_song_info = songInfo
 	pack_choice_candidates = candidates
+	pack_choice_browse_only = browseOnly == true
 	pack_choice_last_song_info = songInfo
 	pack_choice_last_candidates = candidates
 	SL.Global.Online.PackChoiceRecovery = {
@@ -1003,6 +1018,68 @@ local function open_pack_choice_menu(songInfo, candidates, message)
 		if networkStatus then networkStatus:visible(false) end
 	end
 	return true
+end
+
+local function close_browse_pack_download_confirm()
+	showing_browse_pack_download_confirm = false
+	browse_pack_download_confirm_index = 0
+	browse_pack_download_song_info = nil
+	if t then
+		local prompt = t:GetChild("BrowsePackDownloadConfirmPrompt")
+		if prompt then prompt:visible(false) end
+	end
+end
+
+local function open_browse_pack_download_confirm(songInfo)
+	if not songInfo or pack_sync_busy() then return false end
+	browse_pack_download_song_info = songInfo
+	browse_pack_download_confirm_index = 0
+	showing_browse_pack_download_confirm = true
+	if t then
+		local prompt = t:GetChild("BrowsePackDownloadConfirmPrompt")
+		if prompt then
+			prompt:visible(true)
+			prompt:playcommand("Hover")
+		end
+	end
+	return true
+end
+
+local function start_browse_pack_download(songInfo)
+	if not songInfo then return end
+	if not (ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadBrowsingPack) then
+		if t then
+			t:playcommand("SetStatus", {
+				text="Le telechargement anticipe du pack n'est pas disponible.",
+				showSpinner=false,
+				showPrompt=true
+			})
+		end
+		return
+	end
+	t:playcommand("SetStatus", {
+		text="Demarrage du telechargement du pack...",
+		showSpinner=true,
+		showPrompt=false
+	})
+	ITGOnline.PackSync:DownloadBrowsingPack(songInfo, function(ok, message)
+		if not ok and type(message) == "table" and message.kind == "pack_candidates" then
+			open_pack_choice_menu(
+				songInfo,
+				message.candidates,
+				message.message or "Plusieurs packs correspondent. Choisissez-en un.",
+				true
+			)
+			return
+		end
+		if not ok and t then
+			t:playcommand("SetStatus", {
+				text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
+				showSpinner=false,
+				showPrompt=true
+			})
+		end
+	end)
 end
 
 local function handle_leave_confirm_input(event)
@@ -1040,6 +1117,28 @@ local function handle_leave_confirm_input(event)
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
 		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
 		close_leave_confirm()
+	end
+	return false
+end
+
+local function handle_browse_pack_download_confirm_input(event)
+	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
+		browse_pack_download_confirm_index = (browse_pack_download_confirm_index + (event.GameButton=="MenuRight" and 1 or -1)) % 2
+		SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+		t:GetChild("BrowsePackDownloadConfirmPrompt"):playcommand("Hover")
+	elseif event.GameButton == "Start" then
+		if browse_pack_download_confirm_index == 1 then
+			local songInfo = browse_pack_download_song_info
+			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			close_browse_pack_download_confirm()
+			start_browse_pack_download(songInfo)
+		else
+			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+			close_browse_pack_download_confirm()
+		end
+	elseif event.GameButton == "Select" or event.GameButton == "Back" then
+		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+		close_browse_pack_download_confirm()
 	end
 	return false
 end
@@ -1114,6 +1213,7 @@ local function handle_pack_choice_menu_input(event)
 		if candidate and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadPackByCandidate then
 			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
 			pack_choice_last_selected_pack_id = tonumber(candidate.id)
+			local browseOnly = pack_choice_browse_only
 			if SL and SL.Global and SL.Global.Online then
 				SL.Global.Online.PackChoiceRecovery = {
 					songInfo = pack_choice_last_song_info or pack_choice_song_info,
@@ -1141,7 +1241,7 @@ local function handle_pack_choice_menu_input(event)
 						showPrompt=true
 					})
 				end
-			end)
+			end, { browseOnly = browseOnly })
 		end
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
 		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
@@ -1240,8 +1340,10 @@ local function handle_joined_mode_input(event)
 				topScreen:SetNextScreenName("ScreenSelectMusic")
 				topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 			end
-		elseif joined_active_index == 3 and joined_missing_song then
-			if joined_can_download_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadSelectedPack then
+		elseif joined_active_index == 3 and (joined_missing_song or can_download_browsed_pack()) then
+			if can_download_browsed_pack() then
+				open_browse_pack_download_confirm(joined_song_preview)
+			elseif joined_can_download_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadSelectedPack then
 				ITGOnline.PackSync:DownloadSelectedPack(joined_missing_song_info or joined_song_preview, function(ok, message)
 					if not ok and type(message) == "table" and message.kind == "pack_candidates" then
 						open_pack_choice_menu(
@@ -1414,6 +1516,7 @@ end
 
 local function handle_first_press_input(event)
 	if showing_leave_confirm then return handle_leave_confirm_input(event) end
+	if showing_browse_pack_download_confirm then return handle_browse_pack_download_confirm_input(event) end
 	if showing_private_join_prompt then return handle_private_join_prompt_input(event) end
 	if showing_player_action_menu then return handle_player_action_menu_input(event) end
 
@@ -1761,6 +1864,8 @@ local af = Def.ActorFrame{
 							statusLines[#statusLines + 1] = (joined_song_confirmed and "✔ Chanson selectionnee" or "Choix de chanson en cours")
 						if joined_preview_unknown_pack and not joined_song_confirmed then
 							statusLines[#statusLines + 1] = "Pack absent localement."
+							statusLines[#statusLines + 1] = "Le manager parcourt ce pack sans avoir encore choisi de chanson."
+							statusLines[#statusLines + 1] = "Vous pouvez le telecharger maintenant si vous le souhaitez."
 						end
 							if joined_phase == "playing" then
 								statusLines[#statusLines + 1] = "Manche en cours. En attente de la fin pour tous."
@@ -1834,10 +1939,11 @@ local af = Def.ActorFrame{
 
 			local reloadSongsButton = joinedContent and joinedContent:GetChild("ReloadSongsButton")
 			if reloadSongsButton then
-				reloadSongsButton:visible(joined_missing_song)
+				local canDownloadBrowsePack = can_download_browsed_pack()
+				reloadSongsButton:visible(joined_missing_song or canDownloadBrowsePack)
 				local label = reloadSongsButton:GetChild("ReloadSongsLabel")
 				if label then
-						label:settext(joined_can_download_pack and "Telecharger pack" or "Recharger chansons")
+						label:settext((joined_can_download_pack or canDownloadBrowsePack) and "Telecharger pack" or "Recharger chansons")
 				end
 			end
 
@@ -2297,6 +2403,12 @@ local af = Def.ActorFrame{
 	end,
 	OnlinePackSyncReloadSongsMessageCommand=function(self)
 		transition_to_online_song_reload()
+	end,
+	OnlinePackDownloadedMessageCommand=function(self, params)
+		if params and params.songInfo and joined_song_preview and song_info_pack(params.songInfo) == song_info_pack(joined_song_preview) then
+			joined_preview_unknown_pack = false
+			self:queuecommand("UpdateJoinedLobbyText")
+		end
 	end,
 	OnlineResponseStatusMessageCommand=function(self, params)
 		if params and params.event == "createLobby" and params.success == false then
@@ -3270,6 +3382,103 @@ local af = Def.ActorFrame{
 				end,
 				HoverCommand=function(self)
 					self:diffuse(leave_confirm_index == 1 and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
+				end
+			}
+		}
+	},
+
+	Def.ActorFrame{
+		Name="BrowsePackDownloadConfirmPrompt",
+		InitCommand=function(self)
+			self:visible(false)
+		end,
+		HoverCommand=function(self)
+			self:GetChild("CancelButton"):playcommand("Hover")
+			self:GetChild("ConfirmButton"):playcommand("Hover")
+		end,
+
+		Def.Quad{
+			InitCommand=function(self)
+				self:zoomto(SCREEN_WIDTH, SCREEN_HEIGHT):diffuse(0,0,0,0.62)
+			end
+		},
+		Def.Quad{
+			InitCommand=function(self)
+				self:zoomto(560, 230):diffuse(0,0,0,0.92)
+			end
+		},
+		Def.Quad{
+			InitCommand=function(self)
+				self:zoomto(562, 232):diffuse(Color.White):diffusealpha(0.20)
+			end
+		},
+		LoadFont("Common Bold")..{
+			Text="Telecharger ce pack ?",
+			InitCommand=function(self)
+				self:y(-82):zoom(0.72):diffuse(Color.White)
+			end
+		},
+		LoadFont("Common Normal")..{
+			Text="Le manager parcourt ce pack, mais n'a pas encore choisi de chanson.\nTelecharger maintenant peut prendre du temps et de l'espace disque.",
+			InitCommand=function(self)
+				self:y(-28):zoom(0.48):maxwidth(980):diffuse(0.88,0.88,0.88,1)
+			end
+		},
+
+		Def.ActorFrame{
+			Name="CancelButton",
+			InitCommand=function(self)
+				self:x(-100):y(62)
+			end,
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(160, 42):diffuse(Color.White)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(browse_pack_download_confirm_index == 0 and Color.Yellow or Color.White)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(158, 40):diffuse(Color.Black)
+				end
+			},
+			LoadFont("Common Bold")..{
+				Text="Annuler",
+				InitCommand=function(self)
+					self:zoom(0.5)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(browse_pack_download_confirm_index == 0 and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
+				end
+			}
+		},
+
+		Def.ActorFrame{
+			Name="ConfirmButton",
+			InitCommand=function(self)
+				self:x(100):y(62)
+			end,
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(160, 42):diffuse(Color.White)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(browse_pack_download_confirm_index == 1 and Color.Yellow or Color.White)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(158, 40):diffuse(Color.Black)
+				end
+			},
+			LoadFont("Common Bold")..{
+				Text="Telecharger",
+				InitCommand=function(self)
+					self:zoom(0.5)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(browse_pack_download_confirm_index == 1 and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
 				end
 			}
 		}

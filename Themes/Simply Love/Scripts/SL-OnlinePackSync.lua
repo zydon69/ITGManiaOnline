@@ -186,6 +186,22 @@ local function has_simfile_in_directory(path)
 	return false
 end
 
+local function has_simfile_below_directory(path, maxDepth)
+	if not path or path == "" then return false end
+	maxDepth = tonumber(maxDepth) or 0
+	if has_simfile_in_directory(path) then return true end
+	if maxDepth <= 0 then return false end
+
+	for _, folderName in ivalues(dir_listing(path, true, false)) do
+		local safeName = safe_child_folder_name(folderName)
+		if safeName ~= "" and has_simfile_below_directory(path .. safeName .. "/", maxDepth - 1) then
+			return true
+		end
+	end
+
+	return false
+end
+
 local function single_nested_group_folder(quarantinePath)
 	if has_simfile_in_directory(quarantinePath) then return "" end
 	if #dir_listing(quarantinePath, false, true) > 0 then return "" end
@@ -928,11 +944,13 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 	end
 end
 
-function PackSync:DownloadPackByCandidate(songInfo, pack, callback)
+function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	if not pack or not pack.id then
 		if callback then callback(false, "Pack candidat invalide.") end
 		return
 	end
+	options = type(options) == "table" and options or {}
+	local browseOnly = options.browseOnly == true
 
 	local packId = tonumber(pack.id)
 	if not packId or math.floor(packId) ~= packId or packId < 1 then
@@ -965,7 +983,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback)
 		self.downloadLastByteCount = nil
 		self:UpdateStatus(self.status.DownloadFailed, message)
 		remove_directory_if_possible(quarantinePath)
-		if broadcastMissing ~= false and MESSAGEMAN then
+		if not browseOnly and broadcastMissing ~= false and MESSAGEMAN then
 			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
 		end
 		if callback then callback(false, message) end
@@ -1086,6 +1104,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback)
 			trace("Reload Songs after download pack=" .. tostring(packName))
 			self.pendingPostReloadSongInfo = songInfo
 			self.pendingQuarantinePath = installedPath
+			self.pendingPostReloadBrowseOnly = browseOnly
 			self:UpdateStatus(self.status.ReloadingSongs, "Rechargement des chansons")
 			transition_to_reload_songs()
 			finish_candidate_download()
@@ -1100,6 +1119,7 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 	end
 
 	self.currentSongInfo = songInfo
+	self.pendingPostReloadBrowseOnly = false
 	local downloadKey = selected_at(songInfo)
 	if downloadKey == "" then
 		downloadKey = selected_chart_hash(songInfo) .. "|" .. selected_path(songInfo)
@@ -1153,15 +1173,108 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 	end)
 end
 
+function PackSync:DownloadBrowsingPack(songInfo, callback)
+	if not songInfo then
+		if callback then callback(false, "Aucun pack a telecharger.") end
+		return
+	end
+
+	self.currentSongInfo = nil
+	local packName = selected_pack(songInfo)
+	local downloadKey = "browse|" .. (packName ~= "" and packName or (selected_title(songInfo) .. "|" .. selected_artist(songInfo)))
+	if downloadKey == "browse|" then downloadKey = "browse|" .. tostring(songInfo) end
+	if self.downloadInFlightKey == downloadKey then
+		local message = "Telechargement deja en cours."
+		trace(message)
+		if callback then callback(false, message) end
+		return
+	end
+
+	self.downloadInFlightKey = downloadKey
+	local function fail_download(message)
+		self.downloadInFlightKey = nil
+		self.downloadStartedAt = nil
+		self.downloadLastByteAt = nil
+		self.downloadLastByteCount = nil
+		self.pendingPostReloadBrowseOnly = false
+		self:UpdateStatus(self.status.DownloadFailed, message)
+		if callback then callback(false, message) end
+	end
+
+	self:SearchStepManiaOnline(songInfo, function(ok, pack, searchError)
+		if not ok or not pack or not pack.id then
+			if searchError and type(searchError.candidates) == "table" and #searchError.candidates > 0 then
+				trace("Browse download selection required candidates=" .. tostring(#searchError.candidates))
+				self.downloadInFlightKey = nil
+				if callback then
+					callback(false, {
+						kind = "pack_candidates",
+						message = searchError.errorMessage or "Plusieurs packs correspondent a ce pack.",
+						candidates = searchError.candidates,
+						browseOnly = true,
+					})
+				end
+				return
+			end
+			local message = searchError and searchError.errorMessage or "La recherche de pack StepManiaOnline a echoue."
+			trace("Browse download failed search=" .. tostring(message))
+			fail_download(message)
+			return
+		end
+		self:DownloadPackByCandidate(songInfo, pack, function(downloadOk, downloadMessage)
+			if downloadOk then
+				if callback then callback(true) end
+				return
+			end
+			self.downloadInFlightKey = nil
+			if callback then callback(false, downloadMessage or "Le telechargement du pack a echoue.") end
+		end, { browseOnly = true })
+	end)
+end
+
+local function browse_pack_reload_validated(songInfo, quarantinePath)
+	local packName = selected_pack(songInfo)
+	if packName ~= "" and SONGMAN and SONGMAN.DoesSongGroupExist and SONGMAN:DoesSongGroupExist(packName) then
+		return true
+	end
+	if quarantinePath and quarantinePath ~= "" and has_simfile_below_directory(quarantinePath, 2) then
+		return true
+	end
+
+	return false
+end
+
 function PackSync:ValidatePendingPostReload()
 	local songInfo = self.pendingPostReloadSongInfo
 	local quarantinePath = self.pendingQuarantinePath
+	local browseOnly = self.pendingPostReloadBrowseOnly == true
 	self.pendingPostReloadSongInfo = nil
 	self.pendingQuarantinePath = nil
+	self.pendingPostReloadBrowseOnly = false
 	self.downloadInFlightKey = nil
 	if not songInfo then return false end
 
 	self:InvalidateLocalChartIndex()
+	if browseOnly then
+		trace("PostReload browse-only pack download complete quarantine=" .. tostring(quarantinePath or ""))
+		if quarantinePath and quarantinePath ~= "" then
+			log_dir_listing("PostReload browse-only pack", quarantinePath)
+		end
+		if not browse_pack_reload_validated(songInfo, quarantinePath) then
+			trace("Browse-only pack download did not expose the expected pack after reload")
+			if quarantinePath and quarantinePath ~= "" and FILEMAN and FILEMAN.DeleteRecursive then FILEMAN:DeleteRecursive(quarantinePath) end
+			self:UpdateStatus(self.status.DownloadFailed, "Le pack telecharge n'a pas ete trouve apres reload.")
+			if MESSAGEMAN then
+				MESSAGEMAN:Broadcast("OnlinePackDownloadFailed", { songInfo = songInfo, reason = "download_failed" })
+			end
+			return false
+		end
+		self:UpdateStatus(self.status.DownloadedOk, "Pack telecharge. En attente du choix de chanson du manager.")
+		if MESSAGEMAN then
+			MESSAGEMAN:Broadcast("OnlinePackDownloaded", { songInfo = songInfo })
+		end
+		return true
+	end
 	trace("PostReload validate expected chart_hash=" .. tostring(selected_chart_hash(songInfo))
 		.. " expected song_hash=" .. tostring(selected_song_hash(songInfo))
 		.. " quarantine=" .. tostring(quarantinePath or ""))
