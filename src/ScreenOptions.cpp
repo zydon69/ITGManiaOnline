@@ -87,6 +87,39 @@ static std::string OPTION_EXPLANATION(std::string s) {
   return THEME->GetString("OptionExplanations", s);
 }
 
+static bool IsOnlinePlayerOptionsScreen(const std::string& screenName) {
+  return screenName == "ScreenPlayerOptions" ||
+         screenName == "ScreenPlayerOptions2" ||
+         screenName == "ScreenPlayerOptions3";
+}
+
+static bool OnlinePlayerOptionsRequireReadyOnly(const std::string& screenName) {
+  if (!IsOnlinePlayerOptionsScreen(screenName) || LUA == nullptr) {
+    return false;
+  }
+
+  Lua* L = LUA->Get();
+  const bool ran = LuaHelpers::RunExpression(
+      L,
+      "ITGOnline ~= nil "
+      "and ITGOnline.currentRoomId ~= nil "
+      "and ITGOnline.currentRoom ~= nil "
+      "and ITGOnline.currentRoom.selected_song ~= nil "
+      "and ITGOnline.NormalizeRoomPhase ~= nil "
+      "and ("
+      "  ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) == "
+      "'lobby_ready' "
+      "  or ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) == "
+      "'config'"
+      ")",
+      "ScreenOptions::OnlinePlayerOptionsRequireReadyOnly");
+  const bool locked = ran && lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  LUA->Release(L);
+
+  return locked;
+}
+
 static const char* InputModeNames[] = {"Individual", "Together"};
 StringToX(InputMode);
 
@@ -542,6 +575,13 @@ bool ScreenOptions::Input(const InputEventPlus& input) {
 
 void ScreenOptions::HandleScreenMessage(const ScreenMessage SM) {
   if (SM == SM_MenuTimer) {
+    if (OnlinePlayerOptionsRequireReadyOnly(m_sName)) {
+      LOG->Trace(
+          "ITG Online: blocked player options menu timer during selected song "
+          "configuration screen=%s",
+          m_sName.c_str());
+      return;
+    }
     this->BeginFadingOut();
   } else if (SM == SM_BeginFadingOut) {
     if (IsTransitioning()) {
@@ -877,8 +917,29 @@ void ScreenOptions::AfterChangeValueOrRow(PlayerNumber pn) {
 }
 
 bool ScreenOptions::MenuBack(const InputEventPlus&) {
+  if (OnlinePlayerOptionsRequireReadyOnly(m_sName)) {
+    LOG->Trace(
+        "ITG Online: blocked player options back during selected song "
+        "configuration screen=%s",
+        m_sName.c_str());
+    return true;
+  }
+
   Cancel(SM_GoToPrevScreen);
   return true;
+}
+
+void ScreenOptions::Cancel(ScreenMessage smSendWhenDone) {
+  if (OnlinePlayerOptionsRequireReadyOnly(m_sName)) {
+    LOG->Trace(
+        "ITG Online: blocked player options cancel during selected song "
+        "configuration screen=%s message=%s",
+        m_sName.c_str(),
+        ScreenMessageHelpers::ScreenMessageToString(smSendWhenDone).c_str());
+    return;
+  }
+
+  ScreenWithMenuElements::Cancel(smSendWhenDone);
 }
 
 bool ScreenOptions::AllAreOnLastRow() const {

@@ -51,6 +51,7 @@ class ScreenOptions : public ScreenWithMenuElements {
   virtual void Update(float fDeltaTime);
   virtual bool Input(const InputEventPlus& input);
   virtual void HandleScreenMessage(const ScreenMessage SM);
+  virtual void Cancel(ScreenMessage smSendWhenDone);
 
   virtual void TweenOnScreen();
   virtual void TweenOffScreen();
