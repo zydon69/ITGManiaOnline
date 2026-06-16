@@ -4609,6 +4609,9 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 
 	if phase == "config_ready" then
 		payload.options = self:CurrentOnlineOptionSummary()
+		if isReady and self:IsCurrentUserRoomManager(self.currentRoom) then
+			payload.auto_start = true
+		end
 	end
 
 	local options = payload.options or {}
@@ -4730,6 +4733,15 @@ function ITGOnline:MarkConfigReady(callback)
 		if callback then callback(ok, decoded, response) end
 	end
 
+	local directConfigReady = function()
+		self:SetReady("config_ready", true, function(ok, decoded, response)
+			if ok and decoded and decoded.room then
+				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or decoded.room))
+			end
+			finish(ok, decoded, response)
+		end)
+	end
+
 	local finishConfigReady = function()
 		self:ConfirmSelectedSongAvailability("options_ready", function(availabilityOk, availabilityDecoded, availabilityResponse)
 			if not availabilityOk then
@@ -4744,6 +4756,12 @@ function ITGOnline:MarkConfigReady(callback)
 				finish(ok, decoded or availabilityDecoded, response or availabilityResponse)
 			end)
 		end)
+	end
+
+	local localPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+	if localPhase == "config" and self.currentRoom and self.currentRoom.selected_song then
+		directConfigReady()
+		return
 	end
 
 	self:FetchRoom(self.currentRoomId, function(fetchOk, fetchDecoded, fetchResponse)

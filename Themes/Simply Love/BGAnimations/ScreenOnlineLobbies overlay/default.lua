@@ -94,6 +94,7 @@ local joined_all_players_ready
 local last_start_visibility_debug_key = ""
 local last_select_song_visibility_debug_key = ""
 local last_auto_start_focus_key = ""
+local last_auto_start_request_key = ""
 
 local browse_lobby_x = -205
 local browse_players_x = 35
@@ -2065,8 +2066,13 @@ local af = Def.ActorFrame{
 								self:queuecommand("Hover")
 							end
 						end
+						if autoFocusKey ~= last_auto_start_request_key then
+							last_auto_start_request_key = autoFocusKey
+							MESSAGEMAN:Broadcast("StartOnlineRoom")
+						end
 					else
 						last_auto_start_focus_key = ""
+						last_auto_start_request_key = ""
 					end
 				end
 			end,
