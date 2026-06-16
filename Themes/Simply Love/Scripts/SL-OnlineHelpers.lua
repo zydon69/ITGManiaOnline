@@ -1810,7 +1810,14 @@ CreateOnlineHandler = function()
 	      end,
 		      CreateLobbyMessageCommand=function(self, params)
 		        if self.connected and self.socket ~= nil then
-						if self.createLobbyBusy then return end
+						if self.createLobbyBusy then
+							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+								event="createLobby",
+								success=false,
+								message="Une creation de salon est deja en cours."
+							})
+							return
+						end
 						self.createLobbyBusy = true
 						self.inLobby = false
 		          ITGOnline:CreateRoom(function(ok, decoded, response)
@@ -1837,6 +1844,12 @@ CreateOnlineHandler = function()
 								})
 							end
 						end, params and params.visibility or "public")
+	        else
+						MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+							event="createLobby",
+							success=false,
+							message="Le service en ligne n'est pas encore connecte. Reessayez dans un instant."
+						})
 	        end
 	      end,
 	      StartOnlineRoomMessageCommand=function(self)

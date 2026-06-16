@@ -46,6 +46,8 @@ local room_invitation_options = {
 }
 local pending_join_action_id = 0
 local pending_join_deadline = 0
+local pending_create_action_id = 0
+local pending_create_deadline = 0
 
 local mode = "browse"
 local joined_active_index = 1
@@ -848,6 +850,36 @@ end
 		pending_join_deadline = 0
 	end
 
+local function clear_pending_create()
+	pending_create_action_id = 0
+	pending_create_deadline = 0
+end
+
+local function begin_create_timeout(actor, seconds)
+	seconds = tonumber(seconds) or 30
+	pending_create_action_id = pending_create_action_id + 1
+	pending_create_deadline = GetTimeSinceStart() + seconds
+	local timer = actor and actor:GetChild("CreateTimeoutTimer")
+	if timer then
+		timer:stoptweening()
+		timer:sleep(seconds):queuecommand("CheckCreateTimeout")
+	end
+end
+
+local function cancel_pending_create(message)
+	clear_pending_create()
+	mode = "browse"
+	if t then
+		t:GetChild("JoinedLobbyContent"):visible(false)
+		t:queuecommand("UpdateLobbyView")
+		t:playcommand("SetStatus", {
+			text=message or "La creation du salon a expire. Verifiez la connexion puis reessayez.",
+			showSpinner=false,
+			showPrompt=true
+		})
+	end
+end
+
 local function begin_join_timeout(actor, seconds)
 	seconds = tonumber(seconds) or 20
 	pending_join_action_id = pending_join_action_id + 1
@@ -1491,6 +1523,16 @@ local function handle_browse_mode_input(event)
 			end
 		elseif active_index == 3 then
 			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			local onlineHandler = GetOnlineHandlerInstance()
+			if not (onlineHandler and onlineHandler.connected and onlineHandler.socket ~= nil) then
+				t:playcommand("SetStatus", {
+					text="Connexion au service en ligne en cours. Reessayez dans un instant.",
+					showSpinner=false,
+					showPrompt=true
+				})
+				t:queuecommand("CheckConnect")
+				return false
+			end
 			t:GetChild("LobbyContent"):visible(false)
 			t:GetChild("OnlinePlayersContent"):visible(false)
 			t:playcommand("SetStatus", {
@@ -1498,6 +1540,7 @@ local function handle_browse_mode_input(event)
 				showSpinner=true,
 				showPrompt=false
 			})
+			begin_create_timeout(t)
 			MESSAGEMAN:Broadcast("CreateLobby", {})
 		end
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
@@ -1602,6 +1645,14 @@ local af = Def.ActorFrame{
 		CheckJoinTimeoutCommand=function(self)
 			if pending_join_action_id > 0 and GetTimeSinceStart() >= pending_join_deadline then
 					cancel_pending_join("La tentative de rejoindre le salon a expire. Rafraichissement...")
+			end
+		end
+	},
+	Def.Actor{
+		Name="CreateTimeoutTimer",
+		CheckCreateTimeoutCommand=function(self)
+			if pending_create_action_id > 0 and GetTimeSinceStart() >= pending_create_deadline then
+				cancel_pending_create("La creation du salon a expire. Verifiez la connexion puis reessayez.")
 			end
 		end
 	},
@@ -2170,6 +2221,7 @@ local af = Def.ActorFrame{
 		OnlineLobbyStateMessageCommand=function(self, params)
 			local previousLobbyCode = joined_lobby_code
 			clear_pending_join()
+			clear_pending_create()
 			mode = "joined"
 		leaving_lobby = false
 		showing_leave_confirm = false
@@ -2419,6 +2471,7 @@ local af = Def.ActorFrame{
 	end,
 	OnlineResponseStatusMessageCommand=function(self, params)
 		if params and params.event == "createLobby" and params.success == false then
+			clear_pending_create()
 			mode = "browse"
 			self:GetChild("JoinedLobbyContent"):visible(false)
 			self:queuecommand("UpdateLobbyView")
