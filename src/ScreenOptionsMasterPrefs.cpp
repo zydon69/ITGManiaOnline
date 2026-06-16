@@ -13,6 +13,7 @@
 #include "GameState.h"
 #include "LocalizedString.h"
 #include "NoteSkinManager.h"
+#include "PerfDiagnostics.h"
 #include "PlayerOptions.h"
 #include "Preference.h"
 #include "PrefsManager.h"
@@ -701,7 +702,25 @@ static void GlobalOffsetSeconds(
     mapping[i] = SCALE(i, 0.0f, 40.0f, -0.1f, +0.1f);
   }
 
-  MoveMap(sel, pConfOption, ToSel, mapping, ARRAYLEN(mapping));
+  if (ToSel) {
+    sel = FindClosestEntry(PREFSMAN->m_fGlobalOffsetSeconds.Get(), mapping,
+                           ARRAYLEN(mapping));
+    if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+      LOG->Trace(
+          "GLOBAL_OFFSET_TRACE: native_global_offset_to_selection "
+          "runtime_seconds=%.6f selection=%d mapped_seconds=%.6f",
+          PREFSMAN->m_fGlobalOffsetSeconds.Get(), sel, mapping[sel]);
+    }
+  } else {
+    const float old_runtime_seconds = PREFSMAN->m_fGlobalOffsetSeconds.Get();
+    if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+      LOG->Trace(
+          "GLOBAL_OFFSET_TRACE: native_global_offset_from_selection "
+          "selection=%d old_runtime_seconds=%.6f new_runtime_seconds=%.6f",
+          sel, old_runtime_seconds, mapping[sel]);
+    }
+    PREFSMAN->SetGlobalOffsetSeconds(mapping[sel]);
+  }
 }
 
 static void EditRecordModeLeadIn(
@@ -1046,6 +1065,8 @@ static void InitializeConfOptions() {
   ADD(ConfOption("LogContentLoadDiagnostics", MovePref<bool>, "Off", "On"));
   g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogThemeLuaDiagnostics", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
+  ADD(ConfOption("LogGlobalOffsetDiagnostics", MovePref<bool>, "Off", "On"));
   g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
 
   // Sound options

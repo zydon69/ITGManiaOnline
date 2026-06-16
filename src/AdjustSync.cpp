@@ -45,7 +45,9 @@
 #include "LocalizedString.h"
 #include "LuaManager.h"
 #include "MessageManager.h"
+#include "PerfDiagnostics.h"
 #include "PrefsManager.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "ScreenManager.h"
 #include "Song.h"
@@ -57,6 +59,7 @@
 
 std::vector<TimingData> AdjustSync::s_vpTimingDataOriginal;
 float AdjustSync::s_fGlobalOffsetSecondsOriginal = 0.0f;
+int AdjustSync::s_iGlobalOffsetProfileOriginal = 0;
 int AdjustSync::s_iAutosyncOffsetSample = 0;
 float AdjustSync::s_fAutosyncOffset[AdjustSync::OFFSET_SAMPLE_COUNT];
 float AdjustSync::s_fStandardDeviation = 0.0f;
@@ -78,6 +81,16 @@ void AdjustSync::ResetOriginalSyncData() {
     s_vpTimingDataOriginal.push_back(TimingData());
   }
   s_fGlobalOffsetSecondsOriginal = PREFSMAN->m_fGlobalOffsetSeconds;
+  s_iGlobalOffsetProfileOriginal = PREFSMAN->GetGlobalOffsetProfileSelected();
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: adjust_sync_reset_original "
+        "original_runtime_seconds=%.6f original_profile=%d "
+        "timing_snapshots=%zu",
+        s_fGlobalOffsetSecondsOriginal, s_iGlobalOffsetProfileOriginal,
+        s_vpTimingDataOriginal.size());
+  }
+  PREFSMAN->LogGlobalOffsetDiagnostics("adjust_sync_reset_original");
 
   ResetAutosync();
 }
@@ -85,6 +98,9 @@ void AdjustSync::ResetOriginalSyncData() {
 void AdjustSync::ResetAutosync() {
   s_iAutosyncOffsetSample = 0;
   s_vAutosyncTempoData.clear();
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace("GLOBAL_OFFSET_TRACE: adjust_sync_reset_autosync");
+  }
 }
 
 bool AdjustSync::IsSyncDataChanged() {
@@ -103,6 +119,15 @@ void AdjustSync::SaveSyncChanges() {
     return;
   }
 
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: adjust_sync_save_begin "
+        "original_runtime_seconds=%.6f current_runtime_seconds=%.6f changed=%d",
+        s_fGlobalOffsetSecondsOriginal, PREFSMAN->m_fGlobalOffsetSeconds.Get(),
+        s_fGlobalOffsetSecondsOriginal != PREFSMAN->m_fGlobalOffsetSeconds ? 1
+                                                                           : 0);
+  }
+
   /* TODO: Save all of the timing data changes.
    * Luckily, only the song timing data needs comparing here. */
   if (GAMESTATE->m_pCurSong &&
@@ -116,16 +141,39 @@ void AdjustSync::SaveSyncChanges() {
   if (s_fGlobalOffsetSecondsOriginal != PREFSMAN->m_fGlobalOffsetSeconds) {
     PREFSMAN->SavePrefsToDisk();
   }
+  PREFSMAN->LogGlobalOffsetDiagnostics("adjust_sync_save_before_reset");
   ResetOriginalSyncData();
   s_fStandardDeviation = 0.0f;
   s_fAverageError = 0.0f;
+  PREFSMAN->LogGlobalOffsetDiagnostics("adjust_sync_save_end");
 }
 
 void AdjustSync::RevertSyncChanges() {
   if (GAMESTATE->IsCourseMode()) {
     return;
   }
-  PREFSMAN->m_fGlobalOffsetSeconds.Set(s_fGlobalOffsetSecondsOriginal);
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: adjust_sync_revert_begin "
+        "restore_runtime_seconds=%.6f current_runtime_seconds=%.6f "
+        "original_profile=%d current_profile=%d",
+        s_fGlobalOffsetSecondsOriginal, PREFSMAN->m_fGlobalOffsetSeconds.Get(),
+        s_iGlobalOffsetProfileOriginal, PREFSMAN->GetGlobalOffsetProfileSelected());
+  }
+  if (PREFSMAN->GetGlobalOffsetProfileSelected() == s_iGlobalOffsetProfileOriginal) {
+    PREFSMAN->SetGlobalOffsetSeconds(s_fGlobalOffsetSecondsOriginal);
+  } else {
+    if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+      LOG->Trace(
+          "GLOBAL_OFFSET_TRACE: adjust_sync_revert_profile_changed "
+          "restore_profile=%d current_profile=%d restore_seconds=%.6f",
+          s_iGlobalOffsetProfileOriginal, PREFSMAN->GetGlobalOffsetProfileSelected(),
+          s_fGlobalOffsetSecondsOriginal);
+    }
+    PREFSMAN->SetGlobalOffsetProfileSeconds(
+        s_iGlobalOffsetProfileOriginal, s_fGlobalOffsetSecondsOriginal);
+    PREFSMAN->SetGlobalOffsetProfileSelected(s_iGlobalOffsetProfileOriginal);
+  }
 
   // The first one is ALWAYS the song timing.
   GAMESTATE->m_pCurSong->m_SongTiming = s_vpTimingDataOriginal[0];
@@ -140,6 +188,7 @@ void AdjustSync::RevertSyncChanges() {
   ResetOriginalSyncData();
   s_fStandardDeviation = 0.0f;
   s_fAverageError = 0.0f;
+  PREFSMAN->LogGlobalOffsetDiagnostics("adjust_sync_revert_end");
 }
 
 static LocalizedString AUTOSYNC_CORRECTION_APPLIED(
@@ -164,6 +213,13 @@ void AdjustSync::HandleAutosync(float fNoteOffBySeconds, float fStepTime) {
     case AutosyncType_Song: {
       s_fAutosyncOffset[s_iAutosyncOffsetSample] = fNoteOffBySeconds;
       ++s_iAutosyncOffsetSample;
+      if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+        LOG->Trace(
+            "GLOBAL_OFFSET_TRACE: adjust_sync_offset_sample type=%d "
+            "sample=%d/%d step_time=%.6f note_off_by_seconds=%.6f",
+            static_cast<int>(type), s_iAutosyncOffsetSample, OFFSET_SAMPLE_COUNT,
+            fStepTime, fNoteOffBySeconds);
+      }
 
       if (s_iAutosyncOffsetSample < OFFSET_SAMPLE_COUNT) {
         break;  // need more
@@ -196,6 +252,13 @@ void AdjustSync::AutosyncOffset() {
       calc_stddev(s_fAutosyncOffset, s_fAutosyncOffset + OFFSET_SAMPLE_COUNT);
 
   AutosyncType type = GAMESTATE->m_SongOptions.GetCurrent().m_AutosyncType;
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: autosync_offset_evaluate type=%d mean=%.6f "
+        "stddev=%.6f current_runtime_seconds=%.6f threshold=0.030000",
+        static_cast<int>(type), mean, stddev,
+        PREFSMAN->m_fGlobalOffsetSeconds.Get());
+  }
 
   if (stddev < .03f)  // If they stepped with less than .03 error
   {
@@ -216,7 +279,14 @@ void AdjustSync::AutosyncOffset() {
       }
       case AutosyncType_Machine:
         // Step timing is not needed for this operation.
-        PREFSMAN->m_fGlobalOffsetSeconds.Set(
+        if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+          LOG->Trace(
+              "GLOBAL_OFFSET_TRACE: autosync_machine_apply old_runtime_seconds=%.6f "
+              "mean=%.6f new_runtime_seconds=%.6f",
+              PREFSMAN->m_fGlobalOffsetSeconds.Get(), mean,
+              PREFSMAN->m_fGlobalOffsetSeconds.Get() + mean);
+        }
+        PREFSMAN->SetGlobalOffsetSeconds(
             PREFSMAN->m_fGlobalOffsetSeconds + mean);
         break;
       default:
@@ -225,6 +295,13 @@ void AdjustSync::AutosyncOffset() {
 
     SCREENMAN->SystemMessage(AUTOSYNC_CORRECTION_APPLIED.GetValue());
   } else {
+    if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+      LOG->Trace(
+          "GLOBAL_OFFSET_TRACE: autosync_offset_rejected type=%d mean=%.6f "
+          "stddev=%.6f current_runtime_seconds=%.6f",
+          static_cast<int>(type), mean, stddev,
+          PREFSMAN->m_fGlobalOffsetSeconds.Get());
+    }
     SCREENMAN->SystemMessage(AUTOSYNC_CORRECTION_NOT_APPLIED.GetValue());
   }
 

@@ -542,9 +542,60 @@ OperatorMenuOptionRows.SoundDriver = function()
 	}
 end
 
+local function log_global_offset(reason)
+	if PREFSMAN and PREFSMAN.LogGlobalOffsetDiagnostics then
+		PREFSMAN:LogGlobalOffsetDiagnostics("lua_operator_options:" .. tostring(reason))
+	end
+end
+
+local function trim_string(str)
+	return (tostring(str or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function global_offset_string(name, fallback)
+	local value = THEME:GetString("OptionNames", name)
+	return (value ~= name and value) or fallback
+end
+
+local function global_offset_profile_choices()
+	log_global_offset("build_profile_choices")
+	local choices = {}
+	for i=0, PREFSMAN:GetGlobalOffsetProfileCount() - 1 do
+		choices[#choices+1] = PREFSMAN:GetGlobalOffsetProfileName(i)
+	end
+	return choices
+end
+
+local function global_offset_rename_choices()
+	log_global_offset("build_rename_choices")
+	local choices = { global_offset_string("ChooseGlobalOffsetProfile", "Choose profile") }
+	for i=0, PREFSMAN:GetGlobalOffsetProfileCount() - 1 do
+		choices[#choices+1] = PREFSMAN:GetGlobalOffsetProfileName(i)
+	end
+	return choices
+end
+
 function offsetMS(pref, low, high)
-	local val = PREFSMAN:GetPreference(pref)
-	local ms = round(val * 1000)	-- convert seconds to milliseconds
+	local function current_ms()
+		local ms = round(PREFSMAN:GetPreference(pref) * 1000)
+		if pref == "GlobalOffsetSeconds" then
+			log_global_offset("current_ms=" .. tostring(ms))
+		end
+		return ms
+	end
+
+	local function update_range(self)
+		local ms = current_ms()
+		self._low = math.min(low, ms)
+		self._high = math.max(high, ms)
+		self._choices = stringify(range(self._low, self._high), "%ims")
+		self.Choices = self._choices
+		if pref == "GlobalOffsetSeconds" then
+			log_global_offset("update_range low=" .. tostring(self._low) .. " high=" .. tostring(self._high))
+		end
+	end
+
+	local ms = current_ms()
 
 	-- If the player has a value set outside of the specified range
 	-- accommodate by extending the range.
@@ -556,25 +607,135 @@ function offsetMS(pref, low, high)
 	local _values  = range(low, high)
 	local choices  = stringify(_values, "%ims")
 
-	return {
+	local row = {
 		Name=pref,
 		Choices=choices,
 		LayoutType = "ShowOneInRow",
 		SelectType = "SelectOne",
 		OneChoiceForAllPlayers = true,
 		ExportOnChange = false,
+		ReloadRowMessages = { "GlobalOffsetProfileChanged" },
+		Reload = function(self)
+			update_range(self)
+			if pref == "GlobalOffsetSeconds" then
+				log_global_offset("reload_offset_row")
+			end
+			return "All"
+		end,
 		LoadSelections = function(self, list, pn)
-			local i = ms - low + 1
+			local i = current_ms() - self._low + 1
 			list[i] = true
+			if pref == "GlobalOffsetSeconds" then
+				log_global_offset("load_offset_selection index=" .. tostring(i) .. " low=" .. tostring(self._low))
+			end
 		end,
 		SaveSelections = function(self, list, pn)
-			for i=1, #choices do
+			for i=1, #self._choices do
 				if list[i] then
-					PREFSMAN:SetPreference(pref, (low + i - 1) / 1000)
+					local seconds = (self._low + i - 1) / 1000
+					if pref == "GlobalOffsetSeconds" then
+						log_global_offset("save_offset_selection index=" .. tostring(i) .. " seconds=" .. tostring(seconds))
+					end
+					PREFSMAN:SetPreference(pref, seconds)
 					break
 				end
 			end
 		end
+	}
+	row._low = low
+	row._high = high
+	row._choices = choices
+	return row
+end
+
+OperatorMenuOptionRows.GlobalOffsetProfile = function()
+	return {
+		Name="GlobalOffsetProfile",
+		Choices=global_offset_profile_choices(),
+		LayoutType = "ShowOneInRow",
+		SelectType = "SelectOne",
+		OneChoiceForAllPlayers = true,
+		ExportOnChange = true,
+		ReloadRowMessages = { "GlobalOffsetProfileChanged" },
+		Reload = function(self)
+			self.Choices = global_offset_profile_choices()
+			log_global_offset("reload_profile_row")
+			return "All"
+		end,
+		LoadSelections = function(self, list, pn)
+			local selected = PREFSMAN:GetGlobalOffsetProfileSelected() + 1
+			list[selected] = true
+			log_global_offset("load_profile_selection index=" .. tostring(selected))
+		end,
+		SaveSelections = function(self, list, pn)
+			for i=1, #list do
+				if list[i] then
+					local selected = i - 1
+					log_global_offset("save_profile_selection requested=" .. tostring(selected))
+					if selected ~= PREFSMAN:GetGlobalOffsetProfileSelected() then
+						PREFSMAN:SetGlobalOffsetProfileSelected(selected)
+						MESSAGEMAN:Broadcast("GlobalOffsetProfileChanged")
+					end
+					break
+				end
+			end
+		end,
+	}
+end
+
+OperatorMenuOptionRows.RenameGlobalOffsetProfile = function()
+	return {
+		Name="RenameGlobalOffsetProfile",
+		Choices=global_offset_rename_choices(),
+		LayoutType = "ShowOneInRow",
+		SelectType = "SelectOne",
+		OneChoiceForAllPlayers = true,
+		ExportOnChange = true,
+		ReloadRowMessages = { "GlobalOffsetProfileChanged" },
+		Reload = function(self)
+			self.Choices = global_offset_rename_choices()
+			log_global_offset("reload_rename_row")
+			return "All"
+		end,
+		LoadSelections = function(self, list, pn)
+			self._lastRenameSelection = 1
+			list[self._lastRenameSelection] = true
+			log_global_offset("load_rename_selection")
+		end,
+		SaveSelections = function(self, list, pn)
+			for i=1, #list do
+				if list[i] then
+					log_global_offset("save_rename_selection raw_index=" .. tostring(i))
+					if i == (self._lastRenameSelection or 1) then return end
+					if i == 1 then
+						self._lastRenameSelection = i
+						return
+					end
+					self._lastRenameSelection = i
+					local profile_index = i - 2
+					SCREENMAN:AddNewScreenToTop("ScreenTextEntry")
+					SCREENMAN:GetTopScreen():Load({
+						Question = global_offset_string("RenameGlobalOffsetProfilePrompt", "Enter a name for this offset profile."),
+						InitialAnswer = PREFSMAN:GetGlobalOffsetProfileName(profile_index),
+						MaxInputLength = 32,
+						Validate = function(answer)
+							log_global_offset("validate_rename index=" .. tostring(profile_index) .. " blank=" .. tostring(trim_string(answer) == ""))
+							if trim_string(answer) == "" then
+								return false, global_offset_string("GlobalOffsetProfileNameBlank", "Profile name cannot be blank.")
+							end
+							return true, ""
+						end,
+						OnOK = function(answer)
+							log_global_offset("confirm_rename index=" .. tostring(profile_index) .. " name=" .. trim_string(answer))
+							PREFSMAN:SetGlobalOffsetProfileName(profile_index, trim_string(answer))
+							PREFSMAN:SavePreferences()
+							MESSAGEMAN:Broadcast("GlobalOffsetProfileChanged")
+						end,
+					})
+					break
+				end
+			end
+		end,
 	}
 end
 

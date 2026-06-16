@@ -16,6 +16,7 @@
 #include "ModsGroup.h"
 #include "NotesLoaderSM.h"
 #include "NotesLoaderSSC.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "PrefsManager.h"
 #include "RageLog.h"
@@ -46,6 +47,7 @@ void ScreenGameplaySyncMachine::Init() {
   }
   GAMESTATE->SetCurrentStyle(style, PLAYER_INVALID);
   AdjustSync::ResetOriginalSyncData();
+  PREFSMAN->LogGlobalOffsetDiagnostics("screen_gameplay_sync_machine_init");
 
   std::string sFile = THEME->GetPathO("ScreenGameplaySyncMachine", "music");
   // Allow themers to use either a .ssc or .sm file for this. -aj
@@ -163,6 +165,14 @@ void ScreenGameplaySyncMachine::RefreshText() {
   float fNew = PREFSMAN->m_fGlobalOffsetSeconds;
   float fOld = AdjustSync::s_fGlobalOffsetSecondsOriginal;
   float fStdDev = AdjustSync::s_fStandardDeviation;
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: screen_gameplay_sync_machine_refresh_text "
+        "old_runtime_seconds=%.6f new_runtime_seconds=%.6f stddev=%.6f "
+        "sample=%d/%d",
+        fOld, fNew, fStdDev, AdjustSync::s_iAutosyncOffsetSample + 1,
+        AdjustSync::OFFSET_SAMPLE_COUNT);
+  }
   std::string s;
   s += OLD_OFFSET.GetValue() + ssprintf(": %0.3f\n", fOld);
   s += NEW_OFFSET.GetValue() + ssprintf(": %0.3f\n", fNew);

@@ -134,6 +134,9 @@ local actions = {
 local spooky_bpm = 120
 local spooky_bps = spooky_bpm/60
 local globalOffset = PREFSMAN:GetPreference("GlobalOffsetSeconds")
+if PREFSMAN and PREFSMAN.LogGlobalOffsetDiagnostics then
+	PREFSMAN:LogGlobalOffsetDiagnostics("lua_extra_spooky_read GlobalOffsetSeconds=" .. tostring(globalOffset))
+end
 
 local last_beat = -1
 local beat = 0

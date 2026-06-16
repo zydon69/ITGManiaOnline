@@ -1,5 +1,7 @@
 #include "PrefsManager.h"
 
+#include <algorithm>
+#include <cmath>
 #include <map>
 #include <string>
 
@@ -7,6 +9,7 @@
 #include "GameConstantsAndTypes.h"
 #include "IniFile.h"
 #include "LuaManager.h"
+#include "PerfDiagnostics.h"
 #include "Preference.h"
 #include "ProductInfo.h"
 #include "RageDisplay.h"
@@ -25,6 +28,10 @@
 
 PrefsManager* PREFSMAN =
     nullptr;  // global and accessible from anywhere in our program
+
+static const float MIN_GLOBAL_OFFSET_SECONDS = -10.0f;
+static const float MAX_GLOBAL_OFFSET_SECONDS = 10.0f;
+static const float DEFAULT_GLOBAL_OFFSET_SECONDS = -0.008f;
 
 static const char* MusicWheelUsesSectionsNames[] = {
     "Never",
@@ -247,6 +254,21 @@ PrefsManager::PrefsManager()
       m_ShowDancingCharacters("ShowDancingCharacters", SDC_Random),
       m_bUseUnlockSystem("UseUnlockSystem", false),
       m_fGlobalOffsetSeconds("GlobalOffsetSeconds", -0.008f),
+      m_iGlobalOffsetProfileSelected("GlobalOffsetProfileSelected", 0),
+      m_bGlobalOffsetProfilesInitialized(
+          "GlobalOffsetProfilesInitialized", false),
+      m_sGlobalOffsetProfile1Name("GlobalOffsetProfile1Name", ""),
+      m_sGlobalOffsetProfile2Name("GlobalOffsetProfile2Name", ""),
+      m_sGlobalOffsetProfile3Name("GlobalOffsetProfile3Name", ""),
+      m_sGlobalOffsetProfile4Name("GlobalOffsetProfile4Name", ""),
+      m_sGlobalOffsetProfile5Name("GlobalOffsetProfile5Name", ""),
+      m_sGlobalOffsetProfile6Name("GlobalOffsetProfile6Name", ""),
+      m_fGlobalOffsetProfile1Seconds("GlobalOffsetProfile1Seconds", 0.0f),
+      m_fGlobalOffsetProfile2Seconds("GlobalOffsetProfile2Seconds", 0.0f),
+      m_fGlobalOffsetProfile3Seconds("GlobalOffsetProfile3Seconds", 0.0f),
+      m_fGlobalOffsetProfile4Seconds("GlobalOffsetProfile4Seconds", 0.0f),
+      m_fGlobalOffsetProfile5Seconds("GlobalOffsetProfile5Seconds", 0.0f),
+      m_fGlobalOffsetProfile6Seconds("GlobalOffsetProfile6Seconds", 0.0f),
       m_DefaultSyncOffset("DefaultSyncOffset", SyncOffset_ITG),
       m_iProgressiveLifebar("ProgressiveLifebar", 0),
       m_iProgressiveStageLifebar("ProgressiveStageLifebar", 0),
@@ -360,6 +382,7 @@ PrefsManager::PrefsManager()
       m_sAdditionalFolders(
           "AdditionalFolders", "", nullptr, PreferenceType::Deprecated) {
   Init();
+  InitializeGlobalOffsetProfileStorage();
   ReadPrefsFromDisk();
 
   // Register with Lua.
@@ -433,7 +456,260 @@ PrefsManager::GamePrefs::GamePrefs()
       m_sTheme(SpecialFiles::BASE_THEME_NAME),
       m_sDefaultModifiers("") {}
 
+int PrefsManager::GetGlobalOffsetProfileCount() const {
+  return NUM_GLOBAL_OFFSET_PROFILES;
+}
+
+void PrefsManager::InitializeGlobalOffsetProfileStorage() {
+  m_pGlobalOffsetProfileNames[0] = &m_sGlobalOffsetProfile1Name;
+  m_pGlobalOffsetProfileNames[1] = &m_sGlobalOffsetProfile2Name;
+  m_pGlobalOffsetProfileNames[2] = &m_sGlobalOffsetProfile3Name;
+  m_pGlobalOffsetProfileNames[3] = &m_sGlobalOffsetProfile4Name;
+  m_pGlobalOffsetProfileNames[4] = &m_sGlobalOffsetProfile5Name;
+  m_pGlobalOffsetProfileNames[5] = &m_sGlobalOffsetProfile6Name;
+
+  m_pGlobalOffsetProfileSeconds[0] = &m_fGlobalOffsetProfile1Seconds;
+  m_pGlobalOffsetProfileSeconds[1] = &m_fGlobalOffsetProfile2Seconds;
+  m_pGlobalOffsetProfileSeconds[2] = &m_fGlobalOffsetProfile3Seconds;
+  m_pGlobalOffsetProfileSeconds[3] = &m_fGlobalOffsetProfile4Seconds;
+  m_pGlobalOffsetProfileSeconds[4] = &m_fGlobalOffsetProfile5Seconds;
+  m_pGlobalOffsetProfileSeconds[5] = &m_fGlobalOffsetProfile6Seconds;
+}
+
+int PrefsManager::ClampGlobalOffsetProfileIndex(int index) const {
+  return std::max(0, std::min(index, NUM_GLOBAL_OFFSET_PROFILES - 1));
+}
+
+float PrefsManager::SanitizeGlobalOffsetSeconds(
+    float seconds, const char* source) const {
+  if (!std::isfinite(seconds)) {
+    const float fallback_seconds = std::isfinite(m_fGlobalOffsetSeconds.Get())
+                                       ? m_fGlobalOffsetSeconds.Get()
+                                       : DEFAULT_GLOBAL_OFFSET_SECONDS;
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "GLOBAL_OFFSET_TRACE: rejected non-finite offset source='%s' value=%.6f "
+          "fallback_runtime_seconds=%.6f",
+          source == nullptr ? "unknown" : source, seconds, fallback_seconds);
+    }
+    return fallback_seconds;
+  }
+
+  const float clamped =
+      std::max(MIN_GLOBAL_OFFSET_SECONDS,
+               std::min(seconds, MAX_GLOBAL_OFFSET_SECONDS));
+  if (clamped != seconds && LOG != nullptr) {
+    LOG->Warn(
+        "GLOBAL_OFFSET_TRACE: clamped offset source='%s' requested_seconds=%.6f "
+        "clamped_seconds=%.6f min_seconds=%.6f max_seconds=%.6f",
+        source == nullptr ? "unknown" : source, seconds, clamped,
+        MIN_GLOBAL_OFFSET_SECONDS, MAX_GLOBAL_OFFSET_SECONDS);
+  }
+  return clamped;
+}
+
+void PrefsManager::LogGlobalOffsetDiagnostics(
+    const std::string& reason) const {
+  if (!LogGlobalOffsetDiagnosticsEnabled() || LOG == nullptr) {
+    return;
+  }
+
+  const int selected = GetGlobalOffsetProfileSelected();
+  LOG->Trace(
+      "GLOBAL_OFFSET_TRACE: reason='%s' selected=%d runtime_seconds=%.6f "
+      "initialized=%d raw_selected=%d profile_count=%d",
+      reason.c_str(), selected, m_fGlobalOffsetSeconds.Get(),
+      m_bGlobalOffsetProfilesInitialized.Get() ? 1 : 0,
+      m_iGlobalOffsetProfileSelected.Get(), NUM_GLOBAL_OFFSET_PROFILES);
+
+  for (int i = 0; i < NUM_GLOBAL_OFFSET_PROFILES; ++i) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: reason='%s' slot=%d active=%d name='%s' "
+        "seconds=%.6f ms=%d",
+        reason.c_str(), i, i == selected ? 1 : 0,
+        GetGlobalOffsetProfileName(i).c_str(), GetGlobalOffsetProfileSeconds(i),
+        static_cast<int>(std::round(GetGlobalOffsetProfileSeconds(i) * 1000.0f)));
+  }
+}
+
+int PrefsManager::GetGlobalOffsetProfileSelected() const {
+  int index = m_iGlobalOffsetProfileSelected;
+  return ClampGlobalOffsetProfileIndex(index);
+}
+
+Preference<std::string>& PrefsManager::GetMutableGlobalOffsetProfileName(
+    int index) {
+  return *m_pGlobalOffsetProfileNames[ClampGlobalOffsetProfileIndex(index)];
+}
+
+const Preference<std::string>&
+PrefsManager::GetGlobalOffsetProfileNamePreference(int index) const {
+  return *m_pGlobalOffsetProfileNames[ClampGlobalOffsetProfileIndex(index)];
+}
+
+Preference<float>& PrefsManager::GetMutableGlobalOffsetProfileSeconds(
+    int index) {
+  return *m_pGlobalOffsetProfileSeconds[ClampGlobalOffsetProfileIndex(index)];
+}
+
+const Preference<float>& PrefsManager::GetGlobalOffsetProfileSecondsPreference(
+    int index) const {
+  return *m_pGlobalOffsetProfileSeconds[ClampGlobalOffsetProfileIndex(index)];
+}
+
+std::string PrefsManager::GetGlobalOffsetProfileName(int index) const {
+  return GetGlobalOffsetProfileNamePreference(index).Get();
+}
+
+void PrefsManager::SetGlobalOffsetProfileName(
+    int index, const std::string& name) {
+  const int requested_index = index;
+  index = ClampGlobalOffsetProfileIndex(index);
+  const std::string old_name = GetGlobalOffsetProfileName(index);
+  std::string trimmed = name;
+  Trim(trimmed);
+  if (trimmed.empty()) {
+    trimmed = index == 0 ? "Default" : ssprintf("Offset %d", index + 1);
+  }
+  GetMutableGlobalOffsetProfileName(index).Set(trimmed);
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: profile_name_set requested_index=%d index=%d "
+        "old='%s' new='%s'",
+        requested_index, index, old_name.c_str(), trimmed.c_str());
+  }
+  LogGlobalOffsetDiagnostics("profile_name_set");
+}
+
+float PrefsManager::GetGlobalOffsetProfileSeconds(int index) const {
+  return GetGlobalOffsetProfileSecondsPreference(index).Get();
+}
+
+void PrefsManager::SetGlobalOffsetProfileSeconds(int index, float seconds) {
+  const int requested_index = index;
+  index = ClampGlobalOffsetProfileIndex(index);
+  seconds = SanitizeGlobalOffsetSeconds(seconds, "profile_seconds_set");
+  const float old_profile_seconds = GetGlobalOffsetProfileSeconds(index);
+  const float old_runtime_seconds = m_fGlobalOffsetSeconds.Get();
+  GetMutableGlobalOffsetProfileSeconds(index).Set(seconds);
+  if (GetGlobalOffsetProfileSelected() == index) {
+    m_fGlobalOffsetSeconds.Set(seconds);
+  }
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: profile_seconds_set requested_index=%d index=%d "
+        "old_profile_seconds=%.6f new_profile_seconds=%.6f "
+        "old_runtime_seconds=%.6f new_runtime_seconds=%.6f active=%d",
+        requested_index, index, old_profile_seconds, seconds, old_runtime_seconds,
+        m_fGlobalOffsetSeconds.Get(),
+        GetGlobalOffsetProfileSelected() == index ? 1 : 0);
+  }
+  LogGlobalOffsetDiagnostics("profile_seconds_set");
+}
+
+void PrefsManager::SetGlobalOffsetSeconds(float seconds) {
+  seconds = SanitizeGlobalOffsetSeconds(seconds, "runtime_seconds_set");
+  const float old_runtime_seconds = m_fGlobalOffsetSeconds.Get();
+  const int selected = GetGlobalOffsetProfileSelected();
+  const float old_profile_seconds = GetGlobalOffsetProfileSeconds(selected);
+  m_fGlobalOffsetSeconds.Set(seconds);
+  SyncActiveGlobalOffsetProfileFromCurrentOffset();
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: runtime_seconds_set selected=%d "
+        "old_runtime_seconds=%.6f new_runtime_seconds=%.6f "
+        "old_profile_seconds=%.6f new_profile_seconds=%.6f",
+        selected, old_runtime_seconds, m_fGlobalOffsetSeconds.Get(),
+        old_profile_seconds, GetGlobalOffsetProfileSeconds(selected));
+  }
+  LogGlobalOffsetDiagnostics("runtime_seconds_set");
+}
+
+void PrefsManager::SyncActiveGlobalOffsetProfileFromCurrentOffset() {
+  const int selected = GetGlobalOffsetProfileSelected();
+  const float old_profile_seconds = GetGlobalOffsetProfileSeconds(selected);
+  GetMutableGlobalOffsetProfileSeconds(GetGlobalOffsetProfileSelected())
+      .Set(m_fGlobalOffsetSeconds.Get());
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: active_profile_sync selected=%d "
+        "old_profile_seconds=%.6f runtime_seconds=%.6f",
+        selected, old_profile_seconds, m_fGlobalOffsetSeconds.Get());
+  }
+}
+
+void PrefsManager::SetGlobalOffsetProfileSelected(int index) {
+  const int requested_index = index;
+  const int old_selected = GetGlobalOffsetProfileSelected();
+  const float old_runtime_seconds = m_fGlobalOffsetSeconds.Get();
+  index = ClampGlobalOffsetProfileIndex(index);
+  m_iGlobalOffsetProfileSelected.Set(index);
+  m_fGlobalOffsetSeconds.Set(GetGlobalOffsetProfileSeconds(index));
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: profile_selected requested_index=%d "
+        "old_selected=%d new_selected=%d old_runtime_seconds=%.6f "
+        "new_runtime_seconds=%.6f name='%s'",
+        requested_index, old_selected, index, old_runtime_seconds,
+        m_fGlobalOffsetSeconds.Get(), GetGlobalOffsetProfileName(index).c_str());
+  }
+  LogGlobalOffsetDiagnostics("profile_selected");
+}
+
+void PrefsManager::InitializeGlobalOffsetProfiles() {
+  const bool first_profile_migration = !m_bGlobalOffsetProfilesInitialized.Get();
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: initialize_begin first_migration=%d "
+        "runtime_seconds=%.6f raw_selected=%d",
+        first_profile_migration ? 1 : 0, m_fGlobalOffsetSeconds.Get(),
+        m_iGlobalOffsetProfileSelected.Get());
+  }
+
+  for (int i = 0; i < NUM_GLOBAL_OFFSET_PROFILES; ++i) {
+    std::string name = GetGlobalOffsetProfileName(i);
+    Trim(name);
+    if (name.empty()) {
+      SetGlobalOffsetProfileName(
+          i, i == 0 ? "Default" : ssprintf("Offset %d", i + 1));
+    }
+
+    const std::string source = ssprintf("initialize_profile_%d", i + 1);
+    const float sanitized_seconds = SanitizeGlobalOffsetSeconds(
+        GetGlobalOffsetProfileSeconds(i), source.c_str());
+    if (sanitized_seconds != GetGlobalOffsetProfileSeconds(i)) {
+      GetMutableGlobalOffsetProfileSeconds(i).Set(sanitized_seconds);
+    }
+  }
+
+  int selected = GetGlobalOffsetProfileSelected();
+  if (m_iGlobalOffsetProfileSelected.Get() != selected) {
+    m_iGlobalOffsetProfileSelected.Set(selected);
+  }
+
+  if (first_profile_migration) {
+    m_fGlobalOffsetProfile1Seconds.Set(
+        SanitizeGlobalOffsetSeconds(
+            m_fGlobalOffsetSeconds.Get(), "legacy_profile_migration"));
+    m_bGlobalOffsetProfilesInitialized.Set(true);
+    if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+      LOG->Trace(
+          "GLOBAL_OFFSET_TRACE: migrate_legacy_runtime_to_slot1 "
+          "seconds=%.6f",
+          m_fGlobalOffsetSeconds.Get());
+    }
+  }
+
+  m_fGlobalOffsetSeconds.Set(
+      SanitizeGlobalOffsetSeconds(
+          GetGlobalOffsetProfileSeconds(selected), "initialize_active_profile"));
+  LogGlobalOffsetDiagnostics("initialize_end");
+}
+
 void PrefsManager::ReadPrefsFromDisk() {
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace("GLOBAL_OFFSET_TRACE: read_prefs_from_disk_begin");
+  }
   ReadDefaultsFromFile(
       SpecialFiles::DEFAULTS_INI_PATH, GetPreferencesSection());
   IPreference::LoadAllDefaults();
@@ -448,6 +724,10 @@ void PrefsManager::ReadPrefsFromDisk() {
   if (!m_sCurrentGame.Get().empty()) {
     RestoreGamePrefs();
   }
+
+  RefreshPerfDiagnosticsPreferenceCache();
+  InitializeGlobalOffsetProfiles();
+  LogGlobalOffsetDiagnostics("read_prefs_from_disk_end");
 }
 
 void PrefsManager::ResetToFactoryDefaults() {
@@ -458,6 +738,8 @@ void PrefsManager::ResetToFactoryDefaults() {
       SpecialFiles::STATIC_INI_PATH, GetPreferencesSection(), true);
 
   TranslateDeprecatedFlags();
+  InitializeGlobalOffsetProfiles();
+  LogGlobalOffsetDiagnostics("reset_to_factory_defaults_before_save");
 
   SavePrefsToDisk();
 }
@@ -568,9 +850,11 @@ void PrefsManager::TranslateDeprecatedFlags() {
 }
 
 void PrefsManager::SavePrefsToDisk() {
+  LogGlobalOffsetDiagnostics("save_prefs_to_disk_begin");
   IniFile ini;
   SavePrefsToIni(ini);
   ini.WriteFile(SpecialFiles::PREFERENCES_INI_PATH);
+  LogGlobalOffsetDiagnostics("save_prefs_to_disk_end");
 }
 
 void PrefsManager::SavePrefsToIni(IniFile& ini) {
@@ -639,8 +923,12 @@ class LunaPrefsManager : public Luna<PrefsManager> {
       COMMON_RETURN_SELF;
     }
 
-    lua_pushvalue(L, 2);
-    pPref->SetFromStack(L);
+    if (CompareNoCase(sName, "GlobalOffsetSeconds") == 0) {
+      p->SetGlobalOffsetSeconds(FArg(2));
+    } else {
+      lua_pushvalue(L, 2);
+      pPref->SetFromStack(L);
+    }
     COMMON_RETURN_SELF;
   }
   static int SetPreferenceToDefault(T* p, lua_State* L) {
@@ -658,6 +946,9 @@ class LunaPrefsManager : public Luna<PrefsManager> {
     }
 
     pPref->LoadDefault();
+    if (CompareNoCase(sName, "GlobalOffsetSeconds") == 0) {
+      p->SyncActiveGlobalOffsetProfileFromCurrentOffset();
+    }
     LOG->Trace(
         "Restored preference \"%s\" to default \"%s\"", sName.c_str(),
         pPref->ToString().c_str());
@@ -680,12 +971,65 @@ class LunaPrefsManager : public Luna<PrefsManager> {
     COMMON_RETURN_SELF;
   }
 
+  static int GetGlobalOffsetProfileCount(T* p, lua_State* L) {
+    lua_pushnumber(L, p->GetGlobalOffsetProfileCount());
+    return 1;
+  }
+
+  static int GetGlobalOffsetProfileSelected(T* p, lua_State* L) {
+    lua_pushnumber(L, p->GetGlobalOffsetProfileSelected());
+    return 1;
+  }
+
+  static int SetGlobalOffsetProfileSelected(T* p, lua_State* L) {
+    p->SetGlobalOffsetProfileSelected(IArg(1));
+    COMMON_RETURN_SELF;
+  }
+
+  static int GetGlobalOffsetProfileName(T* p, lua_State* L) {
+    lua_pushstring(L, p->GetGlobalOffsetProfileName(IArg(1)).c_str());
+    return 1;
+  }
+
+  static int SetGlobalOffsetProfileName(T* p, lua_State* L) {
+    p->SetGlobalOffsetProfileName(IArg(1), SArg(2));
+    COMMON_RETURN_SELF;
+  }
+
+  static int GetGlobalOffsetProfileSeconds(T* p, lua_State* L) {
+    lua_pushnumber(L, p->GetGlobalOffsetProfileSeconds(IArg(1)));
+    return 1;
+  }
+
+  static int SetGlobalOffsetProfileSeconds(T* p, lua_State* L) {
+    p->SetGlobalOffsetProfileSeconds(IArg(1), FArg(2));
+    COMMON_RETURN_SELF;
+  }
+
+  static int SetGlobalOffsetSeconds(T* p, lua_State* L) {
+    p->SetGlobalOffsetSeconds(FArg(1));
+    COMMON_RETURN_SELF;
+  }
+  static int LogGlobalOffsetDiagnostics(T* p, lua_State* L) {
+    p->LogGlobalOffsetDiagnostics(SArg(1));
+    COMMON_RETURN_SELF;
+  }
+
   LunaPrefsManager() {
     ADD_METHOD(GetPreference);
     ADD_METHOD(SetPreference);
     ADD_METHOD(SetPreferenceToDefault);
     ADD_METHOD(PreferenceExists);
     ADD_METHOD(SavePreferences);
+    ADD_METHOD(GetGlobalOffsetProfileCount);
+    ADD_METHOD(GetGlobalOffsetProfileSelected);
+    ADD_METHOD(SetGlobalOffsetProfileSelected);
+    ADD_METHOD(GetGlobalOffsetProfileName);
+    ADD_METHOD(SetGlobalOffsetProfileName);
+    ADD_METHOD(GetGlobalOffsetProfileSeconds);
+    ADD_METHOD(SetGlobalOffsetProfileSeconds);
+    ADD_METHOD(SetGlobalOffsetSeconds);
+    ADD_METHOD(LogGlobalOffsetDiagnostics);
   }
 };
 

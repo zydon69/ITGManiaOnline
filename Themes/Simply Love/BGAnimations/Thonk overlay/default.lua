@@ -5,6 +5,9 @@ local sw = SCREEN_WIDTH
 local sh = SCREEN_HEIGHT
 
 local globalOffset = PREFSMAN:GetPreference("GlobalOffsetSeconds")
+if PREFSMAN and PREFSMAN.LogGlobalOffsetDiagnostics then
+	PREFSMAN:LogGlobalOffsetDiagnostics("lua_thonk_read GlobalOffsetSeconds=" .. tostring(globalOffset))
+end
 
 local base_positions = {}
 local ss_playmode_items = {}

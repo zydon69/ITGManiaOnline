@@ -10,6 +10,9 @@ local p = PlayerNumber:Reverse()[player]
 local GetStepsToDisplay = LoadActor("../StepsDisplayList/StepsToDisplay.lua")
 -- I feel like this surely must be the wrong way to do this...
 local GlobalOffsetSeconds = PREFSMAN:GetPreference("GlobalOffsetSeconds")
+if PREFSMAN and PREFSMAN.LogGlobalOffsetDiagnostics then
+	PREFSMAN:LogGlobalOffsetDiagnostics("lua_cursor_read GlobalOffsetSeconds=" .. tostring(GlobalOffsetSeconds))
+end
 
 local RowIndex = 1
 

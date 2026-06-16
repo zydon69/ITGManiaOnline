@@ -14,5 +14,6 @@ bool LogMemoryCardDiagnosticsEnabled();
 bool LogContentLoadDiagnosticsEnabled();
 bool LogVerboseContentLoadDiagnosticsEnabled();
 bool LogThemeLuaDiagnosticsEnabled();
+bool LogGlobalOffsetDiagnosticsEnabled();
 
 #endif

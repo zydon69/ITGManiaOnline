@@ -27,6 +27,8 @@ static Preference<bool> g_bLogContentLoadDiagnostics(
     "LogContentLoadDiagnostics", false);
 static Preference<bool> g_bLogThemeLuaDiagnostics(
     "LogThemeLuaDiagnostics", false);
+static Preference<bool> g_bLogGlobalOffsetDiagnostics(
+    "LogGlobalOffsetDiagnostics", false);
 
 static std::atomic<bool> g_bPerfDiagnosticsCached{false};
 static std::atomic<bool> g_bLogAudioUnderrunDiagnosticsCached{false};
@@ -39,6 +41,7 @@ static std::atomic<bool> g_bLogInputDiagnosticsCached{false};
 static std::atomic<bool> g_bLogMemoryCardDiagnosticsCached{false};
 static std::atomic<bool> g_bLogContentLoadDiagnosticsCached{false};
 static std::atomic<bool> g_bLogThemeLuaDiagnosticsCached{false};
+static std::atomic<bool> g_bLogGlobalOffsetDiagnosticsCached{false};
 
 static bool EnvFlagEnabled(const char* name) {
   if (name == nullptr) {
@@ -61,6 +64,8 @@ static const bool g_bEnvLogVerboseContentLoad =
     EnvFlagEnabled("ITG_LOG_VERBOSE_CONTENT_LOAD");
 static const bool g_bEnvLogThemeLua = EnvFlagEnabled("ITG_LOG_THEME_LUA");
 static const bool g_bEnvLogBackground = EnvFlagEnabled("ITG_LOG_BACKGROUND");
+static const bool g_bEnvLogGlobalOffset =
+    EnvFlagEnabled("ITG_LOG_GLOBAL_OFFSET");
 static const bool g_bEnvLegacyTraceGlUploads =
     EnvFlagEnabled("ITG_TRACE_GL_UPLOADS");
 bool PerfDiagnosticsEnabled() {
@@ -91,21 +96,21 @@ void RefreshPerfDiagnosticsPreferenceCache() {
       g_bLogContentLoadDiagnostics.Get(), std::memory_order_release);
   g_bLogThemeLuaDiagnosticsCached.store(
       g_bLogThemeLuaDiagnostics.Get(), std::memory_order_release);
+  g_bLogGlobalOffsetDiagnosticsCached.store(
+      g_bLogGlobalOffsetDiagnostics.Get(), std::memory_order_release);
 }
 
 /*
- * A diagnostic category is enabled when ANY of the following is true, applied
- * uniformly to every category:
+ * Most diagnostic categories are enabled when ANY of the following is true:
  *   1. its own "Log<Category>Diagnostics" preference is set, or
  *   2. the master "PerfDiagnostics" switch is on (it enables every category), or
  *   3. its dedicated "ITG_LOG_<CATEGORY>" environment variable is set to "1".
+ * Hot-path categories may intentionally opt out of the master switch below when
+ * enabling them can create extreme log volume during normal gameplay.
  *
  * The two legacy environment variables (ITG_TRACE_GL_UPLOADS,
  * ITG_TRACE_RESOURCE_SNAPSHOTS) are still honored so existing tooling keeps
- * working.  Keeping this logic identical across categories is intentional:
- * previously only audio-underrun fell back to the master and only two
- * categories had an environment override, which made the toggles behave
- * inconsistently.
+ * working.
  */
 static bool CategoryEnabled(
     const std::atomic<bool>& ownPreference, bool envEnabled,
@@ -163,4 +168,13 @@ bool LogVerboseContentLoadDiagnosticsEnabled() {
 
 bool LogThemeLuaDiagnosticsEnabled() {
   return CategoryEnabled(g_bLogThemeLuaDiagnosticsCached, g_bEnvLogThemeLua);
+}
+
+bool LogGlobalOffsetDiagnosticsEnabled() {
+  // Global-offset diagnostics include timing hot paths that can produce massive
+  // logs during gameplay, so this category intentionally does not inherit from
+  // the master PerfDiagnostics switch.  Use the dedicated option or
+  // ITG_LOG_GLOBAL_OFFSET=1 when investigating this system.
+  return g_bLogGlobalOffsetDiagnosticsCached.load(std::memory_order_acquire) ||
+         g_bEnvLogGlobalOffset;
 }

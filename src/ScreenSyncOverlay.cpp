@@ -11,8 +11,10 @@
 #include "InputFilter.h"
 #include "LocalizedString.h"
 #include "MessageManager.h"
+#include "PerfDiagnostics.h"
 #include "PrefsManager.h"
 #include "RageInputDevice.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "Screen.h"
 #include "ScreenManager.h"
@@ -287,7 +289,16 @@ bool ScreenSyncOverlay::Input(const InputEventPlus& input) {
 
       switch (a) {
         case ChangeGlobalOffset: {
-          PREFSMAN->m_fGlobalOffsetSeconds.Set(
+          const float old_runtime_seconds = PREFSMAN->m_fGlobalOffsetSeconds.Get();
+          if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+            LOG->Trace(
+                "GLOBAL_OFFSET_TRACE: sync_overlay_change_global_offset "
+                "input_type=%d increase=%d delta=%.6f old_runtime_seconds=%.6f "
+                "new_runtime_seconds=%.6f",
+                static_cast<int>(input.type), bIncrease ? 1 : 0, fDelta,
+                old_runtime_seconds, old_runtime_seconds + fDelta);
+          }
+          PREFSMAN->SetGlobalOffsetSeconds(
               PREFSMAN->m_fGlobalOffsetSeconds + fDelta);
           break;
         }

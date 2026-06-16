@@ -16,6 +16,7 @@ void ValidateSongsPerPlay(int& val);
  *
  * This assumes no extra stages, no event mode, no course modes. */
 const int MAX_SONGS_PER_PLAY = 7;
+const int NUM_GLOBAL_OFFSET_PROFILES = 6;
 
 enum MusicWheelUsesSections {
   MusicWheelUsesSections_NEVER,
@@ -247,7 +248,25 @@ class PrefsManager {
   Preference<bool> m_bLockCourseDifficulties;
   Preference<ShowDancingCharacters> m_ShowDancingCharacters;
   Preference<bool> m_bUseUnlockSystem;
+  // Runtime value consumed by timing and legacy theme code.  Writes must go
+  // through SetGlobalOffsetSeconds so the selected named profile stays in sync.
   Preference<float> m_fGlobalOffsetSeconds;
+  Preference<int> m_iGlobalOffsetProfileSelected;
+  Preference<bool> m_bGlobalOffsetProfilesInitialized;
+  Preference<std::string> m_sGlobalOffsetProfile1Name;
+  Preference<std::string> m_sGlobalOffsetProfile2Name;
+  Preference<std::string> m_sGlobalOffsetProfile3Name;
+  Preference<std::string> m_sGlobalOffsetProfile4Name;
+  Preference<std::string> m_sGlobalOffsetProfile5Name;
+  Preference<std::string> m_sGlobalOffsetProfile6Name;
+  Preference<float> m_fGlobalOffsetProfile1Seconds;
+  Preference<float> m_fGlobalOffsetProfile2Seconds;
+  Preference<float> m_fGlobalOffsetProfile3Seconds;
+  Preference<float> m_fGlobalOffsetProfile4Seconds;
+  Preference<float> m_fGlobalOffsetProfile5Seconds;
+  Preference<float> m_fGlobalOffsetProfile6Seconds;
+  Preference<std::string>* m_pGlobalOffsetProfileNames[NUM_GLOBAL_OFFSET_PROFILES];
+  Preference<float>* m_pGlobalOffsetProfileSeconds[NUM_GLOBAL_OFFSET_PROFILES];
   Preference<SyncOffset> m_DefaultSyncOffset;
   Preference<int> m_iProgressiveLifebar;
   Preference<int> m_iProgressiveStageLifebar;
@@ -382,6 +401,17 @@ class PrefsManager {
 
   std::string GetPreferencesSection() const;
 
+  int GetGlobalOffsetProfileCount() const;
+  int GetGlobalOffsetProfileSelected() const;
+  void SetGlobalOffsetProfileSelected(int index);
+  std::string GetGlobalOffsetProfileName(int index) const;
+  void SetGlobalOffsetProfileName(int index, const std::string& name);
+  float GetGlobalOffsetProfileSeconds(int index) const;
+  void SetGlobalOffsetProfileSeconds(int index, float seconds);
+  void SetGlobalOffsetSeconds(float seconds);
+  void SyncActiveGlobalOffsetProfileFromCurrentOffset();
+  void LogGlobalOffsetDiagnostics(const std::string& reason) const;
+
   // Lua
   void PushSelf(lua_State* L);
 
@@ -391,6 +421,16 @@ class PrefsManager {
   void ReadDefaultsFromFile(
       const std::string& sIni, const std::string& sSection);
   void TranslateDeprecatedFlags();
+  void InitializeGlobalOffsetProfiles();
+  int ClampGlobalOffsetProfileIndex(int index) const;
+  float SanitizeGlobalOffsetSeconds(float seconds, const char* source) const;
+  void InitializeGlobalOffsetProfileStorage();
+  Preference<std::string>& GetMutableGlobalOffsetProfileName(int index);
+  const Preference<std::string>& GetGlobalOffsetProfileNamePreference(
+      int index) const;
+  Preference<float>& GetMutableGlobalOffsetProfileSeconds(int index);
+  const Preference<float>& GetGlobalOffsetProfileSecondsPreference(
+      int index) const;
 
   Preference<std::string> m_sAdditionalSongFolders;    // deprecated
   Preference<std::string> m_sAdditionalCourseFolders;  // deprecated

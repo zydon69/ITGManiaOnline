@@ -23,6 +23,7 @@ class AdjustSync {
   static std::vector<TimingData> s_vpTimingDataOriginal;
 
   static float s_fGlobalOffsetSecondsOriginal;
+  static int s_iGlobalOffsetProfileOriginal;
   /* We only want to call the Reset methods before a song, not immediately after
    * a song. If we reset it at the end of a song, we have to carefully check
    * the logic to make sure we never reset it before the user gets a chance to

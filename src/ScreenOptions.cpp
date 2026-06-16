@@ -568,12 +568,27 @@ void ScreenOptions::HandleScreenMessage(const ScreenMessage SM) {
   } else if (SM == SM_ExportOptions) {
     std::vector<PlayerNumber> vpns;
     FOREACH_HumanPlayer(p) vpns.push_back(p);
+    if (LogGlobalOffsetDiagnosticsEnabled()) {
+      PREFSMAN->LogGlobalOffsetDiagnostics(
+          ssprintf("screen_options_export_begin:%s", m_sName.c_str()));
+    }
     for (unsigned r = 0; r < m_pRows.size(); r++)  // foreach row
     {
       if (m_pRows[r]->GetRowType() == OptionRow::RowType_Exit) {
         continue;
       }
+      if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+        LOG->Trace(
+            "GLOBAL_OFFSET_TRACE: screen_options_export_row screen='%s' "
+            "row=%u title='%s' handler='%s'",
+            m_sName.c_str(), r, m_pRows[r]->GetRowTitle().c_str(),
+            m_pRows[r]->GetHandler()->m_Def.m_sName.c_str());
+      }
       this->ExportOptions(r, vpns);
+    }
+    if (LogGlobalOffsetDiagnosticsEnabled()) {
+      PREFSMAN->LogGlobalOffsetDiagnostics(
+          ssprintf("screen_options_export_end:%s", m_sName.c_str()));
     }
 
     this->HandleScreenMessage(SM_GoToNextScreen);

@@ -11,6 +11,7 @@
 #include "GameState.h"
 #include "LuaManager.h"
 #include "NoteTypes.h"
+#include "PerfDiagnostics.h"
 #include "PrefsManager.h"
 #include "RageLog.h"
 #include "RageUtil.h"
@@ -734,9 +735,29 @@ bool TimingData::DoesLabelExist(const std::string& sLabel) const {
 }
 
 void TimingData::GetBeatAndBPSFromElapsedTime(GetBeatArgs& args) const {
-  args.elapsed_time += GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate *
-                       PREFSMAN->m_fGlobalOffsetSeconds;
+  const float elapsed_before_offset = args.elapsed_time;
+  const float music_rate = GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
+  const float runtime_offset = PREFSMAN->m_fGlobalOffsetSeconds;
+  args.elapsed_time += music_rate * runtime_offset;
+  // This timing hot path can log hundreds of lines per second; keep it behind
+  // the dedicated global-offset diagnostics flag only.
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: timing_elapsed_to_beat elapsed_before=%.6f "
+        "music_rate=%.6f runtime_seconds=%.6f applied_delta=%.6f "
+        "elapsed_after=%.6f",
+        elapsed_before_offset, music_rate, runtime_offset,
+        music_rate * runtime_offset, args.elapsed_time);
+  }
   GetBeatAndBPSFromElapsedTimeNoOffset(args);
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: timing_elapsed_to_beat_result "
+        "elapsed_after_offset=%.6f beat=%.6f bps=%.6f freeze=%d delay=%d "
+        "warp_begin=%d warp_dest=%.6f",
+        args.elapsed_time, args.beat, args.bps_out, args.freeze_out ? 1 : 0,
+        args.delay_out ? 1 : 0, args.warp_begin_out, args.warp_dest_out);
+  }
 }
 
 enum {
@@ -983,9 +1004,22 @@ float TimingData::GetElapsedTimeInternal(
 }
 
 float TimingData::GetElapsedTimeFromBeat(float fBeat) const {
-  return TimingData::GetElapsedTimeFromBeatNoOffset(fBeat) -
-         GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate *
-             PREFSMAN->m_fGlobalOffsetSeconds;
+  const float elapsed_no_offset = TimingData::GetElapsedTimeFromBeatNoOffset(fBeat);
+  const float music_rate = GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
+  const float runtime_offset = PREFSMAN->m_fGlobalOffsetSeconds;
+  const float applied_delta = music_rate * runtime_offset;
+  const float elapsed = elapsed_no_offset - applied_delta;
+  // This timing hot path can log hundreds of lines per second; keep it behind
+  // the dedicated global-offset diagnostics flag only.
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: timing_beat_to_elapsed beat=%.6f "
+        "elapsed_no_offset=%.6f music_rate=%.6f runtime_seconds=%.6f "
+        "applied_delta=%.6f elapsed=%.6f",
+        fBeat, elapsed_no_offset, music_rate, runtime_offset, applied_delta,
+        elapsed);
+  }
+  return elapsed;
 }
 
 float TimingData::GetElapsedTimeFromBeatNoOffset(float fBeat) const {
