@@ -519,7 +519,6 @@ local function joined_phase_allows_song_selection()
 	return phase == "lobby"
 		or phase == "lobby_ready"
 		or phase == "config"
-		or phase == "results"
 end
 
 local function joined_phase_allows_start()
@@ -747,6 +746,13 @@ local function room_visibility_label(room)
 	return "[ROOM]"
 end
 
+local function room_accepts_new_members(room)
+	if not room then return false end
+	if room.acceptsNewMembers ~= nil then return room.acceptsNewMembers == true end
+	if room.accepts_new_members ~= nil then return room.accepts_new_members == true end
+	return normalized_online_phase(room.phase) == "lobby"
+end
+
 local function selected_online_user()
 	if #online_users == 0 then return nil end
 	online_player_index = math.max(1, math.min(online_player_index, #online_users))
@@ -759,6 +765,9 @@ local function build_player_action_options(user)
 		return {{label="C'est vous", action="cancel"}, {label="Annuler", action="cancel"}}
 	end
 	if user.room and user.room.visibility == "public" then
+		if not room_accepts_new_members(user.room) then
+			return {{label="Salon public non joignable", action="cancel"}, {label="Annuler", action="cancel"}}
+		end
 		if user.room.id then
 			return {{label="Rejoindre le salon public", action="join_public_room", room_id=user.room.id}, {label="Annuler", action="cancel"}}
 		end
@@ -2041,14 +2050,24 @@ local af = Def.ActorFrame{
 			self:queuecommand("UpdateJoinedLobbyText")
 			self:queuecommand("Hover")
 		end,
-	OnlineLobbyJoinSelectedMessageCommand=function(self, params)
-		if not params or not params.code then
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-			return
-		end
+		OnlineLobbyJoinSelectedMessageCommand=function(self, params)
+			if not params or not params.code then
+				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+				return
+			end
+			if params.acceptsNewMembers == false
+				or (params.acceptsNewMembers == nil and params.phase ~= nil and normalized_online_phase(params.phase) ~= "lobby") then
+				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+				self:playcommand("SetStatus", {
+					text="Ce salon n'accepte plus de nouveaux joueurs.",
+					showSpinner=false,
+					showPrompt=true
+				})
+				return
+			end
 
-			join_lobby_code = params.code
-				self:GetChild("LobbyContent"):visible(false)
+				join_lobby_code = params.code
+					self:GetChild("LobbyContent"):visible(false)
 			self:GetChild("OnlinePlayersContent"):visible(false)
 			self:playcommand("SetStatus", {
 					text="Connexion au salon...",

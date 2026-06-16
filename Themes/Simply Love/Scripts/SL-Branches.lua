@@ -257,19 +257,12 @@ Branch.AfterSelectMusic = function()
 	-- would be expected to pick the same song since it's broadcast to the library.
 	--
 	-- TODO: Consider locking the music wheel in this case.
-	if ITGOnline and ITGOnline.currentRoomId and ITGOnline.SelectSongAndMarkLobbyReady then
-		ITGOnline:SelectSongAndMarkLobbyReady(function(ok, decoded, response)
-			if not ok then
-				MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-					event = "selectSong",
-					success = false,
-					message = (decoded and decoded.message) or (response and response.errorMessage) or "Song selection failed."
-				})
-			end
-		end)
-	else
-		MESSAGEMAN:Broadcast("SongSelected")
+	if ITGOnline and ITGOnline.currentRoomId then
+		if online_trace then
+			online_trace("FLOW branch=AfterSelectMusic action=broadcast_song_selected")
+		end
 	end
+	MESSAGEMAN:Broadcast("SongSelected")
 
 	if ITGOnline and ITGOnline.currentRoomId then
 		return "ScreenOnlineLobbies"

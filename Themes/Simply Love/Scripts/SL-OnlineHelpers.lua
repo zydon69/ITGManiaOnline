@@ -19,6 +19,11 @@ local lastOnlineOptionsSongKey = ""
 local lastOnlineGameplayRoomId = nil
 local pendingOnlineStartRoomId = nil
 local pendingConfigReady = nil
+local pendingOnlineSongSelectionKey = ""
+local pendingOnlineSongSelectionAt = 0
+local pendingOnlineSongSelectionToken = 0
+local pendingManagerAutoReadyRetryKey = ""
+local pendingManagerAutoReadyRetryPhase = ""
 local lastWaitingDebugKey = ""
 local lastFlowLobbyKey = ""
 local UnlockOnlineInput
@@ -516,6 +521,138 @@ local TransitionToOnlineOptions = function()
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 end
 
+local CurrentOnlineSelectionKey = function()
+	if not (ITGOnline and ITGOnline.currentRoomId) then return "" end
+
+	local song = GAMESTATE:GetCurrentSong()
+	local songKey = song and (song:GetSongDir() or song:GetDisplayFullTitle()) or "no-song"
+	local stepsHash = "no-steps"
+	local enabled = GAMESTATE:GetEnabledPlayers()
+	local player = enabled and enabled[1] or nil
+	local steps = player and GAMESTATE:GetCurrentSteps(player) or nil
+	if steps then
+		if ITGOnline.ChartHashForSteps then
+			stepsHash = ITGOnline:ChartHashForSteps(steps)
+		else
+			stepsHash = tostring(steps.GetHash and steps:GetHash() or "steps")
+		end
+	end
+
+	local rate = 1
+	if ITGOnline.CurrentGlobalOptions then
+		local options = ITGOnline:CurrentGlobalOptions()
+		rate = tonumber(options and options.music_rate) or rate
+	end
+
+	return tostring(ITGOnline.currentRoomId) .. "|" .. tostring(songKey) .. "|" .. tostring(stepsHash) .. "|" .. tostring(rate)
+end
+
+local SelectOnlineSongAsManager = function(actor)
+	if not (ITGOnline and ITGOnline.currentRoomId) then
+		online_flow_trace("song_selected_ignored reason=no_room")
+		return
+	end
+
+	local selectionKey = CurrentOnlineSelectionKey()
+	local now = GetTimeSinceStart()
+	if pendingOnlineSongSelectionKey == selectionKey and (now - pendingOnlineSongSelectionAt) < 12 then
+		online_flow_trace("song_selected_ignored reason=selection_inflight key=" .. tostring(selectionKey))
+		return
+	end
+	pendingOnlineSongSelectionKey = selectionKey
+	pendingOnlineSongSelectionAt = now
+	pendingOnlineSongSelectionToken = pendingOnlineSongSelectionToken + 1
+	local selectionToken = pendingOnlineSongSelectionToken
+
+	local clearPendingSelection = function()
+		if pendingOnlineSongSelectionKey == selectionKey and pendingOnlineSongSelectionToken == selectionToken then
+			pendingOnlineSongSelectionKey = ""
+		end
+	end
+
+	local finishSelection = function(room)
+		if pendingOnlineSongSelectionKey ~= selectionKey or pendingOnlineSongSelectionToken ~= selectionToken then
+			online_flow_trace("song_selected_ignored reason=stale_selection_callback key=" .. tostring(selectionKey))
+			return
+		end
+
+		if not (ITGOnline and ITGOnline.currentRoomId) then
+			clearPendingSelection()
+			return
+		end
+
+		if not ITGOnline.user then
+			clearPendingSelection()
+			online_flow_trace("song_selected_ignored reason=no_user_after_room_sync room=" .. tostring(ITGOnline.currentRoomId))
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event="selectSong",
+				success=false,
+				message="Session online indisponible. Reconnecte-toi au mode online."
+			})
+			return
+		end
+
+		if not (ITGOnline.IsCurrentUserRoomManager and ITGOnline:IsCurrentUserRoomManager(room)) then
+			clearPendingSelection()
+			online_flow_trace("song_selected_ignored reason=not_manager room=" .. tostring(ITGOnline.currentRoomId))
+			return
+		end
+
+		if not ITGOnline.SelectSongAndMarkLobbyReady then
+			clearPendingSelection()
+			online_flow_trace("song_selected_ignored reason=no_selection_api room=" .. tostring(ITGOnline.currentRoomId))
+			return
+		end
+
+		pendingOnlineSongSelectionAt = GetTimeSinceStart()
+		if actor then actor.inLobby = true end
+		online_flow_trace("song_selected_handler room=" .. tostring(ITGOnline.currentRoomId)
+			.. " socket=" .. tostring(actor and actor.socket ~= nil)
+			.. " phase=" .. tostring(room and room.phase or "no-room")
+			.. " key=" .. tostring(selectionKey))
+
+		ITGOnline:SelectSongAndMarkLobbyReady(function(ok, decoded, response)
+			if pendingOnlineSongSelectionKey == selectionKey and pendingOnlineSongSelectionToken == selectionToken then
+				pendingOnlineSongSelectionKey = ""
+			end
+
+			if ok then
+				online_flow_trace("song_selected_handler_ok transition=options")
+				TransitionToOnlineOptions()
+				return
+			end
+
+			online_flow_trace("song_selected_handler_failed status=" .. tostring(response and response.statusCode or "nil")
+				.. " error=" .. tostring(decoded and decoded.error_code or response and response.error or "nil"))
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event="selectSong",
+				success=false,
+				message=(decoded and decoded.message) or (response and response.errorMessage) or "Echec de selection de la chanson."
+			})
+		end)
+	end
+
+	if ITGOnline.EnsureCurrentRoom then
+		ITGOnline:EnsureCurrentRoom(function(ok, room, response)
+			if ok and room then
+				finishSelection(room)
+				return
+			end
+
+			clearPendingSelection()
+			online_flow_trace("song_selected_ignored reason=room_sync_failed status=" .. tostring(response and response.statusCode or "nil"))
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event="selectSong",
+				success=false,
+				message=(response and response.errorMessage) or "Impossible de recuperer l'etat du salon."
+			})
+		end)
+		return
+	end
+
+	finishSelection(ITGOnline.currentRoom)
+end
+
 local TransitionToOnlineGameplay = function()
 	local topScreen = SCREENMAN:GetTopScreen()
 	if not topScreen then return end
@@ -628,7 +765,7 @@ local RestoreCurrentRoom = function(actor, callback)
 		return
 	end
 
-	ITGOnline:FetchCurrentRoom(function(ok, decoded)
+	ITGOnline:FetchCurrentRoom(function(ok, decoded, response)
 		if ok and decoded and decoded.room then
 			actor.inLobby = true
 			local payload = ITGOnline:LobbyStatePayload(decoded.room)
@@ -637,6 +774,15 @@ local RestoreCurrentRoom = function(actor, callback)
 			ITGOnline:Heartbeat("in_room")
 			if callback then callback(true) end
 			return
+		end
+
+		if ITGOnline.CurrentRoomConflictCode then
+			local conflictCode = ITGOnline:CurrentRoomConflictCode(decoded, response)
+			if conflictCode ~= "" then
+				actor.inLobby = false
+				if callback then callback(false) end
+				return
+			end
 		end
 
 		actor.inLobby = false
@@ -1177,6 +1323,9 @@ CreateOnlineHandler = function()
 										if ok and decoded and decoded.current_room then
 											self.inLobby = true
 											ITGOnline:Heartbeat("in_room")
+										elseif ITGOnline.CurrentRoomConflictCode
+											and ITGOnline:CurrentRoomConflictCode(decoded, nil) ~= "" then
+											self.inLobby = false
 										else
 											RestoreCurrentRoom(self)
 										end
@@ -1570,54 +1719,48 @@ CreateOnlineHandler = function()
 				OnlineLobbyLeftMessageCommand=function(self)
 					self.inLobby = false
 				end,
-			      SongSelectedMessageCommand=function(self)
-						if self.connected and self.socket ~= nil and ITGOnline.currentRoomId then
-							self.inLobby = true
+				SongSelectedMessageCommand=function(self)
+					SelectOnlineSongAsManager(self)
+				end,
+				OnlineManagerAutoReadyRetryRequestedMessageCommand=function(self, params)
+					if not (params and params.key) then return end
+					local key = tostring(params.key or "")
+					local readyPhase = tostring(params.readyPhase or params.ready_phase or "lobby_ready")
+					if key == "" then return end
 
-							local room = ITGOnline.currentRoom
-							local user = ITGOnline.user
-							local manager = room and room.manager or nil
-							if manager and user and tonumber(manager.id) ~= tonumber(user.id) then
-								return
-							end
+					local retryAfter = tonumber(params.retryAfter or params.retry_after) or 0.25
+					retryAfter = math.min(math.max(retryAfter + 0.05, 0.05), 5)
+					pendingManagerAutoReadyRetryKey = key
+					pendingManagerAutoReadyRetryPhase = readyPhase
+					online_flow_trace("manager_auto_ready_retry_scheduled key=" .. tostring(key)
+						.. " phase=" .. tostring(readyPhase)
+						.. " retry_after=" .. tostring(retryAfter))
+					self:sleep(retryAfter):queuecommand("RetryOnlineManagerAutoReady")
+				end,
+				RetryOnlineManagerAutoReadyCommand=function(self)
+					local key = pendingManagerAutoReadyRetryKey
+					local readyPhase = pendingManagerAutoReadyRetryPhase ~= "" and pendingManagerAutoReadyRetryPhase or "lobby_ready"
+					if key == "" then return end
+					if not (ITGOnline and ITGOnline.currentRoom and ITGOnline.ManagerAutoReadyKey and ITGOnline.MaybeAutoReadyManager) then
+						pendingManagerAutoReadyRetryKey = ""
+						pendingManagerAutoReadyRetryPhase = ""
+						return
+					end
 
-							if ITGOnline.SelectSongAndMarkLobbyReady then
-								ITGOnline:SelectSongAndMarkLobbyReady(function(ok, decoded, response)
-									if ok then
-										TransitionToOnlineOptions()
-										return
-									end
+					local currentKey = ITGOnline:ManagerAutoReadyKey(ITGOnline.currentRoom, readyPhase)
+					if currentKey ~= key then
+						online_flow_trace("manager_auto_ready_retry_ignored reason=stale_key expected=" .. tostring(key)
+							.. " current=" .. tostring(currentKey))
+						pendingManagerAutoReadyRetryKey = ""
+						pendingManagerAutoReadyRetryPhase = ""
+						return
+					end
 
-									MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-										event="selectSong",
-										success=false,
-										message=(decoded and decoded.message) or (response and response.errorMessage) or "Echec de selection de la chanson."
-									})
-								end)
-								return
-							end
-
-			          ITGOnline:SelectSong(function(ok, decoded, response)
-								if ok then
-									maybe_set_lobby_ready("legacy_song_selected")
-									ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(fetchOk, fetchDecoded)
-										if fetchOk and fetchDecoded and fetchDecoded.room then
-											local payload = ITGOnline:LobbyStatePayload(fetchDecoded.room)
-											DisplayLobbyState(payload, self)
-										MESSAGEMAN:Broadcast("OnlineLobbyState", payload)
-										TransitionToOnlineOptions()
-									end
-								end)
-							else
-								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-									event="selectSong",
-									success=false,
-									message=(decoded and decoded.message) or (response and response.errorMessage) or "Echec de selection de la chanson."
-								})
-							end
-						end)
-	        end
-	      end,
+					pendingManagerAutoReadyRetryKey = ""
+					pendingManagerAutoReadyRetryPhase = ""
+					online_flow_trace("manager_auto_ready_retry key=" .. tostring(key))
+					ITGOnline:MaybeAutoReadyManager(ITGOnline.currentRoom)
+				end,
 		      CurrentSongChangedMessageCommand=function(self)
 					if self.connected and self.socket ~= nil then
 						maybe_preview_current_online_song(false)

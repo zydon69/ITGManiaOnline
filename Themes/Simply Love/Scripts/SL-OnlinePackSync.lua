@@ -132,6 +132,74 @@ local function safe_folder_name(value)
 	return value
 end
 
+local function pack_quarantine_path(packId, packName)
+	local folderName = safe_folder_name("__OnlineDownload_" .. tostring(packId) .. "_" .. tostring(packName or "pack"))
+	return "/Songs/" .. folderName .. "/"
+end
+
+local function remove_directory_if_possible(path)
+	if not FILEMAN or not FILEMAN.DeleteRecursive then return end
+	if not path or path == "" then return end
+	local exists = true
+	if FILEMAN.DoesFileExist then
+		exists = FILEMAN:DoesFileExist(path)
+	end
+	if exists then
+		FILEMAN:DeleteRecursive(path)
+	end
+end
+
+local function create_directory_if_possible(path)
+	if not FILEMAN or not FILEMAN.CreateDir then return end
+	if not path or path == "" then return end
+	FILEMAN:CreateDir(path)
+end
+
+local function path_exists(path)
+	if not FILEMAN or not FILEMAN.DoesFileExist then return false end
+	if not path or path == "" then return false end
+	return FILEMAN:DoesFileExist(path) and true or false
+end
+
+local function dir_listing(path, onlyDirs, onlyFiles)
+	if not FILEMAN or not FILEMAN.GetDirListing then return {} end
+	local ok, entries = pcall(function()
+		return FILEMAN:GetDirListing(path, onlyDirs, onlyFiles)
+	end)
+	if not ok or type(entries) ~= "table" then return {} end
+	return entries
+end
+
+local function safe_child_folder_name(value)
+	value = tostring(value or "")
+	if value == "" or value:find("[/\\]") or value:find("%.%.") then return "" end
+	return value
+end
+
+local function has_simfile_in_directory(path)
+	for _, fileName in ivalues(dir_listing(path, false, true)) do
+		local lowerName = tostring(fileName or ""):lower()
+		if lowerName:match("%.sm$") or lowerName:match("%.ssc$") then
+			return true
+		end
+	end
+	return false
+end
+
+local function single_nested_group_folder(quarantinePath)
+	if has_simfile_in_directory(quarantinePath) then return "" end
+	if #dir_listing(quarantinePath, false, true) > 0 then return "" end
+
+	local folders = {}
+	for _, folderName in ivalues(dir_listing(quarantinePath, true, false)) do
+		local safeName = safe_child_folder_name(folderName)
+		if safeName ~= "" then folders[#folders + 1] = safeName end
+	end
+
+	if #folders ~= 1 then return "" end
+	return folders[1]
+end
+
 local function first_enabled_player()
 	local enabled = GAMESTATE and GAMESTATE:GetEnabledPlayers() or {}
 	return enabled[1] or PLAYER_1
@@ -301,11 +369,25 @@ function PackSync:UpdateStatus(status, message, progress, callback)
 	end
 
 	ITGOnline:Request("POST", "/rooms/" .. tostring(ITGOnline.currentRoomId) .. "/pack-sync-status", payload, function(ok, decoded, response)
+		local statusResult = decoded and decoded.pack_sync_status or nil
+		local ignored = ok and statusResult and statusResult.applied == false
+		local callbackOk = ok and not ignored
 		if ok and decoded and decoded.room and ITGOnline.ApplyRoomSnapshot then
 			ITGOnline:ApplyRoomSnapshot(decoded.room, "pack_sync_status")
 			MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+			self:SyncSequenceFromRoom(currentSelectedAt)
 		end
-		if callback then callback(ok, decoded, response) end
+		if ignored then
+			decoded.error_code = decoded.error_code or "pack_sync_status_ignored"
+			decoded.message = decoded.message or "Pack sync status update was ignored for a stale room state."
+			response = response or {}
+			response.errorMessage = response.errorMessage or decoded.message
+			trace("Status ignored reason=" .. tostring(statusResult and statusResult.ignored_reason or "unknown")
+				.. " status=" .. tostring(status)
+				.. " sequence=" .. tostring(payload.sequence)
+				.. " selected_at=" .. tostring(payload.selected_at or ""))
+		end
+		if callback then callback(callbackOk, decoded, response) end
 	end)
 end
 
@@ -860,17 +942,41 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback)
 
 	local packName = trim(pack.name or ("Pack " .. tostring(packId)))
 	local fileName = tostring(packId) .. "_" .. safe_file_name(packName)
-	-- Install directly under /Songs so resulting paths follow
-	-- Songs/<Group>/<Song>/... (required by StepMania song discovery).
-	local targetSongsPath = "/Songs/"
+	local quarantinePath = pack_quarantine_path(packId, packName)
+	local maxDownloadBytes = tonumber(self.maxDownloadBytes) or (512 * 1024 * 1024)
 
 	local url = stepmaniaonline_origin() .. "/download/pack/" .. tostring(packId) .. "/"
 	local downloadMessage = "Telechargement de " .. tostring(packName)
 	trace("Download started pack=" .. tostring(packName) .. " id=" .. tostring(packId))
+	self.currentSongInfo = songInfo or self.currentSongInfo
 	self:UpdateStatus(self.status.DownloadInProgress, downloadMessage, 0)
 	self.lastProgressStatusAt = 0
 	self.lastProgressValue = -10
 	self.lastProgressBucket = -1
+	local downloadCompleted = false
+
+	local function fail_candidate_download(message, broadcastMissing)
+		if downloadCompleted then return end
+		downloadCompleted = true
+		message = message or "Le téléchargement du pack a échoué."
+		self.downloadInFlightKey = nil
+		self.downloadStartedAt = nil
+		self.downloadLastByteAt = nil
+		self.downloadLastByteCount = nil
+		self:UpdateStatus(self.status.DownloadFailed, message)
+		remove_directory_if_possible(quarantinePath)
+		if broadcastMissing ~= false and MESSAGEMAN then
+			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
+		end
+		if callback then callback(false, message) end
+	end
+
+	local function finish_candidate_download()
+		if downloadCompleted then return false end
+		downloadCompleted = true
+		if callback then callback(true) end
+		return true
+	end
 
 	NETWORK:HttpRequest({
 		url = url,
@@ -878,26 +984,24 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback)
 		downloadFile = fileName,
 		connectTimeout = 15,
 		transferTimeout = 600,
-		maxDownloadBytes = 2 * 1024 * 1024 * 1024 - 1,
+		maxDownloadBytes = maxDownloadBytes,
 		-- Keep the zip until we explicitly unzip/cleanup it. If removed too early,
 		-- the post-download check will falsely report "file missing".
 		deleteDownloadAfterResponse = false,
 		onFileError = function(errorMessage)
-			self.downloadStartedAt = nil
-			self.downloadLastByteAt = nil
-			self.downloadLastByteCount = nil
+			if downloadCompleted then return end
 			trace("Download file error pack=" .. tostring(packName) .. " err=" .. tostring(errorMessage))
-			if callback then
-				callback(false, "Erreur d'écriture du fichier téléchargé: " .. tostring(errorMessage or "unknown error"))
-			end
+			fail_candidate_download("Erreur d'écriture du fichier téléchargé: " .. tostring(errorMessage or "unknown error"))
 		end,
 		onProgress = function(current, total)
+			if downloadCompleted then return false end
 			local now = GetTimeSinceStart and GetTimeSinceStart() or 0
 			if self.downloadStartedAt == nil then
 				self.downloadStartedAt = now
 				self.downloadLastByteAt = now
 				self.downloadLastByteCount = tonumber(current) or 0
 			end
+
 			local currentBytes = tonumber(current) or 0
 			if currentBytes > (tonumber(self.downloadLastByteCount) or 0) then
 				self.downloadLastByteCount = currentBytes
@@ -905,6 +1009,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback)
 			end
 			if now - (tonumber(self.downloadLastByteAt) or now) >= 45 then
 				trace("Download stalled for 45s, aborting pack=" .. tostring(packName))
+				fail_candidate_download("Le téléchargement du pack n'a pas progressé depuis 45 secondes.")
 				return false
 			end
 
@@ -924,6 +1029,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback)
 			return true
 		end,
 		onResponse = function(response)
+			if downloadCompleted then return end
 			self.downloadStartedAt = nil
 			self.downloadLastByteAt = nil
 			self.downloadLastByteCount = nil
@@ -931,33 +1037,58 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback)
 			if statusCode < 200 or statusCode >= 300 then
 				local message = "Le téléchargement du pack a échoué."
 				trace("Download failed status=" .. tostring(statusCode))
-				if callback then callback(false, message) end
+				fail_candidate_download(message)
 				return
 			end
 			self:UpdateStatus(self.status.DownloadInProgress, downloadMessage, 100)
 
 			local zipPath = "/Downloads/" .. fileName
 			if not FILEMAN:DoesFileExist(zipPath) then
-				if callback then callback(false, "Le fichier téléchargé est introuvable.") end
+				fail_candidate_download("Le fichier téléchargé est introuvable.")
 				return
 			end
 
-			local extracted = FILEMAN:Unzip(zipPath, targetSongsPath, 0)
+			remove_directory_if_possible(quarantinePath)
+			create_directory_if_possible(quarantinePath)
+			local extracted = FILEMAN:Unzip(zipPath, quarantinePath, 0)
 			if not extracted then
 				remove_path_if_exists(zipPath)
+				remove_directory_if_possible(quarantinePath)
 				trace("Download failed unzip pack=" .. tostring(packName))
-				if callback then callback(false, "Le zip téléchargé est invalide ou impossible à extraire.") end
+				fail_candidate_download("Le zip téléchargé est invalide ou impossible à extraire.")
 				return
 			end
-			log_dir_listing("Extracted Songs root", "/Songs/")
+			log_dir_listing("Extracted quarantine", quarantinePath)
+
+			local installedPath = quarantinePath
+			local nestedGroup = single_nested_group_folder(quarantinePath)
+			if nestedGroup ~= "" then
+				local rootGroupPath = "/Songs/" .. nestedGroup .. "/"
+				if not path_exists(rootGroupPath) then
+					trace("Detected nested pack folder; retrying root extraction group=" .. tostring(nestedGroup))
+					remove_directory_if_possible(quarantinePath)
+					local rootExtracted = FILEMAN:Unzip(zipPath, "/Songs/", 0)
+					if not rootExtracted then
+						remove_path_if_exists(zipPath)
+						remove_directory_if_possible(rootGroupPath)
+						trace("Download failed root unzip pack=" .. tostring(packName))
+						fail_candidate_download("Le zip téléchargé est invalide ou impossible à extraire.")
+						return
+					end
+					installedPath = rootGroupPath
+					log_dir_listing("Extracted root group", installedPath)
+				else
+					trace("Nested pack folder matches an existing Songs group; keeping isolated quarantine group=" .. tostring(nestedGroup))
+				end
+			end
 			remove_path_if_exists(zipPath)
 
 			trace("Reload Songs after download pack=" .. tostring(packName))
 			self.pendingPostReloadSongInfo = songInfo
-			self.pendingQuarantinePath = ""
+			self.pendingQuarantinePath = installedPath
 			self:UpdateStatus(self.status.ReloadingSongs, "Rechargement des chansons")
 			transition_to_reload_songs()
-			if callback then callback(true) end
+			finish_candidate_download()
 		end,
 	})
 end
@@ -992,33 +1123,34 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 	end
 
 	self:UpdateStatus(self.status.DownloadRequested, nil)
-		self:SearchStepManiaOnline(songInfo, function(ok, pack, searchError)
-			if not ok or not pack or not pack.id then
-				if searchError and type(searchError.candidates) == "table" and #searchError.candidates > 0 then
-					trace("Download selection required candidates=" .. tostring(#searchError.candidates))
-					self.downloadInFlightKey = nil
-					if callback then
-						callback(false, {
-							kind = "pack_candidates",
-							message = searchError.errorMessage or "Plusieurs packs correspondent à cette chanson.",
-							candidates = searchError.candidates,
-						})
-					end
-					return
+	self:SearchStepManiaOnline(songInfo, function(ok, pack, searchError)
+		if not ok or not pack or not pack.id then
+			if searchError and type(searchError.candidates) == "table" and #searchError.candidates > 0 then
+				trace("Download selection required candidates=" .. tostring(#searchError.candidates))
+				self.downloadInFlightKey = nil
+				if callback then
+					callback(false, {
+						kind = "pack_candidates",
+						message = searchError.errorMessage or "Plusieurs packs correspondent à cette chanson.",
+						candidates = searchError.candidates,
+					})
 				end
-				local message = searchError and searchError.errorMessage or "La recherche de pack StepManiaOnline a echoue."
-				trace("Download failed search=" .. tostring(message))
-				fail_download(message)
 				return
 			end
-			self:DownloadPackByCandidate(songInfo, pack, function(downloadOk, downloadMessage)
-				if downloadOk then
-					if callback then callback(true) end
-					return
-				end
-				fail_download(downloadMessage or "Le téléchargement du pack a échoué.")
-			end)
+			local message = searchError and searchError.errorMessage or "La recherche de pack StepManiaOnline a echoue."
+			trace("Download failed search=" .. tostring(message))
+			fail_download(message)
+			return
+		end
+		self:DownloadPackByCandidate(songInfo, pack, function(downloadOk, downloadMessage)
+			if downloadOk then
+				if callback then callback(true) end
+				return
+			end
+			self.downloadInFlightKey = nil
+			if callback then callback(false, downloadMessage or "Le téléchargement du pack a échoué.") end
 		end)
+	end)
 end
 
 function PackSync:ValidatePendingPostReload()

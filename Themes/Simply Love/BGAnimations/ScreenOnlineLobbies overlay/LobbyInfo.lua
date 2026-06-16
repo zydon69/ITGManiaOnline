@@ -49,11 +49,13 @@ local t = Def.ActorFrame{
       return
     end
 
-    MESSAGEMAN:Broadcast("OnlineLobbyJoinSelected", {
-      code = selected.code,
-    })
-  end
-}
+	    MESSAGEMAN:Broadcast("OnlineLobbyJoinSelected", {
+	      code = selected.code,
+	      phase = selected.phase,
+	      acceptsNewMembers = selected.acceptsNewMembers,
+	    })
+	  end
+	}
 
 -- +2 because we want to have two of the actors for padding purposes.
 for i=1,num_rows+2 do
