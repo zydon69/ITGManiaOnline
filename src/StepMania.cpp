@@ -137,6 +137,25 @@ static bool IsMacOS() {
 #endif
 }
 
+static bool IsWindows() {
+#if defined(_WIN32)
+  return true;
+#else
+  return false;
+#endif
+}
+
+static void ApplyFirstRunPlatformPreferenceDefaults(
+    bool bPreferencesIniExistedAtStartup) {
+  if (bPreferencesIniExistedAtStartup || !IsWindows()) {
+    return;
+  }
+
+  PREFSMAN->m_bWindowed.Set(false);
+  PREFSMAN->m_bFullscreenIsBorderlessWindow.Set(true);
+  LOG->Info("Applied first-run Windows display default: fullscreen.");
+}
+
 void StepMania::GetPreferredVideoModeParams(VideoModeParams& paramsOut) {
   // resolution handling code that probably needs fixing
   int iWidth = PREFSMAN->m_iDisplayWidth;
@@ -913,6 +932,8 @@ int sm_main(int argc, char* argv[]) {
   if (!bPortable) {
     FILEMAN->MountUserFilesystems();
   }
+  const bool bPreferencesIniExistedAtStartup =
+      DoesFileExist(SpecialFiles::PREFERENCES_INI_PATH);
 
   // Set this up next. Do this early, since it's needed for
   // RageException::Throw.
@@ -956,6 +977,7 @@ int sm_main(int argc, char* argv[]) {
   /* One of the above filesystems might contain files that affect preferences
    * (e.g. Data/Static.ini). Re-read preferences. */
   PREFSMAN->ReadPrefsFromDisk();
+  ApplyFirstRunPlatformPreferenceDefaults(bPreferencesIniExistedAtStartup);
   ApplyLogPreferences();
 
   // This needs PREFSMAN.
