@@ -9,7 +9,7 @@ ITGOnline = ITGOnline or {}
 ITGOnline.PackSync = ITGOnline.PackSync or {}
 
 local PackSync = ITGOnline.PackSync
-PackSync.scriptVersion = "2026-06-17-pack-install-cache-flush-v3"
+PackSync.scriptVersion = "2026-06-17-pack-install-cache-flush-v5"
 PackSync.statusChangedAt = PackSync.statusChangedAt or 0
 PackSync.watchdogLastKey = PackSync.watchdogLastKey or ""
 PackSync.watchdogTimeoutSeconds = PackSync.watchdogTimeoutSeconds or 25
@@ -536,8 +536,14 @@ function PackSync:ResetLocalState(reason)
 		trace("Keep browse-only download state during no_song_confirmed reset")
 		return
 	end
-	if reason == "no_song_confirmed" and self.currentStatus == self.status.DownloadedOk then
-		trace("Keep downloaded pack state during no_song_confirmed reset")
+	if reason == "no_song_confirmed" and (
+		self.currentStatus == self.status.ManagerBrowsingUnknownPack
+		or self.currentStatus == self.status.DownloadRequested
+		or self.currentStatus == self.status.DownloadInProgress
+		or self.currentStatus == self.status.ReloadingSongs
+		or self.currentStatus == self.status.DownloadedOk
+	) then
+		trace("Keep pack navigation/download state during no_song_confirmed reset status=" .. tostring(self.currentStatus))
 		return
 	end
 	self.currentSongInfo = nil
@@ -875,22 +881,39 @@ local function copy_directory_recursive(sourcePath, targetPath, maxDepth)
 end
 
 local function install_extracted_pack_at_songs_root(quarantinePath, expectedPackName)
+	trace("Install extracted pack begin quarantine=" .. tostring(quarantinePath)
+		.. " expectedPack=" .. tostring(expectedPackName)
+		.. " songsRootExists=" .. tostring(path_exists("/Songs/") or path_exists("/Songs")))
+	log_dir_listing("Install quarantine before cleanup", quarantinePath)
 	remove_temp_newdir_artifacts(quarantinePath, 4)
 	local nestedGroup = single_nested_group_folder(quarantinePath, expectedPackName)
 	if nestedGroup == "" then
+		log_dir_listing("Install quarantine invalid", quarantinePath)
 		return nil, "Le zip téléchargé ne contient pas un dossier de pack unique."
 	end
 
 	local sourcePath = quarantinePath .. nestedGroup
 	local rootGroupPath = "/Songs/" .. nestedGroup
+	trace("Install extracted pack resolved nestedGroup=" .. tostring(nestedGroup)
+		.. " source=" .. tostring(sourcePath)
+		.. " target=" .. tostring(rootGroupPath)
+		.. " sourceExists=" .. tostring(path_exists(sourcePath) or path_exists(sourcePath .. "/"))
+		.. " targetExists=" .. tostring(path_exists(rootGroupPath) or path_exists(rootGroupPath .. "/")))
 	remove_temp_newdir_artifacts(sourcePath .. "/", 4)
 	if path_exists(rootGroupPath) or path_exists(rootGroupPath .. "/") then
-		return nil, "Le pack existe déjà localement."
+		log_dir_listing("Install existing target", rootGroupPath .. "/")
+		remove_directory_if_possible(quarantinePath)
+		trace("Install extracted pack reused existing target=" .. tostring(rootGroupPath)
+			.. " quarantineExistsAfterCleanup=" .. tostring(path_exists(quarantinePath) or path_exists(quarantinePath .. "/")))
+		return rootGroupPath .. "/", nil
 	end
 	if not FILEMAN or not FILEMAN.MoveOnlineSongPack then
 		return nil, "Le moteur ne permet pas d'installer le pack téléchargé."
 	end
 	local moved = FILEMAN:MoveOnlineSongPack(sourcePath, rootGroupPath)
+	trace("MoveOnlineSongPack result moved=" .. tostring(moved)
+		.. " sourceExistsAfter=" .. tostring(path_exists(sourcePath) or path_exists(sourcePath .. "/"))
+		.. " targetExistsAfter=" .. tostring(path_exists(rootGroupPath) or path_exists(rootGroupPath .. "/")))
 	if not moved then
 		trace("MoveOnlineSongPack failed; trying recursive copy source=" .. tostring(sourcePath) .. " target=" .. tostring(rootGroupPath))
 		if not copy_directory_recursive(sourcePath .. "/", rootGroupPath .. "/", 8) then
@@ -900,9 +923,10 @@ local function install_extracted_pack_at_songs_root(quarantinePath, expectedPack
 	end
 
 	log_dir_listing("Installed root group", rootGroupPath .. "/")
-	if not moved then
-		remove_directory_if_possible(quarantinePath)
-	end
+	log_dir_listing("Remaining quarantine after install", quarantinePath)
+	remove_directory_if_possible(quarantinePath)
+	trace("Install extracted pack complete target=" .. tostring(rootGroupPath)
+		.. " quarantineExistsAfterCleanup=" .. tostring(path_exists(quarantinePath) or path_exists(quarantinePath .. "/")))
 	return rootGroupPath .. "/", nil
 end
 

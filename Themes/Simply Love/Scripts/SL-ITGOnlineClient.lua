@@ -2183,6 +2183,7 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	end
 
 	self.currentRoomId = room.id
+	room.online_snapshot_source = source
 	self.currentRoom = room
 	if room.id then
 		self.deletedRoomIds[tostring(room.id)] = nil
@@ -3744,6 +3745,47 @@ function ITGOnline:TransferRoomManager(userId, callback)
 				event = "managerTransfer",
 				success = false,
 				message = response_message(response, decoded, "Impossible de transferer le role manager.")
+			})
+		end
+
+		if callback then callback(ok, decoded, response) end
+	end)
+end
+
+function ITGOnline:CancelSongSelection(callback)
+	if not self.currentRoomId then
+		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
+		return
+	end
+
+	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/song-selection/cancel", {}, function(ok, decoded, response)
+		if ok and decoded and decoded.room then
+			local room = self:ApplyRoomSnapshot(decoded.room, "song_selection_cancelled")
+			decoded.room = room or decoded.room
+			self.currentSongPayload = nil
+			self.currentRoomRoundKey = ""
+			self.songLoadedAckKey = ""
+			self.songLoadedInFlightKey = ""
+			self.songLoadedPendingCallbacks = {}
+			self.songAvailabilityInFlightKey = ""
+			self.songAvailabilityInFlightCallbacks = {}
+			self.songAvailabilityReportedKey = ""
+			self.songAvailabilitySuppressedUntil = {}
+			self.startScheduleAckKey = ""
+			self.startScheduleAckInFlightKey = ""
+			self.readyRequestBlockedErrors = {}
+			self:ClearActiveGameplayRound("song_selection_cancelled")
+			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = "cancelSongSelection",
+				success = true,
+				message = "Choix de chanson annule."
+			})
+		else
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = "cancelSongSelection",
+				success = false,
+				message = response_message(response, decoded, "Impossible d'annuler le choix de chanson.")
 			})
 		end
 
@@ -6356,6 +6398,7 @@ function ITGOnline:LobbyStatePayload(room)
 			code = tostring(room.id),
 			roomId = room.id,
 			phase = room.phase,
+			snapshotSource = room.online_snapshot_source,
 			acceptsNewMembers = room.accepts_new_members == true,
 			startAt = room.start_at,
 			startAtMs = room.start_at_ms,
