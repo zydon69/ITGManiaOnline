@@ -263,6 +263,7 @@ class ScreenGameplay : public ScreenWithMenuElements {
   void UpdateLyrics(float fDeltaTime);
   void SongFinished();
   bool OnlineShouldHoldBeforeEvaluation();
+  bool OnlineShouldKeepGameplayAliveAfterLocalFail();
   virtual void SaveStats();
   virtual void StageFinished(bool bBackedOut);
   void SaveReplay();
@@ -378,6 +379,7 @@ class ScreenGameplay : public ScreenWithMenuElements {
   bool m_bLoggedStageEndState;
   bool m_bLoggedOnlineEvaluationHold;
   bool m_bMarkedOnlineFailedEarly;
+  bool m_bLoggedOnlineLocalFailKeepAlive;
   int m_iLightsRowLastCrossed;
   int m_iBeatRowLastCrossed;
   int m_iNoteRowLastCrossed[4];

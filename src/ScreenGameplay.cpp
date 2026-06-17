@@ -668,6 +668,7 @@ ScreenGameplay::ScreenGameplay() {
   m_bLoggedStageEndState = false;
   m_bLoggedOnlineEvaluationHold = false;
   m_bMarkedOnlineFailedEarly = false;
+  m_bLoggedOnlineLocalFailKeepAlive = false;
   m_iLightsRowLastCrossed = 0;
   m_iBeatRowLastCrossed = 0;
   ZERO(m_iNoteRowLastCrossed);
@@ -2413,7 +2414,14 @@ void ScreenGameplay::Update(float fDeltaTime) {
         }
       }
 
-      if (bAllFailed) {
+      if (bAllFailed && OnlineShouldKeepGameplayAliveAfterLocalFail()) {
+        if (!m_bLoggedOnlineLocalFailKeepAlive) {
+          LOG->Trace(
+              "ITG Online: local players failed, keeping ScreenGameplay running "
+              "until remote players finish.");
+          m_bLoggedOnlineLocalFailKeepAlive = true;
+        }
+      } else if (bAllFailed) {
         m_pSoundMusic->StopPlaying();
         SCREENMAN->PostMessageToTopScreen(SM_NotesEnded, 0);
         m_LyricDisplay.Stop();
@@ -3410,6 +3418,33 @@ bool ScreenGameplay::OnlineShouldHoldBeforeEvaluation() {
     return isOnlineActive;
   }
   return shouldHold;
+}
+
+bool ScreenGameplay::OnlineShouldKeepGameplayAliveAfterLocalFail() {
+  if (LUA == nullptr) {
+    return false;
+  }
+  Lua* L = LUA->Get();
+  bool keepAlive = false;
+  const bool ok = LuaHelpers::RunExpression(
+      L,
+      "ITGOnlineShouldKeepGameplayAliveAfterLocalFail ~= nil "
+      "and ITGOnlineShouldKeepGameplayAliveAfterLocalFail()",
+      "ScreenGameplay online keep-alive after local fail gate");
+  if (ok) {
+    LuaHelpers::Pop(L, keepAlive);
+  }
+  LUA->Release(L);
+
+  if (!ok) {
+    const bool isOnlineActive = GetITGOnlineIsActive();
+    LOG->Warn(
+        "ITG Online: local fail keep-alive gate failed; %s",
+        isOnlineActive ? "keeping gameplay alive" : "local gameplay unaffected");
+    return isOnlineActive;
+  }
+
+  return keepAlive;
 }
 
 void ScreenGameplay::StageFinished(bool bBackedOut) {

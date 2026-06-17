@@ -526,7 +526,11 @@ end
 
 local function local_pack_exists(songInfo)
 	local pack = trim_text(songInfo and songInfo.pack)
-	return pack ~= "" and SONGMAN and SONGMAN.DoesSongGroupExist and SONGMAN:DoesSongGroupExist(pack)
+	if pack == "" then return false end
+	if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.PackExists then
+		return ITGOnline.PackSync:PackExists(pack)
+	end
+	return SONGMAN and SONGMAN.DoesSongGroupExist and SONGMAN:DoesSongGroupExist(pack)
 end
 
 local function normalized_online_phase(value)
@@ -2467,9 +2471,16 @@ local af = Def.ActorFrame{
 		self:queuecommand("Hover")
 	end,
 	OnlinePackDownloadedMessageCommand=function(self, params)
+		if params and params.songInfo and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.MarkPackInstalled then
+			ITGOnline.PackSync:MarkPackInstalled(song_info_pack(params.songInfo))
+		end
 		if params and params.songInfo and joined_song_preview and song_info_pack(params.songInfo) == song_info_pack(joined_song_preview) then
 			joined_preview_unknown_pack = false
+			normalize_joined_active_index()
 			self:queuecommand("UpdateJoinedLobbyText")
+			self:queuecommand("UpdateLobbyView")
+			self:queuecommand("UpdateOnlinePlayers")
+			self:queuecommand("Hover")
 		end
 	end,
 	OnlineResponseStatusMessageCommand=function(self, params)

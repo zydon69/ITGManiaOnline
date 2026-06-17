@@ -14,6 +14,7 @@ PackSync.statusChangedAt = PackSync.statusChangedAt or 0
 PackSync.watchdogLastKey = PackSync.watchdogLastKey or ""
 PackSync.watchdogTimeoutSeconds = PackSync.watchdogTimeoutSeconds or 25
 PackSync.activeBrowseOnlyDownload = PackSync.activeBrowseOnlyDownload or false
+PackSync.installedPackNames = PackSync.installedPackNames or {}
 
 PackSync.status = {
 	Unknown = "unknown",
@@ -82,6 +83,10 @@ end
 
 local function selected_pack(songInfo)
 	return trim(songInfo and songInfo.pack)
+end
+
+local function pack_name_key(packName)
+	return lower(packName):gsub("%s+", " ")
 end
 
 local function selected_path(songInfo)
@@ -171,6 +176,12 @@ local function path_exists(path)
 	if not FILEMAN or not FILEMAN.DoesFileExist then return false end
 	if not path or path == "" then return false end
 	return FILEMAN:DoesFileExist(path) and true or false
+end
+
+local function pack_root_path(packName)
+	packName = trim(packName)
+	if packName == "" then return "" end
+	return "/Songs/" .. packName .. "/"
 end
 
 local function flush_dir_cache(path)
@@ -410,6 +421,26 @@ function PackSync:DisplayText(status)
 	return self.statusText[tostring(status or "")] or self.statusText.unknown
 end
 
+function PackSync:MarkPackInstalled(packName)
+	packName = trim(packName)
+	if packName == "" then return end
+	self.installedPackNames = self.installedPackNames or {}
+	self.installedPackNames[pack_name_key(packName)] = true
+	trace("Pack marked installed pack=" .. tostring(packName))
+end
+
+function PackSync:PackExists(packName)
+	packName = trim(packName)
+	if packName == "" then return false end
+	if SONGMAN and SONGMAN.DoesSongGroupExist and SONGMAN:DoesSongGroupExist(packName) then
+		return true
+	end
+	if self.installedPackNames and self.installedPackNames[pack_name_key(packName)] == true then
+		return true
+	end
+	return path_exists(pack_root_path(packName))
+end
+
 function PackSync:UpdateStatus(status, message, progress, callback)
 	status = tostring(status or self.status.Unknown)
 	self.currentStatus = status
@@ -570,9 +601,15 @@ end
 
 function PackSync:ManagerBrowsingPreview(songInfo)
 	if not songInfo then return end
-	if selected_pack(songInfo) ~= "" and SONGMAN and SONGMAN.DoesSongGroupExist and not SONGMAN:DoesSongGroupExist(selected_pack(songInfo)) then
+	local packName = selected_pack(songInfo)
+	local exists = self:PackExists(packName)
+	trace("Manager browsing preview pack=" .. tostring(packName) .. " exists=" .. tostring(exists))
+	if packName ~= "" and not exists then
 		self.currentSongInfo = songInfo
 		self:UpdateStatus(self.status.ManagerBrowsingUnknownPack, "Le manager navigue dans un pack que vous ne possédez pas.")
+	elseif packName ~= "" and exists and self.currentStatus == self.status.ManagerBrowsingUnknownPack then
+		self.currentSongInfo = songInfo
+		self:UpdateStatus(self.status.DownloadedOk, "Pack disponible localement.")
 	end
 end
 
@@ -853,7 +890,8 @@ local function install_extracted_pack_at_songs_root(quarantinePath, expectedPack
 	if not FILEMAN or not FILEMAN.MoveOnlineSongPack then
 		return nil, "Le moteur ne permet pas d'installer le pack téléchargé."
 	end
-	if not FILEMAN:MoveOnlineSongPack(sourcePath, rootGroupPath) then
+	local moved = FILEMAN:MoveOnlineSongPack(sourcePath, rootGroupPath)
+	if not moved then
 		trace("MoveOnlineSongPack failed; trying recursive copy source=" .. tostring(sourcePath) .. " target=" .. tostring(rootGroupPath))
 		if not copy_directory_recursive(sourcePath .. "/", rootGroupPath .. "/", 8) then
 			remove_directory_if_possible(rootGroupPath .. "/")
@@ -862,7 +900,9 @@ local function install_extracted_pack_at_songs_root(quarantinePath, expectedPack
 	end
 
 	log_dir_listing("Installed root group", rootGroupPath .. "/")
-	remove_directory_if_possible(quarantinePath)
+	if not moved then
+		remove_directory_if_possible(quarantinePath)
+	end
 	return rootGroupPath .. "/", nil
 end
 
@@ -1236,6 +1276,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 				fail_candidate_download(installError or "Impossible d'installer le pack téléchargé.")
 				return
 			end
+			self:MarkPackInstalled(packName)
 			remove_path_if_exists(zipPath)
 
 			trace("Reload Songs after download pack=" .. tostring(packName))
@@ -1374,7 +1415,7 @@ end
 
 local function browse_pack_reload_validated(songInfo, quarantinePath)
 	local packName = selected_pack(songInfo)
-	if packName ~= "" and SONGMAN and SONGMAN.DoesSongGroupExist and SONGMAN:DoesSongGroupExist(packName) then
+	if packName ~= "" and PackSync:PackExists(packName) then
 		return true
 	end
 	if quarantinePath and quarantinePath ~= "" and has_simfile_below_directory(quarantinePath, 2) then

@@ -2623,6 +2623,15 @@ ITGOnlineShouldHoldGameplayForEvaluation = function()
 	return ITGOnline and ITGOnline.ShouldHoldGameplayForEvaluation and ITGOnline:ShouldHoldGameplayForEvaluation()
 end
 
+ITGOnlineShouldKeepGameplayAliveAfterLocalFail = function()
+	if not (ITGOnline and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return false end
+	local phase = ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase)
+	if phase ~= "playing" and phase ~= "starting" then return false end
+	local summary = ITGOnline:PlayStateSummary()
+	if not summary or tonumber(summary.players or 0) <= 1 then return false end
+	return summary.allTerminal ~= true
+end
+
 function ITGOnline:PreferredScreenForRoomPhase(screenName)
 	if not self.currentRoom then return nil end
 
