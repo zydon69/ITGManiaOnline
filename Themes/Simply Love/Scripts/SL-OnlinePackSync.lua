@@ -493,6 +493,10 @@ function PackSync:ResetLocalState(reason)
 		trace("Keep browse-only download state during no_song_confirmed reset")
 		return
 	end
+	if reason == "no_song_confirmed" and self.currentStatus == self.status.DownloadedOk then
+		trace("Keep downloaded pack state during no_song_confirmed reset")
+		return
+	end
 	self.currentSongInfo = nil
 	self.currentStatus = self.status.Unknown
 	self.statusChangedAt = 0

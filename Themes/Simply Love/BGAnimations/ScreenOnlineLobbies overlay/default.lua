@@ -537,6 +537,7 @@ local function joined_phase_allows_song_selection()
 	return phase == "lobby"
 		or phase == "lobby_ready"
 		or phase == "config"
+		or phase == "results"
 end
 
 local function joined_phase_allows_start()

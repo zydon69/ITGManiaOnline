@@ -5806,11 +5806,12 @@ function ITGOnline:LeaveRoom(callback)
 		return
 	end
 	local roomId = self.currentRoomId
+	self:CancelPendingRequests()
+	self:ClearCurrentRoomState("leave_room_local")
 	self:Request("POST", "/rooms/" .. tostring(roomId) .. "/leave", {}, function(ok, decoded, response)
 		local gone = response and (response.statusCode == 404 or response.statusCode == 410)
 		if ok or gone then
 			self.deletedRoomIds[tostring(roomId)] = gone == true or nil
-			self:ClearCurrentRoomState("leave_room")
 		end
 		if callback then callback(ok or gone, decoded, response) end
 	end)
