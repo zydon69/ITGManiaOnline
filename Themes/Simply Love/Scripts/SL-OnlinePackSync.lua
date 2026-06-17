@@ -9,7 +9,7 @@ ITGOnline = ITGOnline or {}
 ITGOnline.PackSync = ITGOnline.PackSync or {}
 
 local PackSync = ITGOnline.PackSync
-PackSync.scriptVersion = "2026-06-17-pack-preview-refresh-v6"
+PackSync.scriptVersion = "2026-06-18-selected-download-timeout-guard-v1"
 PackSync.statusChangedAt = PackSync.statusChangedAt or 0
 PackSync.currentStatusMessage = PackSync.currentStatusMessage or nil
 PackSync.watchdogLastKey = PackSync.watchdogLastKey or ""
@@ -1446,12 +1446,13 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 		if not ok or not pack or not pack.id then
 			if searchError and type(searchError.candidates) == "table" and #searchError.candidates > 0 then
 				trace("Download selection required candidates=" .. tostring(#searchError.candidates))
-				self.downloadInFlightKey = nil
+				self:UpdateStatus(self.status.DownloadRequested, "Choisissez le pack a telecharger")
 				if callback then
 					callback(false, {
 						kind = "pack_candidates",
 						message = searchError.errorMessage or "Plusieurs packs correspondent à cette chanson.",
 						candidates = searchError.candidates,
+						downloadKey = downloadKey,
 					})
 				end
 				return
@@ -1517,14 +1518,14 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 		if not ok or not pack or not pack.id then
 			if searchError and type(searchError.candidates) == "table" and #searchError.candidates > 0 then
 				trace("Browse download selection required candidates=" .. tostring(#searchError.candidates))
-				self.downloadInFlightKey = nil
-				self.activeBrowseOnlyDownload = false
+				self:UpdateStatus(self.status.DownloadRequested, "Choisissez le pack a telecharger")
 				if callback then
 					callback(false, {
 						kind = "pack_candidates",
 						message = searchError.errorMessage or "Plusieurs packs correspondent a ce pack.",
 						candidates = searchError.candidates,
 						browseOnly = true,
+						downloadKey = downloadKey,
 					})
 				end
 				return

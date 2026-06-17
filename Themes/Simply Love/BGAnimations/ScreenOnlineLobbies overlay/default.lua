@@ -33,6 +33,7 @@ local pack_choice_last_song_info = nil
 local pack_choice_last_selected_pack_id = nil
 local pack_choice_all_candidates_exhausted = false
 local pack_choice_browse_only = false
+local pack_choice_download_key = nil
 local private_join_options = {
 	{label="Accepter", accept=true, reason=""},
 	{label="Refuser", accept=false, reason=""},
@@ -88,6 +89,7 @@ if type(SL.Global.Online.PackChoiceRecovery.candidates) == "table" then
 	pack_choice_last_candidates = SL.Global.Online.PackChoiceRecovery.candidates
 	pack_choice_last_song_info = SL.Global.Online.PackChoiceRecovery.songInfo
 	pack_choice_last_selected_pack_id = SL.Global.Online.PackChoiceRecovery.selectedPackId
+	pack_choice_download_key = SL.Global.Online.PackChoiceRecovery.downloadKey
 end
 
 local joined_any_player_missing_song
@@ -1077,6 +1079,7 @@ local function close_pack_choice_menu()
 	pack_choice_song_info = nil
 	pack_choice_message = nil
 	pack_choice_browse_only = false
+	pack_choice_download_key = nil
 	if t then
 		local menu = t:GetChild("PackChoiceMenu")
 		if menu then menu:visible(false) end
@@ -1119,12 +1122,14 @@ local function open_pack_choice_menu(songInfo, candidates, message, browseOnly)
 	pack_choice_song_info = songInfo
 	pack_choice_candidates = candidates
 	pack_choice_browse_only = browseOnly == true
+	pack_choice_download_key = nil
 	pack_choice_last_song_info = songInfo
 	pack_choice_last_candidates = candidates
 	SL.Global.Online.PackChoiceRecovery = {
 		songInfo = songInfo,
 		candidates = candidates,
 		selectedPackId = pack_choice_last_selected_pack_id,
+		downloadKey = pack_choice_download_key,
 	}
 	pack_choice_index = 1
 	pack_choice_message = message
@@ -1183,6 +1188,10 @@ local function start_browse_pack_download(songInfo)
 				message.message or "Plusieurs packs correspondent. Choisissez-en un.",
 				true
 			)
+			pack_choice_download_key = message.downloadKey
+			if SL and SL.Global and SL.Global.Online then
+				SL.Global.Online.PackChoiceRecovery.downloadKey = pack_choice_download_key
+			end
 			return
 		end
 		if not ok and t then
@@ -1332,10 +1341,13 @@ local function handle_pack_choice_menu_input(event)
 					songInfo = pack_choice_last_song_info or pack_choice_song_info,
 					candidates = pack_choice_last_candidates,
 					selectedPackId = pack_choice_last_selected_pack_id,
+					downloadKey = pack_choice_download_key,
 				}
 			end
+			local downloadKey = pack_choice_download_key
+			local songInfo = pack_choice_song_info or joined_missing_song_info or joined_song_preview
 			close_pack_choice_menu()
-			ITGOnline.PackSync:DownloadPackByCandidate(pack_choice_song_info or joined_missing_song_info or joined_song_preview, candidate, function(ok, message)
+			ITGOnline.PackSync:DownloadPackByCandidate(songInfo, candidate, function(ok, message)
 				if not ok and t then
 					t:playcommand("SetStatus", {
 						text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
@@ -1343,7 +1355,7 @@ local function handle_pack_choice_menu_input(event)
 						showPrompt=true
 					})
 				end
-			end, { browseOnly = browseOnly })
+			end, { browseOnly = browseOnly, allowExistingDownloadKey = downloadKey })
 		end
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
 		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
@@ -1453,6 +1465,10 @@ local function handle_joined_mode_input(event)
 							message.candidates,
 							message.message or "Plusieurs packs correspondent. Choisissez-en un."
 						)
+						pack_choice_download_key = message.downloadKey
+						if SL and SL.Global and SL.Global.Online then
+							SL.Global.Online.PackChoiceRecovery.downloadKey = pack_choice_download_key
+						end
 						return
 					end
 					if not ok and t then
@@ -2018,7 +2034,7 @@ local af = Def.ActorFrame{
 				end
 
 				local countdownSeconds = joined_missing_song_countdown_seconds()
-				if countdownSeconds and joined_can_download_pack then
+				if countdownSeconds and joined_can_download_pack and not pack_sync_busy() then
 					statusLines[#statusLines + 1] = "Expulsion du salon dans " .. tostring(countdownSeconds) .. " s si le pack n'est pas telecharge."
 				end
 			elseif joined_song_preview then

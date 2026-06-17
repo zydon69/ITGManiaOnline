@@ -577,8 +577,48 @@ local TransitionToOnlineOptions = function()
 		online_trace("FLOW transition_to_options from=" .. tostring(screenName)
 			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"))
 	end
+	if not (topScreen.SetNextScreenName and topScreen.StartTransitioningScreen) then
+		if online_trace then
+			online_trace("FLOW transition_to_options_skipped reason=screen_cannot_transition"
+				.. " screen=" .. tostring(screenName))
+		end
+		return
+	end
 	topScreen:SetNextScreenName("ScreenPlayerOptions")
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+end
+
+local OnlineDeferredReplayBlockedScreen = function(screenName)
+	screenName = tostring(screenName or "")
+	return screenName == "ScreenReloadSongsOnline"
+		or screenName == "ScreenReloadSongs"
+		or screenName == "ScreenReloadSSM"
+		or screenName:find("ReloadSongs", 1, true) ~= nil
+end
+
+local OnlinePayloadMatchesActiveRoom = function(payload)
+	if not (payload and ITGOnline and ITGOnline.currentRoomId and ITGOnline.currentRoom and ITGOnline.user) then
+		return false
+	end
+
+	local payloadRoomId = tostring(payload.roomId or payload.room_id or payload.id or "")
+	if payloadRoomId == "" or payloadRoomId ~= tostring(ITGOnline.currentRoomId or "") then
+		return false
+	end
+	if tostring(ITGOnline.currentRoom.id or "") ~= tostring(ITGOnline.currentRoomId or "") then
+		return false
+	end
+
+	local currentUserId = tostring(ITGOnline.user.id or "")
+	if currentUserId == "" then return false end
+	for member in ivalues(ITGOnline.currentRoom.members or {}) do
+		local user = member and member.user or nil
+		if tostring(member and (member.user_id or member.userId) or "") == currentUserId
+			or tostring(user and user.id or "") == currentUserId then
+			return true
+		end
+	end
+	return false
 end
 
 local CurrentOnlineSelectionKey = function()
@@ -1663,7 +1703,17 @@ CreateOnlineHandler = function()
 						local screenName = screen and screen:GetName() or "NoScreen"
 						if is_evaluation_screen(screenName) then return end
 						if gameplayScreens[screenName] then return end
+						if OnlineDeferredReplayBlockedScreen(screenName) then return end
 						if ITGOnline and ITGOnline.IsOnlineOptionsScreen and ITGOnline:IsOnlineOptionsScreen(screenName) then return end
+						if not OnlinePayloadMatchesActiveRoom(self.lastLobbyStatePayload) then
+							if online_trace then
+								online_trace("replay_deferred_lobby_state_cleared reason=inactive_room"
+									.. " screen=" .. tostring(screenName)
+									.. " payloadRoomId=" .. tostring(self.lastLobbyStatePayload.roomId or self.lastLobbyStatePayload.room_id or ""))
+							end
+							self.lastLobbyStatePayload = nil
+							return
+						end
 						local phase = tostring(self.lastLobbyStatePayload.phase or "")
 						if (phase == "lobby_ready" or phase == "config") and self.lastLobbyStatePayload.songInfo ~= nil then
 							online_flow_trace("replay_deferred_lobby_state"
@@ -1828,6 +1878,9 @@ CreateOnlineHandler = function()
 				end,
 				OnlineLobbyLeftMessageCommand=function(self)
 					self.inLobby = false
+					self.lastLobbyStatePayload = nil
+					replayDeferredLobbyStateQueued = false
+					replayDeferredLobbyStateRunning = false
 				end,
 				SongSelectedMessageCommand=function(self)
 					SelectOnlineSongAsManager(self)
