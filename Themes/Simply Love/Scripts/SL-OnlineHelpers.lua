@@ -64,6 +64,10 @@ local knownDisconnectScreens = {
 
 local DisplayLobbyState
 
+local function is_evaluation_screen(screenName)
+	return evaluationScreens[tostring(screenName or "")] == true
+end
+
 local function remove_online_input_callbacks()
 	for key, callback in pairs(onlineInputCallbacks) do
 		if callback and callback.screen and callback.handler and callback.screen.RemoveInputCallback then
@@ -555,6 +559,15 @@ local TransitionToOnlineOptions = function()
 		or screenName == "ScreenPlayerOptions3"
 		or screenName == "ScreenGameplay"
 		or screenName == "ScreenGameplayShared" then
+		return
+	end
+
+	if is_evaluation_screen(screenName) then
+		if online_trace then
+			online_trace("FLOW transition_to_options_deferred reason=evaluation_screen"
+				.. " screen=" .. tostring(screenName)
+				.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"))
+		end
 		return
 	end
 
@@ -1171,8 +1184,13 @@ DisplayLobbyState = function(data, actor)
 			local shouldApplyInLobby = (data.phase == "lobby_ready" or data.phase == "config")
 				and CurrentUserInLobbyState(data)
 			if shouldApplyInLobby and songKey ~= "" and songKey ~= lastOnlineOptionsSongKey then
-				lastOnlineOptionsSongKey = songKey
-				if ApplyOnlineSongSelection(data.songInfo) then
+				if is_evaluation_screen(screenName) then
+					online_flow_trace("song_selection_apply_deferred reason=evaluation_screen"
+						.. " screen=" .. tostring(screenName)
+						.. " phase=" .. tostring(data.phase)
+						.. " key=" .. tostring(songKey))
+				elseif ApplyOnlineSongSelection(data.songInfo) then
+					lastOnlineOptionsSongKey = songKey
 					if data.phase == "lobby_ready" then
 						if ITGOnline.ConfirmSelectedSongAvailability then
 							ITGOnline:ConfirmSelectedSongAvailability("local_song_available", function(ok)
@@ -1624,11 +1642,25 @@ CreateOnlineHandler = function()
 							and tostring(ITGOnline.currentRoom.phase or "") == "lobby_ready" then
 							maybe_set_lobby_ready("screen_select_music")
 						end
-						if screenName == "ScreenSelectMusic" then
-							self:sleep(0.25):queuecommand("PreviewInitialOnlineSong")
-						end
-						MESSAGEMAN:Broadcast("UpdateMachineState")
+					if screenName == "ScreenSelectMusic" then
+						self:sleep(0.25):queuecommand("PreviewInitialOnlineSong")
+					end
+					self:queuecommand("ReplayDeferredLobbyState")
+					MESSAGEMAN:Broadcast("UpdateMachineState")
 		      end,
+					ReplayDeferredLobbyStateCommand=function(self)
+						if not (self.inLobby and self.lastLobbyStatePayload) then return end
+						local screen = SCREENMAN:GetTopScreen()
+						local screenName = screen and screen:GetName() or "NoScreen"
+						if is_evaluation_screen(screenName) then return end
+						local phase = tostring(self.lastLobbyStatePayload.phase or "")
+						if (phase == "lobby_ready" or phase == "config") and self.lastLobbyStatePayload.songInfo ~= nil then
+							online_flow_trace("replay_deferred_lobby_state"
+								.. " screen=" .. tostring(screenName)
+								.. " phase=" .. tostring(phase))
+							DisplayLobbyState(self.lastLobbyStatePayload, self)
+						end
+					end,
 					PreviewInitialOnlineSongCommand=function(self)
 						if SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() ~= "ScreenSelectMusic" then
 							return
@@ -1656,19 +1688,29 @@ CreateOnlineHandler = function()
 						end
 
 						self.inLobby = true
-							local configReadyKey = ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
-								or (tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or ""))
+						local configReadyKey = ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
+							or (tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or ""))
+						pendingConfigReady = configReadyKey
 						if ITGOnline.MarkConfigReady then
-							pendingConfigReady = configReadyKey
 							Trace("[ITGOnline] options_confirmed queue config_ready key=" .. tostring(configReadyKey))
-							self:queuecommand("RetryOnlineConfigReady")
+						else
+							Trace("[ITGOnline] options_confirmed queue legacy_config_ready key=" .. tostring(configReadyKey))
+						end
+						self:queuecommand("RetryOnlineConfigReady")
+		      end,
+		      OnlineConfigReadyConfirmedMessageCommand=function(self, params)
+						if not pendingConfigReady then
 							return
 						end
 
-						pendingConfigReady = configReadyKey
-						Trace("[ITGOnline] options_confirmed queue legacy_config_ready key=" .. tostring(configReadyKey))
-						self:queuecommand("RetryOnlineConfigReady")
-		      end,
+						local expectedConfigReadyKey = ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
+							or (tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or ""))
+						local confirmedKey = params and params.key or expectedConfigReadyKey
+						if pendingConfigReady == confirmedKey or pendingConfigReady == expectedConfigReadyKey then
+							Trace("[ITGOnline] options_confirmed realtime config_ready key=" .. tostring(confirmedKey))
+							pendingConfigReady = nil
+						end
+					end,
 		      RetryOnlineConfigReadyCommand=function(self)
 						if not pendingConfigReady or not ITGOnline.currentRoomId then
 							return

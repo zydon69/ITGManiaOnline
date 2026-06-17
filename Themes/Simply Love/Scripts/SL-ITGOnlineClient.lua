@@ -2189,12 +2189,27 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		self.deletedRoomIds[tostring(room.id)] = nil
 	end
 	self:ApplyGlobalOptionsToLocalState(room, source)
-	if self:NormalizeRoomPhase(room.phase) ~= "config" then
+	local normalizedRoomPhase = self:NormalizeRoomPhase(room.phase)
+	if normalizedRoomPhase ~= "config" then
 		self:ClearOnlineOptionsReadyDeadline("room_snapshot_" .. tostring(room.phase or "unknown"))
+	elseif self:IsCurrentUserReadyInRoom(room) then
+		local readyKey = self:OnlineOptionsReadyKey()
+		self.configReadyInFlight = false
+		self:ClearOnlineOptionsReadyDeadline("room_snapshot_config_ready")
+		if self.lastConfigReadySnapshotConfirmedKey ~= readyKey then
+			self.lastConfigReadySnapshotConfirmedKey = readyKey
+			online_flow_trace("config_ready_confirmed_by_snapshot source=" .. tostring(source or "unknown")
+				.. " key=" .. tostring(readyKey))
+			MESSAGEMAN:Broadcast("OnlineConfigReadyConfirmed", {
+				key = readyKey,
+				source = source,
+				room = room,
+			})
+		end
 	end
 
 	if room.selected_song and room.selected_song.song_hash and room.selected_song.chart_hash then
-		local phase = self:NormalizeRoomPhase(room.phase)
+		local phase = normalizedRoomPhase
 		if phase == "results" then
 			self.lastResultSongPayload = room.selected_song
 		else
