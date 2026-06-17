@@ -1378,10 +1378,18 @@ void GetDirListingRecursive(
 }
 
 bool DeleteRecursive(RageFileDriver* prfd, const std::string& sDir) {
-  ASSERT(Right(sDir, 1) == "/");
+  if (sDir.empty()) {
+    LOG->Warn("DeleteRecursive called with an empty driver path.");
+    return false;
+  }
+
+  std::string normalizedDir = sDir;
+  if (Right(normalizedDir, 1) != "/") {
+    normalizedDir += "/";
+  }
 
   std::vector<std::string> vsFiles;
-  prfd->GetDirListing(sDir + "*", vsFiles, false, true);
+  prfd->GetDirListing(normalizedDir + "*", vsFiles, false, true);
   for (const std::string& s : vsFiles) {
     if (IsADirectory(s)) {
       DeleteRecursive(s + "/");
@@ -1390,14 +1398,22 @@ bool DeleteRecursive(RageFileDriver* prfd, const std::string& sDir) {
     }
   }
 
-  return FILEMAN->Remove(sDir);
+  return FILEMAN->Remove(normalizedDir);
 }
 
 bool DeleteRecursive(const std::string& sDir) {
-  ASSERT(Right(sDir, 1) == "/");
+  if (sDir.empty()) {
+    LOG->Warn("DeleteRecursive called with an empty path.");
+    return false;
+  }
+
+  std::string normalizedDir = sDir;
+  if (Right(normalizedDir, 1) != "/") {
+    normalizedDir += "/";
+  }
 
   std::vector<std::string> vsFiles;
-  GetDirListing(sDir + "*", vsFiles, false, true);
+  GetDirListing(normalizedDir + "*", vsFiles, false, true);
   for (const std::string& s : vsFiles) {
     if (IsADirectory(s)) {
       DeleteRecursive(s + "/");
@@ -1406,7 +1422,7 @@ bool DeleteRecursive(const std::string& sDir) {
     }
   }
 
-  return FILEMAN->Remove(sDir);
+  return FILEMAN->Remove(normalizedDir);
 }
 
 unsigned int GetHashForFile(const std::string& sPath) {
@@ -1442,8 +1458,13 @@ static std::string NormalizeLuaDeleteRecursivePath(std::string path) {
 
 static bool IsLuaDeleteRecursivePathAllowed(const std::string& path) {
   static const std::string allowedRoot = "/Songs/Online Downloads/";
-  return path.size() > allowedRoot.size() &&
-         CompareNoCase(path.substr(0, allowedRoot.size()), allowedRoot) == 0;
+  static const std::string legacyOnlineDownloadRoot = "/Songs/__OnlineDownload_";
+  return (path.size() > allowedRoot.size() &&
+          CompareNoCase(path.substr(0, allowedRoot.size()), allowedRoot) == 0) ||
+         (path.size() > legacyOnlineDownloadRoot.size() &&
+          CompareNoCase(
+              path.substr(0, legacyOnlineDownloadRoot.size()),
+              legacyOnlineDownloadRoot) == 0);
 }
 
 /** @brief Allow Lua to have access to the RageFileManager. */
