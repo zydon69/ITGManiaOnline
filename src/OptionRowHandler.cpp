@@ -1147,6 +1147,7 @@ class OptionRowHandlerLua : public OptionRowHandler {
 
     if (!m_ReloadFunc.IsNil()) {
       Lua* L = LUA->Get();
+      const int stackTopBeforeReload = lua_gettop(L);
       m_ReloadFunc.PushSelf(L);
 
       // Argument 1: (self)
@@ -1172,6 +1173,15 @@ class OptionRowHandlerLua : public OptionRowHandler {
               stackTopAfterLoadChoices - stackTopBeforeLoadChoices);
           lua_settop(L, stackTopBeforeLoadChoices);
         }
+      }
+      const int stackTopAfterReload = lua_gettop(L);
+      if (stackTopAfterReload != stackTopBeforeReload) {
+        LOG->Warn(
+            "OptionRowHandlerLua::Reload: row '%s' left %d value(s) on the "
+            "Lua stack while reloading; cleaning up before release.",
+            m_Def.m_sName.c_str(),
+            stackTopAfterReload - stackTopBeforeReload);
+        lua_settop(L, stackTopBeforeReload);
       }
       LUA->Release(L);
     }
