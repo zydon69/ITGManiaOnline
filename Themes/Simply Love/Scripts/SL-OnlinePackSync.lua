@@ -234,13 +234,21 @@ local function has_simfile_below_directory(path, maxDepth)
 	return false
 end
 
-local function single_nested_group_folder(quarantinePath)
+local function single_nested_group_folder(quarantinePath, expectedPackName)
 	if has_simfile_in_directory(quarantinePath) then return "" end
 
 	local folders = {}
 	for _, folderName in ivalues(dir_listing(quarantinePath, true, false)) do
 		local safeName = safe_child_folder_name(folderName)
 		if safeName ~= "" and not is_temp_newdir_artifact(safeName) then folders[#folders + 1] = safeName end
+	end
+
+	if #folders == 0 then
+		local expectedName = safe_child_folder_name(expectedPackName)
+		if expectedName ~= "" and (path_exists(quarantinePath .. expectedName) or path_exists(quarantinePath .. expectedName .. "/")) then
+			trace("Using expected pack folder fallback name=" .. tostring(expectedName))
+			return expectedName
+		end
 	end
 
 	if #folders ~= 1 then return "" end
@@ -773,9 +781,41 @@ local function log_dir_listing(prefix, path)
 	end
 end
 
-local function install_extracted_pack_at_songs_root(quarantinePath)
+local function copy_directory_recursive(sourcePath, targetPath, maxDepth)
+	if not FILEMAN or not FILEMAN.Copy or not FILEMAN.CreateDir then return false end
+	if not sourcePath or sourcePath == "" or not targetPath or targetPath == "" then return false end
+	maxDepth = tonumber(maxDepth) or 0
+	if maxDepth < 0 then return false end
+	if sourcePath:sub(-1) ~= "/" then sourcePath = sourcePath .. "/" end
+	if targetPath:sub(-1) ~= "/" then targetPath = targetPath .. "/" end
+
+	FILEMAN:CreateDir(targetPath)
+	local folderPaths = {}
+	for _, folderName in ivalues(dir_listing(sourcePath, true, false)) do
+		local safeName = safe_child_folder_name(folderName)
+		if safeName ~= "" and not is_temp_newdir_artifact(safeName) then
+			folderPaths[sourcePath .. safeName] = true
+			folderPaths[sourcePath .. safeName .. "/"] = true
+			if not copy_directory_recursive(sourcePath .. safeName .. "/", targetPath .. safeName .. "/", maxDepth - 1) then
+				return false
+			end
+		end
+	end
+	for _, entryPath in ivalues(dir_listing(sourcePath, false, true)) do
+		local fileName = tostring(entryPath or ""):match("([^/]+)$") or ""
+		if fileName ~= "" and not is_temp_newdir_artifact(fileName) and not folderPaths[tostring(entryPath or "")] then
+			if not FILEMAN:Copy(entryPath, targetPath .. fileName) then
+				trace("Recursive copy failed from=" .. tostring(entryPath) .. " to=" .. tostring(targetPath .. fileName))
+				return false
+			end
+		end
+	end
+	return true
+end
+
+local function install_extracted_pack_at_songs_root(quarantinePath, expectedPackName)
 	remove_temp_newdir_artifacts(quarantinePath, 4)
-	local nestedGroup = single_nested_group_folder(quarantinePath)
+	local nestedGroup = single_nested_group_folder(quarantinePath, expectedPackName)
 	if nestedGroup == "" then
 		return nil, "Le zip téléchargé ne contient pas un dossier de pack unique."
 	end
@@ -790,7 +830,11 @@ local function install_extracted_pack_at_songs_root(quarantinePath)
 		return nil, "Le moteur ne permet pas d'installer le pack téléchargé."
 	end
 	if not FILEMAN:MoveOnlineSongPack(sourcePath, rootGroupPath) then
-		return nil, "Impossible d'installer le pack téléchargé."
+		trace("MoveOnlineSongPack failed; trying recursive copy source=" .. tostring(sourcePath) .. " target=" .. tostring(rootGroupPath))
+		if not copy_directory_recursive(sourcePath .. "/", rootGroupPath .. "/", 8) then
+			remove_directory_if_possible(rootGroupPath .. "/")
+			return nil, "Impossible d'installer le pack téléchargé."
+		end
 	end
 
 	log_dir_listing("Installed root group", rootGroupPath .. "/")
@@ -1147,7 +1191,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			end
 			log_dir_listing("Extracted quarantine", quarantinePath)
 
-			local installedPath, installError = install_extracted_pack_at_songs_root(quarantinePath)
+			local installedPath, installError = install_extracted_pack_at_songs_root(quarantinePath, packName)
 			if not installedPath then
 				remove_path_if_exists(zipPath)
 				remove_directory_if_possible(quarantinePath)
