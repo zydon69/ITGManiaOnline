@@ -3611,7 +3611,8 @@ function ITGOnline:SelectSong(callback)
 		self.songSelectionInFlightCallbacks = {}
 		online_flow_trace("song_selection_response ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
-			.. " error=" .. tostring(decoded and decoded.error_code or response and response.error or "nil"))
+			.. " error=" .. tostring(decoded and decoded.error_code or response and response.error or "nil")
+			.. " message=" .. tostring(decoded and decoded.message or response and response.errorMessage or "nil"))
 		if ok and decoded and decoded.room then
 			local room = self:ApplyRoomSnapshot(decoded.room, "song_selection")
 			decoded.room = room or decoded.room

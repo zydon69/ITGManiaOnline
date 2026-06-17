@@ -223,9 +223,18 @@ static void CleanupTempNewDirArtifacts(const std::string& rootPath) {
       const bool isArtifact = EndsWithNoCase(entry, ".temp.newdir") ||
                               EndsWithNoCase(entry, "newdir.temp.newdir");
       if (isArtifact) {
-        const bool removed = FILEMAN->IsADirectory(entry)
-            ? FILEMAN->DeleteRecursive(entry)
-            : FILEMAN->Remove(entry);
+        bool removed = false;
+        if (FILEMAN->IsADirectory(entry)) {
+          removed = FILEMAN->DeleteRecursive(entry);
+          if (!removed) {
+            removed = FILEMAN->Remove(entry);
+          }
+        } else {
+          removed = FILEMAN->Remove(entry);
+          if (!removed) {
+            removed = FILEMAN->DeleteRecursive(entry);
+          }
+        }
         if (removed) {
           LOG->Trace("Removed temp directory artifact %s", entry.c_str());
         } else {

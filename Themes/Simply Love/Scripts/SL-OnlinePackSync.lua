@@ -185,6 +185,29 @@ local function is_temp_newdir_artifact(value)
 	return tostring(value or ""):lower():match("%.temp%.newdir$") ~= nil
 end
 
+local function remove_temp_newdir_artifacts(path, maxDepth)
+	if not path or path == "" or not FILEMAN then return end
+	maxDepth = tonumber(maxDepth) or 0
+
+	for _, entry in ivalues(dir_listing(path, false, true)) do
+		if is_temp_newdir_artifact(entry) then
+			if FILEMAN.DeleteRecursive then
+				FILEMAN:DeleteRecursive(entry)
+			elseif FILEMAN.Remove then
+				FILEMAN:Remove(entry)
+			end
+		end
+	end
+
+	if maxDepth <= 0 then return end
+	for _, folderName in ivalues(dir_listing(path, true, false)) do
+		local safeName = safe_child_folder_name(folderName)
+		if safeName ~= "" and not is_temp_newdir_artifact(safeName) then
+			remove_temp_newdir_artifacts(path .. safeName .. "/", maxDepth - 1)
+		end
+	end
+end
+
 local function has_simfile_in_directory(path)
 	for _, fileName in ivalues(dir_listing(path, false, true)) do
 		local lowerName = tostring(fileName or ""):lower()
@@ -203,7 +226,7 @@ local function has_simfile_below_directory(path, maxDepth)
 
 	for _, folderName in ivalues(dir_listing(path, true, false)) do
 		local safeName = safe_child_folder_name(folderName)
-		if safeName ~= "" and has_simfile_below_directory(path .. safeName .. "/", maxDepth - 1) then
+		if safeName ~= "" and not is_temp_newdir_artifact(safeName) and has_simfile_below_directory(path .. safeName .. "/", maxDepth - 1) then
 			return true
 		end
 	end
@@ -217,7 +240,7 @@ local function single_nested_group_folder(quarantinePath)
 	local folders = {}
 	for _, folderName in ivalues(dir_listing(quarantinePath, true, false)) do
 		local safeName = safe_child_folder_name(folderName)
-		if safeName ~= "" then folders[#folders + 1] = safeName end
+		if safeName ~= "" and not is_temp_newdir_artifact(safeName) then folders[#folders + 1] = safeName end
 	end
 
 	if #folders ~= 1 then return "" end
@@ -466,7 +489,7 @@ end
 function PackSync:SyncSequenceFromRoom(currentSelectedAt)
 	if not (ITGOnline and ITGOnline.currentRoom and ITGOnline.user) then return end
 	local selectedSong = ITGOnline.currentRoom.selected_song or {}
-	if selected_at(selectedSong) ~= currentSelectedAt then return end
+	if currentSelectedAt ~= "" and selected_at(selectedSong) ~= currentSelectedAt then return end
 
 	local currentUserId = tostring(ITGOnline.user.id or "")
 	if currentUserId == "" then return end
@@ -751,6 +774,7 @@ local function log_dir_listing(prefix, path)
 end
 
 local function install_extracted_pack_at_songs_root(quarantinePath)
+	remove_temp_newdir_artifacts(quarantinePath, 4)
 	local nestedGroup = single_nested_group_folder(quarantinePath)
 	if nestedGroup == "" then
 		return nil, "Le zip téléchargé ne contient pas un dossier de pack unique."
@@ -758,6 +782,7 @@ local function install_extracted_pack_at_songs_root(quarantinePath)
 
 	local sourcePath = quarantinePath .. nestedGroup
 	local rootGroupPath = "/Songs/" .. nestedGroup
+	remove_temp_newdir_artifacts(sourcePath .. "/", 4)
 	if path_exists(rootGroupPath) or path_exists(rootGroupPath .. "/") then
 		return nil, "Le pack existe déjà localement."
 	end
