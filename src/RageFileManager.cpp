@@ -223,7 +223,10 @@ static void CleanupTempNewDirArtifacts(const std::string& rootPath) {
       const bool isArtifact = EndsWithNoCase(entry, ".temp.newdir") ||
                               EndsWithNoCase(entry, "newdir.temp.newdir");
       if (isArtifact) {
-        if (FILEMAN->DeleteRecursive(entry)) {
+        const bool removed = FILEMAN->IsADirectory(entry)
+            ? FILEMAN->DeleteRecursive(entry)
+            : FILEMAN->Remove(entry);
+        if (removed) {
           LOG->Trace("Removed temp directory artifact %s", entry.c_str());
         } else {
           LOG->Warn("Could not remove temp directory artifact %s", entry.c_str());
@@ -807,7 +810,9 @@ void RageFileManager::CreateDir(const std::string& sDir) {
   f.Close();
 
   if (!Remove(sTempFile) && DoesFileExist(sTempFile)) {
-    DeleteRecursive(sTempFile);
+    if (IsADirectory(sTempFile)) {
+      DeleteRecursive(sTempFile);
+    }
   }
 }
 

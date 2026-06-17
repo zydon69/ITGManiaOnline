@@ -169,10 +169,10 @@ local function path_exists(path)
 	return FILEMAN:DoesFileExist(path) and true or false
 end
 
-local function dir_listing(path, onlyDirs, onlyFiles)
+local function dir_listing(path, onlyDirs, returnPathToo)
 	if not FILEMAN or not FILEMAN.GetDirListing then return {} end
 	local ok, entries = pcall(function()
-		return FILEMAN:GetDirListing(path, onlyDirs, onlyFiles)
+		return FILEMAN:GetDirListing(path, onlyDirs, returnPathToo)
 	end)
 	if not ok or type(entries) ~= "table" then return {} end
 	return entries
@@ -509,7 +509,7 @@ end
 function PackSync:ManagerBrowsingPreview(songInfo)
 	if not songInfo then return end
 	if selected_pack(songInfo) ~= "" and SONGMAN and SONGMAN.DoesSongGroupExist and not SONGMAN:DoesSongGroupExist(selected_pack(songInfo)) then
-		self.currentSongInfo = nil
+		self.currentSongInfo = songInfo
 		self:UpdateStatus(self.status.ManagerBrowsingUnknownPack, "Le manager navigue dans un pack que vous ne possédez pas.")
 	end
 end
