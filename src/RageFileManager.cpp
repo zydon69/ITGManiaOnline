@@ -347,6 +347,9 @@ bool RageFileManager::Unzip(
     }
 
     if (info.m_is_directory) {
+      if (!filepath.empty() && filepath.back() != '/') {
+        filepath.push_back('/');
+      }
       CreateDir(filepath);
     } else {
       RageFile f;
