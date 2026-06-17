@@ -387,7 +387,7 @@ SL_CustomPrefs.Get = function()
 		},
 
 		ITGOnlineRememberToken = {
-			Default = false,
+			Default = true,
 			Choices = {
 				THEME:GetString("OptionTitles", "OnlineTokenAlwaysAsk"),
 				THEME:GetString("OptionTitles", "OnlineTokenKeep")

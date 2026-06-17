@@ -1159,10 +1159,19 @@ class OptionRowHandlerLua : public OptionRowHandler {
 
       if (effect == RELOAD_CHANGED_ALL) {
         m_Def.m_vsChoices.clear();
+        const int stackTopBeforeLoadChoices = lua_gettop(L);
         m_pLuaTable->PushSelf(L);
         LoadChoices(L);
         lua_pop(L, 1);
-        ASSERT(lua_gettop(L) == 0);
+        const int stackTopAfterLoadChoices = lua_gettop(L);
+        if (stackTopAfterLoadChoices != stackTopBeforeLoadChoices) {
+          LOG->Warn(
+              "OptionRowHandlerLua::Reload: row '%s' left %d value(s) on the "
+              "Lua stack while reloading choices; cleaning up.",
+              m_Def.m_sName.c_str(),
+              stackTopAfterLoadChoices - stackTopBeforeLoadChoices);
+          lua_settop(L, stackTopBeforeLoadChoices);
+        }
       }
       LUA->Release(L);
     }

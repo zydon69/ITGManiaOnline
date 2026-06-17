@@ -151,9 +151,9 @@ static void ApplyFirstRunPlatformPreferenceDefaults(
     return;
   }
 
-  PREFSMAN->m_bWindowed.Set(false);
-  PREFSMAN->m_bFullscreenIsBorderlessWindow.Set(true);
-  LOG->Info("Applied first-run Windows display default: fullscreen.");
+  PREFSMAN->m_bWindowed.Set(true);
+  PREFSMAN->m_bFullscreenIsBorderlessWindow.Set(false);
+  LOG->Info("Applied first-run Windows display default: windowed.");
 }
 
 void StepMania::GetPreferredVideoModeParams(VideoModeParams& paramsOut) {
