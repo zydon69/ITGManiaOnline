@@ -9,7 +9,7 @@ ITGOnline = ITGOnline or {}
 ITGOnline.PackSync = ITGOnline.PackSync or {}
 
 local PackSync = ITGOnline.PackSync
-PackSync.scriptVersion = "2026-06-17-pack-install-fallback-v2"
+PackSync.scriptVersion = "2026-06-17-pack-install-cache-flush-v3"
 PackSync.statusChangedAt = PackSync.statusChangedAt or 0
 PackSync.watchdogLastKey = PackSync.watchdogLastKey or ""
 PackSync.watchdogTimeoutSeconds = PackSync.watchdogTimeoutSeconds or 25
@@ -167,6 +167,11 @@ local function path_exists(path)
 	if not FILEMAN or not FILEMAN.DoesFileExist then return false end
 	if not path or path == "" then return false end
 	return FILEMAN:DoesFileExist(path) and true or false
+end
+
+local function flush_dir_cache(path)
+	if not FILEMAN or not FILEMAN.FlushDirCache then return end
+	pcall(function() FILEMAN:FlushDirCache(path or "") end)
 end
 
 local function dir_listing(path, onlyDirs, returnPathToo)
@@ -1192,6 +1197,8 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 				fail_candidate_download("Le zip téléchargé est invalide ou impossible à extraire.")
 				return
 			end
+			flush_dir_cache("/Songs/")
+			flush_dir_cache(quarantinePath)
 			log_dir_listing("Extracted quarantine", quarantinePath)
 
 			local installedPath, installError = install_extracted_pack_at_songs_root(quarantinePath, packName)

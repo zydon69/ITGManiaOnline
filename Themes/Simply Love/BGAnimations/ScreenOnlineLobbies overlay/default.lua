@@ -1090,11 +1090,6 @@ local function start_browse_pack_download(songInfo)
 		end
 		return
 	end
-	t:playcommand("SetStatus", {
-		text="Demarrage du telechargement du pack...",
-		showSpinner=true,
-		showPrompt=false
-	})
 	ITGOnline.PackSync:DownloadBrowsingPack(songInfo, function(ok, message)
 		if not ok and type(message) == "table" and message.kind == "pack_candidates" then
 			open_pack_choice_menu(
@@ -1255,19 +1250,8 @@ local function handle_pack_choice_menu_input(event)
 				}
 			end
 			close_pack_choice_menu()
-			t:playcommand("SetStatus", {
-				text="Demarrage du telechargement du pack...",
-				showSpinner=true,
-				showPrompt=false
-			})
 			ITGOnline.PackSync:DownloadPackByCandidate(pack_choice_song_info or joined_missing_song_info or joined_song_preview, candidate, function(ok, message)
-				if ok and t then
-					t:playcommand("SetStatus", {
-						text="Telechargement termine. Extraction et rechargement des chansons...",
-						showSpinner=true,
-						showPrompt=false
-					})
-				elseif not ok and t then
+				if not ok and t then
 					t:playcommand("SetStatus", {
 						text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
 						showSpinner=false,

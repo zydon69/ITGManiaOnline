@@ -383,6 +383,7 @@ bool RageFileManager::Unzip(
   mz_zip_reader_end(&zip);
   if (success) {
     CleanupTempNewDirArtifacts(targetPath);
+    FlushDirCache(targetPath);
   }
   return success;
 }
@@ -1565,6 +1566,14 @@ class LunaRageFileManager : public Luna<RageFileManager> {
     LuaHelpers::CreateTableFromArray(vDirs, L);
     return 1;
   }
+  static int FlushDirCache(T* p, lua_State* L) {
+    std::string path;
+    if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
+      path = SArg(1);
+    }
+    p->FlushDirCache(path);
+    return 0;
+  }
   static int Unzip(T* p, lua_State* L) {
     std::string zipPath = SArg(1);
     std::string targetPath = SArg(2);
@@ -1619,6 +1628,7 @@ class LunaRageFileManager : public Luna<RageFileManager> {
     ADD_METHOD(GetFileSizeBytes);
     ADD_METHOD(GetHashForFile);
     ADD_METHOD(GetDirListing);
+    ADD_METHOD(FlushDirCache);
     ADD_METHOD(Unzip);
     ADD_METHOD(DeleteRecursive);
     ADD_METHOD(MoveOnlineSongPack);
