@@ -1903,8 +1903,16 @@ CreateOnlineHandler = function()
 	      end,
 	      StartOnlineRoomMessageCommand=function(self)
 					if self.connected and self.socket ~= nil and self.inLobby then
-						if self.startRoomBusy then return end
+						if self.startRoomBusy then
+							if online_trace then
+								online_trace("FLOW start_room ignored reason=busy room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+							end
+							return
+						end
 						if not ITGOnline.currentRoom then
+							if online_trace then
+								online_trace("FLOW start_room rejected reason=no_current_room")
+							end
 							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 								event="startRoom",
 								success=false,
@@ -1915,13 +1923,26 @@ CreateOnlineHandler = function()
 
 						local attemptStart = function()
 							self.startRoomBusy = true
+							if online_trace then
+								online_trace("FLOW start_room request room=" .. tostring(ITGOnline.currentRoomId or "nil")
+									.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+							end
 							ITGOnline:StartRoom(function(ok, decoded, response)
 								self.startRoomBusy = false
 								if ok and decoded and decoded.room then
+									if online_trace then
+										online_trace("FLOW start_room ok room=" .. tostring(decoded.room.id or ITGOnline.currentRoomId or "nil")
+											.. " phase=" .. tostring(decoded.room.phase or "nil"))
+									end
 									local payload = ITGOnline:LobbyStatePayload(decoded.room)
 									DisplayLobbyState(payload, self)
 									MESSAGEMAN:Broadcast("OnlineLobbyState", payload)
 								else
+									if online_trace then
+										online_trace("FLOW start_room failed room=" .. tostring(ITGOnline.currentRoomId or "nil")
+											.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+											.. " error=" .. tostring((decoded and decoded.error_code) or (response and response.errorMessage) or "unknown"))
+									end
 									MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 										event="startRoom",
 											success=false,
@@ -1937,6 +1958,10 @@ CreateOnlineHandler = function()
 							return
 						end
 
+							if online_trace then
+								online_trace("FLOW start_room rejected reason=phase_not_ready room=" .. tostring(ITGOnline.currentRoomId or "nil")
+									.. " phase=" .. tostring(phase))
+							end
 							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 								event="startRoom",
 								success=false,

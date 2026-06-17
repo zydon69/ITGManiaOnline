@@ -357,12 +357,12 @@ NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
 }
 
 NetworkManager::~NetworkManager() {
-  // Unregister with Lua.
-  LUA->UnsetGlobal("NETWORK");
-
-  this->StopWorkers();
-
   this->CloseAllWebSockets();
+  this->StopWorkers();
+  this->ClearMainThreadTasks();
+
+  // Unregister with Lua after all network callbacks have been cancelled.
+  LUA->UnsetGlobal("NETWORK");
 
   // Set the status to uninitialized.
   ix::uninitNetSystem();
@@ -454,6 +454,22 @@ void NetworkManager::StopWorkers() {
 
   if (this->webSocketWorker.joinable()) {
     this->webSocketWorker.join();
+  }
+}
+
+void NetworkManager::ClearMainThreadTasks() {
+  std::size_t droppedTasks = 0;
+  {
+    std::lock_guard<std::mutex> lock(this->mainThreadTaskMutex);
+    droppedTasks = this->mainThreadTaskQueue.size();
+    std::queue<std::function<void()>> emptyQueue;
+    this->mainThreadTaskQueue.swap(emptyQueue);
+  }
+
+  if (droppedTasks > 0) {
+    LOG->Warn(
+        "Network shutdown dropped %zu queued main-thread task(s)",
+        droppedTasks);
   }
 }
 

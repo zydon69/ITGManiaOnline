@@ -4609,9 +4609,6 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 
 	if phase == "config_ready" then
 		payload.options = self:CurrentOnlineOptionSummary()
-		if isReady and self:IsCurrentUserRoomManager(self.currentRoom) then
-			payload.auto_start = true
-		end
 	end
 
 	local options = payload.options or {}

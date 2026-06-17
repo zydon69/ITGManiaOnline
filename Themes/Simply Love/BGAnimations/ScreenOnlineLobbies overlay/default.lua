@@ -2052,24 +2052,21 @@ local af = Def.ActorFrame{
 					end
 
 					if visible then
-						local autoFocusKey = table.concat({
+						local focusKey = table.concat({
 							tostring(joined_lobby_code or ""),
 							tostring(joined_phase or ""),
 							tostring(joined_song_selected_key or ""),
 							ready_summary(),
 							hasMissingSong and "1" or "0",
 						}, "|")
-						if autoFocusKey ~= last_auto_start_focus_key then
-							last_auto_start_focus_key = autoFocusKey
+						if focusKey ~= last_auto_start_focus_key then
+							last_auto_start_focus_key = focusKey
 							if joined_active_index ~= 5 then
 								joined_active_index = 5
 								self:queuecommand("Hover")
 							end
 						end
-						if autoFocusKey ~= last_auto_start_request_key then
-							last_auto_start_request_key = autoFocusKey
-							MESSAGEMAN:Broadcast("StartOnlineRoom")
-						end
+						last_auto_start_request_key = ""
 					else
 						last_auto_start_focus_key = ""
 						last_auto_start_request_key = ""

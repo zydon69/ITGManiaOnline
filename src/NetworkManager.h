@@ -151,6 +151,7 @@ class NetworkManager {
   void RunHttpWorker();
   void RunWebSocketWorker();
   void StopWorkers();
+  void ClearMainThreadTasks();
 
   std::string GetUserAgent();
   void ClearDownloads();
