@@ -453,6 +453,10 @@ local function can_download_browsed_pack()
 		and not pack_sync_busy()
 end
 
+local function show_pack_download_button()
+	return joined_missing_song or can_download_browsed_pack() or pack_sync_busy()
+end
+
 local function pack_sync_status_for_joined_song()
 	if not (ITGOnline and ITGOnline.PackSync) then return "" end
 	if not joined_song_confirmed or joined_song_selected_key == "" then return "" end
@@ -560,7 +564,7 @@ local function joined_button_indices()
 	if joined_is_manager and joined_phase_allows_song_selection() then
 		indices[#indices + 1] = 4
 	end
-	if joined_missing_song or can_download_browsed_pack() then
+	if not pack_sync_busy() and (joined_missing_song or can_download_browsed_pack()) then
 		indices[#indices + 1] = 3
 	end
 	if joined_room_can_start() then
@@ -1984,11 +1988,17 @@ local af = Def.ActorFrame{
 			local reloadSongsButton = joinedContent and joinedContent:GetChild("ReloadSongsButton")
 			if reloadSongsButton then
 				local canDownloadBrowsePack = can_download_browsed_pack()
-				reloadSongsButton:visible(joined_missing_song or canDownloadBrowsePack)
+				local syncBusy = pack_sync_busy()
+				reloadSongsButton:visible(show_pack_download_button())
 				local label = reloadSongsButton:GetChild("ReloadSongsLabel")
 				if label then
+					if syncBusy then
+						label:settext("Telechargement...")
+					else
 						label:settext((joined_can_download_pack or canDownloadBrowsePack) and "Telecharger pack" or "Recharger chansons")
+					end
 				end
+				reloadSongsButton:playcommand("Hover")
 			end
 
 			local globalOptionsButton = joinedContent and joinedContent:GetChild("GlobalOptionsButton")
@@ -2450,6 +2460,11 @@ local af = Def.ActorFrame{
 	end,
 	OnlinePackSyncReloadSongsMessageCommand=function(self)
 		transition_to_online_song_reload()
+	end,
+	OnlinePackSyncLocalStatusMessageCommand=function(self)
+		normalize_joined_active_index()
+		self:queuecommand("UpdateJoinedLobbyText")
+		self:queuecommand("Hover")
 	end,
 	OnlinePackDownloadedMessageCommand=function(self, params)
 		if params and params.songInfo and joined_song_preview and song_info_pack(params.songInfo) == song_info_pack(joined_song_preview) then
@@ -3198,14 +3213,14 @@ local af = Def.ActorFrame{
 					self:xy(180, 34)
 					self.idx = 2
 			end,
-			Def.Quad{
-				InitCommand=function(self)
-					self:zoomto(180, 36):diffuse(Color.White)
-				end,
-				HoverCommand=function(self)
-					self:diffuse(joined_active_index == self:GetParent().idx and Color.Yellow or Color.White)
-				end
-			},
+				Def.Quad{
+					InitCommand=function(self)
+						self:zoomto(180, 36):diffuse(Color.White)
+					end,
+					HoverCommand=function(self)
+						self:diffuse(joined_active_index == self:GetParent().idx and Color.Yellow or Color.White)
+					end
+				},
 			Def.Quad{
 				InitCommand=function(self)
 					self:zoomto(178, 34):diffuse(Color.Black)
@@ -3229,14 +3244,18 @@ local af = Def.ActorFrame{
 					self.idx = 3
 					self:visible(false)
 				end,
-				Def.Quad{
-					InitCommand=function(self)
-						self:zoomto(180, 36):diffuse(Color.White)
-					end,
-					HoverCommand=function(self)
-						self:diffuse(joined_active_index == self:GetParent().idx and Color.Yellow or Color.White)
-					end
-				},
+					Def.Quad{
+						InitCommand=function(self)
+							self:zoomto(180, 36):diffuse(Color.White)
+						end,
+						HoverCommand=function(self)
+							if pack_sync_busy() then
+								self:diffuse(color("#777777"))
+							else
+								self:diffuse(joined_active_index == self:GetParent().idx and Color.Yellow or Color.White)
+							end
+						end
+					},
 				Def.Quad{
 					InitCommand=function(self)
 						self:zoomto(178, 34):diffuse(Color.Black)
@@ -3245,14 +3264,18 @@ local af = Def.ActorFrame{
 				LoadFont("Common Bold")..{
 					Name="ReloadSongsLabel",
 						Text="Telecharger pack",
-					InitCommand=function(self)
-						self:zoom(0.36)
-					end,
-					HoverCommand=function(self)
-						self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
-					end
-				}
-			},
+						InitCommand=function(self)
+							self:zoom(0.36)
+						end,
+						HoverCommand=function(self)
+							if pack_sync_busy() then
+								self:diffuse(color("#999999"))
+							else
+								self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
+							end
+						end
+					}
+				},
 
 			Def.ActorFrame{
 				Name="GlobalOptionsButton",

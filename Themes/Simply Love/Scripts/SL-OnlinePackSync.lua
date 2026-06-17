@@ -52,6 +52,10 @@ end
 
 trace("Loaded script version=" .. tostring(PackSync.scriptVersion))
 
+local function download_already_in_progress_message()
+	return "Telechargement deja en cours."
+end
+
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
@@ -420,6 +424,14 @@ function PackSync:UpdateStatus(status, message, progress, callback)
 	self.sequence = (tonumber(self.sequence) or 0) + 1
 	message = status_message(message)
 	trace("Status " .. status .. (message and (" - " .. tostring(message)) or ""))
+	if MESSAGEMAN then
+		MESSAGEMAN:Broadcast("OnlinePackSyncLocalStatus", {
+			status = status,
+			message = message,
+			download_progress = progress,
+			selected_at = currentSelectedAt,
+		})
+	end
 
 	if not (ITGOnline and ITGOnline.Request and ITGOnline.currentRoomId) then
 		if callback then callback(false, nil, { errorMessage = "Aucun salon online actif." }) end
@@ -1074,6 +1086,14 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	end
 	options = type(options) == "table" and options or {}
 	local browseOnly = options.browseOnly == true
+	local existingDownloadKey = trim(self.downloadInFlightKey)
+	local expectedDownloadKey = trim(options.allowExistingDownloadKey)
+	if existingDownloadKey ~= "" and (expectedDownloadKey == "" or existingDownloadKey ~= expectedDownloadKey) then
+		local message = download_already_in_progress_message()
+		trace(message .. " key=" .. tostring(existingDownloadKey))
+		if callback then callback(false, message) end
+		return
+	end
 
 	local packId = tonumber(pack.id)
 	if not packId or math.floor(packId) ~= packId or packId < 1 then
@@ -1082,6 +1102,9 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	end
 
 	local packName = trim(pack.name or ("Pack " .. tostring(packId)))
+	if existingDownloadKey == "" then
+		self.downloadInFlightKey = (browseOnly and "browse-candidate|" or "selected-candidate|") .. tostring(packId) .. "|" .. packName
+	end
 	local fileName = tostring(packId) .. "_" .. safe_file_name(packName)
 	local quarantinePath = pack_quarantine_path(packId, packName)
 	local maxDownloadBytes = tonumber(self.maxDownloadBytes) or (512 * 1024 * 1024)
@@ -1231,6 +1254,12 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 		if callback then callback(false, "Aucune chanson selectionnee.") end
 		return
 	end
+	if trim(self.downloadInFlightKey) ~= "" then
+		local message = download_already_in_progress_message()
+		trace(message .. " key=" .. tostring(self.downloadInFlightKey))
+		if callback then callback(false, message) end
+		return
+	end
 
 	self.currentSongInfo = songInfo
 	self.pendingPostReloadBrowseOnly = false
@@ -1239,13 +1268,6 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 		downloadKey = selected_chart_hash(songInfo) .. "|" .. selected_path(songInfo)
 	end
 	if downloadKey == "" then downloadKey = tostring(songInfo) end
-	if self.downloadInFlightKey == downloadKey then
-		local message = "Telechargement deja en cours."
-		trace(message)
-		if callback then callback(false, message) end
-		return
-	end
-
 	self.downloadInFlightKey = downloadKey
 	local function fail_download(message)
 		self.downloadInFlightKey = nil
@@ -1283,7 +1305,7 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 			end
 			self.downloadInFlightKey = nil
 			if callback then callback(false, downloadMessage or "Le téléchargement du pack a échoué.") end
-		end)
+		end, { allowExistingDownloadKey = downloadKey })
 	end)
 end
 
@@ -1293,17 +1315,17 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 		return
 	end
 
+	if trim(self.downloadInFlightKey) ~= "" then
+		local message = download_already_in_progress_message()
+		trace(message .. " key=" .. tostring(self.downloadInFlightKey))
+		if callback then callback(false, message) end
+		return
+	end
 	self.currentSongInfo = songInfo
 	self.activeBrowseOnlyDownload = true
 	local packName = selected_pack(songInfo)
 	local downloadKey = "browse|" .. (packName ~= "" and packName or (selected_title(songInfo) .. "|" .. selected_artist(songInfo)))
 	if downloadKey == "browse|" then downloadKey = "browse|" .. tostring(songInfo) end
-	if self.downloadInFlightKey == downloadKey then
-		local message = "Telechargement deja en cours."
-		trace(message)
-		if callback then callback(false, message) end
-		return
-	end
 
 	self.downloadInFlightKey = downloadKey
 	local function fail_download(message)
@@ -1346,7 +1368,7 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 			self.downloadInFlightKey = nil
 			self.activeBrowseOnlyDownload = false
 			if callback then callback(false, downloadMessage or "Le telechargement du pack a echoue.") end
-		end, { browseOnly = true })
+		end, { browseOnly = true, allowExistingDownloadKey = downloadKey })
 	end)
 end
 
