@@ -9,6 +9,7 @@ ITGOnline = ITGOnline or {}
 ITGOnline.PackSync = ITGOnline.PackSync or {}
 
 local PackSync = ITGOnline.PackSync
+PackSync.scriptVersion = "2026-06-17-pack-install-fallback-v2"
 PackSync.statusChangedAt = PackSync.statusChangedAt or 0
 PackSync.watchdogLastKey = PackSync.watchdogLastKey or ""
 PackSync.watchdogTimeoutSeconds = PackSync.watchdogTimeoutSeconds or 25
@@ -48,6 +49,8 @@ local function trace(message)
 	local line = "[OnlinePackSync] " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
+
+trace("Loaded script version=" .. tostring(PackSync.scriptVersion))
 
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
