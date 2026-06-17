@@ -60,6 +60,28 @@ local function download_already_in_progress_message()
 	return "Telechargement deja en cours."
 end
 
+local function current_user_is_active_room_member()
+	if not (ITGOnline and ITGOnline.currentRoomId and ITGOnline.currentRoom and ITGOnline.user) then
+		return false
+	end
+	local currentUserId = tostring(ITGOnline.user.id or "")
+	local currentRoomId = tostring(ITGOnline.currentRoomId or "")
+	if currentUserId == "" or currentRoomId == "" then
+		return false
+	end
+	if tostring(ITGOnline.currentRoom.id or "") ~= currentRoomId then
+		return false
+	end
+	for member in ivalues(ITGOnline.currentRoom.members or {}) do
+		local user = member.user or member
+		local userId = tostring(user.id or member.user_id or "")
+		if userId == currentUserId then
+			return true
+		end
+	end
+	return false
+end
+
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
@@ -469,7 +491,8 @@ function PackSync:UpdateStatus(status, message, progress, callback)
 		})
 	end
 
-	if not (ITGOnline and ITGOnline.Request and ITGOnline.currentRoomId) then
+	if not (ITGOnline and ITGOnline.Request and current_user_is_active_room_member()) then
+		trace("Status skipped reason=not_active_room_member status=" .. tostring(status))
 		if callback then callback(false, nil, { errorMessage = "Aucun salon online actif." }) end
 		return
 	end
@@ -650,6 +673,10 @@ function PackSync:FindLocalMatch(songInfo)
 	end
 
 	self.currentSongInfo = songInfo
+	if trim(self.downloadInFlightKey) ~= "" or self.activeBrowseOnlyDownload == true then
+		trace("Skipping local chart status scan during active download title=" .. selected_title(songInfo))
+		return { ok = false, status = "download_in_progress", reason = "download_in_progress" }
+	end
 	trace("Searching local charts title=" .. selected_title(songInfo) .. " pack=" .. selected_pack(songInfo))
 	self:UpdateStatus(self.status.SearchingLocalCharts, nil)
 
@@ -753,6 +780,9 @@ function PackSync:ApplySelectedChart(songInfo)
 	end
 
 	local reason = result.reason or "missing_local_song"
+	if reason == "download_in_progress" then
+		return false
+	end
 	if result.status == "mismatch" then
 		MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = reason, chartMismatch = true })
 	else
@@ -1191,6 +1221,11 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		if callback then callback(false, "Pack candidat invalide.") end
 		return
 	end
+	if not current_user_is_active_room_member() then
+		trace("DownloadPackByCandidate blocked reason=not_active_room_member")
+		if callback then callback(false, "Vous n'etes plus dans le salon.") end
+		return
+	end
 	options = type(options) == "table" and options or {}
 	local browseOnly = options.browseOnly == true
 	local existingDownloadKey = trim(self.downloadInFlightKey)
@@ -1267,6 +1302,11 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		end,
 		onProgress = function(current, total)
 			if downloadCompleted then return false end
+			if not current_user_is_active_room_member() then
+				trace("Download aborted reason=not_active_room_member pack=" .. tostring(packName))
+				fail_candidate_download("Vous n'etes plus dans le salon.", false)
+				return false
+			end
 			local now = GetTimeSinceStart and GetTimeSinceStart() or 0
 			if self.downloadStartedAt == nil then
 				self.downloadStartedAt = now
@@ -1302,6 +1342,11 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		end,
 		onResponse = function(response)
 			if downloadCompleted then return end
+			if not current_user_is_active_room_member() then
+				trace("Download response ignored reason=not_active_room_member pack=" .. tostring(packName))
+				fail_candidate_download("Vous n'etes plus dans le salon.", false)
+				return
+			end
 			self.downloadStartedAt = nil
 			self.downloadLastByteAt = nil
 			self.downloadLastByteCount = nil
@@ -1362,6 +1407,11 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 		if callback then callback(false, "Aucune chanson selectionnee.") end
 		return
 	end
+	if not current_user_is_active_room_member() then
+		trace("DownloadSelectedPack blocked reason=not_active_room_member")
+		if callback then callback(false, "Vous n'etes plus dans le salon.") end
+		return
+	end
 	if trim(self.downloadInFlightKey) ~= "" then
 		local message = download_already_in_progress_message()
 		trace(message .. " key=" .. tostring(self.downloadInFlightKey))
@@ -1388,6 +1438,11 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 
 	self:UpdateStatus(self.status.DownloadRequested, nil)
 	self:SearchStepManiaOnline(songInfo, function(ok, pack, searchError)
+		if not current_user_is_active_room_member() then
+			trace("DownloadSelectedPack cancelled after search reason=not_active_room_member")
+			fail_download("Vous n'etes plus dans le salon.")
+			return
+		end
 		if not ok or not pack or not pack.id then
 			if searchError and type(searchError.candidates) == "table" and #searchError.candidates > 0 then
 				trace("Download selection required candidates=" .. tostring(#searchError.candidates))
@@ -1422,6 +1477,11 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 		if callback then callback(false, "Aucun pack a telecharger.") end
 		return
 	end
+	if not current_user_is_active_room_member() then
+		trace("DownloadBrowsingPack blocked reason=not_active_room_member")
+		if callback then callback(false, "Vous n'etes plus dans le salon.") end
+		return
+	end
 
 	if trim(self.downloadInFlightKey) ~= "" then
 		local message = download_already_in_progress_message()
@@ -1447,7 +1507,13 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 		if callback then callback(false, message) end
 	end
 
+	self:UpdateStatus(self.status.DownloadRequested, nil)
 	self:SearchStepManiaOnline(songInfo, function(ok, pack, searchError)
+		if not current_user_is_active_room_member() then
+			trace("DownloadBrowsingPack cancelled after search reason=not_active_room_member")
+			fail_download("Vous n'etes plus dans le salon.")
+			return
+		end
 		if not ok or not pack or not pack.id then
 			if searchError and type(searchError.candidates) == "table" and #searchError.candidates > 0 then
 				trace("Browse download selection required candidates=" .. tostring(#searchError.candidates))

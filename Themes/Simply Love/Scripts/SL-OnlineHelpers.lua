@@ -26,6 +26,8 @@ local pendingManagerAutoReadyRetryKey = ""
 local pendingManagerAutoReadyRetryPhase = ""
 local lastWaitingDebugKey = ""
 local lastFlowLobbyKey = ""
+local replayDeferredLobbyStateQueued = false
+local replayDeferredLobbyStateRunning = false
 local UnlockOnlineInput
 local onlineInputCallbacks = {}
 -- These screens are the ones we want to display the player's scores for.
@@ -1342,6 +1344,8 @@ CreateOnlineHandler = function()
 				self.connecting = false
 				self.inLobby = false
 				self.errorMsg = nil
+				replayDeferredLobbyStateQueued = false
+				replayDeferredLobbyStateRunning = false
 				local display = self:GetChild("Display")
 				if display then
 					display:GetChild("Text"):settext("")
@@ -1645,20 +1649,34 @@ CreateOnlineHandler = function()
 					if screenName == "ScreenSelectMusic" then
 						self:sleep(0.25):queuecommand("PreviewInitialOnlineSong")
 					end
-					self:queuecommand("ReplayDeferredLobbyState")
+					if not replayDeferredLobbyStateQueued then
+						replayDeferredLobbyStateQueued = true
+						self:sleep(0.05):queuecommand("ReplayDeferredLobbyState")
+					end
 					MESSAGEMAN:Broadcast("UpdateMachineState")
 		      end,
 					ReplayDeferredLobbyStateCommand=function(self)
+						replayDeferredLobbyStateQueued = false
+						if replayDeferredLobbyStateRunning then return end
 						if not (self.inLobby and self.lastLobbyStatePayload) then return end
 						local screen = SCREENMAN:GetTopScreen()
 						local screenName = screen and screen:GetName() or "NoScreen"
 						if is_evaluation_screen(screenName) then return end
+						if gameplayScreens[screenName] then return end
+						if ITGOnline and ITGOnline.IsOnlineOptionsScreen and ITGOnline:IsOnlineOptionsScreen(screenName) then return end
 						local phase = tostring(self.lastLobbyStatePayload.phase or "")
 						if (phase == "lobby_ready" or phase == "config") and self.lastLobbyStatePayload.songInfo ~= nil then
 							online_flow_trace("replay_deferred_lobby_state"
 								.. " screen=" .. tostring(screenName)
 								.. " phase=" .. tostring(phase))
-							DisplayLobbyState(self.lastLobbyStatePayload, self)
+							replayDeferredLobbyStateRunning = true
+							local ok, err = pcall(function()
+								DisplayLobbyState(self.lastLobbyStatePayload, self)
+							end)
+							replayDeferredLobbyStateRunning = false
+							if not ok then
+								lua.ReportScriptError("ReplayDeferredLobbyState failed: " .. tostring(err))
+							end
 						end
 					end,
 					PreviewInitialOnlineSongCommand=function(self)
@@ -2174,6 +2192,8 @@ CreateOnlineHandler = function()
 					self.connected = false
 					self.inLobby = false
 					self.socket = nil
+					replayDeferredLobbyStateQueued = false
+					replayDeferredLobbyStateRunning = false
 					self:GetChild("Display"):GetChild("Text"):settext("")
 					self:GetChild("Display"):visible(false)
 				end
