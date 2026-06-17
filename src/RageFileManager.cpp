@@ -1396,6 +1396,10 @@ void GetDirListingRecursive(
 }
 
 bool DeleteRecursive(RageFileDriver* prfd, const std::string& sDir) {
+  if (prfd == nullptr) {
+    LOG->Warn("DeleteRecursive called with a null file driver.");
+    return false;
+  }
   if (sDir.empty()) {
     LOG->Warn("DeleteRecursive called with an empty driver path.");
     return false;
@@ -1408,15 +1412,17 @@ bool DeleteRecursive(RageFileDriver* prfd, const std::string& sDir) {
 
   std::vector<std::string> vsFiles;
   prfd->GetDirListing(normalizedDir + "*", vsFiles, false, true);
+  bool removedAllChildren = true;
   for (const std::string& s : vsFiles) {
-    if (IsADirectory(s)) {
-      DeleteRecursive(s + "/");
+    if (prfd->GetFileType(s) == RageFileManager::TYPE_DIR) {
+      removedAllChildren =
+          DeleteRecursive(prfd, s + "/") && removedAllChildren;
     } else {
-      FILEMAN->Remove(s);
+      removedAllChildren = prfd->Remove(s) && removedAllChildren;
     }
   }
 
-  return FILEMAN->Remove(normalizedDir);
+  return prfd->Remove(normalizedDir) && removedAllChildren;
 }
 
 bool DeleteRecursive(const std::string& sDir) {

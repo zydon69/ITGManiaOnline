@@ -1,6 +1,7 @@
 #include "TimingData.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cfloat>
 #include <climits>
 #include <cmath>
@@ -26,6 +27,19 @@ TimingSegment* GetSegmentAtRow(int iNoteRow, TimingSegmentType tst);
 
 static bool IsValidTimingSegmentType(TimingSegmentType tst) {
   return tst >= SEGMENT_BPM && tst < NUM_TimingSegmentType;
+}
+
+static bool ShouldLogGlobalOffsetTimingTrace() {
+  if (!LogGlobalOffsetDiagnosticsEnabled() || LOG == nullptr) {
+    return false;
+  }
+
+  // Timing conversion is a hot path used many times per frame. Keep the
+  // diagnostic category enabled by default, but sample this specific trace so
+  // logs stay usable and cannot destabilize long online sessions.
+  static std::atomic<unsigned> s_uTraceCount{0};
+  const unsigned count = s_uTraceCount.fetch_add(1, std::memory_order_relaxed);
+  return count < 24 || count % 600 == 0;
 }
 
 TimingData::TimingData(float fOffset)
@@ -739,9 +753,8 @@ void TimingData::GetBeatAndBPSFromElapsedTime(GetBeatArgs& args) const {
   const float music_rate = GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
   const float runtime_offset = PREFSMAN->m_fGlobalOffsetSeconds;
   args.elapsed_time += music_rate * runtime_offset;
-  // This timing hot path can log hundreds of lines per second; keep it behind
-  // the dedicated global-offset diagnostics flag only.
-  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+  const bool log_global_offset_timing = ShouldLogGlobalOffsetTimingTrace();
+  if (log_global_offset_timing) {
     LOG->Trace(
         "GLOBAL_OFFSET_TRACE: timing_elapsed_to_beat elapsed_before=%.6f "
         "music_rate=%.6f runtime_seconds=%.6f applied_delta=%.6f "
@@ -750,7 +763,7 @@ void TimingData::GetBeatAndBPSFromElapsedTime(GetBeatArgs& args) const {
         music_rate * runtime_offset, args.elapsed_time);
   }
   GetBeatAndBPSFromElapsedTimeNoOffset(args);
-  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+  if (log_global_offset_timing) {
     LOG->Trace(
         "GLOBAL_OFFSET_TRACE: timing_elapsed_to_beat_result "
         "elapsed_after_offset=%.6f beat=%.6f bps=%.6f freeze=%d delay=%d "
@@ -1009,9 +1022,7 @@ float TimingData::GetElapsedTimeFromBeat(float fBeat) const {
   const float runtime_offset = PREFSMAN->m_fGlobalOffsetSeconds;
   const float applied_delta = music_rate * runtime_offset;
   const float elapsed = elapsed_no_offset - applied_delta;
-  // This timing hot path can log hundreds of lines per second; keep it behind
-  // the dedicated global-offset diagnostics flag only.
-  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+  if (ShouldLogGlobalOffsetTimingTrace()) {
     LOG->Trace(
         "GLOBAL_OFFSET_TRACE: timing_beat_to_elapsed beat=%.6f "
         "elapsed_no_offset=%.6f music_rate=%.6f runtime_seconds=%.6f "

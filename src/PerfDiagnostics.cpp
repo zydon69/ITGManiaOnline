@@ -6,29 +6,29 @@
 
 #include "Preference.h"
 
-static Preference<bool> g_bPerfDiagnostics("PerfDiagnostics", false);
+static Preference<bool> g_bPerfDiagnostics("PerfDiagnostics", true);
 static Preference<bool> g_bLogAudioUnderrunDiagnostics(
-    "LogAudioUnderrunDiagnostics", false);
+    "LogAudioUnderrunDiagnostics", true);
 static Preference<bool> g_bLogTextureUploadDiagnostics(
-    "LogTextureUploadDiagnostics", false);
+    "LogTextureUploadDiagnostics", true);
 static Preference<bool> g_bLogResourceSnapshotDiagnostics(
-    "LogResourceSnapshotDiagnostics", false);
+    "LogResourceSnapshotDiagnostics", true);
 static Preference<bool> g_bLogBackgroundDiagnostics(
-    "LogBackgroundDiagnostics", false);
+    "LogBackgroundDiagnostics", true);
 static Preference<bool> g_bLogPlayOnceDiagnostics(
-    "LogPlayOnceDiagnostics", false);
+    "LogPlayOnceDiagnostics", true);
 static Preference<bool> g_bLogNoteSkinDiagnostics(
-    "LogNoteSkinDiagnostics", false);
+    "LogNoteSkinDiagnostics", true);
 static Preference<bool> g_bLogInputDiagnostics(
-    "LogInputDiagnostics", false);
+    "LogInputDiagnostics", true);
 static Preference<bool> g_bLogMemoryCardDiagnostics(
-    "LogMemoryCardDiagnostics", false);
+    "LogMemoryCardDiagnostics", true);
 static Preference<bool> g_bLogContentLoadDiagnostics(
-    "LogContentLoadDiagnostics", false);
+    "LogContentLoadDiagnostics", true);
 static Preference<bool> g_bLogThemeLuaDiagnostics(
-    "LogThemeLuaDiagnostics", false);
+    "LogThemeLuaDiagnostics", true);
 static Preference<bool> g_bLogGlobalOffsetDiagnostics(
-    "LogGlobalOffsetDiagnostics", false);
+    "LogGlobalOffsetDiagnostics", true);
 
 static std::atomic<bool> g_bPerfDiagnosticsCached{false};
 static std::atomic<bool> g_bLogAudioUnderrunDiagnosticsCached{false};

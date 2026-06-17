@@ -9,12 +9,15 @@ ITGOnline = ITGOnline or {}
 ITGOnline.PackSync = ITGOnline.PackSync or {}
 
 local PackSync = ITGOnline.PackSync
-PackSync.scriptVersion = "2026-06-17-pack-install-cache-flush-v5"
+PackSync.scriptVersion = "2026-06-17-pack-preview-refresh-v6"
 PackSync.statusChangedAt = PackSync.statusChangedAt or 0
+PackSync.currentStatusMessage = PackSync.currentStatusMessage or nil
 PackSync.watchdogLastKey = PackSync.watchdogLastKey or ""
 PackSync.watchdogTimeoutSeconds = PackSync.watchdogTimeoutSeconds or 25
 PackSync.activeBrowseOnlyDownload = PackSync.activeBrowseOnlyDownload or false
 PackSync.installedPackNames = PackSync.installedPackNames or {}
+PackSync.browsePreviewPackKey = PackSync.browsePreviewPackKey or ""
+PackSync.downloadedPackKey = PackSync.downloadedPackKey or ""
 
 PackSync.status = {
 	Unknown = "unknown",
@@ -426,6 +429,7 @@ function PackSync:MarkPackInstalled(packName)
 	if packName == "" then return end
 	self.installedPackNames = self.installedPackNames or {}
 	self.installedPackNames[pack_name_key(packName)] = true
+	self.downloadedPackKey = pack_name_key(packName)
 	trace("Pack marked installed pack=" .. tostring(packName))
 end
 
@@ -443,7 +447,9 @@ end
 
 function PackSync:UpdateStatus(status, message, progress, callback)
 	status = tostring(status or self.status.Unknown)
+	message = status_message(message)
 	self.currentStatus = status
+	self.currentStatusMessage = message
 	self.statusChangedAt = GetTimeSinceStart()
 	local currentSelectedAt = selected_at(self.currentSongInfo)
 	if self.lastSelectedAt ~= currentSelectedAt then
@@ -453,7 +459,6 @@ function PackSync:UpdateStatus(status, message, progress, callback)
 
 	self:SyncSequenceFromRoom(currentSelectedAt)
 	self.sequence = (tonumber(self.sequence) or 0) + 1
-	message = status_message(message)
 	trace("Status " .. status .. (message and (" - " .. tostring(message)) or ""))
 	if MESSAGEMAN then
 		MESSAGEMAN:Broadcast("OnlinePackSyncLocalStatus", {
@@ -548,10 +553,12 @@ function PackSync:ResetLocalState(reason)
 	end
 	self.currentSongInfo = nil
 	self.currentStatus = self.status.Unknown
+	self.currentStatusMessage = nil
 	self.statusChangedAt = 0
 	self.watchdogLastKey = ""
 	self.sequence = 0
 	self.lastSelectedAt = ""
+	self.browsePreviewPackKey = ""
 	trace("Reset local state" .. (reason and (" (" .. tostring(reason) .. ")") or ""))
 end
 
@@ -608,15 +615,33 @@ end
 function PackSync:ManagerBrowsingPreview(songInfo)
 	if not songInfo then return end
 	local packName = selected_pack(songInfo)
-	local exists = self:PackExists(packName)
-	trace("Manager browsing preview pack=" .. tostring(packName) .. " exists=" .. tostring(exists))
-	if packName ~= "" and not exists then
-		self.currentSongInfo = songInfo
-		self:UpdateStatus(self.status.ManagerBrowsingUnknownPack, "Le manager navigue dans un pack que vous ne possédez pas.")
-	elseif packName ~= "" and exists and self.currentStatus == self.status.ManagerBrowsingUnknownPack then
-		self.currentSongInfo = songInfo
-		self:UpdateStatus(self.status.DownloadedOk, "Pack disponible localement.")
+	if packName == "" then return end
+	if self.activeBrowseOnlyDownload == true or trim(self.downloadInFlightKey) ~= "" then
+		trace("Manager browsing preview ignored during active download pack=" .. tostring(packName))
+		return
 	end
+
+	self.currentSongInfo = songInfo
+	local packKey = pack_name_key(packName)
+	local exists = self:PackExists(packName)
+	local status = exists and self.status.DownloadedOk or self.status.ManagerBrowsingUnknownPack
+	local message = exists and "Pack disponible localement." or "Le manager navigue dans un pack que vous ne possédez pas."
+	if exists and self.downloadedPackKey == packKey then
+		message = "Pack téléchargé et disponible localement."
+	end
+	local normalizedMessage = status_message(message)
+	trace("Manager browsing preview pack=" .. tostring(packName)
+		.. " exists=" .. tostring(exists)
+		.. " previous_pack_key=" .. tostring(self.browsePreviewPackKey or "")
+		.. " next_status=" .. tostring(status))
+	if self.browsePreviewPackKey == packKey
+		and self.currentStatus == status
+		and self.currentStatusMessage == normalizedMessage then
+		return
+	end
+
+	self.browsePreviewPackKey = packKey
+	self:UpdateStatus(status, normalizedMessage)
 end
 
 function PackSync:FindLocalMatch(songInfo)
@@ -911,6 +936,10 @@ local function install_extracted_pack_at_songs_root(quarantinePath, expectedPack
 		return nil, "Le moteur ne permet pas d'installer le pack téléchargé."
 	end
 	local moved = FILEMAN:MoveOnlineSongPack(sourcePath, rootGroupPath)
+	flush_dir_cache("/Songs/")
+	flush_dir_cache(quarantinePath)
+	flush_dir_cache(sourcePath)
+	flush_dir_cache(rootGroupPath)
 	trace("MoveOnlineSongPack result moved=" .. tostring(moved)
 		.. " sourceExistsAfter=" .. tostring(path_exists(sourcePath) or path_exists(sourcePath .. "/"))
 		.. " targetExistsAfter=" .. tostring(path_exists(rootGroupPath) or path_exists(rootGroupPath .. "/")))
@@ -920,11 +949,25 @@ local function install_extracted_pack_at_songs_root(quarantinePath, expectedPack
 			remove_directory_if_possible(rootGroupPath .. "/")
 			return nil, "Impossible d'installer le pack téléchargé."
 		end
+		flush_dir_cache("/Songs/")
+		flush_dir_cache(quarantinePath)
+		flush_dir_cache(sourcePath)
+		flush_dir_cache(rootGroupPath)
+	elseif path_exists(sourcePath) or path_exists(sourcePath .. "/") then
+		trace("MoveOnlineSongPack left source visible after cache flush; removing source=" .. tostring(sourcePath))
+		log_dir_listing("Install source still visible after move", sourcePath .. "/")
+		remove_directory_if_possible(sourcePath .. "/")
+		flush_dir_cache("/Songs/")
+		flush_dir_cache(quarantinePath)
+		flush_dir_cache(sourcePath)
+		flush_dir_cache(rootGroupPath)
 	end
 
 	log_dir_listing("Installed root group", rootGroupPath .. "/")
-	log_dir_listing("Remaining quarantine after install", quarantinePath)
 	remove_directory_if_possible(quarantinePath)
+	flush_dir_cache("/Songs/")
+	flush_dir_cache(quarantinePath)
+	log_dir_listing("Remaining quarantine after cleanup", quarantinePath)
 	trace("Install extracted pack complete target=" .. tostring(rootGroupPath)
 		.. " quarantineExistsAfterCleanup=" .. tostring(path_exists(quarantinePath) or path_exists(quarantinePath .. "/")))
 	return rootGroupPath .. "/", nil

@@ -78,6 +78,7 @@ local global_options_index = 1
 local joined_global_options = { scoreMode="itg", musicRate=1.0 }
 local global_options_choices = {}
 local joined_focus_initialized = false
+local joined_user_moved_focus = false
 
 local join_lobby_code = ""
 
@@ -673,6 +674,30 @@ local function player_is_current_user(player)
 	return tostring(player and player.playerId or "") == tostring(ITGOnline.user.id or "")
 end
 
+local function apply_local_pack_sync_status_to_joined_player(params)
+	if not (params and ITGOnline and ITGOnline.user) then return false end
+	local currentUserId = tostring(ITGOnline.user.id or "")
+	if currentUserId == "" then return false end
+	for _, player in ipairs(joined_lobby_players or {}) do
+		if tostring(player and player.playerId or "") == currentUserId then
+			local status = trim_text(params.status)
+			if status ~= "" then player.packSyncStatus = status end
+			player.packSyncMessage = params.message
+			player.packSyncDownloadProgress = params.download_progress
+			if status == "ready" or status == "local_chart_match_found" then
+				player.missingSong = false
+				player.songAvailable = joined_song_confirmed and true or player.songAvailable
+			elseif status == "downloaded_ok" then
+				player.missingSong = false
+			elseif status == "manager_browsing_unknown_pack" then
+				player.songAvailable = false
+			end
+			return true
+		end
+	end
+	return false
+end
+
 local function player_missing_song_for_ui(player)
 	if joined_phase == "results" then return false end
 	if joined_manager_user_id ~= nil and tostring(player and player.playerId or "") == tostring(joined_manager_user_id) then return false end
@@ -722,6 +747,25 @@ local function pack_sync_line_for_player(player)
 	local message = trim_text(player.packSyncMessage)
 	local reason = trim_text(player.missingSongReason)
 	local songAvailable = player.songAvailable == true
+	local previewOnly = joined_song_preview ~= nil and not joined_song_confirmed
+
+	if previewOnly then
+		if status == "manager_browsing_unknown_pack" then
+			return "Pack inconnu"
+		end
+		if status == "download_in_progress" then
+			local progress = tonumber(player.packSyncDownloadProgress)
+			local suffix = progress and (" " .. tostring(math.floor(progress)) .. "%") or ""
+			return "Telechargement en cours" .. suffix
+		end
+		if status == "download_requested"
+			or status == "reloading_songs"
+			or status == "download_failed"
+			or status == "downloaded_ok" then
+			return message ~= "" and message or pack_sync_display_text(status)
+		end
+		return ""
+	end
 
 	if player_missing_song_for_ui(player) then
 		if status == "local_chart_match_found" or songAvailable then
@@ -765,10 +809,13 @@ local function normalize_joined_active_index()
 	local indices = joined_button_indices()
 	for index in ivalues(indices) do
 		if joined_active_index == index then
-			return
+			return false
 		end
 	end
 	joined_active_index = indices[1] or 1
+	joined_user_moved_focus = false
+	last_auto_start_focus_key = ""
+	return true
 end
 
 local function move_joined_button(delta)
@@ -785,6 +832,7 @@ local function move_joined_button(delta)
 	if nextIndex < 1 then nextIndex = #indices end
 	if nextIndex > #indices then nextIndex = 1 end
 	joined_active_index = indices[nextIndex] or 1
+	joined_user_moved_focus = true
 end
 
 local function set_joined_default_active_index(force)
@@ -800,11 +848,15 @@ local function set_joined_default_active_index(force)
 		for _, index in ipairs(indices) do
 			if index == 2 then
 				joined_active_index = 2
+				joined_user_moved_focus = false
+				last_auto_start_focus_key = ""
 				return
 			end
 		end
 	end
 	joined_active_index = indices[1] or 1
+	joined_user_moved_focus = false
+	last_auto_start_focus_key = ""
 end
 
 local function transition_to_online_song_reload()
@@ -2089,28 +2141,28 @@ local af = Def.ActorFrame{
 			local visible = joined_room_can_start()
 			startRoomButton:visible(visible)
 
-				local debugKey = table.concat({
-					tostring(joined_lobby_code or ""),
-					tostring(joined_phase or ""),
+			local debugKey = table.concat({
+				tostring(joined_lobby_code or ""),
+				tostring(joined_phase or ""),
 				joined_is_manager and "1" or "0",
 				tostring(joined_manager_user_id or "nil"),
 				tostring(#joined_lobby_players),
 				everyoneReady and "1" or "0",
 				hasMissingSong and "1" or "0",
-					visible and "1" or "0",
-					ready_summary(),
-				}, "|")
-				if debugKey ~= last_start_visibility_debug_key then
-					last_start_visibility_debug_key = debugKey
-					lobby_debug("start_button visible=" .. tostring(visible)
-						.. " phase=" .. tostring(joined_phase)
-						.. " isManager=" .. tostring(joined_is_manager)
-						.. " managerUserId=" .. tostring(joined_manager_user_id)
-						.. " players=" .. tostring(#joined_lobby_players)
-						.. " everyoneReady=" .. tostring(everyoneReady)
-						.. " missingSong=" .. tostring(hasMissingSong)
-						.. " readyStates=[" .. ready_summary() .. "]")
-				end
+				visible and "1" or "0",
+				ready_summary(),
+			}, "|")
+			if debugKey ~= last_start_visibility_debug_key then
+				last_start_visibility_debug_key = debugKey
+				lobby_debug("start_button visible=" .. tostring(visible)
+					.. " phase=" .. tostring(joined_phase)
+					.. " isManager=" .. tostring(joined_is_manager)
+					.. " managerUserId=" .. tostring(joined_manager_user_id)
+					.. " players=" .. tostring(#joined_lobby_players)
+					.. " everyoneReady=" .. tostring(everyoneReady)
+					.. " missingSong=" .. tostring(hasMissingSong)
+					.. " readyStates=[" .. ready_summary() .. "]")
+			end
 
 			if visible then
 				local focusKey = table.concat({
@@ -2120,19 +2172,20 @@ local af = Def.ActorFrame{
 					ready_summary(),
 					hasMissingSong and "1" or "0",
 				}, "|")
-				if focusKey ~= last_auto_start_focus_key then
+				if focusKey ~= last_auto_start_focus_key or (not joined_user_moved_focus and joined_active_index ~= 5) then
 					last_auto_start_focus_key = focusKey
 					if joined_active_index ~= 5 then
 						joined_active_index = 5
+						joined_user_moved_focus = false
 						self:queuecommand("Hover")
 					end
 				end
 				last_auto_start_request_key = ""
-				else
-					last_auto_start_focus_key = ""
-					last_auto_start_request_key = ""
-				end
+			else
+				last_auto_start_focus_key = ""
+				last_auto_start_request_key = ""
 			end
+		end
 		end,
 		SetStatusCommand=function(self, params)
 			if showing_pack_choice_menu then
@@ -2388,6 +2441,9 @@ local af = Def.ActorFrame{
 				if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ResetLocalState then
 					ITGOnline.PackSync:ResetLocalState("no_song_confirmed")
 				end
+				if joined_song_preview and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ManagerBrowsingPreview then
+					ITGOnline.PackSync:ManagerBrowsingPreview(joined_song_preview)
+				end
 			end
 			sync_local_missing_song_from_joined_players()
 			set_joined_default_active_index(not joined_focus_initialized)
@@ -2549,24 +2605,25 @@ OnlineRoomInvitationMessageCommand=function(self, params)
 	local prompt = self:GetChild("PrivateJoinPrompt")
 	if prompt then prompt:visible(true) end
 	self:queuecommand("UpdatePrivateJoinPrompt")
-end,
-OnlineSongPreviewMessageCommand=function(self, params)
-	local preview = normalize_online_song_info(params)
-	if preview then
-		joined_song_preview = preview
-		joined_song_confirmed = false
-		joined_song_selected_key = ""
-		joined_preview_unknown_pack = not local_pack_exists(preview)
-		if joined_preview_unknown_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ManagerBrowsingPreview then
-			ITGOnline.PackSync:ManagerBrowsingPreview(preview)
+	end,
+	OnlineSongPreviewMessageCommand=function(self, params)
+		local preview = normalize_online_song_info(params)
+		if preview then
+			joined_song_preview = preview
+			joined_song_confirmed = false
+			joined_song_selected_key = ""
+			joined_preview_unknown_pack = not local_pack_exists(preview)
+			if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ManagerBrowsingPreview then
+				ITGOnline.PackSync:ManagerBrowsingPreview(preview)
+			end
+			self:queuecommand("UpdateJoinedLobbyText")
 		end
-		self:queuecommand("UpdateJoinedLobbyText")
-	end
-end,
-OnlinePackSyncReloadSongsMessageCommand=function(self)
-	transition_to_online_song_reload()
-end,
-	OnlinePackSyncLocalStatusMessageCommand=function(self)
+	end,
+	OnlinePackSyncReloadSongsMessageCommand=function(self)
+		transition_to_online_song_reload()
+	end,
+	OnlinePackSyncLocalStatusMessageCommand=function(self, params)
+		apply_local_pack_sync_status_to_joined_player(params)
 		normalize_joined_active_index()
 		self:queuecommand("UpdateJoinedLobbyText")
 		self:queuecommand("Hover")
@@ -2577,6 +2634,9 @@ end,
 		end
 		if params and params.songInfo and joined_song_preview and song_info_pack(params.songInfo) == song_info_pack(joined_song_preview) then
 			joined_preview_unknown_pack = false
+			if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ManagerBrowsingPreview then
+				ITGOnline.PackSync:ManagerBrowsingPreview(joined_song_preview)
+			end
 			normalize_joined_active_index()
 			self:queuecommand("UpdateJoinedLobbyText")
 			self:queuecommand("UpdateLobbyView")
