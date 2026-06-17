@@ -14,8 +14,6 @@ PackSync.watchdogLastKey = PackSync.watchdogLastKey or ""
 PackSync.watchdogTimeoutSeconds = PackSync.watchdogTimeoutSeconds or 25
 PackSync.activeBrowseOnlyDownload = PackSync.activeBrowseOnlyDownload or false
 
-local ONLINE_DOWNLOAD_ROOT = "/Songs/Online Downloads/"
-
 PackSync.status = {
 	Unknown = "unknown",
 	Ready = "ready",
@@ -137,12 +135,11 @@ end
 
 local function pack_quarantine_path(packId, packName)
 	local folderName = safe_folder_name("__OnlineDownload_" .. tostring(packId) .. "_" .. tostring(packName or "pack"))
-	return ONLINE_DOWNLOAD_ROOT .. folderName .. "/"
+	return "/Songs/" .. folderName .. "/"
 end
 
-local function legacy_pack_quarantine_path(packId, packName)
-	local folderName = safe_folder_name("__OnlineDownload_" .. tostring(packId) .. "_" .. tostring(packName or "pack"))
-	return "/Songs/" .. folderName .. "/"
+local function legacy_online_downloads_root()
+	return "/Songs/Online Downloads/"
 end
 
 local function remove_directory_if_possible(path)
@@ -184,6 +181,10 @@ local function safe_child_folder_name(value)
 	return value
 end
 
+local function is_temp_newdir_artifact(value)
+	return tostring(value or ""):lower():match("%.temp%.newdir$") ~= nil
+end
+
 local function has_simfile_in_directory(path)
 	for _, fileName in ivalues(dir_listing(path, false, true)) do
 		local lowerName = tostring(fileName or ""):lower()
@@ -212,7 +213,6 @@ end
 
 local function single_nested_group_folder(quarantinePath)
 	if has_simfile_in_directory(quarantinePath) then return "" end
-	if #dir_listing(quarantinePath, false, true) > 0 then return "" end
 
 	local folders = {}
 	for _, folderName in ivalues(dir_listing(quarantinePath, true, false)) do
@@ -221,6 +221,13 @@ local function single_nested_group_folder(quarantinePath)
 	end
 
 	if #folders ~= 1 then return "" end
+	local folderName = folders[1]
+	for _, entryName in ivalues(dir_listing(quarantinePath, false, false)) do
+		if entryName ~= folderName and not is_temp_newdir_artifact(entryName) then
+			return ""
+		end
+	end
+
 	return folders[1]
 end
 
@@ -743,6 +750,29 @@ local function log_dir_listing(prefix, path)
 	end
 end
 
+local function install_extracted_pack_at_songs_root(quarantinePath)
+	local nestedGroup = single_nested_group_folder(quarantinePath)
+	if nestedGroup == "" then
+		return nil, "Le zip téléchargé ne contient pas un dossier de pack unique."
+	end
+
+	local sourcePath = quarantinePath .. nestedGroup
+	local rootGroupPath = "/Songs/" .. nestedGroup
+	if path_exists(rootGroupPath) or path_exists(rootGroupPath .. "/") then
+		return nil, "Le pack existe déjà localement."
+	end
+	if not FILEMAN or not FILEMAN.MoveOnlineSongPack then
+		return nil, "Le moteur ne permet pas d'installer le pack téléchargé."
+	end
+	if not FILEMAN:MoveOnlineSongPack(sourcePath, rootGroupPath) then
+		return nil, "Impossible d'installer le pack téléchargé."
+	end
+
+	log_dir_listing("Installed root group", rootGroupPath .. "/")
+	remove_directory_if_possible(quarantinePath)
+	return rootGroupPath .. "/", nil
+end
+
 function PackSync:SearchStepManiaOnline(songInfo, callback)
 	local origin = stepmaniaonline_origin()
 	local function search(queryType, query, cb)
@@ -973,7 +1003,6 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	local packName = trim(pack.name or ("Pack " .. tostring(packId)))
 	local fileName = tostring(packId) .. "_" .. safe_file_name(packName)
 	local quarantinePath = pack_quarantine_path(packId, packName)
-	local legacyQuarantinePath = legacy_pack_quarantine_path(packId, packName)
 	local maxDownloadBytes = tonumber(self.maxDownloadBytes) or (512 * 1024 * 1024)
 
 	local url = stepmaniaonline_origin() .. "/download/pack/" .. tostring(packId) .. "/"
@@ -997,7 +1026,6 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		if browseOnly then self.activeBrowseOnlyDownload = false end
 		self:UpdateStatus(self.status.DownloadFailed, message)
 		remove_directory_if_possible(quarantinePath)
-		remove_directory_if_possible(legacyQuarantinePath)
 		if not browseOnly and broadcastMissing ~= false and MESSAGEMAN then
 			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
 		end
@@ -1082,8 +1110,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			end
 
 			remove_directory_if_possible(quarantinePath)
-			remove_directory_if_possible(legacyQuarantinePath)
-			create_directory_if_possible(ONLINE_DOWNLOAD_ROOT)
+			remove_directory_if_possible(legacy_online_downloads_root())
 			create_directory_if_possible(quarantinePath)
 			local extracted = FILEMAN:Unzip(zipPath, quarantinePath, 0)
 			if not extracted then
@@ -1095,26 +1122,13 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			end
 			log_dir_listing("Extracted quarantine", quarantinePath)
 
-			local installedPath = quarantinePath
-			local nestedGroup = single_nested_group_folder(quarantinePath)
-			if nestedGroup ~= "" and not browseOnly then
-				local rootGroupPath = "/Songs/" .. nestedGroup .. "/"
-				if not path_exists(rootGroupPath) then
-					trace("Detected nested pack folder; retrying root extraction group=" .. tostring(nestedGroup))
-					remove_directory_if_possible(quarantinePath)
-					local rootExtracted = FILEMAN:Unzip(zipPath, "/Songs/", 0)
-					if not rootExtracted then
-						remove_path_if_exists(zipPath)
-						remove_directory_if_possible(rootGroupPath)
-						trace("Download failed root unzip pack=" .. tostring(packName))
-						fail_candidate_download("Le zip téléchargé est invalide ou impossible à extraire.")
-						return
-					end
-					installedPath = rootGroupPath
-					log_dir_listing("Extracted root group", installedPath)
-				else
-					trace("Nested pack folder matches an existing Songs group; keeping isolated quarantine group=" .. tostring(nestedGroup))
-				end
+			local installedPath, installError = install_extracted_pack_at_songs_root(quarantinePath)
+			if not installedPath then
+				remove_path_if_exists(zipPath)
+				remove_directory_if_possible(quarantinePath)
+				trace("Download failed install pack=" .. tostring(packName) .. " reason=" .. tostring(installError))
+				fail_candidate_download(installError or "Impossible d'installer le pack téléchargé.")
+				return
 			end
 			remove_path_if_exists(zipPath)
 

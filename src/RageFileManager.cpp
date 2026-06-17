@@ -1464,12 +1464,47 @@ static std::string NormalizeLuaDeleteRecursivePath(std::string path) {
 static bool IsLuaDeleteRecursivePathAllowed(const std::string& path) {
   static const std::string allowedRoot = "/Songs/Online Downloads/";
   static const std::string legacyOnlineDownloadRoot = "/Songs/__OnlineDownload_";
-  return (path.size() > allowedRoot.size() &&
+  return (path.size() >= allowedRoot.size() &&
           CompareNoCase(path.substr(0, allowedRoot.size()), allowedRoot) == 0) ||
          (path.size() > legacyOnlineDownloadRoot.size() &&
           CompareNoCase(
               path.substr(0, legacyOnlineDownloadRoot.size()),
               legacyOnlineDownloadRoot) == 0);
+}
+
+static std::string NormalizeLuaMovePath(std::string path) {
+  FixSlashesInPlace(path);
+  CollapsePath(path, true);
+  return path;
+}
+
+static bool IsLuaOnlineSongInstallMoveAllowed(
+    const std::string& fromPath,
+    const std::string& toPath) {
+  static const std::string quarantineRoot = "/Songs/__OnlineDownload_";
+  static const std::string songsRoot = "/Songs/";
+  if (fromPath.size() <= quarantineRoot.size() ||
+      CompareNoCase(fromPath.substr(0, quarantineRoot.size()), quarantineRoot) !=
+          0) {
+    return false;
+  }
+
+  if (toPath.size() <= songsRoot.size() ||
+      CompareNoCase(toPath.substr(0, songsRoot.size()), songsRoot) != 0) {
+    return false;
+  }
+
+  if (toPath.size() > quarantineRoot.size() &&
+      CompareNoCase(toPath.substr(0, quarantineRoot.size()), quarantineRoot) ==
+          0) {
+    return false;
+  }
+
+  const auto relativeToSongs = toPath.substr(songsRoot.size());
+  return !relativeToSongs.empty() &&
+         relativeToSongs.find('/') == std::string::npos &&
+         relativeToSongs.find('\\') == std::string::npos &&
+         relativeToSongs.find("..") == std::string::npos;
 }
 
 /** @brief Allow Lua to have access to the RageFileManager. */
@@ -1544,6 +1579,27 @@ class LunaRageFileManager : public Luna<RageFileManager> {
     lua_pushboolean(L, p->DeleteRecursive(path));
     return 1;
   }
+  static int MoveOnlineSongPack(T* p, lua_State* L) {
+    const std::string fromPath = NormalizeLuaMovePath(SArg(1));
+    const std::string toPath = NormalizeLuaMovePath(SArg(2));
+    if (!IsLuaOnlineSongInstallMoveAllowed(fromPath, toPath)) {
+      LOG->Warn(
+          "Refusing unsafe online song pack move from %s to %s",
+          fromPath.c_str(),
+          toPath.c_str());
+      lua_pushboolean(L, false);
+      return 1;
+    }
+
+    if (p->DoesFileExist(toPath)) {
+      LOG->Warn("Refusing to overwrite existing song pack %s", toPath.c_str());
+      lua_pushboolean(L, false);
+      return 1;
+    }
+
+    lua_pushboolean(L, p->Move(fromPath, toPath));
+    return 1;
+  }
 
   LunaRageFileManager() {
     ADD_METHOD(Copy);
@@ -1553,6 +1609,7 @@ class LunaRageFileManager : public Luna<RageFileManager> {
     ADD_METHOD(GetDirListing);
     ADD_METHOD(Unzip);
     ADD_METHOD(DeleteRecursive);
+    ADD_METHOD(MoveOnlineSongPack);
   }
 };
 
