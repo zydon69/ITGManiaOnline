@@ -111,6 +111,9 @@ end
 -- Keep flow tracing safe in all contexts; never allow a missing logger
 -- to break lobby state processing.
 local function online_flow_trace(message)
+	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
+		return
+	end
 	local line = tostring(message or "")
 	if online_trace then
 		online_trace("FLOW " .. line)
@@ -1759,12 +1762,18 @@ CreateOnlineHandler = function()
 						local configReadyKey = ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
 							or (tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or ""))
 						pendingConfigReady = configReadyKey
+						if ITGOnline.SetOptimisticConfigReady then
+							ITGOnline:SetOptimisticConfigReady("options_confirmed")
+						end
 						if ITGOnline.MarkConfigReady then
 							Trace("[ITGOnline] options_confirmed queue config_ready key=" .. tostring(configReadyKey))
 						else
 							Trace("[ITGOnline] options_confirmed queue legacy_config_ready key=" .. tostring(configReadyKey))
 						end
-						self:queuecommand("RetryOnlineConfigReady")
+						if online_flow_trace then
+							online_flow_trace("options_confirmed dispatch_immediate config_ready key=" .. tostring(configReadyKey))
+						end
+						self:playcommand("RetryOnlineConfigReady")
 		      end,
 		      OnlineConfigReadyConfirmedMessageCommand=function(self, params)
 						if not pendingConfigReady then
@@ -1777,6 +1786,9 @@ CreateOnlineHandler = function()
 						if pendingConfigReady == confirmedKey or pendingConfigReady == expectedConfigReadyKey then
 							Trace("[ITGOnline] options_confirmed realtime config_ready key=" .. tostring(confirmedKey))
 							pendingConfigReady = nil
+							if ITGOnline.ClearOptimisticConfigReady then
+								ITGOnline:ClearOptimisticConfigReady("config_ready_confirmed")
+							end
 						end
 					end,
 		      RetryOnlineConfigReadyCommand=function(self)
@@ -1802,6 +1814,9 @@ CreateOnlineHandler = function()
 								end
 
 								if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+								if ITGOnline.ClearOptimisticConfigReady then
+									ITGOnline:ClearOptimisticConfigReady("config_ready_failed")
+								end
 								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 								event="ready",
 								success=false,
@@ -1824,6 +1839,9 @@ CreateOnlineHandler = function()
 										self:sleep(0.25):queuecommand("RetryOnlineConfigReady")
 									else
 										if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+										if ITGOnline.ClearOptimisticConfigReady then
+											ITGOnline:ClearOptimisticConfigReady("config_ready_select_song_failed")
+										end
 									MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 										event="selectSong",
 										success=false,
@@ -1836,6 +1854,9 @@ CreateOnlineHandler = function()
 
 							if phase == "starting" or phase == "playing" or phase == "results" then
 								if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+								if ITGOnline.ClearOptimisticConfigReady then
+									ITGOnline:ClearOptimisticConfigReady("config_ready_phase_" .. tostring(phase))
+								end
 							elseif phase == "config" then
 								ITGOnline:SetReady("config_ready", true, function()
 									if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end

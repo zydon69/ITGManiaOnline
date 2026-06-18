@@ -108,6 +108,8 @@ ITGOnline.readyRequestBlockedRetrySeconds = ITGOnline.readyRequestBlockedRetrySe
 ITGOnline.readyRequestBlockedErrors = ITGOnline.readyRequestBlockedErrors or {}
 ITGOnline.configReadyInFlight = ITGOnline.configReadyInFlight or false
 ITGOnline.configReadyInFlightByKey = ITGOnline.configReadyInFlightByKey or {}
+ITGOnline.optimisticConfigReadyKey = ITGOnline.optimisticConfigReadyKey or ""
+ITGOnline.optimisticConfigReadyAt = ITGOnline.optimisticConfigReadyAt or 0
 ITGOnline.onlineOptionsReadyDeadlineKey = ITGOnline.onlineOptionsReadyDeadlineKey or ""
 ITGOnline.onlineOptionsReadyDeadlineAt = ITGOnline.onlineOptionsReadyDeadlineAt or 0
 ITGOnline.onlineOptionsReadyTimeoutInFlightKey = ITGOnline.onlineOptionsReadyTimeoutInFlightKey or ""
@@ -621,8 +623,19 @@ local function apply_authenticated_user_state(client, user)
 	client.sessionExpired = false
 end
 
+local function ready_flow_trace_message(message)
+	local text = tostring(message or "")
+	return text:match("^FLOW") ~= nil
+		or text:match("^ITG Online ReadyFlow") ~= nil
+		or text:match("^%[ITGOnline%] ready_") ~= nil
+		or text:match("^manager_auto_ready") ~= nil
+end
+
 function online_trace(message)
-	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
+	if not (ITGOnline and (
+		ITGOnline.debugOnlineTrace == true
+		or (ITGOnline.debugReadyFlow == true and ready_flow_trace_message(message))
+	)) then
 		return
 	end
 	local line = "ITG Online: " .. tostring(message or "")
@@ -641,7 +654,7 @@ function ITGOnline:RefreshDebugFlags(force)
 			["ITGOnlineDebug"] = {
 				["OnlineTrace"] = "false",
 				["ScoreTrace"] = "false",
-				["ReadyFlow"] = "false",
+				["ReadyFlow"] = "true",
 			}
 		})
 	end
@@ -651,10 +664,13 @@ function ITGOnline:RefreshDebugFlags(force)
 
 	self.debugOnlineTrace = parse_bool(section["OnlineTrace"], false)
 	self.debugScoreTrace = parse_bool(section["ScoreTrace"], false)
-	self.debugReadyFlow = parse_bool(section["ReadyFlow"], false)
+	self.debugReadyFlow = parse_bool(section["ReadyFlow"], true)
 end
 
 local function online_flow_trace(message)
+	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
+		return
+	end
 	local screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
 	local screenName = screen and screen:GetName() or "NoScreen"
 	local phase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
@@ -1868,6 +1884,47 @@ function ITGOnline:OnlineOptionsReadyKey()
 	return tostring(self.currentRoomId) .. "|" .. tostring(self.currentRoomRoundKey or "")
 end
 
+function ITGOnline:RoomOnlineOptionsReadyKey(room)
+	if not room then return "" end
+	local key = self:RoomSongRoundKey(room)
+	if key ~= "" then return key end
+	return tostring(room.id or self.currentRoomId or "") .. "|" .. tostring(self.currentRoomRoundKey or "")
+end
+
+function ITGOnline:SetOptimisticConfigReady(source)
+	local key = self.currentRoom and self:RoomOnlineOptionsReadyKey(self.currentRoom) or self:OnlineOptionsReadyKey()
+	if key == "" then return false end
+	if self.PlayStateKeyIsValid and not self:PlayStateKeyIsValid(key) then return false end
+	if self.currentRoom and self:NormalizeRoomPhase(self.currentRoom.phase) ~= "config" then return false end
+	if self.optimisticConfigReadyKey ~= key then
+		online_flow_trace("config_ready_optimistic_set source=" .. tostring(source or "unknown")
+			.. " key=" .. tostring(key))
+	end
+	self.optimisticConfigReadyKey = key
+	self.optimisticConfigReadyAt = GetTimeSinceStart()
+	if self.currentRoom then
+		MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
+	end
+	return true
+end
+
+function ITGOnline:ClearOptimisticConfigReady(source)
+	if self.optimisticConfigReadyKey ~= "" then
+		online_flow_trace("config_ready_optimistic_cleared source=" .. tostring(source or "unknown")
+			.. " key=" .. tostring(self.optimisticConfigReadyKey))
+	end
+	self.optimisticConfigReadyKey = ""
+	self.optimisticConfigReadyAt = 0
+end
+
+function ITGOnline:CurrentUserHasOptimisticConfigReady(room)
+	if not self.user or self.optimisticConfigReadyKey == "" then return false end
+	room = room or self.currentRoom
+	if not room then return false end
+	if self:NormalizeRoomPhase(room.phase) ~= "config" then return false end
+	return self.optimisticConfigReadyKey == self:RoomOnlineOptionsReadyKey(room)
+end
+
 function ITGOnline:ClearOnlineOptionsReadyDeadline(source)
 	if self.onlineOptionsReadyDeadlineKey ~= "" then
 		online_flow_trace("options_ready_deadline_cleared source=" .. tostring(source or "unknown")
@@ -2295,11 +2352,15 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	local normalizedRoomPhase = self:NormalizeRoomPhase(room.phase)
 	if normalizedRoomPhase ~= "config" then
 		self:ClearOnlineOptionsReadyDeadline("room_snapshot_" .. tostring(room.phase or "unknown"))
+		self:ClearOptimisticConfigReady("room_snapshot_" .. tostring(room.phase or "unknown"))
+	elseif self.optimisticConfigReadyKey ~= "" and self.optimisticConfigReadyKey ~= self:RoomOnlineOptionsReadyKey(room) then
+		self:ClearOptimisticConfigReady("room_snapshot_config_round_changed")
 	elseif self:IsCurrentUserReadyInRoom(room) then
 		local readyKey = self:OnlineOptionsReadyKey()
 		self.configReadyInFlight = false
 		self.configReadyInFlightByKey = {}
 		self:ClearOnlineOptionsReadyDeadline("room_snapshot_config_ready")
+		self:ClearOptimisticConfigReady("room_snapshot_config_ready")
 		if self.lastConfigReadySnapshotConfirmedKey ~= readyKey then
 			self.lastConfigReadySnapshotConfirmedKey = readyKey
 			online_flow_trace("config_ready_confirmed_by_snapshot source=" .. tostring(source or "unknown")
@@ -4927,6 +4988,9 @@ function ITGOnline:MarkConfigReady(callback)
 		online_flow_trace("config_ready_finish key=" .. tostring(requestKey)
 			.. " ok=" .. tostring(ok and true or false)
 			.. " error=" .. tostring((decoded and decoded.error_code) or (response and response.errorMessage) or ""))
+		if not ok then
+			self:ClearOptimisticConfigReady("config_ready_finish_failed")
+		end
 		local callbacks = pending and pending.callbacks or {}
 		for cb in ivalues(callbacks) do
 			cb(ok, decoded, response)
@@ -6001,6 +6065,7 @@ function ITGOnline:ClearCurrentRoomState(source)
 	self.currentRoomRoundKey = ""
 	self.lastResultSongPayload = nil
 	self.pendingJoinRoomId = nil
+	self:ClearOptimisticConfigReady(source or "clear_room")
 	self:ClearOnlineOptionsReadyDeadline(source or "clear_room")
 end
 
@@ -6510,11 +6575,16 @@ function ITGOnline:LobbyStatePayload(room)
 			elseif member.song_available == false or member.song_available == 0 then
 				songAvailable = false
 			end
+			local localOptimisticConfigReady = self.user
+				and tonumber(self.user.id) == tonumber(userId)
+				and self:CurrentUserHasOptimisticConfigReady(room)
+				and readyByUserId[userId] ~= true
 			players[#players + 1] = {
 				playerId = userId,
 				profileName = user_display_name(user, "Player " .. userId),
 				screenName = memberScreenName,
-				ready = readyByUserId[userId] == true,
+				ready = readyByUserId[userId] == true or localOptimisticConfigReady,
+				readyPendingServer = localOptimisticConfigReady,
 				missingSong = member.missing_song and true or false,
 				missingSongReason = member.missing_song_reason,
 				missingSongAt = member.missing_song_at,

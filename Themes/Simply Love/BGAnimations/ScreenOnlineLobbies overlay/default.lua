@@ -183,6 +183,83 @@ local function close_leave_confirm()
 	end
 end
 
+local function close_transient_joined_ui()
+	close_leave_confirm()
+	showing_player_action_menu = false
+	player_action_user = nil
+	player_action_options = {}
+	showing_private_join_prompt = false
+	private_join_request = nil
+	showing_pack_choice_menu = false
+	pack_choice_candidates = {}
+	pack_choice_song_info = nil
+	pack_choice_message = nil
+	showing_browse_pack_download_confirm = false
+	browse_pack_download_song_info = nil
+	showing_global_options_menu = false
+	joined_players_selected = false
+
+	if not t then return end
+	local names = {
+		"PlayerActionMenu",
+		"PrivateJoinPrompt",
+		"PackChoiceMenu",
+		"BrowsePackDownloadConfirmPrompt",
+		"GlobalOptionsMenu",
+		"LeaveConfirmPrompt",
+	}
+	for _, name in ipairs(names) do
+		local child = t:GetChild(name)
+		if child then child:visible(false) end
+	end
+end
+
+local function begin_leave_lobby(root)
+	if leaving_lobby then return end
+	leaving_lobby = true
+	mode = "browse"
+	list_selected = false
+	reset_browse_focus()
+	close_transient_joined_ui()
+	if root then
+		local joinedContent = root:GetChild("JoinedLobbyContent")
+		if joinedContent then joinedContent:visible(false) end
+		root:queuecommand("UpdateLobbyView")
+		root:playcommand("SetStatus", {
+			text="Sortie du salon...",
+			showSpinner=true,
+			showPrompt=false
+		})
+	end
+end
+
+local function finish_leave_lobby(root)
+	leaving_lobby = false
+	mode = "browse"
+	list_selected = false
+	reset_browse_focus()
+	close_transient_joined_ui()
+	reset_joined_lobby_state()
+	if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ResetLocalState then
+		ITGOnline.PackSync:ResetLocalState("lobby_left")
+	end
+	if root then
+		local joinedContent = root:GetChild("JoinedLobbyContent")
+		if joinedContent then joinedContent:visible(false) end
+		root:queuecommand("UpdateLobbyView")
+		root:queuecommand("UpdateOnlinePlayers")
+		local status = root:GetChild("NetworkStatus")
+		if status then status:visible(false) end
+		root:playcommand("SetStatus", {
+			text="Salon quitte.",
+			showSpinner=false,
+			showPrompt=false,
+			duration=3
+		})
+		root:queuecommand("Hover")
+	end
+end
+
 local function focus_selected_browse_list(root)
 	if not root then return end
 	if lobby_view == "players" then
@@ -210,6 +287,9 @@ local function lobby_debug(message)
 end
 
 local function lobby_flow_trace(message)
+	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
+		return
+	end
 	local line = "ITG Online: FLOW lobby_ui " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
@@ -1243,16 +1323,7 @@ local function handle_leave_confirm_input(event)
 					topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 				end
 			else
-				leaving_lobby = true
-				mode = "browse"
-				reset_browse_focus()
-				t:GetChild("JoinedLobbyContent"):visible(false)
-				t:queuecommand("UpdateLobbyView")
-				t:playcommand("SetStatus", {
-					text="Sortie du salon...",
-					showSpinner=true,
-					showPrompt=false
-				})
+				begin_leave_lobby(t)
 				MESSAGEMAN:Broadcast("LeaveLobby")
 			end
 		else
@@ -2387,6 +2458,10 @@ local af = Def.ActorFrame{
 			self:queuecommand("Hover")
 		end,
 		OnlineLobbyStateMessageCommand=function(self, params)
+			if leaving_lobby then
+				lobby_flow_trace("ignored_online_lobby_state reason=leaving_lobby code=" .. tostring(params and params.code or ""))
+				return
+			end
 			local previousLobbyCode = joined_lobby_code
 			local previousJoinedPhase = joined_phase
 			local previousSongConfirmed = joined_song_confirmed
@@ -2599,27 +2674,12 @@ local af = Def.ActorFrame{
 	OnlineLobbyLeftMessageCommand=function(self, params)
 		if params == nil or params.left == nil or params.left then
 			clear_pending_join()
-			leaving_lobby = false
-			close_leave_confirm()
-			if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ResetLocalState then
-				ITGOnline.PackSync:ResetLocalState("lobby_left")
-			end
-			mode = "browse"
-			reset_browse_focus()
-			reset_joined_lobby_state()
-			self:GetChild("JoinedLobbyContent"):visible(false)
-			self:queuecommand("UpdateLobbyView")
-			self:GetChild("NetworkStatus"):visible(false)
-			self:playcommand("SetStatus", {
-				text="Salon quitte.",
-				showSpinner=false,
-				showPrompt=false,
-				duration=3
-			})
-			self:queuecommand("Hover")
+			clear_pending_create()
+			finish_leave_lobby(self)
 		end
 	end,
 OnlinePrivateJoinRequestMessageCommand=function(self, params)
+	if leaving_lobby then return end
 	if not params or not params.join_request then return end
 	private_join_request = params
 	private_join_prompt_kind = "join_request"
@@ -2630,6 +2690,7 @@ OnlinePrivateJoinRequestMessageCommand=function(self, params)
 	self:queuecommand("UpdatePrivateJoinPrompt")
 end,
 OnlineRoomInvitationMessageCommand=function(self, params)
+	if leaving_lobby then return end
 	if not params or not params.invitation then return end
 	private_join_request = params
 	private_join_prompt_kind = "invitation"
@@ -2639,8 +2700,9 @@ OnlineRoomInvitationMessageCommand=function(self, params)
 	if prompt then prompt:visible(true) end
 	self:queuecommand("UpdatePrivateJoinPrompt")
 	end,
-	OnlineSongPreviewMessageCommand=function(self, params)
-		local preview = normalize_online_song_info(params)
+		OnlineSongPreviewMessageCommand=function(self, params)
+			if leaving_lobby then return end
+			local preview = normalize_online_song_info(params)
 		if preview then
 			joined_song_preview = preview
 			joined_song_confirmed = false
@@ -2653,15 +2715,18 @@ OnlineRoomInvitationMessageCommand=function(self, params)
 		end
 	end,
 	OnlinePackSyncReloadSongsMessageCommand=function(self)
+		if leaving_lobby then return end
 		transition_to_online_song_reload()
 	end,
 	OnlinePackSyncLocalStatusMessageCommand=function(self, params)
+		if leaving_lobby then return end
 		apply_local_pack_sync_status_to_joined_player(params)
 		normalize_joined_active_index()
 		self:queuecommand("UpdateJoinedLobbyText")
 		self:queuecommand("Hover")
 	end,
 	OnlinePackDownloadedMessageCommand=function(self, params)
+		if leaving_lobby then return end
 		if params and params.songInfo and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.MarkPackInstalled then
 			ITGOnline.PackSync:MarkPackInstalled(song_info_pack(params.songInfo))
 		end

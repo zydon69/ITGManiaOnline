@@ -6,29 +6,29 @@
 
 #include "Preference.h"
 
-static Preference<bool> g_bPerfDiagnostics("PerfDiagnostics", true);
+static Preference<bool> g_bPerfDiagnostics("PerfDiagnostics", false);
 static Preference<bool> g_bLogAudioUnderrunDiagnostics(
-    "LogAudioUnderrunDiagnostics", true);
+    "LogAudioUnderrunDiagnostics", false);
 static Preference<bool> g_bLogTextureUploadDiagnostics(
-    "LogTextureUploadDiagnostics", true);
+    "LogTextureUploadDiagnostics", false);
 static Preference<bool> g_bLogResourceSnapshotDiagnostics(
-    "LogResourceSnapshotDiagnostics", true);
+    "LogResourceSnapshotDiagnostics", false);
 static Preference<bool> g_bLogBackgroundDiagnostics(
-    "LogBackgroundDiagnostics", true);
+    "LogBackgroundDiagnostics", false);
 static Preference<bool> g_bLogPlayOnceDiagnostics(
-    "LogPlayOnceDiagnostics", true);
+    "LogPlayOnceDiagnostics", false);
 static Preference<bool> g_bLogNoteSkinDiagnostics(
-    "LogNoteSkinDiagnostics", true);
+    "LogNoteSkinDiagnostics", false);
 static Preference<bool> g_bLogInputDiagnostics(
-    "LogInputDiagnostics", true);
+    "LogInputDiagnostics", false);
 static Preference<bool> g_bLogMemoryCardDiagnostics(
-    "LogMemoryCardDiagnostics", true);
+    "LogMemoryCardDiagnostics", false);
 static Preference<bool> g_bLogContentLoadDiagnostics(
-    "LogContentLoadDiagnostics", true);
+    "LogContentLoadDiagnostics", false);
 static Preference<bool> g_bLogThemeLuaDiagnostics(
-    "LogThemeLuaDiagnostics", true);
+    "LogThemeLuaDiagnostics", false);
 static Preference<bool> g_bLogGlobalOffsetDiagnostics(
-    "LogGlobalOffsetDiagnostics", true);
+    "LogGlobalOffsetDiagnostics", false);
 
 static std::atomic<bool> g_bPerfDiagnosticsCached{false};
 static std::atomic<bool> g_bLogAudioUnderrunDiagnosticsCached{false};
@@ -68,6 +68,8 @@ static const bool g_bEnvLogGlobalOffset =
     EnvFlagEnabled("ITG_LOG_GLOBAL_OFFSET");
 static const bool g_bEnvLegacyTraceGlUploads =
     EnvFlagEnabled("ITG_TRACE_GL_UPLOADS");
+static const bool g_bEnvLegacyTraceResourceSnapshots =
+    EnvFlagEnabled("ITG_TRACE_RESOURCE_SNAPSHOTS");
 bool PerfDiagnosticsEnabled() {
   return g_bPerfDiagnosticsCached.load(std::memory_order_acquire);
 }
@@ -79,9 +81,8 @@ void RefreshPerfDiagnosticsPreferenceCache() {
       g_bLogAudioUnderrunDiagnostics.Get(), std::memory_order_release);
   g_bLogTextureUploadDiagnosticsCached.store(
       g_bLogTextureUploadDiagnostics.Get(), std::memory_order_release);
-  // Memory leak detection relies on these snapshots, so keep them enabled
-  // regardless of the preference value.
-  g_bLogResourceSnapshotDiagnosticsCached.store(true, std::memory_order_release);
+  g_bLogResourceSnapshotDiagnosticsCached.store(
+      g_bLogResourceSnapshotDiagnostics.Get(), std::memory_order_release);
   g_bLogBackgroundDiagnosticsCached.store(
       g_bLogBackgroundDiagnostics.Get(), std::memory_order_release);
   g_bLogPlayOnceDiagnosticsCached.store(
@@ -130,7 +131,11 @@ bool LogTextureUploadDiagnosticsEnabled() {
       g_bEnvLegacyTraceGlUploads);
 }
 
-bool LogResourceSnapshotDiagnosticsEnabled() { return true; }
+bool LogResourceSnapshotDiagnosticsEnabled() {
+  return CategoryEnabled(
+      g_bLogResourceSnapshotDiagnosticsCached, false,
+      g_bEnvLegacyTraceResourceSnapshots);
+}
 
 bool LogBackgroundDiagnosticsEnabled() {
   return CategoryEnabled(
