@@ -1512,6 +1512,12 @@ bool HandleGlobalInputs(const InputEventPlus& input) {
 void HandleInputEvents(float fDeltaTime) {
   INPUTFILTER->Update(fDeltaTime);
 
+  if (ArchHooks::UserQuit()) {
+    std::vector<InputEvent> ignoredEvents;
+    INPUTFILTER->GetInputEvents(ignoredEvents);
+    return;
+  }
+
   /* Hack: If the topmost screen hasn't been updated yet, don't process input,
    * since we must not send inputs to a screen that hasn't at least had one
    * update yet. (The first Update should be the very first thing a screen

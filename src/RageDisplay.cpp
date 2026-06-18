@@ -163,6 +163,7 @@ static bool FramePacingSwapLikelyBlocked(
 
 static uint64_t g_iFramePacerNextPresentUsec = 0;
 static uint64_t g_iFramePacerFrames = 0;
+static uint64_t g_iFramePacerLastPresentTraceUsec = 0;
 static uint64_t g_iFramePacerLastPlannedWaitUsec = 0;
 static uint64_t g_iFramePacerLastSleepUsec = 0;
 static uint64_t g_iFramePacerLastActualSleepUsec = 0;
@@ -2793,19 +2794,26 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
         g_iFramePacerLastWakeLateUsec < 0
             ? -g_iFramePacerLastWakeLateUsec
             : g_iFramePacerLastWakeLateUsec;
-    if (PerfDiagnosticsEnabled() &&
-        (absPresentLateUsec >= traceLateUsec ||
-         absWakeLateUsec >= traceLateUsec ||
-         g_iFramePacerLastSleepOvershootUsec >=
-             static_cast<uint64_t>(traceLateUsec) ||
-         skippedIntervals > 0 || hardResynced || phaseResynced ||
-         waitResynced ||
-         g_bFramePacerLastAdaptiveChanged ||
+    const bool shouldTraceFramePacing =
+        absPresentLateUsec >= traceLateUsec ||
+        absWakeLateUsec >= traceLateUsec ||
+        g_iFramePacerLastSleepOvershootUsec >=
+            static_cast<uint64_t>(traceLateUsec) ||
+        skippedIntervals > 0 || hardResynced || phaseResynced ||
+        waitResynced ||
+        g_bFramePacerLastAdaptiveChanged ||
 #ifdef __APPLE__
-         g_bFramePacerLastMacOSAdaptiveLeadChanged ||
+        g_bFramePacerLastMacOSAdaptiveLeadChanged ||
 #endif
-         g_iFramePacerFrames <= 5 ||
-         g_iFramePacerFrames % 240 == 0)) {
+        g_iFramePacerFrames <= 5 ||
+        g_iFramePacerFrames % 240 == 0;
+    const bool framePacingTraceRateLimited =
+        g_iFramePacerFrames > 5 && g_iFramePacerFrames % 240 != 0 &&
+        g_iFramePacerLastPresentTraceUsec != 0 &&
+        nowUsec - g_iFramePacerLastPresentTraceUsec < 250000;
+    if (PerfDiagnosticsEnabled() && shouldTraceFramePacing &&
+        !framePacingTraceRateLimited) {
+      g_iFramePacerLastPresentTraceUsec = nowUsec;
       LOG->Trace(
           "FRAME_PACING: present frame=%llu target_hz=%.3f "
           "base_margin_us=%llu effective_margin_us=%llu next_margin_us=%llu "

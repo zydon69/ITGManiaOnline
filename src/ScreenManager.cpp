@@ -98,6 +98,7 @@ static Preference<float> g_fPerfTraceSlowDrawBreakdownMs(
     "PerfTraceSlowDrawBreakdownMs", 16.0f);
 static Preference<float> g_fPerfTraceFirstUpdateHitchMs(
     "PerfTraceFirstUpdateHitchMs", 1000.0f);
+static uint64_t g_uLastDrawBreakdownTraceUsec = 0;
 // static Preference<bool> g_bPruneFonts( "PruneFonts", true );
 
 struct DrawBreakdownPerfBucket {
@@ -811,8 +812,12 @@ void ScreenManager::Draw() {
 
   const float traceThresholdMs =
       std::max(0.0f, g_fPerfTraceSlowDrawBreakdownMs.Get());
+  const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
   if (PerfDiagnosticsEnabled() && traceThresholdMs > 0.0f &&
-      totalDrawMs >= traceThresholdMs) {
+      totalDrawMs >= traceThresholdMs &&
+      (g_uLastDrawBreakdownTraceUsec == 0 ||
+       nowUsec - g_uLastDrawBreakdownTraceUsec >= 250000)) {
+    g_uLastDrawBreakdownTraceUsec = nowUsec;
     LOG->Trace(
         "PERF_TRACE: draw_breakdown total_ms=%.3f begin_frame_ms=%.3f "
         "shared_bga_ms=%.3f screen_ms=%.3f overlay_ms=%.3f end_frame_ms=%.3f "

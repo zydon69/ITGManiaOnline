@@ -29,6 +29,7 @@ static HDC g_HDC;
 static VideoModeParams g_CurrentParams;
 static bool g_bResolutionChanged = false;
 static bool g_bHasFocus = true;
+static bool g_bDestroyingWindow = false;
 static HICON g_hIcon = nullptr;
 static bool m_bWideWindowClass;
 static bool g_bD3D = false;
@@ -59,6 +60,18 @@ static std::string GetNewWindow() {
 static LRESULT CALLBACK
 GraphicsWindow_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   CHECKPOINT_M(ssprintf("%p, %u, %08x, %08x", hWnd, msg, wParam, lParam));
+
+  if (g_bDestroyingWindow) {
+    switch (msg) {
+      case WM_CLOSE:
+      case WM_KEYDOWN:
+      case WM_KEYUP:
+      case WM_SYSKEYDOWN:
+      case WM_SYSKEYUP:
+      case WM_MOUSEWHEEL:
+        return 0;
+    }
+  }
 
   // Suppress autorun.
   if (msg == g_iQueryCancelAutoPlayMessage) {
@@ -154,6 +167,9 @@ GraphicsWindow_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       return 0;
 
     case WM_CLOSE:
+      if (ArchHooks::UserQuit()) {
+        return 0;
+      }
       LOG->Trace("WM_CLOSE: shutting down");
       ArchHooks::SetUserQuit();
       return 0;
@@ -434,6 +450,8 @@ void GraphicsWindow::CreateGraphicsWindow(
 
 /** @brief Shut down the window, but don't reset the video mode. */
 void GraphicsWindow::DestroyGraphicsWindow() {
+  g_bDestroyingWindow = true;
+
   if (g_HDC != nullptr) {
     ReleaseDC(g_hWndMain, g_HDC);
     g_HDC = nullptr;
@@ -457,14 +475,21 @@ void GraphicsWindow::DestroyGraphicsWindow() {
   CHECKPOINT;
 
   MSG msg;
-  while (PeekMessage(&msg, nullptr, 0, 0, PM_NOREMOVE)) {
+  while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
     CHECKPOINT;
-    GetMessage(&msg, nullptr, 0, 0);
-    CHECKPOINT;
+    if (msg.message == WM_QUIT) {
+      break;
+    }
+    if (msg.message == WM_CLOSE || msg.message == WM_KEYDOWN ||
+        msg.message == WM_KEYUP || msg.message == WM_SYSKEYDOWN ||
+        msg.message == WM_SYSKEYUP || msg.message == WM_MOUSEWHEEL) {
+      continue;
+    }
     DispatchMessage(&msg);
   }
 
   CHECKPOINT;
+  g_bDestroyingWindow = false;
 }
 
 void GraphicsWindow::Initialize(bool bD3D) {
@@ -537,6 +562,10 @@ HDC GraphicsWindow::GetHDC() {
 const VideoModeParams& GraphicsWindow::GetParams() { return g_CurrentParams; }
 
 void GraphicsWindow::Update() {
+  if (ArchHooks::UserQuit()) {
+    return;
+  }
+
   MSG msg;
   while (PeekMessage(&msg, nullptr, 0, 0, PM_NOREMOVE)) {
     GetMessage(&msg, nullptr, 0, 0);

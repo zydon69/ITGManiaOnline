@@ -44,6 +44,8 @@ static Preference<int> g_iQuitAfterIdleSeconds("QuitAfterIdleSeconds", 0);
  * jumps on frame skips. 0 to disable. */
 static Preference<float> g_fConstantUpdateDeltaSeconds(
     "ConstantUpdateDeltaSeconds", 0);
+static Preference<float> g_fPerfTraceFrameMinIntervalSeconds(
+    "PerfTraceFrameMinIntervalSeconds", 1.0f);
 
 void HandleInputEvents(float fDeltaTime);
 
@@ -98,8 +100,12 @@ static std::string GetTopScreenNameForPerf() {
 }
 
 static bool PerfTraceRateLimit(uint64_t nowUsec) {
+  const uint64_t minIntervalUsec =
+      static_cast<uint64_t>(std::max(0.25f,
+                                     g_fPerfTraceFrameMinIntervalSeconds.Get()) *
+                            1000000.0f);
   if (g_LastLoopPerfTraceUsec != 0 &&
-      nowUsec - g_LastLoopPerfTraceUsec < 250000) {
+      nowUsec - g_LastLoopPerfTraceUsec < minIntervalUsec) {
     return false;
   }
 

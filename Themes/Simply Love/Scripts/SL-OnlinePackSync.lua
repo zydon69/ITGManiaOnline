@@ -19,6 +19,7 @@ PackSync.installedPackNames = PackSync.installedPackNames or {}
 PackSync.browsePreviewPackKey = PackSync.browsePreviewPackKey or ""
 PackSync.downloadedPackKey = PackSync.downloadedPackKey or ""
 PackSync.downloadGeneration = tonumber(PackSync.downloadGeneration) or 0
+PackSync.localScanCache = PackSync.localScanCache or {}
 
 PackSync.status = {
 	Unknown = "unknown",
@@ -394,6 +395,18 @@ local function song_count_key()
 	return tostring(#SONGMAN:GetAllSongs())
 end
 
+local function local_scan_key(songInfo)
+	if not songInfo then return "" end
+	return table.concat({
+		selected_at(songInfo),
+		selected_song_hash(songInfo),
+		selected_chart_hash(songInfo),
+		tostring(songInfo.chart_note_count or ""),
+		tostring(songInfo.max_score or ""),
+		song_count_key(),
+	}, "|")
+end
+
 local function build_payload(song, steps)
 	if ITGOnline and ITGOnline.BuildSongPayloadFor then
 		return ITGOnline:BuildSongPayloadFor(song, steps)
@@ -544,6 +557,22 @@ function PackSync:UpdateStatus(status, message, progress, callback)
 	end)
 end
 
+function PackSync:ApplyLocalStatus(status, message, progress)
+	status = tostring(status or self.status.Unknown)
+	message = status_message(message)
+	self.currentStatus = status
+	self.currentStatusMessage = message
+	self.statusChangedAt = GetTimeSinceStart()
+	if MESSAGEMAN then
+		MESSAGEMAN:Broadcast("OnlinePackSyncLocalStatus", {
+			status = status,
+			message = message,
+			download_progress = progress,
+			selected_at = selected_at(self.currentSongInfo),
+		})
+	end
+end
+
 function PackSync:WatchdogTick()
 	local status = tostring(self.currentStatus or self.status.Unknown)
 	if status == self.status.Unknown or status == self.status.Ready then
@@ -576,6 +605,17 @@ function PackSync:ResetLocalState(reason)
 		trace("Keep browse-only download state during no_song_confirmed reset")
 		return
 	end
+	if reason == "no_song_confirmed"
+		and self.currentSongInfo == nil
+		and self.currentStatus == self.status.Unknown
+		and self.currentStatusMessage == nil
+		and tostring(self.downloadInFlightKey or "") == ""
+		and self.pendingPostReloadSongInfo == nil
+		and self.activeBrowseOnlyDownload ~= true
+	then
+		trace("Reset local state skipped; already clear (" .. tostring(reason) .. ")")
+		return
+	end
 	if reason == "no_song_confirmed" and (
 		self.currentStatus == self.status.ManagerBrowsingUnknownPack
 		or self.currentStatus == self.status.DownloadRequested
@@ -593,6 +633,7 @@ function PackSync:ResetLocalState(reason)
 	self.watchdogLastKey = ""
 	self.sequence = 0
 	self.lastSelectedAt = ""
+	self.localScanCache = {}
 	self.browsePreviewPackKey = ""
 	self.downloadInFlightKey = nil
 	self.downloadStartedAt = nil
@@ -630,6 +671,7 @@ end
 function PackSync:InvalidateLocalChartIndex()
 	self.localChartIndex = nil
 	self.localChartIndexKey = nil
+	self.localScanCache = {}
 end
 
 function PackSync:LocalChartIndex()
@@ -697,6 +739,23 @@ function PackSync:FindLocalMatch(songInfo)
 	if trim(self.downloadInFlightKey) ~= "" or self.activeBrowseOnlyDownload == true then
 		trace("Skipping local chart status scan during active download title=" .. selected_title(songInfo))
 		return { ok = false, status = "download_in_progress", reason = "download_in_progress" }
+	end
+	local scanKey = local_scan_key(songInfo)
+	local cachedScan = self.localScanCache and self.localScanCache[scanKey] or nil
+	if cachedScan and cachedScan.ok == false then
+		trace("Local chart scan reused cached terminal result title=" .. selected_title(songInfo)
+			.. " status=" .. tostring(cachedScan.status)
+			.. " reason=" .. tostring(cachedScan.reason))
+		if cachedScan.status == "mismatch" then
+			self:ApplyLocalStatus(self.status.ChartMismatch, cachedScan.message)
+		else
+			self:ApplyLocalStatus(self.status.NoCompatibleChartFound, cachedScan.message)
+		end
+		return {
+			ok = false,
+			status = cachedScan.status,
+			reason = cachedScan.reason,
+		}
 	end
 	trace("Searching local charts title=" .. selected_title(songInfo) .. " pack=" .. selected_pack(songInfo))
 	self:UpdateStatus(self.status.SearchingLocalCharts, nil)
@@ -777,11 +836,14 @@ function PackSync:FindLocalMatch(songInfo)
 			and "La stepchart existe localement, mais l'audio differe de celui du manager."
 			or "La musique ou la stepchart trouvée est différente de celle du manager."
 		self:UpdateStatus(self.status.ChartMismatch, message)
+		self.localScanCache[scanKey] = { ok = false, status = "mismatch", reason = mismatchReason, message = message }
 		return { ok = false, status = "mismatch", reason = mismatchReason }
 	end
 
 	trace("No compatible chart found title=" .. selected_title(songInfo))
-	self:UpdateStatus(self.status.NoCompatibleChartFound, "Aucune stepchart identique à celle du manager n’a été trouvée.")
+	local message = "Aucune stepchart identique à celle du manager n’a été trouvée."
+	self:UpdateStatus(self.status.NoCompatibleChartFound, message)
+	self.localScanCache[scanKey] = { ok = false, status = "missing", reason = "no_compatible_chart_found", message = message }
 	return { ok = false, status = "missing", reason = "no_compatible_chart_found" }
 end
 
@@ -817,7 +879,8 @@ local function stepmaniaonline_origin()
 	return "https://stepmaniaonline.net"
 end
 
-local function request_json(url, callback)
+local function request_json(url, callback, options)
+	options = options or {}
 	NETWORK:HttpRequest({
 		url = url,
 		method = "GET",
@@ -830,7 +893,11 @@ local function request_json(url, callback)
 		onResponse = function(response)
 			local statusCode = tonumber(response and response.statusCode) or 0
 			if statusCode ~= 200 then
-				trace("HTTP JSON failed status=" .. tostring(statusCode) .. " url=" .. tostring(url))
+				if statusCode == 404 and options.expected404 == true then
+					trace("HTTP JSON not found (expected fallback) url=" .. tostring(url))
+				else
+					trace("HTTP JSON failed status=" .. tostring(statusCode) .. " url=" .. tostring(url))
+				end
 				callback(false, nil, response)
 				return
 			end
@@ -1145,7 +1212,7 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 				pack = pack,
 				songPath = selected_path(songInfo),
 			}, callback)
-		end)
+		end, { expected404 = true })
 	elseif pack ~= "" then
 		search("pack", pack, function(ok, decoded)
 			if not ok then

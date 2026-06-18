@@ -138,6 +138,29 @@ local function reset_browse_focus()
 	lobby_view = "lobbies"
 end
 
+local function reset_joined_lobby_state()
+	joined_active_index = 1
+	joined_is_manager = false
+	joined_phase = nil
+	joined_lobby_code = ""
+	joined_lobby_players = {}
+	joined_player_index = 1
+	joined_players_selected = false
+	joined_manager_user_id = nil
+	joined_song_preview = nil
+	joined_song_confirmed = false
+	joined_song_selected_key = ""
+	joined_missing_song = false
+	joined_missing_song_info = nil
+	joined_can_download_pack = false
+	joined_missing_song_reason = nil
+	joined_preview_unknown_pack = false
+	showing_global_options_menu = false
+	joined_global_options = { scoreMode="itg", musicRate=1.0 }
+	joined_focus_initialized = false
+	joined_user_moved_focus = false
+end
+
 local function open_leave_confirm(mode_name)
 	leave_confirm_mode = mode_name or "leave_lobby"
 	leave_confirm_index = 0
@@ -2583,8 +2606,7 @@ local af = Def.ActorFrame{
 			end
 			mode = "browse"
 			reset_browse_focus()
-			joined_lobby_code = ""
-			joined_lobby_players = {}
+			reset_joined_lobby_state()
 			self:GetChild("JoinedLobbyContent"):visible(false)
 			self:queuecommand("UpdateLobbyView")
 			self:GetChild("NetworkStatus"):visible(false)
