@@ -18,6 +18,7 @@ PackSync.activeBrowseOnlyDownload = PackSync.activeBrowseOnlyDownload or false
 PackSync.installedPackNames = PackSync.installedPackNames or {}
 PackSync.browsePreviewPackKey = PackSync.browsePreviewPackKey or ""
 PackSync.downloadedPackKey = PackSync.downloadedPackKey or ""
+PackSync.downloadGeneration = tonumber(PackSync.downloadGeneration) or 0
 
 PackSync.status = {
 	Unknown = "unknown",
@@ -80,6 +81,17 @@ local function current_user_is_active_room_member()
 		end
 	end
 	return false
+end
+
+function PackSync:NextDownloadGeneration(reason)
+	self.downloadGeneration = (tonumber(self.downloadGeneration) or 0) + 1
+	trace("Download generation advanced generation=" .. tostring(self.downloadGeneration)
+		.. " reason=" .. tostring(reason or "unknown"))
+	return self.downloadGeneration
+end
+
+function PackSync:IsDownloadGenerationCurrent(generation)
+	return tonumber(generation) == tonumber(self.downloadGeneration)
 end
 
 local function trim(value)
@@ -582,6 +594,15 @@ function PackSync:ResetLocalState(reason)
 	self.sequence = 0
 	self.lastSelectedAt = ""
 	self.browsePreviewPackKey = ""
+	self.downloadInFlightKey = nil
+	self.downloadStartedAt = nil
+	self.downloadLastByteAt = nil
+	self.downloadLastByteCount = nil
+	self.activeBrowseOnlyDownload = false
+	self.pendingPostReloadSongInfo = nil
+	self.pendingQuarantinePath = nil
+	self.pendingPostReloadBrowseOnly = false
+	self:NextDownloadGeneration(reason or "reset_local_state")
 	trace("Reset local state" .. (reason and (" (" .. tostring(reason) .. ")") or ""))
 end
 
@@ -1247,6 +1268,8 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	if existingDownloadKey == "" then
 		self.downloadInFlightKey = (browseOnly and "browse-candidate|" or "selected-candidate|") .. tostring(packId) .. "|" .. packName
 	end
+	local downloadGeneration = tonumber(options.downloadGeneration)
+		or self:NextDownloadGeneration(browseOnly and "browse_candidate_start" or "selected_candidate_start")
 	local fileName = tostring(packId) .. "_" .. safe_file_name(packName)
 	local quarantinePath = pack_quarantine_path(packId, packName)
 	local maxDownloadBytes = tonumber(self.maxDownloadBytes) or (512 * 1024 * 1024)
@@ -1262,6 +1285,12 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	local downloadCompleted = false
 
 	local function fail_candidate_download(message, broadcastMissing)
+		if not self:IsDownloadGenerationCurrent(downloadGeneration) then
+			trace("Download failure ignored reason=stale_generation pack=" .. tostring(packName)
+				.. " generation=" .. tostring(downloadGeneration)
+				.. " current=" .. tostring(self.downloadGeneration))
+			return
+		end
 		if downloadCompleted then return end
 		downloadCompleted = true
 		message = message or "Le téléchargement du pack a échoué."
@@ -1279,6 +1308,12 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	end
 
 	local function finish_candidate_download()
+		if not self:IsDownloadGenerationCurrent(downloadGeneration) then
+			trace("Download finish ignored reason=stale_generation pack=" .. tostring(packName)
+				.. " generation=" .. tostring(downloadGeneration)
+				.. " current=" .. tostring(self.downloadGeneration))
+			return false
+		end
 		if downloadCompleted then return false end
 		downloadCompleted = true
 		if callback then callback(true) end
@@ -1296,11 +1331,13 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		-- the post-download check will falsely report "file missing".
 		deleteDownloadAfterResponse = false,
 		onFileError = function(errorMessage)
+			if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
 			if downloadCompleted then return end
 			trace("Download file error pack=" .. tostring(packName) .. " err=" .. tostring(errorMessage))
 			fail_candidate_download("Erreur d'écriture du fichier téléchargé: " .. tostring(errorMessage or "unknown error"))
 		end,
 		onProgress = function(current, total)
+			if not self:IsDownloadGenerationCurrent(downloadGeneration) then return false end
 			if downloadCompleted then return false end
 			if not current_user_is_active_room_member() then
 				trace("Download aborted reason=not_active_room_member pack=" .. tostring(packName))
@@ -1341,6 +1378,12 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			return true
 		end,
 		onResponse = function(response)
+			if not self:IsDownloadGenerationCurrent(downloadGeneration) then
+				trace("Download response ignored reason=stale_generation pack=" .. tostring(packName)
+					.. " generation=" .. tostring(downloadGeneration)
+					.. " current=" .. tostring(self.downloadGeneration))
+				return
+			end
 			if downloadCompleted then return end
 			if not current_user_is_active_room_member() then
 				trace("Download response ignored reason=not_active_room_member pack=" .. tostring(packName))
@@ -1427,7 +1470,13 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 	end
 	if downloadKey == "" then downloadKey = tostring(songInfo) end
 	self.downloadInFlightKey = downloadKey
+	local downloadGeneration = self:NextDownloadGeneration("download_selected_search")
 	local function fail_download(message)
+		if not self:IsDownloadGenerationCurrent(downloadGeneration) then
+			trace("DownloadSelected failure ignored reason=stale_generation generation="
+				.. tostring(downloadGeneration) .. " current=" .. tostring(self.downloadGeneration))
+			return
+		end
 		self.downloadInFlightKey = nil
 		self.downloadStartedAt = nil
 		self.downloadLastByteAt = nil
@@ -1438,6 +1487,11 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 
 	self:UpdateStatus(self.status.DownloadRequested, nil)
 	self:SearchStepManiaOnline(songInfo, function(ok, pack, searchError)
+		if not self:IsDownloadGenerationCurrent(downloadGeneration) then
+			trace("DownloadSelected search result ignored reason=stale_generation generation="
+				.. tostring(downloadGeneration) .. " current=" .. tostring(self.downloadGeneration))
+			return
+		end
 		if not current_user_is_active_room_member() then
 			trace("DownloadSelectedPack cancelled after search reason=not_active_room_member")
 			fail_download("Vous n'etes plus dans le salon.")
@@ -1463,13 +1517,14 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 			return
 		end
 		self:DownloadPackByCandidate(songInfo, pack, function(downloadOk, downloadMessage)
+			if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
 			if downloadOk then
 				if callback then callback(true) end
 				return
 			end
 			self.downloadInFlightKey = nil
 			if callback then callback(false, downloadMessage or "Le téléchargement du pack a échoué.") end
-		end, { allowExistingDownloadKey = downloadKey })
+		end, { allowExistingDownloadKey = downloadKey, downloadGeneration = downloadGeneration })
 	end)
 end
 
@@ -1497,7 +1552,13 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 	if downloadKey == "browse|" then downloadKey = "browse|" .. tostring(songInfo) end
 
 	self.downloadInFlightKey = downloadKey
+	local downloadGeneration = self:NextDownloadGeneration("download_browsing_search")
 	local function fail_download(message)
+		if not self:IsDownloadGenerationCurrent(downloadGeneration) then
+			trace("DownloadBrowsing failure ignored reason=stale_generation generation="
+				.. tostring(downloadGeneration) .. " current=" .. tostring(self.downloadGeneration))
+			return
+		end
 		self.downloadInFlightKey = nil
 		self.activeBrowseOnlyDownload = false
 		self.downloadStartedAt = nil
@@ -1510,6 +1571,11 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 
 	self:UpdateStatus(self.status.DownloadRequested, nil)
 	self:SearchStepManiaOnline(songInfo, function(ok, pack, searchError)
+		if not self:IsDownloadGenerationCurrent(downloadGeneration) then
+			trace("DownloadBrowsing search result ignored reason=stale_generation generation="
+				.. tostring(downloadGeneration) .. " current=" .. tostring(self.downloadGeneration))
+			return
+		end
 		if not current_user_is_active_room_member() then
 			trace("DownloadBrowsingPack cancelled after search reason=not_active_room_member")
 			fail_download("Vous n'etes plus dans le salon.")
@@ -1536,6 +1602,7 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 			return
 		end
 		self:DownloadPackByCandidate(songInfo, pack, function(downloadOk, downloadMessage)
+			if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
 			if downloadOk then
 				if callback then callback(true) end
 				return
@@ -1543,7 +1610,7 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 			self.downloadInFlightKey = nil
 			self.activeBrowseOnlyDownload = false
 			if callback then callback(false, downloadMessage or "Le telechargement du pack a echoue.") end
-		end, { browseOnly = true, allowExistingDownloadKey = downloadKey })
+		end, { browseOnly = true, allowExistingDownloadKey = downloadKey, downloadGeneration = downloadGeneration })
 	end)
 end
 

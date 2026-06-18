@@ -16,7 +16,7 @@ local function online_gameplay_routes_back_to_lobby()
 	local phase = online_gameplay_phase()
 	return ITGOnline
 		and ITGOnline.currentRoomId
-		and (phase == "starting" or phase == "playing" or phase == "results")
+		and (phase == "starting" or phase == "playing")
 end
 
 local function route_online_gameplay_to_lobby()
@@ -64,6 +64,13 @@ local RestartHandler = function(event)
 	if not event then return end
 
 	if event.type == "InputEventType_FirstPress" then
+		if event.GameButton == "Back" and online_gameplay_phase() == "results" then
+			if online_gameplay_should_route_to_evaluation() then
+				route_online_gameplay_to_evaluation()
+			end
+			return true
+		end
+
 		if event.GameButton == "Back" and online_gameplay_routes_back_to_lobby() then
 			route_online_gameplay_to_lobby()
 			return true

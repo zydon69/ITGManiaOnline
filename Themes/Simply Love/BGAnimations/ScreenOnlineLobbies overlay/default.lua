@@ -1947,12 +1947,7 @@ local af = Def.ActorFrame{
 			local ready = player.ready and " ✔" or ""
 			local missing = ""
 			local packSyncText = pack_sync_line_for_player(player)
-			local packSyncStatus = trim_text(player.packSyncStatus)
 			if packSyncText ~= "" then
-				local progress = tonumber(player.packSyncDownloadProgress)
-				if progress and packSyncStatus == "download_in_progress" then
-					packSyncText = packSyncText .. " " .. tostring(progress) .. "%"
-				end
 				missing = " · " .. packSyncText
 			end
 			local optionParts = {}

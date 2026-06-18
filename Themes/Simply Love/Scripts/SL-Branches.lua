@@ -204,6 +204,32 @@ Branch.AfterGameplay = function()
 		online_trace("FLOW branch=AfterGameplay room=" .. tostring(ITGOnline.currentRoomId) .. " phase=" .. tostring(phase))
 	end
 
+	if ITGOnline and ITGOnline.currentRoomId then
+		local phase = ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
+		if ITGOnline.NormalizeRoomPhase then
+			phase = ITGOnline:NormalizeRoomPhase(phase)
+		end
+
+		if phase == "results" then
+			if ITGOnline.ShouldHoldGameplayForEvaluation and ITGOnline:ShouldHoldGameplayForEvaluation() then
+				return GAMESTATE:GetCurrentStyle()
+					and GAMESTATE:GetCurrentStyle():GetName() == "routine"
+					and "ScreenGameplayShared"
+					or "ScreenGameplay"
+			end
+
+			ITGOnline.onlineEvaluationExitRequested = false
+			local nextScreen = GAMESTATE:IsCourseMode() and "ScreenEvaluationNonstop" or "ScreenEvaluationStage"
+			if online_trace then
+				online_trace("FLOW branch=AfterGameplay room=" .. tostring(ITGOnline.currentRoomId)
+					.. " phase=" .. tostring(phase)
+					.. " next=" .. tostring(nextScreen)
+					.. " reason=online_results")
+			end
+			return nextScreen
+		end
+	end
+
 	if ITGOnline
 		and ITGOnline.currentRoomId
 		and ITGOnline.ShouldHoldGameplayForEvaluation
