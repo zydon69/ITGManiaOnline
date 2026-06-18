@@ -84,6 +84,7 @@ ITGOnline.processedRealtimeEventOrder = ITGOnline.processedRealtimeEventOrder or
 ITGOnline.processedRealtimeEventLimit = ITGOnline.processedRealtimeEventLimit or 512
 ITGOnline.deletedRoomIds = ITGOnline.deletedRoomIds or {}
 ITGOnline.leavingRoomIds = ITGOnline.leavingRoomIds or {}
+ITGOnline.ignoredRoomEventsUntil = ITGOnline.ignoredRoomEventsUntil or {}
 ITGOnline.needsSyncAfterScreenCancel = ITGOnline.needsSyncAfterScreenCancel or false
 ITGOnline.requestCancelGeneration = ITGOnline.requestCancelGeneration or 0
 ITGOnline.songLoadedAckKey = ITGOnline.songLoadedAckKey or ""
@@ -1508,6 +1509,7 @@ function ITGOnline:ResetRealtimeState()
 	self.processedRealtimeEventIds = {}
 	self.processedRealtimeEventOrder = {}
 	self.leavingRoomIds = {}
+	self.ignoredRoomEventsUntil = {}
 end
 
 function ITGOnline:RoomKey(roomId)
@@ -1531,6 +1533,25 @@ function ITGOnline:MarkLeavingRoom(roomId, leaving)
 	else
 		self.leavingRoomIds[key] = true
 	end
+end
+
+function ITGOnline:IgnoreRoomEvents(roomId, seconds)
+	local key = self:RoomKey(roomId)
+	if key == "" then return end
+	self.ignoredRoomEventsUntil = self.ignoredRoomEventsUntil or {}
+	self.ignoredRoomEventsUntil[key] = GetTimeSinceStart() + (tonumber(seconds) or 30)
+end
+
+function ITGOnline:ShouldIgnoreRoomEvents(roomId)
+	local key = self:RoomKey(roomId)
+	if key == "" then return false end
+	local untilTime = self.ignoredRoomEventsUntil and tonumber(self.ignoredRoomEventsUntil[key]) or nil
+	if not untilTime then return false end
+	if GetTimeSinceStart() <= untilTime then
+		return true
+	end
+	self.ignoredRoomEventsUntil[key] = nil
+	return false
 end
 
 function ITGOnline:CurrentRoomConflictCode(decoded, response)
@@ -2347,6 +2368,10 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	online_room_transition_trace(previousRoom, room, source)
 	if room.id then
 		self.deletedRoomIds[tostring(room.id)] = nil
+		self:MarkLeavingRoom(room.id, false)
+		if self.ignoredRoomEventsUntil then
+			self.ignoredRoomEventsUntil[self:RoomKey(room.id)] = nil
+		end
 	end
 	self:ApplyGlobalOptionsToLocalState(room, source)
 	local normalizedRoomPhase = self:NormalizeRoomPhase(room.phase)
@@ -5849,7 +5874,12 @@ end
 
 function ITGOnline:RequestJoinRoom(roomId, callback)
 	self.pendingJoinRoomId = roomId
-		self:Request("POST", "/rooms/" .. tostring(roomId) .. "/join", {}, function(ok, decoded, response)
+	local roomKey = self:RoomKey(roomId)
+	if roomKey ~= "" and self.ignoredRoomEventsUntil then
+		self.ignoredRoomEventsUntil[roomKey] = nil
+	end
+	self:MarkLeavingRoom(roomId, false)
+			self:Request("POST", "/rooms/" .. tostring(roomId) .. "/join", {}, function(ok, decoded, response)
 			if ok and decoded and decoded.room then
 				local room = self:ApplyRoomSnapshot(decoded.room, "join_room")
 				decoded.room = room or decoded.room
@@ -6055,8 +6085,14 @@ function ITGOnline:DeclineJoinRequest(joinRequestId, reason, callback)
 end
 
 function ITGOnline:ClearCurrentRoomState(source)
-	if self.currentRoomId then
-		self:MarkLeavingRoom(self.currentRoomId, false)
+	local previousRoomId = self.currentRoomId
+	if previousRoomId then
+		local sourceKey = tostring(source or "")
+		if sourceKey:find("leave_room", 1, true) or sourceKey:find("room_deleted", 1, true) then
+			self:IgnoreRoomEvents(previousRoomId, 30)
+		else
+			self:MarkLeavingRoom(previousRoomId, false)
+		end
 	end
 	self.currentRoomId = nil
 	self.currentRoom = nil
@@ -6075,8 +6111,18 @@ function ITGOnline:LeaveRoom(callback)
 		return
 	end
 	local roomId = self.currentRoomId
+	local roomKey = self:RoomKey(roomId)
+	self.leaveRoomCallbacksByRoomId = self.leaveRoomCallbacksByRoomId or {}
+	if self.leaveRoomCallbacksByRoomId[roomKey] then
+		if callback then
+			self.leaveRoomCallbacksByRoomId[roomKey][#self.leaveRoomCallbacksByRoomId[roomKey] + 1] = callback
+		end
+		return
+	end
+	self.leaveRoomCallbacksByRoomId[roomKey] = callback and { callback } or {}
 	self:CancelPendingRequests()
 	self:MarkLeavingRoom(roomId, true)
+	self:IgnoreRoomEvents(roomId, 30)
 	self:Request("POST", "/rooms/" .. tostring(roomId) .. "/leave", {}, function(ok, decoded, response)
 		local gone = response and (response.statusCode == 404 or response.statusCode == 410)
 		if ok or gone then
@@ -6089,7 +6135,11 @@ function ITGOnline:LeaveRoom(callback)
 		else
 			self:MarkLeavingRoom(roomId, false)
 		end
-		if callback then callback(ok or gone, decoded, response) end
+		local callbacks = self.leaveRoomCallbacksByRoomId and self.leaveRoomCallbacksByRoomId[roomKey] or {}
+		if self.leaveRoomCallbacksByRoomId then self.leaveRoomCallbacksByRoomId[roomKey] = nil end
+		for _, cb in ipairs(callbacks) do
+			cb(ok or gone, decoded, response)
+		end
 	end)
 end
 
@@ -6188,6 +6238,11 @@ end
 
 	local room_event_is_relevant = function(roomId)
 		local expected = self.currentRoomId or self.pendingJoinRoomId
+		if roomId and self:ShouldIgnoreRoomEvents(roomId) then
+			online_flow_trace("room_event_ignored reason=recently_left_room room=" .. tostring(roomId)
+				.. " event=" .. tostring(name))
+			return false
+		end
 		if not expected then return false end
 		if not roomId then return true end
 		if self:IsLeavingRoom(roomId) then
@@ -6222,17 +6277,16 @@ end
 			end
 
 			local reason = tostring(payload.reason or "")
-			self:LeaveRoom(function(ok)
-				if not ok then return end
-				MESSAGEMAN:Broadcast("OnlineLobbyLeft", {left=true})
-				MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-					event = "leaveLobby",
-					success = true,
-					message = reason == "pack_sync_timeout"
-						and "Vous avez ete ejecte du salon car le telechargement du pack n'a pas commence a temps."
-						or "Vous avez quitte le salon."
-				})
-			end)
+			self:IgnoreRoomEvents(roomId, 30)
+			self:ClearCurrentRoomState("room_left_event")
+			MESSAGEMAN:Broadcast("OnlineLobbyLeft", {left=true})
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = "leaveLobby",
+				success = true,
+				message = reason == "pack_sync_timeout"
+					and "Vous avez ete ejecte du salon car le telechargement du pack n'a pas commence a temps."
+					or "Vous avez quitte le salon."
+			})
 			return
 			elseif name == "lobby.updated" then
 				if self:ApplyLobbyPresencePayload(payload) then
@@ -6372,6 +6426,7 @@ end
 			if roomId then
 				local roomKey = tostring(roomId)
 				self.deletedRoomIds[roomKey] = true
+				self:IgnoreRoomEvents(roomId, 30)
 				if tostring(self.currentRoomId or "") == roomKey or tostring(self.pendingJoinRoomId or "") == roomKey then
 					self:ClearCurrentRoomState("room_deleted_event")
 					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(nil))

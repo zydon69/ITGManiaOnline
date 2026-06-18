@@ -1349,6 +1349,77 @@ end
 local onlineHandler = nil
 local onlineHandlerInstance = nil
 local onlineHandlerShuttingDown = false
+local onlineConnectionTimerNames = {
+	"RealtimeDeadmanTimer",
+	"OnlineHeartbeatTimer",
+	"ReconnectTimer",
+}
+local onlineRoomTimerNames = {
+	"OnlinePlayingCountdownTimer",
+	"OnlineGameplayStartTimer",
+	"PreviewInitialSongTimer",
+	"ReplayDeferredLobbyStateTimer",
+	"ConfigReadyRetryTimer",
+	"ManagerAutoReadyRetryTimer",
+}
+
+local function stop_named_timers(actor, names)
+	if not actor then return end
+	for _, name in ipairs(names) do
+		local timer = actor:GetChild(name)
+		if timer then timer:stoptweening() end
+	end
+end
+
+local function schedule_named_timer(actor, name, delay, command)
+	if not actor or onlineHandlerShuttingDown then return end
+	local timer = actor:GetChild(name)
+	delay = tonumber(delay) or 0
+	if timer then
+		timer:stoptweening()
+		timer:sleep(math.max(0, delay)):queuecommand(command)
+	else
+		actor:sleep(math.max(0, delay)):queuecommand(command)
+	end
+end
+
+local function start_connection_timers(actor)
+	if not actor or onlineHandlerShuttingDown then return end
+	schedule_named_timer(actor, "RealtimeDeadmanTimer", 1, "Fire")
+	schedule_named_timer(actor, "OnlineHeartbeatTimer", 5, "Fire")
+end
+
+local function stop_connection_timers(actor)
+	stop_named_timers(actor, onlineConnectionTimerNames)
+end
+
+local function start_room_timers(actor)
+	if not actor or onlineHandlerShuttingDown or actor.roomTimersActive then return end
+	actor.roomTimersActive = true
+	schedule_named_timer(actor, "OnlinePlayingCountdownTimer", 0.25, "Fire")
+end
+
+local function stop_room_timers(actor)
+	if not actor then return end
+	actor.roomTimersActive = false
+	stop_named_timers(actor, onlineRoomTimerNames)
+end
+
+local function clear_room_async_state(actor)
+	stop_room_timers(actor)
+	pendingConfigReady = nil
+	pendingManagerAutoReadyRetryKey = ""
+	pendingManagerAutoReadyRetryPhase = ""
+	pendingOnlineStartRoomId = nil
+	lastOnlineGameplayRoomId = nil
+	lastOnlineOptionsSongKey = ""
+	replayDeferredLobbyStateQueued = false
+	replayDeferredLobbyStateRunning = false
+	if actor then
+		actor.lastLobbyStatePayload = nil
+		actor.onlineStartReleaseQueued = false
+	end
+end
 
 GetOnlineHandlerInstance = function()
 	return onlineHandlerInstance
@@ -1369,27 +1440,26 @@ CreateOnlineHandler = function()
 					self.connecting = false
 					self.inLobby = false
 					self.errorMsg = nil
-					self.reconnectDelay = 1
-					self.deadmanTimeoutSeconds = 75
-					self.lastLobbyStatePayload = nil
-	      end,
-				OnCommand=function(self)
-					self:sleep(1):queuecommand("RealtimeDeadman")
-					self:sleep(5):queuecommand("OnlineHeartbeatTick")
-					self:sleep(0.25):queuecommand("OnlinePlayingCountdownTick")
-				end,
-			OffCommand=function(self)
-				onlineHandlerShuttingDown = true
-				remove_online_input_callbacks()
-				ITGOnline:Disconnect()
+						self.reconnectDelay = 1
+						self.deadmanTimeoutSeconds = 75
+						self.lastLobbyStatePayload = nil
+						self.roomTimersActive = false
+		      end,
+					OnCommand=function(self)
+						start_connection_timers(self)
+					end,
+				OffCommand=function(self)
+					onlineHandlerShuttingDown = true
+					clear_room_async_state(self)
+					stop_connection_timers(self)
+					remove_online_input_callbacks()
+					ITGOnline:Disconnect()
 				self.socket = nil
 				self.connected = false
 				self.connecting = false
 				self.inLobby = false
-				self.errorMsg = nil
-				replayDeferredLobbyStateQueued = false
-				replayDeferredLobbyStateRunning = false
-				local display = self:GetChild("Display")
+					self.errorMsg = nil
+					local display = self:GetChild("Display")
 				if display then
 					display:GetChild("Text"):settext("")
 				end
@@ -1401,9 +1471,7 @@ CreateOnlineHandler = function()
 					lastOnlineOptionsSongKey = ""
 					lastOnlineGameplayRoomId = nil
 					pendingOnlineStartRoomId = nil
-					pendingConfigReady = nil
-					self.lastLobbyStatePayload = nil
-					startHoldTime = { ["P1"] = 0, ["P2"] = 0 }
+						startHoldTime = { ["P1"] = 0, ["P2"] = 0 }
 					lastDisconnectCountdown = nil
 					self.joinLobbyBusy = false
 					self.createLobbyBusy = false
@@ -1432,9 +1500,10 @@ CreateOnlineHandler = function()
 									self:GetChild("Display"):visible(false)
 								if ITGOnline.Sync then
 									ITGOnline:Sync(function(ok, decoded)
-										if ok and decoded and decoded.current_room then
-											self.inLobby = true
-											ITGOnline:Heartbeat("in_room")
+											if ok and decoded and decoded.current_room then
+												self.inLobby = true
+												start_room_timers(self)
+												ITGOnline:Heartbeat("in_room")
 										elseif ITGOnline.CurrentRoomConflictCode
 											and ITGOnline:CurrentRoomConflictCode(decoded, nil) ~= "" then
 											self.inLobby = false
@@ -1460,13 +1529,12 @@ CreateOnlineHandler = function()
 								self.connecting = false
 								self.connected = false
 								self.socket = nil
-								self:GetChild("Display"):GetChild("Text"):settext("")
-								self:GetChild("Display"):visible(false)
-								if not ITGOnline.disconnecting then
-									self:stoptweening()
-									self:sleep(self.reconnectDelay or 1):queuecommand("ReconnectOnline")
-									self.reconnectDelay = math.min(30, (self.reconnectDelay or 1) * 2)
-								end
+									self:GetChild("Display"):GetChild("Text"):settext("")
+									self:GetChild("Display"):visible(false)
+									if not ITGOnline.disconnecting then
+										schedule_named_timer(self, "ReconnectTimer", self.reconnectDelay or 1, "Fire")
+										self.reconnectDelay = math.min(30, (self.reconnectDelay or 1) * 2)
+									end
 							end,
 						})
 	        end
@@ -1492,13 +1560,13 @@ CreateOnlineHandler = function()
 								event="websocket",
 								success=false,
 								message="Realtime connection timed out. Reconnecting..."
-							})
-							self:queuecommand("ReconnectOnline")
+								})
+								self:playcommand("ReconnectOnline")
+							end
 						end
-					end
 
-						self:sleep(1):queuecommand("RealtimeDeadman")
-					end,
+							schedule_named_timer(self, "RealtimeDeadmanTimer", 1, "Fire")
+						end,
 					OnlineHeartbeatTickCommand=function(self)
 						if onlineHandlerShuttingDown then return end
 						if ITGOnline and ITGOnline.RefreshDebugFlags then
@@ -1516,11 +1584,12 @@ CreateOnlineHandler = function()
 								ITGOnline:Heartbeat(status)
 							end
 
-						self:sleep(30):queuecommand("OnlineHeartbeatTick")
-					end,
-					OnlinePlayingCountdownTickCommand=function(self)
-						if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.WatchdogTick then
-							ITGOnline.PackSync:WatchdogTick()
+							schedule_named_timer(self, "OnlineHeartbeatTimer", 30, "Fire")
+						end,
+						OnlinePlayingCountdownTickCommand=function(self)
+							if onlineHandlerShuttingDown or not self.roomTimersActive then return end
+							if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.WatchdogTick then
+								ITGOnline.PackSync:WatchdogTick()
 						end
 						if not onlineHandlerShuttingDown and self.inLobby and self.lastLobbyStatePayload then
 							local screen = SCREENMAN:GetTopScreen()
@@ -1529,11 +1598,11 @@ CreateOnlineHandler = function()
 								DisplayLobbyState(self.lastLobbyStatePayload, self)
 							end
 						end
-						if ITGOnline and ITGOnline.FlushLiveScore then
-							ITGOnline:FlushLiveScore()
-						end
-						self:sleep(0.25):queuecommand("OnlinePlayingCountdownTick")
-					end,
+							if ITGOnline and ITGOnline.FlushLiveScore then
+								ITGOnline:FlushLiveScore()
+							end
+							schedule_named_timer(self, "OnlinePlayingCountdownTimer", 0.25, "Fire")
+						end,
 					OnlineScoreSnapshotMessageCommand=function(self, params)
 						if onlineHandlerShuttingDown then return end
 						if not (ITGOnline and ITGOnline.RememberLiveScoreSnapshot and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
@@ -1577,9 +1646,9 @@ CreateOnlineHandler = function()
 								return
 							end
 
-						self.onlineStartReleaseQueued = true
-						self:sleep(seconds and math.min(math.max(seconds, 0.05), 0.25) or 0.25):queuecommand("ReleaseOnlineGameplayAtStart")
-					end,
+							self.onlineStartReleaseQueued = true
+							schedule_named_timer(self, "OnlineGameplayStartTimer", seconds and math.min(math.max(seconds, 0.05), 0.25) or 0.25, "Fire")
+						end,
 	      ScreenChangedMessageCommand=function(self)
 					local screen = SCREENMAN:GetTopScreen()
 					local screenName = screen and screen:GetName() or "NoScreen"
@@ -1689,13 +1758,13 @@ CreateOnlineHandler = function()
 							and tostring(ITGOnline.currentRoom.phase or "") == "lobby_ready" then
 							maybe_set_lobby_ready("screen_select_music")
 						end
-					if screenName == "ScreenSelectMusic" then
-						self:sleep(0.25):queuecommand("PreviewInitialOnlineSong")
-					end
-					if not replayDeferredLobbyStateQueued then
-						replayDeferredLobbyStateQueued = true
-						self:sleep(0.05):queuecommand("ReplayDeferredLobbyState")
-					end
+						if screenName == "ScreenSelectMusic" then
+							schedule_named_timer(self, "PreviewInitialSongTimer", 0.25, "Fire")
+						end
+						if not replayDeferredLobbyStateQueued then
+							replayDeferredLobbyStateQueued = true
+							schedule_named_timer(self, "ReplayDeferredLobbyStateTimer", 0.05, "Fire")
+						end
 					MESSAGEMAN:Broadcast("UpdateMachineState")
 		      end,
 					ReplayDeferredLobbyStateCommand=function(self)
@@ -1806,12 +1875,12 @@ CreateOnlineHandler = function()
 								if ok then
 									if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
 									return
-								end
+									end
 
-								if response and response.retryAfter then
-									self:sleep(response.retryAfter):queuecommand("RetryOnlineConfigReady")
-									return
-								end
+									if response and response.retryAfter then
+										schedule_named_timer(self, "ConfigReadyRetryTimer", response.retryAfter, "Fire")
+										return
+									end
 
 								if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
 								if ITGOnline.ClearOptimisticConfigReady then
@@ -1826,18 +1895,18 @@ CreateOnlineHandler = function()
 						return
 					end
 
-					ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok, decoded)
-							if not ok or not decoded or not decoded.room then
-								self:sleep(1):queuecommand("RetryOnlineConfigReady")
-								return
-						end
+						ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok, decoded)
+								if not ok or not decoded or not decoded.room then
+									schedule_named_timer(self, "ConfigReadyRetryTimer", 1, "Fire")
+									return
+							end
 
 						local phase = decoded.room.phase
-						if not decoded.room.selected_song then
-							ITGOnline:SelectSong(function(selectOk, selectDecoded, selectResponse)
-									if selectOk then
-										self:sleep(0.25):queuecommand("RetryOnlineConfigReady")
-									else
+							if not decoded.room.selected_song then
+								ITGOnline:SelectSong(function(selectOk, selectDecoded, selectResponse)
+										if selectOk then
+											schedule_named_timer(self, "ConfigReadyRetryTimer", 0.25, "Fire")
+										else
 										if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
 										if ITGOnline.ClearOptimisticConfigReady then
 											ITGOnline:ClearOptimisticConfigReady("config_ready_select_song_failed")
@@ -1866,10 +1935,10 @@ CreateOnlineHandler = function()
 									end
 								end)
 							end)
-						elseif phase == "lobby" or phase == "lobby_ready" then
-							ITGOnline:SetReady("lobby_ready", true, function()
-								self:sleep(0.5):queuecommand("RetryOnlineConfigReady")
-							end)
+							elseif phase == "lobby" or phase == "lobby_ready" then
+								ITGOnline:SetReady("lobby_ready", true, function()
+									schedule_named_timer(self, "ConfigReadyRetryTimer", 0.5, "Fire")
+								end)
 						else
 							if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
 						end
@@ -1877,8 +1946,9 @@ CreateOnlineHandler = function()
 	      end,
 					OnlineSessionExpiredMessageCommand=function(self)
 						self.connected = false
-					self.inLobby = false
-					self.socket = nil
+						self.inLobby = false
+						clear_room_async_state(self)
+						self.socket = nil
 					isWaiting = false
 					for player in ivalues(PlayerNumber) do
 						SCREENMAN:set_input_redirected(player, false)
@@ -1890,19 +1960,18 @@ CreateOnlineHandler = function()
 					})
 				end,
 				OnlineLobbyStateMessageCommand=function(self, params)
-					if self.connected and params and params.roomId then
-						self.inLobby = true
-						params.__receivedLocalTime = GetTimeSinceStart()
-						self.lastLobbyStatePayload = params
-						DisplayLobbyState(params, self)
+						if self.connected and params and params.roomId then
+							self.inLobby = true
+							start_room_timers(self)
+							params.__receivedLocalTime = GetTimeSinceStart()
+							self.lastLobbyStatePayload = params
+							DisplayLobbyState(params, self)
 					end
 				end,
-				OnlineLobbyLeftMessageCommand=function(self)
-					self.inLobby = false
-					self.lastLobbyStatePayload = nil
-					replayDeferredLobbyStateQueued = false
-					replayDeferredLobbyStateRunning = false
-				end,
+					OnlineLobbyLeftMessageCommand=function(self)
+						self.inLobby = false
+						clear_room_async_state(self)
+					end,
 				SongSelectedMessageCommand=function(self)
 					SelectOnlineSongAsManager(self)
 				end,
@@ -1916,11 +1985,11 @@ CreateOnlineHandler = function()
 					retryAfter = math.min(math.max(retryAfter + 0.05, 0.05), 5)
 					pendingManagerAutoReadyRetryKey = key
 					pendingManagerAutoReadyRetryPhase = readyPhase
-					online_flow_trace("manager_auto_ready_retry_scheduled key=" .. tostring(key)
-						.. " phase=" .. tostring(readyPhase)
-						.. " retry_after=" .. tostring(retryAfter))
-					self:sleep(retryAfter):queuecommand("RetryOnlineManagerAutoReady")
-				end,
+						online_flow_trace("manager_auto_ready_retry_scheduled key=" .. tostring(key)
+							.. " phase=" .. tostring(readyPhase)
+							.. " retry_after=" .. tostring(retryAfter))
+						schedule_named_timer(self, "ManagerAutoReadyRetryTimer", retryAfter, "Fire")
+					end,
 				RetryOnlineManagerAutoReadyCommand=function(self)
 					local key = pendingManagerAutoReadyRetryKey
 					local readyPhase = pendingManagerAutoReadyRetryPhase ~= "" and pendingManagerAutoReadyRetryPhase or "lobby_ready"
@@ -2235,15 +2304,17 @@ CreateOnlineHandler = function()
 					end)
 				end
 			end,
-				LeaveLobbyMessageCommand=function(self)
-					if self.connected and self.socket ~= nil then
-						if self.leaveLobbyBusy then return end
-						self.leaveLobbyBusy = true
-						ITGOnline:LeaveRoom(function(ok, decoded, response)
-							self.leaveLobbyBusy = false
-							if ok then
-							self.inLobby = false
-							MESSAGEMAN:Broadcast("OnlineLobbyLeft", {left=true})
+					LeaveLobbyMessageCommand=function(self)
+						if self.connected and self.socket ~= nil then
+							if self.leaveLobbyBusy then return end
+							self.leaveLobbyBusy = true
+							clear_room_async_state(self)
+							ITGOnline:LeaveRoom(function(ok, decoded, response)
+								self.leaveLobbyBusy = false
+								if ok then
+								self.inLobby = false
+								clear_room_async_state(self)
+								MESSAGEMAN:Broadcast("OnlineLobbyLeft", {left=true})
 						else
 							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 								event="leaveLobby",
@@ -2255,20 +2326,20 @@ CreateOnlineHandler = function()
 				end
 			end,
 	      DisconnectOnlineMessageCommand=function(self, params)
-				local shouldLeaveRoom = params and params.leaveRoom and self.inLobby
-				local finalize = function()
-					onlineHandlerShuttingDown = true
-					isWaiting = false
-					ITGOnline:Disconnect()
+					local shouldLeaveRoom = params and params.leaveRoom and self.inLobby
+					local finalize = function()
+						onlineHandlerShuttingDown = true
+						clear_room_async_state(self)
+						stop_connection_timers(self)
+						isWaiting = false
+						ITGOnline:Disconnect()
 					for player in ivalues(PlayerNumber) do
 						SCREENMAN:set_input_redirected(player, false)
 					end
 					self.connected = false
 					self.inLobby = false
 					self.socket = nil
-					replayDeferredLobbyStateQueued = false
-					replayDeferredLobbyStateRunning = false
-					self:GetChild("Display"):GetChild("Text"):settext("")
+						self:GetChild("Display"):GetChild("Text"):settext("")
 					self:GetChild("Display"):visible(false)
 				end
 
@@ -2280,10 +2351,47 @@ CreateOnlineHandler = function()
 				end
 
 					finalize()
-	      end,
+				end,
 
-		      Def.Actor{
-		        Name="OnlineStartPollTimer",
+					Def.Actor{
+						Name="RealtimeDeadmanTimer",
+						FireCommand=function(self) self:GetParent():playcommand("RealtimeDeadman") end,
+					},
+					Def.Actor{
+						Name="OnlineHeartbeatTimer",
+						FireCommand=function(self) self:GetParent():playcommand("OnlineHeartbeatTick") end,
+					},
+					Def.Actor{
+						Name="ReconnectTimer",
+						FireCommand=function(self) self:GetParent():playcommand("ReconnectOnline") end,
+					},
+					Def.Actor{
+						Name="OnlinePlayingCountdownTimer",
+						FireCommand=function(self) self:GetParent():playcommand("OnlinePlayingCountdownTick") end,
+					},
+					Def.Actor{
+						Name="OnlineGameplayStartTimer",
+						FireCommand=function(self) self:GetParent():playcommand("ReleaseOnlineGameplayAtStart") end,
+					},
+					Def.Actor{
+						Name="PreviewInitialSongTimer",
+						FireCommand=function(self) self:GetParent():playcommand("PreviewInitialOnlineSong") end,
+					},
+					Def.Actor{
+						Name="ReplayDeferredLobbyStateTimer",
+						FireCommand=function(self) self:GetParent():playcommand("ReplayDeferredLobbyState") end,
+					},
+					Def.Actor{
+						Name="ConfigReadyRetryTimer",
+						FireCommand=function(self) self:GetParent():playcommand("RetryOnlineConfigReady") end,
+					},
+					Def.Actor{
+						Name="ManagerAutoReadyRetryTimer",
+						FireCommand=function(self) self:GetParent():playcommand("RetryOnlineManagerAutoReady") end,
+					},
+
+			      Def.Actor{
+			        Name="OnlineStartPollTimer",
 	        PollCommand=function(self)
 						local actor = self:GetParent()
 						local roomId = pendingOnlineStartRoomId
