@@ -616,7 +616,14 @@ function lobby_room_summary(prefix, params)
 	params = type(params) == "table" and params or {}
 	local players = params.players or params.members or {}
 	local readyStates = params.readyStates or params.ready_states or {}
-	local song = params.song or params.selectedSong or params.selected_song or {}
+	local payloadSong = params.songInfo
+		or params.song_info
+		or params.songPreview
+		or params.song_preview
+		or params.selectedSong
+		or params.selected_song
+		or params.song
+		or {}
 	local readyParts = {}
 	local readyPlayers = 0
 	for _, player in pairs(players or {}) do
@@ -628,11 +635,17 @@ function lobby_room_summary(prefix, params)
 				.. "=" .. tostring(ready and "1" or player.readyPendingServer and "pending" or "0")
 		end
 	end
-	local songTitle = song.title or song.name or song.folder_name or song.song_hash or "none"
-	local selectedSongPresent = type(song) == "table" and next(song) ~= nil
-	local songConfirmed = params.songConfirmed == true
+	local payloadSongPresent = type(payloadSong) == "table" and next(payloadSong) ~= nil
+	local uiPreviewPresent = type(joined_song_preview) == "table" and next(joined_song_preview) ~= nil
+	local songTitle = payloadSong.title
+		or payloadSong.name
+		or payloadSong.folder_name
+		or payloadSong.song_hash
+		or (joined_song_preview and (joined_song_preview.title or joined_song_preview.name or joined_song_preview.folder_name or joined_song_preview.song_hash))
+		or "none"
+	local songConfirmedFlag = params.songConfirmed == true
 		or params.song_confirmed == true
-		or selectedSongPresent
+		or payloadSongPresent
 	lobby_flow_trace(tostring(prefix or "room_state")
 		.. " mode=" .. tostring(mode)
 		.. " joined_code=" .. tostring(joined_lobby_code)
@@ -643,8 +656,10 @@ function lobby_room_summary(prefix, params)
 		.. " readyStatesRaw=" .. tostring(lobby_count(readyStates))
 		.. " readyPlayers=" .. tostring(readyPlayers) .. "/" .. tostring(lobby_count(players))
 		.. " ready={" .. table.concat(readyParts, ",") .. "}"
-		.. " selectedSongPresent=" .. tostring(selectedSongPresent == true)
-		.. " songConfirmed=" .. tostring(songConfirmed == true)
+		.. " payloadSongPresent=" .. tostring(payloadSongPresent == true)
+		.. " uiPreviewPresent=" .. tostring(uiPreviewPresent == true)
+		.. " songConfirmedFlag=" .. tostring(songConfirmedFlag == true)
+		.. " currentJoinedSongConfirmed=" .. tostring(joined_song_confirmed == true)
 		.. " songTitle=" .. tostring(songTitle)
 		.. " leaving=" .. tostring(leaving_lobby == true)
 		.. " screenGeneration=" .. tostring(ITGOnline and ITGOnline.screenGeneration or "nil"))

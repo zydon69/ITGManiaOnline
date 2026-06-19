@@ -5233,6 +5233,28 @@ function ITGOnline:HandleRoomNotPlayingScoreReject(final, decoded)
 	end
 end
 
+function ITGOnline:CurrentUserHasFinalResult(room)
+	room = room or self.currentRoom
+	local userId = self.LocalUserId and self:LocalUserId() or tostring(self.user and self.user.id or "")
+	if userId == "" then return false end
+
+	local playState = room and room.play_state or {}
+	for key, result in pairs(playState.final_results or room and room.final_results or {}) do
+		if tostring(key or "") == userId then
+			return true
+		end
+		if type(result) == "table" then
+			local user = result.user or result.player or {}
+			local resultUserId = tostring(user.id or result.user_id or result.player_id or result.playerId or "")
+			if resultUserId == userId then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
 function ITGOnline:SendScore(force, final, snapshot, callback)
 	local finish = function(ok, decoded, response, meta)
 		if callback then callback(ok, decoded, response, meta or {}) end
@@ -5253,13 +5275,15 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	local roundKey = self.PlayStateKey and self:PlayStateKey() or tostring(self.currentRoomId or "")
 	local validRoundKey = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)
 	if roomPhase ~= "playing" then
-		if final and roomPhase == "results" then
+		if final and (roomPhase == "results" or self:CurrentUserHasFinalResult(self.currentRoom)) then
 			if validRoundKey and self.lastFinalScoreKey ~= roundKey then
 				self.lastFinalScoreKey = roundKey
 			end
-			online_flow_trace("final_score_skipped reason=room_already_results"
+			online_flow_trace("final_score_skipped reason=already_terminal_results"
 				.. " room=" .. tostring(self.currentRoomId)
-				.. " roundKey=" .. tostring(roundKey))
+				.. " roundKey=" .. tostring(roundKey)
+				.. " roomPhase=" .. tostring(roomPhase)
+				.. " hasFinalResult=" .. tostring(self:CurrentUserHasFinalResult(self.currentRoom) == true))
 			finish(true, nil, nil, { alreadyAccepted = true, roomPhase = roomPhase })
 			return
 		end
@@ -5513,6 +5537,28 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		end
 	end
 
+	local latestRoomPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase or roomPhase)
+	if final and (latestRoomPhase == "results" or self:CurrentUserHasFinalResult(self.currentRoom)) then
+		if validRoundKey then
+			self.lastFinalScoreKey = roundKey
+			self.lastFinalScoreInFlightKey = ""
+		end
+		online_flow_trace("final_score_skipped reason=already_terminal_results"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " roundKey=" .. tostring(roundKey)
+			.. " roomPhase=" .. tostring(latestRoomPhase)
+			.. " hasFinalResult=" .. tostring(self:CurrentUserHasFinalResult(self.currentRoom) == true)
+			.. " stage=before_post")
+		finish(true, nil, nil, {
+			failed = outgoingFailed,
+			roundKey = roundKey,
+			final = true,
+			alreadyAccepted = true,
+			roomPhase = latestRoomPhase,
+		})
+		return
+	end
+
 	self.scoreInFlightFingerprint = scoreFingerprint
 	if final and validRoundKey then
 		self.lastFinalScoreInFlightKey = roundKey
@@ -5579,7 +5625,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 			self.onlineGameplayEvaluationNextRetryAt = 0
 			self.onlineGameplayEvaluationTerminalErrorKey = ""
 			self:HandleRoomNotPlayingScoreReject(final, decoded)
-			online_flow_trace("final_score_treated_as_terminal_sync reason=room_not_playing"
+			online_flow_trace("final_score_terminal_race_accepted reason=room_not_playing"
 				.. " room=" .. tostring(self.currentRoomId or "")
 				.. " roundKey=" .. tostring(roundKey)
 				.. " serverPhase=" .. tostring(decoded and decoded.room_phase or "nil"))
