@@ -2424,7 +2424,10 @@ local partialRoomSnapshotSources = {
 local function source_can_be_partial_room_snapshot(source)
 	local value = tostring(source or "")
 	return partialRoomSnapshotSources[value] == true
-		or value:find("realtime_room_event:room.member_", 1, true) == 1
+		or value == "realtime_room_event:room.member_pack_sync_updated"
+		or value == "realtime_room_event:room.member_song_availability_updated"
+		or value == "member_room_refresh:room.member_pack_sync_updated"
+		or value == "member_room_refresh:room.member_song_availability_updated"
 end
 
 local function merge_room_array_by_user_id(previousItems, incomingItems, userIdFn)
@@ -2453,6 +2456,50 @@ local function merge_room_array_by_user_id(previousItems, incomingItems, userIdF
 	end
 
 	return merged
+end
+
+local roomPhaseProgressionOrder = {
+	lobby = 1,
+	lobby_ready = 2,
+	config = 3,
+	starting = 4,
+	playing = 5,
+	results = 6,
+}
+
+local roomPhaseRegressionSources = {
+	song_selection_cancelled = true,
+	["realtime_room_event:room.song_selection_cancelled"] = true,
+	["realtime_room_event_fetch:room.song_selection_cancelled"] = true,
+	load_timeout = true,
+	["realtime_room_event:room.load_timeout"] = true,
+	["realtime_room_event_fetch:room.load_timeout"] = true,
+	fetch_room = true,
+	fetch_current_room = true,
+	sync_current_room = true,
+}
+
+local function source_allows_room_phase_regression(source)
+	return roomPhaseRegressionSources[tostring(source or "")] == true
+end
+
+function ITGOnline:RoomSnapshotRegressesPhase(previousRoom, incomingRoom, source)
+	if type(previousRoom) ~= "table" or type(incomingRoom) ~= "table" then return false end
+	if tonumber(previousRoom.id or -1) ~= tonumber(incomingRoom.id or -2) then return false end
+	if source_allows_room_phase_regression(source) then return false end
+
+	local previousPhase = self:NormalizeRoomPhase(previousRoom.phase)
+	local incomingPhase = self:NormalizeRoomPhase(incomingRoom.phase)
+	local previousOrder = roomPhaseProgressionOrder[previousPhase]
+	local incomingOrder = roomPhaseProgressionOrder[incomingPhase]
+	if not previousOrder or not incomingOrder then return false end
+	if incomingOrder >= previousOrder then return false end
+
+	local previousKey = tostring(self:RoomSongRoundKey(previousRoom) or "")
+	local incomingKey = tostring(self:RoomSongRoundKey(incomingRoom) or "")
+	if previousKey ~= "" and incomingKey ~= "" and previousKey ~= incomingKey then return false end
+
+	return true
 end
 
 function ITGOnline:NormalizeRoomSnapshot(room, previousRoom, source)
@@ -2493,6 +2540,15 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	if not room then return nil end
 	local previousRoom = self.currentRoom
 	room = self:NormalizeRoomSnapshot(room, previousRoom, source)
+	if previousRoom and self:RoomSnapshotRegressesPhase(previousRoom, room, source) then
+		online_flow_trace("ignored_regressive_room_snapshot source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(room.id or "")
+			.. " previous_phase=" .. tostring(self:NormalizeRoomPhase(previousRoom.phase))
+			.. " incoming_phase=" .. tostring(self:NormalizeRoomPhase(room.phase))
+			.. " previous_key=" .. tostring(self:RoomSongRoundKey(previousRoom) or "")
+			.. " incoming_key=" .. tostring(self:RoomSongRoundKey(room) or ""))
+		return self.currentRoom
+	end
 	if previousRoom and self:RoomSnapshotIsStale(previousRoom, room) then
 		local previousKey = self:RoomSongRoundKey(previousRoom)
 		if previousKey == "" then
