@@ -134,6 +134,30 @@ function ScreenOnlineLobbiesApplyCurrentRoomSnapshot(root, reason)
 	return true
 end
 
+function ScreenOnlineLobbiesRemoveLobbyCandidateByCode(code)
+	code = tostring(code or "")
+	if code == "" or type(candidates) ~= "table" then
+		return false
+	end
+
+	local filtered = {}
+	local removed = false
+	for _, room in ipairs(candidates) do
+		local roomCode = tostring(room and (room.code or room.id) or "")
+		if roomCode == code then
+			removed = true
+		else
+			filtered[#filtered + 1] = room
+		end
+	end
+
+	if removed then
+		candidates = filtered
+	end
+
+	return removed
+end
+
 SL.Global.Online.PackChoiceRecovery = SL.Global.Online.PackChoiceRecovery or {}
 if type(SL.Global.Online.PackChoiceRecovery.candidates) == "table" then
 	pack_choice_last_candidates = SL.Global.Online.PackChoiceRecovery.candidates
@@ -335,6 +359,7 @@ end
 
 	local function finish_leave_lobby(root)
 		local now = GetTimeSinceStart()
+		local departed_lobby_code = tostring(joined_lobby_code or "")
 		SL.Global.Online = SL.Global.Online or {}
 		local lastFinishedAt = tonumber(SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt) or -999
 		if now - lastFinishedAt < 0.5 then
@@ -371,8 +396,12 @@ end
 			lobby_flow_trace("finish_leave_lobby_ui_update_begin")
 			local joinedContent = root:GetChild("JoinedLobbyContent")
 			if joinedContent then joinedContent:visible(false) end
+			if ScreenOnlineLobbiesRemoveLobbyCandidateByCode(departed_lobby_code) then
+				lobby_flow_trace("finish_leave_lobby_removed_stale_candidate code=" .. tostring(departed_lobby_code))
+			end
 			root:queuecommand("UpdateLobbyView")
 		root:queuecommand("UpdateOnlinePlayers")
+			root:sleep(0.8):queuecommand("RefreshLobbyAfterLeave")
 		local status = root:GetChild("NetworkStatus")
 		if status then status:visible(false) end
 		root:playcommand("SetStatus", {
@@ -2768,6 +2797,13 @@ local af = Def.ActorFrame{
 		end,
 				RefreshCurrentRoomSnapshotCommand=function(self)
 					ScreenOnlineLobbiesApplyCurrentRoomSnapshot(self, "screen_online_lobbies_refresh")
+				end,
+				RefreshLobbyAfterLeaveCommand=function(self)
+					if not is_active_lobby_overlay() then return end
+					if leaving_lobby then return end
+					if ITGOnline and ITGOnline.currentRoomId then return end
+					lobby_flow_trace("refresh_lobby_after_leave")
+					MESSAGEMAN:Broadcast("SearchLobby", { force=true, minInterval=0 })
 				end,
 				ApplyDeferredLobbySearchCommand=function(self)
 					lobby_search_ui_pending = false
