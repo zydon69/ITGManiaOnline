@@ -119,6 +119,21 @@ function play_online_sound_once(screenName, soundName, minInterval)
 	SOUND:PlayOnce(THEME:GetPathS(screenName, soundName))
 end
 
+function ScreenOnlineLobbiesApplyCurrentRoomSnapshot(root, reason)
+	if not root or not ITGOnline or not ITGOnline.currentRoom or not ITGOnline.LobbyStatePayload then
+		return false
+	end
+	if not ITGOnline.currentRoomId then
+		return false
+	end
+
+	lobby_flow_trace("apply_current_room_snapshot reason=" .. tostring(reason or "unknown")
+		.. " room=" .. tostring(ITGOnline.currentRoomId)
+		.. " phase=" .. tostring(ITGOnline.currentRoom.phase or "nil"))
+	MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(ITGOnline.currentRoom))
+	return true
+end
+
 SL.Global.Online.PackChoiceRecovery = SL.Global.Online.PackChoiceRecovery or {}
 if type(SL.Global.Online.PackChoiceRecovery.candidates) == "table" then
 	pack_choice_last_candidates = SL.Global.Online.PackChoiceRecovery.candidates
@@ -2129,6 +2144,7 @@ local af = Def.ActorFrame{
 			text="Initialisation de la connexion en ligne...",
 				showSpinner=true
 			})
+		self:queuecommand("RefreshCurrentRoomSnapshot")
 		self:queuecommand("CheckConnect")
 	end,
 	OffCommand=function(self)
@@ -2691,6 +2707,7 @@ local af = Def.ActorFrame{
 						showPrompt=false
 					})
 					self:GetChild("NetworkStatus"):visible(false)
+					ScreenOnlineLobbiesApplyCurrentRoomSnapshot(self, "display")
 					if ITGOnline and ITGOnline.Sync then
 						self:playcommand("SetStatus", {
 							text="Synchronisation de l'etat en ligne...",
@@ -2749,6 +2766,9 @@ local af = Def.ActorFrame{
 				end
 			end
 		end,
+				RefreshCurrentRoomSnapshotCommand=function(self)
+					ScreenOnlineLobbiesApplyCurrentRoomSnapshot(self, "screen_online_lobbies_refresh")
+				end,
 				ApplyDeferredLobbySearchCommand=function(self)
 					lobby_search_ui_pending = false
 					apply_lobby_search_to_ui(self, "deferred")
