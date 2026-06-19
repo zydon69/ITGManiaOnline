@@ -2263,6 +2263,40 @@ function ITGOnline:ManagerAutoReadyKey(room, readyPhase)
 	return tostring(readyPhase or "") .. "|" .. tostring(self:RoomSongRoundKey(room))
 end
 
+function ITGOnline:RoomMembersConfirmedSelectedSong(room)
+	room = room or self.currentRoom
+	local members = room and room.members or {}
+	if #members == 0 then
+		return false, "no_members", "members=0"
+	end
+
+	local waiting = {}
+	local confirmed = 0
+	for member in ivalues(members) do
+		local user = member.user or member
+		local userId = tostring(user.id or member.user_id or "?")
+		local displayName = user_display_name(user, "Player " .. userId)
+		local packStatus = tostring(member.pack_sync_status or "none")
+		local songAvailable = member.song_available == true
+		local missingSong = member.missing_song == true
+
+		if songAvailable and not missingSong then
+			confirmed = confirmed + 1
+		else
+			waiting[#waiting + 1] = tostring(displayName)
+				.. ":songAvailable=" .. tostring(songAvailable)
+				.. ",missingSong=" .. tostring(missingSong)
+				.. ",packSyncStatus=" .. tostring(packStatus)
+		end
+	end
+
+	if #waiting > 0 then
+		return false, "members_song_not_confirmed", table.concat(waiting, ";")
+	end
+
+	return true, "all_members_song_confirmed", "confirmed=" .. tostring(confirmed) .. "/" .. tostring(#members)
+end
+
 function ITGOnline:MaybeAutoReadyManager(room)
 	room = room or self.currentRoom
 	if not room or not room.id or not self.currentRoomId then return end
@@ -2289,6 +2323,24 @@ function ITGOnline:MaybeAutoReadyManager(room)
 	end
 	if self.managerAutoReadyInFlightKey == key then return end
 
+	local confirmed, confirmReason, confirmDetails = self:RoomMembersConfirmedSelectedSong(room)
+	if not confirmed then
+		if self.managerAutoReadyDeferredKey ~= key then
+			online_flow_trace("manager_auto_ready_deferred reason=" .. tostring(confirmReason)
+				.. " key=" .. tostring(key)
+				.. " phase=" .. tostring(readyPhase)
+				.. " details=" .. tostring(confirmDetails))
+		end
+		self.managerAutoReadyDeferredKey = key
+		return
+	end
+	if self.managerAutoReadyDeferredKey == key then
+		online_flow_trace("manager_auto_ready_unblocked reason=" .. tostring(confirmReason)
+			.. " key=" .. tostring(key)
+			.. " details=" .. tostring(confirmDetails))
+		self.managerAutoReadyDeferredKey = ""
+	end
+
 	self.managerAutoReadyInFlightKey = key
 	online_trace("manager_auto_ready sending phase=" .. tostring(readyPhase) .. " key=" .. key)
 	self:SetReady(readyPhase, true, function(ok, decoded)
@@ -2298,14 +2350,13 @@ function ITGOnline:MaybeAutoReadyManager(room)
 
 		if not ok then
 			local errorCode = decoded and decoded.error_code
-			if errorCode == "room_members_song_not_confirmed" and decoded and decoded.deferred == true then
+			if errorCode == "room_members_song_not_confirmed" then
 				local retryAfter = tonumber(decoded.retry_after) or tonumber(self.readyRequestBlockedRetrySeconds) or 0.5
-				online_trace("manager_auto_ready deferred key=" .. key .. " retry_after=" .. tostring(retryAfter))
-				MESSAGEMAN:Broadcast("OnlineManagerAutoReadyRetryRequested", {
-					key = key,
-					readyPhase = readyPhase,
-					retryAfter = retryAfter,
-				})
+				self.managerAutoReadyDeferredKey = key
+				online_flow_trace("manager_auto_ready_deferred reason=server_room_members_song_not_confirmed"
+					.. " key=" .. tostring(key)
+					.. " retry_after=" .. tostring(retryAfter)
+					.. " serverDeferred=" .. tostring(decoded and decoded.deferred == true))
 			end
 			if errorCode == "room_phase_not_accepting_lobby_ready" then
 				-- Stale phase race: avoid immediate replay storm on the same key.
@@ -5199,8 +5250,16 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	end
 	local scoreSongPayload = self:CurrentSelectedSongPayload()
 	if not scoreSongPayload then finish(false, nil, { errorMessage = "No selected online song." }); return end
+	local roundKey = self.PlayStateKey and self:PlayStateKey() or tostring(self.currentRoomId or "")
+	local validRoundKey = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)
 	if roomPhase ~= "playing" then
 		if final and roomPhase == "results" then
+			if validRoundKey and self.lastFinalScoreKey ~= roundKey then
+				self.lastFinalScoreKey = roundKey
+			end
+			online_flow_trace("final_score_skipped reason=room_already_results"
+				.. " room=" .. tostring(self.currentRoomId)
+				.. " roundKey=" .. tostring(roundKey))
 			finish(true, nil, nil, { alreadyAccepted = true, roomPhase = roomPhase })
 			return
 		end
@@ -5212,8 +5271,6 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		finish(false, nil, { retryAfter = minLiveInterval })
 		return
 	end
-	local roundKey = self.PlayStateKey and self:PlayStateKey() or tostring(self.currentRoomId or "")
-	local validRoundKey = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)
 	if final and validRoundKey and self.lastFinalScoreKey == roundKey then
 		finish(true, nil, nil, { alreadyAccepted = true, roundKey = roundKey })
 		return
@@ -5513,6 +5570,27 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 				.. " sent_percent=" .. tostring(outgoingPercent)
 				.. " status=" .. tostring(response and response.statusCode or "nil")
 				.. " message=" .. tostring(response_message(response, decoded, "score failed")))
+		end
+		if not ok and errorCode == "room_not_playing" and final then
+			if validRoundKey then
+				self.lastFinalScoreKey = roundKey
+			end
+			self.onlineGameplayEvaluationRetryCount = 0
+			self.onlineGameplayEvaluationNextRetryAt = 0
+			self.onlineGameplayEvaluationTerminalErrorKey = ""
+			self:HandleRoomNotPlayingScoreReject(final, decoded)
+			online_flow_trace("final_score_treated_as_terminal_sync reason=room_not_playing"
+				.. " room=" .. tostring(self.currentRoomId or "")
+				.. " roundKey=" .. tostring(roundKey)
+				.. " serverPhase=" .. tostring(decoded and decoded.room_phase or "nil"))
+			finish(true, decoded, response, {
+				failed = outgoingFailed,
+				roundKey = roundKey,
+				final = true,
+				alreadyAccepted = true,
+				roomNotPlaying = true,
+			})
+			return
 		end
 		if not ok and errorCode == "room_not_playing" then
 			self:HandleRoomNotPlayingScoreReject(final, decoded)
@@ -6660,21 +6738,35 @@ end
 		self.lobbyRefreshDeferredScheduled = false
 
 		self.lobbyRefreshInFlight = true
+		local refreshScreen = tostring(self.currentScreenName or "nil")
+		local refreshPurpose = "background_state_tracking"
+		if self:IsOnlineLobbyScreen(refreshScreen) then
+			refreshPurpose = "lobby_ui_and_state"
+		elseif self:IsOnlineOptionsScreen(refreshScreen) then
+			refreshPurpose = "options_room_state_tracking"
+		elseif self:IsOnlineGameplayScreen(refreshScreen) then
+			refreshPurpose = "gameplay_room_state_tracking"
+		end
 		online_flow_trace("lobby_refresh_request screen=" .. tostring(self.currentScreenName or "nil")
 			.. " room=" .. tostring(self.currentRoomId or "nil")
-			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+			.. " purpose=" .. tostring(refreshPurpose))
 		self:FetchLobby(function(ok, decoded)
 			self.lobbyRefreshInFlight = false
-			local lobbyCount = decoded and decoded.lobbies and #decoded.lobbies or 0
-			local playerCount = decoded and decoded.online_players and #decoded.online_players
+			local rawPublicRoomCount = decoded and decoded.public_rooms and #decoded.public_rooms
+				or decoded and decoded.lobbies and #decoded.lobbies
+				or 0
+			local rawOnlineUserCount = decoded and decoded.online_users and #decoded.online_users
+				or decoded and decoded.online_players and #decoded.online_players
 				or decoded and decoded.onlinePlayers and #decoded.onlinePlayers
 				or 0
 			online_flow_trace("lobby_refresh_response ok=" .. tostring(ok == true)
-				.. " lobbies=" .. tostring(lobbyCount)
-				.. " onlinePlayers=" .. tostring(playerCount)
+				.. " rawPublicRooms=" .. tostring(rawPublicRoomCount)
+				.. " rawOnlineUsers=" .. tostring(rawOnlineUserCount)
 				.. " queued=" .. tostring(self.lobbyRefreshQueued == true)
 				.. " screen=" .. tostring(self.currentScreenName or "nil")
-				.. " room=" .. tostring(self.currentRoomId or "nil"))
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " currentRoomWillBeMerged=" .. tostring(self.currentRoom ~= nil))
 				if ok then
 					if self:IsAutomaticLobbyRefreshSuppressed() then
 						local remaining = math.max(0.05, (tonumber(self.lobbyRefreshDropUntil) or 0) - GetTimeSinceStart() + 0.05)
@@ -6694,9 +6786,13 @@ end
 							"suppressed_after_response")
 					end
 				else
-					online_flow_trace("lobby_refresh_broadcast source=fetch_lobby lobbies=" .. tostring(lobbyCount)
-						.. " onlinePlayers=" .. tostring(playerCount))
-					MESSAGEMAN:Broadcast("LobbySearched", self:LobbySearchPayload(decoded))
+					local lobbyPayload = self:LobbySearchPayload(decoded)
+					online_flow_trace("lobby_refresh_broadcast source=fetch_lobby"
+						.. " rawPublicRooms=" .. tostring(rawPublicRoomCount)
+						.. " rawOnlineUsers=" .. tostring(rawOnlineUserCount)
+						.. " normalizedLobbies=" .. tostring(#(lobbyPayload.lobbies or {}))
+						.. " displayOnlinePlayers=" .. tostring(#(lobbyPayload.onlinePlayers or {})))
+					MESSAGEMAN:Broadcast("LobbySearched", lobbyPayload)
 				end
 			end
 		if self.lobbyRefreshQueued and not self.disconnecting then
@@ -7497,6 +7593,13 @@ end
 
 				if ignoredAfterLeave then
 					online_flow_trace("room_deleted_event_ignored reason=recently_left_room roomId=" .. roomKey)
+					if self.PurgeStaleLobbyCandidate then
+						self:PurgeStaleLobbyCandidate(roomKey, "room_deleted_ignored_after_leave")
+					elseif self.ScheduleDeferredLobbyRefresh then
+						self:ScheduleDeferredLobbyRefresh(0.35, "room_deleted_ignored_after_leave")
+					else
+						self:QueueLobbyRefresh()
+					end
 					return
 				elseif activeRoomDeleted then
 					self:ClearCurrentRoomState("room_deleted_event")
@@ -7665,6 +7768,16 @@ end
 function ITGOnline:LobbySearchPayload(decoded)
 	local lobbies = {}
 	local cachedPayload = self.cachedLobbySearchPayload or { lobbies = {}, onlinePlayers = {} }
+	local source = decoded and "decoded" or "cache"
+	local rawPublicRoomCount = decoded and decoded.public_rooms and #decoded.public_rooms
+		or decoded and decoded.lobbies and #decoded.lobbies
+		or 0
+	local rawOnlineUserCount = decoded and decoded.online_users and #decoded.online_users
+		or decoded and decoded.online_players and #decoded.online_players
+		or decoded and decoded.onlinePlayers and #decoded.onlinePlayers
+		or 0
+	local selfOnlineUserFiltered = 0
+
 	if decoded and decoded.public_rooms ~= nil then
 		for room in ivalues(decoded.public_rooms or {}) do
 			lobbies[#lobbies + 1] = {
@@ -7686,14 +7799,18 @@ function ITGOnline:LobbySearchPayload(decoded)
 	if decoded and decoded.online_users ~= nil then
 		for user in ivalues(decoded.online_users or {}) do
 			local isSelf = self.user and tonumber(user.id) == tonumber(self.user.id)
-			if not isSelf then onlinePlayers[#onlinePlayers + 1] = {
-				id = user.id,
-				name = user_display_name(user, "User " .. tostring(user.id or "?")),
-				status = user.status or "available",
-				room = user.room,
-				lastSeenAt = user.last_seen_at,
-				isSelf = false,
-			} end
+			if isSelf then
+				selfOnlineUserFiltered = selfOnlineUserFiltered + 1
+			else
+				onlinePlayers[#onlinePlayers + 1] = {
+					id = user.id,
+					name = user_display_name(user, "User " .. tostring(user.id or "?")),
+					status = user.status or "available",
+					room = user.room,
+					lastSeenAt = user.last_seen_at,
+					isSelf = false,
+				}
+			end
 		end
 	else
 		for player in ivalues(cachedPayload.onlinePlayers or {}) do
@@ -7707,9 +7824,14 @@ function ITGOnline:LobbySearchPayload(decoded)
 	}
 
 	self.cachedLobbySearchPayload = payload
-	online_flow_trace("lobby_search_payload_built source=" .. tostring(decoded and "decoded" or "cache")
-		.. " lobbies=" .. tostring(#lobbies)
-		.. " onlinePlayers=" .. tostring(#onlinePlayers)
+	online_flow_trace("lobby_search_payload_built source=" .. tostring(source)
+		.. " rawPublicRooms=" .. tostring(rawPublicRoomCount)
+		.. " rawOnlineUsers=" .. tostring(rawOnlineUserCount)
+		.. " normalizedLobbies=" .. tostring(#lobbies)
+		.. " displayOnlinePlayers=" .. tostring(#onlinePlayers)
+		.. " selfOnlineUserFiltered=" .. tostring(selfOnlineUserFiltered)
+		.. " usedCachedLobbies=" .. tostring(not (decoded and decoded.public_rooms ~= nil))
+		.. " usedCachedOnlinePlayers=" .. tostring(not (decoded and decoded.online_users ~= nil))
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 		.. " screen=" .. tostring(self.currentScreenName or "nil"))
 	return payload

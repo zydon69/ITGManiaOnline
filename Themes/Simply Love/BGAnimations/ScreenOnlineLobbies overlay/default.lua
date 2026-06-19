@@ -50,6 +50,8 @@ local pending_join_deadline = 0
 local pending_create_action_id = 0
 local pending_create_deadline = 0
 local lobby_search_ui_pending = false
+local lobby_ui_update_pending = false
+local lobby_ui_update_reason = ""
 
 local mode = "browse"
 local joined_active_index = 1
@@ -478,6 +480,31 @@ end
 		return true
 	end
 
+	local function queue_lobby_ui_update(root, reason)
+		if not root then return false end
+		local source = tostring(reason or "unknown")
+
+		if lobby_ui_update_pending then
+			lobby_flow_trace(
+				"lobby_ui_update_coalesced reason=" .. source ..
+				" pendingReason=" .. tostring(lobby_ui_update_reason))
+			return true
+		end
+
+		lobby_ui_update_pending = true
+		lobby_ui_update_reason = source
+		local timer = root:GetChild("LobbyUiUpdateTimer")
+		if timer then
+			timer:stoptweening()
+			timer:sleep(0.02)
+			timer:queuecommand("Apply")
+		else
+			root:queuecommand("ApplyQueuedLobbyUiUpdate")
+		end
+		lobby_flow_trace("lobby_ui_update_queued reason=" .. source)
+		return true
+	end
+
 	local function apply_lobby_search_to_ui(root, reason)
 		if not root or not is_active_lobby_overlay() then
 			lobby_flow_trace("lobby_search_ui_skipped reason=inactive source=" .. tostring(reason or "unknown"))
@@ -519,11 +546,9 @@ end
 		if not pack_sync_busy() then
 			hide_network_status_if_idle(root)
 		end
-		root:queuecommand("UpdateLobbyView")
-		root:queuecommand("UpdateOnlinePlayers")
 		local joinedContent = root:GetChild("JoinedLobbyContent")
 		if joinedContent then joinedContent:visible(mode == "joined") end
-		root:queuecommand("Hover")
+		queue_lobby_ui_update(root, "lobby_search:" .. tostring(reason or "unknown"))
 		lobby_flow_trace("lobby_search_ui_apply_end source=" .. tostring(reason or "unknown"))
 		return true
 	end
@@ -592,6 +617,22 @@ function lobby_room_summary(prefix, params)
 	local players = params.players or params.members or {}
 	local readyStates = params.readyStates or params.ready_states or {}
 	local song = params.song or params.selectedSong or params.selected_song or {}
+	local readyParts = {}
+	local readyPlayers = 0
+	for _, player in pairs(players or {}) do
+		if type(player) == "table" then
+			local ready = player.ready == true or player.is_ready == true
+			if ready then readyPlayers = readyPlayers + 1 end
+			readyParts[#readyParts + 1] = tostring(player.profileName or player.name or player.displayName or player.playerId or "?")
+				.. ":" .. tostring(player.playerId or player.id or player.user_id or "?")
+				.. "=" .. tostring(ready and "1" or player.readyPendingServer and "pending" or "0")
+		end
+	end
+	local songTitle = song.title or song.name or song.folder_name or song.song_hash or "none"
+	local selectedSongPresent = type(song) == "table" and next(song) ~= nil
+	local songConfirmed = params.songConfirmed == true
+		or params.song_confirmed == true
+		or selectedSongPresent
 	lobby_flow_trace(tostring(prefix or "room_state")
 		.. " mode=" .. tostring(mode)
 		.. " joined_code=" .. tostring(joined_lobby_code)
@@ -599,8 +640,12 @@ function lobby_room_summary(prefix, params)
 		.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 		.. " phase=" .. tostring(params.phase or params.roomPhase or "")
 		.. " players=" .. tostring(lobby_count(players))
-		.. " readyStates=" .. tostring(lobby_count(readyStates))
-		.. " song=" .. tostring(song.title or song.folder_name or song.song_hash or "none")
+		.. " readyStatesRaw=" .. tostring(lobby_count(readyStates))
+		.. " readyPlayers=" .. tostring(readyPlayers) .. "/" .. tostring(lobby_count(players))
+		.. " ready={" .. table.concat(readyParts, ",") .. "}"
+		.. " selectedSongPresent=" .. tostring(selectedSongPresent == true)
+		.. " songConfirmed=" .. tostring(songConfirmed == true)
+		.. " songTitle=" .. tostring(songTitle)
 		.. " leaving=" .. tostring(leaving_lobby == true)
 		.. " screenGeneration=" .. tostring(ITGOnline and ITGOnline.screenGeneration or "nil"))
 end
@@ -975,7 +1020,6 @@ function joined_phase_allows_song_selection()
 	return phase == "lobby"
 		or phase == "lobby_ready"
 		or phase == "config"
-		or phase == "results"
 end
 
 function joined_phase_allows_start()
@@ -997,7 +1041,10 @@ function joined_can_cancel_song_selection()
 end
 
 function joined_button_indices()
-	local indices = {1}
+	local indices = {}
+	if joined_room_can_start() then
+		indices[#indices + 1] = 5
+	end
 	if joined_is_manager and joined_phase_allows_song_selection() then
 		indices[#indices + 1] = 2
 	end
@@ -1010,9 +1057,7 @@ function joined_button_indices()
 	if joined_can_cancel_song_selection() then
 		indices[#indices + 1] = 6
 	end
-	if joined_room_can_start() then
-		indices[#indices + 1] = 5
-	end
+	indices[#indices + 1] = 1
 	return indices
 end
 
@@ -1237,6 +1282,13 @@ end
 
 local function normalize_joined_active_index()
 	local indices = joined_button_indices()
+	if joined_room_can_start() and joined_active_index == 1 then
+		joined_active_index = 5
+		joined_user_moved_focus = false
+		last_auto_start_focus_key = ""
+		lobby_flow_trace("normalize_joined_active_index promoted_leave_to_start reason=room_can_start")
+		return true
+	end
 	for index in ivalues(indices) do
 		if joined_active_index == index then
 			return false
@@ -1270,9 +1322,18 @@ local function set_joined_default_active_index(force)
 	if not force then
 		for _, index in ipairs(indices) do
 			if joined_active_index == index then
+				if joined_active_index == 1 and joined_room_can_start() then
+					break
+				end
 				return
 			end
 		end
+	end
+	if joined_room_can_start() then
+		joined_active_index = 5
+		joined_user_moved_focus = false
+		last_auto_start_focus_key = ""
+		return
 	end
 	if joined_is_manager and joined_phase_allows_song_selection() then
 		for _, index in ipairs(indices) do
@@ -1943,7 +2004,13 @@ local function handle_joined_mode_input(event)
 			.. " canCancelSelection=" .. tostring(joined_can_cancel_song_selection() == true)
 			.. " canDownload=" .. tostring(joined_can_download_pack == true or can_download_browsed_pack() == true))
 		if joined_active_index == 1 then
-			open_leave_confirm("leave_lobby")
+			if joined_room_can_start() then
+				lobby_flow_trace("input_joined_start_leave_index_promoted_to_start_room")
+				joined_active_index = 5
+				MESSAGEMAN:Broadcast("StartOnlineRoom")
+			else
+				open_leave_confirm("leave_lobby")
+			end
 		elseif joined_active_index == 2 and joined_is_manager then
 			if not joined_phase_allows_song_selection() then
 				t:playcommand("SetStatus", {
@@ -2431,10 +2498,32 @@ local af = Def.ActorFrame{
 					if parent then parent:playcommand("ApplyDeferredLobbySearch") end
 				end
 			},
+			Def.Actor{
+				Name="LobbyUiUpdateTimer",
+				ApplyCommand=function(self)
+					lobby_flow_trace("lobby_ui_update_timer_apply pending=" .. tostring(lobby_ui_update_pending == true))
+					local parent = self:GetParent()
+					if parent then parent:playcommand("ApplyQueuedLobbyUiUpdate") end
+				end
+			},
 		HoverCommand=function(self)
 			self:GetChild("LobbyContent"):playcommand("Hover")
 			self:GetChild("OnlinePlayersContent"):playcommand("Hover")
 			self:GetChild("JoinedLobbyContent"):playcommand("Hover")
+		end,
+		ApplyQueuedLobbyUiUpdateCommand=function(self)
+			local reason = lobby_ui_update_reason
+			lobby_ui_update_pending = false
+			lobby_ui_update_reason = ""
+
+			if not is_active_lobby_overlay() then
+				lobby_flow_trace("lobby_ui_update_skipped reason=inactive pendingReason=" .. tostring(reason))
+				return
+			end
+
+			lobby_flow_trace("lobby_ui_update_apply reason=" .. tostring(reason))
+			self:queuecommand("UpdateLobbyView")
+			self:queuecommand("Hover")
 		end,
 	UpdateOnlinePlayersCommand=function(self)
 		local playersContent = self:GetChild("OnlinePlayersContent")
@@ -3181,6 +3270,12 @@ local af = Def.ActorFrame{
 			local previousIsManager = joined_is_manager
 			clear_pending_join()
 			clear_pending_create()
+			if mode ~= "joined" then
+				lobby_flow_trace("mode_autoswitch_to_joined reason=online_lobby_state previous_mode=" .. tostring(mode)
+					.. " roomId=" .. tostring(params and params.roomId or "nil")
+					.. " code=" .. tostring(params and params.code or "")
+					.. " phase=" .. tostring(params and params.phase or "nil"))
+			end
 			mode = "joined"
 			leaving_lobby = false
 			showing_leave_confirm = false
