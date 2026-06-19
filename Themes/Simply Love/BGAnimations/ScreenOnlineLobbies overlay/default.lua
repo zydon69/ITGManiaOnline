@@ -528,7 +528,7 @@ end
 		return true
 	end
 
-local function duplicate_first_press(event)
+function duplicate_first_press(event)
 	if not event or event.type ~= "InputEventType_FirstPress" then
 		return false
 	end
@@ -548,7 +548,7 @@ local function duplicate_first_press(event)
 	return false
 end
 
-local function focus_selected_browse_list(root)
+function focus_selected_browse_list(root)
 	if not root then return end
 	if lobby_view == "players" then
 		local players = root:GetChild("OnlinePlayersContent")
@@ -561,14 +561,14 @@ local function focus_selected_browse_list(root)
 	end
 end
 
-local function lobby_debug_enabled()
+function lobby_debug_enabled()
 	if ITGOnline and ITGOnline.debugReadyFlow ~= nil then
 		return ITGOnline.debugReadyFlow == true
 	end
 	return false
 end
 
-local function lobby_debug(message)
+function lobby_debug(message)
 	if not lobby_debug_enabled() then return end
 	local line = "ITG Online Lobby: " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
@@ -583,11 +583,11 @@ lobby_flow_trace = function(message)
 		if Flush then Flush() end
 end
 
-local function lobby_count(value)
+function lobby_count(value)
 	return type(value) == "table" and #value or 0
 end
 
-local function lobby_room_summary(prefix, params)
+function lobby_room_summary(prefix, params)
 	params = type(params) == "table" and params or {}
 	local players = params.players or params.members or {}
 	local readyStates = params.readyStates or params.ready_states or {}
@@ -605,7 +605,7 @@ local function lobby_room_summary(prefix, params)
 		.. " screenGeneration=" .. tostring(ITGOnline and ITGOnline.screenGeneration or "nil"))
 end
 
-local function ready_summary()
+function ready_summary()
 	local parts = {}
 	for _, player in pairs(joined_lobby_players or {}) do
 		if type(player) == "table" then
@@ -617,7 +617,7 @@ local function ready_summary()
 	return table.concat(parts, ",")
 end
 
-local function normalize_global_options(options)
+function normalize_global_options(options)
 	options = type(options) == "table" and options or {}
 	local scoreMode = tostring(options.scoreMode or options.score_mode or "itg"):lower()
 	if scoreMode ~= "ex" and scoreMode ~= "hardex" then
@@ -628,24 +628,24 @@ local function normalize_global_options(options)
 	return { scoreMode=scoreMode, score_mode=scoreMode, musicRate=musicRate, music_rate=musicRate }
 end
 
-local function global_score_label(mode)
+function global_score_label(mode)
 	mode = tostring(mode or "itg"):lower()
 	if mode == "hardex" then return "HardEX" end
 	if mode == "ex" then return "EX" end
 	return "ITG"
 end
 
-local function global_options_summary()
+function global_options_summary()
 	local options = normalize_global_options(joined_global_options)
 	return global_score_label(options.scoreMode) .. " / " .. string.format("%.2fx", options.musicRate)
 end
 
-local function global_options_mode_label()
+function global_options_mode_label()
 	local options = normalize_global_options(joined_global_options)
 	return "(" .. global_score_label(options.scoreMode) .. "/" .. string.format("%.2f", options.musicRate) .. ")"
 end
 
-local function rebuild_global_options_choices()
+function rebuild_global_options_choices()
 	global_options_choices = {
 		{ label="Score: ITG", scoreMode="itg" },
 		{ label="Score: EX", scoreMode="ex" },
@@ -659,7 +659,7 @@ local function rebuild_global_options_choices()
 	global_options_index = math.min(math.max(1, global_options_index), #global_options_choices)
 end
 
-local function select_current_global_score_choice()
+function select_current_global_score_choice()
 	local current = normalize_global_options(joined_global_options)
 	for i, choice in ipairs(global_options_choices) do
 		if choice.scoreMode and choice.scoreMode == current.scoreMode then
@@ -670,7 +670,7 @@ local function select_current_global_score_choice()
 	global_options_index = math.min(math.max(1, global_options_index), #global_options_choices)
 end
 
-local function open_global_options_menu()
+function open_global_options_menu()
 	rebuild_global_options_choices()
 	select_current_global_score_choice()
 	showing_global_options_menu = true
@@ -681,7 +681,7 @@ local function open_global_options_menu()
 	end
 end
 
-local function close_global_options_menu()
+function close_global_options_menu()
 	showing_global_options_menu = false
 	if t then
 		local menu = t:GetChild("GlobalOptionsMenu")
@@ -689,7 +689,7 @@ local function close_global_options_menu()
 	end
 end
 
-local function move_global_options_choice(delta)
+function move_global_options_choice(delta)
 	if #global_options_choices == 0 then rebuild_global_options_choices() end
 	global_options_index = global_options_index + delta
 	if global_options_index < 1 then global_options_index = #global_options_choices end
@@ -697,7 +697,7 @@ local function move_global_options_choice(delta)
 	if t then t:queuecommand("UpdateGlobalOptionsMenu") end
 end
 
-local function apply_global_options_choice()
+function apply_global_options_choice()
 	local choice = global_options_choices[global_options_index]
 	if not choice or not ITGOnline or not ITGOnline.UpdateGlobalOptions then return end
 	local current = normalize_global_options(joined_global_options)
@@ -717,15 +717,15 @@ local function apply_global_options_choice()
 	end)
 end
 
-local function text_or_empty(value)
+function text_or_empty(value)
 	return tostring(value or "")
 end
 
-local function trim_text(value)
+function trim_text(value)
 	return text_or_empty(value):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
-local function clamp_text(value, maxLen)
+function clamp_text(value, maxLen)
 	value = text_or_empty(value)
 	maxLen = math.max(1, tonumber(maxLen) or 1)
 	if #value <= maxLen then return value end
@@ -733,11 +733,11 @@ local function clamp_text(value, maxLen)
 	return value:sub(1, maxLen - 1) .. "…"
 end
 
-local function song_info_path(songInfo)
+function song_info_path(songInfo)
 	return trim_text(songInfo and (songInfo.songPath or songInfo.folder_name or songInfo.folderName or songInfo.path))
 end
 
-local function song_info_pack(songInfo)
+function song_info_pack(songInfo)
 	local pack = trim_text(songInfo and (songInfo.pack or songInfo.group or songInfo.group_name or songInfo.groupName))
 	if pack ~= "" then return pack end
 
@@ -745,7 +745,7 @@ local function song_info_pack(songInfo)
 	return trim_text(path:match("^([^/]+)"))
 end
 
-local function song_info_title(songInfo)
+function song_info_title(songInfo)
 	local title = trim_text(songInfo and (songInfo.title or songInfo.name or songInfo.songName or songInfo.song_title or songInfo.songTitle))
 	if title ~= "" then return title end
 
@@ -753,11 +753,11 @@ local function song_info_title(songInfo)
 	return trim_text(path:match("^[^/]+/(.+)$") or path)
 end
 
-local function song_info_artist(songInfo)
+function song_info_artist(songInfo)
 	return trim_text(songInfo and (songInfo.artist or songInfo.artistName or songInfo.song_artist or songInfo.songArtist))
 end
 
-local function normalize_online_song_info(songInfo)
+function normalize_online_song_info(songInfo)
 	if type(songInfo) ~= "table" then return nil end
 
 	local title = song_info_title(songInfo)
@@ -775,7 +775,7 @@ local function normalize_online_song_info(songInfo)
 	return songInfo
 end
 
-local function find_online_song(songInfo)
+function find_online_song(songInfo)
 	if not SONGMAN or not SONGMAN.FindSong or type(songInfo) ~= "table" then return nil end
 	local songPath = song_info_path(songInfo)
 	local song = songPath ~= "" and SONGMAN:FindSong(songPath) or nil
@@ -784,7 +784,7 @@ local function find_online_song(songInfo)
 	return relative and SONGMAN:FindSong(relative) or nil
 end
 
-local function update_joined_song_card(joinedContent)
+function update_joined_song_card(joinedContent)
 	if not joinedContent then return end
 	local roomSongInfo = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song or nil
 	local songInfo = normalize_online_song_info(joined_missing_song_info or joined_song_preview or roomSongInfo)
@@ -832,7 +832,7 @@ local function update_joined_song_card(joinedContent)
 	if bannerLabel then bannerLabel:visible(hasSong and not bannerLoaded) end
 end
 
-local function abbreviate_stepchart(value)
+function abbreviate_stepchart(value)
 	local chart = trim_text(value)
 	if chart == "" then return "" end
 
@@ -857,7 +857,7 @@ local function abbreviate_stepchart(value)
 	return chart
 end
 
-local function pack_sync_display_text(status)
+function pack_sync_display_text(status)
 	status = trim_text(status)
 	if status == "" or status == "unknown" then return "" end
 	if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.statusText then
@@ -873,7 +873,7 @@ pack_sync_busy = function()
 	return status == "download_requested" or status == "download_in_progress" or status == "reloading_songs"
 end
 
-local function can_download_browsed_pack()
+function can_download_browsed_pack()
 	return joined_preview_unknown_pack
 		and not joined_song_confirmed
 		and not joined_missing_song
@@ -881,11 +881,11 @@ local function can_download_browsed_pack()
 		and not pack_sync_busy()
 end
 
-local function show_pack_download_button()
+function show_pack_download_button()
 	return joined_missing_song or can_download_browsed_pack() or pack_sync_busy()
 end
 
-local function pack_sync_status_for_joined_song()
+function pack_sync_status_for_joined_song()
 	if not (ITGOnline and ITGOnline.PackSync) then return "" end
 	if not joined_song_confirmed or joined_song_selected_key == "" then return "" end
 
@@ -899,14 +899,14 @@ local function pack_sync_status_for_joined_song()
 	return trim_text(packSync.currentStatus)
 end
 
-local function pack_sync_confirms_joined_song()
+function pack_sync_confirms_joined_song()
 	local status = pack_sync_status_for_joined_song()
 	return status == "local_chart_match_found"
 		or status == "ready"
 		or status == "downloaded_ok"
 end
 
-local function pack_sync_is_checking_joined_song()
+function pack_sync_is_checking_joined_song()
 	local status = pack_sync_status_for_joined_song()
 	return status == "searching_local_charts"
 		or status == "local_chart_match_found"
@@ -917,7 +917,7 @@ local function pack_sync_is_checking_joined_song()
 		or status == "ready"
 end
 
-local function can_download_pack_for_reason(reason)
+function can_download_pack_for_reason(reason)
 	reason = trim_text(reason)
 	return reason == "missing_local_song"
 		or reason == "no_compatible_chart_found"
@@ -926,7 +926,7 @@ local function can_download_pack_for_reason(reason)
 		or reason == "chart_hash_mismatch"
 end
 
-local function pack_sync_countdown_seconds_for_player(player)
+function pack_sync_countdown_seconds_for_player(player)
 	if not (ITGOnline and ITGOnline.currentRoom) then return nil end
 	local roomTimeMs = nil
 	if ITGOnline.serverClockOffsetSeconds then
@@ -943,7 +943,7 @@ local function pack_sync_countdown_seconds_for_player(player)
 	return nil
 end
 
-local function joined_missing_song_countdown_seconds()
+function joined_missing_song_countdown_seconds()
 	local currentUserId = tostring(ITGOnline and ITGOnline.user and ITGOnline.user.id or "")
 	if currentUserId == "" then return nil end
 	for _, player in ipairs(joined_lobby_players or {}) do
@@ -954,7 +954,7 @@ local function joined_missing_song_countdown_seconds()
 	return nil
 end
 
-local function local_pack_exists(songInfo)
+function local_pack_exists(songInfo)
 	local pack = trim_text(songInfo and songInfo.pack)
 	if pack == "" then return false end
 	if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.PackExists then
@@ -963,11 +963,11 @@ local function local_pack_exists(songInfo)
 	return SONGMAN and SONGMAN.DoesSongGroupExist and SONGMAN:DoesSongGroupExist(pack)
 end
 
-local function normalized_online_phase(value)
+function normalized_online_phase(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
 end
 
-local function joined_phase_allows_song_selection()
+function joined_phase_allows_song_selection()
 	local phase = normalized_online_phase(joined_phase)
 	if phase == "" and ITGOnline and ITGOnline.currentRoom then
 		phase = normalized_online_phase(ITGOnline.currentRoom.phase)
@@ -978,11 +978,11 @@ local function joined_phase_allows_song_selection()
 		or phase == "results"
 end
 
-local function joined_phase_allows_start()
+function joined_phase_allows_start()
 	return joined_phase == "config" or joined_phase == "lobby_ready"
 end
 
-local function joined_room_can_start()
+function joined_room_can_start()
 	return joined_is_manager
 		and joined_song_confirmed
 		and joined_phase_allows_start()
@@ -990,13 +990,13 @@ local function joined_room_can_start()
 		and not joined_any_player_missing_song()
 end
 
-local function joined_can_cancel_song_selection()
+function joined_can_cancel_song_selection()
 	return joined_is_manager
 		and joined_song_confirmed
 		and joined_phase_allows_song_selection()
 end
 
-local function joined_button_indices()
+function joined_button_indices()
 	local indices = {1}
 	if joined_is_manager and joined_phase_allows_song_selection() then
 		indices[#indices + 1] = 2
@@ -1016,7 +1016,7 @@ local function joined_button_indices()
 	return indices
 end
 
-local function joined_active_index_is_available()
+function joined_active_index_is_available()
 	for index in ivalues(joined_button_indices()) do
 		if joined_active_index == index then return true end
 	end
