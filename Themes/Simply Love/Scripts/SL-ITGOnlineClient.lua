@@ -6718,6 +6718,22 @@ end
 				self:BroadcastLeaderboardFromRoom(room or payload.room, "realtime_room_event:" .. tostring(name))
 				if name == "room.member_joined" or name == "room.member_left" then
 					self:QueueLobbyRefresh()
+				elseif name == "room.member_pack_sync_updated"
+					or name == "room.member_song_availability_updated"
+					or name == "room.song_selected"
+					or name == "room.ready_updated" then
+					local now = GetTimeSinceStart()
+					local minInterval = name == "room.member_pack_sync_updated" and 1.5 or 0.5
+					local lastRefreshAt = tonumber(self.lastRoomUiLobbyRefreshAt) or 0
+					if now - lastRefreshAt >= minInterval then
+						self.lastRoomUiLobbyRefreshAt = now
+						self:QueueLobbyRefresh()
+					elseif not self.roomUiLobbyRefreshDeferredScheduled and self.ScheduleDeferredLobbyRefresh then
+						self.roomUiLobbyRefreshDeferredScheduled = true
+						self:ScheduleDeferredLobbyRefresh(
+							math.max(0.1, minInterval - (now - lastRefreshAt) + 0.05),
+							"room_ui_refresh:" .. tostring(name))
+					end
 				end
 				if name == "room.join_request.created" then
 					self:BroadcastPendingJoinRequestsFromRoom(room or payload.room)

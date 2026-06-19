@@ -1598,6 +1598,7 @@ CreateOnlineHandler = function()
 								online_trace("FLOW lobby_refresh_deferred_skipped reason=post_leave_auto_suppressed")
 								ITGOnline.lobbyRefreshQueued = false
 								ITGOnline.lobbyRefreshDeferredScheduled = false
+								ITGOnline.roomUiLobbyRefreshDeferredScheduled = false
 								return
 							end
 							if ITGOnline and ITGOnline.IsLobbyRefreshSuppressed and ITGOnline:IsLobbyRefreshSuppressed() then
@@ -1610,6 +1611,7 @@ CreateOnlineHandler = function()
 								online_trace("FLOW lobby_refresh_deferred_fire")
 								ITGOnline.lobbyRefreshQueued = false
 								ITGOnline.lobbyRefreshDeferredScheduled = false
+								ITGOnline.roomUiLobbyRefreshDeferredScheduled = false
 								ITGOnline:QueueLobbyRefresh()
 							end
 						end,
