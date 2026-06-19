@@ -59,7 +59,7 @@ void RageSoundDriver::Sound::Allocate(int iFrames) {
   const int iFramesPerBlock = samples_per_block / channels;
   const int iBlocksToPrebuffer = iFrames / iFramesPerBlock;
   m_Buffer.reserve(iBlocksToPrebuffer + 1);
-  m_MixedPositionQueue.reserve(32);
+  m_MixedPositionQueue.reserve(64);
   m_PlaybackHistory.clear();
 }
 
