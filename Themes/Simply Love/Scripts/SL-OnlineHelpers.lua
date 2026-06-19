@@ -1245,6 +1245,9 @@ DisplayLobbyState = function(data, actor)
 						.. " screen=" .. tostring(screenName)
 						.. " phase=" .. tostring(data.phase)
 						.. " key=" .. tostring(songKey))
+					if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
+						ITGOnline:EnforceRoomPhaseScreen(screenName)
+					end
 				elseif ApplyOnlineSongSelection(data.songInfo) then
 					lastOnlineOptionsSongKey = songKey
 					if data.phase == "lobby_ready" then
@@ -2433,6 +2436,10 @@ CreateOnlineHandler = function()
 							end
 								self.leaveLobbyBusy = true
 								clear_room_input_state("leave_lobby_request")
+								local leaveRoomId = ITGOnline and ITGOnline.currentRoomId or nil
+								local leaveRoomCode = ITGOnline and ITGOnline.currentRoom
+									and (ITGOnline.currentRoom.code or ITGOnline.currentRoom.room_code or ITGOnline.currentRoom.roomCode)
+									or nil
 								ITGOnline:LeaveRoom(function(ok, decoded, response)
 									local alreadyLeftHandled = self.inLobby == false
 										and ITGOnline
@@ -2457,7 +2464,12 @@ CreateOnlineHandler = function()
 											if online_trace then
 												online_trace("FLOW LeaveLobbyMessage broadcast_OnlineLobbyLeft_begin")
 											end
-											MESSAGEMAN:Broadcast("OnlineLobbyLeft", {left=true})
+											MESSAGEMAN:Broadcast("OnlineLobbyLeft", {
+												left=true,
+												roomId=leaveRoomId,
+												lobbyCode=leaveRoomCode,
+												source="leave_callback",
+											})
 											if online_trace then
 												online_trace("FLOW LeaveLobbyMessage broadcast_OnlineLobbyLeft_end")
 											end

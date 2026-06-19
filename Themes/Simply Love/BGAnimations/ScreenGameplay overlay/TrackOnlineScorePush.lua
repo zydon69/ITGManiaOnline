@@ -9,7 +9,7 @@ end
 local function remember_current_score()
 	if not (ITGOnline and ITGOnline.RememberLiveScoreSnapshot and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
 	local phase = tostring(ITGOnline.currentRoom.phase or "")
-	if phase ~= "starting" and phase ~= "playing" then return end
+	if phase ~= "playing" then return end
 
 	local snapshot = nil
 	if ITGOnline.BuildCurrentScoreSnapshot then
@@ -36,6 +36,7 @@ return Def.Actor{
 	end,
 	JudgmentMessageCommand=function(self, params)
 		if not (ITGOnline and ITGOnline.RememberLiveScoreSnapshot and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
+		if tostring(ITGOnline.currentRoom.phase or "") ~= "playing" then return end
 
 		local primary = primary_enabled_player()
 		if primary and params and params.Player and params.Player ~= primary then return end

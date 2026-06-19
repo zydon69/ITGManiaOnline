@@ -2971,6 +2971,10 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 	end
 
 	if phase == "lobby" or phase == "lobby_ready" or phase == "config" then
+		if self:IsOnlineEvaluationScreen(screenName) then
+			online_flow_trace("preferred=lobby reason=new_round_while_evaluation playState=" .. tostring(playState))
+			return "lobby"
+		end
 		if self:IsOnlineGameplayScreen(screenName) then
 			online_flow_trace("preferred=lobby reason=non_playing_phase_in_gameplay playState=" .. tostring(playState))
 			return "lobby"
@@ -6543,9 +6547,16 @@ end
 			end
 
 			local reason = tostring(payload.reason or "")
+			local roomCode = self.currentRoom and (self.currentRoom.code or self.currentRoom.room_code or self.currentRoom.roomCode) or nil
 			self:IgnoreRoomEvents(roomId, 30)
 			self:ClearCurrentRoomState("room_left_event")
-			MESSAGEMAN:Broadcast("OnlineLobbyLeft", {left=true})
+			MESSAGEMAN:Broadcast("OnlineLobbyLeft", {
+				left=true,
+				roomId=roomId,
+				lobbyCode=roomCode,
+				reason=reason,
+				source="room.left",
+			})
 			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 				event = "leaveLobby",
 				success = true,
