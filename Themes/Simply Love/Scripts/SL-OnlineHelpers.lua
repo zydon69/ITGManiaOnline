@@ -1579,18 +1579,20 @@ CreateOnlineHandler = function()
 					end,
 						ITGOnlineLobbyRefreshDeferredMessageCommand=function(self, params)
 							if onlineHandlerShuttingDown or not self.connected then return end
+							local reason = tostring(params and params.reason or "unknown")
 							if ITGOnline
 								and ITGOnline.IsAutomaticLobbyRefreshSuppressed
-								and ITGOnline:IsAutomaticLobbyRefreshSuppressed() then
+								and ITGOnline:IsAutomaticLobbyRefreshSuppressed()
+								and reason:sub(1, 11) ~= "post_leave:" then
 								online_trace(
 									"FLOW lobby_refresh_deferred_ignored reason=post_leave_auto_suppressed source=" ..
-									tostring(params and params.reason or "unknown"))
+									tostring(reason))
 								return
 							end
 							local delay = tonumber(params and params.delay) or 0.25
 							online_trace(
 								"FLOW lobby_refresh_deferred delay=" .. tostring(delay) ..
-								" reason=" .. tostring(params and params.reason or "unknown"))
+								" reason=" .. tostring(reason))
 							schedule_named_timer(self, "DeferredLobbyRefreshTimer", math.max(0.05, delay), "Fire")
 						end,
 						DeferredLobbyRefreshCommand=function(self)
@@ -1598,10 +1600,9 @@ CreateOnlineHandler = function()
 							if ITGOnline
 								and ITGOnline.IsAutomaticLobbyRefreshSuppressed
 								and ITGOnline:IsAutomaticLobbyRefreshSuppressed() then
-								online_trace("FLOW lobby_refresh_deferred_skipped reason=post_leave_auto_suppressed")
-								ITGOnline.lobbyRefreshQueued = false
-								ITGOnline.lobbyRefreshDeferredScheduled = false
-								ITGOnline.roomUiLobbyRefreshDeferredScheduled = false
+								local delay = math.max(0.05, (tonumber(ITGOnline.lobbyRefreshDropUntil) or 0) - GetTimeSinceStart() + 0.05)
+								online_trace("FLOW lobby_refresh_deferred_rescheduled reason=post_leave_auto_suppressed delay=" .. tostring(delay))
+								schedule_named_timer(self, "DeferredLobbyRefreshTimer", delay, "Fire")
 								return
 							end
 							if ITGOnline and ITGOnline.IsLobbyRefreshSuppressed and ITGOnline:IsLobbyRefreshSuppressed() then

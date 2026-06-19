@@ -2403,9 +2403,96 @@ function ITGOnline:ApplyGlobalOptionsToLocalState(room, source)
 	return options
 end
 
+local function room_member_user_id(member)
+	if type(member) ~= "table" then return "" end
+	local user = member.user or {}
+	return tostring(user.id or member.user_id or member.player_id or member.id or "")
+end
+
+local function room_ready_user_id(state)
+	if type(state) ~= "table" then return "" end
+	local user = state.user or {}
+	return tostring(user.id or state.user_id or state.player_id or state.id or "")
+end
+
+local partialRoomSnapshotSources = {
+	pack_sync_status = true,
+	ready = true,
+	song_availability = true,
+}
+
+local function source_can_be_partial_room_snapshot(source)
+	local value = tostring(source or "")
+	return partialRoomSnapshotSources[value] == true
+		or value:find("realtime_room_event:room.member_", 1, true) == 1
+end
+
+local function merge_room_array_by_user_id(previousItems, incomingItems, userIdFn)
+	local merged = {}
+	local indexByUserId = {}
+
+	for item in ivalues(previousItems or {}) do
+		local userId = userIdFn(item)
+		if userId ~= "" then
+			indexByUserId[userId] = #merged + 1
+		end
+		merged[#merged + 1] = item
+	end
+
+	for item in ivalues(incomingItems or {}) do
+		local userId = userIdFn(item)
+		local index = userId ~= "" and indexByUserId[userId] or nil
+		if index then
+			merged[index] = item
+		else
+			if userId ~= "" then
+				indexByUserId[userId] = #merged + 1
+			end
+			merged[#merged + 1] = item
+		end
+	end
+
+	return merged
+end
+
+function ITGOnline:NormalizeRoomSnapshot(room, previousRoom, source)
+	if not room or not previousRoom then return room end
+	if tonumber(room.id or -1) ~= tonumber(previousRoom.id or -2) then return room end
+	if not source_can_be_partial_room_snapshot(source) then return room end
+
+	local incomingMembers = room.members or {}
+	local previousMembers = previousRoom.members or {}
+	local incomingReadyStates = room.ready_states or {}
+	local previousReadyStates = previousRoom.ready_states or {}
+	local shouldMergeMembers = #incomingMembers > 0 and #previousMembers > #incomingMembers
+	local shouldMergeReady = #incomingReadyStates > 0 and #previousReadyStates > #incomingReadyStates
+
+	if not shouldMergeMembers and not shouldMergeReady then return room end
+
+	if shouldMergeMembers then
+		room.members = merge_room_array_by_user_id(previousMembers, incomingMembers, room_member_user_id)
+		room.members_count = math.max(tonumber(room.members_count) or 0, #room.members)
+	end
+
+	if shouldMergeReady then
+		room.ready_states = merge_room_array_by_user_id(previousReadyStates, incomingReadyStates, room_ready_user_id)
+	end
+
+	online_flow_trace("room_snapshot_partial_merged source=" .. tostring(source or "unknown")
+		.. " incoming_members=" .. tostring(#incomingMembers)
+		.. " previous_members=" .. tostring(#previousMembers)
+		.. " merged_members=" .. tostring(type(room.members) == "table" and #room.members or 0)
+		.. " incoming_ready=" .. tostring(#incomingReadyStates)
+		.. " previous_ready=" .. tostring(#previousReadyStates)
+		.. " merged_ready=" .. tostring(type(room.ready_states) == "table" and #room.ready_states or 0))
+
+	return room
+end
+
 function ITGOnline:ApplyRoomSnapshot(room, source)
 	if not room then return nil end
 	local previousRoom = self.currentRoom
+	room = self:NormalizeRoomSnapshot(room, previousRoom, source)
 	if previousRoom and self:RoomSnapshotIsStale(previousRoom, room) then
 		local previousKey = self:RoomSongRoundKey(previousRoom)
 		if previousKey == "" then
