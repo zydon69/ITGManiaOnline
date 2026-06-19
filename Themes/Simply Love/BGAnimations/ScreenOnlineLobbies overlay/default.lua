@@ -254,6 +254,11 @@ local function open_leave_confirm(mode_name)
 	leave_confirm_mode = mode_name or "leave_lobby"
 	leave_confirm_index = 0
 	showing_leave_confirm = true
+	lobby_flow_trace("leave_confirm_open mode=" .. tostring(leave_confirm_mode)
+		.. " joined_code=" .. tostring(joined_lobby_code)
+		.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " leaving=" .. tostring(leaving_lobby == true)
+		.. " joined_phase=" .. tostring(joined_phase))
 	if t then
 		local prompt = t:GetChild("LeaveConfirmPrompt")
 		if prompt then
@@ -265,6 +270,11 @@ local function open_leave_confirm(mode_name)
 end
 
 local function close_leave_confirm()
+	lobby_flow_trace("leave_confirm_close mode=" .. tostring(leave_confirm_mode)
+		.. " index=" .. tostring(leave_confirm_index)
+		.. " joined_code=" .. tostring(joined_lobby_code)
+		.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " leaving=" .. tostring(leaving_lobby == true))
 	showing_leave_confirm = false
 	if t then
 		local prompt = t:GetChild("LeaveConfirmPrompt")
@@ -311,7 +321,11 @@ local function close_transient_joined_ui()
 end
 
 local function stop_lobby_overlay_timers(root)
-	if not root then return end
+	if not root then
+		lobby_flow_trace("stop_lobby_overlay_timers skipped reason=no_root")
+		return
+	end
+	lobby_flow_trace("stop_lobby_overlay_timers begin")
 	local timerNames = {
 		"JoinTimeoutTimer",
 		"CreateTimeoutTimer",
@@ -321,11 +335,15 @@ local function stop_lobby_overlay_timers(root)
 	for _, name in ipairs(timerNames) do
 		local timer = root:GetChild(name)
 		if timer then
+			lobby_flow_trace("stop_lobby_overlay_timer name=" .. tostring(name))
 			timer:stoptweening()
+		else
+			lobby_flow_trace("stop_lobby_overlay_timer_missing name=" .. tostring(name))
 		end
 	end
 	lobby_search_ui_pending = false
 	network_status_clear_at = 0
+	lobby_flow_trace("stop_lobby_overlay_timers end pending=false network_status_clear_at=0")
 end
 
 	local function begin_leave_lobby(root)
@@ -563,6 +581,28 @@ lobby_flow_trace = function(message)
 		local line = "ITG Online: FLOW lobby_ui " .. tostring(message or "")
 		if Trace then Trace(line) elseif Warn then Warn(line) end
 		if Flush then Flush() end
+end
+
+local function lobby_count(value)
+	return type(value) == "table" and #value or 0
+end
+
+local function lobby_room_summary(prefix, params)
+	params = type(params) == "table" and params or {}
+	local players = params.players or params.members or {}
+	local readyStates = params.readyStates or params.ready_states or {}
+	local song = params.song or params.selectedSong or params.selected_song or {}
+	lobby_flow_trace(tostring(prefix or "room_state")
+		.. " mode=" .. tostring(mode)
+		.. " joined_code=" .. tostring(joined_lobby_code)
+		.. " params_code=" .. tostring(params.code or params.roomCode or params.room_id or params.id or "")
+		.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(params.phase or params.roomPhase or "")
+		.. " players=" .. tostring(lobby_count(players))
+		.. " readyStates=" .. tostring(lobby_count(readyStates))
+		.. " song=" .. tostring(song.title or song.folder_name or song.song_hash or "none")
+		.. " leaving=" .. tostring(leaving_lobby == true)
+		.. " screenGeneration=" .. tostring(ITGOnline and ITGOnline.screenGeneration or "nil"))
 end
 
 local function ready_summary()
@@ -1322,11 +1362,15 @@ local function active_private_prompt_options()
 end
 
 	clear_pending_join = function()
+		lobby_flow_trace("clear_pending_join actionId=" .. tostring(pending_join_action_id)
+			.. " deadline=" .. tostring(pending_join_deadline))
 		pending_join_action_id = 0
 		pending_join_deadline = 0
 	end
 
 clear_pending_create = function()
+	lobby_flow_trace("clear_pending_create actionId=" .. tostring(pending_create_action_id)
+		.. " deadline=" .. tostring(pending_create_deadline))
 	pending_create_action_id = 0
 	pending_create_deadline = 0
 end
@@ -1336,6 +1380,10 @@ local function begin_create_timeout(actor, seconds)
 	pending_create_action_id = pending_create_action_id + 1
 	pending_create_deadline = GetTimeSinceStart() + seconds
 	local timer = actor and actor:GetChild("CreateTimeoutTimer")
+	lobby_flow_trace("begin_create_timeout actionId=" .. tostring(pending_create_action_id)
+		.. " seconds=" .. tostring(seconds)
+		.. " deadline=" .. tostring(pending_create_deadline)
+		.. " hasTimer=" .. tostring(timer ~= nil))
 	if timer then
 		timer:stoptweening()
 		timer:sleep(seconds):queuecommand("CheckCreateTimeout")
@@ -1343,6 +1391,9 @@ local function begin_create_timeout(actor, seconds)
 end
 
 local function cancel_pending_create(message)
+	lobby_flow_trace("cancel_pending_create message=" .. tostring(message or "")
+		.. " actionId=" .. tostring(pending_create_action_id)
+		.. " deadline=" .. tostring(pending_create_deadline))
 	clear_pending_create()
 	mode = "browse"
 	if t then
@@ -1361,6 +1412,10 @@ local function begin_join_timeout(actor, seconds)
 	pending_join_action_id = pending_join_action_id + 1
 	pending_join_deadline = GetTimeSinceStart() + seconds
 	local timer = actor and actor:GetChild("JoinTimeoutTimer")
+	lobby_flow_trace("begin_join_timeout actionId=" .. tostring(pending_join_action_id)
+		.. " seconds=" .. tostring(seconds)
+		.. " deadline=" .. tostring(pending_join_deadline)
+		.. " hasTimer=" .. tostring(timer ~= nil))
 	if timer then
 		timer:stoptweening()
 		timer:sleep(seconds):queuecommand("CheckJoinTimeout")
@@ -1369,6 +1424,12 @@ end
 
 	local function cancel_pending_join(message)
 		local onlineHandler = GetOnlineHandlerInstance()
+		lobby_flow_trace("cancel_pending_join message=" .. tostring(message or "")
+			.. " actionId=" .. tostring(pending_join_action_id)
+			.. " deadline=" .. tostring(pending_join_deadline)
+			.. " hasHandler=" .. tostring(onlineHandler ~= nil)
+			.. " connected=" .. tostring(onlineHandler and onlineHandler.connected or false)
+			.. " pendingJoinRequestId=" .. tostring(onlineHandler and onlineHandler.pendingJoinRequestId or "nil"))
 		if onlineHandler and onlineHandler.connected and onlineHandler.pendingJoinRequestId then
 			onlineHandler:CancelJoinRequest()
 		end
@@ -1604,19 +1665,29 @@ end
 local function handle_leave_confirm_input(event)
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 		leave_confirm_index = (leave_confirm_index + (event.GameButton=="MenuRight" and 1 or -1)) % 2
+		lobby_flow_trace("leave_confirm_move button=" .. tostring(event.GameButton)
+			.. " index=" .. tostring(leave_confirm_index)
+			.. " mode=" .. tostring(leave_confirm_mode))
 		play_online_sound_once("ScreenSelectMaster", "change")
 		t:GetChild("LeaveConfirmPrompt"):playcommand("Hover")
 	elseif event.GameButton == "Start" then
+		lobby_flow_trace("leave_confirm_start index=" .. tostring(leave_confirm_index)
+			.. " mode=" .. tostring(leave_confirm_mode)
+			.. " joined_code=" .. tostring(joined_lobby_code)
+			.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " leaving=" .. tostring(leaving_lobby == true))
 		if leave_confirm_index == 1 then
 			play_online_sound_once("Common", "Start")
 			close_leave_confirm()
 			if leave_confirm_mode == "exit_online" then
+				lobby_flow_trace("leave_confirm_confirm_exit_online")
 				local topScreen = SCREENMAN:GetTopScreen()
 				if topScreen then
 					topScreen:SetNextScreenName("ScreenTitleMenu")
 					topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 				end
 			else
+				lobby_flow_trace("leave_confirm_confirm_leave_lobby")
 				begin_leave_lobby(t)
 				MESSAGEMAN:Broadcast("LeaveLobby", {
 					roomId=SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode,
@@ -1625,6 +1696,7 @@ local function handle_leave_confirm_input(event)
 			end
 		else
 			play_online_sound_once("Common", "Cancel")
+			lobby_flow_trace("leave_confirm_cancelled_by_start mode=" .. tostring(leave_confirm_mode))
 			close_leave_confirm()
 		end
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
@@ -1636,10 +1708,14 @@ end
 
 local function handle_browse_pack_download_confirm_input(event)
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
+		lobby_flow_trace("input_browse_pack_download_confirm_move button=" .. tostring(event.GameButton)
+			.. " index_before=" .. tostring(browse_pack_download_confirm_index))
 		browse_pack_download_confirm_index = (browse_pack_download_confirm_index + (event.GameButton=="MenuRight" and 1 or -1)) % 2
 		play_online_sound_once("ScreenSelectMaster", "change")
 		t:GetChild("BrowsePackDownloadConfirmPrompt"):playcommand("Hover")
 	elseif event.GameButton == "Start" then
+		lobby_flow_trace("input_browse_pack_download_confirm_start index=" .. tostring(browse_pack_download_confirm_index)
+			.. " song=" .. tostring(browse_pack_download_song_info and (browse_pack_download_song_info.title or browse_pack_download_song_info.folder_name or browse_pack_download_song_info.song_hash) or "nil"))
 		if browse_pack_download_confirm_index == 1 then
 			local songInfo = browse_pack_download_song_info
 			play_online_sound_once("Common", "Start")
@@ -1650,6 +1726,7 @@ local function handle_browse_pack_download_confirm_input(event)
 			close_browse_pack_download_confirm()
 		end
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
+		lobby_flow_trace("input_browse_pack_download_confirm_cancel button=" .. tostring(event.GameButton))
 		play_online_sound_once("Common", "Cancel")
 		close_browse_pack_download_confirm()
 	end
@@ -1658,6 +1735,10 @@ end
 
 local function handle_private_join_prompt_input(event)
 	local promptOptions = active_private_prompt_options()
+	lobby_flow_trace("input_private_join_prompt button=" .. tostring(event.GameButton)
+		.. " kind=" .. tostring(private_join_prompt_kind)
+		.. " index=" .. tostring(private_join_prompt_index)
+		.. " options=" .. tostring(#promptOptions))
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 		private_join_prompt_index = ((private_join_prompt_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #promptOptions) + 1
 		play_online_sound_once("ScreenSelectMaster", "change")
@@ -1701,6 +1782,10 @@ local function handle_private_join_prompt_input(event)
 end
 
 local function handle_player_action_menu_input(event)
+	lobby_flow_trace("input_player_action_menu button=" .. tostring(event.GameButton)
+		.. " index=" .. tostring(player_action_index)
+		.. " options=" .. tostring(#player_action_options)
+		.. " user=" .. tostring(player_action_user and (player_action_user.playerId or player_action_user.id or player_action_user.name) or "nil"))
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 		player_action_index = ((player_action_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #player_action_options) + 1
 		play_online_sound_once("ScreenSelectMaster", "change")
@@ -1717,6 +1802,11 @@ local function handle_player_action_menu_input(event)
 end
 
 local function handle_pack_choice_menu_input(event)
+	lobby_flow_trace("input_pack_choice_menu button=" .. tostring(event.GameButton)
+		.. " index=" .. tostring(pack_choice_index)
+		.. " candidates=" .. tostring(#pack_choice_candidates)
+		.. " browseOnly=" .. tostring(pack_choice_browse_only == true)
+		.. " downloadKey=" .. tostring(pack_choice_download_key or ""))
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 		pack_choice_index = ((pack_choice_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #pack_choice_candidates) + 1
 		play_online_sound_once("ScreenSelectMaster", "change")
@@ -1756,6 +1846,10 @@ local function handle_pack_choice_menu_input(event)
 end
 
 local function handle_global_options_menu_input(event)
+	lobby_flow_trace("input_global_options_menu button=" .. tostring(event.GameButton)
+		.. " index=" .. tostring(global_options_index)
+		.. " mode=" .. tostring(global_options_mode_label())
+		.. " joined_phase=" .. tostring(joined_phase))
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 		move_global_options_choice(event.GameButton == "MenuRight" and 1 or -1)
 		play_online_sound_once("ScreenSelectMaster", "change")
@@ -1770,7 +1864,16 @@ local function handle_global_options_menu_input(event)
 end
 
 local function handle_joined_mode_input(event)
+	lobby_flow_trace("input_joined_mode button=" .. tostring(event.GameButton)
+		.. " activeIndex=" .. tostring(joined_active_index)
+		.. " playersSelected=" .. tostring(joined_players_selected == true)
+		.. " phase=" .. tostring(joined_phase)
+		.. " isManager=" .. tostring(joined_is_manager)
+		.. " players=" .. tostring(#joined_lobby_players)
+		.. " leaving=" .. tostring(leaving_lobby == true)
+		.. " ready={" .. tostring(ready_summary()) .. "}")
 	if leaving_lobby then
+		lobby_flow_trace("input_joined_mode_ignored reason=leaving_lobby button=" .. tostring(event.GameButton))
 		return false
 	end
 
@@ -1790,6 +1893,8 @@ local function handle_joined_mode_input(event)
 			return false
 		elseif event.GameButton == "Start" then
 			local player = selected_joined_player()
+			lobby_flow_trace("input_joined_player_action_start player=" .. tostring(player and (player.playerId or player.id or player.profileName) or "nil")
+				.. " canReceiveManager=" .. tostring(joined_player_can_receive_manager(player) == true))
 			if joined_player_can_receive_manager(player) then
 				player.actionContext = "joined_manager_transfer"
 				player_action_user = player
@@ -1815,6 +1920,7 @@ local function handle_joined_mode_input(event)
 	end
 
 	if event.GameButton == "Back" then
+		lobby_flow_trace("input_joined_back_open_leave_confirm")
 		play_online_sound_once("Common", "Start")
 		normalize_joined_active_index()
 		joined_active_index = 1
@@ -1829,6 +1935,13 @@ local function handle_joined_mode_input(event)
 	elseif event.GameButton == "Start" then
 		normalize_joined_active_index()
 		play_online_sound_once("Common", "Start")
+		lobby_flow_trace("input_joined_start activeIndex=" .. tostring(joined_active_index)
+			.. " phase=" .. tostring(joined_phase)
+			.. " isManager=" .. tostring(joined_is_manager)
+			.. " roomCanStart=" .. tostring(joined_room_can_start() == true)
+			.. " missingSong=" .. tostring(joined_any_player_missing_song() == true)
+			.. " canCancelSelection=" .. tostring(joined_can_cancel_song_selection() == true)
+			.. " canDownload=" .. tostring(joined_can_download_pack == true or can_download_browsed_pack() == true))
 		if joined_active_index == 1 then
 			open_leave_confirm("leave_lobby")
 		elseif joined_active_index == 2 and joined_is_manager then
@@ -1842,6 +1955,7 @@ local function handle_joined_mode_input(event)
 			end
 			local topScreen = SCREENMAN:GetTopScreen()
 			if topScreen then
+				lobby_flow_trace("input_joined_select_music_transition")
 				topScreen:SetNextScreenName("ScreenSelectMusic")
 				topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 			end
@@ -1850,6 +1964,8 @@ local function handle_joined_mode_input(event)
 				open_browse_pack_download_confirm(joined_song_preview)
 			elseif joined_can_download_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadSelectedPack then
 				ITGOnline.PackSync:DownloadSelectedPack(joined_missing_song_info or joined_song_preview, function(ok, message)
+					lobby_flow_trace("input_joined_download_selected_pack_callback ok=" .. tostring(ok == true)
+						.. " messageType=" .. tostring(type(message)))
 					if not ok and type(message) == "table" and message.kind == "pack_candidates" then
 						open_pack_choice_menu(
 							joined_missing_song_info or joined_song_preview,
@@ -1885,12 +2001,16 @@ local function handle_joined_mode_input(event)
 			end
 		elseif joined_active_index == 6 and joined_can_cancel_song_selection() then
 			if ITGOnline and ITGOnline.CancelSongSelection then
+				lobby_flow_trace("input_joined_cancel_song_selection_request")
 				t:playcommand("SetStatus", {
 					text="Annulation du choix de chanson...",
 					showSpinner=true,
 					showPrompt=false
 				})
 				ITGOnline:CancelSongSelection(function(ok, decoded, response)
+					lobby_flow_trace("input_joined_cancel_song_selection_response ok=" .. tostring(ok == true)
+						.. " status=" .. tostring(response and response.statusCode or "nil")
+						.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil))
 					if not ok and t then
 						t:playcommand("SetStatus", {
 							text=(response and response.errorMessage) or (decoded and decoded.message) or "Impossible d'annuler le choix de chanson.",
@@ -1910,8 +2030,11 @@ local function handle_joined_mode_input(event)
 			end
 		elseif joined_active_index == 5 and joined_is_manager then
 			if joined_room_can_start() then
+				lobby_flow_trace("input_joined_start_room_broadcast")
 				MESSAGEMAN:Broadcast("StartOnlineRoom")
 			else
+				lobby_flow_trace("input_joined_start_room_blocked missingSong=" .. tostring(joined_any_player_missing_song() == true)
+					.. " ready={" .. tostring(ready_summary()) .. "}")
 				t:playcommand("SetStatus", {
 					text=joined_any_player_missing_song() and "Impossible de lancer. Un joueur n'a pas confirme la chanson selectionnee." or "Impossible de lancer. Choisissez une chanson et attendez que chaque joueur soit pret.",
 					showSpinner=false,
@@ -1921,9 +2044,11 @@ local function handle_joined_mode_input(event)
 		end
 	elseif event.GameButton == "Select" then
 		if focus_joined_players() then
+			lobby_flow_trace("input_joined_focus_players")
 			play_online_sound_once("Common", "Start")
 			t:queuecommand("UpdateJoinedLobbyText")
 		else
+			lobby_flow_trace("input_joined_focus_players_blocked")
 			play_online_sound_once("Common", "Cancel")
 		end
 	end
@@ -1931,6 +2056,15 @@ local function handle_joined_mode_input(event)
 end
 
 local function handle_browse_mode_input(event)
+	lobby_flow_trace("input_browse_mode button=" .. tostring(event.GameButton)
+		.. " activeIndex=" .. tostring(active_index)
+		.. " lobbyView=" .. tostring(lobby_view)
+		.. " listSelected=" .. tostring(list_selected == true)
+		.. " candidates=" .. tostring(#candidates)
+		.. " onlinePlayers=" .. tostring(#online_users)
+		.. " selectedLobbyIndex=" .. tostring(selected_lobby_index)
+		.. " onlinePlayerIndex=" .. tostring(online_player_index)
+		.. " connected=" .. tostring(connected == true))
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 		holding[event.GameButton] = true
 		if holding[event.GameButton == "MenuRight" and "MenuLeft" or "MenuRight"] then
@@ -1984,6 +2118,9 @@ local function handle_browse_mode_input(event)
 
 		if active_index == 0 or active_index == 1 then
 			lobby_view = active_index == 1 and "players" or "lobbies"
+			lobby_flow_trace("input_browse_start_focus_list lobbyView=" .. tostring(lobby_view)
+				.. " candidates=" .. tostring(#candidates)
+				.. " onlinePlayers=" .. tostring(#online_users))
 			if (lobby_view == "lobbies" and #candidates > 0) or (lobby_view == "players" and #online_users > 0) then
 				list_selected = true
 				play_online_sound_once("Common", "Start")
@@ -1996,6 +2133,7 @@ local function handle_browse_mode_input(event)
 			play_online_sound_once("Common", "Start")
 			local onlineHandler = GetOnlineHandlerInstance()
 			if onlineHandler and onlineHandler.connected then
+				lobby_flow_trace("input_browse_refresh_search_broadcast")
 				t:playcommand("SetStatus", {
 					text="Recherche des salons...",
 					showSpinner=true,
@@ -2003,6 +2141,7 @@ local function handle_browse_mode_input(event)
 				})
 				MESSAGEMAN:Broadcast("SearchLobby")
 			else
+				lobby_flow_trace("input_browse_refresh_reconnect")
 				connected = false
 				has_error = false
 				attempted = false
@@ -2017,6 +2156,7 @@ local function handle_browse_mode_input(event)
 				t:queuecommand("CheckConnect")
 			end
 		elseif active_index == 4 then
+			lobby_flow_trace("input_browse_exit_to_title")
 			play_online_sound_once("Common", "Start")
 			local topScreen = SCREENMAN:GetTopScreen()
 			if topScreen then
@@ -2027,6 +2167,7 @@ local function handle_browse_mode_input(event)
 			play_online_sound_once("Common", "Start")
 			local onlineHandler = GetOnlineHandlerInstance()
 			if not (onlineHandler and onlineHandler.connected and onlineHandler.socket ~= nil) then
+				lobby_flow_trace("input_browse_create_blocked reason=not_connected")
 				t:playcommand("SetStatus", {
 					text="Connexion au service en ligne en cours. Reessayez dans un instant.",
 					showSpinner=false,
@@ -2043,15 +2184,18 @@ local function handle_browse_mode_input(event)
 				showPrompt=false
 			})
 			begin_create_timeout(t)
+			lobby_flow_trace("input_browse_create_broadcast")
 			MESSAGEMAN:Broadcast("CreateLobby", {})
 		end
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
 		if list_selected then
+			lobby_flow_trace("input_browse_unfocus_list button=" .. tostring(event.GameButton))
 			list_selected = false
 			play_online_sound_once("Common", "Cancel")
 			t:queuecommand("LoseFocus")
 			t:queuecommand("Hover")
 		elseif event.GameButton == "Back" then
+			lobby_flow_trace("input_browse_back_open_exit_confirm")
 			play_online_sound_once("Common", "Start")
 			open_leave_confirm("exit_online")
 		end
@@ -2060,12 +2204,24 @@ local function handle_browse_mode_input(event)
 end
 
 local function handle_first_press_input(event)
+	lobby_flow_trace("input_first_press_route button=" .. tostring(event.GameButton)
+		.. " mode=" .. tostring(mode)
+		.. " connected=" .. tostring(connected == true)
+		.. " hasError=" .. tostring(has_error == true)
+		.. " leaveConfirm=" .. tostring(showing_leave_confirm == true)
+		.. " browsePackConfirm=" .. tostring(showing_browse_pack_download_confirm == true)
+		.. " privatePrompt=" .. tostring(showing_private_join_prompt == true)
+		.. " playerAction=" .. tostring(showing_player_action_menu == true)
+		.. " packChoice=" .. tostring(showing_pack_choice_menu == true)
+		.. " globalOptions=" .. tostring(showing_global_options_menu == true)
+		.. " pendingJoinActionId=" .. tostring(pending_join_action_id))
 	if showing_leave_confirm then return handle_leave_confirm_input(event) end
 	if showing_browse_pack_download_confirm then return handle_browse_pack_download_confirm_input(event) end
 	if showing_private_join_prompt then return handle_private_join_prompt_input(event) end
 	if showing_player_action_menu then return handle_player_action_menu_input(event) end
 
 	if has_error and event.GameButton == "Start" then
+		lobby_flow_trace("input_first_press_error_start_exit")
 		local topScreen = SCREENMAN:GetTopScreen()
 		if topScreen then
 			topScreen:SetNextScreenName("ScreenTitleMenu")
@@ -2075,9 +2231,14 @@ local function handle_first_press_input(event)
 	end
 
 	if showing_pack_choice_menu then return handle_pack_choice_menu_input(event) end
-	if not connected then return false end
+	if not connected then
+		lobby_flow_trace("input_first_press_ignored reason=not_connected button=" .. tostring(event.GameButton))
+		return false
+	end
 
 	if pending_join_action_id > 0 and (event.GameButton == "Select" or event.GameButton == "Back") then
+		lobby_flow_trace("input_first_press_cancel_pending_join button=" .. tostring(event.GameButton)
+			.. " pendingJoinActionId=" .. tostring(pending_join_action_id))
 		play_online_sound_once("Common", "Cancel")
 		cancel_pending_join("Connexion annulee. Rafraichissement des salons...")
 		return false
@@ -2091,10 +2252,17 @@ end
 local InputHandler = function(event)
 	if not event.PlayerNumber or not event.button then return false end
 	if not t then return false end
-	if not is_active_lobby_overlay() then return false end
+	if not is_active_lobby_overlay() then
+		lobby_flow_trace("input_ignored reason=inactive_overlay type=" .. tostring(event.type)
+			.. " button=" .. tostring(event.GameButton or event.button))
+		return false
+	end
 	event.GameButton = online_menu_button(event.GameButton)
 
 	if GetTimeSinceStart() < input_quiet_until then
+		lobby_flow_trace("input_ignored reason=quiet_window type=" .. tostring(event.type)
+			.. " button=" .. tostring(event.GameButton)
+			.. " until=" .. tostring(input_quiet_until))
 		if event.type == "InputEventType_Release"
 			and (event.GameButton == "MenuRight" or event.GameButton == "MenuLeft") then
 			holding[event.GameButton] = false
@@ -2103,13 +2271,22 @@ local InputHandler = function(event)
 	end
 
 	if duplicate_first_press(event) then
+		lobby_flow_trace("input_ignored reason=duplicate_first_press button=" .. tostring(event.GameButton)
+			.. " player=" .. tostring(event.PlayerNumber))
 		return true
 	end
 
 	if event.type == "InputEventType_FirstPress" then
+		lobby_flow_trace("input_first_press button=" .. tostring(event.GameButton)
+			.. " player=" .. tostring(event.PlayerNumber)
+			.. " mode=" .. tostring(mode)
+			.. " activeIndex=" .. tostring(active_index)
+			.. " joinedActiveIndex=" .. tostring(joined_active_index))
 		handle_first_press_input(event)
 		return true
 	elseif event.type == "InputEventType_Release" then
+		lobby_flow_trace("input_release button=" .. tostring(event.GameButton)
+			.. " player=" .. tostring(event.PlayerNumber))
 		if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 			holding[event.GameButton] = false
 		end
@@ -2173,6 +2350,11 @@ local af = Def.ActorFrame{
 		t=self
 		SL.Global.Online = SL.Global.Online or {}
 		SL.Global.Online.ScreenOnlineLobbiesActiveInstance = overlay_instance_id
+		lobby_flow_trace("overlay_on instance=" .. tostring(overlay_instance_id)
+			.. " mode=" .. tostring(mode)
+			.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " currentPhase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+			.. " screenGeneration=" .. tostring(ITGOnline and ITGOnline.screenGeneration or "nil"))
 		reset_browse_focus()
 		leave_confirm_mode = "leave_lobby"
 		showing_leave_confirm = false
@@ -2189,6 +2371,11 @@ local af = Def.ActorFrame{
 		self:queuecommand("CheckConnect")
 	end,
 	OffCommand=function(self)
+			lobby_flow_trace("overlay_off instance=" .. tostring(overlay_instance_id)
+				.. " active=" .. tostring(is_active_lobby_overlay() == true)
+				.. " mode=" .. tostring(mode)
+				.. " leaving=" .. tostring(leaving_lobby == true)
+				.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 			if is_active_lobby_overlay() then
 				SL.Global.Online.ScreenOnlineLobbiesActiveInstance = nil
 			end
@@ -2204,22 +2391,34 @@ local af = Def.ActorFrame{
 	Def.Actor{
 		Name="JoinTimeoutTimer",
 		CheckJoinTimeoutCommand=function(self)
+			lobby_flow_trace("join_timeout_check actionId=" .. tostring(pending_join_action_id)
+				.. " now=" .. tostring(GetTimeSinceStart())
+				.. " deadline=" .. tostring(pending_join_deadline))
 			if pending_join_action_id > 0 and GetTimeSinceStart() >= pending_join_deadline then
 					cancel_pending_join("La tentative de rejoindre le salon a expire. Rafraichissement...")
+			else
+				lobby_flow_trace("join_timeout_check_ok actionId=" .. tostring(pending_join_action_id))
 			end
 		end
 	},
 		Def.Actor{
 			Name="CreateTimeoutTimer",
 			CheckCreateTimeoutCommand=function(self)
+				lobby_flow_trace("create_timeout_check actionId=" .. tostring(pending_create_action_id)
+					.. " now=" .. tostring(GetTimeSinceStart())
+					.. " deadline=" .. tostring(pending_create_deadline))
 				if pending_create_action_id > 0 and GetTimeSinceStart() >= pending_create_deadline then
 					cancel_pending_create("La creation du salon a expire. Verifiez la connexion puis reessayez.")
+				else
+					lobby_flow_trace("create_timeout_check_ok actionId=" .. tostring(pending_create_action_id))
 				end
 			end
 		},
 			Def.Actor{
 				Name="NetworkStatusClearTimer",
 				FireCommand=function(self)
+					lobby_flow_trace("network_status_clear_timer_fire now=" .. tostring(GetTimeSinceStart())
+						.. " clearAt=" .. tostring(network_status_clear_at))
 					local parent = self:GetParent()
 					if parent then parent:playcommand("ClearTransientStatus") end
 				end
@@ -2227,6 +2426,7 @@ local af = Def.ActorFrame{
 			Def.Actor{
 				Name="LobbySearchStabilizationTimer",
 				ApplyCommand=function(self)
+					lobby_flow_trace("lobby_search_stabilization_timer_apply pending=" .. tostring(lobby_search_ui_pending == true))
 					local parent = self:GetParent()
 					if parent then parent:playcommand("ApplyDeferredLobbySearch") end
 				end
@@ -2238,7 +2438,15 @@ local af = Def.ActorFrame{
 		end,
 	UpdateOnlinePlayersCommand=function(self)
 		local playersContent = self:GetChild("OnlinePlayersContent")
-		if not playersContent then return end
+		if not playersContent then
+			lobby_flow_trace("UpdateOnlinePlayers_aborted reason=no_players_content")
+			return
+		end
+		lobby_flow_trace("UpdateOnlinePlayers_begin onlinePlayers=" .. tostring(#online_users)
+			.. " selectedIndex=" .. tostring(online_player_index)
+			.. " lobbyView=" .. tostring(lobby_view)
+			.. " listSelected=" .. tostring(list_selected == true)
+			.. " mode=" .. tostring(mode))
 
 		if #online_users == 0 then
 			online_player_index = 1
@@ -2277,8 +2485,17 @@ local af = Def.ActorFrame{
 		if playerCount then
 			playerCount:settext(tostring(#online_users))
 		end
+		lobby_flow_trace("UpdateOnlinePlayers_end onlinePlayers=" .. tostring(#online_users)
+			.. " selectedIndex=" .. tostring(online_player_index)
+			.. " renderedLines=" .. tostring(#lines))
 	end,
 	UpdateLobbyViewCommand=function(self)
+		lobby_flow_trace("UpdateLobbyView_begin mode=" .. tostring(mode)
+			.. " candidates=" .. tostring(#candidates)
+			.. " onlinePlayers=" .. tostring(#online_users)
+			.. " selectedLobbyIndex=" .. tostring(selected_lobby_index)
+			.. " joined_code=" .. tostring(joined_lobby_code)
+			.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 		local lobbyContent = self:GetChild("LobbyContent")
 		local playersContent = self:GetChild("OnlinePlayersContent")
 		if lobbyContent then
@@ -2294,6 +2511,9 @@ local af = Def.ActorFrame{
 		end
 
 		self:queuecommand("UpdateOnlinePlayers")
+		lobby_flow_trace("UpdateLobbyView_end lobbyVisible=" .. tostring(mode ~= "joined")
+			.. " empty=" .. tostring(#candidates == 0)
+			.. " queuedUpdateOnlinePlayers=true")
 	end,
 	OpenPlayerActionMenuCommand=function(self)
 		player_action_user = selected_online_user()
@@ -2375,9 +2595,22 @@ local af = Def.ActorFrame{
 		if optionsText then optionsText:settext(table.concat(lines, "\n")) end
 	end,
 	UpdateJoinedLobbyTextCommand=function(self)
+		lobby_flow_trace("UpdateJoinedLobbyText_begin code=" .. tostring(joined_lobby_code)
+			.. " phase=" .. tostring(joined_phase)
+			.. " players=" .. tostring(#joined_lobby_players)
+			.. " isManager=" .. tostring(joined_is_manager)
+			.. " managerUserId=" .. tostring(joined_manager_user_id)
+			.. " songConfirmed=" .. tostring(joined_song_confirmed == true)
+			.. " missingSong=" .. tostring(joined_missing_song == true)
+			.. " canDownload=" .. tostring(joined_can_download_pack == true)
+			.. " packBusy=" .. tostring(pack_sync_busy() == true)
+			.. " ready={" .. tostring(ready_summary()) .. "}")
 		sync_local_missing_song_from_joined_players()
 		local joinedContent = self:GetChild("JoinedLobbyContent")
-		if not joinedContent then return end
+		if not joinedContent then
+			lobby_flow_trace("UpdateJoinedLobbyText_aborted reason=no_joined_content")
+			return
+		end
 		local codeValue = joinedContent:GetChild("JoinedLobbyCodeValue")
 		if codeValue then
 			codeValue:settext(joined_lobby_code ~= "" and joined_lobby_code or "(en attente)")
@@ -2655,10 +2888,31 @@ local af = Def.ActorFrame{
 					last_auto_start_request_key = ""
 				end
 			end
+			lobby_flow_trace("UpdateJoinedLobbyText_end code=" .. tostring(joined_lobby_code)
+				.. " phase=" .. tostring(joined_phase)
+				.. " players=" .. tostring(#joined_lobby_players)
+				.. " selectedPlayerIndex=" .. tostring(joined_player_index)
+				.. " activeIndex=" .. tostring(joined_active_index)
+				.. " songConfirmed=" .. tostring(joined_song_confirmed == true)
+				.. " preview=" .. tostring(joined_song_preview and (joined_song_preview.title or joined_song_preview.folder_name or joined_song_preview.song_hash) or "none")
+				.. " canDownload=" .. tostring(joined_can_download_pack == true)
+				.. " missingSong=" .. tostring(joined_missing_song == true)
+				.. " ready={" .. tostring(ready_summary()) .. "}")
 		end,
 		SetStatusCommand=function(self, params)
+			lobby_flow_trace("SetStatus_received text=" .. tostring(params and params.text or "")
+				.. " showSpinner=" .. tostring(params and params.showSpinner == true)
+				.. " showPrompt=" .. tostring(params and params.showPrompt == true)
+				.. " force=" .. tostring(params and params.force == true)
+				.. " critical=" .. tostring(params and params.critical == true)
+				.. " duration=" .. tostring(params and params.duration or "nil")
+				.. " mode=" .. tostring(mode)
+				.. " joined_code=" .. tostring(joined_lobby_code)
+				.. " showingPackChoice=" .. tostring(showing_pack_choice_menu == true)
+				.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 			if showing_pack_choice_menu then
 				if params and (params.force == true or params.critical == true) then
+					lobby_flow_trace("SetStatus_closing_transient_ui reason=force_or_critical")
 					if ITGOnline
 						and ITGOnline.PackSync
 						and ITGOnline.PackSync.CancelPendingPackChoice then
@@ -2666,6 +2920,7 @@ local af = Def.ActorFrame{
 					end
 					close_transient_joined_ui()
 				else
+					lobby_flow_trace("SetStatus_ignored reason=pack_choice_menu_open")
 					return
 				end
 			end
@@ -2675,6 +2930,7 @@ local af = Def.ActorFrame{
 			local duration = tonumber(params and params.duration)
 			if duration and duration > 0 then
 				network_status_clear_at = GetTimeSinceStart() + duration
+				lobby_flow_trace("SetStatus_auto_clear_scheduled at=" .. tostring(network_status_clear_at))
 				local timer = self:GetChild("NetworkStatusClearTimer")
 				if timer then
 					timer:stoptweening()
@@ -2690,6 +2946,12 @@ local af = Def.ActorFrame{
 			if status then status:visible(false) end
 		end,
 		CheckConnectCommand=function(self)
+			lobby_flow_trace("CheckConnect_begin attempted=" .. tostring(attempted)
+				.. " connected=" .. tostring(GetOnlineHandlerInstance() and GetOnlineHandlerInstance().connected or false)
+				.. " wait_time=" .. tostring(wait_time)
+				.. " mode=" .. tostring(mode)
+				.. " joined_code=" .. tostring(joined_lobby_code)
+				.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 			if mode == "browse"
 				and joined_lobby_code == ""
 				and not (ITGOnline and ITGOnline.currentRoomId)
@@ -2707,21 +2969,29 @@ local af = Def.ActorFrame{
 						text="Connexion au service en ligne...",
 						showSpinner=true
 					})
+					lobby_flow_trace("CheckConnect_connect_broadcast attempted=" .. tostring(attempted)
+						.. " hasSocket=" .. tostring(onlineHandler.socket ~= nil)
+						.. " error=" .. tostring(onlineHandler.errorMsg))
 					MESSAGEMAN:Broadcast("ConnectOnline")
 					attempted = true
 				end
 
 				if not onlineHandler.connected and onlineHandler.errorMsg == nil then
 					wait_time = wait_time + 1
+					lobby_flow_trace("CheckConnect_waiting wait_time=" .. tostring(wait_time)
+						.. " hasSocket=" .. tostring(onlineHandler.socket ~= nil))
 					self:playcommand("SetStatus", {
 						text="Connexion au service en ligne... ("..wait_time.."s)",
 						showSpinner=true
 					})
 					self:sleep(1):queuecommand("CheckConnect")
 				else
+					lobby_flow_trace("CheckConnect_display connected=" .. tostring(onlineHandler.connected)
+						.. " error=" .. tostring(onlineHandler.errorMsg))
 					self:queuecommand("Display")
 				end
 			else
+				lobby_flow_trace("CheckConnect_no_handler")
 				self:playcommand("SetStatus", {
 					text="Initialisation du gestionnaire en ligne...",
 					showSpinner=true
@@ -2730,6 +3000,12 @@ local af = Def.ActorFrame{
 			end
 		end,
 		DisplayCommand=function(self)
+			lobby_flow_trace("Display_begin mode=" .. tostring(mode)
+				.. " joined_code=" .. tostring(joined_lobby_code)
+				.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " connected=" .. tostring(connected == true)
+				.. " leaving=" .. tostring(leaving_lobby == true)
+				.. " recentLeave=" .. tostring(recently_left_lobby(5.0) == true))
 			if mode == "browse"
 				and joined_lobby_code == ""
 				and not (ITGOnline and ITGOnline.currentRoomId)
@@ -2752,23 +3028,31 @@ local af = Def.ActorFrame{
 					self:GetChild("NetworkStatus"):visible(false)
 					ScreenOnlineLobbiesApplyCurrentRoomSnapshot(self, "display")
 					if ITGOnline and ITGOnline.Sync then
+						lobby_flow_trace("Display_sync_requested")
 						self:playcommand("SetStatus", {
 							text="Synchronisation de l'etat en ligne...",
 							showSpinner=true,
 							showPrompt=false
 						})
 						ITGOnline:Sync(function(ok, decoded)
+							lobby_flow_trace("Display_sync_result ok=" .. tostring(ok == true)
+								.. " hasRoom=" .. tostring(decoded and decoded.current_room ~= nil)
+								.. " lobbyCount=" .. tostring(decoded and decoded.lobbies and #decoded.lobbies or 0))
 							if not ok or not decoded then
 								MESSAGEMAN:Broadcast("SearchLobby")
 							end
 						end)
 					elseif ITGOnline and ITGOnline.currentRoomId then
+						lobby_flow_trace("Display_fetch_current_room_by_id room=" .. tostring(ITGOnline.currentRoomId))
 						self:playcommand("SetStatus", {
 							text="Restauration du salon actuel...",
 							showSpinner=true,
 							showPrompt=false
 						})
 						ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok, decoded)
+							lobby_flow_trace("Display_fetch_room_result ok=" .. tostring(ok == true)
+								.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+								.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil"))
 							if ok and decoded and decoded.room then
 								MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
 							else
@@ -2776,12 +3060,16 @@ local af = Def.ActorFrame{
 							end
 						end)
 					elseif ITGOnline and ITGOnline.FetchCurrentRoom then
+						lobby_flow_trace("Display_fetch_current_room")
 						self:playcommand("SetStatus", {
 							text="Restauration du salon actuel...",
 							showSpinner=true,
 							showPrompt=false
 						})
 						ITGOnline:FetchCurrentRoom(function(ok, decoded)
+							lobby_flow_trace("Display_fetch_current_room_result ok=" .. tostring(ok == true)
+								.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+								.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil"))
 							if ok and decoded and decoded.room then
 								MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
 							else
@@ -2789,6 +3077,7 @@ local af = Def.ActorFrame{
 							end
 						end)
 					else
+						lobby_flow_trace("Display_search_lobby_fallback")
 						self:queuecommand("UpdateLobbyView")
 						MESSAGEMAN:Broadcast("SearchLobby")
 					end
@@ -2847,18 +3136,37 @@ local af = Def.ActorFrame{
 					apply_lobby_search_to_ui(self, "deferred")
 				end,
 				LobbySearchedMessageCommand=function(self, params)
-					if not is_active_lobby_overlay() then return end
+					if not is_active_lobby_overlay() then
+						lobby_flow_trace("LobbySearched_ignored reason=inactive_overlay")
+						return
+					end
 					candidates = params and params.lobbies or {}
 				online_users = params and params.onlinePlayers or {}
+				lobby_flow_trace("LobbySearched_received lobbies=" .. tostring(#candidates)
+					.. " onlinePlayers=" .. tostring(#online_users)
+					.. " mode=" .. tostring(mode)
+					.. " joined_code=" .. tostring(joined_lobby_code)
+					.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+					.. " force=" .. tostring(params and params.force == true))
 				if #online_users == 0 then
 					online_player_index = 1
 				else
 					online_player_index = math.max(1, math.min(online_player_index, #online_users))
 				end
 				apply_lobby_search_to_ui(self, "LobbySearched")
+				lobby_flow_trace("LobbySearched_applied lobbies=" .. tostring(#candidates)
+					.. " onlinePlayers=" .. tostring(#online_users)
+					.. " selectedLobbyIndex=" .. tostring(selected_lobby_index)
+					.. " onlinePlayerIndex=" .. tostring(online_player_index)
+					.. " mode=" .. tostring(mode)
+					.. " joined_code=" .. tostring(joined_lobby_code))
 			end,
 			OnlineLobbyStateMessageCommand=function(self, params)
-				if not is_active_lobby_overlay() then return end
+				if not is_active_lobby_overlay() then
+					lobby_room_summary("OnlineLobbyState_ignored_inactive", params)
+					return
+				end
+				lobby_room_summary("OnlineLobbyState_received", params)
 				if leaving_lobby then
 				lobby_flow_trace("ignored_online_lobby_state reason=leaving_lobby code=" .. tostring(params and params.code or ""))
 				return
@@ -2866,6 +3174,10 @@ local af = Def.ActorFrame{
 			local previousLobbyCode = joined_lobby_code
 			local previousJoinedPhase = joined_phase
 			local previousSongConfirmed = joined_song_confirmed
+			lobby_flow_trace("OnlineLobbyState_before_apply previous_code=" .. tostring(previousLobbyCode)
+				.. " previous_phase=" .. tostring(previousJoinedPhase)
+				.. " previous_song_confirmed=" .. tostring(previousSongConfirmed == true)
+				.. " previous_ready={" .. tostring(ready_summary()) .. "}")
 			local previousIsManager = joined_is_manager
 			clear_pending_join()
 			clear_pending_create()
@@ -2964,6 +3276,17 @@ local af = Def.ActorFrame{
 				.. " managerUserId=" .. tostring(joined_manager_user_id)
 				.. " players=" .. tostring(#joined_lobby_players)
 				.. " readyStates=[" .. ready_summary() .. "]")
+			lobby_flow_trace("OnlineLobbyState_applied previous_code=" .. tostring(previousLobbyCode)
+				.. " current_code=" .. tostring(joined_lobby_code)
+				.. " previous_phase=" .. tostring(previousJoinedPhase)
+				.. " current_phase=" .. tostring(joined_phase)
+				.. " isManager=" .. tostring(joined_is_manager)
+				.. " managerUserId=" .. tostring(joined_manager_user_id)
+				.. " players=" .. tostring(#joined_lobby_players)
+				.. " songConfirmed=" .. tostring(joined_song_confirmed == true)
+				.. " preview=" .. tostring(joined_song_preview and (joined_song_preview.title or joined_song_preview.folder_name or joined_song_preview.song_hash) or "none")
+				.. " missingSong=" .. tostring(joined_missing_song == true)
+				.. " ready={" .. tostring(ready_summary()) .. "}")
 
 			self:queuecommand("UpdateJoinedLobbyText")
 
@@ -2977,7 +3300,18 @@ local af = Def.ActorFrame{
 			self:queuecommand("Hover")
 		end,
 			OnlineMissingSongMessageCommand=function(self, params)
-				if not is_active_lobby_overlay() then return end
+				if not is_active_lobby_overlay() then
+					lobby_flow_trace("OnlineMissingSong_ignored reason=inactive_overlay"
+						.. " reasonParam=" .. tostring(params and params.reason or "nil"))
+					return
+				end
+				lobby_flow_trace("OnlineMissingSong_received reason=" .. tostring(params and params.reason or "missing_local_song")
+					.. " hasSongInfo=" .. tostring(params and params.songInfo ~= nil)
+					.. " noCompatibleChart=" .. tostring(params and params.noCompatibleChart == true)
+					.. " currentPreviewPack=" .. tostring(joined_song_preview and song_info_pack(joined_song_preview) or "")
+					.. " mode=" .. tostring(mode)
+					.. " joined_code=" .. tostring(joined_lobby_code)
+					.. " phase=" .. tostring(joined_phase))
 				joined_missing_song = true
 			joined_missing_song_info = params and params.songInfo or joined_song_preview
 			joined_missing_song_reason = params and params.reason or "missing_local_song"
@@ -2985,19 +3319,29 @@ local af = Def.ActorFrame{
 				params.noCompatibleChart == true
 				or can_download_pack_for_reason(params.reason)
 			) or false
+			lobby_flow_trace("OnlineMissingSong_state missing=true canDownload=" .. tostring(joined_can_download_pack)
+				.. " selectedKey=" .. tostring(joined_song_selected_key)
+				.. " confirmed=" .. tostring(joined_song_confirmed))
 			if ITGOnline and ITGOnline.ReportSongAvailability then
+				lobby_flow_trace("OnlineMissingSong_report_availability missing=true reason=" .. tostring(params and params.reason or "missing_local_song"))
 				ITGOnline:ReportSongAvailability(true, params and params.reason or "missing_local_song")
 			end
 			if params and params.songInfo then
 				joined_song_preview = params.songInfo
 				joined_song_confirmed = true
+				lobby_flow_trace("OnlineMissingSong_preview_promoted pack=" .. tostring(song_info_pack(params.songInfo))
+					.. " song=" .. tostring(params.songInfo.song or params.songInfo.title or ""))
 			end
 			local reason = params and params.reason or "missing_local_song"
 			if reason == "download_failed" then
+				lobby_flow_trace("OnlineMissingSong_download_failed candidates=" .. tostring(type(pack_choice_last_candidates) == "table" and #pack_choice_last_candidates or 0)
+					.. " selectedPackId=" .. tostring(pack_choice_last_selected_pack_id))
 				if (#pack_choice_last_candidates == 0) and SL and SL.Global and SL.Global.Online and type(SL.Global.Online.PackChoiceRecovery.candidates) == "table" then
 					pack_choice_last_candidates = SL.Global.Online.PackChoiceRecovery.candidates
 					pack_choice_last_song_info = SL.Global.Online.PackChoiceRecovery.songInfo
 					pack_choice_last_selected_pack_id = SL.Global.Online.PackChoiceRecovery.selectedPackId
+					lobby_flow_trace("OnlineMissingSong_recovered_pack_choice candidates=" .. tostring(#pack_choice_last_candidates)
+						.. " selectedPackId=" .. tostring(pack_choice_last_selected_pack_id))
 				end
 				local reopened = false
 				if type(pack_choice_last_candidates) == "table" and #pack_choice_last_candidates > 1 then
@@ -3010,6 +3354,7 @@ local af = Def.ActorFrame{
 						end
 					end
 					if #alternatives > 0 then
+						lobby_flow_trace("OnlineMissingSong_reopen_pack_choice alternatives=" .. tostring(#alternatives))
 						reopened = open_pack_choice_menu(
 							pack_choice_last_song_info or joined_missing_song_info or joined_song_preview,
 							alternatives,
@@ -3018,6 +3363,7 @@ local af = Def.ActorFrame{
 					end
 				end
 				if not reopened then
+					lobby_flow_trace("OnlineMissingSong_pack_choice_exhausted")
 					pack_choice_all_candidates_exhausted = true
 					self:playcommand("SetStatus", {
 						text="Aucun des packs testés ne contient la chart attendue.\nInstallation manuelle requise pour cette chanson.",
@@ -3027,31 +3373,53 @@ local af = Def.ActorFrame{
 				end
 			end
 			set_joined_default_active_index()
+			lobby_flow_trace("OnlineMissingSong_update_ui")
 			self:queuecommand("UpdateJoinedLobbyText")
 			self:queuecommand("Hover")
 		end,
 			OnlineSongAvailableMessageCommand=function(self)
-				if not is_active_lobby_overlay() then return end
+				if not is_active_lobby_overlay() then
+					lobby_flow_trace("OnlineSongAvailable_ignored reason=inactive_overlay")
+					return
+				end
 				local wasMissing = joined_missing_song
+			lobby_flow_trace("OnlineSongAvailable_received wasMissing=" .. tostring(wasMissing)
+				.. " mode=" .. tostring(mode)
+				.. " joined_code=" .. tostring(joined_lobby_code)
+				.. " phase=" .. tostring(joined_phase)
+				.. " currentPreviewPack=" .. tostring(joined_song_preview and song_info_pack(joined_song_preview) or ""))
 			joined_missing_song = false
 			joined_missing_song_info = nil
 			joined_can_download_pack = false
 			joined_missing_song_reason = nil
 			if wasMissing and ITGOnline and ITGOnline.ReportSongAvailability then
+				lobby_flow_trace("OnlineSongAvailable_report_availability missing=false reason=reloaded")
 				ITGOnline:ReportSongAvailability(false, "reloaded")
 			end
 			normalize_joined_active_index()
+			lobby_flow_trace("OnlineSongAvailable_update_ui")
 			self:queuecommand("UpdateJoinedLobbyText")
 			self:queuecommand("Hover")
 		end,
 		OnlineLobbyJoinSelectedMessageCommand=function(self, params)
-			if not is_active_lobby_overlay() then return end
+			if not is_active_lobby_overlay() then
+			lobby_flow_trace("OnlineLobbyJoinSelected_ignored reason=inactive_overlay code=" .. tostring(params and params.code or "nil"))
+			return
+		end
 			if not params or not params.code then
+			lobby_flow_trace("OnlineLobbyJoinSelected_ignored reason=missing_code")
 			play_online_sound_once("Common", "Cancel")
 			return
 		end
+		lobby_flow_trace("OnlineLobbyJoinSelected_received code=" .. tostring(params.code)
+			.. " acceptsNewMembers=" .. tostring(params.acceptsNewMembers)
+			.. " phase=" .. tostring(params.phase)
+			.. " mode=" .. tostring(mode)
+			.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 		if params.acceptsNewMembers == false
 			or (params.acceptsNewMembers == nil and params.phase ~= nil and normalized_online_phase(params.phase) ~= "lobby") then
+			lobby_flow_trace("OnlineLobbyJoinSelected_rejected reason=not_accepting_members code=" .. tostring(params.code)
+				.. " phase=" .. tostring(params.phase))
 			play_online_sound_once("Common", "Cancel")
 			self:playcommand("SetStatus", {
 				text="Ce salon n'accepte plus de nouveaux joueurs.",
@@ -3071,6 +3439,7 @@ local af = Def.ActorFrame{
 			showPrompt=false
 		})
 		begin_join_timeout(self)
+		lobby_flow_trace("OnlineLobbyJoinSelected_broadcast_join code=" .. tostring(params.code))
 		MESSAGEMAN:Broadcast("JoinLobby", {
 			code=params.code,
 		})
@@ -3101,7 +3470,9 @@ local af = Def.ActorFrame{
 				"OnlineLobbyLeftMessage_begin left=" .. tostring(params and params.left) ..
 				" leaving_lobby=" .. tostring(leaving_lobby) ..
 				" joined_code=" .. tostring(joined_lobby_code) ..
-				" event_code=" .. tostring(eventLobbyCode))
+				" event_code=" .. tostring(eventLobbyCode) ..
+				" currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil") ..
+				" mode=" .. tostring(mode))
 			if params == nil or params.left == nil or params.left then
 				clear_pending_join()
 				clear_pending_create()
@@ -3110,9 +3481,23 @@ local af = Def.ActorFrame{
 			lobby_flow_trace("OnlineLobbyLeftMessage_end")
 		end,
 	OnlinePrivateJoinRequestMessageCommand=function(self, params)
-		if not is_active_lobby_overlay() then return end
-		if leaving_lobby then return end
-	if not params or not params.join_request then return end
+		if not is_active_lobby_overlay() then
+			lobby_flow_trace("OnlinePrivateJoinRequest_ignored reason=inactive_overlay")
+			return
+		end
+		if leaving_lobby then
+			lobby_flow_trace("OnlinePrivateJoinRequest_ignored reason=leaving_lobby")
+			return
+		end
+	if not params or not params.join_request then
+		lobby_flow_trace("OnlinePrivateJoinRequest_ignored reason=missing_join_request")
+		return
+	end
+	lobby_flow_trace("OnlinePrivateJoinRequest_received requester=" .. tostring(params.join_request.user_id or params.join_request.player_id or "")
+		.. " room=" .. tostring(params.join_request.room_id or "")
+		.. " mode=" .. tostring(mode)
+		.. " joined_code=" .. tostring(joined_lobby_code)
+		.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 	private_join_request = params
 	private_join_prompt_kind = "join_request"
 	private_join_prompt_index = 1
@@ -3122,9 +3507,23 @@ local af = Def.ActorFrame{
 	self:queuecommand("UpdatePrivateJoinPrompt")
 end,
 	OnlineRoomInvitationMessageCommand=function(self, params)
-		if not is_active_lobby_overlay() then return end
-		if leaving_lobby then return end
-	if not params or not params.invitation then return end
+		if not is_active_lobby_overlay() then
+			lobby_flow_trace("OnlineRoomInvitation_ignored reason=inactive_overlay")
+			return
+		end
+		if leaving_lobby then
+			lobby_flow_trace("OnlineRoomInvitation_ignored reason=leaving_lobby")
+			return
+		end
+	if not params or not params.invitation then
+		lobby_flow_trace("OnlineRoomInvitation_ignored reason=missing_invitation")
+		return
+	end
+	lobby_flow_trace("OnlineRoomInvitation_received inviter=" .. tostring(params.invitation.inviter_id or params.invitation.user_id or "")
+		.. " room=" .. tostring(params.invitation.room_id or "")
+		.. " mode=" .. tostring(mode)
+		.. " joined_code=" .. tostring(joined_lobby_code)
+		.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 	private_join_request = params
 	private_join_prompt_kind = "invitation"
 	private_join_prompt_index = 1
@@ -3134,42 +3533,92 @@ end,
 	self:queuecommand("UpdatePrivateJoinPrompt")
 	end,
 			OnlineSongPreviewMessageCommand=function(self, params)
-				if not is_active_lobby_overlay() then return end
-				if leaving_lobby then return end
+				if not is_active_lobby_overlay() then
+					lobby_flow_trace("OnlineSongPreview_ignored reason=inactive_overlay")
+					return
+				end
+				if leaving_lobby then
+					lobby_flow_trace("OnlineSongPreview_ignored reason=leaving_lobby")
+					return
+				end
 			local preview = normalize_online_song_info(params)
 		if preview then
+			lobby_flow_trace("OnlineSongPreview_received pack=" .. tostring(song_info_pack(preview))
+				.. " song=" .. tostring(preview.song or preview.title or "")
+				.. " mode=" .. tostring(mode)
+				.. " joined_code=" .. tostring(joined_lobby_code)
+				.. " phase=" .. tostring(joined_phase)
+				.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 			joined_song_preview = preview
 			joined_song_confirmed = false
 			joined_song_selected_key = ""
 			joined_preview_unknown_pack = not local_pack_exists(preview)
+			lobby_flow_trace("OnlineSongPreview_state confirmed=false unknownPack=" .. tostring(joined_preview_unknown_pack)
+				.. " selectedKeyCleared=true")
 			if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ManagerBrowsingPreview then
+				lobby_flow_trace("OnlineSongPreview_manager_browsing_preview")
 				ITGOnline.PackSync:ManagerBrowsingPreview(preview)
 			end
 			self:queuecommand("UpdateJoinedLobbyText")
+		else
+			lobby_flow_trace("OnlineSongPreview_ignored reason=normalize_failed")
 		end
 	end,
 		OnlinePackSyncReloadSongsMessageCommand=function(self)
-			if not is_active_lobby_overlay() then return end
-			if leaving_lobby then return end
+			if not is_active_lobby_overlay() then
+				lobby_flow_trace("OnlinePackSyncReloadSongs_ignored reason=inactive_overlay")
+				return
+			end
+			if leaving_lobby then
+				lobby_flow_trace("OnlinePackSyncReloadSongs_ignored reason=leaving_lobby")
+				return
+			end
+		lobby_flow_trace("OnlinePackSyncReloadSongs_received mode=" .. tostring(mode)
+			.. " joined_code=" .. tostring(joined_lobby_code)
+			.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 		transition_to_online_song_reload()
 	end,
 		OnlinePackSyncLocalStatusMessageCommand=function(self, params)
-			if not is_active_lobby_overlay() then return end
-			if leaving_lobby then return end
+			if not is_active_lobby_overlay() then
+				lobby_flow_trace("OnlinePackSyncLocalStatus_ignored reason=inactive_overlay")
+				return
+			end
+			if leaving_lobby then
+				lobby_flow_trace("OnlinePackSyncLocalStatus_ignored reason=leaving_lobby")
+				return
+			end
+		lobby_flow_trace("OnlinePackSyncLocalStatus_received status=" .. tostring(params and params.status or "")
+			.. " progress=" .. tostring(params and params.progress or "")
+			.. " userId=" .. tostring(params and params.userId or params and params.user_id or "")
+			.. " mode=" .. tostring(mode)
+			.. " joined_code=" .. tostring(joined_lobby_code))
 		apply_local_pack_sync_status_to_joined_player(params)
 		normalize_joined_active_index()
 		self:queuecommand("UpdateJoinedLobbyText")
 		self:queuecommand("Hover")
 	end,
 		OnlinePackDownloadedMessageCommand=function(self, params)
-			if not is_active_lobby_overlay() then return end
-			if leaving_lobby then return end
+			if not is_active_lobby_overlay() then
+				lobby_flow_trace("OnlinePackDownloaded_ignored reason=inactive_overlay")
+				return
+			end
+			if leaving_lobby then
+				lobby_flow_trace("OnlinePackDownloaded_ignored reason=leaving_lobby")
+				return
+			end
+		lobby_flow_trace("OnlinePackDownloaded_received pack=" .. tostring(params and params.songInfo and song_info_pack(params.songInfo) or "")
+			.. " currentPreviewPack=" .. tostring(joined_song_preview and song_info_pack(joined_song_preview) or "")
+			.. " mode=" .. tostring(mode)
+			.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 		if params and params.songInfo and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.MarkPackInstalled then
+			lobby_flow_trace("OnlinePackDownloaded_mark_installed pack=" .. tostring(song_info_pack(params.songInfo)))
 			ITGOnline.PackSync:MarkPackInstalled(song_info_pack(params.songInfo))
 		end
 		if params and params.songInfo and joined_song_preview and song_info_pack(params.songInfo) == song_info_pack(joined_song_preview) then
 			joined_preview_unknown_pack = false
+			lobby_flow_trace("OnlinePackDownloaded_matches_preview refreshing_joined_ui pack=" .. tostring(song_info_pack(params.songInfo)))
 			if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ManagerBrowsingPreview then
+				lobby_flow_trace("OnlinePackDownloaded_recheck_manager_preview")
 				ITGOnline.PackSync:ManagerBrowsingPreview(joined_song_preview)
 			end
 			normalize_joined_active_index()
@@ -3179,11 +3628,20 @@ end,
 			self:queuecommand("Hover")
 		end
 		if ITGOnline and ITGOnline.FetchRoom and ITGOnline.currentRoomId then
+			lobby_flow_trace("OnlinePackDownloaded_fetch_room_begin room=" .. tostring(ITGOnline.currentRoomId))
 			ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok, decoded)
+				lobby_flow_trace("OnlinePackDownloaded_fetch_room_result ok=" .. tostring(ok == true)
+					.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+					.. " room=" .. tostring(decoded and decoded.room and decoded.room.id or "nil")
+					.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil"))
 				if ok and decoded and decoded.room then
 					MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
 				end
 			end)
+		else
+			lobby_flow_trace("OnlinePackDownloaded_fetch_room_skipped hasClient=" .. tostring(ITGOnline ~= nil)
+				.. " hasFetch=" .. tostring(ITGOnline and ITGOnline.FetchRoom ~= nil)
+				.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 		end
 	end,
 			OnlineResponseStatusMessageCommand=function(self, params)

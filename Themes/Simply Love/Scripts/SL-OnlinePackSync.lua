@@ -568,6 +568,13 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	self:SyncSequenceFromRoom(currentSelectedAt)
 	self.sequence = (tonumber(self.sequence) or 0) + 1
 	trace("Status " .. status .. (message and (" - " .. tostring(message)) or ""))
+	trace("Status detail room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+		.. " selected_at=" .. tostring(currentSelectedAt)
+		.. " sequence=" .. tostring(self.sequence)
+		.. " progress=" .. tostring(progress)
+		.. " inFlightKey=" .. tostring(self.downloadInFlightKey or "")
+		.. " browseOnly=" .. tostring(self.activeBrowseOnlyDownload == true))
 	if MESSAGEMAN then
 		MESSAGEMAN:Broadcast("OnlinePackSyncLocalStatus", {
 			status = status,
@@ -596,6 +603,15 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		local statusResult = decoded and decoded.pack_sync_status or nil
 		local ignored = ok and statusResult and statusResult.applied == false
 		local callbackOk = ok and not ignored
+		trace("Status response status=" .. tostring(status)
+			.. " ok=" .. tostring(ok == true)
+			.. " ignored=" .. tostring(ignored == true)
+			.. " applied=" .. tostring(statusResult and statusResult.applied)
+			.. " ignored_reason=" .. tostring(statusResult and statusResult.ignored_reason or "nil")
+			.. " statusCode=" .. tostring(response and response.statusCode or "nil")
+			.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+			.. " roomPhase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
+			.. " sequence=" .. tostring(self.sequence))
 		if ok and decoded and decoded.room and ITGOnline.ApplyRoomSnapshot then
 			ITGOnline:ApplyRoomSnapshot(decoded.room, "pack_sync_status")
 			MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
@@ -618,6 +634,13 @@ end
 function PackSync:ApplyLocalStatus(status, message, progress)
 	status = tostring(status or self.status.Unknown)
 	message = status_message(message)
+	trace("ApplyLocalStatus status=" .. tostring(status)
+		.. " message=" .. tostring(message or "")
+		.. " progress=" .. tostring(progress)
+		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+		.. " key=" .. tostring(self.downloadInFlightKey or "")
+		.. " browseOnly=" .. tostring(self.activeBrowseOnlyDownload == true))
 	self.currentStatus = status
 	self.currentStatusMessage = message
 	self.statusChangedAt = GetTimeSinceStart()
@@ -673,6 +696,15 @@ function PackSync:WatchdogTick()
 end
 
 function PackSync:ResetLocalState(reason)
+	trace("ResetLocalState begin reason=" .. tostring(reason or "unknown")
+		.. " status=" .. tostring(self.currentStatus or "nil")
+		.. " message=" .. tostring(self.currentStatusMessage or "")
+		.. " key=" .. tostring(self.downloadInFlightKey or "")
+		.. " hasSong=" .. tostring(self.currentSongInfo ~= nil)
+		.. " pendingPostReload=" .. tostring(self.pendingPostReloadSongInfo ~= nil)
+		.. " browseOnly=" .. tostring(self.activeBrowseOnlyDownload == true)
+		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 	if reason == "no_song_confirmed" and self.activeBrowseOnlyDownload == true then
 		trace("Keep browse-only download state during no_song_confirmed reset")
 		return
@@ -720,6 +752,10 @@ end
 function PackSync:CancelPendingPackChoice(reason)
 	local status = tostring(self.currentStatus or self.status.Unknown)
 	if trim(self.downloadInFlightKey) == "" or status ~= self.status.DownloadRequested then
+		trace("CancelPendingPackChoice skipped reason=no_pending_choice requested_reason=" .. tostring(reason or "unknown")
+			.. " status=" .. tostring(status)
+			.. " key=" .. tostring(self.downloadInFlightKey or "")
+			.. " browseOnly=" .. tostring(self.activeBrowseOnlyDownload == true))
 		return false
 	end
 
@@ -802,9 +838,15 @@ function PackSync:LocalChartIndex()
 end
 
 function PackSync:ManagerBrowsingPreview(songInfo)
-	if not songInfo then return end
+	if not songInfo then
+		trace("ManagerBrowsingPreview skipped reason=no_song_info")
+		return
+	end
 	local packName = selected_pack(songInfo)
-	if packName == "" then return end
+	if packName == "" then
+		trace("ManagerBrowsingPreview skipped reason=no_pack title=" .. tostring(selected_title(songInfo)))
+		return
+	end
 	if self.activeBrowseOnlyDownload == true or trim(self.downloadInFlightKey) ~= "" then
 		trace("Manager browsing preview ignored during active download pack=" .. tostring(packName))
 		return
@@ -951,7 +993,17 @@ function PackSync:FindLocalMatch(songInfo)
 end
 
 function PackSync:ApplySelectedChart(songInfo)
+	trace("ApplySelectedChart begin title=" .. tostring(selected_title(songInfo))
+		.. " pack=" .. tostring(selected_pack(songInfo))
+		.. " selected_at=" .. tostring(selected_at(songInfo))
+		.. " chart_hash=" .. tostring(selected_chart_hash(songInfo))
+		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 	local result = self:FindLocalMatch(songInfo)
+	trace("ApplySelectedChart result ok=" .. tostring(result and result.ok == true)
+		.. " status=" .. tostring(result and result.status or "nil")
+		.. " reason=" .. tostring(result and result.reason or "nil")
+		.. " message=" .. tostring(result and result.message or "nil"))
 	if result.ok then
 		set_current_selection(result.song, result.steps)
 		MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
@@ -1446,7 +1498,12 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 
 	local url = stepmaniaonline_origin() .. "/download/pack/" .. tostring(packId) .. "/"
 	local downloadMessage = "Telechargement de " .. tostring(packName)
-	trace("Download started pack=" .. tostring(packName) .. " id=" .. tostring(packId))
+	trace("Download started pack=" .. tostring(packName) .. " id=" .. tostring(packId)
+		.. " generation=" .. tostring(downloadGeneration)
+		.. " browseOnly=" .. tostring(browseOnly == true)
+		.. " key=" .. tostring(self.downloadInFlightKey or "")
+		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 	self.currentSongInfo = songInfo or self.currentSongInfo
 	self:UpdateStatus(self.status.DownloadInProgress, downloadMessage, 0)
 	self.lastProgressStatusAt = 0
@@ -1464,6 +1521,12 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		if downloadCompleted then return end
 		downloadCompleted = true
 		message = message or "Le téléchargement du pack a échoué."
+		trace("Download failed pack=" .. tostring(packName)
+			.. " id=" .. tostring(packId)
+			.. " generation=" .. tostring(downloadGeneration)
+			.. " message=" .. tostring(message)
+			.. " broadcastMissing=" .. tostring(broadcastMissing ~= false)
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 		self.downloadInFlightKey = nil
 		self.downloadStartedAt = nil
 		self.downloadLastByteAt = nil
@@ -1486,6 +1549,11 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		end
 		if downloadCompleted then return false end
 		downloadCompleted = true
+		trace("Download finished pack=" .. tostring(packName)
+			.. " id=" .. tostring(packId)
+			.. " generation=" .. tostring(downloadGeneration)
+			.. " browseOnly=" .. tostring(browseOnly == true)
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 		if callback then callback(true) end
 		return true
 	end
@@ -1548,6 +1616,12 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			return true
 		end,
 		onResponse = function(response)
+			trace("Download response pack=" .. tostring(packName)
+				.. " id=" .. tostring(packId)
+				.. " generation=" .. tostring(downloadGeneration)
+				.. " statusCode=" .. tostring(response and response.statusCode or "nil")
+				.. " completed=" .. tostring(downloadCompleted == true)
+				.. " currentGeneration=" .. tostring(self.downloadGeneration))
 			if not self:IsDownloadGenerationCurrent(downloadGeneration) then
 				trace("Download response ignored reason=stale_generation pack=" .. tostring(packName)
 					.. " generation=" .. tostring(downloadGeneration)
@@ -1619,6 +1693,13 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 		if callback then callback(false, "Aucune chanson selectionnee.") end
 		return
 	end
+	trace("DownloadSelectedPack begin title=" .. tostring(selected_title(songInfo))
+		.. " pack=" .. tostring(selected_pack(songInfo))
+		.. " selected_at=" .. tostring(selected_at(songInfo))
+		.. " chart_hash=" .. tostring(selected_chart_hash(songInfo))
+		.. " currentKey=" .. tostring(self.downloadInFlightKey or "")
+		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 	if not current_user_is_active_room_member() then
 		trace("DownloadSelectedPack blocked reason=not_active_room_member")
 		if callback then callback(false, "Vous n'etes plus dans le salon.") end
@@ -1656,6 +1737,12 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 
 	self:UpdateStatus(self.status.DownloadRequested, nil)
 	self:SearchStepManiaOnline(songInfo, function(ok, pack, searchError)
+		trace("DownloadSelectedPack search_result ok=" .. tostring(ok == true)
+			.. " packId=" .. tostring(pack and pack.id or "nil")
+			.. " packName=" .. tostring(pack and pack.name or "nil")
+			.. " candidates=" .. tostring(searchError and searchError.candidates and #searchError.candidates or 0)
+			.. " generation=" .. tostring(downloadGeneration)
+			.. " currentGeneration=" .. tostring(self.downloadGeneration))
 		if not self:IsDownloadGenerationCurrent(downloadGeneration) then
 			trace("DownloadSelected search result ignored reason=stale_generation generation="
 				.. tostring(downloadGeneration) .. " current=" .. tostring(self.downloadGeneration))
@@ -1686,6 +1773,10 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 			return
 		end
 		self:DownloadPackByCandidate(songInfo, pack, function(downloadOk, downloadMessage)
+			trace("DownloadSelectedPack candidate_callback ok=" .. tostring(downloadOk == true)
+				.. " message=" .. tostring(downloadMessage or "")
+				.. " generation=" .. tostring(downloadGeneration)
+				.. " currentGeneration=" .. tostring(self.downloadGeneration))
 			if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
 			if downloadOk then
 				if callback then callback(true) end
@@ -1702,6 +1793,12 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 		if callback then callback(false, "Aucun pack a telecharger.") end
 		return
 	end
+	trace("DownloadBrowsingPack begin title=" .. tostring(selected_title(songInfo))
+		.. " pack=" .. tostring(selected_pack(songInfo))
+		.. " selected_at=" .. tostring(selected_at(songInfo))
+		.. " currentKey=" .. tostring(self.downloadInFlightKey or "")
+		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 	if not current_user_is_active_room_member() then
 		trace("DownloadBrowsingPack blocked reason=not_active_room_member")
 		if callback then callback(false, "Vous n'etes plus dans le salon.") end
@@ -1740,6 +1837,12 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 
 	self:UpdateStatus(self.status.DownloadRequested, nil)
 	self:SearchStepManiaOnline(songInfo, function(ok, pack, searchError)
+		trace("DownloadBrowsingPack search_result ok=" .. tostring(ok == true)
+			.. " packId=" .. tostring(pack and pack.id or "nil")
+			.. " packName=" .. tostring(pack and pack.name or "nil")
+			.. " candidates=" .. tostring(searchError and searchError.candidates and #searchError.candidates or 0)
+			.. " generation=" .. tostring(downloadGeneration)
+			.. " currentGeneration=" .. tostring(self.downloadGeneration))
 		if not self:IsDownloadGenerationCurrent(downloadGeneration) then
 			trace("DownloadBrowsing search result ignored reason=stale_generation generation="
 				.. tostring(downloadGeneration) .. " current=" .. tostring(self.downloadGeneration))
@@ -1771,6 +1874,10 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 			return
 		end
 		self:DownloadPackByCandidate(songInfo, pack, function(downloadOk, downloadMessage)
+			trace("DownloadBrowsingPack candidate_callback ok=" .. tostring(downloadOk == true)
+				.. " message=" .. tostring(downloadMessage or "")
+				.. " generation=" .. tostring(downloadGeneration)
+				.. " currentGeneration=" .. tostring(self.downloadGeneration))
 			if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
 			if downloadOk then
 				if callback then callback(true) end
@@ -1802,11 +1909,20 @@ function PackSync:ValidatePendingPostReload()
 	local quarantinePath = self.pendingQuarantinePath
 	local browseOnly = self.pendingPostReloadBrowseOnly == true
 	local packName = selected_pack(songInfo)
+	trace("ValidatePendingPostReload begin hasSong=" .. tostring(songInfo ~= nil)
+		.. " browseOnly=" .. tostring(browseOnly == true)
+		.. " pack=" .. tostring(packName)
+		.. " quarantine=" .. tostring(quarantinePath or "nil")
+		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 	self.pendingPostReloadSongInfo = nil
 	self.pendingQuarantinePath = nil
 	self.pendingPostReloadBrowseOnly = false
 	self.downloadInFlightKey = nil
-	if not songInfo then return false end
+	if not songInfo then
+		trace("ValidatePendingPostReload skipped reason=no_pending_song")
+		return false
+	end
 
 	self:InvalidateLocalChartIndex()
 	if browseOnly then

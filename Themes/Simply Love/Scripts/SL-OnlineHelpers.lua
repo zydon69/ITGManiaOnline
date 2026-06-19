@@ -834,9 +834,24 @@ end
 
 local ReturnToOnlineLobbyFromEvaluation = function(reason)
 	local topScreen = SCREENMAN:GetTopScreen()
-	if not topScreen then return false end
-	if not evaluationScreens[topScreen:GetName()] then return false end
-	if not (ITGOnline and ITGOnline.currentRoomId) then return false end
+	if not topScreen then
+		if online_trace then online_trace("FLOW evaluation_exit_skipped reason=no_top_screen source=" .. tostring(reason or "input")) end
+		return false
+	end
+	if not evaluationScreens[topScreen:GetName()] then
+		if online_trace then
+			online_trace("FLOW evaluation_exit_skipped reason=not_evaluation_screen source=" .. tostring(reason or "input")
+				.. " screen=" .. tostring(topScreen:GetName()))
+		end
+		return false
+	end
+	if not (ITGOnline and ITGOnline.currentRoomId) then
+		if online_trace then
+			online_trace("FLOW evaluation_exit_skipped reason=no_current_room source=" .. tostring(reason or "input")
+				.. " screen=" .. tostring(topScreen:GetName()))
+		end
+		return false
+	end
 
 	UnlockOnlineInput()
 	ITGOnline.onlineEvaluationExitRequested = true
@@ -854,7 +869,16 @@ ITGOnlineReturnToLobbyFromEvaluation = ReturnToOnlineLobbyFromEvaluation
 
 local EvaluationInputHandler = function(event)
 	if not event or event.type ~= "InputEventType_FirstPress" then return false end
-	if not (ITGOnline and ITGOnline.currentRoomId) then return false end
+	if online_trace then
+		online_trace("FLOW evaluation_input button=" .. tostring(event.GameButton or "")
+			.. " device=" .. tostring(event.DeviceInput and event.DeviceInput.button or "nil")
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+	end
+	if not (ITGOnline and ITGOnline.currentRoomId) then
+		if online_trace then online_trace("FLOW evaluation_input_ignored reason=no_current_room") end
+		return false
+	end
 
 	local deviceButton = ""
 	if event.DeviceInput and event.DeviceInput.button then
@@ -875,11 +899,23 @@ end
 
 local RestoreCurrentRoom = function(actor, callback)
 	if not (ITGOnline and ITGOnline.FetchCurrentRoom) then
+		if online_trace then online_trace("FLOW restore_current_room skipped reason=no_fetch_current_room") end
 		if callback then callback(false) end
 		return
 	end
 
+	if online_trace then
+		online_trace("FLOW restore_current_room begin inLobby=" .. tostring(actor and actor.inLobby == true)
+			.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+	end
 	ITGOnline:FetchCurrentRoom(function(ok, decoded, response)
+		if online_trace then
+			online_trace("FLOW restore_current_room result ok=" .. tostring(ok == true)
+				.. " status=" .. tostring(response and response.statusCode or "nil")
+				.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+				.. " room=" .. tostring(decoded and decoded.room and decoded.room.id or "nil")
+				.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil"))
+		end
 		if ok and decoded and decoded.room then
 			actor.inLobby = true
 			local payload = ITGOnline:LobbyStatePayload(decoded.room)
@@ -1002,7 +1038,10 @@ local OrderPlayers = function(data, localScreenName)
 end
 
 DisplayLobbyState = function(data, actor)
-	if not actor or not actor.GetChild then return end
+	if not actor or not actor.GetChild then
+		if online_trace then online_trace("FLOW display_lobby skipped reason=no_actor") end
+		return
+	end
 	-- Keep in mind that SCREENMAN:GetTopScreen() might return nil while screens transition.
 	local screen = SCREENMAN:GetTopScreen()
 	local screenName = screen and screen:GetName() or "NoScreen"
@@ -1031,6 +1070,15 @@ DisplayLobbyState = function(data, actor)
 	end
 
 	local updatedData = OrderPlayers(data, screenName)
+	if online_trace then
+		online_trace("FLOW display_lobby_ordered room=" .. tostring(data and data.roomId or "")
+			.. " phase=" .. tostring(data and data.phase or "")
+			.. " screen=" .. tostring(screenName)
+			.. " inputPlayers=" .. tostring(data and data.players and #data.players or 0)
+			.. " orderedPlayers=" .. tostring(updatedData and updatedData.players and #updatedData.players or 0)
+			.. " isManager=" .. tostring(data and data.isManager == true)
+			.. " song=" .. tostring(data and data.songInfo and (data.songInfo.title or data.songInfo.songHash) or "none"))
+	end
 
 	local lines = {}
 
@@ -1382,14 +1430,31 @@ local function stop_named_timers(actor, names)
 	if not actor then return end
 	for _, name in ipairs(names) do
 		local timer = actor:GetChild(name)
-		if timer then timer:stoptweening() end
+		if timer then
+			if online_trace then online_trace("FLOW timer_stop name=" .. tostring(name)) end
+			timer:stoptweening()
+		end
 	end
 end
 
 local function schedule_named_timer(actor, name, delay, command)
-	if not actor or onlineHandlerShuttingDown then return end
+	if not actor or onlineHandlerShuttingDown then
+		if online_trace then
+			online_trace("FLOW timer_schedule_skipped name=" .. tostring(name)
+				.. " reason=" .. (not actor and "no_actor" or "handler_shutting_down")
+				.. " delay=" .. tostring(delay)
+				.. " command=" .. tostring(command))
+		end
+		return
+	end
 	local timer = actor:GetChild(name)
 	delay = tonumber(delay) or 0
+	if online_trace then
+		online_trace("FLOW timer_schedule name=" .. tostring(name)
+			.. " delay=" .. tostring(delay)
+			.. " command=" .. tostring(command)
+			.. " dedicatedTimer=" .. tostring(timer ~= nil))
+	end
 	if timer then
 		timer:stoptweening()
 		timer:sleep(math.max(0, delay)):queuecommand(command)
@@ -1399,24 +1464,37 @@ local function schedule_named_timer(actor, name, delay, command)
 end
 
 local function start_connection_timers(actor)
-	if not actor or onlineHandlerShuttingDown then return end
+	if not actor or onlineHandlerShuttingDown then
+		if online_trace then online_trace("FLOW connection_timers_start_skipped") end
+		return
+	end
+	if online_trace then online_trace("FLOW connection_timers_start") end
 	schedule_named_timer(actor, "RealtimeDeadmanTimer", 1, "Fire")
 	schedule_named_timer(actor, "OnlineHeartbeatTimer", 5, "Fire")
 end
 
 local function stop_connection_timers(actor)
+	if online_trace then online_trace("FLOW connection_timers_stop") end
 	stop_named_timers(actor, onlineConnectionTimerNames)
 end
 
 local function start_room_timers(actor)
-	if not actor or onlineHandlerShuttingDown or actor.roomTimersActive then return end
+	if not actor or onlineHandlerShuttingDown or actor.roomTimersActive then
+		if online_trace then
+			online_trace("FLOW room_timers_start_skipped reason="
+				.. (not actor and "no_actor" or onlineHandlerShuttingDown and "handler_shutting_down" or "already_active"))
+		end
+		return
+	end
 	actor.roomTimersActive = true
+	if online_trace then online_trace("FLOW room_timers_start") end
 	schedule_named_timer(actor, "OnlinePlayingCountdownTimer", 0.25, "Fire")
 end
 
 local function stop_room_timers(actor)
 	if not actor then return end
 	actor.roomTimersActive = false
+	if online_trace then online_trace("FLOW room_timers_stop") end
 	stop_named_timers(actor, onlineRoomTimerNames)
 end
 
@@ -1469,6 +1547,7 @@ CreateOnlineHandler = function()
 	      InitCommand=function(self)
 				onlineHandlerInstance = self
 				onlineHandlerShuttingDown = false
+				if online_trace then online_trace("FLOW online_handler_init") end
 				if ITGOnline and ITGOnline.RefreshDebugFlags then
 					ITGOnline:RefreshDebugFlags(true)
 				end
@@ -1483,9 +1562,16 @@ CreateOnlineHandler = function()
 						self.roomTimersActive = false
 		      end,
 					OnCommand=function(self)
+						if online_trace then online_trace("FLOW online_handler_on") end
 						start_connection_timers(self)
 					end,
 				OffCommand=function(self)
+					if online_trace then
+						online_trace("FLOW online_handler_off connected=" .. tostring(self.connected == true)
+							.. " socket=" .. tostring(self.socket ~= nil)
+							.. " inLobby=" .. tostring(self.inLobby == true)
+							.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+					end
 					onlineHandlerShuttingDown = true
 					clear_room_async_state(self)
 					stop_connection_timers(self)
@@ -1520,7 +1606,17 @@ CreateOnlineHandler = function()
 					self.leaveLobbyBusy = false
 				end,
 	      ConnectOnlineMessageCommand=function(self)
-	        if self.connecting then return end
+	        if self.connecting then
+						if online_trace then online_trace("FLOW connect_online_skipped reason=already_connecting") end
+						return
+					end
+					if online_trace then
+						online_trace("FLOW connect_online_begin connected=" .. tostring(self.connected == true)
+							.. " socket=" .. tostring(self.socket ~= nil)
+							.. " hasClientSocket=" .. tostring(ITGOnline and ITGOnline.socket ~= nil)
+							.. " realtimeConnected=" .. tostring(ITGOnline and ITGOnline.realtimeConnected == true)
+							.. " error=" .. tostring(self.errorMsg or "nil"))
+					end
 					if ITGOnline and ITGOnline.socket and ITGOnline.realtimeConnected and self.errorMsg == nil then
 						online_trace("FLOW connect_online_reused_existing_socket")
 						self.socket = ITGOnline.socket
@@ -1539,6 +1635,9 @@ CreateOnlineHandler = function()
 					ITGOnline:Connect({
 							open=function()
 								if onlineHandlerShuttingDown then return end
+								if online_trace then
+									online_trace("FLOW connect_online_open room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+								end
 								self.connecting = false
 								self.socket = ITGOnline.socket
 								self.connected = true
@@ -1549,6 +1648,7 @@ CreateOnlineHandler = function()
 							end,
 						error=function(message)
 							if onlineHandlerShuttingDown then return end
+							if online_trace then online_trace("FLOW connect_online_error message=" .. tostring(message or "nil")) end
 							self.connecting = false
 							self.inLobby = false
 							self.connected = false
@@ -1558,6 +1658,10 @@ CreateOnlineHandler = function()
 						end,
 							close=function()
 								if onlineHandlerShuttingDown then return end
+								if online_trace then
+									online_trace("FLOW connect_online_close disconnecting=" .. tostring(ITGOnline and ITGOnline.disconnecting == true)
+										.. " reconnectDelay=" .. tostring(self.reconnectDelay or 1))
+								end
 								self.connecting = false
 								self.connected = false
 								self.socket = nil
@@ -1573,8 +1677,16 @@ CreateOnlineHandler = function()
 	      end,
 					ReconnectOnlineCommand=function(self)
 						if onlineHandlerShuttingDown or ITGOnline.disconnecting or self.connected or self.socket ~= nil or self.connecting then
+							if online_trace then
+								online_trace("FLOW reconnect_online_skipped shuttingDown=" .. tostring(onlineHandlerShuttingDown == true)
+									.. " disconnecting=" .. tostring(ITGOnline and ITGOnline.disconnecting == true)
+									.. " connected=" .. tostring(self.connected == true)
+									.. " socket=" .. tostring(self.socket ~= nil)
+									.. " connecting=" .. tostring(self.connecting == true))
+							end
 							return
 						end
+						if online_trace then online_trace("FLOW reconnect_online_broadcast_connect") end
 						MESSAGEMAN:Broadcast("ConnectOnline")
 					end,
 						ITGOnlineLobbyRefreshDeferredMessageCommand=function(self, params)
@@ -1620,11 +1732,23 @@ CreateOnlineHandler = function()
 							end
 						end,
 						RealtimeDeadmanCommand=function(self)
-						if onlineHandlerShuttingDown then return end
+						if onlineHandlerShuttingDown then
+							if online_trace then online_trace("FLOW realtime_deadman_skipped reason=handler_shutting_down") end
+							return
+						end
 
 					if self.connected and self.socket ~= nil and ITGOnline and ITGOnline.lastRealtimeMessageAt then
 						local idle = GetTimeSinceStart() - ITGOnline.lastRealtimeMessageAt
+						online_flow_trace_throttled("realtime_deadman_tick", 10.0,
+							"realtime_deadman_tick idle=" .. tostring(idle)
+							.. " timeout=" .. tostring(self.deadmanTimeoutSeconds or 75)
+							.. " connected=" .. tostring(self.connected == true)
+							.. " socket=" .. tostring(self.socket ~= nil))
 						if idle > (self.deadmanTimeoutSeconds or 75) then
+							if online_trace then
+								online_trace("FLOW realtime_deadman_timeout idle=" .. tostring(idle)
+									.. " timeout=" .. tostring(self.deadmanTimeoutSeconds or 75))
+							end
 							self.connected = false
 							if ITGOnline.socket then
 								ITGOnline.socket:Close()
@@ -1655,7 +1779,18 @@ CreateOnlineHandler = function()
 								if ITGOnline.currentRoomId then
 									status = (phase == "playing" or screenName == "ScreenGameplay" or screenName == "ScreenGameplayShared") and "playing" or "in_room"
 								end
+								online_flow_trace("heartbeat_tick status=" .. tostring(status)
+									.. " screen=" .. tostring(screenName)
+									.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+									.. " phase=" .. tostring(phase or "nil")
+									.. " connected=" .. tostring(self.connected == true)
+									.. " socket=" .. tostring(self.socket ~= nil)
+									.. " inLobby=" .. tostring(self.inLobby == true))
 								ITGOnline:Heartbeat(status)
+							else
+								online_flow_trace("heartbeat_tick_skipped connected=" .. tostring(self.connected == true)
+									.. " socket=" .. tostring(self.socket ~= nil)
+									.. " hasClient=" .. tostring(ITGOnline ~= nil))
 							end
 
 							schedule_named_timer(self, "OnlineHeartbeatTimer", 30, "Fire")
@@ -1819,6 +1954,11 @@ CreateOnlineHandler = function()
 
 					if wsConnected and ITGOnline and ITGOnline.currentRoomId then
 						local status = (gameplayScreens[screenName] and ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing") and "playing" or "in_room"
+						online_flow_trace("heartbeat_screen_update status=" .. tostring(status)
+							.. " screen=" .. tostring(screenName)
+							.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+							.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+							.. " wsConnected=" .. tostring(wsConnected == true))
 						ITGOnline:Heartbeat(status)
 					end
 						if evaluationScreens[screenName]
@@ -1883,16 +2023,19 @@ CreateOnlineHandler = function()
 					end,
 	      PlayerJoinedMessageCommand=function(self)
 					if self.connected and self.socket ~= nil and self.inLobby then
+	          online_flow_trace("heartbeat_forced source=PlayerJoined room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 	          ITGOnline:Heartbeat("in_room", true)
 	        end
 	      end,
 	      PlayerUnjoinedMessageCommand=function(self)
 					if self.connected and self.socket ~= nil and self.inLobby then
+	          online_flow_trace("heartbeat_forced source=PlayerUnjoined room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 	          ITGOnline:Heartbeat("in_room", true)
 	        end
 	      end,
 			UpdateMachineStateMessageCommand=function(self)
 					if self.connected and self.socket ~= nil and self.inLobby then
+	          online_flow_trace("heartbeat_forced source=UpdateMachineState room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 	          ITGOnline:Heartbeat("in_room", true)
 	        end
 	      end,
@@ -2118,12 +2261,26 @@ CreateOnlineHandler = function()
 					end
 		      end,
 		      JoinLobbyMessageCommand=function(self, params)
+		        online_trace("FLOW JoinLobbyMessage received connected=" .. tostring(self.connected)
+							.. " socket=" .. tostring(self.socket ~= nil)
+							.. " busy=" .. tostring(self.joinLobbyBusy == true)
+							.. " inLobby=" .. tostring(self.inLobby == true)
+							.. " code=" .. tostring(params and params.code or "nil")
+							.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 		        if self.connected and self.socket ~= nil then
-						if self.joinLobbyBusy then return end
+						if self.joinLobbyBusy then
+							online_trace("FLOW JoinLobbyMessage skipped reason=busy code=" .. tostring(params and params.code or "nil"))
+							return
+						end
 						self.joinLobbyBusy = true
 						self.inLobby = false
 		          ITGOnline:RequestJoinRoom(params.code, function(ok, decoded, response)
 								self.joinLobbyBusy = false
+								online_trace("FLOW JoinLobbyMessage result ok=" .. tostring(ok == true)
+									.. " status=" .. tostring(response and response.statusCode or "nil")
+									.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+									.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil")
+									.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 								if ok and decoded and decoded.room then
 									self.inLobby = true
 									DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
@@ -2135,7 +2292,12 @@ CreateOnlineHandler = function()
 										message="Demande envoyee. En attente du manager du salon."
 									})
 								elseif decoded and (decoded.error_code == "already_in_room" or decoded.message == "You are already in this room.") and params and params.code then
+								online_trace("FLOW JoinLobbyMessage restore_existing_room code=" .. tostring(params.code))
 								ITGOnline:FetchRoom(params.code, function(fetchOk, fetchDecoded, fetchResponse)
+									online_trace("FLOW JoinLobbyMessage restore_result ok=" .. tostring(fetchOk == true)
+										.. " status=" .. tostring(fetchResponse and fetchResponse.statusCode or "nil")
+										.. " hasRoom=" .. tostring(fetchDecoded and fetchDecoded.room ~= nil)
+										.. " phase=" .. tostring(fetchDecoded and fetchDecoded.room and fetchDecoded.room.phase or "nil"))
 									if fetchOk and fetchDecoded and fetchDecoded.room then
 										self.inLobby = true
 										DisplayLobbyState(ITGOnline:LobbyStatePayload(fetchDecoded.room), self)
@@ -2156,11 +2318,20 @@ CreateOnlineHandler = function()
 								})
 							end
 						end)
+	        else
+						online_trace("FLOW JoinLobbyMessage skipped reason=not_connected_or_no_socket")
 	        end
 	      end,
 		      CreateLobbyMessageCommand=function(self, params)
+		        online_trace("FLOW CreateLobbyMessage received connected=" .. tostring(self.connected)
+							.. " socket=" .. tostring(self.socket ~= nil)
+							.. " busy=" .. tostring(self.createLobbyBusy == true)
+							.. " inLobby=" .. tostring(self.inLobby == true)
+							.. " visibility=" .. tostring(params and params.visibility or "public")
+							.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 		        if self.connected and self.socket ~= nil then
 						if self.createLobbyBusy then
+							online_trace("FLOW CreateLobbyMessage skipped reason=busy")
 							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 								event="createLobby",
 								success=false,
@@ -2172,12 +2343,19 @@ CreateOnlineHandler = function()
 						self.inLobby = false
 		          ITGOnline:CreateRoom(function(ok, decoded, response)
 								self.createLobbyBusy = false
+								online_trace("FLOW CreateLobbyMessage result ok=" .. tostring(ok == true)
+									.. " status=" .. tostring(response and response.statusCode or "nil")
+									.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+									.. " room=" .. tostring(decoded and decoded.room and decoded.room.id or "nil")
+									.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
 								if ok and decoded and decoded.room then
 								self.inLobby = true
 								DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
 								MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
 								elseif decoded and (decoded.error_code == "already_in_open_room" or decoded.message == "User is already in an open room.") then
+								online_trace("FLOW CreateLobbyMessage restore_current_room reason=already_in_open_room")
 								RestoreCurrentRoom(self, function(restored)
+									online_trace("FLOW CreateLobbyMessage restore_current_room_result restored=" .. tostring(restored == true))
 									if not restored then
 										MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 											event="createLobby",
@@ -2195,6 +2373,7 @@ CreateOnlineHandler = function()
 							end
 						end, params and params.visibility or "public")
 	        else
+						online_trace("FLOW CreateLobbyMessage skipped reason=not_connected_or_no_socket")
 						MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 							event="createLobby",
 							success=false,
@@ -2203,6 +2382,12 @@ CreateOnlineHandler = function()
 	        end
 	      end,
 	      StartOnlineRoomMessageCommand=function(self)
+					online_trace("FLOW StartOnlineRoomMessage received connected=" .. tostring(self.connected)
+						.. " socket=" .. tostring(self.socket ~= nil)
+						.. " inLobby=" .. tostring(self.inLobby == true)
+						.. " busy=" .. tostring(self.startRoomBusy == true)
+						.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+						.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 					if self.connected and self.socket ~= nil and self.inLobby then
 						if self.startRoomBusy then
 							if online_trace then
@@ -2268,6 +2453,10 @@ CreateOnlineHandler = function()
 								success=false,
 								message="Le salon n'est pas encore pret a demarrer."
 						})
+					else
+						online_trace("FLOW StartOnlineRoomMessage skipped reason=not_ready connected=" .. tostring(self.connected)
+							.. " socket=" .. tostring(self.socket ~= nil)
+							.. " inLobby=" .. tostring(self.inLobby == true))
         end
       end,
 	      InviteOnlinePlayerMessageCommand=function(self, params)
@@ -2385,11 +2574,19 @@ CreateOnlineHandler = function()
         end
       end,
 				SearchLobbyMessageCommand=function(self, params)
+					online_trace("FLOW SearchLobbyMessage received connected=" .. tostring(self.connected)
+						.. " socket=" .. tostring(self.socket ~= nil)
+						.. " busy=" .. tostring(self.searchLobbyBusy == true)
+						.. " force=" .. tostring(params and params.force == true)
+						.. " minInterval=" .. tostring(params and params.minInterval or "nil"))
 					if self.connected and self.socket ~= nil then
 						local now = GetTimeSinceStart()
 						local force = params and params.force == true
 						local minInterval = tonumber(params and params.minInterval) or 0.75
-						if self.searchLobbyBusy then return end
+						if self.searchLobbyBusy then
+							online_trace("FLOW SearchLobbyMessage skipped reason=busy")
+							return
+						end
 						if not force
 							and self.searchLobbyLastRequestAt
 							and now - self.searchLobbyLastRequestAt < minInterval then
@@ -2402,6 +2599,11 @@ CreateOnlineHandler = function()
 						self.searchLobbyLastRequestAt = now
 						ITGOnline:FetchLobby(function(ok, decoded, response)
 							self.searchLobbyBusy = false
+							online_trace("FLOW SearchLobbyMessage result ok=" .. tostring(ok == true)
+								.. " status=" .. tostring(response and response.statusCode or "nil")
+								.. " publicRooms=" .. tostring(decoded and decoded.public_rooms and #decoded.public_rooms or decoded and decoded.lobbies and #decoded.lobbies or 0)
+								.. " onlineUsers=" .. tostring(decoded and decoded.online_users and #decoded.online_users or decoded and decoded.onlinePlayers and #decoded.onlinePlayers or 0)
+								.. " error=" .. tostring(decoded and decoded.message or response and response.errorMessage or "nil"))
 							if ok then
 							MESSAGEMAN:Broadcast("LobbySearched", ITGOnline:LobbySearchPayload(decoded))
 						else
@@ -2412,6 +2614,8 @@ CreateOnlineHandler = function()
 							})
 						end
 					end)
+				else
+					online_trace("FLOW SearchLobbyMessage skipped reason=not_connected_or_no_socket")
 				end
 			end,
 						LeaveLobbyMessageCommand=function(self)
@@ -2441,6 +2645,12 @@ CreateOnlineHandler = function()
 								local leaveRoomCode = ITGOnline and ITGOnline.currentRoom
 									and (ITGOnline.currentRoom.code or ITGOnline.currentRoom.room_code or ITGOnline.currentRoom.roomCode)
 									or nil
+								if online_trace then
+									online_trace("FLOW LeaveLobbyMessage request roomId=" .. tostring(leaveRoomId)
+										.. " lobbyCode=" .. tostring(leaveRoomCode)
+										.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+										.. " inLobby=" .. tostring(self.inLobby == true))
+								end
 								ITGOnline:LeaveRoom(function(ok, decoded, response)
 									local alreadyLeftHandled = self.inLobby == false
 										and ITGOnline
@@ -2449,7 +2659,10 @@ CreateOnlineHandler = function()
 										online_trace(
 											"FLOW LeaveLobbyMessage callback_begin ok=" .. tostring(ok) ..
 											" status=" .. tostring(response and response.status) ..
+											" statusCode=" .. tostring(response and response.statusCode) ..
 											" currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId) ..
+											" leaveRoomId=" .. tostring(leaveRoomId) ..
+											" leaveRoomCode=" .. tostring(leaveRoomCode) ..
 											" alreadyLeftHandled=" .. tostring(alreadyLeftHandled))
 									end
 									self.leaveLobbyBusy = false
@@ -2492,6 +2705,13 @@ CreateOnlineHandler = function()
 							end)
 						end,
 		      DisconnectOnlineMessageCommand=function(self, params)
+						if online_trace then
+							online_trace("FLOW DisconnectOnlineMessage received leaveRoom=" .. tostring(not (params and params.leaveRoom == false))
+								.. " connected=" .. tostring(self.connected == true)
+								.. " socket=" .. tostring(self.socket ~= nil)
+								.. " inLobby=" .. tostring(self.inLobby == true)
+								.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+						end
 						onlineHandlerShuttingDown = true
 						clear_room_async_state(self)
 						stop_connection_timers(self)
