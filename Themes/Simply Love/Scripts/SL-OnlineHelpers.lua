@@ -1626,12 +1626,17 @@ CreateOnlineHandler = function()
 						self.inLobby = ITGOnline.currentRoomId ~= nil
 						self.errorMsg = nil
 						self:GetChild("Display"):visible(false)
-						online_trace("FLOW connect_online_initial_lobby_snapshot_request source=reused_socket")
-						MESSAGEMAN:Broadcast("SearchLobby", {
-							force=true,
-							minInterval=0,
-							reason="connect_online_reused_socket_initial_snapshot",
-						})
+						if ITGOnline and ITGOnline.ForceLobbyPresenceHeartbeat then
+							online_trace("FLOW connect_online_presence_heartbeat_request source=reused_socket")
+							ITGOnline:ForceLobbyPresenceHeartbeat("connect_online_reused_socket")
+						else
+							online_trace("FLOW connect_online_initial_lobby_snapshot_request source=reused_socket fallback=no_presence_heartbeat")
+							MESSAGEMAN:Broadcast("SearchLobby", {
+								force=true,
+								minInterval=0,
+								reason="connect_online_reused_socket_initial_snapshot",
+							})
+						end
 						return
 					end
 	        if self.socket == nil or self.errorMsg ~= nil then
@@ -1651,12 +1656,17 @@ CreateOnlineHandler = function()
 								self.inLobby = ITGOnline.currentRoomId ~= nil
 								self.errorMsg = nil
 									self:GetChild("Display"):visible(false)
-									online_trace("FLOW connect_online_initial_lobby_snapshot_request source=open")
-									MESSAGEMAN:Broadcast("SearchLobby", {
-										force=true,
-										minInterval=0,
-										reason="connect_online_open_initial_snapshot",
-									})
+									if ITGOnline and ITGOnline.ForceLobbyPresenceHeartbeat then
+										online_trace("FLOW connect_online_presence_heartbeat_request source=open")
+										ITGOnline:ForceLobbyPresenceHeartbeat("connect_online_open")
+									else
+										online_trace("FLOW connect_online_initial_lobby_snapshot_request source=open fallback=no_presence_heartbeat")
+										MESSAGEMAN:Broadcast("SearchLobby", {
+											force=true,
+											minInterval=0,
+											reason="connect_online_open_initial_snapshot",
+										})
+									end
 							end,
 						error=function(message)
 							if onlineHandlerShuttingDown then return end
@@ -1996,6 +2006,15 @@ CreateOnlineHandler = function()
 							.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
 							.. " wsConnected=" .. tostring(wsConnected == true))
 						ITGOnline:Heartbeat(status)
+					elseif wsConnected
+						and ITGOnline
+						and ITGOnline.ForceLobbyPresenceHeartbeat
+						and screenName == "ScreenOnlineLobbies" then
+						online_flow_trace("heartbeat_screen_update status=available"
+							.. " screen=" .. tostring(screenName)
+							.. " room=nil"
+							.. " wsConnected=" .. tostring(wsConnected == true))
+						ITGOnline:ForceLobbyPresenceHeartbeat("screen_online_lobbies_no_room")
 					end
 						if evaluationScreens[screenName]
 							and ITGOnline

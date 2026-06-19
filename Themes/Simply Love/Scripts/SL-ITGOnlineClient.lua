@@ -160,6 +160,7 @@ ITGOnline.onlineGameplayReleaseLoggedKey = ITGOnline.onlineGameplayReleaseLogged
 ITGOnline.previousScreenName = ITGOnline.previousScreenName or nil
 ITGOnline.heartbeatInFlight = ITGOnline.heartbeatInFlight or false
 ITGOnline.heartbeatQueuedStatus = ITGOnline.heartbeatQueuedStatus or nil
+ITGOnline.heartbeatQueuedForce = ITGOnline.heartbeatQueuedForce or false
 ITGOnline.lastHeartbeatSentAt = ITGOnline.lastHeartbeatSentAt or 0
 ITGOnline.lastHeartbeatFingerprint = ITGOnline.lastHeartbeatFingerprint or ""
 ITGOnline.heartbeatMinIntervalSeconds = ITGOnline.heartbeatMinIntervalSeconds or 30
@@ -4353,6 +4354,7 @@ function ITGOnline:Disconnect(options)
 	self.pendingJoinRoomId = nil
 	self.heartbeatInFlight = false
 	self.heartbeatQueuedStatus = nil
+	self.heartbeatQueuedForce = false
 	self.lastHeartbeatSentAt = 0
 	self.lastHeartbeatFingerprint = ""
 	self.scheduledStartLocalTime = nil
@@ -6808,6 +6810,7 @@ end
 function ITGOnline:Heartbeat(status, force)
 	status = status or "available"
 	local roomId = self.currentRoomId
+	local isLobbyPresenceHeartbeat = roomId == nil and tostring(status) == "available"
 	online_flow_trace("heartbeat_begin status=" .. tostring(status)
 		.. " force=" .. tostring(force == true)
 		.. " room=" .. tostring(roomId or "nil")
@@ -6815,7 +6818,7 @@ function ITGOnline:Heartbeat(status, force)
 		.. " inFlight=" .. tostring(self.heartbeatInFlight == true)
 		.. " queued=" .. tostring(self.heartbeatQueuedStatus or "nil")
 		.. " screen=" .. tostring(self.currentScreenName or "nil"))
-	if tostring(self.currentRoomBlockedReason or "") ~= "" then
+	if tostring(self.currentRoomBlockedReason or "") ~= "" and not isLobbyPresenceHeartbeat then
 		online_trace("Heartbeat suppressed while current room is blocked: status="
 			.. tostring(status)
 			.. " reason=" .. tostring(self.currentRoomBlockedReason))
@@ -6831,9 +6834,11 @@ function ITGOnline:Heartbeat(status, force)
 
 	if self.heartbeatInFlight then
 		self.heartbeatQueuedStatus = status
+		self.heartbeatQueuedForce = self.heartbeatQueuedForce or force == true
 		online_flow_trace("heartbeat_queued reason=in_flight status=" .. tostring(status)
 			.. " fingerprint=" .. tostring(fingerprint)
-			.. " previousQueued=" .. tostring(self.heartbeatQueuedStatus or "nil"))
+			.. " previousQueued=" .. tostring(self.heartbeatQueuedStatus or "nil")
+			.. " queuedForce=" .. tostring(self.heartbeatQueuedForce == true))
 		return
 	end
 
@@ -6857,24 +6862,38 @@ function ITGOnline:Heartbeat(status, force)
 		.. " room=" .. tostring(roomId or "nil")
 		.. " fingerprint=" .. tostring(fingerprint)
 		.. " force=" .. tostring(force == true))
-	self:Request("POST", "/presence/heartbeat", payload, function()
+	self:Request("POST", "/presence/heartbeat", payload, function(ok, decoded, response)
 		self.heartbeatInFlight = false
 		local queuedStatus = self.heartbeatQueuedStatus
+		local queuedForce = self.heartbeatQueuedForce == true
 		self.heartbeatQueuedStatus = nil
+		self.heartbeatQueuedForce = false
 		online_flow_trace("heartbeat_response status=" .. tostring(status)
+			.. " ok=" .. tostring(ok == true)
+			.. " statusCode=" .. tostring(response and response.statusCode or "nil")
 			.. " room=" .. tostring(roomId or "nil")
 			.. " queuedStatus=" .. tostring(queuedStatus or "nil")
+			.. " queuedForce=" .. tostring(queuedForce == true)
 			.. " screen=" .. tostring(self.currentScreenName or "nil")
 			.. " disconnecting=" .. tostring(self.disconnecting == true))
-		if self.currentScreenName == "ScreenOnlineLobbies" and not self.disconnecting then
-			online_flow_trace("heartbeat_queue_lobby_refresh")
+		if ok and self.currentScreenName == "ScreenOnlineLobbies" and not self.disconnecting then
+			online_flow_trace("heartbeat_queue_lobby_refresh source=heartbeat_ack")
 			self:QueueLobbyRefresh()
 		end
 		if queuedStatus then
-			online_flow_trace("heartbeat_replay_queued status=" .. tostring(queuedStatus))
-			self:Heartbeat(queuedStatus)
+			online_flow_trace("heartbeat_replay_queued status=" .. tostring(queuedStatus)
+				.. " force=" .. tostring(queuedForce == true))
+			self:Heartbeat(queuedStatus, queuedForce)
 		end
 	end)
+end
+
+function ITGOnline:ForceLobbyPresenceHeartbeat(reason)
+	online_flow_trace("lobby_presence_heartbeat_forced reason=" .. tostring(reason or "unknown")
+		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+		.. " screen=" .. tostring(self.currentScreenName or "nil")
+		.. " connected=" .. tostring(self.realtimeConnected == true))
+	self:Heartbeat(self.currentRoomId and "in_room" or "available", true)
 end
 
 function ITGOnline:FetchLobby(callback)
