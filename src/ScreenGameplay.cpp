@@ -665,6 +665,7 @@ ScreenGameplay::ScreenGameplay() {
   m_delaying_ready_announce = false;
   m_bOnlineEvaluationHoldMessagePending = false;
   m_bOnlineEvaluationHoldStarted = false;
+  m_bOnlineFailedHoldStarted = false;
   m_bLoggedStageEndState = false;
   m_bLoggedOnlineEvaluationHold = false;
   m_bMarkedOnlineFailedEarly = false;
@@ -3879,9 +3880,29 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
       }
 
       if (OnlineShouldHoldBeforeEvaluation()) {
-        ResetGiveUpTimers(false);
-        this->PostScreenMessage(SM_BeginFailed, 0.25f);
-        return;
+        if (!m_bOnlineFailedHoldStarted) {
+          m_bOnlineFailedHoldStarted = true;
+          m_timerOnlineFailedHoldStarted.Touch();
+        } else if (m_timerOnlineFailedHoldStarted.Ago() >=
+                   ITGONLINE_EVALUATION_HOLD_MAX_SECONDS) {
+          LOG->Warn(
+              "ITG Online: failed-player evaluation hold timed out after %.2fs; "
+              "continuing to evaluation",
+              m_timerOnlineFailedHoldStarted.Ago());
+          m_bOnlineFailedHoldStarted = false;
+        } else {
+          ResetGiveUpTimers(false);
+          this->PostScreenMessage(SM_BeginFailed, 0.25f);
+          return;
+        }
+
+        if (m_bOnlineFailedHoldStarted) {
+          ResetGiveUpTimers(false);
+          this->PostScreenMessage(SM_BeginFailed, 0.25f);
+          return;
+        }
+      } else {
+        m_bOnlineFailedHoldStarted = false;
       }
 
       LOG->Trace(

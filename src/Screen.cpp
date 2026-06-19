@@ -39,6 +39,15 @@ static const char* ScreenTypeNames[] = {
 XToString(ScreenType);
 LuaXType(ScreenType);
 
+static bool ShouldTraceOnlineScreen(const std::string& screenName) {
+  return screenName.find("Online") != std::string::npos ||
+         screenName == "ScreenSelectMusic" ||
+         screenName == "ScreenPlayerOptions" ||
+         screenName == "ScreenEvaluation" ||
+         screenName == "ScreenEvaluationStage" ||
+         screenName == "ScreenGameplay";
+}
+
 void Screen::InitScreen(Screen* pScreen) { pScreen->Init(); }
 
 Screen::~Screen() {}
@@ -64,6 +73,7 @@ void Screen::Init() {
   m_bRunning = false;
 
   m_CallingInputCallbacks = false;
+  m_iInputCallbacksHandleBeforeScreenLocks = 0;
 
   ActorUtil::LoadAllCommandsFromName(*this, m_sName, "Screen");
 
@@ -118,6 +128,7 @@ void Screen::EndScreen() {
 
   m_InputCallbacks.clear();
   m_DelayedCallbackRemovals.clear();
+  m_iInputCallbacksHandleBeforeScreenLocks = 0;
 }
 
 void Screen::Update(float fDeltaTime) {
@@ -257,8 +268,27 @@ bool Screen::Input(const InputEventPlus& input) {
 }
 
 void Screen::HandleScreenMessage(const ScreenMessage SM) {
+  const bool traceOnlineScreen = ShouldTraceOnlineScreen(m_sName);
+  if (traceOnlineScreen) {
+    LOG->Trace(
+        "ITG Online ScreenTrace: handle_screen_message_begin screen=%s "
+        "message=%s running=%d queued=%zu",
+        m_sName.c_str(),
+        ScreenMessageHelpers::ScreenMessageToString(SM).c_str(),
+        m_bRunning ? 1 : 0,
+        m_QueuedMessages.size());
+    LOG->Flush();
+  }
   if (SM == SM_GoToNextScreen || SM == SM_GoToPrevScreen) {
     if (SCREENMAN->IsStackedScreen(this)) {
+      if (traceOnlineScreen) {
+        LOG->Trace(
+            "ITG Online ScreenTrace: handle_screen_message_pop_stacked "
+            "screen=%s message=%s",
+            m_sName.c_str(),
+            ScreenMessageHelpers::ScreenMessageToString(SM).c_str());
+        LOG->Flush();
+      }
       SCREENMAN->PopTopScreen(m_smSendOnPop);
     } else {
       std::string ToScreen =
@@ -266,6 +296,15 @@ void Screen::HandleScreenMessage(const ScreenMessage SM) {
       if (ToScreen == "") {
         LuaHelpers::ReportScriptError("Error:  Tried to go to empty screen.");
       } else {
+        if (traceOnlineScreen || ShouldTraceOnlineScreen(ToScreen)) {
+          LOG->Trace(
+              "ITG Online ScreenTrace: handle_screen_message_set_new_screen "
+              "from=%s to=%s message=%s",
+              m_sName.c_str(),
+              ToScreen.c_str(),
+              ScreenMessageHelpers::ScreenMessageToString(SM).c_str());
+          LOG->Flush();
+        }
         SCREENMAN->SetNewScreen(ToScreen);
       }
     }
@@ -280,6 +319,16 @@ void Screen::HandleScreenMessage(const ScreenMessage SM) {
     LIGHTSMAN->SetLightsMode(LIGHTS_MODE);
   } else if (SM == SM_LoseFocus) {
     INPUTFILTER->ResetRepeatRate();
+  }
+  if (traceOnlineScreen) {
+    LOG->Trace(
+        "ITG Online ScreenTrace: handle_screen_message_end screen=%s "
+        "message=%s running=%d queued=%zu",
+        m_sName.c_str(),
+        ScreenMessageHelpers::ScreenMessageToString(SM).c_str(),
+        m_bRunning ? 1 : 0,
+        m_QueuedMessages.size());
+    LOG->Flush();
   }
 }
 
@@ -307,6 +356,17 @@ std::string Screen::GetPrevScreen() const {
 
 void Screen::PostScreenMessage(const ScreenMessage SM, float fDelay) {
   ASSERT(fDelay >= 0.0);
+
+  if (ShouldTraceOnlineScreen(m_sName)) {
+    LOG->Trace(
+        "ITG Online ScreenTrace: post_screen_message screen=%s message=%s "
+        "delay=%.3f queued_before=%zu",
+        m_sName.c_str(),
+        ScreenMessageHelpers::ScreenMessageToString(SM).c_str(),
+        fDelay,
+        m_QueuedMessages.size());
+    LOG->Flush();
+  }
 
   QueuedScreenMessage QSM;
   QSM.SM = SM;
@@ -389,6 +449,7 @@ bool Screen::PassInputToLua(const InputEventPlus& input) {
          key != m_DelayedCallbackRemovals.end(); ++key) {
       InternalRemoveCallback(*key);
     }
+    m_DelayedCallbackRemovals.clear();
   }
   return handled;
 }
@@ -401,10 +462,43 @@ void Screen::AddInputCallbackFromStack(lua_State* L) {
 void Screen::RemoveInputCallback(lua_State* L) {
   callback_key_t key = lua_topointer(L, 1);
   if (m_CallingInputCallbacks) {
-    m_DelayedCallbackRemovals.push_back(key);
+    if (std::find(m_DelayedCallbackRemovals.begin(),
+                  m_DelayedCallbackRemovals.end(),
+                  key) == m_DelayedCallbackRemovals.end()) {
+      m_DelayedCallbackRemovals.push_back(key);
+    }
   } else {
     InternalRemoveCallback(key);
   }
+}
+
+void Screen::ClearInputCallbacks() {
+  if (m_CallingInputCallbacks) {
+    for (std::map<callback_key_t, LuaReference>::const_iterator callback =
+             m_InputCallbacks.begin();
+         callback != m_InputCallbacks.end(); ++callback) {
+      if (std::find(m_DelayedCallbackRemovals.begin(),
+                    m_DelayedCallbackRemovals.end(),
+                    callback->first) == m_DelayedCallbackRemovals.end()) {
+        m_DelayedCallbackRemovals.push_back(callback->first);
+      }
+    }
+  } else {
+    m_InputCallbacks.clear();
+    m_DelayedCallbackRemovals.clear();
+  }
+}
+
+void Screen::SetInputCallbacksHandleBeforeScreen(bool enabled) {
+  if (enabled) {
+    ++m_iInputCallbacksHandleBeforeScreenLocks;
+  } else if (m_iInputCallbacksHandleBeforeScreenLocks > 0) {
+    --m_iInputCallbacksHandleBeforeScreenLocks;
+  }
+}
+
+bool Screen::InputCallbacksHandleBeforeScreen() const {
+  return m_iInputCallbacksHandleBeforeScreenLocks > 0;
 }
 
 void Screen::InternalRemoveCallback(callback_key_t key) {
@@ -466,6 +560,16 @@ class LunaScreen : public Luna<Screen> {
     COMMON_RETURN_SELF;
   }
 
+  static int ClearInputCallbacks(T* p, lua_State* L) {
+    p->ClearInputCallbacks();
+    COMMON_RETURN_SELF;
+  }
+
+  static int SetInputCallbacksHandleBeforeScreen(T* p, lua_State* L) {
+    p->SetInputCallbacksHandleBeforeScreen(BArg(1));
+    COMMON_RETURN_SELF;
+  }
+
   LunaScreen() {
     ADD_METHOD(GetNextScreenName);
     ADD_METHOD(SetNextScreenName);
@@ -476,6 +580,8 @@ class LunaScreen : public Luna<Screen> {
     ADD_METHOD(GetScreenType);
     ADD_METHOD(AddInputCallback);
     ADD_METHOD(RemoveInputCallback);
+    ADD_METHOD(ClearInputCallbacks);
+    ADD_METHOD(SetInputCallbacksHandleBeforeScreen);
   }
 };
 

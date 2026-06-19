@@ -17,6 +17,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "EnumHelper.h"
@@ -86,17 +87,23 @@ struct HttpRequestArgs {
   std::function<bool(int current, int total)> onProgress;
   std::function<void(const ix::HttpResponsePtr& response)> onResponse;
   std::function<void(const std::string& errorMessage)> onFileError;
+  std::function<void()> onCancel;
 };
 
 class HttpRequestFuture {
  public:
-  HttpRequestFuture(ix::HttpRequestArgsPtr& args) : args(args) {};
+  HttpRequestFuture(
+      ix::HttpRequestArgsPtr& args,
+      std::function<void()> onCancel = nullptr)
+      : args(args), onCancel(std::move(onCancel)) {};
 
   static int Collect(lua_State* L);
   static int Cancel(lua_State* L);
 
  private:
   ix::HttpRequestArgsPtr args;
+  std::function<void()> onCancel;
+  std::atomic<bool> canceled{false};
 };
 
 typedef std::shared_ptr<HttpRequestFuture> HttpRequestFuturePtr;
@@ -120,8 +127,12 @@ class WebSocketHandle {
   static int Close(lua_State* L);
   static int Send(lua_State* L);
 
+  void CloseSocket(bool calledFromLua);
   ix::WebSocket webSocket;
   std::function<void()> onClose;
+  void InvalidateCallbacks();
+  std::uint64_t debugId{0};
+  std::string debugUrl;
   std::atomic<bool> closed{false};
 };
 
@@ -138,6 +149,7 @@ class NetworkManager {
   HttpRequestFuturePtr HttpRequest(const HttpRequestArgs& args);
   WebSocketHandlePtr WebSocket(const WebSocketArgs& args);
   void CloseAllWebSockets();
+  void CloseAllWebSocketsFromLua();
   void Update();
   void EnqueueMainThreadTask(std::function<void()> task);
   std::string UrlEncode(const std::string& value);
@@ -152,6 +164,8 @@ class NetworkManager {
   void RunWebSocketWorker();
   void StopWorkers();
   void ClearMainThreadTasks();
+  void DrainMainThreadTasks();
+  void CloseAllWebSocketsInternal(bool calledFromLua);
 
   std::string GetUserAgent();
   void ClearDownloads();

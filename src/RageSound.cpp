@@ -25,6 +25,7 @@
 #include <string>
 
 #include "LuaManager.h"
+#include "PerfDiagnostics.h"
 #include "PrefsManager.h"
 #include "RageLog.h"
 #include "RageSoundConstants.h"
@@ -73,7 +74,20 @@ RageSound::RageSound()
   ASSERT(SOUNDMAN != nullptr);
 }
 
-RageSound::~RageSound() { Unload(); }
+RageSound::~RageSound() {
+  if (LOG && LogPlayOnceDiagnosticsEnabled()) {
+    LOG->Trace(
+        "RageSound::~RageSound begin ptr=%p source=%p loaded=%d playing=%d "
+        "delete_when_finished=%d path='%s'",
+        static_cast<void*>(this), static_cast<void*>(m_pSource),
+        m_pSource != nullptr ? 1 : 0, IsPlaying() ? 1 : 0,
+        m_bDeleteWhenFinished ? 1 : 0, m_sFilePath.c_str());
+  }
+  Unload();
+  if (LOG && LogPlayOnceDiagnosticsEnabled()) {
+    LOG->Trace("RageSound::~RageSound end ptr=%p", static_cast<void*>(this));
+  }
+}
 
 RageSound::RageSound(const RageSound& cpy)
     : RageSoundBase(cpy),
@@ -114,19 +128,60 @@ RageSound& RageSound::operator=(const RageSound& cpy) {
 }
 
 void RageSound::Unload() {
+  if (LOG && LogPlayOnceDiagnosticsEnabled()) {
+    LOG->Trace(
+        "RageSound::Unload begin ptr=%p source=%p loaded=%d playing=%d "
+        "delete_when_finished=%d path='%s'",
+        static_cast<void*>(this), static_cast<void*>(m_pSource),
+        m_pSource != nullptr ? 1 : 0, IsPlaying() ? 1 : 0,
+        m_bDeleteWhenFinished ? 1 : 0, m_sFilePath.c_str());
+  }
   if (IsPlaying()) {
+    if (LOG && LogPlayOnceDiagnosticsEnabled()) {
+      LOG->Trace(
+          "RageSound::Unload stop_playing_begin ptr=%p path='%s'",
+          static_cast<void*>(this), m_sFilePath.c_str());
+    }
     StopPlaying();
+    if (LOG && LogPlayOnceDiagnosticsEnabled()) {
+      LOG->Trace(
+          "RageSound::Unload stop_playing_end ptr=%p path='%s'",
+          static_cast<void*>(this), m_sFilePath.c_str());
+    }
   }
 
+  if (LOG && LogPlayOnceDiagnosticsEnabled()) {
+    LOG->Trace("RageSound::Unload lock_begin ptr=%p", static_cast<void*>(this));
+  }
   LockMut(m_Mutex);
+  if (LOG && LogPlayOnceDiagnosticsEnabled()) {
+    LOG->Trace("RageSound::Unload lock_acquired ptr=%p", static_cast<void*>(this));
+  }
+  m_bPlaying.store(false, std::memory_order_release);
+  m_bDeleteWhenFinished = false;
+  m_HardwareToStreamMap.Clear();
+  m_StreamToSourceMap.Clear();
 
   if (m_pSource != nullptr) {
+    if (LOG && LogPlayOnceDiagnosticsEnabled()) {
+      LOG->Trace(
+          "RageSound::Unload delete_source_begin ptr=%p source=%p path='%s'",
+          static_cast<void*>(this), static_cast<void*>(m_pSource),
+          m_sFilePath.c_str());
+    }
     delete m_pSource;
+    if (LOG && LogPlayOnceDiagnosticsEnabled()) {
+      LOG->Trace(
+          "RageSound::Unload delete_source_end ptr=%p", static_cast<void*>(this));
+    }
   }
   m_pSource = nullptr;
 
   m_sFilePath = "";
   m_bPreferStrongPrebuffer = false;
+  if (LOG && LogPlayOnceDiagnosticsEnabled()) {
+    LOG->Trace("RageSound::Unload end ptr=%p", static_cast<void*>(this));
+  }
 }
 
 /* The sound will self-delete itself when it stops playing. If the sound is not

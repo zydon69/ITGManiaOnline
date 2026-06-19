@@ -8,6 +8,7 @@
 #include <string>
 
 #include "ActorUtil.h"
+#include "PerfDiagnostics.h"
 #include "Preference.h"
 #include "PrefsManager.h"
 #include "RageDisplay.h"
@@ -65,11 +66,19 @@ static bool IsCacheableImagePath(const std::string& sImagePath) {
   return ActorUtil::GetFileType(sImagePath) == FT_Bitmap;
 }
 
+static std::string NormalizeImageCacheSourcePath(std::string sImagePath) {
+  if (Left(sImagePath, 7) == "/Songs/") {
+    sImagePath.erase(0, 1);
+  }
+  return sImagePath;
+}
+
 /* Synchronizes access to g_ImagePathToImage and ImageCache::ImageData. */
 static RageMutex g_ImageCacheMutex("ImageCache");
 
 std::string ImageCache::GetImageCachePath(
     std::string sImageDir, std::string sImagePath) {
+  sImagePath = NormalizeImageCacheSourcePath(sImagePath);
   return SongCacheIndex::GetCacheFilePath(sImageDir, sImagePath);
 }
 
@@ -88,7 +97,7 @@ void ImageCache::Demand(std::string sImageDir) {
 
   LockMut(g_ImageCacheMutex);
   FOREACH_CONST_Child(&ImageData, p) {
-    std::string sImagePath = p->GetName();
+    std::string sImagePath = NormalizeImageCacheSourcePath(p->GetName());
 
     if (g_ImagePathToImage.find(sImagePath) != g_ImagePathToImage.end()) {
       continue; /* already loaded */
@@ -123,6 +132,7 @@ void ImageCache::Undemand(std::string sImageDir) {
  * not be examined unless the cached image doesn't exist, so the image will
  * not be updated if the original file changes, for efficiency. */
 void ImageCache::LoadImage(std::string sImageDir, std::string sImagePath) {
+  sImagePath = NormalizeImageCacheSourcePath(sImagePath);
   if (sImagePath == "") {
     return;  // nothing to do
   }
@@ -190,17 +200,52 @@ void ImageCache::OutputStats() const {
 }
 
 void ImageCache::UnloadAllImages() {
+  const bool trace = LogContentLoadDiagnosticsEnabled();
+  if (LOG && trace) {
+    LOG->Trace("ImageCache::UnloadAllImages lock_begin");
+  }
   LockMut(g_ImageCacheMutex);
+  if (LOG && trace) {
+    LOG->Trace(
+        "ImageCache::UnloadAllImages begin loaded_images=%zu demand_refcount=%d",
+        g_ImagePathToImage.size(), g_iDemandRefcount);
+  }
+  size_t index = 0;
+  const size_t total = g_ImagePathToImage.size();
   for (auto& it : g_ImagePathToImage) {
+    ++index;
+    if (LOG && trace) {
+      LOG->Trace(
+          "ImageCache::UnloadAllImages delete_image begin index=%zu/%zu "
+          "path='%s' surface=%p",
+          index, total, it.first.c_str(), static_cast<void*>(it.second));
+    }
     delete it.second;
+    if (LOG && trace) {
+      LOG->Trace(
+          "ImageCache::UnloadAllImages delete_image end index=%zu/%zu", index,
+          total);
+    }
   }
 
   g_ImagePathToImage.clear();
+  if (LOG && trace) {
+    LOG->Trace("ImageCache::UnloadAllImages end");
+  }
 }
 
 ImageCache::ImageCache() : delay_save_cache(false) { ReadFromDisk(); }
 
-ImageCache::~ImageCache() { UnloadAllImages(); }
+ImageCache::~ImageCache() {
+  const bool trace = LogContentLoadDiagnosticsEnabled();
+  if (LOG && trace) {
+    LOG->Trace("ImageCache::~ImageCache begin");
+  }
+  UnloadAllImages();
+  if (LOG && trace) {
+    LOG->Trace("ImageCache::~ImageCache end");
+  }
+}
 
 void ImageCache::ReadFromDisk() {
   LockMut(g_ImageCacheMutex);
@@ -295,6 +340,7 @@ struct ImageTexture : public RageTexture {
 /* If a image is cached, get its ID for use. */
 RageTextureID ImageCache::LoadCachedImage(
     std::string sImageDir, std::string sImagePath) {
+  sImagePath = NormalizeImageCacheSourcePath(sImagePath);
   RageTextureID ID(GetImageCachePath(sImageDir, sImagePath));
 
   size_t Found = sImagePath.find("_blank");
@@ -369,6 +415,7 @@ static inline int closest(int num, int n1, int n2) {
 /* Create or update the image cache file as necessary.  If in preload mode,
  * load the cache file, too.  (This is done at startup.) */
 void ImageCache::CacheImage(std::string sImageDir, std::string sImagePath) {
+  sImagePath = NormalizeImageCacheSourcePath(sImagePath);
   if (PREFSMAN->m_ImageCache != IMGCACHE_LOW_RES_PRELOAD &&
       PREFSMAN->m_ImageCache != IMGCACHE_LOW_RES_LOAD_ON_DEMAND) {
     return;
@@ -417,6 +464,7 @@ void ImageCache::CacheImage(std::string sImageDir, std::string sImagePath) {
 
 void ImageCache::CacheImageInternal(
     std::string sImageDir, std::string sImagePath) {
+  sImagePath = NormalizeImageCacheSourcePath(sImagePath);
   std::string sError;
   RageSurface* pImage = RageSurfaceUtils::LoadFile(sImagePath, sError);
   if (pImage == nullptr) {

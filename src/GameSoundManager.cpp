@@ -8,6 +8,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -92,7 +93,22 @@ struct MusicPlaying {
     m_Music = Music;
   }
 
-  ~MusicPlaying() { delete m_Music; }
+  ~MusicPlaying() {
+    if (LOG && LogPlayOnceDiagnosticsEnabled()) {
+      LOG->Trace(
+        "MusicPlaying::~MusicPlaying begin ptr=%p music_ptr=%p loaded=%d "
+        "playing=%d path='%s'",
+        static_cast<void*>(this), static_cast<void*>(m_Music),
+        m_Music != nullptr && m_Music->IsLoaded() ? 1 : 0,
+        m_Music != nullptr && m_Music->IsPlaying() ? 1 : 0,
+        m_Music != nullptr ? m_Music->GetLoadedFilePath().c_str() : "");
+    }
+    delete m_Music;
+    if (LOG && LogPlayOnceDiagnosticsEnabled()) {
+      LOG->Trace(
+          "MusicPlaying::~MusicPlaying end ptr=%p", static_cast<void*>(this));
+    }
+  }
 };
 
 static MusicPlaying* g_Playing;
@@ -155,21 +171,122 @@ static bool IsKnownSilentPlaceholderSound(const std::string& path) {
          basename == "silence.ogg" || basename == "silence.wav";
 }
 
+static void DeleteSoundWithShutdownTrace(
+    RageSound* sound, const char* context, size_t index, size_t total);
+
 static void DeleteUnregisteredSoundPool(std::vector<RageSound*>& pool) {
-  for (RageSound* sound : pool) {
-    delete sound;
+  std::unordered_set<RageSound*> deletedSounds;
+  for (size_t i = 0; i < pool.size(); ++i) {
+    RageSound* sound = pool[i];
+    if (sound == nullptr) {
+      continue;
+    }
+    if (!deletedSounds.insert(sound).second) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: skipped duplicate unregistered PlayOnce sound %p.",
+          static_cast<void*>(sound));
+      continue;
+    }
+    DeleteSoundWithShutdownTrace(
+        sound, "unregistered_pool", i + 1, pool.size());
   }
   pool.clear();
+}
+
+static void DeleteSoundWithShutdownTrace(
+    RageSound* sound, const char* context, size_t index, size_t total) {
+  const bool trace = LogPlayOnceDiagnosticsEnabled();
+  if (sound == nullptr) {
+    if (trace) {
+      LOG->Trace(
+          "GameSoundManager shutdown delete sound skipped null context=%s "
+          "index=%zu/%zu",
+          context, index, total);
+    }
+    return;
+  }
+
+  if (trace) {
+    LOG->Trace(
+        "GameSoundManager shutdown delete sound begin context=%s index=%zu/%zu "
+        "ptr=%p loaded=%d playing=%d path='%s'",
+        context, index, total, static_cast<void*>(sound),
+        sound->IsLoaded() ? 1 : 0, sound->IsPlaying() ? 1 : 0,
+        sound->GetLoadedFilePath().c_str());
+  }
+  delete sound;
+  if (trace) {
+    LOG->Trace(
+        "GameSoundManager shutdown delete sound end context=%s index=%zu/%zu",
+        context, index, total);
+  }
 }
 
 static void DeleteRegisteredSoundPool(std::vector<RageSound*>& pool) {
   // Caller must hold g_PlayOnceDataMutex because registered pools can have
   // entries in g_PlayOnceReservedSounds.
-  for (RageSound* sound : pool) {
+  std::unordered_set<RageSound*> deletedSounds;
+  for (size_t i = 0; i < pool.size(); ++i) {
+    RageSound* sound = pool[i];
+    if (sound == nullptr) {
+      continue;
+    }
+    if (!deletedSounds.insert(sound).second) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: skipped duplicate registered PlayOnce sound %p.",
+          static_cast<void*>(sound));
+      continue;
+    }
     g_PlayOnceReservedSounds.erase(sound);
-    delete sound;
+    DeleteSoundWithShutdownTrace(sound, "registered_pool", i + 1, pool.size());
   }
   pool.clear();
+}
+
+static std::vector<RageSound*> DetachPlayOnceCacheForShutdown() {
+  std::vector<RageSound*> soundsToDelete;
+  std::unordered_set<RageSound*> queuedSounds;
+
+  LockMutex playOnceLock(g_PlayOnceDataMutex);
+  if (LogPlayOnceDiagnosticsEnabled()) {
+    LOG->Trace(
+        "GameSoundManager shutdown PlayOnce detach begin pools=%zu reserved=%zu "
+        "estimated_bytes=%zu invalid_cache=%zu",
+        g_PlayOnceSoundPool.size(), g_PlayOnceReservedSounds.size(),
+        g_PlayOnceEstimatedCacheBytes, g_PlayOnceSoundInvalidPath.size());
+  }
+
+  for (auto& pathAndPool : g_PlayOnceSoundPool) {
+    for (RageSound* sound : pathAndPool.second) {
+      if (sound == nullptr) {
+        continue;
+      }
+      if (queuedSounds.insert(sound).second) {
+        soundsToDelete.push_back(sound);
+      } else {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: skipped duplicate PlayOnce sound %p while "
+            "detaching shutdown cache path='%s'.",
+            static_cast<void*>(sound), pathAndPool.first.c_str());
+      }
+    }
+    pathAndPool.second.clear();
+  }
+
+  g_PlayOnceSoundPool.clear();
+  g_PlayOnceSoundLastUse.clear();
+  g_PlayOnceSoundEstimatedBytes.clear();
+  g_PlayOnceReservedSounds.clear();
+  g_PlayOnceSoundInvalidPath.clear();
+  g_DirSoundOrder.clear();
+  g_PlayOnceEstimatedCacheBytes = 0;
+
+  if (LogPlayOnceDiagnosticsEnabled()) {
+    LOG->Trace(
+        "GameSoundManager shutdown PlayOnce detach end sounds_to_delete=%zu",
+        soundsToDelete.size());
+  }
+  return soundsToDelete;
 }
 
 static bool IsPoolIdle(const std::vector<RageSound*>& pool) {
@@ -381,7 +498,7 @@ static void StartMusic(MusicToPlay& ToPlay) {
   /* Unlock, load the sound here, and relock.  Loading may take a while if we're
    * reading from CD and we have to seek far, which can throw off the timing
    * below. */
-  MusicPlaying* NewMusic;
+MusicPlaying* NewMusic;
   {
     g_Mutex->Unlock();
     RageSound* pSound = new RageSound;
@@ -907,33 +1024,75 @@ GameSoundManager::GameSoundManager() {
 }
 
 GameSoundManager::~GameSoundManager() {
+  const bool trace = LogPlayOnceDiagnosticsEnabled();
+  if (trace) {
+    LOG->Trace("GameSoundManager::~GameSoundManager begin");
+  }
   // Unregister with Lua.
   LUA->UnsetGlobal("SOUND");
 
   /* Signal the mixing thread to quit. */
-  LOG->Trace("Shutting down music start thread ...");
+  if (trace) {
+    LOG->Trace("Shutting down music start thread ...");
+  }
   g_Mutex->Lock();
   g_Shutdown = true;
   g_Mutex->Broadcast();
   g_Mutex->Unlock();
   MusicThread.Wait();
-  LOG->Trace("Music start thread shut down.");
-
-  {
-    LockMutex playOnceLock(g_PlayOnceDataMutex);
-    for (auto& pathAndPool : g_PlayOnceSoundPool) {
-      DeleteRegisteredSoundPool(pathAndPool.second);
-    }
-    g_PlayOnceSoundPool.clear();
-    g_PlayOnceSoundLastUse.clear();
-    g_PlayOnceSoundEstimatedBytes.clear();
-    g_PlayOnceReservedSounds.clear();
-    g_PlayOnceSoundInvalidPath.clear();
-    g_DirSoundOrder.clear();
+  if (trace) {
+    LOG->Trace("Music start thread shut down.");
   }
 
+  {
+    g_Mutex->Lock();
+    g_SoundsToPlayOnce.clear();
+    g_SoundsToPlayOnceFromDir.clear();
+    g_SoundsToPlayOnceFromAnnouncer.clear();
+    g_MusicsToPlay.clear();
+    g_bFlushing = false;
+    g_Mutex->Unlock();
+  }
+
+  if (trace) {
+    LOG->Trace("GameSoundManager shutdown detach PlayOnce cache call begin");
+  }
+  std::vector<RageSound*> playOnceSoundsToDelete =
+      DetachPlayOnceCacheForShutdown();
+  if (trace) {
+    LOG->Trace("GameSoundManager shutdown detach PlayOnce cache call end");
+    LOG->Trace(
+        "GameSoundManager shutdown PlayOnce delete begin count=%zu",
+        playOnceSoundsToDelete.size());
+  }
+  for (size_t i = 0; i < playOnceSoundsToDelete.size(); ++i) {
+    DeleteSoundWithShutdownTrace(
+        playOnceSoundsToDelete[i], "playonce_cache", i + 1,
+        playOnceSoundsToDelete.size());
+  }
+  playOnceSoundsToDelete.clear();
+  if (trace) {
+    LOG->Trace("GameSoundManager shutdown PlayOnce delete end");
+  }
+
+  if (trace) {
+    LOG->Trace(
+        "GameSoundManager shutdown current music delete begin playing_ptr=%p "
+        "music_ptr=%p",
+        static_cast<void*>(g_Playing),
+        g_Playing != nullptr ? static_cast<void*>(g_Playing->m_Music) : nullptr);
+  }
   RageUtil::SafeDelete(g_Playing);
+  if (trace) {
+    LOG->Trace("GameSoundManager shutdown current music delete end");
+    LOG->Trace("GameSoundManager shutdown mutex delete begin mutex_ptr=%p",
+               static_cast<void*>(g_Mutex));
+  }
   RageUtil::SafeDelete(g_Mutex);
+  if (trace) {
+    LOG->Trace("GameSoundManager shutdown mutex delete end");
+    LOG->Trace("GameSoundManager::~GameSoundManager end");
+  }
 }
 
 float GameSoundManager::GetFrameTimingAdjustment(float fDeltaTime) {

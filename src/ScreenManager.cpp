@@ -132,6 +132,16 @@ static bool ScreenNameEquals(const std::string& screenName, const char* name) {
   return name != nullptr && screenName == name;
 }
 
+static bool ShouldTraceOnlineScreenManagerName(const std::string& screenName) {
+  return screenName.find("Online") != std::string::npos ||
+         screenName == "ScreenSelectMusic" ||
+         screenName == "ScreenPlayerOptions" ||
+         screenName == "ScreenEvaluation" ||
+         screenName == "ScreenEvaluationStage" ||
+         screenName == "ScreenGameplay" ||
+         screenName == "NoScreen";
+}
+
 static void RecordDrawBreakdownPerfBucket(
     DrawBreakdownPerfBucket& bucket,
     float totalMs,
@@ -607,10 +617,24 @@ void ScreenManager::set_input_redirected(PlayerNumber pn, bool redir) {
  * screen. Does not send SM_GainFocus. */
 ScreenMessage ScreenManager::PopTopScreenInternal(bool bSendLoseFocus) {
   if (g_ScreenStack.empty()) {
+    LOG->Trace("ITG Online ScreenTrace: pop_top_screen_internal_skipped reason=empty_stack");
+    LOG->Flush();
     return SM_None;
   }
 
   LoadedScreen ls = g_ScreenStack.back();
+  const std::string poppedScreenName = ls.m_pScreen->GetName();
+  if (ShouldTraceOnlineScreenManagerName(poppedScreenName)) {
+    LOG->Trace(
+        "ITG Online ScreenTrace: pop_top_screen_internal_begin screen=%s "
+        "sendLoseFocus=%d stack_before=%zu sendOnPop=%s deleteWhenDone=%d",
+        poppedScreenName.c_str(),
+        bSendLoseFocus ? 1 : 0,
+        g_ScreenStack.size(),
+        ScreenMessageHelpers::ScreenMessageToString(ls.m_SendOnPop).c_str(),
+        ls.m_bDeleteWhenDone ? 1 : 0);
+    LOG->Flush();
+  }
   g_ScreenStack.erase(g_ScreenStack.end() - 1, g_ScreenStack.end());
 
   if (bSendLoseFocus) {
@@ -637,6 +661,18 @@ ScreenMessage ScreenManager::PopTopScreenInternal(bool bSendLoseFocus) {
         g_ScreenStack.back().m_pScreen->GetName().c_str());
   } else {
     LOG->UnmapLog("ScreenManager::TopScreen");
+  }
+
+  if (ShouldTraceOnlineScreenManagerName(poppedScreenName)) {
+    LOG->Trace(
+        "ITG Online ScreenTrace: pop_top_screen_internal_end screen=%s "
+        "stack_after=%zu next_top=%s",
+        poppedScreenName.c_str(),
+        g_ScreenStack.size(),
+        g_ScreenStack.empty()
+            ? "NoScreen"
+            : g_ScreenStack.back().m_pScreen->GetName().c_str());
+    LOG->Flush();
   }
 
   return ls.m_SendOnPop;
@@ -830,6 +866,7 @@ void ScreenManager::Draw() {
         topScreenName.c_str(), maxScreenName.c_str(), maxScreenMs,
         maxOverlayName.c_str(), maxOverlayMs);
   }
+
 }
 
 void ScreenManager::Input(const InputEventPlus& input) {
@@ -863,10 +900,19 @@ void ScreenManager::Input(const InputEventPlus& input) {
     return;
   }
 
-  if (!get_input_redirected(input.pn)) {
-    g_ScreenStack.back().m_pScreen->Input(input);
+  Screen* topScreen = g_ScreenStack.back().m_pScreen;
+  if (topScreen->InputCallbacksHandleBeforeScreen() &&
+      topScreen->PassInputToLua(input)) {
+    return;
   }
-  g_ScreenStack.back().m_pScreen->PassInputToLua(input);
+
+  if (!get_input_redirected(input.pn)) {
+    topScreen->Input(input);
+  }
+
+  if (!topScreen->InputCallbacksHandleBeforeScreen()) {
+    topScreen->PassInputToLua(input);
+  }
 }
 
 // Just create a new screen; don't do any associated cleanup.
@@ -961,11 +1007,23 @@ void ScreenManager::PersistantScreen(const std::string& sScreenName) {
 
 void ScreenManager::SetNewScreen(const std::string& sScreenName) {
   ASSERT(sScreenName != "");
+  const std::string fromScreen =
+      GetTopScreen() != nullptr ? GetTopScreen()->GetName() : "NoScreen";
   LOG->Trace(
       "ITG Debug: ScreenManager::SetNewScreen from=%s to=%s",
-      GetTopScreen() != nullptr ? GetTopScreen()->GetName().c_str()
-                                : "NoScreen",
+      fromScreen.c_str(),
       sScreenName.c_str());
+  if (ShouldTraceOnlineScreenManagerName(fromScreen) ||
+      ShouldTraceOnlineScreenManagerName(sScreenName)) {
+    LOG->Trace(
+        "ITG Online ScreenTrace: set_new_screen from=%s to=%s "
+        "previous_delayed=%s stack=%zu",
+        fromScreen.c_str(),
+        sScreenName.c_str(),
+        m_sDelayedScreen.c_str(),
+        g_ScreenStack.size());
+    LOG->Flush();
+  }
   m_sDelayedScreen = sScreenName;
 }
 
@@ -1027,6 +1085,18 @@ bool ScreenManager::ActivatePreparedScreenAndBackground(
 void ScreenManager::LoadDelayedScreen() {
   std::string sScreenName = m_sDelayedScreen;
   m_sDelayedScreen = "";
+  const std::string topBefore =
+      GetTopScreen() != nullptr ? GetTopScreen()->GetName() : "NoScreen";
+  if (ShouldTraceOnlineScreenManagerName(topBefore) ||
+      ShouldTraceOnlineScreenManagerName(sScreenName)) {
+    LOG->Trace(
+        "ITG Online ScreenTrace: load_delayed_screen_begin from=%s to=%s "
+        "stack=%zu",
+        topBefore.c_str(),
+        sScreenName.c_str(),
+        g_ScreenStack.size());
+    LOG->Flush();
+  }
   if (!IsScreenNameValid(sScreenName)) {
     LuaHelpers::ReportScriptError(
         "Tried to go to invalid screen: " + sScreenName, "INVALID_SCREEN");
@@ -1092,6 +1162,18 @@ void ScreenManager::LoadDelayedScreen() {
       "screen_changed", sPreviousScreenName, sScreenName);
   ResetFramePacingForScreenTransition(
       "screen_changed", sPreviousScreenName, sScreenName);
+  if (ShouldTraceOnlineScreenManagerName(sPreviousScreenName) ||
+      ShouldTraceOnlineScreenManagerName(sScreenName)) {
+    LOG->Trace(
+        "ITG Online ScreenTrace: load_delayed_screen_end from=%s to=%s "
+        "stack=%zu top=%s",
+        sPreviousScreenName.c_str(),
+        sScreenName.c_str(),
+        g_ScreenStack.size(),
+        GetTopScreen() != nullptr ? GetTopScreen()->GetName().c_str()
+                                  : "NoScreen");
+    LOG->Flush();
+  }
 }
 
 void ScreenManager::AddNewScreenToTop(
@@ -1127,6 +1209,17 @@ void ScreenManager::AddNewScreenToTop(
 void ScreenManager::PopTopScreen(ScreenMessage SM) {
   ASSERT(g_ScreenStack.size() > 0);
 
+  const std::string topName =
+      GetTopScreen() != nullptr ? GetTopScreen()->GetName() : "NoScreen";
+  if (ShouldTraceOnlineScreenManagerName(topName)) {
+    LOG->Trace(
+        "ITG Online ScreenTrace: pop_top_screen_requested top=%s message=%s "
+        "stack=%zu",
+        topName.c_str(),
+        ScreenMessageHelpers::ScreenMessageToString(SM).c_str(),
+        g_ScreenStack.size());
+    LOG->Flush();
+  }
   m_PopTopScreen = SM;
 }
 
@@ -1147,6 +1240,15 @@ void ScreenManager::PopAllScreens() {
 void ScreenManager::PostMessageToTopScreen(ScreenMessage SM, float fDelay) {
   Screen* pTopScreen = GetTopScreen();
   if (pTopScreen != nullptr) {
+    if (ShouldTraceOnlineScreenManagerName(pTopScreen->GetName())) {
+      LOG->Trace(
+          "ITG Online ScreenTrace: post_message_to_top screen=%s message=%s "
+          "delay=%.3f",
+          pTopScreen->GetName().c_str(),
+          ScreenMessageHelpers::ScreenMessageToString(SM).c_str(),
+          fDelay);
+      LOG->Flush();
+    }
     pTopScreen->PostScreenMessage(SM, fDelay);
   }
 }
@@ -1154,7 +1256,25 @@ void ScreenManager::PostMessageToTopScreen(ScreenMessage SM, float fDelay) {
 void ScreenManager::SendMessageToTopScreen(ScreenMessage SM) {
   Screen* pTopScreen = GetTopScreen();
   if (pTopScreen != nullptr) {
+    const std::string topScreenName = pTopScreen->GetName();
+    const bool traceOnlineScreen =
+        ShouldTraceOnlineScreenManagerName(topScreenName);
+    if (traceOnlineScreen) {
+      LOG->Trace(
+          "ITG Online ScreenTrace: send_message_to_top_begin screen=%s "
+          "message=%s",
+          topScreenName.c_str(),
+          ScreenMessageHelpers::ScreenMessageToString(SM).c_str());
+      LOG->Flush();
+    }
     pTopScreen->HandleScreenMessage(SM);
+    if (traceOnlineScreen) {
+      LOG->Trace(
+          "ITG Online ScreenTrace: send_message_to_top_end screen=%s message=%s",
+          topScreenName.c_str(),
+          ScreenMessageHelpers::ScreenMessageToString(SM).c_str());
+      LOG->Flush();
+    }
   }
 }
 

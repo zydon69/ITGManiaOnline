@@ -61,14 +61,45 @@ void RageSoundManager::Init() {
 }
 
 RageSoundManager::~RageSoundManager() {
+  const bool trace = LogPlayOnceDiagnosticsEnabled();
+  if (LOG && trace) {
+    LOG->Trace(
+        "RageSoundManager::~RageSoundManager begin driver=%p preloaded=%zu",
+        static_cast<void*>(m_pDriver), m_mapPreloadedSounds.size());
+  }
   /* Don't lock while deleting the driver (the decoder thread might deadlock).
    */
+  if (LOG && trace) {
+    LOG->Trace("RageSoundManager delete driver begin driver=%p",
+               static_cast<void*>(m_pDriver));
+  }
   delete m_pDriver;
+  m_pDriver = nullptr;
+  if (LOG && trace) {
+    LOG->Trace("RageSoundManager delete driver end");
+  }
+  size_t preloadIndex = 0;
   for (std::pair<const std::string&, RageSoundReader_Preload*> s :
        m_mapPreloadedSounds) {
+    ++preloadIndex;
+    if (LOG && trace) {
+      LOG->Trace(
+          "RageSoundManager delete preloaded begin index=%zu/%zu path='%s' "
+          "reader=%p",
+          preloadIndex, m_mapPreloadedSounds.size(), s.first.c_str(),
+          static_cast<void*>(s.second));
+    }
     delete s.second;
+    if (LOG && trace) {
+      LOG->Trace(
+          "RageSoundManager delete preloaded end index=%zu/%zu", preloadIndex,
+          m_mapPreloadedSounds.size());
+    }
   }
   m_mapPreloadedSounds.clear();
+  if (LOG && trace) {
+    LOG->Trace("RageSoundManager::~RageSoundManager end");
+  }
 }
 
 /*
@@ -78,7 +109,17 @@ RageSoundManager::~RageSoundManager() {
  * sounds.  We don't want to delete SOUNDMAN early, since those threads are
  * still using it; just shut down the driver.
  */
-void RageSoundManager::Shutdown() { RageUtil::SafeDelete(m_pDriver); }
+void RageSoundManager::Shutdown() {
+  if (LOG && LogPlayOnceDiagnosticsEnabled()) {
+    LOG->Trace(
+        "RageSoundManager::Shutdown begin driver=%p",
+        static_cast<void*>(m_pDriver));
+  }
+  RageUtil::SafeDelete(m_pDriver);
+  if (LOG && LogPlayOnceDiagnosticsEnabled()) {
+    LOG->Trace("RageSoundManager::Shutdown end");
+  }
+}
 
 void RageSoundManager::StartMixing(RageSoundBase* pSound) {
   if (m_pDriver != nullptr) {

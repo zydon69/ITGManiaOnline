@@ -395,47 +395,70 @@ void ShutdownGame() {
     LIGHTSMAN->TurnOffAllLights();
   }
 
-  RageUtil::SafeDelete(NETWORK);
-  RageUtil::SafeDelete(SCREENMAN);
-  RageUtil::SafeDelete(STATSMAN);
-  RageUtil::SafeDelete(MESSAGEMAN);
+#define DELETE_SINGLETON_WITH_TRACE(SINGLETON)        \
+  do {                                                \
+    if (LOG && SINGLETON && PerfDiagnosticsEnabled()) { \
+      LOG->Trace("ShutdownGame delete " #SINGLETON " begin"); \
+    }                                                 \
+    RageUtil::SafeDelete(SINGLETON);                  \
+    if (LOG && PerfDiagnosticsEnabled()) {            \
+      LOG->Trace("ShutdownGame delete " #SINGLETON " end");   \
+    }                                                 \
+  } while (false)
+
+  DELETE_SINGLETON_WITH_TRACE(NETWORK);
+  DELETE_SINGLETON_WITH_TRACE(SCREENMAN);
+  DELETE_SINGLETON_WITH_TRACE(STATSMAN);
+  DELETE_SINGLETON_WITH_TRACE(MESSAGEMAN);
   /* Delete INPUTMAN before the other INPUTFILTER handlers, or an input
    * driver may try to send a message to INPUTFILTER after we delete it. */
-  RageUtil::SafeDelete(INPUTMAN);
-  RageUtil::SafeDelete(INPUTQUEUE);
-  RageUtil::SafeDelete(INPUTMAPPER);
-  RageUtil::SafeDelete(INPUTFILTER);
-  RageUtil::SafeDelete(MODELMAN);
-  RageUtil::SafeDelete(PROFILEMAN);  // PROFILEMAN needs the songs still loaded
-  RageUtil::SafeDelete(CHARMAN);
-  RageUtil::SafeDelete(UNLOCKMAN);
-  RageUtil::SafeDelete(CRYPTMAN);
-  RageUtil::SafeDelete(MEMCARDMAN);
-  RageUtil::SafeDelete(SONGMAN);
-  RageUtil::SafeDelete(IMAGECACHE);
-  RageUtil::SafeDelete(SONGINDEX);
-  RageUtil::SafeDelete(SOUND);  // uses GAMESTATE, PREFSMAN
-  RageUtil::SafeDelete(PREFSMAN);
-  RageUtil::SafeDelete(GAMESTATE);
-  RageUtil::SafeDelete(GAMEMAN);
-  RageUtil::SafeDelete(NOTESKIN);
-  RageUtil::SafeDelete(THEME);
-  RageUtil::SafeDelete(ANNOUNCER);
-  RageUtil::SafeDelete(BOOKKEEPER);
-  RageUtil::SafeDelete(LIGHTSMAN);
-  RageUtil::SafeDelete(SOUNDMAN);
-  RageUtil::SafeDelete(FONT);
+  DELETE_SINGLETON_WITH_TRACE(INPUTMAN);
+  DELETE_SINGLETON_WITH_TRACE(INPUTQUEUE);
+  DELETE_SINGLETON_WITH_TRACE(INPUTMAPPER);
+  DELETE_SINGLETON_WITH_TRACE(INPUTFILTER);
+  DELETE_SINGLETON_WITH_TRACE(MODELMAN);
+  DELETE_SINGLETON_WITH_TRACE(PROFILEMAN);  // PROFILEMAN needs the songs still loaded
+  DELETE_SINGLETON_WITH_TRACE(CHARMAN);
+  DELETE_SINGLETON_WITH_TRACE(UNLOCKMAN);
+  DELETE_SINGLETON_WITH_TRACE(CRYPTMAN);
+  DELETE_SINGLETON_WITH_TRACE(MEMCARDMAN);
+  DELETE_SINGLETON_WITH_TRACE(SONGMAN);
+  DELETE_SINGLETON_WITH_TRACE(IMAGECACHE);
+  DELETE_SINGLETON_WITH_TRACE(SONGINDEX);
+  DELETE_SINGLETON_WITH_TRACE(SOUND);  // uses GAMESTATE, PREFSMAN
+  DELETE_SINGLETON_WITH_TRACE(PREFSMAN);
+  DELETE_SINGLETON_WITH_TRACE(GAMESTATE);
+  DELETE_SINGLETON_WITH_TRACE(GAMEMAN);
+  DELETE_SINGLETON_WITH_TRACE(NOTESKIN);
+  DELETE_SINGLETON_WITH_TRACE(THEME);
+  DELETE_SINGLETON_WITH_TRACE(ANNOUNCER);
+  DELETE_SINGLETON_WITH_TRACE(BOOKKEEPER);
+  DELETE_SINGLETON_WITH_TRACE(LIGHTSMAN);
+  DELETE_SINGLETON_WITH_TRACE(SOUNDMAN);
+  DELETE_SINGLETON_WITH_TRACE(FONT);
   if (DISPLAY) {
     DISPLAY->PrepareForTextureManagerShutdown();
   }
-  RageUtil::SafeDelete(TEXTUREMAN);
-  RageUtil::SafeDelete(DISPLAY);
+  DELETE_SINGLETON_WITH_TRACE(TEXTUREMAN);
+  DELETE_SINGLETON_WITH_TRACE(DISPLAY);
   Dialog::Shutdown();
-  RageUtil::SafeDelete(LUADEBUG);
-  RageUtil::SafeDelete(LOG);
-  RageUtil::SafeDelete(FILEMAN);
-  RageUtil::SafeDelete(LUA);
-  RageUtil::SafeDelete(HOOKS);
+  DELETE_SINGLETON_WITH_TRACE(LUADEBUG);
+
+  // Keep the low-level process services alive until the OS tears the process
+  // down.  LOG, FILEMAN, LUA, and HOOKS are used by crash reporting, file
+  // wrappers, Lua unregister paths, and platform callbacks during late exit.
+  // Destroying them here has repeatedly caused shutdown-only crashes after the
+  // game state was already cleanly torn down.
+  if (LOG) {
+    LOG->Trace(
+        "ShutdownGame keeping low-level services alive until process exit "
+        "LOG=%p FILEMAN=%p LUA=%p HOOKS=%p",
+        static_cast<void*>(LOG), static_cast<void*>(FILEMAN),
+        static_cast<void*>(LUA), static_cast<void*>(HOOKS));
+    LOG->Flush();
+  }
+
+#undef DELETE_SINGLETON_WITH_TRACE
 }
 
 static void HandleException(const std::string& sError) {

@@ -403,8 +403,14 @@ void PrefsManager::Init() {
 }
 
 PrefsManager::~PrefsManager() {
+  if (LOG) {
+    LOG->Trace("PrefsManager::~PrefsManager begin");
+  }
   // Unregister with Lua.
   LUA->UnsetGlobal("PREFSMAN");
+  if (LOG) {
+    LOG->Trace("PrefsManager::~PrefsManager end");
+  }
 }
 
 void PrefsManager::SetCurrentGame(const std::string& sGame) {

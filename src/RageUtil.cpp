@@ -21,6 +21,7 @@
 #include <ios>
 #include <iterator>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -2136,8 +2137,16 @@ int LuaFunc_JsonEncode(lua_State* L) {
     minified = lua_toboolean(L, 2);
   }
 
-  std::function<Json::Value(int)> convert =
-      [&L, &convert](int index) -> Json::Value {
+  static constexpr int kMaxJsonEncodeTableDepth = 128;
+  std::set<const void*> processedTables;
+
+  std::function<Json::Value(int, int)> convert =
+      [&L, &convert, &processedTables](int index, int depth) -> Json::Value {
+    if (depth > kMaxJsonEncodeTableDepth) {
+      luaL_error(L, "JsonEncode table nesting exceeds maximum depth");
+      return Json::Value(Json::nullValue); /* not reached */
+    }
+
     switch (lua_type(L, index)) {
       case LUA_TNIL:
         return Json::Value(Json::nullValue);
@@ -2167,6 +2176,15 @@ int LuaFunc_JsonEncode(lua_State* L) {
           index = lua_gettop(L) + index + 1;
         }
 
+        const void* tablePointer = lua_topointer(L, index);
+        if (tablePointer != nullptr) {
+          if (processedTables.find(tablePointer) != processedTables.end()) {
+            luaL_error(L, "JsonEncode cannot encode recursive tables");
+            return Json::Value(Json::nullValue); /* not reached */
+          }
+          processedTables.insert(tablePointer);
+        }
+
         size_t len = lua_objlen(L, index);
 
         if (len > 0) {
@@ -2176,10 +2194,13 @@ int LuaFunc_JsonEncode(lua_State* L) {
 
           for (unsigned int i = 0; i < len; i++) {
             lua_rawgeti(L, index, i + 1);
-            array[i] = convert(-1);
+            array[i] = convert(-1, depth + 1);
             lua_pop(L, 1);
           }
 
+          if (tablePointer != nullptr) {
+            processedTables.erase(tablePointer);
+          }
           return array;
         } else {
           // object
@@ -2193,12 +2214,18 @@ int LuaFunc_JsonEncode(lua_State* L) {
 
             size_t keylen;
             const char* key = lua_tolstring(L, -2, &keylen);
-            obj[std::string(key, keylen)] = convert(-1);
+            obj[std::string(key, keylen)] = convert(-1, depth + 1);
             lua_pop(L, 1);
           }
 
           if (obj.size() < 1) {
+            if (tablePointer != nullptr) {
+              processedTables.erase(tablePointer);
+            }
             return Json::Value(Json::arrayValue);
+          }
+          if (tablePointer != nullptr) {
+            processedTables.erase(tablePointer);
           }
           return obj;
         }
@@ -2210,7 +2237,7 @@ int LuaFunc_JsonEncode(lua_State* L) {
     return Json::Value(Json::nullValue); /* not reached */
   };
 
-  Json::Value root = convert(1);
+  Json::Value root = convert(1, 0);
 
   std::string data;
   if (!minified) {

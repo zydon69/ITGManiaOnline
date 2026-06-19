@@ -717,8 +717,13 @@ void XmlFileUtil::CompileXNodeTree(XNode* pNode, const std::string& sFile) {
 }
 
 namespace {
+static constexpr int kMaxLuaTableXNodeDepth = 128;
+
 XNode* XNodeFromTableRecursive(
-    lua_State* L, const std::string& sName, LuaReference& ProcessedTables) {
+    lua_State* L,
+    const std::string& sName,
+    LuaReference& ProcessedTables,
+    int depth) {
   XNode* pNode = new XNode(sName);
 
   // Set the value of the node to the table.
@@ -727,6 +732,10 @@ XNode* XNodeFromTableRecursive(
     lua_pushvalue(L, -1);
     pValue->SetValueFromStack(L);
     pNode->AppendAttrFrom(XNode::TEXT_ATTRIBUTE, pValue);
+  }
+
+  if (depth >= kMaxLuaTableXNodeDepth) {
+    return pNode;
   }
 
   // Iterate over the table, pulling out attributes and tables to process.
@@ -801,7 +810,8 @@ XNode* XNodeFromTableRecursive(
     lua_pop(L, 1);  // pop ProcessedTables
 
     NodeToAdd.PushSelf(L);
-    XNode* pNewNode = XNodeFromTableRecursive(L, sNodeName, ProcessedTables);
+    XNode* pNewNode =
+        XNodeFromTableRecursive(L, sNodeName, ProcessedTables, depth + 1);
     if (pNewNode) {
       pNode->AppendChild(pNewNode);
     }
@@ -834,7 +844,7 @@ XNode* XmlFileUtil::XNodeFromTable(lua_State* L) {
   lua_newtable(L);
   ProcessedTables.SetFromStack(L);
 
-  return XNodeFromTableRecursive(L, "Layer", ProcessedTables);
+  return XNodeFromTableRecursive(L, "Layer", ProcessedTables, 0);
 }
 
 /* Move nodes from pFrom into pTo which don't already exist in pTo. For

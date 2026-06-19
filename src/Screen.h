@@ -142,6 +142,9 @@ class Screen : public ActorFrame {
   bool PassInputToLua(const InputEventPlus& input);
   void AddInputCallbackFromStack(lua_State* L);
   void RemoveInputCallback(lua_State* L);
+  void ClearInputCallbacks();
+  void SetInputCallbacksHandleBeforeScreen(bool enabled);
+  bool InputCallbacksHandleBeforeScreen() const;
   virtual bool AllowCallbackInput() { return true; }
 
   // let subclass override if they want
@@ -168,6 +171,7 @@ class Screen : public ActorFrame {
   std::map<callback_key_t, LuaReference> m_InputCallbacks;
   std::vector<callback_key_t> m_DelayedCallbackRemovals;
   bool m_CallingInputCallbacks;
+  int m_iInputCallbacksHandleBeforeScreenLocks;
   void InternalRemoveCallback(callback_key_t key);
 };
 

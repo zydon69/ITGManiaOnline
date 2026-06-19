@@ -143,6 +143,10 @@ SongManager::SongManager() {
 }
 
 SongManager::~SongManager() {
+  LOG->Trace(
+      "SongManager::~SongManager begin songs=%zu deleted_songs=%zu groups=%zu",
+      m_pSongs.size(), m_pDeletedSongs.size(), m_mapNameToGroup.size());
+
   // Unregister with Lua.
   LUA->UnsetGlobal("SONGMAN");
 
@@ -150,6 +154,8 @@ SongManager::~SongManager() {
   // So, delete the Courses first.
   FreeCourses();
   FreeSongs();
+
+  LOG->Trace("SongManager::~SongManager end");
 }
 
 void SongManager::InitAll(LoadingWindow* ld, bool onlyAdditions) {
@@ -864,6 +870,10 @@ void SongManager::PreloadSongImages() {
 }
 
 void SongManager::FreeSongs() {
+  LOG->Trace(
+      "SongManager::FreeSongs begin songs=%zu deleted_songs=%zu groups=%zu",
+      m_pSongs.size(), m_pDeletedSongs.size(), m_mapNameToGroup.size());
+
   m_sSongGroupNames.clear();
   m_sSongGroupBannerPaths.clear();
   m_mapSongsByDifficulty.clear();
@@ -871,30 +881,59 @@ void SongManager::FreeSongs() {
 
   // m_sSongGroupBackgroundPaths.clear();
 
+  std::vector<Song*> songsToDelete;
+  songsToDelete.reserve(m_pSongs.size() + m_pDeletedSongs.size());
+  std::unordered_set<Song*> queuedSongs;
+  auto queue_song_for_delete = [&queuedSongs, &songsToDelete](Song* song) {
+    if (song == nullptr) {
+      return;
+    }
+    if (queuedSongs.insert(song).second) {
+      songsToDelete.push_back(song);
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: skipped duplicate Song pointer %p during song "
+          "manager cleanup.",
+          static_cast<void*>(song));
+    }
+  };
   for (Song* song : m_pSongs) {
+    queue_song_for_delete(song);
+  }
+  for (Song* song : m_pDeletedSongs) {
+    queue_song_for_delete(song);
+  }
+
+  m_pSongs.clear();
+  m_pDeletedSongs.clear();
+  m_pPopularSongs.clear();
+  m_pShuffledSongs.clear();
+  m_SongsByDir.clear();
+  m_mapSongGroupIndex.clear();
+
+  for (size_t i = 0; i < songsToDelete.size(); ++i) {
+    Song* song = songsToDelete[i];
+    LOG->Trace(
+        "SongManager::FreeSongs deleting song index=%zu/%zu ptr=%p dir='%s'",
+        i + 1, songsToDelete.size(), static_cast<void*>(song),
+        song != nullptr ? song->GetSongDir().c_str() : "");
     RageUtil::SafeDelete(song);
   }
+
   // Loop through all groups in the map and delete them.
   for (auto it = m_mapNameToGroup.begin(); it != m_mapNameToGroup.end(); ++it) {
     Group* group = it->second;
     RageUtil::SafeDelete(group);
   }
 
-  m_pSongs.clear();
   m_mapNameToGroup.clear();
   m_mapSeriesToGroups.clear();
-  m_SongsByDir.clear();
 
-  // also free the songs that have been deleted from disk
-  for (unsigned i = 0; i < m_pDeletedSongs.size(); ++i) {
-    RageUtil::SafeDelete(m_pDeletedSongs[i]);
-  }
-  m_pDeletedSongs.clear();
-
-  m_mapSongGroupIndex.clear();
-
-  m_pPopularSongs.clear();
-  m_pShuffledSongs.clear();
+  LOG->Trace(
+      "SongManager::FreeSongs end deleted=%zu remaining_songs=%zu "
+      "remaining_deleted_songs=%zu groups=%zu",
+      songsToDelete.size(), m_pSongs.size(), m_pDeletedSongs.size(),
+      m_mapNameToGroup.size());
 }
 
 void SongManager::UnlistSong(Song* song) {
@@ -906,7 +945,15 @@ void SongManager::UnlistSong(Song* song) {
   // cannot immediately free song data, as it is needed temporarily for smooth
   // audio transitions, etc. Instead, remove it from the m_pSongs list and store
   // it in a special place where it can safely be deleted later.
-  m_pDeletedSongs.push_back(song);
+  if (std::find(m_pDeletedSongs.begin(), m_pDeletedSongs.end(), song) ==
+      m_pDeletedSongs.end()) {
+    m_pDeletedSongs.push_back(song);
+  } else {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-097: ignored duplicate unlist request for song %p "
+        "'%s'.",
+        static_cast<void*>(song), song->GetSongDir().c_str());
+  }
 
   auto erase_song_from_vector = [song](std::vector<Song*>& songs) -> bool {
     const auto old_size = songs.size();

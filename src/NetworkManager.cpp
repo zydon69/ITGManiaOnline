@@ -242,6 +242,94 @@ static constexpr float kBaseMainThreadTaskSecondsPerUpdate = 0.004f;
 static constexpr int kBacklogMainThreadTasksPerUpdate = 512;
 static constexpr float kBacklogMainThreadTaskSecondsPerUpdate = 0.008f;
 static constexpr std::size_t kBacklogAdaptiveThreshold = 8;
+static std::atomic<std::uint64_t> g_LuaHttpCallbackStateIds{0};
+static std::atomic<std::uint64_t> g_LuaWebSocketCallbackStateIds{0};
+static std::atomic<std::uint64_t> g_WebSocketHandleIds{0};
+
+struct LuaHttpCallbackState {
+  std::uint64_t id{0};
+  std::string url;
+  std::atomic<bool> active{true};
+  std::atomic<bool> canceled{false};
+  std::atomic<bool> progressQueued{false};
+  std::atomic<int> latestProgressCurrent{0};
+  std::atomic<int> latestProgressTotal{0};
+  int progressRef = LUA_NOREF;
+  int responseRef = LUA_NOREF;
+  bool refsReleased = false;
+};
+
+struct LuaWebSocketCallbackState {
+  std::uint64_t id{0};
+  std::string url;
+  std::atomic<bool> active{true};
+  int messageRef = LUA_NOREF;
+  bool refReleased = false;
+};
+
+void ReleaseLuaHttpCallbackRefs(
+    lua_State* L,
+    const std::shared_ptr<LuaHttpCallbackState>& state) {
+  if (!state || state->refsReleased) {
+    return;
+  }
+
+  LOG->Trace(
+      "ITG Online NetworkTrace: http_refs_release_begin id=%llu url=%s "
+      "progressRef=%d responseRef=%d canceled=%d active=%d",
+      static_cast<unsigned long long>(state->id),
+      state->url.c_str(),
+      state->progressRef,
+      state->responseRef,
+      state->canceled.load() ? 1 : 0,
+      state->active.load() ? 1 : 0);
+  LOG->Flush();
+
+  state->active = false;
+  if (state->progressRef != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, state->progressRef);
+    state->progressRef = LUA_NOREF;
+  }
+  if (state->responseRef != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, state->responseRef);
+    state->responseRef = LUA_NOREF;
+  }
+  state->refsReleased = true;
+  LOG->Trace(
+      "ITG Online NetworkTrace: http_refs_release_end id=%llu url=%s",
+      static_cast<unsigned long long>(state->id),
+      state->url.c_str());
+  LOG->Flush();
+}
+
+void ReleaseLuaWebSocketCallbackRef(
+    lua_State* L,
+    const std::shared_ptr<LuaWebSocketCallbackState>& state) {
+  if (!state || state->refReleased) {
+    return;
+  }
+
+  LOG->Trace(
+      "ITG Online NetworkTrace: websocket_ref_release_begin id=%llu url=%s "
+      "messageRef=%d active=%d",
+      static_cast<unsigned long long>(state->id),
+      state->url.c_str(),
+      state->messageRef,
+      state->active.load() ? 1 : 0);
+  LOG->Flush();
+
+  state->active = false;
+  if (state->messageRef != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, state->messageRef);
+    state->messageRef = LUA_NOREF;
+  }
+  state->refReleased = true;
+  LOG->Trace(
+      "ITG Online NetworkTrace: websocket_ref_release_end id=%llu url=%s",
+      static_cast<unsigned long long>(state->id),
+      state->url.c_str());
+  LOG->Flush();
+}
 
 static bool HostMatchesPattern(const std::string& host, const std::string& pattern) {
   if (pattern.empty()) {
@@ -279,7 +367,29 @@ XToString(WebSocketMessageType);
 StringToX(WebSocketMessageType);
 LuaXType(WebSocketMessageType);
 
+static const char* IxWebSocketMessageTypeName(ix::WebSocketMessageType type) {
+  switch (type) {
+    case ix::WebSocketMessageType::Message:
+      return "Message";
+    case ix::WebSocketMessageType::Open:
+      return "Open";
+    case ix::WebSocketMessageType::Close:
+      return "Close";
+    case ix::WebSocketMessageType::Error:
+      return "Error";
+    case ix::WebSocketMessageType::Ping:
+      return "Ping";
+    case ix::WebSocketMessageType::Pong:
+      return "Pong";
+    case ix::WebSocketMessageType::Fragment:
+      return "Fragment";
+  }
+  return "Unknown";
+}
+
 NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
+  LOG->Trace("ITG Online NetworkTrace: network_manager_ctor_begin");
+  LOG->Flush();
   ix::initNetSystem();
 
   // Register with Lua.
@@ -354,11 +464,16 @@ NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
   this->httpWorker = std::thread(&NetworkManager::RunHttpWorker, this);
   this->webSocketWorker =
       std::thread(&NetworkManager::RunWebSocketWorker, this);
+  LOG->Trace("ITG Online NetworkTrace: network_manager_ctor_end");
+  LOG->Flush();
 }
 
 NetworkManager::~NetworkManager() {
+  LOG->Trace("ITG Online NetworkTrace: network_manager_dtor_begin");
+  LOG->Flush();
   this->CloseAllWebSockets();
   this->StopWorkers();
+  this->DrainMainThreadTasks();
   this->ClearMainThreadTasks();
 
   // Unregister with Lua after all network callbacks have been cancelled.
@@ -366,9 +481,23 @@ NetworkManager::~NetworkManager() {
 
   // Set the status to uninitialized.
   ix::uninitNetSystem();
+  LOG->Trace("ITG Online NetworkTrace: network_manager_dtor_end");
+  LOG->Flush();
 }
 
 void NetworkManager::CloseAllWebSockets() {
+  CloseAllWebSocketsInternal(false);
+}
+
+void NetworkManager::CloseAllWebSocketsFromLua() {
+  CloseAllWebSocketsInternal(true);
+}
+
+void NetworkManager::CloseAllWebSocketsInternal(bool calledFromLua) {
+  LOG->Trace(
+      "ITG Online NetworkTrace: close_all_websockets_begin calledFromLua=%d",
+      calledFromLua ? 1 : 0);
+  LOG->Flush();
   // Drop queued websocket starts so no new connections come up after cleanup.
   {
     std::lock_guard<std::mutex> lock(this->webSocketWorkerMutex);
@@ -391,10 +520,14 @@ void NetworkManager::CloseAllWebSockets() {
   }
 
   for (auto& handle : webSocketHandlesCopy) {
-    handle->closed = true;
-    handle->webSocket.disableAutomaticReconnection();
-    handle->webSocket.stop();
+    handle->CloseSocket(calledFromLua);
   }
+  LOG->Trace(
+      "ITG Online NetworkTrace: close_all_websockets_end calledFromLua=%d "
+      "handles=%zu",
+      calledFromLua ? 1 : 0,
+      webSocketHandlesCopy.size());
+  LOG->Flush();
 }
 
 void NetworkManager::RunHttpWorker() {
@@ -473,8 +606,37 @@ void NetworkManager::ClearMainThreadTasks() {
   }
 }
 
+void NetworkManager::DrainMainThreadTasks() {
+  std::size_t drainedTasks = 0;
+  while (true) {
+    std::function<void()> task;
+    {
+      std::lock_guard<std::mutex> lock(this->mainThreadTaskMutex);
+      if (this->mainThreadTaskQueue.empty()) {
+        break;
+      }
+
+      task = std::move(this->mainThreadTaskQueue.front());
+      this->mainThreadTaskQueue.pop();
+    }
+
+    task();
+    ++drainedTasks;
+  }
+  if (drainedTasks > 0) {
+    LOG->Trace(
+        "ITG Online NetworkTrace: drain_main_thread_tasks count=%zu",
+        drainedTasks);
+    LOG->Flush();
+  }
+}
+
 void NetworkManager::EnqueueMainThreadTask(std::function<void()> task) {
   if (this->shutdownWorkers.load()) {
+    LOG->Trace(
+        "ITG Online NetworkTrace: enqueue_main_thread_task_skipped "
+        "reason=shutdown");
+    LOG->Flush();
     return;
   }
 
@@ -756,12 +918,19 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
 
   this->httpWorkerCv.notify_one();
 
-  return std::make_shared<HttpRequestFuture>(req);
+  return std::make_shared<HttpRequestFuture>(req, args.onCancel);
 }
 
 WebSocketHandlePtr NetworkManager::WebSocket(const WebSocketArgs& args) {
   auto handle = std::make_shared<WebSocketHandle>();
+  handle->debugId = ++g_WebSocketHandleIds;
+  handle->debugUrl = args.url;
   handle->onClose = args.onClose;
+  LOG->Trace(
+      "ITG Online NetworkTrace: websocket_create handle=%llu url=%s",
+      static_cast<unsigned long long>(handle->debugId),
+      handle->debugUrl.c_str());
+  LOG->Flush();
 
   handle->webSocket.setUrl(args.url);
   handle->webSocket.setTLSOptions(this->tlsOptions);
@@ -797,14 +966,37 @@ WebSocketHandlePtr NetworkManager::WebSocket(const WebSocketArgs& args) {
     std::lock_guard<std::mutex> lock(this->webSocketWorkerMutex);
     this->webSocketWorkerQueue.push([this, handle]() {
       if (this->shutdownWorkers.load() || handle->closed.load()) {
+        LOG->Trace(
+            "ITG Online NetworkTrace: websocket_start_skipped handle=%llu "
+            "shutdown=%d closed=%d url=%s",
+            static_cast<unsigned long long>(handle->debugId),
+            this->shutdownWorkers.load() ? 1 : 0,
+            handle->closed.load() ? 1 : 0,
+            handle->debugUrl.c_str());
+        LOG->Flush();
         return;
       }
 
+      LOG->Trace(
+          "ITG Online NetworkTrace: websocket_start_begin handle=%llu url=%s",
+          static_cast<unsigned long long>(handle->debugId),
+          handle->debugUrl.c_str());
+      LOG->Flush();
       handle->webSocket.start();
+      LOG->Trace(
+          "ITG Online NetworkTrace: websocket_start_end handle=%llu url=%s",
+          static_cast<unsigned long long>(handle->debugId),
+          handle->debugUrl.c_str());
+      LOG->Flush();
     });
   }
 
   this->webSocketWorkerCv.notify_one();
+  LOG->Trace(
+      "ITG Online NetworkTrace: websocket_start_queued handle=%llu url=%s",
+      static_cast<unsigned long long>(handle->debugId),
+      handle->debugUrl.c_str());
+  LOG->Flush();
 
   {
     std::lock_guard<std::mutex> lock(this->webSocketHandlesMutex);
@@ -852,22 +1044,81 @@ int HttpRequestFuture::Collect(lua_State* L) {
 int HttpRequestFuture::Cancel(lua_State* L) {
   void* udata = luaL_checkudata(L, 1, "HttpRequestFuture");
   auto fut = *static_cast<HttpRequestFuturePtr*>(udata);
+  if (fut->canceled.exchange(true)) {
+    LOG->Trace("ITG Online NetworkTrace: http_future_cancel_skipped reason=already_canceled");
+    LOG->Flush();
+    return 0;
+  }
+  LOG->Trace("ITG Online NetworkTrace: http_future_cancel_begin");
+  LOG->Flush();
   fut->args->cancel = true;
+  if (fut->onCancel) {
+    fut->onCancel();
+  }
+  LOG->Trace("ITG Online NetworkTrace: http_future_cancel_end");
+  LOG->Flush();
   return 0;
 }
 
-WebSocketHandle::~WebSocketHandle() {
-  closed = true;
-  webSocket.stop();
+void WebSocketHandle::InvalidateCallbacks() {
   if (auto closeCallback = std::move(onClose)) {
+    LOG->Trace(
+        "ITG Online NetworkTrace: websocket_invalidate_callbacks_begin "
+        "handle=%llu url=%s",
+        static_cast<unsigned long long>(debugId),
+        debugUrl.c_str());
+    LOG->Flush();
     onClose = nullptr;
     closeCallback();
+    LOG->Trace(
+        "ITG Online NetworkTrace: websocket_invalidate_callbacks_end "
+        "handle=%llu url=%s",
+        static_cast<unsigned long long>(debugId),
+        debugUrl.c_str());
+    LOG->Flush();
   }
+}
+
+void WebSocketHandle::CloseSocket(bool calledFromLua) {
+  if (closed.exchange(true)) {
+    return;
+  }
+
+  LOG->Trace(
+      "ITG Online NetworkTrace: websocket_close_begin handle=%llu "
+      "calledFromLua=%d url=%s",
+      static_cast<unsigned long long>(debugId),
+      calledFromLua ? 1 : 0,
+      debugUrl.c_str());
+  LOG->Flush();
+  InvalidateCallbacks();
+  webSocket.disableAutomaticReconnection();
+  if (calledFromLua) {
+    LUA->YieldLua();
+  }
+  webSocket.stop();
+  if (calledFromLua) {
+    LUA->UnyieldLua();
+  }
+  LOG->Trace(
+      "ITG Online NetworkTrace: websocket_close_end handle=%llu "
+      "calledFromLua=%d url=%s",
+      static_cast<unsigned long long>(debugId),
+      calledFromLua ? 1 : 0,
+      debugUrl.c_str());
+  LOG->Flush();
+}
+
+WebSocketHandle::~WebSocketHandle() {
+  CloseSocket(false);
 }
 
 int WebSocketHandle::Collect(lua_State* L) {
   void* udata = luaL_checkudata(L, 1, "WebSocketHandle");
   auto handleptr = static_cast<WebSocketHandlePtr*>(udata);
+  if (*handleptr) {
+    (*handleptr)->CloseSocket(true);
+  }
   handleptr->~shared_ptr();
   return 0;
 }
@@ -876,15 +1127,7 @@ int WebSocketHandle::Close(lua_State* L) {
   void* udata = luaL_checkudata(L, 1, "WebSocketHandle");
   auto handle = *static_cast<WebSocketHandlePtr*>(udata);
 
-  handle->closed = true;
-  LUA->YieldLua();
-  handle->webSocket.stop();
-  LUA->UnyieldLua();
-
-  if (auto onClose = std::move(handle->onClose)) {
-    handle->onClose = nullptr;
-    onClose();
-  }
+  handle->CloseSocket(true);
 
   return 0;
 }
@@ -898,6 +1141,11 @@ int WebSocketHandle::Send(lua_State* L) {
   std::string data(s, len);
 
   bool binary = lua_toboolean(L, 3);
+
+  if (handle->closed.load()) {
+    lua_pushboolean(L, false);
+    return 1;
+  }
 
   auto info = handle->webSocket.send(data, binary);
 
@@ -965,8 +1213,8 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     luaL_checktype(L, 1, LUA_TTABLE);
 
     HttpRequestArgs args;
-    int onProgressRef = LUA_NOREF;
-    int onResponseRef = LUA_NOREF;
+    auto callbackState = std::make_shared<LuaHttpCallbackState>();
+    callbackState->id = ++g_LuaHttpCallbackStateIds;
 
     lua_getfield(L, 1, "url");
     if (lua_isnil(L, -1)) {
@@ -977,6 +1225,12 @@ class LunaNetworkManager : public Luna<NetworkManager> {
       luaL_error(L, "url must be a string");
     }
     lua_pop(L, 1);
+    callbackState->url = args.url;
+    LOG->Trace(
+        "ITG Online NetworkTrace: lua_http_request_begin id=%llu url=%s",
+        static_cast<unsigned long long>(callbackState->id),
+        callbackState->url.c_str());
+    LOG->Flush();
 
     lua_getfield(L, 1, "method");
     if (!lua_isnil(L, -1)) {
@@ -1108,16 +1362,36 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     if (!lua_isnil(L, -1)) {
       if (lua_isfunction(L, -1)) {
         lua_pushvalue(L, -1);
-        onProgressRef = luaL_ref(L, LUA_REGISTRYINDEX);
+        callbackState->progressRef = luaL_ref(L, LUA_REGISTRYINDEX);
 
-        args.onProgress = [p, onProgressRef](int current, int total) {
-          p->EnqueueMainThreadTask([current, total, onProgressRef]() {
+        args.onProgress = [p, callbackState](int current, int total) {
+          if (!callbackState->active.load()) {
+            return false;
+          }
+
+          callbackState->latestProgressCurrent = current;
+          callbackState->latestProgressTotal = total;
+
+          if (callbackState->progressQueued.exchange(true)) {
+            return callbackState->active.load();
+          }
+
+          p->EnqueueMainThreadTask([callbackState]() {
+            callbackState->progressQueued = false;
+            if (!callbackState->active.load() ||
+                callbackState->refsReleased ||
+                callbackState->progressRef == LUA_NOREF) {
+              return;
+            }
+
+            const int current = callbackState->latestProgressCurrent.load();
+            const int total = callbackState->latestProgressTotal.load();
             Lua* L = LUA->Get();
-            handleProgress(L, current, total, onProgressRef);
+            handleProgress(L, current, total, callbackState->progressRef);
             LUA->Release(L);
           });
 
-          return true;
+          return callbackState->active.load();
         };
       } else {
         luaL_error(L, "onProgress must be a function");
@@ -1129,45 +1403,98 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     if (!lua_isnil(L, -1)) {
       if (lua_isfunction(L, -1)) {
         lua_pushvalue(L, -1);
-        onResponseRef = luaL_ref(L, LUA_REGISTRYINDEX);
+        callbackState->responseRef = luaL_ref(L, LUA_REGISTRYINDEX);
       } else {
-        luaL_unref(L, LUA_REGISTRYINDEX, onProgressRef);
+        ReleaseLuaHttpCallbackRefs(L, callbackState);
         luaL_error(L, "onResponse must be a function");
       }
     }
     lua_pop(L, 1);
 
-    args.onFileError = [p, onProgressRef,
-                        onResponseRef](const std::string& errorMessage) {
-      p->EnqueueMainThreadTask([errorMessage, onProgressRef, onResponseRef]() {
+    args.onCancel = [p, callbackState]() {
+      LOG->Trace(
+          "ITG Online NetworkTrace: lua_http_cancel id=%llu url=%s",
+          static_cast<unsigned long long>(callbackState->id),
+          callbackState->url.c_str());
+      LOG->Flush();
+      callbackState->canceled = true;
+      callbackState->active = false;
+      p->EnqueueMainThreadTask([callbackState]() {
+        Lua* L = LUA->Get();
+        ReleaseLuaHttpCallbackRefs(L, callbackState);
+        LUA->Release(L);
+      });
+    };
+
+    args.onFileError = [p, callbackState](const std::string& errorMessage) {
+      LOG->Trace(
+          "ITG Online NetworkTrace: lua_http_file_error id=%llu url=%s "
+          "error=%s",
+          static_cast<unsigned long long>(callbackState->id),
+          callbackState->url.c_str(),
+          errorMessage.c_str());
+      LOG->Flush();
+      callbackState->active = false;
+      p->EnqueueMainThreadTask([errorMessage, callbackState]() {
         Lua* L = LUA->Get();
 
-        luaL_unref(L, LUA_REGISTRYINDEX, onProgressRef);
-
-        if (onResponseRef != LUA_NOREF) {
-          handleFileError(L, errorMessage, onResponseRef);
+        if (!callbackState->canceled.load() &&
+            !callbackState->refsReleased &&
+            callbackState->responseRef != LUA_NOREF) {
+          handleFileError(L, errorMessage, callbackState->responseRef);
         }
+        ReleaseLuaHttpCallbackRefs(L, callbackState);
 
         LUA->Release(L);
       });
     };
 
-    args.onResponse = [p, onProgressRef,
-                       onResponseRef](const ix::HttpResponsePtr& response) {
-      p->EnqueueMainThreadTask([response, onProgressRef, onResponseRef]() {
+    args.onResponse = [p, callbackState](const ix::HttpResponsePtr& response) {
+      LOG->Trace(
+          "ITG Online NetworkTrace: lua_http_response_queued id=%llu url=%s "
+          "status=%d",
+          static_cast<unsigned long long>(callbackState->id),
+          callbackState->url.c_str(),
+          response ? response->statusCode : -1);
+      LOG->Flush();
+      callbackState->active = false;
+      p->EnqueueMainThreadTask([response, callbackState]() {
         Lua* L = LUA->Get();
 
-        luaL_unref(L, LUA_REGISTRYINDEX, onProgressRef);
-
-        if (onResponseRef != LUA_NOREF) {
-          handleHttpResponse(L, response, onResponseRef);
+        if (!callbackState->canceled.load() &&
+            !callbackState->refsReleased &&
+            callbackState->responseRef != LUA_NOREF) {
+          LOG->Trace(
+              "ITG Online NetworkTrace: lua_http_response_deliver id=%llu "
+              "url=%s status=%d",
+              static_cast<unsigned long long>(callbackState->id),
+              callbackState->url.c_str(),
+              response ? response->statusCode : -1);
+          LOG->Flush();
+          handleHttpResponse(L, response, callbackState->responseRef);
+        } else {
+          LOG->Trace(
+              "ITG Online NetworkTrace: lua_http_response_drop id=%llu url=%s "
+              "canceled=%d refsReleased=%d responseRef=%d",
+              static_cast<unsigned long long>(callbackState->id),
+              callbackState->url.c_str(),
+              callbackState->canceled.load() ? 1 : 0,
+              callbackState->refsReleased ? 1 : 0,
+              callbackState->responseRef);
+          LOG->Flush();
         }
+        ReleaseLuaHttpCallbackRefs(L, callbackState);
 
         LUA->Release(L);
       });
     };
 
     if (p->IsUrlAllowed(args.url)) {
+      LOG->Trace(
+          "ITG Online NetworkTrace: lua_http_request_submit id=%llu url=%s",
+          static_cast<unsigned long long>(callbackState->id),
+          callbackState->url.c_str());
+      LOG->Flush();
       auto fut = p->HttpRequest(args);
 
       void* vp = lua_newuserdata(L, sizeof(std::shared_ptr<HttpRequestFuture>));
@@ -1177,10 +1504,12 @@ class LunaNetworkManager : public Luna<NetworkManager> {
       return 1;
     } else {
       LOG->Warn("blocked access to %s", args.url.c_str());
-      luaL_unref(L, LUA_REGISTRYINDEX, onProgressRef);
-      if (onResponseRef != LUA_NOREF) {
-        handleUrlForbidden(L, args.url, onResponseRef);
+      LOG->Flush();
+      callbackState->active = false;
+      if (callbackState->responseRef != LUA_NOREF) {
+        handleUrlForbidden(L, args.url, callbackState->responseRef);
       }
+      ReleaseLuaHttpCallbackRefs(L, callbackState);
       return 0;
     }
   }
@@ -1189,7 +1518,8 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     luaL_checktype(L, 1, LUA_TTABLE);
 
     WebSocketArgs args;
-    int onMessageRef = LUA_NOREF;
+    auto callbackState = std::make_shared<LuaWebSocketCallbackState>();
+    callbackState->id = ++g_LuaWebSocketCallbackStateIds;
 
     lua_getfield(L, 1, "url");
     if (lua_isnil(L, -1)) {
@@ -1200,6 +1530,12 @@ class LunaNetworkManager : public Luna<NetworkManager> {
       luaL_error(L, "url must be a string");
     }
     lua_pop(L, 1);
+    callbackState->url = args.url;
+    LOG->Trace(
+        "ITG Online NetworkTrace: lua_websocket_begin id=%llu url=%s",
+        static_cast<unsigned long long>(callbackState->id),
+        callbackState->url.c_str());
+    LOG->Flush();
 
     lua_getfield(L, 1, "headers");
     if (!lua_isnil(L, -1)) {
@@ -1261,48 +1597,106 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     if (!lua_isnil(L, -1)) {
       if (lua_isfunction(L, -1)) {
         lua_pushvalue(L, -1);
-        onMessageRef = luaL_ref(L, LUA_REGISTRYINDEX);
+        callbackState->messageRef = luaL_ref(L, LUA_REGISTRYINDEX);
       } else {
         luaL_error(L, "onMessage must be a function");
       }
     }
     lua_pop(L, 1);
 
-    args.onMessage = [p, onMessageRef](const ix::WebSocketMessage& msg) {
+    args.onMessage = [p, callbackState](const ix::WebSocketMessage& msg) {
+      if (!callbackState->active.load()) {
+        LOG->Trace(
+            "ITG Online NetworkTrace: lua_websocket_message_drop id=%llu "
+            "url=%s reason=inactive type=%s",
+            static_cast<unsigned long long>(callbackState->id),
+            callbackState->url.c_str(),
+            IxWebSocketMessageTypeName(msg.type));
+        LOG->Flush();
+        return;
+      }
+
       ix::WebSocketMessageType type = msg.type;
       std::string data = msg.str;
       ix::WebSocketErrorInfo errorInfo = msg.errorInfo;
       ix::WebSocketOpenInfo openInfo = msg.openInfo;
       ix::WebSocketCloseInfo closeInfo = msg.closeInfo;
       bool binary = msg.binary;
+      LOG->Trace(
+          "ITG Online NetworkTrace: lua_websocket_message_queued id=%llu "
+          "url=%s type=%s bytes=%zu",
+          static_cast<unsigned long long>(callbackState->id),
+          callbackState->url.c_str(),
+          IxWebSocketMessageTypeName(type),
+          data.size());
+      LOG->Flush();
 
       p->EnqueueMainThreadTask(
-          [type, data, errorInfo, openInfo, closeInfo, binary, onMessageRef]() {
+          [type, data, errorInfo, openInfo, closeInfo, binary, callbackState]() {
+            if (!callbackState->active.load() ||
+                callbackState->refReleased ||
+                callbackState->messageRef == LUA_NOREF) {
+              LOG->Trace(
+                  "ITG Online NetworkTrace: lua_websocket_message_drop id=%llu "
+                  "url=%s reason=callback_released active=%d refReleased=%d "
+                  "messageRef=%d type=%s",
+                  static_cast<unsigned long long>(callbackState->id),
+                  callbackState->url.c_str(),
+                  callbackState->active.load() ? 1 : 0,
+                  callbackState->refReleased ? 1 : 0,
+                  callbackState->messageRef,
+                  IxWebSocketMessageTypeName(type));
+              LOG->Flush();
+              return;
+            }
+
             Lua* L = LUA->Get();
 
-            if (onMessageRef != LUA_NOREF) {
-              handleMessage(
-                  L, type, data, errorInfo, openInfo, closeInfo, binary,
-                  onMessageRef);
-            }
+            LOG->Trace(
+                "ITG Online NetworkTrace: lua_websocket_message_deliver id=%llu "
+                "url=%s type=%s bytes=%zu",
+                static_cast<unsigned long long>(callbackState->id),
+                callbackState->url.c_str(),
+                IxWebSocketMessageTypeName(type),
+                data.size());
+            LOG->Flush();
+            handleMessage(
+                L, type, data, errorInfo, openInfo, closeInfo, binary,
+                callbackState->messageRef);
+            LOG->Trace(
+                "ITG Online NetworkTrace: lua_websocket_message_delivered id=%llu "
+                "url=%s type=%s",
+                static_cast<unsigned long long>(callbackState->id),
+                callbackState->url.c_str(),
+                IxWebSocketMessageTypeName(type));
+            LOG->Flush();
 
             LUA->Release(L);
           });
     };
 
-    args.onClose = [p, onMessageRef]() {
-      p->EnqueueMainThreadTask([onMessageRef]() {
+    args.onClose = [p, callbackState]() {
+      LOG->Trace(
+          "ITG Online NetworkTrace: lua_websocket_on_close id=%llu url=%s",
+          static_cast<unsigned long long>(callbackState->id),
+          callbackState->url.c_str());
+      LOG->Flush();
+      callbackState->active = false;
+      p->EnqueueMainThreadTask([callbackState]() {
         Lua* L = LUA->Get();
 
-        if (onMessageRef != LUA_NOREF) {
-          luaL_unref(L, LUA_REGISTRYINDEX, onMessageRef);
-        }
+        ReleaseLuaWebSocketCallbackRef(L, callbackState);
 
         LUA->Release(L);
       });
     };
 
     if (p->IsUrlAllowed(args.url)) {
+      LOG->Trace(
+          "ITG Online NetworkTrace: lua_websocket_submit id=%llu url=%s",
+          static_cast<unsigned long long>(callbackState->id),
+          callbackState->url.c_str());
+      LOG->Flush();
       auto handle = p->WebSocket(args);
 
       void* vp = lua_newuserdata(L, sizeof(std::shared_ptr<WebSocketHandle>));
@@ -1312,9 +1706,12 @@ class LunaNetworkManager : public Luna<NetworkManager> {
       return 1;
     } else {
       LOG->Warn("blocked access to %s", args.url.c_str());
-      if (onMessageRef != LUA_NOREF) {
-        handleWebSocketUrlForbidden(L, args.url, onMessageRef);
+      LOG->Flush();
+      callbackState->active = false;
+      if (callbackState->messageRef != LUA_NOREF) {
+        handleWebSocketUrlForbidden(L, args.url, callbackState->messageRef);
       }
+      ReleaseLuaWebSocketCallbackRef(L, callbackState);
       return 0;
     }
   }
@@ -1360,7 +1757,7 @@ class LunaNetworkManager : public Luna<NetworkManager> {
   }
 
   static int CloseAllWebSockets(T* p, lua_State* /* L */) {
-    p->CloseAllWebSockets();
+    p->CloseAllWebSocketsFromLua();
     return 0;
   }
 
@@ -1453,7 +1850,6 @@ class LunaNetworkManager : public Luna<NetworkManager> {
  private:
   static void handleUrlForbidden(Lua* L, std::string& url, int onResponseRef) {
     lua_rawgeti(L, LUA_REGISTRYINDEX, onResponseRef);
-    luaL_unref(L, LUA_REGISTRYINDEX, onResponseRef);
 
     lua_newtable(L);
 
@@ -1470,7 +1866,6 @@ class LunaNetworkManager : public Luna<NetworkManager> {
   static void handleFileError(
       Lua* L, const std::string& errorMessage, int onResponseRef) {
     lua_rawgeti(L, LUA_REGISTRYINDEX, onResponseRef);
-    luaL_unref(L, LUA_REGISTRYINDEX, onResponseRef);
 
     lua_newtable(L);
 
@@ -1487,7 +1882,6 @@ class LunaNetworkManager : public Luna<NetworkManager> {
   static void handleHttpResponse(
       Lua* L, const ix::HttpResponsePtr& response, int onResponseRef) {
     lua_rawgeti(L, LUA_REGISTRYINDEX, onResponseRef);
-    luaL_unref(L, LUA_REGISTRYINDEX, onResponseRef);
 
     lua_newtable(L);
 
@@ -1589,7 +1983,6 @@ class LunaNetworkManager : public Luna<NetworkManager> {
   static void handleWebSocketUrlForbidden(
       Lua* L, std::string& url, int onMessageRef) {
     lua_rawgeti(L, LUA_REGISTRYINDEX, onMessageRef);
-    luaL_unref(L, LUA_REGISTRYINDEX, onMessageRef);
 
     lua_newtable(L);
 

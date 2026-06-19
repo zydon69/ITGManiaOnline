@@ -1554,6 +1554,69 @@ function ITGOnline:ShouldIgnoreRoomEvents(roomId)
 	return false
 end
 
+function ITGOnline:SuppressLobbyRefresh(seconds, reason)
+	local duration = tonumber(seconds) or 1
+	self.lobbyRefreshSuppressedUntil = math.max(
+		tonumber(self.lobbyRefreshSuppressedUntil) or 0,
+		GetTimeSinceStart() + duration)
+	online_flow_trace("lobby_refresh_suppressed duration=" .. tostring(duration)
+		.. " reason=" .. tostring(reason or "unknown"))
+end
+
+function ITGOnline:IsLobbyRefreshSuppressed()
+	local untilTime = tonumber(self.lobbyRefreshSuppressedUntil) or 0
+	if untilTime <= 0 then return false end
+	if GetTimeSinceStart() <= untilTime then
+		return true
+	end
+	self.lobbyRefreshSuppressedUntil = nil
+	return false
+end
+
+	function ITGOnline:LobbyRefreshSuppressionRemaining()
+		local untilTime = tonumber(self.lobbyRefreshSuppressedUntil) or 0
+		return math.max(0, untilTime - GetTimeSinceStart())
+	end
+
+	function ITGOnline:SuppressAutomaticLobbyRefresh(seconds, reason)
+		local duration = tonumber(seconds) or 5
+		self.lobbyRefreshDropUntil = math.max(
+			tonumber(self.lobbyRefreshDropUntil) or 0,
+			GetTimeSinceStart() + duration)
+		self.lobbyRefreshQueued = false
+		self.lobbyRefreshDeferredScheduled = false
+		online_flow_trace("lobby_refresh_auto_suppressed duration=" .. tostring(duration)
+			.. " reason=" .. tostring(reason or "unknown"))
+	end
+
+	function ITGOnline:IsAutomaticLobbyRefreshSuppressed()
+		if self.currentRoomId ~= nil then
+			self.lobbyRefreshDropUntil = nil
+			return false
+		end
+		local untilTime = tonumber(self.lobbyRefreshDropUntil) or 0
+		if untilTime <= 0 then return false end
+		if GetTimeSinceStart() <= untilTime then
+			return true
+		end
+		self.lobbyRefreshDropUntil = nil
+		return false
+	end
+
+	function ITGOnline:ScheduleDeferredLobbyRefresh(delay, reason)
+		if self:IsAutomaticLobbyRefreshSuppressed() then
+			online_flow_trace(
+				"lobby_refresh_deferred_skipped reason=post_leave_auto_suppressed source=" ..
+				tostring(reason or "unknown"))
+			return
+		end
+		self.lobbyRefreshDeferredScheduled = true
+		MESSAGEMAN:Broadcast("ITGOnlineLobbyRefreshDeferred", {
+			delay = math.max(0.05, tonumber(delay) or 0.05),
+			reason = reason or "unknown"
+		})
+	end
+
 function ITGOnline:CurrentRoomConflictCode(decoded, response)
 	local currentRoomMeta = sync_current_room_meta(decoded)
 	local metaErrorCode = currentRoomMeta and currentRoomMeta.error_code or nil
@@ -3228,17 +3291,58 @@ function ITGOnline:Relogin(callback)
 	end)
 end
 
+function ITGOnline:RememberRealtimeConnectCallbacks(callbacks)
+	if not callbacks then return end
+	self.pendingRealtimeConnectCallbacks = self.pendingRealtimeConnectCallbacks or {}
+	self.pendingRealtimeConnectCallbacks[#self.pendingRealtimeConnectCallbacks + 1] = callbacks
+end
+
+function ITGOnline:FlushRealtimeConnectCallbacks(method, value)
+	local callbacks = self.pendingRealtimeConnectCallbacks or {}
+	self.pendingRealtimeConnectCallbacks = {}
+	for cb in ivalues(callbacks) do
+		if cb and cb[method] then
+			cb[method](value)
+		end
+	end
+end
+
 function ITGOnline:ConnectWebSocket(callbacks)
+	if self.socket and self.realtimeConnected and not self.disconnecting then
+		online_flow_trace("connect_websocket_reused reason=already_connected")
+		if callbacks and callbacks.open then callbacks.open() end
+		return
+	end
+	if self.realtimeConnecting then
+		online_flow_trace("connect_websocket_join_inflight")
+		self:RememberRealtimeConnectCallbacks(callbacks)
+		return
+	end
+
+	self.realtimeConnecting = true
+	self:RememberRealtimeConnectCallbacks(callbacks)
 	self:Request("POST", "/websocket/tickets", {}, function(ok, decoded, response)
 		if not ok or not decoded or not decoded.ticket then
-			if callbacks and callbacks.error then
-				callbacks.error(response_message(response, decoded, "WebSocket ticket request failed"))
-			end
+			self.realtimeConnecting = false
+			self.realtimeConnected = false
+			self:FlushRealtimeConnectCallbacks(
+				"error",
+				response_message(response, decoded, "WebSocket ticket request failed"))
 			return
 		end
 
 		local config = self:ConnectionConfig()
-		self.socket = NETWORK:WebSocket{
+		if self.socket then
+			online_flow_trace("connect_websocket_closing_previous_socket")
+			self.realtimeGeneration = (tonumber(self.realtimeGeneration) or 0) + 1
+			pcall(function() self.socket:Close() end)
+			self.socket = nil
+		end
+		self.activeRealtimeCallbacks = callbacks
+		self.realtimeGeneration = (tonumber(self.realtimeGeneration) or 0) + 1
+		local generation = self.realtimeGeneration
+		local socket
+		socket = NETWORK:WebSocket{
 			url = config.webSocketUrl,
 			headers = {
 				["Origin"] = origin_from_base_url(config.apiBaseUrl),
@@ -3246,31 +3350,74 @@ function ITGOnline:ConnectWebSocket(callbacks)
 				["Sec-WebSocket-Protocol"] = "itgmania-ticket",
 			},
 			pingInterval = 20,
-			automaticReconnect = false,
-			onMessage = function(msg)
-				local msgType = ToEnumShortString(msg.type)
-				if msgType == "Open" then
-					self.lastRealtimeMessageAt = GetTimeSinceStart()
-					if callbacks and callbacks.open then callbacks.open() end
-				elseif msgType == "Message" then
-					self.lastRealtimeMessageAt = GetTimeSinceStart()
-					local payload = safe_decode(msg.data)
-					local handled, err = pcall(function()
-						self:HandleRealtimeEvent(payload)
-					end)
-					if handled and payload and payload.id then
-						self:SendRealtimeAck(payload.id)
-					elseif not handled then
-						online_trace("Realtime event handling failed before ack: " .. tostring(err))
+				automaticReconnect = false,
+				onMessage = function(msg)
+					if generation ~= self.realtimeGeneration or self.socket ~= socket then
+						online_flow_trace("realtime_message_ignored reason=stale_socket generation="
+							.. tostring(generation)
+							.. " active=" .. tostring(self.realtimeGeneration or "nil"))
+						return
 					end
-					if handled and callbacks and callbacks.message then callbacks.message(payload) end
-				elseif msgType == "Close" then
-					if callbacks and callbacks.close then callbacks.close(msg.reason) end
-				elseif msgType == "Error" then
-					if callbacks and callbacks.error then callbacks.error(msg.reason or "WebSocket error") end
-				end
-			end,
-		}
+					local msgType = ToEnumShortString(msg.type)
+					if msgType == "Open" then
+						self.lastRealtimeMessageAt = GetTimeSinceStart()
+						self.realtimeConnecting = false
+						self.realtimeConnected = true
+						online_flow_trace("realtime_socket_open")
+						self:FlushRealtimeConnectCallbacks("open")
+					elseif msgType == "Message" then
+						self.lastRealtimeMessageAt = GetTimeSinceStart()
+						local payload = safe_decode(msg.data)
+						online_flow_trace("realtime_message_received id=" .. tostring(payload and payload.id or "nil")
+							.. " name=" .. tostring(payload and (payload.event or payload.name) or "nil")
+							.. " bytes=" .. tostring(msg.data and string.len(msg.data) or 0))
+						local handled, err = pcall(function()
+							online_flow_trace("realtime_handle_begin id=" .. tostring(payload and payload.id or "nil")
+								.. " name=" .. tostring(payload and (payload.event or payload.name) or "nil"))
+							self:HandleRealtimeEvent(payload)
+						end)
+						online_flow_trace("realtime_handle_end id=" .. tostring(payload and payload.id or "nil")
+							.. " name=" .. tostring(payload and (payload.event or payload.name) or "nil")
+							.. " ok=" .. tostring(handled == true))
+						if handled and payload and payload.id then
+							online_flow_trace("realtime_ack_begin id=" .. tostring(payload.id)
+								.. " name=" .. tostring(payload.event or payload.name or "nil"))
+							self:SendRealtimeAck(payload.id)
+							online_flow_trace("realtime_ack_end id=" .. tostring(payload.id)
+								.. " name=" .. tostring(payload.event or payload.name or "nil"))
+						elseif not handled then
+							online_trace("Realtime event handling failed before ack: " .. tostring(err))
+						end
+						if handled and callbacks and callbacks.message then
+							online_flow_trace("realtime_callback_message_begin id=" .. tostring(payload and payload.id or "nil")
+								.. " name=" .. tostring(payload and (payload.event or payload.name) or "nil"))
+							callbacks.message(payload)
+							online_flow_trace("realtime_callback_message_end id=" .. tostring(payload and payload.id or "nil")
+								.. " name=" .. tostring(payload and (payload.event or payload.name) or "nil"))
+						end
+					elseif msgType == "Close" then
+						self.realtimeConnecting = false
+						self.realtimeConnected = false
+						online_flow_trace("realtime_socket_close reason=" .. tostring(msg.reason or ""))
+						if self.pendingRealtimeConnectCallbacks and #self.pendingRealtimeConnectCallbacks > 0 then
+							self:FlushRealtimeConnectCallbacks("close", msg.reason)
+						elseif self.activeRealtimeCallbacks and self.activeRealtimeCallbacks.close then
+							self.activeRealtimeCallbacks.close(msg.reason)
+						end
+						self.activeRealtimeCallbacks = nil
+					elseif msgType == "Error" then
+						self.realtimeConnecting = false
+						self.realtimeConnected = false
+						online_flow_trace("realtime_socket_error reason=" .. tostring(msg.reason or ""))
+						if self.pendingRealtimeConnectCallbacks and #self.pendingRealtimeConnectCallbacks > 0 then
+							self:FlushRealtimeConnectCallbacks("error", msg.reason or "WebSocket error")
+						elseif self.activeRealtimeCallbacks and self.activeRealtimeCallbacks.error then
+							self.activeRealtimeCallbacks.error(msg.reason or "WebSocket error")
+						end
+					end
+				end,
+			}
+		self.socket = socket
 	end)
 end
 
@@ -3290,6 +3437,16 @@ end
 
 function ITGOnline:Connect(callbacks)
 	self.disconnecting = false
+	if self.socket and self.realtimeConnected and not self.sessionExpired then
+		online_flow_trace("connect_reused reason=realtime_already_connected")
+		if callbacks and callbacks.open then callbacks.open() end
+		return
+	end
+	if self.realtimeConnecting then
+		online_flow_trace("connect_join_inflight")
+		self:RememberRealtimeConnectCallbacks(callbacks)
+		return
+	end
 	if self.token and self.user and not self.sessionExpired then
 		self:ConnectWebSocket(callbacks)
 		return
@@ -3332,30 +3489,31 @@ function ITGOnline:Disconnect(options)
 	options = options or {}
 	local revokeToken = options.revokeToken == true
 	local roomIdToLeave = self.currentRoomId
-	if roomIdToLeave and self.token and options.leaveRoom ~= false and NETWORK and NETWORK.HttpRequest then
+	self.disconnecting = true
+	if roomIdToLeave and options.leaveRoom ~= false and self.token and NETWORK and NETWORK.HttpRequest then
+		self:MarkLeavingRoom(roomIdToLeave, true)
+		self:IgnoreRoomEvents(roomIdToLeave, 30)
 		local config = self:ConnectionConfig()
 		local leaveUrl = tostring(config.apiBaseUrl or "") .. "/rooms/" .. tostring(roomIdToLeave) .. "/leave"
-		local leaveOk = pcall(function()
+		local leaveHeaders = self:AuthHeaders()
+		local leaveQueued = pcall(function()
 			NETWORK:HttpRequest{
 				url = leaveUrl,
 				method = "POST",
 				body = "{}",
-				headers = self:AuthHeaders(),
+				headers = leaveHeaders,
 				connectTimeout = 2,
 				transferTimeout = 5,
 				onResponse = function(response)
-					online_trace("POST /rooms/" .. tostring(roomIdToLeave) .. "/leave -> "
-						.. tostring(response and response.statusCode or "no-status")
-						.. " during disconnect")
+					online_trace("Disconnect best-effort leave room=" .. tostring(roomIdToLeave)
+						.. " status=" .. tostring(response and response.statusCode or "no-status"))
 				end
 			}
 		end)
-		if not leaveOk then
-			online_trace("POST /rooms/" .. tostring(roomIdToLeave) .. "/leave could not be queued during disconnect")
+		if not leaveQueued then
+			online_trace("Disconnect best-effort leave could not be queued room=" .. tostring(roomIdToLeave))
 		end
 	end
-
-	self.disconnecting = true
 	self:CancelPendingRequests()
 	if revokeToken and self.token then
 		local token = self.token
@@ -3363,9 +3521,14 @@ function ITGOnline:Disconnect(options)
 		self.token = token
 	end
 	if self.socket then
+		self.realtimeGeneration = (tonumber(self.realtimeGeneration) or 0) + 1
 		self.socket:Close()
 	end
 	self.socket = nil
+	self.realtimeConnecting = false
+	self.realtimeConnected = false
+	self.pendingRealtimeConnectCallbacks = {}
+	self.activeRealtimeCallbacks = nil
 	self.token = nil
 	self.user = nil
 	self.currentRoomId = nil
@@ -5078,8 +5241,10 @@ function ITGOnline:MarkConfigReady(callback)
 				self:SetReady("lobby_ready", true, function(readyOk, readyDecoded, readyResponse)
 					if readyOk and readyDecoded and readyDecoded.room then
 						MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or readyDecoded.room))
+						finish(true, readyDecoded or availabilityDecoded or fetchDecoded, readyResponse or availabilityResponse)
+						return
 					end
-					finish(false, readyDecoded or availabilityDecoded or fetchDecoded, {
+					finish(false, readyDecoded or availabilityDecoded or fetchDecoded, readyResponse or {
 						errorMessage = "Waiting for room config phase.",
 						retryAfter = 1,
 					})
@@ -5778,16 +5943,51 @@ function ITGOnline:FetchLobby(callback)
 	fetchPage()
 end
 
-function ITGOnline:QueueLobbyRefresh()
-	if self.lobbyRefreshInFlight then
-		self.lobbyRefreshQueued = true
-		return
-	end
+	function ITGOnline:QueueLobbyRefresh()
+		if self:IsAutomaticLobbyRefreshSuppressed() then
+			online_flow_trace("lobby_refresh_skipped reason=post_leave_auto_suppressed")
+			self.lobbyRefreshQueued = false
+			self.lobbyRefreshDeferredScheduled = false
+			return
+		end
+		if self:IsLobbyRefreshSuppressed() then
+			online_flow_trace("lobby_refresh_skipped reason=suppressed_after_leave")
+			self.lobbyRefreshQueued = true
+			if not self.lobbyRefreshDeferredScheduled then
+				self:ScheduleDeferredLobbyRefresh(
+					self:LobbyRefreshSuppressionRemaining() + 0.05,
+					"suppressed_before_request")
+			end
+			return
+		end
+		if self.lobbyRefreshInFlight then
+			self.lobbyRefreshQueued = true
+			return
+		end
+		self.lobbyRefreshDeferredScheduled = false
 
-	self.lobbyRefreshInFlight = true
-	self:FetchLobby(function(ok, decoded)
-		self.lobbyRefreshInFlight = false
-		if ok then MESSAGEMAN:Broadcast("LobbySearched", self:LobbySearchPayload(decoded)) end
+		self.lobbyRefreshInFlight = true
+		self:FetchLobby(function(ok, decoded)
+			self.lobbyRefreshInFlight = false
+				if ok then
+					if self:IsAutomaticLobbyRefreshSuppressed() then
+						online_flow_trace("lobby_refresh_result_dropped reason=post_leave_auto_suppressed")
+						self.lobbyRefreshQueued = false
+						self.lobbyRefreshDeferredScheduled = false
+						return
+					end
+					if self:IsLobbyRefreshSuppressed() then
+						online_flow_trace("lobby_refresh_result_dropped reason=suppressed_after_leave")
+						self.lobbyRefreshQueued = true
+						if not self.lobbyRefreshDeferredScheduled then
+						self:ScheduleDeferredLobbyRefresh(
+							self:LobbyRefreshSuppressionRemaining() + 0.05,
+							"suppressed_after_response")
+					end
+				else
+					MESSAGEMAN:Broadcast("LobbySearched", self:LobbySearchPayload(decoded))
+				end
+			end
 		if self.lobbyRefreshQueued and not self.disconnecting then
 			self.lobbyRefreshQueued = false
 			self:QueueLobbyRefresh()
@@ -6105,43 +6305,63 @@ function ITGOnline:ClearCurrentRoomState(source)
 	self:ClearOnlineOptionsReadyDeadline(source or "clear_room")
 end
 
-function ITGOnline:LeaveRoom(callback)
-	if not self.currentRoomId then
-		if callback then callback(true, {}) end
-		return
-	end
-	local roomId = self.currentRoomId
-	local roomKey = self:RoomKey(roomId)
-	self.leaveRoomCallbacksByRoomId = self.leaveRoomCallbacksByRoomId or {}
-	if self.leaveRoomCallbacksByRoomId[roomKey] then
-		if callback then
-			self.leaveRoomCallbacksByRoomId[roomKey][#self.leaveRoomCallbacksByRoomId[roomKey] + 1] = callback
+	function ITGOnline:LeaveRoom(callback)
+		if not self.currentRoomId then
+			online_flow_trace("leave_room_skipped reason=no_current_room")
+			if callback then callback(true, {}) end
+			return
 		end
-		return
-	end
-	self.leaveRoomCallbacksByRoomId[roomKey] = callback and { callback } or {}
-	self:CancelPendingRequests()
-	self:MarkLeavingRoom(roomId, true)
-	self:IgnoreRoomEvents(roomId, 30)
-	self:Request("POST", "/rooms/" .. tostring(roomId) .. "/leave", {}, function(ok, decoded, response)
-		local gone = response and (response.statusCode == 404 or response.statusCode == 410)
-		if ok or gone then
-			if self.currentRoomId ~= nil and tonumber(self.currentRoomId) == tonumber(roomId) then
-				self:ClearCurrentRoomState("leave_room_confirmed")
-			else
+		local roomId = self.currentRoomId
+		local roomKey = self:RoomKey(roomId)
+		self.leaveRoomCallbacksByRoomId = self.leaveRoomCallbacksByRoomId or {}
+		if self.leaveRoomCallbacksByRoomId[roomKey] then
+			online_flow_trace("leave_room_join_inflight room=" .. tostring(roomId))
+			if callback then
+				self.leaveRoomCallbacksByRoomId[roomKey][#self.leaveRoomCallbacksByRoomId[roomKey] + 1] = callback
+			end
+			return
+		end
+		self.leaveRoomCallbacksByRoomId[roomKey] = callback and { callback } or {}
+		online_flow_trace("leave_room_begin room=" .. tostring(roomId)
+			.. " currentRoomId=" .. tostring(self.currentRoomId)
+			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+		self:CancelPendingRequests()
+		self:MarkLeavingRoom(roomId, true)
+		self:IgnoreRoomEvents(roomId, 30)
+		online_flow_trace("leave_room_request room=" .. tostring(roomId))
+		self:Request("POST", "/rooms/" .. tostring(roomId) .. "/leave", {}, function(ok, decoded, response)
+			local gone = response and (response.statusCode == 404 or response.statusCode == 410)
+			online_flow_trace("leave_room_response room=" .. tostring(roomId)
+				.. " ok=" .. tostring(ok == true)
+				.. " gone=" .. tostring(gone == true)
+				.. " status=" .. tostring(response and response.statusCode or "nil")
+				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
+			if ok or gone then
+				if self.currentRoomId ~= nil and tonumber(self.currentRoomId) == tonumber(roomId) then
+					online_flow_trace("leave_room_clear_current room=" .. tostring(roomId))
+					self:ClearCurrentRoomState("leave_room_confirmed")
+				else
+					online_flow_trace("leave_room_mark_not_leaving room=" .. tostring(roomId)
+						.. " reason=current_room_changed")
+					self:MarkLeavingRoom(roomId, false)
+				end
+					self.deletedRoomIds[self:RoomKey(roomId)] = gone == true or nil
+					self:SuppressLobbyRefresh(1.0, "leave_room_confirmed")
+					self:SuppressAutomaticLobbyRefresh(5.0, "leave_room_confirmed")
+				else
+				online_flow_trace("leave_room_failed_unmark room=" .. tostring(roomId))
 				self:MarkLeavingRoom(roomId, false)
 			end
-			self.deletedRoomIds[self:RoomKey(roomId)] = gone == true or nil
-		else
-			self:MarkLeavingRoom(roomId, false)
-		end
-		local callbacks = self.leaveRoomCallbacksByRoomId and self.leaveRoomCallbacksByRoomId[roomKey] or {}
-		if self.leaveRoomCallbacksByRoomId then self.leaveRoomCallbacksByRoomId[roomKey] = nil end
-		for _, cb in ipairs(callbacks) do
-			cb(ok or gone, decoded, response)
-		end
-	end)
-end
+			local callbacks = self.leaveRoomCallbacksByRoomId and self.leaveRoomCallbacksByRoomId[roomKey] or {}
+			if self.leaveRoomCallbacksByRoomId then self.leaveRoomCallbacksByRoomId[roomKey] = nil end
+			online_flow_trace("leave_room_callbacks_begin room=" .. tostring(roomId)
+				.. " count=" .. tostring(#callbacks))
+			for _, cb in ipairs(callbacks) do
+				cb(ok or gone, decoded, response)
+			end
+			online_flow_trace("leave_room_callbacks_end room=" .. tostring(roomId))
+		end)
+	end
 
 function ITGOnline:FetchRoom(roomId, callback)
 	roomId = roomId or self.currentRoomId or self.pendingJoinRoomId
@@ -6257,7 +6477,11 @@ end
 			if self.UpdateServerClockOffset then
 				self:UpdateServerClockOffset(event.server_time or payload.server_time, GetTimeSinceStart(), GetTimeSinceStart())
 			end
-			if GetTimeSinceStart() - (self.lastSyncRequestedAt or 0) > 1 then
+			local screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+			local screenName = screen and screen:GetName() or ""
+			if screenName == "ScreenOnlineLobbies" then
+				online_flow_trace("connection_ready_sync_deferred_to_lobby_screen")
+			elseif not self.syncInFlight and GetTimeSinceStart() - (self.lastSyncRequestedAt or 0) > 1 then
 				self:Sync()
 			end
 	elseif name == "server.ping" then
@@ -6425,9 +6649,21 @@ end
 				or self.pendingJoinRoomId
 			if roomId then
 				local roomKey = tostring(roomId)
+				local activeRoomDeleted = tostring(self.currentRoomId or "") == roomKey
+					or tostring(self.pendingJoinRoomId or "") == roomKey
+				local ignoredAfterLeave = self:ShouldIgnoreRoomEvents(roomId) or self:IsLeavingRoom(roomId)
+				online_flow_trace("room_deleted_event_begin roomId=" .. roomKey
+					.. " active=" .. tostring(activeRoomDeleted == true)
+					.. " ignoredAfterLeave=" .. tostring(ignoredAfterLeave == true)
+					.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+					.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
 				self.deletedRoomIds[roomKey] = true
 				self:IgnoreRoomEvents(roomId, 30)
-				if tostring(self.currentRoomId or "") == roomKey or tostring(self.pendingJoinRoomId or "") == roomKey then
+
+				if ignoredAfterLeave then
+					online_flow_trace("room_deleted_event_ignored reason=recently_left_room roomId=" .. roomKey)
+					return
+				elseif activeRoomDeleted then
 					self:ClearCurrentRoomState("room_deleted_event")
 					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(nil))
 					MESSAGEMAN:Broadcast("OnlineResponseStatus", {
@@ -6436,6 +6672,7 @@ end
 						message = "Room closed."
 					})
 				end
+
 				self:QueueLobbyRefresh()
 				online_flow_trace("room_deleted_event roomId=" .. roomKey)
 			end
@@ -6638,7 +6875,7 @@ function ITGOnline:LobbyStatePayload(room)
 				playerId = userId,
 				profileName = user_display_name(user, "Player " .. userId),
 				screenName = memberScreenName,
-				ready = readyByUserId[userId] == true or localOptimisticConfigReady,
+				ready = readyByUserId[userId] == true,
 				readyPendingServer = localOptimisticConfigReady,
 				missingSong = member.missing_song and true or false,
 				missingSongReason = member.missing_song_reason,

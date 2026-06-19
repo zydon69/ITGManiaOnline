@@ -863,6 +863,10 @@ void ScreenEvaluation::HandleMenuStart() {
 }
 
 bool ScreenEvaluation::OnlineEvaluationAutoAdvanceBlocked() const {
+  if (LUA == nullptr) {
+    return false;
+  }
+
   Lua* L = LUA->Get();
   bool blocked = false;
   const bool ok = LuaHelpers::RunExpression(

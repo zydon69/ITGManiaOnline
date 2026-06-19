@@ -9,7 +9,7 @@ ITGOnline = ITGOnline or {}
 ITGOnline.PackSync = ITGOnline.PackSync or {}
 
 local PackSync = ITGOnline.PackSync
-PackSync.scriptVersion = "2026-06-18-selected-download-timeout-guard-v1"
+PackSync.scriptVersion = "2026-06-18-pack-state-owner-reset-v1"
 PackSync.statusChangedAt = PackSync.statusChangedAt or 0
 PackSync.currentStatusMessage = PackSync.currentStatusMessage or nil
 PackSync.watchdogLastKey = PackSync.watchdogLastKey or ""
@@ -480,21 +480,71 @@ function PackSync:MarkPackInstalled(packName)
 	trace("Pack marked installed pack=" .. tostring(packName))
 end
 
+function PackSync:UnmarkPackInstalled(packName, reason)
+	packName = trim(packName)
+	if packName == "" then return end
+	local key = pack_name_key(packName)
+	if self.installedPackNames then
+		self.installedPackNames[key] = nil
+	end
+	if self.downloadedPackKey == key then
+		self.downloadedPackKey = nil
+	end
+	trace("Pack unmarked installed pack=" .. tostring(packName)
+		.. " reason=" .. tostring(reason or "unknown"))
+end
+
+function PackSync:PackVisibleToSongman(packName)
+	packName = trim(packName)
+	if packName == "" or not SONGMAN then return false end
+	if SONGMAN.DoesSongGroupExist and SONGMAN:DoesSongGroupExist(packName) then
+		return true
+	end
+	if SONGMAN.GetSongGroupNames then
+		local expectedKey = pack_name_key(packName)
+		for group in ivalues(SONGMAN:GetSongGroupNames()) do
+			if pack_name_key(group) == expectedKey then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 function PackSync:PackExists(packName)
 	packName = trim(packName)
 	if packName == "" then return false end
-	if SONGMAN and SONGMAN.DoesSongGroupExist and SONGMAN:DoesSongGroupExist(packName) then
+	if self:PackVisibleToSongman(packName) then
 		return true
 	end
-	if self.installedPackNames and self.installedPackNames[pack_name_key(packName)] == true then
-		return true
+	local rootExists = path_exists(pack_root_path(packName))
+	local key = pack_name_key(packName)
+	if self.installedPackNames and self.installedPackNames[key] == true then
+		if rootExists then
+			return true
+		end
+		self.installedPackNames[key] = nil
+		if self.downloadedPackKey == key then
+			self.downloadedPackKey = nil
+		end
+		trace("Pack installed cache pruned pack=" .. tostring(packName) .. " reason=missing_root")
 	end
-	return path_exists(pack_root_path(packName))
+	return rootExists
 end
 
-function PackSync:UpdateStatus(status, message, progress, callback)
+function PackSync:UpdateStatus(status, message, progress, callback, options)
 	status = tostring(status or self.status.Unknown)
 	message = status_message(message)
+	if type(callback) == "table" and options == nil then
+		options = callback
+		callback = nil
+	end
+	options = type(options) == "table" and options or {}
+	if not (ITGOnline and ITGOnline.Request and current_user_is_active_room_member()) then
+		trace("Status skipped reason=not_active_room_member status=" .. tostring(status))
+		if callback then callback(false, nil, { errorMessage = "Aucun salon online actif." }) end
+		return
+	end
 	self.currentStatus = status
 	self.currentStatusMessage = message
 	self.statusChangedAt = GetTimeSinceStart()
@@ -516,18 +566,15 @@ function PackSync:UpdateStatus(status, message, progress, callback)
 		})
 	end
 
-	if not (ITGOnline and ITGOnline.Request and current_user_is_active_room_member()) then
-		trace("Status skipped reason=not_active_room_member status=" .. tostring(status))
-		if callback then callback(false, nil, { errorMessage = "Aucun salon online actif." }) end
-		return
-	end
-
 	local payload = {
 		status = status,
 		message = message,
 		download_progress = progress,
 		sequence = self.sequence,
 	}
+	if options.downloadCancelled == true then
+		payload.download_cancelled = true
+	end
 	if self.currentSongInfo then
 		if currentSelectedAt ~= "" then
 			payload.selected_at = currentSelectedAt
@@ -583,12 +630,20 @@ function PackSync:WatchdogTick()
 	local watchable = (
 		status == self.status.SearchingLocalCharts
 		or status == self.status.DownloadRequested
+		or status == self.status.DownloadInProgress
 		or status == self.status.ReloadingSongs
 	)
 	if not watchable then return end
 
-	local age = GetTimeSinceStart() - (tonumber(self.statusChangedAt) or 0)
-	if age < (tonumber(self.watchdogTimeoutSeconds) or 25) then return end
+	local now = GetTimeSinceStart()
+	local age = now - (tonumber(self.statusChangedAt) or 0)
+	local timeout = tonumber(self.watchdogTimeoutSeconds) or 25
+	if status == self.status.DownloadInProgress then
+		local lastByteAt = tonumber(self.downloadLastByteAt) or tonumber(self.downloadStartedAt) or tonumber(self.statusChangedAt) or now
+		age = now - lastByteAt
+		timeout = math.max(timeout, 45)
+	end
+	if age < timeout then return end
 
 	local key = status .. ":" .. tostring(selected_at(self.currentSongInfo))
 	if self.watchdogLastKey == key then return end
@@ -596,6 +651,12 @@ function PackSync:WatchdogTick()
 
 	local message = "Opération interrompue (timeout). Réessayez le téléchargement du pack."
 	trace("Watchdog timeout status=" .. tostring(status) .. " age=" .. tostring(math.floor(age)))
+	self.downloadInFlightKey = nil
+	self.downloadStartedAt = nil
+	self.downloadLastByteAt = nil
+	self.downloadLastByteCount = nil
+	self.activeBrowseOnlyDownload = false
+	self:NextDownloadGeneration("watchdog_timeout")
 	self:UpdateStatus(self.status.DownloadFailed, message)
 	if SM then SM(message, 4) end
 end
@@ -617,13 +678,11 @@ function PackSync:ResetLocalState(reason)
 		return
 	end
 	if reason == "no_song_confirmed" and (
-		self.currentStatus == self.status.ManagerBrowsingUnknownPack
-		or self.currentStatus == self.status.DownloadRequested
+		self.currentStatus == self.status.DownloadRequested
 		or self.currentStatus == self.status.DownloadInProgress
 		or self.currentStatus == self.status.ReloadingSongs
-		or self.currentStatus == self.status.DownloadedOk
 	) then
-		trace("Keep pack navigation/download state during no_song_confirmed reset status=" .. tostring(self.currentStatus))
+		trace("Keep active download state during no_song_confirmed reset status=" .. tostring(self.currentStatus))
 		return
 	end
 	self.currentSongInfo = nil
@@ -645,6 +704,39 @@ function PackSync:ResetLocalState(reason)
 	self.pendingPostReloadBrowseOnly = false
 	self:NextDownloadGeneration(reason or "reset_local_state")
 	trace("Reset local state" .. (reason and (" (" .. tostring(reason) .. ")") or ""))
+end
+
+function PackSync:CancelPendingPackChoice(reason)
+	local status = tostring(self.currentStatus or self.status.Unknown)
+	if trim(self.downloadInFlightKey) == "" or status ~= self.status.DownloadRequested then
+		return false
+	end
+
+	local songInfo = self.currentSongInfo
+	local wasBrowseOnly = self.activeBrowseOnlyDownload == true
+	trace("Pending pack choice cancelled reason=" .. tostring(reason or "user_cancelled")
+		.. " key=" .. tostring(self.downloadInFlightKey)
+		.. " browseOnly=" .. tostring(wasBrowseOnly))
+	self.downloadInFlightKey = nil
+	self.downloadStartedAt = nil
+	self.downloadLastByteAt = nil
+	self.downloadLastByteCount = nil
+	self.pendingPostReloadBrowseOnly = false
+	self.activeBrowseOnlyDownload = false
+	self.watchdogLastKey = ""
+	self:NextDownloadGeneration(reason or "pack_choice_cancelled")
+
+	if wasBrowseOnly and songInfo then
+		self:ManagerBrowsingPreview(songInfo)
+	else
+		self:UpdateStatus(
+			self.status.NoCompatibleChartFound,
+			"Telechargement du pack annule.",
+			nil,
+			nil,
+			{ downloadCancelled = true })
+	end
+	return true
 end
 
 function PackSync:SyncSequenceFromRoom(currentSelectedAt)
@@ -1498,7 +1590,6 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 				fail_candidate_download(installError or "Impossible d'installer le pack téléchargé.")
 				return
 			end
-			self:MarkPackInstalled(packName)
 			remove_path_if_exists(zipPath)
 
 			trace("Reload Songs after download pack=" .. tostring(packName))
@@ -1683,11 +1774,13 @@ end
 
 local function browse_pack_reload_validated(songInfo, quarantinePath)
 	local packName = selected_pack(songInfo)
-	if packName ~= "" and PackSync:PackExists(packName) then
+	if packName ~= "" and PackSync:PackVisibleToSongman(packName) then
 		return true
 	end
-	if quarantinePath and quarantinePath ~= "" and has_simfile_below_directory(quarantinePath, 2) then
-		return true
+	if packName ~= "" and PackSync:PackExists(packName) then
+		trace("Browse-only pack exists on disk but is not visible to SONGMAN after reload pack=" .. tostring(packName))
+	elseif quarantinePath and quarantinePath ~= "" and has_simfile_below_directory(quarantinePath, 2) then
+		trace("Browse-only quarantine contains simfiles but expected pack is not visible to SONGMAN pack=" .. tostring(packName))
 	end
 
 	return false
@@ -1697,6 +1790,7 @@ function PackSync:ValidatePendingPostReload()
 	local songInfo = self.pendingPostReloadSongInfo
 	local quarantinePath = self.pendingQuarantinePath
 	local browseOnly = self.pendingPostReloadBrowseOnly == true
+	local packName = selected_pack(songInfo)
 	self.pendingPostReloadSongInfo = nil
 	self.pendingQuarantinePath = nil
 	self.pendingPostReloadBrowseOnly = false
@@ -1713,12 +1807,14 @@ function PackSync:ValidatePendingPostReload()
 		if not browse_pack_reload_validated(songInfo, quarantinePath) then
 			trace("Browse-only pack download did not expose the expected pack after reload")
 			remove_directory_if_possible(quarantinePath)
+			self:UnmarkPackInstalled(packName, "browse_reload_validation_failed")
 			self:UpdateStatus(self.status.DownloadFailed, "Le pack telecharge n'a pas ete trouve apres reload.")
 			if MESSAGEMAN then
 				MESSAGEMAN:Broadcast("OnlinePackDownloadFailed", { songInfo = songInfo, reason = "download_failed" })
 			end
 			return false
 		end
+		self:MarkPackInstalled(packName)
 		self:UpdateStatus(self.status.DownloadedOk, "Pack telecharge. En attente du choix de chanson du manager.")
 		if MESSAGEMAN then
 			MESSAGEMAN:Broadcast("OnlinePackDownloaded", { songInfo = songInfo })
@@ -1737,12 +1833,14 @@ function PackSync:ValidatePendingPostReload()
 		if quarantinePath and quarantinePath ~= "" and songDir:sub(1, #quarantinePath) ~= quarantinePath then
 			trace("Downloaded pack did not contain the selected chart; matched existing local chart instead")
 			remove_directory_if_possible(quarantinePath)
+			self:UnmarkPackInstalled(packName, "selected_chart_not_in_downloaded_pack")
 			self:UpdateStatus(self.status.DownloadFailed, "Le pack téléchargé ne contient pas la stepchart attendue.")
 			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
 			return false
 		end
 		set_current_selection(result.song, result.steps)
 		trace("Downloaded OK and local chart validated")
+		self:MarkPackInstalled(packName)
 		self:UpdateStatus(self.status.DownloadedOk, nil)
 		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
 			ITGOnline:ConfirmSelectedSongAvailability("downloaded_ok", function(ok)
@@ -1759,6 +1857,7 @@ function PackSync:ValidatePendingPostReload()
 	if result.status == "mismatch" then
 		self:UpdateStatus(self.status.ChartMismatch, "La musique ou la stepchart trouvée est différente de celle du manager.")
 		remove_directory_if_possible(quarantinePath)
+		self:UnmarkPackInstalled(packName, "chart_mismatch")
 		if ITGOnline and ITGOnline.ReportSongAvailability then
 			ITGOnline:ReportSongAvailability(true, "chart_mismatch")
 		end
@@ -1766,6 +1865,7 @@ function PackSync:ValidatePendingPostReload()
 	else
 		self:UpdateStatus(self.status.DownloadFailed, "La chanson est introuvable après reload.")
 		remove_directory_if_possible(quarantinePath)
+		self:UnmarkPackInstalled(packName, "downloaded_song_missing_after_reload")
 		if ITGOnline and ITGOnline.ReportSongAvailability then
 			ITGOnline:ReportSongAvailability(true, "download_failed")
 		end

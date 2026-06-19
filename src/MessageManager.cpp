@@ -3,6 +3,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "EnumHelper.h"
 #include "LuaManager.h"
@@ -96,6 +97,67 @@ static RageMutex g_Mutex("MessageManager");
 typedef std::set<IMessageSubscriber*> SubscribersSet;
 static std::map<std::string, SubscribersSet> g_MessageToSubscribers;
 
+static bool MessageNameStartsWith(
+    const std::string& messageName, const std::string& prefix) {
+  return messageName.compare(0, prefix.size(), prefix) == 0;
+}
+
+static bool ShouldTraceOnlineMessage(const std::string& messageName) {
+  return MessageNameStartsWith(messageName, "Online") ||
+         MessageNameStartsWith(messageName, "ITGOnline") ||
+         MessageNameStartsWith(messageName, "Lobby") ||
+         messageName == "ConnectOnline" || messageName == "DisconnectOnline" ||
+         messageName == "CreateLobby" || messageName == "JoinLobby" ||
+         messageName == "LeaveLobby" || messageName == "SearchLobby" ||
+         messageName == "StartOnlineRoom" ||
+         messageName == "InviteOnlinePlayer" ||
+         messageName == "JoinOnlinePlayerRoom" ||
+         messageName == "AnswerPrivateJoinRequest" ||
+         messageName == "AnswerRoomInvitation";
+}
+
+static std::string LuaValueSummary(lua_State* L, int index) {
+  switch (lua_type(L, index)) {
+    case LUA_TNIL:
+      return "nil";
+    case LUA_TBOOLEAN:
+      return lua_toboolean(L, index) ? "true" : "false";
+    case LUA_TNUMBER:
+      return ssprintf("%g", lua_tonumber(L, index));
+    case LUA_TSTRING:
+      return lua_tostring(L, index);
+    case LUA_TTABLE:
+      return ssprintf("table:%p", lua_topointer(L, index));
+    default:
+      return lua_typename(L, lua_type(L, index));
+  }
+}
+
+static std::string LuaFieldSummary(lua_State* L, int tableIndex) {
+  if (!lua_istable(L, tableIndex)) {
+    return std::string("type=") + lua_typename(L, lua_type(L, tableIndex));
+  }
+
+  const int absIndex = LuaHelpers::AbsIndex(L, tableIndex);
+  std::string summary = ssprintf(
+      "type=table ptr=%p array_len=%zu",
+      lua_topointer(L, absIndex),
+      lua_objlen(L, absIndex));
+
+  const char* fields[] = {
+      "event", "success", "left", "room_id", "roomId", "code", "phase",
+      "message", "name"};
+  for (const char* field : fields) {
+    lua_getfield(L, absIndex, field);
+    if (!lua_isnil(L, -1)) {
+      summary += ssprintf(" %s=%s", field, LuaValueSummary(L, -1).c_str());
+    }
+    lua_pop(L, 1);
+  }
+
+  return summary;
+}
+
 Message::Message(const std::string& s) {
   m_sName = s;
   m_pParams = new LuaTable;
@@ -114,7 +176,20 @@ Message::Message(const std::string& s, const LuaReference& params) {
   Lua* L = LUA->Get();
   m_pParams = new LuaTable;  // XXX: creates an extra table
   params.PushSelf(L);
+  if (ShouldTraceOnlineMessage(m_sName)) {
+    LOG->Trace(
+        "ITG Online MessageTrace: message_ctor_set_params_begin name=%s %s",
+        m_sName.c_str(),
+        LuaFieldSummary(L, -1).c_str());
+    LOG->Flush();
+  }
   m_pParams->SetFromStack(L);
+  if (ShouldTraceOnlineMessage(m_sName)) {
+    LOG->Trace(
+        "ITG Online MessageTrace: message_ctor_set_params_end name=%s",
+        m_sName.c_str());
+    LOG->Flush();
+  }
   LUA->Release(L);
   //	m_pParams = new LuaTable( params );
 }
@@ -190,21 +265,85 @@ void MessageManager::Unsubscribe(IMessageSubscriber* pSubscriber, MessageID m) {
 }
 
 void MessageManager::Broadcast(Message& msg) const {
+  const bool traceOnlineMessage = ShouldTraceOnlineMessage(msg.GetName());
   if (m_Logging) {
     LOG->Trace("MESSAGEMAN:Broadcast: %s", msg.GetName().c_str());
   }
   msg.SetBroadcast(true);
 
-  LockMut(g_Mutex);
+  std::vector<IMessageSubscriber*> subscribers;
 
-  std::map<std::string, SubscribersSet>::const_iterator iter =
-      g_MessageToSubscribers.find(msg.GetName());
-  if (iter == g_MessageToSubscribers.end()) {
-    return;
+  {
+    LockMut(g_Mutex);
+
+    std::map<std::string, SubscribersSet>::const_iterator iter =
+        g_MessageToSubscribers.find(msg.GetName());
+    if (iter == g_MessageToSubscribers.end()) {
+      if (traceOnlineMessage) {
+        LOG->Trace(
+            "ITG Online MessageTrace: broadcast_no_subscribers name=%s",
+            msg.GetName().c_str());
+        LOG->Flush();
+      }
+      return;
+    }
+
+    subscribers.assign(iter->second.begin(), iter->second.end());
   }
 
-  for (IMessageSubscriber* subscriber : iter->second) {
+  if (traceOnlineMessage) {
+    LOG->Trace(
+        "ITG Online MessageTrace: broadcast_begin name=%s subscribers=%zu",
+        msg.GetName().c_str(),
+        subscribers.size());
+    LOG->Flush();
+  }
+
+  for (IMessageSubscriber* subscriber : subscribers) {
+    bool stillSubscribed = false;
+    {
+      LockMut(g_Mutex);
+      std::map<std::string, SubscribersSet>::const_iterator iter =
+          g_MessageToSubscribers.find(msg.GetName());
+      if (iter != g_MessageToSubscribers.end()) {
+        stillSubscribed = iter->second.find(subscriber) != iter->second.end();
+      }
+    }
+
+    if (!stillSubscribed) {
+      if (traceOnlineMessage) {
+        LOG->Trace(
+            "ITG Online MessageTrace: deliver_skipped_unsubscribed name=%s "
+            "subscriber=%p",
+            msg.GetName().c_str(),
+            subscriber);
+        LOG->Flush();
+      }
+      continue;
+    }
+
+    if (traceOnlineMessage) {
+      LOG->Trace(
+          "ITG Online MessageTrace: deliver_begin name=%s subscriber=%p",
+          msg.GetName().c_str(),
+          subscriber);
+      LOG->Flush();
+    }
     subscriber->HandleMessage(msg);
+    if (traceOnlineMessage) {
+      LOG->Trace(
+          "ITG Online MessageTrace: deliver_end name=%s subscriber=%p",
+          msg.GetName().c_str(),
+          subscriber);
+      LOG->Flush();
+    }
+  }
+
+  if (traceOnlineMessage) {
+    LOG->Trace(
+        "ITG Online MessageTrace: broadcast_end name=%s",
+        msg.GetName().c_str());
+    LOG->Flush();
   }
 }
 
@@ -270,19 +409,52 @@ void MessageSubscriber::UnsubscribeAll() {
 /** @brief Allow Lua to have access to the MessageManager. */
 class LunaMessageManager : public Luna<MessageManager> {
  public:
-  static int Broadcast(T* p, lua_State* L) {
-    if (!lua_istable(L, 2) && !lua_isnoneornil(L, 2)) {
-      luaL_typerror(L, 2, "table or nil");
-    }
+	  static int Broadcast(T* p, lua_State* L) {
+	    if (!lua_istable(L, 2) && !lua_isnoneornil(L, 2)) {
+	      luaL_typerror(L, 2, "table or nil");
+	    }
 
-    LuaReference ParamTable;
-    lua_pushvalue(L, 2);
-    ParamTable.SetFromStack(L);
+	    const std::string messageName = SArg(1);
+	    if (ShouldTraceOnlineMessage(messageName)) {
+	      LOG->Trace(
+	          "ITG Online MessageTrace: lua_broadcast_begin name=%s %s",
+	          messageName.c_str(),
+	          LuaFieldSummary(L, 2).c_str());
+	      LOG->Flush();
+	    }
 
-    Message msg(SArg(1), ParamTable);
-    p->Broadcast(msg);
-    COMMON_RETURN_SELF;
-  }
+	    LuaReference ParamTable;
+	    lua_pushvalue(L, 2);
+	    if (ShouldTraceOnlineMessage(messageName)) {
+	      LOG->Trace(
+	          "ITG Online MessageTrace: lua_broadcast_ref_begin name=%s",
+	          messageName.c_str());
+	      LOG->Flush();
+	    }
+	    ParamTable.SetFromStack(L);
+	    if (ShouldTraceOnlineMessage(messageName)) {
+	      LOG->Trace(
+	          "ITG Online MessageTrace: lua_broadcast_ref_end name=%s",
+	          messageName.c_str());
+	      LOG->Flush();
+	    }
+
+	    Message msg(messageName, ParamTable);
+	    if (ShouldTraceOnlineMessage(messageName)) {
+	      LOG->Trace(
+	          "ITG Online MessageTrace: lua_broadcast_dispatch name=%s",
+	          messageName.c_str());
+	      LOG->Flush();
+	    }
+	    p->Broadcast(msg);
+	    if (ShouldTraceOnlineMessage(messageName)) {
+	      LOG->Trace(
+	          "ITG Online MessageTrace: lua_broadcast_end name=%s",
+	          messageName.c_str());
+	      LOG->Flush();
+	    }
+	    COMMON_RETURN_SELF;
+	  }
   static int SetLogging(T* p, lua_State* L) {
     p->SetLogging(lua_toboolean(L, -1));
     COMMON_RETURN_SELF;

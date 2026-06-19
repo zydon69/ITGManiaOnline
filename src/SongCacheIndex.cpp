@@ -105,7 +105,14 @@ SongCacheIndex::SongCacheIndex()
   ReadCacheIndex();
 }
 
-SongCacheIndex::~SongCacheIndex() {}
+SongCacheIndex::~SongCacheIndex() {
+  if (LOG) {
+    LOG->Trace("SongCacheIndex::~SongCacheIndex begin");
+  }
+  if (LOG) {
+    LOG->Trace("SongCacheIndex::~SongCacheIndex end");
+  }
+}
 
 void SongCacheIndex::ReadFromDisk() { ReadCacheIndex(); }
 

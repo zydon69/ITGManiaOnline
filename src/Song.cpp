@@ -11,6 +11,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -223,14 +224,32 @@ Song::Song() {
 }
 
 Song::~Song() {
+  std::unordered_set<Steps*> deletedSteps;
+  auto delete_unique_step = [&deletedSteps, this](Steps* steps) {
+    if (steps == nullptr) {
+      return;
+    }
+    if (!deletedSteps.insert(steps).second) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: skipped duplicate Steps pointer %p while destroying "
+          "song '%s'.",
+          static_cast<void*>(steps), m_sSongDir.c_str());
+      return;
+    }
+    RageUtil::SafeDelete(steps);
+  };
+
   for (Steps* s : m_vpSteps) {
-    RageUtil::SafeDelete(s);
+    delete_unique_step(s);
   }
   m_vpSteps.clear();
   for (Steps* s : m_UnknownStyleSteps) {
-    RageUtil::SafeDelete(s);
+    delete_unique_step(s);
   }
   m_UnknownStyleSteps.clear();
+  FOREACH_ENUM(StepsType, st) {
+    m_vpStepsByType[st].clear();
+  }
 
   // It's the responsibility of the owner of this Song to make sure
   // that all pointers to this Song and its Steps are invalidated.
@@ -2213,41 +2232,43 @@ void Song::DeleteSteps(const Steps* pSteps, bool bReAutoGen) {
     RemoveAutoGenNotes();
   }
 
-  auto mainIt = std::find(m_vpSteps.begin(), m_vpSteps.end(), pSteps);
-  auto unknownIt =
-      std::find(m_UnknownStyleSteps.begin(), m_UnknownStyleSteps.end(), pSteps);
-  if (unknownIt != m_UnknownStyleSteps.end()) {
-    delete *unknownIt;
-    m_UnknownStyleSteps.erase(unknownIt);
-  } else {
-    if (mainIt == m_vpSteps.end()) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX: Steps %p disappeared before delete in '%s'.",
-          static_cast<const void*>(pSteps), m_sSongDir.c_str());
-      if (bReAutoGen) {
-        AddAutoGenNotes();
-      }
-      return;
-    }
-    if (!IsPlayableStepsTypeIndex(pSteps->m_StepsType)) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX: Removing Steps %p with invalid StepsType %i from '%s'.",
-          static_cast<const void*>(pSteps), pSteps->m_StepsType,
-          m_sSongDir.c_str());
-    } else {
-      std::vector<Steps*>& vpSteps = m_vpStepsByType[pSteps->m_StepsType];
-      for (int j = static_cast<int>(vpSteps.size()) - 1; j >= 0; j--) {
-        if (vpSteps[j] == pSteps) {
-          // delete vpSteps[j]; // delete below
-          vpSteps.erase(vpSteps.begin() + j);
-          break;
-        }
-      }
-    }
+  auto erase_steps = [pSteps](std::vector<Steps*>& steps) {
+    const auto oldSize = steps.size();
+    steps.erase(std::remove(steps.begin(), steps.end(), pSteps), steps.end());
+    return oldSize - steps.size();
+  };
 
-    delete *mainIt;
-    m_vpSteps.erase(mainIt);
+  size_t removedFromMain = erase_steps(m_vpSteps);
+  size_t removedFromUnknown = erase_steps(m_UnknownStyleSteps);
+  size_t removedFromTyped = 0;
+  if (!IsPlayableStepsTypeIndex(pSteps->m_StepsType)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Removing Steps %p with invalid StepsType %i from '%s'.",
+        static_cast<const void*>(pSteps), pSteps->m_StepsType,
+        m_sSongDir.c_str());
+  } else {
+    removedFromTyped = erase_steps(m_vpStepsByType[pSteps->m_StepsType]);
   }
+
+  if (removedFromMain + removedFromUnknown == 0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Steps %p disappeared before delete in '%s'.",
+        static_cast<const void*>(pSteps), m_sSongDir.c_str());
+    if (bReAutoGen) {
+      AddAutoGenNotes();
+    }
+    return;
+  }
+
+  if (removedFromMain + removedFromUnknown > 1 || removedFromTyped > 1) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: removed duplicate references for Steps %p in '%s' "
+        "(main=%zu unknown=%zu typed=%zu).",
+        static_cast<const void*>(pSteps), m_sSongDir.c_str(), removedFromMain,
+        removedFromUnknown, removedFromTyped);
+  }
+
+  delete pSteps;
 
   if (bReAutoGen) {
     AddAutoGenNotes();

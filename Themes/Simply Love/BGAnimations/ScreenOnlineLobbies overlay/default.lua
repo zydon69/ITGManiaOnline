@@ -49,6 +49,7 @@ local pending_join_action_id = 0
 local pending_join_deadline = 0
 local pending_create_action_id = 0
 local pending_create_deadline = 0
+local lobby_search_ui_pending = false
 
 local mode = "browse"
 local joined_active_index = 1
@@ -78,18 +79,61 @@ local showing_global_options_menu = false
 local global_options_index = 1
 local joined_global_options = { scoreMode="itg", musicRate=1.0 }
 local global_options_choices = {}
+local input_quiet_until = 0
 local joined_focus_initialized = false
 local joined_user_moved_focus = false
 
 local join_lobby_code = ""
 
 SL.Global.Online = SL.Global.Online or {}
+SL.Global.Online.ScreenOnlineLobbiesInputHandlers = SL.Global.Online.ScreenOnlineLobbiesInputHandlers or {}
+SL.Global.Online.ScreenOnlineLobbiesInputDedup = SL.Global.Online.ScreenOnlineLobbiesInputDedup or {
+	key = "",
+	at = 0,
+}
+SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt = SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt or -999
+local overlay_instance_id = tostring({})
+local lobby_flow_trace
+
+local function is_active_lobby_overlay()
+	return SL
+		and SL.Global
+		and SL.Global.Online
+		and SL.Global.Online.ScreenOnlineLobbiesActiveInstance == overlay_instance_id
+end
+
+local online_sound_last_played_at = {}
+
+local function play_online_sound_once(screenName, soundName, minInterval)
+	local now = GetTimeSinceStart()
+	local key = tostring(screenName) .. ":" .. tostring(soundName)
+	local interval = tonumber(minInterval) or 0.08
+
+	if online_sound_last_played_at[key] and now - online_sound_last_played_at[key] < interval then
+		return
+	end
+
+	online_sound_last_played_at[key] = now
+	SOUND:PlayOnce(THEME:GetPathS(screenName, soundName))
+end
+
 SL.Global.Online.PackChoiceRecovery = SL.Global.Online.PackChoiceRecovery or {}
 if type(SL.Global.Online.PackChoiceRecovery.candidates) == "table" then
 	pack_choice_last_candidates = SL.Global.Online.PackChoiceRecovery.candidates
 	pack_choice_last_song_info = SL.Global.Online.PackChoiceRecovery.songInfo
 	pack_choice_last_selected_pack_id = SL.Global.Online.PackChoiceRecovery.selectedPackId
 	pack_choice_download_key = SL.Global.Online.PackChoiceRecovery.downloadKey
+end
+
+local function clear_pack_choice_recovery()
+	pack_choice_last_candidates = {}
+	pack_choice_last_song_info = nil
+	pack_choice_last_selected_pack_id = nil
+	pack_choice_all_candidates_exhausted = false
+	pack_choice_download_key = nil
+	if SL and SL.Global and SL.Global.Online then
+		SL.Global.Online.PackChoiceRecovery = {}
+	end
 end
 
 local joined_any_player_missing_song
@@ -99,6 +143,9 @@ local last_select_song_visibility_debug_key = ""
 local last_auto_start_focus_key = ""
 local last_auto_start_request_key = ""
 local network_status_clear_at = 0
+local pack_sync_busy
+local clear_pending_join
+local clear_pending_create
 
 local function network_status_has_active_transient()
 	return network_status_clear_at > 0 and GetTimeSinceStart() + 0.05 < network_status_clear_at
@@ -139,6 +186,7 @@ local function reset_browse_focus()
 end
 
 local function reset_joined_lobby_state()
+	clear_pack_choice_recovery()
 	joined_active_index = 1
 	joined_is_manager = false
 	joined_phase = nil
@@ -184,6 +232,13 @@ local function close_leave_confirm()
 end
 
 local function close_transient_joined_ui()
+	if showing_pack_choice_menu
+		and ITGOnline
+		and ITGOnline.PackSync
+		and ITGOnline.PackSync.CancelPendingPackChoice then
+		ITGOnline.PackSync:CancelPendingPackChoice("transient_ui_closed")
+		clear_pack_choice_recovery()
+	end
 	close_leave_confirm()
 	showing_player_action_menu = false
 	player_action_user = nil
@@ -214,10 +269,37 @@ local function close_transient_joined_ui()
 	end
 end
 
-local function begin_leave_lobby(root)
-	if leaving_lobby then return end
-	leaving_lobby = true
-	mode = "browse"
+local function stop_lobby_overlay_timers(root)
+	if not root then return end
+	local timerNames = {
+		"JoinTimeoutTimer",
+		"CreateTimeoutTimer",
+		"NetworkStatusClearTimer",
+		"LobbySearchStabilizationTimer",
+	}
+	for _, name in ipairs(timerNames) do
+		local timer = root:GetChild(name)
+		if timer then
+			timer:stoptweening()
+		end
+	end
+	lobby_search_ui_pending = false
+	network_status_clear_at = 0
+end
+
+	local function begin_leave_lobby(root)
+		if leaving_lobby then
+			lobby_flow_trace("begin_leave_lobby_skipped reason=already_leaving joined_code=" .. tostring(joined_lobby_code))
+			return
+		end
+		lobby_flow_trace(
+			"begin_leave_lobby mode=" .. tostring(leave_confirm_mode) ..
+			" joined_code=" .. tostring(joined_lobby_code) ..
+			" phase=" .. tostring(joined_phase) ..
+			" has_root=" .. tostring(root ~= nil))
+		leaving_lobby = true
+		input_quiet_until = GetTimeSinceStart() + 0.35
+		mode = "browse"
 	list_selected = false
 	reset_browse_focus()
 	close_transient_joined_ui()
@@ -228,25 +310,51 @@ local function begin_leave_lobby(root)
 		root:playcommand("SetStatus", {
 			text="Sortie du salon...",
 			showSpinner=true,
-			showPrompt=false
-		})
+				showPrompt=false
+			})
+		end
+		lobby_flow_trace("begin_leave_lobby_end joined_code=" .. tostring(joined_lobby_code))
 	end
-end
 
-local function finish_leave_lobby(root)
-	leaving_lobby = false
+	local function finish_leave_lobby(root)
+		local now = GetTimeSinceStart()
+		SL.Global.Online = SL.Global.Online or {}
+		local lastFinishedAt = tonumber(SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt) or -999
+		if now - lastFinishedAt < 0.5 then
+			lobby_flow_trace(
+				"finish_leave_lobby_skipped reason=dedupe delta=" ..
+				string.format("%.3f", now - lastFinishedAt))
+			return
+		end
+		lobby_flow_trace(
+			"finish_leave_lobby_begin joined_code=" .. tostring(joined_lobby_code) ..
+			" phase=" .. tostring(joined_phase) ..
+			" players=" .. tostring(type(joined_lobby_players) == "table" and #joined_lobby_players or 0) ..
+			" leaving_lobby=" .. tostring(leaving_lobby) ..
+			" has_root=" .. tostring(root ~= nil))
+		SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt = now
+		input_quiet_until = now + 0.75
+		leaving_lobby = false
 	mode = "browse"
 	list_selected = false
+	holding.MenuLeft = false
+	holding.MenuRight = false
 	reset_browse_focus()
-	close_transient_joined_ui()
-	reset_joined_lobby_state()
-	if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ResetLocalState then
-		ITGOnline.PackSync:ResetLocalState("lobby_left")
-	end
-	if root then
-		local joinedContent = root:GetChild("JoinedLobbyContent")
-		if joinedContent then joinedContent:visible(false) end
-		root:queuecommand("UpdateLobbyView")
+		clear_pending_join()
+		clear_pending_create()
+		stop_lobby_overlay_timers(root)
+		close_transient_joined_ui()
+		reset_joined_lobby_state()
+		if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ResetLocalState then
+			lobby_flow_trace("finish_leave_lobby_packsync_reset_begin")
+			ITGOnline.PackSync:ResetLocalState("lobby_left")
+			lobby_flow_trace("finish_leave_lobby_packsync_reset_end")
+		end
+		if root then
+			lobby_flow_trace("finish_leave_lobby_ui_update_begin")
+			local joinedContent = root:GetChild("JoinedLobbyContent")
+			if joinedContent then joinedContent:visible(false) end
+			root:queuecommand("UpdateLobbyView")
 		root:queuecommand("UpdateOnlinePlayers")
 		local status = root:GetChild("NetworkStatus")
 		if status then status:visible(false) end
@@ -255,9 +363,122 @@ local function finish_leave_lobby(root)
 			showSpinner=false,
 			showPrompt=false,
 			duration=3
-		})
-		root:queuecommand("Hover")
+			})
+			root:queuecommand("Hover")
+			lobby_flow_trace("finish_leave_lobby_ui_update_end")
+		end
+		lobby_flow_trace("finish_leave_lobby_end")
 	end
+
+	local function leave_lobby_stabilization_remaining()
+		SL.Global.Online = SL.Global.Online or {}
+		local lastFinishedAt = tonumber(SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt) or -999
+		local elapsed = GetTimeSinceStart() - lastFinishedAt
+		return math.max(0, 2.0 - elapsed)
+	end
+
+	local function recently_left_lobby(seconds)
+		SL.Global.Online = SL.Global.Online or {}
+		local lastFinishedAt = tonumber(SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt) or -999
+		return GetTimeSinceStart() - lastFinishedAt < (tonumber(seconds) or 4.0)
+	end
+
+	local function schedule_lobby_search_ui_apply(root, delay, reason)
+		if not root then return false end
+		local timer = root:GetChild("LobbySearchStabilizationTimer")
+		if not timer then
+			lobby_flow_trace("lobby_search_ui_defer_failed reason=no_timer source=" .. tostring(reason or "unknown"))
+			return false
+		end
+		lobby_search_ui_pending = true
+		timer:stoptweening()
+		timer:sleep(math.max(0.05, tonumber(delay) or 0.05))
+		timer:queuecommand("Apply")
+		lobby_flow_trace(
+			"lobby_search_ui_deferred delay=" .. tostring(delay) ..
+			" reason=" .. tostring(reason or "unknown"))
+		return true
+	end
+
+	local function apply_lobby_search_to_ui(root, reason)
+		if not root or not is_active_lobby_overlay() then
+			lobby_flow_trace("lobby_search_ui_skipped reason=inactive source=" .. tostring(reason or "unknown"))
+			return false
+		end
+
+		if mode == "browse"
+			and joined_lobby_code == ""
+			and not (ITGOnline and ITGOnline.currentRoomId)
+			and recently_left_lobby(4.0) then
+			lobby_search_ui_pending = false
+			lobby_flow_trace(
+				"lobby_search_ui_skipped reason=recent_leave_no_room source=" ..
+				tostring(reason or "unknown"))
+			return false
+		end
+
+		local remaining = leave_lobby_stabilization_remaining()
+		if remaining > 0 then
+			schedule_lobby_search_ui_apply(root, remaining + 0.05, "leave_stabilizing")
+			return false
+		end
+
+		lobby_search_ui_pending = false
+		lobby_flow_trace(
+			"lobby_search_ui_apply_begin source=" .. tostring(reason or "unknown") ..
+			" lobbies=" .. tostring(type(candidates) == "table" and #candidates or 0) ..
+			" onlineUsers=" .. tostring(type(online_users) == "table" and #online_users or 0) ..
+			" mode=" .. tostring(mode))
+
+		local lobbyContent = root:GetChild("LobbyContent")
+		if lobbyContent then
+			local lobbyList = lobbyContent:GetChild("LobbyList")
+			if lobbyList then
+				lobbyList:playcommand("UpdateData", {data=candidates})
+			end
+
+			local lobbyCount = lobbyContent:GetChild("LobbyCount")
+			if lobbyCount then
+				local total = #candidates
+				lobbyCount:settext(total > 0 and ("1/"..total) or "0/0")
+			end
+
+			local emptyText = lobbyContent:GetChild("EmptyStateText")
+			if emptyText then
+				emptyText:visible(#candidates == 0)
+			end
+		end
+
+		if not pack_sync_busy() then
+			hide_network_status_if_idle(root)
+		end
+		root:queuecommand("UpdateLobbyView")
+		root:queuecommand("UpdateOnlinePlayers")
+		local joinedContent = root:GetChild("JoinedLobbyContent")
+		if joinedContent then joinedContent:visible(mode == "joined") end
+		root:queuecommand("Hover")
+		lobby_flow_trace("lobby_search_ui_apply_end source=" .. tostring(reason or "unknown"))
+		return true
+	end
+
+local function duplicate_first_press(event)
+	if not event or event.type ~= "InputEventType_FirstPress" then
+		return false
+	end
+	local now = GetTimeSinceStart()
+	local key = tostring(event.GameButton or "") .. "|" .. tostring(event.PlayerNumber or "")
+	SL.Global.Online = SL.Global.Online or {}
+	local dedup = SL.Global.Online.ScreenOnlineLobbiesInputDedup
+	if type(dedup) ~= "table" then
+		dedup = { key = "", at = 0 }
+		SL.Global.Online.ScreenOnlineLobbiesInputDedup = dedup
+	end
+	if dedup.key == key and now - (tonumber(dedup.at) or 0) < 0.12 then
+		return true
+	end
+	dedup.key = key
+	dedup.at = now
+	return false
 end
 
 local function focus_selected_browse_list(root)
@@ -283,15 +504,16 @@ end
 local function lobby_debug(message)
 	if not lobby_debug_enabled() then return end
 	local line = "ITG Online Lobby: " .. tostring(message or "")
-	if Warn then Warn(line) elseif Trace then Trace(line) end
+	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
 
-local function lobby_flow_trace(message)
-	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
-		return
-	end
-	local line = "ITG Online: FLOW lobby_ui " .. tostring(message or "")
-	if Trace then Trace(line) elseif Warn then Warn(line) end
+lobby_flow_trace = function(message)
+		if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
+			return
+		end
+		local line = "ITG Online: FLOW lobby_ui " .. tostring(message or "")
+		if Trace then Trace(line) elseif Warn then Warn(line) end
+		if Flush then Flush() end
 end
 
 local function ready_summary()
@@ -300,7 +522,7 @@ local function ready_summary()
 		if type(player) == "table" then
 			parts[#parts + 1] = tostring(player.profileName or "?")
 				.. ":" .. tostring(player.playerId or "?")
-				.. "=" .. tostring(player.ready and "1" or "0")
+				.. "=" .. tostring(player.ready and "1" or player.readyPendingServer and "pending" or "0")
 		end
 	end
 	return table.concat(parts, ",")
@@ -555,7 +777,7 @@ local function pack_sync_display_text(status)
 	return status:gsub("_", " ")
 end
 
-local function pack_sync_busy()
+pack_sync_busy = function()
 	if not (ITGOnline and ITGOnline.PackSync) then return false end
 	if trim_text(ITGOnline.PackSync.downloadInFlightKey) ~= "" then return true end
 	local status = trim_text(ITGOnline.PackSync.currentStatus)
@@ -705,11 +927,19 @@ local function joined_button_indices()
 	return indices
 end
 
+local function joined_active_index_is_available()
+	for index in ivalues(joined_button_indices()) do
+		if joined_active_index == index then return true end
+	end
+	return false
+end
+
 function joined_all_players_ready()
-	-- Legacy helper kept for debug text compatibility; gameplay start no longer depends on ready flags.
+	-- Server-authoritative helper: a local optimistic ready can be displayed,
+	-- but it must not unlock Start before the server confirms it.
 	if #joined_lobby_players == 0 then return false end
 	for player in ivalues(joined_lobby_players) do
-		if not player.ready then
+		if not player.ready or player.readyPendingServer then
 			return false
 		end
 	end
@@ -1036,12 +1266,12 @@ local function active_private_prompt_options()
 	return private_join_options
 end
 
-	local function clear_pending_join()
+	clear_pending_join = function()
 		pending_join_action_id = 0
 		pending_join_deadline = 0
 	end
 
-local function clear_pending_create()
+clear_pending_create = function()
 	pending_create_action_id = 0
 	pending_create_deadline = 0
 end
@@ -1175,7 +1405,16 @@ local function execute_player_action(option, user)
 	end
 end
 
-local function close_pack_choice_menu()
+local function close_pack_choice_menu(cancelPackChoice)
+	if cancelPackChoice == true
+		and ITGOnline
+		and ITGOnline.PackSync
+		and ITGOnline.PackSync.CancelPendingPackChoice then
+		ITGOnline.PackSync:CancelPendingPackChoice("pack_choice_menu_closed")
+	end
+	if cancelPackChoice == true then
+		clear_pack_choice_recovery()
+	end
 	showing_pack_choice_menu = false
 	pack_choice_index = 1
 	pack_choice_candidates = {}
@@ -1310,11 +1549,11 @@ end
 local function handle_leave_confirm_input(event)
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 		leave_confirm_index = (leave_confirm_index + (event.GameButton=="MenuRight" and 1 or -1)) % 2
-		SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+		play_online_sound_once("ScreenSelectMaster", "change")
 		t:GetChild("LeaveConfirmPrompt"):playcommand("Hover")
 	elseif event.GameButton == "Start" then
 		if leave_confirm_index == 1 then
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			play_online_sound_once("Common", "Start")
 			close_leave_confirm()
 			if leave_confirm_mode == "exit_online" then
 				local topScreen = SCREENMAN:GetTopScreen()
@@ -1327,11 +1566,11 @@ local function handle_leave_confirm_input(event)
 				MESSAGEMAN:Broadcast("LeaveLobby")
 			end
 		else
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+			play_online_sound_once("Common", "Cancel")
 			close_leave_confirm()
 		end
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
-		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+		play_online_sound_once("Common", "Cancel")
 		close_leave_confirm()
 	end
 	return false
@@ -1340,20 +1579,20 @@ end
 local function handle_browse_pack_download_confirm_input(event)
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 		browse_pack_download_confirm_index = (browse_pack_download_confirm_index + (event.GameButton=="MenuRight" and 1 or -1)) % 2
-		SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+		play_online_sound_once("ScreenSelectMaster", "change")
 		t:GetChild("BrowsePackDownloadConfirmPrompt"):playcommand("Hover")
 	elseif event.GameButton == "Start" then
 		if browse_pack_download_confirm_index == 1 then
 			local songInfo = browse_pack_download_song_info
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			play_online_sound_once("Common", "Start")
 			close_browse_pack_download_confirm()
 			start_browse_pack_download(songInfo)
 		else
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+			play_online_sound_once("Common", "Cancel")
 			close_browse_pack_download_confirm()
 		end
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
-		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+		play_online_sound_once("Common", "Cancel")
 		close_browse_pack_download_confirm()
 	end
 	return false
@@ -1363,7 +1602,7 @@ local function handle_private_join_prompt_input(event)
 	local promptOptions = active_private_prompt_options()
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 		private_join_prompt_index = ((private_join_prompt_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #promptOptions) + 1
-		SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+		play_online_sound_once("ScreenSelectMaster", "change")
 		t:queuecommand("UpdatePrivateJoinPrompt")
 	elseif event.GameButton == "Start" then
 		local option = promptOptions[private_join_prompt_index]
@@ -1372,7 +1611,7 @@ local function handle_private_join_prompt_input(event)
 			if option and option.dismiss then
 				showing_private_join_prompt = false
 				t:GetChild("PrivateJoinPrompt"):visible(false)
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+				play_online_sound_once("Common", "Cancel")
 			elseif option and invitation and invitation.id then
 				showing_private_join_prompt = false
 				t:GetChild("PrivateJoinPrompt"):visible(false)
@@ -1380,7 +1619,7 @@ local function handle_private_join_prompt_input(event)
 					invitation_id=invitation.id,
 					accept=option.accept,
 				})
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+				play_online_sound_once("Common", "Start")
 			end
 		else
 			local request = private_join_request and private_join_request.join_request
@@ -1392,13 +1631,13 @@ local function handle_private_join_prompt_input(event)
 					accept=option.accept,
 					reason=option.reason,
 				})
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+				play_online_sound_once("Common", "Start")
 			end
 		end
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
 		showing_private_join_prompt = false
 		t:GetChild("PrivateJoinPrompt"):visible(false)
-		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+		play_online_sound_once("Common", "Cancel")
 	end
 	return false
 end
@@ -1406,15 +1645,15 @@ end
 local function handle_player_action_menu_input(event)
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 		player_action_index = ((player_action_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #player_action_options) + 1
-		SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+		play_online_sound_once("ScreenSelectMaster", "change")
 		t:queuecommand("UpdatePlayerActionMenu")
 	elseif event.GameButton == "Start" then
-		SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+		play_online_sound_once("Common", "Start")
 		execute_player_action(player_action_options[player_action_index], player_action_user)
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
 		showing_player_action_menu = false
 		t:GetChild("PlayerActionMenu"):visible(false)
-		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+		play_online_sound_once("Common", "Cancel")
 	end
 	return false
 end
@@ -1422,12 +1661,12 @@ end
 local function handle_pack_choice_menu_input(event)
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 		pack_choice_index = ((pack_choice_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #pack_choice_candidates) + 1
-		SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+		play_online_sound_once("ScreenSelectMaster", "change")
 		update_pack_choice_menu()
 	elseif event.GameButton == "Start" then
 		local candidate = pack_choice_candidates[pack_choice_index]
 		if candidate and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadPackByCandidate then
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			play_online_sound_once("Common", "Start")
 			pack_choice_last_selected_pack_id = tonumber(candidate.id)
 			local browseOnly = pack_choice_browse_only
 			if SL and SL.Global and SL.Global.Online then
@@ -1452,8 +1691,8 @@ local function handle_pack_choice_menu_input(event)
 			end, { browseOnly = browseOnly, allowExistingDownloadKey = downloadKey })
 		end
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
-		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
-		close_pack_choice_menu()
+		play_online_sound_once("Common", "Cancel")
+		close_pack_choice_menu(true)
 	end
 	return false
 end
@@ -1461,12 +1700,12 @@ end
 local function handle_global_options_menu_input(event)
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 		move_global_options_choice(event.GameButton == "MenuRight" and 1 or -1)
-		SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+		play_online_sound_once("ScreenSelectMaster", "change")
 	elseif event.GameButton == "Start" then
-		SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+		play_online_sound_once("Common", "Start")
 		apply_global_options_choice()
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
-		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+		play_online_sound_once("Common", "Cancel")
 		close_global_options_menu()
 	end
 	return false
@@ -1487,7 +1726,7 @@ local function handle_joined_mode_input(event)
 						break
 					end
 				end
-				SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+				play_online_sound_once("ScreenSelectMaster", "change")
 				t:queuecommand("UpdateJoinedLobbyText")
 			end
 			return false
@@ -1504,21 +1743,21 @@ local function handle_joined_mode_input(event)
 					menu:visible(showing_player_action_menu)
 					t:queuecommand("UpdatePlayerActionMenu")
 				end
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+				play_online_sound_once("Common", "Start")
 			else
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+				play_online_sound_once("Common", "Cancel")
 			end
 			return false
 		elseif event.GameButton == "Select" or event.GameButton == "Back" then
 			joined_players_selected = false
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+			play_online_sound_once("Common", "Cancel")
 			t:queuecommand("UpdateJoinedLobbyText")
 			return false
 		end
 	end
 
 	if event.GameButton == "Back" then
-		SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+		play_online_sound_once("Common", "Start")
 		normalize_joined_active_index()
 		joined_active_index = 1
 		open_leave_confirm("leave_lobby")
@@ -1527,11 +1766,11 @@ local function handle_joined_mode_input(event)
 
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 		move_joined_button(event.GameButton == "MenuRight" and 1 or -1)
-		SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+		play_online_sound_once("ScreenSelectMaster", "change")
 		t:queuecommand("Hover")
 	elseif event.GameButton == "Start" then
 		normalize_joined_active_index()
-		SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+		play_online_sound_once("Common", "Start")
 		if joined_active_index == 1 then
 			open_leave_confirm("leave_lobby")
 		elseif joined_active_index == 2 and joined_is_manager then
@@ -1624,10 +1863,10 @@ local function handle_joined_mode_input(event)
 		end
 	elseif event.GameButton == "Select" then
 		if focus_joined_players() then
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			play_online_sound_once("Common", "Start")
 			t:queuecommand("UpdateJoinedLobbyText")
 		else
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+			play_online_sound_once("Common", "Cancel")
 		end
 	end
 	return false
@@ -1639,20 +1878,20 @@ local function handle_browse_mode_input(event)
 		if holding[event.GameButton == "MenuRight" and "MenuLeft" or "MenuRight"] then
 			if list_selected then
 				list_selected = false
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+				play_online_sound_once("Common", "Cancel")
 				t:queuecommand("LoseFocus")
 				t:queuecommand("Hover")
 			end
 		else
 			if not list_selected then
 				active_index = (active_index + (event.GameButton=="MenuRight" and 1 or -1)) % #options
-				SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+				play_online_sound_once("ScreenSelectMaster", "change")
 				t:queuecommand("Hover")
 			else
 				if lobby_view == "players" then
 					if #online_users > 0 then
 						online_player_index = ((online_player_index - 1 + (event.GameButton=="MenuRight" and 1 or -1)) % #online_users) + 1
-						SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+						play_online_sound_once("ScreenSelectMaster", "change")
 						t:queuecommand("UpdateOnlinePlayers")
 					end
 				else
@@ -1668,18 +1907,18 @@ local function handle_browse_mode_input(event)
 		if list_selected then
 			if lobby_view == "players" then
 				if selected_online_user() then
-					SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+					play_online_sound_once("Common", "Start")
 					t:queuecommand("OpenPlayerActionMenu")
 				else
-					SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+					play_online_sound_once("Common", "Cancel")
 				end
 			else
 				local lobbyList = t:GetChild("LobbyContent") and t:GetChild("LobbyContent"):GetChild("LobbyList")
 				if lobbyList then
-					SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+					play_online_sound_once("Common", "Start")
 					lobbyList:playcommand("SelectLobby")
 				else
-					SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+					play_online_sound_once("Common", "Cancel")
 				end
 			end
 			return false
@@ -1689,14 +1928,14 @@ local function handle_browse_mode_input(event)
 			lobby_view = active_index == 1 and "players" or "lobbies"
 			if (lobby_view == "lobbies" and #candidates > 0) or (lobby_view == "players" and #online_users > 0) then
 				list_selected = true
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+				play_online_sound_once("Common", "Start")
 				focus_selected_browse_list(t)
 				t:queuecommand("UpdateOnlinePlayers")
 			else
-				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+				play_online_sound_once("Common", "Cancel")
 			end
 		elseif active_index == 2 then
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			play_online_sound_once("Common", "Start")
 			local onlineHandler = GetOnlineHandlerInstance()
 			if onlineHandler and onlineHandler.connected then
 				t:playcommand("SetStatus", {
@@ -1720,14 +1959,14 @@ local function handle_browse_mode_input(event)
 				t:queuecommand("CheckConnect")
 			end
 		elseif active_index == 4 then
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			play_online_sound_once("Common", "Start")
 			local topScreen = SCREENMAN:GetTopScreen()
 			if topScreen then
 				topScreen:SetNextScreenName("ScreenTitleMenu")
 				topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 			end
 		elseif active_index == 3 then
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			play_online_sound_once("Common", "Start")
 			local onlineHandler = GetOnlineHandlerInstance()
 			if not (onlineHandler and onlineHandler.connected and onlineHandler.socket ~= nil) then
 				t:playcommand("SetStatus", {
@@ -1751,11 +1990,11 @@ local function handle_browse_mode_input(event)
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
 		if list_selected then
 			list_selected = false
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+			play_online_sound_once("Common", "Cancel")
 			t:queuecommand("LoseFocus")
 			t:queuecommand("Hover")
 		elseif event.GameButton == "Back" then
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Start"))
+			play_online_sound_once("Common", "Start")
 			open_leave_confirm("exit_online")
 		end
 	end
@@ -1781,7 +2020,7 @@ local function handle_first_press_input(event)
 	if not connected then return false end
 
 	if pending_join_action_id > 0 and (event.GameButton == "Select" or event.GameButton == "Back") then
-		SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+		play_online_sound_once("Common", "Cancel")
 		cancel_pending_join("Connexion annulee. Rafraichissement des salons...")
 		return false
 	end
@@ -1794,49 +2033,107 @@ end
 local InputHandler = function(event)
 	if not event.PlayerNumber or not event.button then return false end
 	if not t then return false end
+	if not is_active_lobby_overlay() then return false end
 	event.GameButton = online_menu_button(event.GameButton)
 
+	if GetTimeSinceStart() < input_quiet_until then
+		if event.type == "InputEventType_Release"
+			and (event.GameButton == "MenuRight" or event.GameButton == "MenuLeft") then
+			holding[event.GameButton] = false
+		end
+		return true
+	end
+
+	if duplicate_first_press(event) then
+		return true
+	end
+
 	if event.type == "InputEventType_FirstPress" then
-		return handle_first_press_input(event)
+		handle_first_press_input(event)
+		return true
 	elseif event.type == "InputEventType_Release" then
 		if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
 			holding[event.GameButton] = false
 		end
+		return true
 	end
-	return false
+	return true
 end
 
 local wait_time = 0
 local attempted = false
 local input_screen = nil
-local af = Def.ActorFrame{
-	  OnCommand=function(self)
-			t=self
-			reset_browse_focus()
-			leave_confirm_mode = "leave_lobby"
-			showing_leave_confirm = false
-			input_added = false
-			holding.MenuLeft = false
-			holding.MenuRight = false
-	    self:Center()
-			local screen = SCREENMAN:GetTopScreen()
-			if not input_added and screen then
-				screen:AddInputCallback(InputHandler)
-				input_screen = screen
-			input_added = true
+
+local function registered_lobby_input_handlers()
+	SL.Global.Online = SL.Global.Online or {}
+	local handlers = SL.Global.Online.ScreenOnlineLobbiesInputHandlers
+	if type(handlers) ~= "table" then
+		handlers = {}
+		SL.Global.Online.ScreenOnlineLobbiesInputHandlers = handlers
+	end
+	return handlers
+end
+
+local function remove_registered_lobby_input_callbacks()
+	local handlers = registered_lobby_input_handlers()
+	for _, entry in ipairs(handlers) do
+		if entry and entry.handler then
+			local screen = entry.screen or SCREENMAN:GetTopScreen()
+			if screen and screen.RemoveInputCallback then
+				pcall(function() screen:RemoveInputCallback(entry.handler) end)
+			end
+			if screen and screen.SetInputCallbacksHandleBeforeScreen then
+				pcall(function() screen:SetInputCallbacksHandleBeforeScreen(false) end)
+			end
 		end
-			self:playcommand("SetStatus", {
-					text="Initialisation de la connexion en ligne...",
+	end
+	for i=#handlers, 1, -1 do
+		handlers[i] = nil
+	end
+	input_screen = nil
+	input_added = false
+end
+
+local function install_lobby_input_callback(screen)
+	if not screen then return end
+	remove_registered_lobby_input_callbacks()
+	if screen.SetInputCallbacksHandleBeforeScreen then
+		pcall(function() screen:SetInputCallbacksHandleBeforeScreen(true) end)
+	end
+	if screen.RemoveInputCallback then
+		pcall(function() screen:RemoveInputCallback(InputHandler) end)
+	end
+	screen:AddInputCallback(InputHandler)
+	input_screen = screen
+	input_added = true
+	local handlers = registered_lobby_input_handlers()
+	handlers[#handlers + 1] = { screen = screen, handler = InputHandler }
+end
+
+local af = Def.ActorFrame{
+	OnCommand=function(self)
+		t=self
+		SL.Global.Online = SL.Global.Online or {}
+		SL.Global.Online.ScreenOnlineLobbiesActiveInstance = overlay_instance_id
+		reset_browse_focus()
+		leave_confirm_mode = "leave_lobby"
+		showing_leave_confirm = false
+		holding.MenuLeft = false
+		holding.MenuRight = false
+		self:Center()
+		local screen = SCREENMAN:GetTopScreen()
+		install_lobby_input_callback(screen)
+		self:playcommand("SetStatus", {
+			text="Initialisation de la connexion en ligne...",
 				showSpinner=true
 			})
 		self:queuecommand("CheckConnect")
-  end,
+	end,
 	OffCommand=function(self)
-			if input_added and input_screen and input_screen.RemoveInputCallback then
-				pcall(function() input_screen:RemoveInputCallback(InputHandler) end)
+			if is_active_lobby_overlay() then
+				SL.Global.Online.ScreenOnlineLobbiesActiveInstance = nil
 			end
-			input_screen = nil
-			input_added = false
+			remove_registered_lobby_input_callbacks()
 			holding.MenuLeft = false
 			holding.MenuRight = false
 			t = nil
@@ -1861,18 +2158,25 @@ local af = Def.ActorFrame{
 				end
 			end
 		},
-		Def.Actor{
-			Name="NetworkStatusClearTimer",
-			ClearTransientStatusCommand=function(self)
-				local parent = self:GetParent()
-				if parent then parent:playcommand("ClearTransientStatus") end
-			end
-		},
-	HoverCommand=function(self)
-		self:GetChild("LobbyContent"):playcommand("Hover")
-		self:GetChild("OnlinePlayersContent"):playcommand("Hover")
-		self:GetChild("JoinedLobbyContent"):playcommand("Hover")
-	end,
+			Def.Actor{
+				Name="NetworkStatusClearTimer",
+				FireCommand=function(self)
+					local parent = self:GetParent()
+					if parent then parent:playcommand("ClearTransientStatus") end
+				end
+			},
+			Def.Actor{
+				Name="LobbySearchStabilizationTimer",
+				ApplyCommand=function(self)
+					local parent = self:GetParent()
+					if parent then parent:playcommand("ApplyDeferredLobbySearch") end
+				end
+			},
+		HoverCommand=function(self)
+			self:GetChild("LobbyContent"):playcommand("Hover")
+			self:GetChild("OnlinePlayersContent"):playcommand("Hover")
+			self:GetChild("JoinedLobbyContent"):playcommand("Hover")
+		end,
 	UpdateOnlinePlayersCommand=function(self)
 		local playersContent = self:GetChild("OnlinePlayersContent")
 		if not playersContent then return end
@@ -2038,7 +2342,7 @@ local af = Def.ActorFrame{
 			if tostring(player.playerId or "") == tostring(joined_manager_user_id or "") then
 				profile = "[M] " .. profile
 			end
-			local ready = player.ready and " ✔" or ""
+			local ready = player.ready and " ✔" or player.readyPendingServer and " ..." or ""
 			local missing = ""
 			local packSyncText = pack_sync_line_for_player(player)
 			if packSyncText ~= "" then
@@ -2269,32 +2573,42 @@ local af = Def.ActorFrame{
 					.. " readyStates=[" .. ready_summary() .. "]")
 			end
 
-			if visible then
-				local focusKey = table.concat({
-					tostring(joined_lobby_code or ""),
-					tostring(joined_phase or ""),
-					tostring(joined_song_selected_key or ""),
-					ready_summary(),
-					hasMissingSong and "1" or "0",
-				}, "|")
-				if focusKey ~= last_auto_start_focus_key or (not joined_user_moved_focus and joined_active_index ~= 5) then
-					last_auto_start_focus_key = focusKey
-					if joined_active_index ~= 5 then
+				if visible then
+					local focusKey = table.concat({
+						tostring(joined_lobby_code or ""),
+						tostring(joined_phase or ""),
+						tostring(joined_song_selected_key or ""),
+						ready_summary(),
+						hasMissingSong and "1" or "0",
+					}, "|")
+					local currentFocusStillAvailable = joined_active_index_is_available()
+					if focusKey ~= last_auto_start_focus_key then
+						last_auto_start_focus_key = focusKey
+					end
+					if joined_active_index ~= 5 and (not joined_user_moved_focus or not currentFocusStillAvailable) then
 						joined_active_index = 5
 						joined_user_moved_focus = false
 						self:queuecommand("Hover")
 					end
+					last_auto_start_request_key = ""
+				else
+					last_auto_start_focus_key = ""
+					last_auto_start_request_key = ""
 				end
-				last_auto_start_request_key = ""
-			else
-				last_auto_start_focus_key = ""
-				last_auto_start_request_key = ""
 			end
-		end
 		end,
 		SetStatusCommand=function(self, params)
 			if showing_pack_choice_menu then
-				return
+				if params and (params.force == true or params.critical == true) then
+					if ITGOnline
+						and ITGOnline.PackSync
+						and ITGOnline.PackSync.CancelPendingPackChoice then
+						ITGOnline.PackSync:CancelPendingPackChoice("status_force_close")
+					end
+					close_transient_joined_ui()
+				else
+					return
+				end
 			end
 			network_status_clear_at = 0
 			self:GetChild("NetworkStatus"):visible(true)
@@ -2305,7 +2619,7 @@ local af = Def.ActorFrame{
 				local timer = self:GetChild("NetworkStatusClearTimer")
 				if timer then
 					timer:stoptweening()
-					timer:sleep(duration):queuecommand("ClearTransientStatus")
+					timer:sleep(duration):queuecommand("Fire")
 				end
 			end
 		end,
@@ -2317,6 +2631,13 @@ local af = Def.ActorFrame{
 			if status then status:visible(false) end
 		end,
 		CheckConnectCommand=function(self)
+			if mode == "browse"
+				and joined_lobby_code == ""
+				and not (ITGOnline and ITGOnline.currentRoomId)
+				and recently_left_lobby(5.0) then
+				lobby_flow_trace("CheckConnect_skipped reason=recent_leave_no_room")
+				return
+			end
 			local onlineHandler = GetOnlineHandlerInstance()
 			if onlineHandler then
 				-- If no connection exists, first (re)establish the connection.
@@ -2349,6 +2670,13 @@ local af = Def.ActorFrame{
 			end
 		end,
 		DisplayCommand=function(self)
+			if mode == "browse"
+				and joined_lobby_code == ""
+				and not (ITGOnline and ITGOnline.currentRoomId)
+				and recently_left_lobby(5.0) then
+				lobby_flow_trace("Display_skipped reason=recent_leave_no_room")
+				return
+			end
 			local onlineHandler = GetOnlineHandlerInstance()
 			if onlineHandler then
 				if onlineHandler.connected then
@@ -2368,9 +2696,7 @@ local af = Def.ActorFrame{
 							showPrompt=false
 						})
 						ITGOnline:Sync(function(ok, decoded)
-							if ok and decoded and decoded.current_room then
-								MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.current_room))
-							else
+							if not ok or not decoded then
 								MESSAGEMAN:Broadcast("SearchLobby")
 							end
 						end)
@@ -2421,44 +2747,24 @@ local af = Def.ActorFrame{
 				end
 			end
 		end,
-		LobbySearchedMessageCommand=function(self, params)
-			candidates = params and params.lobbies or {}
-			online_users = params and params.onlinePlayers or {}
-			if #online_users == 0 then
-				online_player_index = 1
-			else
-				online_player_index = math.max(1, math.min(online_player_index, #online_users))
-			end
-
-			local lobbyContent = self:GetChild("LobbyContent")
-			if lobbyContent then
-				local lobbyList = lobbyContent:GetChild("LobbyList")
-				if lobbyList then
-					lobbyList:playcommand("UpdateData", {data=candidates})
+				ApplyDeferredLobbySearchCommand=function(self)
+					lobby_search_ui_pending = false
+					apply_lobby_search_to_ui(self, "deferred")
+				end,
+				LobbySearchedMessageCommand=function(self, params)
+					if not is_active_lobby_overlay() then return end
+					candidates = params and params.lobbies or {}
+				online_users = params and params.onlinePlayers or {}
+				if #online_users == 0 then
+					online_player_index = 1
+				else
+					online_player_index = math.max(1, math.min(online_player_index, #online_users))
 				end
-
-				local lobbyCount = lobbyContent:GetChild("LobbyCount")
-				if lobbyCount then
-					local total = #candidates
-					lobbyCount:settext(total > 0 and ("1/"..total) or "0/0")
-				end
-
-				local emptyText = lobbyContent:GetChild("EmptyStateText")
-				if emptyText then
-					emptyText:visible(#candidates == 0)
-				end
-			end
-
-			if not pack_sync_busy() then
-				hide_network_status_if_idle(self)
-			end
-			self:queuecommand("UpdateLobbyView")
-			self:queuecommand("UpdateOnlinePlayers")
-			self:GetChild("JoinedLobbyContent"):visible(mode == "joined")
-			self:queuecommand("Hover")
-		end,
-		OnlineLobbyStateMessageCommand=function(self, params)
-			if leaving_lobby then
+				apply_lobby_search_to_ui(self, "LobbySearched")
+			end,
+			OnlineLobbyStateMessageCommand=function(self, params)
+				if not is_active_lobby_overlay() then return end
+				if leaving_lobby then
 				lobby_flow_trace("ignored_online_lobby_state reason=leaving_lobby code=" .. tostring(params and params.code or ""))
 				return
 			end
@@ -2575,8 +2881,9 @@ local af = Def.ActorFrame{
 			normalize_joined_active_index()
 			self:queuecommand("Hover")
 		end,
-		OnlineMissingSongMessageCommand=function(self, params)
-			joined_missing_song = true
+			OnlineMissingSongMessageCommand=function(self, params)
+				if not is_active_lobby_overlay() then return end
+				joined_missing_song = true
 			joined_missing_song_info = params and params.songInfo or joined_song_preview
 			joined_missing_song_reason = params and params.reason or "missing_local_song"
 			joined_can_download_pack = params and (
@@ -2628,8 +2935,9 @@ local af = Def.ActorFrame{
 			self:queuecommand("UpdateJoinedLobbyText")
 			self:queuecommand("Hover")
 		end,
-		OnlineSongAvailableMessageCommand=function(self)
-			local wasMissing = joined_missing_song
+			OnlineSongAvailableMessageCommand=function(self)
+				if not is_active_lobby_overlay() then return end
+				local wasMissing = joined_missing_song
 			joined_missing_song = false
 			joined_missing_song_info = nil
 			joined_can_download_pack = false
@@ -2641,14 +2949,15 @@ local af = Def.ActorFrame{
 			self:queuecommand("UpdateJoinedLobbyText")
 			self:queuecommand("Hover")
 		end,
-	OnlineLobbyJoinSelectedMessageCommand=function(self, params)
-		if not params or not params.code then
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+		OnlineLobbyJoinSelectedMessageCommand=function(self, params)
+			if not is_active_lobby_overlay() then return end
+			if not params or not params.code then
+			play_online_sound_once("Common", "Cancel")
 			return
 		end
 		if params.acceptsNewMembers == false
 			or (params.acceptsNewMembers == nil and params.phase ~= nil and normalized_online_phase(params.phase) ~= "lobby") then
-			SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
+			play_online_sound_once("Common", "Cancel")
 			self:playcommand("SetStatus", {
 				text="Ce salon n'accepte plus de nouveaux joueurs.",
 				showSpinner=false,
@@ -2671,15 +2980,25 @@ local af = Def.ActorFrame{
 			code=params.code,
 		})
 	end,
-	OnlineLobbyLeftMessageCommand=function(self, params)
-		if params == nil or params.left == nil or params.left then
-			clear_pending_join()
-			clear_pending_create()
-			finish_leave_lobby(self)
-		end
-	end,
-OnlinePrivateJoinRequestMessageCommand=function(self, params)
-	if leaving_lobby then return end
+		OnlineLobbyLeftMessageCommand=function(self, params)
+			if not is_active_lobby_overlay() then
+				lobby_flow_trace("OnlineLobbyLeftMessage_ignored reason=inactive_overlay")
+				return
+			end
+			lobby_flow_trace(
+				"OnlineLobbyLeftMessage_begin left=" .. tostring(params and params.left) ..
+				" leaving_lobby=" .. tostring(leaving_lobby) ..
+				" joined_code=" .. tostring(joined_lobby_code))
+			if params == nil or params.left == nil or params.left then
+				clear_pending_join()
+				clear_pending_create()
+				finish_leave_lobby(self)
+			end
+			lobby_flow_trace("OnlineLobbyLeftMessage_end")
+		end,
+	OnlinePrivateJoinRequestMessageCommand=function(self, params)
+		if not is_active_lobby_overlay() then return end
+		if leaving_lobby then return end
 	if not params or not params.join_request then return end
 	private_join_request = params
 	private_join_prompt_kind = "join_request"
@@ -2689,8 +3008,9 @@ OnlinePrivateJoinRequestMessageCommand=function(self, params)
 	if prompt then prompt:visible(true) end
 	self:queuecommand("UpdatePrivateJoinPrompt")
 end,
-OnlineRoomInvitationMessageCommand=function(self, params)
-	if leaving_lobby then return end
+	OnlineRoomInvitationMessageCommand=function(self, params)
+		if not is_active_lobby_overlay() then return end
+		if leaving_lobby then return end
 	if not params or not params.invitation then return end
 	private_join_request = params
 	private_join_prompt_kind = "invitation"
@@ -2700,8 +3020,9 @@ OnlineRoomInvitationMessageCommand=function(self, params)
 	if prompt then prompt:visible(true) end
 	self:queuecommand("UpdatePrivateJoinPrompt")
 	end,
-		OnlineSongPreviewMessageCommand=function(self, params)
-			if leaving_lobby then return end
+			OnlineSongPreviewMessageCommand=function(self, params)
+				if not is_active_lobby_overlay() then return end
+				if leaving_lobby then return end
 			local preview = normalize_online_song_info(params)
 		if preview then
 			joined_song_preview = preview
@@ -2714,19 +3035,22 @@ OnlineRoomInvitationMessageCommand=function(self, params)
 			self:queuecommand("UpdateJoinedLobbyText")
 		end
 	end,
-	OnlinePackSyncReloadSongsMessageCommand=function(self)
-		if leaving_lobby then return end
+		OnlinePackSyncReloadSongsMessageCommand=function(self)
+			if not is_active_lobby_overlay() then return end
+			if leaving_lobby then return end
 		transition_to_online_song_reload()
 	end,
-	OnlinePackSyncLocalStatusMessageCommand=function(self, params)
-		if leaving_lobby then return end
+		OnlinePackSyncLocalStatusMessageCommand=function(self, params)
+			if not is_active_lobby_overlay() then return end
+			if leaving_lobby then return end
 		apply_local_pack_sync_status_to_joined_player(params)
 		normalize_joined_active_index()
 		self:queuecommand("UpdateJoinedLobbyText")
 		self:queuecommand("Hover")
 	end,
-	OnlinePackDownloadedMessageCommand=function(self, params)
-		if leaving_lobby then return end
+		OnlinePackDownloadedMessageCommand=function(self, params)
+			if not is_active_lobby_overlay() then return end
+			if leaving_lobby then return end
 		if params and params.songInfo and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.MarkPackInstalled then
 			ITGOnline.PackSync:MarkPackInstalled(song_info_pack(params.songInfo))
 		end
@@ -2749,17 +3073,19 @@ OnlineRoomInvitationMessageCommand=function(self, params)
 			end)
 		end
 	end,
-		OnlineResponseStatusMessageCommand=function(self, params)
-			if params and params.event == "createLobby" and params.success == false then
+			OnlineResponseStatusMessageCommand=function(self, params)
+				if not is_active_lobby_overlay() then return end
+				if params and params.event == "createLobby" and params.success == false then
 				clear_pending_create()
 				mode = "browse"
 				self:GetChild("JoinedLobbyContent"):visible(false)
 				self:queuecommand("UpdateLobbyView")
 				self:playcommand("SetStatus", {
-				text=params.message and ("Echec de creation du salon :\n"..params.message) or "Echec de creation du salon.",
-				showSpinner=false,
-				showPrompt=false
-			})
+					text=params.message and ("Echec de creation du salon :\n"..params.message) or "Echec de creation du salon.",
+					showSpinner=false,
+					showPrompt=false,
+					force=true
+				})
 		elseif params and params.event == "joinLobby" and params.success == true then
 			begin_join_timeout(self, 60)
 			self:playcommand("SetStatus", {
@@ -2772,12 +3098,13 @@ OnlineRoomInvitationMessageCommand=function(self, params)
 			mode = "browse"
 			self:GetChild("JoinedLobbyContent"):visible(false)
 			self:queuecommand("UpdateLobbyView")
-			self:playcommand("SetStatus", {
-				text=params.message and ("Echec de connexion au salon :\n"..params.message) or "Echec de connexion au salon.",
-				showSpinner=false,
-					showPrompt=false,
-					duration=4
-				})
+				self:playcommand("SetStatus", {
+					text=params.message and ("Echec de connexion au salon :\n"..params.message) or "Echec de connexion au salon.",
+					showSpinner=false,
+						showPrompt=false,
+						duration=4,
+						force=true
+					})
 			elseif params and params.event == "leaveLobby" and params.success == false then
 				leaving_lobby = false
 				showing_leave_confirm = false
@@ -2786,11 +3113,19 @@ OnlineRoomInvitationMessageCommand=function(self, params)
 				self:GetChild("JoinedLobbyContent"):visible(true)
 				self:GetChild("LobbyContent"):visible(false)
 				self:GetChild("OnlinePlayersContent"):visible(false)
+				if ITGOnline and ITGOnline.FetchRoom and ITGOnline.LobbyStatePayload then
+					ITGOnline:FetchRoom(nil, function(ok, decoded)
+						if ok and decoded and decoded.room and is_active_lobby_overlay() then
+							MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+						end
+					end)
+				end
 				self:queuecommand("UpdateJoinedLobbyText")
 				self:playcommand("SetStatus", {
 				text=params.message and ("Echec de sortie du salon :\n"..params.message) or "Echec de sortie du salon.",
 				showSpinner=false,
-				showPrompt=false
+				showPrompt=false,
+				force=true
 			})
 		elseif params and params.event == "invitePlayer" then
 				if params.success then
@@ -2804,11 +3139,12 @@ OnlineRoomInvitationMessageCommand=function(self, params)
 					self:GetChild("JoinedLobbyContent"):visible(false)
 					self:queuecommand("UpdateLobbyView")
 					self:playcommand("SetStatus", {
-					text=params.message and ("Echec de l'invitation :\n"..params.message) or "Echec de l'invitation.",
-					showSpinner=false,
-					showPrompt=false
-				})
-			end
+						text=params.message and ("Echec de l'invitation :\n"..params.message) or "Echec de l'invitation.",
+						showSpinner=false,
+						showPrompt=false,
+						force=true
+					})
+				end
 		elseif params and params.event == "privateJoinAnswer" then
 			self:playcommand("SetStatus", {
 				text=params.message or "Demande traitee.",
@@ -2821,15 +3157,24 @@ OnlineRoomInvitationMessageCommand=function(self, params)
 				showSpinner=false,
 				showPrompt=false
 			})
-		elseif params and params.event == "cancelSongSelection" then
-			self:playcommand("SetStatus", {
-				text=params.message or (params.success and "Choix de chanson annule." or "Impossible d'annuler le choix de chanson."),
-				showSpinner=false,
-				showPrompt=params.success ~= true,
-				duration=4
-			})
-		end
-	end,
+			elseif params and params.event == "cancelSongSelection" then
+					self:playcommand("SetStatus", {
+						text=params.message or (params.success and "Choix de chanson annule." or "Impossible d'annuler le choix de chanson."),
+						showSpinner=false,
+						showPrompt=params.success ~= true,
+						duration=4,
+						force=params.success ~= true
+					})
+			elseif params and params.message then
+				self:playcommand("SetStatus", {
+					text=tostring(params.message),
+					showSpinner=false,
+					showPrompt=params.success ~= true,
+					duration=params.success == true and 3 or 5,
+					force=params.success ~= true or params.critical == true
+				})
+			end
+		end,
 
 	Def.ActorFrame{
 		Name="LobbyContent",
