@@ -102,9 +102,11 @@ local function is_active_lobby_overlay()
 		and SL.Global.Online.ScreenOnlineLobbiesActiveInstance == overlay_instance_id
 end
 
-local online_sound_last_played_at = {}
+function play_online_sound_once(screenName, soundName, minInterval)
+	SL.Global.Online.ScreenOnlineLobbiesSoundLastPlayedAt =
+		SL.Global.Online.ScreenOnlineLobbiesSoundLastPlayedAt or {}
 
-local function play_online_sound_once(screenName, soundName, minInterval)
+	local online_sound_last_played_at = SL.Global.Online.ScreenOnlineLobbiesSoundLastPlayedAt
 	local now = GetTimeSinceStart()
 	local key = tostring(screenName) .. ":" .. tostring(soundName)
 	local interval = tonumber(minInterval) or 0.08
