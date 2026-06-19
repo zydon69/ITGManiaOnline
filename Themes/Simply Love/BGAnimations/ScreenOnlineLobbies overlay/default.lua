@@ -435,7 +435,7 @@ end
 			end
 			root:queuecommand("UpdateLobbyView")
 		root:queuecommand("UpdateOnlinePlayers")
-			root:sleep(0.8):queuecommand("RefreshLobbyAfterLeave")
+			request_lobby_refresh("overlay_post_leave", { delay=0.25 }, root)
 		local status = root:GetChild("NetworkStatus")
 		if status then status:visible(false) end
 		root:playcommand("SetStatus", {
@@ -454,13 +454,81 @@ end
 		SL.Global.Online = SL.Global.Online or {}
 		local lastFinishedAt = tonumber(SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt) or -999
 		local elapsed = GetTimeSinceStart() - lastFinishedAt
-		return math.max(0, 2.0 - elapsed)
+		return math.max(0, 0.15 - elapsed)
 	end
 
 	local function recently_left_lobby(seconds)
 		SL.Global.Online = SL.Global.Online or {}
 		local lastFinishedAt = tonumber(SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt) or -999
 		return GetTimeSinceStart() - lastFinishedAt < (tonumber(seconds) or 4.0)
+	end
+
+	local function request_lobby_refresh(reason, options, root)
+		local source = tostring(reason or "unknown")
+		options = type(options) == "table" and options or {}
+		local hasScheduler = ITGOnline
+			and ITGOnline.HasLobbyRefreshScheduler
+			and ITGOnline:HasLobbyRefreshScheduler()
+		if hasScheduler then
+			lobby_flow_trace("request_lobby_refresh delegated=client reason=" .. source
+				.. " immediate=" .. tostring(options.immediate == true)
+				.. " delay=" .. tostring(options.delay or "nil"))
+			return ITGOnline:RequestLobbyRefresh(source, options)
+		end
+
+		if root and options.retryLegacy ~= true then
+			SL.Global.Online = SL.Global.Online or {}
+			local previousPending = SL.Global.Online.ScreenOnlineLobbiesPendingRefresh
+			local previousOptions = type(previousPending) == "table" and type(previousPending.options) == "table"
+				and previousPending.options or {}
+			local previousDelay = tonumber(previousOptions.delay)
+			local nextDelay = tonumber(options.delay)
+			local mergedDelay = nextDelay
+			if previousDelay and nextDelay then
+				mergedDelay = math.min(previousDelay, nextDelay)
+			elseif previousDelay then
+				mergedDelay = previousDelay
+			end
+			local mergedReason = source
+			if type(previousPending) == "table"
+				and tostring(previousPending.reason or "") ~= ""
+				and tostring(previousPending.reason or "") ~= source then
+				mergedReason = tostring(previousPending.reason) .. "+" .. source
+			end
+			SL.Global.Online.ScreenOnlineLobbiesPendingRefresh = {
+				reason = mergedReason,
+				options = {
+					immediate = previousOptions.immediate == true or options.immediate == true,
+					delay = mergedDelay,
+					retryLegacy = true,
+				},
+			}
+			lobby_flow_trace("request_lobby_refresh retry_before_legacy reason=" .. source
+				.. " mergedReason=" .. tostring(mergedReason)
+				.. " mergedImmediate=" .. tostring(previousOptions.immediate == true or options.immediate == true)
+				.. " mergedDelay=" .. tostring(mergedDelay or "nil")
+				.. " hasITGOnline=" .. tostring(ITGOnline ~= nil)
+				.. " hasSchedulerContract=" .. tostring(ITGOnline and ITGOnline.HasLobbyRefreshScheduler ~= nil))
+			if SL.Global.Online.ScreenOnlineLobbiesPendingRefreshRetryScheduled == true then
+				lobby_flow_trace("request_lobby_refresh_retry_already_scheduled reason=" .. source)
+				return true
+			end
+			SL.Global.Online.ScreenOnlineLobbiesPendingRefreshRetryScheduled = true
+			root:sleep(0.10):queuecommand("RetryLobbyRefresh")
+			return true
+		end
+
+		lobby_flow_trace("request_lobby_refresh delegated=legacy_event reason=" .. source
+			.. " hasITGOnline=" .. tostring(ITGOnline ~= nil)
+			.. " hasSchedulerContract=" .. tostring(ITGOnline and ITGOnline.HasLobbyRefreshScheduler ~= nil)
+			.. " immediate=" .. tostring(options.immediate == true)
+			.. " delay=" .. tostring(options.delay or "nil"))
+		MESSAGEMAN:Broadcast("SearchLobby", {
+			reason = source,
+			force = options.immediate == true,
+			minInterval = options.immediate == true and 0 or nil,
+		})
+		return true
 	end
 
 	local function schedule_lobby_search_ui_apply(root, delay, reason)
@@ -1563,7 +1631,7 @@ end
 			showSpinner=false,
 			showPrompt=false
 		})
-		MESSAGEMAN:Broadcast("SearchLobby")
+		request_lobby_refresh("join_request_timeout", { immediate=true }, t)
 		t:queuecommand("Hover")
 	end
 end
@@ -2255,13 +2323,13 @@ local function handle_browse_mode_input(event)
 			play_online_sound_once("Common", "Start")
 			local onlineHandler = GetOnlineHandlerInstance()
 			if onlineHandler and onlineHandler.connected then
-				lobby_flow_trace("input_browse_refresh_search_broadcast")
+				lobby_flow_trace("input_browse_refresh_requested")
 				t:playcommand("SetStatus", {
 					text="Recherche des salons...",
 					showSpinner=true,
 					showPrompt=false
 				})
-				MESSAGEMAN:Broadcast("SearchLobby")
+				request_lobby_refresh("browse_manual_refresh", { immediate=true }, t)
 			else
 				lobby_flow_trace("input_browse_refresh_reconnect")
 				connected = false
@@ -3107,9 +3175,7 @@ local af = Def.ActorFrame{
 				and joined_lobby_code == ""
 				and not (ITGOnline and ITGOnline.currentRoomId)
 				and recently_left_lobby(5.0) then
-				lobby_flow_trace("CheckConnect_deferred reason=recent_leave_no_room")
-				self:sleep(0.25):queuecommand("CheckConnect")
-				return
+				lobby_flow_trace("CheckConnect_recent_leave_no_room_continue")
 			end
 			local onlineHandler = GetOnlineHandlerInstance()
 			if onlineHandler then
@@ -3161,9 +3227,7 @@ local af = Def.ActorFrame{
 				and joined_lobby_code == ""
 				and not (ITGOnline and ITGOnline.currentRoomId)
 				and recently_left_lobby(5.0) then
-				lobby_flow_trace("Display_deferred reason=recent_leave_no_room")
-				self:sleep(0.25):queuecommand("Display")
-				return
+				lobby_flow_trace("Display_recent_leave_no_room_continue")
 			end
 			local onlineHandler = GetOnlineHandlerInstance()
 			if onlineHandler then
@@ -3190,7 +3254,7 @@ local af = Def.ActorFrame{
 								.. " hasRoom=" .. tostring(decoded and decoded.current_room ~= nil)
 								.. " lobbyCount=" .. tostring(decoded and decoded.lobbies and #decoded.lobbies or 0))
 							if not ok or not decoded then
-								MESSAGEMAN:Broadcast("SearchLobby")
+								request_lobby_refresh("display_sync_failed", { immediate=true }, self)
 							end
 						end)
 					elseif ITGOnline and ITGOnline.currentRoomId then
@@ -3207,7 +3271,7 @@ local af = Def.ActorFrame{
 							if ok and decoded and decoded.room then
 								MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
 							else
-								MESSAGEMAN:Broadcast("SearchLobby")
+								request_lobby_refresh("display_fetch_room_failed", { immediate=true }, self)
 							end
 						end)
 					elseif ITGOnline and ITGOnline.FetchCurrentRoom then
@@ -3224,13 +3288,13 @@ local af = Def.ActorFrame{
 							if ok and decoded and decoded.room then
 								MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
 							else
-								MESSAGEMAN:Broadcast("SearchLobby")
+								request_lobby_refresh("display_fetch_current_room_failed", { immediate=true }, self)
 							end
 						end)
 					else
 						lobby_flow_trace("Display_search_lobby_fallback")
 						self:queuecommand("UpdateLobbyView")
-						MESSAGEMAN:Broadcast("SearchLobby")
+						request_lobby_refresh("display_no_room_fallback", { immediate=true }, self)
 					end
 					self:queuecommand("Hover")
 				end
@@ -3256,8 +3320,25 @@ local af = Def.ActorFrame{
 					if not is_active_lobby_overlay() then return end
 					if leaving_lobby then return end
 					if ITGOnline and ITGOnline.currentRoomId then return end
-					lobby_flow_trace("refresh_lobby_after_leave")
-					MESSAGEMAN:Broadcast("SearchLobby", { force=true, minInterval=0 })
+					lobby_flow_trace("refresh_lobby_after_leave delegated=request_helper")
+					request_lobby_refresh("overlay_post_leave_command", { delay=0.20 }, self)
+				end,
+				RetryLobbyRefreshCommand=function(self)
+					SL.Global.Online = SL.Global.Online or {}
+					SL.Global.Online.ScreenOnlineLobbiesPendingRefreshRetryScheduled = false
+					if not is_active_lobby_overlay() then
+						SL.Global.Online.ScreenOnlineLobbiesPendingRefresh = nil
+						lobby_flow_trace("retry_lobby_refresh_dropped reason=inactive_overlay")
+						return
+					end
+					local pending = SL.Global.Online.ScreenOnlineLobbiesPendingRefresh
+					SL.Global.Online.ScreenOnlineLobbiesPendingRefresh = nil
+					if type(pending) ~= "table" then
+						lobby_flow_trace("retry_lobby_refresh_skipped reason=no_pending_refresh")
+						return
+					end
+					lobby_flow_trace("retry_lobby_refresh reason=" .. tostring(pending.reason or "unknown"))
+					request_lobby_refresh(pending.reason, pending.options, self)
 				end,
 				LeaveLobbyWatchdogCommand=function(self)
 					if not is_active_lobby_overlay() then return end
