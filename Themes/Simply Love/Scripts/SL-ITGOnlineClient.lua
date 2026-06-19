@@ -6718,6 +6718,25 @@ end
 				self:BroadcastLeaderboardFromRoom(room or payload.room, "realtime_room_event:" .. tostring(name))
 				if name == "room.member_joined" or name == "room.member_left" then
 					self:QueueLobbyRefresh()
+					local refreshRoomId = roomId or (room and room.id) or (self.currentRoom and self.currentRoom.id) or self.currentRoomId
+					if refreshRoomId and self.FetchRoom then
+						self.lastMemberRoomRefreshAtByRoomId = self.lastMemberRoomRefreshAtByRoomId or {}
+						local refreshKey = tostring(refreshRoomId)
+						local now = GetTimeSinceStart()
+						local lastRefreshAt = tonumber(self.lastMemberRoomRefreshAtByRoomId[refreshKey]) or 0
+						if now - lastRefreshAt >= 0.5 then
+							self.lastMemberRoomRefreshAtByRoomId[refreshKey] = now
+							online_flow_trace("member_room_refresh_fetch name=" .. tostring(name)
+								.. " roomId=" .. tostring(refreshRoomId)
+								.. " eventId=" .. tostring(eventId))
+							self:FetchRoom(refreshRoomId, function(ok, decoded)
+								if ok and decoded and decoded.room then
+									local fetchedRoom = self:ApplyRoomSnapshot(decoded.room, "member_room_refresh:" .. tostring(name))
+									MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(fetchedRoom or decoded.room))
+								end
+							end)
+						end
+					end
 				elseif name == "room.member_pack_sync_updated"
 					or name == "room.member_song_availability_updated"
 					or name == "room.song_selected"
