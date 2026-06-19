@@ -52,6 +52,7 @@ local pending_create_deadline = 0
 local lobby_search_ui_pending = false
 local lobby_ui_update_pending = false
 local lobby_ui_update_reason = ""
+local request_lobby_refresh = nil
 
 local mode = "browse"
 local joined_active_index = 1
@@ -463,7 +464,7 @@ end
 		return GetTimeSinceStart() - lastFinishedAt < (tonumber(seconds) or 4.0)
 	end
 
-	local function request_lobby_refresh(reason, options, root)
+	request_lobby_refresh = function(reason, options, root)
 		local source = tostring(reason or "unknown")
 		options = type(options) == "table" and options or {}
 		local hasScheduler = ITGOnline

@@ -133,6 +133,9 @@ ITGOnline.syncCallbacks = ITGOnline.syncCallbacks or {}
 ITGOnline.syncGeneration = ITGOnline.syncGeneration or 0
 ITGOnline.lobbyRefreshReplayDelaySeconds = ITGOnline.lobbyRefreshReplayDelaySeconds or 0.20
 ITGOnline.lobbyRefreshLastAppliedAt = ITGOnline.lobbyRefreshLastAppliedAt or 0
+ITGOnline.roomUiLobbyRefreshGeneration = ITGOnline.roomUiLobbyRefreshGeneration or 0
+ITGOnline.deferredLobbyRefreshReason = ITGOnline.deferredLobbyRefreshReason or ""
+ITGOnline.deferredLobbyRefreshRoomUiGeneration = ITGOnline.deferredLobbyRefreshRoomUiGeneration or nil
 ITGOnline.onlineGameplayEnteredKey = ITGOnline.onlineGameplayEnteredKey or ""
 ITGOnline.onlineGameplayReturnedKey = ITGOnline.onlineGameplayReturnedKey or ""
 ITGOnline.onlineGameplayReturnedInFlightKey = ITGOnline.onlineGameplayReturnedInFlightKey or ""
@@ -1659,22 +1662,41 @@ end
 		return false
 	end
 
+	function ITGOnline:InvalidateRoomUiLobbyRefresh(reason)
+		self.roomUiLobbyRefreshGeneration = (tonumber(self.roomUiLobbyRefreshGeneration) or 0) + 1
+		self.roomUiLobbyRefreshDeferredScheduled = false
+		if tostring(self.deferredLobbyRefreshReason or ""):sub(1, 16) == "room_ui_refresh:" then
+			self.deferredLobbyRefreshRoomUiGeneration = nil
+		end
+		online_flow_trace("room_ui_lobby_refresh_invalidated reason=" .. tostring(reason or "unknown")
+			.. " generation=" .. tostring(self.roomUiLobbyRefreshGeneration))
+	end
+
 	function ITGOnline:ScheduleDeferredLobbyRefresh(delay, reason)
+		local source = tostring(reason or "unknown")
+		local roomUiGeneration = nil
+		if source:sub(1, 16) == "room_ui_refresh:" then
+			roomUiGeneration = tonumber(self.roomUiLobbyRefreshGeneration) or 0
+		end
+		self.deferredLobbyRefreshReason = source
+		self.deferredLobbyRefreshRoomUiGeneration = roomUiGeneration
 		if self:IsAutomaticLobbyRefreshSuppressed() then
 			online_flow_trace(
 				"lobby_refresh_deferred_post_leave delay=" .. tostring(delay) ..
-				" source=" .. tostring(reason or "unknown"))
+				" source=" .. source)
 			self.lobbyRefreshDeferredScheduled = true
 			MESSAGEMAN:Broadcast("ITGOnlineLobbyRefreshDeferred", {
 				delay = math.max(0.05, tonumber(delay) or 0.05),
-				reason = "post_leave:" .. tostring(reason or "unknown")
+				reason = "post_leave:" .. source,
+				roomUiGeneration = roomUiGeneration,
 			})
 			return
 		end
 		self.lobbyRefreshDeferredScheduled = true
 		MESSAGEMAN:Broadcast("ITGOnlineLobbyRefreshDeferred", {
 			delay = math.max(0.05, tonumber(delay) or 0.05),
-			reason = reason or "unknown"
+			reason = source,
+			roomUiGeneration = roomUiGeneration,
 		})
 	end
 
@@ -2862,6 +2884,10 @@ local roomPhaseRegressionSources = {
 	load_timeout = true,
 	["realtime_room_event:room.load_timeout"] = true,
 	["realtime_room_event_fetch:room.load_timeout"] = true,
+	["realtime_room_event:room.play_state_reset_to_lobby"] = true,
+	["realtime_room_event_fetch:room.play_state_reset_to_lobby"] = true,
+	["realtime_room_event:room.member_left"] = true,
+	["member_room_refresh:room.member_left"] = true,
 	fetch_room = true,
 	fetch_current_room = true,
 	sync_current_room = true,
@@ -7066,28 +7092,34 @@ function ITGOnline:ApplyLobbyPresencePayload(payload)
 	local cachedPayload = self.cachedLobbySearchPayload or { lobbies = {}, onlinePlayers = {} }
 	local onlinePlayers = {}
 	local found = false
+	local status = tostring(user.status or payload.status or "available")
+	local shouldRemove = status == "offline" or status == "disconnected" or status == "left"
 
 	for player in ivalues(cachedPayload.onlinePlayers or {}) do
 		if tostring(player.id or "") == tostring(user.id or "") then
-			onlinePlayers[#onlinePlayers + 1] = {
-				id = user.id,
-				name = user_display_name(user, player.name or ("User " .. tostring(user.id or "?"))),
-				status = user.status or payload.status or player.status or "available",
-				room = user.room,
-				lastSeenAt = user.last_seen_at or player.lastSeenAt,
-				isSelf = false,
-			}
+			if not shouldRemove then
+				onlinePlayers[#onlinePlayers + 1] = {
+					id = user.id,
+					name = user_display_name(user, player.name or ("User " .. tostring(user.id or "?"))),
+					displayName = user.display_name or user.displayName or player.displayName or player.display_name or player.name,
+					status = status ~= "" and status or player.status or "available",
+					room = user.room,
+					lastSeenAt = user.last_seen_at or player.lastSeenAt,
+					isSelf = false,
+				}
+			end
 			found = true
 		else
 			onlinePlayers[#onlinePlayers + 1] = player
 		end
 	end
 
-	if not found and user.id ~= nil then
+	if not found and not shouldRemove and user.id ~= nil then
 		onlinePlayers[#onlinePlayers + 1] = {
 			id = user.id,
 			name = user_display_name(user, "User " .. tostring(user.id or "?")),
-			status = user.status or payload.status or "available",
+			displayName = user.display_name or user.displayName or user.name,
+			status = status ~= "" and status or "available",
 			room = user.room,
 			lastSeenAt = user.last_seen_at,
 			isSelf = false,
@@ -7955,6 +7987,15 @@ end
 					or name == "room.member_song_availability_updated"
 					or name == "room.song_selected"
 					or name == "room.ready_updated" then
+					if payload.room then
+						if self.InvalidateRoomUiLobbyRefresh then
+							self:InvalidateRoomUiLobbyRefresh("snapshot_already_applied:" .. tostring(name))
+						end
+						online_flow_trace("room_ui_lobby_refresh_skipped name=" .. tostring(name)
+							.. " reason=snapshot_already_applied"
+							.. " screen=" .. tostring(self.currentScreenName or "nil")
+							.. " phase=" .. tostring(room and room.phase or self.currentRoom and self.currentRoom.phase or "nil"))
+					else
 					local now = GetTimeSinceStart()
 					local minInterval = name == "room.member_pack_sync_updated" and 1.5 or 0.5
 					local lastRefreshAt = tonumber(self.lastRoomUiLobbyRefreshAt) or 0
@@ -7976,6 +8017,7 @@ end
 						online_flow_trace("room_ui_lobby_refresh_already_deferred name=" .. tostring(name)
 							.. " age=" .. tostring(now - lastRefreshAt)
 							.. " minInterval=" .. tostring(minInterval))
+					end
 					end
 				end
 				if name == "room.join_request.created" then
@@ -8020,13 +8062,21 @@ function ITGOnline:LobbySearchPayload(decoded)
 	local lobbies = {}
 	local cachedPayload = self.cachedLobbySearchPayload or { lobbies = {}, onlinePlayers = {} }
 	local source = decoded and "decoded" or "cache"
+	local decodedOnlineUsers = decoded and (decoded.online_users or decoded.online_players or decoded.onlinePlayers) or nil
+	local decodedOnlineUsersSource = "none"
+	if decoded then
+		if decoded.online_users ~= nil then
+			decodedOnlineUsersSource = "online_users"
+		elseif decoded.online_players ~= nil then
+			decodedOnlineUsersSource = "online_players"
+		elseif decoded.onlinePlayers ~= nil then
+			decodedOnlineUsersSource = "onlinePlayers"
+		end
+	end
 	local rawPublicRoomCount = decoded and decoded.public_rooms and #decoded.public_rooms
 		or decoded and decoded.lobbies and #decoded.lobbies
 		or 0
-	local rawOnlineUserCount = decoded and decoded.online_users and #decoded.online_users
-		or decoded and decoded.online_players and #decoded.online_players
-		or decoded and decoded.onlinePlayers and #decoded.onlinePlayers
-		or 0
+	local rawOnlineUserCount = decodedOnlineUsers and #decodedOnlineUsers or 0
 	local selfOnlineUserFiltered = 0
 
 	if decoded and decoded.public_rooms ~= nil then
@@ -8047,8 +8097,8 @@ function ITGOnline:LobbySearchPayload(decoded)
 	end
 
 	local onlinePlayers = {}
-	if decoded and decoded.online_users ~= nil then
-		for user in ivalues(decoded.online_users or {}) do
+	if decodedOnlineUsers ~= nil then
+		for user in ivalues(decodedOnlineUsers or {}) do
 			local isSelf = self.user and tonumber(user.id) == tonumber(self.user.id)
 			if isSelf then
 				selfOnlineUserFiltered = selfOnlineUserFiltered + 1
@@ -8056,6 +8106,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 				onlinePlayers[#onlinePlayers + 1] = {
 					id = user.id,
 					name = user_display_name(user, "User " .. tostring(user.id or "?")),
+					displayName = user.display_name or user.displayName or user.name,
 					status = user.status or "available",
 					room = user.room,
 					lastSeenAt = user.last_seen_at,
@@ -8076,13 +8127,16 @@ function ITGOnline:LobbySearchPayload(decoded)
 
 	self.cachedLobbySearchPayload = payload
 	online_flow_trace("lobby_search_payload_built source=" .. tostring(source)
+		.. " onlineUsersField=" .. tostring(decodedOnlineUsersSource)
 		.. " rawPublicRooms=" .. tostring(rawPublicRoomCount)
 		.. " rawOnlineUsers=" .. tostring(rawOnlineUserCount)
 		.. " normalizedLobbies=" .. tostring(#lobbies)
+		.. " normalizedOnlinePlayers=" .. tostring(#onlinePlayers)
 		.. " displayOnlinePlayers=" .. tostring(#onlinePlayers)
 		.. " selfOnlineUserFiltered=" .. tostring(selfOnlineUserFiltered)
 		.. " usedCachedLobbies=" .. tostring(not (decoded and decoded.public_rooms ~= nil))
-		.. " usedCachedOnlinePlayers=" .. tostring(not (decoded and decoded.online_users ~= nil))
+		.. " usedCachedOnlinePlayers=" .. tostring(decodedOnlineUsers == nil)
+		.. " cachedOnlinePlayers=" .. tostring(cachedPayload.onlinePlayers and #cachedPayload.onlinePlayers or 0)
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 		.. " screen=" .. tostring(self.currentScreenName or "nil"))
 	return payload

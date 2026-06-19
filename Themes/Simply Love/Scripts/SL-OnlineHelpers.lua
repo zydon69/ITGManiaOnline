@@ -1626,6 +1626,12 @@ CreateOnlineHandler = function()
 						self.inLobby = ITGOnline.currentRoomId ~= nil
 						self.errorMsg = nil
 						self:GetChild("Display"):visible(false)
+						online_trace("FLOW connect_online_initial_lobby_snapshot_request source=reused_socket")
+						MESSAGEMAN:Broadcast("SearchLobby", {
+							force=true,
+							minInterval=0,
+							reason="connect_online_reused_socket_initial_snapshot",
+						})
 						return
 					end
 	        if self.socket == nil or self.errorMsg ~= nil then
@@ -1645,6 +1651,12 @@ CreateOnlineHandler = function()
 								self.inLobby = ITGOnline.currentRoomId ~= nil
 								self.errorMsg = nil
 									self:GetChild("Display"):visible(false)
+									online_trace("FLOW connect_online_initial_lobby_snapshot_request source=open")
+									MESSAGEMAN:Broadcast("SearchLobby", {
+										force=true,
+										minInterval=0,
+										reason="connect_online_open_initial_snapshot",
+									})
 							end,
 						error=function(message)
 							if onlineHandlerShuttingDown then return end
@@ -1702,9 +1714,14 @@ CreateOnlineHandler = function()
 								return
 							end
 							local delay = tonumber(params and params.delay) or 0.25
+							if ITGOnline then
+								ITGOnline.deferredLobbyRefreshReason = reason
+								ITGOnline.deferredLobbyRefreshRoomUiGeneration = tonumber(params and params.roomUiGeneration)
+							end
 							online_trace(
 								"FLOW lobby_refresh_deferred delay=" .. tostring(delay) ..
-								" reason=" .. tostring(reason))
+								" reason=" .. tostring(reason)
+								.. " roomUiGeneration=" .. tostring(params and params.roomUiGeneration or "nil"))
 							schedule_named_timer(self, "DeferredLobbyRefreshTimer", math.max(0.05, delay), "Fire")
 						end,
 						DeferredLobbyRefreshCommand=function(self)
@@ -1724,10 +1741,29 @@ CreateOnlineHandler = function()
 							return
 							end
 							if ITGOnline and ITGOnline.QueueLobbyRefresh then
+								local deferredReason = tostring(ITGOnline.deferredLobbyRefreshReason or "")
+								local deferredRoomUiGeneration = tonumber(ITGOnline.deferredLobbyRefreshRoomUiGeneration)
+								local currentRoomUiGeneration = tonumber(ITGOnline.roomUiLobbyRefreshGeneration) or 0
+								if deferredReason:sub(1, 16) == "room_ui_refresh:"
+									and deferredRoomUiGeneration ~= nil
+									and deferredRoomUiGeneration ~= currentRoomUiGeneration then
+									online_trace("FLOW lobby_refresh_deferred_ignored reason=stale_room_ui_refresh"
+										.. " source=" .. tostring(deferredReason)
+										.. " scheduledGeneration=" .. tostring(deferredRoomUiGeneration)
+										.. " currentGeneration=" .. tostring(currentRoomUiGeneration))
+									ITGOnline.lobbyRefreshQueued = false
+									ITGOnline.lobbyRefreshDeferredScheduled = false
+									ITGOnline.roomUiLobbyRefreshDeferredScheduled = false
+									ITGOnline.deferredLobbyRefreshReason = ""
+									ITGOnline.deferredLobbyRefreshRoomUiGeneration = nil
+									return
+								end
 								online_trace("FLOW lobby_refresh_deferred_fire")
 								ITGOnline.lobbyRefreshQueued = false
 								ITGOnline.lobbyRefreshDeferredScheduled = false
 								ITGOnline.roomUiLobbyRefreshDeferredScheduled = false
+								ITGOnline.deferredLobbyRefreshReason = ""
+								ITGOnline.deferredLobbyRefreshRoomUiGeneration = nil
 								ITGOnline:QueueLobbyRefresh()
 							end
 						end,
