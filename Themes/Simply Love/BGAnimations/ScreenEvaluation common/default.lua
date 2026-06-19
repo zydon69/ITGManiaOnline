@@ -269,6 +269,16 @@ if OnlineEvaluationActive() then
 	end,
 	RefreshCommand=function(self)
 		local waiting = ITGOnline and ITGOnline.ShouldWaitForOnlineResults and ITGOnline:ShouldWaitForOnlineResults()
+		if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
+			local summary = ITGOnline.PlayStateSummary and ITGOnline:PlayStateSummary() or nil
+			Trace("ITG Online: FLOW evaluation_results_wait_refresh"
+				.. " waiting=" .. tostring(waiting == true)
+				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+				.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+				.. " submitted=" .. tostring(summary and summary.submitted or "nil")
+				.. " expected=" .. tostring(summary and summary.expected or "nil")
+				.. " finalResults=" .. tostring(summary and summary.finalResults or "nil"))
+		end
 		self:visible(waiting == true)
 		DisableOnlineEvaluationTimer("results_wait_refresh")
 
@@ -287,12 +297,36 @@ if OnlineEvaluationActive() then
 		if title then title:playcommand("Refresh") end
 
 		if waiting and ITGOnline and ITGOnline.FetchRoom and ITGOnline.currentRoomId then
+			if ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true then
+				Trace("ITG Online: FLOW evaluation_results_wait_fetch_begin room=" .. tostring(ITGOnline.currentRoomId))
+			end
 			ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok)
+				if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
+					Trace("ITG Online: FLOW evaluation_results_wait_fetch_result"
+						.. " ok=" .. tostring(ok == true)
+						.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+						.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+						.. " hasPlayState=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.play_state ~= nil))
+				end
 				if ok and ITGOnline and ITGOnline.currentRoom and ITGOnline.LobbyStatePayload then
+					if ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true then
+						local playState = ITGOnline.currentRoom.play_state or {}
+						Trace("ITG Online: FLOW evaluation_results_wait_broadcast"
+							.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+							.. " phase=" .. tostring(ITGOnline.currentRoom.phase or "nil")
+							.. " submitted=" .. tostring(playState.submitted_scores and #playState.submitted_scores or "nil")
+							.. " finalResults=" .. tostring(playState.final_results and #playState.final_results or "nil"))
+					end
 					MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(ITGOnline.currentRoom))
 					MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", ITGOnline.currentRoom.play_state or {})
 				end
 			end)
+		elseif waiting then
+			if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
+				Trace("ITG Online: FLOW evaluation_results_wait_fetch_skipped"
+					.. " hasFetchRoom=" .. tostring(ITGOnline.FetchRoom ~= nil)
+					.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
+			end
 		end
 
 		self:sleep(waiting and 0.75 or 0.25):queuecommand("Refresh")

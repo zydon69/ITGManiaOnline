@@ -19,16 +19,34 @@ local function online_display_name(user, fallback)
 	return tostring(user.display_name or user.displayName or user.name or fallback or "Player")
 end
 
+local function final_ranking_trace(message)
+	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
+		return
+	end
+	local line = "ITG Online: FLOW final_ranking " .. tostring(message or "")
+	if Trace then Trace(line) elseif Warn then Warn(line) end
+end
+
 local function final_results()
 	if not (ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.play_state) then
+		final_ranking_trace("final_results_empty reason=missing_context"
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil)
+			.. " hasPlayState=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.play_state ~= nil))
 		return {}
 	end
 
 	local results = ITGOnline.currentRoom.play_state.final_results
 	if type(results) ~= "table" then
+		final_ranking_trace("final_results_empty reason=invalid_results"
+			.. " type=" .. tostring(type(results))
+			.. " phase=" .. tostring(ITGOnline.currentRoom.phase or "nil"))
 		return {}
 	end
 
+	final_ranking_trace("final_results_begin raw=" .. tostring(#results)
+		.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(ITGOnline.currentRoom.phase or "nil"))
 	local normalized = {}
 	for index, result in ipairs(results) do
 		if type(result) == "table" then
@@ -48,6 +66,7 @@ local function final_results()
 		return (tonumber(a.rank) or 0) < (tonumber(b.rank) or 0)
 	end)
 
+	final_ranking_trace("final_results_end rows=" .. tostring(#normalized))
 	return normalized
 end
 
@@ -73,9 +92,11 @@ local t = Def.ActorFrame{
 		self:queuecommand("Refresh")
 	end,
 	OnlineLobbyStateMessageCommand=function(self)
+		final_ranking_trace("message_online_lobby_state")
 		self:queuecommand("Refresh")
 	end,
 	ITGOnlinePlayStateUpdatedMessageCommand=function(self)
+		final_ranking_trace("message_play_state_updated")
 		self:queuecommand("Refresh")
 	end,
 	RefreshCommand=function(self)
@@ -84,6 +105,11 @@ local t = Def.ActorFrame{
 		local show = #rows > 0
 		self:visible(show)
 		self.polling_active = show
+		final_ranking_trace("refresh show=" .. tostring(show == true)
+			.. " rows=" .. tostring(#rows)
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+			.. " polling=" .. tostring(self.polling_active == true))
 
 		if show then
 			self:GetChild("Title"):settext(localized("OnlineFinalRanking", "Online ranking"))

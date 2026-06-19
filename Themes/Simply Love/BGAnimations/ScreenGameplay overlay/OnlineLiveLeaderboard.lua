@@ -35,6 +35,14 @@ local function local_user_id()
 	return ""
 end
 
+local function leaderboard_trace(message)
+	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
+		return
+	end
+	local line = "ITG Online: FLOW live_leaderboard " .. tostring(message or "")
+	if Trace then Trace(line) elseif Warn then Warn(line) end
+end
+
 local function selected_max_score()
 	if ITGOnline and ITGOnline.currentSongPayload and tonumber(ITGOnline.currentSongPayload.max_score) then
 		return tonumber(ITGOnline.currentSongPayload.max_score)
@@ -73,6 +81,10 @@ end
 local function rows_from_leaderboard(leaderboard)
 	local rows = {}
 	local max_score = selected_max_score()
+	leaderboard_trace("rows_from_leaderboard begin raw=" .. tostring(leaderboard and #leaderboard or 0)
+		.. " maxScore=" .. tostring(max_score)
+		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 	for score in ivalues(leaderboard or {}) do
 		local user = score.user or {}
 		local accuracy_percent = tonumber(score.accuracy)
@@ -101,6 +113,7 @@ local function rows_from_leaderboard(leaderboard)
 			play_state = play_state,
 		}
 	end
+	leaderboard_trace("rows_from_leaderboard end rows=" .. tostring(#rows))
 	return rows
 end
 
@@ -108,6 +121,11 @@ local function update_rows(frame, rows)
 	local phase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil
 	local show = ITGOnline and ITGOnline.currentRoom and (phase == "playing" or phase == "results") and #rows > 0
 	frame:visible(show)
+	leaderboard_trace("update_rows show=" .. tostring(show == true)
+		.. " rows=" .. tostring(#rows)
+		.. " phase=" .. tostring(phase or "nil")
+		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil))
 	if not show then return end
 
 	local self_id = local_user_id()
@@ -192,6 +210,9 @@ local af = Def.ActorFrame{
 		end
 	end,
 	ITGOnlineLeaderboardUpdatedMessageCommand=function(self, params)
+		leaderboard_trace("message_leaderboard_updated version=" .. tostring(params and params.version_ms or "nil")
+			.. " rows=" .. tostring(params and params.leaderboard and #params.leaderboard or 0)
+			.. " source=" .. tostring(params and params.source or "nil"))
 		update_rows(self, rows_from_leaderboard(params and params.leaderboard or {}))
 	end,
 	OnlineLobbyStateMessageCommand=function(self, data)

@@ -137,6 +137,9 @@ end
 
 local function maybe_set_lobby_ready(reason, callback)
 	if not (ITGOnline and ITGOnline.SetReady) then
+		online_flow_trace("lobby_ready_skipped reason=" .. tostring(reason or "unknown")
+			.. " cause=no_set_ready_api"
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 		if callback then callback(false) end
 		return
 	end
@@ -144,6 +147,11 @@ local function maybe_set_lobby_ready(reason, callback)
 	local room = ITGOnline.currentRoom
 	local phase = tostring(room and room.phase or "")
 	if phase ~= "lobby" and phase ~= "lobby_ready" then
+		online_flow_trace("lobby_ready_skipped reason=" .. tostring(reason or "unknown")
+			.. " cause=invalid_phase"
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(phase)
+			.. " members=" .. tostring(room and room.members and #room.members or 0))
 		ready_debug("skip lobby_ready reason=" .. tostring(reason or "unknown")
 			.. " phase=" .. tostring(phase))
 		if callback then callback(true, { room = room, skipped = true }) end
@@ -151,12 +159,19 @@ local function maybe_set_lobby_ready(reason, callback)
 	end
 
 	if ITGOnline.IsCurrentUserReadyInRoom and ITGOnline:IsCurrentUserReadyInRoom(room) then
+		online_flow_trace("lobby_ready_skipped reason=" .. tostring(reason or "unknown")
+			.. " cause=already_ready"
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(phase))
 		ready_debug("skip lobby_ready reason=" .. tostring(reason or "unknown")
 			.. " already_ready=1")
 		if callback then callback(true, { room = room, skipped = true }) end
 		return
 	end
 
+	online_flow_trace("lobby_ready_request reason=" .. tostring(reason or "unknown")
+		.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(phase))
 	ITGOnline:SetReady("lobby_ready", true, callback)
 end
 
@@ -166,33 +181,62 @@ local function maybe_preview_current_online_song(force)
 		and ITGOnline.currentRoomId
 		and ITGOnline.currentRoom
 		and ITGOnline.user) then
+		online_flow_trace("song_preview_skipped cause=missing_context"
+			.. " hasClient=" .. tostring(ITGOnline ~= nil)
+			.. " hasPreviewApi=" .. tostring(ITGOnline and ITGOnline.PreviewSong ~= nil)
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil)
+			.. " hasUser=" .. tostring(ITGOnline and ITGOnline.user ~= nil))
 		return
 	end
 
 	local phase = ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) or tostring(ITGOnline.currentRoom.phase or "")
 	if phase ~= "lobby" then
+		online_flow_trace("song_preview_skipped cause=invalid_phase"
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(phase))
 		return
 	end
 
 	if ITGOnline.currentRoom.selected_song ~= nil then
+		online_flow_trace("song_preview_skipped cause=selected_song_exists"
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
 		return
 	end
 
 	local manager = ITGOnline.currentRoom.manager
 	if not manager or tonumber(manager.id) ~= tonumber(ITGOnline.user.id) then
+		online_flow_trace("song_preview_skipped cause=not_manager"
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " manager=" .. tostring(manager and manager.id or "nil")
+			.. " user=" .. tostring(ITGOnline.user and ITGOnline.user.id or "nil"))
 		return
 	end
 
 	local song = GAMESTATE:GetCurrentSong()
-	if not song then return end
+	if not song then
+		online_flow_trace("song_preview_skipped cause=no_current_song"
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
+		return
+	end
 
 	local now = GetTimeSinceStart()
 	local key = song:GetSongDir() or song:GetDisplayFullTitle() or ""
 	if not force and key == lastSongPreviewKey and now - lastSongPreviewSentAt < 1.5 then
+		online_flow_trace("song_preview_skipped cause=debounced"
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " key=" .. tostring(key)
+			.. " age=" .. tostring(now - lastSongPreviewSentAt))
 		return
 	end
 
+	online_flow_trace("song_preview_request room=" .. tostring(ITGOnline.currentRoomId or "nil")
+		.. " key=" .. tostring(key)
+		.. " force=" .. tostring(force == true))
 	ITGOnline:PreviewSong(function(ok)
+		online_flow_trace("song_preview_response room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " key=" .. tostring(key)
+			.. " ok=" .. tostring(ok == true))
 		if ok then
 			lastSongPreviewKey = key
 			lastSongPreviewSentAt = now
@@ -669,6 +713,11 @@ local SelectOnlineSongAsManager = function(actor)
 
 	local selectionKey = CurrentOnlineSelectionKey()
 	local now = GetTimeSinceStart()
+	online_flow_trace("song_selected_attempt room=" .. tostring(ITGOnline.currentRoomId or "nil")
+		.. " key=" .. tostring(selectionKey)
+		.. " pendingKey=" .. tostring(pendingOnlineSongSelectionKey or "")
+		.. " pendingAge=" .. tostring(now - (tonumber(pendingOnlineSongSelectionAt) or 0))
+		.. " hasActor=" .. tostring(actor ~= nil))
 	if pendingOnlineSongSelectionKey == selectionKey and (now - pendingOnlineSongSelectionAt) < 12 then
 		online_flow_trace("song_selected_ignored reason=selection_inflight key=" .. tostring(selectionKey))
 		return
@@ -692,6 +741,7 @@ local SelectOnlineSongAsManager = function(actor)
 
 		if not (ITGOnline and ITGOnline.currentRoomId) then
 			clearPendingSelection()
+			online_flow_trace("song_selected_ignored reason=no_room_after_room_sync key=" .. tostring(selectionKey))
 			return
 		end
 
@@ -747,7 +797,14 @@ local SelectOnlineSongAsManager = function(actor)
 	end
 
 	if ITGOnline.EnsureCurrentRoom then
+		online_flow_trace("song_selected_sync_room_begin room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " key=" .. tostring(selectionKey))
 		ITGOnline:EnsureCurrentRoom(function(ok, room, response)
+			online_flow_trace("song_selected_sync_room_response room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " key=" .. tostring(selectionKey)
+				.. " ok=" .. tostring(ok == true)
+				.. " status=" .. tostring(response and response.statusCode or "nil")
+				.. " phase=" .. tostring(room and room.phase or "nil"))
 			if ok and room then
 				finishSelection(room)
 				return
@@ -1040,6 +1097,8 @@ end
 DisplayLobbyState = function(data, actor)
 	if not actor or not actor.GetChild then
 		if online_trace then online_trace("FLOW display_lobby skipped reason=no_actor") end
+		online_flow_trace("display_lobby_state_skipped reason=no_actor"
+			.. " hasData=" .. tostring(data ~= nil))
 		return
 	end
 	-- Keep in mind that SCREENMAN:GetTopScreen() might return nil while screens transition.
@@ -1058,6 +1117,17 @@ DisplayLobbyState = function(data, actor)
 	}, "|")
 	if flowLobbyKey ~= lastFlowLobbyKey then
 		lastFlowLobbyKey = flowLobbyKey
+		online_flow_trace("display_lobby_state_begin"
+			.. " roomId=" .. tostring(data and data.roomId or "nil")
+			.. " code=" .. tostring(data and data.code or "nil")
+			.. " phase=" .. tostring(data and data.phase or "nil")
+			.. " screen=" .. tostring(screenName)
+			.. " players=" .. tostring(data and data.players and #data.players or 0)
+			.. " sessions=" .. tostring(data and data.playState and #(data.playState.sessions or {}) or 0)
+			.. " finalResults=" .. tostring(data and data.finalResults and #data.finalResults or 0)
+			.. " hasSongInfo=" .. tostring(data and data.songInfo ~= nil)
+			.. " isManager=" .. tostring(data and data.isManager == true)
+			.. " actorInLobby=" .. tostring(actor.inLobby == true))
 		if online_trace then
 			online_trace("FLOW display_lobby room=" .. tostring(data and data.roomId or "")
 				.. " phase=" .. tostring(data and data.phase or "")
@@ -1070,6 +1140,14 @@ DisplayLobbyState = function(data, actor)
 	end
 
 	local updatedData = OrderPlayers(data, screenName)
+	online_flow_trace("display_lobby_state_ordered"
+		.. " roomId=" .. tostring(data and data.roomId or "nil")
+		.. " phase=" .. tostring(data and data.phase or "nil")
+		.. " screen=" .. tostring(screenName)
+		.. " inputPlayers=" .. tostring(data and data.players and #data.players or 0)
+		.. " orderedPlayers=" .. tostring(updatedData and updatedData.players and #updatedData.players or 0)
+		.. " isManager=" .. tostring(data and data.isManager == true)
+		.. " song=" .. tostring(data and data.songInfo and (data.songInfo.title or data.songInfo.songHash) or "none"))
 	if online_trace then
 		online_trace("FLOW display_lobby_ordered room=" .. tostring(data and data.roomId or "")
 			.. " phase=" .. tostring(data and data.phase or "")
@@ -1735,7 +1813,14 @@ CreateOnlineHandler = function()
 							schedule_named_timer(self, "DeferredLobbyRefreshTimer", math.max(0.05, delay), "Fire")
 						end,
 						DeferredLobbyRefreshCommand=function(self)
-							if onlineHandlerShuttingDown or not self.connected then return end
+							if onlineHandlerShuttingDown or not self.connected then
+								online_flow_trace("lobby_refresh_deferred_ignored reason=handler_unavailable"
+									.. " shuttingDown=" .. tostring(onlineHandlerShuttingDown == true)
+									.. " connected=" .. tostring(self.connected == true)
+									.. " socket=" .. tostring(self.socket ~= nil)
+									.. " deferredReason=" .. tostring(ITGOnline and ITGOnline.deferredLobbyRefreshReason or "nil"))
+								return
+							end
 							if ITGOnline
 								and ITGOnline.IsAutomaticLobbyRefreshSuppressed
 								and ITGOnline:IsAutomaticLobbyRefreshSuppressed() then
@@ -1768,7 +1853,14 @@ CreateOnlineHandler = function()
 									ITGOnline.deferredLobbyRefreshRoomUiGeneration = nil
 									return
 								end
-								online_trace("FLOW lobby_refresh_deferred_fire")
+								online_flow_trace("lobby_refresh_deferred_fire"
+									.. " reason=" .. tostring(ITGOnline.deferredLobbyRefreshReason or "nil")
+									.. " roomUiGeneration=" .. tostring(ITGOnline.deferredLobbyRefreshRoomUiGeneration or "nil")
+									.. " currentRoomUiGeneration=" .. tostring(ITGOnline.roomUiLobbyRefreshGeneration or "nil")
+									.. " currentRoomId=" .. tostring(ITGOnline.currentRoomId or "nil")
+									.. " inFlight=" .. tostring(ITGOnline.lobbyRefreshInFlight == true)
+									.. " queued=" .. tostring(ITGOnline.lobbyRefreshQueued == true)
+									.. " screen=" .. tostring(ITGOnline.currentScreenName or "nil"))
 								ITGOnline.lobbyRefreshQueued = false
 								ITGOnline.lobbyRefreshDeferredScheduled = false
 								ITGOnline.roomUiLobbyRefreshDeferredScheduled = false
@@ -1859,12 +1951,35 @@ CreateOnlineHandler = function()
 							schedule_named_timer(self, "OnlinePlayingCountdownTimer", 0.25, "Fire")
 						end,
 					OnlineScoreSnapshotMessageCommand=function(self, params)
-						if onlineHandlerShuttingDown then return end
-						if not (ITGOnline and ITGOnline.RememberLiveScoreSnapshot and ITGOnline.currentRoomId and ITGOnline.currentRoom) then return end
+						if onlineHandlerShuttingDown then
+							online_flow_trace("score_snapshot_ignored reason=handler_shutting_down")
+							return
+						end
+						if not (ITGOnline and ITGOnline.RememberLiveScoreSnapshot and ITGOnline.currentRoomId and ITGOnline.currentRoom) then
+							online_flow_trace("score_snapshot_ignored reason=missing_context"
+								.. " hasClient=" .. tostring(ITGOnline ~= nil)
+								.. " hasRememberApi=" .. tostring(ITGOnline and ITGOnline.RememberLiveScoreSnapshot ~= nil)
+								.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+								.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil))
+							return
+						end
 						local enabled = GAMESTATE:GetEnabledPlayers()
 						local primary = enabled and enabled[1] or nil
-						if not (params and primary and params.Player == primary) then return end
+						if not (params and primary and params.Player == primary) then
+							online_flow_trace("score_snapshot_ignored reason=non_primary_or_missing_params"
+								.. " hasParams=" .. tostring(params ~= nil)
+								.. " player=" .. tostring(params and params.Player or "nil")
+								.. " primary=" .. tostring(primary or "nil"))
+							return
+						end
 
+						online_flow_trace("score_snapshot_remember room=" .. tostring(ITGOnline.currentRoomId or "nil")
+							.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+							.. " player=" .. tostring(params.Player)
+							.. " score=" .. tostring(params.ScorePercent or "nil")
+							.. " ex=" .. tostring(params.ExScorePercent or "nil")
+							.. " displayed=" .. tostring(params.DisplayedPercent or "nil")
+							.. " combo=" .. tostring(params.Combo or "nil"))
 						ITGOnline:RememberLiveScoreSnapshot({
 							scorePercent = params.ScorePercent,
 							exScorePercent = params.ExScorePercent,
@@ -2094,10 +2209,14 @@ CreateOnlineHandler = function()
 	          ITGOnline:Heartbeat("in_room", true)
 	        end
 	      end,
-		      OnlineConfigReadyMessageCommand=function(self)
-						if not (self.connected and self.socket ~= nil and ITGOnline.currentRoomId) then
-							return
-						end
+			      OnlineConfigReadyMessageCommand=function(self)
+							if not (self.connected and self.socket ~= nil and ITGOnline.currentRoomId) then
+								online_flow_trace("options_confirmed ignored reason=missing_context"
+									.. " connected=" .. tostring(self.connected == true)
+									.. " hasSocket=" .. tostring(self.socket ~= nil)
+									.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+								return
+							end
 
 						self.inLobby = true
 						local configReadyKey = ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
@@ -2116,43 +2235,70 @@ CreateOnlineHandler = function()
 						end
 						self:playcommand("RetryOnlineConfigReady")
 		      end,
-		      OnlineConfigReadyConfirmedMessageCommand=function(self, params)
-						if not pendingConfigReady then
-							return
-						end
-
-						local expectedConfigReadyKey = ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
-							or (tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or ""))
-						local confirmedKey = params and params.key or expectedConfigReadyKey
-						if pendingConfigReady == confirmedKey or pendingConfigReady == expectedConfigReadyKey then
-							Trace("[ITGOnline] options_confirmed realtime config_ready key=" .. tostring(confirmedKey))
-							pendingConfigReady = nil
-							if ITGOnline.ClearOptimisticConfigReady then
-								ITGOnline:ClearOptimisticConfigReady("config_ready_confirmed")
+			      OnlineConfigReadyConfirmedMessageCommand=function(self, params)
+							if not pendingConfigReady then
+								online_flow_trace("options_confirmed realtime_ignored reason=no_pending"
+									.. " key=" .. tostring(params and params.key or "nil"))
+								return
 							end
-						end
-					end,
-		      RetryOnlineConfigReadyCommand=function(self)
-						if not pendingConfigReady or not ITGOnline.currentRoomId then
-							return
-						end
+
 							local expectedConfigReadyKey = ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
 								or (tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or ""))
-						if pendingConfigReady ~= expectedConfigReadyKey then
-							return
-						end
+							local confirmedKey = params and params.key or expectedConfigReadyKey
+							online_flow_trace("options_confirmed realtime_received pending=" .. tostring(pendingConfigReady)
+								.. " confirmed=" .. tostring(confirmedKey)
+								.. " expected=" .. tostring(expectedConfigReadyKey))
+							if pendingConfigReady == confirmedKey or pendingConfigReady == expectedConfigReadyKey then
+								Trace("[ITGOnline] options_confirmed realtime config_ready key=" .. tostring(confirmedKey))
+								pendingConfigReady = nil
+								if ITGOnline.ClearOptimisticConfigReady then
+									ITGOnline:ClearOptimisticConfigReady("config_ready_confirmed")
+								end
+							else
+								online_flow_trace("options_confirmed realtime_ignored reason=key_mismatch pending="
+									.. tostring(pendingConfigReady)
+									.. " confirmed=" .. tostring(confirmedKey)
+									.. " expected=" .. tostring(expectedConfigReadyKey))
+							end
+						end,
+			      RetryOnlineConfigReadyCommand=function(self)
+							if not pendingConfigReady or not ITGOnline.currentRoomId then
+								online_flow_trace("options_confirmed retry_ignored reason=missing_pending_or_room"
+									.. " pending=" .. tostring(pendingConfigReady or "nil")
+									.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+								return
+							end
+								local expectedConfigReadyKey = ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
+									or (tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or ""))
+							if pendingConfigReady ~= expectedConfigReadyKey then
+								online_flow_trace("options_confirmed retry_ignored reason=key_mismatch pending="
+									.. tostring(pendingConfigReady)
+									.. " expected=" .. tostring(expectedConfigReadyKey)
+									.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
+								return
+							end
 
-						if ITGOnline.MarkConfigReady then
-							ITGOnline:MarkConfigReady(function(ok, decoded, response)
-								if ok then
-									if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
-									return
-									end
-
-									if response and response.retryAfter then
-										schedule_named_timer(self, "ConfigReadyRetryTimer", response.retryAfter, "Fire")
+							if ITGOnline.MarkConfigReady then
+								online_flow_trace("options_confirmed mark_config_ready_begin key=" .. tostring(expectedConfigReadyKey)
+									.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
+								ITGOnline:MarkConfigReady(function(ok, decoded, response)
+									online_flow_trace("options_confirmed mark_config_ready_response key=" .. tostring(expectedConfigReadyKey)
+										.. " ok=" .. tostring(ok == true)
+										.. " status=" .. tostring(response and response.statusCode or "nil")
+										.. " retryAfter=" .. tostring(response and response.retryAfter or "nil")
+										.. " error=" .. tostring(decoded and decoded.error_code or response and response.error or "nil"))
+									if ok then
+										if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
 										return
-									end
+										end
+
+										if response and response.retryAfter then
+											online_flow_trace("options_confirmed mark_config_ready_retry_scheduled key="
+												.. tostring(expectedConfigReadyKey)
+												.. " retryAfter=" .. tostring(response.retryAfter))
+											schedule_named_timer(self, "ConfigReadyRetryTimer", response.retryAfter, "Fire")
+											return
+										end
 
 								if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
 								if ITGOnline.ClearOptimisticConfigReady then
@@ -2167,21 +2313,35 @@ CreateOnlineHandler = function()
 						return
 					end
 
-						ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok, decoded)
-								if not ok or not decoded or not decoded.room then
-									schedule_named_timer(self, "ConfigReadyRetryTimer", 1, "Fire")
-									return
-							end
+							ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok, decoded)
+									if not ok or not decoded or not decoded.room then
+										online_flow_trace("options_confirmed legacy_fetch_room_retry key=" .. tostring(expectedConfigReadyKey)
+											.. " ok=" .. tostring(ok == true)
+											.. " hasDecoded=" .. tostring(decoded ~= nil)
+											.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil))
+										schedule_named_timer(self, "ConfigReadyRetryTimer", 1, "Fire")
+										return
+								end
 
-						local phase = decoded.room.phase
-							if not decoded.room.selected_song then
-								ITGOnline:SelectSong(function(selectOk, selectDecoded, selectResponse)
-										if selectOk then
-											schedule_named_timer(self, "ConfigReadyRetryTimer", 0.25, "Fire")
-										else
-										if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
-										if ITGOnline.ClearOptimisticConfigReady then
-											ITGOnline:ClearOptimisticConfigReady("config_ready_select_song_failed")
+							local phase = decoded.room.phase
+							online_flow_trace("options_confirmed legacy_fetch_room_ok key=" .. tostring(expectedConfigReadyKey)
+								.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+								.. " phase=" .. tostring(phase)
+								.. " hasSelectedSong=" .. tostring(decoded.room.selected_song ~= nil))
+								if not decoded.room.selected_song then
+									online_flow_trace("options_confirmed legacy_select_song_begin key=" .. tostring(expectedConfigReadyKey)
+										.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
+									ITGOnline:SelectSong(function(selectOk, selectDecoded, selectResponse)
+											if selectOk then
+												online_flow_trace("options_confirmed legacy_select_song_ok key=" .. tostring(expectedConfigReadyKey))
+												schedule_named_timer(self, "ConfigReadyRetryTimer", 0.25, "Fire")
+											else
+											online_flow_trace("options_confirmed legacy_select_song_failed key=" .. tostring(expectedConfigReadyKey)
+												.. " status=" .. tostring(selectResponse and selectResponse.statusCode or "nil")
+												.. " error=" .. tostring(selectDecoded and selectDecoded.error_code or selectResponse and selectResponse.error or "nil"))
+											if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+											if ITGOnline.ClearOptimisticConfigReady then
+												ITGOnline:ClearOptimisticConfigReady("config_ready_select_song_failed")
 										end
 									MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 										event="selectSong",
@@ -2193,27 +2353,36 @@ CreateOnlineHandler = function()
 							return
 						end
 
-							if phase == "starting" or phase == "playing" or phase == "results" then
-								if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
-								if ITGOnline.ClearOptimisticConfigReady then
-									ITGOnline:ClearOptimisticConfigReady("config_ready_phase_" .. tostring(phase))
-								end
-							elseif phase == "config" then
-								ITGOnline:SetReady("config_ready", true, function()
+								if phase == "starting" or phase == "playing" or phase == "results" then
+									online_flow_trace("options_confirmed legacy_stop reason=phase_" .. tostring(phase)
+										.. " key=" .. tostring(expectedConfigReadyKey))
 									if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
-								ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(fetchOk, fetchDecoded)
+									if ITGOnline.ClearOptimisticConfigReady then
+										ITGOnline:ClearOptimisticConfigReady("config_ready_phase_" .. tostring(phase))
+									end
+								elseif phase == "config" then
+									online_flow_trace("options_confirmed legacy_set_config_ready key=" .. tostring(expectedConfigReadyKey)
+										.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
+									ITGOnline:SetReady("config_ready", true, function()
+										if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+									ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(fetchOk, fetchDecoded)
 									if fetchOk and fetchDecoded and fetchDecoded.room then
 									MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(fetchDecoded.room))
 									end
 								end)
 							end)
-							elseif phase == "lobby" or phase == "lobby_ready" then
-								ITGOnline:SetReady("lobby_ready", true, function()
-									schedule_named_timer(self, "ConfigReadyRetryTimer", 0.5, "Fire")
-								end)
-						else
-							if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
-						end
+								elseif phase == "lobby" or phase == "lobby_ready" then
+									online_flow_trace("options_confirmed legacy_set_lobby_ready_before_retry key=" .. tostring(expectedConfigReadyKey)
+										.. " phase=" .. tostring(phase))
+									ITGOnline:SetReady("lobby_ready", true, function()
+										schedule_named_timer(self, "ConfigReadyRetryTimer", 0.5, "Fire")
+									end)
+							else
+								online_flow_trace("options_confirmed legacy_stop reason=unexpected_phase key="
+									.. tostring(expectedConfigReadyKey)
+									.. " phase=" .. tostring(phase))
+								if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+							end
 					end)
 	      end,
 					OnlineSessionExpiredMessageCommand=function(self)
@@ -2236,6 +2405,14 @@ CreateOnlineHandler = function()
 								" phase=" .. tostring(params and (params.phase or params.status or params.readyPhase)))
 						end
 						if self.connected and params and params.roomId then
+							online_flow_trace("online_lobby_state_apply_begin"
+								.. " roomId=" .. tostring(params.roomId or "nil")
+								.. " code=" .. tostring(params.code or "nil")
+								.. " phase=" .. tostring(params.phase or params.status or params.readyPhase or "nil")
+								.. " players=" .. tostring(params.players and #params.players or 0)
+								.. " inLobbyBefore=" .. tostring(self.inLobby == true)
+								.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+								.. " screen=" .. tostring(SCREENMAN and SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() or "nil"))
 							self.inLobby = true
 							start_room_timers(self)
 							if ITGOnline and ITGOnline.Heartbeat then
@@ -2250,8 +2427,18 @@ CreateOnlineHandler = function()
 							if online_trace then
 								online_trace("FLOW OnlineLobbyStateMessage display_end roomId=" .. tostring(params.roomId))
 							end
+							online_flow_trace("online_lobby_state_apply_end"
+								.. " roomId=" .. tostring(params.roomId or "nil")
+								.. " phase=" .. tostring(params.phase or params.status or params.readyPhase or "nil")
+								.. " inLobbyAfter=" .. tostring(self.inLobby == true)
+								.. " lastPayloadRoomId=" .. tostring(self.lastLobbyStatePayload and self.lastLobbyStatePayload.roomId or "nil"))
 						elseif online_trace then
 							online_trace("FLOW OnlineLobbyStateMessage ignored")
+							online_flow_trace("online_lobby_state_ignored"
+								.. " connected=" .. tostring(self.connected == true)
+								.. " hasParams=" .. tostring(params ~= nil)
+								.. " roomId=" .. tostring(params and params.roomId or "nil")
+								.. " inLobby=" .. tostring(self.inLobby == true))
 						end
 					end,
 					OnlineLobbyLeftMessageCommand=function(self)
@@ -2261,12 +2448,21 @@ CreateOnlineHandler = function()
 								" connected=" .. tostring(self.connected) ..
 								" currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId))
 						end
+						online_flow_trace("online_lobby_left_apply_begin"
+							.. " inLobbyBefore=" .. tostring(self.inLobby == true)
+							.. " connected=" .. tostring(self.connected == true)
+							.. " lastPayloadRoomId=" .. tostring(self.lastLobbyStatePayload and self.lastLobbyStatePayload.roomId or "nil")
+							.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+							.. " screen=" .. tostring(SCREENMAN and SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() or "nil"))
 						self.inLobby = false
 						clear_room_async_state(self)
 						clear_room_input_state("lobby_left")
 						if online_trace then
 							online_trace("FLOW OnlineLobbyLeftMessage handler_end")
 						end
+						online_flow_trace("online_lobby_left_apply_end"
+							.. " inLobbyAfter=" .. tostring(self.inLobby == true)
+							.. " lastPayloadRoomId=" .. tostring(self.lastLobbyStatePayload and self.lastLobbyStatePayload.roomId or "nil"))
 					end,
 				SongSelectedMessageCommand=function(self)
 					SelectOnlineSongAsManager(self)
@@ -2515,13 +2711,28 @@ CreateOnlineHandler = function()
         end
       end,
 	      InviteOnlinePlayerMessageCommand=function(self, params)
+	        online_flow_trace("invite_online_player_received connected=" .. tostring(self.connected == true)
+						.. " socket=" .. tostring(self.socket ~= nil)
+						.. " busy=" .. tostring(self.invitePlayerBusy == true)
+						.. " userId=" .. tostring(params and params.user_id or "nil")
+						.. " visibility=" .. tostring(params and params.visibility or "private")
+						.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 	        if self.connected and self.socket ~= nil and params and params.user_id then
-						if self.invitePlayerBusy then return end
+						if self.invitePlayerBusy then
+							online_flow_trace("invite_online_player_skipped reason=busy userId=" .. tostring(params.user_id))
+							return
+						end
 						self.invitePlayerBusy = true
 						self.inLobby = false
 						local visibility = params.visibility or "private"
 	          ITGOnline:InviteUserToNewRoom(params.user_id, visibility, function(ok, decoded, response)
 							self.invitePlayerBusy = false
+							online_flow_trace("invite_online_player_result ok=" .. tostring(ok == true)
+								.. " status=" .. tostring(response and response.statusCode or "nil")
+								.. " userId=" .. tostring(params.user_id)
+								.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+								.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+								.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
 							if ok then
 							self.inLobby = true
 							if ITGOnline.currentRoom then
@@ -2541,15 +2752,37 @@ CreateOnlineHandler = function()
 							})
 						end
 					end)
+	        else
+						online_flow_trace("invite_online_player_skipped reason=missing_context"
+							.. " connected=" .. tostring(self.connected == true)
+							.. " socket=" .. tostring(self.socket ~= nil)
+							.. " hasParams=" .. tostring(params ~= nil)
+							.. " userId=" .. tostring(params and params.user_id or "nil"))
         end
       end,
 	      JoinOnlinePlayerRoomMessageCommand=function(self, params)
+	        online_flow_trace("join_online_player_room_received connected=" .. tostring(self.connected == true)
+						.. " socket=" .. tostring(self.socket ~= nil)
+						.. " busy=" .. tostring(self.joinPlayerBusy == true)
+						.. " userId=" .. tostring(params and params.user_id or "nil")
+						.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 	        if self.connected and self.socket ~= nil and params and params.user_id then
-						if self.joinPlayerBusy then return end
+						if self.joinPlayerBusy then
+							online_flow_trace("join_online_player_room_skipped reason=busy userId=" .. tostring(params.user_id))
+							return
+						end
 						self.joinPlayerBusy = true
 						self.inLobby = false
 	          ITGOnline:RequestJoinUserRoom(params.user_id, function(ok, decoded, response)
 							self.joinPlayerBusy = false
+							online_flow_trace("join_online_player_room_result ok=" .. tostring(ok == true)
+								.. " status=" .. tostring(response and response.statusCode or "nil")
+								.. " userId=" .. tostring(params.user_id)
+								.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+								.. " hasJoinRequest=" .. tostring(decoded and decoded.join_request ~= nil)
+								.. " pendingJoinRoomId=" .. tostring(ITGOnline and ITGOnline.pendingJoinRoomId or "nil")
+								.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+								.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
 							if ok and decoded and decoded.room then
 								self.inLobby = true
 								DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
@@ -2568,15 +2801,34 @@ CreateOnlineHandler = function()
 							})
 						end
 					end)
+	        else
+						online_flow_trace("join_online_player_room_skipped reason=missing_context"
+							.. " connected=" .. tostring(self.connected == true)
+							.. " socket=" .. tostring(self.socket ~= nil)
+							.. " hasParams=" .. tostring(params ~= nil)
+							.. " userId=" .. tostring(params and params.user_id or "nil"))
         end
       end,
 	      AnswerPrivateJoinRequestMessageCommand=function(self, params)
+	        online_flow_trace("answer_private_join_request_received connected=" .. tostring(self.connected == true)
+						.. " socket=" .. tostring(self.socket ~= nil)
+						.. " busy=" .. tostring(self.privateJoinAnswerBusy == true)
+						.. " requestId=" .. tostring(params and params.join_request_id or "nil")
+						.. " accept=" .. tostring(params and params.accept == true))
 	        if self.connected and self.socket ~= nil and params and params.join_request_id then
-						if self.privateJoinAnswerBusy then return end
+						if self.privateJoinAnswerBusy then
+							online_flow_trace("answer_private_join_request_skipped reason=busy requestId=" .. tostring(params.join_request_id))
+							return
+						end
 						self.privateJoinAnswerBusy = true
 						if params.accept then
 							ITGOnline:AcceptJoinRequest(params.join_request_id, function(ok, decoded, response)
 								self.privateJoinAnswerBusy = false
+								online_flow_trace("answer_private_join_request_accept_result ok=" .. tostring(ok == true)
+									.. " status=" .. tostring(response and response.statusCode or "nil")
+									.. " requestId=" .. tostring(params.join_request_id)
+									.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+									.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
 								if ok and decoded and decoded.room then
 								DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
 								MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
@@ -2590,22 +2842,47 @@ CreateOnlineHandler = function()
 						else
 							ITGOnline:DeclineJoinRequest(params.join_request_id, params.reason or "", function(ok, decoded, response)
 								self.privateJoinAnswerBusy = false
+								online_flow_trace("answer_private_join_request_decline_result ok=" .. tostring(ok == true)
+									.. " status=" .. tostring(response and response.statusCode or "nil")
+									.. " requestId=" .. tostring(params.join_request_id)
+									.. " reason=" .. tostring(params.reason or "")
+									.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
 								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 								event="privateJoinAnswer",
 								success=ok and true or false,
 									message=ok and "Demande refusee." or ((decoded and decoded.message) or (response and response.errorMessage) or "Impossible de repondre a la demande.")
 							})
 						end)
-					end
+						end
+	        else
+						online_flow_trace("answer_private_join_request_skipped reason=missing_context"
+							.. " connected=" .. tostring(self.connected == true)
+							.. " socket=" .. tostring(self.socket ~= nil)
+							.. " hasParams=" .. tostring(params ~= nil)
+							.. " requestId=" .. tostring(params and params.join_request_id or "nil"))
         end
       end,
 	      AnswerRoomInvitationMessageCommand=function(self, params)
+	        online_flow_trace("answer_room_invitation_received connected=" .. tostring(self.connected == true)
+						.. " socket=" .. tostring(self.socket ~= nil)
+						.. " busy=" .. tostring(self.roomInvitationAnswerBusy == true)
+						.. " invitationId=" .. tostring(params and params.invitation_id or "nil")
+						.. " accept=" .. tostring(params and params.accept == true))
 	        if self.connected and self.socket ~= nil and params and params.invitation_id then
-						if self.roomInvitationAnswerBusy then return end
+						if self.roomInvitationAnswerBusy then
+							online_flow_trace("answer_room_invitation_skipped reason=busy invitationId=" .. tostring(params.invitation_id))
+							return
+						end
 						self.roomInvitationAnswerBusy = true
 						if params.accept then
 							ITGOnline:AcceptInvitation(params.invitation_id, function(ok, decoded, response)
 								self.roomInvitationAnswerBusy = false
+								online_flow_trace("answer_room_invitation_accept_result ok=" .. tostring(ok == true)
+									.. " status=" .. tostring(response and response.statusCode or "nil")
+									.. " invitationId=" .. tostring(params.invitation_id)
+									.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+									.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+									.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
 								if ok and decoded and decoded.room then
 									DisplayLobbyState(ITGOnline:LobbyStatePayload(decoded.room), self)
 									MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
@@ -2619,6 +2896,10 @@ CreateOnlineHandler = function()
 						else
 							ITGOnline:DeclineInvitation(params.invitation_id, function(ok, decoded, response)
 								self.roomInvitationAnswerBusy = false
+								online_flow_trace("answer_room_invitation_decline_result ok=" .. tostring(ok == true)
+									.. " status=" .. tostring(response and response.statusCode or "nil")
+									.. " invitationId=" .. tostring(params.invitation_id)
+									.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
 								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 									event="roomInvitationAnswer",
 									success=ok and true or false,
@@ -2626,6 +2907,12 @@ CreateOnlineHandler = function()
 								})
 							end)
 						end
+	        else
+						online_flow_trace("answer_room_invitation_skipped reason=missing_context"
+							.. " connected=" .. tostring(self.connected == true)
+							.. " socket=" .. tostring(self.socket ~= nil)
+							.. " hasParams=" .. tostring(params ~= nil)
+							.. " invitationId=" .. tostring(params and params.invitation_id or "nil"))
         end
       end,
 				SearchLobbyMessageCommand=function(self, params)

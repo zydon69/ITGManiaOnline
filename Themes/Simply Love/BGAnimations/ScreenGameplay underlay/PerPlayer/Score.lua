@@ -167,6 +167,16 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 		end
 
 		if ITGOnline and ITGOnline.currentRoomId then
+			if ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true then
+				Trace("ITG Online: FLOW gameplay_score_broadcast source=RedrawScore"
+					.. " player=" .. tostring(player)
+					.. " room=" .. tostring(ITGOnline.currentRoomId)
+					.. " score=" .. tostring(percent)
+					.. " ex=" .. tostring(exPercent)
+					.. " hardex=" .. tostring(hardExPercent)
+					.. " displayed=" .. tostring(displayedPercent)
+					.. " combo=" .. tostring(pss:GetCurrentCombo() or 0))
+			end
 			MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
 				Player = player,
 				ScorePercent = tonumber(percent),
@@ -191,6 +201,15 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 		if ITGOnline and ITGOnline.currentRoomId then
 			local dance_points = pss:GetPercentDancePoints()
 			local percent = FormatPercentScore( dance_points ):sub(1,-2)
+			if ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true then
+				Trace("ITG Online: FLOW gameplay_score_broadcast source=ExCountsChanged"
+					.. " player=" .. tostring(player)
+					.. " room=" .. tostring(ITGOnline.currentRoomId)
+					.. " score=" .. tostring(percent)
+					.. " ex=" .. tostring(params.ExScore)
+					.. " hardex=" .. tostring(params.HardExScore)
+					.. " combo=" .. tostring(pss:GetCurrentCombo() or 0))
+			end
 			MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
 				Player = player,
 				ScorePercent = tonumber(percent),
