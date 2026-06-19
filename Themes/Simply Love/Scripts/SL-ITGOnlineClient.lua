@@ -5943,6 +5943,44 @@ function ITGOnline:FetchLobby(callback)
 	fetchPage()
 end
 
+function ITGOnline:PurgeStaleLobbyCandidate(roomId, reason)
+	local roomKey = self:RoomKey(roomId)
+	if roomKey == "" then
+		return false
+	end
+
+	local cachedPayload = self.cachedLobbySearchPayload or { lobbies = {}, onlinePlayers = {} }
+	local filteredLobbies = {}
+	local removed = false
+
+	for _, lobby in ipairs(cachedPayload.lobbies or {}) do
+		local lobbyKey = self:RoomKey(lobby and (lobby.roomId or lobby.code or lobby.id))
+		if lobbyKey == roomKey then
+			removed = true
+		else
+			filteredLobbies[#filteredLobbies + 1] = lobby
+		end
+	end
+
+	if ScreenOnlineLobbiesRemoveLobbyCandidateByCode then
+		removed = ScreenOnlineLobbiesRemoveLobbyCandidateByCode(roomKey) or removed
+	end
+
+	if removed then
+		self.cachedLobbySearchPayload = {
+			lobbies = filteredLobbies,
+			onlinePlayers = cachedPayload.onlinePlayers or {},
+		}
+		online_flow_trace(
+			"lobby_refresh_removed_stale_candidate room=" .. tostring(roomKey) ..
+			" reason=" .. tostring(reason or "unknown"))
+		MESSAGEMAN:Broadcast("LobbySearched", self.cachedLobbySearchPayload)
+	end
+
+	self:QueueLobbyRefresh()
+	return removed
+end
+
 	function ITGOnline:QueueLobbyRefresh()
 		if self:IsAutomaticLobbyRefreshSuppressed() then
 			online_flow_trace("lobby_refresh_skipped reason=post_leave_auto_suppressed")
@@ -6086,6 +6124,10 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 				self.pendingJoinRoomId = nil
 				self.pendingJoinRequestId = nil
 			elseif not ok then
+				local statusCode = response and tonumber(response.statusCode) or nil
+				if statusCode == 404 or statusCode == 410 or statusCode == 422 then
+					self:PurgeStaleLobbyCandidate(roomId, "join_failed_" .. tostring(statusCode))
+				end
 				self.pendingJoinRoomId = nil
 				self.pendingJoinRequestId = nil
 			end
