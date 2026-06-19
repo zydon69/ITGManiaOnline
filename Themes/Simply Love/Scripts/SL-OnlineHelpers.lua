@@ -1345,7 +1345,7 @@ DisplayLobbyState = function(data, actor)
 		for result in ivalues(data.finalResults) do
 			local user = result.user or {}
 			local score = math.floor(tonumber(result.score) or 0)
-			local scorePercent = tonumber(result.score_percent)
+			local scorePercent = tonumber(result.displayed_percent or result.displayedPercent or result.score_percent)
 			local accuracy = tonumber(result.accuracy) or 0
 				local failedText = result.failed and " echoue [F]" or ""
 			local scoreText = scorePercent ~= nil
@@ -1934,7 +1934,18 @@ CreateOnlineHandler = function()
 							schedule_named_timer(self, "OnlineHeartbeatTimer", 30, "Fire")
 						end,
 						OnlinePlayingCountdownTickCommand=function(self)
-							if onlineHandlerShuttingDown or not self.roomTimersActive then return end
+							if onlineHandlerShuttingDown or not self.roomTimersActive then
+								online_flow_trace_throttled("online_playing_countdown_skipped", 2.0,
+									"online_playing_countdown_skipped shuttingDown=" .. tostring(onlineHandlerShuttingDown == true)
+									.. " roomTimersActive=" .. tostring(self.roomTimersActive == true)
+									.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+								return
+							end
+							online_flow_trace_throttled("online_playing_countdown_tick", 1.0,
+								"online_playing_countdown_tick room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+								.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+								.. " screen=" .. tostring(SCREENMAN and SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() or "nil")
+								.. " secondsUntilStart=" .. tostring(ITGOnline and ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or "nil"))
 							if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.WatchdogTick then
 								ITGOnline.PackSync:WatchdogTick()
 						end
@@ -1988,35 +1999,50 @@ CreateOnlineHandler = function()
 						})
 					end,
 					OnlineSongReloadCompletedMessageCommand=function(self)
+						online_flow_trace("song_reload_completed_message"
+							.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+							.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+							.. " screen=" .. tostring(SCREENMAN and SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() or "nil")
+							.. " lastOptionsSongKey=" .. tostring(lastOnlineOptionsSongKey or ""))
 						lastOnlineOptionsSongKey = ""
 					end,
 					ReleaseOnlineGameplayAtStartCommand=function(self)
 						self.onlineStartReleaseQueued = false
-						if onlineHandlerShuttingDown or not (ITGOnline and ITGOnline.currentRoom) then return end
+						if onlineHandlerShuttingDown or not (ITGOnline and ITGOnline.currentRoom) then
+							online_flow_trace("release_online_gameplay_skipped reason=missing_context"
+								.. " shuttingDown=" .. tostring(onlineHandlerShuttingDown == true)
+								.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil))
+							return
+						end
 
 						local screen = SCREENMAN:GetTopScreen()
 						local screenName = screen and screen:GetName() or "NoScreen"
 						if screenName ~= "ScreenGameplay" and screenName ~= "ScreenGameplayShared" then
+							online_flow_trace("release_online_gameplay_skipped reason=not_gameplay screen=" .. tostring(screenName))
 							return
 						end
 
 							if ITGOnline.currentRoom.phase == "playing" then
 								local seconds = ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or nil
+								online_flow_trace("release_online_gameplay_now reason=already_playing seconds=" .. tostring(seconds or "nil"))
 								ReleaseOnlineGameplay(screen, seconds)
 								return
 							end
 
 						if ITGOnline.currentRoom.phase ~= "starting" then
+							online_flow_trace("release_online_gameplay_skipped reason=phase_not_starting phase=" .. tostring(ITGOnline.currentRoom.phase or "nil"))
 							return
 						end
 
 							local seconds = ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or nil
 							if seconds ~= nil and seconds <= 0.03 then
+								online_flow_trace("release_online_gameplay_now reason=start_time_reached seconds=" .. tostring(seconds))
 								ReleaseOnlineGameplay(screen, seconds)
 								return
 							end
 
 							self.onlineStartReleaseQueued = true
+							online_flow_trace("release_online_gameplay_rescheduled seconds=" .. tostring(seconds or "nil"))
 							schedule_named_timer(self, "OnlineGameplayStartTimer", seconds and math.min(math.max(seconds, 0.05), 0.25) or 0.25, "Fire")
 						end,
 	      ScreenChangedMessageCommand=function(self)
@@ -2187,8 +2213,13 @@ CreateOnlineHandler = function()
 					end,
 					PreviewInitialOnlineSongCommand=function(self)
 						if SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() ~= "ScreenSelectMusic" then
+							online_flow_trace("preview_initial_online_song_skipped reason=not_select_music screen="
+								.. tostring(SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() or "nil"))
 							return
 						end
+						online_flow_trace("preview_initial_online_song_fire"
+							.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+							.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 						maybe_preview_current_online_song(true)
 					end,
 	      PlayerJoinedMessageCommand=function(self)
@@ -2388,6 +2419,7 @@ CreateOnlineHandler = function()
 					OnlineSessionExpiredMessageCommand=function(self)
 						self.connected = false
 						self.inLobby = false
+						self.lastLobbyStateSignature = ""
 						clear_room_async_state(self)
 						clear_room_input_state("session_expired")
 						self.socket = nil
@@ -2405,6 +2437,47 @@ CreateOnlineHandler = function()
 								" phase=" .. tostring(params and (params.phase or params.status or params.readyPhase)))
 						end
 						if self.connected and params and params.roomId then
+							local playerParts = {}
+							for index, player in ipairs(params.players or {}) do
+								player = type(player) == "table" and player or {}
+								local user = type(player.user) == "table" and player.user or {}
+								playerParts[#playerParts + 1] = table.concat({
+									tostring(index),
+									tostring(player.id or player.user_id or user.id or ""),
+									tostring(player.status or player.play_state or player.state or ""),
+									tostring(player.ready_state or player.readyState or ""),
+									tostring(player.is_ready or player.ready or ""),
+									tostring(player.song_available or player.songAvailable or ""),
+									tostring(player.pack_sync_status or player.packSyncStatus or ""),
+									tostring(player.pack_sync_sequence or player.packSyncSequence or ""),
+									tostring(player.download_progress or player.downloadProgress or ""),
+								}, ":")
+							end
+							table.sort(playerParts)
+							local songInfo = type(params.songInfo) == "table" and params.songInfo or {}
+							local playState = type(params.playState) == "table" and params.playState or {}
+							local manager = type(params.manager) == "table" and params.manager or {}
+							local stateSignature = table.concat({
+								tostring(params.roomId or ""),
+								tostring(params.code or ""),
+								tostring(params.phase or params.status or params.readyPhase or ""),
+								tostring(params.isManager or ""),
+								tostring(manager.id or ""),
+								tostring(songInfo.selectedAt or songInfo.selected_at or ""),
+								tostring(songInfo.song_hash or songInfo.songHash or ""),
+								tostring(songInfo.chart_hash or songInfo.chartHash or ""),
+								tostring(playState.submitted_scores and #playState.submitted_scores or ""),
+								tostring(playState.final_results and #playState.final_results or ""),
+								table.concat(playerParts, "|"),
+							}, "||")
+							if stateSignature ~= "" and stateSignature == tostring(self.lastLobbyStateSignature or "") then
+								online_flow_trace("online_lobby_state_apply_skipped reason=duplicate_signature"
+									.. " roomId=" .. tostring(params.roomId or "nil")
+									.. " phase=" .. tostring(params.phase or params.status or params.readyPhase or "nil")
+									.. " players=" .. tostring(params.players and #params.players or 0)
+									.. " source=" .. tostring(params.snapshotSource or "nil"))
+								return
+							end
 							online_flow_trace("online_lobby_state_apply_begin"
 								.. " roomId=" .. tostring(params.roomId or "nil")
 								.. " code=" .. tostring(params.code or "nil")
@@ -2420,6 +2493,7 @@ CreateOnlineHandler = function()
 							end
 							params.__receivedLocalTime = GetTimeSinceStart()
 							self.lastLobbyStatePayload = params
+							self.lastLobbyStateSignature = stateSignature
 							if online_trace then
 								online_trace("FLOW OnlineLobbyStateMessage display_begin roomId=" .. tostring(params.roomId))
 							end
@@ -2442,6 +2516,7 @@ CreateOnlineHandler = function()
 						end
 					end,
 					OnlineLobbyLeftMessageCommand=function(self)
+						self.lastLobbyStateSignature = ""
 						if online_trace then
 							online_trace(
 								"FLOW OnlineLobbyLeftMessage handler_begin inLobby=" .. tostring(self.inLobby) ..

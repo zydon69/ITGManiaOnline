@@ -18,6 +18,13 @@ local function OnlineDisplayName(user, fallback)
 end
 
 local function SetOnlineEvaluationInputRedirected(enabled, reason)
+	if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
+		Trace("ITG Online: FLOW evaluation_input_redirect"
+			.. " enabled=" .. tostring(enabled == true)
+			.. " reason=" .. tostring(reason or "unknown")
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+	end
 	if not OnlineEvaluationActive() then return end
 	for player in ivalues(PlayerNumber) do
 		SCREENMAN:set_input_redirected(player, enabled == true)
@@ -29,6 +36,12 @@ local function SetOnlineEvaluationInputRedirected(enabled, reason)
 end
 
 local function ReturnToOnlineLobby(reason)
+	if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
+		Trace("ITG Online: FLOW evaluation_return_to_lobby_begin"
+			.. " reason=" .. tostring(reason or "unknown")
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+	end
 	if ITGOnlineReturnToLobbyFromEvaluation and ITGOnlineReturnToLobbyFromEvaluation(reason) then
 		return true
 	end
@@ -92,6 +105,12 @@ local function BuildOnlineEvaluationInputHandler(reason)
 end
 
 local function DisableOnlineEvaluationTimer(reason)
+	if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
+		Trace("ITG Online: FLOW evaluation_timer_disable"
+			.. " reason=" .. tostring(reason or "unknown")
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+	end
 	if not (ITGOnline and ITGOnline.currentRoomId) then return end
 	local screen = SCREENMAN:GetTopScreen()
 	local timer = screen and screen:GetChild("Timer") or nil
@@ -296,7 +315,16 @@ if OnlineEvaluationActive() then
 		local title = self:GetChild("Title")
 		if title then title:playcommand("Refresh") end
 
-		if waiting and ITGOnline and ITGOnline.FetchRoom and ITGOnline.currentRoomId then
+		if waiting ~= true then
+			if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
+				Trace("ITG Online: FLOW evaluation_results_wait_stopped reason=not_waiting"
+					.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+					.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+			end
+			return
+		end
+
+		if ITGOnline and ITGOnline.FetchRoom and ITGOnline.currentRoomId then
 			if ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true then
 				Trace("ITG Online: FLOW evaluation_results_wait_fetch_begin room=" .. tostring(ITGOnline.currentRoomId))
 			end
@@ -321,7 +349,7 @@ if OnlineEvaluationActive() then
 					MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", ITGOnline.currentRoom.play_state or {})
 				end
 			end)
-		elseif waiting then
+		else
 			if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
 				Trace("ITG Online: FLOW evaluation_results_wait_fetch_skipped"
 					.. " hasFetchRoom=" .. tostring(ITGOnline.FetchRoom ~= nil)
@@ -329,7 +357,7 @@ if OnlineEvaluationActive() then
 			end
 		end
 
-		self:sleep(waiting and 0.75 or 0.25):queuecommand("Refresh")
+		self:sleep(0.75):queuecommand("Refresh")
 	end,
 
 	Def.Quad{

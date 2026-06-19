@@ -19,6 +19,9 @@ local showing_player_action_menu = false
 local player_action_index = 1
 local player_action_options = {}
 local player_action_user = nil
+local showing_transfer_manager_confirm = false
+local transfer_manager_confirm_index = 0
+local transfer_manager_confirm_user = nil
 local showing_private_join_prompt = false
 local private_join_prompt_index = 1
 local private_join_request = nil
@@ -54,6 +57,10 @@ local lobby_ui_update_pending = false
 local lobby_ui_update_reason = ""
 local request_lobby_refresh = nil
 local request_lobby_ui_repaint = nil
+local last_online_lobby_state_signature = ""
+local last_online_lobby_state_signature_at = 0
+local last_pack_sync_local_status_signature = ""
+local last_pack_sync_local_status_at = 0
 
 local mode = "browse"
 local joined_active_index = 1
@@ -104,6 +111,138 @@ local function is_active_lobby_overlay()
 		and SL.Global
 		and SL.Global.Online
 		and SL.Global.Online.ScreenOnlineLobbiesActiveInstance == overlay_instance_id
+end
+
+local function stable_scalar(value)
+	if value == nil then return "" end
+	return tostring(value)
+end
+
+local function player_state_signature(player)
+	player = type(player) == "table" and player or {}
+	local user = type(player.user) == "table" and player.user or {}
+	return table.concat({
+		stable_scalar(player.id or player.user_id or user.id),
+		stable_scalar(user.display_name or user.displayName or user.name or player.name),
+		stable_scalar(player.status or player.play_state or player.state),
+		stable_scalar(player.ready_state or player.readyState),
+		stable_scalar(player.is_ready or player.ready),
+		stable_scalar(player.song_available or player.songAvailable),
+		stable_scalar(player.missing_song or player.missingSong),
+		stable_scalar(player.pack_sync_status or player.packSyncStatus),
+		stable_scalar(player.pack_sync_sequence or player.packSyncSequence),
+		stable_scalar(player.download_progress or player.downloadProgress),
+	}, ":")
+end
+
+local function joined_player_stable_key(player)
+	if type(player) ~= "table" then return "" end
+	local user = type(player.user) == "table" and player.user or {}
+	local key = player.playerId or player.id or player.user_id or user.id
+	if key ~= nil and tostring(key) ~= "" then
+		return "id:" .. tostring(key)
+	end
+	key = player.profileName or player.displayName or player.name or user.display_name or user.displayName or user.name
+	if key ~= nil and tostring(key) ~= "" then
+		return "name:" .. tostring(key)
+	end
+	return ""
+end
+
+local function joined_player_index_for_key(players, key, fallback)
+	if key == nil or tostring(key) == "" then
+		return fallback or 1
+	end
+	for index, player in ipairs(players or {}) do
+		if joined_player_stable_key(player) == key then
+			return index
+		end
+	end
+	return fallback or 1
+end
+
+local function merge_joined_players_preserving_visual_order(currentPlayers, incomingPlayers)
+	currentPlayers = type(currentPlayers) == "table" and currentPlayers or {}
+	incomingPlayers = type(incomingPlayers) == "table" and incomingPlayers or {}
+
+	local incomingByKey = {}
+	local incomingKeys = {}
+	local anonymousIncoming = {}
+	for _, player in ipairs(incomingPlayers) do
+		local key = joined_player_stable_key(player)
+		if key ~= "" then
+			incomingByKey[key] = player
+			incomingKeys[#incomingKeys + 1] = key
+		else
+			anonymousIncoming[#anonymousIncoming + 1] = player
+		end
+	end
+
+	local merged = {}
+	local consumed = {}
+	for _, current in ipairs(currentPlayers) do
+		local key = joined_player_stable_key(current)
+		local incoming = key ~= "" and incomingByKey[key] or nil
+		if incoming ~= nil then
+			merged[#merged + 1] = incoming
+			consumed[key] = true
+		end
+	end
+
+	for _, key in ipairs(incomingKeys) do
+		if not consumed[key] then
+			merged[#merged + 1] = incomingByKey[key]
+			consumed[key] = true
+		end
+	end
+
+	for _, player in ipairs(anonymousIncoming) do
+		merged[#merged + 1] = player
+	end
+
+	return merged
+end
+
+local function online_lobby_state_signature(params)
+	params = type(params) == "table" and params or {}
+	local players = {}
+	for index, player in ipairs(params.players or {}) do
+		players[#players + 1] = player_state_signature(player) .. "#" .. tostring(index)
+	end
+	table.sort(players)
+	local songInfo = type(params.songInfo) == "table" and params.songInfo or {}
+	local playState = type(params.playState) == "table" and params.playState or {}
+	local globalOptions = type(params.globalOptions) == "table" and params.globalOptions or {}
+	local manager = type(params.manager) == "table" and params.manager or {}
+	return table.concat({
+		stable_scalar(params.roomId or params.id),
+		stable_scalar(params.code),
+		stable_scalar(params.phase or params.status or params.readyPhase),
+		stable_scalar(params.isManager),
+		stable_scalar(manager.id),
+		stable_scalar(songInfo.selectedAt or songInfo.selected_at),
+		stable_scalar(songInfo.song_hash or songInfo.songHash),
+		stable_scalar(songInfo.chart_hash or songInfo.chartHash),
+		stable_scalar(songInfo.pack),
+		stable_scalar(globalOptions.scoreMode),
+		stable_scalar(globalOptions.musicRate),
+		stable_scalar(playState.submitted_scores and #playState.submitted_scores),
+		stable_scalar(playState.final_results and #playState.final_results),
+		table.concat(players, "|"),
+	}, "||")
+end
+
+local function pack_sync_local_status_signature(params)
+	params = type(params) == "table" and params or {}
+	return table.concat({
+		stable_scalar(joined_lobby_code),
+		stable_scalar(joined_phase),
+		stable_scalar(params.userId or params.user_id),
+		stable_scalar(params.status),
+		stable_scalar(params.message),
+		stable_scalar(params.download_progress or params.progress),
+		stable_scalar(params.selected_at or params.selectedAt),
+	}, "||")
 end
 
 function play_online_sound_once(screenName, soundName, minInterval)
@@ -298,6 +437,9 @@ local function close_transient_joined_ui()
 	showing_player_action_menu = false
 	player_action_user = nil
 	player_action_options = {}
+	showing_transfer_manager_confirm = false
+	transfer_manager_confirm_index = 0
+	transfer_manager_confirm_user = nil
 	showing_private_join_prompt = false
 	private_join_request = nil
 	showing_pack_choice_menu = false
@@ -312,6 +454,7 @@ local function close_transient_joined_ui()
 	if not t then return end
 	local names = {
 		"PlayerActionMenu",
+		"TransferManagerConfirmPrompt",
 		"PrivateJoinPrompt",
 		"PackChoiceMenu",
 		"BrowsePackDownloadConfirmPrompt",
@@ -408,7 +551,7 @@ end
 			" leaving_lobby=" .. tostring(leaving_lobby) ..
 			" has_root=" .. tostring(root ~= nil))
 		SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt = now
-		input_quiet_until = now + 0.75
+		input_quiet_until = now + 0.12
 		leaving_lobby = false
 		SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode = nil
 		SL.Global.Online.ScreenOnlineLobbiesLeaveRequestRoomId = nil
@@ -436,11 +579,11 @@ end
 				lobby_flow_trace("finish_leave_lobby_removed_stale_candidate code=" .. tostring(departed_lobby_code))
 			end
 			request_lobby_ui_repaint(root, "finish_leave_lobby")
-			request_lobby_refresh("overlay_post_leave", { delay=0.25 }, root)
+			request_lobby_refresh("overlay_post_leave", { immediate=true, delay=0 }, root)
 		local status = root:GetChild("NetworkStatus")
 		if status then status:visible(false) end
 		lobby_flow_trace("finish_leave_lobby_status_suppressed message=Salon quitte.")
-			root:queuecommand("Hover")
+			root:playcommand("Hover")
 			lobby_flow_trace("finish_leave_lobby_ui_update_end")
 		end
 		lobby_flow_trace("finish_leave_lobby_end")
@@ -547,6 +690,26 @@ end
 	local function queue_lobby_ui_update(root, reason)
 		if not root then return false end
 		local source = tostring(reason or "unknown")
+		local recentLeaveFinish = SL.Global and SL.Global.Online
+			and tonumber(SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt)
+			and (GetTimeSinceStart() - tonumber(SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt)) <= 0.75
+		local forceImmediate = source == "finish_leave_lobby"
+			or (recentLeaveFinish and source:find("lobby_search:", 1, true) ~= nil)
+		if forceImmediate then
+			lobby_ui_update_pending = false
+			lobby_ui_update_reason = ""
+			local timer = root:GetChild("LobbyUiUpdateTimer")
+			if timer then timer:stoptweening() end
+			lobby_flow_trace("lobby_ui_update_apply_now reason=" .. source
+				.. " mode=" .. tostring(mode)
+				.. " candidates=" .. tostring(type(candidates) == "table" and #candidates or 0)
+				.. " onlinePlayers=" .. tostring(type(online_users) == "table" and #online_users or 0)
+				.. " joinedCode=" .. tostring(joined_lobby_code or "")
+				.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+			root:playcommand("UpdateLobbyView")
+			root:playcommand("Hover")
+			return true
+		end
 
 		if lobby_ui_update_pending then
 			lobby_flow_trace(
@@ -817,6 +980,12 @@ function select_current_global_score_choice()
 end
 
 function open_global_options_menu()
+	lobby_flow_trace("open_global_options_menu"
+		.. " joined_code=" .. tostring(joined_lobby_code)
+		.. " phase=" .. tostring(joined_phase)
+		.. " isManager=" .. tostring(joined_is_manager == true)
+		.. " currentScoreMode=" .. tostring(joined_global_options and joined_global_options.scoreMode or "nil")
+		.. " currentRate=" .. tostring(joined_global_options and joined_global_options.musicRate or "nil"))
 	rebuild_global_options_choices()
 	select_current_global_score_choice()
 	showing_global_options_menu = true
@@ -845,13 +1014,26 @@ end
 
 function apply_global_options_choice()
 	local choice = global_options_choices[global_options_index]
-	if not choice or not ITGOnline or not ITGOnline.UpdateGlobalOptions then return end
+	lobby_flow_trace("apply_global_options_choice_begin"
+		.. " index=" .. tostring(global_options_index)
+		.. " hasChoice=" .. tostring(choice ~= nil)
+		.. " joined_code=" .. tostring(joined_lobby_code)
+		.. " phase=" .. tostring(joined_phase)
+		.. " isManager=" .. tostring(joined_is_manager == true))
+	if not choice or not ITGOnline or not ITGOnline.UpdateGlobalOptions then
+		lobby_flow_trace("apply_global_options_choice_skipped reason=missing_context")
+		return
+	end
 	local current = normalize_global_options(joined_global_options)
 	local payload = {
 		score_mode = choice.scoreMode or current.scoreMode,
 		music_rate = choice.musicRate or current.musicRate,
 	}
 	ITGOnline:UpdateGlobalOptions(payload, function(ok)
+		lobby_flow_trace("apply_global_options_choice_response ok=" .. tostring(ok == true)
+			.. " scoreMode=" .. tostring(payload.score_mode or "")
+			.. " musicRate=" .. tostring(payload.music_rate or "")
+			.. " joined_code=" .. tostring(joined_lobby_code))
 		if ok then
 			joined_global_options = normalize_global_options(payload)
 			close_global_options_menu()
@@ -962,6 +1144,7 @@ function update_joined_song_card(joinedContent)
 	local banner = joinedContent:GetChild("JoinedSongBanner")
 	local bannerFallback = joinedContent:GetChild("JoinedSongBannerFallback")
 	local bannerLabel = joinedContent:GetChild("JoinedSongBannerLabel")
+	local confirmedCheck = joinedContent:GetChild("JoinedSongConfirmedCheck")
 	local bannerLoaded = false
 	if banner then
 		banner:visible(false)
@@ -976,6 +1159,7 @@ function update_joined_song_card(joinedContent)
 	end
 	if bannerFallback then bannerFallback:visible(hasSong and not bannerLoaded) end
 	if bannerLabel then bannerLabel:visible(hasSong and not bannerLoaded) end
+	if confirmedCheck then confirmedCheck:visible(hasSong and joined_song_confirmed == true) end
 end
 
 function abbreviate_stepchart(value)
@@ -1223,8 +1407,9 @@ end
 
 function joined_button_indices()
 	local indices = {}
-	if joined_room_can_start() then
-		indices[#indices + 1] = 5
+	indices[#indices + 1] = 1
+	if joined_is_manager and #joined_lobby_players > 1 then
+		indices[#indices + 1] = 8
 	end
 	if joined_is_manager and joined_phase_allows_song_selection() then
 		indices[#indices + 1] = 2
@@ -1238,7 +1423,9 @@ function joined_button_indices()
 	if joined_can_cancel_song_selection() then
 		indices[#indices + 1] = 6
 	end
-	indices[#indices + 1] = 1
+	if joined_room_can_start() then
+		indices[#indices + 1] = 7
+	end
 	return indices
 end
 
@@ -1439,6 +1626,36 @@ local function focus_joined_players()
 	return joined_players_selected
 end
 
+local function open_transfer_manager_confirm(player)
+	if not joined_player_can_receive_manager(player) then
+		lobby_flow_trace("transfer_manager_confirm_open_blocked reason=invalid_player"
+			.. " player=" .. tostring(player and (player.playerId or player.profileName or player.name) or "nil"))
+		return false
+	end
+	transfer_manager_confirm_user = player
+	transfer_manager_confirm_index = 0
+	showing_transfer_manager_confirm = true
+	if t then
+		local prompt = t:GetChild("TransferManagerConfirmPrompt")
+		if prompt then prompt:visible(true) end
+		t:queuecommand("UpdateTransferManagerConfirmPrompt")
+		t:queuecommand("Hover")
+	end
+	lobby_flow_trace("transfer_manager_confirm_open player=" .. tostring(player.playerId or player.profileName or player.name or "nil"))
+	return true
+end
+
+local function close_transfer_manager_confirm()
+	showing_transfer_manager_confirm = false
+	transfer_manager_confirm_index = 0
+	transfer_manager_confirm_user = nil
+	if t then
+		local prompt = t:GetChild("TransferManagerConfirmPrompt")
+		if prompt then prompt:visible(false) end
+		t:queuecommand("Hover")
+	end
+end
+
 local function pack_sync_line_for_player(player)
 	if not player or player_is_manager(player) or joined_phase == "results" then return "" end
 	if joined_song_preview == nil and not (ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song) then return "" end
@@ -1510,7 +1727,7 @@ end
 local function normalize_joined_active_index()
 	local indices = joined_button_indices()
 	if joined_room_can_start() and joined_active_index == 1 then
-		joined_active_index = 5
+		joined_active_index = 7
 		joined_user_moved_focus = false
 		last_auto_start_focus_key = ""
 		lobby_flow_trace("normalize_joined_active_index promoted_leave_to_start reason=room_can_start")
@@ -1557,7 +1774,7 @@ local function set_joined_default_active_index(force)
 		end
 	end
 	if joined_room_can_start() then
-		joined_active_index = 5
+		joined_active_index = 7
 		joined_user_moved_focus = false
 		last_auto_start_focus_key = ""
 		return
@@ -1741,8 +1958,20 @@ end
 end
 
 local function execute_player_action(option, user)
-	if not option or not user then return end
-	if not t then return end
+	lobby_flow_trace("execute_player_action_begin"
+		.. " action=" .. tostring(option and option.action or "nil")
+		.. " targetUser=" .. tostring(user and (user.playerId or user.id) or "nil")
+		.. " joined_code=" .. tostring(joined_lobby_code)
+		.. " phase=" .. tostring(joined_phase)
+		.. " isManager=" .. tostring(joined_is_manager == true))
+	if not option or not user then
+		lobby_flow_trace("execute_player_action_skipped reason=missing_option_or_user")
+		return
+	end
+	if not t then
+		lobby_flow_trace("execute_player_action_skipped reason=no_overlay_root")
+		return
+	end
 	showing_player_action_menu = false
 	t:GetChild("PlayerActionMenu"):visible(false)
 
@@ -1762,6 +1991,10 @@ local function execute_player_action(option, user)
 			showPrompt=false
 		})
 		ITGOnline:TransferRoomManager(targetUserId, function(ok, decoded, response)
+			lobby_flow_trace("transfer_manager_response ok=" .. tostring(ok == true)
+				.. " targetUser=" .. tostring(targetUserId or "nil")
+				.. " status=" .. tostring(response and response.statusCode or "nil")
+				.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil))
 			if ok then
 				joined_players_selected = false
 				if t then
@@ -2210,6 +2443,30 @@ local function handle_global_options_menu_input(event)
 	return false
 end
 
+local function handle_transfer_manager_confirm_input(event)
+	lobby_flow_trace("input_transfer_manager_confirm button=" .. tostring(event.GameButton)
+		.. " index=" .. tostring(transfer_manager_confirm_index)
+		.. " target=" .. tostring(transfer_manager_confirm_user and (transfer_manager_confirm_user.playerId or transfer_manager_confirm_user.profileName or transfer_manager_confirm_user.name) or "nil"))
+	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
+		transfer_manager_confirm_index = transfer_manager_confirm_index == 0 and 1 or 0
+		play_online_sound_once("ScreenSelectMaster", "change")
+		if t then t:queuecommand("Hover") end
+	elseif event.GameButton == "Start" then
+		play_online_sound_once("Common", "Start")
+		if transfer_manager_confirm_index == 1 and transfer_manager_confirm_user then
+			local user = transfer_manager_confirm_user
+			close_transfer_manager_confirm()
+			execute_player_action({label="Transferer manager", action="transfer_manager"}, user)
+		else
+			close_transfer_manager_confirm()
+		end
+	elseif event.GameButton == "Select" or event.GameButton == "Back" then
+		play_online_sound_once("Common", "Cancel")
+		close_transfer_manager_confirm()
+	end
+	return false
+end
+
 local function handle_joined_mode_input(event)
 	lobby_flow_trace("input_joined_mode button=" .. tostring(event.GameButton)
 		.. " activeIndex=" .. tostring(joined_active_index)
@@ -2243,16 +2500,7 @@ local function handle_joined_mode_input(event)
 			lobby_flow_trace("input_joined_player_action_start player=" .. tostring(player and (player.playerId or player.id or player.profileName) or "nil")
 				.. " canReceiveManager=" .. tostring(joined_player_can_receive_manager(player) == true))
 			if joined_player_can_receive_manager(player) then
-				player.actionContext = "joined_manager_transfer"
-				player_action_user = player
-				player_action_options = build_player_action_options(player_action_user)
-				player_action_index = 1
-				showing_player_action_menu = #player_action_options > 0
-				local menu = t:GetChild("PlayerActionMenu")
-				if menu then
-					menu:visible(showing_player_action_menu)
-					t:queuecommand("UpdatePlayerActionMenu")
-				end
+				open_transfer_manager_confirm(player)
 				play_online_sound_once("Common", "Start")
 			else
 				play_online_sound_once("Common", "Cancel")
@@ -2292,7 +2540,7 @@ local function handle_joined_mode_input(event)
 		if joined_active_index == 1 then
 			if joined_room_can_start() then
 				lobby_flow_trace("input_joined_start_leave_index_promoted_to_start_room")
-				joined_active_index = 5
+				joined_active_index = 7
 				MESSAGEMAN:Broadcast("StartOnlineRoom")
 			else
 				open_leave_confirm("leave_lobby")
@@ -2352,6 +2600,14 @@ local function handle_joined_mode_input(event)
 					showPrompt=true
 				})
 			end
+		elseif joined_active_index == 8 and joined_is_manager then
+			if focus_joined_players() then
+				lobby_flow_trace("input_joined_players_frame_start")
+				t:queuecommand("UpdateJoinedLobbyText")
+			else
+				lobby_flow_trace("input_joined_players_frame_start_blocked")
+				play_online_sound_once("Common", "Cancel")
+			end
 		elseif joined_active_index == 6 and joined_can_cancel_song_selection() then
 			if ITGOnline and ITGOnline.CancelSongSelection then
 				lobby_flow_trace("input_joined_cancel_song_selection_request")
@@ -2381,7 +2637,7 @@ local function handle_joined_mode_input(event)
 					duration=4
 				})
 			end
-		elseif joined_active_index == 5 and joined_is_manager then
+		elseif joined_active_index == 7 and joined_is_manager then
 			if joined_room_can_start() then
 				lobby_flow_trace("input_joined_start_room_broadcast")
 				MESSAGEMAN:Broadcast("StartOnlineRoom")
@@ -2394,15 +2650,6 @@ local function handle_joined_mode_input(event)
 					showPrompt=true
 				})
 			end
-		end
-	elseif event.GameButton == "Select" then
-		if focus_joined_players() then
-			lobby_flow_trace("input_joined_focus_players")
-			play_online_sound_once("Common", "Start")
-			t:queuecommand("UpdateJoinedLobbyText")
-		else
-			lobby_flow_trace("input_joined_focus_players_blocked")
-			play_online_sound_once("Common", "Cancel")
 		end
 	end
 	return false
@@ -2605,12 +2852,14 @@ local function handle_first_press_input(event)
 		.. " leaveConfirm=" .. tostring(showing_leave_confirm == true)
 		.. " browsePackConfirm=" .. tostring(showing_browse_pack_download_confirm == true)
 		.. " privatePrompt=" .. tostring(showing_private_join_prompt == true)
+		.. " transferManagerConfirm=" .. tostring(showing_transfer_manager_confirm == true)
 		.. " playerAction=" .. tostring(showing_player_action_menu == true)
 		.. " packChoice=" .. tostring(showing_pack_choice_menu == true)
 		.. " globalOptions=" .. tostring(showing_global_options_menu == true)
 		.. " pendingJoinActionId=" .. tostring(pending_join_action_id))
 	if showing_leave_confirm then return handle_leave_confirm_input(event) end
 	if showing_browse_pack_download_confirm then return handle_browse_pack_download_confirm_input(event) end
+	if showing_transfer_manager_confirm then return handle_transfer_manager_confirm_input(event) end
 	if showing_private_join_prompt then return handle_private_join_prompt_input(event) end
 	if showing_player_action_menu then return handle_player_action_menu_input(event) end
 
@@ -2872,6 +3121,8 @@ local af = Def.ActorFrame{
 			self:GetChild("LobbyContent"):playcommand("Hover")
 			self:GetChild("OnlinePlayersContent"):playcommand("Hover")
 			self:GetChild("JoinedLobbyContent"):playcommand("Hover")
+			local transferPrompt = self:GetChild("TransferManagerConfirmPrompt")
+			if transferPrompt then transferPrompt:playcommand("Hover") end
 		end,
 		ApplyQueuedLobbyUiUpdateCommand=function(self)
 			local reason = lobby_ui_update_reason
@@ -2884,8 +3135,8 @@ local af = Def.ActorFrame{
 			end
 
 			lobby_flow_trace("lobby_ui_update_apply reason=" .. tostring(reason))
-			self:queuecommand("UpdateLobbyView")
-			self:queuecommand("Hover")
+			self:playcommand("UpdateLobbyView")
+			self:playcommand("Hover")
 		end,
 	UpdateOnlinePlayersCommand=function(self)
 		local playersContent = self:GetChild("OnlinePlayersContent")
@@ -2961,10 +3212,10 @@ local af = Def.ActorFrame{
 			emptyText:visible(#candidates == 0)
 		end
 
-		self:queuecommand("UpdateOnlinePlayers")
+		self:playcommand("UpdateOnlinePlayers")
 		lobby_flow_trace("UpdateLobbyView_end lobbyVisible=" .. tostring(mode ~= "joined")
 			.. " empty=" .. tostring(#candidates == 0)
-			.. " queuedUpdateOnlinePlayers=true")
+			.. " appliedUpdateOnlinePlayers=true")
 	end,
 	OpenPlayerActionMenuCommand=function(self)
 		player_action_user = selected_online_user()
@@ -2996,6 +3247,24 @@ local af = Def.ActorFrame{
 		end
 		local text = menu:GetChild("PlayerActionOptions")
 		if text then text:settext(table.concat(body, "\n")) end
+	end,
+	UpdateTransferManagerConfirmPromptCommand=function(self)
+		local prompt = self:GetChild("TransferManagerConfirmPrompt")
+		if not prompt then return end
+		local detail = prompt:GetChild("PromptDetail")
+		if detail then
+			local displayName = "ce joueur"
+			if transfer_manager_confirm_user then
+				displayName = trim_text(transfer_manager_confirm_user.profileName
+					or transfer_manager_confirm_user.display_name
+					or transfer_manager_confirm_user.displayName
+					or transfer_manager_confirm_user.name
+					or transfer_manager_confirm_user.playerId
+					or "ce joueur")
+			end
+			detail:settext("Voulez-vous vraiment transmettre le role de manager a " .. displayName .. " ?")
+		end
+		prompt:playcommand("Hover")
 	end,
 	UpdateGlobalOptionsMenuCommand=function(self)
 		local menu = self:GetChild("GlobalOptionsMenu")
@@ -3127,14 +3396,6 @@ local af = Def.ActorFrame{
 			lines[#lines+1] = line
 			text_length = text_length + #line + 1
 		end
-		if joined_is_manager and #joined_lobby_players > 1 then
-			local helpLine = joined_players_selected
-				and "START: transferer manager  |  SELECT: revenir"
-				or "SELECT: choisir un joueur pour transferer manager"
-			lines[#lines+1] = ""
-			lines[#lines+1] = helpLine
-		end
-
 		local playersText = joinedContent:GetChild("JoinedLobbyPlayers")
 		if playersText then
 			playersText:settext(#lines > 0 and table.concat(lines, "\n") or "En attente des joueurs...")
@@ -3143,69 +3404,16 @@ local af = Def.ActorFrame{
 				playersText:AddAttribute(selected_start, {Length=selected_length, Diffuse={0,1,0,1}})
 			end
 		end
+		local playersFrame = joinedContent:GetChild("JoinedLobbyPlayersFrame")
+		if playersFrame then
+			playersFrame:playcommand("Hover")
+		end
 		update_joined_song_card(joinedContent)
 
 		local songStatus = joinedContent and joinedContent:GetChild("JoinedLobbySongStatus")
 		if songStatus then
-			local statusLines = {}
-
-			local missingSongInfo = joined_missing_song_info or joined_song_preview
-			if joined_missing_song and missingSongInfo then
-				if joined_missing_song_reason == "song_hash_mismatch" then
-					statusLines[#statusLines + 1] = "La stepchart existe localement, mais l'audio est different de celui du salon."
-					statusLines[#statusLines + 1] = "Le mode online exige la même musique et la même stepchart."
-				elseif joined_missing_song_reason == "chart_mismatch" or joined_missing_song_reason == "hash_mismatch" then
-					statusLines[#statusLines + 1] = "La musique ou la stepchart trouvée est différente de celle du salon."
-					statusLines[#statusLines + 1] = "Veuillez supprimer le pack manuellement, recharger Songs, puis télécharger à nouveau le pack."
-				elseif joined_missing_song_reason == "download_failed" then
-					if pack_choice_all_candidates_exhausted then
-						statusLines[#statusLines + 1] = "Aucun pack candidat ne contient la chart attendue."
-						statusLines[#statusLines + 1] = "Installez manuellement le bon pack/stepchart."
-					else
-						statusLines[#statusLines + 1] = "Le téléchargement du pack a échoué."
-						statusLines[#statusLines + 1] = "Veuillez réessayer ou installer le pack manuellement."
-					end
-				elseif joined_missing_song_reason == "missing_local_song" and joined_can_download_pack then
-					statusLines[#statusLines + 1] = "Vous ne possédez pas ce pack localement."
-					statusLines[#statusLines + 1] = "Vous pouvez télécharger le pack utilisé par le salon."
-				elseif joined_can_download_pack then
-					statusLines[#statusLines + 1] = "Cette chanson existe peut-être dans vos packs,"
-					statusLines[#statusLines + 1] = "mais aucune stepchart identique à celle du salon n’a été trouvée."
-					statusLines[#statusLines + 1] = "Vous pouvez télécharger le pack utilisé par le salon."
-				else
-					statusLines[#statusLines + 1] = "Pack de chansons manquant ou different localement"
-				end
-
-				local countdownSeconds = joined_missing_song_countdown_seconds()
-				if countdownSeconds and joined_can_download_pack and not pack_sync_busy() then
-					statusLines[#statusLines + 1] = "Expulsion du salon dans " .. tostring(countdownSeconds) .. " s si le pack n'est pas telecharge."
-				end
-			elseif joined_song_preview then
-				statusLines[#statusLines + 1] = (joined_song_confirmed and "✔ Chanson selectionnee" or "Choix de chanson en cours")
-				if joined_preview_unknown_pack and not joined_song_confirmed then
-					statusLines[#statusLines + 1] = "Pack absent localement."
-					statusLines[#statusLines + 1] = "Le manager parcourt ce pack sans avoir encore choisi de chanson."
-					statusLines[#statusLines + 1] = "Vous pouvez le telecharger maintenant si vous le souhaitez."
-				end
-				if joined_phase == "playing" then
-					statusLines[#statusLines + 1] = "Manche en cours. En attente de la fin pour tous."
-				elseif joined_phase == "results" then
-					statusLines[#statusLines + 1] = "Resultats prets."
-				elseif joined_phase == "starting" then
-					local seconds = ITGOnline and ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or nil
-					statusLines[#statusLines + 1] = seconds and ("Demarrage dans " .. tostring(math.ceil(math.max(0, seconds))) .. "...") or "Demarrage..."
-				elseif joined_phase == "config" or joined_phase == "lobby_ready" then
-					if joined_any_player_missing_song() then
-						statusLines[#statusLines + 1] = "Selection en cours."
-					end
-				end
-			elseif joined_is_manager then
-				statusLines[#statusLines + 1] = "Choisissez une chanson pour lancer la manche."
-			else
-				statusLines[#statusLines + 1] = ""
-			end
-			songStatus:settext(table.concat(statusLines, "\n"):gsub("^%s+", ""):gsub("%s+$", ""))
-			songStatus:diffuse(joined_missing_song and Color.Red or joined_song_confirmed and Color.Green or Color.White)
+			songStatus:settext("")
+			songStatus:visible(false)
 		end
 
 			local codeLabel = joinedContent and joinedContent:GetChild("JoinedLobbyCodeLabel")
@@ -3353,8 +3561,8 @@ local af = Def.ActorFrame{
 					if focusKey ~= last_auto_start_focus_key then
 						last_auto_start_focus_key = focusKey
 					end
-					if joined_active_index ~= 5 and (not joined_user_moved_focus or not currentFocusStillAvailable) then
-						joined_active_index = 5
+					if joined_active_index ~= 7 and (not joined_user_moved_focus or not currentFocusStillAvailable) then
+						joined_active_index = 7
 						joined_user_moved_focus = false
 						self:queuecommand("Hover")
 					end
@@ -3678,6 +3886,20 @@ local af = Def.ActorFrame{
 				lobby_flow_trace("ignored_online_lobby_state reason=leaving_lobby code=" .. tostring(params and params.code or ""))
 				return
 			end
+			local incomingSignature = online_lobby_state_signature(params)
+			if mode == "joined"
+				and tostring(joined_lobby_code or "") == tostring(params and params.code or "")
+				and incomingSignature ~= ""
+				and incomingSignature == last_online_lobby_state_signature
+			then
+				last_online_lobby_state_signature_at = GetTimeSinceStart()
+				lobby_flow_trace("OnlineLobbyState_ignored reason=duplicate_signature"
+					.. " code=" .. tostring(params and params.code or "")
+					.. " phase=" .. tostring(params and params.phase or "nil")
+					.. " players=" .. tostring(params and params.players and #params.players or 0)
+					.. " snapshotSource=" .. tostring(params and params.snapshotSource or "nil"))
+				return
+			end
 			local previousLobbyCode = joined_lobby_code
 			local previousJoinedPhase = joined_phase
 			local previousSongConfirmed = joined_song_confirmed
@@ -3704,8 +3926,13 @@ local af = Def.ActorFrame{
 			showing_leave_confirm = false
 			list_selected = false
 			join_lobby_code = ""
+			local previousSelectedPlayerKey = joined_player_stable_key(joined_lobby_players and joined_lobby_players[joined_player_index])
 			joined_lobby_code = params and params.code or ""
 			if joined_lobby_code ~= previousLobbyCode then
+				last_online_lobby_state_signature = ""
+				last_online_lobby_state_signature_at = 0
+				last_pack_sync_local_status_signature = ""
+				last_pack_sync_local_status_at = 0
 				joined_focus_initialized = false
 				joined_player_index = 1
 				joined_players_selected = false
@@ -3717,8 +3944,9 @@ local af = Def.ActorFrame{
 				joined_can_download_pack = false
 				joined_missing_song_reason = nil
 				joined_preview_unknown_pack = false
+				previousSelectedPlayerKey = ""
 			end
-			joined_lobby_players = params and params.players or {}
+			joined_lobby_players = merge_joined_players_preserving_visual_order(joined_lobby_players, params and params.players or {})
 			joined_is_manager = params and params.isManager or false
 			joined_manager_user_id = params and params.manager and params.manager.id or nil
 			if previousLobbyCode ~= "" and previousLobbyCode == joined_lobby_code and not previousIsManager and joined_is_manager then
@@ -3732,6 +3960,7 @@ local af = Def.ActorFrame{
 			if not joined_is_manager then
 				joined_players_selected = false
 			end
+			joined_player_index = joined_player_index_for_key(joined_lobby_players, previousSelectedPlayerKey, joined_player_index)
 			joined_player_index = math.max(1, math.min(joined_player_index, math.max(1, #joined_lobby_players)))
 			joined_phase = params and params.phase or nil
 			joined_global_options = normalize_global_options(params and params.globalOptions or nil)
@@ -3739,13 +3968,23 @@ local af = Def.ActorFrame{
 				reset_joined_transient_song_state("online_lobby_state_results", { clearPreview = true, resetPackSync = true })
 			else
 				local previousSelectedKey = joined_song_selected_key
+				local snapshotSource = tostring(params and params.snapshotSource or "")
 				local selectedSongInfo = normalize_online_song_info(params and params.songInfo or nil)
+				local stalePostResultsSong = selectedSongInfo ~= nil
+					and previousJoinedPhase == "results"
+					and joined_phase == "lobby"
+					and snapshotSource:find("room.results_ready", 1, true) ~= nil
+				if stalePostResultsSong then
+					lobby_flow_trace("OnlineLobbyState_drop_stale_post_results_song source=" .. tostring(snapshotSource)
+						.. " selectedAt=" .. tostring(selectedSongInfo.selectedAt or selectedSongInfo.selected_at or "")
+						.. " song=" .. tostring(selectedSongInfo.title or selectedSongInfo.songTitle or ""))
+					selectedSongInfo = nil
+				end
 				if selectedSongInfo then
 					joined_song_preview = selectedSongInfo
 					joined_song_confirmed = true
 					joined_song_selected_key = tostring(selectedSongInfo.selectedAt or selectedSongInfo.selected_at or "")
 				else
-					local snapshotSource = tostring(params and params.snapshotSource or "")
 					local shouldClearPreview = (previousJoinedPhase == "results" and joined_phase == "lobby")
 						or (previousSongConfirmed and joined_phase == "lobby")
 						or snapshotSource:find("song_selection_cancel", 1, true) ~= nil
@@ -3800,6 +4039,8 @@ local af = Def.ActorFrame{
 				.. " missingSong=" .. tostring(joined_missing_song == true)
 				.. " ready={" .. tostring(ready_summary()) .. "}")
 
+			last_online_lobby_state_signature = incomingSignature
+			last_online_lobby_state_signature_at = GetTimeSinceStart()
 			self:queuecommand("UpdateJoinedLobbyText")
 
 			if not pack_sync_busy() then
@@ -4132,12 +4373,25 @@ end,
 					self:queuecommand("UpdateJoinedLobbyText")
 					return
 				end
+		local localStatusSignature = pack_sync_local_status_signature(params)
+		if localStatusSignature ~= ""
+			and localStatusSignature == last_pack_sync_local_status_signature
+		then
+			last_pack_sync_local_status_at = GetTimeSinceStart()
+			lobby_flow_trace("OnlinePackSyncLocalStatus_ignored reason=duplicate_signature status=" .. tostring(params and params.status or "")
+				.. " progress=" .. tostring(params and (params.download_progress or params.progress) or "")
+				.. " joined_code=" .. tostring(joined_lobby_code)
+				.. " phase=" .. tostring(joined_phase))
+			return
+		end
 		lobby_flow_trace("OnlinePackSyncLocalStatus_received status=" .. tostring(params and params.status or "")
 			.. " progress=" .. tostring(params and params.progress or "")
 			.. " userId=" .. tostring(params and params.userId or params and params.user_id or "")
 			.. " mode=" .. tostring(mode)
 			.. " joined_code=" .. tostring(joined_lobby_code))
 		apply_local_pack_sync_status_to_joined_player(params)
+		last_pack_sync_local_status_signature = localStatusSignature
+		last_pack_sync_local_status_at = GetTimeSinceStart()
 		normalize_joined_active_index()
 		self:queuecommand("UpdateJoinedLobbyText")
 		self:queuecommand("Hover")
@@ -4779,6 +5033,20 @@ end,
 		InitCommand=function(self)
 			self:visible(false)
 		end,
+		HoverCommand=function(self)
+			local playersFrame = self:GetChild("JoinedLobbyPlayersFrame")
+			if playersFrame then playersFrame:playcommand("Hover") end
+			for _, name in ipairs({
+				"SelectSongButton",
+				"ReloadSongsButton",
+				"GlobalOptionsButton",
+				"CancelChoiceButton",
+				"StartRoomButton",
+			}) do
+				local child = self:GetChild(name)
+				if child then child:playcommand("Hover") end
+			end
+		end,
 
 		Def.Quad{
 			InitCommand=function(self)
@@ -4815,6 +5083,19 @@ end,
 				self:horizalign(right):x(50):y(-170):zoom(0.42)
 			end
 		},
+		Def.Quad{
+			Name="JoinedLobbyPlayersFrame",
+			InitCommand=function(self)
+				self:xy(-70, -58):zoomto(450, 128):diffuse(Color.White):diffusealpha(0.18)
+			end,
+			HoverCommand=function(self)
+				local focusable = joined_is_manager and #joined_lobby_players > 1
+				local focused = joined_active_index == 8 or joined_players_selected
+				self:visible(focusable)
+				self:diffuse(focused and Color.Yellow or Color.White)
+				self:diffusealpha(focused and 0.45 or 0.18)
+			end
+		},
 		LoadFont("Common Normal")..{
 			Name="JoinedLobbyPlayers",
 				Text="En attente des joueurs...",
@@ -4845,6 +5126,13 @@ end,
 			Name="JoinedSongBanner",
 			InitCommand=function(self)
 				self:xy(116, -105):scaletoclipped(72, 40):visible(false)
+			end
+		},
+		LoadFont("Common Bold")..{
+			Name="JoinedSongConfirmedCheck",
+			Text="✓",
+			InitCommand=function(self)
+				self:xy(72, -105):zoom(1.15):diffuse(Color.Green):strokecolor(color("#001900")):shadowlength(1):visible(false)
 			end
 		},
 		LoadFont("Common Normal")..{
@@ -5051,7 +5339,7 @@ end,
 					Name="StartRoomButton",
 				InitCommand=function(self)
 					self:xy(180, 190)
-					self.idx = 5
+					self.idx = 7
 					self:visible(false)
 				end,
 				Def.Quad{
@@ -5278,6 +5566,105 @@ end,
 				end,
 				HoverCommand=function(self)
 					self:diffuse(browse_pack_download_confirm_index == 1 and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
+				end
+			}
+		}
+	},
+
+	Def.ActorFrame{
+		Name="TransferManagerConfirmPrompt",
+		InitCommand=function(self)
+			self:visible(false)
+		end,
+		HoverCommand=function(self)
+			self:GetChild("CancelButton"):playcommand("Hover")
+			self:GetChild("ConfirmButton"):playcommand("Hover")
+		end,
+
+		Def.Quad{
+			InitCommand=function(self)
+				self:zoomto(SCREEN_WIDTH, SCREEN_HEIGHT):diffuse(0,0,0,0.62)
+			end
+		},
+		Def.Quad{
+			InitCommand=function(self)
+				self:zoomto(560, 210):diffuse(0,0,0,0.92)
+			end
+		},
+		Def.Quad{
+			InitCommand=function(self)
+				self:zoomto(562, 212):diffuse(Color.White):diffusealpha(0.20)
+			end
+		},
+		LoadFont("Common Bold")..{
+			Name="PromptTitle",
+			Text="Transferer le role manager ?",
+			InitCommand=function(self)
+				self:y(-72):zoom(0.70):diffuse(Color.White)
+			end
+		},
+		LoadFont("Common Normal")..{
+			Name="PromptDetail",
+			Text="",
+			InitCommand=function(self)
+				self:y(-24):zoom(0.50):maxwidth(980):diffuse(0.88,0.88,0.88,1)
+			end
+		},
+
+		Def.ActorFrame{
+			Name="CancelButton",
+			InitCommand=function(self)
+				self:x(-100):y(58)
+			end,
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(160, 42):diffuse(Color.White)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(transfer_manager_confirm_index == 0 and Color.Yellow or Color.White)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(158, 40):diffuse(Color.Black)
+				end
+			},
+			LoadFont("Common Bold")..{
+				Text="Non",
+				InitCommand=function(self)
+					self:zoom(0.5)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(transfer_manager_confirm_index == 0 and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
+				end
+			}
+		},
+
+		Def.ActorFrame{
+			Name="ConfirmButton",
+			InitCommand=function(self)
+				self:x(100):y(58)
+			end,
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(160, 42):diffuse(Color.White)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(transfer_manager_confirm_index == 1 and Color.Yellow or Color.White)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:zoomto(158, 40):diffuse(Color.Black)
+				end
+			},
+			LoadFont("Common Bold")..{
+				Text="Oui",
+				InitCommand=function(self)
+					self:zoom(0.5)
+				end,
+				HoverCommand=function(self)
+					self:diffuse(transfer_manager_confirm_index == 1 and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
 				end
 			}
 		}

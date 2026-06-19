@@ -292,9 +292,13 @@ static void StartDisplay() {
     if (bestSpec != nullptr && bestMode != nullptr) {
       const float detectedAspectRatio =
           DetectInitialDisplayAspectRatio(bestMode->width, bestMode->height);
+      int initialWindowWidth = std::max(640, static_cast<int>(bestMode->width / 2));
+      int initialWindowHeight = std::max(360, static_cast<int>(bestMode->height / 2));
+      initialWindowWidth -= initialWindowWidth % 2;
+      initialWindowHeight -= initialWindowHeight % 2;
       PREFSMAN->m_sDisplayId.Set(bestSpec->id());
-      PREFSMAN->m_iDisplayWidth.Set(static_cast<int>(bestMode->width));
-      PREFSMAN->m_iDisplayHeight.Set(static_cast<int>(bestMode->height));
+      PREFSMAN->m_iDisplayWidth.Set(initialWindowWidth);
+      PREFSMAN->m_iDisplayHeight.Set(initialWindowHeight);
       PREFSMAN->m_fDisplayAspectRatio.Set(detectedAspectRatio);
 
       VideoModeParams params;
@@ -303,15 +307,16 @@ static void StartDisplay() {
       std::string error = DISPLAY->SetVideoMode(params, needReload);
       if (error != "") {
         LOG->Warn(
-            "Could not apply first-run maximum display mode %ux%u on '%s': %s",
-            bestMode->width, bestMode->height, bestSpec->id().c_str(),
-            error.c_str());
+            "Could not apply first-run half display mode %dx%d "
+            "(detected %ux%u) on '%s': %s",
+            initialWindowWidth, initialWindowHeight, bestMode->width,
+            bestMode->height, bestSpec->id().c_str(), error.c_str());
       } else {
         LOG->Info(
-            "Applied first-run display defaults: resolution=%ux%u "
-            "aspect=%.6f display='%s'",
-            bestMode->width, bestMode->height, detectedAspectRatio,
-            bestSpec->id().c_str());
+            "Applied first-run display defaults: detected=%ux%u "
+            "initial=%dx%d aspect=%.6f display='%s'",
+            bestMode->width, bestMode->height, initialWindowWidth,
+            initialWindowHeight, detectedAspectRatio, bestSpec->id().c_str());
       }
     } else {
       LOG->Warn(

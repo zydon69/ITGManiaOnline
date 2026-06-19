@@ -55,6 +55,7 @@ local function final_results()
 				rank = tonumber(result.rank) or index,
 				name = online_display_name(user, localized("OnlineUnknownPlayer", "Player")),
 				score = math.floor(tonumber(result.score) or 0),
+				displayed_percent = tonumber(result.displayed_percent or result.displayedPercent or result.score_percent),
 				score_percent = tonumber(result.score_percent),
 				accuracy = tonumber(result.accuracy),
 				failed = result.failed and true or false,
@@ -68,6 +69,23 @@ local function final_results()
 
 	final_ranking_trace("final_results_end rows=" .. tostring(#normalized))
 	return normalized
+end
+
+local function final_results_signature(rows)
+	local parts = {}
+	for index, row in ipairs(rows or {}) do
+		parts[#parts + 1] = table.concat({
+			tostring(index),
+			tostring(row.rank or ""),
+			tostring(row.name or ""),
+			tostring(row.score or ""),
+			tostring(row.displayed_percent or ""),
+			tostring(row.score_percent or ""),
+			tostring(row.accuracy or ""),
+			tostring(row.failed == true),
+		}, ":")
+	end
+	return table.concat(parts, "|")
 end
 
 local width = clamp(_screen.w * 0.16, 230, 320)
@@ -103,6 +121,12 @@ local t = Def.ActorFrame{
 		self:stoptweening()
 		local rows = final_results()
 		local show = #rows > 0
+		local signature = final_results_signature(rows)
+		if signature == tostring(self.lastFinalRankingSignature or "") then
+			final_ranking_trace("refresh_skipped reason=duplicate_signature rows=" .. tostring(#rows))
+			return
+		end
+		self.lastFinalRankingSignature = signature
 		self:visible(show)
 		self.polling_active = show
 		final_ranking_trace("refresh show=" .. tostring(show == true)
@@ -117,7 +141,7 @@ local t = Def.ActorFrame{
 				local row = self:GetChild("Row" .. tostring(i))
 				local data = rows[i]
 				if row and data then
-					local percent = data.score_percent or data.accuracy or 0
+					local percent = data.displayed_percent or data.score_percent or data.accuracy or 0
 					local suffix = data.failed and " F" or ""
 					local line = string.format("%d. %s  %.2f%%%s", data.rank, data.name, percent, suffix)
 					row:settext(line)

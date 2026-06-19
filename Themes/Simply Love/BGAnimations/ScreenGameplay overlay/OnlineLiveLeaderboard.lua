@@ -88,6 +88,7 @@ local function rows_from_leaderboard(leaderboard)
 	for score in ivalues(leaderboard or {}) do
 		local user = score.user or {}
 		local accuracy_percent = tonumber(score.accuracy)
+		local displayed_percent = tonumber(score.displayed_percent or score.displayedPercent)
 		local ex_percent = tonumber(score.score_percent)
 		if ex_percent == nil and max_score > 0 and tonumber(score.score) then
 			ex_percent = math.max(0, math.min(100, (tonumber(score.score) / max_score) * 100))
@@ -95,7 +96,7 @@ local function rows_from_leaderboard(leaderboard)
 
 		-- The live leaderboard should follow score progression, not accuracy.
 		-- Use accuracy only when score-based percentage is unavailable.
-		local percent = ex_percent
+		local percent = displayed_percent or ex_percent
 		if percent == nil then
 			percent = accuracy_percent
 		end

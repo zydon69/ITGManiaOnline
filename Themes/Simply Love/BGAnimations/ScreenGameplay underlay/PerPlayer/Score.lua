@@ -6,6 +6,39 @@ local IsUltraWide = (GetScreenAspectRatio() > 21/9)
 local NumPlayers = #GAMESTATE:GetHumanPlayers()
 local IsEX = SL[pn].ActiveModifiers.ShowExScore
 local IsHardEX = SL[pn].ActiveModifiers.ShowHardEXScore
+local OnlineITGScoreColor = Color.White
+local OnlineEXScoreColor = (SL.JudgmentColors and SL.JudgmentColors["FA+"] and SL.JudgmentColors["FA+"][1]) or color("#21CCE8")
+local OnlineHardEXScoreColor = color("#ff00cc")
+
+local function online_score_mode()
+	if ITGOnline and ITGOnline.currentRoomId and ITGOnline.CurrentGlobalOptions then
+		local options = ITGOnline:CurrentGlobalOptions()
+		return tostring(options.score_mode or "itg")
+	end
+	return nil
+end
+
+local function active_score_flags()
+	local mode = online_score_mode()
+	if mode == "hardex" then
+		return false, true, mode
+	elseif mode == "ex" then
+		return true, false, mode
+	elseif mode == "itg" then
+		return false, false, mode
+	end
+	return IsEX, IsHardEX, IsHardEX and "hardex" or (IsEX and "ex" or "itg")
+end
+
+local function apply_score_color(actor, showEx, showHardEx)
+	if showHardEx then
+		actor:diffuse(OnlineHardEXScoreColor)
+	elseif showEx then
+		actor:diffuse(OnlineEXScoreColor)
+	else
+		actor:diffuse(OnlineITGScoreColor)
+	end
+end
 
 -- -----------------------------------------------------------------------
 -- first, check for conditions where we might not draw the score actor at all
@@ -66,13 +99,8 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 	InitCommand=function(self)
 		self:valign(1):horizalign(right)
 		self:zoom(0.5)
-		if IsHardEX then
-			self:diffuse(color("#ff00cc"))
-		elseif IsEX then
-			-- If EX Score, let's diffuse it to be the same as the ITG top window.
-			-- This will make it consistent with the EX Score Pane.
-			self:diffuse(SL.JudgmentColors["ITG"][1])
-		end
+		local showEx, showHardEx = active_score_flags()
+		apply_score_color(self, showEx, showHardEx)
 	end,
 
 	BeginCommand=function(self)
@@ -152,15 +180,17 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 		self:queuecommand("RedrawScore")
 	end,
 	RedrawScoreCommand=function(self)
+		local showEx, showHardEx, scoreMode = active_score_flags()
 		local exPercent = CalculateExScore(player)
 		local hardExPercent = CalculateHardExScore(player)
 		local dance_points = pss:GetPercentDancePoints()
 		local percent = FormatPercentScore( dance_points ):sub(1,-2)
-		local displayedPercent = IsHardEX and tonumber(hardExPercent) or (IsEX and tonumber(exPercent) or tonumber(percent))
+		local displayedPercent = showHardEx and tonumber(hardExPercent) or (showEx and tonumber(exPercent) or tonumber(percent))
 
-		if IsHardEX then
+		apply_score_color(self, showEx, showHardEx)
+		if showHardEx then
 			self:settext(("%.02f"):format(hardExPercent))
-		elseif IsEX then
+		elseif showEx then
 			self:settext(("%.02f"):format(exPercent))
 		else
 			self:settext(percent)
@@ -175,6 +205,7 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 					.. " ex=" .. tostring(exPercent)
 					.. " hardex=" .. tostring(hardExPercent)
 					.. " displayed=" .. tostring(displayedPercent)
+					.. " scoreMode=" .. tostring(scoreMode)
 					.. " combo=" .. tostring(pss:GetCurrentCombo() or 0))
 			end
 			MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
@@ -190,9 +221,11 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 	ExCountsChangedMessageCommand=function(self, params)
 		if params.Player ~= player then return end
 
-		if IsHardEX then
+		local showEx, showHardEx, scoreMode = active_score_flags()
+		apply_score_color(self, showEx, showHardEx)
+		if showHardEx then
 			self:settext(("%.02f"):format(params.HardExScore))
-		elseif IsEX then
+		elseif showEx then
 			self:settext(("%.02f"):format(params.ExScore))
 		else
 			return
@@ -208,6 +241,8 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 					.. " score=" .. tostring(percent)
 					.. " ex=" .. tostring(params.ExScore)
 					.. " hardex=" .. tostring(params.HardExScore)
+					.. " displayed=" .. tostring(showHardEx and tonumber(params.HardExScore) or tonumber(params.ExScore))
+					.. " scoreMode=" .. tostring(scoreMode)
 					.. " combo=" .. tostring(pss:GetCurrentCombo() or 0))
 			end
 			MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
@@ -215,7 +250,7 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 				ScorePercent = tonumber(percent),
 				ExScorePercent = tonumber(params.ExScore),
 				HardExScorePercent = tonumber(params.HardExScore),
-				DisplayedPercent = IsHardEX and tonumber(params.HardExScore) or tonumber(params.ExScore),
+				DisplayedPercent = showHardEx and tonumber(params.HardExScore) or tonumber(params.ExScore),
 				Combo = pss:GetCurrentCombo() or 0,
 			})
 		end
