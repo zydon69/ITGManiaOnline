@@ -934,6 +934,8 @@ pack_sync_busy = function()
 end
 
 function can_download_browsed_pack()
+	if normalized_online_phase and normalized_online_phase(joined_phase) == "results" then return false end
+	if ITGOnline and ITGOnline.currentRoom and normalized_online_phase and normalized_online_phase(ITGOnline.currentRoom.phase) == "results" then return false end
 	return joined_preview_unknown_pack
 		and not joined_song_confirmed
 		and not joined_missing_song
@@ -942,6 +944,8 @@ function can_download_browsed_pack()
 end
 
 function show_pack_download_button()
+	if normalized_online_phase and normalized_online_phase(joined_phase) == "results" then return false end
+	if ITGOnline and ITGOnline.currentRoom and normalized_online_phase and normalized_online_phase(ITGOnline.currentRoom.phase) == "results" then return false end
 	return joined_missing_song or can_download_browsed_pack() or pack_sync_busy()
 end
 
@@ -1025,6 +1029,42 @@ end
 
 function normalized_online_phase(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+end
+
+local function reset_joined_transient_song_state(reason, options)
+	options = options or {}
+	local clearPreview = options.clearPreview ~= false
+	local resetPackSync = options.resetPackSync ~= false
+	local previousPreview = joined_song_preview and (joined_song_preview.title or joined_song_preview.folder_name or joined_song_preview.song_hash) or "none"
+	lobby_flow_trace("joined_transient_song_reset reason=" .. tostring(reason or "unknown")
+		.. " clearPreview=" .. tostring(clearPreview == true)
+		.. " resetPackSync=" .. tostring(resetPackSync == true)
+		.. " previousPhase=" .. tostring(joined_phase)
+		.. " previousPreview=" .. tostring(previousPreview)
+		.. " previousConfirmed=" .. tostring(joined_song_confirmed == true)
+		.. " previousMissing=" .. tostring(joined_missing_song == true)
+		.. " previousCanDownload=" .. tostring(joined_can_download_pack == true)
+		.. " previousUnknownPack=" .. tostring(joined_preview_unknown_pack == true))
+	if clearPreview then
+		joined_song_preview = nil
+	end
+	joined_song_confirmed = false
+	joined_song_selected_key = ""
+	joined_missing_song = false
+	joined_missing_song_info = nil
+	joined_can_download_pack = false
+	joined_missing_song_reason = nil
+	joined_preview_unknown_pack = false
+	clear_pack_choice_recovery()
+	pack_choice_last_candidates = {}
+	pack_choice_last_song_info = nil
+	pack_choice_all_candidates_exhausted = false
+	showing_browse_pack_download_confirm = false
+	browse_pack_download_confirm_index = 0
+	browse_pack_download_song_info = nil
+	if resetPackSync and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ResetLocalState then
+		ITGOnline.PackSync:ResetLocalState(tostring(reason or "joined_transient_song_reset"))
+	end
 end
 
 function joined_phase_allows_song_selection()
@@ -2709,6 +2749,13 @@ local af = Def.ActorFrame{
 			.. " canDownload=" .. tostring(joined_can_download_pack == true)
 			.. " packBusy=" .. tostring(pack_sync_busy() == true)
 			.. " ready={" .. tostring(ready_summary()) .. "}")
+		local displayPhase = normalized_online_phase(joined_phase)
+		local roomPhase = normalized_online_phase(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "")
+		if displayPhase == "results" or roomPhase == "results" then
+			if joined_song_preview ~= nil or joined_song_confirmed or joined_missing_song or joined_can_download_pack or joined_preview_unknown_pack then
+				reset_joined_transient_song_state("update_joined_text_results_guard", { clearPreview = true, resetPackSync = false })
+			end
+		end
 		sync_local_missing_song_from_joined_players()
 		local joinedContent = self:GetChild("JoinedLobbyContent")
 		if not joinedContent then
@@ -3328,14 +3375,7 @@ local af = Def.ActorFrame{
 			joined_phase = params and params.phase or nil
 			joined_global_options = normalize_global_options(params and params.globalOptions or nil)
 			if joined_phase == "results" then
-				joined_song_preview = nil
-				joined_song_confirmed = false
-				joined_song_selected_key = ""
-				joined_missing_song = false
-				joined_missing_song_info = nil
-				joined_can_download_pack = false
-				joined_missing_song_reason = nil
-				joined_preview_unknown_pack = false
+				reset_joined_transient_song_state("online_lobby_state_results", { clearPreview = true, resetPackSync = true })
 			else
 				local previousSelectedKey = joined_song_selected_key
 				local selectedSongInfo = normalize_online_song_info(params and params.songInfo or nil)
@@ -3350,8 +3390,7 @@ local af = Def.ActorFrame{
 						or snapshotSource:find("song_selection_cancel", 1, true) ~= nil
 						or snapshotSource:find("room.play_state_reset_to_lobby", 1, true) ~= nil
 					if shouldClearPreview then
-						joined_song_preview = nil
-						joined_preview_unknown_pack = false
+						reset_joined_transient_song_state("online_lobby_state_clear_unconfirmed_preview", { clearPreview = true, resetPackSync = true })
 					end
 					joined_song_confirmed = false
 					joined_song_selected_key = ""
@@ -3413,6 +3452,17 @@ local af = Def.ActorFrame{
 				if not is_active_lobby_overlay() then
 					lobby_flow_trace("OnlineMissingSong_ignored reason=inactive_overlay"
 						.. " reasonParam=" .. tostring(params and params.reason or "nil"))
+					return
+				end
+				if normalized_online_phase(joined_phase) == "results"
+					or (ITGOnline and ITGOnline.currentRoom and normalized_online_phase(ITGOnline.currentRoom.phase) == "results") then
+					lobby_flow_trace("OnlineMissingSong_ignored reason=results_phase"
+						.. " reasonParam=" .. tostring(params and params.reason or "nil")
+						.. " joinedPhase=" .. tostring(joined_phase)
+						.. " roomPhase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+						.. " currentPreviewPack=" .. tostring(joined_song_preview and song_info_pack(joined_song_preview) or ""))
+					reset_joined_transient_song_state("missing_song_ignored_results_phase", { clearPreview = true, resetPackSync = false })
+					self:queuecommand("UpdateJoinedLobbyText")
 					return
 				end
 				lobby_flow_trace("OnlineMissingSong_received reason=" .. tostring(params and params.reason or "missing_local_song")
@@ -3651,6 +3701,17 @@ end,
 					lobby_flow_trace("OnlineSongPreview_ignored reason=leaving_lobby")
 					return
 				end
+				if normalized_online_phase(joined_phase) == "results"
+					or (ITGOnline and ITGOnline.currentRoom and normalized_online_phase(ITGOnline.currentRoom.phase) == "results") then
+					lobby_flow_trace("OnlineSongPreview_ignored reason=results_phase"
+						.. " joinedPhase=" .. tostring(joined_phase)
+						.. " roomPhase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+						.. " joined_code=" .. tostring(joined_lobby_code)
+						.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+					reset_joined_transient_song_state("song_preview_ignored_results_phase", { clearPreview = true, resetPackSync = false })
+					self:queuecommand("UpdateJoinedLobbyText")
+					return
+				end
 			local preview = normalize_online_song_info(params)
 		if preview then
 			lobby_flow_trace("OnlineSongPreview_received pack=" .. tostring(song_info_pack(preview))
@@ -3659,6 +3720,7 @@ end,
 				.. " joined_code=" .. tostring(joined_lobby_code)
 				.. " phase=" .. tostring(joined_phase)
 				.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+			reset_joined_transient_song_state("song_preview_received", { clearPreview = false, resetPackSync = false })
 			joined_song_preview = preview
 			joined_song_confirmed = false
 			joined_song_selected_key = ""
@@ -3693,10 +3755,20 @@ end,
 				lobby_flow_trace("OnlinePackSyncLocalStatus_ignored reason=inactive_overlay")
 				return
 			end
-			if leaving_lobby then
-				lobby_flow_trace("OnlinePackSyncLocalStatus_ignored reason=leaving_lobby")
-				return
-			end
+				if leaving_lobby then
+					lobby_flow_trace("OnlinePackSyncLocalStatus_ignored reason=leaving_lobby")
+					return
+				end
+				if normalized_online_phase(joined_phase) == "results"
+					or (ITGOnline and ITGOnline.currentRoom and normalized_online_phase(ITGOnline.currentRoom.phase) == "results") then
+					lobby_flow_trace("OnlinePackSyncLocalStatus_ignored reason=results_phase status=" .. tostring(params and params.status or "")
+						.. " progress=" .. tostring(params and params.progress or "")
+						.. " joinedPhase=" .. tostring(joined_phase)
+						.. " roomPhase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+					reset_joined_transient_song_state("pack_sync_status_ignored_results_phase", { clearPreview = true, resetPackSync = false })
+					self:queuecommand("UpdateJoinedLobbyText")
+					return
+				end
 		lobby_flow_trace("OnlinePackSyncLocalStatus_received status=" .. tostring(params and params.status or "")
 			.. " progress=" .. tostring(params and params.progress or "")
 			.. " userId=" .. tostring(params and params.userId or params and params.user_id or "")

@@ -69,9 +69,9 @@ ITGOnline.pendingLiveScoreSnapshot = ITGOnline.pendingLiveScoreSnapshot or nil
 ITGOnline.pendingLiveScoreRoundKey = ITGOnline.pendingLiveScoreRoundKey or ""
 ITGOnline.liveScoreInFlight = ITGOnline.liveScoreInFlight or false
 ITGOnline.liveScoreNextAttemptAt = ITGOnline.liveScoreNextAttemptAt or 0
-ITGOnline.liveScoreMinIntervalSeconds = ITGOnline.liveScoreMinIntervalSeconds or 0.35
+ITGOnline.liveScoreMinIntervalSeconds = ITGOnline.liveScoreMinIntervalSeconds or 0.50
 ITGOnline.liveScoreEndgameWindowSeconds = ITGOnline.liveScoreEndgameWindowSeconds or 6
-ITGOnline.liveScoreEndgameIntervalSeconds = ITGOnline.liveScoreEndgameIntervalSeconds or 0.20
+ITGOnline.liveScoreEndgameIntervalSeconds = ITGOnline.liveScoreEndgameIntervalSeconds or 0.50
 ITGOnline.lastLeaderboardVersionByRoomId = ITGOnline.lastLeaderboardVersionByRoomId or {}
 ITGOnline.lastLeaderboardRealtimeAt = ITGOnline.lastLeaderboardRealtimeAt or 0
 ITGOnline.lastPlayStateVersionByRoomId = ITGOnline.lastPlayStateVersionByRoomId or {}
@@ -5088,8 +5088,8 @@ function ITGOnline:HasPendingLiveScore()
 end
 
 function ITGOnline:LiveScoreMinIntervalSeconds()
-	local normalInterval = tonumber(self.liveScoreMinIntervalSeconds) or 0.35
-	local endgameInterval = tonumber(self.liveScoreEndgameIntervalSeconds) or normalInterval
+	local normalInterval = math.max(0.50, tonumber(self.liveScoreMinIntervalSeconds) or 0.50)
+	local endgameInterval = math.max(0.50, tonumber(self.liveScoreEndgameIntervalSeconds) or normalInterval)
 	local endgameWindow = tonumber(self.liveScoreEndgameWindowSeconds) or 6
 	if endgameInterval >= normalInterval or endgameWindow <= 0 then
 		return normalInterval
