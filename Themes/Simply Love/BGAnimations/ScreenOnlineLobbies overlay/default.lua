@@ -1064,7 +1064,11 @@ local function apply_local_pack_sync_status_to_joined_player(params)
 			local status = trim_text(params.status)
 			if status ~= "" then player.packSyncStatus = status end
 			player.packSyncMessage = params.message
-			player.packSyncDownloadProgress = params.download_progress
+			if params.download_progress ~= nil then
+				player.packSyncDownloadProgress = params.download_progress
+			elseif status ~= "download_in_progress" and status ~= "download_requested" then
+				player.packSyncDownloadProgress = nil
+			end
 			if status == "ready" or status == "local_chart_match_found" then
 				player.missingSong = false
 				player.songAvailable = joined_song_confirmed and true or player.songAvailable
@@ -1130,18 +1134,20 @@ local function pack_sync_line_for_player(player)
 	local songAvailable = player.songAvailable == true
 	local previewOnly = joined_song_preview ~= nil and not joined_song_confirmed
 
+	if status == "download_in_progress" then
+		local progress = tonumber(player.packSyncDownloadProgress)
+		local suffix = progress and (" " .. tostring(math.floor(progress)) .. "%") or ""
+		return "Telechargement en cours" .. suffix
+	end
+	if status == "download_requested" or status == "reloading_songs" then
+		return message ~= "" and message or pack_sync_display_text(status)
+	end
+
 	if previewOnly then
 		if status == "manager_browsing_unknown_pack" then
 			return "Pack inconnu"
 		end
-		if status == "download_in_progress" then
-			local progress = tonumber(player.packSyncDownloadProgress)
-			local suffix = progress and (" " .. tostring(math.floor(progress)) .. "%") or ""
-			return "Telechargement en cours" .. suffix
-		end
-		if status == "download_requested"
-			or status == "reloading_songs"
-			or status == "download_failed"
+		if status == "download_failed"
 			or status == "downloaded_ok" then
 			return message ~= "" and message or pack_sync_display_text(status)
 		end
