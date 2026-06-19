@@ -69,8 +69,6 @@ local joined_can_download_pack = false
 local joined_missing_song_reason = nil
 local joined_preview_unknown_pack = false
 local leaving_lobby = false
-local leave_request_lobby_code = nil
-local leave_request_generation = 0
 local showing_leave_confirm = false
 local leave_confirm_index = 0
 local leave_confirm_mode = "leave_lobby"
@@ -335,13 +333,14 @@ end
 			lobby_flow_trace("begin_leave_lobby_skipped reason=already_leaving joined_code=" .. tostring(joined_lobby_code))
 			return
 		end
-		leave_request_lobby_code = tostring(joined_lobby_code or "")
-		leave_request_generation = leave_request_generation + 1
+		SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode = tostring(joined_lobby_code or "")
+		SL.Global.Online.ScreenOnlineLobbiesLeaveRequestGeneration =
+			(tonumber(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestGeneration) or 0) + 1
 		lobby_flow_trace(
 			"begin_leave_lobby mode=" .. tostring(leave_confirm_mode) ..
 			" joined_code=" .. tostring(joined_lobby_code) ..
-			" request_code=" .. tostring(leave_request_lobby_code) ..
-			" generation=" .. tostring(leave_request_generation) ..
+			" request_code=" .. tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode) ..
+			" generation=" .. tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestGeneration) ..
 			" phase=" .. tostring(joined_phase) ..
 			" has_root=" .. tostring(root ~= nil))
 		leaving_lobby = true
@@ -365,7 +364,7 @@ end
 
 	local function finish_leave_lobby(root, requestedLobbyCode)
 		local now = GetTimeSinceStart()
-		local departed_lobby_code = tostring(requestedLobbyCode or leave_request_lobby_code or joined_lobby_code or "")
+		local departed_lobby_code = tostring(requestedLobbyCode or SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode or joined_lobby_code or "")
 		SL.Global.Online = SL.Global.Online or {}
 		local lastFinishedAt = tonumber(SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt) or -999
 		if now - lastFinishedAt < 0.5 then
@@ -376,7 +375,7 @@ end
 		end
 		lobby_flow_trace(
 			"finish_leave_lobby_begin joined_code=" .. tostring(joined_lobby_code) ..
-			" request_code=" .. tostring(leave_request_lobby_code) ..
+			" request_code=" .. tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode) ..
 			" departed_code=" .. tostring(departed_lobby_code) ..
 			" phase=" .. tostring(joined_phase) ..
 			" players=" .. tostring(type(joined_lobby_players) == "table" and #joined_lobby_players or 0) ..
@@ -385,7 +384,7 @@ end
 		SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt = now
 		input_quiet_until = now + 0.75
 		leaving_lobby = false
-		leave_request_lobby_code = nil
+		SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode = nil
 	mode = "browse"
 	list_selected = false
 	holding.MenuLeft = false
@@ -1625,8 +1624,8 @@ local function handle_leave_confirm_input(event)
 			else
 				begin_leave_lobby(t)
 				MESSAGEMAN:Broadcast("LeaveLobby", {
-					roomId=leave_request_lobby_code,
-					generation=leave_request_generation,
+					roomId=SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode,
+					generation=SL.Global.Online.ScreenOnlineLobbiesLeaveRequestGeneration,
 				})
 			end
 		else
@@ -3065,13 +3064,13 @@ local af = Def.ActorFrame{
 			eventLobbyCode = eventLobbyCode and tostring(eventLobbyCode) or nil
 			if eventLobbyCode ~= nil and eventLobbyCode ~= "" then
 				local activeLobbyCode = tostring(joined_lobby_code or "")
-				local pendingLobbyCode = tostring(leave_request_lobby_code or "")
+				local pendingLobbyCode = tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode or "")
 				local activeRoomId = tostring(ITGOnline and ITGOnline.currentRoomId or "")
 				if activeLobbyCode ~= eventLobbyCode and pendingLobbyCode ~= eventLobbyCode and activeRoomId ~= eventLobbyCode then
 					lobby_flow_trace(
 						"OnlineLobbyLeftMessage_ignored reason=room_mismatch event_code=" .. tostring(eventLobbyCode) ..
 						" joined_code=" .. tostring(joined_lobby_code) ..
-						" request_code=" .. tostring(leave_request_lobby_code) ..
+						" request_code=" .. tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode) ..
 						" currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId))
 					return
 				end
