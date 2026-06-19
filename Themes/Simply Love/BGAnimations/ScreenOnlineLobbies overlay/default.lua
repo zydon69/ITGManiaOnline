@@ -334,12 +334,15 @@ end
 			return
 		end
 		SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode = tostring(joined_lobby_code or "")
+		SL.Global.Online.ScreenOnlineLobbiesLeaveRequestRoomId = tostring(ITGOnline and ITGOnline.currentRoomId or "")
 		SL.Global.Online.ScreenOnlineLobbiesLeaveRequestGeneration =
 			(tonumber(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestGeneration) or 0) + 1
+		SL.Global.Online.ScreenOnlineLobbiesLeaveWatchdogCount = 0
 		lobby_flow_trace(
 			"begin_leave_lobby mode=" .. tostring(leave_confirm_mode) ..
 			" joined_code=" .. tostring(joined_lobby_code) ..
 			" request_code=" .. tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode) ..
+			" request_room_id=" .. tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestRoomId) ..
 			" generation=" .. tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestGeneration) ..
 			" phase=" .. tostring(joined_phase) ..
 			" has_root=" .. tostring(root ~= nil))
@@ -349,11 +352,12 @@ end
 	list_selected = false
 	reset_browse_focus()
 	close_transient_joined_ui()
-	if root then
-		local joinedContent = root:GetChild("JoinedLobbyContent")
-		if joinedContent then joinedContent:visible(false) end
-		root:queuecommand("UpdateLobbyView")
-		root:playcommand("SetStatus", {
+		if root then
+			local joinedContent = root:GetChild("JoinedLobbyContent")
+			if joinedContent then joinedContent:visible(false) end
+			root:queuecommand("UpdateLobbyView")
+			root:sleep(4.0):queuecommand("LeaveLobbyWatchdog")
+			root:playcommand("SetStatus", {
 			text="Sortie du salon...",
 			showSpinner=true,
 				showPrompt=false
@@ -385,6 +389,8 @@ end
 		input_quiet_until = now + 0.75
 		leaving_lobby = false
 		SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode = nil
+		SL.Global.Online.ScreenOnlineLobbiesLeaveRequestRoomId = nil
+		SL.Global.Online.ScreenOnlineLobbiesLeaveWatchdogCount = 0
 	mode = "browse"
 	list_selected = false
 	holding.MenuLeft = false
@@ -457,17 +463,6 @@ end
 	local function apply_lobby_search_to_ui(root, reason)
 		if not root or not is_active_lobby_overlay() then
 			lobby_flow_trace("lobby_search_ui_skipped reason=inactive source=" .. tostring(reason or "unknown"))
-			return false
-		end
-
-		if mode == "browse"
-			and joined_lobby_code == ""
-			and not (ITGOnline and ITGOnline.currentRoomId)
-			and recently_left_lobby(4.0) then
-			lobby_search_ui_pending = false
-			lobby_flow_trace(
-				"lobby_search_ui_skipped reason=recent_leave_no_room source=" ..
-				tostring(reason or "unknown"))
 			return false
 		end
 
@@ -2699,7 +2694,8 @@ local af = Def.ActorFrame{
 				and joined_lobby_code == ""
 				and not (ITGOnline and ITGOnline.currentRoomId)
 				and recently_left_lobby(5.0) then
-				lobby_flow_trace("CheckConnect_skipped reason=recent_leave_no_room")
+				lobby_flow_trace("CheckConnect_deferred reason=recent_leave_no_room")
+				self:sleep(0.25):queuecommand("CheckConnect")
 				return
 			end
 			local onlineHandler = GetOnlineHandlerInstance()
@@ -2738,7 +2734,8 @@ local af = Def.ActorFrame{
 				and joined_lobby_code == ""
 				and not (ITGOnline and ITGOnline.currentRoomId)
 				and recently_left_lobby(5.0) then
-				lobby_flow_trace("Display_skipped reason=recent_leave_no_room")
+				lobby_flow_trace("Display_deferred reason=recent_leave_no_room")
+				self:sleep(0.25):queuecommand("Display")
 				return
 			end
 			local onlineHandler = GetOnlineHandlerInstance()
@@ -2821,6 +2818,29 @@ local af = Def.ActorFrame{
 					if ITGOnline and ITGOnline.currentRoomId then return end
 					lobby_flow_trace("refresh_lobby_after_leave")
 					MESSAGEMAN:Broadcast("SearchLobby", { force=true, minInterval=0 })
+				end,
+				LeaveLobbyWatchdogCommand=function(self)
+					if not is_active_lobby_overlay() then return end
+					if not leaving_lobby then return end
+					SL.Global.Online.ScreenOnlineLobbiesLeaveWatchdogCount =
+						(tonumber(SL.Global.Online.ScreenOnlineLobbiesLeaveWatchdogCount) or 0) + 1
+					lobby_flow_trace(
+						"leave_lobby_watchdog leaving=true count=" ..
+						tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveWatchdogCount) ..
+						" request_code=" .. tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode) ..
+						" request_room_id=" .. tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestRoomId) ..
+						" currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId))
+					if not (ITGOnline and ITGOnline.currentRoomId) then
+						finish_leave_lobby(self, SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode)
+						return
+					end
+					MESSAGEMAN:Broadcast("LeaveLobby", {
+						roomId=SL.Global.Online.ScreenOnlineLobbiesLeaveRequestRoomId,
+						lobbyCode=SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode,
+						generation=SL.Global.Online.ScreenOnlineLobbiesLeaveRequestGeneration,
+						source="watchdog",
+					})
+					self:sleep(4.0):queuecommand("LeaveLobbyWatchdog")
 				end,
 				ApplyDeferredLobbySearchCommand=function(self)
 					lobby_search_ui_pending = false
@@ -3065,12 +3085,14 @@ local af = Def.ActorFrame{
 			if eventLobbyCode ~= nil and eventLobbyCode ~= "" then
 				local activeLobbyCode = tostring(joined_lobby_code or "")
 				local pendingLobbyCode = tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode or "")
+				local pendingRoomId = tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestRoomId or "")
 				local activeRoomId = tostring(ITGOnline and ITGOnline.currentRoomId or "")
-				if activeLobbyCode ~= eventLobbyCode and pendingLobbyCode ~= eventLobbyCode and activeRoomId ~= eventLobbyCode then
+				if activeLobbyCode ~= eventLobbyCode and pendingLobbyCode ~= eventLobbyCode and pendingRoomId ~= eventLobbyCode and activeRoomId ~= eventLobbyCode then
 					lobby_flow_trace(
 						"OnlineLobbyLeftMessage_ignored reason=room_mismatch event_code=" .. tostring(eventLobbyCode) ..
 						" joined_code=" .. tostring(joined_lobby_code) ..
 						" request_code=" .. tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode) ..
+						" request_room_id=" .. tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestRoomId) ..
 						" currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId))
 					return
 				end

@@ -1606,8 +1606,13 @@ end
 	function ITGOnline:ScheduleDeferredLobbyRefresh(delay, reason)
 		if self:IsAutomaticLobbyRefreshSuppressed() then
 			online_flow_trace(
-				"lobby_refresh_deferred_skipped reason=post_leave_auto_suppressed source=" ..
-				tostring(reason or "unknown"))
+				"lobby_refresh_deferred_post_leave delay=" .. tostring(delay) ..
+				" source=" .. tostring(reason or "unknown"))
+			self.lobbyRefreshDeferredScheduled = true
+			MESSAGEMAN:Broadcast("ITGOnlineLobbyRefreshDeferred", {
+				delay = math.max(0.05, tonumber(delay) or 0.05),
+				reason = "post_leave:" .. tostring(reason or "unknown")
+			})
 			return
 		end
 		self.lobbyRefreshDeferredScheduled = true
@@ -3056,11 +3061,14 @@ function ITGOnline:NoteScreenChanged(screenName)
 		SL.Global.Online.GameplayLayoutActive = self:IsOnlineGameplayScreen(screenName)
 		self:CancelScreenBoundRequests()
 		if previous == "ScreenReloadSongsOnline" and screenName == "ScreenOnlineLobbies" then
+			online_flow_trace("reload_songs_online_returned_to_lobby")
 			self:ClearFileHashCache()
 			MESSAGEMAN:Broadcast("OnlineSongReloadCompleted")
 			if self.PackSync and self.PackSync.ValidatePendingPostReload then
 				self.PackSync:ValidatePendingPostReload()
 			end
+		elseif screenName == "ScreenReloadSongsOnline" then
+			online_flow_trace("reload_songs_online_entered previous=" .. tostring(previous))
 		end
 		self:HandleOnlineGameplayScreenTransition(previous, screenName)
 		self:EnforceRoomPhaseScreen(screenName)
@@ -5987,9 +5995,12 @@ end
 
 	function ITGOnline:QueueLobbyRefresh()
 		if self:IsAutomaticLobbyRefreshSuppressed() then
-			online_flow_trace("lobby_refresh_skipped reason=post_leave_auto_suppressed")
-			self.lobbyRefreshQueued = false
-			self.lobbyRefreshDeferredScheduled = false
+			local remaining = math.max(0.05, (tonumber(self.lobbyRefreshDropUntil) or 0) - GetTimeSinceStart() + 0.05)
+			online_flow_trace("lobby_refresh_deferred reason=post_leave_auto_suppressed delay=" .. tostring(remaining))
+			self.lobbyRefreshQueued = true
+			if not self.lobbyRefreshDeferredScheduled then
+				self:ScheduleDeferredLobbyRefresh(remaining, "post_leave_auto_suppressed")
+			end
 			return
 		end
 		if self:IsLobbyRefreshSuppressed() then
@@ -6013,9 +6024,12 @@ end
 			self.lobbyRefreshInFlight = false
 				if ok then
 					if self:IsAutomaticLobbyRefreshSuppressed() then
-						online_flow_trace("lobby_refresh_result_dropped reason=post_leave_auto_suppressed")
-						self.lobbyRefreshQueued = false
-						self.lobbyRefreshDeferredScheduled = false
+						local remaining = math.max(0.05, (tonumber(self.lobbyRefreshDropUntil) or 0) - GetTimeSinceStart() + 0.05)
+						online_flow_trace("lobby_refresh_result_deferred reason=post_leave_auto_suppressed delay=" .. tostring(remaining))
+						self.lobbyRefreshQueued = true
+						if not self.lobbyRefreshDeferredScheduled then
+							self:ScheduleDeferredLobbyRefresh(remaining, "post_leave_response")
+						end
 						return
 					end
 					if self:IsLobbyRefreshSuppressed() then
@@ -6392,8 +6406,8 @@ end
 					self:MarkLeavingRoom(roomId, false)
 				end
 					self.deletedRoomIds[self:RoomKey(roomId)] = gone == true or nil
-					self:SuppressLobbyRefresh(1.0, "leave_room_confirmed")
-					self:SuppressAutomaticLobbyRefresh(5.0, "leave_room_confirmed")
+					self:SuppressLobbyRefresh(0.75, "leave_room_confirmed")
+					self:SuppressAutomaticLobbyRefresh(1.25, "leave_room_confirmed")
 				else
 				online_flow_trace("leave_room_failed_unmark room=" .. tostring(roomId))
 				self:MarkLeavingRoom(roomId, false)

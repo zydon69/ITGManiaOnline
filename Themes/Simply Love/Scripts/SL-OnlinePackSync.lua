@@ -362,12 +362,23 @@ local function transition_to_reload_songs()
 	end
 
 	local topScreen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
-	if not topScreen then return end
-
-	if topScreen:GetName() == "ScreenReloadSongsOnline" then
+	if not topScreen then
+		if online_flow_trace then
+			online_flow_trace("pack_sync_reload_songs_skipped reason=no_top_screen")
+		end
 		return
 	end
 
+	if topScreen:GetName() == "ScreenReloadSongsOnline" then
+		if online_flow_trace then
+			online_flow_trace("pack_sync_reload_songs_skipped reason=already_reloading")
+		end
+		return
+	end
+
+	if online_flow_trace then
+		online_flow_trace("pack_sync_reload_songs_transition from=" .. tostring(topScreen:GetName()))
+	end
 	topScreen:SetNextScreenName("ScreenReloadSongsOnline")
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 end
