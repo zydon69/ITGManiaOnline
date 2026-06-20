@@ -1169,10 +1169,16 @@ function PackSync:ApplySelectedChart(songInfo)
 		MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
 		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
 			ITGOnline:ConfirmSelectedSongAvailability("local_chart_match_found", function(ok)
-				if ok then self:UpdateStatus(self.status.Ready, result.matchMessage) end
+				trace("ApplySelectedChart availability confirmed ok=" .. tostring(ok == true)
+					.. " source=local_chart_match_found")
+				if ok then
+					self:UpdateStatus(self.status.Ready, result.matchMessage)
+					self:MarkLobbyReadyForSelectedSong("local_chart_match_found")
+				end
 			end)
 		else
 			self:UpdateStatus(self.status.Ready, result.matchMessage)
+			self:MarkLobbyReadyForSelectedSong("local_chart_match_found_no_client_confirm")
 		end
 		return true
 	end
@@ -1187,6 +1193,51 @@ function PackSync:ApplySelectedChart(songInfo)
 		MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = reason, noCompatibleChart = true })
 	end
 	return false
+end
+
+function PackSync:MarkLobbyReadyForSelectedSong(source, retrying)
+	if not (ITGOnline and ITGOnline.SetReady) then
+		trace("MarkLobbyReady skipped reason=no_online_client source=" .. tostring(source or "unknown"))
+		return false
+	end
+	local phase = ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom and ITGOnline.currentRoom.phase) or tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "")
+	if phase == "config" then
+		trace("MarkLobbyReady skipped reason=already_config source=" .. tostring(source or "unknown"))
+		if ITGOnline.EnforceRoomPhaseScreen then ITGOnline:EnforceRoomPhaseScreen() end
+		return true
+	end
+	if phase ~= "lobby_ready" and phase ~= "lobby" then
+		trace("MarkLobbyReady skipped reason=phase_not_lobby source=" .. tostring(source or "unknown")
+			.. " phase=" .. tostring(phase))
+		return false
+	end
+	trace("MarkLobbyReady begin source=" .. tostring(source or "unknown")
+		.. " retrying=" .. tostring(retrying == true)
+		.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(phase))
+	ITGOnline:SetReady("lobby_ready", true, function(ok, decoded, response)
+		trace("MarkLobbyReady response source=" .. tostring(source or "unknown")
+			.. " ok=" .. tostring(ok == true)
+			.. " status=" .. tostring(response and response.statusCode or "nil")
+			.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil")
+			.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+			.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+		if ok then
+			if ITGOnline.EnforceRoomPhaseScreen then ITGOnline:EnforceRoomPhaseScreen() end
+			return
+		end
+		if retrying then return end
+		if ITGOnline.EnsureCurrentRoom then
+			ITGOnline:EnsureCurrentRoom(function(fetchOk)
+				trace("MarkLobbyReady retry_refresh source=" .. tostring(source or "unknown")
+					.. " ok=" .. tostring(fetchOk == true))
+				if fetchOk then
+					self:MarkLobbyReadyForSelectedSong(tostring(source or "unknown") .. "_retry", true)
+				end
+			end)
+		end
+	end)
+	return true
 end
 
 local function stepmaniaonline_origin()
@@ -2217,13 +2268,18 @@ function PackSync:ValidatePendingPostReload()
 		self:UpdateStatus(self.status.DownloadedOk, nil)
 		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
 			ITGOnline:ConfirmSelectedSongAvailability("downloaded_ok", function(ok)
-				if ok then self:UpdateStatus(self.status.Ready, nil) end
+				trace("PostReload availability confirmed ok=" .. tostring(ok == true)
+					.. " source=downloaded_ok")
+				if ok then
+					self:UpdateStatus(self.status.Ready, nil)
+					self:MarkLobbyReadyForSelectedSong("downloaded_ok")
+				end
 			end)
 		else
 			self:UpdateStatus(self.status.Ready, nil)
+			self:MarkLobbyReadyForSelectedSong("downloaded_ok_no_client_confirm")
 		end
 		MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
-		transition_to_player_options()
 		return true
 	end
 

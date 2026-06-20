@@ -2658,13 +2658,8 @@ local function handle_joined_mode_input(event)
 			.. " canCancelSelection=" .. tostring(joined_can_cancel_song_selection() == true)
 			.. " canDownload=" .. tostring(joined_can_download_pack == true or can_download_browsed_pack() == true))
 		if joined_active_index == 1 then
-			if joined_room_can_start() then
-				lobby_flow_trace("input_joined_start_leave_index_promoted_to_start_room")
-				joined_active_index = 7
-				MESSAGEMAN:Broadcast("StartOnlineRoom")
-			else
-				open_leave_confirm("leave_lobby")
-			end
+			lobby_flow_trace("input_joined_leave_confirm strict_index=1")
+			open_leave_confirm("leave_lobby")
 		elseif joined_active_index == 2 and joined_is_manager then
 			if not joined_phase_allows_song_selection() then
 				t:playcommand("SetStatus", {

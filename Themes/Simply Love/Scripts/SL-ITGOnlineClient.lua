@@ -9143,6 +9143,9 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 					self.songLoadedPendingCallbacks = {}
 				end
 			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(room or decoded.room))
+			if not missing and self.EnforceRoomPhaseScreen then
+				self:EnforceRoomPhaseScreen()
+			end
 		end
 		for cb in ivalues(callbacks) do
 			if cb then cb(callbackOk, decoded, response) end
