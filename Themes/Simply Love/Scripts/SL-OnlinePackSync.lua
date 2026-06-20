@@ -25,6 +25,9 @@ PackSync.lastPostedStatusAt = tonumber(PackSync.lastPostedStatusAt) or 0
 PackSync.statusPostInFlightSignature = PackSync.statusPostInFlightSignature or ""
 PackSync.lastAppliedLocalStatusSignature = PackSync.lastAppliedLocalStatusSignature or ""
 PackSync.statusPostDuplicateHeartbeatSeconds = tonumber(PackSync.statusPostDuplicateHeartbeatSeconds) or 5.0
+PackSync.lastManagerBrowsingPreviewPostKey = PackSync.lastManagerBrowsingPreviewPostKey or ""
+PackSync.lastManagerBrowsingPreviewPostAt = tonumber(PackSync.lastManagerBrowsingPreviewPostAt) or 0
+PackSync.managerBrowsingPreviewDuplicateSuppressSeconds = tonumber(PackSync.managerBrowsingPreviewDuplicateSuppressSeconds) or 1.5
 
 PackSync.status = {
 	Unknown = "unknown",
@@ -55,6 +58,24 @@ PackSync.statusText = {
 	downloaded_ok = "Telechargement OK",
 	chart_mismatch = "Chart differente",
 }
+
+local function early_trim(value)
+	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+function PackSync:IsActiveDownloadStatus(status)
+	status = tostring(status or self.currentStatus or "")
+	return status == self.status.DownloadRequested
+		or status == self.status.DownloadInProgress
+		or status == self.status.ReloadingSongs
+end
+
+function PackSync:IsActiveDownload()
+	return self:IsActiveDownloadStatus(self.currentStatus)
+		or early_trim(self.downloadInFlightKey) ~= ""
+		or self.activeBrowseOnlyDownload == true
+		or self.pendingPostReloadSongInfo ~= nil
+end
 
 local function trace(message)
 	local line = "[OnlinePackSync] " .. tostring(message or "")
@@ -99,6 +120,17 @@ local function current_user_is_active_room_member()
 	end
 	if tostring(ITGOnline.currentRoom.id or "") ~= currentRoomId then
 		return false
+	end
+	if type(ITGOnline.currentRoom.members) == "table"
+		and #ITGOnline.currentRoom.members == 0
+		and PackSync
+		and PackSync:IsActiveDownload() then
+		trace("Active room membership trusted during active download because current room snapshot has no members"
+			.. " room=" .. tostring(currentRoomId)
+			.. " status=" .. tostring(PackSync.currentStatus or "nil")
+			.. " key=" .. tostring(PackSync.downloadInFlightKey or "")
+			.. " browseOnly=" .. tostring(PackSync.activeBrowseOnlyDownload == true))
+		return true
 	end
 	for member in ivalues(ITGOnline.currentRoom.members or {}) do
 		local user = member.user or member
@@ -986,8 +1018,12 @@ function PackSync:ManagerBrowsingPreview(songInfo)
 		trace("ManagerBrowsingPreview skipped reason=no_pack title=" .. tostring(selected_title(songInfo)))
 		return
 	end
-	if self.activeBrowseOnlyDownload == true or trim(self.downloadInFlightKey) ~= "" then
-		trace("Manager browsing preview ignored during active download pack=" .. tostring(packName))
+	if self:IsActiveDownload() then
+		trace("Manager browsing preview ignored during active download pack=" .. tostring(packName)
+			.. " status=" .. tostring(self.currentStatus or "nil")
+			.. " key=" .. tostring(self.downloadInFlightKey or "")
+			.. " browseOnly=" .. tostring(self.activeBrowseOnlyDownload == true)
+			.. " pendingPostReload=" .. tostring(self.pendingPostReloadSongInfo ~= nil))
 		return
 	end
 
@@ -1000,6 +1036,22 @@ function PackSync:ManagerBrowsingPreview(songInfo)
 		message = "Pack téléchargé et disponible localement."
 	end
 	local normalizedMessage = status_message(message)
+	local postKey = table.concat({
+		tostring(ITGOnline and ITGOnline.currentRoomId or ""),
+		packKey,
+		status,
+		tostring(normalizedMessage or ""),
+	}, "|")
+	local now = GetTimeSinceStart and GetTimeSinceStart() or 0
+	if postKey ~= ""
+		and postKey == tostring(self.lastManagerBrowsingPreviewPostKey or "")
+		and (now - (tonumber(self.lastManagerBrowsingPreviewPostAt) or 0)) < (tonumber(self.managerBrowsingPreviewDuplicateSuppressSeconds) or 1.5) then
+		trace("Manager browsing preview skipped duplicate_recent pack=" .. tostring(packName)
+			.. " status=" .. tostring(status)
+			.. " age=" .. string.format("%.3f", now - (tonumber(self.lastManagerBrowsingPreviewPostAt) or 0)))
+		self:ApplyLocalStatus(status, normalizedMessage)
+		return
+	end
 	trace("Manager browsing preview pack=" .. tostring(packName)
 		.. " exists=" .. tostring(exists)
 		.. " previous_pack_key=" .. tostring(self.browsePreviewPackKey or "")
@@ -1011,6 +1063,8 @@ function PackSync:ManagerBrowsingPreview(songInfo)
 	end
 
 	self.browsePreviewPackKey = packKey
+	self.lastManagerBrowsingPreviewPostKey = postKey
+	self.lastManagerBrowsingPreviewPostAt = now
 	self:UpdateStatus(status, normalizedMessage)
 end
 
@@ -1025,7 +1079,7 @@ function PackSync:FindLocalMatch(songInfo)
 	end
 
 	self.currentSongInfo = songInfo
-	if trim(self.downloadInFlightKey) ~= "" or self.activeBrowseOnlyDownload == true then
+	if self:IsActiveDownload() then
 		trace("Skipping local chart status scan during active download title=" .. selected_title(songInfo))
 		return { ok = false, status = "download_in_progress", reason = "download_in_progress" }
 	end
@@ -2238,6 +2292,16 @@ function PackSync:ValidatePendingPostReload()
 		self:UpdateStatus(self.status.DownloadedOk, "Pack telecharge. En attente du choix de chanson du manager.")
 		if MESSAGEMAN then
 			MESSAGEMAN:Broadcast("OnlinePackDownloaded", { songInfo = songInfo })
+		end
+		local selectedSong = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song or nil
+		if selectedSong and selected_song_hash(selectedSong) ~= "" and selected_chart_hash(selectedSong) ~= "" then
+			trace("Browse-only download complete; applying current selected song after reload"
+				.. " title=" .. tostring(selected_title(selectedSong))
+				.. " pack=" .. tostring(selected_pack(selectedSong))
+				.. " selected_at=" .. tostring(selected_at(selectedSong))
+				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+			self:ApplySelectedChart(selectedSong)
 		end
 		return true
 	end

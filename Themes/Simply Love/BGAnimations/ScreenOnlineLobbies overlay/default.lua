@@ -597,7 +597,7 @@ end
 				lobby_flow_trace("finish_leave_lobby_removed_stale_candidate code=" .. tostring(departed_lobby_code))
 			end
 			request_lobby_ui_repaint(root, "finish_leave_lobby")
-			request_lobby_refresh("overlay_post_leave", { immediate=true, delay=0 }, root)
+			lobby_flow_trace("finish_leave_lobby_refresh_skipped reason=client_leave_room_confirmed_already_refreshes")
 		local status = root:GetChild("NetworkStatus")
 		if status then status:visible(false) end
 		lobby_flow_trace("finish_leave_lobby_status_suppressed message=Salon quitte.")

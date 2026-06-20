@@ -3363,6 +3363,7 @@ local function source_can_be_partial_room_snapshot(source)
 		or value == "realtime_room_event:room.member_song_availability_updated"
 		or value == "member_room_refresh:room.member_pack_sync_updated"
 		or value == "member_room_refresh:room.member_song_availability_updated"
+		or value == "lobby_refresh_current_room:fetch_lobby"
 end
 
 local function merge_room_array_by_user_id(previousItems, incomingItems, userIdFn)
@@ -3473,8 +3474,8 @@ function ITGOnline:NormalizeRoomSnapshot(room, previousRoom, source)
 	local previousMembers = previousRoom.members or {}
 	local incomingReadyStates = room.ready_states or {}
 	local previousReadyStates = previousRoom.ready_states or {}
-	local shouldMergeMembers = #incomingMembers > 0 and #previousMembers > #incomingMembers
-	local shouldMergeReady = #incomingReadyStates > 0 and #previousReadyStates > #incomingReadyStates
+	local shouldMergeMembers = #previousMembers > #incomingMembers
+	local shouldMergeReady = #previousReadyStates > #incomingReadyStates
 
 	if not shouldMergeMembers and not shouldMergeReady then
 		online_flow_trace("room_snapshot_partial_merge_skipped source=" .. tostring(source or "unknown")
@@ -7728,7 +7729,8 @@ function ITGOnline:UpdatePlayStateFromResponse(decoded)
 	end
 end
 
-function ITGOnline:ApplyPlayStateSnapshot(playState, source, versionMs)
+function ITGOnline:ApplyPlayStateSnapshot(playState, source, versionMs, options)
+	options = type(options) == "table" and options or {}
 	if type(playState) ~= "table" or not self.currentRoom then
 		online_flow_trace("play_state_snapshot_skipped source=" .. tostring(source or "unknown")
 			.. " reason=missing_context"
@@ -7767,7 +7769,13 @@ function ITGOnline:ApplyPlayStateSnapshot(playState, source, versionMs)
 		.. " previous=" .. tostring(previousVersion)
 		.. " sessions=" .. tostring(playState.sessions and #playState.sessions or 0)
 		.. " finalResults=" .. tostring(playState.final_results and #playState.final_results or 0))
-	MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
+	if options.suppressLobbyBroadcast == true then
+		online_flow_trace("play_state_snapshot_lobby_broadcast_suppressed source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(roomId)
+			.. " version=" .. tostring(incomingVersion))
+	else
+		MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
+	end
 	MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", playState)
 	return true
 end
@@ -8483,6 +8491,18 @@ function ITGOnline:ForceLobbyPresenceHeartbeat(reason)
 	self:Heartbeat(self.currentRoomId and "in_room" or "available", true)
 end
 
+function ITGOnline:IsPostLeaveLobbyRefreshReason(reason)
+	reason = tostring(reason or "")
+	return reason == "leave_room_confirmed"
+		or reason == "overlay_post_leave"
+		or reason == "overlay_post_leave_command"
+		or reason == "room.member_left"
+		or reason == "room.deleted"
+		or reason == "presence.updated"
+		or reason:match("^purge_stale_lobby_candidate:") ~= nil
+		or reason:match("^coalesced:queued_after_response:") ~= nil
+end
+
 function ITGOnline:FetchLobby(callback)
 	local accumulator = {
 		online_users = {},
@@ -8615,6 +8635,17 @@ function ITGOnline:ReconcileCurrentRoomFromLobbyPayload(decoded, source)
 					.. " selectedAt=" .. tostring(selectedAt)
 					.. " members=" .. tostring(type(room.members) == "table" and #room.members or 0)
 					.. " readyStates=" .. tostring(type(room.ready_states) == "table" and #room.ready_states or 0))
+				if self.currentRoom
+					and type(room.members) == "table"
+					and #room.members == 0
+					and type(self.currentRoom.members) == "table"
+					and #self.currentRoom.members > 0 then
+					online_flow_trace("current_room_lobby_reconcile_empty_members_protected source=" .. tostring(source)
+						.. " room=" .. wantedRoomId
+						.. " previousMembers=" .. tostring(#self.currentRoom.members)
+						.. " incomingPhase=" .. tostring(room.phase)
+						.. " currentPhase=" .. tostring(self.currentRoom.phase or "nil"))
+				end
 				local applied = self:ApplyRoomSnapshot(room, "lobby_refresh_current_room:" .. tostring(source))
 				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(applied or room))
 				self:BroadcastLeaderboardFromRoom(applied or room, "lobby_refresh_current_room:" .. tostring(source))
@@ -8677,6 +8708,23 @@ end
 		local refreshReason = tostring(options.reason or "unknown")
 		local refreshScreen = tostring(self.currentScreenName or "nil")
 		local refreshIsGameplay = self:IsOnlineGameplayScreen(refreshScreen)
+		local now = GetTimeSinceStart()
+		if self.currentRoomId == nil and self:IsPostLeaveLobbyRefreshReason(refreshReason) then
+			local lastPostLeaveAt = tonumber(self.lastPostLeaveLobbyRefreshAt) or 0
+			if refreshReason == "leave_room_confirmed" or lastPostLeaveAt <= 0 then
+				self.lastPostLeaveLobbyRefreshAt = now
+				self.lastPostLeaveLobbyRefreshReason = refreshReason
+			elseif now - lastPostLeaveAt < 0.8 then
+				online_flow_trace("lobby_refresh_skipped reason=post_leave_coalesced"
+					.. " requestReason=" .. refreshReason
+					.. " previousReason=" .. tostring(self.lastPostLeaveLobbyRefreshReason or "nil")
+					.. " age=" .. string.format("%.3f", now - lastPostLeaveAt))
+				return
+			else
+				self.lastPostLeaveLobbyRefreshAt = now
+				self.lastPostLeaveLobbyRefreshReason = refreshReason
+			end
+		end
 		online_flow_trace("lobby_refresh_queue_begin screen=" .. refreshScreen
 			.. " generation=" .. tostring(self.screenGeneration or "nil")
 			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
@@ -10080,7 +10128,9 @@ end
 					online_flow_trace("realtime_room_event_broadcast_play_state name=" .. tostring(name)
 						.. " version=" .. tostring(room.play_state.version_ms or "nil")
 						.. " phase=" .. tostring(room.phase or "nil"))
-					self:ApplyPlayStateSnapshot(room.play_state, "realtime_room_event:" .. tostring(name), room.play_state.version_ms)
+					self:ApplyPlayStateSnapshot(room.play_state, "realtime_room_event:" .. tostring(name), room.play_state.version_ms, {
+						suppressLobbyBroadcast = true,
+					})
 				end
 			elseif roomId then
 				online_flow_trace("realtime_room_event_fetch name=" .. tostring(name)
