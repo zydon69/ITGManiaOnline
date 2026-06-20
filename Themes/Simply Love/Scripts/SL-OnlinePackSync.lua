@@ -121,6 +121,8 @@ function PackSync:IsDownloadGenerationCurrent(generation)
 	return tonumber(generation) == tonumber(self.downloadGeneration)
 end
 
+local selected_at
+
 function PackSync:SyncSequenceFromRoomPayload(room, currentSelectedAt, reason)
 	if not (ITGOnline and ITGOnline.user and type(room) == "table") then return false end
 	local selectedSong = room.selected_song or {}
@@ -206,7 +208,7 @@ local function selected_chart_key(songInfo)
 	return key
 end
 
-local function selected_at(songInfo)
+function selected_at(songInfo)
 	return trim(songInfo and (songInfo.selectedAt or songInfo.selected_at))
 end
 

@@ -5300,6 +5300,89 @@ function ITGOnline:BuildSongPayload()
 	return self:BuildSongPayloadFor(GAMESTATE:GetCurrentSong(), selected_steps())
 end
 
+function ITGOnline:ApplyMatchedSongSelection(match, source)
+	if not match or not match.song then
+		online_flow_trace("apply_matched_song_selection_skipped reason=no_match"
+			.. " source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(self.currentRoomId or "nil"))
+		return false
+	end
+
+	GAMESTATE:SetCurrentSong(match.song)
+	if match.steps then
+		for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
+			GAMESTATE:SetCurrentSteps(player, match.steps)
+		end
+	end
+
+	if match.payload then
+		self.currentSongPayload = match.payload
+	end
+
+	online_flow_trace("apply_matched_song_selection_applied"
+		.. " source=" .. tostring(source or "unknown")
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " songDir=" .. tostring(match.song.GetSongDir and match.song:GetSongDir() or "nil")
+		.. " hasSteps=" .. tostring(match.steps ~= nil)
+		.. " matchSource=" .. tostring(match.matchSource or "nil")
+		.. " songHash=" .. tostring(match.payload and match.payload.song_hash or "nil")
+		.. " chartHash=" .. tostring(match.payload and match.payload.chart_hash or "nil"))
+	return true
+end
+
+function ITGOnline:SelectedSongPayloadMatchesExpected(payload, selectedSong)
+	if not payload then return false, "local_payload_unavailable" end
+	selectedSong = selectedSong or {}
+	local expectedSongHash = selectedSong.song_hash or selectedSong.songHash
+	local expectedChartHash = selectedSong.chart_hash or selectedSong.chartHash
+	if expectedSongHash and expectedSongHash ~= "" and payload.song_hash ~= expectedSongHash then
+		return false, "song_hash_mismatch"
+	end
+	if expectedChartHash and expectedChartHash ~= "" and payload.chart_hash ~= expectedChartHash then
+		return false, "chart_hash_mismatch"
+	end
+	return true, "matched"
+end
+
+function ITGOnline:ResolveSelectedSongAvailabilityPayload(selectedSong, source)
+	selectedSong = selectedSong or {}
+	local directPayload = self:BuildSongPayload()
+	local directOk, directReason = self:SelectedSongPayloadMatchesExpected(directPayload, selectedSong)
+	if directOk then
+		online_flow_trace("song_availability_local_resolved source=" .. tostring(source or "unknown")
+			.. " method=current_selection"
+			.. " songHash=" .. tostring(directPayload.song_hash or "nil")
+			.. " chartHash=" .. tostring(directPayload.chart_hash or "nil"))
+		return directPayload, "current_selection"
+	end
+
+	online_flow_trace("song_availability_current_selection_unusable source=" .. tostring(source or "unknown")
+		.. " reason=" .. tostring(directReason or "unknown")
+		.. " selectedAt=" .. tostring(selectedSong.selected_at or selectedSong.selectedAt or "nil")
+		.. " expectedSongHash=" .. tostring(selectedSong.song_hash or selectedSong.songHash or "nil")
+		.. " expectedChartHash=" .. tostring(selectedSong.chart_hash or selectedSong.chartHash or "nil"))
+
+	if self.PackSync and self.PackSync.FindLocalMatch then
+		local match = self.PackSync:FindLocalMatch(selectedSong)
+		if match and match.ok and match.payload then
+			self:ApplyMatchedSongSelection(match, "availability:" .. tostring(source or "unknown"))
+			online_flow_trace("song_availability_local_resolved source=" .. tostring(source or "unknown")
+				.. " method=packsync_hash_match"
+				.. " matchSource=" .. tostring(match.matchSource or "nil")
+				.. " songHash=" .. tostring(match.payload.song_hash or "nil")
+				.. " chartHash=" .. tostring(match.payload.chart_hash or "nil"))
+			return match.payload, tostring(match.matchSource or "packsync_hash_match")
+		end
+
+		online_flow_trace("song_availability_pack_sync_match_failed source=" .. tostring(source or "unknown")
+			.. " status=" .. tostring(match and match.status or "nil")
+			.. " reason=" .. tostring(match and match.reason or directReason or "unknown"))
+		return nil, tostring(match and match.reason or directReason or "local_payload_unavailable")
+	end
+
+	return nil, tostring(directReason or "local_payload_unavailable")
+end
+
 function ITGOnline:ChartHashForSteps(steps)
 	if not steps then
 		online_flow_trace("chart_hash_skipped reason=no_steps")
@@ -8292,36 +8375,24 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 	end
 
 	if not missing then
-		local localPayload = self:BuildSongPayload()
-		local expectedSongHash = selectedPayload and selectedPayload.song_hash or selectedSong and selectedSong.song_hash or nil
-		local expectedChartHash = selectedPayload and selectedPayload.chart_hash or selectedSong and selectedSong.chart_hash or nil
+		local expectedSong = selectedPayload or selectedSong or {}
+		local localPayload, localSourceOrReason = self:ResolveSelectedSongAvailabilityPayload(expectedSong, reason)
 		if not localPayload then
-			online_flow_trace("song_availability_local_check_failed reason=local_payload_unavailable"
-				.. " selectedAt=" .. tostring(payload.selected_at or "nil"))
-			self:ReportSongAvailability(true, "local_payload_unavailable", callback)
+			online_flow_trace("song_availability_local_check_failed reason=" .. tostring(localSourceOrReason or "local_payload_unavailable")
+				.. " selectedAt=" .. tostring(payload.selected_at or "nil")
+				.. " selectedSongHash=" .. tostring(expectedSong.song_hash or expectedSong.songHash or "nil")
+				.. " selectedChartHash=" .. tostring(expectedSong.chart_hash or expectedSong.chartHash or "nil"))
+			self:ReportSongAvailability(true, localSourceOrReason or "local_payload_unavailable", callback)
 			return
 		end
 		online_flow_trace("song_availability_local_payload"
 			.. " room=" .. tostring(self.currentRoomId or "nil")
 			.. " selectedAt=" .. tostring(payload.selected_at or "nil")
+			.. " source=" .. tostring(localSourceOrReason or "unknown")
 			.. " songHash=" .. tostring(localPayload.song_hash or "nil")
 			.. " chartHash=" .. tostring(localPayload.chart_hash or "nil")
 			.. " chartNoteCount=" .. tostring(localPayload.chart_note_count or "nil")
 			.. " maxScore=" .. tostring(localPayload.max_score or "nil"))
-		if expectedSongHash and expectedSongHash ~= "" and localPayload.song_hash ~= expectedSongHash then
-			online_flow_trace("song_availability_local_check_failed reason=song_hash_mismatch"
-				.. " expected=" .. tostring(expectedSongHash)
-				.. " actual=" .. tostring(localPayload.song_hash or "nil"))
-			self:ReportSongAvailability(true, "song_hash_mismatch", callback)
-			return
-		end
-		if expectedChartHash and expectedChartHash ~= "" and localPayload.chart_hash ~= expectedChartHash then
-			online_flow_trace("song_availability_local_check_failed reason=chart_hash_mismatch"
-				.. " expected=" .. tostring(expectedChartHash)
-				.. " actual=" .. tostring(localPayload.chart_hash or "nil"))
-			self:ReportSongAvailability(true, "chart_hash_mismatch", callback)
-			return
-		end
 		payload.song_hash = localPayload.song_hash
 		payload.chart_hash = localPayload.chart_hash
 		payload.chart_note_count = localPayload.chart_note_count

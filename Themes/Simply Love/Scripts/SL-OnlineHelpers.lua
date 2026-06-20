@@ -135,6 +135,19 @@ local function online_flow_trace(message)
 	end
 end
 
+local online_flow_trace_throttle_last_at = {}
+local function online_flow_trace_throttled(key, intervalSeconds, message)
+	local throttleKey = tostring(key or "default")
+	local interval = tonumber(intervalSeconds) or 1.0
+	local now = GetTimeSinceStart()
+	local lastAt = tonumber(online_flow_trace_throttle_last_at[throttleKey]) or -9999
+	if now - lastAt < interval then
+		return
+	end
+	online_flow_trace_throttle_last_at[throttleKey] = now
+	online_flow_trace(message)
+end
+
 local function maybe_set_lobby_ready(reason, callback)
 	if not (ITGOnline and ITGOnline.SetReady) then
 		online_flow_trace("lobby_ready_skipped reason=" .. tostring(reason or "unknown")
@@ -1853,8 +1866,9 @@ CreateOnlineHandler = function()
 									ITGOnline.deferredLobbyRefreshRoomUiGeneration = nil
 									return
 								end
+								local fireReason = tostring(ITGOnline.deferredLobbyRefreshReason or "deferred_lobby_refresh")
 								online_flow_trace("lobby_refresh_deferred_fire"
-									.. " reason=" .. tostring(ITGOnline.deferredLobbyRefreshReason or "nil")
+									.. " reason=" .. tostring(fireReason)
 									.. " roomUiGeneration=" .. tostring(ITGOnline.deferredLobbyRefreshRoomUiGeneration or "nil")
 									.. " currentRoomUiGeneration=" .. tostring(ITGOnline.roomUiLobbyRefreshGeneration or "nil")
 									.. " currentRoomId=" .. tostring(ITGOnline.currentRoomId or "nil")
@@ -1866,7 +1880,7 @@ CreateOnlineHandler = function()
 								ITGOnline.roomUiLobbyRefreshDeferredScheduled = false
 								ITGOnline.deferredLobbyRefreshReason = ""
 								ITGOnline.deferredLobbyRefreshRoomUiGeneration = nil
-								ITGOnline:QueueLobbyRefresh()
+								ITGOnline:QueueLobbyRefresh({ reason = fireReason })
 							end
 						end,
 						RealtimeDeadmanCommand=function(self)
