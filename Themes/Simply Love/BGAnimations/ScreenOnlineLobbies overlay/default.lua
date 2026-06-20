@@ -1407,10 +1407,10 @@ end
 
 function joined_button_indices()
 	local indices = {}
-	indices[#indices + 1] = 1
 	if joined_is_manager and #joined_lobby_players > 1 then
 		indices[#indices + 1] = 8
 	end
+	indices[#indices + 1] = 1
 	if joined_is_manager and joined_phase_allows_song_selection() then
 		indices[#indices + 1] = 2
 	end
@@ -1778,16 +1778,6 @@ local function set_joined_default_active_index(force)
 		joined_user_moved_focus = false
 		last_auto_start_focus_key = ""
 		return
-	end
-	if joined_is_manager and joined_phase_allows_song_selection() then
-		for _, index in ipairs(indices) do
-			if index == 2 then
-				joined_active_index = 2
-				joined_user_moved_focus = false
-				last_auto_start_focus_key = ""
-				return
-			end
-		end
 	end
 	joined_active_index = indices[1] or 1
 	joined_user_moved_focus = false
@@ -3868,6 +3858,14 @@ local af = Def.ActorFrame{
 				else
 					online_player_index = math.max(1, math.min(online_player_index, #online_users))
 				end
+				if mode == "joined" and not (params and params.force == true) then
+					lobby_flow_trace("LobbySearched_cached_without_repaint reason=joined_mode"
+						.. " lobbies=" .. tostring(#candidates)
+						.. " onlinePlayers=" .. tostring(#online_users)
+						.. " joined_code=" .. tostring(joined_lobby_code)
+						.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+					return
+				end
 				apply_lobby_search_to_ui(self, "LobbySearched")
 				lobby_flow_trace("LobbySearched_applied lobbies=" .. tostring(#candidates)
 					.. " onlinePlayers=" .. tostring(#online_users)
@@ -5083,18 +5081,43 @@ end,
 				self:horizalign(right):x(50):y(-170):zoom(0.42)
 			end
 		},
-		Def.Quad{
+		Def.ActorFrame{
 			Name="JoinedLobbyPlayersFrame",
 			InitCommand=function(self)
-				self:xy(-70, -58):zoomto(450, 128):diffuse(Color.White):diffusealpha(0.18)
+				self:xy(-70, -58):visible(false)
 			end,
 			HoverCommand=function(self)
 				local focusable = joined_is_manager and #joined_lobby_players > 1
 				local focused = joined_active_index == 8 or joined_players_selected
 				self:visible(focusable)
-				self:diffuse(focused and Color.Yellow or Color.White)
-				self:diffusealpha(focused and 0.45 or 0.18)
-			end
+				self:playcommand(focused and "GainFocus" or "LoseFocus")
+			end,
+			GainFocusCommand=function(self)
+				self:stoptweening():diffuse(Color.Yellow):diffusealpha(0.74)
+			end,
+			LoseFocusCommand=function(self)
+				self:stoptweening():diffuse(0.72,0.72,0.72,1):diffusealpha(0.34)
+			end,
+			Def.Quad{
+				InitCommand=function(self)
+					self:xy(0, -64):zoomto(450, 2)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:xy(0, 64):zoomto(450, 2)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:xy(-225, 0):zoomto(2, 128)
+				end
+			},
+			Def.Quad{
+				InitCommand=function(self)
+					self:xy(225, 0):zoomto(2, 128)
+				end
+			},
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedLobbyPlayers",
@@ -5130,7 +5153,7 @@ end,
 		},
 		LoadFont("Common Bold")..{
 			Name="JoinedSongConfirmedCheck",
-			Text="✓",
+			Text="✔",
 			InitCommand=function(self)
 				self:xy(72, -105):zoom(1.15):diffuse(Color.Green):strokecolor(color("#001900")):shadowlength(1):visible(false)
 			end

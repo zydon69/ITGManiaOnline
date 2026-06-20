@@ -1795,7 +1795,7 @@ end
 				.. " automaticSuppressed=" .. tostring(self:IsAutomaticLobbyRefreshSuppressed() == true)
 				.. " suppressed=" .. tostring(self:IsLobbyRefreshSuppressed() == true)
 				.. " screen=" .. tostring(self.currentScreenName or "nil"))
-			self:QueueLobbyRefresh()
+			self:QueueLobbyRefresh({ reason = source })
 			return true
 		end
 
@@ -2605,21 +2605,8 @@ function ITGOnline:MaybeAutoReadyManager(room)
 	end
 	if self.managerAutoReadyInFlightKey == key then return end
 
-	local confirmed, confirmReason, confirmDetails = self:RoomMembersConfirmedSelectedSong(room)
-	if not confirmed then
-		if self.managerAutoReadyDeferredKey ~= key then
-			online_flow_trace("manager_auto_ready_deferred reason=" .. tostring(confirmReason)
-				.. " key=" .. tostring(key)
-				.. " phase=" .. tostring(readyPhase)
-				.. " details=" .. tostring(confirmDetails))
-		end
-		self.managerAutoReadyDeferredKey = key
-		return
-	end
 	if self.managerAutoReadyDeferredKey == key then
-		online_flow_trace("manager_auto_ready_unblocked reason=" .. tostring(confirmReason)
-			.. " key=" .. tostring(key)
-			.. " details=" .. tostring(confirmDetails))
+		online_flow_trace("manager_auto_ready_unblocked reason=own_ready_allowed key=" .. tostring(key))
 		self.managerAutoReadyDeferredKey = ""
 	end
 
@@ -2632,10 +2619,10 @@ function ITGOnline:MaybeAutoReadyManager(room)
 
 		if not ok then
 			local errorCode = decoded and decoded.error_code
-			if errorCode == "room_members_song_not_confirmed" then
+			if errorCode == "room_members_song_not_confirmed" or errorCode == "room_member_song_not_confirmed" then
 				local retryAfter = tonumber(decoded.retry_after) or tonumber(self.readyRequestBlockedRetrySeconds) or 0.5
 				self.managerAutoReadyDeferredKey = key
-				online_flow_trace("manager_auto_ready_deferred reason=server_room_members_song_not_confirmed"
+				online_flow_trace("manager_auto_ready_deferred reason=server_song_not_confirmed"
 					.. " key=" .. tostring(key)
 					.. " retry_after=" .. tostring(retryAfter)
 					.. " serverDeferred=" .. tostring(decoded and decoded.deferred == true))
@@ -3119,6 +3106,142 @@ function ITGOnline:NormalizeRoomSnapshot(room, previousRoom, source)
 	return room
 end
 
+function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
+	room = room or self.currentRoom
+	if not room or not self.currentRoomId then
+		online_flow_trace("song_selected_auto_ready_skipped source=" .. tostring(source or "unknown")
+			.. " reason=no_room"
+			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
+		return
+	end
+
+	local phase = self:NormalizeRoomPhase(room.phase)
+	if phase ~= "lobby_ready" then
+		return
+	end
+
+	local selectedSong = room.selected_song
+	if not selectedSong or not selectedSong.song_hash or not selectedSong.chart_hash then
+		online_flow_trace("song_selected_auto_ready_skipped source=" .. tostring(source or "unknown")
+			.. " reason=no_selected_song"
+			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+			.. " phase=" .. tostring(phase))
+		return
+	end
+
+	local key = self:RoomSongRoundKey(room)
+	if key == "" then
+		online_flow_trace("song_selected_auto_ready_skipped source=" .. tostring(source or "unknown")
+			.. " reason=invalid_round_key"
+			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+			.. " phase=" .. tostring(phase)
+			.. " selectedAt=" .. tostring(selectedSong.selected_at or selectedSong.selectedAt or "nil"))
+		return
+	end
+
+	if self:IsCurrentUserReadyInRoom(room) then
+		if self.songSelectedAutoReadyCompletedKey ~= key then
+			online_flow_trace("song_selected_auto_ready_completed_by_snapshot source=" .. tostring(source or "unknown")
+				.. " key=" .. tostring(key)
+				.. " room=" .. tostring(room.id or self.currentRoomId or "nil"))
+		end
+		self.songSelectedAutoReadyCompletedKey = key
+		if self.songSelectedAutoReadyInFlightKey == key then
+			self.songSelectedAutoReadyInFlightKey = ""
+		end
+		return
+	end
+
+	if self.songSelectedAutoReadyCompletedKey == key then
+		return
+	end
+
+	if self.songSelectedAutoReadyInFlightKey == key then
+		online_flow_trace("song_selected_auto_ready_skipped source=" .. tostring(source or "unknown")
+			.. " reason=in_flight"
+			.. " key=" .. tostring(key)
+			.. " room=" .. tostring(room.id or self.currentRoomId or "nil"))
+		return
+	end
+
+	self.songSelectedAutoReadyInFlightKey = key
+	online_flow_trace("song_selected_auto_ready_begin source=" .. tostring(source or "unknown")
+		.. " key=" .. tostring(key)
+		.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+		.. " title=" .. tostring(selectedSong.title or selectedSong.folder_name or selectedSong.song_hash or "unknown")
+		.. " selectedAt=" .. tostring(selectedSong.selected_at or selectedSong.selectedAt or "nil"))
+
+	self:ConfirmSelectedSongAvailability("room_song_selected_auto", function(availabilityOk, availabilityDecoded, availabilityResponse)
+		online_flow_trace("song_selected_auto_ready_availability_result key=" .. tostring(key)
+			.. " ok=" .. tostring(availabilityOk == true)
+			.. " status=" .. tostring(availabilityResponse and availabilityResponse.statusCode or "nil")
+			.. " hasRoom=" .. tostring(availabilityDecoded and availabilityDecoded.room ~= nil)
+			.. " phase=" .. tostring(availabilityDecoded and availabilityDecoded.room and availabilityDecoded.room.phase or self.currentRoom and self.currentRoom.phase or "nil")
+			.. " error=" .. tostring(availabilityDecoded and availabilityDecoded.error_code or availabilityResponse and availabilityResponse.errorMessage or "nil"))
+
+		if self.songSelectedAutoReadyInFlightKey ~= key then
+			online_flow_trace("song_selected_auto_ready_aborted reason=stale_inflight key=" .. tostring(key))
+			return
+		end
+
+		if not availabilityOk then
+			self.songSelectedAutoReadyInFlightKey = ""
+			online_flow_trace("song_selected_auto_ready_failed key=" .. tostring(key)
+				.. " step=availability"
+				.. " message=" .. tostring(response_message(availabilityResponse, availabilityDecoded, "availability failed")))
+			return
+		end
+
+		local currentPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+		if currentPhase == "config" then
+			self.songSelectedAutoReadyInFlightKey = ""
+			self.songSelectedAutoReadyCompletedKey = key
+			online_flow_trace("song_selected_auto_ready_completed key=" .. tostring(key)
+				.. " reason=room_already_config")
+			if self.EnforceRoomPhaseScreen then
+				self:EnforceRoomPhaseScreen()
+			end
+			return
+		end
+
+		self:SetReady("lobby_ready", true, function(readyOk, readyDecoded, readyResponse)
+			if self.songSelectedAutoReadyInFlightKey == key then
+				self.songSelectedAutoReadyInFlightKey = ""
+			end
+
+			online_flow_trace("song_selected_auto_ready_ready_result key=" .. tostring(key)
+				.. " ok=" .. tostring(readyOk == true)
+				.. " status=" .. tostring(readyResponse and readyResponse.statusCode or "nil")
+				.. " hasRoom=" .. tostring(readyDecoded and readyDecoded.room ~= nil)
+				.. " phase=" .. tostring(readyDecoded and readyDecoded.room and readyDecoded.room.phase or self.currentRoom and self.currentRoom.phase or "nil")
+				.. " error=" .. tostring(readyDecoded and readyDecoded.error_code or readyResponse and readyResponse.errorMessage or "nil"))
+
+			if readyOk then
+				self.songSelectedAutoReadyCompletedKey = key
+				if readyDecoded and readyDecoded.room then
+					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or readyDecoded.room))
+				end
+				if self.EnforceRoomPhaseScreen then
+					self:EnforceRoomPhaseScreen()
+				end
+				return
+			end
+
+			local errorCode = readyDecoded and readyDecoded.error_code
+			if errorCode == "room_members_song_not_confirmed" or errorCode == "room_member_song_not_confirmed" then
+				online_flow_trace("song_selected_auto_ready_waiting key=" .. tostring(key)
+					.. " reason=" .. tostring(errorCode)
+					.. " retryAfter=" .. tostring(readyDecoded and readyDecoded.retry_after or "nil"))
+				return
+			end
+
+			online_flow_trace("song_selected_auto_ready_failed key=" .. tostring(key)
+				.. " step=ready"
+				.. " message=" .. tostring(response_message(readyResponse, readyDecoded, "ready failed")))
+		end)
+	end)
+end
+
 function ITGOnline:ApplyRoomSnapshot(room, source)
 	online_flow_trace("room_snapshot_apply_begin source=" .. tostring(source or "unknown")
 		.. " incomingRoom=" .. tostring(room and (room.id or room.code) or "nil")
@@ -3294,6 +3417,9 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 
 	if self.MaybeAutoReadyManager then
 		self:MaybeAutoReadyManager(self.currentRoom)
+	end
+	if self.MaybeAutoConfirmSelectedSongAndMarkLobbyReady then
+		self:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(self.currentRoom, source)
 	end
 
 	online_flow_trace("room_snapshot_apply_complete source=" .. tostring(source or "unknown")
@@ -5538,12 +5664,12 @@ function ITGOnline:SelectSongAndMarkLobbyReady(callback)
 						MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or readyDecoded.room))
 					end
 					local readyErrorCode = readyDecoded and readyDecoded.error_code
-					if not readyOk and readyErrorCode == "room_members_song_not_confirmed" then
+					if not readyOk and (readyErrorCode == "room_members_song_not_confirmed" or readyErrorCode == "room_member_song_not_confirmed") then
 						local room = (readyDecoded and readyDecoded.room)
 							or (availabilityDecoded and availabilityDecoded.room)
 							or (selectDecoded and selectDecoded.room)
 							or self.currentRoom
-						online_flow_trace("song_selection_ready_pending reason=room_members_song_not_confirmed")
+						online_flow_trace("song_selection_ready_pending reason=" .. tostring(readyErrorCode))
 						if room then
 							MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(room))
 						end
@@ -6677,30 +6803,6 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 		return
 	end
 
-	if isReady and phase == "lobby_ready" and self.currentRoom then
-		local confirmed, confirmReason, confirmDetails = self:RoomMembersConfirmedSelectedSong(self.currentRoom)
-		if not confirmed then
-			local retryAfter = tonumber(self.readyRequestBlockedRetrySeconds) or 2.5
-			self.readyRequestBlockedErrors[requestKey] = nowTs + retryAfter
-			online_flow_trace("ready_request_blocked_local room=" .. tostring(self.currentRoomId)
-				.. " phase=" .. tostring(phase)
-				.. " currentPhase=" .. tostring(currentPhase)
-				.. " reason=" .. tostring(confirmReason or "unknown")
-				.. " details=" .. tostring(confirmDetails or "")
-				.. " retryAfter=" .. tostring(retryAfter))
-			if callback then
-				callback(false, {
-					room = self.currentRoom,
-					error_code = "room_members_song_not_confirmed",
-					retry_after = retryAfter,
-					deferred = true,
-					local_guard = true,
-				}, nil)
-			end
-			return
-		end
-	end
-
 	local inflight = self.readyRequestInFlight[requestKey]
 	if inflight then
 		if callback then
@@ -6773,9 +6875,9 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 		end
 		local roomPhase = decoded and decoded.room and decoded.room.phase
 		local errorCode = decoded and decoded.error_code
-		if not ok and isReady and errorCode == "room_members_song_not_confirmed" then
+		if not ok and isReady and (errorCode == "room_members_song_not_confirmed" or errorCode == "room_member_song_not_confirmed") then
 			self.readyRequestBlockedErrors[requestKey] = GetTimeSinceStart() + (tonumber(self.readyRequestBlockedRetrySeconds) or 2.5)
-		elseif errorCode ~= "room_members_song_not_confirmed" then
+		elseif errorCode ~= "room_members_song_not_confirmed" and errorCode ~= "room_member_song_not_confirmed" then
 			self.readyRequestBlockedErrors[requestKey] = nil
 		end
 		if self.debugReadyFlow == true then
@@ -7713,7 +7815,7 @@ function ITGOnline:Heartbeat(status, force)
 			.. " disconnecting=" .. tostring(self.disconnecting == true))
 		if ok and self.currentScreenName == "ScreenOnlineLobbies" and not self.disconnecting then
 			online_flow_trace("heartbeat_queue_lobby_refresh source=heartbeat_ack")
-			self:QueueLobbyRefresh()
+			self:QueueLobbyRefresh({ reason = "heartbeat_ack" })
 		end
 		if queuedStatus then
 			local replayNow = GetTimeSinceStart()
@@ -7837,7 +7939,7 @@ function ITGOnline:PurgeStaleLobbyCandidate(roomId, reason)
 		MESSAGEMAN:Broadcast("LobbySearched", self.cachedLobbySearchPayload)
 	end
 
-	self:QueueLobbyRefresh({ ignoreSuppression = true, reason = "purge_stale_lobby_candidate" })
+	self:QueueLobbyRefresh({ ignoreSuppression = true, reason = "purge_stale_lobby_candidate:" .. tostring(reason or "unknown") })
 	return removed
 end
 
@@ -8807,7 +8909,7 @@ end
 		elseif name == "presence.pruned" then
 			-- Server-side cleanup notification. The next sync/lobby refresh carries the durable state.
 			online_flow_trace("presence_pruned_refresh_requested")
-			self:QueueLobbyRefresh()
+			self:QueueLobbyRefresh({ reason = "presence_pruned" })
 			return
 		elseif name == "room.left" then
 			local roomId = tonumber(payload.room_id or -1)
@@ -8842,12 +8944,21 @@ end
 			})
 			return
 			elseif name == "lobby.updated" then
+				local lobbyUpdateReason = tostring(payload.reason or "lobby.updated")
+				local hasUserPayload = type(payload.user) == "table"
 				online_flow_trace("lobby_updated_event begin hasLobbyPayload=" .. tostring(type(payload) == "table")
-					.. " reason=" .. tostring(payload.reason or "nil")
+					.. " reason=" .. lobbyUpdateReason
 					.. " userId=" .. tostring(payload.user_id or "nil")
 					.. " roomId=" .. tostring(payload.room_id or "nil")
-					.. " hasUser=" .. tostring(type(payload.user) == "table"))
-				local appliedPresence = self:ApplyLobbyPresencePayload(payload)
+					.. " hasUser=" .. tostring(hasUserPayload == true))
+				local appliedPresence = false
+				if hasUserPayload then
+					appliedPresence = self:ApplyLobbyPresencePayload(payload)
+				else
+					online_flow_trace("lobby_updated_event presence_skipped reason=room_or_lobby_event_without_user"
+						.. " updateReason=" .. lobbyUpdateReason
+						.. " roomId=" .. tostring(payload.room_id or "nil"))
+				end
 				online_flow_trace("lobby_updated_event presence_applied=" .. tostring(appliedPresence == true)
 					.. " cachedLobbies=" .. tostring(self.cachedLobbySearchPayload and self.cachedLobbySearchPayload.lobbies and #self.cachedLobbySearchPayload.lobbies or 0)
 					.. " cachedOnlinePlayers=" .. tostring(self.cachedLobbySearchPayload and self.cachedLobbySearchPayload.onlinePlayers and #self.cachedLobbySearchPayload.onlinePlayers or 0))
@@ -8856,7 +8967,7 @@ end
 					MESSAGEMAN:Broadcast("LobbySearched", self.cachedLobbySearchPayload)
 				end
 				online_flow_trace("lobby_updated_event queue_lobby_refresh")
-				self:QueueLobbyRefresh()
+				self:QueueLobbyRefresh({ reason = lobbyUpdateReason })
 		elseif name == "room.invitation.created" then
 		online_flow_trace("realtime_event_apply name=room.invitation.created action=broadcast_invitation"
 			.. " invitationId=" .. tostring(payload.invitation_id or payload.id or "nil"))
@@ -9038,15 +9149,18 @@ end
 					.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
 				self.deletedRoomIds[roomKey] = true
 				self:IgnoreRoomEvents(roomId, 30)
+				local roomDeletedRefreshQueued = false
+				if self.PurgeStaleLobbyCandidate then
+					self:PurgeStaleLobbyCandidate(roomKey, "room_deleted_event")
+					roomDeletedRefreshQueued = true
+				end
 
 				if ignoredAfterLeave then
 					online_flow_trace("room_deleted_event_ignored reason=recently_left_room roomId=" .. roomKey)
-					if self.PurgeStaleLobbyCandidate then
-						self:PurgeStaleLobbyCandidate(roomKey, "room_deleted_ignored_after_leave")
-					elseif self.ScheduleDeferredLobbyRefresh then
+					if self.ScheduleDeferredLobbyRefresh and not roomDeletedRefreshQueued then
 						self:ScheduleDeferredLobbyRefresh(0.35, "room_deleted_ignored_after_leave")
-					else
-						self:QueueLobbyRefresh()
+					elseif not roomDeletedRefreshQueued then
+						self:QueueLobbyRefresh({ reason = "room_deleted_ignored_after_leave" })
 					end
 					return
 				elseif activeRoomDeleted then
@@ -9059,7 +9173,9 @@ end
 					})
 				end
 
-				self:QueueLobbyRefresh()
+				if not roomDeletedRefreshQueued then
+					self:QueueLobbyRefresh({ reason = "room_deleted_event" })
+				end
 				online_flow_trace("room_deleted_event roomId=" .. roomKey)
 			end
 		elseif name == "room.load_timeout" then
@@ -9127,7 +9243,7 @@ end
 					if roomPolicy.refreshLobby == true then
 						online_flow_trace("room_policy_lobby_refresh name=" .. tostring(name)
 							.. " reason=" .. tostring(roomPolicy.reason or "nil"))
-						self:QueueLobbyRefresh()
+						self:QueueLobbyRefresh({ reason = tostring(roomPolicy.reason or name or "room_policy") })
 					end
 					local refreshRoomId = roomId or (room and room.id) or (self.currentRoom and self.currentRoom.id) or self.currentRoomId
 					if roomPolicy.fetchRoom == true and refreshRoomId and self.FetchRoom then
@@ -9182,7 +9298,7 @@ end
 							.. " age=" .. tostring(now - lastRefreshAt)
 							.. " minInterval=" .. tostring(minInterval)
 							.. " policyReason=" .. tostring(roomPolicy.reason or "nil"))
-						self:QueueLobbyRefresh()
+						self:QueueLobbyRefresh({ reason = tostring(roomPolicy.reason or name or "room_ui_refresh") })
 					elseif not self.roomUiLobbyRefreshDeferredScheduled and self.ScheduleDeferredLobbyRefresh then
 						self.roomUiLobbyRefreshDeferredScheduled = true
 						online_flow_trace("room_ui_lobby_refresh_deferred name=" .. tostring(name)
