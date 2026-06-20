@@ -3448,10 +3448,6 @@ bool ScreenGameplay::OnlineShouldKeepGameplayAliveAfterLocalFail() {
     return isOnlineActive;
   }
 
-  if (keepAlive) {
-    LOG->Trace("ITG Online: local fail keep-alive gate returned true.");
-  }
-
   return keepAlive;
 }
 

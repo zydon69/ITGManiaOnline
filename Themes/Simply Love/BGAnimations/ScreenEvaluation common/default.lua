@@ -346,7 +346,11 @@ if OnlineEvaluationActive() then
 							.. " finalResults=" .. tostring(playState.final_results and #playState.final_results or "nil"))
 					end
 					MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(ITGOnline.currentRoom))
-					MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", ITGOnline.currentRoom.play_state or {})
+					if ITGOnline.ApplyPlayStateSnapshot then
+						ITGOnline:ApplyPlayStateSnapshot(ITGOnline.currentRoom.play_state or {}, "evaluation_results_wait_fetch")
+					else
+						MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", ITGOnline.currentRoom.play_state or {})
+					end
 				end
 			end)
 		else

@@ -244,6 +244,11 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 
 	local P1SubmitText = GetChildSafe(master, "P1SubmitText")
 	local P2SubmitText = GetChildSafe(master, "P2SubmitText")
+	GrooveStatsSubmitTrace("response_received room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+		.. " status=" .. tostring(res and res.statusCode or "nil")
+		.. " hasError=" .. tostring(res and res.error ~= nil)
+		.. " bodyBytes=" .. tostring(res and res.body and string.len(res.body) or 0))
 
 	if not res or res.error or res.statusCode ~= 200 then
 		local statusCode = res and res.statusCode or nil
@@ -268,6 +273,10 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 	-- Hijack the leaderboard pane to display the GrooveStats leaderboards.
 	if panes then
 		local data = DecodeResponseBody(res)
+		GrooveStatsSubmitTrace("response_decoded room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " hasData=" .. tostring(data ~= nil)
+			.. " hasPlayer1=" .. tostring(data and data.player1 ~= nil)
+			.. " hasPlayer2=" .. tostring(data and data.player2 ~= nil))
 		for i=1,2 do
 			local playerStr = "player"..i
 			local entryNum = 1
@@ -294,6 +303,12 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 				-- And then also ensure that the chart hash matches the currently parsed one.
 				-- It's better to just not display anything than display the wrong scores.
 				if SL["P"..side].Streams.Hash == data[playerStr]["chartHash"] then
+					GrooveStatsSubmitTrace("leaderboard_apply player=P" .. tostring(side)
+						.. " chartHash=" .. tostring(data[playerStr]["chartHash"] or "")
+						.. " expectedHash=" .. tostring(SL["P"..side].Streams.Hash or "")
+						.. " hasGsLeaderboard=" .. tostring(data[playerStr]["gsLeaderboard"] ~= nil)
+						.. " hasExLeaderboard=" .. tostring(data[playerStr]["exLeaderboard"] ~= nil)
+						.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 					local personalRank = nil
 					local showExScore = SL["P"..side].ActiveModifiers.ShowExScore and data[playerStr]["exLeaderboard"]
 
@@ -448,6 +463,12 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 						-- Empty out the remaining rows.
 						SetEntryText("---", "----", "------", "----------", entry)
 					end
+				else
+					GrooveStatsSubmitTrace("leaderboard_skip player=P" .. tostring(side)
+						.. " reason=chart_hash_mismatch"
+						.. " expectedHash=" .. tostring(SL["P"..side].Streams.Hash or "")
+						.. " responseHash=" .. tostring(data[playerStr]["chartHash"] or "")
+						.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 				end
 			end
 		end
@@ -533,6 +554,15 @@ local af = Def.ActorFrame {
 					local isPadPlayer = SL[pn].IsPadPlayer == true
 					local hasApiKey = SL[pn].ApiKey ~= ""
 					local hasHash = SL[pn].Streams.Hash ~= ""
+					GrooveStatsSubmitTrace("player=" .. pn .. " snapshot"
+						.. " valid=" .. tostring(valid)
+						.. " failed=" .. tostring(failed)
+						.. " pad=" .. tostring(isPadPlayer)
+						.. " hasApiKey=" .. tostring(hasApiKey)
+						.. " hasHash=" .. tostring(hasHash)
+						.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+						.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+						.. " scoreMode=" .. tostring(SL[pn].ActiveModifiers and SL[pn].ActiveModifiers.SimulateScoreMode or "nil"))
 
 					if valid and not failed and isPadPlayer then
 						local percentDP = stats:GetPercentDancePoints()
@@ -556,6 +586,8 @@ local af = Def.ActorFrame {
 							GrooveStatsSubmitTrace("player=" .. pn .. " action=submit"
 								.. " hash=" .. tostring(SL[pn].Streams.Hash)
 								.. " score=" .. tostring(score)
+								.. " percentDP=" .. tostring(percentDP)
+								.. " rate=" .. tostring(rate)
 								.. " online=true")
 						else
 							GrooveStatsSubmitTrace("player=" .. pn .. " action=skip"
@@ -597,6 +629,10 @@ local af = Def.ActorFrame {
 				local overlay = topScreen and GetChildSafe(topScreen, "Overlay")
 				local evalCommon = overlay and GetChildSafe(overlay, "ScreenEval Common")
 
+				GrooveStatsSubmitTrace("request_send room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+					.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+					.. " queryPlayers=" .. tostring((query.chartHashP1 and "P1" or "") .. (query.chartHashP2 and ",P2" or ""))
+					.. " bodyBytes=" .. tostring(string.len(JsonEncode(body))))
 				self:playcommand("MakeGrooveStatsRequest", {
 					endpoint="?action=scoreSubmit&"..NETWORK:EncodeQueryParameters(query),
 					method="POST",

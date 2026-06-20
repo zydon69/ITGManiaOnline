@@ -45,9 +45,6 @@ local evaluationScreens = {
 local syncLockScreens = {
 	["ScreenGameplay"] = true,
 	["ScreenGameplayShared"] = true,
-	["ScreenEvaluationStage"] = true,
-	["ScreenEvaluationNonstop"] = true,
-	["ScreenEvaluationSummary"] = true,
 }
 
 local autoReadyScreens = {
@@ -1173,6 +1170,30 @@ DisplayLobbyState = function(data, actor)
 
 	local lines = {}
 
+	if screenName == "ScreenOnlineLobbies" and isWaiting then
+		isWaiting = false
+		for player in ivalues(PlayerNumber) do
+			SCREENMAN:set_input_redirected(player, false)
+		end
+		if online_trace then
+			online_trace("FLOW lobby_sync_lock_released room=" .. tostring(data and data.roomId or "")
+				.. " phase=" .. tostring(data and data.phase or "")
+				.. " players=" .. tostring(updatedData and updatedData.players and #updatedData.players or 0))
+		end
+	elseif evaluationScreens[screenName] and isWaiting then
+		isWaiting = false
+		for player in ivalues(PlayerNumber) do
+			SCREENMAN:set_input_redirected(player, false)
+		end
+		if online_trace then
+			online_trace("FLOW evaluation_sync_lock_released room=" .. tostring(data and data.roomId or "")
+				.. " screen=" .. tostring(screenName)
+				.. " phase=" .. tostring(data and data.phase or "")
+				.. " players=" .. tostring(updatedData and updatedData.players and #updatedData.players or 0)
+				.. " anyInGameplay=" .. tostring(updatedData and updatedData.aux and updatedData.aux.anyInGameplay or false))
+		end
+	end
+
 	if isWaiting then
 		local readyToUnlock = false
 		local playerCount = #updatedData.players
@@ -1554,6 +1575,36 @@ local function schedule_named_timer(actor, name, delay, command)
 	end
 end
 
+local function normalized_room_phase_for_runtime()
+	if ITGOnline and ITGOnline.NormalizeRoomPhase then
+		return ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil)
+	end
+	return tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or ""):lower()
+end
+
+local function current_online_screen_name()
+	local screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+	return screen and screen:GetName() or "NoScreen"
+end
+
+local function room_runtime_should_run()
+	local phase = normalized_room_phase_for_runtime()
+	return phase == "starting" or phase == "playing"
+end
+
+local function room_fast_runtime_should_run()
+	if not room_runtime_should_run() then
+		return false
+	end
+
+	local screenName = current_online_screen_name()
+	return not is_evaluation_screen(screenName) and screenName ~= "ScreenOnlineLobbies"
+end
+
+local function room_gameplay_runtime_should_run()
+	return room_runtime_should_run() and gameplayScreens[current_online_screen_name()] == true
+end
+
 local function start_connection_timers(actor)
 	if not actor or onlineHandlerShuttingDown then
 		if online_trace then online_trace("FLOW connection_timers_start_skipped") end
@@ -1569,23 +1620,51 @@ local function stop_connection_timers(actor)
 	stop_named_timers(actor, onlineConnectionTimerNames)
 end
 
-local function start_room_timers(actor)
-	if not actor or onlineHandlerShuttingDown or actor.roomTimersActive then
+local stop_room_timers
+
+local function start_room_timers(actor, reason)
+	if not actor or onlineHandlerShuttingDown then
 		if online_trace then
 			online_trace("FLOW room_timers_start_skipped reason="
-				.. (not actor and "no_actor" or onlineHandlerShuttingDown and "handler_shutting_down" or "already_active"))
+				.. (not actor and "no_actor" or "handler_shutting_down"))
 		end
 		return
 	end
+
+	local phase = normalized_room_phase_for_runtime()
+	if not room_fast_runtime_should_run() then
+		if actor.roomTimersActive then
+			stop_room_timers(actor)
+		end
+		if online_trace then
+			online_trace("FLOW room_timers_start_skipped reason=inactive_runtime phase=" .. tostring(phase)
+				.. " screen=" .. tostring(current_online_screen_name())
+				.. " source=" .. tostring(reason or "unknown"))
+		end
+		return
+	end
+
+	if actor.roomTimersActive then
+		if online_trace then
+			online_trace("FLOW room_timers_start_skipped reason=already_active phase=" .. tostring(phase)
+				.. " source=" .. tostring(reason or "unknown"))
+		end
+		return
+	end
+
 	actor.roomTimersActive = true
-	if online_trace then online_trace("FLOW room_timers_start") end
+	if online_trace then online_trace("FLOW room_timers_start phase=" .. tostring(phase)
+		.. " screen=" .. tostring(current_online_screen_name())
+		.. " source=" .. tostring(reason or "unknown")) end
 	schedule_named_timer(actor, "OnlinePlayingCountdownTimer", 0.25, "Fire")
 end
 
-local function stop_room_timers(actor)
+stop_room_timers = function(actor, reason)
 	if not actor then return end
 	actor.roomTimersActive = false
-	if online_trace then online_trace("FLOW room_timers_stop") end
+	if online_trace then online_trace("FLOW room_timers_stop reason=" .. tostring(reason or "unknown")
+		.. " phase=" .. tostring(normalized_room_phase_for_runtime())
+		.. " screen=" .. tostring(current_online_screen_name())) end
 	stop_named_timers(actor, onlineRoomTimerNames)
 end
 
@@ -1598,7 +1677,7 @@ end
 				" lastOnlineGameplayRoomId=" .. tostring(lastOnlineGameplayRoomId) ..
 				" lastOnlineOptionsSongKey=" .. tostring(lastOnlineOptionsSongKey))
 		end
-		stop_room_timers(actor)
+		stop_room_timers(actor, "clear_room_async_state")
 		pendingConfigReady = nil
 		pendingManagerAutoReadyRetryKey = ""
 	pendingManagerAutoReadyRetryPhase = ""
@@ -1955,22 +2034,34 @@ CreateOnlineHandler = function()
 									.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 								return
 							end
+							if not room_fast_runtime_should_run() then
+								local phase = normalized_room_phase_for_runtime()
+								online_flow_trace("online_playing_countdown_stop reason=inactive_runtime"
+									.. " phase=" .. tostring(phase)
+									.. " screen=" .. tostring(current_online_screen_name())
+									.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+								stop_room_timers(self, "online_playing_countdown_inactive_runtime")
+								if ITGOnline and ITGOnline.StopLiveScoreFlush then
+									ITGOnline:StopLiveScoreFlush("room_runtime_inactive:" .. tostring(phase) .. ":" .. tostring(current_online_screen_name()))
+								end
+								return
+							end
 							online_flow_trace_throttled("online_playing_countdown_tick", 1.0,
 								"online_playing_countdown_tick room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 								.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
-								.. " screen=" .. tostring(SCREENMAN and SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() or "nil")
+								.. " screen=" .. tostring(current_online_screen_name())
 								.. " secondsUntilStart=" .. tostring(ITGOnline and ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or "nil"))
 							if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.WatchdogTick then
 								ITGOnline.PackSync:WatchdogTick()
-						end
-						if not onlineHandlerShuttingDown and self.inLobby and self.lastLobbyStatePayload then
-							local screen = SCREENMAN:GetTopScreen()
-							local screenName = screen and screen:GetName() or "NoScreen"
-							if screenName == "ScreenOnlineLobbies" and tostring(self.lastLobbyStatePayload.phase or "") == "playing" then
-								DisplayLobbyState(self.lastLobbyStatePayload, self)
 							end
-						end
-							if ITGOnline and ITGOnline.FlushLiveScore then
+							if not onlineHandlerShuttingDown and self.inLobby and self.lastLobbyStatePayload then
+								local screen = SCREENMAN:GetTopScreen()
+								local screenName = screen and screen:GetName() or "NoScreen"
+								if screenName == "ScreenOnlineLobbies" and tostring(self.lastLobbyStatePayload.phase or "") == "playing" then
+									DisplayLobbyState(self.lastLobbyStatePayload, self)
+								end
+							end
+							if ITGOnline and ITGOnline.FlushLiveScore and room_gameplay_runtime_should_run() then
 								ITGOnline:FlushLiveScore()
 							end
 							schedule_named_timer(self, "OnlinePlayingCountdownTimer", 0.25, "Fire")
@@ -2087,6 +2178,18 @@ CreateOnlineHandler = function()
 						UnlockOnlineInput()
 						replace_online_input_callback(screen, "select_music", SelectMusicInputHandler)
 					end
+					if screenName == "ScreenOnlineLobbies" then
+						isWaiting = false
+						UnlockOnlineInput()
+						if not room_runtime_should_run() then
+							stop_room_timers(self, "screen_online_lobbies_inactive_runtime")
+						end
+						if online_trace then
+							online_trace("FLOW lobby_screen_unlocked screen=" .. tostring(screenName)
+								.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+								.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+						end
+					end
 					if ITGOnline and ITGOnline.IsOnlineOptionsScreen and ITGOnline:IsOnlineOptionsScreen(screenName) then
 						replace_online_input_callback(screen, "online_options", OnlineOptionsInputHandler)
 					end
@@ -2097,6 +2200,13 @@ CreateOnlineHandler = function()
 						SL.Global.ScreenAfter.PlayerOptions3 = "ScreenOnlineLobbies"
 					end
 					if evaluationScreens[screenName] and screen then
+						isWaiting = false
+						UnlockOnlineInput()
+						if online_trace then
+							online_trace("FLOW evaluation_screen_unlocked screen=" .. tostring(screenName)
+								.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+								.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+						end
 						replace_online_input_callback(screen, "evaluation", EvaluationInputHandler)
 					end
 
@@ -2501,7 +2611,7 @@ CreateOnlineHandler = function()
 								.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 								.. " screen=" .. tostring(SCREENMAN and SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() or "nil"))
 							self.inLobby = true
-							start_room_timers(self)
+							start_room_timers(self, "online_lobby_state_apply")
 							if ITGOnline and ITGOnline.Heartbeat then
 								ITGOnline:Heartbeat("in_room")
 							end

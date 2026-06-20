@@ -670,6 +670,37 @@ end
 		return true
 	end
 
+	local function refresh_joined_room_snapshot(reason, root)
+		local source = tostring(reason or "unknown")
+		local roomId = ITGOnline and ITGOnline.currentRoomId or nil
+		if ITGOnline and ITGOnline.FetchRoom and roomId then
+			lobby_flow_trace("joined_room_snapshot_refresh_begin reason=" .. source
+				.. " room=" .. tostring(roomId)
+				.. " phase=" .. tostring(joined_phase)
+				.. " hasPreview=" .. tostring(joined_song_preview ~= nil))
+			ITGOnline:FetchRoom(roomId, function(ok, decoded)
+				lobby_flow_trace("joined_room_snapshot_refresh_result reason=" .. source
+					.. " ok=" .. tostring(ok == true)
+					.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+					.. " room=" .. tostring(decoded and decoded.room and decoded.room.id or "nil")
+					.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
+					.. " hasSong=" .. tostring(decoded and decoded.room and decoded.room.selected_song ~= nil))
+				if ok and decoded and decoded.room and ITGOnline and ITGOnline.LobbyStatePayload then
+					MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+				elseif root then
+					request_lobby_refresh(source .. "_fallback", { immediate=true, delay=0 }, root)
+				end
+			end)
+			return true
+		end
+
+		lobby_flow_trace("joined_room_snapshot_refresh_fallback reason=" .. source
+			.. " hasClient=" .. tostring(ITGOnline ~= nil)
+			.. " hasFetch=" .. tostring(ITGOnline and ITGOnline.FetchRoom ~= nil)
+			.. " room=" .. tostring(roomId or "nil"))
+		return request_lobby_refresh(source .. "_fallback", { immediate=true, delay=0 }, root)
+	end
+
 	local function schedule_lobby_search_ui_apply(root, delay, reason)
 		if not root then return false end
 		local timer = root:GetChild("LobbySearchStabilizationTimer")
@@ -1291,6 +1322,17 @@ function pack_sync_is_checking_joined_song()
 		or status == "ready"
 end
 
+local function pack_sync_status_blocks_missing_verdict(status)
+	status = trim_text(status)
+	return status == "searching_local_charts"
+		or status == "download_requested"
+		or status == "download_in_progress"
+		or status == "reloading_songs"
+		or status == "downloaded_ok"
+		or status == "local_chart_match_found"
+		or status == "ready"
+end
+
 function can_download_pack_for_reason(reason)
 	reason = trim_text(reason)
 	return reason == "missing_local_song"
@@ -1504,7 +1546,23 @@ local function sync_local_missing_song_from_joined_players()
 				return
 			end
 			local selfMissing = player.missingSong == true
+			local playerPackStatus = trim_text(player.packSyncStatus)
 			if pack_sync_confirms_joined_song() then
+				player.missingSong = false
+				player.missingSongReason = nil
+				joined_missing_song = false
+				joined_missing_song_info = nil
+				joined_can_download_pack = false
+				joined_missing_song_reason = nil
+			elseif pack_sync_status_blocks_missing_verdict(playerPackStatus) or pack_sync_is_checking_joined_song() then
+				if selfMissing or joined_missing_song then
+					lobby_flow_trace("sync_local_missing_song clear reason=provisional_pack_status"
+						.. " status=" .. tostring(playerPackStatus)
+						.. " previousPlayerMissing=" .. tostring(selfMissing)
+						.. " previousJoinedMissing=" .. tostring(joined_missing_song == true))
+				end
+				player.missingSong = false
+				player.missingSongReason = nil
 				joined_missing_song = false
 				joined_missing_song_info = nil
 				joined_can_download_pack = false
@@ -1565,11 +1623,30 @@ local function apply_local_pack_sync_status_to_joined_player(params)
 				player.packSyncDownloadProgress = nil
 			end
 			if status == "ready" or status == "local_chart_match_found" then
+				lobby_flow_trace("apply_local_pack_sync_status_decision verdict=available"
+					.. " status=" .. tostring(status)
+					.. " reason=positive_status"
+					.. " previousMissing=" .. tostring(player.missingSong == true))
 				player.missingSong = false
+				player.missingSongReason = nil
 				player.songAvailable = joined_song_confirmed and true or player.songAvailable
 			elseif status == "downloaded_ok" then
+				lobby_flow_trace("apply_local_pack_sync_status_decision verdict=provisional"
+					.. " status=" .. tostring(status)
+					.. " reason=download_complete_waiting_scan"
+					.. " previousMissing=" .. tostring(player.missingSong == true))
 				player.missingSong = false
+				player.missingSongReason = nil
+			elseif pack_sync_status_blocks_missing_verdict(status) then
+				lobby_flow_trace("apply_local_pack_sync_status_decision verdict=provisional"
+					.. " status=" .. tostring(status)
+					.. " reason=blocks_missing_verdict"
+					.. " previousMissing=" .. tostring(player.missingSong == true))
+				player.missingSong = false
+				player.missingSongReason = nil
 			elseif status == "manager_browsing_unknown_pack" then
+				lobby_flow_trace("apply_local_pack_sync_status_decision verdict=preview_unknown_pack"
+					.. " status=" .. tostring(status))
 				player.songAvailable = false
 			end
 			lobby_flow_trace("apply_local_pack_sync_status_applied player=" .. tostring(player.profileName or player.playerId or "?")
@@ -1672,6 +1749,9 @@ local function pack_sync_line_for_player(player)
 		return "Telechargement en cours" .. suffix
 	end
 	if status == "download_requested" or status == "reloading_songs" then
+		return message ~= "" and message or pack_sync_display_text(status)
+	end
+	if status == "searching_local_charts" or status == "downloaded_ok" then
 		return message ~= "" and message or pack_sync_display_text(status)
 	end
 
@@ -2202,11 +2282,13 @@ local function start_browse_pack_download(songInfo)
 		end
 		return
 	end
+	refresh_joined_room_snapshot("browse_pack_download_start", t)
 	ITGOnline.PackSync:DownloadBrowsingPack(songInfo, function(ok, message)
 		lobby_flow_trace("browse_pack_download_callback ok=" .. tostring(ok == true)
 			.. " messageType=" .. tostring(type(message))
 			.. " kind=" .. tostring(type(message) == "table" and message.kind or "nil")
 			.. " candidates=" .. tostring(type(message) == "table" and message.candidates and #message.candidates or 0))
+		refresh_joined_room_snapshot("browse_pack_download_callback", t)
 		if not ok and type(message) == "table" and message.kind == "pack_candidates" then
 			open_pack_choice_menu(
 				songInfo,
@@ -2398,7 +2480,9 @@ local function handle_pack_choice_menu_input(event)
 			local downloadKey = pack_choice_download_key
 			local songInfo = pack_choice_song_info or joined_missing_song_info or joined_song_preview
 			close_pack_choice_menu()
+			refresh_joined_room_snapshot("pack_choice_download_start", t)
 			ITGOnline.PackSync:DownloadPackByCandidate(songInfo, candidate, function(ok, message)
+				refresh_joined_room_snapshot("pack_choice_download_callback", t)
 				if not ok and t then
 					t:playcommand("SetStatus", {
 						text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
@@ -4423,22 +4507,7 @@ end,
 			request_lobby_ui_repaint(self, "online_pack_downloaded")
 			self:queuecommand("Hover")
 		end
-		if ITGOnline and ITGOnline.FetchRoom and ITGOnline.currentRoomId then
-			lobby_flow_trace("OnlinePackDownloaded_fetch_room_begin room=" .. tostring(ITGOnline.currentRoomId))
-			ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok, decoded)
-				lobby_flow_trace("OnlinePackDownloaded_fetch_room_result ok=" .. tostring(ok == true)
-					.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
-					.. " room=" .. tostring(decoded and decoded.room and decoded.room.id or "nil")
-					.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil"))
-				if ok and decoded and decoded.room then
-					MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
-				end
-			end)
-		else
-			lobby_flow_trace("OnlinePackDownloaded_fetch_room_skipped hasClient=" .. tostring(ITGOnline ~= nil)
-				.. " hasFetch=" .. tostring(ITGOnline and ITGOnline.FetchRoom ~= nil)
-				.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
-		end
+		refresh_joined_room_snapshot("online_pack_downloaded", self)
 	end,
 			OnlineResponseStatusMessageCommand=function(self, params)
 				if not is_active_lobby_overlay() then
@@ -5084,7 +5153,7 @@ end,
 		Def.ActorFrame{
 			Name="JoinedLobbyPlayersFrame",
 			InitCommand=function(self)
-				self:xy(-70, -58):visible(false)
+				self:xy(-120, 10):visible(false)
 			end,
 			HoverCommand=function(self)
 				local focusable = joined_is_manager and #joined_lobby_players > 1
@@ -5100,22 +5169,22 @@ end,
 			end,
 			Def.Quad{
 				InitCommand=function(self)
-					self:xy(0, -64):zoomto(450, 2)
+					self:xy(0, -132):zoomto(348, 2)
 				end
 			},
 			Def.Quad{
 				InitCommand=function(self)
-					self:xy(0, 64):zoomto(450, 2)
+					self:xy(0, 132):zoomto(348, 2)
 				end
 			},
 			Def.Quad{
 				InitCommand=function(self)
-					self:xy(-225, 0):zoomto(2, 128)
+					self:xy(-174, 0):zoomto(2, 264)
 				end
 			},
 			Def.Quad{
 				InitCommand=function(self)
-					self:xy(225, 0):zoomto(2, 128)
+					self:xy(174, 0):zoomto(2, 264)
 				end
 			},
 		},

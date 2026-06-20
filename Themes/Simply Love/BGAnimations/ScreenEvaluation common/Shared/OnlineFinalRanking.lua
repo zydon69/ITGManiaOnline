@@ -107,6 +107,9 @@ local t = Def.ActorFrame{
 		self:xy(panel_x, panel_y):visible(false)
 	end,
 	OnCommand=function(self)
+		if ITGOnline and ITGOnline.ReplayCurrentPlayState then
+			ITGOnline:ReplayCurrentPlayState("final_ranking_on")
+		end
 		self:queuecommand("Refresh")
 	end,
 	OnlineLobbyStateMessageCommand=function(self)

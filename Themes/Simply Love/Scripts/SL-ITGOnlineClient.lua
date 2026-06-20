@@ -77,6 +77,7 @@ ITGOnline.lastGameplayLobbyRefreshAt = ITGOnline.lastGameplayLobbyRefreshAt or 0
 ITGOnline.lastLeaderboardVersionByRoomId = ITGOnline.lastLeaderboardVersionByRoomId or {}
 ITGOnline.lastLeaderboardRealtimeAt = ITGOnline.lastLeaderboardRealtimeAt or 0
 ITGOnline.lastPlayStateVersionByRoomId = ITGOnline.lastPlayStateVersionByRoomId or {}
+ITGOnline.currentRoomPlayStateByRoomId = ITGOnline.currentRoomPlayStateByRoomId or {}
 ITGOnline.lastRoomEventIdByRoomId = ITGOnline.lastRoomEventIdByRoomId or {}
 ITGOnline.promptedPendingJoinRequestIds = ITGOnline.promptedPendingJoinRequestIds or {}
 ITGOnline.lastUnversionedPlayStateFetchAt = ITGOnline.lastUnversionedPlayStateFetchAt or 0
@@ -2259,6 +2260,68 @@ function ITGOnline:IsCurrentUserReadyInRoom(room)
 	return false
 end
 
+function ITGOnline:CurrentUserConfirmedSelectedSong(room)
+	room = room or self.currentRoom
+	if not room or not self.user then
+		online_flow_trace("current_user_song_confirmation result=false reason=missing_context"
+			.. " hasRoom=" .. tostring(room ~= nil)
+			.. " hasUser=" .. tostring(self.user ~= nil))
+		return false, "missing_context"
+	end
+	local selectedSong = room.selected_song or self.currentSongPayload
+	if selectedSong == nil then
+		online_flow_trace("current_user_song_confirmation result=false reason=song_not_selected"
+			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+			.. " phase=" .. tostring(room.phase or "nil"))
+		return false, "song_not_selected"
+	end
+	local currentUserId = tostring(self.user.id or "")
+	if currentUserId == "" then
+		online_flow_trace("current_user_song_confirmation result=false reason=missing_user_id"
+			.. " room=" .. tostring(room.id or self.currentRoomId or "nil"))
+		return false, "missing_user_id"
+	end
+
+	for member in ivalues(room.members or {}) do
+		local memberUser = type(member.user) == "table" and member.user or {}
+		local memberUserId = tostring(member.user_id or memberUser.id or member.id or "")
+		if memberUserId == currentUserId then
+			local songAvailable = member.song_available == true or member.songAvailable == true
+			local missingSong = member.missing_song == true or member.missingSong == true
+			local packStatus = tostring(member.pack_sync_status or member.packSyncStatus or "")
+			if songAvailable and not missingSong then
+				online_flow_trace("current_user_song_confirmation result=true reason=confirmed"
+					.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+					.. " phase=" .. tostring(room.phase or "nil")
+					.. " user=" .. tostring(currentUserId)
+					.. " packStatus=" .. tostring(packStatus)
+					.. " songHash=" .. tostring(selectedSong.song_hash or selectedSong.songHash or ""):sub(1, 12)
+					.. " chartHash=" .. tostring(selectedSong.chart_hash or selectedSong.chartHash or ""):sub(1, 12))
+				return true, "confirmed"
+			end
+			online_flow_trace("current_user_song_confirmation result=false reason=member_not_confirmed"
+				.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+				.. " phase=" .. tostring(room.phase or "nil")
+				.. " user=" .. tostring(currentUserId)
+				.. " available=" .. tostring(songAvailable)
+				.. " missing=" .. tostring(missingSong)
+				.. " packStatus=" .. tostring(packStatus)
+				.. " songHash=" .. tostring(selectedSong.song_hash or selectedSong.songHash or ""):sub(1, 12)
+				.. " chartHash=" .. tostring(selectedSong.chart_hash or selectedSong.chartHash or ""):sub(1, 12))
+			return false, "not_confirmed:available=" .. tostring(songAvailable)
+				.. ",missing=" .. tostring(missingSong)
+				.. ",packStatus=" .. tostring(packStatus)
+		end
+	end
+
+	online_flow_trace("current_user_song_confirmation result=false reason=member_not_found"
+		.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+		.. " phase=" .. tostring(room.phase or "nil")
+		.. " user=" .. tostring(currentUserId)
+		.. " members=" .. tostring(room.members and #room.members or 0))
+	return false, "member_not_found"
+end
+
 function ITGOnline:OnlineOptionsReadyKey()
 	if not self.currentRoomId then return "" end
 	local key = self.PlayStateKey and self:PlayStateKey() or ""
@@ -2718,6 +2781,8 @@ end
 
 function ITGOnline:StopLiveScoreFlush(reason)
 	local hadPending = self.pendingLiveScoreSnapshot ~= nil or tostring(self.pendingLiveScoreRoundKey or "") ~= ""
+	local pendingRoundKey = tostring(self.pendingLiveScoreRoundKey or "")
+	local currentRoundKey = self.PlayStateKey and self:PlayStateKey() or ""
 	self.pendingLiveScoreSnapshot = nil
 	self.pendingLiveScoreRoundKey = ""
 	self.liveScoreNextAttemptAt = 0
@@ -2727,7 +2792,9 @@ function ITGOnline:StopLiveScoreFlush(reason)
 		" inFlight=" .. tostring(self.liveScoreInFlight == true) ..
 		" room=" .. tostring(self.currentRoomId or "") ..
 		" phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil") ..
-		" screen=" .. tostring(self.currentScreenName or "nil")
+		" screen=" .. tostring(self.currentScreenName or "nil") ..
+		" pendingRoundKey=" .. tostring(pendingRoundKey) ..
+		" currentRoundKey=" .. tostring(currentRoundKey)
 	)
 end
 
@@ -2890,6 +2957,33 @@ function ITGOnline:ApplyRoomPhase(incomingPhase, source)
 	elseif normalizedPhase == "starting" or normalizedPhase == "playing" or normalizedPhase == "results" then
 		self:ClearPendingConfigReadyIntent("room_phase_" .. tostring(normalizedPhase))
 	end
+end
+
+function ITGOnline:ClearSelectedSongForLobby(source, shouldBroadcast)
+	if not self.currentRoom then return false end
+	local phase = self:NormalizeRoomPhase(self.currentRoom.phase)
+	if phase ~= "lobby" then return false end
+
+	local hadSong = self.currentRoom.selected_song ~= nil
+	local previousRoundKey = tostring(self.currentRoomRoundKey or "")
+	self.currentRoom.selected_song = nil
+	self.currentSongPayload = nil
+	self.currentRoomRoundKey = ""
+	self:ClearActiveGameplayRound(tostring(source or "lobby_song_clear"))
+	if type(self.currentRoom.ready_states) == "table" and #self.currentRoom.ready_states > 0 then
+		self.currentRoom.ready_states = {}
+	end
+
+	online_flow_trace("room_lobby_song_state_cleared source=" .. tostring(source or "unknown")
+		.. " hadSong=" .. tostring(hadSong == true)
+		.. " previousRoundKey=" .. tostring(previousRoundKey)
+		.. " broadcast=" .. tostring(shouldBroadcast == true))
+
+	if shouldBroadcast == true then
+		self:BroadcastCurrentRoomState(tostring(source or "lobby_song_clear"))
+	end
+
+	return hadSong
 end
 
 function ITGOnline:NormalizeGlobalOptions(options)
@@ -3263,8 +3357,42 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	local incomingReadyStates = room.ready_states and #room.ready_states or 0
 	local previousSelectedAt = previousRoom and previousRoom.selected_song and (previousRoom.selected_song.selected_at or previousRoom.selected_song.selectedAt) or nil
 	local incomingSelectedAt = room.selected_song and (room.selected_song.selected_at or room.selected_song.selectedAt) or nil
+	local previousSongHash = previousRoom and previousRoom.selected_song and (previousRoom.selected_song.song_hash or previousRoom.selected_song.songHash) or nil
+	local previousChartHash = previousRoom and previousRoom.selected_song and (previousRoom.selected_song.chart_hash or previousRoom.selected_song.chartHash) or nil
+	local incomingSongHash = room.selected_song and (room.selected_song.song_hash or room.selected_song.songHash) or nil
+	local incomingChartHash = room.selected_song and (room.selected_song.chart_hash or room.selected_song.chartHash) or nil
 	local previousPlayStateVersion = previousRoom and previousRoom.play_state and previousRoom.play_state.version_ms or nil
 	local incomingPlayStateVersionForLog = room.play_state and room.play_state.version_ms or nil
+	if previousRoom then
+		local previousHadSong = previousRoom.selected_song ~= nil
+		local incomingHasSong = room.selected_song ~= nil
+		local songTransition = nil
+		if not previousHadSong and incomingHasSong then
+			songTransition = "selected_song_added"
+		elseif previousHadSong and not incomingHasSong then
+			songTransition = "selected_song_removed"
+		elseif previousHadSong and incomingHasSong
+			and (tostring(previousSelectedAt or "") ~= tostring(incomingSelectedAt or "")
+				or tostring(previousSongHash or "") ~= tostring(incomingSongHash or "")
+				or tostring(previousChartHash or "") ~= tostring(incomingChartHash or "")) then
+			songTransition = "selected_song_changed"
+		elseif self:NormalizeRoomPhase(room.phase) == "lobby" and incomingHasSong then
+			songTransition = "lobby_with_selected_song"
+		end
+		if songTransition then
+			online_flow_trace("room_snapshot_selected_song_transition source=" .. tostring(source or "unknown")
+				.. " transition=" .. tostring(songTransition)
+				.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+				.. " previousPhase=" .. tostring(previousRoom.phase or "nil")
+				.. " incomingPhase=" .. tostring(room.phase or "nil")
+				.. " previousSelectedAt=" .. tostring(previousSelectedAt or "nil")
+				.. " incomingSelectedAt=" .. tostring(incomingSelectedAt or "nil")
+				.. " previousSongHash=" .. tostring(previousSongHash or ""):sub(1, 12)
+				.. " incomingSongHash=" .. tostring(incomingSongHash or ""):sub(1, 12)
+				.. " previousChartHash=" .. tostring(previousChartHash or ""):sub(1, 12)
+				.. " incomingChartHash=" .. tostring(incomingChartHash or ""):sub(1, 12))
+		end
+	end
 	online_flow_trace("room_snapshot_apply_start source=" .. tostring(source or "unknown")
 		.. " incomingRoom=" .. tostring(room.id or "nil")
 		.. " incomingPhase=" .. tostring(room.phase or "nil")
@@ -6279,6 +6407,9 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		.. " final=" .. tostring(final == true)
 		.. " room=" .. tostring(self.currentRoomId or "nil")
 		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+		.. " playKey=" .. tostring(self.PlayStateKey and self:PlayStateKey() or "")
+		.. " currentRoundKey=" .. tostring(self.currentRoomRoundKey or "")
+		.. " activeRoundKey=" .. tostring(self.activeGameplayRoundKey or "")
 		.. " hasSnapshot=" .. tostring(snapshot ~= nil)
 		.. " hasDisplayedSnapshot=" .. tostring(self.lastDisplayedScoreSnapshot ~= nil)
 		.. " inFlight=" .. tostring(self.scoreInFlightFingerprint ~= nil))
@@ -6312,6 +6443,13 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	end
 	local roundKey = self.CanonicalGameplayRoundKey and self:CanonicalGameplayRoundKey("send_score") or tostring(self.currentRoomId or "")
 	local validRoundKey = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)
+	online_flow_trace("send_score_context room=" .. tostring(self.currentRoomId or "nil")
+		.. " phase=" .. tostring(roomPhase)
+		.. " roundKey=" .. tostring(roundKey)
+		.. " validRoundKey=" .. tostring(validRoundKey == true)
+		.. " selectedAt=" .. tostring(scoreSongPayload.selected_at or scoreSongPayload.selectedAt or "nil")
+		.. " songHash=" .. tostring(scoreSongPayload.song_hash or scoreSongPayload.songHash or ""):sub(1, 12)
+		.. " chartHash=" .. tostring(scoreSongPayload.chart_hash or scoreSongPayload.chartHash or ""):sub(1, 12))
 	if not final
 		and validRoundKey
 		and (self.onlineGameplayEndedKey == roundKey
@@ -6821,6 +6959,27 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 		return
 	end
 
+	if isReady and phase == "lobby_ready" then
+		local confirmed, reason = self:CurrentUserConfirmedSelectedSong(self.currentRoom)
+		if not confirmed then
+			online_flow_trace("ready_request_deferred room=" .. tostring(self.currentRoomId)
+				.. " phase=" .. tostring(phase)
+				.. " currentPhase=" .. tostring(currentPhase)
+				.. " reason=current_member_song_not_confirmed"
+				.. " detail=" .. tostring(reason))
+			if callback then
+				callback(false, {
+					room = self.currentRoom,
+					error_code = "room_member_song_not_confirmed",
+					retry_after = tonumber(self.readyRequestBlockedRetrySeconds) or 2.5,
+					deferred = true,
+					local_guard = true,
+				}, nil)
+			end
+			return
+		end
+	end
+
 	if isReady and phase == "config_ready"
 		and currentPhase ~= "config"
 		and currentPhase ~= "lobby"
@@ -7209,6 +7368,13 @@ function ITGOnline:UpdatePlayStateFromResponse(decoded)
 		if responsePhase then
 			responsePhaseLabel = responsePhase
 			self:ApplyRoomPhase(responsePhase, "play_state_response")
+			if responsePhase == "lobby" then
+				if self:NormalizeRoomPhase(self.currentRoom.phase) ~= "lobby" then
+					online_flow_trace("play_state_response_force_lobby_reset previousPhase=" .. tostring(self.currentRoom.phase))
+					self.currentRoom.phase = "lobby"
+				end
+				self:ClearSelectedSongForLobby("play_state_response", false)
+			end
 		elseif hasResponsePhase then
 			responsePhaseLabel = "ignored:" .. tostring(rawResponsePhase)
 			online_flow_trace("ignored_invalid_play_state_response_phase previousPhase=" .. tostring(previousPhase)
@@ -7237,12 +7403,73 @@ function ITGOnline:UpdatePlayStateFromResponse(decoded)
 		online_flow_trace("play_state_response previousPhase=" .. tostring(previousPhase)
 			.. " responsePhase=" .. tostring(responsePhaseLabel)
 			.. " currentPhase=" .. tostring(self.currentRoom.phase))
-		MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
-		MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", decoded.play_state)
+		self:ApplyPlayStateSnapshot(decoded.play_state, "play_state_response", incomingVersion)
 		if self.EnforceRoomPhaseScreen then
 			self:EnforceRoomPhaseScreen()
 		end
 	end
+end
+
+function ITGOnline:ApplyPlayStateSnapshot(playState, source, versionMs)
+	if type(playState) ~= "table" or not self.currentRoom then
+		online_flow_trace("play_state_snapshot_skipped source=" .. tostring(source or "unknown")
+			.. " reason=missing_context"
+			.. " hasPlayState=" .. tostring(type(playState) == "table")
+			.. " hasRoom=" .. tostring(self.currentRoom ~= nil))
+		return false
+	end
+
+	local roomId = tostring(self.currentRoomId or self.currentRoom.id or "")
+	local incomingVersion = tonumber(versionMs or playState.version_ms) or 0
+	local previousVersion = tonumber(self.lastPlayStateVersionByRoomId[roomId]) or 0
+	if incomingVersion > 0 and incomingVersion < previousVersion then
+		online_flow_trace("play_state_snapshot_ignored source=" .. tostring(source or "unknown")
+			.. " reason=stale_version"
+			.. " room=" .. tostring(roomId)
+			.. " version=" .. tostring(incomingVersion)
+			.. " previous=" .. tostring(previousVersion))
+		return false
+	end
+
+	if incomingVersion > 0 then
+		self.lastPlayStateVersionByRoomId[roomId] = incomingVersion
+	end
+	self.currentRoom.play_state = playState
+	if roomId ~= "" then
+		self.currentRoomPlayStateByRoomId[roomId] = {
+			play_state = playState,
+			version_ms = incomingVersion,
+			applied_at = GetTimeSinceStart(),
+			source = tostring(source or "unknown"),
+		}
+	end
+	online_flow_trace("play_state_snapshot_applied source=" .. tostring(source or "unknown")
+		.. " room=" .. tostring(roomId)
+		.. " version=" .. tostring(incomingVersion)
+		.. " previous=" .. tostring(previousVersion)
+		.. " sessions=" .. tostring(playState.sessions and #playState.sessions or 0)
+		.. " finalResults=" .. tostring(playState.final_results and #playState.final_results or 0))
+	MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
+	MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", playState)
+	return true
+end
+
+function ITGOnline:ReplayCurrentPlayState(source)
+	if not self.currentRoom then return false end
+	local roomId = tostring(self.currentRoomId or self.currentRoom.id or "")
+	local cached = roomId ~= "" and self.currentRoomPlayStateByRoomId and self.currentRoomPlayStateByRoomId[roomId] or nil
+	local playState = self.currentRoom.play_state or (cached and cached.play_state) or nil
+	if type(playState) ~= "table" then
+		online_flow_trace("play_state_replay_skipped source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(roomId)
+			.. " reason=no_cached_play_state")
+		return false
+	end
+	online_flow_trace("play_state_replay source=" .. tostring(source or "unknown")
+		.. " room=" .. tostring(roomId)
+		.. " cachedSource=" .. tostring(cached and cached.source or "current_room")
+		.. " version=" .. tostring(cached and cached.version_ms or playState.version_ms or "nil"))
+	return self:ApplyPlayStateSnapshot(playState, "replay:" .. tostring(source or "unknown"), cached and cached.version_ms or playState.version_ms)
 end
 
 function ITGOnline:BroadcastCurrentRoomState(source)
@@ -7253,9 +7480,10 @@ function ITGOnline:BroadcastCurrentRoomState(source)
 			.. " phase=" .. tostring(self.currentRoom.phase)
 			.. " localPlayState=" .. tostring(localState))
 	end
-	MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
 	if self.currentRoom.play_state then
-		MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", self.currentRoom.play_state)
+		self:ApplyPlayStateSnapshot(self.currentRoom.play_state, "broadcast_room_state:" .. tostring(source or "unknown"))
+	else
+		MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
 	end
 end
 
@@ -7459,6 +7687,10 @@ function ITGOnline:MarkReturnedToLobby(callback)
 	online_flow_trace("mark_returned_to_lobby_request room=" .. tostring(self.currentRoomId)
 		.. " roundKey=" .. tostring(key)
 		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+	if self.currentRoom then
+		self.currentRoom.phase = "lobby"
+		self:ClearSelectedSongForLobby("mark_returned_to_lobby_local", true)
+	end
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/play/returned-to-lobby", {}, function(ok, decoded, response)
 		if self.onlineGameplayReturnedInFlightKey == key then
 			self.onlineGameplayReturnedInFlightKey = ""
@@ -9195,8 +9427,7 @@ end
 						self:ApplyRoomPhase(payload.room_phase, "score_updated")
 					end
 				end
-				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
-				MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", payload.play_state)
+				self:ApplyPlayStateSnapshot(payload.play_state, "score_updated", incomingPlayStateVersion)
 				if self.EnforceRoomPhaseScreen then
 					self:EnforceRoomPhaseScreen()
 				end
@@ -9395,7 +9626,7 @@ end
 					online_flow_trace("realtime_room_event_broadcast_play_state name=" .. tostring(name)
 						.. " version=" .. tostring(room.play_state.version_ms or "nil")
 						.. " phase=" .. tostring(room.phase or "nil"))
-					MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", room.play_state)
+					self:ApplyPlayStateSnapshot(room.play_state, "realtime_room_event:" .. tostring(name), room.play_state.version_ms)
 				end
 			elseif roomId then
 				online_flow_trace("realtime_room_event_fetch name=" .. tostring(name)
@@ -9448,6 +9679,8 @@ function ITGOnline:LobbySearchPayload(decoded)
 		or 0
 	local rawOnlineUserCount = decodedOnlineUsers and #decodedOnlineUsers or 0
 	local selfOnlineUserFiltered = 0
+	local rawOnlineUserIds = {}
+	local displayOnlineUserIds = {}
 
 	if decoded and decoded.public_rooms ~= nil then
 		for room in ivalues(decoded.public_rooms or {}) do
@@ -9469,6 +9702,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 	local onlinePlayers = {}
 	if decodedOnlineUsers ~= nil then
 		for user in ivalues(decodedOnlineUsers or {}) do
+			rawOnlineUserIds[#rawOnlineUserIds + 1] = tostring(user.id or "?")
 			local isSelf = self.user and tonumber(user.id) == tonumber(self.user.id)
 			if isSelf then
 				selfOnlineUserFiltered = selfOnlineUserFiltered + 1
@@ -9482,11 +9716,13 @@ function ITGOnline:LobbySearchPayload(decoded)
 					lastSeenAt = user.last_seen_at,
 					isSelf = false,
 				}
+				displayOnlineUserIds[#displayOnlineUserIds + 1] = tostring(user.id or "?")
 			end
 		end
 	else
 		for player in ivalues(cachedPayload.onlinePlayers or {}) do
 			onlinePlayers[#onlinePlayers + 1] = player
+			displayOnlineUserIds[#displayOnlineUserIds + 1] = tostring(player.id or "?")
 		end
 	end
 
@@ -9504,6 +9740,9 @@ function ITGOnline:LobbySearchPayload(decoded)
 		.. " normalizedOnlinePlayers=" .. tostring(#onlinePlayers)
 		.. " displayOnlinePlayers=" .. tostring(#onlinePlayers)
 		.. " selfOnlineUserFiltered=" .. tostring(selfOnlineUserFiltered)
+		.. " rawOnlineUserIds=" .. table.concat(rawOnlineUserIds, ",")
+		.. " displayOnlineUserIds=" .. table.concat(displayOnlineUserIds, ",")
+		.. " selfUserId=" .. tostring(self.user and self.user.id or "nil")
 		.. " usedCachedLobbies=" .. tostring(not (decoded and decoded.public_rooms ~= nil))
 		.. " usedCachedOnlinePlayers=" .. tostring(decodedOnlineUsers == nil)
 		.. " cachedOnlinePlayers=" .. tostring(cachedPayload.onlinePlayers and #cachedPayload.onlinePlayers or 0)
