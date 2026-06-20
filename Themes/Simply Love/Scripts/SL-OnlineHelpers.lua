@@ -1994,6 +1994,10 @@ CreateOnlineHandler = function()
 							end
 						end
 
+					if ITGOnline and ITGOnline.MaintainRealtimeAndRoomSync then
+						ITGOnline:MaintainRealtimeAndRoomSync("realtime_deadman_tick")
+					end
+
 							schedule_named_timer(self, "RealtimeDeadmanTimer", 1, "Fire")
 						end,
 					OnlineHeartbeatTickCommand=function(self)
