@@ -42,6 +42,8 @@ ITGOnline.pendingJoinRequestId = ITGOnline.pendingJoinRequestId or nil
 ITGOnline.lastScoreSentAt = ITGOnline.lastScoreSentAt or 0
 ITGOnline.scheduledStartLocalTime = ITGOnline.scheduledStartLocalTime or nil
 ITGOnline.sessionExpired = ITGOnline.sessionExpired or false
+ITGOnline.authSessionInvalidated = ITGOnline.authSessionInvalidated or false
+ITGOnline.authSessionInvalidatedReason = ITGOnline.authSessionInvalidatedReason or ""
 ITGOnline.disconnecting = ITGOnline.disconnecting or false
 ITGOnline.lastEventCursor = ITGOnline.lastEventCursor or 0
 ITGOnline.fetchRoomInFlightByRoomId = ITGOnline.fetchRoomInFlightByRoomId or {}
@@ -1463,6 +1465,100 @@ function ITGOnline:ClearStoredAccessToken()
 	end
 end
 
+function ITGOnline:InvalidateAuthenticatedSession(reason, payload)
+	reason = tostring(reason or "session_invalidated")
+	payload = type(payload) == "table" and payload or {}
+	local message = tostring(payload.message or payload.reason_message or "")
+	if message == "" then
+		if reason == "auth.session_revoked" then
+			message = "Cette session a ete ouverte ailleurs. Reconnecte ce joueur avec un compte different."
+		else
+			message = "La session en ligne n'est plus valide. Reconnecte ce joueur."
+		end
+	end
+
+	online_flow_trace("auth_session_invalidate_begin reason=" .. reason
+		.. " message=" .. tostring(message)
+		.. " user=" .. tostring(self.user and self.user.id or "nil")
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " screen=" .. tostring(self.currentScreenName or "nil")
+		.. " socket=" .. tostring(self.socket ~= nil)
+		.. " disconnecting=" .. tostring(self.disconnecting == true))
+
+	self.authSessionInvalidated = true
+	self.authSessionInvalidatedReason = reason
+	self.sessionExpired = true
+	self.disconnecting = false
+	self.authRefreshInFlight = false
+	self.authRefreshCallbacks = {}
+	self.authRefreshFailureCount = self.maxAuthRefreshFailures or 3
+	self.authRefreshNextAttemptAt = GetTimeSinceStart() + 3600
+
+	self:CancelPendingRequests()
+	if self.socket then
+		online_flow_trace("auth_session_invalidate_socket_close generation=" .. tostring(self.realtimeGeneration or "nil"))
+		self.realtimeGeneration = (tonumber(self.realtimeGeneration) or 0) + 1
+		pcall(function() self.socket:Close() end)
+	end
+	self.socket = nil
+	self.realtimeConnecting = false
+	self.realtimeConnected = false
+	self.pendingRealtimeConnectCallbacks = {}
+	self.activeRealtimeCallbacks = nil
+
+	self:ClearStoredAccessToken()
+	self.token = nil
+	self.user = nil
+	self.currentRoomId = nil
+	self.currentRoom = nil
+	self.pendingJoinRoomId = nil
+	self.pendingJoinRequestId = nil
+	self.currentSongPayload = nil
+	self.currentRoomRoundKey = ""
+	self.lastResultSongPayload = nil
+	self.activeGameplaySongPayload = nil
+	self.activeGameplayRoundKey = ""
+	self.cachedLobbySearchPayload = { lobbies = {}, onlinePlayers = {} }
+	self.syncInFlight = false
+	self.syncQueued = false
+	self.syncCallbacks = {}
+	self.syncAccumulator = nil
+	self.syncGeneration = (tonumber(self.syncGeneration) or 0) + 1
+	self.lobbyRefreshInFlight = false
+	self.lobbyRefreshQueued = false
+	self.lobbyRefreshQueuedReason = ""
+	self.lobbyRefreshQueuedAt = 0
+	self.lobbyRefreshDeferredScheduled = false
+	self.heartbeatInFlight = false
+	self.heartbeatQueuedStatus = nil
+	self.heartbeatQueuedForce = false
+	self.heartbeatQueuedFingerprint = ""
+	self.heartbeatQueuedAt = 0
+	self.lastHeartbeatSentAt = 0
+	self.lastHeartbeatFingerprint = ""
+	self.readyRequestInFlight = {}
+	self.readyRequestLastResult = {}
+	self.readyRequestBlockedErrors = {}
+	self:ClearCurrentRoomBlocked("auth_session_invalidated")
+	self:ClearOnlineOptionsReadyDeadline("auth_session_invalidated")
+	self:ResetRealtimeState()
+	self:ClearTransientSecrets()
+
+	MESSAGEMAN:Broadcast("ITGOnlineSessionInvalidated", {
+		reason = reason,
+		message = message,
+		payload = payload,
+	})
+	MESSAGEMAN:Broadcast("ITGOnlineLoginStateChanged")
+
+	online_flow_trace("auth_session_invalidate_end reason=" .. reason
+		.. " syncGeneration=" .. tostring(self.syncGeneration or "nil")
+		.. " realtimeGeneration=" .. tostring(self.realtimeGeneration or "nil")
+		.. " disconnecting=" .. tostring(self.disconnecting == true)
+		.. " sessionExpired=" .. tostring(self.sessionExpired == true)
+		.. " authInvalidated=" .. tostring(self.authSessionInvalidated == true))
+end
+
 function ITGOnline:UnlinkLocalProfile()
 	local hadStoredToken = self:HasStoredAccessToken()
 	local hadActiveToken = tostring(self.token or "") ~= ""
@@ -1521,6 +1617,10 @@ function ITGOnline:ApplyAccessToken(accessToken, callback)
 	self.token = accessToken
 	self.user = nil
 	self.sessionExpired = false
+	self.authSessionInvalidated = false
+	self.authSessionInvalidatedReason = ""
+	self.authRefreshFailureCount = 0
+	self.authRefreshNextAttemptAt = 0
 
 	self:LoadAuthenticatedUser(function(ok, user, decodedOrResponse)
 		if not ok then
@@ -4362,6 +4462,10 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 end
 
 function ITGOnline:Login(callback)
+	self.authSessionInvalidated = false
+	self.authSessionInvalidatedReason = ""
+	self.authRefreshFailureCount = 0
+	self.authRefreshNextAttemptAt = 0
 	online_flow_trace("login_begin localPlayers=" .. tostring(online_local_player_count())
 		.. " hasToken=" .. tostring(tostring(self.token or "") ~= "")
 		.. " sessionExpired=" .. tostring(self.sessionExpired == true))
@@ -4399,6 +4503,8 @@ function ITGOnline:Login(callback)
 		self:ClearTransientSecrets()
 
 		apply_authenticated_user_state(self, decoded.user)
+		self.authSessionInvalidated = false
+		self.authSessionInvalidatedReason = ""
 		self.token = decoded.access_token
 		self:StoreAccessToken(self.token, decoded.user)
 		if callback then callback(true) end
@@ -4683,7 +4789,7 @@ function ITGOnline:ConnectWebSocket(callbacks)
 						online_flow_trace("realtime_handle_end id=" .. tostring(payload and payload.id or "nil")
 							.. " name=" .. tostring(payload and (payload.event or payload.name) or "nil")
 							.. " ok=" .. tostring(handled == true))
-						if handled and payload and payload.id then
+						if handled and payload and payload.id and not payload._itgOnlineAckHandled then
 							online_flow_trace("realtime_ack_begin id=" .. tostring(payload.id)
 								.. " name=" .. tostring(payload.event or payload.name or "nil"))
 							self:SendRealtimeAck(payload.id)
@@ -4764,11 +4870,20 @@ function ITGOnline:Connect(callbacks)
 	online_flow_trace("connect_begin hasToken=" .. tostring(tostring(self.token or "") ~= "")
 		.. " hasUser=" .. tostring(self.user ~= nil)
 		.. " sessionExpired=" .. tostring(self.sessionExpired == true)
+		.. " authInvalidated=" .. tostring(self.authSessionInvalidated == true)
+		.. " authInvalidatedReason=" .. tostring(self.authSessionInvalidatedReason or "")
 		.. " realtimeConnected=" .. tostring(self.realtimeConnected == true)
 		.. " realtimeConnecting=" .. tostring(self.realtimeConnecting == true)
 		.. " socket=" .. tostring(self.socket ~= nil)
 		.. " room=" .. tostring(self.currentRoomId or "nil")
 		.. " screen=" .. tostring(self.currentScreenName or "nil"))
+	if self.authSessionInvalidated and not self.token then
+		local message = "Session ouverte ailleurs. Utilise un compte different ou reconnecte-toi depuis l'ecran de connexion."
+		online_flow_trace("connect_blocked reason=auth_session_invalidated authReason="
+			.. tostring(self.authSessionInvalidatedReason or ""))
+		if callbacks and callbacks.error then callbacks.error(message) end
+		return
+	end
 	if self.socket and self.realtimeConnected and not self.sessionExpired then
 		online_flow_trace("connect_reused reason=realtime_already_connected generation=" .. tostring(self.realtimeGeneration or "nil"))
 		if callbacks and callbacks.open then callbacks.open() end
@@ -9045,6 +9160,10 @@ end
 				action = "ignore_control_frame",
 				reason = "close_lifecycle_handled_by_socket",
 			},
+			["auth.session_revoked"] = {
+				action = "invalidate_authenticated_session",
+				reason = "same_account_connected_elsewhere",
+			},
 			["presence.pruned"] = {
 				action = "queue_lobby_refresh",
 				reason = "presence_cleanup_changes_online_players",
@@ -9107,6 +9226,7 @@ end
 			["server.ping"] = true,
 			["pong"] = true,
 			["client.error"] = true,
+			["auth.session_revoked"] = true,
 		}
 		if eventId and eventId > 0 then
 			self.lastEventCursor = math.max(self.lastEventCursor or 0, math.floor(eventId))
@@ -9208,6 +9328,17 @@ end
 		elseif name == "connection.closed" then
 			-- Informational frame. WebSocket close lifecycle is handled by onMessage Close.
 			online_flow_trace("realtime_event_apply name=connection.closed action=none")
+			return
+		elseif name == "auth.session_revoked" then
+			online_flow_trace("realtime_event_apply name=auth.session_revoked action=invalidate_authenticated_session"
+				.. " eventId=" .. tostring(eventId or "nil")
+				.. " reason=" .. tostring(payload.reason or "nil")
+				.. " user=" .. tostring(payload.user_id or payload.userId or "nil"))
+			if eventId and eventId > 0 then
+				self:SendRealtimeAck(eventId)
+				event._itgOnlineAckHandled = true
+			end
+			self:InvalidateAuthenticatedSession("auth.session_revoked", payload)
 			return
 		elseif name == "presence.pruned" then
 			-- Server-side cleanup notification. The next sync/lobby refresh carries the durable state.
@@ -9681,6 +9812,12 @@ function ITGOnline:LobbySearchPayload(decoded)
 	local selfOnlineUserFiltered = 0
 	local rawOnlineUserIds = {}
 	local displayOnlineUserIds = {}
+	local rawPresenceIdentities = {}
+	local selfPresenceIdentities = {}
+	local selfPresenceSessionIds = {}
+	local selfPresenceDevices = {}
+	local retainedSameAccountPresenceIds = {}
+	local retainedSameAccountSessionIds = {}
 
 	if decoded and decoded.public_rooms ~= nil then
 		for room in ivalues(decoded.public_rooms or {}) do
@@ -9703,10 +9840,39 @@ function ITGOnline:LobbySearchPayload(decoded)
 	if decodedOnlineUsers ~= nil then
 		for user in ivalues(decodedOnlineUsers or {}) do
 			rawOnlineUserIds[#rawOnlineUserIds + 1] = tostring(user.id or "?")
-			local isSelf = self.user and tonumber(user.id) == tonumber(self.user.id)
+			local presenceIdentity = type(user.presence_identity) == "table" and user.presence_identity or {}
+			local viewerSession = type(presenceIdentity.viewer_session) == "table" and presenceIdentity.viewer_session or {}
+			local presenceId = presenceIdentity.presence_id or presenceIdentity.presenceId or user.presence_id or user.presenceId
+			local presenceKey = tostring(presenceIdentity.model or "presence") .. ":" .. tostring(presenceId or "?") .. ":user:" .. tostring(user.id or "?")
+			rawPresenceIdentities[#rawPresenceIdentities + 1] = presenceKey
+			local isViewerPresence = presenceIdentity.is_viewer == true or presenceIdentity.isViewer == true
+			local isSelf = isViewerPresence
 			if isSelf then
 				selfOnlineUserFiltered = selfOnlineUserFiltered + 1
+				selfPresenceIdentities[#selfPresenceIdentities + 1] = presenceKey
+				if viewerSession.api_token_id or viewerSession.apiTokenId then
+					selfPresenceSessionIds[#selfPresenceSessionIds + 1] = tostring(viewerSession.api_token_id or viewerSession.apiTokenId)
+				end
+				if viewerSession.device_name or viewerSession.deviceName then
+					selfPresenceDevices[#selfPresenceDevices + 1] = tostring(viewerSession.device_name or viewerSession.deviceName)
+				end
 			else
+				local sameAccountNonViewer = self.user and tonumber(user.id) == tonumber(self.user.id)
+				if sameAccountNonViewer then
+					retainedSameAccountPresenceIds[#retainedSameAccountPresenceIds + 1] = tostring(presenceId or "?")
+					local apiTokenId = presenceIdentity.api_token_id or presenceIdentity.apiTokenId
+					if apiTokenId then
+						retainedSameAccountSessionIds[#retainedSameAccountSessionIds + 1] = tostring(apiTokenId)
+					end
+					online_flow_trace("lobby_search_presence_retained_same_account"
+						.. " userId=" .. tostring(user.id or "?")
+						.. " selfUserId=" .. tostring(self.user and self.user.id or "nil")
+						.. " presenceKey=" .. tostring(presenceKey)
+						.. " apiTokenId=" .. tostring(apiTokenId or "nil")
+						.. " isViewerPresence=" .. tostring(isViewerPresence)
+						.. " status=" .. tostring(user.status or "nil")
+						.. " roomId=" .. tostring(user.room and user.room.id or "nil"))
+				end
 				onlinePlayers[#onlinePlayers + 1] = {
 					id = user.id,
 					name = user_display_name(user, "User " .. tostring(user.id or "?")),
@@ -9714,6 +9880,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 					status = user.status or "available",
 					room = user.room,
 					lastSeenAt = user.last_seen_at,
+					presenceIdentity = user.presence_identity,
 					isSelf = false,
 				}
 				displayOnlineUserIds[#displayOnlineUserIds + 1] = tostring(user.id or "?")
@@ -9726,9 +9893,27 @@ function ITGOnline:LobbySearchPayload(decoded)
 		end
 	end
 
+	local selfOnlyPresenceFiltered = decodedOnlineUsers ~= nil
+		and rawOnlineUserCount > 0
+		and rawOnlineUserCount == selfOnlineUserFiltered
+		and #onlinePlayers == 0
+
 	local payload = {
 		lobbies = lobbies,
 		onlinePlayers = onlinePlayers,
+		presenceDiagnostics = {
+			rawOnlineUserCount = rawOnlineUserCount,
+			selfOnlineUserFiltered = selfOnlineUserFiltered,
+			selfOnlyPresenceFiltered = selfOnlyPresenceFiltered,
+			rawOnlineUserIds = rawOnlineUserIds,
+			displayOnlineUserIds = displayOnlineUserIds,
+			rawPresenceIdentities = rawPresenceIdentities,
+			selfPresenceIdentities = selfPresenceIdentities,
+			selfPresenceSessionIds = selfPresenceSessionIds,
+			selfPresenceDevices = selfPresenceDevices,
+			retainedSameAccountPresenceIds = retainedSameAccountPresenceIds,
+			retainedSameAccountSessionIds = retainedSameAccountSessionIds,
+		},
 	}
 
 	self.cachedLobbySearchPayload = payload
@@ -9740,9 +9925,18 @@ function ITGOnline:LobbySearchPayload(decoded)
 		.. " normalizedOnlinePlayers=" .. tostring(#onlinePlayers)
 		.. " displayOnlinePlayers=" .. tostring(#onlinePlayers)
 		.. " selfOnlineUserFiltered=" .. tostring(selfOnlineUserFiltered)
+		.. " selfOnlyPresenceFiltered=" .. tostring(selfOnlyPresenceFiltered)
 		.. " rawOnlineUserIds=" .. table.concat(rawOnlineUserIds, ",")
 		.. " displayOnlineUserIds=" .. table.concat(displayOnlineUserIds, ",")
+		.. " rawPresenceIdentities=" .. table.concat(rawPresenceIdentities, ",")
+		.. " selfPresenceIdentities=" .. table.concat(selfPresenceIdentities, ",")
+		.. " selfPresenceSessionIds=" .. table.concat(selfPresenceSessionIds, ",")
+		.. " selfPresenceDevices=" .. table.concat(selfPresenceDevices, ",")
+		.. " retainedSameAccountPresenceIds=" .. table.concat(retainedSameAccountPresenceIds, ",")
+		.. " retainedSameAccountSessionIds=" .. table.concat(retainedSameAccountSessionIds, ",")
 		.. " selfUserId=" .. tostring(self.user and self.user.id or "nil")
+		.. " authInvalidated=" .. tostring(self.authSessionInvalidated == true)
+		.. " authInvalidatedReason=" .. tostring(self.authSessionInvalidatedReason or "")
 		.. " usedCachedLobbies=" .. tostring(not (decoded and decoded.public_rooms ~= nil))
 		.. " usedCachedOnlinePlayers=" .. tostring(decodedOnlineUsers == nil)
 		.. " cachedOnlinePlayers=" .. tostring(cachedPayload.onlinePlayers and #cachedPayload.onlinePlayers or 0)

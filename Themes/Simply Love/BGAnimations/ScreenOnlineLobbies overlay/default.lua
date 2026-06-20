@@ -4509,6 +4509,44 @@ end,
 		end
 		refresh_joined_room_snapshot("online_pack_downloaded", self)
 	end,
+	ITGOnlineSessionInvalidatedMessageCommand=function(self, params)
+		params = type(params) == "table" and params or {}
+		local message = tostring(params.message or "")
+		if message == "" then
+			message = "Session ouverte ailleurs. Reconnecte ce joueur avec un compte different."
+		end
+		lobby_flow_trace("session_invalidated_received reason=" .. tostring(params.reason or "nil")
+			.. " message=" .. tostring(message)
+			.. " mode=" .. tostring(mode)
+			.. " joined_code=" .. tostring(joined_lobby_code)
+			.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " leaving=" .. tostring(leaving_lobby == true))
+		connected = false
+		has_error = true
+		leaving_lobby = false
+		mode = "browse"
+		list_selected = false
+		holding.MenuLeft = false
+		holding.MenuRight = false
+		clear_pending_join()
+		clear_pending_create()
+		stop_lobby_overlay_timers(self)
+		close_transient_joined_ui()
+		reset_joined_lobby_state()
+		reset_browse_focus()
+		candidates = {}
+		online_users = {}
+		last_online_lobby_state_signature = ""
+		last_online_lobby_state_signature_at = 0
+		request_lobby_ui_repaint(self, "session_invalidated")
+		self:playcommand("SetStatus", {
+			text=message,
+			showSpinner=false,
+			showPrompt=true,
+			force=true,
+			critical=true,
+		})
+	end,
 			OnlineResponseStatusMessageCommand=function(self, params)
 				if not is_active_lobby_overlay() then
 					lobby_flow_trace("OnlineResponseStatus_ignored reason=inactive_overlay event=" .. tostring(params and params.event or "nil"))
