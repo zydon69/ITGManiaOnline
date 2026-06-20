@@ -2907,6 +2907,36 @@ function ITGOnline:NormalizeRoomPhase(value)
 	return "unknown"
 end
 
+function ITGOnline:IsSongReloadOrDownloadActive(source)
+	local screenName = self.CurrentTopScreenName and self:CurrentTopScreenName() or tostring(self.currentScreenName or "")
+	local packSync = self.PackSync
+	local downloadKey = packSync and tostring(packSync.downloadInFlightKey or "") or ""
+	local browseOnlyDownload = packSync and packSync.activeBrowseOnlyDownload == true
+	local status = packSync and tostring(packSync.currentStatus or "") or ""
+	local function status_matches(value)
+		value = tostring(value or "")
+		return value ~= "" and status == value
+	end
+	local downloadingStatus = packSync and packSync.status and (
+		status_matches(packSync.status.DownloadInProgress)
+		or status_matches(packSync.status.DownloadRequested)
+		or status_matches(packSync.status.ReloadingSongs)
+	)
+	local active = screenName == "ScreenReloadSongsOnline"
+		or downloadKey ~= ""
+		or browseOnlyDownload
+		or downloadingStatus == true
+	if active then
+		online_flow_trace_throttled("song_reload_or_download_active", 0.5,
+			"song_reload_or_download_active source=" .. tostring(source or "unknown")
+			.. " screen=" .. tostring(screenName)
+			.. " downloadKey=" .. tostring(downloadKey)
+			.. " browseOnlyDownload=" .. tostring(browseOnlyDownload == true)
+			.. " status=" .. tostring(status))
+	end
+	return active
+end
+
 function ITGOnline:KnownRoomPhaseOrNil(value)
 	local phase = self:NormalizeRoomPhase(value)
 	if phase == "unknown" then return nil end
@@ -3052,6 +3082,9 @@ function ITGOnline:ApplyRoomPhase(incomingPhase, source)
 		return
 	end
 	self.currentRoom.phase = normalizedPhase
+	if normalizedPhase ~= "starting" and normalizedPhase ~= "playing" and self.StopLiveScoreFlush then
+		self:StopLiveScoreFlush("phase_applied_not_live:" .. tostring(normalizedPhase) .. ":" .. tostring(source or "unknown"))
+	end
 	if normalizedPhase == "config" then
 		self:MaybeReplayPendingConfigReady("room_phase_" .. tostring(source or "unknown"), self.currentRoom)
 	elseif normalizedPhase == "starting" or normalizedPhase == "playing" or normalizedPhase == "results" then
@@ -3320,6 +3353,15 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 			.. " reason=no_selected_song"
 			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
 			.. " phase=" .. tostring(phase))
+		return
+	end
+	if self:IsSongReloadOrDownloadActive("song_selected_auto_ready:" .. tostring(source or "unknown")) then
+		self.songSelectedAutoReadyInFlightKey = ""
+		online_flow_trace("song_selected_auto_ready_skipped source=" .. tostring(source or "unknown")
+			.. " reason=download_or_reload_active"
+			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+			.. " phase=" .. tostring(phase)
+			.. " selectedAt=" .. tostring(selectedSong.selected_at or selectedSong.selectedAt or "nil"))
 		return
 	end
 
@@ -6445,6 +6487,15 @@ function ITGOnline:FlushLiveScore()
 			.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
 			.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
 			.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
+		local errorCode = decoded and decoded.error_code or response and response.errorMessage or ""
+		local statusCode = tonumber(response and response.statusCode)
+		if not ok and (statusCode == 422 or tostring(errorCode) == "room_not_playing") then
+			self:StopLiveScoreFlush("server_rejected_live_score:" .. tostring(errorCode or "unknown"))
+			if self.HandleRoomNotPlayingScoreReject then
+				self:HandleRoomNotPlayingScoreReject(false, decoded)
+			end
+			return
+		end
 		if not ok and response and response.inFlight then
 			self.pendingLiveScoreSnapshot = self.pendingLiveScoreSnapshot or snapshot
 			self.pendingLiveScoreRoundKey = self.pendingLiveScoreRoundKey ~= "" and self.pendingLiveScoreRoundKey or roundKey
@@ -8722,6 +8773,20 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 	end
 
 	if not missing then
+		if self:IsSongReloadOrDownloadActive("song_availability:" .. tostring(reason or "unknown")) then
+			online_flow_trace("song_availability_deferred reason=download_or_reload_active"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " reportReason=" .. tostring(reason or "nil"))
+			if callback then
+				callback(false, nil, {
+					statusCode = 0,
+					errorMessage = "download_in_progress",
+					downloadInProgress = true,
+					retryAfter = 0.75,
+				})
+			end
+			return
+		end
 		local expectedSong = selectedPayload or selectedSong or {}
 		local localPayload, localSourceOrReason = self:ResolveSelectedSongAvailabilityPayload(expectedSong, reason)
 		if not localPayload then
@@ -10049,24 +10114,28 @@ function ITGOnline:LobbyStatePayload(room)
 	end
 
 	local songInfo = nil
-	if room.selected_song and room.phase ~= "results" then
+	local songSource = room.selected_song
+	if self:NormalizeRoomPhase(room.phase) == "results" and (not songSource or not songSource.chart_hash) then
+		songSource = self.lastResultSongPayload or self.activeGameplaySongPayload or self.currentSongPayload
+	end
+	if songSource then
 			songInfo = {
-				songPath = room.selected_song.folder_name or "",
-				title = room.selected_song.title or "",
-				artist = room.selected_song.artist or "",
-				pack = room.selected_song.pack or tostring(room.selected_song.folder_name or ""):match("^([^/]+)") or "",
-				songLength = room.selected_song.music_length_seconds or room.selected_song.chart_duration_seconds,
-					songHash = room.selected_song.song_hash or "",
-					chartHash = room.selected_song.chart_hash or "",
-					chartKey = room.selected_song.chart_key or "",
-					simfileRelativePath = room.selected_song.simfile_relative_path or "",
-					simfileHash = room.selected_song.simfile_hash or room.selected_song.chart_hash or "",
-					selectedAt = room.selected_song.selected_at or "",
-					roundId = room.selected_song.game_session_id or room.selected_song.session_id or room.selected_song.round_id or room.selected_song.selected_song_id or "",
-				chartType = room.selected_song.chart_type or "",
-			difficulty = room.selected_song.difficulty or "",
-			meter = room.selected_song.meter,
-			rate = room.selected_song.rate or globalOptions.music_rate,
+				songPath = songSource.folder_name or "",
+				title = songSource.title or "",
+				artist = songSource.artist or "",
+				pack = songSource.pack or tostring(songSource.folder_name or ""):match("^([^/]+)") or "",
+				songLength = songSource.music_length_seconds or songSource.chart_duration_seconds,
+					songHash = songSource.song_hash or "",
+					chartHash = songSource.chart_hash or "",
+					chartKey = songSource.chart_key or "",
+					simfileRelativePath = songSource.simfile_relative_path or "",
+					simfileHash = songSource.simfile_hash or songSource.chart_hash or "",
+					selectedAt = songSource.selected_at or "",
+					roundId = songSource.game_session_id or songSource.session_id or songSource.round_id or songSource.selected_song_id or "",
+				chartType = songSource.chart_type or "",
+			difficulty = songSource.difficulty or "",
+			meter = songSource.meter,
+			rate = songSource.rate or globalOptions.music_rate,
 		}
 	end
 

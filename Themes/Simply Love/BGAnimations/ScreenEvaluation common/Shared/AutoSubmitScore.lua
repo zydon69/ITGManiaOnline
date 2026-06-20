@@ -463,12 +463,6 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 						-- Empty out the remaining rows.
 						SetEntryText("---", "----", "------", "----------", entry)
 					end
-				else
-					GrooveStatsSubmitTrace("leaderboard_skip player=P" .. tostring(side)
-						.. " reason=chart_hash_mismatch"
-						.. " expectedHash=" .. tostring(SL["P"..side].Streams.Hash or "")
-						.. " responseHash=" .. tostring(data[playerStr]["chartHash"] or "")
-						.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 				end
 			end
 		end
