@@ -3474,6 +3474,36 @@ function ITGOnline:NormalizeRoomSnapshot(room, previousRoom, source)
 	local previousMembers = previousRoom.members or {}
 	local incomingReadyStates = room.ready_states or {}
 	local previousReadyStates = previousRoom.ready_states or {}
+	local preservedSelectedSong = false
+	local preservedGlobalOptions = false
+	local preservedPlayState = false
+
+	if room.selected_song == nil and previousRoom.selected_song ~= nil then
+		room.selected_song = previousRoom.selected_song
+		preservedSelectedSong = true
+	end
+
+	if room.global_options == nil and previousRoom.global_options ~= nil then
+		room.global_options = previousRoom.global_options
+		preservedGlobalOptions = true
+	end
+
+	if room.play_state == nil and previousRoom.play_state ~= nil then
+		room.play_state = previousRoom.play_state
+		preservedPlayState = true
+	end
+
+	if preservedSelectedSong or preservedGlobalOptions or preservedPlayState then
+		online_flow_trace("room_snapshot_partial_context_preserved source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(room.id or "nil")
+			.. " selected_song=" .. tostring(preservedSelectedSong)
+			.. " global_options=" .. tostring(preservedGlobalOptions)
+			.. " play_state=" .. tostring(preservedPlayState)
+			.. " previousRoundKey=" .. tostring(compute_room_round_key(previousRoom))
+			.. " incomingMembers=" .. tostring(#incomingMembers)
+			.. " previousMembers=" .. tostring(#previousMembers))
+	end
+
 	local shouldMergeMembers = #previousMembers > #incomingMembers
 	local shouldMergeReady = #previousReadyStates > #incomingReadyStates
 
@@ -7962,11 +7992,54 @@ function ITGOnline:MarkPlayEntered(callback)
 		return
 	end
 	local key = self:PlayStateKey()
-	if self:PlayStateKeyIsValid(key) and self.onlineGameplayEnteredKey == key then
+	local topScreen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+	local screenName = topScreen and topScreen:GetName() or tostring(self.currentScreenName or "NoScreen")
+	local roomPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase or nil)
+	if not self:IsOnlineGameplayScreen(screenName) then
+		online_flow_trace("mark_play_entered_skipped reason=not_gameplay_screen"
+			.. " screen=" .. tostring(screenName)
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " phase=" .. tostring(roomPhase)
+			.. " key=" .. tostring(key)
+			.. " enteredKey=" .. tostring(self.onlineGameplayEnteredKey or "")
+			.. " returnedKey=" .. tostring(self.onlineGameplayReturnedKey or ""))
+		if callback then callback(false, nil, { errorMessage = "Play entered ignored outside gameplay." }) end
+		return
+	end
+	if roomPhase ~= "starting" and roomPhase ~= "playing" then
+		online_flow_trace("mark_play_entered_skipped reason=phase_not_live"
+			.. " screen=" .. tostring(screenName)
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " phase=" .. tostring(roomPhase)
+			.. " key=" .. tostring(key))
+		if callback then callback(false, nil, { errorMessage = "Play entered ignored for non-live room phase." }) end
+		return
+	end
+	if not self:PlayStateKeyIsValid(key) then
+		online_flow_trace("mark_play_entered_skipped reason=invalid_round_key"
+			.. " screen=" .. tostring(screenName)
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " phase=" .. tostring(roomPhase)
+			.. " key=" .. tostring(key))
+		if callback then callback(false, nil, { errorMessage = "Invalid online round key." }) end
+		return
+	end
+	if self.onlineGameplayReturnedKey == key or self.onlineGameplayTerminalKey == key then
+		online_flow_trace("mark_play_entered_skipped reason=round_already_finished"
+			.. " screen=" .. tostring(screenName)
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " phase=" .. tostring(roomPhase)
+			.. " key=" .. tostring(key)
+			.. " returnedKey=" .. tostring(self.onlineGameplayReturnedKey or "")
+			.. " terminalKey=" .. tostring(self.onlineGameplayTerminalKey or ""))
 		if callback then callback(true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil) end
 		return
 	end
-	if self:PlayStateKeyIsValid(key) and self.onlineGameplayEnteredInFlightKey == key then
+	if self.onlineGameplayEnteredKey == key then
+		if callback then callback(true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil) end
+		return
+	end
+	if self.onlineGameplayEnteredInFlightKey == key then
 		if callback then callback(true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil) end
 		return
 	end
@@ -8303,15 +8376,33 @@ function ITGOnline:MaybeAckScheduledStart(room)
 
 	local screen = SCREENMAN:GetTopScreen()
 	local screenName = screen and screen:GetName() or "NoScreen"
-	if screenName ~= "ScreenGameplay" and screenName ~= "ScreenGameplayShared" then return end
+	if screenName ~= "ScreenGameplay" and screenName ~= "ScreenGameplayShared" then
+		online_flow_trace("start_ack_skipped reason=not_gameplay_screen"
+			.. " screen=" .. tostring(screenName)
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " phase=" .. tostring(room.phase or "nil"))
+		return
+	end
 
 	local selectedSong = room.selected_song or self.currentSongPayload
 	local roomId = tostring(room.id or self.currentRoomId or "")
 	local chartHash = tostring(selectedSong and selectedSong.chart_hash or "")
 	local startAt = tostring(room.start_at or room.start_at_ms or "")
-	if roomId == "" or chartHash == "" or startAt == "" then return end
+	if roomId == "" or chartHash == "" or startAt == "" then
+		online_flow_trace("start_ack_skipped reason=missing_identity"
+			.. " room=" .. tostring(roomId)
+			.. " chartHash=" .. tostring(chartHash)
+			.. " startAt=" .. tostring(startAt))
+		return
+	end
 	local key = roomId .. "|" .. tostring(self:SelectedSongRoundKey(selectedSong, roomId)) .. "|" .. startAt
-	if self.startScheduleAckKey == key or self.startScheduleAckInFlightKey == key then return end
+	if self.startScheduleAckKey == key or self.startScheduleAckInFlightKey == key then
+		online_flow_trace("start_ack_skipped reason=duplicate"
+			.. " key=" .. tostring(key)
+			.. " completed=" .. tostring(self.startScheduleAckKey == key)
+			.. " inFlight=" .. tostring(self.startScheduleAckInFlightKey == key))
+		return
+	end
 
 	self.startScheduleAckInFlightKey = key
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/start-ack", {}, function(ok, decoded, response)

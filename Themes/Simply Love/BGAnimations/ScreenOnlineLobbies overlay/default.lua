@@ -1852,13 +1852,6 @@ end
 
 local function normalize_joined_active_index()
 	local indices = joined_button_indices()
-	if joined_room_can_start() and joined_active_index == 1 then
-		joined_active_index = 7
-		joined_user_moved_focus = false
-		last_auto_start_focus_key = ""
-		lobby_flow_trace("normalize_joined_active_index promoted_leave_to_start reason=room_can_start")
-		return true
-	end
 	for index in ivalues(indices) do
 		if joined_active_index == index then
 			return false
@@ -1892,18 +1885,9 @@ local function set_joined_default_active_index(force)
 	if not force then
 		for _, index in ipairs(indices) do
 			if joined_active_index == index then
-				if joined_active_index == 1 and joined_room_can_start() then
-					break
-				end
 				return
 			end
 		end
-	end
-	if joined_room_can_start() then
-		joined_active_index = 7
-		joined_user_moved_focus = false
-		last_auto_start_focus_key = ""
-		return
 	end
 	joined_active_index = indices[1] or 1
 	joined_user_moved_focus = false
@@ -3676,9 +3660,11 @@ local af = Def.ActorFrame{
 					if focusKey ~= last_auto_start_focus_key then
 						last_auto_start_focus_key = focusKey
 					end
-					if joined_active_index ~= 7 and (not joined_user_moved_focus or not currentFocusStillAvailable) then
-						joined_active_index = 7
+					if not currentFocusStillAvailable then
+						joined_active_index = 1
 						joined_user_moved_focus = false
+						lobby_flow_trace("start_button_focus_kept_safe reason=current_focus_unavailable canStart=" .. tostring(visible)
+							.. " readyStates=[" .. ready_summary() .. "]")
 						self:queuecommand("Hover")
 					end
 					last_auto_start_request_key = ""
@@ -3709,6 +3695,16 @@ local af = Def.ActorFrame{
 				.. " joined_code=" .. tostring(joined_lobby_code)
 				.. " showingPackChoice=" .. tostring(showing_pack_choice_menu == true)
 				.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+			local statusText = tostring(params and params.text or "")
+			if statusText == "Synchronisation de l'etat en ligne..."
+				and not (params and (params.force == true or params.critical == true))
+			then
+				lobby_flow_trace("SetStatus_ignored reason=passive_sync_status"
+					.. " mode=" .. tostring(mode)
+					.. " joined_code=" .. tostring(joined_lobby_code)
+					.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+				return
+			end
 			if showing_pack_choice_menu then
 				if params and (params.force == true or params.critical == true) then
 					lobby_flow_trace("SetStatus_closing_transient_ui reason=force_or_critical")
@@ -3824,11 +3820,6 @@ local af = Def.ActorFrame{
 					ScreenOnlineLobbiesApplyCurrentRoomSnapshot(self, "display")
 					if ITGOnline and ITGOnline.Sync then
 						lobby_flow_trace("Display_sync_requested")
-						self:playcommand("SetStatus", {
-							text="Synchronisation de l'etat en ligne...",
-							showSpinner=true,
-							showPrompt=false
-						})
 						ITGOnline:Sync(function(ok, decoded)
 							lobby_flow_trace("Display_sync_result ok=" .. tostring(ok == true)
 								.. " hasRoom=" .. tostring(decoded and decoded.current_room ~= nil)
@@ -4146,7 +4137,8 @@ local af = Def.ActorFrame{
 				joined_missing_song_info = nil
 				joined_can_download_pack = false
 				joined_missing_song_reason = nil
-				if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ResetLocalState then
+				if joined_phase ~= "results"
+					and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ResetLocalState then
 					ITGOnline.PackSync:ResetLocalState("no_song_confirmed")
 				end
 				if joined_song_preview and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ManagerBrowsingPreview then

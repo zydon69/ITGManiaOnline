@@ -28,6 +28,8 @@ PackSync.statusPostDuplicateHeartbeatSeconds = tonumber(PackSync.statusPostDupli
 PackSync.lastManagerBrowsingPreviewPostKey = PackSync.lastManagerBrowsingPreviewPostKey or ""
 PackSync.lastManagerBrowsingPreviewPostAt = tonumber(PackSync.lastManagerBrowsingPreviewPostAt) or 0
 PackSync.managerBrowsingPreviewDuplicateSuppressSeconds = tonumber(PackSync.managerBrowsingPreviewDuplicateSuppressSeconds) or 1.5
+PackSync.lastResetSignature = PackSync.lastResetSignature or ""
+PackSync.lastResetAt = tonumber(PackSync.lastResetAt) or 0
 
 PackSync.status = {
 	Unknown = "unknown",
@@ -868,6 +870,26 @@ function PackSync:WatchdogTick()
 end
 
 function PackSync:ResetLocalState(reason)
+	local resetSignature = table.concat({
+		tostring(reason or "unknown"),
+		tostring(self.currentStatus or "nil"),
+		tostring(self.currentStatusMessage or ""),
+		tostring(self.downloadInFlightKey or ""),
+		tostring(self.currentSongInfo ~= nil),
+		tostring(self.pendingPostReloadSongInfo ~= nil),
+		tostring(self.activeBrowseOnlyDownload == true),
+		tostring(ITGOnline and ITGOnline.currentRoomId or "nil"),
+		tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"),
+	}, "|")
+	local now = GetTimeSinceStart()
+	if resetSignature == tostring(self.lastResetSignature or "")
+		and (now - (tonumber(self.lastResetAt) or 0)) < 0.25 then
+		trace("ResetLocalState skipped duplicate reason=" .. tostring(reason or "unknown")
+			.. " status=" .. tostring(self.currentStatus or "nil"))
+		return
+	end
+	self.lastResetSignature = resetSignature
+	self.lastResetAt = now
 	trace("ResetLocalState begin reason=" .. tostring(reason or "unknown")
 		.. " status=" .. tostring(self.currentStatus or "nil")
 		.. " message=" .. tostring(self.currentStatusMessage or "")
@@ -911,6 +933,8 @@ function PackSync:ResetLocalState(reason)
 	self.lastPostedStatusAt = 0
 	self.statusPostInFlightSignature = ""
 	self.lastAppliedLocalStatusSignature = ""
+	self.lastResetSignature = ""
+	self.lastResetAt = 0
 	self.localScanCache = {}
 	self.browsePreviewPackKey = ""
 	self.downloadInFlightKey = nil
