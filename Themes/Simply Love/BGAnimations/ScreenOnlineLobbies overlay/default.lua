@@ -66,6 +66,7 @@ local mode = "browse"
 local joined_active_index = 1
 local joined_is_manager = false
 local joined_phase = nil
+local joined_local_returned_to_lobby_after_results = false
 local joined_lobby_code = ""
 local joined_lobby_players = {}
 local joined_player_index = 1
@@ -212,6 +213,21 @@ local function online_lobby_state_signature(params)
 	table.sort(players)
 	local songInfo = type(params.songInfo) == "table" and params.songInfo or {}
 	local playState = type(params.playState) == "table" and params.playState or {}
+	local playSessions = {}
+	for index, session in ipairs(playState.sessions or {}) do
+		session = type(session) == "table" and session or {}
+		local user = type(session.user) == "table" and session.user or {}
+		playSessions[#playSessions + 1] = table.concat({
+			stable_scalar(session.user_id or user.id),
+			stable_scalar(session.state),
+			stable_scalar(session.returned_to_lobby_at),
+			stable_scalar(session.finished_at),
+			stable_scalar(session.failed_at),
+			stable_scalar(session.disconnected_at),
+			tostring(index),
+		}, ":")
+	end
+	table.sort(playSessions)
 	local globalOptions = type(params.globalOptions) == "table" and params.globalOptions or {}
 	local manager = type(params.manager) == "table" and params.manager or {}
 	return table.concat({
@@ -228,6 +244,7 @@ local function online_lobby_state_signature(params)
 		stable_scalar(globalOptions.musicRate),
 		stable_scalar(playState.submitted_scores and #playState.submitted_scores),
 		stable_scalar(playState.final_results and #playState.final_results),
+		table.concat(playSessions, "|"),
 		table.concat(players, "|"),
 	}, "||")
 end
@@ -372,9 +389,10 @@ end
 local function reset_joined_lobby_state()
 	clear_pack_choice_recovery()
 	joined_active_index = 1
-	joined_is_manager = false
-	joined_phase = nil
-	joined_lobby_code = ""
+		joined_is_manager = false
+		joined_phase = nil
+		joined_local_returned_to_lobby_after_results = false
+		joined_lobby_code = ""
 	joined_lobby_players = {}
 	joined_player_index = 1
 	joined_players_selected = false
@@ -1427,6 +1445,34 @@ function joined_phase_allows_song_selection()
 	return phase == "lobby"
 		or phase == "lobby_ready"
 		or phase == "config"
+		or (phase == "results" and joined_local_returned_to_lobby_after_results == true)
+end
+
+local function local_client_has_returned_to_lobby_for_current_round()
+	if not ITGOnline then
+		return false, "no_client"
+	end
+
+	local currentRoomId = tostring(ITGOnline.currentRoomId or "")
+	local localReturnRoomId = tostring(ITGOnline.onlineGameplayReturnedLocalRoomId or "")
+	if currentRoomId ~= "" and localReturnRoomId == currentRoomId then
+		return true, "local_room_return"
+	end
+
+	if not (ITGOnline.PlayStateKey and ITGOnline.PlayStateKeyIsValid) then
+		return false, "no_play_state_key_api"
+	end
+	local key = ITGOnline:PlayStateKey()
+	if not ITGOnline:PlayStateKeyIsValid(key) then
+		return false, "invalid_play_state_key"
+	end
+	if tostring(ITGOnline.onlineGameplayReturnedKey or "") == key then
+		return true, "returned_key"
+	end
+	if tostring(ITGOnline.onlineGameplayReturnedInFlightKey or "") == key then
+		return true, "returned_in_flight_key"
+	end
+	return false, "not_returned"
 end
 
 function joined_phase_allows_start()
@@ -4045,6 +4091,20 @@ local af = Def.ActorFrame{
 			joined_player_index = joined_player_index_for_key(joined_lobby_players, previousSelectedPlayerKey, joined_player_index)
 			joined_player_index = math.max(1, math.min(joined_player_index, math.max(1, #joined_lobby_players)))
 			joined_phase = params and params.phase or nil
+			local currentPlayState = ITGOnline and ITGOnline.CurrentUserPlayState and ITGOnline:CurrentUserPlayState(ITGOnline.currentRoom) or nil
+			local localReturnKeyActive, localReturnReason = local_client_has_returned_to_lobby_for_current_round()
+			local incomingPhase = normalized_online_phase(joined_phase)
+			joined_local_returned_to_lobby_after_results = incomingPhase == "results"
+				and (tostring(currentPlayState or "") == "returned_to_lobby" or localReturnKeyActive)
+			lobby_flow_trace("joined_local_results_return_state"
+				.. " phase=" .. tostring(joined_phase)
+				.. " currentPlayState=" .. tostring(currentPlayState or "nil")
+				.. " localReturnKeyActive=" .. tostring(localReturnKeyActive == true)
+				.. " localReturnReason=" .. tostring(localReturnReason or "nil")
+				.. " localReturnRoomId=" .. tostring(ITGOnline and ITGOnline.onlineGameplayReturnedLocalRoomId or "nil")
+				.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " localReturned=" .. tostring(joined_local_returned_to_lobby_after_results == true)
+				.. " isManager=" .. tostring(joined_is_manager == true))
 			joined_global_options = normalize_global_options(params and params.globalOptions or nil)
 			if joined_phase == "results" then
 				reset_joined_transient_song_state("online_lobby_state_results", { clearPreview = true, resetPackSync = true })
@@ -5191,7 +5251,7 @@ end,
 		Def.ActorFrame{
 			Name="JoinedLobbyPlayersFrame",
 			InitCommand=function(self)
-				self:xy(-120, 10):visible(false)
+				self:xy(-120, -20):visible(false)
 			end,
 			HoverCommand=function(self)
 				local focusable = joined_is_manager and #joined_lobby_players > 1
@@ -5207,22 +5267,22 @@ end,
 			end,
 			Def.Quad{
 				InitCommand=function(self)
-					self:xy(0, -132):zoomto(348, 2)
+					self:xy(0, -170):zoomto(360, 2)
 				end
 			},
 			Def.Quad{
 				InitCommand=function(self)
-					self:xy(0, 132):zoomto(348, 2)
+					self:xy(0, 170):zoomto(360, 2)
 				end
 			},
 			Def.Quad{
 				InitCommand=function(self)
-					self:xy(-174, 0):zoomto(2, 264)
+					self:xy(-180, 0):zoomto(2, 340)
 				end
 			},
 			Def.Quad{
 				InitCommand=function(self)
-					self:xy(174, 0):zoomto(2, 264)
+					self:xy(180, 0):zoomto(2, 340)
 				end
 			},
 		},

@@ -144,6 +144,8 @@ ITGOnline.deferredLobbyRefreshRoomUiGeneration = ITGOnline.deferredLobbyRefreshR
 ITGOnline.onlineGameplayEnteredKey = ITGOnline.onlineGameplayEnteredKey or ""
 ITGOnline.onlineGameplayReturnedKey = ITGOnline.onlineGameplayReturnedKey or ""
 ITGOnline.onlineGameplayReturnedInFlightKey = ITGOnline.onlineGameplayReturnedInFlightKey or ""
+ITGOnline.onlineGameplayReturnedLocalRoomId = ITGOnline.onlineGameplayReturnedLocalRoomId or ""
+ITGOnline.onlineGameplayReturnedLocalAt = ITGOnline.onlineGameplayReturnedLocalAt or 0
 ITGOnline.onlineGameplayTerminalKey = ITGOnline.onlineGameplayTerminalKey or ""
 ITGOnline.onlineGameplayTerminalInFlightKey = ITGOnline.onlineGameplayTerminalInFlightKey or ""
 ITGOnline.onlineGameplayTerminalState = ITGOnline.onlineGameplayTerminalState or ""
@@ -3005,6 +3007,71 @@ function ITGOnline:ClearActiveGameplayRound(source)
 	self.onlineGameplayEvaluationNavigationAt = 0
 end
 
+function ITGOnline:ResetOnlineRoundRuntimeState(source)
+	local previousActiveRoundKey = tostring(self.activeGameplayRoundKey or "")
+	local previousRoomRoundKey = tostring(self.currentRoomRoundKey or "")
+	local previousPlayStateKey = self.PlayStateKey and tostring(self:PlayStateKey() or "") or ""
+	online_flow_trace("round_runtime_state_reset source=" .. tostring(source or "unknown")
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+		.. " activeRoundKey=" .. tostring(previousActiveRoundKey)
+		.. " currentRoundKey=" .. tostring(previousRoomRoundKey)
+		.. " playStateKey=" .. tostring(previousPlayStateKey)
+		.. " hadPendingLiveScore=" .. tostring(self.pendingLiveScoreSnapshot ~= nil)
+		.. " liveScoreInFlight=" .. tostring(self.liveScoreInFlight == true)
+		.. " scoreInFlight=" .. tostring(self.scoreInFlightFingerprint ~= nil))
+
+	self.songLoadedAckKey = ""
+	self.songLoadedInFlightKey = ""
+	self.songLoadedPendingCallbacks = {}
+	self.songAvailabilityInFlightKey = ""
+	self.songAvailabilityInFlightCallbacks = {}
+	self.songAvailabilityReportedKey = ""
+	self.songAvailabilitySuppressedUntil = {}
+	self.startScheduleAckKey = ""
+	self.startScheduleAckInFlightKey = ""
+	self.onlineGameplayEnteredKey = ""
+	self.onlineGameplayEnteredInFlightKey = ""
+	self.onlineGameplayReturnedKey = ""
+	self.onlineGameplayReturnedInFlightKey = ""
+	self.onlineGameplayReturnedLocalRoomId = ""
+	self.onlineGameplayReturnedLocalAt = 0
+	self.onlineGameplayTerminalKey = ""
+	self.onlineGameplayTerminalInFlightKey = ""
+	self.onlineGameplayTerminalState = ""
+	self.onlineGameplayFailedEarlyKey = ""
+	self.onlineGameplayFailedEarlyInFlightKey = ""
+	self.onlineGameplayEndedKey = ""
+	self.onlineGameplayEvaluationMarkKey = ""
+	self.onlineGameplayEvaluationMarkInFlightKey = ""
+	self.onlineGameplayEvaluationRetryKey = ""
+	self.onlineGameplayEvaluationRetryCount = 0
+	self.onlineGameplayEvaluationNextRetryAt = 0
+	self.onlineGameplayEvaluationTerminalErrorKey = ""
+	self.onlineGameplayEvaluationNavigationKey = ""
+	self.onlineGameplayEvaluationNavigationAt = 0
+	self.onlineGameplayEvaluationHoldStartedKey = ""
+	self.onlineGameplayEvaluationMinimumHoldUntil = 0
+	self.onlineGameplayAllTerminalHoldKey = ""
+	self.onlineGameplayAllTerminalHoldUntil = 0
+	self.readyRequestBlockedErrors = {}
+	self.lastFinalScoreKey = ""
+	self.lastFinalScoreInFlightKey = ""
+	self.lastAcceptedScoreFingerprint = nil
+	self.scoreInFlightFingerprint = nil
+	self.pendingLiveScoreSnapshot = nil
+	self.pendingLiveScoreRoundKey = ""
+	self.liveScoreInFlight = false
+	self.liveScoreNextAttemptAt = 0
+	self.lastScorePositionKey = nil
+	self.lastScoreSongPosition = 0
+	self.lastAcceptedScoreSongPosition = 0
+	self.lastDisplayedScoreSnapshot = nil
+	self.lastDisplayedScoreSnapshotAt = 0
+	self.lastScoreJudgmentsByRoundKey = {}
+	self:ClearActiveGameplayRound(source or "round_runtime_state_reset")
+end
+
 function ITGOnline:RoomSongSelectedAtMs(room)
 	local value = room and room.selected_song and (room.selected_song.selected_at or room.selected_song.selectedAt) or nil
 	return iso_utc_milliseconds(value)
@@ -3663,8 +3730,12 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 			self.lastResultSongPayload = room.selected_song
 		else
 			local previousRoundKey = tostring(self.currentRoomRoundKey or "")
+			local incomingRoundKey = self:RoomSongRoundKey(room)
+			if previousRoundKey ~= "" and incomingRoundKey ~= "" and previousRoundKey ~= incomingRoundKey then
+				self:ResetOnlineRoundRuntimeState("room_snapshot_round_changed:" .. tostring(source or "unknown"))
+			end
 			self.currentSongPayload = room.selected_song
-			self.currentRoomRoundKey = self:RoomSongRoundKey(room)
+			self.currentRoomRoundKey = incomingRoundKey
 			online_flow_trace("room_snapshot_song_payload_store source=" .. tostring(source or "unknown")
 				.. " target=current"
 				.. " phase=" .. tostring(phase)
@@ -5089,6 +5160,8 @@ function ITGOnline:Disconnect(options)
 	self.onlineGameplayEnteredKey = ""
 	self.onlineGameplayReturnedKey = ""
 	self.onlineGameplayReturnedInFlightKey = ""
+	self.onlineGameplayReturnedLocalRoomId = ""
+	self.onlineGameplayReturnedLocalAt = 0
 	self.onlineGameplayTerminalKey = ""
 	self.onlineGameplayTerminalInFlightKey = ""
 	self.onlineGameplayTerminalState = ""
@@ -5777,44 +5850,7 @@ function ITGOnline:SelectSong(callback)
 			local room = self:ApplyRoomSnapshot(decoded.room, "song_selection")
 			decoded.room = room or decoded.room
 			self.currentSongPayload = (room and room.selected_song) or payload
-			self.songLoadedAckKey = ""
-			self.songLoadedInFlightKey = ""
-			self.songLoadedPendingCallbacks = {}
-			self.songAvailabilityInFlightKey = ""
-			self.songAvailabilityInFlightCallbacks = {}
-			self.songAvailabilityReportedKey = ""
-			self.songAvailabilitySuppressedUntil = {}
-			self.startScheduleAckKey = ""
-			self.startScheduleAckInFlightKey = ""
-			self.onlineGameplayEnteredKey = ""
-			self.onlineGameplayReturnedKey = ""
-			self.onlineGameplayReturnedInFlightKey = ""
-			self.onlineGameplayTerminalKey = ""
-			self.onlineGameplayTerminalInFlightKey = ""
-			self.onlineGameplayTerminalState = ""
-			self.onlineGameplayFailedEarlyKey = ""
-			self.onlineGameplayFailedEarlyInFlightKey = ""
-			self.onlineGameplayEndedKey = ""
-			self.onlineGameplayEvaluationMarkKey = ""
-			self.onlineGameplayEvaluationMarkInFlightKey = ""
-			self.onlineGameplayEvaluationRetryKey = ""
-			self.onlineGameplayEvaluationRetryCount = 0
-			self.onlineGameplayEvaluationNextRetryAt = 0
-			self.onlineGameplayEvaluationTerminalErrorKey = ""
-			self.onlineGameplayEvaluationNavigationKey = ""
-			self.onlineGameplayEvaluationNavigationAt = 0
-			self.onlineGameplayEvaluationHoldStartedKey = ""
-			self.onlineGameplayEvaluationMinimumHoldUntil = 0
-			self.onlineGameplayAllTerminalHoldKey = ""
-			self.onlineGameplayAllTerminalHoldUntil = 0
-			self:ClearActiveGameplayRound("song_selection")
-			self.readyRequestBlockedErrors = {}
-			self.lastFinalScoreKey = ""
-			self.lastFinalScoreInFlightKey = ""
-			self.lastAcceptedScoreFingerprint = nil
-			self.scoreInFlightFingerprint = nil
-			self.lastScorePositionKey = nil
-			self.lastScoreSongPosition = 0
+			self:ResetOnlineRoundRuntimeState("song_selection")
 			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
 		elseif ok then
 			self:FetchRoom(self.currentRoomId)
@@ -6489,11 +6525,14 @@ function ITGOnline:FlushLiveScore()
 			.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
 		local errorCode = decoded and decoded.error_code or response and response.errorMessage or ""
 		local statusCode = tonumber(response and response.statusCode)
-		if not ok and (statusCode == 422 or tostring(errorCode) == "room_not_playing") then
+		if not ok and tostring(errorCode) == "room_not_playing" then
 			self:StopLiveScoreFlush("server_rejected_live_score:" .. tostring(errorCode or "unknown"))
 			if self.HandleRoomNotPlayingScoreReject then
 				self:HandleRoomNotPlayingScoreReject(false, decoded)
 			end
+			return
+		elseif not ok and statusCode == 422 then
+			self:StopLiveScoreFlush("server_rejected_live_score_status_422:" .. tostring(errorCode or "unknown"))
 			return
 		end
 		if not ok and response and response.inFlight then
@@ -7819,6 +7858,8 @@ function ITGOnline:MarkPlayEntered(callback)
 		if ok then
 			self.onlineGameplayEnteredKey = key
 			self.onlineGameplayReturnedKey = ""
+			self.onlineGameplayReturnedLocalRoomId = ""
+			self.onlineGameplayReturnedLocalAt = 0
 			self:UpdatePlayStateFromResponse(decoded)
 		end
 		if callback then callback(ok, decoded, response) end
@@ -7850,9 +7891,13 @@ function ITGOnline:MarkReturnedToLobby(callback)
 	if self:PlayStateKeyIsValid(key) then
 		self.onlineGameplayReturnedInFlightKey = key
 	end
+	self.onlineGameplayReturnedLocalRoomId = tostring(self.currentRoomId or "")
+	self.onlineGameplayReturnedLocalAt = GetTimeSinceStart()
 	online_flow_trace("mark_returned_to_lobby_request room=" .. tostring(self.currentRoomId)
 		.. " roundKey=" .. tostring(key)
-		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+		.. " localReturnRoomId=" .. tostring(self.onlineGameplayReturnedLocalRoomId)
+		.. " localReturnAt=" .. string.format("%.3f", tonumber(self.onlineGameplayReturnedLocalAt) or 0))
 	if self.currentRoom then
 		self.currentRoom.phase = "lobby"
 		self:ClearSelectedSongForLobby("mark_returned_to_lobby_local", true)

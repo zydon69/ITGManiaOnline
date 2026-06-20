@@ -76,13 +76,21 @@ for i=1, #TapNoteScores.Types do
 end
 
 t[#t+1] = LoadFont("Common Normal")..{
-	Text=ScreenString("Held"),
+	Text=THEME:GetString("ScreenEvaluation", "Held") ~= ""
+		and THEME:GetString("ScreenEvaluation", "Held")
+		or THEME:GetString("ScreenEvaluationStage", "Held") ~= ""
+			and THEME:GetString("ScreenEvaluationStage", "Held")
+			or "Held",
 	InitCommand=function(self)
 		self:y(140):zoom(0.6):halign(1)
 			:diffuse( SL.JudgmentColors[SL.Global.GameMode][6] )
 	end,
 	OnCommand=function(self)
-		self:x( miss_bmt:GetX() - miss_bmt:GetWidth()/1.15 )
+		if miss_bmt then
+			self:x( miss_bmt:GetX() - miss_bmt:GetWidth()/1.15 )
+		else
+			self:x((player == PLAYER_1 and -130) or -28)
+		end
 	end
 }
 

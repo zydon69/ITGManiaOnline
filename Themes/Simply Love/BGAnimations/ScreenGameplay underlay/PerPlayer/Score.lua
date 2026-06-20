@@ -214,6 +214,7 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 				ExScorePercent = tonumber(exPercent),
 				HardExScorePercent = tonumber(hardExPercent),
 				DisplayedPercent = displayedPercent,
+				ScoreMode = scoreMode,
 				Combo = pss:GetCurrentCombo() or 0,
 			})
 		end
@@ -251,6 +252,7 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 				ExScorePercent = tonumber(params.ExScore),
 				HardExScorePercent = tonumber(params.HardExScore),
 				DisplayedPercent = showHardEx and tonumber(params.HardExScore) or tonumber(params.ExScore),
+				ScoreMode = scoreMode,
 				Combo = pss:GetCurrentCombo() or 0,
 			})
 		end

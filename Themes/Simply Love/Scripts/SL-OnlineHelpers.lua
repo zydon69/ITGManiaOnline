@@ -2094,12 +2094,15 @@ CreateOnlineHandler = function()
 							.. " player=" .. tostring(params.Player)
 							.. " score=" .. tostring(params.ScorePercent or "nil")
 							.. " ex=" .. tostring(params.ExScorePercent or "nil")
+							.. " hardex=" .. tostring(params.HardExScorePercent or "nil")
 							.. " displayed=" .. tostring(params.DisplayedPercent or "nil")
 							.. " combo=" .. tostring(params.Combo or "nil"))
 						ITGOnline:RememberLiveScoreSnapshot({
 							scorePercent = params.ScorePercent,
 							exScorePercent = params.ExScorePercent,
+							hardExScorePercent = params.HardExScorePercent,
 							displayedPercent = params.DisplayedPercent,
+							scoreMode = params.ScoreMode,
 							combo = params.Combo,
 						})
 					end,
