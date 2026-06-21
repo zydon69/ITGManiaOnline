@@ -48,6 +48,10 @@ ITGOnline.disconnecting = ITGOnline.disconnecting or false
 ITGOnline.lastEventCursor = ITGOnline.lastEventCursor or 0
 ITGOnline.fetchRoomInFlightByRoomId = ITGOnline.fetchRoomInFlightByRoomId or {}
 ITGOnline.lastRealtimeMessageAt = ITGOnline.lastRealtimeMessageAt or GetTimeSinceStart()
+ITGOnline.lastRealtimeStateReconcileAt = ITGOnline.lastRealtimeStateReconcileAt or 0
+ITGOnline.realtimeStaleSeconds = ITGOnline.realtimeStaleSeconds or 8.0
+ITGOnline.criticalRoomActionResyncMinIntervalSeconds = ITGOnline.criticalRoomActionResyncMinIntervalSeconds or 0.75
+ITGOnline.lastCriticalRoomActionResyncAt = ITGOnline.lastCriticalRoomActionResyncAt or 0
 ITGOnline.lastSyncRequestedAt = ITGOnline.lastSyncRequestedAt or 0
 ITGOnline.lastCurrentRoomWatchdogAt = ITGOnline.lastCurrentRoomWatchdogAt or 0
 ITGOnline.currentRoomWatchdogIntervalSeconds = ITGOnline.currentRoomWatchdogIntervalSeconds or 2.0
@@ -1707,6 +1711,62 @@ function ITGOnline:ScheduleRealtimeReconnect(reason)
 	return true
 end
 
+function ITGOnline:RealtimeIsConnected()
+	return self.socket ~= nil and self.realtimeConnected == true and self.disconnecting ~= true
+end
+
+function ITGOnline:RealtimeLastMessageAge()
+	return GetTimeSinceStart() - (tonumber(self.lastRealtimeMessageAt) or 0)
+end
+
+function ITGOnline:RealtimeIsFresh(maxAgeSeconds)
+	if not self:RealtimeIsConnected() then return false end
+	local maxAge = tonumber(maxAgeSeconds) or tonumber(self.realtimeStaleSeconds) or 8.0
+	return self:RealtimeLastMessageAge() <= maxAge
+end
+
+function ITGOnline:ReconcileCurrentRoomAfterRealtimeGap(source, minIntervalSeconds)
+	local now = GetTimeSinceStart()
+	local minInterval = tonumber(minIntervalSeconds) or tonumber(self.criticalRoomActionResyncMinIntervalSeconds) or 0.75
+	local age = self:RealtimeLastMessageAge()
+	local fresh = self:RealtimeIsFresh()
+	local connected = self:RealtimeIsConnected()
+	if fresh and connected then
+		online_flow_trace("critical_room_reconcile_skipped reason=realtime_fresh"
+			.. " source=" .. tostring(source or "unknown")
+			.. " age=" .. string.format("%.3f", age)
+			.. " room=" .. tostring(self.currentRoomId or "nil"))
+		return false
+	end
+	if now - (tonumber(self.lastCriticalRoomActionResyncAt) or 0) < minInterval then
+		online_flow_trace("critical_room_reconcile_skipped reason=throttled"
+			.. " source=" .. tostring(source or "unknown")
+			.. " age=" .. string.format("%.3f", age)
+			.. " connected=" .. tostring(connected == true)
+			.. " minInterval=" .. tostring(minInterval)
+			.. " room=" .. tostring(self.currentRoomId or "nil"))
+		return false
+	end
+
+	self.lastCriticalRoomActionResyncAt = now
+	online_flow_trace("critical_room_reconcile_begin source=" .. tostring(source or "unknown")
+		.. " age=" .. string.format("%.3f", age)
+		.. " connected=" .. tostring(connected == true)
+		.. " socket=" .. tostring(self.socket ~= nil)
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+
+	if not connected and self.ScheduleRealtimeReconnect then
+		self:ScheduleRealtimeReconnect("critical_room_reconcile:" .. tostring(source or "unknown"))
+	end
+	if self.currentRoomId and self.FetchCurrentRoomFallback then
+		self:FetchCurrentRoomFallback("critical_room_reconcile:" .. tostring(source or "unknown"), 0)
+	elseif self.Sync then
+		self:Sync()
+	end
+	return true
+end
+
 function ITGOnline:MaintainRealtimeAndRoomSync(source)
 	if self.disconnecting or not self.token then
 		return false
@@ -1756,7 +1816,8 @@ function ITGOnline:MaintainRealtimeAndRoomSync(source)
 	end
 
 	if roomId then
-		local interval = self.realtimeConnected
+		local realtimeFresh = self.RealtimeIsFresh and self:RealtimeIsFresh() or false
+		local interval = realtimeFresh
 			and (tonumber(self.currentRoomWatchdogRealtimeIntervalSeconds) or 4.0)
 			or (tonumber(self.currentRoomWatchdogIntervalSeconds) or 2.0)
 		local elapsed = now - (tonumber(self.lastCurrentRoomWatchdogAt) or 0)
@@ -1773,7 +1834,7 @@ function ITGOnline:MaintainRealtimeAndRoomSync(source)
 			if self.FetchCurrentRoomFallback then
 				self:FetchCurrentRoomFallback("current_room_watchdog:" .. tostring(source or "unknown"), 1.0)
 			end
-			local syncInterval = self.realtimeConnected and 6.0 or 2.0
+			local syncInterval = realtimeFresh and 6.0 or 2.0
 			if self.Sync and not self.syncInFlight and (now - (tonumber(self.lastSyncRequestedAt) or 0)) >= syncInterval then
 				online_flow_trace("current_room_watchdog_sync source=" .. tostring(source or "unknown")
 					.. " room=" .. tostring(roomId)
@@ -2387,8 +2448,24 @@ function ITGOnline:ConsumeNeedsSyncAfterScreenCancel()
 end
 
 function ITGOnline:IsCurrentUserRoomManager(room)
-	if not room or not room.manager or not self.user then return false end
-	return tonumber(room.manager.id) == tonumber(self.user.id)
+	if not room or not self.user then return false end
+	local currentUserId = tostring(self.user.id or "")
+	if currentUserId == "" then return false end
+
+	local manager = type(room.manager) == "table" and room.manager or nil
+	local managerId = room.manager_user_id or room.managerUserId or (manager and manager.id) or nil
+	if managerId ~= nil and tostring(managerId) == currentUserId then return true end
+
+	for member in ivalues(room.members or {}) do
+		local memberUser = type(member.user) == "table" and member.user or {}
+		local memberUserId = member.user_id or member.userId or memberUser.id or nil
+		local role = tostring(member.role or member.member_role or member.memberRole or "")
+		if memberUserId ~= nil and tostring(memberUserId) == currentUserId and role == "manager" then
+			return true
+		end
+	end
+
+	return false
 end
 
 function ITGOnline:RoomMatchesId(room, roomId)
@@ -5086,6 +5163,9 @@ function ITGOnline:ConnectWebSocket(callbacks)
 						end
 						self.activeRealtimeCallbacks = nil
 						self:ScheduleRealtimeReconnect("socket_close:" .. tostring(msg.reason or "unknown"))
+						if self.currentRoomId and self.ReconcileCurrentRoomAfterRealtimeGap then
+							self:ReconcileCurrentRoomAfterRealtimeGap("socket_close", 0)
+						end
 					elseif msgType == "Error" then
 						self.realtimeConnecting = false
 						self.realtimeConnected = false
@@ -5101,6 +5181,9 @@ function ITGOnline:ConnectWebSocket(callbacks)
 							self.activeRealtimeCallbacks.error(msg.reason or "WebSocket error")
 						end
 						self:ScheduleRealtimeReconnect("socket_error:" .. tostring(msg.reason or "unknown"))
+						if self.currentRoomId and self.ReconcileCurrentRoomAfterRealtimeGap then
+							self:ReconcileCurrentRoomAfterRealtimeGap("socket_error", 0)
+						end
 					end
 				end,
 			}
@@ -5911,6 +5994,9 @@ end
 
 function ITGOnline:SelectSong(callback, options)
 	options = type(options) == "table" and options or {}
+	if self.ReconcileCurrentRoomAfterRealtimeGap then
+		self:ReconcileCurrentRoomAfterRealtimeGap("select_song_before_request", 0.75)
+	end
 	if not self.currentRoomId then
 		online_flow_trace("song_selection_failed reason=no_current_room"
 			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
@@ -7601,6 +7687,9 @@ function ITGOnline:CurrentOnlineOptionSummary()
 end
 
 function ITGOnline:MarkConfigReady(callback)
+	if self.ReconcileCurrentRoomAfterRealtimeGap then
+		self:ReconcileCurrentRoomAfterRealtimeGap("mark_config_ready_before_request", 0.75)
+	end
 	if not self.currentRoomId then
 		online_flow_trace("config_ready_failed reason=no_current_room")
 		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
@@ -7711,8 +7800,27 @@ function ITGOnline:MarkConfigReady(callback)
 
 		local room = fetchDecoded.room
 		if not room.selected_song then
-			online_flow_trace("config_ready_path select_song_and_mark_lobby_ready key=" .. tostring(requestKey))
-			self:SelectSongAndMarkLobbyReady(finish)
+			local isManager = self:IsCurrentUserRoomManager(room)
+			if isManager then
+				online_flow_trace("config_ready_path select_song_and_mark_lobby_ready key=" .. tostring(requestKey)
+					.. " isManager=true")
+				self:SelectSongAndMarkLobbyReady(finish)
+				return
+			end
+
+			online_flow_trace("config_ready_waiting_for_manager_selection key=" .. tostring(requestKey)
+				.. " phase=" .. tostring(room.phase or "nil")
+				.. " isManager=false"
+				.. " room=" .. tostring(room.id or self.currentRoomId or "nil"))
+			if self.FetchCurrentRoomFallback then
+				self:FetchCurrentRoomFallback("config_ready_missing_song_non_manager", 0.25)
+			end
+			finish(false, fetchDecoded, {
+				error_code = "missing_selected_song_non_manager",
+				errorMessage = "Waiting for manager song selection.",
+				retryAfter = 0.5,
+				deferred = true,
+			})
 			return
 		end
 
@@ -10315,7 +10423,9 @@ end
 				self:BroadcastLeaderboardFromRoom(room or payload.room, "realtime_room_event:" .. tostring(name))
 				local roomPolicy = self:RealtimeRoomEventPolicy(name, payload.room ~= nil)
 				if roomPolicy.fetchRoom == true and type(self.FetchCurrentRoomFallback) == "function" then
-					self:FetchCurrentRoomFallback("realtime_room_event:" .. tostring(name), roomPolicy.minLobbyRefreshInterval or 0.5)
+					local minInterval = roomPolicy.minLobbyRefreshInterval or 0.5
+					if name == "room.song_selected" then minInterval = 0 end
+					self:FetchCurrentRoomFallback("realtime_room_event:" .. tostring(name), minInterval)
 				end
 				if roomPolicy.memberChange == true then
 					online_flow_trace("room_member_change_refresh_requested name=" .. tostring(name)

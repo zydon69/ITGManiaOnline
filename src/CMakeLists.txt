@@ -638,6 +638,7 @@ if(WITH_CLUB_FANTASTIC)
     ClubFantastic
     URL https://download.clubfantastic.dance/club_fantastic_season2_songs_9ms.zip
     URL_HASH SHA256=845b62da6bb2994fc2ba7871b35da02f6eb36ea1ae78c2b9a59a6ec046946787
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
   )
   FetchContent_MakeAvailable(ClubFantastic)
   FetchContent_GetProperties(ClubFantastic SOURCE_DIR CLUB_FANTASTIC_DIR)

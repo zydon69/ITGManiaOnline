@@ -1570,7 +1570,7 @@ function joined_button_indices()
 		indices[#indices + 1] = 8
 	end
 	indices[#indices + 1] = 1
-	if joined_is_manager and joined_phase_allows_song_selection() then
+	if joined_is_manager and joined_phase_allows_song_selection() and not joined_can_cancel_song_selection() then
 		indices[#indices + 1] = 2
 	end
 	if joined_is_manager and joined_phase_allows_song_selection() then
@@ -3606,10 +3606,11 @@ local af = Def.ActorFrame{
 				place_label_left_if_needed(codeLabel, codeValue, -10, 50)
 			end
 
+		local cancelChoiceVisible = joined_can_cancel_song_selection()
 		local selectSongButton = joinedContent and joinedContent:GetChild("SelectSongButton")
 		if selectSongButton then
 			local allowSelection = joined_phase_allows_song_selection()
-			local visible = joined_is_manager and allowSelection
+			local visible = joined_is_manager and allowSelection and not cancelChoiceVisible
 			selectSongButton:visible(visible)
 
 			local currentPhase = normalized_online_phase(joined_phase)
@@ -3685,7 +3686,7 @@ local af = Def.ActorFrame{
 
 		local cancelChoiceButton = joinedContent and joinedContent:GetChild("CancelChoiceButton")
 		if cancelChoiceButton then
-			cancelChoiceButton:visible(joined_can_cancel_song_selection())
+			cancelChoiceButton:visible(cancelChoiceVisible)
 			cancelChoiceButton:playcommand("Hover")
 		end
 
@@ -5555,7 +5556,7 @@ end,
 				Def.ActorFrame{
 					Name="CancelChoiceButton",
 					InitCommand=function(self)
-						self:xy(180, 138)
+						self:xy(180, 34)
 						self.idx = 6
 						self:visible(false)
 					end,
