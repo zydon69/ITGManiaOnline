@@ -9082,8 +9082,13 @@ function ITGOnline:Heartbeat(status, force)
 			.. " screen=" .. tostring(self.currentScreenName or "nil")
 			.. " disconnecting=" .. tostring(self.disconnecting == true))
 		if ok and self.currentScreenName == "ScreenOnlineLobbies" and not self.disconnecting then
-			online_flow_trace("heartbeat_queue_lobby_refresh source=heartbeat_ack")
-			self:QueueLobbyRefresh({ reason = "heartbeat_ack" })
+			if self.currentRoomId then
+				online_flow_trace("heartbeat_fetch_current_room source=heartbeat_ack room=" .. tostring(self.currentRoomId))
+				self:FetchCurrentRoomFallback("heartbeat_ack", 1.0)
+			else
+				online_flow_trace("heartbeat_queue_lobby_refresh source=heartbeat_ack")
+				self:QueueLobbyRefresh({ reason = "heartbeat_ack" })
+			end
 		end
 		if queuedStatus then
 			local replayNow = GetTimeSinceStart()

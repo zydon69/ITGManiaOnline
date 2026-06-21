@@ -9,7 +9,7 @@ ITGOnline = ITGOnline or {}
 ITGOnline.PackSync = ITGOnline.PackSync or {}
 
 local PackSync = ITGOnline.PackSync
-PackSync.scriptVersion = "2026-06-20-pack-status-lifecycle-v3"
+PackSync.scriptVersion = "2026-06-21-pack-status-selection-binding-v1"
 PackSync.statusChangedAt = PackSync.statusChangedAt or 0
 PackSync.currentStatusMessage = PackSync.currentStatusMessage or nil
 PackSync.watchdogLastKey = PackSync.watchdogLastKey or ""
@@ -268,6 +268,70 @@ end
 
 local function current_room_selected_at()
 	return selected_at(current_room_selected_song())
+end
+
+local function song_info_matches_room_selection(songInfo, roomSong)
+	if type(songInfo) ~= "table" or type(roomSong) ~= "table" then return false end
+
+	local songHash = selected_song_hash(songInfo)
+	local roomSongHash = selected_song_hash(roomSong)
+	if songHash ~= "" and roomSongHash ~= "" and songHash == roomSongHash then
+		return true
+	end
+
+	local chartHash = selected_chart_hash(songInfo)
+	local roomChartHash = selected_chart_hash(roomSong)
+	if chartHash ~= "" and roomChartHash ~= "" and chartHash == roomChartHash then
+		return true
+	end
+
+	local path = selected_path(songInfo)
+	local roomPath = selected_path(roomSong)
+	if path ~= "" and roomPath ~= "" and path == roomPath then
+		return true
+	end
+
+	local title = lower(selected_title(songInfo))
+	local roomTitle = lower(selected_title(roomSong))
+	local pack = pack_name_key(selected_pack(songInfo))
+	local roomPack = pack_name_key(selected_pack(roomSong))
+	return title ~= "" and title == roomTitle and pack ~= "" and pack == roomPack
+end
+
+local function with_current_room_selection(songInfo, reason)
+	if type(songInfo) ~= "table" then return songInfo end
+	if selected_at(songInfo) ~= "" then return songInfo end
+
+	local roomSong = current_room_selected_song()
+	local roomSelectedAt = current_room_selected_at()
+	if roomSelectedAt == "" or not song_info_matches_room_selection(songInfo, roomSong) then
+		return songInfo
+	end
+
+	local enriched = {}
+	for key, value in pairs(songInfo) do
+		enriched[key] = value
+	end
+
+	enriched.selected_at = roomSelectedAt
+	enriched.selectedAt = roomSelectedAt
+	enriched.song_hash = enriched.song_hash or enriched.songHash or roomSong.song_hash or roomSong.songHash
+	enriched.songHash = enriched.songHash or enriched.song_hash
+	enriched.audio_file_hash = enriched.audio_file_hash or roomSong.audio_file_hash
+	enriched.chart_hash = enriched.chart_hash or enriched.chartHash or roomSong.chart_hash or roomSong.chartHash
+	enriched.chartHash = enriched.chartHash or enriched.chart_hash
+	enriched.chart_key = enriched.chart_key or enriched.chartKey or roomSong.chart_key or roomSong.chartKey
+	enriched.chartKey = enriched.chartKey or enriched.chart_key
+	enriched.folder_name = enriched.folder_name or enriched.folderName or roomSong.folder_name or roomSong.folderName
+	enriched.folderName = enriched.folderName or enriched.folder_name
+
+	trace("SongInfo enriched with current room selection"
+		.. " reason=" .. tostring(reason or "unknown")
+		.. " selected_at=" .. tostring(roomSelectedAt)
+		.. " title=" .. tostring(selected_title(enriched))
+		.. " pack=" .. tostring(selected_pack(enriched)))
+
+	return enriched
 end
 
 local function split_path_segments(path)
@@ -728,6 +792,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	self.currentStatus = status
 	self.currentStatusMessage = message
 	self.statusChangedAt = GetTimeSinceStart()
+	self.currentSongInfo = with_current_room_selection(self.currentSongInfo, "status:" .. tostring(status))
 	local currentSelectedAt = self:SelectedAtForStatusPost(status, self.currentSongInfo)
 	if self.lastSelectedAt ~= currentSelectedAt then
 		self.sequence = 0
@@ -1863,6 +1928,7 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 end
 
 function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
+	songInfo = with_current_room_selection(songInfo, "download_candidate")
 	trace("DownloadPackByCandidate begin packId=" .. tostring(pack and pack.id or "nil")
 		.. " packName=" .. tostring(pack and (pack.name or pack.title) or "")
 		.. " songTitle=" .. tostring(selected_title(songInfo))
@@ -2123,6 +2189,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 end
 
 function PackSync:DownloadSelectedPack(songInfo, callback)
+	songInfo = with_current_room_selection(songInfo, "download_selected")
 	trace("DownloadSelectedPack begin title=" .. tostring(selected_title(songInfo))
 		.. " pack=" .. tostring(selected_pack(songInfo))
 		.. " status=" .. tostring(self.currentStatus or "nil")
@@ -2233,6 +2300,7 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 end
 
 function PackSync:DownloadBrowsingPack(songInfo, callback)
+	songInfo = with_current_room_selection(songInfo, "download_browsing")
 	trace("DownloadBrowsingPack begin title=" .. tostring(selected_title(songInfo))
 		.. " pack=" .. tostring(selected_pack(songInfo))
 		.. " status=" .. tostring(self.currentStatus or "nil")
