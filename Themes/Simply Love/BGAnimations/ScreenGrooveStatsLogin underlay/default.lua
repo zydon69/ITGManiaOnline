@@ -249,6 +249,12 @@ local function make_service_panel(player, service)
 		Def.Quad{
 			InitCommand = function(self) self:y((boxHeight * -0.5) + 15):zoomto(boxWidth - 3, 30):diffuse(0.08, 0.08, 0.09, 1) end
 		},
+		Def.Quad{
+			Name = "TopBorder",
+			InitCommand = function(self)
+				self:y(boxHeight * -0.5):zoomto(boxWidth, 2):diffuse(Color.White)
+			end
+		},
 		LoadFont("Common Bold")..{
 			Text = title,
 			InitCommand = function(self)
