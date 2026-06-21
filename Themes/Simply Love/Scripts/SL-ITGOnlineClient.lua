@@ -1623,15 +1623,22 @@ function ITGOnline:LoadAuthenticatedUser(callback)
 end
 
 function ITGOnline:ApplyAccessToken(accessToken, callback)
-	online_flow_trace("auth_apply_token_begin hasToken=" .. tostring(tostring(accessToken or "") ~= ""))
+	online_flow_trace("auth_apply_token_begin hasToken=" .. tostring(tostring(accessToken or "") ~= "")
+		.. " disconnecting=" .. tostring(self.disconnecting == true)
+		.. " sessionExpired=" .. tostring(self.sessionExpired == true)
+		.. " authInvalidated=" .. tostring(self.authSessionInvalidated == true))
 	accessToken = tostring(accessToken or "")
 	if accessToken == "" then
 		if callback then callback(false, nil, { errorMessage = "No access token provided." }) end
 		return
 	end
 
+	if self.disconnecting then
+		online_flow_trace("auth_session_resumed source=apply_access_token previousDisconnecting=true")
+	end
 	self.token = accessToken
 	self.user = nil
+	self.disconnecting = false
 	self.sessionExpired = false
 	self.authSessionInvalidated = false
 	self.authSessionInvalidatedReason = ""
@@ -5182,6 +5189,14 @@ function ITGOnline:FlushRealtimeConnectCallbacks(method, value)
 end
 
 function ITGOnline:ConnectWebSocket(callbacks)
+	if self.disconnecting and tostring(self.token or "") ~= "" then
+		online_flow_trace("auth_session_resumed source=connect_websocket previousDisconnecting=true"
+			.. " hasUser=" .. tostring(self.user ~= nil)
+			.. " socket=" .. tostring(self.socket ~= nil)
+			.. " connected=" .. tostring(self.realtimeConnected == true)
+			.. " screen=" .. tostring(self.currentScreenName or "nil"))
+		self.disconnecting = false
+	end
 	if self.socket and self.realtimeConnected and not self.disconnecting then
 		online_flow_trace("connect_websocket_reused reason=already_connected"
 			.. " generation=" .. tostring(self.realtimeGeneration or "nil")
