@@ -783,11 +783,16 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		return
 	end
 	if MESSAGEMAN then
+		local activeRoomId = ITGOnline and ITGOnline.currentRoomId or nil
+		local activeRoomPhase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil
 		MESSAGEMAN:Broadcast("OnlinePackSyncLocalStatus", {
 			status = status,
 			message = message,
 			download_progress = progress,
 			selected_at = currentSelectedAt,
+			room_id = activeRoomId,
+			room_phase = activeRoomPhase,
+			mode = activeRoomId and "joined" or "browse",
 		})
 	end
 	self.lastPostedStatusSignature = signature
@@ -877,11 +882,16 @@ function PackSync:ApplyLocalStatus(status, message, progress)
 	end
 	self.lastAppliedLocalStatusSignature = localSignature
 	if MESSAGEMAN then
+		local activeRoomId = ITGOnline and ITGOnline.currentRoomId or nil
+		local activeRoomPhase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil
 		MESSAGEMAN:Broadcast("OnlinePackSyncLocalStatus", {
 			status = status,
 			message = message,
 			download_progress = progress,
 			selected_at = selected_at(self.currentSongInfo),
+			room_id = activeRoomId,
+			room_phase = activeRoomPhase,
+			mode = activeRoomId and "joined" or "browse",
 		})
 	end
 end

@@ -266,9 +266,17 @@ end
 
 local function pack_sync_local_status_signature(params)
 	params = type(params) == "table" and params or {}
+	local contextCode = joined_lobby_code
+	if tostring(contextCode or "") == "" then
+		contextCode = params.room_id or params.roomId or (ITGOnline and ITGOnline.currentRoomId) or ""
+	end
+	local contextPhase = joined_phase
+	if tostring(contextPhase or "") == "" then
+		contextPhase = params.room_phase or params.roomPhase or (ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase) or ""
+	end
 	return table.concat({
-		stable_scalar(joined_lobby_code),
-		stable_scalar(joined_phase),
+		stable_scalar(contextCode),
+		stable_scalar(contextPhase),
 		stable_scalar(params.userId or params.user_id),
 		stable_scalar(params.status),
 		stable_scalar(params.message),
@@ -1499,13 +1507,6 @@ function joined_missing_song_countdown_seconds()
 		end
 	end
 	return nil
-end
-
-local function joined_missing_song_countdown_status_text()
-	if normalized_online_phase(joined_phase) == "results" then return "" end
-	local countdown = joined_missing_song_countdown_seconds()
-	if not countdown then return "" end
-	return "Pack manquant ou chart incompatible - expulsion dans " .. tostring(countdown) .. "s"
 end
 
 function local_pack_exists(songInfo)
@@ -3662,13 +3663,6 @@ local af = Def.ActorFrame{
 		end
 		update_joined_song_card(joinedContent)
 
-		local songStatus = joinedContent and joinedContent:GetChild("JoinedLobbySongStatus")
-		if songStatus then
-			local missingCountdownText = joined_missing_song_countdown_status_text()
-			songStatus:settext(missingCountdownText)
-			songStatus:visible(missingCountdownText ~= "")
-		end
-
 			local codeLabel = joinedContent and joinedContent:GetChild("JoinedLobbyCodeLabel")
 			if joinedContent then
 				local function get_zoomed_width(actor)
@@ -4722,11 +4716,21 @@ end,
 				.. " phase=" .. tostring(joined_phase))
 			return
 		end
+		local effectiveMode = tostring(params and params.mode or mode or "")
+		local effectiveJoinedCode = tostring(joined_lobby_code or "")
+		if effectiveJoinedCode == "" then
+			effectiveJoinedCode = tostring(params and (params.room_id or params.roomId) or ITGOnline and ITGOnline.currentRoomId or "")
+		end
+		if effectiveJoinedCode ~= "" then
+			effectiveMode = "joined"
+		end
 		lobby_flow_trace("OnlinePackSyncLocalStatus_received status=" .. tostring(params and params.status or "")
 			.. " progress=" .. tostring(params and params.progress or "")
 			.. " userId=" .. tostring(params and params.userId or params and params.user_id or "")
-			.. " mode=" .. tostring(mode)
-			.. " joined_code=" .. tostring(joined_lobby_code))
+			.. " mode=" .. tostring(effectiveMode)
+			.. " joined_code=" .. tostring(effectiveJoinedCode)
+			.. " ui_mode=" .. tostring(mode)
+			.. " ui_joined_code=" .. tostring(joined_lobby_code))
 		apply_local_pack_sync_status_to_joined_player(params)
 		last_pack_sync_local_status_signature = localStatusSignature
 		last_pack_sync_local_status_at = GetTimeSinceStart()
@@ -5540,13 +5544,6 @@ end,
 			Text="",
 			InitCommand=function(self)
 				self:horizalign(left):xy(160, -96):zoom(WideScale(0.38, 0.40)):maxwidth(320)
-			end
-		},
-		LoadFont("Common Normal")..{
-			Name="JoinedLobbySongStatus",
-				Text="En attente de la chanson...",
-			InitCommand=function(self)
-				self:horizalign(left):vertalign(top):xy(-290, 58):zoom(0.44):maxwidth(800)
 			end
 		},
 		Def.ActorFrame{

@@ -7406,6 +7406,35 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	end
 
 	local latestRoomPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase or roomPhase)
+	if not final then
+		local summary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
+		local localPlayState = self.CurrentUserPlayState and tostring(self:CurrentUserPlayState(self.currentRoom) or "") or ""
+		local localTerminal = self.IsTerminalPlayState and self:IsTerminalPlayState(localPlayState) or false
+		local finalResultsCount = summary and tonumber(summary.finalResults) or 0
+		local allTerminal = summary and summary.allTerminal == true
+		if latestRoomPhase == "results" or allTerminal or localTerminal then
+			if self.StopLiveScoreFlush then
+				self:StopLiveScoreFlush("send_score_before_post_terminal_play_state:" .. tostring(latestRoomPhase))
+			end
+			online_flow_trace("send_score_skipped reason=terminal_play_state_before_post"
+				.. " room=" .. tostring(self.currentRoomId)
+				.. " roundKey=" .. tostring(roundKey)
+				.. " initialPhase=" .. tostring(roomPhase)
+				.. " latestPhase=" .. tostring(latestRoomPhase)
+				.. " localPlayState=" .. tostring(localPlayState)
+				.. " localTerminal=" .. tostring(localTerminal == true)
+				.. " allTerminal=" .. tostring(allTerminal == true)
+				.. " finalResults=" .. tostring(finalResultsCount)
+				.. " final=" .. tostring(final == true))
+			finish(false, nil, {
+				errorMessage = "Round is already terminal; live score update dropped.",
+				room_phase = latestRoomPhase,
+				dropped = true,
+				terminal = true,
+			})
+			return
+		end
+	end
 	if final and (latestRoomPhase == "results" or self:CurrentUserHasFinalResult(self.currentRoom)) then
 		if validRoundKey then
 			self.lastFinalScoreKey = roundKey
