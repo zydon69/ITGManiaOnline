@@ -1026,11 +1026,20 @@ void SSCLoader::ProcessScrolls(TimingData& out, const std::string sParam) {
     }
 
     if (fRatio <= 0.0f) {
-      LOG->Trace(
-          "SRC_AUDIT_FIX ignored invalid #SCROLLS ratio %f in \"%s\" for "
-          "song \"%s\"; simfile left unchanged.",
-          fRatio, SanitizeForLog(s1).c_str(),
-          this->GetSongTitle().c_str());
+      static std::map<std::string, int> sInvalidScrollRatioLogCounts;
+      const std::string sSongTitle = this->GetSongTitle();
+      const int iLogged = sInvalidScrollRatioLogCounts[sSongTitle]++;
+      if (iLogged < 3) {
+        LOG->Trace(
+            "SRC_AUDIT_FIX ignored invalid #SCROLLS ratio %f in \"%s\" for "
+            "song \"%s\"; simfile left unchanged.",
+            fRatio, SanitizeForLog(s1).c_str(), sSongTitle.c_str());
+      } else if (iLogged == 3) {
+        LOG->Trace(
+            "SRC_AUDIT_FIX suppressed additional invalid #SCROLLS ratio logs "
+            "for song \"%s\"; simfile left unchanged.",
+            sSongTitle.c_str());
+      }
       continue;
     }
 

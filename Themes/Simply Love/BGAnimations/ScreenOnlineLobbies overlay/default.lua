@@ -427,6 +427,9 @@ local network_status_clear_at = 0
 local pack_sync_busy
 local clear_pending_join
 local clear_pending_create
+local last_online_missing_song_signature = ""
+local last_online_missing_song_signature_at = 0
+local online_missing_song_duplicate_window = 3.0
 
 local function network_status_has_active_transient()
 	return network_status_clear_at > 0 and GetTimeSinceStart() + 0.05 < network_status_clear_at
@@ -1498,6 +1501,13 @@ function joined_missing_song_countdown_seconds()
 	return nil
 end
 
+local function joined_missing_song_countdown_status_text()
+	if normalized_online_phase(joined_phase) == "results" then return "" end
+	local countdown = joined_missing_song_countdown_seconds()
+	if not countdown then return "" end
+	return "Pack manquant ou chart incompatible - expulsion dans " .. tostring(countdown) .. "s"
+end
+
 function local_pack_exists(songInfo)
 	local pack = trim_text(songInfo and songInfo.pack)
 	if pack == "" then return false end
@@ -1930,9 +1940,7 @@ local function pack_sync_line_for_player(player)
 				or reason == "hash_mismatch"
 				or status == "no_compatible_chart_found"
 				or status == "chart_mismatch" then
-				local countdown = pack_sync_countdown_seconds_for_player(player)
-				local suffix = countdown and (" - expulsion dans " .. tostring(countdown) .. "s") or ""
-				return "Pack KO / aucune chart compatible trouvée" .. suffix
+				return "Pack KO / aucune chart compatible trouvée"
 			end
 		end
 
@@ -3656,8 +3664,9 @@ local af = Def.ActorFrame{
 
 		local songStatus = joinedContent and joinedContent:GetChild("JoinedLobbySongStatus")
 		if songStatus then
-			songStatus:settext("")
-			songStatus:visible(false)
+			local missingCountdownText = joined_missing_song_countdown_status_text()
+			songStatus:settext(missingCountdownText)
+			songStatus:visible(missingCountdownText ~= "")
 		end
 
 			local codeLabel = joinedContent and joinedContent:GetChild("JoinedLobbyCodeLabel")
@@ -4333,6 +4342,13 @@ local af = Def.ActorFrame{
 						.. " reasonParam=" .. tostring(params and params.reason or "nil"))
 					return
 				end
+				if mode ~= "joined" or trim_text(joined_lobby_code) == "" then
+					lobby_flow_trace("OnlineMissingSong_ignored reason=not_joined_mode"
+						.. " mode=" .. tostring(mode)
+						.. " joined_code=" .. tostring(joined_lobby_code)
+						.. " reasonParam=" .. tostring(params and params.reason or "nil"))
+					return
+				end
 				local incomingSongInfo = params and params.songInfo or joined_song_preview
 				if not song_info_matches_current_room_selection(incomingSongInfo) then
 					lobby_flow_trace("OnlineMissingSong_ignored reason=stale_or_no_active_selection"
@@ -4355,6 +4371,25 @@ local af = Def.ActorFrame{
 					self:queuecommand("UpdateJoinedLobbyText")
 					return
 				end
+				local missingReason = params and params.reason or "missing_local_song"
+				local missingSignature = table.concat({
+					tostring(joined_lobby_code or ""),
+					tostring(lobby_song_selected_at(incomingSongInfo)),
+					tostring(missingReason),
+					tostring(params and params.noCompatibleChart == true),
+					tostring(params and params.chartMismatch == true),
+				}, "|")
+				local now = GetTimeSinceStart and GetTimeSinceStart() or 0
+				if missingSignature ~= ""
+					and missingSignature == tostring(last_online_missing_song_signature or "")
+					and (now - (tonumber(last_online_missing_song_signature_at) or 0)) < online_missing_song_duplicate_window then
+					lobby_flow_trace("OnlineMissingSong_ignored reason=duplicate_signature"
+						.. " signature=" .. tostring(missingSignature)
+						.. " age=" .. string.format("%.3f", now - (tonumber(last_online_missing_song_signature_at) or 0)))
+					return
+				end
+				last_online_missing_song_signature = missingSignature
+				last_online_missing_song_signature_at = now
 				lobby_flow_trace("OnlineMissingSong_received reason=" .. tostring(params and params.reason or "missing_local_song")
 					.. " hasSongInfo=" .. tostring(params and params.songInfo ~= nil)
 					.. " noCompatibleChart=" .. tostring(params and params.noCompatibleChart == true)
@@ -4364,7 +4399,7 @@ local af = Def.ActorFrame{
 					.. " phase=" .. tostring(joined_phase))
 				joined_missing_song = true
 			joined_missing_song_info = incomingSongInfo
-			joined_missing_song_reason = params and params.reason or "missing_local_song"
+			joined_missing_song_reason = missingReason
 			joined_can_download_pack = params and (
 				params.noCompatibleChart == true
 				or can_download_pack_for_reason(params.reason)
@@ -4382,7 +4417,7 @@ local af = Def.ActorFrame{
 				lobby_flow_trace("OnlineMissingSong_preview_promoted pack=" .. tostring(song_info_pack(params.songInfo))
 					.. " song=" .. tostring(params.songInfo.song or params.songInfo.title or ""))
 			end
-			local reason = params and params.reason or "missing_local_song"
+			local reason = missingReason
 			if reason == "download_failed" then
 				lobby_flow_trace("OnlineMissingSong_download_failed candidates=" .. tostring(type(pack_choice_last_candidates) == "table" and #pack_choice_last_candidates or 0)
 					.. " selectedPackId=" .. tostring(pack_choice_last_selected_pack_id))
@@ -4432,6 +4467,14 @@ local af = Def.ActorFrame{
 					lobby_flow_trace("OnlineSongAvailable_ignored reason=inactive_overlay")
 					return
 				end
+				if mode ~= "joined" or trim_text(joined_lobby_code) == "" then
+					lobby_flow_trace("OnlineSongAvailable_ignored reason=not_joined_mode"
+						.. " mode=" .. tostring(mode)
+						.. " joined_code=" .. tostring(joined_lobby_code)
+						.. " incomingSelectedAt=" .. tostring(lobby_song_selected_at(params and params.songInfo or nil))
+						.. " roomSelectedAt=" .. tostring(lobby_song_selected_at(current_room_selected_song_info())))
+					return
+				end
 				local wasMissing = joined_missing_song
 				local availabilitySongInfo = params and params.songInfo or joined_missing_song_info or joined_song_preview
 				local canReportAvailability = song_info_matches_current_room_selection(availabilitySongInfo)
@@ -4447,6 +4490,8 @@ local af = Def.ActorFrame{
 			joined_missing_song_info = nil
 			joined_can_download_pack = false
 			joined_missing_song_reason = nil
+			last_online_missing_song_signature = ""
+			last_online_missing_song_signature_at = 0
 			if wasMissing and canReportAvailability and ITGOnline and ITGOnline.ReportSongAvailability then
 				lobby_flow_trace("OnlineSongAvailable_report_availability missing=false reason=reloaded")
 				ITGOnline:ReportSongAvailability(false, "reloaded")
