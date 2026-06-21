@@ -1570,7 +1570,7 @@ function joined_button_indices()
 		indices[#indices + 1] = 8
 	end
 	indices[#indices + 1] = 1
-	if joined_is_manager and joined_phase_allows_song_selection() and not joined_can_cancel_song_selection() then
+	if joined_is_manager and joined_phase_allows_song_selection() then
 		indices[#indices + 1] = 2
 	end
 	if joined_is_manager and joined_phase_allows_song_selection() then
@@ -1578,9 +1578,6 @@ function joined_button_indices()
 	end
 	if not pack_sync_busy() and (joined_missing_song or can_download_browsed_pack()) then
 		indices[#indices + 1] = 3
-	end
-	if joined_can_cancel_song_selection() then
-		indices[#indices + 1] = 6
 	end
 	if joined_room_can_start() then
 		indices[#indices + 1] = 7
@@ -2716,6 +2713,37 @@ local function handle_joined_mode_input(event)
 			lobby_flow_trace("input_joined_leave_confirm strict_index=1")
 			open_leave_confirm("leave_lobby")
 		elseif joined_active_index == 2 and joined_is_manager then
+			if joined_can_cancel_song_selection() then
+				if ITGOnline and ITGOnline.CancelSongSelection then
+					lobby_flow_trace("input_joined_cancel_song_selection_request shared_index=2")
+					t:playcommand("SetStatus", {
+						text="Annulation du choix de chanson...",
+						showSpinner=true,
+						showPrompt=false
+					})
+					ITGOnline:CancelSongSelection(function(ok, decoded, response)
+						lobby_flow_trace("input_joined_cancel_song_selection_response ok=" .. tostring(ok == true)
+							.. " status=" .. tostring(response and response.statusCode or "nil")
+							.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil))
+						if not ok and t then
+							t:playcommand("SetStatus", {
+								text=(response and response.errorMessage) or (decoded and decoded.message) or "Impossible d'annuler le choix de chanson.",
+								showSpinner=false,
+								showPrompt=true,
+								duration=4
+							})
+						end
+					end)
+				else
+					t:playcommand("SetStatus", {
+						text="Annulation du choix indisponible dans cette version.",
+						showSpinner=false,
+						showPrompt=true,
+						duration=4
+					})
+				end
+				return false
+			end
 			if not joined_phase_allows_song_selection() then
 				t:playcommand("SetStatus", {
 					text="La manche actuelle se termine encore. Attendez les resultats avant de choisir une autre chanson.",
@@ -2777,35 +2805,6 @@ local function handle_joined_mode_input(event)
 			else
 				lobby_flow_trace("input_joined_players_frame_start_blocked")
 				play_online_sound_once("Common", "Cancel")
-			end
-		elseif joined_active_index == 6 and joined_can_cancel_song_selection() then
-			if ITGOnline and ITGOnline.CancelSongSelection then
-				lobby_flow_trace("input_joined_cancel_song_selection_request")
-				t:playcommand("SetStatus", {
-					text="Annulation du choix de chanson...",
-					showSpinner=true,
-					showPrompt=false
-				})
-				ITGOnline:CancelSongSelection(function(ok, decoded, response)
-					lobby_flow_trace("input_joined_cancel_song_selection_response ok=" .. tostring(ok == true)
-						.. " status=" .. tostring(response and response.statusCode or "nil")
-						.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil))
-					if not ok and t then
-						t:playcommand("SetStatus", {
-							text=(response and response.errorMessage) or (decoded and decoded.message) or "Impossible d'annuler le choix de chanson.",
-							showSpinner=false,
-							showPrompt=true,
-							duration=4
-						})
-					end
-				end)
-			else
-				t:playcommand("SetStatus", {
-					text="Annulation du choix indisponible dans cette version.",
-					showSpinner=false,
-					showPrompt=true,
-					duration=4
-				})
 			end
 		elseif joined_active_index == 7 and joined_is_manager then
 			if joined_room_can_start() then
@@ -5557,7 +5556,7 @@ end,
 					Name="CancelChoiceButton",
 					InitCommand=function(self)
 						self:xy(180, 34)
-						self.idx = 6
+						self.idx = 2
 						self:visible(false)
 					end,
 					Def.Quad{

@@ -79,6 +79,22 @@ function PackSync:IsActiveDownload()
 		or self.pendingPostReloadSongInfo ~= nil
 end
 
+function PackSync:ShouldPreserveActiveDownloadDuringReset(reason)
+	if not self:IsActiveDownload() then return false end
+
+	reason = tostring(reason or "unknown")
+	if reason == "lobby_left"
+		or reason == "logout"
+		or reason == "disconnect"
+		or reason == "watchdog_timeout"
+		or reason == "explicit_cancel"
+	then
+		return false
+	end
+
+	return true
+end
+
 local function trace(message)
 	local line = "[OnlinePackSync] " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
@@ -899,6 +915,16 @@ function PackSync:ResetLocalState(reason)
 		.. " browseOnly=" .. tostring(self.activeBrowseOnlyDownload == true)
 		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+	if self:ShouldPreserveActiveDownloadDuringReset(reason) then
+		trace("ResetLocalState preserved active download reason=" .. tostring(reason or "unknown")
+			.. " status=" .. tostring(self.currentStatus or "nil")
+			.. " key=" .. tostring(self.downloadInFlightKey or "")
+			.. " generation=" .. tostring(self.downloadGeneration or "nil")
+			.. " selected_at=" .. tostring(selected_at(self.currentSongInfo))
+			.. " pendingPostReload=" .. tostring(self.pendingPostReloadSongInfo ~= nil)
+			.. " browseOnly=" .. tostring(self.activeBrowseOnlyDownload == true))
+		return
+	end
 	if reason == "no_song_confirmed" and self.activeBrowseOnlyDownload == true then
 		trace("Keep browse-only download state during no_song_confirmed reset")
 		return
@@ -2353,6 +2379,33 @@ function PackSync:ValidatePendingPostReload()
 		set_current_selection(result.song, result.steps)
 		trace("Downloaded OK and local chart validated")
 		self:MarkPackInstalled(packName)
+
+		local currentSelectedSong = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song or nil
+		local downloadedSelectedAt = selected_at(songInfo)
+		local currentSelectedAt = selected_at(currentSelectedSong)
+		local currentSelectionChanged = downloadedSelectedAt ~= "" and downloadedSelectedAt ~= currentSelectedAt
+		if currentSelectionChanged then
+			trace("Downloaded pack belongs to an old manager selection; keeping download complete without readying stale song"
+				.. " downloadedSelectedAt=" .. tostring(downloadedSelectedAt)
+				.. " currentSelectedAt=" .. tostring(currentSelectedAt)
+				.. " downloadedTitle=" .. tostring(selected_title(songInfo))
+				.. " currentTitle=" .. tostring(selected_title(currentSelectedSong))
+				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+			self:UpdateStatus(self.status.DownloadedOk, "Pack telecharge. En attente du choix de chanson du manager.")
+			if MESSAGEMAN then
+				MESSAGEMAN:Broadcast("OnlinePackDownloaded", { songInfo = songInfo, staleSelection = true })
+			end
+			if currentSelectedSong and currentSelectedAt ~= "" then
+				trace("Applying current manager selection after stale-selection download completion"
+					.. " currentSelectedAt=" .. tostring(currentSelectedAt)
+					.. " currentTitle=" .. tostring(selected_title(currentSelectedSong))
+					.. " currentPack=" .. tostring(selected_pack(currentSelectedSong)))
+				self:ApplySelectedChart(currentSelectedSong)
+			end
+			return true
+		end
+
 		self:UpdateStatus(self.status.DownloadedOk, nil)
 		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
 			ITGOnline:ConfirmSelectedSongAvailability("downloaded_ok", function(ok)
