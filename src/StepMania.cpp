@@ -100,7 +100,7 @@ static float SnapDisplayAspectRatioToSupported(float aspectRatio) {
       3 / 4.f, 1.f, 4 / 3.f, 5 / 4.f, 16 / 10.f, 16 / 9.f, 8 / 3.f};
 
   if (aspectRatio <= 0.f) {
-    return 16 / 10.f;
+    return 16 / 9.f;
   }
 
   float bestAspect = kSupportedAspects[0];
@@ -126,7 +126,7 @@ static float DetectInitialDisplayAspectRatio(unsigned width, unsigned height) {
     return SnapDisplayAspectRatioToSupported(HOOKS->GetDisplayAspectRatio());
   }
 
-  return 16 / 10.f;
+  return 16 / 9.f;
 }
 
 static bool IsMacOS() {
@@ -312,6 +312,7 @@ static void StartDisplay() {
             initialWindowWidth, initialWindowHeight, bestMode->width,
             bestMode->height, bestSpec->id().c_str(), error.c_str());
       } else {
+        DISPLAY->ResolutionChanged();
         LOG->Info(
             "Applied first-run display defaults: detected=%ux%u "
             "initial=%dx%d aspect=%.6f display='%s'",
@@ -321,7 +322,7 @@ static void StartDisplay() {
     } else {
       LOG->Warn(
           "Could not find an active display mode for first-run maximum "
-          "resolution defaults; keeping fallback 1280x800 16:10.");
+          "resolution defaults; keeping fallback 1280x720 16:9.");
     }
 
     g_bApplyMaxDisplayResolutionDefault = false;

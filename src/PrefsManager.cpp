@@ -161,9 +161,9 @@ PrefsManager::PrefsManager()
       m_bWindowed("Windowed", true),
       m_sDisplayId("DisplayId", ""),
       m_iDisplayWidth("DisplayWidth", 1280),
-      m_iDisplayHeight("DisplayHeight", 800),
+      m_iDisplayHeight("DisplayHeight", 720),
       m_fDisplayAspectRatio(
-          "DisplayAspectRatio", 16 / 10.f, ValidateDisplayAspectRatio),
+          "DisplayAspectRatio", 16 / 9.f, ValidateDisplayAspectRatio),
       m_iDisplayColorDepth("DisplayColorDepth", 32),
       m_iTextureColorDepth("TextureColorDepth", 32),
       m_iMovieColorDepth("MovieColorDepth", 32),
