@@ -4156,6 +4156,10 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 			.. " phase=" .. tostring(room.phase or "nil")
 			.. " previousRoundKey=" .. tostring(self.currentRoomRoundKey or "")
 			.. " hadCurrentSong=" .. tostring(self.currentSongPayload ~= nil))
+		local normalizedClearPhase = self:NormalizeRoomPhase(room.phase)
+		if normalizedClearPhase == "lobby" and tostring(self.currentRoomRoundKey or "") ~= "" then
+			self:ResetOnlineRoundRuntimeState("room_snapshot_lobby_without_song:" .. tostring(source or "unknown"))
+		end
 		self.currentSongPayload = nil
 		self.currentRoomRoundKey = ""
 		self:ClearActiveGameplayRound("room_snapshot_no_song")
