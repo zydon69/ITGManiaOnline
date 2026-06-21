@@ -3917,13 +3917,6 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
           LOG->Trace("ITG Online: SM_BeginFailed starting failed-player hold.");
           m_bOnlineFailedHoldStarted = true;
           m_timerOnlineFailedHoldStarted.Touch();
-        } else if (m_timerOnlineFailedHoldStarted.Ago() >=
-                   ITGONLINE_EVALUATION_HOLD_MAX_SECONDS) {
-          LOG->Warn(
-              "ITG Online: failed-player evaluation hold timed out after %.2fs; "
-              "continuing to evaluation",
-              m_timerOnlineFailedHoldStarted.Ago());
-          m_bOnlineFailedHoldStarted = false;
         } else {
           LOG->Trace(
               "ITG Online: SM_BeginFailed continuing failed-player hold for "

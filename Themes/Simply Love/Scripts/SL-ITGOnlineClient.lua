@@ -4547,7 +4547,7 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 		and summary.finalResultsReady == true
 		and self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase) == "results"
 
-	if summary and summary.players > 0 and (summary.allTerminal == true or releaseWithResults) and not waiting then
+	if summary and summary.players > 0 and releaseWithResults and not waiting then
 		self.onlineGameplayEvaluationHoldStartedKey = roundKey
 		self.onlineGameplayEvaluationMinimumHoldUntil = 0
 		self.onlineGameplayAllTerminalHoldKey = roundKey
@@ -4560,7 +4560,7 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 		}, "|")
 		if self.onlineGameplayReleaseLoggedKey ~= releaseLogKey then
 			self.onlineGameplayReleaseLoggedKey = releaseLogKey
-			online_flow_trace("hold_gameplay_release reason=" .. (summary.allTerminal == true and "all_players_terminal" or "results_final_results_ready")
+			online_flow_trace("hold_gameplay_release reason=results_final_results_ready"
 				.. " terminal=" .. tostring(summary.terminal)
 				.. " players=" .. tostring(summary.players)
 				.. " finalResults=" .. tostring(summary.finalResults))
@@ -4602,12 +4602,12 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 		end
 	end
 
-	if summary and summary.players > 0 and (summary.allTerminal == true or releaseWithResults) then
+	if summary and summary.players > 0 and releaseWithResults then
 		if self.onlineGameplayAllTerminalHoldKey ~= roundKey then
 			self.onlineGameplayAllTerminalHoldKey = roundKey
 			self.onlineGameplayAllTerminalHoldUntil = now + 2.0
 			online_flow_trace("hold_gameplay_after_terminal_or_results start roundKey=" .. tostring(roundKey)
-				.. " reason=" .. (summary.allTerminal == true and "all_players_terminal" or "results_final_results_ready")
+				.. " reason=results_final_results_ready"
 				.. " until=" .. tostring(self.onlineGameplayAllTerminalHoldUntil))
 		end
 

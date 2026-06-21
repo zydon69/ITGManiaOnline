@@ -88,7 +88,8 @@ local function final_results_signature(rows)
 	return table.concat(parts, "|")
 end
 
-local width = clamp(_screen.w * 0.16, 230, 320)
+local width = clamp(_screen.w * 0.20, 280, 400)
+local row_zoom = 0.54
 local banner_zoom = 0.7
 local banner_width = 418 * banner_zoom
 local banner_height = 164 * banner_zoom
@@ -148,7 +149,7 @@ local t = Def.ActorFrame{
 					local suffix = data.failed and " F" or ""
 					local line = string.format("%d. %s  %.2f%%%s", data.rank, data.name, percent, suffix)
 					row:settext(line)
-					row:maxwidth(width / 0.42)
+					row:maxwidth((width - 20) / row_zoom)
 					row:diffuse(data.failed and color("#ff3b30") or Color.White)
 					row:visible(true)
 				elseif row then
@@ -189,8 +190,8 @@ for i = 1, max_rows do
 		InitCommand=function(self)
 			self:horizalign(left)
 				:xy(-width / 2 + 10, -panel_height / 2 + 31 + ((i - 1) * row_height))
-				:zoom(0.42)
-				:maxwidth((width - 20) / 0.42)
+				:zoom(row_zoom)
+				:maxwidth((width - 20) / row_zoom)
 				:visible(false)
 		end,
 	}

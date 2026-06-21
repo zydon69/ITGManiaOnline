@@ -79,22 +79,13 @@ local function BuildOnlineEvaluationInputHandler(reason)
 			return true
 		end
 
-		local waiting = ITGOnline.ShouldWaitForOnlineResults and ITGOnline:ShouldWaitForOnlineResults()
 		if online_trace then
 			local summary = ITGOnline.PlayStateSummary and ITGOnline:PlayStateSummary() or nil
 			online_trace("FLOW evaluation_input button=" .. tostring(event.GameButton)
 				.. " type=" .. tostring(event.type)
 				.. " reason=" .. tostring(reason or "unknown")
-				.. " waiting=" .. tostring(waiting == true)
 				.. " terminal=" .. tostring(summary and summary.terminal or "nil")
 				.. " players=" .. tostring(summary and summary.players or "nil"))
-		end
-
-		if waiting then
-			if event.type == "InputEventType_FirstPress" then
-				SM("Waiting for every online player to finish...")
-			end
-			return true
 		end
 
 		if event.type == "InputEventType_FirstPress" then
@@ -273,160 +264,6 @@ if OnlineEvaluationActive() then
 			self:diffuse(connected and color("#66ff99") or Color.Yellow)
 			self:sleep(0.5):queuecommand("RefreshOnlineStatus")
 		end
-	}
-
-	t[#t+1] = Def.ActorFrame{
-	Name="ITGOnlineResultsWait",
-	InitCommand=function(self)
-		self:Center():visible(false)
-	end,
-	OnCommand=function(self)
-		self:queuecommand("Refresh")
-	end,
-	OffCommand=function(self)
-		SetOnlineEvaluationInputRedirected(false, "results_wait_off")
-	end,
-	RefreshCommand=function(self)
-		local waiting = ITGOnline and ITGOnline.ShouldWaitForOnlineResults and ITGOnline:ShouldWaitForOnlineResults()
-		if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
-			local summary = ITGOnline.PlayStateSummary and ITGOnline:PlayStateSummary() or nil
-			Trace("ITG Online: FLOW evaluation_results_wait_refresh"
-				.. " waiting=" .. tostring(waiting == true)
-				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-				.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
-				.. " submitted=" .. tostring(summary and summary.submitted or "nil")
-				.. " expected=" .. tostring(summary and summary.expected or "nil")
-				.. " finalResults=" .. tostring(summary and summary.finalResults or "nil"))
-		end
-		self:visible(waiting == true)
-		DisableOnlineEvaluationTimer("results_wait_refresh")
-
-		local screen = SCREENMAN:GetTopScreen()
-		if screen then
-			local timer = screen:GetChild("Timer")
-			if timer then timer:visible(false) end
-		end
-
-		SetOnlineEvaluationInputRedirected(waiting == true, "results_wait_refresh")
-		local progress = self:GetChild("Progress")
-		if progress then progress:playcommand("Refresh") end
-		local sessions = self:GetChild("Sessions")
-		if sessions then sessions:playcommand("Refresh") end
-		local title = self:GetChild("Title")
-		if title then title:playcommand("Refresh") end
-
-		if waiting ~= true then
-			if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
-				Trace("ITG Online: FLOW evaluation_results_wait_stopped reason=not_waiting"
-					.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-					.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
-			end
-			return
-		end
-
-		if ITGOnline and ITGOnline.FetchRoom and ITGOnline.currentRoomId then
-			if ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true then
-				Trace("ITG Online: FLOW evaluation_results_wait_fetch_begin room=" .. tostring(ITGOnline.currentRoomId))
-			end
-			ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok)
-				if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
-					Trace("ITG Online: FLOW evaluation_results_wait_fetch_result"
-						.. " ok=" .. tostring(ok == true)
-						.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-						.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
-						.. " hasPlayState=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.play_state ~= nil))
-				end
-				if ok and ITGOnline and ITGOnline.currentRoom and ITGOnline.LobbyStatePayload then
-					if ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true then
-						local playState = ITGOnline.currentRoom.play_state or {}
-						Trace("ITG Online: FLOW evaluation_results_wait_broadcast"
-							.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-							.. " phase=" .. tostring(ITGOnline.currentRoom.phase or "nil")
-							.. " submitted=" .. tostring(playState.submitted_scores and #playState.submitted_scores or "nil")
-							.. " finalResults=" .. tostring(playState.final_results and #playState.final_results or "nil"))
-					end
-					MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(ITGOnline.currentRoom))
-					if ITGOnline.ApplyPlayStateSnapshot then
-						ITGOnline:ApplyPlayStateSnapshot(ITGOnline.currentRoom.play_state or {}, "evaluation_results_wait_fetch")
-					else
-						MESSAGEMAN:Broadcast("ITGOnlinePlayStateUpdated", ITGOnline.currentRoom.play_state or {})
-					end
-				end
-			end)
-		else
-			if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
-				Trace("ITG Online: FLOW evaluation_results_wait_fetch_skipped"
-					.. " hasFetchRoom=" .. tostring(ITGOnline.FetchRoom ~= nil)
-					.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
-			end
-		end
-
-		self:sleep(0.75):queuecommand("Refresh")
-	end,
-
-	Def.Quad{
-		InitCommand=function(self)
-			self:zoomto(_screen.w, _screen.h):diffuse(color("#000000")):diffusealpha(0.74)
-		end,
-	},
-	LoadFont("Common Normal")..{
-		Name="Title",
-		Text="Waiting for every player to finish",
-		InitCommand=function(self)
-			self:y(-76):zoom(0.72):diffuse(color("#66ff99")):shadowlength(1)
-		end,
-		RefreshCommand=function(self)
-			self:settext("Waiting for every player to finish")
-		end,
-	},
-	LoadFont("Common Normal")..{
-		Name="Progress",
-		Text="",
-		InitCommand=function(self)
-			self:y(-46):zoom(0.54):diffuse(Color.White):shadowlength(1)
-		end,
-		RefreshCommand=function(self)
-			local summary = ITGOnline and ITGOnline.PlayStateSummary and ITGOnline:PlayStateSummary() or nil
-			if not summary then
-				self:settext("")
-				return
-			end
-			if summary.allTerminal then
-				self:settext("All players finished")
-			else
-				self:settext(string.format("%d/%d players finished", summary.terminal or 0, summary.players or 0))
-			end
-		end,
-	},
-	LoadFont("Common Normal")..{
-		Name="Sessions",
-		Text="",
-		InitCommand=function(self)
-			self:y(8):zoom(0.48):diffuse(Color.White):shadowlength(1):wrapwidthpixels(_screen.w * 1.45):vertspacing(5)
-		end,
-		RefreshCommand=function(self)
-			local summary = ITGOnline and ITGOnline.PlayStateSummary and ITGOnline:PlayStateSummary() or nil
-			if not summary then
-				self:settext("")
-				return
-			end
-
-			local lines = {}
-			for session in ivalues(summary.sessions or {}) do
-				local user = session.user or {}
-				local name = OnlineDisplayName(user, session.name or "Player")
-				local state = tostring(session.state or "pending")
-				local prefix = "…"
-				if state == "finished" then
-					prefix = "✓"
-				elseif state == "failed" or state == "returned_to_lobby" or state == "disconnected" then
-					prefix = "✖"
-				end
-				lines[#lines + 1] = prefix .. " " .. name .. " - " .. state
-			end
-			self:settext(table.concat(lines, "\n"))
-		end,
-	},
 	}
 end
 
