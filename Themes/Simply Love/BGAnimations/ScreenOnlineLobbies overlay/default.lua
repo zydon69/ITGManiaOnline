@@ -933,6 +933,9 @@ function lobby_room_summary(prefix, params)
 				.. "=" .. tostring(ready and "1" or player.readyPendingServer and "pending" or "0")
 		end
 	end
+	local rawReadyStatesCount = lobby_count(readyStates)
+	local effectiveReadyStatesCount = rawReadyStatesCount > 0 and rawReadyStatesCount or readyPlayers
+	local readyStatesSource = rawReadyStatesCount > 0 and "payload_ready_states" or "players_ready_flags"
 	local payloadSongPresent = type(payloadSong) == "table" and next(payloadSong) ~= nil
 	local uiPreviewPresent = type(joined_song_preview) == "table" and next(joined_song_preview) ~= nil
 	local songTitle = payloadSong.title
@@ -951,7 +954,9 @@ function lobby_room_summary(prefix, params)
 		.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 		.. " phase=" .. tostring(params.phase or params.roomPhase or "")
 		.. " players=" .. tostring(lobby_count(players))
-		.. " readyStatesRaw=" .. tostring(lobby_count(readyStates))
+		.. " readyStatesRaw=" .. tostring(rawReadyStatesCount)
+		.. " readyStatesEffective=" .. tostring(effectiveReadyStatesCount)
+		.. " readyStatesSource=" .. tostring(readyStatesSource)
 		.. " readyPlayers=" .. tostring(readyPlayers) .. "/" .. tostring(lobby_count(players))
 		.. " ready={" .. table.concat(readyParts, ",") .. "}"
 		.. " payloadSongPresent=" .. tostring(payloadSongPresent == true)

@@ -2454,14 +2454,25 @@ function ITGOnline:EnsureCurrentRoom(callback)
 	if callback then callback(false, nil, { errorMessage = "No current room available." }) end
 end
 
-function ITGOnline:IsCurrentUserReadyInRoom(room)
+function ITGOnline:IsCurrentUserReadyInRoom(room, phase)
 	if not room or not self.user or not room.ready_states then return false end
 	local currentUserId = tonumber(self.user.id)
 	if not currentUserId then return false end
+	local expectedPhase = tostring(phase or "")
 
 	for state in ivalues(room.ready_states or {}) do
 		local stateUserId = tonumber((state.user and state.user.id) or state.user_id)
 		if stateUserId == currentUserId then
+			if expectedPhase ~= "" then
+				local statePhase = tostring(state.phase or state.ready_phase or state.readyPhase or "")
+				if statePhase ~= expectedPhase then
+					online_flow_trace("current_user_ready_state_ignored reason=phase_mismatch"
+						.. " expected=" .. tostring(expectedPhase)
+						.. " actual=" .. tostring(statePhase)
+						.. " room=" .. tostring(room.id or self.currentRoomId or "nil"))
+					return false
+				end
+			end
 			return state.is_ready and true or false
 		end
 	end
@@ -2663,7 +2674,7 @@ function ITGOnline:PendingConfigReadyIntentMatchesRoom(room)
 	if roomKey ~= self.pendingConfigReadyIntentKey then
 		return false, "round_changed"
 	end
-	if self:IsCurrentUserReadyInRoom(room) then
+	if self:IsCurrentUserReadyInRoom(room, "config_ready") then
 		return false, "already_ready"
 	end
 	return true, "matched"
@@ -2729,7 +2740,7 @@ end
 function ITGOnline:BeginOnlineOptionsReadyDeadline(seconds, source)
 	if not self.currentRoomId or not self.currentRoom then return nil end
 	if self:NormalizeRoomPhase(self.currentRoom.phase) ~= "config" then return nil end
-	if self:IsCurrentUserReadyInRoom(self.currentRoom) then
+	if self:IsCurrentUserReadyInRoom(self.currentRoom, "config_ready") then
 		self:ClearOnlineOptionsReadyDeadline("already_ready")
 		return nil
 	end
@@ -2756,7 +2767,7 @@ function ITGOnline:OnlineOptionsReadyRemaining()
 		self:ClearOnlineOptionsReadyDeadline("stale_key")
 		return nil
 	end
-	if self.currentRoom and self:IsCurrentUserReadyInRoom(self.currentRoom) then
+	if self.currentRoom and self:IsCurrentUserReadyInRoom(self.currentRoom, "config_ready") then
 		self:ClearOnlineOptionsReadyDeadline("ready")
 		return nil
 	end
@@ -2777,7 +2788,7 @@ function ITGOnline:ExpireOnlineOptionsReady(source, callback)
 		if callback then callback(false) end
 		return
 	end
-	if self:IsCurrentUserReadyInRoom(self.currentRoom) then
+	if self:IsCurrentUserReadyInRoom(self.currentRoom, "config_ready") then
 		self:ClearOnlineOptionsReadyDeadline("expire_already_ready")
 		if callback then callback(false) end
 		return
@@ -2870,7 +2881,7 @@ function ITGOnline:MaybeAutoReadyManager(room)
 
 	local key = self:ManagerAutoReadyKey(room, readyPhase)
 	if self.managerAutoReadyCompletedKey == key then return end
-	if self:IsCurrentUserReadyInRoom(room) then
+	if self:IsCurrentUserReadyInRoom(room, readyPhase) then
 		self.managerAutoReadyCompletedKey = key
 		online_trace("manager_auto_ready skipped: already ready [" .. key .. "]")
 		return
@@ -3499,7 +3510,7 @@ function ITGOnline:NormalizeRoomSnapshot(room, previousRoom, source)
 			.. " selected_song=" .. tostring(preservedSelectedSong)
 			.. " global_options=" .. tostring(preservedGlobalOptions)
 			.. " play_state=" .. tostring(preservedPlayState)
-			.. " previousRoundKey=" .. tostring(compute_room_round_key(previousRoom))
+			.. " previousRoundKey=" .. tostring(self:RoomSongRoundKey(previousRoom))
 			.. " incomingMembers=" .. tostring(#incomingMembers)
 			.. " previousMembers=" .. tostring(#previousMembers))
 	end
@@ -3580,7 +3591,7 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 		return
 	end
 
-	if self:IsCurrentUserReadyInRoom(room) then
+	if self:IsCurrentUserReadyInRoom(room, "lobby_ready") then
 		if self.songSelectedAutoReadyCompletedKey ~= key then
 			online_flow_trace("song_selected_auto_ready_completed_by_snapshot source=" .. tostring(source or "unknown")
 				.. " key=" .. tostring(key)
@@ -3833,7 +3844,7 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		self:ClearOptimisticConfigReady("room_snapshot_" .. tostring(room.phase or "unknown"))
 	elseif self.optimisticConfigReadyKey ~= "" and self.optimisticConfigReadyKey ~= self:RoomOnlineOptionsReadyKey(room) then
 		self:ClearOptimisticConfigReady("room_snapshot_config_round_changed")
-	elseif self:IsCurrentUserReadyInRoom(room) then
+	elseif self:IsCurrentUserReadyInRoom(room, "config_ready") then
 		local readyKey = self:OnlineOptionsReadyKey()
 		self.configReadyInFlight = false
 		self.configReadyInFlightByKey = {}
@@ -7366,7 +7377,7 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 		and lastResult.ok == true
 		and (nowTs - (tonumber(lastResult.at) or 0)) <= (tonumber(self.readyRequestReplayWindowSeconds) or 1.0)
 		and self.currentRoom
-		and self:IsCurrentUserReadyInRoom(self.currentRoom) then
+		and self:IsCurrentUserReadyInRoom(self.currentRoom, phase) then
 		online_flow_trace("ready_request_replayed_success key=" .. tostring(requestKey)
 			.. " age=" .. tostring(nowTs - (tonumber(lastResult.at) or 0))
 			.. " phase=" .. tostring(phase)
@@ -7636,17 +7647,15 @@ function ITGOnline:MarkConfigReady(callback)
 					return
 				end
 
-				self:SetReady("lobby_ready", true, function(readyOk, readyDecoded, readyResponse)
-					if readyOk and readyDecoded and readyDecoded.room then
-						MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or readyDecoded.room))
-						finish(true, readyDecoded or availabilityDecoded or fetchDecoded, readyResponse or availabilityResponse)
-						return
-					end
-					finish(false, readyDecoded or availabilityDecoded or fetchDecoded, readyResponse or {
-						errorMessage = "Waiting for room config phase.",
-						retryAfter = 1,
-					})
-				end)
+				online_flow_trace("config_ready_queued_until_config key=" .. tostring(requestKey)
+					.. " phase=" .. tostring(room.phase)
+					.. " pendingKey=" .. tostring(self.pendingConfigReadyIntentKey or ""))
+				self:FetchCurrentRoomFallback("config_ready_waiting_for_config_phase", 0.25)
+				finish(false, availabilityDecoded or fetchDecoded, {
+					errorMessage = "Waiting for room config phase.",
+					retryAfter = 0.5,
+					deferred = true,
+				})
 			end)
 		else
 			online_flow_trace("config_ready_path_unknown_phase key=" .. tostring(requestKey)
@@ -8737,13 +8746,15 @@ function ITGOnline:ReconcileCurrentRoomFromLobbyPayload(decoded, source)
 						.. " incomingPhase=" .. tostring(room.phase)
 						.. " currentPhase=" .. tostring(self.currentRoom.phase or "nil"))
 				end
-				local applied = self:ApplyRoomSnapshot(room, "lobby_refresh_current_room:" .. tostring(source))
-				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(applied or room))
-				self:BroadcastLeaderboardFromRoom(applied or room, "lobby_refresh_current_room:" .. tostring(source))
-				if type(self.EnforceRoomPhaseScreen) == "function" then
-					self:EnforceRoomPhaseScreen()
-				end
-				self:FetchCurrentRoomFallback("lobby_refresh_current_room_match", 0.75)
+				online_flow_trace("current_room_lobby_reconcile_skipped_apply reason=lobby_payload_not_authoritative"
+					.. " source=" .. tostring(source)
+					.. " room=" .. wantedRoomId
+					.. " phase=" .. tostring(room.phase)
+					.. " selectedAt=" .. tostring(selectedAt)
+					.. " members=" .. tostring(type(room.members) == "table" and #room.members or 0)
+					.. " readyStates=" .. tostring(type(room.ready_states) == "table" and #room.ready_states or 0)
+					.. " currentPhase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+				self:FetchCurrentRoomFallback("lobby_refresh_current_room_match", 0.25)
 				return true
 			end
 		end
