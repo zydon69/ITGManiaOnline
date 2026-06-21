@@ -7449,6 +7449,9 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 		self.readyRequestInFlight[requestKey] = nil
 		local liveRoomId = tostring(self.currentRoomId or "")
 		local livePhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+		local errorCode = decoded and decoded.error_code
+		local phaseNotAccepting = errorCode == "room_phase_not_accepting"
+			or tostring(errorCode or ""):match("^room_phase_not_accepting") ~= nil
 		if liveRoomId ~= requestRoomId or (livePhase ~= "unknown" and livePhase ~= requestPhase) then
 			online_flow_trace("ready_request_response_dropped reason=context_changed"
 				.. " key=" .. tostring(requestKey)
@@ -7457,7 +7460,18 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 				.. " liveRoom=" .. tostring(liveRoomId)
 				.. " requestPhase=" .. tostring(requestPhase)
 				.. " livePhase=" .. tostring(livePhase)
+				.. " error=" .. tostring(errorCode or response and response.errorMessage or "nil")
 				.. " callbacks=" .. tostring(callbacks and #callbacks or 0))
+			if phaseNotAccepting and self.currentRoomId then
+				online_flow_trace("ready_request_context_changed_reconcile"
+					.. " key=" .. tostring(requestKey)
+					.. " requestedPhase=" .. tostring(phase)
+					.. " requestRoom=" .. tostring(requestRoomId)
+					.. " liveRoom=" .. tostring(liveRoomId)
+					.. " livePhase=" .. tostring(livePhase)
+					.. " error=" .. tostring(errorCode))
+				self:FetchCurrentRoomFallback("ready_context_changed_phase_not_accepting", 0)
+			end
 			for cb in ivalues(callbacks) do
 				cb(false, {
 					room = self.currentRoom,
@@ -7476,11 +7490,26 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 			end
 		end
 		local roomPhase = decoded and decoded.room and decoded.room.phase
-		local errorCode = decoded and decoded.error_code
 		if not ok and isReady and (errorCode == "room_members_song_not_confirmed" or errorCode == "room_member_song_not_confirmed") then
 			self.readyRequestBlockedErrors[requestKey] = GetTimeSinceStart() + (tonumber(self.readyRequestBlockedRetrySeconds) or 2.5)
 		elseif errorCode ~= "room_members_song_not_confirmed" and errorCode ~= "room_member_song_not_confirmed" then
 			self.readyRequestBlockedErrors[requestKey] = nil
+		end
+		if not ok and phaseNotAccepting then
+			online_flow_trace("ready_request_phase_not_accepting_reconcile"
+				.. " key=" .. tostring(requestKey)
+				.. " requestedPhase=" .. tostring(phase)
+				.. " requestRoom=" .. tostring(requestRoomId)
+				.. " localPhase=" .. tostring(currentPhase)
+				.. " livePhase=" .. tostring(livePhase)
+				.. " serverRoomPhase=" .. tostring(roomPhase or "nil")
+				.. " status=" .. tostring(response and response.statusCode or "nil"))
+			if phase == "config_ready" then
+				self:ClearOptimisticConfigReady("ready_phase_not_accepting")
+				self:ClearOnlineOptionsReadyDeadline("ready_phase_not_accepting")
+				self:ClearPendingConfigReadyIntent("ready_phase_not_accepting")
+			end
+			self:FetchCurrentRoomFallback("ready_phase_not_accepting", 0)
 		end
 		if self.debugReadyFlow == true then
 			online_trace("[ITGOnline] ready_response room=" .. tostring(self.currentRoomId)
@@ -8804,6 +8833,25 @@ function ITGOnline:PurgeStaleLobbyCandidate(roomId, reason)
 	return removed
 end
 
+function ITGOnline:ShouldSuppressLobbyCandidate(roomId, reason)
+	local roomKey = self:RoomKey(roomId)
+	if roomKey == "" then
+		return false
+	end
+
+	local deleted = self.deletedRoomIds and self.deletedRoomIds[roomKey] == true
+	local ignored = self:ShouldIgnoreRoomEvents(roomKey)
+	local suppressed = deleted or ignored
+	if suppressed then
+		online_flow_trace("lobby_candidate_suppressed"
+			.. " room=" .. tostring(roomKey)
+			.. " reason=" .. tostring(reason or "unknown")
+			.. " deleted=" .. tostring(deleted == true)
+			.. " ignored=" .. tostring(ignored == true))
+	end
+	return suppressed
+end
+
 	function ITGOnline:QueueLobbyRefresh(options)
 		options = type(options) == "table" and options or {}
 		local ignoreSuppression = options.ignoreSuppression == true
@@ -8811,7 +8859,7 @@ end
 		local refreshScreen = tostring(self.currentScreenName or "nil")
 		local refreshIsGameplay = self:IsOnlineGameplayScreen(refreshScreen)
 		local now = GetTimeSinceStart()
-		if self.currentRoomId == nil and self:IsPostLeaveLobbyRefreshReason(refreshReason) then
+		if self.currentRoomId == nil and not ignoreSuppression and self:IsPostLeaveLobbyRefreshReason(refreshReason) then
 			local lastPostLeaveAt = tonumber(self.lastPostLeaveLobbyRefreshAt) or 0
 			if refreshReason == "leave_room_confirmed" or lastPostLeaveAt <= 0 then
 				self.lastPostLeaveLobbyRefreshAt = now
@@ -9850,18 +9898,31 @@ end
 			elseif name == "lobby.updated" then
 				local lobbyUpdateReason = tostring(payload.reason or "lobby.updated")
 				local hasUserPayload = type(payload.user) == "table"
+				local lobbyRoomId = payload.room_id or payload.roomId or (payload.room and payload.room.id)
 				online_flow_trace("lobby_updated_event begin hasLobbyPayload=" .. tostring(type(payload) == "table")
 					.. " reason=" .. lobbyUpdateReason
 					.. " userId=" .. tostring(payload.user_id or "nil")
-					.. " roomId=" .. tostring(payload.room_id or "nil")
+					.. " roomId=" .. tostring(lobbyRoomId or "nil")
 					.. " hasUser=" .. tostring(hasUserPayload == true))
+				if lobbyUpdateReason == "room.deleted" and lobbyRoomId then
+					local roomKey = self:RoomKey(lobbyRoomId)
+					self.deletedRoomIds = self.deletedRoomIds or {}
+					self.deletedRoomIds[roomKey] = true
+					self:IgnoreRoomEvents(roomKey, 30)
+					online_flow_trace("lobby_updated_room_deleted_marked"
+						.. " room=" .. tostring(roomKey)
+						.. " reason=" .. lobbyUpdateReason)
+					if self.PurgeStaleLobbyCandidate then
+						self:PurgeStaleLobbyCandidate(roomKey, "lobby_updated_room_deleted")
+					end
+				end
 				local appliedPresence = false
 				if hasUserPayload then
 					appliedPresence = self:ApplyLobbyPresencePayload(payload)
 				else
 					online_flow_trace("lobby_updated_event presence_skipped reason=room_or_lobby_event_without_user"
 						.. " updateReason=" .. lobbyUpdateReason
-						.. " roomId=" .. tostring(payload.room_id or "nil"))
+						.. " roomId=" .. tostring(lobbyRoomId or "nil"))
 				end
 				online_flow_trace("lobby_updated_event presence_applied=" .. tostring(appliedPresence == true)
 					.. " cachedLobbies=" .. tostring(self.cachedLobbySearchPayload and self.cachedLobbySearchPayload.lobbies and #self.cachedLobbySearchPayload.lobbies or 0)
@@ -10296,18 +10357,28 @@ function ITGOnline:LobbySearchPayload(decoded)
 
 	if decoded and decoded.public_rooms ~= nil then
 		for room in ivalues(decoded.public_rooms or {}) do
-			lobbies[#lobbies + 1] = {
-				code = tostring(room.id),
-				roomId = room.id,
-				name = room.name,
-				playerCount = room.members_count or 0,
-				phase = room.phase,
-				acceptsNewMembers = room.accepts_new_members == true,
-			}
+			local roomId = room and (room.id or room.room_id or room.roomId or room.code)
+			if self:ShouldSuppressLobbyCandidate(roomId, "decoded_lobby_payload") then
+				online_flow_trace("lobby_search_room_filtered source=decoded room=" .. tostring(roomId or "nil"))
+			else
+				lobbies[#lobbies + 1] = {
+					code = tostring(room.id),
+					roomId = room.id,
+					name = room.name,
+					playerCount = room.members_count or 0,
+					phase = room.phase,
+					acceptsNewMembers = room.accepts_new_members == true,
+				}
+			end
 		end
 	else
 		for lobby in ivalues(cachedPayload.lobbies or {}) do
-			lobbies[#lobbies + 1] = lobby
+			local roomId = lobby and (lobby.roomId or lobby.code or lobby.id)
+			if self:ShouldSuppressLobbyCandidate(roomId, "cached_lobby_payload") then
+				online_flow_trace("lobby_search_room_filtered source=cache room=" .. tostring(roomId or "nil"))
+			else
+				lobbies[#lobbies + 1] = lobby
+			end
 		end
 	end
 

@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.20)
 
 project(StepMania)
 
+if(POLICY CMP0177)
+  cmake_policy(SET CMP0177 NEW)
+endif()
+
 include(CTest)
 
 include(StepmaniaCore.cmake)

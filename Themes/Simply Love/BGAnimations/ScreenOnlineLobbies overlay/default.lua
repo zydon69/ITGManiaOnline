@@ -318,6 +318,71 @@ function ScreenOnlineLobbiesRemoveLobbyCandidateByCode(code)
 	return removed
 end
 
+local function mark_recently_left_lobby_code(code, reason)
+	code = tostring(code or "")
+	if code == "" then
+		return
+	end
+
+	SL.Global.Online = SL.Global.Online or {}
+	SL.Global.Online.ScreenOnlineLobbiesRecentlyLeftCodes = SL.Global.Online.ScreenOnlineLobbiesRecentlyLeftCodes or {}
+	SL.Global.Online.ScreenOnlineLobbiesRecentlyLeftCodes[code] = GetTimeSinceStart() + 12
+	lobby_flow_trace("recently_left_lobby_code_marked"
+		.. " code=" .. tostring(code)
+		.. " reason=" .. tostring(reason or "unknown"))
+end
+
+local function is_recently_left_lobby_code(code)
+	code = tostring(code or "")
+	if code == "" then
+		return false
+	end
+
+	local recentlyLeft = SL.Global.Online and SL.Global.Online.ScreenOnlineLobbiesRecentlyLeftCodes or nil
+	if type(recentlyLeft) ~= "table" then
+		return false
+	end
+
+	local expiresAt = tonumber(recentlyLeft[code]) or 0
+	if expiresAt <= 0 then
+		return false
+	end
+
+	if GetTimeSinceStart() >= expiresAt then
+		recentlyLeft[code] = nil
+		lobby_flow_trace("recently_left_lobby_code_expired code=" .. tostring(code))
+		return false
+	end
+
+	return true
+end
+
+local function filter_recently_left_lobby_candidates(incoming, reason)
+	if type(incoming) ~= "table" then
+		return {}
+	end
+
+	local filtered = {}
+	local removed = 0
+	for _, room in ipairs(incoming) do
+		local code = tostring(room and (room.code or room.roomId or room.id) or "")
+		if is_recently_left_lobby_code(code) then
+			removed = removed + 1
+		else
+			filtered[#filtered + 1] = room
+		end
+	end
+
+	if removed > 0 then
+		lobby_flow_trace("LobbySearched_filtered_recently_left"
+			.. " removed=" .. tostring(removed)
+			.. " remaining=" .. tostring(#filtered)
+			.. " reason=" .. tostring(reason or "unknown"))
+	end
+
+	return filtered
+end
+
 SL.Global.Online.PackChoiceRecovery = SL.Global.Online.PackChoiceRecovery or {}
 if type(SL.Global.Online.PackChoiceRecovery.candidates) == "table" then
 	pack_choice_last_candidates = SL.Global.Online.PackChoiceRecovery.candidates
@@ -589,6 +654,7 @@ end
 			ITGOnline.PackSync:ResetLocalState("lobby_left")
 			lobby_flow_trace("finish_leave_lobby_packsync_reset_end")
 		end
+		mark_recently_left_lobby_code(departed_lobby_code, "finish_leave_lobby")
 		if root then
 			lobby_flow_trace("finish_leave_lobby_ui_update_begin")
 			local joinedContent = root:GetChild("JoinedLobbyContent")
@@ -3966,7 +4032,7 @@ local af = Def.ActorFrame{
 						lobby_flow_trace("LobbySearched_ignored reason=inactive_overlay")
 						return
 					end
-					candidates = params and params.lobbies or {}
+					candidates = filter_recently_left_lobby_candidates(params and params.lobbies or {}, "LobbySearched")
 				online_users = params and params.onlinePlayers or {}
 				lobby_flow_trace("LobbySearched_received lobbies=" .. tostring(#candidates)
 					.. " onlinePlayers=" .. tostring(#online_users)

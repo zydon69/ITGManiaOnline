@@ -15,7 +15,15 @@ if(APPLE)
   )
 endif()
 
-sm_get_forwarded_toolchain_args(JPEG_FORWARD_ARGS)
+sm_get_forwarded_toolchain_args(JPEG_FORWARD_ARGS C)
+
+find_program(SM_NASM_EXECUTABLE NAMES nasm)
+find_program(SM_YASM_EXECUTABLE NAMES yasm)
+if(NOT SM_NASM_EXECUTABLE AND NOT SM_YASM_EXECUTABLE)
+  set(JPEG_SIMD_ARGS -DWITH_SIMD=OFF)
+else()
+  set(JPEG_SIMD_ARGS)
+endif()
 
 include(ExternalProject)
 ExternalProject_Add(
@@ -30,6 +38,7 @@ ExternalProject_Add(
              -DENABLE_STATIC=ON
              -DWITH_TOOLS=OFF
              -DWITH_TESTS=OFF
+             ${JPEG_SIMD_ARGS}
              ${JPEG_FORWARD_ARGS}
              ${ARCH_FLAGS}
   BUILD_IN_SOURCE OFF
