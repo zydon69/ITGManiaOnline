@@ -1334,8 +1334,27 @@ end
 pack_sync_busy = function()
 	if not (ITGOnline and ITGOnline.PackSync) then return false end
 	if trim_text(ITGOnline.PackSync.downloadInFlightKey) ~= "" then return true end
+	if ITGOnline.PackSync.activeBrowseOnlyDownload == true then return true end
+	if ITGOnline.PackSync.pendingPostReloadSongInfo ~= nil then return true end
 	local status = trim_text(ITGOnline.PackSync.currentStatus)
 	return status == "download_requested" or status == "download_in_progress" or status == "reloading_songs"
+end
+
+local function lobby_song_selected_at(songInfo)
+	return trim_text(songInfo and (songInfo.selectedAt or songInfo.selected_at))
+end
+
+local function current_room_selected_song_info()
+	return ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song or nil
+end
+
+local function song_info_matches_current_room_selection(songInfo)
+	local songSelectedAt = lobby_song_selected_at(songInfo)
+	local roomSelectedAt = lobby_song_selected_at(current_room_selected_song_info())
+	if songSelectedAt == "" or roomSelectedAt == "" then
+		return false
+	end
+	return songSelectedAt == roomSelectedAt
 end
 
 function can_download_browsed_pack()
@@ -1353,11 +1372,16 @@ function can_download_browsed_pack()
 			.. " roomPhase=" .. tostring(roomPhase))
 		return false
 	end
+	if pack_sync_busy() then
+		lobby_flow_trace("can_download_browsed_pack false reason=pack_sync_busy"
+			.. " status=" .. tostring(ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.currentStatus or "nil")
+			.. " key=" .. tostring(ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.downloadInFlightKey or "nil"))
+		return false
+	end
 	local result = joined_preview_unknown_pack
 		and not joined_song_confirmed
 		and not joined_missing_song
 		and joined_song_preview ~= nil
-		and not pack_sync_busy()
 	lobby_flow_trace("can_download_browsed_pack result=" .. tostring(result == true)
 		.. " unknownPack=" .. tostring(joined_preview_unknown_pack == true)
 		.. " songConfirmed=" .. tostring(joined_song_confirmed == true)
@@ -1380,8 +1404,8 @@ function show_pack_download_button()
 		lobby_flow_trace("show_pack_download_button false reason=room_results")
 		return false
 	end
-	local canDownloadBrowse = can_download_browsed_pack()
 	local busy = pack_sync_busy()
+	local canDownloadBrowse = busy and false or can_download_browsed_pack()
 	local result = joined_missing_song or canDownloadBrowse or busy
 	lobby_flow_trace("show_pack_download_button result=" .. tostring(result == true)
 		.. " missingSong=" .. tostring(joined_missing_song == true)
@@ -1591,7 +1615,7 @@ function joined_button_indices()
 	if joined_is_manager and joined_phase_allows_song_selection() then
 		indices[#indices + 1] = 4
 	end
-	if not pack_sync_busy() and (joined_missing_song or can_download_browsed_pack()) then
+	if show_pack_download_button() then
 		indices[#indices + 1] = 3
 	end
 	if joined_room_can_start() then
@@ -2773,8 +2797,18 @@ local function handle_joined_mode_input(event)
 				topScreen:SetNextScreenName("ScreenSelectMusic")
 				topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 			end
-		elseif joined_active_index == 3 and (joined_missing_song or can_download_browsed_pack()) then
-			if can_download_browsed_pack() then
+		elseif joined_active_index == 3 and show_pack_download_button() then
+			if pack_sync_busy() then
+				lobby_flow_trace("input_joined_download_pack_blocked reason=pack_sync_busy"
+					.. " status=" .. tostring(ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.currentStatus or "nil")
+					.. " key=" .. tostring(ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.downloadInFlightKey or "nil"))
+				t:playcommand("SetStatus", {
+					text="Telechargement du pack en cours...",
+					showSpinner=true,
+					showPrompt=false
+				})
+				return false
+			elseif can_download_browsed_pack() then
 				open_browse_pack_download_confirm(joined_song_preview)
 			elseif joined_can_download_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadSelectedPack then
 				ITGOnline.PackSync:DownloadSelectedPack(joined_missing_song_info or joined_song_preview, function(ok, message)
@@ -4299,6 +4333,17 @@ local af = Def.ActorFrame{
 						.. " reasonParam=" .. tostring(params and params.reason or "nil"))
 					return
 				end
+				local incomingSongInfo = params and params.songInfo or joined_song_preview
+				if not song_info_matches_current_room_selection(incomingSongInfo) then
+					lobby_flow_trace("OnlineMissingSong_ignored reason=stale_or_no_active_selection"
+						.. " reasonParam=" .. tostring(params and params.reason or "nil")
+						.. " incomingSelectedAt=" .. tostring(lobby_song_selected_at(incomingSongInfo))
+						.. " roomSelectedAt=" .. tostring(lobby_song_selected_at(current_room_selected_song_info()))
+						.. " incomingPack=" .. tostring(incomingSongInfo and song_info_pack(incomingSongInfo) or "")
+						.. " roomPack=" .. tostring(current_room_selected_song_info() and song_info_pack(current_room_selected_song_info()) or "")
+						.. " phase=" .. tostring(joined_phase))
+					return
+				end
 				if normalized_online_phase(joined_phase) == "results"
 					or (ITGOnline and ITGOnline.currentRoom and normalized_online_phase(ITGOnline.currentRoom.phase) == "results") then
 					lobby_flow_trace("OnlineMissingSong_ignored reason=results_phase"
@@ -4318,7 +4363,7 @@ local af = Def.ActorFrame{
 					.. " joined_code=" .. tostring(joined_lobby_code)
 					.. " phase=" .. tostring(joined_phase))
 				joined_missing_song = true
-			joined_missing_song_info = params and params.songInfo or joined_song_preview
+			joined_missing_song_info = incomingSongInfo
 			joined_missing_song_reason = params and params.reason or "missing_local_song"
 			joined_can_download_pack = params and (
 				params.noCompatibleChart == true
@@ -4382,24 +4427,31 @@ local af = Def.ActorFrame{
 			self:queuecommand("UpdateJoinedLobbyText")
 			self:queuecommand("Hover")
 		end,
-			OnlineSongAvailableMessageCommand=function(self)
+			OnlineSongAvailableMessageCommand=function(self, params)
 				if not is_active_lobby_overlay() then
 					lobby_flow_trace("OnlineSongAvailable_ignored reason=inactive_overlay")
 					return
 				end
 				local wasMissing = joined_missing_song
+				local availabilitySongInfo = params and params.songInfo or joined_missing_song_info or joined_song_preview
+				local canReportAvailability = song_info_matches_current_room_selection(availabilitySongInfo)
 			lobby_flow_trace("OnlineSongAvailable_received wasMissing=" .. tostring(wasMissing)
 				.. " mode=" .. tostring(mode)
 				.. " joined_code=" .. tostring(joined_lobby_code)
 				.. " phase=" .. tostring(joined_phase)
-				.. " currentPreviewPack=" .. tostring(joined_song_preview and song_info_pack(joined_song_preview) or ""))
+				.. " currentPreviewPack=" .. tostring(joined_song_preview and song_info_pack(joined_song_preview) or "")
+				.. " incomingSelectedAt=" .. tostring(lobby_song_selected_at(availabilitySongInfo))
+				.. " roomSelectedAt=" .. tostring(lobby_song_selected_at(current_room_selected_song_info()))
+				.. " canReportAvailability=" .. tostring(canReportAvailability == true))
 			joined_missing_song = false
 			joined_missing_song_info = nil
 			joined_can_download_pack = false
 			joined_missing_song_reason = nil
-			if wasMissing and ITGOnline and ITGOnline.ReportSongAvailability then
+			if wasMissing and canReportAvailability and ITGOnline and ITGOnline.ReportSongAvailability then
 				lobby_flow_trace("OnlineSongAvailable_report_availability missing=false reason=reloaded")
 				ITGOnline:ReportSongAvailability(false, "reloaded")
+			elseif wasMissing and not canReportAvailability then
+				lobby_flow_trace("OnlineSongAvailable_report_skipped reason=stale_or_no_active_selection")
 			end
 			normalize_joined_active_index()
 			lobby_flow_trace("OnlineSongAvailable_update_ui")

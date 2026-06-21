@@ -262,6 +262,14 @@ function selected_at(songInfo)
 	return trim(songInfo and (songInfo.selectedAt or songInfo.selected_at))
 end
 
+local function current_room_selected_song()
+	return ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song or nil
+end
+
+local function current_room_selected_at()
+	return selected_at(current_room_selected_song())
+end
+
 local function split_path_segments(path)
 	local segments = {}
 	for segment in tostring(path or ""):gmatch("[^/]+") do
@@ -670,6 +678,40 @@ function PackSync:PackExists(packName)
 	return rootExists
 end
 
+function PackSync:SongInfoMatchesCurrentSelection(songInfo)
+	local songSelectedAt = selected_at(songInfo)
+	local roomSelectedAt = current_room_selected_at()
+	if songSelectedAt == "" or roomSelectedAt == "" then
+		return false
+	end
+	return songSelectedAt == roomSelectedAt
+end
+
+function PackSync:SelectedAtForStatusPost(status, songInfo)
+	local songSelectedAt = selected_at(songInfo)
+	if songSelectedAt == "" then
+		return ""
+	end
+
+	local roomSelectedAt = current_room_selected_at()
+	if roomSelectedAt == "" then
+		trace("Status selected_at stripped reason=no_active_room_selection"
+			.. " status=" .. tostring(status)
+			.. " songSelectedAt=" .. tostring(songSelectedAt))
+		return ""
+	end
+	if roomSelectedAt ~= songSelectedAt then
+		trace("Status selected_at stripped reason=stale_selection"
+			.. " status=" .. tostring(status)
+			.. " songSelectedAt=" .. tostring(songSelectedAt)
+			.. " roomSelectedAt=" .. tostring(roomSelectedAt)
+			.. " title=" .. tostring(selected_title(songInfo))
+			.. " roomTitle=" .. tostring(selected_title(current_room_selected_song())))
+		return ""
+	end
+	return songSelectedAt
+end
+
 function PackSync:UpdateStatus(status, message, progress, callback, options)
 	status = tostring(status or self.status.Unknown)
 	message = status_message(message)
@@ -686,7 +728,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	self.currentStatus = status
 	self.currentStatusMessage = message
 	self.statusChangedAt = GetTimeSinceStart()
-	local currentSelectedAt = selected_at(self.currentSongInfo)
+	local currentSelectedAt = self:SelectedAtForStatusPost(status, self.currentSongInfo)
 	if self.lastSelectedAt ~= currentSelectedAt then
 		self.sequence = 0
 		self.lastSelectedAt = currentSelectedAt
@@ -1129,7 +1171,7 @@ function PackSync:FindLocalMatch(songInfo)
 	end
 
 	self.currentSongInfo = songInfo
-	if self:IsActiveDownload() then
+	if self:IsActiveDownload() and self.validatingPostReload ~= true then
 		trace("Skipping local chart status scan during active download title=" .. selected_title(songInfo))
 		return { ok = false, status = "download_in_progress", reason = "download_in_progress" }
 	end
@@ -1905,8 +1947,13 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		if browseOnly then self.activeBrowseOnlyDownload = false end
 		self:UpdateStatus(self.status.DownloadFailed, message)
 		remove_directory_if_possible(quarantinePath)
-		if not browseOnly and broadcastMissing ~= false and MESSAGEMAN then
+		if not browseOnly and broadcastMissing ~= false and MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
 			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
+		elseif not browseOnly and broadcastMissing ~= false then
+			trace("Download failure missing broadcast skipped reason=stale_or_no_active_selection"
+				.. " pack=" .. tostring(packName)
+				.. " selectedAt=" .. tostring(selected_at(songInfo))
+				.. " roomSelectedAt=" .. tostring(current_room_selected_at()))
 		end
 		if callback then callback(false, message) end
 	end
@@ -2361,7 +2408,9 @@ function PackSync:ValidatePendingPostReload()
 	if quarantinePath and quarantinePath ~= "" then
 		log_dir_listing("PostReload quarantine", quarantinePath)
 	end
+	self.validatingPostReload = true
 	local result = self:FindLocalMatch(songInfo)
+	self.validatingPostReload = false
 	trace("PostReload local match result ok=" .. tostring(result and result.ok == true)
 		.. " status=" .. tostring(result and result.status or "nil")
 		.. " reason=" .. tostring(result and result.reason or "nil")
@@ -2373,7 +2422,9 @@ function PackSync:ValidatePendingPostReload()
 			remove_directory_if_possible(quarantinePath)
 			self:UnmarkPackInstalled(packName, "selected_chart_not_in_downloaded_pack")
 			self:UpdateStatus(self.status.DownloadFailed, "Le pack téléchargé ne contient pas la stepchart attendue.")
-			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
+			if MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
+				MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
+			end
 			return false
 		end
 		set_current_selection(result.song, result.steps)
@@ -2428,18 +2479,26 @@ function PackSync:ValidatePendingPostReload()
 		self:UpdateStatus(self.status.ChartMismatch, "La musique ou la stepchart trouvée est différente de celle du manager.")
 		remove_directory_if_possible(quarantinePath)
 		self:UnmarkPackInstalled(packName, "chart_mismatch")
-		if ITGOnline and ITGOnline.ReportSongAvailability then
+		if ITGOnline and ITGOnline.ReportSongAvailability and self:SongInfoMatchesCurrentSelection(songInfo) then
 			ITGOnline:ReportSongAvailability(true, "chart_mismatch")
 		end
-		MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "chart_mismatch", chartMismatch = true })
+		if MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
+			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "chart_mismatch", chartMismatch = true })
+		end
 	else
 		self:UpdateStatus(self.status.DownloadFailed, "La chanson est introuvable après reload.")
 		remove_directory_if_possible(quarantinePath)
 		self:UnmarkPackInstalled(packName, "downloaded_song_missing_after_reload")
-		if ITGOnline and ITGOnline.ReportSongAvailability then
+		if ITGOnline and ITGOnline.ReportSongAvailability and self:SongInfoMatchesCurrentSelection(songInfo) then
 			ITGOnline:ReportSongAvailability(true, "download_failed")
 		end
-		MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
+		if MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
+			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
+		else
+			trace("PostReload missing broadcast skipped reason=stale_or_no_active_selection"
+				.. " selectedAt=" .. tostring(selected_at(songInfo))
+				.. " roomSelectedAt=" .. tostring(current_room_selected_at()))
+		end
 	end
 	return false
 end
