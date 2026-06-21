@@ -9,7 +9,7 @@ ITGOnline = ITGOnline or {}
 ITGOnline.PackSync = ITGOnline.PackSync or {}
 
 local PackSync = ITGOnline.PackSync
-PackSync.scriptVersion = "2026-06-21-pack-status-selection-binding-v1"
+PackSync.scriptVersion = "2026-06-21-pack-status-download-sequence-v2"
 PackSync.statusChangedAt = PackSync.statusChangedAt or 0
 PackSync.currentStatusMessage = PackSync.currentStatusMessage or nil
 PackSync.watchdogLastKey = PackSync.watchdogLastKey or ""
@@ -19,6 +19,8 @@ PackSync.installedPackNames = PackSync.installedPackNames or {}
 PackSync.browsePreviewPackKey = PackSync.browsePreviewPackKey or ""
 PackSync.downloadedPackKey = PackSync.downloadedPackKey or ""
 PackSync.downloadGeneration = tonumber(PackSync.downloadGeneration) or 0
+PackSync.downloadStatusSequence = tonumber(PackSync.downloadStatusSequence) or 0
+PackSync.activeDownloadId = PackSync.activeDownloadId or ""
 PackSync.localScanCache = PackSync.localScanCache or {}
 PackSync.lastPostedStatusSignature = PackSync.lastPostedStatusSignature or ""
 PackSync.lastPostedStatusAt = tonumber(PackSync.lastPostedStatusAt) or 0
@@ -77,6 +79,15 @@ function PackSync:IsActiveDownload()
 		or early_trim(self.downloadInFlightKey) ~= ""
 		or self.activeBrowseOnlyDownload == true
 		or self.pendingPostReloadSongInfo ~= nil
+end
+
+function PackSync:UsesDownloadStatusSequence(status)
+	status = tostring(status or "")
+	return status == self.status.DownloadRequested
+		or status == self.status.DownloadInProgress
+		or status == self.status.ReloadingSongs
+		or status == self.status.DownloadedOk
+		or status == self.status.DownloadFailed
 end
 
 function PackSync:ShouldPreserveActiveDownloadDuringReset(reason)
@@ -162,8 +173,12 @@ end
 
 function PackSync:NextDownloadGeneration(reason)
 	self.downloadGeneration = (tonumber(self.downloadGeneration) or 0) + 1
+	self.downloadStatusSequence = math.max(tonumber(self.downloadStatusSequence) or 0, tonumber(self.sequence) or 0)
+	self.activeDownloadId = tostring(self.downloadGeneration) .. ":" .. tostring(math.floor(((GetTimeSinceStart and GetTimeSinceStart()) or 0) * 1000))
 	trace("Download generation advanced generation=" .. tostring(self.downloadGeneration)
-		.. " reason=" .. tostring(reason or "unknown"))
+		.. " reason=" .. tostring(reason or "unknown")
+		.. " activeDownloadId=" .. tostring(self.activeDownloadId)
+		.. " downloadStatusSequence=" .. tostring(self.downloadStatusSequence))
 	return self.downloadGeneration
 end
 
@@ -192,12 +207,14 @@ function PackSync:SyncSequenceFromRoomPayload(room, currentSelectedAt, reason)
 		local memberUserId = tostring(user.id or member.user_id or "")
 		if memberUserId == currentUserId then
 			local serverSequence = tonumber(member.pack_sync_sequence)
-			if serverSequence and serverSequence > (tonumber(self.sequence) or 0) then
+			if serverSequence and serverSequence > math.max(tonumber(self.sequence) or 0, tonumber(self.downloadStatusSequence) or 0) then
 				trace("Pack sync sequence adopted source=" .. tostring(reason or "unknown")
 					.. " local=" .. tostring(self.sequence or "nil")
+					.. " downloadLocal=" .. tostring(self.downloadStatusSequence or "nil")
 					.. " server=" .. tostring(serverSequence)
 					.. " selected_at=" .. tostring(currentSelectedAt or ""))
 				self.sequence = serverSequence
+				self.downloadStatusSequence = math.max(tonumber(self.downloadStatusSequence) or 0, serverSequence)
 				return true
 			end
 			return false
@@ -794,14 +811,22 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	self.statusChangedAt = GetTimeSinceStart()
 	self.currentSongInfo = with_current_room_selection(self.currentSongInfo, "status:" .. tostring(status))
 	local currentSelectedAt = self:SelectedAtForStatusPost(status, self.currentSongInfo)
-	if self.lastSelectedAt ~= currentSelectedAt then
+	local usesDownloadSequence = self:UsesDownloadStatusSequence(status)
+	if not usesDownloadSequence and self.lastSelectedAt ~= currentSelectedAt then
 		self.sequence = 0
 		self.lastSelectedAt = currentSelectedAt
 	end
 
 	self:SyncSequenceFromRoom(currentSelectedAt)
-	self.sequence = (tonumber(self.sequence) or 0) + 1
-	local requestSequence = tonumber(self.sequence) or 0
+	local requestSequence = 0
+	if usesDownloadSequence then
+		self.downloadStatusSequence = math.max(tonumber(self.downloadStatusSequence) or 0, tonumber(self.sequence) or 0) + 1
+		self.sequence = math.max(tonumber(self.sequence) or 0, tonumber(self.downloadStatusSequence) or 0)
+		requestSequence = tonumber(self.downloadStatusSequence) or 0
+	else
+		self.sequence = (tonumber(self.sequence) or 0) + 1
+		requestSequence = tonumber(self.sequence) or 0
+	end
 	local requestSelectedAt = currentSelectedAt
 	local requestRoomId = tostring(ITGOnline and ITGOnline.currentRoomId or "")
 	trace("Status " .. status .. (message and (" - " .. tostring(message)) or ""))
@@ -809,6 +834,8 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
 		.. " selected_at=" .. tostring(currentSelectedAt)
 		.. " sequence=" .. tostring(requestSequence)
+		.. " sequenceMode=" .. tostring(usesDownloadSequence and "download" or "selection")
+		.. " activeDownloadId=" .. tostring(self.activeDownloadId or "")
 		.. " progress=" .. tostring(progress)
 		.. " inFlightKey=" .. tostring(self.downloadInFlightKey or "")
 		.. " browseOnly=" .. tostring(self.activeBrowseOnlyDownload == true))

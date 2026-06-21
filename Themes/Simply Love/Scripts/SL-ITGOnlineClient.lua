@@ -122,6 +122,9 @@ ITGOnline.songSelectionTransitionKind = ITGOnline.songSelectionTransitionKind or
 ITGOnline.songSelectionTransitionRoomId = ITGOnline.songSelectionTransitionRoomId or nil
 ITGOnline.songSelectionTransitionStartedAt = ITGOnline.songSelectionTransitionStartedAt or 0
 ITGOnline.songSelectionTransitionTimeoutSeconds = ITGOnline.songSelectionTransitionTimeoutSeconds or 4.0
+ITGOnline.songSelectionCancelledVersionByRoomId = ITGOnline.songSelectionCancelledVersionByRoomId or {}
+ITGOnline.songSelectionCancelledAtByRoomId = ITGOnline.songSelectionCancelledAtByRoomId or {}
+ITGOnline.songSelectionCancelGuardSeconds = ITGOnline.songSelectionCancelGuardSeconds or 1.5
 ITGOnline.startScheduleAckKey = ITGOnline.startScheduleAckKey or ""
 ITGOnline.startScheduleAckInFlightKey = ITGOnline.startScheduleAckInFlightKey or ""
 ITGOnline.onlineGameplayEnteredInFlightKey = ITGOnline.onlineGameplayEnteredInFlightKey or ""
@@ -3942,6 +3945,13 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 			.. " currentPhase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
 		return nil
 	end
+	if self:ShouldRejectSongSelectedAfterCancel(room, source) then
+		online_room_snapshot_debug("room_snapshot_rejected_stale_song_selected_after_cancel", room, source, self.currentRoom)
+		return self.currentRoom
+	end
+	if tostring(source or ""):find("song_selection_cancelled", 1, true) then
+		self:RememberSongSelectionCancelled(room, source)
+	end
 	local previousRoom = self.currentRoom
 	local previousMembers = previousRoom and previousRoom.members and #previousRoom.members or 0
 	local previousReadyStates = previousRoom and previousRoom.ready_states and #previousRoom.ready_states or 0
@@ -6376,6 +6386,48 @@ function ITGOnline:ClearSongSelectionTransition(reason)
 	self.songSelectionTransitionStartedAt = 0
 end
 
+function ITGOnline:RememberSongSelectionCancelled(room, source)
+	local roomId = tostring(room and room.id or self.currentRoomId or "")
+	if roomId == "" then return end
+
+	local incomingRoomVersion = tonumber(room and (room.room_version or room.roomVersion)) or 0
+	local previousCancelVersion = tonumber(self.songSelectionCancelledVersionByRoomId[roomId]) or 0
+	if incomingRoomVersion > previousCancelVersion then
+		self.songSelectionCancelledVersionByRoomId[roomId] = incomingRoomVersion
+	end
+	self.songSelectionCancelledAtByRoomId[roomId] = GetTimeSinceStart()
+
+	online_flow_trace("song_selection_cancel_guard_recorded"
+		.. " source=" .. tostring(source or "unknown")
+		.. " room=" .. tostring(roomId)
+		.. " roomVersion=" .. tostring(incomingRoomVersion)
+		.. " storedCancelVersion=" .. tostring(self.songSelectionCancelledVersionByRoomId[roomId] or 0)
+		.. " selectionId=" .. tostring(room and (room.current_selection_id or room.currentSelectionId) or "nil"))
+end
+
+function ITGOnline:ShouldRejectSongSelectedAfterCancel(room, source)
+	local sourceText = tostring(source or "")
+	if not sourceText:find("song_selected", 1, true) then return false end
+	if not (room and room.selected_song) then return false end
+
+	local roomId = tostring(room.id or self.currentRoomId or "")
+	if roomId == "" then return false end
+
+	local incomingRoomVersion = tonumber(room.room_version or room.roomVersion) or 0
+	local cancelVersion = tonumber(self.songSelectionCancelledVersionByRoomId[roomId]) or 0
+	if incomingRoomVersion > 0 and cancelVersion > 0 and incomingRoomVersion <= cancelVersion then
+		online_flow_trace("song_selection_snapshot_rejected_after_cancel"
+			.. " source=" .. sourceText
+			.. " room=" .. tostring(roomId)
+			.. " incomingRoomVersion=" .. tostring(incomingRoomVersion)
+			.. " cancelVersion=" .. tostring(cancelVersion)
+			.. " selectedAt=" .. tostring(room.selected_song and (room.selected_song.selected_at or room.selected_song.selectedAt) or "nil"))
+		return true
+	end
+
+	return false
+end
+
 function ITGOnline:UpdateGlobalOptions(options, callback)
 	if not self.currentRoomId then
 		online_flow_trace("global_options_failed reason=no_current_room")
@@ -6491,6 +6543,7 @@ function ITGOnline:CancelSongSelection(callback)
 			.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
 			.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
 		if ok and decoded and decoded.room then
+			self:RememberSongSelectionCancelled(decoded.room, "song_selection_cancel_response")
 			local room = self:ApplyRoomSnapshot(decoded.room, "song_selection_cancelled")
 			decoded.room = room or decoded.room
 			self.currentSongPayload = nil
