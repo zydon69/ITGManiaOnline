@@ -4529,7 +4529,10 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 			online_flow_trace("preferred=lobby reason=non_playing_phase_in_gameplay playState=" .. tostring(playState))
 			return "lobby"
 		end
-		online_flow_trace("preferred=nil reason=lobby_phase_screen_ok screen=" .. tostring(screenName)
+		local okReason = phase == "config" and "config_phase_waiting_in_lobby_ok"
+			or phase == "lobby_ready" and "lobby_ready_phase_screen_ok"
+			or "lobby_phase_screen_ok"
+		online_flow_trace("preferred=nil reason=" .. okReason .. " screen=" .. tostring(screenName)
 			.. " phase=" .. tostring(phase)
 			.. " playState=" .. tostring(playState))
 		return nil
@@ -5906,7 +5909,8 @@ function ITGOnline:ChartHashForSteps(steps)
 	return normalized_hash(grooveStatsHash ~= "" and grooveStatsHash or stepsHash)
 end
 
-function ITGOnline:SelectSong(callback)
+function ITGOnline:SelectSong(callback, options)
+	options = type(options) == "table" and options or {}
 	if not self.currentRoomId then
 		online_flow_trace("song_selection_failed reason=no_current_room"
 			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
@@ -5969,6 +5973,44 @@ function ITGOnline:SelectSong(callback)
 		.. tostring(payload.chart_hash or "") .. "|"
 		.. tostring(payload.chart_note_count or "") .. "|"
 		.. tostring(payload.rate or "")
+	local existingSong = self.currentRoom and self.currentRoom.selected_song or nil
+	local existingSelectionKey = existingSong and table.concat({
+		tostring(self.currentRoomId or ""),
+		tostring(existingSong.song_hash or existingSong.songHash or ""),
+		tostring(existingSong.chart_hash or existingSong.chartHash or ""),
+		tostring(existingSong.chart_note_count or existingSong.chartNoteCount or ""),
+		tostring(existingSong.rate or existingSong.music_rate or existingSong.musicRate or ""),
+	}, "|") or ""
+	local replacingExistingSelection = existingSelectionKey ~= ""
+		and existingSelectionKey ~= selectionKey
+		and options.skipCancelBeforeSelect ~= true
+	if replacingExistingSelection then
+		online_flow_trace("song_selection_replace_existing_begin"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+			.. " existing=" .. tostring(existingSelectionKey)
+			.. " next=" .. tostring(selectionKey))
+		self:CancelSongSelection(function(cancelOk, cancelDecoded, cancelResponse)
+			online_flow_trace("song_selection_replace_existing_cancel_result"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " ok=" .. tostring(cancelOk == true)
+				.. " status=" .. tostring(cancelResponse and cancelResponse.statusCode or "nil")
+				.. " phase=" .. tostring(cancelDecoded and cancelDecoded.room and cancelDecoded.room.phase or self.currentRoom and self.currentRoom.phase or "nil")
+				.. " error=" .. tostring(cancelDecoded and cancelDecoded.error_code or cancelResponse and cancelResponse.errorMessage or "nil"))
+			if cancelOk then
+				self:SelectSong(callback, { skipCancelBeforeSelect = true })
+				return
+			end
+			self.currentSongPayload = previousSongPayload
+			if callback then callback(false, cancelDecoded, cancelResponse) end
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = "selectSong",
+				success = false,
+				message = response_message(cancelResponse, cancelDecoded, "Impossible d'annuler l'ancien choix de chanson.")
+			})
+		end)
+		return
+	end
 	if self.songSelectionInFlightKey ~= "" then
 		if self.songSelectionInFlightKey == selectionKey then
 			online_flow_trace("song_selection_join_inflight key=" .. tostring(selectionKey))
@@ -7139,6 +7181,23 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		})
 		return
 	end
+	if not final and latestRoomPhase ~= "playing" then
+		if self.StopLiveScoreFlush then
+			self:StopLiveScoreFlush("send_score_before_post_phase_not_playing:" .. tostring(latestRoomPhase))
+		end
+		online_flow_trace("send_score_skipped reason=live_score_phase_not_playing_before_post"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " roundKey=" .. tostring(roundKey)
+			.. " initialPhase=" .. tostring(roomPhase)
+			.. " latestPhase=" .. tostring(latestRoomPhase)
+			.. " final=" .. tostring(final == true))
+		finish(false, nil, {
+			errorMessage = "Room is no longer accepting live score updates.",
+			room_phase = latestRoomPhase,
+			dropped = true,
+		})
+		return
+	end
 
 	self.scoreInFlightFingerprint = scoreFingerprint
 	if final and validRoundKey then
@@ -7881,6 +7940,61 @@ function ITGOnline:BroadcastCurrentRoomState(source)
 	end
 end
 
+function ITGOnline:ResetLocalPlayStateForLobby(source)
+	if not self.currentRoom then return false end
+
+	local roomId = tostring(self.currentRoomId or self.currentRoom.id or "")
+	local previousPlayState = type(self.currentRoom.play_state) == "table" and self.currentRoom.play_state or {}
+	local previousSessions = type(previousPlayState.sessions) == "table" and #previousPlayState.sessions or 0
+	local previousFinalResults = type(previousPlayState.final_results) == "table" and #previousPlayState.final_results or 0
+	local previousSubmittedScores = type(previousPlayState.submitted_scores) == "table" and #previousPlayState.submitted_scores or 0
+	local sessions = {}
+
+	for _, member in ipairs(self.currentRoom.members or {}) do
+		local user = type(member.user) == "table" and member.user or {}
+		local userId = member.user_id or member.userId or user.id or member.id
+		if userId ~= nil then
+			sessions[#sessions + 1] = {
+				user_id = userId,
+				user = user,
+				state = "pending",
+			}
+		end
+	end
+
+	self.currentRoom.play_state = {
+		state = "pending",
+		sessions = sessions,
+		submitted_scores = {},
+		final_results = {},
+		live_scores = {},
+		top_scores = {},
+	}
+
+	if roomId ~= "" then
+		self.currentRoomPlayStateByRoomId = self.currentRoomPlayStateByRoomId or {}
+		self.currentRoomPlayStateByRoomId[roomId] = {
+			play_state = self.currentRoom.play_state,
+			version_ms = 0,
+			applied_at = GetTimeSinceStart(),
+			source = tostring(source or "local_lobby_reset"),
+		}
+	end
+
+	if self.StopLiveScoreFlush then
+		self:StopLiveScoreFlush("local_lobby_play_state_reset:" .. tostring(source or "unknown"))
+	end
+
+	online_flow_trace("local_lobby_play_state_reset"
+		.. " source=" .. tostring(source or "unknown")
+		.. " room=" .. tostring(roomId)
+		.. " previousSessions=" .. tostring(previousSessions)
+		.. " nextSessions=" .. tostring(#sessions)
+		.. " previousFinalResults=" .. tostring(previousFinalResults)
+		.. " previousSubmittedScores=" .. tostring(previousSubmittedScores))
+	return true
+end
+
 function ITGOnline:ShouldBlockEvaluationAutoAdvance()
 	if not self.currentRoomId or self.onlineEvaluationExitRequested then return false end
 	local phase = self.currentRoom and self:NormalizeRoomPhase(self.currentRoom.phase) or ""
@@ -8132,6 +8246,7 @@ function ITGOnline:MarkReturnedToLobby(callback)
 		.. " localReturnAt=" .. string.format("%.3f", tonumber(self.onlineGameplayReturnedLocalAt) or 0))
 	if self.currentRoom then
 		self.currentRoom.phase = "lobby"
+		self:ResetLocalPlayStateForLobby("mark_returned_to_lobby_local")
 		self:ClearSelectedSongForLobby("mark_returned_to_lobby_local", true)
 	end
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/play/returned-to-lobby", {}, function(ok, decoded, response)

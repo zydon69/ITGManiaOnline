@@ -1,7 +1,10 @@
 set(HIDAPI_HPP "hidapi/hidapi/hidapi.h")
 
 if(WIN32)
-    set(HIDAPI_SRC "hidapi/windows/hid.c" "hidapi/windows/hidapi_descriptor_reconstruct.c")
+    # windows/hid.c includes hidapi_descriptor_reconstruct.c directly for static
+    # builds when hidapi_winapi_EXPORTS is not defined. Compiling it as a second
+    # translation unit produces LNK4006 duplicate-symbol warnings on MSVC.
+    set(HIDAPI_SRC "hidapi/windows/hid.c")
 	list(APPEND HIDAPI_HPP 
 			"hidapi/windows/hidapi_cfgmgr32.h"
 			"hidapi/windows/hidapi_descriptor_reconstruct.h"
