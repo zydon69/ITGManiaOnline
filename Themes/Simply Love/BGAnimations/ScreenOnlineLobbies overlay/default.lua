@@ -119,6 +119,21 @@ local function stable_scalar(value)
 	return tostring(value)
 end
 
+local function realtime_health_snapshot()
+	if ITGOnline and ITGOnline.RealtimeHealthSnapshot then
+		return ITGOnline:RealtimeHealthSnapshot()
+	end
+	return {
+		state = "offline",
+		label = "HTTP ONLY",
+		color = {0.55, 0.55, 0.55, 0.90},
+		age = 999,
+		connected = false,
+		connecting = false,
+		socket = false,
+	}
+end
+
 local function player_state_signature(player)
 	player = type(player) == "table" and player or {}
 	local user = type(player.user) == "table" and player.user or {}
@@ -3286,12 +3301,38 @@ local af = Def.ActorFrame{
 					if parent then parent:playcommand("ApplyQueuedLobbyUiUpdate") end
 				end
 			},
+			Def.Actor{
+				Name="RealtimeIndicatorTimer",
+				OnCommand=function(self)
+					self:sleep(0.5):queuecommand("Fire")
+				end,
+				FireCommand=function(self)
+					local parent = self:GetParent()
+					if parent then parent:playcommand("UpdateRealtimeIndicator") end
+					self:sleep(0.5):queuecommand("Fire")
+				end
+			},
 		HoverCommand=function(self)
 			self:GetChild("LobbyContent"):playcommand("Hover")
 			self:GetChild("OnlinePlayersContent"):playcommand("Hover")
 			self:GetChild("JoinedLobbyContent"):playcommand("Hover")
 			local transferPrompt = self:GetChild("TransferManagerConfirmPrompt")
 			if transferPrompt then transferPrompt:playcommand("Hover") end
+		end,
+		UpdateRealtimeIndicatorCommand=function(self)
+			if ITGOnline and ITGOnline.BroadcastRealtimeHealth then
+				ITGOnline:BroadcastRealtimeHealth("screen_indicator")
+			end
+			local indicator = self:GetChild("RealtimeIndicator")
+			if indicator then
+				indicator:playcommand("Set", realtime_health_snapshot())
+			end
+		end,
+		OnlineRealtimeHealthMessageCommand=function(self, params)
+			local indicator = self:GetChild("RealtimeIndicator")
+			if indicator then
+				indicator:playcommand("Set", params or realtime_health_snapshot())
+			end
 		end,
 		ApplyQueuedLobbyUiUpdateCommand=function(self)
 			local reason = lobby_ui_update_reason
@@ -5979,6 +6020,49 @@ end,
 			InitCommand=function(self)
 				self:xy(_screen.w - 12, _screen.h - 18):horizalign(right):zoom(0.32):diffuse(0.75,0.75,0.75,0.85)
 			end
+		},
+
+		Def.ActorFrame{
+			Name="RealtimeIndicator",
+			InitCommand=function(self)
+				self:xy(_screen.w - 18, 22):visible(false)
+			end,
+			SetCommand=function(self, params)
+				params = params or realtime_health_snapshot()
+				local label = tostring(params.label or "HTTP ONLY")
+				local age = tonumber(params.age) or 999
+				local color = params.color or {0.55, 0.55, 0.55, 0.90}
+				local text = label
+				if age < 900 then
+					text = text .. " " .. tostring(math.floor(age)) .. "s"
+				end
+				self:visible(true)
+				self:GetChild("Dot"):diffuse(color[1] or 1, color[2] or 1, color[3] or 1, color[4] or 1)
+				self:GetChild("Label"):settext(text):diffuse(color[1] or 1, color[2] or 1, color[3] or 1, color[4] or 1)
+				local width = math.min(math.max(self:GetChild("Label"):GetWidth() + 44, 150), 260)
+				self:GetChild("Background"):zoomto(width, 26)
+				self:GetChild("Dot"):x(-width + 24)
+				self:GetChild("Label"):x(-12)
+			end,
+			Def.Quad{
+				Name="Background",
+				InitCommand=function(self)
+					self:horizalign(right):zoomto(150, 26):diffuse(0,0,0,0.72)
+				end
+			},
+			Def.Quad{
+				Name="Dot",
+				InitCommand=function(self)
+					self:zoomto(10, 10):diffuse(0.55,0.55,0.55,0.90)
+				end
+			},
+			LoadFont("Common Normal")..{
+				Name="Label",
+				Text="HTTP ONLY",
+				InitCommand=function(self)
+					self:horizalign(right):zoom(0.36):maxwidth(240):diffuse(0.55,0.55,0.55,0.90)
+				end
+			}
 		},
 
 		-- Keep this on top of everything else so that it doesn't get covered up by any other elements.

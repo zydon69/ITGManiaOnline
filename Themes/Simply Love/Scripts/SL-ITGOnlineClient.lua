@@ -48,8 +48,11 @@ ITGOnline.disconnecting = ITGOnline.disconnecting or false
 ITGOnline.lastEventCursor = ITGOnline.lastEventCursor or 0
 ITGOnline.fetchRoomInFlightByRoomId = ITGOnline.fetchRoomInFlightByRoomId or {}
 ITGOnline.lastRealtimeMessageAt = ITGOnline.lastRealtimeMessageAt or GetTimeSinceStart()
+ITGOnline.lastRealtimeClientPingAt = ITGOnline.lastRealtimeClientPingAt or 0
+ITGOnline.lastRealtimeHealthState = ITGOnline.lastRealtimeHealthState or ""
 ITGOnline.lastRealtimeStateReconcileAt = ITGOnline.lastRealtimeStateReconcileAt or 0
-ITGOnline.realtimeStaleSeconds = ITGOnline.realtimeStaleSeconds or 8.0
+ITGOnline.realtimeStaleSeconds = ITGOnline.realtimeStaleSeconds or 45.0
+ITGOnline.realtimeGhostSeconds = ITGOnline.realtimeGhostSeconds or 75.0
 ITGOnline.criticalRoomActionResyncMinIntervalSeconds = ITGOnline.criticalRoomActionResyncMinIntervalSeconds or 0.75
 ITGOnline.lastCriticalRoomActionResyncAt = ITGOnline.lastCriticalRoomActionResyncAt or 0
 ITGOnline.lastSyncRequestedAt = ITGOnline.lastSyncRequestedAt or 0
@@ -1725,6 +1728,129 @@ function ITGOnline:RealtimeIsFresh(maxAgeSeconds)
 	return self:RealtimeLastMessageAge() <= maxAge
 end
 
+function ITGOnline:RealtimeHealthSnapshot()
+	local age = self.RealtimeLastMessageAge and self:RealtimeLastMessageAge() or 999
+	local connected = self.RealtimeIsConnected and self:RealtimeIsConnected() or false
+	local connecting = self.realtimeConnecting == true
+	local staleAt = tonumber(self.realtimeStaleSeconds) or 45.0
+	local ghostAt = tonumber(self.realtimeGhostSeconds) or 75.0
+	local state = "offline"
+	local label = "HTTP ONLY"
+	local color = {0.55, 0.55, 0.55, 0.90}
+
+	if self.disconnecting then
+		state = "offline"
+		label = "OFFLINE"
+	elseif connecting then
+		state = "reconnecting"
+		label = "RECONNEXION"
+		color = {1.00, 0.25, 0.20, 1.00}
+	elseif connected and age <= staleAt then
+		state = "ok"
+		label = "ONLINE OK"
+		color = {0.10, 1.00, 0.20, 1.00}
+	elseif connected and age <= ghostAt then
+		state = "stale"
+		label = "SYNC..."
+		color = {1.00, 0.72, 0.10, 1.00}
+	elseif connected then
+		state = "ghost"
+		label = "RECONNEXION"
+		color = {1.00, 0.25, 0.20, 1.00}
+	end
+
+	return {
+		state = state,
+		label = label,
+		color = color,
+		age = age,
+		connected = connected,
+		connecting = connecting,
+		socket = self.socket ~= nil,
+	}
+end
+
+function ITGOnline:BroadcastRealtimeHealth(reason)
+	local snapshot = self:RealtimeHealthSnapshot()
+	local key = tostring(snapshot.state) .. "|" .. tostring(math.floor((tonumber(snapshot.age) or 0) / 5))
+	if key ~= tostring(self.lastRealtimeHealthState or "") then
+		self.lastRealtimeHealthState = key
+		online_flow_trace("realtime_health state=" .. tostring(snapshot.state)
+			.. " label=" .. tostring(snapshot.label)
+			.. " age=" .. string.format("%.3f", tonumber(snapshot.age) or 0)
+			.. " connected=" .. tostring(snapshot.connected == true)
+			.. " connecting=" .. tostring(snapshot.connecting == true)
+			.. " socket=" .. tostring(snapshot.socket == true)
+			.. " reason=" .. tostring(reason or "unknown"))
+	end
+	MESSAGEMAN:Broadcast("OnlineRealtimeHealth", snapshot)
+	return snapshot
+end
+
+function ITGOnline:SendRealtimePing(reason)
+	if not self.socket then
+		online_flow_trace("realtime_ping_skipped reason=no_socket source=" .. tostring(reason or "unknown")
+			.. " connected=" .. tostring(self.realtimeConnected == true))
+		return false
+	end
+
+	local ok, encoded = pcall(JsonEncode, { action = "ping" })
+	if not ok or not encoded then
+		online_flow_trace("realtime_ping_encode_failed source=" .. tostring(reason or "unknown")
+			.. " ok=" .. tostring(ok == true))
+		return false
+	end
+
+	local sent = self.socket:Send(encoded)
+	self.lastRealtimeClientPingAt = GetTimeSinceStart()
+	online_flow_trace("realtime_ping_send source=" .. tostring(reason or "unknown")
+		.. " sent=" .. tostring(sent == true)
+		.. " generation=" .. tostring(self.realtimeGeneration or "nil")
+		.. " lastRealtimeAge=" .. string.format("%.3f", self:RealtimeLastMessageAge()))
+	if not sent and self.ForceRealtimeReconnect then
+		self:ForceRealtimeReconnect("ping_send_failed:" .. tostring(reason or "unknown"))
+	end
+	return sent == true
+end
+
+function ITGOnline:ForceRealtimeReconnect(reason)
+	if self.disconnecting or not self.token then
+		return false
+	end
+
+	online_flow_trace("realtime_force_reconnect reason=" .. tostring(reason or "unknown")
+		.. " connected=" .. tostring(self.realtimeConnected == true)
+		.. " connecting=" .. tostring(self.realtimeConnecting == true)
+		.. " socket=" .. tostring(self.socket ~= nil)
+		.. " age=" .. string.format("%.3f", self:RealtimeLastMessageAge())
+		.. " generation=" .. tostring(self.realtimeGeneration or "nil")
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " screen=" .. tostring(self.currentScreenName or "nil"))
+
+	self.realtimeGeneration = (tonumber(self.realtimeGeneration) or 0) + 1
+	if self.socket then
+		pcall(function() self.socket:Close() end)
+	end
+	self.socket = nil
+	self.realtimeConnected = false
+	self.realtimeConnecting = false
+	self.activeRealtimeCallbacks = nil
+	self.pendingRealtimeConnectCallbacks = {}
+
+	local handler = GetOnlineHandlerInstance and GetOnlineHandlerInstance() or nil
+	if handler then
+		handler.socket = nil
+		handler.connected = false
+	end
+
+	self:ScheduleRealtimeReconnect("forced:" .. tostring(reason or "unknown"))
+	if self.currentRoomId and self.ReconcileCurrentRoomAfterRealtimeGap then
+		self:ReconcileCurrentRoomAfterRealtimeGap("forced_reconnect:" .. tostring(reason or "unknown"), 0)
+	end
+	self:BroadcastRealtimeHealth("forced_reconnect")
+	return true
+end
+
 function ITGOnline:ReconcileCurrentRoomAfterRealtimeGap(source, minIntervalSeconds)
 	local now = GetTimeSinceStart()
 	local minInterval = tonumber(minIntervalSeconds) or tonumber(self.criticalRoomActionResyncMinIntervalSeconds) or 0.75
@@ -1784,6 +1910,21 @@ function ITGOnline:MaintainRealtimeAndRoomSync(source)
 	end
 
 	local didWork = false
+	if self.realtimeConnected and not self.realtimeConnecting then
+		local age = self:RealtimeLastMessageAge()
+		local ghostAt = tonumber(self.realtimeGhostSeconds) or 75.0
+		if age > ghostAt then
+			online_flow_trace("realtime_ghost_detected source=" .. tostring(source or "unknown")
+				.. " age=" .. string.format("%.3f", age)
+				.. " ghostAt=" .. string.format("%.3f", ghostAt)
+				.. " socket=" .. tostring(self.socket ~= nil)
+				.. " room=" .. tostring(roomId or "nil")
+				.. " screen=" .. screenName)
+			self:ForceRealtimeReconnect("ghost_timeout:" .. tostring(source or "unknown"))
+			didWork = true
+		end
+	end
+
 	if not self.realtimeConnected and not self.realtimeConnecting then
 		local nextAttemptAt = tonumber(self.realtimeReconnectNextAttemptAt) or 0
 		if now >= nextAttemptAt then
@@ -1813,6 +1954,9 @@ function ITGOnline:MaintainRealtimeAndRoomSync(source)
 			})
 			didWork = true
 		end
+	end
+	if self.BroadcastRealtimeHealth then
+		self:BroadcastRealtimeHealth(source)
 	end
 
 	if roomId then
@@ -10063,8 +10207,17 @@ end
 					.. " lastSyncAge=" .. tostring(GetTimeSinceStart() - (self.lastSyncRequestedAt or 0)))
 			end
 	elseif name == "server.ping" then
-		-- Heartbeat frame from server; no client-side action required.
-		online_flow_trace("realtime_event_apply name=server.ping action=none")
+		online_flow_trace("realtime_event_apply name=server.ping action=client_ping")
+		if self.SendRealtimePing then
+			self:SendRealtimePing("server.ping")
+		end
+		return
+	elseif name == "pong" then
+		online_flow_trace("realtime_event_apply name=pong action=keepalive_ack"
+			.. " serverTime=" .. tostring(event.server_time or payload.server_time or "nil"))
+		if self.UpdateServerClockOffset then
+			self:UpdateServerClockOffset(event.server_time or payload.server_time, GetTimeSinceStart(), GetTimeSinceStart())
+		end
 		return
 		elseif name == "connection.closed" then
 			-- Informational frame. WebSocket close lifecycle is handled by onMessage Close.

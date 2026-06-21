@@ -1980,11 +1980,15 @@ CreateOnlineHandler = function()
 								online_trace("FLOW realtime_deadman_timeout idle=" .. tostring(idle)
 									.. " timeout=" .. tostring(self.deadmanTimeoutSeconds or 75))
 							end
-							self.connected = false
-							if ITGOnline.socket then
-								ITGOnline.socket:Close()
+							if ITGOnline and ITGOnline.ForceRealtimeReconnect then
+								ITGOnline:ForceRealtimeReconnect("handler_deadman_timeout")
+							else
+								self.connected = false
+								if ITGOnline.socket then
+									ITGOnline.socket:Close()
+								end
+								self.socket = nil
 							end
-							self.socket = nil
 							MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 								event="websocket",
 								success=false,
