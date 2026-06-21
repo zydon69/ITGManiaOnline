@@ -75,6 +75,7 @@ local joined_manager_user_id = nil
 local joined_song_preview = nil
 local joined_song_confirmed = false
 local joined_song_selected_key = ""
+local joined_song_transition_notice_at = 0
 local joined_missing_song = false
 local joined_missing_song_info = nil
 local joined_can_download_pack = false
@@ -1612,6 +1613,7 @@ function joined_can_cancel_song_selection()
 	return joined_is_manager
 		and joined_song_confirmed
 		and joined_phase_allows_song_selection()
+		and not (ITGOnline and ITGOnline.IsSongSelectionTransitionLocked and ITGOnline:IsSongSelectionTransitionLocked("cancel"))
 end
 
 function joined_button_indices()
@@ -2756,11 +2758,26 @@ local function handle_joined_mode_input(event)
 			.. " roomCanStart=" .. tostring(joined_room_can_start() == true)
 			.. " missingSong=" .. tostring(joined_any_player_missing_song() == true)
 			.. " canCancelSelection=" .. tostring(joined_can_cancel_song_selection() == true)
+			.. " songTransitionLocked=" .. tostring(ITGOnline and ITGOnline.IsSongSelectionTransitionLocked and ITGOnline:IsSongSelectionTransitionLocked("ui") or false)
 			.. " canDownload=" .. tostring(joined_can_download_pack == true or can_download_browsed_pack() == true))
 		if joined_active_index == 1 then
 			lobby_flow_trace("input_joined_leave_confirm strict_index=1")
 			open_leave_confirm("leave_lobby")
 		elseif joined_active_index == 2 and joined_is_manager then
+			if ITGOnline and ITGOnline.IsSongSelectionTransitionLocked and ITGOnline:IsSongSelectionTransitionLocked("joined_action") then
+				local now = GetTimeSinceStart()
+				if now - joined_song_transition_notice_at > 0.75 then
+					joined_song_transition_notice_at = now
+					lobby_flow_trace("input_joined_song_action_blocked reason=transition_inflight")
+					t:playcommand("SetStatus", {
+						text="Mise a jour du choix de chanson en cours...",
+						showSpinner=true,
+						showPrompt=false,
+						duration=1.5
+					})
+				end
+				return false
+			end
 			if joined_can_cancel_song_selection() then
 				if ITGOnline and ITGOnline.CancelSongSelection then
 					lobby_flow_trace("input_joined_cancel_song_selection_request shared_index=2")
@@ -4156,10 +4173,12 @@ local af = Def.ActorFrame{
 				and incomingSignature == last_online_lobby_state_signature
 			then
 				last_online_lobby_state_signature_at = GetTimeSinceStart()
-				lobby_flow_trace("OnlineLobbyState_ignored reason=duplicate_signature"
+				lobby_flow_trace("OnlineLobbyState_duplicate_no_repaint reason=same_signature_already_applied"
 					.. " code=" .. tostring(params and params.code or "")
 					.. " phase=" .. tostring(params and params.phase or "nil")
 					.. " players=" .. tostring(params and params.players and #params.players or 0)
+					.. " songConfirmed=" .. tostring(joined_song_confirmed == true)
+					.. " selectedKey=" .. tostring(joined_song_selected_key or "")
 					.. " snapshotSource=" .. tostring(params and params.snapshotSource or "nil"))
 				return
 			end

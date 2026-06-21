@@ -93,6 +93,7 @@ ITGOnline.lastGameplayLobbyRefreshAt = ITGOnline.lastGameplayLobbyRefreshAt or 0
 ITGOnline.lastLeaderboardVersionByRoomId = ITGOnline.lastLeaderboardVersionByRoomId or {}
 ITGOnline.lastLeaderboardRealtimeAt = ITGOnline.lastLeaderboardRealtimeAt or 0
 ITGOnline.lastPlayStateVersionByRoomId = ITGOnline.lastPlayStateVersionByRoomId or {}
+ITGOnline.lastRoomVersionByRoomId = ITGOnline.lastRoomVersionByRoomId or {}
 ITGOnline.currentRoomPlayStateByRoomId = ITGOnline.currentRoomPlayStateByRoomId or {}
 ITGOnline.lastRoomEventIdByRoomId = ITGOnline.lastRoomEventIdByRoomId or {}
 ITGOnline.promptedPendingJoinRequestIds = ITGOnline.promptedPendingJoinRequestIds or {}
@@ -116,6 +117,11 @@ ITGOnline.songAvailabilitySuppressedUntil = ITGOnline.songAvailabilitySuppressed
 ITGOnline.songAvailabilityFailureDedupSeconds = ITGOnline.songAvailabilityFailureDedupSeconds or 5
 ITGOnline.songSelectionInFlightKey = ITGOnline.songSelectionInFlightKey or ""
 ITGOnline.songSelectionInFlightCallbacks = ITGOnline.songSelectionInFlightCallbacks or {}
+ITGOnline.songSelectionTransitionInFlight = ITGOnline.songSelectionTransitionInFlight or false
+ITGOnline.songSelectionTransitionKind = ITGOnline.songSelectionTransitionKind or ""
+ITGOnline.songSelectionTransitionRoomId = ITGOnline.songSelectionTransitionRoomId or nil
+ITGOnline.songSelectionTransitionStartedAt = ITGOnline.songSelectionTransitionStartedAt or 0
+ITGOnline.songSelectionTransitionTimeoutSeconds = ITGOnline.songSelectionTransitionTimeoutSeconds or 4.0
 ITGOnline.startScheduleAckKey = ITGOnline.startScheduleAckKey or ""
 ITGOnline.startScheduleAckInFlightKey = ITGOnline.startScheduleAckInFlightKey or ""
 ITGOnline.onlineGameplayEnteredInFlightKey = ITGOnline.onlineGameplayEnteredInFlightKey or ""
@@ -4022,6 +4028,28 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	end
 
 	local roomVersionKey = tostring(room.id or self.currentRoomId or "")
+	local incomingRoomVersion = tonumber(room.room_version or room.roomVersion) or 0
+	local previousRoomVersion = tonumber(self.lastRoomVersionByRoomId[roomVersionKey]) or 0
+	if incomingRoomVersion > 0 and previousRoomVersion > 0 and incomingRoomVersion < previousRoomVersion then
+		online_room_snapshot_debug("room_snapshot_rejected_stale_room_version", room, source, previousRoom)
+		online_flow_trace("ignored_stale_room_snapshot source=" .. tostring(source or "unknown")
+			.. " reason=room_version_regression"
+			.. " room=" .. tostring(roomVersionKey)
+			.. " incomingRoomVersion=" .. tostring(incomingRoomVersion)
+			.. " previousRoomVersion=" .. tostring(previousRoomVersion)
+			.. " incomingPhase=" .. tostring(room.phase or "nil")
+			.. " previousPhase=" .. tostring(previousRoom and previousRoom.phase or "nil")
+			.. " incomingSelectionId=" .. tostring(room.current_selection_id or room.currentSelectionId or "nil")
+			.. " previousSelectionId=" .. tostring(previousRoom and (previousRoom.current_selection_id or previousRoom.currentSelectionId) or "nil"))
+		return self.currentRoom
+	elseif incomingRoomVersion > 0 and roomVersionKey ~= "" then
+		self.lastRoomVersionByRoomId[roomVersionKey] = incomingRoomVersion
+		online_flow_trace("room_snapshot_room_version_accepted source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(roomVersionKey)
+			.. " incomingRoomVersion=" .. tostring(incomingRoomVersion)
+			.. " previousRoomVersion=" .. tostring(previousRoomVersion)
+			.. " selectionId=" .. tostring(room.current_selection_id or room.currentSelectionId or "nil"))
+	end
 	local incomingPlayStateVersion = tonumber(room.play_state and room.play_state.version_ms) or 0
 	local previousPlayStateVersion = tonumber(self.lastPlayStateVersionByRoomId[roomVersionKey]) or 0
 	if incomingPlayStateVersion > 0 and incomingPlayStateVersion < previousPlayStateVersion and previousRoom and previousRoom.play_state then
@@ -6218,6 +6246,7 @@ function ITGOnline:SelectSong(callback, options)
 		.. tostring(payload.chart_hash or "") .. "|"
 		.. tostring(payload.chart_note_count or "") .. "|"
 		.. tostring(payload.rate or "")
+	payload.client_action_id = request_id()
 	local existingSong = self.currentRoom and self.currentRoom.selected_song or nil
 	local existingSelectionKey = existingSong and table.concat({
 		tostring(self.currentRoomId or ""),
@@ -6226,35 +6255,22 @@ function ITGOnline:SelectSong(callback, options)
 		tostring(existingSong.chart_note_count or existingSong.chartNoteCount or ""),
 		tostring(existingSong.rate or existingSong.music_rate or existingSong.musicRate or ""),
 	}, "|") or ""
-	local replacingExistingSelection = existingSelectionKey ~= ""
-		and existingSelectionKey ~= selectionKey
-		and options.skipCancelBeforeSelect ~= true
+	local replacingExistingSelection = existingSelectionKey ~= "" and existingSelectionKey ~= selectionKey
+	if self:IsSongSelectionTransitionLocked("select") then
+		online_flow_trace("song_selection_rejected reason=transition_inflight"
+			.. " transition=" .. tostring(self.songSelectionTransitionKind or "")
+			.. " transitionRoom=" .. tostring(self.songSelectionTransitionRoomId or "nil")
+			.. " requested=" .. tostring(selectionKey)
+			.. " existing=" .. tostring(existingSelectionKey))
+		if callback then callback(false, nil, { errorMessage = "Song selection is already updating." }) end
+		return
+	end
 	if replacingExistingSelection then
-		online_flow_trace("song_selection_replace_existing_begin"
+		online_flow_trace("song_selection_replace_existing_atomic_server"
 			.. " room=" .. tostring(self.currentRoomId)
 			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
 			.. " existing=" .. tostring(existingSelectionKey)
 			.. " next=" .. tostring(selectionKey))
-		self:CancelSongSelection(function(cancelOk, cancelDecoded, cancelResponse)
-			online_flow_trace("song_selection_replace_existing_cancel_result"
-				.. " room=" .. tostring(self.currentRoomId or "nil")
-				.. " ok=" .. tostring(cancelOk == true)
-				.. " status=" .. tostring(cancelResponse and cancelResponse.statusCode or "nil")
-				.. " phase=" .. tostring(cancelDecoded and cancelDecoded.room and cancelDecoded.room.phase or self.currentRoom and self.currentRoom.phase or "nil")
-				.. " error=" .. tostring(cancelDecoded and cancelDecoded.error_code or cancelResponse and cancelResponse.errorMessage or "nil"))
-			if cancelOk then
-				self:SelectSong(callback, { skipCancelBeforeSelect = true })
-				return
-			end
-			self.currentSongPayload = previousSongPayload
-			if callback then callback(false, cancelDecoded, cancelResponse) end
-			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
-				event = "selectSong",
-				success = false,
-				message = response_message(cancelResponse, cancelDecoded, "Impossible d'annuler l'ancien choix de chanson.")
-			})
-		end)
-		return
 	end
 	if self.songSelectionInFlightKey ~= "" then
 		if self.songSelectionInFlightKey == selectionKey then
@@ -6271,10 +6287,12 @@ function ITGOnline:SelectSong(callback, options)
 	end
 
 	online_flow_trace("song_selection_request room=" .. tostring(self.currentRoomId)
+		.. " actionId=" .. tostring(payload.client_action_id or "")
 		.. " title=" .. tostring(payload.title or "")
 		.. " pack=" .. tostring(payload.pack or "")
 		.. " chart=" .. tostring(payload.chart_hash or ""):sub(1, 12)
 		.. " song=" .. tostring(payload.song_hash or ""):sub(1, 12))
+	self:BeginSongSelectionTransition("select", self.currentRoomId)
 	self.songSelectionInFlightKey = selectionKey
 	self.songSelectionInFlightCallbacks = {}
 	if callback then
@@ -6284,6 +6302,7 @@ function ITGOnline:SelectSong(callback, options)
 		local callbacks = self.songSelectionInFlightCallbacks or {}
 		self.songSelectionInFlightKey = ""
 		self.songSelectionInFlightCallbacks = {}
+		self:ClearSongSelectionTransition("select_response")
 		online_flow_trace("song_selection_response ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
 			.. " error=" .. tostring(decoded and decoded.error_code or response and response.error or "nil")
@@ -6306,6 +6325,51 @@ function ITGOnline:SelectSong(callback, options)
 			if cb then cb(ok, decoded, response) end
 		end
 	end)
+end
+
+function ITGOnline:IsSongSelectionTransitionLocked(reason)
+	if self.songSelectionTransitionInFlight ~= true then return false end
+	local now = GetTimeSinceStart()
+	local startedAt = tonumber(self.songSelectionTransitionStartedAt) or 0
+	local timeout = tonumber(self.songSelectionTransitionTimeoutSeconds) or 4.0
+	if startedAt > 0 and now - startedAt > timeout then
+		online_flow_trace("song_selection_transition_lock_expired"
+			.. " reason=" .. tostring(reason or "unknown")
+			.. " transition=" .. tostring(self.songSelectionTransitionKind or "")
+			.. " room=" .. tostring(self.songSelectionTransitionRoomId or "nil")
+			.. " age=" .. tostring(now - startedAt)
+			.. " timeout=" .. tostring(timeout))
+		self.songSelectionTransitionInFlight = false
+		self.songSelectionTransitionKind = ""
+		self.songSelectionTransitionRoomId = nil
+		self.songSelectionTransitionStartedAt = 0
+		return false
+	end
+	return true
+end
+
+function ITGOnline:BeginSongSelectionTransition(kind, roomId)
+	self.songSelectionTransitionInFlight = true
+	self.songSelectionTransitionKind = tostring(kind or "unknown")
+	self.songSelectionTransitionRoomId = roomId or self.currentRoomId
+	self.songSelectionTransitionStartedAt = GetTimeSinceStart()
+	online_flow_trace("song_selection_transition_begin"
+		.. " kind=" .. tostring(self.songSelectionTransitionKind)
+		.. " room=" .. tostring(self.songSelectionTransitionRoomId or "nil")
+		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+end
+
+function ITGOnline:ClearSongSelectionTransition(reason)
+	if self.songSelectionTransitionInFlight ~= true then return end
+	online_flow_trace("song_selection_transition_clear"
+		.. " reason=" .. tostring(reason or "unknown")
+		.. " kind=" .. tostring(self.songSelectionTransitionKind or "")
+		.. " room=" .. tostring(self.songSelectionTransitionRoomId or "nil")
+		.. " age=" .. tostring(GetTimeSinceStart() - (tonumber(self.songSelectionTransitionStartedAt) or GetTimeSinceStart())))
+	self.songSelectionTransitionInFlight = false
+	self.songSelectionTransitionKind = ""
+	self.songSelectionTransitionRoomId = nil
+	self.songSelectionTransitionStartedAt = 0
 end
 
 function ITGOnline:UpdateGlobalOptions(options, callback)
@@ -6398,12 +6462,25 @@ function ITGOnline:CancelSongSelection(callback)
 		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
 		return
 	end
+	if self:IsSongSelectionTransitionLocked("cancel") then
+		online_flow_trace("song_selection_cancel_rejected reason=transition_inflight"
+			.. " transition=" .. tostring(self.songSelectionTransitionKind or "")
+			.. " transitionRoom=" .. tostring(self.songSelectionTransitionRoomId or "nil")
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+		if callback then callback(false, nil, { errorMessage = "Song selection is already updating." }) end
+		return
+	end
 
 	online_flow_trace("song_selection_cancel_request room=" .. tostring(self.currentRoomId)
 		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
 		.. " hasSelectedSong=" .. tostring(self.currentRoom and self.currentRoom.selected_song ~= nil)
 		.. " songPayload=" .. tostring(self.currentSongPayload ~= nil))
-	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/song-selection/cancel", {}, function(ok, decoded, response)
+	self:BeginSongSelectionTransition("cancel", self.currentRoomId)
+	local payload = { client_action_id = request_id() }
+	online_flow_trace("song_selection_cancel_action actionId=" .. tostring(payload.client_action_id or ""))
+	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/song-selection/cancel", payload, function(ok, decoded, response)
+		self:ClearSongSelectionTransition("cancel_response")
 		online_flow_trace("song_selection_cancel_response ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
 			.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
@@ -10051,6 +10128,11 @@ end
 				roomUiRefresh = true,
 				minLobbyRefreshInterval = 0.25,
 				reason = "song_selected_requires_authoritative_room_refresh",
+			},
+			["room.song_selection_cancelled"] = {
+				roomUiRefresh = true,
+				minLobbyRefreshInterval = 0.25,
+				reason = "song_selection_cancelled_snapshot_updates_room_ui_only",
 			},
 			["room.ready_updated"] = {
 				roomUiRefresh = true,
