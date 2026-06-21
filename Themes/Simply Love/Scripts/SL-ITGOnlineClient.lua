@@ -4273,12 +4273,20 @@ function ITGOnline:PlayStateSummary(room)
 	local finalResults = playState and playState.final_results or {}
 	local players = tonumber(playState and playState.players_count) or #(sessions or {})
 	local terminal = tonumber(playState and playState.terminal_players_count)
+	local failedTerminal = tonumber(playState and playState.failed_players_count) or 0
 
 	if terminal == nil then
 		terminal = 0
 		for session in ivalues(sessions or {}) do
 			if self:IsTerminalPlayState(session and session.state) then
 				terminal = terminal + 1
+			end
+		end
+	end
+	if failedTerminal <= 0 then
+		for session in ivalues(sessions or {}) do
+			if tostring(session and session.state or "") == "failed" then
+				failedTerminal = failedTerminal + 1
 			end
 		end
 	end
@@ -4296,10 +4304,14 @@ function ITGOnline:PlayStateSummary(room)
 	return {
 		players = players,
 		terminal = terminal,
+		failedTerminal = failedTerminal,
 		playing = playing,
 		allTerminal = allTerminal,
+		allFailedTerminal = (playState and playState.all_players_failed == true) or (players > 0 and failedTerminal >= players),
 		finalResults = #(finalResults or {}),
 		finalResultsReady = players > 0 and #(finalResults or {}) >= players,
+		failedFinalsPending = tonumber(playState and playState.failed_client_final_scores_pending_count) or 0,
+		failedFinalsReady = playState and playState.all_failed_client_finals_ready == true,
 		sessions = sessions or {},
 	}
 end
@@ -4371,6 +4383,17 @@ function ITGOnline:ShouldWaitForOnlineResults(room)
 			.. " finalResults=" .. tostring(summary.finalResults)
 			.. " finalResultsReady=" .. tostring(summary.finalResultsReady == true))
 		return true
+	end
+	if phase == "playing" and summary.allFailedTerminal and not summary.finalResultsReady then
+		online_flow_trace_throttled("results_wait_all_failed_pending_finals", 1.0,
+			"results_wait_decision wait=false reason=all_failed_pending_client_finals"
+			.. " terminal=" .. tostring(summary.terminal)
+			.. " failedTerminal=" .. tostring(summary.failedTerminal)
+			.. " players=" .. tostring(summary.players)
+			.. " finalResults=" .. tostring(summary.finalResults)
+			.. " finalResultsReady=" .. tostring(summary.finalResultsReady == true)
+			.. " failedFinalsPending=" .. tostring(summary.failedFinalsPending))
+		return false
 	end
 	if phase ~= "results" then
 		online_flow_trace_throttled("results_wait_all_terminal_not_results", 1.0,
@@ -4610,6 +4633,25 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 		return false
 	end
 
+	if summary
+		and self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase) == "playing"
+		and summary.allFailedTerminal == true
+		and summary.finalResultsReady ~= true
+	then
+		self.onlineGameplayEvaluationHoldStartedKey = roundKey
+		self.onlineGameplayEvaluationMinimumHoldUntil = 0
+		self.onlineGameplayAllTerminalHoldKey = roundKey
+		self.onlineGameplayAllTerminalHoldUntil = 0
+		online_flow_trace_throttled("hold_gameplay_release_all_failed_pending_finals", 1.0,
+			"hold_gameplay_release reason=all_failed_pending_client_finals"
+			.. " terminal=" .. tostring(summary.terminal)
+			.. " failedTerminal=" .. tostring(summary.failedTerminal)
+			.. " players=" .. tostring(summary.players)
+			.. " finalResults=" .. tostring(summary.finalResults)
+			.. " failedFinalsPending=" .. tostring(summary.failedFinalsPending))
+		return false
+	end
+
 	if validRoundKey and self.onlineGameplayEvaluationHoldStartedKey ~= roundKey then
 		self.onlineGameplayEvaluationHoldStartedKey = roundKey
 		self.onlineGameplayEvaluationMinimumHoldUntil = now + minimumVisibleHoldSeconds
@@ -4620,10 +4662,13 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 		online_flow_trace_throttled("hold_gameplay_before_evaluation", 1.0, "hold_gameplay_before_evaluation waiting=" .. tostring(waiting == true)
 			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
 			.. " terminal=" .. tostring(summary and summary.terminal or "nil")
+			.. " failedTerminal=" .. tostring(summary and summary.failedTerminal or "nil")
 			.. " players=" .. tostring(summary and summary.players or "nil")
 			.. " allTerminal=" .. tostring(summary and summary.allTerminal == true)
+			.. " allFailedTerminal=" .. tostring(summary and summary.allFailedTerminal == true)
 			.. " finalResults=" .. tostring(summary and summary.finalResults or "nil")
-			.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true))
+			.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true)
+			.. " failedFinalsPending=" .. tostring(summary and summary.failedFinalsPending or "nil"))
 
 	if waiting and self.FetchPlayState then
 		if not self.onlineGameplayHoldFetchAt or (now - self.onlineGameplayHoldFetchAt) >= 0.75 then
@@ -4689,6 +4734,19 @@ ITGOnlineShouldKeepGameplayAliveAfterLocalFail = function()
 		return false
 	end
 	local summary = ITGOnline:PlayStateSummary()
+	if summary
+		and summary.allFailedTerminal == true
+		and summary.finalResultsReady ~= true
+		and phase == "playing"
+	then
+		online_flow_trace_throttled("keep_alive_after_fail_all_failed_pending_finals", 1.0,
+			"keep_alive_after_fail decision=true reason=all_failed_pending_client_finals"
+			.. " players=" .. tostring(summary.players)
+			.. " terminal=" .. tostring(summary.terminal)
+			.. " failedTerminal=" .. tostring(summary.failedTerminal)
+			.. " failedFinalsPending=" .. tostring(summary.failedFinalsPending))
+		return true
+	end
 	if not summary or tonumber(summary.players or 0) <= 1 then
 		online_flow_trace_throttled("keep_alive_after_fail_solo", 2.0,
 			"keep_alive_after_fail decision=false reason=not_multiplayer"
@@ -4697,12 +4755,19 @@ ITGOnlineShouldKeepGameplayAliveAfterLocalFail = function()
 		return false
 	end
 	local keepAlive = summary.allTerminal ~= true
+	if summary.allFailedTerminal == true and summary.finalResultsReady ~= true and phase == "playing" then
+		keepAlive = true
+	end
 	online_flow_trace_throttled("keep_alive_after_fail_decision", 1.0,
 		"keep_alive_after_fail decision=" .. tostring(keepAlive == true)
 		.. " phase=" .. tostring(phase)
 		.. " terminal=" .. tostring(summary.terminal)
+		.. " failedTerminal=" .. tostring(summary.failedTerminal)
 		.. " players=" .. tostring(summary.players)
-		.. " allTerminal=" .. tostring(summary.allTerminal == true))
+		.. " allTerminal=" .. tostring(summary.allTerminal == true)
+		.. " allFailedTerminal=" .. tostring(summary.allFailedTerminal == true)
+		.. " finalResultsReady=" .. tostring(summary.finalResultsReady == true)
+		.. " failedFinalsPending=" .. tostring(summary.failedFinalsPending))
 	return keepAlive
 end
 
