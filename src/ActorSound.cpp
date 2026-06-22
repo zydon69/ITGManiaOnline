@@ -5,20 +5,61 @@
 #include "Actor.h"
 #include "ActorUtil.h"
 #include "LuaManager.h"
+#include "RageLog.h"
 #include "RageSound.h"
 #include "XmlFile.h"
 
 REGISTER_ACTOR_CLASS_WITH_NAME(ActorSound, Sound);
 
-void ActorSound::Load(const std::string& sPath) { m_Sound.Load(sPath, true); }
+namespace {
+void WarnActorSoundAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+}  // namespace
 
-void ActorSound::Play() { m_Sound.Play(m_is_action); }
+void ActorSound::Load(const std::string& sPath) {
+  std::string resolvedPath = sPath;
+  if (!ActorUtil::ResolvePath(resolvedPath, "ActorSound:load", true)) {
+    WarnActorSoundAuditFix(
+        "SRC_AUDIT_FIX SRC-786: ActorSound ignored unresolved sound path.");
+    return;
+  }
+  m_Sound.Load(resolvedPath, true);
+}
 
-void ActorSound::Pause(bool bPause) { m_Sound.Pause(bPause); }
+void ActorSound::Play() {
+  if (!m_Sound.IsLoaded()) {
+    WarnActorSoundAuditFix(
+        "SRC_AUDIT_FIX SRC-787: ActorSound ignored play before load.");
+    return;
+  }
+  m_Sound.Play(m_is_action);
+}
 
-void ActorSound::Stop() { m_Sound.Stop(); }
+void ActorSound::Pause(bool bPause) {
+  if (!m_Sound.IsLoaded()) {
+    WarnActorSoundAuditFix(
+        "SRC_AUDIT_FIX SRC-787: ActorSound ignored pause before load.");
+    return;
+  }
+  m_Sound.Pause(bPause);
+}
+
+void ActorSound::Stop() {
+  if (!m_Sound.IsLoaded()) {
+    return;
+  }
+  m_Sound.Stop();
+}
 
 void ActorSound::LoadFromNode(const XNode* pNode) {
+  if (pNode == nullptr) {
+    WarnActorSoundAuditFix(
+        "SRC_AUDIT_FIX SRC-786: ActorSound ignored null XML node.");
+    return;
+  }
   RageSoundLoadParams params;
   pNode->GetAttrValue("SupportPan", params.m_bSupportPan);
   pNode->GetAttrValue("SupportRateChanging", params.m_bSupportRateChanging);
