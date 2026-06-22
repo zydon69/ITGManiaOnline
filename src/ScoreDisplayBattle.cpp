@@ -1,5 +1,6 @@
 #include "ScoreDisplayBattle.h"
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -14,29 +15,58 @@
 #include "ScoreDisplay.h"
 #include "ThemeManager.h"
 
-#define ITEM_X(i) \
-  THEME->GetMetricF("ScoreDisplayBattle", ssprintf("Item%dX", i + 1))
-#define ITEM_Y(i) \
-  THEME->GetMetricF("ScoreDisplayBattle", ssprintf("Item%dY", i + 1))
+namespace {
+void WarnScoreDisplayBattleAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+float GetBattleMetricF(const std::string& metric) {
+  if (THEME == nullptr) {
+    return 0.0f;
+  }
+  const float value = THEME->GetMetricF("ScoreDisplayBattle", metric);
+  return std::isfinite(value) ? value : 0.0f;
+}
+
+bool IsSafeBattleModifierName(const std::string& modifier) {
+  return !modifier.empty() && modifier.find("..") == std::string::npos &&
+         modifier.find('/') == std::string::npos &&
+         modifier.find('\\') == std::string::npos;
+}
+}  // namespace
 
 ScoreDisplayBattle::ScoreDisplayBattle() {
-  LOG->Trace("ScoreDisplayBattle::ScoreDisplayBattle()");
+  if (LOG != nullptr) {
+    LOG->Trace("ScoreDisplayBattle::ScoreDisplayBattle()");
+  }
 
-  m_sprFrame.Load(THEME->GetPathG("ScoreDisplayBattle", "frame"));
+  if (THEME != nullptr) {
+    m_sprFrame.Load(THEME->GetPathG("ScoreDisplayBattle", "frame"));
+  } else {
+    WarnScoreDisplayBattleAuditFix(
+        "SRC_AUDIT_FIX SRC-1106: ScoreDisplayBattle constructed without "
+        "THEME.");
+  }
   this->AddChild(&m_sprFrame);
 
   for (int i = 0; i < NUM_INVENTORY_SLOTS; i++) {
-    m_ItemIcon[i].SetXY(ITEM_X(i), ITEM_Y(i));
+    m_ItemIcon[i].SetXY(
+        GetBattleMetricF(ssprintf("Item%dX", i + 1)),
+        GetBattleMetricF(ssprintf("Item%dY", i + 1)));
     m_ItemIcon[i].StopAnimating();
     this->AddChild(&m_ItemIcon[i]);
   }
 
-  std::vector<std::string> asIconPaths;
-  GetDirListing(
-      THEME->GetCurThemeDir() + "Graphic/ScoreDisplayBattle icon*",
-      asIconPaths);
-  for (unsigned j = 0; j < asIconPaths.size(); j++) {
-    m_TexturePreload.Load(asIconPaths[j]);
+  if (THEME != nullptr) {
+    std::vector<std::string> asIconPaths;
+    GetDirListing(
+        THEME->GetCurThemeDir() + "Graphic/ScoreDisplayBattle icon*",
+        asIconPaths);
+    for (unsigned j = 0; j < asIconPaths.size(); j++) {
+      m_TexturePreload.Load(asIconPaths[j]);
+    }
   }
 }
 
@@ -67,13 +97,20 @@ void ScoreDisplayBattle::Update(float fDelta) {
         m_ItemIcon[s].RunCommands(
             ActorUtil::ParseActorCommands("linear,0.25;zoom,0"));
       } else {
+        if (THEME == nullptr || !IsSafeBattleModifierName(sNewModifier)) {
+          WarnScoreDisplayBattleAuditFix(
+              "SRC_AUDIT_FIX SRC-1107: ScoreDisplayBattle hid unsafe or "
+              "unavailable modifier icon.");
+          m_ItemIcon[s].RunCommands(
+              ActorUtil::ParseActorCommands("linear,0.25;zoom,0"));
+          continue;
+        }
         const std::string iconPath = THEME->GetPathG(
             "ScoreDisplayBattle", "icon " + sNewModifier, true);
         if (iconPath.empty()) {
-          LOG->Warn(
+          WarnScoreDisplayBattleAuditFix(
               "SRC_AUDIT_FIX SRC-240: ScoreDisplayBattle missing icon for "
-              "modifier '%s'.",
-              sNewModifier.c_str());
+              "modifier.");
           m_ItemIcon[s].RunCommands(
               ActorUtil::ParseActorCommands("linear,0.25;zoom,0"));
           continue;
