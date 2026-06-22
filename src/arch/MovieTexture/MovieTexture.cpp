@@ -1,5 +1,7 @@
 #include "MovieTexture.h"
 
+#include <algorithm>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -17,7 +19,8 @@
 
 void ForceToAscii(std::string& str) {
   for (unsigned i = 0; i < str.size(); ++i) {
-    if (str[i] < 0x20 || str[i] > 0x7E) {
+    const unsigned char c = static_cast<unsigned char>(str[i]);
+    if (c < 0x20 || c > 0x7E) {
       str[i] = '?';
     }
   }
@@ -38,33 +41,39 @@ bool RageMovieTexture::GetFourCC(
   }
 
   // Not very pretty but should do all the same error checking without iostream
-#define HANDLE_ERROR(x)                               \
-  {                                                   \
-    LOG->Warn("Error reading %s: %s", fn.c_str(), x); \
-    handler = type = "";                              \
-    return false;                                     \
+#define HANDLE_ERROR(x)                                      \
+  {                                                          \
+    if (LOG != nullptr) {                                    \
+      LOG->Warn("Error reading %s: %s", fn.c_str(), x);      \
+    }                                                        \
+    handler = type = "";                                     \
+    return false;                                            \
   }
 
   RageFile file;
   if (!file.Open(fn)) {
     HANDLE_ERROR("Could not open file.");
   }
-  if (!file.Seek(0x70)) {
+  if (file.Seek(0x70) != 0x70) {
     HANDLE_ERROR("Could not seek.");
   }
-  type = "    ";
-  if (file.Read((char*)type.c_str(), 4) != 4) {
+  std::array<char, 4> typeBytes;
+  if (file.Read(typeBytes.data(), typeBytes.size()) !=
+      static_cast<int>(typeBytes.size())) {
     HANDLE_ERROR("Could not read.");
   }
+  type.assign(typeBytes.data(), typeBytes.size());
   ForceToAscii(type);
 
   if (file.Seek(0xBC) != 0xBC) {
     HANDLE_ERROR("Could not seek.");
   }
-  handler = "    ";
-  if (file.Read((char*)handler.c_str(), 4) != 4) {
+  std::array<char, 4> handlerBytes;
+  if (file.Read(handlerBytes.data(), handlerBytes.size()) !=
+      static_cast<int>(handlerBytes.size())) {
     HANDLE_ERROR("Could not read.");
   }
+  handler.assign(handlerBytes.data(), handlerBytes.size());
   ForceToAscii(handler);
 
   return true;
@@ -80,9 +89,11 @@ static void DumpAVIDebugInfo(const std::string& fn) {
     return;
   }
 
-  LOG->Trace(
-      "Movie %s has handler '%s', type '%s'", fn.c_str(), handler.c_str(),
-      type.c_str());
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "Movie %s has handler '%s', type '%s'", fn.c_str(), handler.c_str(),
+        type.c_str());
+  }
 }
 
 static Preference<std::string> g_sMovieDrivers(
@@ -103,6 +114,14 @@ RageMovieTexture* RageMovieTexture::Create(RageTextureID ID) {
   } else {
     DriversToTry = split(sDrivers, ',');
   }
+  DriversToTry.erase(
+      std::remove_if(
+          DriversToTry.begin(), DriversToTry.end(),
+          [](std::string& driver) {
+            Trim(driver);
+            return driver.empty();
+          }),
+      DriversToTry.end());
 
   if (DriversToTry.empty()) {
     RageException::Throw("%s", MOVIE_DRIVERS_EMPTY.GetValue().c_str());
@@ -112,31 +131,41 @@ RageMovieTexture* RageMovieTexture::Create(RageTextureID ID) {
 
   for (const std::string& Driver : DriversToTry) {
     const char* driverString = Driver.c_str();
-    LOG->Trace("Initializing driver: %s", driverString);
+    if (LOG != nullptr) {
+      LOG->Trace("Initializing driver: %s", driverString);
+    }
     RageDriver* pDriverBase =
         RageMovieTextureDriver::m_pDriverList.Create(Driver);
 
     if (pDriverBase == nullptr) {
-      LOG->Trace("Unknown movie driver name: %s", driverString);
+      if (LOG != nullptr) {
+        LOG->Trace("Unknown movie driver name: %s", driverString);
+      }
       continue;
     }
 
     RageMovieTextureDriver* pDriver =
         dynamic_cast<RageMovieTextureDriver*>(pDriverBase);
-    ASSERT(pDriver != nullptr);
+    if (pDriver == nullptr) {
+      delete pDriverBase;
+      continue;
+    }
 
     std::string sError;
     ret = pDriver->Create(ID, sError);
     delete pDriver;
 
     if (ret == nullptr) {
-      LOG->Trace("Couldn't load driver %s: %s", driverString, sError.c_str());
-      RageUtil::SafeDelete(ret);
+      if (LOG != nullptr) {
+        LOG->Trace("Couldn't load driver %s: %s", driverString, sError.c_str());
+      }
       continue;
     }
-    LOG->Trace(
-        "Created movie texture \"%s\" with driver \"%s\"", ID.filename.c_str(),
-        driverString);
+    if (LOG != nullptr) {
+      LOG->Trace(
+          "Created movie texture \"%s\" with driver \"%s\"",
+          ID.filename.c_str(), driverString);
+    }
     break;
   }
   if (!ret) {

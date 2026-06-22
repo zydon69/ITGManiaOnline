@@ -105,8 +105,8 @@ class MovieTexture_Generic : public RageMovieTexture {
   // on fSeconds passed in. (e.g., 5.9 input means show the frame that should
   // be displayed 5.9 seconds into the movie).
   virtual void UpdateMovie(float seconds);
-  virtual void SetPlaybackRate(float rate) { rate_ = rate; }
-  void SetLooping(bool looping = true) { loop_ = looping; }
+  virtual void SetPlaybackRate(float rate);
+  void SetLooping(bool looping = true);
   bool HasDecodeFailed() const { return failure_.load(std::memory_order_acquire); }
   void SetDecodeFailed(bool failed = true) {
     failure_.store(failed, std::memory_order_release);
@@ -140,7 +140,7 @@ class MovieTexture_Generic : public RageMovieTexture {
 
   void UpdateFrame();
 
-  void CreateTexture();
+  bool CreateTexture();
   void DestroyTexture();
 
   float CheckFrameTime();
