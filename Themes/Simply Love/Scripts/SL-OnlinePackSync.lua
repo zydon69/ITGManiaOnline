@@ -818,6 +818,39 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	end
 
 	self:SyncSequenceFromRoom(currentSelectedAt)
+	local intentSignature = table.concat({
+		tostring(ITGOnline and ITGOnline.currentRoomId or ""),
+		tostring(currentSelectedAt or ""),
+		tostring(status or ""),
+		tostring(message or ""),
+		tostring(progress or ""),
+		tostring(options.downloadCancelled == true),
+		tostring(self.downloadInFlightKey or ""),
+		tostring(self.activeDownloadId or ""),
+	}, "||")
+	local now = GetTimeSinceStart and GetTimeSinceStart() or 0
+	if intentSignature ~= "" and intentSignature == tostring(self.lastStatusPostIntentSignature or "") then
+		local age = now - (tonumber(self.lastStatusPostIntentAt) or 0)
+		if age < 0.35 then
+			trace("Status post skipped duplicate_intent status=" .. tostring(status)
+				.. " progress=" .. tostring(progress)
+				.. " selected_at=" .. tostring(currentSelectedAt)
+				.. " age=" .. string.format("%.3f", age))
+			if callback then
+				callback(true, {
+					pack_sync_status = {
+						applied = false,
+						ignored_reason = "client_duplicate_status_intent",
+					},
+					duplicate = true,
+				}, nil)
+			end
+			return
+		end
+	end
+	self.lastStatusPostIntentSignature = intentSignature
+	self.lastStatusPostIntentAt = now
+
 	local requestSequence = 0
 	if usesDownloadSequence then
 		self.downloadStatusSequence = math.max(tonumber(self.downloadStatusSequence) or 0, tonumber(self.sequence) or 0) + 1
@@ -840,7 +873,6 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		.. " inFlightKey=" .. tostring(self.downloadInFlightKey or "")
 		.. " browseOnly=" .. tostring(self.activeBrowseOnlyDownload == true))
 	local signature = status_post_signature(ITGOnline and ITGOnline.currentRoomId or "", currentSelectedAt, status, message, progress, options)
-	local now = GetTimeSinceStart and GetTimeSinceStart() or 0
 	local postedAt = tonumber(self.lastPostedStatusAt) or 0
 	local heartbeat = tonumber(self.statusPostDuplicateHeartbeatSeconds) or 5.0
 	if signature ~= "" and signature == tostring(self.statusPostInFlightSignature or "") then

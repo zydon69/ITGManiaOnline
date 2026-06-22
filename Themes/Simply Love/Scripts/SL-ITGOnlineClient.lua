@@ -9018,9 +9018,10 @@ function ITGOnline:MarkReturnedToLobby(callback)
 			self.onlineGameplayReturnedKey = key
 			self:UpdatePlayStateFromResponse(decoded)
 			if self.currentRoom then
-				self.currentRoom.phase = "lobby"
-				self:ResetLocalPlayStateForLobby("mark_returned_to_lobby_confirmed")
-				self:ClearSelectedSongForLobby("mark_returned_to_lobby_confirmed", true)
+				online_flow_trace("mark_returned_to_lobby_confirmed_preserve_server_phase"
+					.. " room=" .. tostring(self.currentRoomId)
+					.. " phase=" .. tostring(self.currentRoom.phase or "nil")
+					.. " roundKey=" .. tostring(key))
 			end
 		end
 		online_flow_trace("mark_returned_to_lobby_response room=" .. tostring(self.currentRoomId)
@@ -9209,18 +9210,42 @@ function ITGOnline:MarkPlayFailedEarly(source, callback)
 			return
 		end
 
+		local scoreRoomPhase = self:NormalizeRoomPhase(
+			scoreDecoded and (scoreDecoded.room_phase or scoreDecoded.room and scoreDecoded.room.phase)
+				or self.currentRoom and self.currentRoom.phase
+				or phase
+		)
+		if scoreRoomPhase == "results" or self.lastFinalScoreKey == key then
+			if self.onlineGameplayFailedEarlyInFlightKey == key then
+				self.onlineGameplayFailedEarlyInFlightKey = ""
+			end
+			self.onlineGameplayFailedEarlyKey = key
+			self:ApplyLocalPlayState("failed", "mark_failed_early_final_score_accepted")
+			online_flow_trace("mark_failed_early_confirmed_without_terminal_post"
+				.. " roundKey=" .. tostring(key)
+				.. " reason=final_failed_score_accepted"
+				.. " roomPhase=" .. tostring(scoreRoomPhase)
+				.. " lastFinalScoreKey=" .. tostring(self.lastFinalScoreKey or ""))
+			if callback then callback(true, scoreDecoded, scoreResponse) end
+			return
+		end
+
 		self:MarkPlayFailed(function(ok, decoded, response)
 			if self.onlineGameplayFailedEarlyInFlightKey == key then
 				self.onlineGameplayFailedEarlyInFlightKey = ""
 			end
-			if ok then
+			local errorCode = response_error_code(response, decoded)
+			if ok or errorCode == "room_not_playing" then
 				self.onlineGameplayFailedEarlyKey = key
-				online_flow_trace("mark_failed_early_confirmed roundKey=" .. tostring(key))
+				self:ApplyLocalPlayState("failed", "mark_failed_early_terminal_post")
+				online_flow_trace("mark_failed_early_confirmed roundKey=" .. tostring(key)
+					.. " terminalPostOk=" .. tostring(ok == true)
+					.. " errorCode=" .. tostring(errorCode or "nil"))
 			else
 				online_flow_trace("mark_failed_early_rejected roundKey=" .. tostring(key)
 					.. " message=" .. tostring(response_message(response, decoded, "failed state rejected")))
 			end
-			if callback then callback(ok, decoded, response) end
+			if callback then callback(ok or errorCode == "room_not_playing", decoded, response) end
 		end)
 	end
 
@@ -9347,6 +9372,20 @@ function ITGOnline:MaybeAckScheduledStart(room)
 		return
 	end
 	local key = roomId .. "|" .. tostring(self:SelectedSongRoundKey(selectedSong, roomId)) .. "|" .. startAt
+	local intentKey = roomId .. "|" .. tostring(self:SelectedSongRoundKey(selectedSong, roomId))
+	local now = GetTimeSinceStart and GetTimeSinceStart() or 0
+	if intentKey ~= "" and intentKey == tostring(self.startScheduleAckIntentKey or "") then
+		local age = now - (tonumber(self.startScheduleAckIntentAt) or 0)
+		if age < 2.0 then
+			online_flow_trace("start_ack_skipped reason=duplicate_intent"
+				.. " key=" .. tostring(key)
+				.. " intentKey=" .. tostring(intentKey)
+				.. " age=" .. string.format("%.3f", age)
+				.. " completed=" .. tostring(self.startScheduleAckKey == key)
+				.. " inFlight=" .. tostring(self.startScheduleAckInFlightKey == key))
+			return
+		end
+	end
 	if self.startScheduleAckKey == key or self.startScheduleAckInFlightKey == key then
 		online_flow_trace("start_ack_skipped reason=duplicate"
 			.. " key=" .. tostring(key)
@@ -9355,6 +9394,8 @@ function ITGOnline:MaybeAckScheduledStart(room)
 		return
 	end
 
+	self.startScheduleAckIntentKey = intentKey
+	self.startScheduleAckIntentAt = now
 	self.startScheduleAckInFlightKey = key
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/start-ack", {}, function(ok, decoded, response)
 		if self.startScheduleAckInFlightKey == key then
