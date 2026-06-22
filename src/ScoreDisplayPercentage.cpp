@@ -6,10 +6,26 @@
 #include "ScoreDisplay.h"
 #include "ThemeManager.h"
 
+namespace {
+void WarnScoreDisplayPercentageAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+}  // namespace
+
 ScoreDisplayPercentage::ScoreDisplayPercentage() {
   // todo: allow ScoreDisplayPercentage to have its own frame? -aj
-  m_sprFrame.Load(THEME->GetPathG("ScoreDisplayNormal", "Frame"));
-  this->AddChild(m_sprFrame);
+  if (THEME != nullptr) {
+    m_sprFrame.Load(THEME->GetPathG("ScoreDisplayNormal", "Frame"));
+    if (m_sprFrame.IsLoaded()) {
+      this->AddChild(m_sprFrame);
+    }
+  } else {
+    WarnScoreDisplayPercentageAuditFix(
+        "SRC_AUDIT_FIX SRC-1098: ScoreDisplayPercentage constructed without "
+        "THEME.");
+  }
 
   m_Percent.SetName("ScoreDisplayPercentage Percent");
   this->AddChild(&m_Percent);
@@ -20,7 +36,7 @@ void ScoreDisplayPercentage::Init(
     const PlayerStageStats* pPlayerStageStats) {
   ScoreDisplay::Init(pPlayerState, pPlayerStageStats);
   if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
-    LOG->Warn(
+    WarnScoreDisplayPercentageAuditFix(
         "SRC_AUDIT_FIX SRC-236: ScoreDisplayPercentage ignored null init "
         "state.");
     return;

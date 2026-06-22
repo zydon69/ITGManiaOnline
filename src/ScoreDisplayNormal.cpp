@@ -4,6 +4,7 @@
 
 #include "ActorUtil.h"
 #include "GameState.h"
+#include "LuaManager.h"
 #include "LuaReference.h"
 #include "MessageManager.h"
 #include "PlayerStageStats.h"
@@ -12,22 +13,44 @@
 #include "ScoreDisplay.h"
 #include "ThemeManager.h"
 
+namespace {
+void WarnScoreDisplayNormalAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+}  // namespace
+
 ScoreDisplayNormal::ScoreDisplayNormal() {
-  LOG->Trace("ScoreDisplayNormal::ScoreDisplayNormal()");
+  if (LOG != nullptr) {
+    LOG->Trace("ScoreDisplayNormal::ScoreDisplayNormal()");
+  }
 
   std::string sType = "ScoreDisplayNormal";
 
-  m_sprFrame.Load(THEME->GetPathG(sType, "Frame"));
-  m_sprFrame->SetName("Frame");
-  ActorUtil::LoadAllCommandsAndSetXY(m_sprFrame, sType);
-  this->AddChild(m_sprFrame);
+  if (THEME != nullptr) {
+    m_sprFrame.Load(THEME->GetPathG(sType, "Frame"));
+    if (m_sprFrame.IsLoaded()) {
+      m_sprFrame->SetName("Frame");
+      ActorUtil::LoadAllCommandsAndSetXY(m_sprFrame, sType);
+      this->AddChild(m_sprFrame);
+    }
+  } else {
+    WarnScoreDisplayNormalAuditFix(
+        "SRC_AUDIT_FIX SRC-1096: ScoreDisplayNormal constructed without "
+        "THEME.");
+  }
 
   // init the text
-  m_text.LoadFromFont(THEME->GetPathF("ScoreDisplayNormal", "Text"));
-  m_text.Load("RollingNumbers");
+  if (THEME != nullptr) {
+    m_text.LoadFromFont(THEME->GetPathF("ScoreDisplayNormal", "Text"));
+    m_text.Load("RollingNumbers");
+  }
   m_text.SetName("Text");
   m_text.UpdateText();
-  ActorUtil::LoadAllCommandsAndSetXY(m_text, sType);
+  if (THEME != nullptr) {
+    ActorUtil::LoadAllCommandsAndSetXY(m_text, sType);
+  }
   this->AddChild(&m_text);
 }
 
@@ -36,8 +59,14 @@ void ScoreDisplayNormal::Init(
     const PlayerStageStats* pPlayerStageStats) {
   ScoreDisplay::Init(pPlayerState, pPlayerStageStats);
   if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
-    LOG->Warn(
+    WarnScoreDisplayNormalAuditFix(
         "SRC_AUDIT_FIX SRC-236: ScoreDisplayNormal ignored null init state.");
+    return;
+  }
+  if (LUA == nullptr) {
+    WarnScoreDisplayNormalAuditFix(
+        "SRC_AUDIT_FIX SRC-1097: ScoreDisplayNormal skipped Lua Load message "
+        "without LUA.");
     return;
   }
 

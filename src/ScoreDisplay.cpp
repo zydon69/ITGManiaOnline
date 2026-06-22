@@ -11,10 +11,12 @@ void ScoreDisplay::Init(
     const PlayerState* pPlayerState,
     const PlayerStageStats* pPlayerStageStats) {
   if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX SRC-236: ScoreDisplay initialized with PlayerState=%p "
-        "PlayerStageStats=%p.",
-        pPlayerState, pPlayerStageStats);
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-236: ScoreDisplay initialized with "
+          "PlayerState=%p PlayerStageStats=%p.",
+          pPlayerState, pPlayerStageStats);
+    }
   }
   m_pPlayerState = pPlayerState;
   m_pPlayerStageStats = pPlayerStageStats;
