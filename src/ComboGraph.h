@@ -16,6 +16,7 @@ class BitmapText;
 class ComboGraph : public ActorFrame {
  public:
   ComboGraph();
+  ComboGraph(const ComboGraph& cpy);
   virtual ~ComboGraph();
   void Load(std::string sMetricsGroup);
   void Set(const StageStats& s, const PlayerStageStats& pss);
@@ -27,9 +28,12 @@ class ComboGraph : public ActorFrame {
 
  private:
   void ClearGeneratedActors();
+  void ClearTemplateActors();
 
   ThemeMetric<float> BODY_WIDTH;
   ThemeMetric<float> BODY_HEIGHT;
+  float m_fBodyWidth;
+  float m_fBodyHeight;
   Actor* m_pBacking;
   Actor* m_pNormalCombo;
   Actor* m_pMaxCombo;
