@@ -377,6 +377,14 @@ local InputHandler = function(event)
 	if topScreen and isWaiting and event.PlayerNumber then
 		local pn = ToEnumShortString(event.PlayerNumber)
 		if event.type == "InputEventType_FirstPress" and event.GameButton == "Back" then
+			if ITGOnline and ITGOnline.ShouldBlockEvaluationExit and ITGOnline:ShouldBlockEvaluationExit("sync_input_back") then
+				if online_trace then
+					online_trace("FLOW sync_input_back_blocked reason=awaiting_results_ready"
+						.. " screen=" .. tostring(topScreen:GetName())
+						.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or ITGOnline.currentRoomPhase))
+				end
+				return true
+			end
 			isWaiting = false
 			UnlockOnlineInput()
 			if ITGOnline and ITGOnline.MarkReturnedToLobby then
@@ -3202,6 +3210,24 @@ CreateOnlineHandler = function()
 								end
 								return
 							end
+							local currentRoom = ITGOnline and ITGOnline.currentRoom or nil
+							local currentPhase = ITGOnline and ITGOnline.NormalizeRoomPhase
+								and ITGOnline:NormalizeRoomPhase(currentRoom and currentRoom.phase or ITGOnline.currentRoomPhase)
+								or tostring(currentRoom and currentRoom.phase or "")
+							if currentPhase == "starting" or currentPhase == "playing" then
+								if online_trace then
+									online_trace("FLOW LeaveLobbyMessage blocked reason=phase_not_leaveable"
+										.. " roomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+										.. " phase=" .. tostring(currentPhase))
+								end
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="leaveLobby",
+									success=false,
+									errorCode="phase_not_leaveable",
+									message="La manche se termine. Sortie disponible apres les resultats."
+								})
+								return
+							end
 								self.leaveLobbyBusy = true
 								clear_room_input_state("leave_lobby_request")
 								local leaveRoomId = ITGOnline and ITGOnline.currentRoomId or nil
@@ -3259,6 +3285,7 @@ CreateOnlineHandler = function()
 									MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 										event="leaveLobby",
 										success=false,
+										errorCode=(decoded and (decoded.error_code or decoded.errorCode)) or (response and response.errorCode) or nil,
 										message=(decoded and decoded.message) or (response and response.errorMessage) or "Echec de sortie du salon."
 									})
 								end

@@ -603,10 +603,71 @@ local function stop_lobby_overlay_timers(root)
 	lobby_flow_trace("stop_lobby_overlay_timers end pending=false network_status_clear_at=0")
 end
 
+local function current_joined_room_phase()
+	local phase = normalized_online_phase(joined_phase)
+	if phase == "" and ITGOnline and ITGOnline.currentRoom then
+		phase = normalized_online_phase(ITGOnline.currentRoom.phase)
+	end
+	return phase
+end
+
+local function joined_room_phase_allows_manual_leave()
+	local phase = current_joined_room_phase()
+	return phase ~= "starting" and phase ~= "playing"
+end
+
+local function restore_joined_after_blocked_leave(root, reason, message)
+	lobby_flow_trace("restore_joined_after_blocked_leave reason=" .. tostring(reason or "unknown")
+		.. " phase=" .. tostring(current_joined_room_phase())
+		.. " joined_code=" .. tostring(joined_lobby_code)
+		.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " leaving_lobby=" .. tostring(leaving_lobby == true))
+	leaving_lobby = false
+	showing_leave_confirm = false
+	input_quiet_until = GetTimeSinceStart() + 0.15
+	mode = "joined"
+	list_selected = false
+	reset_browse_focus()
+	if root then
+		local joinedContent = root:GetChild("JoinedLobbyContent")
+		if joinedContent then joinedContent:visible(true) end
+		local lobbyContent = root:GetChild("LobbyContent")
+		if lobbyContent then lobbyContent:visible(false) end
+		local onlinePlayersContent = root:GetChild("OnlinePlayersContent")
+		if onlinePlayersContent then onlinePlayersContent:visible(false) end
+		root:playcommand("SetStatus", {
+			text=message or "La manche se termine. Sortie disponible apres les resultats.",
+			showSpinner=false,
+			showPrompt=false,
+			duration=2.0
+		})
+		request_lobby_ui_repaint(root, "blocked_leave_restore")
+		root:queuecommand("UpdateJoinedLobbyText")
+	end
+	if ITGOnline and ITGOnline.FetchRoom and ITGOnline.LobbyStatePayload then
+		ITGOnline:FetchRoom(nil, function(ok, decoded)
+			lobby_flow_trace("restore_joined_after_blocked_leave_fetch_result ok=" .. tostring(ok == true)
+				.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+				.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil"))
+			if ok and decoded and decoded.room and is_active_lobby_overlay() then
+				MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+			end
+		end)
+	end
+end
+
 	local function begin_leave_lobby(root)
 		if leaving_lobby then
 			lobby_flow_trace("begin_leave_lobby_skipped reason=already_leaving joined_code=" .. tostring(joined_lobby_code))
-			return
+			return false
+		end
+		if not joined_room_phase_allows_manual_leave() then
+			lobby_flow_trace("begin_leave_lobby_blocked reason=phase_not_leaveable"
+				.. " phase=" .. tostring(current_joined_room_phase())
+				.. " joined_code=" .. tostring(joined_lobby_code)
+				.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+			restore_joined_after_blocked_leave(root, "phase_not_leaveable")
+			return false
 		end
 		SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode = tostring(joined_lobby_code or "")
 		SL.Global.Online.ScreenOnlineLobbiesLeaveRequestRoomId = tostring(ITGOnline and ITGOnline.currentRoomId or "")
@@ -639,6 +700,7 @@ end
 			})
 		end
 		lobby_flow_trace("begin_leave_lobby_end joined_code=" .. tostring(joined_lobby_code))
+		return true
 	end
 
 	local function finish_leave_lobby(root, requestedLobbyCode)
@@ -2486,11 +2548,14 @@ local function handle_leave_confirm_input(event)
 				end
 			else
 				lobby_flow_trace("leave_confirm_confirm_leave_lobby")
-				begin_leave_lobby(t)
-				MESSAGEMAN:Broadcast("LeaveLobby", {
-					roomId=SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode,
-					generation=SL.Global.Online.ScreenOnlineLobbiesLeaveRequestGeneration,
-				})
+				if begin_leave_lobby(t) then
+					MESSAGEMAN:Broadcast("LeaveLobby", {
+						roomId=SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode,
+						generation=SL.Global.Online.ScreenOnlineLobbiesLeaveRequestGeneration,
+					})
+				else
+					lobby_flow_trace("leave_confirm_leave_lobby_broadcast_skipped reason=begin_rejected")
+				end
 			end
 		else
 			play_online_sound_once("Common", "Cancel")
@@ -4093,6 +4158,14 @@ local af = Def.ActorFrame{
 				LeaveLobbyWatchdogCommand=function(self)
 					if not is_active_lobby_overlay() then return end
 					if not leaving_lobby then return end
+					if not joined_room_phase_allows_manual_leave() then
+						lobby_flow_trace("leave_lobby_watchdog_stopped reason=phase_not_leaveable"
+							.. " phase=" .. tostring(current_joined_room_phase())
+							.. " request_code=" .. tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestCode)
+							.. " request_room_id=" .. tostring(SL.Global.Online.ScreenOnlineLobbiesLeaveRequestRoomId))
+						restore_joined_after_blocked_leave(self, "watchdog_phase_not_leaveable")
+						return
+					end
 					SL.Global.Online.ScreenOnlineLobbiesLeaveWatchdogCount =
 						(tonumber(SL.Global.Online.ScreenOnlineLobbiesLeaveWatchdogCount) or 0) + 1
 					lobby_flow_trace(
@@ -4851,22 +4924,9 @@ end,
 			self:GetChild("JoinedLobbyContent"):visible(false)
 			request_lobby_ui_repaint(self, "online_response_join_failed")
 			elseif params and params.event == "leaveLobby" and params.success == false then
-				lobby_flow_trace("OnlineResponseStatus_apply event=leaveLobby success=false action=restore_joined")
-				leaving_lobby = false
-				showing_leave_confirm = false
-				-- Leave failed: restore joined view coherently.
-				mode = "joined"
-				self:GetChild("JoinedLobbyContent"):visible(true)
-				self:GetChild("LobbyContent"):visible(false)
-				self:GetChild("OnlinePlayersContent"):visible(false)
-				if ITGOnline and ITGOnline.FetchRoom and ITGOnline.LobbyStatePayload then
-					ITGOnline:FetchRoom(nil, function(ok, decoded)
-						if ok and decoded and decoded.room and is_active_lobby_overlay() then
-							MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
-						end
-					end)
-				end
-				self:queuecommand("UpdateJoinedLobbyText")
+				lobby_flow_trace("OnlineResponseStatus_apply event=leaveLobby success=false action=restore_joined"
+					.. " errorCode=" .. tostring(params.errorCode or params.error_code or "nil"))
+				restore_joined_after_blocked_leave(self, tostring(params.errorCode or params.error_code or "leave_failed"), params.message)
 		elseif params and params.event == "invitePlayer" then
 				if params.success then
 				else

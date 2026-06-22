@@ -4608,6 +4608,17 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 
 	if self.SendScore and phase == "playing" then
 		self.onlineGameplayEvaluationMarkInFlightKey = roundKey
+		if failed then
+			self.scoreInFlightFingerprint = nil
+			self.pendingLiveScoreSnapshot = nil
+			self.pendingLiveScoreRoundKey = ""
+			online_flow_trace("final_failed_score_prepare"
+				.. " source=" .. tostring(source or "unknown")
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. tostring(roundKey)
+				.. " currentPlayState=" .. tostring(currentPlayState or "nil")
+				.. " hadDisplayedSnapshot=" .. tostring(self.lastDisplayedScoreSnapshot ~= nil))
+		end
 		self:SendScore(true, true, nil, function(scoreOk, scoreDecoded, scoreResponse)
 			if not scoreOk then
 				if response_error_code(scoreResponse, scoreDecoded) == "score_already_finalized" then
@@ -4661,7 +4672,7 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 			elseif self.MarkPlayFinished then
 				self:MarkPlayFinished(terminalCallback)
 			end
-		end, { forceFailed = failed })
+		end, { forceFailed = failed, forceFinalFailed = failed })
 	else
 		markTerminalWithoutScore("no_score_submission_path")
 	end
@@ -5117,14 +5128,20 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 		self.onlineEvaluationExitRequested = false
 		self:MarkGameplayCompleteForEvaluation("screen_transition")
 	elseif previousWasGameplay and nextIsLobby and roomPhase == "playing" then
-		online_flow_trace("mark_returned_to_lobby reason=gameplay_to_lobby")
-		self:MarkReturnedToLobby()
-	elseif previousWasEvaluation and nextIsLobby and (roomPhase == "playing" or roomPhase == "starting" or roomPhase == "results") then
+		online_flow_trace("mark_returned_to_lobby_skipped reason=gameplay_to_lobby_before_results"
+			.. " roomPhase=" .. tostring(roomPhase))
+	elseif previousWasEvaluation and nextIsLobby and (roomPhase == "playing" or roomPhase == "starting") then
+		online_flow_trace("mark_returned_to_lobby_skipped reason=evaluation_to_lobby_before_results"
+			.. " roomPhase=" .. tostring(roomPhase))
+	elseif previousWasEvaluation and nextIsLobby and roomPhase == "results" then
 		-- Some flows go Gameplay -> Evaluation -> Lobby. Make sure we still
 		-- notify the server immediately when the player is back in the lobby.
 		online_flow_trace("mark_returned_to_lobby reason=evaluation_to_lobby roomPhase=" .. tostring(roomPhase))
 		self:MarkReturnedToLobby()
-	elseif previousWasGameplay and nextIsSelectMusic and (roomPhase == "playing" or roomPhase == "starting" or roomPhase == "results") then
+	elseif previousWasGameplay and nextIsSelectMusic and (roomPhase == "playing" or roomPhase == "starting") then
+		online_flow_trace("mark_returned_to_lobby_skipped reason=gameplay_to_select_music_before_results"
+			.. " roomPhase=" .. tostring(roomPhase))
+	elseif previousWasGameplay and nextIsSelectMusic and roomPhase == "results" then
 		-- If a player leaves gameplay early, force the online flow back to the room lobby.
 		online_flow_trace("mark_returned_to_lobby reason=gameplay_to_select_music roomPhase=" .. tostring(roomPhase))
 		self:MarkReturnedToLobby()
@@ -7322,6 +7339,11 @@ end
 
 function ITGOnline:SendScore(force, final, snapshot, callback, options)
 	options = type(options) == "table" and options or {}
+	local forceFinalFailed = options.forceFinalFailed == true or (final == true and options.forceFailed == true)
+	if forceFinalFailed then
+		final = true
+		force = true
+	end
 	local finish = function(ok, decoded, response, meta)
 		if callback then callback(ok, decoded, response, meta or {}) end
 	end
@@ -7335,6 +7357,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		.. " activeRoundKey=" .. tostring(self.activeGameplayRoundKey or "")
 		.. " hasSnapshot=" .. tostring(snapshot ~= nil)
 		.. " forceFailed=" .. tostring(options.forceFailed == true)
+		.. " forceFinalFailed=" .. tostring(forceFinalFailed == true)
 		.. " hasDisplayedSnapshot=" .. tostring(self.lastDisplayedScoreSnapshot ~= nil)
 		.. " inFlight=" .. tostring(self.scoreInFlightFingerprint ~= nil))
 
@@ -7428,10 +7451,16 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		finish(true, nil, nil, { alreadyAccepted = true, roundKey = roundKey })
 		return
 	end
-	if final and validRoundKey and self.lastFinalScoreInFlightKey == roundKey then
-		online_flow_trace("send_score_skipped reason=final_in_flight"
+	if final and validRoundKey and self.lastFinalScoreInFlightKey == roundKey and forceFinalFailed then
+		online_flow_trace("final_failed_score_preempts_final_inflight"
 			.. " room=" .. tostring(self.currentRoomId)
 			.. " roundKey=" .. tostring(roundKey))
+		self.lastFinalScoreInFlightKey = ""
+	elseif final and validRoundKey and self.lastFinalScoreInFlightKey == roundKey then
+		online_flow_trace("send_score_skipped reason=final_in_flight"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " roundKey=" .. tostring(roundKey)
+			.. " forceFinalFailed=" .. tostring(forceFinalFailed == true))
 		finish(false, nil, { retryAfter = 0.5, inFlight = true }, { roundKey = roundKey })
 		return
 	end
@@ -7661,6 +7690,10 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 	local outgoingMaxCombo = math.max(0, maxCombo or 0)
 	local outgoingFailed = (failed or options.forceFailed == true) and true or false
 	local scoreFingerprint = self:ScoreFingerprint(outgoingScore, outgoingCombo, outgoingMaxCombo, outgoingFailed, judgments)
+	if forceFinalFailed and not outgoingFailed then
+		outgoingFailed = true
+		scoreFingerprint = self:ScoreFingerprint(outgoingScore, outgoingCombo, outgoingMaxCombo, outgoingFailed, judgments)
+	end
 
 	if not final then
 		if self.scoreInFlightFingerprint then
@@ -7680,6 +7713,15 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 			finish(true, nil, nil, { duplicate = true })
 			return
 		end
+	end
+	if final and forceFinalFailed and self.scoreInFlightFingerprint then
+		online_flow_trace("final_failed_score_preempts_live_inflight"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " roundKey=" .. tostring(roundKey)
+			.. " previousFingerprint=" .. tostring(self.scoreInFlightFingerprint))
+		self.scoreInFlightFingerprint = nil
+		self.pendingLiveScoreSnapshot = nil
+		self.pendingLiveScoreRoundKey = ""
 	end
 
 	local latestRoomPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase or roomPhase)
@@ -7770,6 +7812,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		.. " combo=" .. tostring(outgoingCombo)
 		.. " maxCombo=" .. tostring(outgoingMaxCombo)
 		.. " failed=" .. tostring(outgoingFailed)
+		.. " forceFinalFailed=" .. tostring(forceFinalFailed == true)
 		.. " songPosition=" .. tostring(songPosition)
 		.. " scoreMode=" .. tostring(scoreMode))
 
@@ -8791,6 +8834,15 @@ function ITGOnline:MarkReturnedToLobby(callback)
 		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
 		return
 	end
+	local roomPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase or self.currentRoomPhase)
+	if roomPhase ~= "results" then
+		online_flow_trace("mark_returned_to_lobby_skipped reason=room_not_results"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " phase=" .. tostring(roomPhase)
+			.. " roundKey=" .. tostring(self:PlayStateKey()))
+		if callback then callback(false, nil, { errorMessage = "Returned-to-lobby ignored before results.", skipped=true }) end
+		return
+	end
 	local key = self:PlayStateKey()
 	if self:PlayStateKeyIsValid(key) and self.onlineGameplayReturnedKey == key then
 		online_flow_trace("mark_returned_to_lobby_skipped reason=already_returned"
@@ -8814,14 +8866,9 @@ function ITGOnline:MarkReturnedToLobby(callback)
 	self.onlineGameplayReturnedLocalAt = GetTimeSinceStart()
 	online_flow_trace("mark_returned_to_lobby_request room=" .. tostring(self.currentRoomId)
 		.. " roundKey=" .. tostring(key)
-		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+		.. " phase=" .. tostring(roomPhase)
 		.. " localReturnRoomId=" .. tostring(self.onlineGameplayReturnedLocalRoomId)
 		.. " localReturnAt=" .. string.format("%.3f", tonumber(self.onlineGameplayReturnedLocalAt) or 0))
-	if self.currentRoom then
-		self.currentRoom.phase = "lobby"
-		self:ResetLocalPlayStateForLobby("mark_returned_to_lobby_local")
-		self:ClearSelectedSongForLobby("mark_returned_to_lobby_local", true)
-	end
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/play/returned-to-lobby", {}, function(ok, decoded, response)
 		if self.onlineGameplayReturnedInFlightKey == key then
 			self.onlineGameplayReturnedInFlightKey = ""
@@ -8829,6 +8876,11 @@ function ITGOnline:MarkReturnedToLobby(callback)
 		if ok then
 			self.onlineGameplayReturnedKey = key
 			self:UpdatePlayStateFromResponse(decoded)
+			if self.currentRoom then
+				self.currentRoom.phase = "lobby"
+				self:ResetLocalPlayStateForLobby("mark_returned_to_lobby_confirmed")
+				self:ClearSelectedSongForLobby("mark_returned_to_lobby_confirmed", true)
+			end
 		end
 		online_flow_trace("mark_returned_to_lobby_response room=" .. tostring(self.currentRoomId)
 			.. " roundKey=" .. tostring(key)
