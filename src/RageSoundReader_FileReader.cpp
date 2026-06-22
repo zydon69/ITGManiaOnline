@@ -1,5 +1,6 @@
 #include "RageSoundReader_FileReader.h"
 
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -18,6 +19,11 @@
 RageSoundReader_FileReader* RageSoundReader_FileReader::TryOpenFile(
     RageFileBasic* pFile, std::string& error, std::string format,
     bool& bKeepTrying) {
+  if (pFile == nullptr) {
+    error = "No file handle";
+    bKeepTrying = false;
+    return nullptr;
+  }
   RageSoundReader_FileReader* Sample = nullptr;
 
   if (!CompareNoCase(format, "wav")) {
@@ -33,6 +39,7 @@ RageSoundReader_FileReader* RageSoundReader_FileReader::TryOpenFile(
   }
 
   if (!Sample) {
+    delete pFile;
     return nullptr;
   }
 
@@ -45,7 +52,7 @@ RageSoundReader_FileReader* RageSoundReader_FileReader::TryOpenFile(
   std::string err = Sample->GetError();
   delete Sample;
 
-  if (LogContentLoadDiagnosticsEnabled()) {
+  if (LogContentLoadDiagnosticsEnabled() && LOG != nullptr) {
     LOG->Trace(
         "CONTENT_TRACE: sound_reader_format_failed format=%s error='%s'",
         format.c_str(), err.c_str());
@@ -106,7 +113,8 @@ RageSoundReader_FileReader* RageSoundReader_FileReader::OpenFile(
   }
 
   if (pPrebuffer) {
-    if (pFile->GetFileSize() < 1024 * 50) {
+    const int fileSize = pFile->GetFileSize();
+    if (fileSize >= 0 && fileSize < 1024 * 50) {
       RageFileObjMem* pMem = new RageFileObjMem;
       bool bRet = FileCopy(*pFile, *pMem, error, nullptr);
       if (!bRet) {
@@ -138,8 +146,13 @@ RageSoundReader_FileReader* RageSoundReader_FileReader::OpenFile(
 
   /* If the extension matches a format, try that first. */
   if (FileTypes.find(format) != FileTypes.end()) {
+    RageFileBasic* pCopy = pFile->Copy();
+    if (pCopy == nullptr) {
+      error = "Couldn't copy file handle";
+      return nullptr;
+    }
     RageSoundReader_FileReader* NewSample =
-        TryOpenFile(pFile->Copy(), error, format, bKeepTrying);
+        TryOpenFile(pCopy, error, format, bKeepTrying);
     if (NewSample) {
       return NewSample;
     }
@@ -148,11 +161,19 @@ RageSoundReader_FileReader* RageSoundReader_FileReader::OpenFile(
 
   for (std::set<std::string>::iterator it = FileTypes.begin();
        bKeepTrying && it != FileTypes.end(); ++it) {
+    RageFileBasic* pCopy = pFile->Copy();
+    if (pCopy == nullptr) {
+      error = "Couldn't copy file handle";
+      break;
+    }
     RageSoundReader_FileReader* NewSample =
-        TryOpenFile(pFile->Copy(), error, *it, bKeepTrying);
+        TryOpenFile(pCopy, error, *it, bKeepTrying);
     if (NewSample) {
-      LOG->UserLog(
-          "Sound file", pFile->GetDisplayPath(), "is really %s.", it->c_str());
+      if (LOG != nullptr) {
+        LOG->UserLog(
+            "Sound file", pFile->GetDisplayPath(), "is really %s.",
+            it->c_str());
+      }
       return NewSample;
     }
   }

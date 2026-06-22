@@ -24,15 +24,23 @@
 #include <cstdarg>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 
 static size_t OggRageFile_read_func(
     void* ptr, size_t size, size_t nmemb, void* datasource) {
+  if (ptr == nullptr || datasource == nullptr) {
+    return 0;
+  }
   RageFileBasic* f = (RageFileBasic*)datasource;
   return f->Read(ptr, size, nmemb);
 }
 
 static int OggRageFile_seek_func(
     void* datasource, ogg_int64_t offset, int whence) {
+  if (datasource == nullptr || offset < std::numeric_limits<int>::min() ||
+      offset > std::numeric_limits<int>::max()) {
+    return -1;
+  }
   RageFileBasic* f = (RageFileBasic*)datasource;
   return f->Seek((int)offset, whence);
 }
@@ -40,6 +48,9 @@ static int OggRageFile_seek_func(
 static int OggRageFile_close_func(void* datasource) { return 0; }
 
 static long OggRageFile_tell_func(void* datasource) {
+  if (datasource == nullptr) {
+    return -1;
+  }
   RageFileBasic* f = (RageFileBasic*)datasource;
   return f->Tell();
 }
@@ -107,6 +118,10 @@ static std::string ov_ssprintf(int err, const char* fmt, ...) {
 
 RageSoundReader_FileReader::OpenResult RageSoundReader_Vorbisfile::Open(
     RageFileBasic* pFile) {
+  if (pFile == nullptr) {
+    SetError("No file handle");
+    return OPEN_FATAL_ERROR;
+  }
   m_pFile = pFile;
   vf = new OggVorbis_File;
   memset(vf, 0, sizeof(*vf));
@@ -134,30 +149,39 @@ RageSoundReader_FileReader::OpenResult RageSoundReader_Vorbisfile::Open(
   read_offset = (int)ov_pcm_tell(vf);
 
   vorbis_info* vi = ov_info(vf, -1);
+  if (vi == nullptr || vi->channels <= 0 || vi->channels > 2 ||
+      vi->rate <= 0) {
+    SetError("Invalid Vorbis stream metadata");
+    return OPEN_FATAL_ERROR;
+  }
   channels = vi->channels;
 
   return OPEN_OK;
 }
 
 int RageSoundReader_Vorbisfile::GetLength() const {
+  if (vf == nullptr) {
+    return 0;
+  }
 #if defined(INTEGER_VORBIS)
   int len = ov_time_total(vf, -1);
 #else
   int len = int(ov_time_total(vf, -1) * 1000);
 #endif
-  if (len == OV_EINVAL) {
-    RageException::Throw(
-        "RageSoundReader_Vorbisfile::GetLength: ov_time_total returned "
-        "OV_EINVAL.");
+  if (len < 0) {
+    return 0;
   }
 
   return len;
 }
 
 int RageSoundReader_Vorbisfile::SetPosition(int iFrame) {
+  if (vf == nullptr) {
+    return ERROR;
+  }
   eof = false;
 
-  const ogg_int64_t sample = ogg_int64_t(iFrame);
+  const ogg_int64_t sample = ogg_int64_t(std::max(0, iFrame));
 
   int ret = ov_pcm_seek(vf, sample);
   if (ret < 0) {
@@ -175,9 +199,19 @@ int RageSoundReader_Vorbisfile::SetPosition(int iFrame) {
 }
 
 int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
+  if (iFrames == 0) {
+    return 0;
+  }
+  if (vf == nullptr || buf == nullptr || iFrames < 0 || channels == 0) {
+    return ERROR;
+  }
   int frames_read = 0;
 
   while (iFrames && !eof) {
+    if (channels > std::numeric_limits<int>::max() /
+                       static_cast<int>(sizeof(float))) {
+      return ERROR;
+    }
     const int bytes_per_frame = sizeof(float) * channels;
 
     int iFramesRead = 0;
@@ -187,9 +221,12 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
       if (curofs < read_offset) {
         /* The timestamps moved backwards.  Ignore it.  This file probably
          * won't sync correctly. */
-        LOG->Trace(
-            "p ahead %p %i < %i, we're ahead by %i", static_cast<void*>(this),
-            curofs, read_offset, read_offset - curofs);
+        if (LOG != nullptr) {
+          LOG->Trace(
+              "p ahead %p %i < %i, we're ahead by %i",
+              static_cast<void*>(this), curofs, read_offset,
+              read_offset - curofs);
+        }
         read_offset = curofs;
       } else if (curofs > read_offset) {
         /* Our offset doesn't match.  We have a hole in the data, or corruption.
@@ -199,6 +236,10 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
         /* In bytes: */
         int iSilentFrames = curofs - read_offset;
         iSilentFrames = std::min(iSilentFrames, (int)iFrames);
+        if (iSilentFrames >
+            std::numeric_limits<int>::max() / bytes_per_frame) {
+          return ERROR;
+        }
         int silence = iSilentFrames * bytes_per_frame;
         CHECKPOINT_M(ssprintf(
             "p %i,%i: %i frames of silence needed", curofs, read_offset,
@@ -212,6 +253,10 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
     if (iFramesRead == 0) {
       int bstream;
 #if defined(INTEGER_VORBIS)
+      if (iFrames > std::numeric_limits<int>::max() /
+                        (channels * static_cast<int>(sizeof(int16_t)))) {
+        return ERROR;
+      }
       int ret = ov_read(
           vf, (char*)buf, iFrames * channels * sizeof(int16_t), &bstream);
 #else  // float vorbis decoder
@@ -221,12 +266,17 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
 
       {
         vorbis_info* vi = ov_info(vf, -1);
-        ASSERT(vi != nullptr);
+        if (vi == nullptr) {
+          SetError("Vorbis stream info unavailable");
+          return ERROR;
+        }
 
         if ((unsigned)vi->channels != channels) {
-          RageException::Throw(
-              "File \"%s\" changes channel count from %i to %i; not supported.",
-              filename.c_str(), channels, (int)vi->channels);
+          SetError(ssprintf(
+              "File \"%s\" changes channel count from %i to %i; not "
+              "supported.",
+              filename.c_str(), channels, (int)vi->channels));
+          return ERROR;
         }
       }
 
@@ -235,6 +285,10 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
       }
       if (ret == OV_EBADLINK) {
         SetError(ssprintf("Read: OV_EBADLINK"));
+        return ERROR;
+      }
+      if (ret < 0) {
+        SetError(ov_ssprintf(ret, "Vorbis read failed"));
         return ERROR;
       }
 
@@ -288,16 +342,22 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
 }
 
 int RageSoundReader_Vorbisfile::GetSampleRate() const {
-  ASSERT(vf != nullptr);
+  if (vf == nullptr) {
+    return 0;
+  }
 
   vorbis_info* vi = ov_info(vf, -1);
-  ASSERT(vi != nullptr);
+  if (vi == nullptr) {
+    return 0;
+  }
 
   return vi->rate;
 }
 
 int RageSoundReader_Vorbisfile::GetNextSourceFrame() const {
-  ASSERT(vf != nullptr);
+  if (vf == nullptr) {
+    return 0;
+  }
 
   int iFrame = (int)ov_pcm_tell(vf);
   return iFrame;
@@ -313,14 +373,21 @@ RageSoundReader_Vorbisfile::~RageSoundReader_Vorbisfile() {
 }
 
 RageSoundReader_Vorbisfile* RageSoundReader_Vorbisfile::Copy() const {
+  if (m_pFile.isNull()) {
+    return nullptr;
+  }
   RageFileBasic* pFile = m_pFile->Copy();
+  if (pFile == nullptr) {
+    return nullptr;
+  }
   pFile->Seek(0);
   RageSoundReader_Vorbisfile* ret = new RageSoundReader_Vorbisfile;
 
   /* If we were able to open the sound in the first place, we expect to
    * be able to reopen it. */
   if (ret->Open(pFile) != OPEN_OK) {
-    FAIL_M(ssprintf("Copying sound failed: %s", ret->GetError().c_str()));
+    delete ret;
+    return nullptr;
   }
 
   return ret;
