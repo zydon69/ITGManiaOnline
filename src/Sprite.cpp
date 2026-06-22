@@ -16,6 +16,7 @@
 #include "LuaBinding.h"
 #include "LuaManager.h"
 #include "RageDisplay.h"
+#include "RageLog.h"
 #include "RageTexture.h"
 #include "RageTextureID.h"
 #include "RageTextureManager.h"
@@ -28,6 +29,83 @@
 REGISTER_ACTOR_CLASS(Sprite);
 
 const float min_state_delay = 0.0001f;
+
+namespace {
+void WarnSpriteAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+void WarnSpriteAuditFix(const std::string& message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message.c_str());
+  }
+}
+
+bool IsFiniteFloat(float value) {
+  return std::isfinite(value);
+}
+
+bool IsFiniteRect(const RectF& rect) {
+  return IsFiniteFloat(rect.left) && IsFiniteFloat(rect.top) &&
+         IsFiniteFloat(rect.right) && IsFiniteFloat(rect.bottom);
+}
+
+float SanitizeFiniteFloat(float value, float fallback, const char* context) {
+  if (IsFiniteFloat(value)) {
+    return value;
+  }
+  WarnSpriteAuditFix(ssprintf(
+      "SRC_AUDIT_FIX SRC-1050: Sprite replaced non-finite %s.", context));
+  return fallback;
+}
+
+RectF SanitizeRect(RectF rect, const RectF& fallback, const char* context) {
+  if (IsFiniteRect(rect)) {
+    return rect;
+  }
+  WarnSpriteAuditFix(ssprintf(
+      "SRC_AUDIT_FIX SRC-1050: Sprite replaced non-finite %s rect.", context));
+  return fallback;
+}
+
+Sprite::State MakeDefaultSpriteState() {
+  Sprite::State state;
+  state.rect = RectF(0, 0, 1, 1);
+  state.fDelay = 0.1f;
+  return state;
+}
+
+void SanitizeSpriteState(Sprite::State& state, const RectF& fallbackRect) {
+  state.rect = SanitizeRect(state.rect, fallbackRect, "state");
+  state.fDelay = SanitizeFiniteFloat(state.fDelay, 0.0f, "state delay");
+}
+
+bool HasUsableTextureDimensions(const RageTexture* texture) {
+  return texture != nullptr && texture->GetTextureWidth() > 0 &&
+         texture->GetTextureHeight() > 0 && texture->GetImageWidth() > 0 &&
+         texture->GetImageHeight() > 0;
+}
+
+class TextureOddDimensionWarningGuard {
+ public:
+  TextureOddDimensionWarningGuard() : m_active(TEXTUREMAN != nullptr) {
+    if (m_active) {
+      TEXTUREMAN->DisableOddDimensionWarning();
+    }
+  }
+
+  ~TextureOddDimensionWarningGuard() {
+    if (m_active && TEXTUREMAN != nullptr) {
+      TEXTUREMAN->EnableOddDimensionWarning();
+    }
+  }
+
+ private:
+  bool m_active;
+};
+}  // namespace
 
 Sprite::Sprite() {
   m_pTexture = nullptr;
@@ -55,7 +133,14 @@ Sprite::Sprite() {
 // dig through either of those, NoteSkinManager uses this special function.
 Sprite* Sprite::NewBlankSprite() {
   Sprite* news = new Sprite;
-  news->Load(TEXTUREMAN->GetDefaultTextureID());
+  if (TEXTUREMAN != nullptr) {
+    news->Load(TEXTUREMAN->GetDefaultTextureID());
+  } else {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1051: Sprite created blank sprite without "
+        "TEXTUREMAN.");
+    news->Load(RageTextureID());
+  }
   return news;
 }
 
@@ -81,9 +166,14 @@ Sprite::Sprite(const Sprite& cpy) : Actor(cpy) {
   CPY(m_use_effect_clock_for_texcoords);
 #undef CPY
 
-  if (cpy.m_pTexture != nullptr) {
+  if (cpy.m_pTexture != nullptr && TEXTUREMAN != nullptr) {
     m_pTexture = TEXTUREMAN->CopyTexture(cpy.m_pTexture);
   } else {
+    if (cpy.m_pTexture != nullptr) {
+      WarnSpriteAuditFix(
+          "SRC_AUDIT_FIX SRC-1051: Sprite copy skipped texture copy without "
+          "TEXTUREMAN.");
+    }
     m_pTexture = nullptr;
   }
 }
@@ -120,6 +210,7 @@ void Sprite::InitState() {
 }
 
 void Sprite::SetAllStateDelays(float fDelay) {
+  fDelay = SanitizeFiniteFloat(fDelay, 0.0f, "all state delays");
   for (unsigned int i = 0; i < m_States.size(); i++) {
     m_States[i].fDelay = fDelay;
   }
@@ -177,12 +268,19 @@ void Sprite::Load(RageTextureID ID) {
 };
 
 void Sprite::LoadFromNode(const XNode* pNode) {
+  if (pNode == nullptr) {
+    WarnSpriteAuditFix("SRC_AUDIT_FIX SRC-1052: Sprite ignored null node.");
+    LoadStatesFromTexture();
+    return;
+  }
+
   /* Texture may refer to the ID of a render target; if it's already
    * registered, use it without trying to resolve it. */
   std::string sPath;
   pNode->GetAttrValue("Texture", sPath);
   if (!sPath.empty() &&
-      !TEXTUREMAN->IsTextureRegistered(RageTextureID(sPath))) {
+      (TEXTUREMAN == nullptr ||
+       !TEXTUREMAN->IsTextureRegistered(RageTextureID(sPath)))) {
     ActorUtil::GetAttrPath(pNode, "Texture", sPath);
   }
 
@@ -191,6 +289,15 @@ void Sprite::LoadFromNode(const XNode* pNode) {
     LoadFromTexture(sPath);
 
     LoadStatesFromTexture();
+    if (m_pTexture == nullptr || m_pTexture->GetNumFrames() <= 0) {
+      WarnSpriteAuditFix(ssprintf(
+          "SRC_AUDIT_FIX SRC-1052: Sprite skipped frame metadata for texture "
+          "'%s' because no usable texture is loaded.",
+          sPath.c_str()));
+      Actor::LoadFromNode(pNode);
+      RecalcAnimationLengthSeconds();
+      return;
+    }
 
     // Read in frames and delays from the sprite file,
     // overwriting the states that LoadFromTexture created.
@@ -217,14 +324,18 @@ void Sprite::LoadFromNode(const XNode* pNode) {
         if (!pFrame->GetAttrValue("Delay", newState.fDelay)) {
           newState.fDelay = 0.1f;
         }
+        newState.fDelay =
+            SanitizeFiniteFloat(newState.fDelay, 0.1f, "sprite frame delay");
 
         pFrame->GetAttrValue("Frame", iFrameIndex);
-        if (iFrameIndex >= m_pTexture->GetNumFrames()) {
+        if (iFrameIndex < 0 || iFrameIndex >= m_pTexture->GetNumFrames()) {
           LuaHelpers::ReportScriptErrorFmt(
               "%s: State #%i is frame %d, but the texture \"%s\" only has %d "
               "frames",
               ActorUtil::GetWhere(pNode).c_str(), i + 1, iFrameIndex,
               sPath.c_str(), m_pTexture->GetNumFrames());
+          iFrameIndex =
+              std::clamp(iFrameIndex, 0, m_pTexture->GetNumFrames() - 1);
         }
         newState.rect = *m_pTexture->GetTextureCoordRect(iFrameIndex);
 
@@ -236,15 +347,20 @@ void Sprite::LoadFromNode(const XNode* pNode) {
           float fX = 1.0f, fY = 1.0f;
           pPoints[0]->GetAttrValue("x", fX);
           pPoints[0]->GetAttrValue("y", fY);
+          fX = SanitizeFiniteFloat(fX, 0.0f, "sprite frame point x");
+          fY = SanitizeFiniteFloat(fY, 0.0f, "sprite frame point y");
           newState.rect.left = SCALE(fX, 0.0f, 1.0f, r.left, r.right);
           newState.rect.top = SCALE(fY, 0.0f, 1.0f, r.top, r.bottom);
 
           pPoints[1]->GetAttrValue("x", fX);
           pPoints[1]->GetAttrValue("y", fY);
+          fX = SanitizeFiniteFloat(fX, 1.0f, "sprite frame point x");
+          fY = SanitizeFiniteFloat(fY, 1.0f, "sprite frame point y");
           newState.rect.right = SCALE(fX, 0.0f, 1.0f, r.left, r.right);
           newState.rect.bottom = SCALE(fY, 0.0f, 1.0f, r.top, r.bottom);
         }
 
+        SanitizeSpriteState(newState, *m_pTexture->GetTextureCoordRect(0));
         aStates.push_back(newState);
       }
     } else {
@@ -254,15 +370,17 @@ void Sprite::LoadFromNode(const XNode* pNode) {
         std::string sDelayKey = ssprintf("Delay%04d", i);
         State newState;
 
-        int iFrameIndex;
+        int iFrameIndex = 0;
         if (!pNode->GetAttrValue(sFrameKey, iFrameIndex)) {
           break;
         }
-        if (iFrameIndex >= m_pTexture->GetNumFrames()) {
+        if (iFrameIndex < 0 || iFrameIndex >= m_pTexture->GetNumFrames()) {
           LuaHelpers::ReportScriptErrorFmt(
               "%s: %s is %d, but the texture \"%s\" only has %d frames",
               ActorUtil::GetWhere(pNode).c_str(), sFrameKey.c_str(),
               iFrameIndex, sPath.c_str(), m_pTexture->GetNumFrames());
+          iFrameIndex =
+              std::clamp(iFrameIndex, 0, m_pTexture->GetNumFrames() - 1);
         }
 
         newState.rect = *m_pTexture->GetTextureCoordRect(iFrameIndex);
@@ -270,17 +388,26 @@ void Sprite::LoadFromNode(const XNode* pNode) {
         if (!pNode->GetAttrValue(sDelayKey, newState.fDelay)) {
           break;
         }
+        newState.fDelay =
+            SanitizeFiniteFloat(newState.fDelay, 0.1f, "sprite legacy delay");
+        SanitizeSpriteState(newState, *m_pTexture->GetTextureCoordRect(0));
 
         aStates.push_back(newState);
       }
     }
 
     if (!aStates.empty()) {
-      m_States = aStates;
-      Sprite::m_size.x =
-          aStates[0].rect.GetWidth() / m_pTexture->GetSourceToTexCoordsRatioX();
-      Sprite::m_size.y = aStates[0].rect.GetHeight() /
-                         m_pTexture->GetSourceToTexCoordsRatioY();
+      SetStateProperties(aStates);
+      const float ratioX = m_pTexture->GetSourceToTexCoordsRatioX();
+      const float ratioY = m_pTexture->GetSourceToTexCoordsRatioY();
+      if (ratioX > 0.0f && ratioY > 0.0f) {
+        Sprite::m_size.x = aStates[0].rect.GetWidth() / ratioX;
+        Sprite::m_size.y = aStates[0].rect.GetHeight() / ratioY;
+      } else {
+        WarnSpriteAuditFix(
+            "SRC_AUDIT_FIX SRC-1052: Sprite kept texture size because frame "
+            "ratio was invalid.");
+      }
     }
   }
 
@@ -291,7 +418,12 @@ void Sprite::LoadFromNode(const XNode* pNode) {
 void Sprite::UnloadTexture() {
   if (m_pTexture != nullptr)  // If there was a previous bitmap...
   {
-    TEXTUREMAN->UnloadTexture(m_pTexture);  // Unload it.
+    if (TEXTUREMAN != nullptr) {
+      TEXTUREMAN->UnloadTexture(m_pTexture);  // Unload it.
+    } else {
+      WarnSpriteAuditFix(
+          "SRC_AUDIT_FIX SRC-1051: Sprite detached texture without TEXTUREMAN.");
+    }
     m_pTexture = nullptr;
 
     /* Make sure we're reset to frame 0, so if we're reused, we aren't left
@@ -328,19 +460,28 @@ void Sprite::EnableAnimation(bool bEnable) {
 }
 
 void Sprite::SetTexture(RageTexture* pTexture) {
-  ASSERT(pTexture != nullptr);
+  if (pTexture == nullptr) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1053: Sprite refused null texture and unloaded.");
+    UnloadTexture();
+    LoadStatesFromTexture();
+    return;
+  }
 
   if (m_pTexture != pTexture) {
     UnloadTexture();
     m_pTexture = pTexture;
   }
 
-  ASSERT(m_pTexture->GetTextureWidth() >= 0);
-  ASSERT(m_pTexture->GetTextureHeight() >= 0);
+  if (m_pTexture->GetTextureWidth() <= 0 || m_pTexture->GetTextureHeight() <= 0) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1053: Sprite loaded texture with invalid texture "
+        "dimensions.");
+  }
 
   // the size of the sprite is the size of the image before it was scaled
-  Sprite::m_size.x = (float)m_pTexture->GetSourceFrameWidth();
-  Sprite::m_size.y = (float)m_pTexture->GetSourceFrameHeight();
+  Sprite::m_size.x = std::max(0.0f, (float)m_pTexture->GetSourceFrameWidth());
+  Sprite::m_size.y = std::max(0.0f, (float)m_pTexture->GetSourceFrameHeight());
 
   // apply clipping (if any)
   if (m_fRememberedClipWidth != -1 && m_fRememberedClipHeight != -1) {
@@ -359,6 +500,11 @@ void Sprite::LoadFromTexture(RageTextureID ID) {
   RageTexture* pTexture = nullptr;
   if (m_pTexture && m_pTexture->GetID() == ID) {
     pTexture = m_pTexture;
+  } else if (TEXTUREMAN == nullptr) {
+    WarnSpriteAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-1051: Sprite cannot load texture '%s' without "
+        "TEXTUREMAN.",
+        ID.filename.c_str()));
   } else {
     pTexture = TEXTUREMAN->LoadTexture(ID);
   }
@@ -372,21 +518,29 @@ void Sprite::LoadFromTexture(RageTextureID ID) {
 
 void Sprite::LoadFromCached(const std::string& sDir, const std::string& sPath) {
   if (sPath.empty()) {
-    Load(THEME->GetPathG("Common", "fallback %s", sDir.c_str()));
+    Load(THEME != nullptr
+             ? THEME->GetPathG("Common", "fallback %s", sDir.c_str())
+             : std::string());
     return;
   }
 
   RageTextureID ID;
 
   // Try to load the low quality version.
-  ID = IMAGECACHE->LoadCachedImage(sDir, sPath);
+  if (IMAGECACHE != nullptr) {
+    ID = IMAGECACHE->LoadCachedImage(sDir, sPath);
+  } else {
+    ID = RageTextureID(sPath);
+  }
 
-  if (TEXTUREMAN->IsTextureRegistered(ID)) {
+  if (TEXTUREMAN != nullptr && TEXTUREMAN->IsTextureRegistered(ID)) {
     Load(ID);
   } else if (IsAFile(sPath)) {
     Load(sPath);
   } else {
-    Load(THEME->GetPathG("Common", "fallback %s", sDir.c_str()));
+    Load(THEME != nullptr
+             ? THEME->GetPathG("Common", "fallback %s", sDir.c_str())
+             : std::string());
   }
 }
 
@@ -396,23 +550,38 @@ void Sprite::LoadStatesFromTexture() {
   m_States.clear();
 
   if (m_pTexture == nullptr) {
-    State newState;
-    newState.fDelay = 0.1f;
-    newState.rect = RectF(0, 0, 1, 1);
-    m_States.push_back(newState);
+    m_States.push_back(MakeDefaultSpriteState());
     return;
   }
 
   for (int i = 0; i < m_pTexture->GetNumFrames(); ++i) {
-    State newState;
-    newState.fDelay = 0.1f;
+    State newState = MakeDefaultSpriteState();
     newState.rect = *m_pTexture->GetTextureCoordRect(i);
+    SanitizeSpriteState(newState, RectF(0, 0, 1, 1));
     m_States.push_back(newState);
+  }
+  if (m_States.empty()) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1054: Sprite created default state for texture with "
+        "no frames.");
+    m_States.push_back(MakeDefaultSpriteState());
   }
   RecalcAnimationLengthSeconds();
 }
 
 void Sprite::UpdateAnimationState() {
+  if (m_States.empty()) {
+    LoadStatesFromTexture();
+  }
+  if (m_States.empty()) {
+    return;
+  }
+  if (m_iCurState < 0 || m_iCurState >= (int)m_States.size()) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1054: Sprite repaired current state index before "
+        "animation update.");
+    m_iCurState = 0;
+  }
   // Don't bother with state switching logic if there's only one state.
   // We already know what's going to show.
   if (m_States.size() > 1) {
@@ -451,6 +620,11 @@ void Sprite::UpdateAnimationState() {
  * the above is just documentation of current practice.) -glenn */
 // todo: see if "current" practice is just that. -aj
 void Sprite::Update(float fDelta) {
+  if (!IsFiniteFloat(fDelta)) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1055: Sprite ignored non-finite update delta.");
+    return;
+  }
   Actor::Update(fDelta);  // do tweening
 
   const bool bSkipThisMovieUpdate = m_bSkipNextUpdate;
@@ -465,9 +639,14 @@ void Sprite::Update(float fDelta) {
   }
 
   float fTimePassed = GetEffectDeltaTime();
+  if (!IsFiniteFloat(fTimePassed)) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1055: Sprite ignored non-finite effect delta.");
+    return;
+  }
   m_fSecsIntoState += fTimePassed;
 
-  if (m_fSecsIntoState < 0) {
+  if (m_fSecsIntoState < 0 && GetAnimationLengthSeconds() > 0.0f) {
     wrap(m_fSecsIntoState, GetAnimationLengthSeconds());
   }
 
@@ -483,6 +662,14 @@ void Sprite::Update(float fDelta) {
     float coord_delta = fDelta;
     if (m_use_effect_clock_for_texcoords) {
       coord_delta = fTimePassed;
+    }
+    if (!IsFiniteFloat(coord_delta) || !IsFiniteFloat(m_fTexCoordVelocityX) ||
+        !IsFiniteFloat(m_fTexCoordVelocityY)) {
+      WarnSpriteAuditFix(
+          "SRC_AUDIT_FIX SRC-1055: Sprite disabled invalid texcoord velocity.");
+      m_fTexCoordVelocityX = 0.0f;
+      m_fTexCoordVelocityY = 0.0f;
+      return;
     }
     float fTexCoords[8];
     Sprite::GetActiveTextureCoords(fTexCoords);
@@ -530,9 +717,20 @@ void TexCoordArrayFromRect(float fImageCoords[8], const RectF& rect) {
 }
 
 void Sprite::DrawTexture(const TweenState* state) {
+  if (DISPLAY == nullptr || state == nullptr) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1056: Sprite skipped draw without display/state.");
+    return;
+  }
   Actor::SetGlobalRenderStates();  // set Actor-specified render states
 
   RectF crop = state->crop;
+  crop = SanitizeRect(crop, RectF(0, 0, 0, 0), "crop");
+  if (!IsFiniteFloat(m_size.x) || !IsFiniteFloat(m_size.y)) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1056: Sprite skipped draw with invalid size.");
+    return;
+  }
   // bail if cropped all the way
   if (crop.left + crop.right >= 1 || crop.top + crop.bottom >= 1) {
     return;
@@ -677,6 +875,11 @@ void Sprite::DrawTexture(const TweenState* state) {
 bool Sprite::EarlyAbortDraw() const { return m_pTexture == nullptr; }
 
 void Sprite::DrawPrimitives() {
+  if (m_pTempState == nullptr) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1056: Sprite skipped draw without tween state.");
+    return;
+  }
   if (m_pTempState->fade.top > 0 || m_pTempState->fade.bottom > 0 ||
       m_pTempState->fade.left > 0 || m_pTempState->fade.right > 0) {
     // We're fading the edges.
@@ -801,6 +1004,15 @@ void Sprite::DrawPrimitives() {
 int Sprite::GetNumStates() const { return m_States.size(); }
 
 void Sprite::SetState(int iNewState) {
+  if (m_States.empty()) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1054: Sprite repaired empty state list in SetState.");
+    LoadStatesFromTexture();
+  }
+  if (m_States.empty()) {
+    return;
+  }
+
   /*
    * This assert will likely trigger if the "missing" theme element graphic
    * is loaded in place of a multi-frame sprite. We want to know about these
@@ -843,12 +1055,21 @@ void Sprite::SetState(int iNewState) {
 
 void Sprite::RecalcAnimationLengthSeconds() {
   m_animation_length_seconds = 0;
-  for (const State& s : m_States) {
-    m_animation_length_seconds += s.fDelay;
+  for (State& s : m_States) {
+    SanitizeSpriteState(s, RectF(0, 0, 1, 1));
+    if (s.fDelay > 0.0f) {
+      m_animation_length_seconds += s.fDelay;
+    }
+  }
+  if (!IsFiniteFloat(m_animation_length_seconds)) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1054: Sprite reset non-finite animation length.");
+    m_animation_length_seconds = 0.0f;
   }
 }
 
 void Sprite::SetSecondsIntoAnimation(float fSeconds) {
+  fSeconds = SanitizeFiniteFloat(fSeconds, 0.0f, "seconds into animation");
   SetState(0);  // rewind to the first state
   if (m_pTexture) {
     m_pTexture->SetPosition(fSeconds);
@@ -866,9 +1087,11 @@ std::string Sprite::GetTexturePath() const {
 }
 
 void Sprite::SetCustomTextureRect(const RectF& new_texcoord_frect) {
+  const RectF sanitized =
+      SanitizeRect(new_texcoord_frect, RectF(0, 0, 1, 1), "texture coord");
   m_bUsingCustomTexCoords = true;
   m_bTextureWrapping = true;
-  TexCoordArrayFromRect(m_CustomTexCoords, new_texcoord_frect);
+  TexCoordArrayFromRect(m_CustomTexCoords, sanitized);
 }
 
 void Sprite::SetCustomTextureCoords(
@@ -878,11 +1101,19 @@ void Sprite::SetCustomTextureCoords(
   m_bUsingCustomTexCoords = true;
   m_bTextureWrapping = true;
   for (int i = 0; i < 8; i++) {
-    m_CustomTexCoords[i] = fTexCoords[i];
+    m_CustomTexCoords[i] =
+        SanitizeFiniteFloat(fTexCoords[i], 0.0f, "texture coordinate");
   }
 }
 
 void Sprite::SetCustomImageRect(RectF rectImageCoords) {
+  if (!HasUsableTextureDimensions(m_pTexture)) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1057: Sprite ignored image rect without usable "
+        "texture dimensions.");
+    return;
+  }
+  rectImageCoords = SanitizeRect(rectImageCoords, RectF(0, 0, 1, 1), "image");
   // Convert to a rectangle in texture coordinate space.
   rectImageCoords.left *=
       m_pTexture->GetImageWidth() / (float)m_pTexture->GetTextureWidth();
@@ -900,8 +1131,18 @@ void Sprite::SetCustomImageCoords(
     float fImageCoords[8])  // order: top left, bottom left, bottom right, top
                             // right
 {
+  if (!HasUsableTextureDimensions(m_pTexture)) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1057: Sprite ignored image coords without usable "
+        "texture dimensions.");
+    return;
+  }
   // convert image coords to texture coords in place
   for (int i = 0; i < 8; i += 2) {
+    fImageCoords[i + 0] = SanitizeFiniteFloat(
+        fImageCoords[i + 0], 0.0f, "image coordinate x");
+    fImageCoords[i + 1] = SanitizeFiniteFloat(
+        fImageCoords[i + 1], 0.0f, "image coordinate y");
     fImageCoords[i + 0] *=
         m_pTexture->GetImageWidth() / (float)m_pTexture->GetTextureWidth();
     fImageCoords[i + 1] *=
@@ -917,7 +1158,8 @@ void Sprite::SetCustomPosCoords(
 {
   m_bUsingCustomPosCoords = true;
   for (int i = 0; i < 8; ++i) {
-    m_CustomPosCoords[i] = fPosCoords[i];
+    m_CustomPosCoords[i] =
+        SanitizeFiniteFloat(fPosCoords[i], 0.0f, "position coordinate");
   }
 }
 
@@ -926,9 +1168,18 @@ const RectF* Sprite::GetCurrentTextureCoordRect() const {
 }
 
 const RectF* Sprite::GetTextureCoordRectForState(int iState) const {
-  ASSERT_M(
-      iState < (int)m_States.size(),
-      ssprintf("%d, %d", int(iState), int(m_States.size())));
+  static const RectF fallbackRect(0, 0, 1, 1);
+  if (m_States.empty()) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1054: Sprite returned fallback rect for empty "
+        "state list.");
+    return &fallbackRect;
+  }
+  if (iState < 0 || iState >= (int)m_States.size()) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1054: Sprite clamped texture coord state index.");
+    iState = std::clamp(iState, 0, (int)m_States.size() - 1);
+  }
 
   return &m_States[iState].rect;
 }
@@ -953,11 +1204,20 @@ void Sprite::StopUsingCustomCoords() { m_bUsingCustomTexCoords = false; }
 void Sprite::StopUsingCustomPosCoords() { m_bUsingCustomPosCoords = false; }
 
 void Sprite::SetTexCoordVelocity(float fVelX, float fVelY) {
-  m_fTexCoordVelocityX = fVelX;
-  m_fTexCoordVelocityY = fVelY;
+  m_fTexCoordVelocityX = SanitizeFiniteFloat(fVelX, 0.0f, "texcoord velocity x");
+  m_fTexCoordVelocityY = SanitizeFiniteFloat(fVelY, 0.0f, "texcoord velocity y");
 }
 
 void Sprite::ScaleToClipped(float fWidth, float fHeight) {
+  if ((!IsFiniteFloat(fWidth) || !IsFiniteFloat(fHeight)) ||
+      (fWidth <= 0.0f && fWidth != -1.0f) ||
+      (fHeight <= 0.0f && fHeight != -1.0f)) {
+    WarnSpriteAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-1058: Sprite ignored invalid ScaleToClipped size "
+        "%.6fx%.6f.",
+        fWidth, fHeight));
+    return;
+  }
   m_fRememberedClipWidth = fWidth;
   m_fRememberedClipHeight = fHeight;
 
@@ -979,6 +1239,14 @@ void Sprite::ScaleToClipped(float fWidth, float fHeight) {
 
     // first find the correct zoom
     Sprite::ScaleToCover(RectF(0, 0, fWidth, fHeight));
+    if (GetZoomedWidth() <= 0.0f || GetZoomedHeight() <= 0.0f ||
+        !IsFiniteFloat(GetZoomedWidth()) || !IsFiniteFloat(GetZoomedHeight())) {
+      WarnSpriteAuditFix(
+          "SRC_AUDIT_FIX SRC-1058: Sprite aborted ScaleToClipped after invalid "
+          "zoomed size.");
+      SetXY(fOriginalX, fOriginalY);
+      return;
+    }
     // find which dimension is larger
     bool bXDimNeedsToBeCropped = GetZoomedWidth() > fWidth + 0.01;
 
@@ -1018,6 +1286,14 @@ void Sprite::ScaleToClipped(float fWidth, float fHeight) {
 // magic hurr
 // This code should either be removed or refactored in the future -aj
 void Sprite::CropTo(float fWidth, float fHeight) {
+  if ((!IsFiniteFloat(fWidth) || !IsFiniteFloat(fHeight)) ||
+      (fWidth <= 0.0f && fWidth != -1.0f) ||
+      (fHeight <= 0.0f && fHeight != -1.0f)) {
+    WarnSpriteAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-1058: Sprite ignored invalid CropTo size %.6fx%.6f.",
+        fWidth, fHeight));
+    return;
+  }
   m_fRememberedClipWidth = fWidth;
   m_fRememberedClipHeight = fHeight;
 
@@ -1036,6 +1312,14 @@ void Sprite::CropTo(float fWidth, float fHeight) {
 
     // first find the correct zoom
     Sprite::ScaleToCover(RectF(0, 0, fWidth, fHeight));
+    if (GetZoomedWidth() <= 0.0f || GetZoomedHeight() <= 0.0f ||
+        !IsFiniteFloat(GetZoomedWidth()) || !IsFiniteFloat(GetZoomedHeight())) {
+      WarnSpriteAuditFix(
+          "SRC_AUDIT_FIX SRC-1058: Sprite aborted CropTo after invalid zoomed "
+          "size.");
+      SetXY(fOriginalX, fOriginalY);
+      return;
+    }
     // find which dimension is larger
     bool bXDimNeedsToBeCropped = GetZoomedWidth() > fWidth + 0.01;
 
@@ -1070,6 +1354,8 @@ void Sprite::CropTo(float fWidth, float fHeight) {
 // end magic
 
 void Sprite::StretchTexCoords(float fX, float fY) {
+  fX = SanitizeFiniteFloat(fX, 0.0f, "stretch texcoord x");
+  fY = SanitizeFiniteFloat(fY, 0.0f, "stretch texcoord y");
   float fTexCoords[8];
   GetActiveTextureCoords(fTexCoords);
 
@@ -1082,6 +1368,14 @@ void Sprite::StretchTexCoords(float fX, float fY) {
 }
 
 void Sprite::AddImageCoords(float fX, float fY) {
+  if (!HasUsableTextureDimensions(m_pTexture)) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1057: Sprite ignored image coord offset without "
+        "usable texture dimensions.");
+    return;
+  }
+  fX = SanitizeFiniteFloat(fX, 0.0f, "image coord offset x");
+  fY = SanitizeFiniteFloat(fY, 0.0f, "image coord offset y");
   float fTexCoords[8];
   GetActiveTextureCoords(fTexCoords);
 
@@ -1091,6 +1385,24 @@ void Sprite::AddImageCoords(float fX, float fY) {
   }
 
   SetCustomTextureCoords(fTexCoords);
+}
+
+void Sprite::SetStateProperties(const std::vector<State>& new_states) {
+  m_States = new_states;
+  if (m_States.empty()) {
+    WarnSpriteAuditFix(
+        "SRC_AUDIT_FIX SRC-1054: Sprite replaced empty state properties.");
+    m_States.push_back(MakeDefaultSpriteState());
+  }
+
+  const RectF fallbackRect =
+      m_pTexture != nullptr ? *m_pTexture->GetTextureCoordRect(0)
+                            : RectF(0, 0, 1, 1);
+  for (State& state : m_States) {
+    SanitizeSpriteState(state, fallbackRect);
+  }
+  RecalcAnimationLengthSeconds();
+  SetState(0);
 }
 
 // lua start
@@ -1114,16 +1426,14 @@ class LunaSprite : public Luna<Sprite> {
   }
   static int LoadBackground(T* p, lua_State* L) {
     RageTextureID ID(SArg(1));
-    TEXTUREMAN->DisableOddDimensionWarning();
+    TextureOddDimensionWarningGuard guard;
     p->Load(Sprite::SongBGTexture(ID));
-    TEXTUREMAN->EnableOddDimensionWarning();
     return 1;
   }
   static int LoadBanner(T* p, lua_State* L) {
     RageTextureID ID(SArg(1));
-    TEXTUREMAN->DisableOddDimensionWarning();
+    TextureOddDimensionWarningGuard guard;
     p->Load(Sprite::SongBannerTexture(ID));
-    TEXTUREMAN->EnableOddDimensionWarning();
     return 1;
   }
 
@@ -1141,7 +1451,7 @@ class LunaSprite : public Luna<Sprite> {
     float coords[8];
     for (int i = 0; i < 8; ++i) {
       coords[i] = FArg(i + 1);
-      if (std::isnan(coords[i])) {
+      if (!IsFiniteFloat(coords[i])) {
         coords[i] = 0.0f;
       }
     }
@@ -1204,24 +1514,29 @@ class LunaSprite : public Luna<Sprite> {
     if (num_states == 0) {
       luaL_error(L, "A Sprite cannot have zero states.");
     }
+    RageTexture* texture = p->GetTexture();
+    if (texture == nullptr || texture->GetNumFrames() <= 0) {
+      luaL_error(L, "A Sprite must have a texture with frames before setting states.");
+    }
     for (size_t s = 0; s < num_states; ++s) {
-      Sprite::State new_state;
+      Sprite::State new_state = MakeDefaultSpriteState();
       lua_rawgeti(L, 1, s + 1);
       lua_getfield(L, -1, "Frame");
       int frame_index = 0;
       if (lua_isnumber(L, -1)) {
         frame_index = IArg(-1);
-        if (frame_index < 0 || frame_index >= p->GetTexture()->GetNumFrames()) {
+        if (frame_index < 0 || frame_index >= texture->GetNumFrames()) {
           luaL_error(
               L, "Frame index out of range 0-%d.",
-              p->GetTexture()->GetNumFrames() - 1);
+              texture->GetNumFrames() - 1);
         }
       }
-      new_state.rect = *p->GetTexture()->GetTextureCoordRect(frame_index);
+      new_state.rect = *texture->GetTextureCoordRect(frame_index);
       lua_pop(L, 1);
       lua_getfield(L, -1, "Delay");
       if (lua_isnumber(L, -1)) {
-        new_state.fDelay = FArg(-1);
+        new_state.fDelay =
+            SanitizeFiniteFloat(FArg(-1), 0.0f, "Lua state delay");
       }
       lua_pop(L, 1);
       RectF r = new_state.rect;
@@ -1231,10 +1546,14 @@ class LunaSprite : public Luna<Sprite> {
         // I have no idea why the points are from 0 to 1 and make it use only
         // a portion of the state.  This is just copied from LoadFromNode.
         // -Kyz
-        new_state.rect.left = SCALE(FArg(-1), 0.0f, 1.0f, r.left, r.right);
+        new_state.rect.left = SCALE(
+            SanitizeFiniteFloat(FArg(-1), 0.0f, "Lua state left"), 0.0f, 1.0f,
+            r.left, r.right);
         lua_pop(L, 1);
         lua_rawgeti(L, -1, 2);
-        new_state.rect.top = SCALE(FArg(-1), 0.0f, 1.0f, r.top, r.bottom);
+        new_state.rect.top = SCALE(
+            SanitizeFiniteFloat(FArg(-1), 0.0f, "Lua state top"), 0.0f, 1.0f,
+            r.top, r.bottom);
         lua_pop(L, 1);
       }
       lua_pop(L, 1);
@@ -1244,13 +1563,18 @@ class LunaSprite : public Luna<Sprite> {
         // I have no idea why the points are from 0 to 1 and make it use only
         // a portion of the state.  This is just copied from LoadFromNode.
         // -Kyz
-        new_state.rect.right = SCALE(FArg(-1), 0.0f, 1.0f, r.left, r.right);
+        new_state.rect.right = SCALE(
+            SanitizeFiniteFloat(FArg(-1), 1.0f, "Lua state right"), 0.0f, 1.0f,
+            r.left, r.right);
         lua_pop(L, 1);
         lua_rawgeti(L, -1, 2);
-        new_state.rect.bottom = SCALE(FArg(-1), 0.0f, 1.0f, r.top, r.bottom);
+        new_state.rect.bottom = SCALE(
+            SanitizeFiniteFloat(FArg(-1), 1.0f, "Lua state bottom"), 0.0f,
+            1.0f, r.top, r.bottom);
         lua_pop(L, 1);
       }
       lua_pop(L, 1);
+      SanitizeSpriteState(new_state, *texture->GetTextureCoordRect(0));
       new_states.push_back(new_state);
       lua_pop(L, 1);
     }
@@ -1262,11 +1586,24 @@ class LunaSprite : public Luna<Sprite> {
     return 1;
   }
   static int SetSecondsIntoAnimation(T* p, lua_State* L) {
-    p->SetSecondsIntoAnimation(FArg(0));
+    p->SetSecondsIntoAnimation(FArg(1));
     COMMON_RETURN_SELF;
   }
   static int SetTexture(T* p, lua_State* L) {
+    if (lua_isnil(L, 1)) {
+      p->UnloadTexture();
+      COMMON_RETURN_SELF;
+    }
     RageTexture* pTexture = Luna<RageTexture>::check(L, 1);
+    if (pTexture == p->GetTexture()) {
+      COMMON_RETURN_SELF;
+    }
+    if (TEXTUREMAN == nullptr) {
+      WarnSpriteAuditFix(
+          "SRC_AUDIT_FIX SRC-1051: Sprite Lua SetTexture ignored texture "
+          "without TEXTUREMAN.");
+      COMMON_RETURN_SELF;
+    }
     pTexture = TEXTUREMAN->CopyTexture(pTexture);
     p->SetTexture(pTexture);
     COMMON_RETURN_SELF;

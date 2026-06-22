@@ -63,11 +63,7 @@ class Sprite : public Actor {
   }
   virtual void RecalcAnimationLengthSeconds();
   virtual void SetSecondsIntoAnimation(float fSeconds) override;
-  void SetStateProperties(const std::vector<State>& new_states) {
-    m_States = new_states;
-    RecalcAnimationLengthSeconds();
-    SetState(0);
-  }
+  void SetStateProperties(const std::vector<State>& new_states);
 
   std::string GetTexturePath() const;
 
