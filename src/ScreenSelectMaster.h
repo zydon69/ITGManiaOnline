@@ -99,6 +99,25 @@ class ScreenSelectMaster : public ScreenSelect {
   virtual int GetSelectionIndex(PlayerNumber pn);
   virtual void UpdateSelectableChoices();
   bool AnyOptionsArePlayable() const;
+  void GetActiveElementPlayerNumbers(std::vector<PlayerNumber>& vpns) const;
+  bool IsValidPlayer(PlayerNumber pn) const;
+  bool IsValidChoice(int iChoice) const;
+  int ClampChoice(int iChoice, int fallback = 0) const;
+  int GetNumChoicesOnPage1() const;
+  float GetPreSwitchPageSeconds() const;
+  float GetPostSwitchPageSeconds() const;
+  float GetScrollerSecondsPerItem() const;
+  float GetScrollerNumItemsToDraw() const;
+  int GetScrollerSubdivisions() const;
+  bool ShowIcon() const;
+  bool ShowScroller() const;
+  bool ShowCursor() const;
+  bool IsSharedSelection() const;
+  bool DoublePressToSelect() const;
+  bool AllowRepeatingInput() const;
+  bool WrapCursor() const;
+  bool WrapScroller() const;
+  bool DoSwitchAnyways() const;
 
   bool Move(PlayerNumber pn, MenuDir dir);
   bool ChangePage(int iNewChoice);

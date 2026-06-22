@@ -1,6 +1,7 @@
 #include "ScreenWithMenuElements.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 #include "Actor.h"
@@ -25,13 +26,55 @@
 #include "ThemeManager.h"
 #include "global.h"
 
-#define TIMER_STEALTH THEME->GetMetricB(m_sName, "TimerStealth")
-#define SHOW_STAGE_DISPLAY THEME->GetMetricB(m_sName, "ShowStageDisplay")
-#define MEMORY_CARD_ICONS THEME->GetMetricB(m_sName, "MemoryCardIcons")
-#define FORCE_TIMER THEME->GetMetricB(m_sName, "ForceTimer")
-#define STOP_MUSIC_ON_BACK THEME->GetMetricB(m_sName, "StopMusicOnBack")
+namespace {
+void WarnScreenWithMenuElements(const std::string& message) {
+  if (LOG != nullptr) {
+    LOG->Warn("ScreenWithMenuElements: %s", message.c_str());
+  }
+}
+
+bool GetThemeMetricB(
+    const std::string& group, const std::string& metric, bool fallback) {
+  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
+    return fallback;
+  }
+  return THEME->GetMetricB(group, metric);
+}
+
+std::string GetThemePathB(
+    const std::string& group, const std::string& element) {
+  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
+    return "";
+  }
+  return THEME->GetPathB(group, element);
+}
+
+std::string GetThemePathS(
+    const std::string& group, const std::string& element) {
+  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
+    return "";
+  }
+  return THEME->GetPathS(group, element);
+}
+
+void EnsureActorLoaded(AutoActor& actor, const std::string& name) {
+  if (!actor.IsLoaded()) {
+    WarnScreenWithMenuElements("using fallback actor for " + name);
+    actor.Load(new Actor);
+  }
+}
+
+float SafeNonNegativeSeconds(float seconds) {
+  return std::isfinite(seconds) && seconds > 0.0f ? seconds : 0.0f;
+}
+}  // namespace
+
+#define TIMER_STEALTH GetThemeMetricB(m_sName, "TimerStealth", false)
+#define MEMORY_CARD_ICONS GetThemeMetricB(m_sName, "MemoryCardIcons", false)
+#define FORCE_TIMER GetThemeMetricB(m_sName, "ForceTimer", false)
+#define STOP_MUSIC_ON_BACK GetThemeMetricB(m_sName, "StopMusicOnBack", false)
 #define WAIT_FOR_CHILDREN_BEFORE_TWEENING_OUT \
-  THEME->GetMetricB(m_sName, "WaitForChildrenBeforeTweeningOut")
+  GetThemeMetricB(m_sName, "WaitForChildrenBeforeTweeningOut", false)
 
 REGISTER_SCREEN_CLASS(ScreenWithMenuElements);
 ScreenWithMenuElements::ScreenWithMenuElements() {
@@ -50,11 +93,18 @@ void ScreenWithMenuElements::Init() {
   TIMER_METRICS_GROUP.Load(m_sName, "TimerMetricsGroup");
   Screen::Init();
 
-  ASSERT(this->m_SubActors.empty());  // don't call Init twice!
+  if (!this->m_SubActors.empty()) {
+    WarnScreenWithMenuElements(
+        m_sName + " ignored duplicate Init() with existing children.");
+    return;
+  }
 
   if (MEMORY_CARD_ICONS) {
     FOREACH_PlayerNumber(p) {
-      ASSERT(m_MemoryCardDisplay[p] == nullptr);
+      if (m_MemoryCardDisplay[p] != nullptr) {
+        RemoveChild(m_MemoryCardDisplay[p]);
+        RageUtil::SafeDelete(m_MemoryCardDisplay[p]);
+      }
       m_MemoryCardDisplay[p] = new MemoryCardDisplay;
       m_MemoryCardDisplay[p]->Load(p);
       m_MemoryCardDisplay[p]->SetName(ssprintf("MemoryCardDisplayP%d", p + 1));
@@ -64,7 +114,10 @@ void ScreenWithMenuElements::Init() {
   }
 
   if (TIMER_SECONDS != -1.0f) {
-    ASSERT(m_MenuTimer == nullptr);  // don't load twice
+    if (m_MenuTimer != nullptr) {
+      RemoveChild(m_MenuTimer);
+      RageUtil::SafeDelete(m_MenuTimer);
+    }
     m_MenuTimer = new MenuTimer;
     m_MenuTimer->Load(TIMER_METRICS_GROUP.GetValue());
     m_MenuTimer->SetName("Timer");
@@ -76,13 +129,15 @@ void ScreenWithMenuElements::Init() {
     this->AddChild(m_MenuTimer);
   }
 
-  m_sprUnderlay.Load(THEME->GetPathB(m_sName, "underlay"));
+  m_sprUnderlay.Load(GetThemePathB(m_sName, "underlay"));
+  EnsureActorLoaded(m_sprUnderlay, m_sName + " underlay");
   m_sprUnderlay->SetName("Underlay");
   m_sprUnderlay->SetDrawOrder(DRAW_ORDER_UNDERLAY);
   this->AddChild(m_sprUnderlay);
   LOAD_ALL_COMMANDS(m_sprUnderlay);
 
-  m_sprOverlay.Load(THEME->GetPathB(m_sName, "overlay"));
+  m_sprOverlay.Load(GetThemePathB(m_sName, "overlay"));
+  EnsureActorLoaded(m_sprOverlay, m_sName + " overlay");
   m_sprOverlay->SetName("Overlay");
   m_sprOverlay->SetDrawOrder(DRAW_ORDER_OVERLAY);
   this->AddChild(m_sprOverlay);
@@ -91,41 +146,49 @@ void ScreenWithMenuElements::Init() {
   // decorations
   {
     AutoActor decorations;
-    decorations.LoadB(m_sName, "decorations");
-    decorations->SetName("Decorations");
-    decorations->SetDrawOrder(DRAW_ORDER_DECORATIONS);
-    ActorFrame* pFrame =
-        dynamic_cast<ActorFrame*>(static_cast<Actor*>(decorations));
-    if (pFrame) {
+    if (THEME != nullptr && THEME->IsThemeLoaded()) {
+      decorations.LoadB(m_sName, "decorations");
+    }
+    if (decorations.IsLoaded()) {
+      decorations->SetName("Decorations");
+      decorations->SetDrawOrder(DRAW_ORDER_DECORATIONS);
+    }
+    ActorFrame* pFrame = decorations.IsLoaded()
+                             ? dynamic_cast<ActorFrame*>(
+                                   static_cast<Actor*>(decorations))
+                             : nullptr;
+    if (pFrame != nullptr) {
       m_vDecorations = pFrame->GetChildren();
       for (Actor* child : m_vDecorations) {
-        this->AddChild(child);
+        if (child != nullptr) {
+          this->AddChild(child);
+        }
       }
       pFrame->RemoveAllChildren();
     }
   }
 
   m_In.SetName("In");
-  m_In.Load(THEME->GetPathB(m_sName, "in"));
+  m_In.Load(GetThemePathB(m_sName, "in"));
   m_In.SetDrawOrder(DRAW_ORDER_TRANSITIONS);
   this->AddChild(&m_In);
   LOAD_ALL_COMMANDS(m_In);
 
   m_Out.SetName("Out");
-  m_Out.Load(THEME->GetPathB(m_sName, "out"));
+  m_Out.Load(GetThemePathB(m_sName, "out"));
   m_Out.SetDrawOrder(DRAW_ORDER_TRANSITIONS);
   this->AddChild(&m_Out);
   LOAD_ALL_COMMANDS(m_Out);
 
   m_Cancel.SetName("Cancel");
-  m_Cancel.Load(THEME->GetPathB(m_sName, "cancel"));
+  m_Cancel.Load(GetThemePathB(m_sName, "cancel"));
   m_Cancel.SetDrawOrder(DRAW_ORDER_TRANSITIONS);
   this->AddChild(&m_Cancel);
   LOAD_ALL_COMMANDS(m_Cancel);
 
   // Grab the music path here; don't GetPath during BeginScreen.
   if (PLAY_MUSIC) {
-    m_sPathToMusic = THEME->GetPathS(m_sName, "music");
+    m_sPathToMusic = GetThemePathS(m_sName, "music");
   }
 }
 
@@ -141,7 +204,9 @@ void ScreenWithMenuElements::BeginScreen() {
   this->SortByDrawOrder();
   m_In.StartTransitioning(SM_DoneFadingIn);
 
-  SOUND->PlayOnceFromAnnouncer(m_sName + " intro");
+  if (SOUND != nullptr) {
+    SOUND->PlayOnceFromAnnouncer(m_sName + " intro");
+  }
   StartPlayingMusic();
 
   /* Evaluate FirstUpdateCommand. */
@@ -149,9 +214,10 @@ void ScreenWithMenuElements::BeginScreen() {
 
   /* If AutoJoin and a player is already joined, then try to join a player.  (If
    * no players are joined, they'll join on the first JoinInput.) */
-  if (GAMESTATE->GetCoinMode() == CoinMode_Pay &&
+  if (GAMESTATE != nullptr && GAMESTATE->GetCoinMode() == CoinMode_Pay &&
       GAMESTATE->m_bAutoJoin.Get()) {
-    if (GAMESTATE->GetNumSidesJoined() > 0 && GAMESTATE->JoinPlayers()) {
+    if (GAMESTATE->GetNumSidesJoined() > 0 && GAMESTATE->JoinPlayers() &&
+        SCREENMAN != nullptr) {
       SCREENMAN->PlayStartSound();
     }
   }
@@ -170,15 +236,23 @@ void ScreenWithMenuElements::HandleScreenMessage(const ScreenMessage SM) {
 }
 
 ScreenWithMenuElements::~ScreenWithMenuElements() {
+  if (m_MenuTimer != nullptr) {
+    RemoveChild(m_MenuTimer);
+  }
   RageUtil::SafeDelete(m_MenuTimer);
   FOREACH_PlayerNumber(p) {
     if (m_MemoryCardDisplay[p] != nullptr) {
+      RemoveChild(m_MemoryCardDisplay[p]);
       RageUtil::SafeDelete(m_MemoryCardDisplay[p]);
     }
   }
   for (Actor* actor : m_vDecorations) {
-    delete actor;
+    if (actor != nullptr) {
+      RemoveChild(actor);
+      delete actor;
+    }
   }
+  m_vDecorations.clear();
 }
 
 void ScreenWithMenuElements::SetHelpText(std::string s) {
@@ -189,9 +263,16 @@ void ScreenWithMenuElements::SetHelpText(std::string s) {
 
 std::string ScreenWithMenuElements::HandleLuaMusicFile(
     const std::string& path) {
+  if (path.empty()) {
+    return "";
+  }
   FileType ft = ActorUtil::GetFileType(path);
   std::string ret = path;
   if (ft == FT_Lua) {
+    if (LUA == nullptr) {
+      WarnScreenWithMenuElements("ignored Lua music file without LUA manager.");
+      return "";
+    }
     std::string script;
     std::string error = "Lua runtime error: ";
     if (GetFileContents(path, script)) {
@@ -203,19 +284,26 @@ std::string ScreenWithMenuElements::HandleLuaMusicFile(
         // 1) return the path to the sound
         // (themer has to use THEME:GetPathS())
         std::string music_path_from_lua;
-        LuaHelpers::Pop(L, music_path_from_lua);
+        if (lua_isstring(L, -1)) {
+          LuaHelpers::Pop(L, music_path_from_lua);
+        } else {
+          lua_pop(L, 1);
+          WarnScreenWithMenuElements(
+              "Lua music script did not return a string path.");
+        }
         if (!music_path_from_lua.empty()) {
           ret = music_path_from_lua;
         } else {
           // 2) perhaps it's a table with some params? unsure if I want to
           // support this just yet. -aj
-          LOG->Trace("Lua music script did not return a path to a sound.");
+          WarnScreenWithMenuElements(
+              "Lua music script did not return a path to a sound.");
           ret = "";
         }
       }
       LUA->Release(L);
     } else {
-      LOG->Trace("run script failed hardcore, lol");
+      WarnScreenWithMenuElements("failed to read Lua music script: " + path);
       ret = "";
     }
   } else if (ft != FT_Sound) {
@@ -229,13 +317,14 @@ std::string ScreenWithMenuElements::HandleLuaMusicFile(
 void ScreenWithMenuElements::StartPlayingMusic() {
   /* Some screens should leave the music alone (eg. ScreenPlayerOptions music
    * sample left over from ScreenSelectMusic). */
-  if (PLAY_MUSIC) {
+  if (PLAY_MUSIC && SOUND != nullptr) {
     GameSoundManager::PlayMusicParams pmp;
     pmp.sFile = HandleLuaMusicFile(m_sPathToMusic);
     if (!pmp.sFile.empty()) {
       pmp.bAlignBeat = MUSIC_ALIGN_BEAT;
-      if (DELAY_MUSIC_SECONDS > 0.0f) {
-        pmp.fStartSecond = -DELAY_MUSIC_SECONDS;
+      const float delaySeconds = SafeNonNegativeSeconds(DELAY_MUSIC_SECONDS);
+      if (delaySeconds > 0.0f) {
+        pmp.fStartSecond = -delaySeconds;
       }
       SOUND->PlayMusic(pmp);
     }
@@ -251,8 +340,11 @@ void ScreenWithMenuElements::ResetTimer() {
     return;
   }
 
-  if (TIMER_SECONDS > 0.0f && (PREFSMAN->m_bMenuTimer || FORCE_TIMER)) {
-    m_MenuTimer->SetSeconds(TIMER_SECONDS);
+  const bool menuTimerEnabled =
+      (PREFSMAN != nullptr && PREFSMAN->m_bMenuTimer) || FORCE_TIMER;
+  const float timerSeconds = SafeNonNegativeSeconds(TIMER_SECONDS);
+  if (timerSeconds > 0.0f && menuTimerEnabled) {
+    m_MenuTimer->SetSeconds(timerSeconds);
     m_MenuTimer->Start();
   } else {
     m_MenuTimer->Disable();
@@ -268,8 +360,14 @@ void ScreenWithMenuElements::StartTransitioningScreen(
     // Time the transition so that it finishes exactly when all actors have
     // finished tweening.
     float fSecondsUntilFinished = GetTweenTimeLeft();
+    if (!std::isfinite(fSecondsUntilFinished)) {
+      fSecondsUntilFinished = 0.0f;
+    }
     float fSecondsUntilBeginOff =
         std::max(fSecondsUntilFinished - m_Out.GetTweenTimeLeft(), 0.0f);
+    if (!std::isfinite(fSecondsUntilBeginOff)) {
+      fSecondsUntilBeginOff = 0.0f;
+    }
     m_Out.SetHibernate(fSecondsUntilBeginOff);
   }
 }
@@ -286,7 +384,7 @@ void ScreenWithMenuElements::TweenOffScreen() {
 
   // If we're a stacked screen, then there's someone else between us and the
   // background, so don't tween it off.
-  if (!SCREENMAN->IsStackedScreen(this)) {
+  if (SCREENMAN != nullptr && !SCREENMAN->IsStackedScreen(this)) {
     SCREENMAN->PlaySharedBackgroundOffCommand();
   }
 }
@@ -306,7 +404,7 @@ void ScreenWithMenuElements::Cancel(ScreenMessage smSendWhenDone) {
     return;  // ignore
   }
 
-  if (STOP_MUSIC_ON_BACK) {
+  if (STOP_MUSIC_ON_BACK && SOUND != nullptr) {
     SOUND->StopMusic();
   }
 
@@ -375,6 +473,12 @@ class LunaScreenWithMenuElements : public Luna<ScreenWithMenuElements> {
   static int StartTransitioningScreen(T* p, lua_State* L) {
     std::string sMessage = SArg(1);
     ScreenMessage SM = ScreenMessageHelpers::ToScreenMessage(sMessage);
+    if (SM == SM_Invalid) {
+      LuaHelpers::ReportScriptErrorFmt(
+          "Invalid ScreenMessage '%s' for StartTransitioningScreen.",
+          sMessage.c_str());
+      COMMON_RETURN_SELF;
+    }
     p->StartTransitioningScreen(SM);
     COMMON_RETURN_SELF;
   }

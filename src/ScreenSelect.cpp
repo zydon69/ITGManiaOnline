@@ -24,10 +24,52 @@
 #include "ThemeManager.h"
 #include "global.h"
 
-#define CHOICE_NAMES THEME->GetMetric(m_sName, "ChoiceNames")
-#define CHOICE(s) THEME->GetMetric(m_sName, ssprintf("Choice%s", s.c_str()))
-#define IDLE_TIMEOUT_SCREEN THEME->GetMetric(m_sName, "IdleTimeoutScreen")
-#define UPDATE_ON_MESSAGE THEME->GetMetric(m_sName, "UpdateOnMessage")
+namespace {
+void WarnScreenSelect(const std::string& message) {
+  if (LOG != nullptr) {
+    LOG->Warn("ScreenSelect: %s", message.c_str());
+  }
+}
+
+bool IsValidSelectPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+bool IsValidChoiceIndex(const std::vector<GameCommand>& commands, int index) {
+  return index >= 0 && index < static_cast<int>(commands.size());
+}
+
+std::string GetScreenMetric(
+    const std::string& group, const std::string& metric,
+    const std::string& fallback = "") {
+  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
+    return fallback;
+  }
+  return THEME->GetMetric(group, metric);
+}
+
+std::string GetChoiceMetric(
+    const std::string& group, const std::string& choiceName) {
+  return GetScreenMetric(group, ssprintf("Choice%s", choiceName.c_str()));
+}
+
+void SplitNonEmptyTrimmed(
+    const std::string& value, std::vector<std::string>& out) {
+  std::vector<std::string> parts;
+  split(value, ",", parts);
+  for (std::string& part : parts) {
+    Trim(part);
+    if (!part.empty()) {
+      out.push_back(part);
+    }
+  }
+}
+}  // namespace
+
+#define CHOICE_NAMES GetScreenMetric(m_sName, "ChoiceNames")
+#define CHOICE(s) GetChoiceMetric(m_sName, s)
+#define IDLE_TIMEOUT_SCREEN GetScreenMetric(m_sName, "IdleTimeoutScreen")
+#define UPDATE_ON_MESSAGE GetScreenMetric(m_sName, "UpdateOnMessage")
 
 void ScreenSelect::Init() {
   IDLE_COMMENT_SECONDS.Load(m_sName, "IdleCommentSeconds");
@@ -37,12 +79,15 @@ void ScreenSelect::Init() {
   ScreenWithMenuElements::Init();
 
   // Load messages to update on
-  split(UPDATE_ON_MESSAGE, ",", m_asSubscribedMessages);
-  for (unsigned i = 0; i < m_asSubscribedMessages.size(); ++i) {
-    MESSAGEMAN->Subscribe(this, m_asSubscribedMessages[i]);
+  SplitNonEmptyTrimmed(UPDATE_ON_MESSAGE, m_asSubscribedMessages);
+  if (MESSAGEMAN != nullptr) {
+    for (unsigned i = 0; i < m_asSubscribedMessages.size(); ++i) {
+      MESSAGEMAN->Subscribe(this, m_asSubscribedMessages[i]);
+    }
   }
   // Subscribe to PlayerJoined, if not already.
-  if (!MESSAGEMAN->IsSubscribedToMessage(this, Message_PlayerJoined)) {
+  if (MESSAGEMAN != nullptr &&
+      !MESSAGEMAN->IsSubscribedToMessage(this, Message_PlayerJoined)) {
     this->SubscribeToMessage(Message_PlayerJoined);
   }
 
@@ -51,43 +96,47 @@ void ScreenSelect::Init() {
   std::string choice_names = CHOICE_NAMES;
   if (Left(choice_names, 4) == "lua,") {
     std::string command = Right(choice_names, choice_names.size() - 4);
-    Lua* L = LUA->Get();
-    if (LuaHelpers::RunExpression(L, command, m_sName + "::ChoiceNames")) {
-      if (!lua_istable(L, 1)) {
-        LuaHelpers::ReportScriptError(
-            m_sName +
-            "::ChoiceNames expression did not return a table of gamecommands.");
-      } else {
-        size_t len = lua_objlen(L, 1);
-        for (size_t i = 1; i <= len; ++i) {
-          lua_rawgeti(L, 1, i);
-          if (!lua_isstring(L, -1)) {
-            LuaHelpers::ReportScriptErrorFmt(
-                (m_sName + "::ChoiceNames element %zu is not a string.")
-                    .c_str(),
-                i);
-          } else {
-            std::string com = SArg(-1);
-            GameCommand mc;
-            mc.ApplyCommitsScreens(false);
-            mc.m_sName = ssprintf("%zu", i);
-            Commands cmd = ParseCommands(com);
-            mc.Load(i, cmd);
-            m_aGameCommands.push_back(mc);
+    if (LUA == nullptr) {
+      WarnScreenSelect(m_sName + " ignored Lua ChoiceNames without LUA.");
+    } else {
+      Lua* L = LUA->Get();
+      if (LuaHelpers::RunExpression(L, command, m_sName + "::ChoiceNames")) {
+        if (!lua_istable(L, 1)) {
+          LuaHelpers::ReportScriptError(
+              m_sName +
+              "::ChoiceNames expression did not return a table of gamecommands.");
+        } else {
+          size_t len = lua_objlen(L, 1);
+          for (size_t i = 1; i <= len; ++i) {
+            lua_rawgeti(L, 1, i);
+            if (!lua_isstring(L, -1)) {
+              LuaHelpers::ReportScriptErrorFmt(
+                  (m_sName + "::ChoiceNames element %zu is not a string.")
+                      .c_str(),
+                  i);
+            } else {
+              std::string com = SArg(-1);
+              GameCommand mc;
+              mc.ApplyCommitsScreens(false);
+              mc.m_sName = ssprintf("%zu", i);
+              Commands cmd = ParseCommands(com);
+              mc.Load(i, cmd);
+              m_aGameCommands.push_back(mc);
+            }
+            lua_pop(L, 1);
           }
-          lua_pop(L, 1);
         }
       }
+      lua_settop(L, 0);
+      LUA->Release(L);
     }
-    lua_settop(L, 0);
-    LUA->Release(L);
   } else {
     // Instead of using NUM_CHOICES, use a comma-separated list of choices.
     // Each element in the list is a choice name. This level of indirection
     // makes it easier to add or remove items without having to change a
     // bunch of indices.
     std::vector<std::string> asChoiceNames;
-    split(CHOICE_NAMES, ",", asChoiceNames, true);
+    SplitNonEmptyTrimmed(CHOICE_NAMES, asChoiceNames);
 
     for (unsigned c = 0; c < asChoiceNames.size(); c++) {
       std::string sChoiceName = asChoiceNames[c];
@@ -104,6 +153,7 @@ void ScreenSelect::Init() {
   if (m_aGameCommands.empty()) {
     LuaHelpers::ReportScriptErrorFmt(
         "Screen \"%s\" does not set any choices.", m_sName.c_str());
+    WarnScreenSelect(m_sName + " has no selectable choices.");
   }
 }
 
@@ -115,9 +165,13 @@ void ScreenSelect::BeginScreen() {
 }
 
 ScreenSelect::~ScreenSelect() {
-  LOG->Trace("ScreenSelect::~ScreenSelect()");
-  for (unsigned i = 0; i < m_asSubscribedMessages.size(); ++i) {
-    MESSAGEMAN->Unsubscribe(this, m_asSubscribedMessages[i]);
+  if (LOG != nullptr) {
+    LOG->Trace("ScreenSelect::~ScreenSelect()");
+  }
+  if (MESSAGEMAN != nullptr) {
+    for (unsigned i = 0; i < m_asSubscribedMessages.size(); ++i) {
+      MESSAGEMAN->Unsubscribe(this, m_asSubscribedMessages[i]);
+    }
   }
 }
 
@@ -125,13 +179,20 @@ void ScreenSelect::Update(float fDelta) {
   if (!IsTransitioning()) {
     if (IDLE_COMMENT_SECONDS > 0 &&
         m_timerIdleComment.Ago() >= IDLE_COMMENT_SECONDS) {
-      SOUND->PlayOnceFromAnnouncer(m_sName + " IdleComment");
+      if (SOUND != nullptr) {
+        SOUND->PlayOnceFromAnnouncer(m_sName + " IdleComment");
+      }
       m_timerIdleComment.GetDeltaTime();
     }
 
     if (IDLE_TIMEOUT_SECONDS > 0 &&
         m_timerIdleTimeout.Ago() >= IDLE_TIMEOUT_SECONDS) {
-      SCREENMAN->SetNewScreen(IDLE_TIMEOUT_SCREEN);
+      const std::string idleTimeoutScreen = IDLE_TIMEOUT_SCREEN;
+      if (SCREENMAN != nullptr && !idleTimeoutScreen.empty()) {
+        SCREENMAN->SetNewScreen(idleTimeoutScreen);
+      } else {
+        WarnScreenSelect(m_sName + " ignored invalid idle timeout screen.");
+      }
       m_timerIdleTimeout.GetDeltaTime();
       return;
     }
@@ -152,13 +213,19 @@ bool ScreenSelect::Input(const InputEventPlus& input) {
     this->UpdateSelectableChoices();
   }
 
+  if (!IsValidSelectPlayer(input.pn) || GAMESTATE == nullptr) {
+    return false;
+  }
+
   if (input.MenuI == GAME_BUTTON_START && input.type == IET_FIRST_PRESS &&
       GAMESTATE->JoinInput(input.pn)) {
     // HACK: Only play start sound for the 2nd player who joins. The
     // start sound for the 1st player will be played by ScreenTitleMenu
     // when the player makes a selection on the screen.
     if (GAMESTATE->GetNumSidesJoined() > 1) {
-      SCREENMAN->PlayStartSound();
+      if (SCREENMAN != nullptr) {
+        SCREENMAN->PlayStartSound();
+      }
     }
 
     if (!ALLOW_DISABLED_PLAYER_INPUT) {
@@ -194,12 +261,31 @@ void ScreenSelect::HandleScreenMessage(const ScreenMessage SM) {
      * same choice, and  if so, call ApplyToAll instead.
      * TODO: Think of a better way to handle this.
      */
-    ASSERT(GAMESTATE->GetMasterPlayerNumber() != PlayerNumber_Invalid);
-    int iMastersIndex =
-        this->GetSelectionIndex(GAMESTATE->GetMasterPlayerNumber());
+    if (GAMESTATE == nullptr) {
+      WarnScreenSelect(m_sName + " ignored fade-out without GAMESTATE.");
+      ScreenWithMenuElements::HandleScreenMessage(SM);
+      return;
+    }
+
+    const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+    if (!IsValidSelectPlayer(master)) {
+      WarnScreenSelect(m_sName + " ignored fade-out with invalid master player.");
+      ScreenWithMenuElements::HandleScreenMessage(SM);
+      return;
+    }
+
+    int iMastersIndex = this->GetSelectionIndex(master);
+    if (!IsValidChoiceIndex(m_aGameCommands, iMastersIndex)) {
+      WarnScreenSelect(m_sName + " ignored fade-out with invalid selection.");
+      StopTimer();
+      ScreenWithMenuElements::HandleScreenMessage(SM);
+      return;
+    }
     bool bAllPlayersChoseTheSame = true;
     FOREACH_HumanPlayer(p) {
-      if (this->GetSelectionIndex(p) != iMastersIndex) {
+      const int selection = this->GetSelectionIndex(p);
+      if (!IsValidChoiceIndex(m_aGameCommands, selection) ||
+          selection != iMastersIndex) {
         bAllPlayersChoseTheSame = false;
         break;
       }
@@ -215,6 +301,11 @@ void ScreenSelect::HandleScreenMessage(const ScreenMessage SM) {
       } else {
         FOREACH_HumanPlayer(p) {
           int iIndex = this->GetSelectionIndex(p);
+          if (!IsValidChoiceIndex(m_aGameCommands, iIndex)) {
+            WarnScreenSelect(
+                m_sName + " skipped invalid player selection during fade-out.");
+            continue;
+          }
           const GameCommand& gc = m_aGameCommands[iIndex];
           m_sNextScreen = gc.m_sScreen;
           if (!gc.m_bInvalid) {
@@ -225,7 +316,9 @@ void ScreenSelect::HandleScreenMessage(const ScreenMessage SM) {
     }
     StopTimer();
 
-    SCREENMAN->RefreshCreditsMessages();
+    if (SCREENMAN != nullptr) {
+      SCREENMAN->RefreshCreditsMessages();
+    }
 
     if (IsTransitioning()) {
       // If the player pressed Start and Back on the same frame, the
