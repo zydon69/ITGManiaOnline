@@ -63,16 +63,24 @@ void RageSoundDriver_WaveOut::MixerThread() {
             .c_str());
   }
 
-  while (!wo_shutdown_) {
+  while (!wo_shutdown_.load(std::memory_order_acquire)) {
     while (GetData());
 
-    WaitForSingleObject(soundevent_handle_, 10);
+    if (soundevent_handle_ != nullptr) {
+      WaitForSingleObject(soundevent_handle_, 10);
+    }
   }
 
-  waveOutReset(waveout_handle_);
+  if (waveout_handle_ != nullptr) {
+    waveOutReset(waveout_handle_);
+  }
 }
 
 bool RageSoundDriver_WaveOut::GetData() {
+  if (waveout_handle_ == nullptr) {
+    return false;
+  }
+
   /* Look for a free buffer. */
   int b;
   for (b = 0; b < wo_num_blocks_; ++b) {
@@ -92,10 +100,12 @@ bool RageSoundDriver_WaveOut::GetData() {
   MMRESULT ret =
       waveOutWrite(waveout_handle_, &wo_buffers_[b], sizeof(wo_buffers_[b]));
   if (ret != MMSYSERR_NOERROR) {
-    Init();
-    if (wo_init_success_ == false) {
-      FAIL_M(wo_ssprintf(ret, "waveOutWrite failed"));
+    LOG->Warn(wo_ssprintf(ret, "waveOutWrite failed").c_str());
+    wo_shutdown_.store(true, std::memory_order_release);
+    if (soundevent_handle_ != nullptr) {
+      SetEvent(soundevent_handle_);
     }
+    return false;
   }
 
   /* Increment wo_last_cursor_position_. */
@@ -113,11 +123,16 @@ void RageSoundDriver_WaveOut::SetupDecodingThread() {
 }
 
 int64_t RageSoundDriver_WaveOut::GetPosition() const {
+  if (waveout_handle_ == nullptr) {
+    return wo_last_cursor_position_;
+  }
+
   MMTIME tm;
   tm.wType = TIME_SAMPLES;
   MMRESULT ret = waveOutGetPosition(waveout_handle_, &tm, sizeof(tm));
   if (ret != MMSYSERR_NOERROR) {
-    FAIL_M(wo_ssprintf(ret, "waveOutGetPosition failed").c_str());
+    LOG->Warn(wo_ssprintf(ret, "waveOutGetPosition failed").c_str());
+    return wo_last_cursor_position_;
   }
 
   return tm.u.sample;
@@ -138,8 +153,13 @@ RageSoundDriver_WaveOut::RageSoundDriver_WaveOut()
 
 std::string RageSoundDriver_WaveOut::Init() {
   wo_init_success_ = false;
-  wo_samplerate_ = PREFSMAN->m_iSoundPreferredSampleRate;
-  if (wo_samplerate_ == 0) {
+  wo_shutdown_.store(false, std::memory_order_release);
+  if (soundevent_handle_ == nullptr) {
+    return "CreateEvent failed for WaveOut notification event";
+  }
+
+  wo_samplerate_ = PREFSMAN != nullptr ? PREFSMAN->m_iSoundPreferredSampleRate.Get() : 0;
+  if (wo_samplerate_ <= 0) {
     wo_samplerate_ = FALLBACK_SAMPLE_RATE;
   }
 
@@ -198,6 +218,18 @@ std::string RageSoundDriver_WaveOut::Init() {
     ret = waveOutPrepareHeader(
         waveout_handle_, &wo_buffers_[b], sizeof(wo_buffers_[b]));
     if (ret != MMSYSERR_NOERROR) {
+      for (int i = 0; i <= b; ++i) {
+        if (wo_buffers_[i].lpData == nullptr) {
+          continue;
+        }
+        if (wo_buffers_[i].dwFlags & WHDR_PREPARED) {
+          waveOutUnprepareHeader(waveout_handle_, &wo_buffers_[i], sizeof(wo_buffers_[i]));
+        }
+        delete[] wo_buffers_[i].lpData;
+        wo_buffers_[i].lpData = nullptr;
+      }
+      waveOutClose(waveout_handle_);
+      waveout_handle_ = nullptr;
       return wo_ssprintf(ret, "waveOutPrepareHeader failed");
     }
     wo_buffers_[b].dwFlags |= WHDR_DONE;
@@ -220,11 +252,17 @@ std::string RageSoundDriver_WaveOut::Init() {
 RageSoundDriver_WaveOut::~RageSoundDriver_WaveOut() {
   /* Signal the mixing thread to quit. */
   if (MixingThread.IsCreated()) {
-    wo_shutdown_ = true;
-    SetEvent(soundevent_handle_);
-    LOG->Trace("Shutting down mixer thread ...");
+    wo_shutdown_.store(true, std::memory_order_release);
+    if (soundevent_handle_ != nullptr) {
+      SetEvent(soundevent_handle_);
+    }
+    if (LOG != nullptr) {
+      LOG->Trace("Shutting down mixer thread ...");
+    }
     MixingThread.Wait();
-    LOG->Trace("Mixer thread shut down.");
+    if (LOG != nullptr) {
+      LOG->Trace("Mixer thread shut down.");
+    }
   }
 
   if (waveout_handle_ != nullptr) {
@@ -238,10 +276,15 @@ RageSoundDriver_WaveOut::~RageSoundDriver_WaveOut() {
     waveOutClose(waveout_handle_);
   }
 
-  CloseHandle(soundevent_handle_);
+  if (soundevent_handle_ != nullptr) {
+    CloseHandle(soundevent_handle_);
+  }
 }
 
 float RageSoundDriver_WaveOut::GetPlayLatency() const {
+  if (wo_samplerate_ <= 0) {
+    return 0.0f;
+  }
   /* If we have a 1000-byte buffer, and we fill 100 bytes at a time, we
    * almost always have between 900 and 1000 bytes filled; on average, 950. */
   return (wo_frames_per_block_ - kBlockSizeFrames / 2) *

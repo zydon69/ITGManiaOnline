@@ -1,6 +1,7 @@
 #ifndef RAGE_SOUND_GENERIC_TEST
 #define RAGE_SOUND_GENERIC_TEST
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -26,7 +27,7 @@ class RageSoundDriver_DSound_Software : public RageSoundDriver {
   DSoundBuf* m_pPCM;
   int m_iSampleRate;
 
-  bool m_bShutdownMixerThread;
+  std::atomic<bool> m_bShutdownMixerThread;
 
   static int MixerThread_start(void* p);
   void MixerThread();

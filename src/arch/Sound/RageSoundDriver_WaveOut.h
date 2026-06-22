@@ -6,6 +6,7 @@
 #include <mmsystem.h>
 // clang-format on
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -39,7 +40,7 @@ class RageSoundDriver_WaveOut : public RageSoundDriver {
   HANDLE soundevent_handle_;
   WAVEHDR wo_buffers_[kMaximumNumBlocks];
   int wo_samplerate_;
-  bool wo_shutdown_;
+  std::atomic<bool> wo_shutdown_;
   int wo_last_cursor_position_;
   bool wo_init_success_;
   int wo_frames_per_block_;

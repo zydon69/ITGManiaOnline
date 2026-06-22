@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <algorithm>
 
 #include "DSoundHelpers.h"
 #include "PrefsManager.h"
@@ -20,7 +21,7 @@ static int g_iMaxWriteahead;
 
 /* We'll fill the buffer in chunks this big. */
 static const int num_chunks = 8;
-static int chunksize() { return g_iMaxWriteahead / num_chunks; }
+static int chunksize() { return std::max(1, g_iMaxWriteahead / num_chunks); }
 
 void RageSoundDriver_DSound_Software::MixerThread() {
   if (!SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL)) {
@@ -33,6 +34,10 @@ void RageSoundDriver_DSound_Software::MixerThread() {
 
   /* Fill a buffer before we start playing, so we don't play whatever junk is
    * in the buffer. */
+  if (m_pPCM == nullptr || m_iSampleRate <= 0) {
+    return;
+  }
+
   char* locked_buf_init;
   unsigned len_init;
   while (m_pPCM->get_output_buf(&locked_buf_init, &len_init, chunksize())) {
@@ -43,14 +48,14 @@ void RageSoundDriver_DSound_Software::MixerThread() {
   /* Start playing. */
   m_pPCM->Play();
 
-  while (!m_bShutdownMixerThread) {
+  while (!m_bShutdownMixerThread.load(std::memory_order_acquire)) {
     char* pLockedBuf;
     unsigned iLen;
     const int64_t iPlayPos =
         m_pPCM->GetOutputPosition(); /* must be called before get_output_buf */
 
     if (!m_pPCM->get_output_buf(&pLockedBuf, &iLen, chunksize())) {
-      Sleep(chunksize() * 1000 / m_iSampleRate);
+      Sleep(std::max(1, chunksize() * 1000 / m_iSampleRate));
       continue;
     }
 
@@ -67,6 +72,9 @@ void RageSoundDriver_DSound_Software::MixerThread() {
 }
 
 int64_t RageSoundDriver_DSound_Software::GetPosition() const {
+  if (m_pPCM == nullptr) {
+    return 0;
+  }
   return m_pPCM->GetPosition();
 }
 
@@ -79,6 +87,7 @@ RageSoundDriver_DSound_Software::RageSoundDriver_DSound_Software()
     : m_pPCM(nullptr), m_iSampleRate(0), m_bShutdownMixerThread(false) {}
 
 std::string RageSoundDriver_DSound_Software::Init() {
+  m_bShutdownMixerThread.store(false, std::memory_order_release);
   std::string sError = ds.Init();
   if (sError != "") {
     return sError;
@@ -91,14 +100,14 @@ std::string RageSoundDriver_DSound_Software::Init() {
   }
 
   g_iMaxWriteahead = safe_writeahead;
-  if (PREFSMAN->m_iSoundWriteAhead) {
-    g_iMaxWriteahead = PREFSMAN->m_iSoundWriteAhead;
+  if (PREFSMAN != nullptr && PREFSMAN->m_iSoundWriteAhead.Get() > 0) {
+    g_iMaxWriteahead = std::clamp(PREFSMAN->m_iSoundWriteAhead.Get(), num_chunks, 262144);
   }
 
   /* Create a DirectSound stream, but don't force it into hardware. */
   m_pPCM = new DSoundBuf;
-  m_iSampleRate = PREFSMAN->m_iSoundPreferredSampleRate;
-  if (m_iSampleRate == 0) {
+  m_iSampleRate = PREFSMAN != nullptr ? PREFSMAN->m_iSoundPreferredSampleRate.Get() : 0;
+  if (m_iSampleRate <= 0) {
     m_iSampleRate = FALLBACK_SAMPLE_RATE;
   }
   // This m_iSampleRate (driver's) is then passed as the iSampleRate parameter
@@ -107,6 +116,8 @@ std::string RageSoundDriver_DSound_Software::Init() {
       ds, DSoundBuf::HW_DONT_CARE, channels, m_iSampleRate, 16,
       g_iMaxWriteahead);
   if (sError != "") {
+    delete m_pPCM;
+    m_pPCM = nullptr;
     return sError;
   }
 
@@ -123,12 +134,16 @@ std::string RageSoundDriver_DSound_Software::Init() {
 RageSoundDriver_DSound_Software::~RageSoundDriver_DSound_Software() {
   /* Signal the mixing thread to quit. */
   if (m_MixingThread.IsCreated()) {
-    m_bShutdownMixerThread = true;
-    LOG->Trace("Shutting down mixer thread ...");
-    LOG->Flush();
+    m_bShutdownMixerThread.store(true, std::memory_order_release);
+    if (LOG != nullptr) {
+      LOG->Trace("Shutting down mixer thread ...");
+      LOG->Flush();
+    }
     m_MixingThread.Wait();
-    LOG->Trace("Mixer thread shut down.");
-    LOG->Flush();
+    if (LOG != nullptr) {
+      LOG->Trace("Mixer thread shut down.");
+      LOG->Flush();
+    }
   }
 
   delete m_pPCM;
@@ -143,6 +158,9 @@ void RageSoundDriver_DSound_Software::SetupDecodingThread() {
 }
 
 float RageSoundDriver_DSound_Software::GetPlayLatency() const {
+  if (m_iSampleRate <= 0) {
+    return 0.0f;
+  }
   return (1.0f / m_iSampleRate) * g_iMaxWriteahead;
 }
 

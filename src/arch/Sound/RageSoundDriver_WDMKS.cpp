@@ -87,7 +87,8 @@ static int GetBytesPerSample(DeviceSampleFormat sf) {
       return 3;
     case DeviceSampleFormat_Int32:
       return 4;
-      DEFAULT_FAIL(sf);
+    default:
+      return 0;
   }
 }
 
@@ -144,12 +145,12 @@ static bool WdmSyncIoctl(
 
   OVERLAPPED overlapped;
   memset(&overlapped, 0, sizeof(overlapped));
-  overlapped.hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-  if (!overlapped.hEvent) {
+  HANDLE eventHandle = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+  if (!eventHandle) {
     sError = werr_ssprintf(GetLastError(), "CreateEvent");
     return false;
   }
-  overlapped.hEvent = (HANDLE)((DWORD_PTR)overlapped.hEvent | 0x1);
+  overlapped.hEvent = eventHandle;
 
   int boolResult = DeviceIoControl(
       hHandle, ioctlNumber, pIn, iInSize, pOut, iOutSize, pBytesReturned,
@@ -161,7 +162,7 @@ static bool WdmSyncIoctl(
       if (iError != WAIT_OBJECT_0) {
         ASSERT(iError == WAIT_FAILED);
         sError = werr_ssprintf(GetLastError(), "WaitForSingleObject");
-        CloseHandle(overlapped.hEvent);
+        CloseHandle(eventHandle);
         return false;
       }
     } else if (
@@ -170,7 +171,7 @@ static bool WdmSyncIoctl(
       boolResult = TRUE;
     } else {
       sError = werr_ssprintf(iError, "DeviceIoControl");
-      CloseHandle(overlapped.hEvent);
+      CloseHandle(eventHandle);
       return false;
     }
   }
@@ -178,7 +179,7 @@ static bool WdmSyncIoctl(
     *pBytesReturned = 0;
   }
 
-  CloseHandle(overlapped.hEvent);
+  CloseHandle(eventHandle);
   return true;
 }
 
@@ -263,13 +264,29 @@ static bool WdmGetPinPropertyMulti(
     return false;
   }
 
+  if (multipleItemSize < sizeof(KSMULTIPLE_ITEM) || multipleItemSize > (1U << 20)) {
+    sError = ssprintf("Invalid KSMULTIPLE_ITEM size: %lu", multipleItemSize);
+    return false;
+  }
+
   *ksMultipleItem = (KSMULTIPLE_ITEM*)malloc(multipleItemSize);
-  ASSERT(*ksMultipleItem != nullptr);
+  if (*ksMultipleItem == nullptr) {
+    sError = "malloc(KSMULTIPLE_ITEM) failed";
+    return false;
+  }
 
   if (!WdmSyncIoctl(
           hHandle, IOCTL_KS_PROPERTY, &ksPProp, sizeof(KSP_PIN),
           (void*)*ksMultipleItem, multipleItemSize, nullptr, sError)) {
-    free(ksMultipleItem);
+    free(*ksMultipleItem);
+    *ksMultipleItem = nullptr;
+    return false;
+  }
+  if ((*ksMultipleItem)->Size < sizeof(KSMULTIPLE_ITEM) ||
+      (*ksMultipleItem)->Size > multipleItemSize) {
+    sError = ssprintf("Invalid returned KSMULTIPLE_ITEM size: %lu", (*ksMultipleItem)->Size);
+    free(*ksMultipleItem);
+    *ksMultipleItem = nullptr;
     return false;
   }
 
@@ -387,14 +404,19 @@ std::unique_ptr<WinWdmPin> WinWdmFilter::CreatePin(
     return nullptr;
   }
 
+  const char* rangeEnd = (const char*)pDataRangesItem + pDataRangesItem->Size;
   KSDATARANGE* pDataRanges = (KSDATARANGE*)(pDataRangesItem + 1);
 
   /* Find audio DATARANGEs */
   {
     KSDATARANGE* pDataRange = pDataRanges;
-    for (unsigned i = 0; i < pDataRangesItem->Count;
-         i++, pDataRange = (KSDATARANGE*)(((char*)pDataRange) +
-                                          pDataRange->FormatSize)) {
+    for (unsigned i = 0; i < pDataRangesItem->Count; ++i) {
+      const char* rangePtr = (const char*)pDataRange;
+      if (rangePtr + sizeof(KSDATARANGE) > rangeEnd ||
+          pDataRange->FormatSize < sizeof(KSDATARANGE) ||
+          rangePtr + pDataRange->FormatSize > rangeEnd) {
+        break;
+      }
       if (memcmp(
               &pDataRange->MajorFormat, &KSDATAFORMAT_TYPE_AUDIO,
               sizeof(GUID)) &&
@@ -427,6 +449,7 @@ std::unique_ptr<WinWdmPin> WinWdmFilter::CreatePin(
 
       const KSDATARANGE_AUDIO* pDataRangeAudio = (KSDATARANGE_AUDIO*)pDataRange;
       pPin->m_dataRangesItem.push_back(*pDataRangeAudio);
+      pDataRange = (KSDATARANGE*)(rangePtr + pDataRange->FormatSize);
     }
   }
   free(pDataRangesItem);
@@ -475,6 +498,11 @@ bool WinWdmPin::Instantiate(const WAVEFORMATEX* pFormat, std::string& sError) {
   }
 
   KSPIN_CONNECT* pPinConnect = MakeFormat(pFormat);
+  if (pPinConnect == nullptr) {
+    sError = "failed to build KSPIN_CONNECT format";
+    m_pParentFilter->Release();
+    return false;
+  }
   DWORD iRet = FunctionKsCreatePin(
       m_pParentFilter->m_hHandle, pPinConnect, GENERIC_WRITE | GENERIC_READ,
       &m_hHandle);
@@ -490,14 +518,20 @@ bool WinWdmPin::Instantiate(const WAVEFORMATEX* pFormat, std::string& sError) {
 }
 
 KSPIN_CONNECT* WinWdmPin::MakeFormat(const WAVEFORMATEX* pFormat) const {
-  ASSERT(pFormat != nullptr);
+  if (pFormat == nullptr || pFormat->nChannels == 0 ||
+      pFormat->nSamplesPerSec == 0 || pFormat->wBitsPerSample == 0 ||
+      pFormat->cbSize > sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) {
+    return nullptr;
+  }
 
   unsigned long iWfexSize = sizeof(WAVEFORMATEX) + pFormat->cbSize;
   unsigned long iDataFormatSize = sizeof(KSDATAFORMAT) + iWfexSize;
   unsigned long iSize = sizeof(KSPIN_CONNECT) + iDataFormatSize;
 
   KSPIN_CONNECT* pPinConnect = (KSPIN_CONNECT*)malloc(iSize);
-  ASSERT(pPinConnect != nullptr);
+  if (pPinConnect == nullptr) {
+    return nullptr;
+  }
 
   memset(pPinConnect, 0, iSize);
   pPinConnect->PinId = m_iPinId;
@@ -516,7 +550,10 @@ KSPIN_CONNECT* WinWdmPin::MakeFormat(const WAVEFORMATEX* pFormat) const {
   ksDataFormatWfx->DataFormat.Flags = 0;
   ksDataFormatWfx->DataFormat.Reserved = 0;
   ksDataFormatWfx->DataFormat.MajorFormat = KSDATAFORMAT_TYPE_AUDIO;
-  ksDataFormatWfx->DataFormat.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
+  ksDataFormatWfx->DataFormat.SubFormat =
+      pFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE
+          ? ((const WAVEFORMATEXTENSIBLE*)pFormat)->SubFormat
+          : KSDATAFORMAT_SUBTYPE_PCM;
   ksDataFormatWfx->DataFormat.Specifier = KSDATAFORMAT_SPECIFIER_WAVEFORMATEX;
   ksDataFormatWfx->DataFormat.FormatSize = iDataFormatSize;
 
@@ -621,9 +658,10 @@ bool WinWdmFilter::Use(std::string& sError) {
         m_sFilterName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, nullptr);
 
-    if (m_hHandle == nullptr) {
+    if (m_hHandle == INVALID_HANDLE_VALUE) {
       sError = werr_ssprintf(
           GetLastError(), "CreateFile(%s)", m_sFilterName.c_str());
+      m_hHandle = nullptr;
       return false;
     }
   }
@@ -955,9 +993,13 @@ struct WinWdmStream {
   }
 
   ~WinWdmStream() {
-    CloseHandle(m_Signal[0].hEvent);
-    CloseHandle(m_Signal[1].hEvent);
     Close();
+    for (int i = 0; i < MAX_CHUNKS; ++i) {
+      if (m_Signal[i].hEvent != nullptr) {
+        CloseHandle(m_Signal[i].hEvent);
+        m_Signal[i].hEvent = nullptr;
+      }
+    }
   }
 
   bool Open(
@@ -969,8 +1011,10 @@ struct WinWdmStream {
       m_pPlaybackPin->Close();
     }
     m_pPlaybackPin = nullptr;
-    for (int i = 0; i < 2; ++i) {
-      VirtualFree(m_Packets[i].Data, 0, MEM_RELEASE);
+    for (int i = 0; i < MAX_CHUNKS; ++i) {
+      if (m_Packets[i].Data != nullptr) {
+        VirtualFree(m_Packets[i].Data, 0, MEM_RELEASE);
+      }
       m_Packets[i].Data = nullptr;
     }
   }
@@ -1008,6 +1052,12 @@ bool WinWdmStream::Open(
   m_iDeviceOutputChannels = iPreferredOutputChannels;
   m_iSampleRate = iPreferredSampleRate;
   m_iBytesPerOutputSample = GetBytesPerSample(m_DeviceSampleFormat);
+  if (m_iSampleRate <= 0 || m_iDeviceOutputChannels <= 0 ||
+      m_iBytesPerOutputSample <= 0 || iWriteAheadFrames < 0) {
+    sError = "invalid WDMKS stream format";
+    Close();
+    return false;
+  }
 
   int iFrameSize = 1;
   {
@@ -1026,7 +1076,13 @@ bool WinWdmStream::Open(
     }
   }
 
-  iFrameSize /= m_iBytesPerOutputSample * m_iDeviceOutputChannels;
+  const int bytesPerFrame = m_iBytesPerOutputSample * m_iDeviceOutputChannels;
+  if (bytesPerFrame <= 0) {
+    sError = "invalid WDMKS bytes per frame";
+    Close();
+    return false;
+  }
+  iFrameSize /= bytesPerFrame;
 
   m_iWriteAheadChunks = 2;
 
@@ -1037,10 +1093,15 @@ bool WinWdmStream::Open(
     m_iFramesPerChunk =
         std::max(m_iFramesPerChunk, iFrameSize);  // iFrameSize may be 0
   }
+  if (m_iFramesPerChunk <= 0 || m_iFramesPerChunk > 262144) {
+    sError = ssprintf("invalid WDMKS frames per chunk: %i", m_iFramesPerChunk);
+    Close();
+    return false;
+  }
 
   LOG->Info(
       "KS: chunk size: %i; allocator framing: %i (%ims)", m_iFramesPerChunk,
-      iFrameSize, (iFrameSize * 1000) / m_iSampleRate);
+      iFrameSize, m_iSampleRate > 0 ? (iFrameSize * 1000) / m_iSampleRate : 0);
   LOG->Info("KS: %i hz", m_iSampleRate);
 
   /* Set up chunks. */
@@ -1050,15 +1111,22 @@ bool WinWdmStream::Open(
 
     /* Avoid any FileAlignment problems by using VirtualAlloc, which is always
      * page aligned. */
-    p->Data = (char*)VirtualAlloc(
-        nullptr,
-        m_iFramesPerChunk * m_iBytesPerOutputSample * m_iDeviceOutputChannels,
-        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    ASSERT(p->Data != nullptr);
-    p->FrameExtent =
-        m_iFramesPerChunk * m_iBytesPerOutputSample * m_iDeviceOutputChannels;
-    p->DataUsed =
-        m_iFramesPerChunk * m_iBytesPerOutputSample * m_iDeviceOutputChannels;
+    const uint64_t bufferBytes =
+        uint64_t(m_iFramesPerChunk) * uint64_t(m_iBytesPerOutputSample) *
+        uint64_t(m_iDeviceOutputChannels);
+    if (bufferBytes == 0 || bufferBytes > (1U << 24)) {
+      sError = ssprintf("invalid WDMKS packet size: %llu", (unsigned long long)bufferBytes);
+      Close();
+      return false;
+    }
+    p->Data = (char*)VirtualAlloc(nullptr, size_t(bufferBytes), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (p->Data == nullptr) {
+      sError = werr_ssprintf(GetLastError(), "VirtualAlloc");
+      Close();
+      return false;
+    }
+    p->FrameExtent = static_cast<unsigned>(bufferBytes);
+    p->DataUsed = static_cast<unsigned>(bufferBytes);
     p->Size = sizeof(*p);
     p->PresentationTime.Numerator = 1;
     p->PresentationTime.Denominator = 1;
@@ -1068,11 +1136,18 @@ bool WinWdmStream::Open(
 }
 
 bool WinWdmStream::SubmitPacket(int iPacket, std::string& sError) {
+  if (m_pPlaybackPin == nullptr || m_pPlaybackPin->m_hHandle == nullptr ||
+      iPacket < 0 || iPacket >= MAX_CHUNKS || m_Packets[iPacket].Data == nullptr) {
+    sError = "invalid WDMKS packet submission";
+    return false;
+  }
   KSSTREAM_HEADER* p = &m_Packets[iPacket];
   int iRet = DeviceIoControl(
       m_pPlaybackPin->m_hHandle, IOCTL_KS_WRITE_STREAM, nullptr, 0, p, p->Size,
       nullptr, &m_Signal[iPacket]);
-  ASSERT_M(iRet == 0, "DeviceIoControl");
+  if (iRet != 0) {
+    return true;
+  }
 
   DWORD iError = GetLastError();
   if (iError == ERROR_IO_PENDING) {
@@ -1129,7 +1204,8 @@ void MapChannels(
       pChannelMap = i7_1ChannelMap;
       break;  // KSAUDIO_SPEAKER_7POINT1_SURROUND
     default:
-      FAIL_M(ssprintf("%i", iOutChannels));
+      memset(pOut, 0, iOutChannels * iFrames * sizeof(int16_t));
+      return;
   }
   MapChannels(pIn, pOut, iInChannels, iOutChannels, iFrames, pChannelMap);
 }
@@ -1166,12 +1242,20 @@ void MapSampleFormatFromInt16(
       }
       break;
     }
+    default:
+      memset(pOut, 0, iSamples * sizeof(int16_t));
+      break;
   }
 }
 }  // namespace
 
 void RageSoundDriver_WDMKS::Read(
     void* pData, int iFrames, int iLastCursorPos, int iCurrentFrame) {
+  if (pData == nullptr || m_pStream == nullptr || iFrames <= 0 ||
+      m_pStream->m_iDeviceOutputChannels <= 0 ||
+      m_pStream->m_iBytesPerOutputSample <= 0) {
+    return;
+  }
   /* If we need conversion, read into a temporary buffer.  Otherwise, read
    * directly into the target buffer. */
   int iChannels = 2;
@@ -1182,14 +1266,28 @@ void RageSoundDriver_WDMKS::Read(
     return;
   }
 
-  int16_t* pBuf = (int16_t*)alloca(iFrames * iChannels * sizeof(int16_t));
-  this->Mix((int16_t*)pBuf, iFrames, iLastCursorPos, iCurrentFrame);
+  const uint64_t mixSamples = uint64_t(iFrames) * uint64_t(iChannels);
+  if (mixSamples == 0 || mixSamples > (1U << 20)) {
+    memset(
+        pData, 0,
+        size_t(iFrames) * size_t(m_pStream->m_iDeviceOutputChannels) *
+            size_t(m_pStream->m_iBytesPerOutputSample));
+    return;
+  }
+  std::vector<int16_t> mixBuffer(size_t(mixSamples));
+  int16_t* pBuf = mixBuffer.data();
+  this->Mix(pBuf, iFrames, iLastCursorPos, iCurrentFrame);
 
   /* If the device has other than 2 channels, convert. */
+  std::vector<int16_t> channelBuffer;
   if (m_pStream->m_iDeviceOutputChannels != iChannels) {
-    int16_t* pTempBuf = (int16_t*)alloca(
-        iFrames * m_pStream->m_iBytesPerOutputSample *
-        m_pStream->m_iDeviceOutputChannels);
+    const uint64_t mappedSamples =
+        uint64_t(iFrames) * uint64_t(m_pStream->m_iDeviceOutputChannels);
+    if (mappedSamples == 0 || mappedSamples > (1U << 20)) {
+      return;
+    }
+    channelBuffer.resize(size_t(mappedSamples));
+    int16_t* pTempBuf = channelBuffer.data();
     MapChannels(
         (int16_t*)pBuf, pTempBuf, iChannels, m_pStream->m_iDeviceOutputChannels,
         iFrames);
@@ -1197,9 +1295,16 @@ void RageSoundDriver_WDMKS::Read(
   }
 
   /* If the device format isn't int16_t, convert. */
+  std::vector<unsigned char> formatBuffer;
   if (m_pStream->m_DeviceSampleFormat != DeviceSampleFormat_Int16) {
     int iSamples = iFrames * m_pStream->m_iDeviceOutputChannels;
-    void* pTempBuf = alloca(iSamples * m_pStream->m_iBytesPerOutputSample);
+    const uint64_t bytes =
+        uint64_t(iSamples) * uint64_t(m_pStream->m_iBytesPerOutputSample);
+    if (bytes == 0 || bytes > (1U << 24)) {
+      return;
+    }
+    formatBuffer.resize(size_t(bytes));
+    void* pTempBuf = formatBuffer.data();
     MapSampleFormatFromInt16(
         (int16_t*)pBuf, pTempBuf, iSamples, m_pStream->m_DeviceSampleFormat);
     pBuf = (int16_t*)pTempBuf;
@@ -1240,19 +1345,25 @@ void RageSoundDriver_WDMKS::MixerThread() {
   /* Enable priority boosting. */
   SetThreadPriorityBoost(GetCurrentThread(), FALSE);
 
-  ASSERT(m_pStream->m_pPlaybackPin != nullptr);
+  if (m_pStream == nullptr || m_pStream->m_pPlaybackPin == nullptr) {
+    return;
+  }
 
   /* Some drivers (stock USB audio in XP) misbehave if we go from KSSTATE_STOP
    * to KSSTATE_RUN.  Always transition through KSSTATE_PAUSE. */
   std::string sError;
   if (!m_pStream->m_pPlaybackPin->SetState(KSSTATE_PAUSE, sError) ||
       !m_pStream->m_pPlaybackPin->SetState(KSSTATE_RUN, sError)) {
-    FAIL_M(sError);
+    LOG->Warn("WDMKS failed to start playback pin: %s", sError.c_str());
+    return;
   }
 
   /* Submit initial buffers. */
   for (int i = 0; i < m_pStream->m_iWriteAheadChunks; ++i) {
-    Fill(i, sError);
+    if (!Fill(i, sError)) {
+      LOG->Warn("WDMKS initial Fill(): %s", sError.c_str());
+      return;
+    }
   }
 
   int iNextBufferToSend = m_pStream->m_iWriteAheadChunks;
@@ -1260,7 +1371,7 @@ void RageSoundDriver_WDMKS::MixerThread() {
 
   int iWaitFor = 0;
 
-  while (!m_bShutdown) {
+  while (!m_bShutdown.load(std::memory_order_acquire)) {
     /* Wait for next output buffer to finish. */
     HANDLE aEventHandles[2] = {m_hSignal, m_pStream->m_Signal[iWaitFor].hEvent};
     unsigned long iWait = WaitForMultipleObjects(2, aEventHandles, FALSE, 1000);
@@ -1276,7 +1387,6 @@ void RageSoundDriver_WDMKS::MixerThread() {
 
     if (iWait == WAIT_OBJECT_0) {
       /* Abort event */
-      ASSERT(m_bShutdown); /* Should have been set */
       continue;
     }
     ++iWaitFor;
@@ -1312,13 +1422,21 @@ void RageSoundDriver_WDMKS::SetupDecodingThread() {
 }
 
 int64_t RageSoundDriver_WDMKS::GetPosition() const {
+  if (m_pStream == nullptr || m_pStream->m_pPlaybackPin == nullptr ||
+      m_pStream->m_pPlaybackPin->m_hHandle == nullptr ||
+      m_pStream->m_iBytesPerOutputSample <= 0 ||
+      m_pStream->m_iDeviceOutputChannels <= 0) {
+    return m_iLastCursorPos;
+  }
   KSAUDIO_POSITION pos;
 
   std::string sError;
-  WdmGetPropertySimple(
-      m_pStream->m_pPlaybackPin->m_hHandle, &KSPROPSETID_Audio,
-      KSPROPERTY_AUDIO_POSITION, &pos, sizeof(pos), nullptr, 0, sError);
-  ASSERT_M(sError == "", sError);
+  if (!WdmGetPropertySimple(
+          m_pStream->m_pPlaybackPin->m_hHandle, &KSPROPSETID_Audio,
+          KSPROPERTY_AUDIO_POSITION, &pos, sizeof(pos), nullptr, 0, sError)) {
+    LOG->Warn("WDMKS position query failed: %s", sError.c_str());
+    return m_iLastCursorPos;
+  }
 
   pos.PlayOffset /=
       m_pStream->m_iBytesPerOutputSample * m_pStream->m_iDeviceOutputChannels;
@@ -1328,7 +1446,7 @@ int64_t RageSoundDriver_WDMKS::GetPosition() const {
 RageSoundDriver_WDMKS::RageSoundDriver_WDMKS() {
   m_pStream = nullptr;
   m_pFilter = nullptr;
-  m_bShutdown = false;
+  m_bShutdown.store(false, std::memory_order_relaxed);
   m_iLastCursorPos = 0;
   m_hSignal = CreateEvent(nullptr, FALSE, FALSE, nullptr); /* abort event */
 
@@ -1345,6 +1463,8 @@ RageSoundDriver_WDMKS::RageSoundDriver_WDMKS() {
 }
 
 std::string RageSoundDriver_WDMKS::Init() {
+  return "WDMKS is disabled: use WASAPI, DirectSound-sw, or WaveOut.";
+
   std::string sError;
   if (!PaWinWdm_Initialize(sError)) {
     return sError;
@@ -1399,9 +1519,16 @@ std::string RageSoundDriver_WDMKS::Init() {
 
   m_pStream = new WinWdmStream;
   if (!m_pStream->Open(
-          m_pFilter, PREFSMAN->m_iSoundWriteAhead, DeviceSampleFormat_Int16,
+          m_pFilter,
+          PREFSMAN != nullptr ? PREFSMAN->m_iSoundWriteAhead.Get() : 0,
+          DeviceSampleFormat_Int16,
           0,  // don't care
-          PREFSMAN->m_iSoundPreferredSampleRate, sError)) {
+          PREFSMAN != nullptr ? PREFSMAN->m_iSoundPreferredSampleRate.Get() : 0,
+          sError)) {
+    delete m_pStream;
+    m_pStream = nullptr;
+    delete m_pFilter;
+    m_pFilter = nullptr;
     return sError;
   }
 
@@ -1417,20 +1544,27 @@ std::string RageSoundDriver_WDMKS::Init() {
 RageSoundDriver_WDMKS::~RageSoundDriver_WDMKS() {
   /* Signal the mixing thread to quit. */
   if (MixingThread.IsCreated()) {
-    m_bShutdown = true;
+    m_bShutdown.store(true, std::memory_order_release);
     SetEvent(m_hSignal); /* Signal immediately */
     LOG->Trace("Shutting down mixer thread ...");
     MixingThread.Wait();
     LOG->Trace("Mixer thread shut down.");
 
-    delete m_pStream;
   }
 
+  delete m_pStream;
+  m_pStream = nullptr;
   delete m_pFilter;
-  CloseHandle(m_hSignal);
+  m_pFilter = nullptr;
+  if (m_hSignal != nullptr) {
+    CloseHandle(m_hSignal);
+  }
 }
 
 int RageSoundDriver_WDMKS::GetSampleRate() const {
+  if (m_pStream == nullptr) {
+    return 0;
+  }
   return m_pStream->m_iSampleRate;
 }
 

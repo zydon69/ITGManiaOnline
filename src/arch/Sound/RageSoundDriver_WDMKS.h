@@ -3,6 +3,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -31,7 +32,7 @@ class RageSoundDriver_WDMKS : public RageSoundDriver {
   RageThread MixingThread;
   void SetupDecodingThread();
 
-  bool m_bShutdown;
+  std::atomic<bool> m_bShutdown;
   int m_iLastCursorPos;
 
   HANDLE m_hSignal;

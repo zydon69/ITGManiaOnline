@@ -30,6 +30,7 @@ class RageSoundDriver_WASAPI : public RageSoundDriver {
  private:
   int m_iSampleRate;
   UINT32 m_iBufferSizeFrames;
+  int m_iChannels;
   bool m_bFloat;  // true if we are using float, false if 16-bit PCM
 
   IAudioClient* m_pAudioClient;
