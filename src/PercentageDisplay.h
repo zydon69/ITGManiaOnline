@@ -35,6 +35,7 @@ class PercentageDisplay : public ActorFrame {
   int m_iDancePointsDigits;
   bool m_bUseRemainder;
 
+  void ResetLoadedActors();
   void Refresh();
   const PlayerState* m_pPlayerState;
   const PlayerStageStats* m_pPlayerStageStats;

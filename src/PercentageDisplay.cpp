@@ -23,11 +23,25 @@
 REGISTER_ACTOR_CLASS(PercentageDisplay);
 
 namespace {
+void WarnPercentageDisplayAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+void TracePercentageDisplayAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Trace("%s", message);
+  }
+}
+
 int ClampDancePointDigits(int digits, const char* context) {
   if (digits < 0 || digits > 12) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX SRC-271: %s clamped DancePointsDigits %i.",
-        context, digits);
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-271: %s clamped DancePointsDigits %i.", context,
+          digits);
+    }
     return std::max(0, std::min(12, digits));
   }
   return digits;
@@ -37,6 +51,7 @@ bool IsSafeIntegerFormat(const std::string& format) {
   if (format.empty() || format.size() > 64) {
     return false;
   }
+  int conversions = 0;
   for (size_t i = 0; i < format.size(); ++i) {
     if (format[i] != '%') {
       continue;
@@ -45,7 +60,14 @@ bool IsSafeIntegerFormat(const std::string& format) {
       ++i;
       continue;
     }
+    ++conversions;
+    if (conversions > 1) {
+      return false;
+    }
     size_t j = i + 1;
+    while (j < format.size() && std::string("-+ #0").find(format[j]) != std::string::npos) {
+      ++j;
+    }
     int width = 0;
     while (j < format.size() &&
            std::isdigit(static_cast<unsigned char>(format[j]))) {
@@ -55,28 +77,45 @@ bool IsSafeIntegerFormat(const std::string& format) {
       }
       ++j;
     }
-    while (j < format.size() && !std::isalpha(static_cast<unsigned char>(format[j]))) {
+    if (j < format.size() && format[j] == '.') {
       ++j;
+      int precision = 0;
+      while (j < format.size() &&
+             std::isdigit(static_cast<unsigned char>(format[j]))) {
+        precision = precision * 10 + (format[j] - '0');
+        if (precision > 6) {
+          return false;
+        }
+        ++j;
+      }
     }
     if (j >= format.size()) {
       return false;
     }
-    if (format[j] == 's' || format[j] == 'n' || format[j] == 'p') {
+    if (std::string("diu").find(format[j]) == std::string::npos) {
       return false;
     }
   }
-  return true;
+  return conversions == 1;
 }
 
 std::string FormatIntSafely(
     const std::string& format, int value, const char* context) {
   if (!IsSafeIntegerFormat(format)) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX %s: ignored unsafe integer format '%s'.",
-        context, format.c_str());
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX %s: ignored unsafe integer format '%s'.", context,
+          format.c_str());
+    }
     return ssprintf("%d", value);
   }
   return ssprintf(format.c_str(), value);
+}
+
+void ReleasePercentageDisplayLua(Lua* L) {
+  if (LUA != nullptr && L != nullptr) {
+    LUA->Release(L);
+  }
 }
 }  // namespace
 
@@ -92,29 +131,42 @@ PercentageDisplay::PercentageDisplay() {
   m_FormatPercentScore.SetFromExpression("FormatPercentScore");
 }
 
+void PercentageDisplay::ResetLoadedActors() {
+  RemoveChild(&m_textPercent);
+  RemoveChild(&m_textPercentRemainder);
+  m_Last = -1;
+  m_LastMax = -1;
+}
+
 void PercentageDisplay::LoadFromNode(const XNode* pNode) {
+  ResetLoadedActors();
+
+  if (pNode == nullptr) {
+    WarnPercentageDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1085: PercentageDisplay ignored null XML node.");
+    return;
+  }
   pNode->GetAttrValue("DancePointsDigits", m_iDancePointsDigits);
   m_iDancePointsDigits =
       ClampDancePointDigits(m_iDancePointsDigits, "PercentageDisplay XML");
   pNode->GetAttrValue("AutoRefresh", m_bAutoRefresh);
-  {
+  if (LUA != nullptr) {
     Lua* L = LUA->Get();
-    if (pNode->PushAttrValue(L, "FormatPercentScore")) {
+    if (L != nullptr && pNode->PushAttrValue(L, "FormatPercentScore")) {
       m_FormatPercentScore.SetFromStack(L);
       if (m_FormatPercentScore.GetLuaType() != LUA_TFUNCTION) {
         // Not reported as an error because _fallback and default provided bad
         // examples in their [LifeMeterBattery Percent]:Format metric and nobody
         // realized it was supposed to be set to a function. -Kyz
-        LOG->Trace(
+        TracePercentageDisplayAuditFix(
             "Format attribute for PercentageDisplay named '%s' is not a "
-            "function. Defaulting to 'FormatPercentScore'.",
-            GetName().c_str());
+            "function. Defaulting to 'FormatPercentScore'.");
         m_FormatPercentScore.SetFromExpression("FormatPercentScore");
       }
-    } else {
+    } else if (L != nullptr) {
       lua_pop(L, 1);
     }
-    LUA->Release(L);
+    ReleasePercentageDisplayLua(L);
   }
 
   const XNode* pChild = pNode->GetChild("Percent");
@@ -123,7 +175,13 @@ void PercentageDisplay::LoadFromNode(const XNode* pNode) {
         ActorUtil::GetWhere(pNode) +
         ": PercentageDisplay: missing the node \"Percent\"");
     // Make a BitmapText just so we don't crash.
-    m_textPercent.LoadFromFont(THEME->GetPathF("", "Common Normal"));
+    if (THEME != nullptr) {
+      m_textPercent.LoadFromFont(THEME->GetPathF("", "Common Normal"));
+    } else {
+      WarnPercentageDisplayAuditFix(
+          "SRC_AUDIT_FIX SRC-1085: PercentageDisplay could not load fallback "
+          "font without THEME.");
+    }
   } else {
     m_textPercent.LoadFromNode(pChild);
   }
@@ -164,9 +222,17 @@ void PercentageDisplay::Load(
 void PercentageDisplay::Load(
     const PlayerState* pPlayerState, const PlayerStageStats* pPlayerStageStats,
     const std::string& sMetricsGroup, bool bAutoRefresh) {
+  ResetLoadedActors();
   m_pPlayerState = pPlayerState;
   m_pPlayerStageStats = pPlayerStageStats;
   m_bAutoRefresh = bAutoRefresh;
+
+  if (THEME == nullptr) {
+    WarnPercentageDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1085: PercentageDisplay refused metric load "
+        "without THEME.");
+    return;
+  }
 
   m_iDancePointsDigits = THEME->GetMetricI(sMetricsGroup, "DancePointsDigits");
   m_iDancePointsDigits =
@@ -176,15 +242,20 @@ void PercentageDisplay::Load(
 
   m_sPercentFormat = THEME->GetMetric(sMetricsGroup, "PercentFormat");
   m_sRemainderFormat = THEME->GetMetric(sMetricsGroup, "RemainderFormat");
+  if (m_sPercentFormat.empty()) {
+    m_sPercentFormat = "%d";
+  }
+  if (m_sRemainderFormat.empty()) {
+    m_sRemainderFormat = "%d";
+  }
 
   if (m_FormatPercentScore.GetLuaType() != LUA_TFUNCTION) {
     // Not reported as an error because _fallback and default provided bad
     // examples in their [LifeMeterBattery Percent]:Format metric and nobody
     // realized it was supposed to be set to a function. -Kyz
-    LOG->Trace(
+    TracePercentageDisplayAuditFix(
         "Format metric is not a function in [%s]. Defaulting to "
-        "'FormatPercentScore'.",
-        sMetricsGroup.c_str());
+        "'FormatPercentScore'.");
     m_FormatPercentScore.SetFromExpression("FormatPercentScore");
   }
 
@@ -237,6 +308,12 @@ void PercentageDisplay::Load(
 }
 
 void PercentageDisplay::Update(float fDeltaTime) {
+  if (!std::isfinite(fDeltaTime)) {
+    WarnPercentageDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1088: PercentageDisplay ignored non-finite update "
+        "delta.");
+    return;
+  }
   ActorFrame::Update(fDeltaTime);
 
   if (m_bAutoRefresh) {
@@ -246,7 +323,7 @@ void PercentageDisplay::Update(float fDeltaTime) {
 
 void PercentageDisplay::Refresh() {
   if (m_pPlayerStageStats == nullptr) {
-    LOG->Trace(
+    TracePercentageDisplayAuditFix(
         "SRC_AUDIT_FIX SRC-270: PercentageDisplay skipped refresh without "
         "PlayerStageStats.");
     return;
@@ -270,10 +347,9 @@ void PercentageDisplay::Refresh() {
   } else {
     float fPercentDancePoints = m_pPlayerStageStats->GetPercentDancePoints();
     if (!std::isfinite(fPercentDancePoints)) {
-      LOG->Warn(
+      WarnPercentageDisplayAuditFix(
           "SRC_AUDIT_FIX SRC-274: PercentageDisplay corrected non-finite "
-          "percent %f.",
-          fPercentDancePoints);
+          "percent.");
       fPercentDancePoints = 0.0f;
     }
 
@@ -292,13 +368,22 @@ void PercentageDisplay::Refresh() {
               "SRC-275 PercentageDisplay"));
     } else {
       if (m_FormatPercentScore.GetLuaType() == LUA_TFUNCTION) {
-        Lua* L = LUA->Get();
-        m_FormatPercentScore.PushSelf(L);
-        LuaHelpers::Push(L, fPercentDancePoints);
-        std::string Error = "Error running FormatPercentScore: ";
-        LuaHelpers::RunScriptOnStack(L, Error, 1, 1, true);  // 1 arg, 1 result
-        LuaHelpers::Pop(L, sNumToDisplay);
-        LUA->Release(L);
+        if (LUA != nullptr) {
+          Lua* L = LUA->Get();
+          if (L != nullptr) {
+            m_FormatPercentScore.PushSelf(L);
+            LuaHelpers::Push(L, fPercentDancePoints);
+            std::string Error = "Error running FormatPercentScore: ";
+            LuaHelpers::RunScriptOnStack(
+                L, Error, 1, 1, true);  // 1 arg, 1 result
+            LuaHelpers::Pop(L, sNumToDisplay);
+            ReleasePercentageDisplayLua(L);
+          }
+        }
+      }
+      if (sNumToDisplay.empty()) {
+        sNumToDisplay =
+            PlayerStageStats::FormatPercentScore(fPercentDancePoints);
       }
 
       // HACK: Use the last frame in the numbers texture as '-'
@@ -313,8 +398,9 @@ bool PercentageDisplay::ShowDancePointsNotPercentage() const {
   // Use straight dance points in workout because the percentage denominator
   // isn't accurate - we don't know when the players are going to stop.
 
-  if (GAMESTATE->m_pCurCourse) {
-    if (GAMESTATE->m_pCurCourse->m_fGoalSeconds > 0) {
+  if (GAMESTATE != nullptr && GAMESTATE->m_pCurCourse != nullptr) {
+    if (std::isfinite(GAMESTATE->m_pCurCourse->m_fGoalSeconds) &&
+        GAMESTATE->m_pCurCourse->m_fGoalSeconds > 0) {
       return true;
     }
   }
@@ -328,9 +414,10 @@ bool PercentageDisplay::ShowDancePointsNotPercentage() const {
 class LunaPercentageDisplay : public Luna<PercentageDisplay> {
  public:
   static int LoadFromStats(T* p, lua_State* L) {
-    const PlayerState* pStageStats = Luna<PlayerState>::check(L, 1);
+    const PlayerState* pStageStats =
+        lua_isnil(L, 1) ? nullptr : Luna<PlayerState>::check(L, 1);
     const PlayerStageStats* pPlayerStageStats =
-        Luna<PlayerStageStats>::check(L, 2);
+        lua_isnil(L, 2) ? nullptr : Luna<PlayerStageStats>::check(L, 2);
     p->Load(pStageStats, pPlayerStageStats);
     COMMON_RETURN_SELF;
   }

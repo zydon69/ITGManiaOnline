@@ -1,6 +1,7 @@
 #include "RollingNumbers.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <string>
 
@@ -8,10 +9,86 @@
 #include "ActorUtil.h"
 #include "BitmapText.h"
 #include "LuaManager.h"
+#include "RageLog.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
+#include "ThemeManager.h"
 
 REGISTER_ACTOR_CLASS(RollingNumbers);
+
+namespace {
+void WarnRollingNumbersAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+bool IsSafeRollingNumberFormat(const std::string& format) {
+  if (format.empty() || format.size() > 64) {
+    return false;
+  }
+  int conversions = 0;
+  for (size_t i = 0; i < format.size(); ++i) {
+    if (format[i] != '%') {
+      continue;
+    }
+    if (i + 1 < format.size() && format[i + 1] == '%') {
+      ++i;
+      continue;
+    }
+    ++conversions;
+    if (conversions > 1) {
+      return false;
+    }
+    size_t j = i + 1;
+    while (j < format.size() && std::string("-+ #0").find(format[j]) != std::string::npos) {
+      ++j;
+    }
+    int width = 0;
+    while (j < format.size() &&
+           std::isdigit(static_cast<unsigned char>(format[j]))) {
+      width = width * 10 + (format[j] - '0');
+      if (width > 16) {
+        return false;
+      }
+      ++j;
+    }
+    if (j < format.size() && format[j] == '.') {
+      ++j;
+      int precision = 0;
+      while (j < format.size() &&
+             std::isdigit(static_cast<unsigned char>(format[j]))) {
+        precision = precision * 10 + (format[j] - '0');
+        if (precision > 6) {
+          return false;
+        }
+        ++j;
+      }
+    }
+    if (j >= format.size()) {
+      return false;
+    }
+    if (std::string("fFeEgG").find(format[j]) == std::string::npos) {
+      return false;
+    }
+  }
+  return conversions == 1;
+}
+
+std::string FormatRollingNumber(const std::string& format, float value) {
+  if (!std::isfinite(value)) {
+    WarnRollingNumbersAuditFix(
+        "SRC_AUDIT_FIX SRC-1092: RollingNumbers reset non-finite text value.");
+    value = 0.0f;
+  }
+  if (!IsSafeRollingNumberFormat(format)) {
+    WarnRollingNumbersAuditFix(
+        "SRC_AUDIT_FIX SRC-1090: RollingNumbers ignored unsafe TextFormat.");
+    return ssprintf("%.0f", value);
+  }
+  return ssprintf(format.c_str(), value);
+}
+}  // namespace
 
 RollingNumbers::RollingNumbers() {
   m_fCurrentNumber = 0;
@@ -21,11 +98,26 @@ RollingNumbers::RollingNumbers() {
 }
 
 void RollingNumbers::Load(const std::string& sMetricsGroup) {
+  if (THEME == nullptr) {
+    WarnRollingNumbersAuditFix(
+        "SRC_AUDIT_FIX SRC-1090: RollingNumbers refused load without THEME.");
+    m_metrics_loaded = false;
+    return;
+  }
+  const std::string sResolvedMetricsGroup =
+      sMetricsGroup.empty() ? "RollingNumbers" : sMetricsGroup;
+  if (sMetricsGroup.empty()) {
+    WarnRollingNumbersAuditFix(
+        "SRC_AUDIT_FIX SRC-1090: RollingNumbers fell back from empty metrics "
+        "group.");
+  }
+
   m_metrics_loaded = true;
-  TEXT_FORMAT.Load(sMetricsGroup, "TextFormat");
-  APPROACH_SECONDS.Load(sMetricsGroup, "ApproachSeconds");
-  COMMIFY.Load(sMetricsGroup, "Commify");
-  LEADING_ZERO_MULTIPLY_COLOR.Load(sMetricsGroup, "LeadingZeroMultiplyColor");
+  TEXT_FORMAT.Load(sResolvedMetricsGroup, "TextFormat");
+  APPROACH_SECONDS.Load(sResolvedMetricsGroup, "ApproachSeconds");
+  COMMIFY.Load(sResolvedMetricsGroup, "Commify");
+  LEADING_ZERO_MULTIPLY_COLOR.Load(
+      sResolvedMetricsGroup, "LeadingZeroMultiplyColor");
 
   UpdateText();
 }
@@ -33,6 +125,17 @@ void RollingNumbers::Load(const std::string& sMetricsGroup) {
 void RollingNumbers::DrawPart(
     const RageColor* diffuse, const RageColor& stroke, float crop_left,
     float crop_right) {
+  if (diffuse == nullptr || m_pTempState == nullptr) {
+    return;
+  }
+  if (!std::isfinite(crop_left)) {
+    crop_left = 0.0f;
+  }
+  if (!std::isfinite(crop_right)) {
+    crop_right = 0.0f;
+  }
+  rage_clamp(crop_left, 0.0f, 1.0f);
+  rage_clamp(crop_right, 0.0f, 1.0f);
   for (int i = 0; i < NUM_DIFFUSE_COLORS; ++i) {
     m_pTempState->diffuse[i] = diffuse[i];
   }
@@ -43,7 +146,7 @@ void RollingNumbers::DrawPart(
 }
 
 void RollingNumbers::DrawPrimitives() noexcept {
-  if (!m_metrics_loaded) {
+  if (!m_metrics_loaded || m_pTempState == nullptr) {
     return;
   }
   RageColor diffuse_orig[NUM_DIFFUSE_COLORS];
@@ -58,6 +161,10 @@ void RollingNumbers::DrawPrimitives() noexcept {
   float original_crop_right = m_pTempState->crop.right;
 
   std::string s = this->GetText();
+  if (s.empty()) {
+    BitmapText::DrawPrimitives();
+    return;
+  }
   int i;
   // find the first non-zero non-comma character, or the last character
   for (i = 0; i < (int)(s.length() - 1); i++) {
@@ -72,6 +179,10 @@ void RollingNumbers::DrawPrimitives() noexcept {
     if (s[i] >= '0' && s[i] <= '9') {
       break;
     }
+  }
+  if (i < 0) {
+    BitmapText::DrawPrimitives();
+    return;
   }
   float f = i / (float)s.length();
 
@@ -89,6 +200,21 @@ void RollingNumbers::DrawPrimitives() noexcept {
 }
 
 void RollingNumbers::Update(float fDeltaTime) {
+  if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
+    WarnRollingNumbersAuditFix(
+        "SRC_AUDIT_FIX SRC-1092: RollingNumbers ignored invalid update delta.");
+    BitmapText::Update(0.0f);
+    return;
+  }
+  if (!std::isfinite(m_fCurrentNumber)) {
+    m_fCurrentNumber = 0.0f;
+  }
+  if (!std::isfinite(m_fTargetNumber)) {
+    m_fTargetNumber = 0.0f;
+  }
+  if (!std::isfinite(m_fScoreVelocity)) {
+    m_fScoreVelocity = 0.0f;
+  }
   if (m_fCurrentNumber != m_fTargetNumber) {
     fapproach(
         m_fCurrentNumber, m_fTargetNumber,
@@ -109,8 +235,22 @@ void RollingNumbers::SetTargetNumber(float fTargetNumber) {
   if (fTargetNumber == m_fTargetNumber) {  // no change
     return;
   }
+  if (!std::isfinite(fTargetNumber)) {
+    WarnRollingNumbersAuditFix(
+        "SRC_AUDIT_FIX SRC-1093: RollingNumbers reset non-finite target.");
+    fTargetNumber = 0.0f;
+  }
+  if (!std::isfinite(m_fCurrentNumber)) {
+    m_fCurrentNumber = 0.0f;
+  }
   m_fTargetNumber = fTargetNumber;
   float approach_secs = APPROACH_SECONDS.GetValue();
+  if (!std::isfinite(approach_secs) || approach_secs < 0.0f) {
+    WarnRollingNumbersAuditFix(
+        "SRC_AUDIT_FIX SRC-1092: RollingNumbers used instant approach for "
+        "invalid ApproachSeconds.");
+    approach_secs = 0.0f;
+  }
   if (approach_secs > 0) {
     m_fScoreVelocity = (m_fTargetNumber - m_fCurrentNumber) / approach_secs;
   } else {
@@ -122,7 +262,8 @@ void RollingNumbers::UpdateText() {
   if (!m_metrics_loaded) {
     return;
   }
-  std::string s = ssprintf(TEXT_FORMAT.GetValue().c_str(), m_fCurrentNumber);
+  std::string s =
+      FormatRollingNumber(TEXT_FORMAT.GetValue(), m_fCurrentNumber);
   if (COMMIFY) {
     s = Commify(s);
   }
