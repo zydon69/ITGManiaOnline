@@ -16,9 +16,10 @@ class ActiveAttackList : public BitmapText {
   /**
    * @brief Look into updating the list.
    * @param fDelta the present time. */
-  virtual void Update(float fDelta);
+  virtual void Update(float fDelta) override;
   /** @brief Refresh the list of attacks. */
   void Refresh();
+  virtual ActiveAttackList* Copy() const override;
 
  protected:
   /** @brief the PlayerState of the Player who is dealing with the attack list.
