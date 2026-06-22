@@ -14,6 +14,7 @@ class Trail;
 class WorkoutGraph : public ActorFrame {
  public:
   WorkoutGraph();
+  WorkoutGraph(const WorkoutGraph& cpy);
   ~WorkoutGraph();
   virtual WorkoutGraph* Copy() const;
 
@@ -28,6 +29,7 @@ class WorkoutGraph : public ActorFrame {
  protected:
   void SetInternal(int iNumSongsToShowForCurrentStage);
   void HighlightSong(int iSongIndex);
+  void ClearBars();
 
   Sprite m_sprEmpty;
   std::vector<Sprite*> m_vpBars;

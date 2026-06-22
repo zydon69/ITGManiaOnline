@@ -1,6 +1,7 @@
 #include "WorkoutGraph.h"
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 #include "Actor.h"
@@ -10,6 +11,7 @@
 #include "GameState.h"
 #include "LuaManager.h"
 #include "PlayerNumber.h"
+#include "RageLog.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
 #include "Sprite.h"
@@ -22,22 +24,83 @@ const int MAX_METERS_TO_SHOW = 50;
 
 REGISTER_ACTOR_CLASS(WorkoutGraph);
 
+namespace {
+void WarnWorkoutGraph(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+bool IsValidWorkoutGraphPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+PlayerNumber GetWorkoutGraphPlayer() {
+  if (GAMESTATE == nullptr) {
+    return PlayerNumber_Invalid;
+  }
+
+  const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+  if (IsValidWorkoutGraphPlayer(master)) {
+    return master;
+  }
+
+  FOREACH_PlayerNumber(pn) {
+    if (GAMESTATE->m_pCurTrail[pn] != nullptr) {
+      return pn;
+    }
+  }
+  return PLAYER_1;
+}
+
+int SanitizeWorkoutMeter(int meter) {
+  return std::clamp(meter, 0, MAX_METER);
+}
+}  // namespace
+
 WorkoutGraph::WorkoutGraph() { m_iSongsChoppedOffAtBeginning = 0; }
 
-WorkoutGraph::~WorkoutGraph() {
+WorkoutGraph::WorkoutGraph(const WorkoutGraph& cpy)
+    : ActorFrame(cpy),
+      m_sprEmpty(cpy.m_sprEmpty),
+      m_iSongsChoppedOffAtBeginning(cpy.m_iSongsChoppedOffAtBeginning) {
+  AddChild(&m_sprEmpty);
+  for (Sprite* s : cpy.m_vpBars) {
+    if (s == nullptr) {
+      continue;
+    }
+    Sprite* copied = new Sprite(*s);
+    m_vpBars.push_back(copied);
+    AddChild(copied);
+  }
+}
+
+WorkoutGraph::~WorkoutGraph() { ClearBars(); }
+
+void WorkoutGraph::ClearBars() {
   for (Sprite* s : m_vpBars) {
+    this->RemoveChild(s);
     delete s;
   }
   m_vpBars.clear();
 }
 
 void WorkoutGraph::Load() {
-  m_sprEmpty.Load(THEME->GetPathG("WorkoutGraph", "empty"));
+  RemoveChild(&m_sprEmpty);
+  if (THEME != nullptr) {
+    m_sprEmpty.Load(THEME->GetPathG("WorkoutGraph", "empty"));
+  } else {
+    WarnWorkoutGraph("SRC_AUDIT_FIX SRC-1160: WorkoutGraph loaded without THEME.");
+  }
   this->AddChild(&m_sprEmpty);
 }
 
 void WorkoutGraph::LoadFromNode(const XNode* pNode) {
   ActorFrame::LoadFromNode(pNode);
+  if (pNode == nullptr) {
+    WarnWorkoutGraph("SRC_AUDIT_FIX SRC-1161: WorkoutGraph ignored null XML node.");
+    return;
+  }
 
   Load();
 }
@@ -45,25 +108,61 @@ void WorkoutGraph::LoadFromNode(const XNode* pNode) {
 void WorkoutGraph::SetFromCurrentWorkout() { SetInternal(0); }
 
 void WorkoutGraph::SetInternal(int iMinSongsPlayed) {
-  for (Sprite* s : m_vpBars) {
-    this->RemoveChild(s);
-    delete s;
-  }
-  m_vpBars.clear();
+  ClearBars();
+  m_iSongsChoppedOffAtBeginning = 0;
 
-  Trail* pTrail = GAMESTATE->m_pCurTrail[PLAYER_1];
+  if (GAMESTATE == nullptr) {
+    WarnWorkoutGraph(
+        "SRC_AUDIT_FIX SRC-1162: WorkoutGraph ignored update without GAMESTATE.");
+    return;
+  }
+
+  const PlayerNumber pn = GetWorkoutGraphPlayer();
+  if (!IsValidWorkoutGraphPlayer(pn)) {
+    return;
+  }
+
+  Trail* pTrail = GAMESTATE->m_pCurTrail[pn];
   if (pTrail == nullptr) {
     return;
   }
 
-  std::vector<int> viMeters;
+  std::vector<int> viMetersAll;
   for (const TrailEntry& e : pTrail->m_vEntries) {
-    ASSERT(e.pSteps != nullptr);
-    viMeters.push_back(e.pSteps->GetMeter());
+    if (e.pSteps == nullptr) {
+      WarnWorkoutGraph(
+          "SRC_AUDIT_FIX SRC-1163: WorkoutGraph skipped trail entry without steps.");
+      continue;
+    }
+    viMetersAll.push_back(SanitizeWorkoutMeter(e.pSteps->GetMeter()));
   }
 
-  int iBlocksWide = viMeters.size();
+  if (viMetersAll.empty()) {
+    return;
+  }
+
+  const int totalMeters = static_cast<int>(viMetersAll.size());
+  const int maxMetersToShow = std::max(1, MAX_METERS_TO_SHOW);
+  if (totalMeters > maxMetersToShow) {
+    const int minSongsPlayed = std::max(0, iMinSongsPlayed);
+    const int preferredStart = std::max(0, minSongsPlayed - maxMetersToShow);
+    m_iSongsChoppedOffAtBeginning =
+        std::min(preferredStart, totalMeters - maxMetersToShow);
+  }
+
+  const int metersToCopy =
+      std::min(maxMetersToShow, totalMeters - m_iSongsChoppedOffAtBeginning);
+  std::vector<int> viMeters;
+  viMeters.reserve(metersToCopy);
+  for (int i = 0; i < metersToCopy; ++i) {
+    viMeters.push_back(viMetersAll[m_iSongsChoppedOffAtBeginning + i]);
+  }
+
+  int iBlocksWide = static_cast<int>(viMeters.size());
   int iBlocksHigh = MAX_METER;
+  if (iBlocksWide <= 0 || iBlocksHigh <= 0) {
+    return;
+  }
 
   const float fMaxWidth = 300;
   float fTotalWidth = SCALE(iBlocksWide, 1.0f, 10.0f, 50.0f, fMaxWidth);
@@ -75,6 +174,9 @@ void WorkoutGraph::SetInternal(int iMinSongsPlayed) {
 
   float fBlockSize =
       std::min(fTotalWidth / iBlocksWide, fTotalHeight / iBlocksHigh);
+  if (!std::isfinite(fBlockSize) || fBlockSize <= 0.0f) {
+    return;
+  }
 
   m_sprEmpty.SetVertAlign(align_bottom);
   m_sprEmpty.SetCustomImageRect(
@@ -86,7 +188,12 @@ void WorkoutGraph::SetInternal(int iMinSongsPlayed) {
   for (const int& meter : viMeters) {
     float fOffsetFromCenter = (index++) - (iBlocksWide - 1) / 2.0f;
     Sprite* p = new Sprite;
-    p->Load(THEME->GetPathG("WorkoutGraph", "bar"));
+    if (THEME != nullptr) {
+      p->Load(THEME->GetPathG("WorkoutGraph", "bar"));
+    } else {
+      WarnWorkoutGraph(
+          "SRC_AUDIT_FIX SRC-1160: WorkoutGraph skipped bar texture without THEME.");
+    }
     p->SetVertAlign(align_bottom);
     p->ZoomToWidth(fBlockSize);
     int iMetersToCover = (MAX_METER - meter);
@@ -108,7 +215,7 @@ void WorkoutGraph::SetFromGameStateAndHighlightSong(int iSongIndex) {
 
   int iBarIndex = iSongIndex - m_iSongsChoppedOffAtBeginning;
 
-  if (iBarIndex < (int)m_vpBars.size()) {
+  if (iBarIndex >= 0 && iBarIndex < (int)m_vpBars.size()) {
     m_vpBars[iBarIndex]->SetEffectGlowBlink(
         0.3f, RageColor(1, 1, 1, 0.2f), RageColor(1, 1, 1, 0.8f));
   }
