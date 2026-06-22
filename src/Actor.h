@@ -10,6 +10,7 @@ class XNode;
 struct lua_State;
 class LuaClass;
 #include <cstddef>
+#include <cmath>
 #include <map>
 #include <string>
 #include <vector>
@@ -331,13 +332,13 @@ class Actor : public MessageSubscriber {
   /**
    * @brief Retrieve the Actor's parent.
    * @return the Actor's parent. */
-  Actor* GetParent() { return m_pParent; }
+  Actor* GetParent() const { return m_pParent; }
   /**
    * @brief Retrieve the Actor's lineage.
    * @return the Actor's lineage. */
   std::string GetLineage() const;
 
-  void SetFakeParent(Actor* mailman) { m_FakeParent = mailman; }
+  void SetFakeParent(Actor* mailman);
   Actor* GetFakeParent() { return m_FakeParent; }
 
   void AddWrapperState();
@@ -360,12 +361,12 @@ class Actor : public MessageSubscriber {
   float GetDestX() const { return DestTweenState().pos.x; };
   float GetDestY() const { return DestTweenState().pos.y; };
   float GetDestZ() const { return DestTweenState().pos.z; };
-  void SetX(float x) { DestTweenState().pos.x = x; };
-  void SetY(float y) { DestTweenState().pos.y = y; };
-  void SetZ(float z) { DestTweenState().pos.z = z; };
+  void SetX(float x) { DestTweenState().pos.x = FiniteOr(x, 0.0f); };
+  void SetY(float y) { DestTweenState().pos.y = FiniteOr(y, 0.0f); };
+  void SetZ(float z) { DestTweenState().pos.z = FiniteOr(z, 0.0f); };
   void SetXY(float x, float y) {
-    DestTweenState().pos.x = x;
-    DestTweenState().pos.y = y;
+    DestTweenState().pos.x = FiniteOr(x, 0.0f);
+    DestTweenState().pos.y = FiniteOr(y, 0.0f);
   };
   /**
    * @brief Add to the x position of this Actor.
@@ -389,24 +390,35 @@ class Actor : public MessageSubscriber {
   float GetZoomedHeight() const {
     return m_size.y * m_baseScale.y * DestTweenState().scale.y;
   }
-  void SetWidth(float width) { m_size.x = width; }
-  void SetHeight(float height) { m_size.y = height; }
+  void SetWidth(float width) { m_size.x = NonNegativeFiniteOr(width, 0.0f); }
+  void SetHeight(float height) { m_size.y = NonNegativeFiniteOr(height, 0.0f); }
 
   // Base values
   float GetBaseZoomX() const { return m_baseScale.x; }
-  void SetBaseZoomX(float zoom) { m_baseScale.x = zoom; }
+  void SetBaseZoomX(float zoom) { m_baseScale.x = FiniteOr(zoom, 1.0f); }
   float GetBaseZoomY() const { return m_baseScale.y; }
-  void SetBaseZoomY(float zoom) { m_baseScale.y = zoom; }
+  void SetBaseZoomY(float zoom) { m_baseScale.y = FiniteOr(zoom, 1.0f); }
   float GetBaseZoomZ() const { return m_baseScale.z; }
-  void SetBaseZoomZ(float zoom) { m_baseScale.z = zoom; }
-  void SetBaseZoom(float zoom) { m_baseScale = RageVector3(zoom, zoom, zoom); }
-  void SetBaseRotationX(float rot) { m_baseRotation.x = rot; }
-  void SetBaseRotationY(float rot) { m_baseRotation.y = rot; }
-  void SetBaseRotationZ(float rot) { m_baseRotation.z = rot; }
-  void SetBaseRotation(const RageVector3& rot) { m_baseRotation = rot; }
-  virtual void SetBaseAlpha(float fAlpha) { m_fBaseAlpha = fAlpha; }
-  void SetInternalDiffuse(const RageColor& c) { m_internalDiffuse = c; }
-  void SetInternalGlow(const RageColor& c) { m_internalGlow = c; }
+  void SetBaseZoomZ(float zoom) { m_baseScale.z = FiniteOr(zoom, 1.0f); }
+  void SetBaseZoom(float zoom) {
+    const float safeZoom = FiniteOr(zoom, 1.0f);
+    m_baseScale = RageVector3(safeZoom, safeZoom, safeZoom);
+  }
+  void SetBaseRotationX(float rot) { m_baseRotation.x = FiniteOr(rot, 0.0f); }
+  void SetBaseRotationY(float rot) { m_baseRotation.y = FiniteOr(rot, 0.0f); }
+  void SetBaseRotationZ(float rot) { m_baseRotation.z = FiniteOr(rot, 0.0f); }
+  void SetBaseRotation(const RageVector3& rot) {
+    m_baseRotation = RageVector3(
+        FiniteOr(rot.x, 0.0f), FiniteOr(rot.y, 0.0f),
+        FiniteOr(rot.z, 0.0f));
+  }
+  virtual void SetBaseAlpha(float fAlpha) {
+    m_fBaseAlpha = ClampUnitOr(fAlpha, 1.0f);
+  }
+  void SetInternalDiffuse(const RageColor& c) {
+    m_internalDiffuse = SanitizeColor(c);
+  }
+  void SetInternalGlow(const RageColor& c) { m_internalGlow = SanitizeColor(c); }
 
   /**
    * @brief Retrieve the general zoom factor, using the x coordinate of the
@@ -431,103 +443,124 @@ class Actor : public MessageSubscriber {
    * @brief Set the zoom factor for all dimensions of the Actor.
    * @param zoom the zoom factor for all dimensions. */
   void SetZoom(float zoom) {
-    DestTweenState().scale.x = zoom;
-    DestTweenState().scale.y = zoom;
-    DestTweenState().scale.z = zoom;
+    const float safeZoom = FiniteOr(zoom, 1.0f);
+    DestTweenState().scale.x = safeZoom;
+    DestTweenState().scale.y = safeZoom;
+    DestTweenState().scale.z = safeZoom;
   }
   /**
    * @brief Set the zoom factor for the x dimension of the Actor.
    * @param zoom the zoom factor for the x dimension. */
-  void SetZoomX(float zoom) { DestTweenState().scale.x = zoom; }
+  void SetZoomX(float zoom) { DestTweenState().scale.x = FiniteOr(zoom, 1.0f); }
   /**
    * @brief Set the zoom factor for the y dimension of the Actor.
    * @param zoom the zoom factor for the y dimension. */
-  void SetZoomY(float zoom) { DestTweenState().scale.y = zoom; }
+  void SetZoomY(float zoom) { DestTweenState().scale.y = FiniteOr(zoom, 1.0f); }
   /**
    * @brief Set the zoom factor for the z dimension of the Actor.
    * @param zoom the zoom factor for the z dimension. */
-  void SetZoomZ(float zoom) { DestTweenState().scale.z = zoom; }
+  void SetZoomZ(float zoom) { DestTweenState().scale.z = FiniteOr(zoom, 1.0f); }
   void ZoomTo(float fX, float fY) {
     ZoomToWidth(fX);
     ZoomToHeight(fY);
   }
-  void ZoomToWidth(float zoom) { SetZoomX(zoom / GetUnzoomedWidth()); }
-  void ZoomToHeight(float zoom) { SetZoomY(zoom / GetUnzoomedHeight()); }
+  void ZoomToWidth(float zoom) {
+    const float width = GetUnzoomedWidth();
+    SetZoomX(width > 0.0f ? zoom / width : 1.0f);
+  }
+  void ZoomToHeight(float zoom) {
+    const float height = GetUnzoomedHeight();
+    SetZoomY(height > 0.0f ? zoom / height : 1.0f);
+  }
 
   float GetRotationX() const { return DestTweenState().rotation.x; }
   float GetRotationY() const { return DestTweenState().rotation.y; }
   float GetRotationZ() const { return DestTweenState().rotation.z; }
-  void SetRotationX(float rot) { DestTweenState().rotation.x = rot; }
-  void SetRotationY(float rot) { DestTweenState().rotation.y = rot; }
-  void SetRotationZ(float rot) { DestTweenState().rotation.z = rot; }
+  void SetRotationX(float rot) { DestTweenState().rotation.x = FiniteOr(rot, 0.0f); }
+  void SetRotationY(float rot) { DestTweenState().rotation.y = FiniteOr(rot, 0.0f); }
+  void SetRotationZ(float rot) { DestTweenState().rotation.z = FiniteOr(rot, 0.0f); }
   // added in StepNXA, now available in sm-ssc:
-  void AddRotationX(float rot) { DestTweenState().rotation.x += rot; };
-  void AddRotationY(float rot) { DestTweenState().rotation.y += rot; };
-  void AddRotationZ(float rot) { DestTweenState().rotation.z += rot; };
+  void AddRotationX(float rot) { DestTweenState().rotation.x += FiniteOr(rot, 0.0f); };
+  void AddRotationY(float rot) { DestTweenState().rotation.y += FiniteOr(rot, 0.0f); };
+  void AddRotationZ(float rot) { DestTweenState().rotation.z += FiniteOr(rot, 0.0f); };
   // and these were normally in SM:
   void AddRotationH(float rot);
   void AddRotationP(float rot);
   void AddRotationR(float rot);
 
-  void SetSkewX(float fAmount) { DestTweenState().fSkewX = fAmount; }
+  void SetSkewX(float fAmount) { DestTweenState().fSkewX = FiniteOr(fAmount, 0.0f); }
   float GetSkewX(float /* fAmount */) const { return DestTweenState().fSkewX; }
-  void SetSkewY(float fAmount) { DestTweenState().fSkewY = fAmount; }
+  void SetSkewY(float fAmount) { DestTweenState().fSkewY = FiniteOr(fAmount, 0.0f); }
   float GetSkewY(float /* fAmount */) const { return DestTweenState().fSkewY; }
 
   float GetCropLeft() const { return DestTweenState().crop.left; }
   float GetCropTop() const { return DestTweenState().crop.top; }
   float GetCropRight() const { return DestTweenState().crop.right; }
   float GetCropBottom() const { return DestTweenState().crop.bottom; }
-  void SetCropLeft(float percent) { DestTweenState().crop.left = percent; }
-  void SetCropTop(float percent) { DestTweenState().crop.top = percent; }
-  void SetCropRight(float percent) { DestTweenState().crop.right = percent; }
-  void SetCropBottom(float percent) { DestTweenState().crop.bottom = percent; }
+  void SetCropLeft(float percent) { DestTweenState().crop.left = ClampUnitOr(percent, 0.0f); }
+  void SetCropTop(float percent) { DestTweenState().crop.top = ClampUnitOr(percent, 0.0f); }
+  void SetCropRight(float percent) { DestTweenState().crop.right = ClampUnitOr(percent, 0.0f); }
+  void SetCropBottom(float percent) { DestTweenState().crop.bottom = ClampUnitOr(percent, 0.0f); }
 
-  void SetFadeLeft(float percent) { DestTweenState().fade.left = percent; }
-  void SetFadeTop(float percent) { DestTweenState().fade.top = percent; }
-  void SetFadeRight(float percent) { DestTweenState().fade.right = percent; }
-  void SetFadeBottom(float percent) { DestTweenState().fade.bottom = percent; }
+  void SetFadeLeft(float percent) { DestTweenState().fade.left = ClampUnitOr(percent, 0.0f); }
+  void SetFadeTop(float percent) { DestTweenState().fade.top = ClampUnitOr(percent, 0.0f); }
+  void SetFadeRight(float percent) { DestTweenState().fade.right = ClampUnitOr(percent, 0.0f); }
+  void SetFadeBottom(float percent) { DestTweenState().fade.bottom = ClampUnitOr(percent, 0.0f); }
 
   void SetGlobalDiffuseColor(RageColor c);
 
   virtual void SetDiffuse(RageColor c) {
     for (int i = 0; i < NUM_DIFFUSE_COLORS; i++) {
-      DestTweenState().diffuse[i] = c;
+      DestTweenState().diffuse[i] = SanitizeColor(c);
     }
   };
   virtual void SetDiffuseAlpha(float f) {
     for (int i = 0; i < NUM_DIFFUSE_COLORS; ++i) {
       RageColor c = GetDiffuses(i);
-      c.a = f;
+      c.a = ClampUnitOr(f, c.a);
       SetDiffuses(i, c);
     }
   }
   float GetCurrentDiffuseAlpha() const { return m_current.diffuse[0].a; }
   void SetDiffuseColor(RageColor c);
-  void SetDiffuses(int i, RageColor c) { DestTweenState().diffuse[i] = c; };
-  void SetDiffuseUpperLeft(RageColor c) { DestTweenState().diffuse[0] = c; };
-  void SetDiffuseUpperRight(RageColor c) { DestTweenState().diffuse[1] = c; };
-  void SetDiffuseLowerLeft(RageColor c) { DestTweenState().diffuse[2] = c; };
-  void SetDiffuseLowerRight(RageColor c) { DestTweenState().diffuse[3] = c; };
+  void SetDiffuses(int i, RageColor c) {
+    if (i < 0 || i >= NUM_DIFFUSE_COLORS) {
+      return;
+    }
+    DestTweenState().diffuse[i] = SanitizeColor(c);
+  };
+  void SetDiffuseUpperLeft(RageColor c) { DestTweenState().diffuse[0] = SanitizeColor(c); };
+  void SetDiffuseUpperRight(RageColor c) { DestTweenState().diffuse[1] = SanitizeColor(c); };
+  void SetDiffuseLowerLeft(RageColor c) { DestTweenState().diffuse[2] = SanitizeColor(c); };
+  void SetDiffuseLowerRight(RageColor c) { DestTweenState().diffuse[3] = SanitizeColor(c); };
   void SetDiffuseTopEdge(RageColor c) {
-    DestTweenState().diffuse[0] = DestTweenState().diffuse[1] = c;
+    DestTweenState().diffuse[0] = DestTweenState().diffuse[1] =
+        SanitizeColor(c);
   };
   void SetDiffuseRightEdge(RageColor c) {
-    DestTweenState().diffuse[1] = DestTweenState().diffuse[3] = c;
+    DestTweenState().diffuse[1] = DestTweenState().diffuse[3] =
+        SanitizeColor(c);
   };
   void SetDiffuseBottomEdge(RageColor c) {
-    DestTweenState().diffuse[2] = DestTweenState().diffuse[3] = c;
+    DestTweenState().diffuse[2] = DestTweenState().diffuse[3] =
+        SanitizeColor(c);
   };
   void SetDiffuseLeftEdge(RageColor c) {
-    DestTweenState().diffuse[0] = DestTweenState().diffuse[2] = c;
+    DestTweenState().diffuse[0] = DestTweenState().diffuse[2] =
+        SanitizeColor(c);
   };
   RageColor GetDiffuse() const { return DestTweenState().diffuse[0]; };
-  RageColor GetDiffuses(int i) const { return DestTweenState().diffuse[i]; };
+  RageColor GetDiffuses(int i) const {
+    if (i < 0 || i >= NUM_DIFFUSE_COLORS) {
+      return RageColor(1, 1, 1, 1);
+    }
+    return DestTweenState().diffuse[i];
+  };
   float GetDiffuseAlpha() const { return DestTweenState().diffuse[0].a; };
-  void SetGlow(RageColor c) { DestTweenState().glow = c; };
+  void SetGlow(RageColor c) { DestTweenState().glow = SanitizeColor(c); };
   RageColor GetGlow() const { return DestTweenState().glow; };
 
-  void SetAux(float f) { DestTweenState().aux = f; }
+  void SetAux(float f) { DestTweenState().aux = FiniteOr(f, 0.0f); }
   float GetAux() const { return m_current.aux; }
 
   virtual void BeginTweening(float time, ITween* pInterp);
@@ -569,8 +602,8 @@ class Actor : public MessageSubscriber {
   void StretchTo(const RectF& rect);
 
   // Alignment settings.  These need to be virtual for BitmapText
-  virtual void SetHorizAlign(float f) { m_fHorizAlign = f; }
-  virtual void SetVertAlign(float f) { m_fVertAlign = f; }
+  virtual void SetHorizAlign(float f) { m_fHorizAlign = FiniteOr(f, 0.5f); }
+  virtual void SetVertAlign(float f) { m_fVertAlign = FiniteOr(f, 0.5f); }
   void SetHorizAlign(HorizAlign ha) {
     SetHorizAlign(
         (ha == HorizAlign_Left)     ? 0.0f
@@ -598,20 +631,23 @@ class Actor : public MessageSubscriber {
   float GetEffectDelta() const { return m_fEffectDelta; }
 
   // todo: account for SSC_FUTURES by adding an effect as an arg to each one -aj
-  void SetEffectColor1(RageColor c) { m_effectColor1 = c; }
-  void SetEffectColor2(RageColor c) { m_effectColor2 = c; }
+  void SetEffectColor1(RageColor c) { m_effectColor1 = SanitizeColor(c); }
+  void SetEffectColor2(RageColor c) { m_effectColor2 = SanitizeColor(c); }
   void RecalcEffectPeriod();
   void SetEffectPeriod(float fTime);
   float GetEffectPeriod() const { return m_effect_period; }
   bool SetEffectTiming(
-      float ramp_toh, float at_half, float ramp_tof, float at_zero,
-      float at_full, std::string& err);
+      float ramp_toh, float at_half, float ramp_tof, float at_full,
+      float at_zero, std::string& err);
   bool SetEffectHoldAtFull(float haf, std::string& err);
-  void SetEffectOffset(float fTime) { m_fEffectOffset = fTime; }
-  void SetEffectClock(EffectClock c) { m_EffectClock = c; }
+  void SetEffectOffset(float fTime) { m_fEffectOffset = FiniteOr(fTime, 0.0f); }
+  void SetEffectClock(EffectClock c);
   void SetEffectClockString(const std::string& s);  // convenience
 
-  void SetEffectMagnitude(RageVector3 vec) { m_vEffectMagnitude = vec; }
+  void SetEffectMagnitude(RageVector3 vec) {
+    m_vEffectMagnitude = RageVector3(
+        FiniteOr(vec.x, 0.0f), FiniteOr(vec.y, 0.0f), FiniteOr(vec.z, 0.0f));
+  }
   RageVector3 GetEffectMagnitude() const { return m_vEffectMagnitude; }
 
   void ResetEffectTimeIfDifferent(Effect new_effect);
@@ -642,14 +678,17 @@ class Actor : public MessageSubscriber {
   bool GetVisible() const { return m_bVisible; }
   void SetVisible(bool b) { m_bVisible = b; }
   void SetShadowLength(float fLength) {
-    m_fShadowLengthX = fLength;
-    m_fShadowLengthY = fLength;
+    const float safeLength = FiniteOr(fLength, 0.0f);
+    m_fShadowLengthX = safeLength;
+    m_fShadowLengthY = safeLength;
   }
-  void SetShadowLengthX(float fLengthX) { m_fShadowLengthX = fLengthX; }
-  void SetShadowLengthY(float fLengthY) { m_fShadowLengthY = fLengthY; }
-  void SetShadowColor(RageColor c) { m_ShadowColor = c; }
+  void SetShadowLengthX(float fLengthX) { m_fShadowLengthX = FiniteOr(fLengthX, 0.0f); }
+  void SetShadowLengthY(float fLengthY) { m_fShadowLengthY = FiniteOr(fLengthY, 0.0f); }
+  void SetShadowColor(RageColor c) { m_ShadowColor = SanitizeColor(c); }
   // TODO: Implement hibernate as a tween type?
-  void SetHibernate(float fSecs) { m_fHibernateSecondsLeft = fSecs; }
+  void SetHibernate(float fSecs) {
+    m_fHibernateSecondsLeft = NonNegativeFiniteOr(fSecs, 0.0f);
+  }
   void SetDrawOrder(int iOrder) { m_iDrawOrder = iOrder; }
   int GetDrawOrder() const { return m_iDrawOrder; }
 
@@ -662,8 +701,8 @@ class Actor : public MessageSubscriber {
   // render states
   void SetBlendMode(BlendMode mode) { m_BlendMode = mode; }
   void SetTextureTranslate(float x, float y) {
-    m_texTranslate.x = x;
-    m_texTranslate.y = y;
+    m_texTranslate.x = FiniteOr(x, 0.0f);
+    m_texTranslate.y = FiniteOr(y, 0.0f);
   }
   void SetTextureWrapping(bool b) { m_bTextureWrapping = b; }
   void SetTextureFiltering(bool b) { m_bTextureFiltering = b; }
@@ -674,7 +713,7 @@ class Actor : public MessageSubscriber {
   }
   virtual void SetZTestMode(ZTestMode mode) { m_ZTestMode = mode; }
   virtual void SetZWrite(bool b) { m_bZWrite = b; }
-  void SetZBias(float f) { m_fZBias = f; }
+  void SetZBias(float f) { m_fZBias = FiniteOr(f, 0.0f); }
   virtual void SetCullMode(CullMode mode) { m_CullMode = mode; }
 
   // Lua
@@ -846,6 +885,8 @@ class Actor : public MessageSubscriber {
   bool m_bTextureFiltering;
   bool m_bClearZBuffer;
   bool m_bZWrite;
+  bool m_bMatrixPushed;
+  bool m_bTextureMatrixPushed;
   /**
    * @brief The amount of bias.
    *
@@ -859,6 +900,32 @@ class Actor : public MessageSubscriber {
   static std::vector<float> g_vfCurrentBGMBeatPlayerNoOffset;
 
  private:
+  static float FiniteOr(float value, float fallback) {
+    return std::isfinite(value) ? value : fallback;
+  }
+  static float NonNegativeFiniteOr(float value, float fallback) {
+    return std::isfinite(value) && value >= 0.0f ? value : fallback;
+  }
+  static float ClampUnitOr(float value, float fallback) {
+    if (!std::isfinite(value)) {
+      return fallback;
+    }
+    if (value < 0.0f) {
+      return 0.0f;
+    }
+    if (value > 1.0f) {
+      return 1.0f;
+    }
+    return value;
+  }
+  static RageColor SanitizeColor(RageColor c) {
+    c.r = FiniteOr(c.r, 1.0f);
+    c.g = FiniteOr(c.g, 1.0f);
+    c.b = FiniteOr(c.b, 1.0f);
+    c.a = ClampUnitOr(c.a, 1.0f);
+    return c;
+  }
+
   // Some actors shouldn't be scaled by the engine i.e. using with tab for
   // speeding up or tilde for slowing down.
   // In the case both are pressed (setting rate to 0), this bool does nothing.

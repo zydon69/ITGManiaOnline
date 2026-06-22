@@ -20,6 +20,7 @@
 #include "PlayerNumber.h"
 #include "Preference.h"
 #include "RageDisplay.h"
+#include "RageLog.h"
 #include "RageMath.h"
 #include "RageTimer.h"
 #include "RageTypes.h"
@@ -33,6 +34,34 @@
 
 static Preference<bool> g_bShowMasks("ShowMasks", false);
 static const float default_effect_period = 1.0f;
+
+namespace {
+bool IsValidPlayerNumberForActor(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PlayerNumber;
+}
+
+bool IsFiniteActorValue(float value) { return std::isfinite(value); }
+
+bool IsPositiveFiniteActorValue(float value) {
+  return IsFiniteActorValue(value) && value > 0.0f;
+}
+
+void WarnActorAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+bool WouldCreateParentCycle(const Actor* actor, const Actor* parent) {
+  for (const Actor* current = parent; current != nullptr;
+       current = current->GetParent()) {
+    if (current == actor) {
+      return true;
+    }
+  }
+  return false;
+}
+}  // namespace
 
 /**
  * @brief Set up a hidden Actor that won't be drawn.
@@ -67,25 +96,37 @@ LuaXType(VertAlign);
 
 void Actor::SetBGMTime(
     float fTime, float fBeat, float fTimeNoOffset, float fBeatNoOffset) {
-  g_fCurrentBGMTime = fTime;
-  g_fCurrentBGMBeat = fBeat;
+  g_fCurrentBGMTime = IsFiniteActorValue(fTime) ? fTime : 0.0f;
+  g_fCurrentBGMBeat = IsFiniteActorValue(fBeat) ? fBeat : 0.0f;
 
   /* This timer is generally only used for effects tied to the background music
    * when GameSoundManager is aligning music beats.  Alignment doesn't handle
    * g_fVisualDelaySeconds. */
-  g_fCurrentBGMTimeNoOffset = fTimeNoOffset;
-  g_fCurrentBGMBeatNoOffset = fBeatNoOffset;
+  g_fCurrentBGMTimeNoOffset =
+      IsFiniteActorValue(fTimeNoOffset) ? fTimeNoOffset : 0.0f;
+  g_fCurrentBGMBeatNoOffset =
+      IsFiniteActorValue(fBeatNoOffset) ? fBeatNoOffset : 0.0f;
 }
 
 void Actor::SetPlayerBGMBeat(
     PlayerNumber pn, float fBeat, float fBeatNoOffset) {
-  g_vfCurrentBGMBeatPlayer[pn] = fBeat;
-  g_vfCurrentBGMBeatPlayerNoOffset[pn] = fBeatNoOffset;
+  if (!IsValidPlayerNumberForActor(pn)) {
+    WarnActorAuditFix(
+        "SRC_AUDIT_FIX SRC-743: Actor ignored invalid player BGM beat.");
+    return;
+  }
+  g_vfCurrentBGMBeatPlayer[pn] = IsFiniteActorValue(fBeat) ? fBeat : 0.0f;
+  g_vfCurrentBGMBeatPlayerNoOffset[pn] =
+      IsFiniteActorValue(fBeatNoOffset) ? fBeatNoOffset : 0.0f;
 }
 
 void Actor::SetBGMLight(int iLightNumber, float fCabinetLights) {
-  ASSERT(iLightNumber < NUM_CabinetLight);
-  g_fCabinetLights[iLightNumber] = fCabinetLights;
+  if (iLightNumber < 0 || iLightNumber >= NUM_CabinetLight) {
+    WarnActorAuditFix("SRC_AUDIT_FIX SRC-743: Actor ignored invalid BGM light.");
+    return;
+  }
+  g_fCabinetLights[iLightNumber] =
+      IsFiniteActorValue(fCabinetLights) ? fCabinetLights : 0.0f;
 }
 
 void Actor::InitState() {
@@ -137,6 +178,8 @@ void Actor::InitState() {
   m_bClearZBuffer = false;
   m_ZTestMode = ZTEST_OFF;
   m_bZWrite = false;
+  m_bMatrixPushed = false;
+  m_bTextureMatrixPushed = false;
   m_CullMode = CULL_NONE;
 }
 
@@ -152,14 +195,16 @@ static bool GetMessageNameFromCommandName(
 
 Actor::Actor() {
   m_pLuaInstance = new LuaClass;
-  Lua* L = LUA->Get();
-  m_pLuaInstance->PushSelf(L);
-  lua_newtable(L);
-  lua_pushvalue(L, -1);
-  lua_setmetatable(L, -2);
-  lua_setfield(L, -2, "ctx");
-  lua_pop(L, 1);
-  LUA->Release(L);
+  if (LUA != nullptr) {
+    Lua* L = LUA->Get();
+    m_pLuaInstance->PushSelf(L);
+    lua_newtable(L);
+    lua_pushvalue(L, -1);
+    lua_setmetatable(L, -2);
+    lua_setfield(L, -2, "ctx");
+    lua_pop(L, 1);
+    LUA->Release(L);
+  }
 
   m_size = RageVector2(1, 1);
   InitState();
@@ -187,14 +232,18 @@ Actor::Actor(const Actor& cpy) : MessageSubscriber(cpy) {
 #define CPY(x) x = cpy.x
   CPY(m_sName);
   CPY(alias_);
-  CPY(m_pParent);
-  CPY(m_FakeParent);
+  m_pParent = nullptr;
+  m_FakeParent = nullptr;
   CPY(m_pLuaInstance);
 
-  m_WrapperStates.resize(cpy.m_WrapperStates.size());
-  for (size_t i = 0; i < m_WrapperStates.size(); ++i) {
-    m_WrapperStates[i] =
-        new ActorFrame(*dynamic_cast<ActorFrame*>(cpy.m_WrapperStates[i]));
+  for (size_t i = 0; i < cpy.m_WrapperStates.size(); ++i) {
+    ActorFrame* wrapper = dynamic_cast<ActorFrame*>(cpy.m_WrapperStates[i]);
+    if (wrapper == nullptr) {
+      WarnActorAuditFix(
+          "SRC_AUDIT_FIX SRC-750: Actor skipped invalid wrapper during copy.");
+      continue;
+    }
+    m_WrapperStates.push_back(new ActorFrame(*wrapper));
   }
 
   CPY(m_baseRotation);
@@ -252,10 +301,11 @@ Actor::Actor(const Actor& cpy) : MessageSubscriber(cpy) {
   CPY(m_bClearZBuffer);
   CPY(m_ZTestMode);
   CPY(m_bZWrite);
+  m_bMatrixPushed = false;
+  m_bTextureMatrixPushed = false;
   CPY(m_fZBias);
   CPY(m_CullMode);
 
-  CPY(rate_scaling_enabled_);
   CPY(m_mapNameToCommands);
 
   CPY(m_tween_uses_effect_delta);
@@ -335,6 +385,8 @@ Actor& Actor::operator=(Actor other) {
   SWAP(m_tween_uses_effect_delta);
   SWAP(rate_scaling_enabled_);
 #undef SWAP
+  m_bMatrixPushed = false;
+  m_bTextureMatrixPushed = false;
   return *this;
 }
 
@@ -350,12 +402,21 @@ bool Actor::IsAlias(const std::string& name) {
  * also loads input variables, which should happen first.  The
  * former is more important. */
 void Actor::LoadFromNode(const XNode* pNode) {
-  Lua* L = LUA->Get();
+  if (pNode == nullptr) {
+    WarnActorAuditFix("SRC_AUDIT_FIX SRC-744: Actor ignored null XML node.");
+    return;
+  }
+  Lua* L = LUA != nullptr ? LUA->Get() : nullptr;
   FOREACH_CONST_Attr(pNode, pAttr) {
     // Load Name, if any.
     const std::string& sKeyName = pAttr->first;
     const XNodeValue* pValue = pAttr->second;
     if (EndsWith(sKeyName, "Command")) {
+      if (L == nullptr) {
+        WarnActorAuditFix(
+            "SRC_AUDIT_FIX SRC-744: Actor skipped XML command without Lua.");
+        continue;
+      }
       LuaReference* pRef = new LuaReference;
       pValue->PushValue(L);
       pRef->SetFromStack(L);
@@ -378,7 +439,9 @@ void Actor::LoadFromNode(const XNode* pNode) {
     }
   }
 
-  LUA->Release(L);
+  if (L != nullptr) {
+    LUA->Release(L);
+  }
 
   // Don't recurse Init.  It gets called once for every Actor when the
   // Actor is loaded, and we don't want to call it again.
@@ -386,12 +449,18 @@ void Actor::LoadFromNode(const XNode* pNode) {
 }
 
 bool Actor::PartiallyOpaque() {
+  if (m_pTempState == nullptr) {
+    return false;
+  }
   return m_pTempState->diffuse[0].a > 0 || m_pTempState->diffuse[1].a > 0 ||
          m_pTempState->diffuse[2].a > 0 || m_pTempState->diffuse[3].a > 0 ||
          m_pTempState->glow.a > 0;
 }
 
 void Actor::Draw() {
+  if (DISPLAY == nullptr) {
+    return;
+  }
   if (!m_bVisible || m_fHibernateSecondsLeft > 0 || this->EarlyAbortDraw()) {
     return;  // early abort
   }
@@ -429,7 +498,9 @@ void Actor::Draw() {
   // -Kyz
   for (size_t i = m_WrapperStates.size(); i > 0 && dont_abort_draw; --i) {
     Actor* state = m_WrapperStates[i - 1];
-    if (!state->m_bVisible || state->m_fHibernateSecondsLeft > 0 ||
+    if (state == nullptr) {
+      dont_abort_draw = false;
+    } else if (!state->m_bVisible || state->m_fHibernateSecondsLeft > 0 ||
         state->EarlyAbortDraw()) {
       dont_abort_draw = false;
     } else {
@@ -439,7 +510,7 @@ void Actor::Draw() {
         last_diffuse = state->m_pTempState->diffuse[0];
         last_glow = state->m_pTempState->glow;
         use_last_diffuse = true;
-        if (i > 1) {
+        if (i > 1 && m_WrapperStates[i - 2] != nullptr) {
           m_WrapperStates[i - 2]->SetInternalDiffuse(last_diffuse);
           m_WrapperStates[i - 2]->SetInternalGlow(last_glow);
         }
@@ -467,6 +538,9 @@ void Actor::Draw() {
   }
   for (size_t i = 0; i < wrapper_states_used; ++i) {
     Actor* state = m_WrapperStates[i];
+    if (state == nullptr) {
+      continue;
+    }
     if (abort_with_end_draw) {
       state->EndDraw();
     }
@@ -500,8 +574,9 @@ void Actor::PreDraw()  // calculate actor properties
     m_pTempState = &m_current_with_effects;
     m_current_with_effects = m_current;
 
-    const float fTotalPeriod = GetEffectPeriod();
-    ASSERT(fTotalPeriod > 0);
+    const float fTotalPeriod = IsPositiveFiniteActorValue(GetEffectPeriod())
+                                   ? GetEffectPeriod()
+                                   : default_effect_period;
     const float fTimeIntoEffect =
         fmodfp(m_fSecsIntoEffect + m_fEffectOffset, fTotalPeriod);
 
@@ -628,8 +703,12 @@ void Actor::PreDraw()  // calculate actor properties
         m_current_with_effects.pos += m_vEffectMagnitude * fPercentOffset;
       } break;
       case pulse: {
-        float fMinZoom = m_vEffectMagnitude[0];
-        float fMaxZoom = m_vEffectMagnitude[1];
+        float fMinZoom =
+            IsFiniteActorValue(m_vEffectMagnitude[0]) ? m_vEffectMagnitude[0]
+                                                      : 1.0f;
+        float fMaxZoom =
+            IsFiniteActorValue(m_vEffectMagnitude[1]) ? m_vEffectMagnitude[1]
+                                                      : 1.0f;
         float fPercentOffset = std::sin(fPercentThroughEffect * PI);
         float fZoom = SCALE(fPercentOffset, 0.f, 1.f, fMinZoom, fMaxZoom);
         m_current_with_effects.scale *= fZoom;
@@ -642,7 +721,10 @@ void Actor::PreDraw()  // calculate actor properties
         m_current_with_effects.scale.z *= c.b;
       } break;
       default:
-        FAIL_M(ssprintf("Invalid effect: %i", m_Effect));
+        WarnActorAuditFix(
+            "SRC_AUDIT_FIX SRC-746: Actor stopped invalid effect.");
+        StopEffect();
+        break;
     }
   }
 
@@ -674,7 +756,13 @@ void Actor::PreDraw()  // calculate actor properties
 }
 
 void Actor::BeginDraw() {
+  m_bMatrixPushed = false;
+  m_bTextureMatrixPushed = false;
+  if (DISPLAY == nullptr || m_pTempState == nullptr) {
+    return;
+  }
   DISPLAY->PushMatrix();  // Save the current transformation matrix
+  m_bMatrixPushed = true;
 
   // Get the position of the actor
   const float posX = m_pTempState->pos.x;
@@ -751,11 +839,15 @@ void Actor::BeginDraw() {
   // If the texture is not at the origin, translate the texture
   if (m_texTranslate.x != 0 || m_texTranslate.y != 0) {
     DISPLAY->TexturePushMatrix();
+    m_bTextureMatrixPushed = true;
     DISPLAY->TextureTranslate(m_texTranslate.x, m_texTranslate.y);
   }
 }
 
 void Actor::SetGlobalRenderStates() {
+  if (DISPLAY == nullptr) {
+    return;
+  }
   // set Actor-defined render states
   if (!g_bShowMasks.Get() || m_BlendMode != BLEND_NO_EFFECT) {
     DISPLAY->SetBlendMode(m_BlendMode);
@@ -778,21 +870,41 @@ void Actor::SetGlobalRenderStates() {
 }
 
 void Actor::SetTextureRenderStates() {
+  if (DISPLAY == nullptr) {
+    return;
+  }
   DISPLAY->SetTextureWrapping(TextureUnit_1, m_bTextureWrapping);
   DISPLAY->SetTextureFiltering(TextureUnit_1, m_bTextureFiltering);
 }
 
 void Actor::EndDraw() {
-  DISPLAY->PopMatrix();
+  if (DISPLAY == nullptr) {
+    return;
+  }
+  if (m_bMatrixPushed) {
+    DISPLAY->PopMatrix();
+    m_bMatrixPushed = false;
+  }
 
-  if (m_texTranslate.x != 0 || m_texTranslate.y != 0) {
+  if (m_bTextureMatrixPushed) {
     DISPLAY->TexturePopMatrix();
+    m_bTextureMatrixPushed = false;
   }
 }
 
 void Actor::CalcPercentThroughTween() {
+  if (m_Tweens.empty() || m_Tweens[0] == nullptr ||
+      m_Tweens[0]->info.m_pTween == nullptr) {
+    return;
+  }
   TweenState& TS = m_Tweens[0]->state;
   TweenInfo& TI = m_Tweens[0]->info;
+  if (!IsPositiveFiniteActorValue(TI.m_fTweenTime) ||
+      !IsFiniteActorValue(TI.m_fTimeLeftInTween)) {
+    m_current = TS;
+    UpdatePercentThroughTween(1.0f);
+    return;
+  }
   const float percent_through = 1 - (TI.m_fTimeLeftInTween / TI.m_fTweenTime);
   // distort the percentage if appropriate
   float percent_along = TI.m_pTween->Tween(percent_through);
@@ -801,7 +913,12 @@ void Actor::CalcPercentThroughTween() {
 }
 
 void Actor::UpdateTweening(float fDeltaTime) {
-  if (fDeltaTime < 0.0 && !m_Tweens.empty()) {
+  if (!IsFiniteActorValue(fDeltaTime)) {
+    WarnActorAuditFix(
+        "SRC_AUDIT_FIX SRC-747: Actor ignored non-finite tween delta.");
+    return;
+  }
+  if (fDeltaTime < 0.0 && !m_Tweens.empty() && m_Tweens[0] != nullptr) {
     m_Tweens[0]->info.m_fTimeLeftInTween -= fDeltaTime;
     CalcPercentThroughTween();
     return;
@@ -817,6 +934,14 @@ void Actor::UpdateTweening(float fDeltaTime) {
 
     bool bBeginning = TI.m_fTimeLeftInTween == TI.m_fTweenTime;
 
+    if (!IsFiniteActorValue(TI.m_fTimeLeftInTween) ||
+        !IsFiniteActorValue(TI.m_fTweenTime) || TI.m_pTween == nullptr) {
+      m_current = TS;
+      delete firstTween;
+      m_Tweens.erase(m_Tweens.begin());
+      EraseHeadTween();
+      continue;
+    }
     float fSecsToSubtract = std::min(TI.m_fTimeLeftInTween, fDeltaTime);
     TI.m_fTimeLeftInTween -= fSecsToSubtract;
     fDeltaTime -= fSecsToSubtract;
@@ -859,16 +984,21 @@ bool Actor::IsFirstUpdate() const { return m_bFirstUpdate; }
 
 void Actor::Update(float fDeltaTime) {
   //	LOG->Trace( "Actor::Update( %f )", fDeltaTime );
+  if (!IsFiniteActorValue(fDeltaTime) || fDeltaTime < 0.0f) {
+    WarnActorAuditFix("SRC_AUDIT_FIX SRC-747: Actor ignored invalid delta.");
+    return;
+  }
 
   float rate = GameLoop::GetUpdateRate();
+  if (!IsFiniteActorValue(rate)) {
+    rate = 1.0f;
+  }
   if (rate != 1 && !rate_scaling_enabled_) {
     // Prevent divide by 0 when tab + tilde are both pressed.
     if (rate != 0) {
       fDeltaTime *= (1 / rate);
     }
   }
-
-  ASSERT_M(fDeltaTime >= 0, ssprintf("DeltaTime: %f", fDeltaTime));
 
   if (m_fHibernateSecondsLeft > 0) {
     m_fHibernateSecondsLeft -= fDeltaTime;
@@ -881,7 +1011,9 @@ void Actor::Update(float fDeltaTime) {
     m_fHibernateSecondsLeft = 0;
   }
   for (size_t i = 0; i < m_WrapperStates.size(); ++i) {
-    m_WrapperStates[i]->Update(fDeltaTime);
+    if (m_WrapperStates[i] != nullptr) {
+      m_WrapperStates[i]->Update(fDeltaTime);
+    }
   }
 
   this->UpdateInternal(fDeltaTime);
@@ -894,11 +1026,16 @@ static void generic_global_timer_update(
 }
 
 void Actor::UpdateInternal(float delta_time) {
+  if (!IsFiniteActorValue(delta_time)) {
+    return;
+  }
   if (m_bFirstUpdate) {
     m_bFirstUpdate = false;
   }
 
-  const float effectPeriod = GetEffectPeriod();
+  const float effectPeriod = IsPositiveFiniteActorValue(GetEffectPeriod())
+                                 ? GetEffectPeriod()
+                                 : default_effect_period;
   switch (m_EffectClock) {
     case CLOCK_TIMER:
       m_fSecsIntoEffect += delta_time;
@@ -943,8 +1080,12 @@ void Actor::UpdateInternal(float delta_time) {
     default:
       if (m_EffectClock >= CLOCK_LIGHT_1 && m_EffectClock <= CLOCK_LIGHT_LAST) {
         int lightIndex = m_EffectClock - CLOCK_LIGHT_1;
-        generic_global_timer_update(
-            g_fCabinetLights[lightIndex], m_fEffectDelta, m_fSecsIntoEffect);
+        if (lightIndex >= 0 && lightIndex < NUM_CabinetLight) {
+          generic_global_timer_update(
+              g_fCabinetLights[lightIndex], m_fEffectDelta, m_fSecsIntoEffect);
+        } else {
+          SetEffectClock(CLOCK_TIMER);
+        }
       }
       break;
   }
@@ -984,18 +1125,31 @@ void Actor::AddWrapperState() {
 }
 
 void Actor::RemoveWrapperState(size_t i) {
-  ASSERT(i < m_WrapperStates.size());
+  if (i >= m_WrapperStates.size()) {
+    WarnActorAuditFix(
+        "SRC_AUDIT_FIX SRC-750: Actor ignored invalid wrapper removal.");
+    return;
+  }
   RageUtil::SafeDelete(m_WrapperStates[i]);
   m_WrapperStates.erase(m_WrapperStates.begin() + i);
 }
 
 Actor* Actor::GetWrapperState(size_t i) {
-  ASSERT(i < m_WrapperStates.size());
+  if (i >= m_WrapperStates.size()) {
+    WarnActorAuditFix(
+        "SRC_AUDIT_FIX SRC-750: Actor rejected invalid wrapper lookup.");
+    return nullptr;
+  }
   return m_WrapperStates[i];
 }
 
 void Actor::BeginTweening(float time, ITween* pTween) {
-  ASSERT(time >= 0);
+  if (!IsFiniteActorValue(time) || time < 0.0f || pTween == nullptr) {
+    delete pTween;
+    WarnActorAuditFix(
+        "SRC_AUDIT_FIX SRC-747: Actor rejected invalid tween.");
+    return;
+  }
 
   // If the number of tweens to ever gets this large, there's probably an
   // infinitely recursing ActorCommand.
@@ -1016,7 +1170,8 @@ void Actor::BeginTweening(float time, ITween* pTween) {
   if (m_Tweens.size() >= 2)  // if there was already a TS on the stack
   {
     // initialize the new TS from the last TS in the list
-    TS = m_Tweens[m_Tweens.size() - 2]->state;
+    TweenStateAndInfo* previous = m_Tweens[m_Tweens.size() - 2];
+    TS = previous != nullptr ? previous->state : m_current;
   } else {
     // This new TS is the only TS.
     // Set our tween starting and ending values to the current position.
@@ -1029,7 +1184,11 @@ void Actor::BeginTweening(float time, ITween* pTween) {
 }
 
 void Actor::BeginTweening(float time, TweenType tt) {
-  ASSERT(time >= 0);
+  if (!IsFiniteActorValue(time) || time < 0.0f) {
+    WarnActorAuditFix(
+        "SRC_AUDIT_FIX SRC-747: Actor rejected invalid tween time.");
+    return;
+  }
 
   ITween* pTween = ITween::CreateFromType(tt);
   this->BeginTweening(time, pTween);
@@ -1050,9 +1209,16 @@ void Actor::FinishTweening() {
 }
 
 void Actor::HurryTweening(float factor) {
+  if (!IsFiniteActorValue(factor) || factor < 0.0f) {
+    WarnActorAuditFix(
+        "SRC_AUDIT_FIX SRC-747: Actor ignored invalid hurry factor.");
+    return;
+  }
   for (unsigned i = 0; i < m_Tweens.size(); ++i) {
-    m_Tweens[i]->info.m_fTimeLeftInTween *= factor;
-    m_Tweens[i]->info.m_fTweenTime *= factor;
+    if (m_Tweens[i] != nullptr) {
+      m_Tweens[i]->info.m_fTimeLeftInTween *= factor;
+      m_Tweens[i]->info.m_fTweenTime *= factor;
+    }
   }
 }
 
@@ -1069,8 +1235,12 @@ void Actor::ScaleTo(const RectF& rect, StretchType st) {
   }
 
   // zoom fActor needed to scale the Actor to fill the rectangle
-  float fNewZoomX = std::abs(rect_width / m_size.x);
-  float fNewZoomY = std::abs(rect_height / m_size.y);
+  const float safeWidth =
+      IsPositiveFiniteActorValue(m_size.x) ? m_size.x : 1.0f;
+  const float safeHeight =
+      IsPositiveFiniteActorValue(m_size.y) ? m_size.y : 1.0f;
+  float fNewZoomX = std::abs(rect_width / safeWidth);
+  float fNewZoomY = std::abs(rect_height / safeHeight);
 
   float fNewZoom = 0.f;
 
@@ -1120,6 +1290,23 @@ void Actor::SetEffectClockString(const std::string& s) {
   }
 }
 
+void Actor::SetEffectClock(EffectClock c) {
+  const int clock = static_cast<int>(c);
+  if (clock >= 0 && clock < static_cast<int>(NUM_CLOCKS)) {
+    m_EffectClock = c;
+    return;
+  }
+
+  if (clock >= CLOCK_LIGHT_1 && clock < CLOCK_LIGHT_1 + NUM_CabinetLight) {
+    m_EffectClock = c;
+    return;
+  }
+
+  WarnActorAuditFix(
+      "SRC_AUDIT_FIX SRC-743: Actor replaced invalid effect clock.");
+  m_EffectClock = CLOCK_TIMER;
+}
+
 void Actor::StretchTo(const RectF& r) {
   // width and height of rectangle
   float width = r.GetWidth();
@@ -1130,8 +1317,12 @@ void Actor::StretchTo(const RectF& r) {
   float cy = r.top + height / 2.0f;
 
   // zoom fActor needed to scale the Actor to fill the rectangle
-  float fNewZoomX = width / m_size.x;
-  float fNewZoomY = height / m_size.y;
+  const float safeWidth =
+      IsPositiveFiniteActorValue(m_size.x) ? m_size.x : 1.0f;
+  const float safeHeight =
+      IsPositiveFiniteActorValue(m_size.y) ? m_size.y : 1.0f;
+  float fNewZoomX = width / safeWidth;
+  float fNewZoomY = height / safeHeight;
 
   SetXY(cx, cy);
   SetZoomX(fNewZoomX);
@@ -1145,7 +1336,11 @@ void Actor::RecalcEffectPeriod() {
 }
 
 void Actor::SetEffectPeriod(float time) {
-  ASSERT(time > 0);
+  if (!IsPositiveFiniteActorValue(time)) {
+    WarnActorAuditFix(
+        "SRC_AUDIT_FIX SRC-746: Actor replaced invalid effect period.");
+    time = default_effect_period;
+  }
   m_effect_ramp_to_half = time / 2;
   m_effect_hold_at_half = 0;
   m_effect_ramp_to_full = time / 2;
@@ -1158,11 +1353,13 @@ bool Actor::SetEffectTiming(
     float ramp_toh, float at_half, float ramp_tof, float at_full, float at_zero,
     std::string& err) {
   // No negative timings
-  if (ramp_toh < 0 || at_half < 0 || ramp_tof < 0 || at_full < 0 ||
-      at_zero < 0) {
+  if (!IsFiniteActorValue(ramp_toh) || !IsFiniteActorValue(at_half) ||
+      !IsFiniteActorValue(ramp_tof) || !IsFiniteActorValue(at_full) ||
+      !IsFiniteActorValue(at_zero) || ramp_toh < 0 || at_half < 0 ||
+      ramp_tof < 0 || at_full < 0 || at_zero < 0) {
     err = ssprintf(
-        "Effect timings (%f,%f,%f,%f,%f) must not be negative;", ramp_toh,
-        at_half, ramp_tof, at_zero, at_full);
+        "Effect timings (%f,%f,%f,%f,%f) must be finite and not negative;",
+        ramp_toh, at_half, ramp_tof, at_full, at_zero);
     return false;
   }
   // and at least one positive timing.
@@ -1197,137 +1394,140 @@ void Actor::ResetEffectTimeIfDifferent(Effect new_effect) {
 
 void Actor::SetEffectDiffuseBlink(
     float fEffectPeriodSeconds, RageColor c1, RageColor c2) {
-  ASSERT(fEffectPeriodSeconds > 0);
   // todo: account for SSC_FUTURES -aj
   ResetEffectTimeIfDifferent(diffuse_blink);
   SetEffectPeriod(fEffectPeriodSeconds);
-  m_effectColor1 = c1;
-  m_effectColor2 = c2;
+  SetEffectColor1(c1);
+  SetEffectColor2(c2);
 }
 
 void Actor::SetEffectDiffuseShift(
     float fEffectPeriodSeconds, RageColor c1, RageColor c2) {
-  ASSERT(fEffectPeriodSeconds > 0);
   // todo: account for SSC_FUTURES -aj
   ResetEffectTimeIfDifferent(diffuse_shift);
   SetEffectPeriod(fEffectPeriodSeconds);
-  m_effectColor1 = c1;
-  m_effectColor2 = c2;
+  SetEffectColor1(c1);
+  SetEffectColor2(c2);
 }
 
 void Actor::SetEffectDiffuseRamp(
     float fEffectPeriodSeconds, RageColor c1, RageColor c2) {
-  ASSERT(fEffectPeriodSeconds > 0);
   // todo: account for SSC_FUTURES -aj
   ResetEffectTimeIfDifferent(diffuse_ramp);
   SetEffectPeriod(fEffectPeriodSeconds);
-  m_effectColor1 = c1;
-  m_effectColor2 = c2;
+  SetEffectColor1(c1);
+  SetEffectColor2(c2);
 }
 
 void Actor::SetEffectGlowBlink(
     float fEffectPeriodSeconds, RageColor c1, RageColor c2) {
-  ASSERT(fEffectPeriodSeconds > 0);
   // todo: account for SSC_FUTURES -aj
   ResetEffectTimeIfDifferent(glow_blink);
   SetEffectPeriod(fEffectPeriodSeconds);
-  m_effectColor1 = c1;
-  m_effectColor2 = c2;
+  SetEffectColor1(c1);
+  SetEffectColor2(c2);
 }
 
 void Actor::SetEffectGlowShift(
     float fEffectPeriodSeconds, RageColor c1, RageColor c2) {
-  ASSERT(fEffectPeriodSeconds > 0);
   // todo: account for SSC_FUTURES -aj
   ResetEffectTimeIfDifferent(glow_shift);
   SetEffectPeriod(fEffectPeriodSeconds);
-  m_effectColor1 = c1;
-  m_effectColor2 = c2;
+  SetEffectColor1(c1);
+  SetEffectColor2(c2);
 }
 
 void Actor::SetEffectGlowRamp(
     float fEffectPeriodSeconds, RageColor c1, RageColor c2) {
-  ASSERT(fEffectPeriodSeconds > 0);
   // todo: account for SSC_FUTURES -aj
   ResetEffectTimeIfDifferent(glow_ramp);
   SetEffectPeriod(fEffectPeriodSeconds);
-  m_effectColor1 = c1;
-  m_effectColor2 = c2;
+  SetEffectColor1(c1);
+  SetEffectColor2(c2);
 }
 
 void Actor::SetEffectRainbow(float fEffectPeriodSeconds) {
-  ASSERT(fEffectPeriodSeconds > 0);
   // todo: account for SSC_FUTURES -aj
   ResetEffectTimeIfDifferent(rainbow);
   SetEffectPeriod(fEffectPeriodSeconds);
 }
 
 void Actor::SetEffectWag(float fPeriod, RageVector3 vect) {
-  ASSERT(fPeriod > 0);
   // todo: account for SSC_FUTURES -aj
   ResetEffectTimeIfDifferent(wag);
   SetEffectPeriod(fPeriod);
-  m_vEffectMagnitude = vect;
+  SetEffectMagnitude(vect);
 }
 
 void Actor::SetEffectBounce(float fPeriod, RageVector3 vect) {
-  ASSERT(fPeriod > 0);
   // todo: account for SSC_FUTURES -aj
   m_Effect = bounce;
   SetEffectPeriod(fPeriod);
-  m_vEffectMagnitude = vect;
+  SetEffectMagnitude(vect);
   m_fSecsIntoEffect = 0;
 }
 
 void Actor::SetEffectBob(float fPeriod, RageVector3 vect) {
-  ASSERT(fPeriod > 0);
   // todo: account for SSC_FUTURES -aj
   if (m_Effect != bob || GetEffectPeriod() != fPeriod) {
     m_Effect = bob;
     SetEffectPeriod(fPeriod);
     m_fSecsIntoEffect = 0;
   }
-  m_vEffectMagnitude = vect;
+  SetEffectMagnitude(vect);
 }
 
 void Actor::SetEffectSpin(RageVector3 vect) {
   // todo: account for SSC_FUTURES -aj
   m_Effect = spin;
-  m_vEffectMagnitude = vect;
+  SetEffectMagnitude(vect);
 }
 
 void Actor::SetEffectVibrate(RageVector3 vect) {
   // todo: account for SSC_FUTURES -aj
   m_Effect = vibrate;
-  m_vEffectMagnitude = vect;
+  SetEffectMagnitude(vect);
 }
 
 void Actor::SetEffectPulse(float fPeriod, float fMinZoom, float fMaxZoom) {
-  ASSERT(fPeriod > 0);
   // todo: account for SSC_FUTURES -aj
   m_Effect = pulse;
   SetEffectPeriod(fPeriod);
-  m_vEffectMagnitude[0] = fMinZoom;
-  m_vEffectMagnitude[1] = fMaxZoom;
+  m_vEffectMagnitude[0] = IsFiniteActorValue(fMinZoom) ? fMinZoom : 1.0f;
+  m_vEffectMagnitude[1] = IsFiniteActorValue(fMaxZoom) ? fMaxZoom : 1.0f;
 }
 
 void Actor::AddRotationH(float rot) {
+  if (!IsFiniteActorValue(rot)) {
+    return;
+  }
   RageQuatMultiply(
       &DestTweenState().quat, DestTweenState().quat, RageQuatFromH(rot));
 }
 
 void Actor::AddRotationP(float rot) {
+  if (!IsFiniteActorValue(rot)) {
+    return;
+  }
   RageQuatMultiply(
       &DestTweenState().quat, DestTweenState().quat, RageQuatFromP(rot));
 }
 
 void Actor::AddRotationR(float rot) {
+  if (!IsFiniteActorValue(rot)) {
+    return;
+  }
   RageQuatMultiply(
       &DestTweenState().quat, DestTweenState().quat, RageQuatFromR(rot));
 }
 
 void Actor::RunCommands(
     const LuaReference& cmds, const LuaReference* pParamTable) {
+  if (LUA == nullptr) {
+    WarnActorAuditFix(
+        "SRC_AUDIT_FIX SRC-744: Actor skipped command without Lua.");
+    return;
+  }
   if (!cmds.IsSet() || cmds.IsNil()) {
     LuaHelpers::ReportScriptErrorFmt(
         "RunCommands: commands for %s are unset or nil", GetLineage().c_str());
@@ -1368,7 +1568,10 @@ float Actor::GetTweenTimeLeft() const {
   tot += m_fHibernateSecondsLeft;
 
   for (unsigned i = 0; i < m_Tweens.size(); ++i) {
-    tot += m_Tweens[i]->info.m_fTimeLeftInTween;
+    if (m_Tweens[i] != nullptr &&
+        IsFiniteActorValue(m_Tweens[i]->info.m_fTimeLeftInTween)) {
+      tot += m_Tweens[i]->info.m_fTimeLeftInTween;
+    }
   }
 
   return tot;
@@ -1383,27 +1586,32 @@ float Actor::GetTweenTimeLeft() const {
  * However, we'd then have to give every TweenState a userdata in Lua while it's
  * being manipulated, which would add overhead ... */
 void Actor::SetGlobalDiffuseColor(RageColor c) {
+  const RageColor safeColor = SanitizeColor(c);
   for (int i = 0; i < NUM_DIFFUSE_COLORS; i++)  // color, not alpha
   {
     for (unsigned ts = 0; ts < m_Tweens.size(); ++ts) {
-      m_Tweens[ts]->state.diffuse[i].r = c.r;
-      m_Tweens[ts]->state.diffuse[i].g = c.g;
-      m_Tweens[ts]->state.diffuse[i].b = c.b;
+      if (m_Tweens[ts] == nullptr) {
+        continue;
+      }
+      m_Tweens[ts]->state.diffuse[i].r = safeColor.r;
+      m_Tweens[ts]->state.diffuse[i].g = safeColor.g;
+      m_Tweens[ts]->state.diffuse[i].b = safeColor.b;
     }
-    m_current.diffuse[i].r = c.r;
-    m_current.diffuse[i].g = c.g;
-    m_current.diffuse[i].b = c.b;
-    m_start.diffuse[i].r = c.r;
-    m_start.diffuse[i].g = c.g;
-    m_start.diffuse[i].b = c.b;
+    m_current.diffuse[i].r = safeColor.r;
+    m_current.diffuse[i].g = safeColor.g;
+    m_current.diffuse[i].b = safeColor.b;
+    m_start.diffuse[i].r = safeColor.r;
+    m_start.diffuse[i].g = safeColor.g;
+    m_start.diffuse[i].b = safeColor.b;
   }
 }
 
 void Actor::SetDiffuseColor(RageColor c) {
+  const RageColor safeColor = SanitizeColor(c);
   for (int i = 0; i < NUM_DIFFUSE_COLORS; i++) {
-    DestTweenState().diffuse[i].r = c.r;
-    DestTweenState().diffuse[i].g = c.g;
-    DestTweenState().diffuse[i].b = c.b;
+    DestTweenState().diffuse[i].r = safeColor.r;
+    DestTweenState().diffuse[i].g = safeColor.g;
+    DestTweenState().diffuse[i].b = safeColor.b;
   }
 }
 
@@ -1496,7 +1704,10 @@ void Actor::TweenState::MakeWeightedAverage(
 }
 
 void Actor::Sleep(float time) {
-  ASSERT(time >= 0);
+  if (!IsFiniteActorValue(time) || time < 0.0f) {
+    WarnActorAuditFix("SRC_AUDIT_FIX SRC-747: Actor ignored invalid sleep.");
+    return;
+  }
 
   BeginTweening(time, TWEEN_LINEAR);
   BeginTweening(0, TWEEN_LINEAR);
@@ -1558,25 +1769,60 @@ void Actor::PlayCommandNoRecurse(const Message& msg) {
 }
 
 void Actor::PushContext(lua_State* L) {
+  if (L == nullptr || m_pLuaInstance.isNull()) {
+    return;
+  }
   // self.ctx should already exist
   m_pLuaInstance->PushSelf(L);
   lua_getfield(L, -1, "ctx");
+  if (lua_isnil(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_pushvalue(L, -1);
+    lua_setmetatable(L, -2);
+    lua_pushvalue(L, -1);
+    lua_setfield(L, -3, "ctx");
+  }
   lua_remove(L, -2);
 }
 
 void Actor::SetParent(Actor* pParent) {
+  if (pParent != nullptr && WouldCreateParentCycle(this, pParent)) {
+    WarnActorAuditFix(
+        "SRC_AUDIT_FIX SRC-751: Actor rejected cyclic parent assignment.");
+    return;
+  }
+
   m_pParent = pParent;
 
+  if (LUA == nullptr || m_pLuaInstance.isNull()) {
+    return;
+  }
   Lua* L = LUA->Get();
   int iTop = lua_gettop(L);
 
   this->PushContext(L);
   lua_pushstring(L, "__index");
-  pParent->PushContext(L);
+  if (pParent == nullptr) {
+    lua_pushnil(L);
+  } else if (pParent->m_pLuaInstance.isNull()) {
+    lua_pushnil(L);
+  } else {
+    pParent->PushContext(L);
+  }
   lua_settable(L, -3);
 
   lua_settop(L, iTop);
   LUA->Release(L);
+}
+
+void Actor::SetFakeParent(Actor* mailman) {
+  if (mailman != nullptr && WouldCreateParentCycle(this, mailman)) {
+    WarnActorAuditFix(
+        "SRC_AUDIT_FIX SRC-751: Actor rejected cyclic fake parent.");
+    return;
+  }
+  m_FakeParent = mailman;
 }
 
 Actor::TweenInfo::TweenInfo() { m_pTween = nullptr; }
@@ -1680,8 +1926,9 @@ class LunaActor : public Luna<Actor> {
   }
   static int hurrytweening(T* p, lua_State* L) {
     float time = FArg(1);
-    if (time < 0.0f) {
-      luaL_error(L, "Tweening hurry factor cannot be negative. %f", time);
+    if (!IsFiniteActorValue(time) || time < 0.0f) {
+      luaL_error(
+          L, "Tweening hurry factor must be finite and not negative. %f", time);
     }
     p->HurryTweening(time);
     COMMON_RETURN_SELF;
@@ -2084,14 +2331,14 @@ class LunaActor : public Luna<Actor> {
     }
     std::string err;
     if (!p->SetEffectTiming(rth, hah, rtf, haf, haz, err)) {
-      luaL_error(L, err.c_str());
+      luaL_error(L, "%s", err.c_str());
     }
     COMMON_RETURN_SELF;
   }
   static int effect_hold_at_full(T* p, lua_State* L) {
     std::string err;
     if (!p->SetEffectHoldAtFull(FArg(1), err)) {
-      luaL_error(L, err.c_str());
+      luaL_error(L, "%s", err.c_str());
     }
     COMMON_RETURN_SELF;
   }
@@ -2399,7 +2646,12 @@ class LunaActor : public Luna<Actor> {
   }
   static int AddWrapperState(T* p, lua_State* L) {
     p->AddWrapperState();
-    p->GetWrapperState(p->GetNumWrapperStates() - 1)->PushSelf(L);
+    Actor* wrapper = p->GetWrapperState(p->GetNumWrapperStates() - 1);
+    if (wrapper == nullptr) {
+      lua_pushnil(L);
+      return 1;
+    }
+    wrapper->PushSelf(L);
     return 1;
   }
   static size_t get_state_index(T* p, lua_State* L, int stack_index) {
@@ -2422,10 +2674,18 @@ class LunaActor : public Luna<Actor> {
   }
   static int GetWrapperState(T* p, lua_State* L) {
     size_t si = get_state_index(p, L, 1);
-    p->GetWrapperState(si)->PushSelf(L);
+    Actor* wrapper = p->GetWrapperState(si);
+    if (wrapper == nullptr) {
+      lua_pushnil(L);
+      return 1;
+    }
+    wrapper->PushSelf(L);
     return 1;
   }
   static int Draw(T* p, lua_State* L) {
+    if (LUA == nullptr) {
+      COMMON_RETURN_SELF;
+    }
     LUA->YieldLua();
     p->Draw();
     LUA->UnyieldLua();
