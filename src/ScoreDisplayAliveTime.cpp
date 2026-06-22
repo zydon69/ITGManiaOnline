@@ -1,5 +1,7 @@
 #include "ScoreDisplayAliveTime.h"
 
+#include <cmath>
+
 #include "ActorUtil.h"
 #include "BitmapText.h"
 #include "GameState.h"
@@ -16,6 +18,18 @@
 REGISTER_ACTOR_CLASS(ScoreDisplayAliveTime);
 
 namespace {
+void WarnScoreDisplayAliveTimeAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+void TraceScoreDisplayAliveTimeAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Trace("%s", message);
+  }
+}
+
 bool IsValidPlayerNumber(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
 }
@@ -33,34 +47,55 @@ ScoreDisplayAliveTime::ScoreDisplayAliveTime() {
 ScoreDisplayAliveTime::~ScoreDisplayAliveTime() {}
 
 void ScoreDisplayAliveTime::LoadFromNode(const XNode* pNode) {
+  if (pNode == nullptr) {
+    WarnScoreDisplayAliveTimeAuditFix(
+        "SRC_AUDIT_FIX SRC-1099: ScoreDisplayAliveTime ignored null XML "
+        "node.");
+    return;
+  }
   BitmapText::LoadFromNode(pNode);
 
-  {
+  if (LUA != nullptr) {
     Lua* L = LUA->Get();
-    bool b = pNode->PushAttrValue(L, "PlayerNumber");
-    LuaHelpers::Pop(L, m_PlayerNumber);
-    bool b2 = pNode->PushAttrValue(L, "MultiPlayer");
-    LuaHelpers::Pop(L, m_MultiPlayer);
+    bool b = false;
+    bool b2 = false;
+    if (L != nullptr) {
+      b = pNode->PushAttrValue(L, "PlayerNumber");
+      if (b) {
+        LuaHelpers::Pop(L, m_PlayerNumber);
+      } else {
+        lua_pop(L, 1);
+      }
+      b2 = pNode->PushAttrValue(L, "MultiPlayer");
+      if (b2) {
+        LuaHelpers::Pop(L, m_MultiPlayer);
+      } else {
+        lua_pop(L, 1);
+      }
+    }
     if (!b && !b2) {
-      LOG->Warn(
+      WarnScoreDisplayAliveTimeAuditFix(
           "SRC_AUDIT_FIX SRC-237: ScoreDisplayAliveTime missing PlayerNumber "
           "or MultiPlayer attribute.");
     }
     if (b && !IsValidPlayerNumber(m_PlayerNumber)) {
-      LOG->Warn(
+      WarnScoreDisplayAliveTimeAuditFix(
           "SRC_AUDIT_FIX SRC-237: ScoreDisplayAliveTime ignored invalid "
-          "PlayerNumber %i.",
-          m_PlayerNumber);
+          "PlayerNumber.");
       m_PlayerNumber = PLAYER_INVALID;
     }
     if (b2 && !IsValidMultiPlayer(m_MultiPlayer)) {
-      LOG->Warn(
+      WarnScoreDisplayAliveTimeAuditFix(
           "SRC_AUDIT_FIX SRC-237: ScoreDisplayAliveTime ignored invalid "
-          "MultiPlayer %i.",
-          m_MultiPlayer);
+          "MultiPlayer.");
       m_MultiPlayer = MultiPlayer_Invalid;
     }
-    LUA->Release(L);
+    if (L != nullptr) {
+      LUA->Release(L);
+    }
+  } else {
+    WarnScoreDisplayAliveTimeAuditFix(
+        "SRC_AUDIT_FIX SRC-1099: ScoreDisplayAliveTime loaded without LUA.");
   }
 }
 
@@ -75,6 +110,14 @@ void ScoreDisplayAliveTime::HandleMessage(const Message& msg) {
 }
 
 void ScoreDisplayAliveTime::UpdateNumber() {
+  if (GAMESTATE == nullptr || STATSMAN == nullptr) {
+    TraceScoreDisplayAliveTimeAuditFix(
+        "SRC_AUDIT_FIX SRC-1101: ScoreDisplayAliveTime skipped update without "
+        "game/stat manager.");
+    SetText(SecondsToMMSSMsMs(0));
+    return;
+  }
+
   float fSecsIntoPlay = 0;
   if (IsValidPlayerNumber(m_PlayerNumber) &&
       GAMESTATE->IsPlayerEnabled(m_PlayerNumber)) {
@@ -88,6 +131,12 @@ void ScoreDisplayAliveTime::UpdateNumber() {
       GAMESTATE->IsMultiPlayerEnabled(m_MultiPlayer)) {
     fSecsIntoPlay = STATSMAN->GetAccumPlayedStageStats().m_fGameplaySeconds +
                     STATSMAN->m_CurStageStats.m_fGameplaySeconds;
+  }
+  if (!std::isfinite(fSecsIntoPlay) || fSecsIntoPlay < 0.0f) {
+    TraceScoreDisplayAliveTimeAuditFix(
+        "SRC_AUDIT_FIX SRC-1101: ScoreDisplayAliveTime corrected invalid "
+        "seconds.");
+    fSecsIntoPlay = 0.0f;
   }
 
   SetText(SecondsToMMSSMsMs(fSecsIntoPlay));

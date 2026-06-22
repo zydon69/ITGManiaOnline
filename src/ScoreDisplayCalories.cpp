@@ -1,5 +1,8 @@
 #include "ScoreDisplayCalories.h"
 
+#include <algorithm>
+#include <cmath>
+
 #include "ActorUtil.h"
 #include "BitmapText.h"
 #include "LuaManager.h"
@@ -15,6 +18,18 @@
 REGISTER_ACTOR_CLASS(ScoreDisplayCalories);
 
 namespace {
+void WarnScoreDisplayCaloriesAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+void TraceScoreDisplayCaloriesAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Trace("%s", message);
+  }
+}
+
 bool IsValidPlayerNumber(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
 }
@@ -25,36 +40,58 @@ ScoreDisplayCalories::ScoreDisplayCalories() {
 }
 
 ScoreDisplayCalories::~ScoreDisplayCalories() {
-  if (m_sMessageOnStep != "") {
+  if (MESSAGEMAN != nullptr && m_sMessageOnStep != "") {
     MESSAGEMAN->Unsubscribe(this, m_sMessageOnStep);
+    m_sMessageOnStep.clear();
   }
 }
 
 void ScoreDisplayCalories::LoadFromNode(const XNode* pNode) {
+  if (pNode == nullptr) {
+    WarnScoreDisplayCaloriesAuditFix(
+        "SRC_AUDIT_FIX SRC-1103: ScoreDisplayCalories ignored null XML node.");
+    return;
+  }
   RollingNumbers::LoadFromNode(pNode);
 
-  {
+  if (LUA != nullptr) {
     Lua* L = LUA->Get();
-    bool b = pNode->PushAttrValue(L, "PlayerNumber");
+    bool b = false;
+    if (L != nullptr) {
+      b = pNode->PushAttrValue(L, "PlayerNumber");
+    }
     if (b) {
       LuaHelpers::Pop(L, m_PlayerNumber);
       if (!IsValidPlayerNumber(m_PlayerNumber)) {
-        LOG->Warn(
+        WarnScoreDisplayCaloriesAuditFix(
             "SRC_AUDIT_FIX SRC-237: ScoreDisplayCalories ignored invalid "
-            "PlayerNumber %i.",
-            m_PlayerNumber);
+            "PlayerNumber.");
         m_PlayerNumber = PLAYER_INVALID;
       }
     } else {
-      LOG->Warn(
+      if (L != nullptr) {
+        lua_pop(L, 1);
+      }
+      WarnScoreDisplayCaloriesAuditFix(
           "SRC_AUDIT_FIX SRC-237: ScoreDisplayCalories missing PlayerNumber "
           "attribute.");
       m_PlayerNumber = PLAYER_INVALID;
     }
-    LUA->Release(L);
+    if (L != nullptr) {
+      LUA->Release(L);
+    }
+  } else {
+    WarnScoreDisplayCaloriesAuditFix(
+        "SRC_AUDIT_FIX SRC-1103: ScoreDisplayCalories loaded without LUA.");
   }
 
-  MESSAGEMAN->Subscribe(this, "Step");
+  if (MESSAGEMAN != nullptr) {
+    if (m_sMessageOnStep != "") {
+      MESSAGEMAN->Unsubscribe(this, m_sMessageOnStep);
+    }
+    m_sMessageOnStep = "Step";
+    MESSAGEMAN->Subscribe(this, m_sMessageOnStep);
+  }
 }
 
 void ScoreDisplayCalories::Update(float fDelta) {
@@ -69,9 +106,9 @@ void ScoreDisplayCalories::Update(float fDelta) {
 
 void ScoreDisplayCalories::HandleMessage(const Message& msg) {
   if (msg.GetName() == "Step") {
-    PlayerNumber pn;
-    msg.GetParam("PlayerNumber", pn);
-    if (pn == m_PlayerNumber) {
+    PlayerNumber pn = PLAYER_INVALID;
+    if (LUA != nullptr && msg.GetParam("PlayerNumber", pn) &&
+        IsValidPlayerNumber(pn) && pn == m_PlayerNumber) {
       UpdateNumber();
     }
   }
@@ -81,9 +118,16 @@ void ScoreDisplayCalories::HandleMessage(const Message& msg) {
 
 void ScoreDisplayCalories::UpdateNumber() {
   if (!IsValidPlayerNumber(m_PlayerNumber)) {
-    LOG->Trace(
+    TraceScoreDisplayCaloriesAuditFix(
         "SRC_AUDIT_FIX SRC-239: ScoreDisplayCalories skipped update with "
         "invalid PlayerNumber.");
+    SetTargetNumber(0);
+    return;
+  }
+  if (STATSMAN == nullptr) {
+    TraceScoreDisplayCaloriesAuditFix(
+        "SRC_AUDIT_FIX SRC-1105: ScoreDisplayCalories skipped update without "
+        "StatsManager.");
     SetTargetNumber(0);
     return;
   }
@@ -93,6 +137,12 @@ void ScoreDisplayCalories::UpdateNumber() {
           .m_player[m_PlayerNumber]
           .m_fCaloriesBurned +
       STATSMAN->m_CurStageStats.m_player[m_PlayerNumber].m_fCaloriesBurned;
+  if (!std::isfinite(fCals) || fCals < 0.0f) {
+    TraceScoreDisplayCaloriesAuditFix(
+        "SRC_AUDIT_FIX SRC-1105: ScoreDisplayCalories corrected invalid "
+        "calories.");
+    fCals = std::max(0.0f, std::isfinite(fCals) ? fCals : 0.0f);
+  }
 
   SetTargetNumber(fCals);
 }
