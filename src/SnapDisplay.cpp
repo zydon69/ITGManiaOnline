@@ -1,15 +1,46 @@
 #include "SnapDisplay.h"
 
+#include <algorithm>
+
 #include "GameState.h"
 #include "NoteTypes.h"
+#include "PlayerNumber.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "ScreenDimensions.h"
 #include "Style.h"
 #include "ThemeManager.h"
 
+namespace {
+void WarnSnapDisplay(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+bool IsValidSnapNoteType(NoteType noteType) {
+  return noteType >= NOTE_TYPE_4TH && noteType <= NOTE_TYPE_192ND;
+}
+
+NoteType SanitizeSnapNoteType(NoteType noteType) {
+  if (!IsValidSnapNoteType(noteType)) {
+    return NOTE_TYPE_4TH;
+  }
+  return noteType;
+}
+
+bool IsValidSnapPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+}  // namespace
+
 SnapDisplay::SnapDisplay() {
   for (int i = 0; i < 2; i++) {
-    m_sprIndicators[i].Load(THEME->GetPathG("SnapDisplay", "icon 9x1"));
+    if (THEME != nullptr) {
+      m_sprIndicators[i].Load(THEME->GetPathG("SnapDisplay", "icon 9x1"));
+    } else {
+      WarnSnapDisplay("SRC_AUDIT_FIX SRC-1188: SnapDisplay loaded without THEME.");
+    }
     m_sprIndicators[i].StopAnimating();
     this->AddChild(&m_sprIndicators[i]);
   }
@@ -20,14 +51,28 @@ SnapDisplay::SnapDisplay() {
 }
 
 void SnapDisplay::Load() {
-  m_iNumCols = GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber())
-                   ->m_iColsPerPlayer;
+  const Style* style = nullptr;
+  if (GAMESTATE != nullptr) {
+    PlayerNumber pn = GAMESTATE->GetMasterPlayerNumber();
+    if (!IsValidSnapPlayer(pn)) {
+      pn = PLAYER_1;
+    }
+    style = GAMESTATE->GetCurrentStyle(pn);
+  }
+  if (style == nullptr) {
+    WarnSnapDisplay(
+        "SRC_AUDIT_FIX SRC-1189: SnapDisplay loaded without current style.");
+    m_iNumCols = 4;
+  } else {
+    m_iNumCols = std::clamp(style->m_iColsPerPlayer, 1, MAX_COLS_PER_PLAYER);
+  }
 
   m_sprIndicators[0].SetX(-ARROW_SIZE * (m_iNumCols / 2 + 0.5f));
   m_sprIndicators[1].SetX(ARROW_SIZE * (m_iNumCols / 2 + 0.5f));
 }
 
 bool SnapDisplay::PrevSnapMode() {
+  m_NoteType = SanitizeSnapNoteType(m_NoteType);
   if (m_NoteType == 0) {
     return false;
   }
@@ -38,6 +83,7 @@ bool SnapDisplay::PrevSnapMode() {
 }
 
 bool SnapDisplay::NextSnapMode() {
+  m_NoteType = SanitizeSnapNoteType(m_NoteType);
   if (m_NoteType == NOTE_TYPE_192ND) {  // the smallest snap we should allow
     return false;
   }
@@ -48,6 +94,7 @@ bool SnapDisplay::NextSnapMode() {
 }
 
 void SnapDisplay::SnapModeChanged() {
+  m_NoteType = SanitizeSnapNoteType(m_NoteType);
   for (int i = 0; i < 2; i++) {
     m_sprIndicators[i].SetState(m_NoteType);
   }
