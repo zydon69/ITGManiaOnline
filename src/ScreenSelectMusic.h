@@ -40,6 +40,7 @@ const std::string& SelectionStateToString(SelectionState ss);
 
 class ScreenSelectMusic : public ScreenWithMenuElements {
  public:
+  ScreenSelectMusic();
   virtual ~ScreenSelectMusic();
   virtual void Init();
   virtual void BeginScreen();
@@ -139,8 +140,11 @@ class ScreenSelectMusic : public ScreenWithMenuElements {
                                   : SelectionState_Finalized;
       case SelectionState_SelectingSteps:
         return SelectionState_Finalized;
-        DEFAULT_FAIL(m_SelectionState);
+      case SelectionState_Finalized:
+      case NUM_SelectionState:
+        return SelectionState_Finalized;
     }
+    return SelectionState_Finalized;
   }
 
   GameButton m_GameButtonPreviousSong;
