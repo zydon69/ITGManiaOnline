@@ -124,7 +124,7 @@ class RageSound : public RageSoundBase {
   bool IsLoaded() const;
   void DeleteSelfWhenFinishedPlaying();
 
-  void StartPlaying();
+  bool StartPlaying();
   void StopPlaying();
 
   std::string GetError() const { return m_sError; }
