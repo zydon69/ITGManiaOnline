@@ -591,7 +591,9 @@ bool RageSound::StartPlaying() {
   /* If m_StartTime is in the past, then we probably set a start time but took
    * too long loading.  We don't want that; log it, since it can be unobvious.
    */
-  if (!m_Param.m_StartTime.IsZero() && m_Param.m_StartTime.Ago() > 0) {
+  constexpr float kStartTimePastTraceThresholdSeconds = 0.005f;
+  if (!m_Param.m_StartTime.IsZero() &&
+      m_Param.m_StartTime.Ago() > kStartTimePastTraceThresholdSeconds) {
     if (LOG != nullptr) {
       LOG->Trace(
           "Sound \"%s\" has a start time %f seconds in the past",

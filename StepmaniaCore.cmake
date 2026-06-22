@@ -369,6 +369,22 @@ configure_file("${SM_SRC_DIR}/config.hpp.in"
                "${SM_GENERATED_SRC_DIR}/config.hpp")
 configure_file("${SM_SRC_DIR}/verstub.cpp.in"
                "${SM_GENERATED_SRC_DIR}/verstub.cpp")
+add_custom_target(
+  generate_verstub
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DSM_ROOT_DIR=${SM_ROOT_DIR}"
+    "-DSM_SRC_DIR=${SM_SRC_DIR}"
+    "-DSM_GENERATED_SRC_DIR=${SM_GENERATED_SRC_DIR}"
+    "-DSM_VERSION_MAJOR=${SM_VERSION_MAJOR}"
+    "-DSM_VERSION_MINOR=${SM_VERSION_MINOR}"
+    "-DSM_VERSION_PATCH=${SM_VERSION_PATCH}"
+    "-DSM_VERSION_TRADITIONAL=${SM_VERSION_TRADITIONAL}"
+    "-DWITH_FULL_RELEASE=${WITH_FULL_RELEASE}"
+    "-DWITH_NIGHTLY_RELEASE=${WITH_NIGHTLY_RELEASE}"
+    -P "${SM_CMAKE_DIR}/GenerateVerstub.cmake"
+  BYPRODUCTS "${SM_GENERATED_SRC_DIR}/verstub.cpp"
+  VERBATIM)
 
 # Define installer based items for cpack.
 include("${CMAKE_CURRENT_LIST_DIR}/CMake/CPackSetup.cmake")

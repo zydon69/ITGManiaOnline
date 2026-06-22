@@ -8,6 +8,7 @@
 #include "global.h"
 
 #include <cstddef>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -451,17 +452,23 @@ void ArchHooks::MountUserFilesystems(const std::string& sDirOfExecutable) {
   std::string libraryDir = PathForDirectory(NSLibraryDirectory);
   std::string cachesDir = PathForDirectory(NSCachesDirectory);
   std::string appSupportDir = PathForDirectory(NSApplicationSupportDirectory);
-  std::string appSupportPath = ssprintf("%s/" PRODUCT_ID, appSupportDir.c_str());
+  const char* overrideUserDataPath = getenv("ITGMANIA_USER_DATA_DIR");
+  std::string appSupportPath =
+      overrideUserDataPath != nullptr && overrideUserDataPath[0] != '\0'
+          ? std::string(overrideUserDataPath)
+          : ssprintf("%s/" PRODUCT_ID, appSupportDir.c_str());
 
-  // Do a best effort to migrate the save folder and screenshots.
-  MigrateLegacyDirectory(libraryDir + "/Preferences/" PRODUCT_ID, appSupportPath + "/Save");
-  MigrateLegacyDirectory(
-      cachesDir + "/" PRODUCT_ID " Screenshots", appSupportPath + "/Screenshots");
-  // It's fine to just delete the old Cache directory, and just let the game regenerate it on boot.
-  RemoveLegacyDirectory(cachesDir + "/" PRODUCT_ID);
-  // It's fine to just delete the old Logs directory, as the contents of the data will get
-  // regenerated on boot. In that case, we can just avoid the complexity of migrating directories.
-  RemoveLegacyDirectory(libraryDir + "/Logs/" PRODUCT_ID);
+  if (overrideUserDataPath == nullptr || overrideUserDataPath[0] == '\0') {
+    // Do a best effort to migrate the save folder and screenshots.
+    MigrateLegacyDirectory(libraryDir + "/Preferences/" PRODUCT_ID, appSupportPath + "/Save");
+    MigrateLegacyDirectory(
+        cachesDir + "/" PRODUCT_ID " Screenshots", appSupportPath + "/Screenshots");
+    // It's fine to just delete the old Cache directory, and just let the game regenerate it on boot.
+    RemoveLegacyDirectory(cachesDir + "/" PRODUCT_ID);
+    // It's fine to just delete the old Logs directory, as the contents of the data will get
+    // regenerated on boot. In that case, we can just avoid the complexity of migrating directories.
+    RemoveLegacyDirectory(libraryDir + "/Logs/" PRODUCT_ID);
+  }
 
   MountDirectories(appSupportPath);
 }

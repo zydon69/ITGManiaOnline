@@ -339,8 +339,11 @@ void ArchHooks::MountUserFilesystems(const std::string& sDirOfExecutable) {
    * lowercase.
    */
   const char* szHome = getenv("HOME");
+  const char* overrideUserDataPath = getenv("ITGMANIA_USER_DATA_DIR");
   std::string sUserDataPath =
-      ssprintf("%s/.%s", szHome ? szHome : ".", "itgmania");
+      overrideUserDataPath != nullptr && overrideUserDataPath[0] != '\0'
+          ? std::string(overrideUserDataPath)
+          : ssprintf("%s/.%s", szHome ? szHome : ".", "itgmania");
   FILEMAN->Mount("dir", sUserDataPath + "/Announcers", "/Announcers");
   FILEMAN->Mount("dir", sUserDataPath + "/BGAnimations", "/BGAnimations");
   FILEMAN->Mount(

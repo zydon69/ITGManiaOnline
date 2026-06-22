@@ -72,6 +72,7 @@ else()
   add_executable("${SM_EXE_NAME}" ${SMDATA_ALL_FILES_SRC}
                  ${SMDATA_ALL_FILES_HPP})
 endif()
+add_dependencies("${SM_EXE_NAME}" generate_verstub)
 
 set_property(TARGET "${SM_EXE_NAME}" PROPERTY CXX_STANDARD 17)
 set_property(TARGET "${SM_EXE_NAME}" PROPERTY CXX_STANDARD_REQUIRED ON)
@@ -562,7 +563,11 @@ target_include_directories("${SM_EXE_NAME}" PUBLIC ${SM_INCLUDE_DIRS})
 if(BUILD_TESTING)
   add_test(
     NAME audio_playonce_runtime_smoke
-    COMMAND "$<TARGET_FILE:${SM_EXE_NAME}>" "--playonce-smoke-test=8")
+    COMMAND
+      "${CMAKE_COMMAND}"
+      "-DITGMANIA_EXE=$<TARGET_FILE:${SM_EXE_NAME}>"
+      "-DITGMANIA_USER_DATA_DIR=${CMAKE_BINARY_DIR}/test-user-data/audio_playonce_runtime_smoke"
+      -P "${SM_CMAKE_DIR}/RunPlayOnceSmokeTest.cmake")
   set_tests_properties(
     audio_playonce_runtime_smoke
     PROPERTIES
