@@ -146,8 +146,7 @@ float ScreenSelectMaster::GetScrollerNumItemsToDraw() const {
   if (!IsFiniteNonNegative(value)) {
     return 0.0f;
   }
-  return std::min(value, static_cast<float>(std::max<size_t>(
-                             1, m_aGameCommands.size())));
+  return value;
 }
 
 int ScreenSelectMaster::GetScrollerSubdivisions() const {
