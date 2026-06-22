@@ -1,5 +1,6 @@
 #include "ActorMultiTexture.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 
@@ -18,6 +19,18 @@
 
 REGISTER_ACTOR_CLASS(ActorMultiTexture);
 
+namespace {
+size_t GetMaxTextureUnitsForActorMultiTexture() {
+  size_t iMaxUnits = NUM_TextureUnit;
+  if (DISPLAY != nullptr) {
+    iMaxUnits = std::min(
+        iMaxUnits,
+        static_cast<size_t>(std::max(0, DISPLAY->GetNumTextureUnits())));
+  }
+  return iMaxUnits;
+}
+}  // namespace
+
 ActorMultiTexture::ActorMultiTexture() { m_EffectMode = EffectMode_Normal; }
 
 ActorMultiTexture::~ActorMultiTexture() { ClearTextures(); }
@@ -26,11 +39,15 @@ ActorMultiTexture::ActorMultiTexture(const ActorMultiTexture& cpy)
     : Actor(cpy) {
 #define CPY(a) a = cpy.a
   CPY(m_Rect);
+  CPY(m_EffectMode);
   CPY(m_aTextureUnits);
 #undef CPY
 
   for (TextureUnitState& tex : m_aTextureUnits) {
-    tex.m_pTexture = TEXTUREMAN->CopyTexture(tex.m_pTexture);
+    tex.m_pTexture =
+        TEXTUREMAN != nullptr && tex.m_pTexture != nullptr
+            ? TEXTUREMAN->CopyTexture(tex.m_pTexture)
+            : nullptr;
   }
 }
 
@@ -42,13 +59,20 @@ void ActorMultiTexture::LoadFromNode(const XNode* pNode) {
 }
 
 void ActorMultiTexture::SetSizeFromTexture(RageTexture* pTexture) {
+  if (pTexture == nullptr) {
+    LOG->Warn("Can't size ActorMultiTexture from a nil texture.");
+    return;
+  }
   ActorMultiTexture::m_size.x = pTexture->GetSourceWidth();
   ActorMultiTexture::m_size.y = pTexture->GetSourceHeight();
 }
 
 void ActorMultiTexture::ClearTextures() {
   for (TextureUnitState& tex : m_aTextureUnits) {
-    TEXTUREMAN->UnloadTexture(tex.m_pTexture);
+    if (TEXTUREMAN != nullptr) {
+      TEXTUREMAN->UnloadTexture(tex.m_pTexture);
+    }
+    tex.m_pTexture = nullptr;
   }
   m_aTextureUnits.clear();
 }
@@ -56,26 +80,51 @@ void ActorMultiTexture::ClearTextures() {
 int ActorMultiTexture::AddTexture(RageTexture* pTexture) {
   if (pTexture == nullptr) {
     LOG->Warn("Can't add nil texture to ActorMultiTexture");
-    return m_aTextureUnits.size();
+    return 0;
+  }
+  if (TEXTUREMAN == nullptr) {
+    LOG->Warn("Can't add texture to ActorMultiTexture without texture manager.");
+    return 0;
+  }
+  if (m_aTextureUnits.size() >= GetMaxTextureUnitsForActorMultiTexture()) {
+    LOG->Warn(
+        "Can't add texture to ActorMultiTexture, texture unit limit reached.");
+    return 0;
   }
   LOG->Trace(
       "ActorMultiTexture::AddTexture( %s )",
       pTexture->GetID().filename.c_str());
 
+  RageTexture* pCopy = TEXTUREMAN->CopyTexture(pTexture);
+  if (pCopy == nullptr) {
+    LOG->Warn("Can't add texture to ActorMultiTexture, copy failed.");
+    return 0;
+  }
+
   m_aTextureUnits.push_back(TextureUnitState());
-  m_aTextureUnits.back().m_pTexture = TEXTUREMAN->CopyTexture(pTexture);
+  m_aTextureUnits.back().m_pTexture = pCopy;
   return m_aTextureUnits.size();
 }
 
 void ActorMultiTexture::SetTextureMode(int iIndex, TextureMode tm) {
-  if (iIndex >= (int)m_aTextureUnits.size()) {
-    LOG->Warn("Can't set texture mode, index %d too high.", iIndex);
+  if (iIndex < 0 || iIndex >= static_cast<int>(m_aTextureUnits.size())) {
+    LOG->Warn("Can't set texture mode, index %d out of range.", iIndex);
     return;
   }
   m_aTextureUnits[iIndex].m_TextureMode = tm;
 }
 
 void ActorMultiTexture::DrawPrimitives() {
+  if (DISPLAY == nullptr || m_pTempState == nullptr) {
+    return;
+  }
+
+  const size_t iTextureUnits =
+      std::min(m_aTextureUnits.size(), GetMaxTextureUnitsForActorMultiTexture());
+  if (iTextureUnits == 0) {
+    return;
+  }
+
   Actor::SetGlobalRenderStates();  // set Actor-specified render states
 
   RectF quadVerticies;
@@ -85,9 +134,10 @@ void ActorMultiTexture::DrawPrimitives() {
   quadVerticies.bottom = +m_size.y / 2.0f;
 
   DISPLAY->ClearAllTextures();
-  for (size_t i = 0; i < m_aTextureUnits.size(); ++i) {
+  for (size_t i = 0; i < iTextureUnits; ++i) {
     TextureUnit tu = enum_add2(TextureUnit_1, i);
-    DISPLAY->SetTexture(tu, m_aTextureUnits[i].m_pTexture->GetTexHandle());
+    RageTexture* pTexture = m_aTextureUnits[i].m_pTexture;
+    DISPLAY->SetTexture(tu, pTexture != nullptr ? pTexture->GetTexHandle() : 0);
     DISPLAY->SetTextureWrapping(tu, m_bTextureWrapping);
     DISPLAY->SetTextureMode(tu, m_aTextureUnits[i].m_TextureMode);
   }
@@ -117,7 +167,7 @@ void ActorMultiTexture::DrawPrimitives() {
 
   DISPLAY->DrawQuad(v);
 
-  for (size_t i = 0; i < m_aTextureUnits.size(); ++i) {
+  for (size_t i = 0; i < iTextureUnits; ++i) {
     DISPLAY->SetTexture(enum_add2(TextureUnit_1, i), 0);
   }
 
@@ -125,7 +175,7 @@ void ActorMultiTexture::DrawPrimitives() {
 }
 
 bool ActorMultiTexture::EarlyAbortDraw() const {
-  return m_aTextureUnits.empty();
+  return m_aTextureUnits.empty() || DISPLAY == nullptr;
 }
 
 // lua start
@@ -145,7 +195,7 @@ class LunaActorMultiTexture : public Luna<ActorMultiTexture> {
     return 1;
   }
   static int SetTextureMode(T* p, lua_State* L) {
-    int iIndex = IArg(1);
+    int iIndex = IArg(1) - 1;
     TextureMode tm = Enum::Check<TextureMode>(L, 2);
     p->SetTextureMode(iIndex, tm);
     COMMON_RETURN_SELF;

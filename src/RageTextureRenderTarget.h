@@ -21,6 +21,7 @@ class RageTextureRenderTarget : public RageTexture {
   }
   virtual void Reload();
   virtual uintptr_t GetTexHandle() const { return m_iTexHandle; }
+  bool IsValid() const { return m_bValid; }
 
   void BeginRenderingTo(bool bPreserveTexture = true);
   void FinishRenderingTo();

@@ -39,6 +39,13 @@ void RageTextureRenderTarget::Create() {
   /* All render targets support non-power-of-two targets,
    * but some require that the resulting texture dimensions be powers of two.
    * CreateRenderTarget returns the actual resolution. */
+  if (DISPLAY == nullptr) {
+    LOG->Warn(
+        "RageTextureRenderTarget: failed to create render target '%s' without "
+        "a display backend.",
+        GetID().filename.c_str());
+    return;
+  }
   m_iTexHandle =
       DISPLAY->CreateRenderTarget(m_Param, m_iTextureWidth, m_iTextureHeight);
 
@@ -65,7 +72,7 @@ void RageTextureRenderTarget::Create() {
 }
 
 void RageTextureRenderTarget::Destroy() {
-  if (m_iTexHandle != 0) {
+  if (DISPLAY != nullptr && m_iTexHandle != 0) {
     DISPLAY->DeleteTexture(m_iTexHandle);
   }
   m_iTexHandle = 0;
@@ -74,7 +81,7 @@ void RageTextureRenderTarget::Destroy() {
 }
 
 void RageTextureRenderTarget::BeginRenderingTo(bool bPreserveTexture) {
-  if (!m_bValid) {
+  if (DISPLAY == nullptr || !m_bValid) {
     if (!m_bWarnedInvalidUse) {
       LOG->Warn(
           "RageTextureRenderTarget: ignoring BeginRenderingTo() for invalid "
@@ -105,7 +112,7 @@ void RageTextureRenderTarget::BeginRenderingTo(bool bPreserveTexture) {
 }
 
 void RageTextureRenderTarget::FinishRenderingTo() {
-  if (!m_bRendering) {
+  if (DISPLAY == nullptr || !m_bRendering) {
     return;
   }
 

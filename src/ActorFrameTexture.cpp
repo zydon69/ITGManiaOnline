@@ -2,6 +2,8 @@
 
 #include <cinttypes>
 #include <cstdint>
+#include <cmath>
+#include <limits>
 
 #include "ActorFrame.h"
 #include "ActorUtil.h"
@@ -39,10 +41,32 @@ ActorFrameTexture::ActorFrameTexture(const ActorFrameTexture& cpy)
 
 ActorFrameTexture::~ActorFrameTexture() {
   /* Release our reference to the texture. */
-  TEXTUREMAN->UnloadTexture(m_pRenderTarget);
+  if (TEXTUREMAN != nullptr) {
+    TEXTUREMAN->UnloadTexture(m_pRenderTarget);
+  }
+  m_pRenderTarget = nullptr;
+}
+
+void ActorFrameTexture::SetTextureName(const std::string& sName) {
+  if (m_pRenderTarget != nullptr) {
+    LuaHelpers::ReportScriptError(
+        "ActorFrameTexture: Cannot change texture name after Create.");
+    return;
+  }
+  if (sName.empty()) {
+    LuaHelpers::ReportScriptError(
+        "ActorFrameTexture: Texture name cannot be empty.");
+    return;
+  }
+  m_sTextureName = sName;
 }
 
 void ActorFrameTexture::Create() {
+  if (TEXTUREMAN == nullptr) {
+    LuaHelpers::ReportScriptError(
+        "ActorFrameTexture: Cannot create without texture manager.");
+    return;
+  }
   if (m_pRenderTarget != nullptr) {
     LuaHelpers::ReportScriptError(
         "Can't Create an already created ActorFrameTexture");
@@ -55,9 +79,18 @@ void ActorFrameTexture::Create() {
     return;
   }
 
-  if ((int)m_size.x < 1 || (int)m_size.y < 1) {
+  if (m_sTextureName.empty()) {
     LuaHelpers::ReportScriptError(
-        "ActorFrameTexture: Cannot have width or height less than 1");
+        "ActorFrameTexture: Texture name cannot be empty.");
+    return;
+  }
+
+  if (!std::isfinite(m_size.x) || !std::isfinite(m_size.y) ||
+      m_size.x < 1.0f || m_size.y < 1.0f ||
+      m_size.x > static_cast<float>(std::numeric_limits<int>::max()) ||
+      m_size.y > static_cast<float>(std::numeric_limits<int>::max())) {
+    LuaHelpers::ReportScriptError(
+        "ActorFrameTexture: Cannot have invalid width or height.");
     return;
   }
   RageTextureID id(m_sTextureName);
@@ -70,6 +103,13 @@ void ActorFrameTexture::Create() {
   param.iWidth = (int)m_size.x;
   param.iHeight = (int)m_size.y;
   m_pRenderTarget = new RageTextureRenderTarget(id, param);
+  if (!m_pRenderTarget->IsValid()) {
+    delete m_pRenderTarget;
+    m_pRenderTarget = nullptr;
+    LuaHelpers::ReportScriptError(
+        "ActorFrameTexture: Failed to create render target.");
+    return;
+  }
   m_pRenderTarget->m_bWasUsed = true;
 
   /* This passes ownership of m_pRenderTarget to TEXTUREMAN, but we retain
@@ -78,13 +118,18 @@ void ActorFrameTexture::Create() {
 }
 
 void ActorFrameTexture::DrawPrimitives() {
-  if (m_pRenderTarget == nullptr) {
+  if (m_pRenderTarget == nullptr || !m_pRenderTarget->IsValid()) {
     return;
   }
 
   m_pRenderTarget->BeginRenderingTo(m_bPreserveTexture);
 
-  ActorFrame::DrawPrimitives();
+  try {
+    ActorFrame::DrawPrimitives();
+  } catch (...) {
+    m_pRenderTarget->FinishRenderingTo();
+    throw;
+  }
 
   m_pRenderTarget->FinishRenderingTo();
 }
