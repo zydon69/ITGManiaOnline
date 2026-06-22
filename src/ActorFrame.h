@@ -1,6 +1,7 @@
 #ifndef ACTORFRAME_H
 #define ACTORFRAME_H
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -105,24 +106,30 @@ class ActorFrame : public Actor {
   virtual void HurryTweening(float factor);
 
   void SetUpdateRate(float rate) {
-    if (rate > 0.0f) {
+    if (std::isfinite(rate) && rate > 0.0f) {
       m_fUpdateRate = rate;
     }
   }
   float GetUpdateRate() { return m_fUpdateRate; }
-  void SetFOV(float fFOV) { m_fFOV = fFOV; }
+  void SetFOV(float fFOV) { m_fFOV = std::isfinite(fFOV) ? fFOV : -1.0f; }
   void SetVanishPoint(float fX, float fY) {
-    m_fVanishX = fX;
-    m_fVanishY = fY;
+    m_fVanishX = std::isfinite(fX) ? fX : m_fVanishX;
+    m_fVanishY = std::isfinite(fY) ? fY : m_fVanishY;
   }
 
   void SetCustomLighting(bool bCustomLighting) {
     m_bOverrideLighting = bCustomLighting;
   }
-  void SetAmbientLightColor(RageColor c) { m_ambientColor = c; }
-  void SetDiffuseLightColor(RageColor c) { m_diffuseColor = c; }
-  void SetSpecularLightColor(RageColor c) { m_specularColor = c; }
-  void SetLightDirection(RageVector3 vec) { m_lightDirection = vec; }
+  void SetAmbientLightColor(RageColor c) { m_ambientColor = SanitizeColor(c); }
+  void SetDiffuseLightColor(RageColor c) { m_diffuseColor = SanitizeColor(c); }
+  void SetSpecularLightColor(RageColor c) {
+    m_specularColor = SanitizeColor(c);
+  }
+  void SetLightDirection(RageVector3 vec) {
+    m_lightDirection = RageVector3(
+        FiniteOr(vec.x, 0.0f), FiniteOr(vec.y, 0.0f),
+        FiniteOr(vec.z, 1.0f));
+  }
 
   virtual void SetPropagateCommands(bool b);
 
@@ -140,12 +147,26 @@ class ActorFrame : public Actor {
 
  protected:
   void LoadChildrenFromNode(const XNode* pNode);
+  bool ContainsChild(const Actor* pActor) const;
+  void MarkChildrenMutated();
+  static float FiniteOr(float value, float fallback) {
+    return std::isfinite(value) ? value : fallback;
+  }
+  static RageColor SanitizeColor(RageColor c) {
+    c.r = FiniteOr(c.r, 1.0f);
+    c.g = FiniteOr(c.g, 1.0f);
+    c.b = FiniteOr(c.b, 1.0f);
+    c.a = FiniteOr(c.a, 1.0f);
+    return c;
+  }
 
   /** @brief The children Actors used by the ActorFrame. */
   std::vector<Actor*> m_SubActors;
   bool m_bPropagateCommands;
   bool m_bDeleteChildren;
   bool m_bDrawByZPosition;
+  unsigned m_iChildMutationVersion;
+  bool m_bCameraPushed;
   LuaReference m_UpdateFunction;
   LuaReference m_DrawFunction;
 

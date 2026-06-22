@@ -1,6 +1,7 @@
 #include "ActorFrame.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <typeinfo>
@@ -53,11 +54,16 @@ static const char* SafeActorName(const Actor* actor) {
 
 static void DrawChildWithOptionalPerfTrace(
     ActorFrame* parent, Actor* child, unsigned index) {
+  if (child == nullptr) {
+    return;
+  }
   if (!IsDrawPerfTraceActive()) {
     child->Draw();
     return;
   }
 
+  const std::string childName = SafeActorName(child);
+  const char* childType = typeid(*child).name();
   RageTimer timer;
   child->Draw();
   const float elapsedMs = timer.GetDeltaTime() * 1000.0f;
@@ -66,8 +72,8 @@ static void DrawChildWithOptionalPerfTrace(
     LOG->Trace(
         "PERF_TRACE: slow_actor_draw scope=%s parent=%s child=%s "
         "child_index=%u child_type=%s elapsed_ms=%.3f threshold_ms=%.3f",
-        scope.name.c_str(), SafeActorName(parent), SafeActorName(child),
-        index, typeid(*child).name(), elapsedMs, scope.slowActorMs);
+        scope.name.c_str(), SafeActorName(parent), childName.c_str(),
+        index, childType, elapsedMs, scope.slowActorMs);
   }
 }
 }  // namespace
@@ -90,6 +96,8 @@ ActorFrame::ActorFrame() {
   m_bPropagateCommands = false;
   m_bDeleteChildren = false;
   m_bDrawByZPosition = false;
+  m_iChildMutationVersion = 0;
+  m_bCameraPushed = false;
   m_DrawFunction.SetFromNil();
   m_UpdateFunction.SetFromNil();
   m_fUpdateRate = 1;
@@ -115,6 +123,8 @@ ActorFrame::ActorFrame(const ActorFrame& cpy) : Actor(cpy) {
   CPY(m_bPropagateCommands);
   CPY(m_bDeleteChildren);
   CPY(m_bDrawByZPosition);
+  m_iChildMutationVersion = 0;
+  m_bCameraPushed = false;
   CPY(m_DrawFunction);
   CPY(m_UpdateFunction);
   CPY(m_fUpdateRate);
@@ -134,6 +144,10 @@ ActorFrame::ActorFrame(const ActorFrame& cpy) : Actor(cpy) {
    * the current order of m_SubActors. */
   if (m_bDeleteChildren) {
     for (unsigned i = 0; i < cpy.m_SubActors.size(); ++i) {
+      if (cpy.m_SubActors[i] == nullptr) {
+        LOG->Warn("SRC_AUDIT_FIX SRC-753: ActorFrame skipped null copied child.");
+        continue;
+      }
       Actor* pActor = cpy.m_SubActors[i]->Copy();
       this->AddChild(pActor);
     }
@@ -141,12 +155,19 @@ ActorFrame::ActorFrame(const ActorFrame& cpy) : Actor(cpy) {
 }
 
 void ActorFrame::InitState() {
-  std::for_each(
-      m_SubActors.begin(), m_SubActors.end(), [](Actor* a) { a->InitState(); });
+  std::for_each(m_SubActors.begin(), m_SubActors.end(), [](Actor* a) {
+    if (a != nullptr) {
+      a->InitState();
+    }
+  });
   Actor::InitState();
 }
 
 void ActorFrame::LoadFromNode(const XNode* pNode) {
+  if (pNode == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-752: ActorFrame ignored null XML node.");
+    return;
+  }
   if (AutoLoadChildren()) {
     LoadChildrenFromNode(pNode);
   }
@@ -154,18 +175,36 @@ void ActorFrame::LoadFromNode(const XNode* pNode) {
   Actor::LoadFromNode(pNode);
 
   pNode->GetAttrValue("UpdateRate", m_fUpdateRate);
+  if (!std::isfinite(m_fUpdateRate) || m_fUpdateRate <= 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-752: ActorFrame replaced invalid update rate.");
+    m_fUpdateRate = 1.0f;
+  }
   pNode->GetAttrValue("FOV", m_fFOV);
+  if (!std::isfinite(m_fFOV)) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-752: ActorFrame disabled non-finite FOV.");
+    m_fFOV = -1.0f;
+  }
   pNode->GetAttrValue("VanishX", m_fVanishX);
+  if (!std::isfinite(m_fVanishX)) {
+    m_fVanishX = SCREEN_CENTER_X;
+  }
   pNode->GetAttrValue("VanishY", m_fVanishY);
+  if (!std::isfinite(m_fVanishY)) {
+    m_fVanishY = SCREEN_CENTER_Y;
+  }
   m_bOverrideLighting = pNode->GetAttrValue("Lighting", m_bLighting);
   // new lighting values (only ambient color seems to work?) -aj
   std::string sTemp1, sTemp2, sTemp3;
-  pNode->GetAttrValue("AmbientColor", sTemp1);
-  m_ambientColor.FromString(sTemp1);
-  pNode->GetAttrValue("DiffuseColor", sTemp2);
-  m_diffuseColor.FromString(sTemp2);
-  pNode->GetAttrValue("SpecularColor", sTemp3);
-  m_specularColor.FromString(sTemp3);
+  if (pNode->GetAttrValue("AmbientColor", sTemp1)) {
+    m_ambientColor.FromString(sTemp1);
+  }
+  if (pNode->GetAttrValue("DiffuseColor", sTemp2)) {
+    m_diffuseColor.FromString(sTemp2);
+  }
+  if (pNode->GetAttrValue("SpecularColor", sTemp3)) {
+    m_specularColor.FromString(sTemp3);
+  }
   // Values need to be converted into a RageVector3, so more work needs to be
   // done...
   // pNode->GetAttrValue( "LightDirection", m_lightDirection );
@@ -173,7 +212,16 @@ void ActorFrame::LoadFromNode(const XNode* pNode) {
 
 void ActorFrame::LoadChildrenFromNode(const XNode* pNode) {
   // Shouldn't be calling this unless we're going to delete our children.
-  ASSERT(m_bDeleteChildren);
+  if (!m_bDeleteChildren) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-752: ActorFrame refused child autoload without "
+        "ownership.");
+    return;
+  }
+  if (pNode == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-752: ActorFrame ignored null child node.");
+    return;
+  }
 
   // Load children
   const XNode* pChildren = pNode->GetChild("children");
@@ -197,6 +245,10 @@ void ActorFrame::LoadChildrenFromNode(const XNode* pNode) {
 }
 
 void ActorFrame::AddChild(Actor* pActor) {
+  if (pActor == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-753: ActorFrame ignored null child.");
+    return;
+  }
 #ifdef DEBUG
   // check that this Actor isn't already added.
   std::vector<Actor*>::iterator iter =
@@ -207,12 +259,18 @@ void ActorFrame::AddChild(Actor* pActor) {
         pActor->GetName().c_str()));
   }
 #endif
-
-  ASSERT(pActor != nullptr);
-  ASSERT(
-      reinterpret_cast<uintptr_t>(pActor) !=
-      static_cast<uintptr_t>(0xC0000005));
+  if (ContainsChild(pActor)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-753: ActorFrame ignored duplicate child '%s'.",
+        pActor->GetName().c_str());
+    return;
+  }
+  if (reinterpret_cast<uintptr_t>(pActor) == static_cast<uintptr_t>(0xC0000005)) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-753: ActorFrame ignored invalid child pointer.");
+    return;
+  }
   m_SubActors.push_back(pActor);
+  MarkChildrenMutated();
 
   pActor->SetParent(this);
 }
@@ -221,11 +279,17 @@ void ActorFrame::RemoveChild(Actor* pActor) {
   std::vector<Actor*>::iterator iter =
       find(m_SubActors.begin(), m_SubActors.end(), pActor);
   if (iter != m_SubActors.end()) {
+    (*iter)->SetParent(nullptr);
     m_SubActors.erase(iter);
+    MarkChildrenMutated();
   }
 }
 
 void ActorFrame::TransferChildren(ActorFrame* pTo) {
+  if (pTo == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-753: ActorFrame refused null transfer target.");
+    return;
+  }
   std::for_each(m_SubActors.begin(), m_SubActors.end(), [&](Actor* a) {
     pTo->AddChild(a);
   });
@@ -234,41 +298,61 @@ void ActorFrame::TransferChildren(ActorFrame* pTo) {
 
 Actor* ActorFrame::GetChild(const std::string& sName) {
   for (Actor* a : m_SubActors) {
-    if (a->GetName() == sName || a->IsAlias(sName)) {
+    if (a != nullptr && (a->GetName() == sName || a->IsAlias(sName))) {
       return a;
     }
   }
   return nullptr;
 }
 
-void ActorFrame::RemoveAllChildren() { m_SubActors.clear(); }
+void ActorFrame::RemoveAllChildren() {
+  for (Actor* actor : m_SubActors) {
+    if (actor != nullptr) {
+      actor->SetParent(nullptr);
+    }
+  }
+  m_SubActors.clear();
+  MarkChildrenMutated();
+}
 
 void ActorFrame::MoveToTail(Actor* pActor) {
   std::vector<Actor*>::iterator iter =
       find(m_SubActors.begin(), m_SubActors.end(), pActor);
   if (iter == m_SubActors.end()) {  // didn't find
-    FAIL_M("Nonexistent actor");
+    LOG->Warn("SRC_AUDIT_FIX SRC-757: ActorFrame ignored missing MoveToTail.");
+    return;
   }
 
   m_SubActors.erase(iter);
   m_SubActors.push_back(pActor);
+  MarkChildrenMutated();
 }
 
 void ActorFrame::MoveToHead(Actor* pActor) {
   std::vector<Actor*>::iterator iter =
       find(m_SubActors.begin(), m_SubActors.end(), pActor);
   if (iter == m_SubActors.end()) {  // didn't find
-    FAIL_M("Nonexistent actor");
+    LOG->Warn("SRC_AUDIT_FIX SRC-757: ActorFrame ignored missing MoveToHead.");
+    return;
   }
 
   m_SubActors.erase(iter);
   m_SubActors.insert(m_SubActors.begin(), pActor);
+  MarkChildrenMutated();
 }
 
 void ActorFrame::BeginDraw() {
+  m_bCameraPushed = false;
+  if (DISPLAY == nullptr) {
+    return;
+  }
   Actor::BeginDraw();
+  if (m_pTempState == nullptr) {
+    return;
+  }
   if (m_fFOV != -1) {
     DISPLAY->CameraPushMatrix();
+    m_bCameraPushed = true;
     DISPLAY->LoadMenuPerspective(
         m_fFOV, SCREEN_WIDTH, SCREEN_HEIGHT, m_fVanishX, m_fVanishY);
   }
@@ -294,6 +378,11 @@ void ActorFrame::DrawPrimitives() {
   // Actor::DrawPrimitives();
 
   if (unlikely(!m_DrawFunction.IsNil())) {
+    if (LUA == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-755: ActorFrame skipped DrawFunction without Lua.");
+      return;
+    }
     Lua* L = LUA->Get();
     m_DrawFunction.PushSelf(L);
     if (lua_isnil(L, -1)) {
@@ -323,28 +412,44 @@ void ActorFrame::DrawPrimitives() {
     std::vector<Actor*> subs = m_SubActors;
     ActorUtil::SortByZPosition(subs);
     for (unsigned i = 0; i < subs.size(); i++) {
+      if (!ContainsChild(subs[i])) {
+        continue;
+      }
       subs[i]->SetInternalDiffuse(diffuse);
       subs[i]->SetInternalGlow(glow);
       DrawChildWithOptionalPerfTrace(this, subs[i], i);
     }
   } else {
-    for (unsigned i = 0; i < m_SubActors.size(); i++) {
-      m_SubActors[i]->SetInternalDiffuse(diffuse);
-      m_SubActors[i]->SetInternalGlow(glow);
-      DrawChildWithOptionalPerfTrace(this, m_SubActors[i], i);
+    for (unsigned i = 0; i < m_SubActors.size();) {
+      Actor* child = m_SubActors[i];
+      if (child == nullptr) {
+        ++i;
+        continue;
+      }
+      const unsigned mutationVersion = m_iChildMutationVersion;
+      child->SetInternalDiffuse(diffuse);
+      child->SetInternalGlow(glow);
+      DrawChildWithOptionalPerfTrace(this, child, i);
+      if (mutationVersion == m_iChildMutationVersion) {
+        ++i;
+      }
     }
   }
 }
 
 void ActorFrame::EndDraw() {
+  if (DISPLAY == nullptr) {
+    return;
+  }
   if (m_bOverrideLighting) {
     // TODO: pop state instead of turning lighting off
     DISPLAY->SetLightOff(0);
     DISPLAY->SetLighting(false);
   }
 
-  if (m_fFOV != -1) {
+  if (m_bCameraPushed) {
     DISPLAY->CameraPopMatrix();
+    m_bCameraPushed = false;
   }
   Actor::EndDraw();
 }
@@ -352,6 +457,10 @@ void ActorFrame::EndDraw() {
 // This exists solely as a helper for children table.
 // This applies the desired function to te first child in the table.
 static int IdenticalChildrenSingleApplier(lua_State* L) {
+  if (lua_objlen(L, 1) == 0) {
+    lua_pushnil(L);
+    return 1;
+  }
   // First arg is the table of items, get the last object.
   // It is the one that would have been in the children table in the old
   // version. The other args are meant for the function. The upvalue for this
@@ -374,6 +483,10 @@ static int IdenticalChildrenIndexLayer(lua_State* L) {
   if (lua_isnumber(L, 2)) {
     lua_rawget(L, 1);
   } else {
+    if (lua_objlen(L, 1) == 0) {
+      lua_pushnil(L);
+      return 1;
+    }
     lua_pushvalue(L, 1);
     lua_pushvalue(L, 2);
     lua_pop(L, 2);
@@ -384,8 +497,17 @@ static int IdenticalChildrenIndexLayer(lua_State* L) {
     // ICSA is actually called.
     lua_pushnumber(L, lua_objlen(L, 1));  // stack: 1
     lua_gettable(L, 1);                   // stack: object
-    lua_getmetatable(L, -1);              // stack: object, obj_meta
+    if (!lua_getmetatable(L, -1)) {
+      lua_pop(L, 1);
+      lua_pushnil(L);
+      return 1;
+    }                                     // stack: object, obj_meta
     lua_getfield(L, -1, "__index");       // stack: object, obj_meta, obj_index
+    if (lua_isnil(L, -1)) {
+      lua_pop(L, 3);
+      lua_pushnil(L);
+      return 1;
+    }
     lua_pushvalue(L, 2);  // stack: object, obj_meta, obj_index, func_name
     lua_gettable(L, -2);  // stack: object, obj_meta, obj_index, obj_function
     lua_pushcclosure(
@@ -424,6 +546,9 @@ static void AddToChildTable(lua_State* L, Actor* a) {
 void ActorFrame::PushChildrenTable(lua_State* L) {
   lua_newtable(L);  // stack: all_actors
   for (Actor* a : m_SubActors) {
+    if (a == nullptr || a->GetName().empty()) {
+      continue;
+    }
     LuaHelpers::Push(L, a->GetName());  // stack: all_actors, name
     lua_gettable(L, -2);                // stack: all_actors, entry
     if (lua_isnil(L, -1)) {
@@ -452,6 +577,9 @@ void ActorFrame::PushChildrenTable(lua_State* L) {
 void ActorFrame::PushChildTable(lua_State* L, const std::string& sName) {
   int found = 0;
   for (Actor* a : m_SubActors) {
+    if (a == nullptr) {
+      continue;
+    }
     if (a->GetName() == sName || a->IsAlias(sName)) {
       if (found == 0) {
         a->PushSelf(L);
@@ -486,41 +614,90 @@ void ActorFrame::PlayCommandOnLeaves(
 
 void ActorFrame::RunCommandsRecursively(
     const LuaReference& cmds, const LuaReference* pParamTable) {
-  for (unsigned i = 0; i < m_SubActors.size(); i++) {
-    m_SubActors[i]->RunCommandsRecursively(cmds, pParamTable);
+  for (unsigned i = 0; i < m_SubActors.size();) {
+    Actor* actor = m_SubActors[i];
+    if (actor == nullptr) {
+      ++i;
+      continue;
+    }
+    const unsigned mutationVersion = m_iChildMutationVersion;
+    actor->RunCommandsRecursively(cmds, pParamTable);
+    if (mutationVersion == m_iChildMutationVersion) {
+      ++i;
+    }
   }
   Actor::RunCommandsRecursively(cmds, pParamTable);
 }
 
 void ActorFrame::RunCommandsOnChildren(
     const LuaReference& cmds, const LuaReference* pParamTable) {
-  for (unsigned i = 0; i < m_SubActors.size(); i++) {
-    m_SubActors[i]->RunCommands(cmds, pParamTable);
+  for (unsigned i = 0; i < m_SubActors.size();) {
+    Actor* actor = m_SubActors[i];
+    if (actor == nullptr) {
+      ++i;
+      continue;
+    }
+    const unsigned mutationVersion = m_iChildMutationVersion;
+    actor->RunCommands(cmds, pParamTable);
+    if (mutationVersion == m_iChildMutationVersion) {
+      ++i;
+    }
   }
 }
 
 void ActorFrame::RunCommandsOnLeaves(
     const LuaReference& cmds, const LuaReference* pParamTable) {
-  for (unsigned i = 0; i < m_SubActors.size(); i++) {
-    m_SubActors[i]->RunCommandsOnLeaves(cmds, pParamTable);
+  for (unsigned i = 0; i < m_SubActors.size();) {
+    Actor* actor = m_SubActors[i];
+    if (actor == nullptr) {
+      ++i;
+      continue;
+    }
+    const unsigned mutationVersion = m_iChildMutationVersion;
+    actor->RunCommandsOnLeaves(cmds, pParamTable);
+    if (mutationVersion == m_iChildMutationVersion) {
+      ++i;
+    }
   }
 }
 
 void ActorFrame::UpdateInternal(float fDeltaTime) {
   //	LOG->Trace( "ActorFrame::Update( %f )", fDeltaTime );
+  if (!std::isfinite(fDeltaTime)) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-755: ActorFrame ignored non-finite delta.");
+    return;
+  }
 
   fDeltaTime *= m_fUpdateRate;
+  if (!std::isfinite(fDeltaTime)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-752: ActorFrame ignored non-finite scaled delta.");
+    return;
+  }
 
   Actor::UpdateInternal(fDeltaTime);
 
   // update all sub-Actors
-  for (std::vector<Actor*>::iterator it = m_SubActors.begin();
-       it != m_SubActors.end(); it++) {
-    Actor* pActor = *it;
+  for (unsigned i = 0; i < m_SubActors.size();) {
+    Actor* pActor = m_SubActors[i];
+    if (pActor == nullptr) {
+      ++i;
+      continue;
+    }
+    const unsigned mutationVersion = m_iChildMutationVersion;
     pActor->Update(fDeltaTime);
+    if (mutationVersion == m_iChildMutationVersion) {
+      ++i;
+    }
   }
 
   if (unlikely(!m_UpdateFunction.IsNil())) {
+    if (LUA == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-755: ActorFrame skipped UpdateFunction without "
+          "Lua.");
+      return;
+    }
     Lua* L = LUA->Get();
     m_UpdateFunction.PushSelf(L);
     if (lua_isnil(L, -1)) {
@@ -536,20 +713,42 @@ void ActorFrame::UpdateInternal(float fDeltaTime) {
   }
 }
 
-#define PropagateActorFrameCommand(cmd)                                      \
-  void ActorFrame::cmd() {                                                   \
-    Actor::cmd();                                                            \
-                                                                             \
-    /* set all sub-Actors */                                                 \
-    for (unsigned i = 0; i < m_SubActors.size(); i++) m_SubActors[i]->cmd(); \
+#define PropagateActorFrameCommand(cmd)                                         \
+  void ActorFrame::cmd() {                                                      \
+    Actor::cmd();                                                               \
+                                                                                \
+    /* set all sub-Actors */                                                    \
+    for (unsigned i = 0; i < m_SubActors.size();) {                             \
+      Actor* actor = m_SubActors[i];                                            \
+      if (actor == nullptr) {                                                   \
+        ++i;                                                                    \
+        continue;                                                               \
+      }                                                                         \
+      const unsigned mutationVersion = m_iChildMutationVersion;                 \
+      actor->cmd();                                                             \
+      if (mutationVersion == m_iChildMutationVersion) {                         \
+        ++i;                                                                    \
+      }                                                                         \
+    }                                                                           \
   }
 
-#define PropagateActorFrameCommand1Param(cmd, type)                           \
-  void ActorFrame::cmd(type f) {                                              \
-    Actor::cmd(f);                                                            \
-                                                                              \
-    /* set all sub-Actors */                                                  \
-    for (unsigned i = 0; i < m_SubActors.size(); i++) m_SubActors[i]->cmd(f); \
+#define PropagateActorFrameCommand1Param(cmd, type)                              \
+  void ActorFrame::cmd(type f) {                                                 \
+    Actor::cmd(f);                                                               \
+                                                                                 \
+    /* set all sub-Actors */                                                     \
+    for (unsigned i = 0; i < m_SubActors.size();) {                              \
+      Actor* actor = m_SubActors[i];                                             \
+      if (actor == nullptr) {                                                    \
+        ++i;                                                                     \
+        continue;                                                                \
+      }                                                                          \
+      const unsigned mutationVersion = m_iChildMutationVersion;                  \
+      actor->cmd(f);                                                             \
+      if (mutationVersion == m_iChildMutationVersion) {                          \
+        ++i;                                                                     \
+      }                                                                          \
+    }                                                                            \
   }
 
 PropagateActorFrameCommand(FinishTweening)
@@ -562,6 +761,9 @@ PropagateActorFrameCommand(FinishTweening)
 
   for (unsigned i = 0; i < m_SubActors.size(); i++) {
     const Actor* pActor = m_SubActors[i];
+    if (pActor == nullptr) {
+      continue;
+    }
     m = std::max(m, m_fHibernateSecondsLeft + pActor->GetTweenTimeLeft());
   }
 
@@ -569,19 +771,33 @@ PropagateActorFrameCommand(FinishTweening)
 }
 
 static bool CompareActorsByDrawOrder(const Actor* p1, const Actor* p2) {
+  if (p1 == nullptr || p2 == nullptr) {
+    return p1 != nullptr;
+  }
   return p1->GetDrawOrder() < p2->GetDrawOrder();
 }
 
 void ActorFrame::SortByDrawOrder() {
   // Preserve ordering of Actors with equal DrawOrders.
   stable_sort(m_SubActors.begin(), m_SubActors.end(), CompareActorsByDrawOrder);
+  MarkChildrenMutated();
 }
 
 void ActorFrame::DeleteAllChildren() {
-  for (unsigned i = 0; i < m_SubActors.size(); i++) {
-    delete m_SubActors[i];
+  std::vector<Actor*> uniqueChildren;
+  for (Actor* actor : m_SubActors) {
+    if (actor != nullptr &&
+        find(uniqueChildren.begin(), uniqueChildren.end(), actor) ==
+            uniqueChildren.end()) {
+      uniqueChildren.push_back(actor);
+    }
   }
   m_SubActors.clear();
+  MarkChildrenMutated();
+  for (Actor* actor : uniqueChildren) {
+    actor->SetParent(nullptr);
+    delete actor;
+  }
 }
 
 void ActorFrame::RunCommands(
@@ -604,13 +820,29 @@ void ActorFrame::HandleMessage(const Message& msg) {
     return;
   }
 
-  for (unsigned i = 0; i < m_SubActors.size(); i++) {
+  for (unsigned i = 0; i < m_SubActors.size();) {
     Actor* pActor = m_SubActors[i];
+    if (pActor == nullptr) {
+      ++i;
+      continue;
+    }
+    const unsigned mutationVersion = m_iChildMutationVersion;
     pActor->HandleMessage(msg);
+    if (mutationVersion == m_iChildMutationVersion) {
+      ++i;
+    }
   }
 }
 
 void ActorFrame::SetDrawByZPosition(bool b) { m_bDrawByZPosition = b; }
+
+bool ActorFrame::ContainsChild(const Actor* pActor) const {
+  return pActor != nullptr &&
+         find(m_SubActors.begin(), m_SubActors.end(), pActor) !=
+             m_SubActors.end();
+}
+
+void ActorFrame::MarkChildrenMutated() { ++m_iChildMutationVersion; }
 
 // lua start
 #include "LuaBinding.h"
@@ -657,9 +889,11 @@ class LunaActorFrame : public Luna<ActorFrame> {
   }
   static int SetUpdateRate(T* p, lua_State* L) {
     float rate = FArg(1);
-    if (rate <= 0) {
+    if (!std::isfinite(rate) || rate <= 0) {
       luaL_error(
-          L, "ActorFrame:SetUpdateRate(%f) Update rate must be greater than 0.",
+          L,
+          "ActorFrame:SetUpdateRate(%f) Update rate must be finite and greater "
+          "than 0.",
           rate);
     }
     p->SetUpdateRate(rate);
@@ -667,11 +901,20 @@ class LunaActorFrame : public Luna<ActorFrame> {
   }
   DEFINE_METHOD(GetUpdateRate, GetUpdateRate());
   static int SetFOV(T* p, lua_State* L) {
-    p->SetFOV(FArg(1));
+    float fov = FArg(1);
+    if (!std::isfinite(fov)) {
+      luaL_error(L, "ActorFrame:SetFOV(%f) FOV must be finite.", fov);
+    }
+    p->SetFOV(fov);
     COMMON_RETURN_SELF;
   }
   static int vanishpoint(T* p, lua_State* L) {
-    p->SetVanishPoint(FArg(1), FArg(2));
+    const float x = FArg(1);
+    const float y = FArg(2);
+    if (!std::isfinite(x) || !std::isfinite(y)) {
+      luaL_error(L, "ActorFrame:vanishpoint values must be finite.");
+    }
+    p->SetVanishPoint(x, y);
     COMMON_RETURN_SELF;
   }
   static int GetChild(T* p, lua_State* L) {
@@ -760,7 +1003,12 @@ class LunaActorFrame : public Luna<ActorFrame> {
     LuaHelpers::ReadArrayFromTable(coords, L);
     lua_pop(L, 1);
     if (coords.size() != 3) {
-      // error
+      luaL_error(
+          L, "ActorFrame:SetLightDirection requires exactly three numbers.");
+    }
+    if (!std::isfinite(coords[0]) || !std::isfinite(coords[1]) ||
+        !std::isfinite(coords[2])) {
+      luaL_error(L, "ActorFrame:SetLightDirection values must be finite.");
     }
     RageVector3 vTmp = RageVector3(coords[0], coords[1], coords[2]);
     p->SetLightDirection(vTmp);
