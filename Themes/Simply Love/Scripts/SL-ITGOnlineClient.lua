@@ -7533,7 +7533,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		return
 	end
 	if roomPhase ~= "playing" then
-		if final and (roomPhase == "results" or self:CurrentUserHasFinalResult(self.currentRoom)) then
+		if final and not forceFinalFailed and (roomPhase == "results" or self:CurrentUserHasFinalResult(self.currentRoom)) then
 			if validRoundKey and self.lastFinalScoreKey ~= roundKey then
 				self.lastFinalScoreKey = roundKey
 			end
@@ -7893,7 +7893,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 			return
 		end
 	end
-	if final and (latestRoomPhase == "results" or self:CurrentUserHasFinalResult(self.currentRoom)) then
+	if final and not forceFinalFailed and (latestRoomPhase == "results" or self:CurrentUserHasFinalResult(self.currentRoom)) then
 		if validRoundKey then
 			self.lastFinalScoreKey = roundKey
 			self.lastFinalScoreInFlightKey = ""
@@ -9159,12 +9159,23 @@ function ITGOnline:MarkPlayFailedEarly(source, callback)
 		return false
 	end
 
+	local finalScoreAccepted = self.lastFinalScoreKey == key
 	if self.onlineGameplayFailedEarlyKey == key then
-		online_flow_trace("mark_failed_early_skipped source=" .. tostring(source or "unknown")
-			.. " reason=already_confirmed"
-			.. " roundKey=" .. tostring(key))
-		if callback then callback(true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil) end
-		return true
+		if finalScoreAccepted then
+			online_flow_trace("mark_failed_early_skipped source=" .. tostring(source or "unknown")
+				.. " reason=already_confirmed"
+				.. " roundKey=" .. tostring(key)
+				.. " finalScoreAccepted=true")
+			if callback then callback(true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil) end
+			return true
+		end
+
+		online_flow_trace("mark_failed_early_retry source=" .. tostring(source or "unknown")
+			.. " reason=failed_state_confirmed_without_final_score"
+			.. " roundKey=" .. tostring(key)
+			.. " lastFinalScoreKey=" .. tostring(self.lastFinalScoreKey or "")
+			.. " hasFinalResult=" .. tostring(self:CurrentUserHasFinalResult(self.currentRoom) == true))
+		self.onlineGameplayFailedEarlyKey = ""
 	end
 	if self.onlineGameplayFailedEarlyInFlightKey == key then
 		online_flow_trace("mark_failed_early_skipped source=" .. tostring(source or "unknown")
@@ -9182,10 +9193,20 @@ function ITGOnline:MarkPlayFailedEarly(source, callback)
 	local confirmFailed
 	confirmFailed = function(scoreOk, scoreDecoded, scoreResponse)
 		if scoreOk == false then
-			online_flow_trace("mark_failed_early_score_not_finalized roundKey=" .. tostring(key)
+			if self.onlineGameplayFailedEarlyInFlightKey == key then
+				self.onlineGameplayFailedEarlyInFlightKey = ""
+			end
+			self.onlineGameplayFailedEarlyKey = ""
+			online_flow_trace("mark_failed_early_aborted_before_terminal_state"
+				.. " roundKey=" .. tostring(key)
+				.. " reason=final_failed_score_not_accepted"
+				.. " status=" .. tostring(scoreResponse and scoreResponse.statusCode or "nil")
+				.. " errorCode=" .. tostring(response_error_code(scoreResponse, scoreDecoded) or "nil")
 				.. " message=" .. tostring(response_message(scoreResponse, scoreDecoded, "failed score rejected")))
 			self.onlineGameplayEvaluationRetryKey = key
 			self.onlineGameplayEvaluationNextRetryAt = GetTimeSinceStart() + 0.35
+			if callback then callback(false, scoreDecoded, scoreResponse or { errorMessage = "Failed final score was not accepted." }) end
+			return
 		end
 
 		self:MarkPlayFailed(function(ok, decoded, response)
@@ -11517,6 +11538,7 @@ function ITGOnline:LobbyStatePayload(room)
 		screenName = "ScreenOnlineLobbies"
 	end
 	local players = {}
+	local playersByUserId = {}
 	for member in ivalues(room.members or {}) do
 		local user = member.user or member
 		local userId = tostring(user.id or member.user_id or "")
@@ -11550,7 +11572,7 @@ function ITGOnline:LobbyStatePayload(room)
 				and tonumber(self.user.id) == tonumber(userId)
 				and self:CurrentUserHasOptimisticConfigReady(room)
 				and readyByUserId[userId] ~= true
-			players[#players + 1] = {
+			local playerPayload = {
 				playerId = userId,
 				profileName = user_display_name(user, "Player " .. userId),
 				screenName = memberScreenName,
@@ -11576,6 +11598,47 @@ function ITGOnline:LobbyStatePayload(room)
 				accuracy = scorePercent,
 				exScore = exPercent,
 			}
+			players[#players + 1] = playerPayload
+			if userId ~= "" then playersByUserId[userId] = playerPayload end
+	end
+
+	if self:NormalizeRoomPhase(room.phase) == "results" and type(playState.final_results) == "table" then
+		for result in ivalues(playState.final_results) do
+			if type(result) == "table" then
+				local user = type(result.user) == "table" and result.user or {}
+				local userId = tostring(user.id or result.user_id or "")
+				if userId ~= "" and not playersByUserId[userId] then
+					local displayedPercent = tonumber(result.displayed_percent or result.displayedPercent or result.score_percent or result.accuracy)
+					local playerPayload = {
+						playerId = userId,
+						profileName = user_display_name(user, "Player " .. userId),
+						screenName = "ScreenEvaluationStage",
+						ready = false,
+						readyPendingServer = false,
+						missingSong = false,
+						songAvailable = true,
+						packSyncStatus = "ready",
+						packSyncMessage = nil,
+						packSyncDownloadProgress = nil,
+						packSyncSequence = nil,
+						packSyncUpdatedAt = nil,
+						playState = result.failed and "failed" or "finished",
+						isPlayingSong = false,
+						score = displayedPercent,
+						accuracy = tonumber(result.accuracy),
+						exScore = tonumber(result.score_percent),
+					}
+					players[#players + 1] = playerPayload
+					playersByUserId[userId] = playerPayload
+					online_flow_trace("lobby_state_payload_final_result_player_restored"
+						.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+						.. " userId=" .. tostring(userId)
+						.. " name=" .. tostring(playerPayload.profileName or "")
+						.. " displayedPercent=" .. tostring(displayedPercent or "nil")
+						.. " failed=" .. tostring(result.failed == true))
+				end
+			end
+		end
 	end
 
 	local songInfo = nil

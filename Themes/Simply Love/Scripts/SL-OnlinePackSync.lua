@@ -1059,6 +1059,10 @@ function PackSync:ResetLocalState(reason)
 		.. " browseOnly=" .. tostring(self.activeBrowseOnlyDownload == true)
 		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+	if reason == "online_lobby_state_results" then
+		trace("ResetLocalState ignored during results; preserving final song/download state")
+		return
+	end
 	if self:ShouldPreserveActiveDownloadDuringReset(reason) then
 		trace("ResetLocalState preserved active download reason=" .. tostring(reason or "unknown")
 			.. " status=" .. tostring(self.currentStatus or "nil")

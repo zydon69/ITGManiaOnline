@@ -4351,7 +4351,19 @@ local af = Def.ActorFrame{
 				.. " isManager=" .. tostring(joined_is_manager == true))
 			joined_global_options = normalize_global_options(params and params.globalOptions or nil)
 			if joined_phase == "results" then
-				reset_joined_transient_song_state("online_lobby_state_results", { clearPreview = true, resetPackSync = true })
+				local selectedSongInfo = normalize_online_song_info(params and params.songInfo or nil)
+				if selectedSongInfo then
+					joined_song_preview = selectedSongInfo
+					joined_song_confirmed = true
+					joined_song_selected_key = tostring(selectedSongInfo.selectedAt or selectedSongInfo.selected_at or joined_song_selected_key or "")
+					lobby_flow_trace("OnlineLobbyState_results_preserve_song"
+						.. " title=" .. tostring(selectedSongInfo.title or selectedSongInfo.songTitle or "")
+						.. " selectedAt=" .. tostring(joined_song_selected_key or ""))
+				else
+					lobby_flow_trace("OnlineLobbyState_results_preserve_existing_song"
+						.. " hasPreview=" .. tostring(joined_song_preview ~= nil)
+						.. " selectedKey=" .. tostring(joined_song_selected_key or ""))
+				end
 			else
 				local previousSelectedKey = joined_song_selected_key
 				local snapshotSource = tostring(params and params.snapshotSource or "")
