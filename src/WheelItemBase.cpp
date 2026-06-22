@@ -1,11 +1,13 @@
 #include "WheelItemBase.h"
 
+#include <cmath>
 #include <string>
 
 #include "Actor.h"
 #include "ActorFrame.h"
 #include "EnumHelper.h"
 #include "LuaManager.h"
+#include "RageLog.h"
 #include "RageTypes.h"
 #include "global.h"
 
@@ -17,6 +19,19 @@ XToString(WheelItemDataType);
 StringToX(WheelItemDataType);
 LuaXType(WheelItemDataType);
 
+namespace {
+bool IsFiniteColor(const RageColor& color) {
+  return std::isfinite(color.r) && std::isfinite(color.g) &&
+         std::isfinite(color.b) && std::isfinite(color.a);
+}
+
+void WarnWheelItemBase(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+}  // namespace
+
 WheelItemBaseData::WheelItemBaseData(
     WheelItemDataType type, std::string sText, RageColor color) {
   m_Type = type;
@@ -26,11 +41,11 @@ WheelItemBaseData::WheelItemBaseData(
 
 // begin WheelItemBase
 WheelItemBase::WheelItemBase(const WheelItemBase& cpy)
-    : ActorFrame(cpy), m_pData(cpy.m_pData), m_bExpanded(cpy.m_bExpanded) {
-  // FIXME
-  // if( cpy.m_pGrayBar == cpy.m_sprBar )
-  //	m_pGrayBar = m_sprBar;
-}
+    : ActorFrame(cpy),
+      m_colorLocked(cpy.m_colorLocked),
+      m_pData(cpy.m_pData),
+      m_bExpanded(cpy.m_bExpanded),
+      m_pGrayBar(nullptr) {}
 
 WheelItemBase::WheelItemBase(std::string sType) {
   SetName(sType);
@@ -41,17 +56,29 @@ WheelItemBase::WheelItemBase(std::string sType) {
 }
 
 void WheelItemBase::Load(std::string sType) {
+  (void)sType;
   m_colorLocked = RageColor(0, 0, 0, 0.25f);
+  m_pData = nullptr;
+  m_pGrayBar = nullptr;
 }
 
 void WheelItemBase::LoadFromWheelItemData(
     const WheelItemBaseData* pWID, int iIndex, bool bHasFocus, int iDrawIndex) {
-  ASSERT(pWID != nullptr);
+  (void)iIndex;
+  (void)bHasFocus;
+  (void)iDrawIndex;
+  if (pWID == nullptr) {
+    WarnWheelItemBase(
+        "SRC_AUDIT_FIX SRC-1268: WheelItemBase ignored null wheel item data.");
+    m_pData = nullptr;
+    m_pGrayBar = nullptr;
+    return;
+  }
   m_pData = pWID;
 }
 
 void WheelItemBase::DrawGrayBar(Actor& bar) {
-  if (m_colorLocked.a == 0) {
+  if (m_colorLocked.a == 0 || !IsFiniteColor(m_colorLocked)) {
     return;
   }
 
@@ -73,6 +100,27 @@ void WheelItemBase::DrawPrimitives() {
   if (m_pGrayBar != nullptr) {
     DrawGrayBar(*m_pGrayBar);
   }
+}
+
+const std::string WheelItemBase::GetText() const {
+  if (m_pData == nullptr) {
+    return "";
+  }
+  return m_pData->m_sText;
+}
+
+const RageColor WheelItemBase::GetColor() const {
+  if (m_pData == nullptr) {
+    return RageColor(1, 1, 1, 1);
+  }
+  return m_pData->m_color;
+}
+
+WheelItemDataType WheelItemBase::GetType() const {
+  if (m_pData == nullptr) {
+    return WheelItemDataType_Invalid;
+  }
+  return m_pData->m_Type;
 }
 
 // lua start

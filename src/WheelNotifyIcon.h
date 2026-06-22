@@ -10,6 +10,7 @@
 class WheelNotifyIcon : public Sprite {
  public:
   WheelNotifyIcon();
+  WheelNotifyIcon(const WheelNotifyIcon& cpy);
 
   struct Flags {
     Flags() {
@@ -24,8 +25,8 @@ class WheelNotifyIcon : public Sprite {
 
   void SetFlags(Flags flags);
 
-  virtual void Update(float fDeltaTime);
-  virtual bool EarlyAbortDraw() const;
+  virtual void Update(float fDeltaTime) override;
+  virtual bool EarlyAbortDraw() const override;
 
  protected:
   /** @brief What types of icons are available for the Song? */
@@ -39,11 +40,14 @@ class WheelNotifyIcon : public Sprite {
                  modes. */
     marathon, /**< This Song is a marathon version, and will take 3 Songs in
                  most modes. */
-    empty     /**< There is no icon meant for this Song. */
+    empty,    /**< There is no icon meant for this Song. */
+    NUM_Icons
   };
 
   /** @brief the list of Icons to show. */
   std::vector<Icons> m_vIconsToShow;
+  float m_fCycleTime;
+  unsigned m_iCurrentIcon;
 };
 
 #endif

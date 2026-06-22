@@ -27,7 +27,10 @@ enum WheelItemDataType {
 LuaDeclareType(WheelItemDataType);
 
 struct WheelItemBaseData {
-  WheelItemBaseData() {}
+  WheelItemBaseData()
+      : m_Type(WheelItemDataType_Invalid),
+        m_sText(""),
+        m_color(RageColor(1, 1, 1, 1)) {}
   WheelItemBaseData(WheelItemDataType type, std::string sText, RageColor color);
   virtual ~WheelItemBaseData() {}
   WheelItemDataType m_Type;
@@ -52,19 +55,10 @@ class WheelItemBase : public ActorFrame {
 
   RageColor m_colorLocked;
 
-  const std::string GetText() {
-    ASSERT(m_pData != nullptr);
-    return m_pData->m_sText;
-  }
-  const RageColor GetColor() {
-    ASSERT(m_pData != nullptr);
-    return m_pData->m_color;
-  }
-  WheelItemDataType GetType() {
-    ASSERT(m_pData != nullptr);
-    return m_pData->m_Type;
-  }
-  bool IsLoaded() { return m_pData != nullptr; }
+  const std::string GetText() const;
+  const RageColor GetColor() const;
+  WheelItemDataType GetType() const;
+  bool IsLoaded() const { return m_pData != nullptr; }
 
   // Lua
   void PushSelf(lua_State* L);

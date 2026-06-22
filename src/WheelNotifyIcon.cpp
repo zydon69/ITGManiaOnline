@@ -1,8 +1,9 @@
 #include "WheelNotifyIcon.h"
 
 #include <algorithm>
-#include <cstdint>
+#include <cmath>
 
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "Sprite.h"
 #include "ThemeManager.h"
@@ -19,14 +20,61 @@ static ThemeMetric<bool> SHOW_TRAINING("WheelNotifyIcon", "ShowTraining");
 static ThemeMetric<bool> BLINK_BEST_ICON("WheelNotifyIcon", "BlinkPlayersBest");
 static ThemeMetric<int> NUM_ICONS_TO_SHOW("WheelNotifyIcon", "NumIconsToShow");
 
-WheelNotifyIcon::WheelNotifyIcon() {
+namespace {
+const float ICON_CYCLE_SECONDS = 0.25f;
+const unsigned MAX_WHEEL_NOTIFY_ICONS = 8;
+
+void WarnWheelNotifyIcon(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+bool GetWheelNotifyMetricBool(const ThemeMetric<bool>& metric) {
+  if (THEME == nullptr) {
+    return false;
+  }
+  return metric.GetValue();
+}
+
+unsigned GetMaxIconsToShow() {
+  if (THEME == nullptr) {
+    return 0;
+  }
+  const int numIcons = NUM_ICONS_TO_SHOW.GetValue();
+  if (numIcons <= 0) {
+    return 0;
+  }
+  return std::min<unsigned>(
+      static_cast<unsigned>(numIcons), MAX_WHEEL_NOTIFY_ICONS);
+}
+}  // namespace
+
+WheelNotifyIcon::WheelNotifyIcon() : m_fCycleTime(0), m_iCurrentIcon(0) {
   // Load( THEME->GetPathG("MusicWheelItem","WheelNotifyIcon") );
-  Load(THEME->GetPathG("WheelNotifyIcon", "icons 4x2"));
+  if (THEME == nullptr) {
+    WarnWheelNotifyIcon(
+        "SRC_AUDIT_FIX SRC-1273: WheelNotifyIcon loaded without theme "
+        "manager.");
+    return;
+  }
+  const std::string path = THEME->GetPathG("WheelNotifyIcon", "icons 4x2");
+  if (!path.empty()) {
+    Load(path);
+  }
   StopAnimating();
 }
 
+WheelNotifyIcon::WheelNotifyIcon(const WheelNotifyIcon& cpy)
+    : Sprite(cpy),
+      m_vIconsToShow(cpy.m_vIconsToShow),
+      m_fCycleTime(0),
+      m_iCurrentIcon(0) {}
+
 void WheelNotifyIcon::SetFlags(Flags flags) {
   m_vIconsToShow.clear();
+  m_fCycleTime = 0;
+  m_iCurrentIcon = 0;
 
   // push onto vector in highest to lowest priority
 
@@ -46,32 +94,30 @@ void WheelNotifyIcon::SetFlags(Flags flags) {
     m_vIconsToShow.push_back(edits);
   }
 
-  switch (flags.iStagesForSong) {
-    case 1:
-      break;
-    case 2:
-      m_vIconsToShow.push_back(long_ver);
-      break;
-    case 3:
-      m_vIconsToShow.push_back(marathon);
-      break;
-    default:
-      FAIL_M(ssprintf("flags.iStagesForSong = %d", flags.iStagesForSong));
+  if (flags.iStagesForSong == 2) {
+    m_vIconsToShow.push_back(long_ver);
+  } else if (flags.iStagesForSong >= 3) {
+    m_vIconsToShow.push_back(marathon);
+  } else if (flags.iStagesForSong < 0) {
+    WarnWheelNotifyIcon(
+        "SRC_AUDIT_FIX SRC-1274: WheelNotifyIcon ignored negative stage "
+        "count.");
   }
 
-  if (flags.bHasBeginnerOr1Meter && (bool)SHOW_TRAINING) {
+  if (flags.bHasBeginnerOr1Meter && GetWheelNotifyMetricBool(SHOW_TRAINING)) {
     m_vIconsToShow.push_back(training);
   }
 
   // If BLINK_BEST_ICON, make player's best icon blink if it's the only icon.
-  if (m_vIconsToShow.size() == 1 && BLINK_BEST_ICON) {
+  if (m_vIconsToShow.size() == 1 &&
+      GetWheelNotifyMetricBool(BLINK_BEST_ICON)) {
     if (m_vIconsToShow[0] >= best1 && m_vIconsToShow[0] <= best3) {
       m_vIconsToShow.push_back(empty);
     }
   }
 
-  const unsigned int newSize = std::min<unsigned int>(
-      m_vIconsToShow.size(), static_cast<unsigned int>(NUM_ICONS_TO_SHOW));
+  const unsigned int newSize =
+      std::min<unsigned int>(m_vIconsToShow.size(), GetMaxIconsToShow());
   m_vIconsToShow.resize(newSize);
 
   // Broadcast Set message so items can react. (futures) -aj
@@ -91,14 +137,24 @@ bool WheelNotifyIcon::EarlyAbortDraw() const {
 }
 
 void WheelNotifyIcon::Update(float fDeltaTime) {
-  if (m_vIconsToShow.size() > 0) {
+  if (m_vIconsToShow.size() > 0 && GetNumStates() > 0) {
     /* We should probably end up parsing the vector and then dynamically
      * insert flag icons based on "priority". Easy to do, hopefully
             - Midiman */
-    static uint_fast32_t updateCounter = 0;
-    updateCounter++;
-    const int index = updateCounter % m_vIconsToShow.size();
-    Sprite::SetState(m_vIconsToShow[index]);
+    if (std::isfinite(fDeltaTime) && fDeltaTime > 0) {
+      m_fCycleTime += fDeltaTime;
+    }
+    while (m_fCycleTime >= ICON_CYCLE_SECONDS && m_vIconsToShow.size() > 1) {
+      m_fCycleTime -= ICON_CYCLE_SECONDS;
+      m_iCurrentIcon = (m_iCurrentIcon + 1) % m_vIconsToShow.size();
+    }
+    if (m_iCurrentIcon >= m_vIconsToShow.size()) {
+      m_iCurrentIcon = 0;
+    }
+    const int state = static_cast<int>(m_vIconsToShow[m_iCurrentIcon]);
+    if (state >= 0 && state < GetNumStates()) {
+      Sprite::SetState(state);
+    }
   }
 
   Sprite::Update(fDeltaTime);
