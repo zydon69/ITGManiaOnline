@@ -3,6 +3,7 @@
 
 #include <jack/jack.h>
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -25,7 +26,7 @@ class RageSoundDriver_JACK : public RageSoundDriver {
   jack_port_t* port_l;
   jack_port_t* port_r;
 
-  int sample_rate;
+  std::atomic<int> sample_rate;
 
   // Helper for Init()
   std::string ConnectPorts();
@@ -35,6 +36,8 @@ class RageSoundDriver_JACK : public RageSoundDriver {
   static int ProcessTrampoline(jack_nframes_t nframes, void* arg);
   int SampleRateCallback(jack_nframes_t nframes);
   static int SampleRateTrampoline(jack_nframes_t nframes, void* arg);
+  void ShutdownCallback();
+  static void ShutdownTrampoline(void* arg);
 };
 
 #endif

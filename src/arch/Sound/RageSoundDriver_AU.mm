@@ -2,10 +2,16 @@
 #include "PrefsManager.h"
 #include "RageLog.h"
 #include "RageSoundConstants.h"
+#include "RageTimer.h"
 #include "archutils/Darwin/DarwinThreadHelpers.h"
 #include "global.h"
 
 #include <cstdint>
+#include <vector>
+
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
 
 #include <AudioToolbox/AudioServices.h>
 #include <CoreAudio/CoreAudio.h>
@@ -71,13 +77,18 @@ static void SetSampleRate(AudioUnit au, Float64 desiredRate) {
     return;
   }
 
+  if (size == 0 || size % sizeof(AudioValueRange) != 0 ||
+      size / sizeof(AudioValueRange) > 4096) {
+    LOG->Warn("Invalid available nominal sample-rate range size: %u", size);
+    return;
+  }
+
   const int num = size / sizeof(AudioValueRange);
-  AudioValueRange* ranges = new AudioValueRange[num];
+  std::vector<AudioValueRange> ranges(num);
 
   if ((error =
-           AudioObjectGetPropertyData(OutputDevice, &AvailableRatesAddr, 0, NULL, &size, ranges))) {
+           AudioObjectGetPropertyData(OutputDevice, &AvailableRatesAddr, 0, NULL, &size, ranges.data()))) {
     LOG->Warn("Couldn't get available nominal sample rates: %s", FormatOSError(error));
-    delete[] ranges;
     return;
   }
 
@@ -92,7 +103,6 @@ static void SetSampleRate(AudioUnit au, Float64 desiredRate) {
      * rate would be. The rate closest to the desired value? A multiple of 2?
      * For now give up if the desired sample rate isn't available. */
   }
-  delete[] ranges;
   if (bestRate == 0.0) {
     return;
   }
@@ -199,8 +209,17 @@ RageSoundDriver_AU::~RageSoundDriver_AU() {
     return;
   }
   if (m_bStarted) {
-    m_bDone = true;
-    m_Semaphore.Wait();
+    m_bDone.store(true, std::memory_order_release);
+    const uint64_t timeoutUsec = RageTimer::GetTimeSinceStartMicroseconds() + 2000000;
+    while (!m_Semaphore.TryWait()) {
+      if (RageTimer::GetTimeSinceStartMicroseconds() >= timeoutUsec) {
+        LOG->Warn("Timed out waiting for AudioUnit render callback to stop.");
+        break;
+      }
+#ifdef HAVE_UNISTD_H
+      usleep(1000);
+#endif
+    }
   }
   AudioUnitUninitialize(m_OutputUnit);
   AudioComponentInstanceDispose(m_OutputUnit);
@@ -222,10 +241,10 @@ void RageSoundDriver_AU::SetupDecodingThread() {
 
 float RageSoundDriver_AU::GetPlayLatency() const {
   OSStatus error;
-  UInt32 bufferSize;
+  UInt32 bufferSize = 0;
   AudioDeviceID OutputDevice;
   UInt32 size = sizeof(AudioDeviceID);
-  Float64 sampleRate;
+  Float64 sampleRate = 0.0;
 
   if ((error = AudioUnitGetProperty(
            m_OutputUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
@@ -244,6 +263,10 @@ float RageSoundDriver_AU::GetPlayLatency() const {
     LOG->Warn("Couldn't get the device sample rate: %s", FormatOSError(error));
     return 0.0f;
   }
+  if (sampleRate <= 0.0) {
+    LOG->Warn("Device reported an invalid sample rate: %.02f", sampleRate);
+    return 0.0f;
+  }
 
   AudioObjectPropertyAddress BufferAddr = {
       kAudioDevicePropertyBufferFrameSize, kAudioDevicePropertyScopeOutput,
@@ -256,7 +279,7 @@ float RageSoundDriver_AU::GetPlayLatency() const {
     bufferSize = 0;
   }
 
-  UInt32 frames;
+  UInt32 frames = 0;
 
   AudioObjectPropertyAddress LatencyAddr = {
       kAudioDevicePropertyLatency, kAudioDevicePropertyScopeOutput,
@@ -273,13 +296,14 @@ float RageSoundDriver_AU::GetPlayLatency() const {
       kAudioDevicePropertySafetyOffset, kAudioDevicePropertyScopeOutput,
       kAudioObjectPropertyElementWildcard};
 
-  bufferSize += frames;
+  uint64_t totalFrames = bufferSize;
+  totalFrames += frames;
   size = sizeof(UInt32);
   if ((error = AudioObjectGetPropertyData(OutputDevice, &SafetyAddr, 0, nullptr, &size, &frames))) {
     LOG->Warn("Couldn't get device safety offset: %s", FormatOSError(error));
     frames = 0;
   }
-  bufferSize += frames;
+  totalFrames += frames;
   size = sizeof(UInt32);
 
   do {
@@ -291,17 +315,21 @@ float RageSoundDriver_AU::GetPlayLatency() const {
       LOG->Warn("Device has no streams: %s", FormatOSError(error));
       break;
     }
+    if (size == 0 || size % sizeof(AudioStreamID) != 0 ||
+        size / sizeof(AudioStreamID) > 4096) {
+      LOG->Warn("Invalid stream list size: %u", size);
+      break;
+    }
     int num = size / sizeof(AudioStreamID);
     if (num == 0) {
       LOG->Warn("Device has no streams.");
       break;
     }
-    AudioStreamID* streams = new AudioStreamID[num];
+    std::vector<AudioStreamID> streams(num);
 
     if ((error =
-             AudioObjectGetPropertyData(OutputDevice, &StreamsAddr, 0, nullptr, &size, streams))) {
+             AudioObjectGetPropertyData(OutputDevice, &StreamsAddr, 0, nullptr, &size, streams.data()))) {
       LOG->Warn("Cannot get device's streams: %s", FormatOSError(error));
-      delete[] streams;
       break;
     }
 
@@ -314,17 +342,20 @@ float RageSoundDriver_AU::GetPlayLatency() const {
       LOG->Warn("Stream does not report latency: %s", FormatOSError(error));
       frames = 0;
     }
-    delete[] streams;
-    bufferSize += frames;
+    totalFrames += frames;
   } while (false);
 
-  return float(bufferSize / sampleRate);
+  return float(double(totalFrames) / sampleRate);
 }
 
 OSStatus RageSoundDriver_AU::Render(
     void* inRefCon, AudioUnitRenderActionFlags* ioActionFlags, const AudioTimeStamp* inTimeStamp,
     UInt32 inBusNumber, UInt32 inNumberFrames, AudioBufferList* ioData) {
   RageSoundDriver_AU* This = (RageSoundDriver_AU*)inRefCon;
+  if (This == nullptr || inTimeStamp == nullptr || ioData == nullptr ||
+      ioData->mNumberBuffers == 0 || ioData->mBuffers[0].mData == nullptr) {
+    return noErr;
+  }
 
   if (unlikely(This->m_pIOThread == nullptr)) {
     This->m_pIOThread = new RageThreadRegister("HAL I/O thread");
@@ -335,8 +366,10 @@ OSStatus RageSoundDriver_AU::Render(
   int64_t next = int64_t(This->m_TimeScale * inTimeStamp->mHostTime);
 
   This->Mix((float*)buf.mData, inNumberFrames, next, now);
-  if (unlikely(This->m_bDone)) {
-    AudioOutputUnitStop(This->m_OutputUnit);
+  if (unlikely(This->m_bDone.load(std::memory_order_acquire))) {
+    if (This->m_OutputUnit != nullptr) {
+      AudioOutputUnitStop(This->m_OutputUnit);
+    }
     This->m_Semaphore.Post();
   }
   return noErr;

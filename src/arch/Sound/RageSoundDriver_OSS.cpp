@@ -7,8 +7,12 @@
 
 #include "RageLog.h"
 #include "RageSound.h"
+#include "RageSoundConstants.h"
 #include "RageSoundManager.h"
 #include "global.h"
+
+#include <algorithm>
+#include <limits>
 
 #if defined(HAVE_UNISTD_H)
 #include <unistd.h>
@@ -32,8 +36,6 @@ const int channels = 2;
 const int bytes_per_frame = channels * 2; /* 16-bit */
 const int chunk_order = 12;
 const int num_chunks = 4;
-const int buffersize = num_chunks * (1 << (chunk_order - 1)); /* in bytes */
-const int buffersize_frames = buffersize / bytes_per_frame;   /* in frames */
 
 int RageSoundDriver_OSS::MixerThread_start(void* p) {
   ((RageSoundDriver_OSS*)p)->MixerThread();
@@ -48,8 +50,12 @@ void RageSoundDriver_OSS::MixerThread() {
     LOG->Trace("Set MixerThread nice value to %d", status);
   }
 
-  while (!shutdown) {
+  while (!shutdown.load(std::memory_order_acquire)) {
     while (GetData());
+
+    if (fd == -1) {
+      break;
+    }
 
     fd_set f;
     FD_ZERO(&f);
@@ -73,26 +79,35 @@ bool RageSoundDriver_OSS::GetData() {
   /* Look for a free buffer. */
   audio_buf_info ab;
   if (ioctl(fd, SNDCTL_DSP_GETOSPACE, &ab) == -1) {
-    FAIL_M(ssprintf("ioctl(SNDCTL_DSP_GETOSPACE): %s", strerror(errno)));
+    LOG->Warn("ioctl(SNDCTL_DSP_GETOSPACE): %s", strerror(errno));
+    return false;
   }
 
-  if (!ab.fragments) {
+  if (ab.fragments <= 0 || ab.fragsize <= 0) {
     return false;
   }
 
   const int chunksize = ab.fragsize;
-
-  static int16_t* buf = nullptr;
-  if (!buf) {
-    buf = new int16_t[chunksize / sizeof(int16_t)];
+  if (chunksize % bytes_per_frame != 0) {
+    LOG->Warn("OSS reported an invalid fragment size: %i", chunksize);
+    return false;
   }
 
-  this->Mix(buf, chunksize / bytes_per_frame, last_cursor_pos, GetPosition());
+  const int samples = chunksize / sizeof(int16_t);
+  if (samples <= 0 || samples > (std::numeric_limits<int>::max() / 2)) {
+    LOG->Warn("OSS reported an invalid sample count: %i", samples);
+    return false;
+  }
+  mix_buffer.resize(size_t(samples));
 
-  int wrote = write(fd, buf, chunksize);
+  this->Mix(mix_buffer.data(), chunksize / bytes_per_frame, last_cursor_pos, GetPosition());
+
+  int wrote = write(fd, mix_buffer.data(), chunksize);
   if (wrote != chunksize) {
-    FAIL_M(ssprintf(
-        "write didn't: %i (%s)", wrote, wrote == -1 ? strerror(errno) : ""));
+    LOG->Warn(
+        "OSS write failed: wrote %i of %i bytes%s%s", wrote, chunksize,
+        wrote == -1 ? ": " : "", wrote == -1 ? strerror(errno) : "");
+    return false;
   }
 
   /* Increment last_cursor_pos. */
@@ -104,15 +119,20 @@ bool RageSoundDriver_OSS::GetData() {
 /* XXX: There's a race on last_cursor_pos here: new data might be written after
  * the ioctl returns, incrementing last_cursor_pos. */
 int64_t RageSoundDriver_OSS::GetPosition() const {
-  ASSERT(fd != -1);
+  if (fd == -1) {
+    return last_cursor_pos;
+  }
 
   int delay;
   if (ioctl(fd, SNDCTL_DSP_GETODELAY, &delay) == -1) {
-    FAIL_M(ssprintf(
-        "RageSoundDriver_OSS: ioctl(SNDCTL_DSP_GETODELAY): %s",
-        strerror(errno)));
+    LOG->Warn("RageSoundDriver_OSS: ioctl(SNDCTL_DSP_GETODELAY): %s", strerror(errno));
+    return last_cursor_pos;
   }
 
+  if (delay < 0) {
+    LOG->Warn("RageSoundDriver_OSS: invalid output delay: %i", delay);
+    return last_cursor_pos;
+  }
   return last_cursor_pos - (delay / bytes_per_frame);
 }
 
@@ -139,12 +159,12 @@ std::string RageSoundDriver_OSS::CheckOSSVersion(int fd) {
    * loaded but actually use OSS.  ALSA returns a specific version; check that,
    * too.  It looks like that version is potentially a valid OSS version, so
    * check both.
-   */
+  */
 #ifndef FORCE_OSS
 #define ALSA_SNDRV_OSS_VERSION ((3 << 16) | (8 << 8) | (1 << 4) | (0))
   struct stat st;
-  if (version == ALSA_SNDRV_OSS_VERSION && stat("/proc/asound", &st) &&
-      (st.st_mode & S_IFDIR)) {
+  if (version == ALSA_SNDRV_OSS_VERSION && stat("/proc/asound", &st) == 0 &&
+      (st.st_mode & S_IFMT) == S_IFDIR) {
     return "RageSoundDriver_OSS: ALSA detected.  ALSA OSS emulation is buggy; "
            "use ALSA natively.";
   }
@@ -169,8 +189,9 @@ std::string RageSoundDriver_OSS::CheckOSSVersion(int fd) {
 
 RageSoundDriver_OSS::RageSoundDriver_OSS() {
   fd = -1;
-  shutdown = false;
+  shutdown.store(false, std::memory_order_relaxed);
   last_cursor_pos = 0;
+  samplerate = FALLBACK_SAMPLE_RATE;
 }
 
 std::string RageSoundDriver_OSS::Init() {
@@ -210,9 +231,9 @@ std::string RageSoundDriver_OSS::Init() {
   }
 
   // Determine the target sample rate based on preference
-  int targetSampleRate = PREFSMAN->m_iSoundPreferredSampleRate;
-  if (targetSampleRate == 0) {
-    targetSampleRate = kFallbackSampleRate;
+  int targetSampleRate = PREFSMAN != nullptr ? PREFSMAN->m_iSoundPreferredSampleRate.Get() : 0;
+  if (targetSampleRate <= 0) {
+    targetSampleRate = FALLBACK_SAMPLE_RATE;
   }
 
   samplerate = targetSampleRate;  // Attempt to set this rate
@@ -244,10 +265,14 @@ std::string RageSoundDriver_OSS::Init() {
 RageSoundDriver_OSS::~RageSoundDriver_OSS() {
   if (MixingThread.IsCreated()) {
     /* Signal the mixing thread to quit. */
-    shutdown = true;
-    LOG->Trace("Shutting down mixer thread ...");
+    shutdown.store(true, std::memory_order_release);
+    if (LOG != nullptr) {
+      LOG->Trace("Shutting down mixer thread ...");
+    }
     MixingThread.Wait();
-    LOG->Trace("Mixer thread shut down.");
+    if (LOG != nullptr) {
+      LOG->Trace("Mixer thread shut down.");
+    }
   }
 
   if (fd != -1) {

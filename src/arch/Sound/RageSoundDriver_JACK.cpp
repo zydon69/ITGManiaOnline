@@ -7,6 +7,7 @@
 #include "PrefsManager.h"
 #include "ProductInfo.h"
 #include "RageLog.h"
+#include "RageSoundConstants.h"
 #include "RageUtil.h"
 #include "global.h"
 
@@ -16,6 +17,7 @@ RageSoundDriver_JACK::RageSoundDriver_JACK() : RageSoundDriver() {
   client = nullptr;
   port_l = nullptr;
   port_r = nullptr;
+  sample_rate.store(FALLBACK_SAMPLE_RATE, std::memory_order_relaxed);
 }
 
 RageSoundDriver_JACK::~RageSoundDriver_JACK() {
@@ -41,8 +43,11 @@ std::string RageSoundDriver_JACK::Init() {
     return "Couldn't connect to JACK server";
   }
 
-  sample_rate = jack_get_sample_rate(client);
-  LOG->Trace("JACK connected at %u Hz", sample_rate);
+  sample_rate.store(jack_get_sample_rate(client), std::memory_order_release);
+  if (LOG != nullptr) {
+    LOG->Trace("JACK connected at %u Hz",
+               sample_rate.load(std::memory_order_acquire));
+  }
 
   // Start this before callbacks
   StartDecodeThread();
@@ -58,8 +63,7 @@ std::string RageSoundDriver_JACK::Init() {
     goto out_close;
   }
 
-  // TODO Set a jack_on_shutdown callback as well?  Probably just stop
-  // caring about sound altogether if that happens.
+  jack_on_shutdown(client, ShutdownTrampoline, this);
 
   // Create output ports
   port_l = jack_port_register(
@@ -142,18 +146,19 @@ std::string RageSoundDriver_JACK::ConnectPorts() {
     // "aliases" in the docs.)
     for (const std::string& portName : portNames) {
       jack_port_t* out = jack_port_by_name(client, portName.c_str());
+      if (out == nullptr) {
+        continue;
+      }
       // Make sure the port is a sink.
       if (!(jack_port_flags(out) & JackPortIsInput)) {
         continue;
       }
 
-      if (out != nullptr) {
-        if (port_out_l == nullptr) {
-          port_out_l = jack_port_name(out);
-        } else {
-          port_out_r = jack_port_name(out);
-          break;
-        }
+      if (port_out_l == nullptr) {
+        port_out_l = jack_port_name(out);
+      } else {
+        port_out_r = jack_port_name(out);
+        break;
       }
     }
     if (port_out_l == nullptr) {
@@ -186,9 +191,7 @@ int64_t RageSoundDriver_JACK::GetPosition() const {
 }
 
 int RageSoundDriver_JACK::GetSampleRate() const {
-  // For now, let's pretend there isn't a race condition between this and
-  // SampleRateCallback().
-  return sample_rate;
+  return sample_rate.load(std::memory_order_acquire);
 }
 
 int RageSoundDriver_JACK::ProcessCallback(jack_nframes_t nframes) {
@@ -199,15 +202,17 @@ int RageSoundDriver_JACK::ProcessCallback(jack_nframes_t nframes) {
 
   jack_time_t now = jack_last_frame_time(client);
 
-  MixDeinterlaced(bufs, 2, nframes, now, now + nframes * 2);
+  MixDeinterlaced(bufs, 2, nframes, now, now + nframes);
 
   return 0;
 }
 
 int RageSoundDriver_JACK::SampleRateCallback(jack_nframes_t nframes) {
-  // For now, let's pretend there isn't a race condition between this and
-  // GetSampleRate().
-  sample_rate = jack_get_sample_rate(client);
+  if (client != nullptr) {
+    sample_rate.store(jack_get_sample_rate(client), std::memory_order_release);
+  } else {
+    sample_rate.store(nframes, std::memory_order_release);
+  }
   return 0;
 }
 
@@ -219,6 +224,16 @@ int RageSoundDriver_JACK::ProcessTrampoline(jack_nframes_t nframes, void* arg) {
 int RageSoundDriver_JACK::SampleRateTrampoline(
     jack_nframes_t nframes, void* arg) {
   return ((RageSoundDriver_JACK*)arg)->SampleRateCallback(nframes);
+}
+
+void RageSoundDriver_JACK::ShutdownCallback() {
+  client = nullptr;
+  port_l = nullptr;
+  port_r = nullptr;
+}
+
+void RageSoundDriver_JACK::ShutdownTrampoline(void* arg) {
+  ((RageSoundDriver_JACK*)arg)->ShutdownCallback();
 }
 
 /*

@@ -1,8 +1,10 @@
 #ifndef RAGE_SOUND_WAVEOUT
 #define RAGE_SOUND_WAVEOUT
 
+#include <atomic>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "RageSoundDriver.h"
 #include "RageThreads.h"
@@ -10,9 +12,10 @@
 class RageSoundDriver_OSS : public RageSoundDriver {
   int fd;
 
-  bool shutdown;
+  std::atomic<bool> shutdown;
   int last_cursor_pos;
   int samplerate;
+  std::vector<int16_t> mix_buffer;
 
   static int MixerThread_start(void* p);
   void MixerThread();

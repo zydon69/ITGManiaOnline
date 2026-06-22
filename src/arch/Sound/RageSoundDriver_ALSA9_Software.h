@@ -1,8 +1,10 @@
 #ifndef RAGE_SOUND_ALSA9_SOFTWARE_H
 #define RAGE_SOUND_ALSA9_SOFTWARE_H
 
+#include <atomic>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "ALSA9Helpers.h"
 #include "RageSound.h"
@@ -27,9 +29,10 @@ class RageSoundDriver_ALSA9_Software : public RageSoundDriver {
   void MixerThread();
   bool GetData();
 
-  bool m_bShutdown;
+  std::atomic<bool> m_bShutdown;
   int m_iSampleRate;
   Alsa9Buf* m_pPCM;
+  std::vector<int16_t> m_MixBuffer;
   RageThread m_MixingThread;
 };
 

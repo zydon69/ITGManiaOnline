@@ -4,12 +4,14 @@
 #include <sys/time.h>
 
 #include <cstdint>
+#include <limits>
 #include <string>
 
 #include "ALSA9Dynamic.h"
 #include "PrefsManager.h"
 #include "RageLog.h"
 #include "RageSound.h"
+#include "RageSoundConstants.h"
 #include "RageSoundManager.h"
 #include "RageTimer.h"
 #include "RageUtil.h"
@@ -38,8 +40,8 @@ int RageSoundDriver_ALSA9_Software::MixerThread_start(void* p) {
 void RageSoundDriver_ALSA9_Software::MixerThread() {
   setpriority(PRIO_PROCESS, 0, -15);
 
-  while (!m_bShutdown) {
-    while (!m_bShutdown && GetData());
+  while (!m_bShutdown.load(std::memory_order_acquire)) {
+    while (!m_bShutdown.load(std::memory_order_acquire) && GetData());
 
     m_pPCM->WaitUntilFramesCanBeFilled(100);
   }
@@ -52,22 +54,21 @@ bool RageSoundDriver_ALSA9_Software::GetData() {
     return false;
   }
 
-  static int16_t* buf = nullptr;
-  static int bufsize = 0;
-  if (buf && bufsize < frames_to_fill) {
-    delete[] buf;
-    buf = nullptr;
+  if (frames_to_fill >
+      std::numeric_limits<int>::max() / samples_per_frame) {
+    return false;
   }
-  if (!buf) {
-    buf = new int16_t[frames_to_fill * samples_per_frame];
-    bufsize = frames_to_fill;
+  const size_t samples =
+      static_cast<size_t>(frames_to_fill) * samples_per_frame;
+  if (m_MixBuffer.size() < samples) {
+    m_MixBuffer.resize(samples);
   }
 
   const int64_t play_pos = m_pPCM->GetPlayPos();
   const int64_t cur_play_pos = m_pPCM->GetPosition();
 
-  this->Mix(buf, frames_to_fill, play_pos, cur_play_pos);
-  m_pPCM->Write(buf, frames_to_fill);
+  this->Mix(m_MixBuffer.data(), frames_to_fill, play_pos, cur_play_pos);
+  m_pPCM->Write(m_MixBuffer.data(), frames_to_fill);
 
   return true;
 }
@@ -82,7 +83,7 @@ void RageSoundDriver_ALSA9_Software::SetupDecodingThread() {
 
 RageSoundDriver_ALSA9_Software::RageSoundDriver_ALSA9_Software() {
   m_pPCM = nullptr;
-  m_bShutdown = false;
+  m_bShutdown.store(false, std::memory_order_relaxed);
 }
 
 std::string RageSoundDriver_ALSA9_Software::Init() {
@@ -95,19 +96,23 @@ std::string RageSoundDriver_ALSA9_Software::Init() {
   std::string sys;
   int vers;
   GetKernel(sys, vers);
-  LOG->Trace("OS: %s ver %06i", sys.c_str(), vers);
+  if (LOG != nullptr) {
+    LOG->Trace("OS: %s ver %06i", sys.c_str(), vers);
+  }
   if (sys == "Linux" && vers >= 20600) {
     g_iMaxWriteahead = g_iMaxWriteahead_linux_26;
   }
 
-  if (PREFSMAN->m_iSoundWriteAhead) {
+  if (PREFSMAN != nullptr && PREFSMAN->m_iSoundWriteAhead > 0) {
     g_iMaxWriteahead = PREFSMAN->m_iSoundWriteAhead;
   }
+  g_iMaxWriteahead = std::clamp<unsigned>(g_iMaxWriteahead, num_chunks, 262144);
 
   m_pPCM = new Alsa9Buf();
   sError = m_pPCM->Init(
       channels, g_iMaxWriteahead, g_iMaxWriteahead / num_chunks,
-      PREFSMAN->m_iSoundPreferredSampleRate);
+      PREFSMAN != nullptr ? PREFSMAN->m_iSoundPreferredSampleRate.Get()
+                          : FALLBACK_SAMPLE_RATE);
   if (sError != "") {
     return sError;
   }
@@ -125,10 +130,14 @@ std::string RageSoundDriver_ALSA9_Software::Init() {
 RageSoundDriver_ALSA9_Software::~RageSoundDriver_ALSA9_Software() {
   if (m_MixingThread.IsCreated()) {
     /* Signal the mixing thread to quit. */
-    m_bShutdown = true;
-    LOG->Trace("Shutting down mixer thread ...");
+    m_bShutdown.store(true, std::memory_order_release);
+    if (LOG != nullptr) {
+      LOG->Trace("Shutting down mixer thread ...");
+    }
     m_MixingThread.Wait();
-    LOG->Trace("Mixer thread shut down.");
+    if (LOG != nullptr) {
+      LOG->Trace("Mixer thread shut down.");
+    }
   }
 
   delete m_pPCM;
@@ -137,6 +146,9 @@ RageSoundDriver_ALSA9_Software::~RageSoundDriver_ALSA9_Software() {
 }
 
 float RageSoundDriver_ALSA9_Software::GetPlayLatency() const {
+  if (m_iSampleRate <= 0) {
+    return 0.0f;
+  }
   return float(g_iMaxWriteahead) / m_iSampleRate;
 }
 

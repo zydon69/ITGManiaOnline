@@ -4,6 +4,7 @@
 #include <AudioUnit/AudioUnit.h>
 #include <CoreFoundation/CoreFoundation.h>
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -33,7 +34,7 @@ class RageSoundDriver_AU : public RageSoundDriver {
   double m_TimeScale;
   AudioUnit m_OutputUnit;
   int m_iSampleRate;
-  bool m_bDone;
+  std::atomic<bool> m_bDone;
   bool m_bStarted;
   RageThreadRegister* m_pIOThread;
   RageThreadRegister* m_pNotificationThread;
