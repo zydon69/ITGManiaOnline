@@ -703,7 +703,7 @@ function ITGOnline:RefreshDebugFlags(force)
 			["ITGOnlineDebug"] = {
 				["OnlineTrace"] = "false",
 				["ScoreTrace"] = "false",
-				["ReadyFlow"] = "true",
+				["ReadyFlow"] = "false",
 			}
 		})
 	end
@@ -713,7 +713,7 @@ function ITGOnline:RefreshDebugFlags(force)
 
 	self.debugOnlineTrace = parse_bool(section["OnlineTrace"], false)
 	self.debugScoreTrace = parse_bool(section["ScoreTrace"], false)
-	self.debugReadyFlow = parse_bool(section["ReadyFlow"], true)
+	self.debugReadyFlow = parse_bool(section["ReadyFlow"], false)
 end
 
 local function online_flow_trace(message)
