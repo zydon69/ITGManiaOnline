@@ -5,9 +5,11 @@
 
 #include <cstdint>
 #include <map>
+#include <limits>
 #include <string>
 #include <vector>
 
+#include "RageSoundConstants.h"
 #include "RageSoundReader.h"
 
 class RageSoundReader_Chain : public RageSoundReader {
@@ -19,7 +21,7 @@ class RageSoundReader_Chain : public RageSoundReader {
   /* Set the preferred sample rate.  This will only be used if the source sounds
    * use different sample rates. */
   void SetPreferredSampleRate(int iSampleRate) {
-    m_iPreferredSampleRate = iSampleRate;
+    m_iPreferredSampleRate = iSampleRate > 0 ? iSampleRate : FALLBACK_SAMPLE_RATE;
   }
 
   int LoadSound(std::string sPath);
@@ -63,7 +65,17 @@ class RageSoundReader_Chain : public RageSoundReader {
     RageSoundReader* pSound;  // nullptr if not activated
 
     int GetOffsetFrame(int iSampleRate) const {
-      return int(int64_t(iOffsetMS) * iSampleRate / 1000);
+      if (iSampleRate <= 0) {
+        iSampleRate = FALLBACK_SAMPLE_RATE;
+      }
+      const int64_t frames = int64_t(iOffsetMS) * iSampleRate / 1000;
+      if (frames > std::numeric_limits<int>::max()) {
+        return std::numeric_limits<int>::max();
+      }
+      if (frames < std::numeric_limits<int>::min()) {
+        return std::numeric_limits<int>::min();
+      }
+      return static_cast<int>(frames);
     }
     bool operator<(const Sound& rhs) const { return iOffsetMS < rhs.iOffsetMS; }
   };
@@ -74,7 +86,7 @@ class RageSoundReader_Chain : public RageSoundReader {
   unsigned m_iNextSound;
   std::vector<Sound*> m_apActiveSounds;
 
-  void ActivateSound(Sound* s);
+  bool ActivateSound(Sound* s);
   void ReleaseSound(Sound* s);
 };
 

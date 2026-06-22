@@ -3,17 +3,41 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <vector>
 
 #include "RageLog.h"
+#include "RageSoundConstants.h"
 #include "RageSoundMixBuffer.h"
 #include "RageSoundReader.h"
 #include "RageSoundReader_Pan.h"
 #include "RageSoundReader_Resample_Good.h"
 #include "RageUtil.h"
 #include "global.h"
+
+namespace {
+bool IsUsableRatio(float ratio) {
+  return std::isfinite(ratio) && ratio > 0.0f;
+}
+
+int AdvanceSourceFrame(int sourceFrame, int streamFrames, float ratio) {
+  if (streamFrames <= 0 || !IsUsableRatio(ratio)) {
+    return sourceFrame;
+  }
+  const double delta = static_cast<double>(streamFrames) * ratio;
+  if (delta > static_cast<double>(std::numeric_limits<int>::max())) {
+    return std::numeric_limits<int>::max();
+  }
+  const int rounded = static_cast<int>(std::lround(delta));
+  if (sourceFrame > std::numeric_limits<int>::max() - rounded) {
+    return std::numeric_limits<int>::max();
+  }
+  return sourceFrame + rounded;
+}
+}  // namespace
 
 RageSoundReader_Merge::RageSoundReader_Merge() {
   m_iSampleRate = -1;
@@ -36,11 +60,27 @@ RageSoundReader_Merge::RageSoundReader_Merge(const RageSoundReader_Merge& cpy)
   m_fCurrentStreamToSourceRatio = cpy.m_fCurrentStreamToSourceRatio;
 
   for (const RageSoundReader* it : cpy.m_aSounds) {
-    m_aSounds.push_back(it->Copy());
+    RageSoundReader* copy = it != nullptr ? it->Copy() : nullptr;
+    if (it != nullptr && copy == nullptr) {
+      for (RageSoundReader* sound : m_aSounds) {
+        delete sound;
+      }
+      m_aSounds.clear();
+      return;
+    }
+    if (copy != nullptr) {
+      m_aSounds.push_back(copy);
+    }
   }
 }
 
 void RageSoundReader_Merge::AddSound(RageSoundReader* pSound) {
+  if (pSound == nullptr) {
+    if (LOG != nullptr) {
+      LOG->Warn("RageSoundReader_Merge::AddSound: null sound reader");
+    }
+    return;
+  }
   m_aSounds.push_back(pSound);
 }
 
@@ -49,6 +89,9 @@ int RageSoundReader_Merge::GetSampleRateInternal() const {
   // TODO: Convert to a set and compare values?
   int iRate = -1;
   for (const RageSoundReader* it : m_aSounds) {
+    if (it == nullptr) {
+      continue;
+    }
     if (iRate == -1) {
       iRate = it->GetSampleRate();
     } else if (iRate != it->GetSampleRate()) {
@@ -59,11 +102,17 @@ int RageSoundReader_Merge::GetSampleRateInternal() const {
 }
 
 void RageSoundReader_Merge::Finish(int iPreferredSampleRate) {
+  if (iPreferredSampleRate <= 0) {
+    iPreferredSampleRate = FALLBACK_SAMPLE_RATE;
+  }
   /* Figure out how many channels we have.  All sounds must either have 1 or 2
    * channels, which will be converted as needed, or have the same number of
    * channels. */
   m_iChannels = 1;
   for (RageSoundReader* it : m_aSounds) {
+    if (it == nullptr) {
+      continue;
+    }
     m_iChannels = std::max(m_iChannels, it->GetNumChannels());
   }
 
@@ -75,7 +124,10 @@ void RageSoundReader_Merge::Finish(int iPreferredSampleRate) {
    */
   m_iSampleRate = GetSampleRateInternal();
   if (m_iSampleRate == -1) {
-    for (RageSoundReader* it : m_aSounds) {
+    for (RageSoundReader*& it : m_aSounds) {
+      if (it == nullptr) {
+        continue;
+      }
       RageSoundReader_Resample_Good* pResample =
           new RageSoundReader_Resample_Good(it, iPreferredSampleRate);
       it = pResample;
@@ -86,8 +138,8 @@ void RageSoundReader_Merge::Finish(int iPreferredSampleRate) {
 
   /* If we have two channels, and any sounds have only one, convert them by
    * adding a Pan filter. */
-  for (RageSoundReader* it : m_aSounds) {
-    if (it->GetNumChannels() != this->GetNumChannels()) {
+  for (RageSoundReader*& it : m_aSounds) {
+    if (it != nullptr && it->GetNumChannels() != this->GetNumChannels()) {
       it = new RageSoundReader_Pan(it);
     }
   }
@@ -97,17 +149,22 @@ void RageSoundReader_Merge::Finish(int iPreferredSampleRate) {
   if (m_iChannels > 2) {
     std::vector<RageSoundReader*> aSounds;
     for (RageSoundReader* it : m_aSounds) {
-      if (it->GetNumChannels() != m_iChannels) {
-        LOG->Warn(
-            "Discarded sound with %i channels, not %i", it->GetNumChannels(),
-            m_iChannels);
+      if (it != nullptr && it->GetNumChannels() != m_iChannels) {
+        if (LOG != nullptr) {
+          LOG->Warn(
+              "Discarded sound with %i channels, not %i", it->GetNumChannels(),
+              m_iChannels);
+        }
         delete it;
         it = nullptr;
-      } else {
+      } else if (it != nullptr) {
         aSounds.push_back(it);
       }
     }
     m_aSounds = aSounds;
+  }
+  if (m_iSampleRate <= 0) {
+    m_iSampleRate = iPreferredSampleRate;
   }
 }
 
@@ -117,6 +174,9 @@ int RageSoundReader_Merge::SetPosition(int iFrame) {
   int iRet = 0;
   for (int i = 0; i < (int)m_aSounds.size(); ++i) {
     RageSoundReader* pSound = m_aSounds[i];
+    if (pSound == nullptr) {
+      continue;
+    }
     int iThisRet = pSound->SetPosition(iFrame);
     if (iThisRet == -1) {
       return -1;
@@ -133,7 +193,8 @@ bool RageSoundReader_Merge::SetProperty(
     const std::string& sProperty, float fValue) {
   bool bRet = false;
   for (unsigned i = 0; i < m_aSounds.size(); ++i) {
-    if (m_aSounds[i]->SetProperty(sProperty, fValue)) {
+    if (m_aSounds[i] != nullptr &&
+        m_aSounds[i]->SetProperty(sProperty, fValue)) {
       bRet = true;
     }
   }
@@ -142,7 +203,12 @@ bool RageSoundReader_Merge::SetProperty(
 }
 
 static float Difference(float a, float b) { return std::abs(a - b); }
-static int Difference(int a, int b) { return std::abs(a - b); }
+static uint64_t Difference(int a, int b) {
+  if (a >= b) {
+    return static_cast<uint64_t>(a) - static_cast<uint64_t>(b);
+  }
+  return static_cast<uint64_t>(b) - static_cast<uint64_t>(a);
+}
 
 /*
  * If the audio position drifts apart further than ERROR_CORRECTION_THRESHOLD
@@ -169,6 +235,13 @@ static const int ERROR_CORRECTION_THRESHOLD = 16;
 /* As we iterate through the sound tree, we'll find that we need data from
  * different sounds; a sound may be needed by more than one other sound. */
 int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
+  if (pBuffer == nullptr || iFrames < 0 || m_iChannels == 0 ||
+      m_iSampleRate <= 0 || !IsUsableRatio(m_fCurrentStreamToSourceRatio)) {
+    return ERROR;
+  }
+  if (iFrames == 0) {
+    return 0;
+  }
   if (m_aSounds.empty()) {
     return END_OF_FILE;
   }
@@ -182,8 +255,14 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
   std::vector<float> aRatios(m_aSounds.size());
 
   for (size_t i = 0; i < m_aSounds.size(); ++i) {
+    if (m_aSounds[i] == nullptr) {
+      return ERROR;
+    }
     aNextSourceFrames[i] = m_aSounds[i]->GetNextSourceFrame();
     aRatios[i] = m_aSounds[i]->GetStreamToSourceRatio();
+    if (!IsUsableRatio(aRatios[i])) {
+      return ERROR;
+    }
   }
 
   /* GetNextSourceFrame for each active sound should be the same.  If any
@@ -222,8 +301,9 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
     RageSoundReader* pSound = m_aSounds.front();
     iFrames = pSound->Read(pBuffer, iFrames);
     if (iFrames > 0) {
-      m_iNextSourceFrame +=
-          static_cast<int>((iFrames * m_fCurrentStreamToSourceRatio) + 0.5);
+      m_iNextSourceFrame =
+          AdvanceSourceFrame(
+              m_iNextSourceFrame, iFrames, m_fCurrentStreamToSourceRatio);
     }
     return iFrames;
   }
@@ -231,6 +311,9 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
   RageSoundMixBuffer mix;
   float Buffer[2048];
   iFrames = std::min(iFrames, static_cast<int>(ARRAYLEN(Buffer) / m_iChannels));
+  if (iFrames <= 0) {
+    return ERROR;
+  }
 
   /* Read iFrames from each sound. */
   for (size_t i = 0; i < m_aSounds.size(); ++i) {
@@ -262,6 +345,9 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
         }
         break;
       }
+      if (iGotFrames == 0) {
+        break;
+      }
 
       mix.SetWriteOffset(iFramesRead * pSound->GetNumChannels());
       mix.write(Buffer, iGotFrames * pSound->GetNumChannels());
@@ -275,10 +361,13 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
 
   /* Read mixed frames into the output buffer. */
   int iMaxFramesRead = mix.size() / m_iChannels;
+  if (iMaxFramesRead <= 0) {
+    return 0;
+  }
   mix.read(pBuffer);
 
-  m_iNextSourceFrame +=
-      static_cast<int>((iMaxFramesRead * m_fCurrentStreamToSourceRatio) + 0.5);
+  m_iNextSourceFrame = AdvanceSourceFrame(
+      m_iNextSourceFrame, iMaxFramesRead, m_fCurrentStreamToSourceRatio);
 
   return iMaxFramesRead;
 }
@@ -286,7 +375,9 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
 int RageSoundReader_Merge::GetLength() const {
   int iLength = 0;
   for (unsigned i = 0; i < m_aSounds.size(); ++i) {
-    iLength = std::max(iLength, m_aSounds[i]->GetLength());
+    if (m_aSounds[i] != nullptr) {
+      iLength = std::max(iLength, m_aSounds[i]->GetLength());
+    }
   }
   return iLength;
 }
@@ -294,7 +385,9 @@ int RageSoundReader_Merge::GetLength() const {
 int RageSoundReader_Merge::GetLength_Fast() const {
   int iLength = 0;
   for (unsigned i = 0; i < m_aSounds.size(); ++i) {
-    iLength = std::max(iLength, m_aSounds[i]->GetLength_Fast());
+    if (m_aSounds[i] != nullptr) {
+      iLength = std::max(iLength, m_aSounds[i]->GetLength_Fast());
+    }
   }
   return iLength;
 }
