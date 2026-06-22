@@ -28,25 +28,43 @@ local function final_ranking_trace(message)
 end
 
 local function final_results()
-	if not (ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.play_state) then
-		final_ranking_trace("final_results_empty reason=missing_context"
-			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-			.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil)
-			.. " hasPlayState=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.play_state ~= nil))
-		return {}
+	local results = nil
+	local source = "current_room"
+	local phase = nil
+	local roomId = ITGOnline and ITGOnline.currentRoomId or nil
+
+	if ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.play_state then
+		results = ITGOnline.currentRoom.play_state.final_results
+		phase = ITGOnline.currentRoom.phase
 	end
 
-	local results = ITGOnline.currentRoom.play_state.final_results
-	if type(results) ~= "table" then
-		final_ranking_trace("final_results_empty reason=invalid_results"
-			.. " type=" .. tostring(type(results))
-			.. " phase=" .. tostring(ITGOnline.currentRoom.phase or "nil"))
-		return {}
+	if type(results) ~= "table" or #results == 0 then
+		local cached = ITGOnline and ITGOnline.GetFinalLeaderboardCache and ITGOnline:GetFinalLeaderboardCache(roomId) or nil
+		if cached and type(cached.rows) == "table" and #cached.rows > 0 then
+			results = cached.rows
+			source = "cache:" .. tostring(cached.source or "unknown")
+			roomId = cached.room_id or roomId
+			final_ranking_trace("final_results_cache_hit"
+				.. " room=" .. tostring(roomId or "nil")
+				.. " rows=" .. tostring(#results)
+				.. " roundKey=" .. tostring(cached.round_key or "nil")
+				.. " version=" .. tostring(cached.version_ms or "nil"))
+		else
+			final_ranking_trace("final_results_empty"
+				.. " reason=missing_current_and_cache"
+				.. " room=" .. tostring(roomId or "nil")
+				.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil)
+				.. " hasPlayState=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.play_state ~= nil)
+				.. " currentType=" .. tostring(type(results))
+				.. " phase=" .. tostring(phase or "nil"))
+			return {}
+		end
 	end
 
 	final_ranking_trace("final_results_begin raw=" .. tostring(#results)
-		.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-		.. " phase=" .. tostring(ITGOnline.currentRoom.phase or "nil"))
+		.. " room=" .. tostring(roomId or "nil")
+		.. " phase=" .. tostring(phase or "nil")
+		.. " source=" .. tostring(source))
 	local normalized = {}
 	for index, result in ipairs(results) do
 		if type(result) == "table" then
@@ -67,7 +85,8 @@ local function final_results()
 		return (tonumber(a.rank) or 0) < (tonumber(b.rank) or 0)
 	end)
 
-	final_ranking_trace("final_results_end rows=" .. tostring(#normalized))
+	final_ranking_trace("final_results_end rows=" .. tostring(#normalized)
+		.. " source=" .. tostring(source))
 	return normalized
 end
 

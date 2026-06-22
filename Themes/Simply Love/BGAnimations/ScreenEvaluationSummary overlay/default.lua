@@ -52,12 +52,15 @@ uniqueProfilesUsedForPlayer = function(pn)
 end
 
 local online_final_results = function()
-	if not (ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.play_state) then
-		return {}
+	local results = nil
+	if ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.play_state then
+		results = ITGOnline.currentRoom.play_state.final_results
 	end
-
-	local results = ITGOnline.currentRoom.play_state.final_results
-	if type(results) ~= "table" then
+	if type(results) ~= "table" or #results == 0 then
+		local cached = ITGOnline and ITGOnline.GetFinalLeaderboardCache and ITGOnline:GetFinalLeaderboardCache(ITGOnline.currentRoomId) or nil
+		results = cached and cached.rows or nil
+	end
+	if type(results) ~= "table" or #results == 0 then
 		return {}
 	end
 
@@ -68,6 +71,7 @@ local online_final_results = function()
 			rank = tonumber(result.rank) or index,
 			name = online_display_name(user, "Player"),
 			score = math.floor(tonumber(result.score) or 0),
+			displayed_percent = tonumber(result.displayed_percent or result.displayedPercent or result.score_percent),
 			accuracy = tonumber(result.accuracy) or 0,
 			failed = result.failed and true or false,
 		}

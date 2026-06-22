@@ -218,6 +218,24 @@ ITGOnline.lastDebugConfigPollAt = ITGOnline.lastDebugConfigPollAt or 0
 ITGOnline.debugConfigPollIntervalSeconds = ITGOnline.debugConfigPollIntervalSeconds or 1.0
 ITGOnline.lastHudScoreTraceSecond = ITGOnline.lastHudScoreTraceSecond or -1
 ITGOnline.cachedLobbySearchPayload = ITGOnline.cachedLobbySearchPayload or { lobbies = {}, onlinePlayers = {} }
+ITGOnline.finalLeaderboardCache = ITGOnline.finalLeaderboardCache or {}
+ITGOnline.latestFinalLeaderboardCache = ITGOnline.latestFinalLeaderboardCache or nil
+ITGOnline.finalLeaderboardCacheSignature = ITGOnline.finalLeaderboardCacheSignature or ""
+
+local function online_table_copy(value, depth)
+	if type(value) ~= "table" then return value end
+	depth = tonumber(depth) or 0
+	if depth > 5 then return nil end
+	local copy = {}
+	for key, item in pairs(value) do
+		if type(item) == "table" then
+			copy[key] = online_table_copy(item, depth + 1)
+		else
+			copy[key] = item
+		end
+	end
+	return copy
+end
 
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -4347,6 +4365,10 @@ function ITGOnline:BroadcastLeaderboardFromRoom(room, source)
 		return false
 	end
 
+	if self.StoreFinalLeaderboardFromRoom then
+		self:StoreFinalLeaderboardFromRoom(room, "broadcast_room_leaderboard:" .. tostring(source or "unknown"))
+	end
+
 	local leaderboard = room.live_scores or room.top_scores or room.leaderboard
 	if not leaderboard or #leaderboard == 0 then
 		online_flow_trace_throttled("broadcast_room_leaderboard_empty", 2.0,
@@ -4398,6 +4420,106 @@ function ITGOnline:BroadcastLeaderboardFromRoom(room, source)
 		leaderboard_version_ms = version,
 	})
 	return true
+end
+
+function ITGOnline:FinalLeaderboardResultsFrom(source)
+	if type(source) ~= "table" then return nil end
+	if type(source.finalResults) == "table" then return source.finalResults end
+	if type(source.final_results) == "table" then return source.final_results end
+	if type(source.play_state) == "table" and type(source.play_state.final_results) == "table" then
+		return source.play_state.final_results
+	end
+	if type(source.playState) == "table" and type(source.playState.final_results) == "table" then
+		return source.playState.final_results
+	end
+	return nil
+end
+
+function ITGOnline:StoreFinalLeaderboardFromRoom(source, cacheSource)
+	if type(source) ~= "table" then
+		online_flow_trace("final_leaderboard_cache_skip reason=invalid_source source=" .. tostring(cacheSource or "unknown"))
+		return false
+	end
+
+	local playState = type(source.play_state) == "table" and source.play_state
+		or type(source.playState) == "table" and source.playState
+		or {}
+	local songInfo = type(source.songInfo) == "table" and source.songInfo
+		or type(source.selected_song) == "table" and source.selected_song
+		or {}
+	local phase = source.phase or source.status or source.readyPhase or playState.phase
+	if self.NormalizeRoomPhase then
+		phase = self:NormalizeRoomPhase(phase)
+	end
+	if phase ~= "results" then
+		return false
+	end
+
+	local results = self:FinalLeaderboardResultsFrom(source)
+	if type(results) ~= "table" or #results == 0 then
+		online_flow_trace("final_leaderboard_cache_skip reason=empty_results source=" .. tostring(cacheSource or "unknown")
+			.. " room=" .. tostring(source.roomId or source.room_id or source.id or self.currentRoomId or "nil")
+			.. " phase=" .. tostring(phase or "nil"))
+		return false
+	end
+
+	local roomId = tostring(source.roomId or source.room_id or source.id or self.currentRoomId or "")
+	local roundKey = tostring(playState.round_key
+		or playState.round_id
+		or playState.game_session_id
+		or source.roundKey
+		or source.round_key
+		or songInfo.roundId
+		or songInfo.round_id
+		or songInfo.selectedAt
+		or songInfo.selected_at
+		or "")
+	local version = tonumber(source.leaderboard_version_ms
+		or source.live_score_version_ms
+		or source.updated_version_ms
+		or playState.version_ms
+		or playState.updated_version_ms) or 0
+
+	local cache = {
+		room_id = roomId,
+		round_key = roundKey,
+		version_ms = version,
+		source = tostring(cacheSource or "unknown"),
+		stored_at = GetTimeSinceStart and GetTimeSinceStart() or 0,
+		rows = online_table_copy(results, 0) or {},
+	}
+	self.finalLeaderboardCache = self.finalLeaderboardCache or {}
+	if roomId ~= "" then
+		self.finalLeaderboardCache[roomId] = cache
+	end
+	self.latestFinalLeaderboardCache = cache
+
+	local signature = table.concat({
+		roomId,
+		roundKey,
+		tostring(version),
+		tostring(#results),
+		tostring(cacheSource or "unknown"),
+	}, "|")
+	if signature ~= tostring(self.finalLeaderboardCacheSignature or "") then
+		self.finalLeaderboardCacheSignature = signature
+		online_flow_trace("final_leaderboard_cache_store"
+			.. " source=" .. tostring(cacheSource or "unknown")
+			.. " room=" .. tostring(roomId ~= "" and roomId or "nil")
+			.. " roundKey=" .. tostring(roundKey ~= "" and roundKey or "nil")
+			.. " version=" .. tostring(version)
+			.. " rows=" .. tostring(#results))
+	end
+	return true
+end
+
+function ITGOnline:GetFinalLeaderboardCache(roomId)
+	self.finalLeaderboardCache = self.finalLeaderboardCache or {}
+	local key = tostring(roomId or self.currentRoomId or "")
+	if key ~= "" and self.finalLeaderboardCache[key] then
+		return self.finalLeaderboardCache[key]
+	end
+	return self.latestFinalLeaderboardCache
 end
 
 function ITGOnline:CurrentUserPlayState(room)

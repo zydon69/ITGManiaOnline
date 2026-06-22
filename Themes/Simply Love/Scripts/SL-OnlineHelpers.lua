@@ -1169,6 +1169,9 @@ DisplayLobbyState = function(data, actor)
 			.. " hasData=" .. tostring(data ~= nil))
 		return
 	end
+	if ITGOnline and ITGOnline.StoreFinalLeaderboardFromRoom then
+		ITGOnline:StoreFinalLeaderboardFromRoom(data, "display_lobby_state")
+	end
 	-- Keep in mind that SCREENMAN:GetTopScreen() might return nil while screens transition.
 	local screen = SCREENMAN:GetTopScreen()
 	local screenName = screen and screen:GetName() or "NoScreen"
@@ -2667,6 +2670,9 @@ CreateOnlineHandler = function()
 								tostring(playState.final_results and #playState.final_results or ""),
 								table.concat(playerParts, "|"),
 							}, "||")
+							if ITGOnline and ITGOnline.StoreFinalLeaderboardFromRoom then
+								ITGOnline:StoreFinalLeaderboardFromRoom(params, "online_lobby_state_message")
+							end
 							if stateSignature ~= "" and stateSignature == tostring(self.lastLobbyStateSignature or "") then
 								online_flow_trace("online_lobby_state_apply_skipped reason=duplicate_signature"
 									.. " roomId=" .. tostring(params.roomId or "nil")
