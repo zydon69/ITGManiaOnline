@@ -1,17 +1,34 @@
 #include "HelpDisplay.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
 #include "ActorUtil.h"
 #include "BitmapText.h"
 #include "LuaManager.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "ThemeManager.h"
 #include "global.h"
 
 REGISTER_ACTOR_CLASS(HelpDisplay);
+
+namespace {
+void WarnHelpDisplay(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+float SanitizeHelpSwitchSeconds(float seconds, float fallback) {
+  if (!std::isfinite(seconds) || seconds <= 0.0f) {
+    return fallback;
+  }
+  return seconds;
+}
+}  // namespace
 
 HelpDisplay::HelpDisplay() {
   m_iCurTipIndex = 0;
@@ -20,37 +37,70 @@ HelpDisplay::HelpDisplay() {
 }
 
 void HelpDisplay::Load(const std::string& sType) {
+  if (THEME == nullptr || sType.empty()) {
+    WarnHelpDisplay("SRC_AUDIT_FIX SRC-1170: HelpDisplay loaded without THEME.");
+    return;
+  }
+
   RunCommands(THEME->GetMetricA(sType, "TipOnCommand"));
-  m_fSecsUntilSwitch = THEME->GetMetricF(sType, "TipShowTime");
-  m_fSecsBetweenSwitches = THEME->GetMetricF(sType, "TipSwitchTime");
+  m_fSecsUntilSwitch =
+      SanitizeHelpSwitchSeconds(THEME->GetMetricF(sType, "TipShowTime"), 1.0f);
+  m_fSecsBetweenSwitches =
+      SanitizeHelpSwitchSeconds(THEME->GetMetricF(sType, "TipSwitchTime"), 1.0f);
 }
 
 void HelpDisplay::SetTips(
     const std::vector<std::string>& arrayTips,
     const std::vector<std::string>& arrayTipsAlt) {
-  ASSERT(arrayTips.size() == arrayTipsAlt.size());
+  std::vector<std::string> normalizedTipsAlt = arrayTipsAlt;
+  if (normalizedTipsAlt.size() != arrayTips.size()) {
+    WarnHelpDisplay(
+        "SRC_AUDIT_FIX SRC-1172: HelpDisplay normalized mismatched alt tips.");
+    normalizedTipsAlt.resize(arrayTips.size());
+    for (size_t i = 0; i < arrayTips.size(); ++i) {
+      if (normalizedTipsAlt[i].empty()) {
+        normalizedTipsAlt[i] = arrayTips[i];
+      }
+    }
+  }
 
-  if (arrayTips == m_arrayTips && arrayTipsAlt == m_arrayTipsAlt) {
+  if (arrayTips == m_arrayTips && normalizedTipsAlt == m_arrayTipsAlt) {
     return;
   }
 
   SetText("");
 
   m_arrayTips = arrayTips;
-  m_arrayTipsAlt = arrayTipsAlt;
+  m_arrayTipsAlt = normalizedTipsAlt;
 
   m_iCurTipIndex = 0;
   m_fSecsUntilSwitch = 0;
   Update(0);
 }
 
+void HelpDisplay::SetSecsBetweenSwitches(float fSeconds) {
+  m_fSecsBetweenSwitches = m_fSecsUntilSwitch =
+      SanitizeHelpSwitchSeconds(fSeconds, 1.0f);
+}
+
 void HelpDisplay::Update(float fDeltaTime) {
-  float fHibernate = m_fHibernateSecondsLeft;
+  if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
+    fDeltaTime = 0.0f;
+  }
+  float fHibernate =
+      std::isfinite(m_fHibernateSecondsLeft) ? m_fHibernateSecondsLeft : 0.0f;
 
   BitmapText::Update(fDeltaTime);
 
   if (m_arrayTips.empty()) {
     return;
+  }
+  if (m_iCurTipIndex < 0 ||
+      m_iCurTipIndex >= static_cast<int>(m_arrayTips.size())) {
+    m_iCurTipIndex = 0;
+  }
+  if (m_arrayTipsAlt.size() != m_arrayTips.size()) {
+    m_arrayTipsAlt = m_arrayTips;
   }
 
   m_fSecsUntilSwitch -= std::max(fDeltaTime - fHibernate, 0.0f);
@@ -59,6 +109,8 @@ void HelpDisplay::Update(float fDeltaTime) {
   }
 
   // time to switch states
+  m_fSecsBetweenSwitches =
+      SanitizeHelpSwitchSeconds(m_fSecsBetweenSwitches, 1.0f);
   m_fSecsUntilSwitch = m_fSecsBetweenSwitches;
   SetText(m_arrayTips[m_iCurTipIndex], m_arrayTipsAlt[m_iCurTipIndex]);
   m_iCurTipIndex++;

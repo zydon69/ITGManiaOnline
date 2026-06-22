@@ -27,9 +27,7 @@ class HelpDisplay : public BitmapText {
     arrayTipsOut = m_arrayTips;
     arrayTipsAltOut = m_arrayTipsAlt;
   }
-  void SetSecsBetweenSwitches(float fSeconds) {
-    m_fSecsBetweenSwitches = m_fSecsUntilSwitch = fSeconds;
-  }
+  void SetSecsBetweenSwitches(float fSeconds);
 
   virtual void Update(float fDeltaTime);
 
