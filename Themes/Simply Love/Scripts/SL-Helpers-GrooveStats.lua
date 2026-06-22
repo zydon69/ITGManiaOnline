@@ -950,6 +950,7 @@ CreateGrooveStatsPlayerOptionKeys = function()
 		["TiltMultiplier"] = CreateKey("number"),
 		["ColumnCues"] = CreateKey("boolean"),
 		["LifeMeterSwoosh"] = CreateKey("boolean"),
+		["ShowNativeLifeMeter"] = CreateKey("boolean"),
 		["DisplayScorebox"] = CreateKey("boolean"),
 		["SBITGScore"] = CreateKey("boolean"),
 		["SBExScore"] = CreateKey("boolean"),

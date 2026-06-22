@@ -40,6 +40,7 @@ local PlayerDefaults = {
 				TiltMultiplier = 1,
 				ColumnCues = true,
 				LifeMeterSwoosh = false,
+				ShowNativeLifeMeter = false,
 				DisplayScorebox = true,
 				SBITGScore = true,
 				SBExScore = true,

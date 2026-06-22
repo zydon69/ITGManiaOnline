@@ -57,6 +57,7 @@ local permitted_profile_settings = {
 	TiltMultiplier       = "number",
 	ColumnCues           = "boolean",
 	LifeMeterSwoosh      = "boolean",
+	ShowNativeLifeMeter  = "boolean",
 	DisplayScorebox      = "boolean",
 	SBITGScore           = "boolean",
 	SBExScore            = "boolean",
