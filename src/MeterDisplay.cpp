@@ -1,5 +1,6 @@
 #include "MeterDisplay.h"
 
+#include <cmath>
 #include <string>
 
 #include "ActorFrame.h"
@@ -15,10 +16,36 @@
 REGISTER_ACTOR_CLASS(MeterDisplay);
 REGISTER_ACTOR_CLASS(SongMeterDisplay);
 
-MeterDisplay::MeterDisplay() {}
+namespace {
+void WarnMeterDisplayAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+}  // namespace
+
+MeterDisplay::MeterDisplay() {
+  m_fStreamWidth = 0.0f;
+  m_fPercent = 0.0f;
+}
+
+void MeterDisplay::ResetLoadedActors() {
+  if (m_sprStream.IsLoaded()) {
+    RemoveChild(m_sprStream);
+    m_sprStream.Unload();
+  }
+  if (m_sprTip.IsLoaded()) {
+    RemoveChild(m_sprTip);
+    m_sprTip.Unload();
+  }
+  m_fStreamWidth = 0.0f;
+  m_fPercent = 0.0f;
+}
 
 void MeterDisplay::Load(
     std::string sStreamPath, float fStreamWidth, std::string sTipPath) {
+  ResetLoadedActors();
+
   m_sprStream.Load(sStreamPath);
   this->AddChild(m_sprStream);
 
@@ -30,8 +57,17 @@ void MeterDisplay::Load(
 }
 
 void MeterDisplay::LoadFromNode(const XNode* pNode) {
-  LOG->Trace(
-      "MeterDisplay::LoadFromNode(%s)", ActorUtil::GetWhere(pNode).c_str());
+  ResetLoadedActors();
+
+  if (pNode == nullptr) {
+    WarnMeterDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1122: MeterDisplay ignored null XML node.");
+    return;
+  }
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "MeterDisplay::LoadFromNode(%s)", ActorUtil::GetWhere(pNode).c_str());
+  }
 
   const XNode* pStream = pNode->GetChild("Stream");
   if (pStream == nullptr) {
@@ -63,8 +99,19 @@ void MeterDisplay::LoadFromNode(const XNode* pNode) {
 }
 
 void MeterDisplay::SetPercent(float fPercent) {
-  ASSERT(fPercent >= 0 && fPercent <= 1);
+  if (!std::isfinite(fPercent)) {
+    WarnMeterDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1124: MeterDisplay reset non-finite percent.");
+    fPercent = 0.0f;
+  }
+  rage_clamp(fPercent, 0.0f, 1.0f);
+  m_fPercent = fPercent;
 
+  if (!m_sprStream.IsLoaded()) {
+    WarnMeterDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1124: MeterDisplay ignored percent without stream.");
+    return;
+  }
   m_sprStream->SetCropRight(1 - fPercent);
 
   if (m_sprTip.IsLoaded()) {
@@ -74,18 +121,47 @@ void MeterDisplay::SetPercent(float fPercent) {
 }
 
 void MeterDisplay::SetStreamWidth(float fStreamWidth) {
+  if (!std::isfinite(fStreamWidth) || fStreamWidth < 0.0f) {
+    WarnMeterDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1125: MeterDisplay reset invalid stream width.");
+    fStreamWidth = 0.0f;
+  }
   m_fStreamWidth = fStreamWidth;
-  m_sprStream->SetZoomX(m_fStreamWidth / m_sprStream->GetUnzoomedWidth());
+  if (!m_sprStream.IsLoaded()) {
+    WarnMeterDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1125: MeterDisplay ignored width without stream.");
+    return;
+  }
+  float unzoomedWidth = m_sprStream->GetUnzoomedWidth();
+  if (!std::isfinite(unzoomedWidth) || unzoomedWidth <= 0.0f) {
+    WarnMeterDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1125: MeterDisplay used fallback stream width.");
+    unzoomedWidth = 1.0f;
+  }
+  if (m_fStreamWidth <= 0.0f) {
+    m_fStreamWidth = unzoomedWidth;
+  }
+  m_sprStream->SetZoomX(m_fStreamWidth / unzoomedWidth);
+  SetPercent(m_fPercent);
 }
 
 void SongMeterDisplay::Update(float fDeltaTime) {
-  if (GAMESTATE->m_pCurSong) {
+  if (GAMESTATE != nullptr && GAMESTATE->m_pCurSong) {
     float fSongStartSeconds = GAMESTATE->m_pCurSong->GetFirstSecond();
     float fSongEndSeconds = GAMESTATE->m_pCurSong->GetLastSecond();
-    float fPercentPositionSong = SCALE(
-        GAMESTATE->m_Position.m_fMusicSeconds, fSongStartSeconds,
-        fSongEndSeconds, 0.0f, 1.0f);
-    rage_clamp(fPercentPositionSong, 0, 1);
+    float fPercentPositionSong = 0.0f;
+    if (std::isfinite(fSongStartSeconds) && std::isfinite(fSongEndSeconds) &&
+        fSongEndSeconds > fSongStartSeconds &&
+        std::isfinite(GAMESTATE->m_Position.m_fMusicSeconds)) {
+      fPercentPositionSong = SCALE(
+          GAMESTATE->m_Position.m_fMusicSeconds, fSongStartSeconds,
+          fSongEndSeconds, 0.0f, 1.0f);
+      rage_clamp(fPercentPositionSong, 0.0f, 1.0f);
+    } else {
+      WarnMeterDisplayAuditFix(
+          "SRC_AUDIT_FIX SRC-1126: SongMeterDisplay ignored invalid song "
+          "timing.");
+    }
 
     SetPercent(fPercentPositionSong);
   }

@@ -9,25 +9,89 @@
 #include "EnumHelper.h"
 #include "Grade.h"
 #include "LuaManager.h"
+#include "RageLog.h"
 #include "ThemeManager.h"
 #include "global.h"
 
 REGISTER_ACTOR_CLASS(GradeDisplay);
 
+namespace {
+void WarnGradeDisplayAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+bool IsPossibleGradeForDisplay(Grade grade) {
+  FOREACH_PossibleGrade(g) {
+    if (g == grade) {
+      return true;
+    }
+  }
+  return false;
+}
+}  // namespace
+
+GradeDisplay::GradeDisplay() = default;
+
+GradeDisplay::GradeDisplay(const GradeDisplay& cpy)
+    : ActorFrame(cpy), m_vSpr(cpy.m_vSpr) {
+  DeleteAllChildren();
+  DeleteChildrenWhenDone(false);
+  for (AutoActor& spr : m_vSpr) {
+    if (spr.IsLoaded()) {
+      AddChild(spr);
+    }
+  }
+}
+
+void GradeDisplay::ResetLoadedActors() {
+  for (AutoActor& spr : m_vSpr) {
+    if (spr.IsLoaded()) {
+      RemoveChild(spr);
+      spr.Unload();
+    }
+  }
+  m_vSpr.clear();
+}
+
 void GradeDisplay::Load(std::string sMetricsGroup) {
-  ASSERT(m_vSpr.empty());
+  ResetLoadedActors();
+
+  if (sMetricsGroup.empty()) {
+    WarnGradeDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1128: GradeDisplay fell back from empty metrics "
+        "group.");
+    sMetricsGroup = "GradeDisplay";
+  }
+  if (THEME == nullptr) {
+    WarnGradeDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1128: GradeDisplay refused load without THEME.");
+    return;
+  }
+
   m_vSpr.resize(NUM_POSSIBLE_GRADES);
   int i = 0;
   FOREACH_PossibleGrade(g) {
     AutoActor& spr = m_vSpr[i];
     spr.Load(THEME->GetPathG(sMetricsGroup, GradeToString(g)));
-    spr->SetVisible(false);
-    this->AddChild(spr);
+    if (spr.IsLoaded()) {
+      spr->SetVisible(false);
+      this->AddChild(spr);
+    } else {
+      WarnGradeDisplayAuditFix(
+          "SRC_AUDIT_FIX SRC-1130: GradeDisplay skipped unloaded grade actor.");
+    }
     i++;
   }
 }
 
 void GradeDisplay::SetGrade(Grade grade) {
+  if (!IsPossibleGradeForDisplay(grade)) {
+    WarnGradeDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1129: GradeDisplay ignored invalid grade.");
+    grade = Grade_Invalid;
+  }
   size_t i = 0;
   FOREACH_PossibleGrade(g) {
     if (i >= m_vSpr.size()) {
@@ -35,7 +99,12 @@ void GradeDisplay::SetGrade(Grade grade) {
           "GradeDisplay:SetGrade: No actor loaded for grade " +
           GradeToString(g));
     } else {
-      m_vSpr[i]->SetVisible(g == grade);
+      if (m_vSpr[i].IsLoaded()) {
+        m_vSpr[i]->SetVisible(g == grade);
+      } else {
+        WarnGradeDisplayAuditFix(
+            "SRC_AUDIT_FIX SRC-1130: GradeDisplay skipped null grade actor.");
+      }
       i++;
     }
   }

@@ -22,6 +22,8 @@ class MeterDisplay : public ActorFrame {
   void PushSelf(lua_State* L);
 
  private:
+  void ResetLoadedActors();
+
   float m_fStreamWidth;
   float m_fPercent;
   AutoActor m_sprStream;

@@ -12,6 +12,8 @@ struct lua_State;
 /** @brief Grade shown on ScreenEvaluation. */
 class GradeDisplay : public ActorFrame {
  public:
+  GradeDisplay();
+  GradeDisplay(const GradeDisplay& cpy);
   virtual void Load(std::string sMetricsGroup);
   void SetGrade(Grade g);
 
@@ -21,6 +23,8 @@ class GradeDisplay : public ActorFrame {
   void PushSelf(lua_State* L);
 
  protected:
+  void ResetLoadedActors();
+
   std::vector<AutoActor> m_vSpr;
 };
 
