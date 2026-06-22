@@ -11,10 +11,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "RageSoundReader.h"
 #include "RageSoundReader_Filter.h"
@@ -417,6 +419,9 @@ const PolyphaseFilter* MakePolyphaseFilter(
 
 const PolyphaseFilter* FindNearestPolyphaseFilter(
     int iUpFactor, float fCutoffFrequency) {
+  if (iUpFactor <= 0 || !std::isfinite(fCutoffFrequency)) {
+    return nullptr;
+  }
   /* Find a cached filter with the same iUpFactor and a nearby cutoff frequency.
    * Round the cutoff down, if possible; it's better to filter out too much than
    * too little. */
@@ -424,10 +429,17 @@ const PolyphaseFilter* FindNearestPolyphaseFilter(
   std::pair<int, float> params(
       std::make_pair(iUpFactor, fCutoffFrequency + 0.0001f));
   FilterMap::const_iterator it = g_mapPolyphaseFilters.upper_bound(params);
+  if (g_mapPolyphaseFilters.empty()) {
+    PolyphaseFiltersLock.Unlock();
+    return nullptr;
+  }
   if (it != g_mapPolyphaseFilters.begin()) {
     --it;
   }
-  ASSERT(it->first.first == iUpFactor);
+  if (it == g_mapPolyphaseFilters.end() || it->first.first != iUpFactor) {
+    PolyphaseFiltersLock.Unlock();
+    return nullptr;
+  }
   PolyphaseFilter* pPolyphase = it->second;
   PolyphaseFiltersLock.Unlock();
   return pPolyphase;
@@ -453,6 +465,12 @@ class RageSoundResampler_Polyphase {
      * the conversion ratio will always be exact. */
     m_iUpFactor = iUpFactor;
     m_pPolyphase = nullptr;
+    m_pState = nullptr;
+    if (iUpFactor <= 0 || iMinDownFactor <= 0 || iMaxDownFactor <= 0 ||
+        iMinDownFactor > iMaxDownFactor) {
+      m_iDownFactor = 1;
+      return;
+    }
 
     int iFilterIncrement = std::max((iMaxDownFactor - iMinDownFactor) / 10, 1);
     for (int iDownFactor = iMinDownFactor; iDownFactor <= iMaxDownFactor;
@@ -469,6 +487,9 @@ class RageSoundResampler_Polyphase {
   ~RageSoundResampler_Polyphase() { delete m_pState; }
 
   void SetDownFactor(int iDownFactor) {
+    if (iDownFactor <= 0) {
+      return;
+    }
     m_iDownFactor = iDownFactor;
     m_pPolyphase = GetFilter(m_iDownFactor);
   }
@@ -476,6 +497,11 @@ class RageSoundResampler_Polyphase {
   int Run(
       const float* pIn, int iSamplesIn, float* pOut, int iSamplesOut,
       int iSampleStride) const {
+    if (m_pPolyphase == nullptr || m_pState == nullptr || pIn == nullptr ||
+        pOut == nullptr || iSamplesIn < 0 || iSamplesOut < 0 ||
+        iSampleStride <= 0 || m_iDownFactor <= 0) {
+      return RageSoundReader::ERROR;
+    }
     return m_pPolyphase->RunPolyphaseFilter(
         *m_pState, pIn, iSamplesIn, m_iDownFactor, pOut, iSamplesOut,
         iSampleStride);
@@ -483,19 +509,29 @@ class RageSoundResampler_Polyphase {
 
   void Reset() {
     delete m_pState;
+    if (m_iUpFactor <= 0) {
+      m_pState = nullptr;
+      return;
+    }
     m_pState = new PolyphaseFilter::State(m_iUpFactor);
   }
 
   int NumInputsForOutputSamples(int iOut) const {
+    if (m_pPolyphase == nullptr || m_pState == nullptr || iOut < 0 ||
+        m_iDownFactor <= 0) {
+      return RageSoundReader::ERROR;
+    }
     return m_pPolyphase->NumInputsForOutputSamples(
         *m_pState, iOut, m_iDownFactor);
   }
   int GetLatency() const { return m_pPolyphase->GetLatency(); }
-  int GetFilled() const { return m_pState->m_iFilled; }
+  int GetFilled() const { return m_pState == nullptr ? 0 : m_pState->m_iFilled; }
 
   RageSoundResampler_Polyphase(const RageSoundResampler_Polyphase& cpy) {
     m_pPolyphase = cpy.m_pPolyphase;  // don't copy
-    m_pState = new PolyphaseFilter::State(*cpy.m_pState);
+    m_pState = cpy.m_pState == nullptr
+                   ? nullptr
+                   : new PolyphaseFilter::State(*cpy.m_pState);
     m_iUpFactor = cpy.m_iUpFactor;
     m_iDownFactor = cpy.m_iDownFactor;
   }
@@ -529,6 +565,10 @@ class RageSoundResampler_Polyphase {
 };
 
 int RageSoundReader_Resample_Good::GetNextSourceFrame() const {
+  if (m_pSource.isNull() || m_apResamplers.empty() ||
+      m_pSource->GetSampleRate() <= 0) {
+    return 0;
+  }
   int64_t iPosition = m_pSource->GetNextSourceFrame();
   iPosition -= m_apResamplers[0]->GetFilled();
 
@@ -540,14 +580,20 @@ int RageSoundReader_Resample_Good::GetNextSourceFrame() const {
 bool RageSoundReader_Resample_Good::SetProperty(
     const std::string& sProperty, float fValue) {
   if (sProperty == "Rate") {
+    if (!std::isfinite(fValue) || fValue <= 0.0f) {
+      return false;
+    }
     SetRate(fValue);
     return true;
   }
 
-  return m_pSource->SetProperty(sProperty, fValue);
+  return m_pSource.isNull() ? false : m_pSource->SetProperty(sProperty, fValue);
 }
 
 float RageSoundReader_Resample_Good::GetStreamToSourceRatio() const {
+  if (m_pSource.isNull()) {
+    return 1.0f;
+  }
   float fRatio = m_pSource->GetStreamToSourceRatio();
   if (m_fRate != -1) {
     fRatio *= m_fRate;
@@ -558,14 +604,22 @@ float RageSoundReader_Resample_Good::GetStreamToSourceRatio() const {
 RageSoundReader_Resample_Good::RageSoundReader_Resample_Good(
     RageSoundReader* pSource, int iSampleRate)
     : RageSoundReader_Filter(pSource) {
-  m_iSampleRate = iSampleRate;
+  m_iSampleRate = iSampleRate > 0 ? iSampleRate : 0;
   m_fRate = -1;
-  ReopenResampler();
+  if (pSource != nullptr && pSource->GetSampleRate() > 0 &&
+      pSource->GetNumChannels() > 0 && m_iSampleRate > 0) {
+    ReopenResampler();
+  }
 }
 
 /* Call this if the input position is changed or reset. */
 void RageSoundReader_Resample_Good::Reset() {
-  for (size_t iChannel = 0; iChannel < m_pSource->GetNumChannels();
+  if (m_pSource.isNull()) {
+    return;
+  }
+  for (size_t iChannel = 0;
+       iChannel < m_pSource->GetNumChannels() &&
+       iChannel < m_apResamplers.size();
        ++iChannel) {
     m_apResamplers[iChannel]->Reset();
   }
@@ -573,8 +627,13 @@ void RageSoundReader_Resample_Good::Reset() {
 
 void RageSoundReader_Resample_Good::GetFactors(
     int& iDownFactor, int& iUpFactor) const {
-  iDownFactor = m_pSource->GetSampleRate();
+  iDownFactor = m_pSource.isNull() ? 0 : m_pSource->GetSampleRate();
   iUpFactor = m_iSampleRate;
+  if (iDownFactor <= 0 || iUpFactor <= 0) {
+    iDownFactor = 1;
+    iUpFactor = 1;
+    return;
+  }
 
   {
     int iGCD = GCD(iUpFactor, iDownFactor);
@@ -584,6 +643,13 @@ void RageSoundReader_Resample_Good::GetFactors(
 
   bool bRateChangingEnabled = m_fRate != -1;
   if (bRateChangingEnabled) {
+    if (!std::isfinite(m_fRate) || m_fRate <= 0.0f ||
+        iUpFactor > std::numeric_limits<int>::max() / 100 ||
+        iDownFactor > std::numeric_limits<int>::max() / 100) {
+      iDownFactor = 1;
+      iUpFactor = 1;
+      return;
+    }
     iUpFactor *= 100;
     iDownFactor *= 100;
   }
@@ -598,12 +664,19 @@ void RageSoundReader_Resample_Good::ReopenResampler() {
 
   int iDownFactor, iUpFactor;
   GetFactors(iDownFactor, iUpFactor);
+  if (m_pSource.isNull() || iDownFactor <= 0 || iUpFactor <= 0 ||
+      m_pSource->GetNumChannels() == 0) {
+    return;
+  }
 
   for (size_t iChannel = 0; iChannel < m_pSource->GetNumChannels();
        ++iChannel) {
     int iMinDownFactor = iDownFactor;
     int iMaxDownFactor = iDownFactor;
     if (m_fRate != -1) {
+      if (iMaxDownFactor > std::numeric_limits<int>::max() / 5) {
+        return;
+      }
       iMaxDownFactor *= 5;
     }
 
@@ -613,6 +686,11 @@ void RageSoundReader_Resample_Good::ReopenResampler() {
   }
 
   if (m_fRate != -1) {
+    if (!std::isfinite(m_fRate) || m_fRate <= 0.0f ||
+        static_cast<double>(m_fRate) * iDownFactor >
+            static_cast<double>(std::numeric_limits<int>::max())) {
+      return;
+    }
     iDownFactor = static_cast<int>((m_fRate * iDownFactor) + 0.5);
   }
 
@@ -630,6 +708,10 @@ RageSoundReader_Resample_Good::~RageSoundReader_Resample_Good() {
 /* iFrame is in the destination rate.  Seek the source in its own sample rate.
  */
 int RageSoundReader_Resample_Good::SetPosition(int iFrame) {
+  if (m_pSource.isNull() || m_iSampleRate <= 0 ||
+      m_pSource->GetSampleRate() <= 0) {
+    return RageSoundReader::ERROR;
+  }
   Reset();
   iFrame = (int)SCALE(
       iFrame, 0, (int64_t)m_iSampleRate, 0,
@@ -638,6 +720,13 @@ int RageSoundReader_Resample_Good::SetPosition(int iFrame) {
 }
 
 int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
+  if (iFrames == 0) {
+    return 0;
+  }
+  if (pBuf == nullptr || iFrames < 0 || m_pSource.isNull() ||
+      m_apResamplers.empty()) {
+    return RageSoundReader::ERROR;
+  }
   int iChannels = m_apResamplers.size();
 
   int iFramesRead = 0;
@@ -654,16 +743,32 @@ int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
 
   {
     int iFramesNeeded = m_apResamplers[0]->NumInputsForOutputSamples(iFrames);
-    float* pTmpBuf = (float*)alloca(iFramesNeeded * sizeof(float) * iChannels);
-    int iFramesIn = m_pSource->Read(pTmpBuf, iFramesNeeded);
+    if (iFramesNeeded < 0 ||
+        static_cast<size_t>(iFramesNeeded) >
+            std::numeric_limits<size_t>::max() /
+                static_cast<size_t>(iChannels)) {
+      return RageSoundReader::ERROR;
+    }
+    if (iFramesNeeded == 0) {
+      return 0;
+    }
+    std::vector<float> tmpBuf(
+        static_cast<size_t>(iFramesNeeded) * static_cast<size_t>(iChannels));
+    int iFramesIn = m_pSource->Read(&tmpBuf[0], iFramesNeeded);
     if (iFramesIn < 0) {
       return iFramesIn;
+    }
+    if (iFramesIn > iFramesNeeded) {
+      return RageSoundReader::ERROR;
     }
 
     for (int iChannel = 0; iChannel < iChannels; ++iChannel) {
       int iGotFrames = m_apResamplers[iChannel]->Run(
-          pTmpBuf + iChannel, iFramesIn, pBuf + iChannel, iFrames, iChannels);
-      ASSERT(iGotFrames <= iFrames);
+          &tmpBuf[0] + iChannel, iFramesIn, pBuf + iChannel, iFrames,
+          iChannels);
+      if (iGotFrames < 0 || iGotFrames > iFrames) {
+        return RageSoundReader::ERROR;
+      }
 
       if (iChannel == 0) {
         iFramesRead += iGotFrames;
@@ -686,7 +791,9 @@ int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
  * of L/4 frames.
  */
 void RageSoundReader_Resample_Good::SetRate(float fRatio) {
-  ASSERT(fRatio > 0);
+  if (!std::isfinite(fRatio) || fRatio <= 0.0f || m_apResamplers.empty()) {
+    return;
+  }
   bool bRateChangingWasEnabled = m_fRate != -1;
   m_fRate = fRatio;
 
@@ -697,7 +804,14 @@ void RageSoundReader_Resample_Good::SetRate(float fRatio) {
   int iDownFactor, iUpFactor;
   GetFactors(iDownFactor, iUpFactor);
   if (m_fRate != -1) {
+    if (static_cast<double>(m_fRate) * iDownFactor >
+        static_cast<double>(std::numeric_limits<int>::max())) {
+      return;
+    }
     iDownFactor = static_cast<int>((m_fRate * iDownFactor) + 0.5);
+  }
+  if (iUpFactor <= 0 || iDownFactor <= 0) {
+    return;
   }
 
   /* Set m_fRate to the actual rate, after quantization by iUpFactor. */

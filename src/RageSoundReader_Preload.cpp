@@ -4,8 +4,10 @@
 #include "RageSoundReader_Preload.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 
 #include "Preference.h"
@@ -27,10 +29,15 @@ Preference<int> g_iSoundPreloadMaxSamples(
 #define framesize (samplesize * m_iChannels)
 
 bool RageSoundReader_Preload::PreloadSound(RageSoundReader*& pSound) {
+  if (pSound == nullptr) {
+    return false;
+  }
   RageSoundReader_Preload* pPreload = new RageSoundReader_Preload;
   if (!pPreload->Open(pSound)) {
     /* Preload failed.  It read some data, so we need to rewind the reader. */
-    pSound->SetPosition(0);
+    if (pSound != nullptr) {
+      pSound->SetPosition(0);
+    }
     delete pPreload;
     return false;
   }
@@ -50,30 +57,60 @@ RageSoundReader_Preload::RageSoundReader_Preload()
 }
 
 int RageSoundReader_Preload::GetTotalFrames() const {
+  if (m_iChannels == 0 || framesize == 0) {
+    return 0;
+  }
   return m_Buffer->size() / framesize;
 }
 
 bool RageSoundReader_Preload::Open(RageSoundReader* pSource) {
-  ASSERT(pSource != nullptr);
+  if (pSource == nullptr || pSource->GetSampleRate() <= 0 ||
+      pSource->GetNumChannels() == 0 ||
+      pSource->GetNumChannels() >
+          static_cast<unsigned>(std::numeric_limits<int>::max())) {
+    return false;
+  }
   m_iSampleRate = pSource->GetSampleRate();
-  m_iChannels = pSource->GetNumChannels();
+  m_iChannels = static_cast<int>(pSource->GetNumChannels());
   m_fRate = pSource->GetStreamToSourceRatio();
+  if (!std::isfinite(m_fRate) || m_fRate <= 0.0f || m_iChannels > 1024) {
+    return false;
+  }
 
   int iMaxSamples = g_iSoundPreloadMaxSamples.Get();
+  if (iMaxSamples <= 0) {
+    return false;
+  }
 
   /* Check the length, and see if we think it'll fit in the buffer. */
   int iLen = pSource->GetLength_Fast();
   if (iLen != -1) {
+    if (iLen < 0) {
+      return false;
+    }
     float fSecs = iLen / 1000.f;
 
-    int iFrames =
-        static_cast<int>((fSecs * m_iSampleRate) + 0.5); /* seconds -> frames */
-    int iSamples = unsigned(iFrames * m_iChannels);      /* frames -> samples */
+    const double framesDouble =
+        static_cast<double>(fSecs) * static_cast<double>(m_iSampleRate);
+    if (!std::isfinite(framesDouble) || framesDouble < 0.0 ||
+        framesDouble > static_cast<double>(std::numeric_limits<int>::max())) {
+      return false;
+    }
+    int iFrames = static_cast<int>(framesDouble + 0.5); /* seconds -> frames */
+    if (static_cast<unsigned>(iFrames) >
+        static_cast<unsigned>(std::numeric_limits<int>::max()) / m_iChannels) {
+      return false;
+    }
+    int iSamples = iFrames * m_iChannels; /* frames -> samples */
     if (iSamples > iMaxSamples) {
       return false; /* Don't bother trying to preload it. */
     }
 
-    int iBytes = unsigned(iSamples * samplesize); /* samples -> bytes */
+    if (static_cast<size_t>(iSamples) >
+        std::numeric_limits<size_t>::max() / samplesize) {
+      return false;
+    }
+    size_t iBytes = static_cast<size_t>(iSamples) * samplesize;
     m_Buffer.Get()->reserve(iBytes);
   }
 
@@ -83,12 +120,24 @@ bool RageSoundReader_Preload::Open(RageSoundReader* pSource) {
       return false; /* Don't bother trying to preload it. */
     }
     float buffer[1024];
+    if (m_iChannels == 0 || m_iChannels > ARRAYLEN(buffer)) {
+      return false;
+    }
     int iCnt = pSource->Read(buffer, ARRAYLEN(buffer) / m_iChannels);
 
     if (iCnt == END_OF_FILE) {
       break;
     }
     if (iCnt < 0) {
+      return false;
+    }
+    if (iCnt == 0) {
+      return false;
+    }
+    if (static_cast<unsigned>(iCnt) > ARRAYLEN(buffer) / m_iChannels ||
+        static_cast<unsigned>(iCnt) >
+            static_cast<unsigned>(std::numeric_limits<int>::max()) /
+                m_iChannels) {
       return false;
     }
     /* Add the buffer. */
@@ -103,7 +152,10 @@ bool RageSoundReader_Preload::Open(RageSoundReader* pSource) {
           (char*)buffer, (char*)(buffer + iCnt * m_iChannels));
     }
 
-    if (m_Buffer.Get()->size() > iMaxSamples * samplesize) {
+    if (static_cast<size_t>(iMaxSamples) >
+            std::numeric_limits<size_t>::max() / samplesize ||
+        m_Buffer.Get()->size() >
+            static_cast<size_t>(iMaxSamples) * samplesize) {
       return false; /* too big */
     }
   }
@@ -114,13 +166,19 @@ bool RageSoundReader_Preload::Open(RageSoundReader* pSource) {
 }
 
 int RageSoundReader_Preload::GetLength() const {
+  if (m_iSampleRate <= 0) {
+    return 0;
+  }
   return int(float(GetTotalFrames()) * 1000.f / m_iSampleRate);
 }
 
 int RageSoundReader_Preload::GetLength_Fast() const { return GetLength(); }
 
 int RageSoundReader_Preload::SetPosition(int iFrame) {
-  m_iPosition = iFrame;
+  if (!std::isfinite(m_fRate) || m_fRate <= 0.0f) {
+    return ERROR;
+  }
+  m_iPosition = std::max(0, iFrame);
   m_iPosition = static_cast<int>((m_iPosition / m_fRate) + 0.5);
 
   if (m_iPosition >= int(m_Buffer->size() / framesize)) {
@@ -132,26 +190,46 @@ int RageSoundReader_Preload::SetPosition(int iFrame) {
 }
 
 int RageSoundReader_Preload::GetNextSourceFrame() const {
+  if (!std::isfinite(m_fRate) || m_fRate <= 0.0f) {
+    return 0;
+  }
   return static_cast<int>((m_iPosition * m_fRate) + 0.5);
 }
 
 int RageSoundReader_Preload::Read(float* pBuffer, int iFrames) {
+  if (iFrames == 0) {
+    return 0;
+  }
+  if (pBuffer == nullptr || iFrames < 0 || m_iChannels == 0 || framesize == 0) {
+    return ERROR;
+  }
   const int iSizeFrames = m_Buffer->size() / framesize;
   const int iFramesAvail = iSizeFrames - m_iPosition;
 
   iFrames = std::min(iFrames, iFramesAvail);
+  if (iFrames < 0 ||
+      static_cast<unsigned>(iFrames) >
+          static_cast<unsigned>(std::numeric_limits<int>::max()) /
+              m_iChannels) {
+    return ERROR;
+  }
   if (iFrames == 0) {
     return END_OF_FILE;
   }
+  const int samples = iFrames * m_iChannels;
   if (m_bBufferIs16Bit) {
     const int16_t* pIn =
         (const int16_t*)(m_Buffer->data() + (m_iPosition * framesize));
     RageSoundUtil::ConvertNativeInt16ToFloat(
-        pIn, pBuffer, iFrames * m_iChannels);
+        pIn, pBuffer, samples);
   } else {
+    if (static_cast<size_t>(iFrames) >
+        std::numeric_limits<size_t>::max() / framesize) {
+      return ERROR;
+    }
     memcpy(
         pBuffer, m_Buffer->data() + (m_iPosition * framesize),
-        iFrames * framesize);
+        static_cast<size_t>(iFrames) * framesize);
   }
   m_iPosition += iFrames;
 

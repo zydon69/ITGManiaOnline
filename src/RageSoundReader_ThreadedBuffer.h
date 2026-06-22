@@ -78,6 +78,7 @@ class RageSoundReader_ThreadedBuffer : public RageSoundReader_Filter {
 
   RageThread m_Thread;
   bool m_bShutdownThread;
+  bool m_bThreadStarted;
   static int StartBufferingThread(void* p) {
     ((RageSoundReader_ThreadedBuffer*)p)->BufferingThread();
     return 0;
