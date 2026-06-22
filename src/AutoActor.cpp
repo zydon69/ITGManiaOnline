@@ -5,8 +5,17 @@
 #include "Actor.h"
 #include "ActorUtil.h"
 #include "LuaManager.h"
+#include "RageLog.h"
 #include "ThemeManager.h"
 #include "global.h"
+
+namespace {
+void WarnAutoActorAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+}  // namespace
 
 void AutoActor::Unload() {
   if (m_pActor != nullptr) {
@@ -20,21 +29,38 @@ AutoActor::AutoActor(const AutoActor& cpy) {
     m_pActor = nullptr;
   } else {
     m_pActor = cpy.m_pActor->Copy();
+    if (m_pActor == nullptr) {
+      WarnAutoActorAuditFix(
+          "SRC_AUDIT_FIX SRC-769: AutoActor copy produced null actor.");
+      m_pActor = new Actor;
+    }
   }
 }
 
 AutoActor& AutoActor::operator=(const AutoActor& cpy) {
+  if (this == &cpy) {
+    return *this;
+  }
+
   Unload();
 
   if (cpy.m_pActor == nullptr) {
     m_pActor = nullptr;
   } else {
     m_pActor = cpy.m_pActor->Copy();
+    if (m_pActor == nullptr) {
+      WarnAutoActorAuditFix(
+          "SRC_AUDIT_FIX SRC-769: AutoActor assignment produced null actor.");
+      m_pActor = new Actor;
+    }
   }
   return *this;
 }
 
 void AutoActor::Load(Actor* pActor) {
+  if (pActor == m_pActor) {
+    return;
+  }
   Unload();
   m_pActor = pActor;
 }
@@ -51,9 +77,27 @@ void AutoActor::Load(const std::string& sPath) {
 
 void AutoActor::LoadB(
     const std::string& sMetricsGroup, const std::string& sElement) {
+  if (THEME == nullptr) {
+    WarnAutoActorAuditFix(
+        "SRC_AUDIT_FIX SRC-770: AutoActor refused LoadB without THEME.");
+    Load(new Actor);
+    return;
+  }
   ThemeManager::PathInfo pi;
   bool b = THEME->GetPathInfo(pi, EC_BGANIMATIONS, sMetricsGroup, sElement);
-  ASSERT(b);
+  if (!b) {
+    WarnAutoActorAuditFix(
+        "SRC_AUDIT_FIX SRC-770: AutoActor replaced missing theme actor.");
+    Load(new Actor);
+    return;
+  }
+  if (LUA == nullptr) {
+    WarnAutoActorAuditFix(
+        "SRC_AUDIT_FIX SRC-770: AutoActor loaded theme actor without Lua "
+        "thread variables.");
+    Load(pi.sResolvedPath);
+    return;
+  }
   LuaThreadVariable var1("MatchingMetricsGroup", pi.sMatchingMetricsGroup);
   LuaThreadVariable var2("MatchingElement", pi.sMatchingElement);
   Load(pi.sResolvedPath);
@@ -63,11 +107,27 @@ void AutoActor::LoadActorFromNode(const XNode* pNode, Actor* pParent) {
   Unload();
 
   m_pActor = ActorUtil::LoadFromNode(pNode, pParent);
+  if (m_pActor == nullptr) {
+    WarnAutoActorAuditFix(
+        "SRC_AUDIT_FIX SRC-771: AutoActor replaced null node actor.");
+    m_pActor = new Actor;
+  }
 }
 
 void AutoActor::LoadAndSetName(
     const std::string& sScreenName, const std::string& sActorName) {
-  Load(THEME->GetPathG(sScreenName, sActorName));
+  if (THEME == nullptr) {
+    WarnAutoActorAuditFix(
+        "SRC_AUDIT_FIX SRC-770: AutoActor refused named load without THEME.");
+    Load(new Actor);
+  } else {
+    Load(THEME->GetPathG(sScreenName, sActorName));
+  }
+  if (m_pActor == nullptr) {
+    WarnAutoActorAuditFix(
+        "SRC_AUDIT_FIX SRC-770: AutoActor replaced null named actor.");
+    m_pActor = new Actor;
+  }
   m_pActor->SetName(sActorName);
   ActorUtil::LoadAllCommands(*m_pActor, sScreenName);
 }

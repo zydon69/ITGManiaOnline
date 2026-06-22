@@ -1,6 +1,7 @@
 #include "ActorUtil.h"
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <set>
@@ -29,7 +30,22 @@
 // Actor registration
 static std::map<std::string, CreateActorFn>* g_pmapRegistrees = nullptr;
 
+namespace {
+void WarnActorUtilAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+Actor* MakeFallbackActor() {
+  return new Actor;
+}
+}  // namespace
+
 static bool IsRegistered(const std::string& sClassName) {
+  if (g_pmapRegistrees == nullptr) {
+    return false;
+  }
   return g_pmapRegistrees->find(sClassName) != g_pmapRegistrees->end();
 }
 
@@ -52,6 +68,17 @@ void ActorUtil::Register(const std::string& sClassName, CreateActorFn pfn) {
  * function of the same name. */
 bool ActorUtil::ResolvePath(
     std::string& sPath, const std::string& sName, bool optional) {
+  if (FILEMAN == nullptr) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-761: ActorUtil refused path resolution without "
+        "FILEMAN.");
+    return false;
+  }
+
+  constexpr int kMaxResolveRetries = 8;
+  int retryCount = 0;
+
+retry_resolution:
   CollapsePath(sPath);
 
   // If we know this is an exact match, don't bother with the GetDirListing,
@@ -74,16 +101,27 @@ bool ActorUtil::ResolvePath(
           RageException::Throw("%s", sError.c_str());
           break;
         case Dialog::retry:
+          if (++retryCount > kMaxResolveRetries) {
+            WarnActorUtilAuditFix(
+                "SRC_AUDIT_FIX SRC-761: ActorUtil stopped repeated path "
+                "resolution retries.");
+            return false;
+          }
           FILEMAN->FlushDirCache();
-          return ResolvePath(sPath, sName);
+          goto retry_resolution;
         case Dialog::ignore:
           return false;
         default:
-          FAIL_M("Invalid response to Abort/Retry/Ignore dialog");
+          WarnActorUtilAuditFix(
+              "SRC_AUDIT_FIX SRC-761: ActorUtil ignored invalid path dialog "
+              "response.");
+          return false;
       }
     }
 
-    THEME->FilterFileLanguages(asPaths);
+    if (THEME != nullptr) {
+      THEME->FilterFileLanguages(asPaths);
+    }
 
     if (asPaths.size() > 1) {
       std::string sError = ssprintf(
@@ -96,17 +134,27 @@ bool ActorUtil::ResolvePath(
           RageException::Throw("%s", sError.c_str());
           break;
         case Dialog::retry:
+          if (++retryCount > kMaxResolveRetries) {
+            WarnActorUtilAuditFix(
+                "SRC_AUDIT_FIX SRC-761: ActorUtil stopped repeated path "
+                "resolution retries.");
+            return false;
+          }
           FILEMAN->FlushDirCache();
-          return ResolvePath(sPath, sName);
+          goto retry_resolution;
         case Dialog::ignore:
           asPaths.erase(asPaths.begin() + 1, asPaths.end());
           break;
         default:
-          FAIL_M("Invalid response to Abort/Retry/Ignore dialog");
+          WarnActorUtilAuditFix(
+              "SRC_AUDIT_FIX SRC-761: ActorUtil ignored invalid path dialog "
+              "response.");
+          return false;
       }
     }
 
     sPath = asPaths[0];
+    ft = FILEMAN->GetFileType(sPath);
   }
 
   if (ft == RageFileManager::TYPE_DIR) {
@@ -123,8 +171,14 @@ bool ActorUtil::ResolvePath(
 
 namespace {
 std::string GetLegacyActorClass(XNode* pActor) {
-  DEBUG_ASSERT(PREFSMAN->m_bQuirksMode);
-  ASSERT(pActor);
+  if (pActor == nullptr) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-762: ActorUtil ignored null legacy actor node.");
+    return "Actor";
+  }
+  if (PREFSMAN == nullptr || !PREFSMAN->m_bQuirksMode) {
+    return "Actor";
+  }
 
   // The non-legacy LoadFromNode has already checked the Class and
   // Type attributes.
@@ -138,31 +192,38 @@ std::string GetLegacyActorClass(XNode* pActor) {
     // Backward compatibility hacks for "special" filenames
     if (EqualsNoCase(sFile, "songbackground")) {
       XNodeStringValue* pVal = new XNodeStringValue;
-      Song* pSong = GAMESTATE->m_pCurSong;
+      Song* pSong = GAMESTATE != nullptr ? GAMESTATE->m_pCurSong : nullptr;
       if (pSong && pSong->HasBackground()) {
         pVal->SetValue(pSong->GetBackgroundPath());
-      } else {
+      } else if (THEME != nullptr) {
         pVal->SetValue(THEME->GetPathG("Common", "fallback background"));
+      } else {
+        pVal->SetValue("");
       }
       pActor->AppendAttrFrom("Texture", pVal, false);
       return "Sprite";
     } else if (EqualsNoCase(sFile, "songbanner")) {
       XNodeStringValue* pVal = new XNodeStringValue;
-      Song* pSong = GAMESTATE->m_pCurSong;
+      Song* pSong = GAMESTATE != nullptr ? GAMESTATE->m_pCurSong : nullptr;
       if (pSong && pSong->HasBanner()) {
         pVal->SetValue(pSong->GetBannerPath());
-      } else {
+      } else if (THEME != nullptr) {
         pVal->SetValue(THEME->GetPathG("Common", "fallback banner"));
+      } else {
+        pVal->SetValue("");
       }
       pActor->AppendAttrFrom("Texture", pVal, false);
       return "Sprite";
     } else if (EqualsNoCase(sFile, "coursebanner")) {
       XNodeStringValue* pVal = new XNodeStringValue;
-      Course* pCourse = GAMESTATE->m_pCurCourse;
+      Course* pCourse =
+          GAMESTATE != nullptr ? GAMESTATE->m_pCurCourse : nullptr;
       if (pCourse && pCourse->HasBanner()) {
         pVal->SetValue(pCourse->GetBannerPath());
-      } else {
+      } else if (THEME != nullptr) {
         pVal->SetValue(THEME->GetPathG("Common", "fallback banner"));
+      } else {
+        pVal->SetValue("");
       }
       pActor->AppendAttrFrom("Texture", pVal, false);
       return "Sprite";
@@ -175,7 +236,11 @@ std::string GetLegacyActorClass(XNode* pActor) {
 }  // namespace
 
 Actor* ActorUtil::LoadFromNode(const XNode* _pNode, Actor* pParentActor) {
-  ASSERT(_pNode != nullptr);
+  if (_pNode == nullptr) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-763: ActorUtil replaced null XML node with Actor.");
+    return MakeFallbackActor();
+  }
 
   XNode node = *_pNode;
 
@@ -201,8 +266,9 @@ Actor* ActorUtil::LoadFromNode(const XNode* _pNode, Actor* pParentActor) {
   }
 
   std::map<std::string, CreateActorFn>::iterator iter =
-      g_pmapRegistrees->find(sClass);
-  if (iter == g_pmapRegistrees->end()) {
+      g_pmapRegistrees != nullptr ? g_pmapRegistrees->find(sClass)
+                                  : std::map<std::string, CreateActorFn>::iterator();
+  if (g_pmapRegistrees == nullptr || iter == g_pmapRegistrees->end()) {
     std::string sFile;
     if (bLegacy && node.GetAttrValue("File", sFile) && sFile != "") {
       std::string sPath;
@@ -230,12 +296,22 @@ Actor* ActorUtil::LoadFromNode(const XNode* _pNode, Actor* pParentActor) {
         "%s: invalid Class \"%s\"", ActorUtil::GetWhere(&node).c_str(),
         sClass.c_str());
     LuaHelpers::ReportScriptError(sError);
-    return new Actor;  // Return a dummy object so that we don't crash in
-                       // AutoActor later.
+    return MakeFallbackActor();  // Return a dummy object so that callers don't
+                                 // crash later.
   }
 
   const CreateActorFn& pfn = iter->second;
+  if (pfn == nullptr) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-763: ActorUtil rejected null actor factory.");
+    return MakeFallbackActor();
+  }
   Actor* pRet = pfn();
+  if (pRet == nullptr) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-763: ActorUtil replaced null factory result.");
+    return MakeFallbackActor();
+  }
 
   if (pParentActor) {
     pRet->SetParent(pParentActor);
@@ -249,6 +325,11 @@ namespace {
 XNode* LoadXNodeFromLuaShowErrors(const std::string& sFile) {
   std::string sScript;
   if (!GetFileContents(sFile, sScript)) {
+    return nullptr;
+  }
+  if (LUA == nullptr) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-764: ActorUtil skipped Lua actor without LUA.");
     return nullptr;
   }
 
@@ -276,6 +357,20 @@ XNode* LoadXNodeFromLuaShowErrors(const std::string& sFile) {
  * table.  If the table was returned, return true and leave it on the stack.
  * If not, display an error, return false, and leave nothing on the stack. */
 bool ActorUtil::LoadTableFromStackShowErrors(Lua* L) {
+  if (L == nullptr) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-764: ActorUtil refused null Lua stack.");
+    return false;
+  }
+  if (lua_gettop(L) < 1 || !lua_isfunction(L, -1)) {
+    LuaHelpers::ReportScriptError(
+        "Lua actor file must leave a function on the stack.", "LUA_ERROR");
+    if (lua_gettop(L) >= 1) {
+      lua_pop(L, 1);
+    }
+    return false;
+  }
+
   LuaReference func;
   lua_pushvalue(L, -1);
   func.SetFromStack(L);
@@ -289,11 +384,16 @@ bool ActorUtil::LoadTableFromStackShowErrors(Lua* L) {
   if (lua_type(L, -1) != LUA_TTABLE) {
     lua_pop(L, 1);
 
+    Error = "Lua actor must return a table";
     func.PushSelf(L);
-    lua_Debug debug;
-    lua_getinfo(L, ">nS", &debug);
-
-    Error = ssprintf("%s: must return a table", debug.short_src);
+    if (lua_isfunction(L, -1)) {
+      lua_Debug debug;
+      if (lua_getinfo(L, ">nS", &debug)) {
+        Error = ssprintf("%s: must return a table", debug.short_src);
+      }
+    } else {
+      lua_pop(L, 1);
+    }
 
     LuaHelpers::ReportScriptError(Error, "LUA_ERROR");
     return false;
@@ -320,13 +420,13 @@ Actor* ActorUtil::MakeActor(const std::string& sPath_, Actor* pParentActor) {
     }
     case FT_Xml: {
       // Legacy actors; only supported in quirks mode
-      if (!PREFSMAN->m_bQuirksMode) {
-        return new Actor;
+      if (PREFSMAN == nullptr || !PREFSMAN->m_bQuirksMode) {
+        return MakeFallbackActor();
       }
 
       XNode xml;
       if (!XmlFileUtil::LoadFromFileShowErrors(xml, sPath)) {
-        return new Actor;
+        return MakeFallbackActor();
       }
       XmlFileUtil::CompileXNodeTree(&xml, sPath);
       XmlFileUtil::AnnotateXNodeTree(&xml, sPath);
@@ -358,15 +458,26 @@ Actor* ActorUtil::MakeActor(const std::string& sPath_, Actor* pParentActor) {
     }
     case FT_Sprite: {
       // Legacy actor; only supported in quirks mode
-      if (!PREFSMAN->m_bQuirksMode) {
-        return new Actor;
+      if (PREFSMAN == nullptr || !PREFSMAN->m_bQuirksMode) {
+        return MakeFallbackActor();
       }
 
       IniFile ini;
-      ini.ReadFile(sPath);
+      if (!ini.ReadFile(sPath)) {
+        WarnActorUtilAuditFix(
+            "SRC_AUDIT_FIX SRC-765: ActorUtil ignored unreadable sprite file.");
+        return MakeFallbackActor();
+      }
       XmlFileUtil::AnnotateXNodeTree(&ini, sPath);
 
-      return ActorUtil::LoadFromNode(ini.GetChild("Sprite"), pParentActor);
+      XNode* spriteNode = ini.GetChild("Sprite");
+      if (spriteNode == nullptr) {
+        WarnActorUtilAuditFix(
+            "SRC_AUDIT_FIX SRC-765: ActorUtil ignored sprite without Sprite "
+            "node.");
+        return MakeFallbackActor();
+      }
+      return ActorUtil::LoadFromNode(spriteNode, pParentActor);
     }
     case FT_Model: {
       XNode xml;
@@ -390,6 +501,11 @@ Actor* ActorUtil::MakeActor(const std::string& sPath_, Actor* pParentActor) {
 }
 
 std::string ActorUtil::GetSourcePath(const XNode* pNode) {
+  if (pNode == nullptr) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-766: ActorUtil requested source path for null node.");
+    return "";
+  }
   std::string sRet;
   pNode->GetAttrValue("_Source", sRet);
   if (sRet.substr(0, 1) == "@") {
@@ -400,6 +516,9 @@ std::string ActorUtil::GetSourcePath(const XNode* pNode) {
 }
 
 std::string ActorUtil::GetWhere(const XNode* pNode) {
+  if (pNode == nullptr) {
+    return "<unknown>";
+  }
   std::string sPath = GetSourcePath(pNode);
 
   int iLine;
@@ -412,6 +531,11 @@ std::string ActorUtil::GetWhere(const XNode* pNode) {
 bool ActorUtil::GetAttrPath(
     const XNode* pNode, const std::string& sName, std::string& sOut,
     bool optional) {
+  if (pNode == nullptr) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-766: ActorUtil refused attr path on null node.");
+    return false;
+  }
   if (!pNode->GetAttrValue(sName, sOut)) {
     return false;
   }
@@ -433,6 +557,13 @@ bool ActorUtil::GetAttrPath(
 
 apActorCommands ActorUtil::ParseActorCommands(
     const std::string& sCommands, const std::string& sName) {
+  if (LUA == nullptr) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-764: ActorUtil created nil command without LUA.");
+    LuaReference* pRet = new LuaReference;
+    pRet->SetFromNil();
+    return apActorCommands(pRet);
+  }
   Lua* L = LUA->Get();
   LuaHelpers::ParseCommandList(L, sCommands, sName, false);
   LuaReference* pRet = new LuaReference;
@@ -443,7 +574,11 @@ apActorCommands ActorUtil::ParseActorCommands(
 }
 
 void ActorUtil::SetXY(Actor& actor, const std::string& sMetricsGroup) {
-  ASSERT(!actor.GetName().empty());
+  if (actor.GetName().empty() || THEME == nullptr) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-767: ActorUtil skipped SetXY without name/theme.");
+    return;
+  }
 
   /*
    * Hack: This is run after InitCommand, and InitCommand might set X/Y.  If
@@ -467,6 +602,11 @@ void ActorUtil::LoadCommand(
 void ActorUtil::LoadCommandFromName(
     Actor& actor, const std::string& sMetricsGroup,
     const std::string& sCommandName, const std::string& sName) {
+  if (THEME == nullptr) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-767: ActorUtil skipped command load without THEME.");
+    return;
+  }
   actor.AddCommand(
       sCommandName,
       THEME->GetMetricA(sMetricsGroup, sName + sCommandName + "Command"));
@@ -479,6 +619,12 @@ void ActorUtil::LoadAllCommands(
 
 void ActorUtil::LoadAllCommandsFromName(
     Actor& actor, const std::string& sMetricsGroup, const std::string& sName) {
+  if (THEME == nullptr) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-767: ActorUtil skipped all command load without "
+        "THEME.");
+    return;
+  }
   std::set<std::string> vsValueNames;
   THEME->GetMetricsThatBeginWith(sMetricsGroup, sName, vsValueNames);
 
@@ -493,6 +639,9 @@ void ActorUtil::LoadAllCommandsFromName(
 }
 
 static bool CompareActorsByZPosition(const Actor* p1, const Actor* p2) {
+  if (p1 == nullptr || p2 == nullptr) {
+    return p1 != nullptr;
+  }
   return p1->GetZ() < p2->GetZ();
 }
 
@@ -515,6 +664,9 @@ etft_cont_t ExtensionToFileType;
 fttel_cont_t FileTypeToExtensionList;
 
 void ActorUtil::InitFileTypeLists() {
+  ExtensionToFileType.clear();
+  FileTypeToExtensionList.clear();
+
   // This function creates things to serve two purposes:
   // 1.  A map from extensions to filetypes, so extensions can be converted.
   // 2.  A reverse map for things that need a list of extensions to look for.
@@ -566,7 +718,12 @@ void ActorUtil::InitFileTypeLists() {
 }
 
 const std::vector<std::string>& ActorUtil::GetTypeExtensionList(FileType ft) {
-  return FileTypeToExtensionList[ft];
+  static const std::vector<std::string> empty;
+  fttel_cont_t::const_iterator iter = FileTypeToExtensionList.find(ft);
+  if (iter == FileTypeToExtensionList.end()) {
+    return empty;
+  }
+  return iter->second;
 }
 
 void ActorUtil::AddTypeExtensionsToList(

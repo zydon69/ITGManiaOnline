@@ -69,9 +69,11 @@ inline void PlayCommand(Actor& actor, const std::string& sCommandName) {
   actor.PlayCommand(sCommandName);
 }
 inline void OnCommand(Actor& actor) {
-  ASSERT_M(
-      actor.HasCommand("On"),
-      ssprintf("%s is missing an OnCommand.", actor.GetLineage().c_str()));
+  if (!actor.HasCommand("On")) {
+    LuaHelpers::ReportScriptErrorFmt(
+        "%s is missing an OnCommand.", actor.GetLineage().c_str());
+    return;
+  }
   actor.PlayCommand("On");
 }
 inline void OffCommand(Actor& actor) {
@@ -82,10 +84,11 @@ inline void OffCommand(Actor& actor) {
   if (actor.GetName().empty()) {
     return;
   }
-  ASSERT_M(
-      actor.HasCommand("Off"),
-      ssprintf(
-          "Actor %s is missing an OffCommand.", actor.GetLineage().c_str()));
+  if (!actor.HasCommand("Off")) {
+    LuaHelpers::ReportScriptErrorFmt(
+        "Actor %s is missing an OffCommand.", actor.GetLineage().c_str());
+    return;
+  }
   actor.PlayCommand("Off");
 }
 
