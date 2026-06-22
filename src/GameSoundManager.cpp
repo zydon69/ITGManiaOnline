@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -139,6 +140,54 @@ constexpr size_t kPlayOnceInvalidPathMaxEntries = 256;
 constexpr uint64_t kPlayOnceInvalidPathTtlUses = 2000;
 constexpr uint64_t kPlayOnceInvalidPathTtlUsec = 5000000;
 constexpr size_t kPlayOnceVoiceOverheadBytes = 32 * 1024;
+constexpr size_t kMaxQueuedSounds = 4096;
+constexpr size_t kMaxQueuedPathLength = 4096;
+constexpr float kMaxDimVolume = 16.0f;
+
+static bool HasSoundQueueRuntime() {
+  return g_Mutex != nullptr && !g_Shutdown;
+}
+
+static bool HasCurrentMusic() {
+  return g_Playing != nullptr && g_Playing->m_Music != nullptr;
+}
+
+static float SanitizeNonNegativeSeconds(float value, float fallback = 0.0f) {
+  if (!std::isfinite(value)) {
+    return fallback;
+  }
+  return std::max(0.0f, value);
+}
+
+static float SanitizeLengthSeconds(float value) {
+  if (!std::isfinite(value) || value < 0.0f) {
+    return -1.0f;
+  }
+  return value;
+}
+
+static float SanitizeVolume(float value, float fallback = 1.0f) {
+  if (!std::isfinite(value)) {
+    return fallback;
+  }
+  return std::max(0.0f, std::min(kMaxDimVolume, value));
+}
+
+template <class T>
+static bool EnqueueBounded(std::vector<T>& queue, const T& value) {
+  if (!HasSoundQueueRuntime()) {
+    return false;
+  }
+  if (queue.size() >= kMaxQueuedSounds) {
+    if (LOG != nullptr) {
+      LOG->Warn("GameSoundManager queue full; dropping queued sound request");
+    }
+    return false;
+  }
+  queue.push_back(value);
+  g_Mutex->Broadcast();
+  return true;
+}
 
 static uint64_t g_PlayOnceDroppedBusyCount = 0;
 static uint64_t g_PlayOnceDroppedPoolFullCount = 0;
@@ -182,9 +231,11 @@ static void DeleteUnregisteredSoundPool(std::vector<RageSound*>& pool) {
       continue;
     }
     if (!deletedSounds.insert(sound).second) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX: skipped duplicate unregistered PlayOnce sound %p.",
-          static_cast<void*>(sound));
+      if (LOG != nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: skipped duplicate unregistered PlayOnce sound %p.",
+            static_cast<void*>(sound));
+      }
       continue;
     }
     DeleteSoundWithShutdownTrace(
@@ -198,15 +249,17 @@ static void DeleteSoundWithShutdownTrace(
   const bool trace = LogPlayOnceDiagnosticsEnabled();
   if (sound == nullptr) {
     if (trace) {
-      LOG->Trace(
-          "GameSoundManager shutdown delete sound skipped null context=%s "
-          "index=%zu/%zu",
-          context, index, total);
+      if (LOG != nullptr) {
+        LOG->Trace(
+            "GameSoundManager shutdown delete sound skipped null context=%s "
+            "index=%zu/%zu",
+            context, index, total);
+      }
     }
     return;
   }
 
-  if (trace) {
+  if (trace && LOG != nullptr) {
     LOG->Trace(
         "GameSoundManager shutdown delete sound begin context=%s index=%zu/%zu "
         "ptr=%p loaded=%d playing=%d path='%s'",
@@ -215,7 +268,7 @@ static void DeleteSoundWithShutdownTrace(
         sound->GetLoadedFilePath().c_str());
   }
   delete sound;
-  if (trace) {
+  if (trace && LOG != nullptr) {
     LOG->Trace(
         "GameSoundManager shutdown delete sound end context=%s index=%zu/%zu",
         context, index, total);
@@ -232,9 +285,11 @@ static void DeleteRegisteredSoundPool(std::vector<RageSound*>& pool) {
       continue;
     }
     if (!deletedSounds.insert(sound).second) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX: skipped duplicate registered PlayOnce sound %p.",
-          static_cast<void*>(sound));
+      if (LOG != nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: skipped duplicate registered PlayOnce sound %p.",
+            static_cast<void*>(sound));
+      }
       continue;
     }
     g_PlayOnceReservedSounds.erase(sound);
@@ -248,7 +303,7 @@ static std::vector<RageSound*> DetachPlayOnceCacheForShutdown() {
   std::unordered_set<RageSound*> queuedSounds;
 
   LockMutex playOnceLock(g_PlayOnceDataMutex);
-  if (LogPlayOnceDiagnosticsEnabled()) {
+  if (LOG != nullptr && LogPlayOnceDiagnosticsEnabled()) {
     LOG->Trace(
         "GameSoundManager shutdown PlayOnce detach begin pools=%zu reserved=%zu "
         "estimated_bytes=%zu invalid_cache=%zu",
@@ -264,10 +319,12 @@ static std::vector<RageSound*> DetachPlayOnceCacheForShutdown() {
       if (queuedSounds.insert(sound).second) {
         soundsToDelete.push_back(sound);
       } else {
-        LOG->Warn(
-            "SRC_AUDIT_FIX: skipped duplicate PlayOnce sound %p while "
-            "detaching shutdown cache path='%s'.",
-            static_cast<void*>(sound), pathAndPool.first.c_str());
+        if (LOG != nullptr) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX: skipped duplicate PlayOnce sound %p while "
+              "detaching shutdown cache path='%s'.",
+              static_cast<void*>(sound), pathAndPool.first.c_str());
+        }
       }
     }
     pathAndPool.second.clear();
@@ -281,7 +338,7 @@ static std::vector<RageSound*> DetachPlayOnceCacheForShutdown() {
   g_DirSoundOrder.clear();
   g_PlayOnceEstimatedCacheBytes = 0;
 
-  if (LogPlayOnceDiagnosticsEnabled()) {
+  if (LOG != nullptr && LogPlayOnceDiagnosticsEnabled()) {
     LOG->Trace(
         "GameSoundManager shutdown PlayOnce detach end sounds_to_delete=%zu",
         soundsToDelete.size());
@@ -475,9 +532,25 @@ std::vector<MusicToPlay> g_MusicsToPlay;
 static GameSoundManager::PlayMusicParams g_FallbackMusicParams;
 
 static void StartMusic(MusicToPlay& ToPlay) {
-  LockMutex L(*g_Mutex);
+  if (!HasSoundQueueRuntime() || !HasCurrentMusic()) {
+    return;
+  }
+
+  ToPlay.fStartSecond = SanitizeNonNegativeSeconds(ToPlay.fStartSecond);
+  ToPlay.fLengthSeconds = SanitizeLengthSeconds(ToPlay.fLengthSeconds);
+  ToPlay.fFadeInLengthSeconds =
+      SanitizeNonNegativeSeconds(ToPlay.fFadeInLengthSeconds);
+  ToPlay.fFadeOutLengthSeconds =
+      SanitizeNonNegativeSeconds(ToPlay.fFadeOutLengthSeconds);
+
+  g_Mutex->Lock();
+  if (!HasCurrentMusic()) {
+    g_Mutex->Unlock();
+    return;
+  }
   if (g_Playing->m_Music->IsPlaying() &&
       EqualsNoCase(g_Playing->m_Music->GetLoadedFilePath(), ToPlay.m_sFile)) {
+    g_Mutex->Unlock();
     return;
   }
 
@@ -489,7 +562,7 @@ static void StartMusic(MusicToPlay& ToPlay) {
      * sound. Be sure to leave the rest of g_Playing in place. */
     RageSound* pOldSound = g_Playing->m_Music;
     g_Playing->m_Music = new RageSound;
-    L.Unlock();
+    g_Mutex->Unlock();
 
     delete pOldSound;
     return;
@@ -498,20 +571,28 @@ static void StartMusic(MusicToPlay& ToPlay) {
   /* Unlock, load the sound here, and relock.  Loading may take a while if we're
    * reading from CD and we have to seek far, which can throw off the timing
    * below. */
-MusicPlaying* NewMusic;
+  std::unique_ptr<MusicPlaying> NewMusic;
   {
     g_Mutex->Unlock();
-    RageSound* pSound = new RageSound;
+    std::unique_ptr<RageSound> pSound(new RageSound);
     RageSoundLoadParams params;
     params.m_bSupportRateChanging = ToPlay.bApplyMusicRate;
     if (!pSound->Load(ToPlay.m_sFile, false, &params)) {
-      LOG->Warn(
-          "Music load failed; continuing with silent fallback: '%s' error='%s'",
-          ToPlay.m_sFile.c_str(), pSound->GetError().c_str());
+      if (LOG != nullptr) {
+        LOG->Warn(
+            "Music load failed; continuing with silent fallback: '%s' "
+            "error='%s'",
+            ToPlay.m_sFile.c_str(), pSound->GetError().c_str());
+      }
     }
+    std::unique_ptr<MusicPlaying> loadedMusic(
+        new MusicPlaying(pSound.release()));
     g_Mutex->Lock();
-
-    NewMusic = new MusicPlaying(pSound);
+    NewMusic = std::move(loadedMusic);
+    if (!HasCurrentMusic()) {
+      g_Mutex->Unlock();
+      return;
+    }
   }
 
   NewMusic->m_Timing = g_Playing->m_Timing;
@@ -519,7 +600,9 @@ MusicPlaying* NewMusic;
 
   /* See if we can find timing data, if it's not already loaded. */
   if (!ToPlay.HasTiming && IsAFile(ToPlay.m_sTimingFile)) {
-    LOG->Trace("Found '%s'", ToPlay.m_sTimingFile.c_str());
+    if (LOG != nullptr) {
+      LOG->Trace("Found '%s'", ToPlay.m_sTimingFile.c_str());
+    }
     Song song;
     SSCLoader loaderSSC;
     SMLoader loaderSM;
@@ -588,11 +671,13 @@ MusicPlaying* NewMusic;
     /* This song has no real timing data.  The offset is arbitrary.  Change it
      * so the beat will line up to where we are now, so we don't have to delay.
      */
-    float fDestBeat = fmodfp(GAMESTATE->m_Position.m_fSongBeatNoOffset, 1);
-    float fTime =
-        NewMusic->m_NewTiming.GetElapsedTimeFromBeatNoOffset(fDestBeat);
+    if (GAMESTATE != nullptr) {
+      float fDestBeat = fmodfp(GAMESTATE->m_Position.m_fSongBeatNoOffset, 1);
+      float fTime =
+          NewMusic->m_NewTiming.GetElapsedTimeFromBeatNoOffset(fDestBeat);
 
-    NewMusic->m_NewTiming.m_fBeat0OffsetInSeconds = fTime;
+      NewMusic->m_NewTiming.m_fBeat0OffsetInSeconds = fTime;
+    }
 
     StartImmediately = true;
   }
@@ -607,7 +692,8 @@ MusicPlaying* NewMusic;
   }
 
   RageTimer when; /* zero */
-  if (!StartImmediately) {
+  if (!StartImmediately && GAMESTATE != nullptr && SOUNDMAN != nullptr &&
+      HasCurrentMusic()) {
     /* GetPlayLatency returns the minimum time until a sound starts.  That's
      * common when starting a precached sound, but our sound isn't, so it'll
      * probably take a little longer.  Nudge the latency up. */
@@ -636,10 +722,12 @@ MusicPlaying* NewMusic;
         fMaximumDistance);
 
     when = GAMESTATE->m_Position.m_LastBeatUpdate + fDistance;
+  } else if (!StartImmediately) {
+    StartImmediately = true;
   }
 
   /* Important: don't hold the mutex while we load and seek the actual sound. */
-  L.Unlock();
+  g_Mutex->Unlock();
   {
     NewMusic->m_bHasTiming = ToPlay.HasTiming;
     if (ToPlay.HasTiming) {
@@ -660,12 +748,19 @@ MusicPlaying* NewMusic;
     }
     NewMusic->m_Music->SetParams(p);
     NewMusic->m_Music->SetPrefersStrongPrebuffer(true);
-    NewMusic->m_Music->StartPlaying();
+    if (!NewMusic->m_Music->StartPlaying()) {
+      if (LOG != nullptr) {
+        LOG->Warn("Music start failed for '%s'", ToPlay.m_sFile.c_str());
+      }
+      return;
+    }
   }
 
   LockMut(*g_Mutex);
-  delete g_Playing;
-  g_Playing = NewMusic;
+  if (HasCurrentMusic()) {
+    delete g_Playing;
+    g_Playing = NewMusic.release();
+  }
 }
 
 static void DoPlayOnceWithRetry(std::string sPath, bool allowRetry) {
@@ -695,7 +790,9 @@ static void DoPlayOnceWithRetry(std::string sPath, bool allowRetry) {
   }
 
   if (FILEMAN != nullptr && !FILEMAN->IsAFile(sPath)) {
-    LOG->Warn("PlayOnce sound file missing: '%s'", sPath.c_str());
+    if (LOG != nullptr) {
+      LOG->Warn("PlayOnce sound file missing: '%s'", sPath.c_str());
+    }
     LockMutex playOnceLock(g_PlayOnceDataMutex);
     MarkInvalidPath(sPath, useCounter);
     return;
@@ -708,8 +805,10 @@ static void DoPlayOnceWithRetry(std::string sPath, bool allowRetry) {
     for (int i = 0; i < poolVoices; ++i) {
       RageSound* pSound = new RageSound;
       if (!pSound->Load(sPath, true)) {
-        LOG->Warn("PlayOnce sound preload failed for '%s': %s", sPath.c_str(),
-                  pSound->GetError().c_str());
+        if (LOG != nullptr) {
+          LOG->Warn("PlayOnce sound preload failed for '%s': %s", sPath.c_str(),
+                    pSound->GetError().c_str());
+        }
         delete pSound;
         DeleteUnregisteredSoundPool(newPool);
         LockMutex playOnceLock(g_PlayOnceDataMutex);
@@ -718,8 +817,11 @@ static void DoPlayOnceWithRetry(std::string sPath, bool allowRetry) {
       }
       if (pSound->GetLengthSeconds() <= 0.0f &&
           !IsKnownSilentPlaceholderSound(sPath)) {
-        LOG->Warn("PlayOnce sound rejected because it has no playable audio: '%s'",
-                  sPath.c_str());
+        if (LOG != nullptr) {
+          LOG->Warn(
+              "PlayOnce sound rejected because it has no playable audio: '%s'",
+              sPath.c_str());
+        }
         delete pSound;
         DeleteUnregisteredSoundPool(newPool);
         LockMutex playOnceLock(g_PlayOnceDataMutex);
@@ -727,8 +829,10 @@ static void DoPlayOnceWithRetry(std::string sPath, bool allowRetry) {
         return;
       }
       if (pSound->GetLengthSeconds() <= 0.0f) {
-        LOG->Trace(
-            "PlayOnce accepted known silent placeholder: '%s'", sPath.c_str());
+        if (LOG != nullptr) {
+          LOG->Trace(
+              "PlayOnce accepted known silent placeholder: '%s'", sPath.c_str());
+        }
       }
       newPool.push_back(pSound);
     }
@@ -756,19 +860,23 @@ static void DoPlayOnceWithRetry(std::string sPath, bool allowRetry) {
       }
 
       ++g_PlayOnceDroppedPoolFullCount;
-      LOG->Warn(
-          "PlayOnce pool disappeared before use and retry failed: path='%s'",
-          sPath.c_str());
+      if (LOG != nullptr) {
+        LOG->Warn(
+            "PlayOnce pool disappeared before use and retry failed: path='%s'",
+            sPath.c_str());
+      }
       return;
     }
 
     const size_t maxCacheBytes = GetPlayOnceMaxCacheBytes();
     if (newPoolEstimatedBytes > maxCacheBytes) {
       ++g_PlayOnceDroppedMemoryBudgetCount;
-      LOG->Warn(
-          "PlayOnce pool rejected by memory budget: path='%s' estimate=%zu "
-          "max=%zu",
-          sPath.c_str(), newPoolEstimatedBytes, maxCacheBytes);
+      if (LOG != nullptr) {
+        LOG->Warn(
+            "PlayOnce pool rejected by memory budget: path='%s' estimate=%zu "
+            "max=%zu",
+            sPath.c_str(), newPoolEstimatedBytes, maxCacheBytes);
+      }
       DeleteUnregisteredSoundPool(newPool);
       return;
     }
@@ -796,8 +904,10 @@ static void DoPlayOnceWithRetry(std::string sPath, bool allowRetry) {
   std::vector<RageSound*>& pool = it->second;
   if (pool.empty()) {
     ++g_PlayOnceDroppedPoolFullCount;
-    LOG->Warn("PlayOnce invariant violation: empty registered pool for '%s'",
-              sPath.c_str());
+    if (LOG != nullptr) {
+      LOG->Warn("PlayOnce invariant violation: empty registered pool for '%s'",
+                sPath.c_str());
+    }
     RemovePlayOncePoolAccounting(sPath);
     g_PlayOnceSoundPool.erase(it);
     return;
@@ -857,22 +967,39 @@ static void DoPlayOnceFromDir(std::string sPath) {
     return;
   }
 
-  g_Mutex->Lock();
-  std::vector<int>& order =
-      g_DirSoundOrder.insert({sPath, std::vector<int>()}).first->second;
-  // If order is exhausted, repopulate and reshuffle
-  if (order.size() == 0) {
-    for (int i = 0; i < (int)arraySoundFiles.size(); ++i) {
-      order.push_back(i);
+  int index = -1;
+  {
+    LockMutex playOnceLock(g_PlayOnceDataMutex);
+    std::vector<int>& order =
+        g_DirSoundOrder.insert({sPath, std::vector<int>()}).first->second;
+    order.erase(
+        std::remove_if(
+            order.begin(), order.end(),
+            [&arraySoundFiles](int candidate) {
+              return candidate < 0 ||
+                     static_cast<size_t>(candidate) >= arraySoundFiles.size();
+            }),
+        order.end());
+
+    // If order is exhausted, repopulate and reshuffle.
+    if (order.empty()) {
+      for (int i = 0; i < (int)arraySoundFiles.size(); ++i) {
+        order.push_back(i);
+      }
+      std::shuffle(order.begin(), order.end(), g_RandomNumberGenerator);
     }
-    std::shuffle(order.begin(), order.end(), g_RandomNumberGenerator);
+
+    if (order.empty()) {
+      return;
+    }
+
+    index = order.back();
+    order.pop_back();
   }
 
-  int index = order.back();
-  order.pop_back();
-  g_Mutex->Unlock();
-
-  DoPlayOnce(sPath + arraySoundFiles[index]);
+  if (index >= 0 && static_cast<size_t>(index) < arraySoundFiles.size()) {
+    DoPlayOnce(sPath + arraySoundFiles[index]);
+  }
 }
 
 static bool SoundWaiting() {
@@ -881,6 +1008,9 @@ static bool SoundWaiting() {
 }
 
 static void StartQueuedSounds() {
+  if (!HasSoundQueueRuntime()) {
+    return;
+  }
   g_Mutex->Lock();
   std::vector<std::string> aSoundsToPlayOnce = g_SoundsToPlayOnce;
   g_SoundsToPlayOnce.clear();
@@ -905,7 +1035,7 @@ static void StartQueuedSounds() {
 
   for (unsigned i = 0; i < aSoundsToPlayOnceFromAnnouncer.size(); ++i) {
     std::string sPath = aSoundsToPlayOnceFromAnnouncer[i];
-    if (sPath != "") {
+    if (sPath != "" && ANNOUNCER != nullptr) {
       sPath = ANNOUNCER->GetPathTo(sPath);
       DoPlayOnceFromDir(sPath);
     }
@@ -926,8 +1056,10 @@ static void StartQueuedSounds() {
       /* StopPlaying() can take a while, so don't hold the lock while we stop
        * the sound. */
       g_Mutex->Lock();
-      RageSound* pOldSound = g_Playing->m_Music;
-      g_Playing->m_Music = new RageSound;
+      RageSound* pOldSound = HasCurrentMusic() ? g_Playing->m_Music : nullptr;
+      if (g_Playing != nullptr) {
+        g_Playing->m_Music = new RageSound;
+      }
       g_Mutex->Unlock();
 
       delete pOldSound;
@@ -936,19 +1068,37 @@ static void StartQueuedSounds() {
 }
 
 void GameSoundManager::Flush() {
+  if (g_Mutex == nullptr) {
+    return;
+  }
   g_Mutex->Lock();
+  if (g_Shutdown) {
+    g_Mutex->Unlock();
+    return;
+  }
   g_bFlushing = true;
 
   g_Mutex->Broadcast();
 
-  while (g_bFlushing) {
-    g_Mutex->Wait();
+  RageTimer timeout;
+  timeout += 5.0f;
+  while (g_bFlushing && !g_Shutdown) {
+    if (!g_Mutex->Wait(&timeout)) {
+      if (LOG != nullptr) {
+        LOG->Warn("GameSoundManager::Flush timed out");
+      }
+      g_bFlushing = false;
+      break;
+    }
   }
   g_Mutex->Unlock();
 }
 
 int MusicThread_start(void* p) {
   while (!g_Shutdown) {
+    if (g_Mutex == nullptr) {
+      break;
+    }
     g_Mutex->Lock();
     while (!SoundWaiting() && !g_Shutdown && !g_bFlushing) {
       g_Mutex->Wait();
@@ -960,7 +1110,9 @@ int MusicThread_start(void* p) {
      * so check g_bFlushing before calling.  This won't work if more than
      * one thread might call Flush(), but only the main thread is allowed
      * to make SOUND calls. */
+    g_Mutex->Lock();
     bool bFlushing = g_bFlushing;
+    g_Mutex->Unlock();
 
     StartQueuedSounds();
 
@@ -977,7 +1129,9 @@ int MusicThread_start(void* p) {
 
 GameSoundManager::GameSoundManager() {
   /* Init RageSoundMan first: */
-  ASSERT(SOUNDMAN != nullptr);
+  if (SOUNDMAN == nullptr && LOG != nullptr) {
+    LOG->Warn("GameSoundManager created before SOUNDMAN was initialized");
+  }
 
   // Force runtime PlayOnce pool settings by default, with an explicit
   // command-line escape hatch for tuning sessions.
@@ -985,13 +1139,18 @@ GameSoundManager::GameSoundManager() {
     g_iPlayOncePoolVoices.Set(8);
     g_iPlayOnceMaxPools.Set(96);
     g_iPlayOnceMaxCacheMB.Set(96);
-    LOG->Info(
-        "Forcing PlayOnce runtime config: voices=%d max_pools=%d "
-        "max_cache_mb=%d",
-        g_iPlayOncePoolVoices.Get(), g_iPlayOnceMaxPools.Get(),
-        g_iPlayOnceMaxCacheMB.Get());
+    if (LOG != nullptr) {
+      LOG->Info(
+          "Forcing PlayOnce runtime config: voices=%d max_pools=%d "
+          "max_cache_mb=%d",
+          g_iPlayOncePoolVoices.Get(), g_iPlayOnceMaxPools.Get(),
+          g_iPlayOnceMaxCacheMB.Get());
+    }
   } else {
-    LOG->Info("PlayOnce runtime forcing disabled via --no-force-playonce-config");
+    if (LOG != nullptr) {
+      LOG->Info(
+          "PlayOnce runtime forcing disabled via --no-force-playonce-config");
+    }
   }
 
   g_Mutex = new RageEvent("GameSoundManager");
@@ -1014,7 +1173,7 @@ GameSoundManager::GameSoundManager() {
   MusicThread.Create(MusicThread_start, this);
 
   // Register with Lua.
-  {
+  if (LUA != nullptr) {
     Lua* L = LUA->Get();
     lua_pushstring(L, "SOUND");
     this->PushSelf(L);
@@ -1025,26 +1184,31 @@ GameSoundManager::GameSoundManager() {
 
 GameSoundManager::~GameSoundManager() {
   const bool trace = LogPlayOnceDiagnosticsEnabled();
-  if (trace) {
+  if (trace && LOG != nullptr) {
     LOG->Trace("GameSoundManager::~GameSoundManager begin");
   }
   // Unregister with Lua.
-  LUA->UnsetGlobal("SOUND");
+  if (LUA != nullptr) {
+    LUA->UnsetGlobal("SOUND");
+  }
 
   /* Signal the mixing thread to quit. */
-  if (trace) {
+  if (trace && LOG != nullptr) {
     LOG->Trace("Shutting down music start thread ...");
   }
-  g_Mutex->Lock();
-  g_Shutdown = true;
-  g_Mutex->Broadcast();
-  g_Mutex->Unlock();
-  MusicThread.Wait();
-  if (trace) {
+  if (g_Mutex != nullptr) {
+    g_Mutex->Lock();
+    g_Shutdown = true;
+    g_bFlushing = false;
+    g_Mutex->Broadcast();
+    g_Mutex->Unlock();
+    MusicThread.Wait();
+  }
+  if (trace && LOG != nullptr) {
     LOG->Trace("Music start thread shut down.");
   }
 
-  {
+  if (g_Mutex != nullptr) {
     g_Mutex->Lock();
     g_SoundsToPlayOnce.clear();
     g_SoundsToPlayOnceFromDir.clear();
@@ -1054,12 +1218,12 @@ GameSoundManager::~GameSoundManager() {
     g_Mutex->Unlock();
   }
 
-  if (trace) {
+  if (trace && LOG != nullptr) {
     LOG->Trace("GameSoundManager shutdown detach PlayOnce cache call begin");
   }
   std::vector<RageSound*> playOnceSoundsToDelete =
       DetachPlayOnceCacheForShutdown();
-  if (trace) {
+  if (trace && LOG != nullptr) {
     LOG->Trace("GameSoundManager shutdown detach PlayOnce cache call end");
     LOG->Trace(
         "GameSoundManager shutdown PlayOnce delete begin count=%zu",
@@ -1071,11 +1235,11 @@ GameSoundManager::~GameSoundManager() {
         playOnceSoundsToDelete.size());
   }
   playOnceSoundsToDelete.clear();
-  if (trace) {
+  if (trace && LOG != nullptr) {
     LOG->Trace("GameSoundManager shutdown PlayOnce delete end");
   }
 
-  if (trace) {
+  if (trace && LOG != nullptr) {
     LOG->Trace(
         "GameSoundManager shutdown current music delete begin playing_ptr=%p "
         "music_ptr=%p",
@@ -1083,13 +1247,13 @@ GameSoundManager::~GameSoundManager() {
         g_Playing != nullptr ? static_cast<void*>(g_Playing->m_Music) : nullptr);
   }
   RageUtil::SafeDelete(g_Playing);
-  if (trace) {
+  if (trace && LOG != nullptr) {
     LOG->Trace("GameSoundManager shutdown current music delete end");
     LOG->Trace("GameSoundManager shutdown mutex delete begin mutex_ptr=%p",
                static_cast<void*>(g_Mutex));
   }
   RageUtil::SafeDelete(g_Mutex);
-  if (trace) {
+  if (trace && LOG != nullptr) {
     LOG->Trace("GameSoundManager shutdown mutex delete end");
     LOG->Trace("GameSoundManager::~GameSoundManager end");
   }
@@ -1112,9 +1276,15 @@ float GameSoundManager::GetFrameTimingAdjustment(float fDeltaTime) {
    * timestamp, this won't adversely affect input timing. If we're off by more
    * than that, we probably had a frame skip, in which case we have bigger skip
    * problems, so don't adjust.
-   */
+  */
   static int iLastFPS = 0;
+  if (DISPLAY == nullptr || !std::isfinite(fDeltaTime)) {
+    return 0;
+  }
   int iThisFPS = DISPLAY->GetFPS();
+  if (iThisFPS <= 0) {
+    return 0;
+  }
 
   if (iThisFPS != DISPLAY->GetActualVideoModeParams().rate ||
       iThisFPS != iLastFPS) {
@@ -1133,6 +1303,12 @@ float GameSoundManager::GetFrameTimingAdjustment(float fDeltaTime) {
 }
 
 void GameSoundManager::Update(float fDeltaTime) {
+  if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
+    fDeltaTime = 0.0f;
+  }
+  if (g_Mutex == nullptr || g_Playing == nullptr || GAMESTATE == nullptr) {
+    return;
+  }
   static uint64_t sLastDroppedBusy = 0;
   static uint64_t sLastDroppedPoolFull = 0;
   static uint64_t sLastDroppedMemoryBudget = 0;
@@ -1174,18 +1350,20 @@ void GameSoundManager::Update(float fDeltaTime) {
         droppedMemoryBudget != sLastDroppedMemoryBudget ||
         evictedPools != sLastEvictedPools ||
         invalidLoads != sLastInvalidLoads) {
-      LOG->Trace(
-          "PlayOnce pool stats: pools=%zu invalid_cache=%zu "
-          "empty_pools=%zu estimated_cache=%zu/%zu drops_busy=%llu "
-          "drops_pool_full=%llu drops_memory_budget=%llu evictions=%llu "
-          "invalid_loads=%llu",
-          poolCount, invalidCacheCount, emptyPoolCount, estimatedCacheBytes,
-          maxCacheBytes,
-          static_cast<unsigned long long>(droppedBusy),
-          static_cast<unsigned long long>(droppedPoolFull),
-          static_cast<unsigned long long>(droppedMemoryBudget),
-          static_cast<unsigned long long>(evictedPools),
-          static_cast<unsigned long long>(invalidLoads));
+      if (LOG != nullptr) {
+        LOG->Trace(
+            "PlayOnce pool stats: pools=%zu invalid_cache=%zu "
+            "empty_pools=%zu estimated_cache=%zu/%zu drops_busy=%llu "
+            "drops_pool_full=%llu drops_memory_budget=%llu evictions=%llu "
+            "invalid_loads=%llu",
+            poolCount, invalidCacheCount, emptyPoolCount, estimatedCacheBytes,
+            maxCacheBytes,
+            static_cast<unsigned long long>(droppedBusy),
+            static_cast<unsigned long long>(droppedPoolFull),
+            static_cast<unsigned long long>(droppedMemoryBudget),
+            static_cast<unsigned long long>(evictedPools),
+            static_cast<unsigned long long>(invalidLoads));
+      }
       sLastDroppedBusy = droppedBusy;
       sLastDroppedPoolFull = droppedPoolFull;
       sLastDroppedMemoryBudget = droppedMemoryBudget;
@@ -1196,16 +1374,19 @@ void GameSoundManager::Update(float fDeltaTime) {
 
   {
     g_Mutex->Lock();
-    if (g_Playing->m_bApplyMusicRate) {
+    if (HasCurrentMusic() && g_Playing->m_bApplyMusicRate) {
       RageSoundParams p = g_Playing->m_Music->GetParams();
       float fRate = GAMESTATE->m_SongOptions.GetPreferred().m_fMusicRate;
+      if (!std::isfinite(fRate) || fRate <= 0.0f) {
+        fRate = 1.0f;
+      }
       if (p.m_fSpeed != fRate) {
         p.m_fSpeed = fRate;
         g_Playing->m_Music->SetParams(p);
       }
     }
 
-    bool bIsPlaying = g_Playing->m_Music->IsPlaying();
+    bool bIsPlaying = HasCurrentMusic() && g_Playing->m_Music->IsPlaying();
     g_Mutex->Unlock();
     if (!bIsPlaying && g_bWasPlayingOnLastUpdate &&
         !g_FallbackMusicParams.sFile.empty()) {
@@ -1224,7 +1405,8 @@ void GameSoundManager::Update(float fDeltaTime) {
     // const float fFadeOutSpeed = 0.3f;
     float fFadeInSpeed = g_Playing->m_Music->GetParams().m_fFadeInSeconds;
     float fFadeOutSpeed = g_Playing->m_Music->GetParams().m_fFadeOutSeconds;
-    float fVolume = g_Playing->m_Music->GetParams().m_Volume;
+    float fVolume =
+        SanitizeVolume(g_Playing->m_Music->GetParams().m_Volume);
     switch (g_FadeState) {
       case FADE_NONE:
         break;
@@ -1270,7 +1452,7 @@ void GameSoundManager::Update(float fDeltaTime) {
   }
 
   const float fAdjust = GetFrameTimingAdjustment(fDeltaTime);
-  if (!g_Playing->m_Music->IsPlaying()) {
+  if (!HasCurrentMusic() || !g_Playing->m_Music->IsPlaying()) {
     /* There's no song playing.  Fake it. */
     GAMESTATE->UpdateSongPosition(
         GAMESTATE->m_Position.m_fMusicSeconds +
@@ -1286,7 +1468,8 @@ void GameSoundManager::Update(float fDeltaTime) {
   const float fSeconds = g_Playing->m_Music->GetPositionSeconds(&tm);
 
   // Check for song timing skips.
-  if (PREFSMAN->m_bLogSkips && !g_Playing->m_bTimingDelayed) {
+  if (PREFSMAN != nullptr && PREFSMAN->m_bLogSkips &&
+      !g_Playing->m_bTimingDelayed) {
     const float fExpectedTimePassed =
         (tm - GAMESTATE->m_Position.m_LastBeatUpdate) *
         g_Playing->m_Music->GetPlaybackRate();
@@ -1300,11 +1483,13 @@ void GameSoundManager::Update(float fDeltaTime) {
     /* If fSoundTimePassed < 0, the sound has probably looped. */
     if (sLastFile == ThisFile && fSoundTimePassed >= 0 &&
         std::abs(fDiff) > 0.003f) {
-      LOG->Trace(
-          "Song position skip in %s: expected %.3f, got %.3f (cur %f, prev %f) "
-          "(%.3f difference)",
-          Basename(ThisFile).c_str(), fExpectedTimePassed, fSoundTimePassed,
-          fSeconds, GAMESTATE->m_Position.m_fMusicSeconds, fDiff);
+      if (LOG != nullptr) {
+        LOG->Trace(
+            "Song position skip in %s: expected %.3f, got %.3f (cur %f, prev %f) "
+            "(%.3f difference)",
+            Basename(ThisFile).c_str(), fExpectedTimePassed, fSoundTimePassed,
+            fSeconds, GAMESTATE->m_Position.m_fMusicSeconds, fDiff);
+      }
     }
     sLastFile = ThisFile;
   }
@@ -1329,8 +1514,9 @@ void GameSoundManager::Update(float fDeltaTime) {
   }
 
   // Send crossed messages
-  if (GAMESTATE->m_pCurSong) {
+  if (GAMESTATE->m_pCurSong && MESSAGEMAN != nullptr) {
     static int iBeatLastCrossed = 0;
+    static const Song* pLastCrossedSong = nullptr;
 
     float fSongBeat = GAMESTATE->m_Position.m_fSongBeat;
 
@@ -1338,6 +1524,11 @@ void GameSoundManager::Update(float fDeltaTime) {
     iRowNow = std::max(0, iRowNow);
 
     int iBeatNow = iRowNow / ROWS_PER_BEAT;
+    if (pLastCrossedSong != GAMESTATE->m_pCurSong ||
+        iBeatNow < iBeatLastCrossed) {
+      iBeatLastCrossed = iBeatNow;
+      pLastCrossedSong = GAMESTATE->m_pCurSong;
+    }
 
     for (int iBeat = iBeatLastCrossed + 1; iBeat <= iBeatNow; ++iBeat) {
       Message msg("CrossedBeat");
@@ -1350,12 +1541,15 @@ void GameSoundManager::Update(float fDeltaTime) {
 
   // Update lights
   NoteData& lights = g_Playing->m_Lights;
-  if (lights.GetNumTracks() > 0)  // lights data was loaded
+  if (lights.GetNumTracks() > 0 && LIGHTSMAN != nullptr)  // lights data was loaded
   {
     const float fSongBeat = GAMESTATE->m_Position.m_fLightSongBeat;
     const int iSongRow = BeatToNoteRowNotRounded(fSongBeat);
 
     static int iRowLastCrossed = 0;
+    if (iSongRow < iRowLastCrossed) {
+      iRowLastCrossed = iSongRow;
+    }
 
     FOREACH_CabinetLight(cl) {
       // Are we "holding" the light?
@@ -1379,8 +1573,11 @@ void GameSoundManager::Update(float fDeltaTime) {
 }
 
 std::string GameSoundManager::GetMusicPath() const {
+  if (g_Mutex == nullptr) {
+    return "";
+  }
   LockMut(*g_Mutex);
-  return g_Playing->m_Music->GetLoadedFilePath();
+  return HasCurrentMusic() ? g_Playing->m_Music->GetLoadedFilePath() : "";
 }
 
 void GameSoundManager::PlayMusic(
@@ -1402,6 +1599,9 @@ void GameSoundManager::PlayMusic(
 
 void GameSoundManager::PlayMusic(
     PlayMusicParams params, PlayMusicParams FallbackMusicParams) {
+  if (!HasSoundQueueRuntime()) {
+    return;
+  }
   g_FallbackMusicParams = FallbackMusicParams;
 
   //	LOG->Trace("play '%s' (current '%s')", file.c_str(),
@@ -1421,21 +1621,25 @@ void GameSoundManager::PlayMusic(
   }
 
   ToPlay.bForceLoop = params.bForceLoop;
-  ToPlay.fStartSecond = params.fStartSecond;
-  ToPlay.fLengthSeconds = params.fLengthSeconds;
-  ToPlay.fFadeInLengthSeconds = params.fFadeInLengthSeconds;
-  ToPlay.fFadeOutLengthSeconds = params.fFadeOutLengthSeconds;
+  ToPlay.fStartSecond = SanitizeNonNegativeSeconds(params.fStartSecond);
+  ToPlay.fLengthSeconds = SanitizeLengthSeconds(params.fLengthSeconds);
+  ToPlay.fFadeInLengthSeconds =
+      SanitizeNonNegativeSeconds(params.fFadeInLengthSeconds);
+  ToPlay.fFadeOutLengthSeconds =
+      SanitizeNonNegativeSeconds(params.fFadeOutLengthSeconds);
   ToPlay.bAlignBeat = params.bAlignBeat;
   ToPlay.bApplyMusicRate = params.bApplyMusicRate;
 
   /* Add the MusicToPlay to the g_MusicsToPlay queue. */
   g_Mutex->Lock();
-  g_MusicsToPlay.push_back(ToPlay);
-  g_Mutex->Broadcast();
+  EnqueueBounded(g_MusicsToPlay, ToPlay);
   g_Mutex->Unlock();
 }
 
 void GameSoundManager::DimMusic(float fVolume, float fDurationSeconds) {
+  if (g_Mutex == nullptr || !HasCurrentMusic()) {
+    return;
+  }
   LockMut(*g_Mutex);
 
   if (g_FadeState == FADE_NONE) {
@@ -1444,37 +1648,49 @@ void GameSoundManager::DimMusic(float fVolume, float fDurationSeconds) {
   // otherwise, g_fOriginalVolume is already set and m_Volume will be the
   // current state, not the original state
 
-  g_fDimDurationRemaining = fDurationSeconds;
-  g_fDimVolume = fVolume;
+  g_fDimDurationRemaining = SanitizeNonNegativeSeconds(fDurationSeconds);
+  g_fDimVolume = SanitizeVolume(fVolume);
   g_FadeState = FADE_OUT;
 }
 
 void GameSoundManager::HandleSongTimer(bool on) {
+  if (g_Mutex == nullptr) {
+    return;
+  }
   LockMut(*g_Mutex);
   g_UpdatingTimer = on;
 }
 
 void GameSoundManager::PlayOnce(std::string sPath) {
+  if (sPath.empty() || sPath.size() > kMaxQueuedPathLength ||
+      !HasSoundQueueRuntime()) {
+    return;
+  }
   /* Add the sound to the g_SoundsToPlayOnce queue. */
   g_Mutex->Lock();
-  g_SoundsToPlayOnce.push_back(sPath);
-  g_Mutex->Broadcast();
+  EnqueueBounded(g_SoundsToPlayOnce, sPath);
   g_Mutex->Unlock();
 }
 
 void GameSoundManager::PlayOnceFromDir(std::string sPath) {
+  if (sPath.empty() || sPath.size() > kMaxQueuedPathLength ||
+      !HasSoundQueueRuntime()) {
+    return;
+  }
   /* Add the path to the g_SoundsToPlayOnceFromDir queue. */
   g_Mutex->Lock();
-  g_SoundsToPlayOnceFromDir.push_back(sPath);
-  g_Mutex->Broadcast();
+  EnqueueBounded(g_SoundsToPlayOnceFromDir, sPath);
   g_Mutex->Unlock();
 }
 
 void GameSoundManager::PlayOnceFromAnnouncer(std::string sPath) {
+  if (sPath.empty() || sPath.size() > kMaxQueuedPathLength ||
+      !HasSoundQueueRuntime()) {
+    return;
+  }
   /* Add the path to the g_SoundsToPlayOnceFromAnnouncer queue. */
   g_Mutex->Lock();
-  g_SoundsToPlayOnceFromAnnouncer.push_back(sPath);
-  g_Mutex->Broadcast();
+  EnqueueBounded(g_SoundsToPlayOnceFromAnnouncer, sPath);
   g_Mutex->Unlock();
 }
 
@@ -1489,9 +1705,11 @@ void GameSoundManager::StressTestPlayOnce(std::string sPath, int iCount) {
     LockMutex playOnceLock(g_PlayOnceDataMutex);
     if (!g_bPlayOnceDebugToolsEnabled) {
       if (!g_bLoggedPlayOnceDebugToolsDenied) {
-        LOG->Warn(
-            "PlayOnce stress tools are disabled (enable via --playonce-stress "
-            "or --playonce-debug-tools).");
+        if (LOG != nullptr) {
+          LOG->Warn(
+              "PlayOnce stress tools are disabled (enable via --playonce-stress "
+              "or --playonce-debug-tools).");
+        }
         g_bLoggedPlayOnceDebugToolsDenied = true;
       }
       return;
@@ -1499,9 +1717,11 @@ void GameSoundManager::StressTestPlayOnce(std::string sPath, int iCount) {
   }
 
   const int clampedCount = std::max(1, std::min(iCount, 5000));
-  LOG->Info(
-      "PlayOnce stress test start: path='%s', requested=%d, queued=%d",
-      sPath.c_str(), iCount, clampedCount);
+  if (LOG != nullptr) {
+    LOG->Info(
+        "PlayOnce stress test start: path='%s', requested=%d, queued=%d",
+        sPath.c_str(), iCount, clampedCount);
+  }
   for (int i = 0; i < clampedCount; ++i) {
     PlayOnce(sPath);
   }
@@ -1533,9 +1753,11 @@ bool GameSoundManager::RunPlayOnceRuntimeSmokeTest(
   const PlayOnceDiagnosticsSnapshot before = GetPlayOnceDiagnosticsSnapshot();
 
   LogPlayOnceDiagnostics("runtime_smoke_before");
-  LOG->Info(
-      "PlayOnce runtime smoke start: path='%s', requested=%d, direct_calls=%d",
-      sPath.c_str(), iCount, clampedCount);
+  if (LOG != nullptr) {
+    LOG->Info(
+        "PlayOnce runtime smoke start: path='%s', requested=%d, direct_calls=%d",
+        sPath.c_str(), iCount, clampedCount);
+  }
   for (int i = 0; i < clampedCount; ++i) {
     DoPlayOnce(sPath);
   }
@@ -1556,16 +1778,18 @@ bool GameSoundManager::RunPlayOnceRuntimeSmokeTest(
                   newInvalidLoads == 0 && newPoolFullDrops == 0 &&
                   newMemoryDrops == 0 &&
                   (!busyDropIsFailure || newBusyDrops == 0);
-  LOG->Info(
-      "PlayOnce runtime smoke %s: path='%s' count=%d voices=%d pools=%zu "
-      "empty_pools=%zu invalid_delta=%llu busy_delta=%llu "
-      "pool_full_delta=%llu memory_delta=%llu",
-      ok ? "PASS" : "FAIL", sPath.c_str(), clampedCount, forcedVoiceCount,
-      after.poolCount, after.emptyPoolCount,
-      static_cast<unsigned long long>(newInvalidLoads),
-      static_cast<unsigned long long>(newBusyDrops),
-      static_cast<unsigned long long>(newPoolFullDrops),
-      static_cast<unsigned long long>(newMemoryDrops));
+  if (LOG != nullptr) {
+    LOG->Info(
+        "PlayOnce runtime smoke %s: path='%s' count=%d voices=%d pools=%zu "
+        "empty_pools=%zu invalid_delta=%llu busy_delta=%llu "
+        "pool_full_delta=%llu memory_delta=%llu",
+        ok ? "PASS" : "FAIL", sPath.c_str(), clampedCount, forcedVoiceCount,
+        after.poolCount, after.emptyPoolCount,
+        static_cast<unsigned long long>(newInvalidLoads),
+        static_cast<unsigned long long>(newBusyDrops),
+        static_cast<unsigned long long>(newPoolFullDrops),
+        static_cast<unsigned long long>(newMemoryDrops));
+  }
 
   return ok;
 }
@@ -1575,9 +1799,11 @@ void GameSoundManager::LogPlayOnceDiagnostics(const std::string& reason) {
     LockMutex playOnceLock(g_PlayOnceDataMutex);
     if (!g_bPlayOnceDebugToolsEnabled && !LogPlayOnceDiagnosticsEnabled()) {
       if (!g_bLoggedPlayOnceDebugToolsDenied) {
-        LOG->Warn(
-            "PlayOnce diagnostics are disabled (enable via --playonce-stress "
-            "or --playonce-debug-tools).");
+        if (LOG != nullptr) {
+          LOG->Warn(
+              "PlayOnce diagnostics are disabled (enable via --playonce-stress "
+              "or --playonce-debug-tools).");
+        }
         g_bLoggedPlayOnceDebugToolsDenied = true;
       }
       return;
@@ -1585,24 +1811,27 @@ void GameSoundManager::LogPlayOnceDiagnostics(const std::string& reason) {
   }
 
   const PlayOnceDiagnosticsSnapshot snapshot = GetPlayOnceDiagnosticsSnapshot();
-  LOG->Info(
-      "PlayOnce diagnostics (%s): pools=%zu invalid_cache=%zu "
-      "empty_pools=%zu estimated_cache=%zu/%zu drops_busy=%llu "
-      "drops_pool_full=%llu drops_memory_budget=%llu evictions=%llu "
-      "invalid_loads=%llu",
-      reason.c_str(), snapshot.poolCount, snapshot.invalidCacheCount,
-      snapshot.emptyPoolCount, snapshot.estimatedCacheBytes,
-      snapshot.maxCacheBytes,
-      static_cast<unsigned long long>(snapshot.droppedBusyCount),
-      static_cast<unsigned long long>(snapshot.droppedPoolFullCount),
-      static_cast<unsigned long long>(snapshot.droppedMemoryBudgetCount),
-      static_cast<unsigned long long>(snapshot.evictedPoolCount),
-      static_cast<unsigned long long>(snapshot.invalidLoadCount));
+  if (LOG != nullptr) {
+    LOG->Info(
+        "PlayOnce diagnostics (%s): pools=%zu invalid_cache=%zu "
+        "empty_pools=%zu estimated_cache=%zu/%zu drops_busy=%llu "
+        "drops_pool_full=%llu drops_memory_budget=%llu evictions=%llu "
+        "invalid_loads=%llu",
+        reason.c_str(), snapshot.poolCount, snapshot.invalidCacheCount,
+        snapshot.emptyPoolCount, snapshot.estimatedCacheBytes,
+        snapshot.maxCacheBytes,
+        static_cast<unsigned long long>(snapshot.droppedBusyCount),
+        static_cast<unsigned long long>(snapshot.droppedPoolFullCount),
+        static_cast<unsigned long long>(snapshot.droppedMemoryBudgetCount),
+        static_cast<unsigned long long>(snapshot.evictedPoolCount),
+        static_cast<unsigned long long>(snapshot.invalidLoadCount));
+  }
 }
 
 float GameSoundManager::GetPlayerBalance(PlayerNumber pn) {
   /* If two players are active, play sounds on each players' side. */
-  if (GAMESTATE->GetNumPlayersEnabled() == 2) {
+  if (GAMESTATE != nullptr && pn >= PLAYER_1 && pn < NUM_PlayerNumber &&
+      GAMESTATE->GetNumPlayersEnabled() == 2) {
     return (pn == PLAYER_1) ? -1.0f : 1.0f;
   } else {
     return 0;
@@ -1622,7 +1851,8 @@ class LunaGameSoundManager : public Luna<GameSoundManager> {
   }
   static int PlayOnce(T* p, lua_State* L) {
     std::string sPath = SArg(1);
-    if (lua_toboolean(L, 2) && PREFSMAN->m_MuteActions) {
+    if (lua_toboolean(L, 2) && PREFSMAN != nullptr &&
+        PREFSMAN->m_MuteActions) {
       COMMON_RETURN_SELF;
     }
     p->PlayOnce(sPath);
@@ -1673,7 +1903,7 @@ class LunaGameSoundManager : public Luna<GameSoundManager> {
     COMMON_RETURN_SELF;
   }
   static int IsTimingDelayed(T* p, lua_State* L) {
-    lua_pushboolean(L, g_Playing->m_bTimingDelayed);
+    lua_pushboolean(L, g_Playing != nullptr && g_Playing->m_bTimingDelayed);
     return 1;
   }
   static int LogPlayOnceStats(T* p, lua_State* L) {
