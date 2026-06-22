@@ -221,6 +221,17 @@ ITGOnline.cachedLobbySearchPayload = ITGOnline.cachedLobbySearchPayload or { lob
 ITGOnline.finalLeaderboardCache = ITGOnline.finalLeaderboardCache or {}
 ITGOnline.latestFinalLeaderboardCache = ITGOnline.latestFinalLeaderboardCache or nil
 ITGOnline.finalLeaderboardCacheSignature = ITGOnline.finalLeaderboardCacheSignature or ""
+ITGOnline.finalLeaderboardCacheBootLogged = ITGOnline.finalLeaderboardCacheBootLogged or false
+
+local function final_leaderboard_cache_trace(message)
+	local line = "ITG Online: FLOW final_leaderboard_cache " .. tostring(message or "")
+	if Trace then Trace(line) elseif Warn then Warn(line) end
+end
+
+if not ITGOnline.finalLeaderboardCacheBootLogged then
+	ITGOnline.finalLeaderboardCacheBootLogged = true
+	final_leaderboard_cache_trace("boot version=2026-06-23-global-final-leaderboard-cache")
+end
 
 local function online_table_copy(value, depth)
 	if type(value) ~= "table" then return value end
@@ -4437,7 +4448,7 @@ end
 
 function ITGOnline:StoreFinalLeaderboardFromRoom(source, cacheSource)
 	if type(source) ~= "table" then
-		online_flow_trace("final_leaderboard_cache_skip reason=invalid_source source=" .. tostring(cacheSource or "unknown"))
+		final_leaderboard_cache_trace("skip reason=invalid_source source=" .. tostring(cacheSource or "unknown"))
 		return false
 	end
 
@@ -4457,7 +4468,7 @@ function ITGOnline:StoreFinalLeaderboardFromRoom(source, cacheSource)
 
 	local results = self:FinalLeaderboardResultsFrom(source)
 	if type(results) ~= "table" or #results == 0 then
-		online_flow_trace("final_leaderboard_cache_skip reason=empty_results source=" .. tostring(cacheSource or "unknown")
+		final_leaderboard_cache_trace("skip reason=empty_results source=" .. tostring(cacheSource or "unknown")
 			.. " room=" .. tostring(source.roomId or source.room_id or source.id or self.currentRoomId or "nil")
 			.. " phase=" .. tostring(phase or "nil"))
 		return false
@@ -4503,7 +4514,7 @@ function ITGOnline:StoreFinalLeaderboardFromRoom(source, cacheSource)
 	}, "|")
 	if signature ~= tostring(self.finalLeaderboardCacheSignature or "") then
 		self.finalLeaderboardCacheSignature = signature
-		online_flow_trace("final_leaderboard_cache_store"
+		final_leaderboard_cache_trace("store"
 			.. " source=" .. tostring(cacheSource or "unknown")
 			.. " room=" .. tostring(roomId ~= "" and roomId or "nil")
 			.. " roundKey=" .. tostring(roundKey ~= "" and roundKey or "nil")
@@ -4517,7 +4528,16 @@ function ITGOnline:GetFinalLeaderboardCache(roomId)
 	self.finalLeaderboardCache = self.finalLeaderboardCache or {}
 	local key = tostring(roomId or self.currentRoomId or "")
 	if key ~= "" and self.finalLeaderboardCache[key] then
+		final_leaderboard_cache_trace("hit room=" .. tostring(key)
+			.. " rows=" .. tostring(self.finalLeaderboardCache[key].rows and #self.finalLeaderboardCache[key].rows or 0)
+			.. " source=" .. tostring(self.finalLeaderboardCache[key].source or "unknown"))
 		return self.finalLeaderboardCache[key]
+	end
+	if self.latestFinalLeaderboardCache then
+		final_leaderboard_cache_trace("hit_latest requestedRoom=" .. tostring(key ~= "" and key or "nil")
+			.. " cachedRoom=" .. tostring(self.latestFinalLeaderboardCache.room_id or "nil")
+			.. " rows=" .. tostring(self.latestFinalLeaderboardCache.rows and #self.latestFinalLeaderboardCache.rows or 0)
+			.. " source=" .. tostring(self.latestFinalLeaderboardCache.source or "unknown"))
 	end
 	return self.latestFinalLeaderboardCache
 end

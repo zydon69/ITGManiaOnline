@@ -20,9 +20,6 @@ local function online_display_name(user, fallback)
 end
 
 local function final_ranking_trace(message)
-	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
-		return
-	end
 	local line = "ITG Online: FLOW final_ranking " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end

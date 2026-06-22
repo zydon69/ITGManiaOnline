@@ -2672,6 +2672,11 @@ CreateOnlineHandler = function()
 							}, "||")
 							if ITGOnline and ITGOnline.StoreFinalLeaderboardFromRoom then
 								ITGOnline:StoreFinalLeaderboardFromRoom(params, "online_lobby_state_message")
+							elseif params and (params.phase or params.status or params.readyPhase) == "results" then
+								local line = "ITG Online: FLOW final_leaderboard_cache unavailable source=online_lobby_state_message room="
+									.. tostring(params.roomId or params.code or "nil")
+									.. " finalResults=" .. tostring(params.finalResults and #params.finalResults or 0)
+								if Trace then Trace(line) elseif Warn then Warn(line) end
 							end
 							if stateSignature ~= "" and stateSignature == tostring(self.lastLobbyStateSignature or "") then
 								online_flow_trace("online_lobby_state_apply_skipped reason=duplicate_signature"
