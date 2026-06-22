@@ -1,5 +1,7 @@
 #include "ScoreDisplayOni.h"
 
+#include <cmath>
+
 #include "ActorUtil.h"
 #include "GameState.h"
 #include "PlayerNumber.h"
@@ -12,22 +14,45 @@
 #include "ThemeManager.h"
 
 namespace {
+void WarnScoreDisplayOniAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+void TraceScoreDisplayOniAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Trace("%s", message);
+  }
+}
+
 bool IsValidPlayerNumber(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
 }
 }  // namespace
 
 ScoreDisplayOni::ScoreDisplayOni() {
-  LOG->Trace("ScoreDisplayOni::ScoreDisplayOni()");
+  if (LOG != nullptr) {
+    LOG->Trace("ScoreDisplayOni::ScoreDisplayOni()");
+  }
 
-  m_sprFrame.Load(THEME->GetPathG("ScoreDisplayOni", "frame"));
+  if (THEME != nullptr) {
+    m_sprFrame.Load(THEME->GetPathG("ScoreDisplayOni", "frame"));
+  } else {
+    WarnScoreDisplayOniAuditFix(
+        "SRC_AUDIT_FIX SRC-1110: ScoreDisplayOni constructed without THEME.");
+  }
   this->AddChild(&m_sprFrame);
 
   // init the text
-  m_text.LoadFromFont(THEME->GetPathF("ScoreDisplayOni", "numbers"));
+  if (THEME != nullptr) {
+    m_text.LoadFromFont(THEME->GetPathF("ScoreDisplayOni", "numbers"));
+  }
   m_text.SetName("ScoreDisplayOni Numbers");
   m_text.SetShadowLength(0);
-  LOAD_ALL_COMMANDS(m_text);
+  if (THEME != nullptr) {
+    LOAD_ALL_COMMANDS(m_text);
+  }
   this->AddChild(&m_text);
 }
 
@@ -41,7 +66,7 @@ void ScoreDisplayOni::Update(float fDelta) {
   ScoreDisplay::Update(fDelta);
 
   if (m_pPlayerState == nullptr) {
-    LOG->Trace(
+    TraceScoreDisplayOniAuditFix(
         "SRC_AUDIT_FIX SRC-241: ScoreDisplayOni skipped update without "
         "PlayerState.");
     m_text.SetText(SecondsToMMSSMsMs(0));
@@ -52,12 +77,17 @@ void ScoreDisplayOni::Update(float fDelta) {
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
 
   float fSecsIntoPlay = 0;
-  if (IsValidPlayerNumber(pn) && GAMESTATE->IsPlayerEnabled(pn)) {
+  if (GAMESTATE != nullptr && STATSMAN != nullptr && IsValidPlayerNumber(pn) &&
+      GAMESTATE->IsPlayerEnabled(pn)) {
     fSecsIntoPlay = STATSMAN->m_CurStageStats.m_player[pn].m_fAliveSeconds;
   } else if (!IsValidPlayerNumber(pn)) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-241: ScoreDisplayOni ignored invalid player %i.",
-        pn);
+    TraceScoreDisplayOniAuditFix(
+        "SRC_AUDIT_FIX SRC-241: ScoreDisplayOni ignored invalid player.");
+  }
+  if (!std::isfinite(fSecsIntoPlay) || fSecsIntoPlay < 0.0f) {
+    TraceScoreDisplayOniAuditFix(
+        "SRC_AUDIT_FIX SRC-1111: ScoreDisplayOni corrected invalid seconds.");
+    fSecsIntoPlay = 0.0f;
   }
 
   m_text.SetText(SecondsToMMSSMsMs(fSecsIntoPlay));

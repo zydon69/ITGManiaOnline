@@ -13,16 +13,49 @@
 #include "ScoreDisplay.h"
 #include "ThemeManager.h"
 
+namespace {
+void WarnScoreDisplayLifeTimeAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+void TraceScoreDisplayLifeTimeAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Trace("%s", message);
+  }
+}
+}  // namespace
+
 ScoreDisplayLifeTime::ScoreDisplayLifeTime() {
-  LOG->Trace("ScoreDisplayLifeTime::ScoreDisplayLifeTime()");
+  if (LOG != nullptr) {
+    LOG->Trace("ScoreDisplayLifeTime::ScoreDisplayLifeTime()");
+  }
+}
+
+void ScoreDisplayLifeTime::ResetLoadedActors() {
+  if (m_sprFrame.IsLoaded()) {
+    RemoveChild(m_sprFrame);
+    m_sprFrame.Unload();
+  }
+  RemoveChild(&m_textTimeRemaining);
+  RemoveChild(&m_textDeltaSeconds);
 }
 
 void ScoreDisplayLifeTime::Init(
     const PlayerState* pPlayerState,
     const PlayerStageStats* pPlayerStageStats) {
   ScoreDisplay::Init(pPlayerState, pPlayerStageStats);
+  ResetLoadedActors();
 
   const std::string sType = "ScoreDisplayLifeTime";
+
+  if (THEME == nullptr) {
+    WarnScoreDisplayLifeTimeAuditFix(
+        "SRC_AUDIT_FIX SRC-1108: ScoreDisplayLifeTime refused init without "
+        "THEME.");
+    return;
+  }
 
   m_sprFrame.Load(THEME->GetPathG(sType, "frame"));
   m_sprFrame->SetName("Frame");
@@ -57,7 +90,7 @@ void ScoreDisplayLifeTime::Update(float fDelta) {
   ScoreDisplay::Update(fDelta);
 
   if (m_pPlayerStageStats == nullptr) {
-    LOG->Trace(
+    TraceScoreDisplayLifeTimeAuditFix(
         "SRC_AUDIT_FIX SRC-241: ScoreDisplayLifeTime skipped update without "
         "PlayerStageStats.");
     m_textTimeRemaining.SetText(SecondsToMSSMsMs(0));
@@ -66,10 +99,9 @@ void ScoreDisplayLifeTime::Update(float fDelta) {
 
   float fSecs = m_pPlayerStageStats->m_fLifeRemainingSeconds;
   if (!std::isfinite(fSecs) || fSecs < 0.0f) {
-    LOG->Trace(
+    TraceScoreDisplayLifeTimeAuditFix(
         "SRC_AUDIT_FIX SRC-241: ScoreDisplayLifeTime corrected invalid life "
-        "seconds %f.",
-        fSecs);
+        "seconds.");
     fSecs = 0.0f;
   }
 
@@ -79,9 +111,19 @@ void ScoreDisplayLifeTime::Update(float fDelta) {
 
 void ScoreDisplayLifeTime::OnLoadSong() {}
 
-void ScoreDisplayLifeTime::OnJudgment(TapNoteScore tns) {}
+void ScoreDisplayLifeTime::OnJudgment(TapNoteScore tns) {
+  if (tns >= TNS_None && tns < NUM_TapNoteScore) {
+    m_textDeltaSeconds.PlayCommand(TapNoteScoreToString(tns));
+  }
+}
 
-void ScoreDisplayLifeTime::OnJudgment(HoldNoteScore hns, TapNoteScore tns) {}
+void ScoreDisplayLifeTime::OnJudgment(HoldNoteScore hns, TapNoteScore tns) {
+  if (hns >= HNS_None && hns < NUM_HoldNoteScore) {
+    m_textDeltaSeconds.PlayCommand(HoldNoteScoreToString(hns));
+  } else {
+    OnJudgment(tns);
+  }
+}
 
 /*
  * (c) 2001-2004 Chris Danford

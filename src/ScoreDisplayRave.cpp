@@ -13,38 +13,73 @@
 #include "ThemeManager.h"
 
 namespace {
+void WarnScoreDisplayRaveAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
 bool IsValidScoreDisplayPlayer(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
 }
 }  // namespace
 
 ScoreDisplayRave::ScoreDisplayRave() {
-  LOG->Trace("ScoreDisplayRave::ScoreDisplayRave()");
+  if (LOG != nullptr) {
+    LOG->Trace("ScoreDisplayRave::ScoreDisplayRave()");
+  }
 
   m_lastLevelSeen = ATTACK_LEVEL_1;
 
-  for (int i = 0; i < NUM_ATTACK_LEVELS; i++) {
-    m_sprMeter[i].Load(
-        THEME->GetPathG("ScoreDisplayRave", ssprintf("stream level%d", i + 1)));
-    m_sprMeter[i].SetCropRight(1.f);
-  }
+  if (THEME != nullptr) {
+    for (int i = 0; i < NUM_ATTACK_LEVELS; i++) {
+      m_sprMeter[i].Load(THEME->GetPathG(
+          "ScoreDisplayRave", ssprintf("stream level%d", i + 1)));
+      m_sprMeter[i].SetCropRight(1.f);
+    }
 
-  m_textLevel.LoadFromFont(THEME->GetPathF("ScoreDisplayRave", "level"));
+    m_textLevel.LoadFromFont(THEME->GetPathF("ScoreDisplayRave", "level"));
+  } else {
+    WarnScoreDisplayRaveAuditFix(
+        "SRC_AUDIT_FIX SRC-1112: ScoreDisplayRave constructed without THEME.");
+  }
   m_textLevel.SetText("1");
+}
+
+void ScoreDisplayRave::ResetLoadedActors() {
+  if (m_sprFrameBase.IsLoaded()) {
+    RemoveChild(m_sprFrameBase);
+    m_sprFrameBase.Unload();
+  }
+  if (m_sprFrameOverlay.IsLoaded()) {
+    RemoveChild(m_sprFrameOverlay);
+    m_sprFrameOverlay.Unload();
+  }
+  for (int i = 0; i < NUM_ATTACK_LEVELS; i++) {
+    RemoveChild(&m_sprMeter[i]);
+  }
+  RemoveChild(&m_textLevel);
 }
 
 void ScoreDisplayRave::Init(
     const PlayerState* pPlayerState,
     const PlayerStageStats* pPlayerStageStats) {
   ScoreDisplay::Init(pPlayerState, pPlayerStageStats);
+  ResetLoadedActors();
+
+  if (THEME == nullptr) {
+    WarnScoreDisplayRaveAuditFix(
+        "SRC_AUDIT_FIX SRC-1112: ScoreDisplayRave refused init without "
+        "THEME.");
+    return;
+  }
 
   PlayerNumber pn = PLAYER_1;
   if (pPlayerState == nullptr ||
       !IsValidScoreDisplayPlayer(pPlayerState->m_PlayerNumber)) {
-    LOG->Warn(
+    WarnScoreDisplayRaveAuditFix(
         "SRC_AUDIT_FIX: ScoreDisplayRave initialized with invalid "
-        "PlayerState %p; using PLAYER_1 assets.",
-        static_cast<const void*>(pPlayerState));
+        "PlayerState; using PLAYER_1 assets.");
   } else {
     pn = pPlayerState->m_PlayerNumber;
   }

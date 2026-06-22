@@ -18,6 +18,8 @@ class ScoreDisplayRave : public ScoreDisplay {
   virtual void Update(float fDelta);
 
  protected:
+  void ResetLoadedActors();
+
   AutoActor m_sprFrameBase;
   Sprite m_sprMeter[NUM_ATTACK_LEVELS];
   AutoActor m_sprFrameOverlay;

@@ -25,6 +25,8 @@ class ScoreDisplayLifeTime : public ScoreDisplay {
   virtual void OnJudgment(HoldNoteScore score, TapNoteScore tscore);
 
  protected:
+  void ResetLoadedActors();
+
   AutoActor m_sprFrame;
   BitmapText m_textTimeRemaining;
   BitmapText m_textDeltaSeconds;
