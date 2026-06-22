@@ -155,7 +155,7 @@ PrefsManager::PrefsManager()
     : m_sCurrentGame("CurrentGame", ""),
 
       m_sAnnouncer("Announcer", ""),
-      m_sTheme("Theme", SpecialFiles::BASE_THEME_NAME),
+      m_sTheme("Theme", "Simply Love"),
       m_sDefaultModifiers("DefaultModifiers", ""),
 
       m_bWindowed("Windowed", true),
