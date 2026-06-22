@@ -15,6 +15,7 @@ struct RadarValues;
 class GrooveRadar : public ActorFrame {
  public:
   GrooveRadar();
+  GrooveRadar(const GrooveRadar& cpy);
   virtual GrooveRadar* Copy() const;
   virtual void LoadFromNode(const XNode* pNode);
 

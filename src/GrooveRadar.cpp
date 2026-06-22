@@ -6,6 +6,7 @@
 #include "LuaManager.h"
 #include "PlayerNumber.h"
 #include "RageDisplay.h"
+#include "RageLog.h"
 #include "RageMath.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
@@ -31,29 +32,103 @@ static float RADAR_VALUE_ROTATION(int iValueIndex) {
 
 static const int NUM_SHOWN_RADAR_CATEGORIES = 5;
 
+namespace {
+bool IsValidGrooveRadarPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+void WarnGrooveRadar(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+float SanitizeRadarValue(float value) {
+  if (!std::isfinite(value)) {
+    return 0.0f;
+  }
+  return std::clamp(value, 0.0f, 1.0f);
+}
+
+float SanitizeRadarTween(float value) {
+  if (!std::isfinite(value)) {
+    return 1.0f;
+  }
+  return std::clamp(value, 0.0f, 1.0f);
+}
+}  // namespace
+
 GrooveRadar::GrooveRadar() {
-  m_sprRadarBase.Load(THEME->GetPathG("GrooveRadar", "base"));
-  m_Frame.AddChild(m_sprRadarBase);
+  if (THEME != nullptr) {
+    m_sprRadarBase.Load(THEME->GetPathG("GrooveRadar", "base"));
+  } else {
+    WarnGrooveRadar("SRC_AUDIT_FIX SRC-1150: GrooveRadar loaded without THEME.");
+    m_sprRadarBase.Load(new Actor);
+  }
+  if (m_sprRadarBase.IsLoaded()) {
+    m_Frame.AddChild(m_sprRadarBase);
+  }
   m_Frame.SetName("RadarFrame");
-  ActorUtil::LoadAllCommands(m_Frame, "GrooveRadar");
+  if (THEME != nullptr) {
+    ActorUtil::LoadAllCommands(m_Frame, "GrooveRadar");
+  }
 
   FOREACH_PlayerNumber(p) {
     // todo: remove dependency on radar base being a sprite. -aj
-    m_GrooveRadarValueMap[p].SetRadius(m_sprRadarBase->GetZoomedWidth());
+    const float baseWidth =
+        m_sprRadarBase.IsLoaded() ? m_sprRadarBase->GetZoomedWidth() : 0.0f;
+    m_GrooveRadarValueMap[p].SetRadius(baseWidth);
     m_Frame.AddChild(&m_GrooveRadarValueMap[p]);
     m_GrooveRadarValueMap[p].SetName(ssprintf("RadarValueMapP%d", p + 1));
-    ActorUtil::LoadAllCommands(m_GrooveRadarValueMap[p], "GrooveRadar");
+    if (THEME != nullptr) {
+      ActorUtil::LoadAllCommands(m_GrooveRadarValueMap[p], "GrooveRadar");
+    }
   }
 
   this->AddChild(&m_Frame);
 
   for (int c = 0; c < NUM_SHOWN_RADAR_CATEGORIES; c++) {
     m_sprRadarLabels[c].SetName(ssprintf("Label%i", c + 1));
-    m_sprRadarLabels[c].Load(THEME->GetPathG("GrooveRadar", "labels 1x5"));
+    if (THEME != nullptr) {
+      m_sprRadarLabels[c].Load(THEME->GetPathG("GrooveRadar", "labels 1x5"));
+    }
     m_sprRadarLabels[c].StopAnimating();
     m_sprRadarLabels[c].SetState(c);
-    ActorUtil::LoadAllCommandsAndSetXY(m_sprRadarLabels[c], "GrooveRadar");
+    if (THEME != nullptr) {
+      ActorUtil::LoadAllCommandsAndSetXY(m_sprRadarLabels[c], "GrooveRadar");
+    }
     this->AddChild(&m_sprRadarLabels[c]);
+  }
+}
+
+GrooveRadar::GrooveRadar(const GrooveRadar& cpy)
+    : ActorFrame(cpy), m_sprRadarBase(cpy.m_sprRadarBase), m_Frame(cpy.m_Frame) {
+  if (m_sprRadarBase.IsLoaded()) {
+    m_Frame.AddChild(m_sprRadarBase);
+  }
+
+  FOREACH_PlayerNumber(p) {
+    m_GrooveRadarValueMap[p].m_bValuesVisible =
+        cpy.m_GrooveRadarValueMap[p].m_bValuesVisible;
+    m_GrooveRadarValueMap[p].m_PercentTowardNew =
+        SanitizeRadarTween(cpy.m_GrooveRadarValueMap[p].m_PercentTowardNew);
+    m_GrooveRadarValueMap[p].m_PlayerNumber =
+        cpy.m_GrooveRadarValueMap[p].m_PlayerNumber;
+    m_GrooveRadarValueMap[p].SetRadius(
+        cpy.m_GrooveRadarValueMap[p].GetUnzoomedWidth());
+    for (int c = 0; c < NUM_RadarCategory; ++c) {
+      m_GrooveRadarValueMap[p].m_fValuesNew[c] =
+          SanitizeRadarValue(cpy.m_GrooveRadarValueMap[p].m_fValuesNew[c]);
+      m_GrooveRadarValueMap[p].m_fValuesOld[c] =
+          SanitizeRadarValue(cpy.m_GrooveRadarValueMap[p].m_fValuesOld[c]);
+    }
+    m_Frame.AddChild(&m_GrooveRadarValueMap[p]);
+  }
+
+  AddChild(&m_Frame);
+  for (int c = 0; c < NUM_RadarCategory; ++c) {
+    m_sprRadarLabels[c] = cpy.m_sprRadarLabels[c];
+    AddChild(&m_sprRadarLabels[c]);
   }
 }
 
@@ -64,12 +139,20 @@ void GrooveRadar::LoadFromNode(const XNode* pNode) {
 void GrooveRadar::SetEmpty(PlayerNumber pn) { SetFromSteps(pn, nullptr); }
 
 void GrooveRadar::SetFromRadarValues(PlayerNumber pn, const RadarValues& rv) {
+  if (!IsValidGrooveRadarPlayer(pn)) {
+    WarnGrooveRadar("SRC_AUDIT_FIX SRC-1151: GrooveRadar ignored invalid player.");
+    return;
+  }
   m_GrooveRadarValueMap[pn].SetFromSteps(rv);
 }
 
 void GrooveRadar::SetFromSteps(
     PlayerNumber pn, Steps* pSteps)  // nullptr means no Song
 {
+  if (!IsValidGrooveRadarPlayer(pn)) {
+    WarnGrooveRadar("SRC_AUDIT_FIX SRC-1151: GrooveRadar ignored invalid player.");
+    return;
+  }
   if (pSteps == nullptr) {
     m_GrooveRadarValueMap[pn].SetEmpty();
     return;
@@ -80,6 +163,10 @@ void GrooveRadar::SetFromSteps(
 }
 
 void GrooveRadar::SetFromValues(PlayerNumber pn, std::vector<float> vals) {
+  if (!IsValidGrooveRadarPlayer(pn)) {
+    WarnGrooveRadar("SRC_AUDIT_FIX SRC-1151: GrooveRadar ignored invalid player.");
+    return;
+  }
   m_GrooveRadarValueMap[pn].SetFromValues(vals);
 }
 
@@ -96,15 +183,17 @@ GrooveRadar::GrooveRadarValueMap::GrooveRadarValueMap() {
 void GrooveRadar::GrooveRadarValueMap::SetEmpty() { m_bValuesVisible = false; }
 
 void GrooveRadar::GrooveRadarValueMap::SetFromSteps(const RadarValues& rv) {
+  const bool wasVisible = m_bValuesVisible;
   m_bValuesVisible = true;
   for (int c = 0; c < NUM_SHOWN_RADAR_CATEGORIES; c++) {
-    const float fValueCurrent = m_fValuesOld[c] * (1 - m_PercentTowardNew) +
-                                m_fValuesNew[c] * m_PercentTowardNew;
+    const float percent = SanitizeRadarTween(m_PercentTowardNew);
+    const float fValueCurrent =
+        m_fValuesOld[c] * (1 - percent) + m_fValuesNew[c] * percent;
     m_fValuesOld[c] = fValueCurrent;
-    m_fValuesNew[c] = std::clamp(rv[c], 0.0f, 1.0f);
+    m_fValuesNew[c] = SanitizeRadarValue(rv[c]);
   }
 
-  if (!m_bValuesVisible) {  // the values WERE invisible
+  if (!wasVisible) {
     m_PercentTowardNew = 1;
   } else {
     m_PercentTowardNew = 0;
@@ -112,15 +201,18 @@ void GrooveRadar::GrooveRadarValueMap::SetFromSteps(const RadarValues& rv) {
 }
 
 void GrooveRadar::GrooveRadarValueMap::SetFromValues(std::vector<float> vals) {
+  const bool wasVisible = m_bValuesVisible;
   m_bValuesVisible = true;
   for (int c = 0; c < NUM_SHOWN_RADAR_CATEGORIES; c++) {
-    const float fValueCurrent = m_fValuesOld[c] * (1 - m_PercentTowardNew) +
-                                m_fValuesNew[c] * m_PercentTowardNew;
+    const float percent = SanitizeRadarTween(m_PercentTowardNew);
+    const float fValueCurrent =
+        m_fValuesOld[c] * (1 - percent) + m_fValuesNew[c] * percent;
     m_fValuesOld[c] = fValueCurrent;
-    m_fValuesNew[c] = vals[c];
+    const float value = c < static_cast<int>(vals.size()) ? vals[c] : 0.0f;
+    m_fValuesNew[c] = SanitizeRadarValue(value);
   }
 
-  if (!m_bValuesVisible) {  // the values WERE invisible
+  if (!wasVisible) {
     m_PercentTowardNew = 1;
   } else {
     m_PercentTowardNew = 0;
@@ -130,6 +222,10 @@ void GrooveRadar::GrooveRadarValueMap::SetFromValues(std::vector<float> vals) {
 void GrooveRadar::GrooveRadarValueMap::Update(float fDeltaTime) {
   ActorFrame::Update(fDeltaTime);
 
+  if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
+    return;
+  }
+  m_PercentTowardNew = SanitizeRadarTween(m_PercentTowardNew);
   m_PercentTowardNew = std::min(m_PercentTowardNew + 4.0f * fDeltaTime, 1.0f);
 }
 
@@ -138,6 +234,10 @@ void GrooveRadar::GrooveRadarValueMap::DrawPrimitives() {
 
   // draw radar filling
   const float fRadius = GetUnzoomedWidth() / 2.0f * 1.1f;
+  if (DISPLAY == nullptr || m_pTempState == nullptr ||
+      !std::isfinite(fRadius) || fRadius <= 0.0f) {
+    return;
+  }
 
   DISPLAY->ClearAllTextures();
   DISPLAY->SetTextureMode(TextureUnit_1, TextureMode_Modulate);
@@ -155,17 +255,21 @@ void GrooveRadar::GrooveRadarValueMap::DrawPrimitives() {
   color.a = 0.5f;
   v[0].p = RageVector3(0, 0, 0);
   RageColor midcolor = color;
-  midcolor.a = RADAR_CENTER_ALPHA;
+  const float centerAlpha = std::isfinite(RADAR_CENTER_ALPHA.GetValue())
+                                ? RADAR_CENTER_ALPHA.GetValue()
+                                : 0.0f;
+  midcolor.a = std::clamp(centerAlpha, 0.0f, 1.0f);
   v[0].c = midcolor;
   v[1].c = color;
+  const float percent = SanitizeRadarTween(m_PercentTowardNew);
 
   for (int i = 0; i < NUM_SHOWN_RADAR_CATEGORIES + 1;
        i++)  // do one extra to close the fan
   {
     const int c = i % NUM_SHOWN_RADAR_CATEGORIES;
     const float fDistFromCenter =
-        (m_fValuesOld[c] * (1 - m_PercentTowardNew) +
-         m_fValuesNew[c] * m_PercentTowardNew + 0.07f) *
+        (SanitizeRadarValue(m_fValuesOld[c]) * (1 - percent) +
+         SanitizeRadarValue(m_fValuesNew[c]) * percent + 0.07f) *
         fRadius;
     const float fRotation = RADAR_VALUE_ROTATION(i);
     const float fX = std::cos(fRotation) * fDistFromCenter;
@@ -181,8 +285,8 @@ void GrooveRadar::GrooveRadarValueMap::DrawPrimitives() {
   for (int i = 0; i <= NUM_SHOWN_RADAR_CATEGORIES; i++) {
     const int c = i % NUM_SHOWN_RADAR_CATEGORIES;
     const float fDistFromCenter =
-        (m_fValuesOld[c] * (1 - m_PercentTowardNew) +
-         m_fValuesNew[c] * m_PercentTowardNew + 0.07f) *
+        (SanitizeRadarValue(m_fValuesOld[c]) * (1 - percent) +
+         SanitizeRadarValue(m_fValuesNew[c]) * percent + 0.07f) *
         fRadius;
     const float fRotation = RADAR_VALUE_ROTATION(i);
     const float fX = std::cos(fRotation) * fDistFromCenter;
@@ -199,7 +303,10 @@ void GrooveRadar::GrooveRadarValueMap::DrawPrimitives() {
   // NUM_SHOWN_RADAR_CATEGORIES, RADAR_EDGE_WIDTH );	break; 	case 1:
   // DISPLAY->DrawLoop_Polys( v, NUM_SHOWN_RADAR_CATEGORIES, RADAR_EDGE_WIDTH );
   // break; 	default: 	case -1:
-  DISPLAY->DrawLineStrip(v, NUM_SHOWN_RADAR_CATEGORIES + 1, RADAR_EDGE_WIDTH);
+  const float edgeWidth = std::isfinite(RADAR_EDGE_WIDTH.GetValue())
+                              ? std::max(0.0f, RADAR_EDGE_WIDTH.GetValue())
+                              : 0.0f;
+  DISPLAY->DrawLineStrip(v, NUM_SHOWN_RADAR_CATEGORIES + 1, edgeWidth);
   //	break;
   //	}
 }
