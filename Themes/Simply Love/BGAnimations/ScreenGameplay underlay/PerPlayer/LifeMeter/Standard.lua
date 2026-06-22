@@ -4,6 +4,7 @@ local w = 136
 local h = 18
 local _y = 20
 local side_margin = 4
+local show_swoosh = SL[ToEnumShortString(player)].ActiveModifiers.LifeMeterSwoosh == true
 
 local function resolve_lifebar_x(player_number)
 	local notefield_x = GetNotefieldX(player_number)
@@ -78,6 +79,10 @@ local meter = Def.ActorFrame{
 		Name="MeterSwoosh",
 		InitCommand=function(self)
 			swoosh = self
+			if not show_swoosh then
+				self:visible(false)
+				return
+			end
 
 			self:zoomto(w,h)
 				 :diffusealpha(0.2)
@@ -89,6 +94,7 @@ local meter = Def.ActorFrame{
 			--texcoordvelocity is handled by the Update function below
 		end,
 		HealthStateChangedMessageCommand=function(self,params)
+			if not show_swoosh then return end
 			if(params.PlayerNumber == player) then
 				if(params.HealthState == 'HealthState_Hot') then
 					self:diffusealpha(1)
@@ -104,6 +110,7 @@ local meter = Def.ActorFrame{
 		-- having an effect that is strong enough to change someone's life
 		-- synonyms: compelling, life-altering, puissant, blazing
 		LifeChangedMessageCommand=function(self,params)
+			if not show_swoosh then return end
 			if params.Player == player then
 				local life = params.LifeMeter:GetLife() * w
 				self:finishtweening()

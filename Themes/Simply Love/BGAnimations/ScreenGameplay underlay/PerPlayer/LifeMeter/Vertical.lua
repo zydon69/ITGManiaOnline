@@ -4,6 +4,7 @@ local pn = ToEnumShortString(player)
 local width = 16
 local height = 250
 local _x = _screen.cx + (player==PLAYER_1 and -1 or 1) * SL_WideScale(302, 400)
+local show_swoosh = SL[pn].ActiveModifiers.LifeMeterSwoosh == true
 
 -- if double
 if GAMESTATE:GetCurrentStyle():GetStyleType() == "StyleType_OnePlayerTwoSides"
@@ -71,6 +72,10 @@ local meter = Def.ActorFrame{
 		Name="MeterSwoosh",
 		InitCommand=function(self)
 			swoosh = self
+			if not show_swoosh then
+				self:visible(false)
+				return
+			end
 
 			self:diffusealpha(0.2)
 				 :horizalign( left )
@@ -82,6 +87,7 @@ local meter = Def.ActorFrame{
 			--texcoordvelocity is handled by the Update function below
 		end,
 		LifeChangedMessageCommand=function(self,params)
+			if not show_swoosh then return end
 			if(params.Player == player) then
 				local life = params.LifeMeter:GetLife() * height
 				self:finishtweening()

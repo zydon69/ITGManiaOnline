@@ -39,6 +39,7 @@ local PlayerDefaults = {
 				JudgmentTilt = false,
 				TiltMultiplier = 1,
 				ColumnCues = true,
+				LifeMeterSwoosh = false,
 				DisplayScorebox = true,
 				SBITGScore = true,
 				SBExScore = true,

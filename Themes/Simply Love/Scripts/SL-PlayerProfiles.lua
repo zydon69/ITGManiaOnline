@@ -56,6 +56,7 @@ local permitted_profile_settings = {
 	JudgmentTilt         = "boolean",
 	TiltMultiplier       = "number",
 	ColumnCues           = "boolean",
+	LifeMeterSwoosh      = "boolean",
 	DisplayScorebox      = "boolean",
 	SBITGScore           = "boolean",
 	SBExScore            = "boolean",
