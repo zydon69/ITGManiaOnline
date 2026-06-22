@@ -1,5 +1,6 @@
 #include "AttackDisplay.h"
 
+#include <cctype>
 #include <set>
 #include <string>
 
@@ -16,12 +17,55 @@
 #include "ThemeManager.h"
 #include "global.h"
 
-static bool IsValidAttackDisplayPlayer(PlayerNumber pn) {
+namespace {
+bool IsValidAttackDisplayPlayer(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
 }
 
+void WarnAttackDisplay(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+void WarnAttackDisplay(const char* message, int value) {
+  if (LOG != nullptr) {
+    LOG->Warn(message, value);
+  }
+}
+
+void TraceAttackDisplayMissingAsset(const std::string& pieceName) {
+  if (LOG != nullptr) {
+    LOG->Trace("Couldn't find \"%s\"", pieceName.c_str());
+  }
+}
+
+std::string GetSafeAttackToken(const std::string& attack) {
+  std::string ret;
+  ret.reserve(attack.size());
+  bool lastWasUnderscore = false;
+  for (unsigned char c : attack) {
+    const bool allowed =
+        std::isalnum(c) != 0 || c == ' ' || c == '_' || c == '-';
+    const char out = allowed ? static_cast<char>(c) : '_';
+    if (out == '_' && lastWasUnderscore) {
+      continue;
+    }
+    ret += out;
+    lastWasUnderscore = out == '_';
+  }
+  while (!ret.empty() && (ret.front() == ' ' || ret.front() == '_')) {
+    ret.erase(ret.begin());
+  }
+  while (!ret.empty() && (ret.back() == ' ' || ret.back() == '_')) {
+    ret.pop_back();
+  }
+  return ret;
+}
+}  // namespace
+
 std::string GetAttackPieceName(const std::string& sAttack) {
-  std::string ret = ssprintf("attack %s", sAttack.c_str());
+  std::string ret = ssprintf("attack %s", GetSafeAttackToken(sAttack).c_str());
 
   /* 1.5x -> 1_5x.  If we pass a period to THEME->GetPathTo, it'll think
    * we're looking for a specific file and not search. */
@@ -44,14 +88,19 @@ AttackDisplay::AttackDisplay() : m_pPlayerState(nullptr) {
 void AttackDisplay::Init(const PlayerState* pPlayerState) {
   m_pPlayerState = pPlayerState;
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: AttackDisplay::Init missing gameplay context.");
+    WarnAttackDisplay(
+        "SRC_AUDIT_FIX SRC-1236: AttackDisplay::Init missing gameplay "
+        "context.");
+    HideAttack();
     return;
   }
 
   // TODO: Remove use of PlayerNumber.
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
   if (!IsValidAttackDisplayPlayer(pn)) {
-    LOG->Warn("SRC_AUDIT_FIX: AttackDisplay::Init invalid player %i.", pn);
+    WarnAttackDisplay(
+        "SRC_AUDIT_FIX SRC-1236: AttackDisplay::Init invalid player %i.", pn);
+    HideAttack();
     return;
   }
   m_sprAttack.SetName(ssprintf("TextP%d", pn + 1));
@@ -65,8 +114,10 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
   for (int al = 0; al < NUM_ATTACK_LEVELS; al++) {
     const Character* ch = GAMESTATE->m_pCurCharacters[pn];
     if (ch == nullptr) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX: AttackDisplay missing character for player %i.", pn);
+      WarnAttackDisplay(
+          "SRC_AUDIT_FIX SRC-1236: AttackDisplay missing character for player "
+          "%i.",
+          pn);
       return;
     }
     const std::string* asAttacks = ch->m_sAttacks[al];
@@ -79,14 +130,23 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
 
   for (std::set<std::string>::const_iterator it = attacks.begin();
        it != attacks.end(); ++it) {
+    if (THEME == nullptr) {
+      WarnAttackDisplay(
+          "SRC_AUDIT_FIX SRC-1237: AttackDisplay skipped preload without "
+          "theme manager.");
+      return;
+    }
+
+    const std::string pieceName = GetAttackPieceName(*it);
     const std::string path =
-        THEME->GetPathG("AttackDisplay", GetAttackPieceName(*it), true);
+        THEME->GetPathG("AttackDisplay", pieceName, true);
     if (path == "") {
-      LOG->Trace("Couldn't find \"%s\"", GetAttackPieceName(*it).c_str());
+      TraceAttackDisplayMissingAsset(pieceName);
       continue;
     }
 
     m_TexturePreload.Load(path);
+    m_PreloadedAttackPaths.insert(path);
   }
 }
 
@@ -109,7 +169,8 @@ void AttackDisplay::Update(float fDelta) {
 
     if (!std::isfinite(attack.fStartSecond) ||
         !std::isfinite(attack.fSecsRemaining)) {
-      LOG->Warn("SRC_AUDIT_FIX: Ignoring non-finite displayed attack.");
+      WarnAttackDisplay(
+          "SRC_AUDIT_FIX SRC-1236: Ignoring non-finite displayed attack.");
       continue;
     }
 
@@ -132,12 +193,33 @@ void AttackDisplay::Update(float fDelta) {
 
 void AttackDisplay::SetAttack(const std::string& sText) {
   if (sText.empty() || THEME == nullptr || m_pPlayerState == nullptr) {
+    HideAttack();
     return;
   }
-  const std::string path =
-      THEME->GetPathG("AttackDisplay", GetAttackPieceName(sText), true);
+
+  // TODO: Remove use of PlayerNumber.
+  PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
+  if (!IsValidAttackDisplayPlayer(pn)) {
+    WarnAttackDisplay(
+        "SRC_AUDIT_FIX SRC-1239: AttackDisplay::SetAttack invalid player %i.",
+        pn);
+    HideAttack();
+    return;
+  }
+
+  const std::string pieceName = GetAttackPieceName(sText);
+  const std::string path = THEME->GetPathG("AttackDisplay", pieceName, true);
   if (path == "") {
-    LOG->Trace("Couldn't find \"%s\"", GetAttackPieceName(sText).c_str());
+    TraceAttackDisplayMissingAsset(pieceName);
+    HideAttack();
+    return;
+  }
+
+  if (m_PreloadedAttackPaths.find(path) == m_PreloadedAttackPaths.end()) {
+    WarnAttackDisplay(
+        "SRC_AUDIT_FIX SRC-1242: AttackDisplay skipped non-preloaded dynamic "
+        "attack asset.");
+    HideAttack();
     return;
   }
 
@@ -146,17 +228,13 @@ void AttackDisplay::SetAttack(const std::string& sText) {
     m_sprAttack.Load(path);
   }
 
-  // TODO: Remove use of PlayerNumber.
-  PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
-  if (!IsValidAttackDisplayPlayer(pn)) {
-    LOG->Warn("SRC_AUDIT_FIX: AttackDisplay::SetAttack invalid player %i.", pn);
-    return;
-  }
-
-  const std::string sName = ssprintf("%sP%i", sText.c_str(), pn + 1);
+  const std::string sName =
+      ssprintf("%sP%i", GetSafeAttackToken(sText).c_str(), pn + 1);
   m_sprAttack.RunCommands(
       THEME->GetMetricA("AttackDisplay", sName + "OnCommand"));
 }
+
+void AttackDisplay::HideAttack() { m_sprAttack.SetDiffuseAlpha(0); }
 
 /*
  * (c) 2003 Chris Danford

@@ -1,6 +1,7 @@
 #ifndef AttackDisplay_H
 #define AttackDisplay_H
 
+#include <set>
 #include <string>
 
 #include "ActorFrame.h"
@@ -18,14 +19,17 @@ class AttackDisplay : public ActorFrame {
   void Init(const PlayerState* pPlayerState);
   void SetAttack(const std::string& mod);
 
-  virtual void Update(float fDelta);
+  virtual void Update(float fDelta) override;
 
  protected:
+  void HideAttack();
+
   const PlayerState* m_pPlayerState;
 
   Sprite m_sprAttack;
 
   RageTexturePreloader m_TexturePreload;
+  std::set<std::string> m_PreloadedAttackPaths;
 };
 
 #endif
