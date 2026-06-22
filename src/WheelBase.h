@@ -16,8 +16,6 @@
 #include "ThemeMetric.h"
 #include "WheelItemBase.h"
 
-#define NUM_WHEEL_ITEMS ((int)std::ceil(NUM_WHEEL_ITEMS_TO_DRAW + 2))
-
 enum WheelState {
   STATE_SELECTING,
   STATE_FLYING_OFF_BEFORE_NEXT_SORT,
@@ -77,9 +75,7 @@ class WheelBase : public ActorFrame {
   std::string GetExpandedSectionName() { return m_sExpandedSectionName; }
   int GetCurrentIndex() { return m_iSelection; }
 
-  WheelItemDataType GetSelectedType() {
-    return m_CurWheelItemData[m_iSelection]->m_Type;
-  }
+  WheelItemDataType GetSelectedType();
 
   // Lua
   void PushSelf(lua_State* L);
@@ -92,6 +88,14 @@ class WheelBase : public ActorFrame {
   virtual void UpdateSwitch();
   virtual bool MoveSpecific(int n);
   void SetPositions();
+  int GetWheelItemCount() const;
+  float GetNumWheelItemsToDraw() const;
+  float GetSafeSwitchSeconds() const;
+  float GetSafeLockedInitialVelocity() const;
+  int NormalizeMoveDistance(int n) const;
+  bool HasValidSelection() const;
+  void ClearWheelItems();
+  void PlaySoundIfLoaded(RageSound& sound, bool isAction);
 
   int FirstVisibleIndex();
 
