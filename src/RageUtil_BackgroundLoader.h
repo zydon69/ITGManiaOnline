@@ -44,6 +44,8 @@ class BackgroundLoader {
   }
 
   std::string GetRequest();
+  std::string GetRequestLocked();
+  bool ShouldAbort();
 
   std::string GetCachePath(std::string sPath) const;
   std::string m_sCachePathPrefix;
