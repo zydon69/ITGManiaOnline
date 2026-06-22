@@ -1,20 +1,33 @@
 #include "RageSoundUtil.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 #include "RageUtil.h"
 
 void RageSoundUtil::Attenuate(float* pBuf, int iSamples, float fVolume) {
-  while (iSamples--) {
-    *pBuf *= fVolume;
-    ++pBuf;
+  if (pBuf == nullptr || iSamples <= 0) {
+    return;
+  }
+  if (!std::isfinite(fVolume)) {
+    fVolume = 0.0f;
+  }
+  for (int i = 0; i < iSamples; ++i) {
+    pBuf[i] *= fVolume;
   }
 }
 
 /* Pan buffer left or right; fPos is -1...+1.  Buffer is assumed to be stereo.
  */
 void RageSoundUtil::Pan(float* buffer, int frames, float fPos) {
+  if (buffer == nullptr || frames <= 0) {
+    return;
+  }
+  if (!std::isfinite(fPos)) {
+    fPos = 0.0f;
+  }
+  fPos = std::clamp(fPos, -1.0f, 1.0f);
   if (fPos == 0) {
     return; /* no change */
   }
@@ -45,6 +58,15 @@ void RageSoundUtil::Pan(float* buffer, int frames, float fPos) {
 void RageSoundUtil::Fade(
     float* pBuffer, int iFrames, int iChannels, float fStartVolume,
     float fEndVolume) {
+  if (pBuffer == nullptr || iFrames <= 0 || iChannels <= 0) {
+    return;
+  }
+  if (!std::isfinite(fStartVolume)) {
+    fStartVolume = 0.0f;
+  }
+  if (!std::isfinite(fEndVolume)) {
+    fEndVolume = 0.0f;
+  }
   /* If the whole buffer is full volume, skip. */
   if (fStartVolume > .9999f && fEndVolume > .9999f) {
     return;
@@ -63,6 +85,9 @@ void RageSoundUtil::Fade(
 
 /* Dupe mono to stereo in-place; do it in reverse, to handle overlap. */
 void RageSoundUtil::ConvertMonoToStereoInPlace(float* data, int iFrames) {
+  if (data == nullptr || iFrames <= 0) {
+    return;
+  }
   float* input = data;
   float* output = input;
   input += iFrames;
@@ -77,6 +102,9 @@ void RageSoundUtil::ConvertMonoToStereoInPlace(float* data, int iFrames) {
 
 void RageSoundUtil::ConvertNativeInt16ToFloat(
     const int16_t* pFrom, float* pTo, int iSamples) {
+  if (pFrom == nullptr || pTo == nullptr || iSamples <= 0) {
+    return;
+  }
   for (int i = 0; i < iSamples; ++i) {
     pTo[i] = pFrom[i] / 32768.0f;
   }
@@ -84,9 +112,17 @@ void RageSoundUtil::ConvertNativeInt16ToFloat(
 
 void RageSoundUtil::ConvertFloatToNativeInt16(
     const float* pFrom, int16_t* pTo, int iSamples) {
+  if (pFrom == nullptr || pTo == nullptr || iSamples <= 0) {
+    return;
+  }
   for (int i = 0; i < iSamples; ++i) {
-    int iOut = static_cast<int>((pFrom[i] * 32768.0f) + 0.5);
-    pTo[i] = std::clamp(iOut, -32768, 32767);
+    float sample = pFrom[i];
+    if (!std::isfinite(sample)) {
+      sample = 0.0f;
+    }
+    sample = std::clamp(sample, -1.0f, 1.0f);
+    const long iOut = std::lround(sample * 32767.0f);
+    pTo[i] = static_cast<int16_t>(std::clamp<long>(iOut, -32768, 32767));
   }
 }
 

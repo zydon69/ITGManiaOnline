@@ -1,6 +1,7 @@
 #include "RageSoundPosMap.h"
 
 #include <cinttypes>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
@@ -34,6 +35,38 @@ static int64_t MinorPositionDriftFramesForRate(int iFrameRate) {
       (static_cast<double>(iFrameRate) * kMinorPositionDriftToleranceMs /
        1000.0) +
       0.5);
+}
+
+static bool AddInt64(int64_t lhs, int64_t rhs, int64_t& out) {
+  if ((rhs > 0 && lhs > std::numeric_limits<int64_t>::max() - rhs) ||
+      (rhs < 0 && lhs < std::numeric_limits<int64_t>::min() - rhs)) {
+    return false;
+  }
+  out = lhs + rhs;
+  return true;
+}
+
+static uint64_t AbsDistance(int64_t lhs, int64_t rhs) {
+  if (lhs >= rhs) {
+    return static_cast<uint64_t>(lhs) - static_cast<uint64_t>(rhs);
+  }
+  return static_cast<uint64_t>(rhs) - static_cast<uint64_t>(lhs);
+}
+
+static bool ScaleFramesToDestDelta(
+    int64_t frames, double ratio, int64_t& out) {
+  if (frames < 0 || !std::isfinite(ratio) || ratio <= 0.0) {
+    return false;
+  }
+  const long double scaled =
+      static_cast<long double>(frames) * static_cast<long double>(ratio);
+  if (!std::isfinite(static_cast<double>(scaled)) ||
+      scaled > static_cast<long double>(std::numeric_limits<int64_t>::max()) ||
+      scaled < 0.0L) {
+    return false;
+  }
+  out = static_cast<int64_t>(scaled + 0.5L);
+  return true;
 }
 
 struct pos_map_t {
@@ -76,25 +109,37 @@ pos_map_queue& pos_map_queue::operator=(const pos_map_queue& rhs) {
 void pos_map_queue::Insert(
     int64_t iSourceFrame, int64_t iFrames, int64_t iDestFrame,
     double fSourceToDestRatio) {
+  if (iFrames <= 0 || !std::isfinite(fSourceToDestRatio) ||
+      fSourceToDestRatio <= 0.0) {
+    return;
+  }
+  int64_t sourceEnd = 0;
+  int64_t destDelta = 0;
+  if (!AddInt64(iSourceFrame, iFrames, sourceEnd) ||
+      !ScaleFramesToDestDelta(iFrames, fSourceToDestRatio, destDelta)) {
+    return;
+  }
+
   bool merged = false;
   if (!m_pImpl->m_Queue.empty()) {
     // Check if the last entry can be merged with the new entry
     pos_map_t& last = m_pImpl->m_Queue.back();
-    if (last.m_iSourceFrame + last.m_iFrames == iSourceFrame &&
+    int64_t lastSourceEnd = 0;
+    int64_t lastDestDelta = 0;
+    int64_t lastDestEnd = 0;
+    if (AddInt64(last.m_iSourceFrame, last.m_iFrames, lastSourceEnd) &&
+        ScaleFramesToDestDelta(
+            last.m_iFrames, last.m_fSourceToDestRatio, lastDestDelta) &&
+        AddInt64(last.m_iDestFrame, lastDestDelta, lastDestEnd) &&
+        lastSourceEnd == iSourceFrame &&
         last.m_fSourceToDestRatio == fSourceToDestRatio &&
-
-        // llabs() is used instead of abs() because abs() would be susceptible
-        // to an integer overflow.
-        llabs(
-            last.m_iDestFrame +
-            static_cast<int64_t>(
-                (last.m_iFrames * last.m_fSourceToDestRatio) + 0.5) -
-            iDestFrame) <= 1)
-
-    {
+        AbsDistance(lastDestEnd, iDestFrame) <= 1) {
       // Merge the frames and set the merged flag to true.
-      last.m_iFrames += iFrames;
-      merged = true;
+      int64_t mergedFrames = 0;
+      if (AddInt64(last.m_iFrames, iFrames, mergedFrames)) {
+        last.m_iFrames = mergedFrames;
+        merged = true;
+      }
     }
   }
 
@@ -134,34 +179,52 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
 
   // iSourceFrame is probably in pos_map.  Search to figure out what position it
   // maps to.
-  int64_t iClosestPosition = 0,
-          iClosestPositionDist = std::numeric_limits<int64_t>::max();
+  int64_t iClosestPosition = 0;
+  uint64_t iClosestPositionDist = std::numeric_limits<uint64_t>::max();
   for (const pos_map_t& pm : m_pImpl->m_Queue) {
+    int64_t sourceEnd = 0;
+    int64_t destDelta = 0;
+    int64_t destEnd = 0;
+    if (!AddInt64(pm.m_iSourceFrame, pm.m_iFrames, sourceEnd) ||
+        !ScaleFramesToDestDelta(
+            pm.m_iFrames, pm.m_fSourceToDestRatio, destDelta) ||
+        !AddInt64(pm.m_iDestFrame, destDelta, destEnd)) {
+      continue;
+    }
+
     // Loop over the queue until we know generally where iSourceFrame is
     if (iSourceFrame >= pm.m_iSourceFrame &&
-        iSourceFrame < pm.m_iSourceFrame + pm.m_iFrames) {
+        iSourceFrame < sourceEnd) {
       m_pImpl->m_iConsecutiveMinorDrifts = 0;
       // If we are in the correct block, calculate its current position
       int64_t iDiff = static_cast<int64_t>(iSourceFrame - pm.m_iSourceFrame);
-      iDiff = static_cast<int64_t>((iDiff * pm.m_fSourceToDestRatio) + 0.5);
-      return pm.m_iDestFrame + iDiff;
+      if (!ScaleFramesToDestDelta(iDiff, pm.m_fSourceToDestRatio, iDiff)) {
+        return pm.m_iDestFrame;
+      }
+      int64_t mappedFrame = 0;
+      if (!AddInt64(pm.m_iDestFrame, iDiff, mappedFrame)) {
+        return pm.m_iDestFrame;
+      }
+      return mappedFrame;
     }
 
     // See if the current position is close to the beginning of this block.
-    int64_t dist = llabs(pm.m_iSourceFrame - iSourceFrame);
+    uint64_t dist = AbsDistance(pm.m_iSourceFrame, iSourceFrame);
     if (dist < iClosestPositionDist) {
       iClosestPositionDist = dist;
       iClosestPosition = pm.m_iDestFrame;
     }
 
     // See if the current position is close to the end of this block.
-    dist = llabs(pm.m_iSourceFrame + pm.m_iFrames - iSourceFrame);
+    dist = AbsDistance(sourceEnd, iSourceFrame);
     if (dist < iClosestPositionDist) {
       iClosestPositionDist = dist;
-      iClosestPosition =
-          pm.m_iDestFrame +
-          static_cast<int64_t>((pm.m_iFrames * pm.m_fSourceToDestRatio) + 0.5);
+      iClosestPosition = destEnd;
     }
+  }
+
+  if (iClosestPositionDist == std::numeric_limits<uint64_t>::max()) {
+    return 0;
   }
 
   /*
@@ -177,49 +240,54 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
   const pos_map_t& first = m_pImpl->m_Queue.front();
   const pos_map_t& lastEntry = m_pImpl->m_Queue.back();
   const int64_t firstStart = first.m_iSourceFrame;
-  const int64_t firstEnd = first.m_iSourceFrame + first.m_iFrames;
+  int64_t firstEnd = firstStart;
+  AddInt64(first.m_iSourceFrame, first.m_iFrames, firstEnd);
   const int64_t lastStart = lastEntry.m_iSourceFrame;
-  const int64_t lastEnd = lastEntry.m_iSourceFrame + lastEntry.m_iFrames;
+  int64_t lastEnd = lastStart;
+  AddInt64(lastEntry.m_iSourceFrame, lastEntry.m_iFrames, lastEnd);
   const char* relation =
       iSourceFrame < firstStart ? "before" :
       iSourceFrame >= lastEnd ? "after" : "gap";
 
   static RageTimer lastMinor;
-  if (iClosestPositionDist <= minorPositionDriftFrames) {
+  const uint64_t minorPositionDriftDistance =
+      static_cast<uint64_t>(minorPositionDriftFrames);
+  if (iClosestPositionDist <= minorPositionDriftDistance) {
     ++m_pImpl->m_iConsecutiveMinorDrifts;
     const bool sustainedDrift =
         m_pImpl->m_iConsecutiveMinorDrifts >
         kSustainedMinorPositionDriftSearches;
     if (sustainedDrift) {
       static RageTimer lastSustainedMinor;
-      if (PerfDiagnosticsEnabled() && lastSustainedMinor.Ago() >= 10.0f) {
+      if (LOG != nullptr && PerfDiagnosticsEnabled() &&
+          lastSustainedMinor.Ago() >= 10.0f) {
         lastSustainedMinor.Touch();
         LOG->Trace(
             "Audio position mismatch: sustained minor drift frame %" PRId64
-            " outside buffered range relation=%s closest_dist=%" PRId64
-            " tolerance=%" PRId64 " tolerance_ms=%.3f frame_rate=%d "
+            " outside buffered range relation=%s closest_dist=%" PRIu64
+            " tolerance=%" PRIu64 " tolerance_ms=%.3f frame_rate=%d "
             "consecutive_searches=%d entries=%zu "
             "first=[%" PRId64 ",%" PRId64 ") last=[%" PRId64 ",%" PRId64
             ")",
             iSourceFrame, relation, iClosestPositionDist,
-            minorPositionDriftFrames, kMinorPositionDriftToleranceMs,
+            minorPositionDriftDistance, kMinorPositionDriftToleranceMs,
             iFrameRate, m_pImpl->m_iConsecutiveMinorDrifts,
             m_pImpl->m_Queue.size(), firstStart, firstEnd, lastStart, lastEnd);
       }
       return iClosestPosition;
     }
 
-    if (PerfDiagnosticsEnabled() &&
+    if (LOG != nullptr && PerfDiagnosticsEnabled() &&
         lastMinor.Ago() >= kMinorPositionDriftTraceSeconds) {
       lastMinor.Touch();
       LOG->Trace(
           "Audio position map minor drift: frame %" PRId64
-          " outside buffered range relation=%s closest_dist=%" PRId64
-          " tolerance=%" PRId64 " tolerance_ms=%.3f frame_rate=%d "
+          " outside buffered range relation=%s closest_dist=%" PRIu64
+          " tolerance=%" PRIu64 " tolerance_ms=%.3f frame_rate=%d "
           "consecutive_searches=%d entries=%zu "
           "first=[%" PRId64 ",%" PRId64 ") last=[%" PRId64 ",%" PRId64 ")",
           iSourceFrame, relation, iClosestPositionDist,
-          minorPositionDriftFrames, kMinorPositionDriftToleranceMs,
+          minorPositionDriftDistance, kMinorPositionDriftToleranceMs,
           iFrameRate, m_pImpl->m_iConsecutiveMinorDrifts,
           m_pImpl->m_Queue.size(), firstStart, firstEnd, lastStart, lastEnd);
     }
@@ -228,16 +296,18 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
 
   static RageTimer lastMismatch;
   m_pImpl->m_iConsecutiveMinorDrifts = 0;
-  if (PerfDiagnosticsEnabled() && lastMismatch.Ago() >= 10.0f) {
+  if (LOG != nullptr && PerfDiagnosticsEnabled() &&
+      lastMismatch.Ago() >= 10.0f) {
     lastMismatch.Touch();
     LOG->Trace(
         "Audio position mismatch: frame %" PRId64
-        " outside buffered range relation=%s closest_dist=%" PRId64
-        " tolerance=%" PRId64 " tolerance_ms=%.3f frame_rate=%d entries=%zu "
+        " outside buffered range relation=%s closest_dist=%" PRIu64
+        " tolerance=%" PRIu64 " tolerance_ms=%.3f frame_rate=%d entries=%zu "
         "first=[%" PRId64 ",%" PRId64 ") last=[%" PRId64 ",%" PRId64 ")",
         iSourceFrame, relation, iClosestPositionDist,
-        minorPositionDriftFrames, kMinorPositionDriftToleranceMs, iFrameRate,
-        m_pImpl->m_Queue.size(), firstStart, firstEnd, lastStart, lastEnd);
+        minorPositionDriftDistance, kMinorPositionDriftToleranceMs,
+        iFrameRate, m_pImpl->m_Queue.size(), firstStart, firstEnd, lastStart,
+        lastEnd);
   }
 
   return iClosestPosition;
