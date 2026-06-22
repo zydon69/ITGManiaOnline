@@ -222,12 +222,12 @@ IsUsingOnlineGameplayColumns = function()
 	local style = GAMESTATE:GetCurrentStyle()
 	local top_screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
 	local screen_name = top_screen and top_screen:GetName() or ""
-	local has_online_gameplay_context = ITGOnline
+	local has_active_online_room = ITGOnline
+		and ITGOnline.currentRoomId ~= nil
+		and ITGOnline.currentRoom ~= nil
+	local has_online_gameplay_context = has_active_online_room
 		and (
 			(SL.Global.Online and SL.Global.Online.GameplayLayoutActive == true)
-			or ITGOnline.currentRoomId ~= nil
-			or ITGOnline.currentRoom ~= nil
-			or (screen_name == "ScreenGameplay" and ITGOnline.user ~= nil and ITGOnline.user.id ~= nil)
 			or ITGOnline.currentSongPayload ~= nil
 			or ITGOnline.activeGameplaySongPayload ~= nil
 			or tostring(ITGOnline.activeGameplayRoundKey or "") ~= ""
@@ -244,6 +244,7 @@ IsUsingOnlineGameplayColumns = function()
 			.. " screen=" .. tostring(screen_name)
 			.. " style=" .. tostring(style and style:GetName() or "nil")
 			.. " has_itgonline=" .. tostring(ITGOnline ~= nil)
+			.. " has_active_room=" .. tostring(has_active_online_room == true)
 			.. " has_context=" .. tostring(has_online_gameplay_context == true)
 			.. " layout_flag=" .. tostring(SL.Global.Online and SL.Global.Online.GameplayLayoutActive)
 			.. " room_id=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")

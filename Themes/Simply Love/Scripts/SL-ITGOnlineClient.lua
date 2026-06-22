@@ -5103,6 +5103,8 @@ function ITGOnline:NoteScreenChanged(screenName)
 			.. " lobbyRefreshQueued=" .. tostring(self.lobbyRefreshQueued == true))
 		SL.Global.Online = SL.Global.Online or {}
 		SL.Global.Online.GameplayLayoutActive = self:IsOnlineGameplayScreen(screenName)
+			and self.currentRoomId ~= nil
+			and self.currentRoom ~= nil
 		self:CancelScreenBoundRequests()
 		if self:IsOnlineGameplayScreen(previous) and not self:IsOnlineGameplayScreen(screenName) then
 			self:StopLiveScoreFlush("screen_changed:" .. tostring(previous) .. "->" .. tostring(screenName))
