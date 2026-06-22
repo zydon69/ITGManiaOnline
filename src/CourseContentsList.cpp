@@ -1,5 +1,6 @@
 #include "CourseContentsList.h"
 
+#include <algorithm>
 #include <string>
 
 #include "Actor.h"
@@ -11,6 +12,7 @@
 #include "LuaManager.h"
 #include "MessageManager.h"
 #include "PlayerNumber.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "Steps.h"
 #include "Trail.h"
@@ -18,7 +20,41 @@
 
 REGISTER_ACTOR_CLASS(CourseContentsList);
 
-CourseContentsList::~CourseContentsList() {
+namespace {
+const int MAX_COURSE_CONTENTS_DISPLAYS = 1000;
+
+void WarnCourseContentsList(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+bool IsValidCourseContentsPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+}  // namespace
+
+CourseContentsList::CourseContentsList() {}
+
+CourseContentsList::CourseContentsList(const CourseContentsList& cpy)
+    : ActorScroller(cpy) {
+  RemoveAllChildren();
+  for (Actor* display : cpy.m_vpDisplay) {
+    if (display == nullptr) {
+      continue;
+    }
+    Actor* copiedDisplay = display->Copy();
+    if (copiedDisplay == nullptr) {
+      continue;
+    }
+    m_vpDisplay.push_back(copiedDisplay);
+  }
+}
+
+CourseContentsList::~CourseContentsList() { ClearDisplays(); }
+
+void CourseContentsList::ClearDisplays() {
+  RemoveAllChildren();
   for (Actor* d : m_vpDisplay) {
     delete d;
   }
@@ -26,8 +62,16 @@ CourseContentsList::~CourseContentsList() {
 }
 
 void CourseContentsList::LoadFromNode(const XNode* pNode) {
+  ClearDisplays();
+  if (pNode == nullptr) {
+    WarnCourseContentsList(
+        "SRC_AUDIT_FIX SRC-1218: CourseContentsList ignored null XML node.");
+    return;
+  }
+
   int iMaxSongs = 5;
   pNode->GetAttrValue("MaxSongs", iMaxSongs);
+  iMaxSongs = std::clamp(iMaxSongs, 0, MAX_COURSE_CONTENTS_DISPLAYS);
 
   const XNode* pDisplayNode = pNode->GetChild("Display");
   if (pDisplayNode == nullptr) {
@@ -39,6 +83,11 @@ void CourseContentsList::LoadFromNode(const XNode* pNode) {
 
   for (int i = 0; i < iMaxSongs; i++) {
     Actor* pDisplay = ActorUtil::LoadFromNode(pDisplayNode, this);
+    if (pDisplay == nullptr) {
+      WarnCourseContentsList(
+          "SRC_AUDIT_FIX SRC-1220: CourseContentsList skipped null display.");
+      continue;
+    }
     pDisplay->SetUseZBuffer(true);
     m_vpDisplay.push_back(pDisplay);
   }
@@ -49,19 +98,29 @@ void CourseContentsList::LoadFromNode(const XNode* pNode) {
 void CourseContentsList::SetFromGameState() {
   RemoveAllChildren();
 
-  if (GAMESTATE->GetMasterPlayerNumber() == PlayerNumber_Invalid) {
+  if (GAMESTATE == nullptr) {
     return;
   }
-  const Trail* pMasterTrail =
-      GAMESTATE->m_pCurTrail[GAMESTATE->GetMasterPlayerNumber()];
+  const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+  if (!IsValidCourseContentsPlayer(master)) {
+    return;
+  }
+  const Trail* pMasterTrail = GAMESTATE->m_pCurTrail[master];
   if (pMasterTrail == nullptr) {
     return;
   }
-  unsigned uNumEntriesToShow = pMasterTrail->m_vEntries.size();
-  rage_clamp(uNumEntriesToShow, 0, m_vpDisplay.size());
+  const size_t uNumEntriesToShow =
+      std::min(pMasterTrail->m_vEntries.size(), m_vpDisplay.size());
+  if (uNumEntriesToShow == 0) {
+    SetLoop(false);
+    return;
+  }
 
-  for (int i = 0; i < (int)uNumEntriesToShow; i++) {
+  for (size_t i = 0; i < uNumEntriesToShow; i++) {
     Actor* pDisplay = m_vpDisplay[i];
+    if (pDisplay == nullptr) {
+      continue;
+    }
     SetItemFromGameState(pDisplay, i);
     this->AddChild(pDisplay);
   }
@@ -70,9 +129,12 @@ void CourseContentsList::SetFromGameState() {
 
   this->SetLoop(bLoop);
   this->Load2();
-  this->SetTransformFromHeight(m_vpDisplay[0]->GetUnzoomedHeight());
-  this->EnableMask(
-      m_vpDisplay[0]->GetUnzoomedWidth(), m_vpDisplay[0]->GetUnzoomedHeight());
+  Actor* firstDisplay = m_vpDisplay[0];
+  if (firstDisplay != nullptr) {
+    this->SetTransformFromHeight(firstDisplay->GetUnzoomedHeight());
+    this->EnableMask(
+        firstDisplay->GetUnzoomedWidth(), firstDisplay->GetUnzoomedHeight());
+  }
 
   if (bLoop) {
     SetPauseCountdownSeconds(1.5f);
@@ -82,8 +144,16 @@ void CourseContentsList::SetFromGameState() {
 
 void CourseContentsList::SetItemFromGameState(
     Actor* pActor, int iCourseEntryIndex) {
+  if (pActor == nullptr || GAMESTATE == nullptr || iCourseEntryIndex < 0) {
+    return;
+  }
   const Course* pCourse = GAMESTATE->m_pCurCourse;
+  if (pCourse == nullptr) {
+    ResetItem(pActor);
+    return;
+  }
 
+  bool sentMessage = false;
   FOREACH_HumanPlayer(pn) {
     const Trail* pTrail = GAMESTATE->m_pCurTrail[pn];
     if (pTrail == nullptr ||
@@ -131,8 +201,13 @@ void CourseContentsList::SetItemFromGameState(
         dc = Difficulty_Edit;
       }
     } else {
-      s = ssprintf("%d", te->pSteps->GetMeter());
-      dc = te->pSteps->GetDifficulty();
+      if (te->pSteps == nullptr) {
+        s = "?";
+        dc = Difficulty_Invalid;
+      } else {
+        s = ssprintf("%d", te->pSteps->GetMeter());
+        dc = te->pSteps->GetDifficulty();
+      }
     }
 
     Message msg("SetSong");
@@ -144,6 +219,29 @@ void CourseContentsList::SetItemFromGameState(
     msg.SetParam("Number", iCourseEntryIndex + 1);
     msg.SetParam("Modifiers", te->Modifiers);
     msg.SetParam("Secret", te->bSecret);
+    pActor->HandleMessage(msg);
+    sentMessage = true;
+  }
+
+  if (!sentMessage) {
+    ResetItem(pActor);
+  }
+}
+
+void CourseContentsList::ResetItem(Actor* pActor) {
+  if (pActor == nullptr) {
+    return;
+  }
+  FOREACH_PlayerNumber(pn) {
+    Message msg("SetSong");
+    msg.SetParam("PlayerNumber", pn);
+    msg.SetParam("Song", static_cast<Song*>(nullptr));
+    msg.SetParam("Steps", static_cast<Steps*>(nullptr));
+    msg.SetParam("Difficulty", Difficulty_Invalid);
+    msg.SetParam("Meter", std::string("?"));
+    msg.SetParam("Number", 0);
+    msg.SetParam("Modifiers", std::string());
+    msg.SetParam("Secret", true);
     pActor->HandleMessage(msg);
   }
 }

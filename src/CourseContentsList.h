@@ -10,6 +10,8 @@ class CourseEntryDisplay;
 /** @brief Holds course name and banner. */
 class CourseContentsList : public ActorScroller {
  public:
+  CourseContentsList();
+  CourseContentsList(const CourseContentsList& cpy);
   ~CourseContentsList();
   virtual CourseContentsList* Copy() const;
 
@@ -21,7 +23,9 @@ class CourseContentsList : public ActorScroller {
   void PushSelf(lua_State* L);
 
  protected:
+  void ClearDisplays();
   void SetItemFromGameState(Actor* pActor, int iCourseEntryIndex);
+  void ResetItem(Actor* pActor);
 
   std::vector<Actor*> m_vpDisplay;
 };
