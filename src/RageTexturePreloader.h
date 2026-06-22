@@ -10,8 +10,9 @@ struct RageTextureID;
 class RageTexturePreloader {
  public:
   RageTexturePreloader() : m_apTextures() {}
-  RageTexturePreloader(const RageTexturePreloader& cpy)
-      : m_apTextures(cpy.m_apTextures) {}
+  RageTexturePreloader(const RageTexturePreloader& cpy) : m_apTextures() {
+    *this = cpy;
+  }
   RageTexturePreloader& operator=(const RageTexturePreloader& rhs);
   ~RageTexturePreloader();
   void Load(const RageTextureID& ID);

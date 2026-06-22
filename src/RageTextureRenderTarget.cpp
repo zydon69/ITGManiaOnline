@@ -5,6 +5,14 @@
 #include "RageTexture.h"
 #include "RageTextureID.h"
 
+namespace {
+void WarnRenderTargetAuditFix(const std::string& message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message.c_str());
+  }
+}
+}  // namespace
+
 RageTextureRenderTarget::RageTextureRenderTarget(
     RageTextureID name, const RenderTargetParam& param)
     : RageTexture(name),
@@ -39,11 +47,26 @@ void RageTextureRenderTarget::Create() {
   /* All render targets support non-power-of-two targets,
    * but some require that the resulting texture dimensions be powers of two.
    * CreateRenderTarget returns the actual resolution. */
+  if (m_Param.iWidth <= 0 || m_Param.iHeight <= 0) {
+    WarnRenderTargetAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-1032: RageTextureRenderTarget refused invalid "
+        "dimensions for '%s' requested=%dx%d.",
+        GetID().filename.c_str(), m_Param.iWidth, m_Param.iHeight));
+    m_iSourceWidth = m_iSourceHeight = 1;
+    m_iImageWidth = m_iImageHeight = 1;
+    m_iTextureWidth = m_iTextureHeight = 1;
+    CreateFrameRects();
+    return;
+  }
   if (DISPLAY == nullptr) {
-    LOG->Warn(
+    WarnRenderTargetAuditFix(ssprintf(
         "RageTextureRenderTarget: failed to create render target '%s' without "
         "a display backend.",
-        GetID().filename.c_str());
+        GetID().filename.c_str()));
+    m_iSourceWidth = m_iSourceHeight = 1;
+    m_iImageWidth = m_iImageHeight = 1;
+    m_iTextureWidth = m_iTextureHeight = 1;
+    CreateFrameRects();
     return;
   }
   m_iTexHandle =
@@ -60,14 +83,14 @@ void RageTextureRenderTarget::Create() {
   m_bValid =
       m_iTexHandle != 0 && m_iTextureWidth > 0 && m_iTextureHeight > 0;
   if (!m_bValid) {
-    LOG->Warn(
+    WarnRenderTargetAuditFix(ssprintf(
         "RageTextureRenderTarget: failed to create render target '%s' "
         "requested=%dx%d depth=%d alpha=%d float=%d. Rendering to this "
         "target will be skipped instead of falling back to the main "
         "framebuffer.",
         GetID().filename.c_str(), m_Param.iWidth, m_Param.iHeight,
         m_Param.bWithDepthBuffer ? 1 : 0, m_Param.bWithAlpha ? 1 : 0,
-        m_Param.bFloat ? 1 : 0);
+        m_Param.bFloat ? 1 : 0));
   }
 }
 
@@ -83,10 +106,10 @@ void RageTextureRenderTarget::Destroy() {
 void RageTextureRenderTarget::BeginRenderingTo(bool bPreserveTexture) {
   if (DISPLAY == nullptr || !m_bValid) {
     if (!m_bWarnedInvalidUse) {
-      LOG->Warn(
+      WarnRenderTargetAuditFix(ssprintf(
           "RageTextureRenderTarget: ignoring BeginRenderingTo() for invalid "
           "render target '%s'.",
-          GetID().filename.c_str());
+          GetID().filename.c_str()));
       m_bWarnedInvalidUse = true;
     }
     return;

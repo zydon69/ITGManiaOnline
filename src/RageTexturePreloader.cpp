@@ -8,7 +8,16 @@
 #include "RageTexturePreloader.h"
 
 #include "RageTextureManager.h"
+#include "RageLog.h"
 #include "global.h"
+
+namespace {
+void WarnTexturePreloaderAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+}  // namespace
 
 RageTexturePreloader& RageTexturePreloader::operator=(
     const RageTexturePreloader& rhs) {
@@ -19,18 +28,33 @@ RageTexturePreloader& RageTexturePreloader::operator=(
   UnloadAll();
 
   for (unsigned i = 0; i < rhs.m_apTextures.size(); ++i) {
+    if (TEXTUREMAN == nullptr) {
+      WarnTexturePreloaderAuditFix(
+          "SRC_AUDIT_FIX SRC-1025: RageTexturePreloader skipped copy without "
+          "texture manager.");
+      break;
+    }
     RageTexture* pTexture = TEXTUREMAN->CopyTexture(rhs.m_apTextures[i]);
-    m_apTextures.push_back(pTexture);
+    if (pTexture != nullptr) {
+      m_apTextures.push_back(pTexture);
+    }
   }
 
   return *this;
 }
 
 void RageTexturePreloader::Load(const RageTextureID& ID) {
-  ASSERT(TEXTUREMAN != nullptr);
+  if (TEXTUREMAN == nullptr) {
+    WarnTexturePreloaderAuditFix(
+        "SRC_AUDIT_FIX SRC-1025: RageTexturePreloader ignored load without "
+        "texture manager.");
+    return;
+  }
 
   RageTexture* pTexture = TEXTUREMAN->LoadTexture(ID);
-  m_apTextures.push_back(pTexture);
+  if (pTexture != nullptr) {
+    m_apTextures.push_back(pTexture);
+  }
 }
 
 void RageTexturePreloader::UnloadAll() {

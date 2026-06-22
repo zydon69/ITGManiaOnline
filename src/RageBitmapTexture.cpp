@@ -22,6 +22,26 @@
 #include "arch/Dialog/Dialog.h"
 #include "global.h"
 
+namespace {
+constexpr int kMaxTextureHintResolution = 32768;
+
+void WarnBitmapTextureAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+RageSurface* MakeFallbackSurface() {
+  RageSurface* fallback = RageSurfaceUtils::MakeDummySurface(64, 64);
+  if (fallback == nullptr) {
+    WarnBitmapTextureAuditFix(
+        "SRC_AUDIT_FIX SRC-1026: RageBitmapTexture could not create fallback "
+        "surface.");
+  }
+  return fallback;
+}
+}  // namespace
+
 static void GetResolutionFromFileName(
     std::string sPath, int& iWidth, int& iHeight) {
   /* Match:
@@ -39,7 +59,9 @@ static void GetResolutionFromFileName(
   // Check for nonsense values.  Some people might not intend the hint. -Kyz
   int maybe_width = StringToInt(asMatches[0]);
   int maybe_height = StringToInt(asMatches[1]);
-  if (maybe_width <= 0 || maybe_height <= 0) {
+  if (maybe_width <= 0 || maybe_height <= 0 ||
+      maybe_width > kMaxTextureHintResolution ||
+      maybe_height > kMaxTextureHintResolution) {
     return;
   }
   iWidth = maybe_width;
@@ -72,12 +94,31 @@ void RageBitmapTexture::Reload() {
 void RageBitmapTexture::Create() {
   RageTextureID actualID = GetID();
 
-  ASSERT(actualID.filename != "");
+  if (actualID.filename.empty()) {
+    WarnBitmapTextureAuditFix(
+        "SRC_AUDIT_FIX SRC-1026: RageBitmapTexture refused empty filename.");
+    m_iSourceWidth = m_iSourceHeight = 1;
+    m_iTextureWidth = m_iTextureHeight = 1;
+    m_iImageWidth = m_iImageHeight = 1;
+    CreateFrameRects();
+    return;
+  }
+  if (DISPLAY == nullptr) {
+    WarnBitmapTextureAuditFix(
+        "SRC_AUDIT_FIX SRC-1026: RageBitmapTexture skipped GPU creation without "
+        "display backend.");
+    m_iSourceWidth = m_iSourceHeight = 1;
+    m_iTextureWidth = m_iTextureHeight = 1;
+    m_iImageWidth = m_iImageHeight = 1;
+    CreateFrameRects();
+    return;
+  }
 
   /* Load the image into a RageSurface. */
   std::string error;
   RageSurface* pImg = nullptr;
-  if (actualID.filename == TEXTUREMAN->GetScreenTextureID().filename) {
+  if (TEXTUREMAN != nullptr &&
+      actualID.filename == TEXTUREMAN->GetScreenTextureID().filename) {
     pImg = TEXTUREMAN->GetScreenSurface();
   } else {
     pImg = RageSurfaceUtils::LoadFile(actualID.filename, error);
@@ -88,10 +129,27 @@ void RageBitmapTexture::Create() {
     std::string warning = ssprintf(
         "RageBitmapTexture: Couldn't load %s: %s", actualID.filename.c_str(),
         error.c_str());
-    LOG->Warn("%s", warning.c_str());
+    if (LOG != nullptr) {
+      LOG->Warn("%s", warning.c_str());
+    }
     Dialog::OK(warning, "missing_texture");
-    pImg = RageSurfaceUtils::MakeDummySurface(64, 64);
-    ASSERT(pImg != nullptr);
+    pImg = MakeFallbackSurface();
+  }
+
+  if (pImg == nullptr || pImg->format == nullptr || pImg->w <= 0 ||
+      pImg->h <= 0) {
+    WarnBitmapTextureAuditFix(
+        "SRC_AUDIT_FIX SRC-1026: RageBitmapTexture replaced invalid decoded "
+        "surface.");
+    delete pImg;
+    pImg = MakeFallbackSurface();
+    if (pImg == nullptr) {
+      m_iSourceWidth = m_iSourceHeight = 1;
+      m_iTextureWidth = m_iTextureHeight = 1;
+      m_iImageWidth = m_iImageHeight = 1;
+      CreateFrameRects();
+      return;
+    }
   }
 
   if (actualID.bHotPinkColorKey) {
@@ -158,10 +216,10 @@ void RageBitmapTexture::Create() {
   // DISPLAY->GetMaxTextureSize() in RageBitmapTexture::Create(). This value
   // remains consistent throughout runtime. For example, when using OpenGL,
   // this is the value of GL_MAX_TEXTURE_SIZE. --sukibaby
-  static const int iMaxTextureSize = DISPLAY->GetMaxTextureSize();
+  const int iMaxTextureSize = std::max(1, DISPLAY->GetMaxTextureSize());
 
   /* Cap the max texture size to the hardware max. */
-  actualID.iMaxSize = std::min(actualID.iMaxSize, iMaxTextureSize);
+  actualID.iMaxSize = std::clamp(actualID.iMaxSize, 1, iMaxTextureSize);
 
   /* Save information about the source. */
   m_iSourceWidth = pImg->w;
@@ -212,15 +270,39 @@ void RageBitmapTexture::Create() {
 
   if (pImg->w != m_iImageWidth || pImg->h != m_iImageHeight) {
     RageSurfaceUtils::Zoom(pImg, m_iImageWidth, m_iImageHeight);
+    if (pImg == nullptr || pImg->format == nullptr || pImg->w <= 0 ||
+        pImg->h <= 0) {
+      WarnBitmapTextureAuditFix(
+          "SRC_AUDIT_FIX SRC-1027: RageBitmapTexture recovered from invalid "
+          "zoom result.");
+      delete pImg;
+      pImg = MakeFallbackSurface();
+      if (pImg == nullptr) {
+        m_iSourceWidth = m_iSourceHeight = 1;
+        m_iTextureWidth = m_iTextureHeight = 1;
+        m_iImageWidth = m_iImageHeight = 1;
+        CreateFrameRects();
+        return;
+      }
+      m_iSourceWidth = m_iImageWidth = pImg->w;
+      m_iSourceHeight = m_iImageHeight = pImg->h;
+      m_iTextureWidth = std::max(8, power_of_two(m_iImageWidth));
+      m_iTextureHeight = std::max(8, power_of_two(m_iImageHeight));
+    }
   }
 
   if (actualID.iGrayscaleBits != -1 &&
       DISPLAY->SupportsTextureFormat(RagePixelFormat_PAL)) {
     RageSurface* pGrayscale = RageSurfaceUtils::PalettizeToGrayscale(
         pImg, actualID.iGrayscaleBits, actualID.iAlphaBits);
-
-    delete pImg;
-    pImg = pGrayscale;
+    if (pGrayscale != nullptr) {
+      delete pImg;
+      pImg = pGrayscale;
+    } else {
+      WarnBitmapTextureAuditFix(
+          "SRC_AUDIT_FIX SRC-1028: RageBitmapTexture kept source after failed "
+          "grayscale palettize.");
+    }
   }
 
   // Figure out which texture format we want the renderer to use.
@@ -254,7 +336,11 @@ void RageBitmapTexture::Create() {
         pixfmt = RagePixelFormat_RGBA8;
         break;
       default:
-        FAIL_M(ssprintf("%i", actualID.iColorDepth));
+        WarnBitmapTextureAuditFix(
+            "SRC_AUDIT_FIX SRC-1029: RageBitmapTexture clamped invalid color "
+            "depth.");
+        pixfmt = RagePixelFormat_RGBA8;
+        break;
     }
   }
 
@@ -278,13 +364,24 @@ void RageBitmapTexture::Create() {
     // Dither down to the destination format.
     const RageDisplay::RagePixelFormatDesc* pfd =
         DISPLAY->GetPixelFormatDesc(pixfmt);
-    RageSurface* dst = CreateSurface(
-        pImg->w, pImg->h, pfd->bpp, pfd->masks[0], pfd->masks[1], pfd->masks[2],
-        pfd->masks[3]);
-
-    RageSurfaceUtils::ErrorDiffusionDither(pImg, dst);
-    delete pImg;
-    pImg = dst;
+    if (pfd == nullptr) {
+      WarnBitmapTextureAuditFix(
+          "SRC_AUDIT_FIX SRC-1030: RageBitmapTexture skipped dither without "
+          "pixel format description.");
+    } else {
+      RageSurface* dst = CreateSurface(
+          pImg->w, pImg->h, pfd->bpp, pfd->masks[0], pfd->masks[1],
+          pfd->masks[2], pfd->masks[3]);
+      if (dst != nullptr) {
+        RageSurfaceUtils::ErrorDiffusionDither(pImg, dst);
+        delete pImg;
+        pImg = dst;
+      } else {
+        WarnBitmapTextureAuditFix(
+            "SRC_AUDIT_FIX SRC-1030: RageBitmapTexture skipped dither after "
+            "surface allocation failure.");
+      }
+    }
   }
 
   /* This needs to be done *after* the final resize, since that resize
@@ -299,6 +396,11 @@ void RageBitmapTexture::Create() {
       pImg->fmt.Mask[3]);
 
   m_uTexHandle = DISPLAY->CreateTexture(pixfmt, pImg, actualID.bMipMaps);
+  if (m_uTexHandle == 0) {
+    WarnBitmapTextureAuditFix(
+        "SRC_AUDIT_FIX SRC-1031: RageBitmapTexture failed to create GPU "
+        "texture handle.");
+  }
 
   CreateFrameRects();
 
@@ -321,13 +423,13 @@ void RageBitmapTexture::Create() {
     }
 
     // HACK: Don't check song graphics. Many of them are weird dimensions.
-    if (!TEXTUREMAN->GetOddDimensionWarning()) {
+    if (TEXTUREMAN != nullptr && !TEXTUREMAN->GetOddDimensionWarning()) {
       bRunCheck = false;
     }
 
     // Don't check if this is the screen texture, the theme can't do anything
     // about it. -Kyz
-    if (actualID == TEXTUREMAN->GetScreenTextureID()) {
+    if (TEXTUREMAN != nullptr && actualID == TEXTUREMAN->GetScreenTextureID()) {
       bRunCheck = false;
     }
 
@@ -379,7 +481,12 @@ void RageBitmapTexture::Create() {
   // m_iSourceHeight, 	m_iImageWidth, m_iImageHeight );
 }
 
-void RageBitmapTexture::Destroy() { DISPLAY->DeleteTexture(m_uTexHandle); }
+void RageBitmapTexture::Destroy() {
+  if (DISPLAY != nullptr && m_uTexHandle != 0) {
+    DISPLAY->DeleteTexture(m_uTexHandle);
+  }
+  m_uTexHandle = 0;
+}
 
 /*
  * Copyright (c) 2001-2004 Chris Danford, Glenn Maynard

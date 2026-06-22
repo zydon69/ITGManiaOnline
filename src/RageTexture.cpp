@@ -1,14 +1,33 @@
 #include "RageTexture.h"
 
+#include <algorithm>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
 #include "LuaManager.h"
+#include "RageLog.h"
 #include "RageTextureID.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
 #include "RageUtil/Regex.h"
+
+namespace {
+constexpr int kMaxTextureFrames = 4096;
+
+void WarnTextureAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+bool InvalidTextureDimensions(int imageWidth, int imageHeight, int textureWidth,
+                              int textureHeight) {
+  return imageWidth <= 0 || imageHeight <= 0 || textureWidth <= 0 ||
+         textureHeight <= 0;
+}
+}  // namespace
 
 RageTexture::RageTexture(RageTextureID name)
     : m_iRefCount(1),
@@ -30,10 +49,36 @@ void RageTexture::CreateFrameRects() {
       GetID().filename, &m_iFramesWide, &m_iFramesHigh, m_iSourceWidth,
       m_iSourceHeight);
 
+  if (InvalidTextureDimensions(
+          m_iImageWidth, m_iImageHeight, m_iTextureWidth, m_iTextureHeight)) {
+    WarnTextureAuditFix(
+        "SRC_AUDIT_FIX SRC-1012: RageTexture refused invalid dimensions while "
+        "creating frame rects.");
+    m_iSourceWidth = std::max(1, m_iSourceWidth);
+    m_iSourceHeight = std::max(1, m_iSourceHeight);
+    m_iImageWidth = std::max(1, m_iImageWidth);
+    m_iImageHeight = std::max(1, m_iImageHeight);
+    m_iTextureWidth = std::max(1, m_iTextureWidth);
+    m_iTextureHeight = std::max(1, m_iTextureHeight);
+    m_iFramesWide = m_iFramesHigh = 1;
+    m_TextureCoordRects.clear();
+    m_TextureCoordRects.push_back(RectF(0, 0, 1, 1));
+    return;
+  }
+
+  int64_t frameCount = static_cast<int64_t>(m_iFramesWide) * m_iFramesHigh;
+  if (m_iFramesWide <= 0 || m_iFramesHigh <= 0 || frameCount <= 0 ||
+      frameCount > kMaxTextureFrames) {
+    WarnTextureAuditFix(
+        "SRC_AUDIT_FIX SRC-1012: RageTexture clamped invalid/excessive frame "
+        "metadata.");
+    m_iFramesWide = m_iFramesHigh = 1;
+    frameCount = 1;
+  }
+
   // Fill in the m_FrameRects with the bounds of each frame in the animation.
   m_TextureCoordRects.clear();
-  m_TextureCoordRects.reserve(
-      static_cast<size_t>(m_iFramesWide * m_iFramesHigh));
+  m_TextureCoordRects.reserve(static_cast<size_t>(frameCount));
 
   float frameWidth =
       (m_iImageWidth / static_cast<float>(m_iTextureWidth)) / m_iFramesWide;
@@ -66,6 +111,13 @@ void RageTexture::CreateFrameRects() {
 void RageTexture::GetFrameDimensionsFromFileName(
     std::string sPath, int* piFramesWide, int* piFramesHigh, int source_width,
     int source_height) {
+  if (piFramesWide == nullptr || piFramesHigh == nullptr) {
+    WarnTextureAuditFix(
+        "SRC_AUDIT_FIX SRC-1013: RageTexture ignored null frame dimension "
+        "output pointer.");
+    return;
+  }
+
   static Regex match(" ([0-9]+)x([0-9]+)([\\. ]|$)");
   std::vector<std::string> asMatch;
   if (!match.Compare(sPath, asMatch)) {
@@ -76,6 +128,10 @@ void RageTexture::GetFrameDimensionsFromFileName(
   int maybe_width = StringToInt(asMatch[0]);
   int maybe_height = StringToInt(asMatch[1]);
   if (maybe_width <= 0 || maybe_height <= 0) {
+    *piFramesWide = *piFramesHigh = 1;
+    return;
+  }
+  if (static_cast<int64_t>(maybe_width) * maybe_height > kMaxTextureFrames) {
     *piFramesWide = *piFramesHigh = 1;
     return;
   }
@@ -93,7 +149,26 @@ void RageTexture::GetFrameDimensionsFromFileName(
 }
 
 const RectF* RageTexture::GetTextureCoordRect(int iFrameNo) const {
-  return &m_TextureCoordRects[iFrameNo % GetNumFrames()];
+  static const RectF fallbackRect(0, 0, 1, 1);
+  const int frames = GetNumFrames();
+  if (frames <= 0 || m_TextureCoordRects.empty()) {
+    WarnTextureAuditFix(
+        "SRC_AUDIT_FIX SRC-1014: RageTexture returned fallback coord rect for "
+        "empty frame metadata.");
+    return &fallbackRect;
+  }
+
+  int frame = iFrameNo % frames;
+  if (frame < 0) {
+    frame += frames;
+  }
+  if (static_cast<size_t>(frame) >= m_TextureCoordRects.size()) {
+    WarnTextureAuditFix(
+        "SRC_AUDIT_FIX SRC-1014: RageTexture clamped frame index beyond coord "
+        "rect metadata.");
+    frame = static_cast<int>(m_TextureCoordRects.size()) - 1;
+  }
+  return &m_TextureCoordRects[frame];
 }
 
 // lua start

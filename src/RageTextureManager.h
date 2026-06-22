@@ -84,7 +84,11 @@ class RageTextureManager {
   void LogResourceSnapshot(const std::string& label) const;
 
   void DisableOddDimensionWarning() { m_iNoWarnAboutOddDimensions++; }
-  void EnableOddDimensionWarning() { m_iNoWarnAboutOddDimensions--; }
+  void EnableOddDimensionWarning() {
+    if (m_iNoWarnAboutOddDimensions > 0) {
+      m_iNoWarnAboutOddDimensions--;
+    }
+  }
   bool GetOddDimensionWarning() const {
     return m_iNoWarnAboutOddDimensions == 0;
   }

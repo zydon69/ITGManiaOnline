@@ -23,10 +23,12 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
 #include <iterator>
 #include <map>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "ActorUtil.h"
 #include "PerfDiagnostics.h"
@@ -53,6 +55,17 @@ std::map<RageTextureID, RageTexture*> m_textures_to_update;
 std::map<RageTexture*, RageTextureID> m_texture_ids_by_pointer;
 Preference<int> g_iTextureGCMaxDeletesPerScreenChange(
     "TextureGCMaxDeletesPerScreenChange", 48);
+
+void WarnTextureManagerAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+bool IsValidTexturePolicy(RageTextureID::TexPolicy policy) {
+  return policy == RageTextureID::TEX_DEFAULT ||
+         policy == RageTextureID::TEX_VOLATILE;
+}
 };  // namespace
 
 RageTextureManager::RageTextureManager()
@@ -62,7 +75,7 @@ RageTextureManager::RageTextureManager()
 RageTextureManager::~RageTextureManager() {
   for (std::pair<const RageTextureID&, RageTexture*> i : m_mapPathToTexture) {
     RageTexture* pTexture = i.second;
-    if (pTexture->m_iRefCount) {
+    if (pTexture != nullptr && pTexture->m_iRefCount && LOG != nullptr) {
       LOG->Trace(
           "TEXTUREMAN LEAK: '%s', RefCount = %d.", i.first.filename.c_str(),
           pTexture->m_iRefCount);
@@ -74,8 +87,28 @@ RageTextureManager::~RageTextureManager() {
 }
 
 void RageTextureManager::Update(float fDeltaTime) {
-  for (std::pair<const RageTextureID&, RageTexture*> i : m_textures_to_update) {
+  if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
+    WarnTextureManagerAuditFix(
+        "SRC_AUDIT_FIX SRC-1016: RageTextureManager ignored invalid update "
+        "delta.");
+    return;
+  }
+
+  std::vector<std::pair<RageTextureID, RageTexture*>> texturesToUpdate;
+  texturesToUpdate.reserve(m_textures_to_update.size());
+  for (const auto& i : m_textures_to_update) {
+    texturesToUpdate.push_back(i);
+  }
+
+  for (const auto& i : texturesToUpdate) {
+    auto registered = m_textures_to_update.find(i.first);
+    if (registered == m_textures_to_update.end() || registered->second != i.second) {
+      continue;
+    }
     RageTexture* pTexture = i.second;
+    if (pTexture == nullptr) {
+      continue;
+    }
     pTexture->Update(fDeltaTime);
   }
 }
@@ -84,7 +117,11 @@ void RageTextureManager::AdjustTextureID(RageTextureID& ID) const {
   if (ID.iColorDepth == -1) {
     ID.iColorDepth = m_Prefs.m_iTextureColorDepth;
   }
-  ID.iMaxSize = std::min(ID.iMaxSize, m_Prefs.m_iMaxTextureResolution);
+  if (ID.iColorDepth != 16 && ID.iColorDepth != 32) {
+    ID.iColorDepth = m_Prefs.m_iTextureColorDepth;
+  }
+  const int maxResolution = std::max(1, m_Prefs.m_iMaxTextureResolution);
+  ID.iMaxSize = std::clamp(ID.iMaxSize, 1, maxResolution);
   if (m_Prefs.m_bMipMaps) {
     ID.bMipMaps = true;
   }
@@ -100,6 +137,13 @@ bool RageTextureManager::IsTextureRegistered(RageTextureID ID) const {
  * to its GC policy. */
 void RageTextureManager::RegisterTexture(
     RageTextureID ID, RageTexture* pTexture) {
+  if (pTexture == nullptr) {
+    WarnTextureManagerAuditFix(
+        "SRC_AUDIT_FIX SRC-1017: RageTextureManager ignored null texture "
+        "registration.");
+    return;
+  }
+
   AdjustTextureID(ID);
 
   /* Make sure we don't already have a texture with this ID.  If we do, the
@@ -107,9 +151,13 @@ void RageTextureManager::RegisterTexture(
   std::map<RageTextureID, RageTexture*>::iterator p =
       m_mapPathToTexture.find(ID);
   if (p != m_mapPathToTexture.end()) {
-    /* Oops, found the texture. */
-    RageException::Throw(
-        "Custom texture \"%s\" already registered!", ID.filename.c_str());
+    WarnTextureManagerAuditFix(
+        "SRC_AUDIT_FIX SRC-1017: RageTextureManager rejected duplicate custom "
+        "texture registration.");
+    if (p->second != pTexture) {
+      RageUtil::SafeDelete(pTexture);
+    }
+    return;
   }
 
   m_mapPathToTexture[ID] = pTexture;
@@ -118,6 +166,13 @@ void RageTextureManager::RegisterTexture(
 
 void RageTextureManager::RegisterTextureForUpdating(
     RageTextureID id, RageTexture* tex) {
+  if (tex == nullptr) {
+    m_textures_to_update.erase(id);
+    WarnTextureManagerAuditFix(
+        "SRC_AUDIT_FIX SRC-1018: RageTextureManager ignored null update "
+        "texture.");
+    return;
+  }
   m_textures_to_update[id] = tex;
 }
 
@@ -173,12 +228,18 @@ RageTexture* RageTextureManager::LoadTextureInternal(RageTextureID ID) {
   // The texture is not already loaded.  Load it.
 
   RageTexture* pTexture;
-  if (ID.filename == g_sDefaultTextureName) {
+  if (ID.filename.empty() || ID.filename == g_sDefaultTextureName) {
     pTexture = new RageTexture_Default;
   } else if (ActorUtil::GetFileType(ID.filename) == FT_Movie) {
     pTexture = RageMovieTexture::Create(ID);
   } else {
     pTexture = new RageBitmapTexture(ID);
+  }
+  if (pTexture == nullptr) {
+    WarnTextureManagerAuditFix(
+        "SRC_AUDIT_FIX SRC-1019: RageTextureManager fell back after null "
+        "texture factory result.");
+    pTexture = new RageTexture_Default;
   }
 
   m_mapPathToTexture[ID] = pTexture;
@@ -197,12 +258,21 @@ RageTexture* RageTextureManager::LoadTexture(RageTextureID ID) {
 }
 
 RageTexture* RageTextureManager::CopyTexture(RageTexture* pCopy) {
+  if (pCopy == nullptr) {
+    WarnTextureManagerAuditFix(
+        "SRC_AUDIT_FIX SRC-1020: RageTextureManager refused to copy null "
+        "texture.");
+    return nullptr;
+  }
   ++pCopy->m_iRefCount;
   return pCopy;
 }
 
 void RageTextureManager::VolatileTexture(RageTextureID ID) {
   RageTexture* pTexture = LoadTextureInternal(ID);
+  if (pTexture == nullptr) {
+    return;
+  }
   pTexture->GetPolicy() =
       std::min(pTexture->GetPolicy(), RageTextureID::TEX_VOLATILE);
   UnloadTexture(pTexture);
@@ -213,10 +283,13 @@ void RageTextureManager::UnloadTexture(RageTexture* t) {
     return;
   }
 
+  if (t->m_iRefCount <= 0) {
+    WarnTextureManagerAuditFix(
+        "SRC_AUDIT_FIX SRC-1021: RageTextureManager refused refcount "
+        "underflow during unload.");
+    return;
+  }
   t->m_iRefCount--;
-  ASSERT_M(
-      t->m_iRefCount >= 0,
-      ssprintf("%i, %s", t->m_iRefCount, t->GetID().filename.c_str()));
 
   if (t->m_iRefCount) {
     return; /* Can't unload textures that are still referenced. */
@@ -246,29 +319,44 @@ void RageTextureManager::UnloadTexture(RageTexture* t) {
 }
 
 void RageTextureManager::DeleteTexture(RageTexture* t) {
-  ASSERT(t->m_iRefCount == 0);
+  if (t == nullptr) {
+    return;
+  }
+  if (t->m_iRefCount != 0) {
+    WarnTextureManagerAuditFix(
+        "SRC_AUDIT_FIX SRC-1022: RageTextureManager refused to delete "
+        "referenced texture.");
+    return;
+  }
   // LOG->Trace( "RageTextureManager: deleting '%s'.",
   // t->GetID().filename.c_str() );
 
   std::map<RageTexture*, RageTextureID>::iterator id_entry =
       m_texture_ids_by_pointer.find(t);
   if (id_entry != m_texture_ids_by_pointer.end()) {
+    const RageTextureID id = id_entry->second;
     std::map<RageTextureID, RageTexture*>::iterator tex_entry =
-        m_mapPathToTexture.find(id_entry->second);
-    if (tex_entry != m_mapPathToTexture.end()) {
-      m_mapPathToTexture.erase(tex_entry);
-      RageUtil::SafeDelete(t);
-    }
+        m_mapPathToTexture.find(id);
     std::map<RageTextureID, RageTexture*>::iterator tex_update_entry =
-        m_textures_to_update.find(id_entry->second);
+        m_textures_to_update.find(id);
     if (tex_update_entry != m_textures_to_update.end()) {
       m_textures_to_update.erase(tex_update_entry);
     }
     m_texture_ids_by_pointer.erase(id_entry);
+    if (tex_entry != m_mapPathToTexture.end() && tex_entry->second == t) {
+      m_mapPathToTexture.erase(tex_entry);
+      RageUtil::SafeDelete(t);
+      return;
+    }
+    WarnTextureManagerAuditFix(
+        "SRC_AUDIT_FIX SRC-1022: RageTextureManager found stale texture "
+        "pointer registration.");
     return;
   }
 
-  FAIL_M("Tried to delete a texture that wasn't in the ids by pointer list.");
+  WarnTextureManagerAuditFix(
+      "SRC_AUDIT_FIX SRC-1022: RageTextureManager ignored unknown texture "
+      "delete request.");
 }
 
 void RageTextureManager::GarbageCollect(GCType type) {
@@ -312,7 +400,10 @@ void RageTextureManager::GarbageCollect(GCType type) {
           bDeleteThis = true;
           break;
         default:
-          FAIL_M(ssprintf("Invalid texture policy: %i", policy));
+          WarnTextureManagerAuditFix(
+              "SRC_AUDIT_FIX SRC-1023: RageTextureManager deleted texture with "
+              "invalid policy.");
+          bDeleteThis = true;
       }
     }
 
@@ -350,7 +441,9 @@ void RageTextureManager::ReloadAll() {
   DoDelayedDelete();
 
   for (const auto& i : m_mapPathToTexture) {
-    i.second->Reload();
+    if (i.second != nullptr) {
+      i.second->Reload();
+    }
   }
 
   EnableOddDimensionWarning();
@@ -365,11 +458,27 @@ void RageTextureManager::ReloadAll() {
 void RageTextureManager::InvalidateTextures() {
   for (const auto& i : m_mapPathToTexture) {
     RageTexture* pTexture = i.second;
-    pTexture->Invalidate();
+    if (pTexture != nullptr) {
+      pTexture->Invalidate();
+    }
   }
 }
 
 bool RageTextureManager::SetPrefs(RageTextureManagerPrefs prefs) {
+  if (prefs.m_iTextureColorDepth != 16 && prefs.m_iTextureColorDepth != 32) {
+    WarnTextureManagerAuditFix(
+        "SRC_AUDIT_FIX SRC-1024: RageTextureManager clamped invalid texture "
+        "color depth.");
+    prefs.m_iTextureColorDepth = 32;
+  }
+  if (prefs.m_iMovieColorDepth != 16 && prefs.m_iMovieColorDepth != 32) {
+    WarnTextureManagerAuditFix(
+        "SRC_AUDIT_FIX SRC-1024: RageTextureManager clamped invalid movie color "
+        "depth.");
+    prefs.m_iMovieColorDepth = 32;
+  }
+  prefs.m_iMaxTextureResolution = std::max(1, prefs.m_iMaxTextureResolution);
+
   bool bNeedReload = false;
   if (m_Prefs != prefs) {
     bNeedReload = true;
@@ -377,9 +486,6 @@ bool RageTextureManager::SetPrefs(RageTextureManagerPrefs prefs) {
 
   m_Prefs = prefs;
 
-  ASSERT(
-      m_Prefs.m_iTextureColorDepth == 16 || m_Prefs.m_iTextureColorDepth == 32);
-  ASSERT(m_Prefs.m_iMovieColorDepth == 16 || m_Prefs.m_iMovieColorDepth == 32);
   return bNeedReload;
 }
 

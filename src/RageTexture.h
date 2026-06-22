@@ -4,6 +4,7 @@
 #define RAGE_TEXTURE_H
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -38,37 +39,59 @@ class RageTexture {
   int GetFramesWide() const { return m_iFramesWide; }
   int GetFramesHigh() const { return m_iFramesHigh; }
 
-  int GetSourceFrameWidth() const { return GetSourceWidth() / GetFramesWide(); }
+  int GetSourceFrameWidth() const {
+    return GetFramesWide() > 0 ? GetSourceWidth() / GetFramesWide() : 0;
+  }
   int GetSourceFrameHeight() const {
-    return GetSourceHeight() / GetFramesHigh();
+    return GetFramesHigh() > 0 ? GetSourceHeight() / GetFramesHigh() : 0;
   }
   int GetTextureFrameWidth() const {
-    return GetTextureWidth() / GetFramesWide();
+    return GetFramesWide() > 0 ? GetTextureWidth() / GetFramesWide() : 0;
   }
   int GetTextureFrameHeight() const {
-    return GetTextureHeight() / GetFramesHigh();
+    return GetFramesHigh() > 0 ? GetTextureHeight() / GetFramesHigh() : 0;
   }
-  int GetImageFrameWidth() const { return GetImageWidth() / GetFramesWide(); }
-  int GetImageFrameHeight() const { return GetImageHeight() / GetFramesHigh(); }
+  int GetImageFrameWidth() const {
+    return GetFramesWide() > 0 ? GetImageWidth() / GetFramesWide() : 0;
+  }
+  int GetImageFrameHeight() const {
+    return GetFramesHigh() > 0 ? GetImageHeight() / GetFramesHigh() : 0;
+  }
 
   // Use these to convert between the different coordinate systems:
   float GetSourceToImageCoordsRatioX() const {
-    return float(GetImageWidth()) / GetSourceWidth();
+    return GetSourceWidth() > 0 ? float(GetImageWidth()) / GetSourceWidth()
+                                : 0.0f;
   }
-  float GetImageToTexCoordsRatioX() const { return 1.0f / GetTextureWidth(); }
+  float GetImageToTexCoordsRatioX() const {
+    return GetTextureWidth() > 0 ? 1.0f / GetTextureWidth() : 0.0f;
+  }
   float GetSourceToTexCoordsRatioX() const {
     return GetSourceToImageCoordsRatioX() * GetImageToTexCoordsRatioX();
   }
   float GetSourceToImageCoordsRatioY() const {
-    return float(GetImageHeight()) / GetSourceHeight();
+    return GetSourceHeight() > 0 ? float(GetImageHeight()) / GetSourceHeight()
+                                 : 0.0f;
   }
-  float GetImageToTexCoordsRatioY() const { return 1.0f / GetTextureHeight(); }
+  float GetImageToTexCoordsRatioY() const {
+    return GetTextureHeight() > 0 ? 1.0f / GetTextureHeight() : 0.0f;
+  }
   float GetSourceToTexCoordsRatioY() const {
     return GetSourceToImageCoordsRatioY() * GetImageToTexCoordsRatioY();
   }
 
   const RectF* GetTextureCoordRect(int frameNo) const;
-  int GetNumFrames() const { return m_iFramesWide * m_iFramesHigh; }
+  int GetNumFrames() const {
+    const int64_t frames =
+        static_cast<int64_t>(m_iFramesWide) * m_iFramesHigh;
+    if (frames <= 0) {
+      return 0;
+    }
+    if (frames > std::numeric_limits<int>::max()) {
+      return std::numeric_limits<int>::max();
+    }
+    return static_cast<int>(frames);
+  }
 
   // Used by RageTextureManager. Order is important; see RageTextureManager.cpp.
   const RageTextureID::TexPolicy& GetPolicy() const { return m_ID.Policy; }

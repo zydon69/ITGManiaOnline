@@ -15,7 +15,8 @@ void RageTextureID::Init() {
   iColorDepth = -1;  // default
   bHotPinkColorKey = false;
   AdditionalTextureHints = "";
-  Policy = TEXTUREMAN->GetDefaultTexturePolicy();
+  Policy = TEXTUREMAN != nullptr ? TEXTUREMAN->GetDefaultTexturePolicy()
+                                 : TEX_DEFAULT;
 }
 
 void RageTextureID::SetFilename(const std::string& fn) {
