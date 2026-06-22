@@ -4283,6 +4283,20 @@ function ITGOnline:BroadcastLeaderboardFromRoom(room, source)
 		.. " rows=" .. tostring(#leaderboard)
 		.. " phase=" .. tostring(room.phase or "nil")
 		.. " version=" .. tostring(version))
+	if self.debugScoreTrace == true then
+		local parts = {}
+		for entry in ivalues(leaderboard or {}) do
+			local user = type(entry) == "table" and entry.user or {}
+			parts[#parts + 1] = table.concat({
+				tostring(user and user.id or ""),
+				tostring(entry and entry.displayed_percent or ""),
+				tostring(entry and entry.failed == true),
+				tostring(entry and entry.source or ""),
+			}, ":")
+		end
+		online_trace("broadcast_room_leaderboard_rows room=" .. tostring(roomId or "nil")
+			.. " rows=" .. table.concat(parts, ","))
+	end
 	MESSAGEMAN:Broadcast("ITGOnlineLeaderboardUpdated", {
 		leaderboard = leaderboard,
 		room_id = roomId,
@@ -10983,6 +10997,21 @@ end
 			online_flow_trace("score_updated_leaderboard_broadcast roomId=" .. tostring(payload.room_id or "nil")
 				.. " version=" .. tostring(incomingVersion)
 				.. " entries=" .. tostring(payload.leaderboard and #payload.leaderboard or 0))
+			if self.debugScoreTrace == true then
+				local parts = {}
+				for entry in ivalues(payload.leaderboard or {}) do
+					local user = type(entry) == "table" and entry.user or {}
+					parts[#parts + 1] = table.concat({
+						tostring(user and user.id or ""),
+						tostring(entry and entry.displayed_percent or ""),
+						tostring(entry and entry.failed == true),
+						tostring(entry and entry.source or ""),
+					}, ":")
+				end
+				online_trace("score_updated_leaderboard_rows room=" .. tostring(payload.room_id or "nil")
+					.. " version=" .. tostring(incomingVersion)
+					.. " rows=" .. table.concat(parts, ","))
+			end
 			if self.debugScoreTrace == true then
 				local score = payload.score or {}
 				local user = score.user or {}

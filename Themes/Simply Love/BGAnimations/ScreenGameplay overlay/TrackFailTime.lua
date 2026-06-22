@@ -13,6 +13,13 @@ local NotifyOnlineFailed = function()
     end
 end
 
+local IsDeadHealthState = function(value)
+    local state = tostring(value or "")
+    return state == "Dead"
+        or state == "HealthState_Dead"
+        or state == "0"
+end
+
 -- Return an array of cumulativeSeconds for each song in a course, which is used by Step Statistics Time.lua
 local CourseLengthPerSong = function(player)
     local cumulativeSeconds = {}
@@ -88,7 +95,7 @@ end
 local af = Def.Actor{
 	HealthStateChangedMessageCommand=function(self, param)
 		-- Only do something if the player fails
-		if param.PlayerNumber == player and param.HealthState == "HealthState_Dead" then			
+		if param.PlayerNumber == player and IsDeadHealthState(param.HealthState) then			
 			NotifyOnlineFailed()
 
 			local playerState = GAMESTATE:GetPlayerState(player)			

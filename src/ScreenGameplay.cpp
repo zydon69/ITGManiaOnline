@@ -2363,6 +2363,16 @@ void ScreenGameplay::Update(float fDeltaTime) {
         }
 
         LOG->Trace("Player %d failed", (int)pn);
+        if (GetITGOnlineIsActive() && !m_bMarkedOnlineFailedEarly) {
+          const bool marked = MarkITGOnlineFailedEarly();
+          if (marked) {
+            m_bMarkedOnlineFailedEarly = true;
+          }
+          LOG->Trace(
+              "ITG Online: individual fail triggered early failed finalization "
+              "marked=%d player=%d.",
+              marked ? 1 : 0, (int)pn);
+        }
         pi->GetPlayerStageStats()->m_bFailed = true;  // fail
 
         {
