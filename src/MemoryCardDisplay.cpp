@@ -23,15 +23,41 @@ static bool IsVisibleMemoryCardState(MemoryCardState state) {
   return state >= 0 && state < NUM_MemoryCardState;
 }
 
+static void WarnMemoryCardDisplay(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
 MemoryCardDisplay::MemoryCardDisplay() {
   m_PlayerNumber = PLAYER_INVALID;
   m_LastSeenState = MemoryCardState_Invalid;
 }
 
+MemoryCardDisplay::MemoryCardDisplay(const MemoryCardDisplay& cpy)
+    : ActorFrame(cpy),
+      m_PlayerNumber(cpy.m_PlayerNumber),
+      m_LastSeenState(cpy.m_LastSeenState) {
+  RemoveAllChildren();
+  for (int i = 0; i < NUM_MemoryCardState; ++i) {
+    m_spr[i] = cpy.m_spr[i];
+    AddChild(&m_spr[i]);
+  }
+}
+
+void MemoryCardDisplay::DetachSprites() {
+  for (int i = 0; i < NUM_MemoryCardState; ++i) {
+    RemoveChild(&m_spr[i]);
+  }
+}
+
 void MemoryCardDisplay::Load(PlayerNumber pn) {
+  DetachSprites();
+  m_LastSeenState = MemoryCardState_Invalid;
+
   if (!IsValidMemoryCardDisplayPlayer(pn)) {
-    LOG->Warn(
-        "MemoryCardDisplay::Load: invalid player number %d", int(pn));
+    WarnMemoryCardDisplay(
+        "SRC_AUDIT_FIX SRC-1207: MemoryCardDisplay ignored invalid player.");
     m_PlayerNumber = PLAYER_INVALID;
     return;
   }
@@ -41,8 +67,13 @@ void MemoryCardDisplay::Load(PlayerNumber pn) {
   for (int i = 0; i < NUM_MemoryCardState; i++) {
     MemoryCardState mcs = (MemoryCardState)i;
     std::string sState = MemoryCardStateToString(mcs);
-    m_spr[i].Load(THEME->GetPathG(
-        "MemoryCardDisplay", ssprintf("%s p%d", sState.c_str(), pn + 1)));
+    if (THEME != nullptr) {
+      m_spr[i].Load(THEME->GetPathG(
+          "MemoryCardDisplay", ssprintf("%s p%d", sState.c_str(), pn + 1)));
+    } else {
+      WarnMemoryCardDisplay(
+          "SRC_AUDIT_FIX SRC-1208: MemoryCardDisplay loaded without THEME.");
+    }
     m_spr[i].SetVisible(false);
     this->AddChild(&m_spr[i]);
   }
@@ -50,7 +81,13 @@ void MemoryCardDisplay::Load(PlayerNumber pn) {
 
 void MemoryCardDisplay::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    LOG->Warn("MemoryCardDisplay::LoadFromNode: null node");
+    WarnMemoryCardDisplay(
+        "SRC_AUDIT_FIX SRC-1207: MemoryCardDisplay ignored null XML node.");
+    return;
+  }
+  if (LUA == nullptr) {
+    WarnMemoryCardDisplay(
+        "SRC_AUDIT_FIX SRC-1209: MemoryCardDisplay ignored XML without LUA.");
     return;
   }
 
@@ -66,6 +103,10 @@ void MemoryCardDisplay::LoadFromNode(const XNode* pNode) {
 }
 
 void MemoryCardDisplay::Update(float fDelta) {
+  if (!IsValidMemoryCardDisplayPlayer(m_PlayerNumber) || MEMCARDMAN == nullptr) {
+    ActorFrame::Update(fDelta);
+    return;
+  }
   MemoryCardState newMcs = MEMCARDMAN->GetCardState(m_PlayerNumber);
   if (m_LastSeenState != newMcs) {
     if (IsVisibleMemoryCardState(m_LastSeenState)) {

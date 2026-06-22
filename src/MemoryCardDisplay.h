@@ -10,12 +10,15 @@
 class MemoryCardDisplay : public ActorFrame {
  public:
   MemoryCardDisplay();
+  MemoryCardDisplay(const MemoryCardDisplay& cpy);
   void Load(PlayerNumber pn);
   void LoadFromNode(const XNode* pNode);
   virtual MemoryCardDisplay* Copy() const;
   void Update(float fDelta);
 
  protected:
+  void DetachSprites();
+
   PlayerNumber m_PlayerNumber;
   MemoryCardState m_LastSeenState;
   // todo: make this an AutoActor eventually -aj
