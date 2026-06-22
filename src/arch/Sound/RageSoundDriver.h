@@ -233,10 +233,11 @@ class RageSoundDriver : public RageDriver {
   mutable int64_t m_iMaxHardwareFrame;
   mutable int64_t m_iVMaxHardwareFrame;
 
-  bool m_bShutdownDecodeThread;
+  std::atomic<bool> m_bShutdownDecodeThread;
 
   static int DecodeThread_start(void* p);
   void DecodeThread();
+  RageSoundMixBuffer* m_pMixBuffer;
   RageSoundMixBuffer& MixIntoBuffer(
       int iFrames, int64_t iFrameNumber, int64_t iCurrentFrame);
   RageThread m_DecodeThread;

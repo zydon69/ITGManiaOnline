@@ -14,6 +14,9 @@
 
 namespace {
 void WarnUserAboutBadSoundDriverEntry() {
+  if (LOG == nullptr) {
+    return;
+  }
   std::vector<std::string> list = GetDefaultSoundDriverList();
   std::string list_string = join(",", list);
   std::string trace =
@@ -36,22 +39,32 @@ RageSoundDriver* RageSoundDriver::Create(const std::string& drivers) {
     size_t end = drivers.find(',');
 
     while (end != std::string::npos) {
-      driversToTry.emplace_back(drivers.substr(start, end - start));
+      std::string driver = drivers.substr(start, end - start);
+      Trim(driver);
+      if (!driver.empty()) {
+        driversToTry.emplace_back(driver);
+      }
       start = end + 1;
       end = drivers.find(',', start);
     }
 
-    driversToTry.emplace_back(drivers.substr(start));
+    std::string driver = drivers.substr(start);
+    Trim(driver);
+    if (!driver.empty()) {
+      driversToTry.emplace_back(driver);
+    }
 
     size_t to_try = 0;
+    const std::vector<std::string> defaultDrivers = GetDefaultSoundDriverList();
 
     while (to_try < driversToTry.size()) {
       if (std::find(
-              GetDefaultSoundDriverList().begin(),
-              GetDefaultSoundDriverList().end(),
-              driversToTry[to_try]) == GetDefaultSoundDriverList().end()) {
-        LOG->Warn(
-            "Removed unusable sound driver %s", driversToTry[to_try].c_str());
+              defaultDrivers.begin(), defaultDrivers.end(),
+              driversToTry[to_try]) == defaultDrivers.end()) {
+        if (LOG != nullptr) {
+          LOG->Warn(
+              "Removed unusable sound driver %s", driversToTry[to_try].c_str());
+        }
         WarnUserAboutBadSoundDriverEntry();
         driversToTry.erase(driversToTry.begin() + to_try);
       } else {
@@ -67,19 +80,32 @@ RageSoundDriver* RageSoundDriver::Create(const std::string& drivers) {
     RageDriver* pDriver = m_pDriverList.Create(Driver);
     const char* driverString = Driver.c_str();
     if (pDriver == nullptr) {
-      LOG->Trace("Unknown sound driver: %s", driverString);
+      if (LOG != nullptr) {
+        LOG->Trace("Unknown sound driver: %s", driverString);
+      }
       continue;
     }
 
     RageSoundDriver* pRet = dynamic_cast<RageSoundDriver*>(pDriver);
-    ASSERT(pRet != nullptr);
+    if (pRet == nullptr) {
+      if (LOG != nullptr) {
+        LOG->Warn("Registered sound driver %s has wrong driver type",
+                  driverString);
+      }
+      RageUtil::SafeDelete(pDriver);
+      continue;
+    }
 
     const std::string sError = pRet->Init();
     if (sError.empty()) {
-      LOG->Info("Sound driver: %s", driverString);
+      if (LOG != nullptr) {
+        LOG->Info("Sound driver: %s", driverString);
+      }
       return pRet;
     }
-    LOG->Info("Couldn't load driver %s: %s", driverString, sError.c_str());
+    if (LOG != nullptr) {
+      LOG->Info("Couldn't load driver %s: %s", driverString, sError.c_str());
+    }
     RageUtil::SafeDelete(pRet);
   }
   return nullptr;

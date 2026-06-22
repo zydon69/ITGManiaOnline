@@ -10,25 +10,37 @@
 REGISTER_SOUND_DRIVER_CLASS(Null);
 
 const int channels = 2;
+const int kMaxNullMixFramesPerUpdate = 4096;
 
 void RageSoundDriver_Null::Update() {
   /* "Play" frames. */
-  while (m_iLastCursorPos < GetPosition() + 1024 * 4) {
+  const int64_t targetPosition = GetPosition() + 1024 * 4;
+  int mixedFrames = 0;
+  while (m_iLastCursorPos < targetPosition &&
+         mixedFrames < kMaxNullMixFramesPerUpdate) {
     int16_t buf[256 * channels];
     this->Mix(buf, 256, m_iLastCursorPos, GetPosition());
     m_iLastCursorPos += 256;
+    mixedFrames += 256;
+  }
+  if (m_iLastCursorPos < targetPosition) {
+    m_iLastCursorPos = targetPosition;
   }
 
   RageSoundDriver::Update();
 }
 
 int64_t RageSoundDriver_Null::GetPosition() const {
+  if (m_iSampleRate <= 0) {
+    return 0;
+  }
   return (RageTimer::GetTimeSinceStartMicroseconds() * m_iSampleRate) / 1000000;
 }
 
 RageSoundDriver_Null::RageSoundDriver_Null() {
-  m_iSampleRate = PREFSMAN->m_iSoundPreferredSampleRate;
-  {
+  m_iSampleRate =
+      PREFSMAN != nullptr ? PREFSMAN->m_iSoundPreferredSampleRate.Get() : 0;
+  if (m_iSampleRate <= 0) {
     m_iSampleRate = FALLBACK_SAMPLE_RATE;
   }
   m_iLastCursorPos = GetPosition();
