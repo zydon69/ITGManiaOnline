@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ActorFrame.h"
+#include "ActorProxy.h"
 #include "ActorUtil.h"
 #include "EnumHelper.h"
 #include "GameLoop.h"
@@ -216,6 +217,7 @@ Actor::Actor() {
 }
 
 Actor::~Actor() {
+  ActorProxy::DetachTargetFromAll(this);
   StopTweening();
   UnsubscribeAll();
   for (size_t i = 0; i < m_WrapperStates.size(); ++i) {

@@ -8,6 +8,8 @@ struct lua_State;
 class ActorProxy : public Actor {
  public:
   ActorProxy();
+  ActorProxy(const ActorProxy& cpy);
+  virtual ~ActorProxy();
 
   virtual bool EarlyAbortDraw() const;
   virtual void DrawPrimitives();
@@ -16,13 +18,16 @@ class ActorProxy : public Actor {
   virtual ActorProxy* Copy() const;
 
   Actor* GetTarget() { return m_pActorTarget; }
-  void SetTarget(Actor* pTarget) { m_pActorTarget = pTarget; }
+  const Actor* GetTarget() const { return m_pActorTarget; }
+  void SetTarget(Actor* pTarget);
+  static void DetachTargetFromAll(const Actor* pTarget);
 
   // Lua
   virtual void PushSelf(lua_State* L);
 
  private:
   Actor* m_pActorTarget;
+  bool m_bDrawingTarget;
 };
 
 #endif

@@ -1,27 +1,101 @@
 #include "ActorProxy.h"
 
+#include <set>
+
 #include "Actor.h"
 #include "ActorUtil.h"
+#include "RageLog.h"
 
 REGISTER_ACTOR_CLASS(ActorProxy);
 
-ActorProxy::ActorProxy() { m_pActorTarget = nullptr; }
+namespace {
+std::set<ActorProxy*> g_ActorProxies;
+
+void WarnActorProxyAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+bool WouldCreateProxyCycle(const ActorProxy* proxy, const Actor* target) {
+  const Actor* current = target;
+  for (int depth = 0; current != nullptr && depth < 64; ++depth) {
+    if (current == proxy) {
+      return true;
+    }
+    const ActorProxy* targetProxy = dynamic_cast<const ActorProxy*>(current);
+    if (targetProxy == nullptr) {
+      return false;
+    }
+    current = targetProxy->GetTarget();
+  }
+  return current != nullptr;
+}
+}  // namespace
+
+ActorProxy::ActorProxy() {
+  m_pActorTarget = nullptr;
+  m_bDrawingTarget = false;
+  g_ActorProxies.insert(this);
+}
+
+ActorProxy::ActorProxy(const ActorProxy& cpy) : Actor(cpy) {
+  m_pActorTarget = nullptr;
+  m_bDrawingTarget = false;
+  g_ActorProxies.insert(this);
+}
+
+ActorProxy::~ActorProxy() {
+  g_ActorProxies.erase(this);
+}
 
 bool ActorProxy::EarlyAbortDraw() const {
   return m_pActorTarget == nullptr || Actor::EarlyAbortDraw();
 }
 
 void ActorProxy::DrawPrimitives() {
-  if (m_pActorTarget != nullptr) {
-    bool bVisible = m_pActorTarget->GetVisible();
-    m_pActorTarget->SetVisible(true);
-    m_pActorTarget->Draw();
-    m_pActorTarget->SetVisible(bVisible);
+  if (m_pActorTarget == nullptr || m_bDrawingTarget) {
+    return;
+  }
+
+  Actor* target = m_pActorTarget;
+  const bool bVisible = target->GetVisible();
+  m_bDrawingTarget = true;
+  target->SetVisible(true);
+  target->Draw();
+  m_bDrawingTarget = false;
+  if (m_pActorTarget == target) {
+    target->SetVisible(bVisible);
   }
 }
 
 void ActorProxy::LoadFromNode(const XNode* pNode) {
   Actor::LoadFromNode(pNode);
+}
+
+void ActorProxy::SetTarget(Actor* pTarget) {
+  if (pTarget == nullptr) {
+    m_pActorTarget = nullptr;
+    return;
+  }
+  if (WouldCreateProxyCycle(this, pTarget)) {
+    WarnActorProxyAuditFix(
+        "SRC_AUDIT_FIX SRC-773: ActorProxy rejected cyclic target.");
+    m_pActorTarget = nullptr;
+    return;
+  }
+  m_pActorTarget = pTarget;
+}
+
+void ActorProxy::DetachTargetFromAll(const Actor* pTarget) {
+  if (pTarget == nullptr) {
+    return;
+  }
+  for (ActorProxy* proxy : g_ActorProxies) {
+    if (proxy != nullptr && proxy->m_pActorTarget == pTarget) {
+      proxy->m_pActorTarget = nullptr;
+    }
+  }
 }
 
 // lua start
@@ -31,6 +105,10 @@ void ActorProxy::LoadFromNode(const XNode* pNode) {
 class LunaActorProxy : public Luna<ActorProxy> {
  public:
   static int SetTarget(T* p, lua_State* L) {
+    if (lua_isnoneornil(L, 1)) {
+      p->SetTarget(nullptr);
+      COMMON_RETURN_SELF;
+    }
     Actor* pTarget = Luna<Actor>::check(L, 1);
     p->SetTarget(pTarget);
     COMMON_RETURN_SELF;
