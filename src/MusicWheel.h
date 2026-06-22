@@ -37,16 +37,10 @@ class MusicWheel : public WheelBase {
   bool IsRouletting() const;
 
   virtual bool Select();  // return true if this selection ends the screen
-  WheelItemDataType GetSelectedType() {
-    return GetCurWheelItemData(m_iSelection)->m_Type;
-  }
+  WheelItemDataType GetSelectedType();
   Song* GetSelectedSong();
-  Course* GetSelectedCourse() {
-    return GetCurWheelItemData(m_iSelection)->m_pCourse;
-  }
-  std::string GetSelectedSection() {
-    return GetCurWheelItemData(m_iSelection)->m_sText;
-  }
+  Course* GetSelectedCourse();
+  std::string GetSelectedSection();
 
   Song* GetPreferredSelectionForRandomOrPortal();
 
@@ -54,16 +48,15 @@ class MusicWheel : public WheelBase {
   bool SelectCourse(const Course* p);
   bool SelectSection(const std::string& SectionName);
   void SetOpenSection(std::string group);
-  SortOrder GetSortOrder() const { return m_SortOrder; }
+  SortOrder GetSortOrder() const;
   virtual void ChangeMusic(int dist); /* +1 or -1 */  // CHECK THIS
   void FinishChangingSorts();
   void PlayerJoined();
   // sm-ssc additions
   std::string JumpToNextGroup();
   std::string JumpToPrevGroup();
-  const MusicWheelItemData* GetCurWheelItemData(int i) {
-    return (const MusicWheelItemData*)m_CurWheelItemData[i];
-  }
+  const MusicWheelItemData* GetCurWheelItemData(int i) const;
+  MusicWheelItemData* GetCurWheelItemData(int i);
 
   virtual void ReloadSongList();
 
@@ -84,10 +77,9 @@ class MusicWheel : public WheelBase {
   void readyWheelItemsData(SortOrder so);
 
   std::string m_sLastModeMenuItem;
-  SortOrder m_SortOrder;
   RageSound m_soundChangeSort;
 
-  bool WheelItemIsVisible(int n);
+  bool WheelItemIsVisible(int n) const;
 
   ThemeMetric<float> ROULETTE_SWITCH_SECONDS;
   ThemeMetric<int> ROULETTE_SLOW_DOWN_SWITCHES;
@@ -120,10 +112,21 @@ class MusicWheel : public WheelBase {
   ThemeMetricMap<RageColor> CUSTOM_CHOICE_COLORS;
 
  private:
+  const Style* GetCurrentWheelStyle(PlayerNumber pn = PLAYER_INVALID) const;
+  StepsType GetCurrentWheelStepsType(PlayerNumber pn = PLAYER_INVALID) const;
+  SortOrder GetCurrentSortOrderOrDefault() const;
+  bool IsValidSortOrderForWheel(SortOrder so) const;
+  void DeleteWheelItemDatas(std::vector<MusicWheelItemData*>& items);
+  void ClearWheelItemDataCache();
+  RageColor GetSectionColor(int& index, RageColor fallback) const;
+  void MarkAllWheelItemDatasInvalid();
+
   // use getWheelItemsData instead of touching this one
   enum { INVALID, NEEDREFILTER, VALID } m_WheelItemDatasStatus[NUM_SortOrder];
   std::vector<MusicWheelItemData*> m__WheelItemDatas[NUM_SortOrder];
   std::vector<MusicWheelItemData*> m__UnFilteredWheelItemDatas[NUM_SortOrder];
+  std::vector<MusicWheelItemData*> m_EmptyWheelItems;
+  MusicWheelItemData m_EmptyWheelItemData;
 
   void BuildWheelItemDatas(
       std::vector<MusicWheelItemData*>& arrayWheelItems, SortOrder so);
