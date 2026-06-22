@@ -1246,6 +1246,16 @@ function apply_global_options_choice()
 		.. " joined_code=" .. tostring(joined_lobby_code)
 		.. " phase=" .. tostring(joined_phase)
 		.. " isManager=" .. tostring(joined_is_manager == true))
+	if ITGOnline and ITGOnline.TraceOnlineState then
+		ITGOnline:TraceOnlineState("ui_global_options_apply_begin", {
+			source = "ScreenOnlineLobbies",
+			optionIndex = global_options_index,
+			hasChoice = choice ~= nil,
+			joinedCode = joined_lobby_code,
+			joinedPhase = joined_phase,
+			isManager = joined_is_manager == true,
+		})
+	end
 	if not choice or not ITGOnline or not ITGOnline.UpdateGlobalOptions then
 		lobby_flow_trace("apply_global_options_choice_skipped reason=missing_context")
 		return
@@ -1256,6 +1266,15 @@ function apply_global_options_choice()
 		music_rate = choice.musicRate or current.musicRate,
 	}
 	ITGOnline:UpdateGlobalOptions(payload, function(ok)
+		if ITGOnline and ITGOnline.TraceOnlineState then
+			ITGOnline:TraceOnlineState("ui_global_options_apply_response", {
+				source = "ScreenOnlineLobbies",
+				ok = ok == true,
+				scoreMode = payload.score_mode or "",
+				musicRate = payload.music_rate or "",
+				joinedCode = joined_lobby_code,
+			})
+		end
 		lobby_flow_trace("apply_global_options_choice_response ok=" .. tostring(ok == true)
 			.. " scoreMode=" .. tostring(payload.score_mode or "")
 			.. " musicRate=" .. tostring(payload.music_rate or "")
@@ -2493,6 +2512,16 @@ local function start_browse_pack_download(songInfo)
 		lobby_flow_trace("browse_pack_download_start skipped reason=no_song_info")
 		return
 	end
+	if ITGOnline and ITGOnline.TraceOnlineState then
+		ITGOnline:TraceOnlineState("ui_browse_pack_download_start", {
+			source = "ScreenOnlineLobbies",
+			title = songInfo and (songInfo.title or songInfo.folder_name or songInfo.song_hash) or "nil",
+			pack = song_info_pack(songInfo),
+			uiMode = mode,
+			joinedPhase = joined_phase,
+			activeIndex = joined_active_index,
+		})
+	end
 	lobby_flow_trace("browse_pack_download_start song="
 		.. tostring(songInfo and (songInfo.title or songInfo.folder_name or songInfo.song_hash) or "nil")
 		.. " pack=" .. tostring(song_info_pack(songInfo))
@@ -2511,6 +2540,17 @@ local function start_browse_pack_download(songInfo)
 	end
 	refresh_joined_room_snapshot("browse_pack_download_start", t)
 	ITGOnline.PackSync:DownloadBrowsingPack(songInfo, function(ok, message)
+		if ITGOnline and ITGOnline.TraceOnlineState then
+			ITGOnline:TraceOnlineState("ui_browse_pack_download_response", {
+				source = "ScreenOnlineLobbies",
+				ok = ok == true,
+				messageType = type(message),
+				kind = type(message) == "table" and message.kind or "nil",
+				candidates = type(message) == "table" and message.candidates and #message.candidates or 0,
+				pack = song_info_pack(songInfo),
+				uiMode = mode,
+			})
+		end
 		lobby_flow_trace("browse_pack_download_callback ok=" .. tostring(ok == true)
 			.. " messageType=" .. tostring(type(message))
 			.. " kind=" .. tostring(type(message) == "table" and message.kind or "nil")
@@ -2553,6 +2593,15 @@ local function handle_leave_confirm_input(event)
 			.. " joined_code=" .. tostring(joined_lobby_code)
 			.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 			.. " leaving=" .. tostring(leaving_lobby == true))
+		if ITGOnline and ITGOnline.TraceOnlineState then
+			ITGOnline:TraceOnlineState("ui_leave_confirm_start", {
+				source = "ScreenOnlineLobbies",
+				confirmIndex = leave_confirm_index,
+				leaveMode = leave_confirm_mode,
+				joinedCode = joined_lobby_code,
+				leaving = leaving_lobby == true,
+			})
+		end
 		if leave_confirm_index == 1 then
 			play_online_sound_once("Common", "Start")
 			close_leave_confirm()
@@ -2598,6 +2647,14 @@ local function handle_browse_pack_download_confirm_input(event)
 	elseif event.GameButton == "Start" then
 		lobby_flow_trace("input_browse_pack_download_confirm_start index=" .. tostring(browse_pack_download_confirm_index)
 			.. " song=" .. tostring(browse_pack_download_song_info and (browse_pack_download_song_info.title or browse_pack_download_song_info.folder_name or browse_pack_download_song_info.song_hash) or "nil"))
+		if ITGOnline and ITGOnline.TraceOnlineState then
+			ITGOnline:TraceOnlineState("ui_browse_pack_download_confirm_start", {
+				source = "ScreenOnlineLobbies",
+				confirmIndex = browse_pack_download_confirm_index,
+				title = browse_pack_download_song_info and (browse_pack_download_song_info.title or browse_pack_download_song_info.folder_name or browse_pack_download_song_info.song_hash) or "nil",
+				pack = song_info_pack(browse_pack_download_song_info),
+			})
+		end
 		if browse_pack_download_confirm_index == 1 then
 			local songInfo = browse_pack_download_song_info
 			play_online_sound_once("Common", "Start")
@@ -2696,6 +2753,17 @@ local function handle_pack_choice_menu_input(event)
 	elseif event.GameButton == "Start" then
 		local candidate = pack_choice_candidates[pack_choice_index]
 		if candidate and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadPackByCandidate then
+			if ITGOnline and ITGOnline.TraceOnlineState then
+				ITGOnline:TraceOnlineState("ui_pack_choice_download_start", {
+					source = "ScreenOnlineLobbies",
+					candidateIndex = pack_choice_index,
+					candidateCount = #pack_choice_candidates,
+					packId = candidate.id or "nil",
+					packName = candidate.name or candidate.title or "",
+					browseOnly = pack_choice_browse_only == true,
+					downloadKey = pack_choice_download_key or "",
+				})
+			end
 			play_online_sound_once("Common", "Start")
 			pack_choice_last_selected_pack_id = tonumber(candidate.id)
 			local browseOnly = pack_choice_browse_only
@@ -2712,6 +2780,17 @@ local function handle_pack_choice_menu_input(event)
 			close_pack_choice_menu()
 			refresh_joined_room_snapshot("pack_choice_download_start", t)
 			ITGOnline.PackSync:DownloadPackByCandidate(songInfo, candidate, function(ok, message)
+				if ITGOnline and ITGOnline.TraceOnlineState then
+					ITGOnline:TraceOnlineState("ui_pack_choice_download_response", {
+						source = "ScreenOnlineLobbies",
+						ok = ok == true,
+						messageType = type(message),
+						packId = candidate.id or "nil",
+						packName = candidate.name or candidate.title or "",
+						browseOnly = browseOnly == true,
+						downloadKey = downloadKey or "",
+					})
+				end
 				refresh_joined_room_snapshot("pack_choice_download_callback", t)
 				if not ok and t then
 					t:playcommand("SetStatus", {
@@ -2843,6 +2922,14 @@ local function handle_joined_mode_input(event)
 			.. " songTransitionLocked=" .. tostring(ITGOnline and ITGOnline.IsSongSelectionTransitionLocked and ITGOnline:IsSongSelectionTransitionLocked("ui") or false)
 			.. " canDownload=" .. tostring(joined_can_download_pack == true or can_download_browsed_pack() == true))
 		if joined_active_index == 1 then
+			if ITGOnline and ITGOnline.TraceOnlineState then
+				ITGOnline:TraceOnlineState("ui_joined_leave_pressed", {
+					source = "ScreenOnlineLobbies",
+					activeIndex = joined_active_index,
+					uiMode = mode,
+					joinedPhase = joined_phase,
+				})
+			end
 			lobby_flow_trace("input_joined_leave_confirm strict_index=1")
 			open_leave_confirm("leave_lobby")
 		elseif joined_active_index == 2 and joined_is_manager then
@@ -2862,6 +2949,15 @@ local function handle_joined_mode_input(event)
 			end
 			if joined_can_cancel_song_selection() then
 				if ITGOnline and ITGOnline.CancelSongSelection then
+					if ITGOnline and ITGOnline.TraceOnlineState then
+						ITGOnline:TraceOnlineState("ui_joined_cancel_song_pressed", {
+							source = "ScreenOnlineLobbies",
+							activeIndex = joined_active_index,
+							uiMode = mode,
+							joinedPhase = joined_phase,
+							songTransitionLocked = ITGOnline.IsSongSelectionTransitionLocked and ITGOnline:IsSongSelectionTransitionLocked("ui") or false,
+						})
+					end
 					lobby_flow_trace("input_joined_cancel_song_selection_request shared_index=2")
 					t:playcommand("SetStatus", {
 						text="Annulation du choix de chanson...",
@@ -2869,6 +2965,15 @@ local function handle_joined_mode_input(event)
 						showPrompt=false
 					})
 					ITGOnline:CancelSongSelection(function(ok, decoded, response)
+						if ITGOnline and ITGOnline.TraceOnlineState then
+							ITGOnline:TraceOnlineState("ui_joined_cancel_song_response", {
+								source = "ScreenOnlineLobbies",
+								roomSnapshot = decoded and decoded.room or nil,
+								ok = ok == true,
+								status = response and response.statusCode or "nil",
+								hasRoom = decoded and decoded.room ~= nil,
+							})
+						end
 						lobby_flow_trace("input_joined_cancel_song_selection_response ok=" .. tostring(ok == true)
 							.. " status=" .. tostring(response and response.statusCode or "nil")
 							.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil))
@@ -2901,6 +3006,15 @@ local function handle_joined_mode_input(event)
 			end
 			local topScreen = SCREENMAN:GetTopScreen()
 			if topScreen then
+				if ITGOnline and ITGOnline.TraceOnlineState then
+					ITGOnline:TraceOnlineState("ui_joined_select_music_transition", {
+						source = "ScreenOnlineLobbies",
+						screenFrom = topScreen:GetName(),
+						screenTo = "ScreenSelectMusic",
+						activeIndex = joined_active_index,
+						joinedPhase = joined_phase,
+					})
+				end
 				lobby_flow_trace("input_joined_select_music_transition")
 				topScreen:SetNextScreenName("ScreenSelectMusic")
 				topScreen:StartTransitioningScreen("SM_GoToNextScreen")
@@ -2919,7 +3033,26 @@ local function handle_joined_mode_input(event)
 			elseif can_download_browsed_pack() then
 				open_browse_pack_download_confirm(joined_song_preview)
 			elseif joined_can_download_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadSelectedPack then
+				if ITGOnline and ITGOnline.TraceOnlineState then
+					ITGOnline:TraceOnlineState("ui_joined_download_selected_pack_start", {
+						source = "ScreenOnlineLobbies",
+						activeIndex = joined_active_index,
+						joinedPhase = joined_phase,
+						missingSong = joined_any_player_missing_song() == true,
+						pack = song_info_pack(joined_missing_song_info or joined_song_preview),
+					})
+				end
 				ITGOnline.PackSync:DownloadSelectedPack(joined_missing_song_info or joined_song_preview, function(ok, message)
+					if ITGOnline and ITGOnline.TraceOnlineState then
+						ITGOnline:TraceOnlineState("ui_joined_download_selected_pack_response", {
+							source = "ScreenOnlineLobbies",
+							ok = ok == true,
+							messageType = type(message),
+							kind = type(message) == "table" and message.kind or "nil",
+							candidates = type(message) == "table" and message.candidates and #message.candidates or 0,
+							pack = song_info_pack(joined_missing_song_info or joined_song_preview),
+						})
+					end
 					lobby_flow_trace("input_joined_download_selected_pack_callback ok=" .. tostring(ok == true)
 						.. " messageType=" .. tostring(type(message)))
 					if not ok and type(message) == "table" and message.kind == "pack_candidates" then
@@ -2965,6 +3098,15 @@ local function handle_joined_mode_input(event)
 			end
 		elseif joined_active_index == 7 and joined_is_manager then
 			if joined_room_can_start() then
+				if ITGOnline and ITGOnline.TraceOnlineState then
+					ITGOnline:TraceOnlineState("ui_joined_start_room_pressed", {
+						source = "ScreenOnlineLobbies",
+						activeIndex = joined_active_index,
+						joinedPhase = joined_phase,
+						roomCanStart = joined_room_can_start() == true,
+						ready = ready_summary(),
+					})
+				end
 				lobby_flow_trace("input_joined_start_room_broadcast")
 				MESSAGEMAN:Broadcast("StartOnlineRoom")
 			else
@@ -3055,6 +3197,16 @@ local function handle_browse_mode_input(event)
 		if list_selected then
 			if lobby_view == "players" then
 				if selected_online_user() then
+					if ITGOnline and ITGOnline.TraceOnlineState then
+						local user = selected_online_user()
+						ITGOnline:TraceOnlineState("ui_browse_player_action_open", {
+							source = "ScreenOnlineLobbies",
+							lobbyView = lobby_view,
+							onlinePlayerIndex = online_player_index,
+							onlinePlayers = #online_users,
+							targetUser = user and (user.id or user.playerId or user.name) or "nil",
+						})
+					end
 					play_online_sound_once("Common", "Start")
 					t:queuecommand("OpenPlayerActionMenu")
 				else
@@ -3063,6 +3215,14 @@ local function handle_browse_mode_input(event)
 			else
 				local lobbyList = t:GetChild("LobbyContent") and t:GetChild("LobbyContent"):GetChild("LobbyList")
 				if lobbyList then
+					if ITGOnline and ITGOnline.TraceOnlineState then
+						ITGOnline:TraceOnlineState("ui_browse_lobby_select", {
+							source = "ScreenOnlineLobbies",
+							lobbyView = lobby_view,
+							selectedLobbyIndex = selected_lobby_index,
+							candidates = #candidates,
+						})
+					end
 					play_online_sound_once("Common", "Start")
 					lobbyList:playcommand("SelectLobby")
 				else
@@ -3077,6 +3237,16 @@ local function handle_browse_mode_input(event)
 			lobby_flow_trace("input_browse_start_focus_list lobbyView=" .. tostring(lobby_view)
 				.. " candidates=" .. tostring(#candidates)
 				.. " onlinePlayers=" .. tostring(#online_users))
+			if ITGOnline and ITGOnline.TraceOnlineState then
+				ITGOnline:TraceOnlineState("ui_browse_focus_list_start", {
+					source = "ScreenOnlineLobbies",
+					lobbyView = lobby_view,
+					activeIndex = active_index,
+					candidates = #candidates,
+					onlinePlayers = #online_users,
+					listSelected = list_selected == true,
+				})
+			end
 			if (lobby_view == "lobbies" and #candidates > 0) or (lobby_view == "players" and #online_users > 0) then
 				list_selected = true
 				play_online_sound_once("Common", "Start")
@@ -3101,6 +3271,15 @@ local function handle_browse_mode_input(event)
 			local onlineHandler = GetOnlineHandlerInstance()
 			if onlineHandler and onlineHandler.connected then
 				lobby_flow_trace("input_browse_refresh_requested")
+				if ITGOnline and ITGOnline.TraceOnlineState then
+					ITGOnline:TraceOnlineState("ui_browse_manual_refresh", {
+						source = "ScreenOnlineLobbies",
+						connected = true,
+						candidates = #candidates,
+						onlinePlayers = #online_users,
+						lobbyView = lobby_view,
+					})
+				end
 				t:playcommand("SetStatus", {
 					text="Recherche des salons...",
 					showSpinner=true,
@@ -3109,6 +3288,14 @@ local function handle_browse_mode_input(event)
 				request_lobby_refresh("browse_manual_refresh", { immediate=true }, t)
 			else
 				lobby_flow_trace("input_browse_refresh_reconnect")
+				if ITGOnline and ITGOnline.TraceOnlineState then
+					ITGOnline:TraceOnlineState("ui_browse_refresh_reconnect", {
+						source = "ScreenOnlineLobbies",
+						connected = false,
+						hasError = has_error == true,
+						attempted = attempted == true,
+					})
+				end
 				connected = false
 				has_error = false
 				attempted = false
@@ -4084,6 +4271,15 @@ local af = Def.ActorFrame{
 							showPrompt=false
 						})
 						ITGOnline:FetchRoom(ITGOnline.currentRoomId, function(ok, decoded)
+							if ITGOnline and ITGOnline.TraceOnlineState then
+								ITGOnline:TraceOnlineState("ui_display_fetch_current_room_response", {
+									source = "ScreenOnlineLobbies.Display",
+									roomSnapshot = decoded and decoded.room or nil,
+									ok = ok == true,
+									hasRoom = decoded and decoded.room ~= nil,
+									reason = "restore_current_room_by_id",
+								})
+							end
 							lobby_flow_trace("Display_fetch_room_result ok=" .. tostring(ok == true)
 								.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
 								.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil"))
@@ -4133,6 +4329,15 @@ local af = Def.ActorFrame{
 			end
 		end,
 				RefreshCurrentRoomSnapshotCommand=function(self)
+					if ITGOnline and ITGOnline.TraceOnlineState then
+						ITGOnline:TraceOnlineState("ui_refresh_current_room_snapshot_command", {
+							source = "ScreenOnlineLobbies",
+							uiMode = mode,
+							joinedCode = joined_lobby_code,
+							leaving = leaving_lobby == true,
+							reason = "command",
+						})
+					end
 					lobby_flow_trace("refresh_current_room_snapshot_command currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 						.. " mode=" .. tostring(mode)
 						.. " joined_code=" .. tostring(joined_lobby_code)
@@ -4141,16 +4346,42 @@ local af = Def.ActorFrame{
 				end,
 				RefreshLobbyAfterLeaveCommand=function(self)
 					if not is_active_lobby_overlay() then
+						if ITGOnline and ITGOnline.TraceOnlineState then
+							ITGOnline:TraceOnlineState("ui_refresh_lobby_after_leave_skipped", {
+								source = "ScreenOnlineLobbies",
+								reason = "inactive_overlay",
+							})
+						end
 						lobby_flow_trace("refresh_lobby_after_leave_skipped reason=inactive_overlay")
 						return
 					end
 					if leaving_lobby then
+						if ITGOnline and ITGOnline.TraceOnlineState then
+							ITGOnline:TraceOnlineState("ui_refresh_lobby_after_leave_skipped", {
+								source = "ScreenOnlineLobbies",
+								reason = "leave_in_progress",
+								leaving = true,
+							})
+						end
 						lobby_flow_trace("refresh_lobby_after_leave_skipped reason=leave_in_progress")
 						return
 					end
 					if ITGOnline and ITGOnline.currentRoomId then
+						if ITGOnline and ITGOnline.TraceOnlineState then
+							ITGOnline:TraceOnlineState("ui_refresh_lobby_after_leave_skipped", {
+								source = "ScreenOnlineLobbies",
+								reason = "still_in_room",
+								currentRoom = ITGOnline.currentRoomId,
+							})
+						end
 						lobby_flow_trace("refresh_lobby_after_leave_skipped reason=still_in_room room=" .. tostring(ITGOnline.currentRoomId))
 						return
+					end
+					if ITGOnline and ITGOnline.TraceOnlineState then
+						ITGOnline:TraceOnlineState("ui_refresh_lobby_after_leave_requested", {
+							source = "ScreenOnlineLobbies",
+							reason = "overlay_post_leave_command",
+						})
 					end
 					lobby_flow_trace("refresh_lobby_after_leave delegated=request_helper")
 					request_lobby_refresh("overlay_post_leave_command", { delay=0.20 }, self)

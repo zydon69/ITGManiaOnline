@@ -47,6 +47,8 @@ ITGOnline.authSessionInvalidatedReason = ITGOnline.authSessionInvalidatedReason 
 ITGOnline.disconnecting = ITGOnline.disconnecting or false
 ITGOnline.lastEventCursor = ITGOnline.lastEventCursor or 0
 ITGOnline.fetchRoomInFlightByRoomId = ITGOnline.fetchRoomInFlightByRoomId or {}
+ITGOnline.fetchRoomStableResultsLastAtByRoomId = ITGOnline.fetchRoomStableResultsLastAtByRoomId or {}
+ITGOnline.fetchRoomStableResultsCoalesceSeconds = ITGOnline.fetchRoomStableResultsCoalesceSeconds or 0.75
 ITGOnline.lastRealtimeMessageAt = ITGOnline.lastRealtimeMessageAt or GetTimeSinceStart()
 ITGOnline.lastRealtimeClientPingAt = ITGOnline.lastRealtimeClientPingAt or 0
 ITGOnline.lastRealtimeHealthState = ITGOnline.lastRealtimeHealthState or ""
@@ -2412,6 +2414,17 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 		.. " cancelGeneration=" .. tostring(self.requestCancelGeneration or "nil")
 		.. " currentScreen=" .. tostring(self.currentScreenName or "nil")
 		.. " room=" .. tostring(self.currentRoomId or "nil"))
+	self:TraceOnlineState("http_request_begin", {
+		source = "http_request",
+		requestId = requestId,
+		traceId = traceId,
+		method = method,
+		path = path,
+		hasPayload = payload ~= nil,
+		cancelOnScreenChange = options.cancelOnScreenChange == true,
+		screenGeneration = self.screenGeneration or "nil",
+		cancelGeneration = self.requestCancelGeneration or "nil",
+	})
 	local startedAt = GetTimeSinceStart()
 	local request = NETWORK:HttpRequest{
 		url = url,
@@ -2470,6 +2483,20 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 				.. " currentGeneration=" .. tostring(self.screenGeneration or "nil")
 				.. " requestGeneration=" .. tostring(record.screenGeneration or "nil")
 				.. " room=" .. tostring(self.currentRoomId or "nil"))
+			self:TraceOnlineState("http_response", {
+				source = "http_request",
+				requestId = requestId,
+				traceId = traceId,
+				method = method,
+				path = path,
+				ok = ok == true,
+				status = response and response.statusCode or "nil",
+				durationMs = duration,
+				bytes = responseBytes,
+				error = errorCode or "nil",
+				requestGeneration = record.screenGeneration or "nil",
+				currentGeneration = self.screenGeneration or "nil",
+			})
 			if not ok and decoded and decoded.message then
 				online_trace(method .. " " .. path .. " message: " .. tostring(decoded.message))
 			end
@@ -3284,6 +3311,41 @@ function ITGOnline:HasActiveLiveScoreRoom()
 	return phase == "starting" or phase == "playing"
 end
 
+function ITGOnline:TraceOnlineState(label, fields)
+	if not online_flow_trace then return end
+	fields = type(fields) == "table" and fields or {}
+	local room = fields.roomSnapshot or self.currentRoom or {}
+	local selectedSong = type(room.selected_song) == "table" and room.selected_song
+		or type(self.currentSongPayload) == "table" and self.currentSongPayload
+		or {}
+	local playState = type(room.play_state) == "table" and room.play_state or {}
+	local summary = self.PlayStateSummary and self:PlayStateSummary(room) or nil
+	local parts = {
+		"online_state_trace",
+		"label=" .. tostring(label or "unknown"),
+		"room=" .. tostring(fields.room_id or fields.roomId or self.currentRoomId or room.id or "nil"),
+		"user=" .. tostring(self.user and self.user.id or "nil"),
+		"screen=" .. tostring(self.currentScreenName or "nil"),
+		"phase=" .. tostring(fields.phase or room.phase or "nil"),
+		"selectedAt=" .. tostring(fields.selected_at or fields.selectedAt or selectedSong.selected_at or selectedSong.selectedAt or "nil"),
+		"roundKey=" .. tostring(fields.roundKey or (self.PlayStateKey and self:PlayStateKey() or "nil")),
+		"roomRoundKey=" .. tostring(self.currentRoomRoundKey or ""),
+		"members=" .. tostring(type(room.members) == "table" and #room.members or "nil"),
+		"readyStates=" .. tostring(type(room.ready_states) == "table" and #room.ready_states or "nil"),
+		"sessions=" .. tostring(type(playState.sessions) == "table" and #playState.sessions or "nil"),
+		"finalResults=" .. tostring(type(playState.final_results) == "table" and #playState.final_results or "nil"),
+		"finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true or false),
+		"source=" .. tostring(fields.source or "unknown"),
+	}
+	for key, value in pairs(fields) do
+		if key ~= "roomSnapshot" and key ~= "room_id" and key ~= "roomId" and key ~= "phase"
+			and key ~= "selected_at" and key ~= "selectedAt" and key ~= "roundKey" and key ~= "source" then
+			parts[#parts + 1] = tostring(key) .. "=" .. tostring(value)
+		end
+	end
+	online_flow_trace(table.concat(parts, " "))
+end
+
 function ITGOnline:IsSongReloadOrDownloadActive(source)
 	local screenName = self.CurrentTopScreenName and self:CurrentTopScreenName() or tostring(self.currentScreenName or "")
 	local packSync = self.PackSync
@@ -3956,6 +4018,13 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 end
 
 function ITGOnline:ApplyRoomSnapshot(room, source)
+	self:TraceOnlineState("room_snapshot_incoming", {
+		source = source or "unknown",
+		roomSnapshot = type(room) == "table" and room or nil,
+		incomingPhase = type(room) == "table" and room.phase or "nil",
+		currentPhase = self.currentRoom and self.currentRoom.phase or "nil",
+		currentRoom = self.currentRoomId or "nil",
+	})
 	online_flow_trace("room_snapshot_apply_begin source=" .. tostring(source or "unknown")
 		.. " incomingRoom=" .. tostring(room and (room.id or room.code) or "nil")
 		.. " currentRoom=" .. tostring(self.currentRoomId or "nil")
@@ -4060,6 +4129,12 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		end
 	end
 	if previousRoom and self:RoomSnapshotRegressesPhase(previousRoom, room, source) then
+		self:TraceOnlineState("room_snapshot_rejected_regressive", {
+			source = source or "unknown",
+			roomSnapshot = room,
+			previousPhase = previousRoom.phase or "nil",
+			incomingPhase = room.phase or "nil",
+		})
 		online_room_snapshot_debug("room_snapshot_rejected_regressive", room, source, previousRoom)
 		online_flow_trace("ignored_regressive_room_snapshot source=" .. tostring(source or "unknown")
 			.. " room=" .. tostring(room.id or "")
@@ -4071,6 +4146,12 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		return self.currentRoom
 	end
 	if previousRoom and self:RoomSnapshotIsStale(previousRoom, room) then
+		self:TraceOnlineState("room_snapshot_rejected_stale", {
+			source = source or "unknown",
+			roomSnapshot = room,
+			previousPhase = previousRoom.phase or "nil",
+			incomingPhase = room.phase or "nil",
+		})
 		local previousKey = self:RoomSongRoundKey(previousRoom)
 		if previousKey == "" then
 			previousKey = self.currentRoomRoundKey or ""
@@ -4090,6 +4171,12 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	local incomingRoomVersion = tonumber(room.room_version or room.roomVersion) or 0
 	local previousRoomVersion = tonumber(self.lastRoomVersionByRoomId[roomVersionKey]) or 0
 	if incomingRoomVersion > 0 and previousRoomVersion > 0 and incomingRoomVersion < previousRoomVersion then
+		self:TraceOnlineState("room_snapshot_rejected_room_version", {
+			source = source or "unknown",
+			roomSnapshot = room,
+			incomingRoomVersion = incomingRoomVersion,
+			previousRoomVersion = previousRoomVersion,
+		})
 		online_room_snapshot_debug("room_snapshot_rejected_stale_room_version", room, source, previousRoom)
 		online_flow_trace("ignored_stale_room_snapshot source=" .. tostring(source or "unknown")
 			.. " reason=room_version_regression"
@@ -4240,6 +4327,14 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		.. " roundKey=" .. tostring(self.currentRoomRoundKey or "")
 		.. " playStateVersion=" .. tostring(self.currentRoom and self.currentRoom.play_state and self.currentRoom.play_state.version_ms or "nil")
 		.. " snapshotSource=" .. tostring(self.currentRoom and self.currentRoom.online_snapshot_source or "nil"))
+	self:TraceOnlineState("room_snapshot_applied", {
+		source = source or "unknown",
+		roomSnapshot = self.currentRoom,
+		previousPhase = previousRoom and previousRoom.phase or "nil",
+		previousMembers = previousMembers,
+		previousReadyStates = previousReadyStates,
+		previousSelectedAt = previousSelectedAt or "nil",
+	})
 
 	return self.currentRoom
 end
@@ -5508,11 +5603,25 @@ function ITGOnline:ConnectWebSocket(callbacks)
 		.. " hasToken=" .. tostring(tostring(self.token or "") ~= "")
 		.. " room=" .. tostring(self.currentRoomId or "nil")
 		.. " screen=" .. tostring(self.currentScreenName or "nil"))
+	self:TraceOnlineState("realtime_ticket_request", {
+		source = "connect_websocket",
+		generation = self.realtimeGeneration or "nil",
+		hasToken = tostring(self.token or "") ~= "",
+		realtimeConnecting = self.realtimeConnecting == true,
+		realtimeConnected = self.realtimeConnected == true,
+	})
 	self:Request("POST", "/websocket/tickets", {}, function(ok, decoded, response)
 		online_flow_trace("connect_websocket_ticket_response ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
 			.. " hasTicket=" .. tostring(decoded and decoded.ticket ~= nil)
 			.. " connecting=" .. tostring(self.realtimeConnecting == true))
+		self:TraceOnlineState("realtime_ticket_response", {
+			source = "connect_websocket",
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			hasTicket = decoded and decoded.ticket ~= nil,
+			realtimeConnecting = self.realtimeConnecting == true,
+		})
 		if not ok or not decoded or not decoded.ticket then
 			self.realtimeConnecting = false
 			self.realtimeConnected = false
@@ -5537,6 +5646,12 @@ function ITGOnline:ConnectWebSocket(callbacks)
 			.. " origin=" .. tostring(origin_from_base_url(config.apiBaseUrl))
 			.. " room=" .. tostring(self.currentRoomId or "nil")
 			.. " screen=" .. tostring(self.currentScreenName or "nil"))
+		self:TraceOnlineState("realtime_socket_opening", {
+			source = "connect_websocket",
+			generation = generation,
+			url = config.webSocketUrl,
+			origin = origin_from_base_url(config.apiBaseUrl),
+		})
 		local socket
 		socket = NETWORK:WebSocket{
 			url = config.webSocketUrl,
@@ -5565,6 +5680,11 @@ function ITGOnline:ConnectWebSocket(callbacks)
 							.. " room=" .. tostring(self.currentRoomId or "nil")
 							.. " screen=" .. tostring(self.currentScreenName or "nil")
 							.. " pendingCallbacks=" .. tostring(self.pendingRealtimeConnectCallbacks and #self.pendingRealtimeConnectCallbacks or 0))
+						self:TraceOnlineState("realtime_socket_open", {
+							source = "websocket",
+							generation = generation,
+							pendingCallbacks = self.pendingRealtimeConnectCallbacks and #self.pendingRealtimeConnectCallbacks or 0,
+						})
 						self:FlushRealtimeConnectCallbacks("open")
 					elseif msgType == "Message" then
 						self.lastRealtimeMessageAt = GetTimeSinceStart()
@@ -5572,6 +5692,13 @@ function ITGOnline:ConnectWebSocket(callbacks)
 						online_flow_trace("realtime_message_received id=" .. tostring(payload and payload.id or "nil")
 							.. " name=" .. tostring(payload and (payload.event or payload.name) or "nil")
 							.. " bytes=" .. tostring(msg.data and string.len(msg.data) or 0))
+						self:TraceOnlineState("realtime_message_received", {
+							source = "websocket",
+							eventId = payload and payload.id or "nil",
+							eventName = payload and (payload.event or payload.name) or "nil",
+							bytes = msg.data and string.len(msg.data) or 0,
+							generation = generation,
+						})
 						local handled, err = pcall(function()
 							online_flow_trace("realtime_handle_begin id=" .. tostring(payload and payload.id or "nil")
 								.. " name=" .. tostring(payload and (payload.event or payload.name) or "nil"))
@@ -5580,6 +5707,12 @@ function ITGOnline:ConnectWebSocket(callbacks)
 						online_flow_trace("realtime_handle_end id=" .. tostring(payload and payload.id or "nil")
 							.. " name=" .. tostring(payload and (payload.event or payload.name) or "nil")
 							.. " ok=" .. tostring(handled == true))
+						self:TraceOnlineState("realtime_handle_end", {
+							source = "websocket",
+							eventId = payload and payload.id or "nil",
+							eventName = payload and (payload.event or payload.name) or "nil",
+							ok = handled == true,
+						})
 						if handled and payload and payload.id and not payload._itgOnlineAckHandled then
 							online_flow_trace("realtime_ack_begin id=" .. tostring(payload.id)
 								.. " name=" .. tostring(payload.event or payload.name or "nil"))
@@ -5605,6 +5738,12 @@ function ITGOnline:ConnectWebSocket(callbacks)
 							.. " room=" .. tostring(self.currentRoomId or "nil")
 							.. " screen=" .. tostring(self.currentScreenName or "nil")
 							.. " pendingCallbacks=" .. tostring(self.pendingRealtimeConnectCallbacks and #self.pendingRealtimeConnectCallbacks or 0))
+						self:TraceOnlineState("realtime_socket_close", {
+							source = "websocket",
+							generation = generation,
+							reason = msg.reason or "",
+							pendingCallbacks = self.pendingRealtimeConnectCallbacks and #self.pendingRealtimeConnectCallbacks or 0,
+						})
 						if self.pendingRealtimeConnectCallbacks and #self.pendingRealtimeConnectCallbacks > 0 then
 							self:FlushRealtimeConnectCallbacks("close", msg.reason)
 						elseif self.activeRealtimeCallbacks and self.activeRealtimeCallbacks.close then
@@ -5624,6 +5763,12 @@ function ITGOnline:ConnectWebSocket(callbacks)
 							.. " room=" .. tostring(self.currentRoomId or "nil")
 							.. " screen=" .. tostring(self.currentScreenName or "nil")
 							.. " pendingCallbacks=" .. tostring(self.pendingRealtimeConnectCallbacks and #self.pendingRealtimeConnectCallbacks or 0))
+						self:TraceOnlineState("realtime_socket_error", {
+							source = "websocket",
+							generation = generation,
+							reason = msg.reason or "",
+							pendingCallbacks = self.pendingRealtimeConnectCallbacks and #self.pendingRealtimeConnectCallbacks or 0,
+						})
 						if self.pendingRealtimeConnectCallbacks and #self.pendingRealtimeConnectCallbacks > 0 then
 							self:FlushRealtimeConnectCallbacks("error", msg.reason or "WebSocket error")
 						elseif self.activeRealtimeCallbacks and self.activeRealtimeCallbacks.error then
@@ -5678,6 +5823,17 @@ function ITGOnline:Connect(callbacks)
 		.. " socket=" .. tostring(self.socket ~= nil)
 		.. " room=" .. tostring(self.currentRoomId or "nil")
 		.. " screen=" .. tostring(self.currentScreenName or "nil"))
+	self:TraceOnlineState("connect_begin", {
+		source = "connect",
+		hasToken = tostring(self.token or "") ~= "",
+		hasUser = self.user ~= nil,
+		sessionExpired = self.sessionExpired == true,
+		authInvalidated = self.authSessionInvalidated == true,
+		authInvalidatedReason = self.authSessionInvalidatedReason or "",
+		realtimeConnected = self.realtimeConnected == true,
+		realtimeConnecting = self.realtimeConnecting == true,
+		socket = self.socket ~= nil,
+	})
 	if self.authSessionInvalidated and not self.token then
 		local message = "Session ouverte ailleurs. Utilise un compte different ou reconnecte-toi depuis l'ecran de connexion."
 		online_flow_trace("connect_blocked reason=auth_session_invalidated authReason="
@@ -5749,6 +5905,16 @@ function ITGOnline:Disconnect(options)
 		.. " realtimeConnected=" .. tostring(self.realtimeConnected == true)
 		.. " syncInFlight=" .. tostring(self.syncInFlight == true)
 		.. " requests=" .. tostring(type(self.requests) == "table"))
+	self:TraceOnlineState("disconnect_begin", {
+		source = "disconnect",
+		leaveRoom = options.leaveRoom ~= false,
+		revokeToken = revokeToken == true,
+		roomToLeave = roomIdToLeave or "nil",
+		hasToken = tostring(self.token or "") ~= "",
+		socket = self.socket ~= nil,
+		realtimeConnected = self.realtimeConnected == true,
+		syncInFlight = self.syncInFlight == true,
+	})
 	self.disconnecting = true
 	if roomIdToLeave and options.leaveRoom ~= false and self.token and NETWORK and NETWORK.HttpRequest then
 		self:MarkLeavingRoom(roomIdToLeave, true)
@@ -5888,6 +6054,14 @@ function ITGOnline:Disconnect(options)
 		.. " token=" .. tostring(self.token ~= nil)
 		.. " user=" .. tostring(self.user ~= nil)
 		.. " disconnecting=" .. tostring(self.disconnecting == true))
+	self:TraceOnlineState("disconnect_end", {
+		source = "disconnect",
+		syncGeneration = self.syncGeneration or "nil",
+		realtimeGeneration = self.realtimeGeneration or "nil",
+		hasToken = self.token ~= nil,
+		hasUser = self.user ~= nil,
+		disconnecting = self.disconnecting == true,
+	})
 end
 
 function ITGOnline:Sync(callback)
@@ -5938,6 +6112,15 @@ function ITGOnline:Sync(callback)
 		.. " realtimeConnected=" .. tostring(self.realtimeConnected == true)
 		.. " realtimeConnecting=" .. tostring(self.realtimeConnecting == true)
 		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+	self:TraceOnlineState("sync_begin", {
+		source = "sync",
+		generation = generation,
+		cursor = accumulator.next_cursor,
+		callbacks = #self.syncCallbacks,
+		realtimeConnected = self.realtimeConnected == true,
+		realtimeConnecting = self.realtimeConnecting == true,
+		pendingJoinRoomId = self.pendingJoinRoomId or "nil",
+	})
 	self:SyncPages(accumulator, generation, 0)
 end
 
@@ -5963,6 +6146,19 @@ function ITGOnline:FinishSync(generation, ok, decoded, response)
 		.. " snapshotToken=" .. tostring(decoded and decoded.meta and decoded.meta.sync and decoded.meta.sync.snapshot_token or "nil")
 		.. " callbacks=" .. tostring(self.syncCallbacks and #self.syncCallbacks or 0)
 		.. " queued=" .. tostring(self.syncQueued == true))
+	self:TraceOnlineState("sync_finish", {
+		source = "sync",
+		generation = generation,
+		ok = ok == true,
+		status = response and response.statusCode or "nil",
+		roomSnapshot = decoded and decoded.current_room or self.currentRoom,
+		hasCurrentRoom = decoded and decoded.current_room ~= nil,
+		publicRooms = decoded and decoded.public_rooms and #decoded.public_rooms or 0,
+		onlineUsers = decoded and decoded.online_users and #decoded.online_users or 0,
+		events = decoded and decoded.events and #decoded.events or 0,
+		nextCursor = decoded and decoded.next_cursor or "nil",
+		queued = self.syncQueued == true,
+	})
 
 	local callbacks = self.syncCallbacks or {}
 	self.syncCallbacks = {}
@@ -6560,6 +6756,16 @@ function ITGOnline:SelectSong(callback, options)
 		.. " pack=" .. tostring(payload.pack or "")
 		.. " chart=" .. tostring(payload.chart_hash or ""):sub(1, 12)
 		.. " song=" .. tostring(payload.song_hash or ""):sub(1, 12))
+	self:TraceOnlineState("song_selection_request", {
+		source = "select_song",
+		actionId = payload.client_action_id or "",
+		title = payload.title or "",
+		pack = payload.pack or "",
+		songHash = tostring(payload.song_hash or ""):sub(1, 12),
+		chartHash = tostring(payload.chart_hash or ""):sub(1, 12),
+		replacingExisting = replacingExistingSelection == true,
+		selectionKey = selectionKey,
+	})
 	self:BeginSongSelectionTransition("select", self.currentRoomId)
 	self.songSelectionInFlightKey = selectionKey
 	self.songSelectionInFlightCallbacks = {}
@@ -6575,6 +6781,14 @@ function ITGOnline:SelectSong(callback, options)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
 			.. " error=" .. tostring(decoded and decoded.error_code or response and response.error or "nil")
 			.. " message=" .. tostring(decoded and decoded.message or response and response.errorMessage or "nil"))
+		self:TraceOnlineState("song_selection_response", {
+			source = "select_song",
+			roomSnapshot = decoded and decoded.room or nil,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.error or "nil",
+			selectionKey = selectionKey,
+		})
 		if ok and decoded and decoded.room then
 			local room = self:ApplyRoomSnapshot(decoded.room, "song_selection")
 			decoded.room = room or decoded.room
@@ -6708,6 +6922,13 @@ function ITGOnline:UpdateGlobalOptions(options, callback)
 		.. " musicRate=" .. tostring(payload.music_rate or "nil")
 		.. " requestedScoreMode=" .. tostring(options.score_mode or options.scoreMode or "nil")
 		.. " requestedMusicRate=" .. tostring(options.music_rate or options.musicRate or "nil"))
+	self:TraceOnlineState("global_options_request", {
+		source = "global_options",
+		scoreMode = payload.score_mode or "nil",
+		musicRate = payload.music_rate or "nil",
+		requestedScoreMode = options.score_mode or options.scoreMode or "nil",
+		requestedMusicRate = options.music_rate or options.musicRate or "nil",
+	})
 
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/global-options", payload, function(ok, decoded, response)
 		online_flow_trace("global_options_response ok=" .. tostring(ok == true)
@@ -6715,6 +6936,15 @@ function ITGOnline:UpdateGlobalOptions(options, callback)
 			.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
 			.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
 			.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
+		self:TraceOnlineState("global_options_response", {
+			source = "global_options",
+			roomSnapshot = decoded and decoded.room or nil,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+			scoreMode = payload.score_mode or "nil",
+			musicRate = payload.music_rate or "nil",
+		})
 		if ok and decoded and decoded.room then
 			local room = self:ApplyRoomSnapshot(decoded.room, "global_options")
 			decoded.room = room or decoded.room
@@ -6742,9 +6972,21 @@ function ITGOnline:TransferRoomManager(userId, callback)
 		return
 	end
 
+	self:TraceOnlineState("manager_transfer_request", {
+		source = "manager_transfer",
+		targetUser = userId,
+	})
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/transfer-manager", {
 		user_id = tonumber(userId) or userId,
 	}, function(ok, decoded, response)
+		self:TraceOnlineState("manager_transfer_response", {
+			source = "manager_transfer",
+			roomSnapshot = decoded and decoded.room or nil,
+			targetUser = userId,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+		})
 		if ok and decoded and decoded.room then
 			local room = self:ApplyRoomSnapshot(decoded.room, "manager_transfer")
 			decoded.room = room or decoded.room
@@ -6786,6 +7028,11 @@ function ITGOnline:CancelSongSelection(callback)
 		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
 		.. " hasSelectedSong=" .. tostring(self.currentRoom and self.currentRoom.selected_song ~= nil)
 		.. " songPayload=" .. tostring(self.currentSongPayload ~= nil))
+	self:TraceOnlineState("song_selection_cancel_request", {
+		source = "cancel_song_selection",
+		hasSelectedSong = self.currentRoom and self.currentRoom.selected_song ~= nil,
+		hasSongPayload = self.currentSongPayload ~= nil,
+	})
 	self:BeginSongSelectionTransition("cancel", self.currentRoomId)
 	local payload = { client_action_id = request_id() }
 	online_flow_trace("song_selection_cancel_action actionId=" .. tostring(payload.client_action_id or ""))
@@ -6796,6 +7043,13 @@ function ITGOnline:CancelSongSelection(callback)
 			.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
 			.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
 			.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
+		self:TraceOnlineState("song_selection_cancel_response", {
+			source = "cancel_song_selection",
+			roomSnapshot = decoded and decoded.room or nil,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+		})
 		if ok and decoded and decoded.room then
 			self:RememberSongSelectionCancelled(decoded.room, "song_selection_cancel_response")
 			local room = self:ApplyRoomSnapshot(decoded.room, "song_selection_cancelled")
@@ -7479,6 +7733,15 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		.. " forceFinalFailed=" .. tostring(forceFinalFailed == true)
 		.. " hasDisplayedSnapshot=" .. tostring(self.lastDisplayedScoreSnapshot ~= nil)
 		.. " inFlight=" .. tostring(self.scoreInFlightFingerprint ~= nil))
+	self:TraceOnlineState("send_score_begin", {
+		source = "send_score",
+		force = force == true,
+		final = final == true,
+		forceFailed = options.forceFailed == true,
+		forceFinalFailed = forceFinalFailed == true,
+		hasSnapshot = snapshot ~= nil,
+		inFlight = self.scoreInFlightFingerprint ~= nil,
+	})
 
 	if not online_single_local_player_allowed() then
 		online_flow_trace("send_score_failed reason=multiple_local_players final=" .. tostring(final == true))
@@ -7982,6 +8245,20 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
 			.. " errorCode=" .. tostring(errorCode or "nil")
 			.. " roomPhase=" .. tostring(decoded and decoded.room_phase or decoded and decoded.room and decoded.room.phase or "nil"))
+		self:TraceOnlineState("send_score_response", {
+			source = "send_score",
+			roomSnapshot = decoded and decoded.room or self.currentRoom,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			errorCode = errorCode or "nil",
+			final = final == true,
+			failed = outgoingFailed == true,
+			roundKey = roundKey,
+			score = outgoingScore,
+			displayedPercent = displayedScorePercent,
+			scoreMode = scoreMode,
+			songPosition = songPosition,
+		})
 		if self.scoreInFlightFingerprint == scoreFingerprint then
 			self.scoreInFlightFingerprint = nil
 		end
@@ -8223,6 +8500,16 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 		.. " isReady=" .. tostring(isReady == true)
 		.. " playKey=" .. tostring(self:PlayStateKey())
 		.. " options=" .. tostring(options.speed_mod or "") .. "," .. tostring(options.music_rate_bpm or "") .. "," .. tostring(options.stepchart or ""))
+	self:TraceOnlineState("ready_request_begin", {
+		source = "set_ready",
+		requestedPhase = phase,
+		currentPhase = currentPhase,
+		isReady = isReady == true,
+		requestKey = requestKey,
+		optionsSpeed = options.speed_mod or "",
+		optionsRate = options.music_rate_bpm or "",
+		optionsStepchart = options.stepchart or "",
+	})
 
 	if self.debugReadyFlow == true then
 		online_trace("[ITGOnline] ready_request room=" .. tostring(self.currentRoomId)
@@ -8319,6 +8606,17 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 			.. " error=" .. tostring(errorCode or response and response.errorMessage or "nil")
 			.. " callbacks=" .. tostring(callbacks and #callbacks or 0)
 			.. " blockedUntil=" .. tostring(self.readyRequestBlockedErrors[requestKey] or "nil"))
+		self:TraceOnlineState("ready_request_response", {
+			source = "set_ready",
+			roomSnapshot = decoded and decoded.room or self.currentRoom,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			requestedPhase = phase,
+			serverPhase = roomPhase or "nil",
+			error = errorCode or response and response.errorMessage or "nil",
+			callbacks = callbacks and #callbacks or 0,
+			requestKey = requestKey,
+		})
 		for cb in ivalues(callbacks) do
 			cb(ok, decoded, response)
 		end
@@ -8520,6 +8818,12 @@ function ITGOnline:StartRoom(callback)
 		.. " readyStates=" .. tostring(self.currentRoom and self.currentRoom.ready_states and #self.currentRoom.ready_states or 0)
 		.. " hasSelectedSong=" .. tostring(self.currentRoom and self.currentRoom.selected_song ~= nil)
 		.. " playKey=" .. tostring(self.PlayStateKey and self:PlayStateKey() or "nil"))
+	self:TraceOnlineState("start_room_request", {
+		source = "start_room",
+		members = self.currentRoom and self.currentRoom.members and #self.currentRoom.members or 0,
+		readyStates = self.currentRoom and self.currentRoom.ready_states and #self.currentRoom.ready_states or 0,
+		hasSelectedSong = self.currentRoom and self.currentRoom.selected_song ~= nil,
+	})
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/start", {}, function(ok, decoded, response)
 		online_flow_trace("start_room_response ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
@@ -8527,6 +8831,14 @@ function ITGOnline:StartRoom(callback)
 			.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
 			.. " scheduledStart=" .. tostring(decoded and decoded.room and (decoded.room.scheduled_start_at or decoded.room.scheduled_start_ms) or "nil")
 			.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
+		self:TraceOnlineState("start_room_response", {
+			source = "start_room",
+			roomSnapshot = decoded and decoded.room or nil,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+			scheduledStart = decoded and decoded.room and (decoded.room.scheduled_start_at or decoded.room.scheduled_start_ms) or "nil",
+		})
 		if ok and decoded and decoded.room then
 			local room = self:ApplyRoomSnapshot(decoded.room, "start_room")
 			decoded.room = room or decoded.room
@@ -8651,6 +8963,12 @@ function ITGOnline:ApplyPlayStateSnapshot(playState, source, versionMs, options)
 		.. " previous=" .. tostring(previousVersion)
 		.. " sessions=" .. tostring(playState.sessions and #playState.sessions or 0)
 		.. " finalResults=" .. tostring(playState.final_results and #playState.final_results or 0))
+	self:TraceOnlineState("play_state_snapshot_applied", {
+		source = source or "unknown",
+		roomSnapshot = self.currentRoom,
+		version = incomingVersion,
+		previousVersion = previousVersion,
+	})
 	if options.suppressLobbyBroadcast == true then
 		online_flow_trace("play_state_snapshot_lobby_broadcast_suppressed source=" .. tostring(source or "unknown")
 			.. " room=" .. tostring(roomId)
@@ -8952,6 +9270,12 @@ function ITGOnline:MarkPlayEntered(callback)
 	end
 
 	self.onlineGameplayEnteredInFlightKey = key
+	self:TraceOnlineState("mark_play_entered_request", {
+		source = "play_entered",
+		roundKey = key,
+		screenName = screenName,
+		roomPhase = roomPhase,
+	})
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/play/entered", {}, function(ok, decoded, response)
 		if self.onlineGameplayEnteredInFlightKey == key then
 			self.onlineGameplayEnteredInFlightKey = ""
@@ -8963,6 +9287,14 @@ function ITGOnline:MarkPlayEntered(callback)
 			self.onlineGameplayReturnedLocalAt = 0
 			self:UpdatePlayStateFromResponse(decoded)
 		end
+		self:TraceOnlineState("mark_play_entered_response", {
+			source = "play_entered",
+			roomSnapshot = self.currentRoom,
+			roundKey = key,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+		})
 		if callback then callback(ok, decoded, response) end
 	end)
 end
@@ -9095,6 +9427,13 @@ function ITGOnline:MarkPlayTerminal(endpoint, state, callback)
 		.. " roundKey=" .. tostring(key)
 		.. " validKey=" .. tostring(validKey == true)
 		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+	self:TraceOnlineState("mark_play_terminal_request", {
+		source = "play_terminal",
+		state = state,
+		endpoint = endpoint,
+		roundKey = key,
+		validKey = validKey == true,
+	})
 
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. endpoint, {}, function(ok, decoded, response)
 		if validKey and self.onlineGameplayTerminalInFlightKey == terminalKey then
@@ -9114,6 +9453,16 @@ function ITGOnline:MarkPlayTerminal(endpoint, state, callback)
 			.. " ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
 			.. " message=" .. tostring(response_message(response, decoded, "")))
+		self:TraceOnlineState("mark_play_terminal_response", {
+			source = "play_terminal",
+			roomSnapshot = self.currentRoom,
+			state = state,
+			endpoint = endpoint,
+			roundKey = key,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+		})
 		if callback then callback(ok, decoded, response) end
 	end)
 end
@@ -9325,10 +9674,24 @@ function ITGOnline:MarkSongLoaded(callback, clockRetry)
 
 	self.songLoadedInFlightKey = songKey
 	self.songLoadedPendingCallbacks[songKey] = callback and { callback } or {}
+	self:TraceOnlineState("song_loaded_request", {
+		source = "mark_song_loaded",
+		roundKey = songKey,
+		clockFresh = self.ClockSyncIsFresh and self:ClockSyncIsFresh() or false,
+		callbacks = self.songLoadedPendingCallbacks[songKey] and #self.songLoadedPendingCallbacks[songKey] or 0,
+	})
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/loaded", {}, function(ok, decoded, response)
 		if self.songLoadedInFlightKey == songKey then
 			self.songLoadedInFlightKey = ""
 		end
+		self:TraceOnlineState("song_loaded_response", {
+			source = "mark_song_loaded",
+			roomSnapshot = decoded and decoded.room or nil,
+			roundKey = songKey,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+		})
 				if ok and decoded and decoded.room then
 					local room = self:ApplyRoomSnapshot(decoded.room, "mark_song_loaded")
 					decoded.room = room or decoded.room
@@ -9397,10 +9760,27 @@ function ITGOnline:MaybeAckScheduledStart(room)
 	self.startScheduleAckIntentKey = intentKey
 	self.startScheduleAckIntentAt = now
 	self.startScheduleAckInFlightKey = key
+	self:TraceOnlineState("start_ack_request", {
+		source = "start_ack",
+		ackKey = key,
+		intentKey = intentKey,
+		screenName = screenName,
+		startAt = startAt,
+		chartHash = tostring(chartHash):sub(1, 12),
+	})
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/start-ack", {}, function(ok, decoded, response)
 		if self.startScheduleAckInFlightKey == key then
 			self.startScheduleAckInFlightKey = ""
 		end
+		self:TraceOnlineState("start_ack_response", {
+			source = "start_ack",
+			roomSnapshot = decoded and decoded.room or nil,
+			ackKey = key,
+			intentKey = intentKey,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+		})
 		if ok and decoded and decoded.room then
 			local room = self:ApplyRoomSnapshot(decoded.room, "ack_scheduled_start")
 			decoded.room = room or decoded.room
@@ -9507,6 +9887,14 @@ function ITGOnline:Heartbeat(status, force)
 		.. " inFlight=" .. tostring(self.heartbeatInFlight == true)
 		.. " queued=" .. tostring(self.heartbeatQueuedStatus or "nil")
 		.. " screen=" .. tostring(self.currentScreenName or "nil"))
+	self:TraceOnlineState("heartbeat_begin", {
+		source = "heartbeat",
+		status = status,
+		force = force == true,
+		inFlight = self.heartbeatInFlight == true,
+		queued = self.heartbeatQueuedStatus or "nil",
+		fingerprint = tostring(status) .. "|" .. tostring(roomId or ""),
+	})
 	if tostring(self.currentRoomBlockedReason or "") ~= "" and not isLobbyPresenceHeartbeat then
 		online_trace("Heartbeat suppressed while current room is blocked: status="
 			.. tostring(status)
@@ -10105,12 +10493,24 @@ function ITGOnline:FetchCurrentRoom(callback)
 	online_flow_trace("fetch_current_room_begin screen=" .. tostring(self.currentScreenName or "nil")
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+	self:TraceOnlineState("fetch_current_room_begin", {
+		source = "fetch_current_room",
+		pendingJoinRoomId = self.pendingJoinRoomId or "nil",
+	})
 	self:Request("GET", "/rooms/current", nil, function(ok, decoded, response)
 			online_flow_trace("fetch_current_room_response ok=" .. tostring(ok == true)
 				.. " status=" .. tostring(response and response.statusCode or "nil")
 				.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
 				.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
 				.. " room=" .. tostring(decoded and decoded.room and decoded.room.id or "nil"))
+			self:TraceOnlineState("fetch_current_room_response", {
+				source = "fetch_current_room",
+				roomSnapshot = decoded and decoded.room or nil,
+				ok = ok == true,
+				status = response and response.statusCode or "nil",
+				hasRoom = decoded and decoded.room ~= nil,
+				conflict = decoded and decoded.error_code or "nil",
+			})
 			if ok and decoded and decoded.room then
 				self:ClearCurrentRoomBlocked("fetch_current_room")
 				local room = self:ApplyRoomSnapshot(decoded.room, "fetch_current_room")
@@ -10131,12 +10531,25 @@ function ITGOnline:CreateRoom(callback, visibility)
 	online_flow_trace("create_room_begin visibility=" .. tostring(visibility or "public")
 		.. " name=" .. tostring(roomName)
 		.. " screen=" .. tostring(self.currentScreenName or "nil"))
+	self:TraceOnlineState("create_room_begin", {
+		source = "create_room",
+		visibility = visibility or "public",
+		roomName = roomName,
+	})
 	self:Request("POST", "/rooms", { name = roomName, visibility = visibility or "public" }, function(ok, decoded, response)
 		online_flow_trace("create_room_response ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
 			.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
 			.. " room=" .. tostring(decoded and decoded.room and decoded.room.id or "nil")
 			.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil"))
+		self:TraceOnlineState("create_room_response", {
+			source = "create_room",
+			roomSnapshot = decoded and decoded.room or nil,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			hasRoom = decoded and decoded.room ~= nil,
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+		})
 		if ok and decoded and decoded.room then
 			local room = self:ApplyRoomSnapshot(decoded.room, "create_room")
 			decoded.room = room or decoded.room
@@ -10150,6 +10563,11 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
 		.. " screen=" .. tostring(self.currentScreenName or "nil"))
+	self:TraceOnlineState("join_room_begin", {
+		source = "join_room",
+		targetRoom = roomId,
+		pendingJoinRoomId = self.pendingJoinRoomId or "nil",
+	})
 	self.pendingJoinRoomId = roomId
 	local roomKey = self:RoomKey(roomId)
 	if roomKey ~= "" and self.ignoredRoomEventsUntil then
@@ -10164,6 +10582,16 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 				.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
 				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+			self:TraceOnlineState("join_room_response", {
+				source = "join_room",
+				roomSnapshot = decoded and decoded.room or nil,
+				targetRoom = roomId,
+				ok = ok == true,
+				status = response and response.statusCode or "nil",
+				hasRoom = decoded and decoded.room ~= nil,
+				error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+				pendingJoinRoomId = self.pendingJoinRoomId or "nil",
+			})
 			if ok and decoded and decoded.room then
 				local room = self:ApplyRoomSnapshot(decoded.room, "join_room")
 				decoded.room = room or decoded.room
@@ -10366,7 +10794,22 @@ function ITGOnline:ConfirmSelectedSongAvailability(reason, callback)
 end
 
 function ITGOnline:RequestJoinUserRoom(userId, callback)
+		self:TraceOnlineState("join_user_room_request", {
+			source = "request_join_user_room",
+			targetUser = userId,
+			pendingJoinRoomId = self.pendingJoinRoomId or "nil",
+		})
 		self:Request("POST", "/users/" .. tostring(userId) .. "/room-join-request", {}, function(ok, decoded, response)
+			self:TraceOnlineState("join_user_room_response", {
+				source = "request_join_user_room",
+				roomSnapshot = decoded and decoded.room or nil,
+				targetUser = userId,
+				ok = ok == true,
+				status = response and response.statusCode or "nil",
+				hasRoom = decoded and decoded.room ~= nil,
+				hasJoinRequest = decoded and decoded.join_request ~= nil,
+				error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+			})
 			if ok and decoded and decoded.room then
 				local room = self:ApplyRoomSnapshot(decoded.room, "request_join_user_room")
 				decoded.room = room or decoded.room
@@ -10384,12 +10827,33 @@ function ITGOnline:RequestJoinUserRoom(userId, callback)
 	end
 
 function ITGOnline:InviteUser(roomId, userId, callback)
+	self:TraceOnlineState("invite_user_request", {
+		source = "invite_user",
+		targetRoom = roomId,
+		targetUser = userId,
+	})
 	self:Request("POST", "/rooms/" .. tostring(roomId) .. "/invitations", {
 		user_id = tonumber(userId) or userId,
-	}, callback)
+	}, function(ok, decoded, response)
+		self:TraceOnlineState("invite_user_response", {
+			source = "invite_user",
+			targetRoom = roomId,
+			targetUser = userId,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+			hasInvitation = decoded and decoded.invitation ~= nil,
+		})
+		if callback then callback(ok, decoded, response) end
+	end)
 end
 
 function ITGOnline:InviteUserToNewRoom(userId, visibility, callback)
+	self:TraceOnlineState("invite_user_to_new_room_begin", {
+		source = "invite_user_to_new_room",
+		targetUser = userId,
+		visibility = visibility or "private",
+	})
 	self:CreateRoom(function(ok, decoded, response)
 		if not ok or not decoded or not decoded.room then
 			if callback then callback(false, decoded, response) end
@@ -10410,7 +10874,20 @@ function ITGOnline:InviteUserToNewRoom(userId, visibility, callback)
 end
 
 function ITGOnline:AcceptInvitation(invitationId, callback)
+	self:TraceOnlineState("accept_invitation_request", {
+		source = "accept_invitation",
+		invitationId = invitationId,
+	})
 	self:Request("POST", "/room-invitations/" .. tostring(invitationId) .. "/accept", {}, function(ok, decoded, response)
+		self:TraceOnlineState("accept_invitation_response", {
+			source = "accept_invitation",
+			roomSnapshot = decoded and decoded.room or nil,
+			invitationId = invitationId,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			hasRoom = decoded and decoded.room ~= nil,
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+		})
 		if ok and decoded and decoded.room then
 			local room = self:ApplyRoomSnapshot(decoded.room, "accept_invitation")
 			decoded.room = room or decoded.room
@@ -10421,17 +10898,57 @@ function ITGOnline:AcceptInvitation(invitationId, callback)
 end
 
 function ITGOnline:DeclineInvitation(invitationId, callback)
-	self:Request("POST", "/room-invitations/" .. tostring(invitationId) .. "/decline", {}, callback)
+	self:TraceOnlineState("decline_invitation_request", {
+		source = "decline_invitation",
+		invitationId = invitationId,
+	})
+	self:Request("POST", "/room-invitations/" .. tostring(invitationId) .. "/decline", {}, function(ok, decoded, response)
+		self:TraceOnlineState("decline_invitation_response", {
+			source = "decline_invitation",
+			invitationId = invitationId,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+		})
+		if callback then callback(ok, decoded, response) end
+	end)
 end
 
 function ITGOnline:AcceptJoinRequest(joinRequestId, callback)
-	self:Request("POST", "/room-join-requests/" .. tostring(joinRequestId) .. "/accept", {}, callback)
+	self:TraceOnlineState("accept_join_request_request", {
+		source = "accept_join_request",
+		joinRequestId = joinRequestId,
+	})
+	self:Request("POST", "/room-join-requests/" .. tostring(joinRequestId) .. "/accept", {}, function(ok, decoded, response)
+		self:TraceOnlineState("accept_join_request_response", {
+			source = "accept_join_request",
+			joinRequestId = joinRequestId,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+		})
+		if callback then callback(ok, decoded, response) end
+	end)
 end
 
 function ITGOnline:DeclineJoinRequest(joinRequestId, reason, callback)
+	self:TraceOnlineState("decline_join_request_request", {
+		source = "decline_join_request",
+		joinRequestId = joinRequestId,
+		reason = reason or "",
+	})
 	self:Request("POST", "/room-join-requests/" .. tostring(joinRequestId) .. "/decline", {
 		reason = reason or "",
-	}, callback)
+	}, function(ok, decoded, response)
+		self:TraceOnlineState("decline_join_request_response", {
+			source = "decline_join_request",
+			joinRequestId = joinRequestId,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+		})
+		if callback then callback(ok, decoded, response) end
+	end)
 end
 
 function ITGOnline:ClearCurrentRoomState(source)
@@ -10499,6 +11016,12 @@ end
 		online_flow_trace("leave_room_begin room=" .. tostring(roomId)
 			.. " currentRoomId=" .. tostring(self.currentRoomId)
 			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+		self:TraceOnlineState("leave_room_begin", {
+			source = "leave_room",
+			targetRoom = roomId,
+			phase = self.currentRoom and self.currentRoom.phase or "nil",
+			leaving = self:IsLeavingRoom(roomId) == true,
+		})
 		self:CancelPendingRequests()
 		self:MarkLeavingRoom(roomId, true)
 		self:IgnoreRoomEvents(roomId, 30)
@@ -10510,6 +11033,15 @@ end
 				.. " gone=" .. tostring(gone == true)
 				.. " status=" .. tostring(response and response.statusCode or "nil")
 				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
+			self:TraceOnlineState("leave_room_response", {
+				source = "leave_room",
+				targetRoom = roomId,
+				ok = ok == true,
+				gone = gone == true,
+				status = response and response.statusCode or "nil",
+				error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+				leaving = self:IsLeavingRoom(roomId) == true,
+			})
 			if ok or gone then
 				if self.currentRoomId ~= nil and tonumber(self.currentRoomId) == tonumber(roomId) then
 					online_flow_trace("leave_room_clear_current room=" .. tostring(roomId))
@@ -10554,6 +11086,29 @@ function ITGOnline:FetchRoom(roomId, callback)
 		return
 	end
 	local roomKey = tostring(roomId)
+	local currentRoomKey = tostring(self.currentRoom and (self.currentRoom.id or self.currentRoom.room_id or self.currentRoom.roomId) or self.currentRoomId or "")
+	local currentPhase = self.NormalizeRoomPhase and self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase) or tostring(self.currentRoom and self.currentRoom.phase or "")
+	local currentSummary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
+	if currentRoomKey == roomKey
+		and currentPhase == "results"
+		and currentSummary
+		and currentSummary.finalResultsReady == true
+	then
+		self.fetchRoomStableResultsLastAtByRoomId = self.fetchRoomStableResultsLastAtByRoomId or {}
+		local now = GetTimeSinceStart()
+		local lastAt = tonumber(self.fetchRoomStableResultsLastAtByRoomId[roomKey]) or 0
+		local coalesceSeconds = tonumber(self.fetchRoomStableResultsCoalesceSeconds) or 0.75
+		if now - lastAt < coalesceSeconds then
+			online_flow_trace("fetch_room_coalesced reason=stable_results"
+				.. " room=" .. tostring(roomKey)
+				.. " age=" .. tostring(now - lastAt)
+				.. " coalesceSeconds=" .. tostring(coalesceSeconds)
+				.. " finalResults=" .. tostring(currentSummary.finalResults or "nil"))
+			if callback then callback(true, { room = self.currentRoom, coalesced = true }, { statusCode = 200, coalesced = true }) end
+			return
+		end
+		self.fetchRoomStableResultsLastAtByRoomId[roomKey] = now
+	end
 	online_flow_trace("fetch_room_begin room=" .. tostring(roomKey)
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")

@@ -67,6 +67,8 @@ local function early_trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+local trace
+
 function PackSync:IsActiveDownloadStatus(status)
 	status = tostring(status or self.currentStatus or "")
 	return status == self.status.DownloadRequested
@@ -81,6 +83,21 @@ function PackSync:IsActiveDownload()
 		or self.pendingPostReloadSongInfo ~= nil
 end
 
+function PackSync:HasDownloadWorkInFlight()
+	return self:IsActiveDownloadStatus(self.currentStatus)
+		or early_trim(self.downloadInFlightKey) ~= ""
+		or self.pendingPostReloadSongInfo ~= nil
+end
+
+function PackSync:ClearActiveDownloadId(reason)
+	if early_trim(self.activeDownloadId) == "" then return end
+	trace("Active download id cleared reason=" .. tostring(reason or "unknown")
+		.. " activeDownloadId=" .. tostring(self.activeDownloadId)
+		.. " status=" .. tostring(self.currentStatus or "nil")
+		.. " key=" .. tostring(self.downloadInFlightKey or ""))
+	self.activeDownloadId = ""
+end
+
 function PackSync:UsesDownloadStatusSequence(status)
 	status = tostring(status or "")
 	return status == self.status.DownloadRequested
@@ -91,7 +108,12 @@ function PackSync:UsesDownloadStatusSequence(status)
 end
 
 function PackSync:ShouldPreserveActiveDownloadDuringReset(reason)
-	if not self:IsActiveDownload() then return false end
+	if not self:HasDownloadWorkInFlight() then
+		if self.currentStatus == self.status.Ready or self.currentStatus == self.status.DownloadedOk then
+			self:ClearActiveDownloadId("reset_preserve_check_completed:" .. tostring(reason or "unknown"))
+		end
+		return false
+	end
 
 	reason = tostring(reason or "unknown")
 	if reason == "lobby_left"
@@ -106,9 +128,17 @@ function PackSync:ShouldPreserveActiveDownloadDuringReset(reason)
 	return true
 end
 
-local function trace(message)
+trace = function(message)
 	local line = "[OnlinePackSync] " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
+end
+
+local function trace_online_state(label, fields)
+	if ITGOnline and ITGOnline.TraceOnlineState then
+		fields = type(fields) == "table" and fields or {}
+		fields.source = fields.source or "pack_sync"
+		ITGOnline:TraceOnlineState("pack_sync_" .. tostring(label or "unknown"), fields)
+	end
 end
 
 trace("Loaded script version=" .. tostring(PackSync.scriptVersion))
@@ -174,9 +204,18 @@ end
 function PackSync:NextDownloadGeneration(reason)
 	self.downloadGeneration = (tonumber(self.downloadGeneration) or 0) + 1
 	self.downloadStatusSequence = math.max(tonumber(self.downloadStatusSequence) or 0, tonumber(self.sequence) or 0)
-	self.activeDownloadId = tostring(self.downloadGeneration) .. ":" .. tostring(math.floor(((GetTimeSinceStart and GetTimeSinceStart()) or 0) * 1000))
+	reason = tostring(reason or "unknown")
+	local startsDownload = reason == "download_selected_search"
+		or reason == "download_browsing_search"
+		or reason == "selected_candidate_start"
+		or reason == "browse_candidate_start"
+	if startsDownload then
+		self.activeDownloadId = tostring(self.downloadGeneration) .. ":" .. tostring(math.floor(((GetTimeSinceStart and GetTimeSinceStart()) or 0) * 1000))
+	else
+		self.activeDownloadId = ""
+	end
 	trace("Download generation advanced generation=" .. tostring(self.downloadGeneration)
-		.. " reason=" .. tostring(reason or "unknown")
+		.. " reason=" .. tostring(reason)
 		.. " activeDownloadId=" .. tostring(self.activeDownloadId)
 		.. " downloadStatusSequence=" .. tostring(self.downloadStatusSequence))
 	return self.downloadGeneration
@@ -809,6 +848,14 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	self.currentStatus = status
 	self.currentStatusMessage = message
 	self.statusChangedAt = GetTimeSinceStart()
+	trace_online_state("status_update_begin", {
+		status = status,
+		message = message or "",
+		progress = progress or "",
+		downloadKey = self.downloadInFlightKey or "",
+		activeDownloadId = self.activeDownloadId or "",
+		browseOnly = self.activeBrowseOnlyDownload == true,
+	})
 	self.currentSongInfo = with_current_room_selection(self.currentSongInfo, "status:" .. tostring(status))
 	local currentSelectedAt = self:SelectedAtForStatusPost(status, self.currentSongInfo)
 	local usesDownloadSequence = self:UsesDownloadStatusSequence(status)
@@ -1092,6 +1139,9 @@ function PackSync:ResetLocalState(reason)
 		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 	if reason == "online_lobby_state_results" then
+		if not self:HasDownloadWorkInFlight() then
+			self:ClearActiveDownloadId("results_reset_without_active_download")
+		end
 		trace("ResetLocalState ignored during results; preserving final song/download state")
 		return
 	end
@@ -1147,6 +1197,7 @@ function PackSync:ResetLocalState(reason)
 	self.downloadStartedAt = nil
 	self.downloadLastByteAt = nil
 	self.downloadLastByteCount = nil
+	self:ClearActiveDownloadId(reason or "reset_local_state")
 	self.activeBrowseOnlyDownload = false
 	self.pendingPostReloadSongInfo = nil
 	self.pendingQuarantinePath = nil
@@ -1433,6 +1484,15 @@ function PackSync:FindLocalMatch(songInfo)
 end
 
 function PackSync:ApplySelectedChart(songInfo)
+	trace_online_state("apply_selected_chart_begin", {
+		selected_at = selected_at(songInfo),
+		title = selected_title(songInfo),
+		pack = selected_pack(songInfo),
+		chartHash = tostring(selected_chart_hash(songInfo)):sub(1, 12),
+		status = self.currentStatus or "nil",
+		downloadKey = self.downloadInFlightKey or "",
+		activeDownloadId = self.activeDownloadId or "",
+	})
 	trace("ApplySelectedChart begin title=" .. tostring(selected_title(songInfo))
 		.. " pack=" .. tostring(selected_pack(songInfo))
 		.. " chartHash=" .. tostring(selected_chart_hash(songInfo)):sub(1, 12)
@@ -1448,6 +1508,12 @@ function PackSync:ApplySelectedChart(songInfo)
 		.. " status=" .. tostring(result and result.status or "nil")
 		.. " reason=" .. tostring(result and result.reason or "nil")
 		.. " message=" .. tostring(result and result.message or "nil"))
+	trace_online_state("apply_selected_chart_result", {
+		selected_at = selected_at(songInfo),
+		ok = result and result.ok == true,
+		status = result and result.status or "nil",
+		reason = result and result.reason or "nil",
+	})
 	if result.ok then
 		set_current_selection(result.song, result.steps)
 		MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
@@ -1499,6 +1565,13 @@ function PackSync:MarkLobbyReadyForSelectedSong(source, retrying)
 		.. " retrying=" .. tostring(retrying == true)
 		.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
 		.. " phase=" .. tostring(phase))
+	trace_online_state("mark_lobby_ready_begin", {
+		source = source or "unknown",
+		phase = phase,
+		retrying = retrying == true,
+		status = self.currentStatus or "nil",
+		selected_at = selected_at(self.currentSongInfo),
+	})
 	ITGOnline:SetReady("lobby_ready", true, function(ok, decoded, response)
 		trace("MarkLobbyReady response source=" .. tostring(source or "unknown")
 			.. " ok=" .. tostring(ok == true)
@@ -1506,6 +1579,14 @@ function PackSync:MarkLobbyReadyForSelectedSong(source, retrying)
 			.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil")
 			.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
 			.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+		trace_online_state("mark_lobby_ready_response", {
+			source = source or "unknown",
+			roomSnapshot = decoded and decoded.room or nil,
+			ok = ok == true,
+			statusCode = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+			selected_at = selected_at(self.currentSongInfo),
+		})
 		if ok then
 			if ITGOnline.EnforceRoomPhaseScreen then ITGOnline:EnforceRoomPhaseScreen() end
 			return
@@ -1992,6 +2073,16 @@ end
 
 function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	songInfo = with_current_room_selection(songInfo, "download_candidate")
+	trace_online_state("download_candidate_begin", {
+		selected_at = selected_at(songInfo),
+		packId = pack and pack.id or "nil",
+		packName = pack and (pack.name or pack.title) or "",
+		title = selected_title(songInfo),
+		browseOnly = options and options.browseOnly == true,
+		generation = self.downloadGeneration or "nil",
+		downloadKey = self.downloadInFlightKey or "",
+		activeDownloadId = self.activeDownloadId or "",
+	})
 	trace("DownloadPackByCandidate begin packId=" .. tostring(pack and pack.id or "nil")
 		.. " packName=" .. tostring(pack and (pack.name or pack.title) or "")
 		.. " songTitle=" .. tostring(selected_title(songInfo))
@@ -2056,6 +2147,15 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		.. " key=" .. tostring(self.downloadInFlightKey or "")
 		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+	trace_online_state("download_started", {
+		selected_at = selected_at(songInfo),
+		packId = packId,
+		packName = packName,
+		browseOnly = browseOnly == true,
+		generation = downloadGeneration,
+		downloadKey = self.downloadInFlightKey or "",
+		activeDownloadId = self.activeDownloadId or "",
+	})
 	self.currentSongInfo = songInfo or self.currentSongInfo
 	self:UpdateStatus(self.status.DownloadInProgress, downloadMessage, 0)
 	self.lastProgressStatusAt = 0
@@ -2079,6 +2179,16 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			.. " message=" .. tostring(message)
 			.. " broadcastMissing=" .. tostring(broadcastMissing ~= false)
 			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+		trace_online_state("download_failed", {
+			selected_at = selected_at(songInfo),
+			packId = packId,
+			packName = packName,
+			generation = downloadGeneration,
+			message = message,
+			broadcastMissing = broadcastMissing ~= false,
+			downloadKey = self.downloadInFlightKey or "",
+			activeDownloadId = self.activeDownloadId or "",
+		})
 		self.downloadInFlightKey = nil
 		self.downloadStartedAt = nil
 		self.downloadLastByteAt = nil
@@ -2111,6 +2221,15 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			.. " generation=" .. tostring(downloadGeneration)
 			.. " browseOnly=" .. tostring(browseOnly == true)
 			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+		trace_online_state("download_finished", {
+			selected_at = selected_at(songInfo),
+			packId = packId,
+			packName = packName,
+			browseOnly = browseOnly == true,
+			generation = downloadGeneration,
+			downloadKey = self.downloadInFlightKey or "",
+			activeDownloadId = self.activeDownloadId or "",
+		})
 		if callback then callback(true) end
 		return true
 	end
@@ -2504,6 +2623,7 @@ function PackSync:ValidatePendingPostReload()
 	self.pendingQuarantinePath = nil
 	self.pendingPostReloadBrowseOnly = false
 	self.downloadInFlightKey = nil
+	self:ClearActiveDownloadId("post_reload_validation_begin")
 	if not songInfo then
 		trace("ValidatePendingPostReload skipped reason=no_pending_song")
 		return false

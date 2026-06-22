@@ -655,6 +655,14 @@ local TransitionToOnlineOptions = function()
 		online_trace("FLOW transition_to_options from=" .. tostring(screenName)
 			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"))
 	end
+	if ITGOnline and ITGOnline.TraceOnlineState then
+		ITGOnline:TraceOnlineState("screen_transition_to_options", {
+			source = "TransitionToOnlineOptions",
+			screenFrom = screenName,
+			screenTo = "ScreenPlayerOptions",
+			reason = "manager_selected_song",
+		})
+	end
 	if not (topScreen.SetNextScreenName and topScreen.StartTransitioningScreen) then
 		if online_trace then
 			online_trace("FLOW transition_to_options_skipped reason=screen_cannot_transition"
@@ -860,6 +868,14 @@ local TransitionToOnlineGameplay = function()
 			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room")
 			.. " pendingRoom=" .. tostring(pendingOnlineStartRoomId))
 	end
+	if ITGOnline and ITGOnline.TraceOnlineState then
+		ITGOnline:TraceOnlineState("screen_transition_to_gameplay", {
+			source = "TransitionToOnlineGameplay",
+			screenFrom = screenName,
+			screenTo = OnlineGameplayScreen(),
+			pendingRoom = pendingOnlineStartRoomId or "nil",
+		})
+	end
 	SL.Global.Online = SL.Global.Online or {}
 	SL.Global.Online.GameplayLayoutActive = true
 	topScreen:SetNextScreenName(OnlineGameplayScreen())
@@ -873,10 +889,26 @@ local ReturnToOnlineLobbyFromMusicSelect = function()
 
 	UnlockOnlineInput()
 	if topScreen.ReturnToOnlineLobbyFromMusicSelect then
+		if ITGOnline and ITGOnline.TraceOnlineState then
+			ITGOnline:TraceOnlineState("screen_transition_music_select_to_lobby_delegate", {
+				source = "ReturnToOnlineLobbyFromMusicSelect",
+				screenFrom = topScreen:GetName(),
+				screenTo = "ScreenOnlineLobbies",
+				delegate = true,
+			})
+		end
 		topScreen:ReturnToOnlineLobbyFromMusicSelect()
 		return true
 	end
 
+	if ITGOnline and ITGOnline.TraceOnlineState then
+		ITGOnline:TraceOnlineState("screen_transition_music_select_to_lobby", {
+			source = "ReturnToOnlineLobbyFromMusicSelect",
+			screenFrom = topScreen:GetName(),
+			screenTo = "ScreenOnlineLobbies",
+			delegate = false,
+		})
+	end
 	topScreen:SetNextScreenName("ScreenOnlineLobbies")
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 	return true
@@ -944,6 +976,14 @@ local ReturnToOnlineLobbyFromEvaluation = function(reason)
 		online_trace("FLOW evaluation_exit_requested reason=" .. tostring(reason or "input")
 			.. " screen=" .. tostring(topScreen:GetName())
 			.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or ITGOnline.currentRoomPhase))
+	end
+	if ITGOnline and ITGOnline.TraceOnlineState then
+		ITGOnline:TraceOnlineState("screen_transition_evaluation_to_lobby", {
+			source = "ReturnToOnlineLobbyFromEvaluation",
+			screenFrom = topScreen:GetName(),
+			screenTo = "ScreenOnlineLobbies",
+			reason = reason or "input",
+		})
 	end
 	topScreen:SetNextScreenName("ScreenOnlineLobbies")
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
@@ -1132,6 +1172,7 @@ DisplayLobbyState = function(data, actor)
 	-- Keep in mind that SCREENMAN:GetTopScreen() might return nil while screens transition.
 	local screen = SCREENMAN:GetTopScreen()
 	local screenName = screen and screen:GetName() or "NoScreen"
+	local flowContext = screenName == "ScreenOnlineLobbies" and "display_lobby" or "apply_room_state"
 	startHoldTime = { ["P1"] = 0, ["P2"] = 0 }
 	lastDisconnectCountdown = nil
 	local flowLobbyKey = table.concat({
@@ -1145,7 +1186,7 @@ DisplayLobbyState = function(data, actor)
 	}, "|")
 	if flowLobbyKey ~= lastFlowLobbyKey then
 		lastFlowLobbyKey = flowLobbyKey
-		online_flow_trace("display_lobby_state_begin"
+		online_flow_trace(flowContext .. "_state_begin"
 			.. " roomId=" .. tostring(data and data.roomId or "nil")
 			.. " code=" .. tostring(data and data.code or "nil")
 			.. " phase=" .. tostring(data and data.phase or "nil")
@@ -1157,7 +1198,7 @@ DisplayLobbyState = function(data, actor)
 			.. " isManager=" .. tostring(data and data.isManager == true)
 			.. " actorInLobby=" .. tostring(actor.inLobby == true))
 		if online_trace then
-			online_trace("FLOW display_lobby room=" .. tostring(data and data.roomId or "")
+			online_trace("FLOW " .. flowContext .. " room=" .. tostring(data and data.roomId or "")
 				.. " phase=" .. tostring(data and data.phase or "")
 				.. " screen=" .. tostring(screenName)
 				.. " startAt=" .. tostring(data and data.startAt or "")
@@ -1168,7 +1209,7 @@ DisplayLobbyState = function(data, actor)
 	end
 
 	local updatedData = OrderPlayers(data, screenName)
-	online_flow_trace("display_lobby_state_ordered"
+	online_flow_trace(flowContext .. "_state_ordered"
 		.. " roomId=" .. tostring(data and data.roomId or "nil")
 		.. " phase=" .. tostring(data and data.phase or "nil")
 		.. " screen=" .. tostring(screenName)
@@ -1177,7 +1218,7 @@ DisplayLobbyState = function(data, actor)
 		.. " isManager=" .. tostring(data and data.isManager == true)
 		.. " song=" .. tostring(data and data.songInfo and (data.songInfo.title or data.songInfo.songHash) or "none"))
 	if online_trace then
-		online_trace("FLOW display_lobby_ordered room=" .. tostring(data and data.roomId or "")
+		online_trace("FLOW " .. flowContext .. "_ordered room=" .. tostring(data and data.roomId or "")
 			.. " phase=" .. tostring(data and data.phase or "")
 			.. " screen=" .. tostring(screenName)
 			.. " inputPlayers=" .. tostring(data and data.players and #data.players or 0)
@@ -2651,11 +2692,17 @@ CreateOnlineHandler = function()
 							self.lastLobbyStatePayload = params
 							self.lastLobbyStateSignature = stateSignature
 							if online_trace then
-								online_trace("FLOW OnlineLobbyStateMessage display_begin roomId=" .. tostring(params.roomId))
+								local screenName = SCREENMAN and SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() or "nil"
+								local flowContext = screenName == "ScreenOnlineLobbies" and "display_lobby" or "apply_room_state"
+								online_trace("FLOW OnlineLobbyStateMessage " .. flowContext .. "_begin roomId=" .. tostring(params.roomId)
+									.. " screen=" .. tostring(screenName))
 							end
 							DisplayLobbyState(params, self)
 							if online_trace then
-								online_trace("FLOW OnlineLobbyStateMessage display_end roomId=" .. tostring(params.roomId))
+								local screenName = SCREENMAN and SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() or "nil"
+								local flowContext = screenName == "ScreenOnlineLobbies" and "display_lobby" or "apply_room_state"
+								online_trace("FLOW OnlineLobbyStateMessage " .. flowContext .. "_end roomId=" .. tostring(params.roomId)
+									.. " screen=" .. tostring(screenName))
 							end
 							online_flow_trace("online_lobby_state_apply_end"
 								.. " roomId=" .. tostring(params.roomId or "nil")
