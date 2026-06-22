@@ -266,7 +266,9 @@ end
 local OnlineStartCountdownText = function()
 	if not (ITGOnline and ITGOnline.SecondsUntilScheduledStart) then return nil end
 
-	local seconds = ITGOnline:SecondsUntilScheduledStart()
+	local seconds = ITGOnline.VisibleSecondsUntilScheduledStart
+		and ITGOnline:VisibleSecondsUntilScheduledStart()
+		or ITGOnline:SecondsUntilScheduledStart()
 	if not seconds then return nil end
 
 	if seconds > 0 then

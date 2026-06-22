@@ -7,20 +7,31 @@ local player = args.player
 local pn = ToEnumShortString(player)
 local GraphWidth = args.GraphWidth
 local GraphHeight = args.GraphHeight
-local mods = SL[pn].ActiveModifiers
+local playerState = SL[pn] or {}
+local mods = playerState.ActiveModifiers or {}
 
 -- sequential_offsets gathered in ./BGAnimations/ScreenGameplay overlay/JudgmentOffsetTracking.lua
-local sequential_offsets = SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1].sequential_offsets
+local stageIndex = (SL.Global.Stages.PlayedThisGame or 0) + 1
+local stageStats = playerState.Stages and playerState.Stages.Stats and playerState.Stages.Stats[stageIndex] or nil
+local sequential_offsets = stageStats and stageStats.sequential_offsets or {}
 
 -- a table to store the AMV's vertices
 -- this will be a table of tables, to get around ActorMultiVertex limitations on D3D renderer
 local vertsTable= {}
 
 local Steps = GAMESTATE:GetCurrentSteps(player)
+local Song = GAMESTATE:GetCurrentSong()
+if not Steps or not Song then
+	if ITGOnline and ITGOnline.debugOnlineTrace == true and online_trace then
+		online_trace("ITG Online Evaluation: scatter plot skipped missing Steps/Song for " .. tostring(pn))
+	end
+	return Def.ActorFrame{}
+end
+
 local TimingData = Steps:GetTimingData()
 -- FirstSecond and LastSecond are used in scaling the x-coordinates of the AMV's vertices
 local FirstSecond = math.min(TimingData:GetElapsedTimeFromBeat(0), 0)
-local LastSecond = (not iscourse) and GAMESTATE:GetCurrentSong():GetLastSecond() or TotalCourseLength(player) * SL.Global.ActiveModifiers.MusicRate
+local LastSecond = (not iscourse) and Song:GetLastSecond() or TotalCourseLength(player) * SL.Global.ActiveModifiers.MusicRate
 
 -- variables that will be used and re-used in the loop while calculating the AMV's vertices
 local Offset, CurrentSecond, TimingWindow, x, y, c, r, g, b

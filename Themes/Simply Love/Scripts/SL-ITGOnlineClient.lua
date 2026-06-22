@@ -184,10 +184,15 @@ ITGOnline.onlineGameplayEvaluationMaxRetries = ITGOnline.onlineGameplayEvaluatio
 ITGOnline.onlineGameplayEvaluationTerminalErrorKey = ITGOnline.onlineGameplayEvaluationTerminalErrorKey or ""
 ITGOnline.onlineGameplayEvaluationNavigationKey = ITGOnline.onlineGameplayEvaluationNavigationKey or ""
 ITGOnline.onlineGameplayEvaluationNavigationAt = ITGOnline.onlineGameplayEvaluationNavigationAt or 0
+ITGOnline.onlineGameplayEvaluationShownKey = ITGOnline.onlineGameplayEvaluationShownKey or ""
+ITGOnline.onlineGameplayEvaluationReturnedKey = ITGOnline.onlineGameplayEvaluationReturnedKey or ""
 ITGOnline.onlineGameplayAllTerminalHoldKey = ITGOnline.onlineGameplayAllTerminalHoldKey or ""
 ITGOnline.onlineGameplayAllTerminalHoldUntil = ITGOnline.onlineGameplayAllTerminalHoldUntil or 0
 ITGOnline.onlineGameplayReleaseLoggedKey = ITGOnline.onlineGameplayReleaseLoggedKey or ""
 ITGOnline.previousScreenName = ITGOnline.previousScreenName or nil
+ITGOnline.scheduledStartVisibleKey = ITGOnline.scheduledStartVisibleKey or ""
+ITGOnline.scheduledStartVisibleSeconds = ITGOnline.scheduledStartVisibleSeconds or nil
+ITGOnline.scheduledStartVisibleUpdatedAt = ITGOnline.scheduledStartVisibleUpdatedAt or 0
 ITGOnline.heartbeatInFlight = ITGOnline.heartbeatInFlight or false
 ITGOnline.heartbeatQueuedStatus = ITGOnline.heartbeatQueuedStatus or nil
 ITGOnline.heartbeatQueuedForce = ITGOnline.heartbeatQueuedForce or false
@@ -3375,6 +3380,8 @@ function ITGOnline:ClearActiveGameplayRound(source)
 	self.activeGameplayRoundKey = ""
 	self.onlineGameplayEvaluationNavigationKey = ""
 	self.onlineGameplayEvaluationNavigationAt = 0
+	self.onlineGameplayEvaluationShownKey = ""
+	self.onlineGameplayEvaluationReturnedKey = ""
 end
 
 function ITGOnline:ResetOnlineRoundRuntimeState(source)
@@ -3420,6 +3427,8 @@ function ITGOnline:ResetOnlineRoundRuntimeState(source)
 	self.onlineGameplayEvaluationTerminalErrorKey = ""
 	self.onlineGameplayEvaluationNavigationKey = ""
 	self.onlineGameplayEvaluationNavigationAt = 0
+	self.onlineGameplayEvaluationShownKey = ""
+	self.onlineGameplayEvaluationReturnedKey = ""
 	self.onlineGameplayEvaluationHoldStartedKey = ""
 	self.onlineGameplayEvaluationMinimumHoldUntil = 0
 	self.onlineGameplayAllTerminalHoldKey = ""
@@ -4955,12 +4964,21 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 		if screenName == "ScreenOnlineLobbies" then
 			local summary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
 			local userTerminal = self.IsTerminalPlayState and self:IsTerminalPlayState(playState)
-			if summary and summary.finalResultsReady == true and userTerminal then
+			local alreadyShown = self:PlayStateKeyIsValid(roundKey) and self.onlineGameplayEvaluationShownKey == roundKey
+			local alreadyReturned = self:PlayStateKeyIsValid(roundKey) and self.onlineGameplayEvaluationReturnedKey == roundKey
+			if summary and summary.finalResultsReady == true and userTerminal and not alreadyShown and not alreadyReturned then
 				online_flow_trace("preferred=evaluation reason=results_ready_while_in_lobby"
 					.. " playState=" .. tostring(playState)
 					.. " finalResults=" .. tostring(summary.finalResults or "nil")
 					.. " roundKey=" .. tostring(roundKey))
 				return "evaluation"
+			end
+			if summary and summary.finalResultsReady == true and userTerminal then
+				online_flow_trace("preferred=nil reason=results_ready_lobby_already_handled"
+					.. " playState=" .. tostring(playState)
+					.. " roundKey=" .. tostring(roundKey)
+					.. " shown=" .. tostring(alreadyShown)
+					.. " returned=" .. tostring(alreadyReturned))
 			end
 		end
 		online_flow_trace("preferred=nil reason=results_non_gameplay_screen screen=" .. tostring(screenName)
@@ -5144,9 +5162,12 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 		or previousScreenName == "ScreenEvaluationNonstop"
 		or previousScreenName == "ScreenEvaluationSummary"
 	local roomPhase = self:NormalizeRoomPhase(self.currentRoom.phase)
+	local roundKey = self:PlayStateKey()
+	local validRoundKey = self:PlayStateKeyIsValid(roundKey)
 	online_flow_trace("gameplay_transition previous=" .. tostring(previousScreenName)
 		.. " next=" .. tostring(nextScreenName)
 		.. " roomPhase=" .. tostring(roomPhase)
+		.. " roundKey=" .. tostring(roundKey)
 		.. " previousWasGameplay=" .. tostring(previousWasGameplay)
 		.. " previousWasEvaluation=" .. tostring(previousWasEvaluation)
 		.. " nextIsEvaluation=" .. tostring(nextIsEvaluation)
@@ -5163,7 +5184,20 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 		-- Fallback only. The normal online path marks completion while still
 		-- on ScreenGameplay so every client can wait there before results.
 		self.onlineEvaluationExitRequested = false
+		if validRoundKey then
+			self.onlineGameplayEvaluationShownKey = roundKey
+			self.onlineGameplayEvaluationReturnedKey = ""
+			online_flow_trace("evaluation_seen roundKey=" .. tostring(roundKey)
+				.. " reason=gameplay_to_evaluation")
+		end
 		self:MarkGameplayCompleteForEvaluation("screen_transition")
+	elseif nextIsEvaluation and roomPhase == "results" then
+		if validRoundKey then
+			self.onlineGameplayEvaluationShownKey = roundKey
+			self.onlineGameplayEvaluationReturnedKey = ""
+			online_flow_trace("evaluation_seen roundKey=" .. tostring(roundKey)
+				.. " reason=results_screen_entered")
+		end
 	elseif previousWasGameplay and nextIsLobby and roomPhase == "playing" then
 		online_flow_trace("mark_returned_to_lobby_skipped reason=gameplay_to_lobby_before_results"
 			.. " roomPhase=" .. tostring(roomPhase))
@@ -5173,7 +5207,12 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 	elseif previousWasEvaluation and nextIsLobby and roomPhase == "results" then
 		-- Some flows go Gameplay -> Evaluation -> Lobby. Make sure we still
 		-- notify the server immediately when the player is back in the lobby.
-		online_flow_trace("mark_returned_to_lobby reason=evaluation_to_lobby roomPhase=" .. tostring(roomPhase))
+		if validRoundKey then
+			self.onlineGameplayEvaluationShownKey = roundKey
+			self.onlineGameplayEvaluationReturnedKey = roundKey
+		end
+		online_flow_trace("mark_returned_to_lobby reason=evaluation_to_lobby roomPhase=" .. tostring(roomPhase)
+			.. " roundKey=" .. tostring(roundKey))
 		self:MarkReturnedToLobby()
 	elseif previousWasGameplay and nextIsSelectMusic and (roomPhase == "playing" or roomPhase == "starting") then
 		online_flow_trace("mark_returned_to_lobby_skipped reason=gameplay_to_select_music_before_results"
@@ -5777,6 +5816,9 @@ function ITGOnline:Disconnect(options)
 	self.lobbyRefreshInFlight = false
 	self.lobbyRefreshDeferredScheduled = false
 	self.scheduledStartLocalTime = nil
+	self.scheduledStartVisibleKey = ""
+	self.scheduledStartVisibleSeconds = nil
+	self.scheduledStartVisibleUpdatedAt = 0
 	self.songLoadedAckKey = ""
 	self.songLoadedInFlightKey = ""
 	self.songLoadedPendingCallbacks = {}
@@ -5812,6 +5854,8 @@ function ITGOnline:Disconnect(options)
 	self.onlineGameplayEvaluationTerminalErrorKey = ""
 	self.onlineGameplayEvaluationNavigationKey = ""
 	self.onlineGameplayEvaluationNavigationAt = 0
+	self.onlineGameplayEvaluationShownKey = ""
+	self.onlineGameplayEvaluationReturnedKey = ""
 	self.onlineGameplayEvaluationHoldStartedKey = ""
 	self.onlineGameplayEvaluationMinimumHoldUntil = 0
 	self.onlineGameplayAllTerminalHoldKey = ""
@@ -8933,6 +8977,8 @@ function ITGOnline:MarkReturnedToLobby(callback)
 
 	if self:PlayStateKeyIsValid(key) then
 		self.onlineGameplayReturnedInFlightKey = key
+		self.onlineGameplayEvaluationShownKey = key
+		self.onlineGameplayEvaluationReturnedKey = key
 	end
 	self.onlineGameplayReturnedLocalRoomId = tostring(self.currentRoomId or "")
 	self.onlineGameplayReturnedLocalAt = GetTimeSinceStart()
@@ -9298,9 +9344,16 @@ function ITGOnline:UpdateScheduledStart(room)
 
 	local startAtMs = tonumber(room.start_at_ms or "") or iso_utc_milliseconds(room.start_at)
 	local serverTimeMs = tonumber(room.server_time_ms or "") or iso_utc_milliseconds(room.server_time)
+	local visibleKey = tostring(self.currentRoomId or "") .. "|" .. tostring(startAtMs or "")
 
 	if serverTimeMs and self.UpdateServerClockOffset then
 		self:UpdateServerClockOffset(serverTimeMs, GetTimeSinceStart(), GetTimeSinceStart())
+	end
+
+	if self.scheduledStartVisibleKey ~= visibleKey then
+		self.scheduledStartVisibleKey = visibleKey
+		self.scheduledStartVisibleSeconds = nil
+		self.scheduledStartVisibleUpdatedAt = 0
 	end
 
 	if startAtMs and self.serverClockOffsetSeconds then
@@ -9309,12 +9362,53 @@ function ITGOnline:UpdateScheduledStart(room)
 		self.scheduledStartLocalTime = GetTimeSinceStart() + ((startAtMs - serverTimeMs) / 1000)
 	elseif room.phase ~= "starting" and room.phase ~= "playing" then
 		self.scheduledStartLocalTime = nil
+		self.scheduledStartVisibleKey = ""
+		self.scheduledStartVisibleSeconds = nil
+		self.scheduledStartVisibleUpdatedAt = 0
 	end
 end
 
 function ITGOnline:SecondsUntilScheduledStart()
 	if not self.scheduledStartLocalTime then return nil end
 	return self.scheduledStartLocalTime - GetTimeSinceStart()
+end
+
+function ITGOnline:VisibleSecondsUntilScheduledStart()
+	local seconds = self:SecondsUntilScheduledStart()
+	if not seconds then
+		self.scheduledStartVisibleSeconds = nil
+		self.scheduledStartVisibleUpdatedAt = 0
+		return nil
+	end
+
+	if seconds <= 0 then
+		self.scheduledStartVisibleSeconds = nil
+		self.scheduledStartVisibleUpdatedAt = 0
+		return seconds
+	end
+
+	local now = GetTimeSinceStart()
+	local actualCeil = math.max(0, math.ceil(seconds))
+	if self.scheduledStartVisibleSeconds == nil then
+		self.scheduledStartVisibleSeconds = actualCeil
+		self.scheduledStartVisibleUpdatedAt = now
+		return actualCeil
+	end
+
+	local visible = tonumber(self.scheduledStartVisibleSeconds) or actualCeil
+	if actualCeil > visible then
+		visible = actualCeil
+		self.scheduledStartVisibleUpdatedAt = now
+	elseif actualCeil < visible then
+		local elapsed = math.max(0, now - (tonumber(self.scheduledStartVisibleUpdatedAt) or now))
+		if elapsed >= 0.85 then
+			visible = math.max(actualCeil, visible - 1)
+			self.scheduledStartVisibleUpdatedAt = now
+		end
+	end
+
+	self.scheduledStartVisibleSeconds = visible
+	return visible
 end
 
 function ITGOnline:Heartbeat(status, force)
