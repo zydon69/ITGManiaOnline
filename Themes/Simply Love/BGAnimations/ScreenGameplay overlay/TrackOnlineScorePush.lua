@@ -25,19 +25,28 @@ local function online_score_trace(message, force)
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
 
+local function live_score_runtime_active()
+	if not (ITGOnline and ITGOnline.currentRoomId and ITGOnline.currentRoom) then
+		return false
+	end
+
+	local phase = ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) or tostring(ITGOnline.currentRoom.phase or "")
+	return phase == "starting" or phase == "playing"
+end
+
+local function live_score_playing()
+	if not live_score_runtime_active() then return false end
+	local phase = ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) or tostring(ITGOnline.currentRoom.phase or "")
+	return phase == "playing"
+end
+
 local function remember_current_score()
-	if not (ITGOnline and ITGOnline.RememberLiveScoreSnapshot and ITGOnline.currentRoomId and ITGOnline.currentRoom) then
+	if not (live_score_playing() and ITGOnline.RememberLiveScoreSnapshot) then
 		online_score_trace("remember_skipped reason=missing_context"
 			.. " hasClient=" .. tostring(ITGOnline ~= nil)
 			.. " hasRememberApi=" .. tostring(ITGOnline and ITGOnline.RememberLiveScoreSnapshot ~= nil)
 			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 			.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil))
-		return
-	end
-	local phase = tostring(ITGOnline.currentRoom.phase or "")
-	if phase ~= "playing" then
-		online_score_trace("remember_skipped reason=phase_not_playing phase=" .. tostring(phase)
-			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
 		return
 	end
 
@@ -58,10 +67,29 @@ end
 
 return Def.Actor{
 	OnCommand=function(self)
+		if not live_score_runtime_active() then
+			online_score_trace("tracker_off reason=local_or_inactive_room"
+				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil), true)
+			if ITGOnline and ITGOnline.StopLiveScoreFlush then
+				ITGOnline:StopLiveScoreFlush("tracker_inactive_on")
+			end
+			return
+		end
 		online_score_trace("tracker_on room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"), true)
 		self:queuecommand("FlushOnlineScore")
 	end,
 	FlushOnlineScoreCommand=function(self)
+		if not live_score_runtime_active() then
+			online_score_trace("tracker_stop reason=local_or_inactive_room"
+				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil), true)
+			if ITGOnline and ITGOnline.StopLiveScoreFlush then
+				ITGOnline:StopLiveScoreFlush("tracker_inactive_flush")
+			end
+			return
+		end
+
 		remember_current_score()
 		online_score_trace("flush_tick room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
@@ -75,12 +103,8 @@ return Def.Actor{
 		self:sleep(0.10):queuecommand("FlushOnlineScore")
 	end,
 	JudgmentMessageCommand=function(self, params)
-		if not (ITGOnline and ITGOnline.RememberLiveScoreSnapshot and ITGOnline.currentRoomId and ITGOnline.currentRoom) then
+		if not (live_score_playing() and ITGOnline.RememberLiveScoreSnapshot) then
 			online_score_trace("judgment_skipped reason=missing_context")
-			return
-		end
-		if tostring(ITGOnline.currentRoom.phase or "") ~= "playing" then
-			online_score_trace("judgment_skipped reason=phase_not_playing phase=" .. tostring(ITGOnline.currentRoom.phase or "nil"))
 			return
 		end
 

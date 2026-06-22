@@ -3264,6 +3264,21 @@ function ITGOnline:NormalizeRoomPhase(value)
 	return "unknown"
 end
 
+function ITGOnline:HasCurrentOnlineRoom()
+	if not (self.currentRoomId and self.currentRoom) then return false end
+
+	local expectedRoomId = tostring(self.currentRoomId or "")
+	local snapshotRoomId = tostring(self.currentRoom.id or self.currentRoom.room_id or self.currentRoom.roomId or "")
+	return expectedRoomId ~= "" and snapshotRoomId ~= "" and snapshotRoomId == expectedRoomId
+end
+
+function ITGOnline:HasActiveLiveScoreRoom()
+	if not self:HasCurrentOnlineRoom() then return false end
+
+	local phase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+	return phase == "starting" or phase == "playing"
+end
+
 function ITGOnline:IsSongReloadOrDownloadActive(source)
 	local screenName = self.CurrentTopScreenName and self:CurrentTopScreenName() or tostring(self.currentScreenName or "")
 	local packSync = self.PackSync
@@ -5743,6 +5758,7 @@ function ITGOnline:Disconnect(options)
 	self.lastDisplayedScoreSnapshotAt = 0
 	self.lastScoreJudgmentsByRoundKey = {}
 	self.pendingLiveScoreSnapshot = nil
+	self.pendingLiveScoreRoundKey = ""
 	self.liveScoreInFlight = false
 	self.liveScoreNextAttemptAt = 0
 	self.pendingJoinRoomId = nil
@@ -7054,6 +7070,19 @@ function ITGOnline:QueueLiveScore(snapshot)
 		online_flow_trace("ignored_live_score_multiple_local_players")
 		return false
 	end
+	if not self:HasActiveLiveScoreRoom() then
+		if self.pendingLiveScoreSnapshot ~= nil or tostring(self.pendingLiveScoreRoundKey or "") ~= "" or self.liveScoreInFlight == true then
+			self:StopLiveScoreFlush("queue_without_active_room")
+			self.liveScoreInFlight = false
+		end
+		online_flow_trace_throttled("live_score_queue_no_active_room", 3.0,
+			"live_score_queue_skipped reason=no_active_room"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " hasRoom=" .. tostring(self.currentRoom ~= nil)
+			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+		return false
+	end
+
 	local scorePercent = tonumber(snapshot.scorePercent or snapshot.ScorePercent) or 0
 	local exScorePercent = tonumber(snapshot.exScorePercent or snapshot.ExScorePercent) or 0
 	local hardExScorePercent = tonumber(snapshot.hardExScorePercent or snapshot.HardExScorePercent) or 0
@@ -7100,6 +7129,14 @@ function ITGOnline:RememberLiveScoreSnapshot(snapshot)
 end
 
 function ITGOnline:QueueLiveScoreTickIfDue(snapshot)
+	if not self:HasActiveLiveScoreRoom() then
+		if self.pendingLiveScoreSnapshot ~= nil or tostring(self.pendingLiveScoreRoundKey or "") ~= "" or self.liveScoreInFlight == true then
+			self:StopLiveScoreFlush("tick_without_active_room")
+			self.liveScoreInFlight = false
+		end
+		return false
+	end
+
 	if type(snapshot) == "table" then
 		self:RememberLiveScoreSnapshot(snapshot)
 	elseif self.pendingLiveScoreSnapshot == nil and self.BuildCurrentScoreSnapshot then
@@ -7112,6 +7149,7 @@ function ITGOnline:QueueLiveScoreTickIfDue(snapshot)
 end
 
 function ITGOnline:HasPendingLiveScore()
+	if not self:HasCurrentOnlineRoom() then return false end
 	return self.pendingLiveScoreSnapshot ~= nil or self.liveScoreInFlight == true
 end
 
@@ -7166,8 +7204,9 @@ function ITGOnline:LiveScoreMinIntervalSeconds()
 end
 
 function ITGOnline:FlushLiveScore()
-	if not self.currentRoomId or not self.currentRoom then
-		online_flow_trace("live_score_flush_skipped reason=missing_room"
+	if not self:HasCurrentOnlineRoom() then
+		online_flow_trace_throttled("live_score_flush_missing_room", 3.0,
+			"live_score_flush_skipped reason=missing_room"
 			.. " room=" .. tostring(self.currentRoomId or "nil")
 			.. " hasRoom=" .. tostring(self.currentRoom ~= nil)
 			.. " hadPending=" .. tostring(self.pendingLiveScoreSnapshot ~= nil)
@@ -10237,6 +10276,14 @@ function ITGOnline:ClearCurrentRoomState(source)
 	self.currentSongPayload = nil
 	self.currentRoomRoundKey = ""
 	self.lastResultSongPayload = nil
+	if self.StopLiveScoreFlush then
+		self:StopLiveScoreFlush("clear_current_room_state:" .. tostring(source or "unknown"))
+	else
+		self.pendingLiveScoreSnapshot = nil
+		self.pendingLiveScoreRoundKey = ""
+		self.liveScoreNextAttemptAt = 0
+	end
+	self.liveScoreInFlight = false
 	self.pendingJoinRoomId = nil
 	self:ClearOptimisticConfigReady(source or "clear_room")
 	self:ClearOnlineOptionsReadyDeadline(source or "clear_room")
