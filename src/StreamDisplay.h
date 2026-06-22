@@ -26,8 +26,8 @@ class StreamDisplay : public ActorFrame {
   void Load(const std::string& sMetricsGroup);
 
   void SetPercent(float fPercent);
-  void SetPassingAlpha(float fPassingAlpha) { m_fPassingAlpha = fPassingAlpha; }
-  void SetHotAlpha(float fHotAlpha) { m_fHotAlpha = fHotAlpha; }
+  void SetPassingAlpha(float fPassingAlpha);
+  void SetHotAlpha(float fHotAlpha);
 
   float GetPercent() { return m_fPercent; }
 

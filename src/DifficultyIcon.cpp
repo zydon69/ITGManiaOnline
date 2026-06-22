@@ -9,6 +9,7 @@
 #include "GameState.h"
 #include "LuaManager.h"
 #include "PlayerNumber.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "Sprite.h"
 #include "Steps.h"
@@ -17,12 +18,36 @@
 
 REGISTER_ACTOR_CLASS(DifficultyIcon);
 
+namespace {
+void WarnDifficultyIconAuditFix(const std::string& message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message.c_str());
+  }
+}
+
+bool IsValidDifficultyIconDifficulty(Difficulty dc) {
+  return dc >= Difficulty_Beginner && dc < NUM_Difficulty;
+}
+
+bool IsValidDifficultyIconPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PlayerNumber;
+}
+}  // namespace
+
 DifficultyIcon::DifficultyIcon() {
   m_bBlank = false;
   m_PlayerNumber = PLAYER_1;
 }
 
 bool DifficultyIcon::Load(std::string sPath) {
+  if (sPath.empty() || !DoesFileExist(sPath)) {
+    WarnDifficultyIconAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-1063: DifficultyIcon refused missing file '%s'.",
+        sPath.c_str()));
+    Unset();
+    return false;
+  }
+
   Sprite::Load(sPath);
   int iStates = GetNumStates();
   bool bWarn = iStates != NUM_Difficulty && iStates != NUM_Difficulty * 2;
@@ -35,17 +60,29 @@ bool DifficultyIcon::Load(std::string sPath) {
         "%d states.",
         sPath.c_str(), NUM_Difficulty, NUM_Difficulty * 2, iStates);
     LuaHelpers::ReportScriptError(sError);
+    Unset();
+    StopAnimating();
+    return false;
   }
   StopAnimating();
+  m_bBlank = false;
   return true;
 }
 
 void DifficultyIcon::LoadFromNode(const XNode* pNode) {
+  if (pNode == nullptr) {
+    WarnDifficultyIconAuditFix(
+        "SRC_AUDIT_FIX SRC-1064: DifficultyIcon ignored null XML node.");
+    Unset();
+    return;
+  }
+
   std::string sFile;
   if (!ActorUtil::GetAttrPath(pNode, "File", sFile)) {
     LuaHelpers::ReportScriptErrorFmt(
         "%s: DifficultyIcon: missing the \"File\" attribute.",
         ActorUtil::GetWhere(pNode).c_str());
+    Unset();
   }
 
   Load(sFile);
@@ -54,7 +91,16 @@ void DifficultyIcon::LoadFromNode(const XNode* pNode) {
   Actor::LoadFromNode(pNode);
 }
 
-void DifficultyIcon::SetPlayer(PlayerNumber pn) { m_PlayerNumber = pn; }
+void DifficultyIcon::SetPlayer(PlayerNumber pn) {
+  if (!IsValidDifficultyIconPlayer(pn)) {
+    WarnDifficultyIconAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-1065: DifficultyIcon ignored invalid player %d.",
+        pn));
+    m_PlayerNumber = PLAYER_1;
+    return;
+  }
+  m_PlayerNumber = pn;
+}
 
 void DifficultyIcon::SetFromSteps(PlayerNumber pn, const Steps* pSteps) {
   SetPlayer(pn);
@@ -77,6 +123,14 @@ void DifficultyIcon::SetFromTrail(PlayerNumber pn, const Trail* pTrail) {
 void DifficultyIcon::Unset() { m_bBlank = true; }
 
 void DifficultyIcon::SetFromDifficulty(Difficulty dc) {
+  if (!IsValidDifficultyIconDifficulty(dc)) {
+    WarnDifficultyIconAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-1066: DifficultyIcon unset invalid difficulty %d.",
+        dc));
+    Unset();
+    return;
+  }
+
   m_bBlank = false;
   switch (GetNumStates()) {
     case NUM_Difficulty:

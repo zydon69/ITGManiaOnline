@@ -26,11 +26,45 @@ REGISTER_ACTOR_CLASS(GraphDisplay);
 
 enum { VALUE_RESOLUTION = 100 };
 
+namespace {
+void WarnGraphDisplayAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+void TraceGraphDisplayAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Trace("%s", message);
+  }
+}
+
+bool IsFiniteGraphPoint(const RageSpriteVertex& vertex) {
+  return std::isfinite(vertex.p.x) && std::isfinite(vertex.p.y) &&
+         std::isfinite(vertex.p.z);
+}
+
+void DetachAndUnloadAutoActor(ActorFrame& frame, AutoActor& actor) {
+  if (!actor.IsLoaded()) {
+    return;
+  }
+  frame.RemoveChild(actor);
+  actor.Unload();
+}
+}  // namespace
+
 class GraphLine : public Actor {
  public:
   enum { iSubdivisions = 4 };
   enum { iCircleVertices = iSubdivisions + 2 };
   void DrawPrimitives() {
+    if (DISPLAY == nullptr || m_pTempState == nullptr) {
+      TraceGraphDisplayAuditFix(
+          "SRC_AUDIT_FIX SRC-1074: GraphLine skipped draw without display "
+          "state.");
+      return;
+    }
+
     Actor::SetGlobalRenderStates();  // set Actor-specified render states
 
     DISPLAY->ClearAllTextures();
@@ -60,6 +94,11 @@ class GraphLine : public Actor {
   static void MakeCircle(
       const RageSpriteVertex& v, RageSpriteVertex* pVerts, int iSubdivisions,
       float fRadius) {
+    if (pVerts == nullptr || iSubdivisions <= 0 || !std::isfinite(fRadius) ||
+        !IsFiniteGraphPoint(v)) {
+      return;
+    }
+
     pVerts[0] = v;
 
     for (int i = 0; i < iSubdivisions + 1; ++i) {
@@ -76,35 +115,48 @@ class GraphLine : public Actor {
     m_pCircles.clear();
     m_Quads.clear();
     if (m_LineStrip == nullptr || iSize <= 0) {
-      LOG->Trace(
+      TraceGraphDisplayAuditFix(
           "SRC_AUDIT_FIX SRC-257: GraphLine received empty line strip.");
       return;
     }
 
-    m_pCircles.resize(iSize * iCircleVertices);
-
+    std::vector<RageSpriteVertex> validLineStrip;
+    validLineStrip.reserve(iSize);
     for (int i = 0; i < iSize; ++i) {
+      if (IsFiniteGraphPoint(m_LineStrip[i])) {
+        validLineStrip.push_back(m_LineStrip[i]);
+      }
+    }
+    if (validLineStrip.empty()) {
+      TraceGraphDisplayAuditFix(
+          "SRC_AUDIT_FIX SRC-1074: GraphLine received no finite vertices.");
+      return;
+    }
+
+    m_pCircles.resize(validLineStrip.size() * iCircleVertices);
+
+    for (int i = 0; i < static_cast<int>(validLineStrip.size()); ++i) {
       MakeCircle(
-          m_LineStrip[i], &m_pCircles[0] + iCircleVertices * i, iSubdivisions,
+          validLineStrip[i], &m_pCircles[0] + iCircleVertices * i,
+          iSubdivisions,
           1);
     }
 
-    int iNumLines = iSize - 1;
+    int iNumLines = static_cast<int>(validLineStrip.size()) - 1;
     if (iNumLines <= 0) {
       return;
     }
     m_Quads.reserve(iNumLines * 4);
     for (int i = 0; i < iNumLines; ++i) {
-      const RageSpriteVertex& p1 = m_LineStrip[i];
-      const RageSpriteVertex& p2 = m_LineStrip[i + 1];
+      const RageSpriteVertex& p1 = validLineStrip[i];
+      const RageSpriteVertex& p2 = validLineStrip[i + 1];
 
       float opp = p2.p.x - p1.p.x;
       float adj = p2.p.y - p1.p.y;
       float hyp = std::pow(opp * opp + adj * adj, 0.5f);
       if (!std::isfinite(hyp) || hyp <= 0.0001f) {
-        LOG->Trace(
-            "SRC_AUDIT_FIX SRC-258: GraphLine skipped invalid segment hyp=%f.",
-            hyp);
+        TraceGraphDisplayAuditFix(
+            "SRC_AUDIT_FIX SRC-258: GraphLine skipped invalid segment.");
         continue;
       }
 
@@ -142,25 +194,32 @@ REGISTER_ACTOR_CLASS(GraphLine);
 class GraphBody : public Actor {
  public:
   GraphBody(std::string sFile) {
-    m_pTexture = sFile.empty() ? nullptr : TEXTUREMAN->LoadTexture(sFile);
+    m_pTexture = sFile.empty() || TEXTUREMAN == nullptr
+                     ? nullptr
+                     : TEXTUREMAN->LoadTexture(sFile);
     if (m_pTexture == nullptr) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX SRC-259: GraphBody could not load texture '%s'.",
-          sFile.c_str());
+      if (LOG != nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-259: GraphBody could not load texture '%s'.",
+            sFile.c_str());
+      }
     }
 
     for (int i = 0; i < 2 * VALUE_RESOLUTION; ++i) {
+      m_Slices[i].p = RageVector3(0, 0, 0);
       m_Slices[i].c = RageColor(1, 1, 1, 1);
       m_Slices[i].t = RageVector2(0, 0);
     }
   }
   ~GraphBody() {
-    TEXTUREMAN->UnloadTexture(m_pTexture);
+    if (TEXTUREMAN != nullptr && m_pTexture != nullptr) {
+      TEXTUREMAN->UnloadTexture(m_pTexture);
+    }
     m_pTexture = nullptr;
   }
 
   void DrawPrimitives() {
-    if (m_pTexture == nullptr) {
+    if (DISPLAY == nullptr || m_pTexture == nullptr) {
       return;
     }
     Actor::SetGlobalRenderStates();  // set Actor-specified render states
@@ -186,27 +245,41 @@ GraphDisplay::GraphDisplay() {
 }
 
 GraphDisplay::~GraphDisplay() {
-  for (Actor* p : m_vpSongBoundaries) {
-    RageUtil::SafeDelete(p);
-  }
-  m_vpSongBoundaries.clear();
-  RageUtil::SafeDelete(m_pGraphLine);
-  RageUtil::SafeDelete(m_pGraphBody);
+  ClearGraphActors();
 }
 
-void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
+void GraphDisplay::ClearSongBoundaries() {
   for (Actor* p : m_vpSongBoundaries) {
     RemoveChild(p);
     RageUtil::SafeDelete(p);
   }
   m_vpSongBoundaries.clear();
+}
+
+void GraphDisplay::ClearGraphActors() {
+  ClearSongBoundaries();
+
+  DetachAndUnloadAutoActor(*this, m_sprBarely);
+  DetachAndUnloadAutoActor(*this, m_sprBacking);
+  DetachAndUnloadAutoActor(*this, m_sprSongBoundary);
+
+  if (m_pGraphLine != nullptr) {
+    RemoveChild(m_pGraphLine);
+  }
+  RageUtil::SafeDelete(m_pGraphLine);
+  if (m_pGraphBody != nullptr) {
+    RemoveChild(m_pGraphBody);
+  }
+  RageUtil::SafeDelete(m_pGraphBody);
+}
+
+void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
+  ClearSongBoundaries();
 
   float fTotalStepSeconds = ss.GetTotalPossibleStepsSeconds();
   if (!std::isfinite(fTotalStepSeconds) || fTotalStepSeconds <= 0.0f) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX SRC-261: GraphDisplay received invalid total seconds "
-        "%f.",
-        fTotalStepSeconds);
+    WarnGraphDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-261: GraphDisplay received invalid total seconds.");
     fTotalStepSeconds = 1.0f;
   }
 
@@ -215,7 +288,7 @@ void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
       m_Values.data(), VALUE_RESOLUTION, fTotalStepSeconds);
   for (float& value : m_Values) {
     if (!std::isfinite(value)) {
-      LOG->Trace(
+      TraceGraphDisplayAuditFix(
           "SRC_AUDIT_FIX SRC-260: GraphDisplay corrected non-finite life "
           "value.");
       value = 0.0f;
@@ -232,18 +305,23 @@ void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
   if (possibleSongs.size() > 1) {
     std::for_each(
         possibleSongs.begin(), possibleSongs.end() - 1, [&](Song* song) {
+          if (!m_sprSongBoundary.IsLoaded()) {
+            TraceGraphDisplayAuditFix(
+                "SRC_AUDIT_FIX SRC-1075: GraphDisplay skipped unloaded song "
+                "boundary actor.");
+            return;
+          }
           if (song == nullptr) {
-            LOG->Trace(
+            TraceGraphDisplayAuditFix(
                 "SRC_AUDIT_FIX SRC-261: GraphDisplay skipped null song "
                 "boundary.");
             return;
           }
           const float songSeconds = song->GetStepsSeconds();
           if (!std::isfinite(songSeconds) || songSeconds < 0.0f) {
-            LOG->Trace(
+            TraceGraphDisplayAuditFix(
                 "SRC_AUDIT_FIX SRC-261: GraphDisplay skipped invalid song "
-                "seconds %f.",
-                songSeconds);
+                "seconds.");
             return;
           }
           fSec += songSeconds;
@@ -256,6 +334,10 @@ void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
           p->SetX(fX);
           this->AddChild(p);
         });
+  }
+
+  if (!m_sprBarely.IsLoaded()) {
+    return;
   }
 
   if (!pss.m_bFailed) {
@@ -286,8 +368,29 @@ void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
 }
 
 void GraphDisplay::Load(std::string sMetricsGroup) {
+  ClearGraphActors();
+
+  if (sMetricsGroup.empty()) {
+    WarnGraphDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1071: GraphDisplay fell back from empty metrics "
+        "group.");
+    sMetricsGroup = "GraphDisplay";
+  }
+
+  if (THEME == nullptr) {
+    WarnGraphDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1071: GraphDisplay refused load without THEME.");
+    return;
+  }
+
   m_size.x = THEME->GetMetricI(sMetricsGroup, "BodyWidth");
   m_size.y = THEME->GetMetricI(sMetricsGroup, "BodyHeight");
+  if (m_size.x <= 0 || m_size.y <= 0) {
+    WarnGraphDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1072: GraphDisplay corrected invalid body size.");
+    m_size.x = std::max(m_size.x, 1.0f);
+    m_size.y = std::max(m_size.y, 1.0f);
+  }
 
   m_sprBacking.Load(THEME->GetPathG(sMetricsGroup, "Backing"));
   m_sprBacking->ZoomToWidth(m_size.x);
@@ -313,9 +416,15 @@ void GraphDisplay::UpdateVerts() {
   if (m_pGraphBody == nullptr || m_pGraphLine == nullptr ||
       m_pGraphBody->m_pTexture == nullptr ||
       m_Values.size() != VALUE_RESOLUTION) {
-    LOG->Trace(
+    TraceGraphDisplayAuditFix(
         "SRC_AUDIT_FIX SRC-262: GraphDisplay skipped vertex update before "
         "complete load.");
+    return;
+  }
+  if (!std::isfinite(m_size.x) || !std::isfinite(m_size.y) || m_size.x <= 0 ||
+      m_size.y <= 0) {
+    WarnGraphDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1073: GraphDisplay skipped invalid graph size.");
     return;
   }
 
@@ -337,6 +446,11 @@ void GraphDisplay::UpdateVerts() {
         RageVector3(fX, m_quadVertices.bottom, 0);
 
     const RectF* pRect = m_pGraphBody->m_pTexture->GetTextureCoordRect(0);
+    if (pRect == nullptr) {
+      WarnGraphDisplayAuditFix(
+          "SRC_AUDIT_FIX SRC-1073: GraphDisplay skipped null texture rect.");
+      return;
+    }
 
     const float fU = SCALE(
         fX, m_quadVertices.left, m_quadVertices.right, pRect->left,

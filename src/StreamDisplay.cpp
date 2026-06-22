@@ -1,11 +1,13 @@
 #include "StreamDisplay.h"
 
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <string>
 
 #include "ActorFrame.h"
 #include "EnumHelper.h"
+#include "RageLog.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
 #include "Sprite.h"
@@ -19,6 +21,37 @@ static const char* StreamTypeNames[] = {
 };
 XToString(StreamType);
 
+namespace {
+void WarnStreamDisplayAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+float SanitizeStreamDisplayUnit(float value, const char* field) {
+  if (!std::isfinite(value)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1069: StreamDisplay reset non-finite %s.", field);
+    }
+    return 0.0f;
+  }
+  rage_clamp(value, 0.0f, 1.0f);
+  return value;
+}
+
+float SanitizeStreamDisplayMetric(float value, float fallback, const char* name) {
+  if (!std::isfinite(value)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1068: StreamDisplay used fallback for %s.", name);
+    }
+    return fallback;
+  }
+  return value;
+}
+}  // namespace
+
 StreamDisplay::StreamDisplay() {
   m_fPercent = 0;
   m_fTrailingPercent = 0;
@@ -31,9 +64,19 @@ StreamDisplay::StreamDisplay() {
 }
 
 void StreamDisplay::Load(
-    const std::string& /* unreferenced: _sMetricsGroup  */) {
-  // XXX: actually load from the metrics group passed in -aj
-  std::string sMetricsGroup = "StreamDisplay";
+    const std::string& _sMetricsGroup) {
+  DeleteAllChildren();
+  FOREACH_ENUM(StreamType, st) {
+    m_vpSprPill[st].clear();
+  }
+
+  std::string sMetricsGroup =
+      _sMetricsGroup.empty() ? "StreamDisplay" : _sMetricsGroup;
+  if (THEME == nullptr) {
+    WarnStreamDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1067: StreamDisplay refused load without THEME.");
+    return;
+  }
 
   m_transformPill.SetFromReference(
       THEME->GetMetricR(sMetricsGroup, "PillTransformFunction"));
@@ -47,11 +90,20 @@ void StreamDisplay::Load(
       THEME->GetMetricF(sMetricsGroup, "TextureCoordScaleX");
   int iNumPills =
       static_cast<int>(THEME->GetMetricF(sMetricsGroup, "NumPills"));
+  if (!std::isfinite(fTextureCoordScaleX) || fTextureCoordScaleX <= 0.0f) {
+    WarnStreamDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1068: StreamDisplay used safe texture coord scale.");
+    fTextureCoordScaleX = 1.0f;
+  }
+  if (iNumPills <= 0) {
+    WarnStreamDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1068: StreamDisplay used one pill for invalid "
+        "NumPills.");
+    iNumPills = 1;
+  }
   m_bAlwaysBounce = THEME->GetMetricB(sMetricsGroup, "AlwaysBounceNormalBar");
 
   FOREACH_ENUM(StreamType, st) {
-    ASSERT(m_vpSprPill[st].empty());
-
     for (int i = 0; i < iNumPills; i++) {
       Sprite* pSpr = new Sprite;
 
@@ -68,7 +120,38 @@ void StreamDisplay::Load(
 }
 
 void StreamDisplay::Update(float fDeltaSecs) {
+  if (!std::isfinite(fDeltaSecs) || fDeltaSecs < 0.0f) {
+    WarnStreamDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1070: StreamDisplay ignored invalid update delta.");
+    return;
+  }
   ActorFrame::Update(fDeltaSecs);
+
+  if (m_vpSprPill[StreamType_Normal].empty()) {
+    return;
+  }
+
+  m_fPercent = SanitizeStreamDisplayUnit(m_fPercent, "percent");
+  if (!std::isfinite(m_fTrailingPercent)) {
+    m_fTrailingPercent = m_fPercent;
+  }
+  if (!std::isfinite(m_fVelocity)) {
+    m_fVelocity = 0.0f;
+  }
+
+  const float fVelocityMultiplier =
+      SanitizeStreamDisplayMetric(VELOCITY_MULTIPLIER, 0.0f, "velocity");
+  float fVelocityMin =
+      SanitizeStreamDisplayMetric(VELOCITY_MIN, -FLT_MAX, "velocity min");
+  float fVelocityMax =
+      SanitizeStreamDisplayMetric(VELOCITY_MAX, FLT_MAX, "velocity max");
+  if (fVelocityMin > fVelocityMax) {
+    std::swap(fVelocityMin, fVelocityMax);
+  }
+  const float fSpringMultiplier =
+      SanitizeStreamDisplayMetric(SPRING_MULTIPLIER, 0.0f, "spring");
+  const float fViscosityMultiplier =
+      SanitizeStreamDisplayMetric(VISCOSITY_MULTIPLIER, 0.0f, "viscosity");
 
   // HACK:  Tweaking these values is very difficult.  Update the
   // "physics" many times so that the spring motion appears faster
@@ -81,21 +164,29 @@ void StreamDisplay::Update(float fDeltaSecs) {
       if (std::abs(fDelta) < 0.00001f) {
         m_fVelocity = 0;  // prevent div/0
       } else {
-        m_fVelocity = (fDelta / std::abs(fDelta)) * VELOCITY_MULTIPLIER;
+        m_fVelocity = (fDelta / std::abs(fDelta)) * fVelocityMultiplier;
       }
     } else {
-      const float fSpringForce = fDelta * SPRING_MULTIPLIER;
+      const float fSpringForce = fDelta * fSpringMultiplier;
       m_fVelocity += fSpringForce * fDeltaSecs;
 
-      const float fViscousForce = -m_fVelocity * VISCOSITY_MULTIPLIER;
+      const float fViscousForce = -m_fVelocity * fViscosityMultiplier;
       if (!m_bAlwaysBounce) {
         m_fVelocity += fViscousForce * fDeltaSecs;
       }
     }
 
-    rage_clamp(m_fVelocity, VELOCITY_MIN, VELOCITY_MAX);
+    rage_clamp(m_fVelocity, fVelocityMin, fVelocityMax);
 
     m_fTrailingPercent += m_fVelocity * fDeltaSecs;
+    if (!std::isfinite(m_fTrailingPercent)) {
+      WarnStreamDisplayAuditFix(
+          "SRC_AUDIT_FIX SRC-1070: StreamDisplay reset invalid trailing "
+          "percent.");
+      m_fTrailingPercent = m_fPercent;
+      m_fVelocity = 0.0f;
+      break;
+    }
   }
 
   // Don't clamp life percentage a little outside the visible range so
@@ -103,7 +194,8 @@ void StreamDisplay::Update(float fDeltaSecs) {
   rage_clamp(m_fTrailingPercent, -0.1f, 1.1f);
 
   // set crop of pills
-  const float fPillWidthPercent = 1.0f / m_vpSprPill[0].size();
+  const float fPillWidthPercent =
+      1.0f / static_cast<float>(m_vpSprPill[StreamType_Normal].size());
   FOREACH_ENUM(StreamType, st) {
     for (int i = 0; i < (int)m_vpSprPill[st].size(); i++) {
       Sprite* pSpr = m_vpSprPill[st][i];
@@ -138,7 +230,8 @@ void StreamDisplay::Update(float fDeltaSecs) {
 
 void StreamDisplay::SetPercent(float fPercent) {
 #ifdef DEBUG
-  float fLifeMultiplier = THEME->GetMetricF("LifeMeterBar", "LifeMultiplier");
+  float fLifeMultiplier =
+      THEME == nullptr ? 1.0f : THEME->GetMetricF("LifeMeterBar", "LifeMultiplier");
 #endif
   DEBUG_ASSERT(fPercent >= 0.0f && fPercent <= 1.0f * fLifeMultiplier);
   if (std::isnan(fPercent)) {
@@ -149,10 +242,19 @@ void StreamDisplay::SetPercent(float fPercent) {
     DEBUG_ASSERT_M(0, "fPercent is infinite");
     fPercent = 1;
   }
+  rage_clamp(fPercent, 0.0f, 1.0f);
 
   float fDeltaPercent = fPercent - m_fPercent;
   m_fVelocity += fDeltaPercent;
   m_fPercent = fPercent;
+}
+
+void StreamDisplay::SetPassingAlpha(float fPassingAlpha) {
+  m_fPassingAlpha = SanitizeStreamDisplayUnit(fPassingAlpha, "passing alpha");
+}
+
+void StreamDisplay::SetHotAlpha(float fHotAlpha) {
+  m_fHotAlpha = SanitizeStreamDisplayUnit(fHotAlpha, "hot alpha");
 }
 
 /*

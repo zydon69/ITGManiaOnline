@@ -27,6 +27,8 @@ class GraphDisplay : public ActorFrame {
   virtual void PushSelf(lua_State* L);
 
  private:
+  void ClearGraphActors();
+  void ClearSongBoundaries();
   void UpdateVerts();
 
   std::vector<float> m_Values;

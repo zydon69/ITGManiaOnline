@@ -6,6 +6,7 @@
 #include "ActorUtil.h"
 #include "LuaManager.h"
 #include "MessageManager.h"
+#include "RageLog.h"
 #include "Song.h"
 #include "ThemeManager.h"
 #include "XmlFile.h"
@@ -13,7 +14,37 @@
 
 REGISTER_ACTOR_CLASS(TextBanner);
 
+namespace {
+void WarnTextBannerAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+}  // namespace
+
+void TextBanner::EnsureTextChildren() {
+  if (m_bChildrenAdded) {
+    return;
+  }
+
+  m_textTitle.SetName("Title");
+  this->AddChild(&m_textTitle);
+
+  m_textSubTitle.SetName("Subtitle");
+  this->AddChild(&m_textSubTitle);
+
+  m_textArtist.SetName("Artist");
+  this->AddChild(&m_textArtist);
+
+  m_bChildrenAdded = true;
+}
+
 void TextBanner::LoadFromNode(const XNode* pNode) {
+  if (pNode == nullptr) {
+    WarnTextBannerAuditFix(
+        "SRC_AUDIT_FIX SRC-1060: TextBanner ignored null XML node.");
+    return;
+  }
   m_bInitted = true;
 
   ActorFrame::LoadFromNode(pNode);
@@ -21,18 +52,26 @@ void TextBanner::LoadFromNode(const XNode* pNode) {
 
 void TextBanner::Load(std::string sMetricsGroup) {
   m_bInitted = true;
+  EnsureTextChildren();
 
-  m_textTitle.SetName("Title");
+  if (sMetricsGroup.empty()) {
+    WarnTextBannerAuditFix(
+        "SRC_AUDIT_FIX SRC-1061: TextBanner fell back from empty metrics "
+        "group.");
+    sMetricsGroup = "TextBanner";
+  }
+
+  if (THEME == nullptr) {
+    WarnTextBannerAuditFix(
+        "SRC_AUDIT_FIX SRC-1061: TextBanner refused font load without THEME.");
+    return;
+  }
+
   m_textTitle.LoadFromFont(THEME->GetPathF(sMetricsGroup, "text"));
-  this->AddChild(&m_textTitle);
 
-  m_textSubTitle.SetName("Subtitle");
   m_textSubTitle.LoadFromFont(THEME->GetPathF(sMetricsGroup, "text"));
-  this->AddChild(&m_textSubTitle);
 
-  m_textArtist.SetName("Artist");
   m_textArtist.LoadFromFont(THEME->GetPathF(sMetricsGroup, "text"));
-  this->AddChild(&m_textArtist);
 
   AddCommand("AfterSet", THEME->GetMetricA(sMetricsGroup, "AfterSetCommand"));
   m_sArtistPrependString =
@@ -43,25 +82,33 @@ void TextBanner::Load(std::string sMetricsGroup) {
   ActorUtil::LoadAllCommandsAndOnCommand(m_textArtist, sMetricsGroup);
 }
 
-TextBanner::TextBanner() { m_bInitted = false; }
+TextBanner::TextBanner() {
+  m_bInitted = false;
+  m_bChildrenAdded = false;
+}
 
 TextBanner::TextBanner(const TextBanner& cpy)
     : ActorFrame(cpy),
       m_bInitted(cpy.m_bInitted),
+      m_bChildrenAdded(false),
       m_textTitle(cpy.m_textTitle),
       m_textSubTitle(cpy.m_textSubTitle),
       m_textArtist(cpy.m_textArtist),
       m_sArtistPrependString(cpy.m_sArtistPrependString) {
-  this->AddChild(&m_textTitle);
-  this->AddChild(&m_textSubTitle);
-  this->AddChild(&m_textArtist);
+  EnsureTextChildren();
 }
 
 void TextBanner::SetFromString(
     const std::string& sDisplayTitle, const std::string& sTranslitTitle,
     const std::string& sDisplaySubTitle, const std::string& sTranslitSubTitle,
     const std::string& sDisplayArtist, const std::string& sTranslitArtist) {
-  ASSERT(m_bInitted);
+  if (!m_bInitted) {
+    WarnTextBannerAuditFix(
+        "SRC_AUDIT_FIX SRC-1062: TextBanner initialized lazily before text "
+        "assignment.");
+    m_bInitted = true;
+  }
+  EnsureTextChildren();
 
   m_textTitle.SetText(sDisplayTitle, sTranslitTitle);
   m_textSubTitle.SetText(sDisplaySubTitle, sTranslitSubTitle);
@@ -94,7 +141,7 @@ class LunaTextBanner : public Luna<TextBanner> {
     COMMON_RETURN_SELF;
   }
   static int SetFromSong(T* p, lua_State* L) {
-    Song* pSong = Luna<Song>::check(L, 1);
+    Song* pSong = lua_isnil(L, 1) ? nullptr : Luna<Song>::check(L, 1);
     p->SetFromSong(pSong);
     COMMON_RETURN_SELF;
   }
