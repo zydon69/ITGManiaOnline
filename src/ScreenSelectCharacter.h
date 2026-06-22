@@ -17,6 +17,13 @@
 
 class ScreenSelectCharacter : public ScreenWithMenuElements {
  public:
+  enum SelectionRow {
+    CHOOSING_HUMAN_CHARACTER,
+    CHOOSING_CPU_CHARACTER,
+    FINISHED_CHOOSING
+  };
+
+  ScreenSelectCharacter();
   virtual void Init();
   virtual ~ScreenSelectCharacter();
 
@@ -45,11 +52,9 @@ class ScreenSelectCharacter : public ScreenWithMenuElements {
   void MakeSelection(PlayerNumber pn);
 
   int m_iSelectedCharacter[NUM_PLAYERS];
-  enum {
-    CHOOSING_HUMAN_CHARACTER,
-    CHOOSING_CPU_CHARACTER,
-    FINISHED_CHOOSING
-  } m_SelectionRow[NUM_PLAYERS];
+  SelectionRow m_SelectionRow[NUM_PLAYERS];
+  bool m_bPlayerActorsAdded[NUM_PLAYERS];
+  bool m_bExplanationAdded;
   PlayerNumber GetAffectedPlayerNumber(
       PlayerNumber
           pn);  // returns the number of the player that pn is selecting for
@@ -58,7 +63,7 @@ class ScreenSelectCharacter : public ScreenWithMenuElements {
 
   Banner m_sprIcons[NUM_PLAYERS][MAX_CHAR_ICONS_TO_SHOW];
 
-  Sprite m_sprCard[NUM_PLAYERS];
+  Banner m_sprCard[NUM_PLAYERS];
   Sprite m_sprCardArrows[NUM_PLAYERS];
 
   Sprite m_sprAttackFrame[NUM_PLAYERS];
