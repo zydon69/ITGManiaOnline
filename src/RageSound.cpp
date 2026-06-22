@@ -613,7 +613,10 @@ bool RageSound::StartPlaying() {
   /* Don't lock while calling SOUNDMAN driver calls. */
   ASSERT(!m_Mutex.IsLockedByThisThread());
 
-  SOUNDMAN->StartMixing(this);
+  if (!SOUNDMAN->StartMixing(this)) {
+    m_bPlaying.store(false, std::memory_order_release);
+    return false;
+  }
 
   //	LOG->Trace("StartPlaying %p finished (%s)", this,
   // this->GetLoadedFilePath().c_str());

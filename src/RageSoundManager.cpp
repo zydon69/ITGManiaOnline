@@ -10,7 +10,9 @@
 
 #include "RageSoundManager.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <cmath>
 #include <map>
 #include <string>
 #include <utility>
@@ -47,6 +49,15 @@ static Preference<int> g_iSoundGCMaxDeletesPerUpdate(
     "SoundGCMaxDeletesPerUpdate", 4);
 
 RageSoundManager* SOUNDMAN = nullptr;
+
+namespace {
+float ClampVolume(float volume) {
+  if (!std::isfinite(volume)) {
+    return 1.0f;
+  }
+  return std::max(0.0f, std::min(16.0f, volume));
+}
+}  // namespace
 
 RageSoundManager::RageSoundManager()
     : m_pDriver(nullptr), m_fVolumeOfNonCriticalSounds(1.0f) {}
@@ -121,20 +132,22 @@ void RageSoundManager::Shutdown() {
   }
 }
 
-void RageSoundManager::StartMixing(RageSoundBase* pSound) {
-  if (m_pDriver != nullptr) {
-    m_pDriver->StartMixing(pSound);
+bool RageSoundManager::StartMixing(RageSoundBase* pSound) {
+  if (m_pDriver == nullptr || pSound == nullptr) {
+    return false;
   }
+  m_pDriver->StartMixing(pSound);
+  return true;
 }
 
 void RageSoundManager::StopMixing(RageSoundBase* pSound) {
-  if (m_pDriver != nullptr) {
+  if (m_pDriver != nullptr && pSound != nullptr) {
     m_pDriver->StopMixing(pSound);
   }
 }
 
 bool RageSoundManager::Pause(RageSoundBase* pSound, bool bPause) {
-  if (m_pDriver == nullptr) {
+  if (m_pDriver == nullptr || pSound == nullptr) {
     return false;
   } else {
     return m_pDriver->PauseMixing(pSound, bPause);
@@ -182,7 +195,8 @@ void RageSoundManager::Update() {
   g_SoundManMutex.Unlock(); /* finished with m_mapPreloadedSounds */
 
   const float cleanupMs = cleanupTimer.GetDeltaTime() * 1000.0f;
-  if (PerfDiagnosticsEnabled() && (deletedSounds > 0 || cleanupMs >= 2.0f)) {
+  if (LOG != nullptr && PerfDiagnosticsEnabled() &&
+      (deletedSounds > 0 || cleanupMs >= 2.0f)) {
     LOG->Trace(
         "PERF_TRACE: sound_gc deleted=%d deferred=%d budget=%d elapsed_ms=%.3f "
         "last='%s'",
@@ -215,6 +229,9 @@ int RageSoundManager::GetDriverSampleRate() const {
 /* If the given path is loaded, return a copy; otherwise return nullptr.
  * It's the caller's responsibility to delete the result. */
 RageSoundReader* RageSoundManager::GetLoadedSound(const std::string& sPath_) {
+  if (sPath_.empty()) {
+    return nullptr;
+  }
   LockMut(g_SoundManMutex); /* lock for access to m_mapPreloadedSounds */
 
   std::string sPath(sPath_);
@@ -225,7 +242,16 @@ RageSoundReader* RageSoundManager::GetLoadedSound(const std::string& sPath_) {
     return nullptr;
   }
 
-  return it->second->Copy();
+  if (it->second == nullptr) {
+    return nullptr;
+  }
+
+  RageSoundReader* copy = it->second->Copy();
+  if (copy == nullptr && LOG != nullptr) {
+    LOG->Warn("RageSoundManager::GetLoadedSound: copy failed for %s",
+              sPath.c_str());
+  }
+  return copy;
 }
 
 /* Add the sound to the set of loaded sounds that can be copied for reuse.
@@ -233,6 +259,12 @@ RageSoundReader* RageSoundManager::GetLoadedSound(const std::string& sPath_) {
  * to it; once we hold the last one, we'll release it. */
 void RageSoundManager::AddLoadedSound(
     const std::string& sPath_, RageSoundReader_Preload* pSound) {
+  if (sPath_.empty() || pSound == nullptr) {
+    if (LOG != nullptr) {
+      LOG->Warn("RageSoundManager::AddLoadedSound: invalid preload entry");
+    }
+    return;
+  }
   LockMut(g_SoundManMutex); /* lock for access to m_mapPreloadedSounds */
 
   /* Don't AddLoadedSound a sound that's already registered.  It should have
@@ -241,19 +273,35 @@ void RageSoundManager::AddLoadedSound(
   MakeLower(sPath);
   std::map<std::string, RageSoundReader_Preload*>::const_iterator it;
   it = m_mapPreloadedSounds.find(sPath);
-  ASSERT_M(it == m_mapPreloadedSounds.end(), sPath);
+  if (it != m_mapPreloadedSounds.end()) {
+    if (LOG != nullptr) {
+      LOG->Warn("RageSoundManager::AddLoadedSound: duplicate preload %s",
+                sPath.c_str());
+    }
+    return;
+  }
 
-  m_mapPreloadedSounds[sPath] = pSound->Copy();
+  RageSoundReader_Preload* copy = pSound->Copy();
+  if (copy == nullptr) {
+    if (LOG != nullptr) {
+      LOG->Warn("RageSoundManager::AddLoadedSound: copy failed for %s",
+                sPath.c_str());
+    }
+    return;
+  }
+  m_mapPreloadedSounds[sPath] = copy;
 }
 
 static Preference<float> g_fSoundVolume("SoundVolume", 1.0f);
 
 void RageSoundManager::SetMixVolume() {
-  RageSoundReader_PostBuffering::SetMasterVolume(g_fSoundVolume.Get());
+  RageSoundReader_PostBuffering::SetMasterVolume(
+      ClampVolume(g_fSoundVolume.Get()));
 }
 
 void RageSoundManager::SetVolumeOfNonCriticalSounds(
     float fVolumeOfNonCriticalSounds) {
+  fVolumeOfNonCriticalSounds = ClampVolume(fVolumeOfNonCriticalSounds);
   g_SoundManMutex.Lock(); /* lock for access to m_fVolumeOfNonCriticalSounds */
   m_fVolumeOfNonCriticalSounds = fVolumeOfNonCriticalSounds;
   g_SoundManMutex.Unlock(); /* finished with m_fVolumeOfNonCriticalSounds */
