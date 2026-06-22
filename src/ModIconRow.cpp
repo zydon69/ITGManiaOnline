@@ -15,6 +15,7 @@
 #include "PlayerNumber.h"
 #include "PlayerOptions.h"
 #include "PlayerState.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "global.h"
 
@@ -22,39 +23,108 @@ int OptionToPreferredColumn(std::string sOptionText);
 
 REGISTER_ACTOR_CLASS(ModIconRow);
 
+namespace {
+const int MAX_MOD_ICONS = 64;
+
+bool IsValidModIconRowPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+void WarnModIconRow(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+float SanitizeModIconSpacing(float value) {
+  if (!std::isfinite(value)) {
+    return 0.0f;
+  }
+  return std::clamp(value, -10000.0f, 10000.0f);
+}
+
+int SanitizeNumModIcons(int value) {
+  return std::clamp(value, 0, MAX_MOD_ICONS);
+}
+}  // namespace
+
 ModIconRow::ModIconRow() {
   m_pn = PlayerNumber_Invalid;
 
   this->SubscribeToMessage("PlayerOptionsChanged");
 }
 
-ModIconRow::~ModIconRow() {
+ModIconRow::ModIconRow(const ModIconRow& cpy)
+    : ActorFrame(cpy),
+      m_sMetricsGroup(cpy.m_sMetricsGroup),
+      m_pn(cpy.m_pn),
+      SPACING_X(cpy.SPACING_X),
+      SPACING_Y(cpy.SPACING_Y),
+      NUM_OPTION_ICONS(cpy.NUM_OPTION_ICONS),
+      OPTION_ICON_METRICS_GROUP(cpy.OPTION_ICON_METRICS_GROUP) {
+  RemoveAllChildren();
+  for (ModIcon* icon : cpy.m_vpModIcon) {
+    if (icon == nullptr) {
+      continue;
+    }
+    ModIcon* copy = new ModIcon(*icon);
+    m_vpModIcon.push_back(copy);
+    AddChild(copy);
+  }
+}
+
+ModIconRow::~ModIconRow() { ClearIcons(); }
+
+void ModIconRow::ClearIcons() {
   for (ModIcon* p : m_vpModIcon) {
+    RemoveChild(p);
     RageUtil::SafeDelete(p);
   }
+  m_vpModIcon.clear();
   this->RemoveAllChildren();
 }
 
 void ModIconRow::Load(const std::string& sMetricsGroup, PlayerNumber pn) {
-  ASSERT_M(m_pn == PlayerNumber_Invalid, "Multiple calls to Load");
+  ClearIcons();
 
   m_sMetricsGroup = sMetricsGroup;
-  m_pn = pn;
+  m_pn = IsValidModIconRowPlayer(pn) ? pn : PlayerNumber_Invalid;
+  if (m_pn == PlayerNumber_Invalid) {
+    WarnModIconRow("SRC_AUDIT_FIX SRC-1199: ModIconRow ignored invalid player.");
+  }
 
-  SPACING_X.Load(sMetricsGroup, "SpacingX");
-  SPACING_Y.Load(sMetricsGroup, "SpacingY");
-  NUM_OPTION_ICONS.Load(sMetricsGroup, "NumModIcons");
-  OPTION_ICON_METRICS_GROUP.Load(sMetricsGroup, "ModIconMetricsGroup");
+  float spacingX = 0.0f;
+  float spacingY = 0.0f;
+  int numOptionIcons = 0;
+  std::string optionIconMetricsGroup;
 
-  for (int i = 0; i < NUM_OPTION_ICONS; i++) {
+  if (THEME != nullptr && !sMetricsGroup.empty()) {
+    SPACING_X.Load(sMetricsGroup, "SpacingX");
+    SPACING_Y.Load(sMetricsGroup, "SpacingY");
+    NUM_OPTION_ICONS.Load(sMetricsGroup, "NumModIcons");
+    OPTION_ICON_METRICS_GROUP.Load(sMetricsGroup, "ModIconMetricsGroup");
+    spacingX = SanitizeModIconSpacing(SPACING_X.GetValue());
+    spacingY = SanitizeModIconSpacing(SPACING_Y.GetValue());
+    numOptionIcons = SanitizeNumModIcons(NUM_OPTION_ICONS.GetValue());
+    optionIconMetricsGroup = OPTION_ICON_METRICS_GROUP.GetValue();
+  } else {
+    WarnModIconRow("SRC_AUDIT_FIX SRC-1200: ModIconRow loaded without THEME.");
+  }
+
+  for (int i = 0; i < numOptionIcons; i++) {
     ModIcon* p = new ModIcon;
     p->SetName("ModIcon");
-    float fOffset = SCALE(
-        i, 0, NUM_OPTION_ICONS - 1, -(NUM_OPTION_ICONS - 1) / 2.0f,
-        (float)(NUM_OPTION_ICONS - 1) / 2.0f);
-    p->SetXY(fOffset * SPACING_X, fOffset * SPACING_Y);
-    p->Load(OPTION_ICON_METRICS_GROUP);
-    ActorUtil::LoadAllCommands(p, sMetricsGroup);
+    float fOffset =
+        numOptionIcons == 1
+            ? 0.0f
+            : SCALE(
+                  i, 0, numOptionIcons - 1, -(numOptionIcons - 1) / 2.0f,
+                  (float)(numOptionIcons - 1) / 2.0f);
+    p->SetXY(fOffset * spacingX, fOffset * spacingY);
+    p->Load(optionIconMetricsGroup);
+    if (THEME != nullptr && !sMetricsGroup.empty()) {
+      ActorUtil::LoadAllCommands(p, sMetricsGroup);
+    }
     m_vpModIcon.push_back(p);
     this->AddChild(p);
   }
@@ -124,8 +194,10 @@ static const OptionColumnEntry g_OptionColumnEntries[] = {
 
 int OptionToPreferredColumn(std::string sOptionText) {
   // Speedups always go in column 0. digit ... x
-  if (sOptionText.size() > 1 && isdigit(sOptionText[0]) &&
-      tolower(sOptionText[sOptionText.size() - 1]) == 'x') {
+  if (sOptionText.size() > 1 &&
+      isdigit(static_cast<unsigned char>(sOptionText[0])) &&
+      tolower(static_cast<unsigned char>(sOptionText[sOptionText.size() - 1])) ==
+          'x') {
     return 0;
   }
 
@@ -142,6 +214,18 @@ int OptionToPreferredColumn(std::string sOptionText) {
 
 void ModIconRow::SetFromGameState() {
   PlayerNumber pn = m_pn;
+  if (!IsValidModIconRowPlayer(pn) || GAMESTATE == nullptr ||
+      GAMESTATE->m_pPlayerState[pn] == nullptr) {
+    for (ModIcon* icon : m_vpModIcon) {
+      if (icon != nullptr) {
+        icon->Set("");
+      }
+    }
+    return;
+  }
+  if (m_vpModIcon.empty()) {
+    return;
+  }
 
   std::string sOptions =
       GAMESTATE->m_pPlayerState[pn]->m_PlayerOptions.GetStage().GetString();
@@ -159,7 +243,7 @@ void ModIconRow::SetFromGameState() {
     iPreferredCol = std::clamp(iPreferredCol, 0, (int)m_vpModIcon.size() - 1);
 
     // search for a vacant spot
-    for (int j = iPreferredCol; j < NUM_OPTION_ICONS; j++) {
+    for (int j = iPreferredCol; j < (int)m_vpModIcon.size(); j++) {
       if (vsText[j] != "") {
         continue;
       } else {
@@ -170,7 +254,9 @@ void ModIconRow::SetFromGameState() {
   }
 
   for (unsigned i = 0; i < m_vpModIcon.size(); i++) {
-    m_vpModIcon[i]->Set(vsText[i]);
+    if (m_vpModIcon[i] != nullptr) {
+      m_vpModIcon[i]->Set(vsText[i]);
+    }
   }
 }
 

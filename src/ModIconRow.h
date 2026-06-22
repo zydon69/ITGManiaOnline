@@ -18,6 +18,7 @@ struct lua_State;
 class ModIconRow : public ActorFrame {
  public:
   ModIconRow();
+  ModIconRow(const ModIconRow& cpy);
   ~ModIconRow();
 
   void Load(const std::string& sMetricsGroup, PlayerNumber pn);
@@ -31,6 +32,8 @@ class ModIconRow : public ActorFrame {
   virtual void PushSelf(lua_State* L);
 
  protected:
+  void ClearIcons();
+
   std::string m_sMetricsGroup;
   PlayerNumber m_pn;
 

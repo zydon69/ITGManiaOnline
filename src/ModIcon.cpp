@@ -1,14 +1,35 @@
 #include "ModIcon.h"
 
+#include <algorithm>
 #include <string>
 
 #include "ActorFrame.h"
 #include "ActorUtil.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "StdString.h"
 #include "ThemeManager.h"
 
-ModIcon::ModIcon() {}
+namespace {
+void WarnModIcon(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+void DetachAndUnload(ActorFrame& frame, AutoActor& actor) {
+  if (actor.IsLoaded()) {
+    frame.RemoveChild(actor);
+  }
+  actor.Unload();
+}
+
+int SanitizeCropTextWidth(int width) {
+  return std::clamp(width, 0, 4096);
+}
+}  // namespace
+
+ModIcon::ModIcon() { m_iCropTextToWidth = 0; }
 
 ModIcon::ModIcon(const ModIcon& cpy)
     : ActorFrame(cpy),
@@ -17,6 +38,7 @@ ModIcon::ModIcon(const ModIcon& cpy)
       m_sprEmpty(cpy.m_sprEmpty),
       CROP_TEXT_TO_WIDTH(cpy.CROP_TEXT_TO_WIDTH),
       STOP_WORDS(cpy.STOP_WORDS),
+      m_iCropTextToWidth(cpy.m_iCropTextToWidth),
       m_vStopWords(cpy.m_vStopWords) {
   this->RemoveAllChildren();
   this->AddChild(m_sprFilled);
@@ -25,27 +47,69 @@ ModIcon::ModIcon(const ModIcon& cpy)
 }
 
 void ModIcon::Load(std::string sMetricsGroup) {
-  m_sprFilled.Load(THEME->GetPathG(sMetricsGroup, "Filled"));
-  m_sprFilled->SetName("Filled");
-  ActorUtil::LoadAllCommands(m_sprFilled, sMetricsGroup);
-  this->AddChild(m_sprFilled);
+  DetachAndUnload(*this, m_sprFilled);
+  DetachAndUnload(*this, m_sprEmpty);
+  RemoveChild(&m_text);
 
-  m_sprEmpty.Load(THEME->GetPathG(sMetricsGroup, "Empty"));
-  m_sprEmpty->SetName("Empty");
-  ActorUtil::LoadAllCommands(m_sprEmpty, sMetricsGroup);
-  this->AddChild(m_sprEmpty);
+  if (THEME != nullptr && !sMetricsGroup.empty()) {
+    m_sprFilled.Load(THEME->GetPathG(sMetricsGroup, "Filled"));
+  } else {
+    WarnModIcon("SRC_AUDIT_FIX SRC-1193: ModIcon loaded without THEME.");
+    m_sprFilled.Load(new Actor);
+  }
+  if (m_sprFilled.IsLoaded()) {
+    m_sprFilled->SetName("Filled");
+    if (THEME != nullptr && !sMetricsGroup.empty()) {
+      ActorUtil::LoadAllCommands(m_sprFilled, sMetricsGroup);
+    }
+    this->AddChild(m_sprFilled);
+  }
 
-  m_text.LoadFromFont(THEME->GetPathF(sMetricsGroup, "Text"));
+  if (THEME != nullptr && !sMetricsGroup.empty()) {
+    m_sprEmpty.Load(THEME->GetPathG(sMetricsGroup, "Empty"));
+  } else {
+    m_sprEmpty.Load(new Actor);
+  }
+  if (m_sprEmpty.IsLoaded()) {
+    m_sprEmpty->SetName("Empty");
+    if (THEME != nullptr && !sMetricsGroup.empty()) {
+      ActorUtil::LoadAllCommands(m_sprEmpty, sMetricsGroup);
+    }
+    this->AddChild(m_sprEmpty);
+  }
+
+  if (THEME != nullptr && !sMetricsGroup.empty()) {
+    m_text.LoadFromFont(THEME->GetPathF(sMetricsGroup, "Text"));
+  }
   m_text.SetName("Text");
-  ActorUtil::LoadAllCommandsAndSetXYAndOnCommand(m_text, sMetricsGroup);
+  if (THEME != nullptr && !sMetricsGroup.empty()) {
+    ActorUtil::LoadAllCommandsAndSetXYAndOnCommand(m_text, sMetricsGroup);
+  }
   this->AddChild(&m_text);
 
-  CROP_TEXT_TO_WIDTH.Load(sMetricsGroup, "CropTextToWidth");
+  m_iCropTextToWidth = 0;
+  if (THEME != nullptr && !sMetricsGroup.empty()) {
+    CROP_TEXT_TO_WIDTH.Load(sMetricsGroup, "CropTextToWidth");
+    m_iCropTextToWidth =
+        SanitizeCropTextWidth(CROP_TEXT_TO_WIDTH.GetValue());
+  }
 
   // stop words
-  STOP_WORDS.Load(sMetricsGroup, "StopWords");
+  std::string stopWords;
+  if (THEME != nullptr && !sMetricsGroup.empty()) {
+    STOP_WORDS.Load(sMetricsGroup, "StopWords");
+    stopWords = STOP_WORDS.GetValue();
+  }
   m_vStopWords.clear();
-  split(STOP_WORDS, ",", m_vStopWords);
+  if (stopWords != "") {
+    split(stopWords, ",", m_vStopWords);
+  }
+  for (std::string& stopWord : m_vStopWords) {
+    Trim(stopWord);
+  }
+  m_vStopWords.erase(
+      std::remove(m_vStopWords.begin(), m_vStopWords.end(), ""),
+      m_vStopWords.end());
 
   Set("");
 }
@@ -62,11 +126,15 @@ void ModIcon::Set(const std::string& _sText) {
   Replace(sText, " ", "\n");
 
   bool bVacant = (sText == "");
-  m_sprFilled->SetVisible(!bVacant);
-  m_sprEmpty->SetVisible(bVacant);
+  if (m_sprFilled.IsLoaded()) {
+    m_sprFilled->SetVisible(!bVacant);
+  }
+  if (m_sprEmpty.IsLoaded()) {
+    m_sprEmpty->SetVisible(bVacant);
+  }
 
   m_text.SetText(sText);
-  m_text.CropToWidth(CROP_TEXT_TO_WIDTH);
+  m_text.CropToWidth(m_iCropTextToWidth);
 }
 
 /*
