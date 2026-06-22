@@ -21,6 +21,7 @@ class PlayerState;
 class StepsDisplay : public ActorFrame {
  public:
   StepsDisplay();
+  StepsDisplay(const StepsDisplay& cpy);
 
   void Load(const std::string& sMetricsGroup, const PlayerState* pPlayerState);
 
@@ -45,6 +46,7 @@ class StepsDisplay : public ActorFrame {
     Difficulty dc;
     CourseType ct;
   };
+  void ResetLoadedActors();
   void SetInternal(const SetParams& params);
 
   std::string m_sMetricsGroup;

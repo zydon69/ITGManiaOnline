@@ -1,6 +1,7 @@
 #include "StepsDisplay.h"
 
 #include <algorithm>
+#include <cctype>
 #include <string>
 
 #include "ActorFrame.h"
@@ -14,6 +15,7 @@
 #include "MessageManager.h"
 #include "PlayerNumber.h"
 #include "PlayerState.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "SongManager.h"
 #include "Steps.h"
@@ -22,7 +24,186 @@
 
 REGISTER_ACTOR_CLASS(StepsDisplay);
 
+namespace {
+constexpr int kMaxDisplayTicks = 64;
+constexpr int kMaxDisplayedMeter = 999;
+
+void WarnStepsDisplayAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+bool IsValidStepsDisplayPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+bool IsValidStepsTypeForDisplay(StepsType st) {
+  return st == StepsType_Invalid || (st >= 0 && st < NUM_StepsType);
+}
+
+bool IsValidDifficultyForDisplay(Difficulty dc) {
+  return dc == Difficulty_Invalid || (dc >= 0 && dc < NUM_Difficulty);
+}
+
+bool IsValidCourseTypeForDisplay(CourseType ct) {
+  return ct == CourseType_Invalid || (ct >= 0 && ct < NUM_CourseType);
+}
+
+int SanitizeMeterForDisplay(int meter) {
+  if (meter < 0) {
+    WarnStepsDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1147: StepsDisplay reset negative meter.");
+    return 0;
+  }
+  if (meter > kMaxDisplayedMeter) {
+    WarnStepsDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1147: StepsDisplay clamped oversized meter.");
+    return kMaxDisplayedMeter;
+  }
+  return meter;
+}
+
+int SanitizeTickCount(int value, const char* context) {
+  if (value < 0) {
+    WarnStepsDisplayAuditFix(context);
+    return 0;
+  }
+  if (value > kMaxDisplayTicks) {
+    WarnStepsDisplayAuditFix(context);
+    return kMaxDisplayTicks;
+  }
+  return value;
+}
+
+bool IsSafeMeterFormat(const std::string& format) {
+  if (format.empty() || format.size() > 64) {
+    return false;
+  }
+  int conversions = 0;
+  for (size_t i = 0; i < format.size(); ++i) {
+    if (format[i] != '%') {
+      continue;
+    }
+    if (i + 1 < format.size() && format[i + 1] == '%') {
+      ++i;
+      continue;
+    }
+    ++conversions;
+    if (conversions > 1) {
+      return false;
+    }
+    size_t j = i + 1;
+    while (j < format.size() &&
+           std::string("-+ #0").find(format[j]) != std::string::npos) {
+      ++j;
+    }
+    int width = 0;
+    while (j < format.size() &&
+           std::isdigit(static_cast<unsigned char>(format[j]))) {
+      width = width * 10 + (format[j] - '0');
+      if (width > 12) {
+        return false;
+      }
+      ++j;
+    }
+    if (j < format.size() && format[j] == '.') {
+      ++j;
+      int precision = 0;
+      while (j < format.size() &&
+             std::isdigit(static_cast<unsigned char>(format[j]))) {
+        precision = precision * 10 + (format[j] - '0');
+        if (precision > 6) {
+          return false;
+        }
+        ++j;
+      }
+    }
+    if (j >= format.size()) {
+      return false;
+    }
+    if (std::string("diu").find(format[j]) == std::string::npos) {
+      return false;
+    }
+  }
+  return conversions == 1;
+}
+
+std::string FormatMeterText(const std::string& format, int meter) {
+  if (!IsSafeMeterFormat(format)) {
+    WarnStepsDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1146: StepsDisplay ignored unsafe MeterFormatString.");
+    return ssprintf("%d", meter);
+  }
+  return ssprintf(format.c_str(), meter);
+}
+}  // namespace
+
 StepsDisplay::StepsDisplay() {}
+
+StepsDisplay::StepsDisplay(const StepsDisplay& cpy)
+    : ActorFrame(cpy),
+      m_sMetricsGroup(cpy.m_sMetricsGroup),
+      m_sprFrame(cpy.m_sprFrame),
+      m_textTicks(cpy.m_textTicks),
+      m_textMeter(cpy.m_textMeter),
+      m_textDescription(cpy.m_textDescription),
+      m_textAuthor(cpy.m_textAuthor),
+      m_sprAutogen(cpy.m_sprAutogen),
+      m_sprStepsType(cpy.m_sprStepsType),
+      m_iNumTicks(cpy.m_iNumTicks),
+      m_iMaxTicks(cpy.m_iMaxTicks),
+      m_bShowTicks(cpy.m_bShowTicks),
+      m_bShowMeter(cpy.m_bShowMeter),
+      m_bShowDescription(cpy.m_bShowDescription),
+      m_bShowCredit(cpy.m_bShowCredit),
+      m_bShowAutogen(cpy.m_bShowAutogen),
+      m_bShowStepsType(cpy.m_bShowStepsType),
+      m_sZeroMeterString(cpy.m_sZeroMeterString),
+      m_sMeterFormatString(cpy.m_sMeterFormatString) {
+  DeleteAllChildren();
+  DeleteChildrenWhenDone(false);
+  if (m_sprFrame.IsLoaded()) {
+    AddChild(m_sprFrame);
+  }
+  if (m_bShowTicks) {
+    AddChild(&m_textTicks);
+  }
+  if (m_bShowMeter) {
+    AddChild(&m_textMeter);
+  }
+  if (m_bShowDescription) {
+    AddChild(&m_textDescription);
+  }
+  if (m_bShowCredit) {
+    AddChild(&m_textAuthor);
+  }
+  if (m_sprAutogen.IsLoaded()) {
+    AddChild(m_sprAutogen);
+  }
+  if (m_sprStepsType.IsLoaded()) {
+    AddChild(m_sprStepsType);
+  }
+}
+
+void StepsDisplay::ResetLoadedActors() {
+  RemoveChild(&m_textTicks);
+  RemoveChild(&m_textMeter);
+  RemoveChild(&m_textDescription);
+  RemoveChild(&m_textAuthor);
+  if (m_sprFrame.IsLoaded()) {
+    RemoveChild(m_sprFrame);
+    m_sprFrame.Unload();
+  }
+  if (m_sprAutogen.IsLoaded()) {
+    RemoveChild(m_sprAutogen);
+    m_sprAutogen.Unload();
+  }
+  if (m_sprStepsType.IsLoaded()) {
+    RemoveChild(m_sprStepsType);
+    m_sprStepsType.Unload();
+  }
+}
 
 /* sID experiment:
  *
@@ -49,7 +230,18 @@ StepsDisplay::StepsDisplay() {}
 
 void StepsDisplay::Load(
     const std::string& sMetricsGroup, const PlayerState* pPlayerState) {
-  m_sMetricsGroup = sMetricsGroup;
+  ResetLoadedActors();
+  m_sMetricsGroup = sMetricsGroup.empty() ? "StepsDisplay" : sMetricsGroup;
+  if (sMetricsGroup.empty()) {
+    WarnStepsDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1142: StepsDisplay fell back from empty metrics "
+        "group.");
+  }
+  if (THEME == nullptr) {
+    WarnStepsDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1142: StepsDisplay refused load without THEME.");
+    return;
+  }
 
   /* We can't use global ThemeMetric<std::string>s, because we can have multiple
    * StepsDisplays on screen at once, with different names. */
@@ -65,9 +257,11 @@ void StepsDisplay::Load(
   m_sMeterFormatString.Load(m_sMetricsGroup, "MeterFormatString");
 
   m_sprFrame.Load(THEME->GetPathG(m_sMetricsGroup, "frame"));
-  m_sprFrame->SetName("Frame");
-  ActorUtil::LoadAllCommandsAndSetXYAndOnCommand(m_sprFrame, m_sMetricsGroup);
-  this->AddChild(m_sprFrame);
+  if (m_sprFrame.IsLoaded()) {
+    m_sprFrame->SetName("Frame");
+    ActorUtil::LoadAllCommandsAndSetXYAndOnCommand(m_sprFrame, m_sMetricsGroup);
+    this->AddChild(m_sprFrame);
+  }
 
   if (m_bShowTicks) {
     std::string sChars = "10";  // on, off (todo: make this metricable -aj)
@@ -86,8 +280,10 @@ void StepsDisplay::Load(
         m_textMeter, m_sMetricsGroup);
     this->AddChild(&m_textMeter);
 
-    // These commands should have been loaded by SetXYAndOnCommand above.
-    ASSERT(m_textMeter.HasCommand("Set"));
+    if (!m_textMeter.HasCommand("Set")) {
+      WarnStepsDisplayAuditFix(
+          "SRC_AUDIT_FIX SRC-1143: StepsDisplay meter actor has no Set command.");
+    }
   }
 
   if (m_bShowDescription) {
@@ -125,7 +321,7 @@ void StepsDisplay::Load(
   // Play Load Command
   PlayerState* pPlayerState_ = const_cast<PlayerState*>(pPlayerState);
   Message msg("Load");
-  if (pPlayerState_) {
+  if (pPlayerState_ != nullptr && LUA != nullptr) {
     msg.SetParam("PlayerState", LuaReference::CreateFromPush(*pPlayerState_));
   }
   this->HandleMessage(msg);
@@ -134,6 +330,14 @@ void StepsDisplay::Load(
 }
 
 void StepsDisplay::SetFromGameState(PlayerNumber pn) {
+  if (GAMESTATE == nullptr || !IsValidStepsDisplayPlayer(pn)) {
+    WarnStepsDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1144: StepsDisplay ignored invalid game/player "
+        "state.");
+    SetFromStepsTypeAndMeterAndDifficultyAndCourseType(
+        StepsType_Invalid, 0, Difficulty_Invalid, CourseType_Invalid);
+    return;
+  }
   if (GAMESTATE->IsCourseMode()) {
     // figure out what course type is selected somehow.
     const Trail* pTrail = GAMESTATE->m_pCurTrail[pn];
@@ -192,6 +396,22 @@ void StepsDisplay::Unset() { this->SetVisible(false); }
 
 void StepsDisplay::SetFromStepsTypeAndMeterAndDifficultyAndCourseType(
     StepsType st, int iMeter, Difficulty dc, CourseType ct) {
+  if (!IsValidStepsTypeForDisplay(st)) {
+    WarnStepsDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1148: StepsDisplay reset invalid StepsType.");
+    st = StepsType_Invalid;
+  }
+  if (!IsValidDifficultyForDisplay(dc)) {
+    WarnStepsDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1148: StepsDisplay reset invalid Difficulty.");
+    dc = Difficulty_Invalid;
+  }
+  if (!IsValidCourseTypeForDisplay(ct)) {
+    WarnStepsDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1148: StepsDisplay reset invalid CourseType.");
+    ct = CourseType_Invalid;
+  }
+  iMeter = SanitizeMeterForDisplay(iMeter);
   SetParams params = {nullptr, nullptr, iMeter, st, dc, ct};
   SetInternal(params);
 }
@@ -199,20 +419,32 @@ void StepsDisplay::SetFromStepsTypeAndMeterAndDifficultyAndCourseType(
 void StepsDisplay::SetInternal(const SetParams& params) {
   this->SetVisible(true);
   Message msg("Set");
+  SetParams safeParams = params;
+  safeParams.iMeter = SanitizeMeterForDisplay(safeParams.iMeter);
+  if (!IsValidStepsTypeForDisplay(safeParams.st)) {
+    safeParams.st = StepsType_Invalid;
+  }
+  if (!IsValidDifficultyForDisplay(safeParams.dc)) {
+    safeParams.dc = Difficulty_Invalid;
+  }
+  if (!IsValidCourseTypeForDisplay(safeParams.ct)) {
+    safeParams.ct = CourseType_Invalid;
+  }
 
   std::string sCustomDifficulty;
-  if (params.pSteps) {
-    sCustomDifficulty = StepsToCustomDifficulty(params.pSteps);
-  } else if (params.pTrail) {
-    sCustomDifficulty = TrailToCustomDifficulty(params.pTrail);
+  if (safeParams.pSteps) {
+    sCustomDifficulty = StepsToCustomDifficulty(safeParams.pSteps);
+  } else if (safeParams.pTrail) {
+    sCustomDifficulty = TrailToCustomDifficulty(safeParams.pTrail);
   } else {
-    sCustomDifficulty = GetCustomDifficulty(params.st, params.dc, params.ct);
+    sCustomDifficulty =
+        GetCustomDifficulty(safeParams.st, safeParams.dc, safeParams.ct);
   }
   msg.SetParam("CustomDifficulty", sCustomDifficulty);
 
   std::string sDisplayDescription;
-  if (params.pSteps && params.pSteps->IsAnEdit()) {
-    sDisplayDescription = params.pSteps->GetDescription();
+  if (safeParams.pSteps && safeParams.pSteps->IsAnEdit()) {
+    sDisplayDescription = safeParams.pSteps->GetDescription();
   } else if (sCustomDifficulty.empty()) {
     sDisplayDescription = std::string();
   } else {
@@ -221,20 +453,24 @@ void StepsDisplay::SetInternal(const SetParams& params) {
   msg.SetParam("DisplayDescription", sDisplayDescription);
 
   std::string sDisplayCredit;
-  if (params.pSteps) {
-    sDisplayCredit = params.pSteps->GetCredit();
+  if (safeParams.pSteps) {
+    sDisplayCredit = safeParams.pSteps->GetCredit();
   }
 
-  if (params.pSteps) {
-    msg.SetParam("Steps", LuaReference::CreateFromPush(*(Steps*)params.pSteps));
+  if (safeParams.pSteps && LUA != nullptr) {
+    msg.SetParam(
+        "Steps", LuaReference::CreateFromPush(*(Steps*)safeParams.pSteps));
   }
-  if (params.pTrail) {
-    msg.SetParam("Trail", LuaReference::CreateFromPush(*(Trail*)params.pTrail));
+  if (safeParams.pTrail && LUA != nullptr) {
+    msg.SetParam(
+        "Trail", LuaReference::CreateFromPush(*(Trail*)safeParams.pTrail));
   }
-  msg.SetParam("Meter", params.iMeter);
-  msg.SetParam("StepsType", params.st);
+  msg.SetParam("Meter", safeParams.iMeter);
+  msg.SetParam("StepsType", safeParams.st);
 
-  m_sprFrame->HandleMessage(msg);
+  if (m_sprFrame.IsLoaded()) {
+    m_sprFrame->HandleMessage(msg);
+  }
 
   if (m_bShowTicks) {
     // todo: let themers handle the logic of tick text. -aj
@@ -242,21 +478,27 @@ void StepsDisplay::SetInternal(const SetParams& params) {
     char off = '0';
 
     std::string sNewText;
-    int iNumOn = std::min((int)m_iMaxTicks, params.iMeter);
+    const int maxTicks = SanitizeTickCount(
+        m_iMaxTicks,
+        "SRC_AUDIT_FIX SRC-1147: StepsDisplay clamped invalid MaxTicks.");
+    const int numTicks = SanitizeTickCount(
+        m_iNumTicks,
+        "SRC_AUDIT_FIX SRC-1147: StepsDisplay clamped invalid NumTicks.");
+    int iNumOn = std::min(maxTicks, safeParams.iMeter);
     sNewText.insert(sNewText.end(), iNumOn, on);
-    int iNumOff = std::max(0, m_iNumTicks - iNumOn);
+    int iNumOff = std::max(0, numTicks - iNumOn);
     sNewText.insert(sNewText.end(), iNumOff, off);
     m_textTicks.SetText(sNewText);
     m_textTicks.HandleMessage(msg);
   }
 
   if (m_bShowMeter) {
-    if (params.iMeter == 0)  // Unset calls with this
+    if (safeParams.iMeter == 0)  // Unset calls with this
     {
       m_textMeter.SetText(m_sZeroMeterString);
     } else {
       const std::string sMeter =
-          ssprintf(m_sMeterFormatString.GetValue().c_str(), params.iMeter);
+          FormatMeterText(m_sMeterFormatString.GetValue(), safeParams.iMeter);
       m_textMeter.SetText(sMeter);
       m_textMeter.HandleMessage(msg);
     }
@@ -272,13 +514,15 @@ void StepsDisplay::SetInternal(const SetParams& params) {
   }
 
   if (m_bShowAutogen) {
-    bool b = params.pSteps && params.pSteps->IsAutogen();
-    m_sprAutogen->HandleMessage(msg);
-    m_sprAutogen->SetVisible(b);
+    bool b = safeParams.pSteps && safeParams.pSteps->IsAutogen();
+    if (m_sprAutogen.IsLoaded()) {
+      m_sprAutogen->HandleMessage(msg);
+      m_sprAutogen->SetVisible(b);
+    }
   }
 
   if (m_bShowStepsType) {
-    if (params.st != StepsType_Invalid) {
+    if (safeParams.st != StepsType_Invalid && m_sprStepsType.IsLoaded()) {
       /*
       std::string sStepsType = GAMEMAN->GetStepsTypeInfo(params.st).szName;
       m_sprStepsType.Load( THEME->GetPathG(m_sMetricsGroup,"StepsType
@@ -298,7 +542,13 @@ void StepsDisplay::SetInternal(const SetParams& params) {
 class LunaStepsDisplay : public Luna<StepsDisplay> {
  public:
   static int Load(T* p, lua_State* L) {
-    p->Load(SArg(1), nullptr);
+    std::string metricsGroup = SArg(1);
+    if (metricsGroup.empty()) {
+      WarnStepsDisplayAuditFix(
+          "SRC_AUDIT_FIX SRC-1149: StepsDisplay Lua Load used fallback metrics "
+          "group.");
+    }
+    p->Load(metricsGroup, nullptr);
     COMMON_RETURN_SELF;
   }
   static int SetFromSteps(T* p, lua_State* L) {
