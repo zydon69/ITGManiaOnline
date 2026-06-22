@@ -36,6 +36,7 @@ enum PaneCategory {
 /** @brief An Actor that displays Song information. */
 class PaneDisplay : public ActorFrame {
  public:
+  PaneDisplay();
   virtual PaneDisplay* Copy() const;
 
   void Load(const std::string& sMetricsGroup, PlayerNumber pn);
@@ -47,6 +48,7 @@ class PaneDisplay : public ActorFrame {
   void PushSelf(lua_State* L);
 
  private:
+  void ResetLoadedActors();
   void GetPaneTextAndLevel(
       PaneCategory c, std::string& sTextOut, float& fLevelOut);
   void SetContent(PaneCategory c);
@@ -56,6 +58,7 @@ class PaneDisplay : public ActorFrame {
   ActorFrame m_ContentsFrame;
 
   PlayerNumber m_PlayerNumber;
+  bool m_bLoaded;
 
   LocalizedString EMPTY_MACHINE_HIGH_SCORE_NAME;
   LocalizedString NOT_AVAILABLE;

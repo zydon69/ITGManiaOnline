@@ -1,5 +1,6 @@
 #include "PaneDisplay.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cctype>
 #include <string>
@@ -67,6 +68,18 @@ static const Content_t g_Contents[NUM_PaneCategory] = {
 };
 
 namespace {
+void WarnPaneDisplayAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+void TracePaneDisplayAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Trace("%s", message);
+  }
+}
+
 bool IsValidPlayerNumber(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
 }
@@ -75,40 +88,123 @@ bool IsSafeCountFormat(const std::string& format) {
   if (format.empty() || format.size() > 64) {
     return false;
   }
+  int conversions = 0;
   for (size_t i = 0; i < format.size(); ++i) {
-    if (format[i] != '%' || (i + 1 < format.size() && format[i + 1] == '%')) {
-      if (format[i] == '%') {
-        ++i;
-      }
+    if (format[i] != '%') {
       continue;
     }
+    if (i + 1 < format.size() && format[i + 1] == '%') {
+      ++i;
+      continue;
+    }
+    ++conversions;
+    if (conversions > 1) {
+      return false;
+    }
     size_t j = i + 1;
-    while (j < format.size() && !std::isalpha(format[j])) {
-      if (std::isdigit(format[j]) && format[j] > '9') {
+    while (j < format.size() && std::string("-+ #0").find(format[j]) != std::string::npos) {
+      ++j;
+    }
+    int width = 0;
+    while (j < format.size() &&
+           std::isdigit(static_cast<unsigned char>(format[j]))) {
+      width = width * 10 + (format[j] - '0');
+      if (width > 12) {
         return false;
       }
       ++j;
     }
+    if (j < format.size() && format[j] == '.') {
+      ++j;
+      int precision = 0;
+      while (j < format.size() &&
+             std::isdigit(static_cast<unsigned char>(format[j]))) {
+        precision = precision * 10 + (format[j] - '0');
+        if (precision > 6) {
+          return false;
+        }
+        ++j;
+      }
+    }
     if (j >= format.size()) {
       return false;
     }
-    if (format[j] == 's' || format[j] == 'n' || format[j] == 'p') {
-      return false;
+    if (std::string("fFeEgG").find(format[j]) == std::string::npos) {
+        return false;
     }
   }
+  return conversions == 1;
+}
+
+float GetPaneMetricF(
+    const std::string& sMetricsGroup, const std::string& metric) {
+  if (THEME == nullptr) {
+    return 0.0f;
+  }
+  const float value = THEME->GetMetricF(sMetricsGroup, metric);
+  if (!std::isfinite(value)) {
+    WarnPaneDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1081: PaneDisplay used zero for non-finite layout "
+        "metric.");
+    return 0.0f;
+  }
+  return value;
+}
+
+PlayerNumber SafeMasterPlayerNumber() {
+  if (GAMESTATE == nullptr) {
+    return PLAYER_1;
+  }
+  const PlayerNumber pn = GAMESTATE->GetMasterPlayerNumber();
+  return IsValidPlayerNumber(pn) ? pn : PLAYER_1;
+}
+
+void ReleasePaneDisplayLua(Lua* L) {
+  if (LUA != nullptr && L != nullptr) {
+    LUA->Release(L);
+  }
+}
+
+bool GetPaneDisplayLuaAttr(
+    const XNode* pNode, const std::string& attr, PlayerNumber& pnOut) {
+  if (LUA == nullptr || pNode == nullptr) {
+    return false;
+  }
+  Lua* L = LUA->Get();
+  if (L == nullptr) {
+    return false;
+  }
+  const bool pushed = pNode->PushAttrValue(L, attr);
+  if (!pushed) {
+    lua_pop(L, 1);
+    ReleasePaneDisplayLua(L);
+    return false;
+  }
+  LuaHelpers::Pop(L, pnOut);
+  ReleasePaneDisplayLua(L);
   return true;
+}
+
+bool IsValidProfileSlotForPane(ProfileSlot slot) {
+  switch (slot) {
+    case ProfileSlot_Player1:
+    case ProfileSlot_Player2:
+    case ProfileSlot_Machine:
+      return true;
+    default:
+      return false;
+  }
 }
 
 std::string FormatPaneCount(const std::string& format, float value) {
   if (!std::isfinite(value)) {
-    LOG->Trace(
+    TracePaneDisplayAuditFix(
         "SRC_AUDIT_FIX SRC-269: PaneDisplay corrected non-finite pane count.");
     value = 0.0f;
   }
   if (!IsSafeCountFormat(format)) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX SRC-269: PaneDisplay ignored unsafe count format '%s'.",
-        format.c_str());
+    WarnPaneDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-269: PaneDisplay ignored unsafe count format.");
     return ssprintf("%.0f", value);
   }
   return ssprintf(format.c_str(), value);
@@ -117,49 +213,93 @@ std::string FormatPaneCount(const std::string& format, float value) {
 
 REGISTER_ACTOR_CLASS(PaneDisplay);
 
+PaneDisplay::PaneDisplay() {
+  m_PlayerNumber = PLAYER_1;
+  m_bLoaded = false;
+}
+
+void PaneDisplay::ResetLoadedActors() {
+  RemoveChild(&m_ContentsFrame);
+  FOREACH_ENUM(PaneCategory, pc) {
+    m_ContentsFrame.RemoveChild(&m_textContents[pc]);
+    if (m_Labels[pc].IsLoaded()) {
+      m_ContentsFrame.RemoveChild(m_Labels[pc]);
+      m_Labels[pc].Unload();
+    }
+  }
+  m_ContentsFrame.RemoveAllChildren();
+  m_bLoaded = false;
+}
+
 void PaneDisplay::Load(const std::string& sMetricsGroup, PlayerNumber pn) {
+  ResetLoadedActors();
+
+  std::string sResolvedMetricsGroup = sMetricsGroup;
+  if (sResolvedMetricsGroup.empty()) {
+    WarnPaneDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1081: PaneDisplay fell back from empty metrics "
+        "group.");
+    sResolvedMetricsGroup = "PaneDisplay";
+  }
+  if (THEME == nullptr) {
+    WarnPaneDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1081: PaneDisplay refused load without THEME.");
+    return;
+  }
+
   if (!IsValidPlayerNumber(pn)) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX SRC-267: PaneDisplay loaded with invalid player %i; "
-        "using PLAYER_1 for layout.",
-        pn);
+    WarnPaneDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-267: PaneDisplay loaded with invalid player; using "
+        "PLAYER_1 for layout.");
     pn = PLAYER_1;
   }
   m_PlayerNumber = pn;
 
   EMPTY_MACHINE_HIGH_SCORE_NAME.Load(
-      sMetricsGroup, "EmptyMachineHighScoreName");
-  NOT_AVAILABLE.Load(sMetricsGroup, "NotAvailable");
-  COUNT_FORMAT.Load(sMetricsGroup, "CountFormat");
-  NULL_COUNT_STRING.Load(sMetricsGroup, "NullCountString");
+      sResolvedMetricsGroup, "EmptyMachineHighScoreName");
+  NOT_AVAILABLE.Load(sResolvedMetricsGroup, "NotAvailable");
+  COUNT_FORMAT.Load(sResolvedMetricsGroup, "CountFormat");
+  NULL_COUNT_STRING.Load(sResolvedMetricsGroup, "NullCountString");
 
   FOREACH_ENUM(PaneCategory, pc) {
     LuaThreadVariable var("PaneCategory", LuaReference::Create(pc));
 
     std::string sFontType = g_Contents[pc].sFontType;
 
-    m_textContents[pc].LoadFromFont(THEME->GetPathF(sMetricsGroup, sFontType));
+    m_textContents[pc].LoadFromFont(
+        THEME->GetPathF(sResolvedMetricsGroup, sFontType));
     m_textContents[pc].SetName(PaneCategoryToString(pc) + "Text");
-    ActorUtil::LoadAllCommands(m_textContents[pc], sMetricsGroup);
-    ActorUtil::SetXY(m_textContents[pc], sMetricsGroup);
+    ActorUtil::LoadAllCommands(m_textContents[pc], sResolvedMetricsGroup);
+    ActorUtil::SetXY(m_textContents[pc], sResolvedMetricsGroup);
     m_ContentsFrame.AddChild(&m_textContents[pc]);
 
     m_Labels[pc].Load(
-        THEME->GetPathG(sMetricsGroup, "label " + PaneCategoryToString(pc)));
+        THEME->GetPathG(
+            sResolvedMetricsGroup, "label " + PaneCategoryToString(pc)));
     m_Labels[pc]->SetName(PaneCategoryToString(pc) + "Label");
-    ActorUtil::LoadAllCommands(*m_Labels[pc], sMetricsGroup);
-    ActorUtil::SetXY(m_Labels[pc], sMetricsGroup);
+    ActorUtil::LoadAllCommands(*m_Labels[pc], sResolvedMetricsGroup);
+    ActorUtil::SetXY(m_Labels[pc], sResolvedMetricsGroup);
     m_ContentsFrame.AddChild(m_Labels[pc]);
 
     ActorUtil::LoadAllCommandsFromName(
-        m_textContents[pc], sMetricsGroup, PaneCategoryToString(pc));
+        m_textContents[pc], sResolvedMetricsGroup, PaneCategoryToString(pc));
   }
 
-  m_ContentsFrame.SetXY(SHIFT_X(m_PlayerNumber), SHIFT_Y(m_PlayerNumber));
+  m_ContentsFrame.SetXY(
+      GetPaneMetricF(
+          sResolvedMetricsGroup, ssprintf("ShiftP%iX", m_PlayerNumber + 1)),
+      GetPaneMetricF(
+          sResolvedMetricsGroup, ssprintf("ShiftP%iY", m_PlayerNumber + 1)));
   this->AddChild(&m_ContentsFrame);
+  m_bLoaded = true;
 }
 
 void PaneDisplay::LoadFromNode(const XNode* pNode) {
+  if (pNode == nullptr) {
+    WarnPaneDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1080: PaneDisplay ignored null XML node.");
+    return;
+  }
   bool b;
 
   std::string sMetricsGroup;
@@ -170,25 +310,19 @@ void PaneDisplay::LoadFromNode(const XNode* pNode) {
         "PaneDisplay must have a MetricsGroup specified.");
   }
 
-  Lua* L = LUA->Get();
-  b = pNode->PushAttrValue(L, "PlayerNumber");
-  PlayerNumber pn;
+  PlayerNumber pn = SafeMasterPlayerNumber();
+  b = GetPaneDisplayLuaAttr(pNode, "PlayerNumber", pn);
   if (!b) {
-    lua_pop(L, 1);
-    pn = GAMESTATE->GetMasterPlayerNumber();
     LuaHelpers::ReportScriptError(
         "PaneDisplay must have a PlayerNumber specified.");
   } else {
-    LuaHelpers::Pop(L, pn);
     if (!IsValidPlayerNumber(pn)) {
-      LOG->Warn(
+      WarnPaneDisplayAuditFix(
           "SRC_AUDIT_FIX SRC-267: PaneDisplay ignored invalid PlayerNumber "
-          "%i from XML.",
-          pn);
-      pn = GAMESTATE->GetMasterPlayerNumber();
+          "from XML.");
+      pn = SafeMasterPlayerNumber();
     }
   }
-  LUA->Release(L);
 
   Load(sMetricsGroup, pn);
 
@@ -205,9 +339,16 @@ void PaneDisplay::GetPaneTextAndLevel(
     return;
   }
   if (!IsValidPlayerNumber(m_PlayerNumber)) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX SRC-267: PaneDisplay ignored invalid player %i.",
-        m_PlayerNumber);
+    WarnPaneDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-267: PaneDisplay ignored invalid player.");
+    sTextOut = NOT_AVAILABLE;
+    fLevelOut = 0;
+    return;
+  }
+  if (GAMESTATE == nullptr || PROFILEMAN == nullptr) {
+    WarnPaneDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1082: PaneDisplay skipped update without game or "
+        "profile manager.");
     sTextOut = NOT_AVAILABLE;
     fLevelOut = 0;
     return;
@@ -289,22 +430,36 @@ void PaneDisplay::GetPaneTextAndLevel(
 
     if (pSteps) {
       rv = pSteps->GetRadarValues(m_PlayerNumber);
+      if (pSong == nullptr) {
+        sTextOut = NOT_AVAILABLE;
+        return;
+      }
+      if (!IsValidProfileSlotForPane(slot)) {
+        sTextOut = NOT_AVAILABLE;
+        return;
+      }
       Profile* pProfileForScores = PROFILEMAN->GetProfile(slot);
       if (pProfileForScores == nullptr) {
-        LOG->Warn(
-            "SRC_AUDIT_FIX SRC-268: PaneDisplay missing profile slot %i.",
-            slot);
+        WarnPaneDisplayAuditFix(
+            "SRC_AUDIT_FIX SRC-268: PaneDisplay missing profile slot.");
         sTextOut = NOT_AVAILABLE;
         return;
       }
       pHSL = &pProfileForScores->GetStepsHighScoreList(pSong, pSteps);
     } else if (pTrail) {
       rv = pTrail->GetRadarValues();
+      if (pCourse == nullptr) {
+        sTextOut = NOT_AVAILABLE;
+        return;
+      }
+      if (!IsValidProfileSlotForPane(slot)) {
+        sTextOut = NOT_AVAILABLE;
+        return;
+      }
       Profile* pProfileForScores = PROFILEMAN->GetProfile(slot);
       if (pProfileForScores == nullptr) {
-        LOG->Warn(
-            "SRC_AUDIT_FIX SRC-268: PaneDisplay missing profile slot %i.",
-            slot);
+        WarnPaneDisplayAuditFix(
+            "SRC_AUDIT_FIX SRC-268: PaneDisplay missing profile slot.");
         sTextOut = NOT_AVAILABLE;
         return;
       }
@@ -400,14 +555,32 @@ void PaneDisplay::GetPaneTextAndLevel(
 }
 
 void PaneDisplay::SetContent(PaneCategory c) {
+  if (c < PaneCategory_NumSteps || c >= NUM_PaneCategory) {
+    WarnPaneDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1083: PaneDisplay ignored invalid SetContent "
+        "category.");
+    return;
+  }
   // these get filled in later:
   std::string str;
   float val;
 
   GetPaneTextAndLevel(c, str, val);
+  if (!std::isfinite(val)) {
+    val = 0.0f;
+  }
   m_textContents[c].SetText(str);
 
+  if (LUA == nullptr) {
+    m_textContents[c].PlayCommand("Level");
+    return;
+  }
+
   Lua* L = LUA->Get();
+  if (L == nullptr) {
+    m_textContents[c].PlayCommand("Level");
+    return;
+  }
 
   m_textContents[c].PushSelf(L);
   lua_pushstring(L, "PaneLevel");
@@ -421,6 +594,11 @@ void PaneDisplay::SetContent(PaneCategory c) {
 }
 
 void PaneDisplay::SetFromGameState() {
+  if (!m_bLoaded) {
+    TracePaneDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-1081: PaneDisplay skipped update before load.");
+    return;
+  }
   // Don't update text that doesn't apply to the current mode. It's still
   // tweening off.
   FOREACH_ENUM(PaneCategory, i)
