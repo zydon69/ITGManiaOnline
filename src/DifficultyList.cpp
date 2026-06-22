@@ -1,6 +1,7 @@
 #include "DifficultyList.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <vector>
 
@@ -14,6 +15,7 @@
 #include "LuaManager.h"
 #include "MessageManager.h"
 #include "PlayerNumber.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "Song.h"
 #include "SongUtil.h"
@@ -21,6 +23,7 @@
 #include "StepsDisplay.h"
 #include "StepsUtil.h"
 #include "Style.h"
+#include "ThemeManager.h"
 #include "XmlFile.h"
 #include "global.h"
 
@@ -32,6 +35,41 @@ inline constexpr int MAX_METERS =
     MAX_EDITS_PER_SONG;
 
 REGISTER_ACTOR_CLASS(StepsDisplayList);
+
+namespace {
+void WarnStepsDisplayListAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+bool IsValidListPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+int ClampShownItems(int value) {
+  if (value <= 0) {
+    WarnStepsDisplayListAuditFix(
+        "SRC_AUDIT_FIX SRC-1135: StepsDisplayList used one shown item.");
+    return 1;
+  }
+  if (value > MAX_METERS) {
+    WarnStepsDisplayListAuditFix(
+        "SRC_AUDIT_FIX SRC-1135: StepsDisplayList clamped NumShownItems.");
+    return MAX_METERS;
+  }
+  return value;
+}
+
+float SanitizeItemSpacing(float value) {
+  if (!std::isfinite(value)) {
+    WarnStepsDisplayListAuditFix(
+        "SRC_AUDIT_FIX SRC-1138: StepsDisplayList reset non-finite spacing.");
+    return 0.0f;
+  }
+  return value;
+}
+}  // namespace
 
 StepsDisplayList::StepsDisplayList() {
   m_bShown = true;
@@ -46,11 +84,39 @@ StepsDisplayList::StepsDisplayList() {
 
 StepsDisplayList::~StepsDisplayList() {}
 
+void StepsDisplayList::ResetLoadedActors() {
+  FOREACH_ENUM(PlayerNumber, pn) {
+    m_CursorFrames[pn].RemoveChild(m_Cursors[pn]);
+    RemoveChild(&m_CursorFrames[pn]);
+    if (m_Cursors[pn].IsLoaded()) {
+      m_Cursors[pn].Unload();
+    }
+    m_CursorFrames[pn].RemoveAllChildren();
+  }
+  for (Line& line : m_Lines) {
+    RemoveChild(&line.m_Meter);
+  }
+  m_Lines.clear();
+  m_Rows.clear();
+}
+
 void StepsDisplayList::LoadFromNode(const XNode* pNode) {
+  ResetLoadedActors();
+
+  if (pNode == nullptr) {
+    WarnStepsDisplayListAuditFix(
+        "SRC_AUDIT_FIX SRC-1132: StepsDisplayList ignored null XML node.");
+    return;
+  }
   ActorFrame::LoadFromNode(pNode);
 
   if (m_sName.empty()) {
     LuaHelpers::ReportScriptError("StepsDisplayList must have a Name");
+    return;
+  }
+  if (THEME == nullptr) {
+    WarnStepsDisplayListAuditFix(
+        "SRC_AUDIT_FIX SRC-1132: StepsDisplayList refused load without THEME.");
     return;
   }
 
@@ -60,7 +126,6 @@ void StepsDisplayList::LoadFromNode(const XNode* pNode) {
   MOVE_COMMAND.Load(m_sName, "MoveCommand");
 
   m_Lines.resize(MAX_METERS);
-  m_CurSong = nullptr;
 
   FOREACH_ENUM(PlayerNumber, pn) {
     const XNode* pChild = pNode->GetChild(ssprintf("CursorP%i", pn + 1));
@@ -103,6 +168,9 @@ void StepsDisplayList::LoadFromNode(const XNode* pNode) {
 }
 
 int StepsDisplayList::GetCurrentRowIndex(PlayerNumber pn) const {
+  if (GAMESTATE == nullptr || !IsValidListPlayer(pn)) {
+    return 0;
+  }
   Difficulty ClosestDifficulty = GAMESTATE->GetClosestShownDifficulty(pn);
 
   for (unsigned i = 0; i < m_Rows.size(); i++) {
@@ -124,10 +192,13 @@ int StepsDisplayList::GetCurrentRowIndex(PlayerNumber pn) const {
 
 // Update m_fY and m_bHidden[].
 void StepsDisplayList::UpdatePositions() {
+  if (GAMESTATE == nullptr || m_Rows.empty()) {
+    return;
+  }
   int iCurrentRow[NUM_PLAYERS];
   FOREACH_HumanPlayer(p) iCurrentRow[p] = GetCurrentRowIndex(p);
 
-  const int total = NUM_SHOWN_ITEMS;
+  const int total = ClampShownItems(NUM_SHOWN_ITEMS);
   const int halfsize = total / 2;
 
   int first_start, first_end, second_start, second_end;
@@ -211,7 +282,7 @@ void StepsDisplayList::UpdatePositions() {
 
     Row& row = Rows[i];
 
-    float fY = ITEMS_SPACING_Y * ItemPosition;
+    float fY = SanitizeItemSpacing(ITEMS_SPACING_Y) * ItemPosition;
     row.m_fY = fY;
     row.m_bHidden = i < first_start || (i >= first_end && i < second_start) ||
                     i >= second_end;
@@ -219,12 +290,14 @@ void StepsDisplayList::UpdatePositions() {
 }
 
 void StepsDisplayList::PositionItems() {
-  for (size_t i = 0; i < MAX_METERS; ++i) {
+  const size_t lineCount = m_Lines.size();
+  const size_t rowCount = std::min(m_Rows.size(), lineCount);
+  for (size_t i = 0; i < lineCount; ++i) {
     bool bUnused = (i >= m_Rows.size());
     m_Lines[i].m_Meter.SetVisible(!bUnused);
   }
 
-  for (size_t m = 0; m < m_Rows.size(); ++m) {
+  for (size_t m = 0; m < rowCount; ++m) {
     Row& row = m_Rows[m];
     bool bHidden = row.m_bHidden;
     if (!m_bShown) {
@@ -241,7 +314,7 @@ void StepsDisplayList::PositionItems() {
     m_Lines[m].m_Meter.SetY(row.m_fY);
   }
 
-  for (size_t m = 0; m < MAX_METERS; ++m) {
+  for (size_t m = 0; m < lineCount; ++m) {
     bool bHidden = true;
     if (m_bShown && m < m_Rows.size()) {
       bHidden = m_Rows[m].m_bHidden;
@@ -252,7 +325,13 @@ void StepsDisplayList::PositionItems() {
     m_Lines[m].m_Meter.SetDiffuseAlpha(fDiffuseAlpha);
   }
 
+  if (GAMESTATE == nullptr) {
+    return;
+  }
   FOREACH_HumanPlayer(pn) {
+    if (!IsValidListPlayer(pn) || !m_Cursors[pn].IsLoaded()) {
+      continue;
+    }
     int iCurrentRow = GetCurrentRowIndex(pn);
 
     float fY = 0;
@@ -266,6 +345,18 @@ void StepsDisplayList::PositionItems() {
 }
 
 void StepsDisplayList::SetFromGameState() {
+  if (GAMESTATE == nullptr) {
+    WarnStepsDisplayListAuditFix(
+        "SRC_AUDIT_FIX SRC-1134: StepsDisplayList ignored missing GAMESTATE.");
+    m_Rows.clear();
+    PositionItems();
+    return;
+  }
+  if (m_Lines.size() < MAX_METERS) {
+    WarnStepsDisplayListAuditFix(
+        "SRC_AUDIT_FIX SRC-1133: StepsDisplayList ignored update before load.");
+    return;
+  }
   const Song* pSong = GAMESTATE->m_pCurSong;
   unsigned i = 0;
 
@@ -275,12 +366,27 @@ void StepsDisplayList::SetFromGameState() {
     // DIFFICULTIES_TO_SHOW.
     const std::vector<Difficulty>& difficulties =
         CommonMetrics::DIFFICULTIES_TO_SHOW.GetValue();
-    m_Rows.resize(difficulties.size());
+    const Style* style = GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
+    if (style == nullptr) {
+      WarnStepsDisplayListAuditFix(
+          "SRC_AUDIT_FIX SRC-1136: StepsDisplayList fell back without style.");
+      m_Rows.clear();
+      PositionItems();
+      return;
+    }
+    if (difficulties.size() > MAX_METERS) {
+      WarnStepsDisplayListAuditFix(
+          "SRC_AUDIT_FIX SRC-1137: StepsDisplayList truncated difficulties.");
+    }
+    m_Rows.clear();
+    m_Rows.resize(std::min<size_t>(difficulties.size(), MAX_METERS));
     for (const Difficulty& d : difficulties) {
+      if (i >= m_Rows.size()) {
+        break;
+      }
       m_Rows[i].m_dc = d;
       m_Lines[i].m_Meter.SetFromStepsTypeAndMeterAndDifficultyAndCourseType(
-          GAMESTATE->GetCurrentStyle(PLAYER_INVALID)->m_StepsType, 0, d,
-          CourseType_Invalid);
+          style->m_StepsType, 0, d, CourseType_Invalid);
       ++i;
     }
   } else {
@@ -288,8 +394,16 @@ void StepsDisplayList::SetFromGameState() {
     SongUtil::GetPlayableSteps(pSong, vpSteps);
     // Should match the sort in ScreenSelectMusic::AfterMusicChange.
 
-    m_Rows.resize(vpSteps.size());
+    if (vpSteps.size() > MAX_METERS) {
+      WarnStepsDisplayListAuditFix(
+          "SRC_AUDIT_FIX SRC-1137: StepsDisplayList truncated playable steps.");
+    }
+    m_Rows.clear();
+    m_Rows.resize(std::min<size_t>(vpSteps.size(), MAX_METERS));
     for (const Steps* s : vpSteps) {
+      if (i >= m_Rows.size()) {
+        break;
+      }
       // LOG->Trace(ssprintf("setting steps for row %i",i));
       m_Rows[i].m_Steps = s;
       m_Lines[i].m_Meter.SetFromSteps(s);
@@ -310,7 +424,8 @@ void StepsDisplayList::SetFromGameState() {
 }
 
 void StepsDisplayList::HideRows() {
-  for (unsigned m = 0; m < m_Rows.size(); ++m) {
+  const size_t rowCount = std::min(m_Rows.size(), m_Lines.size());
+  for (size_t m = 0; m < rowCount; ++m) {
     Line& l = m_Lines[m];
 
     l.m_Meter.FinishTweening();
@@ -319,15 +434,22 @@ void StepsDisplayList::HideRows() {
 }
 
 void StepsDisplayList::TweenOnScreen() {
-  FOREACH_HumanPlayer(pn) ON_COMMAND(m_Cursors[pn]);
+  if (GAMESTATE != nullptr) {
+    FOREACH_HumanPlayer(pn) {
+      if (m_Cursors[pn].IsLoaded()) {
+        ON_COMMAND(m_Cursors[pn]);
+      }
+    }
+  }
 
-  for (size_t m = 0; m < MAX_METERS; ++m) {
+  for (size_t m = 0; m < m_Lines.size(); ++m) {
     ON_COMMAND(m_Lines[m].m_Meter);
   }
 
   this->SetHibernate(0.5f);
   m_bShown = true;
-  for (unsigned m = 0; m < m_Rows.size(); ++m) {
+  const size_t rowCount = std::min(m_Rows.size(), m_Lines.size());
+  for (size_t m = 0; m < rowCount; ++m) {
     Line& l = m_Lines[m];
 
     l.m_Meter.FinishTweening();
@@ -336,10 +458,26 @@ void StepsDisplayList::TweenOnScreen() {
   HideRows();
   PositionItems();
 
-  FOREACH_HumanPlayer(pn) COMMAND(m_Cursors[pn], "TweenOn");
+  if (GAMESTATE != nullptr) {
+    FOREACH_HumanPlayer(pn) {
+      if (m_Cursors[pn].IsLoaded()) {
+        COMMAND(m_Cursors[pn], "TweenOn");
+      }
+    }
+  }
 }
 
-void StepsDisplayList::TweenOffScreen() {}
+void StepsDisplayList::TweenOffScreen() {
+  m_bShown = false;
+  PositionItems();
+  if (GAMESTATE != nullptr) {
+    FOREACH_HumanPlayer(pn) {
+      if (m_Cursors[pn].IsLoaded()) {
+        COMMAND(m_Cursors[pn], "TweenOff");
+      }
+    }
+  }
+}
 
 void StepsDisplayList::Show() {
   m_bShown = true;
@@ -349,14 +487,26 @@ void StepsDisplayList::Show() {
   HideRows();
   PositionItems();
 
-  FOREACH_HumanPlayer(pn) COMMAND(m_Cursors[pn], "Show");
+  if (GAMESTATE != nullptr) {
+    FOREACH_HumanPlayer(pn) {
+      if (m_Cursors[pn].IsLoaded()) {
+        COMMAND(m_Cursors[pn], "Show");
+      }
+    }
+  }
 }
 
 void StepsDisplayList::Hide() {
   m_bShown = false;
   PositionItems();
 
-  FOREACH_HumanPlayer(pn) COMMAND(m_Cursors[pn], "Hide");
+  if (GAMESTATE != nullptr) {
+    FOREACH_HumanPlayer(pn) {
+      if (m_Cursors[pn].IsLoaded()) {
+        COMMAND(m_Cursors[pn], "Hide");
+      }
+    }
+  }
 }
 
 void StepsDisplayList::HandleMessage(const Message& msg) {

@@ -39,6 +39,7 @@ class StepsDisplayList : public ActorFrame {
   void PositionItems();
   int GetCurrentRowIndex(PlayerNumber pn) const;
   void HideRows();
+  void ResetLoadedActors();
 
   ThemeMetric<float> ITEMS_SPACING_Y;
   ThemeMetric<int> NUM_SHOWN_ITEMS;
@@ -54,7 +55,6 @@ class StepsDisplayList : public ActorFrame {
   };
   std::vector<Line> m_Lines;
 
-  const Song* m_CurSong;
   bool m_bShown;
 
   struct Row {
