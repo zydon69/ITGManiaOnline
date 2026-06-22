@@ -1,5 +1,23 @@
 local index = Var("GameCommand"):GetIndex()
 local has_focus = false
+local focus_tween_seconds = 0.1
+
+local function GetTextColor()
+	if has_focus then
+		if ThemePrefs.Get("VisualStyle") == "SRPG9" then
+			return GetCurrentColor(true)
+		end
+		return PlayerColor(PLAYER_2)
+	end
+
+	if ThemePrefs.Get("RainbowMode") then
+		return Color.White
+	end
+	if ThemePrefs.Get("VisualStyle") == "SRPG9" then
+		return color(SL.SRPG9.TextColor)
+	end
+	return color("#888888")
+end
 
 local t = Def.ActorFrame{}
 
@@ -25,36 +43,19 @@ t[#t+1] = LoadFont("Common Bold")..{
 		self:playcommand("UpdateColor")
 	end,
 	UpdateColorCommand=function(self)
-		if has_focus then
-			local textColor = PlayerColor(PLAYER_2)
-			if ThemePrefs.Get("VisualStyle") == "SRPG9" then
-				textColor = GetCurrentColor(true)
-			end
-			self:diffuse(textColor)
-		else
-			local textColor = color("#888888")
-			if ThemePrefs.Get("RainbowMode") then
-				textColor = Color.White
-			end
-			if ThemePrefs.Get("VisualStyle") == "SRPG9" then
-				textColor = color(SL.SRPG9.TextColor)
-			end
-			self:diffuse(textColor)
-		end
+		self:diffuse(GetTextColor())
 	end,
 
 	GainFocusCommand=function(self)
 		has_focus = true
-		self:stoptweening():decelerate(0.1):zoom(0.5)
+		self:stoptweening():decelerate(focus_tween_seconds):zoom(0.5):diffuse(GetTextColor())
 		self:accelerate(0.1):glow(1,1,1,0.5)
 		self:decelerate(0.05):glow(1,1,1,0)
-		self:playcommand("UpdateColor")
 	end,
 	LoseFocusCommand=function(self)
 		has_focus = false
-		self:stoptweening():decelerate(0.1):zoom(0.4)
+		self:stoptweening():decelerate(focus_tween_seconds):zoom(0.4):diffuse(GetTextColor())
 		self:accelerate(0.1):glow(1,1,1,0)
-		self:playcommand("UpdateColor")
 	end
 }
 
