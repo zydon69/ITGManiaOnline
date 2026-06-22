@@ -7,7 +7,9 @@
 class LyricDisplay : public ActorFrame {
  public:
   LyricDisplay();
-  void Update(float fDeltaTime);
+  LyricDisplay(const LyricDisplay& cpy);
+  virtual LyricDisplay* Copy() const override;
+  void Update(float fDeltaTime) override;
 
   // Call when song changes:
   void Init();
@@ -16,6 +18,9 @@ class LyricDisplay : public ActorFrame {
   void Stop();
 
  private:
+  void AttachLyricActors();
+  void LoadLyricActor(BitmapText& text, const std::string& name);
+
   BitmapText m_textLyrics[2];
   unsigned m_iCurLyricNumber;
   float m_fLastSecond;

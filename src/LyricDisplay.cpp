@@ -1,12 +1,14 @@
 #include "LyricDisplay.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "ActorFrame.h"
 #include "ActorUtil.h"
 #include "GameState.h"
 #include "LuaManager.h"
 #include "LuaReference.h"
+#include "RageLog.h"
 #include "Song.h"
 #include "ThemeManager.h"
 #include "ThemeMetric.h"
@@ -14,18 +16,84 @@
 static ThemeMetric<float> IN_LENGTH("LyricDisplay", "InLength");
 static ThemeMetric<float> OUT_LENGTH("LyricDisplay", "OutLength");
 
+namespace {
+const float MAX_LYRIC_TWEEN_LENGTH_SECONDS = 60.0f;
+const float MAX_LYRIC_SHOW_LENGTH_SECONDS = 600.0f;
+const float FALLBACK_MUSIC_RATE = 1.0f;
+const size_t MAX_LYRIC_TEXT_CHARS = 4096;
+
+void WarnLyricDisplay(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+float SanitizeLyricTweenLength(float value) {
+  if (!std::isfinite(value) || value < 0.0f) {
+    return 0.0f;
+  }
+  return std::min(value, MAX_LYRIC_TWEEN_LENGTH_SECONDS);
+}
+
+float SanitizeLyricShowLength(float value) {
+  if (!std::isfinite(value) || value < 0.0f) {
+    return 0.0f;
+  }
+  return std::min(value, MAX_LYRIC_SHOW_LENGTH_SECONDS);
+}
+
+float SanitizeMusicRate(float value) {
+  if (!std::isfinite(value) || value <= 0.0f) {
+    return FALLBACK_MUSIC_RATE;
+  }
+  return value;
+}
+
+std::string SanitizeLyricText(const std::string& lyric) {
+  if (lyric.size() <= MAX_LYRIC_TEXT_CHARS) {
+    return lyric;
+  }
+  return lyric.substr(0, MAX_LYRIC_TEXT_CHARS);
+}
+}  // namespace
+
 LyricDisplay::LyricDisplay() {
-  m_textLyrics[0].SetName("LyricBack");
-  ActorUtil::LoadAllCommands(m_textLyrics[0], "LyricDisplay");
-  m_textLyrics[0].LoadFromFont(THEME->GetPathF("LyricDisplay", "text"));
-  this->AddChild(&m_textLyrics[0]);
-
-  m_textLyrics[1].SetName("LyricFront");
-  ActorUtil::LoadAllCommands(m_textLyrics[1], "LyricDisplay");
-  m_textLyrics[1].LoadFromFont(THEME->GetPathF("LyricDisplay", "text"));
-  this->AddChild(&m_textLyrics[1]);
-
+  LoadLyricActor(m_textLyrics[0], "LyricBack");
+  LoadLyricActor(m_textLyrics[1], "LyricFront");
+  AttachLyricActors();
   Init();
+}
+
+LyricDisplay::LyricDisplay(const LyricDisplay& cpy) : ActorFrame(cpy) {
+  m_textLyrics[0] = cpy.m_textLyrics[0];
+  m_textLyrics[1] = cpy.m_textLyrics[1];
+  m_iCurLyricNumber = cpy.m_iCurLyricNumber;
+  m_fLastSecond = cpy.m_fLastSecond;
+  m_bStopped = cpy.m_bStopped;
+  AttachLyricActors();
+}
+
+LyricDisplay* LyricDisplay::Copy() const { return new LyricDisplay(*this); }
+
+void LyricDisplay::AttachLyricActors() {
+  RemoveAllChildren();
+  this->AddChild(&m_textLyrics[0]);
+  this->AddChild(&m_textLyrics[1]);
+}
+
+void LyricDisplay::LoadLyricActor(BitmapText& text, const std::string& name) {
+  text.SetName(name);
+  if (THEME == nullptr) {
+    WarnLyricDisplay(
+        "SRC_AUDIT_FIX SRC-1243: LyricDisplay loaded without theme manager.");
+    return;
+  }
+
+  ActorUtil::LoadAllCommands(text, "LyricDisplay");
+  if (!text.LoadFromFont(THEME->GetPathF("LyricDisplay", "text"))) {
+    WarnLyricDisplay(
+        "SRC_AUDIT_FIX SRC-1244: LyricDisplay failed to load lyric font.");
+  }
 }
 
 void LyricDisplay::Init() {
@@ -47,53 +115,79 @@ void LyricDisplay::Update(float fDeltaTime) {
 
   ActorFrame::Update(fDeltaTime);
 
-  if (GAMESTATE->m_pCurSong == nullptr) {
+  if (GAMESTATE == nullptr || GAMESTATE->m_pCurSong == nullptr) {
+    return;
+  }
+
+  const float fMusicSeconds = GAMESTATE->m_Position.m_fMusicSeconds;
+  if (!std::isfinite(fMusicSeconds)) {
+    WarnLyricDisplay(
+        "SRC_AUDIT_FIX SRC-1246: LyricDisplay ignored non-finite music time.");
     return;
   }
 
   // If the song has changed (in a course), reset.
-  if (GAMESTATE->m_Position.m_fMusicSeconds < m_fLastSecond) {
+  if (fMusicSeconds < m_fLastSecond) {
     Init();
   }
-  m_fLastSecond = GAMESTATE->m_Position.m_fMusicSeconds;
+  m_fLastSecond = fMusicSeconds;
 
-  if (m_iCurLyricNumber >= GAMESTATE->m_pCurSong->m_LyricSegments.size()) {
+  const Song* pSong = GAMESTATE->m_pCurSong;
+  if (m_iCurLyricNumber >= pSong->m_LyricSegments.size()) {
     return;
   }
 
-  const Song* pSong = GAMESTATE->m_pCurSong;
-  const float fStartTime =
-      (pSong->m_LyricSegments[m_iCurLyricNumber].m_fStartTime) -
-      IN_LENGTH.GetValue();
+  const LyricSegment& seg = pSong->m_LyricSegments[m_iCurLyricNumber];
+  const float fLyricStartTime = seg.m_fStartTime;
+  if (!std::isfinite(fLyricStartTime)) {
+    WarnLyricDisplay(
+        "SRC_AUDIT_FIX SRC-1248: LyricDisplay skipped non-finite lyric "
+        "segment.");
+    m_iCurLyricNumber++;
+    return;
+  }
 
-  if (GAMESTATE->m_Position.m_fMusicSeconds < fStartTime) {
+  const float fInLength = SanitizeLyricTweenLength(IN_LENGTH.GetValue());
+  const float fOutLength = SanitizeLyricTweenLength(OUT_LENGTH.GetValue());
+  const float fStartTime = fLyricStartTime - fInLength;
+
+  if (fMusicSeconds < fStartTime) {
     return;
   }
 
   // Clamp this lyric to the beginning of the next or the end of the music.
   float fEndTime;
-  if (m_iCurLyricNumber + 1 < GAMESTATE->m_pCurSong->m_LyricSegments.size()) {
+  if (m_iCurLyricNumber + 1 < pSong->m_LyricSegments.size()) {
     fEndTime = pSong->m_LyricSegments[m_iCurLyricNumber + 1].m_fStartTime;
   } else {
     fEndTime = pSong->GetLastSecond();
   }
+  if (!std::isfinite(fEndTime)) {
+    fEndTime = fLyricStartTime;
+  }
 
-  const float fDistance =
-      fEndTime - pSong->m_LyricSegments[m_iCurLyricNumber].m_fStartTime;
-  const float fTweenBufferTime = IN_LENGTH.GetValue() + OUT_LENGTH.GetValue();
+  const float fDistance = std::max(fEndTime - fLyricStartTime, 0.0f);
+  const float fTweenBufferTime = fInLength + fOutLength;
 
   /* If it's negative, two lyrics are so close together that there's no time
    * to tween properly. Lyrics should never be this brief, anyway, so just
    * skip it. */
-  float fShowLength = std::max(fDistance - fTweenBufferTime, 0.0f);
+  float fShowLength = SanitizeLyricShowLength(fDistance - fTweenBufferTime);
 
   // Make lyrics show faster for faster song rates.
-  fShowLength /= GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
+  fShowLength = SanitizeLyricShowLength(
+      fShowLength /
+      SanitizeMusicRate(GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate));
 
-  const LyricSegment& seg =
-      GAMESTATE->m_pCurSong->m_LyricSegments[m_iCurLyricNumber];
+  if (LUA == nullptr) {
+    WarnLyricDisplay(
+        "SRC_AUDIT_FIX SRC-1250: LyricDisplay skipped lyric without Lua "
+        "manager.");
+    m_iCurLyricNumber++;
+    return;
+  }
 
-  LuaThreadVariable var1("LyricText", seg.m_sLyric);
+  LuaThreadVariable var1("LyricText", SanitizeLyricText(seg.m_sLyric));
   LuaThreadVariable var2("LyricDuration", LuaReference::Create(fShowLength));
   LuaThreadVariable var3("LyricColor", LuaReference::Create(seg.m_Color));
 
