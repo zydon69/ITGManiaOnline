@@ -55,6 +55,30 @@ class OddDimensionWarningGuard {
 bool IsFiniteFloat(float value) {
   return std::isfinite(value);
 }
+
+void WarnBannerAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+void WarnBannerAuditFix(const std::string& message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message.c_str());
+  }
+}
+
+std::string GetBannerThemePath(
+    const std::string& category, const std::string& name) {
+  if (THEME == nullptr) {
+    WarnBannerAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-1046: Banner cannot resolve theme path %s/%s "
+        "without THEME.",
+        category.c_str(), name.c_str()));
+    return std::string();
+  }
+  return THEME->GetPathG(category, name);
+}
 }  // namespace
 
 Banner::Banner() {
@@ -70,7 +94,7 @@ Banner::Banner() {
 // banner.
 void Banner::Load(RageTextureID ID, bool bIsBanner) {
   if (ID.filename == "") {
-    LoadFallback();
+    Sprite::Load(RageTextureID());
     return;
   }
 
@@ -119,10 +143,10 @@ void Banner::Update(float fDeltaTime) {
     const float divisor = SCROLL_SPEED_DIVISOR;
     if (!IsFiniteFloat(divisor) || divisor <= 0.0f ||
         !IsFiniteFloat(fDeltaTime) || !IsFiniteFloat(m_fPercentScrolling)) {
-      LOG->Warn(
+      WarnBannerAuditFix(ssprintf(
           "SRC_AUDIT_FIX SRC-723: Banner disabled invalid scrolling state "
           "divisor=%.6f delta=%.6f percent=%.6f.",
-          divisor, fDeltaTime, m_fPercentScrolling);
+          divisor, fDeltaTime, m_fPercentScrolling));
       m_bScrolling = false;
       m_fPercentScrolling = 0.0f;
       return;
@@ -134,7 +158,7 @@ void Banner::Update(float fDeltaTime) {
 
     const RectF* pTextureRect = GetCurrentTextureCoordRect();
     if (pTextureRect == nullptr) {
-      LOG->Warn(
+      WarnBannerAuditFix(
           "SRC_AUDIT_FIX SRC-723: Banner skipped scrolling because no texture "
           "coord rect is available.");
       return;
@@ -153,10 +177,10 @@ void Banner::Update(float fDeltaTime) {
 void Banner::SetScrolling(bool bScroll, float Percent) {
   m_bScrolling = bScroll;
   if (!IsFiniteFloat(Percent)) {
-    LOG->Warn(
+    WarnBannerAuditFix(ssprintf(
         "SRC_AUDIT_FIX SRC-723: Banner clamped non-finite scrolling percent "
         "%.6f.",
-        Percent);
+        Percent));
     Percent = 0.0f;
   }
   m_fPercentScrolling = Percent - std::floor(Percent);
@@ -179,16 +203,16 @@ void Banner::LoadFromSong(Song* pSong)  // nullptr means no song
 }
 
 void Banner::LoadMode() {
-  Load(THEME->GetPathG("Banner", "Mode"));
+  Load(GetBannerThemePath("Banner", "Mode"));
   m_bScrolling = (bool)SCROLL_MODE;
 }
 
 void Banner::LoadFromSongGroup(std::string sSongGroup) {
   if (SONGMAN == nullptr) {
-    LOG->Warn(
+    WarnBannerAuditFix(ssprintf(
         "SRC_AUDIT_FIX SRC-724: Banner cannot load group '%s' without "
         "SONGMAN.",
-        sSongGroup.c_str());
+        sSongGroup.c_str()));
     LoadGroupFallback();
     m_bScrolling = false;
     return;
@@ -245,40 +269,48 @@ void Banner::LoadBannerFromUnlockEntry(const UnlockEntry* pUE) {
     LoadFallback();
   } else {
     std::string sFile = pUE->GetBannerFile();
-    Load(sFile);
+    if (sFile.empty()) {
+      LoadFallback();
+    } else {
+      Load(sFile);
+    }
     m_bScrolling = false;
   }
 }
 
 void Banner::LoadBackgroundFromUnlockEntry(const UnlockEntry* pUE) {
   if (pUE == nullptr) {
-    LoadFallback();
+    LoadFallbackBG();
   } else {
     std::string sFile = pUE->GetBackgroundFile();
-    Load(sFile);
+    if (sFile.empty()) {
+      LoadFallbackBG();
+    } else {
+      Load(sFile);
+    }
     m_bScrolling = false;
   }
 }
 
 void Banner::LoadFallback() {
-  Load(THEME->GetPathG("Common", "fallback banner"));
+  Load(GetBannerThemePath("Common", "fallback banner"));
 }
 
 void Banner::LoadFallbackBG() {
-  Load(THEME->GetPathG("Common", "fallback background"));
+  Load(GetBannerThemePath("Common", "fallback background"));
 }
 
 void Banner::LoadGroupFallback() {
-  Load(THEME->GetPathG("Banner", "group fallback"));
+  Load(GetBannerThemePath("Banner", "group fallback"));
 }
 
 void Banner::LoadCourseFallback() {
-  Load(THEME->GetPathG("Banner", "course fallback"));
+  Load(GetBannerThemePath("Banner", "course fallback"));
 }
 
 void Banner::LoadFallbackCharacterIcon() {
   if (CHARMAN == nullptr) {
-    LOG->Warn(
+    WarnBannerAuditFix(
         "SRC_AUDIT_FIX SRC-724: Banner cannot load fallback character icon "
         "without CHARMAN.");
     LoadFallback();
@@ -294,12 +326,12 @@ void Banner::LoadFallbackCharacterIcon() {
 }
 
 void Banner::LoadRoulette() {
-  Load(THEME->GetPathG("Banner", "roulette"));
+  Load(GetBannerThemePath("Banner", "roulette"));
   m_bScrolling = (bool)SCROLL_ROULETTE;
 }
 
 void Banner::LoadRandom() {
-  Load(THEME->GetPathG("Banner", "random"));
+  Load(GetBannerThemePath("Banner", "random"));
   m_bScrolling = (bool)SCROLL_RANDOM;
 }
 
@@ -316,18 +348,18 @@ void Banner::LoadFromSortOrder(SortOrder so) {
     case SORT_RECENT:
     case SORT_RECENT_P1:
     case SORT_RECENT_P2:
-      Load(THEME->GetPathG(
+      Load(GetBannerThemePath(
           "Banner", ssprintf("%s", SortOrderToString(SORT_RECENT).c_str())));
       break;
     case SORT_POPULARITY:
     case SORT_POPULARITY_P1:
     case SORT_POPULARITY_P2:
-      Load(THEME->GetPathG(
+      Load(GetBannerThemePath(
           "Banner",
           ssprintf("%s", SortOrderToString(SORT_POPULARITY).c_str())));
       break;
     default:
-      Load(THEME->GetPathG(
+      Load(GetBannerThemePath(
           "Banner", ssprintf("%s", SortOrderToString(so).c_str())));
       break;
   }

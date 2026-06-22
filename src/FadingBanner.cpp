@@ -1,5 +1,6 @@
 #include "FadingBanner.h"
 
+#include <cmath>
 #include <string>
 
 #include "Actor.h"
@@ -24,6 +25,42 @@
 
 REGISTER_ACTOR_CLASS(FadingBanner);
 
+namespace {
+bool IsFiniteFloat(float value) {
+  return std::isfinite(value);
+}
+
+void WarnFadingBannerAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+void WarnFadingBannerAuditFix(const std::string& message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message.c_str());
+  }
+}
+
+void TraceFadingBannerAuditFix(const std::string& message) {
+  if (LOG != nullptr) {
+    LOG->Trace("%s", message.c_str());
+  }
+}
+
+std::string GetFadingBannerThemePath(
+    const std::string& category, const std::string& name) {
+  if (THEME == nullptr) {
+    WarnFadingBannerAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-1048: FadingBanner cannot resolve theme path %s/%s "
+        "without THEME.",
+        category.c_str(), name.c_str()));
+    return std::string();
+  }
+  return THEME->GetPathG(category, name);
+}
+}  // namespace
+
 /* Allow fading from one banner to another. We can handle two fades at once;
  * this is used to fade from an old banner to a low-quality banner to a high-
  * quality banner smoothly.
@@ -42,12 +79,25 @@ FadingBanner::FadingBanner() {
 }
 
 void FadingBanner::ScaleToClipped(float fWidth, float fHeight) {
+  if (!IsFiniteFloat(fWidth) || !IsFiniteFloat(fHeight) || fWidth < 0.0f ||
+      fHeight < 0.0f) {
+    WarnFadingBannerAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-1047: FadingBanner ignored invalid clip size "
+        "%.6fx%.6f.",
+        fWidth, fHeight));
+    return;
+  }
   for (int i = 0; i < NUM_BANNERS; i++) {
     m_Banner[i].ScaleToClipped(fWidth, fHeight);
   }
 }
 
 void FadingBanner::UpdateInternal(float fDeltaTime) {
+  if (!IsFiniteFloat(fDeltaTime)) {
+    WarnFadingBannerAuditFix(
+        "SRC_AUDIT_FIX SRC-1047: FadingBanner ignored non-finite delta.");
+    return;
+  }
   // update children manually
   // ActorFrame::UpdateInternal( fDeltaTime );
   Actor::UpdateInternal(fDeltaTime);
@@ -153,10 +203,10 @@ bool FadingBanner::LoadFromCachedBanner(const std::string& path) {
      * we'll get called again and load the real banner. */
 
     if (m_bMovingFast) {
-      LOG->Trace(
+      TraceFadingBannerAuditFix(ssprintf(
           "SRC_AUDIT_FIX SRC-727: FadingBanner deferred uncached banner '%s' "
           "while moving fast.",
-          path.c_str());
+          path.c_str()));
       return false;
     }
 
@@ -197,10 +247,10 @@ void FadingBanner::LoadMode() {
 
 void FadingBanner::LoadFromSongGroup(std::string sSongGroup) {
   if (SONGMAN == nullptr) {
-    LOG->Warn(
+    WarnFadingBannerAuditFix(ssprintf(
         "SRC_AUDIT_FIX SRC-728: FadingBanner cannot load group '%s' without "
         "SONGMAN.",
-        sSongGroup.c_str());
+        sSongGroup.c_str()));
     LoadFallback();
     return;
   }
@@ -229,6 +279,11 @@ void FadingBanner::LoadFromCourse(const Course* pCourse) {
 void FadingBanner::LoadIconFromCharacter(Character* pCharacter) {
   BeforeChange();
   m_Banner[m_iIndexLatest].LoadIconFromCharacter(pCharacter);
+}
+
+void FadingBanner::LoadCardFromCharacter(Character* pCharacter) {
+  BeforeChange();
+  m_Banner[m_iIndexLatest].LoadCardFromCharacter(pCharacter);
 }
 
 void FadingBanner::LoadBannerFromUnlockEntry(const UnlockEntry* pUE) {
@@ -264,16 +319,16 @@ void FadingBanner::LoadCourseFallback() {
 }
 
 void FadingBanner::LoadCustom(std::string sBanner) {
-  if (THEME == nullptr || sBanner.empty()) {
-    LOG->Warn(
+  if (sBanner.empty()) {
+    WarnFadingBannerAuditFix(ssprintf(
         "SRC_AUDIT_FIX SRC-728: FadingBanner refused custom banner '%s'.",
-        sBanner.c_str());
+        sBanner.c_str()));
     LoadFallback();
     return;
   }
 
   BeforeChange();
-  m_Banner[m_iIndexLatest].Load(THEME->GetPathG("Banner", sBanner));
+  m_Banner[m_iIndexLatest].Load(GetFadingBannerThemePath("Banner", sBanner));
   m_Banner[m_iIndexLatest].PlayCommand(sBanner);
 }
 
@@ -320,10 +375,10 @@ class LunaFadingBanner : public Luna<FadingBanner> {
   }
   static int LoadCardFromCharacter(T* p, lua_State* L) {
     if (lua_isnil(L, 1)) {
-      p->LoadIconFromCharacter(nullptr);
+      p->LoadCardFromCharacter(nullptr);
     } else {
       Character* pC = Luna<Character>::check(L, 1);
-      p->LoadIconFromCharacter(pC);
+      p->LoadCardFromCharacter(pC);
     }
     COMMON_RETURN_SELF;
   }
