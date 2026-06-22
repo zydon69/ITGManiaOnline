@@ -58,30 +58,30 @@ enum ControllerKB7Button
 class ControllerStateDisplay : public ActorFrame {
  public:
   ControllerStateDisplay();
+  ControllerStateDisplay(const ControllerStateDisplay& cpy);
   void LoadMultiPlayer(std::string sType, MultiPlayer mp);
   void LoadGameController(std::string sType, GameController gc);
-  virtual void Update(float fDelta);
+  virtual void Update(float fDelta) override;
   bool IsLoaded() const { return m_bIsLoaded; }
 
-  virtual ControllerStateDisplay* Copy() const;
+  virtual ControllerStateDisplay* Copy() const override;
 
   // Lua
-  virtual void PushSelf(lua_State* L);
+  virtual void PushSelf(lua_State* L) override;
 
  protected:
   void LoadInternal(std::string sType, MultiPlayer mp, GameController gc);
+  void ClearLoadedActors();
+  void AttachLoadedActors();
   MultiPlayer m_mp;
+  GameController m_gc;
 
   bool m_bIsLoaded;
   AutoActor m_sprFrame;
   struct Button {
-    Button() {
-      di.MakeInvalid();
-      gi.MakeInvalid();
-    }
+    Button() { gi.MakeInvalid(); }
 
     AutoActor spr;
-    DeviceInput di;
     GameInput gi;
   };
   Button m_Buttons[NUM_ControllerStateButton];

@@ -1,17 +1,21 @@
 #include "ControllerStateDisplay.h"
 
+#include <memory>
 #include <string>
 
 #include "ActorFrame.h"
 #include "ActorUtil.h"
 #include "EnumHelper.h"
 #include "GameInput.h"
+#include "GameState.h"
 #include "InputMapper.h"
 #include "LuaBinding.h"
 #include "LuaManager.h"
 #include "PlayerNumber.h"
+#include "RageLog.h"
 #include "RageInput.h"
 #include "RageInputDevice.h"
+#include "Style.h"
 #include "ThemeManager.h"
 #include "global.h"
 
@@ -20,18 +24,79 @@ static const char* ControllerStateButtonNames[] = {
 };
 XToString(ControllerStateButton);
 
-// TODO: Generalize for all game types
 static const GameButton ControllerStateButtonToGameButton[] = {
     PUMP_BUTTON_UPLEFT,   PUMP_BUTTON_UPRIGHT,   PUMP_BUTTON_CENTER,
     PUMP_BUTTON_DOWNLEFT, PUMP_BUTTON_DOWNRIGHT,
 };
+static_assert(
+    sizeof(ControllerStateButtonToGameButton) /
+            sizeof(ControllerStateButtonToGameButton[0]) ==
+        NUM_ControllerStateButton,
+    "ControllerStateButtonToGameButton must match ControllerStateButton.");
+
+namespace {
+void WarnControllerStateDisplay(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+bool IsValidControllerStateMultiPlayer(MultiPlayer mp) {
+  return mp >= MultiPlayer_P1 && mp < NUM_MultiPlayer;
+}
+
+bool IsValidControllerStateGameController(GameController gc) {
+  return gc >= GameController_1 && gc < NUM_GameController;
+}
+
+bool StyleMapsGameButton(
+    const Style* style, GameController gc, GameButton button) {
+  if (style == nullptr || !IsValidControllerStateGameController(gc) ||
+      button < 0 || button >= NUM_GameButton) {
+    return true;
+  }
+
+  const int column = style->m_iInputColumn[gc][button];
+  return column != Style::NO_MAPPING && column != Style::END_MAPPING;
+}
+
+GameButton ResolveControllerStateButton(
+    ControllerStateButton button, GameController gc) {
+  if (button < 0 || button >= NUM_ControllerStateButton) {
+    return GameButton_Invalid;
+  }
+
+  const GameButton candidate = ControllerStateButtonToGameButton[button];
+  const Style* style =
+      GAMESTATE == nullptr ? nullptr : GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
+  if (!StyleMapsGameButton(style, gc, candidate)) {
+    return GameButton_Invalid;
+  }
+  return candidate;
+}
+}  // namespace
 
 REGISTER_ACTOR_CLASS(ControllerStateDisplay);
 
 ControllerStateDisplay::ControllerStateDisplay() {
   m_bIsLoaded = false;
   m_mp = MultiPlayer_Invalid;
+  m_gc = GameController_Invalid;
   m_idsLast = InputDeviceState_Invalid;
+}
+
+ControllerStateDisplay::ControllerStateDisplay(
+    const ControllerStateDisplay& cpy)
+    : ActorFrame(cpy) {
+  m_mp = cpy.m_mp;
+  m_gc = cpy.m_gc;
+  m_bIsLoaded = cpy.m_bIsLoaded;
+  m_sprFrame = cpy.m_sprFrame;
+  for (int i = 0; i < NUM_ControllerStateButton; ++i) {
+    m_Buttons[i] = cpy.m_Buttons[i];
+  }
+  m_idsLast = cpy.m_idsLast;
+  AttachLoadedActors();
 }
 
 void ControllerStateDisplay::LoadMultiPlayer(
@@ -46,30 +111,96 @@ void ControllerStateDisplay::LoadGameController(
 
 void ControllerStateDisplay::LoadInternal(
     std::string sType, MultiPlayer mp, GameController gc) {
-  ASSERT(!m_bIsLoaded);
+  ClearLoadedActors();
+  if (sType.empty() || THEME == nullptr) {
+    WarnControllerStateDisplay(
+        "SRC_AUDIT_FIX SRC-1255: ControllerStateDisplay skipped load without "
+        "theme or type.");
+    return;
+  }
+  if (mp != MultiPlayer_Invalid && !IsValidControllerStateMultiPlayer(mp)) {
+    WarnControllerStateDisplay(
+        "SRC_AUDIT_FIX SRC-1257: ControllerStateDisplay ignored invalid "
+        "multiplayer.");
+    return;
+  }
+  if (!IsValidControllerStateGameController(gc)) {
+    WarnControllerStateDisplay(
+        "SRC_AUDIT_FIX SRC-1257: ControllerStateDisplay ignored invalid game "
+        "controller.");
+    return;
+  }
+
   m_bIsLoaded = true;
   m_mp = mp;
+  m_gc = gc;
+  m_idsLast = InputDeviceState_Invalid;
 
-  LuaThreadVariable varElement("MultiPlayer", LuaReference::Create(m_mp));
-  m_sprFrame.Load(THEME->GetPathG(sType, "frame"));
-  this->AddChild(m_sprFrame);
+  std::unique_ptr<LuaThreadVariable> varElement;
+  if (LUA != nullptr) {
+    varElement.reset(
+        new LuaThreadVariable("MultiPlayer", LuaReference::Create(m_mp)));
+  }
+
+  const std::string sFramePath = THEME->GetPathG(sType, "frame");
+  if (!sFramePath.empty()) {
+    m_sprFrame.Load(sFramePath);
+  }
 
   FOREACH_ENUM(ControllerStateButton, b) {
     Button& button = m_Buttons[b];
 
     std::string sPath =
         THEME->GetPathG(sType, ControllerStateButtonToString(b));
-    button.spr.Load(sPath);
-    this->AddChild(m_Buttons[b].spr);
+    if (!sPath.empty()) {
+      button.spr.Load(sPath);
+    }
 
-    button.gi = GameInput(gc, ControllerStateButtonToGameButton[b]);
+    const GameButton gb = ResolveControllerStateButton(b, gc);
+    if (gb == GameButton_Invalid) {
+      button.gi.MakeInvalid();
+    } else {
+      button.gi = GameInput(gc, gb);
+    }
+  }
+
+  AttachLoadedActors();
+}
+
+void ControllerStateDisplay::ClearLoadedActors() {
+  RemoveAllChildren();
+  m_sprFrame.Unload();
+  FOREACH_ENUM(ControllerStateButton, b) {
+    m_Buttons[b].spr.Unload();
+    m_Buttons[b].gi.MakeInvalid();
+  }
+  m_bIsLoaded = false;
+  m_mp = MultiPlayer_Invalid;
+  m_gc = GameController_Invalid;
+  m_idsLast = InputDeviceState_Invalid;
+}
+
+void ControllerStateDisplay::AttachLoadedActors() {
+  RemoveAllChildren();
+  if (m_sprFrame.IsLoaded()) {
+    this->AddChild(m_sprFrame);
+  }
+  FOREACH_ENUM(ControllerStateButton, b) {
+    if (m_Buttons[b].spr.IsLoaded()) {
+      this->AddChild(m_Buttons[b].spr);
+    }
   }
 }
 
 void ControllerStateDisplay::Update(float fDelta) {
   ActorFrame::Update(fDelta);
 
-  if (m_mp != MultiPlayer_Invalid) {
+  if (!m_bIsLoaded) {
+    return;
+  }
+
+  if (m_mp != MultiPlayer_Invalid && IsValidControllerStateMultiPlayer(m_mp) &&
+      INPUTMAN != nullptr) {
     InputDevice id = InputMapper::MultiPlayerToInputDevice(m_mp);
     InputDeviceState ids = INPUTMAN->GetInputDeviceState(id);
     if (ids != m_idsLast) {
@@ -81,6 +212,10 @@ void ControllerStateDisplay::Update(float fDelta) {
   FOREACH_ENUM(ControllerStateButton, b) {
     Button& button = m_Buttons[b];
     if (!button.spr.IsLoaded()) {
+      continue;
+    }
+    if (!button.gi.IsValid() || INPUTMAPPER == nullptr) {
+      button.spr->SetVisible(false);
       continue;
     }
 
