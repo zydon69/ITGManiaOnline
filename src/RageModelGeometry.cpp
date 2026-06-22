@@ -157,12 +157,17 @@ void RageModelGeometry::LoadMilkshapeAscii(
   int iLineNum = 0;
   char szName[MS_MAX_NAME];
   int nFlags, nIndex;
+  const auto GetNextLine = [&]() {
+    const int result = f.GetLine(sLine);
+    if (result > 0) {
+      ++iLineNum;
+    }
+    return result;
+  };
 
   RageVec3ClearBounds(m_vMins, m_vMaxs);
 
-  while (f.GetLine(sLine) > 0) {
-    iLineNum++;
-
+  while (GetNextLine() > 0) {
     if (!strncmp(sLine.c_str(), "//", 2)) {
       continue;
     }
@@ -188,7 +193,7 @@ void RageModelGeometry::LoadMilkshapeAscii(
         std::vector<RageModelVertex>& Vertices = mesh.Vertices;
         std::vector<msTriangle>& Triangles = mesh.Triangles;
 
-        if (f.GetLine(sLine) <= 0) {
+        if (GetNextLine() <= 0) {
           THROW;
         }
 
@@ -210,7 +215,7 @@ void RageModelGeometry::LoadMilkshapeAscii(
         //
         // vertices
         //
-        if (f.GetLine(sLine) <= 0) {
+        if (GetNextLine() <= 0) {
           THROW;
         }
 
@@ -225,7 +230,7 @@ void RageModelGeometry::LoadMilkshapeAscii(
         for (int j = 0; j < nNumVertices; j++) {
           RageModelVertex& v = Vertices[j];
 
-          if (f.GetLine(sLine) <= 0) {
+          if (GetNextLine() <= 0) {
             THROW;
           }
 
@@ -260,7 +265,7 @@ void RageModelGeometry::LoadMilkshapeAscii(
         //
         // normals
         //
-        if (f.GetLine(sLine) <= 0) {
+        if (GetNextLine() <= 0) {
           THROW;
         }
 
@@ -273,7 +278,7 @@ void RageModelGeometry::LoadMilkshapeAscii(
         std::vector<RageVector3> Normals;
         Normals.resize(nNumNormals);
         for (int j = 0; j < nNumNormals; j++) {
-          if (f.GetLine(sLine) <= 0) {
+          if (GetNextLine() <= 0) {
             THROW;
           }
 
@@ -290,8 +295,13 @@ void RageModelGeometry::LoadMilkshapeAscii(
           const float normalLengthSq =
               Normal[0] * Normal[0] + Normal[1] * Normal[1] +
               Normal[2] * Normal[2];
-          if (!std::isfinite(normalLengthSq) || normalLengthSq <= 0.0f) {
+          if (!std::isfinite(normalLengthSq)) {
             THROW;
+          }
+          if (normalLengthSq <= 0.0f) {
+            Normal[0] = 0.0f;
+            Normal[1] = 0.0f;
+            Normal[2] = 1.0f;
           }
 
           RageVec3Normalize((RageVector3*)&Normal, (RageVector3*)&Normal);
@@ -301,7 +311,7 @@ void RageModelGeometry::LoadMilkshapeAscii(
         //
         // triangles
         //
-        if (f.GetLine(sLine) <= 0) {
+        if (GetNextLine() <= 0) {
           THROW;
         }
 
@@ -315,7 +325,7 @@ void RageModelGeometry::LoadMilkshapeAscii(
         Triangles.resize(nNumTriangles);
 
         for (int j = 0; j < nNumTriangles; j++) {
-          if (f.GetLine(sLine) <= 0) {
+          if (GetNextLine() <= 0) {
             THROW;
           }
 
