@@ -919,6 +919,14 @@ local ReturnToOnlineLobbyFromEvaluation = function(reason)
 		end
 		return false
 	end
+	if ITGOnline.ShouldBlockEvaluationExit and ITGOnline:ShouldBlockEvaluationExit(reason) then
+		if online_trace then
+			online_trace("FLOW evaluation_exit_blocked reason=awaiting_results_ready source=" .. tostring(reason or "input")
+				.. " screen=" .. tostring(topScreen:GetName())
+				.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or ITGOnline.currentRoomPhase))
+		end
+		return true
+	end
 
 	UnlockOnlineInput()
 	ITGOnline.onlineEvaluationExitRequested = true
@@ -1201,8 +1209,11 @@ DisplayLobbyState = function(data, actor)
 			-- Gameplay no longer uses manual ready-up; we only wait for screen synchronization.
 			readyToUnlock = updatedData.aux.allInSameScreen or playerCount <= 1
 		elseif evaluationScreens[screenName] then
-			-- Evaluation should only be blocked while someone is still playing.
-			readyToUnlock = not updatedData.aux.anyInGameplay
+			-- Evaluation may show input again only once the authoritative
+			-- server results are ready. Failed rounds can have no active
+			-- gameplay left while the server is still waiting for final failed
+			-- scores, so "no one is playing" is not enough.
+			readyToUnlock = not (ITGOnline and ITGOnline.ShouldBlockEvaluationExit and ITGOnline:ShouldBlockEvaluationExit("evaluation_sync_unlock"))
 		elseif autoReadyScreens[screenName] then
 			-- Other auto-ready screens require everyone to arrive at the same screen.
 			readyToUnlock = updatedData.aux.allInSameScreen

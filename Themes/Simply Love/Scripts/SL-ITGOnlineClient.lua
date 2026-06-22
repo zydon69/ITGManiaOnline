@@ -4010,6 +4010,31 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		.. " previousPlayStateVersion=" .. tostring(previousPlayStateVersion or "nil"))
 	online_room_snapshot_debug("room_snapshot_apply_begin", room, source, previousRoom)
 	room = self:NormalizeRoomSnapshot(room, previousRoom, source)
+	if self:NormalizeRoomPhase(room.phase) == "results" and not room.selected_song then
+		local fallbackSong = self.lastResultSongPayload
+			or (previousRoom and previousRoom.selected_song)
+			or self.currentSongPayload
+			or self.activeGameplaySongPayload
+		if type(fallbackSong) == "table" then
+			local hydratedSong = {}
+			for key, value in pairs(fallbackSong) do
+				hydratedSong[key] = value
+			end
+			room.selected_song = hydratedSong
+			online_flow_trace("room_snapshot_results_song_hydrated source=" .. tostring(source or "unknown")
+				.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+				.. " fallbackTitle=" .. tostring(hydratedSong.title or hydratedSong.folder_name or hydratedSong.song_hash or "unknown")
+				.. " fallbackSongHash=" .. tostring(hydratedSong.song_hash or hydratedSong.songHash or ""):sub(1, 12)
+				.. " fallbackChartHash=" .. tostring(hydratedSong.chart_hash or hydratedSong.chartHash or ""):sub(1, 12))
+		else
+			online_flow_trace_throttled("room_snapshot_results_song_missing", 1.0,
+				"room_snapshot_results_song_missing source=" .. tostring(source or "unknown")
+				.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+				.. " previousHasSong=" .. tostring(previousRoom and previousRoom.selected_song ~= nil)
+				.. " hasCurrentSong=" .. tostring(self.currentSongPayload ~= nil)
+				.. " hasActiveGameplaySong=" .. tostring(self.activeGameplaySongPayload ~= nil))
+		end
+	end
 	if previousRoom and self:RoomSnapshotRegressesPhase(previousRoom, room, source) then
 		online_room_snapshot_debug("room_snapshot_rejected_regressive", room, source, previousRoom)
 		online_flow_trace("ignored_regressive_room_snapshot source=" .. tostring(source or "unknown")
@@ -4386,14 +4411,14 @@ function ITGOnline:ShouldWaitForOnlineResults(room)
 	end
 	if phase == "playing" and summary.allFailedTerminal and not summary.finalResultsReady then
 		online_flow_trace_throttled("results_wait_all_failed_pending_finals", 1.0,
-			"results_wait_decision wait=false reason=all_failed_pending_client_finals"
+			"results_wait_decision wait=true reason=all_failed_pending_client_finals"
 			.. " terminal=" .. tostring(summary.terminal)
 			.. " failedTerminal=" .. tostring(summary.failedTerminal)
 			.. " players=" .. tostring(summary.players)
 			.. " finalResults=" .. tostring(summary.finalResults)
 			.. " finalResultsReady=" .. tostring(summary.finalResultsReady == true)
 			.. " failedFinalsPending=" .. tostring(summary.failedFinalsPending))
-		return false
+		return true
 	end
 	if phase ~= "results" then
 		online_flow_trace_throttled("results_wait_all_terminal_not_results", 1.0,
@@ -4412,6 +4437,52 @@ function ITGOnline:ShouldWaitForOnlineResults(room)
 		.. " finalResults=" .. tostring(summary.finalResults)
 		.. " finalResultsReady=" .. tostring(summary.finalResultsReady == true))
 	return wait
+end
+
+function ITGOnline:ShouldBlockEvaluationExit(reason, room)
+	room = room or self.currentRoom
+	if not room then
+		online_flow_trace("evaluation_exit_block_decision block=false reason=no_room source=" .. tostring(reason or "unknown")
+			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
+		return false
+	end
+
+	local phase = self:NormalizeRoomPhase(room.phase)
+	local summary = self:PlayStateSummary(room)
+	if phase ~= "results" then
+		online_flow_trace_throttled("evaluation_exit_block_not_results", 1.0,
+			"evaluation_exit_block_decision block=true reason=room_not_results"
+			.. " source=" .. tostring(reason or "unknown")
+			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+			.. " phase=" .. tostring(phase)
+			.. " players=" .. tostring(summary.players)
+			.. " terminal=" .. tostring(summary.terminal)
+			.. " failedTerminal=" .. tostring(summary.failedTerminal)
+			.. " finalResults=" .. tostring(summary.finalResults)
+			.. " finalResultsReady=" .. tostring(summary.finalResultsReady == true)
+			.. " failedFinalsPending=" .. tostring(summary.failedFinalsPending))
+		return true
+	end
+
+	if summary.players > 0 and not summary.finalResultsReady then
+		online_flow_trace_throttled("evaluation_exit_block_results_not_ready", 1.0,
+			"evaluation_exit_block_decision block=true reason=final_results_not_ready"
+			.. " source=" .. tostring(reason or "unknown")
+			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+			.. " phase=" .. tostring(phase)
+			.. " players=" .. tostring(summary.players)
+			.. " finalResults=" .. tostring(summary.finalResults)
+			.. " finalResultsReady=" .. tostring(summary.finalResultsReady == true))
+		return true
+	end
+
+	online_flow_trace("evaluation_exit_block_decision block=false reason=results_ready"
+		.. " source=" .. tostring(reason or "unknown")
+		.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+		.. " phase=" .. tostring(phase)
+		.. " players=" .. tostring(summary.players)
+		.. " finalResults=" .. tostring(summary.finalResults))
+	return false
 end
 
 function ITGOnline:MarkGameplayCompleteForEvaluation(source)
@@ -4454,10 +4525,15 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 	local stats = player and STATSMAN:GetCurStageStats():GetPlayerStageStats(player) or nil
 	local failedOk, failedValue = pcall(function() return stats and stats:GetFailed() end)
 	local failed = failedOk and failedValue == true
+	local currentPlayState = self:CurrentUserPlayState(self.currentRoom)
+	if tostring(currentPlayState or "") == "failed" then
+		failed = true
+	end
 
 	online_flow_trace("mark_terminal source=" .. tostring(source or "unknown")
 		.. " phase=" .. tostring(phase)
 		.. " failed=" .. tostring(failed)
+		.. " currentPlayState=" .. tostring(currentPlayState or "nil")
 		.. " roundKey=" .. tostring(roundKey)
 		.. " roundKeySource=" .. tostring(roundKeySource))
 
@@ -4585,7 +4661,7 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 			elseif self.MarkPlayFinished then
 				self:MarkPlayFinished(terminalCallback)
 			end
-		end)
+		end, { forceFailed = failed })
 	else
 		markTerminalWithoutScore("no_score_submission_path")
 	end
@@ -7244,7 +7320,8 @@ function ITGOnline:CurrentUserHasFinalResult(room)
 	return false
 end
 
-function ITGOnline:SendScore(force, final, snapshot, callback)
+function ITGOnline:SendScore(force, final, snapshot, callback, options)
+	options = type(options) == "table" and options or {}
 	local finish = function(ok, decoded, response, meta)
 		if callback then callback(ok, decoded, response, meta or {}) end
 	end
@@ -7257,6 +7334,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 		.. " currentRoundKey=" .. tostring(self.currentRoomRoundKey or "")
 		.. " activeRoundKey=" .. tostring(self.activeGameplayRoundKey or "")
 		.. " hasSnapshot=" .. tostring(snapshot ~= nil)
+		.. " forceFailed=" .. tostring(options.forceFailed == true)
 		.. " hasDisplayedSnapshot=" .. tostring(self.lastDisplayedScoreSnapshot ~= nil)
 		.. " inFlight=" .. tostring(self.scoreInFlightFingerprint ~= nil))
 
@@ -7581,7 +7659,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback)
 	end
 	local outgoingCombo = math.max(0, liveCombo or 0)
 	local outgoingMaxCombo = math.max(0, maxCombo or 0)
-	local outgoingFailed = failed and true or false
+	local outgoingFailed = (failed or options.forceFailed == true) and true or false
 	local scoreFingerprint = self:ScoreFingerprint(outgoingScore, outgoingCombo, outgoingMaxCombo, outgoingFailed, judgments)
 
 	if not final then
