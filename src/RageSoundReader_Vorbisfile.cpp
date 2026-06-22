@@ -202,17 +202,19 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
   if (iFrames == 0) {
     return 0;
   }
-  if (vf == nullptr || buf == nullptr || iFrames < 0 || channels == 0) {
+  if (vf == nullptr || buf == nullptr || iFrames < 0 || channels == 0 ||
+      channels > static_cast<unsigned>(std::numeric_limits<int>::max())) {
     return ERROR;
   }
+  const int channel_count = static_cast<int>(channels);
   int frames_read = 0;
 
   while (iFrames && !eof) {
-    if (channels > std::numeric_limits<int>::max() /
-                       static_cast<int>(sizeof(float))) {
+    if (channel_count >
+        std::numeric_limits<int>::max() / static_cast<int>(sizeof(float))) {
       return ERROR;
     }
-    const int bytes_per_frame = sizeof(float) * channels;
+    const int bytes_per_frame = static_cast<int>(sizeof(float)) * channel_count;
 
     int iFramesRead = 0;
 
@@ -253,12 +255,14 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
     if (iFramesRead == 0) {
       int bstream;
 #if defined(INTEGER_VORBIS)
-      if (iFrames > std::numeric_limits<int>::max() /
-                        (channels * static_cast<int>(sizeof(int16_t)))) {
+      const int integer_bytes_per_frame =
+          channel_count * static_cast<int>(sizeof(int16_t));
+      if (integer_bytes_per_frame <= 0 ||
+          iFrames > std::numeric_limits<int>::max() / integer_bytes_per_frame) {
         return ERROR;
       }
       int ret = ov_read(
-          vf, (char*)buf, iFrames * channels * sizeof(int16_t), &bstream);
+          vf, (char*)buf, iFrames * integer_bytes_per_frame, &bstream);
 #else  // float vorbis decoder
       float** pcm;
       int ret = ov_read_float(vf, &pcm, iFrames, &bstream);
@@ -271,11 +275,11 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
           return ERROR;
         }
 
-        if ((unsigned)vi->channels != channels) {
+        if (vi->channels != channel_count) {
           SetError(ssprintf(
               "File \"%s\" changes channel count from %i to %i; not "
               "supported.",
-              filename.c_str(), channels, (int)vi->channels));
+              filename.c_str(), channel_count, (int)vi->channels));
           return ERROR;
         }
       }
@@ -300,7 +304,7 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
 #if defined(INTEGER_VORBIS)
       if (ret > 0) {
         int iSamplesRead = ret / sizeof(int16_t);
-        iFramesRead = iSamplesRead / channels;
+        iFramesRead = iSamplesRead / channel_count;
 
         /* Convert in reverse, so we can do it in-place. */
         const int16_t* pIn = (int16_t*)buf;
@@ -313,7 +317,7 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
       if (ret > 0) {
         iFramesRead = ret;
 
-        int iNumChannels = channels;
+        int iNumChannels = channel_count;
         for (int iChannel = 0; iChannel < iNumChannels; ++iChannel) {
           const float* pChannelIn = pcm[iChannel];
           float* pChannelOut = &buf[iChannel];
@@ -329,7 +333,7 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
 
     read_offset += iFramesRead;
 
-    buf += iFramesRead * channels;
+    buf += iFramesRead * channel_count;
     frames_read += iFramesRead;
     iFrames -= iFramesRead;
   }
