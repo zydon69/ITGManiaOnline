@@ -47,6 +47,9 @@ class ActorScroller : public ActorFrame {
   void SetDestinationItem(float fItemIndex) {
     if (std::isfinite(fItemIndex)) {
       m_fDestinationItem = fItemIndex;
+      if (m_fSecondsPerItem <= 0.0f) {
+        m_fCurrentItem = m_fDestinationItem;
+      }
     }
   }
   void SetCurrentAndDestinationItem(float fItemIndex) {
@@ -65,7 +68,10 @@ class ActorScroller : public ActorFrame {
   void SetFastCatchup(bool bOn) { m_bFastCatchup = bOn; }
   void SetSecondsPerItem(float fSeconds) {
     m_fSecondsPerItem =
-        std::isfinite(fSeconds) && fSeconds > 0.0f ? fSeconds : 1.0f;
+        std::isfinite(fSeconds) ? std::max(0.0f, fSeconds) : 1.0f;
+    if (m_fSecondsPerItem <= 0.0f) {
+      m_fCurrentItem = m_fDestinationItem;
+    }
   }
   void SetSecondsPauseBetweenItems(float fSeconds) {
     m_fSecondsPauseBetweenItems =
