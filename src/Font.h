@@ -180,9 +180,15 @@ class Font {
   // Load font-wide settings.
   void CapsOnly();
 
-  int GetHeight() const { return m_pDefault->m_iHeight; }
-  int GetCenter() const { return m_pDefault->GetCenter(); }
-  int GetLineSpacing() const { return m_pDefault->m_iLineSpacing; }
+  int GetHeight() const {
+    return m_pDefault != nullptr ? m_pDefault->m_iHeight : 0;
+  }
+  int GetCenter() const {
+    return m_pDefault != nullptr ? m_pDefault->GetCenter() : 0;
+  }
+  int GetLineSpacing() const {
+    return m_pDefault != nullptr ? m_pDefault->m_iLineSpacing : 0;
+  }
 
   void SetDefaultGlyph(FontPage* pPage);
 

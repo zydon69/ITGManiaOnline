@@ -1,6 +1,7 @@
 #include "FontManager.h"
 
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -24,7 +25,7 @@ FontManager::~FontManager() {
        i != g_mapPathToFont.end(); ++i) {
     const FontName& fn = i->first;
     Font* pFont = i->second;
-    if (pFont->m_iRefCount > 0) {
+    if (pFont != nullptr && pFont->m_iRefCount > 0 && LOG != nullptr) {
       LOG->Trace(
           "FONT LEAK: '%s', RefCount = %d.", fn.first.c_str(),
           pFont->m_iRefCount);
@@ -51,18 +52,28 @@ Font* FontManager::LoadFont(
     return pFont;
   }
 
-  Font* f = new Font;
+  std::unique_ptr<Font> f(new Font);
   f->Load(sFontOrTextureFilePath, sChars);
-  g_mapPathToFont[NewName] = f;
-  return f;
+  Font* raw = f.release();
+  g_mapPathToFont[NewName] = raw;
+  return raw;
 }
 
 Font* FontManager::CopyFont(Font* pFont) {
+  if (pFont == nullptr) {
+    if (LOG != nullptr) {
+      LOG->Warn("SRC_AUDIT_FIX SRC-810: attempted to copy a null font.");
+    }
+    return nullptr;
+  }
   ++pFont->m_iRefCount;
   return pFont;
 }
 
 void FontManager::UnloadFont(Font* fp) {
+  if (fp == nullptr) {
+    return;
+  }
   CHECKPOINT_M(ssprintf("FontManager::UnloadFont(%s).", fp->path.c_str()));
 
   for (std::map<FontName, Font*>::iterator i = g_mapPathToFont.begin();
@@ -71,9 +82,15 @@ void FontManager::UnloadFont(Font* fp) {
       continue;
     }
 
-    ASSERT_M(
-        fp->m_iRefCount > 0,
-        "Attempting to unload a font with zero ref count!");
+    if (fp->m_iRefCount <= 0) {
+      if (LOG != nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-810: attempted to unload font '%s' with ref "
+            "count %d.",
+            fp->path.c_str(), fp->m_iRefCount);
+      }
+      return;
+    }
 
     i->second->m_iRefCount--;
 
@@ -84,7 +101,11 @@ void FontManager::UnloadFont(Font* fp) {
     return;
   }
 
-  FAIL_M(ssprintf("Unloaded an unknown font (%p)", static_cast<void*>(fp)));
+  if (LOG != nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-810: unloaded an unknown font (%p).",
+        static_cast<void*>(fp));
+  }
 }
 
 /*

@@ -3,6 +3,7 @@
 #include <map>
 #include <string>
 
+#include "RageThreads.h"
 #include "StdString.h"
 
 const wchar_t FontCharmaps::M_SKIP = 0xFEFF;
@@ -10,6 +11,13 @@ const wchar_t FontCharmaps::M_SKIP = 0xFEFF;
 static std::map<std::string, const wchar_t*> charmaps;
 
 using namespace FontCharmaps;
+
+namespace {
+RageMutex& GetCharmapsMutex() {
+  static RageMutex* mutex = new RageMutex("FontCharmaps");
+  return *mutex;
+}
+}  // namespace
 
 /* Map ranges of Unicode characters.  This is for font mapping; don't try
  * to use it for actual conversion (if that's wanted, use iconv).
@@ -256,6 +264,7 @@ static const wchar_t map_numbers[] = {
     0x0038, 0x0039, 0x0025, 0x002E, 0x0020, 0x003A, 0x0078, 0};
 
 static void Init() {
+  LockMutex lock(GetCharmapsMutex());
   if (!charmaps.empty()) {
     return;
   }
@@ -270,6 +279,7 @@ static void Init() {
 }
 
 const wchar_t* FontCharmaps::get_char_map(std::string name) {
+  LockMutex lock(GetCharmapsMutex());
   Init();
 
   MakeLower(name);

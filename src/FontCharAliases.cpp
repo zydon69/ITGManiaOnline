@@ -4,6 +4,7 @@
 #include <string>
 
 #include "Font.h"
+#include "RageThreads.h"
 #include "RageUtil.h"
 #include "StdString.h"
 
@@ -30,6 +31,11 @@ struct StdStringLessNoCase {
     return ssicmp(sLeft.c_str(), sRight.c_str()) < 0;
   }
 };
+
+RageMutex& GetAliasMutex() {
+  static RageMutex* mutex = new RageMutex("FontCharAliases");
+  return *mutex;
+}
 }  // namespace
 
 // Map from "&foo;" to a UTF-8 string.
@@ -95,6 +101,7 @@ And here's one for a kanji page:
  */
 
 static void InitCharAliases() {
+  LockMutex lock(GetAliasMutex());
   if (!CharAliases.empty()) {
     return;
   }
@@ -398,6 +405,7 @@ static void InitCharAliases() {
 
 // Replace all &markers; and &#NNNN;s with UTF-8.
 void FontCharAliases::ReplaceMarkers(std::string& sText) {
+  LockMutex lock(GetAliasMutex());
   InitCharAliases();
   ReplaceEntityText(sText, CharAliasRepl);
   Replace_Unicode_Markers(sText);
@@ -405,6 +413,7 @@ void FontCharAliases::ReplaceMarkers(std::string& sText) {
 
 // Replace all &markers; and &#NNNN;s with UTF-8.
 bool FontCharAliases::GetChar(std::string& codepoint, wchar_t& ch) {
+  LockMutex lock(GetAliasMutex());
   InitCharAliases();
   aliasmap::const_iterator i = CharAliases.find(codepoint);
   if (i == CharAliases.end()) {
