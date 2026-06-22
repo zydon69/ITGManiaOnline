@@ -4998,6 +4998,8 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 		-- jumping screens directly.  Direct SM_GoToNextScreen can leave gameplay
 		-- state half-alive when every online player has failed.
 		local roundKey, roundKeySource = self:CanonicalGameplayRoundKey("navigate_evaluation")
+		local roomPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+		local summary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
 		local now = GetTimeSinceStart()
 		local previousAt = tonumber(self.onlineGameplayEvaluationNavigationAt) or 0
 		if roundKey ~= ""
@@ -5015,8 +5017,15 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 		end
 		online_flow_trace("navigate_via_gameplay_message message=SM_LeaveGameplay target=" .. tostring(target)
 			.. " roundKey=" .. tostring(roundKey)
-			.. " roundKeySource=" .. tostring(roundKeySource))
-		if topScreen.PostScreenMessage then
+			.. " roundKeySource=" .. tostring(roundKeySource)
+			.. " roomPhase=" .. tostring(roomPhase)
+			.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true)
+			.. " finalResults=" .. tostring(summary and summary.finalResults or "nil"))
+		if roomPhase == "results" and summary and summary.finalResultsReady == true then
+			online_flow_trace("navigate_force_evaluation reason=results_ready target=" .. tostring(target)
+				.. " roundKey=" .. tostring(roundKey))
+			topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+		elseif topScreen.PostScreenMessage then
 			topScreen:PostScreenMessage("SM_LeaveGameplay", 0)
 		else
 			topScreen:StartTransitioningScreen("SM_GoToNextScreen")
@@ -7694,6 +7703,17 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		outgoingFailed = true
 		scoreFingerprint = self:ScoreFingerprint(outgoingScore, outgoingCombo, outgoingMaxCombo, outgoingFailed, judgments)
 	end
+	if final and forceFinalFailed then
+		online_flow_trace("final_failed_score_available"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " roundKey=" .. tostring(roundKey)
+			.. " score=" .. tostring(outgoingScore)
+			.. " displayedPercent=" .. tostring(displayedScorePercent)
+			.. " accuracy=" .. tostring(accuracy)
+			.. " songPosition=" .. tostring(songPosition)
+			.. " hasJudgments=" .. tostring(self:HasScoredJudgments(judgments) == true)
+			.. " snapshotDisplayed=" .. tostring(snapshot and snapshot.displayedPercent or "nil"))
+	end
 
 	if not final then
 		if self.scoreInFlightFingerprint then
@@ -9043,6 +9063,8 @@ function ITGOnline:MarkPlayFailedEarly(source, callback)
 		if scoreOk == false then
 			online_flow_trace("mark_failed_early_score_not_finalized roundKey=" .. tostring(key)
 				.. " message=" .. tostring(response_message(scoreResponse, scoreDecoded, "failed score rejected")))
+			self.onlineGameplayEvaluationRetryKey = key
+			self.onlineGameplayEvaluationNextRetryAt = GetTimeSinceStart() + 0.35
 		end
 
 		self:MarkPlayFailed(function(ok, decoded, response)
@@ -9061,7 +9083,16 @@ function ITGOnline:MarkPlayFailedEarly(source, callback)
 	end
 
 	if self.SendScore then
-		self:SendScore(true, false, nil, confirmFailed)
+		self.scoreInFlightFingerprint = nil
+		self.pendingLiveScoreSnapshot = nil
+		self.pendingLiveScoreRoundKey = ""
+		online_flow_trace("mark_failed_early_final_score_submit"
+			.. " source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(phase)
+			.. " roundKey=" .. tostring(key)
+			.. " hasDisplayedSnapshot=" .. tostring(self.lastDisplayedScoreSnapshot ~= nil))
+		self:SendScore(true, true, nil, confirmFailed, { forceFailed = true, forceFinalFailed = true })
 		return true
 	end
 
