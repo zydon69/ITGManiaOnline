@@ -19,6 +19,7 @@ std::string WARNING_COMMAND_NAME(size_t i);
 class MenuTimer : public ActorFrame {
  public:
   MenuTimer();
+  MenuTimer(const MenuTimer& cpy);
   virtual ~MenuTimer();
   void Load(std::string sMetricsGroup);
 
@@ -61,6 +62,11 @@ class MenuTimer : public ActorFrame {
   ThemeMetric<float> MAX_STALL_SECONDS;
   ThemeMetric<float> HURRY_UP_TRANSITION;
   ThemeMetric1D<apActorCommands>* WARNING_COMMAND;
+
+  int m_iWarningStart;
+  int m_iWarningBeepStart;
+  float m_fMaxStallSeconds;
+  float m_fHurryUpTransition;
 };
 
 #endif
