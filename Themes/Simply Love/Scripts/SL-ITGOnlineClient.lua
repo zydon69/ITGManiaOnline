@@ -180,7 +180,7 @@ ITGOnline.onlineGameplayEvaluationMarkInFlightKey = ITGOnline.onlineGameplayEval
 ITGOnline.onlineGameplayEvaluationRetryKey = ITGOnline.onlineGameplayEvaluationRetryKey or ""
 ITGOnline.onlineGameplayEvaluationRetryCount = ITGOnline.onlineGameplayEvaluationRetryCount or 0
 ITGOnline.onlineGameplayEvaluationNextRetryAt = ITGOnline.onlineGameplayEvaluationNextRetryAt or 0
-ITGOnline.onlineGameplayEvaluationMaxRetries = ITGOnline.onlineGameplayEvaluationMaxRetries or 3
+ITGOnline.onlineGameplayEvaluationMaxRetries = ITGOnline.onlineGameplayEvaluationMaxRetries or 20
 ITGOnline.onlineGameplayEvaluationTerminalErrorKey = ITGOnline.onlineGameplayEvaluationTerminalErrorKey or ""
 ITGOnline.onlineGameplayEvaluationNavigationKey = ITGOnline.onlineGameplayEvaluationNavigationKey or ""
 ITGOnline.onlineGameplayEvaluationNavigationAt = ITGOnline.onlineGameplayEvaluationNavigationAt or 0
@@ -4936,6 +4936,17 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 			end
 			online_flow_trace("preferred=evaluation reason=results_while_in_gameplay playState=" .. tostring(playState))
 			return "evaluation"
+		end
+		if screenName == "ScreenOnlineLobbies" then
+			local summary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
+			local userTerminal = self.IsTerminalPlayState and self:IsTerminalPlayState(playState)
+			if summary and summary.finalResultsReady == true and userTerminal then
+				online_flow_trace("preferred=evaluation reason=results_ready_while_in_lobby"
+					.. " playState=" .. tostring(playState)
+					.. " finalResults=" .. tostring(summary.finalResults or "nil")
+					.. " roundKey=" .. tostring(roundKey))
+				return "evaluation"
+			end
 		end
 		online_flow_trace("preferred=nil reason=results_non_gameplay_screen screen=" .. tostring(screenName)
 			.. " playState=" .. tostring(playState))

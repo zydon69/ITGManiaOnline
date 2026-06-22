@@ -613,7 +613,24 @@ end
 
 local function joined_room_phase_allows_manual_leave()
 	local phase = current_joined_room_phase()
-	return phase ~= "starting" and phase ~= "playing"
+	if phase ~= "starting" and phase ~= "playing" then
+		return true
+	end
+
+	local playState = ""
+	if ITGOnline and ITGOnline.CurrentUserPlayState then
+		playState = tostring(ITGOnline:CurrentUserPlayState(ITGOnline.currentRoom) or "")
+	end
+	local localTerminal = ITGOnline
+		and ITGOnline.IsTerminalPlayState
+		and ITGOnline:IsTerminalPlayState(playState)
+	lobby_flow_trace("manual_leave_phase_guard"
+		.. " phase=" .. tostring(phase)
+		.. " playState=" .. tostring(playState)
+		.. " localTerminal=" .. tostring(localTerminal == true)
+		.. " joined_code=" .. tostring(joined_lobby_code)
+		.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+	return localTerminal == true
 end
 
 local function restore_joined_after_blocked_leave(root, reason, message)
