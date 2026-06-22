@@ -6,7 +6,9 @@
 #include <atomic>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <mutex>
+#include <vector>
 
 #include "MovieTexture_Generic.h"
 
@@ -36,6 +38,7 @@ struct FrameHolder {
       avcodec::av_frame_free(&frame);
     }
   }
+  bool IsValid() const { return frame != nullptr; }
 };
 
 struct PacketHolder {
@@ -52,6 +55,7 @@ struct PacketHolder {
       avcodec::av_packet_free(&packet);
     }
   }
+  bool IsValid() const { return packet != nullptr; }
 };
 
 class MovieTexture_FFMpeg : public MovieTexture_Generic {
@@ -112,8 +116,12 @@ class MovieDecoder_FFMpeg : public MovieDecoder {
   int DecodeMovie();
   bool IsCurrentFrameReady();
 
-  int GetWidth() const { return av_stream_codec_->width; }
-  int GetHeight() const { return av_stream_codec_->height; }
+  int GetWidth() const {
+    return av_stream_codec_ != nullptr ? av_stream_codec_->width : 0;
+  }
+  int GetHeight() const {
+    return av_stream_codec_ != nullptr ? av_stream_codec_->height : 0;
+  }
 
   RageSurface* CreateCompatibleSurface(
       int iTextureWidth, int iTextureHeight, bool bPreferHighColor,
@@ -153,15 +161,15 @@ class MovieDecoder_FFMpeg : public MovieDecoder {
   int DecodePacketToFrame();
   void HandleReset();
 
-  avcodec::AVStream* av_stream_;
-  avcodec::AVPixelFormat av_pixel_format_; /* pixel format of output surface */
-  avcodec::SwsContext* av_sws_context_;
-  avcodec::AVCodecContext* av_stream_codec_;
-  avcodec::AVFormatContext* av_format_context_;
+  avcodec::AVStream* av_stream_ = nullptr;
+  avcodec::AVPixelFormat av_pixel_format_ = avcodec::AV_PIX_FMT_NONE;
+  avcodec::SwsContext* av_sws_context_ = nullptr;
+  avcodec::AVCodecContext* av_stream_codec_ = nullptr;
+  avcodec::AVFormatContext* av_format_context_ = nullptr;
   std::atomic<std::size_t> total_frames_;  // Total number of frames in the movie.
 
-  unsigned char* av_buffer_;
-  avcodec::AVIOContext* av_io_context_;
+  unsigned char* av_buffer_ = nullptr;
+  avcodec::AVIOContext* av_io_context_ = nullptr;
 
   // The movie's buffers. This uses a sliding window from FrameBuffer to
   // PacketBuffer. AVPackets are small enough that keeping the whole movie's
@@ -194,6 +202,7 @@ class MovieDecoder_FFMpeg : public MovieDecoder {
   std::atomic<bool> looping_{false};
   std::atomic<bool> reset_{false};
   std::atomic<bool> end_of_movie_{false};
+  mutable std::mutex buffer_lock_;
 };
 
 static struct AVPixelFormat_t {
