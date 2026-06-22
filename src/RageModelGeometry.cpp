@@ -1,8 +1,11 @@
 #include "RageModelGeometry.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -17,13 +20,52 @@
 
 #define MS_MAX_NAME 32
 
+namespace {
+constexpr int kMaxMeshes = 4096;
+constexpr int kMaxVertices = std::numeric_limits<uint16_t>::max();
+constexpr int kMaxNormals = std::numeric_limits<uint16_t>::max();
+constexpr int kMaxTriangles = 1000000;
+
+bool IsFiniteVector(const RageVector3& v) {
+  return std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]);
+}
+
+bool IsFiniteVector(const RageVector2& v) {
+  return std::isfinite(v[0]) && std::isfinite(v[1]);
+}
+
+void ValidateCount(
+    int count, int maxCount, const char* label, const std::string& sPath,
+    int iLineNum, const std::string& sLine) {
+  if (count < 0 || count > maxCount) {
+    RageException::Throw(
+        "Parse error in \"%s\" at line %d: invalid %s count %d in \"%s\".",
+        sPath.c_str(), iLineNum, label, count, sLine.c_str());
+  }
+}
+
+void ValidateInt8Index(
+    int value, const char* label, const std::string& sPath, int iLineNum,
+    const std::string& sLine) {
+  if (value < -1 || value > std::numeric_limits<int8_t>::max()) {
+    RageException::Throw(
+        "Parse error in \"%s\" at line %d: invalid %s index %d in \"%s\".",
+        sPath.c_str(), iLineNum, label, value, sLine.c_str());
+  }
+}
+}  // namespace
+
 RageModelGeometry::RageModelGeometry() {
   m_iRefCount = 1;
-  m_pCompiledGeometry = DISPLAY->CreateCompiledGeometry();
+  m_pCompiledGeometry =
+      DISPLAY != nullptr ? DISPLAY->CreateCompiledGeometry() : nullptr;
 }
 
 RageModelGeometry::~RageModelGeometry() {
-  DISPLAY->DeleteCompiledGeometry(m_pCompiledGeometry);
+  if (DISPLAY != nullptr && m_pCompiledGeometry != nullptr) {
+    DISPLAY->DeleteCompiledGeometry(m_pCompiledGeometry);
+  }
+  m_pCompiledGeometry = nullptr;
 }
 
 void RageModelGeometry::OptimizeBones() {
@@ -138,6 +180,7 @@ void RageModelGeometry::LoadMilkshapeAscii(
     int nNumMeshes = 0;
     if (sscanf(sLine.c_str(), "Meshes: %d", &nNumMeshes) == 1) {
       ASSERT(m_Meshes.empty());
+      ValidateCount(nNumMeshes, kMaxMeshes, "mesh", sPath, iLineNum, sLine);
       m_Meshes.resize(nNumMeshes);
 
       for (int i = 0; i < nNumMeshes; i++) {
@@ -156,9 +199,11 @@ void RageModelGeometry::LoadMilkshapeAscii(
           THROW;
         }
 
+        ValidateInt8Index(nIndex, "material", sPath, iLineNum, sLine);
+
         mesh.sName = szName;
         // mesh.nFlags = nFlags;
-        mesh.nMaterialIndex = (uint8_t)nIndex;
+        mesh.nMaterialIndex = static_cast<int8_t>(nIndex);
 
         mesh.m_iBoneIndex = -1;
 
@@ -173,6 +218,7 @@ void RageModelGeometry::LoadMilkshapeAscii(
         if (sscanf(sLine.c_str(), "%d", &nNumVertices) != 1) {
           THROW;
         }
+        ValidateCount(nNumVertices, kMaxVertices, "vertex", sPath, iLineNum, sLine);
 
         Vertices.resize(nNumVertices);
 
@@ -188,6 +234,10 @@ void RageModelGeometry::LoadMilkshapeAscii(
                   &v.p[1], &v.p[2], &v.t[0], &v.t[1], &nIndex) != 7) {
             THROW;
           }
+          ValidateInt8Index(nIndex, "bone", sPath, iLineNum, sLine);
+          if (!IsFiniteVector(v.p) || !IsFiniteVector(v.t)) {
+            THROW;
+          }
 
           // vertex.nFlags = nFlags;
           if (nFlags & 1) {
@@ -197,10 +247,13 @@ void RageModelGeometry::LoadMilkshapeAscii(
             v.TextureMatrixScale.y = 0;
           }
           if (nFlags & 4) {
+            if (v.t[0] == 0.0f || v.t[1] == 0.0f) {
+              THROW;
+            }
             v.t[0] = v.p[0] / v.t[0];
             v.t[1] = v.p[1] / v.t[1];
           }
-          v.bone = (uint8_t)nIndex;
+          v.bone = static_cast<int8_t>(nIndex);
           RageVec3AddToBounds(v.p, m_vMins, m_vMaxs);
         }
 
@@ -215,6 +268,7 @@ void RageModelGeometry::LoadMilkshapeAscii(
         if (sscanf(sLine.c_str(), "%d", &nNumNormals) != 1) {
           THROW;
         }
+        ValidateCount(nNumNormals, kMaxNormals, "normal", sPath, iLineNum, sLine);
 
         std::vector<RageVector3> Normals;
         Normals.resize(nNumNormals);
@@ -227,6 +281,16 @@ void RageModelGeometry::LoadMilkshapeAscii(
           if (sscanf(
                   sLine.c_str(), "%f %f %f", &Normal[0], &Normal[1],
                   &Normal[2]) != 3) {
+            THROW;
+          }
+          if (!IsFiniteVector(Normal)) {
+            THROW;
+          }
+
+          const float normalLengthSq =
+              Normal[0] * Normal[0] + Normal[1] * Normal[1] +
+              Normal[2] * Normal[2];
+          if (!std::isfinite(normalLengthSq) || normalLengthSq <= 0.0f) {
             THROW;
           }
 
@@ -245,6 +309,8 @@ void RageModelGeometry::LoadMilkshapeAscii(
         if (sscanf(sLine.c_str(), "%d", &nNumTriangles) != 1) {
           THROW;
         }
+        ValidateCount(
+            nNumTriangles, kMaxTriangles, "triangle", sPath, iLineNum, sLine);
 
         Triangles.resize(nNumTriangles);
 
@@ -253,10 +319,10 @@ void RageModelGeometry::LoadMilkshapeAscii(
             THROW;
           }
 
-          uint16_t nIndices[3];
-          uint16_t nNormalIndices[3];
+          int nIndices[3];
+          int nNormalIndices[3];
           if (sscanf(
-                  sLine.c_str(), "%d %hu %hu %hu %hu %hu %hu %d", &nFlags,
+                  sLine.c_str(), "%d %d %d %d %d %d %d %d", &nFlags,
                   &nIndices[0], &nIndices[1], &nIndices[2], &nNormalIndices[0],
                   &nNormalIndices[1], &nNormalIndices[2], &nIndex) != 8) {
             THROW;
@@ -264,18 +330,16 @@ void RageModelGeometry::LoadMilkshapeAscii(
 
           // deflate the normals into vertices
           for (int k = 0; k < 3; k++) {
-            ASSERT_M(
-                nIndices[k] < Vertices.size(),
-                ssprintf(
-                    "mesh \"%s\" tri #%i accesses vertex %i, but we only have "
-                    "%i",
-                    szName, j, nIndices[k], int(Vertices.size())));
-            ASSERT_M(
-                nNormalIndices[k] < Normals.size(),
-                ssprintf(
-                    "mesh \"%s\" tri #%i accesses normal %i, but we only have "
-                    "%i",
-                    szName, j, nNormalIndices[k], int(Normals.size())));
+            if (nIndices[k] < 0 ||
+                static_cast<size_t>(nIndices[k]) >= Vertices.size() ||
+                nNormalIndices[k] < 0 ||
+                static_cast<size_t>(nNormalIndices[k]) >= Normals.size()) {
+              RageException::Throw(
+                  "Parse error in \"%s\" at line %d: mesh \"%s\" tri #%i "
+                  "uses vertex %i/%zu or normal %i/%zu.",
+                  sPath.c_str(), iLineNum, szName, j, nIndices[k],
+                  Vertices.size(), nNormalIndices[k], Normals.size());
+            }
             RageModelVertex& vertex = Vertices[nIndices[k]];
             RageVector3& normal = Normals[nNormalIndices[k]];
             vertex.n = normal;
@@ -284,9 +348,9 @@ void RageModelGeometry::LoadMilkshapeAscii(
 
           msTriangle& Triangle = Triangles[j];
           // Triangle.nFlags = nFlags;
-          memcpy(
-              &Triangle.nVertexIndices, nIndices,
-              sizeof(Triangle.nVertexIndices));
+          for (int k = 0; k < 3; ++k) {
+            Triangle.nVertexIndices[k] = static_cast<uint16_t>(nIndices[k]);
+          }
           // Triangle.nSmoothingGroup = nIndex;
         }
       }
@@ -295,13 +359,19 @@ void RageModelGeometry::LoadMilkshapeAscii(
 
   OptimizeBones();
 
-  if (DISPLAY->SupportsPerVertexMatrixScale()) {
+  if (DISPLAY != nullptr && DISPLAY->SupportsPerVertexMatrixScale()) {
     if (m_Meshes.size() == 2 && m_Meshes[0].sName == m_Meshes[1].sName) {
       MergeMeshes(1, 0);
     }
   }
 
   // send the finalized vertices to the graphics card
+  if (m_pCompiledGeometry == nullptr) {
+    RageException::Throw(
+        "RageModelGeometry::LoadMilkshapeAscii cannot compile \"%s\" without a "
+        "display backend.",
+        sPath.c_str());
+  }
   m_pCompiledGeometry->Set(m_Meshes, bNeedsNormals);
 }
 

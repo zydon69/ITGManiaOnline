@@ -33,7 +33,7 @@ class Model : public Actor {
   void LoadFromNode(const XNode* pNode) override;
 
   void PlayAnimation(const std::string& sAniName, float fPlayRate = 1);
-  void SetRate(float fRate) { m_fCurAnimationRate = fRate; }
+  void SetRate(float fRate);
   void SetLoop(bool b) { m_bLoop = b; }
   void SetPosition(float fSeconds);
 

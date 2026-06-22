@@ -1,7 +1,9 @@
 #include "ModelManager.h"
 
 #include <map>
+#include <memory>
 #include <string>
+#include <utility>
 
 #include "RageLog.h"
 #include "RageModelGeometry.h"
@@ -14,46 +16,62 @@ ModelManager* MODELMAN =
 ModelManager::ModelManager() {}
 
 ModelManager::~ModelManager() {
-  for (std::map<std::string, RageModelGeometry*>::iterator i =
+  for (std::map<GeometryCacheKey, RageModelGeometry*>::iterator i =
            m_mapFileToGeometry.begin();
        i != m_mapFileToGeometry.end(); ++i) {
     RageModelGeometry* pGeom = i->second;
-    if (pGeom->m_iRefCount) {
+    if (pGeom != nullptr && pGeom->m_iRefCount && LOG != nullptr) {
       LOG->Trace(
-          "MODELMAN LEAK: '%s', RefCount = %d.", i->first.c_str(),
-          pGeom->m_iRefCount);
+          "MODELMAN LEAK: '%s' normals=%d, RefCount = %d.",
+          i->first.first.c_str(), i->first.second ? 1 : 0, pGeom->m_iRefCount);
     }
     RageUtil::SafeDelete(pGeom);
   }
+  m_mapFileToGeometry.clear();
 }
 
 RageModelGeometry* ModelManager::LoadMilkshapeAscii(
     const std::string& sFile, bool bNeedNormals) {
-  std::map<std::string, RageModelGeometry*>::iterator p =
-      m_mapFileToGeometry.find(sFile);
+  const GeometryCacheKey key(sFile, bNeedNormals);
+  std::map<GeometryCacheKey, RageModelGeometry*>::iterator p =
+      m_mapFileToGeometry.find(key);
   if (p != m_mapFileToGeometry.end()) {
     /* Found the geometry.  Just increase the refcount and return it. */
     RageModelGeometry* pGeom = p->second;
+    if (pGeom == nullptr) {
+      m_mapFileToGeometry.erase(p);
+      return LoadMilkshapeAscii(sFile, bNeedNormals);
+    }
     ++pGeom->m_iRefCount;
     return pGeom;
   }
 
-  RageModelGeometry* pGeom = new RageModelGeometry;
+  std::unique_ptr<RageModelGeometry> pGeom(new RageModelGeometry);
   pGeom->LoadMilkshapeAscii(sFile, bNeedNormals);
 
-  m_mapFileToGeometry[sFile] = pGeom;
-  return pGeom;
+  RageModelGeometry* raw = pGeom.release();
+  m_mapFileToGeometry[key] = raw;
+  return raw;
 }
 
 void ModelManager::UnloadModel(RageModelGeometry* m) {
+  if (m == nullptr) {
+    return;
+  }
+  if (m->m_iRefCount <= 0) {
+    if (LOG != nullptr) {
+      LOG->Warn("SRC_AUDIT_FIX SRC-799: duplicate unload of model geometry %p.",
+                static_cast<void*>(m));
+    }
+    return;
+  }
   m->m_iRefCount--;
-  ASSERT(m->m_iRefCount >= 0);
 
   if (m->m_iRefCount) {
     return; /* Can't unload models that are still referenced. */
   }
 
-  for (std::map<std::string, RageModelGeometry*>::iterator i =
+  for (std::map<GeometryCacheKey, RageModelGeometry*>::iterator i =
            m_mapFileToGeometry.begin();
        i != m_mapFileToGeometry.end(); ++i) {
     if (i->second == m) {
@@ -68,7 +86,11 @@ void ModelManager::UnloadModel(RageModelGeometry* m) {
     }
   }
 
-  FAIL_M("Tried to delete a texture that wasn't loaded");
+  if (LOG != nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-799: tried to unload uncached model geometry %p.",
+        static_cast<void*>(m));
+  }
 }
 
 bool ModelManager::SetPrefs(const ModelManagerPrefs& prefs) {

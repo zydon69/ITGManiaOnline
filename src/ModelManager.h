@@ -2,6 +2,7 @@
 #define MODEL_MANAGER_H
 
 #include <map>
+#include <utility>
 #include <string>
 
 #include "RageModelGeometry.h"
@@ -38,7 +39,8 @@ class ModelManager {
   const ModelManagerPrefs& GetPrefs() { return m_Prefs; }
 
  protected:
-  std::map<std::string, RageModelGeometry*> m_mapFileToGeometry;
+  typedef std::pair<std::string, bool> GeometryCacheKey;
+  std::map<GeometryCacheKey, RageModelGeometry*> m_mapFileToGeometry;
 
   ModelManagerPrefs m_Prefs;
 };
