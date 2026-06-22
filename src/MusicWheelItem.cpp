@@ -1,5 +1,6 @@
 #include "MusicWheelItem.h"
 
+#include <algorithm>
 #include <string>
 
 #include "ActorUtil.h"
@@ -16,6 +17,7 @@
 #include "PlayerNumber.h"
 #include "Profile.h"
 #include "ProfileManager.h"
+#include "RageLog.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
 #include "ScreenManager.h"
@@ -36,6 +38,81 @@ static const char* MusicWheelItemTypeNames[] = {
 };
 XToString(MusicWheelItemType);
 
+namespace {
+const int MAX_SECTION_COUNT_DISPLAY = 99999;
+
+void WarnMusicWheelItem(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+bool IsValidMusicWheelItemType(MusicWheelItemType type) {
+  return type >= MusicWheelItemType_Song && type < NUM_MusicWheelItemType;
+}
+
+bool IsValidWheelItemDataType(WheelItemDataType type) {
+  return type >= WheelItemDataType_Generic && type < NUM_WheelItemDataType;
+}
+
+int SanitizeSectionCount(int count) {
+  return std::clamp(count, 0, MAX_SECTION_COUNT_DISPLAY);
+}
+
+std::string GetThemeStringOrFallback(
+    const std::string& group, const std::string& key,
+    const std::string& fallback) {
+  if (THEME == nullptr) {
+    return fallback;
+  }
+  return THEME->GetString(group, key);
+}
+
+void AddLoadedAutoActor(ActorFrame* frame, AutoActor& actor) {
+  if (frame != nullptr && actor.IsLoaded()) {
+    frame->AddChild(actor);
+  }
+}
+
+bool LoadNamedAutoActor(
+    AutoActor& actor, const std::string& path, const std::string& name) {
+  if (path.empty()) {
+    return false;
+  }
+  actor.Load(path);
+  if (!actor.IsLoaded()) {
+    return false;
+  }
+  actor->SetName(name);
+  ActorUtil::LoadAllCommands(actor, "MusicWheelItem");
+  return true;
+}
+
+void SetAutoActorVisible(AutoActor& actor, bool visible) {
+  if (actor.IsLoaded()) {
+    actor->SetVisible(visible);
+  }
+}
+
+bool GetGradesShowMachine(const ThemeMetric<bool>& metric) {
+  if (THEME == nullptr) {
+    return false;
+  }
+  return metric.GetValue();
+}
+
+StepsType GetFallbackStepsType() {
+  if (GAMESTATE == nullptr) {
+    return StepsType_Invalid;
+  }
+  const Style* style = GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
+  if (style == nullptr) {
+    return StepsType_Invalid;
+  }
+  return style->m_StepsType;
+}
+}  // namespace
+
 MusicWheelItemData::MusicWheelItemData(
     WheelItemDataType type, Song* pSong, std::string sSectionName,
     Course* pCourse, Group* pGroup, RageColor color, int iSectionCount)
@@ -48,21 +125,34 @@ MusicWheelItemData::MusicWheelItemData(
       m_sLabel(""),
       m_pAction() {}
 
-MusicWheelItem::MusicWheelItem(std::string sType) : WheelItemBase(sType) {
+MusicWheelItem::MusicWheelItem(std::string sType)
+    : WheelItemBase(sType), m_pTextSectionCount(nullptr) {
+  FOREACH_ENUM(MusicWheelItemType, i) { m_pText[i] = nullptr; }
+
   GRADES_SHOW_MACHINE.Load(sType, "GradesShowMachine");
+  if (THEME == nullptr) {
+    WarnMusicWheelItem(
+        "SRC_AUDIT_FIX SRC-1280: MusicWheelItem loaded without theme "
+        "manager.");
+    return;
+  }
 
   FOREACH_ENUM(MusicWheelItemType, i) {
-    m_sprColorPart[i].Load(
-        THEME->GetPathG(sType, MusicWheelItemTypeToString(i) + " ColorPart"));
-    m_sprColorPart[i]->SetName(MusicWheelItemTypeToString(i) + "ColorPart");
-    ActorUtil::LoadAllCommands(m_sprColorPart[i], "MusicWheelItem");
-    this->AddChild(m_sprColorPart[i]);
+    if (LoadNamedAutoActor(
+            m_sprColorPart[i],
+            THEME->GetPathG(
+                sType, MusicWheelItemTypeToString(i) + " ColorPart"),
+            MusicWheelItemTypeToString(i) + "ColorPart")) {
+      AddLoadedAutoActor(this, m_sprColorPart[i]);
+    }
 
-    m_sprNormalPart[i].Load(
-        THEME->GetPathG(sType, MusicWheelItemTypeToString(i) + " NormalPart"));
-    m_sprNormalPart[i]->SetName(MusicWheelItemTypeToString(i) + "NormalPart");
-    ActorUtil::LoadAllCommands(m_sprNormalPart[i], "MusicWheelItem");
-    this->AddChild(m_sprNormalPart[i]);
+    if (LoadNamedAutoActor(
+            m_sprNormalPart[i],
+            THEME->GetPathG(
+                sType, MusicWheelItemTypeToString(i) + " NormalPart"),
+            MusicWheelItemTypeToString(i) + "NormalPart")) {
+      AddLoadedAutoActor(this, m_sprNormalPart[i]);
+    }
   }
 
   m_TextBanner.SetName("SongName");
@@ -73,16 +163,16 @@ MusicWheelItem::MusicWheelItem(std::string sType) : WheelItemBase(sType) {
   this->AddChild(&m_TextBanner);
 
   FOREACH_ENUM(MusicWheelItemType, i) {
-    m_sprOverPart[i].Load(
-        THEME->GetPathG(sType, MusicWheelItemTypeToString(i) + " OverPart"));
-    m_sprOverPart[i]->SetName(MusicWheelItemTypeToString(i) + "OverPart");
-    ActorUtil::LoadAllCommands(m_sprOverPart[i], "MusicWheelItem");
-    this->AddChild(m_sprOverPart[i]);
+    if (LoadNamedAutoActor(
+            m_sprOverPart[i],
+            THEME->GetPathG(
+                sType, MusicWheelItemTypeToString(i) + " OverPart"),
+            MusicWheelItemTypeToString(i) + "OverPart")) {
+      AddLoadedAutoActor(this, m_sprOverPart[i]);
+    }
   }
 
   FOREACH_ENUM(MusicWheelItemType, i) {
-    m_pText[i] = nullptr;
-
     // Don't init text for Type_Song. It uses a TextBanner.
     if (i == MusicWheelItemType_Song) {
       continue;
@@ -91,8 +181,12 @@ MusicWheelItem::MusicWheelItem(std::string sType) : WheelItemBase(sType) {
     m_pText[i] = new BitmapText;
     m_pText[i]->SetName(MusicWheelItemTypeToString(i));
     ActorUtil::LoadAllCommands(m_pText[i], "MusicWheelItem");
-    m_pText[i]->LoadFromFont(
-        THEME->GetPathF(sType, MusicWheelItemTypeToString(i)));
+    if (!m_pText[i]->LoadFromFont(
+            THEME->GetPathF(sType, MusicWheelItemTypeToString(i)))) {
+      WarnMusicWheelItem(
+          "SRC_AUDIT_FIX SRC-1282: MusicWheelItem failed to load item text "
+          "font.");
+    }
     ActorUtil::SetXY(m_pText[i], "MusicWheelItem");
     m_pText[i]->PlayCommand("On");
     this->AddChild(m_pText[i]);
@@ -101,7 +195,11 @@ MusicWheelItem::MusicWheelItem(std::string sType) : WheelItemBase(sType) {
   m_pTextSectionCount = new BitmapText;
   m_pTextSectionCount->SetName("SectionCount");
   ActorUtil::LoadAllCommands(m_pTextSectionCount, "MusicWheelItem");
-  m_pTextSectionCount->LoadFromFont(THEME->GetPathF(sType, "SectionCount"));
+  if (!m_pTextSectionCount->LoadFromFont(THEME->GetPathF(sType, "SectionCount"))) {
+    WarnMusicWheelItem(
+        "SRC_AUDIT_FIX SRC-1282: MusicWheelItem failed to load section count "
+        "font.");
+  }
   ActorUtil::SetXY(m_pTextSectionCount, "MusicWheelItem");
   m_pTextSectionCount->PlayCommand("On");
   this->AddChild(m_pTextSectionCount);
@@ -114,6 +212,9 @@ MusicWheelItem::MusicWheelItem(std::string sType) : WheelItemBase(sType) {
 
   FOREACH_PlayerNumber(p) {
     m_pGradeDisplay[p].Load(THEME->GetPathG(sType, "grades"));
+    if (!m_pGradeDisplay[p].IsLoaded()) {
+      continue;
+    }
     m_pGradeDisplay[p]->SetName(ssprintf("GradeP%d", int(p + 1)));
     this->AddChild(m_pGradeDisplay[p]);
     LOAD_ALL_COMMANDS_AND_SET_XY(m_pGradeDisplay[p]);
@@ -135,17 +236,17 @@ MusicWheelItem::MusicWheelItem(const MusicWheelItem& cpy)
       m_WheelNotifyIcon(cpy.m_WheelNotifyIcon) {
   FOREACH_ENUM(MusicWheelItemType, i) {
     m_sprColorPart[i] = cpy.m_sprColorPart[i];
-    this->AddChild(m_sprColorPart[i]);
+    AddLoadedAutoActor(this, m_sprColorPart[i]);
 
     m_sprNormalPart[i] = cpy.m_sprNormalPart[i];
-    this->AddChild(m_sprNormalPart[i]);
+    AddLoadedAutoActor(this, m_sprNormalPart[i]);
   }
 
   this->AddChild(&m_TextBanner);
 
   FOREACH_ENUM(MusicWheelItemType, i) {
     m_sprOverPart[i] = cpy.m_sprOverPart[i];
-    this->AddChild(m_sprOverPart[i]);
+    AddLoadedAutoActor(this, m_sprOverPart[i]);
   }
 
   FOREACH_ENUM(MusicWheelItemType, i) {
@@ -157,14 +258,18 @@ MusicWheelItem::MusicWheelItem(const MusicWheelItem& cpy)
     }
   }
 
-  m_pTextSectionCount = new BitmapText(*cpy.m_pTextSectionCount);
-  this->AddChild(m_pTextSectionCount);
+  if (cpy.m_pTextSectionCount == nullptr) {
+    m_pTextSectionCount = nullptr;
+  } else {
+    m_pTextSectionCount = new BitmapText(*cpy.m_pTextSectionCount);
+    this->AddChild(m_pTextSectionCount);
+  }
 
   this->AddChild(&m_WheelNotifyIcon);
 
   FOREACH_PlayerNumber(p) {
     m_pGradeDisplay[p] = cpy.m_pGradeDisplay[p];
-    this->AddChild(m_pGradeDisplay[p]);
+    AddLoadedAutoActor(this, m_pGradeDisplay[p]);
   }
 }
 
@@ -180,32 +285,50 @@ void MusicWheelItem::LoadFromWheelItemData(
 
   const MusicWheelItemData* pWID =
       dynamic_cast<const MusicWheelItemData*>(pData);
+  if (pWID == nullptr) {
+    WarnMusicWheelItem(
+        "SRC_AUDIT_FIX SRC-1286: MusicWheelItem ignored non-music wheel item "
+        "data.");
+    return;
+  }
 
   // hide all
   FOREACH_ENUM(MusicWheelItemType, i) {
-    m_sprColorPart[i]->SetVisible(false);
-    m_sprNormalPart[i]->SetVisible(false);
-    m_sprOverPart[i]->SetVisible(false);
+    SetAutoActorVisible(m_sprColorPart[i], false);
+    SetAutoActorVisible(m_sprNormalPart[i], false);
+    SetAutoActorVisible(m_sprOverPart[i], false);
   }
   m_TextBanner.SetVisible(false);
   FOREACH_ENUM(MusicWheelItemType, i)
   if (m_pText[i]) {
     m_pText[i]->SetVisible(false);
   }
-  m_pTextSectionCount->SetVisible(false);
+  if (m_pTextSectionCount != nullptr) {
+    m_pTextSectionCount->SetVisible(false);
+  }
   m_WheelNotifyIcon.SetVisible(false);
-  FOREACH_PlayerNumber(p) m_pGradeDisplay[p]->SetVisible(false);
+  FOREACH_PlayerNumber(p) { SetAutoActorVisible(m_pGradeDisplay[p], false); }
 
   // Fill these in below
   std::string sDisplayName, sTranslitName;
   MusicWheelItemType type = MusicWheelItemType_Invalid;
 
+  if (!IsValidWheelItemDataType(pWID->m_Type)) {
+    WarnMusicWheelItem(
+        "SRC_AUDIT_FIX SRC-1288: MusicWheelItem ignored invalid wheel item "
+        "type.");
+    return;
+  }
+
   switch (pWID->m_Type) {
-    DEFAULT_FAIL(pWID->m_Type);
     case WheelItemDataType_Song:
       type = MusicWheelItemType_Song;
 
-      m_TextBanner.SetFromSong(pWID->m_pSong);
+      if (pWID->m_pSong == nullptr) {
+        m_TextBanner.SetFromString(pWID->m_sText, "", "", "", "", "");
+      } else {
+        m_TextBanner.SetFromSong(pWID->m_pSong);
+      }
       // We can do this manually if we wanted... maybe have a metric for
       // overrides? -aj
       m_TextBanner.SetDiffuse(pWID->m_color);
@@ -217,34 +340,53 @@ void MusicWheelItem::LoadFromWheelItemData(
       break;
     case WheelItemDataType_Section: {
       if (pWID->m_pGroup == nullptr) {
-        sDisplayName = SONGMAN->ShortenGroupName(pWID->m_sText);
+        sDisplayName = SONGMAN == nullptr
+                           ? pWID->m_sText
+                           : SONGMAN->ShortenGroupName(pWID->m_sText);
       } else {
         if (pWID->m_pGroup->GetSeries().empty()) {
-          sDisplayName =
-              SONGMAN->ShortenGroupName(pWID->m_pGroup->GetDisplayTitle());
-          sTranslitName =
-              SONGMAN->ShortenGroupName(pWID->m_pGroup->GetTranslitTitle());
+          sDisplayName = SONGMAN == nullptr
+                             ? pWID->m_pGroup->GetDisplayTitle()
+                             : SONGMAN->ShortenGroupName(
+                                   pWID->m_pGroup->GetDisplayTitle());
+          sTranslitName = SONGMAN == nullptr
+                              ? pWID->m_pGroup->GetTranslitTitle()
+                              : SONGMAN->ShortenGroupName(
+                                    pWID->m_pGroup->GetTranslitTitle());
         } else {
           // This will eventually do something different when we eventually
           // implement nested folders for now, use the same behavior.
-          sDisplayName =
-              SONGMAN->ShortenGroupName(pWID->m_pGroup->GetDisplayTitle());
-          sTranslitName =
-              SONGMAN->ShortenGroupName(pWID->m_pGroup->GetTranslitTitle());
+          sDisplayName = SONGMAN == nullptr
+                             ? pWID->m_pGroup->GetDisplayTitle()
+                             : SONGMAN->ShortenGroupName(
+                                   pWID->m_pGroup->GetDisplayTitle());
+          sTranslitName = SONGMAN == nullptr
+                              ? pWID->m_pGroup->GetTranslitTitle()
+                              : SONGMAN->ShortenGroupName(
+                                    pWID->m_pGroup->GetTranslitTitle());
         }
       }
-      if (GAMESTATE->sExpandedSectionName == pWID->m_sText) {
+      if (GAMESTATE != nullptr &&
+          GAMESTATE->sExpandedSectionName == pWID->m_sText) {
         type = MusicWheelItemType_SectionExpanded;
       } else {
         type = MusicWheelItemType_SectionCollapsed;
       }
 
-      m_pTextSectionCount->SetText(ssprintf("%d", pWID->m_iSectionCount));
-      m_pTextSectionCount->SetVisible(true);
+      if (m_pTextSectionCount != nullptr) {
+        m_pTextSectionCount->SetText(
+            ssprintf("%d", SanitizeSectionCount(pWID->m_iSectionCount)));
+        m_pTextSectionCount->SetVisible(true);
+      }
     } break;
     case WheelItemDataType_Course:
-      sDisplayName = pWID->m_pCourse->GetDisplayFullTitle();
-      sTranslitName = pWID->m_pCourse->GetTranslitFullTitle();
+      if (pWID->m_pCourse == nullptr) {
+        sDisplayName = pWID->m_sText;
+        sTranslitName = "";
+      } else {
+        sDisplayName = pWID->m_pCourse->GetDisplayFullTitle();
+        sTranslitName = pWID->m_pCourse->GetTranslitFullTitle();
+      }
       type = MusicWheelItemType_Course;
       m_WheelNotifyIcon.SetFlags(pWID->m_Flags);
       m_WheelNotifyIcon.SetVisible(true);
@@ -252,34 +394,50 @@ void MusicWheelItem::LoadFromWheelItemData(
     case WheelItemDataType_Sort:
       sDisplayName = pWID->m_sLabel;
       // hack to get mode items working. -freem
-      if (pWID->m_pAction->m_pm != PlayMode_Invalid) {
+      if (!pWID->m_pAction.isNull() &&
+          pWID->m_pAction->m_pm != PlayMode_Invalid) {
         type = MusicWheelItemType_Mode;
       } else {
         type = MusicWheelItemType_Sort;
       }
       break;
     case WheelItemDataType_Roulette:
-      sDisplayName = THEME->GetString("MusicWheel", "Roulette");
+      sDisplayName =
+          GetThemeStringOrFallback("MusicWheel", "Roulette", "Roulette");
       type = MusicWheelItemType_Roulette;
       break;
     case WheelItemDataType_Random:
-      sDisplayName = THEME->GetString("MusicWheel", "Random");
+      sDisplayName = GetThemeStringOrFallback("MusicWheel", "Random", "Random");
       type = MusicWheelItemType_Random;
       break;
     case WheelItemDataType_Portal:
-      sDisplayName = THEME->GetString("MusicWheel", "Portal");
+      sDisplayName = GetThemeStringOrFallback("MusicWheel", "Portal", "Portal");
       type = MusicWheelItemType_Portal;
       break;
     case WheelItemDataType_Custom:
       sDisplayName = pWID->m_sLabel;
       type = MusicWheelItemType_Custom;
       break;
+    case WheelItemDataType_Generic:
+      sDisplayName = pWID->m_sText;
+      type = MusicWheelItemType_Custom;
+      break;
+    default:
+      return;
   }
 
-  m_sprColorPart[type]->SetVisible(true);
-  m_sprColorPart[type]->SetDiffuse(pWID->m_color);
-  m_sprNormalPart[type]->SetVisible(true);
-  m_sprOverPart[type]->SetVisible(true);
+  if (!IsValidMusicWheelItemType(type)) {
+    WarnMusicWheelItem(
+        "SRC_AUDIT_FIX SRC-1294: MusicWheelItem skipped invalid visual type.");
+    return;
+  }
+
+  if (m_sprColorPart[type].IsLoaded()) {
+    m_sprColorPart[type]->SetVisible(true);
+    m_sprColorPart[type]->SetDiffuse(pWID->m_color);
+  }
+  SetAutoActorVisible(m_sprNormalPart[type], true);
+  SetAutoActorVisible(m_sprOverPart[type], true);
   BitmapText* bt = m_pText[type];
   if (bt) {
     bt->SetText(sDisplayName, sTranslitName);
@@ -288,7 +446,7 @@ void MusicWheelItem::LoadFromWheelItemData(
   }
 
   FOREACH_ENUM(MusicWheelItemType, i) {
-    if (m_sprColorPart[i]->GetVisible()) {
+    if (m_sprColorPart[i].IsLoaded() && m_sprColorPart[i]->GetVisible()) {
       SetGrayBar(m_sprColorPart[i]);
       break;
     }
@@ -307,7 +465,7 @@ void MusicWheelItem::LoadFromWheelItemData(
     msg.SetParam("Color", pWID->m_color);
     msg.SetParam("Label", pWID->m_sLabel);
 
-    this->HandleMessage(msg);
+    WheelItemBase::HandleMessage(msg);
   }
 }
 
@@ -318,11 +476,14 @@ void MusicWheelItem::RefreshGrades() {
   const MusicWheelItemData* pWID =
       dynamic_cast<const MusicWheelItemData*>(m_pData);
 
-  if (pWID == nullptr) {
+  if (pWID == nullptr || GAMESTATE == nullptr || PROFILEMAN == nullptr) {
     return;  // LoadFromWheelItemData() hasn't been called yet.
   }
   FOREACH_HumanPlayer(p) {
-    m_pGradeDisplay[p]->SetVisible(false);
+    SetAutoActorVisible(m_pGradeDisplay[p], false);
+    if (!m_pGradeDisplay[p].IsLoaded()) {
+      continue;
+    }
 
     if (pWID->m_pSong == nullptr && pWID->m_pCourse == nullptr) {
       continue;
@@ -340,7 +501,7 @@ void MusicWheelItem::RefreshGrades() {
     ProfileSlot ps;
     if (PROFILEMAN->IsPersistentProfile(p)) {
       ps = (ProfileSlot)p;
-    } else if (GRADES_SHOW_MACHINE) {
+    } else if (GetGradesShowMachine(GRADES_SHOW_MACHINE)) {
       ps = ProfileSlot_Machine;
     } else {
       continue;
@@ -352,15 +513,25 @@ void MusicWheelItem::RefreshGrades() {
     } else if (GAMESTATE->m_pCurTrail[p]) {
       st = GAMESTATE->m_pCurTrail[p]->m_StepsType;
     } else {
-      st = GAMESTATE->GetCurrentStyle(PLAYER_INVALID)->m_StepsType;
+      st = GetFallbackStepsType();
+      if (st == StepsType_Invalid) {
+        continue;
+      }
     }
 
     m_pGradeDisplay[p]->SetVisible(true);
 
     Profile* pProfile = PROFILEMAN->GetProfile(ps);
+    if (pProfile == nullptr || dc == Difficulty_Invalid ||
+        st == StepsType_Invalid) {
+      Message msg("SetGrade");
+      msg.SetParam("PlayerNumber", p);
+      m_pGradeDisplay[p]->HandleMessage(msg);
+      continue;
+    }
 
     HighScoreList* pHSL = nullptr;
-    if (PROFILEMAN->IsPersistentProfile(ps) && dc != Difficulty_Invalid) {
+    if (PROFILEMAN->IsPersistentProfile(ps)) {
       if (pWID->m_pSong) {
         const Steps* pSteps =
             SongUtil::GetStepsByDifficulty(pWID->m_pSong, st, dc);
@@ -403,15 +574,18 @@ void MusicWheelItem::HandleMessage(const Message& msg) {
       msg == Message_PlayerProfileSet) {
     const MusicWheelItemData* pWID =
         dynamic_cast<const MusicWheelItemData*>(m_pData);
+    if (pWID == nullptr || !IsValidWheelItemDataType(pWID->m_Type)) {
+      return;
+    }
     MusicWheelItemType type = MusicWheelItemType_Invalid;
 
     switch (pWID->m_Type) {
-      DEFAULT_FAIL(pWID->m_Type);
       case WheelItemDataType_Song:
         type = MusicWheelItemType_Song;
         break;
       case WheelItemDataType_Section:
-        if (GAMESTATE->sExpandedSectionName == pWID->m_sText) {
+        if (GAMESTATE != nullptr &&
+            GAMESTATE->sExpandedSectionName == pWID->m_sText) {
           type = MusicWheelItemType_SectionExpanded;
         } else {
           type = MusicWheelItemType_SectionCollapsed;
@@ -421,7 +595,8 @@ void MusicWheelItem::HandleMessage(const Message& msg) {
         type = MusicWheelItemType_Course;
         break;
       case WheelItemDataType_Sort:
-        if (pWID->m_pAction->m_pm != PlayMode_Invalid) {
+        if (!pWID->m_pAction.isNull() &&
+            pWID->m_pAction->m_pm != PlayMode_Invalid) {
           type = MusicWheelItemType_Mode;
         } else {
           type = MusicWheelItemType_Sort;
@@ -439,6 +614,14 @@ void MusicWheelItem::HandleMessage(const Message& msg) {
       case WheelItemDataType_Custom:
         type = MusicWheelItemType_Custom;
         break;
+      case WheelItemDataType_Generic:
+        type = MusicWheelItemType_Custom;
+        break;
+      default:
+        return;
+    }
+    if (!IsValidMusicWheelItemType(type)) {
+      return;
     }
 
     Message setMsg("Set");
@@ -448,7 +631,7 @@ void MusicWheelItem::HandleMessage(const Message& msg) {
     setMsg.SetParam("Type", MusicWheelItemTypeToString(type));
     setMsg.SetParam("Color", pWID->m_color);
     setMsg.SetParam("Label", pWID->m_sLabel);
-    this->HandleMessage(setMsg);
+    WheelItemBase::HandleMessage(setMsg);
 
     RefreshGrades();
   }
