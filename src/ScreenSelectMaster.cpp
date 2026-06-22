@@ -530,10 +530,11 @@ void ScreenSelectMaster::BeginScreen() {
     WarnScreenSelectMaster(m_sName + " began with no game commands.");
   }
   // TODO: Move default choice to ScreenSelect
+  const std::string sDefaultChoice = GetDefaultChoice();
   int iDefaultChoice = -1;
   for (unsigned c = 0; c < m_aGameCommands.size(); c++) {
     const GameCommand& mc = m_aGameCommands[c];
-    if (mc.m_sName == (std::string)DEFAULT_CHOICE) {
+    if (mc.m_sName == sDefaultChoice) {
       iDefaultChoice = c;
       break;
     }

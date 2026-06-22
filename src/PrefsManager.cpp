@@ -855,12 +855,18 @@ void PrefsManager::TranslateDeprecatedFlags() {
   }
 }
 
-void PrefsManager::SavePrefsToDisk() {
+bool PrefsManager::SavePrefsToDisk() {
   LogGlobalOffsetDiagnostics("save_prefs_to_disk_begin");
   IniFile ini;
   SavePrefsToIni(ini);
-  ini.WriteFile(SpecialFiles::PREFERENCES_INI_PATH);
+  const bool bSaved = ini.WriteFile(SpecialFiles::PREFERENCES_INI_PATH);
+  if (!bSaved && LOG != nullptr) {
+    LOG->Warn(
+        "PrefsManager: failed to write %s.",
+        SpecialFiles::PREFERENCES_INI_PATH.c_str());
+  }
   LogGlobalOffsetDiagnostics("save_prefs_to_disk_end");
+  return bSaved;
 }
 
 void PrefsManager::SavePrefsToIni(IniFile& ini) {

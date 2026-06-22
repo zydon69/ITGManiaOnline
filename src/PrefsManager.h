@@ -395,7 +395,7 @@ class PrefsManager {
   void SavePrefsToIni(IniFile& ini);
 
   void ReadPrefsFromDisk();
-  void SavePrefsToDisk();
+  bool SavePrefsToDisk();
 
   void ResetToFactoryDefaults();
 
