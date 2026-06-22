@@ -11,6 +11,14 @@ int RageSoundReader::RetriedRead(
   if (iFrames == 0) {
     return 0;
   }
+  if (iFrames < 0 || pBuffer == nullptr) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "RageSoundReader::RetriedRead called with invalid buffer/frame "
+          "count.");
+    }
+    return RageSoundReader::ERROR;
+  }
 
   // pReader may return 0, which means "try again immediately". As a failsafe,
   // only try this a finite number of times. Use a high number, because in
@@ -32,7 +40,9 @@ int RageSoundReader::RetriedRead(
     }
   }
 
-  LOG->Warn("WARNING: could not read from the sound file. Giving up.");
+  if (LOG != nullptr) {
+    LOG->Warn("WARNING: could not read from the sound file. Giving up.");
+  }
 
   // Pretend we got EOF.
   return RageSoundReader::END_OF_FILE;

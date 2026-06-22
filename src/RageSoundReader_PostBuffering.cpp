@@ -1,6 +1,8 @@
 #include "RageSoundReader_PostBuffering.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <string>
 
 #include "RageSoundReader.h"
@@ -24,11 +26,20 @@ RageSoundReader_PostBuffering::RageSoundReader_PostBuffering(
 }
 
 void RageSoundReader_PostBuffering::SetMasterVolume(float fVolume) {
+  if (!std::isfinite(fVolume)) {
+    fVolume = 1.0f;
+  }
   LockMut(g_Mutex);
-  g_fMasterVolume = fVolume;
+  g_fMasterVolume = std::clamp(fVolume, 0.0f, 1.0f);
 }
 
 int RageSoundReader_PostBuffering::Read(float* pBuf, int iFrames) {
+  if (iFrames == 0) {
+    return 0;
+  }
+  if (pBuf == nullptr || iFrames < 0 || m_pSource.isNull()) {
+    return RageSoundReader::ERROR;
+  }
   iFrames = m_pSource->Read(pBuf, iFrames);
   if (iFrames < 0) {
     return iFrames;
@@ -40,11 +51,22 @@ int RageSoundReader_PostBuffering::Read(float* pBuf, int iFrames) {
   // Square the master so lower volumes are more sensitive.
   // This lines up better with perceived volume.
   float fVolume = m_fVolume * g_fMasterVolume * g_fMasterVolume;
+  if (!std::isfinite(fVolume)) {
+    fVolume = 1.0f;
+  }
   fVolume = std::clamp(fVolume, 0.0f, 1.0f);
   g_Mutex.Unlock();
 
   if (fVolume != 1.0f) {
-    RageSoundUtil::Attenuate(pBuf, iFrames * this->GetNumChannels(), fVolume);
+    const unsigned channels = this->GetNumChannels();
+    if (channels == 0 ||
+        static_cast<size_t>(iFrames) >
+            std::numeric_limits<size_t>::max() / channels) {
+      return RageSoundReader::ERROR;
+    }
+    RageSoundUtil::Attenuate(
+        pBuf, static_cast<int>(static_cast<size_t>(iFrames) * channels),
+        fVolume);
   }
 
   return iFrames;
@@ -53,7 +75,10 @@ int RageSoundReader_PostBuffering::Read(float* pBuf, int iFrames) {
 bool RageSoundReader_PostBuffering::SetProperty(
     const std::string& sProperty, float fValue) {
   if (sProperty == "Volume") {
-    m_fVolume = fValue;
+    if (!std::isfinite(fValue)) {
+      return false;
+    }
+    m_fVolume = std::clamp(fValue, 0.0f, 1.0f);
     return true;
   }
 

@@ -11,27 +11,47 @@ class RageSoundReader_Filter : public RageSoundReader {
  public:
   RageSoundReader_Filter(RageSoundReader* pSource) : m_pSource(pSource) {}
 
-  virtual int GetLength() const { return m_pSource->GetLength(); }
-  virtual int GetLength_Fast() const { return m_pSource->GetLength_Fast(); }
-  virtual int SetPosition(int iFrame) { return m_pSource->SetPosition(iFrame); }
+  virtual int GetLength() const { return m_pSource.isNull() ? 0 : m_pSource->GetLength(); }
+  virtual int GetLength_Fast() const {
+    return m_pSource.isNull() ? 0 : m_pSource->GetLength_Fast();
+  }
+  virtual int SetPosition(int iFrame) {
+    return m_pSource.isNull() ? RageSoundReader::ERROR
+                              : m_pSource->SetPosition(iFrame);
+  }
   virtual int Read(float* pBuf, int iFrames) {
+    if (iFrames == 0) {
+      return 0;
+    }
+    if (iFrames < 0 || pBuf == nullptr || m_pSource.isNull()) {
+      return RageSoundReader::ERROR;
+    }
     return m_pSource->Read(pBuf, iFrames);
   }
-  virtual int GetSampleRate() const { return m_pSource->GetSampleRate(); }
+  virtual int GetSampleRate() const {
+    return m_pSource.isNull() ? 0 : m_pSource->GetSampleRate();
+  }
   virtual unsigned GetNumChannels() const {
-    return m_pSource->GetNumChannels();
+    return m_pSource.isNull() ? 0 : m_pSource->GetNumChannels();
   }
   virtual bool SetProperty(const std::string& sProperty, float fValue) {
+    if (m_pSource.isNull()) {
+      return false;
+    }
     return m_pSource->SetProperty(sProperty, fValue);
   }
   virtual int GetNextSourceFrame() const {
-    return m_pSource->GetNextSourceFrame();
+    return m_pSource.isNull() ? 0 : m_pSource->GetNextSourceFrame();
   }
   virtual float GetStreamToSourceRatio() const {
-    return m_pSource->GetStreamToSourceRatio();
+    return m_pSource.isNull() ? 1.0f : m_pSource->GetStreamToSourceRatio();
   }
-  virtual RageSoundReader* GetSource() { return &*m_pSource; }
-  virtual std::string GetError() const { return m_pSource->GetError(); }
+  virtual RageSoundReader* GetSource() {
+    return m_pSource.isNull() ? nullptr : &*m_pSource;
+  }
+  virtual std::string GetError() const {
+    return m_pSource.isNull() ? "No sound source" : m_pSource->GetError();
+  }
 
  protected:
   HiddenPtr<RageSoundReader> m_pSource;

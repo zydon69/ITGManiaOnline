@@ -10,6 +10,7 @@
 
 #include "RageSoundReader_PitchChange.h"
 
+#include <cmath>
 #include <string>
 
 #include "Preference.h"
@@ -23,10 +24,28 @@ static Preference<bool> g_bRateModPreservesPitch("RateModPreservesPitch", true);
 RageSoundReader_PitchChange::RageSoundReader_PitchChange(
     RageSoundReader* pSource)
     : RageSoundReader_Filter(nullptr) {
-  bool bPreservePitch = g_bRateModPreservesPitch.Get();
+  m_fSpeedRatio = 1.0f;
+  m_fPitchRatio = 1.0f;
+  m_fLastSetSpeedRatio = m_fSpeedRatio;
+  m_fLastSetPitchRatio = m_fPitchRatio;
+  m_pSpeedChange = nullptr;
+  m_pResample = nullptr;
 
-  m_pSpeedChange = new RageSoundReader_SpeedChange(pSource);
+  if (pSource == nullptr || pSource->GetSampleRate() <= 0 ||
+      pSource->GetNumChannels() == 0) {
+    m_pSource = pSource;
+    return;
+  }
+
+  bool bPreservePitch = g_bRateModPreservesPitch.Get();
   if (bPreservePitch) {
+    m_pSpeedChange = new RageSoundReader_SpeedChange(pSource);
+    if (m_pSpeedChange->GetSampleRate() <= 0 ||
+        m_pSpeedChange->GetNumChannels() == 0) {
+      delete m_pSpeedChange;
+      m_pSpeedChange = nullptr;
+      return;
+    }
     m_pResample = new RageSoundReader_Resample_Good(
         m_pSpeedChange, m_pSpeedChange->GetSampleRate());
   } else {
@@ -34,10 +53,6 @@ RageSoundReader_PitchChange::RageSoundReader_PitchChange(
         new RageSoundReader_Resample_Good(pSource, pSource->GetSampleRate());
   }
   m_pSource = m_pResample;
-  m_fSpeedRatio = 1.0f;
-  m_fPitchRatio = 1.0f;
-  m_fLastSetSpeedRatio = m_fSpeedRatio;
-  m_fLastSetPitchRatio = m_fPitchRatio;
 }
 
 RageSoundReader_PitchChange::RageSoundReader_PitchChange(
@@ -46,9 +61,14 @@ RageSoundReader_PitchChange::RageSoundReader_PitchChange(
   /* The source tree has already been copied.  Our source is m_pResample; its
    * source is m_pSpeedChange (and its source is a copy of the pSource we were
    * initialized with). */
-  m_pResample = dynamic_cast<RageSoundReader_Resample_Good*>(&*m_pSource);
+  m_pResample =
+      m_pSource.isNull()
+          ? nullptr
+          : dynamic_cast<RageSoundReader_Resample_Good*>(&*m_pSource);
   m_pSpeedChange =
-      dynamic_cast<RageSoundReader_SpeedChange*>(m_pResample->GetSource());
+      m_pResample == nullptr
+          ? nullptr
+          : dynamic_cast<RageSoundReader_SpeedChange*>(m_pResample->GetSource());
   m_fSpeedRatio = cpy.m_fSpeedRatio;
   m_fPitchRatio = cpy.m_fPitchRatio;
   m_fLastSetSpeedRatio = cpy.m_fLastSetSpeedRatio;
@@ -56,6 +76,13 @@ RageSoundReader_PitchChange::RageSoundReader_PitchChange(
 }
 
 int RageSoundReader_PitchChange::Read(float* pBuf, int iFrames) {
+  if (iFrames == 0) {
+    return 0;
+  }
+  if (pBuf == nullptr || iFrames < 0 || m_pSource.isNull() ||
+      m_pResample == nullptr) {
+    return RageSoundReader::ERROR;
+  }
   /* m_pSpeedChange->NextReadWillStep is true if speed changes will be applied
    * immediately on the next Read().  When this is true, apply the ratio to the
    * resampler and the speed changer simultaneously, so they take effect as
@@ -63,6 +90,7 @@ int RageSoundReader_PitchChange::Read(float* pBuf, int iFrames) {
   bool bPreservePitch = g_bRateModPreservesPitch.Get();
   if ((!bPreservePitch) || ((m_fLastSetSpeedRatio != m_fSpeedRatio ||
                              m_fLastSetPitchRatio != m_fPitchRatio) &&
+                            m_pSpeedChange != nullptr &&
                             m_pSpeedChange->NextReadWillStep())) {
     float fRate = GetStreamToSourceRatio();
 
@@ -77,6 +105,10 @@ int RageSoundReader_PitchChange::Read(float* pBuf, int iFrames) {
     if (bPreservePitch) {
       m_pResample->SetRate(m_fPitchRatio);
       float fActualPitchRatio = m_pResample->GetRate();
+      if (!std::isfinite(fActualPitchRatio) || fActualPitchRatio <= 0.0f ||
+          m_pSpeedChange == nullptr) {
+        return RageSoundReader::ERROR;
+      }
       float fRequestedSpeedRatio = m_fSpeedRatio / fActualPitchRatio;
       m_pSpeedChange->SetSpeedRatio(fRequestedSpeedRatio);
       m_fLastSetPitchRatio = m_fPitchRatio;
@@ -104,16 +136,30 @@ bool RageSoundReader_PitchChange::SetProperty(
     return false;
   }
   if (sProperty == "Speed") {
-    SetSpeedRatio(fValue);
-    return true;
+    return SetSpeedRatio(fValue);
   }
 
   if (sProperty == "Pitch") {
-    SetPitchRatio(fValue);
-    return true;
+    return SetPitchRatio(fValue);
   }
 
   return RageSoundReader_Filter::SetProperty(sProperty, fValue);
+}
+
+bool RageSoundReader_PitchChange::SetSpeedRatio(float fRatio) {
+  if (!std::isfinite(fRatio) || fRatio <= 0.0f) {
+    return false;
+  }
+  m_fSpeedRatio = fRatio;
+  return true;
+}
+
+bool RageSoundReader_PitchChange::SetPitchRatio(float fRatio) {
+  if (!std::isfinite(fRatio) || fRatio <= 0.0f) {
+    return false;
+  }
+  m_fPitchRatio = fRatio;
+  return true;
 }
 
 /*

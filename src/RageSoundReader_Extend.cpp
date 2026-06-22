@@ -1,7 +1,9 @@
 #include "RageSoundReader_Extend.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <limits>
 #include <string>
 
 #include "RageSoundReader.h"
@@ -9,6 +11,53 @@
 #include "RageSoundUtil.h"
 #include "RageUtil.h"
 #include "global.h"
+
+namespace {
+bool FramesToSamples(int iFrames, unsigned iChannels, size_t* pSamples) {
+  if (iFrames < 0 || iChannels == 0) {
+    return false;
+  }
+  const size_t frames = static_cast<size_t>(iFrames);
+  const size_t channels = static_cast<size_t>(iChannels);
+  if (frames > std::numeric_limits<size_t>::max() / channels) {
+    return false;
+  }
+  *pSamples = frames * channels;
+  return true;
+}
+
+bool SecondsToFrames(float fSeconds, int iSampleRate, int* pFrames) {
+  if (!std::isfinite(fSeconds) || iSampleRate <= 0) {
+    return false;
+  }
+  const double frames =
+      static_cast<double>(fSeconds) * static_cast<double>(iSampleRate);
+  if (frames < static_cast<double>(std::numeric_limits<int>::min()) ||
+      frames > static_cast<double>(std::numeric_limits<int>::max())) {
+    return false;
+  }
+  *pFrames = static_cast<int>(frames + (frames >= 0.0 ? 0.5 : -0.5));
+  return true;
+}
+
+bool NonNegativeSecondsToFrames(float fSeconds, int iSampleRate, int* pFrames) {
+  if (fSeconds < 0.0f) {
+    return false;
+  }
+  return SecondsToFrames(fSeconds, iSampleRate, pFrames);
+}
+
+int SaturatingAddFrames(int a, int b) {
+  const long long sum = static_cast<long long>(a) + static_cast<long long>(b);
+  if (sum > std::numeric_limits<int>::max()) {
+    return std::numeric_limits<int>::max();
+  }
+  if (sum < std::numeric_limits<int>::min()) {
+    return std::numeric_limits<int>::min();
+  }
+  return static_cast<int>(sum);
+}
+}  // namespace
 
 /*
  * Add support for negative seeks (adding a delay), extending a sound
@@ -35,6 +84,9 @@ RageSoundReader_Extend::RageSoundReader_Extend(RageSoundReader* pSource)
 }
 
 int RageSoundReader_Extend::SetPosition(int iFrame) {
+  if (m_pSource.isNull()) {
+    return RageSoundReader::ERROR;
+  }
   m_bIgnoreFadeInFrames = false;
 
   m_iPositionFrames = iFrame;
@@ -61,10 +113,17 @@ int RageSoundReader_Extend::GetEndFrame() const {
     return -1;
   }
 
-  return m_iStartFrames + m_iLengthFrames;
+  return SaturatingAddFrames(m_iStartFrames, m_iLengthFrames);
 }
 
 int RageSoundReader_Extend::GetData(float* pBuffer, int iFrames) {
+  if (iFrames == 0) {
+    return 0;
+  }
+  if (pBuffer == nullptr || iFrames < 0 || m_pSource.isNull()) {
+    return RageSoundReader::ERROR;
+  }
+
   int iFramesToRead = iFrames;
   if (m_iLengthFrames != -1) {
     int iFramesLeft = GetEndFrame() - m_iPositionFrames;
@@ -78,7 +137,12 @@ int RageSoundReader_Extend::GetData(float* pBuffer, int iFrames) {
 
   if (m_iPositionFrames < 0) {
     iFramesToRead = std::min(iFramesToRead, -m_iPositionFrames);
-    memset(pBuffer, 0, iFramesToRead * sizeof(float) * this->GetNumChannels());
+    size_t samples = 0;
+    if (!FramesToSamples(iFramesToRead, this->GetNumChannels(), &samples) ||
+        samples > std::numeric_limits<size_t>::max() / sizeof(float)) {
+      return RageSoundReader::ERROR;
+    }
+    memset(pBuffer, 0, samples * sizeof(float));
     return iFramesToRead;
   }
 
@@ -94,6 +158,12 @@ int RageSoundReader_Extend::GetData(float* pBuffer, int iFrames) {
 }
 
 int RageSoundReader_Extend::Read(float* pBuffer, int iFrames) {
+  if (iFrames == 0) {
+    return 0;
+  }
+  if (pBuffer == nullptr || iFrames < 0) {
+    return RageSoundReader::ERROR;
+  }
   int iFramesRead = GetData(pBuffer, iFrames);
   if (iFramesRead == RageSoundReader::END_OF_FILE) {
     if ((m_iLengthFrames != -1 && m_iPositionFrames < GetEndFrame()) ||
@@ -102,7 +172,12 @@ int RageSoundReader_Extend::Read(float* pBuffer, int iFrames) {
       if (m_StopMode != M_CONTINUE) {
         iFramesRead = std::min(GetEndFrame() - m_iPositionFrames, iFramesRead);
       }
-      memset(pBuffer, 0, iFramesRead * sizeof(float) * this->GetNumChannels());
+      size_t samples = 0;
+      if (!FramesToSamples(iFramesRead, this->GetNumChannels(), &samples) ||
+          samples > std::numeric_limits<size_t>::max() / sizeof(float)) {
+        return RageSoundReader::ERROR;
+      }
+      memset(pBuffer, 0, samples * sizeof(float));
     }
   }
 
@@ -125,7 +200,7 @@ int RageSoundReader_Extend::Read(float* pBuffer, int iFrames) {
 
     if (iSilencePositionFrames != iFullVolumePositionFrames) {
       const int iStartSecond = m_iPositionFrames;
-      const int iEndSecond = m_iPositionFrames + iFramesRead;
+      const int iEndSecond = SaturatingAddFrames(m_iPositionFrames, iFramesRead);
       const float fStartVolume = SCALE(
           iStartSecond, iFullVolumePositionFrames, iSilencePositionFrames, 1.0f,
           0.0f);
@@ -137,7 +212,7 @@ int RageSoundReader_Extend::Read(float* pBuffer, int iFrames) {
           fEndVolume);
     }
 
-    m_iPositionFrames += iFramesRead;
+    m_iPositionFrames = SaturatingAddFrames(m_iPositionFrames, iFramesRead);
   }
 
   if (iFramesRead == RageSoundReader::END_OF_FILE && m_StopMode == M_LOOP) {
@@ -161,7 +236,11 @@ int RageSoundReader_Extend::GetNextSourceFrame() const {
 bool RageSoundReader_Extend::SetProperty(
     const std::string& sProperty, float fValue) {
   if (sProperty == "StartSecond") {
-    m_iStartFrames = static_cast<int>((fValue * this->GetSampleRate()) + 0.5);
+    int frames = 0;
+    if (!SecondsToFrames(fValue, this->GetSampleRate(), &frames)) {
+      return false;
+    }
+    m_iStartFrames = frames;
     return true;
   }
 
@@ -169,8 +248,11 @@ bool RageSoundReader_Extend::SetProperty(
     if (fValue == -1) {
       m_iLengthFrames = -1;
     } else {
-      m_iLengthFrames =
-          static_cast<int>((fValue * this->GetSampleRate()) + 0.5);
+      int frames = 0;
+      if (!NonNegativeSecondsToFrames(fValue, this->GetSampleRate(), &frames)) {
+        return false;
+      }
+      m_iLengthFrames = frames;
     }
     return true;
   }
@@ -191,12 +273,20 @@ bool RageSoundReader_Extend::SetProperty(
   }
 
   if (sProperty == "FadeInSeconds") {
-    m_iFadeInFrames = static_cast<int>((fValue * this->GetSampleRate()) + 0.5);
+    int frames = 0;
+    if (!NonNegativeSecondsToFrames(fValue, this->GetSampleRate(), &frames)) {
+      return false;
+    }
+    m_iFadeInFrames = frames;
     return true;
   }
 
   if (sProperty == "FadeSeconds" || sProperty == "FadeOutSeconds") {
-    m_iFadeOutFrames = static_cast<int>((fValue * this->GetSampleRate()) + 0.5);
+    int frames = 0;
+    if (!NonNegativeSecondsToFrames(fValue, this->GetSampleRate(), &frames)) {
+      return false;
+    }
+    m_iFadeOutFrames = frames;
     return true;
   }
 

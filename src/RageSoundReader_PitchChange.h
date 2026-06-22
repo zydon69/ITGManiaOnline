@@ -19,8 +19,8 @@ class RageSoundReader_PitchChange : public RageSoundReader_Filter {
   virtual int Read(float* pBuf, int iFrames);
   virtual bool SetProperty(const std::string& sProperty, float fValue);
 
-  void SetSpeedRatio(float fRatio) { m_fSpeedRatio = fRatio; }
-  void SetPitchRatio(float fRatio) { m_fPitchRatio = fRatio; }
+  bool SetSpeedRatio(float fRatio);
+  bool SetPitchRatio(float fRatio);
 
   virtual RageSoundReader_PitchChange* Copy() const {
     return new RageSoundReader_PitchChange(*this);

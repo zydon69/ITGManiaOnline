@@ -1,6 +1,8 @@
 #include "RageSoundReader_Pan.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <string>
 
 #include "RageSoundReader.h"
@@ -13,14 +15,26 @@ RageSoundReader_Pan::RageSoundReader_Pan(RageSoundReader* pSource)
 }
 
 int RageSoundReader_Pan::Read(float* pBuf, int iFrames) {
+  if (iFrames == 0) {
+    return 0;
+  }
+  if (pBuf == nullptr || iFrames < 0 || m_pSource.isNull()) {
+    return RageSoundReader::ERROR;
+  }
   iFrames = m_pSource->Read(pBuf, iFrames);
   if (iFrames < 0) {
     return iFrames;
   }
 
-  int iSamples = iFrames * m_pSource->GetNumChannels();
+  const unsigned sourceChannels = m_pSource->GetNumChannels();
+  if (sourceChannels == 0 ||
+      static_cast<size_t>(iFrames) >
+          std::numeric_limits<int>::max() / sourceChannels) {
+    return RageSoundReader::ERROR;
+  }
+  int iSamples = iFrames * sourceChannels;
 
-  if (m_pSource->GetNumChannels() == 1) {
+  if (sourceChannels == 1) {
     RageSoundUtil::ConvertMonoToStereoInPlace(pBuf, iSamples);
     iSamples *= 2;
   }
@@ -34,13 +48,20 @@ int RageSoundReader_Pan::Read(float* pBuf, int iFrames) {
 }
 
 unsigned RageSoundReader_Pan::GetNumChannels() const {
-  return std::max(2u, RageSoundReader_Filter::GetNumChannels());
+  const unsigned sourceChannels = RageSoundReader_Filter::GetNumChannels();
+  if (sourceChannels == 0) {
+    return 0;
+  }
+  return std::max(2u, sourceChannels);
 }
 
 bool RageSoundReader_Pan::SetProperty(
     const std::string& sProperty, float fValue) {
   if (sProperty == "Pan") {
-    m_fPan = fValue;
+    if (!std::isfinite(fValue)) {
+      return false;
+    }
+    m_fPan = std::clamp(fValue, -1.0f, 1.0f);
     return true;
   }
 
