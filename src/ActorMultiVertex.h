@@ -140,21 +140,35 @@ class ActorMultiVertex : public Actor {
   int GetNumStates() const override { return _states.size(); }
   void AddState(const State& new_state) { _states.push_back(new_state); }
   void RemoveState(size_t i) {
-    ASSERT(i < _states.size());
+    if (i >= _states.size()) {
+      return;
+    }
     _states.erase(_states.begin() + i);
+    if (_cur_state >= _states.size()) {
+      _cur_state = _states.empty() ? 0 : _states.size() - 1;
+    }
   }
   size_t GetState() { return _cur_state; }
   State& GetStateData(size_t i) {
-    ASSERT(i < _states.size());
+    static State empty = {RectF(0, 0, 0, 0), 0.0f};
+    if (i >= _states.size()) {
+      return empty;
+    }
     return _states[i];
   }
   void SetStateData(size_t i, const State& s) {
-    ASSERT(i < _states.size());
+    if (i >= _states.size()) {
+      return;
+    }
     _states[i] = s;
   }
   void SetStateProperties(const std::vector<State>& new_states) {
     _states = new_states;
-    SetState(0);
+    if (_states.empty()) {
+      _cur_state = 0;
+    } else {
+      SetState(0);
+    }
   }
   void SetState(int i) override;
   void SetAllStateDelays(float delay);
@@ -166,11 +180,22 @@ class ActorMultiVertex : public Actor {
   }
   void AddQuadState(size_t s) { AMV_DestTweenState().quad_states.push_back(s); }
   void RemoveQuadState(size_t i) {
+    if (i >= AMV_DestTweenState().quad_states.size()) {
+      return;
+    }
     AMV_DestTweenState().quad_states.erase(
         AMV_DestTweenState().quad_states.begin() + i);
   }
-  size_t GetQuadState(size_t i) { return AMV_DestTweenState().quad_states[i]; }
+  size_t GetQuadState(size_t i) {
+    if (i >= AMV_DestTweenState().quad_states.size()) {
+      return 0;
+    }
+    return AMV_DestTweenState().quad_states[i];
+  }
   void SetQuadState(size_t i, size_t s) {
+    if (i >= AMV_DestTweenState().quad_states.size()) {
+      return;
+    }
     AMV_DestTweenState().quad_states[i] = s;
   }
   bool _use_animation_state;
@@ -200,6 +225,8 @@ class ActorMultiVertex : public Actor {
   float _secs_into_state;
   size_t _cur_state;
   std::vector<State> _states;
+
+  void AdoptTexture(RageTexture* Texture);
 };
 
 /**
