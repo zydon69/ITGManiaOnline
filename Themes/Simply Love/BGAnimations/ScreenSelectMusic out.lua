@@ -71,7 +71,7 @@ return Def.ActorFrame{
 
 	Def.Quad{
 		InitCommand=function(self) self:diffuse(0,0,0,0):FullScreen():cropbottom(1):fadebottom(0.5) end,
-		OffCommand=function(self) self:linear(0.3):cropbottom(-0.5):diffusealpha(1) end
+		OffCommand=function(self) self:linear(0.3):cropbottom(0):fadebottom(0):diffusealpha(1) end
 	},
 
 	Def.ActorFrame{
