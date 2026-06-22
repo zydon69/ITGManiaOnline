@@ -7728,7 +7728,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 	elseif final and self.lastScoreJudgmentsByRoundKey[judgmentRoundKey] then
 		judgments = self:CopyServerJudgments(self.lastScoreJudgmentsByRoundKey[judgmentRoundKey])
 	end
-	if final and not self:HasScoredJudgments(judgments) then
+	if final and not self:HasScoredJudgments(judgments) and not forceFinalFailed then
 		online_trace("score-final-deferred room=" .. tostring(self.currentRoomId or "")
 			.. " round=" .. tostring(roundKey)
 			.. " reason=missing_judgments")
@@ -7737,6 +7737,15 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 			.. " roundKey=" .. tostring(roundKey))
 		finish(false, nil, { retryAfter = 0.5, errorMessage = "Final score judgments are not ready yet." }, { roundKey = roundKey })
 		return
+	end
+	if final and forceFinalFailed and not self:HasScoredJudgments(judgments) then
+		online_trace("score-final-failed-without-judgments room=" .. tostring(self.currentRoomId or "")
+			.. " round=" .. tostring(roundKey)
+			.. " reason=failed_final_must_not_block")
+		online_flow_trace("send_score_continue reason=final_failed_missing_judgments_allowed"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " roundKey=" .. tostring(roundKey)
+			.. " displayedSnapshot=" .. tostring(snapshot and snapshot.displayedPercent or "nil"))
 	end
 	local accuracyFromJudgments = self:ServerAccuracyFromJudgments(judgments)
 	local accuracy = tonumber(snapshot and snapshot.scorePercent)
