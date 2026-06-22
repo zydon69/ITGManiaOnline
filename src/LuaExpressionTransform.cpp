@@ -1,12 +1,22 @@
 #include "LuaExpressionTransform.h"
 
+#include <cmath>
 #include <map>
 #include <string>
 
 #include "Actor.h"
 #include "LuaManager.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "global.h"
+
+namespace {
+void WarnLuaExpressionTransformAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+}  // namespace
 
 LuaExpressionTransform::LuaExpressionTransform() { m_iNumSubdivisions = 1; }
 
@@ -14,14 +24,34 @@ LuaExpressionTransform::~LuaExpressionTransform() {}
 
 void LuaExpressionTransform::SetFromReference(const LuaReference& ref) {
   m_exprTransformFunction = ref;
+  ClearCache();
 }
 
 void LuaExpressionTransform::TransformItemDirect(
     Actor& a, float fPositionOffsetFromCenter, int iItemIndex,
     int iNumItems) const {
+  if (LUA == nullptr || !m_exprTransformFunction.IsSet() ||
+      m_exprTransformFunction.IsNil()) {
+    WarnLuaExpressionTransformAuditFix(
+        "SRC_AUDIT_FIX SRC-784: LuaExpressionTransform skipped invalid "
+        "function.");
+    return;
+  }
+  if (!std::isfinite(fPositionOffsetFromCenter)) {
+    fPositionOffsetFromCenter = 0.0f;
+  }
+  if (iNumItems < 0) {
+    iNumItems = 0;
+  }
   Lua* L = LUA->Get();
   m_exprTransformFunction.PushSelf(L);
-  ASSERT(!lua_isnil(L, -1));
+  if (!lua_isfunction(L, -1)) {
+    lua_pop(L, 1);
+    LUA->Release(L);
+    WarnLuaExpressionTransformAuditFix(
+        "SRC_AUDIT_FIX SRC-784: LuaExpressionTransform skipped non-function.");
+    return;
+  }
   a.PushSelf(L);
   LuaHelpers::Push(L, fPositionOffsetFromCenter);
   LuaHelpers::Push(L, iItemIndex);
@@ -33,6 +63,12 @@ void LuaExpressionTransform::TransformItemDirect(
 
 const Actor::TweenState& LuaExpressionTransform::GetTransformCached(
     float fPositionOffsetFromCenter, int iItemIndex, int iNumItems) const {
+  if (!std::isfinite(fPositionOffsetFromCenter)) {
+    fPositionOffsetFromCenter = 0.0f;
+  }
+  if (iNumItems < 0) {
+    iNumItems = 0;
+  }
   PositionOffsetAndItemIndex key = {fPositionOffsetFromCenter, iItemIndex};
 
   std::map<PositionOffsetAndItemIndex, Actor::TweenState>::const_iterator iter =
@@ -48,6 +84,15 @@ const Actor::TweenState& LuaExpressionTransform::GetTransformCached(
 
 void LuaExpressionTransform::TransformItemCached(
     Actor& a, float fPositionOffsetFromCenter, int iItemIndex, int iNumItems) {
+  if (!std::isfinite(fPositionOffsetFromCenter)) {
+    fPositionOffsetFromCenter = 0.0f;
+  }
+  if (iNumItems < 0) {
+    iNumItems = 0;
+  }
+  if (m_iNumSubdivisions <= 0) {
+    m_iNumSubdivisions = 1;
+  }
   float fInterval = 1.0f / m_iNumSubdivisions;
   float fFloor = QuantizeDown(fPositionOffsetFromCenter, fInterval);
   float fCeil = QuantizeUp(fPositionOffsetFromCenter, fInterval);
@@ -62,6 +107,9 @@ void LuaExpressionTransform::TransformItemCached(
 
     float fPercentTowardCeil =
         SCALE(fPositionOffsetFromCenter, fFloor, fCeil, 0.0f, 1.0f);
+    if (!std::isfinite(fPercentTowardCeil)) {
+      fPercentTowardCeil = 0.0f;
+    }
     Actor::TweenState::MakeWeightedAverage(
         a.DestTweenState(), tsFloor, tsCeil, fPercentTowardCeil);
   }

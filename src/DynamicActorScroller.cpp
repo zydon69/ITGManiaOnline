@@ -1,6 +1,7 @@
 #include "DynamicActorScroller.h"
 
 #include <climits>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <string>
@@ -10,15 +11,29 @@
 #include "ActorUtil.h"
 #include "LuaBinding.h"
 #include "LuaManager.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "XmlFile.h"
 #include "global.h"
+
+namespace {
+void WarnDynamicActorScrollerAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+}  // namespace
 
 DynamicActorScroller* DynamicActorScroller::Copy() const {
   return new DynamicActorScroller(*this);
 }
 
 void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
+  if (pNode == nullptr) {
+    WarnDynamicActorScrollerAuditFix(
+        "SRC_AUDIT_FIX SRC-779: DynamicActorScroller ignored null XML node.");
+    return;
+  }
   ActorScroller::LoadFromNode(pNode);
 
   /* All of our children are identical, since they must be interchangeable.
@@ -30,40 +45,82 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
         "%s: DynamicActorScroller: loaded %i nodes; require exactly one",
         ActorUtil::GetWhere(pNode).c_str(), (int)m_SubActors.size());
     // Remove all but one.
-    for (size_t i = 1; i < m_SubActors.size(); i++) {
-      delete m_SubActors[i];
+    while (m_SubActors.size() > 1) {
+      Actor* extra = m_SubActors.back();
+      RemoveChild(extra);
+      delete extra;
     }
-    m_SubActors.resize(1);
+    if (m_SubActors.empty()) {
+      WarnDynamicActorScrollerAuditFix(
+          "SRC_AUDIT_FIX SRC-779: DynamicActorScroller created fallback "
+          "template child.");
+      AddChild(new Actor);
+    }
   }
 
-  int iNumCopies = (int)m_fNumItemsToDraw;
+  int iNumCopies =
+      std::clamp((int)std::ceil(std::max(1.0f, m_fNumItemsToDraw)), 1, 1024);
   if (m_quadMask.GetVisible()) {
     iNumCopies += 1;
   }
   for (int i = 1; i < iNumCopies; ++i) {
     Actor* pCopy = m_SubActors[0]->Copy();
+    if (pCopy == nullptr) {
+      WarnDynamicActorScrollerAuditFix(
+          "SRC_AUDIT_FIX SRC-781: DynamicActorScroller replaced null copy.");
+      pCopy = new Actor;
+    }
     this->AddChild(pCopy);
   }
 
-  {
+  if (LUA != nullptr) {
     Lua* L = LUA->Get();
     pNode->PushAttrValue(L, "LoadFunction");
     m_LoadFunction.SetFromStack(L);
     LUA->Release(L);
+  } else {
+    WarnDynamicActorScrollerAuditFix(
+        "SRC_AUDIT_FIX SRC-781: DynamicActorScroller skipped LoadFunction "
+        "without LUA.");
+    m_iNumItems = 0;
+    return;
+  }
+
+  if (!m_LoadFunction.IsSet() || m_LoadFunction.IsNil()) {
+    WarnDynamicActorScrollerAuditFix(
+        "SRC_AUDIT_FIX SRC-781: DynamicActorScroller missing LoadFunction.");
+    m_iNumItems = 0;
+    return;
   }
 
   // Call the expression with line = nil to find out the number of lines.
   {
     Lua* L = LUA->Get();
     m_LoadFunction.PushSelf(L);
-    ASSERT(!lua_isnil(L, -1));
+    if (!lua_isfunction(L, -1)) {
+      lua_pop(L, 1);
+      LUA->Release(L);
+      WarnDynamicActorScrollerAuditFix(
+          "SRC_AUDIT_FIX SRC-781: DynamicActorScroller LoadFunction is not a "
+          "function.");
+      m_iNumItems = 0;
+      return;
+    }
     lua_pushnil(L);
     lua_pushnil(L);
 
     std::string Error = "Error running LoadFunction: ";
-    LuaHelpers::RunScriptOnStack(L, Error, 2, 1, true);  // 2 args, 1 result
+    const bool ok =
+        LuaHelpers::RunScriptOnStack(L, Error, 2, 1, true);  // 2 args, 1 result
 
-    m_iNumItems = (int)luaL_checknumber(L, -1);
+    float numItems = ok && lua_isnumber(L, -1) ? (float)lua_tonumber(L, -1) : 0.0f;
+    if (!std::isfinite(numItems) || numItems < 0.0f) {
+      WarnDynamicActorScrollerAuditFix(
+          "SRC_AUDIT_FIX SRC-781: DynamicActorScroller replaced invalid item "
+          "count.");
+      numItems = 0.0f;
+    }
+    m_iNumItems = std::clamp((int)numItems, 0, 1000000);
     lua_pop(L, 1);
     LUA->Release(L);
   }
@@ -81,7 +138,7 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
 void DynamicActorScroller::ShiftSubActors(int iDist) {
   ActorScroller::ShiftSubActors(iDist);
 
-  if (iDist == 0) {
+  if (iDist == 0 || m_SubActors.empty() || m_iNumItems <= 0) {
     return;
   }
 
@@ -111,26 +168,50 @@ void DynamicActorScroller::ShiftSubActors(int iDist) {
       wrap(iIndex, m_SubActors.size());
       wrap(iItem, m_iNumItems);
     } else if (
-        iIndex < 0 || iIndex >= m_iNumItems || iItem < 0 ||
+        iIndex < 0 || iIndex >= (int)m_SubActors.size() || iItem < 0 ||
         iItem >= m_iNumItems) {
       continue;
     }
 
+    Actor* actor = m_SubActors[iIndex];
+    if (actor == nullptr || !ContainsChild(actor)) {
+      continue;
+    }
     {
+      if (LUA == nullptr) {
+        WarnDynamicActorScrollerAuditFix(
+            "SRC_AUDIT_FIX SRC-783: DynamicActorScroller skipped item index "
+            "without LUA.");
+        continue;
+      }
       Lua* L = LUA->Get();
       lua_pushnumber(L, i);
-      m_SubActors[iIndex]->m_pLuaInstance->Set(L, "ItemIndex");
+      actor->m_pLuaInstance->Set(L, "ItemIndex");
       LUA->Release(L);
     }
 
-    ConfigureActor(m_SubActors[iIndex], iItem);
+    ConfigureActor(actor, iItem);
   }
 }
 
 void DynamicActorScroller::ConfigureActor(Actor* pActor, int iItem) {
+  if (LUA == nullptr || pActor == nullptr || !m_LoadFunction.IsSet() ||
+      m_LoadFunction.IsNil()) {
+    WarnDynamicActorScrollerAuditFix(
+        "SRC_AUDIT_FIX SRC-783: DynamicActorScroller skipped invalid "
+        "ConfigureActor.");
+    return;
+  }
   Lua* L = LUA->Get();
   m_LoadFunction.PushSelf(L);
-  ASSERT(!lua_isnil(L, -1));
+  if (!lua_isfunction(L, -1)) {
+    lua_pop(L, 1);
+    LUA->Release(L);
+    WarnDynamicActorScrollerAuditFix(
+        "SRC_AUDIT_FIX SRC-783: DynamicActorScroller skipped non-function "
+        "ConfigureActor.");
+    return;
+  }
   pActor->PushSelf(L);
   LuaHelpers::Push(L, iItem);
 

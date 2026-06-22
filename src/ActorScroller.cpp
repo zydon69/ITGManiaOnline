@@ -11,9 +11,30 @@
 #include "ActorUtil.h"
 #include "LuaBinding.h"
 #include "LuaManager.h"
+#include "RageLog.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
 #include "XmlFile.h"
+
+namespace {
+float FiniteOrScroller(float value, float fallback) {
+  return std::isfinite(value) ? value : fallback;
+}
+
+float NonNegativeFiniteOrScroller(float value, float fallback) {
+  return std::isfinite(value) && value >= 0.0f ? value : fallback;
+}
+
+float PositiveFiniteOrScroller(float value, float fallback) {
+  return std::isfinite(value) && value > 0.0f ? value : fallback;
+}
+
+void WarnActorScrollerAuditFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+}  // namespace
 
 /* Tricky: We need ActorFrames created in Lua to auto delete their children.
  * We don't want classes that derive from ActorFrame to auto delete their
@@ -49,8 +70,16 @@ ActorScroller::ActorScroller() {
 void ActorScroller::Load2() {
   m_iNumItems = m_SubActors.size();
 
+  if (LUA == nullptr) {
+    WarnActorScrollerAuditFix(
+        "SRC_AUDIT_FIX SRC-774: ActorScroller skipped Load2 without LUA.");
+    return;
+  }
   Lua* L = LUA->Get();
   for (unsigned i = 0; i < m_SubActors.size(); ++i) {
+    if (m_SubActors[i] == nullptr) {
+      continue;
+    }
     lua_pushnumber(L, i);
     this->m_SubActors[i]->m_pLuaInstance->Set(L, "ItemIndex");
   }
@@ -59,6 +88,12 @@ void ActorScroller::Load2() {
 
 void ActorScroller::SetTransformFromReference(const LuaReference& ref) {
   m_exprTransformFunction.SetFromReference(ref);
+  if (LUA == nullptr || !ref.IsSet() || ref.IsNil()) {
+    m_bFunctionDependsOnPositionOffset = true;
+    m_bFunctionDependsOnItemIndex = true;
+    m_exprTransformFunction.ClearCache();
+    return;
+  }
 
   // Probe to find which of the parameters are used.
 #define GP(a, b) m_exprTransformFunction.GetTransformCached(a, b, 2)
@@ -77,18 +112,22 @@ void ActorScroller::SetTransformFromExpression(
 }
 
 void ActorScroller::SetTransformFromWidth(float fItemWidth) {
+  fItemWidth = FiniteOrScroller(fItemWidth, 0.0f);
   SetTransformFromExpression(ssprintf(
       "function(self,offset,itemIndex,numItems) self:x(%f*offset) end",
       fItemWidth));
 }
 
 void ActorScroller::SetTransformFromHeight(float fItemHeight) {
+  fItemHeight = FiniteOrScroller(fItemHeight, 0.0f);
   SetTransformFromExpression(ssprintf(
       "function(self,offset,itemIndex,numItems) self:y(%f*offset) end",
       fItemHeight));
 }
 
 void ActorScroller::EnableMask(float fWidth, float fHeight) {
+  fWidth = NonNegativeFiniteOrScroller(fWidth, 0.0f);
+  fHeight = NonNegativeFiniteOrScroller(fHeight, 0.0f);
   m_quadMask.SetVisible(fWidth != 0 && fHeight != 0);
   m_quadMask.SetWidth(fWidth);
   m_fMaskWidth = fWidth;
@@ -106,21 +145,29 @@ void ActorScroller::ScrollThroughAllItems() {
 
 void ActorScroller::ScrollWithPadding(
     float fItemPaddingStart, float fItemPaddingEnd) {
+  fItemPaddingStart = NonNegativeFiniteOrScroller(fItemPaddingStart, 0.0f);
+  fItemPaddingEnd = NonNegativeFiniteOrScroller(fItemPaddingEnd, 0.0f);
   m_fCurrentItem = -fItemPaddingStart;
   m_fDestinationItem = m_iNumItems - 1 + fItemPaddingEnd;
 }
 
 float ActorScroller::GetSecondsForCompleteScrollThrough() const {
   float fTotalItems = m_fNumItemsToDraw + m_iNumItems;
-  return fTotalItems * (m_fSecondsPerItem + m_fSecondsPauseBetweenItems);
+  return FiniteOrScroller(
+      fTotalItems * (m_fSecondsPerItem + m_fSecondsPauseBetweenItems), 0.0f);
 }
 
 float ActorScroller::GetSecondsToDestination() const {
   float fTotalItemsToMove = std::abs(m_fCurrentItem - m_fDestinationItem);
-  return fTotalItemsToMove * m_fSecondsPerItem;
+  return FiniteOrScroller(fTotalItemsToMove * m_fSecondsPerItem, 0.0f);
 }
 
 void ActorScroller::LoadFromNode(const XNode* pNode) {
+  if (pNode == nullptr) {
+    WarnActorScrollerAuditFix(
+        "SRC_AUDIT_FIX SRC-774: ActorScroller ignored null XML node.");
+    return;
+  }
   ActorFrame::LoadFromNode(pNode);
 
   Load2();
@@ -135,16 +182,21 @@ void ActorScroller::LoadFromNode(const XNode* pNode) {
     ActorScroller::SetSecondsPerItem(fSecondsPerItem);
   }
 
-  Lua* L = LUA->Get();
-  pNode->PushAttrValue(L, "TransformFunction");
-  {
-    LuaReference ref;
-    ref.SetFromStack(L);
-    if (!ref.IsNil()) {
-      SetTransformFromReference(ref);
+  if (LUA != nullptr) {
+    Lua* L = LUA->Get();
+    pNode->PushAttrValue(L, "TransformFunction");
+    {
+      LuaReference ref;
+      ref.SetFromStack(L);
+      if (!ref.IsNil()) {
+        SetTransformFromReference(ref);
+      }
     }
+    LUA->Release(L);
+  } else {
+    WarnActorScrollerAuditFix(
+        "SRC_AUDIT_FIX SRC-774: ActorScroller skipped transform without LUA.");
   }
-  LUA->Release(L);
 
   int iSubdivisions = 1;
   if (pNode->GetAttrValue("Subdivisions", iSubdivisions)) {
@@ -161,15 +213,21 @@ void ActorScroller::LoadFromNode(const XNode* pNode) {
   }
 
   pNode->GetAttrValue("QuantizePixels", m_fQuantizePixels);
+  m_fQuantizePixels = NonNegativeFiniteOrScroller(m_fQuantizePixels, 0.0f);
   pNode->GetAttrValue("LoopScroller", m_bLoop);
   pNode->GetAttrValue("WrapScroller", m_bWrap);
 }
 
 void ActorScroller::UpdateInternal(float fDeltaTime) {
+  if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
+    WarnActorScrollerAuditFix(
+        "SRC_AUDIT_FIX SRC-775: ActorScroller ignored invalid delta.");
+    return;
+  }
   ActorFrame::UpdateInternal(fDeltaTime);
 
   // If we have no children, the code below will busy loop.
-  if (!m_SubActors.size()) {
+  if (m_SubActors.empty() || m_iNumItems <= 0) {
     return;
   }
 
@@ -223,7 +281,7 @@ void ActorScroller::PositionItems() { PositionItemsAndDrawPrimitives(false); }
 /* Shift m_SubActors forward by iDist. This will place item
  * m_iFirstSubActorIndex in m_SubActors[0]. */
 void ActorScroller::ShiftSubActors(int iDist) {
-  if (iDist != INT_MAX) {
+  if (iDist != INT_MAX && !m_SubActors.empty()) {
     CircularShift(m_SubActors, iDist);
   }
 }
@@ -233,7 +291,14 @@ void ActorScroller::PositionItemsAndDrawPrimitives(bool bDrawPrimitives) {
     return;
   }
 
-  float fNumItemsToDraw = m_fNumItemsToDraw;
+  if (!std::isfinite(m_fCurrentItem) || !std::isfinite(m_fDestinationItem) ||
+      !std::isfinite(m_fNumItemsToDraw)) {
+    WarnActorScrollerAuditFix(
+        "SRC_AUDIT_FIX SRC-775: ActorScroller skipped invalid positioning.");
+    return;
+  }
+
+  float fNumItemsToDraw = NonNegativeFiniteOrScroller(m_fNumItemsToDraw, 0.0f);
   if (m_quadMask.GetVisible()) {
     // write to z buffer so that top and bottom are clipped
     // Draw an extra item; this is the one that will be masked.
@@ -279,8 +344,15 @@ void ActorScroller::PositionItemsAndDrawPrimitives(bool bDrawPrimitives) {
     float fPosition = iItem - m_fCurrentItem;
     int iIndex = i;  // index into m_SubActors
     if (m_bLoop || m_bWrap) {
+      if (m_SubActors.empty()) {
+        break;
+      }
       wrap(iIndex, m_SubActors.size());
     } else if (iIndex < 0 || iIndex >= (int)m_SubActors.size()) {
+      continue;
+    }
+    Actor* child = m_SubActors[iIndex];
+    if (child == nullptr || !ContainsChild(child)) {
       continue;
     }
 
@@ -295,13 +367,26 @@ void ActorScroller::PositionItemsAndDrawPrimitives(bool bDrawPrimitives) {
       iItem = 0;
     }
 
+    const unsigned mutationVersion = m_iChildMutationVersion;
     m_exprTransformFunction.TransformItemCached(
-        *m_SubActors[iIndex], fPosition, iItem, m_iNumItems);
+        *child, fPosition, iItem, m_iNumItems);
+    if (mutationVersion != m_iChildMutationVersion || !ContainsChild(child)) {
+      continue;
+    }
+    if (m_fQuantizePixels > 0.0f) {
+      Actor::TweenState& state = child->DestTweenState();
+      state.pos.x =
+          std::round(state.pos.x / m_fQuantizePixels) * m_fQuantizePixels;
+      state.pos.y =
+          std::round(state.pos.y / m_fQuantizePixels) * m_fQuantizePixels;
+      state.pos.z =
+          std::round(state.pos.z / m_fQuantizePixels) * m_fQuantizePixels;
+    }
     if (bDrawPrimitives) {
       if (m_bDrawByZPosition) {
-        subs.push_back(m_SubActors[iIndex]);
+        subs.push_back(child);
       } else {
-        m_SubActors[iIndex]->Draw();
+        child->Draw();
       }
     }
   }
@@ -309,7 +394,9 @@ void ActorScroller::PositionItemsAndDrawPrimitives(bool bDrawPrimitives) {
   if (m_bDrawByZPosition) {
     ActorUtil::SortByZPosition(subs);
     for (Actor* a : subs) {
-      a->Draw();
+      if (a != nullptr && ContainsChild(a)) {
+        a->Draw();
+      }
     }
   }
 }

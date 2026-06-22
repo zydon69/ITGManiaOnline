@@ -3,6 +3,8 @@
 #ifndef LuaExpressionTransform_H
 #define LuaExpressionTransform_H
 
+#include <algorithm>
+#include <cmath>
 #include <map>
 
 #include "Actor.h"
@@ -21,8 +23,8 @@ class LuaExpressionTransform {
 
   void SetFromReference(const LuaReference& ref);
   void SetNumSubdivisions(int iNumSubdivisions) {
-    ASSERT(iNumSubdivisions > 0);
-    m_iNumSubdivisions = iNumSubdivisions;
+    m_iNumSubdivisions = std::clamp(iNumSubdivisions, 1, 1024);
+    ClearCache();
   }
 
   void TransformItemCached(

@@ -1,6 +1,8 @@
 #ifndef ActorScroller_H
 #define ActorScroller_H
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 
 #include "ActorFrame.h"
@@ -37,23 +39,37 @@ class ActorScroller : public ActorFrame {
   void SetLoop(bool bLoop) { m_bLoop = bLoop; }
   void SetWrap(bool bWrap) { m_bWrap = bWrap; }
   void SetNumItemsToDraw(float fNumItemsToDraw) {
-    m_fNumItemsToDraw = fNumItemsToDraw;
+    m_fNumItemsToDraw =
+        std::isfinite(fNumItemsToDraw)
+            ? std::clamp(fNumItemsToDraw, 0.0f, 1024.0f)
+            : 0.0f;
   }
-  void SetDestinationItem(float fItemIndex) { m_fDestinationItem = fItemIndex; }
+  void SetDestinationItem(float fItemIndex) {
+    if (std::isfinite(fItemIndex)) {
+      m_fDestinationItem = fItemIndex;
+    }
+  }
   void SetCurrentAndDestinationItem(float fItemIndex) {
-    m_fCurrentItem = m_fDestinationItem = fItemIndex;
+    if (std::isfinite(fItemIndex)) {
+      m_fCurrentItem = m_fDestinationItem = fItemIndex;
+    }
   }
   float GetCurrentItem() const { return m_fCurrentItem; }
   float GetDestinationItem() const { return m_fDestinationItem; }
   void ScrollThroughAllItems();
   void ScrollWithPadding(float fItemPaddingStart, float fItemPaddingEnd);
   void SetPauseCountdownSeconds(float fSecs) {
-    m_fPauseCountdownSeconds = fSecs;
+    m_fPauseCountdownSeconds =
+        std::isfinite(fSecs) && fSecs >= 0.0f ? fSecs : 0.0f;
   }
   void SetFastCatchup(bool bOn) { m_bFastCatchup = bOn; }
-  void SetSecondsPerItem(float fSeconds) { m_fSecondsPerItem = fSeconds; }
+  void SetSecondsPerItem(float fSeconds) {
+    m_fSecondsPerItem =
+        std::isfinite(fSeconds) && fSeconds > 0.0f ? fSeconds : 1.0f;
+  }
   void SetSecondsPauseBetweenItems(float fSeconds) {
-    m_fSecondsPauseBetweenItems = fSeconds;
+    m_fSecondsPauseBetweenItems =
+        std::isfinite(fSeconds) && fSeconds >= 0.0f ? fSeconds : 0.0f;
   }
   float GetSecondsPauseBetweenItems() { return m_fSecondsPauseBetweenItems; }
   void SetNumSubdivisions(int iNumSubdivisions) {
