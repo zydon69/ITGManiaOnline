@@ -144,18 +144,18 @@ void Bookkeeper::ReadFromDisk() {
   LoadFromNode(&xml);
 }
 
-void Bookkeeper::WriteToDisk() {
+bool Bookkeeper::WriteToDisk() {
   // Write data. Use SLOW_FLUSH, to help ensure that we don't lose coin data.
   RageFile f;
   if (!f.Open(COINS_DAT, RageFile::WRITE | RageFile::SLOW_FLUSH)) {
     LOG->Warn(
         "Couldn't open file \"%s\" for writing: %s", COINS_DAT.c_str(),
         f.GetError().c_str());
-    return;
+    return false;
   }
 
   std::unique_ptr<XNode> xml(CreateNode());
-  XmlFileUtil::SaveToFile(xml.get(), f);
+  return XmlFileUtil::SaveToFile(xml.get(), f);
 }
 
 void Bookkeeper::CoinInserted() {

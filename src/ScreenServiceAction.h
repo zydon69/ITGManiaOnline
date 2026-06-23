@@ -1,17 +1,21 @@
-/* ScreenServiceAction -  */
+/* ScreenServiceAction - confirmed operator service actions. */
 
-#ifndef ScreenServiceAction_H
-#define ScreenServiceAction_H
+#ifndef SCREEN_SERVICE_ACTION_H
+#define SCREEN_SERVICE_ACTION_H
 
 #include <string>
 
 #include "ScreenPrompt.h"
 
-std::string ClearMachineStats();
-
 class ScreenServiceAction : public ScreenPrompt {
  public:
-  virtual void BeginScreen();
+  void BeginScreen() override;
+
+ private:
+  static void ExecutePendingAction(void* data);
+  static void CancelPendingAction(void* data);
+
+  std::string m_sPendingAction;
 };
 
 #endif

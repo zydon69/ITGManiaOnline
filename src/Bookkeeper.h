@@ -29,7 +29,7 @@ class Bookkeeper {
   XNode* CreateNode() const;
 
   void ReadFromDisk();
-  void WriteToDisk();
+  bool WriteToDisk();
 
  private:
   /** @brief A simple way of handling the date. */
