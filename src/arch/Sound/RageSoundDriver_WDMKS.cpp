@@ -1274,7 +1274,7 @@ void RageSoundDriver_WDMKS::Read(
             size_t(m_pStream->m_iBytesPerOutputSample));
     return;
   }
-  std::vector<int16_t> mixBuffer(size_t(mixSamples));
+  std::vector<int16_t> mixBuffer(static_cast<size_t>(mixSamples));
   int16_t* pBuf = mixBuffer.data();
   this->Mix(pBuf, iFrames, iLastCursorPos, iCurrentFrame);
 
