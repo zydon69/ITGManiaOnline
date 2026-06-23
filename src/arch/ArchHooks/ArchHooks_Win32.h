@@ -16,7 +16,7 @@ class ArchHooks_Win32 : public ArchHooks {
   void RestartProgram();
   bool CheckForMultipleInstances(int argc, char* argv[]);
 
-  void SetTime(tm newtime);
+  bool SetTime(tm newtime) override;
 
   void BoostPriority();
   void UnBoostPriority();

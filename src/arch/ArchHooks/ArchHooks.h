@@ -40,7 +40,7 @@ class ArchHooks {
     return false;
   }
 
-  virtual void SetTime(tm) {}
+  virtual bool SetTime(tm) { return false; }
 
   virtual void BoostPriority() {}
   virtual void UnBoostPriority() {}

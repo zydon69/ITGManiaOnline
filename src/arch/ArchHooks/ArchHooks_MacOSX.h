@@ -7,11 +7,12 @@
 
 class ArchHooks_MacOSX : public ArchHooks {
  public:
-  void Init();
-  std::string GetArchName() const;
-  void DumpDebugInfo();
+  void Init() override;
+  std::string GetArchName() const override;
+  void DumpDebugInfo() override;
+  bool SetTime(tm newtime) override;
   std::string GetPreferredLanguage();
-  float GetDisplayAspectRatio();
+  float GetDisplayAspectRatio() override;
 };
 
 #ifdef ARCH_HOOKS

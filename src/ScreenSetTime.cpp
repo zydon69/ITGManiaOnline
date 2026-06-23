@@ -1,6 +1,9 @@
 #include "ScreenSetTime.h"
 
+#include <array>
+#include <cmath>
 #include <ctime>
+#include <limits>
 #include <string>
 
 #include "BitmapText.h"
@@ -10,6 +13,9 @@
 #include "InputEventPlus.h"
 #include "InputFilter.h"
 #include "InputMapper.h"
+#include "LocalizedString.h"
+#include "PlayerNumber.h"
+#include "RageLog.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
 #include "Screen.h"
@@ -25,32 +31,188 @@ static const char* SetTimeSelectionNames[] = {
     "Year", "Month", "Day", "Hour", "Minute", "Second",
 };
 XToString(SetTimeSelection);
+XToLocalizedString(SetTimeSelection);
 /** @brief A foreach iterator through the time selections. */
 #define FOREACH_SetTimeSelection(s) FOREACH_ENUM(SetTimeSelection, s)
 
-const float g_X[NUM_SetTimeSelection] = {320, 320, 320, 320, 320, 320};
+namespace {
+const std::array<float, NUM_SetTimeSelection> FALLBACK_TITLE_X = {
+    240.0f, 240.0f, 240.0f, 240.0f, 240.0f, 240.0f};
+const std::array<float, NUM_SetTimeSelection> FALLBACK_VALUE_X = {
+    400.0f, 400.0f, 400.0f, 400.0f, 400.0f, 400.0f};
+const std::array<float, NUM_SetTimeSelection> FALLBACK_Y = {
+    140.0f, 180.0f, 220.0f, 260.0f, 300.0f, 340.0f};
 
-const float g_Y[NUM_SetTimeSelection] = {140, 180, 220, 260, 300, 340};
+static LocalizedString AM("ScreenSetTime", "am");
+static LocalizedString PM("ScreenSetTime", "pm");
+static LocalizedString TIME_SET_FAILED(
+    "ScreenSetTime", "Could not set the system time.");
 
-static float GetTitleX(SetTimeSelection s) { return g_X[s] - 80; }
-static float GetTitleY(SetTimeSelection s) { return g_Y[s]; }
-static float GetValueX(SetTimeSelection s) { return g_X[s] + 80; }
-static float GetValueY(SetTimeSelection s) { return g_Y[s]; }
+bool HasLoadedTheme() { return THEME != nullptr && THEME->IsThemeLoaded(); }
+
+bool IsValidSelection(SetTimeSelection selection) {
+  return selection >= year && selection < NUM_SetTimeSelection;
+}
+
+SetTimeSelection SanitizeSelection(SetTimeSelection selection) {
+  if (IsValidSelection(selection)) {
+    return selection;
+  }
+
+  if (LOG != nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-1696: ScreenSetTime reset invalid selection %d.",
+        static_cast<int>(selection));
+  }
+  return year;
+}
+
+std::string MetricName(const std::string& prefix, SetTimeSelection selection) {
+  return prefix + SetTimeSelectionToString(selection);
+}
+
+float GetMetricFOr(
+    const std::string& metric, float fallback, const char* context) {
+  if (!HasLoadedTheme() || !THEME->HasMetric("ScreenSetTime", metric)) {
+    return fallback;
+  }
+
+  const float value = THEME->GetMetricF("ScreenSetTime", metric);
+  if (!std::isfinite(value)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1703: ScreenSetTime ignored non-finite %s %.6f "
+          "for %s.",
+          metric.c_str(), value, context);
+    }
+    return fallback;
+  }
+  return value;
+}
+
+float GetTitleX(SetTimeSelection selection) {
+  const int index = static_cast<int>(selection);
+  return GetMetricFOr(
+      MetricName("TitleX", selection), FALLBACK_TITLE_X[index], "title x");
+}
+
+float GetTitleY(SetTimeSelection selection) {
+  const int index = static_cast<int>(selection);
+  return GetMetricFOr(MetricName("Y", selection), FALLBACK_Y[index], "title y");
+}
+
+float GetValueX(SetTimeSelection selection) {
+  const int index = static_cast<int>(selection);
+  return GetMetricFOr(
+      MetricName("ValueX", selection), FALLBACK_VALUE_X[index], "value x");
+}
+
+float GetValueY(SetTimeSelection selection) {
+  const int index = static_cast<int>(selection);
+  return GetMetricFOr(MetricName("Y", selection), FALLBACK_Y[index], "value y");
+}
+
+std::string GetThemePathFOptional(
+    const std::string& group, const std::string& element) {
+  if (!HasLoadedTheme()) {
+    return "";
+  }
+  return THEME->GetPathF(group, element, true);
+}
+
+bool LoadFontWithFallback(
+    BitmapText& text, const std::string& element,
+    const std::string& fallbackElement) {
+  const std::string requested = GetThemePathFOptional("ScreenSetTime", element);
+  if (!requested.empty() && text.LoadFromFont(requested)) {
+    return true;
+  }
+
+  const std::string fallback = GetThemePathFOptional("Common", fallbackElement);
+  if (!fallback.empty() && text.LoadFromFont(fallback)) {
+    return true;
+  }
+
+  if (LOG != nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-1693: ScreenSetTime could not load font for %s.",
+        element.c_str());
+  }
+  return false;
+}
+
+void LoadSoundOptional(RageSound& sound, const std::string& element) {
+  if (!HasLoadedTheme()) {
+    return;
+  }
+
+  const std::string path = THEME->GetPathS("ScreenSetTime", element, true);
+  if (!path.empty()) {
+    sound.Load(path);
+  }
+}
+
+bool SafeAddTime(time_t base, time_t offset, time_t& out) {
+  if (offset > 0 && base > std::numeric_limits<time_t>::max() - offset) {
+    return false;
+  }
+  if (offset < 0 && base < std::numeric_limits<time_t>::min() - offset) {
+    return false;
+  }
+  out = base + offset;
+  return true;
+}
+
+bool SafeNow(time_t& now) {
+  now = time(nullptr);
+  return now != static_cast<time_t>(-1);
+}
+
+bool SafeLocalTime(time_t value, tm& out) {
+  ZERO(out);
+  return localtime_r(&value, &out) != nullptr;
+}
+
+std::string FormatHour(const tm& time) {
+  int prettyHour = time.tm_hour % 12;
+  if (prettyHour == 0) {
+    prettyHour = 12;
+  }
+  return ssprintf(
+      "%d %s", prettyHour, time.tm_hour >= 12 ? PM.GetValue().c_str()
+                                              : AM.GetValue().c_str());
+}
+
+std::string FormatMonth(const tm& time) {
+  if (time.tm_mon < 0 || time.tm_mon >= NUM_Month) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1694: ScreenSetTime clamped invalid month %d.",
+          time.tm_mon);
+    }
+    return "?";
+  }
+  return MonthToLocalizedString(static_cast<Month>(time.tm_mon));
+}
+
+bool IsPlayerInput(PlayerNumber pn) { return pn >= PLAYER_1 && pn < NUM_PLAYERS; }
+}  // namespace
 
 REGISTER_SCREEN_CLASS(ScreenSetTime);
 
 void ScreenSetTime::Init() {
   ScreenWithMenuElements::Init();
 
+  m_TimeOffset = 0;
   m_Selection = hour;
 
   FOREACH_SetTimeSelection(s) {
     BitmapText& title = m_textTitle[s];
     BitmapText& value = m_textValue[s];
 
-    title.LoadFromFont(THEME->GetPathF("Common", "title"));
+    LoadFontWithFallback(title, "Title", "title");
     title.SetDiffuse(RageColor(1, 1, 1, 1));
-    title.SetText(SetTimeSelectionToString(s));
+    title.SetText(SetTimeSelectionToLocalizedString(s));
     title.SetXY(GetTitleX(s), GetTitleY(s));
     this->AddChild(&title);
 
@@ -58,7 +220,7 @@ void ScreenSetTime::Init() {
     title.BeginTweening(0.3f, TWEEN_LINEAR);
     title.SetDiffuse(RageColor(1, 1, 1, 1));
 
-    value.LoadFromFont(THEME->GetPathF("Common", "normal"));
+    LoadFontWithFallback(value, "Value", "normal");
     value.SetDiffuse(RageColor(1, 1, 1, 1));
     value.SetXY(GetValueX(s), GetValueY(s));
     this->AddChild(&value);
@@ -68,36 +230,82 @@ void ScreenSetTime::Init() {
     value.SetDiffuse(RageColor(1, 1, 1, 1));
   }
 
-  m_soundChangeSelection.Load(
-      THEME->GetPathS("ScreenSetTime", "ChangeSelection"));
-  m_soundChangeValue.Load(THEME->GetPathS("ScreenSetTime", "ChangeValue"));
+  LoadSoundOptional(m_soundChangeSelection, "ChangeSelection");
+  LoadSoundOptional(m_soundChangeValue, "ChangeValue");
 
-  m_TimeOffset = 0;
-  m_Selection = (SetTimeSelection)0;
   ChangeSelection(0);
+  RefreshDisplayedTime();
 }
 
 void ScreenSetTime::Update(float fDelta) {
   Screen::Update(fDelta);
+  RefreshDisplayedTime();
+}
 
-  time_t iNow = time(nullptr);
-  iNow += m_TimeOffset;
-
-  tm now;
-  localtime_r(&iNow, &now);
-
-  int iPrettyHour = now.tm_hour % 12;
-  if (iPrettyHour == 0) {
-    iPrettyHour = 12;
+bool ScreenSetTime::GetAdjustedLocalTime(tm& adjusted) const {
+  time_t now;
+  if (!SafeNow(now)) {
+    if (LOG != nullptr) {
+      LOG->Warn("SRC_AUDIT_FIX SRC-1694: ScreenSetTime could not read time().");
+    }
+    return false;
   }
-  std::string sPrettyHour =
-      ssprintf("%d %s", iPrettyHour, now.tm_hour >= 12 ? "pm" : "am");
 
-  m_textValue[hour].SetText(sPrettyHour);
+  time_t adjustedTime;
+  if (!SafeAddTime(now, m_TimeOffset, adjustedTime)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1695: ScreenSetTime refused overflowing time "
+          "offset.");
+    }
+    return false;
+  }
+
+  if (!SafeLocalTime(adjustedTime, adjusted)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1694: ScreenSetTime could not convert adjusted "
+          "time.");
+    }
+    return false;
+  }
+
+  return true;
+}
+
+bool ScreenSetTime::SetAdjustedTime(const tm& adjusted) {
+  time_t now;
+  if (!SafeNow(now)) {
+    return false;
+  }
+
+  tm normalized = adjusted;
+  normalized.tm_isdst = -1;
+  const time_t adjustedTime = mktime(&normalized);
+  if (adjustedTime == static_cast<time_t>(-1)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1695: ScreenSetTime mktime() rejected adjusted "
+          "time.");
+    }
+    return false;
+  }
+
+  m_TimeOffset = adjustedTime - now;
+  return true;
+}
+
+void ScreenSetTime::RefreshDisplayedTime() {
+  tm now;
+  if (!GetAdjustedLocalTime(now)) {
+    return;
+  }
+
+  m_textValue[hour].SetText(FormatHour(now));
   m_textValue[minute].SetText(ssprintf("%02d", now.tm_min));
   m_textValue[second].SetText(ssprintf("%02d", now.tm_sec));
-  m_textValue[year].SetText(ssprintf("%02d", now.tm_year + 1900));
-  m_textValue[month].SetText(MonthToString((Month)now.tm_mon));
+  m_textValue[year].SetText(ssprintf("%04d", now.tm_year + 1900));
+  m_textValue[month].SetText(FormatMonth(now));
   m_textValue[day].SetText(ssprintf("%02d", now.tm_mday));
 }
 
@@ -109,18 +317,24 @@ bool ScreenSetTime::Input(const InputEventPlus& input) {
   if (IsTransitioning()) {
     return false;
   }
+  if (m_fLockInputSecs > 0) {
+    return false;
+  }
 
   return Screen::Input(input);  // default handler
 }
 
 void ScreenSetTime::ChangeValue(int iDirection) {
-  time_t iNow = time(nullptr);
-  time_t iAdjusted = iNow + m_TimeOffset;
-
   tm adjusted;
-  localtime_r(&iAdjusted, &adjusted);
+  if (!GetAdjustedLocalTime(adjusted)) {
+    if (SCREENMAN != nullptr) {
+      SCREENMAN->PlayInvalidSound();
+    }
+    return;
+  }
 
   // tm now = GetLocalTime();
+  m_Selection = SanitizeSelection(m_Selection);
   switch (m_Selection) {
     case hour:
       adjusted.tm_hour += iDirection;
@@ -141,19 +355,28 @@ void ScreenSetTime::ChangeValue(int iDirection) {
       adjusted.tm_mday += iDirection;
       break;
     default:
-      FAIL_M(ssprintf("Invalid SetTimeSelection: %i", m_Selection));
+      if (SCREENMAN != nullptr) {
+        SCREENMAN->PlayInvalidSound();
+      }
+      return;
   }
 
-  /* Normalize: */
-  iAdjusted = mktime(&adjusted);
+  if (!SetAdjustedTime(adjusted)) {
+    if (SCREENMAN != nullptr) {
+      SCREENMAN->PlayInvalidSound();
+    }
+    return;
+  }
 
-  m_TimeOffset = iAdjusted - iNow;
-
-  m_soundChangeValue.Play(true);
+  RefreshDisplayedTime();
+  if (m_soundChangeValue.IsLoaded()) {
+    m_soundChangeValue.Play(true);
+  }
 }
 
 void ScreenSetTime::ChangeSelection(int iDirection) {
   // set new value of m_Selection
+  m_Selection = SanitizeSelection(m_Selection);
   SetTimeSelection OldSelection = m_Selection;
   enum_add<SetTimeSelection>(m_Selection, iDirection);
 
@@ -169,7 +392,9 @@ void ScreenSetTime::ChangeSelection(int iDirection) {
       1.f, RageColor(0.3f, 0.3f, 0.3f, 1), RageColor(1, 1, 1, 1));
 
   if (iDirection != 0) {
-    m_soundChangeSelection.Play(true);
+    if (m_soundChangeSelection.IsLoaded()) {
+      m_soundChangeSelection.Play(true);
+    }
   }
 }
 
@@ -194,7 +419,10 @@ bool ScreenSetTime::MenuRight(const InputEventPlus& input) {
 }
 
 bool ScreenSetTime::MenuStart(const InputEventPlus& input) {
+  const bool bCanCheckHeldButtons =
+      INPUTMAPPER != nullptr && IsPlayerInput(input.pn);
   bool bHoldingLeftAndRight =
+      bCanCheckHeldButtons &&
       INPUTMAPPER->IsBeingPressed(GAME_BUTTON_RIGHT, input.pn) &&
       INPUTMAPPER->IsBeingPressed(GAME_BUTTON_LEFT, input.pn);
 
@@ -202,30 +430,19 @@ bool ScreenSetTime::MenuStart(const InputEventPlus& input) {
     ChangeSelection(-1);
   } else if (m_Selection == NUM_SetTimeSelection - 1)  // last row
   {
-    /* Save the new time. */
-    time_t iNow = time(nullptr);
-    time_t iAdjusted = iNow + m_TimeOffset;
-
-    tm adjusted;
-    localtime_r(&iAdjusted, &adjusted);
-
-    HOOKS->SetTime(adjusted);
+    if (!CommitAdjustedTime()) {
+      return true;
+    }
 
     /* We're going to draw a little more while we transition out.  We've already
      * set the new time; don't over-adjust visually. */
     m_TimeOffset = 0;
 
-    FOREACH_SetTimeSelection(s) {
-      BitmapText& title = m_textTitle[s];
-      title.BeginTweening(0.3f, TWEEN_LINEAR);
-      title.SetDiffuse(RageColor(1, 1, 1, 0));
+    TweenTimeRowsOff();
 
-      BitmapText& value = m_textValue[s];
-      value.BeginTweening(0.3f, TWEEN_LINEAR);
-      value.SetDiffuse(RageColor(1, 1, 1, 0));
+    if (SCREENMAN != nullptr) {
+      SCREENMAN->PlayStartSound();
     }
-
-    SCREENMAN->PlayStartSound();
     StartTransitioningScreen(SM_GoToNextScreen);
   } else {
     ChangeSelection(+1);
@@ -239,8 +456,45 @@ bool ScreenSetTime::MenuSelect(const InputEventPlus& input) {
 }
 
 bool ScreenSetTime::MenuBack(const InputEventPlus& input) {
-  StartTransitioningScreen(SM_GoToPrevScreen);
+  Cancel(SM_GoToPrevScreen);
   return true;
+}
+
+bool ScreenSetTime::CommitAdjustedTime() {
+  tm adjusted;
+  if (!GetAdjustedLocalTime(adjusted)) {
+    if (SCREENMAN != nullptr) {
+      SCREENMAN->PlayInvalidSound();
+    }
+    return false;
+  }
+
+  if (HOOKS == nullptr || !HOOKS->SetTime(adjusted)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1698: ScreenSetTime could not set the system "
+          "time.");
+    }
+    SetHelpText(TIME_SET_FAILED.GetValue());
+    if (SCREENMAN != nullptr) {
+      SCREENMAN->PlayInvalidSound();
+    }
+    return false;
+  }
+
+  return true;
+}
+
+void ScreenSetTime::TweenTimeRowsOff() {
+  FOREACH_SetTimeSelection(s) {
+    BitmapText& title = m_textTitle[s];
+    title.BeginTweening(0.3f, TWEEN_LINEAR);
+    title.SetDiffuse(RageColor(1, 1, 1, 0));
+
+    BitmapText& value = m_textValue[s];
+    value.BeginTweening(0.3f, TWEEN_LINEAR);
+    value.SetDiffuse(RageColor(1, 1, 1, 0));
+  }
 }
 
 /*

@@ -13,7 +13,7 @@ class ArchHooks_Unix : public ArchHooks {
   std::string GetArchName() const { return "Unix"; }
   void DumpDebugInfo();
 
-  void SetTime(tm newtime);
+  bool SetTime(tm newtime) override;
   int64_t GetSystemTimeInMicroseconds();
 
   void MountInitialFilesystems(const std::string& sDirOfExecutable);

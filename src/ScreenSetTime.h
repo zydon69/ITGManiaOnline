@@ -4,9 +4,10 @@
 #include <ctime>
 
 #include "BitmapText.h"
-#include "InputQueue.h"
 #include "RageSound.h"
 #include "ScreenWithMenuElements.h"
+
+class InputEventPlus;
 
 enum SetTimeSelection {
   year,
@@ -21,30 +22,35 @@ enum SetTimeSelection {
 
 class ScreenSetTime : public ScreenWithMenuElements {
  public:
-  virtual void Init();
+  void Init() override;
 
-  virtual void Update(float fDelta);
-  virtual bool Input(const InputEventPlus& input);
+  void Update(float fDelta) override;
+  bool Input(const InputEventPlus& input) override;
 
-  virtual bool MenuUp(const InputEventPlus& input);
-  virtual bool MenuDown(const InputEventPlus& input);
-  virtual bool MenuLeft(const InputEventPlus& input);
-  virtual bool MenuRight(const InputEventPlus& input);
-  virtual bool MenuStart(const InputEventPlus& input);
-  virtual bool MenuSelect(const InputEventPlus& input);
-  virtual bool MenuBack(const InputEventPlus& input);
+  bool MenuUp(const InputEventPlus& input) override;
+  bool MenuDown(const InputEventPlus& input) override;
+  bool MenuLeft(const InputEventPlus& input) override;
+  bool MenuRight(const InputEventPlus& input) override;
+  bool MenuStart(const InputEventPlus& input) override;
+  bool MenuSelect(const InputEventPlus& input) override;
+  bool MenuBack(const InputEventPlus& input) override;
 
  private:
   SetTimeSelection m_Selection;
   time_t m_TimeOffset;
+
   void ChangeSelection(int iDirection);
   void ChangeValue(int iDirection);
+  bool GetAdjustedLocalTime(tm& adjusted) const;
+  bool SetAdjustedTime(const tm& adjusted);
+  bool CommitAdjustedTime();
+  void RefreshDisplayedTime();
+  void TweenTimeRowsOff();
 
   RageSound m_soundChangeValue;
   RageSound m_soundChangeSelection;
   BitmapText m_textTitle[NUM_SetTimeSelection];
   BitmapText m_textValue[NUM_SetTimeSelection];
-  BitmapText m_textDayOfWeek;
 };
 
 #endif

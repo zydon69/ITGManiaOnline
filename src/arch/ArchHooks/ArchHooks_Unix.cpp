@@ -213,21 +213,32 @@ void ArchHooks_Unix::DumpDebugInfo() {
   LOG->Info("libavcodec: %#x (%u)", avcodec_version(), avcodec_version());
 }
 
-void ArchHooks_Unix::SetTime(tm newtime) {
+namespace {
+bool RunSetTimeCommand(const std::string& command) {
+  LOG->Trace("executing '%s'", command.c_str());
+  const int ret = system(command.c_str());
+  if (ret == -1 || ret == 127 || !WIFEXITED(ret) || WEXITSTATUS(ret)) {
+    LOG->Warn("'%s' failed while setting system time", command.c_str());
+    return false;
+  }
+  return true;
+}
+}  // namespace
+
+bool ArchHooks_Unix::SetTime(tm newtime) {
   std::string sCommand = ssprintf(
       "date %02d%02d%02d%02d%04d.%02d", newtime.tm_mon + 1, newtime.tm_mday,
       newtime.tm_hour, newtime.tm_min, newtime.tm_year + 1900, newtime.tm_sec);
 
-  LOG->Trace("executing '%s'", sCommand.c_str());
-  int ret = system(sCommand.c_str());
-  if (ret == -1 || ret == 127 || !WIFEXITED(ret) || WEXITSTATUS(ret)) {
-    LOG->Trace("'%s' failed", sCommand.c_str());
+  const bool timeWasSet = RunSetTimeCommand(sCommand);
+
+  if (!RunSetTimeCommand("hwclock --systohc")) {
+    LOG->Warn("System time command completed with result %d; hardware clock "
+              "sync failed or is unsupported.",
+              timeWasSet ? 1 : 0);
   }
 
-  ret = system("hwclock --systohc");
-  if (ret == -1 || ret == 127 || !WIFEXITED(ret) || WEXITSTATUS(ret)) {
-    LOG->Trace("'hwclock --systohc' failed");
-  }
+  return timeWasSet;
 }
 
 std::string ArchHooks_Unix::GetClipboard() {

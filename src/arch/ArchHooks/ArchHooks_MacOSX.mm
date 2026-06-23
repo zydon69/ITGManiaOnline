@@ -17,6 +17,7 @@
 #include <CoreServices/CoreServices.h>
 #include <mach/mach.h>
 #include <sys/sysctl.h>
+#include <sys/wait.h>
 #include <sys/types.h>
 extern "C" {
 #include <IOKit/graphics/IOGraphicsLib.h>
@@ -209,6 +210,20 @@ void ArchHooks_MacOSX::DumpDebugInfo() {
   LOG->Info("Clock speed %.2f %cHz", fFreq, freqPower);
   LOG->Info("%s", SystemVersion.c_str());
   LOG->Info("Memory: %.2f %cB", fRam, ramPower);
+}
+
+bool ArchHooks_MacOSX::SetTime(tm newtime) {
+  const std::string command = ssprintf(
+      "date %02d%02d%02d%02d%04d.%02d", newtime.tm_mon + 1, newtime.tm_mday,
+      newtime.tm_hour, newtime.tm_min, newtime.tm_year + 1900, newtime.tm_sec);
+
+  LOG->Trace("executing '%s'", command.c_str());
+  const int ret = system(command.c_str());
+  if (ret == -1 || ret == 127 || !WIFEXITED(ret) || WEXITSTATUS(ret)) {
+    LOG->Warn("'%s' failed while setting system time", command.c_str());
+    return false;
+  }
+  return true;
 }
 
 std::string ArchHooks::GetPreferredLanguage() {

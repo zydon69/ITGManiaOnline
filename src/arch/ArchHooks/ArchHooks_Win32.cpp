@@ -133,7 +133,7 @@ bool ArchHooks_Win32::CheckForMultipleInstances(int argc, char* argv[]) {
 
 void ArchHooks_Win32::RestartProgram() { Win32RestartProgram(); }
 
-void ArchHooks_Win32::SetTime(tm newtime) {
+bool ArchHooks_Win32::SetTime(tm newtime) {
   SYSTEMTIME st;
   ZERO(st);
   st.wYear = (WORD)newtime.tm_year + 1900;
@@ -143,7 +143,11 @@ void ArchHooks_Win32::SetTime(tm newtime) {
   st.wMinute = (WORD)newtime.tm_min;
   st.wSecond = (WORD)newtime.tm_sec;
   st.wMilliseconds = 0;
-  SetLocalTime(&st);
+  if (!SetLocalTime(&st)) {
+    LOG->Warn("SetLocalTime failed with error %lu", GetLastError());
+    return false;
+  }
+  return true;
 }
 
 void ArchHooks_Win32::BoostPriority() {
