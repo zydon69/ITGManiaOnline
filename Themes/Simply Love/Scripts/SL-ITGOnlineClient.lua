@@ -3376,6 +3376,48 @@ function ITGOnline:TraceOnlineState(label, fields)
 	online_flow_trace(table.concat(parts, " "))
 end
 
+function ITGOnline:TraceFinalScorePayload(label, fields)
+	if not online_flow_trace then return end
+	fields = type(fields) == "table" and fields or {}
+	local judgments = type(fields.judgments) == "table" and fields.judgments or {}
+	local judgmentTotal = 0
+	for _, value in pairs(judgments) do
+		judgmentTotal = judgmentTotal + math.max(0, tonumber(value) or 0)
+	end
+	local score = tonumber(fields.score) or 0
+	local displayedPercent = tonumber(fields.displayedPercent) or 0
+	local accuracy = tonumber(fields.accuracy) or 0
+	local songPosition = tonumber(fields.songPosition) or 0
+	local failed = fields.failed == true
+	local classification = "client_final_completed"
+	if failed then
+		if score == 0 and displayedPercent == 0 then
+			if accuracy > 0 or songPosition > 0 or judgmentTotal > 0 then
+				classification = "client_failed_zero_progress_confirmed"
+			else
+				classification = "suspicious_empty_failed_final"
+			end
+		else
+			classification = "client_failed_scored"
+		end
+	end
+	online_flow_trace("final_score_payload_trace"
+		.. " label=" .. tostring(label or "unknown")
+		.. " room=" .. tostring(fields.roomId or self.currentRoomId or "nil")
+		.. " roundKey=" .. tostring(fields.roundKey or "")
+		.. " final=" .. tostring(fields.final == true)
+		.. " failed=" .. tostring(failed)
+		.. " classification=" .. tostring(classification)
+		.. " score=" .. tostring(score)
+		.. " displayedPercent=" .. tostring(displayedPercent)
+		.. " accuracy=" .. tostring(accuracy)
+		.. " songPosition=" .. tostring(songPosition)
+		.. " judgmentTotal=" .. tostring(judgmentTotal)
+		.. " forceFinalFailed=" .. tostring(fields.forceFinalFailed == true)
+		.. " scoreMode=" .. tostring(fields.scoreMode or "nil")
+		.. " source=" .. tostring(fields.source or "unknown"))
+end
+
 function ITGOnline:IsSongReloadOrDownloadActive(source)
 	local screenName = self.CurrentTopScreenName and self:CurrentTopScreenName() or tostring(self.currentScreenName or "")
 	local packSync = self.PackSync
@@ -4374,6 +4416,18 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		.. " roundKey=" .. tostring(self.currentRoomRoundKey or "")
 		.. " playStateVersion=" .. tostring(self.currentRoom and self.currentRoom.play_state and self.currentRoom.play_state.version_ms or "nil")
 		.. " snapshotSource=" .. tostring(self.currentRoom and self.currentRoom.online_snapshot_source or "nil"))
+	if self.PlayStateSummary then
+		local summary = self:PlayStateSummary(self.currentRoom)
+		online_flow_trace("room_snapshot_play_state_summary source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+			.. " localState=" .. tostring(self.CurrentUserPlayState and self:CurrentUserPlayState(self.currentRoom) or "nil")
+			.. " allTerminal=" .. tostring(summary and summary.allTerminal == true)
+			.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true)
+			.. " submittedScores=" .. tostring(summary and summary.submittedScores or "nil")
+			.. " finalResults=" .. tostring(summary and summary.finalResults or "nil")
+			.. " waitingFailedFinals=" .. tostring(summary and summary.waitingFailedFinals == true))
+	end
 	self:TraceOnlineState("room_snapshot_applied", {
 		source = source or "unknown",
 		roomSnapshot = self.currentRoom,
@@ -5163,6 +5217,24 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 	local validRoundKey = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)
 	local now = GetTimeSinceStart()
 	local minimumVisibleHoldSeconds = 2.25
+	online_flow_trace_throttled("evaluation_guard_decision_context", 1.0,
+		"evaluation_guard_decision_context"
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " screen=" .. tostring(screenName)
+		.. " phase=" .. tostring(phase)
+		.. " normalizedPhase=" .. tostring(self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase))
+		.. " roundKey=" .. tostring(roundKey or "")
+		.. " validRoundKey=" .. tostring(validRoundKey == true)
+		.. " waiting=" .. tostring(waiting == true)
+		.. " hasCurrentFinal=" .. tostring(self:CurrentUserHasFinalResult(self.currentRoom) == true)
+		.. " lastFinalScoreKey=" .. tostring(self.lastFinalScoreKey or "")
+		.. " finalInFlightKey=" .. tostring(self.lastFinalScoreInFlightKey or "")
+		.. " players=" .. tostring(summary and summary.players or "nil")
+		.. " terminal=" .. tostring(summary and summary.terminal or "nil")
+		.. " failedTerminal=" .. tostring(summary and summary.failedTerminal or "nil")
+		.. " finalResults=" .. tostring(summary and summary.finalResults or "nil")
+		.. " failedFinalsPending=" .. tostring(summary and summary.failedFinalsPending or "nil")
+		.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true))
 
 	local releaseWithResults = summary
 		and summary.players > 0
@@ -5242,6 +5314,12 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 	if validRoundKey and self.onlineGameplayEvaluationHoldStartedKey == roundKey then
 		local minimumRemaining = (tonumber(self.onlineGameplayEvaluationMinimumHoldUntil) or 0) - now
 		if minimumRemaining > 0 then
+			online_flow_trace_throttled("hold_gameplay_minimum_wait", 0.5,
+				"hold_gameplay_minimum_wait"
+				.. " roundKey=" .. tostring(roundKey)
+				.. " remaining=" .. tostring(minimumRemaining)
+				.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+				.. " waiting=" .. tostring(waiting == true))
 			return true
 		end
 	end
@@ -5261,6 +5339,14 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 		end
 	end
 
+	online_flow_trace_throttled("hold_gameplay_release_no_hold_needed", 1.0,
+		"hold_gameplay_release reason=no_hold_needed"
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+		.. " roundKey=" .. tostring(roundKey or "")
+		.. " waiting=" .. tostring(waiting == true)
+		.. " players=" .. tostring(summary and summary.players or "nil")
+		.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true))
 	return false
 end
 
@@ -5554,6 +5640,18 @@ function ITGOnline:EnforceRoomPhaseScreen(screenName)
 		.. " preferred=" .. tostring(preferred or "nil")
 		.. " room=" .. tostring(self.currentRoomId or "nil")
 		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+	if self.TraceOnlineState then
+		self:TraceOnlineState("enforce_screen_decision", {
+			source = "screen_enforcer",
+			requestedScreen = screenName or "nil",
+			topScreen = topScreen:GetName(),
+			preferred = preferred or "nil",
+			roomId = self.currentRoomId or "nil",
+			roomPhase = self.currentRoom and self.currentRoom.phase or "nil",
+			playState = self.CurrentUserPlayState and self:CurrentUserPlayState(self.currentRoom) or "nil",
+			summary = self.PlayStateSummary and self:PlayStateSummary() or nil,
+		})
+	end
 	return self:ApplyPreferredRoomScreen(topScreen, preferred)
 end
 
@@ -8449,6 +8547,22 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 			.. " hasJudgments=" .. tostring(self:HasScoredJudgments(judgments) == true)
 			.. " snapshotDisplayed=" .. tostring(snapshot and snapshot.displayedPercent or "nil"))
 	end
+	if final then
+		self:TraceFinalScorePayload("before_post", {
+			source = "send_score",
+			roomId = self.currentRoomId,
+			roundKey = roundKey,
+			final = true,
+			failed = outgoingFailed,
+			score = outgoingScore,
+			displayedPercent = displayedScorePercent,
+			accuracy = accuracy,
+			songPosition = songPosition,
+			judgments = judgments,
+			forceFinalFailed = forceFinalFailed,
+			scoreMode = scoreMode,
+		})
+	end
 
 	if not final then
 		if self.scoreInFlightFingerprint then
@@ -10194,12 +10308,25 @@ end
 function ITGOnline:VisibleSecondsUntilScheduledStart()
 	local seconds = self:SecondsUntilScheduledStart()
 	if not seconds then
+		if tostring(self.scheduledStartVisibleTraceKey or "") ~= "nil_seconds" then
+			self.scheduledStartVisibleTraceKey = "nil_seconds"
+			online_flow_trace("scheduled_start_visible_reset reason=nil_seconds"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+		end
 		self.scheduledStartVisibleSeconds = nil
 		self.scheduledStartVisibleUpdatedAt = 0
 		return nil
 	end
 
 	if seconds <= 0 then
+		local traceKey = "elapsed|" .. tostring(math.ceil(seconds))
+		if tostring(self.scheduledStartVisibleTraceKey or "") ~= traceKey then
+			self.scheduledStartVisibleTraceKey = traceKey
+			online_flow_trace("scheduled_start_visible_elapsed seconds=" .. tostring(seconds)
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+		end
 		self.scheduledStartVisibleSeconds = nil
 		self.scheduledStartVisibleUpdatedAt = 0
 		return seconds
@@ -10210,6 +10337,11 @@ function ITGOnline:VisibleSecondsUntilScheduledStart()
 	if self.scheduledStartVisibleSeconds == nil then
 		self.scheduledStartVisibleSeconds = actualCeil
 		self.scheduledStartVisibleUpdatedAt = now
+		self.scheduledStartVisibleTraceKey = "init|" .. tostring(actualCeil)
+		online_flow_trace("scheduled_start_visible_init actual=" .. tostring(actualCeil)
+			.. " seconds=" .. tostring(seconds)
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
 		return actualCeil
 	end
 
@@ -10226,6 +10358,15 @@ function ITGOnline:VisibleSecondsUntilScheduledStart()
 	end
 
 	self.scheduledStartVisibleSeconds = visible
+	local traceKey = tostring(actualCeil) .. "|" .. tostring(visible)
+	if tostring(self.scheduledStartVisibleTraceKey or "") ~= traceKey then
+		self.scheduledStartVisibleTraceKey = traceKey
+		online_flow_trace("scheduled_start_visible_update actual=" .. tostring(actualCeil)
+			.. " visible=" .. tostring(visible)
+			.. " seconds=" .. tostring(seconds)
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+	end
 	return visible
 end
 

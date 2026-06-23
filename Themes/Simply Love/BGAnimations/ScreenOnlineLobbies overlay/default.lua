@@ -179,6 +179,14 @@ local function joined_player_index_for_key(players, key, fallback)
 	return fallback or 1
 end
 
+local function joined_players_order_signature(players)
+	local parts = {}
+	for index, player in ipairs(players or {}) do
+		parts[#parts + 1] = tostring(index) .. "=" .. tostring(joined_player_stable_key(player))
+	end
+	return table.concat(parts, ",")
+end
+
 local function merge_joined_players_preserving_visual_order(currentPlayers, incomingPlayers)
 	currentPlayers = type(currentPlayers) == "table" and currentPlayers or {}
 	incomingPlayers = type(incomingPlayers) == "table" and incomingPlayers or {}
@@ -216,6 +224,16 @@ local function merge_joined_players_preserving_visual_order(currentPlayers, inco
 
 	for _, player in ipairs(anonymousIncoming) do
 		merged[#merged + 1] = player
+	end
+
+	if lobby_flow_trace then
+		lobby_flow_trace("joined_players_merge"
+			.. " currentCount=" .. tostring(#currentPlayers)
+			.. " incomingCount=" .. tostring(#incomingPlayers)
+			.. " mergedCount=" .. tostring(#merged)
+			.. " currentOrder=" .. tostring(joined_players_order_signature(currentPlayers))
+			.. " incomingOrder=" .. tostring(joined_players_order_signature(incomingPlayers))
+			.. " mergedOrder=" .. tostring(joined_players_order_signature(merged)))
 	end
 
 	return merged
@@ -2104,9 +2122,15 @@ local function normalize_joined_active_index()
 			return false
 		end
 	end
+	local previous = joined_active_index
 	joined_active_index = indices[1] or 1
 	joined_user_moved_focus = false
 	last_auto_start_focus_key = ""
+	lobby_flow_trace("joined_active_index_normalized previous=" .. tostring(previous)
+		.. " next=" .. tostring(joined_active_index)
+		.. " indices=" .. table.concat(indices, ",")
+		.. " phase=" .. tostring(joined_phase)
+		.. " isManager=" .. tostring(joined_is_manager))
 	return true
 end
 
@@ -2123,8 +2147,17 @@ local function move_joined_button(delta)
 	local nextIndex = current + delta
 	if nextIndex < 1 then nextIndex = #indices end
 	if nextIndex > #indices then nextIndex = 1 end
+	local previous = joined_active_index
 	joined_active_index = indices[nextIndex] or 1
 	joined_user_moved_focus = true
+	lobby_flow_trace("joined_button_focus_moved previous=" .. tostring(previous)
+		.. " next=" .. tostring(joined_active_index)
+		.. " delta=" .. tostring(delta)
+		.. " currentSlot=" .. tostring(current)
+		.. " nextSlot=" .. tostring(nextIndex)
+		.. " indices=" .. table.concat(indices, ",")
+		.. " phase=" .. tostring(joined_phase)
+		.. " playersSelected=" .. tostring(joined_players_selected == true))
 end
 
 local function set_joined_default_active_index(force)
@@ -2136,9 +2169,16 @@ local function set_joined_default_active_index(force)
 			end
 		end
 	end
+	local previous = joined_active_index
 	joined_active_index = indices[1] or 1
 	joined_user_moved_focus = false
 	last_auto_start_focus_key = ""
+	lobby_flow_trace("joined_default_focus_set previous=" .. tostring(previous)
+		.. " next=" .. tostring(joined_active_index)
+		.. " force=" .. tostring(force == true)
+		.. " indices=" .. table.concat(indices, ",")
+		.. " phase=" .. tostring(joined_phase)
+		.. " isManager=" .. tostring(joined_is_manager))
 end
 
 local function transition_to_online_song_reload()
@@ -2928,11 +2968,12 @@ local function handle_joined_mode_input(event)
 		end
 	end
 
-	if event.GameButton == "Back" then
+		if event.GameButton == "Back" then
 		lobby_flow_trace("input_joined_back_open_leave_confirm")
 		play_online_sound_once("Common", "Start")
 		normalize_joined_active_index()
 		joined_active_index = 1
+		lobby_flow_trace("input_joined_action_resolved action=open_leave_confirm trigger=back activeIndex=" .. tostring(joined_active_index))
 		open_leave_confirm("leave_lobby")
 		return false
 	end
@@ -2962,6 +3003,7 @@ local function handle_joined_mode_input(event)
 				})
 			end
 			lobby_flow_trace("input_joined_leave_confirm strict_index=1")
+			lobby_flow_trace("input_joined_action_resolved action=open_leave_confirm trigger=start activeIndex=" .. tostring(joined_active_index))
 			open_leave_confirm("leave_lobby")
 		elseif joined_active_index == 2 and joined_is_manager then
 			if ITGOnline and ITGOnline.IsSongSelectionTransitionLocked and ITGOnline:IsSongSelectionTransitionLocked("joined_action") then
@@ -2990,6 +3032,7 @@ local function handle_joined_mode_input(event)
 						})
 					end
 					lobby_flow_trace("input_joined_cancel_song_selection_request shared_index=2")
+					lobby_flow_trace("input_joined_action_resolved action=cancel_song_selection activeIndex=" .. tostring(joined_active_index))
 					t:playcommand("SetStatus", {
 						text="Annulation du choix de chanson...",
 						showSpinner=true,
@@ -3047,6 +3090,7 @@ local function handle_joined_mode_input(event)
 					})
 				end
 				lobby_flow_trace("input_joined_select_music_transition")
+				lobby_flow_trace("input_joined_action_resolved action=select_music activeIndex=" .. tostring(joined_active_index))
 				topScreen:SetNextScreenName("ScreenSelectMusic")
 				topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 			end
@@ -3062,6 +3106,7 @@ local function handle_joined_mode_input(event)
 				})
 				return false
 			elseif can_download_browsed_pack() then
+				lobby_flow_trace("input_joined_action_resolved action=open_browse_pack_download_confirm activeIndex=" .. tostring(joined_active_index))
 				open_browse_pack_download_confirm(joined_song_preview)
 			elseif joined_can_download_pack and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadSelectedPack then
 				if ITGOnline and ITGOnline.TraceOnlineState then
@@ -3107,10 +3152,12 @@ local function handle_joined_mode_input(event)
 					end
 				end)
 			else
+				lobby_flow_trace("input_joined_action_resolved action=reload_songs activeIndex=" .. tostring(joined_active_index))
 				transition_to_online_song_reload()
 			end
 		elseif joined_active_index == 4 and joined_is_manager then
 			if joined_phase_allows_song_selection() then
+				lobby_flow_trace("input_joined_action_resolved action=open_global_options activeIndex=" .. tostring(joined_active_index))
 				open_global_options_menu()
 			else
 				t:playcommand("SetStatus", {
@@ -3122,6 +3169,7 @@ local function handle_joined_mode_input(event)
 		elseif joined_active_index == 8 and joined_is_manager then
 			if focus_joined_players() then
 				lobby_flow_trace("input_joined_players_frame_start")
+				lobby_flow_trace("input_joined_action_resolved action=focus_players activeIndex=" .. tostring(joined_active_index))
 				t:queuecommand("UpdateJoinedLobbyText")
 			else
 				lobby_flow_trace("input_joined_players_frame_start_blocked")
@@ -3139,6 +3187,7 @@ local function handle_joined_mode_input(event)
 					})
 				end
 				lobby_flow_trace("input_joined_start_room_broadcast")
+				lobby_flow_trace("input_joined_action_resolved action=start_room activeIndex=" .. tostring(joined_active_index))
 				MESSAGEMAN:Broadcast("StartOnlineRoom")
 			else
 				lobby_flow_trace("input_joined_start_room_blocked missingSong=" .. tostring(joined_any_player_missing_song() == true)
@@ -4082,6 +4131,11 @@ local af = Def.ActorFrame{
 		if cancelChoiceButton then
 			cancelChoiceButton:visible(cancelChoiceVisible)
 			cancelChoiceButton:playcommand("Hover")
+			lobby_flow_trace("cancel_choice_button_state visible=" .. tostring(cancelChoiceVisible == true)
+				.. " activeIndex=" .. tostring(joined_active_index)
+				.. " phase=" .. tostring(joined_phase)
+				.. " isManager=" .. tostring(joined_is_manager)
+				.. " transitionLocked=" .. tostring(ITGOnline and ITGOnline.IsSongSelectionTransitionLocked and ITGOnline:IsSongSelectionTransitionLocked("ui") or false))
 		end
 
 		local startRoomButton = joinedContent and joinedContent:GetChild("StartRoomButton")
@@ -4139,6 +4193,23 @@ local af = Def.ActorFrame{
 					last_auto_start_request_key = ""
 				end
 			end
+			local function joined_actor_visible(actor)
+				if not actor or not actor.GetVisible then return "nil" end
+				local ok, value = pcall(function() return actor:GetVisible() end)
+				if not ok then return "unknown" end
+				return tostring(value == true)
+			end
+			lobby_flow_trace("joined_button_visibility_summary"
+				.. " leave=true"
+				.. " selectMusic=" .. joined_actor_visible(selectSongButton)
+				.. " reload=" .. joined_actor_visible(reloadSongsButton)
+				.. " globalOptions=" .. joined_actor_visible(globalOptionsButton)
+				.. " cancelChoice=" .. joined_actor_visible(cancelChoiceButton)
+				.. " start=" .. joined_actor_visible(startRoomButton)
+				.. " activeIndex=" .. tostring(joined_active_index)
+				.. " indices=" .. table.concat(joined_button_indices(), ",")
+				.. " phase=" .. tostring(joined_phase)
+				.. " ready={" .. tostring(ready_summary()) .. "}")
 			lobby_flow_trace("UpdateJoinedLobbyText_end code=" .. tostring(joined_lobby_code)
 				.. " phase=" .. tostring(joined_phase)
 				.. " players=" .. tostring(#joined_lobby_players)
@@ -4596,6 +4667,13 @@ local af = Def.ActorFrame{
 			end
 			joined_player_index = joined_player_index_for_key(joined_lobby_players, previousSelectedPlayerKey, joined_player_index)
 			joined_player_index = math.max(1, math.min(joined_player_index, math.max(1, #joined_lobby_players)))
+			lobby_flow_trace("joined_player_focus_after_snapshot"
+				.. " previousSelectedKey=" .. tostring(previousSelectedPlayerKey)
+				.. " selectedIndex=" .. tostring(joined_player_index)
+				.. " selectedKey=" .. tostring(joined_player_stable_key(joined_lobby_players and joined_lobby_players[joined_player_index]))
+				.. " players=" .. tostring(#joined_lobby_players)
+				.. " order=" .. tostring(joined_players_order_signature(joined_lobby_players))
+				.. " source=" .. tostring(params and params.snapshotSource or "nil"))
 			joined_phase = params and params.phase or nil
 			local currentPlayState = ITGOnline and ITGOnline.CurrentUserPlayState and ITGOnline:CurrentUserPlayState(ITGOnline.currentRoom) or nil
 			local localReturnKeyActive, localReturnReason = local_client_has_returned_to_lobby_for_current_round()

@@ -13,6 +13,13 @@ end
 local OPTIONS_READY_TIMEOUT_SECONDS = 30
 local online_options_screen_name = nil
 local last_online_options_warning_second = nil
+local last_online_options_timer_trace_key = ""
+
+local function online_options_trace(message)
+	if Trace then
+		Trace("[ITGOnline] options_flow " .. tostring(message or ""))
+	end
+end
 
 local function play_online_options_warning_tick(remaining)
 	local second = tonumber(remaining)
@@ -53,16 +60,32 @@ end
 
 local function play_online_options_preview_music(source)
 	if not (ITGOnline and ITGOnline.currentRoom and play_online_preview_music_normal_rate) then
+		online_options_trace("preview_skipped reason=missing_context source=" .. tostring(source or "nil")
+			.. " hasClient=" .. tostring(ITGOnline ~= nil)
+			.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil)
+			.. " hasPreviewApi=" .. tostring(play_online_preview_music_normal_rate ~= nil))
 		return
 	end
 	local phase = ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) or tostring(ITGOnline.currentRoom.phase or "")
 	if phase ~= "config" and phase ~= "lobby_ready" then
+		online_options_trace("preview_skipped reason=phase source=" .. tostring(source or "nil")
+			.. " phase=" .. tostring(phase)
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
 		return
 	end
 	local songInfo = ITGOnline.currentRoom.selected_song or ITGOnline.currentSongPayload
 	if type(songInfo) ~= "table" then
+		online_options_trace("preview_skipped reason=no_song source=" .. tostring(source or "nil")
+			.. " phase=" .. tostring(phase)
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
 		return
 	end
+	online_options_trace("preview_play source=" .. tostring(source or "nil")
+		.. " phase=" .. tostring(phase)
+		.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+		.. " title=" .. tostring(songInfo.title or songInfo.song_title or songInfo.folder_name or "nil")
+		.. " pack=" .. tostring(songInfo.pack_name or songInfo.group_name or "nil")
+		.. " rate=" .. tostring(ITGOnline.currentRoom.music_rate or ITGOnline.currentRoom.rate or "nil"))
 	play_online_preview_music_normal_rate(songInfo, source or "screen_player_options")
 end
 
@@ -70,6 +93,13 @@ local af = Def.ActorFrame{
 	OnCommand=function(self)
 		local screen = SCREENMAN:GetTopScreen()
 		online_options_screen_name = screen and screen:GetName() or nil
+		online_options_trace("screen_on screen=" .. tostring(online_options_screen_name or "nil")
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+			.. " timeoutActive=" .. tostring(online_options_timeout_active() == true)
+			.. " afterP1=" .. tostring(SL.Global.ScreenAfter.PlayerOptions or "nil")
+			.. " afterP2=" .. tostring(SL.Global.ScreenAfter.PlayerOptions2 or "nil")
+			.. " afterP3=" .. tostring(SL.Global.ScreenAfter.PlayerOptions3 or "nil"))
 		if ITGOnline and ITGOnline.currentRoomId then
 			SL.Global.ScreenAfter.PlayerOptions = "ScreenOnlineLobbies"
 			SL.Global.ScreenAfter.PlayerOptions2 = "ScreenOnlineLobbies"
@@ -77,13 +107,22 @@ local af = Def.ActorFrame{
 		end
 		if ITGOnline and ITGOnline.BeginOnlineOptionsReadyDeadline and online_options_timeout_active() then
 			last_online_options_warning_second = nil
+			online_options_trace("ready_deadline_begin source=screen_on seconds=" .. tostring(OPTIONS_READY_TIMEOUT_SECONDS)
+				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
 			ITGOnline:BeginOnlineOptionsReadyDeadline(OPTIONS_READY_TIMEOUT_SECONDS, "screen_player_options")
 			self:queuecommand("UpdateOptionsReadyTimer")
 		end
 		play_online_options_preview_music("screen_player_options_on")
 	end,
 	OnlineLobbyStateMessageCommand=function(self)
+		online_options_trace("lobby_state_received screen=" .. tostring(online_options_screen_name or "nil")
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+			.. " timeoutActive=" .. tostring(online_options_timeout_active() == true)
+			.. " ready=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.IsCurrentUserReadyInRoom and ITGOnline:IsCurrentUserReadyInRoom(ITGOnline.currentRoom) == true))
 		if ITGOnline and ITGOnline.BeginOnlineOptionsReadyDeadline and online_options_timeout_active() then
+			online_options_trace("ready_deadline_begin source=lobby_state seconds=" .. tostring(OPTIONS_READY_TIMEOUT_SECONDS)
+				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
 			ITGOnline:BeginOnlineOptionsReadyDeadline(OPTIONS_READY_TIMEOUT_SECONDS, "screen_player_options_state")
 			self:queuecommand("UpdateOptionsReadyTimer")
 		end
@@ -91,30 +130,47 @@ local af = Def.ActorFrame{
 	end,
 	OffCommand=function(self)
 		if not (ITGOnline and ITGOnline.currentRoomId) then
+			online_options_trace("screen_off_skipped reason=no_room")
 			return
 		end
 		if ITGOnline.ShouldSuppressOnlineConfigReadyOnOptionsExit
 			and ITGOnline:ShouldSuppressOnlineConfigReadyOnOptionsExit() then
-			Trace("[ITGOnline] options_screen_off skipped config_ready after timeout")
+			online_options_trace("screen_off_skipped reason=suppress_config_ready_after_timeout"
+				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+				.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 			return
 		end
 
 		local screen = SCREENMAN:GetTopScreen()
 		local screenName = online_options_screen_name or (screen and screen:GetName()) or ""
 		if online_next_screen_for_options(screenName) ~= "ScreenOnlineLobbies" then
+			online_options_trace("screen_off_skipped reason=next_screen_not_lobby"
+				.. " screen=" .. tostring(screenName)
+				.. " next=" .. tostring(online_next_screen_for_options(screenName) or "nil"))
 			return
 		end
 
-		Trace("[ITGOnline] options_screen_off confirmed screen=" .. tostring(screenName))
+		online_options_trace("screen_off_config_ready_broadcast screen=" .. tostring(screenName)
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 		MESSAGEMAN:Broadcast("OnlineConfigReady")
 	end,
 
 	UpdateOptionsReadyTimerCommand=function(self)
 		local timer = self:GetChild("OnlineOptionsReadyTimer")
-		if not timer then return end
+		if not timer then
+			online_options_trace("timer_skipped reason=missing_actor")
+			return
+		end
 
 		if not (ITGOnline and ITGOnline.OnlineOptionsReadyRemaining and online_options_timeout_active()) then
 			last_online_options_warning_second = nil
+			if last_online_options_timer_trace_key ~= "inactive" then
+				last_online_options_timer_trace_key = "inactive"
+				online_options_trace("timer_hidden reason=inactive"
+					.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+					.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+			end
 			timer:visible(false)
 			return
 		end
@@ -122,12 +178,18 @@ local af = Def.ActorFrame{
 		local remaining = ITGOnline:OnlineOptionsReadyRemaining()
 		if remaining == nil then
 			last_online_options_warning_second = nil
+			if last_online_options_timer_trace_key ~= "nil_remaining" then
+				last_online_options_timer_trace_key = "nil_remaining"
+				online_options_trace("timer_hidden reason=nil_remaining room=" .. tostring(ITGOnline.currentRoomId or "nil"))
+			end
 			timer:visible(false)
 			return
 		end
 
 		if remaining <= 0 then
 			last_online_options_warning_second = nil
+			online_options_trace("timer_expired room=" .. tostring(ITGOnline.currentRoomId or "nil")
+				.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 			timer:visible(true)
 			timer:settext("Options timeout")
 			if ITGOnline.ExpireOnlineOptionsReady then
@@ -142,6 +204,13 @@ local af = Def.ActorFrame{
 
 		timer:visible(true)
 		play_online_options_warning_tick(remaining)
+		local secondKey = tostring(math.ceil(remaining))
+		if last_online_options_timer_trace_key ~= secondKey then
+			last_online_options_timer_trace_key = secondKey
+			online_options_trace("timer_visible remaining=" .. tostring(secondKey)
+				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+				.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+		end
 		timer:settext(("Ready in %02ds or leave lobby"):format(math.ceil(remaining)))
 		self:sleep(0.25):queuecommand("UpdateOptionsReadyTimer")
 	end,
