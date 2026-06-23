@@ -9,6 +9,7 @@
 #include "Banner.h"
 #include "BitmapText.h"
 #include "CommonMetrics.h"
+#include "CourseUtil.h"
 #include "Difficulty.h"
 #include "EnumHelper.h"
 #include "GameConstantsAndTypes.h"
@@ -17,9 +18,8 @@
 #include "ScreenAttract.h"
 #include "ScreenMessage.h"
 #include "ThemeMetric.h"
+#include "TrailUtil.h"
 
-class Course;
-class Trail;
 typedef std::pair<Difficulty, StepsType> DifficultyAndStepsType;
 
 const int NUM_RANKING_LINES = 5;
@@ -34,35 +34,40 @@ LuaDeclareType(RankingType);
 
 class ScreenRanking : public ScreenAttract {
  public:
-  virtual void Init();
-  virtual void BeginScreen();
+  void Init() override;
+  void BeginScreen() override;
 
-  void HandleScreenMessage(const ScreenMessage SM);
+  void HandleScreenMessage(const ScreenMessage SM) override;
 
  protected:
   struct PageToShow {
-    PageToShow() {
-      pCourse = nullptr;
-      pTrail = nullptr;
-    }
+    PageToShow();
 
-    int colorIndex;
+    size_t colorIndex;
     std::vector<DifficultyAndStepsType> aTypes;
 
     // RankingPageType_Category
     RankingCategory category;
 
     // RankingPageType_SpecificCourses
-    Course* pCourse;
-    Trail* pTrail;
+    CourseID courseID;
+    TrailID trailID;
   };
 
   virtual float SetPage(const PageToShow& pts);
+  RankingType GetRankingType() const;
+  float GetPageFadeSeconds() const;
+  float GetSecondsPerPage() const;
+  RageColor GetStepsTypeColor(size_t colorIndex) const;
+  std::string GetCategoryTitle(RankingCategory category) const;
+  void SetRecentScoreEffect(
+      int row, bool recent, bool showScores, bool showPoints,
+      bool showTime);
 
   BitmapText m_textStepsType;  // for category, course, all_steps
 
   std::vector<PageToShow> m_vPagesToShow;
-  unsigned m_iNextPageToShow;
+  size_t m_iNextPageToShow;
 
   // Don't use the version in CommonMetrics because we may have multiple
   // ranking screens that want to show different types and difficulties.
