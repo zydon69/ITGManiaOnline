@@ -25,6 +25,8 @@ PackSync.localScanCache = PackSync.localScanCache or {}
 PackSync.lastPostedStatusSignature = PackSync.lastPostedStatusSignature or ""
 PackSync.lastPostedStatusAt = tonumber(PackSync.lastPostedStatusAt) or 0
 PackSync.statusPostInFlightSignature = PackSync.statusPostInFlightSignature or ""
+PackSync.statusPostInFlightCallbacks = PackSync.statusPostInFlightCallbacks or {}
+PackSync.statusPostInFlightStartedAt = tonumber(PackSync.statusPostInFlightStartedAt) or 0
 PackSync.lastAppliedLocalStatusSignature = PackSync.lastAppliedLocalStatusSignature or ""
 PackSync.statusPostDuplicateHeartbeatSeconds = tonumber(PackSync.statusPostDuplicateHeartbeatSeconds) or 5.0
 PackSync.lastManagerBrowsingPreviewPostKey = PackSync.lastManagerBrowsingPreviewPostKey or ""
@@ -927,13 +929,8 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 			.. " progress=" .. tostring(progress)
 			.. " selected_at=" .. tostring(currentSelectedAt))
 		if callback then
-			callback(true, {
-				pack_sync_status = {
-					applied = false,
-					ignored_reason = "client_duplicate_status_in_flight",
-				},
-				duplicate = true,
-			}, nil)
+			self.statusPostInFlightCallbacks[signature] = self.statusPostInFlightCallbacks[signature] or {}
+			self.statusPostInFlightCallbacks[signature][#self.statusPostInFlightCallbacks[signature] + 1] = callback
 		end
 		return
 	end
@@ -969,6 +966,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	self.lastPostedStatusSignature = signature
 	self.lastPostedStatusAt = now
 	self.statusPostInFlightSignature = signature
+	self.statusPostInFlightStartedAt = now
 
 	local payload = {
 		status = status,
@@ -988,6 +986,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	ITGOnline:Request("POST", "/rooms/" .. requestRoomId .. "/pack-sync-status", payload, function(ok, decoded, response)
 		if tostring(self.statusPostInFlightSignature or "") == signature then
 			self.statusPostInFlightSignature = ""
+			self.statusPostInFlightStartedAt = 0
 		end
 		local statusResult = decoded and decoded.pack_sync_status or nil
 		local ignored = ok and statusResult and statusResult.applied == false
@@ -1022,6 +1021,11 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 				.. " selected_at=" .. tostring(payload.selected_at or ""))
 		end
 		if callback then callback(callbackOk, decoded, response) end
+		local waitingCallbacks = self.statusPostInFlightCallbacks[signature] or {}
+		self.statusPostInFlightCallbacks[signature] = nil
+		for _, queuedCallback in ipairs(waitingCallbacks) do
+			queuedCallback(callbackOk, decoded, response)
+		end
 	end)
 end
 

@@ -250,6 +250,9 @@ local function maybe_preview_current_online_song(force)
 		if ok then
 			lastSongPreviewKey = key
 			lastSongPreviewSentAt = now
+		else
+			lastSongPreviewKey = ""
+			lastSongPreviewSentAt = 0
 		end
 	end)
 end

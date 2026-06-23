@@ -221,6 +221,7 @@ ITGOnline.cachedLobbySearchPayload = ITGOnline.cachedLobbySearchPayload or { lob
 ITGOnline.finalLeaderboardCache = ITGOnline.finalLeaderboardCache or {}
 ITGOnline.latestFinalLeaderboardCache = ITGOnline.latestFinalLeaderboardCache or nil
 ITGOnline.finalLeaderboardCacheSignature = ITGOnline.finalLeaderboardCacheSignature or ""
+ITGOnline.finalLeaderboardCacheLogSignature = ITGOnline.finalLeaderboardCacheLogSignature or ""
 ITGOnline.finalLeaderboardCacheBootLogged = ITGOnline.finalLeaderboardCacheBootLogged or false
 
 local function final_leaderboard_cache_trace(message)
@@ -4368,6 +4369,47 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	return self.currentRoom
 end
 
+function ITGOnline:IsPostResultsLobbyScreen(room, screenName)
+	room = room or self.currentRoom
+	if not room then
+		return false
+	end
+
+	local resolvedScreenName = tostring(screenName or "")
+	if resolvedScreenName == "" then
+		local topScreen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+		resolvedScreenName = tostring((topScreen and topScreen:GetName()) or self.currentScreenName or "")
+	end
+
+	if resolvedScreenName ~= "ScreenOnlineLobbies" then
+		return false
+	end
+
+	if self:NormalizeRoomPhase(room.phase) ~= "results" then
+		return false
+	end
+
+	local playState = ""
+	if self.CurrentUserPlayState then
+		playState = tostring(self:CurrentUserPlayState(room) or "")
+	end
+	if playState == "returned_to_lobby" then
+		return true
+	end
+
+	local roundKey = ""
+	if self.PlayStateKey then
+		roundKey = tostring(self:PlayStateKey() or "")
+	end
+	if roundKey ~= "" and (not self.PlayStateKeyIsValid or self:PlayStateKeyIsValid(roundKey)) then
+		if tostring(self.onlineGameplayEvaluationReturnedKey or "") == roundKey then
+			return true
+		end
+	end
+
+	return false
+end
+
 function ITGOnline:BroadcastLeaderboardFromRoom(room, source)
 	room = room or self.currentRoom
 	if not room then
@@ -4378,6 +4420,18 @@ function ITGOnline:BroadcastLeaderboardFromRoom(room, source)
 
 	if self.StoreFinalLeaderboardFromRoom then
 		self:StoreFinalLeaderboardFromRoom(room, "broadcast_room_leaderboard:" .. tostring(source or "unknown"))
+	end
+
+	local topScreen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+	local screenName = tostring((topScreen and topScreen:GetName()) or self.currentScreenName or "")
+	if self:IsPostResultsLobbyScreen(room, screenName) then
+		online_flow_trace_throttled("post_results_leaderboard_broadcast_suppressed", 1.0,
+			"broadcast_room_leaderboard_suppressed reason=post_results_lobby"
+			.. " source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+			.. " phase=" .. tostring(room.phase or "nil")
+			.. " screen=" .. screenName)
+		return false
 	end
 
 	local leaderboard = room.live_scores or room.top_scores or room.leaderboard
@@ -4480,16 +4534,47 @@ function ITGOnline:StoreFinalLeaderboardFromRoom(source, cacheSource)
 		or playState.game_session_id
 		or source.roundKey
 		or source.round_key
+		or source.startAt
+		or source.start_at
+		or source.startedAt
+		or source.started_at
 		or songInfo.roundId
 		or songInfo.round_id
 		or songInfo.selectedAt
 		or songInfo.selected_at
+		or songInfo.game_session_id
+		or songInfo.session_id
+		or songInfo.song_hash
+		or songInfo.songHash
+		or songInfo.chart_hash
+		or songInfo.chartHash
 		or "")
 	local version = tonumber(source.leaderboard_version_ms
 		or source.live_score_version_ms
 		or source.updated_version_ms
 		or playState.version_ms
 		or playState.updated_version_ms) or 0
+	local rowsSignatureParts = {}
+	for index, result in ipairs(results or {}) do
+		if type(result) == "table" then
+			local user = type(result.user) == "table" and result.user or {}
+			rowsSignatureParts[#rowsSignatureParts + 1] = table.concat({
+				tostring(index),
+				tostring(result.rank or ""),
+				tostring(user.id or result.user_id or ""),
+				tostring(result.displayed_percent or result.displayedPercent or result.score_percent or ""),
+				tostring(result.score or ""),
+				tostring(result.failed == true),
+			}, ":")
+		end
+	end
+	local canonicalSignature = table.concat({
+		roomId,
+		roundKey,
+		tostring(version),
+		tostring(#results),
+		table.concat(rowsSignatureParts, ","),
+	}, "|")
 
 	local cache = {
 		room_id = roomId,
@@ -4497,23 +4582,24 @@ function ITGOnline:StoreFinalLeaderboardFromRoom(source, cacheSource)
 		version_ms = version,
 		source = tostring(cacheSource or "unknown"),
 		stored_at = GetTimeSinceStart and GetTimeSinceStart() or 0,
+		signature = canonicalSignature,
 		rows = online_table_copy(results, 0) or {},
 	}
 	self.finalLeaderboardCache = self.finalLeaderboardCache or {}
+	local previous = roomId ~= "" and self.finalLeaderboardCache[roomId] or self.latestFinalLeaderboardCache
+	local duplicate = previous and tostring(previous.signature or "") == canonicalSignature
 	if roomId ~= "" then
 		self.finalLeaderboardCache[roomId] = cache
 	end
 	self.latestFinalLeaderboardCache = cache
 
-	local signature = table.concat({
-		roomId,
-		roundKey,
-		tostring(version),
-		tostring(#results),
-		tostring(cacheSource or "unknown"),
-	}, "|")
-	if signature ~= tostring(self.finalLeaderboardCacheSignature or "") then
-		self.finalLeaderboardCacheSignature = signature
+	self.finalLeaderboardCacheSignature = canonicalSignature
+	if duplicate then
+		return true
+	end
+	local logSignature = table.concat({ canonicalSignature, tostring(cacheSource or "unknown") }, "|")
+	if logSignature ~= tostring(self.finalLeaderboardCacheLogSignature or "") then
+		self.finalLeaderboardCacheLogSignature = logSignature
 		final_leaderboard_cache_trace("store"
 			.. " source=" .. tostring(cacheSource or "unknown")
 			.. " room=" .. tostring(roomId ~= "" and roomId or "nil")
@@ -4572,6 +4658,9 @@ function ITGOnline:PlayStateSummary(room)
 	local sessions = playState and playState.sessions or {}
 	local finalResults = playState and playState.final_results or {}
 	local players = tonumber(playState and playState.players_count) or #(sessions or {})
+	if players <= 0 and room and type(room.members) == "table" then
+		players = #room.members
+	end
 	local terminal = tonumber(playState and playState.terminal_players_count)
 	local failedTerminal = tonumber(playState and playState.failed_players_count) or 0
 
@@ -4659,6 +4748,15 @@ function ITGOnline:ShouldWaitForOnlineResults(room)
 	end
 
 	local summary = self:PlayStateSummary(room)
+	if phase == "results" and summary.players > 0 and not summary.finalResultsReady then
+		online_flow_trace_throttled("results_wait_phase_results_incomplete", 1.0,
+			"results_wait_decision wait=true reason=results_phase_incomplete_final_results"
+			.. " state=" .. tostring(state or "nil")
+			.. " terminal=" .. tostring(summary.terminal)
+			.. " players=" .. tostring(summary.players)
+			.. " finalResults=" .. tostring(summary.finalResults))
+		return true
+	end
 	if summary.players <= 0 then
 		online_flow_trace_throttled("results_wait_no_players", 1.0,
 			"results_wait_decision wait=false reason=no_players"
@@ -5205,6 +5303,15 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 
 	if phase == "results" then
 		if self:IsOnlineGameplayScreen(screenName) then
+			local summary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
+			if summary and summary.players > 0 and summary.finalResultsReady ~= true then
+				online_flow_trace_throttled("preferred_results_incomplete_hold_gameplay", 1.0,
+					"preferred=nil reason=results_incomplete_final_results"
+					.. " playState=" .. tostring(playState)
+					.. " players=" .. tostring(summary.players)
+					.. " finalResults=" .. tostring(summary.finalResults))
+				return nil
+			end
 			if self.ShouldHoldGameplayForEvaluation and self:ShouldHoldGameplayForEvaluation() then
 				online_flow_trace_throttled("preferred_hold_gameplay_before_evaluation", 1.0, "preferred=nil reason=hold_gameplay_before_evaluation playState=" .. tostring(playState))
 				return nil
@@ -7350,11 +7457,18 @@ function ITGOnline:PreviewSong(callback)
 		difficulty = payload.difficulty,
 		meter = payload.meter,
 	}, function(ok, decoded, response)
+		local statusCode = tonumber(response and response.statusCode) or 0
+		local cancelled = ok ~= true and statusCode == 0
 		online_flow_trace("song_preview_response_payload ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
+			.. " cancelled=" .. tostring(cancelled == true)
 			.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
 			.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
 			.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
+		if cancelled then
+			if callback then callback(true, { cancelled = true }, response) end
+			return
+		end
 		if callback then callback(ok, decoded, response) end
 	end, nil, { cancelOnScreenChange = true })
 end
@@ -11753,9 +11867,22 @@ end
 		end
 
 		if payload.leaderboard and leaderboardIsFresh then
-			online_flow_trace("score_updated_leaderboard_broadcast roomId=" .. tostring(payload.room_id or "nil")
-				.. " version=" .. tostring(incomingVersion)
-				.. " entries=" .. tostring(payload.leaderboard and #payload.leaderboard or 0))
+			local topScreen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+			local screenName = tostring((topScreen and topScreen:GetName()) or self.currentScreenName or "")
+			local suppressPostResultsBroadcast = self:IsPostResultsLobbyScreen(self.currentRoom, screenName)
+			if suppressPostResultsBroadcast then
+				online_flow_trace_throttled("post_results_score_leaderboard_suppressed", 1.0,
+					"score_updated_leaderboard_broadcast_suppressed reason=post_results_lobby"
+					.. " roomId=" .. tostring(payload.room_id or "nil")
+					.. " version=" .. tostring(incomingVersion)
+					.. " entries=" .. tostring(payload.leaderboard and #payload.leaderboard or 0)
+					.. " phase=" .. tostring((self.currentRoom and self.currentRoom.phase) or "nil")
+					.. " screen=" .. screenName)
+			else
+				online_flow_trace("score_updated_leaderboard_broadcast roomId=" .. tostring(payload.room_id or "nil")
+					.. " version=" .. tostring(incomingVersion)
+					.. " entries=" .. tostring(payload.leaderboard and #payload.leaderboard or 0))
+			end
 			if self.debugScoreTrace == true then
 				local parts = {}
 				for entry in ivalues(payload.leaderboard or {}) do
@@ -11797,11 +11924,13 @@ end
 					.. " local_score=" .. tostring(localScore)
 					.. " local_ex=" .. tostring(localEx))
 			end
-			MESSAGEMAN:Broadcast("ITGOnlineLeaderboardUpdated", {
-				leaderboard = payload.leaderboard,
-				room_id = payload.room_id,
-				leaderboard_version_ms = incomingVersion,
-			})
+			if not suppressPostResultsBroadcast then
+				MESSAGEMAN:Broadcast("ITGOnlineLeaderboardUpdated", {
+					leaderboard = payload.leaderboard,
+					room_id = payload.room_id,
+					leaderboard_version_ms = incomingVersion,
+				})
+			end
 		end
 		if payload.play_state and self.currentRoom then
 			local playStateVersionKey = tostring(roomId or expectedRoomId or "")
