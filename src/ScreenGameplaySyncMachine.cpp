@@ -1,5 +1,6 @@
 #include "ScreenGameplaySyncMachine.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -165,13 +166,16 @@ void ScreenGameplaySyncMachine::RefreshText() {
   float fNew = PREFSMAN->m_fGlobalOffsetSeconds;
   float fOld = AdjustSync::s_fGlobalOffsetSecondsOriginal;
   float fStdDev = AdjustSync::s_fStandardDeviation;
+  const int sample_count =
+      std::min(
+          std::max(AdjustSync::s_iAutosyncOffsetSample + 1, 1),
+          AdjustSync::OFFSET_SAMPLE_COUNT);
   if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
     LOG->Trace(
         "GLOBAL_OFFSET_TRACE: screen_gameplay_sync_machine_refresh_text "
         "old_runtime_seconds=%.6f new_runtime_seconds=%.6f stddev=%.6f "
         "sample=%d/%d",
-        fOld, fNew, fStdDev, AdjustSync::s_iAutosyncOffsetSample + 1,
-        AdjustSync::OFFSET_SAMPLE_COUNT);
+        fOld, fNew, fStdDev, sample_count, AdjustSync::OFFSET_SAMPLE_COUNT);
   }
   std::string s;
   s += OLD_OFFSET.GetValue() + ssprintf(": %0.3f\n", fOld);
@@ -179,8 +183,7 @@ void ScreenGameplaySyncMachine::RefreshText() {
   s += STANDARD_DEVIATION.GetValue() + ssprintf(": %0.3f\n", fStdDev);
   s += COLLECTING_SAMPLE.GetValue() +
        ssprintf(
-           ": %d / %d", AdjustSync::s_iAutosyncOffsetSample + 1,
-           AdjustSync::OFFSET_SAMPLE_COUNT);
+           ": %d / %d", sample_count, AdjustSync::OFFSET_SAMPLE_COUNT);
 
   m_textSyncInfo.SetText(s);
 }

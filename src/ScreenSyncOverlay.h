@@ -3,18 +3,41 @@
 
 #include "AutoActor.h"
 #include "Screen.h"
-/** @brief Credits and statistics drawn on top of everything else. */
+
+struct Message;
+
+/** @brief Sync diagnostics and keyboard timing adjustment overlay. */
 class ScreenSyncOverlay : public Screen {
  public:
-  virtual void Init();
+  void Init() override;
 
-  bool Input(const InputEventPlus& input);
-  void Update(float fDeltaTime);
+  bool Input(const InputEventPlus& input) override;
+  void Update(float fDeltaTime) override;
 
  private:
+  enum Action {
+    RevertSyncChanges,
+    ChangeSongBPM,
+    ChangeGlobalOffset,
+    ChangeSongOffset,
+    Action_Invalid
+  };
+
   void UpdateText();
   void ShowHelp();
   void HideHelp();
+  bool IsGameplayActive() const;
+  bool HasRuntimeForSync() const;
+  bool IsShiftPressed() const;
+  bool IsAltPressed() const;
+  bool GetActionForInput(const InputEventPlus& input, Action& action,
+                         bool& increase) const;
+  float GetInputDelta(const InputEventPlus& input, bool increase) const;
+  void ReleaseCurrentStepLookups();
+  bool ApplyBPMDelta(float delta);
+  bool ApplyGlobalOffsetDelta(float delta);
+  bool ApplySongOffsetDelta(float delta);
+  void SendOverlayMessage(Message& message);
 
   AutoActor m_overlay;
 };
