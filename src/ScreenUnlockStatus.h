@@ -7,14 +7,18 @@
 #include "ScreenAttract.h"
 #include "Sprite.h"
 
-class Course;
-
 class ScreenUnlockStatus : public ScreenAttract {
  public:
-  virtual void Init();
-  ~ScreenUnlockStatus();
+  ScreenUnlockStatus() = default;
+  ScreenUnlockStatus(const ScreenUnlockStatus&) = delete;
+  ScreenUnlockStatus& operator=(const ScreenUnlockStatus&) = delete;
+
+  void Init() override;
+  ~ScreenUnlockStatus() override;
 
  protected:
+  void ClearOwnedActors();
+
   BitmapText PointsUntilNextUnlock;
   std::vector<Sprite*> Unlocks;
   std::vector<BitmapText*> item;   // scrolling text
