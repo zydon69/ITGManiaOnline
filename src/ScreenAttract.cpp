@@ -1,87 +1,190 @@
 #include "ScreenAttract.h"
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 
-#include "GameConstantsAndTypes.h"
+#include "CharacterManager.h"
 #include "GameInput.h"
 #include "GameSoundManager.h"
 #include "GameState.h"
 #include "InputEventPlus.h"
-#include "InputFilter.h"
+#include "MemoryCardManager.h"
+#include "NoteSkinManager.h"
 #include "Preference.h"
 #include "PrefsManager.h"
 #include "RageLog.h"
 #include "RageSoundManager.h"
-#include "Screen.h"
 #include "ScreenManager.h"
 #include "ScreenMessage.h"
 #include "ScreenWithMenuElements.h"
+#include "SongManager.h"
+#include "StatsManager.h"
 #include "ThemeManager.h"
 #include "ThemeMetric.h"
 
-#define START_SCREEN(sScreenName) THEME->GetMetric(sScreenName, "StartScreen")
-
+AutoScreenMessage(SM_GoToStartScreen);
 ThemeMetric<bool> BACK_GOES_TO_START_SCREEN(
     "ScreenAttract", "BackGoesToStartScreen");
 Preference<float> g_fSoundVolumeAttract("SoundVolumeAttract", 1.0f);
 
+namespace {
+void WarnAttract(const std::string& message) {
+  if (LOG != nullptr) {
+    LOG->Warn("ScreenAttract: %s", message.c_str());
+  }
+}
+
+bool CanReadThemeMetrics() {
+  return THEME != nullptr && THEME->IsThemeLoaded() && LUA != nullptr;
+}
+
+bool CanSafelyResetGameState() {
+  return GAMESTATE != nullptr && THEME != nullptr && MEMCARDMAN != nullptr &&
+         NOTESKIN != nullptr && SONGMAN != nullptr && STATSMAN != nullptr &&
+         PREFSMAN != nullptr && CHARMAN != nullptr;
+}
+
+bool GetLoadedBoolMetric(const ThemeMetric<bool>& metric, bool fallback) {
+  return metric.IsLoaded() ? metric.GetValue() : fallback;
+}
+
+void LoadBoolMetricIfPossible(
+    ThemeMetric<bool>& metric, const std::string& screenName,
+    const std::string& metricName) {
+  if (!CanReadThemeMetrics() || screenName.empty()) {
+    WarnAttract(
+        "Skipping metric load for '" + metricName +
+        "' because the theme runtime is not ready.");
+    return;
+  }
+
+  metric.Load(screenName, metricName);
+}
+
+float GetAttractSoundVolume() {
+  const float volume = g_fSoundVolumeAttract.Get();
+  if (!std::isfinite(volume)) {
+    WarnAttract("Ignoring non-finite SoundVolumeAttract preference.");
+    return 1.0f;
+  }
+
+  return std::max(0.0f, std::min(volume, 16.0f));
+}
+
+bool IsScreenUsable(const std::string& screenName) {
+  return SCREENMAN != nullptr && THEME != nullptr && THEME->IsThemeLoaded() &&
+         !screenName.empty() && SCREENMAN->IsScreenNameValid(screenName);
+}
+
+std::string GetStartScreenName(const std::string& screenName) {
+  if (!CanReadThemeMetrics() || screenName.empty()) {
+    WarnAttract(
+        "Cannot resolve start screen because theme metrics are unavailable.");
+    return "";
+  }
+
+  return THEME->GetMetric(screenName, "StartScreen");
+}
+
+bool ShouldAllowAttractSound() {
+  if (GAMESTATE == nullptr || PREFSMAN == nullptr) {
+    WarnAttract(
+        "Keeping attract sound enabled because game state or preferences are "
+        "not initialized.");
+    return true;
+  }
+
+  return GAMESTATE->IsTimeToPlayAttractSounds();
+}
+
+bool IsReadyForAttractInput(ScreenWithMenuElements* pScreen) {
+  return pScreen != nullptr && !pScreen->IsTransitioning() &&
+         !pScreen->IsInputLocked();
+}
+}  // namespace
+
 REGISTER_SCREEN_CLASS(ScreenAttract);
 void ScreenAttract::Init() {
-  RESET_GAME_STATE.Load(m_sName, "ResetGameState");
-  ATTRACT_VOLUME.Load(m_sName, "AttractVolume");
+  LoadBoolMetricIfPossible(RESET_GAME_STATE, m_sName, "ResetGameState");
+  LoadBoolMetricIfPossible(ATTRACT_VOLUME, m_sName, "AttractVolume");
   ScreenWithMenuElements::Init();
 }
 
 void ScreenAttract::BeginScreen() {
-  if (RESET_GAME_STATE) {
-    GAMESTATE->Reset();
+  if (GetLoadedBoolMetric(RESET_GAME_STATE, false)) {
+    if (!CanSafelyResetGameState()) {
+      WarnAttract(
+          "Skipping attract game-state reset because a required manager is "
+          "not initialized.");
+    } else {
+      GAMESTATE->Reset();
+    }
   }
 
-  GAMESTATE->VisitAttractScreen(m_sName);
-  ScreenAttract::SetAttractVolume(ATTRACT_VOLUME);
+  if (GAMESTATE != nullptr) {
+    GAMESTATE->VisitAttractScreen(m_sName);
+  } else {
+    WarnAttract("Skipping attract visit because GAMESTATE is not initialized.");
+  }
+
+  ScreenAttract::SetAttractVolume(GetLoadedBoolMetric(ATTRACT_VOLUME, false));
 
   ScreenWithMenuElements::BeginScreen();
 }
 
 bool ScreenAttract::Input(const InputEventPlus& input) {
-  bool handled;
-  //	LOG->Trace( "ScreenAttract::Input()" );
+  if (ScreenWithMenuElements::Input(input)) {
+    return true;
+  }
 
-  handled = AttractInput(input, this);
-
-  // Always run both AttractInput and ScreenWithMenuElements::Input
-  return ScreenWithMenuElements::Input(input) || handled;
+  return AttractInput(input, this);
 }
 
 void ScreenAttract::SetAttractVolume(bool bInAttract) {
+  if (SOUNDMAN == nullptr) {
+    WarnAttract(
+        "Cannot change attract volume because SOUNDMAN is not initialized.");
+    return;
+  }
+
   if (bInAttract) {
-    if (GAMESTATE->IsTimeToPlayAttractSounds()) {
-      SOUNDMAN->SetVolumeOfNonCriticalSounds(
-          g_fSoundVolumeAttract);  // unmute attract sounds
+    if (ShouldAllowAttractSound()) {
+      SOUNDMAN->SetVolumeOfNonCriticalSounds(GetAttractSoundVolume());
     } else {
-      SOUNDMAN->SetVolumeOfNonCriticalSounds(0.0f);  // mute attract sounds
+      SOUNDMAN->SetVolumeOfNonCriticalSounds(0.0f);
     }
   } else {
-    SOUNDMAN->SetVolumeOfNonCriticalSounds(1.0f);  // unmute all sounds
+    SOUNDMAN->SetVolumeOfNonCriticalSounds(1.0f);
   }
 }
 
 void ScreenAttract::Cancel(ScreenMessage smSendWhenDone) {
-  LOG->Trace("ScreenAttract::AttractInput: begin fading to START_SCREEN");
+  if (LOG != nullptr) {
+    LOG->Trace("ScreenAttract::AttractInput: begin fading to start screen");
+  }
 
-  SetAttractVolume(false);  // unmute attract sounds
+  SetAttractVolume(false);
   ScreenWithMenuElements::Cancel(smSendWhenDone);
 }
 
 bool ScreenAttract::AttractInput(
     const InputEventPlus& input, ScreenWithMenuElements* pScreen) {
+  if (pScreen == nullptr) {
+    return false;
+  }
+
   if (input.type != IET_FIRST_PRESS) {
     return false;  // don't care
   }
 
+  if (pScreen->IsInputLocked()) {
+    return false;
+  }
+
   switch (input.MenuI) {
     case GAME_BUTTON_BACK:
-      if (!BACK_GOES_TO_START_SCREEN) {
+      if (!GetLoadedBoolMetric(BACK_GOES_TO_START_SCREEN, false)) {
         break;
       }
       [[fallthrough]];
@@ -89,18 +192,20 @@ bool ScreenAttract::AttractInput(
     case GAME_BUTTON_COIN:
       // If we're not in a game and there aren't enough credits to start,
       // eat the input and do nothing.
-      if (GAMESTATE->GetCoinMode() == CoinMode_Pay &&
-          GAMESTATE->m_iCoins < PREFSMAN->m_iCoinsPerCredit &&
+      if (GAMESTATE != nullptr && PREFSMAN != nullptr &&
+          GAMESTATE->GetCoinMode() == CoinMode_Pay &&
+          GAMESTATE->m_iCoins <
+              std::max(1, PREFSMAN->m_iCoinsPerCredit.Get()) &&
           GAMESTATE->GetNumSidesJoined() == 0) {
         return true;
       }
-      if (pScreen->IsTransitioning()) {
+      if (!IsReadyForAttractInput(pScreen)) {
         return false;
       }
 
       // HandleGlobalInputs() already played the coin sound. Don't play it
       // again.
-      if (input.MenuI != GAME_BUTTON_COIN) {
+      if (input.MenuI != GAME_BUTTON_COIN && SCREENMAN != nullptr) {
         SCREENMAN->PlayStartSound();
       }
 
@@ -110,22 +215,18 @@ bool ScreenAttract::AttractInput(
       break;
   }
 
-  if (pScreen->IsTransitioning()) {
+  if (!IsReadyForAttractInput(pScreen)) {
     return false;
   }
 
   switch (input.MenuI) {
     case GAME_BUTTON_LEFT:
     case GAME_BUTTON_RIGHT:
-      SCREENMAN->PostMessageToTopScreen(SM_BeginFadingOut, 0);
+      pScreen->PostScreenMessage(SM_BeginFadingOut, 0);
       return true;
     default:
       return false;
   }
-}
-
-void ScreenAttract::StartPlayingMusic() {
-  ScreenWithMenuElements::StartPlayingMusic();
 }
 
 void ScreenAttract::HandleScreenMessage(const ScreenMessage SM) {
@@ -135,21 +236,22 @@ void ScreenAttract::HandleScreenMessage(const ScreenMessage SM) {
     }
   } else if (SM == SM_GoToStartScreen) {
     GoToStartScreen(m_sName);
+    return;
   } else if (SM == SM_GoToNextScreen) {
     /* Look at the def of the screen we're going to; if it has a music theme
      * element and it's the same as the one we're playing now, don't stop.
      * However, if we're going to interrupt it when we fade in, stop the old
      * music before we fade out. */
     bool bMusicChanging = false;
-    if (PLAY_MUSIC) {
-      bMusicChanging = THEME->GetPathS(m_sName, "music") !=
-                       THEME->GetPathS(
-                           GetNextScreenName(), "music",
-                           true);  // GetPath optional on the next screen
-                                   // because it may not have music.
+    const std::string nextScreenName = GetNextScreenName();
+    if (GetLoadedBoolMetric(PLAY_MUSIC, false) && CanReadThemeMetrics() &&
+        IsScreenUsable(nextScreenName)) {
+      bMusicChanging =
+          THEME->GetPathS(m_sName, "music", true) !=
+          THEME->GetPathS(nextScreenName, "music", true);
     }
 
-    if (bMusicChanging) {
+    if (bMusicChanging && SOUND != nullptr) {
       SOUND->StopMusic();
     }
   } else if (SM == SM_LoseFocus) {
@@ -159,8 +261,14 @@ void ScreenAttract::HandleScreenMessage(const ScreenMessage SM) {
   ScreenWithMenuElements::HandleScreenMessage(SM);
 }
 
-void ScreenAttract::GoToStartScreen(std::string sScreenName) {
-  SCREENMAN->SetNewScreen(START_SCREEN(sScreenName));
+void ScreenAttract::GoToStartScreen(const std::string& sScreenName) {
+  const std::string startScreenName = GetStartScreenName(sScreenName);
+  if (!IsScreenUsable(startScreenName)) {
+    WarnAttract("Ignoring invalid start screen '" + startScreenName + "'.");
+    return;
+  }
+
+  SCREENMAN->SetNewScreen(startScreenName);
 }
 
 // lua start

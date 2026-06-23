@@ -71,6 +71,7 @@ class Screen : public ActorFrame {
   virtual bool Input(const InputEventPlus& input);
   virtual void HandleScreenMessage(const ScreenMessage SM);
   void SetLockInputSecs(float f);
+  bool IsInputLocked() const { return m_fLockInputSecs > 0.0f; }
 
   /**
    * @brief Put the specified message onto the screen for a specified time.
