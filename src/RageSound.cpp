@@ -68,7 +68,9 @@ float ClampFiniteMin(float value, float fallback, float minimum) {
 }
 
 RageSoundParams NormalizeSoundParams(RageSoundParams params) {
-  params.m_StartSecond = ClampFiniteMin(params.m_StartSecond, 0.0f, 0.0f);
+  if (!std::isfinite(params.m_StartSecond)) {
+    params.m_StartSecond = 0.0f;
+  }
 
   if (!std::isfinite(params.m_LengthSeconds) ||
       params.m_LengthSeconds < 0.0f) {
@@ -576,7 +578,8 @@ bool RageSound::StartPlaying() {
 
   // Move to the start position.
   const double startFrame = m_Param.m_StartSecond * sampleRate + 0.5;
-  if (!std::isfinite(startFrame) || startFrame > INT_MAX) {
+  if (!std::isfinite(startFrame) || startFrame < INT_MIN ||
+      startFrame > INT_MAX) {
     if (LOG != nullptr) {
       LOG->Warn(
           "RageSound::StartPlaying: invalid start frame for \"%s\"",
@@ -845,10 +848,6 @@ bool RageSound::SetPositionFrames(int iFrames) {
     }
     return false;
   }
-  if (iFrames < 0) {
-    iFrames = 0;
-  }
-
   int iRet = m_pSource->SetPosition(iFrames);
   std::string filePath = GetLoadedFilePath();
   if (iRet == -1) {
