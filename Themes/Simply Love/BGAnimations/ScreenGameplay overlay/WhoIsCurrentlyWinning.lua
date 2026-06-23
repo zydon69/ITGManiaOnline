@@ -7,6 +7,7 @@ if #GAMESTATE:GetHumanPlayers() < 2 then return end
 
 -- if displaying different scoring mechanisms, don't bother.
 if SL["P1"].ActiveModifiers.ShowExScore ~= SL["P2"].ActiveModifiers.ShowExScore then return end
+if SL["P1"].ActiveModifiers.ShowHardEXScore ~= SL["P2"].ActiveModifiers.ShowHardEXScore then return end
 
 local p1_score, p2_score
 local p1_dp = 0
@@ -14,6 +15,7 @@ local p2_dp = 0
 local p1_pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(PLAYER_1)
 local p2_pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(PLAYER_2)
 local IsEX = SL["P1"].ActiveModifiers.ShowExScore
+local IsHardEX = SL["P1"].ActiveModifiers.ShowHardEXScore
 
 -- allow for HideScore, which outright removes score actors
 local try_diffusealpha = function(af, alpha)
@@ -41,7 +43,7 @@ return Def.Actor{
 		p2_score = underlay:GetChild("P2Score")
 	end,
 	JudgmentMessageCommand=function(self, params)
-		if not IsEX then
+		if not (IsEX or IsHardEX) then
 			-- calculate the percentage DP manually rather than use GetPercentDancePoints.
 			-- That function rounds to the nearest .01%, which is inaccurate on long songs.
 			if params.Player == PLAYER_1 then
@@ -53,7 +55,14 @@ return Def.Actor{
 		end
 	end,
 	ExCountsChangedMessageCommand=function(self, params)
-		if IsEX then
+		if IsHardEX then
+			if params.Player == PLAYER_1 then
+				p1_dp = params.HardExScore
+			elseif params.Player == PLAYER_2 then
+				p2_dp = params.HardExScore
+			end
+			update_winner()
+		elseif IsEX then
 			if params.Player == PLAYER_1 then
 				p1_dp = params.ExScore
 			elseif params.Player == PLAYER_2 then

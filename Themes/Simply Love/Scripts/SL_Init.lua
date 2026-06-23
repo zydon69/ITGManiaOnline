@@ -60,6 +60,8 @@ local PlayerDefaults = {
 				ShowFaPlusWindow = false,
 				ShowExScore = false,
 				ShowHardEXScore = false,
+				ShowAllScoreModes = false,
+				MatchFantasticColor = false,
 				ShowFaPlusPane = true,
 				SmallerWhite = false,
 				RememberOnlineToken = false,
@@ -247,6 +249,10 @@ SL = {
 			color("#66c955"),	-- green
 			color("#b45cff"),	-- purple (greatly lightened)
 			color("#ff3030")	-- red (slightly lightened)
+		},
+		HardEX = {
+			color("#ff00cc"),	-- pink 10ms Fantastic
+			color("#ffffff"),	-- white Fantastic outside the 10ms window
 		},
 	},
 	Preferences = {

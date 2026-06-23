@@ -8,7 +8,8 @@ local IsEX = SL[pn].ActiveModifiers.ShowExScore
 local IsHardEX = SL[pn].ActiveModifiers.ShowHardEXScore
 local OnlineITGScoreColor = Color.White
 local OnlineEXScoreColor = (SL.JudgmentColors and SL.JudgmentColors["FA+"] and SL.JudgmentColors["FA+"][1]) or color("#21CCE8")
-local OnlineHardEXScoreColor = color("#ff00cc")
+local OnlineHardEXScoreColor = (SL.JudgmentColors and SL.JudgmentColors["HardEX"] and SL.JudgmentColors["HardEX"][1]) or color("#ff00cc")
+local pss
 
 local function online_score_mode()
 	if ITGOnline and ITGOnline.currentRoomId and ITGOnline.CurrentGlobalOptions then
@@ -31,12 +32,75 @@ local function active_score_flags()
 end
 
 local function apply_score_color(actor, showEx, showHardEx)
+	if not actor then return end
 	if showHardEx then
 		actor:diffuse(OnlineHardEXScoreColor)
 	elseif showEx then
 		actor:diffuse(OnlineEXScoreColor)
 	else
 		actor:diffuse(OnlineITGScoreColor)
+	end
+end
+
+local function is_online_column_layout()
+	return IsUsingOnlineGameplayColumns and IsUsingOnlineGameplayColumns()
+end
+
+local function format_percent(value)
+	return ("%.02f"):format(tonumber(value) or 0)
+end
+
+local function get_itg_percent()
+	return tonumber(FormatPercentScore(pss:GetPercentDancePoints()):sub(1,-2)) or 0
+end
+
+local function set_normal_lower_score_layout(actor_frame)
+	local lower_ex = actor_frame:GetChild("LowerEXScore")
+	local lower_itg = actor_frame:GetChild("LowerITGScore")
+	local primary = actor_frame:GetChild("PrimaryScore")
+	if primary then primary:horizalign(right) end
+	if lower_ex then lower_ex:horizalign(left):xy(10, -2) end
+	if lower_itg then lower_itg:horizalign(left):xy(92, -2) end
+end
+
+local function set_online_lower_score_layout(actor_frame)
+	local lower_ex = actor_frame:GetChild("LowerEXScore")
+	local lower_itg = actor_frame:GetChild("LowerITGScore")
+	local primary = actor_frame:GetChild("PrimaryScore")
+	if primary then primary:horizalign(center) end
+	if lower_ex then lower_ex:horizalign(center):xy(-46, 18) end
+	if lower_itg then lower_itg:horizalign(center):xy(46, 18) end
+end
+
+local function update_lower_scores(actor_frame, scoreMode, exPercent)
+	local lower_ex = actor_frame:GetChild("LowerEXScore")
+	local lower_itg = actor_frame:GetChild("LowerITGScore")
+	if not (lower_ex and lower_itg) then return end
+
+	lower_ex:visible(false)
+	lower_itg:visible(false)
+
+	if mods.ShowAllScoreModes ~= true then return end
+	if scoreMode == "itg" then return end
+
+	local itgPercent = get_itg_percent()
+	if scoreMode == "hardex" then
+		if is_online_column_layout() then
+			lower_ex:horizalign(center):xy(-46, 18)
+			lower_itg:horizalign(center):xy(46, 18)
+		else
+			lower_ex:horizalign(left):xy(10, -2)
+			lower_itg:horizalign(left):xy(92, -2)
+		end
+		lower_ex:settext("EX " .. format_percent(exPercent or CalculateExScore(player))):visible(true)
+		lower_itg:settext("ITG " .. format_percent(itgPercent)):visible(true)
+	elseif scoreMode == "ex" then
+		if is_online_column_layout() then
+			lower_itg:horizalign(center):xy(0, 18)
+		else
+			lower_itg:horizalign(left):xy(10, -2)
+		end
+		lower_itg:settext("ITG " .. format_percent(itgPercent)):visible(true)
 	end
 end
 
@@ -70,7 +134,7 @@ if IsUltraWide and NumPlayers == 1 then
 	pos[PLAYER_1].x = math.max(pos[PLAYER_1].x, difficulty_x + header_gap)
 end
 
-local pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 
 local StepsOrTrail = (GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(player)) or GAMESTATE:GetCurrentSteps(player)
 local total_tapnotes = StepsOrTrail and StepsOrTrail:GetRadarValues(player):GetValue( "RadarCategory_Notes" ) or 1
@@ -93,18 +157,17 @@ local zoom_factor = clamp(scale(GetScreenAspectRatio(), 16/10, 16/9, ar_scale.si
 
 -- -----------------------------------------------------------------------
 
-return LoadFont("Wendy/_wendy monospace numbers")..{
-	Text="0.00",
+return Def.ActorFrame{
 	Name=pn.."Score",
 	InitCommand=function(self)
-		self:valign(1):horizalign(right)
-		self:zoom(0.5)
+		set_normal_lower_score_layout(self)
 		local showEx, showHardEx = active_score_flags()
-		apply_score_color(self, showEx, showHardEx)
+		apply_score_color(self:GetChild("PrimaryScore"), showEx, showHardEx)
 	end,
 
 	BeginCommand=function(self)
-		if IsUsingOnlineGameplayColumns and IsUsingOnlineGameplayColumns() then
+		set_normal_lower_score_layout(self)
+		if is_online_column_layout() then
 			self:playcommand("OnlineColumnLayout")
 			return
 		end
@@ -172,7 +235,7 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 		end
 	end,
 	OnlineColumnLayoutCommand=function(self)
-		self:horizalign(center)
+		set_online_lower_score_layout(self)
 		self:x(GetOnlineGameplayColumnX(GetOnlineGameplayPlayerColumn(player)))
 		self:y(pos[player].y)
 	end,
@@ -180,6 +243,7 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 		self:queuecommand("RedrawScore")
 	end,
 	RedrawScoreCommand=function(self)
+		local primary = self:GetChild("PrimaryScore")
 		local showEx, showHardEx, scoreMode = active_score_flags()
 		local exPercent = CalculateExScore(player)
 		local hardExPercent = CalculateHardExScore(player)
@@ -187,14 +251,15 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 		local percent = FormatPercentScore( dance_points ):sub(1,-2)
 		local displayedPercent = showHardEx and tonumber(hardExPercent) or (showEx and tonumber(exPercent) or tonumber(percent))
 
-		apply_score_color(self, showEx, showHardEx)
+		apply_score_color(primary, showEx, showHardEx)
 		if showHardEx then
-			self:settext(("%.02f"):format(hardExPercent))
+			primary:settext(format_percent(hardExPercent))
 		elseif showEx then
-			self:settext(("%.02f"):format(exPercent))
+			primary:settext(format_percent(exPercent))
 		else
-			self:settext(percent)
+			primary:settext(percent)
 		end
+		update_lower_scores(self, scoreMode, exPercent)
 
 		if ITGOnline and ITGOnline.currentRoomId then
 			if ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true then
@@ -222,15 +287,17 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 	ExCountsChangedMessageCommand=function(self, params)
 		if params.Player ~= player then return end
 
+		local primary = self:GetChild("PrimaryScore")
 		local showEx, showHardEx, scoreMode = active_score_flags()
-		apply_score_color(self, showEx, showHardEx)
+		apply_score_color(primary, showEx, showHardEx)
 		if showHardEx then
-			self:settext(("%.02f"):format(params.HardExScore))
+			primary:settext(format_percent(params.HardExScore))
 		elseif showEx then
-			self:settext(("%.02f"):format(params.ExScore))
+			primary:settext(format_percent(params.ExScore))
 		else
 			return
 		end
+		update_lower_scores(self, scoreMode, params.ExScore)
 
 		if ITGOnline and ITGOnline.currentRoomId then
 			local dance_points = pss:GetPercentDancePoints()
@@ -257,4 +324,31 @@ return LoadFont("Wendy/_wendy monospace numbers")..{
 			})
 		end
 	end,
+
+	LoadFont("Wendy/_wendy monospace numbers")..{
+		Text="0.00",
+		Name="PrimaryScore",
+		InitCommand=function(self)
+			self:valign(1):horizalign(right)
+			self:zoom(0.5)
+		end
+	},
+
+	LoadFont("Wendy/_wendy monospace numbers")..{
+		Text="",
+		Name="LowerEXScore",
+		InitCommand=function(self)
+			self:valign(1):horizalign(left)
+			self:zoom(0.28):diffuse(OnlineEXScoreColor):visible(false)
+		end
+	},
+
+	LoadFont("Wendy/_wendy monospace numbers")..{
+		Text="",
+		Name="LowerITGScore",
+		InitCommand=function(self)
+			self:valign(1):horizalign(left)
+			self:zoom(0.28):diffuse(OnlineITGScoreColor):visible(false)
+		end
+	}
 }

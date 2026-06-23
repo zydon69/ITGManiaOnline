@@ -38,6 +38,22 @@ local GetPlayableTrails = function(course)
 	return trails
 end
 
+local ApplyScoreMode = function(player, mode)
+	local sl_pn = SL[ToEnumShortString(player)]
+	local mods = sl_pn.ActiveModifiers
+	local is_ex = mode == "ex"
+	local is_hardex = mode == "hardex"
+
+	mods.ShowExScore = is_ex
+	mods.ShowHardEXScore = is_hardex
+	mods.ShowFaPlusWindow = is_ex or is_hardex
+	mods.ShowFaPlusPane = is_ex or is_hardex or mods.ShowFaPlusPane == true
+	mods.SmallerWhite = is_hardex
+	sl_pn.EvalPanePrimary = ((mods.ShowFaPlusWindow or mods.ShowExScore or mods.ShowHardEXScore) and mods.ShowFaPlusPane) and 2 or 1
+
+	return mods, sl_pn
+end
+
 -- -----------------------------------------------------------------------
 -- when to use Choices() vs. Values()
 --
@@ -503,9 +519,18 @@ local Overrides = {
 	},
 	ExScoreMode = {
 		SelectType = "SelectOne",
-		Values = { "Off", "ShowExScore", "ShowHardEXScore" },
+		Values = function()
+			if ThemePrefs.Get("EnableTournamentMode") then
+				return { ThemePrefs.Get("ScoringSystem") == "EX" and "ScoreModeEX" or "ScoreModeITG" }
+			end
+			return { "ScoreModeITG", "ScoreModeEX", "ScoreModeHardEX" }
+		end,
 		LoadSelections = function(self, list, pn)
 			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+			if ThemePrefs.Get("EnableTournamentMode") then
+				list[1] = true
+				return list
+			end
 			if mods.ShowHardEXScore then
 				list[3] = true
 			elseif mods.ShowExScore then
@@ -516,17 +541,18 @@ local Overrides = {
 			return list
 		end,
 		SaveSelections = function(self, list, pn)
-			local sl_pn = SL[ToEnumShortString(pn)]
-			local mods = sl_pn.ActiveModifiers
-			mods.ShowExScore = list[2] == true
-			mods.ShowHardEXScore = list[3] == true
-			if mods.ShowHardEXScore then
-				mods.ShowExScore = false
+			local mode = "itg"
+			if ThemePrefs.Get("EnableTournamentMode") then
+				mode = ThemePrefs.Get("ScoringSystem") == "EX" and "ex" or "itg"
+			elseif list[3] then
+				mode = "hardex"
+			elseif list[2] then
+				mode = "ex"
 			end
-			sl_pn.EvalPanePrimary = ((mods.ShowFaPlusWindow or mods.ShowExScore or mods.ShowHardEXScore) and mods.ShowFaPlusPane) and 2 or 1
+			local mods, sl_pn = ApplyScoreMode(pn, mode)
 			Trace(("FA_PLUS_SCORE_MODE: pn=%s mode=%s window=%s ex=%s hardex=%s pane=%s smaller_white=%s eval_pane=%s"):format(
 				ToEnumShortString(pn),
-				mods.ShowHardEXScore and "hardex" or (mods.ShowExScore and "ex" or "off"),
+				mode,
 				tostring(mods.ShowFaPlusWindow),
 				tostring(mods.ShowExScore),
 				tostring(mods.ShowHardEXScore),
@@ -534,6 +560,30 @@ local Overrides = {
 				tostring(mods.SmallerWhite),
 				tostring(sl_pn.EvalPanePrimary)
 			))
+		end
+	},
+	ShowAllScoreModes = {
+		SelectType = "SelectOne",
+		Values = { "No", "Yes" },
+		LoadSelections = function(self, list, pn)
+			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+			list[mods.ShowAllScoreModes and 2 or 1] = true
+			return list
+		end,
+		SaveSelections = function(self, list, pn)
+			SL[ToEnumShortString(pn)].ActiveModifiers.ShowAllScoreModes = list[2] == true
+		end
+	},
+	MatchFantasticColor = {
+		SelectType = "SelectOne",
+		Values = { "No", "Yes" },
+		LoadSelections = function(self, list, pn)
+			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+			list[mods.MatchFantasticColor and 2 or 1] = true
+			return list
+		end,
+		SaveSelections = function(self, list, pn)
+			SL[ToEnumShortString(pn)].ActiveModifiers.MatchFantasticColor = list[2] == true
 		end
 	},
 	-------------------------------------------------------------------------

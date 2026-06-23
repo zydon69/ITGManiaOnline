@@ -2,6 +2,58 @@ local player = Var "Player"
 local pn = ToEnumShortString(player)
 local mods = SL[pn].ActiveModifiers
 local sprite
+local FantasticWhite = (SL.JudgmentColors and SL.JudgmentColors["FA+"] and SL.JudgmentColors["FA+"][2]) or Color.White
+local FantasticHardEX = (SL.JudgmentColors and SL.JudgmentColors["HardEX"] and SL.JudgmentColors["HardEX"][1]) or color("#ff00cc")
+
+local function should_match_fantastic_color()
+	return mods.MatchFantasticColor == true and not IsAutoplay(player)
+end
+
+local function get_fantastic_window(param)
+	if not (param and param.TapNoteScore and ToEnumShortString(param.TapNoteScore) == "W1") then return nil end
+	if not should_match_fantastic_color() then return "blue" end
+	if mods.ShowHardEXScore then
+		return IsW010Judgment(param, player) and "hardex" or "white"
+	end
+	if mods.ShowExScore then
+		return IsW0Judgment(param, player) and "blue" or "white"
+	end
+	return "blue"
+end
+
+local function apply_fantastic_color(window)
+	if not sprite then return end
+	if window == "hardex" then
+		sprite:diffuse(FantasticHardEX)
+	elseif window == "white" then
+		sprite:diffuse(FantasticWhite)
+	elseif window == "blue" then
+		sprite:diffuse(Color.White)
+	else
+		sprite:diffuse(Color.White)
+	end
+end
+
+local function fantastic_frame(frame, window)
+	if frame ~= 0 then return frame end
+	if window == "white" and sprite and (sprite:GetNumStates() == 7 or sprite:GetNumStates() == 14) then
+		return 1
+	end
+	return frame
+end
+
+local function flash_white_fantastic_note_field(param)
+	if param.Notes then
+		for col,tapnote in pairs(param.Notes) do
+			local tnt = ToEnumShortString(tapnote:GetTapNoteType())
+			if tnt == "Tap" or tnt == "HoldHead" or tnt == "Lift" then
+				GetPlayerAF(pn):GetChild("NoteField"):did_tap_note(col, "TapNoteScore_W1", --[[bright]] true)
+			end
+		end
+	elseif param.Column then
+		GetPlayerAF(pn):GetChild("NoteField"):did_tap_note(param.Column + 1, "TapNoteScore_W1", --[[bright]] true)
+	end
+end
 
 ------------------------------------------------------------
 -- A profile might ask for a judgment graphic that doesn't exist
@@ -16,26 +68,14 @@ if file_to_load == "None" then
 		InitCommand=function(self) self:visible(false) end,
 		JudgmentMessageCommand=function(self,param)
 			if param.Player ~= player then return end
+			if not param.TapNoteScore then return end
 
-			if ToEnumShortString(param.TapNoteScore) == "W1" and mods.ShowFaPlusWindow then
-				local is_W0 = IsW010Judgment(param, player) or (not mods.SmallerWhite and IsW0Judgment(param, player))
-				if not is_W0 and not IsAutoplay(player) then
-					frame = 1
-					if param.Notes ~= nil then
-						for col,tapnote in pairs(param.Notes) do
-							local tnt = ToEnumShortString(tapnote:GetTapNoteType())
-							if tnt == "Tap" or tnt == "HoldHead" or tnt == "Lift" then
-								GetPlayerAF(pn):GetChild("NoteField"):did_tap_note(col, "TapNoteScore_W1", --[[bright]] true)
-							end
-						end
-					elseif param.TapNote ~= nil then
-						if tnt == "Tap" or tnt == "HoldHead" or tnt == "Lift" then
-							GetPlayerAF(pn):GetChild("NoteField"):did_tap_note(col, "TapNoteScore_W1", --[[bright]] true)
-						end
-					end
+			if ToEnumShortString(param.TapNoteScore) == "W1" then
+				if get_fantastic_window(param) == "white" then
+					flash_white_fantastic_note_field(param)
 				end
 			end
-	  end,
+		  end,
 		EarlyHitMessageCommand=function(self, param)
 			if param.Player ~= player then return end
 	
@@ -76,25 +116,14 @@ return Def.ActorFrame{
 		end
 
 		if not mods.HideEarlyDecentWayOffJudgments then
-			-- If the judgment font contains a graphic for the additional white fantastic window...
+			local fantastic_window = get_fantastic_window(param)
 			if sprite:GetNumStates() == 7 or sprite:GetNumStates() == 14 then
 				if ToEnumShortString(param.TapNoteScore) == "W1" then
-					if mods.ShowFaPlusWindow then
-						local is_W0 = IsW010Judgment(param, player) or (not mods.SmallerWhite and IsW0Judgment(param, player))
-						-- If this W1 judgment fell outside of the FA+ window, show the white window
-						--
-						-- Treat Autoplay specially. The TNS might be out of the range, but
-						-- it's a nicer experience to always just display the top window graphic regardless.
-						-- This technically causes a discrepency on the histogram, but it's likely okay.
-						if not is_W0 and not IsAutoplay(player) then
-							frame = 1
-						end
-					end
-					-- We don't need to adjust the top window otherwise.
+					frame = fantastic_frame(frame, fantastic_window)
 				else
-                    -- Everything outside of W1 needs to be shifted down a row if not in FA+ mode.
-                    -- Some people might be using 2x7s in FA+ mode (by copying ITG graphics to FA+).
-                    -- Don't need to shift in that case.
+					-- Everything outside of W1 needs to be shifted down a row if not in FA+ mode.
+					-- Some people might be using 2x7s in FA+ mode (by copying ITG graphics to FA+).
+					-- Don't need to shift in that case.
 					frame = frame + 1
 				end
 			end
@@ -108,6 +137,7 @@ return Def.ActorFrame{
 				frame = frame * 2
 			end
 
+			apply_fantastic_color(fantastic_window)
 			sprite:visible(true):setstate(frame)
 
 			if mods.JudgmentTilt then
@@ -133,8 +163,8 @@ return Def.ActorFrame{
 
 			if earlyTns ~= "None" then
 				if tns == "W4" or tns == "W5" then
-                    return
-                end
+					return
+				end
 			end
 		end
 
@@ -144,28 +174,15 @@ return Def.ActorFrame{
 		local frame = TNSFrames[ param.TapNoteScore ]
 		if not frame then return end
 
+		local fantastic_window = get_fantastic_window(param)
+
 		-- If the judgment font contains a graphic for the additional white fantastic window...
 		if sprite:GetNumStates() == 7 or sprite:GetNumStates() == 14 then
 			if tns == "W1" then
-				if mods.ShowFaPlusWindow then
-					local is_W0 = IsW010Judgment(param, player) or (not mods.SmallerWhite and IsW0Judgment(param, player))
-					-- If this W1 judgment fell outside of the FA+ window, show the white window
-					--
-					-- Treat Autoplay specially. The TNS might be out of the range, but
-					-- it's a nicer experience to always just display the top window graphic regardless.
-					-- This technically causes a discrepency on the histogram, but it's likely okay.
-					if not is_W0 and not IsAutoplay(player) then
-						frame = 1
-						
-						for col,tapnote in pairs(param.Notes) do
-							local tnt = ToEnumShortString(tapnote:GetTapNoteType())
-							if tnt == "Tap" or tnt == "HoldHead" or tnt == "Lift" then
-								GetPlayerAF(pn):GetChild("NoteField"):did_tap_note(col, "TapNoteScore_W1", --[[bright]] true)
-							end
-						end
-					end
+				frame = fantastic_frame(frame, fantastic_window)
+				if fantastic_window == "white" then
+					flash_white_fantastic_note_field(param)
 				end
-				-- We don't need to adjust the top window otherwise.
 			else
 				-- Everything outside of W1 needs to be shifted down a row if not in FA+ mode.
 				-- Some people might be using 2x7s in FA+ mode (by copying ITG graphics to FA+).
@@ -185,6 +202,7 @@ return Def.ActorFrame{
 
 		self:playcommand("Reset")
 
+		apply_fantastic_color(fantastic_window)
 		sprite:visible(true):setstate(frame)
 
 		if mods.JudgmentTilt then
@@ -221,6 +239,6 @@ return Def.ActorFrame{
 				self:Load( THEME:GetPathG("", "_judgments/" .. file_to_load) )
 			end
 		end,
-		ResetCommand=function(self) self:finishtweening():stopeffect():visible(false) end
+		ResetCommand=function(self) self:finishtweening():stopeffect():diffuse(Color.White):visible(false) end
 	}
 }
