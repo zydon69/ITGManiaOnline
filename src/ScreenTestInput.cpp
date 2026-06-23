@@ -18,17 +18,55 @@
 #include "Screen.h"
 #include "ScreenManager.h"
 #include "ScreenMessage.h"
+#include "ThemeManager.h"
+
+namespace {
+bool IsValidGameController(GameController controller) {
+  return controller >= GameController_1 && controller < NUM_GameController;
+}
+
+bool IsValidGameButton(GameButton button) {
+  return button >= GAME_BUTTON_MENULEFT && button < NUM_GameButton;
+}
+
+std::string SanitizeInputMessageName(const std::string& raw) {
+  std::string out;
+  out.reserve(raw.size());
+  for (char c : raw) {
+    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') || c == '_';
+    out += ok ? c : '_';
+  }
+  return out.empty() ? "UnknownInput" : out;
+}
+
+std::string SafeDeviceInputString(const DeviceInput& di) {
+  return INPUTMAN != nullptr ? INPUTMAN->GetDeviceSpecificInputString(di)
+                             : di.ToString();
+}
+
+std::string SafeGameButtonString(const InputScheme* scheme, GameButton button) {
+  if (scheme == nullptr || !IsValidGameButton(button)) {
+    return "Invalid";
+  }
+  if (THEME != nullptr && THEME->IsThemeLoaded()) {
+    return GameButtonToLocalizedString(scheme, button);
+  }
+  return GameButtonToString(scheme, button);
+}
+}  // namespace
 
 class DeviceList : public BitmapText {
  public:
-  void Update(float fDeltaTime) {
+  void Update(float fDeltaTime) override {
     // Update devices text
-    this->SetText(INPUTMAN->GetDisplayDevicesString());
+    this->SetText(
+        INPUTMAN != nullptr ? INPUTMAN->GetDisplayDevicesString() : "");
 
     BitmapText::Update(fDeltaTime);
   }
 
-  virtual DeviceList* Copy() const;
+  DeviceList* Copy() const override;
 };
 
 REGISTER_ACTOR_CLASS(DeviceList);
@@ -37,21 +75,29 @@ static LocalizedString CONTROLLER("ScreenTestInput", "Controller");
 static LocalizedString SECONDARY("ScreenTestInput", "secondary");
 static LocalizedString NOT_MAPPED("ScreenTestInput", "not mapped");
 class InputList : public BitmapText {
-  virtual InputList* Copy() const;
+  InputList* Copy() const override;
 
-  void Update(float fDeltaTime) {
+  void Update(float fDeltaTime) override {
     // Update input texts
     std::vector<std::string> asInputs;
 
     std::vector<DeviceInput> DeviceInputs;
+    if (INPUTFILTER == nullptr) {
+      this->SetText("");
+      BitmapText::Update(fDeltaTime);
+      return;
+    }
+
     INPUTFILTER->GetPressedButtons(DeviceInputs);
+    const InputScheme* scheme =
+        INPUTMAPPER != nullptr ? INPUTMAPPER->GetInputScheme() : nullptr;
     for (const DeviceInput& di : DeviceInputs) {
       if (!di.bDown && di.level == 0.0f) {
         continue;
       }
 
       std::string sTemp;
-      sTemp += INPUTMAN->GetDeviceSpecificInputString(di);
+      sTemp += SafeDeviceInputString(di);
       if (di.level == 1.0f) {
         sTemp += ssprintf(" - 1 ");
       } else {
@@ -59,19 +105,18 @@ class InputList : public BitmapText {
       }
 
       GameInput gi;
-      if (INPUTMAPPER->DeviceToGame(di, gi)) {
-        std::string sName = GameButtonToLocalizedString(
-            INPUTMAPPER->GetInputScheme(), gi.button);
+      if (INPUTMAPPER != nullptr && scheme != nullptr &&
+          INPUTMAPPER->DeviceToGame(di, gi) &&
+          IsValidGameController(gi.controller) && IsValidGameButton(gi.button)) {
+        std::string sName = SafeGameButtonString(scheme, gi.button);
         sTemp += ssprintf(
             " - %s %d %s", CONTROLLER.GetValue().c_str(), gi.controller + 1,
             sName.c_str());
 
-        if (!PREFSMAN->m_bOnlyDedicatedMenuButtons) {
-          GameButton mb =
-              INPUTMAPPER->GetInputScheme()->GameButtonToMenuButton(gi.button);
+        if (PREFSMAN != nullptr && !PREFSMAN->m_bOnlyDedicatedMenuButtons) {
+          GameButton mb = scheme->GameButtonToMenuButton(gi.button);
           if (mb != GameButton_Invalid && mb != gi.button) {
-            std::string sGameButtonString =
-                GameButtonToLocalizedString(INPUTMAPPER->GetInputScheme(), mb);
+            std::string sGameButtonString = SafeGameButtonString(scheme, mb);
             sTemp += ssprintf(
                 " - (%s %s)", sGameButtonString.c_str(),
                 SECONDARY.GetValue().c_str());
@@ -100,7 +145,12 @@ REGISTER_ACTOR_CLASS(InputList);
 REGISTER_SCREEN_CLASS(ScreenTestInput);
 
 bool ScreenTestInput::Input(const InputEventPlus& input) {
-  std::string sMessage = input.DeviceI.ToString();
+  const bool bParentHandled = Screen::Input(input);
+  if (bParentHandled) {
+    return true;
+  }
+
+  std::string sMessage = SanitizeInputMessageName(input.DeviceI.ToString());
   bool bHandled = false;
   switch (input.type) {
     case IET_FIRST_PRESS:
@@ -115,15 +165,17 @@ bool ScreenTestInput::Input(const InputEventPlus& input) {
         default:
           break;
       }
-      MESSAGEMAN->Broadcast(sMessage);
-      bHandled = true;
+      if (MESSAGEMAN != nullptr) {
+        MESSAGEMAN->Broadcast(sMessage);
+        bHandled = true;
+      }
       break;
     }
     default:
       break;
   }
 
-  return Screen::Input(input) || bHandled;  // default handler
+  return bHandled;
 }
 
 bool ScreenTestInput::MenuStart(const InputEventPlus& input) {
@@ -131,15 +183,20 @@ bool ScreenTestInput::MenuStart(const InputEventPlus& input) {
 }
 
 bool ScreenTestInput::MenuBack(const InputEventPlus& input) {
-  if (input.type != IET_REPEAT) {
+  if (input.type != IET_FIRST_PRESS) {
     return false;  // ignore
   }
 
-  if (IsTransitioning()) {
+  if (IsTransitioning() || m_fLockInputSecs > 0) {
     return false;
   }
-  SCREENMAN->PlayStartSound();
-  StartTransitioningScreen(SM_GoToPrevScreen);
+  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
+    return false;
+  }
+  if (SCREENMAN != nullptr) {
+    SCREENMAN->PlayStartSound();
+  }
+  Cancel(SM_GoToPrevScreen);
   return true;
 }
 

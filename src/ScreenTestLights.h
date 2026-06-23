@@ -8,20 +8,21 @@
 
 class ScreenTestLights : public ScreenWithMenuElements {
  public:
-  virtual void Init();
-  virtual void BeginScreen();
-  virtual void EndScreen();
+  void Init() override;
+  void BeginScreen() override;
+  void EndScreen() override;
 
-  virtual void Update(float fDelta);
-  virtual bool Input(const InputEventPlus& input);
+  void Update(float fDelta) override;
+  bool Input(const InputEventPlus& input) override;
 
-  virtual bool MenuLeft(const InputEventPlus& input);
-  virtual bool MenuRight(const InputEventPlus& input);
-  virtual bool MenuStart(const InputEventPlus& input);
-  virtual bool MenuBack(const InputEventPlus& input);
+  bool MenuLeft(const InputEventPlus& input) override;
+  bool MenuRight(const InputEventPlus& input) override;
+  bool MenuStart(const InputEventPlus& input) override;
+  bool MenuBack(const InputEventPlus& input) override;
 
  private:
   BitmapText m_textInputs;
+  bool m_bTextReady = false;
 
   RageTimer m_timerBackToAutoCycle;
 };

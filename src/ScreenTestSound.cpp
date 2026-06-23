@@ -1,10 +1,12 @@
 #include "ScreenTestSound.h"
 
+#include <array>
 #include <string>
 #include <vector>
 
 #include "InputEventPlus.h"
 #include "InputFilter.h"
+#include "RageLog.h"
 #include "RageInputDevice.h"
 #include "RageSoundManager.h"
 #include "RageUtil.h"
@@ -14,41 +16,77 @@
 
 REGISTER_SCREEN_CLASS(ScreenTestSound);
 
+namespace {
+struct TestSoundPath {
+  const char* group;
+  const char* element;
+};
+
+const std::array<TestSoundPath, 5> TEST_SOUND_PATHS = {{
+    {"Common", "start"},
+    {"Common", "cancel"},
+    {"Common", "invalid"},
+    {"Common", "coin"},
+    {"ScreenTitleMenu", "change"},
+}};
+
+bool HasLoadedTheme() { return THEME != nullptr && THEME->IsThemeLoaded(); }
+
+bool LoadCommonFont(BitmapText& text) {
+  return HasLoadedTheme() &&
+         text.LoadFromFont(THEME->GetPathF("Common", "normal", true));
+}
+
+std::string GetOptionalSoundPath(const TestSoundPath& path) {
+  if (!HasLoadedTheme()) {
+    return "";
+  }
+  return THEME->GetPathS(path.group, path.element, true);
+}
+}  // namespace
+
 void ScreenTestSound::Init() {
   Screen::Init();
 
-  this->AddChild(&HEEEEEEEEELP);
-
-  HEEEEEEEEELP.SetXY(450, 400);
-  HEEEEEEEEELP.LoadFromFont(THEME->GetPathF("Common", "normal"));
-  HEEEEEEEEELP.SetZoom(.5f);
-  HEEEEEEEEELP.SetText(
-      "p  Play\n"
-      "s  Stop\n"
-      "l  Set looping\n"
-      "a  Set autostop\n"
-      "c  Set continue");
-
-  for (int i = 0; i < nsounds; ++i) {
-    this->AddChild(&s[i].txt);
-    s[i].txt.LoadFromFont(THEME->GetPathF("Common", "normal"));
-    s[i].txt.SetZoom(.5f);
+  m_help.SetXY(450, 400);
+  m_helpReady = LoadCommonFont(m_help);
+  if (m_helpReady) {
+    this->AddChild(&m_help);
+    m_help.SetZoom(.5f);
+    m_help.SetText(
+        "p  Play\n"
+        "s  Stop\n"
+        "l  Set looping\n"
+        "a  Set autostop\n"
+        "c  Set continue\n"
+        "Back  Exit");
   }
 
-  s[0].txt.SetXY(150, 100);
-  s[1].txt.SetXY(450, 100);
-  s[2].txt.SetXY(150, 250);
-  s[3].txt.SetXY(450, 250);
-  s[4].txt.SetXY(150, 400);
+  for (size_t i = 0; i < m_sounds.size(); ++i) {
+    m_textReady[i] = LoadCommonFont(m_sounds[i].txt);
+    if (m_textReady[i]) {
+      this->AddChild(&m_sounds[i].txt);
+      m_sounds[i].txt.SetZoom(.5f);
+    }
+  }
 
-  // howl says that "oga" is preferred over "ogg" as the extension;
-  // i personally don't give a shit until I see what the vorbis group
-  // has to say about it.
-  s[0].s.Load("Themes/default/Sounds/_common menu music (loop).ogg");
-  s[1].s.Load("Themes/default/Sounds/ScreenTitleMenu change.ogg");
-  s[2].s.Load("Themes/default/Sounds/ScreenEvaluation try extra1.ogg");
-  s[3].s.Load("Themes/default/Sounds/ScreenGameplay oni die.ogg");
-  s[4].s.Load("Themes/default/Sounds/Common back.ogg");
+  m_sounds[0].txt.SetXY(150, 100);
+  m_sounds[1].txt.SetXY(450, 100);
+  m_sounds[2].txt.SetXY(150, 250);
+  m_sounds[3].txt.SetXY(450, 250);
+  m_sounds[4].txt.SetXY(150, 400);
+
+  for (size_t i = 0; i < m_sounds.size(); ++i) {
+    const std::string path = GetOptionalSoundPath(TEST_SOUND_PATHS[i]);
+    if (!path.empty()) {
+      m_sounds[i].s.Load(path);
+    } else if (LOG != nullptr) {
+      LOG->Warn(
+          "ScreenTestSound: missing optional test sound %s/%s",
+          TEST_SOUND_PATHS[i].group,
+          TEST_SOUND_PATHS[i].element);
+    }
+  }
 
   // s[0].s.SetStartSeconds(45);
   // s[0].s.SetPositionSeconds();
@@ -56,82 +94,93 @@ void ScreenTestSound::Init() {
   RageSoundParams p;
   p.StopMode = RageSoundParams::M_STOP;
   // p.m_fRate = 1.20f;
-  for (int i = 0; i < nsounds; ++i) {
-    s[i].s.SetParams(p);
+  for (auto& sound : m_sounds) {
+    sound.s.SetParams(p);
   }
 
   // s[0].s.SetStopMode(RageSound::M_LOOP);
   // s[0].s.Play(false);
 
-  selected = 0;
-  for (int i = 0; i < nsounds; ++i) {
+  m_selected = 0;
+  for (size_t i = 0; i < m_sounds.size(); ++i) {
     UpdateText(i);
   }
 }
 
-ScreenTestSound::~ScreenTestSound() {
-  for (int i = 0; i < nsounds; ++i) {
-    /* Delete copied sounds. */
-    std::vector<RageSound*>& snds = m_sSoundCopies[i];
-    for (unsigned j = 0; j < snds.size(); ++j) {
-      delete snds[j];
-    }
-  }
+ScreenTestSound::~ScreenTestSound() = default;
+
+bool ScreenTestSound::IsValidSoundIndex(int n) const {
+  return n >= 0 && n < static_cast<int>(m_sounds.size());
 }
 
-void ScreenTestSound::UpdateText(int n) {
-  std::string fn = Basename(s[n].s.GetLoadedFilePath());
+void ScreenTestSound::UpdateText(size_t n) {
+  if (n >= m_sounds.size() || !m_textReady[n]) {
+    return;
+  }
 
-  std::vector<RageSound*>& snds = m_sSoundCopies[n];
+  std::string fn = Basename(m_sounds[n].s.GetLoadedFilePath());
+  if (fn.empty()) {
+    fn = "(not loaded)";
+  }
+
+  auto& snds = m_soundCopies[n];
 
   std::string pos;
-  for (unsigned p = 0; p < snds.size(); ++p) {
+  for (size_t p = 0; p < snds.size(); ++p) {
+    if (snds[p] == nullptr) {
+      continue;
+    }
     if (p) {
       pos += ", ";
     }
     pos += ssprintf("%.3f", snds[p]->GetPositionSeconds());
   }
 
-  s[n].txt.SetText(ssprintf(
+  m_sounds[n].txt.SetText(ssprintf(
       "%i: %s\n"
       "%s\n"
       "%s\n"
       "(%s)\n"
       "%s",
-      n + 1, fn.c_str(), s[n].s.IsPlaying() ? "Playing" : "Stopped",
-      s[n].s.GetParams().StopMode == RageSoundParams::M_STOP
+      static_cast<int>(n + 1), fn.c_str(),
+      m_sounds[n].s.IsPlaying() ? "Playing" : "Stopped",
+      m_sounds[n].s.GetParams().StopMode == RageSoundParams::M_STOP
           ? "Stop when finished"
-      : s[n].s.GetParams().StopMode == RageSoundParams::M_CONTINUE
+      : m_sounds[n].s.GetParams().StopMode == RageSoundParams::M_CONTINUE
           ? "Continue until stopped"
           : "Loop",
       pos.size() ? pos.c_str() : "none playing",
-      selected == n ? "^^^^^^" : ""));
+      m_selected == static_cast<int>(n) ? "^^^^^^" : ""));
 }
 
 void ScreenTestSound::Update(float f) {
   Screen::Update(f);
 
-  for (int i = 0; i < nsounds; ++i) {
+  for (size_t i = 0; i < m_sounds.size(); ++i) {
     UpdateText(i);
 
     /* Delete copied sounds that have finished playing. */
-    std::vector<RageSound*>& snds = m_sSoundCopies[i];
-    for (unsigned j = 0; j < snds.size(); ++j) {
-      if (snds[j]->IsPlaying()) {
-        continue;
+    auto& snds = m_soundCopies[i];
+    for (auto it = snds.begin(); it != snds.end();) {
+      if (*it != nullptr && (*it)->IsPlaying()) {
+        ++it;
+      } else {
+        it = snds.erase(it);
       }
-      delete snds[j];
-      snds.erase(snds.begin() + j);
-      --j;
     }
   }
 }
 
 bool ScreenTestSound::Input(const InputEventPlus& input) {
+  if (Screen::Input(input)) {
+    return true;
+  }
+
   if (input.type != IET_FIRST_PRESS) {
     return false;  // ignore
   }
 
+  bool handled = false;
   switch (input.DeviceI.device) {
     case DEVICE_KEYBOARD:
       switch (input.DeviceI.button) {
@@ -140,44 +189,63 @@ bool ScreenTestSound::Input(const InputEventPlus& input) {
         case '3':
         case '4':
         case '5':
-          selected = input.DeviceI.button - '0' - 1;
+          m_selected = input.DeviceI.button - '0' - 1;
+          handled = true;
           break;
         case 'p': {
+          if (!IsValidSoundIndex(m_selected)) {
+            return false;
+          }
           /* We want to be able to read the position of copied sounds; if we let
            * RageSound copy itself, then the copy will be owned by
            * RageSoundManager and we won't be allowed to touch it.  Copy it
            * ourself. */
-          RageSound* pCopy = new RageSound(s[selected].s);
-          m_sSoundCopies[selected].push_back(pCopy);
-          pCopy->Play(false);
+          auto copy = std::make_unique<RageSound>(m_sounds[m_selected].s);
+          copy->Play(false);
+          m_soundCopies[m_selected].push_back(std::move(copy));
+          handled = true;
           break;
         }
         case 's': {
-          for (int i = 0; i < nsounds; ++i) {
+          for (auto& snds : m_soundCopies) {
             /* Stop copied sounds. */
-            std::vector<RageSound*>& snds = m_sSoundCopies[i];
-            for (unsigned j = 0; j < snds.size(); ++j) {
-              snds[j]->Stop();
+            for (auto& snd : snds) {
+              if (snd != nullptr) {
+                snd->Stop();
+              }
             }
           }
+          handled = true;
           break;
         }
         case 'l': {
-          RageSoundParams p = s[selected].s.GetParams();
+          if (!IsValidSoundIndex(m_selected)) {
+            return false;
+          }
+          RageSoundParams p = m_sounds[m_selected].s.GetParams();
           p.StopMode = RageSoundParams::M_LOOP;
-          s[selected].s.SetParams(p);
+          m_sounds[m_selected].s.SetParams(p);
+          handled = true;
           break;
         }
         case 'a': {
-          RageSoundParams p = s[selected].s.GetParams();
+          if (!IsValidSoundIndex(m_selected)) {
+            return false;
+          }
+          RageSoundParams p = m_sounds[m_selected].s.GetParams();
           p.StopMode = RageSoundParams::M_STOP;
-          s[selected].s.SetParams(p);
+          m_sounds[m_selected].s.SetParams(p);
+          handled = true;
           break;
         }
         case 'c': {
-          RageSoundParams p = s[selected].s.GetParams();
+          if (!IsValidSoundIndex(m_selected)) {
+            return false;
+          }
+          RageSoundParams p = m_sounds[m_selected].s.GetParams();
           p.StopMode = RageSoundParams::M_CONTINUE;
-          s[selected].s.SetParams(p);
+          m_sounds[m_selected].s.SetParams(p);
+          handled = true;
           break;
         }
           /*			case KEY_LEFT:
@@ -196,10 +264,29 @@ bool ScreenTestSound::Input(const InputEventPlus& input) {
         default:
           break;
       }
+      break;
     default:
       break;
   }
 
+  return handled;
+}
+
+bool ScreenTestSound::MenuBack(const InputEventPlus& input) {
+  if (input.type != IET_FIRST_PRESS || SCREENMAN == nullptr) {
+    return false;
+  }
+  if (HasLoadedTheme() && THEME->HasMetric(m_sName, "PrevScreen") &&
+      !GetPrevScreen().empty()) {
+    SCREENMAN->PlayStartSound();
+    PostScreenMessage(SM_GoToPrevScreen, 0);
+    return true;
+  }
+  if (SCREENMAN->IsStackedScreen(this)) {
+    SCREENMAN->PlayStartSound();
+    SCREENMAN->PopTopScreen(SM_None);
+    return true;
+  }
   return false;
 }
 

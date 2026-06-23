@@ -1,6 +1,8 @@
 #ifndef SCREEN_TEST_SOUND_H
 #define SCREEN_TEST_SOUND_H
 
+#include <array>
+#include <memory>
 #include <vector>
 
 #include "BitmapText.h"
@@ -12,23 +14,30 @@ const int nsounds = 5;
 
 class ScreenTestSound : public Screen {
  public:
-  virtual void Init();
-  ~ScreenTestSound();
+  void Init() override;
+  ~ScreenTestSound() override;
 
-  virtual bool Input(const InputEventPlus& input);
+  bool Input(const InputEventPlus& input) override;
+  bool MenuBack(const InputEventPlus& input) override;
 
-  void Update(float f);
-  void UpdateText(int n);
+  void Update(float f) override;
 
+ private:
+  static constexpr int NUM_SOUNDS = 5;
   struct Sound {
     RageSound s;
     BitmapText txt;
   };
-  Sound s[nsounds];
-  std::vector<RageSound*> m_sSoundCopies[nsounds];
-  BitmapText HEEEEEEEEELP;
+  void UpdateText(size_t n);
+  bool IsValidSoundIndex(int n) const;
 
-  int selected;
+  std::array<Sound, NUM_SOUNDS> m_sounds;
+  std::array<std::vector<std::unique_ptr<RageSound>>, NUM_SOUNDS> m_soundCopies;
+  BitmapText m_help;
+  std::array<bool, NUM_SOUNDS> m_textReady{};
+  bool m_helpReady = false;
+
+  int m_selected = 0;
 };
 
 #endif
