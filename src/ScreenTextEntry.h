@@ -1,6 +1,7 @@
 #ifndef SCREEN_TEXT_ENTRY_H
 #define SCREEN_TEXT_ENTRY_H
 
+#include <array>
 #include <string>
 
 #include "AutoActor.h"
@@ -30,7 +31,7 @@ enum KeyboardRow {
 /** @brief A special foreach loop for the KeyboardRow enum. */
 #define FOREACH_KeyboardRow(i) FOREACH_ENUM(KeyboardRow, i)
 /** @brief The maximum number of keys per row. */
-const int KEYS_PER_ROW = 13;
+static constexpr int KEYS_PER_ROW = 13;
 /** @brief The list of very special keys inside some rows. */
 enum KeyboardRowSpecialKey {
   SPACEBAR = 2,  /**< The space bar key. */
@@ -75,7 +76,7 @@ class ScreenTextEntry : public ScreenWithMenuElements {
         : smSendOnPop(),
           sQuestion(""),
           sInitialAnswer(""),
-          iMaxInputLength(0),
+          iMaxInputLength(255),
           bPassword(false),
           Validate(),
           OnOK(),
@@ -103,38 +104,74 @@ class ScreenTextEntry : public ScreenWithMenuElements {
     // main part, and ImportOption() from OptionRowHandler.cpp for functions.
     void FromStack(lua_State* L);
   };
+
+  struct RuntimeSettings {
+    RuntimeSettings();
+
+    std::string sQuestion;
+    std::string sInitialAnswer;
+    int iMaxInputLength;
+    bool bPassword;
+    bool (*Validate)(const std::string& sAnswer, std::string& sErrorOut);
+    void (*OnOK)(const std::string& sAnswer);
+    void (*OnCancel)();
+    bool (*ValidateAppend)(
+        const std::string& sAnswerBeforeChar, std::string& sAppend);
+    std::string (*FormatAnswerForDisplay)(const std::string& sAnswer);
+    LuaReference ValidateLua;
+    LuaReference OnOKLua;
+    LuaReference OnCancelLua;
+    LuaReference ValidateAppendLua;
+    LuaReference FormatAnswerForDisplayLua;
+  };
+
   void LoadFromTextEntrySettings(const TextEntrySettings& settings);
 
   static bool FloatValidate(const std::string& sAnswer, std::string& sErrorOut);
   static bool IntValidate(const std::string& sAnswer, std::string& sErrorOut);
 
-  virtual void Init();
-  virtual void BeginScreen();
+  void Init() override;
+  void BeginScreen() override;
 
-  virtual void Update(float fDelta);
-  virtual bool Input(const InputEventPlus& input);
+  void Update(float fDelta) override;
+  bool Input(const InputEventPlus& input) override;
 
   static std::string s_sLastAnswer;
   static bool s_bCancelledLast;
 
   // Lua
-  virtual void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
  protected:
   void TryAppendToAnswer(std::string s);
   void BackspaceInAnswer();
   virtual void TextEnteredDirectly() {}
 
-  virtual void End(bool bCancelled);
+  void End(bool bCancelled);
+  void PlayInvalidSound() const;
 
  private:
-  virtual bool MenuStart(const InputEventPlus& input);
-  virtual bool MenuBack(const InputEventPlus& input);
+  bool MenuStart(const InputEventPlus& input) override;
+  bool MenuBack(const InputEventPlus& input) override;
 
+  void ApplySettings(const RuntimeSettings& settings);
+  void RefreshFromSettings();
+  bool ValidateAnswer(std::string& sErrorOut);
+  bool ValidateAppend(std::string& sAppend);
+  std::string FormatAnswerForDisplay(const std::string& sAnswer);
+  void RunOnOK(const std::string& sAnswer);
+  void RunOnCancel();
   void UpdateAnswerText();
+  bool CanEditText() const;
 
+  RuntimeSettings m_Settings;
   std::wstring m_sAnswer;
-  bool m_bShowAnswerCaret;
+  bool m_bShowAnswerCaret = false;
+  bool m_bLCtrl = false;
+  bool m_bRCtrl = false;
+  bool m_bQuestionReady = false;
+  bool m_bAnswerReady = false;
+  bool m_bEnding = false;
   // todo: allow Left/Right to change caret location -aj
   // int			m_iCaretLocation;
 
@@ -151,29 +188,31 @@ class ScreenTextEntry : public ScreenWithMenuElements {
  * screen. */
 class ScreenTextEntryVisual : public ScreenTextEntry {
  public:
-  ~ScreenTextEntryVisual();
-  void Init();
-  void BeginScreen();
+  ScreenTextEntryVisual();
+  ~ScreenTextEntryVisual() override;
+  void Init() override;
+  void BeginScreen() override;
 
  protected:
   void MoveX(int iDir);
   void MoveY(int iDir);
   void PositionCursor();
 
-  virtual void TextEnteredDirectly();
+  void TextEnteredDirectly() override;
 
-  virtual bool MenuLeft(const InputEventPlus& input);
-  virtual bool MenuRight(const InputEventPlus& input);
-  virtual bool MenuUp(const InputEventPlus& input);
-  virtual bool MenuDown(const InputEventPlus& input);
+  bool MenuLeft(const InputEventPlus& input) override;
+  bool MenuRight(const InputEventPlus& input) override;
+  bool MenuUp(const InputEventPlus& input) override;
+  bool MenuDown(const InputEventPlus& input) override;
 
-  virtual bool MenuStart(const InputEventPlus& input);
+  bool MenuStart(const InputEventPlus& input) override;
 
   int m_iFocusX;
   KeyboardRow m_iFocusY;
 
   AutoActor m_sprCursor;
-  BitmapText* m_ptextKeys[NUM_KeyboardRow][KEYS_PER_ROW];
+  std::array<std::array<BitmapText*, KEYS_PER_ROW>, NUM_KeyboardRow> m_ptextKeys;
+  bool m_bKeyboardReady = false;
 
   RageSound m_sndChange;
 
