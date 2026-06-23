@@ -1,21 +1,29 @@
 #ifndef ScreenUnlockBrowse_H
 #define ScreenUnlockBrowse_H
 
+#include <vector>
+
 #include "FadingBanner.h"
-#include "InputQueue.h"
-#include "MessageManager.h"
 #include "ScreenSelectMaster.h"
+
+class UnlockEntry;
 
 class ScreenUnlockBrowse : public ScreenSelectMaster {
  public:
-  virtual void Init();
-  virtual void BeginScreen();
-  virtual bool MenuStart(const InputEventPlus& input);
+  void Init() override;
+  void BeginScreen() override;
+  bool MenuStart(const InputEventPlus& input) override;
 
-  virtual void HandleMessage(const Message& msg);
+  void HandleMessage(const Message& msg) override;
 
  protected:
+  PlayerNumber GetSelectionPlayer(PlayerNumber fallback) const;
+  const UnlockEntry* GetUnlockEntryForSelection(int selection) const;
+  bool IsPlayableUnlockSelection(int selection) const;
+  void UpdateBannerForCurrentSelection();
+
   FadingBanner m_banner;
+  std::vector<int> m_vUnlockEntryStatus;
 };
 
 #endif
