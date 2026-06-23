@@ -72,11 +72,11 @@ class ScreenWithMenuElements : public Screen {
 
 class ScreenWithMenuElementsSimple : public ScreenWithMenuElements {
  public:
-  bool MenuStart(const InputEventPlus& input);
-  bool MenuBack(const InputEventPlus& input);
+  bool MenuStart(const InputEventPlus& input) override;
+  bool MenuBack(const InputEventPlus& input) override;
 
   // Lua
-  virtual void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
  protected:
 };

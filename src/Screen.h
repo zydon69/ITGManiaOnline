@@ -70,7 +70,7 @@ class Screen : public ActorFrame {
   virtual void Update(float fDeltaTime);
   virtual bool Input(const InputEventPlus& input);
   virtual void HandleScreenMessage(const ScreenMessage SM);
-  void SetLockInputSecs(float f) { m_fLockInputSecs = f; }
+  void SetLockInputSecs(float f);
 
   /**
    * @brief Put the specified message onto the screen for a specified time.
@@ -84,10 +84,8 @@ class Screen : public ActorFrame {
    * @param SM the specific ScreenMessage to get out of the Queue. */
   void ClearMessageQueue(const ScreenMessage SM);
 
-  virtual ScreenType GetScreenType() const {
-    return ALLOW_OPERATOR_MENU_BUTTON ? game_menu : system_menu;
-  }
-  bool AllowOperatorMenuButton() const { return ALLOW_OPERATOR_MENU_BUTTON; }
+  virtual ScreenType GetScreenType() const;
+  bool AllowOperatorMenuButton() const;
   /**
    * @brief Determine if we allow extra players to join in on this screen.
    * @return false, for players should never be able to join while in progress.
@@ -128,10 +126,10 @@ class Screen : public ActorFrame {
   std::string m_sPrevScreen;
   ScreenMessage m_smSendOnPop;
 
-  float m_fLockInputSecs;
+  float m_fLockInputSecs = 0.0f;
 
   // If currently between BeginScreen/EndScreen calls:
-  bool m_bRunning;
+  bool m_bRunning = false;
 
  public:
   std::string GetNextScreenName() const;
@@ -170,8 +168,8 @@ class Screen : public ActorFrame {
   typedef const void* callback_key_t;
   std::map<callback_key_t, LuaReference> m_InputCallbacks;
   std::vector<callback_key_t> m_DelayedCallbackRemovals;
-  bool m_CallingInputCallbacks;
-  int m_iInputCallbacksHandleBeforeScreenLocks;
+  bool m_CallingInputCallbacks = false;
+  int m_iInputCallbacksHandleBeforeScreenLocks = 0;
   void InternalRemoveCallback(callback_key_t key);
 };
 

@@ -1,7 +1,9 @@
 #include "Screen.h"
 
 #include <algorithm>
+#include <cmath>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -24,11 +26,96 @@
 #include "ThemeManager.h"
 #include "global.h"
 
-#define NEXT_SCREEN THEME->GetMetric(m_sName, "NextScreen")
-#define PREV_SCREEN THEME->GetMetric(m_sName, "PrevScreen")
-#define PREPARE_SCREENS THEME->GetMetric(m_sName, "PrepareScreens")
-#define PERSIST_SCREENS THEME->GetMetric(m_sName, "PersistScreens")
-#define GROUPED_SCREENS THEME->GetMetric(m_sName, "GroupedScreens")
+namespace {
+bool HasThemeRuntime() {
+  return THEME != nullptr && THEME->IsThemeLoaded() && LUA != nullptr;
+}
+
+void WarnScreen(const std::string& screenName, const std::string& message) {
+  if (LOG != nullptr) {
+    LOG->Warn("Screen[%s]: %s", screenName.c_str(), message.c_str());
+  }
+}
+
+std::string GetThemeMetricString(
+    const std::string& screenName, const std::string& metric) {
+  if (!HasThemeRuntime() || screenName.empty()) {
+    return "";
+  }
+  return THEME->GetMetric(screenName, metric);
+}
+
+float SanitizeNonNegativeSeconds(float seconds) {
+  return std::isfinite(seconds) && seconds > 0.0f ? seconds : 0.0f;
+}
+
+bool IsUsableScreenTarget(const std::string& screenName) {
+  return !screenName.empty() && SCREENMAN != nullptr && THEME != nullptr &&
+         THEME->IsThemeLoaded() && SCREENMAN->IsScreenNameValid(screenName);
+}
+
+bool GetLoadedBoolMetric(const ThemeMetric<bool>& metric, bool fallback) {
+  return metric.IsLoaded() ? metric.GetValue() : fallback;
+}
+
+float GetLoadedFloatMetric(const ThemeMetric<float>& metric, float fallback) {
+  if (!metric.IsLoaded()) {
+    return fallback;
+  }
+  const float value = metric.GetValue();
+  return std::isfinite(value) ? value : fallback;
+}
+
+void TraceOnlineScreenMessage(
+    const std::string& event, const std::string& screenName, ScreenMessage SM,
+    bool running, size_t queued) {
+  if (LOG == nullptr) {
+    return;
+  }
+  LOG->Trace(
+      "ITG Online ScreenTrace: %s screen=%s message=%s running=%d queued=%zu",
+      event.c_str(),
+      screenName.c_str(),
+      ScreenMessageHelpers::ScreenMessageToString(SM).c_str(),
+      running ? 1 : 0,
+      queued);
+  LOG->Flush();
+}
+
+void TraceOnlineScreenTransition(
+    const std::string& event, const std::string& fromScreen,
+    const std::string& toScreen, ScreenMessage SM) {
+  if (LOG == nullptr) {
+    return;
+  }
+  LOG->Trace(
+      "ITG Online ScreenTrace: %s from=%s to=%s message=%s",
+      event.c_str(),
+      fromScreen.c_str(),
+      toScreen.c_str(),
+      ScreenMessageHelpers::ScreenMessageToString(SM).c_str());
+  LOG->Flush();
+}
+
+void TraceOnlineScreenPop(
+    const std::string& screenName, ScreenMessage SM) {
+  if (LOG == nullptr) {
+    return;
+  }
+  LOG->Trace(
+      "ITG Online ScreenTrace: handle_screen_message_pop_stacked screen=%s "
+      "message=%s",
+      screenName.c_str(),
+      ScreenMessageHelpers::ScreenMessageToString(SM).c_str());
+  LOG->Flush();
+}
+
+void BroadcastMouseMessage(MessageID message) {
+  if (MESSAGEMAN != nullptr) {
+    MESSAGEMAN->Broadcast(message);
+  }
+}
+}  // namespace
 
 static const char* ScreenTypeNames[] = {
     "Attract",
@@ -48,7 +135,13 @@ static bool ShouldTraceOnlineScreen(const std::string& screenName) {
          screenName == "ScreenGameplay";
 }
 
-void Screen::InitScreen(Screen* pScreen) { pScreen->Init(); }
+void Screen::InitScreen(Screen* pScreen) {
+  if (pScreen == nullptr) {
+    WarnScreen("", "InitScreen called with a null screen.");
+    return;
+  }
+  pScreen->Init();
+}
 
 Screen::~Screen() {}
 
@@ -59,13 +152,16 @@ bool Screen::SortMessagesByDelayRemaining(
 }
 
 void Screen::Init() {
-  ALLOW_OPERATOR_MENU_BUTTON.Load(m_sName, "AllowOperatorMenuButton");
-  HANDLE_BACK_BUTTON.Load(m_sName, "HandleBackButton");
-  REPEAT_RATE.Load(m_sName, "RepeatRate");
-  REPEAT_DELAY.Load(m_sName, "RepeatDelay");
-  LIGHTS_MODE.Load(m_sName, "LightsMode");
-
-  m_Codes.Load(m_sName);
+  if (HasThemeRuntime() && !m_sName.empty()) {
+    ALLOW_OPERATOR_MENU_BUTTON.Load(m_sName, "AllowOperatorMenuButton");
+    HANDLE_BACK_BUTTON.Load(m_sName, "HandleBackButton");
+    REPEAT_RATE.Load(m_sName, "RepeatRate");
+    REPEAT_DELAY.Load(m_sName, "RepeatDelay");
+    LIGHTS_MODE.Load(m_sName, "LightsMode");
+    m_Codes.Load(m_sName);
+  } else {
+    WarnScreen(m_sName, "initializing without a loaded theme/Lua runtime.");
+  }
 
   SetFOV(0);
 
@@ -75,29 +171,49 @@ void Screen::Init() {
   m_CallingInputCallbacks = false;
   m_iInputCallbacksHandleBeforeScreenLocks = 0;
 
-  ActorUtil::LoadAllCommandsFromName(*this, m_sName, "Screen");
+  if (HasThemeRuntime() && !m_sName.empty()) {
+    ActorUtil::LoadAllCommandsFromName(*this, m_sName, "Screen");
+  }
 
   PlayCommandNoRecurse(Message("Init"));
 
-  std::vector<std::string> asList;
-  split(PREPARE_SCREENS, ",", asList);
-  for (unsigned i = 0; i < asList.size(); ++i) {
-    LOG->Trace(
-        "Screen \"%s\" preparing \"%s\"", m_sName.c_str(), asList[i].c_str());
-    SCREENMAN->PrepareScreen(asList[i]);
+  if (SCREENMAN == nullptr) {
+    WarnScreen(m_sName, "cannot prepare/group/persist screens without SCREENMAN.");
+    return;
   }
 
-  asList.clear();
-  split(GROUPED_SCREENS, ",", asList);
-  for (unsigned i = 0; i < asList.size(); ++i) {
-    SCREENMAN->GroupScreen(asList[i]);
-  }
+  auto applyScreenList = [this](
+                             const std::string& metric,
+                             void (ScreenManager::*action)(
+                                 const std::string&)) {
+    std::vector<std::string> asList;
+    split(GetThemeMetricString(m_sName, metric), ",", asList);
+    std::set<std::string> seen;
+    for (std::string screenName : asList) {
+      Trim(screenName);
+      if (screenName.empty() || seen.find(screenName) != seen.end()) {
+        continue;
+      }
+      seen.insert(screenName);
+      if (!IsUsableScreenTarget(screenName)) {
+        WarnScreen(
+            m_sName,
+            "ignoring invalid " + metric + " target: " + screenName);
+        continue;
+      }
+      if (metric == "PrepareScreens" && LOG != nullptr) {
+        LOG->Trace(
+            "Screen \"%s\" preparing \"%s\"",
+            m_sName.c_str(),
+            screenName.c_str());
+      }
+      (SCREENMAN->*action)(screenName);
+    }
+  };
 
-  asList.clear();
-  split(PERSIST_SCREENS, ",", asList);
-  for (unsigned i = 0; i < asList.size(); ++i) {
-    SCREENMAN->PersistantScreen(asList[i]);
-  }
+  applyScreenList("PrepareScreens", &ScreenManager::PrepareScreen);
+  applyScreenList("GroupedScreens", &ScreenManager::GroupScreen);
+  applyScreenList("PersistScreens", &ScreenManager::PersistantScreen);
 }
 
 void Screen::BeginScreen() {
@@ -111,9 +227,11 @@ void Screen::BeginScreen() {
 
   m_fLockInputSecs = 0;
 
-  this->RunCommands(THEME->GetMetricA(m_sName, "ScreenOnCommand"));
+  if (HasThemeRuntime() && !m_sName.empty()) {
+    this->RunCommands(THEME->GetMetricA(m_sName, "ScreenOnCommand"));
+  }
 
-  if (m_fLockInputSecs == 0) {
+  if (!std::isfinite(m_fLockInputSecs) || m_fLockInputSecs <= 0.0f) {
     m_fLockInputSecs =
         0.0001f;  // always lock for a tiny amount of time so that we throw away
                   // any queued inputs during the load.
@@ -132,9 +250,16 @@ void Screen::EndScreen() {
 }
 
 void Screen::Update(float fDeltaTime) {
+  fDeltaTime = SanitizeNonNegativeSeconds(fDeltaTime);
   ActorFrame::Update(fDeltaTime);
 
-  m_fLockInputSecs = std::max(0.0f, m_fLockInputSecs - fDeltaTime);
+  m_fLockInputSecs =
+      SanitizeNonNegativeSeconds(m_fLockInputSecs - fDeltaTime);
+
+  for (QueuedScreenMessage& message : m_QueuedMessages) {
+    message.fDelayRemaining =
+        SanitizeNonNegativeSeconds(message.fDelayRemaining);
+  }
 
   /* We need to ensure two things:
    * 1. Messages must be sent in the order of delay. If two messages are sent
@@ -149,7 +274,7 @@ void Screen::Update(float fDeltaTime) {
       SortMessagesByDelayRemaining);
 
   // Update the times of queued ScreenMessages.
-  for (unsigned i = 0; i < m_QueuedMessages.size(); i++) {
+  for (size_t i = 0; i < m_QueuedMessages.size(); i++) {
     /* Hack:
      * If we simply subtract time and then send messages, we have a problem.
      * Messages are queued to arrive at specific times, and those times line
@@ -173,17 +298,17 @@ void Screen::Update(float fDeltaTime) {
    * within HandleScreenMessage, someone cleared messages on the queue. This
    * means we have no idea where 'i' is, so start over. Since we applied time
    * already, this won't cause messages to be mistimed. */
-  for (unsigned i = 0; i < m_QueuedMessages.size(); i++) {
+  for (size_t i = 0; i < m_QueuedMessages.size();) {
     if (m_QueuedMessages[i].fDelayRemaining > 0.0f) {
+      ++i;
       continue; /* not yet */
     }
 
     // Remove the message from the list.
     const ScreenMessage SM = m_QueuedMessages[i].SM;
     m_QueuedMessages.erase(m_QueuedMessages.begin() + i);
-    i--;
 
-    unsigned iSize = m_QueuedMessages.size();
+    const size_t iSize = m_QueuedMessages.size();
 
     // send this sucker!
     CHECKPOINT_M(ssprintf(
@@ -194,6 +319,8 @@ void Screen::Update(float fDeltaTime) {
     // If the size changed, start over.
     if (iSize != m_QueuedMessages.size()) {
       i = 0;
+    } else {
+      // Erase already moved the next message into index i.
     }
   }
 }
@@ -202,10 +329,8 @@ void Screen::Update(float fDeltaTime) {
  * overlays, this determines whether the event will be propagated to lower
  * screens (i.e. it propagates from an overlay only when this returns false). */
 bool Screen::Input(const InputEventPlus& input) {
-  Message msg("");
-  if (m_Codes.InputMessage(input, msg)) {
-    this->HandleMessage(msg);
-    return true;
+  if (m_fLockInputSecs > 0.0f) {
+    return false;
   }
 
   // Don't send release messages with the default handler.
@@ -217,21 +342,27 @@ bool Screen::Input(const InputEventPlus& input) {
       return false;  // don't care
   }
 
+  Message msg("");
+  if (m_Codes.InputMessage(input, msg)) {
+    this->HandleMessage(msg);
+    return true;
+  }
+
   // Always broadcast mouse input so themers can grab it. -aj
   if (input.DeviceI == DeviceInput(DEVICE_MOUSE, MOUSE_LEFT)) {
-    MESSAGEMAN->Broadcast((MessageID)(Message_LeftClick));
+    BroadcastMouseMessage(Message_LeftClick);
   }
   if (input.DeviceI == DeviceInput(DEVICE_MOUSE, MOUSE_RIGHT)) {
-    MESSAGEMAN->Broadcast((MessageID)(Message_RightClick));
+    BroadcastMouseMessage(Message_RightClick);
   }
   if (input.DeviceI == DeviceInput(DEVICE_MOUSE, MOUSE_MIDDLE)) {
-    MESSAGEMAN->Broadcast((MessageID)(Message_MiddleClick));
+    BroadcastMouseMessage(Message_MiddleClick);
   }
   // Can't do MouseWheelUp and MouseWheelDown at the same time. -aj
   if (input.DeviceI == DeviceInput(DEVICE_MOUSE, MOUSE_WHEELUP)) {
-    MESSAGEMAN->Broadcast((MessageID)(Message_MouseWheelUp));
+    BroadcastMouseMessage(Message_MouseWheelUp);
   } else if (input.DeviceI == DeviceInput(DEVICE_MOUSE, MOUSE_WHEELDOWN)) {
-    MESSAGEMAN->Broadcast((MessageID)(Message_MouseWheelDown));
+    BroadcastMouseMessage(Message_MouseWheelDown);
   }
 
   // default input handler used by most menus
@@ -249,7 +380,7 @@ bool Screen::Input(const InputEventPlus& input) {
       // options screen, they might still be holding it when select music
       // appears, and accidentally back out of that too. -Kyz
       if (input.type == IET_FIRST_PRESS) {
-        if (HANDLE_BACK_BUTTON) {
+        if (GetLoadedBoolMetric(HANDLE_BACK_BUTTON, false)) {
           return this->MenuBack(input);
         }
       }
@@ -270,24 +401,18 @@ bool Screen::Input(const InputEventPlus& input) {
 void Screen::HandleScreenMessage(const ScreenMessage SM) {
   const bool traceOnlineScreen = ShouldTraceOnlineScreen(m_sName);
   if (traceOnlineScreen) {
-    LOG->Trace(
-        "ITG Online ScreenTrace: handle_screen_message_begin screen=%s "
-        "message=%s running=%d queued=%zu",
-        m_sName.c_str(),
-        ScreenMessageHelpers::ScreenMessageToString(SM).c_str(),
-        m_bRunning ? 1 : 0,
+    TraceOnlineScreenMessage(
+        "handle_screen_message_begin", m_sName, SM, m_bRunning,
         m_QueuedMessages.size());
-    LOG->Flush();
   }
   if (SM == SM_GoToNextScreen || SM == SM_GoToPrevScreen) {
+    if (SCREENMAN == nullptr) {
+      WarnScreen(m_sName, "cannot change screens without SCREENMAN.");
+      return;
+    }
     if (SCREENMAN->IsStackedScreen(this)) {
       if (traceOnlineScreen) {
-        LOG->Trace(
-            "ITG Online ScreenTrace: handle_screen_message_pop_stacked "
-            "screen=%s message=%s",
-            m_sName.c_str(),
-            ScreenMessageHelpers::ScreenMessageToString(SM).c_str());
-        LOG->Flush();
+        TraceOnlineScreenPop(m_sName, SM);
       }
       SCREENMAN->PopTopScreen(m_smSendOnPop);
     } else {
@@ -295,40 +420,38 @@ void Screen::HandleScreenMessage(const ScreenMessage SM) {
           (SM == SM_GoToNextScreen ? GetNextScreenName() : GetPrevScreen());
       if (ToScreen == "") {
         LuaHelpers::ReportScriptError("Error:  Tried to go to empty screen.");
+      } else if (!IsUsableScreenTarget(ToScreen)) {
+        WarnScreen(m_sName, "refusing invalid target screen: " + ToScreen);
       } else {
         if (traceOnlineScreen || ShouldTraceOnlineScreen(ToScreen)) {
-          LOG->Trace(
-              "ITG Online ScreenTrace: handle_screen_message_set_new_screen "
-              "from=%s to=%s message=%s",
-              m_sName.c_str(),
-              ToScreen.c_str(),
-              ScreenMessageHelpers::ScreenMessageToString(SM).c_str());
-          LOG->Flush();
+          TraceOnlineScreenTransition(
+              "handle_screen_message_set_new_screen", m_sName, ToScreen, SM);
         }
         SCREENMAN->SetNewScreen(ToScreen);
       }
     }
   } else if (SM == SM_GainFocus) {
-    if (REPEAT_RATE != -1.0f) {
-      INPUTFILTER->SetRepeatRate(REPEAT_RATE);
+    const float repeatRate = GetLoadedFloatMetric(REPEAT_RATE, -1.0f);
+    const float repeatDelay = GetLoadedFloatMetric(REPEAT_DELAY, -1.0f);
+    if (INPUTFILTER != nullptr && repeatRate != -1.0f) {
+      INPUTFILTER->SetRepeatRate(repeatRate);
     }
-    if (REPEAT_DELAY != -1.0f) {
-      INPUTFILTER->SetRepeatDelay(REPEAT_DELAY);
+    if (INPUTFILTER != nullptr && repeatDelay != -1.0f) {
+      INPUTFILTER->SetRepeatDelay(repeatDelay);
     }
 
-    LIGHTSMAN->SetLightsMode(LIGHTS_MODE);
+    if (LIGHTSMAN != nullptr && LIGHTS_MODE.IsLoaded()) {
+      LIGHTSMAN->SetLightsMode(LIGHTS_MODE.GetValue());
+    }
   } else if (SM == SM_LoseFocus) {
-    INPUTFILTER->ResetRepeatRate();
+    if (INPUTFILTER != nullptr) {
+      INPUTFILTER->ResetRepeatRate();
+    }
   }
   if (traceOnlineScreen) {
-    LOG->Trace(
-        "ITG Online ScreenTrace: handle_screen_message_end screen=%s "
-        "message=%s running=%d queued=%zu",
-        m_sName.c_str(),
-        ScreenMessageHelpers::ScreenMessageToString(SM).c_str(),
-        m_bRunning ? 1 : 0,
+    TraceOnlineScreenMessage(
+        "handle_screen_message_end", m_sName, SM, m_bRunning,
         m_QueuedMessages.size());
-    LOG->Flush();
   }
 }
 
@@ -336,7 +459,7 @@ std::string Screen::GetNextScreenName() const {
   if (!m_sNextScreen.empty()) {
     return m_sNextScreen;
   }
-  return NEXT_SCREEN;
+  return GetThemeMetricString(m_sName, "NextScreen");
 }
 
 void Screen::SetNextScreenName(const std::string& name) {
@@ -351,13 +474,18 @@ std::string Screen::GetPrevScreen() const {
   if (!m_sPrevScreen.empty()) {
     return m_sPrevScreen;
   }
-  return PREV_SCREEN;
+  return GetThemeMetricString(m_sName, "PrevScreen");
 }
 
 void Screen::PostScreenMessage(const ScreenMessage SM, float fDelay) {
-  ASSERT(fDelay >= 0.0);
+  if (SM == SM_Invalid) {
+    WarnScreen(m_sName, "ignored invalid empty ScreenMessage.");
+    return;
+  }
 
-  if (ShouldTraceOnlineScreen(m_sName)) {
+  fDelay = SanitizeNonNegativeSeconds(fDelay);
+
+  if (ShouldTraceOnlineScreen(m_sName) && LOG != nullptr) {
     LOG->Trace(
         "ITG Online ScreenTrace: post_screen_message screen=%s message=%s "
         "delay=%.3f queued_before=%zu",
@@ -377,16 +505,21 @@ void Screen::PostScreenMessage(const ScreenMessage SM, float fDelay) {
 void Screen::ClearMessageQueue() { m_QueuedMessages.clear(); }
 
 void Screen::ClearMessageQueue(const ScreenMessage SM) {
-  for (int i = m_QueuedMessages.size() - 1; i >= 0; i--) {
-    if (m_QueuedMessages[i].SM == SM) {
-      m_QueuedMessages.erase(m_QueuedMessages.begin() + i);
-    }
-  }
+  m_QueuedMessages.erase(
+      std::remove_if(
+          m_QueuedMessages.begin(),
+          m_QueuedMessages.end(),
+          [&](const QueuedScreenMessage& message) { return message.SM == SM; }),
+      m_QueuedMessages.end());
 }
 
 bool Screen::PassInputToLua(const InputEventPlus& input) {
   if (m_InputCallbacks.empty() || m_fLockInputSecs > 0.0f ||
       !AllowCallbackInput()) {
+    return false;
+  }
+  if (LUA == nullptr || INPUTMAPPER == nullptr) {
+    WarnScreen(m_sName, "cannot run input callbacks without Lua/input mapper.");
     return false;
   }
   m_CallingInputCallbacks = true;
@@ -430,15 +563,22 @@ bool Screen::PassInputToLua(const InputEventPlus& input) {
   lua_setfield(L, -2, "PlayerNumber");
   Enum::Push(L, input.mp);
   lua_setfield(L, -2, "MultiPlayer");
+  const int inputTableIndex = lua_gettop(L);
   for (std::map<callback_key_t, LuaReference>::iterator callback =
            m_InputCallbacks.begin();
        callback != m_InputCallbacks.end() && !handled; ++callback) {
     callback->second.PushSelf(L);
     lua_pushvalue(L, -2);
     std::string error = "Error running input callback: ";
-    LuaHelpers::RunScriptOnStack(L, error, 1, 1, true);
-    handled = lua_toboolean(L, -1);
-    lua_pop(L, 1);
+    if (LuaHelpers::RunScriptOnStack(L, error, 1, 1, true)) {
+      if (lua_isboolean(L, -1)) {
+        handled = lua_toboolean(L, -1);
+      } else if (!lua_isnil(L, -1)) {
+        LuaHelpers::ReportScriptError(
+            "Input callback did not return a boolean.");
+      }
+    }
+    lua_settop(L, inputTableIndex);
   }
   lua_pop(L, 1);
   LUA->Release(L);
@@ -455,12 +595,27 @@ bool Screen::PassInputToLua(const InputEventPlus& input) {
 }
 
 void Screen::AddInputCallbackFromStack(lua_State* L) {
+  if (L == nullptr || !lua_isfunction(L, 1)) {
+    WarnScreen(m_sName, "ignored invalid input callback registration.");
+    return;
+  }
   callback_key_t key = lua_topointer(L, 1);
+  if (key == nullptr) {
+    WarnScreen(m_sName, "ignored input callback with null key.");
+    return;
+  }
   m_InputCallbacks[key] = LuaReference(L);
 }
 
 void Screen::RemoveInputCallback(lua_State* L) {
+  if (L == nullptr || !lua_isfunction(L, 1)) {
+    WarnScreen(m_sName, "ignored invalid input callback removal.");
+    return;
+  }
   callback_key_t key = lua_topointer(L, 1);
+  if (key == nullptr) {
+    return;
+  }
   if (m_CallingInputCallbacks) {
     if (std::find(m_DelayedCallbackRemovals.begin(),
                   m_DelayedCallbackRemovals.end(),
@@ -490,11 +645,7 @@ void Screen::ClearInputCallbacks() {
 }
 
 void Screen::SetInputCallbacksHandleBeforeScreen(bool enabled) {
-  if (enabled) {
-    ++m_iInputCallbacksHandleBeforeScreenLocks;
-  } else if (m_iInputCallbacksHandleBeforeScreenLocks > 0) {
-    --m_iInputCallbacksHandleBeforeScreenLocks;
-  }
+  m_iInputCallbacksHandleBeforeScreenLocks = enabled ? 1 : 0;
 }
 
 bool Screen::InputCallbacksHandleBeforeScreen() const {
@@ -507,6 +658,18 @@ void Screen::InternalRemoveCallback(callback_key_t key) {
   if (iter != m_InputCallbacks.end()) {
     m_InputCallbacks.erase(iter);
   }
+}
+
+void Screen::SetLockInputSecs(float f) {
+  m_fLockInputSecs = SanitizeNonNegativeSeconds(f);
+}
+
+ScreenType Screen::GetScreenType() const {
+  return AllowOperatorMenuButton() ? game_menu : system_menu;
+}
+
+bool Screen::AllowOperatorMenuButton() const {
+  return GetLoadedBoolMetric(ALLOW_OPERATOR_MENU_BUTTON, false);
 }
 
 // lua start
@@ -539,8 +702,11 @@ class LunaScreen : public Luna<Screen> {
 
   static int PostScreenMessage(T* p, lua_State* L) {
     std::string sMessage = SArg(1);
+    if (sMessage.empty()) {
+      luaL_error(L, "ScreenMessage must not be empty.");
+    }
     ScreenMessage SM = ScreenMessageHelpers::ToScreenMessage(sMessage);
-    p->PostScreenMessage(SM, IArg(2));
+    p->PostScreenMessage(SM, FArg(2));
     COMMON_RETURN_SELF;
   }
 
