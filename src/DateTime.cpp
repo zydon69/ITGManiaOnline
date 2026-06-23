@@ -5,6 +5,7 @@
 #include <string>
 
 #include "EnumHelper.h"
+#include "LocalizedString.h"
 #include "LuaManager.h"
 #include "RageUtil.h"
 #include "StdString.h"
@@ -178,6 +179,23 @@ static const char* DAY_OF_WEEK_TO_NAME[DAYS_IN_WEEK] = {
 
 std::string DayOfWeekToString(int iDayOfWeekIndex) {
   return DAY_OF_WEEK_TO_NAME[iDayOfWeekIndex];
+}
+
+std::string DayOfWeekToLocalizedString(int iDayOfWeekIndex) {
+  static LocalizedString localizedNames[DAYS_IN_WEEK] = {
+      LocalizedString("DayOfWeek", "Sunday"),
+      LocalizedString("DayOfWeek", "Monday"),
+      LocalizedString("DayOfWeek", "Tuesday"),
+      LocalizedString("DayOfWeek", "Wednesday"),
+      LocalizedString("DayOfWeek", "Thursday"),
+      LocalizedString("DayOfWeek", "Friday"),
+      LocalizedString("DayOfWeek", "Saturday"),
+  };
+
+  if (iDayOfWeekIndex < 0 || iDayOfWeekIndex >= DAYS_IN_WEEK) {
+    return "";
+  }
+  return localizedNames[iDayOfWeekIndex].GetValue();
 }
 
 std::string HourInDayToString(int iHourInDayIndex) {

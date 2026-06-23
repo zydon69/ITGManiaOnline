@@ -1,20 +1,19 @@
 #include "ScreenBookkeeping.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
-#include "Actor.h"
 #include "ActorUtil.h"
 #include "Bookkeeper.h"
 #include "DateTime.h"
 #include "EnumHelper.h"
 #include "InputEventPlus.h"
-#include "InputFilter.h"
 #include "LocalizedString.h"
 #include "Profile.h"
 #include "ProfileManager.h"
+#include "RageLog.h"
 #include "RageUtil.h"
-#include "Screen.h"
 #include "ScreenDimensions.h"
 #include "ScreenManager.h"
 #include "ScreenMessage.h"
@@ -32,25 +31,148 @@ static const char* BookkeepingViewNames[] = {
 };
 XToString(BookkeepingView);
 
+namespace {
+void WarnBookkeeping(const std::string& message) {
+  if (LOG != nullptr) {
+    LOG->Warn("ScreenBookkeeping: %s", message.c_str());
+  }
+}
+
+bool HasThemeRuntime() {
+  return THEME != nullptr && THEME->IsThemeLoaded() && LUA != nullptr;
+}
+
+bool IsUsableScreenTarget(const std::string& screenName) {
+  return SCREENMAN != nullptr && THEME != nullptr && THEME->IsThemeLoaded() &&
+         !screenName.empty() && SCREENMAN->IsScreenNameValid(screenName);
+}
+
+bool GetThemeBool(
+    const std::string& group, const std::string& metric, bool fallback) {
+  if (!HasThemeRuntime()) {
+    WarnBookkeeping(
+        "Using fallback for metric '" + metric +
+        "' because the theme runtime is not ready.");
+    return fallback;
+  }
+
+  if (!THEME->HasMetric(group, metric)) {
+    WarnBookkeeping(
+        "Using fallback for missing metric '" + group + "::" + metric + "'.");
+    return fallback;
+  }
+
+  return THEME->GetMetricB(group, metric);
+}
+
+std::string GetFontPath(
+    const std::string& group, const std::string& element) {
+  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
+    return "";
+  }
+  return THEME->GetPathF(group, element, true);
+}
+
+bool LoadFontWithFallback(
+    BitmapText& text, const std::string& group, const std::string& element) {
+  const std::string requestedFont = GetFontPath(group, element);
+  if (!requestedFont.empty() && text.LoadFromFont(requestedFont)) {
+    return true;
+  }
+
+  const std::string fallbackFont = GetFontPath("Common", "normal");
+  if (!fallbackFont.empty() && text.LoadFromFont(fallbackFont)) {
+    return true;
+  }
+
+  WarnBookkeeping("Failed to load font for '" + group + "::" + element + "'.");
+  return false;
+}
+
+void LoadCommandsIfPossible(Actor& actor, const std::string& screenName) {
+  if (!HasThemeRuntime()) {
+    WarnBookkeeping(
+        "Skipping actor commands because the theme runtime is not ready.");
+    return;
+  }
+  ActorUtil::LoadAllCommandsAndSetXY(actor, screenName);
+}
+
+std::string TruncateUTF8ForSongLine(const std::string& text) {
+  constexpr size_t maxCharsBeforeTruncation = 22;
+  constexpr size_t charsBeforeEllipsis = 20;
+  const std::wstring wideText = RStringToWstring(text);
+  if (wideText.size() <= maxCharsBeforeTruncation) {
+    return text;
+  }
+  return WStringToRString(wideText.substr(0, charsBeforeEllipsis)) + "...";
+}
+
+void FillCoinsLastDays(int coins[NUM_LAST_DAYS]) {
+  std::fill(coins, coins + NUM_LAST_DAYS, 0);
+  if (BOOKKEEPER == nullptr) {
+    WarnBookkeeping("Cannot read last-days coins because BOOKKEEPER is missing.");
+    return;
+  }
+  BOOKKEEPER->GetCoinsLastDays(coins);
+}
+
+void FillCoinsLastWeeks(int coins[NUM_LAST_WEEKS]) {
+  std::fill(coins, coins + NUM_LAST_WEEKS, 0);
+  if (BOOKKEEPER == nullptr) {
+    WarnBookkeeping(
+        "Cannot read last-weeks coins because BOOKKEEPER is missing.");
+    return;
+  }
+  BOOKKEEPER->GetCoinsLastWeeks(coins);
+}
+
+void FillCoinsByDayOfWeek(int coins[DAYS_IN_WEEK]) {
+  std::fill(coins, coins + DAYS_IN_WEEK, 0);
+  if (BOOKKEEPER == nullptr) {
+    WarnBookkeeping(
+        "Cannot read day-of-week coins because BOOKKEEPER is missing.");
+    return;
+  }
+  BOOKKEEPER->GetCoinsByDayOfWeek(coins);
+}
+
+void FillCoinsByHour(int coins[HOURS_IN_DAY]) {
+  std::fill(coins, coins + HOURS_IN_DAY, 0);
+  if (BOOKKEEPER == nullptr) {
+    WarnBookkeeping("Cannot read hourly coins because BOOKKEEPER is missing.");
+    return;
+  }
+  BOOKKEEPER->GetCoinsByHour(coins);
+}
+}  // namespace
+
 REGISTER_SCREEN_CLASS(ScreenBookkeeping);
 
 void ScreenBookkeeping::Init() {
   ScreenWithMenuElements::Init();
 
-  m_textAllTime.LoadFromFont(THEME->GetPathF(m_sName, "AllTime"));
   m_textAllTime.SetName("AllTime");
-  LOAD_ALL_COMMANDS_AND_SET_XY(m_textAllTime);
-  this->AddChild(&m_textAllTime);
+  m_bAllTimeLoaded = LoadFontWithFallback(m_textAllTime, m_sName, "AllTime");
+  if (m_bAllTimeLoaded) {
+    LoadCommandsIfPossible(m_textAllTime, m_sName);
+    this->AddChild(&m_textAllTime);
+  }
 
-  m_textTitle.LoadFromFont(THEME->GetPathF(m_sName, "title"));
   m_textTitle.SetName("Title");
-  LOAD_ALL_COMMANDS_AND_SET_XY(m_textTitle);
-  this->AddChild(&m_textTitle);
+  m_bTitleLoaded = LoadFontWithFallback(m_textTitle, m_sName, "title");
+  if (m_bTitleLoaded) {
+    LoadCommandsIfPossible(m_textTitle, m_sName);
+    this->AddChild(&m_textTitle);
+  }
 
-  for (int i = 0; i < NUM_BOOKKEEPING_COLS; i++) {
-    m_textData[i].LoadFromFont(THEME->GetPathF(m_sName, "data"));
+  for (size_t i = 0; i < m_textData.size(); i++) {
     m_textData[i].SetName("Data");
-    LOAD_ALL_COMMANDS_AND_SET_XY(m_textData[i]);
+    m_bDataLoaded[i] = LoadFontWithFallback(m_textData[i], m_sName, "data");
+    if (!m_bDataLoaded[i]) {
+      continue;
+    }
+    LoadCommandsIfPossible(m_textData[i], m_sName);
     float fX = SCALE(
         i, 0.f, NUM_BOOKKEEPING_COLS - 1, SCREEN_LEFT + 50, SCREEN_RIGHT - 160);
     m_textData[i].SetX(fX);
@@ -58,68 +180,65 @@ void ScreenBookkeeping::Init() {
   }
 
   FOREACH_ENUM(BookkeepingView, i) {
-    if (THEME->GetMetricB(m_sName, "Show" + BookkeepingViewToString(i))) {
+    if (GetThemeBool(m_sName, "Show" + BookkeepingViewToString(i), true)) {
       m_vBookkeepingViews.push_back(i);
     }
   }
 
-  m_iViewIndex = 0;
-
+  ClampViewIndex();
   UpdateView();
 }
 
-void ScreenBookkeeping::Update(float fDelta) {
-  ScreenWithMenuElements::Update(fDelta);
-}
-
-bool ScreenBookkeeping::Input(const InputEventPlus& input) {
-  if (input.type != IET_FIRST_PRESS && input.type != IET_REPEAT) {
-    return false;  // ignore
+bool ScreenBookkeeping::MenuLeft(const InputEventPlus& input) {
+  if (!CanNavigateViews(input)) {
+    return false;
   }
 
-  return Screen::Input(input);  // default handler
-}
-
-bool ScreenBookkeeping::MenuLeft(const InputEventPlus& input) {
   m_iViewIndex--;
-  rage_clamp(m_iViewIndex, 0, m_vBookkeepingViews.size() - 1);
+  ClampViewIndex();
 
   UpdateView();
   return true;
 }
 
 bool ScreenBookkeeping::MenuRight(const InputEventPlus& input) {
+  if (!CanNavigateViews(input)) {
+    return false;
+  }
+
   m_iViewIndex++;
-  rage_clamp(m_iViewIndex, 0, m_vBookkeepingViews.size() - 1);
+  ClampViewIndex();
 
   UpdateView();
   return true;
 }
 
 bool ScreenBookkeeping::MenuStart(const InputEventPlus& input) {
-  if (IsTransitioning()) {
+  if (!CanLeaveScreen(input)) {
     return false;
   }
 
-  SCREENMAN->PlayStartSound();
-  StartTransitioningScreen(SM_GoToNextScreen);
-  return true;
+  return StartValidatedTransition(
+      SM_GoToNextScreen, GetNextScreenName(), "next");
 }
 
 bool ScreenBookkeeping::MenuBack(const InputEventPlus& input) {
-  if (IsTransitioning()) {
+  if (!CanLeaveScreen(input)) {
     return false;
   }
 
-  SCREENMAN->PlayStartSound();
-  StartTransitioningScreen(SM_GoToPrevScreen);
-  return true;
+  return StartValidatedTransition(SM_GoToPrevScreen, GetPrevScreen(), "prev");
 }
 
 bool ScreenBookkeeping::MenuCoin(const InputEventPlus& input) {
+  if (input.type != IET_FIRST_PRESS || IsInputLocked()) {
+    return false;
+  }
+
+  const bool handled = Screen::MenuCoin(input);
   UpdateView();
 
-  return Screen::MenuCoin(input);
+  return handled;
 }
 
 static LocalizedString ALL_TIME("ScreenBookkeeping", "All-time Coin Total:");
@@ -132,30 +251,123 @@ static LocalizedString DAY_OF_WEEK(
     "ScreenBookkeeping", "Coin Data by Day of Week, All-Time");
 static LocalizedString HOUR_OF_DAY(
     "ScreenBookkeeping", "Coin Data by Hour of Day, All-Time");
+static LocalizedString NO_VIEWS(
+    "ScreenBookkeeping", "No bookkeeping views enabled.");
+
+void ScreenBookkeeping::ClampViewIndex() {
+  if (m_vBookkeepingViews.empty()) {
+    m_iViewIndex = 0;
+    return;
+  }
+
+  rage_clamp(m_iViewIndex, 0, static_cast<int>(m_vBookkeepingViews.size()) - 1);
+}
+
+bool ScreenBookkeeping::CanNavigateViews(const InputEventPlus& input) {
+  if (input.type != IET_FIRST_PRESS && input.type != IET_REPEAT) {
+    return false;
+  }
+  return !m_vBookkeepingViews.empty() && !IsTransitioning() && !IsInputLocked();
+}
+
+bool ScreenBookkeeping::CanLeaveScreen(const InputEventPlus& input) {
+  return input.type == IET_FIRST_PRESS && !IsTransitioning() && !IsInputLocked();
+}
+
+bool ScreenBookkeeping::StartValidatedTransition(
+    ScreenMessage smSendWhenDone, const std::string& targetScreen,
+    const char* context) {
+  if (!IsUsableScreenTarget(targetScreen)) {
+    WarnBookkeeping(
+        "Ignoring invalid " + std::string(context) + " screen '" +
+        targetScreen + "'.");
+    return false;
+  }
+
+  if (SCREENMAN != nullptr) {
+    SCREENMAN->PlayStartSound();
+  }
+  StartTransitioningScreen(smSendWhenDone);
+  return true;
+}
+
+void ScreenBookkeeping::ClearDataText() {
+  for (size_t i = 0; i < m_textData.size(); ++i) {
+    SetDataText(i, "", align_left);
+  }
+}
+
+void ScreenBookkeeping::SetDataText(
+    size_t col, const std::string& text, float align) {
+  if (col >= m_textData.size() || !m_bDataLoaded[col]) {
+    return;
+  }
+  m_textData[col].SetHorizAlign(align);
+  m_textData[col].SetText(text);
+}
+
+void ScreenBookkeeping::SetTitleText(const std::string& text) {
+  if (m_bTitleLoaded) {
+    m_textTitle.SetText(text);
+  }
+}
+
+void ScreenBookkeeping::SetAllTimeText(const std::string& text) {
+  if (m_bAllTimeLoaded) {
+    m_textAllTime.SetText(text);
+  }
+}
+
 void ScreenBookkeeping::UpdateView() {
+  ClampViewIndex();
+  if (m_vBookkeepingViews.empty()) {
+    SetTitleText(NO_VIEWS.GetValue());
+    SetAllTimeText("");
+    ClearDataText();
+    return;
+  }
+
   BookkeepingView view = m_vBookkeepingViews[m_iViewIndex];
 
   {
     std::string s;
     s += ALL_TIME.GetValue();
-    s += ssprintf(" %i\n", BOOKKEEPER->GetCoinsTotal());
-    m_textAllTime.SetText(s);
+    s += ssprintf(
+        " %i\n", BOOKKEEPER != nullptr ? BOOKKEEPER->GetCoinsTotal() : 0);
+    if (BOOKKEEPER == nullptr) {
+      WarnBookkeeping("Cannot read total coins because BOOKKEEPER is missing.");
+    }
+    SetAllTimeText(s);
   }
+
+  ClearDataText();
 
   switch (view) {
     case BookkeepingView_SongPlays: {
-      Profile* pProfile = PROFILEMAN->GetMachineProfile();
+      Profile* pProfile =
+          PROFILEMAN != nullptr ? PROFILEMAN->GetMachineProfile() : nullptr;
+      if (pProfile == nullptr || SONGMAN == nullptr) {
+        WarnBookkeeping(
+            "Cannot show song plays because profile or song manager is "
+            "missing.");
+        SetTitleText(ssprintf(SONG_PLAYS.GetValue().c_str(), 0));
+        break;
+      }
 
       std::vector<Song*> vpSongs;
       int iCount = 0;
       for (Song* pSong : SONGMAN->GetAllSongs()) {
-        if (UNLOCKMAN->SongIsLocked(pSong) & ~LOCKED_DISABLED) {
+        if (pSong == nullptr) {
+          continue;
+        }
+        if (UNLOCKMAN != nullptr &&
+            (UNLOCKMAN->SongIsLocked(pSong) & ~LOCKED_DISABLED)) {
           continue;
         }
         iCount += pProfile->GetSongNumTimesPlayed(pSong);
         vpSongs.push_back(pSong);
       }
-      m_textTitle.SetText(ssprintf(SONG_PLAYS.GetValue().c_str(), iCount));
+      SetTitleText(ssprintf(SONG_PLAYS.GetValue().c_str(), iCount));
       SongUtil::SortSongPointerArrayByNumPlays(vpSongs, pProfile, true);
 
       const int iSongPerCol = 15;
@@ -169,23 +381,19 @@ void ScreenBookkeeping::UpdateView() {
             iCount = pProfile->GetSongNumTimesPlayed(pSong);
             std::string sTitle =
                 ssprintf("%4d", iCount) + " " + pSong->GetDisplayFullTitle();
-            if (sTitle.length() > 22) {
-              sTitle = Left(sTitle, 20) + "...";
-            }
+            sTitle = TruncateUTF8ForSongLine(sTitle);
             s += sTitle + "\n";
             iSongIndex++;
           }
         }
-        m_textData[i].SetText(s);
-        m_textData[i].SetHorizAlign(align_left);
+        SetDataText(i, s, align_left);
       }
     } break;
     case BookkeepingView_LastDays: {
-      m_textTitle.SetText(
-          ssprintf(LAST_DAYS.GetValue().c_str(), NUM_LAST_DAYS));
+      SetTitleText(ssprintf(LAST_DAYS.GetValue().c_str(), NUM_LAST_DAYS));
 
       int coins[NUM_LAST_DAYS];
-      BOOKKEEPER->GetCoinsLastDays(coins);
+      FillCoinsLastDays(coins);
       int iTotalLast = 0;
 
       std::string sTitle, sData;
@@ -198,57 +406,51 @@ void ScreenBookkeeping::UpdateView() {
       sTitle += ALL_TIME.GetValue() + "\n";
       sData += ssprintf("%i\n", iTotalLast);
 
-      m_textData[0].SetText("");
-      m_textData[1].SetHorizAlign(align_left);
-      m_textData[1].SetText(sTitle);
-      m_textData[2].SetText("");
-      m_textData[3].SetHorizAlign(align_right);
-      m_textData[3].SetText(sData);
+      SetDataText(1, sTitle, align_left);
+      SetDataText(3, sData, align_right);
     } break;
     case BookkeepingView_LastWeeks: {
-      m_textTitle.SetText(
-          ssprintf(LAST_WEEKS.GetValue().c_str(), NUM_LAST_WEEKS));
+      SetTitleText(ssprintf(LAST_WEEKS.GetValue().c_str(), NUM_LAST_WEEKS));
 
       int coins[NUM_LAST_WEEKS];
-      BOOKKEEPER->GetCoinsLastWeeks(coins);
+      FillCoinsLastWeeks(coins);
 
-      std::string sTitle, sData;
-      for (int col = 0; col < 4; col++) {
+      const int rowsPerCol =
+          (NUM_LAST_WEEKS + NUM_BOOKKEEPING_COLS - 1) / NUM_BOOKKEEPING_COLS;
+      for (int col = 0; col < NUM_BOOKKEEPING_COLS; col++) {
         std::string sTemp;
-        for (int row = 0; row < 52 / 4; row++) {
-          int week = row * 4 + col;
+        for (int row = 0; row < rowsPerCol; row++) {
+          int week = row * NUM_BOOKKEEPING_COLS + col;
+          if (week >= NUM_LAST_WEEKS) {
+            continue;
+          }
           sTemp += LastWeekToLocalizedString(week) +
                    ssprintf(": %d", coins[week]) + "\n";
         }
 
-        m_textData[col].SetHorizAlign(align_left);
-        m_textData[col].SetText(sTemp);
+        SetDataText(col, sTemp, align_left);
       }
     } break;
     case BookkeepingView_DayOfWeek: {
-      m_textTitle.SetText(DAY_OF_WEEK);
+      SetTitleText(DAY_OF_WEEK.GetValue());
 
       int coins[DAYS_IN_WEEK];
-      BOOKKEEPER->GetCoinsByDayOfWeek(coins);
+      FillCoinsByDayOfWeek(coins);
 
       std::string sTitle, sData;
       for (int i = 0; i < DAYS_IN_WEEK; i++) {
-        sTitle += DayOfWeekToString(i) + "\n";
+        sTitle += DayOfWeekToLocalizedString(i) + "\n";
         sData += ssprintf("%d", coins[i]) + "\n";
       }
 
-      m_textData[0].SetText("");
-      m_textData[1].SetHorizAlign(align_left);
-      m_textData[1].SetText(sTitle);
-      m_textData[2].SetText("");
-      m_textData[3].SetHorizAlign(align_right);
-      m_textData[3].SetText(sData);
+      SetDataText(1, sTitle, align_left);
+      SetDataText(3, sData, align_right);
     } break;
     case BookkeepingView_HourOfDay: {
-      m_textTitle.SetText(HOUR_OF_DAY);
+      SetTitleText(HOUR_OF_DAY.GetValue());
 
       int coins[HOURS_IN_DAY];
-      BOOKKEEPER->GetCoinsByHour(coins);
+      FillCoinsByHour(coins);
 
       std::string sTitle1, sData1;
       for (int i = 0; i < HOURS_IN_DAY / 2; i++) {
@@ -262,17 +464,15 @@ void ScreenBookkeeping::UpdateView() {
         sData2 += ssprintf("%d", coins[i]) + "\n";
       }
 
-      m_textData[0].SetHorizAlign(align_left);
-      m_textData[0].SetText(sTitle1);
-      m_textData[1].SetHorizAlign(align_right);
-      m_textData[1].SetText(sData1);
-      m_textData[2].SetHorizAlign(align_left);
-      m_textData[2].SetText(sTitle2);
-      m_textData[3].SetHorizAlign(align_right);
-      m_textData[3].SetText(sData2);
+      SetDataText(0, sTitle1, align_left);
+      SetDataText(1, sData1, align_right);
+      SetDataText(2, sTitle2, align_left);
+      SetDataText(3, sData2, align_right);
     } break;
     default:
-      FAIL_M(ssprintf("Invalid BookkeepingView: %i", view));
+      WarnBookkeeping(ssprintf("Ignoring invalid BookkeepingView: %i", view));
+      SetTitleText(NO_VIEWS.GetValue());
+      ClearDataText();
   }
 }
 

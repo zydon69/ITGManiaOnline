@@ -3,13 +3,11 @@
 #ifndef ScreenBookkeeping_H
 #define ScreenBookkeeping_H
 
+#include <array>
 #include <vector>
 
 #include "BitmapText.h"
-#include "InputQueue.h"
 #include "ScreenWithMenuElements.h"
-
-const int NUM_BOOKKEEPING_COLS = 4;
 
 enum BookkeepingView {
   BookkeepingView_SongPlays,
@@ -23,26 +21,39 @@ enum BookkeepingView {
 
 class ScreenBookkeeping : public ScreenWithMenuElements {
  public:
-  virtual void Init();
+  void Init() override;
 
-  virtual void Update(float fDelta);
-  virtual bool Input(const InputEventPlus& input);
-
-  virtual bool MenuLeft(const InputEventPlus& input);
-  virtual bool MenuRight(const InputEventPlus& input);
-  virtual bool MenuStart(const InputEventPlus& input);
-  virtual bool MenuBack(const InputEventPlus& input);
-  virtual bool MenuCoin(const InputEventPlus& input);
+  bool MenuLeft(const InputEventPlus& input) override;
+  bool MenuRight(const InputEventPlus& input) override;
+  bool MenuStart(const InputEventPlus& input) override;
+  bool MenuBack(const InputEventPlus& input) override;
+  bool MenuCoin(const InputEventPlus& input) override;
 
  private:
+  static constexpr int NUM_BOOKKEEPING_COLS = 4;
+  static_assert(NUM_BOOKKEEPING_COLS >= 4);
+
+  void ClampViewIndex();
+  bool CanNavigateViews(const InputEventPlus& input);
+  bool CanLeaveScreen(const InputEventPlus& input);
+  bool StartValidatedTransition(
+      ScreenMessage smSendWhenDone, const std::string& targetScreen,
+      const char* context);
+  void ClearDataText();
+  void SetDataText(size_t col, const std::string& text, float align);
+  void SetTitleText(const std::string& text);
+  void SetAllTimeText(const std::string& text);
   void UpdateView();
 
-  int m_iViewIndex;
+  int m_iViewIndex = 0;
   std::vector<BookkeepingView> m_vBookkeepingViews;
 
   BitmapText m_textAllTime;
   BitmapText m_textTitle;
-  BitmapText m_textData[NUM_BOOKKEEPING_COLS];
+  std::array<BitmapText, NUM_BOOKKEEPING_COLS> m_textData;
+  bool m_bAllTimeLoaded = false;
+  bool m_bTitleLoaded = false;
+  std::array<bool, NUM_BOOKKEEPING_COLS> m_bDataLoaded{};
 };
 
 #endif
