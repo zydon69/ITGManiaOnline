@@ -12,17 +12,18 @@
 #include "RageTimer.h"
 #include "RageTypes.h"
 #include "Screen.h"
-#include "ThemeMetric.h"
-
-const int NUM_SKIPS_TO_SHOW = 5;
 
 class ScreenStatsOverlay : public Screen {
  public:
-  virtual void Init();
+  void Init() override;
 
-  void Update(float fDeltaTime);
+  void Update(float fDeltaTime) override;
 
  private:
+  static constexpr int NUM_SKIPS_TO_SHOW = 5;
+
+  void LoadStatsText();
+  void LoadSkipOverlay();
   void AddTimestampLine(const std::string& txt, const RageColor& color);
   void UpdateSkips();
 
@@ -30,13 +31,15 @@ class ScreenStatsOverlay : public Screen {
   Quad m_quadSkipBackground;
   std::array<BitmapText, NUM_SKIPS_TO_SHOW> m_textSkips;
   RageTimer m_timerSkip;
-  int m_LastSkip;
+  int m_LastSkip{0};
 
-  ThemeMetric<bool> SHOW_SKIPS;
-  ThemeMetric<float> SKIP_X;
-  ThemeMetric<float> SKIP_Y;
-  ThemeMetric<float> SKIP_SPACING_Y;
-  ThemeMetric<float> SKIP_WIDTH;
+  bool m_bStatsTextLoaded{false};
+  bool m_bShowSkips{false};
+  bool m_bShowStatsWasOn{false};
+  float m_fSkipX{0.0f};
+  float m_fSkipY{0.0f};
+  float m_fSkipSpacingY{0.0f};
+  float m_fSkipWidth{0.0f};
 };
 
 #endif

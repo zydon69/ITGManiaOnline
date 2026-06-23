@@ -1717,9 +1717,9 @@ std::string RageDisplay::GetStats() const {
   // If FPS == 0, we don't have stats yet.
   if (!GetFPS()) {
     s = "-- FPS\n-- av FPS\n-- VPF";
+  } else {
+    s = ssprintf("%i FPS\n%i av FPS\n%i VPF", GetFPS(), GetCumFPS(), GetVPF());
   }
-
-  s = ssprintf("%i FPS\n%i av FPS\n%i VPF", GetFPS(), GetCumFPS(), GetVPF());
 
   //	#if defined(_WIN32)
   s += "\n" + this->GetApiDescription();

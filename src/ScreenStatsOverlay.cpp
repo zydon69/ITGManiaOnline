@@ -1,8 +1,11 @@
 #include "ScreenStatsOverlay.h"
 
+#include <cmath>
 #include <string>
 
 #include "ActorUtil.h"
+#include "LuaManager.h"
+#include "MessageManager.h"
 #include "PrefsManager.h"
 #include "RageDisplay.h"
 #include "RageLog.h"
@@ -14,13 +17,87 @@
 
 REGISTER_SCREEN_CLASS(ScreenStatsOverlay);
 
+namespace {
+const char* SHOW_SKIPS_METRIC = "ShowSkips";
+const char* SKIP_X_METRIC = "SkipX";
+const char* SKIP_Y_METRIC = "SkipY";
+const char* SKIP_SPACING_Y_METRIC = "SkipSpacingY";
+const char* SKIP_WIDTH_METRIC = "SkipWidth";
+const char* SHOW_STATS_CHANGED_COMMAND = "ShowStatsChangedCommand";
+
+bool CanReadThemeMetrics() {
+  return THEME != nullptr && THEME->IsThemeLoaded() && LUA != nullptr;
+}
+
+bool HasLoadedTheme() { return THEME != nullptr && THEME->IsThemeLoaded(); }
+
+bool HasThemeMetric(const std::string& group, const char* metric) {
+  return HasLoadedTheme() && THEME->HasMetric(group, metric);
+}
+
+bool GetThemeMetricBoolOrDefault(
+    const std::string& group, const char* metric, bool default_value) {
+  if (!CanReadThemeMetrics() || !THEME->HasMetric(group, metric)) {
+    return default_value;
+  }
+  return THEME->GetMetricB(group, metric);
+}
+
+float GetThemeMetricFloatOrDefault(
+    const std::string& group, const char* metric, float default_value) {
+  if (!CanReadThemeMetrics() || !THEME->HasMetric(group, metric)) {
+    return default_value;
+  }
+  return THEME->GetMetricF(group, metric);
+}
+
+std::string GetOptionalFontPath(
+    const std::string& group, const std::string& element) {
+  if (!HasLoadedTheme()) {
+    return "";
+  }
+  return THEME->GetPathF(group, element, true);
+}
+
+bool LoadFontWithFallback(
+    BitmapText& text, const std::string& group, const std::string& element) {
+  std::string font = GetOptionalFontPath(group, element);
+  if (font.empty()) {
+    font = GetOptionalFontPath("Common", "normal");
+  }
+  if (font.empty()) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "ScreenStatsOverlay could not resolve font %s/%s or fallback "
+          "Common/normal.",
+          group.c_str(), element.c_str());
+    }
+    return false;
+  }
+
+  if (!text.LoadFromFont(font)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "ScreenStatsOverlay failed to load font '%s' for %s/%s.",
+          font.c_str(), group.c_str(), element.c_str());
+    }
+    return false;
+  }
+
+  return true;
+}
+
+bool IsFinite(float value) { return std::isfinite(value); }
+
+bool IsPositiveFinite(float value) {
+  return std::isfinite(value) && value > 0.0f;
+}
+}  // namespace
+
 void ScreenStatsOverlay::Init() {
   Screen::Init();
 
-  m_textStats.LoadFromFont(THEME->GetPathF(m_sName, "stats"));
-  m_textStats.SetName("Stats");
-  LOAD_ALL_COMMANDS_AND_SET_XY_AND_ON_COMMAND(m_textStats);
-  this->AddChild(&m_textStats);
+  LoadStatsText();
 
   /* "Was that a skip?"  This displays a message when an update takes
    * abnormally long, to quantify skips more precisely, verify them
@@ -28,58 +105,110 @@ void ScreenStatsOverlay::Init() {
    * the time in the log. */
   m_LastSkip = 0;
 
-  SHOW_SKIPS.Load(m_sName, "ShowSkips");
-  if (SHOW_SKIPS) {
-    SKIP_X.Load(m_sName, "SkipX");
-    SKIP_Y.Load(m_sName, "SkipY");
-    SKIP_SPACING_Y.Load(m_sName, "SkipSpacingY");
-    SKIP_WIDTH.Load(m_sName, "SkipWidth");
+  LoadSkipOverlay();
 
-    RectF rectSkips = RectF(
-        SKIP_X - SKIP_WIDTH / 2,
-        SKIP_Y - (SKIP_SPACING_Y * NUM_SKIPS_TO_SHOW) / 2 - 10,
-        SKIP_X + SKIP_WIDTH / 2,
-        SKIP_Y + (SKIP_SPACING_Y * NUM_SKIPS_TO_SHOW) / 2 + 10);
-    m_quadSkipBackground.StretchTo(rectSkips);
-    m_quadSkipBackground.SetDiffuse(RageColor(0, 0, 0, 0.4f));
-    this->AddChild(&m_quadSkipBackground);
-
-    for (int i = 0; i < NUM_SKIPS_TO_SHOW; i++) {
-      /* This is somewhat big.  Let's put it on the right side, where it'll
-       * obscure the 2P side during gameplay; there's nowhere to put it that
-       * doesn't obscure something, and it's just a diagnostic. */
-      m_textSkips[i].LoadFromFont(THEME->GetPathF("Common", "normal"));
-      m_textSkips[i].SetX(SKIP_X);
-      m_textSkips[i].SetY(SCALE(
-          i, 0, NUM_SKIPS_TO_SHOW - 1, rectSkips.top + 10,
-          rectSkips.bottom - 10));
-      m_textSkips[i].SetDiffuse(RageColor(1, 1, 1, 0));
-      m_textSkips[i].SetShadowLength(0);
-      this->AddChild(&m_textSkips[i]);
-    }
+  // Optional hook for themes that define a ShowStatsChangedCommand.
+  if (MESSAGEMAN != nullptr &&
+      HasThemeMetric(m_sName, SHOW_STATS_CHANGED_COMMAND)) {
+    this->SubscribeToMessage("ShowStatsChanged");
   }
-
-  this->SubscribeToMessage("ShowStatsChanged");
 }
 
 void ScreenStatsOverlay::Update(float fDeltaTime) {
   Screen::Update(fDeltaTime);
 
-  static bool bShowStatsWasOn = false;
+  if (PREFSMAN == nullptr) {
+    m_bShowStatsWasOn = false;
+    this->SetVisible(false);
+    return;
+  }
 
-  if (PREFSMAN->m_bShowStats && !bShowStatsWasOn) {
+  const bool show_stats = PREFSMAN->m_bShowStats.Get();
+  if (show_stats && !m_bShowStatsWasOn) {
     // Reset skip timer when we toggle Stats on so we don't show a large skip
     // from the span when stats were turned off.
     m_timerSkip.Touch();
   }
-  bShowStatsWasOn = PREFSMAN->m_bShowStats.Get();
+  m_bShowStatsWasOn = show_stats;
 
-  this->SetVisible(PREFSMAN->m_bShowStats);
-  if (PREFSMAN->m_bShowStats) {
-    m_textStats.SetText(DISPLAY->GetStats());
-    if (SHOW_SKIPS) {
+  this->SetVisible(show_stats);
+  if (show_stats && DISPLAY != nullptr) {
+    if (m_bStatsTextLoaded) {
+      m_textStats.SetText(DISPLAY->GetStats());
+    }
+    if (m_bShowSkips) {
       UpdateSkips();
     }
+  }
+}
+
+void ScreenStatsOverlay::LoadStatsText() {
+  m_textStats.SetName("Stats");
+  m_bStatsTextLoaded = LoadFontWithFallback(m_textStats, m_sName, "stats");
+  if (!m_bStatsTextLoaded) {
+    return;
+  }
+
+  if (HasLoadedTheme()) {
+    LOAD_ALL_COMMANDS_AND_SET_XY_AND_ON_COMMAND(m_textStats);
+  }
+  this->AddChild(&m_textStats);
+}
+
+void ScreenStatsOverlay::LoadSkipOverlay() {
+  m_bShowSkips =
+      GetThemeMetricBoolOrDefault(m_sName, SHOW_SKIPS_METRIC, false);
+  if (!m_bShowSkips) {
+    return;
+  }
+
+  m_fSkipX = GetThemeMetricFloatOrDefault(m_sName, SKIP_X_METRIC, 0.0f);
+  m_fSkipY = GetThemeMetricFloatOrDefault(m_sName, SKIP_Y_METRIC, 0.0f);
+  m_fSkipSpacingY =
+      GetThemeMetricFloatOrDefault(m_sName, SKIP_SPACING_Y_METRIC, 0.0f);
+  m_fSkipWidth =
+      GetThemeMetricFloatOrDefault(m_sName, SKIP_WIDTH_METRIC, 0.0f);
+
+  if (!IsFinite(m_fSkipX) || !IsFinite(m_fSkipY) ||
+      !IsPositiveFinite(m_fSkipSpacingY) || !IsPositiveFinite(m_fSkipWidth)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "ScreenStatsOverlay disabled skip overlay due to invalid metrics "
+          "x=%.3f y=%.3f spacing=%.3f width=%.3f.",
+          m_fSkipX, m_fSkipY, m_fSkipSpacingY, m_fSkipWidth);
+    }
+    m_bShowSkips = false;
+    return;
+  }
+
+  const RectF rectSkips = RectF(
+      m_fSkipX - m_fSkipWidth / 2,
+      m_fSkipY - (m_fSkipSpacingY * NUM_SKIPS_TO_SHOW) / 2 - 10,
+      m_fSkipX + m_fSkipWidth / 2,
+      m_fSkipY + (m_fSkipSpacingY * NUM_SKIPS_TO_SHOW) / 2 + 10);
+
+  for (int i = 0; i < NUM_SKIPS_TO_SHOW; i++) {
+    /* This is somewhat big.  Let's put it on the right side, where it'll
+     * obscure the 2P side during gameplay; there's nowhere to put it that
+     * doesn't obscure something, and it's just a diagnostic. */
+    if (!LoadFontWithFallback(m_textSkips[i], "Common", "normal")) {
+      m_bShowSkips = false;
+      return;
+    }
+    m_textSkips[i].SetX(m_fSkipX);
+    m_textSkips[i].SetY(SCALE(
+        i, 0, NUM_SKIPS_TO_SHOW - 1, rectSkips.top + 10,
+        rectSkips.bottom - 10));
+    m_textSkips[i].SetDiffuse(RageColor(1, 1, 1, 0));
+    m_textSkips[i].SetShadowLength(0);
+  }
+
+  m_quadSkipBackground.StretchTo(rectSkips);
+  m_quadSkipBackground.SetDiffuse(RageColor(0, 0, 0, 0.4f));
+  this->AddChild(&m_quadSkipBackground);
+
+  for (int i = 0; i < NUM_SKIPS_TO_SHOW; i++) {
+    this->AddChild(&m_textSkips[i]);
   }
 }
 
@@ -101,16 +230,23 @@ void ScreenStatsOverlay::AddTimestampLine(
 void ScreenStatsOverlay::UpdateSkips() {
   /* Use our own timer, so we ignore `/tab. */
   const float UpdateTime = m_timerSkip.GetDeltaTime();
+  if (!std::isfinite(UpdateTime) || DISPLAY == nullptr) {
+    return;
+  }
 
   /* FPS is 0 for a little while after we load a screen; don't report
    * during this time. Do clear the timer, though, so we don't report
    * a big "skip" after this period passes. */
-  if (!DISPLAY->GetFPS()) {
+  const int fps = DISPLAY->GetFPS();
+  if (fps <= 0) {
     return;
   }
 
   /* We want to display skips.  We expect to get updates of about 1.0/FPS ms. */
-  const float ExpectedUpdate = 1.0f / DISPLAY->GetFPS();
+  const float ExpectedUpdate = 1.0f / fps;
+  if (!std::isfinite(ExpectedUpdate) || ExpectedUpdate <= 0.0f) {
+    return;
+  }
 
   /* These are thresholds for severity of skips.  The smallest
    * is slightly above expected, to tolerate normal jitter. */
@@ -139,7 +275,7 @@ void ScreenStatsOverlay::UpdateSkips() {
             UpdateTime / ExpectedUpdate),
         colors[skip]);
 
-    if (PREFSMAN->m_bLogSkips) {
+    if (PREFSMAN != nullptr && PREFSMAN->m_bLogSkips && LOG != nullptr) {
       LOG->Trace(
           "Frame skip: %.0fms (%.0f)", 1000 * UpdateTime,
           UpdateTime / ExpectedUpdate);
