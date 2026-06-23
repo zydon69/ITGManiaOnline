@@ -1,16 +1,16 @@
-/* ScreenSaveSync -  */
+/* ScreenSaveSync - Prompt for saving pending sync changes. */
 
-#ifndef ScreenSaveSync_H
-#define ScreenSaveSync_H
+#ifndef SCREEN_SAVE_SYNC_H
+#define SCREEN_SAVE_SYNC_H
 
 #include "ScreenMessage.h"
-#include "ScreenPrompt.h"
 
-class ScreenSaveSync : public ScreenPrompt {
+class ScreenSaveSync {
  public:
-  virtual void Init();
-
   static void PromptSaveSync(ScreenMessage sm = SM_None);
+
+ private:
+  ScreenSaveSync() = delete;
 };
 
 #endif
