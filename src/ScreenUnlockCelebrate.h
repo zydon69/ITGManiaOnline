@@ -1,21 +1,16 @@
 #ifndef ScreenUnlockCelebrate_H
 #define ScreenUnlockCelebrate_H
 
-#include "InputQueue.h"
 #include "ScreenUnlockBrowse.h"
 
 class ScreenUnlockCelebrate : public ScreenUnlockBrowse {
  public:
-  virtual void Init();
-  virtual bool MenuLeft(const InputEventPlus& input) { return false; }
-  virtual bool MenuRight(const InputEventPlus& input) { return false; }
-  virtual bool MenuUp(const InputEventPlus& input) { return false; }
-  virtual bool MenuDown(const InputEventPlus& input) { return false; }
-  virtual bool MenuBack(const InputEventPlus& input) {
-    return MenuStart(input);
-  }
-
- protected:
+  void Init() override;
+  bool MenuLeft(const InputEventPlus& input) override { return false; }
+  bool MenuRight(const InputEventPlus& input) override { return false; }
+  bool MenuUp(const InputEventPlus& input) override { return false; }
+  bool MenuDown(const InputEventPlus& input) override { return false; }
+  bool MenuBack(const InputEventPlus& input) override;
 };
 
 #endif
