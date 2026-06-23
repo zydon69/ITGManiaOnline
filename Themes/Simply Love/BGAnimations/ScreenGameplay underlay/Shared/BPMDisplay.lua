@@ -9,6 +9,9 @@ local bpmDisplay, SongPosition
 -- -----------------------------------------------------------------------
 
 local xRateText = THEME:GetString("OptionTitles", "MusicRateMultiplier")
+local function FormatGameplayBPM(songPosition)
+	return "BPM : " .. tostring(round(songPosition:GetCurBPS() * 60 * MusicRate))
+end
 
 -- the update function when a single BPM Display is in use
 local UpdateSingleBPM = function(af)
@@ -19,7 +22,7 @@ local UpdateSingleBPM = function(af)
 	MusicRate = so:MusicRate()
 
 	-- BPM Display
-	bpmDisplay:settext( round(SongPosition:GetCurBPS() * 60 * MusicRate) )
+	bpmDisplay:settext(FormatGameplayBPM(SongPosition))
 
 	-- MusicRate Display
 	MusicRate = string.format("%.2f", MusicRate )
@@ -34,7 +37,7 @@ local Update2PBPM = function(self)
 	for player in ivalues(Players) do
 		bpmDisplay = (player == PLAYER_1) and dispP1 or dispP2
 		SongPosition = GAMESTATE:GetPlayerState(player):GetSongPosition()
-		bpmDisplay:settext( round( SongPosition:GetCurBPS() * 60 * MusicRate ) )
+		bpmDisplay:settext(FormatGameplayBPM(SongPosition))
 	end
 
 	MusicRate = string.format("%.2f", MusicRate )
@@ -64,14 +67,14 @@ local DualBPMDisplay = function()
 		LoadFont("Common Normal")..{
 			Name="DisplayP1",
 			InitCommand=function(self)
-				self:x(-18):zoom(1):shadowlength(1)
+				self:x(-70):zoom(0.85):shadowlength(1)
 				dispP1 = self
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="DisplayP2",
 			InitCommand=function(self)
-				self:x(18):zoom(1):shadowlength(1)
+				self:x(70):zoom(0.85):shadowlength(1)
 				dispP2 = self
 			end
 		}
