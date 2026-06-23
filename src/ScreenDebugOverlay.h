@@ -1,9 +1,10 @@
-/* ScreenDebugOverlay - credits and statistics drawn on top of everything else.
+/* ScreenDebugOverlay - keyboard-driven runtime diagnostics and debug actions.
  */
 
 #ifndef ScreenDebugOverlay_H
 #define ScreenDebugOverlay_H
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -16,17 +17,18 @@ void ChangeVisualDelay(float fDelta);
 
 class ScreenDebugOverlay : public Screen {
  public:
-  virtual ~ScreenDebugOverlay();
-  virtual void Init();
+  ~ScreenDebugOverlay() override;
+  void Init() override;
 
-  bool Input(const InputEventPlus& input);
+  bool Input(const InputEventPlus& input) override;
 
-  void Update(float fDeltaTime);
+  void Update(float fDeltaTime) override;
 
  private:
   void UpdateText();
 
-  std::string GetCurrentPageName() const { return m_asPages[m_iCurrentPage]; }
+  std::string GetCurrentPageName() const;
+  bool HasTextForLine(std::size_t index) const;
   std::vector<std::string> m_asPages;
   int m_iCurrentPage;
   bool m_bForcedHidden;
