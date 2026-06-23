@@ -4133,6 +4133,23 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		.. " previousPlayStateVersion=" .. tostring(previousPlayStateVersion or "nil"))
 	online_room_snapshot_debug("room_snapshot_apply_begin", room, source, previousRoom)
 	room = self:NormalizeRoomSnapshot(room, previousRoom, source)
+	local normalizedIncomingPhase = self:NormalizeRoomPhase(room.phase)
+	local normalizedPreviousPhase = previousRoom and self:NormalizeRoomPhase(previousRoom.phase) or "unknown"
+	local normalizedIncomingSelectedAt = room.selected_song and (room.selected_song.selected_at or room.selected_song.selectedAt) or nil
+	local normalizedIncomingSongHash = room.selected_song and (room.selected_song.song_hash or room.selected_song.songHash) or nil
+	local normalizedIncomingChartHash = room.selected_song and (room.selected_song.chart_hash or room.selected_song.chartHash) or nil
+	local finalCacheShouldClear = normalizedIncomingPhase ~= "results" and (
+		normalizedPreviousPhase == "results"
+		or tostring(previousSelectedAt or "") ~= tostring(normalizedIncomingSelectedAt or "")
+		or tostring(previousSongHash or "") ~= tostring(normalizedIncomingSongHash or "")
+		or tostring(previousChartHash or "") ~= tostring(normalizedIncomingChartHash or "")
+	)
+	if finalCacheShouldClear and self.ClearFinalLeaderboardCache then
+		self:ClearFinalLeaderboardCache(
+			"room_snapshot_" .. tostring(normalizedPreviousPhase) .. "_to_" .. tostring(normalizedIncomingPhase),
+			room.id or self.currentRoomId
+		)
+	end
 	if self:NormalizeRoomPhase(room.phase) == "results" and not room.selected_song then
 		local fallbackSong = self.lastResultSongPayload
 			or (previousRoom and previousRoom.selected_song)
@@ -4610,6 +4627,31 @@ function ITGOnline:StoreFinalLeaderboardFromRoom(source, cacheSource)
 	return true
 end
 
+function ITGOnline:ClearFinalLeaderboardCache(reason, roomId)
+	self.finalLeaderboardCache = self.finalLeaderboardCache or {}
+	local key = tostring(roomId or self.currentRoomId or "")
+	local clearedRoomCache = false
+	if key ~= "" and self.finalLeaderboardCache[key] ~= nil then
+		self.finalLeaderboardCache[key] = nil
+		clearedRoomCache = true
+	end
+	local clearedLatest = false
+	if self.latestFinalLeaderboardCache
+		and (key == "" or tostring(self.latestFinalLeaderboardCache.room_id or "") == key) then
+		self.latestFinalLeaderboardCache = nil
+		clearedLatest = true
+	end
+	if clearedRoomCache or clearedLatest or tostring(self.finalLeaderboardCacheSignature or "") ~= "" then
+		self.finalLeaderboardCacheSignature = ""
+		self.finalLeaderboardCacheLogSignature = ""
+		final_leaderboard_cache_trace("clear"
+			.. " reason=" .. tostring(reason or "unknown")
+			.. " room=" .. tostring(key ~= "" and key or "nil")
+			.. " clearedRoom=" .. tostring(clearedRoomCache)
+			.. " clearedLatest=" .. tostring(clearedLatest))
+	end
+end
+
 function ITGOnline:GetFinalLeaderboardCache(roomId)
 	self.finalLeaderboardCache = self.finalLeaderboardCache or {}
 	local key = tostring(roomId or self.currentRoomId or "")
@@ -4619,13 +4661,18 @@ function ITGOnline:GetFinalLeaderboardCache(roomId)
 			.. " source=" .. tostring(self.finalLeaderboardCache[key].source or "unknown"))
 		return self.finalLeaderboardCache[key]
 	end
-	if self.latestFinalLeaderboardCache then
+	if self.latestFinalLeaderboardCache
+		and (key == "" or tostring(self.latestFinalLeaderboardCache.room_id or "") == key) then
 		final_leaderboard_cache_trace("hit_latest requestedRoom=" .. tostring(key ~= "" and key or "nil")
 			.. " cachedRoom=" .. tostring(self.latestFinalLeaderboardCache.room_id or "nil")
 			.. " rows=" .. tostring(self.latestFinalLeaderboardCache.rows and #self.latestFinalLeaderboardCache.rows or 0)
 			.. " source=" .. tostring(self.latestFinalLeaderboardCache.source or "unknown"))
+		return self.latestFinalLeaderboardCache
+	elseif self.latestFinalLeaderboardCache then
+		final_leaderboard_cache_trace("skip_latest reason=room_mismatch requestedRoom=" .. tostring(key ~= "" and key or "nil")
+			.. " cachedRoom=" .. tostring(self.latestFinalLeaderboardCache.room_id or "nil"))
 	end
-	return self.latestFinalLeaderboardCache
+	return nil
 end
 
 function ITGOnline:CurrentUserPlayState(room)
@@ -4952,33 +4999,6 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 			.. " message=" .. tostring(response_message(response, decoded, "terminal state rejected")))
 	end
 
-	local markTerminalWithoutScore
-	markTerminalWithoutScore = function(reason)
-		self.onlineGameplayEvaluationMarkInFlightKey = roundKey
-		local terminalCallback = function(terminalOk, terminalDecoded, terminalResponse)
-			if self.onlineGameplayEvaluationMarkInFlightKey == roundKey then
-				self.onlineGameplayEvaluationMarkInFlightKey = ""
-			end
-			if terminalOk then
-				self.onlineGameplayEvaluationMarkKey = roundKey
-				self.onlineGameplayEndedKey = roundKey
-				self.onlineGameplayEvaluationTerminalErrorKey = ""
-				self.onlineGameplayEvaluationRetryCount = 0
-				self.onlineGameplayEvaluationNextRetryAt = 0
-				return
-			end
-			scheduleTerminalRetry("mark_terminal_failed_without_final_score reason=" .. tostring(reason or "unknown"), terminalDecoded, terminalResponse)
-		end
-
-		if self.MarkPlayFailed then
-			if not failed then
-				online_flow_trace("mark_terminal_without_final_score_forced_failed reason=" .. tostring(reason or "unknown")
-					.. " roundKey=" .. tostring(roundKey))
-			end
-			self:MarkPlayFailed(terminalCallback)
-		end
-	end
-
 	if self.SendScore and phase == "playing" then
 		self.onlineGameplayEvaluationMarkInFlightKey = roundKey
 		if failed then
@@ -5017,7 +5037,11 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 					.. " retry=" .. tostring(self.onlineGameplayEvaluationRetryCount)
 					.. " message=" .. tostring(response_message(scoreResponse, scoreDecoded, "score rejected")))
 				if self.onlineGameplayEvaluationRetryCount >= (tonumber(self.onlineGameplayEvaluationMaxRetries) or 3) then
-					markTerminalWithoutScore("final_score_retry_exhausted")
+					self.onlineGameplayEvaluationNextRetryAt = GetTimeSinceStart() + 2.0
+					online_flow_trace("mark_terminal_without_score_blocked"
+						.. " reason=final_score_retry_exhausted"
+						.. " roundKey=" .. tostring(roundKey)
+						.. " decision=retry_final_score")
 				else
 					self.onlineGameplayEvaluationNextRetryAt = GetTimeSinceStart() + 1.0
 				end
@@ -5047,7 +5071,11 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 			end
 		end, { forceFailed = failed, forceFinalFailed = failed })
 	else
-		markTerminalWithoutScore("no_score_submission_path")
+		self.onlineGameplayEvaluationNextRetryAt = GetTimeSinceStart() + 2.0
+		online_flow_trace("mark_terminal_without_score_blocked"
+			.. " reason=no_score_submission_path"
+			.. " roundKey=" .. tostring(roundKey)
+			.. " decision=wait_for_score_api")
 	end
 
 	return true
@@ -5058,11 +5086,80 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 	local screen = SCREENMAN:GetTopScreen()
 	local screenName = screen and screen:GetName() or "NoScreen"
 	if not self:IsOnlineGameplayScreen(screenName) then return false end
+	local phase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+	local roundKey = self.CanonicalGameplayRoundKey and self:CanonicalGameplayRoundKey("evaluation_guard") or (self.PlayStateKey and self:PlayStateKey() or "")
+	if phase == "results"
+		and not self:CurrentUserHasFinalResult(self.currentRoom)
+		and tostring(self.lastFinalScoreKey or "") ~= tostring(roundKey or "") then
+		local now = GetTimeSinceStart()
+		if tostring(self.lastFinalScoreInFlightKey or "") == tostring(roundKey or "")
+			or tostring(self.onlineGameplayEvaluationGuardInFlightKey or "") == tostring(roundKey or "") then
+			online_flow_trace_throttled("evaluation_guard_final_inflight", 1.0,
+				"evaluation_guard_hold reason=final_score_inflight"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. tostring(roundKey or "")
+				.. " lastFinalScoreInFlightKey=" .. tostring(self.lastFinalScoreInFlightKey or "")
+				.. " guardInFlightKey=" .. tostring(self.onlineGameplayEvaluationGuardInFlightKey or ""))
+			return true
+		end
+
+		if now < (tonumber(self.onlineGameplayEvaluationGuardNextAttemptAt) or 0) then
+			online_flow_trace_throttled("evaluation_guard_backoff", 1.0,
+				"evaluation_guard_hold reason=retry_backoff"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. tostring(roundKey or "")
+				.. " retryIn=" .. tostring((tonumber(self.onlineGameplayEvaluationGuardNextAttemptAt) or 0) - now))
+			return true
+		end
+
+		if not self.SendScore then
+			online_flow_trace("evaluation_guard_hold reason=no_send_score_api"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. tostring(roundKey or ""))
+			return true
+		end
+
+		self.onlineGameplayEvaluationGuardInFlightKey = roundKey
+		self.onlineGameplayEvaluationGuardNextAttemptAt = now + 1.0
+		online_flow_trace("evaluation_guard_final_score_submit"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " roundKey=" .. tostring(roundKey or "")
+			.. " phase=" .. tostring(phase)
+			.. " screen=" .. tostring(screenName)
+			.. " hasDisplayedSnapshot=" .. tostring(self.lastDisplayedScoreSnapshot ~= nil))
+
+		self:SendScore(true, true, nil, function(ok, decoded, response)
+			if tostring(self.onlineGameplayEvaluationGuardInFlightKey or "") == tostring(roundKey or "") then
+				self.onlineGameplayEvaluationGuardInFlightKey = ""
+			end
+
+			if ok then
+				self.lastFinalScoreKey = roundKey
+				self.onlineGameplayEvaluationGuardNextAttemptAt = 0
+				online_flow_trace("evaluation_guard_final_score_accepted"
+					.. " room=" .. tostring(self.currentRoomId or "nil")
+					.. " roundKey=" .. tostring(roundKey or "")
+					.. " status=" .. tostring(response and response.statusCode or "nil"))
+				if self.FetchPlayState then self:FetchPlayState() end
+				return
+			end
+
+			self.onlineGameplayEvaluationGuardNextAttemptAt = GetTimeSinceStart() + 1.0
+			online_flow_trace("evaluation_guard_final_score_rejected"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. tostring(roundKey or "")
+				.. " status=" .. tostring(response and response.statusCode or "nil")
+				.. " errorCode=" .. tostring(response_error_code(response, decoded) or "nil")
+				.. " message=" .. tostring(response_message(response, decoded, "final score rejected")))
+			if self.FetchPlayState then self:FetchPlayState() end
+		end)
+
+		return true
+	end
 
 	self:MarkGameplayCompleteForEvaluation("engine_hold")
 	local waiting = self:ShouldWaitForOnlineResults()
 	local summary = self:PlayStateSummary()
-	local roundKey = self.PlayStateKey and self:PlayStateKey() or ""
 	local validRoundKey = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)
 	local now = GetTimeSinceStart()
 	local minimumVisibleHoldSeconds = 2.25

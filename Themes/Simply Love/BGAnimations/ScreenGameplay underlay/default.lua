@@ -41,7 +41,14 @@ local function online_gameplay_should_route_to_evaluation()
 	local topScreen = SCREENMAN:GetTopScreen()
 	if not topScreen then return false end
 	if ITGOnline.IsOnlineGameplayScreen and not ITGOnline:IsOnlineGameplayScreen(topScreen:GetName()) then return false end
-	if ITGOnline.ShouldHoldGameplayForEvaluation and ITGOnline:ShouldHoldGameplayForEvaluation() then return false end
+	if ITGOnline.ShouldHoldGameplayForEvaluation and ITGOnline:ShouldHoldGameplayForEvaluation() then
+		if Trace then
+			Trace("ITG Online: FLOW gameplay_evaluation_transition_held reason=awaiting_local_final_score room="
+				.. tostring(ITGOnline.currentRoomId or "nil")
+				.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+		end
+		return false
+	end
 	return true
 end
 
@@ -162,7 +169,9 @@ t[#t+1] = Def.ActorFrame{
 			return
 		end
 
-		local seconds = ITGOnline:SecondsUntilScheduledStart()
+		local seconds = ITGOnline.VisibleSecondsUntilScheduledStart
+			and ITGOnline:VisibleSecondsUntilScheduledStart()
+			or ITGOnline:SecondsUntilScheduledStart()
 		if not seconds or seconds <= 0 then
 			self:visible(false)
 			self:sleep(0.1):queuecommand("RefreshCountdown")
