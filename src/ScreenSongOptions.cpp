@@ -1,39 +1,197 @@
 #include "ScreenSongOptions.h"
 
+#include <array>
+#include <string>
 #include <vector>
 
-#include "GameConstantsAndTypes.h"
 #include "GameState.h"
-#include "PlayerNumber.h"
 #include "PlayerState.h"
 #include "PrefsManager.h"
-#include "Screen.h"
+#include "RageLog.h"
 #include "ScreenOptionsMaster.h"
 #include "ThemeManager.h"
+
+namespace {
+const char* SCREEN_NAME = "ScreenSongOptions";
+const char* OPTION_IN = "option in";
+
+bool HasLoadedTheme() { return THEME != nullptr && THEME->IsThemeLoaded(); }
+
+bool IsValidPlayerNumberForSongOptions(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+bool ContainsPlayer(const std::vector<PlayerNumber>& players, PlayerNumber pn) {
+  for (const PlayerNumber player : players) {
+    if (player == pn) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool AddExportPlayer(std::vector<PlayerNumber>& players, PlayerNumber pn) {
+  if (!IsValidPlayerNumberForSongOptions(pn)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1711: ScreenSongOptions ignored invalid player "
+          "%d while exporting options.",
+          static_cast<int>(pn));
+    }
+    return false;
+  }
+
+  if (GAMESTATE == nullptr || GAMESTATE->m_pPlayerState[pn] == nullptr) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1712: ScreenSongOptions ignored player %d with "
+          "missing PlayerState.",
+          static_cast<int>(pn));
+    }
+    return false;
+  }
+
+  if (!ContainsPlayer(players, pn)) {
+    players.push_back(pn);
+  }
+  return true;
+}
+
+struct FailTypeSnapshot {
+  bool valid = false;
+  FailType preferred = FailType_Invalid;
+  FailType stage = FailType_Invalid;
+  FailType song = FailType_Invalid;
+  FailType current = FailType_Invalid;
+};
+
+FailTypeSnapshot CaptureFailTypes(PlayerNumber pn) {
+  FailTypeSnapshot snapshot;
+  if (!IsValidPlayerNumberForSongOptions(pn) || GAMESTATE == nullptr ||
+      GAMESTATE->m_pPlayerState[pn] == nullptr) {
+    return snapshot;
+  }
+
+  const auto& options = GAMESTATE->m_pPlayerState[pn]->m_PlayerOptions;
+  snapshot.valid = true;
+  snapshot.preferred = options.GetPreferred().m_FailType;
+  snapshot.stage = options.GetStage().m_FailType;
+  snapshot.song = options.GetSong().m_FailType;
+  snapshot.current = options.GetCurrent().m_FailType;
+  return snapshot;
+}
+
+bool FailTypeChanged(PlayerNumber pn, const FailTypeSnapshot& before) {
+  if (!before.valid || !IsValidPlayerNumberForSongOptions(pn) ||
+      GAMESTATE == nullptr || GAMESTATE->m_pPlayerState[pn] == nullptr) {
+    return false;
+  }
+
+  const auto& options = GAMESTATE->m_pPlayerState[pn]->m_PlayerOptions;
+  return before.preferred != options.GetPreferred().m_FailType ||
+         before.stage != options.GetStage().m_FailType ||
+         before.song != options.GetSong().m_FailType ||
+         before.current != options.GetCurrent().m_FailType;
+}
+}  // namespace
 
 REGISTER_SCREEN_CLASS(ScreenSongOptions);
 
 void ScreenSongOptions::Init() {
   ScreenOptionsMaster::Init();
 
-  /* Hack: If we're coming in from "press start for more options", we need a
-   * different fade in. */
-  if (PREFSMAN->m_ShowSongOptions == Maybe_ASK) {
-    m_In.Load(THEME->GetPathB("ScreenSongOptions", "option in"));
-    m_In.StartTransitioning();
+  if (PREFSMAN == nullptr) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1706: ScreenSongOptions has no PrefsManager; "
+          "using the parent transition.");
+    }
+    return;
   }
+
+  if (PREFSMAN->m_ShowSongOptions != Maybe_ASK) {
+    return;
+  }
+
+  if (!HasLoadedTheme()) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1707: ScreenSongOptions has no loaded theme; "
+          "using the parent transition.");
+    }
+    return;
+  }
+
+  // This fade is optional and should never replace the normal screen
+  // transition unless the active theme explicitly provides it.
+  if (!THEME->HasMetric(SCREEN_NAME, OPTION_IN)) {
+    return;
+  }
+
+  const std::string optionInPath = THEME->GetPathB(SCREEN_NAME, OPTION_IN, true);
+  if (optionInPath.empty()) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1708: ScreenSongOptions option-in transition is "
+          "declared but missing; using the parent transition.");
+    }
+    return;
+  }
+
+  m_In.Load(optionInPath);
 }
 
 void ScreenSongOptions::ExportOptions(
     int iRow, const std::vector<PlayerNumber>& vpns) {
-  PlayerNumber pn = GAMESTATE->GetMasterPlayerNumber();
-  PlayerState* pPS = GAMESTATE->m_pPlayerState[pn];
-  const FailType ft = pPS->m_PlayerOptions.GetPreferred().m_FailType;
+  if (GAMESTATE == nullptr) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1710: ScreenSongOptions cannot export without "
+          "GameState.");
+    }
+    return;
+  }
 
-  ScreenOptionsMaster::ExportOptions(iRow, vpns);
+  if (iRow < 0 || iRow >= GetNumRows() || GetRow(iRow) == nullptr) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1715: ScreenSongOptions ignored invalid row %d "
+          "while exporting options.",
+          iRow);
+    }
+    return;
+  }
 
-  if (ft != pPS->m_PlayerOptions.GetPreferred().m_FailType) {
-    GAMESTATE->m_bFailTypeWasExplicitlySet = true;
+  std::vector<PlayerNumber> exportPlayers;
+  for (const PlayerNumber pn : vpns) {
+    AddExportPlayer(exportPlayers, pn);
+  }
+
+  const PlayerNumber masterPlayer = GAMESTATE->GetMasterPlayerNumber();
+  if (exportPlayers.empty()) {
+    AddExportPlayer(exportPlayers, masterPlayer);
+  }
+
+  std::array<FailTypeSnapshot, NUM_PLAYERS> before;
+  for (const PlayerNumber pn : exportPlayers) {
+    before[pn] = CaptureFailTypes(pn);
+  }
+  if (IsValidPlayerNumberForSongOptions(masterPlayer) &&
+      !ContainsPlayer(exportPlayers, masterPlayer)) {
+    before[masterPlayer] = CaptureFailTypes(masterPlayer);
+  }
+
+  ScreenOptionsMaster::ExportOptions(iRow, exportPlayers);
+
+  if (GAMESTATE == nullptr) {
+    return;
+  }
+
+  for (PlayerNumber pn = PLAYER_1; pn < NUM_PLAYERS; enum_add(pn, 1)) {
+    if (FailTypeChanged(pn, before[pn])) {
+      GAMESTATE->m_bFailTypeWasExplicitlySet = true;
+      break;
+    }
   }
 }
 
