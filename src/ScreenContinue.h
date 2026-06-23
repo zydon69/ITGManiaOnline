@@ -4,23 +4,27 @@
 #ifndef ScreenContinue_H
 #define ScreenContinue_H
 
-#include "InputQueue.h"
-#include "MessageManager.h"
-#include "ScreenMessage.h"
 #include "ScreenWithMenuElements.h"
 #include "ThemeMetric.h"
 
+class InputEventPlus;
+struct Message;
+
 class ScreenContinue : public ScreenWithMenuElementsSimple {
  public:
-  virtual void Init();
+  void Init() override;
 
-  virtual void BeginScreen();
-  virtual bool Input(const InputEventPlus& input);
-  virtual void HandleScreenMessage(const ScreenMessage SM);
-  virtual void HandleMessage(const Message& msg);
-  virtual bool AllowLateJoin() const { return true; }
+  void BeginScreen() override;
+  bool Input(const InputEventPlus& input) override;
+  void HandleScreenMessage(const ScreenMessage SM) override;
+  void HandleMessage(const Message& msg) override;
+  bool AllowLateJoin() const override { return true; }
 
  private:
+  bool AreAllPlayerSidesJoined() const;
+  bool IsForceTimerWaitEnabled() const;
+  bool IsPlayerJoinedMessageUsable(const Message& msg) const;
+
   ThemeMetric<bool> FORCE_TIMER_WAIT;
 };
 

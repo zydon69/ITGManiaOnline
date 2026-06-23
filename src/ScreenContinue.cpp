@@ -7,27 +7,58 @@
 #include "GameInput.h"
 #include "GameState.h"
 #include "InputEventPlus.h"
-#include "InputFilter.h"
+#include "LuaManager.h"
 #include "MemoryCardManager.h"
 #include "MenuTimer.h"
 #include "MessageManager.h"
 #include "PlayerNumber.h"
+#include "RageLog.h"
 #include "Screen.h"
 #include "ScreenManager.h"
 #include "ScreenMessage.h"
 #include "ScreenWithMenuElements.h"
+#include "ThemeManager.h"
+
+namespace {
+void WarnScreenContinue(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX ScreenContinue: %s", message);
+  }
+}
+
+bool IsValidContinuePlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+}  // namespace
 
 REGISTER_SCREEN_CLASS(ScreenContinue);
 
 void ScreenContinue::Init() {
   ScreenWithMenuElementsSimple::Init();
 
-  this->SubscribeToMessage(Message_PlayerJoined);
+  if (MESSAGEMAN != nullptr &&
+      !MESSAGEMAN->IsSubscribedToMessage(this, Message_PlayerJoined)) {
+    this->SubscribeToMessage(Message_PlayerJoined);
+  } else if (MESSAGEMAN == nullptr) {
+    WarnScreenContinue("skipped PlayerJoined subscription without MESSAGEMAN.");
+  }
 
-  FORCE_TIMER_WAIT.Load(m_sName, "ForceTimerWait");
+  if (THEME != nullptr && THEME->IsThemeLoaded() && LUA != nullptr) {
+    FORCE_TIMER_WAIT.Load(m_sName, "ForceTimerWait");
+  } else {
+    FORCE_TIMER_WAIT.Clear();
+    WarnScreenContinue("ForceTimerWait metric unavailable during Init.");
+  }
 }
 
 void ScreenContinue::BeginScreen() {
+  if (GAMESTATE == nullptr) {
+    WarnScreenContinue(
+        "BeginScreen skipped game-state cleanup without GAMESTATE.");
+    ScreenWithMenuElementsSimple::BeginScreen();
+    return;
+  }
+
   GAMESTATE->SetCurrentStyle(nullptr, PLAYER_INVALID);
 
   // Unjoin human players with 0 stages left and reset non-human players.
@@ -38,8 +69,12 @@ void ScreenContinue::BeginScreen() {
     if (GAMESTATE->IsHumanPlayer(p)) {
       bool bPlayerDone = GAMESTATE->m_iPlayerStageTokens[p] <= 0;
       if (bPlayerDone) {
+        if (MEMCARDMAN != nullptr) {
+          MEMCARDMAN->UnlockCard(p);
+        } else {
+          WarnScreenContinue("could not unlock memory card without MEMCARDMAN.");
+        }
         GAMESTATE->UnjoinPlayer(p);
-        MEMCARDMAN->UnlockCard(p);
       }
     } else {
       GAMESTATE->ResetPlayer(p);
@@ -50,21 +85,22 @@ void ScreenContinue::BeginScreen() {
 }
 
 bool ScreenContinue::Input(const InputEventPlus& input) {
+  if (IsTransitioning()) {
+    return true;
+  }
+
   if (input.MenuI == GAME_BUTTON_COIN && input.type == IET_FIRST_PRESS) {
     ResetTimer();
   }
 
   if (input.MenuI == GAME_BUTTON_START && input.type == IET_FIRST_PRESS &&
-      GAMESTATE->JoinInput(input.pn)) {
+      GAMESTATE != nullptr && GAMESTATE->JoinInput(input.pn)) {
     return true;  // handled
   }
 
-  if (IsTransitioning()) {
-    return true;
-  }
-
-  if (input.type == IET_FIRST_PRESS && GAMESTATE->IsHumanPlayer(input.pn) &&
-      FORCE_TIMER_WAIT) {
+  if (input.type == IET_FIRST_PRESS && GAMESTATE != nullptr &&
+      GAMESTATE->IsHumanPlayer(input.pn) && IsForceTimerWaitEnabled() &&
+      m_MenuTimer != nullptr) {
     switch (input.MenuI) {
       case GAME_BUTTON_START:
       case GAME_BUTTON_UP:
@@ -82,6 +118,10 @@ bool ScreenContinue::Input(const InputEventPlus& input) {
       default:
         break;
     }
+  } else if (
+      input.type == IET_FIRST_PRESS && IsForceTimerWaitEnabled() &&
+      m_MenuTimer == nullptr) {
+    WarnScreenContinue("ignored ForceTimerWait input without menu timer.");
   }
 
   return ScreenWithMenuElementsSimple::Input(input);
@@ -100,17 +140,16 @@ void ScreenContinue::HandleScreenMessage(const ScreenMessage SM) {
 
 void ScreenContinue::HandleMessage(const Message& msg) {
   if (msg == Message_PlayerJoined) {
-    ResetTimer();
-
-    bool bAllPlayersAreEnabled = true;
-    FOREACH_ENUM(PlayerNumber, p) {
-      if (!GAMESTATE->IsPlayerEnabled(p)) {
-        bAllPlayersAreEnabled = false;
-      }
+    if (!IsPlayerJoinedMessageUsable(msg)) {
+      WarnScreenContinue("ignored malformed PlayerJoined message.");
+      ScreenWithMenuElementsSimple::HandleMessage(msg);
+      return;
     }
 
-    if (bAllPlayersAreEnabled) {
-      m_MenuTimer->Stop();
+    ResetTimer();
+
+    if (AreAllPlayerSidesJoined()) {
+      StopTimer();
       if (!IsTransitioning()) {
         StartTransitioningScreen(SM_GoToNextScreen);
       }
@@ -118,6 +157,38 @@ void ScreenContinue::HandleMessage(const Message& msg) {
   }
 
   ScreenWithMenuElementsSimple::HandleMessage(msg);
+}
+
+bool ScreenContinue::AreAllPlayerSidesJoined() const {
+  if (GAMESTATE == nullptr) {
+    return false;
+  }
+
+  FOREACH_ENUM(PlayerNumber, p) {
+    if (!GAMESTATE->m_bSideIsJoined[p]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ScreenContinue::IsForceTimerWaitEnabled() const {
+  if (!FORCE_TIMER_WAIT.IsLoaded() || LUA == nullptr) {
+    return false;
+  }
+  return FORCE_TIMER_WAIT.GetValue();
+}
+
+bool ScreenContinue::IsPlayerJoinedMessageUsable(const Message& msg) const {
+  if (GAMESTATE == nullptr || LUA == nullptr) {
+    return false;
+  }
+
+  PlayerNumber pn = PLAYER_INVALID;
+  if (!msg.GetParam("Player", pn) || !IsValidContinuePlayer(pn)) {
+    return false;
+  }
+  return GAMESTATE->m_bSideIsJoined[pn];
 }
 
 /*
