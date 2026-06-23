@@ -314,6 +314,24 @@ local Overrides = {
 		end,
 		ExportOnChange = true,
 		OneChoiceForAllPlayers = true,
+		HideOnDisable = true,
+		EnabledForPlayers = function()
+			if ITGOnline and ITGOnline.currentRoomId and ITGOnline.currentRoom and ITGOnline.user then
+				local manager = ITGOnline.currentRoom.manager or {}
+				local managerId = tostring(manager.id or ITGOnline.currentRoom.manager_id or ITGOnline.currentRoom.managerId or "")
+				local userId = tostring(ITGOnline.user.id or "")
+				if managerId ~= "" and userId ~= "" and managerId ~= userId then
+					if online_flow_trace then
+						online_flow_trace("player_options_music_rate_hidden reason=online_non_manager"
+							.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+							.. " manager=" .. tostring(managerId)
+							.. " user=" .. tostring(userId))
+					end
+					return {}
+				end
+			end
+			return {PLAYER_1, PLAYER_2}
+		end,
 		LoadSelections = function(self, list, pn)
 			local rate = ("%g"):format( SL.Global.ActiveModifiers.MusicRate )
 			local i = FindInTable(rate, self.Choices) or 1

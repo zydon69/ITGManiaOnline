@@ -31,6 +31,76 @@ stop_music = function()
 	SOUND:PlayMusicPart("", 0, 0)
 end
 
+local function online_preview_trim(value)
+	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function online_preview_song_path(songInfo)
+	if type(songInfo) ~= "table" then return "" end
+	return online_preview_trim(songInfo.songPath
+		or songInfo.song_path
+		or songInfo.path
+		or songInfo.folder
+		or songInfo.folder_name)
+end
+
+local function online_preview_find_song(songInfo)
+	if not (SONGMAN and SONGMAN.FindSong) then return nil end
+	local songPath = online_preview_song_path(songInfo)
+	if songPath == "" then return nil end
+
+	local song = SONGMAN:FindSong(songPath)
+	if song then return song end
+
+	local relative = songPath:match("^[^/]+/(.+)$")
+	if relative then
+		song = SONGMAN:FindSong(relative)
+		if song then return song end
+	end
+
+	local pack = online_preview_trim(songInfo.pack or songInfo.group or songInfo.group_name)
+	local title = online_preview_trim(songInfo.title or songInfo.song or songInfo.name or songInfo.folder_name)
+	if pack ~= "" and title ~= "" then
+		return SONGMAN:FindSong(pack .. "/" .. title)
+	end
+
+	return nil
+end
+
+play_online_preview_music_normal_rate = function(songInfo, source)
+	if GAMESTATE:IsCourseMode() then return false end
+	if not (SOUND and THEME) then return false end
+
+	local song = online_preview_find_song(songInfo)
+	if not song then
+		if online_flow_trace then
+			online_flow_trace("online_preview_music_skipped reason=local_song_missing"
+				.. " source=" .. tostring(source or "unknown")
+				.. " path=" .. tostring(online_preview_song_path(songInfo)))
+		end
+		return false
+	end
+
+	local songpath = song:GetMusicPath()
+	local sample_start = song:GetSampleStart()
+	local sample_len = song:GetSampleLength()
+	if not (songpath and sample_start and sample_len) then
+		stop_music()
+		return false
+	end
+
+	if online_flow_trace then
+		online_flow_trace("online_preview_music_play_normal_rate"
+			.. " source=" .. tostring(source or "unknown")
+			.. " path=" .. tostring(songpath)
+			.. " sampleStart=" .. tostring(sample_start)
+			.. " sampleLen=" .. tostring(sample_len))
+	end
+	SOUND:DimMusic(PREFSMAN:GetPreference("SoundVolume"), math.huge)
+	SOUND:PlayMusicPart(songpath, sample_start, sample_len, 0.5, 1.5, ThemePrefs.Get("SampleMusicLoops"), true)
+	return true
+end
+
 
 ----------------------------------------------------------------------------------------
 -- functions used by ScreenSelectMusic

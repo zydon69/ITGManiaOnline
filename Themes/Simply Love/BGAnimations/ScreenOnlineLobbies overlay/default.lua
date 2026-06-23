@@ -61,6 +61,7 @@ local last_online_lobby_state_signature = ""
 local last_online_lobby_state_signature_at = 0
 local last_pack_sync_local_status_signature = ""
 local last_pack_sync_local_status_at = 0
+local online_warning_countdown_last_second = {}
 
 local mode = "browse"
 local joined_active_index = 1
@@ -301,6 +302,31 @@ function play_online_sound_once(screenName, soundName, minInterval)
 
 	online_sound_last_played_at[key] = now
 	SOUND:PlayOnce(THEME:GetPathS(screenName, soundName))
+end
+
+local function play_online_warning_countdown_tick(countdownKey, remainingSeconds)
+	local second = tonumber(remainingSeconds)
+	if not second then return end
+	second = math.ceil(second)
+	countdownKey = tostring(countdownKey or "")
+	if countdownKey == "" then return end
+
+	if second < 1 or second > 5 then
+		online_warning_countdown_last_second[countdownKey] = nil
+		return
+	end
+	if online_warning_countdown_last_second[countdownKey] == second then
+		return
+	end
+
+	online_warning_countdown_last_second[countdownKey] = second
+	if lobby_flow_trace then
+		lobby_flow_trace("warning_countdown_tick source=pack_sync_kick"
+			.. " key=" .. tostring(countdownKey)
+			.. " remaining=" .. tostring(second)
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+	end
+	SOUND:PlayOnce(THEME:GetPathS("MenuTimer", "tick"))
 end
 
 function ScreenOnlineLobbiesApplyCurrentRoomSnapshot(root, reason)
@@ -2033,6 +2059,11 @@ local function pack_sync_line_for_player(player)
 	if player_missing_song_for_ui(player) then
 		if status == "local_chart_match_found" or songAvailable then
 			return "Pack KO / chart compatible trouvée"
+		end
+		local remaining = pack_sync_countdown_seconds_for_player(player)
+		if remaining ~= nil then
+			play_online_warning_countdown_tick("pack_sync_kick:" .. tostring(player.playerId or ""), remaining)
+			return "Expulse dans " .. tostring(math.ceil(remaining)) .. " sec"
 		end
 			if reason == "missing_local_song"
 				or reason == "no_compatible_chart_found"
@@ -5018,6 +5049,9 @@ end,
 			if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ManagerBrowsingPreview then
 				lobby_flow_trace("OnlineSongPreview_manager_browsing_preview")
 				ITGOnline.PackSync:ManagerBrowsingPreview(preview)
+			end
+			if play_online_preview_music_normal_rate then
+				play_online_preview_music_normal_rate(preview, "online_lobby_song_preview")
 			end
 			self:queuecommand("UpdateJoinedLobbyText")
 		else

@@ -12,6 +12,28 @@ end
 
 local OPTIONS_READY_TIMEOUT_SECONDS = 30
 local online_options_screen_name = nil
+local last_online_options_warning_second = nil
+
+local function play_online_options_warning_tick(remaining)
+	local second = tonumber(remaining)
+	if not second then return end
+	second = math.ceil(second)
+
+	if second < 1 or second > 5 then
+		last_online_options_warning_second = nil
+		return
+	end
+	if last_online_options_warning_second == second then
+		return
+	end
+
+	last_online_options_warning_second = second
+	if Trace then
+		Trace("[ITGOnline] options_ready_warning_tick remaining=" .. tostring(second)
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+	end
+	SOUND:PlayOnce(THEME:GetPathS("MenuTimer", "tick"))
+end
 
 local function online_options_timeout_active()
 	return ITGOnline
@@ -29,6 +51,21 @@ local function return_to_online_lobby()
 	screen:StartTransitioningScreen("SM_GoToNextScreen")
 end
 
+local function play_online_options_preview_music(source)
+	if not (ITGOnline and ITGOnline.currentRoom and play_online_preview_music_normal_rate) then
+		return
+	end
+	local phase = ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) or tostring(ITGOnline.currentRoom.phase or "")
+	if phase ~= "config" and phase ~= "lobby_ready" then
+		return
+	end
+	local songInfo = ITGOnline.currentRoom.selected_song or ITGOnline.currentSongPayload
+	if type(songInfo) ~= "table" then
+		return
+	end
+	play_online_preview_music_normal_rate(songInfo, source or "screen_player_options")
+end
+
 local af = Def.ActorFrame{
 	OnCommand=function(self)
 		local screen = SCREENMAN:GetTopScreen()
@@ -39,15 +76,18 @@ local af = Def.ActorFrame{
 			SL.Global.ScreenAfter.PlayerOptions3 = "ScreenOnlineLobbies"
 		end
 		if ITGOnline and ITGOnline.BeginOnlineOptionsReadyDeadline and online_options_timeout_active() then
+			last_online_options_warning_second = nil
 			ITGOnline:BeginOnlineOptionsReadyDeadline(OPTIONS_READY_TIMEOUT_SECONDS, "screen_player_options")
 			self:queuecommand("UpdateOptionsReadyTimer")
 		end
+		play_online_options_preview_music("screen_player_options_on")
 	end,
 	OnlineLobbyStateMessageCommand=function(self)
 		if ITGOnline and ITGOnline.BeginOnlineOptionsReadyDeadline and online_options_timeout_active() then
 			ITGOnline:BeginOnlineOptionsReadyDeadline(OPTIONS_READY_TIMEOUT_SECONDS, "screen_player_options_state")
 			self:queuecommand("UpdateOptionsReadyTimer")
 		end
+		play_online_options_preview_music("screen_player_options_state")
 	end,
 	OffCommand=function(self)
 		if not (ITGOnline and ITGOnline.currentRoomId) then
@@ -74,17 +114,20 @@ local af = Def.ActorFrame{
 		if not timer then return end
 
 		if not (ITGOnline and ITGOnline.OnlineOptionsReadyRemaining and online_options_timeout_active()) then
+			last_online_options_warning_second = nil
 			timer:visible(false)
 			return
 		end
 
 		local remaining = ITGOnline:OnlineOptionsReadyRemaining()
 		if remaining == nil then
+			last_online_options_warning_second = nil
 			timer:visible(false)
 			return
 		end
 
 		if remaining <= 0 then
+			last_online_options_warning_second = nil
 			timer:visible(true)
 			timer:settext("Options timeout")
 			if ITGOnline.ExpireOnlineOptionsReady then
@@ -98,6 +141,7 @@ local af = Def.ActorFrame{
 		end
 
 		timer:visible(true)
+		play_online_options_warning_tick(remaining)
 		timer:settext(("Ready in %02ds or leave lobby"):format(math.ceil(remaining)))
 		self:sleep(0.25):queuecommand("UpdateOptionsReadyTimer")
 	end,
