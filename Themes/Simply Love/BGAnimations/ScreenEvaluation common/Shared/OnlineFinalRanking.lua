@@ -24,6 +24,11 @@ local function final_ranking_trace(message)
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
 
+local function has_final_ranking_context()
+	if not ITGOnline then return false end
+	return ITGOnline.currentRoom ~= nil or ITGOnline.currentRoomId ~= nil
+end
+
 local function final_results()
 	local results = nil
 	local source = "current_room"
@@ -130,15 +135,25 @@ local t = Def.ActorFrame{
 		self:queuecommand("Refresh")
 	end,
 	OnlineLobbyStateMessageCommand=function(self)
-		final_ranking_trace("message_online_lobby_state")
+		if has_final_ranking_context() then
+			final_ranking_trace("message_online_lobby_state")
+		end
 		self:queuecommand("Refresh")
 	end,
 	ITGOnlinePlayStateUpdatedMessageCommand=function(self)
-		final_ranking_trace("message_play_state_updated")
+		if has_final_ranking_context() then
+			final_ranking_trace("message_play_state_updated")
+		end
 		self:queuecommand("Refresh")
 	end,
 	RefreshCommand=function(self)
 		self:stoptweening()
+		if not has_final_ranking_context() then
+			self:visible(false)
+			self.polling_active = false
+			self.lastFinalRankingSignature = ""
+			return
+		end
 		local rows = final_results()
 		local show = #rows > 0
 		local signature = final_results_signature(rows)

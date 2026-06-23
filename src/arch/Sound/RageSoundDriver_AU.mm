@@ -288,7 +288,11 @@ float RageSoundDriver_AU::GetPlayLatency() const {
   size = sizeof(UInt32);
   if ((error =
            AudioObjectGetPropertyData(OutputDevice, &LatencyAddr, 0, nullptr, &size, &frames))) {
-    LOG->Warn("Couldn't get device latency: %s", FormatOSError(error));
+    static bool s_warnedDeviceLatencyUnavailable = false;
+    if (!s_warnedDeviceLatencyUnavailable) {
+      LOG->Warn("Couldn't get device latency: %s", FormatOSError(error));
+      s_warnedDeviceLatencyUnavailable = true;
+    }
     frames = 0;
   }
 

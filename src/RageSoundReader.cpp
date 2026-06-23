@@ -41,7 +41,23 @@ int RageSoundReader::RetriedRead(
   }
 
   if (LOG != nullptr) {
-    LOG->Warn("WARNING: could not read from the sound file. Giving up.");
+    std::string sourcePath = this->GetSourcePath();
+    if (sourcePath.empty()) {
+      sourcePath = "<unknown>";
+    }
+
+    std::string error = this->GetError();
+    if (error.empty()) {
+      LOG->Warn(
+          "RageSoundReader could not read from sound file '%s'; giving up "
+          "after retries.",
+          sourcePath.c_str());
+    } else {
+      LOG->Warn(
+          "RageSoundReader could not read from sound file '%s'; giving up "
+          "after retries. Last error: %s",
+          sourcePath.c_str(), error.c_str());
+    }
   }
 
   // Pretend we got EOF.

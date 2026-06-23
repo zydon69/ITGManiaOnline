@@ -99,6 +99,10 @@ RageSoundReader_FileReader* RageSoundReader_FileReader::TryOpenFile(
 
 #include "RageFileDriverMemory.h"
 
+std::string RageSoundReader_FileReader::GetSourcePath() const {
+  return m_pFile.isNull() ? std::string() : m_pFile->GetDisplayPath();
+}
+
 RageSoundReader_FileReader* RageSoundReader_FileReader::OpenFile(
     std::string filename, std::string& error, bool* pPrebuffer) {
   HiddenPtr<RageFileBasic> pFile;

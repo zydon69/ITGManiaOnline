@@ -20,6 +20,7 @@ class RageSoundReader {
     return false;
   }
   virtual RageSoundReader* GetSource() { return nullptr; }
+  virtual std::string GetSourcePath() const { return std::string(); }
 
   /* Return values for Read(). */
   enum {

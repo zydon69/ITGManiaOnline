@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <set>
 #include <string>
 
 #include "ActorUtil.h"
@@ -74,6 +75,18 @@ void WarnImageCacheAuditFix(const std::string& message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message.c_str());
   }
+}
+
+void TraceMissingImageDimensionsOnce(const std::string& imagePath) {
+  static std::set<std::string> s_missingDimensionPaths;
+  if (LOG == nullptr || !s_missingDimensionPaths.insert(imagePath).second) {
+    return;
+  }
+
+  LOG->Trace(
+      "Image cache metadata for '%s' is missing dimensions; using the "
+      "original texture path.",
+      imagePath.c_str());
 }
 
 bool IsValidCachedSurface(const RageSurface* pImage) {
@@ -480,12 +493,7 @@ RageTextureID ImageCache::LoadCachedImage(
   ImageData.GetValue(sImagePath, "Width", iSourceWidth);
   ImageData.GetValue(sImagePath, "Height", iSourceHeight);
   if (iSourceWidth == 0 || iSourceHeight == 0) {
-    if (LOG != nullptr) {
-      LOG->Trace(
-          "Image cache metadata for '%s' is missing dimensions; using the "
-          "original texture path.",
-          sImagePath.c_str());
-    }
+    TraceMissingImageDimensionsOnce(sImagePath);
     return ID;
   }
   if (TEXTUREMAN == nullptr) {
