@@ -52,7 +52,7 @@ end
 
 local function prepare_lower_score(actor)
 	if actor then
-		actor:zoomx(0.34):zoomy(0.34)
+		actor:zoomx(0.25):zoomy(0.25)
 	end
 end
 
