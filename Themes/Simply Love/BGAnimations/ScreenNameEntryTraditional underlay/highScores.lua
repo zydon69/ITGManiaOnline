@@ -2,18 +2,19 @@ local player = ...
 local pn = ToEnumShortString(player)
 
 -- get the number of stages that were played
-local NumStages = SL.Global.Stages.PlayedThisGame
+local NumStages = SL.Global.Stages.PlayedThisGame or 0
 local durationPerSong = 4
 
 local af = Def.ActorFrame{}
 
 for i=1,NumStages do
 	local StepsOrTrail
-	local SongOrCourse = SL.Global.Stages.Stats[i].song
+	local globalStageStats = SL.Global.Stages.Stats and SL.Global.Stages.Stats[i] or nil
+	local SongOrCourse = globalStageStats and globalStageStats.song or nil
 	local stats = SL[pn].Stages.Stats[i]
 
 	-- stats might exist for one player but not the other due to latejoin
-	if stats then
+	if stats and globalStageStats then
 		StepsOrTrail = stats.steps
 
 		local args = { Player=player, RoundsAgo=(NumStages-(i-1)), SongOrCourse=SongOrCourse, StepsOrTrail=StepsOrTrail }

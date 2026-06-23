@@ -52,3 +52,17 @@ end
 function LightenColor(c)
 	return { c[1]*1.25, c[2]*1.25, c[3]*1.25, c[4] }
 end
+
+function BlendColors(c1, c2, ratio)
+	ratio = type(ratio) == "number" and clamp(ratio, 0, 1) or 0.5
+
+	c1 = c1 or Color.White
+	c2 = c2 or Color.White
+
+	return {
+		c1[1] * (1 - ratio) + c2[1] * ratio,
+		c1[2] * (1 - ratio) + c2[2] * ratio,
+		c1[3] * (1 - ratio) + c2[3] * ratio,
+		(c1[4] or 1) * (1 - ratio) + (c2[4] or 1) * ratio
+	}
+end

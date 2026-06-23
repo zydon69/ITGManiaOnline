@@ -3,7 +3,7 @@ local Players = GAMESTATE:GetHumanPlayers()
 
 ---------------------------------------------------------------------------
 -- The number of stages that were played this game cycle
-local NumStages = SL.Global.Stages.PlayedThisGame
+local NumStages = SL.Global.Stages.PlayedThisGame or 0
 -- The duration (in seconds) each stage should display onscreen before cycling to the next
 local DurationPerStage = 4
 ---------------------------------------------------------------------------
@@ -123,7 +123,8 @@ t[#t+1] = Def.ActorFrame {
 -- Banner(s) and Title(s)
 for i=1,NumStages do
 
-	local SongOrCourse = SL.Global.Stages.Stats[i].song
+	local stageStats = SL.Global.Stages.Stats and SL.Global.Stages.Stats[i] or nil
+	local SongOrCourse = stageStats and stageStats.song or nil
 
 	-- Create an ActorFrame for each (Name + Banner) pair
 	-- so that we can display/hide all children simultaneously.
@@ -173,7 +174,9 @@ for i=1,NumStages do
 	}
 
 	-- add each SongNameAndBanner ActorFrame to the primary ActorFrame
-	t[#t+1] = SongNameAndBanner
+	if stageStats then
+		t[#t+1] = SongNameAndBanner
+	end
 end
 
 
