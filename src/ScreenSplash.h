@@ -3,23 +3,30 @@
 #ifndef ScreenSplash_H
 #define ScreenSplash_H
 
-#include "InputQueue.h"
-#include "ScreenMessage.h"
 #include "ScreenWithMenuElements.h"
-#include "ThemeMetric.h"
+
+#include <string>
 
 class ScreenSplash : public ScreenWithMenuElements {
  public:
-  virtual void Init();
-  virtual void BeginScreen();
+  void Init() override;
+  void BeginScreen() override;
 
-  virtual void HandleScreenMessage(const ScreenMessage SM);
-  virtual bool MenuBack(const InputEventPlus& input);
-  virtual bool MenuStart(const InputEventPlus& input);
+  void HandleScreenMessage(const ScreenMessage SM) override;
+  bool MenuBack(const InputEventPlus& input) override;
+  bool MenuStart(const InputEventPlus& input) override;
 
- protected:
-  ThemeMetric<bool> ALLOW_START_TO_SKIP;
-  ThemeMetric<bool> PREPARE_SCREEN;
+ private:
+  void LoadSplashMetrics();
+  void QueuePrepareScreen();
+  void PrepareConfiguredScreen();
+  std::string GetConfiguredPrepareScreenName() const;
+
+  bool m_bAllowStartToSkip{false};
+  bool m_bPrepareNextScreen{false};
+  bool m_bPrepareScreenQueued{false};
+  float m_fMinimumScreenPrepareDelaySeconds{0.0f};
+  std::string m_sPrepareScreenName;
 };
 
 #endif
