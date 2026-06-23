@@ -9,13 +9,17 @@ class LoadingWindow;
 class ScreenReloadSongs : public Screen {
  public:
   ScreenReloadSongs();
-  ~ScreenReloadSongs();
+  ~ScreenReloadSongs() override;
 
-  virtual void Init();
-  void Update(float fDeltaTime);
+  void Init() override;
+  void Update(float fDeltaTime) override;
 
  private:
+  ScreenReloadSongs(const ScreenReloadSongs& rhs);
+  ScreenReloadSongs& operator=(const ScreenReloadSongs& rhs);
+
   int m_iUpdates;
+  bool m_bReloadStarted;
   LoadingWindow* m_pLoadingWindow;
   BitmapText m_Loading;
 };
