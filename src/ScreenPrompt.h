@@ -7,10 +7,11 @@
 
 #include "AutoActor.h"
 #include "BitmapText.h"
-#include "InputQueue.h"
 #include "RageSound.h"
 #include "ScreenMessage.h"
 #include "ScreenWithMenuElements.h"
+
+class InputEventPlus;
 
 enum PromptType { PROMPT_OK, PROMPT_YES_NO, PROMPT_YES_NO_CANCEL };
 
@@ -18,6 +19,8 @@ enum PromptAnswer { ANSWER_YES, ANSWER_NO, ANSWER_CANCEL, NUM_PromptAnswer };
 
 class ScreenPrompt : public ScreenWithMenuElements {
  public:
+  ScreenPrompt();
+
   static void SetPromptSettings(
       const std::string& sText, PromptType type = PROMPT_OK,
       PromptAnswer defaultAnswer = ANSWER_NO, void (*OnYes)(void*) = nullptr,
@@ -29,9 +32,9 @@ class ScreenPrompt : public ScreenWithMenuElements {
       void (*OnYes)(void*) = nullptr, void (*OnNo)(void*) = nullptr,
       void* pCallbackData = nullptr, bool reverseYesNoOrder = false);
 
-  virtual void Init();
-  virtual void BeginScreen();
-  virtual bool Input(const InputEventPlus& input);
+  void Init() override;
+  void BeginScreen() override;
+  bool Input(const InputEventPlus& input) override;
 
   static PromptAnswer s_LastAnswer;
   static bool s_bCancelledLast;
@@ -40,24 +43,35 @@ class ScreenPrompt : public ScreenWithMenuElements {
   // virtual void PushSelf( lua_State *L );
 
  protected:
-  bool CanGoLeft() { return m_Answer > 0; }
+  bool CanGoLeft() const;
   bool CanGoRight();
   bool IsYesNoOrderReversed() const;
+  int GetNumAnswers() const;
+  std::string GetAnswerText(const std::string& sAnswer) const;
   void Change(int dir);
-  bool MenuLeft(const InputEventPlus& input);
-  bool MenuRight(const InputEventPlus& input);
-  bool MenuBack(const InputEventPlus& input);
-  bool MenuStart(const InputEventPlus& input);
+  bool MenuLeft(const InputEventPlus& input) override;
+  bool MenuRight(const InputEventPlus& input) override;
+  bool MenuBack(const InputEventPlus& input) override;
+  bool MenuStart(const InputEventPlus& input) override;
 
+  // Updates prompt result state before invoking callbacks; overrides must keep
+  // cancellation side-effect free.
   virtual void End(bool bCancelled);
   void PositionCursor();
 
-  virtual void TweenOffScreen();
+  void TweenOffScreen() override;
 
   BitmapText m_textQuestion;
   AutoActor m_sprCursor;
   BitmapText m_textAnswer[NUM_PromptAnswer];
   PromptAnswer m_Answer;
+  PromptType m_PromptType;
+  bool m_bReverseYesNoOrder;
+  bool m_bPromptActorsLoaded;
+  std::string m_sPromptText;
+  void (*m_pOnYes)(void*);
+  void (*m_pOnNo)(void*);
+  void* m_pCallbackData;
 
   RageSound m_sndChange;
 };
