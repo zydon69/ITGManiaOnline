@@ -620,7 +620,6 @@ function offsetMS(pref, low, high)
 			if pref == "GlobalOffsetSeconds" then
 				log_global_offset("reload_offset_row")
 			end
-			return "All"
 		end,
 		LoadSelections = function(self, list, pn)
 			local i = current_ms() - self._low + 1
@@ -660,7 +659,6 @@ OperatorMenuOptionRows.GlobalOffsetProfile = function()
 		Reload = function(self)
 			self.Choices = global_offset_profile_choices()
 			log_global_offset("reload_profile_row")
-			return "All"
 		end,
 		LoadSelections = function(self, list, pn)
 			local selected = PREFSMAN:GetGlobalOffsetProfileSelected() + 1
@@ -695,7 +693,6 @@ OperatorMenuOptionRows.RenameGlobalOffsetProfile = function()
 		Reload = function(self)
 			self.Choices = global_offset_rename_choices()
 			log_global_offset("reload_rename_row")
-			return "All"
 		end,
 		LoadSelections = function(self, list, pn)
 			self._lastRenameSelection = 1
