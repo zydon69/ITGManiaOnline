@@ -65,6 +65,7 @@ class Steps {
   void Compress() const;
   void Decompress() const;
   void Decompress();
+  bool IsNoteDataFilled() const { return m_bNoteDataIsFilled; }
   /**
    * @brief Determine if these steps were created by the autogenerator.
    * @return true if they were, false otherwise.
