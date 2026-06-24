@@ -73,24 +73,25 @@ local function final_results()
 			local user = type(result.user) == "table" and result.user or {}
 			local displayedPercent = tonumber(result.displayed_percent or result.displayedPercent)
 			if displayedPercent == nil then
-				final_ranking_trace("final_result_missing_displayed_percent"
+				final_ranking_trace("final_result_rejected_missing_displayed_percent"
 					.. " index=" .. tostring(index)
 					.. " user=" .. tostring(user.id or result.user_id or "nil")
 					.. " score=" .. tostring(result.score or "nil")
 					.. " score_percent=" .. tostring(result.score_percent or "nil")
 					.. " accuracy=" .. tostring(result.accuracy or "nil"))
+			else
+				normalized[#normalized + 1] = {
+					rank = tonumber(result.rank) or index,
+					name = online_display_name(user, localized("OnlineUnknownPlayer", "Player")),
+					score = math.floor(tonumber(result.score) or 0),
+					displayed_percent = displayedPercent,
+					score_percent = tonumber(result.score_percent),
+					accuracy = tonumber(result.accuracy),
+					failed = result.failed and true or false,
+					user_id = user.id or result.user_id,
+					source = result.source,
+				}
 			end
-			normalized[#normalized + 1] = {
-				rank = tonumber(result.rank) or index,
-				name = online_display_name(user, localized("OnlineUnknownPlayer", "Player")),
-				score = math.floor(tonumber(result.score) or 0),
-				displayed_percent = displayedPercent,
-				score_percent = tonumber(result.score_percent),
-				accuracy = tonumber(result.accuracy),
-				failed = result.failed and true or false,
-				user_id = user.id or result.user_id,
-				source = result.source,
-			}
 		end
 	end
 
