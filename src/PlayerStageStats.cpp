@@ -30,18 +30,6 @@
 #include "ThemeMetric.h"
 #include "global.h"
 
-#define GRADE_PERCENT_TIER(i) \
-  THEME->GetMetricF(          \
-      "PlayerStageStats",     \
-      ssprintf("GradePercent%s", GradeToString((Grade)i).c_str()))
-// deprecated, but no solution to replace them exists yet:
-#define GRADE_TIER02_IS_ALL_W2S \
-  THEME->GetMetricB("PlayerStageStats", "GradeTier02IsAllW2s")
-#define GRADE_TIER01_IS_ALL_W2S \
-  THEME->GetMetricB("PlayerStageStats", "GradeTier01IsAllW2s")
-#define GRADE_TIER02_IS_FULL_COMBO \
-  THEME->GetMetricB("PlayerStageStats", "GradeTier02IsFullCombo")
-
 static ThemeMetric<TapNoteScore> g_MinScoreToMaintainCombo(
     "Gameplay", "MinScoreToMaintainCombo");
 static ThemeMetric<bool> g_MineHitIncrementsMissCombo(
@@ -74,6 +62,38 @@ bool IsValidHoldNoteScore(HoldNoteScore hns) {
   return hns >= HNS_None && hns < NUM_HoldNoteScore;
 }
 
+bool IsThemeAvailable(const char* context) {
+  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s used fallback because THEME is unavailable.",
+        context);
+    return false;
+  }
+  return true;
+}
+
+float ClampFiniteFloat(float value, const char* field, float fallback) {
+  if (!std::isfinite(value)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats normalized non-finite %s value %f "
+        "to %f.",
+        field, value, fallback);
+    return fallback;
+  }
+  return value;
+}
+
+float ClampLifeValue(float value, const char* field) {
+  value = ClampFiniteFloat(value, field, 0.0f);
+  if (value < 0.0f || value > 1.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats clamped out-of-range %s value %f.",
+        field, value);
+  }
+  rage_clamp(value, 0.0f, 1.0f);
+  return value;
+}
+
 int ClampNonNegativeInt(int value, const char* field) {
   if (value < 0) {
     LOG->Warn(
@@ -97,6 +117,23 @@ int AddNonNegativeIntSaturated(int current, int add, const char* field) {
   return current + add;
 }
 
+double AddGradeContribution(
+    double current, int count, int gradeValue, const char* field) {
+  const int safeCount = ClampNonNegativeInt(count, field);
+  const double contribution =
+      static_cast<double>(safeCount) * static_cast<double>(gradeValue);
+  const double result = current + contribution;
+  if (!std::isfinite(result)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats saturated non-finite grade sum for "
+        "%s.",
+        field);
+    return contribution < 0.0 ? -std::numeric_limits<double>::max()
+                              : std::numeric_limits<double>::max();
+  }
+  return result;
+}
+
 unsigned int AddUnsignedSaturated(
     unsigned int current, unsigned int add, const char* field) {
   if (add > std::numeric_limits<unsigned int>::max() - current) {
@@ -106,6 +143,16 @@ unsigned int AddUnsignedSaturated(
     return std::numeric_limits<unsigned int>::max();
   }
   return current + add;
+}
+
+int ClampUnsignedToInt(unsigned int value, const char* field) {
+  if (value > static_cast<unsigned int>(std::numeric_limits<int>::max())) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats saturated %s value %u to INT_MAX.",
+        field, value);
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(value);
 }
 
 float ClampFiniteNonNegativeFloat(float value, const char* field) {
@@ -146,6 +193,71 @@ int GetSafePercentDecimalPlaces() {
         iDecimals, iClamped);
   }
   return iClamped;
+}
+
+float GetSafeGradePercentTier(Grade g) {
+  if (!IsThemeAvailable("GetGradeFromPercent")) {
+    return std::numeric_limits<float>::infinity();
+  }
+  const float value = THEME->GetMetricF(
+      "PlayerStageStats",
+      ssprintf("GradePercent%s", GradeToString(g).c_str()));
+  if (!std::isfinite(value)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: GetGradeFromPercent ignored non-finite threshold for "
+        "%s.",
+        GradeToString(g).c_str());
+    return std::numeric_limits<float>::infinity();
+  }
+  return value;
+}
+
+bool GetSafeGradeMetricB(const char* metricName, bool fallback) {
+  if (!IsThemeAvailable(metricName)) {
+    return fallback;
+  }
+  return THEME->GetMetricB("PlayerStageStats", metricName);
+}
+
+TapNoteScore GetSafeMinScoreToMaintainCombo() {
+  if (!g_MinScoreToMaintainCombo.IsLoaded()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats used TNS_W3 because "
+        "MinScoreToMaintainCombo is not loaded.");
+    return TNS_W3;
+  }
+  const TapNoteScore tns = g_MinScoreToMaintainCombo.GetValue();
+  if (!IsValidFullComboTapScore(tns)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats used TNS_W3 because "
+        "MinScoreToMaintainCombo is invalid: %i.",
+        tns);
+    return TNS_W3;
+  }
+  return tns;
+}
+
+bool GetSafeMineHitIncrementsMissCombo() {
+  if (!g_MineHitIncrementsMissCombo.IsLoaded()) {
+    return false;
+  }
+  return g_MineHitIncrementsMissCombo.GetValue();
+}
+
+bool CurrentCourseIsEndless(const char* context) {
+  if (GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s could not inspect current course because "
+        "GAMESTATE is unavailable.",
+        context);
+    return false;
+  }
+  return GAMESTATE->m_pCurCourse != nullptr &&
+         GAMESTATE->m_pCurCourse->IsEndless();
+}
+
+void PushSaneNumber(lua_State* L, float value, const char* field) {
+  lua_pushnumber(L, ClampFiniteNonNegativeFloat(value, field));
 }
 }  // namespace
 
@@ -302,6 +414,13 @@ void PlayerStageStats::AddStats(const PlayerStageStats& other) {
       ClampFiniteNonNegativeFloat(other.m_fLastSecond, "last second");
   const float fOtherFirstSecond = otherFirstSecond + baseLastSecond + 1.0f;
   const float fOtherLastSecond = otherLastSecond + baseLastSecond + 1.0f;
+  if (!std::isfinite(fOtherFirstSecond) || !std::isfinite(fOtherLastSecond)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::AddStats skipped time-series merge "
+        "because offsets are non-finite: first=%f last=%f.",
+        fOtherFirstSecond, fOtherLastSecond);
+    return;
+  }
   m_fLastSecond = fOtherLastSecond;
 
   std::map<float, float>::const_iterator it;
@@ -316,14 +435,30 @@ void PlayerStageStats::AddStats(const PlayerStageStats& other) {
           pos, life);
       continue;
     }
-    m_fLifeRecord[fOtherFirstSecond + pos] = life;
+    const float shiftedPos = fOtherFirstSecond + pos;
+    if (!std::isfinite(shiftedPos)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats::AddStats skipped life record with "
+          "non-finite shifted position %f.",
+          shiftedPos);
+      continue;
+    }
+    m_fLifeRecord[shiftedPos] = ClampLifeValue(life, "life record");
   }
 
-  for (unsigned i = 0; i < other.m_ComboList.size(); ++i) {
+  for (size_t i = 0; i < other.m_ComboList.size(); ++i) {
+    if (m_ComboList.size() >= MAX_COMBO_LIST_ENTRIES) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats::AddStats capped combo list at "
+          "%zu entries.",
+          MAX_COMBO_LIST_ENTRIES);
+      break;
+    }
     const Combo_t& combo = other.m_ComboList[i];
     if (!std::isfinite(combo.m_fStartSecond) ||
         !std::isfinite(combo.m_fSizeSeconds) || combo.m_fSizeSeconds < 0.0f ||
-        combo.m_cnt < 0 || combo.m_rollover < 0) {
+        combo.m_cnt < 0 || combo.m_rollover < 0 ||
+        combo.m_rollover > combo.m_cnt) {
       LOG->Warn(
           "SRC_AUDIT_FIX: PlayerStageStats::AddStats skipped invalid combo "
           "start=%f size=%f count=%i rollover=%i.",
@@ -334,12 +469,19 @@ void PlayerStageStats::AddStats(const PlayerStageStats& other) {
 
     Combo_t newcombo(combo);
     newcombo.m_fStartSecond += fOtherFirstSecond;
+    if (!std::isfinite(newcombo.m_fStartSecond)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats::AddStats skipped combo with "
+          "non-finite shifted start %f.",
+          newcombo.m_fStartSecond);
+      continue;
+    }
     m_ComboList.push_back(newcombo);
   }
 
   /* Merge identical combos. This normally only happens in course mode, when
    * a combo continues between songs. */
-  for (unsigned i = 1; i < m_ComboList.size(); ++i) {
+  for (size_t i = 1; i < m_ComboList.size(); ++i) {
     Combo_t& prevcombo = m_ComboList[i - 1];
     Combo_t& combo = m_ComboList[i];
     const float PrevComboEnd =
@@ -350,8 +492,10 @@ void PlayerStageStats::AddStats(const PlayerStageStats& other) {
     }
 
     // These are really the same combo.
-    prevcombo.m_fSizeSeconds += combo.m_fSizeSeconds;
-    prevcombo.m_cnt += combo.m_cnt;
+    prevcombo.m_fSizeSeconds = AddFiniteNonNegativeFloat(
+        prevcombo.m_fSizeSeconds, combo.m_fSizeSeconds, "combo size seconds");
+    prevcombo.m_cnt = AddNonNegativeIntSaturated(
+        prevcombo.m_cnt, combo.m_cnt, "combo count");
     m_ComboList.erase(m_ComboList.begin() + i);
     --i;
   }
@@ -369,7 +513,7 @@ Grade GetGradeFromPercent(float fPercent) {
 
   for (Grade g = Grade_Tier01; g < GetNumGradeTiersUsed();
        enum_add<Grade>(g, 1)) {
-    if (fPercent >= GRADE_PERCENT_TIER(g)) {
+    if (fPercent >= GetSafeGradePercentTier(g)) {
       grade = g;
       break;
     }
@@ -393,10 +537,10 @@ Grade PlayerStageStats::GetGrade() const {
 
   /* XXX: This entire calculation should be in ScoreKeeper, but final evaluation
    * is tricky since at that point the ScoreKeepers no longer exist. */
-  float fActual = 0;
+  double fActual = 0.0;
 
   bool bIsBeginner = false;
-  if (m_iStepsPlayed > 0 && !GAMESTATE->IsCourseMode()) {
+  if (m_iStepsPlayed == 1) {
     if (!m_vpPossibleSteps.empty() && m_vpPossibleSteps[0] != nullptr) {
       bIsBeginner =
           m_vpPossibleSteps[0]->GetDifficulty() == Difficulty_Beginner;
@@ -408,21 +552,19 @@ Grade PlayerStageStats::GetGrade() const {
   }
 
   FOREACH_ENUM(TapNoteScore, tns) {
-    const int iTapCount =
-        ClampNonNegativeInt(m_iTapNoteScores[tns], "tap grade count");
     int iTapScoreValue =
         ScoreKeeperNormal::TapNoteScoreToGradePoints(tns, bIsBeginner);
-    fActual += iTapCount * iTapScoreValue;
+    fActual = AddGradeContribution(
+        fActual, m_iTapNoteScores[tns], iTapScoreValue, "tap grade count");
     // LOG->Trace( "GetGrade actual: %i * %i", m_iTapNoteScores[tns],
     // iTapScoreValue );
   }
 
   FOREACH_ENUM(HoldNoteScore, hns) {
-    const int iHoldCount =
-        ClampNonNegativeInt(m_iHoldNoteScores[hns], "hold grade count");
     int iHoldScoreValue =
         ScoreKeeperNormal::HoldNoteScoreToGradePoints(hns, bIsBeginner);
-    fActual += iHoldCount * iHoldScoreValue;
+    fActual = AddGradeContribution(
+        fActual, m_iHoldNoteScores[hns], iHoldScoreValue, "hold grade count");
     // LOG->Trace( "GetGrade actual: %i * %i", m_iHoldNoteScores[hns],
     // iHoldScoreValue );
   }
@@ -430,7 +572,7 @@ Grade PlayerStageStats::GetGrade() const {
   // LOG->Trace( "GetGrade: fActual: %f, fPossible: %d", fActual,
   // m_iPossibleGradePoints );
 
-  float fPercent = fActual / m_iPossibleGradePoints;
+  float fPercent = static_cast<float>(fActual / m_iPossibleGradePoints);
 
   Grade grade = GetGradeFromPercent(fPercent);
 
@@ -438,7 +580,7 @@ Grade PlayerStageStats::GetGrade() const {
   // GRADE_TIER02_IS_ALL_W2S );
 
   // TODO: Change these conditions to use Lua instead. -aj
-  if (GRADE_TIER02_IS_ALL_W2S) {
+  if (GetSafeGradeMetricB("GradeTier02IsAllW2s", false)) {
     if (FullComboOfScore(TNS_W1)) {
       return Grade_Tier01;
     }
@@ -450,15 +592,15 @@ Grade PlayerStageStats::GetGrade() const {
     grade = std::max(grade, Grade_Tier03);
   }
 
-  if (GRADE_TIER01_IS_ALL_W2S) {
+  if (GetSafeGradeMetricB("GradeTier01IsAllW2s", false)) {
     if (FullComboOfScore(TNS_W2)) {
       return Grade_Tier01;
     }
     grade = std::max(grade, Grade_Tier02);
   }
 
-  if (GRADE_TIER02_IS_FULL_COMBO) {
-    if (FullComboOfScore(g_MinScoreToMaintainCombo)) {
+  if (GetSafeGradeMetricB("GradeTier02IsFullCombo", false)) {
+    if (FullComboOfScore(GetSafeMinScoreToMaintainCombo())) {
       return Grade_Tier02;
     }
     grade = std::max(grade, Grade_Tier03);
@@ -537,7 +679,8 @@ int PlayerStageStats::GetLessonScoreActual() const {
       case TNS_W3:
       case TNS_W2:
       case TNS_W1:
-        iScore += m_iTapNoteScores[tns];
+        iScore = AddNonNegativeIntSaturated(
+            iScore, m_iTapNoteScores[tns], "lesson tap score");
       default:
         break;
     }
@@ -546,7 +689,8 @@ int PlayerStageStats::GetLessonScoreActual() const {
   FOREACH_ENUM(HoldNoteScore, hns) {
     switch (hns) {
       case HNS_Held:
-        iScore += m_iHoldNoteScores[hns];
+        iScore = AddNonNegativeIntSaturated(
+            iScore, m_iHoldNoteScores[hns], "lesson hold score");
       default:
         break;
     }
@@ -611,18 +755,26 @@ void PlayerStageStats::ResetScoreForLesson() {
   m_iMaxScore = 0;
   m_radarPossible.Zero();
   m_radarActual.Zero();
+  m_bFailed = false;
+  m_bPlayerCanAchieveFullCombo = true;
+  m_fAliveSeconds = 0.0f;
+  m_fLifeRemainingSeconds = 0.0f;
   m_fLifeRecord.clear();
   m_ComboList.clear();
   m_fFirstSecond = FLT_MAX;
   m_fLastSecond = 0.0f;
   m_StageAward = StageAward_Invalid;
   m_PeakComboAward = PeakComboAward_Invalid;
+  m_iPersonalHighScoreIndex = -1;
+  m_iMachineHighScoreIndex = -1;
   m_bDisqualified = false;
+  m_rc = RankingCategory_Invalid;
+  m_HighScore = HighScore();
 }
 
 void PlayerStageStats::SetLifeRecordAt(float fLife, float fStepsSecond) {
   // Don't save life stats in endless courses, or could run OOM in a few hours.
-  if (GAMESTATE->m_pCurCourse && GAMESTATE->m_pCurCourse->IsEndless()) {
+  if (CurrentCourseIsEndless("PlayerStageStats::SetLifeRecordAt")) {
     return;
   }
 
@@ -637,7 +789,7 @@ void PlayerStageStats::SetLifeRecordAt(float fLife, float fStepsSecond) {
   if (fStepsSecond < 0) {
     return;
   }
-  rage_clamp(fLife, 0.0f, 1.0f);
+  fLife = ClampLifeValue(fLife, "life record");
 
   m_fFirstSecond = std::min(fStepsSecond, m_fFirstSecond);
   m_fLastSecond = std::max(fStepsSecond, m_fLastSecond);
@@ -673,7 +825,13 @@ void PlayerStageStats::SetLifeRecordAt(float fLife, float fStepsSecond) {
             Message_LifeMeterChangedP1 + Enum::to_integral(m_player_number)));
     msg.SetParam("Life", fLife);
     msg.SetParam("StepsSecond", fStepsSecond);
-    MESSAGEMAN->Broadcast(msg);
+    if (MESSAGEMAN != nullptr) {
+      MESSAGEMAN->Broadcast(msg);
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats::SetLifeRecordAt skipped life "
+          "message because MESSAGEMAN is unavailable.");
+    }
   } else {
     LOG->Warn(
         "SRC_AUDIT_FIX: PlayerStageStats::SetLifeRecordAt skipped life "
@@ -727,7 +885,7 @@ float PlayerStageStats::GetLifeRecordAt(float fStepsSecond) const {
     --it;
   }
 
-  return it->second;
+  return ClampLifeValue(it->second, "life record");
 }
 
 float PlayerStageStats::GetLifeRecordLerpAt(float fStepsSecond) const {
@@ -753,18 +911,19 @@ float PlayerStageStats::GetLifeRecordLerpAt(float fStepsSecond) const {
   }
 
   if (later == m_fLifeRecord.end()) {
-    return earlier->second;
+    return ClampLifeValue(earlier->second, "life record");
   }
 
   if (earlier->first == later->first) {  // two samples from the same time.
                                          // Don't divide by zero in SCALE
-    return earlier->second;
+    return ClampLifeValue(earlier->second, "life record");
   }
 
   // earlier <= pos <= later
-  return SCALE(
+  const float value = SCALE(
       fStepsSecond, earlier->first, later->first, earlier->second,
       later->second);
+  return ClampLifeValue(value, "life record");
 }
 
 void PlayerStageStats::GetLifeRecord(
@@ -799,14 +958,14 @@ float PlayerStageStats::GetCurrentLife() const {
   }
   std::map<float, float>::const_iterator iter = m_fLifeRecord.end();
   --iter;
-  return iter->second;
+  return ClampLifeValue(iter->second, "life record");
 }
 
 /* If bRollover is true, we're being called before gameplay begins, so we can
  * record the amount of the first combo that comes from the previous song. */
 void PlayerStageStats::UpdateComboList(float fSecond, bool bRollover) {
   // Don't save combo stats in endless courses, or could run OOM in a few hours.
-  if (GAMESTATE->m_pCurCourse && GAMESTATE->m_pCurCourse->IsEndless()) {
+  if (CurrentCourseIsEndless("PlayerStageStats::UpdateComboList")) {
     return;
   }
 
@@ -824,7 +983,7 @@ void PlayerStageStats::UpdateComboList(float fSecond, bool bRollover) {
     // LOG->Trace( "fLastSecond = %f", fLastSecond );
   }
 
-  int cnt = m_iCurCombo;
+  int cnt = ClampUnsignedToInt(m_iCurCombo, "current combo");
   if (!cnt) {
     return;  // no combo
   }
@@ -864,6 +1023,13 @@ void PlayerStageStats::UpdateComboList(float fSecond, bool bRollover) {
   }
 
   combo.m_fSizeSeconds = std::max(0.0f, fSecond - combo.m_fStartSecond);
+  if (!std::isfinite(combo.m_fSizeSeconds)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::UpdateComboList normalized "
+        "non-finite combo size %f.",
+        combo.m_fSizeSeconds);
+    combo.m_fSizeSeconds = 0.0f;
+  }
   combo.m_cnt = cnt;
 
   if (bRollover) {
@@ -912,31 +1078,35 @@ bool PlayerStageStats::FullComboOfScore(
   }
 
   // If missed any holds, then it's not a full combo
-  if (m_iHoldNoteScores[HNS_LetGo] > 0) {
+  if (ClampNonNegativeInt(m_iHoldNoteScores[HNS_LetGo], "hold note score") >
+      0) {
     return false;
   }
 
   // if any checkpoints were missed, it's not a full combo	either
-  if (m_iTapNoteScores[TNS_CheckpointMiss] > 0) {
+  if (ClampNonNegativeInt(
+          m_iTapNoteScores[TNS_CheckpointMiss], "tap note score") > 0) {
     return false;
   }
 
   // If has any of the judgments below, then not a full combo
   for (int i = TNS_Miss; i < tnsAllGreaterOrEqual; i++) {
-    if (m_iTapNoteScores[i] > 0) {
+    if (ClampNonNegativeInt(m_iTapNoteScores[i], "tap note score") > 0) {
       return false;
     }
   }
 
   // hit any mines when they increment the miss combo? It's not a full combo.
-  if (g_MineHitIncrementsMissCombo && m_iTapNoteScores[TNS_HitMine] > 0) {
+  if (GetSafeMineHitIncrementsMissCombo() &&
+      ClampNonNegativeInt(m_iTapNoteScores[TNS_HitMine], "tap note score") >
+          0) {
     return false;
   }
 
   // If has at least one of the judgments equal to or above, then is a full
   // combo.
   for (int i = tnsAllGreaterOrEqual; i < NUM_TapNoteScore; i++) {
-    if (m_iTapNoteScores[i] > 0) {
+    if (ClampNonNegativeInt(m_iTapNoteScores[i], "tap note score") > 0) {
       return true;
     }
   }
@@ -965,7 +1135,8 @@ bool PlayerStageStats::SingleDigitsOfScore(
     return false;
   }
   return FullComboOfScore(tnsAllGreaterOrEqual) &&
-         m_iTapNoteScores[tnsAllGreaterOrEqual] < 10;
+         ClampNonNegativeInt(
+             m_iTapNoteScores[tnsAllGreaterOrEqual], "tap note score") < 10;
 }
 
 bool PlayerStageStats::OneOfScore(TapNoteScore tnsAllGreaterOrEqual) const {
@@ -977,13 +1148,15 @@ bool PlayerStageStats::OneOfScore(TapNoteScore tnsAllGreaterOrEqual) const {
     return false;
   }
   return FullComboOfScore(tnsAllGreaterOrEqual) &&
-         m_iTapNoteScores[tnsAllGreaterOrEqual] == 1;
+         ClampNonNegativeInt(
+             m_iTapNoteScores[tnsAllGreaterOrEqual], "tap note score") == 1;
 }
 
 int PlayerStageStats::GetTotalTaps() const {
   int iTotalTaps = 0;
   for (int i = TNS_Miss; i < NUM_TapNoteScore; i++) {
-    iTotalTaps += m_iTapNoteScores[i];
+    iTotalTaps = AddNonNegativeIntSaturated(
+        iTotalTaps, m_iTapNoteScores[i], "total taps");
   }
   return iTotalTaps;
 }
@@ -998,12 +1171,14 @@ float PlayerStageStats::GetPercentageOfTaps(TapNoteScore tns) const {
   }
   int iTotalTaps = 0;
   for (int i = TNS_Miss; i < NUM_TapNoteScore; i++) {
-    iTotalTaps += m_iTapNoteScores[i];
+    iTotalTaps = AddNonNegativeIntSaturated(
+        iTotalTaps, m_iTapNoteScores[i], "total taps");
   }
   if (iTotalTaps <= 0) {
     return 0.0f;
   }
-  return m_iTapNoteScores[tns] / (float)iTotalTaps;
+  return ClampNonNegativeInt(m_iTapNoteScores[tns], "tap note score") /
+         (float)iTotalTaps;
 }
 
 void PlayerStageStats::CalcAwards(
@@ -1019,62 +1194,63 @@ void PlayerStageStats::CalcAwards(
         p);
     return;
   }
+  if (GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::CalcAwards skipped because "
+        "GAMESTATE is unavailable.");
+    return;
+  }
 
   if (bGaveUp || bUsedAutoplay) {
     return;
   }
 
-  std::deque<StageAward>& vPdas = GAMESTATE->m_vLastStageAwards[p];
-
   // LOG->Trace( "per difficulty awards" );
 
   // per-difficulty awards
   // don't give per-difficutly awards if using easy mods
+  StageAward stageAward = StageAward_Invalid;
   if (!IsDisqualified()) {
     if (FullComboOfScore(TNS_W3)) {
-      vPdas.push_back(StageAward_FullComboW3);
+      stageAward = StageAward_FullComboW3;
     }
     if (SingleDigitsOfScore(TNS_W3)) {
-      vPdas.push_back(StageAward_SingleDigitW3);
+      stageAward = StageAward_SingleDigitW3;
     }
     if (FullComboOfScore(TNS_W2)) {
-      vPdas.push_back(StageAward_FullComboW2);
+      stageAward = StageAward_FullComboW2;
     }
     if (SingleDigitsOfScore(TNS_W2)) {
-      vPdas.push_back(StageAward_SingleDigitW2);
+      stageAward = StageAward_SingleDigitW2;
     }
     if (FullComboOfScore(TNS_W1)) {
-      vPdas.push_back(StageAward_FullComboW1);
+      stageAward = StageAward_FullComboW1;
     }
 
     if (OneOfScore(TNS_W3)) {
-      vPdas.push_back(StageAward_OneW3);
+      stageAward = StageAward_OneW3;
     }
     if (OneOfScore(TNS_W2)) {
-      vPdas.push_back(StageAward_OneW2);
+      stageAward = StageAward_OneW2;
     }
 
     float fPercentW3s = GetPercentageOfTaps(TNS_W3);
     if (fPercentW3s >= 0.8f) {
-      vPdas.push_back(StageAward_80PercentW3);
+      stageAward = StageAward_80PercentW3;
     }
     if (fPercentW3s >= 0.9f) {
-      vPdas.push_back(StageAward_90PercentW3);
+      stageAward = StageAward_90PercentW3;
     }
     if (fPercentW3s >= 1.f) {
-      vPdas.push_back(StageAward_100PercentW3);
+      stageAward = StageAward_100PercentW3;
     }
   }
 
-  // Max one PDA per stage
-  if (!vPdas.empty()) {
-    vPdas.erase(vPdas.begin(), vPdas.end() - 1);
-  }
-
-  if (!vPdas.empty()) {
-    m_StageAward = vPdas.back();
-  } else {
-    m_StageAward = StageAward_Invalid;
+  m_StageAward = stageAward;
+  std::deque<StageAward>& vPdas = GAMESTATE->m_vLastStageAwards[p];
+  vPdas.clear();
+  if (stageAward != StageAward_Invalid) {
+    vPdas.push_back(stageAward);
   }
 
   // LOG->Trace( "done with per difficulty awards" );
@@ -1083,27 +1259,29 @@ void PlayerStageStats::CalcAwards(
   int iComboAtStartOfStage = GetComboAtStartOfStage();
   int iPeakCombo = GetMaxCombo().m_cnt;
 
+  PeakComboAward peakAward = PeakComboAward_Invalid;
   FOREACH_ENUM(PeakComboAward, pca) {
     int iLevel = 1000 * (pca + 1);
     bool bCrossedLevel = iComboAtStartOfStage < iLevel && iPeakCombo >= iLevel;
     // LOG->Trace( "pca = %d, iLevel = %d, bCrossedLevel = %d", pca, iLevel,
     // bCrossedLevel );
     if (bCrossedLevel) {
-      GAMESTATE->m_vLastPeakComboAwards[p].push_back(pca);
+      peakAward = pca;
     }
   }
 
-  if (!GAMESTATE->m_vLastPeakComboAwards[p].empty()) {
-    m_PeakComboAward = GAMESTATE->m_vLastPeakComboAwards[p].back();
-  } else {
-    m_PeakComboAward = PeakComboAward_Invalid;
+  m_PeakComboAward = peakAward;
+  std::deque<PeakComboAward>& vPeak = GAMESTATE->m_vLastPeakComboAwards[p];
+  vPeak.clear();
+  if (peakAward != PeakComboAward_Invalid) {
+    vPeak.push_back(peakAward);
   }
 
   // LOG->Trace( "done with per combo awards" );
 }
 
 bool PlayerStageStats::IsDisqualified() const {
-  if (!PREFSMAN->m_bDisqualification) {
+  if (PREFSMAN == nullptr || !PREFSMAN->m_bDisqualification) {
     return false;
   }
   return m_bDisqualified;
@@ -1114,7 +1292,14 @@ float PlayerStageStats::GetSurvivalSeconds() const {
       ClampFiniteNonNegativeFloat(m_fAliveSeconds, "alive seconds");
   const float lifeRemainingSeconds = ClampFiniteNonNegativeFloat(
       m_fLifeRemainingSeconds, "life remaining seconds");
-  return aliveSeconds + lifeRemainingSeconds;
+  const float survivalSeconds = aliveSeconds + lifeRemainingSeconds;
+  if (!std::isfinite(survivalSeconds)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerStageStats::GetSurvivalSeconds saturated "
+        "non-finite survival seconds.");
+    return std::numeric_limits<float>::max();
+  }
+  return survivalSeconds;
 }
 
 LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
@@ -1123,11 +1308,41 @@ LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
 #include "LuaBinding.h"
 
     /** @brief Allow Lua to have access to the PlayerStageStats. */
-    class LunaPlayerStageStats : public Luna<PlayerStageStats> {
+class LunaPlayerStageStats : public Luna<PlayerStageStats> {
  public:
-  DEFINE_METHOD(GetCaloriesBurned, m_fCaloriesBurned)
-  DEFINE_METHOD(GetNumControllerSteps, m_iNumControllerSteps)
-  DEFINE_METHOD(GetLifeRemainingSeconds, m_fLifeRemainingSeconds)
+  static int GetCaloriesBurned(T* p, lua_State* L) {
+    PushSaneNumber(L, p->m_fCaloriesBurned, "calories burned");
+    return 1;
+  }
+  static int GetNumControllerSteps(T* p, lua_State* L) {
+    PushSaneNumber(L, p->m_iNumControllerSteps, "controller steps");
+    return 1;
+  }
+  static int GetLifeRemainingSeconds(T* p, lua_State* L) {
+    PushSaneNumber(L, p->m_fLifeRemainingSeconds, "life remaining seconds");
+    return 1;
+  }
+  static int GetAliveSeconds(T* p, lua_State* L) {
+    PushSaneNumber(L, p->m_fAliveSeconds, "alive seconds");
+    return 1;
+  }
+  static int GetActualDancePoints(T* p, lua_State* L) {
+    lua_pushnumber(
+        L, ClampNonNegativeInt(p->m_iActualDancePoints, "actual dance points"));
+    return 1;
+  }
+  static int GetPossibleDancePoints(T* p, lua_State* L) {
+    lua_pushnumber(
+        L, ClampNonNegativeInt(
+               p->m_iPossibleDancePoints, "possible dance points"));
+    return 1;
+  }
+  static int GetCurrentPossibleDancePoints(T* p, lua_State* L) {
+    lua_pushnumber(
+        L, ClampNonNegativeInt(
+               p->m_iCurPossibleDancePoints, "current possible dance points"));
+    return 1;
+  }
   DEFINE_METHOD(GetSurvivalSeconds, GetSurvivalSeconds())
   DEFINE_METHOD(GetCurrentCombo, m_iCurCombo)
   DEFINE_METHOD(GetCurrentMissCombo, m_iCurMissCombo)
@@ -1140,9 +1355,6 @@ LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
   DEFINE_METHOD(MaxCombo, GetMaxCombo().m_cnt)
   DEFINE_METHOD(GetCurrentLife, GetCurrentLife())
   DEFINE_METHOD(GetGrade, GetGrade())
-  DEFINE_METHOD(GetActualDancePoints, m_iActualDancePoints)
-  DEFINE_METHOD(GetPossibleDancePoints, m_iPossibleDancePoints)
-  DEFINE_METHOD(GetCurrentPossibleDancePoints, m_iCurPossibleDancePoints)
   DEFINE_METHOD(GetPercentDancePoints, GetPercentDancePoints())
   DEFINE_METHOD(GetLessonScoreActual, GetLessonScoreActual())
   DEFINE_METHOD(GetLessonScoreNeeded, GetLessonScoreNeeded())
@@ -1151,7 +1363,6 @@ LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
   DEFINE_METHOD(GetStageAward, m_StageAward)
   DEFINE_METHOD(GetPeakComboAward, m_PeakComboAward)
   DEFINE_METHOD(IsDisqualified, IsDisqualified())
-  DEFINE_METHOD(GetAliveSeconds, m_fAliveSeconds)
   DEFINE_METHOD(
       GetPercentageOfTaps, GetPercentageOfTaps(Enum::Check<TapNoteScore>(L, 1)))
   DEFINE_METHOD(GetBestFullComboTapNoteScore, GetBestFullComboTapNoteScore())
@@ -1174,7 +1385,8 @@ LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
       lua_pushnumber(L, 0);
       return 1;
     }
-    lua_pushnumber(L, p->m_iTapNoteScores[tns]);
+    lua_pushnumber(L, ClampNonNegativeInt(p->m_iTapNoteScores[tns],
+                                          "tap note score"));
     return 1;
   }
 
@@ -1188,15 +1400,24 @@ LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
       lua_pushnumber(L, 0);
       return 1;
     }
-    lua_pushnumber(L, p->m_iHoldNoteScores[hns]);
+    lua_pushnumber(L, ClampNonNegativeInt(p->m_iHoldNoteScores[hns],
+                                          "hold note score"));
     return 1;
   }
 
   static int GetPlayedSteps(T* p, lua_State* L) {
     lua_newtable(L);
     const int stepsPlayed = std::max(0, p->m_iStepsPlayed);
+    const size_t possibleLimit = std::min(
+        p->m_vpPossibleSteps.size(),
+        static_cast<size_t>(std::numeric_limits<int>::max()));
+    if (possibleLimit != p->m_vpPossibleSteps.size()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats:GetPlayedSteps truncated possible "
+          "steps for Lua.");
+    }
     const int maxSteps =
-        std::min(stepsPlayed, static_cast<int>(p->m_vpPossibleSteps.size()));
+        std::min(stepsPlayed, static_cast<int>(possibleLimit));
     int luaIndex = 1;
     for (int i = 0; i < maxSteps; ++i) {
       Steps* steps = p->m_vpPossibleSteps[i];
@@ -1215,12 +1436,20 @@ LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
   static int GetPossibleSteps(T* p, lua_State* L) {
     lua_newtable(L);
     int luaIndex = 1;
-    for (int i = 0; i < (int)p->m_vpPossibleSteps.size(); ++i) {
+    const size_t possibleLimit = std::min(
+        p->m_vpPossibleSteps.size(),
+        static_cast<size_t>(std::numeric_limits<int>::max()));
+    if (possibleLimit != p->m_vpPossibleSteps.size()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats:GetPossibleSteps truncated "
+          "possible steps for Lua.");
+    }
+    for (size_t i = 0; i < possibleLimit; ++i) {
       Steps* steps = p->m_vpPossibleSteps[i];
       if (steps == nullptr) {
         LOG->Warn(
             "SRC_AUDIT_FIX: PlayerStageStats:GetPossibleSteps skipped null "
-            "steps at index %i.",
+            "steps at index %zu.",
             i);
         continue;
       }
@@ -1230,14 +1459,23 @@ LuaFunction(GetGradeFromPercent, GetGradeFromPercent(FArg(1))) LuaFunction(
     return 1;
   }
   static int GetComboList(T* p, lua_State* L) {
-    lua_createtable(L, p->m_ComboList.size(), 0);
+    const size_t comboLimit = std::min(
+        p->m_ComboList.size(),
+        static_cast<size_t>(std::numeric_limits<int>::max()));
+    if (comboLimit != p->m_ComboList.size()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerStageStats:GetComboList truncated combo list "
+          "for Lua.");
+    }
+    lua_createtable(L, static_cast<int>(comboLimit), 0);
     int luaIndex = 1;
-    for (size_t i = 0; i < p->m_ComboList.size(); ++i) {
+    for (size_t i = 0; i < comboLimit; ++i) {
       const PlayerStageStats::Combo_t& combo = p->m_ComboList[i];
       if (!std::isfinite(combo.m_fStartSecond) ||
           !std::isfinite(combo.m_fSizeSeconds) ||
           combo.m_fSizeSeconds < 0.0f || combo.m_cnt < 0 ||
-          combo.m_rollover < 0) {
+          combo.m_rollover < 0 || combo.m_rollover > combo.m_cnt ||
+          combo.IsZero()) {
         LOG->Warn(
             "SRC_AUDIT_FIX: PlayerStageStats:GetComboList skipped invalid "
             "combo start=%f size=%f count=%i rollover=%i.",
