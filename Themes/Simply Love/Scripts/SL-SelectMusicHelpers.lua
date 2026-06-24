@@ -78,6 +78,7 @@ play_online_preview_music_normal_rate = function(songInfo, source)
 				.. " source=" .. tostring(source or "unknown")
 				.. " path=" .. tostring(online_preview_song_path(songInfo)))
 		end
+		stop_music()
 		return false
 	end
 

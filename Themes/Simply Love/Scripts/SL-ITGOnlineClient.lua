@@ -11997,6 +11997,13 @@ end
 					.. " userId=" .. tostring(payload.user_id or "nil")
 					.. " roomId=" .. tostring(lobbyRoomId or "nil")
 					.. " hasUser=" .. tostring(hasUserPayload == true))
+				if lobbyUpdateReason == "room.results_ready" then
+					online_flow_trace("lobby_updated_event ignored reason=room_results_ready_room_scoped"
+						.. " roomId=" .. tostring(lobbyRoomId or "nil")
+						.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+						.. " screen=" .. tostring(self.currentScreenName or "nil"))
+					return
+				end
 				if lobbyUpdateReason == "room.deleted" and lobbyRoomId then
 					local roomKey = self:RoomKey(lobbyRoomId)
 					self.deletedRoomIds = self.deletedRoomIds or {}

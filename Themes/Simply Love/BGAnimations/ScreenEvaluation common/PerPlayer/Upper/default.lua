@@ -22,7 +22,9 @@ return Def.ActorFrame{
 	LoadActor("./StepArtist.lua", player),
 
 	-- stream breakdown
-	LoadActor("./StreamBreakdown.lua", player),
+	((SL and SL[ToEnumShortString(player)] and SL[ToEnumShortString(player)].ActiveModifiers and SL[ToEnumShortString(player)].ActiveModifiers.ShowStreamBreakdown == true)
+		and LoadActor("./StreamBreakdown.lua", player)
+		or Def.ActorFrame{}),
 
 	-- difficulty text and meter
 	LoadActor("./Difficulty.lua", player),

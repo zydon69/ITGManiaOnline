@@ -768,6 +768,20 @@ local Overrides = {
 		Values = { "Off", "Measure", "Quarter", "Eighth" },
 	},
 	-------------------------------------------------------------------------
+	EvaluationExtras = {
+		SelectType = "SelectMultiple",
+		Values = { "ShowStreamBreakdown" },
+		LoadSelections = function(self, list, pn)
+			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+			list[1] = mods.ShowStreamBreakdown == true
+			return list
+		end,
+		SaveSelections = function(self, list, pn)
+			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+			mods.ShowStreamBreakdown = list[1] == true
+		end,
+	},
+	-------------------------------------------------------------------------
 	VisualDelay = {
 		Choices = function()
 			local first	= -100

@@ -48,6 +48,7 @@ local permitted_profile_settings = {
 	HideLookahead        = "boolean",
 
 	MeasureLines         = "string",
+	ShowStreamBreakdown  = "boolean",
 
 	ColumnFlashOnMiss    = "boolean",
 	SubtractiveScoring   = "boolean",

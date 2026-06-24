@@ -30,6 +30,7 @@ local PlayerDefaults = {
 				MeasureCounterUp = true,
 				HideLookahead = false,
 				MeasureLines = "Off",
+				ShowStreamBreakdown = false,
 				DataVisualizations = "None",
 				TargetScore = 11,
 				ActionOnMissedTarget = "Nothing",

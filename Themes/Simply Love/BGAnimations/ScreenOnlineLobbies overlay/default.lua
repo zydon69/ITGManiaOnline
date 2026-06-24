@@ -5144,11 +5144,20 @@ end,
 				lobby_flow_trace("OnlineSongPreview_manager_browsing_preview")
 				ITGOnline.PackSync:ManagerBrowsingPreview(preview)
 			end
-			if play_online_preview_music_normal_rate then
+			if joined_preview_unknown_pack and stop_music then
+				lobby_flow_trace("OnlineSongPreview_stop_music reason=unknown_local_pack"
+					.. " pack=" .. tostring(song_info_pack(preview))
+					.. " song=" .. tostring(preview.song or preview.title or ""))
+				stop_music()
+			elseif play_online_preview_music_normal_rate then
 				play_online_preview_music_normal_rate(preview, "online_lobby_song_preview")
 			end
 			self:queuecommand("UpdateJoinedLobbyText")
 		else
+			if stop_music then
+				lobby_flow_trace("OnlineSongPreview_stop_music reason=normalize_failed")
+				stop_music()
+			end
 			lobby_flow_trace("OnlineSongPreview_ignored reason=normalize_failed")
 		end
 	end,
