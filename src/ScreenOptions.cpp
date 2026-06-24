@@ -106,12 +106,8 @@ static bool OnlinePlayerOptionsRequireReadyOnly(const std::string& screenName) {
       "and ITGOnline.currentRoom ~= nil "
       "and ITGOnline.currentRoom.selected_song ~= nil "
       "and ITGOnline.NormalizeRoomPhase ~= nil "
-      "and ("
-      "  ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) == "
-      "'lobby_ready' "
-      "  or ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) == "
-      "'config'"
-      ")",
+      "and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) == "
+      "'config'",
       "ScreenOptions::OnlinePlayerOptionsRequireReadyOnly");
   const bool locked = ran && lua_toboolean(L, -1);
   lua_pop(L, 1);

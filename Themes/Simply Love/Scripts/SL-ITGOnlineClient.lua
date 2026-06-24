@@ -12769,7 +12769,7 @@ function ITGOnline:LobbyStatePayload(room)
 	end
 
 	local screenName = "ScreenOnlineLobbies"
-	if room.phase == "config" or room.phase == "lobby_ready" then
+	if room.phase == "config" then
 		screenName = "ScreenPlayerOptions"
 	elseif room.phase == "starting" or room.phase == "playing" then
 		screenName = "ScreenGameplay"

@@ -636,6 +636,15 @@ local TransitionToOnlineOptions = function()
 	local topScreen = SCREENMAN:GetTopScreen()
 	if not topScreen then return end
 
+	local roomPhase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
+	if roomPhase ~= "config" then
+		if online_trace then
+			online_trace("FLOW transition_to_options_skipped reason=phase_not_config"
+				.. " phase=" .. tostring(roomPhase))
+		end
+		return
+	end
+
 	local screenName = topScreen:GetName()
 	if screenName == "ScreenPlayerOptions"
 		or screenName == "ScreenPlayerOptions2"
@@ -656,7 +665,7 @@ local TransitionToOnlineOptions = function()
 
 	if online_trace then
 		online_trace("FLOW transition_to_options from=" .. tostring(screenName)
-			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"))
+			.. " phase=" .. tostring(roomPhase))
 	end
 	if ITGOnline and ITGOnline.TraceOnlineState then
 		ITGOnline:TraceOnlineState("screen_transition_to_options", {
@@ -1477,8 +1486,10 @@ DisplayLobbyState = function(data, actor)
 						ITGOnline:EnforceRoomPhaseScreen(screenName)
 					end
 				elseif ApplyOnlineSongSelection(data.songInfo) then
-					lastOnlineOptionsSongKey = songKey
 					if data.phase == "lobby_ready" then
+						online_flow_trace("transition_to_options_deferred reason=lobby_ready_waiting_for_config"
+							.. " key=" .. tostring(songKey)
+							.. " room=" .. tostring(data.roomId or data.id or "nil"))
 						if ITGOnline.ConfirmSelectedSongAvailability then
 							ITGOnline:ConfirmSelectedSongAvailability("local_song_available", function(ok)
 								if ok then
@@ -1488,8 +1499,10 @@ DisplayLobbyState = function(data, actor)
 						else
 							maybe_set_lobby_ready("local_song_available")
 						end
+					else
+						lastOnlineOptionsSongKey = songKey
+						TransitionToOnlineOptions()
 					end
-					TransitionToOnlineOptions()
 				end
 			end
 

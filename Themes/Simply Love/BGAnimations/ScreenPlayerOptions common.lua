@@ -131,7 +131,7 @@ local function play_online_options_preview_music(source)
 		return
 	end
 	local phase = ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) or tostring(ITGOnline.currentRoom.phase or "")
-	if phase ~= "config" and phase ~= "lobby_ready" then
+	if phase ~= "config" then
 		online_options_trace("preview_skipped reason=phase source=" .. tostring(source or "nil")
 			.. " phase=" .. tostring(phase)
 			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
