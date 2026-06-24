@@ -8604,6 +8604,15 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		-- Use EX-derived percentage as live accuracy fallback.
 		accuracy = normalizedExScore * 100
 	end
+	if final and forceFinalFailed and (tonumber(displayedScorePercent) or 0) <= 0 and accuracy > 0 then
+		online_flow_trace("final_failed_displayed_percent_restored"
+			.. " source=accuracy_from_judgments"
+			.. " from=" .. tostring(displayedScorePercent)
+			.. " to=" .. tostring(accuracy)
+			.. " scoreMode=" .. tostring(scoreMode)
+			.. " hasJudgments=" .. tostring(self:HasScoredJudgments(judgments) == true))
+		displayedScorePercent = accuracy
+	end
 		local liveCombo = tonumber(snapshot and snapshot.combo)
 		if liveCombo == nil then
 			if stats then
