@@ -3429,10 +3429,7 @@ function ITGOnline:TraceFinalScorePayload(label, fields)
 	if not online_flow_trace then return end
 	fields = type(fields) == "table" and fields or {}
 	local judgments = type(fields.judgments) == "table" and fields.judgments or {}
-	local judgmentTotal = 0
-	for _, value in pairs(judgments) do
-		judgmentTotal = judgmentTotal + math.max(0, tonumber(value) or 0)
-	end
+	local judgmentTotal = self:JudgmentTotal(judgments)
 	local score = tonumber(fields.score) or 0
 	local displayedPercent = tonumber(fields.displayedPercent) or 0
 	local accuracy = tonumber(fields.accuracy) or 0
@@ -3465,6 +3462,17 @@ function ITGOnline:TraceFinalScorePayload(label, fields)
 		.. " forceFinalFailed=" .. tostring(fields.forceFinalFailed == true)
 		.. " scoreMode=" .. tostring(fields.scoreMode or "nil")
 		.. " source=" .. tostring(fields.source or "unknown"))
+end
+
+function ITGOnline:JudgmentTotal(judgments)
+	if type(judgments) ~= "table" then return 0 end
+
+	local total = 0
+	for _, value in pairs(judgments) do
+		total = total + math.max(0, tonumber(value) or 0)
+	end
+
+	return total
 end
 
 function ITGOnline:IsSongReloadOrDownloadActive(source)
