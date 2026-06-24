@@ -76,8 +76,8 @@ local function set_online_lower_score_layout(actor_frame)
 	local lower_itg = actor_frame:GetChild("LowerITGScore")
 	local primary = actor_frame:GetChild("PrimaryScore")
 	if primary then primary:horizalign(center) end
-	if lower_ex then lower_ex:horizalign(center):xy(-36, 18) end
-	if lower_itg then lower_itg:horizalign(center):xy(36, 18) end
+	if lower_ex then lower_ex:horizalign(left):xy(8, -2) end
+	if lower_itg then lower_itg:horizalign(left):xy(70, -2) end
 	prepare_lower_score(lower_ex)
 	prepare_lower_score(lower_itg)
 end
@@ -95,21 +95,12 @@ local function update_lower_scores(actor_frame, scoreMode, exPercent)
 
 	local itgPercent = get_itg_percent()
 	if scoreMode == "hardex" then
-		if is_online_column_layout() then
-			lower_ex:horizalign(center):xy(-36, 18)
-			lower_itg:horizalign(center):xy(36, 18)
-		else
-			lower_ex:horizalign(left):xy(8, -2)
-			lower_itg:horizalign(left):xy(70, -2)
-		end
+		lower_ex:horizalign(left):xy(8, -2)
+		lower_itg:horizalign(left):xy(70, -2)
 		lower_ex:settext(format_percent(exPercent or CalculateExScore(player))):visible(true)
 		lower_itg:settext(format_percent(itgPercent)):visible(true)
 	elseif scoreMode == "ex" then
-		if is_online_column_layout() then
-			lower_itg:horizalign(center):xy(0, 18)
-		else
-			lower_itg:horizalign(left):xy(8, -2)
-		end
+		lower_itg:horizalign(left):xy(8, -2)
 		lower_itg:settext(format_percent(itgPercent)):visible(true)
 	end
 end

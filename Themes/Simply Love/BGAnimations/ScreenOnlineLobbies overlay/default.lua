@@ -22,6 +22,7 @@ local player_action_user = nil
 local showing_transfer_manager_confirm = false
 local transfer_manager_confirm_index = 0
 local transfer_manager_confirm_user = nil
+local transfer_manager_confirm_action = "transfer_manager"
 local showing_private_join_prompt = false
 local private_join_prompt_index = 1
 local private_join_request = nil
@@ -598,6 +599,7 @@ local function close_transient_joined_ui()
 	showing_transfer_manager_confirm = false
 	transfer_manager_confirm_index = 0
 	transfer_manager_confirm_user = nil
+	transfer_manager_confirm_action = "transfer_manager"
 	showing_private_join_prompt = false
 	private_join_request = nil
 	showing_pack_choice_menu = false
@@ -2025,13 +2027,14 @@ local function focus_joined_players()
 	return joined_players_selected
 end
 
-local function open_transfer_manager_confirm(player)
+local function open_transfer_manager_confirm(player, action)
 	if not joined_player_can_receive_manager(player) then
 		lobby_flow_trace("transfer_manager_confirm_open_blocked reason=invalid_player"
 			.. " player=" .. tostring(player and (player.playerId or player.profileName or player.name) or "nil"))
 		return false
 	end
 	transfer_manager_confirm_user = player
+	transfer_manager_confirm_action = action == "exclude_player" and "exclude_player" or "transfer_manager"
 	transfer_manager_confirm_index = 0
 	showing_transfer_manager_confirm = true
 	if t then
@@ -2040,7 +2043,8 @@ local function open_transfer_manager_confirm(player)
 		t:queuecommand("UpdateTransferManagerConfirmPrompt")
 		t:queuecommand("Hover")
 	end
-	lobby_flow_trace("transfer_manager_confirm_open player=" .. tostring(player.playerId or player.profileName or player.name or "nil"))
+	lobby_flow_trace("transfer_manager_confirm_open player=" .. tostring(player.playerId or player.profileName or player.name or "nil")
+		.. " action=" .. tostring(transfer_manager_confirm_action))
 	return true
 end
 
@@ -2048,6 +2052,7 @@ local function close_transfer_manager_confirm()
 	showing_transfer_manager_confirm = false
 	transfer_manager_confirm_index = 0
 	transfer_manager_confirm_user = nil
+	transfer_manager_confirm_action = "transfer_manager"
 	if t then
 		local prompt = t:GetChild("TransferManagerConfirmPrompt")
 		if prompt then prompt:visible(false) end
@@ -2233,6 +2238,7 @@ local function build_player_action_options(user)
 		end
 		return {
 			{label="Transferer manager", action="transfer_manager"},
+			{label="Exclure du salon", action="exclude_player_confirm"},
 			{label="Annuler", action="cancel"},
 		}
 	end
@@ -2375,6 +2381,11 @@ local function execute_player_action(option, user)
 	showing_player_action_menu = false
 	t:GetChild("PlayerActionMenu"):visible(false)
 
+	if option.action == "exclude_player_confirm" then
+		open_transfer_manager_confirm(user, "exclude_player")
+		return
+	end
+
 	if option.action == "transfer_manager" then
 		local targetUserId = user.playerId or user.id
 		if not joined_player_can_receive_manager(user) or not ITGOnline or not ITGOnline.TransferRoomManager then
@@ -2408,6 +2419,48 @@ local function execute_player_action(option, user)
 				end
 			elseif t then
 				local message = "Impossible de transferer le role manager."
+				if response and response.errorMessage then message = response.errorMessage end
+				if decoded and decoded.message then message = decoded.message end
+				t:playcommand("SetStatus", {
+					text=message,
+					showSpinner=false,
+					showPrompt=true
+				})
+			end
+		end)
+	elseif option.action == "exclude_player" then
+		local targetUserId = user.playerId or user.id
+		if not joined_player_can_receive_manager(user) or not ITGOnline or not ITGOnline.KickRoomMember then
+			t:playcommand("SetStatus", {
+				text="Impossible d'exclure ce joueur du salon.",
+				showSpinner=false,
+				showPrompt=true
+			})
+			return
+		end
+		t:playcommand("SetStatus", {
+			text="Exclusion du joueur...",
+			showSpinner=true,
+			showPrompt=false
+		})
+		ITGOnline:KickRoomMember(targetUserId, function(ok, decoded, response)
+			lobby_flow_trace("kick_player_response ok=" .. tostring(ok == true)
+				.. " targetUser=" .. tostring(targetUserId or "nil")
+				.. " status=" .. tostring(response and response.statusCode or "nil")
+				.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil))
+			if ok then
+				joined_players_selected = false
+				if t then
+					t:playcommand("SetStatus", {
+						text="Joueur exclu du salon.",
+						showSpinner=false,
+						showPrompt=false
+					})
+					t:queuecommand("UpdateJoinedLobbyText")
+					t:queuecommand("Hover")
+				end
+			elseif t then
+				local message = "Impossible d'exclure ce joueur."
 				if response and response.errorMessage then message = response.errorMessage end
 				if decoded and decoded.message then message = decoded.message end
 				t:playcommand("SetStatus", {
@@ -2922,8 +2975,12 @@ local function handle_transfer_manager_confirm_input(event)
 		play_online_sound_once("Common", "Start")
 		if transfer_manager_confirm_index == 1 and transfer_manager_confirm_user then
 			local user = transfer_manager_confirm_user
+			local action = transfer_manager_confirm_action
 			close_transfer_manager_confirm()
-			execute_player_action({label="Transferer manager", action="transfer_manager"}, user)
+			execute_player_action({
+				label=action == "exclude_player" and "Exclure du salon" or "Transferer manager",
+				action=action,
+			}, user)
 		else
 			close_transfer_manager_confirm()
 		end
@@ -2967,7 +3024,15 @@ local function handle_joined_mode_input(event)
 			lobby_flow_trace("input_joined_player_action_start player=" .. tostring(player and (player.playerId or player.id or player.profileName) or "nil")
 				.. " canReceiveManager=" .. tostring(joined_player_can_receive_manager(player) == true))
 			if joined_player_can_receive_manager(player) then
-				open_transfer_manager_confirm(player)
+				player_action_user = player
+				player_action_options = build_player_action_options(player)
+				player_action_index = 1
+				showing_player_action_menu = #player_action_options > 0
+				local menu = t and t:GetChild("PlayerActionMenu")
+				if menu then
+					menu:visible(showing_player_action_menu)
+					t:queuecommand("UpdatePlayerActionMenu")
+				end
 				play_online_sound_once("Common", "Start")
 			else
 				play_online_sound_once("Common", "Cancel")
@@ -3885,6 +3950,7 @@ local af = Def.ActorFrame{
 		if not prompt then return end
 		local detail = prompt:GetChild("PromptDetail")
 		if detail then
+			local title = prompt:GetChild("PromptTitle")
 			local displayName = "ce joueur"
 			if transfer_manager_confirm_user then
 				displayName = trim_text(transfer_manager_confirm_user.profileName
@@ -3894,7 +3960,13 @@ local af = Def.ActorFrame{
 					or transfer_manager_confirm_user.playerId
 					or "ce joueur")
 			end
-			detail:settext("Voulez-vous vraiment transmettre le role de manager a " .. displayName .. " ?")
+			if transfer_manager_confirm_action == "exclude_player" then
+				if title then title:settext("Exclure ce joueur ?") end
+				detail:settext("Voulez-vous vraiment exclure " .. displayName .. " du salon ?")
+			else
+				if title then title:settext("Transferer le role manager ?") end
+				detail:settext("Voulez-vous vraiment transmettre le role de manager a " .. displayName .. " ?")
+			end
 		end
 		prompt:playcommand("Hover")
 	end,
@@ -4198,9 +4270,16 @@ local af = Def.ActorFrame{
 					local currentFocusStillAvailable = joined_active_index_is_available()
 					if focusKey ~= lobby_trace_state.lastAutoStartFocusKey then
 						lobby_trace_state.lastAutoStartFocusKey = focusKey
+						joined_active_index = 7
+						joined_user_moved_focus = false
+						lobby_flow_trace("start_button_focus_forced reason=start_button_became_available"
+							.. " canStart=" .. tostring(visible)
+							.. " readyStates=[" .. ready_summary() .. "]"
+							.. " focusKey=" .. tostring(focusKey))
+						self:queuecommand("Hover")
 					end
 					if not currentFocusStillAvailable then
-						joined_active_index = 1
+						joined_active_index = 7
 						joined_user_moved_focus = false
 						lobby_flow_trace("start_button_focus_kept_safe reason=current_focus_unavailable canStart=" .. tostring(visible)
 							.. " readyStates=[" .. ready_summary() .. "]")

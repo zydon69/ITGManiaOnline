@@ -5680,7 +5680,10 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 
 	if phase == "lobby" or phase == "lobby_ready" or phase == "config" then
 		if self:IsOnlineEvaluationScreen(screenName) then
-			if (phase == "lobby_ready" or phase == "config") and self.currentRoom and self.currentRoom.selected_song then
+			if (phase == "lobby_ready" or phase == "config")
+				and self.currentRoom
+				and self.currentRoom.selected_song
+				and self:CurrentUserConfirmedSelectedSong(self.currentRoom) then
 				online_flow_trace("preferred=options reason=new_song_while_evaluation playState=" .. tostring(playState)
 					.. " phase=" .. tostring(phase))
 				return "options"
@@ -5693,7 +5696,13 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 			online_flow_trace("preferred=lobby reason=non_playing_phase_in_gameplay playState=" .. tostring(playState))
 			return "lobby"
 		end
-		local okReason = phase == "config" and "config_phase_waiting_in_lobby_ok"
+		if phase == "config" and self.currentRoom and self.currentRoom.selected_song and self:CurrentUserConfirmedSelectedSong(self.currentRoom) then
+			online_flow_trace("preferred=options reason=config_phase_current_user_has_song screen=" .. tostring(screenName)
+				.. " phase=" .. tostring(phase)
+				.. " playState=" .. tostring(playState))
+			return "options"
+		end
+		local okReason = phase == "config" and "config_phase_waiting_in_lobby_until_song_confirmed"
 			or phase == "lobby_ready" and "lobby_ready_phase_screen_ok"
 			or "lobby_phase_screen_ok"
 		online_flow_trace("preferred=nil reason=" .. okReason .. " screen=" .. tostring(screenName)
@@ -7604,6 +7613,48 @@ function ITGOnline:TransferRoomManager(userId, callback)
 				event = "managerTransfer",
 				success = false,
 				message = response_message(response, decoded, "Impossible de transferer le role manager.")
+			})
+		end
+
+		if callback then callback(ok, decoded, response) end
+	end)
+end
+
+function ITGOnline:KickRoomMember(userId, callback)
+	if not self.currentRoomId then
+		if callback then callback(false, nil, { errorMessage = "No active online room." }) end
+		return
+	end
+
+	self:TraceOnlineState("room_member_kick_request", {
+		source = "room_member_kick",
+		targetUser = userId,
+	})
+	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/kick", {
+		user_id = tonumber(userId) or userId,
+	}, function(ok, decoded, response)
+		self:TraceOnlineState("room_member_kick_response", {
+			source = "room_member_kick",
+			roomSnapshot = decoded and decoded.room or nil,
+			targetUser = userId,
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+		})
+		if ok and decoded and decoded.room then
+			local room = self:ApplyRoomSnapshot(decoded.room, "room_member_kick")
+			decoded.room = room or decoded.room
+			MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = "memberKick",
+				success = true,
+				message = "Joueur exclu du salon."
+			})
+		else
+			MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+				event = "memberKick",
+				success = false,
+				message = response_message(response, decoded, "Impossible d'exclure ce joueur.")
 			})
 		end
 
@@ -12912,7 +12963,15 @@ function ITGOnline:LobbyStatePayload(room)
 		local session = playByUserId[userId] or {}
 		local state = tostring(session.state or member.play_state or "pending")
 		local memberScreenName = screenName
-		if room.phase == "playing" and state ~= "playing" then
+		local songAvailable = nil
+		if member.song_available == true then
+			songAvailable = true
+		elseif member.song_available == false or member.song_available == 0 then
+			songAvailable = false
+		end
+		if (room.phase == "config" or room.phase == "starting") and songAvailable ~= true then
+			memberScreenName = "ScreenOnlineLobbies"
+		elseif room.phase == "playing" and state ~= "playing" then
 			memberScreenName = "ScreenOnlineLobbies"
 		elseif room.phase == "results" then
 			if member.returned_to_lobby == true or state == "returned_to_lobby" then
@@ -12935,12 +12994,6 @@ function ITGOnline:LobbyStatePayload(room)
 		if displayedPercent == nil then
 			displayedPercent = exPercent or scorePercent
 		end
-			local songAvailable = nil
-			if member.song_available == true then
-				songAvailable = true
-			elseif member.song_available == false or member.song_available == 0 then
-				songAvailable = false
-			end
 			local localOptimisticConfigReady = self.user
 				and tonumber(self.user.id) == tonumber(userId)
 				and self:CurrentUserHasOptimisticConfigReady(room)
