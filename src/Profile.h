@@ -483,8 +483,12 @@ class Profile {
 
  private:
   const HighScoresForASong* GetHighScoresForASong(const SongID& songID) const;
+  const HighScoreList* GetStepsHighScoreListIfPresent(
+      const Song* pSong, const Steps* pSteps) const;
   const HighScoresForACourse* GetHighScoresForACourse(
       const CourseID& courseID) const;
+  const HighScoreList* GetCourseHighScoreListIfPresent(
+      const Course* pCourse, const Trail* pTrail) const;
 };
 
 #endif

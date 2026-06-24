@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <cmath>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -84,6 +86,137 @@ static ThemeMetric<std::string> UNLOCK_AUTH_STRING(
 
 const int DEFAULT_WEIGHT_POUNDS = 120;
 const float DEFAULT_BIRTH_YEAR = 1995;
+const size_t MAX_PROFILE_SCORE_ROOT_ENTRIES = 100000;
+const size_t MAX_PROFILE_SCREENSHOTS = 10000;
+const size_t MAX_PROFILE_CALORIE_DAYS = 36500;
+
+namespace {
+int AddProfileIntSaturated(int lhs, int rhs, const char* field) {
+  if (lhs < 0) {
+    LOG->Warn("Profile: clamped negative %s value %d to 0.", field, lhs);
+    lhs = 0;
+  }
+  if (rhs < 0) {
+    LOG->Warn("Profile: clamped negative %s delta %d to 0.", field, rhs);
+    rhs = 0;
+  }
+  if (lhs > std::numeric_limits<int>::max() - rhs) {
+    LOG->Warn("Profile: saturated %s while adding %d and %d.", field, lhs, rhs);
+    return std::numeric_limits<int>::max();
+  }
+  return lhs + rhs;
+}
+
+float AddProfileFloatSaturated(float lhs, float rhs, const char* field) {
+  if (!std::isfinite(lhs) || lhs < 0.0f) {
+    LOG->Warn("Profile: clamped invalid %s value to 0.", field);
+    lhs = 0.0f;
+  }
+  if (!std::isfinite(rhs) || rhs < 0.0f) {
+    LOG->Warn("Profile: clamped invalid %s delta to 0.", field);
+    rhs = 0.0f;
+  }
+  if (lhs > std::numeric_limits<float>::max() - rhs) {
+    LOG->Warn("Profile: saturated %s while adding profile totals.", field);
+    return std::numeric_limits<float>::max();
+  }
+  return lhs + rhs;
+}
+
+bool IsValidStepsTypeIndex(StepsType st) {
+  return st >= 0 && st < NUM_StepsType;
+}
+
+bool IsValidRankingCategoryIndex(RankingCategory rc) {
+  return rc >= 0 && rc < NUM_RankingCategory;
+}
+
+bool IsUsableScreenshotFileName(const std::string& file_name) {
+  return !file_name.empty() && file_name.find('/') == std::string::npos &&
+         file_name.find('\\') == std::string::npos &&
+         file_name.find("..") == std::string::npos &&
+         file_name.find(':') == std::string::npos;
+}
+
+std::string EscapeRegexLiteral(const std::string& value) {
+  std::string escaped;
+  escaped.reserve(value.size() * 2);
+  for (char c : value) {
+    switch (c) {
+      case '.':
+      case '\\':
+      case '+':
+      case '*':
+      case '?':
+      case '[':
+      case '^':
+      case ']':
+      case '$':
+      case '(':
+      case ')':
+      case '{':
+      case '}':
+      case '=':
+      case '!':
+      case '<':
+      case '>':
+      case '|':
+      case ':':
+      case '-':
+        escaped.push_back('\\');
+        break;
+      default:
+        break;
+    }
+    escaped.push_back(c);
+  }
+  return escaped;
+}
+
+std::string SanitizeProfileText(std::string value) {
+  return Profile::NormalizeDisplayName(value);
+}
+
+int SanitizeNonNegativeProfileInt(int value, int maxValue, const char* field) {
+  if (value < 0) {
+    LOG->Warn("Profile: clamped negative %s value %d to 0.", field, value);
+    return 0;
+  }
+  if (value > maxValue) {
+    LOG->Warn(
+        "Profile: clamped oversized %s value %d to %d.",
+        field, value, maxValue);
+    return maxValue;
+  }
+  return value;
+}
+
+float SanitizeNonNegativeProfileFloat(
+    float value, float maxValue, const char* field) {
+  if (!std::isfinite(value) || value < 0.0f) {
+    LOG->Warn("Profile: clamped invalid %s value to 0.", field);
+    return 0.0f;
+  }
+  if (value > maxValue) {
+    LOG->Warn("Profile: clamped oversized %s value.", field);
+    return maxValue;
+  }
+  return value;
+}
+
+GoalType SanitizeGoalType(GoalType value) {
+  if (value < 0 || value >= NUM_GoalType) {
+    LOG->Warn("Profile: reset invalid goal type %d.", value);
+    return GoalType_Calories;
+  }
+  return value;
+}
+
+const HighScoreList& EmptyHighScoreList() {
+  static const HighScoreList empty;
+  return empty;
+}
+}  // namespace
 
 #if defined(_MSC_VER)
 #pragma warning(disable : 4706)  // assignment within conditional expression
@@ -101,13 +234,11 @@ LuaXType(ProfileType);
 Profile::~Profile() { ClearSongs(); }
 
 void Profile::ClearSongs() {
-  if (m_songs.empty()) {
-    return;
-  }
-  Song* gamestate_curr_song = GAMESTATE->m_pCurSong;
+  Song* gamestate_curr_song =
+      GAMESTATE != nullptr ? GAMESTATE->m_pCurSong.Get() : nullptr;
   for (size_t i = 0; i < m_songs.size(); ++i) {
     Song* curr_song = m_songs[i];
-    if (curr_song == gamestate_curr_song) {
+    if (GAMESTATE != nullptr && curr_song == gamestate_curr_song) {
       GAMESTATE->m_pCurSong.Set(nullptr);
     }
     delete curr_song;
@@ -122,7 +253,8 @@ int Profile::HighScoresForASong::GetNumTimesPlayed() const {
   int iCount = 0;
   for (const std::pair<const StepsID, HighScoresForASteps>& i :
        m_StepsHighScores) {
-    iCount += i.second.hsl.GetNumTimesPlayed();
+    iCount = AddProfileIntSaturated(
+        iCount, i.second.hsl.GetNumTimesPlayed(), "song play count");
   }
   return iCount;
 }
@@ -131,7 +263,8 @@ int Profile::HighScoresForACourse::GetNumTimesPlayed() const {
   int iCount = 0;
   for (const std::pair<const TrailID, HighScoresForATrail>& i :
        m_TrailHighScores) {
-    iCount += i.second.hsl.GetNumTimesPlayed();
+    iCount = AddProfileIntSaturated(
+        iCount, i.second.hsl.GetNumTimesPlayed(), "course play count");
   }
   return iCount;
 }
@@ -258,9 +391,16 @@ std::string Profile::NormalizeDisplayName(const std::string& sName) {
 }
 
 Character* Profile::GetCharacter() const {
+  if (CHARMAN == nullptr) {
+    LOG->Warn("Profile::GetCharacter called without CharacterManager.");
+    return nullptr;
+  }
   std::vector<Character*> vpCharacters;
   CHARMAN->GetCharacters(vpCharacters);
   for (Character* c : vpCharacters) {
+    if (c == nullptr) {
+      continue;
+    }
     if (CompareNoCase(c->m_sCharacterID, m_sCharacterID) == 0) {
       return c;
     }
@@ -269,7 +409,7 @@ Character* Profile::GetCharacter() const {
 }
 
 void Profile::SetCharacter(const std::string sCharacterID) {
-  if (CHARMAN->GetCharacterFromID(sCharacterID)) {
+  if (CHARMAN != nullptr && CHARMAN->GetCharacterFromID(sCharacterID)) {
     m_sCharacterID = sCharacterID;
   }
 }
@@ -310,15 +450,23 @@ float Profile::GetCaloriesBurnedToday() const {
 int Profile::GetTotalNumSongsPassed() const {
   int iTotal = 0;
   FOREACH_ENUM(PlayMode, i)
-  iTotal += m_iNumStagesPassedByPlayMode[i];
+  iTotal = AddProfileIntSaturated(
+      iTotal, m_iNumStagesPassedByPlayMode[i], "songs passed");
   return iTotal;
 }
 
 int Profile::GetTotalStepsWithTopGrade(
     StepsType st, Difficulty d, Grade g) const {
   int iCount = 0;
+  if (SONGMAN == nullptr) {
+    LOG->Warn("Profile::GetTotalStepsWithTopGrade called without SongManager.");
+    return 0;
+  }
 
   for (Song* pSong : SONGMAN->GetAllSongs()) {
+    if (pSong == nullptr) {
+      continue;
+    }
     if (!pSong->NormallyDisplayed()) {
       continue;  // skip
     }
@@ -332,12 +480,15 @@ int Profile::GetTotalStepsWithTopGrade(
         continue;  // skip
       }
 
-      const HighScoreList& hsl = GetStepsHighScoreList(pSong, pSteps);
-      if (hsl.vHighScores.empty()) {
+      const HighScoreList* hsl = GetStepsHighScoreListIfPresent(pSong, pSteps);
+      if (hsl == nullptr) {
+        continue;
+      }
+      if (hsl->vHighScores.empty()) {
         continue;  // skip
       }
 
-      if (hsl.vHighScores[0].GetGrade() == g) {
+      if (hsl->vHighScores[0].GetGrade() == g) {
         iCount++;
       }
     }
@@ -349,11 +500,18 @@ int Profile::GetTotalStepsWithTopGrade(
 int Profile::GetTotalTrailsWithTopGrade(
     StepsType st, CourseDifficulty d, Grade g) const {
   int iCount = 0;
+  if (SONGMAN == nullptr) {
+    LOG->Warn("Profile::GetTotalTrailsWithTopGrade called without SongManager.");
+    return 0;
+  }
 
   // add course high scores
   std::vector<Course*> vCourses;
   SONGMAN->GetAllCourses(vCourses, false);
   for (const Course* pCourse : vCourses) {
+    if (pCourse == nullptr) {
+      continue;
+    }
     // Don't count any course that has any entries that change over time.
     if (!pCourse->AllSongsAreFixed()) {
       continue;
@@ -365,12 +523,12 @@ int Profile::GetTotalTrailsWithTopGrade(
       continue;
     }
 
-    const HighScoreList& hsl = GetCourseHighScoreList(pCourse, pTrail);
-    if (hsl.vHighScores.empty()) {
+    const HighScoreList* hsl = GetCourseHighScoreListIfPresent(pCourse, pTrail);
+    if (hsl == nullptr || hsl->vHighScores.empty()) {
       continue;  // skip
     }
 
-    if (hsl.vHighScores[0].GetGrade() == g) {
+    if (hsl->vHighScores[0].GetGrade() == g) {
       iCount++;
     }
   }
@@ -380,11 +538,18 @@ int Profile::GetTotalTrailsWithTopGrade(
 
 float Profile::GetSongsPossible(StepsType st, Difficulty dc) const {
   int iTotalSteps = 0;
+  if (SONGMAN == nullptr) {
+    LOG->Warn("Profile::GetSongsPossible called without SongManager.");
+    return 0.0f;
+  }
 
   // add steps high scores
   const std::vector<Song*>& vSongs = SONGMAN->GetAllSongs();
   for (unsigned i = 0; i < vSongs.size(); i++) {
     Song* pSong = vSongs[i];
+    if (pSong == nullptr) {
+      continue;
+    }
 
     if (!pSong->NormallyDisplayed()) {
       continue;  // skip
@@ -393,6 +558,9 @@ float Profile::GetSongsPossible(StepsType st, Difficulty dc) const {
     std::vector<Steps*> vSteps = pSong->GetAllSteps();
     for (unsigned j = 0; j < vSteps.size(); j++) {
       Steps* pSteps = vSteps[j];
+      if (pSteps == nullptr) {
+        continue;
+      }
 
       if (pSteps->m_StepsType != st) {
         continue;  // skip
@@ -476,16 +644,24 @@ float Profile::GetSongsActual(StepsType st, Difficulty dc) const {
 }
 
 float Profile::GetSongsPercentComplete(StepsType st, Difficulty dc) const {
-  return GetSongsActual(st, dc) / GetSongsPossible(st, dc);
+  const float possible = GetSongsPossible(st, dc);
+  return possible > 0.0f ? GetSongsActual(st, dc) / possible : 0.0f;
 }
 
 static void GetHighScoreCourses(std::vector<Course*>& vpCoursesOut) {
   vpCoursesOut.clear();
+  if (SONGMAN == nullptr) {
+    LOG->Warn("GetHighScoreCourses called without SongManager.");
+    return;
+  }
 
   std::vector<Course*> vpCourses;
   SONGMAN->GetAllCourses(vpCourses, false);
 
   for (Course* c : vpCourses) {
+    if (c == nullptr) {
+      continue;
+    }
     // Don't count any course that has any entries that change over time.
     if (!c->AllSongsAreFixed()) {
       continue;
@@ -514,8 +690,10 @@ float Profile::GetCoursesActual(StepsType st, CourseDifficulty cd) const {
       continue;
     }
 
-    const HighScoreList& hsl = GetCourseHighScoreList(c, pTrail);
-    fTotalPercents += hsl.GetTopScore().GetPercentDP();
+    const HighScoreList* hsl = GetCourseHighScoreListIfPresent(c, pTrail);
+    if (hsl != nullptr) {
+      fTotalPercents += hsl->GetTopScore().GetPercentDP();
+    }
   }
 
   return fTotalPercents;
@@ -523,7 +701,8 @@ float Profile::GetCoursesActual(StepsType st, CourseDifficulty cd) const {
 
 float Profile::GetCoursesPercentComplete(
     StepsType st, CourseDifficulty cd) const {
-  return GetCoursesActual(st, cd) / GetCoursesPossible(st, cd);
+  const float possible = GetCoursesPossible(st, cd);
+  return possible > 0.0f ? GetCoursesActual(st, cd) / possible : 0.0f;
 }
 
 float Profile::GetSongsAndCoursesPercentCompleteAllDifficulties(
@@ -538,7 +717,7 @@ float Profile::GetSongsAndCoursesPercentCompleteAllDifficulties(
     fActual += GetCoursesActual(st, d);
     fPossible += GetCoursesPossible(st, d);
   }
-  return fActual / fPossible;
+  return fPossible > 0.0f ? fActual / fPossible : 0.0f;
 }
 
 int Profile::GetSongNumTimesPlayed(const Song* pSong) const {
@@ -575,6 +754,10 @@ int Profile::GetSongNumTimesPlayed(const SongID& songID) const {
  */
 bool Profile::GetDefaultModifiers(
     const Game* pGameType, std::string& sModifiersOut) const {
+  if (pGameType == nullptr) {
+    LOG->Warn("Profile::GetDefaultModifiers called without a game type.");
+    return false;
+  }
   std::map<std::string, std::string>::const_iterator it;
   it = m_sDefaultModifiers.find(pGameType->m_szName);
   if (it == m_sDefaultModifiers.end()) {
@@ -586,6 +769,10 @@ bool Profile::GetDefaultModifiers(
 
 void Profile::SetDefaultModifiers(
     const Game* pGameType, const std::string& sModifiers) {
+  if (pGameType == nullptr) {
+    LOG->Warn("Profile::SetDefaultModifiers called without a game type.");
+    return;
+  }
   if (sModifiers == "") {
     m_sDefaultModifiers.erase(pGameType->m_szName);
   } else {
@@ -630,16 +817,28 @@ Course* Profile::GetMostPopularCourse() const {
 // Steps high scores
 void Profile::AddStepsHighScore(
     const Song* pSong, const Steps* pSteps, HighScore hs, int& iIndexOut) {
+  iIndexOut = -1;
+  if (pSong == nullptr || pSteps == nullptr) {
+    LOG->Warn("Profile::AddStepsHighScore ignored null song or steps.");
+    return;
+  }
   GetStepsHighScoreList(pSong, pSteps).AddHighScore(hs, iIndexOut, IsMachine());
 }
 
 const HighScoreList& Profile::GetStepsHighScoreList(
     const Song* pSong, const Steps* pSteps) const {
-  return ((Profile*)this)->GetStepsHighScoreList(pSong, pSteps);
+  const HighScoreList* hsl = GetStepsHighScoreListIfPresent(pSong, pSteps);
+  return hsl != nullptr ? *hsl : EmptyHighScoreList();
 }
 
 HighScoreList& Profile::GetStepsHighScoreList(
     const Song* pSong, const Steps* pSteps) {
+  static HighScoreList invalid;
+  if (pSong == nullptr || pSteps == nullptr) {
+    LOG->Warn("Profile::GetStepsHighScoreList ignored null song or steps.");
+    invalid.Init();
+    return invalid;
+  }
   SongID songID;
   songID.FromSong(pSong);
 
@@ -656,20 +855,24 @@ HighScoreList& Profile::GetStepsHighScoreList(
 
 int Profile::GetStepsNumTimesPlayed(
     const Song* pSong, const Steps* pSteps) const {
-  return GetStepsHighScoreList(pSong, pSteps).GetNumTimesPlayed();
+  const HighScoreList* hsl = GetStepsHighScoreListIfPresent(pSong, pSteps);
+  return hsl != nullptr ? hsl->GetNumTimesPlayed() : 0;
 }
 
 DateTime Profile::GetSongLastPlayedDateTime(const Song* pSong) const {
+  DateTime dtLatest;  // starts out zeroed
+  if (pSong == nullptr) {
+    return dtLatest;
+  }
   SongID id;
   id.FromSong(pSong);
   std::map<SongID, HighScoresForASong>::const_iterator iter =
       m_SongHighScores.find(id);
 
-  // don't call this unless has been played once
-  ASSERT(iter != m_SongHighScores.end());
-  ASSERT(!iter->second.m_StepsHighScores.empty());
+  if (iter == m_SongHighScores.end() || iter->second.m_StepsHighScores.empty()) {
+    return dtLatest;
+  }
 
-  DateTime dtLatest;  // starts out zeroed
   for (const std::pair<const StepsID, HighScoresForASteps>& i :
        iter->second.m_StepsHighScores) {
     const HighScoreList& hsl = i.second.hsl;
@@ -684,8 +887,11 @@ DateTime Profile::GetSongLastPlayedDateTime(const Song* pSong) const {
 }
 
 bool Profile::HasPassedSteps(const Song* pSong, const Steps* pSteps) const {
-  const HighScoreList& hsl = GetStepsHighScoreList(pSong, pSteps);
-  Grade grade = hsl.GetTopScore().GetGrade();
+  const HighScoreList* hsl = GetStepsHighScoreListIfPresent(pSong, pSteps);
+  if (hsl == nullptr) {
+    return false;
+  }
+  Grade grade = hsl->GetTopScore().GetGrade();
   switch (grade) {
     case Grade_Failed:
     case Grade_NoData:
@@ -696,6 +902,9 @@ bool Profile::HasPassedSteps(const Song* pSong, const Steps* pSteps) const {
 }
 
 bool Profile::HasPassedAnyStepsInSong(const Song* pSong) const {
+  if (pSong == nullptr) {
+    return false;
+  }
   const auto& steps = pSong->GetAllSteps();
   return std::any_of(steps.begin(), steps.end(), [&](const Steps* s) {
     return HasPassedSteps(pSong, s);
@@ -703,6 +912,10 @@ bool Profile::HasPassedAnyStepsInSong(const Song* pSong) const {
 }
 
 void Profile::IncrementStepsPlayCount(const Song* pSong, const Steps* pSteps) {
+  if (pSong == nullptr || pSteps == nullptr) {
+    LOG->Warn("Profile::IncrementStepsPlayCount ignored null song or steps.");
+    return;
+  }
   DateTime now = DateTime::GetNowDate();
   GetStepsHighScoreList(pSong, pSteps).IncrementPlayCount(now);
 }
@@ -737,17 +950,29 @@ void Profile::GetGrades(
 // Course high scores
 void Profile::AddCourseHighScore(
     const Course* pCourse, const Trail* pTrail, HighScore hs, int& iIndexOut) {
+  iIndexOut = -1;
+  if (pCourse == nullptr || pTrail == nullptr) {
+    LOG->Warn("Profile::AddCourseHighScore ignored null course or trail.");
+    return;
+  }
   GetCourseHighScoreList(pCourse, pTrail)
       .AddHighScore(hs, iIndexOut, IsMachine());
 }
 
 const HighScoreList& Profile::GetCourseHighScoreList(
     const Course* pCourse, const Trail* pTrail) const {
-  return ((Profile*)this)->GetCourseHighScoreList(pCourse, pTrail);
+  const HighScoreList* hsl = GetCourseHighScoreListIfPresent(pCourse, pTrail);
+  return hsl != nullptr ? *hsl : EmptyHighScoreList();
 }
 
 HighScoreList& Profile::GetCourseHighScoreList(
     const Course* pCourse, const Trail* pTrail) {
+  static HighScoreList invalid;
+  if (pCourse == nullptr || pTrail == nullptr) {
+    LOG->Warn("Profile::GetCourseHighScoreList ignored null course or trail.");
+    invalid.Init();
+    return invalid;
+  }
   CourseID courseID;
   courseID.FromCourse(pCourse);
 
@@ -763,6 +988,9 @@ HighScoreList& Profile::GetCourseHighScoreList(
 }
 
 int Profile::GetCourseNumTimesPlayed(const Course* pCourse) const {
+  if (pCourse == nullptr) {
+    return 0;
+  }
   CourseID courseID;
   courseID.FromCourse(pCourse);
 
@@ -780,22 +1008,28 @@ int Profile::GetCourseNumTimesPlayed(const CourseID& courseID) const {
        hsCourse->m_TrailHighScores) {
     const HighScoresForATrail& hsTrail = j.second;
 
-    iTotalNumTimesPlayed += hsTrail.hsl.GetNumTimesPlayed();
+    iTotalNumTimesPlayed = AddProfileIntSaturated(
+        iTotalNumTimesPlayed, hsTrail.hsl.GetNumTimesPlayed(),
+        "course play count");
   }
   return iTotalNumTimesPlayed;
 }
 
 DateTime Profile::GetCourseLastPlayedDateTime(const Course* pCourse) const {
+  DateTime dtLatest;  // starts out zeroed
+  if (pCourse == nullptr) {
+    return dtLatest;
+  }
   CourseID id;
   id.FromCourse(pCourse);
   std::map<CourseID, HighScoresForACourse>::const_iterator iter =
       m_CourseHighScores.find(id);
 
-  // don't call this unless has been played once
-  ASSERT(iter != m_CourseHighScores.end());
-  ASSERT(!iter->second.m_TrailHighScores.empty());
+  if (iter == m_CourseHighScores.end() ||
+      iter->second.m_TrailHighScores.empty()) {
+    return dtLatest;
+  }
 
-  DateTime dtLatest;  // starts out zeroed
   for (const std::pair<const TrailID, HighScoresForATrail>& i :
        iter->second.m_TrailHighScores) {
     const HighScoreList& hsl = i.second.hsl;
@@ -811,6 +1045,10 @@ DateTime Profile::GetCourseLastPlayedDateTime(const Course* pCourse) const {
 
 void Profile::IncrementCoursePlayCount(
     const Course* pCourse, const Trail* pTrail) {
+  if (pCourse == nullptr || pTrail == nullptr) {
+    LOG->Warn("Profile::IncrementCoursePlayCount ignored null course or trail.");
+    return;
+  }
   DateTime now = DateTime::GetNowDate();
   GetCourseHighScoreList(pCourse, pTrail).IncrementPlayCount(now);
 }
@@ -856,12 +1094,19 @@ void Profile::GetAllUsedHighScoreNames(std::set<std::string>& names) {
 void Profile::MergeScoresFromOtherProfile(
     Profile* other, bool skip_totals, const std::string& from_dir,
     const std::string& to_dir) {
+  if (other == nullptr) {
+    LOG->Warn("Profile::MergeScoresFromOtherProfile ignored null profile.");
+    return;
+  }
   if (!skip_totals) {
-#define MERGE_FIELD(field_name) field_name += other->field_name;
+#define MERGE_FIELD(field_name) \
+  field_name = AddProfileIntSaturated(field_name, other->field_name, #field_name)
     MERGE_FIELD(m_iTotalSessions);
     MERGE_FIELD(m_iTotalSessionSeconds);
     MERGE_FIELD(m_iTotalGameplaySeconds);
-    MERGE_FIELD(m_fTotalCaloriesBurned);
+    m_fTotalCaloriesBurned = AddProfileFloatSaturated(
+        m_fTotalCaloriesBurned, other->m_fTotalCaloriesBurned,
+        "total calories burned");
     MERGE_FIELD(m_iTotalDancePoints);
     MERGE_FIELD(m_iNumExtraStagesPassed);
     MERGE_FIELD(m_iNumExtraStagesFailed);
@@ -880,7 +1125,7 @@ void Profile::MergeScoresFromOtherProfile(
     FOREACH_ENUM(Difficulty, i) {
       MERGE_FIELD(m_iNumSongsPlayedByDifficulty[i]);
     }
-    for (int i = 0; i < MAX_METER; ++i) {
+    for (int i = 0; i < MAX_METER + 1; ++i) {
       MERGE_FIELD(m_iNumSongsPlayedByMeter[i]);
     }
     MERGE_FIELD(m_iNumTotalSongsPlayed);
@@ -894,7 +1139,9 @@ void Profile::MergeScoresFromOtherProfile(
       if (this_cal == m_mapDayToCaloriesBurned.end()) {
         m_mapDayToCaloriesBurned[other_cal->first] = other_cal->second;
       } else {
-        this_cal->second.fCals += other_cal->second.fCals;
+        this_cal->second.fCals = AddProfileFloatSaturated(
+            this_cal->second.fCals, other_cal->second.fCals,
+            "daily calories burned");
       }
     }
   }
@@ -946,6 +1193,20 @@ void Profile::MergeScoresFromOtherProfile(
         m_vScreenshots.end(), other->m_vScreenshots.begin(),
         other->m_vScreenshots.end());
     for (size_t sid = old_count; sid < m_vScreenshots.size(); ++sid) {
+      if (!IsUsableScreenshotFileName(m_vScreenshots[sid].sFileName)) {
+        LOG->Warn(
+            "Profile::MergeScoresFromOtherProfile skipped unsafe screenshot "
+            "filename '%s'.",
+            m_vScreenshots[sid].sFileName.c_str());
+        m_vScreenshots[sid].sFileName.clear();
+        continue;
+      }
+      if (FILEMAN == nullptr) {
+        LOG->Warn(
+            "Profile::MergeScoresFromOtherProfile cannot move screenshots "
+            "without FileManager.");
+        break;
+      }
       std::string old_path =
           from_dir + "Screenshots/" + m_vScreenshots[sid].sFileName;
       std::string new_path =
@@ -1034,27 +1295,52 @@ void Profile::swap(Profile& other) {
 // Category high scores
 void Profile::AddCategoryHighScore(
     StepsType st, RankingCategory rc, HighScore hs, int& iIndexOut) {
+  iIndexOut = -1;
+  if (!IsValidStepsTypeIndex(st) || !IsValidRankingCategoryIndex(rc)) {
+    LOG->Warn("Profile::AddCategoryHighScore ignored invalid category.");
+    return;
+  }
   m_CategoryHighScores[st][rc].AddHighScore(hs, iIndexOut, IsMachine());
 }
 
 const HighScoreList& Profile::GetCategoryHighScoreList(
     StepsType st, RankingCategory rc) const {
-  return ((Profile*)this)->m_CategoryHighScores[st][rc];
+  if (!IsValidStepsTypeIndex(st) || !IsValidRankingCategoryIndex(rc)) {
+    LOG->Warn("Profile::GetCategoryHighScoreList ignored invalid category.");
+    return EmptyHighScoreList();
+  }
+  return m_CategoryHighScores[st][rc];
 }
 
 HighScoreList& Profile::GetCategoryHighScoreList(
     StepsType st, RankingCategory rc) {
+  static HighScoreList invalid;
+  if (!IsValidStepsTypeIndex(st) || !IsValidRankingCategoryIndex(rc)) {
+    LOG->Warn("Profile::GetCategoryHighScoreList ignored invalid category.");
+    invalid.Init();
+    return invalid;
+  }
   return m_CategoryHighScores[st][rc];
 }
 
 int Profile::GetCategoryNumTimesPlayed(StepsType st) const {
+  if (!IsValidStepsTypeIndex(st)) {
+    LOG->Warn("Profile::GetCategoryNumTimesPlayed ignored invalid steps type.");
+    return 0;
+  }
   int iNumTimesPlayed = 0;
   FOREACH_ENUM(RankingCategory, rc)
-  iNumTimesPlayed += m_CategoryHighScores[st][rc].GetNumTimesPlayed();
+  iNumTimesPlayed = AddProfileIntSaturated(
+      iNumTimesPlayed, m_CategoryHighScores[st][rc].GetNumTimesPlayed(),
+      "category play count");
   return iNumTimesPlayed;
 }
 
 void Profile::IncrementCategoryPlayCount(StepsType st, RankingCategory rc) {
+  if (!IsValidStepsTypeIndex(st) || !IsValidRankingCategoryIndex(rc)) {
+    LOG->Warn("Profile::IncrementCategoryPlayCount ignored invalid category.");
+    return;
+  }
   DateTime now = DateTime::GetNowDate();
   m_CategoryHighScores[st][rc].IncrementPlayCount(now);
 }
@@ -1109,7 +1395,19 @@ void Profile::LoadCustomFunction(std::string sDir, PlayerNumber pn) {
    *   [Profile]
    *   CustomLoadFunction=function(profile, profileDir) ... end
    */
+  if (LUA == nullptr || THEME == nullptr) {
+    LOG->Warn(
+        "Profile::LoadCustomFunction: Lua or ThemeManager unavailable; "
+        "skipping theme profile load hook");
+    return;
+  }
   Lua* L = LUA->Get();
+  if (L == nullptr) {
+    LOG->Warn(
+        "Profile::LoadCustomFunction: Lua state unavailable; skipping theme "
+        "profile load hook");
+    return;
+  }
   LuaReference customLoadFunc =
       THEME->GetMetricR("Profile", "CustomLoadFunction");
   customLoadFunc.PushSelf(L);
@@ -1139,6 +1437,12 @@ void Profile::LoadCustomFunction(std::string sDir, PlayerNumber pn) {
 }
 
 void Profile::HandleStatsPrefixChange(std::string dir, bool require_signature) {
+  if (PROFILEMAN == nullptr) {
+    LOG->Warn(
+        "Profile::HandleStatsPrefixChange: ProfileManager unavailable; "
+        "leaving profile data untouched.");
+    return;
+  }
   // Temp variables to preserve stuff across the reload.
   // Some stuff intentionally left out because the original reason for the
   // stats prefix was to allow scores from different game types to coexist.
@@ -1166,8 +1470,15 @@ void Profile::HandleStatsPrefixChange(std::string dir, bool require_signature) {
   float total_calories_burned = m_fTotalCaloriesBurned;
   LuaTable user_table = m_UserTable;
   bool need_to_create_file = false;
-  if (IsAFile(dir + PROFILEMAN->GetStatsPrefix() + STATS_XML)) {
-    LoadAllFromDir(dir, require_signature);
+  const std::string statsPrefix = dir + PROFILEMAN->GetStatsPrefix();
+  if (IsAFile(statsPrefix + STATS_XML) || IsAFile(statsPrefix + STATS_XML_GZ)) {
+    ProfileLoadResult result = LoadAllFromDir(dir, require_signature);
+    if (result != ProfileLoadResult_Success) {
+      LOG->Warn(
+          "Profile::HandleStatsPrefixChange: failed to reload stats prefix "
+          "'%s'; keeping preserved profile fields only.",
+          PROFILEMAN->GetStatsPrefix().c_str());
+    }
   } else {
     ClearStats();
     need_to_create_file = true;
@@ -1195,7 +1506,12 @@ void Profile::HandleStatsPrefixChange(std::string dir, bool require_signature) {
   m_fTotalCaloriesBurned = total_calories_burned;
   m_UserTable = user_table;
   if (need_to_create_file) {
-    SaveAllToDir(dir, require_signature);
+    if (!SaveAllToDir(dir, require_signature)) {
+      LOG->Warn(
+          "Profile::HandleStatsPrefixChange: failed to create stats file for "
+          "prefix '%s'.",
+          PROFILEMAN->GetStatsPrefix().c_str());
+    }
   }
 }
 
@@ -1232,11 +1548,16 @@ ProfileLoadResult Profile::LoadAllFromDir(
 
 void Profile::LoadSongsFromDir(
     const std::string& dir, ProfileSlot prof_slot, bool isMemoryCard) {
+  if (PREFSMAN == nullptr || FILEMAN == nullptr) {
+    LOG->Warn("Profile::LoadSongsFromDir called without prefs or file manager.");
+    return;
+  }
   if (!PREFSMAN->m_custom_songs_enable) {
     return;
   }
   std::string songs_folder = dir + "Songs";
   if (FILEMAN->DoesFileExist(songs_folder) && isMemoryCard) {
+    ClearSongs();
     LOG->Trace("Found songs folder in profile.");
     std::vector<std::string> song_folders;
     RageTimer song_load_start_time;
@@ -1252,9 +1573,16 @@ void Profile::LoadSongsFromDir(
 
     LOG->Trace("Found %i songs in profile.", int(song_folders.size()));
     // Only songs that are successfully loaded count towards the limit. -Kyz
+    const size_t maxSongs =
+        static_cast<size_t>(PREFSMAN->m_custom_songs_max_count.Get());
+    const float customSongsTimeout =
+        PREFSMAN->m_custom_songs_load_timeout.Get();
+    const float loadTimeout =
+        std::isfinite(customSongsTimeout)
+            ? std::max(0.0f, customSongsTimeout)
+            : 0.0f;
     for (size_t song_index = 0;
-         song_index < song_folders.size() &&
-         m_songs.size() < PREFSMAN->m_custom_songs_max_count;
+         song_index < song_folders.size() && m_songs.size() < maxSongs;
          ++song_index) {
       std::string& song_dir_name = song_folders[song_index];
       Song* new_song = new Song;
@@ -1266,7 +1594,7 @@ void Profile::LoadSongsFromDir(
         new_song->SetEnabled(true);
         m_songs.push_back(new_song);
       }
-      if (song_load_start_time.Ago() > PREFSMAN->m_custom_songs_load_timeout) {
+      if (loadTimeout > 0.0f && song_load_start_time.Ago() > loadTimeout) {
         break;
       }
     }
@@ -1286,6 +1614,10 @@ void Profile::LoadSongsFromDir(
 
 ProfileLoadResult Profile::LoadStatsFromDir(
     std::string dir, bool require_signature) {
+  if (PROFILEMAN == nullptr || FILEMAN == nullptr) {
+    LOG->Warn("Profile::LoadStatsFromDir called without profile or file manager.");
+    return ProfileLoadResult_FailedNoProfile;
+  }
   dir = dir + PROFILEMAN->GetStatsPrefix();
   // Check for the existance of stats.xml
   std::string fn = dir + STATS_XML;
@@ -1320,15 +1652,12 @@ ProfileLoadResult Profile::LoadStatsFromDir(
   }
 
   // Don't load unreasonably large stats.xml files.
-  if (!IsMachine())  // only check stats coming from the player
-  {
-    int iBytes = pFile->GetFileSize();
-    if (iBytes > MAX_PLAYER_STATS_XML_SIZE_BYTES) {
-      LuaHelpers::ReportScriptErrorFmt(
-          "The file '%s' is unreasonably large.  It won't be loaded.",
-          fn.c_str());
-      return ProfileLoadResult_FailedTampered;
-    }
+  int iBytes = pFile->GetFileSize();
+  if (iBytes < 0 || iBytes > MAX_PLAYER_STATS_XML_SIZE_BYTES) {
+    LuaHelpers::ReportScriptErrorFmt(
+        "The file '%s' is unreasonably large.  It won't be loaded.",
+        fn.c_str());
+    return ProfileLoadResult_FailedTampered;
   }
 
   if (require_signature) {
@@ -1396,6 +1725,10 @@ void Profile::LoadTypeFromDir(std::string dir) {
 
 ProfileLoadResult Profile::LoadStatsXmlFromNode(
     const XNode* xml, bool bIgnoreEditable) {
+  if (xml == nullptr) {
+    WARN_M("null Stats root");
+    return ProfileLoadResult_FailedTampered;
+  }
   /* The placeholder stats.xml file has an <html> tag. Don't load it,
    * but don't warn about it. */
   if (xml->GetName() == "html") {
@@ -1439,7 +1772,15 @@ ProfileLoadResult Profile::LoadStatsXmlFromNode(
 }
 
 bool Profile::SaveAllToDir(std::string sDir, bool bSignData) const {
-  m_sLastPlayedMachineGuid = PROFILEMAN->GetMachineProfile()->m_sGuid;
+  if (PROFILEMAN == nullptr || FILEMAN == nullptr || PREFSMAN == nullptr) {
+    LOG->Warn(
+        "Profile::SaveAllToDir: required managers unavailable for '%s'.",
+        sDir.c_str());
+    return false;
+  }
+  const Profile* machineProfile = PROFILEMAN->GetMachineProfile();
+  m_sLastPlayedMachineGuid =
+      machineProfile != nullptr ? machineProfile->m_sGuid : std::string();
   m_LastPlayedDate = DateTime::GetNowDate();
 
   bool bSaved = SaveStatsXmlToDir(sDir, bSignData);
@@ -1478,7 +1819,19 @@ bool Profile::SaveAllToDir(std::string sDir, bool bSignData) const {
    *   [Profile]
    *   CustomSaveFunction=function(profile, profileDir) ... end
    */
+  if (LUA == nullptr || THEME == nullptr) {
+    LOG->Warn(
+        "Profile::SaveAllToDir: Lua or ThemeManager unavailable; skipping "
+        "theme profile save hook");
+    return bSaved;
+  }
   Lua* L = LUA->Get();
+  if (L == nullptr) {
+    LOG->Warn(
+        "Profile::SaveAllToDir: Lua state unavailable; skipping theme profile "
+        "save hook");
+    return bSaved;
+  }
   LuaReference customSaveFunc =
       THEME->GetMetricR("Profile", "CustomSaveFunction");
   customSaveFunc.PushSelf(L);
@@ -1522,11 +1875,18 @@ XNode* Profile::SaveStatsXmlCreateNode() const {
 
 bool Profile::SaveStatsXmlToDir(std::string sDir, bool bSignData) const {
   LOG->Trace("SaveStatsXmlToDir: %s", sDir.c_str());
+  if (PROFILEMAN == nullptr || FILEMAN == nullptr) {
+    LOG->Warn(
+        "Profile::SaveStatsXmlToDir: required managers unavailable for '%s'.",
+        sDir.c_str());
+    return false;
+  }
   std::unique_ptr<XNode> xml(SaveStatsXmlCreateNode());
 
   sDir = sDir + PROFILEMAN->GetStatsPrefix();
   // Save stats.xml
-  std::string fn = sDir + (g_bProfileDataCompress ? STATS_XML_GZ : STATS_XML);
+  const bool writeCompressed = g_bProfileDataCompress;
+  std::string fn = sDir + (writeCompressed ? STATS_XML_GZ : STATS_XML);
 
   {
     std::string sError;
@@ -1548,18 +1908,9 @@ bool Profile::SaveStatsXmlToDir(std::string sDir, bool bSignData) const {
         return false;
       }
 
-      /* After successfully saving STATS_XML_GZ, remove any stray STATS_XML. */
-      if (FILEMAN->IsAFile(sDir + STATS_XML)) {
-        FILEMAN->Remove(sDir + STATS_XML);
-      }
     } else {
       if (!XmlFileUtil::SaveToFile(xml.get(), f, "", false)) {
         return false;
-      }
-
-      /* After successfully saving STATS_XML, remove any stray STATS_XML_GZ. */
-      if (FILEMAN->IsAFile(sDir + STATS_XML_GZ)) {
-        FILEMAN->Remove(sDir + STATS_XML_GZ);
       }
     }
   }
@@ -1575,6 +1926,12 @@ bool Profile::SaveStatsXmlToDir(std::string sDir, bool bSignData) const {
     if (!CryptManager::SignFileToFile(sStatsXmlSigFile, sDontShareFile)) {
       return false;
     }
+  }
+
+  const std::string staleStats =
+      sDir + (writeCompressed ? STATS_XML : STATS_XML_GZ);
+  if (FILEMAN->IsAFile(staleStats)) {
+    FILEMAN->Remove(staleStats);
   }
 
   return true;
@@ -1642,7 +1999,7 @@ XNode* Profile::SaveGeneralDataCreateNode() const {
       "LastDifficulty", DifficultyToString(m_LastDifficulty));
   pGeneralDataNode->AppendChild(
       "LastCourseDifficulty", DifficultyToString(m_LastCourseDifficulty));
-  if (m_LastStepsType != StepsType_Invalid) {
+  if (m_LastStepsType != StepsType_Invalid && GAMEMAN != nullptr) {
     pGeneralDataNode->AppendChild(
         "LastStepsType", GAMEMAN->GetStepsTypeInfo(m_LastStepsType).szName);
   }
@@ -1691,7 +2048,7 @@ XNode* Profile::SaveGeneralDataCreateNode() const {
     for (const std::string& unlockEntry : m_UnlockedEntryIDs) {
       XNode* pEntry = pUnlocks->AppendChild("UnlockEntry");
       pEntry->AppendAttr("UnlockEntryID", unlockEntry);
-      if (!UNLOCK_AUTH_STRING.GetValue().empty()) {
+      if (!UNLOCK_AUTH_STRING.GetValue().empty() && CRYPTMAN != nullptr) {
         std::string sUnlockAuth = BinaryToHex(CRYPTMAN->GetMD5ForString(
             unlockEntry + UNLOCK_AUTH_STRING.GetValue()));
         pEntry->AppendAttr("Auth", sUnlockAuth);
@@ -1778,11 +2135,18 @@ XNode* Profile::SaveGeneralDataCreateNode() const {
   }
 
   // Load Lua UserTable from profile
-  if (!IsMachine() && m_UserTable.IsSet()) {
+  if (!IsMachine() && m_UserTable.IsSet() && LUA != nullptr) {
     Lua* L = LUA->Get();
+    if (L == nullptr) {
+      return pGeneralDataNode;
+    }
     m_UserTable.PushSelf(L);
     XNode* pUserTable = XmlFileUtil::XNodeFromTable(L);
     LUA->Release(L);
+    if (pUserTable == nullptr) {
+      LOG->Warn("Profile::SaveGeneralDataCreateNode: failed to save UserTable.");
+      return pGeneralDataNode;
+    }
 
     // XXX: XNodeFromTable returns a root node with the name "Layer".
     pUserTable->m_sName = "UserTable";
@@ -1808,7 +2172,10 @@ ProfileLoadResult Profile::LoadEditableDataFromDir(std::string sDir) {
   }
 
   IniFile ini;
-  ini.ReadFile(fn);
+  if (!ini.ReadFile(fn)) {
+    LOG->Warn("Profile::LoadEditableDataFromDir: failed to read '%s'.", fn.c_str());
+    return ProfileLoadResult_FailedTampered;
+  }
 
   ini.GetValue("Editable", "DisplayName", m_sDisplayName);
   ini.GetValue("Editable", "CharacterID", m_sCharacterID);
@@ -1821,9 +2188,21 @@ ProfileLoadResult Profile::LoadEditableDataFromDir(std::string sDir) {
   ini.GetValue("Editable", "IsMale", m_IsMale);
 
   // This is data that the user can change, so we have to validate it.
-  m_sDisplayName = NormalizeDisplayName(m_sDisplayName);
-  if (m_iWeightPounds != 0) {
-    rage_clamp(m_iWeightPounds, 20, 1000);
+  m_sDisplayName = SanitizeProfileText(m_sDisplayName);
+  m_sLastUsedHighScoreName = SanitizeProfileText(m_sLastUsedHighScoreName);
+  m_iWeightPounds =
+      m_iWeightPounds == 0
+          ? 0
+          : SanitizeNonNegativeProfileInt(
+                m_iWeightPounds, 1000, "weight pounds");
+  if (m_iWeightPounds > 0 && m_iWeightPounds < 20) {
+    m_iWeightPounds = 20;
+  }
+  m_Voomax = SanitizeNonNegativeProfileFloat(m_Voomax, 100.0f, "VO2 max");
+  const int currentYear = GetLocalTime().tm_year + 1900;
+  if (m_BirthYear < 0 || m_BirthYear > currentYear) {
+    LOG->Warn("Profile: reset invalid birth year %d.", m_BirthYear);
+    m_BirthYear = 0;
   }
 
   return ProfileLoadResult_Success;
@@ -1854,7 +2233,8 @@ void Profile::LoadGeneralDataFromNode(const XNode* pNode) {
   pNode->GetChildValue("LastCourseDifficulty", s);
   m_LastCourseDifficulty = StringToDifficulty(s);
   pNode->GetChildValue("LastStepsType", s);
-  m_LastStepsType = GAMEMAN->StringToStepsType(s);
+  m_LastStepsType =
+      GAMEMAN != nullptr ? GAMEMAN->StringToStepsType(s) : StepsType_Invalid;
   pTemp = pNode->GetChild("Song");
   if (pTemp) {
     m_lastSong.LoadFromNode(pTemp);
@@ -1886,9 +2266,71 @@ void Profile::LoadGeneralDataFromNode(const XNode* pNode) {
   pNode->GetChildValue("TotalHands", m_iTotalHands);
   pNode->GetChildValue("TotalLifts", m_iTotalLifts);
 
+  m_sDisplayName = SanitizeProfileText(m_sDisplayName);
+  m_sLastUsedHighScoreName = SanitizeProfileText(m_sLastUsedHighScoreName);
+  m_iWeightPounds =
+      m_iWeightPounds == 0
+          ? 0
+          : SanitizeNonNegativeProfileInt(
+                m_iWeightPounds, 1000, "weight pounds");
+  if (m_iWeightPounds > 0 && m_iWeightPounds < 20) {
+    m_iWeightPounds = 20;
+  }
+  m_Voomax = SanitizeNonNegativeProfileFloat(m_Voomax, 100.0f, "VO2 max");
+  const int currentYear = GetLocalTime().tm_year + 1900;
+  if (m_BirthYear < 0 || m_BirthYear > currentYear) {
+    LOG->Warn("Profile: reset invalid birth year %d.", m_BirthYear);
+    m_BirthYear = 0;
+  }
+  m_iCurrentCombo = SanitizeNonNegativeProfileInt(
+      m_iCurrentCombo, std::numeric_limits<int>::max(), "current combo");
+  m_iTotalSessions = SanitizeNonNegativeProfileInt(
+      m_iTotalSessions, std::numeric_limits<int>::max(), "total sessions");
+  m_iTotalSessionSeconds = SanitizeNonNegativeProfileInt(
+      m_iTotalSessionSeconds, std::numeric_limits<int>::max(),
+      "total session seconds");
+  m_iTotalGameplaySeconds = SanitizeNonNegativeProfileInt(
+      m_iTotalGameplaySeconds, std::numeric_limits<int>::max(),
+      "total gameplay seconds");
+  m_fTotalCaloriesBurned = SanitizeNonNegativeProfileFloat(
+      m_fTotalCaloriesBurned, std::numeric_limits<float>::max(),
+      "total calories burned");
+  m_GoalType = SanitizeGoalType(m_GoalType);
+  m_iGoalCalories = SanitizeNonNegativeProfileInt(
+      m_iGoalCalories, std::numeric_limits<int>::max(), "goal calories");
+  m_iGoalSeconds = SanitizeNonNegativeProfileInt(
+      m_iGoalSeconds, std::numeric_limits<int>::max(), "goal seconds");
+  m_iTotalDancePoints = SanitizeNonNegativeProfileInt(
+      m_iTotalDancePoints, std::numeric_limits<int>::max(),
+      "total dance points");
+  m_iNumExtraStagesPassed = SanitizeNonNegativeProfileInt(
+      m_iNumExtraStagesPassed, std::numeric_limits<int>::max(),
+      "extra stages passed");
+  m_iNumExtraStagesFailed = SanitizeNonNegativeProfileInt(
+      m_iNumExtraStagesFailed, std::numeric_limits<int>::max(),
+      "extra stages failed");
+  m_iNumToasties = SanitizeNonNegativeProfileInt(
+      m_iNumToasties, std::numeric_limits<int>::max(), "toasties");
+  m_iTotalTapsAndHolds = SanitizeNonNegativeProfileInt(
+      m_iTotalTapsAndHolds, std::numeric_limits<int>::max(),
+      "total taps and holds");
+  m_iTotalJumps = SanitizeNonNegativeProfileInt(
+      m_iTotalJumps, std::numeric_limits<int>::max(), "total jumps");
+  m_iTotalHolds = SanitizeNonNegativeProfileInt(
+      m_iTotalHolds, std::numeric_limits<int>::max(), "total holds");
+  m_iTotalRolls = SanitizeNonNegativeProfileInt(
+      m_iTotalRolls, std::numeric_limits<int>::max(), "total rolls");
+  m_iTotalMines = SanitizeNonNegativeProfileInt(
+      m_iTotalMines, std::numeric_limits<int>::max(), "total mines");
+  m_iTotalHands = SanitizeNonNegativeProfileInt(
+      m_iTotalHands, std::numeric_limits<int>::max(), "total hands");
+  m_iTotalLifts = SanitizeNonNegativeProfileInt(
+      m_iTotalLifts, std::numeric_limits<int>::max(), "total lifts");
+
   {
     const XNode* pDefaultModifiers = pNode->GetChild("DefaultModifiers");
     if (pDefaultModifiers) {
+      m_sDefaultModifiers.clear();
       FOREACH_CONST_Child(pDefaultModifiers, game_type) {
         game_type->GetTextValue(m_sDefaultModifiers[game_type->GetName()]);
       }
@@ -1910,8 +2352,11 @@ void Profile::LoadGeneralDataFromNode(const XNode* pNode) {
             continue;
           }
 
-          std::string sExpectedUnlockAuth =
-              BinaryToHex(CRYPTMAN->GetMD5ForString(
+          if (CRYPTMAN == nullptr) {
+            continue;
+          }
+          std::string sExpectedUnlockAuth = BinaryToHex(
+              CRYPTMAN->GetMD5ForString(
                   sUnlockEntryID + UNLOCK_AUTH_STRING.GetValue()));
           if (sUnlockAuth != sExpectedUnlockAuth) {
             continue;
@@ -1927,9 +2372,13 @@ void Profile::LoadGeneralDataFromNode(const XNode* pNode) {
     const XNode* pNumSongsPlayedByPlayMode =
         pNode->GetChild("NumSongsPlayedByPlayMode");
     if (pNumSongsPlayedByPlayMode) {
-      FOREACH_ENUM(PlayMode, pm)
+      FOREACH_ENUM(PlayMode, pm) {
       pNumSongsPlayedByPlayMode->GetChildValue(
           PlayModeToString(pm), m_iNumSongsPlayedByPlayMode[pm]);
+      m_iNumSongsPlayedByPlayMode[pm] = SanitizeNonNegativeProfileInt(
+          m_iNumSongsPlayedByPlayMode[pm], std::numeric_limits<int>::max(),
+          "songs played by play mode");
+      }
     }
   }
 
@@ -1949,7 +2398,10 @@ void Profile::LoadGeneralDataFromNode(const XNode* pNode) {
           WARN_AND_CONTINUE;
         }
 
-        style->GetTextValue(m_iNumSongsPlayedByStyle[sID]);
+        int plays = 0;
+        style->GetTextValue(plays);
+        m_iNumSongsPlayedByStyle[sID] = SanitizeNonNegativeProfileInt(
+            plays, std::numeric_limits<int>::max(), "songs played by style");
       }
     }
   }
@@ -1958,9 +2410,13 @@ void Profile::LoadGeneralDataFromNode(const XNode* pNode) {
     const XNode* pNumSongsPlayedByDifficulty =
         pNode->GetChild("NumSongsPlayedByDifficulty");
     if (pNumSongsPlayedByDifficulty) {
-      FOREACH_ENUM(Difficulty, dc)
+      FOREACH_ENUM(Difficulty, dc) {
       pNumSongsPlayedByDifficulty->GetChildValue(
           DifficultyToString(dc), m_iNumSongsPlayedByDifficulty[dc]);
+      m_iNumSongsPlayedByDifficulty[dc] = SanitizeNonNegativeProfileInt(
+          m_iNumSongsPlayedByDifficulty[dc], std::numeric_limits<int>::max(),
+          "songs played by difficulty");
+      }
     }
   }
 
@@ -1971,19 +2427,29 @@ void Profile::LoadGeneralDataFromNode(const XNode* pNode) {
       for (int i = 0; i < MAX_METER + 1; i++) {
         pNumSongsPlayedByMeter->GetChildValue(
             ssprintf("Meter%d", i), m_iNumSongsPlayedByMeter[i]);
+        m_iNumSongsPlayedByMeter[i] = SanitizeNonNegativeProfileInt(
+            m_iNumSongsPlayedByMeter[i], std::numeric_limits<int>::max(),
+            "songs played by meter");
       }
     }
   }
 
   pNode->GetChildValue("NumTotalSongsPlayed", m_iNumTotalSongsPlayed);
+  m_iNumTotalSongsPlayed = SanitizeNonNegativeProfileInt(
+      m_iNumTotalSongsPlayed, std::numeric_limits<int>::max(),
+      "total songs played");
 
   {
     const XNode* pNumStagesPassedByGrade =
         pNode->GetChild("NumStagesPassedByGrade");
     if (pNumStagesPassedByGrade) {
-      FOREACH_ENUM(Grade, g)
+      FOREACH_ENUM(Grade, g) {
       pNumStagesPassedByGrade->GetChildValue(
           GradeToString(g), m_iNumStagesPassedByGrade[g]);
+      m_iNumStagesPassedByGrade[g] = SanitizeNonNegativeProfileInt(
+          m_iNumStagesPassedByGrade[g], std::numeric_limits<int>::max(),
+          "stages passed by grade");
+      }
     }
   }
 
@@ -1991,17 +2457,25 @@ void Profile::LoadGeneralDataFromNode(const XNode* pNode) {
     const XNode* pNumStagesPassedByPlayMode =
         pNode->GetChild("NumStagesPassedByPlayMode");
     if (pNumStagesPassedByPlayMode) {
-      FOREACH_ENUM(PlayMode, pm)
+      FOREACH_ENUM(PlayMode, pm) {
       pNumStagesPassedByPlayMode->GetChildValue(
           PlayModeToString(pm), m_iNumStagesPassedByPlayMode[pm]);
+      m_iNumStagesPassedByPlayMode[pm] = SanitizeNonNegativeProfileInt(
+          m_iNumStagesPassedByPlayMode[pm], std::numeric_limits<int>::max(),
+          "stages passed by play mode");
+      }
     }
   }
 
   // Build the custom data table from the existing XNode.
-  if (!IsMachine()) {
+  if (!IsMachine() && LUA != nullptr) {
     const XNode* pUserTable = pNode->GetChild("UserTable");
 
     Lua* L = LUA->Get();
+    if (L == nullptr) {
+      LOG->Warn("Profile::LoadGeneralDataFromNode: Lua state unavailable.");
+      return;
+    }
 
     // If we have custom data, load it. Otherwise, make a blank table.
     if (pUserTable) {
@@ -2018,18 +2492,31 @@ void Profile::LoadGeneralDataFromNode(const XNode* pNode) {
 void Profile::AddStepTotals(
     int iTotalTapsAndHolds, int iTotalJumps, int iTotalHolds, int iTotalRolls,
     int iTotalMines, int iTotalHands, int iTotalLifts, float fCaloriesBurned) {
-  m_iTotalTapsAndHolds += iTotalTapsAndHolds;
-  m_iTotalJumps += iTotalJumps;
-  m_iTotalHolds += iTotalHolds;
-  m_iTotalRolls += iTotalRolls;
-  m_iTotalMines += iTotalMines;
-  m_iTotalHands += iTotalHands;
-  m_iTotalLifts += iTotalLifts;
+  m_iTotalTapsAndHolds = AddProfileIntSaturated(
+      m_iTotalTapsAndHolds, iTotalTapsAndHolds, "total taps and holds");
+  m_iTotalJumps =
+      AddProfileIntSaturated(m_iTotalJumps, iTotalJumps, "total jumps");
+  m_iTotalHolds =
+      AddProfileIntSaturated(m_iTotalHolds, iTotalHolds, "total holds");
+  m_iTotalRolls =
+      AddProfileIntSaturated(m_iTotalRolls, iTotalRolls, "total rolls");
+  m_iTotalMines =
+      AddProfileIntSaturated(m_iTotalMines, iTotalMines, "total mines");
+  m_iTotalHands =
+      AddProfileIntSaturated(m_iTotalHands, iTotalHands, "total hands");
+  m_iTotalLifts =
+      AddProfileIntSaturated(m_iTotalLifts, iTotalLifts, "total lifts");
 
   if (!m_IgnoreStepCountCalories) {
-    m_fTotalCaloriesBurned += fCaloriesBurned;
+    fCaloriesBurned = SanitizeNonNegativeProfileFloat(
+        fCaloriesBurned, std::numeric_limits<float>::max(),
+        "step calories burned");
+    m_fTotalCaloriesBurned = AddProfileFloatSaturated(
+        m_fTotalCaloriesBurned, fCaloriesBurned, "total calories burned");
     DateTime date = DateTime::GetNowDate();
-    m_mapDayToCaloriesBurned[date].fCals += fCaloriesBurned;
+    m_mapDayToCaloriesBurned[date].fCals = AddProfileFloatSaturated(
+        m_mapDayToCaloriesBurned[date].fCals, fCaloriesBurned,
+        "daily calories burned");
   }
 }
 
@@ -2040,12 +2527,20 @@ void Profile::AddStepTotals(
 // player can't put in their heart rate for calculation until after
 // ScreenGameplay
 void Profile::AddCaloriesToDailyTotal(float cals) {
-  m_fTotalCaloriesBurned += cals;
+  cals = SanitizeNonNegativeProfileFloat(
+      cals, std::numeric_limits<float>::max(), "calories burned");
+  m_fTotalCaloriesBurned = AddProfileFloatSaturated(
+      m_fTotalCaloriesBurned, cals, "total calories burned");
   DateTime date = DateTime::GetNowDate();
-  m_mapDayToCaloriesBurned[date].fCals += cals;
+  m_mapDayToCaloriesBurned[date].fCals = AddProfileFloatSaturated(
+      m_mapDayToCaloriesBurned[date].fCals, cals, "daily calories burned");
 }
 
 float Profile::CalculateCaloriesFromHeartRate(float HeartRate, float Duration) {
+  if (!std::isfinite(HeartRate) || HeartRate <= 0.0f ||
+      !std::isfinite(Duration) || Duration <= 0.0f) {
+    return 0.0f;
+  }
   // Copied from
   // http://www.shapesense.com/fitness-exercise/calculators/heart-rate-based-calorie-burn-calculator.aspx
   /*
@@ -2099,15 +2594,18 @@ float Profile::CalculateCaloriesFromHeartRate(float HeartRate, float Duration) {
     }
   } else if (!m_IsMale) {
     gender_factor = -20.4022f;
-    heart_factor = 0.6309f;
-    weight_factor = 0.1988f;
-    age_factor = 0.2017f;
+    heart_factor = 0.4472f;
+    weight_factor = -0.1263f;
+    age_factor = 0.074f;
   }
-  return ((gender_factor + (heart_factor * HeartRate) +
-           (voo_factor * m_Voomax) + (weight_factor * kilos) +
-           (age_factor + age)) /
-          4.184) *
-         Duration;
+  const float calories =
+      ((gender_factor + (heart_factor * HeartRate) +
+        (voo_factor * m_Voomax) + (weight_factor * kilos) +
+        (age_factor * age)) /
+       4.184f) *
+      Duration;
+  return SanitizeNonNegativeProfileFloat(
+      calories, std::numeric_limits<float>::max(), "heart rate calories");
 }
 
 XNode* Profile::SaveSongScoresCreateNode() const {
@@ -2163,9 +2661,14 @@ void Profile::LoadSongScoresFromNode(const XNode* pSongScores) {
     return;
   }
 
+  size_t songScoreRoots = 0;
   FOREACH_CONST_Child(pSongScores, pSong) {
     if (pSong->GetName() != "Song") {
       continue;
+    }
+    if (++songScoreRoots > MAX_PROFILE_SCORE_ROOT_ENTRIES) {
+      LOG->Warn("Profile::LoadSongScoresFromNode: too many Song entries.");
+      break;
     }
 
     SongID songID;
@@ -2248,11 +2751,18 @@ void Profile::LoadCourseScoresFromNode(const XNode* pCourseScores) {
   }
 
   std::vector<Course*> vpAllCourses;
-  SONGMAN->GetAllCourses(vpAllCourses, true);
+  if (SONGMAN != nullptr) {
+    SONGMAN->GetAllCourses(vpAllCourses, true);
+  }
 
+  size_t courseScoreRoots = 0;
   FOREACH_CONST_Child(pCourseScores, pCourse) {
     if (pCourse->GetName() != "Course") {
       continue;
+    }
+    if (++courseScoreRoots > MAX_PROFILE_SCORE_ROOT_ENTRIES) {
+      LOG->Warn("Profile::LoadCourseScoresFromNode: too many Course entries.");
+      break;
     }
 
     CourseID courseID;
@@ -2273,14 +2783,24 @@ void Profile::LoadCourseScoresFromNode(const XNode* pCourseScores) {
         std::string sDir, sFName, sExt;
         splitpath(courseID.GetPath(), sDir, sFName, sExt);
         std::string sFullFileName = sFName + sExt;
+        Course* pOnlyMatch = nullptr;
+        if (!sFullFileName.empty()) {
+          for (Course* c : vpAllCourses) {
+            if (c == nullptr || c->m_sPath.empty()) {
+              continue;
+            }
+            std::string sOther = Right(c->m_sPath, sFullFileName.size());
 
-        for (Course* c : vpAllCourses) {
-          std::string sOther = Right(c->m_sPath, sFullFileName.size());
-
-          if (CompareNoCase(sFullFileName, sOther) == 0) {
-            pC = c;
-            courseID.FromCourse(pC);
-            break;
+            if (CompareNoCase(sFullFileName, sOther) == 0) {
+              if (pOnlyMatch != nullptr) {
+                pOnlyMatch = nullptr;
+                break;
+              }
+              pOnlyMatch = c;
+            }
+          }
+          if (pOnlyMatch != nullptr) {
+            courseID.FromCourse(pOnlyMatch);
           }
         }
       }
@@ -2324,7 +2844,9 @@ XNode* Profile::SaveCategoryScoresCreateNode() const {
     }
 
     XNode* pStepsTypeNode = pNode->AppendChild("StepsType");
-    pStepsTypeNode->AppendAttr("Type", GAMEMAN->GetStepsTypeInfo(st).szName);
+    pStepsTypeNode->AppendAttr(
+        "Type", GAMEMAN != nullptr ? GAMEMAN->GetStepsTypeInfo(st).szName
+                                   : StepsTypeToString(st));
 
     FOREACH_ENUM(RankingCategory, rc) {
       // skip steps types/categories that have never been played
@@ -2365,7 +2887,8 @@ void Profile::LoadCategoryScoresFromNode(const XNode* pCategoryScores) {
     if (!pStepsType->GetAttrValue("Type", str)) {
       WARN_AND_CONTINUE;
     }
-    StepsType st = GAMEMAN->StringToStepsType(str);
+    StepsType st =
+        GAMEMAN != nullptr ? GAMEMAN->StringToStepsType(str) : StepsType_Invalid;
     if (st == StepsType_Invalid) {
       WARN_AND_CONTINUE_M(str);
     }
@@ -2400,13 +2923,24 @@ void Profile::SaveStatsWebPageToDir(std::string) const {
 }
 
 void Profile::SaveMachinePublicKeyToDir(std::string sDir) const {
-  if (PREFSMAN->m_bSignProfileData &&
+  if (PREFSMAN != nullptr && CRYPTMAN != nullptr &&
+      PREFSMAN->m_bSignProfileData &&
       IsAFile(CRYPTMAN->GetPublicKeyFileName())) {
     FileCopy(CRYPTMAN->GetPublicKeyFileName(), sDir + PUBLIC_KEY_FILE);
   }
 }
 
 void Profile::AddScreenshot(const Screenshot& screenshot) {
+  if (!IsUsableScreenshotFileName(screenshot.sFileName)) {
+    LOG->Warn(
+        "Profile::AddScreenshot skipped unsafe screenshot filename '%s'.",
+        screenshot.sFileName.c_str());
+    return;
+  }
+  if (m_vScreenshots.size() >= MAX_PROFILE_SCREENSHOTS) {
+    LOG->Warn("Profile::AddScreenshot skipped screenshot limit overflow.");
+    return;
+  }
   m_vScreenshots.push_back(screenshot);
 }
 
@@ -2426,9 +2960,20 @@ void Profile::LoadScreenshotDataFromNode(const XNode* pScreenshotData) {
 
     Screenshot ss;
     ss.LoadFromNode(pScreenshot);
+    if (!IsUsableScreenshotFileName(ss.sFileName)) {
+      WARN_AND_CONTINUE_M(ss.sFileName);
+    }
+    if (m_vScreenshots.size() >= MAX_PROFILE_SCREENSHOTS) {
+      LOG->Warn("Profile::LoadScreenshotDataFromNode: too many screenshots.");
+      break;
+    }
 
     m_vScreenshots.push_back(ss);
   }
+  std::sort(m_vScreenshots.begin(), m_vScreenshots.end());
+  std::vector<Screenshot>::iterator unique_end =
+      std::unique(m_vScreenshots.begin(), m_vScreenshots.end());
+  m_vScreenshots.erase(unique_end, m_vScreenshots.end());
 }
 
 XNode* Profile::SaveScreenshotDataCreateNode() const {
@@ -2470,6 +3015,14 @@ void Profile::LoadCalorieDataFromNode(const XNode* pCalorieData) {
     float fCaloriesBurned = 0;
 
     pCaloriesBurned->GetTextValue(fCaloriesBurned);
+    fCaloriesBurned = SanitizeNonNegativeProfileFloat(
+        fCaloriesBurned, std::numeric_limits<float>::max(),
+        "daily calories burned");
+    if (m_mapDayToCaloriesBurned.size() >= MAX_PROFILE_CALORIE_DAYS &&
+        m_mapDayToCaloriesBurned.find(date) == m_mapDayToCaloriesBurned.end()) {
+      LOG->Warn("Profile::LoadCalorieDataFromNode: too many calorie days.");
+      break;
+    }
 
     m_mapDayToCaloriesBurned[date].fCals = fCaloriesBurned;
   }
@@ -2485,8 +3038,11 @@ XNode* Profile::SaveCalorieDataCreateNode() const {
 
   for (const std::pair<const DateTime, Calories>& i :
        m_mapDayToCaloriesBurned) {
+    const float calories = SanitizeNonNegativeProfileFloat(
+        i.second.fCals, std::numeric_limits<float>::max(),
+        "daily calories burned");
     XNode* pCaloriesBurned =
-        pNode->AppendChild("CaloriesBurned", i.second.fCals);
+        pNode->AppendChild("CaloriesBurned", calories);
 
     pCaloriesBurned->AppendAttr("Date", i.first.GetString());
   }
@@ -2579,6 +3135,9 @@ new XNode("RecentCourseScores") ); recent->AppendChild( h.CreateNode() );
 */
 const Profile::HighScoresForASong* Profile::GetHighScoresForASong(
     const SongID& songID) const {
+  if (songID.ToString().empty()) {
+    return nullptr;
+  }
   std::map<SongID, HighScoresForASong>::const_iterator it;
   it = m_SongHighScores.find(songID);
   if (it == m_SongHighScores.end()) {
@@ -2587,8 +3146,34 @@ const Profile::HighScoresForASong* Profile::GetHighScoresForASong(
   return &it->second;
 }
 
+const HighScoreList* Profile::GetStepsHighScoreListIfPresent(
+    const Song* pSong, const Steps* pSteps) const {
+  if (pSong == nullptr || pSteps == nullptr) {
+    return nullptr;
+  }
+
+  SongID songID;
+  songID.FromSong(pSong);
+  const HighScoresForASong* hsSong = GetHighScoresForASong(songID);
+  if (hsSong == nullptr) {
+    return nullptr;
+  }
+
+  StepsID stepsID;
+  stepsID.FromSteps(pSteps);
+  std::map<StepsID, HighScoresForASteps>::const_iterator it =
+      hsSong->m_StepsHighScores.find(stepsID);
+  if (it == hsSong->m_StepsHighScores.end()) {
+    return nullptr;
+  }
+  return &it->second.hsl;
+}
+
 const Profile::HighScoresForACourse* Profile::GetHighScoresForACourse(
     const CourseID& courseID) const {
+  if (courseID.ToString().empty()) {
+    return nullptr;
+  }
   std::map<CourseID, HighScoresForACourse>::const_iterator it;
   it = m_CourseHighScores.find(courseID);
   if (it == m_CourseHighScores.end()) {
@@ -2597,9 +3182,32 @@ const Profile::HighScoresForACourse* Profile::GetHighScoresForACourse(
   return &it->second;
 }
 
+const HighScoreList* Profile::GetCourseHighScoreListIfPresent(
+    const Course* pCourse, const Trail* pTrail) const {
+  if (pCourse == nullptr || pTrail == nullptr) {
+    return nullptr;
+  }
+
+  CourseID courseID;
+  courseID.FromCourse(pCourse);
+  const HighScoresForACourse* hsCourse = GetHighScoresForACourse(courseID);
+  if (hsCourse == nullptr) {
+    return nullptr;
+  }
+
+  TrailID trailID;
+  trailID.FromTrail(pTrail);
+  std::map<TrailID, HighScoresForATrail>::const_iterator it =
+      hsCourse->m_TrailHighScores.find(trailID);
+  if (it == hsCourse->m_TrailHighScores.end()) {
+    return nullptr;
+  }
+  return &it->second.hsl;
+}
+
 bool Profile::IsMachine() const {
   // TODO: Think of a better way to handle this
-  return this == PROFILEMAN->GetMachineProfile();
+  return PROFILEMAN != nullptr && this == PROFILEMAN->GetMachineProfile();
 }
 
 XNode* Profile::SaveCoinDataCreateNode() const {
@@ -2609,6 +3217,10 @@ XNode* Profile::SaveCoinDataCreateNode() const {
   ASSERT(pProfile != nullptr);
 
   XNode* pNode = new XNode("CoinData");
+  if (BOOKKEEPER == nullptr) {
+    LOG->Warn("Profile::SaveCoinDataCreateNode called without Bookkeeper.");
+    return pNode;
+  }
 
   {
     int coins[NUM_LAST_DAYS];
@@ -2649,6 +3261,10 @@ XNode* Profile::SaveCoinDataCreateNode() const {
 static bool CopyProfileBackupFile(
     const std::string& sFromDir, const std::string& sToDir,
     const std::string& sFile) {
+  if (FILEMAN == nullptr) {
+    LOG->Warn("Profile::MoveBackupToDir: FileManager unavailable.");
+    return false;
+  }
   if (!FILEMAN->IsAFile(sFromDir + sFile)) {
     return true;
   }
@@ -2664,6 +3280,10 @@ static bool CopyProfileBackupFile(
 }
 
 bool Profile::MoveBackupToDir(std::string sFromDir, std::string sToDir) {
+  if (FILEMAN == nullptr || sFromDir.empty() || sToDir.empty()) {
+    LOG->Warn("Profile::MoveBackupToDir: invalid backup directories.");
+    return false;
+  }
   FILEMAN->CreateDir(sToDir);
 
   bool bCopiedStats = false;
@@ -2705,6 +3325,9 @@ bool Profile::MoveBackupToDir(std::string sFromDir, std::string sToDir) {
 
 std::string Profile::MakeUniqueFileNameNoExtension(
     std::string sDir, std::string sFileNameBeginning) {
+  if (FILEMAN == nullptr) {
+    return MakeFileNameNoExtension(sFileNameBeginning, 0);
+  }
   FILEMAN->FlushDirCache(sDir);
   // Find a file name for the screenshot
   std::vector<std::string> files;
@@ -2712,16 +3335,17 @@ std::string Profile::MakeUniqueFileNameNoExtension(
   sort(files.begin(), files.end());
 
   int iIndex = 0;
+  const std::string escapedBeginning = EscapeRegexLiteral(sFileNameBeginning);
+  Regex re("^" + escapedBeginning + "([0-9]{5})\\....$");
 
   for (auto file = files.rbegin(); file != files.rend(); ++file) {
-    static Regex re("^" + sFileNameBeginning + "([0-9]{5})\\....$");
     std::vector<std::string> matches;
     if (!re.Compare(*file, matches)) {
       continue;
     }
 
     ASSERT(matches.size() == 1);
-    iIndex = StringToInt(matches[0]) + 1;
+    iIndex = std::min(StringToInt(matches[0]) + 1, 99999);
     break;
   }
 
@@ -2742,6 +3366,11 @@ class LunaProfile : public Luna<Profile> {
   static int AddScreenshot(T* p, lua_State* L) {
     HighScore* hs = Luna<HighScore>::check(L, 1);
     std::string filename = SArg(2);
+    if (hs == nullptr || CRYPTMAN == nullptr ||
+        !IsUsableScreenshotFileName(filename)) {
+      lua_pushboolean(L, false);
+      return 1;
+    }
     Screenshot screenshot;
     screenshot.sFileName = filename;
     screenshot.sMD5 = BinaryToHex(CRYPTMAN->GetMD5ForFile(filename));
@@ -2757,7 +3386,7 @@ class LunaProfile : public Luna<Profile> {
     return 1;
   }
   static int SetDisplayName(T* p, lua_State* L) {
-    p->m_sDisplayName = SArg(1);
+    p->m_sDisplayName = SanitizeProfileText(SArg(1));
     COMMON_RETURN_SELF;
   }
   static int GetLastUsedHighScoreName(T* p, lua_State* L) {
@@ -2765,21 +3394,24 @@ class LunaProfile : public Luna<Profile> {
     return 1;
   }
   static int SetLastUsedHighScoreName(T* p, lua_State* L) {
-    p->m_sLastUsedHighScoreName = SArg(1);
+    p->m_sLastUsedHighScoreName = SanitizeProfileText(SArg(1));
     COMMON_RETURN_SELF;
   }
   static int GetHighScoreList(T* p, lua_State* L) {
     if (LuaBinding::CheckLuaObjectType(L, 1, "Song")) {
       const Song* pSong = Luna<Song>::check(L, 1);
       const Steps* pSteps = Luna<Steps>::check(L, 2);
-      HighScoreList& hsl = p->GetStepsHighScoreList(pSong, pSteps);
-      hsl.PushSelf(L);
+      const HighScoreList& hsl =
+          static_cast<const Profile*>(p)->GetStepsHighScoreList(pSong, pSteps);
+      const_cast<HighScoreList&>(hsl).PushSelf(L);
       return 1;
     } else if (LuaBinding::CheckLuaObjectType(L, 1, "Course")) {
       const Course* pCourse = Luna<Course>::check(L, 1);
       const Trail* pTrail = Luna<Trail>::check(L, 2);
-      HighScoreList& hsl = p->GetCourseHighScoreList(pCourse, pTrail);
-      hsl.PushSelf(L);
+      const HighScoreList& hsl =
+          static_cast<const Profile*>(p)->GetCourseHighScoreList(
+              pCourse, pTrail);
+      const_cast<HighScoreList&>(hsl).PushSelf(L);
       return 1;
     }
 
@@ -2787,8 +3419,8 @@ class LunaProfile : public Luna<Profile> {
     COMMON_RETURN_SELF;
   }
   static int GetCategoryHighScoreList(T* p, lua_State* L) {
-    StepsType pStepsType = Enum::Check<StepsType>(L, 1);
-    RankingCategory pRankCat = Enum::Check<RankingCategory>(L, 2);
+    StepsType pStepsType = Enum::Check<StepsType>(L, 1, true);
+    RankingCategory pRankCat = Enum::Check<RankingCategory>(L, 2, true);
     HighScoreList& hsl = p->GetCategoryHighScoreList(pStepsType, pRankCat);
     hsl.PushSelf(L);
     return 1;
@@ -2798,6 +3430,10 @@ class LunaProfile : public Luna<Profile> {
 #define GET_IF_EXISTS(arga_type, argb_type)                                \
   const arga_type* parga = Luna<arga_type>::check(L, 1);                   \
   const argb_type* pargb = Luna<argb_type>::check(L, 2);                   \
+  if (parga == nullptr || pargb == nullptr) {                              \
+    lua_pushnil(L);                                                        \
+    return 1;                                                              \
+  }                                                                        \
   arga_type##ID arga_id;                                                   \
   arga_id.From##arga_type(parga);                                          \
   argb_type##ID argb_id;                                                   \
@@ -2831,10 +3467,13 @@ class LunaProfile : public Luna<Profile> {
   static int GetAllUsedHighScoreNames(T* p, lua_State* L) {
     std::set<std::string> names;
     p->GetAllUsedHighScoreNames(names);
-    lua_createtable(L, names.size(), 0);
+    const size_t maxNames = std::min(
+        names.size(), static_cast<size_t>(std::numeric_limits<int>::max()));
+    lua_createtable(L, static_cast<int>(maxNames), 0);
     int next_name_index = 1;
     for (std::set<std::string>::iterator name = names.begin();
-         name != names.end(); ++name) {
+         name != names.end() && next_name_index <= static_cast<int>(maxNames);
+         ++name) {
       lua_pushstring(L, name->c_str());
       lua_rawseti(L, -2, next_name_index);
       ++next_name_index;
@@ -2843,7 +3482,12 @@ class LunaProfile : public Luna<Profile> {
   }
 
   static int GetCharacter(T* p, lua_State* L) {
-    p->GetCharacter()->PushSelf(L);
+    Character* character = p->GetCharacter();
+    if (character == nullptr) {
+      lua_pushnil(L);
+      return 1;
+    }
+    character->PushSelf(L);
     return 1;
   }
   static int SetCharacter(T* p, lua_State* L) {
@@ -2855,7 +3499,14 @@ class LunaProfile : public Luna<Profile> {
     return 1;
   }
   static int SetWeightPounds(T* p, lua_State* L) {
-    p->m_iWeightPounds = IArg(1);
+    int weight = IArg(1);
+    p->m_iWeightPounds =
+        weight == 0
+            ? 0
+            : SanitizeNonNegativeProfileInt(weight, 1000, "weight pounds");
+    if (p->m_iWeightPounds > 0 && p->m_iWeightPounds < 20) {
+      p->m_iWeightPounds = 20;
+    }
     COMMON_RETURN_SELF;
   }
   DEFINE_METHOD(GetVoomax, m_Voomax);
@@ -2864,11 +3515,14 @@ class LunaProfile : public Luna<Profile> {
   DEFINE_METHOD(GetIgnoreStepCountCalories, m_IgnoreStepCountCalories);
   DEFINE_METHOD(GetIsMale, m_IsMale);
   static int SetVoomax(T* p, lua_State* L) {
-    p->m_Voomax = FArg(1);
+    p->m_Voomax = SanitizeNonNegativeProfileFloat(FArg(1), 100.0f, "VO2 max");
     COMMON_RETURN_SELF;
   }
   static int SetBirthYear(T* p, lua_State* L) {
-    p->m_BirthYear = IArg(1);
+    const int birthYear = IArg(1);
+    const int currentYear = GetLocalTime().tm_year + 1900;
+    p->m_BirthYear =
+        birthYear >= 0 && birthYear <= currentYear ? birthYear : 0;
     COMMON_RETURN_SELF;
   }
   static int SetIgnoreStepCountCalories(T* p, lua_State* L) {
@@ -2891,7 +3545,7 @@ class LunaProfile : public Luna<Profile> {
     return 1;
   }
   static int SetGoalType(T* p, lua_State* L) {
-    p->m_GoalType = Enum::Check<GoalType>(L, 1);
+    p->m_GoalType = SanitizeGoalType(Enum::Check<GoalType>(L, 1, true));
     COMMON_RETURN_SELF;
   }
   static int GetGoalCalories(T* p, lua_State* L) {
@@ -2899,7 +3553,8 @@ class LunaProfile : public Luna<Profile> {
     return 1;
   }
   static int SetGoalCalories(T* p, lua_State* L) {
-    p->m_iGoalCalories = IArg(1);
+    p->m_iGoalCalories = SanitizeNonNegativeProfileInt(
+        IArg(1), std::numeric_limits<int>::max(), "goal calories");
     COMMON_RETURN_SELF;
   }
   static int GetGoalSeconds(T* p, lua_State* L) {
@@ -2907,7 +3562,8 @@ class LunaProfile : public Luna<Profile> {
     return 1;
   }
   static int SetGoalSeconds(T* p, lua_State* L) {
-    p->m_iGoalSeconds = IArg(1);
+    p->m_iGoalSeconds = SanitizeNonNegativeProfileInt(
+        IArg(1), std::numeric_limits<int>::max(), "goal seconds");
     COMMON_RETURN_SELF;
   }
   static int GetCaloriesBurnedToday(T* p, lua_State* L) {
@@ -2925,51 +3581,59 @@ class LunaProfile : public Luna<Profile> {
   static int GetSongsActual(T* p, lua_State* L) {
     lua_pushnumber(
         L, p->GetSongsActual(
-               Enum::Check<StepsType>(L, 1), Enum::Check<Difficulty>(L, 2)));
+               Enum::Check<StepsType>(L, 1, true),
+               Enum::Check<Difficulty>(L, 2, true)));
     return 1;
   }
   static int GetCoursesActual(T* p, lua_State* L) {
     lua_pushnumber(
         L, p->GetCoursesActual(
-               Enum::Check<StepsType>(L, 1), Enum::Check<Difficulty>(L, 2)));
+               Enum::Check<StepsType>(L, 1, true),
+               Enum::Check<Difficulty>(L, 2, true)));
     return 1;
   }
   static int GetSongsPossible(T* p, lua_State* L) {
     lua_pushnumber(
         L, p->GetSongsPossible(
-               Enum::Check<StepsType>(L, 1), Enum::Check<Difficulty>(L, 2)));
+               Enum::Check<StepsType>(L, 1, true),
+               Enum::Check<Difficulty>(L, 2, true)));
     return 1;
   }
   static int GetCoursesPossible(T* p, lua_State* L) {
     lua_pushnumber(
         L, p->GetCoursesPossible(
-               Enum::Check<StepsType>(L, 1), Enum::Check<Difficulty>(L, 2)));
+               Enum::Check<StepsType>(L, 1, true),
+               Enum::Check<Difficulty>(L, 2, true)));
     return 1;
   }
   static int GetSongsPercentComplete(T* p, lua_State* L) {
     lua_pushnumber(
         L, p->GetSongsPercentComplete(
-               Enum::Check<StepsType>(L, 1), Enum::Check<Difficulty>(L, 2)));
+               Enum::Check<StepsType>(L, 1, true),
+               Enum::Check<Difficulty>(L, 2, true)));
     return 1;
   }
   static int GetCoursesPercentComplete(T* p, lua_State* L) {
     lua_pushnumber(
         L, p->GetCoursesPercentComplete(
-               Enum::Check<StepsType>(L, 1), Enum::Check<Difficulty>(L, 2)));
+               Enum::Check<StepsType>(L, 1, true),
+               Enum::Check<Difficulty>(L, 2, true)));
     return 1;
   }
   static int GetTotalStepsWithTopGrade(T* p, lua_State* L) {
     lua_pushnumber(
         L, p->GetTotalStepsWithTopGrade(
-               Enum::Check<StepsType>(L, 1), Enum::Check<Difficulty>(L, 2),
-               Enum::Check<Grade>(L, 3)));
+               Enum::Check<StepsType>(L, 1, true),
+               Enum::Check<Difficulty>(L, 2, true),
+               Enum::Check<Grade>(L, 3, true)));
     return 1;
   }
   static int GetTotalTrailsWithTopGrade(T* p, lua_State* L) {
     lua_pushnumber(
         L, p->GetTotalTrailsWithTopGrade(
-               Enum::Check<StepsType>(L, 1), Enum::Check<Difficulty>(L, 2),
-               Enum::Check<Grade>(L, 3)));
+               Enum::Check<StepsType>(L, 1, true),
+               Enum::Check<Difficulty>(L, 2, true),
+               Enum::Check<Grade>(L, 3, true)));
     return 1;
   }
   static int GetNumTotalSongsPlayed(T* p, lua_State* L) {
@@ -2992,7 +3656,7 @@ class LunaProfile : public Luna<Profile> {
       T* p, lua_State* L) {
     lua_pushnumber(
         L, p->GetSongsAndCoursesPercentCompleteAllDifficulties(
-               Enum::Check<StepsType>(L, 1)));
+               Enum::Check<StepsType>(L, 1, true)));
     return 1;
   }
   static int GetTotalCaloriesBurned(T* p, lua_State* L) {
@@ -3105,11 +3769,17 @@ class LunaProfile : public Luna<Profile> {
   }
   DEFINE_METHOD(GetGUID, m_sGuid);
   static int get_songs(T* p, lua_State* L) {
-    lua_createtable(L, p->m_songs.size(), 0);
+    const size_t maxSongs = std::min(
+        p->m_songs.size(), static_cast<size_t>(std::numeric_limits<int>::max()));
+    lua_createtable(L, static_cast<int>(maxSongs), 0);
     int song_tab = lua_gettop(L);
+    int luaIndex = 1;
     for (size_t i = 0; i < p->m_songs.size(); ++i) {
+      if (p->m_songs[i] == nullptr || luaIndex > static_cast<int>(maxSongs)) {
+        continue;
+      }
       p->m_songs[i]->PushSelf(L);
-      lua_rawseti(L, song_tab, i + 1);
+      lua_rawseti(L, song_tab, luaIndex++);
     }
     return 1;
   }
