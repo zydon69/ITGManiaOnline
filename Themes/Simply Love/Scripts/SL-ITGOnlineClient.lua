@@ -5230,7 +5230,7 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 					or self.currentRoom and self.currentRoom.phase
 					or phase
 			)
-			if scoreRoomPhase == "results" or self.lastFinalScoreKey == roundKey or self:CurrentUserHasFinalResult(self.currentRoom) then
+			if scoreRoomPhase == "results" then
 				if self.onlineGameplayEvaluationMarkInFlightKey == roundKey then
 					self.onlineGameplayEvaluationMarkInFlightKey = ""
 				end
@@ -5245,7 +5245,7 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 					self:ApplyLocalPlayState("finished", "mark_terminal_final_score_accepted_results_phase")
 				end
 				online_flow_trace("mark_terminal_skipped_after_score"
-					.. " reason=results_or_final_score_accepted"
+					.. " reason=server_already_results"
 					.. " room=" .. tostring(self.currentRoomId or "nil")
 					.. " roundKey=" .. tostring(roundKey)
 					.. " scoreRoomPhase=" .. tostring(scoreRoomPhase)
@@ -5348,20 +5348,6 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 		return true
 	end
 
-	if phase == "results" and tostring(self.lastFinalScoreKey or "") == tostring(roundKey or "") then
-		self.onlineGameplayEvaluationHoldStartedKey = roundKey
-		self.onlineGameplayEvaluationMinimumHoldUntil = 0
-		self.onlineGameplayAllTerminalHoldKey = roundKey
-		self.onlineGameplayAllTerminalHoldUntil = 0
-		online_flow_trace_throttled("hold_gameplay_release_local_final_accepted", 1.0,
-			"hold_gameplay_release reason=local_final_score_accepted"
-			.. " room=" .. tostring(self.currentRoomId or "nil")
-			.. " roundKey=" .. tostring(roundKey or "")
-			.. " phase=" .. tostring(phase)
-			.. " hasFinalResult=" .. tostring(self:CurrentUserHasFinalResult(self.currentRoom) == true))
-		return false
-	end
-
 	self:MarkGameplayCompleteForEvaluation("engine_hold")
 	local waiting = self:ShouldWaitForOnlineResults()
 	local summary = self:PlayStateSummary()
@@ -5422,14 +5408,20 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 		self.onlineGameplayEvaluationMinimumHoldUntil = 0
 		self.onlineGameplayAllTerminalHoldKey = roundKey
 		self.onlineGameplayAllTerminalHoldUntil = 0
-		online_flow_trace_throttled("hold_gameplay_release_all_failed_pending_finals", 1.0,
-			"hold_gameplay_release reason=all_failed_pending_client_finals"
+		if self.FetchPlayState then
+			if not self.onlineGameplayHoldFetchAt or (now - self.onlineGameplayHoldFetchAt) >= 0.75 then
+				self.onlineGameplayHoldFetchAt = now
+				self:FetchPlayState()
+			end
+		end
+		online_flow_trace_throttled("hold_gameplay_all_failed_pending_finals", 1.0,
+			"hold_gameplay_wait reason=all_failed_pending_client_finals"
 			.. " terminal=" .. tostring(summary.terminal)
 			.. " failedTerminal=" .. tostring(summary.failedTerminal)
 			.. " players=" .. tostring(summary.players)
 			.. " finalResults=" .. tostring(summary.finalResults)
 			.. " failedFinalsPending=" .. tostring(summary.failedFinalsPending))
-		return false
+		return true
 	end
 
 	if validRoundKey and self.onlineGameplayEvaluationHoldStartedKey ~= roundKey then
@@ -9762,22 +9754,21 @@ function ITGOnline:ShouldBlockEvaluationAutoAdvance()
 		return false
 	end
 
-	-- If the authoritative play-state says that everyone is already terminal,
-	-- do not keep blocking evaluation auto-advance just because the room phase
-	-- is still momentarily stuck on "playing" or "results".
 	local summary = self:PlayStateSummary(self.currentRoom)
-	if summary and summary.allTerminal then
-		online_flow_trace("evaluation_auto_advance_unblocked summary_all_terminal=true phase=" .. tostring(phase)
-			.. " players=" .. tostring(summary.players)
-			.. " terminal=" .. tostring(summary.terminal))
-		return false
-	end
 	if summary and phase == "results" and summary.finalResultsReady then
 		online_flow_trace("evaluation_auto_advance_unblocked final_results_ready=true phase=" .. tostring(phase)
 			.. " players=" .. tostring(summary.players)
 			.. " terminal=" .. tostring(summary.terminal)
 			.. " finalResults=" .. tostring(summary.finalResults))
 		return false
+	end
+
+	if self.FetchPlayState then
+		local now = GetTimeSinceStart()
+		if not self.onlineEvaluationBlockedFetchAt or (now - self.onlineEvaluationBlockedFetchAt) >= 0.75 then
+			self.onlineEvaluationBlockedFetchAt = now
+			self:FetchPlayState()
+		end
 	end
 
 	return true
@@ -10273,7 +10264,7 @@ function ITGOnline:MarkPlayFailedEarly(source, callback)
 				or self.currentRoom and self.currentRoom.phase
 				or phase
 		)
-		if scoreRoomPhase == "results" or self.lastFinalScoreKey == key then
+		if scoreRoomPhase == "results" then
 			if self.onlineGameplayFailedEarlyInFlightKey == key then
 				self.onlineGameplayFailedEarlyInFlightKey = ""
 			end
