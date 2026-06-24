@@ -13,11 +13,6 @@ if ThemePrefs.Get("VisualStyle") ~= "SRPG9" then
 	local img = failed and "failed text.png" or "cleared text.png"
 
 	return Def.ActorFrame{
-		Def.Quad{
-			InitCommand=function(self) self:FullScreen():diffuse(Color.Black) end,
-			OnCommand=function(self) self:sleep(0.2):linear(0.5):diffusealpha(0) end,
-		},
-
 		LoadActor(img)..{
 			InitCommand=function(self) self:Center():zoom(0.8):diffusealpha(0) end,
 			OnCommand=function(self) self:accelerate(0.4):diffusealpha(1):sleep(0.6):decelerate(0.4):diffusealpha(0) end
@@ -403,11 +398,6 @@ else
 				self:zoom(0.13):rotationz(10):rotationy(180):x(80):y(-80)
 			end,
 		},
-	}
-
-	af[#af+1] = Def.Quad{
-		InitCommand=function(self) self:zoomto(SCREEN_WIDTH, 0):diffuse(Color.Black):visible(false) end,
-		OnCommand=function(self) self:sleep(1):accelerate(0.5):visible(true):zoomto(SCREEN_WIDTH, SCREEN_HEIGHT) end,
 	}
 
 	af[#af+1] = Def.Sprite{

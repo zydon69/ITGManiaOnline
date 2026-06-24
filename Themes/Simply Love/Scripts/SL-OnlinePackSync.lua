@@ -860,6 +860,45 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	})
 	self.currentSongInfo = with_current_room_selection(self.currentSongInfo, "status:" .. tostring(status))
 	local currentSelectedAt = self:SelectedAtForStatusPost(status, self.currentSongInfo)
+	local noActiveSelectionLocalOnly = currentSelectedAt == "" and (
+		status == self.status.DownloadedOk
+		or status == self.status.Ready
+		or status == self.status.SearchingLocalCharts
+		or status == self.status.LocalChartMatchFound
+		or status == self.status.NoCompatibleChartFound
+		or status == self.status.ChartMismatch
+	)
+	if noActiveSelectionLocalOnly then
+		trace("Status post skipped reason=no_active_selection_local_only"
+			.. " status=" .. tostring(status)
+			.. " progress=" .. tostring(progress)
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+		if MESSAGEMAN then
+			local activeRoomId = ITGOnline and ITGOnline.currentRoomId or nil
+			local activeRoomPhase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil
+			MESSAGEMAN:Broadcast("OnlinePackSyncLocalStatus", {
+				status = status,
+				message = message,
+				download_progress = progress,
+				selected_at = "",
+				room_id = activeRoomId,
+				room_phase = activeRoomPhase,
+				mode = activeRoomId and "joined" or "browse",
+				local_only = true,
+			})
+		end
+		if callback then
+			callback(true, {
+				pack_sync_status = {
+					applied = false,
+					ignored_reason = "client_no_active_selection_local_only",
+				},
+				local_only = true,
+			}, nil)
+		end
+		return
+	end
 	local usesDownloadSequence = self:UsesDownloadStatusSequence(status)
 	if not usesDownloadSequence and self.lastSelectedAt ~= currentSelectedAt then
 		self.sequence = 0
