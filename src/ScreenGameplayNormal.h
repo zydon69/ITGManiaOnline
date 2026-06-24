@@ -10,7 +10,7 @@
 
 class ScreenGameplayNormal : public ScreenGameplay {
  public:
-  virtual void FillPlayerInfo(std::vector<PlayerInfo>& vPlayerInfoOut);
+  void FillPlayerInfo(std::vector<PlayerInfo>& vPlayerInfoOut) override;
 };
 
 #endif

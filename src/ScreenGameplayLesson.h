@@ -5,26 +5,39 @@
 
 #include "AutoActor.h"
 #include "InputEventPlus.h"
+#include "MessageManager.h"
+#include "PlayerNumber.h"
 #include "ScreenGameplayNormal.h"
 #include "ScreenMessage.h"
 
-class CourseEntry;
+class PlayerStageStats;
+class Song;
 
 /** @brief Shows some explanation pages, then allows 3 tries to pass a song. */
 class ScreenGameplayLesson : public ScreenGameplayNormal {
  public:
   ScreenGameplayLesson();
-  virtual void Init();
+  void Init() override;
 
-  virtual bool Input(const InputEventPlus& input);
-  virtual void HandleScreenMessage(const ScreenMessage SM);
+  bool Input(const InputEventPlus& input) override;
+  void HandleScreenMessage(const ScreenMessage SM) override;
 
-  virtual bool MenuStart(const InputEventPlus& input);
-  virtual bool MenuBack(const InputEventPlus& input);
+  bool MenuStart(const InputEventPlus& input) override;
+  bool MenuBack(const InputEventPlus& input) override;
 
  protected:
   void ChangeLessonPage(int iDir);
   void ResetAndRestartCurrentSong();
+
+  bool LoadLessonPages(Song* pSong);
+  bool IsCurrentPageIndexValid() const;
+  PlayerNumber GetLessonScorePlayer() const;
+  PlayerStageStats* GetLessonStageStats();
+  void BroadcastLessonMessage(MessageID message) const;
+  void HideCurrentPageIfValid();
+  void EnterLessonPlay(bool restartSong);
+  void SetLessonAutoplayControllers();
+  void RestoreLessonControllers();
 
   std::vector<AutoActor> m_vPages;
   int m_iCurrentPageIndex;

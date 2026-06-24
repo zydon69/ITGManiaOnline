@@ -1,5 +1,5 @@
-#ifndef SCREEN_GAMEPLAY_ROUTINE_H
-#define SCREEN_GAMEPLAY_ROUTINE_H
+#ifndef SCREEN_GAMEPLAY_SHARED_H
+#define SCREEN_GAMEPLAY_SHARED_H
 
 #include <vector>
 
@@ -8,8 +8,8 @@
 
 class ScreenGameplayShared : public ScreenGameplay {
  protected:
-  virtual void FillPlayerInfo(std::vector<PlayerInfo>& vPlayerInfoOut);
-  virtual PlayerInfo* GetPlayerInfoForInput(const InputEventPlus& iep);
+  void FillPlayerInfo(std::vector<PlayerInfo>& vPlayerInfoOut) override;
+  PlayerInfo* GetPlayerInfoForInput(const InputEventPlus& iep) override;
 };
 
 #endif

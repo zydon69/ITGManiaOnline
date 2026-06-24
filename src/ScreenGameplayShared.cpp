@@ -6,20 +6,41 @@
 #include "GameState.h"
 #include "InputEventPlus.h"
 #include "PlayerNumber.h"
+#include "RageLog.h"
 #include "Screen.h"
 #include "ScreenGameplay.h"
 
 REGISTER_SCREEN_CLASS(ScreenGameplayShared);
 
+namespace {
+bool IsSharedGameplayPlayer(const PlayerNumber pn) {
+  return pn == PLAYER_1 || pn == PLAYER_2;
+}
+}  // namespace
+
 void ScreenGameplayShared::FillPlayerInfo(
     std::vector<PlayerInfo>& vPlayerInfoOut) {
+  vPlayerInfoOut.clear();
+  vPlayerInfoOut.resize(NUM_PLAYERS);
+
+  if (GAMESTATE == nullptr) {
+    LOG->Warn("ScreenGameplayShared::FillPlayerInfo called without GAMESTATE.");
+    return;
+  }
+
   const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+  if (!IsSharedGameplayPlayer(master)) {
+    LOG->Warn("ScreenGameplayShared::FillPlayerInfo ignored invalid master "
+              "player %d.",
+              master);
+    return;
+  }
+
   const PlayerNumber other = (master == PLAYER_1 ? PLAYER_2 : PLAYER_1);
 
   /* The master player is where all of the real work takes place.  The other
    * player exists only so we have a place to split stats out into at the end.
    */
-  vPlayerInfoOut.resize(2);
   vPlayerInfoOut[master].Load(
       master, MultiPlayer_Invalid, true, Difficulty_Invalid);
   vPlayerInfoOut[other].Load(
@@ -28,9 +49,15 @@ void ScreenGameplayShared::FillPlayerInfo(
 
 PlayerInfo* ScreenGameplayShared::GetPlayerInfoForInput(
     const InputEventPlus& iep) {
+  if (GAMESTATE == nullptr) {
+    LOG->Warn("ScreenGameplayShared::GetPlayerInfoForInput called without "
+              "GAMESTATE.");
+    return nullptr;
+  }
+
   const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
-  if (master < PLAYER_1 || master >= NUM_PLAYERS ||
-      master >= static_cast<PlayerNumber>(m_vPlayerInfo.size())) {
+  if (!IsSharedGameplayPlayer(master) ||
+      static_cast<size_t>(master) >= m_vPlayerInfo.size()) {
     return nullptr;
   }
   return &m_vPlayerInfo[master];
