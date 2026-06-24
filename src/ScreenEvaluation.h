@@ -63,14 +63,14 @@ class ScreenEvaluation : public ScreenWithMenuElements {
   virtual bool MenuStart(const InputEventPlus& input);
   virtual bool MenuRestart(const InputEventPlus& input);
   virtual void PushSelf(lua_State* L);
-  StageStats* GetStageStats() { return m_pStageStats; }
+  StageStats* GetStageStats() const { return m_pStageStats; }
 
  protected:
   bool OnlineEvaluationAutoAdvanceBlocked() const;
   void HandleMenuStart();
 
-  bool m_bSummary;
-  StageStats* m_pStageStats;
+  bool m_bSummary = false;
+  StageStats* m_pStageStats = nullptr;
   StageStats m_FinalEvalStageStats;
 
   // banner area
