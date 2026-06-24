@@ -1,6 +1,7 @@
 #ifndef SCREEN_GAMEPLAY_H
 #define SCREEN_GAMEPLAY_H
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -159,32 +160,32 @@ class PlayerInfo {
 class ScreenGameplay : public ScreenWithMenuElements {
  public:
   ScreenGameplay();
-  virtual void Init();
-  virtual ~ScreenGameplay();
-  virtual void BeginScreen();
+  void Init() override;
+  ~ScreenGameplay() override;
+  void BeginScreen() override;
 
-  virtual void Update(float fDeltaTime);
-  virtual bool Input(const InputEventPlus& input);
-  virtual void HandleScreenMessage(const ScreenMessage SM);
-  virtual void HandleMessage(const Message& msg);
-  virtual void Cancel(ScreenMessage smSendWhenDone);
+  void Update(float fDeltaTime) override;
+  bool Input(const InputEventPlus& input) override;
+  void HandleScreenMessage(const ScreenMessage SM) override;
+  void HandleMessage(const Message& msg) override;
+  void Cancel(ScreenMessage smSendWhenDone) override;
 
-  virtual void DrawPrimitives();
+  void DrawPrimitives() override;
 
   /**
    * @brief Retrieve the current ScreenType.
    * @return the gameplay ScreenType. */
-  virtual ScreenType GetScreenType() const { return gameplay; }
+  ScreenType GetScreenType() const override { return gameplay; }
 
   /**
    * @brief Determine if we are to center the columns for just one player.
    * @return true if we center the solo player, false otherwise. */
   bool Center1Player() const;
 
-  bool MenuRestart(const InputEventPlus& input);
+  bool MenuRestart(const InputEventPlus& input) override;
 
   // Lua
-  virtual void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
   Song* GetNextCourseSong() const;
   LifeMeter* GetLifeMeter(PlayerNumber pn);
   PlayerInfo* GetPlayerInfo(PlayerNumber pn);
@@ -210,12 +211,11 @@ class ScreenGameplay : public ScreenWithMenuElements {
 
  protected:
   virtual void UpdateStageStats(
-      MultiPlayer /* mp */){};  // overridden for multiplayer
+      MultiPlayer /* mp */) {}  // overridden for multiplayer
 
   virtual bool UseSongBackgroundAndForeground() const { return true; }
 
   ThemeMetric<std::string> PLAYER_TYPE;
-  ThemeMetric<std::string> SCORE_DISPLAY_TYPE;
   ThemeMetric<apActorCommands> PLAYER_INIT_COMMAND;
   LocalizedString GIVE_UP_START_TEXT;
   LocalizedString GIVE_UP_BACK_TEXT;
@@ -241,7 +241,7 @@ class ScreenGameplay : public ScreenWithMenuElements {
   ThemeMetric<bool> SURVIVAL_MOD_OVERRIDE;
 
   bool IsLastSong();
-  void SetupSong(int iSongIndex);
+  bool SetupSong(int iSongIndex);
   void ReloadCurrentSong();
   virtual void LoadNextSong();
   void StartPlayingSong(float fMinTimeToNotes, float fMinTimeToMusic);
@@ -260,7 +260,6 @@ class ScreenGameplay : public ScreenWithMenuElements {
 
   void PlayTicks();
   void UpdateSongPosition(float fDeltaTime);
-  void UpdateLyrics(float fDeltaTime);
   void SongFinished();
   bool OnlineShouldHoldBeforeEvaluation();
   bool OnlineShouldKeepGameplayAliveAfterLocalFail();
@@ -322,6 +321,7 @@ class ScreenGameplay : public ScreenWithMenuElements {
   bool m_gave_up;
   RageTimer m_SkipSongTimer;
   bool m_skipped_song;
+  bool m_bPausedMemoryCardMounting;
   void AbortGiveUpText(bool show_abort_text);
   void AbortSkipSong(bool show_text);
   void AbortGiveUp(bool bShowText);
@@ -360,7 +360,8 @@ class ScreenGameplay : public ScreenWithMenuElements {
       m_vPlayerInfo;  // filled by SGameplay derivatives in FillPlayerInfo
   virtual void FillPlayerInfo(std::vector<PlayerInfo>& vPlayerInfoOut) = 0;
   virtual PlayerInfo* GetPlayerInfoForInput(const InputEventPlus& iep) {
-    if (iep.pn < PLAYER_1 || iep.pn >= NUM_PLAYERS) {
+    if (iep.pn < PLAYER_1 || iep.pn >= NUM_PLAYERS ||
+        static_cast<size_t>(iep.pn) >= m_vPlayerInfo.size()) {
       return nullptr;
     }
     return &m_vPlayerInfo[iep.pn];
@@ -382,6 +383,7 @@ class ScreenGameplay : public ScreenWithMenuElements {
   bool m_bLoggedOnlineEvaluationHold;
   bool m_bMarkedOnlineFailedEarly;
   bool m_bLoggedOnlineLocalFailKeepAlive;
+  float m_fLastSeenEnemyHealth;
   int m_iLightsRowLastCrossed;
   int m_iBeatRowLastCrossed;
   int m_iNoteRowLastCrossed[4];
