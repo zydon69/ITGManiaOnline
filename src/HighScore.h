@@ -130,12 +130,7 @@ struct HighScoreList {
   void Init();
 
   int GetNumTimesPlayed() const { return iNumTimesPlayed; }
-  DateTime GetLastPlayed() const {
-    ASSERT(
-        iNumTimesPlayed >
-        0);  // don't call this unless the song has been played
-    return dtLastPlayed;
-  }
+  DateTime GetLastPlayed() const { return dtLastPlayed; }
   const HighScore& GetTopScore() const;
 
   void AddHighScore(HighScore hs, int& iIndexOut, bool bIsMachine);
@@ -175,7 +170,8 @@ struct Screenshot {
   }
 
   bool operator==(const Screenshot& rhs) const {
-    return sFileName == rhs.sFileName;
+    return sFileName == rhs.sFileName && sMD5 == rhs.sMD5 &&
+           highScore == rhs.highScore;
   }
 };
 

@@ -1,7 +1,10 @@
 #include "HighScore.h"
 
 #include <algorithm>
+#include <climits>
+#include <cmath>
 #include <cstddef>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -12,13 +15,238 @@
 #include "PlayerNumber.h"
 #include "PrefsManager.h"
 #include "RadarValues.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "RageUtil_AutoPtr.h"
+#include "ThemeManager.h"
 #include "ThemeMetric.h"
 #include "XmlFile.h"
 #include "global.h"
 
 ThemeMetric<std::string> EMPTY_NAME("HighScore", "EmptyName");
+
+namespace {
+constexpr int DEFAULT_MACHINE_HIGH_SCORE_LIMIT = 10;
+constexpr int DEFAULT_PLAYER_HIGH_SCORE_LIMIT = 3;
+constexpr int MAX_REASONABLE_HIGH_SCORE_LIMIT = 1000;
+
+void WarnHighScore(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: %s", message);
+  }
+}
+
+bool IsValidGradeValue(Grade grade) {
+  return (grade >= Grade_Tier01 && grade <= Grade_Failed) ||
+         grade == Grade_NoData;
+}
+
+bool IsValidStageAwardValue(StageAward award) {
+  return (award >= 0 && award < NUM_StageAward) ||
+         award == StageAward_Invalid;
+}
+
+bool IsValidPeakComboAwardValue(PeakComboAward award) {
+  return (award >= 0 && award < NUM_PeakComboAward) ||
+         award == PeakComboAward_Invalid;
+}
+
+bool IsValidTapNoteScoreValue(TapNoteScore tns) {
+  return tns >= TNS_None && tns < NUM_TapNoteScore;
+}
+
+bool IsValidHoldNoteScoreValue(HoldNoteScore hns) {
+  return hns >= HNS_None && hns < NUM_HoldNoteScore;
+}
+
+Grade SanitizeGrade(Grade grade) {
+  if (IsValidGradeValue(grade)) {
+    return grade;
+  }
+  WarnHighScore("HighScore normalized invalid grade to NoData.");
+  return Grade_NoData;
+}
+
+StageAward SanitizeStageAward(StageAward award) {
+  if (IsValidStageAwardValue(award)) {
+    return award;
+  }
+  WarnHighScore("HighScore normalized invalid stage award.");
+  return StageAward_Invalid;
+}
+
+PeakComboAward SanitizePeakComboAward(PeakComboAward award) {
+  if (IsValidPeakComboAwardValue(award)) {
+    return award;
+  }
+  WarnHighScore("HighScore normalized invalid peak combo award.");
+  return PeakComboAward_Invalid;
+}
+
+float SanitizeFiniteNonNegativeFloat(
+    float value, const char* field, float fallback = 0.0f) {
+  if (!std::isfinite(value) || value < 0.0f) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: HighScore normalized invalid %s value %f to %f.",
+          field, value, fallback);
+    }
+    return fallback;
+  }
+  return value;
+}
+
+float SanitizePercentDP(float value) {
+  value = SanitizeFiniteNonNegativeFloat(value, "PercentDP");
+  if (value > 1.0f) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: HighScore clamped PercentDP value %f to 1.", value);
+    }
+    return 1.0f;
+  }
+  return value;
+}
+
+int SanitizeNonNegativeInt(int value, const char* field) {
+  if (value < 0) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: HighScore clamped negative %s value %i to 0.",
+          field, value);
+    }
+    return 0;
+  }
+  return value;
+}
+
+int AddNonNegativeIntSaturated(int lhs, int rhs, const char* field) {
+  lhs = SanitizeNonNegativeInt(lhs, field);
+  rhs = SanitizeNonNegativeInt(rhs, field);
+  if (rhs > std::numeric_limits<int>::max() - lhs) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: HighScore saturated %s sum %i + %i.",
+          field, lhs, rhs);
+    }
+    return std::numeric_limits<int>::max();
+  }
+  return lhs + rhs;
+}
+
+int GetMaxHighScoresForList(bool isMachine) {
+  int value = isMachine ? DEFAULT_MACHINE_HIGH_SCORE_LIMIT
+                        : DEFAULT_PLAYER_HIGH_SCORE_LIMIT;
+  if (PREFSMAN != nullptr) {
+    value = isMachine ? PREFSMAN->m_iMaxHighScoresPerListForMachine.Get()
+                      : PREFSMAN->m_iMaxHighScoresPerListForPlayer.Get();
+  }
+  if (value < 0 || value > MAX_REASONABLE_HIGH_SCORE_LIMIT) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: HighScore clamped max high score list size %i.",
+          value);
+    }
+    value = std::clamp(value, 0, MAX_REASONABLE_HIGH_SCORE_LIMIT);
+  }
+  return value;
+}
+
+bool AllowMultipleHighScoresWithSameName() {
+  return PREFSMAN == nullptr ||
+         PREFSMAN->m_bAllowMultipleHighScoreWithSameName.Get();
+}
+
+bool IsBetterGrade(Grade lhs, Grade rhs) {
+  lhs = SanitizeGrade(lhs);
+  rhs = SanitizeGrade(rhs);
+  if (lhs == Grade_NoData) {
+    return false;
+  }
+  if (rhs == Grade_NoData) {
+    return true;
+  }
+  return lhs < rhs;
+}
+
+Grade BestGrade(Grade lhs, Grade rhs) {
+  return IsBetterGrade(lhs, rhs) ? lhs : rhs;
+}
+
+float ComparablePercent(const HighScore& hs) {
+  return SanitizePercentDP(hs.GetPercentDP());
+}
+
+bool IsBetterHighScore(const HighScore& lhs, const HighScore& rhs) {
+  if (PREFSMAN != nullptr && PREFSMAN->m_bPercentageScoring.Get()) {
+    const float lhsPercent = ComparablePercent(lhs);
+    const float rhsPercent = ComparablePercent(rhs);
+    if (lhsPercent != rhsPercent) {
+      return lhsPercent > rhsPercent;
+    }
+  } else if (lhs.GetScore() != rhs.GetScore()) {
+    return lhs.GetScore() > rhs.GetScore();
+  }
+
+  if (lhs.GetGrade() != rhs.GetGrade()) {
+    return IsBetterGrade(lhs.GetGrade(), rhs.GetGrade());
+  }
+  if (lhs.GetMaxCombo() != rhs.GetMaxCombo()) {
+    return lhs.GetMaxCombo() > rhs.GetMaxCombo();
+  }
+  return lhs.GetDateTime() > rhs.GetDateTime();
+}
+
+Grade CalculateHighGrade(const std::vector<HighScore>& scores) {
+  Grade highGrade = Grade_NoData;
+  for (const HighScore& score : scores) {
+    highGrade = BestGrade(score.GetGrade(), highGrade);
+  }
+  return highGrade;
+}
+
+void SortHighScoresBestFirst(std::vector<HighScore>& scores) {
+  std::stable_sort(scores.begin(), scores.end(), IsBetterHighScore);
+}
+
+bool ShouldDeduplicateHighScoreName(const std::string& name) {
+  return !name.empty() && !IsRankingToFillIn(name);
+}
+
+std::string SafeStageAwardToString(StageAward award) {
+  award = SanitizeStageAward(award);
+  return award == StageAward_Invalid ? std::string("")
+                                     : StageAwardToString(award);
+}
+
+std::string SafePeakComboAwardToString(PeakComboAward award) {
+  award = SanitizePeakComboAward(award);
+  return award == PeakComboAward_Invalid ? std::string("")
+                                         : PeakComboAwardToString(award);
+}
+
+bool IsSafeScreenshotFilename(const std::string& fileName) {
+  return !fileName.empty() && fileName == Basename(fileName) &&
+         fileName.find("..") == std::string::npos;
+}
+
+bool IsHexChar(char c) {
+  return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+         (c >= 'A' && c <= 'F');
+}
+
+bool IsValidMD5(const std::string& md5) {
+  return md5.empty() ||
+         (md5.size() == 32 &&
+          std::all_of(md5.begin(), md5.end(), IsHexChar));
+}
+
+bool NearlyEqualHighScoreFloat(float lhs, float rhs, const char* field) {
+  lhs = SanitizeFiniteNonNegativeFloat(lhs, field);
+  rhs = SanitizeFiniteNonNegativeFloat(rhs, field);
+  return std::fabs(lhs - rhs) <= 0.000001f;
+}
+}  // namespace
 
 struct HighScoreImpl {
   std::string sName;  // name that shows in the machine's ranking screen
@@ -69,10 +297,11 @@ bool HighScoreImpl::operator==(const HighScoreImpl& other) const {
   if (peakComboAward != other.peakComboAward) {
     return false;
   }
-  if (fPercentDP != other.fPercentDP) {
+  if (!NearlyEqualHighScoreFloat(fPercentDP, other.fPercentDP, "PercentDP")) {
     return false;
   }
-  if (fSurviveSeconds != other.fSurviveSeconds) {
+  if (!NearlyEqualHighScoreFloat(
+          fSurviveSeconds, other.fSurviveSeconds, "SurviveSeconds")) {
     return false;
   }
   if (sModifiers != other.sModifiers) {
@@ -103,7 +332,10 @@ bool HighScoreImpl::operator==(const HighScoreImpl& other) const {
   if (radarValues != other.radarValues) {
     return false;
   }
-  if (fLifeRemainingSeconds != other.fLifeRemainingSeconds) {
+  if (!NearlyEqualHighScoreFloat(
+          fLifeRemainingSeconds,
+          other.fLifeRemainingSeconds,
+          "LifeRemainingSeconds")) {
     return false;
   }
   if (bDisqualified != other.bDisqualified) {
@@ -130,6 +362,7 @@ HighScoreImpl::HighScoreImpl() {
   ZERO(iHoldNoteScores);
   radarValues.MakeUnknown();
   fLifeRemainingSeconds = 0;
+  bDisqualified = false;
 }
 
 XNode* HighScoreImpl::CreateNode() const {
@@ -140,13 +373,16 @@ XNode* HighScoreImpl::CreateNode() const {
   // TRICKY:  Don't write "name to fill in" markers.
   pNode->AppendChild(
       "Name", IsRankingToFillIn(sName) ? std::string("") : sName);
-  pNode->AppendChild("Grade", GradeToString(grade));
+  pNode->AppendChild("Grade", GradeToString(SanitizeGrade(grade)));
   pNode->AppendChild("Score", iScore);
-  pNode->AppendChild("PercentDP", fPercentDP);
-  pNode->AppendChild("SurviveSeconds", fSurviveSeconds);
+  pNode->AppendChild("PercentDP", SanitizePercentDP(fPercentDP));
+  pNode->AppendChild(
+      "SurviveSeconds",
+      SanitizeFiniteNonNegativeFloat(fSurviveSeconds, "SurviveSeconds"));
   pNode->AppendChild("MaxCombo", iMaxCombo);
-  pNode->AppendChild("StageAward", StageAwardToString(stageAward));
-  pNode->AppendChild("PeakComboAward", PeakComboAwardToString(peakComboAward));
+  pNode->AppendChild("StageAward", SafeStageAwardToString(stageAward));
+  pNode->AppendChild(
+      "PeakComboAward", SafePeakComboAwardToString(peakComboAward));
   pNode->AppendChild("Modifiers", sModifiers);
   pNode->AppendChild("DateTime", dateTime.GetString());
   pNode->AppendChild("PlayerGuid", sPlayerGuid);
@@ -155,65 +391,88 @@ XNode* HighScoreImpl::CreateNode() const {
   XNode* pTapNoteScores = pNode->AppendChild("TapNoteScores");
   FOREACH_ENUM(TapNoteScore, tns)
   if (tns != TNS_None) {  // HACK: don't save meaningless "none" count
-    pTapNoteScores->AppendChild(TapNoteScoreToString(tns), iTapNoteScores[tns]);
+    pTapNoteScores->AppendChild(
+        TapNoteScoreToString(tns),
+        SanitizeNonNegativeInt(iTapNoteScores[tns], "tap note score"));
   }
   XNode* pHoldNoteScores = pNode->AppendChild("HoldNoteScores");
   FOREACH_ENUM(HoldNoteScore, hns)
   if (hns != HNS_None) {  // HACK: don't save meaningless "none" count
     pHoldNoteScores->AppendChild(
-        HoldNoteScoreToString(hns), iHoldNoteScores[hns]);
+        HoldNoteScoreToString(hns),
+        SanitizeNonNegativeInt(iHoldNoteScores[hns], "hold note score"));
   }
   pNode->AppendChild(
       radarValues.CreateNode(bWriteSimpleValues, bWriteComplexValues));
-  pNode->AppendChild("LifeRemainingSeconds", fLifeRemainingSeconds);
+  pNode->AppendChild(
+      "LifeRemainingSeconds",
+      SanitizeFiniteNonNegativeFloat(
+          fLifeRemainingSeconds, "LifeRemainingSeconds"));
   pNode->AppendChild("Disqualified", bDisqualified);
 
   return pNode;
 }
 
 void HighScoreImpl::LoadFromNode(const XNode* pNode) {
-  ASSERT(pNode->GetName() == "HighScore");
+  if (pNode == nullptr || pNode->GetName() != "HighScore") {
+    WarnHighScore("HighScore ignored invalid or null HighScore XML node.");
+    *this = HighScoreImpl();
+    return;
+  }
 
+  *this = HighScoreImpl();
   std::string s;
 
   pNode->GetChildValue("Name", sName);
-  pNode->GetChildValue("Grade", s);
-  grade = StringToGrade(s);
+  if (pNode->GetChildValue("Grade", s) && !s.empty()) {
+    grade = SanitizeGrade(StringToGrade(s));
+  }
   pNode->GetChildValue("Score", iScore);
   pNode->GetChildValue("PercentDP", fPercentDP);
+  fPercentDP = SanitizePercentDP(fPercentDP);
   pNode->GetChildValue("SurviveSeconds", fSurviveSeconds);
+  fSurviveSeconds =
+      SanitizeFiniteNonNegativeFloat(fSurviveSeconds, "SurviveSeconds");
   pNode->GetChildValue("MaxCombo", iMaxCombo);
-  pNode->GetChildValue("StageAward", s);
-  stageAward = StringToStageAward(s);
-  pNode->GetChildValue("PeakComboAward", s);
-  peakComboAward = StringToPeakComboAward(s);
+  if (pNode->GetChildValue("StageAward", s) && !s.empty()) {
+    stageAward = SanitizeStageAward(StringToStageAward(s));
+  }
+  if (pNode->GetChildValue("PeakComboAward", s) && !s.empty()) {
+    peakComboAward = SanitizePeakComboAward(StringToPeakComboAward(s));
+  }
   pNode->GetChildValue("Modifiers", sModifiers);
-  pNode->GetChildValue("DateTime", s);
-  dateTime.FromString(s);
+  if (pNode->GetChildValue("DateTime", s)) {
+    dateTime.FromString(s);
+  }
   pNode->GetChildValue("PlayerGuid", sPlayerGuid);
   pNode->GetChildValue("MachineGuid", sMachineGuid);
   pNode->GetChildValue("ProductID", iProductID);
   const XNode* pTapNoteScores = pNode->GetChild("TapNoteScores");
   if (pTapNoteScores) {
     FOREACH_ENUM(TapNoteScore, tns)
-    pTapNoteScores->GetChildValue(
-        TapNoteScoreToString(tns), iTapNoteScores[tns]);
+    if (pTapNoteScores->GetChildValue(
+            TapNoteScoreToString(tns), iTapNoteScores[tns])) {
+      iTapNoteScores[tns] =
+          SanitizeNonNegativeInt(iTapNoteScores[tns], "tap note score");
+    }
   }
   const XNode* pHoldNoteScores = pNode->GetChild("HoldNoteScores");
   if (pHoldNoteScores) {
     FOREACH_ENUM(HoldNoteScore, hns)
-    pHoldNoteScores->GetChildValue(
-        HoldNoteScoreToString(hns), iHoldNoteScores[hns]);
+    if (pHoldNoteScores->GetChildValue(
+            HoldNoteScoreToString(hns), iHoldNoteScores[hns])) {
+      iHoldNoteScores[hns] =
+          SanitizeNonNegativeInt(iHoldNoteScores[hns], "hold note score");
+    }
   }
   const XNode* pRadarValues = pNode->GetChild("RadarValues");
   if (pRadarValues) {
     radarValues.LoadFromNode(pRadarValues);
   }
   pNode->GetChildValue("LifeRemainingSeconds", fLifeRemainingSeconds);
+  fLifeRemainingSeconds = SanitizeFiniteNonNegativeFloat(
+      fLifeRemainingSeconds, "LifeRemainingSeconds");
   pNode->GetChildValue("Disqualified", bDisqualified);
-
-  // Validate input.
-  grade = std::clamp(grade, Grade_Tier01, Grade_Failed);
 }
 
 REGISTER_CLASS_TRAITS(HighScoreImpl, new HighScoreImpl(*pCopy))
@@ -223,29 +482,43 @@ HighScore::HighScore() { m_Impl = new HighScoreImpl; }
 void HighScore::Unset() { m_Impl = new HighScoreImpl; }
 
 bool HighScore::IsEmpty() const {
-  if (m_Impl->iTapNoteScores[TNS_W1] || m_Impl->iTapNoteScores[TNS_W2] ||
-      m_Impl->iTapNoteScores[TNS_W3] || m_Impl->iTapNoteScores[TNS_W4] ||
-      m_Impl->iTapNoteScores[TNS_W5]) {
+  if (GetTapNoteScore(TNS_W1) > 0 || GetTapNoteScore(TNS_W2) > 0 ||
+      GetTapNoteScore(TNS_W3) > 0 || GetTapNoteScore(TNS_W4) > 0 ||
+      GetTapNoteScore(TNS_W5) > 0) {
     return false;
   }
-  if (m_Impl->iHoldNoteScores[HNS_Held] > 0) {
+  if (GetHoldNoteScore(HNS_Held) > 0) {
     return false;
   }
   return true;
 }
 
 std::string HighScore::GetName() const { return m_Impl->sName; }
-Grade HighScore::GetGrade() const { return m_Impl->grade; }
+Grade HighScore::GetGrade() const { return SanitizeGrade(m_Impl->grade); }
 unsigned int HighScore::GetScore() const { return m_Impl->iScore; }
 unsigned int HighScore::GetMaxCombo() const { return m_Impl->iMaxCombo; }
-StageAward HighScore::GetStageAward() const { return m_Impl->stageAward; }
-PeakComboAward HighScore::GetPeakComboAward() const {
-  return m_Impl->peakComboAward;
+StageAward HighScore::GetStageAward() const {
+  return SanitizeStageAward(m_Impl->stageAward);
 }
-float HighScore::GetPercentDP() const { return m_Impl->fPercentDP; }
-float HighScore::GetSurviveSeconds() const { return m_Impl->fSurviveSeconds; }
+PeakComboAward HighScore::GetPeakComboAward() const {
+  return SanitizePeakComboAward(m_Impl->peakComboAward);
+}
+float HighScore::GetPercentDP() const {
+  return SanitizePercentDP(m_Impl->fPercentDP);
+}
+float HighScore::GetSurviveSeconds() const {
+  return SanitizeFiniteNonNegativeFloat(
+      m_Impl->fSurviveSeconds, "SurviveSeconds");
+}
 float HighScore::GetSurvivalSeconds() const {
-  return GetSurviveSeconds() + GetLifeRemainingSeconds();
+  const float surviveSeconds = GetSurviveSeconds();
+  const float lifeRemainingSeconds = GetLifeRemainingSeconds();
+  if (lifeRemainingSeconds >
+      std::numeric_limits<float>::max() - surviveSeconds) {
+    WarnHighScore("HighScore saturated survival seconds sum.");
+    return std::numeric_limits<float>::max();
+  }
+  return surviveSeconds + lifeRemainingSeconds;
 }
 std::string HighScore::GetModifiers() const { return m_Impl->sModifiers; }
 DateTime HighScore::GetDateTime() const { return m_Impl->dateTime; }
@@ -253,45 +526,70 @@ std::string HighScore::GetPlayerGuid() const { return m_Impl->sPlayerGuid; }
 std::string HighScore::GetMachineGuid() const { return m_Impl->sMachineGuid; }
 int HighScore::GetProductID() const { return m_Impl->iProductID; }
 int HighScore::GetTapNoteScore(TapNoteScore tns) const {
+  if (!IsValidTapNoteScoreValue(tns)) {
+    WarnHighScore("HighScore rejected invalid tap note score getter enum.");
+    return 0;
+  }
   return m_Impl->iTapNoteScores[tns];
 }
 int HighScore::GetHoldNoteScore(HoldNoteScore hns) const {
+  if (!IsValidHoldNoteScoreValue(hns)) {
+    WarnHighScore("HighScore rejected invalid hold note score getter enum.");
+    return 0;
+  }
   return m_Impl->iHoldNoteScores[hns];
 }
 const RadarValues& HighScore::GetRadarValues() const {
   return m_Impl->radarValues;
 }
 float HighScore::GetLifeRemainingSeconds() const {
-  return m_Impl->fLifeRemainingSeconds;
+  return SanitizeFiniteNonNegativeFloat(
+      m_Impl->fLifeRemainingSeconds, "LifeRemainingSeconds");
 }
 bool HighScore::GetDisqualified() const { return m_Impl->bDisqualified; }
 
 void HighScore::SetName(const std::string& sName) { m_Impl->sName = sName; }
-void HighScore::SetGrade(Grade g) { m_Impl->grade = g; }
+void HighScore::SetGrade(Grade g) { m_Impl->grade = SanitizeGrade(g); }
 void HighScore::SetScore(unsigned int iScore) { m_Impl->iScore = iScore; }
 void HighScore::SetMaxCombo(unsigned int i) { m_Impl->iMaxCombo = i; }
-void HighScore::SetStageAward(StageAward a) { m_Impl->stageAward = a; }
-void HighScore::SetPeakComboAward(PeakComboAward a) {
-  m_Impl->peakComboAward = a;
+void HighScore::SetStageAward(StageAward a) {
+  m_Impl->stageAward = SanitizeStageAward(a);
 }
-void HighScore::SetPercentDP(float f) { m_Impl->fPercentDP = f; }
-void HighScore::SetAliveSeconds(float f) { m_Impl->fSurviveSeconds = f; }
+void HighScore::SetPeakComboAward(PeakComboAward a) {
+  m_Impl->peakComboAward = SanitizePeakComboAward(a);
+}
+void HighScore::SetPercentDP(float f) {
+  m_Impl->fPercentDP = SanitizePercentDP(f);
+}
+void HighScore::SetAliveSeconds(float f) {
+  m_Impl->fSurviveSeconds =
+      SanitizeFiniteNonNegativeFloat(f, "SurviveSeconds");
+}
 void HighScore::SetModifiers(std::string s) { m_Impl->sModifiers = s; }
 void HighScore::SetDateTime(DateTime d) { m_Impl->dateTime = d; }
 void HighScore::SetPlayerGuid(std::string s) { m_Impl->sPlayerGuid = s; }
 void HighScore::SetMachineGuid(std::string s) { m_Impl->sMachineGuid = s; }
 void HighScore::SetProductID(int i) { m_Impl->iProductID = i; }
 void HighScore::SetTapNoteScore(TapNoteScore tns, int i) {
-  m_Impl->iTapNoteScores[tns] = i;
+  if (!IsValidTapNoteScoreValue(tns)) {
+    WarnHighScore("HighScore rejected invalid tap note score setter enum.");
+    return;
+  }
+  m_Impl->iTapNoteScores[tns] = SanitizeNonNegativeInt(i, "tap note score");
 }
 void HighScore::SetHoldNoteScore(HoldNoteScore hns, int i) {
-  m_Impl->iHoldNoteScores[hns] = i;
+  if (!IsValidHoldNoteScoreValue(hns)) {
+    WarnHighScore("HighScore rejected invalid hold note score setter enum.");
+    return;
+  }
+  m_Impl->iHoldNoteScores[hns] = SanitizeNonNegativeInt(i, "hold note score");
 }
 void HighScore::SetRadarValues(const RadarValues& rv) {
   m_Impl->radarValues = rv;
 }
 void HighScore::SetLifeRemainingSeconds(float f) {
-  m_Impl->fLifeRemainingSeconds = f;
+  m_Impl->fLifeRemainingSeconds =
+      SanitizeFiniteNonNegativeFloat(f, "LifeRemainingSeconds");
 }
 void HighScore::SetDisqualified(bool b) { m_Impl->bDisqualified = b; }
 
@@ -303,17 +601,7 @@ std::string* HighScore::GetNameMutable() { return &m_Impl->sName; }
 bool HighScore::operator<(const HighScore& other) const {
   /* Make sure we treat AAAA as higher than AAA, even though the score
    * is the same. */
-  if (PREFSMAN->m_bPercentageScoring) {
-    if (GetPercentDP() != other.GetPercentDP()) {
-      return GetPercentDP() < other.GetPercentDP();
-    }
-  } else {
-    if (GetScore() != other.GetScore()) {
-      return GetScore() < other.GetScore();
-    }
-  }
-
-  return GetGrade() < other.GetGrade();
+  return IsBetterHighScore(other, *this);
 }
 
 bool HighScore::operator>(const HighScore& other) const {
@@ -344,7 +632,10 @@ void HighScore::LoadFromNode(const XNode* pNode) {
 
 std::string HighScore::GetDisplayName() const {
   if (GetName().empty()) {
-    return EMPTY_NAME;
+    if (THEME != nullptr && THEME->IsThemeLoaded() && EMPTY_NAME.IsLoaded()) {
+      return EMPTY_NAME.GetValue();
+    }
+    return "???";
   } else {
     return GetName();
   }
@@ -355,22 +646,22 @@ void HighScoreList::Init() {
   iNumTimesPlayed = 0;
   vHighScores.clear();
   HighGrade = Grade_NoData;
+  dtLastPlayed.Init();
 }
 
 void HighScoreList::AddHighScore(
     HighScore hs, int& iIndexOut, bool bIsMachine) {
-  int i;
-  for (i = 0; i < (int)vHighScores.size(); i++) {
-    if (hs >= vHighScores[i]) {
+  iIndexOut = -1;
+  size_t insertIndex = 0;
+  for (; insertIndex < vHighScores.size(); insertIndex++) {
+    if (hs >= vHighScores[insertIndex]) {
       break;
     }
   }
-  const int iMaxScores = bIsMachine
-                             ? PREFSMAN->m_iMaxHighScoresPerListForMachine
-                             : PREFSMAN->m_iMaxHighScoresPerListForPlayer;
-  if (i < iMaxScores) {
-    vHighScores.insert(vHighScores.begin() + i, hs);
-    iIndexOut = i;
+  const int iMaxScores = GetMaxHighScoresForList(bIsMachine);
+  if (insertIndex < static_cast<size_t>(iMaxScores)) {
+    vHighScores.insert(vHighScores.begin() + insertIndex, hs);
+    iIndexOut = static_cast<int>(insertIndex);
 
     // Delete extra machine high scores in RemoveAllButOneOfEachNameAndClampSize
     // and not here so that we don't end up with less than iMaxScores after
@@ -379,19 +670,19 @@ void HighScoreList::AddHighScore(
     if (!bIsMachine) {
       ClampSize(bIsMachine);
     }
+    HighGrade = BestGrade(hs.GetGrade(), HighGrade);
   }
-  HighGrade = std::min(hs.GetGrade(), HighGrade);
 }
 
 void HighScoreList::IncrementPlayCount(DateTime _dtLastPlayed) {
   dtLastPlayed = _dtLastPlayed;
-  iNumTimesPlayed++;
+  iNumTimesPlayed = AddNonNegativeIntSaturated(
+      iNumTimesPlayed, 1, "number of times played");
 }
 
 const HighScore& HighScoreList::GetTopScore() const {
   if (vHighScores.empty()) {
-    static HighScore hs;
-    hs = HighScore();
+    static const HighScore hs;
     return hs;
   } else {
     return vHighScores[0];
@@ -401,13 +692,15 @@ const HighScore& HighScoreList::GetTopScore() const {
 XNode* HighScoreList::CreateNode() const {
   XNode* pNode = new XNode("HighScoreList");
 
-  pNode->AppendChild("NumTimesPlayed", iNumTimesPlayed);
+  pNode->AppendChild(
+      "NumTimesPlayed",
+      SanitizeNonNegativeInt(iNumTimesPlayed, "number of times played"));
   pNode->AppendChild("LastPlayed", dtLastPlayed.GetString());
   if (HighGrade != Grade_NoData) {
-    pNode->AppendChild("HighGrade", GradeToString(HighGrade));
+    pNode->AppendChild("HighGrade", GradeToString(SanitizeGrade(HighGrade)));
   }
 
-  for (unsigned i = 0; i < vHighScores.size(); i++) {
+  for (size_t i = 0; i < vHighScores.size(); i++) {
     const HighScore& hs = vHighScores[i];
     pNode->AppendChild(hs.CreateNode());
   }
@@ -418,11 +711,17 @@ XNode* HighScoreList::CreateNode() const {
 void HighScoreList::LoadFromNode(const XNode* pHighScoreList) {
   Init();
 
-  ASSERT(pHighScoreList->GetName() == "HighScoreList");
+  if (pHighScoreList == nullptr ||
+      pHighScoreList->GetName() != "HighScoreList") {
+    WarnHighScore("HighScoreList ignored invalid or null XML node.");
+    return;
+  }
   FOREACH_CONST_Child(pHighScoreList, p) {
     const std::string& name = p->GetName();
     if (name == "NumTimesPlayed") {
       p->GetTextValue(iNumTimesPlayed);
+      iNumTimesPlayed =
+          SanitizeNonNegativeInt(iNumTimesPlayed, "number of times played");
     } else if (name == "LastPlayed") {
       std::string s;
       p->GetTextValue(s);
@@ -430,83 +729,117 @@ void HighScoreList::LoadFromNode(const XNode* pHighScoreList) {
     } else if (name == "HighGrade") {
       std::string s;
       p->GetTextValue(s);
-      HighGrade = StringToGrade(s);
+      HighGrade = s.empty() ? Grade_NoData : SanitizeGrade(StringToGrade(s));
     } else if (name == "HighScore") {
+      if (vHighScores.size() >=
+          static_cast<size_t>(MAX_REASONABLE_HIGH_SCORE_LIMIT)) {
+        WarnHighScore("HighScoreList truncated oversized XML score list.");
+        continue;
+      }
       vHighScores.resize(vHighScores.size() + 1);
       vHighScores.back().LoadFromNode(p);
-
-      HighGrade = std::min(vHighScores.back().GetGrade(), HighGrade);
     }
   }
+  SortHighScoresBestFirst(vHighScores);
+  std::vector<HighScore>::iterator unique_end =
+      std::unique(vHighScores.begin(), vHighScores.end());
+  vHighScores.erase(unique_end, vHighScores.end());
+  HighGrade = CalculateHighGrade(vHighScores);
 }
 
 void HighScoreList::RemoveAllButOneOfEachName() {
   for (std::vector<HighScore>::iterator i = vHighScores.begin();
        i != vHighScores.end(); ++i) {
+    if (!ShouldDeduplicateHighScoreName(i->GetName())) {
+      continue;
+    }
     for (std::vector<HighScore>::iterator j = i + 1; j != vHighScores.end();
-         j++) {
+         /* incremented below */) {
       if (i->GetName() == j->GetName()) {
-        j--;
-        vHighScores.erase(j + 1);
+        j = vHighScores.erase(j);
+      } else {
+        ++j;
       }
     }
   }
+  HighGrade = CalculateHighGrade(vHighScores);
 }
 
 void HighScoreList::ClampSize(bool bIsMachine) {
-  const int iMaxScores = bIsMachine
-                             ? PREFSMAN->m_iMaxHighScoresPerListForMachine
-                             : PREFSMAN->m_iMaxHighScoresPerListForPlayer;
-  if (vHighScores.size() > unsigned(iMaxScores)) {
-    vHighScores.erase(vHighScores.begin() + iMaxScores, vHighScores.end());
+  const int iMaxScores = GetMaxHighScoresForList(bIsMachine);
+  const size_t maxScores = static_cast<size_t>(iMaxScores);
+  if (vHighScores.size() > maxScores) {
+    vHighScores.erase(vHighScores.begin() + maxScores, vHighScores.end());
   }
+  HighGrade = CalculateHighGrade(vHighScores);
 }
 
 void HighScoreList::MergeFromOtherHSL(HighScoreList& other, bool is_machine) {
-  iNumTimesPlayed += other.iNumTimesPlayed;
+  iNumTimesPlayed = AddNonNegativeIntSaturated(
+      iNumTimesPlayed, other.iNumTimesPlayed, "number of times played");
   if (other.dtLastPlayed > dtLastPlayed) {
     dtLastPlayed = other.dtLastPlayed;
   }
-  if (other.HighGrade > HighGrade) {
-    HighGrade = other.HighGrade;
-  }
   vHighScores.insert(
       vHighScores.end(), other.vHighScores.begin(), other.vHighScores.end());
-  std::sort(vHighScores.begin(), vHighScores.end());
+  SortHighScoresBestFirst(vHighScores);
   // Remove non-unique scores because they probably come from an accidental
   // repeated merge. -Kyz
   std::vector<HighScore>::iterator unique_end =
       std::unique(vHighScores.begin(), vHighScores.end());
   vHighScores.erase(unique_end, vHighScores.end());
-  // Reverse it because sort moved the lesser scores to the top.
-  std::reverse(vHighScores.begin(), vHighScores.end());
 
-  if (!PREFSMAN->m_bAllowMultipleHighScoreWithSameName) {
+  if (!AllowMultipleHighScoresWithSameName()) {
     // erase all but the highest score for each name
     RemoveAllButOneOfEachName();
   }
   ClampSize(is_machine);
+  HighGrade = CalculateHighGrade(vHighScores);
 }
 
 XNode* Screenshot::CreateNode() const {
   XNode* pNode = new XNode("Screenshot");
 
-  // TRICKY:  Don't write "name to fill in" markers.
-  pNode->AppendChild("FileName", sFileName);
-  pNode->AppendChild("MD5", sMD5);
+  if (!sFileName.empty() && !IsSafeScreenshotFilename(sFileName)) {
+    WarnHighScore("Screenshot omitted unsafe filename while writing XML.");
+  }
+  if (!IsValidMD5(sMD5)) {
+    WarnHighScore("Screenshot omitted invalid MD5 while writing XML.");
+  }
+  pNode->AppendChild(
+      "FileName", IsSafeScreenshotFilename(sFileName) ? sFileName : "");
+  pNode->AppendChild("MD5", IsValidMD5(sMD5) ? sMD5 : "");
   pNode->AppendChild(highScore.CreateNode());
 
   return pNode;
 }
 
 void Screenshot::LoadFromNode(const XNode* pNode) {
-  ASSERT(pNode->GetName() == "Screenshot");
+  if (pNode == nullptr || pNode->GetName() != "Screenshot") {
+    WarnHighScore("Screenshot ignored invalid or null XML node.");
+    *this = Screenshot();
+    return;
+  }
+
+  sFileName.clear();
+  sMD5.clear();
+  highScore.Unset();
 
   pNode->GetChildValue("FileName", sFileName);
+  if (!sFileName.empty() && !IsSafeScreenshotFilename(sFileName)) {
+    WarnHighScore("Screenshot cleared unsafe filename from XML.");
+    sFileName.clear();
+  }
   pNode->GetChildValue("MD5", sMD5);
+  if (!IsValidMD5(sMD5)) {
+    WarnHighScore("Screenshot cleared invalid MD5 from XML.");
+    sMD5.clear();
+  }
   const XNode* pHighScore = pNode->GetChild("HighScore");
   if (pHighScore) {
     highScore.LoadFromNode(pHighScore);
+  } else {
+    highScore.Unset();
   }
 }
 
@@ -552,16 +885,17 @@ class LunaHighScore : public Luna<HighScore> {
     return 1;
   }
   static int GetTapNoteScore(T* p, lua_State* L) {
-    lua_pushnumber(L, p->GetTapNoteScore(Enum::Check<TapNoteScore>(L, 1)));
+    lua_pushnumber(
+        L, p->GetTapNoteScore(Enum::Check<TapNoteScore>(L, 1, true, true)));
     return 1;
   }
   static int GetHoldNoteScore(T* p, lua_State* L) {
-    lua_pushnumber(L, p->GetHoldNoteScore(Enum::Check<HoldNoteScore>(L, 1)));
+    lua_pushnumber(
+        L, p->GetHoldNoteScore(Enum::Check<HoldNoteScore>(L, 1, true, true)));
     return 1;
   }
   static int GetRadarValues(T* p, lua_State* L) {
-    RadarValues& rv = const_cast<RadarValues&>(p->GetRadarValues());
-    rv.PushSelf(L);
+    p->GetRadarValues().PushSelf(L);
     return 1;
   }
   DEFINE_METHOD(GetGrade, GetGrade())
@@ -593,9 +927,15 @@ class LunaHighScoreList : public Luna<HighScoreList> {
  public:
   static int GetHighScores(T* p, lua_State* L) {
     lua_newtable(L);
-    for (int i = 0; i < (int)p->vHighScores.size(); ++i) {
+    const size_t maxLuaScores = std::min(
+        p->vHighScores.size(),
+        static_cast<size_t>(std::numeric_limits<int>::max()));
+    if (maxLuaScores != p->vHighScores.size()) {
+      WarnHighScore("HighScoreList truncated oversized Lua high score table.");
+    }
+    for (size_t i = 0; i < maxLuaScores; ++i) {
       p->vHighScores[i].PushSelf(L);
-      lua_rawseti(L, -2, i + 1);
+      lua_rawseti(L, -2, static_cast<int>(i) + 1);
     }
 
     return 1;
@@ -603,6 +943,10 @@ class LunaHighScoreList : public Luna<HighScoreList> {
 
   static int GetHighestScoreOfName(T* p, lua_State* L) {
     std::string name = SArg(1);
+    if (name.empty()) {
+      lua_pushnil(L);
+      return 1;
+    }
     for (size_t i = 0; i < p->vHighScores.size(); ++i) {
       if (name == p->vHighScores[i].GetName()) {
         p->vHighScores[i].PushSelf(L);
@@ -615,11 +959,21 @@ class LunaHighScoreList : public Luna<HighScoreList> {
 
   static int GetRankOfName(T* p, lua_State* L) {
     std::string name = SArg(1);
-    size_t rank = 0;
-    for (size_t i = 0; i < p->vHighScores.size(); ++i) {
+    if (name.empty()) {
+      lua_pushnumber(L, 0);
+      return 1;
+    }
+    const size_t maxLuaScores = std::min(
+        p->vHighScores.size(),
+        static_cast<size_t>(std::numeric_limits<int>::max()));
+    if (maxLuaScores != p->vHighScores.size()) {
+      WarnHighScore("HighScoreList truncated oversized Lua rank lookup.");
+    }
+    int rank = 0;
+    for (size_t i = 0; i < maxLuaScores; ++i) {
       if (name == p->vHighScores[i].GetName()) {
         // Indices from Lua are one-indexed.  +1 to adjust.
-        rank = i + 1;
+        rank = static_cast<int>(i) + 1;
         break;
       }
     }

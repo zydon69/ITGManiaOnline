@@ -135,6 +135,10 @@ class LunaRadarValues : public Luna<RadarValues> {
 };
 
 LUA_REGISTER_CLASS(RadarValues)
+
+void RadarValues::PushSelf(lua_State* L) const {
+  const_cast<RadarValues*>(this)->PushSelf(L);
+}
 // lua end
 
 /*

@@ -77,6 +77,7 @@ struct RadarValues {
 
   // Lua
   void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) const;
 };
 
 #endif
