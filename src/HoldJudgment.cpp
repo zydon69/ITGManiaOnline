@@ -9,6 +9,7 @@
 #include "LuaManager.h"
 #include "MessageManager.h"
 #include "PlayerNumber.h"
+#include "RageLog.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
 #include "XmlFile.h"
@@ -20,6 +21,11 @@ HoldJudgment::HoldJudgment() { m_mpToTrack = MultiPlayer_Invalid; }
 
 void HoldJudgment::Load(const std::string& sPath) {
   m_sprJudgment.Load(sPath);
+  if (!m_sprJudgment.IsLoaded()) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-2022: HoldJudgment failed to load '%s'.",
+              sPath.c_str());
+    return;
+  }
   m_sprJudgment->StopAnimating();
   m_sprJudgment->SetName("HoldJudgment");
   ActorUtil::LoadAllCommands(*m_sprJudgment, "HoldJudgment");
@@ -43,7 +49,11 @@ void HoldJudgment::LoadFromNode(const XNode* pNode) {
 }
 
 void HoldJudgment::ResetAnimation() {
-  ASSERT(m_sprJudgment.IsLoaded());
+  if (!m_sprJudgment.IsLoaded()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-2022: HoldJudgment reset skipped unloaded actor.");
+    return;
+  }
   m_sprJudgment->SetDiffuse(RageColor(1, 1, 1, 0));
   m_sprJudgment->SetXY(0, 0);
   m_sprJudgment->StopTweening();
@@ -52,6 +62,12 @@ void HoldJudgment::ResetAnimation() {
 
 void HoldJudgment::SetHoldJudgment(HoldNoteScore hns) {
   // LOG->Trace( "Judgment::SetJudgment()" );
+  if (!m_sprJudgment.IsLoaded()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-2022: HoldJudgment ignored score %i without actor.",
+        hns);
+    return;
+  }
 
   // Matt: To save API. Command can handle if desired.
   if (hns != HNS_Missed) {
@@ -73,7 +89,8 @@ void HoldJudgment::SetHoldJudgment(HoldNoteScore hns) {
       break;
     case HNS_None:
     default:
-      FAIL_M(ssprintf("Cannot set hold judgment to %i", hns));
+      LOG->Warn("SRC_AUDIT_FIX SRC-2043: Invalid hold judgment score %i.", hns);
+      break;
   }
 }
 

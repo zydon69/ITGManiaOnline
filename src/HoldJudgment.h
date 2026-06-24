@@ -12,17 +12,17 @@
 class HoldJudgment : public ActorFrame {
  public:
   HoldJudgment();
-  virtual HoldJudgment* Copy() const;
+  HoldJudgment* Copy() const override;
   void Load(const std::string& sPath);
-  void LoadFromNode(const XNode* pNode);
+  void LoadFromNode(const XNode* pNode) override;
 
   void SetHoldJudgment(HoldNoteScore hns);
   void LoadFromMultiPlayer(MultiPlayer mp);
-  virtual void HandleMessage(const Message& msg);
+  void HandleMessage(const Message& msg) override;
   bool IsActiveForPerf();
 
   // Lua
-  virtual void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
  protected:
   void ResetAnimation();

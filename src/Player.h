@@ -92,8 +92,8 @@ class Player : public ActorFrame {
   Player(NoteData& nd, bool bVisibleParts = true);
   ~Player();
 
-  virtual void Update(float fDeltaTime);
-  virtual void DrawPrimitives();
+  void Update(float fDeltaTime) override;
+  void DrawPrimitives() override;
   // PushPlayerMatrix and PopPlayerMatrix are separate functions because
   // they need to be used twice so that the notefield board can rendered
   // underneath the combo and judgment.  They're not embedded in
@@ -182,7 +182,7 @@ class Player : public ActorFrame {
   bool m_oitg_zoom_mode;
 
   // Lua
-  virtual void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
   PlayerState* GetPlayerState() { return this->m_pPlayerState; }
   void ChangeLife(float delta);
@@ -326,6 +326,8 @@ class PlayerPlus {
 
  public:
   PlayerPlus() { m_pPlayer = new Player(m_NoteData); }
+  PlayerPlus(const PlayerPlus&) = delete;
+  PlayerPlus& operator=(const PlayerPlus&) = delete;
   ~PlayerPlus() { delete m_pPlayer; }
   void Load(const NoteData& nd) {
     m_NoteData = nd;
