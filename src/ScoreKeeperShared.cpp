@@ -5,10 +5,17 @@
 #include "Attack.h"
 #include "GameState.h"
 #include "NoteTypes.h"
+#include "PlayerNumber.h"
 #include "PlayerState.h"
 #include "RageLog.h"
 #include "ScoreKeeper.h"
 #include "ScoreKeeperNormal.h"
+
+namespace {
+bool IsValidSharedScorePlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+}  // namespace
 
 /* In Routine, we have two Players, but the master one handles all of the
  * scoring.  The other one will just receive misses for everything, and
@@ -32,7 +39,16 @@ bool ScoreKeeperShared::IsMasterScoreKeeper() const {
         "is null.");
     return false;
   }
-  return m_pPlayerState->m_PlayerNumber == GAMESTATE->GetMasterPlayerNumber();
+  const PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
+  const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+  if (!IsValidSharedScorePlayer(pn) || !IsValidSharedScorePlayer(master)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-2066: ScoreKeeperShared ignored callback for "
+        "player %i master %i.",
+        pn, master);
+    return false;
+  }
+  return pn == master;
 }
 
 void ScoreKeeperShared::Load(

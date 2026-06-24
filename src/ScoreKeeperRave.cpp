@@ -1,6 +1,7 @@
 #include "ScoreKeeperRave.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <string>
@@ -66,7 +67,13 @@ static void SuperMeterPercentChangeInit(
     case SE_Missed:
       defaultValueOut = -0.00f;
       break;
-      DEFAULT_FAIL(ci);
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2063: Unknown ScoreEvent %i for Rave super "
+          "meter preference default; using 0.",
+          ci);
+      defaultValueOut = 0.0f;
+      break;
   }
 }
 
@@ -76,6 +83,14 @@ static Preference1D<float> g_fSuperMeterPercentChange(
 namespace {
 bool IsValidRavePlayer(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+bool IsValidRaveTapScore(TapNoteScore tns) {
+  return tns >= TNS_None && tns < NUM_TapNoteScore;
+}
+
+bool IsValidRaveHoldScore(HoldNoteScore hns) {
+  return hns >= HNS_None && hns < NUM_HoldNoteScore;
 }
 
 bool IsValidAttackLevel(AttackLevel al) {
@@ -125,6 +140,32 @@ bool HasRaveGlobals(const char* context) {
       context, static_cast<void*>(GAMESTATE), static_cast<void*>(PREFSMAN));
   return false;
 }
+
+bool IsSafeRaveAttackModifier(std::string modifier, const char* context) {
+  Trim(modifier);
+  if (modifier.empty()) {
+    LOG->Warn("SRC_AUDIT_FIX: %s rejected empty attack modifier.", context);
+    return false;
+  }
+  static const size_t kMaxRaveAttackModifierChars = 256;
+  if (modifier.size() > kMaxRaveAttackModifierChars) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-2064: %s rejected oversized attack modifier (%zu "
+        "chars).",
+        context, modifier.size());
+    return false;
+  }
+  for (unsigned char c : modifier) {
+    if (std::iscntrl(c)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2064: %s rejected attack modifier containing a "
+          "control character.",
+          context);
+      return false;
+    }
+  }
+  return true;
+}
 }  // namespace
 
 ScoreKeeperRave::ScoreKeeperRave(
@@ -136,6 +177,13 @@ void ScoreKeeperRave::HandleTapScore(const TapNote& tn) {
     return;
   }
   TapNoteScore score = tn.result.tns;
+  if (!IsValidRaveTapScore(score)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-2062: ScoreKeeperRave ignored invalid tap score "
+        "%i.",
+        score);
+    return;
+  }
   float fPercentToMove = 0;
 
   if (score == TNS_HitMine) {
@@ -216,19 +264,33 @@ void ScoreKeeperRave::HandleHoldScore(const TapNote& tn) {
   // todo: should hit mine be handled in HandleTapRow score instead? -aj
   TapNoteScore tapScore = tn.result.tns;
   float fPercentToMove = 0.0f;
-  switch (tapScore) {
-    case TNS_HitMine:
-      fPercentToMove = ClampSuperMeterDelta(
-          g_fSuperMeterPercentChange[SE_HitMine],
-          "ScoreKeeperRave hold HitMine super meter delta");
-      break;
-    default:
-      break;
+  if (!IsValidRaveTapScore(tapScore)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-2062: ScoreKeeperRave ignored invalid hold tap "
+        "score %i.",
+        tapScore);
+  } else {
+    switch (tapScore) {
+      case TNS_HitMine:
+        fPercentToMove = ClampSuperMeterDelta(
+            g_fSuperMeterPercentChange[SE_HitMine],
+            "ScoreKeeperRave hold HitMine super meter delta");
+        break;
+      default:
+        break;
+    }
   }
 
   // Playing with this code enabled seems to feel "wrong", but I'm leaving it
   // in for player feedback. -aj
   HoldNoteScore holdScore = tn.HoldResult.hns;
+  if (!IsValidRaveHoldScore(holdScore)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-2062: ScoreKeeperRave ignored invalid hold score "
+        "%i.",
+        holdScore);
+    return;
+  }
   switch (holdScore) {
     case HNS_Held:
       fPercentToMove = ClampSuperMeterDelta(
@@ -322,7 +384,9 @@ void ScoreKeeperRave::AddSuperMeterDelta(float fUnscaledPercentChange) {
   // mercy: drop super meter faster if at a higher level
   if (fUnscaledPercentChange < 0) {
     fUnscaledPercentChange *=
-        SCALE(m_pPlayerState->m_fSuperMeter, 0.f, 1.f, 0.01f, 1.f);
+        SCALE(
+            m_pPlayerState->m_fSuperMeter, 0.f,
+            static_cast<float>(NUM_ATTACK_LEVELS), 0.01f, 1.f);
   }
 
   AttackLevel oldAL = (AttackLevel)(int)m_pPlayerState->m_fSuperMeter;
@@ -390,13 +454,15 @@ void ScoreKeeperRave::LaunchAttack(AttackLevel al) {
                                      "sudden", "boost", "brake", "wave"};
     sAttackToGive = DefaultAttacks[RandomInt(8)];
   }
-  if (sAttackToGive.empty()) {
+  if (!IsSafeRaveAttackModifier(
+          sAttackToGive, "ScoreKeeperRave::LaunchAttack")) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperRave skipped empty attack modifier for "
-        "player %i attack level %i.",
+        "SRC_AUDIT_FIX SRC-2064: ScoreKeeperRave skipped invalid attack "
+        "modifier for player %i attack level %i.",
         pn, al);
     return;
   }
+  Trim(sAttackToGive);
 
   PlayerNumber pnToAttack = OPPOSITE_PLAYER[pn];
   if (!IsValidRavePlayer(pnToAttack)) {

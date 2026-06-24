@@ -13,23 +13,24 @@ class ScoreKeeperShared : public ScoreKeeperNormal {
   ScoreKeeperShared(
       PlayerState* pPlayerState, PlayerStageStats* pPlayerStageStats);
 
-  virtual void Load(
+  void Load(
       const std::vector<Song*>& apSongs, const std::vector<Steps*>& apSteps,
-      const std::vector<AttackArray>& asModifiers);
+      const std::vector<AttackArray>& asModifiers) override;
 
-  virtual void DrawPrimitives();
-  virtual void Update(float fDelta);
+  void DrawPrimitives() override;
+  void Update(float fDelta) override;
 
-  virtual void OnNextSong(
-      int iSongInCourseIndex, const Steps* pSteps, const NoteData* pNoteData);
-  virtual void HandleTapScore(const TapNote& tn);
-  virtual void HandleTapRowScore(const NoteData& nd, int iRow);
-  virtual void HandleHoldScore(const TapNote& tn);
-  virtual void HandleHoldActiveSeconds(float fMusicSecondsHeld);
-  virtual void HandleHoldCheckpointScore(
+  void OnNextSong(
+      int iSongInCourseIndex, const Steps* pSteps,
+      const NoteData* pNoteData) override;
+  void HandleTapScore(const TapNote& tn) override;
+  void HandleTapRowScore(const NoteData& nd, int iRow) override;
+  void HandleHoldScore(const TapNote& tn) override;
+  void HandleHoldActiveSeconds(float fMusicSecondsHeld) override;
+  void HandleHoldCheckpointScore(
       const NoteData& nd, int iRow, int iNumHoldsHeldThisRow,
-      int iNumHoldsMissedThisRow);
-  virtual void HandleTapScoreNone();
+      int iNumHoldsMissedThisRow) override;
+  void HandleTapScoreNone() override;
 
  private:
   bool IsMasterScoreKeeper() const;

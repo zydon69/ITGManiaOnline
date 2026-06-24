@@ -9,13 +9,14 @@ class ScoreKeeperRave : public ScoreKeeper {
  public:
   ScoreKeeperRave(
       PlayerState* pPlayerState, PlayerStageStats* pPlayerStageStats);
-  void OnNextSong(int /* iSongInCourseIndex */, const Steps*, const NoteData*) {
+  void OnNextSong(
+      int /* iSongInCourseIndex */, const Steps*, const NoteData*) override {
   }
-  void HandleTapScore(const TapNote& tn);
-  void HandleTapRowScore(const NoteData& nd, int iRow);
-  void HandleHoldScore(const TapNote& tn);
-  void HandleHoldActiveSeconds(float /* fMusicSecondsHeld */) {}
-  void HandleTapScoreNone();
+  void HandleTapScore(const TapNote& tn) override;
+  void HandleTapRowScore(const NoteData& nd, int iRow) override;
+  void HandleHoldScore(const TapNote& tn) override;
+  void HandleHoldActiveSeconds(float /* fMusicSecondsHeld */) override {}
+  void HandleTapScoreNone() override;
 
  protected:
   void LaunchAttack(AttackLevel al);
