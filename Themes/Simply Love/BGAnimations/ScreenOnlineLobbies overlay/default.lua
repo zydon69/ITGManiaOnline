@@ -1873,19 +1873,24 @@ local function sync_local_missing_song_from_joined_players()
 				joined_missing_song_info = nil
 				joined_can_download_pack = false
 				joined_missing_song_reason = nil
-			elseif pack_sync_status_blocks_missing_verdict(playerPackStatus) or pack_sync_is_checking_joined_song() then
-				if selfMissing or joined_missing_song then
-					lobby_flow_trace("sync_local_missing_song clear reason=provisional_pack_status"
-						.. " status=" .. tostring(playerPackStatus)
-						.. " previousPlayerMissing=" .. tostring(selfMissing)
-						.. " previousJoinedMissing=" .. tostring(joined_missing_song == true))
+			elseif (selfMissing or joined_missing_song)
+				and (pack_sync_status_blocks_missing_verdict(playerPackStatus) or pack_sync_is_checking_joined_song())
+			then
+				lobby_flow_trace("sync_local_missing_song preserve reason=missing_verdict_waiting_positive_status"
+					.. " status=" .. tostring(playerPackStatus)
+					.. " previousPlayerMissing=" .. tostring(selfMissing)
+					.. " previousJoinedMissing=" .. tostring(joined_missing_song == true))
+				player.missingSong = true
+				player.missingSongReason = player.missingSongReason or joined_missing_song_reason or "missing_local_song"
+				joined_missing_song = true
+				joined_missing_song_reason = player.missingSongReason
+				if joined_missing_song_info == nil then
+					joined_missing_song_info = joined_song_preview
 				end
-				player.missingSong = false
-				player.missingSongReason = nil
-				joined_missing_song = false
-				joined_missing_song_info = nil
-				joined_can_download_pack = false
-				joined_missing_song_reason = nil
+				joined_can_download_pack = joined_can_download_pack or can_download_pack_for_reason(joined_missing_song_reason)
+			elseif pack_sync_status_blocks_missing_verdict(playerPackStatus) or pack_sync_is_checking_joined_song() then
+				lobby_flow_trace("sync_local_missing_song provisional reason=no_missing_verdict_yet"
+					.. " status=" .. tostring(playerPackStatus))
 			elseif selfMissing and not pack_sync_is_checking_joined_song() then
 				joined_missing_song = true
 				joined_missing_song_reason = player.missingSongReason or joined_missing_song_reason or "missing_local_song"
@@ -1957,12 +1962,13 @@ local function apply_local_pack_sync_status_to_joined_player(params)
 				player.missingSong = false
 				player.missingSongReason = nil
 			elseif pack_sync_status_blocks_missing_verdict(status) then
-				lobby_flow_trace("apply_local_pack_sync_status_decision verdict=provisional"
+				lobby_flow_trace("apply_local_pack_sync_status_decision verdict=preserve_missing_until_positive"
 					.. " status=" .. tostring(status)
 					.. " reason=blocks_missing_verdict"
 					.. " previousMissing=" .. tostring(player.missingSong == true))
-				player.missingSong = false
-				player.missingSongReason = nil
+				if player.missingSong == true then
+					player.missingSongReason = player.missingSongReason or joined_missing_song_reason or "missing_local_song"
+				end
 			elseif status == "manager_browsing_unknown_pack" then
 				lobby_flow_trace("apply_local_pack_sync_status_decision verdict=preview_unknown_pack"
 					.. " status=" .. tostring(status))
@@ -1984,9 +1990,6 @@ end
 local function player_missing_song_for_ui(player)
 	if joined_phase == "results" then return false end
 	if joined_manager_user_id ~= nil and tostring(player and player.playerId or "") == tostring(joined_manager_user_id) then return false end
-	if player_is_current_user(player) and pack_sync_is_checking_joined_song() then
-		return false
-	end
 	return player and player.missingSong == true or false
 end
 
@@ -5335,6 +5338,29 @@ end,
 		elseif params and params.event == "roomInvitationAnswer" then
 			elseif params and params.event == "cancelSongSelection" then
 			elseif params and params.message then
+			end
+		end,
+		OnlineOptionsRedirectWaitMessageCommand=function(self, params)
+			local show = params and params.show == true
+			lobby_flow_trace("OnlineOptionsRedirectWait show=" .. tostring(show)
+				.. " reason=" .. tostring(params and params.reason or "nil")
+				.. " roomId=" .. tostring(params and params.roomId or ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " phase=" .. tostring(joined_phase)
+				.. " mode=" .. tostring(mode))
+			if show then
+				self:playcommand("SetStatus", {
+					text="Attente de renvoi vers l'ecran doptions.",
+					showSpinner=true,
+					showPrompt=false,
+					force=true,
+					critical=true,
+				})
+				return
+			end
+			network_status_clear_at = 0
+			local status = self:GetChild("NetworkStatus")
+			if status then
+				status:visible(false)
 			end
 		end,
 

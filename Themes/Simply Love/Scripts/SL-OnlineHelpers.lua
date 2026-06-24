@@ -682,6 +682,12 @@ local TransitionToOnlineOptions = function()
 		end
 		return
 	end
+	MESSAGEMAN:Broadcast("OnlineOptionsRedirectWait", {
+		show=false,
+		reason="transition_to_options",
+		screen=screenName,
+		phase=roomPhase,
+	})
 	topScreen:SetNextScreenName("ScreenPlayerOptions")
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 end
@@ -814,6 +820,12 @@ local SelectOnlineSongAsManager = function(actor)
 			.. " socket=" .. tostring(actor and actor.socket ~= nil)
 			.. " phase=" .. tostring(room and room.phase or "no-room")
 			.. " key=" .. tostring(selectionKey))
+		MESSAGEMAN:Broadcast("OnlineOptionsRedirectWait", {
+			show=true,
+			reason="manager_song_selected",
+			roomId=ITGOnline.currentRoomId,
+			selectionKey=selectionKey,
+		})
 
 		ITGOnline:SelectSongAndMarkLobbyReady(function(ok, decoded, response)
 			if pendingOnlineSongSelectionKey == selectionKey and pendingOnlineSongSelectionToken == selectionToken then
@@ -826,6 +838,12 @@ local SelectOnlineSongAsManager = function(actor)
 				return
 			end
 
+			MESSAGEMAN:Broadcast("OnlineOptionsRedirectWait", {
+				show=false,
+				reason="song_selection_failed",
+				roomId=ITGOnline and ITGOnline.currentRoomId or nil,
+				selectionKey=selectionKey,
+			})
 			online_flow_trace("song_selected_handler_failed status=" .. tostring(response and response.statusCode or "nil")
 				.. " error=" .. tostring(decoded and decoded.error_code or response and response.error or "nil"))
 			MESSAGEMAN:Broadcast("OnlineResponseStatus", {

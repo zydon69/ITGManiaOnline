@@ -5075,6 +5075,49 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 		.. " roundKey=" .. tostring(roundKey)
 		.. " roundKeySource=" .. tostring(roundKeySource))
 
+	if failed then
+		local now = GetTimeSinceStart()
+		local stabilizeSeconds = tonumber(self.failedFinalScoreStabilizeSeconds) or 0.35
+		local stabilizeKey = tostring(self.failedFinalScoreStabilizeKey or "")
+		local stabilizeAt = tonumber(self.failedFinalScoreStabilizeAt) or 0
+		local candidateSnapshot = self.BuildCurrentScoreSnapshot and self:BuildCurrentScoreSnapshot() or nil
+		local candidateDisplayed = candidateSnapshot and self.ScoreSnapshotDisplayedPercent and self:ScoreSnapshotDisplayedPercent(candidateSnapshot) or nil
+		if stabilizeKey ~= roundKey then
+			self.failedFinalScoreStabilizeKey = roundKey
+			self.failedFinalScoreStabilizeAt = now + stabilizeSeconds
+			self.onlineGameplayEvaluationNextRetryAt = self.failedFinalScoreStabilizeAt
+			online_flow_trace("mark_terminal_failed_final_stabilizing"
+				.. " source=" .. tostring(source or "unknown")
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. tostring(roundKey)
+				.. " delay=" .. string.format("%.3f", stabilizeSeconds)
+				.. " candidateDisplayed=" .. tostring(candidateDisplayed or "nil")
+				.. " hadDisplayedSnapshot=" .. tostring(self.lastDisplayedScoreSnapshot ~= nil)
+				.. " currentPlayState=" .. tostring(currentPlayState or "nil"))
+			return true
+		end
+		if now < stabilizeAt then
+			self.onlineGameplayEvaluationNextRetryAt = stabilizeAt
+			online_flow_trace("mark_terminal_failed_final_stabilizing_wait"
+				.. " source=" .. tostring(source or "unknown")
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. tostring(roundKey)
+				.. " remaining=" .. string.format("%.3f", math.max(0, stabilizeAt - now))
+				.. " candidateDisplayed=" .. tostring(candidateDisplayed or "nil")
+				.. " hadDisplayedSnapshot=" .. tostring(self.lastDisplayedScoreSnapshot ~= nil)
+				.. " currentPlayState=" .. tostring(currentPlayState or "nil"))
+			return true
+		end
+		online_flow_trace("mark_terminal_failed_final_stabilized"
+			.. " source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " roundKey=" .. tostring(roundKey)
+			.. " waited=" .. string.format("%.3f", math.max(0, now - (stabilizeAt - stabilizeSeconds)))
+			.. " candidateDisplayed=" .. tostring(candidateDisplayed or "nil")
+			.. " hadDisplayedSnapshot=" .. tostring(self.lastDisplayedScoreSnapshot ~= nil)
+			.. " currentPlayState=" .. tostring(currentPlayState or "nil"))
+	end
+
 	if phase == "results" then
 		self.onlineGameplayEvaluationMarkKey = roundKey
 		self.onlineGameplayEndedKey = roundKey
@@ -8427,12 +8470,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		finish(true, nil, nil, { alreadyAccepted = true, roundKey = roundKey })
 		return
 	end
-	if final and validRoundKey and self.lastFinalScoreInFlightKey == roundKey and forceFinalFailed then
-		online_flow_trace("final_failed_score_preempts_final_inflight"
-			.. " room=" .. tostring(self.currentRoomId)
-			.. " roundKey=" .. tostring(roundKey))
-		self.lastFinalScoreInFlightKey = ""
-	elseif final and validRoundKey and self.lastFinalScoreInFlightKey == roundKey then
+	if final and validRoundKey and self.lastFinalScoreInFlightKey == roundKey then
 		online_flow_trace("send_score_skipped reason=final_in_flight"
 			.. " room=" .. tostring(self.currentRoomId)
 			.. " roundKey=" .. tostring(roundKey)
@@ -8752,7 +8790,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		end
 	end
 	if final and forceFinalFailed and self.scoreInFlightFingerprint then
-		online_flow_trace("final_failed_score_preempts_live_inflight"
+		online_flow_trace("final_failed_score_supersedes_live_inflight"
 			.. " room=" .. tostring(self.currentRoomId)
 			.. " roundKey=" .. tostring(roundKey)
 			.. " previousFingerprint=" .. tostring(self.scoreInFlightFingerprint))
@@ -8852,6 +8890,20 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		.. " forceFinalFailed=" .. tostring(forceFinalFailed == true)
 		.. " songPosition=" .. tostring(songPosition)
 		.. " scoreMode=" .. tostring(scoreMode))
+	if final and forceFinalFailed then
+		online_flow_trace("final_failed_score_post"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " roundKey=" .. tostring(roundKey)
+			.. " score=" .. tostring(outgoingScore)
+			.. " displayedPercent=" .. tostring(displayedScorePercent)
+			.. " outgoingPercent=" .. tostring(outgoingPercent)
+			.. " accuracy=" .. tostring(accuracy)
+			.. " songPosition=" .. tostring(songPosition)
+			.. " judgments=" .. tostring(self:JudgmentTotal(judgments))
+			.. " hadDisplayedSnapshot=" .. tostring(self.lastDisplayedScoreSnapshot ~= nil)
+			.. " finalInFlightKey=" .. tostring(self.lastFinalScoreInFlightKey or "")
+			.. " scoreInFlight=" .. tostring(self.scoreInFlightFingerprint ~= nil))
+	end
 
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/score", {
 		score = outgoingScore,
