@@ -1656,6 +1656,13 @@ function joined_missing_song_countdown_seconds()
 	return nil
 end
 
+local function joined_download_kick_warning_text()
+	local remaining = joined_missing_song_countdown_seconds()
+	if remaining == nil then return "" end
+	play_online_warning_countdown_tick("pack_sync_kick:download_button", remaining)
+	return "Ou vous serez expulsez dans " .. tostring(math.ceil(remaining)) .. " sec"
+end
+
 function local_pack_exists(songInfo)
 	local pack = trim_text(songInfo and songInfo.pack)
 	if pack == "" then return false end
@@ -2084,8 +2091,7 @@ local function pack_sync_line_for_player(player)
 		end
 		local remaining = pack_sync_countdown_seconds_for_player(player)
 		if remaining ~= nil then
-			play_online_warning_countdown_tick("pack_sync_kick:" .. tostring(player.playerId or ""), remaining)
-			return "Expulse dans " .. tostring(math.ceil(remaining)) .. " sec"
+			return ""
 		end
 			if reason == "missing_local_song"
 				or reason == "no_compatible_chart_found"
@@ -4090,6 +4096,7 @@ local af = Def.ActorFrame{
 			local reloadVisible = show_pack_download_button()
 			reloadSongsButton:visible(reloadVisible)
 			local label = reloadSongsButton:GetChild("ReloadSongsLabel")
+			local kickWarning = reloadSongsButton:GetChild("ReloadSongsKickWarning")
 			local labelText = ""
 			if label then
 				if syncBusy then
@@ -4098,6 +4105,11 @@ local af = Def.ActorFrame{
 					labelText = (joined_can_download_pack or canDownloadBrowsePack) and "Telecharger pack" or "Recharger chansons"
 				end
 				label:settext(labelText)
+			end
+			if kickWarning then
+				local warningText = reloadVisible and joined_download_kick_warning_text() or ""
+				kickWarning:visible(warningText ~= "")
+				kickWarning:settext(warningText)
 			end
 			lobby_flow_trace("reload_download_button_state visible=" .. tostring(reloadVisible == true)
 				.. " label=" .. tostring(labelText)
@@ -5945,7 +5957,7 @@ end,
 			Name="JoinedLobbyPlayers",
 				Text="En attente des joueurs...",
 			InitCommand=function(self)
-				self:horizalign(left):x(-290):y(-112):zoom(0.72):maxwidth(470)
+				self:horizalign(left):x(-290):y(-112):zoom(0.84):maxwidth(405)
 			end
 		},
 		Def.Quad{
@@ -5984,7 +5996,7 @@ end,
 			Name="JoinedSongPack",
 			Text="",
 			InitCommand=function(self)
-				self:horizalign(left):xy(96, -148):zoom(0.38):maxwidth(500):diffuse(0.85,0.85,0.85,1)
+				self:horizalign(left):xy(96, -148):zoom(0.46):maxwidth(560):diffuse(0.85,0.85,0.85,1)
 			end
 		},
 		LoadFont("Common Bold")..{
@@ -5998,7 +6010,7 @@ end,
 			Name="JoinedSongArtist",
 			Text="",
 			InitCommand=function(self)
-				self:horizalign(left):xy(160, -96):zoom(WideScale(0.38, 0.40)):maxwidth(320)
+				self:horizalign(left):xy(160, -94):zoom(WideScale(0.46, 0.48)):maxwidth(420)
 			end
 		},
 		Def.ActorFrame{
@@ -6096,6 +6108,13 @@ end,
 							else
 								self:diffuse(joined_active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
 							end
+						end
+					},
+					LoadFont("Common Normal")..{
+						Name="ReloadSongsKickWarning",
+						Text="",
+						InitCommand=function(self)
+							self:y(29):zoom(0.28):maxwidth(700):diffuse(color("#FFDD55")):visible(false)
 						end
 					}
 				},

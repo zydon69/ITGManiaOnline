@@ -14,6 +14,8 @@ local OPTIONS_READY_TIMEOUT_SECONDS = 30
 local online_options_screen_name = nil
 local last_online_options_warning_second = nil
 local last_online_options_timer_trace_key = ""
+local last_online_options_deadline_begin_key = ""
+local last_online_options_deadline_active_key = ""
 
 local function online_options_trace(message)
 	if Trace then
@@ -49,6 +51,68 @@ local function online_options_timeout_active()
 		and ITGOnline.NormalizeRoomPhase
 		and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) == "config"
 		and not ITGOnline:IsCurrentUserReadyInRoom(ITGOnline.currentRoom)
+end
+
+local function online_options_deadline_key()
+	if ITGOnline and ITGOnline.OnlineOptionsReadyKey then
+		local ok, key = pcall(function() return ITGOnline:OnlineOptionsReadyKey() end)
+		if ok then
+			return tostring(key or "")
+		end
+	end
+	return table.concat({
+		tostring(ITGOnline and ITGOnline.currentRoomId or ""),
+		tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or ""),
+		tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song and (
+			ITGOnline.currentRoom.selected_song.selected_at
+				or ITGOnline.currentRoom.selected_song.selectedAt
+				or ITGOnline.currentRoom.selected_song.song_hash
+				or ITGOnline.currentRoom.selected_song.songHash
+				or ""
+		) or "")
+	}, "|")
+end
+
+local function reset_online_options_deadline_trace_state()
+	last_online_options_deadline_begin_key = ""
+	last_online_options_deadline_active_key = ""
+end
+
+local function begin_online_options_ready_deadline(actor, source)
+	if not (ITGOnline and ITGOnline.BeginOnlineOptionsReadyDeadline and online_options_timeout_active()) then
+		reset_online_options_deadline_trace_state()
+		return nil
+	end
+
+	local key = online_options_deadline_key()
+	local wasActive = key ~= "" and tostring(ITGOnline.onlineOptionsReadyDeadlineKey or "") == key
+	local remaining = ITGOnline:BeginOnlineOptionsReadyDeadline(OPTIONS_READY_TIMEOUT_SECONDS, source)
+	if remaining == nil then
+		reset_online_options_deadline_trace_state()
+		return nil
+	end
+
+	local traceKey = tostring(source or "unknown") .. "|" .. tostring(key)
+	if not wasActive then
+		last_online_options_deadline_begin_key = traceKey
+		last_online_options_deadline_active_key = ""
+		online_options_trace("ready_deadline_begin source=" .. tostring(source or "unknown")
+			.. " seconds=" .. tostring(OPTIONS_READY_TIMEOUT_SECONDS)
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " key=" .. tostring(key ~= "" and key or "nil")
+			.. " remaining=" .. tostring(math.ceil(remaining)))
+	elseif last_online_options_deadline_active_key ~= traceKey then
+		last_online_options_deadline_active_key = traceKey
+		online_options_trace("ready_deadline_already_active source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " key=" .. tostring(key ~= "" and key or "nil")
+			.. " remaining=" .. tostring(math.ceil(remaining)))
+	end
+
+	if actor then
+		actor:queuecommand("UpdateOptionsReadyTimer")
+	end
+	return remaining
 end
 
 local function return_to_online_lobby()
@@ -107,10 +171,7 @@ local af = Def.ActorFrame{
 		end
 		if ITGOnline and ITGOnline.BeginOnlineOptionsReadyDeadline and online_options_timeout_active() then
 			last_online_options_warning_second = nil
-			online_options_trace("ready_deadline_begin source=screen_on seconds=" .. tostring(OPTIONS_READY_TIMEOUT_SECONDS)
-				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
-			ITGOnline:BeginOnlineOptionsReadyDeadline(OPTIONS_READY_TIMEOUT_SECONDS, "screen_player_options")
-			self:queuecommand("UpdateOptionsReadyTimer")
+			begin_online_options_ready_deadline(self, "screen_player_options")
 		end
 		play_online_options_preview_music("screen_player_options_on")
 	end,
@@ -120,12 +181,7 @@ local af = Def.ActorFrame{
 			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
 			.. " timeoutActive=" .. tostring(online_options_timeout_active() == true)
 			.. " ready=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.IsCurrentUserReadyInRoom and ITGOnline:IsCurrentUserReadyInRoom(ITGOnline.currentRoom) == true))
-		if ITGOnline and ITGOnline.BeginOnlineOptionsReadyDeadline and online_options_timeout_active() then
-			online_options_trace("ready_deadline_begin source=lobby_state seconds=" .. tostring(OPTIONS_READY_TIMEOUT_SECONDS)
-				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
-			ITGOnline:BeginOnlineOptionsReadyDeadline(OPTIONS_READY_TIMEOUT_SECONDS, "screen_player_options_state")
-			self:queuecommand("UpdateOptionsReadyTimer")
-		end
+		begin_online_options_ready_deadline(self, "screen_player_options_state")
 		play_online_options_preview_music("screen_player_options_state")
 	end,
 	OffCommand=function(self)
@@ -165,6 +221,7 @@ local af = Def.ActorFrame{
 
 		if not (ITGOnline and ITGOnline.OnlineOptionsReadyRemaining and online_options_timeout_active()) then
 			last_online_options_warning_second = nil
+			reset_online_options_deadline_trace_state()
 			if last_online_options_timer_trace_key ~= "inactive" then
 				last_online_options_timer_trace_key = "inactive"
 				online_options_trace("timer_hidden reason=inactive"
@@ -178,6 +235,7 @@ local af = Def.ActorFrame{
 		local remaining = ITGOnline:OnlineOptionsReadyRemaining()
 		if remaining == nil then
 			last_online_options_warning_second = nil
+			reset_online_options_deadline_trace_state()
 			if last_online_options_timer_trace_key ~= "nil_remaining" then
 				last_online_options_timer_trace_key = "nil_remaining"
 				online_options_trace("timer_hidden reason=nil_remaining room=" .. tostring(ITGOnline.currentRoomId or "nil"))
@@ -188,6 +246,7 @@ local af = Def.ActorFrame{
 
 		if remaining <= 0 then
 			last_online_options_warning_second = nil
+			reset_online_options_deadline_trace_state()
 			online_options_trace("timer_expired room=" .. tostring(ITGOnline.currentRoomId or "nil")
 				.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 			timer:visible(true)

@@ -754,10 +754,6 @@ local af = Def.ActorFrame{
 	InitCommand=function(self)
 		self:visible(false)
 	end,
-	-- Slightly darken the entire screen
-	Def.Quad {
-		InitCommand=function(self) self:FullScreen():diffuse(Color.Black):diffusealpha(0.8) end
-	},
 
 	-- Press START to dismiss text.
 	LoadFont("Common Normal")..{

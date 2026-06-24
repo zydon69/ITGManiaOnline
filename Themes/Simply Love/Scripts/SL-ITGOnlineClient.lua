@@ -4684,6 +4684,20 @@ end
 function ITGOnline:ClearFinalLeaderboardCache(reason, roomId)
 	self.finalLeaderboardCache = self.finalLeaderboardCache or {}
 	local key = tostring(roomId or self.currentRoomId or "")
+	local clearReason = tostring(reason or "unknown")
+	if clearReason == "room_snapshot_results_to_lobby_ready" then
+		local screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+		local screenName = tostring((screen and screen.GetName and screen:GetName()) or self.currentScreenName or "")
+		if screenName == "ScreenEvaluationStage"
+			or screenName == "ScreenEvaluationNonstop"
+			or screenName == "ScreenEvaluationSummary" then
+			final_leaderboard_cache_trace("clear_deferred"
+				.. " reason=" .. clearReason
+				.. " room=" .. tostring(key ~= "" and key or "nil")
+				.. " screen=" .. tostring(screenName))
+			return false
+		end
+	end
 	local clearedRoomCache = false
 	if key ~= "" and self.finalLeaderboardCache[key] ~= nil then
 		self.finalLeaderboardCache[key] = nil
@@ -4699,11 +4713,12 @@ function ITGOnline:ClearFinalLeaderboardCache(reason, roomId)
 		self.finalLeaderboardCacheSignature = ""
 		self.finalLeaderboardCacheLogSignature = ""
 		final_leaderboard_cache_trace("clear"
-			.. " reason=" .. tostring(reason or "unknown")
+			.. " reason=" .. clearReason
 			.. " room=" .. tostring(key ~= "" and key or "nil")
 			.. " clearedRoom=" .. tostring(clearedRoomCache)
 			.. " clearedLatest=" .. tostring(clearedLatest))
 	end
+	return clearedRoomCache or clearedLatest
 end
 
 function ITGOnline:GetFinalLeaderboardCache(roomId)

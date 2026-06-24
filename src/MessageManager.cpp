@@ -103,6 +103,9 @@ static bool MessageNameStartsWith(
 }
 
 static bool ShouldTraceOnlineMessage(const std::string& messageName) {
+  if (messageName == "OnlineRealtimeHealth") {
+    return false;
+  }
   return MessageNameStartsWith(messageName, "Online") ||
          MessageNameStartsWith(messageName, "ITGOnline") ||
          MessageNameStartsWith(messageName, "Lobby") ||

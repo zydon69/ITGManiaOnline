@@ -110,7 +110,7 @@ local function final_results_signature(rows)
 end
 
 local width = clamp(_screen.w * 0.20, 280, 400)
-local row_zoom = 0.54
+local row_zoom = 0.66
 local banner_zoom = 0.7
 local banner_width = 418 * banner_zoom
 local banner_height = 164 * banner_zoom
