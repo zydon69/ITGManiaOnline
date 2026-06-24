@@ -37,7 +37,8 @@ class ProfileManager {
 
   const Profile* GetLocalProfile(const std::string& sProfileID) const;
   Profile* GetLocalProfile(const std::string& sProfileID) {
-    return (Profile*)((const ProfileManager*)this)->GetLocalProfile(sProfileID);
+    return const_cast<Profile*>(
+        static_cast<const ProfileManager*>(this)->GetLocalProfile(sProfileID));
   }
   Profile* GetLocalProfileFromIndex(int iIndex);
   std::string GetLocalProfileIDFromIndex(int iIndex);
@@ -93,11 +94,13 @@ class ProfileManager {
   // return a profile even if !IsUsingProfile
   const Profile* GetProfile(PlayerNumber pn) const;
   Profile* GetProfile(PlayerNumber pn) {
-    return (Profile*)((const ProfileManager*)this)->GetProfile(pn);
+    return const_cast<Profile*>(
+        static_cast<const ProfileManager*>(this)->GetProfile(pn));
   }
   const Profile* GetProfile(ProfileSlot slot) const;
   Profile* GetProfile(ProfileSlot slot) {
-    return (Profile*)((const ProfileManager*)this)->GetProfile(slot);
+    return const_cast<Profile*>(
+        static_cast<const ProfileManager*>(this)->GetProfile(slot));
   }
 
   const std::string& GetProfileDir(ProfileSlot slot) const;
