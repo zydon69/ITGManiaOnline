@@ -9462,10 +9462,15 @@ function ITGOnline:MarkConfigReady(callback)
 			return
 		end
 
-		if room.phase == "starting" or room.phase == "playing" or room.phase == "results" then
-			online_flow_trace("config_ready_path already_started key=" .. tostring(requestKey)
-				.. " phase=" .. tostring(room.phase))
-			finish(true, fetchDecoded, fetchResponse)
+			if room.phase == "starting" or room.phase == "playing" or room.phase == "results" then
+				online_flow_trace("config_ready_path already_started key=" .. tostring(requestKey)
+					.. " phase=" .. tostring(room.phase))
+				if type(fetchDecoded) == "table" then
+					fetchDecoded.stale_ready = true
+					fetchDecoded.already_started = true
+					fetchDecoded.ready_result = "already_started"
+				end
+				finish(true, fetchDecoded, fetchResponse)
 		elseif room.phase == "config" then
 			finishConfigReady()
 		elseif room.phase == "lobby" or room.phase == "lobby_ready" then
