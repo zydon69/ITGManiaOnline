@@ -828,6 +828,29 @@ local function room_ready_summary(room)
 	return sorted_count_summary(counts)
 end
 
+local function room_final_results_summary(room)
+	local results = room and (room.final_results or (room.play_state and room.play_state.final_results)) or {}
+	if type(results) ~= "table" then return "" end
+
+	local parts = {}
+	for key, result in pairs(results) do
+		if type(result) == "table" then
+			local user = result.user or result.player or {}
+			local userId = result.user_id or result.player_id or result.userId or result.playerId or user.id or key
+			local displayed = result.displayed_percent or result.displayedPercent or result.score_percent or result.percent
+			local source = result.source or result.finalization_source or result.finalizationSource or ""
+			parts[#parts + 1] = tostring(userId or "")
+				.. ":" .. tostring(displayed or "")
+				.. ":" .. tostring(result.failed == true)
+				.. ":" .. tostring(source or "")
+		else
+			parts[#parts + 1] = tostring(key) .. ":" .. tostring(result)
+		end
+	end
+	table.sort(parts)
+	return table.concat(parts, ",")
+end
+
 local function room_transition_key(room)
 	if not room then return "" end
 	local selected = room.selected_song or {}
@@ -841,6 +864,7 @@ local function room_transition_key(room)
 		tostring(playState.version_ms or ""),
 		room_member_status_summary(room),
 		"ready={" .. room_ready_summary(room) .. "}",
+		"final={" .. room_final_results_summary(room) .. "}",
 	}, "|")
 end
 
@@ -886,6 +910,31 @@ local function online_room_snapshot_debug(label, room, source, previousRoom)
 		.. " generation=" .. tostring(ITGOnline.screenGeneration or "nil")
 		.. " " .. room_member_status_summary(room)
 		.. " ready={" .. room_ready_summary(room) .. "}")
+end
+
+function ITGOnline:ShouldApplyRoomSnapshotPayload(room, source, eventId)
+	if type(room) ~= "table" then return false end
+
+	local roomId = tostring(room.id or room.room_id or room.roomId or self.currentRoomId or "")
+	local key = room_transition_key(room)
+	if roomId == "" or key == "" then return true end
+
+	self.lastAppliedRoomSnapshotKeyByRoomId = self.lastAppliedRoomSnapshotKeyByRoomId or {}
+	local previousKey = self.lastAppliedRoomSnapshotKeyByRoomId[roomId]
+	if previousKey == key then
+		online_flow_trace_throttled("duplicate_room_snapshot:" .. roomId, 0.75,
+			"duplicate_room_snapshot_ignored source=" .. tostring(source or "unknown")
+				.. " roomId=" .. roomId
+				.. " eventId=" .. tostring(eventId or "nil")
+				.. " phase=" .. tostring(room.phase or "nil")
+				.. " selectedAt=" .. tostring(room.selected_song and (room.selected_song.selected_at or room.selected_song.selectedAt) or "nil")
+				.. " playStateVersion=" .. tostring(room.play_state and room.play_state.version_ms or "nil")
+				.. " final={" .. room_final_results_summary(room) .. "}")
+		return false
+	end
+
+	self.lastAppliedRoomSnapshotKeyByRoomId[roomId] = key
+	return true
 end
 
 local function request_id()
@@ -7837,6 +7886,41 @@ function ITGOnline:BuildCurrentScoreSnapshot()
 	}
 end
 
+function ITGOnline:ScoreSnapshotDisplayedPercent(snapshot)
+	if type(snapshot) ~= "table" then return nil end
+	return tonumber(snapshot.displayedPercent or snapshot.DisplayedPercent)
+end
+
+function ITGOnline:BestFinalFailedScoreSnapshot(candidate, fallback)
+	if type(candidate) ~= "table" then return fallback end
+	if type(fallback) ~= "table" then return candidate end
+
+	local candidateDisplayed = self:ScoreSnapshotDisplayedPercent(candidate) or 0
+	local fallbackDisplayed = self:ScoreSnapshotDisplayedPercent(fallback) or 0
+	local candidateScore = tonumber(candidate.scorePercent or candidate.ScorePercent) or 0
+	local fallbackScore = tonumber(fallback.scorePercent or fallback.ScorePercent) or 0
+	local candidateHasProgress = candidateDisplayed > 0 or candidateScore > 0
+	local fallbackHasProgress = fallbackDisplayed > 0 or fallbackScore > 0
+
+	if fallbackHasProgress and not candidateHasProgress then
+		online_flow_trace("final_failed_snapshot_preserved reason=fresh_zero"
+			.. " fallbackDisplayed=" .. tostring(fallbackDisplayed)
+			.. " fallbackScore=" .. tostring(fallbackScore)
+			.. " candidateDisplayed=" .. tostring(candidateDisplayed)
+			.. " candidateScore=" .. tostring(candidateScore))
+		return fallback
+	end
+
+	if fallbackDisplayed > candidateDisplayed then
+		online_flow_trace("final_failed_snapshot_preserved reason=fallback_displayed_higher"
+			.. " fallbackDisplayed=" .. tostring(fallbackDisplayed)
+			.. " candidateDisplayed=" .. tostring(candidateDisplayed))
+		return fallback
+	end
+
+	return candidate
+end
+
 function ITGOnline:ClearFileHashCache()
 	self.fileHashCache = {}
 end
@@ -8314,13 +8398,18 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 	end
 	self.lastScoreSentAt = GetTimeSinceStart()
 
+	local previousDisplayedSnapshot = self.lastDisplayedScoreSnapshot
 	if final and self.BuildCurrentScoreSnapshot then
 		local freshSnapshot = self:BuildCurrentScoreSnapshot()
 		if freshSnapshot ~= nil then
-			snapshot = freshSnapshot
+			if forceFinalFailed then
+				snapshot = self:BestFinalFailedScoreSnapshot(freshSnapshot, snapshot or previousDisplayedSnapshot)
+			else
+				snapshot = freshSnapshot
+			end
 		end
 	end
-	if snapshot ~= nil then
+	if snapshot ~= nil and not (final and forceFinalFailed and self:BestFinalFailedScoreSnapshot(snapshot, previousDisplayedSnapshot) == previousDisplayedSnapshot) then
 		self.lastDisplayedScoreSnapshot = snapshot
 		self.lastDisplayedScoreSnapshotAt = GetTimeSinceStart()
 	end
@@ -8456,6 +8545,17 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 			displayedScorePercent = snapshotScorePercent
 		elseif itgScorePercent > 0 then
 			displayedScorePercent = itgScorePercent
+		end
+	end
+	if final and forceFinalFailed and (tonumber(displayedScorePercent) or 0) <= 0 and previousDisplayedSnapshot ~= nil then
+		local preservedDisplayed = self:ScoreSnapshotDisplayedPercent(previousDisplayedSnapshot)
+		if preservedDisplayed ~= nil and preservedDisplayed > 0 then
+			online_flow_trace("final_failed_displayed_percent_restored"
+				.. " from=" .. tostring(displayedScorePercent)
+				.. " to=" .. tostring(preservedDisplayed)
+				.. " snapshotScore=" .. tostring(previousDisplayedSnapshot.scorePercent or previousDisplayedSnapshot.ScorePercent or "nil"))
+			displayedScorePercent = preservedDisplayed
+			snapshot = previousDisplayedSnapshot
 		end
 	end
 	displayedScorePercent = math.max(0, math.min(100, tonumber(displayedScorePercent) or 0))
@@ -12313,6 +12413,9 @@ end
 						return
 					end
 					self.lastRoomEventIdByRoomId[versionRoomId] = eventId
+				end
+				if not self:ShouldApplyRoomSnapshotPayload(payload.room, "realtime_room_event:" .. tostring(name), eventId) then
+					return
 				end
 				online_flow_trace("realtime_room_event name=" .. tostring(name)
 					.. " payloadPhase=" .. tostring(payload.room.phase)

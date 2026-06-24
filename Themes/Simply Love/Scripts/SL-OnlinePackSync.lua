@@ -860,6 +860,40 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	})
 	self.currentSongInfo = with_current_room_selection(self.currentSongInfo, "status:" .. tostring(status))
 	local currentSelectedAt = self:SelectedAtForStatusPost(status, self.currentSongInfo)
+	if currentSelectedAt ~= "" and (status == self.status.SearchingLocalCharts or status == self.status.LocalChartMatchFound) then
+		local localUserId = ITGOnline and ITGOnline.LocalUserId and tostring(ITGOnline:LocalUserId() or "") or ""
+		local room = ITGOnline and ITGOnline.currentRoom or nil
+		local members = type(room) == "table" and (room.players or room.members or room.room_members) or nil
+		local alreadyReadyForSelection = false
+		if localUserId ~= "" and type(members) == "table" then
+			for _, member in pairs(members) do
+				local user = type(member) == "table" and (member.user or member.player or {}) or {}
+				local memberUserId = tostring((type(member) == "table" and (member.user_id or member.userId or member.player_id or member.playerId)) or user.id or "")
+				local memberStatus = tostring((type(member) == "table" and (member.pack_sync_status or member.status)) or "")
+				local memberSelectedAt = tostring((type(member) == "table" and (member.pack_sync_selected_at or member.selected_at or member.selectedAt)) or "")
+				if memberUserId == localUserId and memberStatus == self.status.Ready and (memberSelectedAt == "" or memberSelectedAt == currentSelectedAt) then
+					alreadyReadyForSelection = true
+					break
+				end
+			end
+		end
+		if alreadyReadyForSelection then
+			trace("Status post skipped reason=client_ready_status_protected_from_local_scan"
+				.. " status=" .. tostring(status)
+				.. " selected_at=" .. tostring(currentSelectedAt)
+				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+			if callback then
+				callback(true, {
+					pack_sync_status = {
+						applied = false,
+						ignored_reason = "client_ready_status_protected_from_local_scan",
+					},
+					local_only = true,
+				}, nil)
+			end
+			return
+		end
+	end
 	local noActiveSelectionLocalOnly = currentSelectedAt == "" and (
 		status == self.status.DownloadedOk
 		or status == self.status.Ready
