@@ -15,6 +15,7 @@
 #include "NoteSkinManager.h"
 #include "RageException.h"
 #include "RageInputDevice.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "StdString.h"
 #include "StepMania.h"
@@ -3364,15 +3365,30 @@ void GameManager::GetDemonstrationStylesForGame(
     const Game* pGame, std::vector<const Style*>& vpStylesOut) {
   vpStylesOut.clear();
 
+  if (pGame == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-1935: demonstration style lookup received no game.");
+    return;
+  }
+
   for (int s = 0; pGame->m_apStyles[s]; ++s) {
     const Style* style = pGame->m_apStyles[s];
+    if (style == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1935: ignoring null demonstration style in %s.",
+          pGame->m_szName);
+      continue;
+    }
     if (style->m_bUsedForDemonstration) {
       vpStylesOut.push_back(style);
     }
   }
 
-  ASSERT(vpStylesOut.size() > 0);  // this Game is missing a Style that can be
-                                   // used with the demonstration
+  if (vpStylesOut.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-1935: game %s has no demonstration style.",
+        pGame->m_szName);
+  }
 }
 
 const Style* GameManager::GetHowToPlayStyleForGame(const Game* pGame) {

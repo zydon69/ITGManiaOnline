@@ -1,6 +1,7 @@
 #include "ScreenDemonstration.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -8,6 +9,7 @@
 #include "GameManager.h"
 #include "GameState.h"
 #include "PlayerNumber.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "RageUtil/RandomNumbers.h"
 #include "Screen.h"
@@ -20,42 +22,104 @@
 #include "ThemeManager.h"
 #include "global.h"
 
-#define SECONDS_TO_SHOW THEME->GetMetricF(m_sName, "SecondsToShow")
-#define ALLOW_STYLE_TYPES THEME->GetMetric(m_sName, "AllowStyleTypes")
+namespace {
+
+float GetSecondsToShow(const std::string& screenName) {
+  constexpr float kFallbackSeconds = 25.0f;
+  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
+    return kFallbackSeconds;
+  }
+
+  float seconds = THEME->GetMetricF(screenName, "SecondsToShow");
+  if (!std::isfinite(seconds) || seconds < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-1937: %s SecondsToShow is invalid; using %.1f.",
+        screenName.c_str(), kFallbackSeconds);
+    return kFallbackSeconds;
+  }
+  return seconds;
+}
+
+std::vector<StyleType> GetAllowedStyleTypes(const std::string& screenName) {
+  std::vector<StyleType> styleTypes;
+  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
+    return styleTypes;
+  }
+
+  std::vector<std::string> rawStyleTypes;
+  split(THEME->GetMetric(screenName, "AllowStyleTypes"), ",", rawStyleTypes);
+  for (std::string styleTypeName : rawStyleTypes) {
+    Trim(styleTypeName);
+    if (styleTypeName.empty()) {
+      continue;
+    }
+
+    StyleType styleType = StringToStyleType(styleTypeName);
+    if (styleType == StyleType_Invalid) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1934: ignoring invalid demonstration style type "
+          "'%s'.",
+          styleTypeName.c_str());
+      continue;
+    }
+    styleTypes.push_back(styleType);
+  }
+  return styleTypes;
+}
+
+void AbortDemonstration(ScreenDemonstration* screen, ScreenMessage message) {
+  screen->ClearMessageQueue();
+  screen->PostScreenMessage(message, 0);
+}
+
+}  // namespace
 
 REGISTER_SCREEN_CLASS(ScreenDemonstration);
 ScreenDemonstration::ScreenDemonstration() { m_bDemonstration = true; }
 
 void ScreenDemonstration::Init() {
+  if (GAMESTATE == nullptr || GAMEMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-1933: ScreenDemonstration cannot init without game "
+        "state and game manager.");
+    AbortDemonstration(this, SM_GoToNextScreen);
+    return;
+  }
+
   GAMESTATE->Reset();
   GAMESTATE->VisitAttractScreen(m_sName);
   ScreenAttract::SetAttractVolume(true);
 
   // Choose a Style
   {
-    std::vector<std::string> v;
-    split(ALLOW_STYLE_TYPES, ",", v);
-    std::vector<StyleType> vStyleTypeAllow;
-    for (const std::string& s : v) {
-      StyleType st = StringToStyleType(s);
-      ASSERT(st != StyleType_Invalid);
-      vStyleTypeAllow.push_back(st);
-    }
+    std::vector<StyleType> vStyleTypeAllow = GetAllowedStyleTypes(m_sName);
 
     std::vector<const Style*> vStylePossible;
     GAMEMAN->GetDemonstrationStylesForGame(
         GAMESTATE->m_pCurGame, vStylePossible);
-    for (int i = (int)(vStylePossible.size()) - 1; i >= 0; i--) {
-      bool bAllowThis =
-          find(
-              vStyleTypeAllow.begin(), vStyleTypeAllow.end(),
-              vStylePossible[i]->m_StyleType) != vStyleTypeAllow.end();
+    for (int i = static_cast<int>(vStylePossible.size()) - 1; i >= 0; i--) {
+      const Style* style = vStylePossible[i];
+      if (style == nullptr) {
+        vStylePossible.erase(vStylePossible.begin() + i);
+        continue;
+      }
+
+      bool bAllowThis = vStyleTypeAllow.empty() ||
+                        find(
+                            vStyleTypeAllow.begin(), vStyleTypeAllow.end(),
+                            style->m_StyleType) != vStyleTypeAllow.end();
       if (!bAllowThis) {
         vStylePossible.erase(vStylePossible.begin() + i);
       }
     }
 
-    ASSERT(vStylePossible.size() > 0);
+    if (vStylePossible.empty()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-1934: ScreenDemonstration has no valid style to "
+          "use.");
+      AbortDemonstration(this, SM_GoToNextScreen);
+      return;
+    }
     const Style* pStyle = vStylePossible[RandomInt(vStylePossible.size())];
     GAMESTATE->SetCurrentStyle(pStyle, PLAYER_INVALID);
   }
@@ -66,7 +130,7 @@ void ScreenDemonstration::Init() {
 
   if (GAMESTATE->m_pCurSong == nullptr)  // we didn't find a song.
   {
-    PostScreenMessage(SM_GoToNextScreen, 0);  // Abort demonstration.
+    AbortDemonstration(this, SM_GoToNextScreen);
     return;
   }
 
@@ -77,7 +141,8 @@ void ScreenDemonstration::Init() {
 
   m_DancingState = STATE_DANCING;
   this->PostScreenMessage(
-      SM_BeginFadingOut, SECONDS_TO_SHOW);  // TODO: Use MenuTimer instead?
+      SM_BeginFadingOut,
+      GetSecondsToShow(m_sName));  // TODO: Use MenuTimer instead?
 }
 
 void ScreenDemonstration::HandleScreenMessage(const ScreenMessage SM) {

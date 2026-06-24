@@ -10,18 +10,16 @@ class CourseEntry;
 class ScreenJukebox : public ScreenGameplayNormal {
  public:
   ScreenJukebox();
-  virtual void Init();
+  void Init() override;
 
-  virtual bool Input(const InputEventPlus& input);
-  virtual void HandleScreenMessage(const ScreenMessage SM);
+  bool Input(const InputEventPlus& input) override;
+  void HandleScreenMessage(const ScreenMessage SM) override;
 
  protected:
   bool m_bDemonstration;
 
-  const CourseEntry* m_pCourseEntry;
-
   void SetSong();
-  virtual void InitSongQueues();
+  void InitSongQueues() override;
 };
 
 #endif

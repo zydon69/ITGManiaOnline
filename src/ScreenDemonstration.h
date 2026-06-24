@@ -10,12 +10,12 @@
 class ScreenDemonstration : public ScreenJukebox {
  public:
   ScreenDemonstration();
-  virtual void Init();
-  virtual void Cancel(ScreenMessage smSendWhenDone);
+  void Init() override;
+  void Cancel(ScreenMessage smSendWhenDone) override;
 
-  virtual void HandleScreenMessage(const ScreenMessage SM);
+  void HandleScreenMessage(const ScreenMessage SM) override;
 
-  virtual ScreenType GetScreenType() const { return attract; }
+  ScreenType GetScreenType() const override { return attract; }
 };
 
 #endif
