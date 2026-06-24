@@ -71,14 +71,25 @@ local function final_results()
 	for index, result in ipairs(results) do
 		if type(result) == "table" then
 			local user = type(result.user) == "table" and result.user or {}
+			local displayedPercent = tonumber(result.displayed_percent or result.displayedPercent)
+			if displayedPercent == nil then
+				final_ranking_trace("final_result_missing_displayed_percent"
+					.. " index=" .. tostring(index)
+					.. " user=" .. tostring(user.id or result.user_id or "nil")
+					.. " score=" .. tostring(result.score or "nil")
+					.. " score_percent=" .. tostring(result.score_percent or "nil")
+					.. " accuracy=" .. tostring(result.accuracy or "nil"))
+			end
 			normalized[#normalized + 1] = {
 				rank = tonumber(result.rank) or index,
 				name = online_display_name(user, localized("OnlineUnknownPlayer", "Player")),
 				score = math.floor(tonumber(result.score) or 0),
-				displayed_percent = tonumber(result.displayed_percent or result.displayedPercent or result.score_percent),
+				displayed_percent = displayedPercent,
 				score_percent = tonumber(result.score_percent),
 				accuracy = tonumber(result.accuracy),
 				failed = result.failed and true or false,
+				user_id = user.id or result.user_id,
+				source = result.source,
 			}
 		end
 	end
@@ -89,6 +100,19 @@ local function final_results()
 
 	final_ranking_trace("final_results_end rows=" .. tostring(#normalized)
 		.. " source=" .. tostring(source))
+	for index, row in ipairs(normalized) do
+		final_ranking_trace("final_result_row"
+			.. " index=" .. tostring(index)
+			.. " rank=" .. tostring(row.rank or "nil")
+			.. " user=" .. tostring(row.user_id or "nil")
+			.. " name=" .. tostring(row.name or "nil")
+			.. " displayed_percent=" .. tostring(row.displayed_percent or "nil")
+			.. " score_percent=" .. tostring(row.score_percent or "nil")
+			.. " accuracy=" .. tostring(row.accuracy or "nil")
+			.. " score=" .. tostring(row.score or "nil")
+			.. " failed=" .. tostring(row.failed == true)
+			.. " source=" .. tostring(row.source or "nil"))
+	end
 	return normalized
 end
 
@@ -176,7 +200,7 @@ local t = Def.ActorFrame{
 				local row = self:GetChild("Row" .. tostring(i))
 				local data = rows[i]
 				if row and data then
-					local percent = data.displayed_percent or data.score_percent or data.accuracy or 0
+					local percent = tonumber(data.displayed_percent) or 0
 					local suffix = data.failed and " F" or ""
 					local line = string.format("%d. %s  %.2f%%%s", data.rank, data.name, percent, suffix)
 					row:settext(line)

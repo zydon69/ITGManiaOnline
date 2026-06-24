@@ -7999,12 +7999,12 @@ function ITGOnline:BestFinalFailedScoreSnapshot(candidate, fallback)
 	end
 
 	if fallbackDisplayed > candidateDisplayed then
-		online_flow_trace("final_failed_snapshot_preserved reason=fallback_displayed_higher"
+		online_flow_trace("final_failed_snapshot_replaced reason=prefer_fresh_candidate"
 			.. " fallbackDisplayed=" .. tostring(fallbackDisplayed)
-			.. " candidateDisplayed=" .. tostring(candidateDisplayed))
-		return fallback
+			.. " candidateDisplayed=" .. tostring(candidateDisplayed)
+			.. " fallbackScore=" .. tostring(fallbackScore)
+			.. " candidateScore=" .. tostring(candidateScore))
 	end
-
 	return candidate
 end
 
@@ -8687,13 +8687,11 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		accuracy = normalizedExScore * 100
 	end
 	if final and forceFinalFailed and (tonumber(displayedScorePercent) or 0) <= 0 and accuracy > 0 then
-		online_flow_trace("final_failed_displayed_percent_restored"
-			.. " source=accuracy_from_judgments"
-			.. " from=" .. tostring(displayedScorePercent)
-			.. " to=" .. tostring(accuracy)
+		online_flow_trace("final_failed_displayed_percent_kept_zero"
+			.. " reason=accuracy_is_not_displayed_score"
+			.. " accuracy=" .. tostring(accuracy)
 			.. " scoreMode=" .. tostring(scoreMode)
 			.. " hasJudgments=" .. tostring(self:HasScoredJudgments(judgments) == true))
-		displayedScorePercent = accuracy
 	end
 		local liveCombo = tonumber(snapshot and snapshot.combo)
 		if liveCombo == nil then
