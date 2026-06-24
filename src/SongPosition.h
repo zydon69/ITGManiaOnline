@@ -35,18 +35,15 @@ class SongPosition {
   float m_fMusicSecondsVisible;
   // Represents the visible beat of the song.
   float m_fSongBeatVisible;
-  //// A flag to determine if the song is in the middle of a stop (freeze or
-  /// delay). / bool m_bStop;
 
   void Reset() {
-    m_fMusicSeconds = 0;  // MUSIC_SECONDS_INVALID;
+    m_fMusicSeconds = 0;
     m_fSongBeat = 0;
     m_fSongBeatNoOffset = 0;
-    m_fCurBPS = 10;
-    m_fLightSongBeat = 0;  // Assuming initial value
+    m_fCurBPS = 1.0f;
+    m_fLightSongBeat = 0;
     m_bFreeze = false;
     m_bDelay = false;
-    // m_bStop = false;
     m_iWarpBeginRow =
         -1;  // Set to -1 because some song may want to warp to row 0. -aj
     m_fWarpDestination =

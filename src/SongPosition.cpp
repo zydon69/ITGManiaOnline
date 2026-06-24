@@ -1,6 +1,10 @@
 #include "SongPosition.h"
 
+#include <algorithm>
+#include <cmath>
+
 #include "LightsManager.h"
+#include "NoteTypes.h"
 #include "Preference.h"
 #include "RageLog.h"
 #include "RageTimer.h"
@@ -10,45 +14,167 @@
 
 static Preference<float> g_fVisualDelaySeconds("VisualDelaySeconds", 0.0f);
 
+namespace {
+constexpr float kMinPlayableBeat = -1999.0f;
+constexpr float kMaxPlayableBeat =
+    MAX_NOTE_ROW / static_cast<float>(ROWS_PER_BEAT);
+constexpr float kFallbackBPS = 1.0f;
+constexpr float kMaxBPS = 100.0f;
+constexpr float kMaxVisualDelaySeconds = 60.0f;
+
+bool IsFinite(float value) {
+  return std::isfinite(static_cast<double>(value));
+}
+
+void WarnSongPositionFix(const char* message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message);
+  }
+}
+
+float SanitizeBeat(float value, float fallback, const char* context) {
+  if (!IsFinite(value)) {
+    WarnSongPositionFix(context);
+    return IsFinite(fallback) ? fallback : 0.0f;
+  }
+  if (value < kMinPlayableBeat) {
+    WarnSongPositionFix(
+        "SRC_AUDIT_FIX SRC-2067: SongPosition clamped an extremely negative "
+        "beat.");
+    return kMinPlayableBeat;
+  }
+  if (value > kMaxPlayableBeat) {
+    WarnSongPositionFix(
+        "SRC_AUDIT_FIX SRC-2067: SongPosition clamped an extremely large "
+        "beat.");
+    return kMaxPlayableBeat;
+  }
+  return value;
+}
+
+float SanitizeBPS(float value) {
+  if (!IsFinite(value) || value <= 0.0f) {
+    WarnSongPositionFix(
+        "SRC_AUDIT_FIX SRC-2067: SongPosition replaced invalid BPS with 1.");
+    return kFallbackBPS;
+  }
+  if (value > kMaxBPS) {
+    WarnSongPositionFix(
+        "SRC_AUDIT_FIX SRC-2067: SongPosition clamped excessive BPS.");
+    return kMaxBPS;
+  }
+  return value;
+}
+
+float SanitizeVisualDelay(float value, const char* context) {
+  if (!IsFinite(value)) {
+    WarnSongPositionFix(context);
+    return 0.0f;
+  }
+  if (value < -kMaxVisualDelaySeconds || value > kMaxVisualDelaySeconds) {
+    WarnSongPositionFix(
+        "SRC_AUDIT_FIX SRC-2068: SongPosition clamped excessive visual "
+        "delay.");
+    return std::clamp(value, -kMaxVisualDelaySeconds, kMaxVisualDelaySeconds);
+  }
+  return value;
+}
+
+int SanitizeWarpBeginRow(int value) {
+  if (value < -1) {
+    WarnSongPositionFix(
+        "SRC_AUDIT_FIX SRC-2067: SongPosition reset invalid warp begin row.");
+    return -1;
+  }
+  if (value > MAX_NOTE_ROW) {
+    WarnSongPositionFix(
+        "SRC_AUDIT_FIX SRC-2067: SongPosition clamped excessive warp begin "
+        "row.");
+    return MAX_NOTE_ROW;
+  }
+  return value;
+}
+
+float SanitizeWarpDestination(float value) {
+  if (!IsFinite(value)) {
+    WarnSongPositionFix(
+        "SRC_AUDIT_FIX SRC-2067: SongPosition reset invalid warp destination.");
+    return -1.0f;
+  }
+  if (value < -1.0f) {
+    WarnSongPositionFix(
+        "SRC_AUDIT_FIX SRC-2067: SongPosition clamped negative warp "
+        "destination.");
+    return -1.0f;
+  }
+  if (value > kMaxPlayableBeat) {
+    WarnSongPositionFix(
+        "SRC_AUDIT_FIX SRC-2067: SongPosition clamped excessive warp "
+        "destination.");
+    return kMaxPlayableBeat;
+  }
+  return value;
+}
+}  // namespace
+
 void SongPosition::UpdateSongPosition(
     float fPositionSeconds, const TimingData& timing,
     const RageTimer& timestamp, float fAdditionalVisualDelay) {
-  if (!timestamp.IsZero()) {
-    m_LastBeatUpdate = timestamp;
-  } else {
-    m_LastBeatUpdate.Touch();
+  if (!IsFinite(fPositionSeconds)) {
+    WarnSongPositionFix(
+        "SRC_AUDIT_FIX SRC-2067: SongPosition ignored non-finite music "
+        "seconds.");
+    return;
   }
 
   TimingData::GetBeatArgs beat_info;
   beat_info.elapsed_time = fPositionSeconds;
   timing.GetBeatAndBPSFromElapsedTime(beat_info);
-  m_fSongBeat = beat_info.beat;
-  m_fCurBPS = beat_info.bps_out;
+  m_fSongBeat = SanitizeBeat(
+      beat_info.beat, m_fSongBeat,
+      "SRC_AUDIT_FIX SRC-2067: SongPosition replaced non-finite song beat.");
+  m_fCurBPS = SanitizeBPS(beat_info.bps_out);
   m_bFreeze = beat_info.freeze_out;
   m_bDelay = beat_info.delay_out;
-  m_iWarpBeginRow = beat_info.warp_begin_out;
-  m_fWarpDestination = beat_info.warp_dest_out;
-
-  // Defensive guard: malformed/unstable timing state should never hard-crash a
-  // live run. Keep gameplay alive and surface diagnostics in logs.
-  if (m_fSongBeat <= -2000.0f) {
-    LOG->Warn("SongPosition: suspicious beat %f at %f seconds, clamping to -1999.0",
-              m_fSongBeat, fPositionSeconds);
-    m_fSongBeat = -1999.0f;
-  }
+  m_iWarpBeginRow = SanitizeWarpBeginRow(beat_info.warp_begin_out);
+  m_fWarpDestination = SanitizeWarpDestination(beat_info.warp_dest_out);
 
   m_fMusicSeconds = fPositionSeconds;
 
-  m_fLightSongBeat =
-      timing.GetBeatFromElapsedTime(fPositionSeconds + g_fLightsAheadSeconds);
+  const float lightsAheadSeconds = SanitizeVisualDelay(
+      g_fLightsAheadSeconds.Get(),
+      "SRC_AUDIT_FIX SRC-2069: SongPosition reset non-finite lights ahead "
+      "seconds.");
+  m_fLightSongBeat = SanitizeBeat(
+      timing.GetBeatFromElapsedTime(fPositionSeconds + lightsAheadSeconds),
+      m_fSongBeat,
+      "SRC_AUDIT_FIX SRC-2069: SongPosition replaced non-finite light beat.");
 
-  m_fSongBeatNoOffset = timing.GetBeatFromElapsedTimeNoOffset(fPositionSeconds);
+  m_fSongBeatNoOffset = SanitizeBeat(
+      timing.GetBeatFromElapsedTimeNoOffset(fPositionSeconds), m_fSongBeat,
+      "SRC_AUDIT_FIX SRC-2070: SongPosition replaced non-finite no-offset "
+      "beat.");
 
+  const float visualDelaySeconds = SanitizeVisualDelay(
+      g_fVisualDelaySeconds.Get(),
+      "SRC_AUDIT_FIX SRC-2068: SongPosition reset non-finite visual delay.");
+  const float additionalVisualDelay = SanitizeVisualDelay(
+      fAdditionalVisualDelay,
+      "SRC_AUDIT_FIX SRC-2068: SongPosition reset non-finite additional visual "
+      "delay.");
   m_fMusicSecondsVisible =
-      fPositionSeconds - g_fVisualDelaySeconds.Get() - fAdditionalVisualDelay;
+      fPositionSeconds - visualDelaySeconds - additionalVisualDelay;
   beat_info.elapsed_time = m_fMusicSecondsVisible;
   timing.GetBeatAndBPSFromElapsedTime(beat_info);
-  m_fSongBeatVisible = beat_info.beat;
+  m_fSongBeatVisible = SanitizeBeat(
+      beat_info.beat, m_fSongBeat,
+      "SRC_AUDIT_FIX SRC-2070: SongPosition replaced non-finite visible beat.");
+
+  if (!timestamp.IsZero()) {
+    m_LastBeatUpdate = timestamp;
+  } else {
+    m_LastBeatUpdate.Touch();
+  }
 }
 
 // lua start
