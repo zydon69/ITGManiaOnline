@@ -69,20 +69,21 @@ class ScoreKeeperNormal : public ScoreKeeper {
 
   void Load(
       const std::vector<Song*>& apSongs, const std::vector<Steps*>& apSteps,
-      const std::vector<AttackArray>& asModifiers);
+      const std::vector<AttackArray>& asModifiers) override;
 
   // before a song plays (called multiple times if course)
   void OnNextSong(
-      int iSongInCourseIndex, const Steps* pSteps, const NoteData* pNoteData);
+      int iSongInCourseIndex, const Steps* pSteps,
+      const NoteData* pNoteData) override;
 
-  void HandleTapScore(const TapNote& tn);
-  void HandleTapRowScore(const NoteData& nd, int iRow);
-  void HandleHoldScore(const TapNote& tn);
-  void HandleHoldActiveSeconds(float /* fMusicSecondsHeld */) {};
+  void HandleTapScore(const TapNote& tn) override;
+  void HandleTapRowScore(const NoteData& nd, int iRow) override;
+  void HandleHoldScore(const TapNote& tn) override;
+  void HandleHoldActiveSeconds(float /* fMusicSecondsHeld */) override {};
   void HandleHoldCheckpointScore(
       const NoteData& nd, int iRow, int iNumHoldsHeldThisRow,
-      int iNumHoldsMissedThisRow);
-  void HandleTapScoreNone();
+      int iNumHoldsMissedThisRow) override;
+  void HandleTapScoreNone() override;
 
   // This must be calculated using only cached radar values so that we can
   // do it quickly.
