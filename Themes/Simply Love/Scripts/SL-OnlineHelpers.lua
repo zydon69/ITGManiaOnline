@@ -1429,15 +1429,23 @@ DisplayLobbyState = function(data, actor)
 			-- screen than we are.
 			local playingText = player.isPlayingSong and (" " .. OnlinePlayingSpinner()) or ""
 			local stateText = ""
-			if data.phase == "playing" and player.playState and player.playState ~= "playing" then
-				if player.playState == "finished" then
-						stateText = " - termine [OK]"
-					elseif player.playState == "failed" then
-						stateText = " - echoue [F]"
+			if (data.phase == "playing" or data.phase == "results") and player.playState and player.playState ~= "playing" then
+				if data.phase == "results" and player.waitingOnEvaluation == true then
+					if player.playState == "failed" then
+						stateText = " - evaluation [F]"
+					elseif player.playState == "disconnected" then
+						stateText = " - evaluation [X]"
+					else
+						stateText = " - evaluation [OK]"
+					end
+				elseif player.playState == "finished" then
+					stateText = " - termine [OK]"
+				elseif player.playState == "failed" then
+					stateText = " - echoue [F]"
 				elseif player.playState == "returned_to_lobby" then
 					stateText = " - a quitte la chanson [X]"
 				elseif player.playState == "disconnected" then
-						stateText = " - deconnecte [X]"
+					stateText = " - deconnecte [X]"
 				else
 					stateText = " - " .. tostring(player.playState)
 				end
@@ -1496,12 +1504,41 @@ DisplayLobbyState = function(data, actor)
 				and CurrentUserInLobbyState(data)
 			if shouldApplyInLobby and songKey ~= "" and songKey ~= lastOnlineOptionsSongKey then
 				if is_evaluation_screen(screenName) then
-					online_flow_trace("song_selection_apply_deferred reason=evaluation_screen"
+					online_flow_trace("song_selection_apply_from_evaluation"
 						.. " screen=" .. tostring(screenName)
 						.. " phase=" .. tostring(data.phase)
 						.. " key=" .. tostring(songKey))
-					if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
-						ITGOnline:EnforceRoomPhaseScreen(screenName)
+					if ApplyOnlineSongSelection(data.songInfo) then
+						if data.phase == "lobby_ready" then
+							online_flow_trace("transition_to_options_deferred reason=evaluation_lobby_ready_waiting_for_config"
+								.. " key=" .. tostring(songKey)
+								.. " room=" .. tostring(data.roomId or data.id or "nil"))
+							if ITGOnline.ConfirmSelectedSongAvailability then
+								ITGOnline:ConfirmSelectedSongAvailability("evaluation_local_song_available", function(ok)
+									if ok then
+										maybe_set_lobby_ready("evaluation_local_song_available")
+										if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
+											ITGOnline:EnforceRoomPhaseScreen(screenName)
+										end
+									end
+								end)
+							else
+								maybe_set_lobby_ready("evaluation_local_song_available")
+								if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
+									ITGOnline:EnforceRoomPhaseScreen(screenName)
+								end
+							end
+						else
+							lastOnlineOptionsSongKey = songKey
+							if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
+								ITGOnline:EnforceRoomPhaseScreen(screenName)
+							end
+						end
+					else
+						online_flow_trace("song_selection_apply_deferred reason=evaluation_missing_or_downloading"
+							.. " screen=" .. tostring(screenName)
+							.. " phase=" .. tostring(data.phase)
+							.. " key=" .. tostring(songKey))
 					end
 				elseif ApplyOnlineSongSelection(data.songInfo) then
 					if data.phase == "lobby_ready" then
@@ -2487,6 +2524,9 @@ CreateOnlineHandler = function()
 						local configReadyKey = ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
 							or (tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or ""))
 						pendingConfigReady = configReadyKey
+						self.configReadyRetryKey = configReadyKey
+						self.configReadyRetryCount = 0
+						self.configReadyRetryStartedAt = GetTimeSinceStart and GetTimeSinceStart() or 0
 						if ITGOnline.SetOptimisticConfigReady then
 							ITGOnline:SetOptimisticConfigReady("options_confirmed")
 						end
@@ -2516,6 +2556,9 @@ CreateOnlineHandler = function()
 							if pendingConfigReady == confirmedKey or pendingConfigReady == expectedConfigReadyKey then
 								Trace("[ITGOnline] options_confirmed realtime config_ready key=" .. tostring(confirmedKey))
 								pendingConfigReady = nil
+								self.configReadyRetryKey = nil
+								self.configReadyRetryCount = 0
+								self.configReadyRetryStartedAt = 0
 								if ITGOnline.ClearOptimisticConfigReady then
 									ITGOnline:ClearOptimisticConfigReady("config_ready_confirmed")
 								end
@@ -2543,6 +2586,34 @@ CreateOnlineHandler = function()
 								return
 							end
 
+							if self.configReadyRetryKey ~= expectedConfigReadyKey then
+								self.configReadyRetryKey = expectedConfigReadyKey
+								self.configReadyRetryCount = 0
+								self.configReadyRetryStartedAt = GetTimeSinceStart and GetTimeSinceStart() or 0
+							end
+							self.configReadyRetryCount = (tonumber(self.configReadyRetryCount) or 0) + 1
+							local retryStartedAt = tonumber(self.configReadyRetryStartedAt) or (GetTimeSinceStart and GetTimeSinceStart() or 0)
+							local retryAge = (GetTimeSinceStart and GetTimeSinceStart() or retryStartedAt) - retryStartedAt
+							if self.configReadyRetryCount > 8 or retryAge > 12 then
+								online_flow_trace("options_confirmed retry_aborted reason=retry_budget_exhausted key="
+									.. tostring(expectedConfigReadyKey)
+									.. " attempts=" .. tostring(self.configReadyRetryCount)
+									.. " age=" .. string.format("%.3f", retryAge))
+								if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+								self.configReadyRetryKey = nil
+								self.configReadyRetryCount = 0
+								self.configReadyRetryStartedAt = 0
+								if ITGOnline.ClearOptimisticConfigReady then
+									ITGOnline:ClearOptimisticConfigReady("config_ready_retry_budget_exhausted")
+								end
+								MESSAGEMAN:Broadcast("OnlineResponseStatus", {
+									event="ready",
+									success=false,
+									message="Echec de synchronisation de l'etat pret."
+								})
+								return
+							end
+
 							if ITGOnline.MarkConfigReady then
 								online_flow_trace("options_confirmed mark_config_ready_begin key=" .. tostring(expectedConfigReadyKey)
 									.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
@@ -2554,18 +2625,27 @@ CreateOnlineHandler = function()
 										.. " error=" .. tostring(decoded and decoded.error_code or response and response.error or "nil"))
 									if ok then
 										if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+										self.configReadyRetryKey = nil
+										self.configReadyRetryCount = 0
+										self.configReadyRetryStartedAt = 0
 										return
 										end
 
 										if response and response.retryAfter then
+											local retryAfter = tonumber(response.retryAfter) or 0.5
+											retryAfter = math.max(0.1, math.min(retryAfter, 2.0))
 											online_flow_trace("options_confirmed mark_config_ready_retry_scheduled key="
 												.. tostring(expectedConfigReadyKey)
-												.. " retryAfter=" .. tostring(response.retryAfter))
-											schedule_named_timer(self, "ConfigReadyRetryTimer", response.retryAfter, "Fire")
+												.. " retryAfter=" .. tostring(retryAfter)
+												.. " attempts=" .. tostring(self.configReadyRetryCount))
+											schedule_named_timer(self, "ConfigReadyRetryTimer", retryAfter, "Fire")
 											return
 										end
 
 								if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
+								self.configReadyRetryKey = nil
+								self.configReadyRetryCount = 0
+								self.configReadyRetryStartedAt = 0
 								if ITGOnline.ClearOptimisticConfigReady then
 									ITGOnline:ClearOptimisticConfigReady("config_ready_failed")
 								end
@@ -2583,7 +2663,8 @@ CreateOnlineHandler = function()
 										online_flow_trace("options_confirmed legacy_fetch_room_retry key=" .. tostring(expectedConfigReadyKey)
 											.. " ok=" .. tostring(ok == true)
 											.. " hasDecoded=" .. tostring(decoded ~= nil)
-											.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil))
+											.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+											.. " attempts=" .. tostring(self.configReadyRetryCount))
 										schedule_named_timer(self, "ConfigReadyRetryTimer", 1, "Fire")
 										return
 								end

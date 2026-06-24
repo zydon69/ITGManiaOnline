@@ -5680,8 +5680,14 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 
 	if phase == "lobby" or phase == "lobby_ready" or phase == "config" then
 		if self:IsOnlineEvaluationScreen(screenName) then
-			online_flow_trace("preferred=lobby reason=new_round_while_evaluation playState=" .. tostring(playState))
-			return "lobby"
+			if (phase == "lobby_ready" or phase == "config") and self.currentRoom and self.currentRoom.selected_song then
+				online_flow_trace("preferred=options reason=new_song_while_evaluation playState=" .. tostring(playState)
+					.. " phase=" .. tostring(phase))
+				return "options"
+			end
+			online_flow_trace("preferred=nil reason=keep_evaluation_after_round_until_player_leaves playState=" .. tostring(playState)
+				.. " phase=" .. tostring(phase))
+			return nil
 		end
 		if self:IsOnlineGameplayScreen(screenName) then
 			online_flow_trace("preferred=lobby reason=non_playing_phase_in_gameplay playState=" .. tostring(playState))
@@ -5717,6 +5723,8 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 		target = style == "routine" and "ScreenGameplayShared" or "ScreenGameplay"
 	elseif preferred == "evaluation" then
 		target = GAMESTATE:IsCourseMode() and "ScreenEvaluationNonstop" or "ScreenEvaluationStage"
+	elseif preferred == "options" then
+		target = "ScreenPlayerOptions"
 	end
 
 	if not target or topScreen:GetName() == target then
@@ -12897,10 +12905,16 @@ function ITGOnline:LobbyStatePayload(room)
 		local user = member.user or member
 		local userId = tostring(user.id or member.user_id or "")
 		local session = playByUserId[userId] or {}
-		local state = tostring(session.state or "pending")
+		local state = tostring(session.state or member.play_state or "pending")
 		local memberScreenName = screenName
 		if room.phase == "playing" and state ~= "playing" then
 			memberScreenName = "ScreenOnlineLobbies"
+		elseif room.phase == "results" then
+			if member.returned_to_lobby == true or state == "returned_to_lobby" then
+				memberScreenName = "ScreenOnlineLobbies"
+			elseif state == "finished" or state == "failed" or state == "disconnected" or member.waiting_on_evaluation == true then
+				memberScreenName = "ScreenEvaluationStage"
+			end
 		end
 			local liveScore = liveScoreByUserId[userId] or {}
 			local selectedMaxScore = tonumber(room.selected_song and room.selected_song.max_score) or 0
@@ -12943,6 +12957,8 @@ function ITGOnline:LobbyStatePayload(room)
 				packSyncDownloadProgress = member.pack_sync_download_progress,
 				packSyncSequence = member.pack_sync_sequence,
 				packSyncUpdatedAt = member.pack_sync_updated_at,
+				waitingOnEvaluation = member.waiting_on_evaluation == true,
+				returnedToLobby = member.returned_to_lobby == true,
 				speedMod = member.options and member.options.speed_mod or nil,
 				musicRateBpm = member.options and member.options.music_rate_bpm or nil,
 				stepchart = member.options and member.options.stepchart or nil,

@@ -1679,6 +1679,31 @@ function PackSync:MarkLobbyReadyForSelectedSong(source, retrying)
 		.. " retrying=" .. tostring(retrying == true)
 		.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
 		.. " phase=" .. tostring(phase))
+	local readyIntentKey = table.concat({
+		tostring(ITGOnline.currentRoomId or ""),
+		tostring(current_room_selected_at()),
+		tostring(phase),
+	}, "|")
+	local now = GetTimeSinceStart and GetTimeSinceStart() or 0
+	if self.markLobbyReadyInFlightKey == readyIntentKey then
+		trace("MarkLobbyReady skipped reason=in_flight"
+			.. " source=" .. tostring(source or "unknown")
+			.. " key=" .. tostring(readyIntentKey))
+		return true
+	end
+	if retrying ~= true
+		and self.lastMarkLobbyReadyIntentKey == readyIntentKey
+		and (now - (tonumber(self.lastMarkLobbyReadyIntentAt) or 0)) < 1.5
+	then
+		trace("MarkLobbyReady skipped reason=recent_duplicate"
+			.. " source=" .. tostring(source or "unknown")
+			.. " key=" .. tostring(readyIntentKey)
+			.. " age=" .. string.format("%.3f", now - (tonumber(self.lastMarkLobbyReadyIntentAt) or 0)))
+		return true
+	end
+	self.markLobbyReadyInFlightKey = readyIntentKey
+	self.lastMarkLobbyReadyIntentKey = readyIntentKey
+	self.lastMarkLobbyReadyIntentAt = now
 	trace_online_state("mark_lobby_ready_begin", {
 		source = source or "unknown",
 		phase = phase,
@@ -1687,6 +1712,9 @@ function PackSync:MarkLobbyReadyForSelectedSong(source, retrying)
 		selected_at = selected_at(self.currentSongInfo),
 	})
 	ITGOnline:SetReady("lobby_ready", true, function(ok, decoded, response)
+		if self.markLobbyReadyInFlightKey == readyIntentKey then
+			self.markLobbyReadyInFlightKey = ""
+		end
 		trace("MarkLobbyReady response source=" .. tostring(source or "unknown")
 			.. " ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
@@ -1705,12 +1733,31 @@ function PackSync:MarkLobbyReadyForSelectedSong(source, retrying)
 			if ITGOnline.EnforceRoomPhaseScreen then ITGOnline:EnforceRoomPhaseScreen() end
 			return
 		end
+		local errorCode = tostring(decoded and decoded.error_code or "")
+		if errorCode == "ready_context_changed" then
+			trace("MarkLobbyReady stopped reason=ready_context_changed"
+				.. " source=" .. tostring(source or "unknown")
+				.. " selected_at=" .. tostring(current_room_selected_at())
+				.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil))
+			if decoded and decoded.room and ITGOnline.ApplyRoomSnapshot then
+				ITGOnline:ApplyRoomSnapshot(decoded.room, "mark_lobby_ready_context_changed")
+				if MESSAGEMAN then
+					MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+				end
+				if ITGOnline.EnforceRoomPhaseScreen then ITGOnline:EnforceRoomPhaseScreen() end
+			elseif ITGOnline.EnsureCurrentRoom then
+				ITGOnline:EnsureCurrentRoom()
+			end
+			return
+		end
 		if retrying then return end
 		if ITGOnline.EnsureCurrentRoom then
 			ITGOnline:EnsureCurrentRoom(function(fetchOk)
 				trace("MarkLobbyReady retry_refresh source=" .. tostring(source or "unknown")
 					.. " ok=" .. tostring(fetchOk == true))
 				if fetchOk then
+					self.lastMarkLobbyReadyIntentKey = ""
+					self.lastMarkLobbyReadyIntentAt = 0
 					self:MarkLobbyReadyForSelectedSong(tostring(source or "unknown") .. "_retry", true)
 				end
 			end)

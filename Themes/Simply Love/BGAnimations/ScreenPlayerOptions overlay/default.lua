@@ -140,6 +140,8 @@ end
 local SpeedModBMTs = {}
 -- VariantBMTs is a table that will contain the BitmapText actors within the NoteSkinVariant OptionRow for available players
 local VariantBMTs = {}
+local refreshInProgress = false
+local refreshVariantsInProgress = false
 local t = Def.ActorFrame{
 	InitCommand=function(self) self:xy(_screen.cx,0) end,
 	OnCommand=function(self)
@@ -165,7 +167,7 @@ local t = Def.ActorFrame{
 			if VariantRowIndex then
 				-- The BitmapText actors for P1 and P2 variant are both named "Item", so we need to provide a 1 or 2 to index
 				VariantBMTs[pn] = ScreenOptions:GetOptionRow(VariantRowIndex):GetChild(""):GetChild("Item")[ PlayerNumber:Reverse()[player]+1 ]
-				self:queuecommand("Set"..pn.."Variant")
+				self:playcommand("Set"..pn.."Variant")
 			end
 		end
 	end,
@@ -175,9 +177,11 @@ local t = Def.ActorFrame{
 		if SCREENMAN:GetTopScreen():GetName() == "ScreenAttackMenu" then return end
 
 		-- update SpeedModHelper text to reflect the new music rate
-		self:queuecommand("Refresh")
+		self:playcommand("Refresh")
 	end,
 	RefreshCommand=function(self)
+		if refreshInProgress then return end
+		refreshInProgress = true
 		local screen = SCREENMAN:GetTopScreen()
 		-- find the index of the OptionRow for MusicRate so we can update
 		-- the text of its title BitmapText as the MusicRate changes
@@ -203,11 +207,17 @@ local t = Def.ActorFrame{
 
 			title_bmt:settext( ("%s\nbpm: %s"):format(THEME:GetString("OptionTitles", "MusicRate"), text) )
 		end
+		refreshInProgress = false
 	end,
 	RefreshVariantsCommand=function(self)
+		if refreshVariantsInProgress then return end
+		refreshVariantsInProgress = true
 		local screen = SCREENMAN:GetTopScreen()
 		local VariantRowIndex = FindOptionRowIndex(screen,"NoteSkinVariant")
-		if not VariantRowIndex then return end
+		if not VariantRowIndex then
+			refreshVariantsInProgress = false
+			return
+		end
 		for player in ivalues( GAMESTATE:GetHumanPlayers() ) do
 			local pn = ToEnumShortString(player)
 			local variant_bmt = VariantBMTs[pn]
@@ -219,7 +229,7 @@ local t = Def.ActorFrame{
 				screen:RedrawOptions() 
 			end
 		end
-
+		refreshVariantsInProgress = false
 	end
 }
 
@@ -291,19 +301,23 @@ for player in ivalues(GAMESTATE:GetHumanPlayers()) do
 				text = "M" .. tostring(SL[pn].ActiveModifiers.SpeedMod)
 			end
 
-			SpeedModBMTs[pn]:settext( text )
-			self:GetParent():queuecommand("Refresh")
+			if SpeedModBMTs[pn] then
+				SpeedModBMTs[pn]:settext( text )
+			end
+			self:GetParent():playcommand("Refresh")
 		end,
 		["Set" .. pn .. "VariantCommand"]=function(self)
 			local current_variant = SL[pn].ActiveModifiers.NoteSkinVariant or SL[pn].ActiveModifiers.NoteSkin
 			-- Get all text after first _ to get the variant name
 			current_variant = current_variant:match("_(.*)") or current_variant
-			VariantBMTs[pn]:settext( current_variant )
-			self:GetParent():queuecommand("RefreshVariants")
+			if VariantBMTs[pn] then
+				VariantBMTs[pn]:settext( current_variant )
+			end
+			self:GetParent():playcommand("RefreshVariants")
 		end,
 
-		["CurrentSteps" .. pn .. "ChangedMessageCommand"]=function(self) self:queuecommand("Set"..pn) end,
-		["CurrentTrail" .. pn .. "ChangedMessageCommand"]=function(self) self:queuecommand("Set"..pn) end,
+		["CurrentSteps" .. pn .. "ChangedMessageCommand"]=function(self) self:playcommand("Set"..pn) end,
+		["CurrentTrail" .. pn .. "ChangedMessageCommand"]=function(self) self:playcommand("Set"..pn) end,
 
 		["MenuLeft" .. pn .. "MessageCommand"]=function(self)
 			local topscreen = SCREENMAN:GetTopScreen()
@@ -311,15 +325,15 @@ for player in ivalues(GAMESTATE:GetHumanPlayers()) do
 
 			if row_index == FindOptionRowIndex(topscreen, "SpeedMod") then
 				ChangeSpeedMod( pn, -1 )
-				self:queuecommand("Set"..pn)
+				self:playcommand("Set"..pn)
 			end
 			if row_index == FindOptionRowIndex(topscreen, "NoteSkinVariant") then
 				ChangeVariant( pn, -1 )
-				self:queuecommand("Set"..pn.."Variant")
+				self:playcommand("Set"..pn.."Variant")
 			end
 			if row_index == FindOptionRowIndex(topscreen, "NoteSkin") then
 				ChangeVariant( pn, 0 )
-				self:queuecommand("Set"..pn.."Variant")
+				self:playcommand("Set"..pn.."Variant")
 			end
 		end,
 		["MenuRight" .. pn .. "MessageCommand"]=function(self)
@@ -328,14 +342,14 @@ for player in ivalues(GAMESTATE:GetHumanPlayers()) do
 
 			if row_index == FindOptionRowIndex(topscreen, "SpeedMod") then
 				ChangeSpeedMod( pn, 1 )
-				self:queuecommand("Set"..pn)
+				self:playcommand("Set"..pn)
 			end
 			if row_index == FindOptionRowIndex(topscreen, "NoteSkinVariant") then
 				ChangeVariant( pn, 1 )
-				self:queuecommand("Set"..pn.."Variant")
+				self:playcommand("Set"..pn.."Variant")
 			elseif row_index == FindOptionRowIndex(topscreen, "NoteSkin") then
 				ChangeVariant( pn, 0 )
-				self:queuecommand("Set"..pn.."Variant")
+				self:playcommand("Set"..pn.."Variant")
 			end
 		end
 	}
