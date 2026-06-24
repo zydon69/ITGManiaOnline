@@ -227,7 +227,9 @@ class BroadcastOnChange {
   const T Get() const { return val; }
   void Set(T t) {
     val = t;
-    MESSAGEMAN->Broadcast(MessageIDToString(mSendWhenChanged));
+    if (MESSAGEMAN != nullptr) {
+      MESSAGEMAN->Broadcast(MessageIDToString(mSendWhenChanged));
+    }
   }
   operator T() const { return val; }
   bool operator==(const T& other) const { return val == other; }
