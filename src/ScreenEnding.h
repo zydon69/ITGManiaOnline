@@ -1,18 +1,20 @@
 #ifndef SCREEN_ENDING_H
 #define SCREEN_ENDING_H
 
-#include "InputQueue.h"
 #include "PlayerNumber.h"
 #include "ScreenAttract.h"
 #include "Sprite.h"
 /** @brief Ending screen that shows stats. */
 class ScreenEnding : public ScreenAttract {
  public:
-  ScreenEnding();
-  virtual void Init();
-  virtual bool Input(const InputEventPlus& input);
+  void Init() override;
+  bool Input(const InputEventPlus& input) override;
 
  private:
+  void SetupTestInitialScreen();
+  void LoadRemoveCardPrompt(PlayerNumber p);
+  void PlayEndingAnnouncer();
+
   Sprite m_sprRemoveMemoryCard[NUM_PLAYERS];
 };
 
