@@ -198,6 +198,145 @@ static const Style* GetSafePlayerStyle(const PlayerState* playerState) {
   return GAMESTATE->GetCurrentStyle(playerState->m_PlayerNumber);
 }
 
+static bool HasPlayerThemeRuntime(const char* context) {
+  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
+    LOG->Warn("SRC_AUDIT_FIX: %s skipped because THEME is unavailable.", context);
+    return false;
+  }
+  return true;
+}
+
+static float GetSafeStageStepsSeconds(const char* context) {
+  if (STATSMAN == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: %s using zero stage time without STATSMAN.",
+              context);
+    return 0.0f;
+  }
+  const float seconds = STATSMAN->m_CurStageStats.m_fStepsSeconds;
+  if (!std::isfinite(seconds) || seconds < 0.0f) {
+    LOG->Warn("SRC_AUDIT_FIX: %s using zero invalid stage time %f.", context,
+              seconds);
+    return 0.0f;
+  }
+  return seconds;
+}
+
+static float GetSafeGameplaySeconds(const char* context) {
+  if (STATSMAN == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: %s using zero gameplay time without STATSMAN.",
+              context);
+    return 0.0f;
+  }
+  const float seconds = STATSMAN->m_CurStageStats.m_fGameplaySeconds;
+  if (!std::isfinite(seconds) || seconds < 0.0f) {
+    LOG->Warn("SRC_AUDIT_FIX: %s using zero invalid gameplay time %f.", context,
+              seconds);
+    return 0.0f;
+  }
+  return seconds;
+}
+
+static void MarkAutoplayUsedForPlayer(PlayerStageStats* stats,
+                                      const char* context) {
+  if (STATSMAN != nullptr) {
+    STATSMAN->m_CurStageStats.m_bUsedAutoplay = true;
+  } else {
+    LOG->Warn("SRC_AUDIT_FIX: %s could not mark autoplay without STATSMAN.",
+              context);
+  }
+  if (stats != nullptr) {
+    stats->m_bDisqualified = true;
+  }
+}
+
+static bool BroadcastPlayerMessage(Message& msg, const char* context) {
+  if (MESSAGEMAN == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: %s dropped message '%s' without MESSAGEMAN.",
+              context, msg.GetName().c_str());
+    return false;
+  }
+  MESSAGEMAN->Broadcast(msg);
+  return true;
+}
+
+static bool PostPlayerScreenMessage(ScreenMessage sm, float delay,
+                                    const char* context) {
+  if (SCREENMAN == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: %s dropped screen message '%s' without SCREENMAN.",
+              context, sm.c_str());
+    return false;
+  }
+  SCREENMAN->PostMessageToTopScreen(sm, delay);
+  return true;
+}
+
+static float SanitizePlayerFinite(float value, float fallback,
+                                  const char* context) {
+  if (!std::isfinite(value)) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid float %f in %s; using %f.", value,
+              context, fallback);
+    return fallback;
+  }
+  return value;
+}
+
+static float SanitizePlayerPercent(float value, float fallback,
+                                   const char* context) {
+  value = SanitizePlayerFinite(value, fallback, context);
+  return std::clamp(value, 0.0f, 1.0f);
+}
+
+static float SanitizePlayerNonNegative(float value, float fallback,
+                                       const char* context) {
+  value = SanitizePlayerFinite(value, fallback, context);
+  if (value < 0.0f) {
+    LOG->Warn("SRC_AUDIT_FIX: Negative float %f in %s; using %f.", value,
+              context, fallback);
+    return fallback;
+  }
+  return value;
+}
+
+static float GetSafePadStickSeconds() {
+  if (PREFSMAN == nullptr || !std::isfinite(PREFSMAN->m_fPadStickSeconds.Get())) {
+    return 0.0f;
+  }
+  return std::max(0.0f, PREFSMAN->m_fPadStickSeconds.Get());
+}
+
+static bool IsConfinedSongAssetPath(const std::string& songDir,
+                                    const std::string& asset,
+                                    std::string& outPath) {
+  if (asset.empty()) {
+    return false;
+  }
+  std::string normalizedAsset = asset;
+  FixSlashesInPlace(normalizedAsset);
+  std::vector<std::string> parts;
+  split(normalizedAsset, "/", parts, false);
+  for (const std::string& part : parts) {
+    if (part == "..") {
+      return false;
+    }
+  }
+  if (normalizedAsset[0] == '/' ||
+      (normalizedAsset.size() > 1 && normalizedAsset[1] == ':') ||
+      BeginsWith(normalizedAsset, "\\\\")) {
+    return false;
+  }
+
+  std::string normalizedDir = songDir;
+  FixSlashesInPlace(normalizedDir);
+  CollapsePath(normalizedDir);
+  if (!normalizedDir.empty() && normalizedDir.back() != '/') {
+    normalizedDir += "/";
+  }
+
+  outPath = normalizedDir + normalizedAsset;
+  CollapsePath(outPath);
+  return BeginsWith(outPath, normalizedDir);
+}
+
 void TimingWindowSecondsInit(
     size_t /*TimingWindow*/ i, std::string& sNameOut, float& defaultValueOut) {
   sNameOut = "TimingWindowSeconds" +
@@ -460,6 +599,20 @@ void Player::Init(
     CombinedLifeMeter* pCombinedLM, ScoreDisplay* pScoreDisplay,
     ScoreDisplay* pSecondaryScoreDisplay, Inventory* pInventory,
     ScoreKeeper* pPrimaryScoreKeeper, ScoreKeeper* pSecondaryScoreKeeper) {
+  m_pPlayerState = pPlayerState;
+  m_pPlayerStageStats = pPlayerStageStats;
+  m_pLifeMeter = pLM;
+  m_pCombinedLifeMeter = pCombinedLM;
+  m_pScoreDisplay = pScoreDisplay;
+  m_pSecondaryScoreDisplay = pSecondaryScoreDisplay;
+  m_pInventory = pInventory;
+  m_pPrimaryScoreKeeper = pPrimaryScoreKeeper;
+  m_pSecondaryScoreKeeper = pSecondaryScoreKeeper;
+
+  if (!HasPlayerThemeRuntime("Player::Init")) {
+    return;
+  }
+
   GRAY_ARROWS_Y_STANDARD.Load(sType, "ReceptorArrowsYStandard");
   GRAY_ARROWS_Y_REVERSE.Load(sType, "ReceptorArrowsYReverse");
   ATTACK_DISPLAY_X.Load(sType, ATTACK_DISPLAY_X_NAME, NUM_PLAYERS, 2);
@@ -475,16 +628,6 @@ void Player::Init(
       sType, "DrawDistanceAfterTargetsPixels");
   DRAW_DISTANCE_BEFORE_TARGET_PIXELS.Load(
       sType, "DrawDistanceBeforeTargetsPixels");
-
-  m_pPlayerState = pPlayerState;
-  m_pPlayerStageStats = pPlayerStageStats;
-  m_pLifeMeter = pLM;
-  m_pCombinedLifeMeter = pCombinedLM;
-  m_pScoreDisplay = pScoreDisplay;
-  m_pSecondaryScoreDisplay = pSecondaryScoreDisplay;
-  m_pInventory = pInventory;
-  m_pPrimaryScoreKeeper = pPrimaryScoreKeeper;
-  m_pSecondaryScoreKeeper = pSecondaryScoreKeeper;
 
   const Style* style = GetSafePlayerStyle(m_pPlayerState);
   if (style == nullptr) {
@@ -564,7 +707,7 @@ void Player::Init(
   if (m_pLifeMeter && m_pPlayerStageStats) {
     float fLife = m_pLifeMeter->GetLife();
     m_pPlayerStageStats->SetLifeRecordAt(
-        fLife, STATSMAN->m_CurStageStats.m_fStepsSeconds);
+        fLife, GetSafeStageStepsSeconds("Player::Init"));
   }
 
   // TODO: Remove use of PlayerNumber.
@@ -684,23 +827,43 @@ void Player::Init(
   m_soundAttackEnding.SetProperty("Pan", fBalance);
 
   if (HasVisibleParts()) {
-    LuaThreadVariable var(
-        "Player", LuaReference::Create(m_pPlayerState->m_PlayerNumber));
-    LuaThreadVariable var2(
-        "MultiPlayer", LuaReference::Create(m_pPlayerState->m_mp));
+    auto loadVisibleActors = [&]() {
+      m_sprCombo.Load(THEME->GetPathG(sType, "combo"));
+      if (m_sprCombo.IsLoaded()) {
+        m_sprCombo->SetName("Combo");
+        m_pActorWithComboPosition = &*m_sprCombo;
+        this->AddChild(m_sprCombo);
+      } else {
+        LOG->Warn("SRC_AUDIT_FIX SRC-2022: Player combo actor did not load.");
+        m_pActorWithComboPosition = nullptr;
+      }
 
-    m_sprCombo.Load(THEME->GetPathG(sType, "combo"));
-    m_sprCombo->SetName("Combo");
-    m_pActorWithComboPosition = &*m_sprCombo;
-    this->AddChild(m_sprCombo);
+      // todo: allow for judgments to be loaded per-column a la pop'n?
+      // see how HoldJudgments are handled below for an example, though
+      // it would need more work. -aj
+      m_sprJudgment.Load(THEME->GetPathG(sType, "judgment"));
+      if (m_sprJudgment.IsLoaded()) {
+        m_sprJudgment->SetName("Judgment");
+        m_pActorWithJudgmentPosition = &*m_sprJudgment;
+        this->AddChild(m_sprJudgment);
+      } else {
+        LOG->Warn("SRC_AUDIT_FIX SRC-2022: Player judgment actor did not load.");
+        m_pActorWithJudgmentPosition = nullptr;
+      }
+    };
 
-    // todo: allow for judgments to be loaded per-column a la pop'n?
-    // see how HoldJudgments are handled below for an example, though
-    // it would need more work. -aj
-    m_sprJudgment.Load(THEME->GetPathG(sType, "judgment"));
-    m_sprJudgment->SetName("Judgment");
-    m_pActorWithJudgmentPosition = &*m_sprJudgment;
-    this->AddChild(m_sprJudgment);
+    if (LUA != nullptr) {
+      LuaThreadVariable var(
+          "Player", LuaReference::Create(m_pPlayerState->m_PlayerNumber));
+      LuaThreadVariable var2(
+          "MultiPlayer", LuaReference::Create(m_pPlayerState->m_mp));
+      loadVisibleActors();
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2021: Loading player actors without Lua thread "
+          "variables.");
+      loadVisibleActors();
+    }
   } else {
     m_pActorWithComboPosition = nullptr;
     m_pActorWithJudgmentPosition = nullptr;
@@ -732,7 +895,11 @@ void Player::Init(
   m_fNoteFieldHeight = GRAY_ARROWS_Y_REVERSE - GRAY_ARROWS_Y_STANDARD;
   if (m_pNoteField) {
     m_pNoteField->Init(m_pPlayerState, m_fNoteFieldHeight);
-    ActorUtil::LoadAllCommands(*m_pNoteField, sType);
+    if (LUA != nullptr) {
+      ActorUtil::LoadAllCommands(*m_pNoteField, sType);
+    } else {
+      LOG->Warn("SRC_AUDIT_FIX SRC-2021: NoteField commands skipped without Lua.");
+    }
     this->AddChild(m_pNoteField);
   }
 
@@ -790,6 +957,10 @@ static bool NeedsHoldJudging(const TapNote& tn) {
 
 static void GenerateCacheDataStructure(
     PlayerState* pPlayerState, const NoteData& notes) {
+  if (pPlayerState == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-2048: Skipping cache generation without state.");
+    return;
+  }
   pPlayerState->m_CacheDisplayedBeat.clear();
 
   const std::vector<TimingSegment*> vScrolls =
@@ -800,9 +971,22 @@ static void GenerateCacheDataStructure(
   float lastRatio = 1.0f;
   for (unsigned i = 0; i < vScrolls.size(); i++) {
     ScrollSegment* seg = ToScroll(vScrolls[i]);
+    if (seg == nullptr || !std::isfinite(seg->GetBeat()) ||
+        !std::isfinite(seg->GetRatio())) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2048: Ignoring invalid scroll segment in player "
+          "cache.");
+      continue;
+    }
     displayedBeat += (seg->GetBeat() - lastRealBeat) * lastRatio;
     lastRealBeat = seg->GetBeat();
     lastRatio = seg->GetRatio();
+    if (!std::isfinite(displayedBeat)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2048: Reset invalid displayed beat cache value.");
+      displayedBeat = lastRealBeat;
+      lastRatio = 1.0f;
+    }
     CacheDisplayedBeat c = {seg->GetBeat(), displayedBeat, seg->GetRatio()};
     pPlayerState->m_CacheDisplayedBeat.push_back(c);
   }
@@ -857,7 +1041,7 @@ void Player::Load() {
   // The editor can start playing in the middle of the song.
   const int iNoteRow =
       BeatToNoteRowNotRounded(m_pPlayerState->m_Position.m_fSongBeat);
-  m_iFirstUncrossedRow = iNoteRow - 1;
+  m_iFirstUncrossedRow = std::max(0, iNoteRow - 1);
   m_pJudgedRows->Reset(iNoteRow);
 
   bool bOniDead =
@@ -978,8 +1162,16 @@ void Player::Load() {
 
   float fBalance = GameSoundManager::GetPlayerBalance(pn);
   for (unsigned i = 0; i < m_vKeysounds.size(); i++) {
-    std::string sKeysoundFilePath = sSongDir + pSong->m_vsKeysoundFile[i];
     RageSound& sound = m_vKeysounds[i];
+    std::string sKeysoundFilePath;
+    if (!IsConfinedSongAssetPath(
+            sSongDir, pSong->m_vsKeysoundFile[i], sKeysoundFilePath)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2047: Ignoring unsafe keysound path '%s'.",
+          pSong->m_vsKeysoundFile[i].c_str());
+      sound.Unload();
+      continue;
+    }
     if (sound.GetLoadedFilePath() != sKeysoundFilePath) {
       sound.Load(sKeysoundFilePath, true, &SoundParams);
     }
@@ -1015,11 +1207,16 @@ void Player::Load() {
 
 void Player::SendComboMessages(
     unsigned int iOldCombo, unsigned int iOldMissCombo) {
+  if (m_pPlayerState == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-2023: Combo message skipped without state.");
+    return;
+  }
   const unsigned int iCurCombo =
       m_pPlayerStageStats ? m_pPlayerStageStats->m_iCurCombo : 0;
   if (iOldCombo > (unsigned int)COMBO_STOPPED_AT &&
       iCurCombo < (unsigned int)COMBO_STOPPED_AT) {
-    SCREENMAN->PostMessageToTopScreen(SM_ComboStopped, 0);
+    PostPlayerScreenMessage(
+        SM_ComboStopped, 0, "Player::SendComboMessages");
   }
 
   if (m_bSendJudgmentAndComboMessages) {
@@ -1036,7 +1233,7 @@ void Player::SendComboMessages(
           "PlayerStageStats",
           LuaReference::CreateFromPush(*m_pPlayerStageStats));
     }
-    MESSAGEMAN->Broadcast(msg);
+    BroadcastPlayerMessage(msg, "Player::SendComboMessages");
   }
 }
 
@@ -1077,7 +1274,9 @@ void Player::Update(float fDeltaTime) {
     }
   }
 
-  const float fSongBeat = m_pPlayerState->m_Position.m_fSongBeat;
+  const float fSongBeat = SanitizePlayerFinite(
+      m_pPlayerState->m_Position.m_fSongBeat, 0.0f,
+      "Player::Update song beat");
   const int iSongRow = BeatToNoteRow(fSongBeat);
 
   ArrowEffects::SetCurrentOptions(
@@ -1088,13 +1287,13 @@ void Player::Update(float fDeltaTime) {
   if (HasVisibleParts()) {
     // Random Attack Mod
     if (m_pPlayerState->m_PlayerOptions.GetCurrent().m_fRandAttack) {
-      float fCurrentGameTime = STATSMAN->m_CurStageStats.m_fGameplaySeconds;
+      float fCurrentGameTime = GetSafeGameplaySeconds("Player::Update");
 
       const float fAttackRunTime = SanitizePlayerDelta(
           ATTACK_RUN_TIME_RANDOM, "Player::Update random attack runtime");
 
       // Don't start until 1 seconds into game, minimum
-      if (fCurrentGameTime > 1.0f) {
+      if (fCurrentGameTime > 1.0f && fAttackRunTime > 0.5f) {
         /* Update the attack if there are no others currently running.
          * Note that we have a new one activate a little early; This is
          * to have a bit of overlap rather than an abrupt change. */
@@ -1111,18 +1310,24 @@ void Player::Update(float fDeltaTime) {
     }
 
     if (g_bEnableAttackSoundPlayback) {
-      if (m_pPlayerState->m_bAttackBeganThisUpdate) {
+      if (m_pPlayerState->m_bAttackBeganThisUpdate &&
+          m_soundAttackLaunch.IsLoaded()) {
         m_soundAttackLaunch.Play(false);
       }
-      if (m_pPlayerState->m_bAttackEndedThisUpdate) {
+      if (m_pPlayerState->m_bAttackEndedThisUpdate &&
+          m_soundAttackEnding.IsLoaded()) {
         m_soundAttackEnding.Play(false);
       }
     }
 
-    float fMiniPercent = m_pPlayerState->m_PlayerOptions.GetCurrent()
-                             .m_fEffects[PlayerOptions::EFFECT_MINI];
-    float fTinyPercent = m_pPlayerState->m_PlayerOptions.GetCurrent()
-                             .m_fEffects[PlayerOptions::EFFECT_TINY];
+    float fMiniPercent = SanitizePlayerPercent(
+        m_pPlayerState->m_PlayerOptions.GetCurrent()
+            .m_fEffects[PlayerOptions::EFFECT_MINI],
+        0.0f, "Player::Update mini");
+    float fTinyPercent = SanitizePlayerPercent(
+        m_pPlayerState->m_PlayerOptions.GetCurrent()
+            .m_fEffects[PlayerOptions::EFFECT_TINY],
+        0.0f, "Player::Update tiny");
     float fJudgmentZoom =
         std::min(std::pow(0.5f, fMiniPercent + fTinyPercent), 1.0f);
 
@@ -1134,16 +1339,24 @@ void Player::Update(float fDeltaTime) {
         if (m_vpHoldJudgment[c] == nullptr) {
           continue;
         }
-        float fPercentReverse = m_pPlayerState->m_PlayerOptions.GetCurrent()
-                                    .GetReversePercentForColumn(c);
+        float fPercentReverse = SanitizePlayerPercent(
+            m_pPlayerState->m_PlayerOptions.GetCurrent()
+                .GetReversePercentForColumn(c),
+            0.0f, "Player::Update reverse percent");
         float fHoldJudgeYPos = SCALE(
             fPercentReverse, 0.f, 1.f, HOLD_JUDGMENT_Y_STANDARD,
             HOLD_JUDGMENT_Y_REVERSE);
+        fHoldJudgeYPos = SanitizePlayerFinite(
+            fHoldJudgeYPos, 0.0f, "Player::Update hold judgment y");
         // float fGrayYPos = SCALE( fPercentReverse, 0.f, 1.f,
         // GRAY_ARROWS_Y_STANDARD, GRAY_ARROWS_Y_REVERSE );
 
-        float fX = ArrowEffects::GetXPos(m_pPlayerState, c, 0);
-        const float fZ = ArrowEffects::GetZPos(m_pPlayerState, c, 0);
+        float fX = SanitizePlayerFinite(
+            ArrowEffects::GetXPos(m_pPlayerState, c, 0), 0.0f,
+            "Player::Update hold judgment x");
+        const float fZ = SanitizePlayerFinite(
+            ArrowEffects::GetZPos(m_pPlayerState, c, 0), 0.0f,
+            "Player::Update hold judgment z");
         fX *= (1 - fMiniPercent * 0.5f);
 
         m_vpHoldJudgment[c]->SetX(fX);
@@ -1160,8 +1373,10 @@ void Player::Update(float fDeltaTime) {
     const bool bReverse =
         m_pPlayerState->m_PlayerOptions.GetCurrent().GetReversePercentForColumn(
             0) == 1;
-    float fPercentCentered = m_pPlayerState->m_PlayerOptions.GetCurrent()
-                                 .m_fScrolls[PlayerOptions::SCROLL_CENTERED];
+    float fPercentCentered = SanitizePlayerPercent(
+        m_pPlayerState->m_PlayerOptions.GetCurrent()
+            .m_fScrolls[PlayerOptions::SCROLL_CENTERED],
+        0.0f, "Player::Update centered");
 
     if (m_pActorWithJudgmentPosition != nullptr) {
       const Actor::TweenState& ts1 = m_tsJudgment[bReverse ? 1 : 0][0];
@@ -1179,7 +1394,8 @@ void Player::Update(float fDeltaTime) {
           fPercentCentered);
     }
 
-    float field_zoom = 1 - fMiniPercent * 0.5f;
+    float field_zoom = SanitizePlayerNonNegative(
+        1 - fMiniPercent * 0.5f, 1.0f, "Player::Update field zoom");
     if (m_pNoteField) {
       if (m_oitg_zoom_mode) {
         m_pNoteField->SetZoomX(field_zoom);
@@ -1217,7 +1433,8 @@ void Player::Update(float fDeltaTime) {
     std::vector<GameInput> GameI;
     style->StyleInputToGameInput(col, m_pPlayerState->m_PlayerNumber, GameI);
 
-    bool bIsHoldingButton = INPUTMAPPER->IsBeingPressed(GameI);
+    bool bIsHoldingButton =
+        INPUTMAPPER != nullptr && INPUTMAPPER->IsBeingPressed(GameI);
 
     // TODO: Make this work for non-human-controlled players
     if (bIsHoldingButton && !GAMESTATE->m_bDemonstrationOrJukebox &&
@@ -1251,10 +1468,7 @@ void Player::Update(float fDeltaTime) {
 
       Step(iTrack, iHeadRow, now, false, false);
       if (m_pPlayerState->m_PlayerController == PC_AUTOPLAY) {
-        STATSMAN->m_CurStageStats.m_bUsedAutoplay = true;
-        if (m_pPlayerStageStats) {
-          m_pPlayerStageStats->m_bDisqualified = true;
-        }
+        MarkAutoplayUsedForPlayer(m_pPlayerStageStats, "Player::Update");
       }
     }
   }
@@ -1264,7 +1478,9 @@ void Player::Update(float fDeltaTime) {
   // A miss is "held" if the player was physically holding the button at the
   // note's exact timing point.
   {
-    const float musicPosition = m_pPlayerState->m_Position.m_fMusicSeconds;
+    const float musicPosition = SanitizePlayerFinite(
+        m_pPlayerState->m_Position.m_fMusicSeconds, 0.0f,
+        "Player::Update music position");
     const float rate = SanitizePlayerMusicRate(
         GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate,
         "Player::Update held miss tracking");
@@ -1320,9 +1536,15 @@ void Player::Update(float fDeltaTime) {
       // (max time of all inputs mapped to this column).
       const float secsSinceNote = (musicPosition - notePosition) / rate;
       float maxSecsHeld = 0.0f;
-      for (const GameInput& gi : inputs) {
-        maxSecsHeld = std::max(
-            maxSecsHeld, INPUTMAPPER->GetSecsHeld(gi, m_pPlayerState->m_mp));
+      if (INPUTMAPPER != nullptr) {
+        for (const GameInput& gi : inputs) {
+          maxSecsHeld = std::max(
+              maxSecsHeld, INPUTMAPPER->GetSecsHeld(gi, m_pPlayerState->m_mp));
+        }
+      } else {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-2024: Held miss input check skipped without "
+            "INPUTMAPPER.");
       }
       tn.result.bHeld = maxSecsHeld >= secsSinceNote;
     }
@@ -1407,11 +1629,18 @@ void Player::Update(float fDeltaTime) {
     /* We want to send the crossed row message exactly when we cross the
      * row--not .5 before the row. Use a very slow song (around 2 BPM) as a test
      * case: without rounding, autoplay steps early. -glenn */
-    const float fPositionSeconds = m_pPlayerState->m_Position.m_fMusicSeconds -
-                                   PREFSMAN->m_fPadStickSeconds;
+    const float fPositionSeconds =
+        SanitizePlayerFinite(
+            m_pPlayerState->m_Position.m_fMusicSeconds, 0.0f,
+            "Player::Update crossed row position") -
+        GetSafePadStickSeconds();
     const float fDisplayedSongBeat =
         m_pPlayerState->GetDisplayedTiming().GetBeatFromElapsedTime(
             fPositionSeconds);
+    if (!std::isfinite(fDisplayedSongBeat)) {
+      LOG->Warn("SRC_AUDIT_FIX SRC-2035: Crossed row beat is invalid.");
+      return;
+    }
     const int iRowNow = BeatToNoteRowNotRounded(fDisplayedSongBeat);
 
     if (iRowNow >= 0) {
@@ -1467,6 +1696,11 @@ void Player::UpdateHoldNotes(
   */
 
   int iStartRow = vTN[0].iRow;
+  if (iStartRow < 0 || iStartRow > MAX_NOTE_ROW) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-2040: Invalid hold start row %i.",
+              iStartRow);
+    return;
+  }
   int iMaxEndRow = INT_MIN;
   int iFirstTrackWithMaxEndRow = -1;
 
@@ -1537,7 +1771,9 @@ void Player::UpdateHoldNotes(
   }
 
   HoldNoteScore hns = vTN[0].pTN->HoldResult.hns;
-  float fLife = vTN[0].pTN->HoldResult.fLife;
+  float fLife = SanitizePlayerNonNegative(
+      vTN[0].pTN->HoldResult.fLife, 0.0f,
+      "Player::UpdateHoldNotes hold life");
 
   if (hns != HNS_None)  // if this HoldNote already has a result
   {
@@ -1615,17 +1851,22 @@ void Player::UpdateHoldNotes(
       if (m_pPlayerState->m_PlayerController != PC_HUMAN) {
         // TODO: Make the CPU miss sometimes.
         if (m_pPlayerState->m_PlayerController == PC_AUTOPLAY) {
-          STATSMAN->m_CurStageStats.m_bUsedAutoplay = true;
-          if (m_pPlayerStageStats != nullptr) {
-            m_pPlayerStageStats->m_bDisqualified = true;
-          }
+          MarkAutoplayUsedForPlayer(
+              m_pPlayerStageStats, "Player::UpdateHoldNotes");
         }
       } else {
         std::vector<GameInput> GameI;
         style->StyleInputToGameInput(iTrack, pn, GameI);
 
-        bIsHoldingButton &=
-            INPUTMAPPER->IsBeingPressed(GameI, m_pPlayerState->m_mp);
+        if (INPUTMAPPER != nullptr) {
+          bIsHoldingButton &=
+              INPUTMAPPER->IsBeingPressed(GameI, m_pPlayerState->m_mp);
+        } else {
+          LOG->Warn(
+              "SRC_AUDIT_FIX SRC-2027: Hold input check skipped without "
+              "INPUTMAPPER.");
+          bIsHoldingButton = false;
+        }
       }
     }
   }
@@ -1662,7 +1903,8 @@ void Player::UpdateHoldNotes(
           // LOG->Trace("bInitiatedNote && bIsHoldingButton; Increasing hold
           // life to MAX_HOLD_LIFE");
           //  Increase life
-          fLife = MAX_HOLD_LIFE;  // was 1 -aj
+          fLife = SanitizePlayerNonNegative(
+              MAX_HOLD_LIFE, 1.0f, "Player::UpdateHoldNotes max hold life");
         } else {
           /*
           LOG->Trace("Checklist:");
@@ -1818,7 +2060,9 @@ void Player::UpdateHoldNotes(
     if (bInitiatedNote) {
       if (!bLetGoOfHoldNote) {
         // LOG->Trace("initiated note and didn't let go");
-        fLife = 1;  // xxx: should be MAX_HOLD_LIFE instead? -aj
+        fLife = SanitizePlayerNonNegative(
+            MAX_HOLD_LIFE, 1.0f,
+            "Player::UpdateHoldNotes held max hold life");
         hns = HNS_Held;
         bool bBright = m_pPlayerStageStats &&
                        m_pPlayerStageStats->m_iCurCombo >
@@ -1847,6 +2091,11 @@ void Player::UpdateHoldNotes(
       (std::isfinite(maxHoldLife) && maxHoldLife > 0.0f)
           ? fLife / maxHoldLife
           : 0.0f;
+  if (!std::isfinite(fLifeFraction)) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-2028: Invalid hold life fraction %f.",
+              fLifeFraction);
+    fLifeFraction = 0.0f;
+  }
 
   for (const TrackRowTapNote& trtn : vTN) {
     TapNote& tn = *trtn.pTN;
@@ -1861,7 +2110,8 @@ void Player::UpdateHoldNotes(
     Preference<float>* pVolume =
         Preference<float>::GetPreferenceByName("SoundVolume");
     if (pVolume != nullptr) {
-      float fVol = pVolume->Get();
+      float fVol = SanitizePlayerNonNegative(
+          pVolume->Get(), 1.0f, "Player::UpdateHoldNotes sound volume");
 
       if (tn.iKeysoundIndex >= 0 &&
           tn.iKeysoundIndex < (int)m_vKeysounds.size()) {
@@ -1952,12 +2202,19 @@ void Player::DrawPrimitives() {
 
   const PlayerOptions& curr_options =
       m_pPlayerState->m_PlayerOptions.GetCurrent();
-  float tilt = curr_options.m_fPerspectiveTilt;
-  float skew = curr_options.m_fSkew;
-  float mini = curr_options.m_fEffects[PlayerOptions::EFFECT_MINI];
-  float center_y =
-      GetY() + (GRAY_ARROWS_Y_STANDARD + GRAY_ARROWS_Y_REVERSE) / 2;
-  bool reverse = curr_options.GetReversePercentForColumn(0) > .5;
+  float tilt = SanitizePlayerFinite(
+      curr_options.m_fPerspectiveTilt, 0.0f, "Player::DrawPrimitives tilt");
+  float skew = SanitizePlayerFinite(
+      curr_options.m_fSkew, 0.0f, "Player::DrawPrimitives skew");
+  float mini = SanitizePlayerPercent(
+      curr_options.m_fEffects[PlayerOptions::EFFECT_MINI], 0.0f,
+      "Player::DrawPrimitives mini");
+  float center_y = SanitizePlayerFinite(
+      GetY() + (GRAY_ARROWS_Y_STANDARD + GRAY_ARROWS_Y_REVERSE) / 2,
+      SCREEN_CENTER_Y, "Player::DrawPrimitives center_y");
+  bool reverse = SanitizePlayerPercent(
+                     curr_options.GetReversePercentForColumn(0), 0.0f,
+                     "Player::DrawPrimitives reverse") > .5;
 
   if (m_drawing_notefield_board) {
     // Ask the Notefield to draw its board primitive before everything else
@@ -2013,6 +2270,10 @@ void Player::DrawPrimitives() {
 }
 
 void Player::PushPlayerMatrix(float x, float skew, float center_y) {
+  if (DISPLAY == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-2029: PushPlayerMatrix skipped without DISPLAY.");
+    return;
+  }
   DISPLAY->CameraPushMatrix();
   DISPLAY->PushMatrix();
   DISPLAY->LoadMenuPerspective(
@@ -2021,6 +2282,10 @@ void Player::PushPlayerMatrix(float x, float skew, float center_y) {
 }
 
 void Player::PopPlayerMatrix() {
+  if (DISPLAY == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-2029: PopPlayerMatrix skipped without DISPLAY.");
+    return;
+  }
   DISPLAY->CameraPopMatrix();
   DISPLAY->PopMatrix();
 }
@@ -2095,6 +2360,20 @@ Player::PlayerNoteFieldPositioner::PlayerNoteFieldPositioner(
     Player* p, float x, float tilt, float skew, float mini, float center_y,
     bool reverse)
     : player(p) {
+  if (player == nullptr || player->m_pNoteField == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-2029: PlayerNoteFieldPositioner skipped invalid "
+        "player/notefield.");
+    player = nullptr;
+    original_y = 0.0f;
+    y_offset = 0.0f;
+    return;
+  }
+  tilt = SanitizePlayerFinite(tilt, 0.0f, "PlayerNoteFieldPositioner tilt");
+  skew = SanitizePlayerFinite(skew, 0.0f, "PlayerNoteFieldPositioner skew");
+  mini = SanitizePlayerPercent(mini, 0.0f, "PlayerNoteFieldPositioner mini");
+  center_y = SanitizePlayerFinite(
+      center_y, SCREEN_CENTER_Y, "PlayerNoteFieldPositioner center_y");
   player->PushPlayerMatrix(x, skew, center_y);
   float reverse_mult = (reverse ? -1 : 1);
   original_y = player->m_pNoteField->GetY();
@@ -2122,11 +2401,18 @@ Player::PlayerNoteFieldPositioner::PlayerNoteFieldPositioner(
 }
 
 Player::PlayerNoteFieldPositioner::~PlayerNoteFieldPositioner() {
+  if (player == nullptr || player->m_pNoteField == nullptr) {
+    return;
+  }
   player->m_pNoteField->SetY(original_y);
   player->PopPlayerMatrix();
 }
 
 void Player::DrawTapJudgments() {
+  if (m_pPlayerState == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-2030: DrawTapJudgments skipped without state.");
+    return;
+  }
   if (m_pPlayerState->m_PlayerOptions.GetCurrent().m_fBlind > 0) {
     return;
   }
@@ -2137,6 +2423,10 @@ void Player::DrawTapJudgments() {
 }
 
 void Player::DrawHoldJudgments() {
+  if (m_pPlayerState == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-2030: DrawHoldJudgments skipped without state.");
+    return;
+  }
   if (m_pPlayerState->m_PlayerOptions.GetCurrent().m_fBlind > 0) {
     return;
   }
@@ -2248,15 +2538,26 @@ void Player::ChangeLifeRecord() {
   if (m_pLifeMeter) {
     fLife = m_pLifeMeter->GetLife();
   } else if (m_pCombinedLifeMeter) {
+    if (GAMESTATE == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2031: Combined life record skipped without "
+          "GAMESTATE.");
+      return;
+    }
     fLife = GAMESTATE->m_fTugLifePercentP1;
     if (pn == PLAYER_2) {
       fLife = 1.0f - fLife;
     }
   }
   if (fLife != -1) {
+    if (!std::isfinite(fLife)) {
+      LOG->Warn("SRC_AUDIT_FIX SRC-2031: Ignoring invalid life record %f.",
+                fLife);
+      return;
+    }
     if (m_pPlayerStageStats) {
       m_pPlayerStageStats->SetLifeRecordAt(
-          fLife, STATSMAN->m_CurStageStats.m_fStepsSeconds);
+          fLife, GetSafeStageStepsSeconds("Player::ChangeLifeRecord"));
     }
   }
 }
@@ -2347,7 +2648,7 @@ int Player::GetClosestNote(
 }
 
 int Player::GetClosestNonEmptyRowDirectional(
-    int iStartRow, int iEndRow, bool /* bAllowGraded */, bool bForward) const {
+    int iStartRow, int iEndRow, bool bAllowGraded, bool bForward) const {
   if (m_Timing == nullptr) {
     LOG->Warn("SRC_AUDIT_FIX: Missing timing in closest row search.");
     return -1;
@@ -2362,7 +2663,8 @@ int Player::GetClosestNonEmptyRowDirectional(
         m_NoteData.GetTapNoteRangeAllTracks(iStartRow, iEndRow);
 
     while (!iter.IsAtEnd()) {
-      if (NoteDataWithScoring::IsRowCompletelyJudged(m_NoteData, iter.Row())) {
+      if (!bAllowGraded && NoteDataWithScoring::IsRowCompletelyJudged(
+                               m_NoteData, iter.Row())) {
         ++iter;
         continue;
       }
@@ -2377,7 +2679,8 @@ int Player::GetClosestNonEmptyRowDirectional(
         m_NoteData.GetTapNoteRangeAllTracksReverse(iStartRow, iEndRow);
 
     while (!iter.IsAtEnd()) {
-      if (NoteDataWithScoring::IsRowCompletelyJudged(m_NoteData, iter.Row())) {
+      if (!bAllowGraded && NoteDataWithScoring::IsRowCompletelyJudged(
+                               m_NoteData, iter.Row())) {
         ++iter;
         continue;
       }
@@ -2417,9 +2720,15 @@ int Player::GetClosestNonEmptyRow(
   }
 
   // Get the current time, previous time, and next time.
-  float fNoteTime = m_pPlayerState->m_Position.m_fMusicSeconds;
-  float fNextTime = m_Timing->GetElapsedTimeFromBeat(NoteRowToBeat(iNextRow));
-  float fPrevTime = m_Timing->GetElapsedTimeFromBeat(NoteRowToBeat(iPrevRow));
+  float fNoteTime = SanitizePlayerFinite(
+      m_pPlayerState->m_Position.m_fMusicSeconds, 0.0f,
+      "Player::GetClosestNonEmptyRow music seconds");
+  float fNextTime = SanitizePlayerFinite(
+      m_Timing->GetElapsedTimeFromBeat(NoteRowToBeat(iNextRow)), fNoteTime,
+      "Player::GetClosestNonEmptyRow next time");
+  float fPrevTime = SanitizePlayerFinite(
+      m_Timing->GetElapsedTimeFromBeat(NoteRowToBeat(iPrevRow)), fNoteTime,
+      "Player::GetClosestNonEmptyRow prev time");
 
   /* Figure out which row is closer. */
   if (std::abs(fNoteTime - fNextTime) > std::abs(fNoteTime - fPrevTime)) {
@@ -2430,6 +2739,9 @@ int Player::GetClosestNonEmptyRow(
 }
 
 bool Player::IsOniDead() const {
+  if (m_pPlayerState == nullptr) {
+    return false;
+  }
   // If we're playing on oni and we've died, do nothing.
   return m_pPlayerState->m_PlayerOptions.GetStage().m_LifeType ==
              LifeType_Battery &&
@@ -2438,7 +2750,7 @@ bool Player::IsOniDead() const {
 
 void Player::DoTapScoreNone() {
   Message msg("ScoreNone");
-  MESSAGEMAN->Broadcast(msg);
+  BroadcastPlayerMessage(msg, "Player::DoTapScoreNone");
 
   const unsigned int iOldCombo =
       m_pPlayerStageStats ? m_pPlayerStageStats->m_iCurCombo : 0;
@@ -2471,8 +2783,16 @@ void Player::DoTapScoreNone() {
   }
 
   if (PENALIZE_TAP_SCORE_NONE) {
+    if (m_pPlayerState == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2032: TapScoreNone penalty skipped without state.");
+      return;
+    }
     SetJudgment(
-        BeatToNoteRow(m_pPlayerState->m_Position.m_fSongBeat), -1, TAP_EMPTY,
+        BeatToNoteRow(SanitizePlayerFinite(
+            m_pPlayerState->m_Position.m_fSongBeat, 0.0f,
+            "Player::DoTapScoreNone song beat")),
+        -1, TAP_EMPTY,
         TNS_Miss, 0);
     // the ScoreKeeper will subtract points later.
   }
@@ -2480,7 +2800,14 @@ void Player::DoTapScoreNone() {
 
 void Player::ScoreAllActiveHoldsLetGo() {
   if (PENALIZE_TAP_SCORE_NONE) {
-    const float fSongBeat = m_pPlayerState->m_Position.m_fSongBeat;
+    if (m_pPlayerState == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2033: Active hold let-go skipped without state.");
+      return;
+    }
+    const float fSongBeat = SanitizePlayerFinite(
+        m_pPlayerState->m_Position.m_fSongBeat, 0.0f,
+        "Player::ScoreAllActiveHoldsLetGo song beat");
     const int iSongRow = BeatToNoteRow(fSongBeat);
 
     // Score all active holds to NotHeld
@@ -2523,10 +2850,19 @@ void Player::PlayKeysound(const TapNote& tn, TapNoteScore score) {
         }
       }
     }
+    if (!m_vKeysounds[tn.iKeysoundIndex].IsLoaded()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2047: Keysound index %i is not loaded.",
+          tn.iKeysoundIndex);
+      return;
+    }
     m_vKeysounds[tn.iKeysoundIndex].Play(false);
     Preference<float>* pVolume =
         Preference<float>::GetPreferenceByName("SoundVolume");
-    float fVol = pVolume != nullptr ? pVolume->Get() : 1.0f;
+    float fVol = pVolume != nullptr
+                     ? SanitizePlayerNonNegative(
+                           pVolume->Get(), 1.0f, "Player::PlayKeysound volume")
+                     : 1.0f;
     m_vKeysounds[tn.iKeysoundIndex].SetProperty("Volume", fVol);
   }
 }
@@ -2535,7 +2871,8 @@ void Player::Step(
     int col, int row, const RageTimer& tm, bool bHeld, bool bRelease) {
   const Style* style = GetSafePlayerStyle(m_pPlayerState);
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr || m_Timing == nullptr ||
-      style == nullptr || col < 0 || col >= m_NoteData.GetNumTracks()) {
+      GAMESTATE->GetCurrentGame() == nullptr || style == nullptr || col < 0 ||
+      col >= m_NoteData.GetNumTracks()) {
     LOG->Warn(
         "SRC_AUDIT_FIX: Ignoring invalid Player::Step col %i row %i.", col,
         row);
@@ -2551,13 +2888,20 @@ void Player::Step(
 
   // Do everything that depends on a RageTimer here;
   // set your breakpoints somewhere after this block.
-  const float fLastBeatUpdate =
-      m_pPlayerState->m_Position.m_LastBeatUpdate.Ago();
+  const float fLastBeatUpdate = SanitizePlayerNonNegative(
+      m_pPlayerState->m_Position.m_LastBeatUpdate.Ago(), 0.0f,
+      "Player::Step last beat update");
+  const float fTimeSinceStep =
+      SanitizePlayerNonNegative(tm.Ago(), 0.0f, "Player::Step timer age");
   const float fPositionSeconds =
-      m_pPlayerState->m_Position.m_fMusicSeconds - tm.Ago();
-  const float fTimeSinceStep = tm.Ago();
+      SanitizePlayerFinite(
+          m_pPlayerState->m_Position.m_fMusicSeconds, 0.0f,
+          "Player::Step music seconds") -
+      fTimeSinceStep;
 
-  float fSongBeat = m_pPlayerState->m_Position.m_fSongBeat;
+  float fSongBeat = SanitizePlayerFinite(
+      m_pPlayerState->m_Position.m_fSongBeat, 0.0f,
+      "Player::Step song beat");
   const float musicRate = SanitizePlayerMusicRate(
       GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate, "Player::Step");
 
@@ -2569,6 +2913,7 @@ void Player::Step(
       fSongBeat = m_Timing->GetBeatFromElapsedTime(fPositionSeconds);
     }
   }
+  fSongBeat = SanitizePlayerFinite(fSongBeat, 0.0f, "Player::Step beat");
 
   const int iSongRow = row == -1 ? BeatToNoteRow(fSongBeat) : row;
 
@@ -2653,51 +2998,55 @@ void Player::Step(
   // is held over a mine or being released.
   // TODO: Move calorie counting into a ScoreKeeper?
   if (m_pPlayerStageStats && m_pPlayerState && !bHeld && !bRelease) {
+    m_pPlayerStageStats->m_iNumControllerSteps++;
     // TODO: remove use of PlayerNumber
     PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
-    Profile* pProfile = PROFILEMAN->GetProfile(pn);
-    if (pProfile == nullptr) {
-      LOG->Warn("SRC_AUDIT_FIX: Missing profile while counting calories.");
-      return;
-    }
-
-    int iNumTracksHeld = 0;
-    for (int t = 0; t < m_NoteData.GetNumTracks(); t++) {
-      std::vector<GameInput> GameI;
-      style->StyleInputToGameInput(t, pn, GameI);
-      float secs_held = 0.0f;
-      for (size_t i = 0; i < GameI.size(); ++i) {
-        secs_held = std::max(secs_held, INPUTMAPPER->GetSecsHeld(GameI[i]));
-      }
-      if (secs_held > 0 && secs_held < m_fTimingWindowJump) {
-        iNumTracksHeld++;
-      }
-    }
-
-    float fCals = 0;
-    switch (iNumTracksHeld) {
-      case 0:
-        // autoplay is on, or this is a computer player
-        iNumTracksHeld = 1;
-        [[fallthrough]];
-      default: {
-        const int tracksForCalories = std::clamp(iNumTracksHeld, 1, 2);
-        float fCalsFor100Lbs =
-            SCALE(tracksForCalories, 1, 2, 0.023f, 0.077f);
-        float fCalsFor200Lbs =
-            SCALE(tracksForCalories, 1, 2, 0.041f, 0.133f);
-        const float weight = pProfile->GetCalculatedWeightPounds();
-        if (!std::isfinite(weight) || weight <= 0.0f) {
-          LOG->Warn("SRC_AUDIT_FIX: Invalid profile weight for calories.");
-          break;
+    Profile* pProfile = PROFILEMAN != nullptr ? PROFILEMAN->GetProfile(pn) : nullptr;
+    if (pProfile == nullptr || INPUTMAPPER == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2034: Calorie count skipped without profile/input.");
+    } else {
+      int iNumTracksHeld = 0;
+      const float timingWindowJump = SanitizePlayerNonNegative(
+          m_fTimingWindowJump, 0.25f, "Player::Step timing window jump");
+      for (int t = 0; t < m_NoteData.GetNumTracks(); t++) {
+        std::vector<GameInput> GameI;
+        style->StyleInputToGameInput(t, pn, GameI);
+        float secs_held = 0.0f;
+        for (size_t i = 0; i < GameI.size(); ++i) {
+          secs_held = std::max(secs_held, INPUTMAPPER->GetSecsHeld(GameI[i]));
         }
-        fCals = SCALE(
-            weight, 100.f, 200.f, fCalsFor100Lbs, fCalsFor200Lbs);
-      } break;
-    }
+        if (secs_held > 0 && secs_held < timingWindowJump) {
+          iNumTracksHeld++;
+        }
+      }
 
-    m_pPlayerStageStats->m_fCaloriesBurned += fCals;
-    m_pPlayerStageStats->m_iNumControllerSteps++;
+      float fCals = 0;
+      switch (iNumTracksHeld) {
+        case 0:
+          // autoplay is on, or this is a computer player
+          iNumTracksHeld = 1;
+          [[fallthrough]];
+        default: {
+          const int tracksForCalories = std::clamp(iNumTracksHeld, 1, 2);
+          float fCalsFor100Lbs =
+              SCALE(tracksForCalories, 1, 2, 0.023f, 0.077f);
+          float fCalsFor200Lbs =
+              SCALE(tracksForCalories, 1, 2, 0.041f, 0.133f);
+          const float weight = pProfile->GetCalculatedWeightPounds();
+          if (!std::isfinite(weight) || weight <= 0.0f) {
+            LOG->Warn("SRC_AUDIT_FIX: Invalid profile weight for calories.");
+            break;
+          }
+          fCals = SCALE(
+              weight, 100.f, 200.f, fCalsFor100Lbs, fCalsFor200Lbs);
+        } break;
+      }
+
+      if (std::isfinite(fCals) && fCals >= 0.0f) {
+        m_pPlayerStageStats->m_fCaloriesBurned += fCals;
+      }
+    }
   }
 
   // Check for step on a TapNote
@@ -2713,15 +3062,16 @@ void Player::Step(
    * Either option would fundamentally change the grading of two quick notes
    * "jack hammers." Hmm.
    */
+  const float currentMusicSeconds = SanitizePlayerFinite(
+      m_pPlayerState->m_Position.m_fMusicSeconds, 0.0f,
+      "Player::Step search music seconds");
   const int iStepSearchRows =
       std::max(
           BeatToNoteRow(m_Timing->GetBeatFromElapsedTime(
-              m_pPlayerState->m_Position.m_fMusicSeconds +
-              StepSearchDistance)) -
+              currentMusicSeconds + StepSearchDistance)) -
               iSongRow,
           iSongRow - BeatToNoteRow(m_Timing->GetBeatFromElapsedTime(
-                         m_pPlayerState->m_Position.m_fMusicSeconds -
-                         StepSearchDistance))) +
+                         currentMusicSeconds - StepSearchDistance))) +
       ROWS_PER_BEAT;
   int iRowOfOverlappingNoteOrRow = row;
   if (row == -1) {
@@ -2737,7 +3087,9 @@ void Player::Step(
     float fNoteOffset = 0.0f;
     // we need this later if we are autosyncing
     const float fStepBeat = NoteRowToBeat(iRowOfOverlappingNoteOrRow);
-    const float fStepSeconds = m_Timing->GetElapsedTimeFromBeat(fStepBeat);
+      const float fStepSeconds = SanitizePlayerFinite(
+          m_Timing->GetElapsedTimeFromBeat(fStepBeat), fPositionSeconds,
+          "Player::Step note seconds");
 
     if (row == -1) {
       // We actually stepped on the note this long ago:
@@ -2765,7 +3117,11 @@ void Player::Step(
                                         */
     }
 
-    const float fSecondsFromExact = std::abs(fNoteOffset);
+      const float fSecondsFromExact = std::abs(fNoteOffset);
+      if (!std::isfinite(fSecondsFromExact)) {
+        LOG->Warn("SRC_AUDIT_FIX SRC-2035: Ignoring non-finite note offset.");
+        return;
+      }
 
     TapNote tnDummy = TAP_ORIGINAL_TAP;
     TapNote* pTN = nullptr;
@@ -2994,14 +3350,14 @@ void Player::Step(
 
       // TODO: Remove use of PlayerNumber
       PlayerNumber pnToAttack = OPPOSITE_PLAYER[m_pPlayerState->m_PlayerNumber];
-      PlayerState* pPlayerStateToAttack = GAMESTATE->m_pPlayerState[pnToAttack];
       if (!IsValidPlayerNumberForPlayer(pnToAttack) ||
-          pPlayerStateToAttack == nullptr) {
+          GAMESTATE->m_pPlayerState[pnToAttack] == nullptr) {
         LOG->Warn(
             "SRC_AUDIT_FIX: Attack note has no valid target player %i.",
             pnToAttack);
         return;
       }
+      PlayerState* pPlayerStateToAttack = GAMESTATE->m_pPlayerState[pnToAttack];
       pPlayerStateToAttack->LaunchAttack(attack);
 
       // remove all TapAttacks on this row
@@ -3019,7 +3375,12 @@ void Player::Step(
     }
 
     // Do game-specific and mode-specific score mapping.
-    score = GAMESTATE->GetCurrentGame()->MapTapNoteScore(score);
+    const Game* currentGame = GAMESTATE->GetCurrentGame();
+    if (currentGame == nullptr) {
+      LOG->Warn("SRC_AUDIT_FIX SRC-2036: Step scoring skipped without game.");
+      return;
+    }
+    score = currentGame->MapTapNoteScore(score);
     if (score == TNS_W1 && !GAMESTATE->ShowW1()) {
       score = TNS_W2;
     }
@@ -3074,7 +3435,7 @@ void Player::Step(
           msg.SetParam("TapNoteScore", score);
           msg.SetParam("Column", col);
           msg.SetParam("TapNoteOffset", -fNoteOffset);
-          MESSAGEMAN->Broadcast(msg);
+          BroadcastPlayerMessage(msg, "Player::Step EarlyHit");
         }
       } else {
         // If earlyTns is not set (good hit):
@@ -3092,7 +3453,7 @@ void Player::Step(
     }
 
     m_LastTapNoteScore = score;
-    if (GAMESTATE->GetCurrentGame()->m_bCountNotesSeparately) {
+    if (currentGame->m_bCountNotesSeparately) {
       if (pTN->type != TapNoteType_Mine) {
         const bool bBlind =
             (m_pPlayerState->m_PlayerOptions.GetCurrent().m_fBlind != 0);
@@ -3159,10 +3520,10 @@ void Player::Step(
     msg.SetParam("PlayerNumber", m_pPlayerState->m_PlayerNumber);
     msg.SetParam("MultiPlayer", m_pPlayerState->m_mp);
     msg.SetParam("Column", col);
-    MESSAGEMAN->Broadcast(msg);
+    BroadcastPlayerMessage(msg, "Player::Step");
     // Backwards compatibility
     Message msg2(ssprintf("StepP%d", m_pPlayerState->m_PlayerNumber + 1));
-    MESSAGEMAN->Broadcast(msg2);
+    BroadcastPlayerMessage(msg2, "Player::Step legacy");
   }
 }
 
@@ -3179,11 +3540,20 @@ void Player::UpdateTapNotesMissedOlderThan(float fMissIfOlderThanSeconds) {
   // fMissIfOlderThanThisBeat );
   int iMissIfOlderThanThisRow;
   const float fEarliestTime =
-      m_pPlayerState->m_Position.m_fMusicSeconds - fMissIfOlderThanSeconds;
+      SanitizePlayerFinite(
+          m_pPlayerState->m_Position.m_fMusicSeconds, 0.0f,
+          "Player::UpdateTapNotesMissedOlderThan music seconds") -
+      fMissIfOlderThanSeconds;
   {
     TimingData::GetBeatArgs beat_info;
     beat_info.elapsed_time = fEarliestTime;
     m_Timing->GetBeatAndBPSFromElapsedTime(beat_info);
+    if (!std::isfinite(beat_info.beat)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2038: Miss horizon produced invalid beat %f.",
+          beat_info.beat);
+      return;
+    }
 
     iMissIfOlderThanThisRow = BeatToNoteRow(beat_info.beat);
     if (beat_info.freeze_out || beat_info.delay_out) {
@@ -3240,9 +3610,16 @@ void Player::UpdateJudgedRows() {
     return;
   }
   // Look ahead far enough to catch any rows judged early.
-  const int iEndRow = BeatToNoteRow(m_Timing->GetBeatFromElapsedTime(
-      m_pPlayerState->m_Position.m_fMusicSeconds +
-      GetMaxStepDistanceSeconds()));
+  const float endBeat = m_Timing->GetBeatFromElapsedTime(
+      SanitizePlayerFinite(
+          m_pPlayerState->m_Position.m_fMusicSeconds, 0.0f,
+          "Player::UpdateJudgedRows music seconds") +
+      GetMaxStepDistanceSeconds());
+  if (!std::isfinite(endBeat)) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-2038: Judged row horizon is invalid.");
+    return;
+  }
+  const int iEndRow = BeatToNoteRow(endBeat);
   bool bAllJudged = true;
   const bool bSeparately = GAMESTATE->GetCurrentGame()->m_bCountNotesSeparately;
 
@@ -3359,14 +3736,19 @@ void Player::UpdateJudgedRows() {
        * etc.) are still applied. */
       if (m_pPlayerState->m_PlayerOptions.GetCurrent()
               .m_bTransforms[PlayerOptions::TRANSFORM_ATTACKMINES]) {
-        const float fAttackRunTime = ATTACK_RUN_TIME_MINE;
+        const float fAttackRunTime = SanitizePlayerNonNegative(
+            ATTACK_RUN_TIME_MINE, 0.0f, "Player::UpdateJudgedRows mine attack");
+        if (fAttackRunTime <= 0.0f) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX SRC-2039: Mine attack skipped invalid runtime.");
+        } else {
+          Attack attMineAttack;
+          attMineAttack.sModifiers = ApplyRandomAttack();
+          attMineAttack.fStartSecond = ATTACK_STARTS_NOW;
+          attMineAttack.fSecsRemaining = fAttackRunTime;
 
-        Attack attMineAttack;
-        attMineAttack.sModifiers = ApplyRandomAttack();
-        attMineAttack.fStartSecond = ATTACK_STARTS_NOW;
-        attMineAttack.fSecsRemaining = fAttackRunTime;
-
-        m_pPlayerState->LaunchAttack(attMineAttack);
+          m_pPlayerState->LaunchAttack(attMineAttack);
+        }
       } else {
         ChangeLife(tn.result.tns);
       }
@@ -3395,8 +3777,10 @@ void Player::UpdateJudgedRows() {
 
     for (RageSound* sound : setSounds) {
       // Only play one copy of each mine sound at a time per player.
-      sound->Stop();
-      sound->Play(false);
+      if (sound != nullptr && sound->IsLoaded()) {
+        sound->Stop();
+        sound->Play(false);
+      }
     }
   }
 }
@@ -3438,6 +3822,7 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
     LOG->Warn("SRC_AUDIT_FIX: Invalid CrossedRows context.");
     return;
   }
+  iLastRowCrossed = std::clamp(iLastRowCrossed, 0, MAX_NOTE_ROW);
 
   NoteData::all_tracks_iterator& iter = *m_pIterUncrossedRows;
   int iLastSeenRow = -1;
@@ -3448,16 +3833,19 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
     int iTrack = iter.Track();
     switch (tn.type) {
       case TapNoteType_HoldHead: {
-        tn.HoldResult.fLife = INITIAL_HOLD_LIFE;
+        tn.HoldResult.fLife = SanitizePlayerNonNegative(
+            INITIAL_HOLD_LIFE, 1.0f, "Player::CrossedRows initial hold life");
         if (!REQUIRE_STEP_ON_HOLD_HEADS) {
+          if (INPUTMAPPER == nullptr) {
+            LOG->Warn(
+                "SRC_AUDIT_FIX SRC-2040: Hold head input skipped without "
+                "INPUTMAPPER.");
+            break;
+          }
           PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
           std::vector<GameInput> GameI;
           style->StyleInputToGameInput(iTrack, pn, GameI);
-          const float padStickSeconds =
-              PREFSMAN != nullptr &&
-                      std::isfinite(PREFSMAN->m_fPadStickSeconds.Get())
-                  ? std::max(0.0f, PREFSMAN->m_fPadStickSeconds.Get())
-                  : 0.0f;
+          const float padStickSeconds = GetSafePadStickSeconds();
           if (padStickSeconds > 0.f) {
             for (size_t i = 0; i < GameI.size(); ++i) {
               float fSecsHeld =
@@ -3475,16 +3863,17 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
         break;
       }
       case TapNoteType_Mine: {
+        if (INPUTMAPPER == nullptr) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX SRC-2040: Mine input skipped without INPUTMAPPER.");
+          break;
+        }
         // Hold the panel while crossing a mine will cause the mine to explode
         // TODO: Remove use of PlayerNumber.
         PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
         std::vector<GameInput> GameI;
         style->StyleInputToGameInput(iTrack, pn, GameI);
-        const float padStickSeconds =
-            PREFSMAN != nullptr &&
-                    std::isfinite(PREFSMAN->m_fPadStickSeconds.Get())
-                ? std::max(0.0f, PREFSMAN->m_fPadStickSeconds.Get())
-                : 0.0f;
+        const float padStickSeconds = GetSafePadStickSeconds();
         if (padStickSeconds > 0.0f) {
           for (size_t i = 0; i < GameI.size(); ++i) {
             float fSecsHeld =
@@ -3541,7 +3930,7 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
   if (m_bTickHolds && m_pPlayerState->m_PlayerController != PC_AUTOPLAY) {
     // Few rows typically cross per update. Easier to check all crossed rows
     // than to calculate from timing segments.
-    for (int r = m_iFirstUncrossedRow; r <= iLastRowCrossed; ++r) {
+    for (int r = std::max(0, m_iFirstUncrossedRow); r <= iLastRowCrossed; ++r) {
       int tickCurrent = m_Timing->GetTickcountAtRow(r);
       const int tickInterval =
           tickCurrent > 0 ? ROWS_PER_BEAT / tickCurrent : 0;
@@ -3561,7 +3950,7 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
         // start at r-1 so that we consider holds whose end rows are equal to
         // the checkpoint row
         NoteData::all_tracks_iterator nIter =
-            m_NoteData.GetTapNoteRangeAllTracks(r - 1, r, true);
+            m_NoteData.GetTapNoteRangeAllTracks(std::max(0, r - 1), r, true);
         for (; !nIter.IsAtEnd(); ++nIter) {
           TapNote& tn = *nIter;
           if (tn.type != TapNoteType_HoldHead) {
@@ -3665,27 +4054,27 @@ void Player::HandleTapRowScore(unsigned row) {
 
 #define CROSSED(x) (iOldCombo < x && iCurCombo >= x)
   if (CROSSED(100)) {
-    SCREENMAN->PostMessageToTopScreen(SM_100Combo, 0);
+    PostPlayerScreenMessage(SM_100Combo, 0, "Player::HandleTapRowScore");
   } else if (CROSSED(200)) {
-    SCREENMAN->PostMessageToTopScreen(SM_200Combo, 0);
+    PostPlayerScreenMessage(SM_200Combo, 0, "Player::HandleTapRowScore");
   } else if (CROSSED(300)) {
-    SCREENMAN->PostMessageToTopScreen(SM_300Combo, 0);
+    PostPlayerScreenMessage(SM_300Combo, 0, "Player::HandleTapRowScore");
   } else if (CROSSED(400)) {
-    SCREENMAN->PostMessageToTopScreen(SM_400Combo, 0);
+    PostPlayerScreenMessage(SM_400Combo, 0, "Player::HandleTapRowScore");
   } else if (CROSSED(500)) {
-    SCREENMAN->PostMessageToTopScreen(SM_500Combo, 0);
+    PostPlayerScreenMessage(SM_500Combo, 0, "Player::HandleTapRowScore");
   } else if (CROSSED(600)) {
-    SCREENMAN->PostMessageToTopScreen(SM_600Combo, 0);
+    PostPlayerScreenMessage(SM_600Combo, 0, "Player::HandleTapRowScore");
   } else if (CROSSED(700)) {
-    SCREENMAN->PostMessageToTopScreen(SM_700Combo, 0);
+    PostPlayerScreenMessage(SM_700Combo, 0, "Player::HandleTapRowScore");
   } else if (CROSSED(800)) {
-    SCREENMAN->PostMessageToTopScreen(SM_800Combo, 0);
+    PostPlayerScreenMessage(SM_800Combo, 0, "Player::HandleTapRowScore");
   } else if (CROSSED(900)) {
-    SCREENMAN->PostMessageToTopScreen(SM_900Combo, 0);
+    PostPlayerScreenMessage(SM_900Combo, 0, "Player::HandleTapRowScore");
   } else if (CROSSED(1000)) {
-    SCREENMAN->PostMessageToTopScreen(SM_1000Combo, 0);
+    PostPlayerScreenMessage(SM_1000Combo, 0, "Player::HandleTapRowScore");
   } else if ((iOldCombo / 100) < (iCurCombo / 100) && iCurCombo > 1000) {
-    SCREENMAN->PostMessageToTopScreen(SM_ComboContinuing, 0);
+    PostPlayerScreenMessage(SM_ComboContinuing, 0, "Player::HandleTapRowScore");
   }
 #undef CROSSED
 
@@ -3702,7 +4091,7 @@ void Player::HandleTapRowScore(unsigned row) {
    * can't use GAMESTATE->m_fMusicSeconds. Use fStepsSeconds instead. */
   if (m_pPlayerStageStats) {
     m_pPlayerStageStats->UpdateComboList(
-        STATSMAN->m_CurStageStats.m_fStepsSeconds, false);
+        GetSafeStageStepsSeconds("Player::HandleTapRowScore"), false);
   }
 
   if (m_pScoreDisplay) {
@@ -3731,6 +4120,12 @@ void Player::HandleHoldCheckpoint(
   if (m_pPlayerState == nullptr || m_Timing == nullptr ||
       viColsWithHold.empty()) {
     LOG->Warn("SRC_AUDIT_FIX: Invalid HandleHoldCheckpoint context.");
+    return;
+  }
+  if (iNumHoldsHeldThisRow < 0 || iNumHoldsMissedThisRow < 0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-2041: Invalid checkpoint counts held=%i missed=%i.",
+        iNumHoldsHeldThisRow, iNumHoldsMissedThisRow);
     return;
   }
   bool bNoCheating = true;
@@ -3782,7 +4177,7 @@ void Player::HandleHoldCheckpoint(
     SetCombo(
         m_pPlayerStageStats->m_iCurCombo, m_pPlayerStageStats->m_iCurMissCombo);
     m_pPlayerStageStats->UpdateComboList(
-        STATSMAN->m_CurStageStats.m_fStepsSeconds, false);
+        GetSafeStageStepsSeconds("Player::HandleHoldCheckpoint"), false);
   }
 
   ChangeLife(
@@ -3861,7 +4256,10 @@ float Player::GetMaxStepDistanceSeconds() {
                 "Player::GetMaxStepDistanceSeconds")
           : 1.0f;
   float f = rate * fMax;
-  return f + m_fMaxInputLatencySeconds;
+  const float latency = SanitizePlayerNonNegative(
+      m_fMaxInputLatencySeconds, 0.0f,
+      "Player::GetMaxStepDistanceSeconds latency");
+  return f + latency;
 }
 
 void Player::FadeToFail() {
@@ -3890,7 +4288,7 @@ void Player::SetMineJudgment(TapNoteScore tns, int iTrack) {
     msg.SetParam("Player", m_pPlayerState->m_PlayerNumber);
     msg.SetParam("TapNoteScore", tns);
     msg.SetParam("FirstTrack", iTrack);
-    MESSAGEMAN->Broadcast(msg);
+    BroadcastPlayerMessage(msg, "Player::SetMineJudgment");
     if (m_pPlayerStageStats &&
         ((tns == TNS_AvoidMine && AVOID_MINE_INCREMENTS_COMBO) ||
          (tns == TNS_HitMine && MINE_HIT_INCREMENTS_MISS_COMBO))) {
@@ -3904,13 +4302,15 @@ void Player::SetMineJudgment(TapNoteScore tns, int iTrack) {
 void Player::SetJudgment(
     int iRow, int iTrack, const TapNote& tn, TapNoteScore tns,
     float fTapNoteOffset) {
-  if (m_pPlayerState == nullptr || LUA == nullptr ||
-      !IsValidTapNoteScoreForPlayer(tns) || iRow < 0 || iRow > MAX_NOTE_ROW) {
+  if (m_pPlayerState == nullptr || !IsValidTapNoteScoreForPlayer(tns) ||
+      iRow < 0 || iRow > MAX_NOTE_ROW) {
     LOG->Warn(
         "SRC_AUDIT_FIX: Invalid SetJudgment row %i track %i score %i.", iRow,
         iTrack, tns);
     return;
   }
+  fTapNoteOffset = SanitizePlayerFinite(
+      fTapNoteOffset, 0.0f, "Player::SetJudgment tap offset");
   ++m_iPerfTapJudgmentsSinceLastSnapshot;
   if (m_bSendJudgmentAndComboMessages) {
     Message msg("Judgment");
@@ -3919,7 +4319,7 @@ void Player::SetJudgment(
     msg.SetParam("FirstTrack", iTrack);
     msg.SetParam("TapNoteScore", tns);
     msg.SetParam("Early", fTapNoteOffset < 0.0f);
-    msg.SetParam("TapNoteOffset", tn.result.fTapNoteOffset);
+    msg.SetParam("TapNoteOffset", fTapNoteOffset);
     msg.SetParam("EarlyTapNoteScore", tn.result.earlyTns);
     msg.SetParam("EarlyTapNoteOffset", tn.result.fEarlyTapNoteOffset);
 
@@ -3927,40 +4327,45 @@ void Player::SetJudgment(
       msg.SetParam("HeldMiss", tn.result.bHeld);
     }
 
-    Lua* L = LUA->Get();
-    lua_createtable(L, 0, m_NoteData.GetNumTracks());  // TapNotes this row
-    lua_createtable(
-        L, 0,
-        m_NoteData.GetNumTracks());  // HoldHeads of tracks held at this row.
+    if (LUA != nullptr) {
+      Lua* L = LUA->Get();
+      lua_createtable(L, 0, m_NoteData.GetNumTracks());  // TapNotes this row
+      lua_createtable(
+          L, 0,
+          m_NoteData.GetNumTracks());  // HoldHeads of tracks held at this row.
 
-    for (int iTrackTmp = 0; iTrackTmp < m_NoteData.GetNumTracks();
-         ++iTrackTmp) {
-      NoteData::iterator tnTmp = m_NoteData.FindTapNote(iTrackTmp, iRow);
-      if (tnTmp != m_NoteData.end(iTrackTmp)) {
-        tnTmp->second.PushSelf(L);
-        lua_rawseti(L, -3, iTrackTmp + 1);
-      } else {
-        int iHeadRow;
-        if (m_NoteData.IsHoldNoteAtRow(iTrackTmp, iRow, &iHeadRow)) {
-          NoteData::iterator hold = m_NoteData.FindTapNote(iTrackTmp, iHeadRow);
-          if (hold != m_NoteData.end(iTrackTmp)) {
-            hold->second.PushSelf(L);
-            lua_rawseti(L, -2, iTrackTmp + 1);
+      for (int iTrackTmp = 0; iTrackTmp < m_NoteData.GetNumTracks();
+           ++iTrackTmp) {
+        NoteData::iterator tnTmp = m_NoteData.FindTapNote(iTrackTmp, iRow);
+        if (tnTmp != m_NoteData.end(iTrackTmp)) {
+          tnTmp->second.PushSelf(L);
+          lua_rawseti(L, -3, iTrackTmp + 1);
+        } else {
+          int iHeadRow;
+          if (m_NoteData.IsHoldNoteAtRow(iTrackTmp, iRow, &iHeadRow)) {
+            NoteData::iterator hold = m_NoteData.FindTapNote(iTrackTmp, iHeadRow);
+            if (hold != m_NoteData.end(iTrackTmp)) {
+              hold->second.PushSelf(L);
+              lua_rawseti(L, -2, iTrackTmp + 1);
+            }
           }
         }
       }
-    }
-    msg.SetParamFromStack(L, "Holds");
-    msg.SetParamFromStack(L, "Notes");
+      msg.SetParamFromStack(L, "Holds");
+      msg.SetParamFromStack(L, "Notes");
 
-    LUA->Release(L);
-    MESSAGEMAN->Broadcast(msg);
+      LUA->Release(L);
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2043: Judgment Lua payload skipped without Lua.");
+    }
+    BroadcastPlayerMessage(msg, "Player::SetJudgment");
   }
 }
 
 void Player::SetHoldJudgment(TapNote& tn, int iTrack) {
   if (m_pPlayerState == nullptr || iTrack < 0 ||
-      iTrack >= (int)m_vpHoldJudgment.size() || LUA == nullptr ||
+      iTrack >= (int)m_vpHoldJudgment.size() ||
       !IsValidTapNoteScoreForPlayer(tn.result.tns) ||
       !IsValidHoldNoteScoreForPlayer(tn.HoldResult.hns)) {
     LOG->Warn(
@@ -3983,12 +4388,18 @@ void Player::SetHoldJudgment(TapNote& tn, int iTrack) {
     msg.SetParam("HoldNoteScore", tn.HoldResult.hns);
     msg.SetParam("EarlyTapNoteScore", tn.result.earlyTns);
 
-    Lua* L = LUA->Get();
-    tn.PushSelf(L);
-    msg.SetParamFromStack(L, "TapNote");
-    LUA->Release(L);
+    if (LUA != nullptr) {
+      Lua* L = LUA->Get();
+      tn.PushSelf(L);
+      msg.SetParamFromStack(L, "TapNote");
+      LUA->Release(L);
+    } else {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2043: Hold judgment Lua payload skipped without "
+          "Lua.");
+    }
 
-    MESSAGEMAN->Broadcast(msg);
+    BroadcastPlayerMessage(msg, "Player::SetHoldJudgment");
   }
 }
 
@@ -4054,6 +4465,8 @@ void Player::SetCombo(unsigned int iCombo, unsigned int iMisses) {
    *	TODO: Add a metric that determines Course combo colors logic?
    *	Or possibly move the logic to a Lua function? -aj */
   bool bPastBeginning = false;
+  const float percentUntilColor = SanitizePlayerPercent(
+      PERCENT_UNTIL_COLOR_COMBO, 0.0f, "Player::SetCombo color percent");
   if (GAMESTATE->IsCourseMode()) {
     if (GAMESTATE->m_pCurCourse == nullptr) {
       LOG->Warn("SRC_AUDIT_FIX: Missing course while setting combo.");
@@ -4062,16 +4475,20 @@ void Player::SetCombo(unsigned int iCombo, unsigned int iMisses) {
     int iSongIndexStartColoring =
         GAMESTATE->m_pCurCourse->GetEstimatedNumStages();
     iSongIndexStartColoring = static_cast<int>(
-        std::floor(iSongIndexStartColoring * PERCENT_UNTIL_COLOR_COMBO));
+        std::floor(iSongIndexStartColoring * percentUntilColor));
     bPastBeginning = GAMESTATE->GetCourseSongIndex() >= iSongIndexStartColoring;
   } else {
     if (GAMESTATE->m_pCurSong == nullptr) {
       LOG->Warn("SRC_AUDIT_FIX: Missing song while setting combo.");
       return;
     }
-    bPastBeginning = m_pPlayerState->m_Position.m_fMusicSeconds >
-                     GAMESTATE->m_pCurSong->m_fMusicLengthSeconds *
-                         PERCENT_UNTIL_COLOR_COMBO;
+    const float musicSeconds = SanitizePlayerNonNegative(
+        m_pPlayerState->m_Position.m_fMusicSeconds, 0.0f,
+        "Player::SetCombo music seconds");
+    const float musicLength = SanitizePlayerNonNegative(
+        GAMESTATE->m_pCurSong->m_fMusicLengthSeconds, 0.0f,
+        "Player::SetCombo music length");
+    bPastBeginning = musicSeconds > musicLength * percentUntilColor;
   }
 
   if (m_bSendJudgmentAndComboMessages) {
@@ -4120,6 +4537,10 @@ void Player::IncrementComboOrMissCombo(bool bComboOrMissCombo) {
 }
 
 std::string Player::ApplyRandomAttack() {
+  if (GAMESTATE == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-2046: Random attack skipped without GAMESTATE.");
+    return "";
+  }
   if (GAMESTATE->m_RandomAttacks.size() < 1) {
     return "";
   }
