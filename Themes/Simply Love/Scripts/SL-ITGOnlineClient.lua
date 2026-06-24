@@ -5182,6 +5182,36 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 				scheduleTerminalRetry("mark_terminal_failed_after_score", terminalDecoded, terminalResponse)
 			end
 
+			local scoreRoomPhase = self:NormalizeRoomPhase(
+				scoreDecoded and (scoreDecoded.room_phase or scoreDecoded.room and scoreDecoded.room.phase)
+					or self.currentRoom and self.currentRoom.phase
+					or phase
+			)
+			if scoreRoomPhase == "results" or self.lastFinalScoreKey == roundKey or self:CurrentUserHasFinalResult(self.currentRoom) then
+				if self.onlineGameplayEvaluationMarkInFlightKey == roundKey then
+					self.onlineGameplayEvaluationMarkInFlightKey = ""
+				end
+				self.onlineGameplayEvaluationMarkKey = roundKey
+				self.onlineGameplayEndedKey = roundKey
+				self.onlineGameplayEvaluationTerminalErrorKey = ""
+				self.onlineGameplayEvaluationRetryCount = 0
+				self.onlineGameplayEvaluationNextRetryAt = 0
+				if failed then
+					self:ApplyLocalPlayState("failed", "mark_terminal_final_score_accepted_results_phase")
+				else
+					self:ApplyLocalPlayState("finished", "mark_terminal_final_score_accepted_results_phase")
+				end
+				online_flow_trace("mark_terminal_skipped_after_score"
+					.. " reason=results_or_final_score_accepted"
+					.. " room=" .. tostring(self.currentRoomId or "nil")
+					.. " roundKey=" .. tostring(roundKey)
+					.. " scoreRoomPhase=" .. tostring(scoreRoomPhase)
+					.. " lastFinalScoreKey=" .. tostring(self.lastFinalScoreKey or "")
+					.. " hasFinalResult=" .. tostring(self:CurrentUserHasFinalResult(self.currentRoom) == true))
+				if self.FetchPlayState then self:FetchPlayState() end
+				return
+			end
+
 			if failed and self.MarkPlayFailed then
 				self:MarkPlayFailed(terminalCallback)
 			elseif self.MarkPlayFinished then
@@ -5273,6 +5303,20 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 		end)
 
 		return true
+	end
+
+	if phase == "results" and tostring(self.lastFinalScoreKey or "") == tostring(roundKey or "") then
+		self.onlineGameplayEvaluationHoldStartedKey = roundKey
+		self.onlineGameplayEvaluationMinimumHoldUntil = 0
+		self.onlineGameplayAllTerminalHoldKey = roundKey
+		self.onlineGameplayAllTerminalHoldUntil = 0
+		online_flow_trace_throttled("hold_gameplay_release_local_final_accepted", 1.0,
+			"hold_gameplay_release reason=local_final_score_accepted"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " roundKey=" .. tostring(roundKey or "")
+			.. " phase=" .. tostring(phase)
+			.. " hasFinalResult=" .. tostring(self:CurrentUserHasFinalResult(self.currentRoom) == true))
+		return false
 	end
 
 	self:MarkGameplayCompleteForEvaluation("engine_hold")
@@ -10003,6 +10047,28 @@ function ITGOnline:MarkPlayTerminal(endpoint, state, callback)
 			.. " room=" .. tostring(self.currentRoomId)
 			.. " roundKey=" .. tostring(key))
 		if callback then callback(false, nil, { retryAfter = 0.5, inFlight = true }) end
+		return
+	end
+
+	local currentPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+	if validKey
+		and currentPhase == "results"
+		and (
+			tostring(self.lastFinalScoreKey or "") == tostring(key or "")
+			or self:CurrentUserHasFinalResult(self.currentRoom)
+		)
+	then
+		self.onlineGameplayTerminalKey = terminalKey
+		self.onlineGameplayTerminalState = state
+		self:ApplyLocalPlayState(state, "terminal_skipped_results_final_score_accepted")
+		online_flow_trace("mark_play_terminal_skipped state=" .. tostring(state)
+			.. " reason=results_final_score_accepted"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " roundKey=" .. tostring(key)
+			.. " phase=" .. tostring(currentPhase)
+			.. " lastFinalScoreKey=" .. tostring(self.lastFinalScoreKey or "")
+			.. " hasFinalResult=" .. tostring(self:CurrentUserHasFinalResult(self.currentRoom) == true))
+		if callback then callback(true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil) end
 		return
 	end
 
