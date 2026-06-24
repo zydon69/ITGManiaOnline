@@ -57,10 +57,19 @@ local lobby_ui_update_pending = false
 local lobby_ui_update_reason = ""
 local request_lobby_refresh = nil
 local request_lobby_ui_repaint = nil
-local last_online_lobby_state_signature = ""
-local last_online_lobby_state_signature_at = 0
-local last_pack_sync_local_status_signature = ""
-local last_pack_sync_local_status_at = 0
+local lobby_trace_state = {
+	lastOnlineLobbyStateSignature = "",
+	lastOnlineLobbyStateSignatureAt = 0,
+	lastPackSyncLocalStatusSignature = "",
+	lastPackSyncLocalStatusAt = 0,
+	lastStartVisibilityDebugKey = "",
+	lastSelectSongVisibilityDebugKey = "",
+	lastAutoStartFocusKey = "",
+	lastAutoStartRequestKey = "",
+	lastOnlineMissingSongSignature = "",
+	lastOnlineMissingSongSignatureAt = 0,
+	onlineMissingSongDuplicateWindow = 3.0,
+}
 local online_warning_countdown_last_second = {}
 
 local mode = "browse"
@@ -472,17 +481,10 @@ end
 
 local joined_any_player_missing_song
 local joined_all_players_ready
-local last_start_visibility_debug_key = ""
-local last_select_song_visibility_debug_key = ""
-local last_auto_start_focus_key = ""
-local last_auto_start_request_key = ""
 local network_status_clear_at = 0
 local pack_sync_busy
 local clear_pending_join
 local clear_pending_create
-local last_online_missing_song_signature = ""
-local last_online_missing_song_signature_at = 0
-local online_missing_song_duplicate_window = 3.0
 
 local function network_status_has_active_transient()
 	return network_status_clear_at > 0 and GetTimeSinceStart() + 0.05 < network_status_clear_at
@@ -494,20 +496,22 @@ local function hide_network_status_if_idle(actor)
 	if status then status:visible(false) end
 end
 
-local browse_lobby_x = -205
-local browse_players_x = 35
-local browse_button_x = 245
-local browse_panel_y = -20
-local browse_panel_width = 230
-local browse_panel_height = 340
-local browse_button_width = 145
-local browse_button_height = 34
-local browse_button_spacing = 12
+local lobby_layout = {
+	browseLobbyX = -205,
+	browsePlayersX = 35,
+	browseButtonX = 245,
+	browsePanelY = -20,
+	browsePanelWidth = 230,
+	browsePanelHeight = 340,
+	browseButtonWidth = 145,
+	browseButtonHeight = 34,
+	browseButtonSpacing = 12,
+}
 
 local function browse_button_y(idx)
 	local first = 3
 	local offset = idx - first
-	return -62 + offset * (browse_button_height + browse_button_spacing)
+	return -62 + offset * (lobby_layout.browseButtonHeight + lobby_layout.browseButtonSpacing)
 end
 
 local function online_menu_button(button)
@@ -2125,7 +2129,7 @@ local function normalize_joined_active_index()
 	local previous = joined_active_index
 	joined_active_index = indices[1] or 1
 	joined_user_moved_focus = false
-	last_auto_start_focus_key = ""
+	lobby_trace_state.lastAutoStartFocusKey = ""
 	lobby_flow_trace("joined_active_index_normalized previous=" .. tostring(previous)
 		.. " next=" .. tostring(joined_active_index)
 		.. " indices=" .. table.concat(indices, ",")
@@ -2172,7 +2176,7 @@ local function set_joined_default_active_index(force)
 	local previous = joined_active_index
 	joined_active_index = indices[1] or 1
 	joined_user_moved_focus = false
-	last_auto_start_focus_key = ""
+	lobby_trace_state.lastAutoStartFocusKey = ""
 	lobby_flow_trace("joined_default_focus_set previous=" .. tostring(previous)
 		.. " next=" .. tostring(joined_active_index)
 		.. " force=" .. tostring(force == true)
@@ -4067,8 +4071,8 @@ local af = Def.ActorFrame{
 				visible and "1" or "0",
 				tostring(#joined_lobby_players),
 			}, "|")
-			if visibilityKey ~= last_select_song_visibility_debug_key then
-				last_select_song_visibility_debug_key = visibilityKey
+			if visibilityKey ~= lobby_trace_state.lastSelectSongVisibilityDebugKey then
+				lobby_trace_state.lastSelectSongVisibilityDebugKey = visibilityKey
 				lobby_flow_trace("select_music_button visible=" .. tostring(visible)
 					.. " allowSelection=" .. tostring(allowSelection)
 					.. " joinedPhase=" .. tostring(currentPhase)
@@ -4156,8 +4160,8 @@ local af = Def.ActorFrame{
 				visible and "1" or "0",
 				ready_summary(),
 			}, "|")
-			if debugKey ~= last_start_visibility_debug_key then
-				last_start_visibility_debug_key = debugKey
+			if debugKey ~= lobby_trace_state.lastStartVisibilityDebugKey then
+				lobby_trace_state.lastStartVisibilityDebugKey = debugKey
 				lobby_debug("start_button visible=" .. tostring(visible)
 					.. " phase=" .. tostring(joined_phase)
 					.. " isManager=" .. tostring(joined_is_manager)
@@ -4177,8 +4181,8 @@ local af = Def.ActorFrame{
 						hasMissingSong and "1" or "0",
 					}, "|")
 					local currentFocusStillAvailable = joined_active_index_is_available()
-					if focusKey ~= last_auto_start_focus_key then
-						last_auto_start_focus_key = focusKey
+					if focusKey ~= lobby_trace_state.lastAutoStartFocusKey then
+						lobby_trace_state.lastAutoStartFocusKey = focusKey
 					end
 					if not currentFocusStillAvailable then
 						joined_active_index = 1
@@ -4187,10 +4191,10 @@ local af = Def.ActorFrame{
 							.. " readyStates=[" .. ready_summary() .. "]")
 						self:queuecommand("Hover")
 					end
-					last_auto_start_request_key = ""
+					lobby_trace_state.lastAutoStartRequestKey = ""
 				else
-					last_auto_start_focus_key = ""
-					last_auto_start_request_key = ""
+					lobby_trace_state.lastAutoStartFocusKey = ""
+					lobby_trace_state.lastAutoStartRequestKey = ""
 				end
 			end
 			local function joined_actor_visible(actor)
@@ -4593,9 +4597,9 @@ local af = Def.ActorFrame{
 			if mode == "joined"
 				and tostring(joined_lobby_code or "") == tostring(params and params.code or "")
 				and incomingSignature ~= ""
-				and incomingSignature == last_online_lobby_state_signature
+				and incomingSignature == lobby_trace_state.lastOnlineLobbyStateSignature
 			then
-				last_online_lobby_state_signature_at = GetTimeSinceStart()
+				lobby_trace_state.lastOnlineLobbyStateSignatureAt = GetTimeSinceStart()
 				lobby_flow_trace("OnlineLobbyState_duplicate_no_repaint reason=same_signature_already_applied"
 					.. " code=" .. tostring(params and params.code or "")
 					.. " phase=" .. tostring(params and params.phase or "nil")
@@ -4634,10 +4638,10 @@ local af = Def.ActorFrame{
 			local previousSelectedPlayerKey = joined_player_stable_key(joined_lobby_players and joined_lobby_players[joined_player_index])
 			joined_lobby_code = params and params.code or ""
 			if joined_lobby_code ~= previousLobbyCode then
-				last_online_lobby_state_signature = ""
-				last_online_lobby_state_signature_at = 0
-				last_pack_sync_local_status_signature = ""
-				last_pack_sync_local_status_at = 0
+				lobby_trace_state.lastOnlineLobbyStateSignature = ""
+				lobby_trace_state.lastOnlineLobbyStateSignatureAt = 0
+				lobby_trace_state.lastPackSyncLocalStatusSignature = ""
+				lobby_trace_state.lastPackSyncLocalStatusAt = 0
 				joined_focus_initialized = false
 				joined_player_index = 1
 				joined_players_selected = false
@@ -4778,8 +4782,8 @@ local af = Def.ActorFrame{
 				.. " missingSong=" .. tostring(joined_missing_song == true)
 				.. " ready={" .. tostring(ready_summary()) .. "}")
 
-			last_online_lobby_state_signature = incomingSignature
-			last_online_lobby_state_signature_at = GetTimeSinceStart()
+			lobby_trace_state.lastOnlineLobbyStateSignature = incomingSignature
+			lobby_trace_state.lastOnlineLobbyStateSignatureAt = GetTimeSinceStart()
 			self:queuecommand("UpdateJoinedLobbyText")
 
 			if not pack_sync_busy() then
@@ -4836,15 +4840,15 @@ local af = Def.ActorFrame{
 				}, "|")
 				local now = GetTimeSinceStart and GetTimeSinceStart() or 0
 				if missingSignature ~= ""
-					and missingSignature == tostring(last_online_missing_song_signature or "")
-					and (now - (tonumber(last_online_missing_song_signature_at) or 0)) < online_missing_song_duplicate_window then
+					and missingSignature == tostring(lobby_trace_state.lastOnlineMissingSongSignature or "")
+					and (now - (tonumber(lobby_trace_state.lastOnlineMissingSongSignatureAt) or 0)) < lobby_trace_state.onlineMissingSongDuplicateWindow then
 					lobby_flow_trace("OnlineMissingSong_ignored reason=duplicate_signature"
 						.. " signature=" .. tostring(missingSignature)
-						.. " age=" .. string.format("%.3f", now - (tonumber(last_online_missing_song_signature_at) or 0)))
+						.. " age=" .. string.format("%.3f", now - (tonumber(lobby_trace_state.lastOnlineMissingSongSignatureAt) or 0)))
 					return
 				end
-				last_online_missing_song_signature = missingSignature
-				last_online_missing_song_signature_at = now
+				lobby_trace_state.lastOnlineMissingSongSignature = missingSignature
+				lobby_trace_state.lastOnlineMissingSongSignatureAt = now
 				lobby_flow_trace("OnlineMissingSong_received reason=" .. tostring(params and params.reason or "missing_local_song")
 					.. " hasSongInfo=" .. tostring(params and params.songInfo ~= nil)
 					.. " noCompatibleChart=" .. tostring(params and params.noCompatibleChart == true)
@@ -4945,8 +4949,8 @@ local af = Def.ActorFrame{
 			joined_missing_song_info = nil
 			joined_can_download_pack = false
 			joined_missing_song_reason = nil
-			last_online_missing_song_signature = ""
-			last_online_missing_song_signature_at = 0
+			lobby_trace_state.lastOnlineMissingSongSignature = ""
+			lobby_trace_state.lastOnlineMissingSongSignatureAt = 0
 			if wasMissing and canReportAvailability and ITGOnline and ITGOnline.ReportSongAvailability then
 				lobby_flow_trace("OnlineSongAvailable_report_availability missing=false reason=reloaded")
 				ITGOnline:ReportSongAvailability(false, "reloaded")
@@ -5171,9 +5175,9 @@ end,
 				end
 		local localStatusSignature = pack_sync_local_status_signature(params)
 		if localStatusSignature ~= ""
-			and localStatusSignature == last_pack_sync_local_status_signature
+			and localStatusSignature == lobby_trace_state.lastPackSyncLocalStatusSignature
 		then
-			last_pack_sync_local_status_at = GetTimeSinceStart()
+			lobby_trace_state.lastPackSyncLocalStatusAt = GetTimeSinceStart()
 			lobby_flow_trace("OnlinePackSyncLocalStatus_ignored reason=duplicate_signature status=" .. tostring(params and params.status or "")
 				.. " progress=" .. tostring(params and (params.download_progress or params.progress) or "")
 				.. " joined_code=" .. tostring(joined_lobby_code)
@@ -5196,8 +5200,8 @@ end,
 			.. " ui_mode=" .. tostring(mode)
 			.. " ui_joined_code=" .. tostring(joined_lobby_code))
 		apply_local_pack_sync_status_to_joined_player(params)
-		last_pack_sync_local_status_signature = localStatusSignature
-		last_pack_sync_local_status_at = GetTimeSinceStart()
+		lobby_trace_state.lastPackSyncLocalStatusSignature = localStatusSignature
+		lobby_trace_state.lastPackSyncLocalStatusAt = GetTimeSinceStart()
 		normalize_joined_active_index()
 		self:queuecommand("UpdateJoinedLobbyText")
 		self:queuecommand("Hover")
@@ -5260,8 +5264,8 @@ end,
 		reset_browse_focus()
 		candidates = {}
 		online_users = {}
-		last_online_lobby_state_signature = ""
-		last_online_lobby_state_signature_at = 0
+		lobby_trace_state.lastOnlineLobbyStateSignature = ""
+		lobby_trace_state.lastOnlineLobbyStateSignatureAt = 0
 		request_lobby_ui_repaint(self, "session_invalidated")
 		self:playcommand("SetStatus", {
 			text=message,
@@ -5322,7 +5326,7 @@ end,
 			Def.ActorFrame{
 				Name="LobbyList",
 			InitCommand=function(self)
-				self:x(browse_lobby_x)
+				self:x(lobby_layout.browseLobbyX)
 				self.idx = 0
 			end,
 			OnCommand=function(self)
@@ -5331,7 +5335,7 @@ end,
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(browse_panel_width,browse_panel_height):y(browse_panel_y):diffuse(Color.White)
+					self:zoomto(lobby_layout.browsePanelWidth,lobby_layout.browsePanelHeight):y(lobby_layout.browsePanelY):diffuse(Color.White)
 				end,
 				HoverCommand=function(self)
 					if list_selected and lobby_view == "lobbies" then
@@ -5351,20 +5355,20 @@ end,
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(browse_panel_width-2,browse_panel_height-2):y(browse_panel_y):diffuse(Color.Black)
+					self:zoomto(lobby_layout.browsePanelWidth-2,lobby_layout.browsePanelHeight-2):y(lobby_layout.browsePanelY):diffuse(Color.Black)
 				end
 			},
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(browse_panel_width-10, 1):y(-150):diffuse(Color.White)
+					self:zoomto(lobby_layout.browsePanelWidth-10, 1):y(-150):diffuse(Color.White)
 				end
 			},
 
 			LoadFont("Common Bold")..{
 					Text="Salons disponibles",
 				InitCommand=function(self)
-					self:horizalign(left):x(-(browse_panel_width/2)+8):y(-170):zoom(0.42)
+					self:horizalign(left):x(-(lobby_layout.browsePanelWidth/2)+8):y(-170):zoom(0.42)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(active_index == self:GetParent().idx and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
@@ -5375,7 +5379,7 @@ end,
 				Name="LobbyCount",
 				Text="0/0",
 				InitCommand=function(self)
-					self:horizalign(right):x((browse_panel_width/2)-8):y(-170):zoom(0.58)
+					self:horizalign(right):x((lobby_layout.browsePanelWidth/2)-8):y(-170):zoom(0.58)
 				end,
 				UpdateIndexCommand=function(self, params)
 					self:settext(params.idx .. "/" .. params.total)
@@ -5389,7 +5393,7 @@ end,
 			Name="EmptyStateText",
 				Text="Aucun salon trouve.",
 			InitCommand=function(self)
-				self:horizalign(center):xy(browse_lobby_x, -118):zoom(0.72):diffuse(Color.White):visible(false)
+				self:horizalign(center):xy(lobby_layout.browseLobbyX, -118):zoom(0.72):diffuse(Color.White):visible(false)
 			end
 		},
 
@@ -5449,13 +5453,13 @@ end,
 			InitCommand=function(self)
 				local idx = 3
 				self:y(browse_button_y(idx))
-				self:x(browse_button_x)
+				self:x(lobby_layout.browseButtonX)
 				self.idx = idx - 1
 			end,
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(browse_button_width, browse_button_height):diffuse(Color.White)
+					self:zoomto(lobby_layout.browseButtonWidth, lobby_layout.browseButtonHeight):diffuse(Color.White)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(active_index == self:GetParent().idx and Color.Yellow or Color.White)
@@ -5467,7 +5471,7 @@ end,
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(browse_button_width-2, browse_button_height-2):diffuse(Color.Black)
+					self:zoomto(lobby_layout.browseButtonWidth-2, lobby_layout.browseButtonHeight-2):diffuse(Color.Black)
 				end
 			},
 
@@ -5482,7 +5486,7 @@ end,
 			},
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(browse_button_width, browse_button_height):diffuse(color("#424242")):diffusealpha(0)
+					self:zoomto(lobby_layout.browseButtonWidth, lobby_layout.browseButtonHeight):diffuse(color("#424242")):diffusealpha(0)
 				end,
 				SelectedCommand=function(self)
 					if active_index ~= self:GetParent().idx then
@@ -5502,13 +5506,13 @@ end,
 			InitCommand=function(self)
 				local idx = 4
 				self:y(browse_button_y(idx))
-				self:x(browse_button_x)
+				self:x(lobby_layout.browseButtonX)
 				self.idx = idx - 1
 			end,
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(browse_button_width, browse_button_height):diffuse(Color.White)
+					self:zoomto(lobby_layout.browseButtonWidth, lobby_layout.browseButtonHeight):diffuse(Color.White)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(active_index == self:GetParent().idx and Color.Yellow or Color.White)
@@ -5520,7 +5524,7 @@ end,
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(browse_button_width-2, browse_button_height-2):diffuse(Color.Black)
+					self:zoomto(lobby_layout.browseButtonWidth-2, lobby_layout.browseButtonHeight-2):diffuse(Color.Black)
 				end
 			},
 
@@ -5535,7 +5539,7 @@ end,
 			},
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(browse_button_width, browse_button_height):diffuse(color("#424242")):diffusealpha(0)
+					self:zoomto(lobby_layout.browseButtonWidth, lobby_layout.browseButtonHeight):diffuse(color("#424242")):diffusealpha(0)
 				end,
 				SelectedCommand=function(self)
 					if active_index ~= self:GetParent().idx then
@@ -5555,13 +5559,13 @@ end,
 			InitCommand=function(self)
 				local idx = 5
 				self:y(browse_button_y(idx))
-				self:x(browse_button_x)
+				self:x(lobby_layout.browseButtonX)
 				self.idx = idx - 1
 			end,
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(browse_button_width, browse_button_height):diffuse(Color.White)
+					self:zoomto(lobby_layout.browseButtonWidth, lobby_layout.browseButtonHeight):diffuse(Color.White)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(active_index == self:GetParent().idx and Color.Yellow or Color.White)
@@ -5573,7 +5577,7 @@ end,
 
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(browse_button_width-2, browse_button_height-2):diffuse(Color.Black)
+					self:zoomto(lobby_layout.browseButtonWidth-2, lobby_layout.browseButtonHeight-2):diffuse(Color.Black)
 				end
 			},
 
@@ -5588,7 +5592,7 @@ end,
 			},
 			Def.Quad{
 				InitCommand=function(self)
-					self:zoomto(browse_button_width, browse_button_height):diffuse(color("#424242")):diffusealpha(0)
+					self:zoomto(lobby_layout.browseButtonWidth, lobby_layout.browseButtonHeight):diffuse(color("#424242")):diffusealpha(0)
 				end,
 				SelectedCommand=function(self)
 					if active_index ~= self:GetParent().idx then
@@ -5614,7 +5618,7 @@ end,
 			Def.Quad{
 				Name="OnlinePlayersBorder",
 			InitCommand=function(self)
-				self:zoomto(browse_panel_width,browse_panel_height):x(browse_players_x):y(browse_panel_y):diffuse(Color.White)
+				self:zoomto(lobby_layout.browsePanelWidth,lobby_layout.browsePanelHeight):x(lobby_layout.browsePlayersX):y(lobby_layout.browsePanelY):diffuse(Color.White)
 			end,
 			HoverCommand=function(self)
 				if list_selected and lobby_view == "players" then
@@ -5637,32 +5641,32 @@ end,
 		},
 		Def.Quad{
 			InitCommand=function(self)
-				self:zoomto(browse_panel_width-2,browse_panel_height-2):x(browse_players_x):y(browse_panel_y):diffuse(Color.Black)
+				self:zoomto(lobby_layout.browsePanelWidth-2,lobby_layout.browsePanelHeight-2):x(lobby_layout.browsePlayersX):y(lobby_layout.browsePanelY):diffuse(Color.Black)
 			end
 		},
 		Def.Quad{
 			InitCommand=function(self)
-				self:zoomto(browse_panel_width-10, 1):x(browse_players_x):y(-150):diffuse(Color.White)
+				self:zoomto(lobby_layout.browsePanelWidth-10, 1):x(lobby_layout.browsePlayersX):y(-150):diffuse(Color.White)
 			end
 		},
 		LoadFont("Common Bold")..{
 				Text="Joueurs en ligne",
 			InitCommand=function(self)
-				self:horizalign(left):x(browse_players_x-(browse_panel_width/2)+8):y(-170):zoom(0.42)
+				self:horizalign(left):x(lobby_layout.browsePlayersX-(lobby_layout.browsePanelWidth/2)+8):y(-170):zoom(0.42)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="OnlinePlayersCount",
 			Text="0",
 			InitCommand=function(self)
-				self:horizalign(right):x(browse_players_x+(browse_panel_width/2)-8):y(-170):zoom(0.58)
+				self:horizalign(right):x(lobby_layout.browsePlayersX+(lobby_layout.browsePanelWidth/2)-8):y(-170):zoom(0.58)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="OnlinePlayersList",
 				Text="Aucun joueur connecte trouve.",
 			InitCommand=function(self)
-				self:horizalign(left):vertalign(top):xy(browse_players_x-(browse_panel_width/2)+10, -132):zoom(0.48):maxwidth(420)
+				self:horizalign(left):vertalign(top):xy(lobby_layout.browsePlayersX-(lobby_layout.browsePanelWidth/2)+10, -132):zoom(0.48):maxwidth(420)
 			end
 		},
 		Def.ActorFrame{
