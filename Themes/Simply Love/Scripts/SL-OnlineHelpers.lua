@@ -30,7 +30,7 @@ local replayDeferredLobbyStateQueued = false
 local replayDeferredLobbyStateRunning = false
 local onlineHandlerShuttingDown = false
 local onlineOperationToken = 0
-local UnlockOnlineInput
+UnlockOnlineInput = nil
 local onlineInputCallbacks = {}
 -- These screens are the ones we want to display the player's scores for.
 local scoreScreens = {"ScreenGameplay", "ScreenGameplayShared", "ScreenEvaluationStage", "ScreenEvaluationNonstop", "ScreenEvaluationSummary"}
@@ -63,24 +63,21 @@ local knownDisconnectScreens = {
   ["ScreenOptionsService"] = true,
 }
 
-local DisplayLobbyState
+DisplayLobbyState = nil
 
-local function online_trace(message)
-	local globalTrace = _G and rawget(_G, "online_trace") or nil
-	if type(globalTrace) == "function" then
-		globalTrace(message)
-	elseif Trace then
+function online_trace(message)
+	if Trace then
 		Trace("ITG Online: " .. tostring(message or ""))
 	elseif Warn then
 		Warn("ITG Online: " .. tostring(message or ""))
 	end
 end
 
-local function is_evaluation_screen(screenName)
+function is_evaluation_screen(screenName)
 	return evaluationScreens[tostring(screenName or "")] == true
 end
 
-local function remove_online_input_callbacks()
+function remove_online_input_callbacks()
 	for key, callback in pairs(onlineInputCallbacks) do
 		if callback and callback.screen and callback.handler and callback.screen.RemoveInputCallback then
 			pcall(function() callback.screen:RemoveInputCallback(callback.handler) end)
@@ -89,7 +86,7 @@ local function remove_online_input_callbacks()
 	end
 end
 
-local function replace_online_input_callback(screen, key, handler)
+function replace_online_input_callback(screen, key, handler)
 	if not screen or not handler then return end
 	local callback = onlineInputCallbacks[key]
 	if callback and callback.screen and callback.handler and callback.screen.RemoveInputCallback then
@@ -99,14 +96,14 @@ local function replace_online_input_callback(screen, key, handler)
 	onlineInputCallbacks[key] = { screen = screen, handler = handler }
 end
 
-local function ready_debug_enabled()
+function ready_debug_enabled()
 	if ITGOnline and ITGOnline.debugReadyFlow ~= nil then
 		return ITGOnline.debugReadyFlow == true
 	end
 	return false
 end
 
-local function ready_debug(message)
+function ready_debug(message)
 	if not ready_debug_enabled() then return end
 	local line = "ITG Online ReadyFlow: " .. tostring(message or "")
 	if online_trace then
@@ -120,7 +117,7 @@ end
 
 -- Keep flow tracing safe in all contexts; never allow a missing logger
 -- to break lobby state processing.
-local function online_flow_trace(message)
+function online_flow_trace(message)
 	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
 		return
 	end
@@ -135,7 +132,7 @@ local function online_flow_trace(message)
 end
 
 local online_flow_trace_throttle_last_at = {}
-local function online_flow_trace_throttled(key, intervalSeconds, message)
+function online_flow_trace_throttled(key, intervalSeconds, message)
 	local throttleKey = tostring(key or "default")
 	local interval = tonumber(intervalSeconds) or 1.0
 	local now = GetTimeSinceStart()
@@ -147,7 +144,7 @@ local function online_flow_trace_throttled(key, intervalSeconds, message)
 	online_flow_trace(message)
 end
 
-local function report_online_error(context, err)
+function report_online_error(context, err)
 	local message = "ITG Online " .. tostring(context or "operation") .. " failed: " .. tostring(err or "unknown")
 	if lua and lua.ReportScriptError then
 		lua.ReportScriptError(message)
@@ -158,7 +155,7 @@ local function report_online_error(context, err)
 	end
 end
 
-local function safe_online_call(context, fn)
+function safe_online_call(context, fn)
 	if type(fn) ~= "function" then return false end
 	local ok, result = pcall(fn)
 	if not ok then
@@ -168,14 +165,14 @@ local function safe_online_call(context, fn)
 	return true, result
 end
 
-local function safe_broadcast(message, params)
+function safe_broadcast(message, params)
 	if not (MESSAGEMAN and MESSAGEMAN.Broadcast) then return false end
 	return safe_online_call("broadcast " .. tostring(message), function()
 		MESSAGEMAN:Broadcast(message, params)
 	end)
 end
 
-local function current_top_screen()
+function current_top_screen()
 	if not (SCREENMAN and SCREENMAN.GetTopScreen) then return nil end
 	local ok, screen = safe_online_call("get top screen", function()
 		return SCREENMAN:GetTopScreen()
@@ -183,7 +180,7 @@ local function current_top_screen()
 	return ok and screen or nil
 end
 
-local function screen_name(screen)
+function screen_name(screen)
 	if not (screen and screen.GetName) then return "NoScreen" end
 	local ok, name = safe_online_call("get screen name", function()
 		return screen:GetName()
@@ -191,11 +188,11 @@ local function screen_name(screen)
 	return ok and tostring(name or "NoScreen") or "NoScreen"
 end
 
-local function screen_can_transition(screen)
+function screen_can_transition(screen)
 	return screen and screen.SetNextScreenName and screen.StartTransitioningScreen
 end
 
-local function transition_screen(screen, nextScreen, message, context)
+function transition_screen(screen, nextScreen, message, context)
 	if not screen_can_transition(screen) then
 		online_flow_trace("transition_skipped reason=screen_cannot_transition context="
 			.. tostring(context or "unknown")
@@ -209,27 +206,27 @@ local function transition_screen(screen, nextScreen, message, context)
 	end)
 end
 
-local function room_id_from(value)
+function room_id_from(value)
 	if type(value) ~= "table" then return "" end
 	return tostring(value.roomId or value.room_id or value.id or "")
 end
 
-local function current_room_id()
+function current_room_id()
 	return tostring(ITGOnline and ITGOnline.currentRoomId or "")
 end
 
-local function normalize_room_phase(phase)
+function normalize_room_phase(phase)
 	if ITGOnline and ITGOnline.NormalizeRoomPhase then
 		return ITGOnline:NormalizeRoomPhase(phase)
 	end
 	return tostring(phase or ""):lower()
 end
 
-local function current_user_id()
+function current_user_id()
 	return tostring(ITGOnline and ITGOnline.user and ITGOnline.user.id or "")
 end
 
-local function user_is_member_of_room(room, userId)
+function user_is_member_of_room(room, userId)
 	userId = tostring(userId or "")
 	if userId == "" or type(room) ~= "table" then return false end
 	for member in ivalues(room.members or {}) do
@@ -242,7 +239,7 @@ local function user_is_member_of_room(room, userId)
 	return false
 end
 
-local function current_room_is_active(options)
+function current_room_is_active(options)
 	options = type(options) == "table" and options or {}
 	if not (ITGOnline and ITGOnline.currentRoomId and ITGOnline.currentRoom) then
 		return false, nil, "missing_room"
@@ -287,7 +284,7 @@ local function current_room_is_active(options)
 	return true, room, nil
 end
 
-local function room_context_token(kind)
+function room_context_token(kind)
 	onlineOperationToken = onlineOperationToken + 1
 	return {
 		kind = tostring(kind or "operation"),
@@ -296,7 +293,7 @@ local function room_context_token(kind)
 	}
 end
 
-local function room_context_still_active(token, options)
+function room_context_still_active(token, options)
 	if onlineHandlerShuttingDown then return false end
 	if token and token.roomId and token.roomId ~= "" and token.roomId ~= current_room_id() then
 		return false
@@ -304,7 +301,7 @@ local function room_context_still_active(token, options)
 	return current_room_is_active(options)
 end
 
-local function clear_pending_room_state()
+function clear_pending_room_state()
 	songSelected = false
 	lastSongPreviewSentAt = 0
 	lastSongPreviewKey = ""
@@ -313,7 +310,7 @@ local function clear_pending_room_state()
 	pendingOnlineSongSelectionToken = pendingOnlineSongSelectionToken + 1
 end
 
-local function begin_actor_operation(actor, key)
+function begin_actor_operation(actor, key)
 	if not actor then return nil end
 	onlineOperationToken = onlineOperationToken + 1
 	actor.onlineOperationTokens = actor.onlineOperationTokens or {}
@@ -321,7 +318,7 @@ local function begin_actor_operation(actor, key)
 	return onlineOperationToken
 end
 
-local function actor_operation_is_current(actor, key, token)
+function actor_operation_is_current(actor, key, token)
 	return not onlineHandlerShuttingDown
 		and actor ~= nil
 		and token ~= nil
@@ -329,7 +326,7 @@ local function actor_operation_is_current(actor, key, token)
 		and actor.onlineOperationTokens[key] == token
 end
 
-local function build_lobby_payload(room)
+function build_lobby_payload(room)
 	if not (ITGOnline and ITGOnline.LobbyStatePayload and type(room) == "table") then
 		return nil
 	end
@@ -339,7 +336,7 @@ local function build_lobby_payload(room)
 	return ok and payload or nil
 end
 
-local function maybe_set_lobby_ready(reason, callback)
+function maybe_set_lobby_ready(reason, callback)
 	if not (ITGOnline and ITGOnline.SetReady) then
 		online_flow_trace("lobby_ready_skipped reason=" .. tostring(reason or "unknown")
 			.. " cause=no_set_ready_api"
@@ -389,7 +386,7 @@ local function maybe_set_lobby_ready(reason, callback)
 	ITGOnline:SetReady("lobby_ready", true, callback)
 end
 
-local function maybe_preview_current_online_song(force)
+function maybe_preview_current_online_song(force)
 	if not (ITGOnline
 		and ITGOnline.PreviewSong
 		and ITGOnline.currentRoomId
@@ -473,7 +470,7 @@ local function maybe_preview_current_online_song(force)
 	end)
 end
 
-local function split_online_song_path(path)
+function split_online_song_path(path)
 	path = tostring(path or "")
 	local pack, song = path:match("^([^/]+)/(.+)$")
 	if pack then
@@ -482,7 +479,7 @@ local function split_online_song_path(path)
 	return path, nil
 end
 
-local OnlineStartCountdownText = function()
+OnlineStartCountdownText = function()
 	if not (ITGOnline and ITGOnline.SecondsUntilScheduledStart) then return nil end
 
 	local seconds = ITGOnline.VisibleSecondsUntilScheduledStart
@@ -497,19 +494,19 @@ local OnlineStartCountdownText = function()
 	return "Chanson demarree. Synchronisation audio..."
 end
 
-local OnlinePlayingSpinner = function()
+OnlinePlayingSpinner = function()
 	local frames = { "|", "/", "-", "\\" }
 	return frames[(math.floor(GetTimeSinceStart() * 6) % #frames) + 1]
 end
 
-local FormatRemainingSeconds = function(value)
+FormatRemainingSeconds = function(value)
 	local seconds = math.max(0, math.ceil(tonumber(value) or 0))
 	local minutes = math.floor(seconds / 60)
 	local remainder = seconds % 60
 	return string.format("%d:%02d", minutes, remainder)
 end
 
-local OnlineRemainingText = function(data)
+OnlineRemainingText = function(data)
 	if not data then return nil end
 
 	local remaining = nil
@@ -541,7 +538,7 @@ local OnlineRemainingText = function(data)
 	return "Joueurs encore en chanson : " .. FormatRemainingSeconds(remaining) .. " restantes"
 end
 
-local QueueOnlineGameplayStartRelease = function(actor)
+QueueOnlineGameplayStartRelease = function(actor)
 	if actor and actor.sleep and actor.queuecommand and not actor.onlineStartReleaseQueued then
 		actor.onlineStartReleaseQueued = true
 		actor:sleep(0.05):queuecommand("ReleaseOnlineGameplayAtStart")
@@ -550,7 +547,7 @@ end
 
 local lastGameplayPauseScreen = nil
 local lastGameplayPauseState = nil
-local SetGameplayPaused = function(screen, paused)
+SetGameplayPaused = function(screen, paused)
 	if not screen then return end
 
 	local screenName = screen.GetName and screen:GetName() or ""
@@ -580,7 +577,7 @@ local SetGameplayPaused = function(screen, paused)
 	end
 end
 
-local ReleaseOnlineGameplay = function(screen, secondsUntilStart)
+ReleaseOnlineGameplay = function(screen, secondsUntilStart)
 	local lateBy = secondsUntilStart and math.max(0, -secondsUntilStart) or 0
 	if online_trace then
 		online_trace("FLOW release_gameplay screen=" .. tostring(screen and screen:GetName() or "nil")
@@ -603,7 +600,7 @@ end
 -- It does nothing, but it's necessary to prevent the player from interacting with the screen
 -- until everyone is ready.
 -- Holding Start for 5 seconds will disconnect from the lobby.
-local InputHandler = function(event)
+InputHandler = function(event)
 	if not event then return false end
 	local topScreen = current_top_screen()
 	if topScreen and isWaiting and event.PlayerNumber then
@@ -666,7 +663,7 @@ local InputHandler = function(event)
 	return false
 end
 
-local OnlineOptionsInputHandler = function(event)
+OnlineOptionsInputHandler = function(event)
 	if not current_room_is_active({ requireMember = false }) then return false end
 	if not event or event.type ~= "InputEventType_FirstPress" then return false end
 
@@ -698,13 +695,13 @@ UnlockOnlineInput = function()
 	end
 end
 
-local OnlineGameplayScreen = function()
+OnlineGameplayScreen = function()
 	if not GAMESTATE then return "ScreenGameplay" end
 	local style = GAMESTATE:GetCurrentStyle() and GAMESTATE:GetCurrentStyle():GetName() or ""
 	return style == "routine" and "ScreenGameplayShared" or "ScreenGameplay"
 end
 
-local OnlineSongKey = function(data)
+OnlineSongKey = function(data)
 	if not data or not data.songInfo then return "" end
 	return tostring(data.roomId or data.code or "")
 		.. "|" .. tostring(data.songInfo.roundId or "")
@@ -713,7 +710,7 @@ local OnlineSongKey = function(data)
 		.. "|" .. tostring(data.songInfo.selectedAt or "")
 end
 
-local CurrentUserInLobbyState = function(data)
+CurrentUserInLobbyState = function(data)
 	if not (data and data.players and ITGOnline and ITGOnline.user) then return false end
 	if not current_room_is_active({ payload = data }) then return false end
 	local selfId = tostring(ITGOnline.user.id or "")
@@ -726,7 +723,7 @@ local CurrentUserInLobbyState = function(data)
 	return false
 end
 
-local ApplyOnlineSongSelection = function(songInfo)
+ApplyOnlineSongSelection = function(songInfo)
 	if not songInfo or not songInfo.songPath then return false end
 	if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ApplySelectedChart then
 		online_flow_trace("pack_sync_apply_selected_chart title=" .. tostring(songInfo.title or songInfo.name or "")
@@ -884,7 +881,7 @@ local ApplyOnlineSongSelection = function(songInfo)
 	return true
 end
 
-local TransitionToOnlineOptions = function()
+TransitionToOnlineOptions = function()
 	local topScreen = current_top_screen()
 	if not topScreen then return end
 
@@ -943,7 +940,7 @@ local TransitionToOnlineOptions = function()
 	transition_screen(topScreen, "ScreenPlayerOptions", "SM_GoToNextScreen", "online_options")
 end
 
-local OnlineDeferredReplayBlockedScreen = function(screenName)
+OnlineDeferredReplayBlockedScreen = function(screenName)
 	screenName = tostring(screenName or "")
 	return screenName == "ScreenReloadSongsOnline"
 		or screenName == "ScreenReloadSongs"
@@ -951,11 +948,11 @@ local OnlineDeferredReplayBlockedScreen = function(screenName)
 		or screenName:find("ReloadSongs", 1, true) ~= nil
 end
 
-local OnlinePayloadMatchesActiveRoom = function(payload)
+OnlinePayloadMatchesActiveRoom = function(payload)
 	return current_room_is_active({ payload = payload })
 end
 
-local CurrentOnlineSelectionKey = function()
+CurrentOnlineSelectionKey = function()
 	if not current_room_is_active() then return "" end
 	if not GAMESTATE then return "" end
 
@@ -982,7 +979,7 @@ local CurrentOnlineSelectionKey = function()
 	return tostring(ITGOnline.currentRoomId) .. "|" .. tostring(songKey) .. "|" .. tostring(stepsHash) .. "|" .. tostring(rate)
 end
 
-local SelectOnlineSongAsManager = function(actor)
+SelectOnlineSongAsManager = function(actor)
 	if not current_room_is_active({ phase = { "lobby", "lobby_ready", "config" } }) then
 		online_flow_trace("song_selected_ignored reason=no_room")
 		return
@@ -1136,7 +1133,7 @@ local SelectOnlineSongAsManager = function(actor)
 	finishSelection(ITGOnline.currentRoom)
 end
 
-local TransitionToOnlineGameplay = function()
+TransitionToOnlineGameplay = function()
 	if not current_room_is_active({ phase = "starting" }) then
 		online_flow_trace("transition_to_gameplay_skipped reason=inactive_room")
 		return
@@ -1170,7 +1167,7 @@ local TransitionToOnlineGameplay = function()
 	transition_screen(topScreen, OnlineGameplayScreen(), "SM_GoToNextScreen", "online_gameplay")
 end
 
-local ReturnToOnlineLobbyFromMusicSelect = function()
+ReturnToOnlineLobbyFromMusicSelect = function()
 	local topScreen = current_top_screen()
 	if not topScreen or topScreen:GetName() ~= "ScreenSelectMusic" then return false end
 	if not current_room_is_active({ requireMember = false, requireUser = false }) then return false end
@@ -1201,7 +1198,7 @@ local ReturnToOnlineLobbyFromMusicSelect = function()
 	return true
 end
 
-local PollOnlineStart = function(actor, roomId)
+PollOnlineStart = function(actor, roomId)
 	if not actor or not roomId or not (ITGOnline and ITGOnline.FetchRoom) then return end
 	if tostring(roomId) ~= current_room_id() then
 		online_flow_trace("poll_online_start_skipped reason=stale_room"
@@ -1226,7 +1223,7 @@ local PollOnlineStart = function(actor, roomId)
 	timer:sleep(1):queuecommand("Poll")
 end
 
-local SelectMusicInputHandler = function(event)
+SelectMusicInputHandler = function(event)
 	if not event or event.type ~= "InputEventType_FirstPress" then return false end
 
 	local deviceButton = ""
@@ -1246,7 +1243,7 @@ local SelectMusicInputHandler = function(event)
 	return false
 end
 
-local ReturnToOnlineLobbyFromEvaluation = function(reason)
+ReturnToOnlineLobbyFromEvaluation = function(reason)
 	local topScreen = current_top_screen()
 	if not topScreen then
 		if online_trace then online_trace("FLOW evaluation_exit_skipped reason=no_top_screen source=" .. tostring(reason or "input")) end
@@ -1296,7 +1293,7 @@ end
 
 ITGOnlineReturnToLobbyFromEvaluation = ReturnToOnlineLobbyFromEvaluation
 
-local EvaluationInputHandler = function(event)
+EvaluationInputHandler = function(event)
 	if not event or event.type ~= "InputEventType_FirstPress" then return false end
 	if online_trace then
 		online_trace("FLOW evaluation_input button=" .. tostring(event.GameButton or "")
@@ -1326,7 +1323,7 @@ local EvaluationInputHandler = function(event)
 	return false
 end
 
-local RestoreCurrentRoom = function(actor, callback)
+RestoreCurrentRoom = function(actor, callback)
 	if not (actor and ITGOnline and ITGOnline.FetchCurrentRoom) then
 		if online_trace then online_trace("FLOW restore_current_room skipped reason=no_fetch_current_room") end
 		if callback then callback(false) end
@@ -1374,7 +1371,7 @@ local RestoreCurrentRoom = function(actor, callback)
 	end)
 end
 
-local OrderPlayers = function(data, localScreenName)
+OrderPlayers = function(data, localScreenName)
 	local updatedData = {
 		players = {},
 
@@ -1932,7 +1929,7 @@ DisplayLobbyState = function(data, actor)
 	end
 end
 
-local HandleResponse = function(response, actor)
+HandleResponse = function(response, actor)
 	if type(response) ~= "table" then return end
 	local event = response.event
 	local data = response.data
@@ -1978,7 +1975,7 @@ local onlineRoomTimerNames = {
 	"ManagerAutoReadyRetryTimer",
 }
 
-local function stop_named_timers(actor, names)
+function stop_named_timers(actor, names)
 	if not actor then return end
 	for _, name in ipairs(names) do
 		local timer = actor:GetChild(name)
@@ -1989,7 +1986,7 @@ local function stop_named_timers(actor, names)
 	end
 end
 
-local function schedule_named_timer(actor, name, delay, command)
+function schedule_named_timer(actor, name, delay, command)
 	if not actor or onlineHandlerShuttingDown then
 		if online_trace then
 			online_trace("FLOW timer_schedule_skipped name=" .. tostring(name)
@@ -2015,24 +2012,24 @@ local function schedule_named_timer(actor, name, delay, command)
 	end
 end
 
-local function normalized_room_phase_for_runtime()
+function normalized_room_phase_for_runtime()
 	if ITGOnline and ITGOnline.NormalizeRoomPhase then
 		return ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil)
 	end
 	return tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or ""):lower()
 end
 
-local function current_online_screen_name()
+function current_online_screen_name()
 	local screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
 	return screen and screen:GetName() or "NoScreen"
 end
 
-local function room_runtime_should_run()
+function room_runtime_should_run()
 	local phase = normalized_room_phase_for_runtime()
 	return phase == "starting" or phase == "playing"
 end
 
-local function room_fast_runtime_should_run()
+function room_fast_runtime_should_run()
 	if not room_runtime_should_run() then
 		return false
 	end
@@ -2041,11 +2038,11 @@ local function room_fast_runtime_should_run()
 	return not is_evaluation_screen(screenName) and screenName ~= "ScreenOnlineLobbies"
 end
 
-local function room_gameplay_runtime_should_run()
+function room_gameplay_runtime_should_run()
 	return room_runtime_should_run() and gameplayScreens[current_online_screen_name()] == true
 end
 
-local function start_connection_timers(actor)
+function start_connection_timers(actor)
 	if not actor or onlineHandlerShuttingDown then
 		if online_trace then online_trace("FLOW connection_timers_start_skipped") end
 		return
@@ -2055,14 +2052,14 @@ local function start_connection_timers(actor)
 	schedule_named_timer(actor, "OnlineHeartbeatTimer", 5, "Fire")
 end
 
-local function stop_connection_timers(actor)
+function stop_connection_timers(actor)
 	if online_trace then online_trace("FLOW connection_timers_stop") end
 	stop_named_timers(actor, onlineConnectionTimerNames)
 end
 
 local stop_room_timers
 
-local function start_room_timers(actor, reason)
+function start_room_timers(actor, reason)
 	if not actor or onlineHandlerShuttingDown then
 		if online_trace then
 			online_trace("FLOW room_timers_start_skipped reason="
@@ -2137,7 +2134,7 @@ end
 		end
 	end
 
-local function clear_room_input_state(reason)
+function clear_room_input_state(reason)
 	isWaiting = false
 	remove_online_input_callbacks()
 	UnlockOnlineInput()

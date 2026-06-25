@@ -617,8 +617,6 @@ void ScreenManager::set_input_redirected(PlayerNumber pn, bool redir) {
  * screen. Does not send SM_GainFocus. */
 ScreenMessage ScreenManager::PopTopScreenInternal(bool bSendLoseFocus) {
   if (g_ScreenStack.empty()) {
-    LOG->Trace("ITG Online ScreenTrace: pop_top_screen_internal_skipped reason=empty_stack");
-    LOG->Flush();
     return SM_None;
   }
 

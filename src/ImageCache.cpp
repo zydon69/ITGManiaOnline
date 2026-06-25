@@ -78,15 +78,7 @@ void WarnImageCacheAuditFix(const std::string& message) {
 }
 
 void TraceMissingImageDimensionsOnce(const std::string& imagePath) {
-  static std::set<std::string> s_missingDimensionPaths;
-  if (LOG == nullptr || !s_missingDimensionPaths.insert(imagePath).second) {
-    return;
-  }
-
-  LOG->Trace(
-      "Image cache metadata for '%s' is missing dimensions; using the "
-      "original texture path.",
-      imagePath.c_str());
+  (void)imagePath;
 }
 
 bool IsValidCachedSurface(const RageSurface* pImage) {

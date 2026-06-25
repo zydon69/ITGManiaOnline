@@ -211,6 +211,18 @@ void PlaySoundIfLoaded(RageSound& sound, bool copy = false) {
   }
 }
 
+bool LoadSoundIfPathPresent(
+    RageSound& sound,
+    const std::string& path,
+    bool preload = false,
+    RageSoundLoadParams* params = nullptr) {
+  if (path.empty()) {
+    return false;
+  }
+
+  return sound.Load(path, preload, params);
+}
+
 const Profile* GetSafeProfile(PlayerNumber pn) {
   if (PROFILEMAN == nullptr || !IsValidPlayer(pn)) {
     return nullptr;
@@ -447,20 +459,35 @@ void ScreenSelectMusic::Init() {
   this->AddChild(&m_Banner);
 
   m_sprCDTitleFront.SetName("CDTitle");
-  m_sprCDTitleFront.Load(GetThemePathG(m_sName, "fallback cdtitle"));
+  {
+    const std::string fallbackCDTitlePath =
+        GetThemePathG(m_sName, "fallback cdtitle");
+    if (!fallbackCDTitlePath.empty()) {
+      m_sprCDTitleFront.Load(fallbackCDTitlePath);
+    }
+  }
   LOAD_ALL_COMMANDS_AND_SET_XY(m_sprCDTitleFront);
   COMMAND(m_sprCDTitleFront, "Front");
   this->AddChild(&m_sprCDTitleFront);
 
   m_sprCDTitleBack.SetName("CDTitle");
-  m_sprCDTitleBack.Load(GetThemePathG(m_sName, "fallback cdtitle"));
+  {
+    const std::string fallbackCDTitlePath =
+        GetThemePathG(m_sName, "fallback cdtitle");
+    if (!fallbackCDTitlePath.empty()) {
+      m_sprCDTitleBack.Load(fallbackCDTitlePath);
+    }
+  }
   LOAD_ALL_COMMANDS_AND_SET_XY(m_sprCDTitleBack);
   COMMAND(m_sprCDTitleBack, "Back");
   this->AddChild(&m_sprCDTitleBack);
 
   FOREACH_ENUM(PlayerNumber, p) {
-    m_sprHighScoreFrame[p].Load(
-        GetThemePathG(m_sName, ssprintf("ScoreFrame P%d", p + 1)));
+    const std::string scoreFramePath =
+        GetThemePathG(m_sName, ssprintf("ScoreFrame P%d", p + 1));
+    if (!scoreFramePath.empty()) {
+      m_sprHighScoreFrame[p].Load(scoreFramePath);
+    }
     if (m_sprHighScoreFrame[p].IsLoaded()) {
       m_sprHighScoreFrame[p]->SetName(ssprintf("ScoreFrameP%d", p + 1));
       LOAD_ALL_COMMANDS_AND_SET_XY(m_sprHighScoreFrame[p]);
@@ -476,13 +503,20 @@ void ScreenSelectMusic::Init() {
   RageSoundLoadParams SoundParams;
   SoundParams.m_bSupportPan = true;
 
-  m_soundStart.Load(GetThemePathS(m_sName, "start"));
-  m_soundDifficultyEasier.Load(
-      GetThemePathS(m_sName, "difficulty easier"), false, &SoundParams);
-  m_soundDifficultyHarder.Load(
-      GetThemePathS(m_sName, "difficulty harder"), false, &SoundParams);
-  m_soundOptionsChange.Load(GetThemePathS(m_sName, "options"));
-  m_soundLocked.Load(GetThemePathS(m_sName, "locked"));
+  LoadSoundIfPathPresent(m_soundStart, GetThemePathS(m_sName, "start"));
+  LoadSoundIfPathPresent(
+      m_soundDifficultyEasier,
+      GetThemePathS(m_sName, "difficulty easier"),
+      false,
+      &SoundParams);
+  LoadSoundIfPathPresent(
+      m_soundDifficultyHarder,
+      GetThemePathS(m_sName, "difficulty harder"),
+      false,
+      &SoundParams);
+  LoadSoundIfPathPresent(
+      m_soundOptionsChange, GetThemePathS(m_sName, "options"));
+  LoadSoundIfPathPresent(m_soundLocked, GetThemePathS(m_sName, "locked"));
 
   this->SortByDrawOrder();
 }
@@ -2543,11 +2577,22 @@ void ScreenSelectMusic::AfterMusicChange() {
 
   m_bCDTitleWaiting = false;
   if (!m_sCDTitlePath.empty() || m_bWantFallbackCdTitle) {
-    if (LOG != nullptr) {
-      LOG->Trace("cache \"%s\"", m_sCDTitlePath.c_str());
+    if (!m_sCDTitlePath.empty()) {
+      if (LOG != nullptr) {
+        LOG->Trace("cache \"%s\"", m_sCDTitlePath.c_str());
+      }
+      m_BackgroundLoader.CacheFile(m_sCDTitlePath);
+      m_bCDTitleWaiting = true;
+    } else if (m_bWantFallbackCdTitle && !m_sFallbackCDTitlePath.empty()) {
+      if (TEXTUREMAN != nullptr) {
+        TEXTUREMAN->DisableOddDimensionWarning();
+      }
+      m_sprCDTitleFront.Load(m_sFallbackCDTitlePath);
+      m_sprCDTitleBack.Load(m_sFallbackCDTitlePath);
+      if (TEXTUREMAN != nullptr) {
+        TEXTUREMAN->EnableOddDimensionWarning();
+      }
     }
-    m_BackgroundLoader.CacheFile(m_sCDTitlePath);  // empty OK
-    m_bCDTitleWaiting = true;
   }
 
   m_bBannerWaiting = false;

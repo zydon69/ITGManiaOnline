@@ -405,6 +405,9 @@ bool ActorUtil::LoadTableFromStackShowErrors(Lua* L) {
 // Callers should be aware of this and handle it appropriately.
 Actor* ActorUtil::MakeActor(const std::string& sPath_, Actor* pParentActor) {
   std::string sPath(sPath_);
+  if (sPath.empty()) {
+    return MakeFallbackActor();
+  }
 
   FileType ft = GetFileType(sPath);
   switch (ft) {

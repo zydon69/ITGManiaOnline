@@ -677,5 +677,5 @@ local t = Def.ActorFrame {
 	sort_wheel:create_actors( "Sort Menu", 9, wheel_item_mt, _screen.cx, _screen.cy )
 }
 t[#t+1] = LoadActor( THEME:GetPathS("ScreenSelectMaster", "change") )..{ Name="change_sound", IsAction=true, SupportPan=false }
-t[#t+1] = LoadActor( THEME:GetPathS("common", "start") )..{ Name="start_sound", IsAction=true, SupportPan=false }
+t[#t+1] = LoadActor( THEME:GetPathS("Common", "start") )..{ Name="start_sound", IsAction=true, SupportPan=false }
 return t

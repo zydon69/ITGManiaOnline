@@ -142,11 +142,17 @@ static void BroadcastIfAvailable(MessageID message) {
 
 static bool LuaReadOptionsPlayer(
     lua_State* L, int index, PlayerNumber& playerOut) {
-  if (L == nullptr || !lua_isnumber(L, index)) {
+  if (L == nullptr || lua_isnoneornil(L, index)) {
     playerOut = PLAYER_INVALID;
     return false;
   }
-  playerOut = static_cast<PlayerNumber>(lua_tointeger(L, index));
+
+  if (lua_isnumber(L, index)) {
+    playerOut = static_cast<PlayerNumber>(lua_tointeger(L, index));
+    return IsValidOptionsPlayer(playerOut);
+  }
+
+  playerOut = Enum::Check<PlayerNumber>(L, index, true, true);
   return IsValidOptionsPlayer(playerOut);
 }
 

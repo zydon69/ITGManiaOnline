@@ -515,10 +515,19 @@ local Overrides = {
 				if list[i] then
 					local value = self.Values[i]
 					if value ~= "X" and value ~= "C" and value ~= "M" then value = "X" end
+					local previous = mods.SpeedModType or "X"
 					mods.SpeedModType = value
 					-- Broadcast a message that ./BGAnimations/ScreenPlayerOptions overlay.lua will be listening for
 					-- so it can hackishly modify the single BitmapText actor used in the SpeedMod optionrow
-					SafeBroadcast('SpeedModType'..tostring(PlayerKey(pn) or "")..'Set', {SpeedModType=value, Player=pn})
+					PlayerOptionsTrace("speed_mod_type_selected player=" .. tostring(PlayerKey(pn) or pn)
+						.. " previous=" .. tostring(previous)
+						.. " selected=" .. tostring(value)
+						.. " speed=" .. tostring(mods.SpeedMod))
+					SafeBroadcast('SpeedModType'..tostring(PlayerKey(pn) or "")..'Set', {
+						SpeedModType=value,
+						PreviousSpeedModType=previous,
+						Player=pn
+					})
 				end
 			end
 		end
@@ -530,7 +539,12 @@ local Overrides = {
 		LayoutType = "ShowOneInRow",
 		SaveSelections = function(self, list, pn)
 			local mods, playeroptions = GetModsAndPlayerOptions(pn)
-			if not (mods and playeroptions) then return end
+			if not (mods and playeroptions) then
+				PlayerOptionsTrace("speed_mod_export_skipped player=" .. tostring(PlayerKey(pn) or pn)
+					.. " has_mods=" .. tostring(mods ~= nil)
+					.. " has_playeroptions=" .. tostring(playeroptions ~= nil))
+				return
+			end
 			local speedType  = mods.SpeedModType or "X"
 			local speed = NumberOr(mods.SpeedMod, 1.00)
 
@@ -541,9 +555,17 @@ local Overrides = {
 			}
 			local applier = appliers[speedType] or appliers.X
 			if type(applier) == "function" then
-				SafeCall("PlayerOptions." .. tostring(speedType) .. "Mod", function()
+				local ok = SafeCall("PlayerOptions." .. tostring(speedType) .. "Mod", function()
 					applier(playeroptions, speed)
 				end)
+				PlayerOptionsTrace("speed_mod_export_applied player=" .. tostring(PlayerKey(pn) or pn)
+					.. " type=" .. tostring(speedType)
+					.. " speed=" .. tostring(speed)
+					.. " ok=" .. tostring(ok))
+			else
+				PlayerOptionsTrace("speed_mod_export_missing_applier player=" .. tostring(PlayerKey(pn) or pn)
+					.. " type=" .. tostring(speedType)
+					.. " speed=" .. tostring(speed))
 			end
 		end
 	},
@@ -1633,6 +1655,7 @@ local OptionRowDefault = {
 			self.BroadcastOnExport = override.BroadcastOnExport or {}
 			self.HideOnDisable = override.HideOnDisable or false
 			self.ApplyOnProfileLoad = override.ApplyOnProfileLoad ~= false
+			self.NotifyOfSelection = override.NotifyOfSelection or function() return false end
 			
 			if self.SelectType == "SelectOne" then
 

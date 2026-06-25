@@ -266,10 +266,12 @@ std::string FormatDetailLine(
 
 void PlayEvaluationSoundPath(const std::string& path, const char* context) {
   if (SOUND == nullptr || path.empty()) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenEvaluation skipped %s sound because runtime or "
-        "path is unavailable.",
-        context);
+    if (LOG != nullptr && SOUND == nullptr) {
+      LOG->Trace(
+          "ScreenEvaluation skipped %s sound because sound manager is "
+          "unavailable.",
+          context);
+    }
     return;
   }
   SOUND->PlayOnceFromDir(path);
@@ -277,10 +279,6 @@ void PlayEvaluationSoundPath(const std::string& path, const char* context) {
 
 std::string GetEvaluationAnnouncerPath(const std::string& sound) {
   if (ANNOUNCER == nullptr) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenEvaluation skipped announcer sound '%s' because "
-        "ANNOUNCER is unavailable.",
-        sound.c_str());
     return "";
   }
   return ANNOUNCER->GetPathTo(sound);

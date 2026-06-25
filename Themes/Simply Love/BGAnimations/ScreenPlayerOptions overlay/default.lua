@@ -78,6 +78,52 @@ end
 -- use this to directly manipulate the SpeedMod numbers in the global SL table
 --    first argument is either "P1" or "P2"
 --    second argument is either -1 (MenuLeft was pressed) or 1 (MenuRight was pressed)
+local SpeedModTrace = function(message)
+	if type(online_trace) == "function" then
+		online_trace("FLOW player_options_speedmod " .. tostring(message or ""))
+	elseif type(Trace) == "function" then
+		Trace("ScreenPlayerOptions SpeedMod: " .. tostring(message or ""))
+	end
+end
+
+local ApplySpeedModToPlayerOptions = function(player, reason)
+	local pn = ToEnumShortString(player)
+	local mods = SL and SL[pn] and SL[pn].ActiveModifiers or nil
+	if not mods then
+		SpeedModTrace("apply_skipped_missing_mods player=" .. tostring(pn) .. " reason=" .. tostring(reason))
+		return false
+	end
+
+	local speedType = mods.SpeedModType or "X"
+	local speed = tonumber(mods.SpeedMod) or 1.00
+	local playerState = GAMESTATE and GAMESTATE:GetPlayerState(player) or nil
+	if not playerState then
+		SpeedModTrace("apply_skipped_missing_player_state player=" .. tostring(pn) .. " reason=" .. tostring(reason))
+		return false
+	end
+
+	local topScreen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+	local topScreenName = topScreen and topScreen.GetName and topScreen:GetName() or ""
+	local modsLevel = topScreenName == "ScreenEditOptions" and "ModsLevel_Stage" or "ModsLevel_Preferred"
+	local playerOptions = playerState:GetPlayerOptions(modsLevel)
+	local applier = playerOptions and playerOptions[speedType .. "Mod"] or nil
+	if type(applier) ~= "function" then
+		SpeedModTrace("apply_skipped_missing_applier player=" .. tostring(pn)
+			.. " type=" .. tostring(speedType)
+			.. " speed=" .. tostring(speed)
+			.. " reason=" .. tostring(reason))
+		return false
+	end
+
+	applier(playerOptions, speed)
+	SpeedModTrace("applied player=" .. tostring(pn)
+		.. " type=" .. tostring(speedType)
+		.. " speed=" .. tostring(speed)
+		.. " mods_level=" .. tostring(modsLevel)
+		.. " reason=" .. tostring(reason))
+	return true
+end
+
 local ChangeSpeedMod = function(pn, direction)
 	local mods = SL[pn].ActiveModifiers
 	local speedmod = mods.SpeedMod
@@ -106,10 +152,22 @@ local FindOptionRowIndex = function(ScreenOptions, Name)
 
 	-- OptionRows on ScreenOptions are 0-indexed, so start counting from 0
 	for i=0,num_rows-1 do
-		if ScreenOptions:GetOptionRow(i):GetName() == Name then
+		local row = ScreenOptions:GetOptionRow(i)
+		local rowName = row and row:GetName() or nil
+		local rowTitle = row and row.GetRowTitle and row:GetRowTitle() or nil
+		if rowName == Name or rowTitle == Name then
 			return i
 		end
 	end
+end
+
+local GetOptionRowDebugName = function(ScreenOptions, rowIndex)
+	if not ScreenOptions or rowIndex == nil or rowIndex < 0 then return "none" end
+	local row = ScreenOptions:GetOptionRow(rowIndex)
+	if not row then return "missing" end
+	local rowName = row:GetName()
+	local rowTitle = row.GetRowTitle and row:GetRowTitle() or ""
+	return tostring(rowName) .. "/" .. tostring(rowTitle)
 end
 
 local ChangeVariant = function(pn, direction)
@@ -257,11 +315,14 @@ for player in ivalues(GAMESTATE:GetHumanPlayers()) do
 		["SpeedModType" .. pn .. "SetMessageCommand"]=function(self,params)
 			if params.Player ~= player then return end
 
-			local oldtype = SL[pn].ActiveModifiers.SpeedModType
+			local oldtype = params.PreviousSpeedModType or SL[pn].ActiveModifiers.SpeedModType
 			local newtype = params.SpeedModType
 
 			-- this should never happen, but hey, might as well check
-			if oldtype == newtype then return end
+			if oldtype == newtype then
+				self:queuecommand("Set" .. pn)
+				return
+			end
 
 			local bpms = GetDisplayBPMs(player)
 			local speedmod = SL[pn].ActiveModifiers.SpeedMod
@@ -285,6 +346,7 @@ for player in ivalues(GAMESTATE:GetHumanPlayers()) do
 			SL[pn].ActiveModifiers.SpeedMod     = speedmod
 			SL[pn].ActiveModifiers.SpeedModType = newtype
 
+			ApplySpeedModToPlayerOptions(player, "type_change")
 			self:queuecommand("Set" .. pn)
 		end,
 
@@ -322,9 +384,15 @@ for player in ivalues(GAMESTATE:GetHumanPlayers()) do
 		["MenuLeft" .. pn .. "MessageCommand"]=function(self)
 			local topscreen = SCREENMAN:GetTopScreen()
 			local row_index = topscreen:GetCurrentRowIndex(player)
+			local speedmod_row_index = FindOptionRowIndex(topscreen, "SpeedMod")
+			SpeedModTrace("menu_left player=" .. tostring(pn)
+				.. " row_index=" .. tostring(row_index)
+				.. " row=" .. GetOptionRowDebugName(topscreen, row_index)
+				.. " speedmod_row_index=" .. tostring(speedmod_row_index))
 
-			if row_index == FindOptionRowIndex(topscreen, "SpeedMod") then
+			if row_index == speedmod_row_index then
 				ChangeSpeedMod( pn, -1 )
+				ApplySpeedModToPlayerOptions(player, "menu_left")
 				self:playcommand("Set"..pn)
 			end
 			if row_index == FindOptionRowIndex(topscreen, "NoteSkinVariant") then
@@ -339,9 +407,15 @@ for player in ivalues(GAMESTATE:GetHumanPlayers()) do
 		["MenuRight" .. pn .. "MessageCommand"]=function(self)
 			local topscreen = SCREENMAN:GetTopScreen()
 			local row_index = topscreen:GetCurrentRowIndex(player)
+			local speedmod_row_index = FindOptionRowIndex(topscreen, "SpeedMod")
+			SpeedModTrace("menu_right player=" .. tostring(pn)
+				.. " row_index=" .. tostring(row_index)
+				.. " row=" .. GetOptionRowDebugName(topscreen, row_index)
+				.. " speedmod_row_index=" .. tostring(speedmod_row_index))
 
-			if row_index == FindOptionRowIndex(topscreen, "SpeedMod") then
+			if row_index == speedmod_row_index then
 				ChangeSpeedMod( pn, 1 )
+				ApplySpeedModToPlayerOptions(player, "menu_right")
 				self:playcommand("Set"..pn)
 			end
 			if row_index == FindOptionRowIndex(topscreen, "NoteSkinVariant") then

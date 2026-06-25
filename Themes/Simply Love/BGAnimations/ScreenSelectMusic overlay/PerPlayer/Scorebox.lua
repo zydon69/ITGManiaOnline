@@ -25,6 +25,12 @@ local NoteFieldIsCentered = (GetNotefieldX(player) == _screen.cx)
 -- GrooveStats shows 5 rows; ArrowCloud now returns 7. We render 7 rows total
 -- (GS will leave rows 6-7 blank) to keep the layout simple and consistent.
 local NumEntries = 7
+local function SafeThemeFontName()
+	local font = ThemePrefs.Get("ThemeFont")
+	if font == nil or tostring(font) == "" then return "Common" end
+	return tostring(font)
+end
+local ScoreboxFont = SafeThemeFontName() .. " Normal"
 
 local border = 5
 local width = 162
@@ -832,7 +838,7 @@ local af = Def.ActorFrame{
 	},
 	-- EX Text
 	Def.BitmapText{
-		Font=ThemePrefs.Get("ThemeFont") .. " Normal",
+		Font=ScoreboxFont,
 		Text="EX",
 		InitCommand=function(self)
 			self:diffusealpha(0):x(2):y(-5)
@@ -902,7 +908,7 @@ local af = Def.ActorFrame{
 	},
 
 	-- ArrowCloud Mode Text (bottom-right ITG / EX / HardEX)
-	LoadFont(ThemePrefs.Get("ThemeFont") .. " Normal")..{
+	LoadFont(ScoreboxFont)..{
 		Name="ACModeLabel",
 		Text="",
 		InitCommand=function(self)
@@ -972,7 +978,7 @@ for i=1,NumEntries do
 			OffCommand=function(self) self:stoptweening() end
 		}
 	else
-		af[#af+1] = LoadFont(ThemePrefs.Get("ThemeFont") .. " Normal")..{
+		af[#af+1] = LoadFont(ScoreboxFont)..{
 			Name="Rank"..i,
 			Text="",
 			InitCommand=function(self)
@@ -1015,7 +1021,7 @@ for i=1,NumEntries do
 		}
 	end
 
-	af[#af+1] = LoadFont(ThemePrefs.Get("ThemeFont") .. " Normal")..{
+	af[#af+1] = LoadFont(ScoreboxFont)..{
 		Name="Name"..i,
 		Text="",
 		InitCommand=function(self)
@@ -1057,7 +1063,7 @@ for i=1,NumEntries do
 		OffCommand=function(self) self:stoptweening() end
 	}
 
-	af[#af+1] = LoadFont(ThemePrefs.Get("ThemeFont") .. " Normal")..{
+	af[#af+1] = LoadFont(ScoreboxFont)..{
 		Name="Score"..i,
 		Text="",
 		InitCommand=function(self)

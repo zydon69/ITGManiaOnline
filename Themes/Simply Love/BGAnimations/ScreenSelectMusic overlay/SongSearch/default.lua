@@ -10,7 +10,12 @@ local borderWidth = 2
 local textHeight = 15
 local detailSpacingY = 21
 local detailStartY = -paneHeight/2 + 30
-local SearchFont = (ThemePrefs.Get("ThemeFont") or "Common") .. " Normal"
+local function SafeThemeFontName()
+	local font = ThemePrefs.Get("ThemeFont")
+	if font == nil or tostring(font) == "" then return "Common" end
+	return tostring(font)
+end
+local SearchFont = SafeThemeFontName() .. " Normal"
 
 local af = Def.ActorFrame {
 	Name="SongSearch",

@@ -316,6 +316,6 @@ for i,choice in ipairs(choices) do
 end
 
 t[#t+1] = LoadActor( THEME:GetPathS("ScreenSelectMaster", "change") )..{ Name="Change", IsAction=true, SupportPan=false }
-t[#t+1] = LoadActor( THEME:GetPathS("common", "start") )..{ Name="Start", IsAction=true, SupportPan=false }
+t[#t+1] = LoadActor( THEME:GetPathS("Common", "start") )..{ Name="Start", IsAction=true, SupportPan=false }
 
 return t

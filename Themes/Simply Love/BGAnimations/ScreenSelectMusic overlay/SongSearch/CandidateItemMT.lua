@@ -1,6 +1,11 @@
 local paneHeight = 319
 local paneWidth = 319
-local ThemeFont = (ThemePrefs.Get("ThemeFont") or "Common")
+local function SafeThemeFontName()
+	local font = ThemePrefs.Get("ThemeFont")
+	if font == nil or tostring(font) == "" then return "Common" end
+	return tostring(font)
+end
+local ThemeFont = SafeThemeFontName()
 
 -- the metatable for an item in the song search results.
 return {
