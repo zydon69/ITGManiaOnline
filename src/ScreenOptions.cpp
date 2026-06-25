@@ -83,7 +83,86 @@
  * row in player options menus, but it should in the options menu.
  */
 
+static bool IsValidOptionsPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+static void ScreenOptionsLogTrace(const std::string& message) {
+  if (LOG == nullptr) {
+    return;
+  }
+  LOG->Trace("%s", message.c_str());
+}
+
+static void ScreenOptionsLogWarn(const std::string& message) {
+  if (LOG == nullptr) {
+    return;
+  }
+  LOG->Warn("%s", message.c_str());
+}
+
+static bool HasTheme() {
+  return THEME != nullptr && THEME->IsThemeLoaded();
+}
+
+static bool IsHumanOptionsPlayer(PlayerNumber pn) {
+  return IsValidOptionsPlayer(pn) && GAMESTATE != nullptr &&
+         GAMESTATE->IsHumanPlayer(pn);
+}
+
+static bool IsUsableScreenTarget(const std::string& screenName) {
+  if (screenName.empty()) {
+    return false;
+  }
+  if (SCREENMAN != nullptr && HasTheme()) {
+    return SCREENMAN->IsScreenNameValid(screenName);
+  }
+  return true;
+}
+
+static bool IsRowIndexValid(const std::vector<OptionRow*>& rows, int row) {
+  return row >= 0 && row < static_cast<int>(rows.size()) && rows[row] != nullptr;
+}
+
+static int ClampRowsShown(int rowsShown) {
+  return std::max(rowsShown, 1);
+}
+
+static void BroadcastIfAvailable(Message& msg) {
+  if (MESSAGEMAN != nullptr) {
+    MESSAGEMAN->Broadcast(msg);
+  }
+}
+
+static void BroadcastIfAvailable(MessageID message) {
+  if (MESSAGEMAN != nullptr) {
+    MESSAGEMAN->Broadcast(message);
+  }
+}
+
+static bool LuaReadOptionsPlayer(
+    lua_State* L, int index, PlayerNumber& playerOut) {
+  if (L == nullptr || !lua_isnumber(L, index)) {
+    playerOut = PLAYER_INVALID;
+    return false;
+  }
+  playerOut = static_cast<PlayerNumber>(lua_tointeger(L, index));
+  return IsValidOptionsPlayer(playerOut);
+}
+
+static bool LuaReadInt(lua_State* L, int index, int& valueOut) {
+  if (L == nullptr || !lua_isnumber(L, index)) {
+    valueOut = -1;
+    return false;
+  }
+  valueOut = static_cast<int>(lua_tointeger(L, index));
+  return true;
+}
+
 static std::string OPTION_EXPLANATION(std::string s) {
+  if (!HasTheme()) {
+    return std::string();
+  }
   return THEME->GetString("OptionExplanations", s);
 }
 
@@ -99,18 +178,23 @@ static bool OnlinePlayerOptionsRequireReadyOnly(const std::string& screenName) {
   }
 
   Lua* L = LUA->Get();
+  if (L == nullptr) {
+    return false;
+  }
+  const int top = lua_gettop(L);
   const bool ran = LuaHelpers::RunExpression(
       L,
       "ITGOnline ~= nil "
       "and ITGOnline.currentRoomId ~= nil "
       "and ITGOnline.currentRoom ~= nil "
+      "and ITGOnline.currentRoom.id == ITGOnline.currentRoomId "
       "and ITGOnline.currentRoom.selected_song ~= nil "
       "and ITGOnline.NormalizeRoomPhase ~= nil "
       "and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) == "
       "'config'",
       "ScreenOptions::OnlinePlayerOptionsRequireReadyOnly");
-  const bool locked = ran && lua_toboolean(L, -1);
-  lua_pop(L, 1);
+  const bool locked = ran && lua_gettop(L) > top && lua_toboolean(L, -1);
+  lua_settop(L, top);
   LUA->Release(L);
 
   return locked;
@@ -120,9 +204,20 @@ static const char* InputModeNames[] = {"Individual", "Together"};
 StringToX(InputMode);
 
 // REGISTER_SCREEN_CLASS( ScreenOptions );	// can't be instantiated
-ScreenOptions::ScreenOptions() {
+ScreenOptions::ScreenOptions()
+    : m_OptionsNavigation(NAV_FIVE_KEY),
+      m_InputMode(INPUTMODE_SHARE_CURSOR) {
+  FOREACH_PlayerNumber(p) {
+    m_iCurrentRow[p] = -1;
+    m_iFocusX[p] = -1;
+    m_bWasOnExit[p] = false;
+    m_bGotAtLeastOneStartPressed[p] = false;
+  }
+
   // These can be overridden in a derived Init().
-  switch (PREFSMAN->m_iArcadeOptionsNavigation) {
+  const int arcadeNavigation =
+      PREFSMAN != nullptr ? PREFSMAN->m_iArcadeOptionsNavigation.Get() : 0;
+  switch (arcadeNavigation) {
     case 0:
       SetNavigation(NAV_FIVE_KEY);
       break;
@@ -132,8 +227,14 @@ ScreenOptions::ScreenOptions() {
     case 2:
       SetNavigation(NAV_THREE_KEY_ALT);
       break;
+    default:
+      ScreenOptionsLogWarn(
+          ssprintf(
+              "ScreenOptions: invalid ArcadeOptionsNavigation=%d, using five-key",
+              arcadeNavigation));
+      SetNavigation(NAV_FIVE_KEY);
+      break;
   }
-  m_InputMode = INPUTMODE_SHARE_CURSOR;
 }
 
 void ScreenOptions::Init() {
@@ -156,24 +257,32 @@ void ScreenOptions::Init() {
   OPTION_ROW_NORMAL_METRICS_GROUP.Load(m_sName, "OptionRowNormalMetricsGroup");
   OPTION_ROW_EXIT_METRICS_GROUP.Load(m_sName, "OptionRowExitMetricsGroup");
 
-  m_exprRowPositionTransformFunction.SetFromReference(
-      THEME->GetMetricR(m_sName, "RowPositionTransformFunction"));
+  m_exprRowPositionTransformFunction.ClearCache();
+  if (HasTheme()) {
+    m_exprRowPositionTransformFunction.SetFromReference(
+        THEME->GetMetricR(m_sName, "RowPositionTransformFunction"));
+  } else {
+    ScreenOptionsLogWarn(
+        ssprintf("ScreenOptions::Init(%s): theme unavailable", m_sName.c_str()));
+  }
 
   ScreenWithMenuElements::Init();
 
-  m_SoundChangeCol.Load(THEME->GetPathS(m_sName, "change"), true);
-  m_SoundNextRow.Load(THEME->GetPathS(m_sName, "next"), true);
-  m_SoundPrevRow.Load(THEME->GetPathS(m_sName, "prev"), true);
-  m_SoundToggleOn.Load(THEME->GetPathS(m_sName, "toggle on"), true);
-  m_SoundToggleOff.Load(THEME->GetPathS(m_sName, "toggle off"), true);
-  m_SoundStart.Load(THEME->GetPathS(m_sName, "start"), true);
+  if (HasTheme()) {
+    m_SoundChangeCol.Load(THEME->GetPathS(m_sName, "change"), true);
+    m_SoundNextRow.Load(THEME->GetPathS(m_sName, "next"), true);
+    m_SoundPrevRow.Load(THEME->GetPathS(m_sName, "prev"), true);
+    m_SoundToggleOn.Load(THEME->GetPathS(m_sName, "toggle on"), true);
+    m_SoundToggleOff.Load(THEME->GetPathS(m_sName, "toggle off"), true);
+    m_SoundStart.Load(THEME->GetPathS(m_sName, "start"), true);
+  }
 
   // add everything to m_frameContainer so we can animate everything at once
   m_frameContainer.SetName("Container");
   LOAD_ALL_COMMANDS(m_frameContainer);
   this->AddChild(&m_frameContainer);
 
-  m_sprPage.Load(THEME->GetPathG(m_sName, "page"));
+  m_sprPage.Load(HasTheme() ? THEME->GetPathG(m_sName, "page") : "");
   m_sprPage->SetName("Page");
   LOAD_ALL_COMMANDS_AND_SET_XY(m_sprPage);
   m_frameContainer.AddChild(m_sprPage);
@@ -181,7 +290,8 @@ void ScreenOptions::Init() {
   // init line highlights
   FOREACH_PlayerNumber(p) {
     m_sprLineHighlight[p].Load(
-        THEME->GetPathG(m_sName, ssprintf("LineHighlight P%d", p + 1)));
+        HasTheme() ? THEME->GetPathG(m_sName, ssprintf("LineHighlight P%d", p + 1))
+                   : "");
     m_sprLineHighlight[p]->SetName(ssprintf("LineHighlightP%d", p + 1));
     m_sprLineHighlight[p]->SetX(LINE_HIGHLIGHT_X);
     LOAD_ALL_COMMANDS(m_sprLineHighlight[p]);
@@ -200,7 +310,7 @@ void ScreenOptions::Init() {
     case INPUTMODE_INDIVIDUAL:
       FOREACH_PlayerNumber(p) {
         m_textExplanation[p].LoadFromFont(
-            THEME->GetPathF(m_sName, "explanation"));
+            HasTheme() ? THEME->GetPathF(m_sName, "explanation") : "");
         m_textExplanation[p].SetDrawOrder(2);
         m_textExplanation[p].SetName("Explanation" + PlayerNumberToString(p));
         LOAD_ALL_COMMANDS_AND_SET_XY(m_textExplanation[p]);
@@ -209,14 +319,24 @@ void ScreenOptions::Init() {
       break;
     case INPUTMODE_SHARE_CURSOR:
       m_textExplanationTogether.LoadFromFont(
-          THEME->GetPathF(m_sName, "explanation"));
+          HasTheme() ? THEME->GetPathF(m_sName, "explanation") : "");
       m_textExplanationTogether.SetDrawOrder(2);
       m_textExplanationTogether.SetName("ExplanationTogether");
       LOAD_ALL_COMMANDS_AND_SET_XY(m_textExplanationTogether);
       m_frameContainer.AddChild(&m_textExplanationTogether);
       break;
     default:
-      FAIL_M(ssprintf("Invalid InputMode: %i", m_InputMode));
+      ScreenOptionsLogWarn(
+          ssprintf("ScreenOptions::Init(%s): invalid InputMode=%d, using shared",
+                   m_sName.c_str(), m_InputMode));
+      m_InputMode = INPUTMODE_SHARE_CURSOR;
+      m_textExplanationTogether.LoadFromFont(
+          HasTheme() ? THEME->GetPathF(m_sName, "explanation") : "");
+      m_textExplanationTogether.SetDrawOrder(2);
+      m_textExplanationTogether.SetName("ExplanationTogether");
+      LOAD_ALL_COMMANDS_AND_SET_XY(m_textExplanationTogether);
+      m_frameContainer.AddChild(&m_textExplanationTogether);
+      break;
   }
 
   if (SHOW_SCROLL_BAR) {
@@ -224,14 +344,13 @@ void ScreenOptions::Init() {
     m_ScrollBar.SetBarHeight(SCROLL_BAR_HEIGHT);
     m_ScrollBar.SetBarTime(SCROLL_BAR_TIME);
     m_ScrollBar.Load("DualScrollBar");
-    FOREACH_PlayerNumber(p)
-        m_ScrollBar.EnablePlayer(p, GAMESTATE->IsHumanPlayer(p));
+    FOREACH_PlayerNumber(p) m_ScrollBar.EnablePlayer(p, IsHumanOptionsPlayer(p));
     LOAD_ALL_COMMANDS_AND_SET_XY(m_ScrollBar);
     m_ScrollBar.SetDrawOrder(2);
     m_frameContainer.AddChild(&m_ScrollBar);
   }
 
-  m_sprMore.Load(THEME->GetPathG(m_sName, "more"));
+  m_sprMore.Load(HasTheme() ? THEME->GetPathG(m_sName, "more") : "");
   m_sprMore->SetName("More");
   LOAD_ALL_COMMANDS_AND_SET_XY(m_sprMore);
   m_sprMore->SetDrawOrder(2);
@@ -243,7 +362,7 @@ void ScreenOptions::Init() {
 }
 
 void ScreenOptions::InitMenu(const std::vector<OptionRowHandler*>& vHands) {
-  LOG->Trace("ScreenOptions::InitMenu()");
+  ScreenOptionsLogTrace("ScreenOptions::InitMenu()");
 
   for (unsigned i = 0; i < m_pRows.size(); i++) {
     m_frameContainer.RemoveChild(m_pRows[i]);
@@ -253,6 +372,12 @@ void ScreenOptions::InitMenu(const std::vector<OptionRowHandler*>& vHands) {
 
   for (unsigned r = 0; r < vHands.size(); r++)  // foreach row
   {
+    if (vHands[r] == nullptr) {
+      ScreenOptionsLogWarn(
+          ssprintf("ScreenOptions::InitMenu(%s): skipped null row handler %u",
+                   m_sName.c_str(), r));
+      continue;
+    }
     m_pRows.push_back(new OptionRow(&m_OptionRowTypeNormal));
     OptionRow& row = *m_pRows.back();
     row.SetDrawOrder(1);
@@ -275,10 +400,18 @@ void ScreenOptions::InitMenu(const std::vector<OptionRowHandler*>& vHands) {
 
   int iIndex = 0;
   for (OptionRow* p : m_pRows) {
-    Lua* L = LUA->Get();
-    LuaHelpers::Push(L, iIndex++);
-    p->m_pLuaInstance->Set(L, "iIndex");
-    LUA->Release(L);
+    if (p == nullptr) {
+      continue;
+    }
+    if (LUA != nullptr && !p->m_pLuaInstance.isNull()) {
+      Lua* L = LUA->Get();
+      if (L != nullptr) {
+        LuaHelpers::Push(L, iIndex);
+        p->m_pLuaInstance->Set(L, "iIndex");
+        LUA->Release(L);
+      }
+    }
+    iIndex++;
 
     p->RunCommands(ROW_INIT_COMMAND);
   }
@@ -300,6 +433,12 @@ void ScreenOptions::RestartOptions() {
   for (unsigned r = 0; r < m_pRows.size(); r++)  // foreach row
   {
     OptionRow* pRow = m_pRows[r];
+    if (pRow == nullptr) {
+      ScreenOptionsLogWarn(
+          ssprintf("ScreenOptions::RestartOptions(%s): null row %u",
+                   m_sName.c_str(), r));
+      continue;
+    }
     pRow->Reload();
 
     this->ImportOptions(r, vpns);
@@ -315,6 +454,9 @@ void ScreenOptions::RestartOptions() {
 
     // put focus on the first enabled row
     for (unsigned r = 0; r < m_pRows.size(); r++) {
+      if (m_pRows[r] == nullptr) {
+        continue;
+      }
       const OptionRow& row = *m_pRows[r];
       if (row.GetRowDef().IsEnabledForPlayer(p)) {
         m_iCurrentRow[p] = r;
@@ -323,8 +465,10 @@ void ScreenOptions::RestartOptions() {
     }
 
     // Hide the highlight if no rows are enabled.
-    m_sprLineHighlight[p]->SetVisible(
-        m_iCurrentRow[p] != -1 && GAMESTATE->IsHumanPlayer(p));
+    if (m_sprLineHighlight[p].IsLoaded()) {
+      m_sprLineHighlight[p]->SetVisible(
+          m_iCurrentRow[p] != -1 && IsHumanOptionsPlayer(p));
+    }
   }
 
   CHECKPOINT_M("About to get the rows positioned right.");
@@ -351,7 +495,7 @@ void ScreenOptions::BeginScreen() {
   ON_COMMAND(m_frameContainer);
 
   FOREACH_PlayerNumber(p) {
-    m_Cursor[p].SetVisible(GAMESTATE->IsHumanPlayer(p));
+    m_Cursor[p].SetVisible(IsHumanOptionsPlayer(p));
     ON_COMMAND(m_Cursor[p]);
   }
 
@@ -362,7 +506,9 @@ void ScreenOptions::TweenOnScreen() {
   ScreenWithMenuElements::TweenOnScreen();
 
   for (OptionRow* p : m_pRows) {
-    p->RunCommands(ROW_ON_COMMAND);
+    if (p != nullptr) {
+      p->RunCommands(ROW_ON_COMMAND);
+    }
   }
 
   m_frameContainer.SortByDrawOrder();
@@ -372,18 +518,23 @@ void ScreenOptions::TweenOffScreen() {
   ScreenWithMenuElements::TweenOffScreen();
 
   for (OptionRow* p : m_pRows) {
-    p->RunCommands(ROW_OFF_COMMAND);
+    if (p != nullptr) {
+      p->RunCommands(ROW_OFF_COMMAND);
+    }
   }
 }
 
 ScreenOptions::~ScreenOptions() {
-  LOG->Trace("ScreenOptions::~ScreenOptions()");
+  ScreenOptionsLogTrace("ScreenOptions::~ScreenOptions()");
   for (unsigned i = 0; i < m_pRows.size(); i++) {
     RageUtil::SafeDelete(m_pRows[i]);
   }
 }
 
 std::string ScreenOptions::GetExplanationText(int iRow) const {
+  if (!IsRowIndexValid(m_pRows, iRow)) {
+    return std::string();
+  }
   const OptionRow& row = *m_pRows[iRow];
 
   bool bAllowExplanation = row.GetRowDef().m_bAllowExplanation;
@@ -396,7 +547,9 @@ std::string ScreenOptions::GetExplanationText(int iRow) const {
   if (sExplanationName.empty()) {
     sExplanationName = row.GetRowDef().m_sName;
   }
-  ASSERT(!sExplanationName.empty());
+  if (sExplanationName.empty()) {
+    return std::string();
+  }
 
   return OPTION_EXPLANATION(sExplanationName);
 }
@@ -404,14 +557,21 @@ std::string ScreenOptions::GetExplanationText(int iRow) const {
 void ScreenOptions::GetWidthXY(
     PlayerNumber pn, int iRow, int iChoiceOnRow, int& iWidthOut, int& iXOut,
     int& iYOut) const {
-  ASSERT_M(
-      iRow < (int)m_pRows.size(),
-      ssprintf("%i < %i", iRow, (int)m_pRows.size()));
+  iWidthOut = 0;
+  iXOut = 0;
+  iYOut = 0;
+  if (!IsValidOptionsPlayer(pn) || !IsRowIndexValid(m_pRows, iRow) ||
+      iChoiceOnRow < 0) {
+    return;
+  }
   const OptionRow& row = *m_pRows[iRow];
   row.GetWidthXY(pn, iChoiceOnRow, iWidthOut, iXOut, iYOut);
 }
 
 void ScreenOptions::RefreshIcons(int iRow, PlayerNumber pn) {
+  if (!IsValidOptionsPlayer(pn) || !IsRowIndexValid(m_pRows, iRow)) {
+    return;
+  }
   OptionRow& row = *m_pRows[iRow];
 
   const OptionRowDefinition& def = row.GetRowDef();
@@ -430,7 +590,10 @@ void ScreenOptions::RefreshIcons(int iRow, PlayerNumber pn) {
     if (pHand) {
       int iSelection = iFirstSelection +
                        (m_OptionsNavigation == NAV_TOGGLE_THREE_KEY ? -1 : 0);
-      pHand->GetIconTextAndGameCommand(iSelection, sIcon, gc);
+      if (iSelection >= 0 &&
+          iSelection < static_cast<int>(def.m_vsChoices.size())) {
+        pHand->GetIconTextAndGameCommand(iSelection, sIcon, gc);
+      }
     }
   }
 
@@ -443,6 +606,9 @@ void ScreenOptions::RefreshIcons(int iRow, PlayerNumber pn) {
 }
 
 void ScreenOptions::PositionCursor(PlayerNumber pn) {
+  if (!IsValidOptionsPlayer(pn)) {
+    return;
+  }
   // Set the position of the cursor showing the current option the user is
   // changing.
   const int iRow = m_iCurrentRow[pn];
@@ -450,9 +616,9 @@ void ScreenOptions::PositionCursor(PlayerNumber pn) {
     return;
   }
 
-  ASSERT_M(
-      iRow >= 0 && iRow < (int)m_pRows.size(),
-      ssprintf("%i < %i", iRow, (int)m_pRows.size()));
+  if (!IsRowIndexValid(m_pRows, iRow)) {
+    return;
+  }
   const OptionRow& row = *m_pRows[iRow];
 
   const int iChoiceWithFocus = row.GetChoiceInRowWithFocus(pn);
@@ -474,15 +640,21 @@ void ScreenOptions::PositionCursor(PlayerNumber pn) {
 }
 
 void ScreenOptions::TweenCursor(PlayerNumber pn) {
+  if (!IsValidOptionsPlayer(pn)) {
+    return;
+  }
   // Set the position of the cursor showing the current option the user is
   // changing.
   const int iRow = m_iCurrentRow[pn];
-  ASSERT_M(
-      iRow >= 0 && iRow < (int)m_pRows.size(),
-      ssprintf("%i < %i", iRow, (int)m_pRows.size()));
+  if (!IsRowIndexValid(m_pRows, iRow)) {
+    return;
+  }
 
   const OptionRow& row = *m_pRows[iRow];
   const int iChoiceWithFocus = row.GetChoiceInRowWithFocus(pn);
+  if (iChoiceWithFocus < 0) {
+    return;
+  }
 
   int iWidth, iX, iY;
   GetWidthXY(pn, iRow, iChoiceWithFocus, iWidth, iX, iY);
@@ -512,7 +684,7 @@ void ScreenOptions::TweenCursor(PlayerNumber pn) {
   }
   cursor.SetCanGo(bCanGoLeft, bCanGoRight);
 
-  if (GAMESTATE->IsHumanPlayer(pn)) {
+  if (IsHumanOptionsPlayer(pn) && m_sprLineHighlight[pn].IsLoaded()) {
     COMMAND(m_sprLineHighlight[pn], "Change");
     if (row.GetRowType() == OptionRow::RowType_Exit) {
       COMMAND(m_sprLineHighlight[pn], "ChangeToExit");
@@ -547,7 +719,7 @@ bool ScreenOptions::Input(const InputEventPlus& input) {
     return false;
   }
 
-  if (!GAMESTATE->IsHumanPlayer(input.pn)) {
+  if (!IsHumanOptionsPlayer(input.pn)) {
     return false;
   }
 
@@ -557,9 +729,11 @@ bool ScreenOptions::Input(const InputEventPlus& input) {
       case GAME_BUTTON_SELECT:
       case GAME_BUTTON_MENURIGHT:
       case GAME_BUTTON_MENULEFT:
-        INPUTMAPPER->ResetKeyRepeat(GAME_BUTTON_START, input.pn);
-        INPUTMAPPER->ResetKeyRepeat(GAME_BUTTON_RIGHT, input.pn);
-        INPUTMAPPER->ResetKeyRepeat(GAME_BUTTON_LEFT, input.pn);
+        if (INPUTMAPPER != nullptr) {
+          INPUTMAPPER->ResetKeyRepeat(GAME_BUTTON_START, input.pn);
+          INPUTMAPPER->ResetKeyRepeat(GAME_BUTTON_RIGHT, input.pn);
+          INPUTMAPPER->ResetKeyRepeat(GAME_BUTTON_LEFT, input.pn);
+        }
       default:
         break;
     }
@@ -572,10 +746,10 @@ bool ScreenOptions::Input(const InputEventPlus& input) {
 void ScreenOptions::HandleScreenMessage(const ScreenMessage SM) {
   if (SM == SM_MenuTimer) {
     if (OnlinePlayerOptionsRequireReadyOnly(m_sName)) {
-      LOG->Trace(
-          "ITG Online: blocked player options menu timer during selected song "
-          "configuration screen=%s",
-          m_sName.c_str());
+      ScreenOptionsLogTrace(
+          ssprintf("ITG Online: blocked player options menu timer during "
+                   "selected song configuration screen=%s",
+                   m_sName.c_str()));
       return;
     }
     this->BeginFadingOut();
@@ -585,10 +759,16 @@ void ScreenOptions::HandleScreenMessage(const ScreenMessage SM) {
     }
 
     // If the selected option sets a screen, honor it.
-    std::string sThisScreen =
-        GetNextScreenForFocusedItem(GAMESTATE->GetMasterPlayerNumber());
-    if (sThisScreen != "") {
+    const PlayerNumber master =
+        GAMESTATE != nullptr ? GAMESTATE->GetMasterPlayerNumber()
+                             : PLAYER_INVALID;
+    std::string sThisScreen = GetNextScreenForFocusedItem(master);
+    if (IsUsableScreenTarget(sThisScreen)) {
       m_sNextScreen = sThisScreen;
+    } else if (!sThisScreen.empty()) {
+      LuaHelpers::ReportScriptErrorFmt(
+          "%s::HandleScreenMessage: rejected invalid focused next screen '%s'",
+          m_sName.c_str(), sThisScreen.c_str());
     }
 
     // If options set a NextScreen or one is specified in metrics, then fade out
@@ -605,26 +785,32 @@ void ScreenOptions::HandleScreenMessage(const ScreenMessage SM) {
     std::vector<PlayerNumber> vpns;
     FOREACH_HumanPlayer(p) vpns.push_back(p);
     if (LogGlobalOffsetDiagnosticsEnabled()) {
-      PREFSMAN->LogGlobalOffsetDiagnostics(
-          ssprintf("screen_options_export_begin:%s", m_sName.c_str()));
+      if (PREFSMAN != nullptr) {
+        PREFSMAN->LogGlobalOffsetDiagnostics(
+            ssprintf("screen_options_export_begin:%s", m_sName.c_str()));
+      }
     }
     for (unsigned r = 0; r < m_pRows.size(); r++)  // foreach row
     {
-      if (m_pRows[r]->GetRowType() == OptionRow::RowType_Exit) {
+      OptionRow* row = m_pRows[r];
+      if (row == nullptr || row->GetRowType() == OptionRow::RowType_Exit) {
         continue;
       }
       if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+        const OptionRowHandler* handler = row->GetHandler();
         LOG->Trace(
             "GLOBAL_OFFSET_TRACE: screen_options_export_row screen='%s' "
             "row=%u title='%s' handler='%s'",
-            m_sName.c_str(), r, m_pRows[r]->GetRowTitle().c_str(),
-            m_pRows[r]->GetHandler()->m_Def.m_sName.c_str());
+            m_sName.c_str(), r, row->GetRowTitle().c_str(),
+            handler != nullptr ? handler->m_Def.m_sName.c_str() : "");
       }
       this->ExportOptions(r, vpns);
     }
     if (LogGlobalOffsetDiagnosticsEnabled()) {
-      PREFSMAN->LogGlobalOffsetDiagnostics(
-          ssprintf("screen_options_export_end:%s", m_sName.c_str()));
+      if (PREFSMAN != nullptr) {
+        PREFSMAN->LogGlobalOffsetDiagnostics(
+            ssprintf("screen_options_export_end:%s", m_sName.c_str()));
+      }
     }
 
     this->HandleScreenMessage(SM_GoToNextScreen);
@@ -634,21 +820,31 @@ void ScreenOptions::HandleScreenMessage(const ScreenMessage SM) {
 }
 
 void ScreenOptions::PositionRows(bool bTween) {
-  const int total = NUM_ROWS_SHOWN;
+  const int total = ClampRowsShown(NUM_ROWS_SHOWN);
   const int halfsize = total / 2;
 
   int first_start, first_end, second_start, second_end;
 
   // Choices for each player. If only one player is active, it's the same for
   // both.
-  int P1Choice = GAMESTATE->IsHumanPlayer(PLAYER_1) ? m_iCurrentRow[PLAYER_1]
-                                                    : m_iCurrentRow[PLAYER_2];
+  int P1Choice = IsHumanOptionsPlayer(PLAYER_1) ? m_iCurrentRow[PLAYER_1]
+                                                : m_iCurrentRow[PLAYER_2];
   int P1VisibleChoice = 0;
-  int P2Choice = GAMESTATE->IsHumanPlayer(PLAYER_2) ? m_iCurrentRow[PLAYER_2]
-                                                    : m_iCurrentRow[PLAYER_1];
+  int P2Choice = IsHumanOptionsPlayer(PLAYER_2) ? m_iCurrentRow[PLAYER_2]
+                                                : m_iCurrentRow[PLAYER_1];
   int P2VisibleChoice = 0;
-  std::vector<OptionRow*> Rows(m_pRows);
+  std::vector<OptionRow*> Rows;
+  Rows.reserve(m_pRows.size());
+  for (OptionRow* row : m_pRows) {
+    if (row != nullptr) {
+      Rows.push_back(row);
+    }
+  }
   OptionRow* pSeparateExitRow = nullptr;
+
+  if (Rows.empty()) {
+    return;
+  }
 
   if ((bool)SEPARATE_EXIT_ROW && !Rows.empty() &&
       Rows.back()->GetRowType() == OptionRow::RowType_Exit) {
@@ -724,7 +920,7 @@ void ScreenOptions::PositionRows(bool bTween) {
   const int visibleCount = (int)visibleRows.size();
 
   const bool BothPlayersActivated =
-      GAMESTATE->IsHumanPlayer(PLAYER_1) && GAMESTATE->IsHumanPlayer(PLAYER_2);
+      IsHumanOptionsPlayer(PLAYER_1) && IsHumanOptionsPlayer(PLAYER_2);
   if (m_InputMode == INPUTMODE_SHARE_CURSOR || !BothPlayersActivated) {
     // Simply center the cursor.
     first_start = std::max(P1VisibleChoice - halfsize, 0);
@@ -768,7 +964,11 @@ void ScreenOptions::PositionRows(bool bTween) {
     } else if (second_end < visibleCount) {
       second_end++;
     } else {
-      FAIL_M("Do we have room to grow or don't we?");
+      ScreenOptionsLogWarn(
+          ssprintf("ScreenOptions::PositionRows(%s): could not expand row "
+                   "windows total=%d visible=%d",
+                   m_sName.c_str(), total, visibleCount));
+      break;
     }
   }
 
@@ -796,14 +996,14 @@ void ScreenOptions::PositionRows(bool bTween) {
     } else if (
         bRowVisible && thisVisibleIndex >= first_end &&
         thisVisibleIndex < second_start) {
-      fPos = ((int)NUM_ROWS_SHOWN) / 2 - 0.5f;
+      fPos = total / 2 - 0.5f;
     } else if (bRowVisible && thisVisibleIndex >= second_end) {
-      fPos = ((int)NUM_ROWS_SHOWN) - 0.5f;
+      fPos = total - 0.5f;
     }
 
     Actor::TweenState tsDestination =
         m_exprRowPositionTransformFunction.GetTransformCached(
-            fPos, i, std::min((int)Rows.size(), (int)NUM_ROWS_SHOWN));
+            fPos, i, std::min((int)Rows.size(), total));
 
     bool bHidden = !bRowVisible;
     if (bRowVisible) {
@@ -840,15 +1040,16 @@ void ScreenOptions::PositionRows(bool bTween) {
 }
 
 void ScreenOptions::AfterChangeValueOrRow(PlayerNumber pn) {
-  if (!GAMESTATE->IsHumanPlayer(pn)) {
+  if (!IsHumanOptionsPlayer(pn)) {
     return;
   }
 
   const int iCurRow = m_iCurrentRow[pn];
 
-  if (iCurRow == -1) {
+  if (!IsRowIndexValid(m_pRows, iCurRow)) {
     return;
   }
+  OptionRow& currentRow = *m_pRows[iCurRow];
 
   // Update m_fY and m_bHidden[].
   PositionRows(true);
@@ -856,13 +1057,16 @@ void ScreenOptions::AfterChangeValueOrRow(PlayerNumber pn) {
   // Do positioning.
   RefreshIcons(iCurRow, pn);
   for (unsigned r = 0; r < m_pRows.size(); r++) {
+    if (m_pRows[r] == nullptr) {
+      continue;
+    }
     /* After changing a value, position underlines. Do this for both players,
      * since underlines for both players will change with
      * m_bOneChoiceForAllPlayers. */
     FOREACH_HumanPlayer(p) m_pRows[r]->PositionUnderlines(p);
     m_pRows[r]->PositionIcons(pn);
     m_pRows[r]->SetRowHasFocus(
-        pn, GAMESTATE->IsHumanPlayer(pn) && iCurRow == (int)r);
+        pn, IsHumanOptionsPlayer(pn) && iCurRow == (int)r);
     m_pRows[r]->UpdateEnabledDisabled();
   }
 
@@ -878,18 +1082,22 @@ void ScreenOptions::AfterChangeValueOrRow(PlayerNumber pn) {
   FOREACH_HumanPlayer(p) TweenCursor(p);
 
   FOREACH_PlayerNumber(p) {
-    OptionRow& row = *m_pRows[iCurRow];
-    const bool bExitSelected = row.GetRowType() == OptionRow::RowType_Exit;
-    if (GAMESTATE->GetNumHumanPlayers() != 1 && p != pn) {
+    const bool bExitSelected =
+        currentRow.GetRowType() == OptionRow::RowType_Exit;
+    const int humanPlayers =
+        GAMESTATE != nullptr ? GAMESTATE->GetNumHumanPlayers() : 0;
+    if (humanPlayers != 1 && p != pn) {
       continue;
     }
     if (m_bWasOnExit[p] != bExitSelected) {
       m_bWasOnExit[p] = bExitSelected;
-      COMMAND(
-          m_sprMore,
-          ssprintf(
-              "Exit%sP%i", bExitSelected ? "Selected" : "Unselected", p + 1));
-      m_sprMore->PlayCommand(bExitSelected ? "GainFocus" : "LoseFocus");
+      if (m_sprMore.IsLoaded()) {
+        COMMAND(
+            m_sprMore,
+            ssprintf(
+                "Exit%sP%i", bExitSelected ? "Selected" : "Unselected", p + 1));
+        m_sprMore->PlayCommand(bExitSelected ? "GainFocus" : "LoseFocus");
+      }
     }
   }
 
@@ -905,7 +1113,7 @@ void ScreenOptions::AfterChangeValueOrRow(PlayerNumber pn) {
     default:
       break;
   }
-  if (pText->GetText() != text) {
+  if (pText != nullptr && pText->GetText() != text) {
     pText->FinishTweening();
     ON_COMMAND(pText);
     pText->SetText(text);
@@ -914,24 +1122,28 @@ void ScreenOptions::AfterChangeValueOrRow(PlayerNumber pn) {
 
 bool ScreenOptions::MenuBack(const InputEventPlus&) {
   if (OnlinePlayerOptionsRequireReadyOnly(m_sName)) {
-    LOG->Trace(
-        "ITG Online: blocked player options back during selected song "
-        "configuration screen=%s",
-        m_sName.c_str());
+    ScreenOptionsLogTrace(
+        ssprintf("ITG Online: blocked player options back during selected song "
+                 "configuration screen=%s",
+                 m_sName.c_str()));
     return true;
   }
 
+  if (m_Cancel.IsTransitioning() || m_Out.IsTransitioning()) {
+    return true;
+  }
   Cancel(SM_GoToPrevScreen);
   return true;
 }
 
 void ScreenOptions::Cancel(ScreenMessage smSendWhenDone) {
   if (OnlinePlayerOptionsRequireReadyOnly(m_sName)) {
-    LOG->Trace(
-        "ITG Online: blocked player options cancel during selected song "
-        "configuration screen=%s message=%s",
-        m_sName.c_str(),
-        ScreenMessageHelpers::ScreenMessageToString(smSendWhenDone).c_str());
+    ScreenOptionsLogTrace(
+        ssprintf("ITG Online: blocked player options cancel during selected "
+                 "song configuration screen=%s message=%s",
+                 m_sName.c_str(),
+                 ScreenMessageHelpers::ScreenMessageToString(smSendWhenDone)
+                     .c_str()));
     return;
   }
 
@@ -939,6 +1151,9 @@ void ScreenOptions::Cancel(ScreenMessage smSendWhenDone) {
 }
 
 bool ScreenOptions::AllAreOnLastRow() const {
+  if (m_pRows.empty()) {
+    return false;
+  }
   FOREACH_HumanPlayer(p) {
     if (m_iCurrentRow[p] != (int)(m_pRows.size() - 1)) {
       return false;
@@ -949,6 +1164,9 @@ bool ScreenOptions::AllAreOnLastRow() const {
 
 bool ScreenOptions::MenuStart(const InputEventPlus& input) {
   PlayerNumber pn = input.pn;
+  if (!IsHumanOptionsPlayer(pn)) {
+    return false;
+  }
   switch (input.type) {
     case IET_FIRST_PRESS:
       m_bGotAtLeastOneStartPressed[pn] = true;
@@ -968,6 +1186,7 @@ bool ScreenOptions::MenuStart(const InputEventPlus& input) {
     case NAV_THREE_KEY:
     case NAV_TOGGLE_THREE_KEY: {
       bool bHoldingLeftAndRight =
+          INPUTMAPPER != nullptr &&
           INPUTMAPPER->IsBeingPressed(GAME_BUTTON_RIGHT, pn) &&
           INPUTMAPPER->IsBeingPressed(GAME_BUTTON_LEFT, pn);
       if (bHoldingLeftAndRight) {
@@ -987,16 +1206,19 @@ bool ScreenOptions::MenuStart(const InputEventPlus& input) {
 
 void ScreenOptions::ProcessMenuStart(const InputEventPlus& input) {
   PlayerNumber pn = input.pn;
+  if (!IsHumanOptionsPlayer(pn)) {
+    return;
+  }
 
   int iCurRow = m_iCurrentRow[pn];
-  if (LogInputDiagnosticsEnabled()) {
+  if (LogInputDiagnosticsEnabled() && LOG != nullptr) {
     LOG->Trace(
         "ITG Debug: ScreenOptions::ProcessMenuStart screen=%s pn=%d row=%d rows=%zu transitioning=%d",
         this->GetName().c_str(), (int)pn, iCurRow, m_pRows.size(),
         IsTransitioning() ? 1 : 0);
   }
 
-  if (iCurRow < 0) {
+  if (!IsRowIndexValid(m_pRows, iCurRow)) {
     // this shouldn't be happening, but it is, so we need to bail out. -aj
     m_SoundStart.PlayCopy(true);
     this->BeginFadingOut();
@@ -1004,7 +1226,7 @@ void ScreenOptions::ProcessMenuStart(const InputEventPlus& input) {
   }
 
   OptionRow& row = *m_pRows[iCurRow];
-  if (LogInputDiagnosticsEnabled()) {
+  if (LogInputDiagnosticsEnabled() && LOG != nullptr) {
     LOG->Trace(
         "ITG Debug: ScreenOptions::ProcessMenuStart row_title=\"%s\" row_type=%d choice=%d",
         row.GetRowTitle().c_str(), (int)row.GetRowType(),
@@ -1067,6 +1289,14 @@ void ScreenOptions::ProcessMenuStart(const InputEventPlus& input) {
 
   if (row.GetRowDef().m_selectType == SELECT_MULTIPLE) {
     int iChoiceInRow = row.GetChoiceInRowWithFocus(pn);
+    if (iChoiceInRow < 0 ||
+        iChoiceInRow >= static_cast<int>(row.GetRowDef().m_vsChoices.size())) {
+      ScreenOptionsLogWarn(
+          ssprintf("ScreenOptions::ProcessMenuStart(%s): invalid choice %d "
+                   "for row %d",
+                   m_sName.c_str(), iChoiceInRow, iCurRow));
+      return;
+    }
     bool bSelected = !row.GetSelected(pn, iChoiceInRow);
     bool changed = row.SetSelected(pn, iChoiceInRow, bSelected);
     if (changed) {
@@ -1087,7 +1317,7 @@ void ScreenOptions::ProcessMenuStart(const InputEventPlus& input) {
     msg.SetParam("RowIndex", iCurRow);
     msg.SetParam("ChoiceInRow", iChoiceInRow);
     msg.SetParam("Selected", bSelected);
-    MESSAGEMAN->Broadcast(msg);
+    BroadcastIfAvailable(msg);
 
     if (row.GetFirstItemGoesDown() && row.GoToFirstOnStart()) {
       // move to the first choice in the row
@@ -1114,6 +1344,11 @@ void ScreenOptions::ProcessMenuStart(const InputEventPlus& input) {
       case NAV_TOGGLE_THREE_KEY:
       case NAV_TOGGLE_FIVE_KEY: {
         int iChoiceInRow = row.GetChoiceInRowWithFocus(pn);
+        if (iChoiceInRow < 0 ||
+            iChoiceInRow >=
+                static_cast<int>(row.GetRowDef().m_vsChoices.size())) {
+          return;
+        }
         if (row.GetRowDef().m_bOneChoiceForAllPlayers) {
           row.SetOneSharedSelection(iChoiceInRow);
         } else {
@@ -1131,7 +1366,10 @@ void ScreenOptions::ProcessMenuStart(const InputEventPlus& input) {
         break;
       }
       case NAV_THREE_KEY_MENU:
-        FAIL_M("NAV_THREE_KEY_MENU should be unreachable");
+        ScreenOptionsLogWarn(
+            "ScreenOptions::ProcessMenuStart: NAV_THREE_KEY_MENU reached "
+            "non-ending branch");
+        return;
       case NAV_FIVE_KEY:
         /* Jump to the exit row.  (If everyone's already on the exit row, then
          * we'll have already gone to the next screen above.) */
@@ -1145,8 +1383,14 @@ void ScreenOptions::ProcessMenuStart(const InputEventPlus& input) {
 }
 
 void ScreenOptions::StoreFocus(PlayerNumber pn) {
+  if (!IsValidOptionsPlayer(pn)) {
+    return;
+  }
   // Long rows always put us in the center, so don't update the focus.
   int iCurrentRow = m_iCurrentRow[pn];
+  if (!IsRowIndexValid(m_pRows, iCurrentRow)) {
+    return;
+  }
   const OptionRow& row = *m_pRows[iCurrentRow];
   if (row.GetRowDef().m_layoutType == LAYOUT_SHOW_ONE_IN_ROW) {
     return;
@@ -1156,27 +1400,33 @@ void ScreenOptions::StoreFocus(PlayerNumber pn) {
   GetWidthXY(
       pn, m_iCurrentRow[pn], row.GetChoiceInRowWithFocus(pn), iWidth,
       m_iFocusX[pn], iY);
-  LOG->Trace(
-      "cur selection %ix%i @ %i", m_iCurrentRow[pn],
-      row.GetChoiceInRowWithFocus(pn), m_iFocusX[pn]);
+  ScreenOptionsLogTrace(
+      ssprintf("cur selection %ix%i @ %i", m_iCurrentRow[pn],
+               row.GetChoiceInRowWithFocus(pn), m_iFocusX[pn]));
 }
 
 bool ScreenOptions::FocusedItemEndsScreen(PlayerNumber pn) const {
   std::string sScreen = GetNextScreenForFocusedItem(pn);
-  LOG->Trace(
-      "ITG Debug: ScreenOptions::FocusedItemEndsScreen screen=%s pn=%d next=\"%s\"",
-      this->GetName().c_str(), (int)pn, sScreen.c_str());
+  ScreenOptionsLogTrace(
+      ssprintf("ITG Debug: ScreenOptions::FocusedItemEndsScreen screen=%s "
+               "pn=%d next=\"%s\"",
+               this->GetName().c_str(), (int)pn, sScreen.c_str()));
   return !sScreen.empty();
 }
 
 std::string ScreenOptions::GetNextScreenForFocusedItem(PlayerNumber pn) const {
+  if (!IsValidOptionsPlayer(pn)) {
+    return std::string();
+  }
   int iCurRow = this->GetCurrentRow(pn);
 
   if (iCurRow == -1) {
     return std::string();
   }
 
-  ASSERT(iCurRow >= 0 && iCurRow < (int)m_pRows.size());
+  if (!IsRowIndexValid(m_pRows, iCurRow)) {
+    return std::string();
+  }
   const OptionRow* pRow = m_pRows[iCurRow];
 
   int iChoice = pRow->GetChoiceInRowWithFocus(pn);
@@ -1185,21 +1435,28 @@ std::string ScreenOptions::GetNextScreenForFocusedItem(PlayerNumber pn) const {
   }
 
   // not the "goes down" item
-  if (iChoice == -1) {
+  if (iChoice < 0 ||
+      iChoice >= static_cast<int>(pRow->GetRowDef().m_vsChoices.size())) {
     return std::string();
   }
 
   const OptionRowHandler* pHand = pRow->GetHandler();
   if (pHand == nullptr) {
-    LOG->Trace(
-        "ITG Debug: ScreenOptions::GetNextScreenForFocusedItem handler=null screen=%s pn=%d row=%d",
-        this->GetName().c_str(), (int)pn, iCurRow);
+    ScreenOptionsLogTrace(
+        ssprintf("ITG Debug: ScreenOptions::GetNextScreenForFocusedItem "
+                 "handler=null screen=%s pn=%d row=%d",
+                 this->GetName().c_str(), (int)pn, iCurRow));
     return std::string();
   }
   std::string next = pHand->GetScreen(iChoice);
-  LOG->Trace(
-      "ITG Debug: ScreenOptions::GetNextScreenForFocusedItem screen=%s pn=%d row=%d choice=%d next=\"%s\"",
-      this->GetName().c_str(), (int)pn, iCurRow, iChoice, next.c_str());
+  if (!IsUsableScreenTarget(next)) {
+    return std::string();
+  }
+  ScreenOptionsLogTrace(
+      ssprintf("ITG Debug: ScreenOptions::GetNextScreenForFocusedItem "
+               "screen=%s pn=%d row=%d choice=%d next=\"%s\"",
+               this->GetName().c_str(), (int)pn, iCurRow, iChoice,
+               next.c_str()));
   return next;
 }
 
@@ -1213,11 +1470,16 @@ void ScreenOptions::ChangeValueInRowAbsolute(
   if (iRow == -1) {  // no row selected
     return;          // don't allow a move
   }
+  if (!IsValidOptionsPlayer(pn) || !IsRowIndexValid(m_pRows, iRow)) {
+    return;
+  }
 
   OptionRow& row = *m_pRows[iRow];
 
   const int iNumChoices = row.GetRowDef().m_vsChoices.size();
-  ASSERT(iNumChoices >= 0 && iChoiceIndex < iNumChoices);
+  if (iChoiceIndex < 0 || iChoiceIndex >= iNumChoices) {
+    return;
+  }
 
   int iCurrentChoiceWithFocus = row.GetChoiceInRowWithFocus(pn);
   int iDelta = iChoiceIndex - iCurrentChoiceWithFocus;
@@ -1225,7 +1487,7 @@ void ScreenOptions::ChangeValueInRowAbsolute(
   Message msg("ChangeValue");
   msg.SetParam("PlayerNumber", pn);
   msg.SetParam("RowIndex", iRow);
-  MESSAGEMAN->Broadcast(msg);
+  BroadcastIfAvailable(msg);
 
   ChangeValueInRowRelative(iRow, pn, iDelta, bRepeat);
 }
@@ -1234,6 +1496,9 @@ void ScreenOptions::ChangeValueInRowRelative(
     int iRow, PlayerNumber pn, int iDelta, bool bRepeat) {
   if (iRow == -1) {  // no row selected
     return;          // don't allow a move
+  }
+  if (!IsValidOptionsPlayer(pn) || !IsRowIndexValid(m_pRows, iRow)) {
+    return;
   }
 
   OptionRow& row = *m_pRows[iRow];
@@ -1269,6 +1534,10 @@ void ScreenOptions::ChangeValueInRowRelative(
   bool bOneChanged = false;
 
   int iCurrentChoiceWithFocus = row.GetChoiceInRowWithFocus(pn);
+  if (iCurrentChoiceWithFocus < 0 ||
+      iCurrentChoiceWithFocus >= iNumChoices) {
+    iCurrentChoiceWithFocus = 0;
+  }
   int iNewChoiceWithFocus = iCurrentChoiceWithFocus + iDelta;
   if (!bRepeat && WRAP_VALUE_IN_ROW.GetValue()) {
     wrap(iNewChoiceWithFocus, iNumChoices);
@@ -1339,14 +1608,24 @@ void ScreenOptions::AfterChangeValueInRow(int iRow, PlayerNumber pn) {
 // Move up/down. Returns true if we actually moved.
 bool ScreenOptions::MoveRowRelative(PlayerNumber pn, int iDir, bool bRepeat) {
   // LOG->Trace( "MoveRowRelative(pn %i, dir %i, rep %i)", pn, iDir, bRepeat );
+  if (!IsValidOptionsPlayer(pn) || (iDir != -1 && iDir != 1) ||
+      m_pRows.empty()) {
+    return false;
+  }
 
   int iDest = -1;
-  ASSERT(m_pRows.size() != 0);
+  if (!IsRowIndexValid(m_pRows, m_iCurrentRow[pn])) {
+    m_iCurrentRow[pn] = 0;
+  }
   for (int r = 1; r < (int)m_pRows.size(); r++) {
     int iDelta = r * iDir;
     iDest = m_iCurrentRow[pn] + iDelta;
     wrap(iDest, m_pRows.size());
 
+    if (!IsRowIndexValid(m_pRows, iDest)) {
+      iDest = -1;
+      continue;
+    }
     OptionRow& row = *m_pRows[iDest];
     if (row.GetRowDef().IsEnabledForPlayer(pn)) {
       break;
@@ -1372,8 +1651,11 @@ bool ScreenOptions::MoveRowRelative(PlayerNumber pn, int iDir, bool bRepeat) {
 }
 
 void ScreenOptions::AfterChangeRow(PlayerNumber pn) {
+  if (!IsValidOptionsPlayer(pn)) {
+    return;
+  }
   const int iRow = m_iCurrentRow[pn];
-  if (iRow != -1) {
+  if (IsRowIndexValid(m_pRows, iRow)) {
     OptionRow& row = *m_pRows[iRow];
     if (m_OptionsNavigation == NAV_TOGGLE_FIVE_KEY) {
       if (row.GetRowDef().m_selectType == SELECT_ONE) {
@@ -1408,6 +1690,9 @@ void ScreenOptions::AfterChangeRow(PlayerNumber pn) {
 }
 
 bool ScreenOptions::MoveRowAbsolute(PlayerNumber pn, int iRow) {
+  if (!IsValidOptionsPlayer(pn) || !IsRowIndexValid(m_pRows, iRow)) {
+    return false;
+  }
   bool bChanged = false;
   FOREACH_PlayerNumber(p) {
     if (m_InputMode == INPUTMODE_INDIVIDUAL && p != pn) {
@@ -1428,13 +1713,16 @@ bool ScreenOptions::MoveRowAbsolute(PlayerNumber pn, int iRow) {
     msg.SetParam("PlayerNumber", p);
     msg.SetParam("RowIndex", GetCurrentRow(p));
     msg.SetParam("ChangedToExit", row.GetRowType() == OptionRow::RowType_Exit);
-    MESSAGEMAN->Broadcast(msg);
+    BroadcastIfAvailable(msg);
   }
 
   return bChanged;
 }
 
 bool ScreenOptions::MenuLeft(const InputEventPlus& input) {
+  if (!IsHumanOptionsPlayer(input.pn)) {
+    return false;
+  }
   if (m_OptionsNavigation == NAV_THREE_KEY_ALT) {
     MenuUpDown(input, -1);
   } else {
@@ -1443,12 +1731,14 @@ bool ScreenOptions::MenuLeft(const InputEventPlus& input) {
   }
 
   PlayerNumber pn = input.pn;
-  MESSAGEMAN->Broadcast(
-      (MessageID)(Message_MenuLeftP1 + Enum::to_integral(pn)));
+  BroadcastIfAvailable((MessageID)(Message_MenuLeftP1 + Enum::to_integral(pn)));
   return true;
 }
 
 bool ScreenOptions::MenuRight(const InputEventPlus& input) {
+  if (!IsHumanOptionsPlayer(input.pn)) {
+    return false;
+  }
   if (m_OptionsNavigation == NAV_THREE_KEY_ALT) {
     MenuUpDown(input, +1);
   } else {
@@ -1457,46 +1747,62 @@ bool ScreenOptions::MenuRight(const InputEventPlus& input) {
   }
 
   PlayerNumber pn = input.pn;
-  MESSAGEMAN->Broadcast(
+  BroadcastIfAvailable(
       (MessageID)(Message_MenuRightP1 + Enum::to_integral(pn)));
   return true;
 }
 
 bool ScreenOptions::MenuUp(const InputEventPlus& input) {
+  if (!IsHumanOptionsPlayer(input.pn)) {
+    return false;
+  }
   MenuUpDown(input, -1);
   PlayerNumber pn = input.pn;
-  MESSAGEMAN->Broadcast((MessageID)(Message_MenuUpP1 + Enum::to_integral(pn)));
+  BroadcastIfAvailable((MessageID)(Message_MenuUpP1 + Enum::to_integral(pn)));
   return true;
 }
 
 bool ScreenOptions::MenuDown(const InputEventPlus& input) {
+  if (!IsHumanOptionsPlayer(input.pn)) {
+    return false;
+  }
   MenuUpDown(input, +1);
   PlayerNumber pn = input.pn;
-  MESSAGEMAN->Broadcast(
+  BroadcastIfAvailable(
       (MessageID)(Message_MenuDownP1 + Enum::to_integral(pn)));
   return true;
 }
 
 bool ScreenOptions::MenuSelect(const InputEventPlus& input) {
+  if (!IsHumanOptionsPlayer(input.pn)) {
+    return false;
+  }
   MenuUpDown(input, -1);
   return true;
 }
 
 void ScreenOptions::MenuUpDown(const InputEventPlus& input, int iDir) {
-  ASSERT(iDir == -1 || iDir == +1);
+  if (iDir != -1 && iDir != +1) {
+    return;
+  }
   PlayerNumber pn = input.pn;
+  if (!IsHumanOptionsPlayer(pn)) {
+    return;
+  }
 
   if (input.type == IET_REPEAT) {
     /* If down is pressed, don't allow up to repeat, and vice versa. This
      * prevents holding both up and down from toggling repeatedly in-place. */
     if (iDir == +1) {
-      if (INPUTMAPPER->IsBeingPressed(GAME_BUTTON_MENUUP, pn) ||
-          INPUTMAPPER->IsBeingPressed(GAME_BUTTON_SELECT, pn)) {
+      if (INPUTMAPPER != nullptr &&
+          (INPUTMAPPER->IsBeingPressed(GAME_BUTTON_MENUUP, pn) ||
+           INPUTMAPPER->IsBeingPressed(GAME_BUTTON_SELECT, pn))) {
         return;
       }
     } else {
-      if (INPUTMAPPER->IsBeingPressed(GAME_BUTTON_MENUDOWN, pn) ||
-          INPUTMAPPER->IsBeingPressed(GAME_BUTTON_START, pn)) {
+      if (INPUTMAPPER != nullptr &&
+          (INPUTMAPPER->IsBeingPressed(GAME_BUTTON_MENUDOWN, pn) ||
+           INPUTMAPPER->IsBeingPressed(GAME_BUTTON_START, pn))) {
         return;
       }
     }
@@ -1520,8 +1826,8 @@ void ScreenOptions::RedrawOptions() {
   // Restore current row indices if they're still valid
   FOREACH_PlayerNumber(pn) {
     if (saved_row[pn] >= 0 && saved_row[pn] < GetNumRows()) {
-      const OptionRow& row = *GetRow(saved_row[pn]);
-      if (row.GetRowDef().IsEnabledForPlayer(pn)) {
+      const OptionRow* row = GetRow(saved_row[pn]);
+      if (row != nullptr && row->GetRowDef().IsEnabledForPlayer(pn)) {
         m_iCurrentRow[pn] = saved_row[pn];
       }
     }
@@ -1533,7 +1839,7 @@ void ScreenOptions::RedrawOptions() {
   FOREACH_PlayerNumber(pn) { AfterChangeRow(pn); }
 
   Message msg("OptionsRedrawn");
-  MESSAGEMAN->Broadcast(msg);
+  BroadcastIfAvailable(msg);
 }
 
 void ScreenOptions::SetOptionRowVisible(
@@ -1571,7 +1877,7 @@ void ScreenOptions::SetOptionRowVisible(
   Message msg("OptionRowVisibilityChanged");
   msg.SetParam("RowIndex", row_index);
   msg.SetParam("Visible", visible);
-  MESSAGEMAN->Broadcast(msg);
+  BroadcastIfAvailable(msg);
 }
 
 // lua start
@@ -1585,18 +1891,29 @@ class LunaScreenOptions : public Luna<ScreenOptions> {
     return 1;
   }
   static int FocusedItemEndsScreen(T* p, lua_State* L) {
+    PlayerNumber pn = PLAYER_INVALID;
     lua_pushboolean(
-        L, p->FocusedItemEndsScreen(Enum::Check<PlayerNumber>(L, 1)));
+        L, LuaReadOptionsPlayer(L, 1, pn) && p->FocusedItemEndsScreen(pn));
     return 1;
   }
   static int GetCurrentRowIndex(T* p, lua_State* L) {
-    lua_pushnumber(L, p->GetCurrentRow(Enum::Check<PlayerNumber>(L, 1)));
+    PlayerNumber pn = PLAYER_INVALID;
+    if (!LuaReadOptionsPlayer(L, 1, pn)) {
+      lua_pushnumber(L, -1);
+      return 1;
+    }
+    lua_pushnumber(L, p->GetCurrentRow(pn));
     return 1;
   }
   static int GetOptionRow(T* p, lua_State* L) {
-    int row_index = IArg(1);
+    int row_index = -1;
+    if (!LuaReadInt(L, 1, row_index)) {
+      lua_pushnil(L);
+      return 1;
+    }
     if (row_index < 0 || row_index >= p->GetNumRows()) {
-      luaL_error(L, "Row index %d is invalid.", row_index);
+      lua_pushnil(L);
+      return 1;
     }
     OptionRow* pOptRow = p->GetRow(row_index);
     if (pOptRow) {
@@ -1607,9 +1924,12 @@ class LunaScreenOptions : public Luna<ScreenOptions> {
     return 1;
   }
   static int SetOptionRowVisible(T* p, lua_State* L) {
-    int row_index = IArg(1);
-    bool visible = BArg(2);
-    bool redraw = lua_isnone(L, 3) ? true : BArg(3);
+    int row_index = -1;
+    if (!LuaReadInt(L, 1, row_index)) {
+      COMMON_RETURN_SELF;
+    }
+    bool visible = lua_toboolean(L, 2);
+    bool redraw = lua_isnone(L, 3) ? true : lua_toboolean(L, 3);
 
     p->SetOptionRowVisible(row_index, visible, redraw);
     COMMON_RETURN_SELF;
@@ -1622,10 +1942,13 @@ class LunaScreenOptions : public Luna<ScreenOptions> {
   DEFINE_METHOD(GetNumRows, GetNumRows());
 
   static int SetOptionRowIndex(T* p, lua_State* L) {
-    PlayerNumber pn = Enum::Check<PlayerNumber>(L, 1);
-    int row_index = IArg(2);
+    PlayerNumber pn = PLAYER_INVALID;
+    int row_index = -1;
+    if (!LuaReadOptionsPlayer(L, 1, pn) || !LuaReadInt(L, 2, row_index)) {
+      COMMON_RETURN_SELF;
+    }
     if (row_index < 0 || row_index >= p->GetNumRows()) {
-      luaL_error(L, "Row index %d is invalid.", row_index);
+      COMMON_RETURN_SELF;
     }
     p->MoveRowAbsolute(pn, row_index);
     COMMON_RETURN_SELF;

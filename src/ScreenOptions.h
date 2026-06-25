@@ -113,10 +113,18 @@ class ScreenOptions : public ScreenWithMenuElements {
       const InputEventPlus& input, int iDir);  // iDir == -1 or iDir == +1
 
   int GetCurrentRow(PlayerNumber pn = PLAYER_1) const {
+    if (pn < PLAYER_1 || pn >= NUM_PLAYERS) {
+      return -1;
+    }
     return m_iCurrentRow[pn];
   }
   bool AllAreOnLastRow() const;
-  OptionRow* GetRow(int iRow) const { return m_pRows[iRow]; }
+  OptionRow* GetRow(int iRow) const {
+    if (iRow < 0 || iRow >= static_cast<int>(m_pRows.size())) {
+      return nullptr;
+    }
+    return m_pRows[iRow];
+  }
   // void SetOptionRowFromName( const std::string& nombre );
   int GetNumRows() const { return static_cast<int>(m_pRows.size()); }
 
