@@ -83,6 +83,7 @@
 #include "SongManager.h"
 #include "SpecialFiles.h"
 #include "StatsManager.h"
+#include "TeejusbFsrManager.h"
 #include "ThemeManager.h"
 #include "UnlockManager.h"
 #include "ver.h"
@@ -413,6 +414,7 @@ void ShutdownGame() {
   } while (false)
 
   DELETE_SINGLETON_WITH_TRACE(NETWORK);
+  DELETE_SINGLETON_WITH_TRACE(TEEJUSBFSR);
   DELETE_SINGLETON_WITH_TRACE(SCREENMAN);
   DELETE_SINGLETON_WITH_TRACE(STATSMAN);
   DELETE_SINGLETON_WITH_TRACE(MESSAGEMAN);
@@ -1197,6 +1199,7 @@ int sm_main(int argc, char* argv[]) {
   SONGMAN->UpdatePopular();
   SONGMAN->UpdatePreferredSort();
   NETWORK = new NetworkManager;
+  TEEJUSBFSR = new TeejusbFsrManager;
   STATSMAN = new StatsManager;
 
   // Initialize which courses are ranking courses here.
