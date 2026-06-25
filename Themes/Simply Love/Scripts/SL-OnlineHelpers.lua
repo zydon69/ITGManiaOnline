@@ -893,6 +893,17 @@ TransitionToOnlineOptions = function()
 		end
 		return
 	end
+	if ITGOnline
+		and ITGOnline.currentRoom
+		and ITGOnline.IsCurrentUserReadyInRoom
+		and ITGOnline:IsCurrentUserReadyInRoom(ITGOnline.currentRoom, "config_ready") then
+		if online_trace then
+			online_trace("FLOW transition_to_options_skipped reason=current_user_already_config_ready"
+				.. " phase=" .. tostring(roomPhase)
+				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
+		end
+		return
+	end
 
 	local screenName = topScreen:GetName()
 	if screenName == "ScreenPlayerOptions"

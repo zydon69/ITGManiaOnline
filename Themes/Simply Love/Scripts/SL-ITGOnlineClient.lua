@@ -5683,7 +5683,8 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 			if (phase == "lobby_ready" or phase == "config")
 				and self.currentRoom
 				and self.currentRoom.selected_song
-				and self:CurrentUserConfirmedSelectedSong(self.currentRoom) then
+				and self:CurrentUserConfirmedSelectedSong(self.currentRoom)
+				and not self:IsCurrentUserReadyInRoom(self.currentRoom, "config_ready") then
 				online_flow_trace("preferred=options reason=new_song_while_evaluation playState=" .. tostring(playState)
 					.. " phase=" .. tostring(phase))
 				return "options"
@@ -5697,6 +5698,12 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 			return "lobby"
 		end
 		if phase == "config" and self.currentRoom and self.currentRoom.selected_song and self:CurrentUserConfirmedSelectedSong(self.currentRoom) then
+			if self:IsCurrentUserReadyInRoom(self.currentRoom, "config_ready") then
+				online_flow_trace("preferred=nil reason=config_phase_current_user_already_ready screen=" .. tostring(screenName)
+					.. " phase=" .. tostring(phase)
+					.. " playState=" .. tostring(playState))
+				return nil
+			end
 			online_flow_trace("preferred=options reason=config_phase_current_user_has_song screen=" .. tostring(screenName)
 				.. " phase=" .. tostring(phase)
 				.. " playState=" .. tostring(playState))
