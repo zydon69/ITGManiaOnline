@@ -2,15 +2,227 @@
 -- Helper Functions for PlayerOptions
 -- -----------------------------------------------------------------------
 
+local applyingProfileMods = false
+
+local PlayerOptionsTrace = function(message)
+	if type(online_trace) == "function" then
+		online_trace("FLOW player_options " .. tostring(message or ""))
+	elseif type(Trace) == "function" then
+		Trace("SL-PlayerOptions: " .. tostring(message or ""))
+	elseif type(Warn) == "function" then
+		Warn("SL-PlayerOptions: " .. tostring(message or ""))
+	end
+end
+
+local SafeCall = function(context, fn)
+	if type(fn) ~= "function" then return false, nil end
+	local results = { pcall(fn) }
+	local ok = table.remove(results, 1)
+	if not ok then
+		local result = results[1]
+		PlayerOptionsTrace("safe_call_failed context=" .. tostring(context or "unknown")
+			.. " error=" .. tostring(result))
+		return false, nil
+	end
+	return true, unpack(results)
+end
+
+local SafeMethod = function(context, object, method)
+	if not (object and type(object[method]) == "function") then return nil end
+	local ok, result = SafeCall(context, function()
+		return object[method](object)
+	end)
+	return ok and result or nil
+end
+
+local SafeBroadcast = function(message, params)
+	if applyingProfileMods and tostring(message or "") == "RefreshActorProxy" then
+		return false
+	end
+	if not (MESSAGEMAN and MESSAGEMAN.Broadcast) then return false end
+	return SafeCall("MESSAGEMAN.Broadcast " .. tostring(message), function()
+		MESSAGEMAN:Broadcast(message, params)
+	end)
+end
+
+local SafeThemePref = function(name, fallback)
+	if not (ThemePrefs and type(ThemePrefs.Get) == "function") then return fallback end
+	local ok, value = SafeCall("ThemePrefs.Get " .. tostring(name), function()
+		return ThemePrefs.Get(name)
+	end)
+	if not ok or value == nil then return fallback end
+	return value
+end
+
+local SafeEnumShort = function(value, fallback)
+	if type(ToEnumShortString) ~= "function" or value == nil then return fallback end
+	local ok, result = SafeCall("ToEnumShortString", function()
+		return ToEnumShortString(value)
+	end)
+	return ok and result or fallback
+end
+
+local PlayerKey = function(player)
+	return SafeEnumShort(player, nil)
+end
+
+local PlayerMods = function(player)
+	local pn = PlayerKey(player)
+	local sl_pn = pn and SL and SL[pn] or nil
+	if not sl_pn then
+		PlayerOptionsTrace("missing_player_state player=" .. tostring(pn or player))
+		return nil, nil
+	end
+	sl_pn.ActiveModifiers = sl_pn.ActiveModifiers or {}
+	return sl_pn.ActiveModifiers, sl_pn
+end
+
+local IsFiniteNumber = function(value)
+	value = tonumber(value)
+	return value ~= nil and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+local NumberOr = function(value, fallback)
+	value = tonumber(value)
+	if IsFiniteNumber(value) then return value end
+	return fallback
+end
+
+local Clamp = function(value, minimum, maximum)
+	value = NumberOr(value, minimum)
+	if value < minimum then return minimum end
+	if value > maximum then return maximum end
+	return value
+end
+
+local FindSelectedIndex = function(list, limit)
+	for i=1, math.min(#(list or {}), tonumber(limit) or #(list or {})) do
+		if list[i] then return i end
+	end
+	return nil
+end
+
+local SafeTopScreenName = function()
+	if not (SCREENMAN and SCREENMAN.GetTopScreen) then return nil end
+	local ok, screen = SafeCall("SCREENMAN.GetTopScreen", function()
+		return SCREENMAN:GetTopScreen()
+	end)
+	if not (ok and screen and screen.GetName) then return nil end
+	local okName, name = SafeCall("Screen.GetName", function()
+		return screen:GetName()
+	end)
+	return okName and tostring(name or "") or nil
+end
+
+local HumanPlayers = function()
+	if GAMESTATE and GAMESTATE.GetHumanPlayers then
+		local ok, players = SafeCall("GAMESTATE.GetHumanPlayers", function()
+			return GAMESTATE:GetHumanPlayers()
+		end)
+		if ok and type(players) == "table" and #players > 0 then return players end
+	end
+	return {}
+end
+
+local NormalizeRoomPhase = function(phase)
+	if ITGOnline and type(ITGOnline.NormalizeRoomPhase) == "function" then
+		local ok, normalized = SafeCall("ITGOnline.NormalizeRoomPhase", function()
+			return ITGOnline:NormalizeRoomPhase(phase)
+		end)
+		if ok and normalized then return tostring(normalized) end
+	end
+	return tostring(phase or ""):lower()
+end
+
+local RoomId = function(room)
+	if type(room) ~= "table" then return "" end
+	return tostring(room.id or room.room_id or room.roomId or "")
+end
+
+local CurrentUserId = function()
+	return tostring(ITGOnline and ITGOnline.user and ITGOnline.user.id or "")
+end
+
+local UserIsRoomMember = function(room, userId)
+	if type(room) ~= "table" then return false end
+	userId = tostring(userId or "")
+	if userId == "" then return false end
+	for member in ivalues(type(room.members) == "table" and room.members or {}) do
+		local memberTable = type(member) == "table" and member or {}
+		local user = type(memberTable.user) == "table" and memberTable.user or nil
+		local memberId = tostring(memberTable.user_id or memberTable.userId or memberTable.playerId or memberTable.id or "")
+		if memberId == userId or tostring(user and user.id or "") == userId then
+			return true
+		end
+	end
+	return false
+end
+
+local HasActiveOnlineRoom = function(options)
+	options = type(options) == "table" and options or {}
+	if not (ITGOnline and ITGOnline.currentRoomId and ITGOnline.currentRoom) then
+		return false, nil, "missing_room"
+	end
+	local room = ITGOnline.currentRoom
+	local expectedRoomId = tostring(ITGOnline.currentRoomId or "")
+	if expectedRoomId == "" or RoomId(room) ~= expectedRoomId then
+		return false, room, "room_id_mismatch"
+	end
+	local userId = CurrentUserId()
+	if options.requireUser ~= false and userId == "" then
+		return false, room, "missing_user"
+	end
+	if options.requireMember ~= false and not UserIsRoomMember(room, userId) then
+		return false, room, "user_not_in_room"
+	end
+	if options.phase then
+		local currentPhase = NormalizeRoomPhase(room.phase)
+		local phases = type(options.phase) == "table" and options.phase or { options.phase }
+		local okPhase = false
+		for phase in ivalues(phases) do
+			if currentPhase == tostring(phase) then
+				okPhase = true
+				break
+			end
+		end
+		if not okPhase then return false, room, "phase_mismatch" end
+	end
+	return true, room, nil
+end
+
+local CurrentGameMode = function()
+	return SL and SL.Global and SL.Global.GameMode or "ITG"
+end
+
+local IsTournamentMode = function()
+	return SafeThemePref("EnableTournamentMode", false) == true
+end
+
+local TournamentScoringSystem = function()
+	local scoring = tostring(SafeThemePref("ScoringSystem", "ITG") or "ITG")
+	return scoring == "EX" and "EX" or "ITG"
+end
+
 local GetModsAndPlayerOptions = function(player)
-	local mods = SL[ToEnumShortString(player)].ActiveModifiers
+	local mods = PlayerMods(player)
+	if not mods then return nil, nil end
 	-- This can get called already when loading ScreenTitleMenu if all screens
 	-- before and including ScreenSelectPlayMode are disabled. Top screen will
 	-- be nil in that case.
-	local topscreen = SCREENMAN:GetTopScreen()
-	local topscreenname = topscreen and topscreen:GetName()
+	local topscreenname = SafeTopScreenName()
 	local modslevel = topscreenname == "ScreenEditOptions" and "ModsLevel_Stage" or "ModsLevel_Preferred"
-	local playeroptions = GAMESTATE:GetPlayerState(player):GetPlayerOptions(modslevel)
+	if not (GAMESTATE and GAMESTATE.GetPlayerState) then return mods, nil end
+	local okState, playerstate = SafeCall("GAMESTATE.GetPlayerState", function()
+		return GAMESTATE:GetPlayerState(player)
+	end)
+	if not (okState and playerstate and playerstate.GetPlayerOptions) then
+		PlayerOptionsTrace("missing_player_options player=" .. tostring(PlayerKey(player) or player))
+		return mods, nil
+	end
+	local okOptions, playeroptions = SafeCall("PlayerState.GetPlayerOptions", function()
+		return playerstate:GetPlayerOptions(modslevel)
+	end)
+	if not okOptions then playeroptions = nil end
 
 	return mods, playeroptions
 end
@@ -24,10 +236,24 @@ local GetPlayableTrails = function(course)
 	if not (course and course.GetAllTrails) then return nil end
 
 	local trails = {}
-	for _,trail in ipairs(course:GetAllTrails()) do
+	local okTrails, allTrails = SafeCall("Course.GetAllTrails", function()
+		return course:GetAllTrails()
+	end)
+	for _,trail in ipairs(okTrails and type(allTrails) == "table" and allTrails or {}) do
 		local playable = true
-		for _,entry in ipairs(trail:GetTrailEntries()) do
-			if not SongUtil.IsStepsTypePlayable(entry:GetSong(), entry:GetSteps():GetStepsType()) then
+		local entries = SafeMethod("Trail.GetTrailEntries", trail, "GetTrailEntries")
+		for _,entry in ipairs(type(entries) == "table" and entries or {}) do
+			local song = SafeMethod("TrailEntry.GetSong", entry, "GetSong")
+			local steps = SafeMethod("TrailEntry.GetSteps", entry, "GetSteps")
+			local stepsType = SafeMethod("Steps.GetStepsType", steps, "GetStepsType")
+			local okPlayable, isPlayable = false, false
+			if SongUtil and SongUtil.IsStepsTypePlayable and song and stepsType then
+				okPlayable, isPlayable = SafeCall("SongUtil.IsStepsTypePlayable", function()
+					return SongUtil.IsStepsTypePlayable(song, stepsType)
+				end)
+			end
+			if not (SongUtil and SongUtil.IsStepsTypePlayable and song and stepsType)
+				or not (okPlayable and isPlayable) then
 				playable = false
 				break
 			end
@@ -39,8 +265,8 @@ local GetPlayableTrails = function(course)
 end
 
 local ApplyScoreMode = function(player, mode)
-	local sl_pn = SL[ToEnumShortString(player)]
-	local mods = sl_pn.ActiveModifiers
+	local mods, sl_pn = PlayerMods(player)
+	if not mods then return {}, {} end
 	local is_ex = mode == "ex"
 	local is_hardex = mode == "hardex"
 
@@ -52,6 +278,152 @@ local ApplyScoreMode = function(player, mode)
 	sl_pn.EvalPanePrimary = ((mods.ShowFaPlusWindow or mods.ShowExScore or mods.ShowHardEXScore) and mods.ShowFaPlusPane) and 2 or 1
 
 	return mods, sl_pn
+end
+
+local SafeAssetList = function(context, fn, fallback)
+	local ok, values = SafeCall(context, fn)
+	if not ok or type(values) ~= "table" then return fallback or {} end
+	local sanitized = {}
+	for value in ivalues(values) do
+		if value ~= nil then sanitized[#sanitized+1] = value end
+	end
+	if #sanitized == 0 and fallback then return fallback end
+	return sanitized
+end
+
+local SafeStringChoices = function(values, fallback)
+	local choices = {}
+	for value in ivalues(type(values) == "table" and values or {}) do
+		if value ~= nil then choices[#choices+1] = tostring(value) end
+	end
+	if #choices == 0 and fallback then return fallback end
+	return choices
+end
+
+local ResolveOptionTable = function(context, source)
+	if type(source) == "function" then
+		local ok, values = SafeCall(context, source)
+		return ok and type(values) == "table" and values or {}
+	end
+	return type(source) == "table" and source or {}
+end
+
+local StripHintsList = function(values, fallback)
+	local choices = {}
+	for value in ivalues(type(values) == "table" and values or {}) do
+		if type(StripSpriteHints) == "function" then
+			local ok, stripped = SafeCall("StripSpriteHints", function()
+				return StripSpriteHints(value)
+			end)
+			choices[#choices+1] = tostring(ok and stripped or value)
+		else
+			choices[#choices+1] = tostring(value)
+		end
+	end
+	if #choices == 0 and fallback then return fallback end
+	return choices
+end
+
+local SafeThemeString = function(group, key)
+	if not (THEME and THEME.GetString) then return tostring(key or "") end
+	local ok, value = SafeCall("THEME.GetString " .. tostring(group) .. "." .. tostring(key), function()
+		return THEME:GetString(group, key)
+	end)
+	return ok and tostring(value or key or "") or tostring(key or "")
+end
+
+local SafeCourseMode = function()
+	if not (GAMESTATE and GAMESTATE.IsCourseMode) then return false end
+	local ok, result = SafeCall("GAMESTATE.IsCourseMode", function()
+		return GAMESTATE:IsCourseMode()
+	end)
+	return ok and result == true
+end
+
+local CurrentSongOrCourse = function()
+	if not GAMESTATE then return nil end
+	if SafeCourseMode() then
+		if not GAMESTATE.GetCurrentCourse then return nil end
+		local ok, course = SafeCall("GAMESTATE.GetCurrentCourse", function()
+			return GAMESTATE:GetCurrentCourse()
+		end)
+		return ok and course or nil
+	end
+	if not GAMESTATE.GetCurrentSong then return nil end
+	local ok, song = SafeCall("GAMESTATE.GetCurrentSong", function()
+		return GAMESTATE:GetCurrentSong()
+	end)
+	return ok and song or nil
+end
+
+local PlayableSteps = function(song)
+	if not (SongUtil and SongUtil.GetPlayableSteps and song) then return {} end
+	local ok, steps = SafeCall("SongUtil.GetPlayableSteps", function()
+		return SongUtil.GetPlayableSteps(song)
+	end)
+	return ok and type(steps) == "table" and steps or {}
+end
+
+local StepchartSnapshot = function()
+	local values = {}
+	local choices = {}
+	local songOrCourse = CurrentSongOrCourse()
+	if not songOrCourse then return choices, values end
+
+	if SafeCourseMode() then
+		values = GetPlayableTrails(songOrCourse) or {}
+		for _, trail in ipairs(values) do
+			local difficulty = SafeMethod("Trail.GetDifficulty", trail, "GetDifficulty")
+			local meter = SafeMethod("Trail.GetMeter", trail, "GetMeter") or 0
+			choices[#choices+1] = ("%s %i"):format(
+				SafeThemeString("Difficulty", SafeEnumShort(difficulty, "Edit")),
+				tonumber(meter) or 0)
+		end
+	else
+		values = PlayableSteps(songOrCourse)
+		for steps in ivalues(values) do
+			local isEdit = SafeMethod("Steps.IsAnEdit", steps, "IsAnEdit") == true
+			if steps and isEdit then
+				choices[#choices+1] = ("%s %i"):format(
+					tostring(SafeMethod("Steps.GetDescription", steps, "GetDescription") or "Edit"),
+					tonumber(SafeMethod("Steps.GetMeter", steps, "GetMeter") or 0) or 0)
+			elseif steps then
+				local difficulty = SafeMethod("Steps.GetDifficulty", steps, "GetDifficulty")
+				choices[#choices+1] = ("%s %i"):format(
+					SafeThemeString("Difficulty", SafeEnumShort(difficulty, "Edit")),
+					tonumber(SafeMethod("Steps.GetMeter", steps, "GetMeter") or 0) or 0)
+			end
+		end
+	end
+	return choices, values
+end
+
+local IsGrooveStatsScoreboxAllowed = function()
+	if not (SL and SL.GrooveStats and SL.GrooveStats.GetScores and type(IsServiceAllowed) == "function") then
+		return false
+	end
+	local ok, allowed = SafeCall("IsServiceAllowed GrooveStats.GetScores", function()
+		return IsServiceAllowed(SL.GrooveStats.GetScores)
+	end)
+	return ok and allowed == true
+end
+
+local SafeIsUsingWideScreen = function()
+	if type(IsUsingWideScreen) ~= "function" then return true end
+	local ok, result = SafeCall("IsUsingWideScreen", IsUsingWideScreen)
+	return ok and result == true
+end
+
+local ScreenSelectMusicAvailable = function()
+	local global = SL and SL.Global or {}
+	local timer = type(global.MenuTimer) == "table" and global.MenuTimer or {}
+	return NumberOr(timer.ScreenSelectMusic, 0) > 1 and global.MusicWheelLocked ~= true
+end
+
+local EnsureScreenAfter = function()
+	SL.Global = SL.Global or {}
+	SL.Global.ScreenAfter = SL.Global.ScreenAfter or {}
+	return SL.Global.ScreenAfter
 end
 
 -- -----------------------------------------------------------------------
@@ -137,11 +509,16 @@ local Overrides = {
 		ExportOnChange = true,
 		LayoutType = "ShowOneInRow",
 		SaveSelections = function(self, list, pn)
+			local mods = PlayerMods(pn)
+			if not mods then return end
 			for i=1,#list do
 				if list[i] then
+					local value = self.Values[i]
+					if value ~= "X" and value ~= "C" and value ~= "M" then value = "X" end
+					mods.SpeedModType = value
 					-- Broadcast a message that ./BGAnimations/ScreenPlayerOptions overlay.lua will be listening for
 					-- so it can hackishly modify the single BitmapText actor used in the SpeedMod optionrow
-					MESSAGEMAN:Broadcast('SpeedModType'..ToEnumShortString(pn)..'Set', {SpeedModType=self.Values[i], Player=pn})
+					SafeBroadcast('SpeedModType'..tostring(PlayerKey(pn) or "")..'Set', {SpeedModType=value, Player=pn})
 				end
 			end
 		end
@@ -153,10 +530,21 @@ local Overrides = {
 		LayoutType = "ShowOneInRow",
 		SaveSelections = function(self, list, pn)
 			local mods, playeroptions = GetModsAndPlayerOptions(pn)
-			local type  = mods.SpeedModType or "X"
-			local speed = mods.SpeedMod or 1.00
+			if not (mods and playeroptions) then return end
+			local speedType  = mods.SpeedModType or "X"
+			local speed = NumberOr(mods.SpeedMod, 1.00)
 
-			playeroptions[type.."Mod"](playeroptions, speed)
+			local appliers = {
+				X = playeroptions.XMod,
+				C = playeroptions.CMod,
+				M = playeroptions.MMod,
+			}
+			local applier = appliers[speedType] or appliers.X
+			if type(applier) == "function" then
+				SafeCall("PlayerOptions." .. tostring(speedType) .. "Mod", function()
+					applier(playeroptions, speed)
+				end)
+			end
 		end
 	},
 	-------------------------------------------------------------------------
@@ -165,10 +553,23 @@ local Overrides = {
 		LayoutType = "ShowOneInRow",
 		Choices = function()
 
-			local all = NOTESKIN:GetNoteSkinNames(false)
+			local all = SafeAssetList("NOTESKIN.GetNoteSkinNames", function()
+				return NOTESKIN and NOTESKIN:GetNoteSkinNames(false)
+			end, { "default" })
 
-			if ThemePrefs.Get("HideStockNoteSkins") then
-				local game = GAMESTATE:GetCurrentGame():GetName()
+			if SafeThemePref("HideStockNoteSkins", false) then
+				local game = "dance"
+				if GAMESTATE and GAMESTATE.GetCurrentGame then
+					local okGame, currentGame = SafeCall("GAMESTATE.GetCurrentGame", function()
+						return GAMESTATE:GetCurrentGame()
+					end)
+					if okGame and currentGame and currentGame.GetName then
+						local okName, name = SafeCall("Game.GetName", function()
+							return currentGame:GetName()
+						end)
+						game = okName and tostring(name or game) or game
+					end
+				end
 
 				-- Apologies, midiman. :(
 				-- Most of these are StepMania 5 stock note skins
@@ -207,18 +608,25 @@ local Overrides = {
 
 			-- It's possible a user might want to hide stock noteskins
 			-- but only have stock noteskins.  If so, just return all noteskins.
-			if #all == 0 then all = NOTESKIN:GetNoteSkinNames(false) end
+			if #all == 0 then all = SafeAssetList("NOTESKIN.GetNoteSkinNames fallback", function()
+				return NOTESKIN and NOTESKIN:GetNoteSkinNames(false)
+			end, { "default" }) end
 
 			return all
 		end,
 		SaveSelections = function(self, list, pn)
 			local mods, playeroptions = GetModsAndPlayerOptions(pn)
+			if not mods then return end
 			for i, val in ipairs(self.Choices) do
 				if list[i] then mods.NoteSkin = val; break end
 			end
 			-- Broadcast a message that ./Graphics/OptionRow Frame.lua will be listening for so it can change the NoteSkin preview
-			MESSAGEMAN:Broadcast("RefreshActorProxy", {Player=pn, Name="NoteSkin", Value=mods.NoteSkin})
-			playeroptions:NoteSkin( mods.NoteSkin )
+			SafeBroadcast("RefreshActorProxy", {Player=pn, Name="NoteSkin", Value=mods.NoteSkin})
+			if playeroptions and playeroptions.NoteSkin and mods.NoteSkin then
+				SafeCall("PlayerOptions.NoteSkin", function()
+					playeroptions:NoteSkin(mods.NoteSkin)
+				end)
+			end
 		end
 	},
 	NoteSkinVariant = {
@@ -228,10 +636,18 @@ local Overrides = {
 		Choices = { "       " },
 		EnabledForPlayers = function() 
 			local players = {}
-			for player in ivalues(GAMESTATE:GetHumanPlayers()) do
-				local variant = SL[ToEnumShortString(player)].ActiveModifiers.NoteSkinVariant
-				local noteskin = SL[ToEnumShortString(player)].ActiveModifiers.NoteSkin
-				if (noteskin and NOTESKIN:HasVariants(noteskin)) then
+			for player in ivalues(HumanPlayers()) do
+				local mods = PlayerMods(player)
+				local variant = mods and mods.NoteSkinVariant or nil
+				local noteskin = mods and mods.NoteSkin or nil
+				local hasVariants = false
+				if noteskin and NOTESKIN and NOTESKIN.HasVariants then
+					local ok, result = SafeCall("NOTESKIN.HasVariants", function()
+						return NOTESKIN:HasVariants(noteskin)
+					end)
+					hasVariants = ok and result == true
+				end
+				if (variant or noteskin) and hasVariants then
 					players[#players+1] = player
 				end
 			end
@@ -240,11 +656,16 @@ local Overrides = {
 		ReloadRowMessages = { "RefreshActorProxy" },
 		SaveSelections = function(self, list, pn)
 			local mods, playeroptions = GetModsAndPlayerOptions(pn)
+			if not mods then return end
 			local variant = mods.NoteSkinVariant
 			if variant then
 				-- Broadcast a message that ./Graphics/OptionRow Frame.lua will be listening for so it can change the NoteSkin preview
-				MESSAGEMAN:Broadcast("RefreshActorProxy", {Player=pn, Name="NoteSkinVariant", Value=mods.NoteSkinVariant})
-				playeroptions:NoteSkin( mods.NoteSkinVariant )
+				SafeBroadcast("RefreshActorProxy", {Player=pn, Name="NoteSkinVariant", Value=mods.NoteSkinVariant})
+				if playeroptions and playeroptions.NoteSkin then
+					SafeCall("PlayerOptions.NoteSkinVariant", function()
+						playeroptions:NoteSkin(mods.NoteSkinVariant)
+					end)
+				end
 			end
 		end
 	},
@@ -252,44 +673,65 @@ local Overrides = {
 	JudgmentGraphic = {
 		LayoutType = "ShowOneInRow",
 		ExportOnChange = true,
-		Choices = function() return map(StripSpriteHints, GetJudgmentGraphics()) end,
-		Values = function() return GetJudgmentGraphics() end,
+		Choices = function()
+			return StripHintsList(SafeAssetList("GetJudgmentGraphics", GetJudgmentGraphics, { "default" }), { "default" })
+		end,
+		Values = function()
+			return SafeAssetList("GetJudgmentGraphics", GetJudgmentGraphics, { "default" })
+		end,
 		SaveSelections = function(self, list, pn)
-			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+			local mods = PlayerMods(pn)
+			if not mods then return end
 			for i, val in ipairs(self.Values) do
 				if list[i] then mods.JudgmentGraphic = val; break end
 			end
 			-- Broadcast a message that ./Graphics/OptionRow Frame.lua will be listening for so it can change the Judgment preview
-			MESSAGEMAN:Broadcast("RefreshActorProxy", {Player=pn, Name="JudgmentGraphic", Value=StripSpriteHints(mods.JudgmentGraphic)})
+			SafeBroadcast("RefreshActorProxy", {
+				Player=pn,
+				Name="JudgmentGraphic",
+				Value=StripHintsList({ mods.JudgmentGraphic }, { mods.JudgmentGraphic or "" })[1]
+			})
 		end
 	},
 	-------------------------------------------------------------------------
 	HoldJudgment = {
 		LayoutType = "ShowOneInRow",
 		ExportOnChange = true,
-		Choices = function() return map(StripSpriteHints, GetHoldJudgments()) end,
-		Values = function() return GetHoldJudgments() end,
+		Choices = function()
+			return StripHintsList(SafeAssetList("GetHoldJudgments", GetHoldJudgments, { "default" }), { "default" })
+		end,
+		Values = function()
+			return SafeAssetList("GetHoldJudgments", GetHoldJudgments, { "default" })
+		end,
 		SaveSelections = function(self, list, pn)
-			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+			local mods = PlayerMods(pn)
+			if not mods then return end
 			for i, val in ipairs(self.Values) do
 				if list[i] then mods.HoldJudgment = val; break end
 			end
 			-- Broadcast a message that ./Graphics/OptionRow Frame.lua will be listening for so it can change the HoldJudgment preview
-			MESSAGEMAN:Broadcast("RefreshActorProxy", {Player=pn, Name="HoldJudgment", Value=StripSpriteHints(mods.HoldJudgment)})
+			SafeBroadcast("RefreshActorProxy", {
+				Player=pn,
+				Name="HoldJudgment",
+				Value=StripHintsList({ mods.HoldJudgment }, { mods.HoldJudgment or "" })[1]
+			})
 		end
 	},
 	-------------------------------------------------------------------------
 	ComboFont = {
 		LayoutType = "ShowOneInRow",
 		ExportOnChange = true,
-		Choices = function() return GetComboFonts() end,
+		Choices = function()
+			return SafeStringChoices(SafeAssetList("GetComboFonts", GetComboFonts, { "default" }), { "default" })
+		end,
 		SaveSelections = function(self, list, pn)
-			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+			local mods = PlayerMods(pn)
+			if not mods then return end
 			for i, val in ipairs(self.Choices) do
 				if list[i] then mods.ComboFont = val; break end
 			end
 			-- Broadcast a message that ./Graphics/OptionRow Frame.lua will be listening for so it can change the ComboFont preview
-			MESSAGEMAN:Broadcast("RefreshActorProxy", {Player=pn, Name="ComboFont", Value=mods.ComboFont})
+			SafeBroadcast("RefreshActorProxy", {Player=pn, Name="ComboFont", Value=mods.ComboFont})
 		end
 	},
 	-------------------------------------------------------------------------
@@ -307,6 +749,7 @@ local Overrides = {
 		end,
 		SaveSelections = function(self, list, pn)
 			local mods, playeroptions = GetModsAndPlayerOptions(pn)
+			if not (mods and playeroptions) then return end
 
 			for i=1,#self.Choices do
 				if list[i] then
@@ -316,11 +759,17 @@ local Overrides = {
 
 			-- to make the arrows smaller, pass Mini() a value between 0 and 1
 			-- (to make the arrows bigger, pass Mini() a value larger than 1)
-			playeroptions:Mini( mods.Mini:gsub("%%","")/100 )
+			local mini = Clamp(tostring(mods.Mini or "0"):gsub("%%",""), -100, 150) / 100
+			if playeroptions.Mini then
+				SafeCall("PlayerOptions.Mini", function()
+					playeroptions:Mini(mini)
+				end)
+			end
 		end
 	},
 	-------------------------------------------------------------------------
 	MusicRate = {
+		ApplyOnProfileLoad = false,
 		Choices = function()
 			local first	= 0.05
 			local last 	= 3
@@ -332,10 +781,11 @@ local Overrides = {
 		OneChoiceForAllPlayers = true,
 		HideOnDisable = true,
 		EnabledForPlayers = function()
-			if ITGOnline and ITGOnline.currentRoomId and ITGOnline.currentRoom and ITGOnline.user then
-				local manager = ITGOnline.currentRoom.manager or {}
-				local managerId = tostring(manager.id or ITGOnline.currentRoom.manager_id or ITGOnline.currentRoom.managerId or "")
-				local userId = tostring(ITGOnline.user.id or "")
+			local active, room = HasActiveOnlineRoom({ phase = { "lobby", "lobby_ready", "config" } })
+			if active then
+				local manager = room.manager or {}
+				local managerId = tostring(manager.id or room.manager_id or room.managerId or "")
+				local userId = CurrentUserId()
 				if managerId ~= "" and userId ~= "" and managerId ~= userId then
 					if online_flow_trace then
 						online_flow_trace("player_options_music_rate_hidden reason=online_non_manager"
@@ -346,25 +796,30 @@ local Overrides = {
 					return {}
 				end
 			end
-			return {PLAYER_1, PLAYER_2}
+			local players = HumanPlayers()
+			return #players > 0 and players or {PLAYER_1, PLAYER_2}
 		end,
 		LoadSelections = function(self, list, pn)
-			local rate = ("%g"):format( SL.Global.ActiveModifiers.MusicRate )
+			local rate = ("%g"):format(Clamp(SL and SL.Global and SL.Global.ActiveModifiers and SL.Global.ActiveModifiers.MusicRate or 1, 0.05, 3))
 			local i = FindInTable(rate, self.Choices) or 1
 			list[i] = true
 			return list
 		end,
 		SaveSelections = function(self, list, pn)
 
+			SL.Global = SL.Global or {}
+			SL.Global.ActiveModifiers = SL.Global.ActiveModifiers or {}
 			local mods = SL.Global.ActiveModifiers
 
+			local selected = FindSelectedIndex(list, #self.Choices)
+			if not selected then return end
 			for i=1,#self.Choices do
 				if list[i] then
-					mods.MusicRate = tonumber( self.Choices[i] )
+					mods.MusicRate = Clamp(self.Choices[i], 0.05, 3)
 				end
 			end
 
-			local topscreen = SCREENMAN:GetTopScreen():GetName()
+			local topscreen = SafeTopScreenName()
 
 			-- Use the older GameCommand interface for applying rate mods in Edit Mode;
 			-- it seems to be the only way (probably due to how broken Edit Mode is, in general).
@@ -372,61 +827,61 @@ local Overrides = {
 			-- (between songs, between screens, etc.) until you manually change them.  This is (probably)
 			-- not the desired behavior in EditMode, so when users change between different songs in EditMode,
 			-- always reset the musicrate mod.  See: ./BGAnimations/ScreenEditMeny underlay.lua
-			if topscreen == "ScreenEditOptions" then
-				GAMESTATE:ApplyGameCommand("mod," .. mods.MusicRate .."xmusic")
-			else
-				GAMESTATE:GetSongOptionsObject("ModsLevel_Preferred"):MusicRate( mods.MusicRate )
+			if GAMESTATE then
+				if topscreen == "ScreenEditOptions" and GAMESTATE.ApplyGameCommand then
+					SafeCall("GAMESTATE.ApplyGameCommand music rate", function()
+						GAMESTATE:ApplyGameCommand("mod," .. mods.MusicRate .."xmusic")
+					end)
+				elseif GAMESTATE.GetSongOptionsObject then
+					local okOptions, songOptions = SafeCall("GAMESTATE.GetSongOptionsObject", function()
+						return GAMESTATE:GetSongOptionsObject("ModsLevel_Preferred")
+					end)
+					if okOptions and songOptions and songOptions.MusicRate then
+						SafeCall("SongOptions.MusicRate", function()
+							songOptions:MusicRate(mods.MusicRate)
+						end)
+					end
+				end
 			end
 
-			MESSAGEMAN:Broadcast("MusicRateChanged")
+			SafeBroadcast("MusicRateChanged")
 			-- Broadcast a message that ./Graphics/OptionRow Frame.lua will be listening for so it can update ActorProxies
 			-- in the MusicRate OptionRow for split BPMs if needed
-			MESSAGEMAN:Broadcast("RefreshActorProxy", {Player=pn, Name="MusicRate", Value=""})
+			SafeBroadcast("RefreshActorProxy", {Player=pn, Name="MusicRate", Value=""})
 		end
 	},
 	-------------------------------------------------------------------------
 	Stepchart = {
+		ApplyOnProfileLoad = false,
 		ExportOnChange = true,
+		Snapshot = function()
+			return StepchartSnapshot()
+		end,
 		Choices = function()
-			local choices = {}
-
-			if not GAMESTATE:IsCourseMode() then
-				local song = GAMESTATE:GetCurrentSong()
-				if song then
-					for steps in ivalues( SongUtil.GetPlayableSteps(song) ) do
-						if steps:IsAnEdit() then
-							choices[#choices+1] = ("%s %i"):format(steps:GetDescription(), steps:GetMeter())
-						else
-							choices[#choices+1] = ("%s %i"):format(THEME:GetString("Difficulty", ToEnumShortString(steps:GetDifficulty())), steps:GetMeter())
-						end
-					end
-				end
-			else
-				local course = GAMESTATE:GetCurrentCourse()
-				if course then
-					for _,trail in ipairs(GetPlayableTrails(course)) do
-						choices[#choices+1] = ("%s %i"):format(THEME:GetString("Difficulty", ToEnumShortString(trail:GetDifficulty())), trail:GetMeter())
-					end
-				end
-			end
-
+			local choices = StepchartSnapshot()
 			return choices
 		end,
 		Values = function()
-			local SongOrCourse = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentCourse() or GAMESTATE:GetCurrentSong()
-			if SongOrCourse then
-				if GAMESTATE:IsCourseMode() then
-					return GetPlayableTrails(SongOrCourse)
-				else
-					return SongUtil.GetPlayableSteps(SongOrCourse)
-				end
-			end
-			return {}
+			local _, values = StepchartSnapshot()
+			return values
 		end,
 		LoadSelections = function(self, list, pn)
-			local StepsOrTrail = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(pn) or GAMESTATE:GetCurrentSteps(pn)
+			local StepsOrTrail = nil
+			if GAMESTATE then
+				if SafeCourseMode() and GAMESTATE.GetCurrentTrail then
+					local ok, trail = SafeCall("GAMESTATE.GetCurrentTrail", function()
+						return GAMESTATE:GetCurrentTrail(pn)
+					end)
+					StepsOrTrail = ok and trail or nil
+				elseif GAMESTATE.GetCurrentSteps then
+					local ok, steps = SafeCall("GAMESTATE.GetCurrentSteps", function()
+						return GAMESTATE:GetCurrentSteps(pn)
+					end)
+					StepsOrTrail = ok and steps or nil
+				end
+			end
 			local i = FindInTable(StepsOrTrail, self.Values) or 1
-			list[i] = true
+			if self.Values[i] then list[i] = true end
 			return list
 		end,
 		SaveSelections = function(self, list, pn)
@@ -436,14 +891,25 @@ local Overrides = {
 					-- the engine's SelectMusic class.  SL is using the engine's SelectMusic for now.
 					-- Set the PreferredDifficulty now so that the player's newly chosen difficulty
 					-- doesn't reset when they return to SelectMusic/SelectCourse.
-					GAMESTATE:SetPreferredDifficulty(pn, v:GetDifficulty())
+					if not (GAMESTATE and v and v.GetDifficulty) then return end
+					SafeCall("GAMESTATE.SetPreferredDifficulty", function()
+						GAMESTATE:SetPreferredDifficulty(pn, v:GetDifficulty())
+					end)
 
-					if GAMESTATE:IsCourseMode() then
-						GAMESTATE:SetCurrentTrail(pn, v)
-						MESSAGEMAN:Broadcast("CurrentTrail"..ToEnumShortString(pn).."Changed")
+					if SafeCourseMode() then
+						if GAMESTATE.SetCurrentTrail then
+							SafeCall("GAMESTATE.SetCurrentTrail", function()
+								GAMESTATE:SetCurrentTrail(pn, v)
+							end)
+						end
+						SafeBroadcast("CurrentTrail"..tostring(PlayerKey(pn) or "").."Changed")
 					else
-						GAMESTATE:SetCurrentSteps(pn, v)
-						MESSAGEMAN:Broadcast("CurrentSteps"..ToEnumShortString(pn).."Changed")
+						if GAMESTATE.SetCurrentSteps then
+							SafeCall("GAMESTATE.SetCurrentSteps", function()
+								GAMESTATE:SetCurrentSteps(pn, v)
+							end)
+						end
+						SafeBroadcast("CurrentSteps"..tostring(PlayerKey(pn) or "").."Changed")
 					end
 					break
 				end
@@ -459,15 +925,16 @@ local Overrides = {
 			-- 2. EX score/ITG score is forced in Tournament Mode so remove the option.
 			-- 3. FA Plus Pane should always be shown in Tournament Mode to prevent issues with
 			--    potentially crucial information.
-			if ThemePrefs.Get("EnableTournamentMode") then
+			if IsTournamentMode() then
 				return { "ShowFaPlusWindow" }
 			end
 
 			return { "ShowFaPlusWindow", "ShowFaPlusPane", "SmallerWhite" }
 		end,
 		LoadSelections = function(self, list, pn)
-			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
-			if ThemePrefs.Get("EnableTournamentMode") then
+			local mods = PlayerMods(pn)
+			if not mods then return list end
+			if IsTournamentMode() then
 				list[1] = mods.ShowFaPlusWindow or false
 				return list
 			end
@@ -478,19 +945,19 @@ local Overrides = {
 			return list
 		end,
 		SaveSelections = function(self, list, pn)
-			local sl_pn = SL[ToEnumShortString(pn)]
-			local mods = sl_pn.ActiveModifiers
+			local mods, sl_pn = PlayerMods(pn)
+			if not mods then return end
 
-			if ThemePrefs.Get("EnableTournamentMode") then
+			if IsTournamentMode() then
 				mods.ShowFaPlusWindow = list[1]
-				mods.ShowExScore = ThemePrefs.Get("ScoringSystem") == "EX"
+				mods.ShowExScore = TournamentScoringSystem() == "EX"
 				mods.ShowHardEXScore = false
 				mods.ShowFaPlusPane = true
 				mods.SmallerWhite = false
 				-- Default to FA+ pane in Tournament Mode
 				sl_pn.EvalPanePrimary = 2
-				Trace(("FA_PLUS_OPTIONS: pn=%s tournament=1 window=%s ex=%s hardex=%s pane=%s smaller_white=%s eval_pane=%s"):format(
-					ToEnumShortString(pn),
+				PlayerOptionsTrace(("FA_PLUS_OPTIONS: pn=%s tournament=1 window=%s ex=%s hardex=%s pane=%s smaller_white=%s eval_pane=%s"):format(
+					tostring(PlayerKey(pn) or pn),
 					tostring(mods.ShowFaPlusWindow),
 					tostring(mods.ShowExScore),
 					tostring(mods.ShowHardEXScore),
@@ -506,8 +973,8 @@ local Overrides = {
 			mods.SmallerWhite = list[3] == true
 			-- Default to FA+ pane if either options are active.
 			sl_pn.EvalPanePrimary = ((mods.ShowFaPlusWindow or mods.ShowExScore or mods.ShowHardEXScore) and mods.ShowFaPlusPane) and 2 or 1
-			Trace(("FA_PLUS_OPTIONS: pn=%s window=%s ex=%s hardex=%s pane=%s smaller_white=%s eval_pane=%s"):format(
-				ToEnumShortString(pn),
+			PlayerOptionsTrace(("FA_PLUS_OPTIONS: pn=%s window=%s ex=%s hardex=%s pane=%s smaller_white=%s eval_pane=%s"):format(
+				tostring(PlayerKey(pn) or pn),
 				tostring(mods.ShowFaPlusWindow),
 				tostring(mods.ShowExScore),
 				tostring(mods.ShowHardEXScore),
@@ -520,14 +987,15 @@ local Overrides = {
 	ExScoreMode = {
 		SelectType = "SelectOne",
 		Values = function()
-			if ThemePrefs.Get("EnableTournamentMode") then
-				return { ThemePrefs.Get("ScoringSystem") == "EX" and "ScoreModeEX" or "ScoreModeITG" }
+			if IsTournamentMode() then
+				return { TournamentScoringSystem() == "EX" and "ScoreModeEX" or "ScoreModeITG" }
 			end
 			return { "ScoreModeITG", "ScoreModeEX", "ScoreModeHardEX" }
 		end,
 		LoadSelections = function(self, list, pn)
-			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
-			if ThemePrefs.Get("EnableTournamentMode") then
+			local mods = PlayerMods(pn)
+			if not mods then return list end
+			if IsTournamentMode() then
 				list[1] = true
 				return list
 			end
@@ -542,16 +1010,17 @@ local Overrides = {
 		end,
 		SaveSelections = function(self, list, pn)
 			local mode = "itg"
-			if ThemePrefs.Get("EnableTournamentMode") then
-				mode = ThemePrefs.Get("ScoringSystem") == "EX" and "ex" or "itg"
+			if IsTournamentMode() then
+				mode = TournamentScoringSystem() == "EX" and "ex" or "itg"
 			elseif list[3] then
 				mode = "hardex"
 			elseif list[2] then
 				mode = "ex"
 			end
 			local mods, sl_pn = ApplyScoreMode(pn, mode)
-			Trace(("FA_PLUS_SCORE_MODE: pn=%s mode=%s window=%s ex=%s hardex=%s pane=%s smaller_white=%s eval_pane=%s"):format(
-				ToEnumShortString(pn),
+			if not mods.ShowFaPlusWindow then return end
+			PlayerOptionsTrace(("FA_PLUS_SCORE_MODE: pn=%s mode=%s window=%s ex=%s hardex=%s pane=%s smaller_white=%s eval_pane=%s"):format(
+				tostring(PlayerKey(pn) or pn),
 				mode,
 				tostring(mods.ShowFaPlusWindow),
 				tostring(mods.ShowExScore),
@@ -566,24 +1035,28 @@ local Overrides = {
 		SelectType = "SelectOne",
 		Values = { "No", "Yes" },
 		LoadSelections = function(self, list, pn)
-			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+			local mods = PlayerMods(pn)
+			if not mods then return list end
 			list[mods.ShowAllScoreModes and 2 or 1] = true
 			return list
 		end,
 		SaveSelections = function(self, list, pn)
-			SL[ToEnumShortString(pn)].ActiveModifiers.ShowAllScoreModes = list[2] == true
+			local mods = PlayerMods(pn)
+			if mods then mods.ShowAllScoreModes = list[2] == true end
 		end
 	},
 	MatchFantasticColor = {
 		SelectType = "SelectOne",
 		Values = { "No", "Yes" },
 		LoadSelections = function(self, list, pn)
-			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+			local mods = PlayerMods(pn)
+			if not mods then return list end
 			list[mods.MatchFantasticColor and 2 or 1] = true
 			return list
 		end,
 		SaveSelections = function(self, list, pn)
-			SL[ToEnumShortString(pn)].ActiveModifiers.MatchFantasticColor = list[2] == true
+			local mods = PlayerMods(pn)
+			if mods then mods.MatchFantasticColor = list[2] == true end
 		end
 	},
 	-------------------------------------------------------------------------
@@ -591,7 +1064,8 @@ local Overrides = {
 		SelectType = "SelectMultiple",
 		Values = { "Targets", "SongBG", "Combo", "Lifebar", "Score", "Danger", "ComboExplosions" },
 		LoadSelections = function(self, list, pn)
-			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+			local mods = PlayerMods(pn)
+			if not mods then return list end
 			list[1] = mods.HideTargets or false
 			list[2] = mods.HideSongBG  or false
 			list[3] = mods.HideCombo   or false
@@ -603,6 +1077,7 @@ local Overrides = {
 		end,
 		SaveSelections = function(self, list, pn)
 			local mods, playeroptions = GetModsAndPlayerOptions(pn)
+			if not mods then return end
 			mods.HideTargets = list[1]
 			mods.HideSongBG  = list[2]
 			mods.HideCombo   = list[3]
@@ -611,8 +1086,16 @@ local Overrides = {
 			mods.HideDanger  = list[6]
 			mods.HideComboExplosions = list[7]
 
-			playeroptions:Dark(mods.HideTargets and 1 or 0)
-			playeroptions:Cover(mods.HideSongBG and 1 or 0)
+			if playeroptions and playeroptions.Dark then
+				SafeCall("PlayerOptions.Dark", function()
+					playeroptions:Dark(mods.HideTargets and 1 or 0)
+				end)
+			end
+			if playeroptions and playeroptions.Cover then
+				SafeCall("PlayerOptions.Cover", function()
+					playeroptions:Cover(mods.HideSongBG and 1 or 0)
+				end)
+			end
 		end,
 	},
 	-------------------------------------------------------------------------
@@ -624,17 +1107,46 @@ local Overrides = {
 			-- but Step Statistics needs a lot of space and isn't always possible
 			-- remove it as an available option if we aren't in single or if the current
 			-- notefield width already uses more than half the screen width
-			local style = GAMESTATE:GetCurrentStyle()
-			local notefieldwidth = GetNotefieldWidth()
-			local IsUltraWide = (GetScreenAspectRatio() > 21/9)
-			local mpn = GAMESTATE:GetMasterPlayerNumber()
+			local styleName = ""
+			if GAMESTATE and GAMESTATE.GetCurrentStyle then
+				local okStyle, style = SafeCall("GAMESTATE.GetCurrentStyle", function()
+					return GAMESTATE:GetCurrentStyle()
+				end)
+				if okStyle and style and style.GetName then
+					local okName, name = SafeCall("Style.GetName", function()
+						return style:GetName()
+					end)
+					styleName = okName and tostring(name or "") or ""
+				end
+			end
+			local wide = SafeIsUsingWideScreen()
+			local aspect = 16/9
+			if type(GetScreenAspectRatio) == "function" then
+				local okAspect, ratio = SafeCall("GetScreenAspectRatio", GetScreenAspectRatio)
+				aspect = okAspect and NumberOr(ratio, aspect) or aspect
+			end
+			local IsUltraWide = aspect > 21/9
+			local mpn = nil
+			if GAMESTATE and GAMESTATE.GetMasterPlayerNumber then
+				local okMpn, master = SafeCall("GAMESTATE.GetMasterPlayerNumber", function()
+					return GAMESTATE:GetMasterPlayerNumber()
+				end)
+				mpn = okMpn and master or nil
+			end
+			local centered4x3 = false
+			if mpn and type(GetNotefieldX) == "function" and _screen and _screen.cx then
+				local okX, notefieldX = SafeCall("GetNotefieldX", function()
+					return GetNotefieldX(mpn)
+				end)
+				centered4x3 = okX and notefieldX == _screen.cx and not wide
+			end
 
 			-- Not in 4:3 versus mode
-			if (not IsUsingWideScreen() and style and style:GetName() == "versus")
+			if (not wide and styleName == "versus")
 			-- if the notefield is centered with 4:3 aspect ratio
-			or (mpn and GetNotefieldX(mpn) == _screen.cx and not IsUsingWideScreen())
+			or centered4x3
 			-- Tournament Mode always enforces whether to display/hide step stats so remove that as an option.
-			or ThemePrefs.Get("EnableTournamentMode")
+			or IsTournamentMode()
 			then
 				table.remove(choices, 3)
 			end
@@ -656,13 +1168,17 @@ local Overrides = {
 			return t
 		end,
 		LoadSelections = function(self, list, pn)
-			local i = tonumber(SL[ToEnumShortString(pn)].ActiveModifiers.TargetScore) or 11
+			local mods = PlayerMods(pn)
+			if not mods then return list end
+			local i = Clamp(mods.TargetScore, 1, #(self.Values or {}))
 			list[i] = true
 			return list
 		end,
 		SaveSelections = function(self, list, pn)
+			local mods = PlayerMods(pn)
+			if not mods then return end
 			for i,v in ipairs(self.Values) do
-				if list[i] then SL[ToEnumShortString(pn)].ActiveModifiers.TargetScore = i; break end
+				if list[i] then mods.TargetScore = i; break end
 			end
 		end
 	},
@@ -679,7 +1195,7 @@ local Overrides = {
 
 			-- if not WideScreen (traditional DDR cabinets running at 640x480)
 			-- remove the last two choices to be appended an additional OptionRow (GameplayExtrasB below).
-			if not IsUsingWideScreen() then
+			if not SafeIsUsingWideScreen() then
 				table.remove(vals, 4)
 			end
 			return vals
@@ -689,9 +1205,9 @@ local Overrides = {
 		SelectType = "SelectMultiple",
 		Values = function()
 			local vals = {}
-			if IsUsingWideScreen() then
+			if SafeIsUsingWideScreen() then
 				vals = { "JudgmentTilt", "ColumnCues", "LifeMeterSwoosh", "ShowNativeLifeMeter" }
-				if IsServiceAllowed(SL.GrooveStats.GetScores) then
+				if IsGrooveStatsScoreboxAllowed() then
 					vals[#vals+1] = "DisplayScorebox"
 				end
 			else
@@ -705,7 +1221,7 @@ local Overrides = {
 		SelectType = "SelectMultiple",
 		Values = function()
 			local vals = {}
-			if not IsUsingWideScreen() and IsServiceAllowed(SL.GrooveStats.GetScores) then
+			if not SafeIsUsingWideScreen() and IsGrooveStatsScoreboxAllowed() then
 				vals = { "DisplayScorebox" }
 			end
 			return vals
@@ -720,18 +1236,20 @@ local Overrides = {
 			return stringify(range(first, last, step), "%g")
 		end,
 		LoadSelections = function(self, list, pn)
-			local mods =SL[ToEnumShortString(pn)].ActiveModifiers
-			local tiltMultiplier = ("%g"):format(mods.TiltMultiplier)
+			local mods = PlayerMods(pn)
+			if not mods then return list end
+			local tiltMultiplier = ("%g"):format(Clamp(mods.TiltMultiplier, 1, 3))
 			local i = FindInTable(tiltMultiplier, self.Choices) or 1
 			list[i] = true
 			return list
 		end,
 		SaveSelections = function(self, list, pn)
-			local mods =SL[ToEnumShortString(pn)].ActiveModifiers
+			local mods = PlayerMods(pn)
+			if not mods then return end
 
 			for i=1,#self.Choices do
 				if list[i] then
-					mods.TiltMultiplier = tonumber( self.Choices[i] )
+					mods.TiltMultiplier = Clamp(self.Choices[i], 1, 3)
 				end
 			end
 		end
@@ -745,7 +1263,7 @@ local Overrides = {
 		Values = { "Off", "Great", "Excellent" },
 		Choices = function()
 			local tns = "TapNoteScore"
-			local t = {THEME:GetString("SLPlayerOptions","Off"), THEME:GetString(tns,"W3"), THEME:GetString(tns,"W2")}
+			local t = {SafeThemeString("SLPlayerOptions","Off"), SafeThemeString(tns,"W3"), SafeThemeString(tns,"W2")}
 			return t
 		end,
 	},
@@ -772,13 +1290,14 @@ local Overrides = {
 		SelectType = "SelectMultiple",
 		Values = { "ShowStreamBreakdown" },
 		LoadSelections = function(self, list, pn)
-			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+			local mods = PlayerMods(pn)
+			if not mods then return list end
 			list[1] = mods.ShowStreamBreakdown == true
 			return list
 		end,
 		SaveSelections = function(self, list, pn)
-			local mods = SL[ToEnumShortString(pn)].ActiveModifiers
-			mods.ShowStreamBreakdown = list[1] == true
+			local mods = PlayerMods(pn)
+			if mods then mods.ShowStreamBreakdown = list[1] == true end
 		end,
 	},
 	-------------------------------------------------------------------------
@@ -793,13 +1312,20 @@ local Overrides = {
 		LayoutType = "ShowOneInRow",
 		SaveSelections = function(self, list, pn)
 			local mods, playeroptions = GetModsAndPlayerOptions(pn)
+			if not (mods and playeroptions) then return end
 
 			for i=1,#self.Choices do
 				if list[i] then
 					mods.VisualDelay = self.Choices[i]
 				end
 			end
-			playeroptions:VisualDelay( mods.VisualDelay:gsub("ms","")/1000 )
+			local delayMs = Clamp(tostring(mods.VisualDelay or "0ms"):gsub("ms",""), -100, 100)
+			mods.VisualDelay = ("%gms"):format(delayMs)
+			if playeroptions.VisualDelay then
+				SafeCall("PlayerOptions.VisualDelay", function()
+					playeroptions:VisualDelay(delayMs/1000)
+				end)
+			end
 		end
 	},
 	-------------------------------------------------------------------------
@@ -816,24 +1342,30 @@ local Overrides = {
 			}
 		end,
 		Choices = function()
-			local tns = "TapNoteScore" .. (SL.Global.GameMode=="ITG" and "" or SL.Global.GameMode)
-			local t = {THEME:GetString("SLPlayerOptions","None")}
-			if SL.Global.GameMode=="Casual" then
+			local gameMode = CurrentGameMode()
+			local tns = "TapNoteScore" .. (gameMode=="ITG" and "" or gameMode)
+			local t = {SafeThemeString("SLPlayerOptions","None")}
+			if gameMode=="Casual" then
 				local idx = 2
-				t[idx] = THEME:GetString(tns,"W4").."s + "..t[idx-1]
+				t[idx] = SafeThemeString(tns,"W4").."s + "..t[idx-1]
 			end
 			return t
 		end,
 		LoadSelections = function(self, list, pn)
 			local mods, playeroptions = GetModsAndPlayerOptions(pn)
+			if not mods then return list end
 			-- First determine the set of actual enabled windows.
 			local windows = {true,true,true,true,true}
-			if SL.Global.Gamemode == "Casual" then
+			if CurrentGameMode() == "Casual" then
 				windows[4] = false
 				windows[5] = false
 				list[2] = true
 			else
-				playeroptions:ResetDisabledTimingWindows()
+				if playeroptions and playeroptions.ResetDisabledTimingWindows then
+					SafeCall("PlayerOptions.ResetDisabledTimingWindows", function()
+						playeroptions:ResetDisabledTimingWindows()
+					end)
+				end
 				list[1] = true
 			end
 			mods.TimingWindows = windows
@@ -841,14 +1373,21 @@ local Overrides = {
 		end,
 		SaveSelections = function(self, list, pn)
 			local mods, playeroptions = GetModsAndPlayerOptions(pn)
+			if not (mods and playeroptions) then return end
 			for i=1,#list do
 				if list[i] then
 					mods.TimingWindows = self.Values[i]
-					playeroptions:ResetDisabledTimingWindows()
-					if SL.Global.GameMode == "ITG" then return end
+					if playeroptions.ResetDisabledTimingWindows then
+						SafeCall("PlayerOptions.ResetDisabledTimingWindows", function()
+							playeroptions:ResetDisabledTimingWindows()
+						end)
+					end
+					if CurrentGameMode() == "ITG" then return end
 					for i,enabled in ipairs(mods.TimingWindows) do
-						if not enabled then
-							playeroptions:DisableTimingWindow("TimingWindow_W"..i)
+						if not enabled and playeroptions.DisableTimingWindow then
+							SafeCall("PlayerOptions.DisableTimingWindow", function()
+								playeroptions:DisableTimingWindow("TimingWindow_W"..i)
+							end)
 						end
 					end
 				end
@@ -867,7 +1406,9 @@ local Overrides = {
 			return range(first, last, step)
 		end,
 		LoadSelections = function(self, list, pn)
-			local val = tonumber(SL[ToEnumShortString(pn)].ActiveModifiers.NoteFieldOffsetX) or 0
+			local mods = PlayerMods(pn)
+			if not mods then return list end
+			local val = Clamp(mods.NoteFieldOffsetX, 0, 50)
 			for i,v in ipairs(self.Choices) do
 				if v == val then
 					list[i] = true
@@ -877,9 +1418,11 @@ local Overrides = {
 			return list
 		end,
 		SaveSelections = function(self, list, pn)
+			local mods = PlayerMods(pn)
+			if not mods then return end
 			for i,v in ipairs(self.Choices) do
 				if list[i] then
-					SL[ToEnumShortString(pn)].ActiveModifiers.NoteFieldOffsetX = v
+					mods.NoteFieldOffsetX = Clamp(v, 0, 50)
 					break
 				end
 			end
@@ -897,7 +1440,9 @@ local Overrides = {
 			return range(first, last, step)
 		end,
 		LoadSelections = function(self, list, pn)
-			local val = tonumber(SL[ToEnumShortString(pn)].ActiveModifiers.NoteFieldOffsetY) or 0
+			local mods = PlayerMods(pn)
+			if not mods then return list end
+			local val = Clamp(mods.NoteFieldOffsetY, -50, 50)
 			for i,v in ipairs(self.Choices) do
 				if v == val then
 					list[i] = true
@@ -907,9 +1452,11 @@ local Overrides = {
 			return list
 		end,
 		SaveSelections = function(self, list, pn)
+			local mods = PlayerMods(pn)
+			if not mods then return end
 			for i,v in ipairs(self.Choices) do
 				if list[i] then
-					SL[ToEnumShortString(pn)].ActiveModifiers.NoteFieldOffsetY = v
+					mods.NoteFieldOffsetY = Clamp(v, -50, 50)
 					break
 				end
 			end
@@ -921,113 +1468,119 @@ local Overrides = {
 	},
 	-------------------------------------------------------------------------
 	ScreenAfterPlayerOptions = {
+		ApplyOnProfileLoad = false,
 		Values = function()
-			if ITGOnline and ITGOnline.currentRoomId then
+			if HasActiveOnlineRoom() then
 				return { "Ready", "Options2", "Options3" }
 			end
 			local finishChoice = "Gameplay"
 			local choices = { finishChoice, "Select Music", "Options2", "Options3"  }
-			if SL.Global.MenuTimer.ScreenSelectMusic < 1  or SL.Global.MusicWheelLocked == true then table.remove(choices, 2) end
+			if not ScreenSelectMusicAvailable() then table.remove(choices, 2) end
 			return choices
 		end,
 		OneChoiceForAllPlayers = true,
 		SaveSelections = function(self, list, pn)
-			if ITGOnline and ITGOnline.currentRoomId then
+			local screenAfter = EnsureScreenAfter()
+			if HasActiveOnlineRoom() then
 				if list[2] then
-					SL.Global.ScreenAfter.PlayerOptions = "ScreenPlayerOptions2"
+					screenAfter.PlayerOptions = "ScreenPlayerOptions2"
 				elseif list[3] then
-					SL.Global.ScreenAfter.PlayerOptions = "ScreenPlayerOptions3"
+					screenAfter.PlayerOptions = "ScreenPlayerOptions3"
 				else
-					SL.Global.ScreenAfter.PlayerOptions = "ScreenOnlineLobbies"
+					screenAfter.PlayerOptions = "ScreenOnlineLobbies"
 				end
 				return
 			end
 			if list[1] then
-				SL.Global.ScreenAfter.PlayerOptions = Branch.GameplayScreen()
+				screenAfter.PlayerOptions = Branch.GameplayScreen()
 			end
 
-			if SL.Global.MenuTimer.ScreenSelectMusic > 1 and SL.Global.MusicWheelLocked == false then
-				if list[2] then SL.Global.ScreenAfter.PlayerOptions = Branch.SelectMusicOrCourse() end
-				if list[3] then SL.Global.ScreenAfter.PlayerOptions = "ScreenPlayerOptions2" end
-				if list[4] then SL.Global.ScreenAfter.PlayerOptions = "ScreenPlayerOptions3" end
+			if ScreenSelectMusicAvailable() then
+				if list[2] then screenAfter.PlayerOptions = Branch.SelectMusicOrCourse() end
+				if list[3] then screenAfter.PlayerOptions = "ScreenPlayerOptions2" end
+				if list[4] then screenAfter.PlayerOptions = "ScreenPlayerOptions3" end
 			else
-				if list[2] then SL.Global.ScreenAfter.PlayerOptions = "ScreenPlayerOptions2" end
-				if list[3] then SL.Global.ScreenAfter.PlayerOptions = "ScreenPlayerOptions3" end
+				if list[2] then screenAfter.PlayerOptions = "ScreenPlayerOptions2" end
+				if list[3] then screenAfter.PlayerOptions = "ScreenPlayerOptions3" end
 			end
 		end
 	},
 	-------------------------------------------------------------------------
 	ScreenAfterPlayerOptions2 = {
+		ApplyOnProfileLoad = false,
 		Values = function()
-			if ITGOnline and ITGOnline.currentRoomId then
+			if HasActiveOnlineRoom() then
 				return { "Ready", "Options1", "Options3" }
 			end
 			local finishChoice = "Gameplay"
 			local choices = { finishChoice, "Select Music", "Options1", "Options3"  }
-			if SL.Global.MenuTimer.ScreenSelectMusic < 1  or SL.Global.MusicWheelLocked == true	 then table.remove(choices, 2) end
+			if not ScreenSelectMusicAvailable() then table.remove(choices, 2) end
 			return choices
 		end,
 		OneChoiceForAllPlayers = true,
 		SaveSelections = function(self, list, pn)
-			if ITGOnline and ITGOnline.currentRoomId then
+			local screenAfter = EnsureScreenAfter()
+			if HasActiveOnlineRoom() then
 				if list[2] then
-					SL.Global.ScreenAfter.PlayerOptions2 = "ScreenPlayerOptions"
+					screenAfter.PlayerOptions2 = "ScreenPlayerOptions"
 				elseif list[3] then
-					SL.Global.ScreenAfter.PlayerOptions2 = "ScreenPlayerOptions3"
+					screenAfter.PlayerOptions2 = "ScreenPlayerOptions3"
 				else
-					SL.Global.ScreenAfter.PlayerOptions2 = "ScreenOnlineLobbies"
+					screenAfter.PlayerOptions2 = "ScreenOnlineLobbies"
 				end
 				return
 			end
 			if list[1] then
-				SL.Global.ScreenAfter.PlayerOptions2 = Branch.GameplayScreen()
+				screenAfter.PlayerOptions2 = Branch.GameplayScreen()
 			end
 
-			if SL.Global.MenuTimer.ScreenSelectMusic > 1 and SL.Global.MusicWheelLocked == false then
-				if list[2] then SL.Global.ScreenAfter.PlayerOptions2 = Branch.SelectMusicOrCourse() end
-				if list[3] then SL.Global.ScreenAfter.PlayerOptions2 = "ScreenPlayerOptions" end
-				if list[4] then SL.Global.ScreenAfter.PlayerOptions2 = "ScreenPlayerOptions3" end
+			if ScreenSelectMusicAvailable() then
+				if list[2] then screenAfter.PlayerOptions2 = Branch.SelectMusicOrCourse() end
+				if list[3] then screenAfter.PlayerOptions2 = "ScreenPlayerOptions" end
+				if list[4] then screenAfter.PlayerOptions2 = "ScreenPlayerOptions3" end
 			else
-				if list[2] then SL.Global.ScreenAfter.PlayerOptions2 = "ScreenPlayerOptions" end
-				if list[3] then SL.Global.ScreenAfter.PlayerOptions2 = "ScreenPlayerOptions3" end
+				if list[2] then screenAfter.PlayerOptions2 = "ScreenPlayerOptions" end
+				if list[3] then screenAfter.PlayerOptions2 = "ScreenPlayerOptions3" end
 			end
 		end
 	},
 	-------------------------------------------------------------------------
 	-- this is so dumb; I need to find time to completely rewrite ScreenPlayerOptions :(
 	ScreenAfterPlayerOptions3 = {
+		ApplyOnProfileLoad = false,
 		Values = function()
-			if ITGOnline and ITGOnline.currentRoomId then
+			if HasActiveOnlineRoom() then
 				return { "Ready", "Options1", "Options2" }
 			end
 			local finishChoice = "Gameplay"
 			local choices = { finishChoice, "Select Music", "Options1", "Options2"  }
-			if SL.Global.MenuTimer.ScreenSelectMusic < 1  or SL.Global.MusicWheelLocked == true then table.remove(choices, 2) end
+			if not ScreenSelectMusicAvailable() then table.remove(choices, 2) end
 			return choices
 		end,
 		OneChoiceForAllPlayers = true,
 		SaveSelections = function(self, list, pn)
-			if ITGOnline and ITGOnline.currentRoomId then
+			local screenAfter = EnsureScreenAfter()
+			if HasActiveOnlineRoom() then
 				if list[2] then
-					SL.Global.ScreenAfter.PlayerOptions3 = "ScreenPlayerOptions"
+					screenAfter.PlayerOptions3 = "ScreenPlayerOptions"
 				elseif list[3] then
-					SL.Global.ScreenAfter.PlayerOptions3 = "ScreenPlayerOptions2"
+					screenAfter.PlayerOptions3 = "ScreenPlayerOptions2"
 				else
-					SL.Global.ScreenAfter.PlayerOptions3 = "ScreenOnlineLobbies"
+					screenAfter.PlayerOptions3 = "ScreenOnlineLobbies"
 				end
 				return
 			end
 			if list[1] then
-				SL.Global.ScreenAfter.PlayerOptions3 = Branch.GameplayScreen()
+				screenAfter.PlayerOptions3 = Branch.GameplayScreen()
 			end
 
-			if SL.Global.MenuTimer.ScreenSelectMusic > 1 and SL.Global.MusicWheelLocked == false then
-				if list[2] then SL.Global.ScreenAfter.PlayerOptions3 = Branch.SelectMusicOrCourse() end
-				if list[3] then SL.Global.ScreenAfter.PlayerOptions3 = "ScreenPlayerOptions" end
-				if list[4] then SL.Global.ScreenAfter.PlayerOptions3 = "ScreenPlayerOptions2" end
+			if ScreenSelectMusicAvailable() then
+				if list[2] then screenAfter.PlayerOptions3 = Branch.SelectMusicOrCourse() end
+				if list[3] then screenAfter.PlayerOptions3 = "ScreenPlayerOptions" end
+				if list[4] then screenAfter.PlayerOptions3 = "ScreenPlayerOptions2" end
 			else
-				if list[2] then SL.Global.ScreenAfter.PlayerOptions3 = "ScreenPlayerOptions" end
-				if list[3] then SL.Global.ScreenAfter.PlayerOptions3 = "ScreenPlayerOptions2" end
+				if list[2] then screenAfter.PlayerOptions3 = "ScreenPlayerOptions" end
+				if list[3] then screenAfter.PlayerOptions3 = "ScreenPlayerOptions2" end
 			end
 		end
 	}
@@ -1044,43 +1597,65 @@ local OptionRowDefault = {
 		initialize = function(self, name)
 
 			self.Name = name
+			local override = Overrides[name]
 
 			-- FIXME: add inline comments explaining the intent/purpose of All This Code
-			if Overrides[name].Values then
-				if Overrides[name].Choices then
-					self.Choices = type(Overrides[name].Choices)=="function" and Overrides[name].Choices() or Overrides[name].Choices
+			if override.Snapshot then
+				local ok, choices, values = SafeCall("OptionRow.Snapshot " .. name, function()
+					return override.Snapshot()
+				end)
+				self.Choices = ok and type(choices) == "table" and choices or {}
+				self.Values = ok and type(values) == "table" and values or {}
+			elseif override.Values then
+				local values = ResolveOptionTable("OptionRow.Values " .. name, override.Values)
+				if override.Choices then
+					self.Choices = ResolveOptionTable("OptionRow.Choices " .. name, override.Choices)
 				else
 					self.Choices = {}
-					for i, v in ipairs( (type(Overrides[name].Values)=="function" and Overrides[name].Values() or Overrides[name].Values) ) do
-						self.Choices[i] = THEME:GetString("SLPlayerOptions", v)
+					for i, v in ipairs(values) do
+						self.Choices[i] = SafeThemeString("SLPlayerOptions", v)
 					end
 				end
-				self.Values = type(Overrides[name].Values)=="function" and Overrides[name].Values() or Overrides[name].Values
+				self.Values = values
 			else
-				self.Choices = type(Overrides[name].Choices)=="function" and Overrides[name].Choices() or Overrides[name].Choices
+				self.Choices = ResolveOptionTable("OptionRow.Choices " .. name, override.Choices)
 			end
+			self.Choices = type(self.Choices) == "table" and self.Choices or {}
+			self.Values = type(self.Values) == "table" and self.Values or nil
 
 			-- define fallback values to use here if an override isn't specified
-			self.LayoutType = Overrides[name].LayoutType or "ShowAllInRow"
-			self.SelectType = Overrides[name].SelectType or "SelectOne"
-			self.OneChoiceForAllPlayers = Overrides[name].OneChoiceForAllPlayers or false
-			self.ExportOnChange = Overrides[name].ExportOnChange or false
-			self.EnabledForPlayers = Overrides[name].EnabledForPlayers or function() return {PLAYER_1, PLAYER_2} end
-			self.ReloadRowMessages = Overrides[name].ReloadRowMessages or {}
-			self.BroadcastOnExport = Overrides[name].BroadcastOnExport or {}
-			self.HideOnDisable = Overrides[name].HideOnDisable or false
+			self.LayoutType = override.LayoutType or "ShowAllInRow"
+			self.SelectType = override.SelectType or "SelectOne"
+			self.OneChoiceForAllPlayers = override.OneChoiceForAllPlayers or false
+			self.ExportOnChange = override.ExportOnChange or false
+			self.EnabledForPlayers = override.EnabledForPlayers or function() return HumanPlayers() end
+			self.ReloadRowMessages = override.ReloadRowMessages or {}
+			self.BroadcastOnExport = override.BroadcastOnExport or {}
+			self.HideOnDisable = override.HideOnDisable or false
+			self.ApplyOnProfileLoad = override.ApplyOnProfileLoad ~= false
 			
 			if self.SelectType == "SelectOne" then
 
-				self.LoadSelections = Overrides[name].LoadSelections or function(subself, list, pn)
+				self.LoadSelections = override.LoadSelections or function(subself, list, pn)
 					local mods, playeroptions = GetModsAndPlayerOptions(pn)
-					local choice = mods[name] or (playeroptions[name] ~= nil and playeroptions[name](playeroptions)) or self.Choices[1]
-					local i = FindInTable(choice, (self.Values or self.Choices)) or 1
-					list[i] = true
+					if not mods then return list end
+					local vals = self.Values or self.Choices
+					if #vals == 0 then return list end
+					local choice = mods[name]
+					if choice == nil and playeroptions and type(playeroptions[name]) == "function" then
+						local ok, optionValue = SafeCall("PlayerOptions." .. name, function()
+							return playeroptions[name](playeroptions)
+						end)
+						if ok then choice = optionValue end
+					end
+					choice = choice or vals[1]
+					local i = FindInTable(choice, vals) or 1
+					if vals[i] ~= nil then list[i] = true end
 					return list
 				end
-				self.SaveSelections = Overrides[name].SaveSelections or function(subself, list, pn)
-					local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+				self.SaveSelections = override.SaveSelections or function(subself, list, pn)
+					local mods = PlayerMods(pn)
+					if not mods then return end
 					local vals = self.Values or self.Choices
 					for i, val in ipairs(vals) do
 						if list[i] then mods[name] = val; break end
@@ -1090,19 +1665,21 @@ local OptionRowDefault = {
 			else
 				-- "SelectMultiple" typically means a collection of theme-defined flags in a single OptionRow
 				-- most of these behave the same and can fall back on this generic definition; a notable exception is "Hide"
-				self.LoadSelections = Overrides[name].LoadSelections or function(subself, list, pn)
-					local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+				self.LoadSelections = override.LoadSelections or function(subself, list, pn)
+					local mods = PlayerMods(pn)
+					if not mods then return list end
 					local vals = self.Values or self.Choices
 					for i, mod in ipairs(vals) do
 						list[i] = mods[mod] or false
 					end
 					return list
 				end
-				self.SaveSelections = Overrides[name].SaveSelections or function(subself, list, pn)
-					local mods = SL[ToEnumShortString(pn)].ActiveModifiers
+				self.SaveSelections = override.SaveSelections or function(subself, list, pn)
+					local mods = PlayerMods(pn)
+					if not mods then return end
 					local vals = self.Values or self.Choices
 					for i, mod in ipairs(vals) do
-						mods[mod] = list[i]
+						mods[mod] = list[i] == true
 					end
 				end
 			end
@@ -1148,24 +1725,38 @@ end
 -- the former handles "normally" joined players, and the latter handles latejoin
 
 function ApplyMods(player)
-	for name,value in pairs(Overrides) do
-		OptRow = CustomOptionRow( name )
+	local previousApplyingProfileMods = applyingProfileMods
+	applyingProfileMods = true
 
-		-- LoadSelections() and SaveSelections() expect two arguments in addition to self (the OptionRow)
-		-- first, a table of true/false values corresponding to the OptionRow's Choices table
-		-- second, the player that this applies to
-		--
-		-- LoadSelections() receives a table of all false values, one for each entry in this OptionRow's Choices table
-		-- LoadSelections() will process that table, and set the appropriate entries to true using the SL[pn].ActiveModifiers table
-		-- when done setting one or more entries to true, LoadSelections() will return that table of true/false values
-		--
-		-- SaveSelections() expects the same sort of arguments, but it expects the true/false table to be already set appropriately
-		-- thus, we pass in the list that was returned from LoadSelections()
-		local list = {}
-		for i=1, #OptRow.Choices do
-			list[i] = false
+	for name,override in pairs(Overrides) do
+		if override.ApplyOnProfileLoad ~= false then
+			SafeCall("ApplyMods " .. tostring(name), function()
+				local optRow = CustomOptionRow(name)
+				if type(optRow) ~= "table"
+					or type(optRow.Choices) ~= "table"
+					or type(optRow.LoadSelections) ~= "function"
+					or type(optRow.SaveSelections) ~= "function" then
+					PlayerOptionsTrace("apply_mods_skip_invalid_row name=" .. tostring(name))
+					return
+				end
+
+				-- LoadSelections() receives a false-filled list matching the row's
+				-- current choices, then SaveSelections() applies only profile-safe
+				-- engine/player modifiers.
+				local list = {}
+				for i=1, #optRow.Choices do
+					list[i] = false
+				end
+				local okLoad, loaded = SafeCall("ApplyMods.LoadSelections " .. tostring(name), function()
+					return optRow:LoadSelections(list, player)
+				end)
+				if okLoad and type(loaded) == "table" then list = loaded end
+				SafeCall("ApplyMods.SaveSelections " .. tostring(name), function()
+					optRow:SaveSelections(list, player)
+				end)
+			end)
 		end
-		list = OptRow:LoadSelections( list, player )
-		OptRow:SaveSelections( list, player )
 	end
+
+	applyingProfileMods = previousApplyingProfileMods
 end
