@@ -81,6 +81,7 @@ struct HttpRequestArgs {
   std::unordered_map<std::string, std::string> headers;
   int connectTimeout = -1;
   int transferTimeout = -1;
+  int64_t maxResponseBytes = -1;
   int64_t maxDownloadBytes = -1;
   std::string downloadFile;
   bool deleteDownloadAfterResponse = false;
@@ -113,6 +114,7 @@ struct WebSocketArgs {
   std::unordered_map<std::string, std::string> headers;
   int handshakeTimeout = -1;
   int pingInterval = -1;
+  int64_t maxMessageBytes = -1;
   bool automaticReconnect = true;
   std::function<void(const ix::WebSocketMessage& response)> onMessage;
   std::function<void()> onClose;
@@ -151,7 +153,7 @@ class NetworkManager {
   void CloseAllWebSockets();
   void CloseAllWebSocketsFromLua();
   void Update();
-  void EnqueueMainThreadTask(std::function<void()> task);
+  bool EnqueueMainThreadTask(std::function<void()> task);
   std::string UrlEncode(const std::string& value);
   std::string EncodeQueryParameters(
       const std::unordered_map<std::string, std::string>& query);
@@ -174,7 +176,7 @@ class NetworkManager {
   ix::HttpClient downloadClient;
   ix::SocketTLSOptions tlsOptions;
   bool tlsBackendEnforcesPublicKeyPins{false};
-  bool warnedPinningUnsupportedForProductionHost{false};
+  std::atomic<bool> warnedPinningUnsupportedForProductionHost{false};
 
   static Preference<bool> httpEnabled;
   static Preference<std::string> httpAllowHosts;
