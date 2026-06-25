@@ -34,6 +34,26 @@
 
 REGISTER_SCREEN_CLASS(ScreenOptionsMaster);
 
+namespace {
+bool IsScreenOptionsMasterPlayerValid(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+bool IsScreenOptionsMasterHumanPlayer(PlayerNumber pn) {
+  return GAMESTATE != nullptr && IsScreenOptionsMasterPlayerValid(pn) &&
+         GAMESTATE->IsHumanPlayer(pn) &&
+         GAMESTATE->m_pPlayerState[pn] != nullptr;
+}
+
+void WarnScreenOptionsMaster(const std::string& message) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", message.c_str());
+  }
+}
+}  // namespace
+
+ScreenOptionsMaster::ScreenOptionsMaster() : m_iChangeMask(0) {}
+
 void ScreenOptionsMaster::Init() {
   std::vector<std::string> asLineNames;
   split(LINE_NAMES, ",", asLineNames);
@@ -82,25 +102,71 @@ void ScreenOptionsMaster::Init() {
 
 void ScreenOptionsMaster::ImportOptions(
     int r, const std::vector<PlayerNumber>& vpns) {
-  for (const PlayerNumber& pn : vpns) {
-    ASSERT(GAMESTATE->IsHumanPlayer(pn));
+  OptionRow* row = GetRow(r);
+  if (row == nullptr) {
+    WarnScreenOptionsMaster(
+        ssprintf("ScreenOptionsMaster::ImportOptions(%s): invalid row %d",
+                 m_sName.c_str(), r));
+    return;
   }
-  OptionRow& row = *m_pRows[r];
-  row.ImportOptions(vpns);
+
+  std::vector<PlayerNumber> validPlayers;
+  for (const PlayerNumber& pn : vpns) {
+    if (IsScreenOptionsMasterHumanPlayer(pn)) {
+      validPlayers.push_back(pn);
+    }
+  }
+  if (validPlayers.empty()) {
+    return;
+  }
+  row->ImportOptions(validPlayers);
+}
+
+int ScreenOptionsMaster::ExportOptionsInternal(
+    int r, const std::vector<PlayerNumber>& vpns, bool accumulateChangeMask) {
+  CHECKPOINT_M(ssprintf("%i/%i", r, int(m_pRows.size())));
+
+  OptionRow* row = GetRow(r);
+  if (row == nullptr) {
+    WarnScreenOptionsMaster(
+        ssprintf("ScreenOptionsMaster::ExportOptions(%s): invalid row %d",
+                 m_sName.c_str(), r));
+    return 0;
+  }
+
+  bool bRowHasFocus[NUM_PLAYERS];
+  ZERO(bRowHasFocus);
+  std::vector<PlayerNumber> validPlayers;
+  for (const PlayerNumber& p : vpns) {
+    if (!IsScreenOptionsMasterHumanPlayer(p)) {
+      continue;
+    }
+    int iCurRow = m_iCurrentRow[p];
+    bRowHasFocus[p] = iCurRow == r;
+    validPlayers.push_back(p);
+  }
+  if (validPlayers.empty()) {
+    return 0;
+  }
+
+  const int changeMask = row->ExportOptions(validPlayers, bRowHasFocus);
+  if (accumulateChangeMask) {
+    m_iChangeMask |= changeMask;
+  }
+  return changeMask;
 }
 
 void ScreenOptionsMaster::ExportOptions(
     int r, const std::vector<PlayerNumber>& vpns) {
-  CHECKPOINT_M(ssprintf("%i/%i", r, int(m_pRows.size())));
+  ExportOptionsInternal(r, vpns, true);
+}
 
-  OptionRow& row = *m_pRows[r];
-  bool bRowHasFocus[NUM_PLAYERS];
-  ZERO(bRowHasFocus);
-  for (const PlayerNumber& p : vpns) {
-    int iCurRow = m_iCurrentRow[p];
-    bRowHasFocus[p] = iCurRow == r;
-  }
-  m_iChangeMask |= row.ExportOptions(vpns, bRowHasFocus);
+int ScreenOptionsMaster::ExportOptionsForPreview(
+    int r, const std::vector<PlayerNumber>& vpns) {
+  const int savedChangeMask = m_iChangeMask;
+  const int changeMask = ExportOptionsInternal(r, vpns, false);
+  m_iChangeMask = savedChangeMask;
+  return changeMask;
 }
 
 void ScreenOptionsMaster::HandleScreenMessage(const ScreenMessage SM) {

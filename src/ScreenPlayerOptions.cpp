@@ -14,6 +14,7 @@
 #include "ModsGroup.h"
 #include "LuaManager.h"
 #include "OptionRow.h"
+#include "OptionRowHandler.h"
 #include "PlayerNumber.h"
 #include "PlayerState.h"
 #include "PrefsManager.h"
@@ -23,10 +24,31 @@
 #include "ScreenMessage.h"
 #include "ScreenOptions.h"
 #include "ScreenOptionsMaster.h"
+#include "SongOptions.h"
 #include "ThemeManager.h"
 #include "global.h"
 
 REGISTER_SCREEN_CLASS(ScreenPlayerOptions);
+
+namespace {
+bool HasPlayerOptionsTheme() {
+  return THEME != nullptr && THEME->IsThemeLoaded();
+}
+
+std::string GetPlayerOptionsExitText() {
+  if (!HasPlayerOptionsTheme()) {
+    return "Exit";
+  }
+  return THEME->GetString("OptionNames", "Exit");
+}
+
+std::string GetPlayerOptionsReadyText() {
+  if (!HasPlayerOptionsTheme()) {
+    return "Ready";
+  }
+  return THEME->GetString("OptionNames", "Ready");
+}
+}  // namespace
 
 static bool HasActiveITGOnlineRoom() {
   if (LUA == nullptr) {
@@ -34,11 +56,20 @@ static bool HasActiveITGOnlineRoom() {
   }
 
   Lua* L = LUA->Get();
+  if (L == nullptr) {
+    return false;
+  }
+  const int top = lua_gettop(L);
   const bool ran = LuaHelpers::RunExpression(
-      L, "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil",
+      L,
+      "ITGOnline ~= nil "
+      "and ITGOnline.currentRoomId ~= nil "
+      "and ITGOnline.currentRoom ~= nil "
+      "and ITGOnline.currentRoom.id == ITGOnline.currentRoomId "
+      "and ITGOnline.user ~= nil",
       "ScreenPlayerOptions::HasActiveITGOnlineRoom");
-  const bool active = ran && lua_toboolean(L, -1);
-  lua_pop(L, 1);
+  const bool active = ran && lua_gettop(L) > top && lua_toboolean(L, -1);
+  lua_settop(L, top);
   LUA->Release(L);
 
   return active;
@@ -48,7 +79,8 @@ void ScreenPlayerOptions::Init() {
   ScreenOptionsMaster::Init();
 
   FOREACH_PlayerNumber(p) {
-    m_sprDisqualify[p].Load(THEME->GetPathG(m_sName, "disqualify"));
+    m_sprDisqualify[p].Load(
+        HasPlayerOptionsTheme() ? THEME->GetPathG(m_sName, "disqualify") : "");
     m_sprDisqualify[p]->SetName(ssprintf("DisqualifyP%i", p + 1));
     LOAD_ALL_COMMANDS_AND_SET_XY(m_sprDisqualify[p]);
     m_sprDisqualify[p]->SetVisible(
@@ -57,69 +89,117 @@ void ScreenPlayerOptions::Init() {
     m_frameContainer.AddChild(m_sprDisqualify[p]);
   }
 
+  const Maybe showSongOptions =
+      PREFSMAN != nullptr ? PREFSMAN->m_ShowSongOptions.Get() : Maybe_NO;
   m_bAskOptionsMessage =
-      !GAMESTATE->IsEditing() && PREFSMAN->m_ShowSongOptions == Maybe_ASK;
+      GAMESTATE != nullptr && !GAMESTATE->IsEditing() &&
+      showSongOptions == Maybe_ASK;
 
   m_bAcceptedChoices = false;
-  m_bGoToOptions = (PREFSMAN->m_ShowSongOptions == Maybe_YES);
+  m_bGoToOptions = showSongOptions == Maybe_YES;
 
-  SOUND->PlayOnceFromDir(ANNOUNCER->GetPathTo("player options intro"));
+  if (SOUND != nullptr && ANNOUNCER != nullptr) {
+    SOUND->PlayOnceFromDir(ANNOUNCER->GetPathTo("player options intro"));
+  }
 
-  FOREACH_PlayerNumber(p) m_bRowCausesDisqualified[p].resize(
-      m_pRows.size(), false);
+  ResizeDisqualificationCache();
 }
 
 void ScreenPlayerOptions::BeginScreen() {
-  FOREACH_PlayerNumber(p) ON_COMMAND(m_sprDisqualify[p]);
+  FOREACH_PlayerNumber(p) {
+    if (m_sprDisqualify[p].IsLoaded()) {
+      ON_COMMAND(m_sprDisqualify[p]);
+    }
+  }
 
   ScreenOptionsMaster::BeginScreen();
 
-  if (HasActiveITGOnlineRoom()) {
-    for (OptionRow* row : m_pRows) {
-      if (row != nullptr && row->GetRowType() == OptionRow::RowType_Exit) {
-        row->SetExitText(THEME->GetString("OptionNames", "Ready"));
-      }
+  ResizeDisqualificationCache();
+
+  const std::string exitText =
+      HasActiveITGOnlineRoom() ? GetPlayerOptionsReadyText()
+                               : GetPlayerOptionsExitText();
+  for (OptionRow* row : m_pRows) {
+    if (row != nullptr && row->GetRowType() == OptionRow::RowType_Exit) {
+      row->SetExitText(exitText);
     }
   }
 
   FOREACH_HumanPlayer(p) {
     for (unsigned r = 0; r < m_pRows.size(); r++) {
-      UpdateDisqualified(r, p);
+      if (IsDisqualificationRow(static_cast<int>(r))) {
+        UpdateDisqualified(r, p);
+      }
+    }
+  }
+}
+
+bool ScreenPlayerOptions::IsUsablePlayer(PlayerNumber pn) const {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS && GAMESTATE != nullptr &&
+         GAMESTATE->IsHumanPlayer(pn) &&
+         GAMESTATE->m_pPlayerState[pn] != nullptr;
+}
+
+bool ScreenPlayerOptions::IsDisqualificationRow(int row) const {
+  OptionRow* optionRow = GetRow(row);
+  return optionRow != nullptr &&
+         optionRow->GetRowType() != OptionRow::RowType_Exit;
+}
+
+void ScreenPlayerOptions::ResizeDisqualificationCache() {
+  FOREACH_PlayerNumber(p) {
+    if (m_bRowCausesDisqualified[p].size() != m_pRows.size()) {
+      m_bRowCausesDisqualified[p].assign(m_pRows.size(), false);
     }
   }
 }
 
 bool ScreenPlayerOptions::Input(const InputEventPlus& input) {
   bool bHandled = false;
+  PlayerNumber pn = input.pn;
+  const bool usablePlayer = IsUsablePlayer(pn);
 
   if (m_bAskOptionsMessage && input.type == IET_FIRST_PRESS &&
-      !m_In.IsTransitioning() && input.MenuI == GAME_BUTTON_START) {
+      !m_In.IsTransitioning() && input.MenuI == GAME_BUTTON_START &&
+      usablePlayer) {
     if (m_bAcceptedChoices && !m_bGoToOptions) {
       m_bGoToOptions = true;
       this->PlayCommand("GoToOptions");
-      SCREENMAN->PlayStartSound();
+      if (SCREENMAN != nullptr) {
+        SCREENMAN->PlayStartSound();
+      }
       bHandled = true;
     }
   }
 
-  PlayerNumber pn = input.pn;
-  if (GAMESTATE->IsHumanPlayer(pn) &&
+  if (usablePlayer &&
       CodeDetector::EnteredCode(
           input.GameI.controller, CODE_CANCEL_ALL_PLAYER_OPTIONS)) {
     // apply the game default mods, but not the Profile saved mods
     GAMESTATE->m_pPlayerState[pn]->ResetToDefaultPlayerOptions(
         ModsLevel_Preferred);
 
-    MESSAGEMAN->Broadcast(ssprintf("CancelAllP%i", pn + 1));
+    if (MESSAGEMAN != nullptr) {
+      MESSAGEMAN->Broadcast(ssprintf("CancelAllP%i", pn + 1));
+    }
 
     for (unsigned r = 0; r < m_pRows.size(); r++) {
+      OptionRow* row = GetRow(r);
+      if (row == nullptr) {
+        continue;
+      }
       std::vector<PlayerNumber> v;
       v.push_back(pn);
-      int iOldFocus = m_pRows[r]->GetChoiceInRowWithFocus(pn);
+      int iOldFocus = row->GetChoiceInRowWithFocus(pn);
       this->ImportOptions(r, v);
-      m_pRows[r]->AfterImportOptions(pn);
-      this->UpdateDisqualified(r, pn);
-      m_pRows[r]->SetChoiceInRowWithFocus(pn, iOldFocus);
+      row->AfterImportOptions(pn);
+      if (IsDisqualificationRow(r)) {
+        this->UpdateDisqualified(r, pn);
+      }
+      if (iOldFocus >= 0 &&
+          iOldFocus < static_cast<int>(row->GetRowDef().m_vsChoices.size())) {
+        row->SetChoiceInRowWithFocus(pn, iOldFocus);
+      }
     }
     bHandled = true;
   }
@@ -127,16 +207,19 @@ bool ScreenPlayerOptions::Input(const InputEventPlus& input) {
   bHandled = ScreenOptionsMaster::Input(input) || bHandled;
 
   // UGLY: Update m_Disqualified whenever Start is pressed
-  if (GAMESTATE->IsHumanPlayer(pn) && input.MenuI == GAME_BUTTON_START) {
+  if (IsUsablePlayer(pn) && input.MenuI == GAME_BUTTON_START) {
     int row = m_iCurrentRow[pn];
-    UpdateDisqualified(row, pn);
+    if (IsDisqualificationRow(row)) {
+      UpdateDisqualified(row, pn);
+    }
   }
   return bHandled;
 }
 
 void ScreenPlayerOptions::HandleScreenMessage(const ScreenMessage SM) {
   if (SM == SM_BeginFadingOut &&
-      m_bAskOptionsMessage)  // user accepts the page of options
+      m_bAskOptionsMessage && !m_bAcceptedChoices &&
+      !m_Cancel.IsTransitioning())  // user accepts the page of options
   {
     m_bAcceptedChoices = true;
 
@@ -148,11 +231,37 @@ void ScreenPlayerOptions::HandleScreenMessage(const ScreenMessage SM) {
 }
 
 void ScreenPlayerOptions::UpdateDisqualified(int row, PlayerNumber pn) {
-  ASSERT(GAMESTATE->IsHumanPlayer(pn));
+  if (!IsUsablePlayer(pn) || !IsDisqualificationRow(row)) {
+    return;
+  }
+
+  ResizeDisqualificationCache();
+
+  if (row < 0 ||
+      row >= static_cast<int>(m_bRowCausesDisqualified[pn].size())) {
+    return;
+  }
+
+  OptionRow* optionRow = GetRow(row);
+  if (optionRow == nullptr) {
+    return;
+  }
+
+  if (!optionRow->GetRowDef().IsEnabledForPlayer(pn)) {
+    m_bRowCausesDisqualified[pn][row] = false;
+    const bool disqualified = std::any_of(
+        m_bRowCausesDisqualified[pn].begin(),
+        m_bRowCausesDisqualified[pn].end(), [](const bool& b) { return b; });
+    if (m_sprDisqualify[pn].IsLoaded()) {
+      m_sprDisqualify[pn]->SetVisible(disqualified);
+    }
+    return;
+  }
 
   // save original player options
   PlayerOptions poOrig =
       GAMESTATE->m_pPlayerState[pn]->m_PlayerOptions.GetPreferred();
+  SongOptions soOrig = GAMESTATE->m_SongOptions.GetPreferred();
 
   // Find out if the current row when exported causes disqualification.
   // Exporting the row will fill GAMESTATE->m_PlayerOptions.
@@ -161,8 +270,15 @@ void ScreenPlayerOptions::UpdateDisqualified(int row, PlayerNumber pn) {
       Init);
   std::vector<PlayerNumber> v;
   v.push_back(pn);
-  ExportOptions(row, v);
+  LuaThreadVariable previewExport("ScreenOptionsPreviewExport", "1");
+  ExportOptionsForPreview(row, v);
   bool bRowCausesDisqualified = GAMESTATE->CurrentOptionsDisqualifyPlayer(pn);
+
+  // restore previous player/song options before updating UI state
+  GAMESTATE->m_pPlayerState[pn]->m_PlayerOptions.Assign(
+      ModsLevel_Preferred, poOrig);
+  GAMESTATE->m_SongOptions.Assign(ModsLevel_Preferred, soOrig);
+
   m_bRowCausesDisqualified[pn][row] = bRowCausesDisqualified;
 
   // Update disqualified graphic
@@ -170,11 +286,9 @@ void ScreenPlayerOptions::UpdateDisqualified(int row, PlayerNumber pn) {
       m_bRowCausesDisqualified[pn].begin(), m_bRowCausesDisqualified[pn].end(),
       [](const bool& b) { return b; });
 
-  m_sprDisqualify[pn]->SetVisible(disqualified);
-
-  // restore previous player options in case the user escapes back after this
-  GAMESTATE->m_pPlayerState[pn]->m_PlayerOptions.Assign(
-      ModsLevel_Preferred, poOrig);
+  if (m_sprDisqualify[pn].IsLoaded()) {
+    m_sprDisqualify[pn]->SetVisible(disqualified);
+  }
 }
 
 // lua start

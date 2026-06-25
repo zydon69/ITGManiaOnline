@@ -25,11 +25,14 @@ class ScreenPlayerOptions : public ScreenOptionsMaster {
 
  private:
   std::vector<bool> m_bRowCausesDisqualified[NUM_PLAYERS];
+  bool IsUsablePlayer(PlayerNumber pn) const;
+  bool IsDisqualificationRow(int row) const;
+  void ResizeDisqualificationCache();
   void UpdateDisqualified(int row, PlayerNumber pn);
 
-  bool m_bAcceptedChoices;
-  bool m_bGoToOptions;
-  bool m_bAskOptionsMessage;
+  bool m_bAcceptedChoices = false;
+  bool m_bGoToOptions = false;
+  bool m_bAskOptionsMessage = false;
 
   // show if the current selections will disqualify a high score
   AutoActor m_sprDisqualify[NUM_PLAYERS];
