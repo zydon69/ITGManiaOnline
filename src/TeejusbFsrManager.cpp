@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <cstdint>
 #include <sstream>
 
 #include "IniFile.h"
@@ -20,6 +21,10 @@
 #include <unistd.h>
 #endif
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 TeejusbFsrManager* TEEJUSBFSR = nullptr;
 
 namespace {
@@ -27,6 +32,7 @@ constexpr int kDefaultThreshold = 1000;
 constexpr auto kDeviceScanInterval = std::chrono::milliseconds(1000);
 constexpr auto kValuePollInterval = std::chrono::milliseconds(40);
 const std::string kAssignmentsPath = "Save/TeejusbFsr.ini";
+const std::string kWindowsTeensyVidPid = "VID_16C0&PID_0487";
 
 std::chrono::steady_clock::time_point g_LastDeviceScan =
     std::chrono::steady_clock::time_point::min();
@@ -140,6 +146,224 @@ bool ConfigureSerialPort(int fd) {
   return true;
 }
 #endif
+
+#if defined(_WIN32)
+std::string WideToUtf8(const std::wstring& value) {
+  if (value.empty()) {
+    return "";
+  }
+
+  const int bytes = WideCharToMultiByte(
+      CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0,
+      nullptr, nullptr);
+  if (bytes <= 0) {
+    return "";
+  }
+
+  std::string out(bytes, '\0');
+  WideCharToMultiByte(
+      CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), &out[0],
+      bytes, nullptr, nullptr);
+  return out;
+}
+
+std::wstring Utf8ToWide(const std::string& value) {
+  if (value.empty()) {
+    return L"";
+  }
+
+  const int chars = MultiByteToWideChar(
+      CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0);
+  if (chars <= 0) {
+    return L"";
+  }
+
+  std::wstring out(chars, L'\0');
+  MultiByteToWideChar(
+      CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), &out[0],
+      chars);
+  return out;
+}
+
+std::string WindowsErrorString(DWORD error) {
+  wchar_t* message = nullptr;
+  const DWORD length = FormatMessageW(
+      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+          FORMAT_MESSAGE_IGNORE_INSERTS,
+      nullptr, error, 0, reinterpret_cast<LPWSTR>(&message), 0, nullptr);
+
+  std::string result = "Windows error " + std::to_string(error);
+  if (length > 0 && message != nullptr) {
+    result = WideToUtf8(std::wstring(message, length));
+    TrimRight(result);
+  }
+
+  if (message != nullptr) {
+    LocalFree(message);
+  }
+  return result;
+}
+
+bool RegReadStringValue(HKEY key, const wchar_t* valueName, std::wstring& out) {
+  DWORD type = 0;
+  DWORD bytes = 0;
+  LONG result = RegQueryValueExW(key, valueName, nullptr, &type, nullptr, &bytes);
+  if (result != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ) ||
+      bytes < sizeof(wchar_t)) {
+    return false;
+  }
+
+  std::wstring buffer(bytes / sizeof(wchar_t), L'\0');
+  result = RegQueryValueExW(
+      key, valueName, nullptr, &type, reinterpret_cast<LPBYTE>(&buffer[0]),
+      &bytes);
+  if (result != ERROR_SUCCESS) {
+    return false;
+  }
+
+  if (!buffer.empty() && buffer.back() == L'\0') {
+    buffer.pop_back();
+  }
+  out = buffer;
+  return true;
+}
+
+void AddWindowsPortName(const std::wstring& portName, std::vector<std::string>& ports) {
+  if (portName.empty()) {
+    return;
+  }
+
+  std::string port = WideToUtf8(portName);
+  if (port.empty()) {
+    return;
+  }
+
+  if (port.rfind("\\\\.\\", 0) != 0) {
+    port = "\\\\.\\" + port;
+  }
+  ports.push_back(port);
+}
+
+void AddWindowsTeensyPortsFromInstance(
+    HKEY deviceKey, const std::wstring& instanceName,
+    std::vector<std::string>& ports) {
+  HKEY instanceKey = nullptr;
+  if (RegOpenKeyExW(
+          deviceKey, instanceName.c_str(), 0, KEY_READ, &instanceKey) !=
+      ERROR_SUCCESS) {
+    return;
+  }
+
+  HKEY parametersKey = nullptr;
+  if (RegOpenKeyExW(
+          instanceKey, L"Device Parameters", 0, KEY_READ, &parametersKey) ==
+      ERROR_SUCCESS) {
+    std::wstring portName;
+    if (RegReadStringValue(parametersKey, L"PortName", portName)) {
+      AddWindowsPortName(portName, ports);
+    }
+    RegCloseKey(parametersKey);
+  }
+
+  RegCloseKey(instanceKey);
+}
+
+void AddWindowsTeensyPortsFromRegistry(std::vector<std::string>& ports) {
+  HKEY usbKey = nullptr;
+  if (RegOpenKeyExW(
+          HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Enum\\USB", 0,
+          KEY_READ, &usbKey) != ERROR_SUCCESS) {
+    return;
+  }
+
+  DWORD deviceIndex = 0;
+  wchar_t deviceName[256];
+  DWORD deviceNameSize = 0;
+  while (true) {
+    deviceNameSize = static_cast<DWORD>(ARRAYLEN(deviceName));
+    const LONG deviceResult = RegEnumKeyExW(
+        usbKey, deviceIndex++, deviceName, &deviceNameSize, nullptr, nullptr,
+        nullptr, nullptr);
+    if (deviceResult == ERROR_NO_MORE_ITEMS) {
+      break;
+    }
+    if (deviceResult != ERROR_SUCCESS) {
+      continue;
+    }
+
+    const std::string deviceNameUtf8 = WideToUtf8(deviceName);
+    if (deviceNameUtf8.find(kWindowsTeensyVidPid) == std::string::npos) {
+      continue;
+    }
+
+    HKEY deviceKey = nullptr;
+    if (RegOpenKeyExW(usbKey, deviceName, 0, KEY_READ, &deviceKey) !=
+        ERROR_SUCCESS) {
+      continue;
+    }
+
+    DWORD instanceIndex = 0;
+    wchar_t instanceName[256];
+    DWORD instanceNameSize = 0;
+    while (true) {
+      instanceNameSize = static_cast<DWORD>(ARRAYLEN(instanceName));
+      const LONG instanceResult = RegEnumKeyExW(
+          deviceKey, instanceIndex++, instanceName, &instanceNameSize, nullptr,
+          nullptr, nullptr, nullptr);
+      if (instanceResult == ERROR_NO_MORE_ITEMS) {
+        break;
+      }
+      if (instanceResult == ERROR_SUCCESS) {
+        AddWindowsTeensyPortsFromInstance(deviceKey, instanceName, ports);
+      }
+    }
+
+    RegCloseKey(deviceKey);
+  }
+
+  RegCloseKey(usbKey);
+}
+
+bool ConfigureWindowsSerialPort(HANDLE handle) {
+  DCB dcb;
+  ZeroMemory(&dcb, sizeof(dcb));
+  dcb.DCBlength = sizeof(dcb);
+  if (!GetCommState(handle, &dcb)) {
+    return false;
+  }
+
+  dcb.BaudRate = CBR_115200;
+  dcb.ByteSize = 8;
+  dcb.Parity = NOPARITY;
+  dcb.StopBits = ONESTOPBIT;
+  dcb.fBinary = TRUE;
+  dcb.fDtrControl = DTR_CONTROL_ENABLE;
+  dcb.fRtsControl = RTS_CONTROL_ENABLE;
+  dcb.fOutxCtsFlow = FALSE;
+  dcb.fOutxDsrFlow = FALSE;
+  dcb.fDsrSensitivity = FALSE;
+  dcb.fOutX = FALSE;
+  dcb.fInX = FALSE;
+
+  if (!SetCommState(handle, &dcb)) {
+    return false;
+  }
+
+  COMMTIMEOUTS timeouts;
+  ZeroMemory(&timeouts, sizeof(timeouts));
+  timeouts.ReadIntervalTimeout = MAXDWORD;
+  timeouts.ReadTotalTimeoutMultiplier = 0;
+  timeouts.ReadTotalTimeoutConstant = 0;
+  timeouts.WriteTotalTimeoutMultiplier = 0;
+  timeouts.WriteTotalTimeoutConstant = 100;
+  if (!SetCommTimeouts(handle, &timeouts)) {
+    return false;
+  }
+
+  PurgeComm(handle, PURGE_RXCLEAR | PURGE_TXCLEAR);
+  return true;
+}
+#endif
 }  // namespace
 
 TeejusbFsrManager::TeejusbFsrManager() {
@@ -160,6 +384,8 @@ std::vector<std::string> TeejusbFsrManager::GetDevicePorts() const {
   AddMatchingDevicePorts("/dev", {"cu.usbmodem"}, ports);
 #elif defined(UNIX)
   AddMatchingDevicePorts("/dev", {"ttyACM", "ttyUSB", "cu.usbmodem"}, ports);
+#elif defined(_WIN32)
+  AddWindowsTeensyPortsFromRegistry(ports);
 #endif
   std::sort(ports.begin(), ports.end());
   ports.erase(std::unique(ports.begin(), ports.end()), ports.end());
@@ -504,6 +730,30 @@ bool TeejusbFsrManager::OpenDevice(DeviceState& device) {
   SetStatus(device, "Connected");
   WriteCommand(device, "t");
   return true;
+#elif defined(_WIN32)
+  const std::wstring port = Utf8ToWide(device.port);
+  HANDLE handle = CreateFileW(
+      port.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (handle == INVALID_HANDLE_VALUE) {
+    SetStatus(device, "Open failed: " + WindowsErrorString(GetLastError()));
+    return false;
+  }
+
+  if (!ConfigureWindowsSerialPort(handle)) {
+    const std::string error = WindowsErrorString(GetLastError());
+    CloseHandle(handle);
+    SetStatus(device, "Serial setup failed: " + error);
+    return false;
+  }
+
+  device.fd = reinterpret_cast<intptr_t>(handle);
+  device.readBuffer.clear();
+  device.lastResponse.clear();
+  device.lastValueRequest = std::chrono::steady_clock::time_point::min();
+  SetStatus(device, "Connected");
+  WriteCommand(device, "t");
+  return true;
 #else
   SetStatus(device, "Serial teejusb-fsr support is unavailable");
   return false;
@@ -513,7 +763,11 @@ bool TeejusbFsrManager::OpenDevice(DeviceState& device) {
 void TeejusbFsrManager::CloseDevice(DeviceState& device) {
 #if defined(MACOSX) || defined(UNIX)
   if (device.fd >= 0) {
-    close(device.fd);
+    close(static_cast<int>(device.fd));
+  }
+#elif defined(_WIN32)
+  if (device.fd >= 0) {
+    CloseHandle(reinterpret_cast<HANDLE>(device.fd));
   }
 #endif
   device.fd = -1;
@@ -543,13 +797,41 @@ bool TeejusbFsrManager::WriteCommand(
   std::size_t offset = 0;
   while (offset < payload.size()) {
     const ssize_t written =
-        write(device.fd, payload.data() + offset, payload.size() - offset);
+        write(static_cast<int>(device.fd), payload.data() + offset,
+              payload.size() - offset);
     if (written < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         continue;
       }
 
       const std::string error = std::strerror(errno);
+      CloseDevice(device);
+      SetStatus(device, "Write failed: " + error);
+      return false;
+    }
+
+    if (written == 0) {
+      CloseDevice(device);
+      SetStatus(device, "Write failed: no bytes written");
+      return false;
+    }
+
+    offset += static_cast<std::size_t>(written);
+  }
+  return true;
+#elif defined(_WIN32)
+  std::string payload = command;
+  if (payload.empty() || payload.back() != '\n') {
+    payload += '\n';
+  }
+
+  HANDLE handle = reinterpret_cast<HANDLE>(device.fd);
+  std::size_t offset = 0;
+  while (offset < payload.size()) {
+    DWORD written = 0;
+    const DWORD remaining = static_cast<DWORD>(payload.size() - offset);
+    if (!WriteFile(handle, payload.data() + offset, remaining, &written, nullptr)) {
+      const std::string error = WindowsErrorString(GetLastError());
       CloseDevice(device);
       SetStatus(device, "Write failed: " + error);
       return false;
@@ -577,21 +859,23 @@ void TeejusbFsrManager::ReadAvailableLines(DeviceState& device) {
   }
 
   for (;;) {
+    const int fd = static_cast<int>(device.fd);
     fd_set readSet;
     FD_ZERO(&readSet);
-    FD_SET(device.fd, &readSet);
+    FD_SET(fd, &readSet);
 
     timeval timeout;
     timeout.tv_sec = 0;
     timeout.tv_usec = 0;
 
-    const int ready = select(device.fd + 1, &readSet, nullptr, nullptr, &timeout);
+    const int ready = select(fd + 1, &readSet, nullptr, nullptr, &timeout);
     if (ready <= 0) {
       break;
     }
 
     char buffer[512];
-    const ssize_t bytesRead = read(device.fd, buffer, sizeof(buffer));
+    const ssize_t bytesRead =
+        read(static_cast<int>(device.fd), buffer, sizeof(buffer));
     if (bytesRead > 0) {
       device.readBuffer.append(buffer, static_cast<std::size_t>(bytesRead));
       continue;
@@ -604,6 +888,54 @@ void TeejusbFsrManager::ReadAvailableLines(DeviceState& device) {
       SetStatus(device, error);
     }
     break;
+  }
+
+  std::size_t newline = std::string::npos;
+  while ((newline = device.readBuffer.find('\n')) != std::string::npos) {
+    std::string line = device.readBuffer.substr(0, newline);
+    device.readBuffer.erase(0, newline + 1);
+    Trim(line);
+    if (!line.empty()) {
+      ProcessLine(device, line);
+    }
+  }
+#endif
+#if defined(_WIN32)
+  if (device.fd < 0) {
+    return;
+  }
+
+  HANDLE handle = reinterpret_cast<HANDLE>(device.fd);
+  for (;;) {
+    DWORD errors = 0;
+    COMSTAT status;
+    ZeroMemory(&status, sizeof(status));
+    if (!ClearCommError(handle, &errors, &status)) {
+      const std::string error = WindowsErrorString(GetLastError());
+      CloseDevice(device);
+      SetStatus(device, error);
+      break;
+    }
+
+    if (status.cbInQue == 0) {
+      break;
+    }
+
+    char buffer[512];
+    DWORD bytesRead = 0;
+    const DWORD bytesToRead =
+        std::min<DWORD>(status.cbInQue, static_cast<DWORD>(sizeof(buffer)));
+    if (!ReadFile(handle, buffer, bytesToRead, &bytesRead, nullptr)) {
+      const std::string error = WindowsErrorString(GetLastError());
+      CloseDevice(device);
+      SetStatus(device, error);
+      break;
+    }
+
+    if (bytesRead == 0) {
+      break;
+    }
+    device.readBuffer.append(buffer, static_cast<std::size_t>(bytesRead));
   }
 
   std::size_t newline = std::string::npos;

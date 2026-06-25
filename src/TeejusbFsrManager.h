@@ -3,6 +3,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -56,7 +57,7 @@ class TeejusbFsrManager {
 
  private:
   struct DeviceState {
-    int fd = -1;
+    intptr_t fd = -1;
     std::string port;
     std::string readBuffer;
     std::string status = "Not connected";

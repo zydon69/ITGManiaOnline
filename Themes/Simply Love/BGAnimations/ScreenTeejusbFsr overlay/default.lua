@@ -22,7 +22,7 @@ local function get_manager()
 end
 
 local function short_port_name(port)
-	return tostring(port or ""):gsub("^/dev/", "")
+	return tostring(port or ""):gsub("^/dev/", ""):gsub("^\\\\%.\\", "")
 end
 
 local function display_port_name(port)
