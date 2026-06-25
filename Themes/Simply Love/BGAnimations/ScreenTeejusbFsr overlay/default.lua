@@ -1,7 +1,10 @@
+local selected_player = 1
 local selected_sensor = 1
 local selected_device = 1
-local device_ports = {}
-local last_port_scan = -100
+local selected_focus = 1
+
+local focus_names = { "Player", "Controller", "Sensor" }
+local device_snapshots = {}
 local snapshot = {
 	connected = false,
 	port = "",
@@ -33,112 +36,138 @@ local function display_port_name(port)
 	return name
 end
 
-local function find_port_index(port)
+local function find_device_index(port)
 	if not port or port == "" then return nil end
-	for i, candidate in ipairs(device_ports) do
-		if candidate == port then return i end
+	for i, device in ipairs(device_snapshots) do
+		if device.port == port then return i end
 	end
 	return nil
 end
 
-local function rescan_ports(force)
+local function assigned_port()
 	local manager = get_manager()
-	if not manager then
-		device_ports = {}
-		selected_device = 1
-		return
-	end
+	if not manager then return "" end
+	return manager:GetAssignedPort(selected_player) or ""
+end
 
-	local now = GetTimeSinceStart and GetTimeSinceStart() or 0
-	if not force and now - last_port_scan < 1 then return end
-	last_port_scan = now
-
-	device_ports = manager:GetDevicePorts() or {}
-	if #device_ports == 0 then
-		selected_device = 1
-		return
-	end
-
-	local current_index = find_port_index(snapshot.port)
-	if current_index then
-		selected_device = current_index
+local function sync_selected_device_to_assignment()
+	local index = find_device_index(assigned_port())
+	if index then
+		selected_device = index
+	elseif #device_snapshots > 0 then
+		selected_device = clamp(selected_device, 1, #device_snapshots)
 	else
-		selected_device = clamp(selected_device, 1, #device_ports)
+		selected_device = 1
 	end
 end
 
 local function refresh_snapshot()
 	local manager = get_manager()
 	if not manager then return snapshot end
-	snapshot = manager:Poll() or snapshot
-	rescan_ports(false)
+	device_snapshots = manager:PollAll() or {}
+	sync_selected_device_to_assignment()
+	snapshot = manager:GetSnapshotForPlayer(selected_player) or snapshot
 	return snapshot
 end
 
-local function update_threshold(sensor, delta)
+local function assign_selected_controller()
 	local manager = get_manager()
 	if not manager then return end
-	local thresholds = snapshot.thresholds or {}
-	local current = thresholds[sensor] or 1000
-	local next_value = clamp(current + delta, 0, 1023)
-	manager:SetThreshold(sensor, next_value)
-	snapshot.thresholds[sensor] = next_value
-	MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
-end
-
-local function connect_selected_device()
-	local manager = get_manager()
-	if not manager then return end
-
-	rescan_ports(true)
-	if #device_ports == 0 then
-		manager:Disconnect()
-		snapshot = manager:GetSnapshot() or snapshot
+	if #device_snapshots == 0 then
+		manager:AssignPlayer(selected_player, "")
+		snapshot = manager:GetSnapshotForPlayer(selected_player) or snapshot
 		MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
 		return
 	end
 
-	selected_device = clamp(selected_device, 1, #device_ports)
-	manager:Connect(device_ports[selected_device])
-	manager:RequestThresholds()
-	snapshot = manager:GetSnapshot() or snapshot
+	selected_device = clamp(selected_device, 1, #device_snapshots)
+	local port = device_snapshots[selected_device].port or ""
+	manager:AssignPlayer(selected_player, port)
+	manager:RequestThresholdsForPort(port)
+	snapshot = manager:GetSnapshotForPlayer(selected_player) or snapshot
 	MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
 end
 
-local function cycle_device(delta)
-	rescan_ports(true)
-	if #device_ports == 0 then
-		connect_selected_device()
-		return
-	end
+local function cycle_player(delta)
+	selected_player = ((selected_player - 1 + delta) % 4) + 1
+	sync_selected_device_to_assignment()
+	snapshot = get_manager() and get_manager():GetSnapshotForPlayer(selected_player) or snapshot
+	MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
+end
 
-	selected_device = ((selected_device - 1 + delta) % #device_ports) + 1
-	connect_selected_device()
+local function cycle_controller(delta)
+	if #device_snapshots == 0 then return end
+	selected_device = ((selected_device - 1 + delta) % #device_snapshots) + 1
+	assign_selected_controller()
+end
+
+local function cycle_sensor(delta)
+	selected_sensor = ((selected_sensor - 1 + delta) % 4) + 1
+	MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
+end
+
+local function update_threshold(delta)
+	local manager = get_manager()
+	local port = assigned_port()
+	if not manager or port == "" then return end
+
+	local thresholds = snapshot.thresholds or {}
+	local current = thresholds[selected_sensor] or 1000
+	local next_value = clamp(current + delta, 0, 1023)
+	manager:SetThresholdForPort(port, selected_sensor, next_value)
+	snapshot.thresholds[selected_sensor] = next_value
+	MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
+end
+
+local function save_thresholds()
+	local manager = get_manager()
+	local port = assigned_port()
+	if manager and port ~= "" then
+		manager:SaveThresholdsForPort(port)
+	end
 end
 
 local InputHandler = function(event)
-	if not event or event.type ~= "InputEventType_FirstPress" then return false end
+	if not event or event.type == "InputEventType_Release" then return false end
 
-	if event.GameButton == "MenuLeft" then
-		selected_sensor = ((selected_sensor + 2) % 4) + 1
-		MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
-		return true
-	elseif event.GameButton == "MenuRight" then
-		selected_sensor = (selected_sensor % 4) + 1
-		MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
-		return true
-	elseif event.GameButton == "MenuUp" then
-		update_threshold(selected_sensor, 5)
+	local is_first_press = event.type == "InputEventType_FirstPress"
+	local is_repeat = event.type == "InputEventType_Repeat"
+	if not is_first_press and not is_repeat then return false end
+
+	if event.GameButton == "MenuUp" then
+		update_threshold(is_repeat and 25 or 5)
 		return true
 	elseif event.GameButton == "MenuDown" then
-		update_threshold(selected_sensor, -5)
+		update_threshold(is_repeat and -25 or -5)
+		return true
+	end
+
+	if not is_first_press then return false end
+
+	if event.GameButton == "Select" then
+		selected_focus = (selected_focus % #focus_names) + 1
+		MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
+		return true
+	elseif event.GameButton == "MenuLeft" then
+		if selected_focus == 1 then
+			cycle_player(-1)
+		elseif selected_focus == 2 then
+			cycle_controller(-1)
+		else
+			cycle_sensor(-1)
+		end
+		return true
+	elseif event.GameButton == "MenuRight" then
+		if selected_focus == 1 then
+			cycle_player(1)
+		elseif selected_focus == 2 then
+			cycle_controller(1)
+		else
+			cycle_sensor(1)
+		end
 		return true
 	elseif event.GameButton == "Start" then
-		local manager = get_manager()
-		if manager then manager:SaveThresholds() end
-		return true
-	elseif event.GameButton == "Select" then
-		cycle_device(1)
+		save_thresholds()
 		return true
 	elseif event.GameButton == "Back" then
 		local top = SCREENMAN:GetTopScreen()
@@ -156,11 +185,11 @@ local function make_sensor(index, x)
 	return Def.ActorFrame{
 		Name = "Sensor" .. index,
 		InitCommand=function(self)
-			self:xy(x, _screen.cy + 26)
+			self:xy(x, _screen.cy + 30)
 		end,
 
 		TeejusbFsrUpdatedMessageCommand=function(self)
-			local is_selected = selected_sensor == index
+			local is_selected = selected_focus == 3 and selected_sensor == index
 			self:GetChild("Selected"):visible(is_selected)
 
 			local values = snapshot.values or {}
@@ -245,6 +274,32 @@ local function make_sensor(index, x)
 	}
 end
 
+local function make_selector(name, y, text_fn)
+	return Def.ActorFrame{
+		Name = name,
+		InitCommand=function(self)
+			self:xy(_screen.cx, y)
+		end,
+		TeejusbFsrUpdatedMessageCommand=function(self)
+			local active = focus_names[selected_focus] == name
+			self:GetChild("Frame"):diffusealpha(active and 0.18 or 0.08)
+			self:GetChild("Label"):settext(text_fn())
+		end,
+		Def.Quad{
+			Name = "Frame",
+			InitCommand=function(self)
+				self:zoomto(WideScale(250, 330), 30):diffuse(color("#FFFFFF")):diffusealpha(0.08)
+			end,
+		},
+		LoadFont("Common Normal")..{
+			Name = "Label",
+			InitCommand=function(self)
+				self:zoom(0.48):diffuse(Color.White):maxwidth(WideScale(480, 620))
+			end,
+		},
+	}
+end
+
 local af = Def.ActorFrame{
 	OnCommand=function(self)
 		local top = SCREENMAN:GetTopScreen()
@@ -252,7 +307,7 @@ local af = Def.ActorFrame{
 			top:SetInputCallbacksHandleBeforeScreen(true)
 			top:AddInputCallback(InputHandler)
 		end
-		connect_selected_device()
+		refresh_snapshot()
 		self:SetUpdateFunction(function()
 			refresh_snapshot()
 			MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
@@ -276,55 +331,43 @@ local af = Def.ActorFrame{
 	LoadFont("Common Bold")..{
 		Text = "teejusb-fsr",
 		InitCommand=function(self)
-			self:xy(_screen.cx, _screen.cy - 205):zoom(0.9):diffuse(Color.White)
+			self:xy(_screen.cx, _screen.cy - 210):zoom(0.86):diffuse(Color.White)
 		end,
 	},
 
-	Def.ActorFrame{
-		Name = "DeviceSelector",
+	make_selector("Player", _screen.cy - 176, function()
+		return ("<  Player %d  >"):format(selected_player)
+	end),
+
+	make_selector("Controller", _screen.cy - 140, function()
+		if #device_snapshots == 0 then
+			return "<  no pad detected  >"
+		end
+
+		local port = assigned_port()
+		local index = find_device_index(port)
+		if not index then
+			return "<  unassigned  >"
+		end
+
+		return ("<  Controller %d/%d  %s  >"):format(index, #device_snapshots, display_port_name(port))
+	end),
+
+	LoadFont("Common Normal")..{
+		Name = "Status",
 		InitCommand=function(self)
-			self:xy(_screen.cx, _screen.cy - 170)
+			self:xy(_screen.cx, _screen.cy - 115):zoom(0.32):diffuse(color("#B8C2CC")):maxwidth(WideScale(500, 620))
 		end,
 		TeejusbFsrUpdatedMessageCommand=function(self)
-			local ports_count = #device_ports
-			local label = self:GetChild("Label")
-			local status = self:GetChild("Status")
-			if not label or not status then return end
-
-			if ports_count == 0 then
-				label:settext("<  no pad detected  >")
-			else
-				local port = device_ports[selected_device] or snapshot.port or ""
-				label:settext(("<  Controller %d/%d  %s  >"):format(selected_device, ports_count, display_port_name(port)))
-			end
-			status:settext(snapshot.status or "Unknown")
+			local focus = focus_names[selected_focus] or "Player"
+			self:settext(("%s focus - %s"):format(focus, snapshot.status or "Unknown"))
 		end,
-
-		Def.Quad{
-			InitCommand=function(self)
-				self:zoomto(WideScale(260, 340), 30):diffuse(color("#FFFFFF")):diffusealpha(0.08)
-			end,
-		},
-
-		LoadFont("Common Normal")..{
-			Name = "Label",
-			InitCommand=function(self)
-				self:y(-4):zoom(0.58):diffuse(Color.White):maxwidth(WideScale(500, 620))
-			end,
-		},
-
-		LoadFont("Common Normal")..{
-			Name = "Status",
-			InitCommand=function(self)
-				self:y(10):zoom(0.26):diffuse(color("#B8C2CC")):maxwidth(WideScale(500, 620))
-			end,
-		},
 	},
 
 	LoadFont("Common Normal")..{
-		Text = "Select: controller  Left/Right: pad  Up/Down: threshold  Start: save  Back: exit",
+		Text = "Select: focus  Left/Right: change  Up/Down: threshold  Start: save  Back: exit",
 		InitCommand=function(self)
-			self:xy(_screen.cx, _screen.cy + 224):zoom(0.45):diffuse(color("#B8C2CC"))
+			self:xy(_screen.cx, _screen.cy + 226):zoom(0.42):diffuse(color("#B8C2CC"))
 		end,
 	},
 }

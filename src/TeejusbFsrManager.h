@@ -11,47 +11,82 @@
 class TeejusbFsrManager {
  public:
   static constexpr int NUM_SENSORS = 4;
+  static constexpr int NUM_ASSIGNABLE_PLAYERS = 4;
 
   TeejusbFsrManager();
   ~TeejusbFsrManager();
 
   std::vector<std::string> GetDevicePorts() const;
+
   bool ConnectAuto();
   bool Connect(const std::string& port);
   void Disconnect();
   bool IsConnected() const;
 
   void Poll();
+  void PollAll();
   bool RequestValues();
   bool RequestThresholds();
   bool SetThreshold(int sensorIndexOneBased, int threshold);
   bool SaveThresholds();
 
-  const std::string& GetPort() const { return m_sPort; }
-  const std::string& GetStatus() const { return m_sStatus; }
-  const std::array<int, NUM_SENSORS>& GetValues() const { return m_iValues; }
-  const std::array<int, NUM_SENSORS>& GetThresholds() const {
-    return m_iThresholds;
-  }
+  bool SetActivePort(const std::string& port);
+  bool RequestValuesForPort(const std::string& port);
+  bool RequestThresholdsForPort(const std::string& port);
+  bool SetThresholdForPort(
+      const std::string& port, int sensorIndexOneBased, int threshold);
+  bool SaveThresholdsForPort(const std::string& port);
+
+  bool AssignPlayer(int playerIndexOneBased, const std::string& port);
+  std::string GetAssignedPort(int playerIndexOneBased) const;
+  bool SaveAssignments() const;
+  void LoadAssignments();
+
+  const std::string& GetPort() const { return m_sActivePort; }
+  std::string GetStatus() const;
+  std::array<int, NUM_SENSORS> GetValues() const;
+  std::array<int, NUM_SENSORS> GetThresholds() const;
+
   void PushSnapshot(lua_State* L) const;
+  void PushSnapshotForPort(lua_State* L, const std::string& port) const;
+  void PushSnapshotForPlayer(lua_State* L, int playerIndexOneBased) const;
+  void PushDevices(lua_State* L) const;
+  void PushAssignments(lua_State* L) const;
   void PushSelf(lua_State* L);
 
  private:
-  void CloseFd();
-  bool WriteCommand(const std::string& command);
-  void ReadAvailableLines();
-  void ProcessLine(const std::string& line);
-  void MaybeRequestValues();
-  void SetStatus(const std::string& status);
+  struct DeviceState {
+    int fd = -1;
+    std::string port;
+    std::string readBuffer;
+    std::string status = "Not connected";
+    std::string lastResponse;
+    std::array<int, NUM_SENSORS> values = {{0, 0, 0, 0}};
+    std::array<int, NUM_SENSORS> thresholds = {{1000, 1000, 1000, 1000}};
+    std::chrono::steady_clock::time_point lastValueRequest =
+        std::chrono::steady_clock::time_point::min();
+  };
 
-  int m_iFd;
-  std::string m_sPort;
-  std::string m_sReadBuffer;
-  std::string m_sStatus;
-  std::string m_sLastResponse;
-  std::array<int, NUM_SENSORS> m_iValues;
-  std::array<int, NUM_SENSORS> m_iThresholds;
-  std::chrono::steady_clock::time_point m_LastValueRequest;
+  DeviceState* FindDevice(const std::string& port);
+  const DeviceState* FindDevice(const std::string& port) const;
+  DeviceState* FindOrCreateDevice(const std::string& port);
+  DeviceState* GetActiveDevice();
+  const DeviceState* GetActiveDevice() const;
+
+  void SyncDeviceList();
+  bool OpenDevice(DeviceState& device);
+  void CloseDevice(DeviceState& device);
+  void CloseAllDevices();
+  bool WriteCommand(DeviceState& device, const std::string& command);
+  void ReadAvailableLines(DeviceState& device);
+  void ProcessLine(DeviceState& device, const std::string& line);
+  void MaybeRequestValues(DeviceState& device);
+  void SetStatus(DeviceState& device, const std::string& status);
+  void PushDeviceSnapshot(lua_State* L, const DeviceState* device) const;
+
+  std::vector<DeviceState> m_vDevices;
+  std::string m_sActivePort;
+  std::array<std::string, NUM_ASSIGNABLE_PLAYERS> m_sAssignedPorts;
 };
 
 extern TeejusbFsrManager* TEEJUSBFSR;

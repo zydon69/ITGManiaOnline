@@ -163,6 +163,7 @@ af[#af+1] = LoadActor("./DarkBackground.lua", {player, header_height, sidepane_b
 		LoadActor("./Banner.lua", online_stats_payload(player)),
 		LoadActor("./TapNoteJudgments.lua", online_stats_payload(player), true), -- second argument is if it has labels or not
 		LoadActor("./HoldsMinesRolls.lua", online_stats_payload(player)),
+		LoadActor("./TeejusbFsrBars.lua", online_stats_payload(player)),
 		LoadActor("./Time.lua", online_stats_payload(player)),
 		LoadActor("./Scorebox.lua", player),
 	}	
