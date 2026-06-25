@@ -2281,6 +2281,18 @@ end
 		local refreshDelay = math.max(
 			0.05,
 			tonumber(delay) or tonumber(self.lobbyRefreshReplayDelaySeconds) or 0.20)
+		local roomSnapshotAge = GetTimeSinceStart() - (tonumber(self.lastAuthoritativeRoomSnapshotAt) or 0)
+		if self.currentRoomId
+			and roomSnapshotAge >= 0
+			and roomSnapshotAge < 0.50 then
+			online_flow_trace("lobby_refresh_coalesced_skipped reason=recent_room_snapshot"
+				.. " requestReason=" .. tostring(reason or "unknown")
+				.. " age=" .. string.format("%.3f", roomSnapshotAge)
+				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+				.. " snapshotSource=" .. tostring(self.lastAuthoritativeRoomSnapshotSource or "nil")
+				.. " screen=" .. tostring(self.currentScreenName or "nil"))
+			return
+		end
 		if self.lobbyRefreshDeferredScheduled then
 			online_flow_trace("lobby_refresh_coalesced_existing reason=" .. tostring(reason or "unknown")
 				.. " delay=" .. tostring(refreshDelay)
@@ -4372,6 +4384,8 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 
 	self.currentRoomId = room.id
 	room.online_snapshot_source = source
+	self.lastAuthoritativeRoomSnapshotAt = GetTimeSinceStart()
+	self.lastAuthoritativeRoomSnapshotSource = tostring(source or "unknown")
 	self.currentRoom = room
 	online_room_snapshot_debug("room_snapshot_accepted", room, source, previousRoom)
 	online_room_transition_trace(previousRoom, room, source)
@@ -11058,6 +11072,24 @@ end
 		local refreshScreen = tostring(self.currentScreenName or "nil")
 		local refreshIsGameplay = self:IsOnlineGameplayScreen(refreshScreen)
 		local now = GetTimeSinceStart()
+		local recentRoomSnapshotAge = now - (tonumber(self.lastAuthoritativeRoomSnapshotAt) or 0)
+		local automaticRoomUiRefresh = refreshReason:match("^coalesced:queued_after_response:") ~= nil
+			or refreshReason:match("^queued_after_response:") ~= nil
+			or refreshReason:match("^room_ui_refresh:") ~= nil
+			or refreshReason == "lobby_refresh_current_room:fetch_lobby"
+		if not ignoreSuppression
+			and self.currentRoomId
+			and automaticRoomUiRefresh
+			and recentRoomSnapshotAge >= 0
+			and recentRoomSnapshotAge < 0.50 then
+			online_flow_trace("lobby_refresh_skipped reason=recent_room_snapshot"
+				.. " requestReason=" .. refreshReason
+				.. " age=" .. string.format("%.3f", recentRoomSnapshotAge)
+				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+				.. " snapshotSource=" .. tostring(self.lastAuthoritativeRoomSnapshotSource or "nil")
+				.. " screen=" .. refreshScreen)
+			return
+		end
 		if self.currentRoomId == nil and not ignoreSuppression and self:IsPostLeaveLobbyRefreshReason(refreshReason) then
 			local lastPostLeaveAt = tonumber(self.lastPostLeaveLobbyRefreshAt) or 0
 			if refreshReason == "leave_room_confirmed" or lastPostLeaveAt <= 0 then

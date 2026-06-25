@@ -2655,7 +2655,7 @@ CreateOnlineHandler = function()
 						isWaiting = false
 						UnlockOnlineInput()
 						if not room_runtime_should_run() then
-							stop_room_timers(self, "screen_online_lobbies_inactive_runtime")
+							stop_room_timers(self, "screen_online_lobbies_no_fast_runtime")
 						end
 						if online_trace then
 							online_trace("FLOW lobby_screen_unlocked screen=" .. tostring(screenName)

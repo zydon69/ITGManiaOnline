@@ -4806,6 +4806,7 @@ local af = Def.ActorFrame{
 				local previousSelectedKey = joined_song_selected_key
 				local snapshotSource = tostring(params and params.snapshotSource or "")
 				local selectedSongInfo = normalize_online_song_info(params and params.songInfo or nil)
+				local packSyncResetBySnapshotClear = false
 				local stalePostResultsSong = selectedSongInfo ~= nil
 					and previousJoinedPhase == "results"
 					and joined_phase == "lobby"
@@ -4827,6 +4828,7 @@ local af = Def.ActorFrame{
 						or snapshotSource:find("room.play_state_reset_to_lobby", 1, true) ~= nil
 					if shouldClearPreview then
 						reset_joined_transient_song_state("online_lobby_state_clear_unconfirmed_preview", { clearPreview = true, resetPackSync = true })
+						packSyncResetBySnapshotClear = true
 					end
 					joined_song_confirmed = false
 					joined_song_selected_key = ""
@@ -4847,7 +4849,14 @@ local af = Def.ActorFrame{
 				joined_missing_song_reason = nil
 				if joined_phase ~= "results"
 					and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ResetLocalState then
-					ITGOnline.PackSync:ResetLocalState("no_song_confirmed")
+					if packSyncResetBySnapshotClear then
+						lobby_flow_trace("PackSync_reset_skipped reason=no_song_confirmed_already_reset_by_snapshot_clear"
+							.. " phase=" .. tostring(joined_phase)
+							.. " previousPhase=" .. tostring(previousJoinedPhase)
+							.. " snapshotSource=" .. tostring(params and params.snapshotSource or ""))
+					else
+						ITGOnline.PackSync:ResetLocalState("no_song_confirmed")
+					end
 				end
 				if joined_song_preview and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ManagerBrowsingPreview then
 					ITGOnline.PackSync:ManagerBrowsingPreview(joined_song_preview)

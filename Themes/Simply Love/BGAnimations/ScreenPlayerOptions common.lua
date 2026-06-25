@@ -205,6 +205,22 @@ local af = Def.ActorFrame{
 				.. " next=" .. tostring(online_next_screen_for_options(screenName) or "nil"))
 			return
 		end
+		local phase = ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom and ITGOnline.currentRoom.phase) or tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "")
+		if phase ~= "config" then
+			online_options_trace("screen_off_skipped reason=phase_not_config"
+				.. " screen=" .. tostring(screenName)
+				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+				.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+			return
+		end
+		if ITGOnline.IsCurrentUserReadyInRoom
+			and ITGOnline:IsCurrentUserReadyInRoom(ITGOnline.currentRoom, "config_ready") then
+			online_options_trace("screen_off_skipped reason=already_config_ready"
+				.. " screen=" .. tostring(screenName)
+				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+				.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+			return
+		end
 
 		online_options_trace("screen_off_config_ready_broadcast screen=" .. tostring(screenName)
 			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
