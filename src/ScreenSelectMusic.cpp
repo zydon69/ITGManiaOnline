@@ -79,16 +79,6 @@ AutoScreenMessage(SM_BackFromPlayerOptions);
 AutoScreenMessage(SM_ConfirmDeleteSong);
 AutoScreenMessage(SM_ConfirmExit);
 
-static std::string g_sCDTitlePath;
-static bool g_bWantFallbackCdTitle;
-static bool g_bCDTitleWaiting = false;
-static std::string g_sBannerPath;
-static bool g_bBannerWaiting = false;
-static bool g_bSampleMusicWaiting = false;
-static RageTimer g_StartedLoadingAt(RageZeroTimer);
-static RageTimer g_ScreenStartedLoadingAt(RageZeroTimer);
-RageTimer g_CanOpenOptionsList(RageZeroTimer);
-
 static LocalizedString PERMANENTLY_DELETE(
     "ScreenSelectMusic", "PermanentlyDelete");
 static LocalizedString PROMPT_BEFORE_EXITING(
@@ -103,6 +93,10 @@ bool IsValidPlayer(PlayerNumber pn) {
 
 bool IsValidButton(GameButton button) {
   return button >= 0 && button < NUM_GameButton;
+}
+
+bool HasLoadedSelectMusicTheme() {
+  return THEME != nullptr && THEME->IsThemeLoaded();
 }
 
 void WarnSelectMusic(const char* fmt, ...) {
@@ -161,27 +155,35 @@ void BroadcastSelectMusic(Message& message) {
 
 std::string GetThemeMetricString(
     const std::string& group, const std::string& metric) {
-  return THEME == nullptr ? std::string() : THEME->GetMetric(group, metric);
+  return !HasLoadedSelectMusicTheme() || !THEME->HasMetric(group, metric)
+             ? std::string()
+             : THEME->GetMetric(group, metric);
 }
 
 std::string GetThemePathS(const std::string& group, const std::string& metric) {
-  return THEME == nullptr ? std::string() : THEME->GetPathS(group, metric);
+  return !HasLoadedSelectMusicTheme() || !THEME->HasMetric(group, metric)
+             ? std::string()
+             : THEME->GetPathS(group, metric);
 }
 
 std::string GetThemePathG(const std::string& group, const std::string& metric) {
-  return THEME == nullptr ? std::string() : THEME->GetPathG(group, metric);
+  return !HasLoadedSelectMusicTheme() || !THEME->HasMetric(group, metric)
+             ? std::string()
+             : THEME->GetPathG(group, metric);
 }
 
 std::string GetThemePathF(const std::string& group, const std::string& metric) {
-  return THEME == nullptr ? std::string() : THEME->GetPathF(group, metric);
+  return !HasLoadedSelectMusicTheme() || !THEME->HasMetric(group, metric)
+             ? std::string()
+             : THEME->GetPathF(group, metric);
 }
 
 float GetThemeMetricSeconds(
     const std::string& group, const std::string& metric,
     float fallback = 0.0f) {
-  return THEME == nullptr ? fallback
-                          : SanitizeMetricSeconds(
-                                THEME->GetMetricF(group, metric), fallback);
+  return !HasLoadedSelectMusicTheme() || !THEME->HasMetric(group, metric)
+             ? fallback
+             : SanitizeMetricSeconds(THEME->GetMetricF(group, metric), fallback);
 }
 
 GameButton ButtonFromMetric(
@@ -218,6 +220,34 @@ const Profile* GetSafeProfile(PlayerNumber pn) {
 }
 
 bool HasUsableTimer(MenuTimer* timer) { return timer != nullptr; }
+
+bool PathStartsWith(const std::string& path, const std::string& prefix) {
+  return path.compare(0, prefix.size(), prefix) == 0;
+}
+
+std::string NormalizeVirtualDirectory(std::string path) {
+  Replace(path, '\\', '/');
+  CollapsePath(path, true);
+  if (!path.empty() && path[path.size() - 1] != '/') {
+    path += "/";
+  }
+  return path;
+}
+
+bool IsSafeSongDeletionDirectory(const std::string& songDir) {
+  const std::string normalized = NormalizeVirtualDirectory(songDir);
+  if (!PathStartsWith(normalized, "Songs/") ||
+      PathStartsWith(normalized, "Songs/../") ||
+      normalized.find("/../") != std::string::npos) {
+    return false;
+  }
+
+  std::vector<std::string> pathParts;
+  split(normalized, "/", pathParts, true);
+  // Require Songs/<group>/<song>/ and refuse deleting the root or a whole group.
+  return pathParts.size() >= 3 && pathParts[0] == "Songs" &&
+         !pathParts[1].empty() && !pathParts[2].empty();
+}
 }  // namespace
 
 static bool HasActiveITGOnlineRoom() {
@@ -228,7 +258,12 @@ static bool HasActiveITGOnlineRoom() {
   Lua* L = LUA->Get();
   const int top = lua_gettop(L);
   const bool ran = LuaHelpers::RunExpression(
-      L, "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil",
+      L,
+      "ITGOnline ~= nil "
+      "and ITGOnline.currentRoom ~= nil "
+      "and ITGOnline.currentRoomId ~= nil "
+      "and ITGOnline.currentRoom.id == ITGOnline.currentRoomId "
+      "and ITGOnline.user ~= nil",
       "HasActiveITGOnlineRoom");
   const bool active = ran && lua_gettop(L) > top && lua_toboolean(L, -1);
   lua_settop(L, top);
@@ -247,7 +282,10 @@ ScreenSelectMusic::ScreenSelectMusic()
       m_bAllowOptionsMenuRepeat(false),
       m_bPreviewSuspendedForPrompt(false),
       m_bPreviewDisabled(false),
-      m_pSongAwaitingDeletionConfirmation(nullptr) {
+      m_bWantFallbackCdTitle(false),
+      m_bCDTitleWaiting(false),
+      m_bBannerWaiting(false),
+      m_bSampleMusicWaiting(false) {
   ZERO(m_iSelection);
   ZERO(m_bStepsChosen);
   ZERO(m_bSelectIsDown);
@@ -264,7 +302,7 @@ ScreenSelectMusic::ScreenSelectMusic()
 }
 
 void ScreenSelectMusic::Init() {
-  g_ScreenStartedLoadingAt.Touch();
+  m_ScreenStartedLoadingAt.Touch();
   if (PREFSMAN != nullptr && GAMESTATE != nullptr && GAMEMAN != nullptr &&
       PREFSMAN->m_sTestInitialScreen.Get() == m_sName) {
     GAMESTATE->m_PlayMode.Set(PLAY_MODE_REGULAR);
@@ -450,8 +488,11 @@ void ScreenSelectMusic::Init() {
 }
 
 void ScreenSelectMusic::BeginScreen() {
-  g_ScreenStartedLoadingAt.Touch();
+  m_ScreenStartedLoadingAt.Touch();
   m_timerIdleComment.GetDeltaTime();
+  ResetAssetRequestState();
+  m_sSongAwaitingDeletionDir.clear();
+  m_sSongAwaitingDeletionTitle.clear();
 
   if (GAMESTATE == nullptr) {
     WarnSelectMusic("ScreenSelectMusic opened without GAMESTATE.");
@@ -512,6 +553,9 @@ void ScreenSelectMusic::BeginScreen() {
   m_bGoToOptions = false;
   m_bAllowOptionsMenu = m_bAllowOptionsMenuRepeat = false;
   ZERO(m_iSelection);
+  FOREACH_PlayerNumber(pn) {
+    m_CanOpenOptionsList[pn].Touch();
+  }
 
   if (USE_OPTIONS_LIST) {
     FOREACH_PlayerNumber(pn) m_OptionsList[pn].Reset();
@@ -537,12 +581,26 @@ ScreenSelectMusic::~ScreenSelectMusic() {
   if (IMAGECACHE != nullptr) {
     IMAGECACHE->Undemand("Banner");
   }
-  g_bCDTitleWaiting = false;
-  g_bBannerWaiting = false;
-  g_bSampleMusicWaiting = false;
-  g_sCDTitlePath.clear();
-  g_sBannerPath.clear();
-  g_bWantFallbackCdTitle = false;
+  ResetAssetRequestState();
+}
+
+void ScreenSelectMusic::ResetAssetRequestState() {
+  m_bCDTitleWaiting = false;
+  m_bBannerWaiting = false;
+  m_bSampleMusicWaiting = false;
+  m_sCDTitlePath.clear();
+  m_sBannerPath.clear();
+  m_bWantFallbackCdTitle = false;
+}
+
+void ScreenSelectMusic::SuspendPreviewForPrompt() {
+  m_bPreviewSuspendedForPrompt = true;
+  ResetAssetRequestState();
+  m_BackgroundLoader.Abort();
+  if (SOUND != nullptr) {
+    SOUND->StopMusic();
+  }
+  m_MusicWheel.Move(0);
 }
 
 // If bForce is true, the next request will be started even if it might cause a
@@ -552,21 +610,21 @@ void ScreenSelectMusic::CheckBackgroundRequests(bool bForce) {
     return;
   }
 
-  if (g_bCDTitleWaiting) {
+  if (m_bCDTitleWaiting) {
     // The CDTitle is normally very small, so we don't bother waiting to display
     // it.
     std::string sPath;
-    if (!m_BackgroundLoader.IsCacheFileFinished(g_sCDTitlePath, sPath)) {
+    if (!m_BackgroundLoader.IsCacheFileFinished(m_sCDTitlePath, sPath)) {
       return;
     }
 
-    g_bCDTitleWaiting = false;
+    m_bCDTitleWaiting = false;
 
     std::string sCDTitlePath = sPath;
 
     if (sCDTitlePath.empty() || !IsAFile(sCDTitlePath)) {
       sCDTitlePath =
-          g_bWantFallbackCdTitle ? m_sFallbackCDTitlePath : std::string("");
+          m_bWantFallbackCdTitle ? m_sFallbackCDTitlePath : std::string("");
     }
 
     if (!sCDTitlePath.empty()) {
@@ -580,7 +638,7 @@ void ScreenSelectMusic::CheckBackgroundRequests(bool bForce) {
       }
     }
 
-    m_BackgroundLoader.FinishedWithCachedFile(g_sCDTitlePath);
+    m_BackgroundLoader.FinishedWithCachedFile(m_sCDTitlePath);
   }
 
   /* Loading the rest can cause small skips, so don't do it until the wheel
@@ -593,7 +651,7 @@ void ScreenSelectMusic::CheckBackgroundRequests(bool bForce) {
     return;
   }
 
-  if (g_bBannerWaiting) {
+  if (m_bBannerWaiting) {
     if (m_Banner.GetTweenTimeLeft() > 0) {
       return;
     }
@@ -602,46 +660,46 @@ void ScreenSelectMusic::CheckBackgroundRequests(bool bForce) {
     bool bFreeCache = false;
     if (TEXTUREMAN != nullptr &&
         TEXTUREMAN->IsTextureRegistered(
-            Sprite::SongBannerTexture(g_sBannerPath))) {
+            Sprite::SongBannerTexture(m_sBannerPath))) {
       /* If the file is already loaded into a texture, it's finished,
        * and we only do this to honor the HighQualTime value. */
-      sPath = g_sBannerPath;
+      sPath = m_sBannerPath;
     } else {
-      if (!m_BackgroundLoader.IsCacheFileFinished(g_sBannerPath, sPath)) {
+      if (!m_BackgroundLoader.IsCacheFileFinished(m_sBannerPath, sPath)) {
         return;
       }
       bFreeCache = true;
     }
 
-    g_bBannerWaiting = false;
+    m_bBannerWaiting = false;
     m_Banner.Load(sPath, true);
 
     if (bFreeCache) {
-      m_BackgroundLoader.FinishedWithCachedFile(g_sBannerPath);
+      m_BackgroundLoader.FinishedWithCachedFile(m_sBannerPath);
     }
   }
 
   // Nothing else is going.  Start the music, if we haven't yet.
-  if (g_bSampleMusicWaiting) {
-    if (g_ScreenStartedLoadingAt.Ago() <
+  if (m_bSampleMusicWaiting) {
+    if (m_ScreenStartedLoadingAt.Ago() <
         SanitizeMetricSeconds(SAMPLE_MUSIC_DELAY_INIT.GetValue())) {
       return;
     }
 
     if (m_bPreviewDisabled) {
       m_bPreviewDisabled = false;
-      g_bSampleMusicWaiting = false;
+      m_bSampleMusicWaiting = false;
       return;
     }
 
     // Don't start the music sample when moving fast.
-    if (g_StartedLoadingAt.Ago() <
+    if (m_StartedLoadingAt.Ago() <
             SanitizeMetricSeconds(SAMPLE_MUSIC_DELAY.GetValue()) &&
         !bForce) {
       return;
     }
 
-    g_bSampleMusicWaiting = false;
+    m_bSampleMusicWaiting = false;
     StartSampleMusicPreviewNow();
   }
 }
@@ -782,13 +840,22 @@ bool ScreenSelectMusic::Input(const InputEventPlus& input) {
       Song* songToDelete = m_MusicWheel.GetSelectedSong();
       if (songToDelete && PREFSMAN != nullptr &&
           PREFSMAN->m_bAllowSongDeletion.Get()) {
-        m_pSongAwaitingDeletionConfirmation = songToDelete;
+        const std::string deleteDir = songToDelete->GetSongDir();
+        if (!IsSafeSongDeletionDirectory(deleteDir)) {
+          WarnSelectMusic(
+              "Refused to prompt deletion for unsafe song directory '%s'.",
+              deleteDir.c_str());
+          return true;
+        }
+        SuspendPreviewForPrompt();
+        m_sSongAwaitingDeletionDir = NormalizeVirtualDirectory(deleteDir);
+        m_sSongAwaitingDeletionTitle = songToDelete->m_sMainTitle;
         ScreenPrompt::Prompt(
             SM_ConfirmDeleteSong,
             ssprintf(
                 PERMANENTLY_DELETE.GetValue().c_str(),
-                songToDelete->m_sMainTitle.c_str(),
-                songToDelete->GetSongDir().c_str()),
+                m_sSongAwaitingDeletionTitle.c_str(),
+                m_sSongAwaitingDeletionDir.c_str()),
             PROMPT_YES_NO);
         return true;
       }
@@ -934,9 +1001,10 @@ bool ScreenSelectMusic::Input(const InputEventPlus& input) {
       m_bAcceptSelectRelease[input.pn] = false;
     }
     if (input.type == IET_FIRST_PRESS) {
-      g_CanOpenOptionsList.Touch();
+      m_CanOpenOptionsList[input.pn].Touch();
     }
-    if (g_CanOpenOptionsList.Ago() > OPTIONS_LIST_TIMEOUT) {
+    if (m_CanOpenOptionsList[input.pn].Ago() >
+        SanitizeMetricSeconds(OPTIONS_LIST_TIMEOUT.GetValue())) {
       m_bAcceptSelectRelease[input.pn] = false;
     }
     return true;
@@ -1513,6 +1581,9 @@ void ScreenSelectMusic::HandleScreenMessage(const ScreenMessage SM) {
     if (ScreenPrompt::s_LastAnswer == ANSWER_YES) {
       OnConfirmSongDeletion();
     } else {
+      m_sSongAwaitingDeletionDir.clear();
+      m_sSongAwaitingDeletionTitle.clear();
+      m_bPreviewSuspendedForPrompt = false;
       // need to resume the song preview that was automatically paused
       m_MusicWheel.ChangeMusic(0);
     }
@@ -1533,7 +1604,13 @@ bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
     return false;
   }
 
+  if (GAMESTATE == nullptr) {
+    WarnSelectMusic("MenuStart ignored because GameState is unavailable.");
+    return false;
+  }
+
   const bool valid_player = IsValidPlayer(input.pn);
+  const SelectionState previousSelectionState = m_SelectionState;
 
   /* If select is being pressed at the same time, this is probably an attempt
    * to change the sort, not to pick a song or difficulty. If it gets here,
@@ -1562,7 +1639,7 @@ bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
             SAMPLE_MUSIC_PREVIEW_MODE ==
                 SampleMusicPreviewMode_StartToPreview) {
           // start playing the preview music.
-          g_bSampleMusicWaiting = true;
+          m_bSampleMusicWaiting = true;
           CheckBackgroundRequests(true);
         }
 
@@ -1811,6 +1888,14 @@ bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
   }
 
   if (m_SelectionState == SelectionState_Finalized) {
+    if (!HasPlayableSelectionForEachHumanPlayer()) {
+      WarnSelectMusic(
+          "Refused to finalize ScreenSelectMusic without playable steps or "
+          "trails for every human player.");
+      m_SelectionState = previousSelectionState;
+      return false;
+    }
+
     if (HasUsableTimer(m_MenuTimer)) {
       m_MenuTimer->Stop();
     }
@@ -1835,7 +1920,7 @@ bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
     /* If we're currently waiting on song assets, abort all except the music
      * and start the music, so if we make a choice quickly before background
      * requests come through, the music will still start. */
-    g_bCDTitleWaiting = g_bBannerWaiting = false;
+    m_bCDTitleWaiting = m_bBannerWaiting = false;
     m_BackgroundLoader.Abort();
     CheckBackgroundRequests(true);
 
@@ -1881,7 +1966,23 @@ void ScreenSelectMusic::ReturnToOnlineLobbyFromMusicSelect() {
         "room.");
     return;
   }
+  if (IsTransitioning()) {
+    WarnSelectMusic(
+        "Ignoring ReturnToOnlineLobbyFromMusicSelect during an active "
+        "transition.");
+    return;
+  }
+  ClearMessageQueue(SM_BeginFadingOut);
+  ClearMessageQueue(SM_GoToNextScreen);
+  m_bGoToOptions = false;
+  m_bAllowOptionsMenu = false;
+  m_bAllowOptionsMenuRepeat = false;
+  m_SelectionState = SelectionState_SelectingSong;
+  ResetAssetRequestState();
   m_BackgroundLoader.Abort();
+  if (SOUND != nullptr) {
+    SOUND->StopMusic();
+  }
   SetNextScreenName("ScreenOnlineLobbies");
   StartTransitioningScreen(SM_GoToNextScreen);
 }
@@ -1918,15 +2019,7 @@ bool ScreenSelectMusic::MenuBack(const InputEventPlus& /* input */) {
 
 void ScreenSelectMusic::Cancel(ScreenMessage smSendWhenDone) {
   if (CONFIRM_EXIT) {
-    m_bPreviewSuspendedForPrompt = true;
-    g_bCDTitleWaiting = false;
-    g_bBannerWaiting = false;
-    g_bSampleMusicWaiting = false;
-    m_BackgroundLoader.Abort();
-    if (SOUND != nullptr) {
-      SOUND->StopMusic();
-    }
-    m_MusicWheel.Move(0);
+    SuspendPreviewForPrompt();
     ScreenPrompt::Prompt(
         SM_ConfirmExit, PROMPT_BEFORE_EXITING.GetValue().c_str(), PROMPT_YES_NO,
         ANSWER_NO, nullptr, nullptr, nullptr, true);
@@ -2003,6 +2096,41 @@ void ScreenSelectMusic::AfterStepsOrTrailChange(
       m_textHighScore[pn].SetText(NULL_SCORE_STRING);
     }
   }
+}
+
+bool ScreenSelectMusic::HasPlayableSelectionForEachHumanPlayer() const {
+  if (GAMESTATE == nullptr) {
+    return false;
+  }
+
+  bool hasHumanPlayer = false;
+  if (GAMESTATE->m_pCurSong) {
+    if (m_vpSteps.empty()) {
+      return false;
+    }
+    FOREACH_HumanPlayer(pn) {
+      hasHumanPlayer = true;
+      if (GAMESTATE->m_pCurSteps[pn] == nullptr) {
+        return false;
+      }
+    }
+    return hasHumanPlayer;
+  }
+
+  if (GAMESTATE->m_pCurCourse) {
+    if (m_vpTrails.empty()) {
+      return false;
+    }
+    FOREACH_HumanPlayer(pn) {
+      hasHumanPlayer = true;
+      if (GAMESTATE->m_pCurTrail[pn] == nullptr) {
+        return false;
+      }
+    }
+    return hasHumanPlayer;
+  }
+
+  return false;
 }
 
 void ScreenSelectMusic::SwitchPlayerStepDifficulty(
@@ -2170,9 +2298,9 @@ void ScreenSelectMusic::AfterMusicChange() {
     m_sSampleMusicToPlay = "";
   }
   m_pSampleMusicTimingData = nullptr;
-  g_sCDTitlePath = "";
-  g_sBannerPath = "";
-  g_bWantFallbackCdTitle = false;
+  m_sCDTitlePath = "";
+  m_sBannerPath = "";
+  m_bWantFallbackCdTitle = false;
   bool bWantBanner = true;
 
   static SortOrder s_lastSortOrder = SortOrder_Invalid;
@@ -2191,7 +2319,7 @@ void ScreenSelectMusic::AfterMusicChange() {
     case WheelItemDataType_Custom:
       FOREACH_PlayerNumber(p) m_iSelection[p] = -1;
 
-      g_sCDTitlePath = "";  // none
+      m_sCDTitlePath = "";  // none
 
       if (SAMPLE_MUSIC_PREVIEW_MODE == SampleMusicPreviewMode_LastSong) {
         // HACK: Make random music work in LastSong mode. -aj
@@ -2210,7 +2338,7 @@ void ScreenSelectMusic::AfterMusicChange() {
           {
             SortOrder curSort = GAMESTATE->m_SortOrder;
             if (curSort == SORT_GROUP && SONGMAN != nullptr) {
-              g_sBannerPath = SONGMAN->GetSongGroupBannerPath(
+              m_sBannerPath = SONGMAN->GetSongGroupBannerPath(
                   m_MusicWheel.GetSelectedSection());
             } else {
               bWantBanner = false;  // we load it ourself
@@ -2314,15 +2442,18 @@ void ScreenSelectMusic::AfterMusicChange() {
 
       SongUtil::GetPlayableSteps(pSong, m_vpSteps);
       if (m_vpSteps.empty()) {
-        // LuaHelpers::ReportScriptError("GetPlayableSteps returned nothing.");
+        WarnSelectMusic(
+            "Selected song '%s' has no playable steps; clearing gameplay "
+            "selection.",
+            pSong->GetSongDir().c_str());
       }
 
       if (PREFSMAN != nullptr && PREFSMAN->m_bShowBanners) {
-        g_sBannerPath = pSong->GetBannerPath();
+        m_sBannerPath = pSong->GetBannerPath();
       }
 
-      g_sCDTitlePath = pSong->GetCDTitlePath();
-      g_bWantFallbackCdTitle = true;
+      m_sCDTitlePath = pSong->GetCDTitlePath();
+      m_bWantFallbackCdTitle = true;
 
       if (GAMESTATE->m_SortOrder == SORT_METER && !m_vpSteps.empty()) {
         for (int i = static_cast<int>(m_vpSteps.size()) - 1; i >= 0; i--) {
@@ -2382,8 +2513,15 @@ void ScreenSelectMusic::AfterMusicChange() {
       m_fSampleStartSeconds = 0;
       m_fSampleLengthSeconds = -1;
 
-      g_sBannerPath = lCourse->GetBannerPath();
-      if (g_sBannerPath.empty()) {
+      if (m_vpTrails.empty()) {
+        WarnSelectMusic(
+            "Selected course '%s' has no playable trails; clearing gameplay "
+            "selection.",
+            lCourse->m_sPath.c_str());
+      }
+
+      m_sBannerPath = lCourse->GetBannerPath();
+      if (m_sBannerPath.empty()) {
         m_Banner.LoadFallback();
       }
 
@@ -2403,57 +2541,57 @@ void ScreenSelectMusic::AfterMusicChange() {
   // since we need new ones.
   m_BackgroundLoader.Abort();
 
-  g_bCDTitleWaiting = false;
-  if (!g_sCDTitlePath.empty() || g_bWantFallbackCdTitle) {
+  m_bCDTitleWaiting = false;
+  if (!m_sCDTitlePath.empty() || m_bWantFallbackCdTitle) {
     if (LOG != nullptr) {
-      LOG->Trace("cache \"%s\"", g_sCDTitlePath.c_str());
+      LOG->Trace("cache \"%s\"", m_sCDTitlePath.c_str());
     }
-    m_BackgroundLoader.CacheFile(g_sCDTitlePath);  // empty OK
-    g_bCDTitleWaiting = true;
+    m_BackgroundLoader.CacheFile(m_sCDTitlePath);  // empty OK
+    m_bCDTitleWaiting = true;
   }
 
-  g_bBannerWaiting = false;
+  m_bBannerWaiting = false;
   if (bWantBanner) {
     if (LOG != nullptr) {
-      LOG->Trace("LoadFromCachedBanner(%s)", g_sBannerPath.c_str());
+      LOG->Trace("LoadFromCachedBanner(%s)", m_sBannerPath.c_str());
     }
     // TODO: We should probably have some fallback banner for videos, but for
     // now we can just load the video file directly. This is to try an address
     // some issues with the video banners potentially crashing the game but
     // needs some more investigation.
-    if (IsVideoFile(g_sBannerPath)) {
+    if (IsVideoFile(m_sBannerPath)) {
       // Directly load the video file.
-      m_Banner.LoadFromCachedBanner(g_sBannerPath);
-      g_bBannerWaiting = false;
+      m_Banner.LoadFromCachedBanner(m_sBannerPath);
+      m_bBannerWaiting = false;
     } else {
-      if (m_Banner.LoadFromCachedBanner(g_sBannerPath)) {
+      if (m_Banner.LoadFromCachedBanner(m_sBannerPath)) {
         /* If the high-res banner is already loaded, just delay before
          * loading it, so the low-res one has time to fade in. */
         if (TEXTUREMAN == nullptr ||
             !TEXTUREMAN->IsTextureRegistered(
-                Sprite::SongBannerTexture(g_sBannerPath))) {
-          m_BackgroundLoader.CacheFile(g_sBannerPath);
+                Sprite::SongBannerTexture(m_sBannerPath))) {
+          m_BackgroundLoader.CacheFile(m_sBannerPath);
         }
 
-        g_bBannerWaiting = true;
+        m_bBannerWaiting = true;
       }
     }
   }
 
   // Don't stop music if it's already playing the right file.
-  g_bSampleMusicWaiting = false;
+  m_bSampleMusicWaiting = false;
   if (!m_bPreviewSuspendedForPrompt && !m_MusicWheel.IsRouletting() &&
       SOUND != nullptr && SOUND->GetMusicPath() != m_sSampleMusicToPlay) {
     SOUND->StopMusic();
     // some SampleMusicPreviewModes don't want the sample music immediately.
     if (SAMPLE_MUSIC_PREVIEW_MODE != SampleMusicPreviewMode_StartToPreview) {
       if (!m_sSampleMusicToPlay.empty()) {
-        g_bSampleMusicWaiting = true;
+        m_bSampleMusicWaiting = true;
       }
     }
   }
 
-  g_StartedLoadingAt.Touch();
+  m_StartedLoadingAt.Touch();
 
   std::vector<PlayerNumber> vpns;
   FOREACH_HumanPlayer(p) vpns.push_back(p);
@@ -2462,18 +2600,24 @@ void ScreenSelectMusic::AfterMusicChange() {
 }
 
 void ScreenSelectMusic::OpenOptionsList(PlayerNumber pn) {
-  if (IsValidPlayer(pn) && USE_OPTIONS_LIST) {
+  if (can_open_options_list(pn)) {
     m_MusicWheel.Move(0);
     m_OptionsList[pn].Open();
   }
 }
 
 void ScreenSelectMusic::OnConfirmSongDeletion() {
-  Song* deletedSong = m_pSongAwaitingDeletionConfirmation;
-  if (!deletedSong) {
+  const std::string deleteDir =
+      NormalizeVirtualDirectory(m_sSongAwaitingDeletionDir);
+  const std::string deleteTitle = m_sSongAwaitingDeletionTitle;
+  m_sSongAwaitingDeletionDir.clear();
+  m_sSongAwaitingDeletionTitle.clear();
+
+  if (deleteDir.empty()) {
     WarnSelectMusic(
-        "Attempted to delete a null song "
+        "Attempted to delete a song without a pending directory "
         "(ScreenSelectMusic::OnConfirmSongDeletion)");
+    m_bPreviewSuspendedForPrompt = false;
     return;
   }
   // ensure Stepmania is configured to allow song deletion
@@ -2481,14 +2625,14 @@ void ScreenSelectMusic::OnConfirmSongDeletion() {
     WarnSelectMusic(
         "Attemped to delete a song but AllowSongDeletion was set to false "
         "(ScreenSelectMusic::OnConfirmSongDeletion)");
+    m_bPreviewSuspendedForPrompt = false;
     return;
   }
 
-  std::string deleteDir = deletedSong->GetSongDir();
-  if (deleteDir.empty()) {
+  if (!IsSafeSongDeletionDirectory(deleteDir)) {
     WarnSelectMusic(
-        "Attempted to delete a song with an empty directory "
-        "(ScreenSelectMusic::OnConfirmSongDeletion)");
+        "Refused to delete unsafe song directory '%s'.", deleteDir.c_str());
+    m_bPreviewSuspendedForPrompt = false;
     return;
   }
   if (FILEMAN == nullptr || SONGMAN == nullptr) {
@@ -2496,31 +2640,46 @@ void ScreenSelectMusic::OnConfirmSongDeletion() {
         "Unable to delete song '%s' because file or song manager is "
         "unavailable.",
         deleteDir.c_str());
+    m_bPreviewSuspendedForPrompt = false;
     return;
   }
 
   if (LOG != nullptr) {
-    LOG->Trace("Deleting song: '%s'\n", deleteDir.c_str());
+    LOG->Trace(
+        "Deleting song: '%s' (%s)\n", deleteTitle.c_str(), deleteDir.c_str());
   }
   // delete the song directory from disk
   if (!FILEMAN->DeleteRecursive(deleteDir)) {
     WarnSelectMusic("Failed to delete song directory '%s'.", deleteDir.c_str());
+    m_bPreviewSuspendedForPrompt = false;
     return;
   }
 
   // flush the deleted song from any caches only after disk deletion succeeds.
-  SONGMAN->UnlistSong(deletedSong);
+  Song* deletedSong = SONGMAN->GetSongFromDir(deleteDir);
+  if (deletedSong != nullptr) {
+    SONGMAN->UnlistSong(deletedSong);
+  }
   // refresh the song list
   m_MusicWheel.ReloadSongList();
 
-  m_pSongAwaitingDeletionConfirmation = nullptr;
+  ResetAssetRequestState();
+  m_bPreviewSuspendedForPrompt = false;
 }
 
 bool ScreenSelectMusic::can_open_options_list(PlayerNumber pn) {
   if (!USE_OPTIONS_LIST) {
     return false;
   }
-  if (!IsValidPlayer(pn)) {
+  if (GAMESTATE == nullptr || !IsValidPlayer(pn) ||
+      !GAMESTATE->IsHumanPlayer(pn)) {
+    return false;
+  }
+  if (!CanChangeSong() || IsTransitioning()) {
+    return false;
+  }
+  if (m_CanOpenOptionsList[pn].Ago() >
+      SanitizeMetricSeconds(OPTIONS_LIST_TIMEOUT.GetValue())) {
     return false;
   }
   if (m_OptionsList[pn].IsOpened()) {

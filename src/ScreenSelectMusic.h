@@ -87,12 +87,18 @@ class ScreenSelectMusic : public ScreenWithMenuElements {
   void CheckBackgroundRequests(bool bForce);
   void StartSampleMusicPreviewNow();
   bool DetectCodes(const InputEventPlus& input);
+  void ResetAssetRequestState();
+  void SuspendPreviewForPrompt();
+  bool HasPlayableSelectionForEachHumanPlayer() const;
 
   std::vector<Steps*> m_vpSteps;
   std::vector<Trail*> m_vpTrails;
   int m_iSelection[NUM_PLAYERS];
 
   RageTimer m_timerIdleComment;
+  RageTimer m_StartedLoadingAt;
+  RageTimer m_ScreenStartedLoadingAt;
+  RageTimer m_CanOpenOptionsList[NUM_PLAYERS];
   ThemeMetric<float> IDLE_COMMENT_SECONDS;
 
   ThemeMetric<float> SAMPLE_MUSIC_DELAY_INIT;
@@ -194,7 +200,15 @@ class ScreenSelectMusic : public ScreenWithMenuElements {
   BackgroundLoader m_BackgroundLoader;
   RageTexturePreloader m_TexturePreload;
 
-  Song* m_pSongAwaitingDeletionConfirmation;
+  std::string m_sCDTitlePath;
+  std::string m_sBannerPath;
+  bool m_bWantFallbackCdTitle;
+  bool m_bCDTitleWaiting;
+  bool m_bBannerWaiting;
+  bool m_bSampleMusicWaiting;
+
+  std::string m_sSongAwaitingDeletionDir;
+  std::string m_sSongAwaitingDeletionTitle;
 };
 
 #endif
