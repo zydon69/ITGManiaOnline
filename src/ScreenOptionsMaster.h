@@ -16,15 +16,18 @@ class ScreenOptionsMaster : public ScreenOptions {
 
  private:
   int m_iChangeMask;
-  int ExportOptionsInternal(
+  bool ExportOptionsInternal(
       int iRow, const std::vector<PlayerNumber>& vpns,
-      bool accumulateChangeMask);
+      bool accumulateChangeMask, int* changeMaskOut);
 
  protected:
   virtual void HandleScreenMessage(const ScreenMessage SM);
 
   virtual void ImportOptions(int iRow, const std::vector<PlayerNumber>& vpns);
   virtual void ExportOptions(int iRow, const std::vector<PlayerNumber>& vpns);
+  bool ExportOptionsAndGetChangeMask(
+      int iRow, const std::vector<PlayerNumber>& vpns,
+      int* changeMaskOut);
   int ExportOptionsForPreview(
       int iRow, const std::vector<PlayerNumber>& vpns);
 };

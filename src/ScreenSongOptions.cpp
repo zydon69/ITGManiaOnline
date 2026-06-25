@@ -12,7 +12,6 @@
 #include "ThemeManager.h"
 
 namespace {
-const char* SCREEN_NAME = "ScreenSongOptions";
 const char* OPTION_IN = "option in";
 
 bool HasLoadedTheme() { return THEME != nullptr && THEME->IsThemeLoaded(); }
@@ -30,22 +29,14 @@ bool ContainsPlayer(const std::vector<PlayerNumber>& players, PlayerNumber pn) {
   return false;
 }
 
-bool AddExportPlayer(std::vector<PlayerNumber>& players, PlayerNumber pn) {
-  if (!IsValidPlayerNumberForSongOptions(pn)) {
-    if (LOG != nullptr) {
+bool AddExportPlayer(
+    std::vector<PlayerNumber>& players, PlayerNumber pn, bool logFailure) {
+  if (!IsValidPlayerNumberForSongOptions(pn) || GAMESTATE == nullptr ||
+      GAMESTATE->m_pPlayerState[pn] == nullptr || !GAMESTATE->IsHumanPlayer(pn)) {
+    if (logFailure && LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1711: ScreenSongOptions ignored invalid player "
-          "%d while exporting options.",
-          static_cast<int>(pn));
-    }
-    return false;
-  }
-
-  if (GAMESTATE == nullptr || GAMESTATE->m_pPlayerState[pn] == nullptr) {
-    if (LOG != nullptr) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1712: ScreenSongOptions ignored player %d with "
-          "missing PlayerState.",
+          "SRC_AUDIT_FIX SRC-2374: ScreenSongOptions ignored non-exportable "
+          "player %d while exporting options.",
           static_cast<int>(pn));
     }
     return false;
@@ -98,6 +89,9 @@ bool FailTypeChanged(PlayerNumber pn, const FailTypeSnapshot& before) {
 REGISTER_SCREEN_CLASS(ScreenSongOptions);
 
 void ScreenSongOptions::Init() {
+  const Maybe showSongOptions =
+      PREFSMAN != nullptr ? PREFSMAN->m_ShowSongOptions.Get() : Maybe_NO;
+
   ScreenOptionsMaster::Init();
 
   if (PREFSMAN == nullptr) {
@@ -109,7 +103,7 @@ void ScreenSongOptions::Init() {
     return;
   }
 
-  if (PREFSMAN->m_ShowSongOptions != Maybe_ASK) {
+  if (showSongOptions != Maybe_ASK) {
     return;
   }
 
@@ -124,11 +118,11 @@ void ScreenSongOptions::Init() {
 
   // This fade is optional and should never replace the normal screen
   // transition unless the active theme explicitly provides it.
-  if (!THEME->HasMetric(SCREEN_NAME, OPTION_IN)) {
+  if (!THEME->HasMetric(m_sName, OPTION_IN)) {
     return;
   }
 
-  const std::string optionInPath = THEME->GetPathB(SCREEN_NAME, OPTION_IN, true);
+  const std::string optionInPath = THEME->GetPathB(m_sName, OPTION_IN, true);
   if (optionInPath.empty()) {
     if (LOG != nullptr) {
       LOG->Warn(
@@ -164,12 +158,13 @@ void ScreenSongOptions::ExportOptions(
 
   std::vector<PlayerNumber> exportPlayers;
   for (const PlayerNumber pn : vpns) {
-    AddExportPlayer(exportPlayers, pn);
+    AddExportPlayer(exportPlayers, pn, false);
   }
 
   const PlayerNumber masterPlayer = GAMESTATE->GetMasterPlayerNumber();
-  if (exportPlayers.empty()) {
-    AddExportPlayer(exportPlayers, masterPlayer);
+  if (exportPlayers.empty() &&
+      !AddExportPlayer(exportPlayers, masterPlayer, true)) {
+    return;
   }
 
   std::array<FailTypeSnapshot, NUM_PLAYERS> before;
@@ -181,7 +176,16 @@ void ScreenSongOptions::ExportOptions(
     before[masterPlayer] = CaptureFailTypes(masterPlayer);
   }
 
-  ScreenOptionsMaster::ExportOptions(iRow, exportPlayers);
+  if (!ScreenOptionsMaster::ExportOptionsAndGetChangeMask(
+          iRow, exportPlayers, nullptr)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2375: ScreenSongOptions row %d produced no "
+          "export.",
+          iRow);
+    }
+    return;
+  }
 
   if (GAMESTATE == nullptr) {
     return;
