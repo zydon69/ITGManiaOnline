@@ -600,8 +600,9 @@ void ImageCache::CacheImageInternal(
 
   /* Round to the nearest power of two.  This simplifies the actual texture
    * load. */
-  iWidth = closest(iWidth, power_of_two(iWidth), power_of_two(iWidth) / 2);
-  iHeight = closest(iHeight, power_of_two(iHeight), power_of_two(iHeight) / 2);
+  iWidth = std::max(1, closest(iWidth, power_of_two(iWidth), power_of_two(iWidth) / 2));
+  iHeight =
+      std::max(1, closest(iHeight, power_of_two(iHeight), power_of_two(iHeight) / 2));
 
   /* Don't resize the image to less than 32 pixels in either dimension or the
    * next power of two of the source (whichever is smaller); it's already very
