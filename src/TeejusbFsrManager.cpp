@@ -655,13 +655,7 @@ bool TeejusbFsrManager::RequestThresholdsForPort(const std::string& port) {
 
 bool TeejusbFsrManager::LoadThresholdsForPort(const std::string& port) {
   DeviceState* device = FindDevice(port);
-  if (device == nullptr || !WriteCommand(*device, "l")) {
-    return false;
-  }
-
-  // Older teejusb-fsr firmware ignores "l"; asking for thresholds afterwards
-  // keeps the UI synchronized even before the firmware is reflashed.
-  return WriteCommand(*device, "t");
+  return device != nullptr && WriteCommand(*device, "t");
 }
 
 bool TeejusbFsrManager::SetThresholdForPort(
