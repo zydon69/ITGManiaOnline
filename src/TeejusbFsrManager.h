@@ -63,10 +63,15 @@ class TeejusbFsrManager {
     std::string port;
     std::string readBuffer;
     std::string status = "Not connected";
+    std::string notice;
     std::string lastResponse;
+    bool pendingThresholdLoad = false;
+    bool pendingEepromSave = false;
     std::array<int, NUM_SENSORS> values = {{0, 0, 0, 0}};
     std::array<int, NUM_SENSORS> thresholds = {{1000, 1000, 1000, 1000}};
     std::chrono::steady_clock::time_point lastValueRequest =
+        std::chrono::steady_clock::time_point::min();
+    std::chrono::steady_clock::time_point noticeUntil =
         std::chrono::steady_clock::time_point::min();
   };
 
@@ -85,6 +90,7 @@ class TeejusbFsrManager {
   void ProcessLine(DeviceState& device, const std::string& line);
   void MaybeRequestValues(DeviceState& device);
   void SetStatus(DeviceState& device, const std::string& status);
+  void SetNotice(DeviceState& device, const std::string& notice);
   void PushDeviceSnapshot(lua_State* L, const DeviceState* device) const;
 
   std::vector<DeviceState> m_vDevices;

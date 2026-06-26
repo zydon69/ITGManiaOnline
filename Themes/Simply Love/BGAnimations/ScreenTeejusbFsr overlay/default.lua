@@ -128,7 +128,7 @@ local function save_thresholds()
 	local port = assigned_port()
 	if manager and port ~= "" then
 		local ok = manager:SaveThresholdsForPort(port)
-		action_feedback = ok and "enregistrement envoye" or "enregistrement impossible"
+		action_feedback = ok and "enregistrement en cours" or "enregistrement impossible"
 		MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
 	end
 end
@@ -138,7 +138,7 @@ local function load_thresholds()
 	local port = assigned_port()
 	if manager and port ~= "" then
 		local ok = manager:LoadThresholdsForPort(port)
-		action_feedback = ok and "chargement envoye" or "chargement impossible"
+		action_feedback = ok and "chargement en cours" or "chargement impossible"
 		MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
 	end
 end
@@ -421,7 +421,11 @@ local af = Def.ActorFrame{
 		TeejusbFsrUpdatedMessageCommand=function(self)
 			local focus = focus_names[selected_focus] or "Player"
 			local status = snapshot.status or "Unknown"
-			if action_feedback ~= "" then
+			local notice = snapshot.notice or ""
+			if notice ~= "" then
+				action_feedback = ""
+				status = status .. " - " .. notice
+			elseif action_feedback ~= "" then
 				status = status .. " - " .. action_feedback
 			end
 			self:settext(("%s focus - %s"):format(focus, status))

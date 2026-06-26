@@ -32,6 +32,7 @@ namespace {
 constexpr int kDefaultThreshold = 1000;
 constexpr auto kDeviceScanInterval = std::chrono::milliseconds(1000);
 constexpr auto kValuePollInterval = std::chrono::milliseconds(40);
+constexpr auto kNoticeDuration = std::chrono::milliseconds(3500);
 const std::string kAssignmentsPath = "Save/TeejusbFsr.ini";
 const std::string kWindowsTeensyVidPid = "VID_16C0&PID_0487";
 
@@ -602,6 +603,11 @@ void TeejusbFsrManager::PollAll() {
   }
 
   for (DeviceState& device : m_vDevices) {
+    if (device.noticeUntil != std::chrono::steady_clock::time_point::min() &&
+        now >= device.noticeUntil) {
+      device.notice.clear();
+      device.noticeUntil = std::chrono::steady_clock::time_point::min();
+    }
     if (device.fd < 0) {
       OpenDevice(device);
     }
@@ -618,8 +624,7 @@ bool TeejusbFsrManager::RequestValues() {
 }
 
 bool TeejusbFsrManager::RequestThresholds() {
-  DeviceState* device = GetActiveDevice();
-  return device != nullptr && WriteCommand(*device, "t");
+  return RequestThresholdsForPort(m_sActivePort);
 }
 
 bool TeejusbFsrManager::LoadThresholds() {
@@ -650,12 +655,21 @@ bool TeejusbFsrManager::RequestValuesForPort(const std::string& port) {
 
 bool TeejusbFsrManager::RequestThresholdsForPort(const std::string& port) {
   DeviceState* device = FindDevice(port);
-  return device != nullptr && WriteCommand(*device, "t");
+  if (device == nullptr) {
+    return false;
+  }
+
+  device->pendingThresholdLoad = true;
+  SetStatus(*device, "Loading thresholds from pad");
+  if (!WriteCommand(*device, "t")) {
+    device->pendingThresholdLoad = false;
+    return false;
+  }
+  return true;
 }
 
 bool TeejusbFsrManager::LoadThresholdsForPort(const std::string& port) {
-  DeviceState* device = FindDevice(port);
-  return device != nullptr && WriteCommand(*device, "t");
+  return RequestThresholdsForPort(port);
 }
 
 bool TeejusbFsrManager::SetThresholdForPort(
@@ -680,7 +694,25 @@ bool TeejusbFsrManager::SetThresholdForPort(
 
 bool TeejusbFsrManager::SaveThresholdsForPort(const std::string& port) {
   DeviceState* device = FindDevice(port);
-  return device != nullptr && WriteCommand(*device, "s");
+  if (device == nullptr) {
+    return false;
+  }
+
+  SetStatus(*device, "Saving thresholds to EEPROM");
+  for (int i = 0; i < NUM_SENSORS; ++i) {
+    std::ostringstream command;
+    command << i << " " << device->thresholds[i];
+    if (!WriteCommand(*device, command.str())) {
+      return false;
+    }
+  }
+
+  device->pendingEepromSave = true;
+  if (!WriteCommand(*device, "s")) {
+    device->pendingEepromSave = false;
+    return false;
+  }
+  return true;
 }
 
 bool TeejusbFsrManager::AssignPlayer(
@@ -888,9 +920,12 @@ bool TeejusbFsrManager::OpenDevice(DeviceState& device) {
   device.fd = fd;
   device.readBuffer.clear();
   device.lastResponse.clear();
+  device.pendingThresholdLoad = true;
   device.lastValueRequest = std::chrono::steady_clock::time_point::min();
-  SetStatus(device, "Connected");
-  WriteCommand(device, "t");
+  SetStatus(device, "Loading thresholds from pad");
+  if (!WriteCommand(device, "t")) {
+    device.pendingThresholdLoad = false;
+  }
   return true;
 #elif defined(_WIN32)
   const std::wstring port = Utf8ToWide(device.port);
@@ -912,9 +947,12 @@ bool TeejusbFsrManager::OpenDevice(DeviceState& device) {
   device.fd = reinterpret_cast<intptr_t>(handle);
   device.readBuffer.clear();
   device.lastResponse.clear();
+  device.pendingThresholdLoad = true;
   device.lastValueRequest = std::chrono::steady_clock::time_point::min();
-  SetStatus(device, "Connected");
-  WriteCommand(device, "t");
+  SetStatus(device, "Loading thresholds from pad");
+  if (!WriteCommand(device, "t")) {
+    device.pendingThresholdLoad = false;
+  }
   return true;
 #else
   SetStatus(device, "Serial teejusb-fsr support is unavailable");
@@ -934,6 +972,8 @@ void TeejusbFsrManager::CloseDevice(DeviceState& device) {
 #endif
   device.fd = -1;
   device.readBuffer.clear();
+  device.pendingThresholdLoad = false;
+  device.pendingEepromSave = false;
   SetStatus(device, "Not connected");
 }
 
@@ -1119,6 +1159,10 @@ void TeejusbFsrManager::ProcessLine(DeviceState& device, const std::string& line
   split(line, " ", parts, true);
   if (parts.size() == 2 && (parts[0] == "s" || parts[0] == "S")) {
     SetStatus(device, "Thresholds saved");
+    if (device.pendingEepromSave) {
+      device.pendingEepromSave = false;
+      SetNotice(device, "nouvelles valeurs enregistrees dans EEPROM");
+    }
     return;
   }
 
@@ -1134,12 +1178,25 @@ void TeejusbFsrManager::ProcessLine(DeviceState& device, const std::string& line
   const std::string& command = parts[0];
   if (command == "v" || command == "V") {
     device.values = parsed;
-    SetStatus(device, "Connected");
+    if (!device.pendingEepromSave && !device.pendingThresholdLoad) {
+      SetStatus(device, "Connected");
+    }
   } else if (command == "t" || command == "T" || command == "s" ||
              command == "S") {
     device.thresholds = parsed;
-    SetStatus(device, command == "s" || command == "S" ? "Thresholds saved"
-                                                        : "Connected");
+    if (command == "s" || command == "S") {
+      device.pendingEepromSave = false;
+      SetStatus(device, "Thresholds saved");
+      SetNotice(device, "nouvelles valeurs enregistrees dans EEPROM");
+    } else {
+      if (device.pendingThresholdLoad) {
+        device.pendingThresholdLoad = false;
+        SetNotice(device, "valeurs chargees depuis le pad");
+      }
+      if (!device.pendingEepromSave) {
+        SetStatus(device, "Connected");
+      }
+    }
   }
 }
 
@@ -1160,6 +1217,12 @@ void TeejusbFsrManager::SetStatus(
   device.status = status;
 }
 
+void TeejusbFsrManager::SetNotice(
+    DeviceState& device, const std::string& notice) {
+  device.notice = notice;
+  device.noticeUntil = std::chrono::steady_clock::now() + kNoticeDuration;
+}
+
 void TeejusbFsrManager::PushDeviceSnapshot(
     lua_State* L, const DeviceState* device) const {
   lua_newtable(L);
@@ -1167,6 +1230,7 @@ void TeejusbFsrManager::PushDeviceSnapshot(
   PushStringField(L, "port", device == nullptr ? "" : device->port);
   PushStringField(
       L, "status", device == nullptr ? "Not connected" : device->status);
+  PushStringField(L, "notice", device == nullptr ? "" : device->notice);
   PushStringField(
       L, "last_response", device == nullptr ? "" : device->lastResponse);
   PushIntArrayField(
