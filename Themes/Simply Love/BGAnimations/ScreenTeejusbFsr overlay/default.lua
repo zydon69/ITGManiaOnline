@@ -2,7 +2,7 @@ local selected_player = 1
 local selected_sensor = 1
 local selected_device = 1
 local selected_focus = 1
-local selected_action = 1
+local selected_action = 2
 local action_feedback = ""
 
 local focus_names = { "Player", "Controller", "Sensor", "Action" }
@@ -197,7 +197,11 @@ local InputHandler = function(event)
 		end
 		return true
 	elseif event.GameButton == "Start" then
-		run_selected_action()
+		if selected_focus == 4 then
+			run_selected_action()
+		else
+			save_thresholds()
+		end
 		return true
 	elseif event.GameButton == "Back" then
 		local top = SCREENMAN:GetTopScreen()
@@ -433,7 +437,7 @@ local af = Def.ActorFrame{
 	},
 
 	LoadFont("Common Normal")..{
-		Text = "Select: focus  Left/Right: change  Up/Down: threshold  Start: valider  Back: quitter",
+		Text = "Select: focus  Left/Right: change  Up/Down: threshold  Start: enregistrer  Back: quitter",
 		InitCommand=function(self)
 			self:xy(_screen.cx, _screen.cy + 270):zoom(0.42):diffuse(color("#B8C2CC"))
 		end,
