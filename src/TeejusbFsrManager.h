@@ -28,12 +28,14 @@ class TeejusbFsrManager {
   void PollAll();
   bool RequestValues();
   bool RequestThresholds();
+  bool LoadThresholds();
   bool SetThreshold(int sensorIndexOneBased, int threshold);
   bool SaveThresholds();
 
   bool SetActivePort(const std::string& port);
   bool RequestValuesForPort(const std::string& port);
   bool RequestThresholdsForPort(const std::string& port);
+  bool LoadThresholdsForPort(const std::string& port);
   bool SetThresholdForPort(
       const std::string& port, int sensorIndexOneBased, int threshold);
   bool SaveThresholdsForPort(const std::string& port);

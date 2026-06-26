@@ -2,8 +2,11 @@ local selected_player = 1
 local selected_sensor = 1
 local selected_device = 1
 local selected_focus = 1
+local selected_action = 1
+local action_feedback = ""
 
-local focus_names = { "Player", "Controller", "Sensor" }
+local focus_names = { "Player", "Controller", "Sensor", "Action" }
+local action_names = { "charger", "enregistrer" }
 local device_snapshots = {}
 local snapshot = {
 	connected = false,
@@ -116,6 +119,7 @@ local function update_threshold(delta)
 	local next_value = clamp(current + delta, 0, 1023)
 	manager:SetThresholdForPort(port, selected_sensor, next_value)
 	snapshot.thresholds[selected_sensor] = next_value
+	action_feedback = ""
 	MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
 end
 
@@ -123,7 +127,27 @@ local function save_thresholds()
 	local manager = get_manager()
 	local port = assigned_port()
 	if manager and port ~= "" then
-		manager:SaveThresholdsForPort(port)
+		local ok = manager:SaveThresholdsForPort(port)
+		action_feedback = ok and "enregistrement envoye" or "enregistrement impossible"
+		MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
+	end
+end
+
+local function load_thresholds()
+	local manager = get_manager()
+	local port = assigned_port()
+	if manager and port ~= "" then
+		local ok = manager:LoadThresholdsForPort(port)
+		action_feedback = ok and "chargement envoye" or "chargement impossible"
+		MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
+	end
+end
+
+local function run_selected_action()
+	if selected_action == 1 then
+		load_thresholds()
+	else
+		save_thresholds()
 	end
 end
 
@@ -153,8 +177,11 @@ local InputHandler = function(event)
 			cycle_player(-1)
 		elseif selected_focus == 2 then
 			cycle_controller(-1)
-		else
+		elseif selected_focus == 3 then
 			cycle_sensor(-1)
+		else
+			selected_action = ((selected_action - 2) % #action_names) + 1
+			MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
 		end
 		return true
 	elseif event.GameButton == "MenuRight" then
@@ -162,12 +189,15 @@ local InputHandler = function(event)
 			cycle_player(1)
 		elseif selected_focus == 2 then
 			cycle_controller(1)
-		else
+		elseif selected_focus == 3 then
 			cycle_sensor(1)
+		else
+			selected_action = (selected_action % #action_names) + 1
+			MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
 		end
 		return true
 	elseif event.GameButton == "Start" then
-		save_thresholds()
+		run_selected_action()
 		return true
 	elseif event.GameButton == "Back" then
 		local top = SCREENMAN:GetTopScreen()
@@ -176,6 +206,36 @@ local InputHandler = function(event)
 	end
 
 	return false
+end
+
+local function make_action_button(index, x)
+	return Def.ActorFrame{
+		Name = "Action" .. index,
+		InitCommand=function(self)
+			self:xy(_screen.cx + x, _screen.cy + 235)
+		end,
+		TeejusbFsrUpdatedMessageCommand=function(self)
+			local active = selected_focus == 4 and selected_action == index
+			self:GetChild("Frame"):diffuse(active and color("#66CCFF") or color("#FFFFFF"))
+			self:GetChild("Frame"):diffusealpha(active and 0.28 or 0.1)
+			self:GetChild("Label"):diffuse(active and Color.White or color("#B8C2CC"))
+		end,
+
+		Def.Quad{
+			Name = "Frame",
+			InitCommand=function(self)
+				self:zoomto(132, 28):diffuse(color("#FFFFFF")):diffusealpha(0.1)
+			end,
+		},
+
+		LoadFont("Common Normal")..{
+			Name = "Label",
+			Text = action_names[index],
+			InitCommand=function(self)
+				self:zoom(0.44):diffuse(color("#B8C2CC")):maxwidth(220)
+			end,
+		},
+	}
 end
 
 local function make_sensor(index, x)
@@ -360,17 +420,24 @@ local af = Def.ActorFrame{
 		end,
 		TeejusbFsrUpdatedMessageCommand=function(self)
 			local focus = focus_names[selected_focus] or "Player"
-			self:settext(("%s focus - %s"):format(focus, snapshot.status or "Unknown"))
+			local status = snapshot.status or "Unknown"
+			if action_feedback ~= "" then
+				status = status .. " - " .. action_feedback
+			end
+			self:settext(("%s focus - %s"):format(focus, status))
 		end,
 	},
 
 	LoadFont("Common Normal")..{
-		Text = "Select: focus  Left/Right: change  Up/Down: threshold  Start: save  Back: exit",
+		Text = "Select: focus  Left/Right: change  Up/Down: threshold  Start: valider  Back: quitter",
 		InitCommand=function(self)
-			self:xy(_screen.cx, _screen.cy + 226):zoom(0.42):diffuse(color("#B8C2CC"))
+			self:xy(_screen.cx, _screen.cy + 270):zoom(0.42):diffuse(color("#B8C2CC"))
 		end,
 	},
 }
+
+af[#af+1] = make_action_button(1, -76)
+af[#af+1] = make_action_button(2, 76)
 
 local spacing = WideScale(110, 140)
 for i = 1, 4 do

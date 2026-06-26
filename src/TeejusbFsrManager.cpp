@@ -622,6 +622,10 @@ bool TeejusbFsrManager::RequestThresholds() {
   return device != nullptr && WriteCommand(*device, "t");
 }
 
+bool TeejusbFsrManager::LoadThresholds() {
+  return LoadThresholdsForPort(m_sActivePort);
+}
+
 bool TeejusbFsrManager::SetThreshold(int sensorIndexOneBased, int threshold) {
   return SetThresholdForPort(m_sActivePort, sensorIndexOneBased, threshold);
 }
@@ -647,6 +651,17 @@ bool TeejusbFsrManager::RequestValuesForPort(const std::string& port) {
 bool TeejusbFsrManager::RequestThresholdsForPort(const std::string& port) {
   DeviceState* device = FindDevice(port);
   return device != nullptr && WriteCommand(*device, "t");
+}
+
+bool TeejusbFsrManager::LoadThresholdsForPort(const std::string& port) {
+  DeviceState* device = FindDevice(port);
+  if (device == nullptr || !WriteCommand(*device, "l")) {
+    return false;
+  }
+
+  // Older teejusb-fsr firmware ignores "l"; asking for thresholds afterwards
+  // keeps the UI synchronized even before the firmware is reflashed.
+  return WriteCommand(*device, "t");
 }
 
 bool TeejusbFsrManager::SetThresholdForPort(
@@ -1259,6 +1274,11 @@ class LunaTeejusbFsrManager : public Luna<TeejusbFsrManager> {
     return 1;
   }
 
+  static int LoadThresholds(T* p, lua_State* L) {
+    LuaHelpers::Push(L, p->LoadThresholds());
+    return 1;
+  }
+
   static int SetThreshold(T* p, lua_State* L) {
     LuaHelpers::Push(L, p->SetThreshold(IArg(1), IArg(2)));
     return 1;
@@ -1271,6 +1291,11 @@ class LunaTeejusbFsrManager : public Luna<TeejusbFsrManager> {
 
   static int RequestThresholdsForPort(T* p, lua_State* L) {
     LuaHelpers::Push(L, p->RequestThresholdsForPort(SArg(1)));
+    return 1;
+  }
+
+  static int LoadThresholdsForPort(T* p, lua_State* L) {
+    LuaHelpers::Push(L, p->LoadThresholdsForPort(SArg(1)));
     return 1;
   }
 
@@ -1300,9 +1325,11 @@ class LunaTeejusbFsrManager : public Luna<TeejusbFsrManager> {
     ADD_METHOD(SetActivePort);
     ADD_METHOD(RequestValues);
     ADD_METHOD(RequestThresholds);
+    ADD_METHOD(LoadThresholds);
     ADD_METHOD(SetThreshold);
     ADD_METHOD(SaveThresholds);
     ADD_METHOD(RequestThresholdsForPort);
+    ADD_METHOD(LoadThresholdsForPort);
     ADD_METHOD(SetThresholdForPort);
     ADD_METHOD(SaveThresholdsForPort);
   }
