@@ -2815,7 +2815,14 @@ function ITGOnline:EnsureCurrentRoom(callback)
 end
 
 function ITGOnline:IsCurrentUserReadyInRoom(room, phase)
-	if not room or not self.user or not room.ready_states then return false end
+	if not room or not self.user then return false end
+	if tostring(phase or "") == "config_ready" and self:CurrentUserHasOptimisticConfigReady(room) then
+		online_flow_trace("current_user_ready_state result=true reason=optimistic_config_ready"
+			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+			.. " phase=" .. tostring(room.phase or "nil"))
+		return true
+	end
+	if not room.ready_states then return false end
 	local currentUserId = tonumber(self.user.id)
 	if not currentUserId then return false end
 	local expectedPhase = tostring(phase or "")

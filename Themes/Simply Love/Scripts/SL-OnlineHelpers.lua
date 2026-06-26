@@ -2577,7 +2577,13 @@ CreateOnlineHandler = function()
 							.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
 							.. " screen=" .. tostring(screen_name(current_top_screen()))
 							.. " lastOptionsSongKey=" .. tostring(lastOnlineOptionsSongKey or ""))
-						lastOnlineOptionsSongKey = ""
+						local phase = ITGOnline and ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom and ITGOnline.currentRoom.phase) or tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "")
+						if phase == "config" then
+							online_flow_trace("song_reload_completed_keep_options_key reason=config_phase"
+								.. " key=" .. tostring(lastOnlineOptionsSongKey or ""))
+						else
+							lastOnlineOptionsSongKey = ""
+						end
 					end,
 					ReleaseOnlineGameplayAtStartCommand=function(self)
 						self.onlineStartReleaseQueued = false

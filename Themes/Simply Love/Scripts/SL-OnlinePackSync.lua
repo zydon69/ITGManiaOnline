@@ -34,6 +34,8 @@ PackSync.lastManagerBrowsingPreviewPostAt = tonumber(PackSync.lastManagerBrowsin
 PackSync.managerBrowsingPreviewDuplicateSuppressSeconds = tonumber(PackSync.managerBrowsingPreviewDuplicateSuppressSeconds) or 1.5
 PackSync.lastResetSignature = PackSync.lastResetSignature or ""
 PackSync.lastResetAt = tonumber(PackSync.lastResetAt) or 0
+PackSync.lastNoSongClearResetAt = tonumber(PackSync.lastNoSongClearResetAt) or 0
+PackSync.lastNoSongClearResetReason = PackSync.lastNoSongClearResetReason or ""
 
 PackSync.status = {
 	Unknown = "unknown",
@@ -1186,8 +1188,9 @@ function PackSync:WatchdogTick()
 end
 
 function PackSync:ResetLocalState(reason)
+	local normalizedReason = tostring(reason or "unknown")
 	local resetSignature = table.concat({
-		tostring(reason or "unknown"),
+		normalizedReason,
 		tostring(self.currentStatus or "nil"),
 		tostring(self.currentStatusMessage or ""),
 		tostring(self.downloadInFlightKey or ""),
@@ -1200,12 +1203,35 @@ function PackSync:ResetLocalState(reason)
 	local now = GetTimeSinceStart()
 	if resetSignature == tostring(self.lastResetSignature or "")
 		and (now - (tonumber(self.lastResetAt) or 0)) < 0.25 then
-		trace("ResetLocalState skipped duplicate reason=" .. tostring(reason or "unknown")
+		trace("ResetLocalState skipped duplicate reason=" .. tostring(normalizedReason)
 			.. " status=" .. tostring(self.currentStatus or "nil"))
 		return
 	end
+
+	local isNoSongClearReset = normalizedReason == "no_song_confirmed"
+		or normalizedReason == "online_lobby_state_clear_unconfirmed_preview"
+		or normalizedReason == "song_selection_cancelled"
+	if isNoSongClearReset
+		and not self:HasDownloadWorkInFlight()
+		and self.currentSongInfo == nil
+		and tostring(self.downloadInFlightKey or "") == ""
+		and self.pendingPostReloadSongInfo == nil
+		and self.activeBrowseOnlyDownload ~= true
+		and (now - (tonumber(self.lastNoSongClearResetAt) or 0)) < 0.75
+	then
+		trace("ResetLocalState skipped equivalent no-song clear reason=" .. tostring(normalizedReason)
+			.. " previousReason=" .. tostring(self.lastNoSongClearResetReason or "")
+			.. " age=" .. string.format("%.3f", now - (tonumber(self.lastNoSongClearResetAt) or 0))
+			.. " status=" .. tostring(self.currentStatus or "nil"))
+		return
+	end
+
 	self.lastResetSignature = resetSignature
 	self.lastResetAt = now
+	if isNoSongClearReset then
+		self.lastNoSongClearResetAt = now
+		self.lastNoSongClearResetReason = normalizedReason
+	end
 	trace("ResetLocalState begin reason=" .. tostring(reason or "unknown")
 		.. " status=" .. tostring(self.currentStatus or "nil")
 		.. " message=" .. tostring(self.currentStatusMessage or "")
@@ -1288,6 +1314,8 @@ function PackSync:ResetLocalState(reason)
 	self.lastAppliedLocalStatusSignature = ""
 	self.lastResetSignature = ""
 	self.lastResetAt = 0
+	self.lastNoSongClearResetAt = now
+	self.lastNoSongClearResetReason = normalizedReason
 	self.localScanCache = {}
 	self.browsePreviewPackKey = ""
 	self.downloadInFlightKey = nil

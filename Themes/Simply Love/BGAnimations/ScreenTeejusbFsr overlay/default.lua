@@ -199,8 +199,6 @@ local InputHandler = function(event)
 	elseif event.GameButton == "Start" then
 		if selected_focus == 4 then
 			run_selected_action()
-		else
-			save_thresholds()
 		end
 		return true
 	elseif event.GameButton == "Back" then
@@ -216,7 +214,7 @@ local function make_action_button(index, x)
 	return Def.ActorFrame{
 		Name = "Action" .. index,
 		InitCommand=function(self)
-			self:xy(_screen.cx + x, _screen.cy + 235)
+			self:xy(_screen.cx + x, _screen.cy + 180)
 		end,
 		TeejusbFsrUpdatedMessageCommand=function(self)
 			local active = selected_focus == 4 and selected_action == index
@@ -243,13 +241,13 @@ local function make_action_button(index, x)
 end
 
 local function make_sensor(index, x)
-	local bar_w = 72
-	local bar_h = 250
+	local bar_w = 54
+	local bar_h = 175
 
 	return Def.ActorFrame{
 		Name = "Sensor" .. index,
 		InitCommand=function(self)
-			self:xy(x, _screen.cy + 30)
+			self:xy(x, _screen.cy + 20)
 		end,
 
 		TeejusbFsrUpdatedMessageCommand=function(self)
@@ -275,14 +273,14 @@ local function make_sensor(index, x)
 		LoadFont("Common Bold")..{
 			Text = "Pad " .. index,
 			InitCommand=function(self)
-				self:y(-bar_h / 2 - 38):zoom(0.7):diffuse(Color.White)
+				self:y(-bar_h / 2 - 18):zoom(0.5):diffuse(Color.White)
 			end,
 		},
 
 		Def.Quad{
 			Name = "Selected",
 			InitCommand=function(self)
-				self:zoomto(bar_w + 18, bar_h + 22):diffuse(color("#66CCFF")):diffusealpha(0.18)
+				self:zoomto(bar_w + 14, bar_h + 18):diffuse(color("#66CCFF")):diffusealpha(0.18)
 			end,
 		},
 
@@ -308,7 +306,7 @@ local function make_sensor(index, x)
 		Def.Quad{
 			Name = "Threshold",
 			InitCommand=function(self)
-				self:zoomto(bar_w + 14, 3):diffuse(color("#FF6633"))
+				self:zoomto(bar_w + 12, 2):diffuse(color("#FF6633"))
 			end,
 		},
 
@@ -316,7 +314,7 @@ local function make_sensor(index, x)
 			Name = "State",
 			Text = "OFF",
 			InitCommand=function(self)
-				self:y(-bar_h / 2 + 22):zoom(0.62):diffuse(Color.White)
+				self:y(-bar_h / 2 + 18):zoom(0.46):diffuse(Color.White)
 			end,
 		},
 
@@ -324,7 +322,7 @@ local function make_sensor(index, x)
 			Name = "Value",
 			Text = "0",
 			InitCommand=function(self)
-				self:y(bar_h / 2 + 28):zoom(0.7):diffuse(Color.White)
+				self:y(bar_h / 2 + 14):zoom(0.52):diffuse(Color.White)
 			end,
 		},
 
@@ -332,7 +330,7 @@ local function make_sensor(index, x)
 			Name = "ThresholdText",
 			Text = "1000",
 			InitCommand=function(self)
-				self:y(bar_h / 2 + 52):zoom(0.5):diffuse(color("#FFAA88"))
+				self:y(bar_h / 2 + 30):zoom(0.42):diffuse(color("#FFAA88"))
 			end,
 		},
 	}
@@ -437,9 +435,9 @@ local af = Def.ActorFrame{
 	},
 
 	LoadFont("Common Normal")..{
-		Text = "Select: focus  Left/Right: change  Up/Down: threshold  Start: enregistrer  Back: quitter",
+		Text = "Select: focus  Left/Right: change  Up/Down: threshold  Back: quitter",
 		InitCommand=function(self)
-			self:xy(_screen.cx, _screen.cy + 270):zoom(0.42):diffuse(color("#B8C2CC"))
+			self:xy(_screen.cx, _screen.cy + 212):zoom(0.42):diffuse(color("#B8C2CC"))
 		end,
 	},
 }
@@ -447,7 +445,7 @@ local af = Def.ActorFrame{
 af[#af+1] = make_action_button(1, -76)
 af[#af+1] = make_action_button(2, 76)
 
-local spacing = WideScale(110, 140)
+local spacing = WideScale(96, 120)
 for i = 1, 4 do
 	af[#af+1] = make_sensor(i, _screen.cx + (i - 2.5) * spacing)
 end
