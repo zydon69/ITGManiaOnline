@@ -836,6 +836,7 @@ ScreenGameplay::ScreenGameplay() {
   m_bOnlineFailedHoldStarted = false;
   m_bLoggedStageEndState = false;
   m_bLoggedOnlineEvaluationHold = false;
+  m_bLoggedOnlineNotesEndedDuringHold = false;
   m_bMarkedOnlineFailedEarly = false;
   m_bLoggedOnlineLocalFailKeepAlive = false;
   m_fLastSeenEnemyHealth = 1.0f;
@@ -4079,6 +4080,18 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
         STATE_DANCING;  // STATE CHANGE!  Now the user is allowed to press Back
   } else if (SM == SM_NotesEnded)  // received while STATE_DANCING
   {
+    if (GetITGOnlineIsActive() &&
+        (m_bOnlineEvaluationHoldStarted ||
+         m_bOnlineEvaluationHoldMessagePending)) {
+      if (!m_bLoggedOnlineNotesEndedDuringHold) {
+        LOG->Trace(
+            "ITG Online: SM_NotesEnded ignored while evaluation hold is "
+            "active.");
+        m_bLoggedOnlineNotesEndedDuringHold = true;
+      }
+      return;
+    }
+
     ResetGiveUpTimers(
         false);  // don't allow giveup while the next song is loading
 
@@ -4153,6 +4166,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
       if (!m_bOnlineEvaluationHoldStarted) {
         LOG->Trace("ITG Online: SM_LeaveGameplay starting evaluation hold.");
         m_bOnlineEvaluationHoldStarted = true;
+        m_bLoggedOnlineNotesEndedDuringHold = false;
         m_timerOnlineEvaluationHoldStarted.Touch();
         m_bOnlineEvaluationHoldMessagePending = true;
         m_timerOnlineEvaluationHoldMessage.Touch();
@@ -4182,6 +4196,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
     }
 
     m_bOnlineEvaluationHoldMessagePending = false;
+    m_bLoggedOnlineNotesEndedDuringHold = false;
     if (GetITGOnlineIsActive()) {
       LOG->Trace("ITG Online: SM_LeaveGameplay advancing to evaluation.");
     }

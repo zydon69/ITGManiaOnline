@@ -10261,6 +10261,36 @@ function ITGOnline:MarkPlayTerminal(endpoint, state, callback)
 			status = response and response.statusCode or "nil",
 			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
 		})
+		local errorCode = response_error_code(response, decoded)
+		if not ok
+			and state == "finished"
+			and errorCode == "finished_requires_finalized_score"
+			and self.SendScore
+		then
+			online_flow_trace("mark_play_terminal_recover_missing_final_score"
+				.. " state=" .. tostring(state)
+				.. " room=" .. tostring(self.currentRoomId)
+				.. " roundKey=" .. tostring(key)
+				.. " status=" .. tostring(response and response.statusCode or "nil"))
+			self:SendScore(true, true, nil, function(scoreOk, scoreDecoded, scoreResponse)
+				if scoreOk then
+					online_flow_trace("mark_play_terminal_retry_after_final_score"
+						.. " state=" .. tostring(state)
+						.. " room=" .. tostring(self.currentRoomId)
+						.. " roundKey=" .. tostring(key))
+					self:MarkPlayTerminal(endpoint, state, callback)
+					return
+				end
+				online_flow_trace("mark_play_terminal_missing_final_score_recovery_failed"
+					.. " state=" .. tostring(state)
+					.. " room=" .. tostring(self.currentRoomId)
+					.. " roundKey=" .. tostring(key)
+					.. " status=" .. tostring(scoreResponse and scoreResponse.statusCode or "nil")
+					.. " errorCode=" .. tostring(response_error_code(scoreResponse, scoreDecoded) or "nil"))
+				if callback then callback(false, scoreDecoded, scoreResponse or response) end
+			end)
+			return
+		end
 		if callback then callback(ok, decoded, response) end
 	end)
 end

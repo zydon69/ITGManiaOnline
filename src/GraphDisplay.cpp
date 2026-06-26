@@ -278,8 +278,8 @@ void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
 
   float fTotalStepSeconds = ss.GetTotalPossibleStepsSeconds();
   if (!std::isfinite(fTotalStepSeconds) || fTotalStepSeconds <= 0.0f) {
-    WarnGraphDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-261: GraphDisplay received invalid total seconds.");
+    TraceGraphDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-261: GraphDisplay skipped invalid total seconds.");
     fTotalStepSeconds = 1.0f;
   }
 

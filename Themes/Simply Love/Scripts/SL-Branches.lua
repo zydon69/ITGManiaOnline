@@ -467,8 +467,8 @@ Branch.AfterEvaluationStage = function()
 		end
 		BranchTrace("AfterEvaluationStage room=" .. tostring(ITGOnline.currentRoomId)
 			.. " phase=" .. tostring(OnlineRoomPhase(room))
-			.. " next=ScreenOnlineLobbies reason=safety_exit")
-		return "ScreenOnlineLobbies"
+			.. " next=ScreenEvaluationStage reason=online_exit_not_requested")
+		return "ScreenEvaluationStage"
 	end
 
 	-- If we're in Casual mode, don't save the profile(s).

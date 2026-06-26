@@ -19,11 +19,21 @@ return Def.Actor{
 		--
 		-- Here, we are storing things like letter grade, percent score, judgment counts, stepchart difficulty, etc.
 		-- so that we can more easily display it on ScreenEvaluationSummary when this game cycle ends.
+		SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1] = SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1] or {}
 		local storage = SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
 
 		-- a PlayerStageStats object from the engine
 		-- see: http://quietly-turning.github.io/Lua-For-SM5/LuaAPI#Actors-PlayerStageStats
 		local pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+		if not pss then
+			if ITGOnline and ITGOnline.currentRoomId and online_flow_trace then
+				online_flow_trace("evaluation_storage_skipped reason=missing_player_stage_stats"
+					.. " player=" .. tostring(pn)
+					.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+					.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+			end
+			return
+		end
 
 		if PROFILEMAN:IsPersistentProfile(pn) then
 			storage.profile = PROFILEMAN:GetProfile(player):GetDisplayName()
@@ -64,9 +74,17 @@ return Def.Actor{
 			storage.stepartist = GAMESTATE:GetCurrentCourse(player):GetScripter()
 		else
 			storage.steps      = GAMESTATE:GetCurrentSteps(player)
-			storage.difficulty = pss:GetPlayedSteps()[1]:GetDifficulty()
-			storage.meter      = pss:GetPlayedSteps()[1]:GetMeter()
-			storage.stepartist = pss:GetPlayedSteps()[1]:GetAuthorCredit()
+			local playedSteps = pss:GetPlayedSteps()
+			local firstPlayedSteps = playedSteps and playedSteps[1] or nil
+			if firstPlayedSteps then
+				storage.difficulty = firstPlayedSteps:GetDifficulty()
+				storage.meter      = firstPlayedSteps:GetMeter()
+				storage.stepartist = firstPlayedSteps:GetAuthorCredit()
+			elseif storage.steps then
+				storage.difficulty = storage.steps:GetDifficulty()
+				storage.meter      = storage.steps:GetMeter()
+				storage.stepartist = storage.steps:GetAuthorCredit()
+			end
 		end
 
 		storage.timingwindows = SL[pn].ActiveModifiers.TimingWindows

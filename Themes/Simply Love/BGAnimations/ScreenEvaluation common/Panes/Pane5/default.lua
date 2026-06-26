@@ -6,7 +6,8 @@ local pn = ToEnumShortString(player)
 
 -- table of offset values obtained during this song's playthrough
 -- obtained via ./BGAnimations/ScreenGameplay overlay/JudgmentOffsetTracking.lua
-local sequential_offsets = SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1].sequential_offsets
+local stage_stats = SL[pn] and SL[pn].Stages and SL[pn].Stages.Stats and SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1] or nil
+local sequential_offsets = stage_stats and stage_stats.sequential_offsets or {}
 local pane_width, pane_height = 300, 180
 local topbar_height = 26
 local bottombar_height = 13
