@@ -67,6 +67,10 @@ local function IsEvaluationExitInput(event)
 	end
 	return event.GameButton == "Start"
 		or event.GameButton == "Back"
+		or string.find(deviceButton, "enter", 1, true) ~= nil
+		or string.find(deviceButton, "return", 1, true) ~= nil
+		or deviceButton == "devicebutton_z"
+		or deviceButton == "z"
 		or string.find(deviceButton, "escape", 1, true) ~= nil
 		or string.find(deviceButton, "backspace", 1, true) ~= nil
 end
@@ -137,9 +141,9 @@ if SL.Global.GameMode ~= "Casual" then
 		EventOverlayInputHandler = LoadActor("./Shared/EventInputHandler.lua")
 		local screen = SCREENMAN:GetTopScreen()
 		if screen then
-			screen:AddInputCallback(InputHandler)
 			OnlineEvaluationInputHandler = BuildOnlineEvaluationInputHandler("standard")
 			screen:AddInputCallback(OnlineEvaluationInputHandler)
+			screen:AddInputCallback(InputHandler)
 			DisableOnlineEvaluationTimer("on_command")
 		end
 		PROFILEMAN:SaveMachineProfile()

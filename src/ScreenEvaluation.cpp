@@ -347,6 +347,26 @@ float GetBannerMetric(
   const float value = GetEvaluationMetricF(screenName, metric, fallback, true);
   return value > 0.0f ? value : fallback;
 }
+
+bool ShouldIgnoreOnlineEvaluationNextScreen() {
+  if (LUA == nullptr) {
+    return false;
+  }
+
+  Lua* L = LUA->Get();
+  bool shouldIgnore = false;
+  const bool ok = LuaHelpers::RunExpression(
+      L,
+      "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil "
+      "and ITGOnline.onlineEvaluationExitRequested ~= true",
+      "ScreenEvaluation online next-screen guard");
+  if (ok) {
+    LuaHelpers::Pop(L, shouldIgnore);
+  }
+  LUA->Release(L);
+
+  return ok && shouldIgnore;
+}
 }  // namespace
 
 ScreenEvaluation::ScreenEvaluation() {
@@ -1302,6 +1322,13 @@ bool ScreenEvaluation::Input(const InputEventPlus& input) {
 }
 
 void ScreenEvaluation::HandleScreenMessage(const ScreenMessage SM) {
+  if (SM == SM_GoToNextScreen && ShouldIgnoreOnlineEvaluationNextScreen()) {
+    LOG->Trace(
+        "ITG Online: ScreenEvaluation ignored SM_GoToNextScreen without "
+        "explicit online evaluation exit request.");
+    return;
+  }
+
   if (SM == SM_PlayCheer) {
     PlayEvaluationSoundPath(
         GetEvaluationAnnouncerPath("evaluation cheer"), "cheer");

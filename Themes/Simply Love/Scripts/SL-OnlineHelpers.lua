@@ -1325,13 +1325,17 @@ EvaluationInputHandler = function(event)
 	local isEscape = string.find(deviceButton, "escape", 1, true)
 		or string.find(deviceButton, "backspace", 1, true)
 	local isConfirm = event.GameButton == "Start"
+		or string.find(deviceButton, "enter", 1, true)
+		or string.find(deviceButton, "return", 1, true)
+		or deviceButton == "devicebutton_z"
+		or deviceButton == "z"
 	local isBack = event.GameButton == "Back"
 
 	if isConfirm or isBack or isEscape then
 		return ReturnToOnlineLobbyFromEvaluation("evaluation_input")
 	end
 
-	return false
+	return true
 end
 
 RestoreCurrentRoom = function(actor, callback)

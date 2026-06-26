@@ -94,6 +94,16 @@ af[#af+1] = Def.GraphDisplay{
 
 		local playerStageStats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 		local stageStats = STATSMAN:GetCurStageStats()
+		if not playerStageStats or not stageStats then
+			if ITGOnline and ITGOnline.currentRoomId and online_flow_trace then
+				online_flow_trace("evaluation_graph_display_skipped reason=missing_stage_stats"
+					.. " player=" .. tostring(pn)
+					.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+					.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+			end
+			self:visible(false)
+			return
+		end
 		self:Set(stageStats, playerStageStats)
 		
 		-- hide the GraphDisplay's body (2nd unnamed child)
@@ -111,7 +121,7 @@ af[#af+1] = Def.Quad{
 	end
 }
 
-local storage = SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
+local storage = SL[pn] and SL[pn].Stages and SL[pn].Stages.Stats and SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1] or {}
 
 if storage.DeathSecond ~= nil then
 	local seconds = storage.TotalSeconds
