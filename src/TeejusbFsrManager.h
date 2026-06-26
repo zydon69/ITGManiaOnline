@@ -69,6 +69,8 @@ class TeejusbFsrManager {
     bool pendingEepromSave = false;
     std::array<int, NUM_SENSORS> values = {{0, 0, 0, 0}};
     std::array<int, NUM_SENSORS> thresholds = {{1000, 1000, 1000, 1000}};
+    std::chrono::steady_clock::time_point pendingCommandDeadline =
+        std::chrono::steady_clock::time_point::min();
     std::chrono::steady_clock::time_point lastValueRequest =
         std::chrono::steady_clock::time_point::min();
     std::chrono::steady_clock::time_point noticeUntil =

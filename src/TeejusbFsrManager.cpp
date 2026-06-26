@@ -33,6 +33,7 @@ constexpr int kDefaultThreshold = 1000;
 constexpr auto kDeviceScanInterval = std::chrono::milliseconds(1000);
 constexpr auto kValuePollInterval = std::chrono::milliseconds(40);
 constexpr auto kNoticeDuration = std::chrono::milliseconds(3500);
+constexpr auto kCommandResponseTimeout = std::chrono::milliseconds(2500);
 const std::string kAssignmentsPath = "Save/TeejusbFsr.ini";
 const std::string kWindowsTeensyVidPid = "VID_16C0&PID_0487";
 
@@ -608,11 +609,33 @@ void TeejusbFsrManager::PollAll() {
       device.notice.clear();
       device.noticeUntil = std::chrono::steady_clock::time_point::min();
     }
+    if (device.pendingCommandDeadline !=
+            std::chrono::steady_clock::time_point::min() &&
+        now >= device.pendingCommandDeadline) {
+      if (device.pendingEepromSave) {
+        LOG->Warn(
+            "TeejusbFsr: EEPROM save timed out waiting for serial ack on %s",
+            device.port.c_str());
+        SetStatus(device, "EEPROM save timed out");
+        SetNotice(device, "aucune confirmation EEPROM recue");
+      } else if (device.pendingThresholdLoad) {
+        LOG->Warn(
+            "TeejusbFsr: threshold load timed out waiting for serial ack on %s",
+            device.port.c_str());
+        SetStatus(device, "Threshold load timed out");
+        SetNotice(device, "aucune reponse du pad recue");
+      }
+      device.pendingEepromSave = false;
+      device.pendingThresholdLoad = false;
+      device.pendingCommandDeadline = std::chrono::steady_clock::time_point::min();
+    }
     if (device.fd < 0) {
       OpenDevice(device);
     }
     if (device.fd >= 0) {
-      MaybeRequestValues(device);
+      if (!device.pendingEepromSave && !device.pendingThresholdLoad) {
+        MaybeRequestValues(device);
+      }
       ReadAvailableLines(device);
     }
   }
@@ -660,9 +683,12 @@ bool TeejusbFsrManager::RequestThresholdsForPort(const std::string& port) {
   }
 
   device->pendingThresholdLoad = true;
+  device->pendingCommandDeadline =
+      std::chrono::steady_clock::now() + kCommandResponseTimeout;
   SetStatus(*device, "Loading thresholds from pad");
   if (!WriteCommand(*device, "t")) {
     device->pendingThresholdLoad = false;
+    device->pendingCommandDeadline = std::chrono::steady_clock::time_point::min();
     return false;
   }
   return true;
@@ -699,17 +725,22 @@ bool TeejusbFsrManager::SaveThresholdsForPort(const std::string& port) {
   }
 
   SetStatus(*device, "Saving thresholds to EEPROM");
+  device->pendingEepromSave = true;
+  device->pendingCommandDeadline =
+      std::chrono::steady_clock::now() + kCommandResponseTimeout;
   for (int i = 0; i < NUM_SENSORS; ++i) {
     std::ostringstream command;
     command << i << " " << device->thresholds[i];
     if (!WriteCommand(*device, command.str())) {
+      device->pendingEepromSave = false;
+      device->pendingCommandDeadline = std::chrono::steady_clock::time_point::min();
       return false;
     }
   }
 
-  device->pendingEepromSave = true;
   if (!WriteCommand(*device, "s")) {
     device->pendingEepromSave = false;
+    device->pendingCommandDeadline = std::chrono::steady_clock::time_point::min();
     return false;
   }
   return true;
@@ -921,10 +952,14 @@ bool TeejusbFsrManager::OpenDevice(DeviceState& device) {
   device.readBuffer.clear();
   device.lastResponse.clear();
   device.pendingThresholdLoad = true;
+  device.pendingCommandDeadline =
+      std::chrono::steady_clock::now() + kCommandResponseTimeout;
   device.lastValueRequest = std::chrono::steady_clock::time_point::min();
   SetStatus(device, "Loading thresholds from pad");
+  LOG->Trace("TeejusbFsr: opened serial port %s", device.port.c_str());
   if (!WriteCommand(device, "t")) {
     device.pendingThresholdLoad = false;
+    device.pendingCommandDeadline = std::chrono::steady_clock::time_point::min();
   }
   return true;
 #elif defined(_WIN32)
@@ -948,10 +983,14 @@ bool TeejusbFsrManager::OpenDevice(DeviceState& device) {
   device.readBuffer.clear();
   device.lastResponse.clear();
   device.pendingThresholdLoad = true;
+  device.pendingCommandDeadline =
+      std::chrono::steady_clock::now() + kCommandResponseTimeout;
   device.lastValueRequest = std::chrono::steady_clock::time_point::min();
   SetStatus(device, "Loading thresholds from pad");
+  LOG->Trace("TeejusbFsr: opened serial port %s", device.port.c_str());
   if (!WriteCommand(device, "t")) {
     device.pendingThresholdLoad = false;
+    device.pendingCommandDeadline = std::chrono::steady_clock::time_point::min();
   }
   return true;
 #else
@@ -974,6 +1013,7 @@ void TeejusbFsrManager::CloseDevice(DeviceState& device) {
   device.readBuffer.clear();
   device.pendingThresholdLoad = false;
   device.pendingEepromSave = false;
+  device.pendingCommandDeadline = std::chrono::steady_clock::time_point::min();
   SetStatus(device, "Not connected");
 }
 
@@ -994,6 +1034,11 @@ bool TeejusbFsrManager::WriteCommand(
   std::string payload = command;
   if (payload.empty() || payload.back() != '\n') {
     payload += '\n';
+  }
+  if (command != "v") {
+    LOG->Trace(
+        "TeejusbFsr: write command port=%s command=%s", device.port.c_str(),
+        command.c_str());
   }
 
   std::size_t offset = 0;
@@ -1025,6 +1070,11 @@ bool TeejusbFsrManager::WriteCommand(
   std::string payload = command;
   if (payload.empty() || payload.back() != '\n') {
     payload += '\n';
+  }
+  if (command != "v") {
+    LOG->Trace(
+        "TeejusbFsr: write command port=%s command=%s", device.port.c_str(),
+        command.c_str());
   }
 
   HANDLE handle = reinterpret_cast<HANDLE>(device.fd);
@@ -1158,15 +1208,22 @@ void TeejusbFsrManager::ProcessLine(DeviceState& device, const std::string& line
   std::vector<std::string> parts;
   split(line, " ", parts, true);
   if (parts.size() == 2 && (parts[0] == "s" || parts[0] == "S")) {
+    LOG->Trace(
+        "TeejusbFsr: read EEPROM ack port=%s line=\"%s\"",
+        device.port.c_str(), line.c_str());
     SetStatus(device, "Thresholds saved");
     if (device.pendingEepromSave) {
       device.pendingEepromSave = false;
+      device.pendingCommandDeadline = std::chrono::steady_clock::time_point::min();
       SetNotice(device, "nouvelles valeurs enregistrees dans EEPROM");
     }
     return;
   }
 
   if (parts.size() != NUM_SENSORS + 1) {
+    LOG->Trace(
+        "TeejusbFsr: ignored serial line port=%s line=\"%s\"",
+        device.port.c_str(), line.c_str());
     return;
   }
 
@@ -1183,14 +1240,20 @@ void TeejusbFsrManager::ProcessLine(DeviceState& device, const std::string& line
     }
   } else if (command == "t" || command == "T" || command == "s" ||
              command == "S") {
+    LOG->Trace(
+        "TeejusbFsr: read %s response port=%s line=\"%s\"",
+        command.c_str(), device.port.c_str(), line.c_str());
     device.thresholds = parsed;
     if (command == "s" || command == "S") {
       device.pendingEepromSave = false;
+      device.pendingCommandDeadline = std::chrono::steady_clock::time_point::min();
       SetStatus(device, "Thresholds saved");
       SetNotice(device, "nouvelles valeurs enregistrees dans EEPROM");
     } else {
       if (device.pendingThresholdLoad) {
         device.pendingThresholdLoad = false;
+        device.pendingCommandDeadline =
+            std::chrono::steady_clock::time_point::min();
         SetNotice(device, "valeurs chargees depuis le pad");
       }
       if (!device.pendingEepromSave) {
