@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <cstdint>
 #include <sstream>
@@ -13,7 +14,7 @@
 #include "SpecialFiles.h"
 #include "global.h"
 
-#if defined(MACOSX) || defined(UNIX)
+#if (defined(MACOSX) || defined(UNIX)) && !defined(_WIN32)
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/select.h>
@@ -94,7 +95,7 @@ void PushIntArrayField(
   lua_setfield(L, -2, field);
 }
 
-#if defined(MACOSX) || defined(UNIX)
+#if (defined(MACOSX) || defined(UNIX)) && !defined(_WIN32)
 void AddMatchingDevicePorts(
     const std::string& directory,
     const std::vector<std::string>& prefixes,
@@ -228,7 +229,8 @@ bool RegReadStringValue(HKEY key, const wchar_t* valueName, std::wstring& out) {
   return true;
 }
 
-void AddWindowsPortName(const std::wstring& portName, std::vector<std::string>& ports) {
+void AddWindowsPortName(
+    const std::wstring& portName, std::vector<std::string>& ports) {
   if (portName.empty()) {
     return;
   }
@@ -242,6 +244,49 @@ void AddWindowsPortName(const std::wstring& portName, std::vector<std::string>& 
     port = "\\\\.\\" + port;
   }
   ports.push_back(port);
+}
+
+bool IsWindowsComDeviceName(const std::wstring& name) {
+  if (name.size() < 4 || name.compare(0, 3, L"COM") != 0) {
+    return false;
+  }
+
+  for (std::size_t i = 3; i < name.size(); ++i) {
+    if (name[i] < L'0' || name[i] > L'9') {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool IsTeejusbFsrSerialLine(std::string line) {
+  Trim(line);
+  if (line.empty()) {
+    return false;
+  }
+
+  std::vector<std::string> parts;
+  split(line, " ", parts, true);
+  if (parts.size() != TeejusbFsrManager::NUM_SENSORS + 1) {
+    return false;
+  }
+
+  const std::string& command = parts[0];
+  if (command != "v" && command != "V" && command != "t" &&
+      command != "T" && command != "s" && command != "S") {
+    return false;
+  }
+
+  for (int i = 1; i <= TeejusbFsrManager::NUM_SENSORS; ++i) {
+    char* end = nullptr;
+    const long value = std::strtol(parts[i].c_str(), &end, 10);
+    if (end == parts[i].c_str() || *end != '\0' || value < 0 ||
+        value > 1023) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 void AddWindowsTeensyPortsFromInstance(
@@ -363,6 +408,111 @@ bool ConfigureWindowsSerialPort(HANDLE handle) {
   PurgeComm(handle, PURGE_RXCLEAR | PURGE_TXCLEAR);
   return true;
 }
+
+bool ProbeWindowsTeejusbPort(const std::string& port) {
+  const std::wstring widePort = Utf8ToWide(port);
+  if (widePort.empty()) {
+    return false;
+  }
+
+  HANDLE handle = CreateFileW(
+      widePort.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (handle == INVALID_HANDLE_VALUE) {
+    return false;
+  }
+
+  if (!ConfigureWindowsSerialPort(handle)) {
+    CloseHandle(handle);
+    return false;
+  }
+
+  const char request[] = "t\n";
+  DWORD written = 0;
+  if (!WriteFile(
+          handle, request, static_cast<DWORD>(sizeof(request) - 1), &written,
+          nullptr)) {
+    CloseHandle(handle);
+    return false;
+  }
+
+  std::string readBuffer;
+  bool matched = false;
+  for (int attempt = 0; attempt < 20 && !matched; ++attempt) {
+    Sleep(10);
+
+    DWORD errors = 0;
+    COMSTAT status;
+    ZeroMemory(&status, sizeof(status));
+    if (!ClearCommError(handle, &errors, &status)) {
+      break;
+    }
+    if (status.cbInQue == 0) {
+      continue;
+    }
+
+    char buffer[512];
+    DWORD bytesRead = 0;
+    const DWORD bytesToRead =
+        std::min<DWORD>(status.cbInQue, static_cast<DWORD>(sizeof(buffer)));
+    if (!ReadFile(handle, buffer, bytesToRead, &bytesRead, nullptr)) {
+      break;
+    }
+    if (bytesRead == 0) {
+      continue;
+    }
+
+    readBuffer.append(buffer, static_cast<std::size_t>(bytesRead));
+    std::size_t newline = std::string::npos;
+    while ((newline = readBuffer.find('\n')) != std::string::npos) {
+      std::string line = readBuffer.substr(0, newline);
+      readBuffer.erase(0, newline + 1);
+      if (IsTeejusbFsrSerialLine(line)) {
+        matched = true;
+        break;
+      }
+    }
+  }
+
+  CloseHandle(handle);
+  return matched;
+}
+
+void AddWindowsComPortsFromDosDevices(std::vector<std::string>& ports) {
+  std::vector<wchar_t> devices(65536, L'\0');
+  const DWORD chars = QueryDosDeviceW(
+      nullptr, devices.data(), static_cast<DWORD>(devices.size()));
+  if (chars == 0) {
+    return;
+  }
+
+  const wchar_t* device = devices.data();
+  while (*device != L'\0') {
+    const std::wstring deviceName = device;
+    if (IsWindowsComDeviceName(deviceName)) {
+      AddWindowsPortName(deviceName, ports);
+    }
+    device += deviceName.size() + 1;
+  }
+}
+
+void AddWindowsResponsiveTeejusbPorts(std::vector<std::string>& ports) {
+  std::vector<std::string> candidates;
+  AddWindowsComPortsFromDosDevices(candidates);
+
+  std::sort(candidates.begin(), candidates.end());
+  candidates.erase(
+      std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+  for (const std::string& candidate : candidates) {
+    if (std::find(ports.begin(), ports.end(), candidate) != ports.end()) {
+      continue;
+    }
+    if (ProbeWindowsTeejusbPort(candidate)) {
+      ports.push_back(candidate);
+    }
+  }
+}
 #endif
 }  // namespace
 
@@ -380,12 +530,15 @@ TeejusbFsrManager::~TeejusbFsrManager() { CloseAllDevices(); }
 
 std::vector<std::string> TeejusbFsrManager::GetDevicePorts() const {
   std::vector<std::string> ports;
-#if defined(MACOSX)
+#if defined(_WIN32)
+  AddWindowsTeensyPortsFromRegistry(ports);
+  if (ports.empty()) {
+    AddWindowsResponsiveTeejusbPorts(ports);
+  }
+#elif defined(MACOSX)
   AddMatchingDevicePorts("/dev", {"cu.usbmodem"}, ports);
 #elif defined(UNIX)
   AddMatchingDevicePorts("/dev", {"ttyACM", "ttyUSB", "cu.usbmodem"}, ports);
-#elif defined(_WIN32)
-  AddWindowsTeensyPortsFromRegistry(ports);
 #endif
   std::sort(ports.begin(), ports.end());
   ports.erase(std::unique(ports.begin(), ports.end()), ports.end());
@@ -709,7 +862,7 @@ bool TeejusbFsrManager::OpenDevice(DeviceState& device) {
     return true;
   }
 
-#if defined(MACOSX) || defined(UNIX)
+#if (defined(MACOSX) || defined(UNIX)) && !defined(_WIN32)
   const int fd = open(device.port.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
   if (fd < 0) {
     SetStatus(device, "Open failed: " + std::string(std::strerror(errno)));
@@ -761,7 +914,7 @@ bool TeejusbFsrManager::OpenDevice(DeviceState& device) {
 }
 
 void TeejusbFsrManager::CloseDevice(DeviceState& device) {
-#if defined(MACOSX) || defined(UNIX)
+#if (defined(MACOSX) || defined(UNIX)) && !defined(_WIN32)
   if (device.fd >= 0) {
     close(static_cast<int>(device.fd));
   }
@@ -788,7 +941,7 @@ bool TeejusbFsrManager::WriteCommand(
     return false;
   }
 
-#if defined(MACOSX) || defined(UNIX)
+#if (defined(MACOSX) || defined(UNIX)) && !defined(_WIN32)
   std::string payload = command;
   if (payload.empty() || payload.back() != '\n') {
     payload += '\n';
@@ -853,7 +1006,7 @@ bool TeejusbFsrManager::WriteCommand(
 }
 
 void TeejusbFsrManager::ReadAvailableLines(DeviceState& device) {
-#if defined(MACOSX) || defined(UNIX)
+#if (defined(MACOSX) || defined(UNIX)) && !defined(_WIN32)
   if (device.fd < 0) {
     return;
   }
