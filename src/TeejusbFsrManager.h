@@ -67,8 +67,12 @@ class TeejusbFsrManager {
     std::string lastResponse;
     bool pendingThresholdLoad = false;
     bool pendingEepromSave = false;
+    bool pendingEepromFinalCommand = false;
+    int pendingEepromNextSensor = 0;
     std::array<int, NUM_SENSORS> values = {{0, 0, 0, 0}};
     std::array<int, NUM_SENSORS> thresholds = {{1000, 1000, 1000, 1000}};
+    std::array<int, NUM_SENSORS> pendingEepromThresholds =
+        {{1000, 1000, 1000, 1000}};
     std::chrono::steady_clock::time_point pendingCommandDeadline =
         std::chrono::steady_clock::time_point::min();
     std::chrono::steady_clock::time_point lastValueRequest =
@@ -88,6 +92,9 @@ class TeejusbFsrManager {
   void CloseDevice(DeviceState& device);
   void CloseAllDevices();
   bool WriteCommand(DeviceState& device, const std::string& command);
+  bool SendNextEepromSaveCommand(DeviceState& device);
+  void ResetPendingEepromSave(DeviceState& device);
+  void FlushDeviceInput(DeviceState& device);
   void ReadAvailableLines(DeviceState& device);
   void ProcessLine(DeviceState& device, const std::string& line);
   void MaybeRequestValues(DeviceState& device);
