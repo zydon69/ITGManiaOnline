@@ -618,7 +618,7 @@ Branch.AfterSelectMusic = function()
 	-- would be expected to pick the same song since it's broadcast to the library.
 	--
 	-- TODO: Consider locking the music wheel in this case.
-	local active, room, inactiveReason = HasActiveOnlineRoom({ phase = { "lobby", "lobby_ready", "config" } })
+	local active, room, inactiveReason = HasActiveOnlineRoom({ phase = { "lobby", "lobby_ready", "config", "results" } })
 	if active then
 		BranchTrace("AfterSelectMusic action=broadcast_song_selected"
 			.. " room=" .. tostring(ITGOnline.currentRoomId)

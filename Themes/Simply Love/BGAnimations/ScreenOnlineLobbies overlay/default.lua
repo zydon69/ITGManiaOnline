@@ -819,7 +819,12 @@ end
 				lobby_flow_trace("finish_leave_lobby_removed_stale_candidate code=" .. tostring(departed_lobby_code))
 			end
 			request_lobby_ui_repaint(root, "finish_leave_lobby")
-			lobby_flow_trace("finish_leave_lobby_refresh_skipped reason=client_leave_room_confirmed_already_refreshes")
+			lobby_flow_trace("finish_leave_lobby_refresh_requested reason=post_room_exit")
+			request_lobby_refresh("overlay_finish_leave_lobby", {
+				immediate = true,
+				forceFresh = true,
+				ignoreSuppression = true,
+			}, root)
 		local status = root:GetChild("NetworkStatus")
 		if status then status:visible(false) end
 		lobby_flow_trace("finish_leave_lobby_status_suppressed message=Salon quitte.")
@@ -4615,7 +4620,12 @@ local af = Def.ActorFrame{
 						})
 					end
 					lobby_flow_trace("refresh_lobby_after_leave delegated=request_helper")
-					request_lobby_refresh("overlay_post_leave_command", { delay=0.20 }, self)
+					request_lobby_refresh("overlay_post_leave_command", {
+						immediate=true,
+						delay=0.20,
+						forceFresh=true,
+						ignoreSuppression=true,
+					}, self)
 				end,
 				RetryLobbyRefreshCommand=function(self)
 					SL.Global.Online = SL.Global.Online or {}

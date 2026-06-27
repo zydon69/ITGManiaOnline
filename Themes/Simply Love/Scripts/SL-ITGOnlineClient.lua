@@ -2352,6 +2352,7 @@ end
 		if options.immediate == true then
 			online_flow_trace("lobby_refresh_requested source=" .. source
 				.. " mode=immediate"
+				.. " forceFresh=" .. tostring(options.forceFresh == true)
 				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 				.. " inFlight=" .. tostring(self.lobbyRefreshInFlight == true)
 				.. " queued=" .. tostring(self.lobbyRefreshQueued == true)
@@ -2359,7 +2360,11 @@ end
 				.. " automaticSuppressed=" .. tostring(self:IsAutomaticLobbyRefreshSuppressed() == true)
 				.. " suppressed=" .. tostring(self:IsLobbyRefreshSuppressed() == true)
 				.. " screen=" .. tostring(self.currentScreenName or "nil"))
-			self:QueueLobbyRefresh({ reason = source })
+			self:QueueLobbyRefresh({
+				reason = source,
+				forceFresh = options.forceFresh == true,
+				ignoreSuppression = options.ignoreSuppression == true,
+			})
 			return true
 		end
 
@@ -2727,10 +2732,15 @@ end
 function ITGOnline:CancelScreenBoundRequests()
 	local cancelledAny = false
 	local cancelledCount = 0
+	local cancelledLobbyRequest = false
 	for requestId, request in pairs(self.requests or {}) do
 		if request.cancelOnScreenChange == true and request.screenGeneration ~= self.screenGeneration then
 			request.cancelled = true
 			cancelledCount = cancelledCount + 1
+			local requestPath = tostring(request.path or "")
+			if requestPath:match("^/lobby") or requestPath:find("/lobby?", 1, true) then
+				cancelledLobbyRequest = true
+			end
 			online_flow_trace("screen_bound_request_cancelled id=" .. tostring(requestId)
 				.. " traceId=" .. tostring(request.traceId or "nil")
 				.. " method=" .. tostring(request.method or "nil")
@@ -2749,9 +2759,17 @@ function ITGOnline:CancelScreenBoundRequests()
 	if cancelledAny then
 		self.requestCancelGeneration = (tonumber(self.requestCancelGeneration) or 0) + 1
 		self.needsSyncAfterScreenCancel = true
+		if cancelledLobbyRequest then
+			self.lobbyRefreshInFlight = false
+			self.lobbyRefreshQueued = true
+			self.lobbyRefreshQueuedReason = "screen_bound_lobby_request_cancelled"
+			self.lobbyRefreshQueuedAt = GetTimeSinceStart()
+		end
 		online_flow_trace("screen_bound_requests_cancelled count=" .. tostring(cancelledCount)
 			.. " newCancelGeneration=" .. tostring(self.requestCancelGeneration)
 			.. " needsSyncAfterScreenCancel=true"
+			.. " cancelledLobbyRequest=" .. tostring(cancelledLobbyRequest == true)
+			.. " lobbyRefreshInFlight=" .. tostring(self.lobbyRefreshInFlight == true)
 			.. " disconnecting=" .. tostring(self.disconnecting == true))
 		if not self.disconnecting and self.Sync then
 			self:Sync()
@@ -3255,6 +3273,9 @@ function ITGOnline:ExpireOnlineOptionsReady(source, callback)
 	self.onlineOptionsReadyExitSuppressedKey = key
 	online_flow_trace("options_ready_deadline_expired source=" .. tostring(source or "unknown")
 		.. " key=" .. tostring(key))
+	if self.QueuePostRoomExitLobbyRefresh then
+		self:QueuePostRoomExitLobbyRefresh("options_ready_timeout:" .. tostring(source or "unknown"), 0.35)
+	end
 
 	MESSAGEMAN:Broadcast("OnlineResponseStatus", {
 		event = "ready",
@@ -3267,6 +3288,9 @@ function ITGOnline:ExpireOnlineOptionsReady(source, callback)
 			self.onlineOptionsReadyTimeoutInFlightKey = ""
 		end
 		self:ClearOnlineOptionsReadyDeadline("timeout_leave")
+		if ok and self.QueuePostRoomExitLobbyRefresh then
+			self:QueuePostRoomExitLobbyRefresh("options_ready_timeout_leave_confirmed", 0.20)
+		end
 		if callback then callback(ok, decoded, response) end
 	end)
 end
@@ -5724,6 +5748,14 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 
 	if self:IsOnlineOptionsScreen(screenName) and phase == "results" and self.songSelectionInFlightKey ~= "" then
 		online_flow_trace("preferred=nil reason=options_during_song_selection playState=" .. tostring(playState)
+			.. " selectionKey=" .. tostring(self.songSelectionInFlightKey))
+		return nil
+	end
+
+	if phase == "results" and self.songSelectionInFlightKey ~= "" then
+		online_flow_trace("preferred=nil reason=results_during_song_selection"
+			.. " screen=" .. tostring(screenName or "nil")
+			.. " playState=" .. tostring(playState)
 			.. " selectionKey=" .. tostring(self.songSelectionInFlightKey))
 		return nil
 	end
@@ -11337,6 +11369,37 @@ function ITGOnline:PurgeStaleLobbyCandidate(roomId, reason)
 	return removed
 end
 
+function ITGOnline:ResetPostRoomExitLobbyRefreshState(reason)
+	local source = tostring(reason or "unknown")
+	self.lobbyRefreshInFlight = false
+	self.lobbyRefreshQueued = false
+	self.lobbyRefreshQueuedReason = ""
+	self.lobbyRefreshQueuedAt = 0
+	self.lobbyRefreshDeferredScheduled = false
+	self.deferredLobbyRefreshReason = ""
+	self.deferredLobbyRefreshRoomUiGeneration = nil
+	self.lobbyRefreshSuppressedUntil = nil
+	self.lobbyRefreshDropUntil = nil
+	self.postRoomExitLobbyRefreshPending = true
+	self.postRoomExitLobbyRefreshReason = source
+	self.postRoomExitLobbyRefreshRequestedAt = GetTimeSinceStart()
+	online_flow_trace("post_room_exit_lobby_refresh_state_reset reason=" .. source
+		.. " screen=" .. tostring(self.currentScreenName or "nil")
+		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+end
+
+function ITGOnline:QueuePostRoomExitLobbyRefresh(reason, delay)
+	local source = tostring(reason or self.postRoomExitLobbyRefreshReason or "unknown")
+	self:ResetPostRoomExitLobbyRefreshState(source)
+	local refreshDelay = math.max(0.05, tonumber(delay) or 0.20)
+	online_flow_trace("post_room_exit_lobby_refresh_scheduled reason=" .. source
+		.. " delay=" .. tostring(refreshDelay)
+		.. " screen=" .. tostring(self.currentScreenName or "nil"))
+	self:ScheduleDeferredLobbyRefresh(refreshDelay, "post_room_exit:" .. source)
+	return true
+end
+
 function ITGOnline:ShouldSuppressLobbyCandidate(roomId, reason)
 	local roomKey = self:RoomKey(roomId)
 	if roomKey == "" then
@@ -11361,6 +11424,9 @@ end
 		local ignoreSuppression = options.ignoreSuppression == true
 		local refreshReason = tostring(options.reason or "unknown")
 		local refreshScreen = tostring(self.currentScreenName or "nil")
+		local forceFresh = options.forceFresh == true
+			or refreshReason:match("^post_room_exit:") ~= nil
+			or (self.currentRoomId == nil and self:IsOnlineLobbyScreen(refreshScreen) and refreshReason:match("refresh") ~= nil)
 		local refreshIsGameplay = self:IsOnlineGameplayScreen(refreshScreen)
 		local now = GetTimeSinceStart()
 		local recentRoomSnapshotAge = now - (tonumber(self.lastAuthoritativeRoomSnapshotAt) or 0)
@@ -11406,8 +11472,25 @@ end
 			.. " deferred=" .. tostring(self.lobbyRefreshDeferredScheduled == true)
 			.. " reason=" .. refreshReason
 			.. " ignoreSuppression=" .. tostring(ignoreSuppression == true)
+			.. " forceFresh=" .. tostring(forceFresh == true)
 			.. " autoSuppressed=" .. tostring(self:IsAutomaticLobbyRefreshSuppressed() == true)
 			.. " suppressed=" .. tostring(self:IsLobbyRefreshSuppressed() == true))
+		if forceFresh then
+			self.lobbyRefreshSuppressedUntil = nil
+			self.lobbyRefreshDropUntil = nil
+			if self.lobbyRefreshInFlight then
+				online_flow_trace("lobby_refresh_force_fresh_reset_inflight reason=" .. refreshReason
+					.. " queuedReason=" .. tostring(self.lobbyRefreshQueuedReason or "nil")
+					.. " screen=" .. refreshScreen)
+				self.lobbyRefreshInFlight = false
+			end
+			self.lobbyRefreshQueued = false
+			self.lobbyRefreshQueuedReason = ""
+			self.lobbyRefreshQueuedAt = 0
+			self.lobbyRefreshDeferredScheduled = false
+			self.deferredLobbyRefreshReason = ""
+			self.deferredLobbyRefreshRoomUiGeneration = nil
+		end
 		if not ignoreSuppression and self:IsAutomaticLobbyRefreshSuppressed() then
 			local remaining = math.max(0.05, (tonumber(self.lobbyRefreshDropUntil) or 0) - GetTimeSinceStart() + 0.05)
 			online_flow_trace("lobby_refresh_deferred reason=post_leave_auto_suppressed delay=" .. tostring(remaining))
@@ -11478,6 +11561,10 @@ end
 			.. " purpose=" .. tostring(refreshPurpose))
 		self:FetchLobby(function(ok, decoded)
 			self.lobbyRefreshInFlight = false
+			if forceFresh then
+				self.postRoomExitLobbyRefreshPending = false
+				self.postRoomExitLobbyRefreshReason = ""
+			end
 			if self.disconnecting or not self.token then
 				self.lobbyRefreshQueued = false
 				self.lobbyRefreshQueuedReason = ""
@@ -12113,6 +12200,13 @@ function ITGOnline:ClearCurrentRoomState(source)
 	self:ClearOptimisticConfigReady(source or "clear_room")
 	self:ClearOnlineOptionsReadyDeadline(source or "clear_room")
 	self:ClearPendingConfigReadyIntent(source or "clear_room")
+	local sourceKey = tostring(source or "")
+	if sourceKey:find("leave", 1, true)
+		or sourceKey:find("left", 1, true)
+		or sourceKey:find("timeout", 1, true)
+		or sourceKey:find("deleted", 1, true) then
+		self:ResetPostRoomExitLobbyRefreshState(sourceKey)
+	end
 	online_flow_trace("clear_current_room_state_end source=" .. tostring(source or "unknown")
 		.. " previousRoomId=" .. tostring(previousRoomId or "nil")
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")

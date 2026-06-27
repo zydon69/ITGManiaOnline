@@ -1149,9 +1149,15 @@ CurrentOnlineSelectionKey = function()
 	return tostring(ITGOnline.currentRoomId) .. "|" .. tostring(songKey) .. "|" .. tostring(stepsHash) .. "|" .. tostring(rate)
 end
 
+local onlineSongSelectionAllowedPhases = { "lobby", "lobby_ready", "config", "results" }
+
 SelectOnlineSongAsManager = function(actor)
-	if not current_room_is_active({ phase = { "lobby", "lobby_ready", "config" } }) then
-		online_flow_trace("song_selected_ignored reason=no_room")
+	local active, activeRoom, inactiveReason = current_room_is_active({ phase = onlineSongSelectionAllowedPhases })
+	if not active then
+		online_flow_trace("song_selected_ignored reason=no_room"
+			.. " inactiveReason=" .. tostring(inactiveReason or "nil")
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(activeRoom and activeRoom.phase or ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 		return
 	end
 
@@ -1188,7 +1194,7 @@ SelectOnlineSongAsManager = function(actor)
 			return
 		end
 
-		if not room_context_still_active(selectionContext, { phase = { "lobby", "lobby_ready", "config" } }) then
+		if not room_context_still_active(selectionContext, { phase = onlineSongSelectionAllowedPhases }) then
 			clearPendingSelection()
 			online_flow_trace("song_selected_ignored reason=stale_room_after_room_sync key=" .. tostring(selectionKey))
 			return
@@ -1239,7 +1245,7 @@ SelectOnlineSongAsManager = function(actor)
 		})
 
 		ITGOnline:SelectSongAndMarkLobbyReady(function(ok, decoded, response)
-			if not room_context_still_active(selectionContext, { phase = { "lobby", "lobby_ready", "config" } }) then
+			if not room_context_still_active(selectionContext, { phase = onlineSongSelectionAllowedPhases }) then
 				clearPendingSelection()
 				online_flow_trace("song_selected_callback_ignored reason=stale_room key=" .. tostring(selectionKey))
 				return
@@ -1274,7 +1280,7 @@ SelectOnlineSongAsManager = function(actor)
 		online_flow_trace("song_selected_sync_room_begin room=" .. tostring(ITGOnline.currentRoomId or "nil")
 			.. " key=" .. tostring(selectionKey))
 		ITGOnline:EnsureCurrentRoom(function(ok, room, response)
-			if not room_context_still_active(selectionContext, { phase = { "lobby", "lobby_ready", "config" } }) then
+			if not room_context_still_active(selectionContext, { phase = onlineSongSelectionAllowedPhases }) then
 				clearPendingSelection()
 				online_flow_trace("song_selected_sync_room_ignored reason=stale_context key=" .. tostring(selectionKey))
 				return
@@ -2636,7 +2642,11 @@ CreateOnlineHandler = function()
 								ITGOnline.roomUiLobbyRefreshDeferredScheduled = false
 								ITGOnline.deferredLobbyRefreshReason = ""
 								ITGOnline.deferredLobbyRefreshRoomUiGeneration = nil
-								ITGOnline:QueueLobbyRefresh({ reason = fireReason })
+								ITGOnline:QueueLobbyRefresh({
+									reason = fireReason,
+									forceFresh = fireReason:match("^post_room_exit:") ~= nil,
+									ignoreSuppression = fireReason:match("^post_room_exit:") ~= nil,
+								})
 							end
 						end,
 						RealtimeDeadmanCommand=function(self)
@@ -2880,6 +2890,18 @@ CreateOnlineHandler = function()
 						ITGOnline:NoteScreenChanged(screenName)
 						if ITGOnline.ConsumeNeedsSyncAfterScreenCancel and ITGOnline:ConsumeNeedsSyncAfterScreenCancel() and ITGOnline.Sync then
 							ITGOnline:Sync()
+						end
+						if screenName == "ScreenOnlineLobbies"
+							and ITGOnline.postRoomExitLobbyRefreshPending == true
+							and ITGOnline.currentRoomId == nil
+							and ITGOnline.QueuePostRoomExitLobbyRefresh then
+							online_flow_trace("screen_changed_post_room_exit_refresh"
+								.. " reason=" .. tostring(ITGOnline.postRoomExitLobbyRefreshReason or "unknown")
+								.. " inFlight=" .. tostring(ITGOnline.lobbyRefreshInFlight == true)
+								.. " queued=" .. tostring(ITGOnline.lobbyRefreshQueued == true))
+							ITGOnline:QueuePostRoomExitLobbyRefresh(
+								ITGOnline.postRoomExitLobbyRefreshReason or "screen_changed_to_lobby",
+								0.12)
 						end
 					end
 					startHoldTime = { ["P1"] = 0, ["P2"] = 0 }
@@ -3479,6 +3501,9 @@ CreateOnlineHandler = function()
 						self.inLobby = false
 						clear_room_async_state(self)
 						clear_room_input_state("lobby_left")
+						if ITGOnline and ITGOnline.QueuePostRoomExitLobbyRefresh then
+							ITGOnline:QueuePostRoomExitLobbyRefresh("online_lobby_left_message", 0.20)
+						end
 						if online_trace then
 							online_trace("FLOW OnlineLobbyLeftMessage handler_end")
 						end
@@ -4117,6 +4142,9 @@ CreateOnlineHandler = function()
 										self.inLobby = false
 										clear_room_async_state(self)
 										clear_room_input_state("leave_lobby_confirmed")
+										if ITGOnline and ITGOnline.QueuePostRoomExitLobbyRefresh then
+											ITGOnline:QueuePostRoomExitLobbyRefresh("leave_lobby_confirmed_callback", 0.20)
+										end
 										if alreadyLeftHandled then
 											if online_trace then
 												online_trace("FLOW LeaveLobbyMessage broadcast_OnlineLobbyLeft_skipped reason=already_left")
