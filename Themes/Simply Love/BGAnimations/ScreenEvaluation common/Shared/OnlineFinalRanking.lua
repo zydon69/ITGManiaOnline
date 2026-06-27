@@ -24,6 +24,36 @@ local function final_ranking_trace(message)
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
 
+local function final_ranking_row_summary(row, index)
+	if type(row) ~= "table" then return tostring(index or "?") .. ":invalid" end
+	local user = type(row.user) == "table" and row.user or {}
+	return table.concat({
+		tostring(index or ""),
+		tostring(row.rank or ""),
+		tostring(user.id or row.user_id or row.player_id or ""),
+		tostring(row.name or user.display_name or user.displayName or user.name or ""),
+		tostring(row.displayed_percent or row.displayedPercent or ""),
+		tostring(row.score_percent or row.scorePercent or ""),
+		tostring(row.accuracy or ""),
+		tostring(row.score or ""),
+		tostring(row.failed == true),
+		tostring(row.source or ""),
+	}, ":")
+end
+
+local function final_ranking_rows_summary(rows)
+	if type(rows) ~= "table" then return "none" end
+	local parts = {}
+	local count = math.min(#rows, max_rows)
+	for index = 1, count do
+		parts[#parts + 1] = final_ranking_row_summary(rows[index], index)
+	end
+	if #rows > count then
+		parts[#parts + 1] = "more=" .. tostring(#rows - count)
+	end
+	return table.concat(parts, ",")
+end
+
 local function has_final_ranking_context()
 	if not ITGOnline then return false end
 	return ITGOnline.currentRoom ~= nil or ITGOnline.currentRoomId ~= nil
@@ -66,7 +96,8 @@ local function final_results()
 	final_ranking_trace("final_results_begin raw=" .. tostring(#results)
 		.. " room=" .. tostring(roomId or "nil")
 		.. " phase=" .. tostring(phase or "nil")
-		.. " source=" .. tostring(source))
+		.. " source=" .. tostring(source)
+		.. " rawRowsSummary=" .. final_ranking_rows_summary(results))
 	local normalized = {}
 	for index, result in ipairs(results) do
 		if type(result) == "table" then
@@ -100,7 +131,8 @@ local function final_results()
 	end)
 
 	final_ranking_trace("final_results_end rows=" .. tostring(#normalized)
-		.. " source=" .. tostring(source))
+		.. " source=" .. tostring(source)
+		.. " normalizedRowsSummary=" .. final_ranking_rows_summary(normalized))
 	for index, row in ipairs(normalized) do
 		final_ranking_trace("final_result_row"
 			.. " index=" .. tostring(index)
@@ -193,7 +225,9 @@ local t = Def.ActorFrame{
 			.. " rows=" .. tostring(#rows)
 			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
-			.. " polling=" .. tostring(self.polling_active == true))
+			.. " polling=" .. tostring(self.polling_active == true)
+			.. " signature=" .. tostring(signature)
+			.. " rowsSummary=" .. final_ranking_rows_summary(rows))
 
 		if show then
 			self:GetChild("Title"):settext(localized("OnlineFinalRanking", "Online ranking"))
@@ -208,8 +242,20 @@ local t = Def.ActorFrame{
 					row:maxwidth((width - 20) / row_zoom)
 					row:diffuse(data.failed and color("#ff3b30") or Color.White)
 					row:visible(true)
+					final_ranking_trace("row_visible"
+						.. " slot=" .. tostring(i)
+						.. " rank=" .. tostring(data.rank or "nil")
+						.. " user=" .. tostring(data.user_id or "nil")
+						.. " name=" .. tostring(data.name or "nil")
+						.. " displayed_percent=" .. tostring(data.displayed_percent or "nil")
+						.. " score_percent=" .. tostring(data.score_percent or "nil")
+						.. " accuracy=" .. tostring(data.accuracy or "nil")
+						.. " score=" .. tostring(data.score or "nil")
+						.. " failed=" .. tostring(data.failed == true)
+						.. " source=" .. tostring(data.source or "nil"))
 				elseif row then
 					row:visible(false)
+					final_ranking_trace("row_hidden slot=" .. tostring(i))
 				end
 			end
 		end

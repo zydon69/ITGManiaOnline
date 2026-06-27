@@ -16,6 +16,8 @@ local lastDisconnectCountdown = nil
 local lastSongPreviewSentAt = 0
 local lastSongPreviewKey = ""
 local lastOnlineOptionsSongKey = ""
+local onlineOptionsRedirectedSelectionKey = ""
+local onlineOptionsRedirectedAt = 0
 local lastOnlineGameplayRoomId = nil
 local pendingOnlineStartRoomId = nil
 local pendingConfigReady = nil
@@ -190,11 +192,44 @@ function screen_name(screen)
 	return ok and tostring(name or "NoScreen") or "NoScreen"
 end
 
-function screen_can_transition(screen)
-	return screen and screen.SetNextScreenName and screen.StartTransitioningScreen
-end
+	function screen_can_transition(screen)
+		return screen and screen.SetNextScreenName and screen.StartTransitioningScreen
+	end
 
-function transition_screen(screen, nextScreen, message, context)
+	local function online_selected_song_field(song, snakeKey, camelKey)
+		if type(song) ~= "table" then return "" end
+		local value = song[snakeKey]
+		if value == nil and camelKey then value = song[camelKey] end
+		return tostring(value or "")
+	end
+
+	local function current_online_options_redirect_key()
+		local room = ITGOnline and ITGOnline.currentRoom or nil
+		local selectedSong = room and room.selected_song or ITGOnline and ITGOnline.currentSongPayload or nil
+		local roomId = tostring(ITGOnline and ITGOnline.currentRoomId or room and room.id or "")
+		local selectedAt = online_selected_song_field(selectedSong, "selected_at", "selectedAt")
+		local selectionId = tostring(room and (room.current_selection_id or room.currentSelectionId) or "")
+		local songHash = online_selected_song_field(selectedSong, "song_hash", "songHash")
+		local chartHash = online_selected_song_field(selectedSong, "chart_hash", "chartHash")
+		local title = online_selected_song_field(selectedSong, "title")
+		local key = table.concat({ roomId, selectionId, selectedAt, songHash, chartHash }, "|")
+		local valid = roomId ~= "" and type(selectedSong) == "table" and (
+			selectionId ~= "" or selectedAt ~= "" or songHash ~= "" or chartHash ~= ""
+		)
+		return key, valid, selectedSong, title
+	end
+
+	local function reset_online_options_redirect_guard(reason)
+		if onlineOptionsRedirectedSelectionKey ~= "" then
+			online_flow_trace("transition_to_options_guard_reset reason=" .. tostring(reason or "unknown")
+				.. " previousKey=" .. tostring(onlineOptionsRedirectedSelectionKey)
+				.. " age=" .. tostring(GetTimeSinceStart() - (tonumber(onlineOptionsRedirectedAt) or 0)))
+		end
+		onlineOptionsRedirectedSelectionKey = ""
+		onlineOptionsRedirectedAt = 0
+	end
+
+	function transition_screen(screen, nextScreen, message, context)
 	if not screen_can_transition(screen) then
 		online_flow_trace("transition_skipped reason=screen_cannot_transition context="
 			.. tostring(context or "unknown")
@@ -243,12 +278,20 @@ local function transition_evaluation_to_lobby(topScreen, reason)
 		ITGOnline.onlineEvaluationExitRequested = true
 		ITGOnline.onlineEvaluationExitRequestedAt = now
 	end
+	local summary = ITGOnline and ITGOnline.PlayStateSummary and ITGOnline:PlayStateSummary(ITGOnline.currentRoom) or nil
+	local cache = ITGOnline and ITGOnline.GetFinalLeaderboardCache and ITGOnline:GetFinalLeaderboardCache(roomId) or nil
 
 	online_flow_trace("evaluation_exit_transition_begin"
 		.. " room=" .. tostring(roomId)
 		.. " from=" .. tostring(fromScreen)
 		.. " to=ScreenOnlineLobbies"
 		.. " phase=" .. tostring(phase)
+		.. " players=" .. tostring(summary and summary.players or "nil")
+		.. " terminal=" .. tostring(summary and summary.terminal or "nil")
+		.. " finalResults=" .. tostring(summary and summary.finalResults or "nil")
+		.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true)
+		.. " cacheRows=" .. tostring(cache and cache.rows and #cache.rows or 0)
+		.. " cacheSource=" .. tostring(cache and cache.source or "nil")
 		.. " source=" .. tostring(reason or "input"))
 
 	-- For online evaluation, direct navigation is intentional. The normal
@@ -950,52 +993,93 @@ ApplyOnlineSongSelection = function(songInfo)
 	return true
 end
 
-TransitionToOnlineOptions = function()
-	local topScreen = current_top_screen()
-	if not topScreen then return end
-
-	local roomPhase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
-	if not current_room_is_active({ phase = "config" }) then
-		if online_trace then
-			online_trace("FLOW transition_to_options_skipped reason=phase_not_config"
-				.. " phase=" .. tostring(roomPhase))
+	TransitionToOnlineOptions = function()
+		local topScreen = current_top_screen()
+		if not topScreen then
+			online_flow_trace("transition_to_options_skipped reason=no_top_screen")
+			return
 		end
-		return
-	end
+
+		local roomPhase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
+		local redirectSelectionKey, redirectSelectionKeyValid, selectedSong, selectedTitle = current_online_options_redirect_key()
+		local screenName = topScreen:GetName()
+		online_flow_trace("transition_to_options_decision_begin"
+			.. " from=" .. tostring(screenName)
+			.. " phase=" .. tostring(roomPhase)
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " key=" .. tostring(redirectSelectionKey)
+			.. " keyValid=" .. tostring(redirectSelectionKeyValid == true)
+			.. " previousRedirectKey=" .. tostring(onlineOptionsRedirectedSelectionKey or "")
+			.. " hasSelectedSong=" .. tostring(type(selectedSong) == "table")
+			.. " title=" .. tostring(selectedTitle or ""))
+		if not current_room_is_active({ phase = "config" }) then
+			if online_trace then
+				online_trace("FLOW transition_to_options_skipped reason=phase_not_config"
+					.. " from=" .. tostring(screenName)
+					.. " phase=" .. tostring(roomPhase)
+					.. " key=" .. tostring(redirectSelectionKey))
+			end
+			return
+		end
 	if ITGOnline
 		and ITGOnline.currentRoom
 		and ITGOnline.IsCurrentUserReadyInRoom
 		and ITGOnline:IsCurrentUserReadyInRoom(ITGOnline.currentRoom, "config_ready") then
-		if online_trace then
-			online_trace("FLOW transition_to_options_skipped reason=current_user_already_config_ready"
-				.. " phase=" .. tostring(roomPhase)
-				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
+			if online_trace then
+				online_trace("FLOW transition_to_options_skipped reason=current_user_already_config_ready"
+					.. " phase=" .. tostring(roomPhase)
+					.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+					.. " key=" .. tostring(redirectSelectionKey))
+			end
+			return
 		end
-		return
-	end
 
-	local screenName = topScreen:GetName()
-	if screenName == "ScreenPlayerOptions"
-		or screenName == "ScreenPlayerOptions2"
-		or screenName == "ScreenPlayerOptions3"
-		or screenName == "ScreenGameplay"
-		or screenName == "ScreenGameplayShared" then
-		return
-	end
+		if screenName == "ScreenPlayerOptions"
+			or screenName == "ScreenPlayerOptions2"
+			or screenName == "ScreenPlayerOptions3"
+			or screenName == "ScreenGameplay"
+			or screenName == "ScreenGameplayShared" then
+			online_flow_trace("transition_to_options_skipped reason=already_on_blocked_screen"
+				.. " screen=" .. tostring(screenName)
+				.. " phase=" .. tostring(roomPhase)
+				.. " key=" .. tostring(redirectSelectionKey))
+			return
+		end
 
-	if is_evaluation_screen(screenName) then
-		if online_trace then
+		if is_evaluation_screen(screenName) then
+			if online_trace then
 			online_trace("FLOW transition_to_options_deferred reason=evaluation_screen"
 				.. " screen=" .. tostring(screenName)
 				.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"))
+			end
+			return
 		end
-		return
-	end
 
-	if online_trace then
-		online_trace("FLOW transition_to_options from=" .. tostring(screenName)
-			.. " phase=" .. tostring(roomPhase))
-	end
+		if not redirectSelectionKeyValid then
+			online_flow_trace("transition_to_options_skipped reason=invalid_selection_key"
+				.. " from=" .. tostring(screenName)
+				.. " phase=" .. tostring(roomPhase)
+				.. " key=" .. tostring(redirectSelectionKey)
+				.. " hasSelectedSong=" .. tostring(type(selectedSong) == "table"))
+			return
+		end
+
+		if redirectSelectionKey == onlineOptionsRedirectedSelectionKey then
+			if online_trace then
+				online_trace("FLOW transition_to_options_skipped reason=selection_already_redirected"
+					.. " from=" .. tostring(screenName)
+					.. " phase=" .. tostring(roomPhase)
+					.. " key=" .. tostring(redirectSelectionKey)
+					.. " age=" .. tostring(GetTimeSinceStart() - (tonumber(onlineOptionsRedirectedAt) or 0)))
+			end
+			return
+		end
+
+		if online_trace then
+			online_trace("FLOW transition_to_options from=" .. tostring(screenName)
+				.. " phase=" .. tostring(roomPhase)
+				.. " key=" .. tostring(redirectSelectionKey))
+		end
 	if ITGOnline and ITGOnline.TraceOnlineState then
 		ITGOnline:TraceOnlineState("screen_transition_to_options", {
 			source = "TransitionToOnlineOptions",
@@ -1011,14 +1095,20 @@ TransitionToOnlineOptions = function()
 		end
 		return
 	end
-	safe_broadcast("OnlineOptionsRedirectWait", {
-		show=false,
-		reason="transition_to_options",
-		screen=screenName,
-		phase=roomPhase,
-	})
-	transition_screen(topScreen, "ScreenPlayerOptions", "SM_GoToNextScreen", "online_options")
-end
+		safe_broadcast("OnlineOptionsRedirectWait", {
+			show=false,
+			reason="transition_to_options",
+			screen=screenName,
+			phase=roomPhase,
+		})
+		onlineOptionsRedirectedSelectionKey = redirectSelectionKey
+		onlineOptionsRedirectedAt = GetTimeSinceStart()
+		online_flow_trace("transition_to_options_guard_set"
+			.. " key=" .. tostring(onlineOptionsRedirectedSelectionKey)
+			.. " from=" .. tostring(screenName)
+			.. " target=ScreenPlayerOptions")
+		transition_screen(topScreen, "ScreenPlayerOptions", "SM_GoToNextScreen", "online_options")
+	end
 
 OnlineDeferredReplayBlockedScreen = function(screenName)
 	screenName = tostring(screenName or "")
@@ -1358,9 +1448,17 @@ ReturnToOnlineLobbyFromEvaluation = function(reason)
 		ITGOnline.onlineEvaluationExitRequestedAt = GetTimeSinceStart()
 	end
 	if online_trace then
+		local summary = ITGOnline and ITGOnline.PlayStateSummary and ITGOnline:PlayStateSummary(ITGOnline.currentRoom) or nil
+		local cache = ITGOnline and ITGOnline.GetFinalLeaderboardCache and ITGOnline:GetFinalLeaderboardCache(ITGOnline.currentRoomId) or nil
 		online_trace("FLOW evaluation_exit_requested reason=" .. tostring(reason or "input")
 			.. " screen=" .. tostring(topScreen:GetName())
-			.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or ITGOnline.currentRoomPhase))
+			.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or ITGOnline.currentRoomPhase)
+			.. " players=" .. tostring(summary and summary.players or "nil")
+			.. " terminal=" .. tostring(summary and summary.terminal or "nil")
+			.. " finalResults=" .. tostring(summary and summary.finalResults or "nil")
+			.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true)
+			.. " cacheRows=" .. tostring(cache and cache.rows and #cache.rows or 0)
+			.. " cacheSource=" .. tostring(cache and cache.source or "nil"))
 	end
 	if ITGOnline and ITGOnline.TraceOnlineState then
 		ITGOnline:TraceOnlineState("screen_transition_evaluation_to_lobby", {
@@ -1593,6 +1691,8 @@ DisplayLobbyState = function(data, actor)
 	}, "|")
 	if flowLobbyKey ~= lastFlowLobbyKey then
 		lastFlowLobbyKey = flowLobbyKey
+		local summary = ITGOnline and ITGOnline.PlayStateSummary and ITGOnline:PlayStateSummary(ITGOnline.currentRoom) or nil
+		local cache = ITGOnline and ITGOnline.GetFinalLeaderboardCache and ITGOnline:GetFinalLeaderboardCache(data and data.roomId) or nil
 		online_flow_trace(flowContext .. "_state_begin"
 			.. " roomId=" .. tostring(data and data.roomId or "nil")
 			.. " code=" .. tostring(data and data.code or "nil")
@@ -1601,6 +1701,12 @@ DisplayLobbyState = function(data, actor)
 			.. " players=" .. tostring(data and data.players and #data.players or 0)
 			.. " sessions=" .. tostring(data and data.playState and #(data.playState.sessions or {}) or 0)
 			.. " finalResults=" .. tostring(data and data.finalResults and #data.finalResults or 0)
+			.. " currentSummaryPlayers=" .. tostring(summary and summary.players or "nil")
+			.. " currentSummaryTerminal=" .. tostring(summary and summary.terminal or "nil")
+			.. " currentSummaryFinalResults=" .. tostring(summary and summary.finalResults or "nil")
+			.. " currentSummaryFinalReady=" .. tostring(summary and summary.finalResultsReady == true)
+			.. " cacheRows=" .. tostring(cache and cache.rows and #cache.rows or 0)
+			.. " cacheSource=" .. tostring(cache and cache.source or "nil")
 			.. " hasSongInfo=" .. tostring(data and data.songInfo ~= nil)
 			.. " isManager=" .. tostring(data and data.isManager == true)
 			.. " actorInLobby=" .. tostring(actor.inLobby == true))
@@ -1873,8 +1979,21 @@ DisplayLobbyState = function(data, actor)
 			local songKey = OnlineSongKey(data)
 			local shouldApplyInLobby = (data.phase == "lobby_ready" or data.phase == "config")
 				and CurrentUserInLobbyState(data)
-			if shouldApplyInLobby and songKey ~= "" and songKey ~= lastOnlineOptionsSongKey then
-				if is_evaluation_screen(screenName) then
+				if shouldApplyInLobby and songKey ~= "" and songKey ~= lastOnlineOptionsSongKey then
+					local redirectKey, redirectKeyValid = current_online_options_redirect_key()
+					if redirectKeyValid and redirectKey ~= onlineOptionsRedirectedSelectionKey then
+						reset_online_options_redirect_guard("display_lobby_new_selection")
+					end
+					online_flow_trace("song_selection_apply_decision"
+						.. " screen=" .. tostring(screenName)
+						.. " phase=" .. tostring(data.phase)
+						.. " songKey=" .. tostring(songKey)
+						.. " lastOptionsSongKey=" .. tostring(lastOnlineOptionsSongKey)
+						.. " redirectKey=" .. tostring(redirectKey)
+						.. " redirectKeyValid=" .. tostring(redirectKeyValid == true)
+						.. " redirectedKey=" .. tostring(onlineOptionsRedirectedSelectionKey)
+						.. " shouldApplyInLobby=" .. tostring(shouldApplyInLobby == true))
+					if is_evaluation_screen(screenName) then
 					online_flow_trace("song_selection_apply_from_evaluation"
 						.. " screen=" .. tostring(screenName)
 						.. " phase=" .. tostring(data.phase)
@@ -2206,7 +2325,8 @@ end
 	pendingManagerAutoReadyRetryPhase = ""
 	pendingOnlineStartRoomId = nil
 	lastOnlineGameplayRoomId = nil
-	lastOnlineOptionsSongKey = ""
+		lastOnlineOptionsSongKey = ""
+	reset_online_options_redirect_guard("clear_room_async_state")
 	replayDeferredLobbyStateQueued = false
 	replayDeferredLobbyStateRunning = false
 	clear_pending_room_state()
@@ -2766,10 +2886,18 @@ CreateOnlineHandler = function()
 					if evaluationScreens[screenName] and screen then
 						isWaiting = false
 						UnlockOnlineInput()
+						local summary = ITGOnline and ITGOnline.PlayStateSummary and ITGOnline:PlayStateSummary(ITGOnline.currentRoom) or nil
+						local cache = ITGOnline and ITGOnline.GetFinalLeaderboardCache and ITGOnline:GetFinalLeaderboardCache(ITGOnline.currentRoomId) or nil
 						if online_trace then
 							online_trace("FLOW evaluation_screen_unlocked screen=" .. tostring(screenName)
 								.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-								.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+								.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+								.. " players=" .. tostring(summary and summary.players or "nil")
+								.. " terminal=" .. tostring(summary and summary.terminal or "nil")
+								.. " finalResults=" .. tostring(summary and summary.finalResults or "nil")
+								.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true)
+								.. " cacheRows=" .. tostring(cache and cache.rows and #cache.rows or 0)
+								.. " cacheSource=" .. tostring(cache and cache.source or "nil"))
 						end
 						replace_online_input_callback(screen, "evaluation", EvaluationInputHandler)
 					end

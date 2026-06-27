@@ -261,6 +261,41 @@ local function user_display_name(user, fallback)
 	return tostring(fallback or "Player")
 end
 
+local function online_score_entry_summary(entry, index)
+	if type(entry) ~= "table" then
+		return tostring(index or "?") .. ":invalid"
+	end
+	local user = type(entry.user) == "table" and entry.user or type(entry.player) == "table" and entry.player or {}
+	local userId = user.id or entry.user_id or entry.player_id or entry.playerId or ""
+	local name = user_display_name(user, entry.name or entry.display_name or entry.displayName or "")
+	return table.concat({
+		tostring(index or ""),
+		tostring(entry.rank or ""),
+		tostring(userId or ""),
+		tostring(name or ""),
+		tostring(entry.displayed_percent or entry.displayedPercent or ""),
+		tostring(entry.score_percent or entry.scorePercent or ""),
+		tostring(entry.accuracy or ""),
+		tostring(entry.score or ""),
+		tostring(entry.failed == true),
+		tostring(entry.state or entry.play_state or ""),
+		tostring(entry.source or ""),
+	}, ":")
+end
+
+local function online_score_rows_summary(rows, limit)
+	if type(rows) ~= "table" then return "none" end
+	local parts = {}
+	local maxRows = math.min(#rows, tonumber(limit) or 8)
+	for index = 1, maxRows do
+		parts[#parts + 1] = online_score_entry_summary(rows[index], index)
+	end
+	if #rows > maxRows then
+		parts[#parts + 1] = "more=" .. tostring(#rows - maxRows)
+	end
+	return table.concat(parts, ",")
+end
+
 function ITGOnline:UserDisplayName(user, fallback)
 	return user_display_name(user, fallback)
 end
@@ -2928,9 +2963,20 @@ end
 
 function ITGOnline:SetOptimisticConfigReady(source)
 	local key = self.currentRoom and self:RoomOnlineOptionsReadyKey(self.currentRoom) or self:OnlineOptionsReadyKey()
-	if key == "" then return false end
-	if self.PlayStateKeyIsValid and not self:PlayStateKeyIsValid(key) then return false end
-	if self.currentRoom and self:NormalizeRoomPhase(self.currentRoom.phase) ~= "config" then return false end
+	if key == "" then
+		online_flow_trace("config_ready_optimistic_skipped source=" .. tostring(source or "unknown")
+			.. " reason=empty_key"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+		return false
+	end
+	if self.currentRoom and self:NormalizeRoomPhase(self.currentRoom.phase) ~= "config" then
+		online_flow_trace("config_ready_optimistic_skipped source=" .. tostring(source or "unknown")
+			.. " reason=not_config_phase"
+			.. " key=" .. tostring(key)
+			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+		return false
+	end
 	if self.optimisticConfigReadyKey ~= key then
 		online_flow_trace("config_ready_optimistic_set source=" .. tostring(source or "unknown")
 			.. " key=" .. tostring(key))
@@ -2958,6 +3004,40 @@ function ITGOnline:CurrentUserHasOptimisticConfigReady(room)
 	if not room then return false end
 	if self:NormalizeRoomPhase(room.phase) ~= "config" then return false end
 	return self.optimisticConfigReadyKey == self:RoomOnlineOptionsReadyKey(room)
+end
+
+function ITGOnline:CurrentOptionsSelectionKey(room)
+	room = room or self.currentRoom
+	if not room then return "" end
+	local key = self:RoomOnlineOptionsReadyKey(room)
+	if key ~= "" then return key end
+	return self.currentRoomId and tostring(self.currentRoomId) or ""
+end
+
+function ITGOnline:HasPresentedOptionsForCurrentSelection(room)
+	local key = self:CurrentOptionsSelectionKey(room)
+	return key ~= "" and tostring(self.onlineOptionsPresentedKey or "") == key
+end
+
+function ITGOnline:MarkOptionsPresentedForCurrentSelection(source, room)
+	local key = self:CurrentOptionsSelectionKey(room)
+	if key == "" then
+		online_flow_trace("options_presented_mark_skipped source=" .. tostring(source or "unknown")
+			.. " reason=empty_key"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+		return false
+	end
+	if tostring(self.onlineOptionsPresentedKey or "") ~= key then
+		online_flow_trace("options_presented_marked source=" .. tostring(source or "unknown")
+			.. " key=" .. tostring(key)
+			.. " previous=" .. tostring(self.onlineOptionsPresentedKey or "")
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+	end
+	self.onlineOptionsPresentedKey = key
+	self.onlineOptionsPresentedAt = GetTimeSinceStart()
+	return true
 end
 
 function ITGOnline:ConfigReadyIntentKey(room)
@@ -3643,6 +3723,8 @@ function ITGOnline:ResetOnlineRoundRuntimeState(source)
 	self.onlineGameplayEvaluationMinimumHoldUntil = 0
 	self.onlineGameplayAllTerminalHoldKey = ""
 	self.onlineGameplayAllTerminalHoldUntil = 0
+	self.onlineOptionsPresentedKey = ""
+	self.onlineOptionsPresentedAt = 0
 	self.readyRequestBlockedErrors = {}
 	self.lastFinalScoreKey = ""
 	self.lastFinalScoreInFlightKey = ""
@@ -4613,7 +4695,10 @@ function ITGOnline:BroadcastLeaderboardFromRoom(room, source)
 		.. " room=" .. tostring(roomId or "nil")
 		.. " rows=" .. tostring(#leaderboard)
 		.. " phase=" .. tostring(room.phase or "nil")
-		.. " version=" .. tostring(version))
+		.. " version=" .. tostring(version)
+		.. " selectedAt=" .. tostring(room.selected_song and (room.selected_song.selected_at or room.selected_song.selectedAt) or "nil")
+		.. " playStateVersion=" .. tostring(room.play_state and room.play_state.version_ms or "nil")
+		.. " rowsSummary=" .. online_score_rows_summary(leaderboard, 8))
 	if self.debugScoreTrace == true then
 		local parts = {}
 		for entry in ivalues(leaderboard or {}) do
@@ -4673,7 +4758,9 @@ function ITGOnline:StoreFinalLeaderboardFromRoom(source, cacheSource)
 	if type(results) ~= "table" or #results == 0 then
 		final_leaderboard_cache_trace("skip reason=empty_results source=" .. tostring(cacheSource or "unknown")
 			.. " room=" .. tostring(source.roomId or source.room_id or source.id or self.currentRoomId or "nil")
-			.. " phase=" .. tostring(phase or "nil"))
+			.. " phase=" .. tostring(phase or "nil")
+			.. " playStateSessions=" .. tostring(playState.sessions and #playState.sessions or 0)
+			.. " submittedScores=" .. tostring(playState.submitted_scores and #playState.submitted_scores or 0))
 		return false
 	end
 
@@ -4744,6 +4831,13 @@ function ITGOnline:StoreFinalLeaderboardFromRoom(source, cacheSource)
 
 	self.finalLeaderboardCacheSignature = canonicalSignature
 	if duplicate then
+		final_leaderboard_cache_trace("duplicate"
+			.. " source=" .. tostring(cacheSource or "unknown")
+			.. " room=" .. tostring(roomId ~= "" and roomId or "nil")
+			.. " roundKey=" .. tostring(roundKey ~= "" and roundKey or "nil")
+			.. " version=" .. tostring(version)
+			.. " rows=" .. tostring(#results)
+			.. " rowsSummary=" .. online_score_rows_summary(results, 8))
 		return true
 	end
 	local logSignature = table.concat({ canonicalSignature, tostring(cacheSource or "unknown") }, "|")
@@ -4754,7 +4848,8 @@ function ITGOnline:StoreFinalLeaderboardFromRoom(source, cacheSource)
 			.. " room=" .. tostring(roomId ~= "" and roomId or "nil")
 			.. " roundKey=" .. tostring(roundKey ~= "" and roundKey or "nil")
 			.. " version=" .. tostring(version)
-			.. " rows=" .. tostring(#results))
+			.. " rows=" .. tostring(#results)
+			.. " rowsSummary=" .. online_score_rows_summary(results, 8))
 	end
 	return true
 end
@@ -4805,7 +4900,8 @@ function ITGOnline:GetFinalLeaderboardCache(roomId)
 	if key ~= "" and self.finalLeaderboardCache[key] then
 		final_leaderboard_cache_trace("hit room=" .. tostring(key)
 			.. " rows=" .. tostring(self.finalLeaderboardCache[key].rows and #self.finalLeaderboardCache[key].rows or 0)
-			.. " source=" .. tostring(self.finalLeaderboardCache[key].source or "unknown"))
+			.. " source=" .. tostring(self.finalLeaderboardCache[key].source or "unknown")
+			.. " rowsSummary=" .. online_score_rows_summary(self.finalLeaderboardCache[key].rows, 8))
 		return self.finalLeaderboardCache[key]
 	end
 	if self.latestFinalLeaderboardCache
@@ -4813,7 +4909,8 @@ function ITGOnline:GetFinalLeaderboardCache(roomId)
 		final_leaderboard_cache_trace("hit_latest requestedRoom=" .. tostring(key ~= "" and key or "nil")
 			.. " cachedRoom=" .. tostring(self.latestFinalLeaderboardCache.room_id or "nil")
 			.. " rows=" .. tostring(self.latestFinalLeaderboardCache.rows and #self.latestFinalLeaderboardCache.rows or 0)
-			.. " source=" .. tostring(self.latestFinalLeaderboardCache.source or "unknown"))
+			.. " source=" .. tostring(self.latestFinalLeaderboardCache.source or "unknown")
+			.. " rowsSummary=" .. online_score_rows_summary(self.latestFinalLeaderboardCache.rows, 8))
 		return self.latestFinalLeaderboardCache
 	elseif self.latestFinalLeaderboardCache then
 		final_leaderboard_cache_trace("skip_latest reason=room_mismatch requestedRoom=" .. tostring(key ~= "" and key or "nil")
@@ -5102,7 +5199,11 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 		.. " failed=" .. tostring(failed)
 		.. " currentPlayState=" .. tostring(currentPlayState or "nil")
 		.. " roundKey=" .. tostring(roundKey)
-		.. " roundKeySource=" .. tostring(roundKeySource))
+		.. " roundKeySource=" .. tostring(roundKeySource)
+		.. " lastDisplayed=" .. tostring(self.lastDisplayedScoreSnapshot and self:ScoreSnapshotDisplayedPercent(self.lastDisplayedScoreSnapshot) or "nil")
+		.. " pendingDisplayed=" .. tostring(self.pendingLiveScoreSnapshot and self:ScoreSnapshotDisplayedPercent(self.pendingLiveScoreSnapshot) or "nil")
+		.. " lastFinalScoreKey=" .. tostring(self.lastFinalScoreKey or "")
+		.. " finalInFlightKey=" .. tostring(self.lastFinalScoreInFlightKey or ""))
 
 	if failed then
 		local now = GetTimeSinceStart()
@@ -5730,6 +5831,15 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 					.. " playState=" .. tostring(playState))
 				return nil
 			end
+			if screenName == "ScreenOnlineLobbies" and self:HasPresentedOptionsForCurrentSelection(self.currentRoom) then
+				online_flow_trace("preferred=nil reason=config_phase_options_already_presented"
+					.. " screen=" .. tostring(screenName)
+					.. " phase=" .. tostring(phase)
+					.. " playState=" .. tostring(playState)
+					.. " key=" .. tostring(self:CurrentOptionsSelectionKey(self.currentRoom))
+					.. " age=" .. tostring(GetTimeSinceStart() - (tonumber(self.onlineOptionsPresentedAt) or 0)))
+				return nil
+			end
 			online_flow_trace("preferred=options reason=config_phase_current_user_has_song screen=" .. tostring(screenName)
 				.. " phase=" .. tostring(phase)
 				.. " playState=" .. tostring(playState))
@@ -5801,8 +5911,11 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 	self.onlineNavigationInFlightKey = navigationKey
 	self.onlineNavigationInFlightAt = now
 
-	online_flow_trace("navigate target=" .. tostring(target) .. " preferred=" .. tostring(preferred) .. " from=" .. tostring(topScreen:GetName()))
-	topScreen:SetNextScreenName(target)
+		online_flow_trace("navigate target=" .. tostring(target) .. " preferred=" .. tostring(preferred) .. " from=" .. tostring(topScreen:GetName()))
+		if preferred == "options" then
+			self:MarkOptionsPresentedForCurrentSelection("apply_preferred_room_screen", self.currentRoom)
+		end
+		topScreen:SetNextScreenName(target)
 	if preferred == "evaluation" and self:IsOnlineGameplayScreen(topScreen:GetName()) then
 		-- Let ScreenGameplay perform its normal end-of-song cleanup instead of
 		-- jumping screens directly.  Direct SM_GoToNextScreen can leave gameplay
@@ -5885,8 +5998,11 @@ function ITGOnline:NoteScreenChanged(screenName)
 	if self.currentScreenName ~= screenName then
 		local previous = self.currentScreenName
 		self.currentScreenName = screenName
-		self.screenGeneration = (self.screenGeneration or 0) + 1
-		self.onlineNavigationInFlightKey = ""
+			self.screenGeneration = (self.screenGeneration or 0) + 1
+			if self:IsOnlineOptionsScreen(screenName) then
+				self:MarkOptionsPresentedForCurrentSelection("screen_changed_to_options", self.currentRoom)
+			end
+			self.onlineNavigationInFlightKey = ""
 		self.onlineNavigationInFlightAt = 0
 		online_flow_trace("screen_changed previous=" .. tostring(previous)
 			.. " next=" .. tostring(screenName)
@@ -5936,7 +6052,7 @@ function ITGOnline:EnforceCurrentRoomScreenAfterStateUpdate(source)
 	end
 
 	local screenName = topScreen:GetName()
-	if self:IsOnlineOptionsScreen and self:IsOnlineOptionsScreen(screenName) then
+	if self.IsOnlineOptionsScreen and self:IsOnlineOptionsScreen(screenName) then
 		return false
 	end
 
@@ -8506,6 +8622,8 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		.. " forceFailed=" .. tostring(options.forceFailed == true)
 		.. " forceFinalFailed=" .. tostring(forceFinalFailed == true)
 		.. " hasDisplayedSnapshot=" .. tostring(self.lastDisplayedScoreSnapshot ~= nil)
+		.. " displayedSnapshot=" .. tostring(self.lastDisplayedScoreSnapshot and self:ScoreSnapshotDisplayedPercent(self.lastDisplayedScoreSnapshot) or "nil")
+		.. " inputSnapshotDisplayed=" .. tostring(snapshot and self:ScoreSnapshotDisplayedPercent(snapshot) or "nil")
 		.. " inFlight=" .. tostring(self.scoreInFlightFingerprint ~= nil))
 	self:TraceOnlineState("send_score_begin", {
 		source = "send_score",
@@ -9024,7 +9142,10 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		.. " failed=" .. tostring(outgoingFailed)
 		.. " forceFinalFailed=" .. tostring(forceFinalFailed == true)
 		.. " songPosition=" .. tostring(songPosition)
-		.. " scoreMode=" .. tostring(scoreMode))
+		.. " scoreMode=" .. tostring(scoreMode)
+		.. " snapshotDisplayed=" .. tostring(snapshot and self:ScoreSnapshotDisplayedPercent(snapshot) or "nil")
+		.. " previousDisplayed=" .. tostring(previousDisplayedSnapshot and self:ScoreSnapshotDisplayedPercent(previousDisplayedSnapshot) or "nil")
+		.. " judgmentsTotal=" .. tostring(self:JudgmentTotal(judgments)))
 	if final and forceFinalFailed then
 		online_flow_trace("final_failed_score_post"
 			.. " room=" .. tostring(self.currentRoomId)
@@ -9066,7 +9187,12 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 			.. " ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
 			.. " errorCode=" .. tostring(errorCode or "nil")
-			.. " roomPhase=" .. tostring(decoded and decoded.room_phase or decoded and decoded.room and decoded.room.phase or "nil"))
+			.. " roomPhase=" .. tostring(decoded and decoded.room_phase or decoded and decoded.room and decoded.room.phase or "nil")
+			.. " responseFinalResults=" .. tostring(decoded and decoded.room and decoded.room.play_state and decoded.room.play_state.final_results and #decoded.room.play_state.final_results or 0)
+			.. " responseFinalRowsSummary=" .. online_score_rows_summary(decoded and decoded.room and decoded.room.play_state and decoded.room.play_state.final_results or nil, 8)
+			.. " sentScore=" .. tostring(outgoingScore)
+			.. " sentDisplayed=" .. tostring(displayedScorePercent)
+			.. " sentFailed=" .. tostring(outgoingFailed == true))
 		self:TraceOnlineState("send_score_response", {
 			source = "send_score",
 			roomSnapshot = decoded and decoded.room or self.currentRoom,
@@ -9789,7 +9915,8 @@ function ITGOnline:ApplyPlayStateSnapshot(playState, source, versionMs, options)
 		.. " version=" .. tostring(incomingVersion)
 		.. " previous=" .. tostring(previousVersion)
 		.. " sessions=" .. tostring(playState.sessions and #playState.sessions or 0)
-		.. " finalResults=" .. tostring(playState.final_results and #playState.final_results or 0))
+		.. " finalResults=" .. tostring(playState.final_results and #playState.final_results or 0)
+		.. " finalRowsSummary=" .. online_score_rows_summary(playState.final_results, 8))
 	self:TraceOnlineState("play_state_snapshot_applied", {
 		source = source or "unknown",
 		roomSnapshot = self.currentRoom,
@@ -9821,7 +9948,10 @@ function ITGOnline:ReplayCurrentPlayState(source)
 	online_flow_trace("play_state_replay source=" .. tostring(source or "unknown")
 		.. " room=" .. tostring(roomId)
 		.. " cachedSource=" .. tostring(cached and cached.source or "current_room")
-		.. " version=" .. tostring(cached and cached.version_ms or playState.version_ms or "nil"))
+		.. " version=" .. tostring(cached and cached.version_ms or playState.version_ms or "nil")
+		.. " sessions=" .. tostring(playState.sessions and #playState.sessions or 0)
+		.. " finalResults=" .. tostring(playState.final_results and #playState.final_results or 0)
+		.. " finalRowsSummary=" .. online_score_rows_summary(playState.final_results, 8))
 	return self:ApplyPlayStateSnapshot(playState, "replay:" .. tostring(source or "unknown"), cached and cached.version_ms or playState.version_ms)
 end
 
@@ -10163,9 +10293,17 @@ function ITGOnline:MarkReturnedToLobby(callback)
 	end
 	self.onlineGameplayReturnedLocalRoomId = tostring(self.currentRoomId or "")
 	self.onlineGameplayReturnedLocalAt = GetTimeSinceStart()
+	local summary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
+	local cache = self.GetFinalLeaderboardCache and self:GetFinalLeaderboardCache(self.currentRoomId) or nil
 	online_flow_trace("mark_returned_to_lobby_request room=" .. tostring(self.currentRoomId)
 		.. " roundKey=" .. tostring(key)
 		.. " phase=" .. tostring(roomPhase)
+		.. " players=" .. tostring(summary and summary.players or "nil")
+		.. " terminal=" .. tostring(summary and summary.terminal or "nil")
+		.. " finalResults=" .. tostring(summary and summary.finalResults or "nil")
+		.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true)
+		.. " cacheRows=" .. tostring(cache and cache.rows and #cache.rows or 0)
+		.. " cacheSource=" .. tostring(cache and cache.source or "nil")
 		.. " localReturnRoomId=" .. tostring(self.onlineGameplayReturnedLocalRoomId)
 		.. " localReturnAt=" .. string.format("%.3f", tonumber(self.onlineGameplayReturnedLocalAt) or 0))
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/play/returned-to-lobby", {}, function(ok, decoded, response)
@@ -10186,6 +10324,9 @@ function ITGOnline:MarkReturnedToLobby(callback)
 			.. " roundKey=" .. tostring(key)
 			.. " ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
+			.. " responsePhase=" .. tostring(decoded and decoded.room and decoded.room.phase or decoded and decoded.room_phase or "nil")
+			.. " responseFinalResults=" .. tostring(decoded and decoded.room and decoded.room.play_state and decoded.room.play_state.final_results and #decoded.room.play_state.final_results or 0)
+			.. " responseFinalRowsSummary=" .. online_score_rows_summary(decoded and decoded.room and decoded.room.play_state and decoded.room.play_state.final_results or nil, 8)
 			.. " message=" .. tostring(response_message(response, decoded, "")))
 		if callback then callback(ok, decoded, response) end
 	end)
