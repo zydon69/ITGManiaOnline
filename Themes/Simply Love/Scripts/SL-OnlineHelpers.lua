@@ -1499,6 +1499,17 @@ EvaluationInputHandler = function(event)
 		or deviceButton == "devicebutton_z"
 		or deviceButton == "z"
 	local isBack = event.GameButton == "Back"
+	if online_trace then
+		local topScreen = current_top_screen()
+		online_trace("FLOW evaluation_input_decoded button=" .. tostring(event.GameButton or "")
+			.. " device=" .. tostring(deviceButton)
+			.. " topScreen=" .. tostring(screen_name(topScreen))
+			.. " isConfirm=" .. tostring(isConfirm == true)
+			.. " isBack=" .. tostring(isBack == true)
+			.. " isEscape=" .. tostring(isEscape and true or false)
+			.. " exitRequested=" .. tostring(ITGOnline and ITGOnline.onlineEvaluationExitRequested == true)
+			.. " returnedKey=" .. tostring(ITGOnline and ITGOnline.onlineGameplayEvaluationReturnedKey or ""))
+	end
 
 	if isConfirm or isBack or isEscape then
 		return ReturnToOnlineLobbyFromEvaluation("evaluation_input")
@@ -1722,6 +1733,20 @@ DisplayLobbyState = function(data, actor)
 	end
 
 	local updatedData = OrderPlayers(data, screenName)
+	local orderedParts = {}
+	for index, player in ipairs(updatedData and updatedData.players or {}) do
+		orderedParts[#orderedParts + 1] = table.concat({
+			tostring(index),
+			tostring(player.playerId or player.userId or player.id or ""),
+			tostring(player.profileName or player.name or ""),
+			tostring(player.ready == true),
+			tostring(player.readyPendingServer == true),
+			tostring(player.screen or player.currentScreen or ""),
+			tostring(player.playState or player.play_state or ""),
+			tostring(player.packSyncStatus or player.pack_sync_status or ""),
+			tostring(player.songAvailable),
+		}, ":")
+	end
 	online_flow_trace(flowContext .. "_state_ordered"
 		.. " roomId=" .. tostring(data and data.roomId or "nil")
 		.. " phase=" .. tostring(data and data.phase or "nil")
@@ -1729,7 +1754,8 @@ DisplayLobbyState = function(data, actor)
 		.. " inputPlayers=" .. tostring(data and data.players and #data.players or 0)
 		.. " orderedPlayers=" .. tostring(updatedData and updatedData.players and #updatedData.players or 0)
 		.. " isManager=" .. tostring(data and data.isManager == true)
-		.. " song=" .. tostring(data and data.songInfo and (data.songInfo.title or data.songInfo.songHash) or "none"))
+		.. " song=" .. tostring(data and data.songInfo and (data.songInfo.title or data.songInfo.songHash) or "none")
+		.. " rows=" .. table.concat(orderedParts, ","))
 	if online_trace then
 		online_trace("FLOW " .. flowContext .. "_ordered room=" .. tostring(data and data.roomId or "")
 			.. " phase=" .. tostring(data and data.phase or "")
@@ -2828,6 +2854,16 @@ CreateOnlineHandler = function()
 					local screen = current_top_screen()
 					local screenName = screen_name(screen)
 					local wsConnected = self.connected and self.socket ~= nil
+					online_flow_trace("screen_changed_message top=" .. tostring(screenName)
+						.. " currentScreenName=" .. tostring(ITGOnline and ITGOnline.currentScreenName or "nil")
+						.. " inLobby=" .. tostring(screenName == "ScreenOnlineLobbies")
+						.. " connected=" .. tostring(self.connected == true)
+						.. " wsConnected=" .. tostring(wsConnected == true)
+						.. " isWaiting=" .. tostring(isWaiting == true)
+						.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+						.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+						.. " pendingOnlineStartRoomId=" .. tostring(pendingOnlineStartRoomId or "nil")
+						.. " pendingConfigReady=" .. tostring(pendingConfigReady ~= nil))
 					remove_online_input_callbacks()
 					if screenName ~= "ScreenEvaluationStage"
 						and screenName ~= "ScreenEvaluationNonstop"

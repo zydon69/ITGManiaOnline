@@ -5693,18 +5693,34 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 		return nil
 	end
 
+	self.preferredScreenDecisionSequence = (tonumber(self.preferredScreenDecisionSequence) or 0) + 1
+	local decisionId = self.preferredScreenDecisionSequence
+	local topScreen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+	local topScreenName = topScreen and topScreen.GetName and topScreen:GetName() or "nil"
 	local phase = self:NormalizeRoomPhase(self.currentRoom.phase)
 	local playState = tostring(self:CurrentUserPlayState(self.currentRoom) or "")
 	local roundKey = self.PlayStateKey and self:PlayStateKey() or ""
 	local localRoundEnded = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey) and self.onlineGameplayEndedKey == roundKey
-	online_flow_trace("preferred_check screen=" .. tostring(screenName or "nil")
+	local summary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
+	online_flow_trace("preferred_check decisionId=" .. tostring(decisionId)
+		.. " screen=" .. tostring(screenName or "nil")
+		.. " topScreen=" .. tostring(topScreenName)
+		.. " screenMatchesTop=" .. tostring(tostring(screenName or "") == tostring(topScreenName or ""))
 		.. " room=" .. tostring(self.currentRoomId or "nil")
 		.. " phase=" .. tostring(phase)
 		.. " playState=" .. tostring(playState)
 		.. " roundKey=" .. tostring(roundKey)
 		.. " localRoundEnded=" .. tostring(localRoundEnded == true)
 		.. " activeRoundKey=" .. tostring(self.activeGameplayRoundKey or "")
-		.. " endedKey=" .. tostring(self.onlineGameplayEndedKey or ""))
+		.. " endedKey=" .. tostring(self.onlineGameplayEndedKey or "")
+		.. " screenGeneration=" .. tostring(self.screenGeneration or "nil")
+		.. " optionsPresentedKey=" .. tostring(self.onlineOptionsPresentedSelectionKey or "")
+		.. " evaluationShownKey=" .. tostring(self.onlineGameplayEvaluationShownKey or "")
+		.. " evaluationReturnedKey=" .. tostring(self.onlineGameplayEvaluationReturnedKey or "")
+		.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true)
+		.. " summaryPlayers=" .. tostring(summary and summary.players or "nil")
+		.. " summaryTerminal=" .. tostring(summary and summary.terminal or "nil")
+		.. " summaryFinalResults=" .. tostring(summary and summary.finalResults or "nil"))
 
 	if self:IsOnlineOptionsScreen(screenName) and phase == "results" and self.songSelectionInFlightKey ~= "" then
 		online_flow_trace("preferred=nil reason=options_during_song_selection playState=" .. tostring(playState)
@@ -5861,8 +5877,11 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 end
 
 function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
+	self.navigationDecisionSequence = (tonumber(self.navigationDecisionSequence) or 0) + 1
+	local decisionId = self.navigationDecisionSequence
 	if not topScreen or not preferred then
-		online_flow_trace("navigate_skipped reason=" .. (not topScreen and "no_top_screen" or "no_preferred")
+		online_flow_trace("navigate_skipped decisionId=" .. tostring(decisionId)
+			.. " reason=" .. (not topScreen and "no_top_screen" or "no_preferred")
 			.. " preferred=" .. tostring(preferred or "nil"))
 		return false
 	end
@@ -5880,7 +5899,8 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 	end
 
 	if not target or topScreen:GetName() == target then
-		online_flow_trace("navigate_skipped reason=" .. (not target and "no_target" or "already_on_target")
+		online_flow_trace("navigate_skipped decisionId=" .. tostring(decisionId)
+			.. " reason=" .. (not target and "no_target" or "already_on_target")
 			.. " preferred=" .. tostring(preferred)
 			.. " target=" .. tostring(target or "nil")
 			.. " from=" .. tostring(topScreen:GetName()))
@@ -5897,9 +5917,24 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 		tostring(target or ""),
 	}, "|")
 	local now = GetTimeSinceStart()
+	local summary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
+	online_flow_trace("navigate_decision_begin decisionId=" .. tostring(decisionId)
+		.. " preferred=" .. tostring(preferred)
+		.. " target=" .. tostring(target)
+		.. " from=" .. tostring(topScreen:GetName())
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " phase=" .. tostring(roomPhase)
+		.. " roundKey=" .. tostring(roundKey or "")
+		.. " generation=" .. tostring(self.screenGeneration or "nil")
+		.. " inFlightKey=" .. tostring(self.onlineNavigationInFlightKey or "")
+		.. " optionsPresentedKey=" .. tostring(self.onlineOptionsPresentedSelectionKey or "")
+		.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true)
+		.. " summaryPlayers=" .. tostring(summary and summary.players or "nil")
+		.. " summaryFinalResults=" .. tostring(summary and summary.finalResults or "nil"))
 	if tostring(self.onlineNavigationInFlightKey or "") == navigationKey
 		and (now - (tonumber(self.onlineNavigationInFlightAt) or 0)) < 1.25 then
-		online_flow_trace("navigate_skipped reason=navigation_in_flight"
+		online_flow_trace("navigate_skipped decisionId=" .. tostring(decisionId)
+			.. " reason=navigation_in_flight"
 			.. " preferred=" .. tostring(preferred)
 			.. " target=" .. tostring(target)
 			.. " from=" .. tostring(topScreen:GetName())
@@ -5911,7 +5946,7 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 	self.onlineNavigationInFlightKey = navigationKey
 	self.onlineNavigationInFlightAt = now
 
-		online_flow_trace("navigate target=" .. tostring(target) .. " preferred=" .. tostring(preferred) .. " from=" .. tostring(topScreen:GetName()))
+		online_flow_trace("navigate decisionId=" .. tostring(decisionId) .. " target=" .. tostring(target) .. " preferred=" .. tostring(preferred) .. " from=" .. tostring(topScreen:GetName()))
 		if preferred == "options" then
 			self:MarkOptionsPresentedForCurrentSelection("apply_preferred_room_screen", self.currentRoom)
 		end
@@ -5997,6 +6032,10 @@ function ITGOnline:NoteScreenChanged(screenName)
 	screenName = tostring(screenName or "NoScreen")
 	if self.currentScreenName ~= screenName then
 		local previous = self.currentScreenName
+		local topScreen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+		local topScreenName = topScreen and topScreen.GetName and topScreen:GetName() or "nil"
+		local summary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
+		local playState = self.CurrentUserPlayState and self:CurrentUserPlayState(self.currentRoom) or "nil"
 		self.currentScreenName = screenName
 			self.screenGeneration = (self.screenGeneration or 0) + 1
 			if self:IsOnlineOptionsScreen(screenName) then
@@ -6006,11 +6045,21 @@ function ITGOnline:NoteScreenChanged(screenName)
 		self.onlineNavigationInFlightAt = 0
 		online_flow_trace("screen_changed previous=" .. tostring(previous)
 			.. " next=" .. tostring(screenName)
+			.. " topScreen=" .. tostring(topScreenName)
+			.. " screenMatchesTop=" .. tostring(tostring(screenName or "") == tostring(topScreenName or ""))
 			.. " generation=" .. tostring(self.screenGeneration)
 			.. " room=" .. tostring(self.currentRoomId or "nil")
 			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+			.. " playState=" .. tostring(playState)
 			.. " currentRoundKey=" .. tostring(self.currentRoomRoundKey or "")
 			.. " activeRoundKey=" .. tostring(self.activeGameplayRoundKey or "")
+			.. " optionsPresentedKey=" .. tostring(self.onlineOptionsPresentedSelectionKey or "")
+			.. " evaluationShownKey=" .. tostring(self.onlineGameplayEvaluationShownKey or "")
+			.. " evaluationReturnedKey=" .. tostring(self.onlineGameplayEvaluationReturnedKey or "")
+			.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true)
+			.. " summaryPlayers=" .. tostring(summary and summary.players or "nil")
+			.. " summaryTerminal=" .. tostring(summary and summary.terminal or "nil")
+			.. " summaryFinalResults=" .. tostring(summary and summary.finalResults or "nil")
 			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
 			.. " syncInFlight=" .. tostring(self.syncInFlight == true)
 			.. " lobbyRefreshInFlight=" .. tostring(self.lobbyRefreshInFlight == true)
@@ -9298,6 +9347,20 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 	end
 
 	local currentPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+	local readyRoundKey = self.PlayStateKey and self:PlayStateKey() or ""
+	local readySelectionKey = self.CurrentOptionsSelectionKey and self:CurrentOptionsSelectionKey(self.currentRoom) or ""
+	local readyScreen = self.currentScreenName or ((SCREENMAN and SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName()) or "nil")
+	online_flow_trace("ready_request_begin room=" .. tostring(self.currentRoomId)
+		.. " requestedPhase=" .. tostring(phase)
+		.. " isReady=" .. tostring(isReady == true)
+		.. " currentPhase=" .. tostring(currentPhase)
+		.. " screen=" .. tostring(readyScreen)
+		.. " playState=" .. tostring(self.CurrentUserPlayState and self:CurrentUserPlayState(self.currentRoom) or "nil")
+		.. " roundKey=" .. tostring(readyRoundKey)
+		.. " selectionKey=" .. tostring(readySelectionKey)
+		.. " refreshedUnknownPhase=" .. tostring(refreshedUnknownPhase == true)
+		.. " optimisticConfigKey=" .. tostring(self.optimisticConfigReadyKey or "")
+		.. " configInFlight=" .. tostring(self.configReadyRequestInFlight == true))
 	if isReady and currentPhase == "unknown" then
 		if not refreshedUnknownPhase then
 			online_flow_trace("ready_request_refresh room=" .. tostring(self.currentRoomId)
@@ -12368,10 +12431,24 @@ end
 		local name = event.event or event.name
 		local payload = event.payload or {}
 		local eventId = tonumber(event.id)
+		local payloadRoom = type(payload.room) == "table" and payload.room or nil
+		local payloadMembers = payloadRoom and (payloadRoom.members or payloadRoom.players or payloadRoom.room_members) or payload.members
+		local payloadReadyStates = payloadRoom and payloadRoom.ready_states or payload.ready_states
+		local payloadFinalResults = payloadRoom and payloadRoom.final_results or payload.final_results
+		local payloadSessions = payloadRoom and payloadRoom.play_sessions or payload.play_sessions
+		local payloadLeaderboard = payload.leaderboard or (payloadRoom and payloadRoom.leaderboard)
+		local payloadPlayState = payload.play_state or payload.playState or (payloadRoom and (payloadRoom.play_state or payloadRoom.playState))
 		online_flow_trace("realtime_event_begin name=" .. tostring(name or "nil")
 			.. " eventId=" .. tostring(eventId or "nil")
 			.. " payloadRoomId=" .. tostring(payload.room_id or (payload.room and payload.room.id) or "nil")
 			.. " payloadPhase=" .. tostring(payload.room and payload.room.phase or payload.room_phase or "nil")
+			.. " payloadMembers=" .. tostring(type(payloadMembers) == "table" and #payloadMembers or "nil")
+			.. " payloadReadyStates=" .. tostring(type(payloadReadyStates) == "table" and #payloadReadyStates or "nil")
+			.. " payloadFinalResults=" .. tostring(type(payloadFinalResults) == "table" and #payloadFinalResults or "nil")
+			.. " payloadSessions=" .. tostring(type(payloadSessions) == "table" and #payloadSessions or "nil")
+			.. " payloadLeaderboard=" .. tostring(type(payloadLeaderboard) == "table" and #payloadLeaderboard or "nil")
+			.. " payloadSelectedAt=" .. tostring((payloadRoom and payloadRoom.selected_song and payloadRoom.selected_song.selected_at) or payload.selected_at or "nil")
+			.. " payloadPlayStateVersion=" .. tostring(type(payloadPlayState) == "table" and (payloadPlayState.version or payloadPlayState.play_state_version) or "nil")
 			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
 			.. " currentPhase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")

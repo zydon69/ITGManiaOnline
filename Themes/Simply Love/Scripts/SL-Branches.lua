@@ -199,6 +199,34 @@ local OnlineRoomPhase = function(room)
 	return NormalizeRoomPhase(room and room.phase or nil)
 end
 
+local OnlineEvaluationBranchState = function(room)
+	local screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+	local screenName = screen and screen.GetName and screen:GetName() or "nil"
+	local playState = ITGOnline and IsCallable(ITGOnline.CurrentUserPlayState)
+		and ITGOnline:CurrentUserPlayState(room)
+		or "nil"
+	local roundKey = ITGOnline and IsCallable(ITGOnline.PlayStateKey)
+		and ITGOnline:PlayStateKey()
+		or ""
+	local summary = ITGOnline and IsCallable(ITGOnline.PlayStateSummary)
+		and ITGOnline:PlayStateSummary(room)
+		or nil
+	local userHasFinalResult = ITGOnline and IsCallable(ITGOnline.CurrentUserHasFinalResult)
+		and ITGOnline:CurrentUserHasFinalResult(room)
+		or false
+	return " topScreen=" .. tostring(screenName)
+		.. " playState=" .. tostring(playState)
+		.. " roundKey=" .. tostring(roundKey)
+		.. " shownKey=" .. tostring(ITGOnline and ITGOnline.onlineGameplayEvaluationShownKey or "")
+		.. " returnedKey=" .. tostring(ITGOnline and ITGOnline.onlineGameplayEvaluationReturnedKey or "")
+		.. " exitRequested=" .. tostring(ITGOnline and ITGOnline.onlineEvaluationExitRequested == true)
+		.. " userHasFinalResult=" .. tostring(userHasFinalResult == true)
+		.. " summaryPlayers=" .. tostring(summary and summary.players or "nil")
+		.. " summaryTerminal=" .. tostring(summary and summary.terminal or "nil")
+		.. " summaryFinalResults=" .. tostring(summary and summary.finalResults or "nil")
+		.. " summaryFinalReady=" .. tostring(summary and summary.finalResultsReady == true)
+end
+
 local ValidAutoStyles = {
 	single = true,
 	versus = true,
@@ -456,20 +484,26 @@ Branch.AfterSelectOnlineMode = function()
 end
 
 Branch.AfterEvaluationStage = function()
-	local active, room = HasActiveOnlineRoom()
+	local active, room, inactiveReason = HasActiveOnlineRoom()
 	if active then
 		if ITGOnline.onlineEvaluationExitRequested then
 			ITGOnline.onlineEvaluationExitRequested = false
 			BranchTrace("AfterEvaluationStage room=" .. tostring(ITGOnline.currentRoomId)
 				.. " phase=" .. tostring(OnlineRoomPhase(room))
-				.. " next=ScreenOnlineLobbies reason=explicit_exit")
+				.. " next=ScreenOnlineLobbies reason=explicit_exit"
+				.. OnlineEvaluationBranchState(room))
 			return "ScreenOnlineLobbies"
 		end
 		BranchTrace("AfterEvaluationStage room=" .. tostring(ITGOnline.currentRoomId)
 			.. " phase=" .. tostring(OnlineRoomPhase(room))
-			.. " next=ScreenEvaluationStage reason=online_exit_not_requested")
+			.. " next=ScreenEvaluationStage reason=online_exit_not_requested"
+			.. OnlineEvaluationBranchState(room))
 		return "ScreenEvaluationStage"
 	end
+	BranchTrace("AfterEvaluationStage inactive reason=" .. tostring(inactiveReason or "nil")
+		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(OnlineRoomPhase(room))
+		.. OnlineEvaluationBranchState(room))
 
 	-- If we're in Casual mode, don't save the profile(s).
 	if SafeGameMode() == "Casual" then

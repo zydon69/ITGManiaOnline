@@ -3606,7 +3606,17 @@ local InputHandler = function(event)
 		.. " showingGlobalOptions=" .. tostring(showing_global_options_menu == true)
 		.. " listSelected=" .. tostring(list_selected == true)
 		.. " lobbyView=" .. tostring(lobby_view)
-		.. " activeIndex=" .. tostring(active_index))
+		.. " activeIndex=" .. tostring(active_index)
+		.. " joinedActiveIndex=" .. tostring(joined_active_index)
+		.. " joinedPlayersSelected=" .. tostring(joined_players_selected == true)
+		.. " joinedPlayerIndex=" .. tostring(joined_player_index)
+		.. " joinedPhase=" .. tostring(joined_phase)
+		.. " joinedIsManager=" .. tostring(joined_is_manager == true)
+		.. " joinedSongConfirmed=" .. tostring(joined_song_confirmed == true)
+		.. " joinedMissingSong=" .. tostring(joined_missing_song == true)
+		.. " joinedCanDownload=" .. tostring(joined_can_download_pack == true)
+		.. " packBusy=" .. tostring(pack_sync_busy() == true)
+		.. " canDownloadBrowsedPack=" .. tostring(can_download_browsed_pack() == true))
 
 	if should_suppress_input_during_quiet_window(event) then
 		lobby_flow_trace("input_ignored reason=quiet_window type=" .. tostring(event.type)
@@ -3854,6 +3864,7 @@ local af = Def.ActorFrame{
 		end
 
 		local lines = {}
+		local renderParts = {}
 		local selected_start = nil
 		local selected_length = nil
 		local text_length = 0
@@ -4068,6 +4079,18 @@ local af = Def.ActorFrame{
 			local ready = player.ready and " ✔" or player.readyPendingServer and " ..." or ""
 			local missing = ""
 			local packSyncText = pack_sync_line_for_player(player)
+			renderParts[#renderParts + 1] = table.concat({
+				tostring(i),
+				tostring(player.playerId or ""),
+				tostring(profile),
+				tostring(player.ready == true),
+				tostring(player.readyPendingServer == true),
+				tostring(player.screen or player.currentScreen or ""),
+				tostring(player.playState or player.play_state or ""),
+				tostring(player.packSyncStatus or player.pack_sync_status or ""),
+				tostring(player.songAvailable),
+				tostring(packSyncText),
+			}, ":")
 			if packSyncText ~= "" then
 				missing = " · " .. packSyncText
 			end
@@ -4100,6 +4123,13 @@ local af = Def.ActorFrame{
 			lines[#lines+1] = line
 			text_length = text_length + #line + 1
 		end
+		lobby_flow_trace("joined_players_render rows=" .. table.concat(renderParts, ",")
+			.. " selectedIndex=" .. tostring(joined_player_index)
+			.. " selectedStart=" .. tostring(selected_start or "nil")
+			.. " selectedLength=" .. tostring(selected_length or "nil")
+			.. " playersSelected=" .. tostring(joined_players_selected == true)
+			.. " activeIndex=" .. tostring(joined_active_index)
+			.. " manager=" .. tostring(joined_manager_user_id or "nil"))
 		local playersText = joinedContent:GetChild("JoinedLobbyPlayers")
 		if playersText then
 			playersText:settext(#lines > 0 and table.concat(lines, "\n") or "En attente des joueurs...")
@@ -6046,6 +6076,13 @@ end,
 			HoverCommand=function(self)
 				local focusable = joined_is_manager and #joined_lobby_players > 1
 				local focused = joined_active_index == 8 or joined_players_selected
+				lobby_flow_trace("players_frame_focus_state focusable=" .. tostring(focusable == true)
+					.. " focused=" .. tostring(focused == true)
+					.. " activeIndex=" .. tostring(joined_active_index)
+					.. " playersSelected=" .. tostring(joined_players_selected == true)
+					.. " playerIndex=" .. tostring(joined_player_index)
+					.. " players=" .. tostring(#joined_lobby_players)
+					.. " manager=" .. tostring(joined_is_manager == true))
 				self:visible(focusable)
 				self:playcommand(focused and "GainFocus" or "LoseFocus")
 			end,
