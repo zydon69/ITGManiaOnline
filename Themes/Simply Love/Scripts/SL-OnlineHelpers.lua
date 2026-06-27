@@ -30,6 +30,8 @@ local replayDeferredLobbyStateQueued = false
 local replayDeferredLobbyStateRunning = false
 local onlineHandlerShuttingDown = false
 local onlineOperationToken = 0
+local evaluationExitTransitionRequestedAt = 0
+local evaluationExitTransitionRoomId = ""
 UnlockOnlineInput = nil
 local onlineInputCallbacks = {}
 -- These screens are the ones we want to display the player's scores for.
@@ -204,6 +206,73 @@ function transition_screen(screen, nextScreen, message, context)
 		screen:SetNextScreenName(nextScreen)
 		screen:StartTransitioningScreen(message or "SM_GoToNextScreen")
 	end)
+end
+
+local function direct_set_screen(nextScreen, context)
+	if not (SCREENMAN and SCREENMAN.SetNewScreen) then
+		online_flow_trace("direct_set_screen_skipped reason=no_screenman_set_new_screen"
+			.. " context=" .. tostring(context or "unknown")
+			.. " next=" .. tostring(nextScreen))
+		return false
+	end
+
+	return safe_online_call("direct set screen " .. tostring(context or nextScreen), function()
+		SCREENMAN:SetNewScreen(nextScreen)
+	end)
+end
+
+local function transition_evaluation_to_lobby(topScreen, reason)
+	local fromScreen = screen_name(topScreen)
+	local roomId = tostring(ITGOnline and ITGOnline.currentRoomId or "")
+	local phase = tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or ITGOnline and ITGOnline.currentRoomPhase or "nil")
+	local now = GetTimeSinceStart()
+
+	if evaluationExitTransitionRoomId == roomId and (now - (tonumber(evaluationExitTransitionRequestedAt) or 0)) < 1.0 then
+		online_flow_trace("evaluation_exit_transition_skip reason=already_requested"
+			.. " room=" .. tostring(roomId)
+			.. " from=" .. tostring(fromScreen)
+			.. " phase=" .. tostring(phase)
+			.. " source=" .. tostring(reason or "input"))
+		return true
+	end
+
+	evaluationExitTransitionRoomId = roomId
+	evaluationExitTransitionRequestedAt = now
+
+	if ITGOnline then
+		ITGOnline.onlineEvaluationExitRequested = true
+		ITGOnline.onlineEvaluationExitRequestedAt = now
+	end
+
+	online_flow_trace("evaluation_exit_transition_begin"
+		.. " room=" .. tostring(roomId)
+		.. " from=" .. tostring(fromScreen)
+		.. " to=ScreenOnlineLobbies"
+		.. " phase=" .. tostring(phase)
+		.. " source=" .. tostring(reason or "input"))
+
+	-- For online evaluation, direct navigation is intentional. The normal
+	-- ScreenEvaluation timer/branch path is guarded to prevent automatic exits;
+	-- relying on the same SM_GoToNextScreen animation path for a manual exit can
+	-- leave the screen in an OffCommand state without ever reaching the lobby.
+	local ok = direct_set_screen("ScreenOnlineLobbies", "evaluation_to_lobby")
+	if ok then
+		online_flow_trace("evaluation_exit_transition_sent"
+			.. " method=SCREENMAN.SetNewScreen"
+			.. " room=" .. tostring(roomId)
+			.. " from=" .. tostring(fromScreen)
+			.. " to=ScreenOnlineLobbies"
+			.. " source=" .. tostring(reason or "input"))
+		return true
+	end
+
+	online_flow_trace("evaluation_exit_transition_fallback"
+		.. " method=StartTransitioningScreen"
+		.. " room=" .. tostring(roomId)
+		.. " from=" .. tostring(fromScreen)
+		.. " to=ScreenOnlineLobbies"
+		.. " source=" .. tostring(reason or "input"))
+	return transition_screen(topScreen, "ScreenOnlineLobbies", "SM_GoToNextScreen", "evaluation_to_lobby_fallback")
 end
 
 function room_id_from(value)
@@ -1284,7 +1353,10 @@ ReturnToOnlineLobbyFromEvaluation = function(reason)
 	end
 
 	UnlockOnlineInput()
-	if ITGOnline then ITGOnline.onlineEvaluationExitRequested = true end
+	if ITGOnline then
+		ITGOnline.onlineEvaluationExitRequested = true
+		ITGOnline.onlineEvaluationExitRequestedAt = GetTimeSinceStart()
+	end
 	if online_trace then
 		online_trace("FLOW evaluation_exit_requested reason=" .. tostring(reason or "input")
 			.. " screen=" .. tostring(topScreen:GetName())
@@ -1298,8 +1370,7 @@ ReturnToOnlineLobbyFromEvaluation = function(reason)
 			reason = reason or "input",
 		})
 	end
-	transition_screen(topScreen, "ScreenOnlineLobbies", "SM_GoToNextScreen", "evaluation_to_lobby")
-	return true
+	return transition_evaluation_to_lobby(topScreen, reason)
 end
 
 ITGOnlineReturnToLobbyFromEvaluation = ReturnToOnlineLobbyFromEvaluation
@@ -2638,6 +2709,16 @@ CreateOnlineHandler = function()
 					local screenName = screen_name(screen)
 					local wsConnected = self.connected and self.socket ~= nil
 					remove_online_input_callbacks()
+					if screenName ~= "ScreenEvaluationStage"
+						and screenName ~= "ScreenEvaluationNonstop"
+						and screenName ~= "ScreenEvaluationSummary" then
+						evaluationExitTransitionRequestedAt = 0
+						evaluationExitTransitionRoomId = ""
+						if ITGOnline then
+							ITGOnline.onlineEvaluationExitRequested = false
+							ITGOnline.onlineEvaluationExitRequestedAt = nil
+						end
+					end
 
 					if ITGOnline and ITGOnline.NoteScreenChanged then
 						ITGOnline:NoteScreenChanged(screenName)
