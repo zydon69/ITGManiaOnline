@@ -20,6 +20,14 @@ local function online_gameplay_routes_back_to_lobby()
 end
 
 local function route_online_gameplay_to_lobby()
+	if online_gameplay_phase() == "playing" or online_gameplay_phase() == "starting" then
+		if Trace then
+			Trace("ITG Online: FLOW gameplay_lobby_route_blocked reason=round_in_progress room="
+				.. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " phase=" .. tostring(online_gameplay_phase()))
+		end
+		return
+	end
 	if ITGOnline and ITGOnline.MarkReturnedToLobby then
 		ITGOnline:MarkReturnedToLobby()
 	end

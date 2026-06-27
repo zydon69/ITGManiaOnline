@@ -3552,6 +3552,14 @@ void ScreenGameplay::SendCrossedMessages() {
 }
 
 void ScreenGameplay::BeginBackingOutFromGameplay() {
+  if (GetITGOnlineIsActive()) {
+    LOG->Trace(
+        "ITG Online: BeginBackingOutFromGameplay ignored while online "
+        "gameplay is active; round completion must flow through results.");
+    ResetGiveUpTimers(false);
+    return;
+  }
+
   m_DancingState = STATE_OUTRO;
   ResetGiveUpTimers(false);
 
@@ -4447,6 +4455,22 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
     }
     PlayAnnouncer(ssprintf("gameplay battle damage level%d", iDamageLevel), 3);
   } else if (SM == SM_DoPrevScreen) {
+    if (GetITGOnlineIsActive()) {
+      if (OnlineShouldHoldBeforeEvaluation()) {
+        LOG->Trace(
+            "ITG Online: SM_DoPrevScreen blocked while waiting for "
+            "authoritative results.");
+        ResetGiveUpTimers(false);
+        return;
+      }
+
+      LOG->Trace(
+          "ITG Online: SM_DoPrevScreen redirected to SM_DoNextScreen so "
+          "online gameplay reaches evaluation instead of lobby.");
+      HandleScreenMessage(SM_DoNextScreen);
+      return;
+    }
+
     SongFinished();
     this->StageFinished(true);
 

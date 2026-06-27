@@ -3275,6 +3275,9 @@ CreateOnlineHandler = function()
 									.. " screen=" .. tostring(screenName))
 							end
 							DisplayLobbyState(params, self)
+							if ITGOnline and ITGOnline.EnforceCurrentRoomScreenAfterStateUpdate then
+								ITGOnline:EnforceCurrentRoomScreenAfterStateUpdate("online_lobby_state_message")
+							end
 							if online_trace then
 								local screenName = SCREENMAN and SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() or "nil"
 								local flowContext = screenName == "ScreenOnlineLobbies" and "display_lobby" or "apply_room_state"

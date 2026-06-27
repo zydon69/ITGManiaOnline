@@ -5677,18 +5677,23 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 		if screenName == "ScreenOnlineLobbies" then
 			local summary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
 			local userTerminal = self.IsTerminalPlayState and self:IsTerminalPlayState(playState)
+			local userHasFinalResult = self.CurrentUserHasFinalResult and self:CurrentUserHasFinalResult(self.currentRoom) == true
 			local alreadyShown = self:PlayStateKeyIsValid(roundKey) and self.onlineGameplayEvaluationShownKey == roundKey
 			local alreadyReturned = self:PlayStateKeyIsValid(roundKey) and self.onlineGameplayEvaluationReturnedKey == roundKey
-			if summary and summary.finalResultsReady == true and userTerminal and not alreadyShown and not alreadyReturned then
+			if summary and summary.finalResultsReady == true and (userTerminal or userHasFinalResult) and not alreadyShown and not alreadyReturned then
 				online_flow_trace("preferred=evaluation reason=results_ready_while_in_lobby"
 					.. " playState=" .. tostring(playState)
+					.. " userTerminal=" .. tostring(userTerminal == true)
+					.. " userHasFinalResult=" .. tostring(userHasFinalResult == true)
 					.. " finalResults=" .. tostring(summary.finalResults or "nil")
 					.. " roundKey=" .. tostring(roundKey))
 				return "evaluation"
 			end
-			if summary and summary.finalResultsReady == true and userTerminal then
+			if summary and summary.finalResultsReady == true and (userTerminal or userHasFinalResult) then
 				online_flow_trace("preferred=nil reason=results_ready_lobby_already_handled"
 					.. " playState=" .. tostring(playState)
+					.. " userTerminal=" .. tostring(userTerminal == true)
+					.. " userHasFinalResult=" .. tostring(userHasFinalResult == true)
 					.. " roundKey=" .. tostring(roundKey)
 					.. " shown=" .. tostring(alreadyShown)
 					.. " returned=" .. tostring(alreadyReturned))
@@ -5771,6 +5776,30 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 			.. " from=" .. tostring(topScreen:GetName()))
 		return false
 	end
+
+	local roomPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+	local roundKey = self.CanonicalGameplayRoundKey and self:CanonicalGameplayRoundKey("navigation") or (self.PlayStateKey and self:PlayStateKey() or "")
+	local navigationKey = table.concat({
+		tostring(self.currentRoomId or ""),
+		tostring(roomPhase or ""),
+		tostring(roundKey or ""),
+		tostring(topScreen:GetName() or ""),
+		tostring(target or ""),
+	}, "|")
+	local now = GetTimeSinceStart()
+	if tostring(self.onlineNavigationInFlightKey or "") == navigationKey
+		and (now - (tonumber(self.onlineNavigationInFlightAt) or 0)) < 1.25 then
+		online_flow_trace("navigate_skipped reason=navigation_in_flight"
+			.. " preferred=" .. tostring(preferred)
+			.. " target=" .. tostring(target)
+			.. " from=" .. tostring(topScreen:GetName())
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(roomPhase)
+			.. " roundKey=" .. tostring(roundKey or ""))
+		return true
+	end
+	self.onlineNavigationInFlightKey = navigationKey
+	self.onlineNavigationInFlightAt = now
 
 	online_flow_trace("navigate target=" .. tostring(target) .. " preferred=" .. tostring(preferred) .. " from=" .. tostring(topScreen:GetName()))
 	topScreen:SetNextScreenName(target)
@@ -5857,6 +5886,8 @@ function ITGOnline:NoteScreenChanged(screenName)
 		local previous = self.currentScreenName
 		self.currentScreenName = screenName
 		self.screenGeneration = (self.screenGeneration or 0) + 1
+		self.onlineNavigationInFlightKey = ""
+		self.onlineNavigationInFlightAt = 0
 		online_flow_trace("screen_changed previous=" .. tostring(previous)
 			.. " next=" .. tostring(screenName)
 			.. " generation=" .. tostring(self.screenGeneration)
@@ -5895,6 +5926,25 @@ function ITGOnline:NoteScreenChanged(screenName)
 			.. " room=" .. tostring(self.currentRoomId or "nil")
 			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
 	end
+end
+
+function ITGOnline:EnforceCurrentRoomScreenAfterStateUpdate(source)
+	local topScreen = SCREENMAN and SCREENMAN.GetTopScreen and SCREENMAN:GetTopScreen() or nil
+	if not topScreen then
+		online_flow_trace("enforce_after_state_skipped reason=no_top_screen source=" .. tostring(source or "unknown"))
+		return false
+	end
+
+	local screenName = topScreen:GetName()
+	if self:IsOnlineOptionsScreen and self:IsOnlineOptionsScreen(screenName) then
+		return false
+	end
+
+	online_flow_trace("enforce_after_state source=" .. tostring(source or "unknown")
+		.. " screen=" .. tostring(screenName)
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+	return self:EnforceRoomPhaseScreen(screenName)
 end
 
 function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, nextScreenName)
