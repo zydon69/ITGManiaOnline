@@ -4059,6 +4059,7 @@ local af = Def.ActorFrame{
 		end
 
 		local lines = {}
+		local renderParts = {}
 		local selected_start = nil
 		local selected_length = nil
 		local text_length = 0
