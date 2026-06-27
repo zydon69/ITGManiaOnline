@@ -367,6 +367,58 @@ bool ShouldIgnoreOnlineEvaluationNextScreen() {
 
   return ok && shouldIgnore;
 }
+
+bool TryHandleOnlineEvaluationNativeExit(const std::string& inputName) {
+  if (LUA == nullptr) {
+    return false;
+  }
+
+  Lua* L = LUA->Get();
+  if (L == nullptr) {
+    return false;
+  }
+
+  const int stackTop = lua_gettop(L);
+  bool onlineActive = false;
+  bool handled = false;
+  bool shouldConsume = false;
+  const bool activeOk = LuaHelpers::RunExpression(
+      L,
+      "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil",
+      "ScreenEvaluation online native exit active check");
+  if (activeOk) {
+    if (lua_isboolean(L, -1)) {
+      LuaHelpers::Pop(L, onlineActive);
+    } else {
+      lua_pop(L, 1);
+    }
+  }
+
+  if (onlineActive) {
+    const bool handlerOk = LuaHelpers::RunExpression(
+        L,
+        "ITGOnlineReturnToLobbyFromEvaluation ~= nil "
+        "and ITGOnlineReturnToLobbyFromEvaluation('screen_evaluation_native_"
+        "input') == true",
+        "ScreenEvaluation online native exit handler");
+    if (handlerOk) {
+      if (lua_isboolean(L, -1)) {
+        LuaHelpers::Pop(L, handled);
+      } else {
+        lua_pop(L, 1);
+      }
+    }
+    shouldConsume = true;
+    LOG->Trace(
+        "ITG Online: ScreenEvaluation consumed native %s input online "
+        "handled=%i.",
+        inputName.c_str(), handled ? 1 : 0);
+  }
+
+  lua_settop(L, stackTop);
+  LUA->Release(L);
+  return shouldConsume;
+}
 }  // namespace
 
 ScreenEvaluation::ScreenEvaluation() {
@@ -1346,11 +1398,16 @@ bool ScreenEvaluation::MenuStart(const InputEventPlus& input) {
     return false;
   }
 
+  const std::string inputName =
+      INPUTMAPPER != nullptr
+          ? GameButtonToString(INPUTMAPPER->GetInputScheme(), input.MenuI)
+          : ssprintf("GameButton%d", input.MenuI);
+
+  if (TryHandleOnlineEvaluationNativeExit(inputName)) {
+    return true;
+  }
+
   if (OnlineEvaluationAutoAdvanceBlocked()) {
-    const std::string inputName =
-        INPUTMAPPER != nullptr
-            ? GameButtonToString(INPUTMAPPER->GetInputScheme(), input.MenuI)
-            : ssprintf("GameButton%d", input.MenuI);
     LOG->Trace(
         "ITG Online: evaluation auto advance blocked screen=%s input=%s",
         m_sName.c_str(), inputName.c_str());
