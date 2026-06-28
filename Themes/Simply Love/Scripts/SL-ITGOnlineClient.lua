@@ -4358,6 +4358,15 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	online_room_snapshot_debug("room_snapshot_apply_begin", room, source, previousRoom)
 	room = self:NormalizeRoomSnapshot(room, previousRoom, source)
 	local normalizedIncomingPhase = self:NormalizeRoomPhase(room.phase)
+	if normalizedIncomingPhase ~= "results" and type(room.play_state) == "table" and type(room.play_state.final_results) == "table" and #room.play_state.final_results > 0 then
+		online_flow_trace("room_snapshot_final_results_ignored_non_results"
+			.. " source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+			.. " phase=" .. tostring(normalizedIncomingPhase or "nil")
+			.. " rows=" .. tostring(#room.play_state.final_results)
+			.. " version=" .. tostring(room.play_state.version_ms or "nil"))
+		room.play_state.final_results = {}
+	end
 	local normalizedPreviousPhase = previousRoom and self:NormalizeRoomPhase(previousRoom.phase) or "unknown"
 	local normalizedIncomingSelectedAt = room.selected_song and (room.selected_song.selected_at or room.selected_song.selectedAt) or nil
 	local normalizedIncomingSongHash = room.selected_song and (room.selected_song.song_hash or room.selected_song.songHash) or nil
@@ -13662,7 +13671,7 @@ function ITGOnline:LobbyStatePayload(room)
 			estimatedEndAt = playState.estimated_end_at,
 			estimatedEndAtMs = playState.estimated_end_at_ms,
 			remainingSeconds = playState.remaining_seconds,
-			finalResults = playState.final_results or {},
+			finalResults = self:NormalizeRoomPhase(room.phase) == "results" and (playState.final_results or {}) or {},
 			secondsUntilStart = self:SecondsUntilScheduledStart(),
 			manager = room.manager,
 			isManager = self.user and room.manager and tonumber(room.manager.id) == tonumber(self.user.id) or false,
