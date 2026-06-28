@@ -13,6 +13,7 @@ local status_zoom = 0.38
 local label_maxwidth = math.max(1, (score_x - label_x - (panel_width * 0.12)) / row_zoom)
 local score_maxwidth = math.max(1, (panel_width * 0.27) / score_zoom)
 local last_visible_trace_at = -999
+local last_rows_signature = ""
 
 local function monotonic_time()
 	if GetTimeSinceStart then
@@ -158,13 +159,76 @@ local function rows_from_play_state_sessions(play_state)
 	return rows
 end
 
+local function copy_row(row)
+	local copied = {}
+	for key, value in pairs(row or {}) do
+		copied[key] = value
+	end
+	return copied
+end
+
+local function rows_signature(rows)
+	local parts = {}
+	for row in ivalues(rows or {}) do
+		parts[#parts + 1] = table.concat({
+			tostring(row.user_id or ""),
+			tostring(row.name or ""),
+			string.format("%.3f", tonumber(row.percent) or 0),
+			tostring(row.failed == true),
+			tostring(row.exited == true),
+			tostring(row.finished == true),
+			tostring(row.play_state or ""),
+		}, ":")
+	end
+	return table.concat(parts, "|")
+end
+
 local function rows_from_room(room)
 	local leaderboard = room and (room.leaderboard or room.live_scores or room.top_scores) or nil
-	local rows = rows_from_leaderboard(leaderboard or {})
-	if #rows == 0 then
-		rows = rows_from_play_state_sessions(room and room.play_state or nil)
+	local score_rows = rows_from_leaderboard(leaderboard or {})
+	local session_rows = rows_from_play_state_sessions(room and room.play_state or nil)
+	local score_by_user_id = {}
+	local merged = {}
+	local seen = {}
+
+	for row in ivalues(score_rows or {}) do
+		if row.user_id and tostring(row.user_id) ~= "" then
+			score_by_user_id[tostring(row.user_id)] = row
+		end
 	end
-	return rows, leaderboard
+
+	if #session_rows > 0 then
+		for session_row in ivalues(session_rows) do
+			local user_id = tostring(session_row.user_id or "")
+			local score_row = score_by_user_id[user_id]
+			local row = score_row and copy_row(score_row) or copy_row(session_row)
+			if score_row then
+				row.play_state = session_row.play_state
+				row.failed = session_row.failed or score_row.failed
+				row.exited = session_row.exited or score_row.exited
+				row.finished = session_row.finished or score_row.finished
+			end
+			merged[#merged + 1] = row
+			if user_id ~= "" then seen[user_id] = true end
+		end
+
+		for row in ivalues(score_rows or {}) do
+			local user_id = tostring(row.user_id or "")
+			if user_id ~= "" and not seen[user_id] then
+				merged[#merged + 1] = row
+				seen[user_id] = true
+			end
+		end
+	else
+		merged = score_rows
+	end
+
+	leaderboard_trace("rows_from_room merged scoreRows=" .. tostring(#score_rows)
+		.. " sessionRows=" .. tostring(#session_rows)
+		.. " mergedRows=" .. tostring(#merged)
+		.. " room=" .. tostring(room and room.id or ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(room and room.phase or "nil"))
+	return merged, leaderboard
 end
 
 local function update_rows(frame, rows)
@@ -189,6 +253,9 @@ local function update_rows(frame, rows)
 		.. " phase=" .. tostring(phase or "nil")
 		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 		.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil))
+	local signature = show and rows_signature(rows) or ""
+	local structure_changed = signature ~= last_rows_signature
+	last_rows_signature = signature
 	if not show then return end
 
 	local self_id = local_user_id()
@@ -243,7 +310,11 @@ local function update_rows(frame, rows)
 				status:diffuse(rowColor)
 			end
 			row:diffuse(color("#ffffff"))
-			row:stoptweening():linear(0.18):y(12 + (i - 1) * 20)
+			if structure_changed then
+				row:stoptweening():linear(0.18):y(12 + (i - 1) * 20)
+			else
+				row:y(12 + (i - 1) * 20)
+			end
 			row:visible(true)
 		elseif row then
 			row:visible(false)
