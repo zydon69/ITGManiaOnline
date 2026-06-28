@@ -1047,12 +1047,20 @@ end
 		end
 
 		if is_evaluation_screen(screenName) then
-			if online_trace then
-			online_trace("FLOW transition_to_options_deferred reason=evaluation_screen"
-				.. " screen=" .. tostring(screenName)
-				.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"))
+			if ITGOnline then
+				ITGOnline.onlineEvaluationExitRequested = true
+				ITGOnline.onlineEvaluationExitRequestedAt = GetTimeSinceStart()
+				if ITGOnline.ClearFinalLeaderboardCache then
+					ITGOnline:ClearFinalLeaderboardCache("new_song_options_redirect_from_evaluation", ITGOnline.currentRoomId)
+				end
 			end
-			return
+			if online_trace then
+				online_trace("FLOW evaluation_forced_exit_to_options reason=new_song_selected_while_in_evaluation"
+					.. " screen=" .. tostring(screenName)
+					.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room")
+					.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+					.. " key=" .. tostring(redirectSelectionKey))
+			end
 		end
 
 		if not redirectSelectionKeyValid then

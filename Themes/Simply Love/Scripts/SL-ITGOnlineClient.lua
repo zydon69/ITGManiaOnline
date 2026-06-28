@@ -5139,7 +5139,7 @@ function ITGOnline:ShouldBlockEvaluationExit(reason, room)
 	local summary = self:PlayStateSummary(room)
 	if phase ~= "results" then
 		online_flow_trace_throttled("evaluation_exit_block_not_results", 1.0,
-			"evaluation_exit_block_decision block=true reason=room_not_results"
+			"evaluation_exit_block_decision block=false reason=room_not_results"
 			.. " source=" .. tostring(reason or "unknown")
 			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
 			.. " phase=" .. tostring(phase)
@@ -5149,7 +5149,7 @@ function ITGOnline:ShouldBlockEvaluationExit(reason, room)
 			.. " finalResults=" .. tostring(summary.finalResults)
 			.. " finalResultsReady=" .. tostring(summary.finalResultsReady == true)
 			.. " failedFinalsPending=" .. tostring(summary.failedFinalsPending))
-		return true
+		return false
 	end
 
 	if summary.players > 0 and not summary.finalResultsReady then
@@ -5981,6 +5981,17 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 		online_flow_trace("navigate decisionId=" .. tostring(decisionId) .. " target=" .. tostring(target) .. " preferred=" .. tostring(preferred) .. " from=" .. tostring(topScreen:GetName()))
 		if preferred == "options" then
 			self:MarkOptionsPresentedForCurrentSelection("apply_preferred_room_screen", self.currentRoom)
+			if self.ClearFinalLeaderboardCache then
+				self:ClearFinalLeaderboardCache("new_song_options_navigation", self.currentRoomId)
+			end
+			if self:IsOnlineEvaluationScreen(topScreen:GetName()) then
+				self.onlineEvaluationExitRequested = true
+				self.onlineEvaluationExitRequestedAt = GetTimeSinceStart()
+				online_flow_trace("evaluation_forced_exit_to_options reason=preferred_screen_options"
+					.. " from=" .. tostring(topScreen:GetName())
+					.. " phase=" .. tostring(roomPhase)
+					.. " room=" .. tostring(self.currentRoomId or "nil"))
+			end
 		end
 		topScreen:SetNextScreenName(target)
 	if preferred == "evaluation" and self:IsOnlineGameplayScreen(topScreen:GetName()) then
