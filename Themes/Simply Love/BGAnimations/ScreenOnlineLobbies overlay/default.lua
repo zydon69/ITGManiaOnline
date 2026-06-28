@@ -442,18 +442,35 @@ local function filter_recently_left_lobby_candidates(incoming, reason)
 
 	local filtered = {}
 	local removed = 0
+	local restored = 0
 	for _, room in ipairs(incoming) do
 		local code = tostring(room and (room.code or room.roomId or room.id) or "")
 		if is_recently_left_lobby_code(code) then
-			removed = removed + 1
+			local playerCount = tonumber(room and (room.playerCount or room.members_count or room.membersCount)) or 0
+			local phase = normalized_online_phase(room and room.phase or nil)
+			local acceptsNewMembers = room and room.acceptsNewMembers
+			if acceptsNewMembers == nil then
+				acceptsNewMembers = room and room.accepts_new_members
+			end
+			local serverConfirmsVisibleRoom = (acceptsNewMembers == true) or (phase == "lobby" and playerCount > 0)
+			if serverConfirmsVisibleRoom then
+				if SL.Global.Online and type(SL.Global.Online.ScreenOnlineLobbiesRecentlyLeftCodes) == "table" then
+					SL.Global.Online.ScreenOnlineLobbiesRecentlyLeftCodes[code] = nil
+				end
+				restored = restored + 1
+				filtered[#filtered + 1] = room
+			else
+				removed = removed + 1
+			end
 		else
 			filtered[#filtered + 1] = room
 		end
 	end
 
-	if removed > 0 then
+	if removed > 0 or restored > 0 then
 		lobby_flow_trace("LobbySearched_filtered_recently_left"
 			.. " removed=" .. tostring(removed)
+			.. " restored=" .. tostring(restored)
 			.. " remaining=" .. tostring(#filtered)
 			.. " reason=" .. tostring(reason or "unknown"))
 	end
@@ -2017,6 +2034,17 @@ local function joined_player_can_receive_manager(player)
 	return true
 end
 
+local function joined_player_action_user(player)
+	if type(player) ~= "table" then return nil end
+	local user = {}
+	for key, value in pairs(player) do
+		user[key] = value
+	end
+	user.actionContext = "joined_manager_transfer"
+	user.id = user.playerId or user.id
+	return user
+end
+
 local function focus_joined_players()
 	if not joined_is_manager or #joined_lobby_players <= 1 then return false end
 	joined_player_index = math.max(1, math.min(joined_player_index, #joined_lobby_players))
@@ -3029,8 +3057,8 @@ local function handle_joined_mode_input(event)
 			lobby_flow_trace("input_joined_player_action_start player=" .. tostring(player and (player.playerId or player.id or player.profileName) or "nil")
 				.. " canReceiveManager=" .. tostring(joined_player_can_receive_manager(player) == true))
 			if joined_player_can_receive_manager(player) then
-				player_action_user = player
-				player_action_options = build_player_action_options(player)
+				player_action_user = joined_player_action_user(player)
+				player_action_options = build_player_action_options(player_action_user)
 				player_action_index = 1
 				showing_player_action_menu = #player_action_options > 0
 				local menu = t and t:GetChild("PlayerActionMenu")
