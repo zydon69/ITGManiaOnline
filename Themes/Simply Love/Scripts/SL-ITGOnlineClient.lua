@@ -11508,13 +11508,17 @@ function ITGOnline:ShouldSuppressLobbyCandidate(roomId, reason)
 
 	local deleted = self.deletedRoomIds and self.deletedRoomIds[roomKey] == true
 	local ignored = self:ShouldIgnoreRoomEvents(roomKey)
-	local suppressed = deleted or ignored
+	local suppressed = deleted
 	if suppressed then
 		online_flow_trace("lobby_candidate_suppressed"
 			.. " room=" .. tostring(roomKey)
 			.. " reason=" .. tostring(reason or "unknown")
 			.. " deleted=" .. tostring(deleted == true)
 			.. " ignored=" .. tostring(ignored == true))
+	elseif ignored then
+		online_flow_trace("lobby_candidate_visible_despite_recent_room_ignore"
+			.. " room=" .. tostring(roomKey)
+			.. " reason=" .. tostring(reason or "unknown"))
 	end
 	return suppressed
 end
