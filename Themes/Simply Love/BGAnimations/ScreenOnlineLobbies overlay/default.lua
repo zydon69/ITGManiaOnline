@@ -441,35 +441,20 @@ local function filter_recently_left_lobby_candidates(incoming, reason)
 	end
 
 	local filtered = {}
-	local removed = 0
 	local restored = 0
 	for _, room in ipairs(incoming) do
 		local code = tostring(room and (room.code or room.roomId or room.id) or "")
 		if is_recently_left_lobby_code(code) then
-			local playerCount = tonumber(room and (room.playerCount or room.members_count or room.membersCount)) or 0
-			local phase = normalized_online_phase(room and room.phase or nil)
-			local acceptsNewMembers = room and room.acceptsNewMembers
-			if acceptsNewMembers == nil then
-				acceptsNewMembers = room and room.accepts_new_members
+			if SL.Global.Online and type(SL.Global.Online.ScreenOnlineLobbiesRecentlyLeftCodes) == "table" then
+				SL.Global.Online.ScreenOnlineLobbiesRecentlyLeftCodes[code] = nil
 			end
-			local serverConfirmsVisibleRoom = (acceptsNewMembers == true) or (phase == "lobby" and playerCount > 0)
-			if serverConfirmsVisibleRoom then
-				if SL.Global.Online and type(SL.Global.Online.ScreenOnlineLobbiesRecentlyLeftCodes) == "table" then
-					SL.Global.Online.ScreenOnlineLobbiesRecentlyLeftCodes[code] = nil
-				end
-				restored = restored + 1
-				filtered[#filtered + 1] = room
-			else
-				removed = removed + 1
-			end
-		else
-			filtered[#filtered + 1] = room
+			restored = restored + 1
 		end
+		filtered[#filtered + 1] = room
 	end
 
-	if removed > 0 or restored > 0 then
-		lobby_flow_trace("LobbySearched_filtered_recently_left"
-			.. " removed=" .. tostring(removed)
+	if restored > 0 then
+		lobby_flow_trace("LobbySearched_restored_recently_left"
 			.. " restored=" .. tostring(restored)
 			.. " remaining=" .. tostring(#filtered)
 			.. " reason=" .. tostring(reason or "unknown"))
