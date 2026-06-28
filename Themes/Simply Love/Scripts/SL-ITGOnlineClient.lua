@@ -13322,13 +13322,22 @@ function ITGOnline:LobbySearchPayload(decoded)
 			if self:ShouldSuppressLobbyCandidate(roomId, "decoded_lobby_payload") then
 				online_flow_trace("lobby_search_room_filtered source=decoded room=" .. tostring(roomId or "nil"))
 			else
+				local phase = room and room.phase or nil
+				local acceptsNewMembers = room and room.accepts_new_members
+				if acceptsNewMembers == nil and room then
+					acceptsNewMembers = room.acceptsNewMembers
+				end
+				if acceptsNewMembers == nil then
+					local normalizedPhase = self.NormalizeRoomPhase and self:NormalizeRoomPhase(phase) or tostring(phase or "")
+					acceptsNewMembers = normalizedPhase == "lobby" or normalizedPhase == "results"
+				end
 				lobbies[#lobbies + 1] = {
-					code = tostring(room.id),
-					roomId = room.id,
+					code = tostring(roomId or ""),
+					roomId = roomId,
 					name = room.name,
 					playerCount = room.members_count or 0,
-					phase = room.phase,
-					acceptsNewMembers = room.accepts_new_members == true,
+					phase = phase,
+					acceptsNewMembers = acceptsNewMembers == true,
 				}
 			end
 		end

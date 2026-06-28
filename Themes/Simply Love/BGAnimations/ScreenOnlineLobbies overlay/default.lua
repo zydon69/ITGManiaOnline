@@ -2239,7 +2239,8 @@ local function room_accepts_new_members(room)
 	if not room then return false end
 	if room.acceptsNewMembers ~= nil then return room.acceptsNewMembers == true end
 	if room.accepts_new_members ~= nil then return room.accepts_new_members == true end
-	return normalized_online_phase(room.phase) == "lobby"
+	local phase = normalized_online_phase(room.phase)
+	return phase == "lobby" or phase == "results"
 end
 
 local function selected_online_user()
@@ -5134,8 +5135,10 @@ local af = Def.ActorFrame{
 			.. " phase=" .. tostring(params.phase)
 			.. " mode=" .. tostring(mode)
 			.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+		local joinPhase = normalized_online_phase(params.phase)
+		local phaseAllowsJoin = joinPhase == "lobby" or joinPhase == "results"
 		if params.acceptsNewMembers == false
-			or (params.acceptsNewMembers == nil and params.phase ~= nil and normalized_online_phase(params.phase) ~= "lobby") then
+			or (params.acceptsNewMembers == nil and params.phase ~= nil and not phaseAllowsJoin) then
 			lobby_flow_trace("OnlineLobbyJoinSelected_rejected reason=not_accepting_members code=" .. tostring(params.code)
 				.. " phase=" .. tostring(params.phase))
 			play_online_sound_once("Common", "Cancel")
