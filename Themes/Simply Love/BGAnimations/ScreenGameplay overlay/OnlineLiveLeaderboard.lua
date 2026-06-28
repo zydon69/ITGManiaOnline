@@ -102,6 +102,9 @@ local function rows_from_leaderboard(leaderboard)
 		end
 		local user_id = tostring(user.id or "")
 		local play_state = play_state_for_user(user_id)
+		if play_state == "" and score.state ~= nil then
+			play_state = tostring(score.state)
+		end
 		local flags = terminal_flags(play_state, score.failed and true or false)
 		local is_finalized = score.finalized_at ~= nil and tostring(score.finalized_at) ~= ""
 		rows[#rows + 1] = {
@@ -115,6 +118,31 @@ local function rows_from_leaderboard(leaderboard)
 		}
 	end
 	leaderboard_trace("rows_from_leaderboard end rows=" .. tostring(#rows))
+	return rows
+end
+
+local function rows_from_play_state_sessions(play_state)
+	local rows = {}
+	local sessions = play_state and play_state.sessions or {}
+	leaderboard_trace("rows_from_play_state_sessions begin sessions=" .. tostring(sessions and #sessions or 0)
+		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+	for session in ivalues(sessions or {}) do
+		local user = session.user or {}
+		local user_id = tostring(user.id or session.user_id or "")
+		local state = tostring(session.state or "")
+		local flags = terminal_flags(state, state == "failed")
+		rows[#rows + 1] = {
+			user_id = user_id,
+			name = online_display_name(user, "Player"),
+			percent = 0,
+			failed = flags.failed,
+			exited = flags.exited,
+			finished = flags.finished,
+			play_state = state,
+		}
+	end
+	leaderboard_trace("rows_from_play_state_sessions end rows=" .. tostring(#rows))
 	return rows
 end
 
@@ -217,8 +245,23 @@ local af = Def.ActorFrame{
 		update_rows(self, rows_from_leaderboard(params and params.leaderboard or {}))
 	end,
 	OnlineLobbyStateMessageCommand=function(self, data)
-		-- Intentionally ignored: gameplay leaderboard is driven exclusively by ITGOnlineLeaderboardUpdated.
-		return
+		local room = data or (ITGOnline and ITGOnline.currentRoom) or nil
+		local current_room_id = tostring(ITGOnline and ITGOnline.currentRoomId or "")
+		local incoming_room_id = tostring(room and room.id or room and room.roomId or "")
+		if current_room_id ~= "" and incoming_room_id ~= "" and current_room_id ~= incoming_room_id then
+			leaderboard_trace("lobby_state_ignored reason=room_mismatch current=" .. current_room_id .. " incoming=" .. incoming_room_id)
+			return
+		end
+
+		local leaderboard = room and (room.leaderboard or room.live_scores or room.top_scores) or nil
+		local rows = rows_from_leaderboard(leaderboard or {})
+		if #rows == 0 then
+			rows = rows_from_play_state_sessions(room and room.play_state or nil)
+		end
+		leaderboard_trace("lobby_state_update rows=" .. tostring(#rows)
+			.. " leaderboardRows=" .. tostring(leaderboard and #leaderboard or 0)
+			.. " phase=" .. tostring(room and room.phase or "nil"))
+		update_rows(self, rows)
 	end,
 }
 
