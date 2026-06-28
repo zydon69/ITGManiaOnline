@@ -12,6 +12,19 @@ local score_zoom = 0.23
 local status_zoom = 0.38
 local label_maxwidth = math.max(1, (score_x - label_x - (panel_width * 0.12)) / row_zoom)
 local score_maxwidth = math.max(1, (panel_width * 0.27) / score_zoom)
+local last_visible_trace_at = -999
+
+local function monotonic_time()
+	if GetTimeSinceStart then
+		return tonumber(GetTimeSinceStart()) or 0
+	end
+	return 0
+end
+
+local function force_trace(message)
+	local line = "ITG Online: FLOW live_leaderboard " .. tostring(message or "")
+	if Trace then Trace(line) elseif Warn then Warn(line) end
+end
 
 local function compact_name(name)
 	name = tostring(name or "Player")
@@ -39,8 +52,7 @@ local function leaderboard_trace(message)
 	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
 		return
 	end
-	local line = "ITG Online: FLOW live_leaderboard " .. tostring(message or "")
-	if Trace then Trace(line) elseif Warn then Warn(line) end
+	force_trace(message)
 end
 
 local function selected_max_score()
@@ -146,10 +158,32 @@ local function rows_from_play_state_sessions(play_state)
 	return rows
 end
 
+local function rows_from_room(room)
+	local leaderboard = room and (room.leaderboard or room.live_scores or room.top_scores) or nil
+	local rows = rows_from_leaderboard(leaderboard or {})
+	if #rows == 0 then
+		rows = rows_from_play_state_sessions(room and room.play_state or nil)
+	end
+	return rows, leaderboard
+end
+
 local function update_rows(frame, rows)
 	local phase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil
 	local show = ITGOnline and ITGOnline.currentRoom and (phase == "playing" or phase == "results") and #rows > 0
+	local now = monotonic_time()
 	frame:visible(show)
+	frame:diffusealpha(show and 1 or 0)
+	frame:zoom(1)
+	if now - last_visible_trace_at >= 1.0 then
+		force_trace("visible_state show=" .. tostring(show == true)
+			.. " rows=" .. tostring(#rows)
+			.. " phase=" .. tostring(phase or "nil")
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " x=" .. tostring(frame.GetX and frame:GetX() or "nil")
+			.. " y=" .. tostring(frame.GetY and frame:GetY() or "nil")
+			.. " alpha=" .. tostring(show and 1 or 0))
+		last_visible_trace_at = now
+	end
 	leaderboard_trace("update_rows show=" .. tostring(show == true)
 		.. " rows=" .. tostring(#rows)
 		.. " phase=" .. tostring(phase or "nil")
@@ -238,6 +272,19 @@ local af = Def.ActorFrame{
 				.. " aspect=" .. tostring(GetScreenAspectRatio()))
 		end
 	end,
+	OnCommand=function(self)
+		self:queuecommand("RefreshFromRoom")
+	end,
+	RefreshFromRoomCommand=function(self)
+		local room = ITGOnline and ITGOnline.currentRoom or nil
+		if room then
+			local rows = rows_from_room(room)
+			update_rows(self, rows)
+		else
+			update_rows(self, {})
+		end
+		self:sleep(0.25):queuecommand("RefreshFromRoom")
+	end,
 	ITGOnlineLeaderboardUpdatedMessageCommand=function(self, params)
 		leaderboard_trace("message_leaderboard_updated version=" .. tostring(params and params.version_ms or "nil")
 			.. " rows=" .. tostring(params and params.leaderboard and #params.leaderboard or 0)
@@ -253,11 +300,7 @@ local af = Def.ActorFrame{
 			return
 		end
 
-		local leaderboard = room and (room.leaderboard or room.live_scores or room.top_scores) or nil
-		local rows = rows_from_leaderboard(leaderboard or {})
-		if #rows == 0 then
-			rows = rows_from_play_state_sessions(room and room.play_state or nil)
-		end
+		local rows, leaderboard = rows_from_room(room)
 		leaderboard_trace("lobby_state_update rows=" .. tostring(#rows)
 			.. " leaderboardRows=" .. tostring(leaderboard and #leaderboard or 0)
 			.. " phase=" .. tostring(room and room.phase or "nil"))
