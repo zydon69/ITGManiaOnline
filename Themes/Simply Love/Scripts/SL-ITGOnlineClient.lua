@@ -4369,6 +4369,10 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		or tostring(previousChartHash or "") ~= tostring(normalizedIncomingChartHash or "")
 	)
 	if finalCacheShouldClear and self.ClearFinalLeaderboardCache then
+		if normalizedPreviousPhase == "results" and normalizedIncomingPhase == "lobby" then
+			self.finalLeaderboardCacheInvalidLobbyRoomId = tostring(room.id or self.currentRoomId or "")
+			self.finalLeaderboardCacheInvalidLobbyAt = GetTimeSinceStart()
+		end
 		self:ClearFinalLeaderboardCache(
 			"room_snapshot_" .. tostring(normalizedPreviousPhase) .. "_to_" .. tostring(normalizedIncomingPhase),
 			room.id or self.currentRoomId
@@ -4921,6 +4925,15 @@ end
 function ITGOnline:GetFinalLeaderboardCache(roomId)
 	self.finalLeaderboardCache = self.finalLeaderboardCache or {}
 	local key = tostring(roomId or self.currentRoomId or "")
+	local currentPhase = self.currentRoom and self:NormalizeRoomPhase(self.currentRoom.phase) or ""
+	if currentPhase == "lobby"
+		and key ~= ""
+		and tostring(self.finalLeaderboardCacheInvalidLobbyRoomId or "") == key then
+		final_leaderboard_cache_trace("miss reason=invalidated_lobby_phase"
+			.. " room=" .. tostring(key)
+			.. " age=" .. tostring(GetTimeSinceStart() - (tonumber(self.finalLeaderboardCacheInvalidLobbyAt) or GetTimeSinceStart())))
+		return nil
+	end
 	if key ~= "" and self.finalLeaderboardCache[key] then
 		final_leaderboard_cache_trace("hit room=" .. tostring(key)
 			.. " rows=" .. tostring(self.finalLeaderboardCache[key].rows and #self.finalLeaderboardCache[key].rows or 0)
@@ -6033,6 +6046,13 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 		end
 		return true
 	end
+	if preferred == "options" and self:IsOnlineEvaluationScreen(topScreen:GetName()) then
+		online_flow_trace("evaluation_forced_exit_to_options action=start_transition"
+			.. " from=" .. tostring(topScreen:GetName())
+			.. " target=" .. tostring(target)
+			.. " phase=" .. tostring(roomPhase)
+			.. " room=" .. tostring(self.currentRoomId or "nil"))
+	end
 	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 	return true
 end
@@ -6153,6 +6173,75 @@ function ITGOnline:EnforceCurrentRoomScreenAfterStateUpdate(source)
 		.. " room=" .. tostring(self.currentRoomId or "nil")
 		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
 	return self:EnforceRoomPhaseScreen(screenName)
+end
+
+function ITGOnline:ForceGameplayEvaluationIfResultsReady(source)
+	if not self.currentRoomId or not self.currentRoom then
+		online_flow_trace("force_evaluation_skipped reason=no_current_room source=" .. tostring(source or "unknown"))
+		return false
+	end
+
+	local topScreen = SCREENMAN and SCREENMAN.GetTopScreen and SCREENMAN:GetTopScreen() or nil
+	local screenName = topScreen and topScreen.GetName and topScreen:GetName() or "nil"
+	if not (topScreen and self:IsOnlineGameplayScreen(screenName)) then
+		return false
+	end
+
+	local phase = self:NormalizeRoomPhase(self.currentRoom.phase)
+	if phase ~= "results" then
+		return false
+	end
+
+	local summary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
+	if not (summary and summary.players > 0 and summary.finalResultsReady == true) then
+		online_flow_trace_throttled("force_evaluation_wait_results", 1.0,
+			"force_evaluation_skipped reason=final_results_not_ready"
+			.. " source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(phase)
+			.. " players=" .. tostring(summary and summary.players or "nil")
+			.. " terminal=" .. tostring(summary and summary.terminal or "nil")
+			.. " finalResults=" .. tostring(summary and summary.finalResults or "nil")
+			.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true))
+		return false
+	end
+
+	local roundKey, roundKeySource = self:CanonicalGameplayRoundKey("force_results_ready_evaluation")
+	local forceKey = table.concat({
+		tostring(self.currentRoomId or ""),
+		tostring(roundKey or ""),
+		tostring(screenName or ""),
+		"results_ready",
+	}, "|")
+	local now = GetTimeSinceStart()
+	if tostring(self.onlineGameplayEvaluationForceKey or "") == forceKey
+		and (now - (tonumber(self.onlineGameplayEvaluationForceAt) or 0)) < 1.5 then
+		online_flow_trace_throttled("force_evaluation_duplicate", 1.0,
+			"force_evaluation_skipped reason=already_forced"
+			.. " source=" .. tostring(source or "unknown")
+			.. " key=" .. tostring(forceKey)
+			.. " age=" .. tostring(now - (tonumber(self.onlineGameplayEvaluationForceAt) or 0)))
+		return true
+	end
+
+	self.onlineGameplayEvaluationForceKey = forceKey
+	self.onlineGameplayEvaluationForceAt = now
+	online_flow_trace("force_evaluation_results_ready"
+		.. " source=" .. tostring(source or "unknown")
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " screen=" .. tostring(screenName)
+		.. " roundKey=" .. tostring(roundKey or "")
+		.. " roundKeySource=" .. tostring(roundKeySource or "")
+		.. " players=" .. tostring(summary.players)
+		.. " terminal=" .. tostring(summary.terminal)
+		.. " finalResults=" .. tostring(summary.finalResults))
+
+	if topScreen.PostScreenMessage then
+		topScreen:PostScreenMessage("SM_LeaveGameplay", 0)
+	else
+		topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+	end
+	return true
 end
 
 function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, nextScreenName)

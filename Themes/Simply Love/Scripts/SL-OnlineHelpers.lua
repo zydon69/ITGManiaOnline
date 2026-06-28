@@ -3438,6 +3438,9 @@ CreateOnlineHandler = function()
 									.. " finalResults=" .. tostring(params.finalResults and #params.finalResults or 0)
 								if Trace then Trace(line) elseif Warn then Warn(line) end
 							end
+							if ITGOnline and ITGOnline.ForceGameplayEvaluationIfResultsReady then
+								ITGOnline:ForceGameplayEvaluationIfResultsReady("online_lobby_state_message_before_duplicate_guard")
+							end
 							if stateSignature ~= "" and stateSignature == tostring(self.lastLobbyStateSignature or "") then
 								online_flow_trace("online_lobby_state_apply_skipped reason=duplicate_signature"
 									.. " roomId=" .. tostring(params.roomId or "nil")
@@ -3469,6 +3472,9 @@ CreateOnlineHandler = function()
 									.. " screen=" .. tostring(screenName))
 							end
 							DisplayLobbyState(params, self)
+							if ITGOnline and ITGOnline.ForceGameplayEvaluationIfResultsReady then
+								ITGOnline:ForceGameplayEvaluationIfResultsReady("online_lobby_state_message_after_display")
+							end
 							if ITGOnline and ITGOnline.EnforceCurrentRoomScreenAfterStateUpdate then
 								ITGOnline:EnforceCurrentRoomScreenAfterStateUpdate("online_lobby_state_message")
 							end
