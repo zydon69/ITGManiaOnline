@@ -5790,6 +5790,16 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 	end
 
 	if phase == "starting" then
+		local hasStartAt = self.currentRoom
+			and (self.currentRoom.start_at ~= nil or self.currentRoom.start_at_ms ~= nil)
+		online_flow_trace("preferred_starting_detail"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " hasStartAt=" .. tostring(hasStartAt == true)
+			.. " startAt=" .. tostring(self.currentRoom and (self.currentRoom.start_at or self.currentRoom.start_at_ms) or "nil")
+			.. " secondsUntilStart=" .. tostring(self:SecondsUntilScheduledStart() or "nil")
+			.. " screen=" .. tostring(screenName or "nil")
+			.. " playState=" .. tostring(playState)
+			.. " localRoundEnded=" .. tostring(localRoundEnded == true))
 		if localRoundEnded then
 			online_flow_trace("preferred=nil reason=starting_after_local_round_end playState=" .. tostring(playState) .. " roundKey=" .. tostring(roundKey))
 			return nil
@@ -10933,7 +10943,14 @@ function ITGOnline:MarkSongLoaded(callback, clockRetry)
 
 function ITGOnline:MaybeAckScheduledStart(room)
 	room = room or self.currentRoom
-	if not room or room.phase ~= "starting" or not room.start_at then return end
+	if not room or room.phase ~= "starting" or not room.start_at then
+		online_flow_trace("start_ack_skipped reason=no_scheduled_start"
+			.. " hasRoom=" .. tostring(room ~= nil)
+			.. " room=" .. tostring(room and (room.id or self.currentRoomId) or self.currentRoomId or "nil")
+			.. " phase=" .. tostring(room and room.phase or "nil")
+			.. " startAt=" .. tostring(room and (room.start_at or room.start_at_ms) or "nil"))
+		return
+	end
 	if not self.currentRoomId then return end
 
 	local screen = SCREENMAN:GetTopScreen()
