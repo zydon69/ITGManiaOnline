@@ -620,10 +620,17 @@ Branch.AfterSelectMusic = function()
 	-- TODO: Consider locking the music wheel in this case.
 	local active, room, inactiveReason = HasActiveOnlineRoom({ phase = { "lobby", "lobby_ready", "config", "results" } })
 	if active then
-		BranchTrace("AfterSelectMusic action=broadcast_song_selected"
+		BranchTrace("AfterSelectMusic action=select_online_song_as_manager"
 			.. " room=" .. tostring(ITGOnline.currentRoomId)
 			.. " phase=" .. tostring(OnlineRoomPhase(room)))
-		if MESSAGEMAN and MESSAGEMAN.Broadcast then
+		if IsCallable(SelectOnlineSongAsManager) then
+			SafeCall("SelectOnlineSongAsManager AfterSelectMusic", function()
+				SelectOnlineSongAsManager(nil)
+			end)
+		elseif MESSAGEMAN and MESSAGEMAN.Broadcast then
+			BranchTrace("AfterSelectMusic fallback=broadcast_song_selected reason=no_select_helper"
+				.. " room=" .. tostring(ITGOnline.currentRoomId)
+				.. " phase=" .. tostring(OnlineRoomPhase(room)))
 			SafeCall("MESSAGEMAN.Broadcast SongSelected", function()
 				MESSAGEMAN:Broadcast("SongSelected", {
 					roomId = ITGOnline.currentRoomId,
