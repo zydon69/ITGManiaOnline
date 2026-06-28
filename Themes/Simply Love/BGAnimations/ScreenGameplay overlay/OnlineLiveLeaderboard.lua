@@ -16,8 +16,10 @@ local last_visible_trace_at = -999
 local last_layout_signature = ""
 local last_visible_state = nil
 local cached_score_context = ""
+local cached_room_id = ""
 local cached_score_rows_by_user_id = {}
 local cached_score_user_order = {}
+local last_non_empty_rows = {}
 
 local function monotonic_time()
 	if GetTimeSinceStart then
@@ -74,12 +76,16 @@ end
 
 local function reset_score_cache_if_needed(room)
 	local context = room_round_context(room)
-	if context == cached_score_context then
+	local room_id = tostring(room and (room.id or room.roomId) or ITGOnline and ITGOnline.currentRoomId or "")
+	local phase = tostring(room and room.phase or ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "")
+	if room_id == cached_room_id and (context == cached_score_context or phase == "playing") then
 		return
 	end
+	cached_room_id = room_id
 	cached_score_context = context
 	cached_score_rows_by_user_id = {}
 	cached_score_user_order = {}
+	last_non_empty_rows = {}
 	leaderboard_trace("score_cache_reset context=" .. tostring(context))
 end
 
@@ -224,7 +230,17 @@ local function remember_score_rows(rows)
 	for row in ivalues(rows or {}) do
 		local user_id = tostring(row.user_id or "")
 		if user_id ~= "" then
-			cached_score_rows_by_user_id[user_id] = copy_row(row)
+			local previous = cached_score_rows_by_user_id[user_id]
+			local previous_percent = tonumber(previous and previous.percent) or 0
+			local incoming_percent = tonumber(row.percent) or 0
+			local incoming_terminal = row.failed == true or row.finished == true or row.exited == true
+			if not previous or incoming_terminal or incoming_percent >= previous_percent then
+				cached_score_rows_by_user_id[user_id] = copy_row(row)
+			else
+				leaderboard_trace("score_cache_kept_higher user=" .. tostring(user_id)
+					.. " incoming=" .. string.format("%.3f", incoming_percent)
+					.. " previous=" .. string.format("%.3f", previous_percent))
+			end
 			if not cache_has_user_id(user_id) then
 				cached_score_user_order[#cached_score_user_order + 1] = user_id
 			end
@@ -260,7 +276,13 @@ local function rows_from_room(room, leaderboard_override)
 
 	for row in ivalues(score_rows or {}) do
 		if row.user_id and tostring(row.user_id) ~= "" then
-			score_by_user_id[tostring(row.user_id)] = row
+			local user_id = tostring(row.user_id)
+			local cached = cached_score_rows_by_user_id[user_id]
+			if cached and (tonumber(cached.percent) or 0) > (tonumber(row.percent) or 0) then
+				score_by_user_id[user_id] = cached
+			else
+				score_by_user_id[user_id] = row
+			end
 		end
 	end
 
@@ -294,7 +316,31 @@ local function rows_from_room(room, leaderboard_override)
 			end
 		end
 	else
-		merged = score_rows
+		for row in ivalues(score_rows or {}) do
+			local user_id = tostring(row.user_id or "")
+			local cached = cached_score_rows_by_user_id[user_id]
+			if cached and (tonumber(cached.percent) or 0) > (tonumber(row.percent) or 0) then
+				merged[#merged + 1] = copy_row(cached)
+			else
+				merged[#merged + 1] = row
+			end
+			if user_id ~= "" then seen[user_id] = true end
+		end
+
+		for user_id in ivalues(cached_score_user_order or {}) do
+			if tostring(user_id) ~= "" and not seen[tostring(user_id)] and cached_score_rows_by_user_id[tostring(user_id)] then
+				merged[#merged + 1] = copy_row(cached_score_rows_by_user_id[tostring(user_id)])
+				seen[tostring(user_id)] = true
+			end
+		end
+	end
+
+	if #merged == 0 and tostring(room and room.phase or "") == "playing" and #last_non_empty_rows > 0 then
+		leaderboard_trace("rows_from_room_reuse_last_non_empty reason=empty_playing"
+			.. " room=" .. tostring(room and room.id or ITGOnline and ITGOnline.currentRoomId or "nil"))
+		for row in ivalues(last_non_empty_rows) do
+			merged[#merged + 1] = copy_row(row)
+		end
 	end
 
 	leaderboard_trace("rows_from_room merged scoreRows=" .. tostring(#score_rows)
@@ -308,8 +354,17 @@ end
 
 local function update_rows(frame, rows)
 	local phase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil
+	if phase == "playing" and (not rows or #rows == 0) and #last_non_empty_rows > 0 then
+		rows = last_non_empty_rows
+	end
 	local show = ITGOnline and ITGOnline.currentRoom and (phase == "playing" or phase == "results") and #rows > 0
 	local now = monotonic_time()
+	if show and rows and #rows > 0 then
+		last_non_empty_rows = {}
+		for row in ivalues(rows) do
+			last_non_empty_rows[#last_non_empty_rows + 1] = copy_row(row)
+		end
+	end
 	if last_visible_state ~= show then
 		frame:visible(show)
 		frame:diffusealpha(show and 1 or 0)
