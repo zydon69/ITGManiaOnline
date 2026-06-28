@@ -194,6 +194,21 @@ local function copy_row(row)
 	return copied
 end
 
+local function rows_debug_summary(rows)
+	local parts = {}
+	for row in ivalues(rows or {}) do
+		parts[#parts + 1] = table.concat({
+			tostring(row.user_id or ""),
+			tostring(row.name or ""),
+			string.format("%.2f", tonumber(row.percent) or 0),
+			tostring(row.play_state or ""),
+			tostring(row.failed == true),
+			tostring(row.finished == true),
+		}, ":")
+	end
+	return table.concat(parts, ",")
+end
+
 local function cache_has_user_id(user_id)
 	user_id = tostring(user_id or "")
 	for id in ivalues(cached_score_user_order or {}) do
@@ -308,7 +323,8 @@ local function update_rows(frame, rows)
 			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 			.. " x=" .. tostring(frame.GetX and frame:GetX() or "nil")
 			.. " y=" .. tostring(frame.GetY and frame:GetY() or "nil")
-			.. " alpha=" .. tostring(show and 1 or 0))
+			.. " alpha=" .. tostring(show and 1 or 0)
+			.. " rowSummary=" .. rows_debug_summary(rows))
 		last_visible_trace_at = now
 	end
 	leaderboard_trace("update_rows show=" .. tostring(show == true)

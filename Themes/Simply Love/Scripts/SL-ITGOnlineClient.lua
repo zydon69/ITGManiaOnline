@@ -12966,6 +12966,19 @@ end
 		end
 
 		if payload.leaderboard and leaderboardIsFresh then
+			if self.currentRoom then
+				self.currentRoom.live_scores = payload.leaderboard
+				self.currentRoom.leaderboard_version_ms = incomingVersion
+				self.currentRoom.live_score_version_ms = incomingVersion
+				if payload.room_phase then
+					self.currentRoom.phase = payload.room_phase
+				end
+				online_flow_trace("score_updated_live_scores_applied roomId=" .. tostring(payload.room_id or "nil")
+					.. " version=" .. tostring(incomingVersion)
+					.. " entries=" .. tostring(payload.leaderboard and #payload.leaderboard or 0)
+					.. " phase=" .. tostring(self.currentRoom.phase or "nil")
+					.. " rowsSummary=" .. online_score_rows_summary(payload.leaderboard, 8))
+			end
 			local topScreen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
 			local screenName = tostring((topScreen and topScreen:GetName()) or self.currentScreenName or "")
 			local suppressPostResultsBroadcast = self:IsPostResultsLobbyScreen(self.currentRoom, screenName)
