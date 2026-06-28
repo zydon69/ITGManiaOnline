@@ -13,7 +13,11 @@ local status_zoom = 0.38
 local label_maxwidth = math.max(1, (score_x - label_x - (panel_width * 0.12)) / row_zoom)
 local score_maxwidth = math.max(1, (panel_width * 0.27) / score_zoom)
 local last_visible_trace_at = -999
-local last_rows_signature = ""
+local last_layout_signature = ""
+local last_visible_state = nil
+local cached_score_context = ""
+local cached_score_rows_by_user_id = {}
+local cached_score_user_order = {}
 
 local function monotonic_time()
 	if GetTimeSinceStart then
@@ -54,6 +58,29 @@ local function leaderboard_trace(message)
 		return
 	end
 	force_trace(message)
+end
+
+local function room_round_context(room)
+	room = room or (ITGOnline and ITGOnline.currentRoom) or {}
+	local play_state = room.play_state or {}
+	local selected_song = room.selected_song or {}
+	return table.concat({
+		tostring(room.id or room.roomId or ITGOnline and ITGOnline.currentRoomId or ""),
+		tostring(play_state.round_key or play_state.roundKey or play_state.round_id or play_state.roundId or ""),
+		tostring(play_state.started_at or play_state.startedAt or play_state.start_at or play_state.startAt or ""),
+		tostring(selected_song.selected_at or selected_song.selectedAt or selected_song.id or selected_song.chart_key or selected_song.chartKey or ""),
+	}, "|")
+end
+
+local function reset_score_cache_if_needed(room)
+	local context = room_round_context(room)
+	if context == cached_score_context then
+		return
+	end
+	cached_score_context = context
+	cached_score_rows_by_user_id = {}
+	cached_score_user_order = {}
+	leaderboard_trace("score_cache_reset context=" .. tostring(context))
 end
 
 local function selected_max_score()
@@ -113,7 +140,7 @@ local function rows_from_leaderboard(leaderboard)
 		if percent == nil then
 			percent = accuracy_percent
 		end
-		local user_id = tostring(user.id or "")
+		local user_id = tostring(user.id or score.user_id or score.userId or "")
 		local play_state = play_state_for_user(user_id)
 		if play_state == "" and score.state ~= nil then
 			play_state = tostring(score.state)
@@ -122,7 +149,7 @@ local function rows_from_leaderboard(leaderboard)
 		local is_finalized = score.finalized_at ~= nil and tostring(score.finalized_at) ~= ""
 		rows[#rows + 1] = {
 			user_id = user_id,
-			name = online_display_name(user, "Player"),
+			name = online_display_name(user, score.user_name or score.userName or score.name or "Player"),
 			percent = percent or 0,
 			failed = flags.failed,
 			exited = flags.exited,
@@ -167,29 +194,54 @@ local function copy_row(row)
 	return copied
 end
 
-local function rows_signature(rows)
+local function cache_has_user_id(user_id)
+	user_id = tostring(user_id or "")
+	for id in ivalues(cached_score_user_order or {}) do
+		if tostring(id) == user_id then
+			return true
+		end
+	end
+	return false
+end
+
+local function remember_score_rows(rows)
+	local remembered = 0
+	for row in ivalues(rows or {}) do
+		local user_id = tostring(row.user_id or "")
+		if user_id ~= "" then
+			cached_score_rows_by_user_id[user_id] = copy_row(row)
+			if not cache_has_user_id(user_id) then
+				cached_score_user_order[#cached_score_user_order + 1] = user_id
+			end
+			remembered = remembered + 1
+		end
+	end
+	if remembered > 0 then
+		leaderboard_trace("score_cache_remember rows=" .. tostring(remembered)
+			.. " context=" .. tostring(cached_score_context))
+	end
+end
+
+local function rows_layout_signature(rows)
 	local parts = {}
 	for row in ivalues(rows or {}) do
 		parts[#parts + 1] = table.concat({
 			tostring(row.user_id or ""),
 			tostring(row.name or ""),
-			string.format("%.3f", tonumber(row.percent) or 0),
-			tostring(row.failed == true),
-			tostring(row.exited == true),
-			tostring(row.finished == true),
-			tostring(row.play_state or ""),
 		}, ":")
 	end
 	return table.concat(parts, "|")
 end
 
-local function rows_from_room(room)
-	local leaderboard = room and (room.leaderboard or room.live_scores or room.top_scores) or nil
+local function rows_from_room(room, leaderboard_override)
+	reset_score_cache_if_needed(room)
+	local leaderboard = leaderboard_override or (room and (room.leaderboard or room.live_scores or room.top_scores) or nil)
 	local score_rows = rows_from_leaderboard(leaderboard or {})
 	local session_rows = rows_from_play_state_sessions(room and room.play_state or nil)
 	local score_by_user_id = {}
 	local merged = {}
 	local seen = {}
+	remember_score_rows(score_rows)
 
 	for row in ivalues(score_rows or {}) do
 		if row.user_id and tostring(row.user_id) ~= "" then
@@ -200,7 +252,7 @@ local function rows_from_room(room)
 	if #session_rows > 0 then
 		for session_row in ivalues(session_rows) do
 			local user_id = tostring(session_row.user_id or "")
-			local score_row = score_by_user_id[user_id]
+			local score_row = score_by_user_id[user_id] or cached_score_rows_by_user_id[user_id]
 			local row = score_row and copy_row(score_row) or copy_row(session_row)
 			if score_row then
 				row.play_state = session_row.play_state
@@ -219,6 +271,13 @@ local function rows_from_room(room)
 				seen[user_id] = true
 			end
 		end
+
+		for user_id in ivalues(cached_score_user_order or {}) do
+			if tostring(user_id) ~= "" and not seen[tostring(user_id)] and cached_score_rows_by_user_id[tostring(user_id)] then
+				merged[#merged + 1] = copy_row(cached_score_rows_by_user_id[tostring(user_id)])
+				seen[tostring(user_id)] = true
+			end
+		end
 	else
 		merged = score_rows
 	end
@@ -226,6 +285,7 @@ local function rows_from_room(room)
 	leaderboard_trace("rows_from_room merged scoreRows=" .. tostring(#score_rows)
 		.. " sessionRows=" .. tostring(#session_rows)
 		.. " mergedRows=" .. tostring(#merged)
+		.. " cachedRows=" .. tostring(#cached_score_user_order)
 		.. " room=" .. tostring(room and room.id or ITGOnline and ITGOnline.currentRoomId or "nil")
 		.. " phase=" .. tostring(room and room.phase or "nil"))
 	return merged, leaderboard
@@ -235,9 +295,12 @@ local function update_rows(frame, rows)
 	local phase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil
 	local show = ITGOnline and ITGOnline.currentRoom and (phase == "playing" or phase == "results") and #rows > 0
 	local now = monotonic_time()
-	frame:visible(show)
-	frame:diffusealpha(show and 1 or 0)
-	frame:zoom(1)
+	if last_visible_state ~= show then
+		frame:visible(show)
+		frame:diffusealpha(show and 1 or 0)
+		frame:zoom(1)
+		last_visible_state = show
+	end
 	if now - last_visible_trace_at >= 1.0 then
 		force_trace("visible_state show=" .. tostring(show == true)
 			.. " rows=" .. tostring(#rows)
@@ -253,9 +316,9 @@ local function update_rows(frame, rows)
 		.. " phase=" .. tostring(phase or "nil")
 		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 		.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil))
-	local signature = show and rows_signature(rows) or ""
-	local structure_changed = signature ~= last_rows_signature
-	last_rows_signature = signature
+	local signature = show and rows_layout_signature(rows) or ""
+	local structure_changed = signature ~= last_layout_signature
+	last_layout_signature = signature
 	if not show then return end
 
 	local self_id = local_user_id()
@@ -360,7 +423,12 @@ local af = Def.ActorFrame{
 		leaderboard_trace("message_leaderboard_updated version=" .. tostring(params and params.version_ms or "nil")
 			.. " rows=" .. tostring(params and params.leaderboard and #params.leaderboard or 0)
 			.. " source=" .. tostring(params and params.source or "nil"))
-		update_rows(self, rows_from_leaderboard(params and params.leaderboard or {}))
+		local room = ITGOnline and ITGOnline.currentRoom or nil
+		if room then
+			update_rows(self, rows_from_room(room, params and params.leaderboard or {}))
+		else
+			update_rows(self, rows_from_leaderboard(params and params.leaderboard or {}))
+		end
 	end,
 	OnlineLobbyStateMessageCommand=function(self, data)
 		local room = data or (ITGOnline and ITGOnline.currentRoom) or nil
