@@ -928,17 +928,21 @@ local Overrides = {
 						local beforeSteps = GAMESTATE and GAMESTATE.GetCurrentSteps and GAMESTATE:GetCurrentSteps(pn) or nil
 						local beforeDifficulty = beforeSteps and beforeSteps.GetDifficulty and ToEnumShortString(beforeSteps:GetDifficulty()) or "nil"
 						local beforeMeter = beforeSteps and beforeSteps.GetMeter and beforeSteps:GetMeter() or "nil"
+						local beforeChartHash = ITGOnline and ITGOnline.ChartHashForSteps and beforeSteps and ITGOnline:ChartHashForSteps(beforeSteps) or ""
 						local selectedDifficulty = v and v.GetDifficulty and ToEnumShortString(v:GetDifficulty()) or "nil"
 						local selectedMeter = v and v.GetMeter and v:GetMeter() or "nil"
 						local selectedChartKey = v and v.GetChartKey and tostring(v:GetChartKey() or "") or ""
+						local selectedChartHash = ITGOnline and ITGOnline.ChartHashForSteps and v and ITGOnline:ChartHashForSteps(v) or ""
 						online_flow_trace("player_options_stepchart_save_begin"
 							.. " player=" .. tostring(PlayerKey(pn) or pn or "nil")
 							.. " index=" .. tostring(i)
 							.. " beforeDifficulty=" .. tostring(beforeDifficulty)
 							.. " beforeMeter=" .. tostring(beforeMeter)
+							.. " beforeChartHash=" .. tostring(beforeChartHash)
 							.. " selectedDifficulty=" .. tostring(selectedDifficulty)
 							.. " selectedMeter=" .. tostring(selectedMeter)
-							.. " selectedChartKey=" .. tostring(selectedChartKey))
+							.. " selectedChartKey=" .. tostring(selectedChartKey)
+							.. " selectedChartHash=" .. tostring(selectedChartHash))
 					end
 					-- GAMESTATE keeps track of what the "preferred difficulty" is and this is used by
 					-- the engine's SelectMusic class.  SL is using the engine's SelectMusic for now.
@@ -972,12 +976,14 @@ local Overrides = {
 							local afterDifficulty = afterSteps and afterSteps.GetDifficulty and ToEnumShortString(afterSteps:GetDifficulty()) or "nil"
 							local afterMeter = afterSteps and afterSteps.GetMeter and afterSteps:GetMeter() or "nil"
 							local afterChartKey = afterSteps and afterSteps.GetChartKey and tostring(afterSteps:GetChartKey() or "") or ""
+							local afterChartHash = ITGOnline and ITGOnline.ChartHashForSteps and afterSteps and ITGOnline:ChartHashForSteps(afterSteps) or ""
 							online_flow_trace("player_options_stepchart_save_applied"
 								.. " player=" .. tostring(PlayerKey(pn) or pn or "nil")
 								.. " index=" .. tostring(i)
 								.. " afterDifficulty=" .. tostring(afterDifficulty)
 								.. " afterMeter=" .. tostring(afterMeter)
 								.. " afterChartKey=" .. tostring(afterChartKey)
+								.. " afterChartHash=" .. tostring(afterChartHash)
 								.. " sameSteps=" .. tostring(afterSteps == v))
 						end
 						SafeBroadcast("CurrentSteps"..tostring(PlayerKey(pn) or "").."Changed")

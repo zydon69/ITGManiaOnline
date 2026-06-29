@@ -7866,6 +7866,211 @@ function ITGOnline:ResolveSelectedSongAvailabilityPayload(selectedSong, source)
 	return nil, tostring(directReason or "local_payload_unavailable")
 end
 
+local function online_steps_trace_summary(online, steps)
+	if not steps then
+		return {
+			hasSteps = false,
+			chartHash = "",
+			chartKey = "",
+			chartType = "",
+			difficulty = "",
+			meter = "",
+			noteCount = "",
+		}
+	end
+
+	return {
+		hasSteps = true,
+		chartHash = online and online.ChartHashForSteps and online:ChartHashForSteps(steps) or "",
+		chartKey = steps.GetChartKey and tostring(steps:GetChartKey() or "") or "",
+		chartType = steps.GetStepsType and normalize_chart_type(enum_short(steps:GetStepsType()) or "") or "",
+		difficulty = steps.GetDifficulty and enum_short(steps:GetDifficulty()) or "",
+		meter = steps.GetMeter and tostring(steps:GetMeter()) or "",
+		noteCount = tostring(current_chart_note_count(steps) or ""),
+	}
+end
+
+local function online_member_user_id(member)
+	if type(member) ~= "table" then return "" end
+	return tostring(member.user_id or member.userId or member.id or member.account_id or member.accountId or "")
+end
+
+function ITGOnline:LocalRoomMember(room)
+	room = type(room) == "table" and room or self.currentRoom or {}
+	local userId = tostring(self.user and self.user.id or "")
+	if userId == "" or type(room.members) ~= "table" then return nil end
+	for _, member in ipairs(room.members) do
+		if online_member_user_id(member) == userId then
+			return member
+		end
+	end
+	return nil
+end
+
+function ITGOnline:LocalMemberOptionSummary(room)
+	local member = self:LocalRoomMember(room)
+	if type(member) ~= "table" then return nil end
+	return type(member.options) == "table" and member.options or nil
+end
+
+local function option_value(options, ...)
+	if type(options) ~= "table" then return "" end
+	for _, key in ipairs({ ... }) do
+		local value = options[key]
+		if value ~= nil and tostring(value) ~= "" then
+			return tostring(value)
+		end
+	end
+	return ""
+end
+
+local function option_number(options, ...)
+	local value = option_value(options, ...)
+	if value == "" then return nil end
+	return tonumber(value)
+end
+
+local function find_steps_from_options(online, song, options)
+	if not song or type(options) ~= "table" then return nil, "no_options" end
+	local playable = SongUtil and SongUtil.GetPlayableSteps and SongUtil.GetPlayableSteps(song) or {}
+	if type(playable) ~= "table" or #playable == 0 then return nil, "no_playable_steps" end
+
+	local wantedHash = normalized_hash(option_value(options, "chart_hash", "chartHash", "simfile_hash", "simfileHash"))
+	local wantedKey = option_value(options, "chart_key", "chartKey")
+	local wantedType = normalize_chart_type(option_value(options, "chart_type", "chartType", "steps_type", "stepsType"))
+	local wantedDifficulty = option_value(options, "difficulty")
+	local wantedMeter = option_number(options, "meter")
+
+	if wantedHash ~= "" and online and online.ChartHashForSteps then
+		for _, steps in ipairs(playable) do
+			if normalized_hash(online:ChartHashForSteps(steps)) == wantedHash then
+				return steps, "member_options_chart_hash"
+			end
+		end
+	end
+
+	if wantedKey ~= "" then
+		for _, steps in ipairs(playable) do
+			local key = steps.GetChartKey and tostring(steps:GetChartKey() or "") or ""
+			if key ~= "" and key == wantedKey then
+				return steps, "member_options_chart_key"
+			end
+		end
+	end
+
+	if wantedDifficulty ~= "" then
+		for _, steps in ipairs(playable) do
+			local difficulty = steps.GetDifficulty and enum_short(steps:GetDifficulty()) or ""
+			local chartType = steps.GetStepsType and normalize_chart_type(enum_short(steps:GetStepsType()) or "") or ""
+			local meter = steps.GetMeter and tonumber(steps:GetMeter()) or nil
+			local typeMatches = wantedType == "" or chartType == wantedType
+			local meterMatches = wantedMeter == nil or meter == wantedMeter
+			if difficulty == wantedDifficulty and typeMatches and meterMatches then
+				return steps, "member_options_difficulty_meter"
+			end
+		end
+	end
+
+	return nil, "member_options_no_match"
+end
+
+function ITGOnline:RememberExpectedOnlineGameplaySteps(steps, source)
+	local summary = online_steps_trace_summary(self, steps)
+	summary.source = tostring(source or "unknown")
+	summary.roomId = tostring(self.currentRoomId or "")
+	summary.roundKey = tostring(self.PlayStateKey and self:PlayStateKey() or self.currentRoomRoundKey or "")
+	summary.recordedAt = GetTimeSinceStart and GetTimeSinceStart() or 0
+	self.expectedOnlineGameplaySteps = summary
+	self:TraceOnlineState("gameplay_expected_steps_recorded", summary)
+end
+
+function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSteps, source)
+	local room = self.currentRoom or {}
+	local phase = self.NormalizeRoomPhase and self:NormalizeRoomPhase(room.phase) or tostring(room.phase or "")
+	local screen = tostring(self.currentScreenName or "")
+	local shouldUseMemberOptions = phase == "starting"
+		or phase == "playing"
+		or screen == "ScreenGameplay"
+		or screen == "ScreenEvaluation"
+	if not shouldUseMemberOptions then
+		self:TraceOnlineState("gameplay_steps_resolve_skipped", {
+			source = source,
+			reason = "phase_not_gameplay_bound",
+			phase = phase,
+			screen = screen,
+			fallbackChartHash = online_steps_trace_summary(self, fallbackSteps).chartHash,
+		})
+		return fallbackSteps
+	end
+
+	local song = GAMESTATE and GAMESTATE.GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
+	local options = self:LocalMemberOptionSummary(room)
+	local pending = self.pendingOnlineOptionSteps
+	local pendingBelongs = steps_belongs_to_current_song(pending)
+	local selectedSteps = nil
+	local selectedSource = ""
+	local resolveReason = ""
+
+	if pendingBelongs then
+		selectedSteps = pending
+		selectedSource = "pending_online_option_steps"
+	else
+		selectedSteps, resolveReason = find_steps_from_options(self, song, options)
+		if selectedSteps then
+			selectedSource = resolveReason
+		else
+			selectedSteps = fallbackSteps
+			selectedSource = "fallback_selected_song_chart"
+		end
+	end
+
+	local fallbackSummary = online_steps_trace_summary(self, fallbackSteps)
+	local selectedSummary = online_steps_trace_summary(self, selectedSteps)
+	self:TraceOnlineState("gameplay_steps_resolved", {
+		source = source,
+		phase = phase,
+		screen = screen,
+		selectedAt = songInfo and (songInfo.selected_at or songInfo.selectedAt) or "",
+		resolveSource = selectedSource,
+		resolveReason = resolveReason,
+		pendingBelongs = pendingBelongs == true,
+		optionChartHash = option_value(options, "chart_hash", "chartHash", "simfile_hash", "simfileHash"),
+		optionChartKey = option_value(options, "chart_key", "chartKey"),
+		optionDifficulty = option_value(options, "difficulty"),
+		optionMeter = option_value(options, "meter"),
+		fallbackChartHash = fallbackSummary.chartHash,
+		fallbackDifficulty = fallbackSummary.difficulty,
+		fallbackMeter = fallbackSummary.meter,
+		resolvedChartHash = selectedSummary.chartHash,
+		resolvedDifficulty = selectedSummary.difficulty,
+		resolvedMeter = selectedSummary.meter,
+	})
+	self:RememberExpectedOnlineGameplaySteps(selectedSteps, "resolve:" .. tostring(source or "unknown") .. ":" .. selectedSource)
+	return selectedSteps
+end
+
+function ITGOnline:TraceActualOnlineGameplaySteps(source)
+	local expected = type(self.expectedOnlineGameplaySteps) == "table" and self.expectedOnlineGameplaySteps or {}
+	for player in ivalues(GAMESTATE and GAMESTATE:GetEnabledPlayers() or {}) do
+		local steps = GAMESTATE and GAMESTATE.GetCurrentSteps and GAMESTATE:GetCurrentSteps(player) or nil
+		local actual = online_steps_trace_summary(self, steps)
+		self:TraceOnlineState("gameplay_actual_steps", {
+			source = source,
+			player = tostring(PlayerKey and PlayerKey(player) or player or ""),
+			expectedSource = expected.source or "",
+			expectedChartHash = expected.chartHash or "",
+			expectedDifficulty = expected.difficulty or "",
+			expectedMeter = expected.meter or "",
+			actualChartHash = actual.chartHash,
+			actualDifficulty = actual.difficulty,
+			actualMeter = actual.meter,
+			actualChartKey = actual.chartKey,
+			actualNoteCount = actual.noteCount,
+			matchesExpected = tostring(expected.chartHash or "") ~= "" and expected.chartHash == actual.chartHash,
+		})
+	end
+end
+
 function ITGOnline:ChartHashForSteps(steps)
 	if not steps then
 		online_flow_trace("chart_hash_skipped reason=no_steps")

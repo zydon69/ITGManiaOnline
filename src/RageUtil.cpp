@@ -1519,6 +1519,18 @@ std::string FloatToString(const float& num) {
 }
 
 int StringToInt(const std::string& str, size_t* pos, int base, int exceptVal) {
+  if (base == 10 && (str == "true" || str == "True" || str == "TRUE")) {
+    if (pos != nullptr) {
+      *pos = str.size();
+    }
+    return 1;
+  }
+  if (base == 10 && (str == "false" || str == "False" || str == "FALSE")) {
+    if (pos != nullptr) {
+      *pos = str.size();
+    }
+    return 0;
+  }
   try {
     return std::stoi(str, pos, base);
   } catch (const std::invalid_argument& e) {

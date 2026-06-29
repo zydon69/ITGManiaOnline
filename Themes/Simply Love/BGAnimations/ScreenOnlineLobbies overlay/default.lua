@@ -1136,6 +1136,49 @@ function lobby_count(value)
 	return type(value) == "table" and #value or 0
 end
 
+local function lobby_local_user_id()
+	if ITGOnline and ITGOnline.LocalUserId then
+		local ok, id = pcall(function() return ITGOnline:LocalUserId() end)
+		if ok and id ~= nil and tostring(id) ~= "" then return tostring(id) end
+	end
+	return tostring(ITGOnline and ITGOnline.user and ITGOnline.user.id or "")
+end
+
+local function lobby_player_user_id(player)
+	player = type(player) == "table" and player or {}
+	local user = type(player.user) == "table" and player.user or {}
+	return tostring(player.user_id or player.userId or player.playerId or player.id or user.id or "")
+end
+
+local function apply_optimistic_config_ready_to_players(players, room, source)
+	if not (ITGOnline and ITGOnline.CurrentUserHasOptimisticConfigReady and ITGOnline:CurrentUserHasOptimisticConfigReady(room)) then
+		return players
+	end
+	if tostring(room and room.phase or "") ~= "config" then return players end
+	local localUserId = lobby_local_user_id()
+	if localUserId == "" then return players end
+	local applied = false
+	for _, player in ipairs(players or {}) do
+		if type(player) == "table" and lobby_player_user_id(player) == localUserId then
+			if player.ready ~= true and player.is_ready ~= true then
+				player.ready = true
+				player.is_ready = true
+				player.readyPendingServer = true
+				applied = true
+			end
+			break
+		end
+	end
+	if applied then
+		lobby_flow_trace("optimistic_config_ready_applied_to_players"
+			.. " source=" .. tostring(source or "unknown")
+			.. " userId=" .. tostring(localUserId)
+			.. " room=" .. tostring(room and (room.id or room.room_id) or "nil")
+			.. " phase=" .. tostring(room and room.phase or "nil"))
+	end
+	return players
+end
+
 function lobby_room_summary(prefix, params)
 	params = type(params) == "table" and params or {}
 	local players = params.players or params.members or {}
@@ -4914,6 +4957,11 @@ local af = Def.ActorFrame{
 					ITGOnline.PackSync:ManagerBrowsingPreview(joined_song_preview)
 				end
 			end
+			joined_lobby_players = apply_optimistic_config_ready_to_players(
+				joined_lobby_players,
+				ITGOnline and ITGOnline.currentRoom or nil,
+				"online_lobby_state"
+			)
 			sync_local_missing_song_from_joined_players()
 			set_joined_default_active_index(not joined_focus_initialized)
 			joined_focus_initialized = true

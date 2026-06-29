@@ -109,6 +109,9 @@ local t = Def.ActorFrame{
 	Name="GameplayUnderlay",
 	OnCommand=function(self)
 		if ITGOnline and ITGOnline.currentRoomId then
+			if ITGOnline.TraceActualOnlineGameplaySteps then
+				ITGOnline:TraceActualOnlineGameplaySteps("screen_gameplay_on")
+			end
 			SCREENMAN:GetTopScreen():AddInputCallback(RestartHandler)
 			self:sleep(0.25):queuecommand("OnlinePhaseCheck")
 			return

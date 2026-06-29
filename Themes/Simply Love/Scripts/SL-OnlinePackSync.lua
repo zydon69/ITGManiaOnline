@@ -577,9 +577,12 @@ local function first_enabled_player()
 	return enabled[1] or PLAYER_1
 end
 
-local function set_current_selection(song, steps)
+local function set_current_selection(song, steps, songInfo, source)
 	if not song then return end
 	GAMESTATE:SetCurrentSong(song)
+	if ITGOnline and ITGOnline.ResolveLocalGameplayStepsForSelectedSong then
+		steps = ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, steps, source or "pack_sync_set_current_selection")
+	end
 	if steps then
 		for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
 			GAMESTATE:SetCurrentSteps(player, steps)
@@ -855,6 +858,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		if callback then callback(false, nil, { errorMessage = "Aucun salon online actif." }) end
 		return
 	end
+	local previousStatus = tostring(self.currentStatus or "")
 	self.currentStatus = status
 	self.currentStatusMessage = message
 	self.statusChangedAt = GetTimeSinceStart()
@@ -868,6 +872,9 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	})
 	self.currentSongInfo = with_current_room_selection(self.currentSongInfo, "status:" .. tostring(status))
 	local currentSelectedAt = self:SelectedAtForStatusPost(status, self.currentSongInfo)
+	if status == self.status.Ready and currentSelectedAt ~= "" then
+		self.lastReadySelectedAt = currentSelectedAt
+	end
 	if currentSelectedAt ~= "" and (status == self.status.SearchingLocalCharts or status == self.status.LocalChartMatchFound) then
 		local localUserId = ITGOnline and ITGOnline.LocalUserId and tostring(ITGOnline:LocalUserId() or "") or ""
 		local room = ITGOnline and ITGOnline.currentRoom or nil
@@ -885,7 +892,9 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 				end
 			end
 		end
-		if alreadyReadyForSelection then
+		local locallyReadyForSelection = tostring(self.lastReadySelectedAt or "") == currentSelectedAt
+			and previousStatus == self.status.Ready
+		if alreadyReadyForSelection or locallyReadyForSelection then
 			trace("Status post skipped reason=client_ready_status_protected_from_local_scan"
 				.. " status=" .. tostring(status)
 				.. " selected_at=" .. tostring(currentSelectedAt)
@@ -895,6 +904,8 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 					pack_sync_status = {
 						applied = false,
 						ignored_reason = "client_ready_status_protected_from_local_scan",
+						local_ready = locallyReadyForSelection,
+						server_ready = alreadyReadyForSelection,
 					},
 					local_only = true,
 				}, nil)
@@ -1689,7 +1700,7 @@ function PackSync:ApplySelectedChart(songInfo)
 		reason = result and result.reason or "nil",
 	})
 	if result.ok then
-		set_current_selection(result.song, result.steps)
+		set_current_selection(result.song, result.steps, songInfo, "pack_sync_apply_selected_chart")
 		MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
 		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
 			ITGOnline:ConfirmSelectedSongAvailability("local_chart_match_found", function(ok)
@@ -2939,7 +2950,7 @@ function PackSync:ValidatePendingPostReload()
 			end
 			return false
 		end
-		set_current_selection(result.song, result.steps)
+		set_current_selection(result.song, result.steps, songInfo, "pack_sync_reload_apply_selected_chart")
 		trace("Downloaded OK and local chart validated")
 		self:MarkPackInstalled(packName)
 
