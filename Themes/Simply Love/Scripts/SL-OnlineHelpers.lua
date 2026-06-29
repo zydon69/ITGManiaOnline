@@ -2293,7 +2293,6 @@ local onlineRoomTimerNames = {
 	"OnlineGameplayStartTimer",
 	"PreviewInitialSongTimer",
 	"ReplayDeferredLobbyStateTimer",
-	"ConfigReadyRetryTimer",
 	"ManagerAutoReadyRetryTimer",
 }
 
@@ -2437,6 +2436,7 @@ end
 				" lastOnlineOptionsSongKey=" .. tostring(lastOnlineOptionsSongKey))
 		end
 		stop_room_timers(actor, "clear_room_async_state")
+		stop_named_timers(actor, { "ConfigReadyRetryTimer" })
 		pendingConfigReady = nil
 		pendingManagerAutoReadyRetryKey = ""
 	pendingManagerAutoReadyRetryPhase = ""
