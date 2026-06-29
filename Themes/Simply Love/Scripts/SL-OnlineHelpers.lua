@@ -70,7 +70,15 @@ local knownDisconnectScreens = {
 
 DisplayLobbyState = nil
 
+function online_logs_enabled()
+	return type(IsOnlineGameplayLayoutLoggingEnabled) == "function"
+		and IsOnlineGameplayLayoutLoggingEnabled() == true
+end
+
 function online_trace(message)
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+		return
+	end
 	if Trace then
 		Trace("ITG Online: " .. tostring(message or ""))
 	elseif Warn then
@@ -102,6 +110,9 @@ function replace_online_input_callback(screen, key, handler)
 end
 
 function ready_debug_enabled()
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+		return false
+	end
 	if ITGOnline and ITGOnline.debugReadyFlow ~= nil then
 		return ITGOnline.debugReadyFlow == true
 	end
@@ -123,7 +134,7 @@ end
 -- Keep flow tracing safe in all contexts; never allow a missing logger
 -- to break lobby state processing.
 function online_flow_trace(message)
-	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
 		return
 	end
 	local line = tostring(message or "")
@@ -3231,18 +3242,21 @@ CreateOnlineHandler = function()
 							ITGOnline:SetOptimisticConfigReady("options_confirmed")
 						end
 						if ITGOnline.MarkConfigReady then
-							Trace("[ITGOnline] options_confirmed queue config_ready key=" .. tostring(configReadyKey))
+							online_flow_trace("options_confirmed queue config_ready key=" .. tostring(configReadyKey))
 						else
-							Trace("[ITGOnline] options_confirmed queue legacy_config_ready key=" .. tostring(configReadyKey))
+							online_flow_trace("options_confirmed queue legacy_config_ready key=" .. tostring(configReadyKey))
 						end
 						if online_flow_trace then
-							online_flow_trace("options_confirmed dispatch_immediate config_ready key=" .. tostring(configReadyKey))
+							online_flow_trace("options_confirmed dispatch_deferred config_ready key=" .. tostring(configReadyKey)
+								.. " delay=0.20")
 						end
 						-- Let ScreenPlayerOptions finish SaveSelections first. The Stepchart
 						-- option updates GAMESTATE:SetCurrentSteps() during that save pass; if
 						-- we send config_ready synchronously here, the payload can still contain
-						-- the previous song's chart.
-						schedule_named_timer(self, "ConfigReadyRetryTimer", 0.05, "Fire")
+						-- the previous song's chart. The explicit remembered-step cache in
+						-- ITGOnline covers the immediate case; this delay is a second guard for
+						-- engine-side GAMESTATE propagation.
+						schedule_named_timer(self, "ConfigReadyRetryTimer", 0.20, "Fire")
 		      end,
 			      OnlineConfigReadyConfirmedMessageCommand=function(self, params)
 							if not pendingConfigReady then
@@ -3265,7 +3279,7 @@ CreateOnlineHandler = function()
 								.. " confirmed=" .. tostring(confirmedKey)
 								.. " expected=" .. tostring(expectedConfigReadyKey))
 							if pendingConfigReady == confirmedKey or pendingConfigReady == expectedConfigReadyKey then
-								Trace("[ITGOnline] options_confirmed server_confirmed config_ready key=" .. tostring(confirmedKey))
+								online_flow_trace("options_confirmed server_confirmed config_ready key=" .. tostring(confirmedKey))
 								pendingConfigReady = nil
 								self.configReadyRetryKey = nil
 								self.configReadyRetryCount = 0
@@ -3330,7 +3344,9 @@ CreateOnlineHandler = function()
 
 							if ITGOnline.MarkConfigReady then
 								online_flow_trace("options_confirmed mark_config_ready_begin key=" .. tostring(expectedConfigReadyKey)
-									.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
+									.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+									.. " rememberedStepSource=" .. tostring(ITGOnline.pendingOnlineOptionStepsSource or "nil")
+									.. " rememberedStepAge=" .. tostring((GetTimeSinceStart and GetTimeSinceStart() or 0) - (tonumber(ITGOnline.pendingOnlineOptionStepsAt) or 0)))
 								ITGOnline:MarkConfigReady(function(ok, decoded, response)
 									if not room_context_still_active(configReadyToken, { phase = { "config", "lobby", "lobby_ready" } }) then
 										online_flow_trace("options_confirmed mark_config_ready_ignored reason=stale_context key=" .. tostring(expectedConfigReadyKey))
@@ -3340,7 +3356,9 @@ CreateOnlineHandler = function()
 										.. " ok=" .. tostring(ok == true)
 										.. " status=" .. tostring(response and response.statusCode or "nil")
 										.. " retryAfter=" .. tostring(response and response.retryAfter or "nil")
-										.. " error=" .. tostring(decoded and decoded.error_code or response and response.error or "nil"))
+										.. " error=" .. tostring(decoded and decoded.error_code or response and response.error or "nil")
+										.. " serverRoomPhase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
+										.. " serverReadyStates=" .. tostring(decoded and decoded.room and decoded.room.ready_states and #decoded.room.ready_states or "nil"))
 									if ok then
 										if pendingConfigReady == expectedConfigReadyKey then pendingConfigReady = nil end
 										self.configReadyRetryKey = nil
@@ -3521,10 +3539,9 @@ CreateOnlineHandler = function()
 							if ITGOnline and ITGOnline.StoreFinalLeaderboardFromRoom then
 								ITGOnline:StoreFinalLeaderboardFromRoom(params, "online_lobby_state_message")
 							elseif params and (params.phase or params.status or params.readyPhase) == "results" then
-								local line = "ITG Online: FLOW final_leaderboard_cache unavailable source=online_lobby_state_message room="
+								online_flow_trace("final_leaderboard_cache unavailable source=online_lobby_state_message room="
 									.. tostring(params.roomId or params.code or "nil")
-									.. " finalResults=" .. tostring(params.finalResults and #params.finalResults or 0)
-								if Trace then Trace(line) elseif Warn then Warn(line) end
+									.. " finalResults=" .. tostring(params.finalResults and #params.finalResults or 0))
 							end
 							if ITGOnline and ITGOnline.ForceGameplayEvaluationIfResultsReady then
 								ITGOnline:ForceGameplayEvaluationIfResultsReady("online_lobby_state_message_before_duplicate_guard")

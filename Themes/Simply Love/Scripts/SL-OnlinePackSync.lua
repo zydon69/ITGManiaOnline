@@ -133,11 +133,17 @@ function PackSync:ShouldPreserveActiveDownloadDuringReset(reason)
 end
 
 trace = function(message)
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+		return
+	end
 	local line = "[OnlinePackSync] " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
 
 local function trace_online_state(label, fields)
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+		return
+	end
 	if ITGOnline and ITGOnline.TraceOnlineState then
 		fields = type(fields) == "table" and fields or {}
 		fields.source = fields.source or "pack_sync"

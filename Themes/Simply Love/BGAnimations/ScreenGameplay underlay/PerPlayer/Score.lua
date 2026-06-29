@@ -263,7 +263,7 @@ return Def.ActorFrame{
 		update_lower_scores(self, scoreMode, exPercent)
 
 		if ITGOnline and ITGOnline.currentRoomId then
-			if ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true then
+			if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
 				Trace("ITG Online: FLOW gameplay_score_broadcast source=RedrawScore"
 					.. " player=" .. tostring(player)
 					.. " room=" .. tostring(ITGOnline.currentRoomId)
@@ -303,7 +303,7 @@ return Def.ActorFrame{
 		if ITGOnline and ITGOnline.currentRoomId then
 			local dance_points = pss:GetPercentDancePoints()
 			local percent = FormatPercentScore( dance_points ):sub(1,-2)
-			if ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true then
+			if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
 				Trace("ITG Online: FLOW gameplay_score_broadcast source=ExCountsChanged"
 					.. " player=" .. tostring(player)
 					.. " room=" .. tostring(ITGOnline.currentRoomId)

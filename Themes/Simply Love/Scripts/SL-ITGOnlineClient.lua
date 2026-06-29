@@ -211,9 +211,10 @@ ITGOnline.lobbyRefreshQueuedAt = ITGOnline.lobbyRefreshQueuedAt or 0
 ITGOnline.fileHashCache = ITGOnline.fileHashCache or {}
 ITGOnline.fileHashCacheTtlSeconds = ITGOnline.fileHashCacheTtlSeconds or 30
 ITGOnline.onlineFlowTraceThrottle = ITGOnline.onlineFlowTraceThrottle or {}
-ITGOnline.debugOnlineTrace = ITGOnline.debugOnlineTrace == true
-ITGOnline.debugScoreTrace = ITGOnline.debugScoreTrace == true
-ITGOnline.debugReadyFlow = ITGOnline.debugReadyFlow == true
+ITGOnline.debugOnlineTrace = type(IsOnlineGameplayLayoutLoggingEnabled) == "function"
+	and IsOnlineGameplayLayoutLoggingEnabled() == true
+ITGOnline.debugScoreTrace = ITGOnline.debugOnlineTrace == true
+ITGOnline.debugReadyFlow = ITGOnline.debugOnlineTrace == true
 ITGOnline.lastDebugConfigPollAt = ITGOnline.lastDebugConfigPollAt or 0
 ITGOnline.debugConfigPollIntervalSeconds = ITGOnline.debugConfigPollIntervalSeconds or 1.0
 ITGOnline.lastHudScoreTraceSecond = ITGOnline.lastHudScoreTraceSecond or -1
@@ -225,6 +226,9 @@ ITGOnline.finalLeaderboardCacheLogSignature = ITGOnline.finalLeaderboardCacheLog
 ITGOnline.finalLeaderboardCacheBootLogged = ITGOnline.finalLeaderboardCacheBootLogged or false
 
 local function final_leaderboard_cache_trace(message)
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+		return
+	end
 	local line = "ITG Online: FLOW final_leaderboard_cache " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
@@ -753,6 +757,9 @@ local function ready_flow_trace_message(message)
 end
 
 function online_trace(message)
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+		return
+	end
 	if not (ITGOnline and (
 		ITGOnline.debugOnlineTrace == true
 		or (ITGOnline.debugReadyFlow == true and ready_flow_trace_message(message))
@@ -780,16 +787,16 @@ function ITGOnline:RefreshDebugFlags(force)
 		})
 	end
 
-	local raw = IniFile.ReadFile(self.debugConfigPath) or {}
-	local section = raw["ITGOnlineDebug"] or {}
+	local themeOnlineLogsEnabled = type(IsOnlineGameplayLayoutLoggingEnabled) == "function"
+		and IsOnlineGameplayLayoutLoggingEnabled() == true
 
-	self.debugOnlineTrace = parse_bool(section["OnlineTrace"], false)
-	self.debugScoreTrace = parse_bool(section["ScoreTrace"], false)
-	self.debugReadyFlow = parse_bool(section["ReadyFlow"], false)
+	self.debugOnlineTrace = themeOnlineLogsEnabled
+	self.debugScoreTrace = themeOnlineLogsEnabled
+	self.debugReadyFlow = themeOnlineLogsEnabled
 end
 
 local function online_flow_trace(message)
-	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
 		return
 	end
 	local screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
@@ -1127,11 +1134,80 @@ local function normalized_hash(value)
 	return ITGOnline:NormalizeHash(value, { hashFallback = true })
 end
 
+local function steps_belongs_to_current_song(steps)
+	if not steps or not GAMESTATE or not SongUtil or not SongUtil.GetPlayableSteps then return false end
+	local song = GAMESTATE.GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
+	if not song then return false end
+
+	local ok, playableSteps = pcall(function()
+		return SongUtil.GetPlayableSteps(song)
+	end)
+	if not ok or type(playableSteps) ~= "table" then return false end
+
+	for candidate in ivalues(playableSteps) do
+		if candidate == steps then
+			return true
+		end
+	end
+
+	return false
+end
+
+function ITGOnline:RememberOnlineOptionSteps(player, steps, source)
+	if not steps_belongs_to_current_song(steps) then
+		online_flow_trace("online_options_stepchart_remember_skipped"
+			.. " source=" .. tostring(source or "unknown")
+			.. " reason=steps_not_current_song")
+		return
+	end
+
+	self.pendingOnlineOptionSteps = steps
+	self.pendingOnlineOptionStepsPlayer = player
+	self.pendingOnlineOptionStepsAt = GetTimeSinceStart and GetTimeSinceStart() or 0
+	self.pendingOnlineOptionStepsSource = tostring(source or "unknown")
+
+	local chartHash = self.ChartHashForSteps and self:ChartHashForSteps(steps) or ""
+	local chartKey = steps.GetChartKey and tostring(steps:GetChartKey() or "") or ""
+	local chartType = steps.GetStepsType and enum_short(steps:GetStepsType()) or ""
+	local difficulty = steps.GetDifficulty and enum_short(steps:GetDifficulty()) or ""
+	local meter = steps.GetMeter and tonumber(steps:GetMeter()) or nil
+	local notes = current_chart_note_count(steps)
+	online_flow_trace("online_options_stepchart_remembered"
+		.. " source=" .. tostring(source or "unknown")
+		.. " chartHash=" .. tostring(chartHash or ""):sub(1, 12)
+		.. " chartKey=" .. tostring(chartKey)
+		.. " chartType=" .. tostring(chartType)
+		.. " difficulty=" .. tostring(difficulty or "")
+		.. " meter=" .. tostring(meter or "nil")
+		.. " notes=" .. tostring(notes or "nil"))
+end
+
 local function selected_steps()
 	local player = first_enabled_player()
 	if not GAMESTATE then return nil end
 	if GAMESTATE:IsCourseMode() then
 		return GAMESTATE:GetCurrentTrail(player)
+	end
+
+	local rememberedSteps = ITGOnline and ITGOnline.pendingOnlineOptionSteps or nil
+	if steps_belongs_to_current_song(rememberedSteps) then
+		if online_flow_trace then
+			local age = (GetTimeSinceStart and GetTimeSinceStart() or 0) - (tonumber(ITGOnline.pendingOnlineOptionStepsAt) or 0)
+			local chartHash = ITGOnline.ChartHashForSteps and ITGOnline:ChartHashForSteps(rememberedSteps) or ""
+			local difficulty = rememberedSteps.GetDifficulty and enum_short(rememberedSteps:GetDifficulty()) or ""
+			local meter = rememberedSteps.GetMeter and tonumber(rememberedSteps:GetMeter()) or nil
+			online_flow_trace("option_stepchart_using_remembered"
+				.. " source=" .. tostring(ITGOnline.pendingOnlineOptionStepsSource or "unknown")
+				.. " age=" .. string.format("%.3f", age)
+				.. " player=" .. tostring(ITGOnline.pendingOnlineOptionStepsPlayer or "nil")
+				.. " chartHash=" .. tostring(chartHash or ""):sub(1, 12)
+				.. " difficulty=" .. tostring(difficulty or "")
+				.. " meter=" .. tostring(meter or "nil"))
+		end
+		if GAMESTATE.SetCurrentSteps then
+			pcall(function() GAMESTATE:SetCurrentSteps(player, rememberedSteps) end)
+		end
+		return rememberedSteps
 	end
 
 	local currentSteps = GAMESTATE:GetCurrentSteps(player)
@@ -1181,6 +1257,16 @@ local function selected_steps()
 				return playableSteps[1]
 			end
 		end
+	end
+
+	if online_flow_trace and currentSteps then
+		local chartHash = ITGOnline.ChartHashForSteps and ITGOnline:ChartHashForSteps(currentSteps) or ""
+		local difficulty = currentSteps.GetDifficulty and enum_short(currentSteps:GetDifficulty()) or ""
+		local meter = currentSteps.GetMeter and tonumber(currentSteps:GetMeter()) or nil
+		online_flow_trace("option_stepchart_using_gamestate"
+			.. " chartHash=" .. tostring(chartHash or ""):sub(1, 12)
+			.. " difficulty=" .. tostring(difficulty or "")
+			.. " meter=" .. tostring(meter or "nil"))
 	end
 
 	return currentSteps
@@ -9716,6 +9802,16 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 
 	if phase == "config_ready" then
 		payload.options = self:CurrentOnlineOptionSummary()
+		online_flow_trace("ready_request_options_payload"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " stepchart=" .. tostring(payload.options.stepchart or "")
+			.. " songHash=" .. tostring(payload.options.song_hash or "nil"):sub(1, 12)
+			.. " chartHash=" .. tostring(payload.options.chart_hash or "nil"):sub(1, 12)
+			.. " chartKey=" .. tostring(payload.options.chart_key or "nil")
+			.. " difficulty=" .. tostring(payload.options.difficulty or "nil")
+			.. " meter=" .. tostring(payload.options.meter or "nil")
+			.. " notes=" .. tostring(payload.options.chart_note_count or "nil")
+			.. " maxScore=" .. tostring(payload.options.max_score or "nil"))
 	end
 
 	local options = payload.options or {}
@@ -9944,7 +10040,9 @@ function ITGOnline:CurrentOnlineOptionSummary()
 		.. " difficulty=" .. tostring(summary.difficulty or "nil")
 		.. " meter=" .. tostring(summary.meter or "nil")
 		.. " notes=" .. tostring(summary.chart_note_count or "nil")
-		.. " maxScore=" .. tostring(summary.max_score or "nil"))
+		.. " maxScore=" .. tostring(summary.max_score or "nil")
+		.. " rememberedSource=" .. tostring(self.pendingOnlineOptionStepsSource or "nil")
+		.. " rememberedAge=" .. tostring((GetTimeSinceStart and GetTimeSinceStart() or 0) - (tonumber(self.pendingOnlineOptionStepsAt) or 0)))
 	return summary
 end
 

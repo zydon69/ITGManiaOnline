@@ -63,6 +63,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <ctime>
 #include <map>
 #include <set>
 #include <string>
@@ -71,11 +72,13 @@
 #include "ActorUtil.h"
 #include "EnumHelper.h"
 #include "GameSoundManager.h"
+#include "IniFile.h"
 #include "InputEventPlus.h"
 #include "LuaManager.h"
 #include "MessageManager.h"
 #include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
+#include "PrefsManager.h"
 #include "Preference.h"
 #include "RageDisplay.h"
 #include "RageLog.h"
@@ -132,7 +135,43 @@ static bool ScreenNameEquals(const std::string& screenName, const char* name) {
   return name != nullptr && screenName == name;
 }
 
+static bool OnlineVerboseLogsEnabledFromThemePrefs() {
+  static time_t lastRead = 0;
+  static bool cached = false;
+
+  const time_t now = time(nullptr);
+  if (now == lastRead) {
+    return cached;
+  }
+
+  lastRead = now;
+  cached = false;
+
+  if (PREFSMAN == nullptr) {
+    return false;
+  }
+
+  IniFile ini;
+  if (!ini.ReadFile("Save/ThemePrefs.ini")) {
+    return false;
+  }
+
+  bool enabled = false;
+  if (!ini.GetValue(
+          PREFSMAN->m_sTheme,
+          "ITGOnlineGameplayLayoutLogs",
+          enabled)) {
+    return false;
+  }
+
+  cached = enabled;
+  return cached;
+}
+
 static bool ShouldTraceOnlineScreenManagerName(const std::string& screenName) {
+  if (!OnlineVerboseLogsEnabledFromThemePrefs()) {
+    return false;
+  }
   return screenName.find("Online") != std::string::npos ||
          screenName == "ScreenSelectMusic" ||
          screenName == "ScreenPlayerOptions" ||

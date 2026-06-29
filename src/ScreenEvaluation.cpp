@@ -5,7 +5,10 @@
 #include <climits>
 #include <cmath>
 #include <cstddef>
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <limits>
 #include <string>
 #include <vector>
@@ -26,6 +29,7 @@
 #include "InputEventPlus.h"
 #include "InputFilter.h"
 #include "InputMapper.h"
+#include "IniFile.h"
 #include "LuaManager.h"
 #include "MemoryCardManager.h"
 #include "ModsGroup.h"
@@ -73,6 +77,52 @@ AutoScreenMessage(SM_PlayCheer);
 REGISTER_SCREEN_CLASS(ScreenEvaluation);
 
 namespace {
+bool OnlineVerboseLogsEnabledFromThemePrefs() {
+  static time_t lastRead = 0;
+  static bool cached = false;
+
+  const time_t now = time(nullptr);
+  if (now == lastRead) {
+    return cached;
+  }
+
+  lastRead = now;
+  cached = false;
+
+  if (PREFSMAN == nullptr) {
+    return false;
+  }
+
+  IniFile ini;
+  if (!ini.ReadFile("Save/ThemePrefs.ini")) {
+    return false;
+  }
+
+  bool enabled = false;
+  if (!ini.GetValue(
+          PREFSMAN->m_sTheme,
+          "ITGOnlineGameplayLayoutLogs",
+          enabled)) {
+    return false;
+  }
+
+  cached = enabled;
+  return cached;
+}
+
+void OnlineTrace(const char* fmt, ...) {
+  if (LOG == nullptr || !OnlineVerboseLogsEnabledFromThemePrefs()) {
+    return;
+  }
+
+  va_list args;
+  va_start(args, fmt);
+  char buffer[2048];
+  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+  LOG->Trace("%s", buffer);
+}
+
 bool IsValidEvaluationPlayer(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
 }
@@ -409,8 +459,7 @@ bool TryHandleOnlineEvaluationNativeExit(const std::string& inputName) {
       }
     }
     shouldConsume = true;
-    LOG->Trace(
-        "ITG Online: ScreenEvaluation consumed native %s input online "
+    OnlineTrace("ITG Online: ScreenEvaluation consumed native %s input online "
         "handled=%i.",
         inputName.c_str(), handled ? 1 : 0);
   }
@@ -1375,8 +1424,7 @@ bool ScreenEvaluation::Input(const InputEventPlus& input) {
 
 void ScreenEvaluation::HandleScreenMessage(const ScreenMessage SM) {
   if (SM == SM_GoToNextScreen && ShouldIgnoreOnlineEvaluationNextScreen()) {
-    LOG->Trace(
-        "ITG Online: ScreenEvaluation ignored SM_GoToNextScreen without "
+    OnlineTrace("ITG Online: ScreenEvaluation ignored SM_GoToNextScreen without "
         "explicit online evaluation exit request.");
     return;
   }
@@ -1408,8 +1456,7 @@ bool ScreenEvaluation::MenuStart(const InputEventPlus& input) {
   }
 
   if (OnlineEvaluationAutoAdvanceBlocked()) {
-    LOG->Trace(
-        "ITG Online: evaluation auto advance blocked screen=%s input=%s",
+    OnlineTrace("ITG Online: evaluation auto advance blocked screen=%s input=%s",
         m_sName.c_str(), inputName.c_str());
     return true;
   }

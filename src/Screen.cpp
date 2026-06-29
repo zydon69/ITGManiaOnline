@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ctime>
 #include <map>
 #include <set>
 #include <string>
@@ -11,12 +12,14 @@
 #include "ActorUtil.h"
 #include "EnumHelper.h"
 #include "GameInput.h"
+#include "IniFile.h"
 #include "InputEventPlus.h"
 #include "InputFilter.h"
 #include "InputMapper.h"
 #include "LightsManager.h"
 #include "LuaManager.h"
 #include "MessageManager.h"
+#include "PrefsManager.h"
 #include "RageInputDevice.h"
 #include "RageLog.h"
 #include "RageThreads.h"
@@ -66,10 +69,43 @@ float GetLoadedFloatMetric(const ThemeMetric<float>& metric, float fallback) {
   return std::isfinite(value) ? value : fallback;
 }
 
+bool OnlineVerboseLogsEnabledFromThemePrefs() {
+  static time_t lastRead = 0;
+  static bool cached = false;
+
+  const time_t now = time(nullptr);
+  if (now == lastRead) {
+    return cached;
+  }
+
+  lastRead = now;
+  cached = false;
+
+  if (PREFSMAN == nullptr) {
+    return false;
+  }
+
+  IniFile ini;
+  if (!ini.ReadFile("Save/ThemePrefs.ini")) {
+    return false;
+  }
+
+  bool enabled = false;
+  if (!ini.GetValue(
+          PREFSMAN->m_sTheme,
+          "ITGOnlineGameplayLayoutLogs",
+          enabled)) {
+    return false;
+  }
+
+  cached = enabled;
+  return cached;
+}
+
 void TraceOnlineScreenMessage(
     const std::string& event, const std::string& screenName, ScreenMessage SM,
     bool running, size_t queued) {
-  if (LOG == nullptr) {
+  if (LOG == nullptr || !OnlineVerboseLogsEnabledFromThemePrefs()) {
     return;
   }
   LOG->Trace(
@@ -85,7 +121,7 @@ void TraceOnlineScreenMessage(
 void TraceOnlineScreenTransition(
     const std::string& event, const std::string& fromScreen,
     const std::string& toScreen, ScreenMessage SM) {
-  if (LOG == nullptr) {
+  if (LOG == nullptr || !OnlineVerboseLogsEnabledFromThemePrefs()) {
     return;
   }
   LOG->Trace(
@@ -99,7 +135,7 @@ void TraceOnlineScreenTransition(
 
 void TraceOnlineScreenPop(
     const std::string& screenName, ScreenMessage SM) {
-  if (LOG == nullptr) {
+  if (LOG == nullptr || !OnlineVerboseLogsEnabledFromThemePrefs()) {
     return;
   }
   LOG->Trace(
@@ -127,6 +163,9 @@ XToString(ScreenType);
 LuaXType(ScreenType);
 
 static bool ShouldTraceOnlineScreen(const std::string& screenName) {
+  if (!OnlineVerboseLogsEnabledFromThemePrefs()) {
+    return false;
+  }
   return screenName.find("Online") != std::string::npos ||
          screenName == "ScreenSelectMusic" ||
          screenName == "ScreenPlayerOptions" ||

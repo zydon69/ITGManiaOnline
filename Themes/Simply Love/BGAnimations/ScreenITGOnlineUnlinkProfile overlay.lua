@@ -10,12 +10,22 @@ local function screen_text(key)
 	return THEME:GetString("ScreenITGOnlineUnlinkProfile", key)
 end
 
+local function unlink_trace(message)
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+		return
+	end
+	if not Trace then return end
+	Trace("ITG Online: UnlinkProfile " .. tostring(message or ""))
+end
+
 local function go_back()
+	unlink_trace("go_back screen=ScreenOnlineOptions completed=" .. tostring(completed))
 	local top_screen = SCREENMAN:GetTopScreen()
 	top_screen:SetNextScreenName("ScreenOnlineOptions"):StartTransitioningScreen("SM_GoToNextScreen")
 end
 
 local function update_choices()
+	unlink_trace("update_choices activeIndex=" .. tostring(active_index) .. " completed=" .. tostring(completed))
 	for i, actor in pairs(choice_actors) do
 		actor:finishtweening()
 		if i == active_index then
@@ -27,11 +37,14 @@ local function update_choices()
 end
 
 local function unlink_profile()
+	unlink_trace("unlink_profile begin hasClient=" .. tostring(ITGOnline ~= nil)
+		.. " hasMethod=" .. tostring(ITGOnline and ITGOnline.UnlinkLocalProfile ~= nil))
 	local had_link = false
 	if ITGOnline and ITGOnline.UnlinkLocalProfile then
 		had_link = ITGOnline:UnlinkLocalProfile()
 	end
 
+	unlink_trace("unlink_profile complete hadLink=" .. tostring(had_link))
 	completed = true
 	active_index = 2
 	if body then
@@ -50,6 +63,7 @@ local InputHandler = function(event)
 
 	if completed then
 		if event.GameButton == "Start" or event.GameButton == "Back" then
+			unlink_trace("input_after_completed button=" .. tostring(event.GameButton))
 			go_back()
 			return true
 		end
@@ -58,17 +72,20 @@ local InputHandler = function(event)
 
 	if event.GameButton == "MenuLeft" or event.GameButton == "MenuRight" then
 		active_index = active_index == 1 and 2 or 1
+		unlink_trace("input_move button=" .. tostring(event.GameButton) .. " activeIndex=" .. tostring(active_index))
 		update_choices()
 		if af then af:queuecommand("DirectionButton") end
 		return true
 	end
 
 	if event.GameButton == "Back" then
+		unlink_trace("input_back activeIndex=" .. tostring(active_index))
 		go_back()
 		return true
 	end
 
 	if event.GameButton == "Start" then
+		unlink_trace("input_start activeIndex=" .. tostring(active_index))
 		if active_index == 1 then
 			unlink_profile()
 		else
@@ -82,6 +99,7 @@ end
 
 local t = Def.ActorFrame{
 	OnCommand=function(self)
+		unlink_trace("screen_on")
 		af = self
 		SCREENMAN:GetTopScreen():AddInputCallback(InputHandler)
 	end

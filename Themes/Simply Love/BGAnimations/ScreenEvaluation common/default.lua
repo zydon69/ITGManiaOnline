@@ -18,7 +18,7 @@ local function OnlineDisplayName(user, fallback)
 end
 
 local function SetOnlineEvaluationInputRedirected(enabled, reason)
-	if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
+	if type(online_logs_enabled) == "function" and online_logs_enabled() then
 		Trace("ITG Online: FLOW evaluation_input_redirect"
 			.. " enabled=" .. tostring(enabled == true)
 			.. " reason=" .. tostring(reason or "unknown")
@@ -36,7 +36,7 @@ local function SetOnlineEvaluationInputRedirected(enabled, reason)
 end
 
 local function ReturnToOnlineLobby(reason)
-	if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
+	if type(online_logs_enabled) == "function" and online_logs_enabled() then
 		Trace("ITG Online: FLOW evaluation_return_to_lobby_begin"
 			.. " reason=" .. tostring(reason or "unknown")
 			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
@@ -100,7 +100,7 @@ local function BuildOnlineEvaluationInputHandler(reason)
 end
 
 local function DisableOnlineEvaluationTimer(reason)
-	if ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true) then
+	if type(online_logs_enabled) == "function" and online_logs_enabled() then
 		Trace("ITG Online: FLOW evaluation_timer_disable"
 			.. " reason=" .. tostring(reason or "unknown")
 			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")

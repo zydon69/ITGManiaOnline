@@ -3,6 +3,22 @@ local offset = 0
 local num_rows = 5
 local data = {}
 
+local function lobby_info_trace(message)
+  if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+    return
+  end
+  if not Trace then return end
+  Trace("ITG Online: LobbyInfo " .. tostring(message or ""))
+end
+
+local function lobby_row_summary(row)
+  row = type(row) == "table" and row or {}
+  return " code=" .. tostring(row.code)
+    .. " phase=" .. tostring(row.phase)
+    .. " acceptsNewMembers=" .. tostring(row.acceptsNewMembers)
+    .. " playerCount=" .. tostring(row.playerCount)
+end
+
 local t = Def.ActorFrame{
   InitCommand=function(self)
     self:y(-180)
@@ -11,6 +27,8 @@ local t = Def.ActorFrame{
     data = params.data
     focus_pos = 1
     offset = 0
+    lobby_info_trace("update_data count=" .. tostring(#data)
+      .. " first=" .. lobby_row_summary(data[1]))
     if self:GetParent() then
       self:GetParent():playcommand("UpdateIndex", {idx=(#data > 0 and 1 or 0), total=#data})
     end
@@ -19,11 +37,17 @@ local t = Def.ActorFrame{
   NextLobbyCommand=function(self)
     if focus_pos < num_rows and focus_pos < #data then
       focus_pos = focus_pos + 1
+      lobby_info_trace("next_lobby focus=" .. tostring(focus_pos)
+        .. " offset=" .. tostring(offset)
+        .. lobby_row_summary(data[focus_pos + offset]))
       self:queuecommand("UpdateSelf")
       SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
       self:GetParent():playcommand("UpdateIndex", {idx=focus_pos+offset, total=#data})
     elseif focus_pos == num_rows and focus_pos + offset < #data then
       offset = offset + 1
+      lobby_info_trace("next_lobby_scroll focus=" .. tostring(focus_pos)
+        .. " offset=" .. tostring(offset)
+        .. lobby_row_summary(data[focus_pos + offset]))
       self:queuecommand("UpdateSelf")
       SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
       self:GetParent():playcommand("UpdateIndex", {idx=focus_pos+offset, total=#data})
@@ -32,11 +56,17 @@ local t = Def.ActorFrame{
   PrevLobbyCommand=function(self)
     if focus_pos > 1 then
       focus_pos = focus_pos - 1
+      lobby_info_trace("prev_lobby focus=" .. tostring(focus_pos)
+        .. " offset=" .. tostring(offset)
+        .. lobby_row_summary(data[focus_pos + offset]))
       self:queuecommand("UpdateSelf")
       SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
       self:GetParent():playcommand("UpdateIndex", {idx=focus_pos+offset, total=#data})
     elseif focus_pos == 1 and focus_pos + offset > 1 then
       offset = offset - 1
+      lobby_info_trace("prev_lobby_scroll focus=" .. tostring(focus_pos)
+        .. " offset=" .. tostring(offset)
+        .. lobby_row_summary(data[focus_pos + offset]))
       self:queuecommand("UpdateSelf")
       SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
       self:GetParent():playcommand("UpdateIndex", {idx=focus_pos+offset, total=#data})
@@ -45,10 +75,16 @@ local t = Def.ActorFrame{
   SelectLobbyCommand=function(self, params)
     local selected = data[focus_pos + offset]
     if not selected then
+      lobby_info_trace("select_lobby missing focus=" .. tostring(focus_pos)
+        .. " offset=" .. tostring(offset)
+        .. " count=" .. tostring(#data))
       SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
       return
     end
 
+	    lobby_info_trace("select_lobby" .. lobby_row_summary(selected)
+	      .. " focus=" .. tostring(focus_pos)
+	      .. " offset=" .. tostring(offset))
 	    MESSAGEMAN:Broadcast("OnlineLobbyJoinSelected", {
 	      code = selected.code,
 	      phase = selected.phase,

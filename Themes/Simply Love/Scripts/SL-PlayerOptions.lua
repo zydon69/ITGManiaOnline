@@ -5,6 +5,9 @@
 local applyingProfileMods = false
 
 local PlayerOptionsTrace = function(message)
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+		return
+	end
 	if type(online_trace) == "function" then
 		online_trace("FLOW player_options " .. tostring(message or ""))
 	elseif type(Trace) == "function" then
@@ -903,12 +906,40 @@ local Overrides = {
 				end
 			end
 			local i = FindInTable(StepsOrTrail, self.Values) or 1
+			if online_flow_trace then
+				local selected = self.Values and self.Values[i] or nil
+				local difficulty = selected and selected.GetDifficulty and ToEnumShortString(selected:GetDifficulty()) or "nil"
+				local meter = selected and selected.GetMeter and selected:GetMeter() or "nil"
+				online_flow_trace("player_options_stepchart_load"
+					.. " player=" .. tostring(PlayerKey(pn) or pn or "nil")
+					.. " index=" .. tostring(i)
+					.. " difficulty=" .. tostring(difficulty)
+					.. " meter=" .. tostring(meter)
+					.. " hasCurrent=" .. tostring(StepsOrTrail ~= nil)
+					.. " values=" .. tostring(self.Values and #self.Values or 0))
+			end
 			if self.Values[i] then list[i] = true end
 			return list
 		end,
 		SaveSelections = function(self, list, pn)
 			for i,v in ipairs(self.Values) do
 				if list[i] then
+					if online_flow_trace then
+						local beforeSteps = GAMESTATE and GAMESTATE.GetCurrentSteps and GAMESTATE:GetCurrentSteps(pn) or nil
+						local beforeDifficulty = beforeSteps and beforeSteps.GetDifficulty and ToEnumShortString(beforeSteps:GetDifficulty()) or "nil"
+						local beforeMeter = beforeSteps and beforeSteps.GetMeter and beforeSteps:GetMeter() or "nil"
+						local selectedDifficulty = v and v.GetDifficulty and ToEnumShortString(v:GetDifficulty()) or "nil"
+						local selectedMeter = v and v.GetMeter and v:GetMeter() or "nil"
+						local selectedChartKey = v and v.GetChartKey and tostring(v:GetChartKey() or "") or ""
+						online_flow_trace("player_options_stepchart_save_begin"
+							.. " player=" .. tostring(PlayerKey(pn) or pn or "nil")
+							.. " index=" .. tostring(i)
+							.. " beforeDifficulty=" .. tostring(beforeDifficulty)
+							.. " beforeMeter=" .. tostring(beforeMeter)
+							.. " selectedDifficulty=" .. tostring(selectedDifficulty)
+							.. " selectedMeter=" .. tostring(selectedMeter)
+							.. " selectedChartKey=" .. tostring(selectedChartKey))
+					end
 					-- GAMESTATE keeps track of what the "preferred difficulty" is and this is used by
 					-- the engine's SelectMusic class.  SL is using the engine's SelectMusic for now.
 					-- Set the PreferredDifficulty now so that the player's newly chosen difficulty
@@ -930,6 +961,24 @@ local Overrides = {
 							SafeCall("GAMESTATE.SetCurrentSteps", function()
 								GAMESTATE:SetCurrentSteps(pn, v)
 							end)
+						end
+						if ITGOnline and ITGOnline.RememberOnlineOptionSteps then
+							SafeCall("ITGOnline.RememberOnlineOptionSteps", function()
+								ITGOnline:RememberOnlineOptionSteps(pn, v, "player_options_stepchart_save")
+							end)
+						end
+						if online_flow_trace then
+							local afterSteps = GAMESTATE and GAMESTATE.GetCurrentSteps and GAMESTATE:GetCurrentSteps(pn) or nil
+							local afterDifficulty = afterSteps and afterSteps.GetDifficulty and ToEnumShortString(afterSteps:GetDifficulty()) or "nil"
+							local afterMeter = afterSteps and afterSteps.GetMeter and afterSteps:GetMeter() or "nil"
+							local afterChartKey = afterSteps and afterSteps.GetChartKey and tostring(afterSteps:GetChartKey() or "") or ""
+							online_flow_trace("player_options_stepchart_save_applied"
+								.. " player=" .. tostring(PlayerKey(pn) or pn or "nil")
+								.. " index=" .. tostring(i)
+								.. " afterDifficulty=" .. tostring(afterDifficulty)
+								.. " afterMeter=" .. tostring(afterMeter)
+								.. " afterChartKey=" .. tostring(afterChartKey)
+								.. " sameSteps=" .. tostring(afterSteps == v))
 						end
 						SafeBroadcast("CurrentSteps"..tostring(PlayerKey(pn) or "").."Changed")
 					end

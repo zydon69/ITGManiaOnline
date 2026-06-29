@@ -20,6 +20,9 @@ local function online_display_name(user, fallback)
 end
 
 local function final_ranking_trace(message)
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+		return
+	end
 	local line = "ITG Online: FLOW final_ranking " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end

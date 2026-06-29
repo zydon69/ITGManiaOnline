@@ -4,7 +4,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdarg>
 #include <cstdio>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -33,6 +35,7 @@
 #include "GameplayHelpers.h"
 #include "InputFilter.h"
 #include "InputMapper.h"
+#include "IniFile.h"
 #include "Inventory.h"
 #include "LifeMeter.h"
 #include "LifeMeterBar.h"
@@ -119,6 +122,52 @@ AutoScreenMessage(SM_PlayGo);
 
 static constexpr float ITGONLINE_EVALUATION_HOLD_MAX_SECONDS = 30.0f;
 static constexpr float ITGONLINE_FAILED_HOLD_MAX_SECONDS = 30.0f;
+
+static bool OnlineVerboseLogsEnabledFromThemePrefs() {
+  static time_t lastRead = 0;
+  static bool cached = false;
+
+  const time_t now = time(nullptr);
+  if (now == lastRead) {
+    return cached;
+  }
+
+  lastRead = now;
+  cached = false;
+
+  if (PREFSMAN == nullptr) {
+    return false;
+  }
+
+  IniFile ini;
+  if (!ini.ReadFile("Save/ThemePrefs.ini")) {
+    return false;
+  }
+
+  bool enabled = false;
+  if (!ini.GetValue(
+          PREFSMAN->m_sTheme,
+          "ITGOnlineGameplayLayoutLogs",
+          enabled)) {
+    return false;
+  }
+
+  cached = enabled;
+  return cached;
+}
+
+static void OnlineTrace(const char* fmt, ...) {
+  if (LOG == nullptr || !OnlineVerboseLogsEnabledFromThemePrefs()) {
+    return;
+  }
+
+  va_list args;
+  va_start(args, fmt);
+  char buffer[2048];
+  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+  LOG->Trace("%s", buffer);
+}
 
 static bool HasActiveITGOnlineRoom() {
   if (LUA == nullptr) {
@@ -2025,7 +2074,7 @@ void ScreenGameplay::LoadNextSong() {
     if (!pi->m_bIsDummy) {
       if (bDisableAutoplayForITGOnline) {
         DisableAutoplayForITGOnline(playerState);
-        LOG->Trace("ITG Online: disabled autoplay for gameplay player=%s",
+        OnlineTrace("ITG Online: disabled autoplay for gameplay player=%s",
                    PlayerNumberToString(playerState->m_PlayerNumber)
                        .c_str());
       } else if (GAMESTATE->m_bDemonstrationOrJukebox) {
@@ -2766,8 +2815,7 @@ void ScreenGameplay::Update(float fDeltaTime) {
           if (marked) {
             m_bMarkedOnlineFailedEarly = true;
           }
-          LOG->Trace(
-              "ITG Online: individual fail triggered early failed finalization "
+          OnlineTrace("ITG Online: individual fail triggered early failed finalization "
               "marked=%d player=%d.",
               marked ? 1 : 0, (int)pn);
         }
@@ -2830,8 +2878,7 @@ void ScreenGameplay::Update(float fDeltaTime) {
 
       if (bAllFailed && OnlineShouldKeepGameplayAliveAfterLocalFail()) {
         if (!m_bLoggedOnlineLocalFailKeepAlive) {
-          LOG->Trace(
-              "ITG Online: local players failed, keeping ScreenGameplay running "
+          OnlineTrace("ITG Online: local players failed, keeping ScreenGameplay running "
               "until remote players finish.");
           m_bLoggedOnlineLocalFailKeepAlive = true;
         }
@@ -3577,8 +3624,7 @@ void ScreenGameplay::SendCrossedMessages() {
 
 void ScreenGameplay::BeginBackingOutFromGameplay() {
   if (GetITGOnlineIsActive()) {
-    LOG->Trace(
-        "ITG Online: BeginBackingOutFromGameplay ignored while online "
+    OnlineTrace("ITG Online: BeginBackingOutFromGameplay ignored while online "
         "gameplay is active; round completion must flow through results.");
     ResetGiveUpTimers(false);
     return;
@@ -3893,7 +3939,7 @@ void ScreenGameplay::SongFinished() {
   }
   const bool isOnlineActive = GetITGOnlineIsActive();
   if (isOnlineActive) {
-    LOG->Trace("ITG Online: ScreenGameplay::SongFinished begin.");
+    OnlineTrace("ITG Online: ScreenGameplay::SongFinished begin.");
   }
   FOREACH_EnabledPlayer(pn) {
     if (GAMESTATE->m_pCurSteps[pn]) {
@@ -3911,20 +3957,18 @@ void ScreenGameplay::SongFinished() {
     }
   }
   if (isOnlineActive) {
-    LOG->Trace("ITG Online: ScreenGameplay::SongFinished complete.");
+    OnlineTrace("ITG Online: ScreenGameplay::SongFinished complete.");
   }
 }
 
 bool ScreenGameplay::OnlineShouldHoldBeforeEvaluation() {
   if (GetITGOnlineShouldReleaseGameplayForEvaluation()) {
     if (m_bLoggedOnlineEvaluationHold) {
-      LOG->Trace(
-          "ITG Online: released ScreenGameplay for evaluation because server "
+      OnlineTrace("ITG Online: released ScreenGameplay for evaluation because server "
           "results are ready.");
       m_bLoggedOnlineEvaluationHold = false;
     } else {
-      LOG->Trace(
-          "ITG Online: evaluation hold bypassed because server results are "
+      OnlineTrace("ITG Online: evaluation hold bypassed because server results are "
           "ready.");
     }
     return false;
@@ -3945,10 +3989,10 @@ bool ScreenGameplay::OnlineShouldHoldBeforeEvaluation() {
   }
   LUA->Release(L);
   if (shouldHold && !m_bLoggedOnlineEvaluationHold) {
-    LOG->Trace("ITG Online: holding ScreenGameplay before evaluation");
+    OnlineTrace("ITG Online: holding ScreenGameplay before evaluation");
     m_bLoggedOnlineEvaluationHold = true;
   } else if (!shouldHold && m_bLoggedOnlineEvaluationHold) {
-    LOG->Trace("ITG Online: released ScreenGameplay for evaluation");
+    OnlineTrace("ITG Online: released ScreenGameplay for evaluation");
     m_bLoggedOnlineEvaluationHold = false;
   }
   if (!ok) {
@@ -3994,8 +4038,7 @@ void ScreenGameplay::StageFinished(bool bBackedOut) {
   }
   const bool isOnlineActive = GetITGOnlineIsActive();
   if (isOnlineActive) {
-    LOG->Trace(
-        "ITG Online: StageFinished begin backedOut=%d allFailed=%d gaveUp=%d "
+    OnlineTrace("ITG Online: StageFinished begin backedOut=%d allFailed=%d gaveUp=%d "
         "usedAutoplay=%d playMode=%d",
         bBackedOut ? 1 : 0,
         STATSMAN->m_CurStageStats.AllFailed() ? 1 : 0,
@@ -4029,7 +4072,7 @@ void ScreenGameplay::StageFinished(bool bBackedOut) {
 
   if (bBackedOut) {
     if (isOnlineActive) {
-      LOG->Trace("ITG Online: StageFinished cancelling stage after backed out.");
+      OnlineTrace("ITG Online: StageFinished cancelling stage after backed out.");
     }
     GAMESTATE->CancelStage();
     return;
@@ -4053,7 +4096,7 @@ void ScreenGameplay::StageFinished(bool bBackedOut) {
   STATSMAN->CalcAccumPlayedStageStats();
   GAMESTATE->FinishStage();
   if (isOnlineActive) {
-    LOG->Trace("ITG Online: StageFinished complete.");
+    OnlineTrace("ITG Online: StageFinished complete.");
   }
 }
 
@@ -4130,8 +4173,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
         (m_bOnlineEvaluationHoldStarted ||
          m_bOnlineEvaluationHoldMessagePending)) {
       if (!m_bLoggedOnlineNotesEndedDuringHold) {
-        LOG->Trace(
-            "ITG Online: SM_NotesEnded ignored while evaluation hold is "
+        OnlineTrace("ITG Online: SM_NotesEnded ignored while evaluation hold is "
             "active.");
         m_bLoggedOnlineNotesEndedDuringHold = true;
       }
@@ -4201,8 +4243,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
   } else if (SM == SM_LeaveGameplay) {
     if (m_bOnlineEvaluationHoldMessagePending &&
         m_timerOnlineEvaluationHoldMessage.Ago() < 0.20f) {
-      LOG->Trace(
-          "ITG Online: SM_LeaveGameplay ignored while evaluation hold message "
+      OnlineTrace("ITG Online: SM_LeaveGameplay ignored while evaluation hold message "
           "is pending.");
       return;
     }
@@ -4210,7 +4251,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
 
     if (OnlineShouldHoldBeforeEvaluation()) {
       if (!m_bOnlineEvaluationHoldStarted) {
-        LOG->Trace("ITG Online: SM_LeaveGameplay starting evaluation hold.");
+        OnlineTrace("ITG Online: SM_LeaveGameplay starting evaluation hold.");
         m_bOnlineEvaluationHoldStarted = true;
         m_bLoggedOnlineNotesEndedDuringHold = false;
         m_timerOnlineEvaluationHoldStarted.Touch();
@@ -4226,8 +4267,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
             m_timerOnlineEvaluationHoldStarted.Ago());
         m_bOnlineEvaluationHoldStarted = false;
       } else {
-        LOG->Trace(
-            "ITG Online: SM_LeaveGameplay continuing evaluation hold for %.2fs.",
+        OnlineTrace("ITG Online: SM_LeaveGameplay continuing evaluation hold for %.2fs.",
             m_timerOnlineEvaluationHoldStarted.Ago());
         m_bOnlineEvaluationHoldMessagePending = true;
         m_timerOnlineEvaluationHoldMessage.Touch();
@@ -4236,7 +4276,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
       }
     } else {
       if (m_bOnlineEvaluationHoldStarted) {
-        LOG->Trace("ITG Online: SM_LeaveGameplay evaluation hold released.");
+        OnlineTrace("ITG Online: SM_LeaveGameplay evaluation hold released.");
       }
       m_bOnlineEvaluationHoldStarted = false;
     }
@@ -4244,7 +4284,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
     m_bOnlineEvaluationHoldMessagePending = false;
     m_bLoggedOnlineNotesEndedDuringHold = false;
     if (GetITGOnlineIsActive()) {
-      LOG->Trace("ITG Online: SM_LeaveGameplay advancing to evaluation.");
+      OnlineTrace("ITG Online: SM_LeaveGameplay advancing to evaluation.");
     }
 
     GAMESTATE->m_DanceDuration = GAMESTATE->m_DanceStartTime.Ago();
@@ -4495,15 +4535,13 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
   } else if (SM == SM_DoPrevScreen) {
     if (GetITGOnlineIsActive()) {
       if (OnlineShouldHoldBeforeEvaluation()) {
-        LOG->Trace(
-            "ITG Online: SM_DoPrevScreen blocked while waiting for "
+        OnlineTrace("ITG Online: SM_DoPrevScreen blocked while waiting for "
             "authoritative results.");
         ResetGiveUpTimers(false);
         return;
       }
 
-      LOG->Trace(
-          "ITG Online: SM_DoPrevScreen redirected to SM_DoNextScreen so "
+      OnlineTrace("ITG Online: SM_DoPrevScreen redirected to SM_DoNextScreen so "
           "online gameplay reaches evaluation instead of lobby.");
       HandleScreenMessage(SM_DoNextScreen);
       return;
@@ -4547,13 +4585,12 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
       if (!m_bMarkedOnlineFailedEarly) {
         m_bMarkedOnlineFailedEarly = true;
         MarkITGOnlineFailedEarly();
-        LOG->Trace(
-            "ITG Online: player failed but ScreenGameplay is kept active.");
+        OnlineTrace("ITG Online: player failed but ScreenGameplay is kept active.");
       }
 
       if (OnlineShouldHoldBeforeEvaluation()) {
         if (!m_bOnlineFailedHoldStarted) {
-          LOG->Trace("ITG Online: SM_BeginFailed starting failed-player hold.");
+          OnlineTrace("ITG Online: SM_BeginFailed starting failed-player hold.");
           m_bOnlineFailedHoldStarted = true;
           m_timerOnlineFailedHoldStarted.Touch();
         } else if (m_timerOnlineFailedHoldStarted.Ago() >=
@@ -4564,8 +4601,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
               m_timerOnlineFailedHoldStarted.Ago());
           m_bOnlineFailedHoldStarted = false;
         } else {
-          LOG->Trace(
-              "ITG Online: SM_BeginFailed continuing failed-player hold for "
+          OnlineTrace("ITG Online: SM_BeginFailed continuing failed-player hold for "
               "%.2fs.",
               m_timerOnlineFailedHoldStarted.Ago());
           ResetGiveUpTimers(false);
@@ -4574,20 +4610,19 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
         }
 
         if (m_bOnlineFailedHoldStarted) {
-          LOG->Trace("ITG Online: SM_BeginFailed reposting failed-player hold.");
+          OnlineTrace("ITG Online: SM_BeginFailed reposting failed-player hold.");
           ResetGiveUpTimers(false);
           this->PostScreenMessage(SM_BeginFailed, 0.25f);
           return;
         }
       } else {
         if (m_bOnlineFailedHoldStarted) {
-          LOG->Trace("ITG Online: SM_BeginFailed failed-player hold released.");
+          OnlineTrace("ITG Online: SM_BeginFailed failed-player hold released.");
         }
         m_bOnlineFailedHoldStarted = false;
       }
 
-      LOG->Trace(
-          "ITG Online: failed player released from ScreenGameplay to "
+      OnlineTrace("ITG Online: failed player released from ScreenGameplay to "
           "evaluation.");
     }
 

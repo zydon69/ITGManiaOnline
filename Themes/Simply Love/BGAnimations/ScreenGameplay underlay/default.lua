@@ -21,7 +21,7 @@ end
 
 local function route_online_gameplay_to_lobby()
 	if online_gameplay_phase() == "playing" or online_gameplay_phase() == "starting" then
-		if Trace then
+		if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
 			Trace("ITG Online: FLOW gameplay_lobby_route_blocked reason=round_in_progress room="
 				.. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 				.. " phase=" .. tostring(online_gameplay_phase()))
@@ -50,7 +50,7 @@ local function online_gameplay_should_route_to_evaluation()
 	if not topScreen then return false end
 	if ITGOnline.IsOnlineGameplayScreen and not ITGOnline:IsOnlineGameplayScreen(topScreen:GetName()) then return false end
 	if ITGOnline.ShouldHoldGameplayForEvaluation and ITGOnline:ShouldHoldGameplayForEvaluation() then
-		if Trace then
+		if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
 			Trace("ITG Online: FLOW gameplay_evaluation_transition_held reason=awaiting_local_final_score room="
 				.. tostring(ITGOnline.currentRoomId or "nil")
 				.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))

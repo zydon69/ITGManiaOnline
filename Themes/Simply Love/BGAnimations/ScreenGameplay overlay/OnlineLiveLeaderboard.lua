@@ -29,6 +29,9 @@ local function monotonic_time()
 end
 
 local function force_trace(message)
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+		return
+	end
 	local line = "ITG Online: FLOW live_leaderboard " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
@@ -56,7 +59,7 @@ local function local_user_id()
 end
 
 local function leaderboard_trace(message)
-	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
 		return
 	end
 	force_trace(message)
@@ -509,13 +512,12 @@ end
 local af = Def.ActorFrame{
 	InitCommand=function(self)
 		self:xy(GetOnlineGameplayColumnX and GetOnlineGameplayColumnX("center") or _screen.cx, _screen.cy - 125):visible(false)
-		if Trace then
-			Trace("SL_ONLINE_LIVE_LEADERBOARD"
-				.. " panel_width=" .. tostring(panel_width)
-				.. " panel_padding=" .. tostring(panel_padding)
-				.. " local_x=" .. tostring(self:GetX())
-				.. " local_y=" .. tostring(self:GetY())
-				.. " marker_x=" .. tostring(marker_x)
+		force_trace("init"
+			.. " panel_width=" .. tostring(panel_width)
+			.. " panel_padding=" .. tostring(panel_padding)
+			.. " local_x=" .. tostring(self:GetX())
+			.. " local_y=" .. tostring(self:GetY())
+			.. " marker_x=" .. tostring(marker_x)
 				.. " label_x=" .. tostring(label_x)
 				.. " score_x=" .. tostring(score_x)
 				.. " status_x=" .. tostring(status_x)
@@ -525,7 +527,6 @@ local af = Def.ActorFrame{
 				.. " screen_w=" .. tostring(_screen.w)
 				.. " screen_h=" .. tostring(_screen.h)
 				.. " aspect=" .. tostring(GetScreenAspectRatio()))
-		end
 	end,
 	OnCommand=function(self)
 		self:queuecommand("RefreshFromRoom")

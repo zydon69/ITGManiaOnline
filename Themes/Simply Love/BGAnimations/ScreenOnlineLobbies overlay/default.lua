@@ -1114,10 +1114,7 @@ function focus_selected_browse_list(root)
 end
 
 function lobby_debug_enabled()
-	if ITGOnline and ITGOnline.debugReadyFlow ~= nil then
-		return ITGOnline.debugReadyFlow == true
-	end
-	return false
+	return type(online_logs_enabled) == "function" and online_logs_enabled() == true
 end
 
 function lobby_debug(message)
@@ -1127,7 +1124,7 @@ function lobby_debug(message)
 end
 
 lobby_flow_trace = function(message)
-		if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
+		if type(online_logs_enabled) == "function" and not online_logs_enabled() then
 			return
 		end
 		local line = "ITG Online: FLOW lobby_ui " .. tostring(message or "")

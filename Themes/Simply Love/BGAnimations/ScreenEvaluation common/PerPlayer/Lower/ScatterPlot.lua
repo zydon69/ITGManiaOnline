@@ -22,7 +22,7 @@ local vertsTable= {}
 local Steps = GAMESTATE:GetCurrentSteps(player)
 local Song = GAMESTATE:GetCurrentSong()
 if not Steps or not Song then
-	if ITGOnline and ITGOnline.debugOnlineTrace == true and online_trace then
+	if type(online_logs_enabled) == "function" and online_logs_enabled() and online_trace then
 		online_trace("ITG Online Evaluation: scatter plot skipped missing Steps/Song for " .. tostring(pn))
 	end
 	return Def.ActorFrame{}

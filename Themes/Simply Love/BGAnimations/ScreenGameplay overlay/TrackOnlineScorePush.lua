@@ -10,7 +10,7 @@ local onlineScoreTraceLastAt = 0
 local onlineScoreTraceSuppressed = 0
 
 local function online_score_trace(message, force)
-	if not (ITGOnline and (ITGOnline.debugOnlineTrace == true or ITGOnline.debugReadyFlow == true)) then
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
 		return
 	end
 	local now = GetTimeSinceStart and GetTimeSinceStart() or 0

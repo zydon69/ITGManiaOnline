@@ -67,6 +67,25 @@ local state = {
 	startAttempts = 0,
 }
 
+local function login_flow_trace(message)
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+		return
+	end
+	if not Trace then return end
+	Trace("ITG Online: LoginFlow " .. tostring(message or ""))
+end
+
+local function login_state_summary()
+	return " mode=" .. tostring(state.mode)
+		.. " connected=" .. tostring(is_connected())
+		.. " hasStoredToken=" .. tostring(has_stored_access_token())
+		.. " session=" .. tostring(state.sessionId ~= nil and state.sessionId ~= "")
+		.. " pollToken=" .. tostring(state.pollToken ~= nil and state.pollToken ~= "")
+		.. " polling=" .. tostring(state.polling)
+		.. " connecting=" .. tostring(state.connecting)
+		.. " attempts=" .. tostring(state.startAttempts)
+end
+
 local function safe_screen_text_width()
 	return math.max(280, math.min(760, _screen.w - 80))
 end
@@ -82,11 +101,13 @@ end
 local function set_status(text)
 	text = tostring(text or "")
 	if state.status == text then return end
+	login_flow_trace("status_change from=" .. tostring(state.status) .. " to=" .. text .. login_state_summary())
 	state.status = text
 	refresh()
 end
 
 local function clear_session()
+	login_flow_trace("clear_session" .. login_state_summary())
 	state.sessionId = nil
 	state.pollToken = nil
 	state.verificationUrl = nil
@@ -98,26 +119,31 @@ local function clear_session()
 end
 
 local function go_back()
+	login_flow_trace("go_back begin" .. login_state_summary())
 	if is_connected() then
 		ITGOnline:Disconnect()
 	end
 	SL.Global.ITGOnline = SL.Global.ITGOnline or {}
 	SL.Global.ITGOnline.Enabled = false
+	login_flow_trace("go_back screen=ScreenSelectOnlineMode")
 	SCREENMAN:SetNewScreen("ScreenSelectOnlineMode")
 end
 
 local start_device_login
 
 local function connect_to_lobbies()
+	login_flow_trace("websocket_connect_begin" .. login_state_summary())
 	ITGOnline:ConnectWebSocket({
 		open = function()
 			state.connecting = false
 			state.mode = "connected"
+			login_flow_trace("websocket_open screen=ScreenOnlineLobbies" .. login_state_summary())
 			set_status(THEME:GetString("ScreenITGOnlineLogin", "Connected"))
 			SCREENMAN:SetNewScreen("ScreenOnlineLobbies")
 		end,
 		error = function(message)
 			state.connecting = false
+			login_flow_trace("websocket_error message=" .. tostring(message) .. login_state_summary())
 			ITGOnline:ClearStoredAccessToken()
 			clear_session()
 			state.mode = "idle"
@@ -126,6 +152,7 @@ local function connect_to_lobbies()
 		end,
 		close = function(reason)
 			state.connecting = false
+			login_flow_trace("websocket_close reason=" .. tostring(reason) .. login_state_summary())
 			set_status(tostring(reason or THEME:GetString("ScreenITGOnlineLogin", "Disconnected")))
 		end,
 	})
@@ -133,14 +160,21 @@ end
 
 local function connect_with_token(accessToken)
 	if tostring(accessToken or "") == "" then
+		login_flow_trace("connect_with_token rejected empty_token" .. login_state_summary())
 		set_status(THEME:GetString("ScreenITGOnlineLogin", "DeviceLoginUnavailable"))
 		return
 	end
 
 	state.mode = "connecting"
 	state.connecting = true
+	login_flow_trace("connect_with_token begin tokenPresent=true" .. login_state_summary())
 	set_status(THEME:GetString("ScreenITGOnlineLogin", "Connecting"))
 	ITGOnline:ApplyAccessToken(accessToken, function(ok, user, response)
+		local userId = type(user) == "table" and (user.id or user.user_id) or nil
+		login_flow_trace("apply_access_token result ok=" .. tostring(ok)
+			.. " userId=" .. tostring(userId)
+			.. " responseMessage=" .. tostring(response and response.message)
+			.. login_state_summary())
 		if not ok then
 			state.connecting = false
 			ITGOnline:ClearStoredAccessToken()
@@ -156,8 +190,12 @@ local function connect_with_token(accessToken)
 end
 
 start_device_login = function(resetAttempts)
-	if state.connecting or state.polling then return end
+	if state.connecting or state.polling then
+		login_flow_trace("start_device_login skipped busy resetAttempts=" .. tostring(resetAttempts) .. login_state_summary())
+		return
+	end
 	if is_two_player_online_requested() then
+		login_flow_trace("start_device_login blocked two_player_requested" .. login_state_summary())
 		set_status(THEME:GetString("ScreenITGOnlineLogin", "TwoPlayerNotice"))
 		return
 	end
@@ -169,9 +207,14 @@ start_device_login = function(resetAttempts)
 	clear_session()
 	state.startAttempts = (tonumber(state.startAttempts) or 0) + 1
 	state.startRequestedAt = GetTimeSinceStart()
+	login_flow_trace("start_device_login begin resetAttempts=" .. tostring(resetAttempts) .. login_state_summary())
 	set_status(THEME:GetString("ScreenITGOnlineLogin", "QrStarting"))
 	ITGOnline:StartDeviceLogin(function(ok, decoded, response)
 		state.startRequestedAt = 0
+		login_flow_trace("start_device_login result ok=" .. tostring(ok)
+			.. " hasDecoded=" .. tostring(decoded ~= nil)
+			.. " responseError=" .. tostring(response and response.errorMessage)
+			.. login_state_summary())
 		if not ok or not decoded then
 			state.mode = "failed"
 			set_status(tostring((decoded and decoded.message) or (response and response.errorMessage) or THEME:GetString("ScreenITGOnlineLogin", "DeviceLoginUnavailable")))
@@ -186,6 +229,11 @@ start_device_login = function(resetAttempts)
 		state.expiresAt = decoded.expiresAt
 		state.nextPollAt = GetTimeSinceStart() + 0.25
 		state.mode = "waiting"
+		login_flow_trace("start_device_login waiting shortCode=" .. tostring(state.shortCode)
+			.. " pollInterval=" .. tostring(state.pollIntervalSeconds)
+			.. " expiresAt=" .. tostring(state.expiresAt)
+			.. " verificationUrlPresent=" .. tostring(state.verificationUrl ~= "")
+			.. login_state_summary())
 		set_status(THEME:GetString("ScreenITGOnlineLogin", "QrWaiting"))
 	end)
 end
@@ -196,22 +244,31 @@ local function poll_device_login()
 	if state.nextPollAt and GetTimeSinceStart() < state.nextPollAt then return end
 
 	state.polling = true
+	login_flow_trace("poll_device_login begin" .. login_state_summary())
 	ITGOnline:PollDeviceLogin(state.sessionId, state.pollToken, function(ok, decoded, response)
 		state.polling = false
+		login_flow_trace("poll_device_login result ok=" .. tostring(ok)
+			.. " hasDecoded=" .. tostring(decoded ~= nil)
+			.. " status=" .. tostring(decoded and decoded.status)
+			.. " responseError=" .. tostring(response and response.errorMessage)
+			.. login_state_summary())
 		if not ok or not decoded then
 			state.nextPollAt = GetTimeSinceStart() + (state.pollIntervalSeconds or 3)
+			login_flow_trace("poll_device_login retry_after_error nextPollAt=" .. tostring(state.nextPollAt) .. login_state_summary())
 			return
 		end
 
 		local pollStatus = tostring(decoded.status or "pending")
 		if pollStatus == "pending" then
 			state.nextPollAt = GetTimeSinceStart() + (state.pollIntervalSeconds or 3)
+			login_flow_trace("poll_device_login pending nextPollAt=" .. tostring(state.nextPollAt) .. login_state_summary())
 			set_status(THEME:GetString("ScreenITGOnlineLogin", "QrWaiting"))
 			return
 		end
 
 		if pollStatus == "expired" or pollStatus == "cancelled" then
 			state.mode = "failed"
+			login_flow_trace("poll_device_login terminal status=" .. tostring(pollStatus) .. login_state_summary())
 			clear_session()
 			set_status(THEME:GetString("ScreenITGOnlineLogin", "QrExpired"))
 			return
@@ -219,22 +276,29 @@ local function poll_device_login()
 
 		if pollStatus == "consumed" and tostring(decoded.apiKey or "") ~= "" then
 			state.mode = "connecting"
+			login_flow_trace("poll_device_login consumed tokenPresent=true" .. login_state_summary())
 			set_status(THEME:GetString("ScreenITGOnlineLogin", "Connecting"))
 			connect_with_token(tostring(decoded.apiKey))
 			return
 		end
 
 		state.nextPollAt = GetTimeSinceStart() + (state.pollIntervalSeconds or 3)
+		login_flow_trace("poll_device_login unhandled_status status=" .. tostring(pollStatus)
+			.. " nextPollAt=" .. tostring(state.nextPollAt)
+			.. login_state_summary())
 	end)
 end
 
 local function action_connect()
+	login_flow_trace("action_connect" .. login_state_summary())
 	if is_connected() then
+		login_flow_trace("action_connect already_connected screen=ScreenOnlineLobbies")
 		SCREENMAN:SetNewScreen("ScreenOnlineLobbies")
 		return
 	end
 
 	if has_stored_access_token() then
+		login_flow_trace("action_connect stored_token")
 		connect_with_token((ITGOnline:Config().accessToken or ""))
 		return
 	end
@@ -243,11 +307,13 @@ local function action_connect()
 end
 
 local function action_disconnect()
+	login_flow_trace("action_disconnect begin" .. login_state_summary())
 	ITGOnline:Disconnect({ revokeToken = true })
 	ITGOnline:ClearStoredAccessToken()
 	clear_session()
 	state.mode = "idle"
 	set_status(THEME:GetString("ScreenITGOnlineLogin", "Disconnected"))
+	login_flow_trace("action_disconnect restarting_device_login")
 	start_device_login()
 end
 
@@ -273,6 +339,9 @@ local function refresh_selection()
 	if selection > #rows then
 		selection = #rows
 	end
+	login_flow_trace("selection_refresh selection=" .. tostring(selection)
+		.. " rows=" .. table.concat(rows, ",")
+		.. login_state_summary())
 	refresh()
 end
 
@@ -359,6 +428,9 @@ local function input(event)
 		refresh_selection()
 	elseif event.GameButton == "Start" then
 		local action = selected_action()
+		login_flow_trace("input_start action=" .. tostring(action)
+			.. " selection=" .. tostring(selection)
+			.. login_state_summary())
 		if action == "Connect" or action == "Continue" then
 			action_connect()
 		elseif action == "Disconnect" then
@@ -367,6 +439,7 @@ local function input(event)
 			go_back()
 		end
 	elseif event.GameButton == "Back" then
+		login_flow_trace("input_back" .. login_state_summary())
 		go_back()
 	end
 end
@@ -374,6 +447,7 @@ end
 local t = Def.ActorFrame{
 	InitCommand=function(self) self:Center() end,
 	OnCommand=function(self)
+		login_flow_trace("screen_on" .. login_state_summary())
 		local topScreen = SCREENMAN:GetTopScreen()
 		if topScreen then
 			topScreen:AddInputCallback(input)
@@ -384,14 +458,18 @@ local t = Def.ActorFrame{
 		self:sleep(0.25):queuecommand("Tick")
 	end,
 	AutoConnectCommand=function(self)
+		login_flow_trace("auto_connect begin" .. login_state_summary())
 		if is_connected() then
 			state.mode = "connected"
+			login_flow_trace("auto_connect already_connected" .. login_state_summary())
 			set_status(THEME:GetString("ScreenITGOnlineLogin", "Connected"))
 		elseif has_stored_access_token() then
 			state.mode = "connecting"
+			login_flow_trace("auto_connect stored_token" .. login_state_summary())
 			set_status(THEME:GetString("ScreenITGOnlineLogin", "Connecting"))
 			connect_with_token((ITGOnline:Config().accessToken or ""))
 		else
+			login_flow_trace("auto_connect start_device_login" .. login_state_summary())
 			start_device_login(true)
 		end
 		self:playcommand("Refresh")
@@ -400,6 +478,7 @@ local t = Def.ActorFrame{
 		self:playcommand("Refresh")
 	end,
 	OffCommand=function(self)
+		login_flow_trace("screen_off" .. login_state_summary())
 		local topScreen = SCREENMAN:GetTopScreen()
 		if topScreen then
 			pcall(function() topScreen:RemoveInputCallback(input) end)
@@ -414,12 +493,14 @@ local t = Def.ActorFrame{
 			and GetTimeSinceStart() - (tonumber(state.startRequestedAt) or 0) > 2.0
 		then
 			if (tonumber(state.startAttempts) or 0) < 3 then
+				login_flow_trace("start_device_login timeout_retry" .. login_state_summary())
 				clear_session()
 				state.mode = "idle"
 				start_device_login()
 			else
 				state.startRequestedAt = 0
 				state.mode = "failed"
+				login_flow_trace("start_device_login timeout_failed" .. login_state_summary())
 				set_status(THEME:GetString("ScreenITGOnlineLogin", "DeviceLoginUnavailable"))
 			end
 		end
