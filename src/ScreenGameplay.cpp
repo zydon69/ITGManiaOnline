@@ -318,6 +318,30 @@ static bool GetITGOnlineIsActive() {
   return isActive;
 }
 
+static bool GetITGOnlineShouldReleaseGameplayForEvaluation() {
+  if (LUA == nullptr) {
+    return false;
+  }
+
+  Lua* L = LUA->Get();
+  const bool ran = LuaHelpers::RunExpression(
+      L,
+      "ITGOnline ~= nil and "
+      "ITGOnline.ShouldReleaseGameplayForEvaluation ~= nil and "
+      "ITGOnline:ShouldReleaseGameplayForEvaluation() or false",
+      "ScreenGameplay::GetITGOnlineShouldReleaseGameplayForEvaluation");
+
+  const bool shouldRelease = ran && lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  LUA->Release(L);
+
+  if (!ran) {
+    LOG->Warn("ITG Online: evaluation release gate failed.");
+  }
+
+  return shouldRelease;
+}
+
 static bool GetITGOnlineShouldHoldGameplayForStart() {
   if (LUA == nullptr) {
     return false;
@@ -3892,6 +3916,20 @@ void ScreenGameplay::SongFinished() {
 }
 
 bool ScreenGameplay::OnlineShouldHoldBeforeEvaluation() {
+  if (GetITGOnlineShouldReleaseGameplayForEvaluation()) {
+    if (m_bLoggedOnlineEvaluationHold) {
+      LOG->Trace(
+          "ITG Online: released ScreenGameplay for evaluation because server "
+          "results are ready.");
+      m_bLoggedOnlineEvaluationHold = false;
+    } else {
+      LOG->Trace(
+          "ITG Online: evaluation hold bypassed because server results are "
+          "ready.");
+    }
+    return false;
+  }
+
   if (LUA == nullptr) {
     return false;
   }

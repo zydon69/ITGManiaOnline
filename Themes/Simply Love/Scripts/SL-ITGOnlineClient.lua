@@ -6194,6 +6194,32 @@ function ITGOnline:EnforceCurrentRoomScreenAfterStateUpdate(source)
 	return self:EnforceRoomPhaseScreen(screenName)
 end
 
+function ITGOnline:ShouldReleaseGameplayForEvaluation()
+	if not self.currentRoomId or not self.currentRoom then
+		online_flow_trace_throttled("evaluation_release_no_room", 1.0,
+			"evaluation_release_decision release=false reason=no_current_room")
+		return false
+	end
+
+	local phase = self:NormalizeRoomPhase(self.currentRoom.phase)
+	local summary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
+	local release = phase == "results"
+		and summary ~= nil
+		and summary.players > 0
+		and summary.finalResultsReady == true
+
+	online_flow_trace_throttled("evaluation_release_" .. tostring(self.currentRoomId), 0.5,
+		"evaluation_release_decision release=" .. tostring(release == true)
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " phase=" .. tostring(phase)
+		.. " players=" .. tostring(summary and summary.players or "nil")
+		.. " terminal=" .. tostring(summary and summary.terminal or "nil")
+		.. " finalResults=" .. tostring(summary and summary.finalResults or "nil")
+		.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true))
+
+	return release
+end
+
 function ITGOnline:ForceGameplayEvaluationIfResultsReady(source)
 	if not self.currentRoomId or not self.currentRoom then
 		online_flow_trace("force_evaluation_skipped reason=no_current_room source=" .. tostring(source or "unknown"))
