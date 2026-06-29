@@ -9912,11 +9912,40 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 end
 
 function ITGOnline:CurrentOnlineOptionSummary()
-	return {
+	local steps = selected_steps()
+	local song = GAMESTATE:GetCurrentSong()
+	local songHash = song and self.SongHashFor and self:SongHashFor(song) or ""
+	local chartHash = steps and self.ChartHashForSteps and self:ChartHashForSteps(steps) or ""
+	local chartKey = steps and steps.GetChartKey and tostring(steps:GetChartKey() or "") or ""
+	local chartType = steps and normalize_chart_type(enum_short(steps:GetStepsType()) or "") or ""
+	local difficulty = steps and enum_short(steps:GetDifficulty()) or ""
+	local meter = steps and steps.GetMeter and tonumber(steps:GetMeter()) or nil
+	local noteCount = current_chart_note_count(steps)
+	local maxScore = noteCount and server_max_score_for_note_count(noteCount) or nil
+	local summary = {
 		speed_mod = current_speed_mod_label(),
 		music_rate_bpm = string.format("%.2fx", current_music_rate()),
 		stepchart = current_stepchart_label(),
+		song_hash = songHash ~= "" and songHash or nil,
+		chart_hash = chartHash ~= "" and chartHash or nil,
+		chart_key = chartKey ~= "" and chartKey or nil,
+		chart_type = chartType ~= "" and chartType or nil,
+		difficulty = difficulty ~= "" and difficulty or nil,
+		meter = meter,
+		chart_note_count = noteCount,
+		max_score = maxScore,
 	}
+	online_flow_trace("online_options_summary"
+		.. " stepchart=" .. tostring(summary.stepchart or "")
+		.. " songHash=" .. tostring(summary.song_hash or "nil"):sub(1, 12)
+		.. " chartHash=" .. tostring(summary.chart_hash or "nil"):sub(1, 12)
+		.. " chartKey=" .. tostring(summary.chart_key or "nil")
+		.. " chartType=" .. tostring(summary.chart_type or "nil")
+		.. " difficulty=" .. tostring(summary.difficulty or "nil")
+		.. " meter=" .. tostring(summary.meter or "nil")
+		.. " notes=" .. tostring(summary.chart_note_count or "nil")
+		.. " maxScore=" .. tostring(summary.max_score or "nil"))
+	return summary
 end
 
 function ITGOnline:MarkConfigReady(callback)
@@ -11684,6 +11713,20 @@ end
 			or refreshReason:match("^post_room_exit:") ~= nil
 			or (self.currentRoomId == nil and self:IsOnlineLobbyScreen(refreshScreen) and refreshReason:match("refresh") ~= nil)
 		local refreshIsGameplay = self:IsOnlineGameplayScreen(refreshScreen)
+		local gameplayNoiseRefresh = refreshReason == "presence.updated"
+			or refreshReason == "heartbeat_ack"
+			or refreshReason == "lobby.updated"
+			or refreshReason == "room.started"
+			or refreshReason == "room.load_requested"
+			or refreshReason == "room.start_scheduled"
+			or refreshReason == "room.member_pack_sync_updated"
+		if refreshIsGameplay and self.currentRoomId and not ignoreSuppression and gameplayNoiseRefresh then
+			online_flow_trace("lobby_refresh_skipped reason=gameplay_lobby_noise"
+				.. " requestReason=" .. refreshReason
+				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+				.. " screen=" .. refreshScreen)
+			return
+		end
 		local now = GetTimeSinceStart()
 		local recentRoomSnapshotAge = now - (tonumber(self.lastAuthoritativeRoomSnapshotAt) or 0)
 		local automaticRoomUiRefresh = refreshReason:match("^coalesced:queued_after_response:") ~= nil
@@ -12979,6 +13022,19 @@ end
 					.. " userId=" .. tostring(payload.user_id or "nil")
 					.. " roomId=" .. tostring(lobbyRoomId or "nil")
 					.. " hasUser=" .. tostring(hasUserPayload == true))
+				if self:IsOnlineGameplayScreen(tostring(self.currentScreenName or ""))
+					and (lobbyUpdateReason == "presence.updated"
+						or lobbyUpdateReason == "room.started"
+						or lobbyUpdateReason == "room.load_requested"
+						or lobbyUpdateReason == "room.start_scheduled"
+						or lobbyUpdateReason == "room.member_pack_sync_updated") then
+					online_flow_trace("lobby_updated_event ignored reason=gameplay_lobby_noise"
+						.. " updateReason=" .. lobbyUpdateReason
+						.. " roomId=" .. tostring(lobbyRoomId or "nil")
+						.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+						.. " screen=" .. tostring(self.currentScreenName or "nil"))
+					return
+				end
 				if lobbyUpdateReason == "room.results_ready" then
 					online_flow_trace("lobby_updated_event ignored reason=room_results_ready_room_scoped"
 						.. " roomId=" .. tostring(lobbyRoomId or "nil")
