@@ -482,6 +482,29 @@ function maybe_set_lobby_ready(reason, callback)
 		return
 	end
 
+	local function send_lobby_ready(verifiedRoom)
+		local verifiedPhase = tostring(verifiedRoom and verifiedRoom.phase or phase)
+		if verifiedPhase ~= "lobby" and verifiedPhase ~= "lobby_ready" then
+			online_flow_trace("lobby_ready_skipped reason=" .. tostring(reason or "unknown")
+				.. " cause=server_phase_changed"
+				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+				.. " localPhase=" .. tostring(phase)
+				.. " serverPhase=" .. tostring(verifiedPhase))
+			if verifiedRoom and ITGOnline.ApplyRoomSnapshot then
+				ITGOnline:ApplyRoomSnapshot(verifiedRoom, "lobby_ready_server_phase_changed")
+			end
+			if ITGOnline.EnforceRoomPhaseScreen then ITGOnline:EnforceRoomPhaseScreen() end
+			if callback then callback(true, { room = verifiedRoom or room, skipped = true, reason = "server_phase_changed" }) end
+			return
+		end
+
+		online_flow_trace("lobby_ready_request reason=" .. tostring(reason or "unknown")
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(verifiedPhase)
+			.. " verified=" .. tostring(verifiedRoom ~= nil))
+		ITGOnline:SetReady("lobby_ready", true, callback)
+	end
+
 	if ITGOnline.IsCurrentUserReadyInRoom and ITGOnline:IsCurrentUserReadyInRoom(room) then
 		online_flow_trace("lobby_ready_skipped reason=" .. tostring(reason or "unknown")
 			.. " cause=already_ready"
@@ -493,10 +516,32 @@ function maybe_set_lobby_ready(reason, callback)
 		return
 	end
 
-	online_flow_trace("lobby_ready_request reason=" .. tostring(reason or "unknown")
-		.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-		.. " phase=" .. tostring(phase))
-	ITGOnline:SetReady("lobby_ready", true, callback)
+	if ITGOnline.FetchRoom and ITGOnline.currentRoomId then
+		local verifyRoomId = ITGOnline.currentRoomId
+		online_flow_trace("lobby_ready_verify_server_phase reason=" .. tostring(reason or "unknown")
+			.. " room=" .. tostring(verifyRoomId)
+			.. " localPhase=" .. tostring(phase))
+		ITGOnline:FetchRoom(verifyRoomId, function(ok, decoded)
+			if tostring(ITGOnline and ITGOnline.currentRoomId or "") ~= tostring(verifyRoomId or "") then
+				online_flow_trace("lobby_ready_verify_ignored reason=room_changed"
+					.. " expected=" .. tostring(verifyRoomId)
+					.. " current=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+				if callback then callback(false, { skipped = true, reason = "room_changed" }) end
+				return
+			end
+			if ok and decoded and decoded.room then
+				send_lobby_ready(decoded.room)
+				return
+			end
+			online_flow_trace("lobby_ready_verify_failed reason=" .. tostring(reason or "unknown")
+				.. " room=" .. tostring(verifyRoomId)
+				.. " localPhase=" .. tostring(phase))
+			send_lobby_ready(nil)
+		end)
+		return
+	end
+
+	send_lobby_ready(nil)
 end
 
 function maybe_preview_current_online_song(force)
@@ -1642,7 +1687,17 @@ OrderPlayers = function(data, localScreenName)
 		if bScore == nil then
 			return true
 		end
-		return aScore > bScore
+		if aScore ~= bScore then
+			return aScore > bScore
+		end
+		local aUser = type(a.user) == "table" and a.user or {}
+		local bUser = type(b.user) == "table" and b.user or {}
+		local aRankKey = tonumber(a.rank or a.sort_index or a.sortIndex or a.user_id or aUser.id or a.id) or 0
+		local bRankKey = tonumber(b.rank or b.sort_index or b.sortIndex or b.user_id or bUser.id or b.id) or 0
+		if aRankKey ~= bRankKey then
+			return aRankKey < bRankKey
+		end
+		return tostring(a.name or aUser.name or "") < tostring(b.name or bUser.name or "")
 	end)
 
 	-- Then add all the other players in other screens below.
@@ -3183,7 +3238,11 @@ CreateOnlineHandler = function()
 						if online_flow_trace then
 							online_flow_trace("options_confirmed dispatch_immediate config_ready key=" .. tostring(configReadyKey))
 						end
-						self:playcommand("RetryOnlineConfigReady")
+						-- Let ScreenPlayerOptions finish SaveSelections first. The Stepchart
+						-- option updates GAMESTATE:SetCurrentSteps() during that save pass; if
+						-- we send config_ready synchronously here, the payload can still contain
+						-- the previous song's chart.
+						schedule_named_timer(self, "ConfigReadyRetryTimer", 0.05, "Fire")
 		      end,
 			      OnlineConfigReadyConfirmedMessageCommand=function(self, params)
 							if not pendingConfigReady then
@@ -3387,7 +3446,7 @@ CreateOnlineHandler = function()
 								elseif phase == "lobby" or phase == "lobby_ready" then
 									online_flow_trace("options_confirmed legacy_set_lobby_ready_before_retry key=" .. tostring(expectedConfigReadyKey)
 										.. " phase=" .. tostring(phase))
-									ITGOnline:SetReady("lobby_ready", true, function()
+									maybe_set_lobby_ready("options_confirmed_legacy_retry", function()
 										schedule_named_timer(self, "ConfigReadyRetryTimer", 0.5, "Fire")
 									end)
 							else

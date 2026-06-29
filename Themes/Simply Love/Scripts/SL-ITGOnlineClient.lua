@@ -1129,7 +1129,61 @@ end
 
 local function selected_steps()
 	local player = first_enabled_player()
-	return (GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(player)) or GAMESTATE:GetCurrentSteps(player)
+	if not GAMESTATE then return nil end
+	if GAMESTATE:IsCourseMode() then
+		return GAMESTATE:GetCurrentTrail(player)
+	end
+
+	local currentSteps = GAMESTATE:GetCurrentSteps(player)
+	local currentSong = GAMESTATE:GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
+	if currentSong and currentSteps and SongUtil and SongUtil.GetPlayableSteps then
+		local ok, playableSteps = pcall(function()
+			return SongUtil.GetPlayableSteps(currentSong)
+		end)
+		if ok and type(playableSteps) == "table" then
+			for steps in ivalues(playableSteps) do
+				if steps == currentSteps then
+					return currentSteps
+				end
+			end
+
+			local preferredDifficulty = nil
+			if GAMESTATE.GetPreferredDifficulty then
+				local preferredOk, preferred = pcall(function()
+					return GAMESTATE:GetPreferredDifficulty(player)
+				end)
+				preferredDifficulty = preferredOk and preferred or nil
+			end
+			if preferredDifficulty ~= nil then
+				for steps in ivalues(playableSteps) do
+					if steps and steps.GetDifficulty and steps:GetDifficulty() == preferredDifficulty then
+						if online_flow_trace then
+							online_flow_trace("option_stepchart_recovered_from_preferred"
+								.. " preferred=" .. tostring(ToEnumShortString(preferredDifficulty) or "")
+								.. " currentWasForeign=" .. tostring(currentSteps ~= nil))
+						end
+						if GAMESTATE.SetCurrentSteps then
+							pcall(function() GAMESTATE:SetCurrentSteps(player, steps) end)
+						end
+						return steps
+					end
+				end
+			end
+
+			if playableSteps[1] then
+				if online_flow_trace then
+					online_flow_trace("option_stepchart_recovered_from_first_playable"
+						.. " currentWasForeign=" .. tostring(currentSteps ~= nil))
+				end
+				if GAMESTATE.SetCurrentSteps then
+					pcall(function() GAMESTATE:SetCurrentSteps(player, playableSteps[1]) end)
+				end
+				return playableSteps[1]
+			end
+		end
+	end
+
+	return currentSteps
 end
 
 local function current_chart_note_count(steps)
@@ -4935,11 +4989,23 @@ function ITGOnline:GetFinalLeaderboardCache(roomId)
 	self.finalLeaderboardCache = self.finalLeaderboardCache or {}
 	local key = tostring(roomId or self.currentRoomId or "")
 	local currentPhase = self.currentRoom and self:NormalizeRoomPhase(self.currentRoom.phase) or ""
-	if currentPhase == "lobby"
-		and key ~= ""
-		and tostring(self.finalLeaderboardCacheInvalidLobbyRoomId or "") == key then
+	local screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+	local screenName = tostring((screen and screen.GetName and screen:GetName()) or self.currentScreenName or "")
+	local evaluationScreenActive = screenName == "ScreenEvaluationStage"
+		or screenName == "ScreenEvaluationNonstop"
+		or screenName == "ScreenEvaluationSummary"
+	if currentPhase ~= "" and currentPhase ~= "results" and not evaluationScreenActive then
+		final_leaderboard_cache_trace("miss reason=non_results_phase_outside_evaluation"
+			.. " room=" .. tostring(key ~= "" and key or "nil")
+			.. " phase=" .. tostring(currentPhase)
+			.. " screen=" .. tostring(screenName))
+		return nil
+	end
+	if key ~= "" and tostring(self.finalLeaderboardCacheInvalidLobbyRoomId or "") == key and not evaluationScreenActive then
 		final_leaderboard_cache_trace("miss reason=invalidated_lobby_phase"
 			.. " room=" .. tostring(key)
+			.. " phase=" .. tostring(currentPhase)
+			.. " screen=" .. tostring(screenName)
 			.. " age=" .. tostring(GetTimeSinceStart() - (tonumber(self.finalLeaderboardCacheInvalidLobbyAt) or GetTimeSinceStart())))
 		return nil
 	end
