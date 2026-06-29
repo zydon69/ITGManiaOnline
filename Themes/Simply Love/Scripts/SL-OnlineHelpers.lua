@@ -3250,15 +3250,22 @@ CreateOnlineHandler = function()
 									.. " key=" .. tostring(params and params.key or "nil"))
 								return
 							end
+							if not (params and params.authoritative == true) then
+								online_flow_trace("options_confirmed realtime_ignored reason=not_authoritative"
+									.. " pending=" .. tostring(pendingConfigReady)
+									.. " key=" .. tostring(params and params.key or "nil")
+									.. " source=" .. tostring(params and params.source or "nil"))
+								return
+							end
 
 							local expectedConfigReadyKey = ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
 								or (tostring(ITGOnline.currentRoomId) .. "|" .. tostring(ITGOnline.currentSongPayload and ITGOnline.currentSongPayload.chart_hash or ""))
 							local confirmedKey = params and params.key or expectedConfigReadyKey
-							online_flow_trace("options_confirmed realtime_received pending=" .. tostring(pendingConfigReady)
+							online_flow_trace("options_confirmed authoritative_confirm_received pending=" .. tostring(pendingConfigReady)
 								.. " confirmed=" .. tostring(confirmedKey)
 								.. " expected=" .. tostring(expectedConfigReadyKey))
 							if pendingConfigReady == confirmedKey or pendingConfigReady == expectedConfigReadyKey then
-								Trace("[ITGOnline] options_confirmed realtime config_ready key=" .. tostring(confirmedKey))
+								Trace("[ITGOnline] options_confirmed server_confirmed config_ready key=" .. tostring(confirmedKey))
 								pendingConfigReady = nil
 								self.configReadyRetryKey = nil
 								self.configReadyRetryCount = 0

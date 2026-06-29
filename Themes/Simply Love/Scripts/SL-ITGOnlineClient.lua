@@ -2929,6 +2929,11 @@ function ITGOnline:IsCurrentUserReadyInRoom(room, phase)
 			.. " phase=" .. tostring(room.phase or "nil"))
 		return true
 	end
+	return self:IsCurrentUserServerReadyInRoom(room, phase)
+end
+
+function ITGOnline:IsCurrentUserServerReadyInRoom(room, phase)
+	if not room or not self.user then return false end
 	if not room.ready_states then return false end
 	local currentUserId = tonumber(self.user.id)
 	if not currentUserId then return false end
@@ -2940,7 +2945,7 @@ function ITGOnline:IsCurrentUserReadyInRoom(room, phase)
 			if expectedPhase ~= "" then
 				local statePhase = tostring(state.phase or state.ready_phase or state.readyPhase or "")
 				if statePhase ~= expectedPhase then
-					online_flow_trace("current_user_ready_state_ignored reason=phase_mismatch"
+					online_flow_trace("current_user_server_ready_state_ignored reason=phase_mismatch"
 						.. " expected=" .. tostring(expectedPhase)
 						.. " actual=" .. tostring(statePhase)
 						.. " room=" .. tostring(room.id or self.currentRoomId or "nil"))
@@ -3193,7 +3198,7 @@ function ITGOnline:PendingConfigReadyIntentMatchesRoom(room)
 	if roomKey ~= self.pendingConfigReadyIntentKey then
 		return false, "round_changed"
 	end
-	if self:IsCurrentUserReadyInRoom(room, "config_ready") then
+	if self:IsCurrentUserServerReadyInRoom(room, "config_ready") then
 		return false, "already_ready"
 	end
 	return true, "matched"
@@ -4586,7 +4591,7 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		self:ClearOptimisticConfigReady("room_snapshot_" .. tostring(room.phase or "unknown"))
 	elseif self.optimisticConfigReadyKey ~= "" and self.optimisticConfigReadyKey ~= self:RoomOnlineOptionsReadyKey(room) then
 		self:ClearOptimisticConfigReady("room_snapshot_config_round_changed")
-	elseif self:IsCurrentUserReadyInRoom(room, "config_ready") then
+	elseif self:IsCurrentUserServerReadyInRoom(room, "config_ready") then
 		local readyKey = self:OnlineOptionsReadyKey()
 		self.configReadyInFlight = false
 		self.configReadyInFlightByKey = {}
@@ -4599,6 +4604,7 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 				.. " key=" .. tostring(readyKey))
 			MESSAGEMAN:Broadcast("OnlineConfigReadyConfirmed", {
 				key = readyKey,
+				authoritative = true,
 				source = source,
 				room = room,
 			})
@@ -9980,7 +9986,7 @@ function ITGOnline:MarkConfigReady(callback)
 			.. " hasSelectedSong=" .. tostring(self.currentRoom and self.currentRoom.selected_song ~= nil))
 		self:SetReady("config_ready", true, function(ok, decoded, response)
 			if ok and decoded and decoded.room then
-				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or decoded.room))
+				MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
 			end
 			finish(ok, decoded, response)
 		end)
@@ -10001,7 +10007,7 @@ function ITGOnline:MarkConfigReady(callback)
 
 			self:SetReady("config_ready", true, function(ok, decoded, response)
 				if ok and decoded and decoded.room then
-					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or decoded.room))
+					MESSAGEMAN:Broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
 				end
 				finish(ok, decoded or availabilityDecoded, response or availabilityResponse)
 			end)
