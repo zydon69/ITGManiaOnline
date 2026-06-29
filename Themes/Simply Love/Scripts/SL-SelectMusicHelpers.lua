@@ -95,10 +95,12 @@ play_online_preview_music_normal_rate = function(songInfo, source)
 			.. " source=" .. tostring(source or "unknown")
 			.. " path=" .. tostring(songpath)
 			.. " sampleStart=" .. tostring(sample_start)
-			.. " sampleLen=" .. tostring(sample_len))
+			.. " sampleLen=" .. tostring(sample_len)
+			.. " activeMusicRate=" .. tostring(SL and SL.Global and SL.Global.ActiveModifiers and SL.Global.ActiveModifiers.MusicRate or "nil")
+			.. " applyMusicRate=false")
 	end
 	SOUND:DimMusic(PREFSMAN:GetPreference("SoundVolume"), math.huge)
-	SOUND:PlayMusicPart(songpath, sample_start, sample_len, 0.5, 1.5, ThemePrefs.Get("SampleMusicLoops"), true)
+	SOUND:PlayMusicPart(songpath, sample_start, sample_len, 0.5, 1.5, ThemePrefs.Get("SampleMusicLoops"), false, true)
 	return true
 end
 
