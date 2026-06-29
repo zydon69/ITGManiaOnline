@@ -6198,6 +6198,9 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 					.. " room=" .. tostring(self.currentRoomId or "nil"))
 			end
 		end
+		if preferred == "gameplay" and self.ApplyResolvedLocalGameplaySteps then
+			self:ApplyResolvedLocalGameplaySteps("navigate_to_gameplay")
+		end
 		topScreen:SetNextScreenName(target)
 	if preferred == "evaluation" and self:IsOnlineGameplayScreen(topScreen:GetName()) then
 		-- Let ScreenGameplay perform its normal end-of-song cleanup instead of
@@ -7974,6 +7977,31 @@ local function find_steps_from_options(online, song, options)
 	return nil, "member_options_no_match"
 end
 
+local function find_steps_from_local_preference(song, player)
+	if not (GAMESTATE and song) then return nil, "no_runtime" end
+	local playable = SongUtil and SongUtil.GetPlayableSteps and SongUtil.GetPlayableSteps(song) or {}
+	if type(playable) ~= "table" or #playable == 0 then return nil, "no_playable_steps" end
+
+	local preferredDifficulty = nil
+	if GAMESTATE.GetPreferredDifficulty then
+		local ok, preferred = pcall(function() return GAMESTATE:GetPreferredDifficulty(player) end)
+		preferredDifficulty = ok and preferred or nil
+	end
+	if preferredDifficulty == nil then return nil, "no_preferred_difficulty" end
+
+	local currentStyle = GAMESTATE.GetCurrentStyle and GAMESTATE:GetCurrentStyle() or nil
+	local wantedStepsType = currentStyle and currentStyle.GetStepsType and currentStyle:GetStepsType() or nil
+	for _, steps in ipairs(playable) do
+		local difficultyMatches = steps and steps.GetDifficulty and steps:GetDifficulty() == preferredDifficulty
+		local typeMatches = wantedStepsType == nil or (steps and steps.GetStepsType and steps:GetStepsType() == wantedStepsType)
+		if difficultyMatches and typeMatches then
+			return steps, "local_preferred_difficulty"
+		end
+	end
+
+	return nil, "preferred_difficulty_no_match"
+end
+
 function ITGOnline:RememberExpectedOnlineGameplaySteps(steps, source)
 	local summary = online_steps_trace_summary(self, steps)
 	summary.source = tostring(source or "unknown")
@@ -7993,6 +8021,28 @@ function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSt
 		or screen == "ScreenGameplay"
 		or screen == "ScreenEvaluation"
 	if not shouldUseMemberOptions then
+		if phase == "config" or screen == "ScreenPlayerOptions" then
+			local player = first_enabled_player()
+			local song = GAMESTATE and GAMESTATE.GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
+			local localSteps, localReason = find_steps_from_local_preference(song, player)
+			local resolvedSteps = localSteps or fallbackSteps
+			local fallbackSummary = online_steps_trace_summary(self, fallbackSteps)
+			local resolvedSummary = online_steps_trace_summary(self, resolvedSteps)
+			self:TraceOnlineState("option_steps_local_default_resolved", {
+				source = source,
+				phase = phase,
+				screen = screen,
+				resolveReason = localReason,
+				fallbackChartHash = fallbackSummary.chartHash,
+				fallbackDifficulty = fallbackSummary.difficulty,
+				fallbackMeter = fallbackSummary.meter,
+				resolvedChartHash = resolvedSummary.chartHash,
+				resolvedDifficulty = resolvedSummary.difficulty,
+				resolvedMeter = resolvedSummary.meter,
+				managerChartUsedAsFallback = localSteps == nil,
+			})
+			return resolvedSteps
+		end
 		self:TraceOnlineState("gameplay_steps_resolve_skipped", {
 			source = source,
 			reason = "phase_not_gameplay_bound",
@@ -8047,6 +8097,41 @@ function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSt
 	})
 	self:RememberExpectedOnlineGameplaySteps(selectedSteps, "resolve:" .. tostring(source or "unknown") .. ":" .. selectedSource)
 	return selectedSteps
+end
+
+function ITGOnline:ApplyResolvedLocalGameplaySteps(source)
+	if not GAMESTATE then return false end
+	local player = first_enabled_player()
+	local fallbackSteps = GAMESTATE.GetCurrentSteps and GAMESTATE:GetCurrentSteps(player) or nil
+	local selectedSong = self.currentRoom and self.currentRoom.selected_song or self.currentSongPayload or {}
+	local resolvedSteps = self:ResolveLocalGameplayStepsForSelectedSong(selectedSong, fallbackSteps, source or "apply_resolved_gameplay_steps")
+	if not resolvedSteps then
+		self:TraceOnlineState("gameplay_steps_apply_skipped", {
+			source = source,
+			reason = "no_resolved_steps",
+			fallbackChartHash = online_steps_trace_summary(self, fallbackSteps).chartHash,
+		})
+		return false
+	end
+
+	local before = online_steps_trace_summary(self, fallbackSteps)
+	local after = online_steps_trace_summary(self, resolvedSteps)
+	for enabledPlayer in ivalues(GAMESTATE:GetEnabledPlayers()) do
+		if GAMESTATE.SetCurrentSteps then
+			pcall(function() GAMESTATE:SetCurrentSteps(enabledPlayer, resolvedSteps) end)
+		end
+	end
+	self:TraceOnlineState("gameplay_steps_applied_to_gamestate", {
+		source = source,
+		beforeChartHash = before.chartHash,
+		beforeDifficulty = before.difficulty,
+		beforeMeter = before.meter,
+		appliedChartHash = after.chartHash,
+		appliedDifficulty = after.difficulty,
+		appliedMeter = after.meter,
+		changed = before.chartHash ~= after.chartHash,
+	})
+	return true
 end
 
 function ITGOnline:TraceActualOnlineGameplaySteps(source)

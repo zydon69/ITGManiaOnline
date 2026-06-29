@@ -109,6 +109,9 @@ local t = Def.ActorFrame{
 	Name="GameplayUnderlay",
 	OnCommand=function(self)
 		if ITGOnline and ITGOnline.currentRoomId then
+			if ITGOnline.ApplyResolvedLocalGameplaySteps then
+				ITGOnline:ApplyResolvedLocalGameplaySteps("screen_gameplay_on_guard")
+			end
 			if ITGOnline.TraceActualOnlineGameplaySteps then
 				ITGOnline:TraceActualOnlineGameplaySteps("screen_gameplay_on")
 			end
