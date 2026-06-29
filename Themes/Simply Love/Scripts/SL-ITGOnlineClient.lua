@@ -1135,7 +1135,7 @@ local function selected_steps()
 	end
 
 	local currentSteps = GAMESTATE:GetCurrentSteps(player)
-	local currentSong = GAMESTATE:GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
+	local currentSong = GAMESTATE.GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
 	if currentSong and currentSteps and SongUtil and SongUtil.GetPlayableSteps then
 		local ok, playableSteps = pcall(function()
 			return SongUtil.GetPlayableSteps(currentSong)
