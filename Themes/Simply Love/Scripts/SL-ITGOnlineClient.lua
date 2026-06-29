@@ -1134,6 +1134,9 @@ local function normalized_hash(value)
 	return ITGOnline:NormalizeHash(value, { hashFallback = true })
 end
 
+local enum_short
+local current_chart_note_count
+
 local function steps_belongs_to_current_song(steps)
 	if not steps or not GAMESTATE or not SongUtil or not SongUtil.GetPlayableSteps then return false end
 	local song = GAMESTATE.GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
@@ -1272,7 +1275,7 @@ local function selected_steps()
 	return currentSteps
 end
 
-local function current_chart_note_count(steps)
+current_chart_note_count = function(steps)
 	if not steps or not steps.GetRadarValues then return nil end
 
 	local player = first_enabled_player()
@@ -1392,9 +1395,21 @@ local function current_stepchart_label()
 	return chartLabel .. "/" .. difficultyLabel
 end
 
-local function enum_short(value)
+enum_short = function(value)
 	if value == nil then return "" end
-	return ToEnumShortString(value)
+	if type(ToEnumShortString) ~= "function" then
+		online_flow_trace("enum_short_fallback reason=missing_ToEnumShortString value=" .. tostring(value))
+		return tostring(value or "")
+	end
+	local ok, result = pcall(function()
+		return ToEnumShortString(value)
+	end)
+	if ok and result ~= nil then
+		return tostring(result or "")
+	end
+	online_flow_trace("enum_short_fallback reason=conversion_failed value=" .. tostring(value)
+		.. " error=" .. tostring(result))
+	return tostring(value or "")
 end
 
 local function current_game_name()
