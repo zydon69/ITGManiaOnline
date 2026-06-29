@@ -6208,6 +6208,12 @@ function ITGOnline:ForceGameplayEvaluationIfResultsReady(source)
 
 	local phase = self:NormalizeRoomPhase(self.currentRoom.phase)
 	if phase ~= "results" then
+		online_flow_trace_throttled("force_evaluation_not_results", 1.0,
+			"force_evaluation_skipped reason=phase_not_results"
+			.. " source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " screen=" .. tostring(screenName)
+			.. " phase=" .. tostring(phase))
 		return false
 	end
 
@@ -6234,7 +6240,7 @@ function ITGOnline:ForceGameplayEvaluationIfResultsReady(source)
 	}, "|")
 	local now = GetTimeSinceStart()
 	if tostring(self.onlineGameplayEvaluationForceKey or "") == forceKey
-		and (now - (tonumber(self.onlineGameplayEvaluationForceAt) or 0)) < 1.5 then
+		and (now - (tonumber(self.onlineGameplayEvaluationForceAt) or 0)) < 0.5 then
 		online_flow_trace_throttled("force_evaluation_duplicate", 1.0,
 			"force_evaluation_skipped reason=already_forced"
 			.. " source=" .. tostring(source or "unknown")
@@ -6245,6 +6251,16 @@ function ITGOnline:ForceGameplayEvaluationIfResultsReady(source)
 
 	self.onlineGameplayEvaluationForceKey = forceKey
 	self.onlineGameplayEvaluationForceAt = now
+	if self.onlineNavigationInFlightKey ~= forceKey then
+		self.onlineNavigationInFlightKey = forceKey
+		self.onlineNavigationInFlightAt = now
+	else
+		online_flow_trace("force_evaluation_navigation_already_in_flight"
+			.. " source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " screen=" .. tostring(screenName)
+			.. " forceKey=" .. tostring(forceKey))
+	end
 	online_flow_trace("force_evaluation_results_ready"
 		.. " source=" .. tostring(source or "unknown")
 		.. " room=" .. tostring(self.currentRoomId or "nil")
@@ -6257,8 +6273,20 @@ function ITGOnline:ForceGameplayEvaluationIfResultsReady(source)
 
 	if topScreen.PostScreenMessage then
 		topScreen:PostScreenMessage("SM_LeaveGameplay", 0)
+		online_flow_trace("force_evaluation_transition_posted"
+			.. " method=PostScreenMessage"
+			.. " message=SM_LeaveGameplay"
+			.. " source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " forceKey=" .. tostring(forceKey))
 	else
 		topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+		online_flow_trace("force_evaluation_transition_posted"
+			.. " method=StartTransitioningScreen"
+			.. " message=SM_GoToNextScreen"
+			.. " source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " forceKey=" .. tostring(forceKey))
 	end
 	return true
 end

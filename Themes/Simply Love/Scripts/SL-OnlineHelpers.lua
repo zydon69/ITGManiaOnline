@@ -34,6 +34,7 @@ local onlineHandlerShuttingDown = false
 local onlineOperationToken = 0
 local evaluationExitTransitionRequestedAt = 0
 local evaluationExitTransitionRoomId = ""
+local lastGameplayResultsForceKey = ""
 UnlockOnlineInput = nil
 local onlineInputCallbacks = {}
 -- These screens are the ones we want to display the player's scores for.
@@ -1909,9 +1910,30 @@ DisplayLobbyState = function(data, actor)
 					UnlockOnlineInput()
 					local topScreen = current_top_screen()
 					SetGameplayPaused(topScreen, false)
-				if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
-					ITGOnline:EnforceRoomPhaseScreen(screenName)
-				end
+					local summary = ITGOnline and ITGOnline.PlayStateSummary and ITGOnline:PlayStateSummary(ITGOnline.currentRoom) or nil
+					local forceKey = table.concat({
+						tostring(data and data.roomId or ""),
+						tostring(data and data.startAt or ""),
+						tostring(data and data.startedAt or ""),
+						tostring(summary and summary.finalResults or 0),
+						tostring(summary and summary.finalResultsReady == true),
+					}, "|")
+					if forceKey ~= lastGameplayResultsForceKey then
+						lastGameplayResultsForceKey = forceKey
+						online_flow_trace("gameplay_results_authoritative_transition_check"
+							.. " room=" .. tostring(data and data.roomId or "nil")
+							.. " screen=" .. tostring(screenName)
+							.. " players=" .. tostring(summary and summary.players or "nil")
+							.. " terminal=" .. tostring(summary and summary.terminal or "nil")
+							.. " finalResults=" .. tostring(summary and summary.finalResults or "nil")
+							.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true))
+					end
+					if ITGOnline and ITGOnline.ForceGameplayEvaluationIfResultsReady then
+						ITGOnline:ForceGameplayEvaluationIfResultsReady("display_lobby_state_results_phase")
+					end
+					if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
+						ITGOnline:EnforceRoomPhaseScreen(screenName)
+					end
 				elseif gameplayScreens[screenName] and (data.phase == "config" or data.phase == "lobby_ready" or data.phase == "lobby") then
 					UnlockOnlineInput()
 					local topScreen = current_top_screen()
