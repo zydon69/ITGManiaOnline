@@ -386,8 +386,9 @@ local function rows_from_room(room, leaderboard_override)
 		end
 	end
 
-	if #merged == 0 and tostring(room and room.phase or "") == "playing" and #last_non_empty_rows > 0 then
-		leaderboard_trace("rows_from_room_reuse_last_non_empty reason=empty_playing"
+	local room_phase = tostring(room and room.phase or "")
+	if #merged == 0 and (room_phase == "playing" or room_phase == "results") and #last_non_empty_rows > 0 then
+		leaderboard_trace("rows_from_room_reuse_last_non_empty reason=empty_" .. room_phase
 			.. " room=" .. tostring(room and room.id or ITGOnline and ITGOnline.currentRoomId or "nil"))
 		for row in ivalues(last_non_empty_rows) do
 			merged[#merged + 1] = copy_row(row)
@@ -407,7 +408,9 @@ end
 
 local function update_rows(frame, rows)
 	local phase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil
-	if phase == "playing" and (not rows or #rows == 0) and #last_non_empty_rows > 0 then
+	if (phase == "playing" or phase == "results") and (not rows or #rows == 0) and #last_non_empty_rows > 0 then
+		leaderboard_trace("update_rows_reuse_last_non_empty reason=empty_" .. tostring(phase)
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 		rows = last_non_empty_rows
 	end
 	local show = ITGOnline and ITGOnline.currentRoom and (phase == "playing" or phase == "results") and #rows > 0
