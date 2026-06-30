@@ -161,6 +161,7 @@ void WheelBase::SetItemPosition(
     item.SetVisible(false);
     return;
   }
+  item.SetVisible(true);
   item.DestTweenState() = ts;
 }
 

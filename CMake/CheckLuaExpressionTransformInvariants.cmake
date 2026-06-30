@@ -119,6 +119,10 @@ require_contains(
   "item.SetVisible(false);"
   "WheelBase hides items when transform cache fails")
 require_contains(
+  "${wheel_base_cpp}"
+  "item.SetVisible(true);"
+  "WheelBase restores item visibility after transform cache success")
+require_contains(
   "${screen_options_cpp}"
   "const bool bTransformOk ="
   "ScreenOptions captures transform cache failure")
