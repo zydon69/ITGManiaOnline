@@ -94,6 +94,7 @@ class WheelBase : public ActorFrame {
   float GetSafeLockedInitialVelocity() const;
   int NormalizeMoveDistance(int n) const;
   int GetVisualFocusIndex() const;
+  int GetVisualFocusDrawIndex(int itemCount) const;
   bool HasValidSelection() const;
   bool SettleSelectionOnFocusedItem();
   void ClearWheelItems();

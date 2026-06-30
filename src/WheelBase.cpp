@@ -678,6 +678,7 @@ void WheelBase::RebuildWheelItems(int iDist) {
   // find the first wheel item shown
   const int wheelItemCount = GetWheelItemCount();
   const int itemCount = std::min(wheelItemCount, static_cast<int>(items.size()));
+  const int visualFocusDrawIndex = GetVisualFocusDrawIndex(itemCount);
   iFirstVisibleIndex -= wheelItemCount / 2;
 
   wrap(iFirstVisibleIndex, data.size());
@@ -711,10 +712,11 @@ void WheelBase::RebuildWheelItems(int iDist) {
       "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_window "
       "normalizedDist=%d selection=%d firstVisible=%d firstReloadSlot=%d "
       "lastReloadSlot=%d itemCount=%d wheelItemCount=%d dataCount=%zu "
-      "actorCount=%zu offset=%.6f moving=%d visualFocus=%d",
+      "actorCount=%zu offset=%.6f moving=%d visualFocus=%d "
+      "visualFocusDrawIndex=%d",
       iDist, m_iSelection, iFirstVisibleIndex, iFirst, iLast, itemCount,
       wheelItemCount, data.size(), items.size(), m_fPositionOffsetFromSelection,
-      m_Moving, visualFocusIndex);
+      m_Moving, visualFocusIndex, visualFocusDrawIndex);
 
   for (int i = iFirst; i <= iLast; i++) {
     int iIndex = iFirstVisibleIndex + i;
@@ -745,22 +747,23 @@ void WheelBase::RebuildWheelItems(int iDist) {
       TraceWheelBaseMusicWheel(
           "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_load_skip "
           "slot=%d dataIndex=%d dataPtr=%p actorPtr=%p logicalSelected=%d "
-          "hasVisualFocus=%d visualFocus=%d",
+          "hasVisualFocus=%d visualFocus=%d visualFocusDrawIndex=%d",
           i, iIndex, static_cast<const void*>(pData),
           static_cast<void*>(pDisplay), m_iSelection == iIndex,
-          visualFocusIndex == iIndex, visualFocusIndex);
+          i == visualFocusDrawIndex, visualFocusIndex, visualFocusDrawIndex);
       continue;
     }
-    const bool hasVisualFocus = visualFocusIndex == iIndex;
+    const bool hasVisualFocus = i == visualFocusDrawIndex;
     TraceWheelBaseMusicWheel(
         "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_load_slot "
         "slot=%d dataIndex=%d logicalSelected=%d hasVisualFocus=%d type='%s' "
         "text='%s' dataPtr=%p actorPtr=%p firstVisible=%d selection=%d "
-        "visualFocus=%d offset=%.6f",
+        "visualFocus=%d visualFocusDrawIndex=%d offset=%.6f",
         i, iIndex, m_iSelection == iIndex, hasVisualFocus,
         WheelItemDataTypeToLogString(pData->m_Type), pData->m_sText.c_str(),
         static_cast<const void*>(pData), static_cast<void*>(pDisplay),
         iFirstVisibleIndex, m_iSelection, visualFocusIndex,
+        visualFocusDrawIndex,
         m_fPositionOffsetFromSelection);
     pDisplay->LoadFromWheelItemData(pData, iIndex, hasVisualFocus, i);
   }
@@ -768,9 +771,10 @@ void WheelBase::RebuildWheelItems(int iDist) {
   TraceWheelBaseMusicWheel(
       "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_end "
       "selection=%d visualFocus=%d offset=%.6f moving=%d firstVisible=%d "
-      "dataCount=%zu actorCount=%zu empty=%d",
+      "visualFocusDrawIndex=%d dataCount=%zu actorCount=%zu empty=%d",
       m_iSelection, visualFocusIndex, m_fPositionOffsetFromSelection, m_Moving,
-      iFirstVisibleIndex, data.size(), items.size(), m_bEmpty);
+      iFirstVisibleIndex, visualFocusDrawIndex, data.size(), items.size(),
+      m_bEmpty);
 }
 
 WheelItemBaseData* WheelBase::LastSelected() {
@@ -821,6 +825,22 @@ int WheelBase::GetVisualFocusIndex() const {
   }
 
   return focusedIndex;
+}
+
+int WheelBase::GetVisualFocusDrawIndex(int itemCount) const {
+  if (itemCount <= 0) {
+    return -1;
+  }
+
+  const int centerDrawIndex = GetWheelItemCount() / 2;
+  float offsetFromSelection = 0.0f;
+  if (std::isfinite(m_fPositionOffsetFromSelection)) {
+    offsetFromSelection = m_fPositionOffsetFromSelection;
+  }
+
+  const int focusDrawIndex =
+      static_cast<int>(std::lround(centerDrawIndex - offsetFromSelection));
+  return std::clamp(focusDrawIndex, 0, itemCount - 1);
 }
 
 int WheelBase::GetWheelItemCount() const {

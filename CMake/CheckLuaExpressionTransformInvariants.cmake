@@ -157,6 +157,14 @@ require_contains(
   "int WheelBase::GetVisualFocusIndex() const"
   "WheelBase centralizes visual focus selection reads")
 require_contains(
+  "${wheel_base_cpp}"
+  "int WheelBase::GetVisualFocusDrawIndex(int itemCount) const"
+  "WheelBase centralizes rendered focus slot calculation")
+require_contains(
+  "${wheel_base_cpp}"
+  "std::lround(centerDrawIndex - offsetFromSelection)"
+  "WheelBase rendered focus follows the actor closest to the visual center")
+require_contains(
   "${music_wheel_cpp}"
   "return WheelBase::GetVisualFocusIndex();"
   "MusicWheel delegates visual focus calculation to WheelBase")
@@ -222,8 +230,12 @@ require_contains(
   "WheelBase logs rebuilt visual wheel slots")
 require_contains(
   "${wheel_base_cpp}"
+  "const bool hasVisualFocus = i == visualFocusDrawIndex;"
+  "WheelBase marks only one rendered actor as focused during rebuild")
+require_contains(
+  "${wheel_base_cpp}"
   "pDisplay->LoadFromWheelItemData(pData, iIndex, hasVisualFocus, i);"
-  "WheelBase marks visual focus instead of logical selection during rebuild")
+  "WheelBase passes rendered focus into rebuilt wheel items")
 require_contains(
   "${banner_cpp}"
   "SRC-2693 MusicWheelTrace banner_cached_begin"
