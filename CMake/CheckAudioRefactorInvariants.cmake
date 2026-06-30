@@ -41,6 +41,9 @@ read_source("src/arch/Sound/RageSoundDriver.h" rage_sound_driver_h)
 read_source("src/arch/Sound/RageSoundDriver_Generic_Software.cpp" rage_sound_driver_generic_cpp)
 read_source("src/GameSoundManager.h" game_sound_manager_h)
 read_source("src/GameSoundManager.cpp" game_sound_manager_cpp)
+read_source("src/AutoKeysounds.cpp" auto_keysounds_cpp)
+read_source("src/RageSoundManager.h" rage_sound_manager_h)
+read_source("src/RageSoundManager.cpp" rage_sound_manager_cpp)
 read_source("src/StepMania.cpp" stepmania_cpp)
 read_source("src/RageDisplay.cpp" rage_display_cpp)
 read_source("src/arch/LowLevelWindow/LowLevelWindow_MacOSX.mm" macos_window_cpp)
@@ -134,9 +137,65 @@ require_contains(
   "m_sError = \"\";"
   "RageSound clears load error before each load")
 require_contains(
+  "${rage_sound_h}"
+  "bool m_bLoadSucceeded;"
+  "RageSound stores logical load success separately from fallback readers")
+require_contains(
+  "${rage_sound_h}"
+  "RageSoundParams GetParams() const;"
+  "RageSound params are returned by value")
+require_not_contains(
+  "${rage_sound_h}"
+  "const RageSoundParams& GetParams() const"
+  "RageSound must not expose params by reference")
+require_contains(
   "${rage_sound_cpp}"
-  "return m_sError.empty();"
-  "RageSound Load reports failed opens to callers")
+  "return LoadSucceeded();"
+  "RageSound IsLoaded reports logical load success")
+require_contains(
+  "${rage_sound_cpp}"
+  "if (this == &cpy)"
+  "RageSound copy assignment handles self-assignment")
+require_contains(
+  "${rage_sound_cpp}"
+  "std::unique_ptr<RageSoundReader> sourceCopy;"
+  "RageSound copy assignment prepares a reader before mutating destination")
+require_contains(
+  "${rage_sound_cpp}"
+  "LockMut(m_Mutex);"
+  "RageSound reader access is protected by its mutex")
+require_contains(
+  "${rage_sound_h}"
+  "GetDataToPlay("
+  "RageSound exposes the driver callback")
+require_contains(
+  "${rage_sound_h}"
+  "int& iBytesRead) override;"
+  "RageSound marks driver data callback override")
+require_contains(
+  "${rage_sound_h}"
+  "void CommitPlayingPosition("
+  "RageSound exposes driver position callback")
+require_contains(
+  "${rage_sound_h}"
+  "int iGotFrames) override;"
+  "RageSound marks driver position callback override")
+require_contains(
+  "${rage_sound_cpp}"
+  "RageSound::SetParam: unknown parameter"
+  "RageSound Lua SetParam diagnoses unknown parameter names")
+require_contains(
+  "${rage_sound_cpp}"
+  "lua_pushboolean(L, false);"
+  "RageSound Lua SetParam returns failure for unknown parameter names")
+require_contains(
+  "${rage_sound_cpp}"
+  "RageSound::ApplyParams: one or more properties failed"
+  "RageSound reports parameter application failures")
+require_contains(
+  "${rage_sound_cpp}"
+  "return m_bLoadSucceeded;"
+  "RageSound Load reports logical load success to callers")
 require_contains(
   "${rage_sound_cpp}"
   "RageSound::Load: error preloading sound"
@@ -160,8 +219,12 @@ require_contains(
   "PlayOnce rejects non-placeholder zero-length cached sounds")
 require_contains(
   "${game_sound_manager_cpp}"
-  "Music load failed; continuing with silent fallback"
-  "Critical music loads log explicit Load failures")
+  "Music load failed; refusing to start silent fallback"
+  "Critical music loads refuse silent fallback playback")
+require_not_contains(
+  "${game_sound_manager_cpp}"
+  "continuing with silent fallback"
+  "Critical music loads must not promote failed loads to silent music")
 require_contains(
   "${game_sound_manager_cpp}"
   "PlayOnce invariant violation: empty registered pool"
@@ -178,6 +241,36 @@ require_contains(
   "${game_sound_manager_h}"
   "RunPlayOnceRuntimeSmokeTest"
   "PlayOnce exposes a runtime smoke test entrypoint")
+
+require_contains(
+  "${auto_keysounds_cpp}"
+  "AutoKeysounds::AutoKeysounds()"
+  "AutoKeysounds initializes owned reader pointers")
+require_contains(
+  "${auto_keysounds_cpp}"
+  "GAMESTATE == nullptr || SOUNDMAN == nullptr"
+  "AutoKeysounds FinishLoading guards gameplay audio singletons")
+require_contains(
+  "${auto_keysounds_cpp}"
+  "no playable keysounds were loaded"
+  "AutoKeysounds refuses empty sound chains without assert")
+require_not_contains(
+  "${auto_keysounds_cpp}"
+  "ASSERT_M(\n      m_pSharedSound != nullptr"
+  "AutoKeysounds must not assert on songs without playable keysounds")
+
+require_contains(
+  "${rage_sound_manager_h}"
+  "float GetVolumeOfNonCriticalSounds() const;"
+  "RageSoundManager non-critical volume getter is out-of-line")
+require_contains(
+  "${rage_sound_manager_cpp}"
+  "float RageSoundManager::GetVolumeOfNonCriticalSounds() const"
+  "RageSoundManager defines synchronized non-critical volume getter")
+require_contains(
+  "${rage_sound_manager_cpp}"
+  "LockMut(g_SoundManMutex);"
+  "RageSoundManager volume getter uses sound manager mutex")
 require_contains(
   "${stepmania_cpp}"
   "playonce-smoke-test"

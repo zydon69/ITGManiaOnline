@@ -43,11 +43,28 @@
 #include "Song.h"
 #include "global.h"
 
+namespace {
+bool IsAutoKeysoundPlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+}  // namespace
+
+AutoKeysounds::AutoKeysounds()
+    : m_pChain(nullptr), m_pPlayerSounds{nullptr, nullptr},
+      m_pSharedSound(nullptr) {}
+
 void AutoKeysounds::Load(PlayerNumber pn, const NoteData& ndAutoKeysoundsOnly) {
+  if (!IsAutoKeysoundPlayer(pn)) {
+    return;
+  }
   m_ndAutoKeysoundsOnly[pn] = ndAutoKeysoundsOnly;
 }
 
 void AutoKeysounds::LoadAutoplaySoundsInto(RageSoundReader_Chain* pChain) {
+  if (pChain == nullptr || GAMESTATE == nullptr || SOUNDMAN == nullptr ||
+      GAMESTATE->m_pCurSong == nullptr) {
+    return;
+  }
   //
   // Load sounds.
   //
@@ -57,8 +74,11 @@ void AutoKeysounds::LoadAutoplaySoundsInto(RageSoundReader_Chain* pChain) {
   /*
    * Add all current autoplay sounds in both players to the chain.
    */
-  int iNumTracks =
-      m_ndAutoKeysoundsOnly[GAMESTATE->GetMasterPlayerNumber()].GetNumTracks();
+  const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+  if (!IsAutoKeysoundPlayer(master)) {
+    return;
+  }
+  int iNumTracks = m_ndAutoKeysoundsOnly[master].GetNumTracks();
   for (int t = 0; t < iNumTracks; t++) {
     int iRow = -1;
     for (;;) {
@@ -96,6 +116,12 @@ void AutoKeysounds::LoadAutoplaySoundsInto(RageSoundReader_Chain* pChain) {
 
         ASSERT(tn[pn].type == TapNoteType_AutoKeysound);
         if (tn[pn].iKeysoundIndex >= 0) {
+          if (static_cast<size_t>(tn[pn].iKeysoundIndex) >=
+              pSong->m_vsKeysoundFile.size() ||
+              GAMESTATE->m_pCurSteps[pn] == nullptr ||
+              GAMESTATE->m_pCurSteps[pn]->GetTimingData() == nullptr) {
+            continue;
+          }
           std::string sKeysoundFilePath =
               sSongDir + pSong->m_vsKeysoundFile[tn[pn].iKeysoundIndex];
           float fSeconds =
@@ -129,10 +155,18 @@ void AutoKeysounds::LoadTracks(
   pPlayer2 = nullptr;
   pShared = nullptr;
 
+  if (pSong == nullptr || GAMESTATE == nullptr) {
+    return;
+  }
+  const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+  if (!IsAutoKeysoundPlayer(master) ||
+      GAMESTATE->m_pCurSteps[master] == nullptr) {
+    return;
+  }
+
   std::vector<std::string> vsMusicFile;
   const std::string sMusicPath =
-      GAMESTATE->m_pCurSteps[GAMESTATE->GetMasterPlayerNumber()]
-          ->GetMusicPath();
+      GAMESTATE->m_pCurSteps[master]->GetMusicPath();
 
   if (!sMusicPath.empty()) {
     vsMusicFile.push_back(sMusicPath);
@@ -152,7 +186,12 @@ void AutoKeysounds::LoadTracks(
     std::string sError;
     RageSoundReader* pSongReader =
         RageSoundReader_FileReader::OpenFile(s, sError);
-    vpSounds.push_back(pSongReader);
+    if (pSongReader != nullptr) {
+      vpSounds.push_back(pSongReader);
+    } else if (LOG != nullptr) {
+      LOG->Warn("AutoKeysounds: failed to open track '%s': %s", s.c_str(),
+                sError.c_str());
+    }
   }
 
   if (vpSounds.size() == 1) {
@@ -184,6 +223,15 @@ void AutoKeysounds::LoadTracks(
     std::string sError;
     RageSoundReader* pGuitarTrackReader = RageSoundReader_FileReader::OpenFile(
         pSong->GetInstrumentTrackPath(InstrumentTrack_Guitar), sError);
+    if (pGuitarTrackReader == nullptr) {
+      if (LOG != nullptr) {
+        LOG->Warn(
+            "AutoKeysounds: failed to open guitar track '%s': %s",
+            pSong->GetInstrumentTrackPath(InstrumentTrack_Guitar).c_str(),
+            sError.c_str());
+      }
+      return;
+    }
     // Load the buffering filter before the effects filters, so effects aren't
     // delayed.
     pGuitarTrackReader = new RageSoundReader_Extend(pGuitarTrackReader);
@@ -259,6 +307,19 @@ void AutoKeysounds::LoadTracks(
 
 void AutoKeysounds::FinishLoading() {
   m_sSound.Unload();
+  m_pChain = nullptr;
+  m_pSharedSound = nullptr;
+  m_pPlayerSounds[PLAYER_1] = nullptr;
+  m_pPlayerSounds[PLAYER_2] = nullptr;
+
+  if (GAMESTATE == nullptr || SOUNDMAN == nullptr ||
+      GAMESTATE->m_pCurSong == nullptr) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "AutoKeysounds::FinishLoading skipped without gameplay audio state");
+    }
+    return;
+  }
 
   Song* pSong = GAMESTATE->m_pCurSong;
 
@@ -282,11 +343,14 @@ void AutoKeysounds::FinishLoading() {
       delete pChain;
     }
   }
-  ASSERT_M(
-      m_pSharedSound != nullptr,
-      ssprintf(
-          "No keysounds were loaded for the song %s!",
-          pSong->m_sMainTitle.c_str()));
+  if (m_pSharedSound == nullptr) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "AutoKeysounds: no playable keysounds were loaded for the song %s",
+          pSong->m_sMainTitle.c_str());
+    }
+    return;
+  }
 
   m_pSharedSound = new RageSoundReader_PitchChange(m_pSharedSound);
   m_pSharedSound = new RageSoundReader_PostBuffering(m_pSharedSound);
@@ -323,7 +387,12 @@ void AutoKeysounds::FinishLoading() {
 
     m_pChain = pMerge;
   } else {
-    ASSERT(!apSounds.empty());
+    if (apSounds.empty()) {
+      if (LOG != nullptr) {
+        LOG->Warn("AutoKeysounds: no sound chain entries after filtering");
+      }
+      return;
+    }
     m_pChain = apSounds[0];
   }
 

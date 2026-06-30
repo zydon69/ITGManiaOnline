@@ -13,6 +13,7 @@ class Song;
 /** @brief Handle playback of auto keysound notes. */
 class AutoKeysounds {
  public:
+  AutoKeysounds();
   void Load(PlayerNumber pn, const NoteData& ndAutoKeysoundsOnly);
   void Update(float fDelta);
   /** @brief Finish loading the main sounds, and setup the auto keysounds if

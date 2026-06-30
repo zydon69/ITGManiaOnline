@@ -580,10 +580,11 @@ static void StartMusic(MusicToPlay& ToPlay) {
     if (!pSound->Load(ToPlay.m_sFile, false, &params)) {
       if (LOG != nullptr) {
         LOG->Warn(
-            "Music load failed; continuing with silent fallback: '%s' "
+            "Music load failed; refusing to start silent fallback: '%s' "
             "error='%s'",
             ToPlay.m_sFile.c_str(), pSound->GetError().c_str());
       }
+      return;
     }
     std::unique_ptr<MusicPlaying> loadedMusic(
         new MusicPlaying(pSound.release()));

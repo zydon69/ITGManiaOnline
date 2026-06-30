@@ -30,9 +30,7 @@ class RageSoundManager {
   void Init();
 
   void SetMixVolume();
-  float GetVolumeOfNonCriticalSounds() const {
-    return m_fVolumeOfNonCriticalSounds;
-  }
+  float GetVolumeOfNonCriticalSounds() const;
   void SetVolumeOfNonCriticalSounds(float fVolumeOfNonCriticalSounds);
 
   void Update();

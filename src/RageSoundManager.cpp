@@ -299,6 +299,11 @@ void RageSoundManager::SetMixVolume() {
       ClampVolume(g_fSoundVolume.Get()));
 }
 
+float RageSoundManager::GetVolumeOfNonCriticalSounds() const {
+  LockMut(g_SoundManMutex);
+  return m_fVolumeOfNonCriticalSounds;
+}
+
 void RageSoundManager::SetVolumeOfNonCriticalSounds(
     float fVolumeOfNonCriticalSounds) {
   fVolumeOfNonCriticalSounds = ClampVolume(fVolumeOfNonCriticalSounds);
