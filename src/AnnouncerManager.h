@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "LuaManager.h"
+struct lua_State;
 
 /** @brief The commentators who say seemlingly random things during gameplay. */
 class AnnouncerManager {
