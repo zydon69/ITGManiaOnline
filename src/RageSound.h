@@ -110,6 +110,7 @@ class RageSound : public RageSoundBase {
   /* Using this version means the "don't care" about caching. Currently,
    * this always will not cache the sound; this may become a preference. */
   bool Load(std::string sFile);
+  bool LoadSucceeded() const;
 
   /* Load a RageSoundReader that you've set up yourself. Sample rate conversion
    * will be set up only if needed. Doesn't fail. */
@@ -118,7 +119,7 @@ class RageSound : public RageSoundBase {
       RageSoundReader* pSound, const std::string& sDebugFilePath);
 
   // Get the loaded RageSoundReader. While playing, only properties can be set.
-  RageSoundReader* GetSoundReader() { return m_pSource; }
+  RageSoundReader* GetSoundReader();
 
   void Unload();
   bool IsLoaded() const;
@@ -127,7 +128,7 @@ class RageSound : public RageSoundBase {
   bool StartPlaying();
   void StopPlaying();
 
-  std::string GetError() const { return m_sError; }
+  std::string GetError() const;
 
   void Play(bool is_action, const RageSoundParams* params = nullptr);
   void PlayCopy(bool is_action, const RageSoundParams* pParams = nullptr) const;
@@ -139,15 +140,15 @@ class RageSound : public RageSoundBase {
 
   float GetLengthSeconds();
   float GetPositionSeconds(RageTimer* Timestamp = nullptr) const;
-  std::string GetLoadedFilePath() const { return m_sFilePath; }
-  bool PrefersStrongPrebuffer() const;
+  std::string GetLoadedFilePath() const override;
+  bool PrefersStrongPrebuffer() const override;
   bool IsPlaying() const { return m_bPlaying.load(std::memory_order_acquire); }
   bool IsPlayingThreadSafe() const;
 
   float GetPlaybackRate() const;
-  RageTimer GetStartTime() const;
+  RageTimer GetStartTime() const override;
   void SetParams(const RageSoundParams& p);
-  const RageSoundParams& GetParams() const { return m_Param; }
+  RageSoundParams GetParams() const;
   void SetPrefersStrongPrebuffer(bool prefer);
   bool SetProperty(const std::string& sProperty, float fValue);
   bool SetPositionSeconds(float seconds);
@@ -160,6 +161,7 @@ class RageSound : public RageSoundBase {
   mutable RageMutex m_Mutex;
 
   RageSoundReader* m_pSource;
+  bool m_bLoadSucceeded;
 
   // We keep track of sound blocks we've sent out recently through
   // GetDataToPlay.
@@ -168,7 +170,7 @@ class RageSound : public RageSoundBase {
 
   std::string m_sFilePath;
 
-  void ApplyParams();
+  bool ApplyParamsLocked();
   RageSoundParams m_Param;
 
   /* Current position of the output sound, in frames. If < 0, nothing will play
@@ -192,9 +194,9 @@ class RageSound : public RageSoundBase {
   int GetSourceFrameFromHardwareFrame(int64_t iHardwareFrame) const;
 
   bool SetPositionFrames(int frames = -1);
-  RageSoundParams::StopMode_t GetStopMode() const;  // resolves M_AUTO
+  RageSoundParams::StopMode_t GetStopModeLocked() const;  // resolves M_AUTO
 
-  void SoundIsFinishedPlaying();  // called by sound drivers
+  void SoundIsFinishedPlaying() override;  // called by sound drivers
 
  public:
   // These functions are called only by sound drivers.
@@ -204,9 +206,10 @@ class RageSound : public RageSoundBase {
    * called. Until then, SOUNDMAN->GetPosition can still be called; the sound
    * is still playing. */
   int GetDataToPlay(
-      float* pBuffer, int iSize, int64_t& iStreamFrame, int& iBytesRead);
+      float* pBuffer, int iSize, int64_t& iStreamFrame,
+      int& iBytesRead) override;
   void CommitPlayingPosition(
-      int64_t iHardwareFrame, int64_t iStreamFrame, int iGotFrames);
+      int64_t iHardwareFrame, int64_t iStreamFrame, int iGotFrames) override;
 };
 
 #endif
