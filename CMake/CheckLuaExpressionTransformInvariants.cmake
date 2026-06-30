@@ -156,6 +156,18 @@ require_contains(
   "const MusicWheelItemData* item = GetVisualFocusItemData();"
   "MusicWheel selected metadata follows visual focus")
 require_contains(
+  "${music_wheel_cpp}"
+  "void MusicWheel::PostSongChangedIfVisualFocusChanged()"
+  "MusicWheel emits song changed when animated visual focus changes")
+require_contains(
+  "${music_wheel_cpp}"
+  "m_iLastPostedVisualFocusIndex = focusedIndex;"
+  "MusicWheel records the last announced visual focus")
+require_contains(
+  "${music_wheel_cpp}"
+  "PostSongChangedIfVisualFocusChanged();"
+  "MusicWheel checks visual focus changes during update")
+require_contains(
   "${screen_options_cpp}"
   "const bool bTransformOk ="
   "ScreenOptions captures transform cache failure")

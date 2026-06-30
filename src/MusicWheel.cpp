@@ -168,6 +168,11 @@ MusicWheelItemData* MusicWheel::GetCurWheelItemData(int i) {
   return dynamic_cast<MusicWheelItemData*>(m_CurWheelItemData[i]);
 }
 
+void MusicWheel::Update(float fDeltaTime) {
+  WheelBase::Update(fDeltaTime);
+  PostSongChangedIfVisualFocusChanged();
+}
+
 int MusicWheel::GetVisualFocusIndex() const {
   if (m_CurWheelItemData.empty()) {
     return -1;
@@ -186,6 +191,18 @@ int MusicWheel::GetVisualFocusIndex() const {
 
 const MusicWheelItemData* MusicWheel::GetVisualFocusItemData() const {
   return GetCurWheelItemData(GetVisualFocusIndex());
+}
+
+void MusicWheel::PostSongChangedIfVisualFocusChanged() {
+  const int focusedIndex = GetVisualFocusIndex();
+  if (focusedIndex == m_iLastPostedVisualFocusIndex) {
+    return;
+  }
+
+  m_iLastPostedVisualFocusIndex = focusedIndex;
+  if (SCREENMAN != nullptr) {
+    SCREENMAN->PostMessageToTopScreen(SM_SongChanged, 0);
+  }
 }
 
 WheelItemDataType MusicWheel::GetSelectedType() {

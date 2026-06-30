@@ -24,8 +24,8 @@ class MusicWheel : public WheelBase {
   friend struct CompareSongPointerArrayBySectionName;
 
  public:
-  virtual ~MusicWheel();
-  virtual void Load(std::string sType);
+  ~MusicWheel() override;
+  void Load(std::string sType) override;
   void BeginScreen();
 
   bool ChangeSort(
@@ -36,7 +36,8 @@ class MusicWheel : public WheelBase {
   void StartRandom();
   bool IsRouletting() const;
 
-  virtual bool Select();  // return true if this selection ends the screen
+  void Update(float fDeltaTime) override;
+  bool Select() override;  // return true if this selection ends the screen
   WheelItemDataType GetSelectedType();
   Song* GetSelectedSong();
   Course* GetSelectedCourse();
@@ -47,9 +48,9 @@ class MusicWheel : public WheelBase {
   bool SelectSong(const Song* p);
   bool SelectCourse(const Course* p);
   bool SelectSection(const std::string& SectionName);
-  void SetOpenSection(std::string group);
+  void SetOpenSection(std::string group) override;
   SortOrder GetSortOrder() const;
-  virtual void ChangeMusic(int dist); /* +1 or -1 */  // CHECK THIS
+  void ChangeMusic(int dist) override; /* +1 or -1 */  // CHECK THIS
   void FinishChangingSorts();
   void PlayerJoined();
   // sm-ssc additions
@@ -58,27 +59,29 @@ class MusicWheel : public WheelBase {
   const MusicWheelItemData* GetCurWheelItemData(int i) const;
   MusicWheelItemData* GetCurWheelItemData(int i);
 
-  virtual void ReloadSongList();
+  void ReloadSongList() override;
 
   void GetCurrentSections(std::vector<std::string>& sections);
   // Lua
-  void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
  protected:
-  MusicWheelItem* MakeItem();
+  MusicWheelItem* MakeItem() override;
 
   int GetVisualFocusIndex() const;
   const MusicWheelItemData* GetVisualFocusItemData() const;
+  void PostSongChangedIfVisualFocusChanged();
   void GetSongList(std::vector<Song*>& arraySongs, SortOrder so);
   bool SelectSongOrCourse();
   bool SelectModeMenuItem();
 
-  virtual void UpdateSwitch();
+  void UpdateSwitch() override;
 
   std::vector<MusicWheelItemData*>& getWheelItemsData(SortOrder so);
   void readyWheelItemsData(SortOrder so);
 
   std::string m_sLastModeMenuItem;
+  int m_iLastPostedVisualFocusIndex = -1;
   RageSound m_soundChangeSort;
 
   bool WheelItemIsVisible(int n) const;
