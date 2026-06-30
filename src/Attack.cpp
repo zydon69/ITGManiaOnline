@@ -18,11 +18,20 @@ static bool IsValidAttackLevel(AttackLevel level) {
   return level >= ATTACK_LEVEL_1 && level < NUM_ATTACK_LEVELS;
 }
 
+static constexpr float GLOBAL_COURSE_MODIFIER_DURATION_SECONDS =
+    24.0f * 60.0f * 60.0f;
+
+static void WarnAttack(const std::string& warning) {
+  if (LOG != nullptr) {
+    LOG->Warn("%s", warning.c_str());
+  }
+}
+
 static float SanitizeAttackSeconds(float value, const char* context) {
   if (!std::isfinite(value) || value < 0.0f) {
-    LOG->Warn(
+    WarnAttack(ssprintf(
         "SRC_AUDIT_FIX: Invalid attack seconds %f in %s; using 0.", value,
-        context);
+        context));
     return 0.0f;
   }
   return value;
@@ -33,7 +42,7 @@ void Attack::GetAttackBeats(
   fStartBeat = 0.0f;
   fEndBeat = 0.0f;
   if (pSong == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: Attack::GetAttackBeats called without song.");
+    WarnAttack("SRC_AUDIT_FIX: Attack::GetAttackBeats called without song.");
     return;
   }
   const float startSecond =
@@ -46,9 +55,9 @@ void Attack::GetAttackBeats(
   fEndBeat = timing.GetBeatFromElapsedTime(startSecond + secondsRemaining);
   if (!std::isfinite(fStartBeat) || !std::isfinite(fEndBeat) ||
       fEndBeat < fStartBeat) {
-    LOG->Warn(
+    WarnAttack(ssprintf(
         "SRC_AUDIT_FIX: Invalid attack beat range %f-%f; clamping to start.",
-        fStartBeat, fEndBeat);
+        fStartBeat, fEndBeat));
     fStartBeat = std::isfinite(fStartBeat) ? fStartBeat : 0.0f;
     fEndBeat = fStartBeat;
   }
@@ -63,7 +72,7 @@ void Attack::GetRealtimeAttackBeats(
   fStartBeat = 0.0f;
   fEndBeat = 0.0f;
   if (pSong == nullptr) {
-    LOG->Warn(
+    WarnAttack(
         "SRC_AUDIT_FIX: Attack::GetRealtimeAttackBeats called without song.");
     return;
   }
@@ -74,7 +83,7 @@ void Attack::GetRealtimeAttackBeats(
   }
 
   if (pPlayerState == nullptr || GAMESTATE == nullptr) {
-    LOG->Warn(
+    WarnAttack(
         "SRC_AUDIT_FIX: Realtime attack missing player state or GAMESTATE.");
     return;
   }
@@ -84,7 +93,7 @@ void Attack::GetRealtimeAttackBeats(
   fStartBeat = std::min(
       GAMESTATE->m_Position.m_fSongBeat + 8, pPlayerState->m_fLastDrawnBeat);
   if (!std::isfinite(fStartBeat)) {
-    LOG->Warn("SRC_AUDIT_FIX: Realtime attack start beat was non-finite.");
+    WarnAttack("SRC_AUDIT_FIX: Realtime attack start beat was non-finite.");
     fStartBeat = 0.0f;
   }
   fStartBeat = std::trunc(fStartBeat) + 1;
@@ -98,18 +107,19 @@ void Attack::GetRealtimeAttackBeats(
   fEndBeat = std::trunc(fEndBeat) + 1;
 
   if (!std::isfinite(fEndBeat) || fEndBeat < fStartBeat) {
-    LOG->Warn(
+    WarnAttack(ssprintf(
         "SRC_AUDIT_FIX: Invalid realtime attack beat range %f-%f; clamping.",
-        fStartBeat, fEndBeat);
+        fStartBeat, fEndBeat));
     fEndBeat = fStartBeat;
   }
 }
 
 bool Attack::operator==(const Attack& rhs) const {
-#define EQUAL(a) (a == rhs.a)
-  return EQUAL(level) && EQUAL(fStartSecond) && EQUAL(fSecsRemaining) &&
-         EQUAL(sModifiers) && EQUAL(bOn) && EQUAL(bGlobal) &&
-         EQUAL(bShowInAttackList);
+  return level == rhs.level && fStartSecond == rhs.fStartSecond &&
+         fSecsRemaining == rhs.fSecsRemaining &&
+         sModifiers == rhs.sModifiers && bOn == rhs.bOn &&
+         bGlobal == rhs.bGlobal &&
+         bShowInAttackList == rhs.bShowInAttackList;
 }
 
 bool Attack::ContainsTransformOrTurn() const {
@@ -121,11 +131,31 @@ bool Attack::ContainsTransformOrTurn() const {
 Attack Attack::FromGlobalCourseModifier(const std::string& sModifiers) {
   Attack a;
   a.fStartSecond = 0;
-  a.fSecsRemaining = 10000; /* whole song */
+  a.fSecsRemaining = GLOBAL_COURSE_MODIFIER_DURATION_SECONDS;
   a.level = ATTACK_LEVEL_1;
   a.sModifiers = sModifiers;
   a.bGlobal = true;
   return a;
+}
+
+std::string Attack::SanitizeModifiersForSerialization(
+    const std::string& sModifiers, const char* context) {
+  std::string sanitized = sModifiers;
+  bool changed = false;
+  for (char& c : sanitized) {
+    if (c == ':' || c == ';' || c == '\r' || c == '\n') {
+      c = ' ';
+      changed = true;
+    }
+  }
+  Trim(sanitized);
+  if (changed) {
+    WarnAttack(ssprintf(
+        "SRC_AUDIT_FIX: Sanitized attack modifiers containing MSD delimiters "
+        "during %s serialization.",
+        context != nullptr ? context : "attack"));
+  }
+  return sanitized;
 }
 
 std::string Attack::GetTextDescription() const {
@@ -136,7 +166,14 @@ std::string Attack::GetTextDescription() const {
 int Attack::GetNumAttacks() const {
   std::vector<std::string> tmp;
   split(this->sModifiers, ",", tmp);
-  return tmp.size();
+  int count = 0;
+  for (std::string fragment : tmp) {
+    Trim(fragment);
+    if (!fragment.empty()) {
+      ++count;
+    }
+  }
+  return count;
 }
 
 bool AttackArray::ContainsTransformOrTurn() const {
@@ -149,33 +186,43 @@ std::vector<std::string> AttackArray::ToVectorString() const {
   std::vector<std::string> ret;
   for (const Attack& a : *this) {
     if (!std::isfinite(a.fStartSecond) || !std::isfinite(a.fSecsRemaining)) {
-      LOG->Warn(
+      WarnAttack(ssprintf(
           "SRC_AUDIT_FIX: Skipping attack with invalid times %f/%f during "
           "serialization.",
-          a.fStartSecond, a.fSecsRemaining);
+          a.fStartSecond, a.fSecsRemaining));
       continue;
     }
     if (!IsValidAttackLevel(a.level)) {
-      LOG->Warn(
+      WarnAttack(ssprintf(
           "SRC_AUDIT_FIX: Serializing attack with invalid level %i.",
-          a.level);
+          a.level));
+    }
+    const std::string modifiers =
+        Attack::SanitizeModifiersForSerialization(a.sModifiers, "AttackArray");
+    if (modifiers.empty()) {
+      WarnAttack(
+          "SRC_AUDIT_FIX: Skipping attack with empty modifiers during "
+          "serialization.");
+      continue;
     }
     ret.push_back(ssprintf(
         "TIME=%f:LEN=%f:MODS=%s", a.fStartSecond, a.fSecsRemaining,
-        a.sModifiers.c_str()));
+        modifiers.c_str()));
   }
   return ret;
 }
 
 void AttackArray::UpdateStartTimes(float delta) {
   if (!std::isfinite(delta)) {
-    LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid attack time delta %f.", delta);
+    WarnAttack(
+        ssprintf("SRC_AUDIT_FIX: Ignoring invalid attack time delta %f.", delta));
     return;
   }
   for (Attack& a : *this) {
     a.fStartSecond += delta;
     if (!std::isfinite(a.fStartSecond)) {
-      LOG->Warn("SRC_AUDIT_FIX: Attack start time overflowed; clamping to 0.");
+      WarnAttack(
+          "SRC_AUDIT_FIX: Attack start time overflowed; clamping to 0.");
       a.fStartSecond = 0.0f;
     }
   }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -35,6 +36,25 @@ const int MAX_EDIT_COURSE_SIZE_BYTES = 32 * 1024;  // 32KB
 const char* g_CRSDifficultyNames[] = {
     "Beginner", "Easy", "Regular", "Difficult", "Challenge", "Edit",
 };
+
+static void UserLogCourseWarning(
+    const std::string& sPath, const char* fmt, const std::string& value) {
+  if (LOG != nullptr) {
+    LOG->UserLog("Course file", sPath, fmt, value.c_str());
+  }
+}
+
+static bool ParseCRSAttackFloat(
+    const std::string& rawValue, const std::string& fieldName,
+    const std::string& sPath, float& valueOut) {
+  valueOut = StringToFloat(rawValue);
+  if (!std::isfinite(valueOut)) {
+    UserLogCourseWarning(
+        sPath, "ignored non-finite attack %s value", fieldName);
+    return false;
+  }
+  return true;
+}
 
 // This is a convenience function to handle splitting a string that potentially
 // has escaped delimitor characters. We need to split the string while still
@@ -401,7 +421,17 @@ bool CourseLoaderCRS::ParseCourseMods(
     const MsdFile::value_t& sParams, AttackArray& attacks,
     const std::string& sPath) {
   Attack attack;
-  float end = -9999;
+  float end = 0.0f;
+  bool hasEnd = false;
+  bool attackValid = true;
+
+  auto resetAttack = [&attack, &end, &hasEnd, &attackValid]() {
+    attack.MakeBlank();
+    end = 0.0f;
+    hasEnd = false;
+    attackValid = true;
+  };
+
   for (unsigned j = 1; j < sParams.params.size(); ++j) {
     std::vector<std::string> sBits;
     split(sParams[j], "=", sBits, false);
@@ -411,34 +441,59 @@ bool CourseLoaderCRS::ParseCourseMods(
 
     Trim(sBits[0]);
     if (!CompareNoCase(sBits[0], "TIME")) {
-      attack.fStartSecond = std::max(StringToFloat(sBits[1]), 0.0f);
+      float value = 0.0f;
+      if (ParseCRSAttackFloat(sBits[1], "TIME", sPath, value)) {
+        attack.fStartSecond = std::max(value, 0.0f);
+      } else {
+        attackValid = false;
+      }
     } else if (!CompareNoCase(sBits[0], "LEN")) {
-      attack.fSecsRemaining = StringToFloat(sBits[1]);
+      float value = 0.0f;
+      if (ParseCRSAttackFloat(sBits[1], "LEN", sPath, value)) {
+        attack.fSecsRemaining = value;
+      } else {
+        attackValid = false;
+      }
     } else if (!CompareNoCase(sBits[0], "END")) {
-      end = StringToFloat(sBits[1]);
+      if (ParseCRSAttackFloat(sBits[1], "END", sPath, end)) {
+        hasEnd = true;
+      } else {
+        attackValid = false;
+      }
     } else if (!CompareNoCase(sBits[0], "MODS")) {
       attack.sModifiers = sBits[1];
+      Trim(attack.sModifiers);
 
-      if (end != -9999) {
-        attack.fSecsRemaining = end - attack.fStartSecond;
-        end = -9999;
+      if (!attackValid || attack.sModifiers.empty()) {
+        UserLogCourseWarning(
+            sPath, "ignored malformed attack entry ending at '%s'", sParams[j]);
+        resetAttack();
+        continue;
       }
 
-      if (attack.fSecsRemaining <= 0.0f) {
-        LOG->UserLog(
-            "Course file", sPath, "has an attack with a nonpositive length: %s",
-            sBits[1].c_str());
+      if (hasEnd) {
+        attack.fSecsRemaining = end - attack.fStartSecond;
+        hasEnd = false;
+      }
+
+      if (!std::isfinite(attack.fSecsRemaining) ||
+          attack.fSecsRemaining <= 0.0f) {
+        UserLogCourseWarning(
+            sPath, "has an attack with a nonpositive length: %s",
+            attack.sModifiers);
         attack.fSecsRemaining = 0.0f;
       }
 
       // warn on invalid so we catch typos on load
-      CourseUtil::WarnOnInvalidMods(attack.sModifiers);
+      if (LOG != nullptr) {
+        CourseUtil::WarnOnInvalidMods(attack.sModifiers);
+      }
 
       attacks.push_back(attack);
+      resetAttack();
     } else {
-      LOG->UserLog(
-          "Course file", sPath, "has an unexpected value named '%s'",
-          sBits[0].c_str());
+      UserLogCourseWarning(
+          sPath, "has an unexpected attack value named '%s'", sBits[0]);
     }
   }
   return true;

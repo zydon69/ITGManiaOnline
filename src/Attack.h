@@ -1,7 +1,7 @@
 #ifndef ATTACK_H
 #define ATTACK_H
 
-#define ATTACK_STARTS_NOW (-10000.f)
+inline constexpr float ATTACK_STARTS_NOW = -10000.f;
 
 #include <string>
 #include <vector>
@@ -16,7 +16,7 @@ struct Attack {
   /**
    * @brief the starting point of this attack.
    *
-   * If this is -1, then the attack starts now. */
+   * If this is ATTACK_STARTS_NOW, then the attack starts now. */
   float fStartSecond;
   /** @brief How long does this attack last? */
   float fSecsRemaining;
@@ -72,6 +72,8 @@ struct Attack {
   bool operator==(const Attack& rhs) const;
   bool ContainsTransformOrTurn() const;
   static Attack FromGlobalCourseModifier(const std::string& sModifiers);
+  static std::string SanitizeModifiersForSerialization(
+      const std::string& sModifiers, const char* context);
   std::string GetTextDescription() const;
 
   int GetNumAttacks() const;

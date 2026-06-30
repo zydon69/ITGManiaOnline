@@ -28,6 +28,32 @@ static std::string DifficultyToCRSString(CourseDifficulty iVal) {
   return g_CRSDifficultyNames[iVal];
 }
 
+static void WriteCRSAttackSection(
+    const AttackArray& attacks, RageFileBasic& f) {
+  std::vector<std::string> attackLines;
+  for (const Attack& attack : attacks) {
+    const std::string modifiers = Attack::SanitizeModifiersForSerialization(
+        attack.sModifiers, "CRS course");
+    if (modifiers.empty()) {
+      continue;
+    }
+    attackLines.push_back(ssprintf(
+        "  TIME=%.2f:LEN=%.2f:MODS=%s", attack.fStartSecond,
+        attack.fSecsRemaining, modifiers.c_str()));
+  }
+
+  if (attackLines.empty()) {
+    return;
+  }
+
+  f.PutLine("#MODS:");
+  for (size_t i = 0; i < attackLines.size(); ++i) {
+    f.Write(attackLines[i]);
+    f.Write(i + 1 < attackLines.size() ? ":" : ";");
+    f.PutLine("");
+  }
+}
+
 bool CourseWriterCRS::Write(
     const Course& course, const std::string& sPath, bool bSavingCache) {
   RageFile f;
@@ -137,23 +163,7 @@ bool CourseWriterCRS::Write(
 
 bool CourseWriterCRS::WriteCourseEntry(
     const CourseEntry& entry, RageFileBasic& f) {
-  for (unsigned j = 0; j < entry.attacks.size(); ++j) {
-    if (j == 0) {
-      f.PutLine("#MODS:");
-    }
-
-    const Attack& a = entry.attacks[j];
-    f.Write(ssprintf(
-        "  TIME=%.2f:LEN=%.2f:MODS=%s", a.fStartSecond, a.fSecsRemaining,
-        a.sModifiers.c_str()));
-
-    if (j + 1 < entry.attacks.size()) {
-      f.Write(":");
-    } else {
-      f.Write(";");
-    }
-    f.PutLine("");
-  }
+  WriteCRSAttackSection(entry.attacks, f);
 
   if (entry.fGainSeconds > 0) {
     f.PutLine(ssprintf("#GAINSECONDS:%f;", entry.fGainSeconds));
@@ -228,23 +238,7 @@ bool CourseWriterCRS::WriteCourseEntry(
 
 bool CourseWriterCRS::WriteSongSelectCourseEntry(
     const CourseEntry& entry, RageFileBasic& f) {
-  for (unsigned j = 0; j < entry.attacks.size(); ++j) {
-    if (j == 0) {
-      f.PutLine("#MODS:");
-    }
-
-    const Attack& a = entry.attacks[j];
-    f.Write(ssprintf(
-        "  TIME=%.2f:LEN=%.2f:MODS=%s", a.fStartSecond, a.fSecsRemaining,
-        a.sModifiers.c_str()));
-
-    if (j + 1 < entry.attacks.size()) {
-      f.Write(":");
-    } else {
-      f.Write(";");
-    }
-    f.PutLine("");
-  }
+  WriteCRSAttackSection(entry.attacks, f);
 
   std::vector<std::string> songSelectParams;
 
