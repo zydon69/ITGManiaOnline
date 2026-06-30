@@ -27,13 +27,14 @@ class LuaExpressionTransform {
     ClearCache();
   }
 
-  void TransformItemCached(
+  bool TransformItemCached(
       Actor& a, float fPositionOffsetFromCenter, int iItemIndex, int iNumItems);
-  void TransformItemDirect(
+  bool TransformItemDirect(
       Actor& a, float fPositionOffsetFromCenter, int iItemIndex,
       int iNumItems) const;
-  const Actor::TweenState& GetTransformCached(
-      float fPositionOffsetFromCenter, int iItemIndex, int iNumItems) const;
+  bool GetTransformCached(
+      float fPositionOffsetFromCenter, int iItemIndex, int iNumItems,
+      Actor::TweenState& tweenStateOut) const;
   void ClearCache() { m_mapPositionToTweenStateCache.clear(); }
 
  protected:
@@ -43,14 +44,19 @@ class LuaExpressionTransform {
   struct PositionOffsetAndItemIndex {
     float fPositionOffsetFromCenter;
     int iItemIndex;
+    int iNumItems;
 
     bool operator<(const PositionOffsetAndItemIndex& other) const {
       if (fPositionOffsetFromCenter != other.fPositionOffsetFromCenter) {
         return fPositionOffsetFromCenter < other.fPositionOffsetFromCenter;
       }
-      return iItemIndex < other.iItemIndex;
+      if (iItemIndex != other.iItemIndex) {
+        return iItemIndex < other.iItemIndex;
+      }
+      return iNumItems < other.iNumItems;
     }
   };
+  float NormalizeOffsetForCache(float fPositionOffsetFromCenter) const;
   mutable std::map<PositionOffsetAndItemIndex, Actor::TweenState>
       m_mapPositionToTweenStateCache;
 };
