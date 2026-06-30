@@ -2,10 +2,183 @@
 -- call this to draw a Quad with a border
 -- arguments are: width of quad, height of quad, and border width, in pixels
 
+local function sl_helpers_trace(message)
+	local line = "SL-Helpers: " .. tostring(message or "")
+	if type(Trace) == "function" then
+		Trace(line)
+	elseif type(Warn) == "function" then
+		Warn(line)
+	end
+end
+
+local function safe_call(context, fn)
+	if type(fn) ~= "function" then return false, nil end
+	local results = { pcall(fn) }
+	local ok = table.remove(results, 1)
+	if not ok then
+		sl_helpers_trace("safe_call_failed context=" .. tostring(context or "unknown")
+			.. " error=" .. tostring(results[1]))
+		return false, nil
+	end
+	return true, unpack(results)
+end
+
+local function safe_method(context, object, method, ...)
+	if not (object and type(object[method]) == "function") then return nil end
+	local args = { ... }
+	local ok, result = safe_call(context, function()
+		return object[method](object, unpack(args))
+	end)
+	return ok and result or nil
+end
+
+local function finite_number_or(value, fallback)
+	value = tonumber(value)
+	if value ~= nil and value == value and value ~= math.huge and value ~= -math.huge then
+		return value
+	end
+	return fallback
+end
+
+local function positive_number_or(value, fallback)
+	value = finite_number_or(value, fallback)
+	if value == nil or value <= 0 then return fallback end
+	return value
+end
+
+local function clamp_number(value, minimum, maximum, fallback)
+	value = finite_number_or(value, fallback or minimum)
+	if value < minimum then return minimum end
+	if value > maximum then return maximum end
+	return value
+end
+
+local function option_enabled(value)
+	value = finite_number_or(value, value)
+	if type(value) == "number" then return value > 0 end
+	return value == true
+end
+
+local function safe_preference(name, fallback)
+	if not (PREFSMAN and type(PREFSMAN.GetPreference) == "function") then return fallback end
+	local ok, value = safe_call("PREFSMAN.GetPreference " .. tostring(name), function()
+		return PREFSMAN:GetPreference(name)
+	end)
+	if not ok or value == nil then return fallback end
+	return value
+end
+
+local function safe_preference_number(name, fallback)
+	return finite_number_or(safe_preference(name, fallback), fallback)
+end
+
+local function safe_theme_pref(name, fallback)
+	if not (ThemePrefs and type(ThemePrefs.Get) == "function") then return fallback end
+	local ok, value = safe_call("ThemePrefs.Get " .. tostring(name), function()
+		return ThemePrefs.Get(name)
+	end)
+	if not ok or value == nil then return fallback end
+	return value
+end
+
+local function safe_theme_string(group, key)
+	if not (THEME and type(THEME.GetString) == "function") then return tostring(key or "") end
+	local ok, value = safe_call("THEME.GetString " .. tostring(group) .. "." .. tostring(key), function()
+		return THEME:GetString(group, key)
+	end)
+	return ok and tostring(value or key or "") or tostring(key or "")
+end
+
+local function safe_enum_short(value, fallback)
+	if type(ToEnumShortString) ~= "function" or value == nil then return fallback end
+	local ok, result = safe_call("ToEnumShortString", function()
+		return ToEnumShortString(value)
+	end)
+	return ok and result or fallback
+end
+
+local function safe_game_state_method(method, fallback, ...)
+	if not (GAMESTATE and type(GAMESTATE[method]) == "function") then return fallback end
+	local args = { ... }
+	local ok, result = safe_call("GAMESTATE." .. tostring(method), function()
+		return GAMESTATE[method](GAMESTATE, unpack(args))
+	end)
+	if not ok or result == nil then return fallback end
+	return result
+end
+
+local function safe_current_game_name()
+	local game = safe_game_state_method("GetCurrentGame", nil)
+	return tostring(safe_method("Game.GetName", game, "GetName") or "dance")
+end
+
+local function safe_current_style()
+	return safe_game_state_method("GetCurrentStyle", nil)
+end
+
+local function safe_player_state(player)
+	return safe_game_state_method("GetPlayerState", nil, player)
+end
+
+local function safe_player_options(player, modsLevel)
+	local state = safe_player_state(player)
+	return safe_method("PlayerState.GetPlayerOptions", state, "GetPlayerOptions", modsLevel or "ModsLevel_Preferred")
+end
+
+local function safe_player_options_array(player, modsLevel)
+	local state = safe_player_state(player)
+	local options = safe_method("PlayerState.GetPlayerOptionsArray", state, "GetPlayerOptionsArray", modsLevel or "ModsLevel_Preferred")
+	return type(options) == "table" and options or {}
+end
+
+local function safe_player_mods(player)
+	local pn = safe_enum_short(player, nil)
+	local playerState = pn and SL and SL[pn] or nil
+	local mods = playerState and playerState.ActiveModifiers or nil
+	return type(mods) == "table" and mods or {}, pn, playerState
+end
+
+local function safe_is_course_mode()
+	return safe_game_state_method("IsCourseMode", false) == true
+end
+
+local function safe_human_players()
+	local players = safe_game_state_method("GetHumanPlayers", {})
+	return type(players) == "table" and players or {}
+end
+
+local function safe_radar_value(owner, player, category)
+	local radar = safe_method("RadarOwner.GetRadarValues", owner, "GetRadarValues", player)
+	return math.max(0, finite_number_or(safe_method("RadarValues.GetValue", radar, "GetValue", category), 0))
+end
+
+local function safe_stats_tap_score(stats, window)
+	return math.max(0, finite_number_or(safe_method("PlayerStageStats.GetTapNoteScores", stats, "GetTapNoteScores", window), 0))
+end
+
+local function safe_stage_index()
+	local played = SL and SL.Global and SL.Global.Stages and SL.Global.Stages.PlayedThisGame
+	return math.max(1, math.floor(finite_number_or(played, 0) + 1))
+end
+
+local function active_music_rate()
+	local rate = SL and SL.Global and SL.Global.ActiveModifiers and SL.Global.ActiveModifiers.MusicRate
+	return positive_number_or(rate, 1)
+end
+
+local function safe_dir_listing(path, dirs_only, return_full_path)
+	if type(path) ~= "string" or path == "" then return {} end
+	if not (FILEMAN and type(FILEMAN.GetDirListing) == "function") then return {} end
+	local ok, files = safe_call("FILEMAN.GetDirListing " .. path, function()
+		return FILEMAN:GetDirListing(path, dirs_only, return_full_path)
+	end)
+	return ok and type(files) == "table" and files or {}
+end
+
 Border = function(width, height, bw)
-	width  = width  or 2
-	height = height or 2
-	bw     = bw     or 1
+	width  = math.max(2, finite_number_or(width, 2))
+	height = math.max(2, finite_number_or(height, 2))
+	bw     = clamp_number(bw, 0, math.min(width, height) / 2, 1)
 
 	return Def.ActorFrame {
 		Def.Quad { InitCommand=function(self) self:zoomto(width-2*bw, height-2*bw):MaskSource(true) end },
@@ -33,7 +206,10 @@ end
 -- that expect it to behave a particular way.
 
 SL_WideScale = function(AR4_3, AR16_9)
-	return clamp(scale( SCREEN_WIDTH, 640, 854, AR4_3, AR16_9 ), math.min(AR4_3, AR16_9), math.max(AR4_3, AR16_9))
+	AR4_3 = finite_number_or(AR4_3, 0)
+	AR16_9 = finite_number_or(AR16_9, AR4_3)
+	local width = finite_number_or(SCREEN_WIDTH, 640)
+	return clamp(scale(width, 640, 854, AR4_3, AR16_9), math.min(AR4_3, AR16_9), math.max(AR4_3, AR16_9))
 end
 
 -- -----------------------------------------------------------------------
@@ -51,15 +227,22 @@ end
 -- get timing window in milliseconds
 
 GetTimingWindow = function(n, mode, useHardExInnerWindow)
+	n = math.floor(clamp_number(n, 1, NumJudgmentsAvailable(), 1))
+	local gameMode = mode or (SL and SL.Global and SL.Global.GameMode) or "ITG"
+	local scale = positive_number_or(safe_preference_number("TimingWindowScale", 1), 1)
+
 	if n == 1 and mode == "FA+" and useHardExInnerWindow then
-		local prefs = SL.Preferences["FA+"]
-		local scale = PREFSMAN:GetPreference("TimingWindowScale")
-		return 0.0085 * scale + (prefs and prefs.TimingWindowAdd or 0)
+		local prefs = SL and SL.Preferences and SL.Preferences["FA+"] or {}
+		return math.max(0, 0.0085 * scale + finite_number_or(prefs.TimingWindowAdd, 0))
 	end
 
-	local prefs = SL.Preferences[mode or SL.Global.GameMode]
-	local scale = PREFSMAN:GetPreference("TimingWindowScale")
-	return prefs["TimingWindowSecondsW"..n] * scale + prefs.TimingWindowAdd
+	local prefs = SL and SL.Preferences and SL.Preferences[gameMode] or {}
+	local seconds = finite_number_or(prefs["TimingWindowSecondsW"..n], nil)
+	if seconds == nil and SL and SL.Preferences and SL.Preferences.ITG then
+		prefs = SL.Preferences.ITG
+		seconds = finite_number_or(prefs["TimingWindowSecondsW"..n], 0)
+	end
+	return math.max(0, finite_number_or(seconds, 0) * scale + finite_number_or(prefs.TimingWindowAdd, 0))
 end
 
 -- -----------------------------------------------------------------------
@@ -67,8 +250,9 @@ end
 -- used by the judgment scatter plot and offset histogram in ScreenEvaluation
 
 DetermineTimingWindow = function(offset)
+	offset = math.abs(finite_number_or(offset, math.huge))
 	for i=1,NumJudgmentsAvailable() do
-		if math.abs(offset) <= GetTimingWindow(i) then
+		if offset <= GetTimingWindow(i) then
 			return i
 		end
 	end
@@ -87,9 +271,10 @@ end
 
 GetWorstJudgment = function(offsets)
 	local worst_judgment = 1
-	for i in ivalues(offsets) do
-		if i[2] ~= "Miss" then
-			local judgment = DetermineTimingWindow(i[2])
+	for i in ivalues(type(offsets) == "table" and offsets or {}) do
+		local offset = type(i) == "table" and i[2] or nil
+		if offset ~= "Miss" then
+			local judgment = DetermineTimingWindow(offset)
 			if worst_judgment < judgment then
 				worst_judgment = judgment
 			end
@@ -104,8 +289,8 @@ end
 -- as well as ScreenTitleJoin overlay and ./Scripts/SL-Branches.lua regarding coin credits
 
 GetCredits = function()
-	local coins = GAMESTATE:GetCoins()
-	local coinsPerCredit = PREFSMAN:GetPreference('CoinsPerCredit')
+	local coins = math.max(0, math.floor(finite_number_or(safe_game_state_method("GetCoins", 0), 0)))
+	local coinsPerCredit = math.max(1, math.floor(safe_preference_number('CoinsPerCredit', 1)))
 	local credits = math.floor(coins/coinsPerCredit)
 	local remainder = coins % coinsPerCredit
 
@@ -119,29 +304,37 @@ end
 --   (that's handled in Metrics.ini under [ScreenGameplay])
 
 local function BaseNotefieldX(player)
-	if not player then return end
+	if not player then return _screen and _screen.cx or 0 end
 
-	local style = GAMESTATE:GetCurrentStyle()
-	if not style then return end
+	local style = safe_current_style()
+	if not style then return _screen and _screen.cx or 0 end
 
-	local p = ToEnumShortString(player)
-	local game = GAMESTATE:GetCurrentGame():GetName()
+	local p = safe_enum_short(player, player == PLAYER_1 and "P1" or "P2")
+	local game = safe_current_game_name()
 
-	local IsPlayingDanceSolo = (style:GetStepsType() == "StepsType_Dance_Solo")
-	local IsPlayingDanceThreePanel = (style:GetName() == "threepanel")
-	local NumPlayersEnabled  = GAMESTATE:GetNumPlayersEnabled()
-	local NumSidesJoined     = GAMESTATE:GetNumSidesJoined()
-	local IsUsingSoloSingles = PREFSMAN:GetPreference('Center1Player') or IsPlayingDanceSolo or IsPlayingDanceThreePanel or (NumSidesJoined==1 and (game=="techno" or game=="kb7"))
+	local styleStepsType = tostring(safe_method("Style.GetStepsType", style, "GetStepsType") or "")
+	local styleName = tostring(safe_method("Style.GetName", style, "GetName") or "")
+	local IsPlayingDanceSolo = (styleStepsType == "StepsType_Dance_Solo")
+	local IsPlayingDanceThreePanel = (styleName == "threepanel")
+	local NumPlayersEnabled  = math.max(0, math.floor(finite_number_or(safe_game_state_method("GetNumPlayersEnabled", 0), 0)))
+	local NumSidesJoined     = math.max(0, math.floor(finite_number_or(safe_game_state_method("GetNumSidesJoined", 0), 0)))
+	local IsUsingSoloSingles = safe_preference("Center1Player", false) == true or IsPlayingDanceSolo or IsPlayingDanceThreePanel or (NumSidesJoined==1 and (game=="techno" or game=="kb7"))
 
 	-- dance solo is always centered
 	if IsUsingSoloSingles and NumPlayersEnabled == 1 and NumSidesJoined == 1 then return _screen.cx end
 	-- double is always centered
-	if style:GetStyleType() == "StyleType_OnePlayerTwoSides" then return _screen.cx end
+	if safe_method("Style.GetStyleType", style, "GetStyleType") == "StyleType_OnePlayerTwoSides" then return _screen.cx end
 
-	local PlayerOffset = SL[p].ActiveModifiers.NoteFieldOffsetX * (player == PLAYER_1 and -1 or 1)
+	local mods = safe_player_mods(player)
+	local PlayerOffset = finite_number_or(mods.NoteFieldOffsetX, 0) * (player == PLAYER_1 and -1 or 1)
 
-	local NumPlayersAndSides = ToEnumShortString( style:GetStyleType() )
-	return THEME:GetMetric("ScreenGameplay","Player".. p .. NumPlayersAndSides .."X") + PlayerOffset
+	local NumPlayersAndSides = safe_enum_short(safe_method("Style.GetStyleType", style, "GetStyleType"), "")
+	local fallbackX = _screen and _screen.cx or 0
+	if not (THEME and type(THEME.GetMetric) == "function") then return fallbackX + PlayerOffset end
+	local ok, metric = safe_call("THEME.GetMetric ScreenGameplay PlayerX", function()
+		return THEME:GetMetric("ScreenGameplay","Player".. p .. NumPlayersAndSides .."X")
+	end)
+	return finite_number_or(ok and metric or nil, fallbackX) + PlayerOffset
 end
 
 GetOnlineGameplayColumnX = function(column)
@@ -280,7 +473,12 @@ GetBaseNotefieldX = function(player)
 end
 
 GetNotefieldX = function(player)
-	if IsUsingOnlineGameplayColumns() then
+	local useOnlineColumns = false
+	if type(IsUsingOnlineGameplayColumns) == "function" then
+		local ok, result = safe_call("IsUsingOnlineGameplayColumns", IsUsingOnlineGameplayColumns)
+		useOnlineColumns = ok and result == true
+	end
+	if useOnlineColumns then
 		local pn = player and ToEnumShortString(player) or ""
 		local player_offset = (SL[pn] and SL[pn].ActiveModifiers and SL[pn].ActiveModifiers.NoteFieldOffsetX or 0)
 			* (player == PLAYER_1 and -1 or 1)
@@ -331,13 +529,13 @@ local NoteFieldWidth = {
 }
 
 GetNotefieldWidth = function()
-	local game = GAMESTATE:GetCurrentGame()
+	local game = safe_game_state_method("GetCurrentGame", nil)
 
 	if game then
-		local game_widths = NoteFieldWidth[game:GetName()]
-		local style = GAMESTATE:GetCurrentStyle()
+		local game_widths = NoteFieldWidth[tostring(safe_method("Game.GetName", game, "GetName") or "")]
+		local style = safe_current_style()
 		if style then
-			return game_widths[style:GetName()]
+			return game_widths and game_widths[tostring(safe_method("Style.GetName", style, "GetName") or "")] or false
 		end
 	end
 
@@ -371,8 +569,9 @@ GetComboThreshold = function( MaintainOrContinue )
 	-- include dummy values here to prevent Lua errors in case players accidentally switch to lights
 	Combo.lights  = { Maintain = "TapNoteScore_W3", Continue = "TapNoteScore_W3" }
 
-	local game = GAMESTATE:GetCurrentGame():GetName() or "dance"
-	return Combo[game][MaintainOrContinue]
+	local game = safe_current_game_name()
+	local combo = Combo[game] or Combo.dance
+	return combo[MaintainOrContinue] or combo.Maintain
 end
 
 -- -----------------------------------------------------------------------
@@ -427,7 +626,7 @@ end
 -- I'm pretty sure ZP Theart was wailing about such project bitrot in Lost Souls in Endless Time.
 
 GetDefaultFailType = function()
-	local default_mods = PREFSMAN:GetPreference("DefaultModifiers")
+	local default_mods = tostring(safe_preference("DefaultModifiers", "") or "")
 
 	local default_fail = ""
 	local fail_strings = {}
@@ -479,40 +678,68 @@ end
 -- -----------------------------------------------------------------------
 
 SetGameModePreferences = function()
+	local gameMode = SL and SL.Global and SL.Global.GameMode or "ITG"
+	local preferences = SL and SL.Preferences and SL.Preferences[gameMode] or nil
+	if type(preferences) ~= "table" then
+		sl_helpers_trace("SetGameModePreferences skipped missing preferences for " .. tostring(gameMode))
+		return false
+	end
+
 	-- apply the preferences associated with this SL GameMode (Casual, ITG)
-	for key,val in pairs(SL.Preferences[SL.Global.GameMode]) do
-		PREFSMAN:SetPreference(key, val)
+	for key,val in pairs(preferences) do
+		if PREFSMAN and type(PREFSMAN.SetPreference) == "function" then
+			safe_call("PREFSMAN.SetPreference " .. tostring(key), function()
+				PREFSMAN:SetPreference(key, val)
+			end)
+		end
 	end
 
 	--------------------------------------------
 	-- loop through human players and apply whatever mods need to be set now
-	for player in ivalues(GAMESTATE:GetHumanPlayers()) do
-		local pn = ToEnumShortString(player)
+	for player in ivalues(safe_human_players()) do
+		local mods, pn = safe_player_mods(player)
 		-- If we're switching to Casual mode,
 		-- we want to reduce the number of judgments,
 		-- so turn Decents and WayOffs off now.
-		if SL.Global.GameMode == "Casual" then
+		if gameMode == "Casual" and pn and SL and SL[pn] then
+			SL[pn].ActiveModifiers = mods
 			SL[pn].ActiveModifiers.TimingWindows = {true,true,true,false,false}
 		end
 
 		-- Now that we've set the SL table for TimingWindows appropriately,
 		-- use it to apply TimingWindows.
-		local TW_OptRow = CustomOptionRow( "TimingWindows" )
-		TW_OptRow:LoadSelections( TW_OptRow.Choices, player )
+		if type(CustomOptionRow) == "function" then
+			local okRow, TW_OptRow = safe_call("CustomOptionRow TimingWindows", function()
+				return CustomOptionRow("TimingWindows")
+			end)
+			if okRow and TW_OptRow and type(TW_OptRow.LoadSelections) == "function" then
+				safe_call("TimingWindows.LoadSelections", function()
+					TW_OptRow:LoadSelections(TW_OptRow.Choices or {}, player)
+				end)
+			end
+		end
 
 
-		local player_modslevel = GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Preferred")
+		local player_modslevel = safe_player_options(player, "ModsLevel_Preferred")
 
 		-- using PREFSMAN to set the preference for MinTNSToHideNotes apparently isn't
 		-- enough when switching gamemodes because MinTNSToHideNotes is also a PlayerOption.
 		-- so, set the PlayerOption version of it now, too, to ensure that arrows disappear
 		-- at the appropriate judgments during gameplay for this gamemode.
-		player_modslevel:MinTNSToHideNotes(SL.Preferences[SL.Global.GameMode].MinTNSToHideNotes)
+		if player_modslevel and type(player_modslevel.MinTNSToHideNotes) == "function" then
+			safe_call("PlayerOptions.MinTNSToHideNotes", function()
+				player_modslevel:MinTNSToHideNotes(preferences.MinTNSToHideNotes)
+			end)
+		end
 
 		-- FailSetting is also a modifier that can be set per-player per-stage in SM5, but I'm
 		-- opting to enforce it in Simply Love using what the machine operator sets
 		-- as the default FailType in Advanced Options in the operator menu
-		player_modslevel:FailSetting( GetDefaultFailType() )
+		if player_modslevel and type(player_modslevel.FailSetting) == "function" then
+			safe_call("PlayerOptions.FailSetting", function()
+				player_modslevel:FailSetting( GetDefaultFailType() )
+			end)
+		end
 	end
 
 	--------------------------------------------
@@ -528,9 +755,16 @@ SetGameModePreferences = function()
 
 	prefix["Casual"] = "Casual-"
 
-	if PROFILEMAN:GetStatsPrefix() ~= prefix[SL.Global.GameMode] then
-		PROFILEMAN:SetStatsPrefix(prefix[SL.Global.GameMode])
+	if PROFILEMAN and type(PROFILEMAN.GetStatsPrefix) == "function" and type(PROFILEMAN.SetStatsPrefix) == "function" then
+		local targetPrefix = prefix[gameMode] or ""
+		local currentPrefix = safe_method("PROFILEMAN.GetStatsPrefix", PROFILEMAN, "GetStatsPrefix")
+		if currentPrefix ~= targetPrefix then
+			safe_call("PROFILEMAN.SetStatsPrefix", function()
+				PROFILEMAN:SetStatsPrefix(targetPrefix)
+			end)
+		end
 	end
+	return true
 end
 
 -- -----------------------------------------------------------------------
@@ -548,12 +782,27 @@ end
 -- Thus, this global function.
 
 ResetPreferencesToStockSM5 = function()
+	local gameMode = SL and SL.Global and SL.Global.GameMode or "ITG"
+	local preferences = SL and SL.Preferences and SL.Preferences[gameMode] or nil
+	if type(preferences) ~= "table" then
+		sl_helpers_trace("ResetPreferencesToStockSM5 skipped missing preferences for " .. tostring(gameMode))
+		return false
+	end
 	-- loop through all the Preferences that SL forcibly manages and reset them
-	for key, value in pairs(SL.Preferences[SL.Global.GameMode]) do
-		PREFSMAN:SetPreferenceToDefault(key)
+	for key, value in pairs(preferences) do
+		if PREFSMAN and type(PREFSMAN.SetPreferenceToDefault) == "function" then
+			safe_call("PREFSMAN.SetPreferenceToDefault " .. tostring(key), function()
+				PREFSMAN:SetPreferenceToDefault(key)
+			end)
+		end
 	end
 	-- now that those Preferences are reset to default values, write Preferences.ini to disk now
-	PREFSMAN:SavePreferences()
+	if PREFSMAN and type(PREFSMAN.SavePreferences) == "function" then
+		return safe_call("PREFSMAN.SavePreferences", function()
+			PREFSMAN:SavePreferences()
+		end)
+	end
+	return false
 end
 
 -- -----------------------------------------------------------------------
@@ -564,32 +813,38 @@ end
 GetStepsCredit = function(player)
 	local t = {}
 
-	if GAMESTATE:IsCourseMode() then
-		local trail = GAMESTATE:GetCurrentTrail(player)
-		local entries = trail:GetTrailEntries()
-		local song
+	if safe_is_course_mode() then
+		local trail = safe_game_state_method("GetCurrentTrail", nil, player)
+		local entries = safe_method("Trail.GetTrailEntries", trail, "GetTrailEntries")
+		if type(entries) ~= "table" then return t end
 
 		for i, entry in ipairs(entries) do
-			steps = entry:GetSteps()
+			local steps = safe_method("TrailEntry.GetSteps", entry, "GetSteps")
 			if steps then
-				-- prefer steps Description; this is where stepartists seem to put chart info
-				if steps:GetDescription() ~= "" then
-					t[i] = steps:GetDescription()
+			-- prefer steps Description; this is where stepartists seem to put chart info
+				local description = tostring(safe_method("Steps.GetDescription", steps, "GetDescription") or "")
+				local author = tostring(safe_method("Steps.GetAuthorCredit", steps, "GetAuthorCredit") or "")
+				if description ~= "" then
+					t[i] = description
 
-				-- if no description was available, use AuthorCredit instead
-				elseif steps:GetAuthorCredit() ~= "" then
-					t[i] = steps:GetAuthorCredit()
+			-- if no description was available, use AuthorCredit instead
+				elseif author ~= "" then
+					t[i] = author
 				end
 			end
 		end
 	else
-		local steps = GAMESTATE:GetCurrentSteps(player)
+		local steps = safe_game_state_method("GetCurrentSteps", nil, player)
+		if not steps then return t end
 		-- credit
-		if steps:GetAuthorCredit() ~= "" then t[#t+1] = steps:GetAuthorCredit() end
+		local author = tostring(safe_method("Steps.GetAuthorCredit", steps, "GetAuthorCredit") or "")
+		if author ~= "" then t[#t+1] = author end
 		-- description
-		if steps:GetDescription() ~= "" then t[#t+1] = steps:GetDescription() end
+		local description = tostring(safe_method("Steps.GetDescription", steps, "GetDescription") or "")
+		if description ~= "" then t[#t+1] = description end
 		-- chart name
-		if steps:GetChartName() ~= "" then t[#t+1] = steps:GetChartName() end
+		local chartName = tostring(safe_method("Steps.GetChartName", steps, "GetChartName") or "")
+		if chartName ~= "" then t[#t+1] = chartName end
 	end
 
 	return t
@@ -599,7 +854,8 @@ end
 -- the best way to spread holiday cheer is singing loud for all to hear
 
 HolidayCheer = function()
-	return (PREFSMAN:GetPreference("EasterEggs") and MonthOfYear()==11)
+	local month = type(MonthOfYear) == "function" and MonthOfYear() or -1
+	return (safe_preference("EasterEggs", false) == true and month == 11)
 end
 
 DarkUI = function()
@@ -607,9 +863,11 @@ DarkUI = function()
 	-- which will cause the ThemePrefs system to throw errors when a "RainbowMode" key isn't found
 	-- because a [_fallback] section doesn't exist.  This should really be fixed in the _fallback theme,
 	-- but we can prevent Lua errors from being thrown in the meantime.
-	if THEME:GetCurThemeName() ~= PREFSMAN:GetPreference("Theme") then return false end
+	if not (THEME and type(THEME.GetCurThemeName) == "function") then return false end
+	local curTheme = safe_method("THEME.GetCurThemeName", THEME, "GetCurThemeName")
+	if curTheme ~= safe_preference("Theme", curTheme) then return false end
 
-	if ThemePrefs.Get("RainbowMode") then return true end
+	if safe_theme_pref("RainbowMode", false) == true then return true end
 	if HolidayCheer() then return true end
 	return false
 end
@@ -617,7 +875,8 @@ end
 -- -----------------------------------------------------------------------
 -- "The chills, I have them down my spine."
 IsSpooky = function()
-	return (PREFSMAN:GetPreference("EasterEggs") and MonthOfYear()==9 and ThemePrefs.Get("VisualStyle")=="Spooky")
+	local month = type(MonthOfYear) == "function" and MonthOfYear() or -1
+	return (safe_preference("EasterEggs", false) == true and month == 9 and safe_theme_pref("VisualStyle", "")=="Spooky")
 end
 
 -- -----------------------------------------------------------------------
@@ -627,7 +886,8 @@ end
 -- return true if both are found in the filename
 -- (note: Lua doesn't natively support an end-of-string regex marker.)
 local FilenameIsMultiFrameSprite = function(filename)
-	return string.match(filename, " %d+x%d+") and string.match(filename, "%.[A-Za-z]+")
+	if type(filename) ~= "string" then return false end
+	return filename:match(" %d+x%d+") and filename:match("%.[A-Za-z]+$")
 end
 
 -- remove "[frames wide] x [frames tall]"
@@ -635,12 +895,18 @@ end
 -- remove ".png"
 StripSpriteHints = function(filename)
 	-- handle common cases here, gory details in /src/RageBitmapTexture.cpp
-	return filename:gsub(" %d+x%d+", ""):gsub(" %(doubleres%)", ""):gsub(".png", "")
+	return tostring(filename or ""):gsub(" %d+x%d+", ""):gsub(" %(doubleres%)", ""):gsub("%.[Pp][Nn][Gg]$", "")
 end
 
 GetJudgmentGraphics = function()
-	local path = THEME:GetPathG('', '_judgments')
-	local files = FILEMAN:GetDirListing(path .. '/')
+	local path = ""
+	if THEME and type(THEME.GetPathG) == "function" then
+		local okPath, value = safe_call("THEME.GetPathG _judgments", function()
+			return THEME:GetPathG('', '_judgments')
+		end)
+		path = okPath and tostring(value or "") or ""
+	end
+	local files = safe_dir_listing(path .. '/')
 	local judgment_graphics = {}
 
 	for i,filename in ipairs(files) do
@@ -668,8 +934,9 @@ GetJudgmentGraphics = function()
 end
 
 GetHoldJudgments = function()
-	local path = THEME:GetCurrentThemeDirectory().."Graphics/_HoldJudgments/"
-	local files = FILEMAN:GetDirListing(path)
+	local themeDir = safe_method("THEME.GetCurrentThemeDirectory", THEME, "GetCurrentThemeDirectory") or ""
+	local path = tostring(themeDir).."Graphics/_HoldJudgments/"
+	local files = safe_dir_listing(path)
 	local hold_graphics = {}
 
 	for i,filename in ipairs(files) do
@@ -681,6 +948,9 @@ GetHoldJudgments = function()
 		end
 	end
 
+	if #hold_graphics == 0 then
+		hold_graphics[#hold_graphics+1] = "None 1x2.png"
+	end
 	return hold_graphics
 end
 
@@ -698,18 +968,19 @@ end
 --   • be open source or "100% free" on dafont.com
 
 GetComboFonts = function()
-	local path = THEME:GetCurrentThemeDirectory().."Fonts/_Combo Fonts/"
-	local dirs = FILEMAN:GetDirListing(path, true, false)
+	local themeDir = safe_method("THEME.GetCurrentThemeDirectory", THEME, "GetCurrentThemeDirectory") or ""
+	local path = tostring(themeDir).."Fonts/_Combo Fonts/"
+	local dirs = safe_dir_listing(path, true, false)
 	local fonts = {}
 	local has_wendy_cursed = false
 
 	for directory_name in ivalues(dirs) do
-		local files = FILEMAN:GetDirListing(path..directory_name.."/")
+		local files = safe_dir_listing(path..tostring(directory_name).."/")
 		local has_png, has_ini = false, false
 
 		for filename in ivalues(files) do
 			if FilenameIsMultiFrameSprite(filename) and StripSpriteHints(filename)==directory_name then has_png = true end
-			if filename:match(".ini") and filename:gsub(".ini","")==directory_name then has_ini = true end
+			if type(filename) == "string" and filename:match("%.[Ii][Nn][Ii]$") and filename:gsub("%.[Ii][Nn][Ii]$","")==directory_name then has_ini = true end
 		end
 
 		if has_png and has_ini then
@@ -727,6 +998,7 @@ GetComboFonts = function()
 	end
 
 	if has_wendy_cursed then table.insert(fonts, "Wendy (Cursed)") end
+	if #fonts == 0 then fonts[#fonts+1] = "Wendy" end
 
 	return fonts
 end
@@ -734,12 +1006,14 @@ end
 
 -- -----------------------------------------------------------------------
 IsHumanPlayer = function(player)
-	return GAMESTATE:GetPlayerState(player):GetPlayerController() == "PlayerController_Human"
+	local playerState = safe_player_state(player)
+	return safe_method("PlayerState.GetPlayerController", playerState, "GetPlayerController") == "PlayerController_Human"
 end
 
 -- -----------------------------------------------------------------------
 IsAutoplay = function(player)
-	return GAMESTATE:GetPlayerState(player):GetPlayerController() == "PlayerController_Autoplay"
+	local playerState = safe_player_state(player)
+	return safe_method("PlayerState.GetPlayerController", playerState, "GetPlayerController") == "PlayerController_Autoplay"
 end
 
 -- -----------------------------------------------------------------------
@@ -747,16 +1021,17 @@ end
 -- Params are the params received from the JudgmentMessageCommand.
 -- Returns true/false
 IsW0Judgment = function(params, player)
+	if type(params) ~= "table" then return false end
 	if params.Player ~= player then return false end
 	if params.HoldNoteScore then return false end
 
 	-- Only check/update FA+ count if we received a TNS in the top window.
-	if params.TapNoteScore == "TapNoteScore_W1" and SL.Global.GameMode == "ITG" then
-		local prefs = SL.Preferences["FA+"]
-		local scale = PREFSMAN:GetPreference("TimingWindowScale")
-		local W0 = prefs["TimingWindowSecondsW1"] * scale + prefs["TimingWindowAdd"]
+	if params.TapNoteScore == "TapNoteScore_W1" and SL and SL.Global and SL.Global.GameMode == "ITG" then
+		local prefs = SL and SL.Preferences and SL.Preferences["FA+"] or {}
+		local scale = positive_number_or(safe_preference_number("TimingWindowScale", 1), 1)
+		local W0 = math.max(0, finite_number_or(prefs["TimingWindowSecondsW1"], 0) * scale + finite_number_or(prefs["TimingWindowAdd"], 0))
 
-		local offset = math.abs(params.TapNoteOffset)
+		local offset = math.abs(finite_number_or(params.TapNoteOffset, math.huge))
 		if offset <= W0 then
 			return true
 		end
@@ -769,12 +1044,13 @@ end
 -- This is display/scoring interpretation only; it does not change the
 -- engine's immutable raw judgment result.
 IsW010Judgment = function(params, player)
+	if type(params) ~= "table" then return false end
 	if params.Player ~= player then return false end
 	if params.HoldNoteScore then return false end
 	if params.TapNoteScore ~= "TapNoteScore_W1" then return false end
-	if SL.Global.GameMode ~= "ITG" then return false end
+	if not (SL and SL.Global and SL.Global.GameMode == "ITG") then return false end
 
-	return math.abs(params.TapNoteOffset) <= GetTimingWindow(1, "FA+", true)
+	return math.abs(finite_number_or(params.TapNoteOffset, math.huge)) <= GetTimingWindow(1, "FA+", true)
 end
 
 -- -----------------------------------------------------------------------
@@ -805,61 +1081,66 @@ end
 -- Note: The returned table can't be used directly into CalculateExScore because the keys
 -- "HitMine", "Held", and "LetGo" aren't calculated here.
 GetExJudgmentCounts = function(player)
-	local pn = ToEnumShortString(player)
-	local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(pn)
-	local StepsOrTrail = (GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(player)) or GAMESTATE:GetCurrentSteps(player)
+	local pn = safe_enum_short(player, nil)
+	local curStageStats = safe_method("STATSMAN.GetCurStageStats", STATSMAN, "GetCurStageStats")
+	local stats = pn and safe_method("StageStats.GetPlayerStageStats", curStageStats, "GetPlayerStageStats", pn) or nil
+	local StepsOrTrail = (safe_is_course_mode() and safe_game_state_method("GetCurrentTrail", nil, player)) or safe_game_state_method("GetCurrentSteps", nil, player)
 
 	local counts = {}
 
 	local TNS = { "W1", "W2", "W3", "W4", "W5", "Miss" }
 
-	if SL.Global.GameMode == "ITG" then
+	if SL and SL.Global and SL.Global.GameMode == "ITG" then
 		for window in ivalues(TNS) do
 			-- Get the count.
-			local number = stats:GetTapNoteScores( "TapNoteScore_"..window )
+			local number = safe_stats_tap_score(stats, "TapNoteScore_"..window)
 			-- We need to extract the W0 count in ITG mode.
 			if window == "W1" then
-				local stageStats = SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
+				local playerState = pn and SL and SL[pn] or nil
+				local stageStats = playerState and playerState.Stages and playerState.Stages.Stats and playerState.Stages.Stats[safe_stage_index()]
 				local exCounts = stageStats and stageStats.ex_counts or {}
-				local faPlus = exCounts.W0_total or 0
-				local faPlus10 = exCounts.W010_total or 0
+				local faPlus = math.max(0, finite_number_or(exCounts.W0_total, 0))
+				local faPlus10 = math.max(0, finite_number_or(exCounts.W010_total, 0))
 				-- Subtract FA+ count from the overall fantastic window count.
-				number = number - faPlus
+				number = math.max(0, number - faPlus)
 				-- Populate the split top-window numbers.
 				counts["W0"] = faPlus
 				counts["W1"] = number
 				counts["W010"] = faPlus10
-				counts["W110"] = math.max(0, stats:GetTapNoteScores("TapNoteScore_W1") - faPlus10)
+				counts["W110"] = math.max(0, safe_stats_tap_score(stats, "TapNoteScore_W1") - faPlus10)
 			else
+				local mods = safe_player_mods(player)
+				local timingWindows = type(mods.TimingWindows) == "table" and mods.TimingWindows or {}
 				if ((window ~= "W4" and window ~= "W5") or
 						-- Only populate decent and way off windows if they're active.
-						(window == "W4" and SL[pn].ActiveModifiers.TimingWindows[4]) or
-						(window == "W5" and SL[pn].ActiveModifiers.TimingWindows[5])) then
+						(window == "W4" and timingWindows[4]) or
+						(window == "W5" and timingWindows[5])) then
 					counts[window] = number
 				end
 			end
 		end
 	end
-	counts["totalSteps"] = StepsOrTrail:GetRadarValues(player):GetValue( "RadarCategory_TapsAndHolds" )
+	counts["totalSteps"] = safe_radar_value(StepsOrTrail, player, "RadarCategory_TapsAndHolds")
 
 	local RadarCategory = { "Holds", "Mines", "Rolls" }
 
-	local po = GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Preferred")
+	local po = safe_player_options(player, "ModsLevel_Preferred")
 
 	for RCType in ivalues(RadarCategory) do
-		local number = stats:GetRadarActual():GetValue( "RadarCategory_"..RCType )
-		local possible = StepsOrTrail:GetRadarValues(player):GetValue( "RadarCategory_"..RCType )
+		local radarActual = safe_method("PlayerStageStats.GetRadarActual", stats, "GetRadarActual")
+		local number = math.max(0, finite_number_or(safe_method("RadarValues.GetValue", radarActual, "GetValue", "RadarCategory_"..RCType), 0))
+		local possible = safe_radar_value(StepsOrTrail, player, "RadarCategory_"..RCType)
 
 		if RCType == "Mines" then
 			-- NoMines still report the total number of mines that exist in a chart, even if they weren't played in the chart.
 			-- If NoMines was set, report 0 for the number of mines as the chart actually didn't have any.
 			-- TODO(teejusb): Track AvoidMine in the future. This is fine for now as ITL compares serverside.
-			if po:NoMines() then
+			if option_enabled(safe_method("PlayerOptions.NoMines", po, "NoMines")) then
 				counts[RCType] = 0
 				counts["total"..RCType] = 0
 			else
 				-- We want to keep track of mines hit.
-				counts[RCType] = possible - number
+				counts[RCType] = math.max(0, possible - number)
 				counts["total"..RCType] = possible
 			end
 		else
@@ -894,48 +1175,54 @@ end
 -- Use the optional boolean argument use_actual_w0_weight to choose to fallback to the proper W0 weight.
 CalculateExScore = function(player, ex_counts, use_actual_w0_weight)
 	-- No EX scores in Casual mode, just return some dummy number early.
-	if SL.Global.GameMode == "Casual" then return 0 end
-	local StepsOrTrail = (GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(player)) or GAMESTATE:GetCurrentSteps(player)
+	if SL and SL.Global and SL.Global.GameMode == "Casual" then return 0 end
+	local StepsOrTrail = (safe_is_course_mode() and safe_game_state_method("GetCurrentTrail", nil, player)) or safe_game_state_method("GetCurrentSteps", nil, player)
 	if not StepsOrTrail then return 0, 0, 0 end
 
-	local totalSteps = StepsOrTrail:GetRadarValues(player):GetValue( "RadarCategory_TapsAndHolds" )
-	local totalHolds = StepsOrTrail:GetRadarValues(player):GetValue( "RadarCategory_Holds" )
-	local totalRolls = StepsOrTrail:GetRadarValues(player):GetValue( "RadarCategory_Rolls" )
+	local totalSteps = safe_radar_value(StepsOrTrail, player, "RadarCategory_TapsAndHolds")
+	local totalHolds = safe_radar_value(StepsOrTrail, player, "RadarCategory_Holds")
+	local totalRolls = safe_radar_value(StepsOrTrail, player, "RadarCategory_Rolls")
 
-	local W0Weight = use_actual_w0_weight and 3.5 or SL.ExWeights["W0"]
-	local total_possible = totalSteps * W0Weight + (totalHolds + totalRolls) * SL.ExWeights["Held"]
+	local weights = type(SL and SL.ExWeights) == "table" and SL.ExWeights or {}
+	local W0Weight = use_actual_w0_weight and 3.5 or finite_number_or(weights["W0"], 0)
+	local heldWeight = finite_number_or(weights["Held"], 0)
+	local total_possible = totalSteps * W0Weight + (totalHolds + totalRolls) * heldWeight
+	if total_possible <= 0 then return 0, 0, 0 end
 
 	local total_points = 0
 
-	local po = GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Preferred")
+	local po = safe_player_options(player, "ModsLevel_Preferred")
 
 	-- If mines are disabled, they should still be accounted for in EX Scoring based on the weight assigned to it.
 	-- Stamina community does often play with no-mines on, but because EX scoring is more timing centric where mines
 	-- generally have a negative weight, it's a better experience to make sure the EX score reflects that.
-	if po:NoMines() then
-		local totalMines = StepsOrTrail:GetRadarValues(player):GetValue( "RadarCategory_Mines" )
-		total_points = total_points + totalMines * SL.ExWeights["HitMine"];
+	if option_enabled(safe_method("PlayerOptions.NoMines", po, "NoMines")) then
+		local totalMines = safe_radar_value(StepsOrTrail, player, "RadarCategory_Mines")
+		total_points = total_points + totalMines * finite_number_or(weights["HitMine"], 0)
 	end
 
 	local keys = { "W0", "W1", "W2", "W3", "W4", "W5", "Miss", "Held", "LetGo", "HitMine" }
-	local playerKey = ToEnumShortString(player)
-	local playerState = SL[playerKey]
+	local playerKey = safe_enum_short(player, nil)
+	local playerState = playerKey and SL and SL[playerKey] or nil
 	local stages = playerState and playerState.Stages
 	local stats = stages and stages.Stats
-	local stageStats = stats and stats[SL.Global.Stages.PlayedThisGame + 1]
-	local counts = ex_counts or (stageStats and stageStats.ex_counts)
+	local stageStats = stats and stats[safe_stage_index()]
+	local sourceCounts = ex_counts or (stageStats and stageStats.ex_counts)
 	-- Just for validation, but shouldn't happen in normal gameplay.
-	if counts == nil then return 0 end
+	if type(sourceCounts) ~= "table" then return 0, 0, total_possible end
 
-	if ex_counts then
-		counts["Held"] = counts["Held"] or (counts["Holds"] or 0) + (counts["Rolls"] or 0)
-		counts["HitMine"] = counts["HitMine"] or counts["Mines"] or 0
+	local counts = {}
+	for key,value in pairs(sourceCounts) do
+		counts[key] = value
 	end
+	counts["Held"] = counts["Held"] or (finite_number_or(counts["Holds"], 0) + finite_number_or(counts["Rolls"], 0))
+	counts["HitMine"] = counts["HitMine"] or counts["Mines"] or 0
 
 	for key in ivalues(keys) do
-		local value = counts[key]
-		if value ~= nil then
-			total_points = total_points + value * SL.ExWeights[key]
+		local value = finite_number_or(counts[key], nil)
+		local weight = finite_number_or(weights[key], nil)
+		if value ~= nil and weight ~= nil then
+			total_points = total_points + value * weight
 		end
 	end
 
@@ -947,42 +1234,46 @@ end
 -- split and stricter weights:
 -- 10ms=3.5, white Fantastic=3, Excellent=1, Great/Decent/WayOff/Miss=0.
 CalculateHardExScore = function(player, ex_counts, use_actual_w0_weight)
-	if SL.Global.GameMode == "Casual" then return 0 end
-	local StepsOrTrail = (GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(player)) or GAMESTATE:GetCurrentSteps(player)
+	if SL and SL.Global and SL.Global.GameMode == "Casual" then return 0 end
+	local StepsOrTrail = (safe_is_course_mode() and safe_game_state_method("GetCurrentTrail", nil, player)) or safe_game_state_method("GetCurrentSteps", nil, player)
 	if not StepsOrTrail then return 0, 0, 0 end
 
-	local totalSteps = StepsOrTrail:GetRadarValues(player):GetValue("RadarCategory_TapsAndHolds")
-	local totalHolds = StepsOrTrail:GetRadarValues(player):GetValue("RadarCategory_Holds")
-	local totalRolls = StepsOrTrail:GetRadarValues(player):GetValue("RadarCategory_Rolls")
-	local W010Weight = SL.HardExWeights["W010"]
-	local total_possible = totalSteps * W010Weight + (totalHolds + totalRolls) * SL.HardExWeights["Held"]
+	local totalSteps = safe_radar_value(StepsOrTrail, player, "RadarCategory_TapsAndHolds")
+	local totalHolds = safe_radar_value(StepsOrTrail, player, "RadarCategory_Holds")
+	local totalRolls = safe_radar_value(StepsOrTrail, player, "RadarCategory_Rolls")
+	local weights = type(SL and SL.HardExWeights) == "table" and SL.HardExWeights or {}
+	local W010Weight = finite_number_or(weights["W010"], 0)
+	local total_possible = totalSteps * W010Weight + (totalHolds + totalRolls) * finite_number_or(weights["Held"], 0)
 	if total_possible <= 0 then return 0, 0, 0 end
 
 	local total_points = 0
-	local po = GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Preferred")
-	if po:NoMines() then
-		local totalMines = StepsOrTrail:GetRadarValues(player):GetValue("RadarCategory_Mines")
-		total_points = total_points + totalMines * SL.HardExWeights["HitMine"]
+	local po = safe_player_options(player, "ModsLevel_Preferred")
+	if option_enabled(safe_method("PlayerOptions.NoMines", po, "NoMines")) then
+		local totalMines = safe_radar_value(StepsOrTrail, player, "RadarCategory_Mines")
+		total_points = total_points + totalMines * finite_number_or(weights["HitMine"], 0)
 	end
 
 	local keys = { "W010", "W110", "W2", "W3", "W4", "W5", "Miss", "Held", "LetGo", "HitMine" }
-	local playerKey = ToEnumShortString(player)
-	local playerState = SL[playerKey]
+	local playerKey = safe_enum_short(player, nil)
+	local playerState = playerKey and SL and SL[playerKey] or nil
 	local stages = playerState and playerState.Stages
 	local stats = stages and stages.Stats
-	local stageStats = stats and stats[SL.Global.Stages.PlayedThisGame + 1]
-	local counts = ex_counts or (stageStats and stageStats.ex_counts)
-	if counts == nil then return 0 end
+	local stageStats = stats and stats[safe_stage_index()]
+	local sourceCounts = ex_counts or (stageStats and stageStats.ex_counts)
+	if type(sourceCounts) ~= "table" then return 0, 0, total_possible end
 
-	if ex_counts then
-		counts["Held"] = counts["Held"] or (counts["Holds"] or 0) + (counts["Rolls"] or 0)
-		counts["HitMine"] = counts["HitMine"] or counts["Mines"] or 0
+	local counts = {}
+	for key,value in pairs(sourceCounts) do
+		counts[key] = value
 	end
+	counts["Held"] = counts["Held"] or (finite_number_or(counts["Holds"], 0) + finite_number_or(counts["Rolls"], 0))
+	counts["HitMine"] = counts["HitMine"] or counts["Mines"] or 0
 
 	for key in ivalues(keys) do
-		local value = counts[key]
-		if value ~= nil then
-			total_points = total_points + value * SL.HardExWeights[key]
+		local value = finite_number_or(counts[key], nil)
+		local weight = finite_number_or(weights[key], nil)
+		if value ~= nil and weight ~= nil then
+			total_points = total_points + value * weight
 		end
 	end
 
@@ -994,44 +1285,63 @@ end
 -- Returns a table containing the column swaps.
 -- Returns nil if we can't compute it
 GetColumnMapping = function(player)
-	local po = GAMESTATE:GetPlayerState(player):GetPlayerOptions('ModsLevel_Preferred')
+	local po = safe_player_options(player, 'ModsLevel_Preferred')
+	if not po then return nil end
 
-	local shuffle = po:Shuffle() or po:SoftShuffle() or po:SuperShuffle()
-	local notes_inserted = (po:Wide() or po:Skippy() or po:Quick() or po:Echo() or
-													po:BMRize() or po:Stomp() or po:Big())
-	local notes_removed = (po:Little()  or po:NoHolds() or po:NoStretch() or
-													po:NoHands() or po:NoJumps() or po:NoFakes() or
-													po:NoLifts() or po:NoQuads() or po:NoRolls())
+	local shuffle = option_enabled(safe_method("PlayerOptions.Shuffle", po, "Shuffle"))
+		or option_enabled(safe_method("PlayerOptions.SoftShuffle", po, "SoftShuffle"))
+		or option_enabled(safe_method("PlayerOptions.SuperShuffle", po, "SuperShuffle"))
+	local notes_inserted = (option_enabled(safe_method("PlayerOptions.Wide", po, "Wide"))
+		or option_enabled(safe_method("PlayerOptions.Skippy", po, "Skippy"))
+		or option_enabled(safe_method("PlayerOptions.Quick", po, "Quick"))
+		or option_enabled(safe_method("PlayerOptions.Echo", po, "Echo"))
+		or option_enabled(safe_method("PlayerOptions.BMRize", po, "BMRize"))
+		or option_enabled(safe_method("PlayerOptions.Stomp", po, "Stomp"))
+		or option_enabled(safe_method("PlayerOptions.Big", po, "Big")))
+	local notes_removed = (option_enabled(safe_method("PlayerOptions.Little", po, "Little"))
+		or option_enabled(safe_method("PlayerOptions.NoHolds", po, "NoHolds"))
+		or option_enabled(safe_method("PlayerOptions.NoStretch", po, "NoStretch"))
+		or option_enabled(safe_method("PlayerOptions.NoHands", po, "NoHands"))
+		or option_enabled(safe_method("PlayerOptions.NoJumps", po, "NoJumps"))
+		or option_enabled(safe_method("PlayerOptions.NoFakes", po, "NoFakes"))
+		or option_enabled(safe_method("PlayerOptions.NoLifts", po, "NoLifts"))
+		or option_enabled(safe_method("PlayerOptions.NoQuads", po, "NoQuads"))
+		or option_enabled(safe_method("PlayerOptions.NoRolls", po, "NoRolls")))
 
 	-- If shuffle is used or notes were inserted/removed, we can't compute it
 	-- return early
 	-- TODO(teejusb): Add support for Backwards()
-	if shuffle or notes_inserted or notes_removed or po:Backwards() then
+	if shuffle or notes_inserted or notes_removed or option_enabled(safe_method("PlayerOptions.Backwards", po, "Backwards")) then
 		return nil
 	end
 
-	local flip = po:Flip() > 0
-	local invert = po:Invert() > 0
-	local left = po:Left()
-	local right = po:Right()
-	local mirror = po:Mirror()
-	local udmirror = po:UDMirror()
-	local lrmirror = po:LRMirror()
+	local flip = finite_number_or(safe_method("PlayerOptions.Flip", po, "Flip"), 0) > 0
+	local invert = finite_number_or(safe_method("PlayerOptions.Invert", po, "Invert"), 0) > 0
+	local left = option_enabled(safe_method("PlayerOptions.Left", po, "Left"))
+	local right = option_enabled(safe_method("PlayerOptions.Right", po, "Right"))
+	local mirror = option_enabled(safe_method("PlayerOptions.Mirror", po, "Mirror"))
+	local udmirror = option_enabled(safe_method("PlayerOptions.UDMirror", po, "UDMirror"))
+	local lrmirror = option_enabled(safe_method("PlayerOptions.LRMirror", po, "LRMirror"))
 
 	-- Combining flip and invert results in unusual spacing so ignore it.
 	if flip and invert then
 		return nil
 	end
 
-	local has_turn = flip or invert or left or right or mirror
-	local style = GAMESTATE:GetCurrentStyle()
-	local num_columns = style:ColumnsPerPlayer()
+	local has_turn = flip or invert or left or right or mirror or udmirror or lrmirror
+	local style = safe_current_style()
+	local num_columns = math.max(0, math.floor(finite_number_or(safe_method("Style.ColumnsPerPlayer", style, "ColumnsPerPlayer"), 0)))
+	if num_columns <= 0 then return nil end
 
 	-- We only resolve turn mods in 4 and 8 panel.
 	if num_columns ~= 4 and num_columns ~= 8 then
 		if not has_turn then
 			-- Not turn mod used, return 1-to-1 mapping.
-			return range(num_columns)
+				return type(range) == "function" and range(num_columns) or (function()
+					local t = {}
+					for i=1,num_columns do t[i] = i end
+					return t
+				end)()
 		else
 			-- If we are using turn mods in modes without 4 or 8 columns then return
 			-- early since we don't try to resolve them.
@@ -1110,30 +1420,32 @@ local GameAndMenuButtons = {
 local LocalizedGameButtons = {}
 
 local DelocalizeGameButton = function(localized_btn)
-	local game = GAMESTATE:GetCurrentGame():GetName()
+	local game = safe_current_game_name()
 	if not GameAndMenuButtons[game] then return false end
 
 	-- if we haven't created a lookup table for the current language yet, do that now
-	local language = THEME:GetCurLanguage()
-	if not LocalizedGameButtons[language] then
+	local language = tostring(safe_method("THEME.GetCurLanguage", THEME, "GetCurLanguage") or "")
+	local cacheKey = language .. ":" .. game
+	if not LocalizedGameButtons[cacheKey] then
 		local t = {}
 		for gb in ivalues(GameAndMenuButtons[game]) do
-			t[THEME:GetString("GameButton", gb)] = gb
+			t[safe_theme_string("GameButton", gb)] = gb
 		end
-		LocalizedGameButtons[language] = t
+		LocalizedGameButtons[cacheKey] = t
 	end
 
 	-- given a localized string like "Ariba" return a GameButton like "Up"
-	return LocalizedGameButtons[language][localized_btn]
+	return LocalizedGameButtons[cacheKey][localized_btn]
 end
 
 IsGameAndMenuButton = function(localized_btn)
-	if PREFSMAN:GetPreference("OnlyDedicatedMenuButtons") then return false end
+	if safe_preference("OnlyDedicatedMenuButtons", false) == true then return false end
 
 	local btn = DelocalizeGameButton(localized_btn)
 	if not btn then return false end
 
-	return FindInTable(btn, GameAndMenuButtons[GAMESTATE:GetCurrentGame():GetName()])
+	local buttons = GameAndMenuButtons[safe_current_game_name()]
+	return type(FindInTable) == "function" and type(buttons) == "table" and FindInTable(btn, buttons) or false
 end
 
 -- -----------------------------------------------------------------------
@@ -1141,45 +1453,48 @@ end
 GetPlayerOptionsString = function(player, modsLevel)
 	local modsLevel = modsLevel or "ModsLevel_Preferred"
 	-- grab the song options from this PlayerState
-	local PlayerOptions = GAMESTATE:GetPlayerState(player):GetPlayerOptionsArray(modsLevel)
-	local pn = ToEnumShortString(player)
+	local PlayerOptions = safe_player_options_array(player, modsLevel)
+	local mods, pn = safe_player_mods(player)
 
-	-- start with an empty string...
-	local optionslist = ""
+	local rendered = {}
 
 	-- if the player used an XMod of 1x, it won't be in PlayerOptions list
 	-- so check here, and add it in manually if necessary
-	if SL[pn].ActiveModifiers.SpeedModType == "X" and SL[pn].ActiveModifiers.SpeedMod == 1 then
-		optionslist = "1x, "
+	if mods.SpeedModType == "X" and finite_number_or(mods.SpeedMod, 0) == 1 then
+		rendered[#rendered+1] = "1x"
 	end
 
 	--  ...and append options to that string as needed
 	for i,option in ipairs(PlayerOptions) do
+		option = tostring(option or "")
 
 		-- these don't need to show up in the mods list
 		if option ~= "FailAtEnd" and option ~= "FailImmediateContinue" and option ~= "FailImmediate" and 
 			not string.find(option, "Lights") then
 			-- 100% Mini will be in the PlayerOptions as just "Mini" so use the value from the SL table instead
 			if option:match("Mini") then
-				option = SL[pn].ActiveModifiers.Mini .. " Mini"
+				option = tostring(finite_number_or(mods.Mini, 0)) .. " Mini"
 			end
 
 			if option:match("Cover") then
-				option = THEME:GetString("OptionNames", "Cover")
+				option = safe_theme_string("OptionNames", "Cover")
 			end
 
-			if i < #PlayerOptions then
-				optionslist = optionslist..option..", "
-			else
-				optionslist = optionslist..option
-			end
+			rendered[#rendered+1] = option
 		end
 	end
 
 	-- Display TimingWindowScale as a modifier if it's set to anything other than 1
-	local TimingWindowScale = PREFSMAN:GetPreference("TimingWindowScale")
+	local TimingWindowScale = safe_preference_number("TimingWindowScale", 1)
 	if TimingWindowScale ~= 1 then
-		optionslist = optionslist .. ", " .. (ScreenString("TimingWindowScale")):format(TimingWindowScale*100)
+		local label = "%g%% Timing"
+		if type(ScreenString) == "function" then
+			local okLabel, value = safe_call("ScreenString TimingWindowScale", function()
+				return ScreenString("TimingWindowScale")
+			end)
+			label = okLabel and tostring(value or label) or label
+		end
+		rendered[#rendered+1] = tostring(label):format(TimingWindowScale*100)
 	end
 
 	local substitutions = {
@@ -1189,6 +1504,7 @@ GetPlayerOptionsString = function(player, modsLevel)
 		["UDMirror"] = "UD-Mirror",
 	}
 
+	local optionslist = table.concat(rendered, ", ")
 	for k,v in pairs(substitutions) do
 		optionslist = optionslist:gsub(k, v)
 	end
@@ -1202,9 +1518,13 @@ end
 --     arguments:  pn is short string PlayerNumber like "P1" or "P2"
 --     returns:    the "PlayerP1" or "PlayerP2" ActorFrame
 GetPlayerAF = function(pn)
-	local topscreen = SCREENMAN:GetTopScreen()
+	local topscreen = safe_method("SCREENMAN.GetTopScreen", SCREENMAN, "GetTopScreen")
 	if not topscreen then
-		lua.ReportScriptError("GetPlayerAF() failed to find the player ActorFrame because there is no Screen yet.")
+		if lua and type(lua.ReportScriptError) == "function" then
+			safe_call("lua.ReportScriptError GetPlayerAF", function()
+				lua.ReportScriptError("GetPlayerAF() failed to find the player ActorFrame because there is no Screen yet.")
+			end)
+		end
 		return nil
 	end
 
@@ -1216,16 +1536,32 @@ GetPlayerAF = function(pn)
 	-- ScreenEdit does not name its player ActorFrame, but does set its alias to
 	-- "PlayerP1" or "PlayerP2". GetChild will return the child if either the
 	-- name or alias matches.
-	return topscreen:GetChild("Player"..pn)
+	return safe_method("Screen.GetChild PlayerAF", topscreen, "GetChild", "Player"..tostring(pn or ""))
 end
 
 -- -----------------------------------------------------------------------
 -- If the banner is missing, use the VisualStyle fallback banner according to selected color.
 GetFallbackBanner = function()
-    local path = "/" .. THEME:GetCurrentThemeDirectory() .. "Graphics/_FallbackBanners/" .. ThemePrefs.Get("VisualStyle")
-    local banner_directory = FILEMAN:DoesFileExist(path) and path or THEME:GetPathG("", "_FallbackBanners/Arrows")
+	local themeDir = tostring(safe_method("THEME.GetCurrentThemeDirectory", THEME, "GetCurrentThemeDirectory") or "")
+	local visualStyle = tostring(safe_theme_pref("VisualStyle", "Arrows") or "Arrows")
+    local path = themeDir .. "Graphics/_FallbackBanners/" .. visualStyle
+	local exists = false
+	if FILEMAN and type(FILEMAN.DoesFileExist) == "function" then
+		local okExists, result = safe_call("FILEMAN.DoesFileExist fallback banner", function()
+			return FILEMAN:DoesFileExist(path)
+		end)
+		exists = okExists and result == true
+	end
+	local fallback = ""
+	if THEME and type(THEME.GetPathG) == "function" then
+		local okFallback, value = safe_call("THEME.GetPathG fallback banner", function()
+			return THEME:GetPathG("", "_FallbackBanners/Arrows")
+		end)
+		fallback = okFallback and tostring(value or "") or ""
+	end
+    local banner_directory = exists and path or fallback
 
-    return banner_directory .. "/banner" .. SL.Global.ActiveColorIndex .. " (doubleres).png"
+    return banner_directory .. "/banner" .. tostring(math.max(1, math.floor(finite_number_or(SL and SL.Global and SL.Global.ActiveColorIndex, 1)))) .. " (doubleres).png"
 end
 
 -- -----------------------------------------------------------------------
@@ -1233,25 +1569,29 @@ end
 
 -- calculate each chart's actual length by GetLastSecond instead of song length
 TotalCourseLength = function(player)
-    local trail = GAMESTATE:GetCurrentTrail(player)
+    local trail = safe_game_state_method("GetCurrentTrail", nil, player)
     local t = 0
-    for te in ivalues(trail:GetTrailEntries()) do
-        t = t + te:GetSong():GetLastSecond()
+    for te in ivalues(safe_method("Trail.GetTrailEntries", trail, "GetTrailEntries") or {}) do
+		local song = safe_method("TrailEntry.GetSong", te, "GetSong")
+        t = t + math.max(0, finite_number_or(safe_method("Song.GetLastSecond", song, "GetLastSecond"), 0))
     end
 
-    return t / SL.Global.ActiveModifiers.MusicRate
+    return t / active_music_rate()
 end
 
 -- calculate amount of course played for properly scaling the scatterplot of judgments
 TotalCourseLengthPlayed = function(player)
-	local pn = ToEnumShortString(player)
-	local trail = GAMESTATE:GetCurrentTrail(player)
-	local storage = SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
+	local pn = safe_enum_short(player, nil)
+	local trail = safe_game_state_method("GetCurrentTrail", nil, player)
+	local playerState = pn and SL and SL[pn] or nil
+	local storage = playerState and playerState.Stages and playerState.Stages.Stats and playerState.Stages.Stats[safe_stage_index()] or {}
 	if storage.DeathSecond ~= nil then
-		local deathSecond = storage.DeathSecond
+		local deathSecond = finite_number_or(storage.DeathSecond, nil)
+		if deathSecond == nil then return -1 end
 		local t = 0
-		for te in ivalues(trail:GetTrailEntries()) do
-			t = t + ( te:GetSong():GetLastSecond() / SL.Global.ActiveModifiers.MusicRate )
+		for te in ivalues(safe_method("Trail.GetTrailEntries", trail, "GetTrailEntries") or {}) do
+			local song = safe_method("TrailEntry.GetSong", te, "GetSong")
+			t = t + ( math.max(0, finite_number_or(safe_method("Song.GetLastSecond", song, "GetLastSecond"), 0)) / active_music_rate() )
 			if t > deathSecond then break end
 		end
 		return t
