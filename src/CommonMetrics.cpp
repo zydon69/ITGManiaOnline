@@ -168,6 +168,9 @@ const std::vector<StepsType>& ThemeMetricStepsTypesToShow::GetValue() const {
 
 std::string CommonMetrics::LocalizeOptionItem(
     const std::string& s, bool bOptional) {
+  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
+    return s;
+  }
   if (bOptional && !THEME->HasString("OptionNames", s)) {
     return s;
   }

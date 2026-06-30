@@ -2286,6 +2286,12 @@ void PlayerOptions::GetLocalizedMods(std::vector<std::string>& AddTo) const {
     // Strip the approach speed token, if any
     if (asTokens[0][0] == '*') {
       asTokens.erase(asTokens.begin());
+      if (asTokens.empty()) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-2603: Ignoring localized player option with "
+            "only an approach token.");
+        continue;
+      }
     }
 
     // capitalize NoteSkin names
