@@ -110,6 +110,27 @@ void WarnSelectMusic(const char* fmt, ...) {
   va_end(va);
 }
 
+std::string DescribeSelectMusicSong(const Song* song) {
+  if (song == nullptr) {
+    return "<null>";
+  }
+  return ssprintf(
+      "ptr=%p title='%s' dir='%s' banner='%s' music='%s' preview='%s'",
+      static_cast<const void*>(song), song->GetDisplayFullTitle().c_str(),
+      song->GetSongDir().c_str(), song->GetBannerPath().c_str(),
+      song->GetMusicPath().c_str(), song->GetPreviewMusicPath().c_str());
+}
+
+std::string DescribeSelectMusicCourse(const Course* course) {
+  if (course == nullptr) {
+    return "<null>";
+  }
+  return ssprintf(
+      "ptr=%p title='%s' path='%s' banner='%s'",
+      static_cast<const void*>(course), course->GetDisplayFullTitle().c_str(),
+      course->m_sPath.c_str(), course->GetBannerPath().c_str());
+}
+
 float SanitizeMetricSeconds(float seconds, float fallback = 0.0f) {
   if (!std::isfinite(seconds)) {
     return fallback;
@@ -628,6 +649,14 @@ void ScreenSelectMusic::ResetAssetRequestState() {
 }
 
 void ScreenSelectMusic::SuspendPreviewForPrompt() {
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace suspend_preview_for_prompt "
+        "wheelLogical=%d wheelFocus=%d moving=%d sample='%s' banner='%s'",
+        m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex(),
+        m_MusicWheel.IsMoving(), m_sSampleMusicToPlay.c_str(),
+        m_sBannerPath.c_str());
+  }
   m_bPreviewSuspendedForPrompt = true;
   ResetAssetRequestState();
   m_BackgroundLoader.Abort();
@@ -641,6 +670,13 @@ void ScreenSelectMusic::SuspendPreviewForPrompt() {
 // skip.
 void ScreenSelectMusic::CheckBackgroundRequests(bool bForce) {
   if (m_bPreviewSuspendedForPrompt) {
+    if (LOG != nullptr) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace background_requests_skip "
+          "reason=preview_suspended force=%d bannerWaiting=%d sampleWaiting=%d",
+          bForce ? 1 : 0, m_bBannerWaiting ? 1 : 0,
+          m_bSampleMusicWaiting ? 1 : 0);
+    }
     return;
   }
 
@@ -682,6 +718,16 @@ void ScreenSelectMusic::CheckBackgroundRequests(bool bForce) {
    * around after selecting TYPE_RANDOM, and it'll take a while before the wheel
    * will settle. */
   if (!m_MusicWheel.IsSettled() && !m_MusicWheel.WheelIsLocked() && !bForce) {
+    if (LOG != nullptr && (m_bBannerWaiting || m_bSampleMusicWaiting)) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace background_requests_wait "
+          "reason=wheel_not_settled logical=%d focus=%d moving=%d "
+          "bannerWaiting=%d sampleWaiting=%d banner='%s' sample='%s'",
+          m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex(),
+          m_MusicWheel.IsMoving(), m_bBannerWaiting ? 1 : 0,
+          m_bSampleMusicWaiting ? 1 : 0, m_sBannerPath.c_str(),
+          m_sSampleMusicToPlay.c_str());
+    }
     return;
   }
 
@@ -706,6 +752,12 @@ void ScreenSelectMusic::CheckBackgroundRequests(bool bForce) {
     }
 
     m_bBannerWaiting = false;
+    if (LOG != nullptr) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace banner_load "
+          "path='%s' resolved='%s' force=%d",
+          m_sBannerPath.c_str(), sPath.c_str(), bForce ? 1 : 0);
+    }
     m_Banner.Load(sPath, true);
 
     if (bFreeCache) {
@@ -734,12 +786,25 @@ void ScreenSelectMusic::CheckBackgroundRequests(bool bForce) {
     }
 
     m_bSampleMusicWaiting = false;
+    if (LOG != nullptr) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace sample_start_ready "
+          "sample='%s' force=%d wheelLogical=%d wheelFocus=%d",
+          m_sSampleMusicToPlay.c_str(), bForce ? 1 : 0,
+          m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex());
+    }
     StartSampleMusicPreviewNow();
   }
 }
 
 void ScreenSelectMusic::StartSampleMusicPreviewNow() {
   if (SOUND == nullptr || m_sSampleMusicToPlay.empty()) {
+    if (LOG != nullptr) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace sample_start_skip "
+          "soundAvailable=%d sample='%s'",
+          SOUND != nullptr ? 1 : 0, m_sSampleMusicToPlay.c_str());
+    }
     return;
   }
 
@@ -753,6 +818,20 @@ void ScreenSelectMusic::StartSampleMusicPreviewNow() {
       SanitizeMetricSeconds(SAMPLE_MUSIC_FADE_OUT_SECONDS.GetValue());
   PlayParams.bAlignBeat = ALIGN_MUSIC_BEATS;
   PlayParams.bApplyMusicRate = true;
+
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace sample_start "
+        "file='%s' resolved='%s' start=%.4f length=%.4f loops=%d "
+        "alignBeat=%d wheelLogical=%d wheelFocus=%d currentSong={%s}",
+        m_sSampleMusicToPlay.c_str(), PlayParams.sFile.c_str(),
+        PlayParams.fStartSecond, PlayParams.fLengthSeconds,
+        SAMPLE_MUSIC_LOOPS.GetValue() ? 1 : 0, ALIGN_MUSIC_BEATS ? 1 : 0,
+        m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex(),
+        DescribeSelectMusicSong(GAMESTATE == nullptr
+                                    ? nullptr
+                                    : GAMESTATE->m_pCurSong.Get()).c_str());
+  }
 
   GameSoundManager::PlayMusicParams FallbackMusic;
   FallbackMusic.sFile = m_sLoopMusicPath;
@@ -1622,6 +1701,17 @@ void ScreenSelectMusic::HandleScreenMessage(const ScreenMessage SM) {
       m_MusicWheel.ChangeMusic(0);
     }
   } else if (SM == SM_ConfirmExit) {
+    if (LOG != nullptr) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace confirm_exit "
+          "answer=%d wheelLogical=%d wheelFocus=%d moving=%d selectedSong={%s} "
+          "selectedCourse={%s}",
+          static_cast<int>(ScreenPrompt::s_LastAnswer),
+          m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex(),
+          m_MusicWheel.IsMoving(),
+          DescribeSelectMusicSong(m_MusicWheel.GetSelectedSong()).c_str(),
+          DescribeSelectMusicCourse(m_MusicWheel.GetSelectedCourse()).c_str());
+    }
     if (ScreenPrompt::s_LastAnswer == ANSWER_YES) {
       ConfirmedCancel(SM_GoToPrevScreen);
     } else {
@@ -1636,6 +1726,19 @@ void ScreenSelectMusic::HandleScreenMessage(const ScreenMessage SM) {
 bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
   if (input.type != IET_FIRST_PRESS) {
     return false;
+  }
+
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace menu_start "
+        "player=%d selectionState=%s wheelLogical=%d wheelFocus=%d moving=%d "
+        "settled=%d selectedSong={%s} selectedCourse={%s} section='%s'",
+        static_cast<int>(input.pn), SelectionStateToString(m_SelectionState).c_str(),
+        m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex(),
+        m_MusicWheel.IsMoving(), m_MusicWheel.IsSettled() ? 1 : 0,
+        DescribeSelectMusicSong(m_MusicWheel.GetSelectedSong()).c_str(),
+        DescribeSelectMusicCourse(m_MusicWheel.GetSelectedCourse()).c_str(),
+        m_MusicWheel.GetSelectedSection().c_str());
   }
 
   if (GAMESTATE == nullptr) {
@@ -1664,6 +1767,13 @@ bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
     case SelectionState_SelectingSong:
       // If false, we don't have a selection just yet.
       if (!m_MusicWheel.Select()) {
+        if (LOG != nullptr) {
+          LOG->Trace(
+              "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace menu_start_select_false "
+              "wheelLogical=%d wheelFocus=%d moving=%d settled=%d",
+              m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex(),
+              m_MusicWheel.IsMoving(), m_MusicWheel.IsSettled() ? 1 : 0);
+        }
         return false;
       }
 
@@ -2023,7 +2133,20 @@ void ScreenSelectMusic::ReturnToOnlineLobbyFromMusicSelect() {
   StartTransitioningScreen(SM_GoToNextScreen);
 }
 
-bool ScreenSelectMusic::MenuBack(const InputEventPlus& /* input */) {
+bool ScreenSelectMusic::MenuBack(const InputEventPlus& input) {
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace menu_back "
+        "player=%d selectionState=%s wheelLogical=%d wheelFocus=%d moving=%d "
+        "settled=%d selectedSong={%s} selectedCourse={%s} section='%s'",
+        static_cast<int>(input.pn), SelectionStateToString(m_SelectionState).c_str(),
+        m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex(),
+        m_MusicWheel.IsMoving(), m_MusicWheel.IsSettled() ? 1 : 0,
+        DescribeSelectMusicSong(m_MusicWheel.GetSelectedSong()).c_str(),
+        DescribeSelectMusicCourse(m_MusicWheel.GetSelectedCourse()).c_str(),
+        m_MusicWheel.GetSelectedSection().c_str());
+  }
+
   if (HasActiveITGOnlineRoom()) {
     ReturnToOnlineLobbyFromMusicSelect();
     return true;
@@ -2054,6 +2177,17 @@ bool ScreenSelectMusic::MenuBack(const InputEventPlus& /* input */) {
 }
 
 void ScreenSelectMusic::Cancel(ScreenMessage smSendWhenDone) {
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace cancel "
+        "confirmExit=%d nextMessage=%s wheelLogical=%d wheelFocus=%d "
+        "moving=%d settled=%d sample='%s' banner='%s'",
+        CONFIRM_EXIT ? 1 : 0, ScreenMessageHelpers::ScreenMessageToString(smSendWhenDone).c_str(),
+        m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex(),
+        m_MusicWheel.IsMoving(), m_MusicWheel.IsSettled() ? 1 : 0,
+        m_sSampleMusicToPlay.c_str(), m_sBannerPath.c_str());
+  }
+
   if (CONFIRM_EXIT) {
     SuspendPreviewForPrompt();
     ScreenPrompt::Prompt(
@@ -2065,6 +2199,13 @@ void ScreenSelectMusic::Cancel(ScreenMessage smSendWhenDone) {
 }
 
 void ScreenSelectMusic::ConfirmedCancel(ScreenMessage smSendWhenDone) {
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace confirmed_cancel "
+        "nextMessage=%s wheelLogical=%d wheelFocus=%d",
+        ScreenMessageHelpers::ScreenMessageToString(smSendWhenDone).c_str(),
+        m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex());
+  }
   m_bPreviewSuspendedForPrompt = false;
   m_BackgroundLoader.Abort();
   ScreenWithMenuElements::Cancel(smSendWhenDone);
@@ -2323,6 +2464,18 @@ void ScreenSelectMusic::AfterMusicChange() {
     GAMESTATE->m_pPreferredCourse = pCourse;
   }
 
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace after_music_change_begin "
+        "wheelLogical=%d wheelFocus=%d moving=%d settled=%d selectedSection='%s' "
+        "song={%s} course={%s}",
+        m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex(),
+        m_MusicWheel.IsMoving(), m_MusicWheel.IsSettled() ? 1 : 0,
+        m_MusicWheel.GetSelectedSection().c_str(),
+        DescribeSelectMusicSong(pSong).c_str(),
+        DescribeSelectMusicCourse(pCourse).c_str());
+  }
+
   m_vpSteps.clear();
   m_vpTrails.clear();
 
@@ -2346,6 +2499,14 @@ void ScreenSelectMusic::AfterMusicChange() {
   }
 
   WheelItemDataType wtype = m_MusicWheel.GetSelectedType();
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace after_music_change_type "
+        "wheelLogical=%d wheelFocus=%d type=%s currentSort=%s",
+        m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex(),
+        WheelItemDataTypeToLogString(wtype),
+        SortOrderToString(GAMESTATE->m_SortOrder).c_str());
+  }
   SampleMusicPreviewMode pmode;
   switch (wtype) {
     case WheelItemDataType_Section:
@@ -2639,6 +2800,22 @@ void ScreenSelectMusic::AfterMusicChange() {
   }
 
   m_StartedLoadingAt.Touch();
+
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace after_music_change_end "
+        "wheelLogical=%d wheelFocus=%d type=%s banner='%s' cdTitle='%s' "
+        "sample='%s' sampleStart=%.4f sampleLength=%.4f steps=%zu trails=%zu "
+        "wantBanner=%d bannerWaiting=%d cdWaiting=%d sampleWaiting=%d "
+        "previewSuspended=%d",
+        m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex(),
+        WheelItemDataTypeToLogString(wtype), m_sBannerPath.c_str(),
+        m_sCDTitlePath.c_str(), m_sSampleMusicToPlay.c_str(),
+        m_fSampleStartSeconds, m_fSampleLengthSeconds, m_vpSteps.size(),
+        m_vpTrails.size(), bWantBanner ? 1 : 0, m_bBannerWaiting ? 1 : 0,
+        m_bCDTitleWaiting ? 1 : 0, m_bSampleMusicWaiting ? 1 : 0,
+        m_bPreviewSuspendedForPrompt ? 1 : 0);
+  }
 
   std::vector<PlayerNumber> vpns;
   FOREACH_HumanPlayer(p) vpns.push_back(p);

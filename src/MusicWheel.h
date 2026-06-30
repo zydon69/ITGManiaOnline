@@ -58,6 +58,7 @@ class MusicWheel : public WheelBase {
   std::string JumpToPrevGroup();
   const MusicWheelItemData* GetCurWheelItemData(int i) const;
   MusicWheelItemData* GetCurWheelItemData(int i);
+  int GetVisualFocusIndex() const;
 
   void ReloadSongList() override;
 
@@ -68,7 +69,6 @@ class MusicWheel : public WheelBase {
  protected:
   MusicWheelItem* MakeItem() override;
 
-  int GetVisualFocusIndex() const;
   const MusicWheelItemData* GetVisualFocusItemData() const;
   void PostSongChangedIfVisualFocusChanged();
   void GetSongList(std::vector<Song*>& arraySongs, SortOrder so);

@@ -32,6 +32,8 @@ read_source("src/ScreenOptions.cpp" screen_options_cpp)
 read_source("src/StreamDisplay.cpp" stream_display_cpp)
 read_source("src/WheelBase.cpp" wheel_base_cpp)
 read_source("src/MusicWheel.cpp" music_wheel_cpp)
+read_source("src/MusicWheelItem.cpp" music_wheel_item_cpp)
+read_source("src/ScreenSelectMusic.cpp" screen_select_music_cpp)
 
 require_contains(
   "${lua_expression_transform_h}"
@@ -167,6 +169,22 @@ require_contains(
   "${music_wheel_cpp}"
   "PostSongChangedIfVisualFocusChanged();"
   "MusicWheel checks visual focus changes during update")
+require_contains(
+  "${music_wheel_cpp}"
+  "SRC-2693 MusicWheelTrace change_music"
+  "MusicWheel logs selection and focus transitions")
+require_contains(
+  "${wheel_base_cpp}"
+  "SRC-2693 MusicWheelTrace wheelbase_move_accept"
+  "WheelBase logs accepted wheel movement")
+require_contains(
+  "${music_wheel_item_cpp}"
+  "SRC-2693 MusicWheelTrace item_load"
+  "MusicWheelItem logs rendered wheel item data")
+require_contains(
+  "${screen_select_music_cpp}"
+  "SRC-2693 MusicWheelTrace after_music_change_end"
+  "ScreenSelectMusic logs applied banner and sample state")
 require_contains(
   "${screen_options_cpp}"
   "const bool bTransformOk ="
