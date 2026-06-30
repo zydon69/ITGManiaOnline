@@ -27,7 +27,10 @@ PackSync.lastPostedStatusAt = tonumber(PackSync.lastPostedStatusAt) or 0
 PackSync.statusPostInFlightSignature = PackSync.statusPostInFlightSignature or ""
 PackSync.statusPostInFlightCallbacks = PackSync.statusPostInFlightCallbacks or {}
 PackSync.statusPostInFlightStartedAt = tonumber(PackSync.statusPostInFlightStartedAt) or 0
+PackSync.statusPostInFlightTimeoutSeconds = tonumber(PackSync.statusPostInFlightTimeoutSeconds) or 15
 PackSync.lastAppliedLocalStatusSignature = PackSync.lastAppliedLocalStatusSignature or ""
+PackSync.lastAppliedLocalStatusAt = tonumber(PackSync.lastAppliedLocalStatusAt) or 0
+PackSync.localStatusDuplicateSuppressSeconds = tonumber(PackSync.localStatusDuplicateSuppressSeconds) or 0.35
 PackSync.statusPostDuplicateHeartbeatSeconds = tonumber(PackSync.statusPostDuplicateHeartbeatSeconds) or 5.0
 PackSync.lastManagerBrowsingPreviewPostKey = PackSync.lastManagerBrowsingPreviewPostKey or ""
 PackSync.lastManagerBrowsingPreviewPostAt = tonumber(PackSync.lastManagerBrowsingPreviewPostAt) or 0
@@ -120,15 +123,43 @@ function PackSync:ShouldPreserveActiveDownloadDuringReset(reason)
 	end
 
 	reason = tostring(reason or "unknown")
-	if reason == "lobby_left"
-		or reason == "logout"
-		or reason == "disconnect"
-		or reason == "watchdog_timeout"
-		or reason == "explicit_cancel"
-	then
+	trace("Reset will cancel active download reason=" .. tostring(reason)
+		.. " status=" .. tostring(self.currentStatus or "nil")
+		.. " key=" .. tostring(self.downloadInFlightKey or "")
+		.. " activeDownloadId=" .. tostring(self.activeDownloadId or ""))
+	return false
+end
+
+local function safe_invoke_callback(callback, ...)
+	if type(callback) ~= "function" then return end
+	local ok, err = pcall(callback, ...)
+	if not ok then
+		trace("Callback failed err=" .. tostring(err))
+	end
+end
+
+function PackSync:ExpireStatusPostInFlight(reason)
+	local signature = tostring(self.statusPostInFlightSignature or "")
+	if signature == "" then return false end
+	local now = GetTimeSinceStart and GetTimeSinceStart() or 0
+	local startedAt = tonumber(self.statusPostInFlightStartedAt) or 0
+	local timeout = math.max(1, tonumber(self.statusPostInFlightTimeoutSeconds) or 15)
+	if startedAt > 0 and (now - startedAt) < timeout then
 		return false
 	end
 
+	local callbacks = self.statusPostInFlightCallbacks[signature] or {}
+	self.statusPostInFlightCallbacks[signature] = nil
+	self.statusPostInFlightSignature = ""
+	self.statusPostInFlightStartedAt = 0
+	trace("Expired in-flight status post reason=" .. tostring(reason or "unknown")
+		.. " signature=" .. tostring(signature)
+		.. " age=" .. tostring(startedAt > 0 and string.format("%.3f", now - startedAt) or "unknown")
+		.. " callbacks=" .. tostring(#callbacks))
+	local response = { errorMessage = "La publication du statut online a expire." }
+	for _, queuedCallback in ipairs(callbacks) do
+		safe_invoke_callback(queuedCallback, false, nil, response)
+	end
 	return true
 end
 
@@ -190,20 +221,26 @@ local function current_user_is_active_room_member()
 	if tostring(ITGOnline.currentRoom.id or "") ~= currentRoomId then
 		return false
 	end
-	if type(ITGOnline.currentRoom.members) == "table"
-		and #ITGOnline.currentRoom.members == 0
-		and PackSync
-		and PackSync:IsActiveDownload() then
-		trace("Active room membership trusted during active download because current room snapshot has no members"
-			.. " room=" .. tostring(currentRoomId)
-			.. " status=" .. tostring(PackSync.currentStatus or "nil")
-			.. " key=" .. tostring(PackSync.downloadInFlightKey or "")
-			.. " browseOnly=" .. tostring(PackSync.activeBrowseOnlyDownload == true))
-		return true
+	local members = ITGOnline.currentRoom.members or ITGOnline.currentRoom.players or ITGOnline.currentRoom.room_members
+	local memberCount = 0
+	if type(members) == "table" then
+		for _ in pairs(members) do
+			memberCount = memberCount + 1
+		end
 	end
-	for member in ivalues(ITGOnline.currentRoom.members or {}) do
-		local user = member.user or member
-		local userId = tostring(user.id or member.user_id or "")
+	if type(members) ~= "table" or memberCount == 0 then
+		trace("Active room membership unavailable; refusing online pack sync action"
+			.. " room=" .. tostring(currentRoomId)
+			.. " hasMembers=" .. tostring(type(members) == "table")
+			.. " count=" .. tostring(type(members) == "table" and memberCount or "nil")
+			.. " status=" .. tostring(PackSync and PackSync.currentStatus or "nil")
+			.. " key=" .. tostring(PackSync and PackSync.downloadInFlightKey or ""))
+		return false
+	end
+	for _, member in pairs(members) do
+		local memberTable = type(member) == "table" and member or {}
+		local user = memberTable.user or memberTable.player or memberTable
+		local userId = tostring(user.id or memberTable.user_id or memberTable.userId or memberTable.player_id or memberTable.playerId or "")
 		if userId == currentUserId then
 			return true
 		end
@@ -416,12 +453,26 @@ local function status_message(value)
 	return value ~= "" and value or nil
 end
 
+local MAX_SAFE_NAME_LENGTH = 96
+
+local function limit_safe_name(value, suffix)
+	value = trim(value)
+	suffix = tostring(suffix or "")
+	local maxBaseLength = math.max(1, MAX_SAFE_NAME_LENGTH - #suffix)
+	if #value > maxBaseLength then
+		value = value:sub(1, maxBaseLength)
+	end
+	return value .. suffix
+end
+
 local function safe_file_name(value)
 	value = trim(value):gsub("[/\\:%c]", "_"):gsub("%.%.", "_")
 	value = value:gsub("^%s+", ""):gsub("%s+$", "")
 	if value == "" then value = "stepmaniaonline-pack" end
-	if not value:lower():match("%.zip$") then value = value .. ".zip" end
-	return value
+	if value:lower():match("%.zip$") then
+		value = value:gsub("%.[Zz][Ii][Pp]$", "")
+	end
+	return limit_safe_name(value, ".zip")
 end
 
 local function safe_folder_name(value)
@@ -429,16 +480,12 @@ local function safe_folder_name(value)
 	value = value:gsub("^%s+", ""):gsub("%s+$", "")
 	value = value:gsub("%.[Zz][Ii][Pp]$", "")
 	if value == "" then value = "stepmaniaonline-pack" end
-	return value
+	return limit_safe_name(value)
 end
 
 local function pack_quarantine_path(packId, packName)
 	local folderName = safe_folder_name("__OnlineDownload_" .. tostring(packId) .. "_" .. tostring(packName or "pack"))
 	return "/Songs/" .. folderName .. "/"
-end
-
-local function legacy_online_downloads_root()
-	return "/Songs/Online Downloads/"
 end
 
 local function remove_directory_if_possible(path)
@@ -468,6 +515,10 @@ end
 local function pack_root_path(packName)
 	packName = trim(packName)
 	if packName == "" then return "" end
+	if packName:find("[/\\]") or packName:find("%.%.") then
+		trace("Pack root lookup rejected unsafe pack name=" .. tostring(packName))
+		return ""
+	end
 	return "/Songs/" .. packName .. "/"
 end
 
@@ -563,6 +614,12 @@ local function single_nested_group_folder(quarantinePath, expectedPackName)
 
 	if #folders ~= 1 then return "" end
 	local folderName = folders[1]
+	local expectedName = safe_child_folder_name(expectedPackName)
+	if expectedName ~= "" and pack_name_key(folderName) ~= pack_name_key(expectedName) then
+		trace("Nested pack folder rejected reason=unexpected_name expected=" .. tostring(expectedName)
+			.. " actual=" .. tostring(folderName))
+		return ""
+	end
 	for _, entryName in ivalues(dir_listing(quarantinePath, false, false)) do
 		if entryName ~= folderName and not is_temp_newdir_artifact(entryName) then
 			return ""
@@ -572,20 +629,26 @@ local function single_nested_group_folder(quarantinePath, expectedPackName)
 	return folders[1]
 end
 
-local function first_enabled_player()
-	local enabled = GAMESTATE and GAMESTATE:GetEnabledPlayers() or {}
-	return enabled[1] or PLAYER_1
-end
-
 local function set_current_selection(song, steps, songInfo, source)
-	if not song then return end
-	GAMESTATE:SetCurrentSong(song)
+	if not (GAMESTATE and song) then return end
+	if GAMESTATE.SetCurrentSong then
+		local ok, err = pcall(function() GAMESTATE:SetCurrentSong(song) end)
+		if not ok then
+			trace("SetCurrentSong failed source=" .. tostring(source or "unknown") .. " err=" .. tostring(err))
+			return
+		end
+	end
 	if ITGOnline and ITGOnline.ResolveLocalGameplayStepsForSelectedSong then
 		steps = ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, steps, source or "pack_sync_set_current_selection")
 	end
-	if steps then
-		for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
-			GAMESTATE:SetCurrentSteps(player, steps)
+	if steps and GAMESTATE.GetEnabledPlayers and GAMESTATE.SetCurrentSteps then
+		for player in ivalues(GAMESTATE:GetEnabledPlayers() or {}) do
+			local ok, err = pcall(function() GAMESTATE:SetCurrentSteps(player, steps) end)
+			if not ok then
+				trace("SetCurrentSteps failed source=" .. tostring(source or "unknown")
+					.. " player=" .. tostring(player)
+					.. " err=" .. tostring(err))
+			end
 		end
 	end
 end
@@ -608,11 +671,6 @@ local function transition_to_player_options()
 end
 
 local function transition_to_reload_songs()
-	if SL and SL.Global then
-		SL.Global.Online = SL.Global.Online or {}
-		SL.Global.Online.ReturnToLobbyAfterSongReload = true
-	end
-
 	local topScreen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
 	if not topScreen then
 		if online_flow_trace then
@@ -628,6 +686,11 @@ local function transition_to_reload_songs()
 		return
 	end
 
+	if SL and SL.Global then
+		SL.Global.Online = SL.Global.Online or {}
+		SL.Global.Online.ReturnToLobbyAfterSongReload = true
+	end
+
 	if online_flow_trace then
 		online_flow_trace("pack_sync_reload_songs_transition from=" .. tostring(topScreen:GetName()))
 	end
@@ -638,11 +701,16 @@ end
 local function playable_steps(song)
 	if not song then return {} end
 	if SongUtil and SongUtil.GetPlayableSteps then
-		return SongUtil.GetPlayableSteps(song)
+		local ok, steps = pcall(function() return SongUtil.GetPlayableSteps(song) end)
+		if ok and type(steps) == "table" then return steps end
 	end
-	local style = GAMESTATE:GetCurrentStyle()
+	local style = GAMESTATE and GAMESTATE.GetCurrentStyle and GAMESTATE:GetCurrentStyle() or nil
 	local stepsType = style and style:GetStepsType() or nil
-	return stepsType and song:GetStepsByStepsType(stepsType) or {}
+	if stepsType and song.GetStepsByStepsType then
+		local ok, steps = pcall(function() return song:GetStepsByStepsType(stepsType) end)
+		if ok and type(steps) == "table" then return steps end
+	end
+	return {}
 end
 
 local function chart_hash_for_steps(steps)
@@ -655,7 +723,30 @@ end
 
 local function song_count_key()
 	if not SONGMAN or not SONGMAN.GetAllSongs then return "" end
-	return tostring(#SONGMAN:GetAllSongs())
+	local ok, songs = pcall(function() return SONGMAN:GetAllSongs() end)
+	if not ok or type(songs) ~= "table" then return "" end
+	return tostring(#songs)
+end
+
+local function local_song_library_key()
+	if not SONGMAN or not SONGMAN.GetAllSongs then return "" end
+	local ok, songs = pcall(function() return SONGMAN:GetAllSongs() end)
+	if not ok or type(songs) ~= "table" then return "" end
+	local dirs = {}
+	for song in ivalues(songs) do
+		local dir = song and song.GetSongDir and tostring(song:GetSongDir() or "") or ""
+		if dir ~= "" then dirs[#dirs + 1] = dir end
+	end
+	table.sort(dirs)
+	local hash = 2166136261
+	local totalLength = 0
+	for _, dir in ipairs(dirs) do
+		totalLength = totalLength + #dir
+		for index = 1, #dir do
+			hash = (hash * 16777619 + string.byte(dir, index)) % 4294967296
+		end
+	end
+	return tostring(#dirs) .. ":" .. tostring(totalLength) .. ":" .. tostring(hash)
 end
 
 local function local_scan_key(songInfo)
@@ -667,6 +758,7 @@ local function local_scan_key(songInfo)
 		tostring(songInfo.chart_note_count or ""),
 		tostring(songInfo.max_score or ""),
 		song_count_key(),
+		local_song_library_key(),
 	}, "|")
 end
 
@@ -692,12 +784,13 @@ end
 
 local function matching_steps_in_song(song, songInfo)
 	local expectedChartHash = selected_chart_hash(songInfo)
-	local style = GAMESTATE:GetCurrentStyle()
+	local style = GAMESTATE and GAMESTATE.GetCurrentStyle and GAMESTATE:GetCurrentStyle() or nil
 	local stepsType = style and style:GetStepsType() or nil
 	local stepsList = {}
 
 	if stepsType then
-		stepsList = song:GetStepsByStepsType(stepsType)
+		local ok, byType = pcall(function() return song:GetStepsByStepsType(stepsType) end)
+		stepsList = ok and type(byType) == "table" and byType or {}
 	else
 		stepsList = playable_steps(song)
 	end
@@ -716,16 +809,21 @@ local function song_matches_text_prefilter(song, songInfo)
 	local expectedTitle = lower(selected_title(songInfo))
 	if expectedTitle == "" then return true end
 
-	local fullTitle = lower(song:GetDisplayFullTitle())
-	local mainTitle = song.GetTranslitMainTitle and lower(song:GetTranslitMainTitle()) or fullTitle
-	if fullTitle ~= expectedTitle and mainTitle ~= expectedTitle then
+	local fullTitle = song.GetDisplayFullTitle and lower(song:GetDisplayFullTitle()) or ""
+	local displayMainTitle = song.GetDisplayMainTitle and lower(song:GetDisplayMainTitle()) or ""
+	local translitMainTitle = song.GetTranslitMainTitle and lower(song:GetTranslitMainTitle()) or ""
+	local translitFullTitle = song.GetTranslitFullTitle and lower(song:GetTranslitFullTitle()) or ""
+	if fullTitle ~= expectedTitle
+		and displayMainTitle ~= expectedTitle
+		and translitMainTitle ~= expectedTitle
+		and translitFullTitle ~= expectedTitle then
 		return false
 	end
 
 	local expectedArtist = lower(selected_artist(songInfo))
 	if expectedArtist == "" then return true end
 
-	local artist = lower(song:GetDisplayArtist())
+	local artist = song.GetDisplayArtist and lower(song:GetDisplayArtist()) or ""
 	local translitArtist = song.GetTranslitArtist and lower(song:GetTranslitArtist()) or artist
 	return artist == expectedArtist or translitArtist == expectedArtist
 end
@@ -855,13 +953,10 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	options = type(options) == "table" and options or {}
 	if not (ITGOnline and ITGOnline.Request and current_user_is_active_room_member()) then
 		trace("Status skipped reason=not_active_room_member status=" .. tostring(status))
-		if callback then callback(false, nil, { errorMessage = "Aucun salon online actif." }) end
+		safe_invoke_callback(callback, false, nil, { errorMessage = "Aucun salon online actif." })
 		return
 	end
 	local previousStatus = tostring(self.currentStatus or "")
-	self.currentStatus = status
-	self.currentStatusMessage = message
-	self.statusChangedAt = GetTimeSinceStart()
 	trace_online_state("status_update_begin", {
 		status = status,
 		message = message or "",
@@ -894,13 +989,12 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		end
 		local locallyReadyForSelection = tostring(self.lastReadySelectedAt or "") == currentSelectedAt
 			and previousStatus == self.status.Ready
-		if alreadyReadyForSelection or locallyReadyForSelection then
-			trace("Status post skipped reason=client_ready_status_protected_from_local_scan"
-				.. " status=" .. tostring(status)
-				.. " selected_at=" .. tostring(currentSelectedAt)
-				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
-			if callback then
-				callback(true, {
+			if alreadyReadyForSelection or locallyReadyForSelection then
+				trace("Status post skipped reason=client_ready_status_protected_from_local_scan"
+					.. " status=" .. tostring(status)
+					.. " selected_at=" .. tostring(currentSelectedAt)
+					.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+				safe_invoke_callback(callback, true, {
 					pack_sync_status = {
 						applied = false,
 						ignored_reason = "client_ready_status_protected_from_local_scan",
@@ -909,10 +1003,9 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 					},
 					local_only = true,
 				}, nil)
+				return
 			end
-			return
 		end
-	end
 	local noActiveSelectionLocalOnly = currentSelectedAt == "" and (
 		status == self.status.DownloadedOk
 		or status == self.status.Ready
@@ -920,38 +1013,23 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		or status == self.status.LocalChartMatchFound
 		or status == self.status.NoCompatibleChartFound
 		or status == self.status.ChartMismatch
-	)
-	if noActiveSelectionLocalOnly then
-		trace("Status post skipped reason=no_active_selection_local_only"
-			.. " status=" .. tostring(status)
-			.. " progress=" .. tostring(progress)
-			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
-		if MESSAGEMAN then
-			local activeRoomId = ITGOnline and ITGOnline.currentRoomId or nil
-			local activeRoomPhase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil
-			MESSAGEMAN:Broadcast("OnlinePackSyncLocalStatus", {
-				status = status,
-				message = message,
-				download_progress = progress,
-				selected_at = "",
-				room_id = activeRoomId,
-				room_phase = activeRoomPhase,
-				mode = activeRoomId and "joined" or "browse",
-				local_only = true,
-			})
-		end
-		if callback then
-			callback(true, {
+		)
+		if noActiveSelectionLocalOnly then
+			trace("Status post skipped reason=no_active_selection_local_only"
+				.. " status=" .. tostring(status)
+				.. " progress=" .. tostring(progress)
+				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+			self:ApplyLocalStatus(status, message, progress)
+			safe_invoke_callback(callback, true, {
 				pack_sync_status = {
 					applied = false,
 					ignored_reason = "client_no_active_selection_local_only",
 				},
 				local_only = true,
 			}, nil)
+			return
 		end
-		return
-	end
 	local usesDownloadSequence = self:UsesDownloadStatusSequence(status)
 	if not usesDownloadSequence and self.lastSelectedAt ~= currentSelectedAt then
 		self.sequence = 0
@@ -977,18 +1055,16 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 				.. " progress=" .. tostring(progress)
 				.. " selected_at=" .. tostring(currentSelectedAt)
 				.. " age=" .. string.format("%.3f", age))
-			if callback then
-				callback(true, {
+				safe_invoke_callback(callback, true, {
 					pack_sync_status = {
 						applied = false,
 						ignored_reason = "client_duplicate_status_intent",
 					},
 					duplicate = true,
 				}, nil)
+				return
 			end
-			return
 		end
-	end
 	self.lastStatusPostIntentSignature = intentSignature
 	self.lastStatusPostIntentAt = now
 
@@ -1019,38 +1095,46 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		.. " progress=" .. tostring(progress)
 		.. " inFlightKey=" .. tostring(self.downloadInFlightKey or "")
 		.. " browseOnly=" .. tostring(self.activeBrowseOnlyDownload == true))
-	local signature = status_post_signature(ITGOnline and ITGOnline.currentRoomId or "", currentSelectedAt, status, message, progress, options)
-	local postedAt = tonumber(self.lastPostedStatusAt) or 0
-	local heartbeat = tonumber(self.statusPostDuplicateHeartbeatSeconds) or 5.0
-	if signature ~= "" and signature == tostring(self.statusPostInFlightSignature or "") then
-		trace("Status post skipped duplicate_in_flight status=" .. tostring(status)
-			.. " progress=" .. tostring(progress)
-			.. " selected_at=" .. tostring(currentSelectedAt))
-		if callback then
-			self.statusPostInFlightCallbacks[signature] = self.statusPostInFlightCallbacks[signature] or {}
-			self.statusPostInFlightCallbacks[signature][#self.statusPostInFlightCallbacks[signature] + 1] = callback
+		local signature = status_post_signature(ITGOnline and ITGOnline.currentRoomId or "", currentSelectedAt, status, message, progress, options)
+		local postedAt = tonumber(self.lastPostedStatusAt) or 0
+		local heartbeat = tonumber(self.statusPostDuplicateHeartbeatSeconds) or 5.0
+		self:ExpireStatusPostInFlight("before_status_update")
+		if signature ~= "" and signature == tostring(self.statusPostInFlightSignature or "") then
+			trace("Status post skipped duplicate_in_flight status=" .. tostring(status)
+				.. " progress=" .. tostring(progress)
+				.. " selected_at=" .. tostring(currentSelectedAt))
+			if callback then
+				self.statusPostInFlightCallbacks[signature] = self.statusPostInFlightCallbacks[signature] or {}
+				local waitingCallbacks = self.statusPostInFlightCallbacks[signature]
+				if #waitingCallbacks < 16 then
+					waitingCallbacks[#waitingCallbacks + 1] = callback
+				else
+					trace("Status duplicate_in_flight callback rejected reason=queue_full signature=" .. tostring(signature))
+					safe_invoke_callback(callback, false, nil, { errorMessage = "Trop de statuts online en attente." })
+				end
+			end
+			return
 		end
-		return
-	end
 	if signature ~= "" and signature == tostring(self.lastPostedStatusSignature or "") and (now - postedAt) < heartbeat then
-		trace("Status post skipped duplicate status=" .. tostring(status)
-			.. " progress=" .. tostring(progress)
-			.. " selected_at=" .. tostring(currentSelectedAt)
-			.. " age=" .. string.format("%.3f", now - postedAt))
-		if callback then
-			callback(true, {
+			trace("Status post skipped duplicate status=" .. tostring(status)
+				.. " progress=" .. tostring(progress)
+				.. " selected_at=" .. tostring(currentSelectedAt)
+				.. " age=" .. string.format("%.3f", now - postedAt))
+			safe_invoke_callback(callback, true, {
 				pack_sync_status = {
 					applied = false,
 					ignored_reason = "client_duplicate_status",
 				},
 				duplicate = true,
 			}, nil)
+			return
 		end
-		return
-	end
-	if MESSAGEMAN then
-		local activeRoomId = ITGOnline and ITGOnline.currentRoomId or nil
-		local activeRoomPhase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil
+		self.currentStatus = status
+		self.currentStatusMessage = message
+		self.statusChangedAt = now
+		if MESSAGEMAN then
+			local activeRoomId = ITGOnline and ITGOnline.currentRoomId or nil
+			local activeRoomPhase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil
 		MESSAGEMAN:Broadcast("OnlinePackSyncLocalStatus", {
 			status = status,
 			message = message,
@@ -1118,14 +1202,14 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 				.. " sequence=" .. tostring(payload.sequence)
 				.. " selected_at=" .. tostring(payload.selected_at or ""))
 		end
-		if callback then callback(callbackOk, decoded, response) end
-		local waitingCallbacks = self.statusPostInFlightCallbacks[signature] or {}
-		self.statusPostInFlightCallbacks[signature] = nil
-		for _, queuedCallback in ipairs(waitingCallbacks) do
-			queuedCallback(callbackOk, decoded, response)
-		end
-	end)
-end
+			safe_invoke_callback(callback, callbackOk, decoded, response)
+			local waitingCallbacks = self.statusPostInFlightCallbacks[signature] or {}
+			self.statusPostInFlightCallbacks[signature] = nil
+			for _, queuedCallback in ipairs(waitingCallbacks) do
+				safe_invoke_callback(queuedCallback, callbackOk, decoded, response)
+			end
+		end)
+	end
 
 function PackSync:ApplyLocalStatus(status, message, progress)
 	status = tostring(status or self.status.Unknown)
@@ -1143,7 +1227,8 @@ function PackSync:ApplyLocalStatus(status, message, progress)
 		.. " browseOnly=" .. tostring(self.activeBrowseOnlyDownload == true))
 	self.currentStatus = status
 	self.currentStatusMessage = message
-	self.statusChangedAt = GetTimeSinceStart()
+	local now = GetTimeSinceStart and GetTimeSinceStart() or 0
+	self.statusChangedAt = now
 	local localSignature = table.concat({
 		tostring(ITGOnline and ITGOnline.currentRoomId or ""),
 		tostring(selected_at(self.currentSongInfo)),
@@ -1152,12 +1237,18 @@ function PackSync:ApplyLocalStatus(status, message, progress)
 		tostring(progress or ""),
 	}, "||")
 	if localSignature ~= "" and localSignature == tostring(self.lastAppliedLocalStatusSignature or "") then
-		trace("ApplyLocalStatus skipped duplicate status=" .. tostring(status)
-			.. " progress=" .. tostring(progress)
-			.. " selected_at=" .. tostring(selected_at(self.currentSongInfo)))
-		return
+		local age = now - (tonumber(self.lastAppliedLocalStatusAt) or 0)
+		local suppressFor = tonumber(self.localStatusDuplicateSuppressSeconds) or 0.35
+		if age >= 0 and age < suppressFor then
+			trace("ApplyLocalStatus skipped duplicate status=" .. tostring(status)
+				.. " progress=" .. tostring(progress)
+				.. " selected_at=" .. tostring(selected_at(self.currentSongInfo))
+				.. " age=" .. string.format("%.3f", age))
+			return
+		end
 	end
 	self.lastAppliedLocalStatusSignature = localSignature
+	self.lastAppliedLocalStatusAt = now
 	if MESSAGEMAN then
 		local activeRoomId = ITGOnline and ITGOnline.currentRoomId or nil
 		local activeRoomPhase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil
@@ -1318,10 +1409,6 @@ function PackSync:ResetLocalState(reason)
 		})
 		return
 	end
-	if reason == "no_song_confirmed" and self.activeBrowseOnlyDownload == true then
-		trace("Keep browse-only download state during no_song_confirmed reset")
-		return
-	end
 	if reason == "no_song_confirmed"
 		and self.currentSongInfo == nil
 		and self.currentStatus == self.status.Unknown
@@ -1333,14 +1420,6 @@ function PackSync:ResetLocalState(reason)
 		trace("Reset local state skipped; already clear (" .. tostring(reason) .. ")")
 		return
 	end
-	if reason == "no_song_confirmed" and (
-		self.currentStatus == self.status.DownloadRequested
-		or self.currentStatus == self.status.DownloadInProgress
-		or self.currentStatus == self.status.ReloadingSongs
-	) then
-		trace("Keep active download state during no_song_confirmed reset status=" .. tostring(self.currentStatus))
-		return
-	end
 	self.currentSongInfo = nil
 	self.currentStatus = self.status.Unknown
 	self.currentStatusMessage = nil
@@ -1348,11 +1427,14 @@ function PackSync:ResetLocalState(reason)
 	self.watchdogLastKey = ""
 	self.sequence = 0
 	self.lastSelectedAt = ""
-	self.lastPostedStatusSignature = ""
-	self.lastPostedStatusAt = 0
-	self.statusPostInFlightSignature = ""
-	self.lastAppliedLocalStatusSignature = ""
-	self.lastResetSignature = ""
+		self.lastPostedStatusSignature = ""
+		self.lastPostedStatusAt = 0
+		self.statusPostInFlightSignature = ""
+		self.statusPostInFlightStartedAt = 0
+		self.statusPostInFlightCallbacks = {}
+		self.lastAppliedLocalStatusSignature = ""
+		self.lastAppliedLocalStatusAt = 0
+		self.lastResetSignature = ""
 	self.lastResetAt = 0
 	self.lastNoSongClearResetAt = now
 	self.lastNoSongClearResetReason = normalizedReason
@@ -1365,10 +1447,23 @@ function PackSync:ResetLocalState(reason)
 	self:ClearActiveDownloadId(reason or "reset_local_state")
 	self.activeBrowseOnlyDownload = false
 	self.pendingPostReloadSongInfo = nil
-	self.pendingQuarantinePath = nil
-	self.pendingPostReloadBrowseOnly = false
-	self:NextDownloadGeneration(reason or "reset_local_state")
-	trace("Reset local state" .. (reason and (" (" .. tostring(reason) .. ")") or ""))
+		self.pendingQuarantinePath = nil
+		self.pendingPostReloadBrowseOnly = false
+		self:NextDownloadGeneration(reason or "reset_local_state")
+		if MESSAGEMAN then
+			MESSAGEMAN:Broadcast("OnlinePackSyncLocalStatus", {
+				status = self.status.Unknown,
+				message = nil,
+				download_progress = nil,
+				selected_at = "",
+				room_id = ITGOnline and ITGOnline.currentRoomId or nil,
+				room_phase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or nil,
+				mode = ITGOnline and ITGOnline.currentRoomId and "joined" or "browse",
+				local_only = true,
+				reset_reason = normalizedReason,
+			})
+		end
+		trace("Reset local state" .. (reason and (" (" .. tostring(reason) .. ")") or ""))
 	trace_online_state("reset_local_state_complete", {
 		reason = reason or "unknown",
 		status = self.currentStatus or "nil",
@@ -1428,7 +1523,7 @@ function PackSync:InvalidateLocalChartIndex()
 end
 
 function PackSync:LocalChartIndex()
-	local key = song_count_key()
+	local key = local_song_library_key()
 	if self.localChartIndex and self.localChartIndexKey == key then
 		trace("LocalChartIndex reused key=" .. tostring(key))
 		return self.localChartIndex
@@ -1439,7 +1534,9 @@ function PackSync:LocalChartIndex()
 	local stepsCount = 0
 	local hashCount = 0
 	if SONGMAN and SONGMAN.GetAllSongs then
-		for song in ivalues(SONGMAN:GetAllSongs()) do
+		local ok, songs = pcall(function() return SONGMAN:GetAllSongs() end)
+		if not ok or type(songs) ~= "table" then songs = {} end
+		for song in ivalues(songs) do
 			songCount = songCount + 1
 			for steps in ivalues(playable_steps(song)) do
 				stepsCount = stepsCount + 1
@@ -1567,23 +1664,43 @@ function PackSync:FindLocalMatch(songInfo)
 	self:UpdateStatus(self.status.SearchingLocalCharts, nil)
 
 	local expectedChartHash = selected_chart_hash(songInfo)
-	if expectedChartHash == "" then
-		trace("Local chart scan failed reason=missing_expected_chart_hash title=" .. selected_title(songInfo)
-			.. " pack=" .. selected_pack(songInfo)
-			.. " selected_at=" .. selected_at(songInfo))
-		return { ok = false, status = "missing", reason = "chart_hash_mismatch" }
-	end
+		if expectedChartHash == "" then
+			trace("Local chart scan failed reason=missing_expected_chart_hash title=" .. selected_title(songInfo)
+				.. " pack=" .. selected_pack(songInfo)
+				.. " selected_at=" .. selected_at(songInfo))
+			return { ok = false, status = "missing", reason = "chart_hash_mismatch" }
+		end
+		if not (SONGMAN and SONGMAN.FindSong and SONGMAN.GetAllSongs) then
+			trace("Local chart scan failed reason=songman_unavailable title=" .. selected_title(songInfo)
+				.. " pack=" .. selected_pack(songInfo)
+				.. " selected_at=" .. selected_at(songInfo))
+			self:ApplyLocalStatus(self.status.NoCompatibleChartFound, "La bibliothèque locale n'est pas disponible.")
+			return { ok = false, status = "missing", reason = "songman_unavailable" }
+		end
 
-	local exactPath = selected_path(songInfo)
-	local exactSong = exactPath ~= "" and SONGMAN:FindSong(exactPath) or nil
-	trace("Local chart exact path lookup path=" .. tostring(exactPath)
-		.. " found=" .. tostring(exactSong ~= nil))
-	if not exactSong and exactPath ~= "" then
-		local parts = split_path_segments(exactPath)
-		if parts and parts[2] then exactSong = SONGMAN:FindSong(parts[2]) end
-		trace("Local chart fallback path lookup folder=" .. tostring(parts and parts[2] or "nil")
+		local exactPath = selected_path(songInfo)
+		local exactSong = nil
+		if exactPath ~= "" then
+			local ok, found = pcall(function() return SONGMAN:FindSong(exactPath) end)
+			exactSong = ok and found or nil
+		end
+		trace("Local chart exact path lookup path=" .. tostring(exactPath)
 			.. " found=" .. tostring(exactSong ~= nil))
-	end
+		if not exactSong and exactPath ~= "" then
+			local parts = split_path_segments(exactPath)
+			local fallbackPath = ""
+			if #parts >= 3 and lower(parts[1]) == "songs" then
+				fallbackPath = parts[2] .. "/" .. parts[3] .. "/"
+			elseif #parts >= 2 then
+				fallbackPath = parts[#parts - 1] .. "/" .. parts[#parts] .. "/"
+			end
+			if fallbackPath ~= "" then
+				local ok, found = pcall(function() return SONGMAN:FindSong(fallbackPath) end)
+				exactSong = ok and found or nil
+			end
+			trace("Local chart fallback path lookup folder=" .. tostring(fallbackPath ~= "" and fallbackPath or "nil")
+				.. " found=" .. tostring(exactSong ~= nil))
+		end
 
 	local mismatchReason = nil
 	local function evaluate_candidate(song, source)
@@ -1621,9 +1738,11 @@ function PackSync:FindLocalMatch(songInfo)
 		if result then return result end
 	end
 
-	for song in ivalues(SONGMAN:GetAllSongs()) do
-		if song ~= exactSong and song_matches_text_prefilter(song, songInfo) then
-			local result = evaluate_candidate(song)
+		local okSongs, allSongs = pcall(function() return SONGMAN:GetAllSongs() end)
+		allSongs = okSongs and type(allSongs) == "table" and allSongs or {}
+		for song in ivalues(allSongs) do
+			if song ~= exactSong and song_matches_text_prefilter(song, songInfo) then
+				local result = evaluate_candidate(song)
 			if result then return result end
 		end
 	end
@@ -1688,7 +1807,11 @@ function PackSync:ApplySelectedChart(songInfo)
 		.. " downloadWorkInFlight=" .. tostring(self:HasDownloadWorkInFlight())
 		.. " activeDownloadId=" .. tostring(self.activeDownloadId or "")
 		.. " generation=" .. tostring(self.downloadGeneration or "nil"))
-	local result = self:FindLocalMatch(songInfo)
+		local okFind, result = pcall(function() return self:FindLocalMatch(songInfo) end)
+		if not okFind or type(result) ~= "table" then
+			trace("ApplySelectedChart local match failed err=" .. tostring(result))
+			result = { ok = false, status = "missing", reason = "local_match_error" }
+		end
 	trace("ApplySelectedChart result ok=" .. tostring(result and result.ok == true)
 		.. " status=" .. tostring(result and result.status or "nil")
 		.. " reason=" .. tostring(result and result.reason or "nil")
@@ -1701,7 +1824,9 @@ function PackSync:ApplySelectedChart(songInfo)
 	})
 	if result.ok then
 		set_current_selection(result.song, result.steps, songInfo, "pack_sync_apply_selected_chart")
-		MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
+		if MESSAGEMAN then
+			MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
+		end
 		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
 			ITGOnline:ConfirmSelectedSongAvailability("local_chart_match_found", function(ok)
 				trace("ApplySelectedChart availability confirmed ok=" .. tostring(ok == true)
@@ -1723,9 +1848,13 @@ function PackSync:ApplySelectedChart(songInfo)
 		return false
 	end
 	if result.status == "mismatch" then
-		MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = reason, chartMismatch = true })
+		if MESSAGEMAN then
+			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = reason, chartMismatch = true })
+		end
 	else
-		MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = reason, noCompatibleChart = true })
+		if MESSAGEMAN then
+			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = reason, noCompatibleChart = true })
+		end
 	end
 	return false
 end
@@ -1848,7 +1977,18 @@ end
 
 local function request_json(url, callback, options)
 	options = options or {}
-	NETWORK:HttpRequest({
+	if not (NETWORK and NETWORK.HttpRequest) then
+		trace("HTTP JSON skipped reason=network_unavailable url=" .. tostring(url))
+		safe_invoke_callback(callback, false, nil, { errorMessage = "Le reseau du moteur n'est pas disponible." })
+		return
+	end
+	if type(JsonDecode) ~= "function" then
+		trace("HTTP JSON skipped reason=json_decode_unavailable url=" .. tostring(url))
+		safe_invoke_callback(callback, false, nil, { errorMessage = "Le decodeur JSON n'est pas disponible." })
+		return
+	end
+	local okRequest, requestError = pcall(function()
+		NETWORK:HttpRequest({
 		url = url,
 		method = "GET",
 		headers = {
@@ -1859,32 +1999,39 @@ local function request_json(url, callback, options)
 		transferTimeout = 20,
 		onResponse = function(response)
 			local statusCode = tonumber(response and response.statusCode) or 0
-			if statusCode ~= 200 then
-				if statusCode == 404 and options.expected404 == true then
-					trace("HTTP JSON not found (expected fallback) url=" .. tostring(url))
-				else
-					trace("HTTP JSON failed status=" .. tostring(statusCode) .. " url=" .. tostring(url))
-				end
-				callback(false, nil, response)
-				return
-			end
-			local ok, decoded = pcall(JsonDecode, response.body or "")
-			if not ok or decoded == nil then
-				local sample = tostring(response and response.body or ""):gsub("%s+", " "):sub(1, 200)
-				trace("HTTP JSON decode failed status=" .. tostring(statusCode) .. " url=" .. tostring(url) .. " body_sample=" .. sample)
-				local firstByte = string.byte(response and response.body or "", 1)
-				local secondByte = string.byte(response and response.body or "", 2)
-				if firstByte == 0x1f and secondByte == 0x8b then
-					callback(false, nil, {
-						statusCode = statusCode,
-						errorMessage = "Compressed StepManiaOnline response could not be decoded.",
-					})
+				if statusCode ~= 200 then
+					if statusCode == 404 and options.expected404 == true then
+						trace("HTTP JSON not found (expected fallback) url=" .. tostring(url))
+					else
+						trace("HTTP JSON failed status=" .. tostring(statusCode) .. " url=" .. tostring(url))
+					end
+					safe_invoke_callback(callback, false, nil, response)
 					return
 				end
-			end
-			callback(ok and decoded ~= nil, decoded, response)
-		end,
-	})
+				local ok, decoded = pcall(JsonDecode, response.body or "")
+				if not ok or decoded == nil then
+					local bodyLength = #(tostring(response and response.body or ""))
+					trace("HTTP JSON decode failed status=" .. tostring(statusCode)
+						.. " url=" .. tostring(url)
+						.. " body_length=" .. tostring(bodyLength))
+					local firstByte = string.byte(response and response.body or "", 1)
+					local secondByte = string.byte(response and response.body or "", 2)
+					if firstByte == 0x1f and secondByte == 0x8b then
+						safe_invoke_callback(callback, false, nil, {
+							statusCode = statusCode,
+							errorMessage = "Compressed StepManiaOnline response could not be decoded.",
+						})
+						return
+					end
+				end
+				safe_invoke_callback(callback, ok and decoded ~= nil, decoded, response)
+			end,
+		})
+	end)
+	if not okRequest then
+		trace("HTTP JSON request failed url=" .. tostring(url) .. " err=" .. tostring(requestError))
+		safe_invoke_callback(callback, false, nil, { errorMessage = "La requete StepManiaOnline a echoue." })
+	end
 end
 
 local function path_escape(value)
@@ -2013,9 +2160,9 @@ local function install_extracted_pack_at_songs_root(quarantinePath, expectedPack
 	if path_exists(rootGroupPath) or path_exists(rootGroupPath .. "/") then
 		log_dir_listing("Install existing target", rootGroupPath .. "/")
 		remove_directory_if_possible(quarantinePath)
-		trace("Install extracted pack reused existing target=" .. tostring(rootGroupPath)
+		trace("Install extracted pack rejected existing target=" .. tostring(rootGroupPath)
 			.. " quarantineExistsAfterCleanup=" .. tostring(path_exists(quarantinePath) or path_exists(quarantinePath .. "/")))
-		return rootGroupPath .. "/", nil
+		return nil, "Un dossier de pack du meme nom existe deja localement."
 	end
 	if not FILEMAN or not FILEMAN.MoveOnlineSongPack then
 		return nil, "Le moteur ne permet pas d'installer le pack téléchargé."
@@ -2065,7 +2212,16 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 		.. " chartHash=" .. tostring(selected_chart_hash(songInfo)):sub(1, 12))
 	local origin = stepmaniaonline_origin()
 	local function search(queryType, query, cb)
-		local encoded = NETWORK:EncodeQueryParameters({ type = queryType, query = query })
+		local encoded = ""
+		if NETWORK and NETWORK.EncodeQueryParameters then
+			local ok, result = pcall(function()
+				return NETWORK:EncodeQueryParameters({ type = queryType, query = query })
+			end)
+			encoded = ok and tostring(result or "") or ""
+		end
+		if encoded == "" then
+			encoded = "type=" .. path_escape(queryType) .. "&query=" .. path_escape(query)
+		end
 		trace("SMO search begin type=" .. tostring(queryType)
 			.. " query=" .. tostring(query)
 			.. " origin=" .. tostring(origin))
@@ -2079,8 +2235,19 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 	trace("SearchStepManiaOnline begin pack=" .. tostring(pack)
 		.. " title=" .. tostring(title)
 		.. " artist=" .. tostring(artist)
-		.. " chartKey=" .. tostring(chartKey)
-		.. " selected_at=" .. tostring(selected_at(songInfo)))
+			.. " chartKey=" .. tostring(chartKey)
+			.. " selected_at=" .. tostring(selected_at(songInfo)))
+
+	local function pack_result_has_title(packResult)
+		if title == "" then return true end
+		if type(packResult) ~= "table" or type(packResult.matching_songs) ~= "table" then return false end
+		for songTitle in ivalues(packResult.matching_songs) do
+			if lower(songTitle) == lower(title) then
+				return true
+			end
+		end
+		return false
+	end
 
 	local function choose_chart_key_pack(chartDecoded)
 		local commonPacks = chartDecoded and chartDecoded.common_packs or {}
@@ -2099,16 +2266,8 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 		for packResult in ivalues(results or {}) do
 			local name = trim(packResult.name)
 			local packExact = pack ~= "" and lower(name) == lower(pack)
-			local titleMatches = false
-			if type(packResult.matching_songs) == "table" and #packResult.matching_songs > 0 and title ~= "" then
-				for songTitle in ivalues(packResult.matching_songs) do
-					if lower(songTitle) == lower(title) then
-						titleMatches = true
-						break
-					end
-				end
-			end
-			if packExact or titleMatches then
+			local titleMatches = pack_result_has_title(packResult)
+			if (packExact and titleMatches) or (title ~= "" and titleMatches) then
 				candidates[#candidates + 1] = packResult
 			end
 		end
@@ -2236,29 +2395,26 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 				packCandidatesPayload = dedupe_candidates(packCandidatesPayload)
 			end
 
-			local exactPackMatches = {}
-			if decoded and type(decoded.results) == "table" then
-				for packResult in ivalues(decoded.results) do
-					if lower(trim(packResult.name)) == lower(pack) then
-						exactPackMatches[#exactPackMatches + 1] = packResult
+				local exactPackMatches = {}
+				if decoded and type(decoded.results) == "table" then
+					for packResult in ivalues(decoded.results) do
+						if lower(trim(packResult.name)) == lower(pack) and pack_result_has_title(packResult) then
+							exactPackMatches[#exactPackMatches + 1] = packResult
+						end
 					end
 				end
-			end
-			if #exactPackMatches == 1 then
+				if #exactPackMatches == 1 then
 				callback(true, exactPackMatches[1])
 				return
 			end
-			-- When pack search already returned candidates, do not hard-depend on title search:
-			-- title endpoint can be flaky and should not block the flow.
-			if #packCandidatesPayload == 1 then
-				callback(true, {
-					id = packCandidatesPayload[1].id,
-					name = packCandidatesPayload[1].name,
-					songs_count = packCandidatesPayload[1].songs_count,
-				})
-				return
-			elseif #packCandidatesPayload > 1 then
-				callback(false, nil, {
+				if #packCandidatesPayload == 1 then
+					callback(false, nil, {
+						errorMessage = "La recherche de pack StepManiaOnline doit etre confirmee par titre ou chart.",
+						candidates = packCandidatesPayload,
+					})
+					return
+				elseif #packCandidatesPayload > 1 then
+					callback(false, nil, {
 					errorMessage = "La recherche de pack StepManiaOnline correspond a plusieurs packs.",
 					candidates = packCandidatesPayload,
 				})
@@ -2269,21 +2425,13 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 				trace("SMO title refinement result ok=" .. tostring(titleOk == true)
 					.. " results=" .. tostring(titleDecoded and titleDecoded.results and #titleDecoded.results or 0)
 					.. " title=" .. tostring(title))
-				if not titleOk then
-					-- Keep a resilient fallback: if title search fails upstream, but pack search
-					-- yielded one exact pack match, continue with that match instead of hard failing.
-					if #exactPackMatches == 1 then
-						callback(true, exactPackMatches[1])
-					elseif #packCandidatesPayload == 1 then
-						callback(true, {
-							id = packCandidatesPayload[1].id,
-							name = packCandidatesPayload[1].name,
-							songs_count = packCandidatesPayload[1].songs_count,
-						})
-					elseif #packCandidatesPayload > 1 then
-						callback(false, nil, {
-							errorMessage = "La recherche titre StepManiaOnline a echoue.",
-							candidates = packCandidatesPayload,
+					if not titleOk then
+						if title == "" and #exactPackMatches == 1 then
+							callback(true, exactPackMatches[1])
+						elseif #packCandidatesPayload > 0 then
+							callback(false, nil, {
+								errorMessage = "La recherche titre StepManiaOnline a echoue.",
+								candidates = packCandidatesPayload,
 						})
 					else
 						callback(false, nil, { errorMessage = "La recherche titre StepManiaOnline a echoue." })
@@ -2330,15 +2478,25 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		.. " existingDownloadKey=" .. tostring(self.downloadInFlightKey or "")
 		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
-	if not pack or not pack.id then
-		trace("DownloadPackByCandidate blocked reason=invalid_candidate"
-			.. " hasPack=" .. tostring(pack ~= nil)
-			.. " packId=" .. tostring(pack and pack.id or "nil")
-			.. " title=" .. tostring(selected_title(songInfo))
-			.. " selected_at=" .. tostring(selected_at(songInfo)))
-		if callback then callback(false, "Pack candidat invalide.") end
-		return
-	end
+		if not pack or not pack.id then
+			trace("DownloadPackByCandidate blocked reason=invalid_candidate"
+				.. " hasPack=" .. tostring(pack ~= nil)
+				.. " packId=" .. tostring(pack and pack.id or "nil")
+				.. " title=" .. tostring(selected_title(songInfo))
+				.. " selected_at=" .. tostring(selected_at(songInfo)))
+			if callback then callback(false, "Pack candidat invalide.") end
+			return
+		end
+		if not (NETWORK and NETWORK.HttpRequest) then
+			trace("DownloadPackByCandidate blocked reason=network_unavailable")
+			if callback then callback(false, "Le reseau du moteur n'est pas disponible.") end
+			return
+		end
+		if not (FILEMAN and FILEMAN.DoesFileExist and FILEMAN.Unzip) then
+			trace("DownloadPackByCandidate blocked reason=fileman_unavailable")
+			if callback then callback(false, "Le gestionnaire de fichiers du moteur n'est pas disponible.") end
+			return
+		end
 	if not current_user_is_active_room_member() then
 		trace("DownloadPackByCandidate blocked reason=not_active_room_member"
 			.. " packId=" .. tostring(pack and pack.id or "nil")
@@ -2386,9 +2544,15 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	end
 	local downloadGeneration = tonumber(options.downloadGeneration)
 		or self:NextDownloadGeneration(browseOnly and "browse_candidate_start" or "selected_candidate_start")
-	local fileName = tostring(packId) .. "_" .. safe_file_name(packName)
-	local quarantinePath = pack_quarantine_path(packId, packName)
-	local maxDownloadBytes = tonumber(self.maxDownloadBytes) or (512 * 1024 * 1024)
+		local fileName = tostring(packId) .. "_" .. safe_file_name(packName)
+		local quarantinePath = pack_quarantine_path(packId, packName)
+		local maxDownloadBytes = tonumber(self.maxDownloadBytes) or (512 * 1024 * 1024)
+		local defaultMaxDownloadBytes = 512 * 1024 * 1024
+		if maxDownloadBytes < (16 * 1024 * 1024) or maxDownloadBytes > (1024 * 1024 * 1024) then
+			trace("Download max bytes clamped raw=" .. tostring(self.maxDownloadBytes)
+				.. " effective=" .. tostring(defaultMaxDownloadBytes))
+			maxDownloadBytes = defaultMaxDownloadBytes
+		end
 
 	local url = stepmaniaonline_origin() .. "/download/pack/" .. tostring(packId) .. "/"
 	local downloadMessage = "Telechargement de " .. tostring(packName)
@@ -2441,21 +2605,13 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			message = message,
 			broadcastMissing = broadcastMissing ~= false,
 		})
-		trace_online_state("download_failed", {
-			selected_at = selected_at(songInfo),
-			packId = packId,
-			packName = packName,
-			generation = downloadGeneration,
-			message = message,
-			broadcastMissing = broadcastMissing ~= false,
-			downloadKey = self.downloadInFlightKey or "",
-			activeDownloadId = self.activeDownloadId or "",
-		})
 		self.downloadInFlightKey = nil
 		self.downloadStartedAt = nil
 		self.downloadLastByteAt = nil
 		self.downloadLastByteCount = nil
+		self.pendingPostReloadCallback = nil
 		if browseOnly then self.activeBrowseOnlyDownload = false end
+		self:ClearActiveDownloadId("candidate_download_failed")
 		self:UpdateStatus(self.status.DownloadFailed, message)
 		remove_directory_if_possible(quarantinePath)
 		if not browseOnly and broadcastMissing ~= false and MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
@@ -2492,11 +2648,11 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			downloadKey = self.downloadInFlightKey or "",
 			activeDownloadId = self.activeDownloadId or "",
 		})
-		if callback then callback(true) end
 		return true
 	end
 
-	NETWORK:HttpRequest({
+	local okRequest, requestError = pcall(function()
+		NETWORK:HttpRequest({
 		url = url,
 		method = "GET",
 		downloadFile = fileName,
@@ -2594,7 +2750,6 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			end
 
 			remove_directory_if_possible(quarantinePath)
-			remove_directory_if_possible(legacy_online_downloads_root())
 			create_directory_if_possible(quarantinePath)
 			trace("Download unzip begin pack=" .. tostring(packName)
 				.. " zipPath=" .. tostring(zipPath)
@@ -2625,11 +2780,16 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			self.pendingPostReloadSongInfo = songInfo
 			self.pendingQuarantinePath = installedPath
 			self.pendingPostReloadBrowseOnly = browseOnly
+			self.pendingPostReloadCallback = callback
 			self:UpdateStatus(self.status.ReloadingSongs, "Rechargement des chansons")
 			transition_to_reload_songs()
 			finish_candidate_download()
 		end,
 	})
+	end)
+	if not okRequest then
+		fail_candidate_download("La requete de telechargement a echoue: " .. tostring(requestError or "unknown error"))
+	end
 end
 
 function PackSync:DownloadSelectedPack(songInfo, callback)
@@ -2683,11 +2843,12 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 			return
 		end
 		self.downloadInFlightKey = nil
-		self.downloadStartedAt = nil
-		self.downloadLastByteAt = nil
-		self.downloadLastByteCount = nil
-		self:UpdateStatus(self.status.DownloadFailed, message)
-		if callback then callback(false, message) end
+			self.downloadStartedAt = nil
+			self.downloadLastByteAt = nil
+			self.downloadLastByteCount = nil
+			self:ClearActiveDownloadId("selected_download_failed")
+			self:UpdateStatus(self.status.DownloadFailed, message)
+			if callback then callback(false, message) end
 	end
 
 	self:UpdateStatus(self.status.DownloadRequested, nil)
@@ -2738,6 +2899,7 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 				return
 			end
 			self.downloadInFlightKey = nil
+			self:ClearActiveDownloadId("selected_candidate_download_failed")
 			if callback then callback(false, downloadMessage or "Le téléchargement du pack a échoué.") end
 		end, { allowExistingDownloadKey = downloadKey, downloadGeneration = downloadGeneration })
 	end)
@@ -2797,6 +2959,7 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 		self.downloadLastByteAt = nil
 		self.downloadLastByteCount = nil
 		self.pendingPostReloadBrowseOnly = false
+		self:ClearActiveDownloadId("browse_download_failed")
 		self:UpdateStatus(self.status.DownloadFailed, message)
 		if callback then callback(false, message) end
 	end
@@ -2851,6 +3014,7 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 			end
 			self.downloadInFlightKey = nil
 			self.activeBrowseOnlyDownload = false
+			self:ClearActiveDownloadId("browse_candidate_download_failed")
 			if callback then callback(false, downloadMessage or "Le telechargement du pack a echoue.") end
 		end, { browseOnly = true, allowExistingDownloadKey = downloadKey, downloadGeneration = downloadGeneration })
 	end)
@@ -2874,26 +3038,35 @@ function PackSync:ValidatePendingPostReload()
 	local songInfo = self.pendingPostReloadSongInfo
 	local quarantinePath = self.pendingQuarantinePath
 	local browseOnly = self.pendingPostReloadBrowseOnly == true
+	local pendingCallback = self.pendingPostReloadCallback
 	local packName = selected_pack(songInfo)
+	local pendingCompleted = false
+	local function complete_pending(ok, message, reason)
+		if pendingCompleted then return end
+		pendingCompleted = true
+		self.pendingPostReloadSongInfo = nil
+		self.pendingQuarantinePath = nil
+		self.pendingPostReloadBrowseOnly = false
+		self.pendingPostReloadCallback = nil
+		self.downloadInFlightKey = nil
+		self.activeBrowseOnlyDownload = false
+		self:ClearActiveDownloadId(reason or "post_reload_validation_complete")
+		safe_invoke_callback(pendingCallback, ok == true, message)
+	end
 	trace("ValidatePendingPostReload begin hasSong=" .. tostring(songInfo ~= nil)
 		.. " browseOnly=" .. tostring(browseOnly == true)
 		.. " pack=" .. tostring(packName)
 		.. " quarantine=" .. tostring(quarantinePath or "nil")
-		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
-	self.pendingPostReloadSongInfo = nil
-	self.pendingQuarantinePath = nil
-	self.pendingPostReloadBrowseOnly = false
-	self.downloadInFlightKey = nil
-	self:ClearActiveDownloadId("post_reload_validation_begin")
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 	if not songInfo then
 		trace("ValidatePendingPostReload skipped reason=no_pending_song")
+		complete_pending(false, "Aucun téléchargement en attente de validation.", "post_reload_no_pending_song")
 		return false
 	end
 
 	self:InvalidateLocalChartIndex()
 	if browseOnly then
-		self.activeBrowseOnlyDownload = false
 		trace("PostReload browse-only pack download complete quarantine=" .. tostring(quarantinePath or ""))
 		if quarantinePath and quarantinePath ~= "" then
 			log_dir_listing("PostReload browse-only pack", quarantinePath)
@@ -2903,28 +3076,30 @@ function PackSync:ValidatePendingPostReload()
 			remove_directory_if_possible(quarantinePath)
 			self:UnmarkPackInstalled(packName, "browse_reload_validation_failed")
 			self:UpdateStatus(self.status.DownloadFailed, "Le pack telecharge n'a pas ete trouve apres reload.")
-			if MESSAGEMAN then
-				MESSAGEMAN:Broadcast("OnlinePackDownloadFailed", { songInfo = songInfo, reason = "download_failed" })
+				if MESSAGEMAN then
+					MESSAGEMAN:Broadcast("OnlinePackDownloadFailed", { songInfo = songInfo, reason = "download_failed" })
+				end
+				complete_pending(false, "Le pack telecharge n'a pas ete trouve apres reload.", "browse_reload_validation_failed")
+				return false
 			end
-			return false
-		end
-		self:MarkPackInstalled(packName)
-		self:UpdateStatus(self.status.DownloadedOk, "Pack telecharge. En attente du choix de chanson du manager.")
+			self:MarkPackInstalled(packName)
+			self:UpdateStatus(self.status.DownloadedOk, "Pack telecharge. En attente du choix de chanson du manager.")
 		if MESSAGEMAN then
 			MESSAGEMAN:Broadcast("OnlinePackDownloaded", { songInfo = songInfo })
 		end
 		local selectedSong = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song or nil
-		if selectedSong and selected_song_hash(selectedSong) ~= "" and selected_chart_hash(selectedSong) ~= "" then
-			trace("Browse-only download complete; applying current selected song after reload"
+			if selectedSong and selected_song_hash(selectedSong) ~= "" and selected_chart_hash(selectedSong) ~= "" then
+				trace("Browse-only download complete; applying current selected song after reload"
 				.. " title=" .. tostring(selected_title(selectedSong))
 				.. " pack=" .. tostring(selected_pack(selectedSong))
 				.. " selected_at=" .. tostring(selected_at(selectedSong))
 				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 				.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
-			self:ApplySelectedChart(selectedSong)
+				self:ApplySelectedChart(selectedSong)
+			end
+			complete_pending(true, "Pack telecharge et valide apres reload.", "browse_reload_validation_ok")
+			return true
 		end
-		return true
-	end
 	trace("PostReload validate expected chart_hash=" .. tostring(selected_chart_hash(songInfo))
 		.. " expected song_hash=" .. tostring(selected_song_hash(songInfo))
 		.. " quarantine=" .. tostring(quarantinePath or ""))
@@ -2932,8 +3107,12 @@ function PackSync:ValidatePendingPostReload()
 		log_dir_listing("PostReload quarantine", quarantinePath)
 	end
 	self.validatingPostReload = true
-	local result = self:FindLocalMatch(songInfo)
+	local okFind, result = pcall(function() return self:FindLocalMatch(songInfo) end)
 	self.validatingPostReload = false
+	if not okFind or type(result) ~= "table" then
+		trace("PostReload local match failed err=" .. tostring(result))
+		result = { ok = false, status = "missing", reason = "local_match_error" }
+	end
 	trace("PostReload local match result ok=" .. tostring(result and result.ok == true)
 		.. " status=" .. tostring(result and result.status or "nil")
 		.. " reason=" .. tostring(result and result.reason or "nil")
@@ -2945,11 +3124,12 @@ function PackSync:ValidatePendingPostReload()
 			remove_directory_if_possible(quarantinePath)
 			self:UnmarkPackInstalled(packName, "selected_chart_not_in_downloaded_pack")
 			self:UpdateStatus(self.status.DownloadFailed, "Le pack téléchargé ne contient pas la stepchart attendue.")
-			if MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
-				MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
+				if MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
+					MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
+				end
+				complete_pending(false, "Le pack téléchargé ne contient pas la stepchart attendue.", "selected_chart_not_in_downloaded_pack")
+				return false
 			end
-			return false
-		end
 		set_current_selection(result.song, result.steps, songInfo, "pack_sync_reload_apply_selected_chart")
 		trace("Downloaded OK and local chart validated")
 		self:MarkPackInstalled(packName)
@@ -2970,15 +3150,16 @@ function PackSync:ValidatePendingPostReload()
 			if MESSAGEMAN then
 				MESSAGEMAN:Broadcast("OnlinePackDownloaded", { songInfo = songInfo, staleSelection = true })
 			end
-			if currentSelectedSong and currentSelectedAt ~= "" then
-				trace("Applying current manager selection after stale-selection download completion"
+				if currentSelectedSong and currentSelectedAt ~= "" then
+					trace("Applying current manager selection after stale-selection download completion"
 					.. " currentSelectedAt=" .. tostring(currentSelectedAt)
 					.. " currentTitle=" .. tostring(selected_title(currentSelectedSong))
 					.. " currentPack=" .. tostring(selected_pack(currentSelectedSong)))
-				self:ApplySelectedChart(currentSelectedSong)
+					self:ApplySelectedChart(currentSelectedSong)
+				end
+				complete_pending(true, "Pack telecharge et valide apres reload.", "selected_reload_validation_stale_selection")
+				return true
 			end
-			return true
-		end
 
 		self:UpdateStatus(self.status.DownloadedOk, nil)
 		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
@@ -2994,7 +3175,10 @@ function PackSync:ValidatePendingPostReload()
 			self:UpdateStatus(self.status.Ready, nil)
 			self:MarkLobbyReadyForSelectedSong("downloaded_ok_no_client_confirm")
 		end
-		MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
+		if MESSAGEMAN then
+			MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
+		end
+		complete_pending(true, "Pack telecharge et valide apres reload.", "selected_reload_validation_ok")
 		return true
 	end
 
@@ -3005,24 +3189,26 @@ function PackSync:ValidatePendingPostReload()
 		if ITGOnline and ITGOnline.ReportSongAvailability and self:SongInfoMatchesCurrentSelection(songInfo) then
 			ITGOnline:ReportSongAvailability(true, "chart_mismatch")
 		end
-		if MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
-			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "chart_mismatch", chartMismatch = true })
-		end
-	else
-		self:UpdateStatus(self.status.DownloadFailed, "La chanson est introuvable après reload.")
-		remove_directory_if_possible(quarantinePath)
+			if MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
+				MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "chart_mismatch", chartMismatch = true })
+			end
+			complete_pending(false, "La musique ou la stepchart trouvée est différente de celle du manager.", "post_reload_chart_mismatch")
+		else
+			self:UpdateStatus(self.status.DownloadFailed, "La chanson est introuvable après reload.")
+			remove_directory_if_possible(quarantinePath)
 		self:UnmarkPackInstalled(packName, "downloaded_song_missing_after_reload")
 		if ITGOnline and ITGOnline.ReportSongAvailability and self:SongInfoMatchesCurrentSelection(songInfo) then
 			ITGOnline:ReportSongAvailability(true, "download_failed")
 		end
 		if MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
 			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
-		else
-			trace("PostReload missing broadcast skipped reason=stale_or_no_active_selection"
-				.. " selectedAt=" .. tostring(selected_at(songInfo))
-				.. " roomSelectedAt=" .. tostring(current_room_selected_at()))
+			else
+				trace("PostReload missing broadcast skipped reason=stale_or_no_active_selection"
+					.. " selectedAt=" .. tostring(selected_at(songInfo))
+					.. " roomSelectedAt=" .. tostring(current_room_selected_at()))
+			end
+			complete_pending(false, "La chanson est introuvable après reload.", "post_reload_missing")
 		end
-	end
 	return false
 end
 
