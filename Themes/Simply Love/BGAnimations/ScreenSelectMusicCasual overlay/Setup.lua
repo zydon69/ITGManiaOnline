@@ -5,8 +5,31 @@
 -- in here that we don't want cluttering up default.lua
 ---------------------------------------------------------------------------
 
+local function trace(msg)
+	if lua and lua.ReportScriptError then
+		lua.ReportScriptError("ScreenSelectMusicCasual: " .. tostring(msg))
+	elseif Trace then
+		Trace("ScreenSelectMusicCasual: " .. tostring(msg))
+	end
+end
+
+local function finite_number_or(value, fallback)
+	value = tonumber(value)
+	if value == nil or value ~= value or value == math.huge or value == -math.huge then
+		return fallback
+	end
+	return value
+end
+
+if not (GAMESTATE and SONGMAN and PREFSMAN and THEME) then
+	trace("required managers are not available")
+	return nil
+end
+
 -- because no one wants "Invalid PlayMode 7"
-GAMESTATE:SetCurrentPlayMode('PlayMode_Regular')
+if GAMESTATE.SetCurrentPlayMode then
+	pcall(function() GAMESTATE:SetCurrentPlayMode('PlayMode_Regular') end)
+end
 
 ---------------------------------------------------------------------------
 -- local junk
@@ -50,7 +73,53 @@ local row = {
 ---------------------------------------------------------------------------
 -- a steps_type like "StepsType_Dance_Single" is needed so we can filter out steps that aren't suitable
 
-local steps_type = GAMESTATE:GetCurrentStyle():GetStepsType()
+local current_style = GAMESTATE:GetCurrentStyle()
+if not current_style then
+	trace("missing current style")
+	return nil
+end
+
+local steps_type = current_style:GetStepsType()
+if not steps_type then
+	trace("missing current steps type")
+	return nil
+end
+
+local GetCasualMaxMeter = function()
+	return math.max(1, finite_number_or(ThemePrefs and ThemePrefs.Get and ThemePrefs.Get("CasualMaxMeter"), 10))
+end
+
+local GetLongSongSeconds = function()
+	return math.max(0, finite_number_or(PREFSMAN:GetPreference("LongVerSongSeconds"), math.huge))
+end
+
+local SongIsUnlocked = function(song)
+	if not (UNLOCKMAN and UNLOCKMAN.IsSongLocked) then return true end
+	return UNLOCKMAN:IsSongLocked(song) == 0
+end
+
+local SongHasCasualSteps = function(song)
+	if not (song and song.HasStepsType and song:HasStepsType(steps_type)) then return false end
+	if song:GetLastSecond() >= GetLongSongSeconds() then return false end
+	if not SongIsUnlocked(song) then return false end
+
+	for steps in ivalues(song:GetStepsByStepsType(steps_type)) do
+		if steps and steps.GetMeter and steps:GetMeter() <= GetCasualMaxMeter() then
+			return true
+		end
+	end
+
+	return false
+end
+
+local SongIsInGroups = function(song, groups)
+	if not (song and groups) then return false end
+	return FindInTable(song:GetGroupName(), groups) ~= nil
+end
+
+local SongIsCasualValid = function(song, groups)
+	return SongIsInGroups(song, groups) and SongHasCasualSteps(song)
+end
 
 ---------------------------------------------------------------------------
 -- initializes sick_wheel OptionRows for the CurrentSong with needed information
@@ -76,6 +145,11 @@ end
 local GetFileContents = function(path)
 	local contents = ""
 
+	if not (FILEMAN and FILEMAN.DoesFileExist and RageFileUtil and RageFileUtil.CreateRageFile) then
+		trace("file manager unavailable while reading " .. tostring(path))
+		return {}, "unreadable"
+	end
+
 	if FILEMAN:DoesFileExist(path) then
 		-- create a generic RageFile that we'll use to read the contents
 		local file = RageFileUtil.CreateRageFile()
@@ -83,10 +157,16 @@ local GetFileContents = function(path)
 		-- that we are opening the file in read-only mode
 		if file:Open(path, 1) then
 			contents = file:Read()
+		else
+			file:destroy()
+			trace("could not open " .. tostring(path))
+			return {}, "unreadable"
 		end
 
 		-- destroy the generic RageFile now that we have the contents
 		file:destroy()
+	else
+		return {}, "missing"
 	end
 
 	-- split the contents of the file on newline
@@ -96,7 +176,7 @@ local GetFileContents = function(path)
 		lines[#lines+1] = line
 	end
 
-	return lines
+	return lines, "ok"
 end
 
 ---------------------------------------------------------------------------
@@ -110,20 +190,8 @@ local PruneSongsFromGroup = function(group)
 
 	-- prune out songs that don't have valid steps
 	for i,song in ipairs(SONGMAN:GetSongsInGroup(group)) do
-		-- this should be guaranteed by this point, but better safe than segfault
-		if song:HasStepsType(steps_type)
-		-- respect StepMania's cutoff for 1-round songs
-		and song:GetLastSecond() < PREFSMAN:GetPreference("LongVerSongSeconds")
-		-- respect the #SELECTABLE tag in this song's simfile
-		and UNLOCKMAN:IsSongLocked(song) == 0
-		then
-			-- ensure that at least one stepchart has a meter ≤ CasualMaxMeter (10, by default)
-			for steps in ivalues(song:GetStepsByStepsType(steps_type)) do
-				if steps:GetMeter() <= ThemePrefs.Get("CasualMaxMeter") then
-					songs[#songs+1] = song
-					break
-				end
-			end
+		if SongHasCasualSteps(song) then
+			songs[#songs+1] = song
 		end
 		-- we need to retain the index of the current song so we can set the SongWheel to start on it
 		if current_song == song then index = #songs end
@@ -138,12 +206,16 @@ end
 
 local GetGroups = function()
 	local path = THEME:GetCurrentThemeDirectory() .. "Other/CasualMode-Groups.txt"
-	local preliminary_groups = GetFileContents(path)
+	local preliminary_groups, status = GetFileContents(path)
 
 	-- if the file didn't exist or was empty or contained no valid groups,
 	-- return the full list of groups available to SM
+	if status == "unreadable" then
+		return {}, false
+	end
+
 	if preliminary_groups == nil or #preliminary_groups == 0 then
-		return SONGMAN:GetSongGroupNames()
+		return SONGMAN:GetSongGroupNames(), true
 	end
 
 	local groups = {}
@@ -157,9 +229,10 @@ local GetGroups = function()
 	end
 
 	if #groups > 0 then
-		return groups
+		return groups, true
 	else
-		return SONGMAN:GetSongGroupNames()
+		trace(path .. " contained no valid groups; falling back to all groups")
+		return SONGMAN:GetSongGroupNames(), true
 	end
 end
 
@@ -173,39 +246,35 @@ local GetDefaultSong = function(groups)
 	local path = THEME:GetCurrentThemeDirectory() .. "Other/CasualMode-DefaultSong.txt"
 	local preliminary_songs = GetFileContents(path)
 
-	-- the file was empty or doesn't exist, return the first song in the first group
-	if preliminary_songs == nil or #preliminary_songs == 0 then
-		return SONGMAN:GetSongsInGroup(groups[1])[1]
-	end
-
 	-- verify that the song(s) specified actually exist
 	local songs = {}
-	for prelim_song in ivalues(preliminary_songs) do
-		-- parse the group out of the prelim_song string to verify this song
-		-- exists within a permitted group
-		local _group = prelim_song:gsub("/.*", "")
-
-		-- if this song exists and is part of a group returned by PruneGroups()
-		if SONGMAN:FindSong( prelim_song ) and FindInTable(_group, groups) then
-			-- add this prelim_song to the table of songs that do exist
-			songs[#songs+1] = prelim_song
+	if preliminary_songs and #preliminary_songs > 0 then
+		for prelim_song in ivalues(preliminary_songs) do
+			local song = SONGMAN:FindSong(prelim_song)
+			if SongIsCasualValid(song, groups) then
+				songs[#songs+1] = song
+			end
 		end
 	end
 
-
 	-- if multiple valid songs were found, randomly select and return one
 	if #songs >= 2 then
-		local song = SONGMAN:FindSong( songs[math.random(1, #songs)] )
-		if song then return song end
+		return songs[math.random(1, #songs)]
 
 	-- if DefaultSong.txt only contained one song, return that
 	elseif #songs == 1 then
-		local song = SONGMAN:FindSong( songs[1] )
-		if song then return song end
+		return songs[1]
 	end
 
 	-- fall back on first valid song from first valid group if needed
-	return PruneSongsFromGroup( groups[1] )[1]
+	for group in ivalues(groups) do
+		local pruned_songs = PruneSongsFromGroup(group)
+		if #pruned_songs > 0 then
+			return pruned_songs[1]
+		end
+	end
+
+	return nil
 end
 
 
@@ -218,21 +287,8 @@ local PruneGroups = function(_groups)
 	local groups = {}
 
 	for group in ivalues( _groups ) do
-		local group_has_been_added = false
-
-		for song in ivalues(SONGMAN:GetSongsInGroup(group)) do
-			if song:HasStepsType(steps_type)
-			and song:GetLastSecond() < PREFSMAN:GetPreference("LongVerSongSeconds") then
-
-				for steps in ivalues(song:GetStepsByStepsType(steps_type)) do
-					if steps:GetMeter() < ThemePrefs.Get("CasualMaxMeter") then
-						groups[#groups+1] = group
-						group_has_been_added = true
-						break
-					end
-				end
-			end
-			if group_has_been_added then break end
+		if #PruneSongsFromGroup(group) > 0 then
+			groups[#groups+1] = group
 		end
 	end
 
@@ -300,14 +356,14 @@ local current_song = GAMESTATE:GetCurrentSong()
 local group_index = 1
 
 -- GetGroups() will read from ./Other/CasualMode-Groups.txt
-local groups = GetGroups()
+local groups, allow_global_retry = GetGroups()
 -- prune the list of potential groups down to valid groups
 groups = PruneGroups(groups)
 
 -- it's possible the list used in GetGroups() was too limited and we
 -- just pruned the table to be completely empty
 -- in that case, try again using ALL groups available to StepMania
-if #groups == 0 then
+if #groups == 0 and allow_global_retry then
 	groups = PruneGroups(SONGMAN:GetSongGroupNames())
 end
 
@@ -321,8 +377,16 @@ end
 
 -- there will be a current_song if we're on stage 2 or later
 -- if no current_song, check ./Other/CasualMode-DefaultSong.txt
-if current_song == nil then
+if not SongIsCasualValid(current_song, groups) then
 	current_song = GetDefaultSong(groups)
+end
+
+if current_song == nil then
+	trace("no valid default song found")
+	return nil
+end
+
+if GAMESTATE:GetCurrentSong() ~= current_song then
 	GAMESTATE:SetCurrentSong(current_song)
 end
 
