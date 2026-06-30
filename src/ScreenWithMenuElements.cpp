@@ -159,12 +159,7 @@ void ScreenWithMenuElements::Init() {
                              : nullptr;
     if (pFrame != nullptr) {
       m_vDecorations = pFrame->GetChildren();
-      for (Actor* child : m_vDecorations) {
-        if (child != nullptr) {
-          this->AddChild(child);
-        }
-      }
-      pFrame->RemoveAllChildren();
+      pFrame->TransferChildren(this);
     }
   }
 

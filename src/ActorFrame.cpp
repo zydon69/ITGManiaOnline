@@ -290,10 +290,26 @@ void ActorFrame::TransferChildren(ActorFrame* pTo) {
     LOG->Warn("SRC_AUDIT_FIX SRC-753: ActorFrame refused null transfer target.");
     return;
   }
-  std::for_each(m_SubActors.begin(), m_SubActors.end(), [&](Actor* a) {
-    pTo->AddChild(a);
-  });
-  RemoveAllChildren();
+  if (pTo == this) {
+    LOG->Warn("SRC_AUDIT_FIX SRC-753: ActorFrame refused self child transfer.");
+    return;
+  }
+
+  std::vector<Actor*> children;
+  children.swap(m_SubActors);
+  MarkChildrenMutated();
+
+  for (Actor* child : children) {
+    if (child == nullptr) {
+      LOG->Warn("SRC_AUDIT_FIX SRC-753: ActorFrame skipped null transferred child.");
+      continue;
+    }
+    if (pTo->ContainsChild(child)) {
+      child->SetParent(pTo);
+      continue;
+    }
+    pTo->AddChild(child);
+  }
 }
 
 Actor* ActorFrame::GetChild(const std::string& sName) {
