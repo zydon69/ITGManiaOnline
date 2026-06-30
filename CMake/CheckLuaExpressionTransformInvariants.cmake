@@ -145,13 +145,25 @@ require_contains(
   "m_fPositionOffsetFromSelection = 0.0f;"
   "WheelBase clears visual offset before selection")
 require_contains(
+  "${wheel_base_cpp}"
+  "m_fPositionOffsetFromSelection += iDist;\n\n  RebuildWheelItems(iDist);"
+  "WheelBase applies visual offset before rebuilding focused items")
+require_contains(
   "${music_wheel_cpp}"
   "int MusicWheel::GetVisualFocusIndex() const"
   "MusicWheel centralizes visual focus selection reads")
 require_contains(
+  "${wheel_base_cpp}"
+  "int WheelBase::GetVisualFocusIndex() const"
+  "WheelBase centralizes visual focus selection reads")
+require_contains(
   "${music_wheel_cpp}"
-  "std::lround(m_fPositionOffsetFromSelection)"
-  "MusicWheel reads the item closest to visual focus")
+  "return WheelBase::GetVisualFocusIndex();"
+  "MusicWheel delegates visual focus calculation to WheelBase")
+require_contains(
+  "${music_wheel_cpp}"
+  "m_fPositionOffsetFromSelection += iDist;\n\n  if (REMIND_WHEEL_POSITIONS"
+  "MusicWheel applies visual offset before rebuilding focused items")
 require_contains(
   "${music_wheel_cpp}"
   "const MusicWheelItemData* selected = GetVisualFocusItemData();"
@@ -177,6 +189,14 @@ require_contains(
   "SRC-2693 MusicWheelTrace change_music"
   "MusicWheel logs selection and focus transitions")
 require_contains(
+  "${music_wheel_cpp}"
+  "SRC-2693 MusicWheelTrace change_music_focus_unchanged"
+  "MusicWheel does not notify when only logical selection changed")
+require_not_contains(
+  "${music_wheel_cpp}"
+  "reason=change_music focus="
+  "MusicWheel must not post song changed before visual focus changes")
+require_contains(
   "${wheel_base_cpp}"
   "SRC-2693 MusicWheelTrace wheelbase_move_accept"
   "WheelBase logs accepted wheel movement")
@@ -200,6 +220,10 @@ require_contains(
   "${wheel_base_cpp}"
   "SRC-2693 MusicWheelTrace rebuild_load_slot"
   "WheelBase logs rebuilt visual wheel slots")
+require_contains(
+  "${wheel_base_cpp}"
+  "pDisplay->LoadFromWheelItemData(pData, iIndex, hasVisualFocus, i);"
+  "WheelBase marks visual focus instead of logical selection during rebuild")
 require_contains(
   "${banner_cpp}"
   "SRC-2693 MusicWheelTrace banner_cached_begin"

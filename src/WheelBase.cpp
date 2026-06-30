@@ -629,10 +629,9 @@ void WheelBase::ChangeMusic(int iDist) {
 
   m_iSelection += iDist;
   wrap(m_iSelection, m_CurWheelItemData.size());
+  m_fPositionOffsetFromSelection += iDist;
 
   RebuildWheelItems(iDist);
-
-  m_fPositionOffsetFromSelection += iDist;
 
   //	SCREENMAN->PostMessageToTopScreen( SM_SongChanged, 0 );
 
@@ -674,6 +673,7 @@ void WheelBase::RebuildWheelItems(int iDist) {
       std::find(data.begin(), data.end(), m_LastSelection) == data.end()) {
     m_LastSelection = nullptr;
   }
+  const int visualFocusIndex = GetVisualFocusIndex();
 
   // find the first wheel item shown
   const int wheelItemCount = GetWheelItemCount();
@@ -711,10 +711,10 @@ void WheelBase::RebuildWheelItems(int iDist) {
       "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_window "
       "normalizedDist=%d selection=%d firstVisible=%d firstReloadSlot=%d "
       "lastReloadSlot=%d itemCount=%d wheelItemCount=%d dataCount=%zu "
-      "actorCount=%zu offset=%.6f moving=%d",
+      "actorCount=%zu offset=%.6f moving=%d visualFocus=%d",
       iDist, m_iSelection, iFirstVisibleIndex, iFirst, iLast, itemCount,
       wheelItemCount, data.size(), items.size(), m_fPositionOffsetFromSelection,
-      m_Moving);
+      m_Moving, visualFocusIndex);
 
   for (int i = iFirst; i <= iLast; i++) {
     int iIndex = iFirstVisibleIndex + i;
@@ -744,27 +744,32 @@ void WheelBase::RebuildWheelItems(int iDist) {
     if (pData == nullptr || pDisplay == nullptr) {
       TraceWheelBaseMusicWheel(
           "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_load_skip "
-          "slot=%d dataIndex=%d dataPtr=%p actorPtr=%p selected=%d",
+          "slot=%d dataIndex=%d dataPtr=%p actorPtr=%p logicalSelected=%d "
+          "hasVisualFocus=%d visualFocus=%d",
           i, iIndex, static_cast<const void*>(pData),
-          static_cast<void*>(pDisplay), m_iSelection == iIndex);
+          static_cast<void*>(pDisplay), m_iSelection == iIndex,
+          visualFocusIndex == iIndex, visualFocusIndex);
       continue;
     }
+    const bool hasVisualFocus = visualFocusIndex == iIndex;
     TraceWheelBaseMusicWheel(
         "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_load_slot "
-        "slot=%d dataIndex=%d selected=%d type='%s' text='%s' dataPtr=%p "
-        "actorPtr=%p firstVisible=%d selection=%d offset=%.6f",
-        i, iIndex, m_iSelection == iIndex,
+        "slot=%d dataIndex=%d logicalSelected=%d hasVisualFocus=%d type='%s' "
+        "text='%s' dataPtr=%p actorPtr=%p firstVisible=%d selection=%d "
+        "visualFocus=%d offset=%.6f",
+        i, iIndex, m_iSelection == iIndex, hasVisualFocus,
         WheelItemDataTypeToLogString(pData->m_Type), pData->m_sText.c_str(),
         static_cast<const void*>(pData), static_cast<void*>(pDisplay),
-        iFirstVisibleIndex, m_iSelection, m_fPositionOffsetFromSelection);
-    pDisplay->LoadFromWheelItemData(pData, iIndex, m_iSelection == iIndex, i);
+        iFirstVisibleIndex, m_iSelection, visualFocusIndex,
+        m_fPositionOffsetFromSelection);
+    pDisplay->LoadFromWheelItemData(pData, iIndex, hasVisualFocus, i);
   }
 
   TraceWheelBaseMusicWheel(
       "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_end "
-      "selection=%d offset=%.6f moving=%d firstVisible=%d dataCount=%zu "
-      "actorCount=%zu empty=%d",
-      m_iSelection, m_fPositionOffsetFromSelection, m_Moving,
+      "selection=%d visualFocus=%d offset=%.6f moving=%d firstVisible=%d "
+      "dataCount=%zu actorCount=%zu empty=%d",
+      m_iSelection, visualFocusIndex, m_fPositionOffsetFromSelection, m_Moving,
       iFirstVisibleIndex, data.size(), items.size(), m_bEmpty);
 }
 
@@ -800,6 +805,22 @@ WheelItemDataType WheelBase::GetSelectedType() {
   }
 
   return m_CurWheelItemData[m_iSelection]->m_Type;
+}
+
+int WheelBase::GetVisualFocusIndex() const {
+  if (m_CurWheelItemData.empty()) {
+    return 0;
+  }
+
+  int focusedIndex = std::clamp(
+      m_iSelection, 0, static_cast<int>(m_CurWheelItemData.size()) - 1);
+  if (std::isfinite(m_fPositionOffsetFromSelection)) {
+    focusedIndex -=
+        static_cast<int>(std::lround(m_fPositionOffsetFromSelection));
+    wrap(focusedIndex, m_CurWheelItemData.size());
+  }
+
+  return focusedIndex;
 }
 
 int WheelBase::GetWheelItemCount() const {

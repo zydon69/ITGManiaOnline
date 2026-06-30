@@ -207,15 +207,7 @@ int MusicWheel::GetVisualFocusIndex() const {
     return -1;
   }
 
-  int focusedIndex = std::clamp(
-      m_iSelection, 0, static_cast<int>(m_CurWheelItemData.size()) - 1);
-  if (std::isfinite(m_fPositionOffsetFromSelection)) {
-    focusedIndex -=
-        static_cast<int>(std::lround(m_fPositionOffsetFromSelection));
-    wrap(focusedIndex, m_CurWheelItemData.size());
-  }
-
-  return focusedIndex;
+  return WheelBase::GetVisualFocusIndex();
 }
 
 const MusicWheelItemData* MusicWheel::GetVisualFocusItemData() const {
@@ -1936,6 +1928,7 @@ void MusicWheel::ChangeMusic(int iDist) {
 
   m_iSelection += iDist;
   wrap(m_iSelection, m_CurWheelItemData.size());
+  m_fPositionOffsetFromSelection += iDist;
 
   if (REMIND_WHEEL_POSITIONS && HIDE_INACTIVE_SECTIONS && SONGMAN != nullptr) {
     // store the group song index
@@ -1947,8 +1940,6 @@ void MusicWheel::ChangeMusic(int iDist) {
   }
 
   RebuildWheelItems(iDist);
-
-  m_fPositionOffsetFromSelection += iDist;
 
   if (LOG != nullptr) {
     LOG->Trace(
@@ -1966,14 +1957,14 @@ void MusicWheel::ChangeMusic(int iDist) {
         DescribeMusicWheelTraceItem(GetVisualFocusItemData()).c_str());
   }
 
-  if (SCREENMAN != nullptr) {
-    if (LOG != nullptr) {
-      LOG->Trace(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace post_sm_song_changed "
-          "reason=change_music focus=%d logicalSelection=%d offset=%.4f",
-          GetVisualFocusIndex(), m_iSelection, m_fPositionOffsetFromSelection);
-    }
-    SCREENMAN->PostMessageToTopScreen(SM_SongChanged, 0);
+  const int newFocus = GetVisualFocusIndex();
+  if (newFocus != oldFocus) {
+    PostSongChangedIfVisualFocusChanged();
+  } else if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace change_music_focus_unchanged "
+        "focus=%d logicalSelection=%d offset=%.4f oldFocus=%d",
+        newFocus, m_iSelection, m_fPositionOffsetFromSelection, oldFocus);
   }
 
   // If we're moving automatically, don't play this; it'll be called in Update.
