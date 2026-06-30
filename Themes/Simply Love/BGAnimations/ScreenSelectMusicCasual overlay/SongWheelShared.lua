@@ -23,24 +23,24 @@ af[#af+1] = Def.Quad{
 }
 
 -- rainbow glowing border top
-af[#af+1] = Def.Quad{
-	InitCommand=function(self) self:zoomto(_screen.w, 1):diffuse(1,1,1,0):xy(_screen.cx, _screen.cy+30 + _screen.h/(row.how_many-2)*-0.5):faderight(10):rainbow() end,
-	OnCommand=function(self) self:sleep(0.3):diffusealpha(0.75):queuecommand("FadeMe") end,
-	FadeMeCommand=function(self) self:accelerate(1.5):faderight(0):accelerate(1.5):fadeleft(10):sleep(0):diffusealpha(0):fadeleft(0):sleep(1.5):faderight(10):diffusealpha(0.75):queuecommand("FadeMe") end,
-	SwitchFocusToGroupsMessageCommand=function(self) self:visible(false) end,
-	SwitchFocusToSingleSongMessageCommand=function(self) self:visible(false) end,
-	SwitchFocusToSongsMessageCommand==function(self) self:visible(true) end
-}
+	af[#af+1] = Def.Quad{
+		InitCommand=function(self) self:zoomto(_screen.w, 1):diffuse(1,1,1,0):xy(_screen.cx, _screen.cy+30 + _screen.h/(row.how_many-2)*-0.5):faderight(10):rainbow() end,
+		OnCommand=function(self) self:sleep(0.3):diffusealpha(0.75):queuecommand("FadeMe") end,
+		FadeMeCommand=function(self) self:accelerate(1.5):faderight(0):accelerate(1.5):fadeleft(10):sleep(0):diffusealpha(0):fadeleft(0):sleep(1.5):faderight(10):diffusealpha(0.75):queuecommand("FadeMe") end,
+		SwitchFocusToGroupsMessageCommand=function(self) self:visible(false) end,
+		SwitchFocusToSingleSongMessageCommand=function(self) self:visible(false) end,
+		SwitchFocusToSongsMessageCommand=function(self) self:visible(true) end
+	}
 
 -- rainbow glowing border bottom
-af[#af+1] = Def.Quad{
-	InitCommand=function(self) self:zoomto(_screen.w, 1):diffuse(1,1,1,0):xy(_screen.cx, _screen.cy+30 + _screen.h/(row.how_many-2) * 0.5):faderight(10):rainbow() end,
-	OnCommand=function(self) self:sleep(0.3):diffusealpha(0.75):queuecommand("FadeMe") end,
-	FadeMeCommand=function(self) self:accelerate(1.5):faderight(0):accelerate(1.5):fadeleft(10):sleep(0):diffusealpha(0):fadeleft(0):sleep(1.5):faderight(10):diffusealpha(0.75):queuecommand("FadeMe") end,
-	SwitchFocusToGroupsMessageCommand=function(self) self:visible(false) end,
-	SwitchFocusToSingleSongMessageCommand=function(self) self:visible(false) end,
-	SwitchFocusToSongsMessageCommand==function(self) self:visible(true) end
-}
+	af[#af+1] = Def.Quad{
+		InitCommand=function(self) self:zoomto(_screen.w, 1):diffuse(1,1,1,0):xy(_screen.cx, _screen.cy+30 + _screen.h/(row.how_many-2) * 0.5):faderight(10):rainbow() end,
+		OnCommand=function(self) self:sleep(0.3):diffusealpha(0.75):queuecommand("FadeMe") end,
+		FadeMeCommand=function(self) self:accelerate(1.5):faderight(0):accelerate(1.5):fadeleft(10):sleep(0):diffusealpha(0):fadeleft(0):sleep(1.5):faderight(10):diffusealpha(0.75):queuecommand("FadeMe") end,
+		SwitchFocusToGroupsMessageCommand=function(self) self:visible(false) end,
+		SwitchFocusToSingleSongMessageCommand=function(self) self:visible(false) end,
+		SwitchFocusToSongsMessageCommand=function(self) self:visible(true) end
+	}
 -----------------------------------------------------------------
 -- left/right UI arrows
 
@@ -115,11 +115,13 @@ af[#af+1] = Def.ActorFrame{
 		Font="Common Normal",
 		Name="Title",
 		InitCommand=function(self) self:zoom(1.3):diffuse(Color.White):horizalign(left):y(-45):maxwidth(300) end,
-		CurrentSongChangedMessageCommand=function(self, params)
-			if params.song then
-				self:settext( params.song:GetDisplayMainTitle() .. " " .. params.song:GetDisplaySubTitle() )
-			end
-		end,
+			CurrentSongChangedMessageCommand=function(self, params)
+				if params.song then
+					self:settext( params.song:GetDisplayMainTitle() .. " " .. params.song:GetDisplaySubTitle() )
+				else
+					self:settext("")
+				end
+			end,
 	},
 
 	-- artist
@@ -127,11 +129,13 @@ af[#af+1] = Def.ActorFrame{
 		Font="Common Normal",
 		Name="Artist",
 		InitCommand=function(self) self:zoom(0.85):diffuse(Color.White):y(-20):horizalign(left) end,
-		CurrentSongChangedMessageCommand=function(self, params)
-			if params.song then
-				self:settext( THEME:GetString("SongDescription", "Artist") .. ": " .. params.song:GetDisplayArtist() )
-			end
-		end,
+			CurrentSongChangedMessageCommand=function(self, params)
+				if params.song then
+					self:settext( THEME:GetString("SongDescription", "Artist") .. ": " .. params.song:GetDisplayArtist() )
+				else
+					self:settext("")
+				end
+			end,
 	},
 
 	Def.ActorFrame{
@@ -142,22 +146,26 @@ af[#af+1] = Def.ActorFrame{
 			Font="Common Normal",
 			Name="BPM",
 			InitCommand=function(self) self:zoom(0.65):diffuse(Color.White):y(0):horizalign(left) end,
-			CurrentSongChangedMessageCommand=function(self, params)
-				if params.song then
-					self:settext( ("%s: %s"):format(THEME:GetString("SongDescription", "BPM"), StringifyDisplayBPMs() or "") )
-				end
-			end,
+				CurrentSongChangedMessageCommand=function(self, params)
+					if params.song then
+						self:settext( ("%s: %s"):format(THEME:GetString("SongDescription", "BPM"), StringifyDisplayBPMs() or "") )
+					else
+						self:settext("")
+					end
+				end,
 		},
 		-- length
 		Def.BitmapText{
 			Font="Common Normal",
 			Name="Length",
 			InitCommand=function(self) self:zoom(0.65):diffuse(Color.White):y(14):horizalign(left) end,
-	 		CurrentSongChangedMessageCommand=function(self, params)
-				if params.song then
-		 			self:settext( THEME:GetString("SongDescription", "Length") .. ": " .. SecondsToMMSS(params.song:GetLastSecond()):gsub("^0*","") )
-				end
-	 		end,
+				CurrentSongChangedMessageCommand=function(self, params)
+					if params.song then
+						self:settext( THEME:GetString("SongDescription", "Length") .. ": " .. SecondsToMMSS(params.song:GetLastSecond()):gsub("^0*","") )
+					else
+						self:settext("")
+					end
+				end,
 		},
 		-- genre
 		Def.BitmapText{
@@ -166,11 +174,13 @@ af[#af+1] = Def.ActorFrame{
 			InitCommand=function(self)
 				self:zoom(0.65):diffuse(Color.White):y(28):horizalign(left)
 			end,
-			CurrentSongChangedMessageCommand=function(self, params)
-				if params.song then
-					self:settext( THEME:GetString("SongDescription", "Genre") .. ": " .. params.song:GetGenre() )
-				end
-			end,
+				CurrentSongChangedMessageCommand=function(self, params)
+					if params.song then
+						self:settext( THEME:GetString("SongDescription", "Genre") .. ": " .. params.song:GetGenre() )
+					else
+						self:settext("")
+					end
+				end,
 		},
 	}
 }

@@ -23,9 +23,9 @@ local item_mt = {
 		create_actors = function(self, name)
 			self.name=name
 
-			-- this is a terrible way to do this
-			local item_index = name:gsub("item", "")
-			self.index = item_index
+				-- this is a terrible way to do this
+				local item_index = tonumber(name:gsub("item", "")) or 0
+				self.index = item_index
 
 			local af = Def.ActorFrame{
 				Name=name,

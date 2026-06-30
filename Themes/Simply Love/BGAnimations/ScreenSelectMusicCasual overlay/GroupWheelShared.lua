@@ -38,13 +38,13 @@ af[#af+1] = Def.ActorFrame{
 		InitCommand=function(self)
 			self:zoom(1.1):diffuse(Color.White):xy(0,15):maxwidth(300)
 		end,
-		CurrentGroupChangedMessageCommand=function(self, params)
-			if params.group then
-				self:settext( group_info[params.group].num_songs .. " Unique Songs" )
-			else
-				self:self("")
-			end
-		end,
+			CurrentGroupChangedMessageCommand=function(self, params)
+				if params.group and group_info[params.group] then
+					self:settext( group_info[params.group].num_songs .. " Unique Songs" )
+				else
+					self:settext("")
+				end
+			end,
 	},
 
 	-- artists
@@ -53,13 +53,13 @@ af[#af+1] = Def.ActorFrame{
 		InitCommand=function(self)
 			self:zoom(0.75):diffuse(Color.White):xy(-260, 30):horizalign(left):vertalign(top)
 		end,
-		CurrentGroupChangedMessageCommand=function(self, params)
-			if params.group then
-				self:settext( "ARTISTS:\n" .. group_info[params.group].artists )
-			else
-				self:self("")
-			end
-		end,
+			CurrentGroupChangedMessageCommand=function(self, params)
+				if params.group and group_info[params.group] then
+					self:settext( "ARTISTS:\n" .. group_info[params.group].artists )
+				else
+					self:settext("")
+				end
+			end,
 	},
 
 	-- genres
@@ -68,13 +68,13 @@ af[#af+1] = Def.ActorFrame{
 		InitCommand=function(self)
 			self:zoom(0.75):diffuse(Color.White):xy(-60, 30):horizalign(left):vertalign(top)
 		end,
-		CurrentGroupChangedMessageCommand=function(self, params)
-			if params.group then
-				self:settext( "GENRES:\n" .. group_info[params.group].genres )
-			else
-				self:self("")
-			end
-		end,
+			CurrentGroupChangedMessageCommand=function(self, params)
+				if params.group and group_info[params.group] then
+					self:settext( "GENRES:\n" .. group_info[params.group].genres )
+				else
+					self:settext("")
+				end
+			end,
 	},
 
 	-- steps
@@ -83,13 +83,13 @@ af[#af+1] = Def.ActorFrame{
 		InitCommand=function(self)
 			self:zoom(0.75):diffuse(Color.White):xy(130, 30):horizalign(left):vertalign(top)
 		end,
-		CurrentGroupChangedMessageCommand=function(self, params)
-			if params.group then
-				self:settext( "STEPCHARTS:\n" ..group_info[params.group].charts )
-			else
-				self:self("")
-			end
-		end,
+			CurrentGroupChangedMessageCommand=function(self, params)
+				if params.group and group_info[params.group] then
+					self:settext( "STEPCHARTS:\n" ..group_info[params.group].charts )
+				else
+					self:settext("")
+				end
+			end,
 	},
 
 }

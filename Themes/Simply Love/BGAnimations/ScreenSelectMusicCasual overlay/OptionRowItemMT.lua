@@ -52,11 +52,15 @@ local optionrow_item_mt = {
 			end
 		end,
 
-		set = function(self, info)
+			set = function(self, info)
 
-			if not info then return end
+				if not info then
+					self.bmt1:settext("")
+					self.bmt2:settext("")
+					return
+				end
 
-			if type(info) == "table" then
+				if type(info) == "table" then
 				self.bmt1:settext( info[1] )
 				self.bmt2:settext( info[2] )
 			else

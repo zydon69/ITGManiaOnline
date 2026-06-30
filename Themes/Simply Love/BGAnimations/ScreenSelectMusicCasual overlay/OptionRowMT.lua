@@ -122,14 +122,16 @@ local optionrow_mt = {
 			end
 		end,
 
-		set = function(self, optionrow)
-			if not optionrow then return end
-			self.helptext:settext( optionrow.HelpText )
-			if optionrow.HelpText == "" then
-				self.bgQuad:visible(false)
+			set = function(self, optionrow)
+				if not optionrow then
+					self.helptext:settext("")
+					self.bgQuad:visible(false)
+					return
+				end
+				self.helptext:settext( optionrow.HelpText )
+				self.bgQuad:visible(optionrow.HelpText ~= "")
 			end
-		end
+		}
 	}
-}
 
 return optionrow_mt

@@ -10,6 +10,24 @@ local NoJacketTexture = nil
 -- max number of characters allowed in a song title before truncating to ellipsis
 local max_chars = 28
 
+local LoadNoJacketTexture = function(self)
+	self.img_path = nil
+	self.img_type = nil
+
+	if NoJacketTexture ~= nil then
+		self.banner:SetTexture(NoJacketTexture)
+	else
+		self.banner:Load( THEME:GetPathB("ScreenSelectMusicCasual", "overlay/img/no-jacket.png") )
+		NoJacketTexture = self.banner:GetTexture()
+	end
+end
+
+local FileExists = function(path)
+	if type(path) ~= "string" or path == "" then return false end
+	if not (FILEMAN and FILEMAN.DoesFileExist) then return true end
+	return FILEMAN:DoesFileExist(path)
+end
+
 local song_mt = {
 	__index = {
 		create_actors = function(self, name)
@@ -167,23 +185,25 @@ local song_mt = {
 			return af
 		end,
 
-		transform = function(self, item_index, num_items, has_focus)
+			transform = function(self, item_index, num_items, has_focus)
 
-			self.container:finishtweening()
-			stop_music()
+				self.container:finishtweening()
 
-			if has_focus then
-				if self.song ~= "CloseThisFolder" then
-					GAMESTATE:SetCurrentSong(self.song)
-					MESSAGEMAN:Broadcast("CurrentSongChanged", {song=self.song})
+				if has_focus then
+					if self.song and self.song ~= "CloseThisFolder" then
+						stop_music()
+						GAMESTATE:SetCurrentSong(self.song)
+						MESSAGEMAN:Broadcast("CurrentSongChanged", {song=self.song})
 
 					-- wait for the musicgrid to settle for at least 0.2 seconds before attempting to play preview music
 					self.preview_music:stoptweening():sleep(0.2):queuecommand("PlayMusicPreview")
+					elseif self.song == "CloseThisFolder" then
+						MESSAGEMAN:Broadcast("CloseThisFolderHasFocus")
+					else
+						MESSAGEMAN:Broadcast("CurrentSongChanged", {})
+					end
+					self.container:playcommand("GainFocus")
 				else
-					MESSAGEMAN:Broadcast("CloseThisFolderHasFocus")
-				end
-				self.container:playcommand("GainFocus")
-			else
 				self.container:playcommand("LoseFocus")
 			end
 
@@ -226,12 +246,18 @@ local song_mt = {
 			end
 		end,
 
-		set = function(self, song)
+			set = function(self, song)
 
-			if not song then return end
+				self.img_path = ""
+				self.img_type = ""
 
-			self.img_path = ""
-			self.img_type = ""
+				if not song then
+					self.song = nil
+					self.title_bmt:settext("")
+					self.subtitle_bmt:settext("")
+					LoadNoJacketTexture(self)
+					return
+				end
 
 			-- this SongMT was passed the string "CloseThisFolder"
 			-- so this is a special case song metatable item
@@ -255,31 +281,26 @@ local song_mt = {
 				self.title_bmt:settext( self.song:GetDisplayMainTitle() ):Truncate(max_chars)
 				self.subtitle_bmt:settext( self.song:GetDisplaySubTitle() ):Truncate(max_chars)
 
-				if song:HasJacket() then
-					self.img_path = song:GetJacketPath()
-					self.img_type = "Jacket"
+					if song:HasJacket() then
+						self.img_path = song:GetJacketPath()
+						self.img_type = "Jacket"
 				elseif song:HasBackground() then
 					self.img_path = song:GetBackgroundPath()
 					self.img_type = "Background"
 				elseif song:HasBanner() then
 					self.img_path = song:GetBannerPath()
 					self.img_type = "Banner"
-				else
-					self.img_path = nil
-					self.img_type = nil
-
-					if NoJacketTexture ~= nil then
-						self.banner:SetTexture(NoJacketTexture)
 					else
-						self.banner:Load( THEME:GetPathB("ScreenSelectMusicCasual", "overlay/img/no-jacket.png") )
-						NoJacketTexture = self.banner:GetTexture()
+						LoadNoJacketTexture(self)
+						return
 					end
-					return
-				end
 
-				-- thank you, based Jousway
-				if (Sprite.LoadFromCached ~= nil) then
-					self.banner:LoadFromCached(self.img_type, self.img_path)
+					-- thank you, based Jousway
+					if not FileExists(self.img_path) then
+						LoadNoJacketTexture(self)
+
+					elseif (Sprite.LoadFromCached ~= nil) then
+						self.banner:LoadFromCached(self.img_type, self.img_path)
 
 				-- support SM5.0.12 begrudgingly
 				else

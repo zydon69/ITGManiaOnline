@@ -35,10 +35,10 @@ for player in ivalues( PlayerNumber ) do
 	if not GAMESTATE:IsSideJoined(player) and Input.AllowLateJoin() then
 		af[#af+1] = LoadFont("Common Normal")..{
 			Text=THEME:GetString("ScreenSelectMusicCasual", "PressStartToLateJoin"),
-			InitCommand=function(self)
-				self:xy( _screen.cx + 150 * (player==PLAYER_1 and -1 or 1), _screen.cy + 80 )
-					:diffuseshift():effectcolor1(1,1,1,1):effectcolor1(1,1,1,0.5)
-			end,
+				InitCommand=function(self)
+					self:xy( _screen.cx + 150 * (player==PLAYER_1 and -1 or 1), _screen.cy + 80 )
+						:diffuseshift():effectcolor1(1,1,1,1):effectcolor2(1,1,1,0.5)
+				end,
 			PlayerJoinedMessageCommand=function(self, params)
 				if params.Player == player then
 					self:smooth(0.15):zoom(1.4):smooth(0.15):zoom(0)

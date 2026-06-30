@@ -9,10 +9,15 @@ return Def.ActorFrame{
 
 	LoadActor("./img/start_glow.png")..{
 		Name="Glow",
-		InitCommand=function(self)
-			-- start_glow.png is 600px wide, but the space carved out of the middle is only 500px wide
-			self:zoom( (w/self:GetWidth()) * 1.2 )
-		end,
+			InitCommand=function(self)
+				-- start_glow.png is 600px wide, but the space carved out of the middle is only 500px wide
+				local width = self:GetWidth()
+				if width and width > 0 then
+					self:zoom( (w/width) * 1.2 )
+				else
+					self:visible(false)
+				end
+			end,
 		OnCommand=function(self) self:diffuseshift():effectcolor1(color("#55CC5500")):effectcolor2(color("#55CC55FF")) end,
 	},
 
