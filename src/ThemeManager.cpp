@@ -152,6 +152,7 @@ static std::string MetricsGroupAndElementToFileName(
 }
 
 ThemeManager::ThemeManager() {
+  m_iMetricGeneration = 0;
   THEME = this;  // so that we can Register THEME on construction
 
   // Register with Lua.
@@ -177,6 +178,9 @@ ThemeManager::~ThemeManager() {
 
   // Unregister with Lua.
   LUA->UnsetGlobal("THEME");
+  if (THEME == this) {
+    THEME = nullptr;
+  }
 }
 
 void ThemeManager::GetThemeNames(std::vector<std::string>& AddTo) {
@@ -363,6 +367,7 @@ void ThemeManager::LoadThemeMetrics(
 
   LOG->MapLog("theme", "Theme: %s", m_sCurThemeName.c_str());
   LOG->MapLog("language", "Language: %s", m_sCurLanguage.c_str());
+  ++m_iMetricGeneration;
 }
 
 std::string ThemeManager::GetDefaultLanguage() {

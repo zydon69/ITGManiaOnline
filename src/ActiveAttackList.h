@@ -9,6 +9,7 @@ class ActiveAttackList : public BitmapText {
  public:
   /** @brief The constructor that does nothing. */
   ActiveAttackList();
+  ActiveAttackList(const ActiveAttackList& cpy);
   /**
    * @brief Set up the PlayerState.
    * @param pPlayerState the PlayerState involved with the attacks. */
@@ -22,6 +23,10 @@ class ActiveAttackList : public BitmapText {
   virtual ActiveAttackList* Copy() const override;
 
  protected:
+  void ClearRenderedAttackText();
+
+  unsigned int m_iLastRenderedAttackRevision;
+  unsigned int m_iLastRenderedThemeMetricGeneration;
   /** @brief the PlayerState of the Player who is dealing with the attack list.
    */
   const PlayerState* m_pPlayerState;

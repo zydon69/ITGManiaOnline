@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 #include <string>
 #include <vector>
@@ -21,6 +22,8 @@
 #include "global.h"
 
 namespace {
+const size_t MAX_ACTIVE_ATTACKS_PER_PLAYER = 4096;
+
 bool IsValidPlayerNumberForState(PlayerNumber pn) {
   return pn == PLAYER_INVALID || (pn >= PLAYER_1 && pn < NUM_PLAYERS);
 }
@@ -118,6 +121,7 @@ bool NormalizeActiveAttack(Attack& attack) {
 PlayerState::PlayerState() {
   m_PlayerNumber = PLAYER_INVALID;
   m_mp = MultiPlayer_Invalid;
+  m_iActiveAttackListRevision = 0;
   Reset();
 }
 
@@ -142,6 +146,7 @@ void PlayerState::Reset() {
   m_bAttackEndedThisUpdate = false;
   m_ActiveAttacks.clear();
   m_ModsToApply.clear();
+  ++m_iActiveAttackListRevision;
 
   m_iTapsHitSinceLastHasteUpdate = 0;
   m_iTapsMissedSinceLastHasteUpdate = 0;
@@ -198,6 +203,7 @@ void PlayerState::Update(float fDelta) {
   }
 
   if (bRebuildPlayerOptions) {
+    ++m_iActiveAttackListRevision;
     RebuildPlayerOptionsFromActiveAttacks();
   }
 
@@ -256,6 +262,13 @@ void PlayerState::LaunchAttack(const Attack& a) {
         static_cast<int>(m_PlayerNumber), static_cast<int>(m_mp));
     return;
   }
+  if (m_ActiveAttacks.size() >= MAX_ACTIVE_ATTACKS_PER_PLAYER ||
+      m_ModsToApply.size() >= MAX_ACTIVE_ATTACKS_PER_PLAYER) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-2605: PlayerState rejected attack because the "
+        "active attack queue is full.");
+    return;
+  }
 
   /* If fStartSecond is the sentinel, it means "launch as soon as possible". For
    * m_ActiveAttacks, mark the real time it's starting (now), so Update() can
@@ -276,6 +289,7 @@ void PlayerState::LaunchAttack(const Attack& a) {
   m_ModsToApply.push_back(modToApply);
   Attack attack = NormalizeAttackForLaunch(a, m_Position);
   m_ActiveAttacks.push_back(attack);
+  ++m_iActiveAttackListRevision;
 
   RebuildPlayerOptionsFromActiveAttacks();
 }
@@ -287,20 +301,30 @@ void PlayerState::RemoveActiveAttacks(AttackLevel al) {
         static_cast<int>(al));
     return;
   }
+  bool bRemovedAny = false;
   for (unsigned s = 0; s < m_ActiveAttacks.size(); s++) {
     if (al != NUM_ATTACK_LEVELS && al != m_ActiveAttacks[s].level) {
       continue;
     }
     m_ActiveAttacks.erase(
         m_ActiveAttacks.begin() + s, m_ActiveAttacks.begin() + s + 1);
+    bRemovedAny = true;
     --s;
+  }
+  if (bRemovedAny) {
+    ++m_iActiveAttackListRevision;
   }
   RebuildPlayerOptionsFromActiveAttacks();
 }
 
 void PlayerState::EndActiveAttacks() {
+  bool bChangedAny = false;
   for (Attack& a : m_ActiveAttacks) {
+    bChangedAny = bChangedAny || a.fSecsRemaining != 0;
     a.fSecsRemaining = 0;
+  }
+  if (bChangedAny) {
+    ++m_iActiveAttackListRevision;
   }
 }
 

@@ -108,6 +108,9 @@ class PlayerState {
   void EndActiveAttacks();
   void RebuildPlayerOptionsFromActiveAttacks();
   int GetSumOfActiveAttackLevels() const;
+  unsigned int GetActiveAttackListRevision() const {
+    return m_iActiveAttackListRevision;
+  }
   int m_iCpuSkill;  // only used when m_PlayerController is PC_CPU
   // Attacks take a while to transition out of use.  Account for this in
   // PlayerAI by still penalizing it for 1 second after the player options are
@@ -122,6 +125,7 @@ class PlayerState {
 
   AttackArray m_ActiveAttacks;
   std::vector<Attack> m_ModsToApply;
+  unsigned int m_iActiveAttackListRevision;
 
   // Haste
   int m_iTapsHitSinceLastHasteUpdate;

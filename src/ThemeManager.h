@@ -51,6 +51,7 @@ class ThemeManager {
   std::string GetCurThemeName() const { return m_sCurThemeName; };
   bool IsThemeLoaded() const { return !m_sCurThemeName.empty(); };
   std::string GetCurLanguage() const { return m_sCurLanguage; };
+  unsigned int GetMetricGeneration() const { return m_iMetricGeneration; };
   std::string GetCurThemeDir() const {
     return GetThemeDirFromName(m_sCurThemeName);
   };
@@ -186,6 +187,7 @@ class ThemeManager {
   std::string m_sCurThemeName;
   std::string m_sCurLanguage;
   bool m_bPseudoLocalize;
+  unsigned int m_iMetricGeneration;
 };
 
 extern ThemeManager*

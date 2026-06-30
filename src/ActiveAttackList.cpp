@@ -1,19 +1,21 @@
 #include "ActiveAttackList.h"
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
 #include "Attack.h"
 #include "BitmapText.h"
-#include "GameState.h"
-#include "Inventory.h"
 #include "PlayerOptions.h"
 #include "PlayerState.h"
 #include "RageLog.h"
 #include "RageUtil.h"
+#include "ThemeManager.h"
+#include "global.h"
 
 namespace {
 const size_t MAX_ATTACK_LIST_MODIFIER_CHARS = 2048;
+const size_t MAX_ATTACK_LIST_PARSE_ITEMS = 256;
 const size_t MAX_ATTACK_LIST_DISPLAY_CHARS = 2048;
 const size_t MAX_ATTACK_LIST_DISPLAY_ITEMS = 64;
 
@@ -48,9 +50,24 @@ std::string JoinBoundedAttackMods(const std::vector<std::string>& mods) {
   }
   return joined;
 }
+
+unsigned int GetThemeMetricGenerationForAttackList() {
+  return THEME == nullptr ? 0 : THEME->GetMetricGeneration();
+}
 }  // namespace
 
-ActiveAttackList::ActiveAttackList() : m_pPlayerState(nullptr) {}
+ActiveAttackList::ActiveAttackList()
+    : m_iLastRenderedAttackRevision(0),
+      m_iLastRenderedThemeMetricGeneration(0),
+      m_pPlayerState(nullptr) {}
+
+ActiveAttackList::ActiveAttackList(const ActiveAttackList& cpy)
+    : BitmapText(cpy),
+      m_iLastRenderedAttackRevision(0),
+      m_iLastRenderedThemeMetricGeneration(0),
+      m_pPlayerState(nullptr) {
+  ClearRenderedAttackText();
+}
 
 void ActiveAttackList::Init(const PlayerState* pPlayerState) {
   m_pPlayerState = pPlayerState;
@@ -58,7 +75,7 @@ void ActiveAttackList::Init(const PlayerState* pPlayerState) {
     WarnActiveAttackList(
         "SRC_AUDIT_FIX SRC-1231: ActiveAttackList initialized without player "
         "state.");
-    SetText("");
+    ClearRenderedAttackText();
   }
 }
 
@@ -66,15 +83,21 @@ void ActiveAttackList::Update(float fDelta) {
   if (m_pPlayerState == nullptr) {
     BitmapText::Update(fDelta);
     if (IsFirstUpdate()) {
-      SetText("");
+      ClearRenderedAttackText();
     }
     return;
   }
 
+  const unsigned int attackRevision =
+      m_pPlayerState->GetActiveAttackListRevision();
+  const unsigned int themeMetricGeneration =
+      GetThemeMetricGenerationForAttackList();
   bool bTimeToRefresh =
       IsFirstUpdate() ||  // check this before running Actor::Update()
       m_pPlayerState->m_bAttackBeganThisUpdate ||
-      m_pPlayerState->m_bAttackEndedThisUpdate;
+      m_pPlayerState->m_bAttackEndedThisUpdate ||
+      attackRevision != m_iLastRenderedAttackRevision ||
+      themeMetricGeneration != m_iLastRenderedThemeMetricGeneration;
 
   BitmapText::Update(fDelta);
 
@@ -85,14 +108,18 @@ void ActiveAttackList::Update(float fDelta) {
 
 void ActiveAttackList::Refresh() {
   if (m_pPlayerState == nullptr) {
-    SetText("");
+    m_iLastRenderedAttackRevision = 0;
+    m_iLastRenderedThemeMetricGeneration =
+        GetThemeMetricGenerationForAttackList();
+    ClearRenderedAttackText();
     return;
   }
 
   const AttackArray& attacks = m_pPlayerState->m_ActiveAttacks;
 
   std::vector<std::string> vsThemedMods;
-  for (unsigned i = 0; i < attacks.size(); i++) {
+  size_t parsedAttackItems = 0;
+  for (size_t i = 0; i < attacks.size(); i++) {
     const Attack& attack = attacks[i];
 
     if (!attack.bOn) {
@@ -101,6 +128,13 @@ void ActiveAttackList::Refresh() {
     if (!attack.bShowInAttackList) {
       continue;
     }
+    if (parsedAttackItems >= MAX_ATTACK_LIST_PARSE_ITEMS) {
+      WarnActiveAttackList(
+          "SRC_AUDIT_FIX SRC-2605: ActiveAttackList truncated attack modifier "
+          "parsing.");
+      break;
+    }
+    ++parsedAttackItems;
 
     PlayerOptions po;
     if (attack.sModifiers.size() > MAX_ATTACK_LIST_MODIFIER_CHARS) {
@@ -126,10 +160,30 @@ void ActiveAttackList::Refresh() {
 
   this->SetText(s);  // BitmapText will not rebuild vertices if these strings
                      // are the same.
+  m_iLastRenderedAttackRevision =
+      m_pPlayerState->GetActiveAttackListRevision();
+  m_iLastRenderedThemeMetricGeneration =
+      GetThemeMetricGenerationForAttackList();
 }
 
 ActiveAttackList* ActiveAttackList::Copy() const {
   return new ActiveAttackList(*this);
+}
+
+void ActiveAttackList::ClearRenderedAttackText() {
+  if (m_pFont != nullptr) {
+    SetText("");
+    return;
+  }
+
+  m_sText.clear();
+  m_wTextLines.clear();
+  m_iLineWidths.clear();
+  m_aVertices.clear();
+  m_vpFontPageTextures.clear();
+  ClearAttributes();
+  SetWidth(0.0f);
+  SetHeight(0.0f);
 }
 
 /*
