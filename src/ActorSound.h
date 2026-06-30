@@ -8,26 +8,40 @@
 /** @brief RageSound Actor interface. */
 class ActorSound : public Actor {
  public:
-  ActorSound() : m_is_action(false) {}
-  virtual ~ActorSound() {}
-  virtual ActorSound* Copy() const;
+  ActorSound();
+  ~ActorSound() override {}
+  ActorSound* Copy() const override;
 
-  void Load(const std::string& sPath);
+  bool Load(const std::string& sPath);
+  bool Load(
+      const std::string& sPath, const RageSoundLoadParams& params,
+      bool bPrecache);
   void Play();
   void Pause(bool bPause);
   void Stop();
-  void LoadFromNode(const XNode* pNode);
-  bool IsSoundLoaded() const { return m_Sound.IsLoaded(); }
+  void LoadFromNode(const XNode* pNode) override;
+  bool IsSoundLoaded() const { return m_bSoundLoaded; }
   void PushSound(lua_State* L) { m_Sound.PushSelf(L); }
-
-  bool m_is_action;
+  void SetIsAction(bool bIsAction) { m_bIsAction = bIsAction; }
+  bool GetIsAction() const { return m_bIsAction; }
+  RageSoundLoadParams GetSoundLoadParams() const { return m_LoadParams; }
+  bool GetPrecache() const { return m_bPrecache; }
 
   //
   // Lua
   //
-  virtual void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
  private:
+  void ResetLoadedSound();
+  bool LoadResolvedPath(
+      const std::string& sResolvedPath, const RageSoundLoadParams& params,
+      bool bPrecache);
+
+  bool m_bIsAction;
+  bool m_bSoundLoaded;
+  bool m_bPrecache;
+  RageSoundLoadParams m_LoadParams;
   RageSound m_Sound;
 };
 

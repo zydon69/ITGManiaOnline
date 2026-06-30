@@ -12,34 +12,83 @@
 REGISTER_ACTOR_CLASS_WITH_NAME(ActorSound, Sound);
 
 namespace {
-void WarnActorSoundAuditFix(const char* message) {
+void WarnActorSoundAuditFix(const std::string& message) {
   if (LOG != nullptr) {
-    LOG->Warn("%s", message);
+    LOG->Warn("%s", message.c_str());
   }
+}
+
+int AbsoluteLuaIndex(lua_State* L, int index) {
+  return index < 0 ? lua_gettop(L) + index + 1 : index;
+}
+
+void ReadOptionalBoolField(
+    lua_State* L, int tableIndex, const char* fieldName, bool& valueOut) {
+  tableIndex = AbsoluteLuaIndex(L, tableIndex);
+  lua_getfield(L, tableIndex, fieldName);
+  if (!lua_isnil(L, -1)) {
+    valueOut = lua_toboolean(L, -1) != 0;
+  }
+  lua_pop(L, 1);
 }
 }  // namespace
 
-void ActorSound::Load(const std::string& sPath) {
+ActorSound::ActorSound()
+    : m_bIsAction(false), m_bSoundLoaded(false), m_bPrecache(true) {}
+
+void ActorSound::ResetLoadedSound() {
+  m_Sound.Unload();
+  m_bSoundLoaded = false;
+}
+
+bool ActorSound::LoadResolvedPath(
+    const std::string& sResolvedPath, const RageSoundLoadParams& params,
+    bool bPrecache) {
+  RageSound nextSound;
+  if (!nextSound.Load(sResolvedPath, bPrecache, &params)) {
+    WarnActorSoundAuditFix(
+        "SRC_AUDIT_FIX SRC-2673: ActorSound rejected failed sound load '" +
+        sResolvedPath + "': " + nextSound.GetError());
+    ResetLoadedSound();
+    return false;
+  }
+
+  m_Sound = nextSound;
+  m_bSoundLoaded = true;
+  return true;
+}
+
+bool ActorSound::Load(const std::string& sPath) {
+  return Load(sPath, m_LoadParams, m_bPrecache);
+}
+
+bool ActorSound::Load(
+    const std::string& sPath, const RageSoundLoadParams& params,
+    bool bPrecache) {
+  m_LoadParams = params;
+  m_bPrecache = bPrecache;
+
   std::string resolvedPath = sPath;
   if (!ActorUtil::ResolvePath(resolvedPath, "ActorSound:load", true)) {
     WarnActorSoundAuditFix(
-        "SRC_AUDIT_FIX SRC-786: ActorSound ignored unresolved sound path.");
-    return;
+        "SRC_AUDIT_FIX SRC-2672: ActorSound cleared unresolved sound path.");
+    ResetLoadedSound();
+    return false;
   }
-  m_Sound.Load(resolvedPath, true);
+  return LoadResolvedPath(resolvedPath, params, bPrecache);
 }
 
 void ActorSound::Play() {
-  if (!m_Sound.IsLoaded()) {
+  if (!m_bSoundLoaded) {
     WarnActorSoundAuditFix(
         "SRC_AUDIT_FIX SRC-787: ActorSound ignored play before load.");
     return;
   }
-  m_Sound.Play(m_is_action);
+  m_Sound.Play(m_bIsAction);
 }
 
 void ActorSound::Pause(bool bPause) {
-  if (!m_Sound.IsLoaded()) {
+  if (!m_bSoundLoaded) {
     WarnActorSoundAuditFix(
         "SRC_AUDIT_FIX SRC-787: ActorSound ignored pause before load.");
     return;
@@ -48,7 +97,7 @@ void ActorSound::Pause(bool bPause) {
 }
 
 void ActorSound::Stop() {
-  if (!m_Sound.IsLoaded()) {
+  if (!m_bSoundLoaded) {
     return;
   }
   m_Sound.Stop();
@@ -57,23 +106,33 @@ void ActorSound::Stop() {
 void ActorSound::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
     WarnActorSoundAuditFix(
-        "SRC_AUDIT_FIX SRC-786: ActorSound ignored null XML node.");
+        "SRC_AUDIT_FIX SRC-2672: ActorSound cleared null XML node.");
+    ResetLoadedSound();
     return;
   }
   RageSoundLoadParams params;
   pNode->GetAttrValue("SupportPan", params.m_bSupportPan);
   pNode->GetAttrValue("SupportRateChanging", params.m_bSupportRateChanging);
-  pNode->GetAttrValue("IsAction", m_is_action);
+  bool bIsAction = false;
+  pNode->GetAttrValue("IsAction", bIsAction);
 
   bool bPrecache = true;
   pNode->GetAttrValue("Precache", bPrecache);
 
-  Actor::LoadFromNode(pNode);
+  m_LoadParams = params;
+  m_bPrecache = bPrecache;
+  SetIsAction(bIsAction);
 
   std::string sFile;
   if (ActorUtil::GetAttrPath(pNode, "File", sFile)) {
-    m_Sound.Load(sFile, bPrecache, &params);
+    LoadResolvedPath(sFile, params, bPrecache);
+  } else {
+    WarnActorSoundAuditFix(
+        "SRC_AUDIT_FIX SRC-2672: ActorSound cleared XML node without File.");
+    ResetLoadedSound();
   }
+
+  Actor::LoadFromNode(pNode);
 }
 
 // lua start
@@ -83,7 +142,18 @@ void ActorSound::LoadFromNode(const XNode* pNode) {
 class LunaActorSound : public Luna<ActorSound> {
  public:
   static int load(T* p, lua_State* L) {
-    p->Load(SArg(1));
+    RageSoundLoadParams params = p->GetSoundLoadParams();
+    bool bPrecache = p->GetPrecache();
+    bool bIsAction = p->GetIsAction();
+    if (lua_istable(L, 2)) {
+      ReadOptionalBoolField(L, 2, "SupportPan", params.m_bSupportPan);
+      ReadOptionalBoolField(
+          L, 2, "SupportRateChanging", params.m_bSupportRateChanging);
+      ReadOptionalBoolField(L, 2, "Precache", bPrecache);
+      ReadOptionalBoolField(L, 2, "IsAction", bIsAction);
+    }
+    p->SetIsAction(bIsAction);
+    p->Load(SArg(1), params, bPrecache);
     COMMON_RETURN_SELF;
   }
   static int play(T* p, lua_State* L) {
@@ -103,10 +173,10 @@ class LunaActorSound : public Luna<ActorSound> {
     return 1;
   }
   static int set_is_action(T* p, lua_State* L) {
-    p->m_is_action = BArg(1);
+    p->SetIsAction(BArg(1));
     COMMON_RETURN_SELF;
   }
-  DEFINE_METHOD(get_is_action, m_is_action);
+  DEFINE_METHOD(get_is_action, GetIsAction());
 
   LunaActorSound() {
     ADD_METHOD(load);
