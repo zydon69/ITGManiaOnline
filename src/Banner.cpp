@@ -68,6 +68,12 @@ void WarnBannerAuditFix(const std::string& message) {
   }
 }
 
+void TraceBannerAuditFix(const std::string& message) {
+  if (LOG != nullptr) {
+    LOG->Trace("%s", message.c_str());
+  }
+}
+
 std::string GetBannerThemePath(
     const std::string& category, const std::string& name) {
   if (THEME == nullptr) {
@@ -93,6 +99,10 @@ Banner::Banner() {
 // Ugly: if sIsBanner is false, we're actually loading something other than a
 // banner.
 void Banner::Load(RageTextureID ID, bool bIsBanner) {
+  TraceBannerAuditFix(ssprintf(
+      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace banner_load_raw "
+      "path='%s' isBanner=%d scrolling=%d percent=%.6f",
+      ID.filename.c_str(), bIsBanner, m_bScrolling, m_fPercentScrolling));
   if (ID.filename == "") {
     Sprite::Load(RageTextureID());
     return;
@@ -111,6 +121,9 @@ void Banner::Load(RageTextureID ID, bool bIsBanner) {
 
 void Banner::LoadFromCachedBanner(const std::string& sPath) {
   if (sPath.empty()) {
+    TraceBannerAuditFix(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace "
+        "banner_cached_empty_path fallback=1");
     LoadFallback();
     return;
   }
@@ -120,6 +133,11 @@ void Banner::LoadFromCachedBanner(const std::string& sPath) {
   const bool bLowRes =
       !bIsMovie && PREFSMAN != nullptr && IMAGECACHE != nullptr &&
       (PREFSMAN->m_ImageCache != IMGCACHE_FULL);
+  TraceBannerAuditFix(ssprintf(
+      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace banner_cached_begin "
+      "path='%s' isMovie=%d lowRes=%d textureManager=%d imageCache=%d",
+      sPath.c_str(), bIsMovie, bLowRes, TEXTUREMAN != nullptr,
+      IMAGECACHE != nullptr));
   if (!bLowRes) {
     ID = Sprite::SongBannerTexture(sPath);
   } else {
@@ -128,10 +146,22 @@ void Banner::LoadFromCachedBanner(const std::string& sPath) {
   }
 
   if (TEXTUREMAN != nullptr && TEXTUREMAN->IsTextureRegistered(ID)) {
+    TraceBannerAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace banner_cached_registered "
+        "path='%s' resolved='%s' lowRes=%d",
+        sPath.c_str(), ID.filename.c_str(), bLowRes));
     Load(ID);
   } else if (IsAFile(sPath)) {
+    TraceBannerAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace banner_cached_load_file "
+        "path='%s' resolved='%s'",
+        sPath.c_str(), ID.filename.c_str()));
     Load(sPath);
   } else {
+    TraceBannerAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace banner_cached_missing_file "
+        "path='%s' resolved='%s'",
+        sPath.c_str(), ID.filename.c_str()));
     LoadFallback();
   }
 }
@@ -175,6 +205,12 @@ void Banner::Update(float fDeltaTime) {
 }
 
 void Banner::SetScrolling(bool bScroll, float Percent) {
+  TraceBannerAuditFix(ssprintf(
+      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace banner_set_scrolling "
+      "scroll=%d percent=%.6f previousScroll=%d previousPercent=%.6f "
+      "texture='%s'",
+      bScroll, Percent, m_bScrolling, m_fPercentScrolling,
+      GetTexturePath().c_str()));
   m_bScrolling = bScroll;
   if (!IsFiniteFloat(Percent)) {
     WarnBannerAuditFix(ssprintf(
@@ -191,6 +227,14 @@ void Banner::SetScrolling(bool bScroll, float Percent) {
 
 void Banner::LoadFromSong(Song* pSong)  // nullptr means no song
 {
+  TraceBannerAuditFix(ssprintf(
+      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace banner_song "
+      "songPtr=%p title='%s' dir='%s' hasBanner=%d banner='%s'",
+      static_cast<void*>(pSong),
+      pSong == nullptr ? "<null>" : pSong->GetDisplayFullTitle().c_str(),
+      pSong == nullptr ? "" : pSong->GetSongDir().c_str(),
+      pSong != nullptr && pSong->HasBanner(),
+      pSong == nullptr ? "" : pSong->GetBannerPath().c_str()));
   if (pSong == nullptr) {
     LoadFallback();
   } else if (pSong->HasBanner()) {
@@ -219,6 +263,10 @@ void Banner::LoadFromSongGroup(std::string sSongGroup) {
   }
 
   std::string sGroupBannerPath = SONGMAN->GetSongGroupBannerPath(sSongGroup);
+  TraceBannerAuditFix(ssprintf(
+      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace banner_group "
+      "group='%s' banner='%s'",
+      sSongGroup.c_str(), sGroupBannerPath.c_str()));
   if (sGroupBannerPath != "") {
     Load(sGroupBannerPath);
   } else {
@@ -229,6 +277,12 @@ void Banner::LoadFromSongGroup(std::string sSongGroup) {
 
 void Banner::LoadFromCourse(const Course* pCourse)  // nullptr means no course
 {
+  TraceBannerAuditFix(ssprintf(
+      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace banner_course "
+      "coursePtr=%p title='%s' banner='%s'",
+      static_cast<const void*>(pCourse),
+      pCourse == nullptr ? "<null>" : pCourse->GetDisplayFullTitle().c_str(),
+      pCourse == nullptr ? "" : pCourse->GetBannerPath().c_str()));
   if (pCourse == nullptr) {
     LoadFallback();
   } else if (pCourse->GetBannerPath() != "") {
@@ -293,6 +347,8 @@ void Banner::LoadBackgroundFromUnlockEntry(const UnlockEntry* pUE) {
 }
 
 void Banner::LoadFallback() {
+  TraceBannerAuditFix(
+      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace banner_fallback");
   Load(GetBannerThemePath("Common", "fallback banner"));
 }
 

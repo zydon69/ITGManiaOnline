@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <cstdarg>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,17 @@ void WarnWheelBase(const std::string& message) {
   if (LOG != nullptr) {
     LOG->Warn("WheelBase: %s", message.c_str());
   }
+}
+
+void TraceWheelBaseMusicWheel(const char* fmt, ...) {
+  if (LOG == nullptr) {
+    return;
+  }
+
+  va_list va;
+  va_start(va, fmt);
+  LOG->Trace("%s", vssprintf(fmt, va).c_str());
+  va_end(va);
 }
 }  // namespace
 
@@ -636,9 +648,19 @@ void WheelBase::RebuildWheelItems(int iDist) {
 
   const std::vector<WheelItemBaseData*>& data = m_CurWheelItemData;
   std::vector<WheelItemBase*>& items = m_WheelBaseItems;
+  TraceWheelBaseMusicWheel(
+      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_begin "
+      "requestedDist=%d selection=%d offset=%.6f moving=%d dataCount=%zu "
+      "actorCount=%zu empty=%d lastSelection=%p",
+      iDist, m_iSelection, m_fPositionOffsetFromSelection, m_Moving,
+      data.size(), items.size(), m_bEmpty, static_cast<void*>(m_LastSelection));
   if (data.empty() || items.empty()) {
     m_bEmpty = true;
     m_LastSelection = nullptr;
+    TraceWheelBaseMusicWheel(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_empty "
+        "requestedDist=%d dataCount=%zu actorCount=%zu",
+        iDist, data.size(), items.size());
     return;
   }
 
@@ -665,6 +687,12 @@ void WheelBase::RebuildWheelItems(int iDist) {
   int iFirst = 0;
   int iLast = itemCount - 1;
   if (iLast < 0) {
+    TraceWheelBaseMusicWheel(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_no_visible_items "
+        "requestedDist=%d selection=%d firstVisible=%d itemCount=%d "
+        "wheelItemCount=%d actorCount=%zu",
+        iDist, m_iSelection, iFirstVisibleIndex, itemCount, wheelItemCount,
+        items.size());
     return;
   }
 
@@ -679,6 +707,15 @@ void WheelBase::RebuildWheelItems(int iDist) {
     }
   }
 
+  TraceWheelBaseMusicWheel(
+      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_window "
+      "normalizedDist=%d selection=%d firstVisible=%d firstReloadSlot=%d "
+      "lastReloadSlot=%d itemCount=%d wheelItemCount=%d dataCount=%zu "
+      "actorCount=%zu offset=%.6f moving=%d",
+      iDist, m_iSelection, iFirstVisibleIndex, iFirst, iLast, itemCount,
+      wheelItemCount, data.size(), items.size(), m_fPositionOffsetFromSelection,
+      m_Moving);
+
   for (int i = iFirst; i <= iLast; i++) {
     int iIndex = iFirstVisibleIndex + i;
     wrap(iIndex, data.size());
@@ -686,6 +723,11 @@ void WheelBase::RebuildWheelItems(int iDist) {
     const WheelItemBaseData* pData = data[iIndex];
     WheelItemBase* pDisplay = items[i];
     if (pData == nullptr || pDisplay == nullptr) {
+      TraceWheelBaseMusicWheel(
+          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_expand_skip "
+          "slot=%d dataIndex=%d dataPtr=%p actorPtr=%p",
+          i, iIndex, static_cast<const void*>(pData),
+          static_cast<void*>(pDisplay));
       continue;
     }
 
@@ -700,10 +742,30 @@ void WheelBase::RebuildWheelItems(int iDist) {
     const WheelItemBaseData* pData = data[iIndex];
     WheelItemBase* pDisplay = items[i];
     if (pData == nullptr || pDisplay == nullptr) {
+      TraceWheelBaseMusicWheel(
+          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_load_skip "
+          "slot=%d dataIndex=%d dataPtr=%p actorPtr=%p selected=%d",
+          i, iIndex, static_cast<const void*>(pData),
+          static_cast<void*>(pDisplay), m_iSelection == iIndex);
       continue;
     }
+    TraceWheelBaseMusicWheel(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_load_slot "
+        "slot=%d dataIndex=%d selected=%d type='%s' text='%s' dataPtr=%p "
+        "actorPtr=%p firstVisible=%d selection=%d offset=%.6f",
+        i, iIndex, m_iSelection == iIndex,
+        WheelItemDataTypeToLogString(pData->m_Type), pData->m_sText.c_str(),
+        static_cast<const void*>(pData), static_cast<void*>(pDisplay),
+        iFirstVisibleIndex, m_iSelection, m_fPositionOffsetFromSelection);
     pDisplay->LoadFromWheelItemData(pData, iIndex, m_iSelection == iIndex, i);
   }
+
+  TraceWheelBaseMusicWheel(
+      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_end "
+      "selection=%d offset=%.6f moving=%d firstVisible=%d dataCount=%zu "
+      "actorCount=%zu empty=%d",
+      m_iSelection, m_fPositionOffsetFromSelection, m_Moving,
+      iFirstVisibleIndex, data.size(), items.size(), m_bEmpty);
 }
 
 WheelItemBaseData* WheelBase::LastSelected() {

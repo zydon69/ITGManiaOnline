@@ -7,6 +7,7 @@
 #include "LuaManager.h"
 #include "MessageManager.h"
 #include "RageLog.h"
+#include "RageUtil.h"
 #include "Song.h"
 #include "ThemeManager.h"
 #include "XmlFile.h"
@@ -18,6 +19,12 @@ namespace {
 void WarnTextBannerAuditFix(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
+  }
+}
+
+void TraceTextBannerAuditFix(const std::string& message) {
+  if (LOG != nullptr) {
+    LOG->Trace("%s", message.c_str());
   }
 }
 }  // namespace
@@ -102,6 +109,15 @@ void TextBanner::SetFromString(
     const std::string& sDisplayTitle, const std::string& sTranslitTitle,
     const std::string& sDisplaySubTitle, const std::string& sTranslitSubTitle,
     const std::string& sDisplayArtist, const std::string& sTranslitArtist) {
+  TraceTextBannerAuditFix(ssprintf(
+      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace text_banner_set_string "
+      "displayTitle='%s' translitTitle='%s' displaySubtitle='%s' "
+      "translitSubtitle='%s' displayArtist='%s' translitArtist='%s' "
+      "initted=%d childrenAdded=%d",
+      sDisplayTitle.c_str(), sTranslitTitle.c_str(),
+      sDisplaySubTitle.c_str(), sTranslitSubTitle.c_str(),
+      sDisplayArtist.c_str(), sTranslitArtist.c_str(), m_bInitted,
+      m_bChildrenAdded));
   if (!m_bInitted) {
     WarnTextBannerAuditFix(
         "SRC_AUDIT_FIX SRC-1062: TextBanner initialized lazily before text "
@@ -120,9 +136,20 @@ void TextBanner::SetFromString(
 
 void TextBanner::SetFromSong(const Song* pSong) {
   if (pSong == nullptr) {
+    TraceTextBannerAuditFix(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace "
+        "text_banner_set_song song=<null>");
     SetFromString("", "", "", "", "", "");
     return;
   }
+  TraceTextBannerAuditFix(ssprintf(
+      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace text_banner_set_song "
+      "songPtr=%p title='%s' subtitle='%s' artist='%s' dir='%s' "
+      "banner='%s' music='%s' preview='%s'",
+      static_cast<const void*>(pSong), pSong->GetDisplayMainTitle().c_str(),
+      pSong->GetDisplaySubTitle().c_str(), pSong->GetDisplayArtist().c_str(),
+      pSong->GetSongDir().c_str(), pSong->GetBannerPath().c_str(),
+      pSong->GetMusicPath().c_str(), pSong->GetPreviewMusicPath().c_str()));
   SetFromString(
       pSong->GetDisplayMainTitle(), pSong->GetTranslitMainTitle(),
       pSong->GetDisplaySubTitle(), pSong->GetTranslitSubTitle(),

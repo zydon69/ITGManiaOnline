@@ -34,6 +34,9 @@ read_source("src/WheelBase.cpp" wheel_base_cpp)
 read_source("src/MusicWheel.cpp" music_wheel_cpp)
 read_source("src/MusicWheelItem.cpp" music_wheel_item_cpp)
 read_source("src/ScreenSelectMusic.cpp" screen_select_music_cpp)
+read_source("src/Banner.cpp" banner_cpp)
+read_source("src/FadingBanner.cpp" fading_banner_cpp)
+read_source("src/TextBanner.cpp" text_banner_cpp)
 
 require_contains(
   "${lua_expression_transform_h}"
@@ -185,6 +188,30 @@ require_contains(
   "${screen_select_music_cpp}"
   "SRC-2693 MusicWheelTrace after_music_change_end"
   "ScreenSelectMusic logs applied banner and sample state")
+require_contains(
+  "${screen_select_music_cpp}"
+  "SRC-2693 MusicWheelTrace input_event"
+  "ScreenSelectMusic logs raw select-music input state")
+require_contains(
+  "${screen_select_music_cpp}"
+  "SRC-2693 MusicWheelTrace handle_screen_message_begin"
+  "ScreenSelectMusic logs screen-message entry state")
+require_contains(
+  "${wheel_base_cpp}"
+  "SRC-2693 MusicWheelTrace rebuild_load_slot"
+  "WheelBase logs rebuilt visual wheel slots")
+require_contains(
+  "${banner_cpp}"
+  "SRC-2693 MusicWheelTrace banner_cached_begin"
+  "Banner logs cached visual asset resolution")
+require_contains(
+  "${fading_banner_cpp}"
+  "SRC-2693 MusicWheelTrace fading_banner_cached_begin"
+  "FadingBanner logs cached visual asset resolution")
+require_contains(
+  "${text_banner_cpp}"
+  "SRC-2693 MusicWheelTrace text_banner_set_song"
+  "TextBanner logs rendered song text")
 require_contains(
   "${screen_options_cpp}"
   "const bool bTransformOk ="

@@ -131,6 +131,27 @@ std::string DescribeSelectMusicCourse(const Course* course) {
       course->m_sPath.c_str(), course->GetBannerPath().c_str());
 }
 
+std::string DescribeSelectMusicButton(GameButton button) {
+  if (button == GameButton_Invalid) {
+    return "Invalid";
+  }
+  if (INPUTMAPPER == nullptr || INPUTMAPPER->GetInputScheme() == nullptr) {
+    return ssprintf("%d", static_cast<int>(button));
+  }
+  return GameButtonToString(INPUTMAPPER->GetInputScheme(), button);
+}
+
+std::string DescribeSelectMusicGameInput(const GameInput& input) {
+  if (!input.IsValid()) {
+    return "Invalid";
+  }
+  return ssprintf(
+      "controller=%d button='%s' rawButton=%d",
+      static_cast<int>(input.controller),
+      DescribeSelectMusicButton(input.button).c_str(),
+      static_cast<int>(input.button));
+}
+
 float SanitizeMetricSeconds(float seconds, float fallback = 0.0f) {
   if (!std::isfinite(seconds)) {
     return fallback;
@@ -871,7 +892,28 @@ bool ScreenSelectMusic::Input(const InputEventPlus& input) {
                      input.MenuI == GAME_BUTTON_START)) {
     return ScreenWithMenuElements::Input(input);
   }
-  //	LOG->Trace( "ScreenSelectMusic::Input()" );
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace input_event "
+        "type='%s' player=%d device='%s' menu='%s' menuRaw=%d game={%s} "
+        "state='%s' transitioning=%d finalized=%d stepsChosenP1=%d "
+        "stepsChosenP2=%d goToOptions=%d allowOptions=%d wheelLogical=%d "
+        "wheelFocus=%d moving=%d settled=%d selectedSong={%s} "
+        "selectedCourse={%s}",
+        InputEventTypeToString(input.type).c_str(), static_cast<int>(input.pn),
+        input.DeviceI.ToString().c_str(),
+        DescribeSelectMusicButton(input.MenuI).c_str(),
+        static_cast<int>(input.MenuI),
+        DescribeSelectMusicGameInput(input.GameI).c_str(),
+        SelectionStateToString(m_SelectionState).c_str(), IsTransitioning(),
+        m_SelectionState == SelectionState_Finalized,
+        m_bStepsChosen[PLAYER_1], m_bStepsChosen[PLAYER_2], m_bGoToOptions,
+        m_bAllowOptionsMenu, m_MusicWheel.GetCurrentIndex(),
+        m_MusicWheel.GetVisualFocusIndex(), m_MusicWheel.IsMoving(),
+        m_MusicWheel.IsSettled(),
+        DescribeSelectMusicSong(m_MusicWheel.GetSelectedSong()).c_str(),
+        DescribeSelectMusicCourse(m_MusicWheel.GetSelectedCourse()).c_str());
+  }
 
   // reset announcer timer
   m_timerIdleComment.GetDeltaTime();
@@ -1631,6 +1673,21 @@ void ScreenSelectMusic::HandleMessage(const Message& msg) {
 }
 
 void ScreenSelectMusic::HandleScreenMessage(const ScreenMessage SM) {
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace handle_screen_message_begin "
+        "sm='%s' state='%s' transitioning=%d goToOptions=%d "
+        "previewSuspended=%d wheelLogical=%d wheelFocus=%d moving=%d "
+        "settled=%d selectedSong={%s} selectedCourse={%s}",
+        ScreenMessageHelpers::ScreenMessageToString(SM).c_str(),
+        SelectionStateToString(m_SelectionState).c_str(), IsTransitioning(),
+        m_bGoToOptions, m_bPreviewSuspendedForPrompt,
+        m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex(),
+        m_MusicWheel.IsMoving(), m_MusicWheel.IsSettled(),
+        DescribeSelectMusicSong(m_MusicWheel.GetSelectedSong()).c_str(),
+        DescribeSelectMusicCourse(m_MusicWheel.GetSelectedCourse()).c_str());
+  }
+
   if (SM == SM_AllowOptionsMenuRepeat) {
     m_bAllowOptionsMenuRepeat = true;
   } else if (SM == SM_MenuTimer) {
@@ -1661,6 +1718,20 @@ void ScreenSelectMusic::HandleScreenMessage(const ScreenMessage SM) {
       }
 
       MenuStart(InputEventPlus());
+    }
+    if (LOG != nullptr) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace handle_screen_message_end "
+          "sm='%s' state='%s' transitioning=%d goToOptions=%d "
+          "previewSuspended=%d wheelLogical=%d wheelFocus=%d moving=%d "
+          "settled=%d selectedSong={%s} selectedCourse={%s}",
+          ScreenMessageHelpers::ScreenMessageToString(SM).c_str(),
+          SelectionStateToString(m_SelectionState).c_str(), IsTransitioning(),
+          m_bGoToOptions, m_bPreviewSuspendedForPrompt,
+          m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex(),
+          m_MusicWheel.IsMoving(), m_MusicWheel.IsSettled(),
+          DescribeSelectMusicSong(m_MusicWheel.GetSelectedSong()).c_str(),
+          DescribeSelectMusicCourse(m_MusicWheel.GetSelectedCourse()).c_str());
     }
     return;
   } else if (SM == SM_GoToPrevScreen) {
@@ -1721,6 +1792,20 @@ void ScreenSelectMusic::HandleScreenMessage(const ScreenMessage SM) {
   }
 
   ScreenWithMenuElements::HandleScreenMessage(SM);
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace handle_screen_message_end "
+        "sm='%s' state='%s' transitioning=%d goToOptions=%d "
+        "previewSuspended=%d wheelLogical=%d wheelFocus=%d moving=%d "
+        "settled=%d selectedSong={%s} selectedCourse={%s}",
+        ScreenMessageHelpers::ScreenMessageToString(SM).c_str(),
+        SelectionStateToString(m_SelectionState).c_str(), IsTransitioning(),
+        m_bGoToOptions, m_bPreviewSuspendedForPrompt,
+        m_MusicWheel.GetCurrentIndex(), m_MusicWheel.GetVisualFocusIndex(),
+        m_MusicWheel.IsMoving(), m_MusicWheel.IsSettled(),
+        DescribeSelectMusicSong(m_MusicWheel.GetSelectedSong()).c_str(),
+        DescribeSelectMusicCourse(m_MusicWheel.GetSelectedCourse()).c_str());
+  }
 }
 
 bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
