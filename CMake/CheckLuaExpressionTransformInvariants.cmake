@@ -31,6 +31,7 @@ read_source("src/ActorScroller.cpp" actor_scroller_cpp)
 read_source("src/ScreenOptions.cpp" screen_options_cpp)
 read_source("src/StreamDisplay.cpp" stream_display_cpp)
 read_source("src/WheelBase.cpp" wheel_base_cpp)
+read_source("src/MusicWheel.cpp" music_wheel_cpp)
 
 require_contains(
   "${lua_expression_transform_h}"
@@ -138,6 +139,22 @@ require_contains(
   "${wheel_base_cpp}"
   "m_fPositionOffsetFromSelection = 0.0f;"
   "WheelBase clears visual offset before selection")
+require_contains(
+  "${music_wheel_cpp}"
+  "int MusicWheel::GetVisualFocusIndex() const"
+  "MusicWheel centralizes visual focus selection reads")
+require_contains(
+  "${music_wheel_cpp}"
+  "std::lround(m_fPositionOffsetFromSelection)"
+  "MusicWheel reads the item closest to visual focus")
+require_contains(
+  "${music_wheel_cpp}"
+  "const MusicWheelItemData* selected = GetVisualFocusItemData();"
+  "MusicWheel selected song follows visual focus")
+require_contains(
+  "${music_wheel_cpp}"
+  "const MusicWheelItemData* item = GetVisualFocusItemData();"
+  "MusicWheel selected metadata follows visual focus")
 require_contains(
   "${screen_options_cpp}"
   "const bool bTransformOk ="

@@ -168,18 +168,38 @@ MusicWheelItemData* MusicWheel::GetCurWheelItemData(int i) {
   return dynamic_cast<MusicWheelItemData*>(m_CurWheelItemData[i]);
 }
 
+int MusicWheel::GetVisualFocusIndex() const {
+  if (m_CurWheelItemData.empty()) {
+    return -1;
+  }
+
+  int focusedIndex = std::clamp(
+      m_iSelection, 0, static_cast<int>(m_CurWheelItemData.size()) - 1);
+  if (std::isfinite(m_fPositionOffsetFromSelection)) {
+    focusedIndex -=
+        static_cast<int>(std::lround(m_fPositionOffsetFromSelection));
+    wrap(focusedIndex, m_CurWheelItemData.size());
+  }
+
+  return focusedIndex;
+}
+
+const MusicWheelItemData* MusicWheel::GetVisualFocusItemData() const {
+  return GetCurWheelItemData(GetVisualFocusIndex());
+}
+
 WheelItemDataType MusicWheel::GetSelectedType() {
-  const MusicWheelItemData* item = GetCurWheelItemData(m_iSelection);
+  const MusicWheelItemData* item = GetVisualFocusItemData();
   return item != nullptr ? item->m_Type : WheelItemDataType_Invalid;
 }
 
 Course* MusicWheel::GetSelectedCourse() {
-  const MusicWheelItemData* item = GetCurWheelItemData(m_iSelection);
+  const MusicWheelItemData* item = GetVisualFocusItemData();
   return item != nullptr ? item->m_pCourse : nullptr;
 }
 
 std::string MusicWheel::GetSelectedSection() {
-  const MusicWheelItemData* item = GetCurWheelItemData(m_iSelection);
+  const MusicWheelItemData* item = GetVisualFocusItemData();
   return item != nullptr ? item->m_sText : "";
 }
 
@@ -2326,7 +2346,7 @@ bool MusicWheel::IsRouletting() const {
 }
 
 Song* MusicWheel::GetSelectedSong() {
-  const MusicWheelItemData* selected = GetCurWheelItemData(m_iSelection);
+  const MusicWheelItemData* selected = GetVisualFocusItemData();
   if (selected == nullptr) {
     return nullptr;
   }

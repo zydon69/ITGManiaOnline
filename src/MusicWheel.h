@@ -67,6 +67,8 @@ class MusicWheel : public WheelBase {
  protected:
   MusicWheelItem* MakeItem();
 
+  int GetVisualFocusIndex() const;
+  const MusicWheelItemData* GetVisualFocusItemData() const;
   void GetSongList(std::vector<Song*>& arraySongs, SortOrder so);
   bool SelectSongOrCourse();
   bool SelectModeMenuItem();
