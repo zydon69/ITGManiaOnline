@@ -238,6 +238,8 @@ if not ITGOnline.finalLeaderboardCacheBootLogged then
 	final_leaderboard_cache_trace("boot version=2026-06-23-global-final-leaderboard-cache")
 end
 
+local online_trace
+
 local function online_table_copy(value, depth)
 	if type(value) ~= "table" then return value end
 	depth = tonumber(depth) or 0
@@ -255,6 +257,135 @@ end
 
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function safe_call(label, fn)
+	if type(fn) ~= "function" then return false, "not_function" end
+	local results = { pcall(fn) }
+	local ok = table.remove(results, 1)
+	if not ok then
+		local message = "safe_call_failed label=" .. tostring(label or "unknown") .. " error=" .. tostring(results[1])
+		if online_trace then online_trace(message) elseif Warn then Warn("ITG Online: " .. message) end
+	end
+	return ok, unpack(results)
+end
+
+local function safe_callback(callback, ...)
+	if type(callback) ~= "function" then return false end
+	local args = { ... }
+	return safe_call("callback", function()
+		return callback(unpack(args))
+	end)
+end
+
+local function safe_callbacks(callbacks, ...)
+	if type(callbacks) ~= "table" then return 0 end
+	local args = { ... }
+	local count = 0
+	for callback in ivalues(callbacks) do
+		if type(callback) == "function" then
+			count = count + 1
+			safe_call("callback_list", function()
+				return callback(unpack(args))
+			end)
+		end
+	end
+	return count
+end
+
+local function safe_broadcast(message, params)
+	if not (MESSAGEMAN and MESSAGEMAN.Broadcast) then return false end
+	return safe_call("broadcast:" .. tostring(message or ""), function()
+		if params == nil then
+			MESSAGEMAN:Broadcast(message)
+		else
+			MESSAGEMAN:Broadcast(message, params)
+		end
+	end)
+end
+
+local function top_screen()
+	if not (SCREENMAN and SCREENMAN.GetTopScreen) then return nil end
+	local ok, screen = safe_call("screenman_get_top_screen", function()
+		return SCREENMAN:GetTopScreen()
+	end)
+	return ok and screen or nil
+end
+
+local function top_screen_name(fallback)
+	local screen = top_screen()
+	if screen and screen.GetName then
+		local ok, name = safe_call("screen_get_name", function()
+			return screen:GetName()
+		end)
+		if ok and name then return tostring(name) end
+	end
+	return tostring(fallback or "NoScreen")
+end
+
+local function online_values(collection)
+	if type(collection) ~= "table" then return {} end
+	local values = {}
+	local seen = {}
+	for _, value in ipairs(collection) do
+		values[#values + 1] = value
+		seen[value] = true
+	end
+	for key, value in pairs(collection) do
+		if type(key) ~= "number" and not seen[value] then
+			values[#values + 1] = value
+			seen[value] = true
+		end
+	end
+	return values
+end
+
+local function online_count(collection)
+	return #online_values(collection)
+end
+
+local function online_room_ids_match(a, b)
+	local left = trim(a)
+	local right = trim(b)
+	if left == "" or right == "" then return false end
+	local leftNumber = tonumber(left)
+	local rightNumber = tonumber(right)
+	if leftNumber ~= nil and rightNumber ~= nil then
+		return leftNumber == rightNumber
+	end
+	return left == right
+end
+
+local function file_exists(path)
+	if not (FILEMAN and FILEMAN.DoesFileExist) then return false end
+	local ok, exists = safe_call("file_exists", function()
+		return FILEMAN:DoesFileExist(path)
+	end)
+	return ok and exists == true
+end
+
+local function ini_read(path)
+	if not (IniFile and IniFile.ReadFile) then return nil end
+	local ok, contents = safe_call("ini_read", function()
+		return IniFile.ReadFile(path)
+	end)
+	return ok and type(contents) == "table" and contents or nil
+end
+
+local function ini_write(path, contents)
+	if not (IniFile and IniFile.WriteFile) then return false end
+	local ok = safe_call("ini_write", function()
+		return IniFile.WriteFile(path, contents)
+	end)
+	return ok == true
+end
+
+local function manager_method(manager, methodName, ...)
+	if not manager or type(manager[methodName]) ~= "function" then return false, nil end
+	local args = { ... }
+	return safe_call("manager_method:" .. tostring(methodName), function()
+		return manager[methodName](manager, unpack(args))
+	end)
 end
 
 local function user_display_name(user, fallback)
@@ -337,7 +468,11 @@ local function is_itgonline_host(host)
 end
 
 local function network_allows(value)
-	return NETWORK and NETWORK.IsUrlAllowed and NETWORK:IsUrlAllowed(value)
+	if not (NETWORK and NETWORK.IsUrlAllowed) then return false end
+	local ok, allowed = safe_call("network_is_url_allowed", function()
+		return NETWORK:IsUrlAllowed(value)
+	end)
+	return ok and allowed == true
 end
 
 local function is_trusted_online_api_url(value)
@@ -376,26 +511,43 @@ local function origin_from_base_url(value)
 	return value:match("^(https?://[^/]+)") or ""
 end
 
-local online_trace
-
 local function secure_credentials_available()
-	return NETWORK and NETWORK.SecureCredentialIsAvailable and NETWORK:SecureCredentialIsAvailable()
+	if not (NETWORK and NETWORK.SecureCredentialIsAvailable) then return false end
+	local ok, available = safe_call("secure_credentials_available", function()
+		return NETWORK:SecureCredentialIsAvailable()
+	end)
+	return ok and available == true
 end
 
 local function secure_credentials_backend()
 	if NETWORK and NETWORK.SecureCredentialBackend then
-		return tostring(NETWORK:SecureCredentialBackend() or "unavailable")
+		local ok, backend = safe_call("secure_credentials_backend", function()
+			return NETWORK:SecureCredentialBackend()
+		end)
+		if ok then return tostring(backend or "unavailable") end
 	end
 	return "unavailable"
 end
 
 local function active_online_player()
-	if GAMESTATE then
-		for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
-			if GAMESTATE:IsHumanPlayer(player) then return player end
+	if GAMESTATE and GAMESTATE.GetEnabledPlayers then
+		local ok, players = safe_call("active_online_player_enabled", function()
+			return GAMESTATE:GetEnabledPlayers()
+		end)
+		if ok and type(players) == "table" then
+			for player in ivalues(players) do
+				local humanOk, isHuman = safe_call("active_online_player_human", function()
+					return GAMESTATE:IsHumanPlayer(player)
+				end)
+				if humanOk and isHuman then return player end
+			end
 		end
-		if GAMESTATE:IsSideJoined(PLAYER_1) then return PLAYER_1 end
-		if GAMESTATE:IsSideJoined(PLAYER_2) then return PLAYER_2 end
+		if GAMESTATE.IsSideJoined then
+			local p1Ok, p1Joined = safe_call("active_online_player_p1", function() return GAMESTATE:IsSideJoined(PLAYER_1) end)
+			if p1Ok and p1Joined then return PLAYER_1 end
+			local p2Ok, p2Joined = safe_call("active_online_player_p2", function() return GAMESTATE:IsSideJoined(PLAYER_2) end)
+			if p2Ok and p2Joined then return PLAYER_2 end
+		end
 	end
 
 	return PLAYER_1
@@ -426,7 +578,10 @@ local function profile_prefers_persistent_online_token()
 	end
 
 	if not PROFILEMAN or not PROFILEMAN.IsPersistentProfile then return false end
-	return PROFILEMAN:IsPersistentProfile(player)
+	local ok, persistent = safe_call("profile_persistent", function()
+		return PROFILEMAN:IsPersistentProfile(player)
+	end)
+	return ok and persistent == true
 end
 
 local function online_profile_slot(player)
@@ -438,7 +593,7 @@ local function active_profile_auth_path()
 	if not PROFILEMAN then return nil, nil end
 
 	local player = active_online_player()
-	local ok, dir = pcall(function()
+	local ok, dir = safe_call("active_profile_auth_path", function()
 		return PROFILEMAN:GetProfileDir(online_profile_slot(player))
 	end)
 	if not ok or trim(dir) == "" then return nil, nil end
@@ -460,7 +615,7 @@ local function profile_access_token_cache_entry(path)
 	return ITGOnline.profileAccessTokenCache[path]
 end
 
-local function set_profile_access_token_cache(path, apiBaseUrl, token, exists)
+local function set_profile_access_token_cache(path, apiBaseUrl, token, exists, scope)
 	if not path then return end
 
 	ITGOnline.profileAccessTokenCache = ITGOnline.profileAccessTokenCache or {}
@@ -468,6 +623,7 @@ local function set_profile_access_token_cache(path, apiBaseUrl, token, exists)
 		apiBaseUrl = normalize_base_url(apiBaseUrl),
 		token = tostring(token or ""),
 		exists = exists == true,
+		scope = tostring(scope or ""),
 	}
 end
 
@@ -482,19 +638,19 @@ end
 
 local function read_profile_access_token(apiBaseUrl, deviceName)
 	local path = active_profile_auth_path()
-	if not path or not FILEMAN:DoesFileExist(path) then return nil, false end
+	if not path or not file_exists(path) then return nil, false end
 
 	local normalizedApiBaseUrl = normalize_base_url(apiBaseUrl)
 	local expectedScope = access_token_scope(apiBaseUrl, deviceName)
 	local cached = profile_access_token_cache_entry(path)
 	if cached
 		and cached.apiBaseUrl == normalizedApiBaseUrl
-		and (not cached.scope or cached.scope == expectedScope) then
+		and cached.scope == expectedScope then
 		local cachedToken = tostring(cached.token or "")
 		return cachedToken ~= "" and cachedToken or nil, cachedToken ~= ""
 	end
 
-	local contents = IniFile.ReadFile(path) or {}
+	local contents = ini_read(path) or {}
 	local section = contents["ITGOnline"] or {}
 	if normalize_base_url(section["ApiBaseUrl"]) ~= normalizedApiBaseUrl then
 		return nil, false
@@ -506,8 +662,7 @@ local function read_profile_access_token(apiBaseUrl, deviceName)
 	end
 
 	local token = tostring(section["AccessToken"] or "")
-	set_profile_access_token_cache(path, normalizedApiBaseUrl, token, token ~= "")
-	ITGOnline.profileAccessTokenCache[path].scope = expectedScope
+	set_profile_access_token_cache(path, normalizedApiBaseUrl, token, token ~= "", expectedScope)
 	if token == "" then return nil, false end
 
 	return token, true
@@ -518,8 +673,8 @@ local function write_profile_access_token(apiBaseUrl, deviceName, accessToken, u
 	if not path or tostring(accessToken or "") == "" then return false end
 
 	local contents = {}
-	if FILEMAN:DoesFileExist(path) then
-		contents = IniFile.ReadFile(path) or {}
+	if file_exists(path) then
+		contents = ini_read(path) or {}
 	end
 
 	contents["ITGOnline"] = contents["ITGOnline"] or {}
@@ -533,15 +688,14 @@ local function write_profile_access_token(apiBaseUrl, deviceName, accessToken, u
 		contents["ITGOnline"]["UserName"] = user_display_name(user, user.name)
 	end
 
-	IniFile.WriteFile(path, contents)
-	set_profile_access_token_cache(path, contents["ITGOnline"]["ApiBaseUrl"], contents["ITGOnline"]["AccessToken"], true)
-	ITGOnline.profileAccessTokenCache[path].scope = contents["ITGOnline"]["AccessTokenScope"]
+	if not ini_write(path, contents) then return false end
+	set_profile_access_token_cache(path, contents["ITGOnline"]["ApiBaseUrl"], contents["ITGOnline"]["AccessToken"], true, contents["ITGOnline"]["AccessTokenScope"])
 	return true
 end
 
 local function clear_profile_access_token()
 	local path = active_profile_auth_path()
-	if not path or not FILEMAN:DoesFileExist(path) then
+	if not path or not file_exists(path) then
 		invalidate_profile_access_token_cache(path)
 		return false
 	end
@@ -551,17 +705,17 @@ local function clear_profile_access_token()
 		return false
 	end
 
-	local contents = IniFile.ReadFile(path) or {}
+	local contents = ini_read(path) or {}
 	contents["ITGOnline"] = contents["ITGOnline"] or {}
 	if tostring(contents["ITGOnline"]["AccessToken"] or "") == "" then
-		set_profile_access_token_cache(path, contents["ITGOnline"]["ApiBaseUrl"] or "", "", true)
+		set_profile_access_token_cache(path, contents["ITGOnline"]["ApiBaseUrl"] or "", "", true, "")
 		return false
 	end
 
 	contents["ITGOnline"]["AccessToken"] = ""
 	contents["ITGOnline"]["AccessTokenScope"] = ""
-	IniFile.WriteFile(path, contents)
-	set_profile_access_token_cache(path, contents["ITGOnline"]["ApiBaseUrl"] or "", "", true)
+	if not ini_write(path, contents) then return false end
+	set_profile_access_token_cache(path, contents["ITGOnline"]["ApiBaseUrl"] or "", "", true, "")
 	return true
 end
 
@@ -577,7 +731,10 @@ local function secure_password_get(apiBaseUrl, email)
 	local account = secure_password_account(apiBaseUrl, email)
 	if account == "" then return nil, false end
 
-	local result = NETWORK:SecureCredentialGet(ITGOnline.passwordService, account)
+	local ok, result = safe_call("secure_password_get", function()
+		return NETWORK:SecureCredentialGet(ITGOnline.passwordService, account)
+	end)
+	if not ok then return nil, false end
 	if result and result.ok and tostring(result.secret or "") ~= "" then
 		return tostring(result.secret), true
 	end
@@ -591,7 +748,10 @@ local function secure_password_set(apiBaseUrl, email, password)
 	local account = secure_password_account(apiBaseUrl, email)
 	if account == "" or tostring(password or "") == "" then return false end
 
-	local result = NETWORK:SecureCredentialSet(ITGOnline.passwordService, account, tostring(password))
+	local ok, result = safe_call("secure_password_set", function()
+		return NETWORK:SecureCredentialSet(ITGOnline.passwordService, account, tostring(password))
+	end)
+	if not ok then return false end
 	if not result or not result.ok then
 		online_trace("Secure password save failed using " .. secure_credentials_backend() .. ": " .. tostring(result and result.error or "unknown"))
 		return false
@@ -606,7 +766,10 @@ local function secure_password_delete(apiBaseUrl, email)
 	local account = secure_password_account(apiBaseUrl, email)
 	if account == "" then return false end
 
-	local result = NETWORK:SecureCredentialDelete(ITGOnline.passwordService, account)
+	local ok, result = safe_call("secure_password_delete", function()
+		return NETWORK:SecureCredentialDelete(ITGOnline.passwordService, account)
+	end)
+	if not ok then return false end
 	return result and result.ok
 end
 
@@ -635,14 +798,19 @@ local function secure_access_token_get(apiBaseUrl, deviceName)
 	local account = secure_access_token_account(apiBaseUrl, deviceName)
 	if account == "" then return nil, false end
 
-	local result = NETWORK:SecureCredentialGet(ITGOnline.accessTokenService, account)
+	local ok, result = safe_call("secure_access_token_get", function()
+		return NETWORK:SecureCredentialGet(ITGOnline.accessTokenService, account)
+	end)
+	if not ok then return nil, false end
 	if result and result.ok and tostring(result.secret or "") ~= "" then
 		return tostring(result.secret), true
 	end
 
 	local legacyAccount = legacy_secure_access_token_account(apiBaseUrl, deviceName)
 	if legacyAccount ~= "" and legacyAccount ~= account then
-		result = NETWORK:SecureCredentialGet(ITGOnline.accessTokenService, legacyAccount)
+		ok, result = safe_call("secure_access_token_get_legacy", function()
+			return NETWORK:SecureCredentialGet(ITGOnline.accessTokenService, legacyAccount)
+		end)
 		if result and result.ok and tostring(result.secret or "") ~= "" then
 			return tostring(result.secret), true
 		end
@@ -661,18 +829,21 @@ local function secure_access_token_set(apiBaseUrl, deviceName, accessToken, user
 	end
 
 	if not secure_credentials_available() then
-		local savedToProfile = write_profile_access_token(apiBaseUrl, deviceName, accessToken, user)
-		online_trace(
-			"Secure access token save skipped: secure credential storage unavailable; " ..
-			(savedToProfile and "stored token in local profile file." or "failed to store token in local profile file.")
-		)
-		return savedToProfile
+		clear_profile_access_token()
+		online_trace("Secure access token save skipped: secure credential storage unavailable; plaintext profile token persistence disabled.")
+		return false
 	end
 
 	local account = secure_access_token_account(apiBaseUrl, deviceName)
 	if account == "" or tostring(accessToken or "") == "" then return false end
 
-	local result = NETWORK:SecureCredentialSet(ITGOnline.accessTokenService, account, tostring(accessToken))
+	local ok, result = safe_call("secure_access_token_set", function()
+		return NETWORK:SecureCredentialSet(ITGOnline.accessTokenService, account, tostring(accessToken))
+	end)
+	if not ok then
+		clear_profile_access_token()
+		return false
+	end
 	if not result or not result.ok then
 		online_trace("Secure access token save failed using " .. secure_credentials_backend() .. ": " .. tostring(result and result.error or "unknown"))
 		clear_profile_access_token()
@@ -683,7 +854,9 @@ local function secure_access_token_set(apiBaseUrl, deviceName, accessToken, user
 
 	local legacyAccount = legacy_secure_access_token_account(apiBaseUrl, deviceName)
 	if legacyAccount ~= "" and legacyAccount ~= account then
-		NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, legacyAccount)
+		safe_call("secure_access_token_delete_legacy_after_set", function()
+			return NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, legacyAccount)
+		end)
 	end
 
 	return true
@@ -696,14 +869,18 @@ local function secure_access_token_delete(apiBaseUrl, deviceName)
 	local account = secure_access_token_account(apiBaseUrl, deviceName)
 	local deleted = false
 	if account ~= "" then
-		local result = NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, account)
-		deleted = result and result.ok
+		local ok, result = safe_call("secure_access_token_delete", function()
+			return NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, account)
+		end)
+		deleted = ok and result and result.ok
 	end
 
 	local legacyAccount = legacy_secure_access_token_account(apiBaseUrl, deviceName)
 	if legacyAccount ~= "" and legacyAccount ~= account then
-		local result = NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, legacyAccount)
-		deleted = deleted or (result and result.ok)
+		local ok, result = safe_call("secure_access_token_delete_legacy", function()
+			return NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, legacyAccount)
+		end)
+		deleted = deleted or (ok and result and result.ok)
 	end
 
 	return deleted
@@ -777,8 +954,8 @@ function ITGOnline:RefreshDebugFlags(force)
 	end
 	self.lastDebugConfigPollAt = now
 
-	if not FILEMAN:DoesFileExist(self.debugConfigPath) then
-		IniFile.WriteFile(self.debugConfigPath, {
+	if not file_exists(self.debugConfigPath) then
+		ini_write(self.debugConfigPath, {
 			["ITGOnlineDebug"] = {
 				["OnlineTrace"] = "false",
 				["ScoreTrace"] = "false",
@@ -799,8 +976,7 @@ local function online_flow_trace(message)
 	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
 		return
 	end
-	local screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
-	local screenName = screen and screen:GetName() or "NoScreen"
+	local screenName = top_screen_name("NoScreen")
 	local phase = ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"
 	local roomId = ITGOnline and ITGOnline.currentRoomId or "no-room-id"
 	local line = "ITG Online: FLOW room=" .. tostring(roomId)
@@ -808,7 +984,6 @@ local function online_flow_trace(message)
 		.. " screen=" .. tostring(screenName)
 		.. " " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
-	if Flush then Flush() end
 end
 
 local function online_flow_trace_throttled(key, intervalSeconds, message)
@@ -1036,16 +1211,34 @@ local function iso_utc_milliseconds(value)
 end
 
 local function first_enabled_player()
-	for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
-		if GAMESTATE:IsSideJoined(player) then return player end
+	if GAMESTATE and GAMESTATE.GetEnabledPlayers then
+		local ok, players = safe_call("first_enabled_player_enabled", function()
+			return GAMESTATE:GetEnabledPlayers()
+		end)
+		if ok and type(players) == "table" then
+			for player in ivalues(players) do
+				local joinedOk, joined = safe_call("first_enabled_player_joined", function()
+					return GAMESTATE:IsSideJoined(player)
+				end)
+				if joinedOk and joined then return player end
+			end
+		end
 	end
 	return PLAYER_1
 end
 
 local function online_local_player_count()
 	local count = 0
-	for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
-		if GAMESTATE:IsSideJoined(player) then count = count + 1 end
+	if not (GAMESTATE and GAMESTATE.GetEnabledPlayers and GAMESTATE.IsSideJoined) then return count end
+	local ok, players = safe_call("online_local_player_count_enabled", function()
+		return GAMESTATE:GetEnabledPlayers()
+	end)
+	if not ok or type(players) ~= "table" then return count end
+	for player in ivalues(players) do
+		local joinedOk, joined = safe_call("online_local_player_count_joined", function()
+			return GAMESTATE:IsSideJoined(player)
+		end)
+		if joinedOk and joined then count = count + 1 end
 	end
 	return count
 end
@@ -1056,9 +1249,21 @@ end
 
 local function local_profile_name()
 	local player = first_enabled_player()
-	if player and PROFILEMAN:IsPersistentProfile(player) and PROFILEMAN:GetProfile(player) then
-		local name = PROFILEMAN:GetProfile(player):GetDisplayName()
-		if name and name ~= "" then return name end
+	if player and PROFILEMAN and PROFILEMAN.IsPersistentProfile and PROFILEMAN.GetProfile then
+		local persistentOk, persistent = safe_call("local_profile_persistent", function()
+			return PROFILEMAN:IsPersistentProfile(player)
+		end)
+		if persistentOk and persistent then
+			local profileOk, profile = safe_call("local_profile_get", function()
+				return PROFILEMAN:GetProfile(player)
+			end)
+			if profileOk and profile and profile.GetDisplayName then
+				local nameOk, name = safe_call("local_profile_name", function()
+					return profile:GetDisplayName()
+				end)
+				if nameOk and name and name ~= "" then return name end
+			end
+		end
 	end
 	return "ITG Player"
 end
@@ -1070,14 +1275,25 @@ local function song_path(song)
 end
 
 local function sha256_hex(value)
-	return BinaryToHex(CRYPTMAN:SHA256String(tostring(value or ""))):lower()
+	if not (CRYPTMAN and CRYPTMAN.SHA256String and type(BinaryToHex) == "function") then return "" end
+	local ok, digest = safe_call("sha256_string", function()
+		return CRYPTMAN:SHA256String(tostring(value or ""))
+	end)
+	if not ok or not digest or digest == "" then return "" end
+	local hexOk, hex = safe_call("binary_to_hex:string", function()
+		return BinaryToHex(digest)
+	end)
+	return hexOk and tostring(hex or ""):lower() or ""
 end
 
 local function sha256_file_hex(path)
 	if not path or path == "" or not CRYPTMAN or not CRYPTMAN.SHA256File then return nil end
-	local ok, digest = pcall(function() return CRYPTMAN:SHA256File(path) end)
+	local ok, digest = safe_call("sha256_file", function() return CRYPTMAN:SHA256File(path) end)
 	if ok and digest and digest ~= "" then
-		return BinaryToHex(digest):lower()
+		local hexOk, hex = safe_call("binary_to_hex:file", function()
+			return BinaryToHex(digest)
+		end)
+		return hexOk and tostring(hex or ""):lower() or nil
 	end
 	return nil
 end
@@ -1088,7 +1304,7 @@ local function cached_sha256_file_hex(path)
 	ITGOnline.fileHashCache = ITGOnline.fileHashCache or {}
 	local size = nil
 	if FILEMAN and FILEMAN.GetFileSizeBytes then
-		local ok, value = pcall(function() return FILEMAN:GetFileSizeBytes(path) end)
+		local ok, value = safe_call("file_size", function() return FILEMAN:GetFileSizeBytes(path) end)
 		if ok and tonumber(value) then size = tonumber(value) end
 	end
 	local cacheKey = path .. "|" .. tostring(size or "unknown")
@@ -1131,7 +1347,7 @@ function ITGOnline:NormalizeHash(value, options)
 end
 
 local function normalized_hash(value)
-	return ITGOnline:NormalizeHash(value, { hashFallback = true })
+	return ITGOnline:NormalizeHash(value)
 end
 
 local enum_short
@@ -1413,9 +1629,15 @@ enum_short = function(value)
 end
 
 local function current_game_name()
-	local game = GAMESTATE:GetCurrentGame()
+	if not (GAMESTATE and GAMESTATE.GetCurrentGame) then return "dance" end
+	local ok, game = safe_call("current_game", function()
+		return GAMESTATE:GetCurrentGame()
+	end)
+	if not ok then return "dance" end
 	if game and game.GetName then
-		local name = game:GetName()
+		local nameOk, name = safe_call("current_game_name", function()
+			return game:GetName()
+		end)
 		if name and name ~= "" then return tostring(name):lower() end
 	end
 
@@ -1452,8 +1674,8 @@ end
 
 local function read_config(loadPassword)
 	if loadPassword == nil then loadPassword = true end
-	if not FILEMAN:DoesFileExist(ITGOnline.configPath) then
-		IniFile.WriteFile(ITGOnline.configPath, {
+	if not file_exists(ITGOnline.configPath) then
+		ini_write(ITGOnline.configPath, {
 			["ITGOnline"] = {
 				["ApiBaseUrl"] = ITGOnline.defaults.apiBaseUrl,
 				["WebSocketUrl"] = ITGOnline.defaults.webSocketUrl,
@@ -1463,7 +1685,7 @@ local function read_config(loadPassword)
 		})
 	end
 
-	local raw = IniFile.ReadFile(ITGOnline.configPath) or {}
+	local raw = ini_read(ITGOnline.configPath) or {}
 	local section = raw["ITGOnline"] or {}
 	local apiBaseUrl = normalize_base_url(section["ApiBaseUrl"])
 	local email = trim(section["Email"])
@@ -1678,7 +1900,7 @@ function ITGOnline:SaveConfig(values)
 	nextConfig.accessTokenScope = access_token_scope(nextConfig.apiBaseUrl, nextConfig.deviceName)
 	nextConfig.secureCredentialsBackend = secure_credentials_backend()
 
-	IniFile.WriteFile(ITGOnline.configPath, {
+	ini_write(ITGOnline.configPath, {
 		["ITGOnline"] = {
 			["ApiBaseUrl"] = nextConfig.apiBaseUrl,
 			["WebSocketUrl"] = nextConfig.webSocketUrl,
@@ -4067,11 +4289,16 @@ function ITGOnline:ApplyGlobalOptionsToLocalState(room, source)
 	local options = self:NormalizeGlobalOptions(room and room.global_options)
 	apply_music_rate(options.music_rate)
 
-	for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
-		local pn = ToEnumShortString(player)
-		if pn and SL and SL[pn] and SL[pn].ActiveModifiers then
-			SL[pn].ActiveModifiers.ShowExScore = options.score_mode == "ex"
-			SL[pn].ActiveModifiers.ShowHardEXScore = options.score_mode == "hardex"
+	if GAMESTATE and GAMESTATE.GetEnabledPlayers then
+		local ok, players = safe_call("global_options_enabled_players", function()
+			return GAMESTATE:GetEnabledPlayers()
+		end)
+		for player in ivalues(ok and type(players) == "table" and players or {}) do
+			local pn = type(ToEnumShortString) == "function" and ToEnumShortString(player) or nil
+			if pn and SL and SL[pn] and SL[pn].ActiveModifiers then
+				SL[pn].ActiveModifiers.ShowExScore = options.score_mode == "ex"
+				SL[pn].ActiveModifiers.ShowHardEXScore = options.score_mode == "hardex"
+			end
 		end
 	end
 
@@ -7783,7 +8010,10 @@ function ITGOnline:BuildSongPayload()
 		"song_payload_build_current currentRoom=" .. tostring(self.currentRoomId or "nil")
 		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
 		.. " screen=" .. tostring(self.currentScreenName or "nil"))
-	return self:BuildSongPayloadFor(GAMESTATE:GetCurrentSong(), selected_steps())
+	local ok, song = safe_call("build_song_payload_current_song", function()
+		return GAMESTATE and GAMESTATE.GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
+	end)
+	return self:BuildSongPayloadFor(ok and song or nil, selected_steps())
 end
 
 function ITGOnline:ApplyMatchedSongSelection(match, source)
@@ -7794,10 +8024,19 @@ function ITGOnline:ApplyMatchedSongSelection(match, source)
 		return false
 	end
 
-	GAMESTATE:SetCurrentSong(match.song)
+	if GAMESTATE and GAMESTATE.SetCurrentSong then
+		safe_call("apply_matched_song_song", function()
+			GAMESTATE:SetCurrentSong(match.song)
+		end)
+	end
 	if match.steps then
-		for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
-			GAMESTATE:SetCurrentSteps(player, match.steps)
+		local ok, players = safe_call("apply_matched_song_enabled_players", function()
+			return GAMESTATE:GetEnabledPlayers()
+		end)
+		for player in ivalues(ok and type(players) == "table" and players or {}) do
+			safe_call("apply_matched_song_steps", function()
+				GAMESTATE:SetCurrentSteps(player, match.steps)
+			end)
 		end
 	end
 
@@ -8116,9 +8355,14 @@ function ITGOnline:ApplyResolvedLocalGameplaySteps(source)
 
 	local before = online_steps_trace_summary(self, fallbackSteps)
 	local after = online_steps_trace_summary(self, resolvedSteps)
-	for enabledPlayer in ivalues(GAMESTATE:GetEnabledPlayers()) do
+	local ok, players = safe_call("apply_resolved_steps_enabled_players", function()
+		return GAMESTATE:GetEnabledPlayers()
+	end)
+	for enabledPlayer in ivalues(ok and type(players) == "table" and players or {}) do
 		if GAMESTATE.SetCurrentSteps then
-			pcall(function() GAMESTATE:SetCurrentSteps(enabledPlayer, resolvedSteps) end)
+			safe_call("apply_resolved_steps_set_current", function()
+				GAMESTATE:SetCurrentSteps(enabledPlayer, resolvedSteps)
+			end)
 		end
 	end
 	self:TraceOnlineState("gameplay_steps_applied_to_gamestate", {
@@ -8136,8 +8380,13 @@ end
 
 function ITGOnline:TraceActualOnlineGameplaySteps(source)
 	local expected = type(self.expectedOnlineGameplaySteps) == "table" and self.expectedOnlineGameplaySteps or {}
-	for player in ivalues(GAMESTATE and GAMESTATE:GetEnabledPlayers() or {}) do
-		local steps = GAMESTATE and GAMESTATE.GetCurrentSteps and GAMESTATE:GetCurrentSteps(player) or nil
+	local ok, players = safe_call("trace_actual_steps_enabled_players", function()
+		return GAMESTATE and GAMESTATE.GetEnabledPlayers and GAMESTATE:GetEnabledPlayers() or {}
+	end)
+	for player in ivalues(ok and type(players) == "table" and players or {}) do
+		local stepsOk, steps = safe_call("trace_actual_steps_current", function()
+			return GAMESTATE and GAMESTATE.GetCurrentSteps and GAMESTATE:GetCurrentSteps(player) or nil
+		end)
 		local actual = online_steps_trace_summary(self, steps)
 		self:TraceOnlineState("gameplay_actual_steps", {
 			source = source,
@@ -8160,10 +8409,22 @@ function ITGOnline:ChartHashForSteps(steps)
 	if not steps then
 		online_flow_trace("chart_hash_skipped reason=no_steps")
 	end
-	local stepsHash = steps and tostring(steps:GetHash()) or "no-steps"
-	local grooveStatsHash = steps and steps.GetGrooveStatsHash and tostring(steps:GetGrooveStatsHash()) or ""
+	local stepsHash = ""
+	if steps and steps.GetHash then
+		local ok, value = safe_call("chart_hash_steps", function()
+			return steps:GetHash()
+		end)
+		stepsHash = ok and tostring(value or "") or ""
+	end
+	local grooveStatsHash = ""
+	if steps and steps.GetGrooveStatsHash then
+		local ok, value = safe_call("chart_hash_groovestats", function()
+			return steps:GetGrooveStatsHash()
+		end)
+		grooveStatsHash = ok and tostring(value or "") or ""
+	end
 
-	return normalized_hash(grooveStatsHash ~= "" and grooveStatsHash or stepsHash)
+	return self:NormalizeHash(grooveStatsHash ~= "" and grooveStatsHash or stepsHash, { hashFallback = true })
 end
 
 function ITGOnline:SelectSong(callback, options)
@@ -8186,7 +8447,7 @@ function ITGOnline:SelectSong(callback, options)
 				.. " hasPolicy=" .. tostring(has_server_scoring_policy() == true)
 				.. " room=" .. tostring(self.currentRoomId or "nil"))
 			if ok and has_server_scoring_policy() then
-				self:SelectSong(callback)
+				self:SelectSong(callback, options)
 				return
 			end
 
@@ -8206,8 +8467,8 @@ function ITGOnline:SelectSong(callback, options)
 	if not payload then
 		local songFilePath = song and song.GetSongFilePath and song:GetSongFilePath() or ""
 		local musicPath = song and song.GetMusicPath and song:GetMusicPath() or ""
-		local songFileExists = songFilePath ~= "" and FILEMAN:DoesFileExist(songFilePath) or false
-		local musicFileExists = musicPath ~= "" and FILEMAN:DoesFileExist(musicPath) or false
+		local songFileExists = songFilePath ~= "" and file_exists(songFilePath) or false
+		local musicFileExists = musicPath ~= "" and file_exists(musicPath) or false
 		online_flow_trace("song_selection_payload_missing"
 			.. " song=" .. tostring(song and song.GetDisplayFullTitle and song:GetDisplayFullTitle() or "nil")
 			.. " song_path=" .. tostring(song and song_path(song) or "nil")
