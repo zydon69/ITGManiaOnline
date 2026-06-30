@@ -1,6 +1,7 @@
 #include "AttackDisplay.h"
 
 #include <cctype>
+#include <map>
 #include <set>
 #include <string>
 
@@ -40,6 +41,10 @@ void TraceAttackDisplayMissingAsset(const std::string& pieceName) {
   }
 }
 
+bool AttackDisplayThemeIsReady() {
+  return THEME != nullptr && THEME->IsThemeLoaded();
+}
+
 std::string GetSafeAttackToken(const std::string& attack) {
   std::string ret;
   ret.reserve(attack.size());
@@ -62,10 +67,13 @@ std::string GetSafeAttackToken(const std::string& attack) {
   }
   return ret;
 }
-}  // namespace
 
 std::string GetAttackPieceName(const std::string& sAttack) {
-  std::string ret = ssprintf("attack %s", GetSafeAttackToken(sAttack).c_str());
+  const std::string token = GetSafeAttackToken(sAttack);
+  if (token.empty()) {
+    return std::string();
+  }
+  std::string ret = ssprintf("attack %s", token.c_str());
 
   /* 1.5x -> 1_5x.  If we pass a period to THEME->GetPathTo, it'll think
    * we're looking for a specific file and not search. */
@@ -74,19 +82,40 @@ std::string GetAttackPieceName(const std::string& sAttack) {
   return ret;
 }
 
-AttackDisplay::AttackDisplay() : m_pPlayerState(nullptr) {
-  if (GAMESTATE == nullptr ||
-      (GAMESTATE->m_PlayMode != PLAY_MODE_BATTLE &&
-       GAMESTATE->m_PlayMode != PLAY_MODE_RAVE)) {
-    return;
+std::string GetAttackCommandName(const std::string& sAttack, PlayerNumber pn) {
+  const std::string token = GetSafeAttackToken(sAttack);
+  if (token.empty() || !IsValidAttackDisplayPlayer(pn)) {
+    return std::string();
   }
+  return ssprintf("%sP%iOnCommand", token.c_str(), pn + 1);
+}
 
+bool CanRunAttackDisplayCommand(const std::string& commandName) {
+  return !commandName.empty() && AttackDisplayThemeIsReady() && LUA != nullptr &&
+         THEME->HasMetric("AttackDisplay", commandName);
+}
+}  // namespace
+
+AttackDisplay::AttackDisplay()
+    : m_pPlayerState(nullptr), m_bAttackVisible(false) {
   m_sprAttack.SetDiffuseAlpha(0);  // invisible
+  this->AddChild(&m_sprAttack);
+}
+
+AttackDisplay::AttackDisplay(const AttackDisplay& cpy)
+    : ActorFrame(cpy),
+      m_pPlayerState(nullptr),
+      m_sprAttack(cpy.m_sprAttack),
+      m_bAttackVisible(false) {
+  m_sprAttack.StopTweening();
+  m_sprAttack.SetDiffuseAlpha(0);
   this->AddChild(&m_sprAttack);
 }
 
 void AttackDisplay::Init(const PlayerState* pPlayerState) {
   m_pPlayerState = pPlayerState;
+  ResetPreloadedAttacks();
+  HideAttack();
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr) {
     WarnAttackDisplay(
         "SRC_AUDIT_FIX SRC-1236: AttackDisplay::Init missing gameplay "
@@ -109,6 +138,12 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
       GAMESTATE->m_PlayMode != PLAY_MODE_RAVE) {
     return;
   }
+  if (!AttackDisplayThemeIsReady()) {
+    WarnAttackDisplay(
+        "SRC_AUDIT_FIX SRC-1237: AttackDisplay skipped preload without loaded "
+        "theme manager.");
+    return;
+  }
 
   std::set<std::string> attacks;
   for (int al = 0; al < NUM_ATTACK_LEVELS; al++) {
@@ -128,25 +163,42 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
     }
   }
 
-  for (std::set<std::string>::const_iterator it = attacks.begin();
-       it != attacks.end(); ++it) {
-    if (THEME == nullptr) {
+  std::map<std::string, std::string> pieceNameOwners;
+  std::set<std::string> ambiguousAttacks;
+  for (const std::string& attack : attacks) {
+    const std::string pieceName = GetAttackPieceName(attack);
+    if (pieceName.empty()) {
       WarnAttackDisplay(
-          "SRC_AUDIT_FIX SRC-1237: AttackDisplay skipped preload without "
-          "theme manager.");
-      return;
+          "SRC_AUDIT_FIX: AttackDisplay skipped attack with empty display "
+          "token.");
+      continue;
+    }
+    auto inserted = pieceNameOwners.insert(std::make_pair(pieceName, attack));
+    if (!inserted.second && inserted.first->second != attack) {
+      ambiguousAttacks.insert(inserted.first->second);
+      ambiguousAttacks.insert(attack);
+    }
+  }
+
+  for (const std::string& attack : attacks) {
+    if (ambiguousAttacks.find(attack) != ambiguousAttacks.end()) {
+      WarnAttackDisplay(
+          "SRC_AUDIT_FIX: AttackDisplay skipped ambiguous attack asset token.");
+      continue;
     }
 
-    const std::string pieceName = GetAttackPieceName(*it);
-    const std::string path =
-        THEME->GetPathG("AttackDisplay", pieceName, true);
+    const std::string pieceName = GetAttackPieceName(attack);
+    if (pieceName.empty()) {
+      continue;
+    }
+    const std::string path = THEME->GetPathG("AttackDisplay", pieceName, true);
     if (path == "") {
       TraceAttackDisplayMissingAsset(pieceName);
       continue;
     }
 
     m_TexturePreload.Load(path);
-    m_PreloadedAttackPaths.insert(path);
+    m_PreloadedAttackPathsByModifier[attack] = path;
   }
 }
 
@@ -159,11 +211,11 @@ void AttackDisplay::Update(float fDelta) {
     return;
   }
 
-  if (!m_pPlayerState->m_bAttackBeganThisUpdate) {
+  if (!m_pPlayerState->m_bAttackBeganThisUpdate && !m_bAttackVisible) {
     return;
   }
-  // don't handle this again
 
+  std::string activeAttack;
   for (unsigned s = 0; s < m_pPlayerState->m_ActiveAttacks.size(); s++) {
     const Attack& attack = m_pPlayerState->m_ActiveAttacks[s];
 
@@ -186,13 +238,21 @@ void AttackDisplay::Update(float fDelta) {
       continue;
     }
 
-    SetAttack(attack.sModifiers);
+    activeAttack = attack.sModifiers;
     break;
+  }
+  if (activeAttack.empty()) {
+    HideAttack();
+    return;
+  }
+  if (m_pPlayerState->m_bAttackBeganThisUpdate ||
+      activeAttack != m_sDisplayedAttack) {
+    SetAttack(activeAttack);
   }
 }
 
 void AttackDisplay::SetAttack(const std::string& sText) {
-  if (sText.empty() || THEME == nullptr || m_pPlayerState == nullptr) {
+  if (sText.empty() || m_pPlayerState == nullptr) {
     HideAttack();
     return;
   }
@@ -207,15 +267,8 @@ void AttackDisplay::SetAttack(const std::string& sText) {
     return;
   }
 
-  const std::string pieceName = GetAttackPieceName(sText);
-  const std::string path = THEME->GetPathG("AttackDisplay", pieceName, true);
-  if (path == "") {
-    TraceAttackDisplayMissingAsset(pieceName);
-    HideAttack();
-    return;
-  }
-
-  if (m_PreloadedAttackPaths.find(path) == m_PreloadedAttackPaths.end()) {
+  const auto preloaded = m_PreloadedAttackPathsByModifier.find(sText);
+  if (preloaded == m_PreloadedAttackPathsByModifier.end()) {
     WarnAttackDisplay(
         "SRC_AUDIT_FIX SRC-1242: AttackDisplay skipped non-preloaded dynamic "
         "attack asset.");
@@ -223,18 +276,34 @@ void AttackDisplay::SetAttack(const std::string& sText) {
     return;
   }
 
+  m_sprAttack.StopTweening();
+  const std::string& path = preloaded->second;
   m_sprAttack.SetDiffuseAlpha(1);
   if (m_sprAttack.GetTexturePath() != path) {
     m_sprAttack.Load(path);
   }
+  m_sDisplayedAttack = sText;
+  m_bAttackVisible = true;
 
-  const std::string sName =
-      ssprintf("%sP%i", GetSafeAttackToken(sText).c_str(), pn + 1);
-  m_sprAttack.RunCommands(
-      THEME->GetMetricA("AttackDisplay", sName + "OnCommand"));
+  const std::string commandName = GetAttackCommandName(sText, pn);
+  if (CanRunAttackDisplayCommand(commandName)) {
+    m_sprAttack.RunCommands(THEME->GetMetricA("AttackDisplay", commandName));
+  }
 }
 
-void AttackDisplay::HideAttack() { m_sprAttack.SetDiffuseAlpha(0); }
+void AttackDisplay::HideAttack() {
+  m_sprAttack.StopTweening();
+  m_sprAttack.SetDiffuseAlpha(0);
+  m_sDisplayedAttack.clear();
+  m_bAttackVisible = false;
+}
+
+void AttackDisplay::ResetPreloadedAttacks() {
+  m_TexturePreload.UnloadAll();
+  m_PreloadedAttackPathsByModifier.clear();
+}
+
+AttackDisplay* AttackDisplay::Copy() const { return new AttackDisplay(*this); }
 
 /*
  * (c) 2003 Chris Danford

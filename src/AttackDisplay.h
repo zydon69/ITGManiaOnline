@@ -1,6 +1,7 @@
 #ifndef AttackDisplay_H
 #define AttackDisplay_H
 
+#include <map>
 #include <set>
 #include <string>
 
@@ -8,28 +9,31 @@
 #include "RageTexturePreloader.h"
 #include "Sprite.h"
 
-std::string GetAttackPieceName(const std::string& sAttack);
-
 class PlayerState;
 /** @brief A graphical display for attacks. */
 class AttackDisplay : public ActorFrame {
  public:
   AttackDisplay();
+  AttackDisplay(const AttackDisplay& cpy);
 
   void Init(const PlayerState* pPlayerState);
   void SetAttack(const std::string& mod);
 
-  virtual void Update(float fDelta) override;
+  void Update(float fDelta) override;
+  AttackDisplay* Copy() const override;
 
  protected:
   void HideAttack();
+  void ResetPreloadedAttacks();
 
   const PlayerState* m_pPlayerState;
 
   Sprite m_sprAttack;
 
   RageTexturePreloader m_TexturePreload;
-  std::set<std::string> m_PreloadedAttackPaths;
+  std::map<std::string, std::string> m_PreloadedAttackPathsByModifier;
+  std::string m_sDisplayedAttack;
+  bool m_bAttackVisible;
 };
 
 #endif
