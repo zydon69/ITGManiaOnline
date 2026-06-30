@@ -34,27 +34,30 @@ local af = Def.ActorFrame {
                 return
             end
 
-            if params.Song then
-                local song = params.Song
-                local song_dir = song:GetSongDir()
-                -- Only take the <song> parth of /Songs/<pack>/<song>/
-                local song_folder = song_dir:gsub("[/\\]+$", ""):match("([^/\\]+)$") or song_dir
+            if not params.Song then
+                self:visible(false)
+                return
+            end
 
-                local year = 2026
-                if string.find(string.lower(song_dir), "itl online "..year.." unlocks") then
-                    local unlockData = SL[pn].ITLData["unlockFolders"] or {}
-                    local songUnlocked = (unlockData[song_folder]==true)
-                    self:visible(not songUnlocked)
-                else
-                    self:visible(false)
-                end
+            local song = params.Song
+            local song_dir = song:GetSongDir()
+            -- Only take the <song> part of /Songs/<pack>/<song>/
+            local song_folder = song_dir:gsub("[/\\]+$", ""):match("([^/\\]+)$") or song_dir
 
-                if #GAMESTATE:GetHumanPlayers() > 1 then
-                    self:zoomto(15,15)
-                    self:y(pn == "P1" and -8 or 8)
-                else
-                    self:zoomto(20,20):y(0)
-                end
+            local year = 2026
+            if string.find(string.lower(song_dir), "itl online "..year.." unlocks") then
+                local unlockData = SL[pn].ITLData["unlockFolders"] or {}
+                local songUnlocked = (unlockData[song_folder]==true)
+                self:visible(not songUnlocked)
+            else
+                self:visible(false)
+            end
+
+            if #GAMESTATE:GetHumanPlayers() > 1 then
+                self:zoomto(15,15)
+                self:y(pn == "P1" and -8 or 8)
+            else
+                self:zoomto(20,20):y(0)
             end
         end,
     }

@@ -28,19 +28,22 @@ local af = Def.ActorFrame {
             end
         end,
         SetCommand=function(self, params)
-            if params.Song then
-                local song = params.Song
-                if song and FindInTable(song, SL[pn].Favorites) then 
-                    self:visible(true)
-                else
-                    self:visible(false)
-                end
-                if #GAMESTATE:GetHumanPlayers() > 1 then
-                    self:zoomto(15,15)
-                    self:y(pn == "P1" and -8 or 8)
-                else
-                    self:zoomto(20,20):y(0)
-                end
+            if not params.Song then
+                self:visible(false)
+                return
+            end
+
+            local song = params.Song
+            if FindInTable(song, SL[pn].Favorites) then
+                self:visible(true)
+            else
+                self:visible(false)
+            end
+            if #GAMESTATE:GetHumanPlayers() > 1 then
+                self:zoomto(15,15)
+                self:y(pn == "P1" and -8 or 8)
+            else
+                self:zoomto(20,20):y(0)
             end
         end,
     }
