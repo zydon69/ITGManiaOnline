@@ -23,6 +23,21 @@ local col = setup.col
 
 local TransitionTime = 0.5
 local songwheel_y_offset = -13
+local input_screen = nil
+
+local SafeGetChild = function(actor, name)
+	if not (actor and name) then return nil end
+	local ok, child = pcall(function() return actor:GetChild(name) end)
+	return ok and child or nil
+end
+
+local GetTopScreen = function()
+	return SCREENMAN and SCREENMAN.GetTopScreen and SCREENMAN:GetTopScreen() or nil
+end
+
+local GetHumanPlayers = function()
+	return GAMESTATE and GAMESTATE.GetHumanPlayers and GAMESTATE:GetHumanPlayers() or {}
+end
 
 ---------------------------------------------------------------------------
 -- a table of params from this file that we pass into the InputHandler file
@@ -44,45 +59,48 @@ local optionrow_item_mt = LoadActor("./OptionRowItemMT.lua")
 local t = Def.ActorFrame {
 	InitCommand=function(self)
 		GroupWheel:set_info_set(Groups, group_index)
-		self:GetChild("GroupWheel"):SetDrawByZPosition(true)
+		local groupwheel_actor = SafeGetChild(self, "GroupWheel")
+		if groupwheel_actor then groupwheel_actor:SetDrawByZPosition(true) end
 
 		self:queuecommand("Capture")
 	end,
 	OnCommand=function(self)
-		if PREFSMAN:GetPreference("MenuTimer") then self:queuecommand("Listen") end
+		if PREFSMAN and PREFSMAN.GetPreference and PREFSMAN:GetPreference("MenuTimer") then self:queuecommand("Listen") end
 	end,
 	ListenCommand=function(self)
-		local topscreen = SCREENMAN:GetTopScreen()
-		local seconds = topscreen:GetChild("Timer"):GetSeconds()
+		local topscreen = GetTopScreen()
+		local timer = SafeGetChild(topscreen, "Timer")
+		if not (timer and timer.GetSeconds) then return end
 
-		-- if necessary, force the players into Gameplay because the MenuTimer has run out
-		if not Input.AllPlayersAreAtLastRow() and seconds <= 0 then
+		local seconds = timer:GetSeconds()
 
-			-- if we we're not currently in the optionrows,
-			-- we'll need to initialize them for the current song, first
-			if Input.WheelWithFocus ~= OptionsWheel then
-				setup.InitOptionRowsForSingleSong()
-			end
-
-			for player in ivalues(GAMESTATE:GetHumanPlayers()) do
-
-				for index=1, #OptionRows-1 do
-					local choice = OptionsWheel[player][index]:get_info_at_focus_pos()
-					local choices= OptionRows[index]:Choices()
-					local values = OptionRows[index].Values()
-
-					OptionRows[index]:OnSave(player, choice, choices, values)
+			-- if necessary, force the players into Gameplay because the MenuTimer has run out
+			if not Input.AllPlayersAreAtLastRow() and seconds <= 0 then
+				-- if we we're not currently in the optionrows,
+				-- we'll need to initialize them for the current song, first
+				if Input.WheelWithFocus ~= OptionsWheel then
+					setup.InitOptionRowsForSingleSong()
 				end
+
+				local players = GetHumanPlayers()
+				if #players == 0 then return end
+
+				for player in ivalues(players) do
+					if not Input.SaveOptionsForPlayer(player) then return end
+				end
+				topscreen:StartTransitioningScreen("SM_GoToNextScreen")
+			else
+				self:sleep(0.5):queuecommand("Listen")
 			end
-			topscreen:StartTransitioningScreen("SM_GoToNextScreen")
-		else
-			self:sleep(0.5):queuecommand("Listen")
-		end
-	end,
+		end,
 	CaptureCommand=function(self)
 
 		-- One element of the Input table is an internal function, Handler
-		SCREENMAN:GetTopScreen():AddInputCallback( Input.Handler )
+		local topscreen = GetTopScreen()
+		if topscreen and topscreen.AddInputCallback then
+			input_screen = topscreen
+			topscreen:AddInputCallback( Input.Handler )
+		end
 
 		-- set up initial variable states and the players' OptionRows
 		Input:Init()
@@ -90,21 +108,30 @@ local t = Def.ActorFrame {
 		-- It should be safe to enable input for players now
 		self:queuecommand("EnableInput")
 	end,
+	OffCommand=function(self)
+		if input_screen and input_screen.RemoveInputCallback then
+			pcall(function() input_screen:RemoveInputCallback(Input.Handler) end)
+		end
+		input_screen = nil
+	end,
 	CodeMessageCommand=function(self, params)
 		-- I'm using Metrics-based code detection because the engine is already good at handling
 		-- simultaneous button presses (CancelSingleSong when ThreeKeyNavigation=1),
 		-- as well as long input patterns (Exit from EventMode) and I see no need to
 		-- reinvent that functionality for the Lua InputCallback that I'm using otherwise.
 
-		if params.Name == "Exit" then
+		if type(params) ~= "table" then return end
+		local topscreen = GetTopScreen()
+
+		if params.Name == "Exit" and topscreen then
 			if PREFSMAN:GetPreference("EventMode") then
-				SCREENMAN:GetTopScreen():SetNextScreenName( Branch.SSMCancel() ):StartTransitioningScreen("SM_GoToNextScreen")
+				topscreen:SetNextScreenName( Branch.SSMCancel() ):StartTransitioningScreen("SM_GoToNextScreen")
 			else
 				if SL.Global.Stages.PlayedThisGame == 0 then
 					SL.Global.GameMode = "ITG"
 					SetGameModePreferences()
 					THEME:ReloadMetrics()
-					SCREENMAN:GetTopScreen():SetNextScreenName("ScreenReloadSSM"):StartTransitioningScreen("SM_GoToNextScreen")
+					topscreen:SetNextScreenName("ScreenReloadSSM"):StartTransitioningScreen("SM_GoToNextScreen")
 				end
 			end
 		end

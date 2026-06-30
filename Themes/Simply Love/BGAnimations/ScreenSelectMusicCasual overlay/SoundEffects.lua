@@ -1,11 +1,14 @@
 local af = Def.ActorFrame{}
 af.PlaySFXMessageCommand=function(self, params)
-	local actor = self:GetChild(params.Action)
+	if type(params) ~= "table" or type(params.Action) ~= "string" then return end
+
+	local ok, actor = pcall(function() return self:GetChild(params.Action) end)
+	if not ok then return end
 	if actor then
-		if params.Player then
-			actor:playforplayer(params.Player)
+		if params.Player and GAMESTATE and GAMESTATE.IsHumanPlayer and GAMESTATE:IsHumanPlayer(params.Player) then
+			pcall(function() actor:playforplayer(params.Player) end)
 		else
-			actor:play()
+			pcall(function() actor:play() end)
 		end
 	end
 end
