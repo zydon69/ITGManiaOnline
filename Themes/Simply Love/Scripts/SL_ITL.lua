@@ -49,6 +49,41 @@ end
 -- Note that songs resynced for ITL but played outside of the pack will not be covered in the pathMap.
 local itlFilePath = "ITL2026.json"
 
+local function itl_trace(message)
+	local line = "SL_ITL: " .. tostring(message or "")
+	if type(Trace) == "function" then
+		Trace(line)
+	elseif type(Warn) == "function" then
+		Warn(line)
+	end
+end
+
+local function itl_safe_call(context, fn)
+	if type(fn) ~= "function" then return false, nil end
+	local ok, result = pcall(fn)
+	if not ok then
+		itl_trace("safe_call_failed context=" .. tostring(context or "unknown") .. " error=" .. tostring(result))
+		return false, nil
+	end
+	return true, result
+end
+
+local function itl_default_data()
+	return {
+		["pathMap"] = {},
+		["hashMap"] = {},
+		["unlockFolders"] = {},
+	}
+end
+
+local function itl_normalize_data(data)
+	if type(data) ~= "table" then return itl_default_data(), false end
+	data["pathMap"] = type(data["pathMap"]) == "table" and data["pathMap"] or {}
+	data["hashMap"] = type(data["hashMap"]) == "table" and data["hashMap"] or {}
+	data["unlockFolders"] = type(data["unlockFolders"]) == "table" and data["unlockFolders"] or {}
+	return data, true
+end
+
 local TableContainsData = function(t)
 	if t == nil then return false end
 
@@ -61,30 +96,37 @@ end
 -- Takes the ITLData loaded in memory and writes it to the local profile.
 WriteItlFile = function(player)
 	local pn = ToEnumShortString(player)
+	if not (pn and SL and SL[pn]) then return false end
+	SL[pn].ITLData = itl_normalize_data(SL[pn].ITLData)
 	-- No data to write, return early.
 	if (not TableContainsData(SL[pn].ITLData["pathMap"]) and
 			not TableContainsData(SL[pn].ITLData["hashMap"]) and
 			not TableContainsData(SL[pn].ITLData["unlockFolders"])) then
-		return
+		return true
 	end
 
 	local profile_slot = {
 		[PLAYER_1] = "ProfileSlot_Player1",
 		[PLAYER_2] = "ProfileSlot_Player2"
 	}
+	if not profile_slot[player] then return false end
 	
 	local dir = PROFILEMAN:GetProfileDir(profile_slot[player])
 	-- We require an explicit profile to be loaded.
-	if not dir or #dir == 0 then return end
+	if not dir or #dir == 0 then return false end
 
 	local path = dir .. itlFilePath
-	local f = RageFileUtil:CreateRageFile()
+	local f = RageFileUtil and RageFileUtil.CreateRageFile and RageFileUtil:CreateRageFile()
+	if not f then return false end
 
+	local ok = false
 	if f:Open(path, 2) then
-		f:Write(JsonEncode(SL[pn].ITLData))
+		local encoded = JsonEncode(SL[pn].ITLData)
+		ok = f:Write(encoded) ~= false
 		f:Close()
 	end
 	f:destroy()
+	return ok
 end
 
 -- Generally to be called only once when a profile is loaded.
@@ -94,30 +136,36 @@ ReadItlFile = function(player)
 		[PLAYER_1] = "ProfileSlot_Player1",
 		[PLAYER_2] = "ProfileSlot_Player2"
 	}
+	if not profile_slot[player] then return false end
 	
 	local dir = PROFILEMAN:GetProfileDir(profile_slot[player])
 	local pn = ToEnumShortString(player)
 	-- We require an explicit profile to be loaded.
-	if not dir or #dir == 0 then return end
+	if not (pn and SL and SL[pn]) then return false end
+	if not dir or #dir == 0 then
+		SL[pn].ITLData = itl_default_data()
+		return false
+	end
 
 	local path = dir .. itlFilePath
-	local itlData = { 
-		["pathMap"] = {},
-		["hashMap"] = {},
-		["unlockFolders"] = {},
-	}
+	local itlData = itl_default_data()
+	local schemaOk = true
 	if FILEMAN:DoesFileExist(path) then
-		local f = RageFileUtil:CreateRageFile()
+		local f = RageFileUtil and RageFileUtil.CreateRageFile and RageFileUtil:CreateRageFile()
 		local existing = ""
-		if f:Open(path, 1) then
+		if f and f:Open(path, 1) then
 			existing = f:Read()
 			f:Close()
 		end
-		f:destroy()
-		itlData = JsonDecode(existing)
+		if f then f:destroy() end
+		local decodeOk, decoded = itl_safe_call("JsonDecode " .. path, function()
+			return JsonDecode(existing)
+		end)
+		itlData, schemaOk = itl_normalize_data(decodeOk and decoded or nil)
 	end
 
 	SL[pn].ITLData = itlData
+	return schemaOk
 end
 
 UpdateItlUnlocks = function(player, downloadFolders)

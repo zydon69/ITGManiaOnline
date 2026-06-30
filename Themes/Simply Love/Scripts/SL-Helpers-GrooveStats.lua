@@ -190,6 +190,44 @@ end
 -- -----------------------------------------------------------------------
 -- Sets the API key for a player if it's found in their profile.
 
+local function groove_profile_safe_call(context, fn)
+	if type(fn) ~= "function" then return false, nil end
+	local ok, result = pcall(fn)
+	if not ok then
+		if type(Warn) == "function" then
+			Warn("SL-GrooveStats profile safe_call_failed context=" .. tostring(context or "unknown") .. " error=" .. tostring(result))
+		elseif type(Trace) == "function" then
+			Trace("SL-GrooveStats profile safe_call_failed context=" .. tostring(context or "unknown") .. " error=" .. tostring(result))
+		end
+		return false, nil
+	end
+	return true, result
+end
+
+local function groove_profile_ini_read(path)
+	if type(path) ~= "string" or path == "" or not (IniFile and type(IniFile.ReadFile) == "function") then return {} end
+	local ok, contents = groove_profile_safe_call("IniFile.ReadFile " .. path, function()
+		return IniFile.ReadFile(path)
+	end)
+	return ok and type(contents) == "table" and contents or {}
+end
+
+local function groove_profile_ini_write(path, contents)
+	if type(path) ~= "string" or path == "" or type(contents) ~= "table" or not (IniFile and type(IniFile.WriteFile) == "function") then return false end
+	local ok = groove_profile_safe_call("IniFile.WriteFile " .. path, function()
+		IniFile.WriteFile(path, contents)
+	end)
+	return ok == true
+end
+
+local function groove_profile_file_exists(path)
+	if type(path) ~= "string" or path == "" or not (FILEMAN and type(FILEMAN.DoesFileExist) == "function") then return false end
+	local ok, exists = groove_profile_safe_call("FILEMAN.DoesFileExist " .. path, function()
+		return FILEMAN:DoesFileExist(path)
+	end)
+	return ok and exists == true
+end
+
 ParseGrooveStatsIni = function(player)
 	if not player then return end
 
@@ -204,12 +242,16 @@ ParseGrooveStatsIni = function(player)
 	local pn = ToEnumShortString(player)
 	-- We require an explicit profile to be loaded.
 	if not dir or #dir == 0 then return "" end
+	if not (pn and SL and SL[pn]) then return false end
 
 	local path = dir .. "GrooveStats.ini"
 
-	if not FILEMAN:DoesFileExist(path) then
+	if not groove_profile_file_exists(path) then
 		-- The file doesn't exist. We will create it for this profile, and then just return.
-		IniFile.WriteFile(path, {
+		SL[pn].ApiKey = ""
+		SL[pn].GrooveStatsUsername = ""
+		SL[pn].IsPadPlayer = false
+		return groove_profile_ini_write(path, {
 			["GrooveStats"]={
 				["ApiKey"]="",
 				["Username"]="",
@@ -217,9 +259,11 @@ ParseGrooveStatsIni = function(player)
 			}
 		})
 	else
-		local contents = IniFile.ReadFile(path)
-		for k,v in pairs(contents["GrooveStats"]) do
+		local contents = groove_profile_ini_read(path)
+		local section = type(contents["GrooveStats"]) == "table" and contents["GrooveStats"] or {}
+		for k,v in pairs(section) do
 			if k == "ApiKey" then
+				v = type(v) == "string" and v or ""
 				if #v ~= 64 then
 					-- Print the error only if the ApiKey is non-empty.
 					if #v ~= 0 then
@@ -230,10 +274,10 @@ ParseGrooveStatsIni = function(player)
 					SL[pn].ApiKey = v
 				end
 			elseif k == "Username" then
-				SL[pn].GrooveStatsUsername = v
+				SL[pn].GrooveStatsUsername = type(v) == "string" and v:gsub("[\r\n]", "") or ""
 			elseif k == "IsPadPlayer" then
 				-- Must be explicitly set to 1.
-				if v == 1 then
+				if v == 1 or v == "1" then
 					SL[pn].IsPadPlayer = true
 				else
 					SL[pn].IsPadPlayer = false
@@ -243,7 +287,7 @@ ParseGrooveStatsIni = function(player)
 
 		-- Always write the file back to disk to ensure it's up to date with
 		-- any new fields that may have been added.
-		IniFile.WriteFile(path, {
+		return groove_profile_ini_write(path, {
 			["GrooveStats"]={
 				["ApiKey"]=SL[pn].ApiKey,
 				["Username"]=SL[pn].GrooveStatsUsername,
@@ -268,13 +312,14 @@ WriteGrooveStatsIni = function(player)
 	local pn = ToEnumShortString(player)
 	-- We require an explicit profile to be loaded.
 	if not dir or #dir == 0 then return "" end
+	if not (pn and SL and SL[pn]) then return false end
 
 	local path = dir .. "GrooveStats.ini"
 
-	IniFile.WriteFile(path, {
+	return groove_profile_ini_write(path, {
 		["GrooveStats"]={
-			["ApiKey"]=SL[pn].ApiKey,
-			["Username"]=SL[pn].GrooveStatsUsername,
+			["ApiKey"]=type(SL[pn].ApiKey) == "string" and SL[pn].ApiKey or "",
+			["Username"]=type(SL[pn].GrooveStatsUsername) == "string" and SL[pn].GrooveStatsUsername:gsub("[\r\n]", "") or "",
 			["IsPadPlayer"]=SL[pn].IsPadPlayer and "1" or "0",
 		}
 	})
