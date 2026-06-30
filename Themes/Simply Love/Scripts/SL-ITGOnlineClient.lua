@@ -421,12 +421,13 @@ end
 local function online_score_rows_summary(rows, limit)
 	if type(rows) ~= "table" then return "none" end
 	local parts = {}
-	local maxRows = math.min(#rows, tonumber(limit) or 8)
+	local values = online_values(rows)
+	local maxRows = math.min(#values, tonumber(limit) or 8)
 	for index = 1, maxRows do
-		parts[#parts + 1] = online_score_entry_summary(rows[index], index)
+		parts[#parts + 1] = online_score_entry_summary(values[index], index)
 	end
-	if #rows > maxRows then
-		parts[#parts + 1] = "more=" .. tostring(#rows - maxRows)
+	if #values > maxRows then
+		parts[#parts + 1] = "more=" .. tostring(#values - maxRows)
 	end
 	return table.concat(parts, ",")
 end
@@ -1023,7 +1024,7 @@ local function room_member_status_summary(room)
 	local packCounts = {}
 	local playCounts = {}
 	local members = room and room.members or {}
-	for member in ivalues(members) do
+	for member in ivalues(online_values(members)) do
 		local packStatus = tostring(member.pack_sync_status or "none")
 		packCounts[packStatus] = (packCounts[packStatus] or 0) + 1
 
@@ -1031,14 +1032,14 @@ local function room_member_status_summary(room)
 		playCounts[playState] = (playCounts[playState] or 0) + 1
 	end
 
-	return "members=" .. tostring(#members)
+	return "members=" .. tostring(online_count(members))
 		.. " pack={" .. sorted_count_summary(packCounts) .. "}"
 		.. " play={" .. sorted_count_summary(playCounts) .. "}"
 end
 
 local function room_ready_summary(room)
 	local counts = {}
-	for ready in ivalues(room and room.ready_states or {}) do
+	for ready in ivalues(online_values(room and room.ready_states or {})) do
 		local phase = tostring(ready.phase or "unknown")
 		counts[phase] = (counts[phase] or 0) + 1
 	end
@@ -1116,10 +1117,10 @@ local function online_room_snapshot_debug(label, room, source, previousRoom)
 		.. " room=" .. tostring(room.id or "nil")
 		.. " previousPhase=" .. tostring(previousPhase)
 		.. " incomingPhase=" .. tostring(room.phase or "nil")
-		.. " previousMembers=" .. tostring(#previousMembers)
-		.. " incomingMembers=" .. tostring(type(room.members) == "table" and #room.members or 0)
-		.. " previousReady=" .. tostring(#previousReady)
-		.. " incomingReady=" .. tostring(type(room.ready_states) == "table" and #room.ready_states or 0)
+		.. " previousMembers=" .. tostring(online_count(previousMembers))
+		.. " incomingMembers=" .. tostring(online_count(room.members))
+		.. " previousReady=" .. tostring(online_count(previousReady))
+		.. " incomingReady=" .. tostring(online_count(room.ready_states))
 		.. " selected=" .. tostring(selected.title or selected.folder_name or selected.song_hash or "none")
 		.. " roundKey=" .. tostring(ITGOnline:RoomSongRoundKey(room) or "")
 		.. " playStateVersion=" .. tostring(playState.version_ms or "nil")
@@ -1150,8 +1151,16 @@ function ITGOnline:ShouldApplyRoomSnapshotPayload(room, source, eventId)
 		return false
 	end
 
-	self.lastAppliedRoomSnapshotKeyByRoomId[roomId] = key
 	return true
+end
+
+function ITGOnline:MarkRoomSnapshotApplied(room)
+	if type(room) ~= "table" then return end
+	local roomId = tostring(room.id or room.room_id or room.roomId or self.currentRoomId or "")
+	local key = room_transition_key(room)
+	if roomId == "" or key == "" then return end
+	self.lastAppliedRoomSnapshotKeyByRoomId = self.lastAppliedRoomSnapshotKeyByRoomId or {}
+	self.lastAppliedRoomSnapshotKeyByRoomId[roomId] = key
 end
 
 local function request_id()
@@ -3234,11 +3243,8 @@ function ITGOnline:IsCurrentUserRoomManager(room)
 end
 
 function ITGOnline:RoomMatchesId(room, roomId)
-	if not room or not room.id or roomId == nil then return false end
-	if tonumber(room.id) ~= nil and tonumber(roomId) ~= nil then
-		return tonumber(room.id) == tonumber(roomId)
-	end
-	return tostring(room.id) == tostring(roomId)
+	if type(room) ~= "table" or roomId == nil then return false end
+	return online_room_ids_match(room.id or room.room_id or room.roomId, roomId)
 end
 
 function ITGOnline:EnsureCurrentRoom(callback)
@@ -4397,7 +4403,7 @@ local function merge_room_array_by_user_id(previousItems, incomingItems, userIdF
 	local merged = {}
 	local indexByUserId = {}
 
-	for item in ivalues(previousItems or {}) do
+	for item in ivalues(online_values(previousItems or {})) do
 		local userId = userIdFn(item)
 		if userId ~= "" then
 			indexByUserId[userId] = #merged + 1
@@ -4405,7 +4411,7 @@ local function merge_room_array_by_user_id(previousItems, incomingItems, userIdF
 		merged[#merged + 1] = item
 	end
 
-	for item in ivalues(incomingItems or {}) do
+	for item in ivalues(online_values(incomingItems or {})) do
 		local userId = userIdFn(item)
 		local index = userId ~= "" and indexByUserId[userId] or nil
 		if index then
@@ -4458,7 +4464,7 @@ function ITGOnline:RoomSnapshotRegressesPhase(previousRoom, incomingRoom, source
 		.. " previousSelectedAt=" .. tostring(previousRoom and previousRoom.selected_song and previousRoom.selected_song.selected_at or "")
 		.. " incomingSelectedAt=" .. tostring(incomingRoom and incomingRoom.selected_song and incomingRoom.selected_song.selected_at or ""))
 	if type(previousRoom) ~= "table" or type(incomingRoom) ~= "table" then return false end
-	if tonumber(previousRoom.id or -1) ~= tonumber(incomingRoom.id or -2) then return false end
+	if not online_room_ids_match(previousRoom.id, incomingRoom.id) then return false end
 	if source_allows_room_phase_regression(source) then return false end
 
 	local previousPhase = self:NormalizeRoomPhase(previousRoom.phase)
@@ -4484,8 +4490,11 @@ function ITGOnline:NormalizeRoomSnapshot(room, previousRoom, source)
 		.. " previousPhase=" .. tostring(previousRoom and previousRoom.phase or "nil")
 		.. " incomingMembers=" .. tostring(room and room.members and #room.members or "nil")
 		.. " previousMembers=" .. tostring(previousRoom and previousRoom.members and #previousRoom.members or "nil"))
+	if type(room) == "table" then
+		room = online_table_copy(room, 0) or room
+	end
 	if not room or not previousRoom then return room end
-	if tonumber(room.id or -1) ~= tonumber(previousRoom.id or -2) then return room end
+	if not online_room_ids_match(room.id, previousRoom.id) then return room end
 	if not source_can_be_partial_room_snapshot(source) then
 		online_flow_trace("room_snapshot_partial_merge_skipped source=" .. tostring(source or "unknown")
 			.. " reason=source_not_partial"
@@ -4952,6 +4961,9 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	self.lastAuthoritativeRoomSnapshotAt = GetTimeSinceStart()
 	self.lastAuthoritativeRoomSnapshotSource = tostring(source or "unknown")
 	self.currentRoom = room
+	self:MarkRoomSnapshotApplied(room)
+	self:UpdateScheduledStart(room)
+	self:MaybeAckScheduledStart(room)
 	online_room_snapshot_debug("room_snapshot_accepted", room, source, previousRoom)
 	online_room_transition_trace(previousRoom, room, source)
 	if room.id then
@@ -5446,23 +5458,25 @@ function ITGOnline:PlayStateSummary(room)
 	local playState = room and room.play_state or nil
 	local sessions = playState and playState.sessions or {}
 	local finalResults = playState and playState.final_results or {}
-	local players = tonumber(playState and playState.players_count) or #(sessions or {})
+	local sessionCount = online_count(sessions)
+	local finalResultCount = online_count(finalResults)
+	local players = tonumber(playState and playState.players_count) or sessionCount
 	if players <= 0 and room and type(room.members) == "table" then
-		players = #room.members
+		players = online_count(room.members)
 	end
 	local terminal = tonumber(playState and playState.terminal_players_count)
 	local failedTerminal = tonumber(playState and playState.failed_players_count) or 0
 
 	if terminal == nil then
 		terminal = 0
-		for session in ivalues(sessions or {}) do
+		for session in ivalues(online_values(sessions or {})) do
 			if self:IsTerminalPlayState(session and session.state) then
 				terminal = terminal + 1
 			end
 		end
 	end
 	if failedTerminal <= 0 then
-		for session in ivalues(sessions or {}) do
+		for session in ivalues(online_values(sessions or {})) do
 			if tostring(session and session.state or "") == "failed" then
 				failedTerminal = failedTerminal + 1
 			end
@@ -5486,8 +5500,8 @@ function ITGOnline:PlayStateSummary(room)
 		playing = playing,
 		allTerminal = allTerminal,
 		allFailedTerminal = (playState and playState.all_players_failed == true) or (players > 0 and failedTerminal >= players),
-		finalResults = #(finalResults or {}),
-		finalResultsReady = players > 0 and #(finalResults or {}) >= players,
+		finalResults = finalResultCount,
+		finalResultsReady = players > 0 and finalResultCount >= players,
 		failedFinalsPending = tonumber(playState and playState.failed_client_final_scores_pending_count) or 0,
 		failedFinalsReady = playState and playState.all_failed_client_finals_ready == true,
 		sessions = sessions or {},
@@ -5902,8 +5916,7 @@ end
 
 function ITGOnline:ShouldHoldGameplayForEvaluation()
 	if not self.currentRoomId or not self.currentRoom then return false end
-	local screen = top_screen()
-	local screenName = screen and screen:GetName() or "NoScreen"
+	local screenName = top_screen_name("NoScreen")
 	if not self:IsOnlineGameplayScreen(screenName) then return false end
 	local phase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
 	local roundKey = self.CanonicalGameplayRoundKey and self:CanonicalGameplayRoundKey("evaluation_guard") or (self.PlayStateKey and self:PlayStateKey() or "")
@@ -7236,6 +7249,7 @@ function ITGOnline:ConnectWebSocket(callbacks)
 							online_flow_trace("realtime_ack_end id=" .. tostring(payload.id)
 								.. " name=" .. tostring(payload.event or payload.name or "nil"))
 						elseif not handled then
+							self:UnmarkRealtimeEventProcessed(payload and payload.id)
 							online_trace("Realtime event handling failed before ack: " .. tostring(err))
 						end
 						if handled and callbacks and callbacks.message then
@@ -11525,6 +11539,9 @@ function ITGOnline:MarkPlayTerminal(endpoint, state, callback)
 			if validKey then
 				self.onlineGameplayTerminalKey = terminalKey
 				self.onlineGameplayTerminalState = state
+				if self.terminalFinalScoreRecoveryAttemptsByKey then
+					self.terminalFinalScoreRecoveryAttemptsByKey[terminalKey] = nil
+				end
 			end
 			self:ApplyLocalPlayState(state, "terminal_response")
 			self:UpdatePlayStateFromResponse(decoded)
@@ -11551,6 +11568,20 @@ function ITGOnline:MarkPlayTerminal(endpoint, state, callback)
 			and errorCode == "finished_requires_finalized_score"
 			and self.SendScore
 		then
+			self.terminalFinalScoreRecoveryAttemptsByKey = self.terminalFinalScoreRecoveryAttemptsByKey or {}
+			local recoveryKey = terminalKey ~= "" and terminalKey or tostring(endpoint) .. "|" .. tostring(state)
+			local attempts = tonumber(self.terminalFinalScoreRecoveryAttemptsByKey[recoveryKey]) or 0
+			if attempts >= 1 then
+				online_flow_trace("mark_play_terminal_recover_missing_final_score_skipped"
+					.. " reason=recovery_limit"
+					.. " state=" .. tostring(state)
+					.. " room=" .. tostring(self.currentRoomId)
+					.. " roundKey=" .. tostring(key)
+					.. " attempts=" .. tostring(attempts))
+				safe_callback(callback, ok, decoded, response)
+				return
+			end
+			self.terminalFinalScoreRecoveryAttemptsByKey[recoveryKey] = attempts + 1
 			online_flow_trace("mark_play_terminal_recover_missing_final_score"
 				.. " state=" .. tostring(state)
 				.. " room=" .. tostring(self.currentRoomId)
@@ -11711,7 +11742,6 @@ function ITGOnline:MarkPlayFailedEarly(source, callback)
 	end
 
 	if self.SendScore then
-		self.scoreInFlightFingerprint = nil
 		self.pendingLiveScoreSnapshot = nil
 		self.pendingLiveScoreRoundKey = ""
 		online_flow_trace("mark_failed_early_final_score_submit"
@@ -12225,6 +12255,17 @@ function ITGOnline:FetchLobby(callback)
 				accumulator.meta.public_rooms.has_more = roomsCursor ~= nil
 				accumulator.meta.online_users.next_cursor = onlineCursor
 				accumulator.meta.public_rooms.next_cursor = roomsCursor
+			end
+
+			if onlineCursor or roomsCursor then
+				accumulator.partial = true
+				safe_callback(callback, false, accumulator, {
+					statusCode = response and response.statusCode or 0,
+					error_code = "lobby_pagination_limit_exceeded",
+					errorMessage = "Lobby pagination limit exceeded.",
+					partial = true,
+				})
+				return
 			end
 
 			safe_callback(callback, true, accumulator, response)
@@ -12806,6 +12847,7 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 		pendingJoinRoomId = self.pendingJoinRoomId or "nil",
 	})
 	self.pendingJoinRoomId = roomId
+	local joinIntentRoomId = roomId
 	local roomKey = self:RoomKey(roomId)
 	if roomKey ~= "" and self.ignoredRoomEventsUntil then
 		self.ignoredRoomEventsUntil[roomKey] = nil
@@ -12832,15 +12874,19 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 			if ok and decoded and decoded.room then
 				local room = self:ApplyRoomSnapshot(decoded.room, "join_room")
 				decoded.room = room or decoded.room
-				self.pendingJoinRoomId = nil
-				self.pendingJoinRequestId = nil
+				if online_room_ids_match(self.pendingJoinRoomId, joinIntentRoomId) then
+					self.pendingJoinRoomId = nil
+					self.pendingJoinRequestId = nil
+				end
 			elseif not ok then
 				local statusCode = response and tonumber(response.statusCode) or nil
 				if statusCode == 404 or statusCode == 410 or statusCode == 422 then
 					self:PurgeStaleLobbyCandidate(roomId, "join_failed_" .. tostring(statusCode))
 				end
-				self.pendingJoinRoomId = nil
-				self.pendingJoinRequestId = nil
+				if online_room_ids_match(self.pendingJoinRoomId, joinIntentRoomId) then
+					self.pendingJoinRoomId = nil
+					self.pendingJoinRequestId = nil
+				end
 			end
 			safe_callback(callback, ok, decoded, response)
 		end)
@@ -12848,15 +12894,23 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 
 	function ITGOnline:CancelJoinRequest(callback)
 		local joinRequestId = self.pendingJoinRequestId
+		local joinRoomId = self.pendingJoinRoomId
 		if not joinRequestId then
 			self.pendingJoinRoomId = nil
 			safe_callback(callback, true, { message = "No pending join request." }, nil)
 			return
 		end
 
-		self.pendingJoinRoomId = nil
-		self.pendingJoinRequestId = nil
-		self:Request("POST", "/room-join-requests/" .. tostring(joinRequestId) .. "/cancel", {}, callback)
+		self:Request("POST", "/room-join-requests/" .. tostring(joinRequestId) .. "/cancel", {}, function(ok, decoded, response)
+			if ok and tostring(self.pendingJoinRequestId or "") == tostring(joinRequestId or "") then
+				self.pendingJoinRoomId = nil
+				self.pendingJoinRequestId = nil
+			elseif ok and joinRoomId ~= nil and online_room_ids_match(self.pendingJoinRoomId, joinRoomId) then
+				self.pendingJoinRoomId = nil
+				self.pendingJoinRequestId = nil
+			end
+			safe_callback(callback, ok, decoded, response)
+		end)
 	end
 
 function ITGOnline:ReportSongAvailability(missing, reason, callback)
@@ -13423,6 +13477,23 @@ function ITGOnline:MarkRealtimeEventProcessed(eventId)
 	return false
 end
 
+function ITGOnline:UnmarkRealtimeEventProcessed(eventId)
+	local normalizedId = tonumber(eventId)
+	if not normalizedId or normalizedId <= 0 then return end
+	normalizedId = tostring(math.floor(normalizedId))
+	if type(self.processedRealtimeEventIds) == "table" then
+		self.processedRealtimeEventIds[normalizedId] = nil
+	end
+	if type(self.processedRealtimeEventOrder) == "table" then
+		for index = #self.processedRealtimeEventOrder, 1, -1 do
+			if self.processedRealtimeEventOrder[index] == normalizedId then
+				table.remove(self.processedRealtimeEventOrder, index)
+				break
+			end
+		end
+	end
+end
+
 	function ITGOnline:RealtimeRoomEventPolicy(name, hasRoomSnapshot)
 		local policies = {
 			["room.member_joined"] = {
@@ -13635,7 +13706,7 @@ end
 				.. " event=" .. tostring(name))
 			return false
 		end
-		local relevant = tonumber(roomId) == tonumber(expected)
+		local relevant = online_room_ids_match(roomId, expected)
 		if not relevant then
 			online_flow_trace("room_event_ignored reason=room_mismatch"
 				.. " room=" .. tostring(roomId)
@@ -13802,7 +13873,7 @@ end
 				.. " roomId=" .. tostring(payload.room_id or "nil")
 				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
 				.. " reason=" .. tostring(payload.reason or "nil"))
-			if payload.room_id == nil or tonumber(payload.room_id) == tonumber(self.pendingJoinRoomId or -1) then
+			if payload.room_id ~= nil and online_room_ids_match(payload.room_id, self.pendingJoinRoomId) then
 				self.pendingJoinRoomId = nil
 				self.pendingJoinRequestId = nil
 			end
@@ -13816,7 +13887,7 @@ end
 				.. " roomId=" .. tostring(payload.room_id or "nil")
 				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
 				.. " reason=" .. tostring(payload.reason or "nil"))
-			if payload.room_id == nil or tonumber(payload.room_id) == tonumber(self.pendingJoinRoomId or -1) then
+			if payload.room_id ~= nil and online_room_ids_match(payload.room_id, self.pendingJoinRoomId) then
 				self.pendingJoinRoomId = nil
 				self.pendingJoinRequestId = nil
 			end
@@ -13891,9 +13962,6 @@ end
 				self.currentRoom.live_scores = payload.leaderboard
 				self.currentRoom.leaderboard_version_ms = incomingVersion
 				self.currentRoom.live_score_version_ms = incomingVersion
-				if payload.room_phase then
-					self.currentRoom.phase = payload.room_phase
-				end
 				online_flow_trace("score_updated_live_scores_applied roomId=" .. tostring(payload.room_id or "nil")
 					.. " version=" .. tostring(incomingVersion)
 					.. " entries=" .. tostring(payload.leaderboard and #payload.leaderboard or 0)
@@ -14002,12 +14070,16 @@ end
 			local roomId = payload.room_id
 				or (event.target and event.target.id)
 				or payload.id
-				or self.currentRoomId
-				or self.pendingJoinRoomId
+			if not roomId then
+				online_flow_trace("room_deleted_event_ignored reason=missing_room_id"
+					.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+					.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+				return
+			end
 			if roomId then
 				local roomKey = tostring(roomId)
-				local activeRoomDeleted = tostring(self.currentRoomId or "") == roomKey
-					or tostring(self.pendingJoinRoomId or "") == roomKey
+				local activeRoomDeleted = online_room_ids_match(self.currentRoomId, roomId)
+					or online_room_ids_match(self.pendingJoinRoomId, roomId)
 				local ignoredAfterLeave = self:ShouldIgnoreRoomEvents(roomId) or self:IsLeavingRoom(roomId)
 				online_flow_trace("room_deleted_event_begin roomId=" .. roomKey
 					.. " active=" .. tostring(activeRoomDeleted == true)
@@ -14046,6 +14118,10 @@ end
 				online_flow_trace("room_deleted_event roomId=" .. roomKey)
 			end
 		elseif name == "room.load_timeout" then
+			local timeoutRoomId = payload.room_id
+				or (payload.room and (payload.room.id or payload.room_id or payload.roomId))
+				or (event.target and event.target.id)
+			if not room_event_is_relevant(timeoutRoomId) then return end
 			if payload.room then
 				online_flow_trace("load_timeout_event_apply hasRoom=true phase=" .. tostring(payload.room.phase or "nil")
 					.. " roomId=" .. tostring(payload.room.id or payload.room_id or "nil"))
@@ -14331,7 +14407,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 						.. " userId=" .. tostring(user.id or "?")
 						.. " selfUserId=" .. tostring(self.user and self.user.id or "nil")
 						.. " presenceKey=" .. tostring(presenceKey)
-						.. " apiTokenId=" .. tostring(apiTokenId or "nil")
+						.. " hasApiTokenId=" .. tostring(apiTokenId ~= nil)
 						.. " isViewerPresence=" .. tostring(isViewerPresence)
 						.. " status=" .. tostring(user.status or "nil")
 						.. " roomId=" .. tostring(user.room and user.room.id or "nil"))
@@ -14393,10 +14469,10 @@ function ITGOnline:LobbySearchPayload(decoded)
 		.. " displayOnlineUserIds=" .. table.concat(displayOnlineUserIds, ",")
 		.. " rawPresenceIdentities=" .. table.concat(rawPresenceIdentities, ",")
 		.. " selfPresenceIdentities=" .. table.concat(selfPresenceIdentities, ",")
-		.. " selfPresenceSessionIds=" .. table.concat(selfPresenceSessionIds, ",")
-		.. " selfPresenceDevices=" .. table.concat(selfPresenceDevices, ",")
+		.. " selfPresenceSessionCount=" .. tostring(#selfPresenceSessionIds)
+		.. " selfPresenceDeviceCount=" .. tostring(#selfPresenceDevices)
 		.. " retainedSameAccountPresenceIds=" .. table.concat(retainedSameAccountPresenceIds, ",")
-		.. " retainedSameAccountSessionIds=" .. table.concat(retainedSameAccountSessionIds, ",")
+		.. " retainedSameAccountSessionCount=" .. tostring(#retainedSameAccountSessionIds)
 		.. " selfUserId=" .. tostring(self.user and self.user.id or "nil")
 		.. " authInvalidated=" .. tostring(self.authSessionInvalidated == true)
 		.. " authInvalidatedReason=" .. tostring(self.authSessionInvalidatedReason or "")
@@ -14411,8 +14487,6 @@ end
 function ITGOnline:LobbyStatePayload(room)
 	room = room or self.currentRoom
 	if not room then return { code = "", players = {} } end
-	self:UpdateScheduledStart(room)
-	self:MaybeAckScheduledStart(room)
 	local globalOptions = self:NormalizeGlobalOptions(room.global_options)
 
 	local readyByUserId = {}
