@@ -1,9 +1,11 @@
 #ifndef Inventory_H
 #define Inventory_H
 
+#include <array>
 #include <vector>
 
 #include "Actor.h"
+#include "GameConstantsAndTypes.h"
 #include "RageSound.h"
 #include "ScreenMessage.h"
 
@@ -19,8 +21,8 @@ class Inventory : public Actor {
   ~Inventory();
   void Load(PlayerState* pPlayerState);
 
-  virtual void Update(float fDelta);
-  virtual void DrawPrimitives() {};
+  void Update(float fDelta) override;
+  void DrawPrimitives() override {};
 
   void UseItem(int iSlot);
 
@@ -29,6 +31,8 @@ class Inventory : public Actor {
 
   PlayerState* m_pPlayerState;
   unsigned int m_iLastSeenCombo;
+  float m_fSecondsUntilCpuUseCheck;
+  std::array<int, NUM_INVENTORY_SLOTS> m_iInventoryItemIndex;
 
   /** @brief a sound played when an item has been acquired. */
   RageSound m_soundAcquireItem;
