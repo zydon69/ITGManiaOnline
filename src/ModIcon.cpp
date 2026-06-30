@@ -55,7 +55,7 @@ void ModIcon::Load(std::string sMetricsGroup) {
     m_sprFilled.Load(THEME->GetPathG(sMetricsGroup, "Filled"));
   } else {
     WarnModIcon("SRC_AUDIT_FIX SRC-1193: ModIcon loaded without THEME.");
-    m_sprFilled.Load(new Actor);
+    m_sprFilled.LoadFallback();
   }
   if (m_sprFilled.IsLoaded()) {
     m_sprFilled->SetName("Filled");
@@ -68,7 +68,7 @@ void ModIcon::Load(std::string sMetricsGroup) {
   if (THEME != nullptr && !sMetricsGroup.empty()) {
     m_sprEmpty.Load(THEME->GetPathG(sMetricsGroup, "Empty"));
   } else {
-    m_sprEmpty.Load(new Actor);
+    m_sprEmpty.LoadFallback();
   }
   if (m_sprEmpty.IsLoaded()) {
     m_sprEmpty->SetName("Empty");

@@ -60,7 +60,7 @@ std::string GetThemePathS(
 void EnsureActorLoaded(AutoActor& actor, const std::string& name) {
   if (!actor.IsLoaded()) {
     WarnScreenWithMenuElements("using fallback actor for " + name);
-    actor.Load(new Actor);
+    actor.LoadFallback();
   }
 }
 

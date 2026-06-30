@@ -63,7 +63,7 @@ GrooveRadar::GrooveRadar() {
     m_sprRadarBase.Load(THEME->GetPathG("GrooveRadar", "base"));
   } else {
     WarnGrooveRadar("SRC_AUDIT_FIX SRC-1150: GrooveRadar loaded without THEME.");
-    m_sprRadarBase.Load(new Actor);
+    m_sprRadarBase.LoadFallback();
   }
   if (m_sprRadarBase.IsLoaded()) {
     m_Frame.AddChild(m_sprRadarBase);

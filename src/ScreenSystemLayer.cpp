@@ -258,7 +258,7 @@ void ScreenSystemLayer::Init() {
     m_sprOverlay.LoadB(m_sName, "overlay");
   } else {
     WarnSystemLayer("using empty overlay actor because no theme is loaded.");
-    m_sprOverlay.Load(new Actor);
+    m_sprOverlay.LoadFallback();
   }
   this->AddChild(m_sprOverlay);
 
@@ -266,7 +266,7 @@ void ScreenSystemLayer::Init() {
     m_errLayer.LoadB(m_sName, "error");
   } else {
     WarnSystemLayer("using empty error actor because no theme is loaded.");
-    m_errLayer.Load(new Actor);
+    m_errLayer.LoadFallback();
   }
   this->AddChild(m_errLayer);
 }

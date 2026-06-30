@@ -94,7 +94,7 @@ void ScreenSyncOverlay::Init() {
     m_overlay.LoadB(m_sName, "overlay");
   } else {
     WarnSyncOverlay("using empty overlay actor because no theme is loaded.");
-    m_overlay.Load(new Actor);
+    m_overlay.LoadFallback();
   }
   AddChild(m_overlay);
 

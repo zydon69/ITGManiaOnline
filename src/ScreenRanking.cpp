@@ -124,7 +124,7 @@ void LoadGraphicWithFallback(
       ssprintf("using blank actor for graphic %s/%s.",
                group.c_str(),
                element.c_str()));
-  actor.Load(new Actor);
+  actor.LoadFallback();
 }
 
 bool HasRankingManagers() {

@@ -1,5 +1,6 @@
 #include "ReceptorArrow.h"
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -34,7 +35,8 @@ void ReceptorArrow::Load(const PlayerState* pPlayerState, int iColNo) {
   NOTESKIN->SetGameController(GameI[0].controller);
 
   std::string sButton = GAMESTATE->GetCurrentStyle(pn)->ColToButtonName(iColNo);
-  m_pReceptor.Load(NOTESKIN->LoadActor(sButton, "Receptor"));
+  m_pReceptor.Adopt(
+      std::unique_ptr<Actor>(NOTESKIN->LoadActor(sButton, "Receptor")));
   this->AddChild(m_pReceptor);
 
   bool bReverse =

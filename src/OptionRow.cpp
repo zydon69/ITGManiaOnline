@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Actor.h"
@@ -119,12 +121,12 @@ void OptionRowType::Load(const std::string& sMetricsGroup, Actor* pParent) {
   m_textTitle.SetName("Title");
   ActorUtil::LoadAllCommandsAndSetXY(m_textTitle, sMetricsGroup);
 
-  Actor* pActor =
-      ActorUtil::MakeActor(THEME->GetPathG(sMetricsGroup, "Frame"), pParent);
-  if (pActor == nullptr) {
-    pActor = new Actor;
+  std::unique_ptr<Actor> frameActor(
+      ActorUtil::MakeActor(THEME->GetPathG(sMetricsGroup, "Frame"), pParent));
+  if (frameActor == nullptr) {
+    frameActor.reset(new Actor);
   }
-  m_sprFrame.Load(pActor);
+  m_sprFrame.Adopt(std::move(frameActor));
   m_sprFrame->SetName("Frame");
   ActorUtil::LoadAllCommandsAndSetXY(m_sprFrame, sMetricsGroup);
 

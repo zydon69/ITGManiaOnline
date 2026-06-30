@@ -1,6 +1,7 @@
 #ifndef AutoActor_H
 #define AutoActor_H
 
+#include <memory>
 #include <string>
 
 class Actor;
@@ -13,20 +14,26 @@ class XNode;
  * automatically deletes the Actor on deconstruction. */
 class AutoActor {
  public:
-  AutoActor() : m_pActor(nullptr) {}
-  ~AutoActor() { Unload(); }
+  AutoActor() = default;
+  ~AutoActor();
   AutoActor(const AutoActor& cpy);
   AutoActor& operator=(const AutoActor& cpy);
-  operator const Actor*() const { return m_pActor; }
-  operator Actor*() { return m_pActor; }
-  const Actor* operator->() const { return m_pActor; }
-  Actor* operator->() { return m_pActor; }
+  AutoActor(AutoActor&& cpy) noexcept;
+  AutoActor& operator=(AutoActor&& cpy) noexcept;
+  operator const Actor*() const { return m_pActor.get(); }
+  operator Actor*() { return m_pActor.get(); }
+  const Actor* operator->() const { return m_pActor.get(); }
+  Actor* operator->() { return m_pActor.get(); }
+  const Actor* Get() const { return m_pActor.get(); }
+  Actor* Get() { return m_pActor.get(); }
   void Unload();
   /**
    * @brief Determine if this actor is presently loaded.
    * @return true if it is loaded, or false otherwise. */
   bool IsLoaded() const { return m_pActor != nullptr; }
-  void Load(Actor* pActor);  // transfer pointer
+  void Load(std::unique_ptr<Actor> pActor);
+  void Adopt(std::unique_ptr<Actor> pActor);
+  void LoadFallback();
   void Load(const std::string& sPath);
   void LoadB(
       const std::string& sMetricsGroup,
@@ -36,9 +43,12 @@ class AutoActor {
   void LoadAndSetName(
       const std::string& sScreenName, const std::string& sActorName);
 
+ private:
+  void Load(Actor* pActor);
+
  protected:
   /** @brief the Actor for which there is a smart pointer to. */
-  Actor* m_pActor;
+  std::unique_ptr<Actor> m_pActor;
 };
 
 #endif

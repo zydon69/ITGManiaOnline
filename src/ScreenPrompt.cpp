@@ -237,7 +237,7 @@ void ScreenPrompt::Init() {
     m_sprCursor.Load(cursorPath);
   } else {
     WarnScreenPrompt("using blank cursor actor.");
-    m_sprCursor.Load(new Actor);
+    m_sprCursor.LoadFallback();
   }
   m_sprCursor->SetName("Cursor");
   LOAD_ALL_COMMANDS(m_sprCursor);
