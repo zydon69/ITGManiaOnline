@@ -68,6 +68,11 @@ if(BUILD_TESTING)
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_SOURCE_DIR}/CMake/CheckActorProxyInvariants.cmake)
   add_test(
+    NAME actor_scroller_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckActorScrollerInvariants.cmake)
+  add_test(
     NAME timing_loader_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}

@@ -27,36 +27,28 @@ class ActorScroller : public ActorFrame {
   void EnableMask(float fWidth, float fHeight);
   void DisableMask();
 
-  virtual void UpdateInternal(float fDelta);
-  virtual void DrawPrimitives();  // handles drawing and doesn't call
-                                  // ActorFrame::DrawPrimitives
+  void UpdateInternal(float fDelta) override;
+  void DrawPrimitives() override;  // handles drawing and doesn't call
+                                   // ActorFrame::DrawPrimitives
 
   void PositionItems();
 
-  void LoadFromNode(const XNode* pNode);
-  virtual ActorScroller* Copy() const;
+  void LoadFromNode(const XNode* pNode) override;
+  ActorScroller* Copy() const override;
 
-  void SetLoop(bool bLoop) { m_bLoop = bLoop; }
-  void SetWrap(bool bWrap) { m_bWrap = bWrap; }
+  void AddChild(Actor* pActor) override;
+  void RemoveChild(Actor* pActor) override;
+
+  void SetLoop(bool bLoop);
+  void SetWrap(bool bWrap);
   void SetNumItemsToDraw(float fNumItemsToDraw) {
     m_fNumItemsToDraw =
         std::isfinite(fNumItemsToDraw)
             ? std::clamp(fNumItemsToDraw, 0.0f, 1024.0f)
             : 0.0f;
   }
-  void SetDestinationItem(float fItemIndex) {
-    if (std::isfinite(fItemIndex)) {
-      m_fDestinationItem = fItemIndex;
-      if (m_fSecondsPerItem <= 0.0f) {
-        m_fCurrentItem = m_fDestinationItem;
-      }
-    }
-  }
-  void SetCurrentAndDestinationItem(float fItemIndex) {
-    if (std::isfinite(fItemIndex)) {
-      m_fCurrentItem = m_fDestinationItem = fItemIndex;
-    }
-  }
+  void SetDestinationItem(float fItemIndex);
+  void SetCurrentAndDestinationItem(float fItemIndex);
   float GetCurrentItem() const { return m_fCurrentItem; }
   float GetDestinationItem() const { return m_fDestinationItem; }
   void ScrollThroughAllItems();
@@ -86,11 +78,17 @@ class ActorScroller : public ActorFrame {
   int GetNumItems() const { return m_iNumItems; }
 
   // Commands
-  void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
  protected:
   void PositionItemsAndDrawPrimitives(bool bDrawPrimitives);
   virtual void ShiftSubActors(int iDist);
+  virtual bool SyncItemCountWithChildren() const { return true; }
+
+  float ClampItemIndex(float fItemIndex) const;
+  int NormalizeShiftDistance(int iDist) const;
+  void ResetScrollerLoadState();
+  void SyncNumItemsToChildren();
 
   int m_iNumItems;
   /**
@@ -129,8 +127,8 @@ class ActorScroller : public ActorFrame {
 class ActorScrollerAutoDeleteChildren : public ActorScroller {
  public:
   ActorScrollerAutoDeleteChildren() { DeleteChildrenWhenDone(true); }
-  virtual bool AutoLoadChildren() const { return true; }
-  virtual ActorScrollerAutoDeleteChildren* Copy() const;
+  bool AutoLoadChildren() const override { return true; }
+  ActorScrollerAutoDeleteChildren* Copy() const override;
 };
 
 #endif

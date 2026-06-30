@@ -1,7 +1,7 @@
 #include "DynamicActorScroller.h"
 
-#include <climits>
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstddef>
 #include <string>
@@ -58,21 +58,6 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
     }
   }
 
-  int iNumCopies =
-      std::clamp((int)std::ceil(std::max(1.0f, m_fNumItemsToDraw)), 1, 1024);
-  if (m_quadMask.GetVisible()) {
-    iNumCopies += 1;
-  }
-  for (int i = 1; i < iNumCopies; ++i) {
-    Actor* pCopy = m_SubActors[0]->Copy();
-    if (pCopy == nullptr) {
-      WarnDynamicActorScrollerAuditFix(
-          "SRC_AUDIT_FIX SRC-781: DynamicActorScroller replaced null copy.");
-      pCopy = new Actor;
-    }
-    this->AddChild(pCopy);
-  }
-
   if (LUA != nullptr) {
     Lua* L = LUA->Get();
     pNode->PushAttrValue(L, "LoadFunction");
@@ -113,7 +98,8 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
     const bool ok =
         LuaHelpers::RunScriptOnStack(L, Error, 2, 1, true);  // 2 args, 1 result
 
-    float numItems = ok && lua_isnumber(L, -1) ? (float)lua_tonumber(L, -1) : 0.0f;
+    float numItems =
+        ok && lua_isnumber(L, -1) ? (float)lua_tonumber(L, -1) : 0.0f;
     if (!std::isfinite(numItems) || numItems < 0.0f) {
       WarnDynamicActorScrollerAuditFix(
           "SRC_AUDIT_FIX SRC-781: DynamicActorScroller replaced invalid item "
@@ -123,6 +109,21 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
     m_iNumItems = std::clamp((int)numItems, 0, 1000000);
     lua_pop(L, 1);
     LUA->Release(L);
+  }
+
+  int iNumCopies =
+      std::clamp((int)std::ceil(std::max(1.0f, m_fNumItemsToDraw)), 1, 1024);
+  if (m_quadMask.GetVisible()) {
+    iNumCopies += 1;
+  }
+  for (int i = 1; i < iNumCopies; ++i) {
+    Actor* pCopy = m_SubActors[0]->Copy();
+    if (pCopy == nullptr) {
+      WarnDynamicActorScrollerAuditFix(
+          "SRC_AUDIT_FIX SRC-781: DynamicActorScroller replaced null copy.");
+      pCopy = new Actor;
+    }
+    this->AddChild(pCopy);
   }
 
   /* Reconfigure all items, so the loaded actors actually correspond with
@@ -136,13 +137,14 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
  * object is created per update, and this normally only happens when an
  * object comes on screen.  Extra actor updates are avoided for efficiency. */
 void DynamicActorScroller::ShiftSubActors(int iDist) {
+  const bool bReconfigureAll = iDist == INT_MAX;
   ActorScroller::ShiftSubActors(iDist);
 
   if (iDist == 0 || m_SubActors.empty() || m_iNumItems <= 0) {
     return;
   }
 
-  if (m_bLoop) {
+  if (m_bLoop && !bReconfigureAll) {
     /* Optimization: in a loop of 10, when we loop around from 9 to 0,
      * iDist will be -9.  Moving -9 is equivalent to moving +1, and
      * reconfigures much fewer actors. */
@@ -155,9 +157,10 @@ void DynamicActorScroller::ShiftSubActors(int iDist) {
 
   int iFirstToReconfigure = 0;
   int iLastToReconfigure = (int)m_SubActors.size();
-  if (iDist > 0 && iDist < (int)m_SubActors.size()) {
+  if (!bReconfigureAll && iDist > 0 && iDist < (int)m_SubActors.size()) {
     iFirstToReconfigure = m_SubActors.size() - iDist;
-  } else if (iDist < 0 && -iDist < (int)m_SubActors.size()) {
+  } else if (
+      !bReconfigureAll && iDist < 0 && -iDist < (int)m_SubActors.size()) {
     iLastToReconfigure = -iDist;
   }
 
@@ -185,7 +188,7 @@ void DynamicActorScroller::ShiftSubActors(int iDist) {
         continue;
       }
       Lua* L = LUA->Get();
-      lua_pushnumber(L, i);
+      lua_pushnumber(L, iItem);
       actor->m_pLuaInstance->Set(L, "ItemIndex");
       LUA->Release(L);
     }
@@ -197,6 +200,9 @@ void DynamicActorScroller::ShiftSubActors(int iDist) {
 void DynamicActorScroller::ConfigureActor(Actor* pActor, int iItem) {
   if (LUA == nullptr || pActor == nullptr || !m_LoadFunction.IsSet() ||
       m_LoadFunction.IsNil()) {
+    if (pActor != nullptr) {
+      pActor->SetVisible(false);
+    }
     WarnDynamicActorScrollerAuditFix(
         "SRC_AUDIT_FIX SRC-783: DynamicActorScroller skipped invalid "
         "ConfigureActor.");
@@ -207,18 +213,26 @@ void DynamicActorScroller::ConfigureActor(Actor* pActor, int iItem) {
   if (!lua_isfunction(L, -1)) {
     lua_pop(L, 1);
     LUA->Release(L);
+    pActor->SetVisible(false);
     WarnDynamicActorScrollerAuditFix(
         "SRC_AUDIT_FIX SRC-783: DynamicActorScroller skipped non-function "
         "ConfigureActor.");
     return;
   }
+  pActor->SetVisible(true);
   pActor->PushSelf(L);
   LuaHelpers::Push(L, iItem);
 
   std::string Error = "Error running LoadFunction: ";
-  LuaHelpers::RunScriptOnStack(L, Error, 2, 0, true);  // 2 args, 0 results
+  const bool ok =
+      LuaHelpers::RunScriptOnStack(L, Error, 2, 0, true);  // 2 args, 0 results
 
   LUA->Release(L);
+  if (!ok) {
+    pActor->SetVisible(false);
+    WarnDynamicActorScrollerAuditFix(
+        "SRC_AUDIT_FIX SRC-2660: DynamicActorScroller hid failed item.");
+  }
 }
 
 REGISTER_ACTOR_CLASS_WITH_NAME(
