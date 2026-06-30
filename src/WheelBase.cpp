@@ -387,11 +387,11 @@ bool WheelBase::Select()  // return true if this selection can end the screen
     LOG->Trace("WheelBase::Select()");
   }
 
-  m_Moving = 0;
-
   if (m_bEmpty || !HasValidSelection()) {
     return false;
   }
+
+  SettleSelectionOnFocusedItem();
 
   WheelItemBaseData* selected = m_CurWheelItemData[m_iSelection];
   switch (selected->m_Type) {
@@ -730,6 +730,38 @@ bool WheelBase::HasValidSelection() const {
   }
 
   return m_CurWheelItemData[m_iSelection] != nullptr;
+}
+
+bool WheelBase::SettleSelectionOnFocusedItem() {
+  if (m_CurWheelItemData.empty()) {
+    m_bEmpty = true;
+    m_iSelection = 0;
+    m_Moving = 0;
+    m_fPositionOffsetFromSelection = 0.0f;
+    return false;
+  }
+
+  const int previousSelection = m_iSelection;
+  m_iSelection = std::clamp(
+      m_iSelection, 0, static_cast<int>(m_CurWheelItemData.size()) - 1);
+  if (std::isfinite(m_fPositionOffsetFromSelection)) {
+    int offsetToFocusedItem =
+        static_cast<int>(std::lround(m_fPositionOffsetFromSelection));
+    offsetToFocusedItem = std::clamp(offsetToFocusedItem, -1, 1);
+    m_iSelection -= offsetToFocusedItem;
+    wrap(m_iSelection, m_CurWheelItemData.size());
+  }
+
+  m_Moving = 0;
+  m_TimeBeforeMovingBegins = 0.0f;
+  m_fLockedWheelVelocity = 0.0f;
+  m_fPositionOffsetFromSelection = 0.0f;
+
+  RebuildWheelItems();
+  SetPositions();
+  UpdateScrollbar();
+
+  return m_iSelection != previousSelection;
 }
 
 void WheelBase::ClearWheelItems() {

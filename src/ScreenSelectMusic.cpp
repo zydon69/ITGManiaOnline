@@ -1667,6 +1667,8 @@ bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
         return false;
       }
 
+      AfterMusicChange();
+
       // a song was selected
       if (m_MusicWheel.GetSelectedSong() != nullptr) {
         if (TWO_PART_CONFIRMS_ONLY &&

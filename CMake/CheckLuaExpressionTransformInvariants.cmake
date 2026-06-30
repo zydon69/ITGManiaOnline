@@ -123,6 +123,22 @@ require_contains(
   "item.SetVisible(true);"
   "WheelBase restores item visibility after transform cache success")
 require_contains(
+  "${wheel_base_cpp}"
+  "bool WheelBase::SettleSelectionOnFocusedItem()"
+  "WheelBase centralizes visual focus settling before selection")
+require_contains(
+  "${wheel_base_cpp}"
+  "std::lround(m_fPositionOffsetFromSelection)"
+  "WheelBase selects the item closest to visual focus")
+require_contains(
+  "${wheel_base_cpp}"
+  "SettleSelectionOnFocusedItem();"
+  "WheelBase settles visual focus before accepting selection")
+require_contains(
+  "${wheel_base_cpp}"
+  "m_fPositionOffsetFromSelection = 0.0f;"
+  "WheelBase clears visual offset before selection")
+require_contains(
   "${screen_options_cpp}"
   "const bool bTransformOk ="
   "ScreenOptions captures transform cache failure")
