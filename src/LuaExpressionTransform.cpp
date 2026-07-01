@@ -53,6 +53,9 @@ bool LuaExpressionTransform::TransformItemDirect(
   if (iNumItems < 0) {
     iNumItems = 0;
   }
+  Actor::TweenState originalTweenState = a.DestTweenState();
+  const bool bOriginalVisible = a.GetVisible();
+
   Lua* L = LUA->Get();
   m_exprTransformFunction.PushSelf(L);
   if (!lua_isfunction(L, -1)) {
@@ -69,7 +72,15 @@ bool LuaExpressionTransform::TransformItemDirect(
   std::string error = "Lua error in Transform function: ";
   const bool bSuccess = LuaHelpers::RunScriptOnStack(L, error, 4, 0, true);
   LUA->Release(L);
-  return bSuccess;
+  if (!bSuccess) {
+    a.DestTweenState() = originalTweenState;
+    a.SetVisible(bOriginalVisible);
+    WarnLuaExpressionTransformAuditFix(
+        "SRC_AUDIT_FIX SRC-2669: LuaExpressionTransform restored failed "
+        "direct transform.");
+    return false;
+  }
+  return true;
 }
 
 bool LuaExpressionTransform::GetTransformCached(
