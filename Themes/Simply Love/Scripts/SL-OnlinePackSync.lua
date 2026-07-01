@@ -41,7 +41,8 @@ PackSync.lastNoSongClearResetAt = tonumber(PackSync.lastNoSongClearResetAt) or 0
 PackSync.lastNoSongClearResetReason = PackSync.lastNoSongClearResetReason or ""
 
 PackSync.status = {
-	Unknown = "unknown",
+	Idle = "idle",
+	Unknown = "idle",
 	Ready = "ready",
 	ManagerBrowsingUnknownPack = "manager_browsing_unknown_pack",
 	SearchingLocalCharts = "searching_local_charts",
@@ -56,7 +57,7 @@ PackSync.status = {
 }
 
 PackSync.statusText = {
-	unknown = "Pret",
+	idle = "Pret",
 	ready = "Pret",
 	manager_browsing_unknown_pack = "Pack inconnu",
 	searching_local_charts = "Recherche locale",
@@ -829,7 +830,7 @@ local function song_matches_text_prefilter(song, songInfo)
 end
 
 function PackSync:DisplayText(status)
-	return self.statusText[tostring(status or "")] or self.statusText.unknown
+	return self.statusText[tostring(status or "")] or self.statusText.idle
 end
 
 function PackSync:MarkPackInstalled(packName)

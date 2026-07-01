@@ -1531,7 +1531,7 @@ end
 
 function pack_sync_display_text(status)
 	status = trim_text(status)
-	if status == "" or status == "unknown" then return "" end
+	if status == "" or status == "unknown" or status == "idle" then return "" end
 	if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.statusText then
 		return ITGOnline.PackSync.statusText[status] or status
 	end
@@ -2176,7 +2176,7 @@ local function pack_sync_line_for_player(player)
 		return "Pack+chart trouvées"
 	end
 
-	if status ~= "" and status ~= "unknown" then
+	if status ~= "" and status ~= "unknown" and status ~= "idle" then
 		return pack_sync_display_text(status)
 	end
 
