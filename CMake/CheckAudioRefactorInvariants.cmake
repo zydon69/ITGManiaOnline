@@ -49,6 +49,10 @@ read_source("src/RageSoundReader_Pan.h" rage_sound_reader_pan_h)
 read_source("src/RageSoundReader_Pan.cpp" rage_sound_reader_pan_cpp)
 read_source("src/RageSoundReader_ChannelSplit.h" rage_sound_reader_channel_split_h)
 read_source("src/RageSoundReader_ChannelSplit.cpp" rage_sound_reader_channel_split_cpp)
+read_source("src/RageSoundMixBuffer.h" rage_sound_mix_buffer_h)
+read_source("src/RageSoundMixBuffer.cpp" rage_sound_mix_buffer_cpp)
+read_source("src/RageSoundReader_Chain.cpp" rage_sound_reader_chain_cpp)
+read_source("src/RageSoundReader_Merge.cpp" rage_sound_reader_merge_cpp)
 read_source("src/StepMania.cpp" stepmania_cpp)
 read_source("src/RageDisplay.cpp" rage_display_cpp)
 read_source("src/arch/LowLevelWindow/LowLevelWindow_MacOSX.mm" macos_window_cpp)
@@ -335,6 +339,58 @@ require_not_contains(
   "${rage_sound_reader_channel_split_cpp}"
   "&m_sBuffer[0]"
   "ChannelSplit must not take vector element zero before proving non-empty")
+require_contains(
+  "${rage_sound_mix_buffer_h}"
+  "bool SetWriteOffset(int iOffset);"
+  "RageSoundMixBuffer reports invalid write offsets")
+require_contains(
+  "${rage_sound_mix_buffer_h}"
+  "bool Extend(size_t iSamples);"
+  "RageSoundMixBuffer reports resize failures")
+require_contains(
+  "${rage_sound_mix_buffer_h}"
+  "bool write("
+  "RageSoundMixBuffer write reports failures")
+require_contains(
+  "${rage_sound_mix_buffer_h}"
+  "bool read_deinterlace(float** pBufs, int channels);"
+  "RageSoundMixBuffer deinterlace reports failures")
+require_contains(
+  "${rage_sound_mix_buffer_h}"
+  "size_t m_iOffset;"
+  "RageSoundMixBuffer stores offsets in size_t")
+require_contains(
+  "${rage_sound_mix_buffer_cpp}"
+  "SRC_AUDIT_FIX SRC-2761"
+  "RageSoundMixBuffer rejects negative write offsets")
+require_contains(
+  "${rage_sound_mix_buffer_cpp}"
+  "SRC_AUDIT_FIX SRC-2762"
+  "RageSoundMixBuffer rejects invalid strides and span overflow")
+require_contains(
+  "${rage_sound_mix_buffer_cpp}"
+  "SRC_AUDIT_FIX SRC-2763"
+  "RageSoundMixBuffer guards resize arithmetic and allocation")
+require_contains(
+  "${rage_sound_mix_buffer_cpp}"
+  "SRC_AUDIT_FIX SRC-2764"
+  "RageSoundMixBuffer rejects null interleaved buffers")
+require_contains(
+  "${rage_sound_mix_buffer_cpp}"
+  "SRC_AUDIT_FIX SRC-2765"
+  "RageSoundMixBuffer validates deinterlace arguments")
+require_contains(
+  "${rage_sound_reader_chain_cpp}"
+  "RageSoundReader_Chain: mix buffer write failed"
+  "RageSoundReader_Chain handles mix write failures")
+require_contains(
+  "${rage_sound_reader_merge_cpp}"
+  "RageSoundReader_Merge: mix buffer write failed"
+  "RageSoundReader_Merge handles mix write failures")
+require_contains(
+  "${rage_sound_driver_generic_cpp}"
+  "RageSoundDriver::MixIntoBuffer: mix buffer write failed"
+  "Software sound driver handles mix write failures")
 
 require_contains(
   "${rage_sound_manager_h}"

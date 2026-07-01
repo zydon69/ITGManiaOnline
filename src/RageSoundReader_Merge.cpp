@@ -349,8 +349,13 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
         break;
       }
 
-      mix.SetWriteOffset(iFramesRead * pSound->GetNumChannels());
-      mix.write(Buffer, iGotFrames * pSound->GetNumChannels());
+      if (!mix.SetWriteOffset(iFramesRead * pSound->GetNumChannels()) ||
+          !mix.write(Buffer, iGotFrames * pSound->GetNumChannels())) {
+        LOG->Warn(
+            "RageSoundReader_Merge: mix buffer write failed: %s",
+            mix.GetError().c_str());
+        return ERROR;
+      }
       iFramesRead += iGotFrames;
 
       if (Difference(aRatios[i], m_fCurrentStreamToSourceRatio) > 0.001f) {
@@ -364,7 +369,12 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
   if (iMaxFramesRead <= 0) {
     return 0;
   }
-  mix.read(pBuffer);
+  if (!mix.read(pBuffer)) {
+    LOG->Warn(
+        "RageSoundReader_Merge: mix buffer read failed: %s",
+        mix.GetError().c_str());
+    return ERROR;
+  }
 
   m_iNextSourceFrame = AdvanceSourceFrame(
       m_iNextSourceFrame, iMaxFramesRead, m_fCurrentStreamToSourceRatio);

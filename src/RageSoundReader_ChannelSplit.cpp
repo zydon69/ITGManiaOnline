@@ -343,13 +343,28 @@ int RageSoundReader_Split::Read(float* pBuf, int iFrames) {
         m_iRequestFrames = 0;
         return RageSoundReader::ERROR;
       }
-      mix.SetWriteOffset(chan.m_iToChannel);
-      mix.write(
-          pSrc + chan.m_iFromChannel, static_cast<unsigned>(iFramesAvailable),
-          sourceChannels, m_iNumOutputChannels);
+      const bool mixed =
+          mix.SetWriteOffset(chan.m_iToChannel) &&
+          mix.write(
+              pSrc + chan.m_iFromChannel,
+              static_cast<size_t>(iFramesAvailable), sourceChannels,
+              m_iNumOutputChannels);
+      if (!mixed) {
+        impl->SetErrorLocked("RageSoundReader_Split::Read mix failed: " +
+                             mix.GetError());
+        WarnAuditFix("SRC-2766", impl->m_sError);
+        m_iRequestFrames = 0;
+        return RageSoundReader::ERROR;
+      }
     }
 
-    mix.read(pBuf);
+    if (!mix.read(pBuf)) {
+      impl->SetErrorLocked("RageSoundReader_Split::Read mix output failed: " +
+                           mix.GetError());
+      WarnAuditFix("SRC-2766", impl->m_sError);
+      m_iRequestFrames = 0;
+      return RageSoundReader::ERROR;
+    }
   }
 
   m_iPositionFrame = iEndFrame - (iFrames - static_cast<int>(iFramesAvailable));

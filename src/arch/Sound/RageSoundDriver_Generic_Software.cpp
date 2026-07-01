@@ -322,8 +322,14 @@ RageSoundMixBuffer& RageSoundDriver::MixIntoBuffer(
       /* Note that, until we call advance_read_pointer, we can safely write to
        * p[0]. */
       const int frames_to_read = std::min(iFramesLeft, p[0]->m_FramesInBuffer);
-      mix.SetWriteOffset(iGotFrames * channels);
-      mix.write(p[0]->m_BufferNext, frames_to_read * channels);
+      if (!mix.SetWriteOffset(iGotFrames * channels) ||
+          !mix.write(p[0]->m_BufferNext, frames_to_read * channels)) {
+        LOG->Warn(
+            "RageSoundDriver::MixIntoBuffer: mix buffer write failed: %s",
+            mix.GetError().c_str());
+        mix.Clear();
+        return mix;
+      }
 
       {
         Sound::QueuedPosMap pos;
@@ -422,7 +428,14 @@ void RageSoundDriver::Mix(
     return;
   }
   memset(pBuf, 0, iFrames * channels * sizeof(int16_t));
-  MixIntoBuffer(iFrames, iFrameNumber, iCurrentFrame).read(pBuf);
+  RageSoundMixBuffer& mix =
+      MixIntoBuffer(iFrames, iFrameNumber, iCurrentFrame);
+  if (!mix.read(pBuf)) {
+    LOG->Warn(
+        "RageSoundDriver::Mix: mix buffer read failed: %s",
+        mix.GetError().c_str());
+    mix.Clear();
+  }
 }
 
 void RageSoundDriver::Mix(
@@ -431,7 +444,14 @@ void RageSoundDriver::Mix(
     return;
   }
   memset(pBuf, 0, iFrames * channels * sizeof(float));
-  MixIntoBuffer(iFrames, iFrameNumber, iCurrentFrame).read(pBuf);
+  RageSoundMixBuffer& mix =
+      MixIntoBuffer(iFrames, iFrameNumber, iCurrentFrame);
+  if (!mix.read(pBuf)) {
+    LOG->Warn(
+        "RageSoundDriver::Mix: float mix buffer read failed: %s",
+        mix.GetError().c_str());
+    mix.Clear();
+  }
 }
 
 void RageSoundDriver::MixDeinterlaced(
@@ -446,8 +466,14 @@ void RageSoundDriver::MixDeinterlaced(
     }
     memset(pBufs[i], 0, iFrames * sizeof(float));
   }
-  MixIntoBuffer(iFrames, iFrameNumber, iCurrentFrame)
-      .read_deinterlace(pBufs, iChannels);
+  RageSoundMixBuffer& mix =
+      MixIntoBuffer(iFrames, iFrameNumber, iCurrentFrame);
+  if (!mix.read_deinterlace(pBufs, iChannels)) {
+    LOG->Warn(
+        "RageSoundDriver::MixDeinterlaced: mix buffer read failed: %s",
+        mix.GetError().c_str());
+    mix.Clear();
+  }
 }
 
 void RageSoundDriver::DecodeThread() {

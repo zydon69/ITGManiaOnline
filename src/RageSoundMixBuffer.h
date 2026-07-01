@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 class RageSoundMixBuffer {
@@ -10,19 +11,24 @@ class RageSoundMixBuffer {
   RageSoundMixBuffer();
   ~RageSoundMixBuffer();
 
-  void SetWriteOffset(int iOffset);
-  void Extend(unsigned iSamples);
-  void write(
-      const float* pBuf, unsigned iSize, int iSourceStride = 1,
+  bool SetWriteOffset(int iOffset);
+  bool Extend(size_t iSamples);
+  bool write(
+      const float* pBuf, size_t iSize, int iSourceStride = 1,
       int iDestStride = 1);
-  void read(int16_t* pBuf);
-  void read(float* pBuf);
-  void read_deinterlace(float** pBufs, int channels);
+  bool read(int16_t* pBuf);
+  bool read(float* pBuf);
+  bool read_deinterlace(float** pBufs, int channels);
+  void Clear();
+  const std::string& GetError() const { return m_sError; }
   inline size_t size() const { return m_pMixbuf.size(); }
 
  private:
+  bool SetError(const std::string& sError);
+
   std::vector<float> m_pMixbuf;
-  unsigned m_iOffset;
+  std::string m_sError;
+  size_t m_iOffset;
 };
 
 #endif  // RAGESOUNDMIXBUFFER_H
