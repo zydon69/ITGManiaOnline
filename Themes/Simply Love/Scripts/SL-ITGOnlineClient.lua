@@ -13295,10 +13295,14 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		if self:IsSongReloadOrDownloadActive("song_availability:" .. tostring(reason or "unknown")) then
 			online_flow_trace("song_availability_deferred reason=download_or_reload_active"
 				.. " room=" .. tostring(self.currentRoomId or "nil")
-				.. " reportReason=" .. tostring(reason or "nil"))
+				.. " reportReason=" .. tostring(reason or "nil")
+				.. " retryAfter=0.75")
 			safe_callback(callback, false, nil, {
 				statusCode = 0,
 				errorMessage = "download_in_progress",
+				errorCode = "song_availability_deferred",
+				deferred = true,
+				deferredReason = "download_or_reload_active",
 				downloadInProgress = true,
 				retryAfter = 0.75,
 			})

@@ -183,6 +183,23 @@ local function trace_online_state(label, fields)
 	end
 end
 
+local function availability_confirmation_state(ok, decoded, response)
+	local decodedTable = type(decoded) == "table" and decoded or {}
+	local responseTable = type(response) == "table" and response or {}
+	local deferred = decodedTable.deferred == true
+		or responseTable.deferred == true
+		or responseTable.downloadInProgress == true
+	local reason = decodedTable.deferredReason
+		or decodedTable.errorCode
+		or decodedTable.error_code
+		or responseTable.deferredReason
+		or responseTable.errorCode
+		or responseTable.error_code
+		or responseTable.errorMessage
+		or "nil"
+	return ok == true, deferred == true, reason
+end
+
 trace("Loaded script version=" .. tostring(PackSync.scriptVersion))
 
 local function download_already_in_progress_message()
@@ -1829,10 +1846,13 @@ function PackSync:ApplySelectedChart(songInfo)
 			MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
 		end
 		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
-			ITGOnline:ConfirmSelectedSongAvailability("local_chart_match_found", function(ok)
-				trace("ApplySelectedChart availability confirmed ok=" .. tostring(ok == true)
+			ITGOnline:ConfirmSelectedSongAvailability("local_chart_match_found", function(ok, decoded, response)
+				local confirmed, deferred, availabilityReason = availability_confirmation_state(ok, decoded, response)
+				trace("ApplySelectedChart availability confirmed ok=" .. tostring(confirmed)
+					.. " deferred=" .. tostring(deferred)
+					.. " reason=" .. tostring(availabilityReason)
 					.. " source=local_chart_match_found")
-				if ok then
+				if confirmed then
 					self:UpdateStatus(self.status.Ready, result.matchMessage)
 					self:MarkLobbyReadyForSelectedSong("local_chart_match_found")
 				end
@@ -3164,10 +3184,13 @@ function PackSync:ValidatePendingPostReload()
 
 		self:UpdateStatus(self.status.DownloadedOk, nil)
 		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
-			ITGOnline:ConfirmSelectedSongAvailability("downloaded_ok", function(ok)
-				trace("PostReload availability confirmed ok=" .. tostring(ok == true)
+			ITGOnline:ConfirmSelectedSongAvailability("downloaded_ok", function(ok, decoded, response)
+				local confirmed, deferred, availabilityReason = availability_confirmation_state(ok, decoded, response)
+				trace("PostReload availability confirmed ok=" .. tostring(confirmed)
+					.. " deferred=" .. tostring(deferred)
+					.. " reason=" .. tostring(availabilityReason)
 					.. " source=downloaded_ok")
-				if ok then
+				if confirmed then
 					self:UpdateStatus(self.status.Ready, nil)
 					self:MarkLobbyReadyForSelectedSong("downloaded_ok")
 				end
