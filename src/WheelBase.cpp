@@ -248,6 +248,39 @@ void WheelBase::SetPositions() {
 
     SetItemPosition(*pDisplay, i, fOffsetFromSelection);
   }
+  ApplyWheelItemDrawOrder(displayCount);
+}
+
+void WheelBase::ApplyWheelItemDrawOrder(int itemCount) {
+  const int focusDrawIndex = GetVisualFocusDrawIndex(itemCount);
+  if (focusDrawIndex < 0) {
+    return;
+  }
+
+  bool changed = false;
+  for (int i = 0; i < itemCount; ++i) {
+    WheelItemBase* pDisplay = m_WheelBaseItems[i];
+    if (pDisplay == nullptr) {
+      continue;
+    }
+
+    // ActorFrame draws lower draw orders first.  Keep distant wheel items
+    // behind the actor closest to the visual focus so recycled adjacent rows
+    // cannot bleed over the focused title during scroll animations.
+    const int drawOrder = -std::abs(i - focusDrawIndex);
+    if (pDisplay->GetDrawOrder() != drawOrder) {
+      pDisplay->SetDrawOrder(drawOrder);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    SortByDrawOrder();
+    TraceWheelBaseMusicWheel(
+        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace draw_order_update "
+        "focusDrawIndex=%d itemCount=%d offset=%.6f",
+        focusDrawIndex, itemCount, m_fPositionOffsetFromSelection);
+  }
 }
 
 void WheelBase::Update(float fDeltaTime) {

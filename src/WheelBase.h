@@ -88,6 +88,7 @@ class WheelBase : public ActorFrame {
   virtual void UpdateSwitch();
   virtual bool MoveSpecific(int n);
   void SetPositions();
+  void ApplyWheelItemDrawOrder(int itemCount);
   int GetWheelItemCount() const;
   float GetNumWheelItemsToDraw() const;
   float GetSafeSwitchSeconds() const;

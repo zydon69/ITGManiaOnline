@@ -165,6 +165,18 @@ require_contains(
   "std::lround(centerDrawIndex - offsetFromSelection)"
   "WheelBase rendered focus follows the actor closest to the visual center")
 require_contains(
+  "${wheel_base_cpp}"
+  "void WheelBase::ApplyWheelItemDrawOrder(int itemCount)"
+  "WheelBase centralizes rendered wheel draw order")
+require_contains(
+  "${wheel_base_cpp}"
+  "const int drawOrder = -std::abs(i - focusDrawIndex);"
+  "WheelBase draws items closest to visual focus above recycled neighbors")
+require_contains(
+  "${wheel_base_cpp}"
+  "ApplyWheelItemDrawOrder(displayCount);"
+  "WheelBase refreshes draw order after positioning wheel items")
+require_contains(
   "${music_wheel_cpp}"
   "return WheelBase::GetVisualFocusIndex();"
   "MusicWheel delegates visual focus calculation to WheelBase")
