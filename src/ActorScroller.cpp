@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,9 @@
 #include "XmlFile.h"
 
 namespace {
+constexpr float kMaxScrollerItemPadding = 1024.0f;
+constexpr float kMaxScrollerLogicalItems = 1000000.0f;
+
 float FiniteOrScroller(float value, float fallback) {
   return std::isfinite(value) ? value : fallback;
 }
@@ -25,14 +29,20 @@ float NonNegativeFiniteOrScroller(float value, float fallback) {
   return std::isfinite(value) && value >= 0.0f ? value : fallback;
 }
 
-float PositiveFiniteOrScroller(float value, float fallback) {
-  return std::isfinite(value) && value > 0.0f ? value : fallback;
-}
-
 void WarnActorScrollerAuditFix(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
+}
+
+int SafeCeilToInt(float value, int fallback) {
+  if (!std::isfinite(value)) {
+    return fallback;
+  }
+  const float lower = (float)std::numeric_limits<int>::min() / 4.0f;
+  const float upper = (float)std::numeric_limits<int>::max() / 4.0f;
+  value = std::clamp(value, lower, upper);
+  return (int)std::ceil(value);
 }
 }  // namespace
 
@@ -67,6 +77,76 @@ ActorScroller::ActorScroller() {
   DisableMask();
 }
 
+float ActorScroller::ClampItemIndex(float fItemIndex) const {
+  if (!std::isfinite(fItemIndex)) {
+    WarnActorScrollerAuditFix(
+        "SRC_AUDIT_FIX SRC-2655: ActorScroller replaced invalid item index.");
+    return 0.0f;
+  }
+
+  const float logicalItems =
+      std::clamp((float)std::max(m_iNumItems, 0), 0.0f, kMaxScrollerLogicalItems);
+  const float drawWindow =
+      NonNegativeFiniteOrScroller(m_fNumItemsToDraw, 0.0f);
+  const float limit = std::clamp(
+      logicalItems + drawWindow + kMaxScrollerItemPadding,
+      kMaxScrollerItemPadding,
+      kMaxScrollerLogicalItems + kMaxScrollerItemPadding);
+  const float clamped = std::clamp(fItemIndex, -limit, limit);
+  if (clamped != fItemIndex) {
+    WarnActorScrollerAuditFix(
+        "SRC_AUDIT_FIX SRC-2655: ActorScroller clamped oversized item index.");
+  }
+  return clamped;
+}
+
+int ActorScroller::NormalizeShiftDistance(int iDist) const {
+  if (iDist == INT_MAX || m_SubActors.empty()) {
+    return 0;
+  }
+  const int size = (int)m_SubActors.size();
+  if (size <= 0) {
+    return 0;
+  }
+  int normalized = iDist % size;
+  if (normalized > size / 2) {
+    normalized -= size;
+  } else if (normalized < -size / 2) {
+    normalized += size;
+  }
+  return normalized;
+}
+
+void ActorScroller::SyncNumItemsToChildren() {
+  if (SyncItemCountWithChildren()) {
+    m_iNumItems = (int)std::min<size_t>(
+        m_SubActors.size(), (size_t)kMaxScrollerLogicalItems);
+  }
+}
+
+void ActorScroller::AddChild(Actor* pActor) {
+  ActorFrame::AddChild(pActor);
+  SyncNumItemsToChildren();
+}
+
+void ActorScroller::RemoveChild(Actor* pActor) {
+  ActorFrame::RemoveChild(pActor);
+  SyncNumItemsToChildren();
+  m_fCurrentItem = ClampItemIndex(m_fCurrentItem);
+  m_fDestinationItem = ClampItemIndex(m_fDestinationItem);
+}
+
+void ActorScroller::SetDestinationItem(float fItemIndex) {
+  m_fDestinationItem = ClampItemIndex(fItemIndex);
+  if (m_fSecondsPerItem <= 0.0f) {
+    m_fCurrentItem = m_fDestinationItem;
+  }
+}
+
+void ActorScroller::SetCurrentAndDestinationItem(float fItemIndex) {
+  m_fCurrentItem = m_fDestinationItem = ClampItemIndex(fItemIndex);
+}
+
 void ActorScroller::Load2() {
   m_iNumItems = m_SubActors.size();
 
@@ -88,19 +168,15 @@ void ActorScroller::Load2() {
 
 void ActorScroller::SetTransformFromReference(const LuaReference& ref) {
   m_exprTransformFunction.SetFromReference(ref);
+  m_bFunctionDependsOnPositionOffset = true;
+  m_bFunctionDependsOnItemIndex = true;
   if (LUA == nullptr || !ref.IsSet() || ref.IsNil()) {
-    m_bFunctionDependsOnPositionOffset = true;
-    m_bFunctionDependsOnItemIndex = true;
     m_exprTransformFunction.ClearCache();
     return;
   }
 
-  // Probe to find which of the parameters are used.
-#define GP(a, b) m_exprTransformFunction.GetTransformCached(a, b, 2)
-  m_bFunctionDependsOnPositionOffset =
-      (GP(0, 0) != GP(1, 0)) && (GP(0, 1) != GP(1, 1));
-  m_bFunctionDependsOnItemIndex =
-      (GP(0, 0) != GP(0, 1)) && (GP(1, 0) != GP(1, 1));
+  // Theme transform functions can be non-linear or stateful.  Assume both
+  // parameters are used so caching never feeds zeroed arguments to Lua.
   m_exprTransformFunction.ClearCache();
 }
 
@@ -138,17 +214,24 @@ void ActorScroller::EnableMask(float fWidth, float fHeight) {
 void ActorScroller::DisableMask() { m_quadMask.SetVisible(false); }
 
 void ActorScroller::ScrollThroughAllItems() {
-  m_fCurrentItem = (m_bLoop || m_bWrap) ? +m_fNumItemsToDraw / 2.0f
-                                        : -(m_fNumItemsToDraw / 2.0f) - 1;
-  m_fDestinationItem = (float)(m_iNumItems + m_fNumItemsToDraw / 2.0f + 1);
+  const float start = (m_bLoop || m_bWrap) ? +m_fNumItemsToDraw / 2.0f
+                                           : -(m_fNumItemsToDraw / 2.0f) - 1;
+  const float destination =
+      (float)(m_iNumItems + m_fNumItemsToDraw / 2.0f + 1);
+  m_fCurrentItem = ClampItemIndex(start);
+  m_fDestinationItem = ClampItemIndex(destination);
 }
 
 void ActorScroller::ScrollWithPadding(
     float fItemPaddingStart, float fItemPaddingEnd) {
-  fItemPaddingStart = NonNegativeFiniteOrScroller(fItemPaddingStart, 0.0f);
-  fItemPaddingEnd = NonNegativeFiniteOrScroller(fItemPaddingEnd, 0.0f);
-  m_fCurrentItem = -fItemPaddingStart;
-  m_fDestinationItem = m_iNumItems - 1 + fItemPaddingEnd;
+  fItemPaddingStart = std::min(
+      NonNegativeFiniteOrScroller(fItemPaddingStart, 0.0f),
+      kMaxScrollerItemPadding);
+  fItemPaddingEnd = std::min(
+      NonNegativeFiniteOrScroller(fItemPaddingEnd, 0.0f),
+      kMaxScrollerItemPadding);
+  m_fCurrentItem = ClampItemIndex(-fItemPaddingStart);
+  m_fDestinationItem = ClampItemIndex(m_iNumItems - 1 + fItemPaddingEnd);
 }
 
 float ActorScroller::GetSecondsForCompleteScrollThrough() const {
@@ -247,13 +330,15 @@ void ActorScroller::UpdateInternal(float fDeltaTime) {
 
   float fOldItemAtTop = m_fCurrentItem;
   if (m_fSecondsPerItem > 0) {
+    const float fDistanceToMove =
+        std::abs(m_fCurrentItem - m_fDestinationItem);
     float fApproachSpeed = fDeltaTime / m_fSecondsPerItem;
     if (m_bFastCatchup) {
-      float fDistanceToMove = std::abs(m_fCurrentItem - m_fDestinationItem);
       if (fDistanceToMove > 1) {
         fApproachSpeed *= fDistanceToMove * fDistanceToMove;
       }
     }
+    fApproachSpeed = FiniteOrScroller(fApproachSpeed, fDistanceToMove);
 
     fapproach(m_fCurrentItem, m_fDestinationItem, fApproachSpeed);
   }
@@ -281,8 +366,17 @@ void ActorScroller::PositionItems() { PositionItemsAndDrawPrimitives(false); }
 /* Shift m_SubActors forward by iDist. This will place item
  * m_iFirstSubActorIndex in m_SubActors[0]. */
 void ActorScroller::ShiftSubActors(int iDist) {
-  if (iDist != INT_MAX && !m_SubActors.empty()) {
-    CircularShift(m_SubActors, iDist);
+  const int normalized = NormalizeShiftDistance(iDist);
+  if (normalized > 0) {
+    std::rotate(
+        m_SubActors.begin(),
+        m_SubActors.begin() + normalized,
+        m_SubActors.end());
+  } else if (normalized < 0) {
+    std::rotate(
+        m_SubActors.begin(),
+        m_SubActors.end() + normalized,
+        m_SubActors.end());
   }
 }
 
@@ -321,8 +415,8 @@ void ActorScroller::PositionItemsAndDrawPrimitives(bool bDrawPrimitives) {
 
   float fFirstItemToDraw = m_fCurrentItem - fNumItemsToDraw / 2.f;
   float fLastItemToDraw = m_fCurrentItem + fNumItemsToDraw / 2.f;
-  int iFirstItemToDraw = std::ceil(fFirstItemToDraw);
-  int iLastItemToDraw = std::ceil(fLastItemToDraw);
+  int iFirstItemToDraw = SafeCeilToInt(fFirstItemToDraw, 0);
+  int iLastItemToDraw = SafeCeilToInt(fLastItemToDraw, iFirstItemToDraw);
   if (!m_bLoop && !m_bWrap) {
     iFirstItemToDraw = std::clamp(iFirstItemToDraw, 0, m_iNumItems);
     iLastItemToDraw = std::clamp(iLastItemToDraw, 0, m_iNumItems);

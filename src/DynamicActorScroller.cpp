@@ -136,13 +136,14 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
  * object is created per update, and this normally only happens when an
  * object comes on screen.  Extra actor updates are avoided for efficiency. */
 void DynamicActorScroller::ShiftSubActors(int iDist) {
+  const bool bReconfigureAll = iDist == INT_MAX;
   ActorScroller::ShiftSubActors(iDist);
 
   if (iDist == 0 || m_SubActors.empty() || m_iNumItems <= 0) {
     return;
   }
 
-  if (m_bLoop) {
+  if (m_bLoop && !bReconfigureAll) {
     /* Optimization: in a loop of 10, when we loop around from 9 to 0,
      * iDist will be -9.  Moving -9 is equivalent to moving +1, and
      * reconfigures much fewer actors. */
@@ -155,9 +156,10 @@ void DynamicActorScroller::ShiftSubActors(int iDist) {
 
   int iFirstToReconfigure = 0;
   int iLastToReconfigure = (int)m_SubActors.size();
-  if (iDist > 0 && iDist < (int)m_SubActors.size()) {
+  if (!bReconfigureAll && iDist > 0 && iDist < (int)m_SubActors.size()) {
     iFirstToReconfigure = m_SubActors.size() - iDist;
-  } else if (iDist < 0 && -iDist < (int)m_SubActors.size()) {
+  } else if (
+      !bReconfigureAll && iDist < 0 && -iDist < (int)m_SubActors.size()) {
     iLastToReconfigure = -iDist;
   }
 
