@@ -44,6 +44,19 @@ foreach(REQUIRED_SNIPPET
   endif()
 endforeach()
 
+foreach(REQUIRED_SNIPPET
+    "snapshotScorePercent == nil or final == true"
+    "snapshotExScore == nil or final == true"
+    "if scoreMode == \"itg\" then"
+    "itgScorePercent = outgoingPercent")
+  string(FIND "${ONLINE_CLIENT_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+        FATAL_ERROR
+        "Online score payload invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
 string(FIND "${ONLINE_CLIENT_TEXT}" "and self:SecondsUntilScheduledStart() == nil" NIL_SCHEDULE_HOLD_OFFSET)
 if(NOT NIL_SCHEDULE_HOLD_OFFSET EQUAL -1)
   message(

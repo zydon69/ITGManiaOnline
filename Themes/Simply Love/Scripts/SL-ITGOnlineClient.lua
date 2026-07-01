@@ -9875,20 +9875,23 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 			if statsOk then stats = statsValue end
 		end
 
-		local dancePoints = (tonumber(snapshot and snapshot.scorePercent) or 0) / 100
-		if stats then
+		local snapshotScorePercent = tonumber(snapshot and (snapshot.scorePercent or snapshot.ScorePercent))
+		local dancePoints = (snapshotScorePercent or 0) / 100
+		if stats and (snapshotScorePercent == nil or final == true) then
 			local danceOk, danceValue = pcall(function() return stats:GetPercentDancePoints() end)
 			if danceOk and tonumber(danceValue) then dancePoints = tonumber(danceValue) end
 		end
 
-		local exScore = tonumber(snapshot and snapshot.exScorePercent) or 0
-		if player and CalculateExScore then
+		local snapshotExScore = tonumber(snapshot and (snapshot.exScorePercent or snapshot.ExScorePercent))
+		local exScore = snapshotExScore or 0
+		if player and CalculateExScore and (snapshotExScore == nil or final == true) then
 			local exOk, exValue = pcall(function() return CalculateExScore(player) end)
 			if exOk and tonumber(exValue) then exScore = tonumber(exValue) end
 		end
 
-		local hardExScore = tonumber(snapshot and snapshot.hardExScorePercent) or 0
-		if player and CalculateHardExScore then
+		local snapshotHardExScore = tonumber(snapshot and (snapshot.hardExScorePercent or snapshot.HardExScorePercent))
+		local hardExScore = snapshotHardExScore or 0
+		if player and CalculateHardExScore and (snapshotHardExScore == nil or final == true) then
 			local hardExOk, hardExValue = pcall(function() return CalculateHardExScore(player) end)
 			if hardExOk and tonumber(hardExValue) then hardExScore = tonumber(hardExValue) end
 		end
@@ -9961,8 +9964,8 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 
 	local selectedMaxScore = tonumber(scoreSongPayload.max_score) or server_max_score_for_note_count(scoreSongPayload.chart_note_count)
 	local itgScorePercent = math.max(0, math.min(100, (tonumber(dancePoints) or 0) * 100))
-	local exScorePercent = tonumber(snapshot and snapshot.exScorePercent) or tonumber(exScore) or 0
-	local hardExScorePercent = tonumber(snapshot and snapshot.hardExScorePercent) or tonumber(hardExScore) or 0
+	local exScorePercent = tonumber(snapshot and (snapshot.exScorePercent or snapshot.ExScorePercent)) or tonumber(exScore) or 0
+	local hardExScorePercent = tonumber(snapshot and (snapshot.hardExScorePercent or snapshot.HardExScorePercent)) or tonumber(hardExScore) or 0
 	local normalizedExScore = math.max(0, math.min(100, exScorePercent)) / 100
 	local scoreMode = tostring((self:CurrentGlobalOptions() or {}).score_mode or "itg")
 	local displayedScorePercent = tonumber(snapshot and snapshot.displayedPercent)
@@ -10069,6 +10072,9 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 	-- Always transport the score currently shown to the player in gameplay.
 	local outgoingScore = math.max(0, math.floor((displayedScorePercent / 100) * selectedMaxScore + 0.5))
 	local outgoingPercent = selectedMaxScore > 0 and ((outgoingScore / selectedMaxScore) * 100) or 0
+	if scoreMode == "itg" then
+		itgScorePercent = outgoingPercent
+	end
 	if self.debugScoreTrace == true then
 		online_trace(string.format(
 			"score-trace room=%s mode=%s displayed=%.3f outgoing=%.3f snapshot(score=%.3f ex=%.3f hardex=%.3f shown=%.3f) max=%d combo=%d",
