@@ -20,6 +20,8 @@ local cached_room_id = ""
 local cached_score_rows_by_user_id = {}
 local cached_score_user_order = {}
 local last_non_empty_rows = {}
+local last_non_empty_rows_at = -999
+local last_score_phase = ""
 
 local function monotonic_time()
 	if GetTimeSinceStart then
@@ -82,6 +84,14 @@ local function reset_score_cache_if_needed(room)
 	local room_id = tostring(room and (room.id or room.roomId) or ITGOnline and ITGOnline.currentRoomId or "")
 	local phase = tostring(room and room.phase or ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "")
 	if room_id == cached_room_id and (context == cached_score_context or phase == "playing") then
+		last_score_phase = phase
+		return
+	end
+	if room_id == cached_room_id and phase == "lobby" and last_score_phase == "results" and #last_non_empty_rows > 0 then
+		last_score_phase = phase
+		leaderboard_trace("score_cache_preserved reason=results_to_lobby_visual_grace context=" .. tostring(context)
+			.. " cachedContext=" .. tostring(cached_score_context)
+			.. " rows=" .. tostring(#last_non_empty_rows))
 		return
 	end
 	cached_room_id = room_id
@@ -89,6 +99,8 @@ local function reset_score_cache_if_needed(room)
 	cached_score_rows_by_user_id = {}
 	cached_score_user_order = {}
 	last_non_empty_rows = {}
+	last_non_empty_rows_at = -999
+	last_score_phase = phase
 	leaderboard_trace("score_cache_reset context=" .. tostring(context))
 end
 
@@ -420,6 +432,17 @@ local function update_rows(frame, rows)
 		for row in ivalues(rows) do
 			last_non_empty_rows[#last_non_empty_rows + 1] = copy_row(row)
 		end
+		last_non_empty_rows_at = now
+	elseif not show
+		and phase == "lobby"
+		and last_visible_state == true
+		and #last_non_empty_rows > 0
+		and now - last_non_empty_rows_at <= 1.0 then
+		leaderboard_trace("update_rows_hide_deferred reason=results_to_lobby_visual_grace"
+			.. " age=" .. tostring(now - last_non_empty_rows_at)
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+		show = true
+		rows = last_non_empty_rows
 	end
 	if last_visible_state ~= show then
 		frame:visible(show)
