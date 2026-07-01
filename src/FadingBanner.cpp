@@ -124,12 +124,6 @@ void FadingBanner::DrawPrimitives() {
 }
 
 void FadingBanner::Load(RageTextureID ID, bool bLowResToHighRes) {
-  TraceFadingBannerAuditFix(ssprintf(
-      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace fading_banner_load "
-      "path='%s' lowResToHighRes=%d latestIndex=%d movingFast=%d "
-      "skipNextUpdate=%d",
-      ID.filename.c_str(), bLowResToHighRes, m_iIndexLatest, m_bMovingFast,
-      m_bSkipNextBannerUpdate));
   BeforeChange(bLowResToHighRes);
   m_Banner[m_iIndexLatest].Load(ID);
 
@@ -162,12 +156,6 @@ void FadingBanner::BeforeChange(bool bLowResToHighRes) {
     sCommand = "FadeOff";
   }
 
-  TraceFadingBannerAuditFix(ssprintf(
-      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace fading_banner_before_change "
-      "command='%s' latestIndexBefore=%d movingFast=%d skipNextUpdate=%d",
-      sCommand.c_str(), m_iIndexLatest, m_bMovingFast,
-      m_bSkipNextBannerUpdate));
-
   m_Banner[m_iIndexLatest].PlayCommand(sCommand);
   ++m_iIndexLatest;
   wrap(m_iIndexLatest, NUM_BANNERS);
@@ -184,18 +172,10 @@ void FadingBanner::BeforeChange(bool bLowResToHighRes) {
 bool FadingBanner::LoadFromCachedBanner(const std::string& path) {
   // If we're already on the given banner, don't fade again.
   if (path != "" && m_Banner[m_iIndexLatest].GetTexturePath() == path) {
-    TraceFadingBannerAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace "
-        "fading_banner_cached_noop path='%s' latestIndex=%d texture='%s'",
-        path.c_str(), m_iIndexLatest,
-        m_Banner[m_iIndexLatest].GetTexturePath().c_str()));
     return false;
   }
 
   if (path == "") {
-    TraceFadingBannerAuditFix(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace "
-        "fading_banner_cached_empty_path fallback=1");
     LoadFallback();
     return false;
   }
@@ -208,12 +188,6 @@ bool FadingBanner::LoadFromCachedBanner(const std::string& path) {
   const bool bLowRes =
       !bIsMovie && PREFSMAN != nullptr && IMAGECACHE != nullptr &&
       (PREFSMAN->m_ImageCache != IMGCACHE_FULL);
-  TraceFadingBannerAuditFix(ssprintf(
-      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace fading_banner_cached_begin "
-      "path='%s' isMovie=%d lowRes=%d movingFast=%d latestIndex=%d "
-      "textureManager=%d imageCache=%d",
-      path.c_str(), bIsMovie, bLowRes, m_bMovingFast, m_iIndexLatest,
-      TEXTUREMAN != nullptr, IMAGECACHE != nullptr));
   if (!bLowRes) {
     ID = Sprite::SongBannerTexture(path);
   } else {
@@ -233,36 +207,18 @@ bool FadingBanner::LoadFromCachedBanner(const std::string& path) {
           "SRC_AUDIT_FIX SRC-727: FadingBanner deferred uncached banner '%s' "
           "while moving fast.",
           path.c_str()));
-      TraceFadingBannerAuditFix(ssprintf(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace "
-          "fading_banner_cached_deferred path='%s' resolved='%s' "
-          "movingFast=%d textureManager=%d",
-          path.c_str(), ID.filename.c_str(), m_bMovingFast,
-          TEXTUREMAN != nullptr));
       return false;
     }
 
     if (IsAFile(path)) {
-      TraceFadingBannerAuditFix(ssprintf(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace "
-          "fading_banner_cached_load_file path='%s' resolved='%s'",
-          path.c_str(), ID.filename.c_str()));
       Load(path);
     } else {
-      TraceFadingBannerAuditFix(ssprintf(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace "
-          "fading_banner_cached_missing_file path='%s' resolved='%s'",
-          path.c_str(), ID.filename.c_str()));
       LoadFallback();
     }
 
     return false;
   }
 
-  TraceFadingBannerAuditFix(ssprintf(
-      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace "
-      "fading_banner_cached_registered path='%s' resolved='%s' lowRes=%d",
-      path.c_str(), ID.filename.c_str(), bLowRes));
   Load(ID);
 
   return bLowRes;
@@ -270,9 +226,6 @@ bool FadingBanner::LoadFromCachedBanner(const std::string& path) {
 
 void FadingBanner::LoadFromSong(const Song* pSong) {
   if (pSong == nullptr) {
-    TraceFadingBannerAuditFix(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace "
-        "fading_banner_song song=<null> fallback=1");
     LoadFallback();
     return;
   }
@@ -280,11 +233,6 @@ void FadingBanner::LoadFromSong(const Song* pSong) {
   /* Don't call HasBanner. That'll do disk access and cause the music wheel
    * to skip. */
   std::string sPath = pSong->GetBannerPath();
-  TraceFadingBannerAuditFix(ssprintf(
-      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace fading_banner_song "
-      "songPtr=%p title='%s' dir='%s' banner='%s' movingFast=%d",
-      static_cast<const void*>(pSong), pSong->GetDisplayFullTitle().c_str(),
-      pSong->GetSongDir().c_str(), sPath.c_str(), m_bMovingFast));
   if (sPath.empty()) {
     LoadFallback();
   } else {
@@ -293,8 +241,6 @@ void FadingBanner::LoadFromSong(const Song* pSong) {
 }
 
 void FadingBanner::LoadMode() {
-  TraceFadingBannerAuditFix(
-      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace fading_banner_mode");
   BeforeChange();
   m_Banner[m_iIndexLatest].LoadMode();
 }
@@ -311,10 +257,6 @@ void FadingBanner::LoadFromSongGroup(std::string sSongGroup) {
 
   const std::string sGroupBannerPath =
       SONGMAN->GetSongGroupBannerPath(sSongGroup);
-  TraceFadingBannerAuditFix(ssprintf(
-      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace fading_banner_group "
-      "group='%s' banner='%s'",
-      sSongGroup.c_str(), sGroupBannerPath.c_str()));
   LoadFromCachedBanner(sGroupBannerPath);
 }
 

@@ -110,9 +110,7 @@ void StreamDisplay::Load(
       pSpr->Load(THEME->GetPathG(sMetricsGroup, StreamTypeToString(st)));
       m_vpSprPill[st].push_back(pSpr);
 
-      if (!m_transformPill.TransformItemDirect(*pSpr, -1, i, iNumPills)) {
-        pSpr->SetVisible(false);
-      }
+      m_transformPill.TransformItemDirect(*pSpr, -1, i, iNumPills);
       float f = 1 / fTextureCoordScaleX;
       pSpr->SetCustomTextureRect(RectF(f * i, 0, f * (i + 1), 1));
 

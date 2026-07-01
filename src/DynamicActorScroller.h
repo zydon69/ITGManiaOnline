@@ -7,13 +7,12 @@
 /** @brief ActorScroller that fills in its children on the fly. */
 class DynamicActorScroller : public ActorScroller {
  public:
-  DynamicActorScroller* Copy() const override;
-  void LoadFromNode(const XNode* pNode) override;
+  virtual DynamicActorScroller* Copy() const;
+  void LoadFromNode(const XNode* pNode);
 
  protected:
-  void ShiftSubActors(int iDist) override;
+  virtual void ShiftSubActors(int iDist);
   virtual void ConfigureActor(Actor* pActor, int iItem);
-  bool SyncItemCountWithChildren() const override { return false; }
 
   LuaReference m_LoadFunction;
 };
@@ -21,8 +20,8 @@ class DynamicActorScroller : public ActorScroller {
 class DynamicActorScrollerAutoDeleteChildren : public DynamicActorScroller {
  public:
   DynamicActorScrollerAutoDeleteChildren() { DeleteChildrenWhenDone(true); }
-  bool AutoLoadChildren() const override { return true; }
-  DynamicActorScrollerAutoDeleteChildren* Copy() const override;
+  virtual bool AutoLoadChildren() const { return true; }
+  virtual DynamicActorScrollerAutoDeleteChildren* Copy() const;
 };
 
 #endif

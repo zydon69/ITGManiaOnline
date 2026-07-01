@@ -1046,10 +1046,9 @@ void ScreenOptions::PositionRows(bool bTween) {
       fPos = total - 0.5f;
     }
 
-    Actor::TweenState tsDestination = row.DestTweenState();
-    const bool bTransformOk =
+    Actor::TweenState tsDestination =
         m_exprRowPositionTransformFunction.GetTransformCached(
-            fPos, i, std::min((int)Rows.size(), total), tsDestination);
+            fPos, i, std::min((int)Rows.size(), total));
 
     bool bHidden = !bRowVisible;
     if (bRowVisible) {
@@ -1058,10 +1057,7 @@ void ScreenOptions::PositionRows(bool bTween) {
           (thisVisibleIndex >= first_end && thisVisibleIndex < second_start) ||
           thisVisibleIndex >= second_end;
     }
-    if (!bTransformOk) {
-      bHidden = true;
-      row.SetVisible(false);
-    } else if (!bRowEnabled && bHideDisabled) {
+    if (!bRowEnabled && bHideDisabled) {
       bHidden = true;
       row.SetVisible(false);
     } else {

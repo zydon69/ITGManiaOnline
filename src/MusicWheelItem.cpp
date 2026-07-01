@@ -47,33 +47,12 @@ void WarnMusicWheelItem(const char* message) {
   }
 }
 
-std::string DescribeMusicWheelItemTraceData(const MusicWheelItemData* item) {
-  if (item == nullptr) {
-    return "<null>";
+void TraceMusicWheelItemReintro(const char* event, const std::string& details) {
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2710 WheelReintroTrace %s %s", event,
+        details.c_str());
   }
-
-  std::string description = ssprintf(
-      "ptr=%p dataType=%s text='%s' label='%s'",
-      static_cast<const void*>(item), WheelItemDataTypeToLogString(item->m_Type),
-      item->m_sText.c_str(), item->m_sLabel.c_str());
-  if (item->m_pSong != nullptr) {
-    description += ssprintf(
-        " songTitle='%s' songDir='%s'",
-        item->m_pSong->GetDisplayFullTitle().c_str(),
-        item->m_pSong->GetSongDir().c_str());
-  }
-  if (item->m_pCourse != nullptr) {
-    description += ssprintf(
-        " courseTitle='%s' coursePath='%s'",
-        item->m_pCourse->GetDisplayFullTitle().c_str(),
-        item->m_pCourse->m_sPath.c_str());
-  }
-  if (item->m_pGroup != nullptr) {
-    description += ssprintf(
-        " groupTitle='%s'", item->m_pGroup->GetDisplayTitle().c_str());
-  }
-
-  return description;
 }
 
 bool IsValidMusicWheelItemType(MusicWheelItemType type) {
@@ -321,6 +300,23 @@ void MusicWheelItem::LoadFromWheelItemData(
     return;
   }
 
+  std::string traceTitle = pWID->m_sText;
+  if (pWID->m_pSong != nullptr) {
+    traceTitle = pWID->m_pSong->GetDisplayFullTitle();
+  } else if (pWID->m_pCourse != nullptr) {
+    traceTitle = pWID->m_pCourse->GetDisplayFullTitle();
+  } else if (pWID->m_pGroup != nullptr) {
+    traceTitle = pWID->m_pGroup->GetDisplayTitle();
+  } else if (!pWID->m_sLabel.empty()) {
+    traceTitle = pWID->m_sLabel;
+  }
+  TraceMusicWheelItemReintro(
+      "item_load",
+      ssprintf(
+          "dataIndex=%d drawIndex=%d hasFocus=%d dataType=%d text='%s'",
+          iIndex, iDrawIndex, bHasFocus ? 1 : 0,
+          static_cast<int>(pWID->m_Type), traceTitle.c_str()));
+
   // hide all
   FOREACH_ENUM(MusicWheelItemType, i) {
     SetAutoActorVisible(m_sprColorPart[i], false);
@@ -459,17 +455,6 @@ void MusicWheelItem::LoadFromWheelItemData(
     WarnMusicWheelItem(
         "SRC_AUDIT_FIX SRC-1294: MusicWheelItem skipped invalid visual type.");
     return;
-  }
-
-  if (LOG != nullptr) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace item_load "
-        "actor=%p index=%d drawIndex=%d hasFocus=%d visualType=%s "
-        "displayName='%s' translit='%s' data={%s}",
-        static_cast<void*>(this), iIndex, iDrawIndex, bHasFocus ? 1 : 0,
-        MusicWheelItemTypeToString(type).c_str(), sDisplayName.c_str(),
-        sTranslitName.c_str(),
-        DescribeMusicWheelItemTraceData(pWID).c_str());
   }
 
   if (m_sprColorPart[type].IsLoaded()) {

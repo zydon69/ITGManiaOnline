@@ -61,33 +61,31 @@ void WarnMusicWheel(const std::string& message) {
   }
 }
 
-std::string DescribeMusicWheelTraceItem(const MusicWheelItemData* item) {
+void TraceMusicWheelReintro(const char* event, const std::string& details) {
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2710 WheelReintroTrace %s %s", event,
+        details.c_str());
+  }
+}
+
+std::string TraceMusicWheelItemName(const MusicWheelItemData* item) {
   if (item == nullptr) {
     return "<null>";
   }
-
-  std::string description = ssprintf(
-      "ptr=%p type=%s text='%s' label='%s'",
-      static_cast<const void*>(item), WheelItemDataTypeToLogString(item->m_Type),
-      item->m_sText.c_str(), item->m_sLabel.c_str());
   if (item->m_pSong != nullptr) {
-    description += ssprintf(
-        " songTitle='%s' songDir='%s'",
-        item->m_pSong->GetDisplayFullTitle().c_str(),
-        item->m_pSong->GetSongDir().c_str());
+    return item->m_pSong->GetDisplayFullTitle();
   }
   if (item->m_pCourse != nullptr) {
-    description += ssprintf(
-        " courseTitle='%s' coursePath='%s'",
-        item->m_pCourse->GetDisplayFullTitle().c_str(),
-        item->m_pCourse->m_sPath.c_str());
+    return item->m_pCourse->GetDisplayFullTitle();
   }
   if (item->m_pGroup != nullptr) {
-    description += ssprintf(
-        " groupTitle='%s'", item->m_pGroup->GetDisplayTitle().c_str());
+    return item->m_pGroup->GetDisplayTitle();
   }
-
-  return description;
+  if (!item->m_sLabel.empty()) {
+    return item->m_sLabel;
+  }
+  return item->m_sText;
 }
 
 bool IsValidSortOrderValue(SortOrder so) {
@@ -197,68 +195,18 @@ MusicWheelItemData* MusicWheel::GetCurWheelItemData(int i) {
   return dynamic_cast<MusicWheelItemData*>(m_CurWheelItemData[i]);
 }
 
-void MusicWheel::Update(float fDeltaTime) {
-  WheelBase::Update(fDeltaTime);
-  PostSongChangedIfVisualFocusChanged();
-}
-
-int MusicWheel::GetVisualFocusIndex() const {
-  if (m_CurWheelItemData.empty()) {
-    return -1;
-  }
-
-  return WheelBase::GetVisualFocusIndex();
-}
-
-const MusicWheelItemData* MusicWheel::GetVisualFocusItemData() const {
-  return GetCurWheelItemData(GetVisualFocusIndex());
-}
-
-void MusicWheel::PostSongChangedIfVisualFocusChanged() {
-  const int focusedIndex = GetVisualFocusIndex();
-  if (focusedIndex == m_iLastPostedVisualFocusIndex) {
-    return;
-  }
-
-  const int previousFocusIndex = m_iLastPostedVisualFocusIndex;
-  const MusicWheelItemData* focusedItem = GetCurWheelItemData(focusedIndex);
-  const MusicWheelItemData* logicalItem = GetCurWheelItemData(m_iSelection);
-  if (LOG != nullptr) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace focus_changed "
-        "previousFocus=%d newFocus=%d logicalSelection=%d offset=%.4f "
-        "moving=%d state=%s focusItem={%s} logicalItem={%s}",
-        previousFocusIndex, focusedIndex, m_iSelection,
-        m_fPositionOffsetFromSelection, m_Moving,
-        WheelStateToString(m_WheelState).c_str(),
-        DescribeMusicWheelTraceItem(focusedItem).c_str(),
-        DescribeMusicWheelTraceItem(logicalItem).c_str());
-  }
-
-  m_iLastPostedVisualFocusIndex = focusedIndex;
-  if (SCREENMAN != nullptr) {
-    if (LOG != nullptr) {
-      LOG->Trace(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace post_sm_song_changed "
-          "reason=visual_focus_changed focus=%d logicalSelection=%d offset=%.4f",
-          focusedIndex, m_iSelection, m_fPositionOffsetFromSelection);
-    }
-    SCREENMAN->PostMessageToTopScreen(SM_SongChanged, 0);
-  }
-}
-
 WheelItemDataType MusicWheel::GetSelectedType() {
-  const MusicWheelItemData* item = GetVisualFocusItemData();
+  const MusicWheelItemData* item = GetCurWheelItemData(m_iSelection);
   return item != nullptr ? item->m_Type : WheelItemDataType_Invalid;
 }
 
 Course* MusicWheel::GetSelectedCourse() {
-  const MusicWheelItemData* item = GetVisualFocusItemData();
+  const MusicWheelItemData* item = GetCurWheelItemData(m_iSelection);
   return item != nullptr ? item->m_pCourse : nullptr;
 }
 
 std::string MusicWheel::GetSelectedSection() {
-  const MusicWheelItemData* item = GetVisualFocusItemData();
+  const MusicWheelItemData* item = GetCurWheelItemData(m_iSelection);
   return item != nullptr ? item->m_sText : "";
 }
 
@@ -1896,39 +1844,28 @@ void MusicWheel::ChangeMusic(int iDist) {
   if (m_CurWheelItemData.empty()) {
     m_bEmpty = true;
     m_Moving = 0;
-    if (LOG != nullptr) {
-      LOG->Trace(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace change_music_empty "
-          "dist=%d",
-          iDist);
-    }
     return;
   }
 
-  const int requestedDist = iDist;
   iDist = NormalizeMoveDistance(iDist);
   if (iDist == 0) {
-    if (LOG != nullptr) {
-      LOG->Trace(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace change_music_ignored "
-          "requestedDist=%d normalizedDist=0 selection=%d focus=%d offset=%.4f "
-          "item={%s}",
-          requestedDist, m_iSelection, GetVisualFocusIndex(),
-          m_fPositionOffsetFromSelection,
-          DescribeMusicWheelTraceItem(GetVisualFocusItemData()).c_str());
-    }
     return;
   }
 
-  const int oldSelection = m_iSelection;
-  const int oldFocus = GetVisualFocusIndex();
-  const float oldOffset = m_fPositionOffsetFromSelection;
-  const MusicWheelItemData* oldLogicalItem = GetCurWheelItemData(m_iSelection);
-  const MusicWheelItemData* oldFocusItem = GetVisualFocusItemData();
-
+  const int previousSelection = m_iSelection;
+  const float previousOffset = m_fPositionOffsetFromSelection;
   m_iSelection += iDist;
   wrap(m_iSelection, m_CurWheelItemData.size());
-  m_fPositionOffsetFromSelection += iDist;
+  const MusicWheelItemData* selectedItem = GetCurWheelItemData(m_iSelection);
+  TraceMusicWheelReintro(
+      "music_change",
+      ssprintf(
+          "dist=%d prevSelection=%d newSelection=%d prevOffset=%.4f "
+          "dataCount=%zu moving=%d selectedType=%d selectedText='%s'",
+          iDist, previousSelection, m_iSelection, previousOffset,
+          m_CurWheelItemData.size(), m_Moving,
+          selectedItem != nullptr ? static_cast<int>(selectedItem->m_Type) : -1,
+          TraceMusicWheelItemName(selectedItem).c_str()));
 
   if (REMIND_WHEEL_POSITIONS && HIDE_INACTIVE_SECTIONS && SONGMAN != nullptr) {
     // store the group song index
@@ -1941,30 +1878,16 @@ void MusicWheel::ChangeMusic(int iDist) {
 
   RebuildWheelItems(iDist);
 
-  if (LOG != nullptr) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace change_music "
-        "requestedDist=%d normalizedDist=%d oldSelection=%d newSelection=%d "
-        "oldFocus=%d newFocus=%d oldOffset=%.4f newOffset=%.4f moving=%d "
-        "state=%s oldLogical={%s} newLogical={%s} oldFocusItem={%s} "
-        "newFocusItem={%s}",
-        requestedDist, iDist, oldSelection, m_iSelection, oldFocus,
-        GetVisualFocusIndex(), oldOffset, m_fPositionOffsetFromSelection,
-        m_Moving, WheelStateToString(m_WheelState).c_str(),
-        DescribeMusicWheelTraceItem(oldLogicalItem).c_str(),
-        DescribeMusicWheelTraceItem(GetCurWheelItemData(m_iSelection)).c_str(),
-        DescribeMusicWheelTraceItem(oldFocusItem).c_str(),
-        DescribeMusicWheelTraceItem(GetVisualFocusItemData()).c_str());
-  }
+  m_fPositionOffsetFromSelection += iDist;
+  TraceMusicWheelReintro(
+      "music_change_offset",
+      ssprintf(
+          "dist=%d selection=%d newOffset=%.4f moving=%d settled=%d",
+          iDist, m_iSelection, m_fPositionOffsetFromSelection, m_Moving,
+          IsSettled() ? 1 : 0));
 
-  const int newFocus = GetVisualFocusIndex();
-  if (newFocus != oldFocus) {
-    PostSongChangedIfVisualFocusChanged();
-  } else if (LOG != nullptr) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace change_music_focus_unchanged "
-        "focus=%d logicalSelection=%d offset=%.4f oldFocus=%d",
-        newFocus, m_iSelection, m_fPositionOffsetFromSelection, oldFocus);
+  if (SCREENMAN != nullptr) {
+    SCREENMAN->PostMessageToTopScreen(SM_SongChanged, 0);
   }
 
   // If we're moving automatically, don't play this; it'll be called in Update.
@@ -2067,14 +1990,7 @@ bool MusicWheel::NextSort()  // return true if change successful
 bool MusicWheel::Select()  // return true if this selection ends the screen
 {
   if (LOG != nullptr) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace select_begin "
-        "selection=%d focus=%d offset=%.4f moving=%d state=%s logical={%s} "
-        "focusItem={%s}",
-        m_iSelection, GetVisualFocusIndex(), m_fPositionOffsetFromSelection,
-        m_Moving, WheelStateToString(m_WheelState).c_str(),
-        DescribeMusicWheelTraceItem(GetCurWheelItemData(m_iSelection)).c_str(),
-        DescribeMusicWheelTraceItem(GetVisualFocusItemData()).c_str());
+    LOG->Trace("MusicWheel::Select()");
   }
 
   switch (m_WheelState) {
@@ -2099,33 +2015,12 @@ bool MusicWheel::Select()  // return true if this selection ends the screen
   }
 
   if (!WheelBase::Select()) {
-    if (LOG != nullptr) {
-      LOG->Trace(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace select_rejected_by_base "
-          "selection=%d focus=%d offset=%.4f moving=%d state=%s",
-          m_iSelection, GetVisualFocusIndex(), m_fPositionOffsetFromSelection,
-          m_Moving, WheelStateToString(m_WheelState).c_str());
-    }
     return false;
   }
 
   MusicWheelItemData* selected = GetCurWheelItemData(m_iSelection);
   if (selected == nullptr) {
-    if (LOG != nullptr) {
-      LOG->Trace(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace select_null_after_base "
-          "selection=%d focus=%d offset=%.4f",
-          m_iSelection, GetVisualFocusIndex(), m_fPositionOffsetFromSelection);
-    }
     return false;
-  }
-
-  if (LOG != nullptr) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace select_after_base "
-        "selection=%d focus=%d offset=%.4f item={%s}",
-        m_iSelection, GetVisualFocusIndex(), m_fPositionOffsetFromSelection,
-        DescribeMusicWheelTraceItem(selected).c_str());
   }
 
   switch (selected->m_Type) {
@@ -2476,7 +2371,7 @@ bool MusicWheel::IsRouletting() const {
 }
 
 Song* MusicWheel::GetSelectedSong() {
-  const MusicWheelItemData* selected = GetVisualFocusItemData();
+  const MusicWheelItemData* selected = GetCurWheelItemData(m_iSelection);
   if (selected == nullptr) {
     return nullptr;
   }

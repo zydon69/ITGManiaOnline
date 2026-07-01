@@ -128,94 +128,102 @@ require_contains(
   "${wheel_base_cpp}"
   "item.SetVisible(true);"
   "WheelBase restores item visibility after transform cache success")
-require_contains(
+require_not_contains(
   "${wheel_base_cpp}"
   "bool WheelBase::SettleSelectionOnFocusedItem()"
-  "WheelBase centralizes visual focus settling before selection")
+  "WheelBase restored source selection behavior without visual focus settling")
+require_not_contains(
+  "${wheel_base_cpp}"
+  "wheelbase_move_settle_before_accept"
+  "WheelBase restored source move acceptance behavior")
+require_not_contains(
+  "${wheel_base_cpp}"
+  "focus_state_update"
+  "WheelBase restored source rebuild-only focus state")
+require_not_contains(
+  "${wheel_base_cpp}"
+  "FOCUS_BLEED_OCCLUSION_RADIUS"
+  "WheelBase restored source visibility behavior without focus-band occlusion")
+require_not_contains(
+  "${music_wheel_cpp}"
+  "post_sm_song_changed_deferred"
+  "MusicWheel restored immediate source song-change notification behavior")
+require_not_contains(
+  "${screen_select_music_cpp}"
+  "screen_song_changed_deferred"
+  "ScreenSelectMusic restored immediate source song-change handling")
 require_contains(
   "${wheel_base_cpp}"
-  "std::lround(m_fPositionOffsetFromSelection)"
-  "WheelBase selects the item closest to visual focus")
+  "m_fPositionOffsetFromSelection = 0;"
+  "WheelBase initializes visual offset before first positioning")
 require_contains(
   "${wheel_base_cpp}"
-  "SettleSelectionOnFocusedItem();"
-  "WheelBase settles visual focus before accepting selection")
+  "m_WheelState = STATE_SELECTING;"
+  "WheelBase initializes wheel state before initial positioning")
 require_contains(
   "${wheel_base_cpp}"
-  "m_fPositionOffsetFromSelection = 0.0f;"
-  "WheelBase clears visual offset before selection")
+  "const char* WheelStateToTraceString(WheelState state)"
+  "WheelBase traces wheel state without assertive enum conversion")
+require_not_contains(
+  "${wheel_base_cpp}"
+  "WheelStateToString(m_WheelState)"
+  "WheelBase traces must not crash on an invalid or not-yet-initialized wheel state")
 require_contains(
   "${wheel_base_cpp}"
-  "m_fPositionOffsetFromSelection += iDist;\n\n  RebuildWheelItems(iDist);"
-  "WheelBase applies visual offset before rebuilding focused items")
+  "RebuildWheelItems(iDist);\n\n  m_fPositionOffsetFromSelection += iDist;"
+  "WheelBase restores source order by rebuilding before applying visual offset")
 require_contains(
   "${music_wheel_cpp}"
   "int MusicWheel::GetVisualFocusIndex() const"
-  "MusicWheel centralizes visual focus selection reads")
+  "MusicWheel keeps a compatibility alias for focus traces")
 require_contains(
   "${wheel_base_cpp}"
   "int WheelBase::GetVisualFocusIndex() const"
-  "WheelBase centralizes visual focus selection reads")
-require_contains(
+  "WheelBase keeps a compatibility alias for focus traces")
+require_not_contains(
   "${wheel_base_cpp}"
   "int WheelBase::GetVisualFocusDrawIndex(int itemCount) const"
-  "WheelBase centralizes rendered focus slot calculation")
-require_contains(
-  "${wheel_base_cpp}"
-  "std::lround(centerDrawIndex - offsetFromSelection)"
-  "WheelBase rendered focus follows the actor closest to the visual center")
-require_contains(
+  "WheelBase restored source static draw-slot behavior")
+require_not_contains(
   "${wheel_base_cpp}"
   "void WheelBase::ApplyWheelItemDrawOrder(int itemCount)"
-  "WheelBase centralizes rendered wheel draw order")
-require_contains(
-  "${wheel_base_cpp}"
-  "const int drawOrder = -std::abs(i - focusDrawIndex);"
-  "WheelBase draws items closest to visual focus above recycled neighbors")
-require_contains(
+  "WheelBase restored source child draw order")
+require_not_contains(
   "${wheel_base_cpp}"
   "ApplyWheelItemDrawOrder(displayCount);"
-  "WheelBase refreshes draw order after positioning wheel items")
+  "WheelBase restored source positioning without dynamic draw order")
+require_not_contains(
+  "${wheel_base_cpp}"
+  "set_positions_focus_window slot=%d"
+  "WheelBase removed focus-window instrumentation tied to the reverted occlusion model")
 require_contains(
   "${music_wheel_cpp}"
   "return WheelBase::GetVisualFocusIndex();"
-  "MusicWheel delegates visual focus calculation to WheelBase")
+  "MusicWheel delegates compatibility focus traces to WheelBase")
 require_contains(
   "${music_wheel_cpp}"
-  "m_fPositionOffsetFromSelection += iDist;\n\n  if (REMIND_WHEEL_POSITIONS"
-  "MusicWheel applies visual offset before rebuilding focused items")
-require_contains(
+  "RebuildWheelItems(iDist);\n\n  m_fPositionOffsetFromSelection += iDist;"
+  "MusicWheel restores source order by rebuilding before applying visual offset")
+require_not_contains(
   "${music_wheel_cpp}"
-  "const MusicWheelItemData* selected = GetVisualFocusItemData();"
-  "MusicWheel selected song follows visual focus")
-require_contains(
-  "${music_wheel_cpp}"
-  "const MusicWheelItemData* item = GetVisualFocusItemData();"
-  "MusicWheel selected metadata follows visual focus")
-require_contains(
+  "GetVisualFocusItemData()"
+  "MusicWheel selected metadata follows the source logical selection")
+require_not_contains(
   "${music_wheel_cpp}"
   "void MusicWheel::PostSongChangedIfVisualFocusChanged()"
-  "MusicWheel emits song changed when animated visual focus changes")
-require_contains(
-  "${music_wheel_cpp}"
-  "m_iLastPostedVisualFocusIndex = focusedIndex;"
-  "MusicWheel records the last announced visual focus")
-require_contains(
+  "MusicWheel restored source notification behavior without visual-focus polling")
+require_not_contains(
   "${music_wheel_cpp}"
   "PostSongChangedIfVisualFocusChanged();"
-  "MusicWheel checks visual focus changes during update")
+  "MusicWheel update no longer emits visual-focus notifications")
 require_contains(
   "${music_wheel_cpp}"
   "SRC-2693 MusicWheelTrace change_music"
   "MusicWheel logs selection and focus transitions")
 require_contains(
   "${music_wheel_cpp}"
-  "SRC-2693 MusicWheelTrace change_music_focus_unchanged"
-  "MusicWheel does not notify when only logical selection changed")
-require_not_contains(
-  "${music_wheel_cpp}"
-  "reason=change_music focus="
-  "MusicWheel must not post song changed before visual focus changes")
+  "SCREENMAN->PostMessageToTopScreen(SM_SongChanged, 0);"
+  "MusicWheel restored source immediate song-change notification")
 require_contains(
   "${wheel_base_cpp}"
   "SRC-2693 MusicWheelTrace wheelbase_move_accept"
@@ -242,12 +250,12 @@ require_contains(
   "WheelBase logs rebuilt visual wheel slots")
 require_contains(
   "${wheel_base_cpp}"
-  "const bool hasVisualFocus = i == visualFocusDrawIndex;"
-  "WheelBase marks only one rendered actor as focused during rebuild")
+  "const bool hasFocus = m_iSelection == iIndex;"
+  "WheelBase restored source logical selection focus during rebuild")
 require_contains(
   "${wheel_base_cpp}"
-  "pDisplay->LoadFromWheelItemData(pData, iIndex, hasVisualFocus, i);"
-  "WheelBase passes rendered focus into rebuilt wheel items")
+  "pDisplay->LoadFromWheelItemData(pData, iIndex, hasFocus, i);"
+  "WheelBase passes logical selection focus into rebuilt wheel items")
 require_contains(
   "${banner_cpp}"
   "SRC-2693 MusicWheelTrace banner_cached_begin"

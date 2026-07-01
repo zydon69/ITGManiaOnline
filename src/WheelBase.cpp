@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
-#include <cstdarg>
 #include <string>
 #include <vector>
 
@@ -39,15 +38,37 @@ void WarnWheelBase(const std::string& message) {
   }
 }
 
-void TraceWheelBaseMusicWheel(const char* fmt, ...) {
-  if (LOG == nullptr) {
-    return;
+const char* WheelItemDataTypeTraceName(WheelItemDataType type) {
+  switch (type) {
+    case WheelItemDataType_Generic:
+      return "Generic";
+    case WheelItemDataType_Section:
+      return "Section";
+    case WheelItemDataType_Song:
+      return "Song";
+    case WheelItemDataType_Roulette:
+      return "Roulette";
+    case WheelItemDataType_Random:
+      return "Random";
+    case WheelItemDataType_Portal:
+      return "Portal";
+    case WheelItemDataType_Course:
+      return "Course";
+    case WheelItemDataType_Sort:
+      return "Sort";
+    case WheelItemDataType_Custom:
+      return "Custom";
+    default:
+      return "Invalid";
   }
+}
 
-  va_list va;
-  va_start(va, fmt);
-  LOG->Trace("%s", vssprintf(fmt, va).c_str());
-  va_end(va);
+void TraceWheelReintro(const char* event, const std::string& details) {
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2710 WheelReintroTrace %s %s", event,
+        details.c_str());
+  }
 }
 }  // namespace
 
@@ -167,28 +188,16 @@ void WheelBase::BeginScreen() { m_WheelState = STATE_SELECTING; }
 
 void WheelBase::SetItemPosition(
     Actor& item, int item_index, float offset_from_middle) {
-  Actor::TweenState ts;
-  if (!m_exprItemTransformFunction.GetTransformCached(
-          offset_from_middle, item_index, GetWheelItemCount(), ts)) {
-    item.SetVisible(false);
-    return;
-  }
-  item.SetVisible(true);
+  Actor::TweenState ts = m_exprItemTransformFunction.GetTransformCached(
+      offset_from_middle, item_index, GetWheelItemCount());
   item.DestTweenState() = ts;
 }
 
 void WheelBase::GetItemPosition(
     float fPosOffsetsFromMiddle, float& fX_out, float& fY_out, float& fZ_out,
     float& fRotationX_out) {
-  Actor::TweenState ts;
-  if (!m_exprItemTransformFunction.GetTransformCached(
-          fPosOffsetsFromMiddle, 0, GetWheelItemCount(), ts)) {
-    fX_out = 0.0f;
-    fY_out = 0.0f;
-    fZ_out = 0.0f;
-    fRotationX_out = 0.0f;
-    return;
-  }
+  Actor::TweenState ts = m_exprItemTransformFunction.GetTransformCached(
+      fPosOffsetsFromMiddle, 0, GetWheelItemCount());
   fX_out = ts.pos.x;
   fY_out = ts.pos.y;
   fZ_out = ts.pos.z;
@@ -247,39 +256,6 @@ void WheelBase::SetPositions() {
     }
 
     SetItemPosition(*pDisplay, i, fOffsetFromSelection);
-  }
-  ApplyWheelItemDrawOrder(displayCount);
-}
-
-void WheelBase::ApplyWheelItemDrawOrder(int itemCount) {
-  const int focusDrawIndex = GetVisualFocusDrawIndex(itemCount);
-  if (focusDrawIndex < 0) {
-    return;
-  }
-
-  bool changed = false;
-  for (int i = 0; i < itemCount; ++i) {
-    WheelItemBase* pDisplay = m_WheelBaseItems[i];
-    if (pDisplay == nullptr) {
-      continue;
-    }
-
-    // ActorFrame draws lower draw orders first.  Keep distant wheel items
-    // behind the actor closest to the visual focus so recycled adjacent rows
-    // cannot bleed over the focused title during scroll animations.
-    const int drawOrder = -std::abs(i - focusDrawIndex);
-    if (pDisplay->GetDrawOrder() != drawOrder) {
-      pDisplay->SetDrawOrder(drawOrder);
-      changed = true;
-    }
-  }
-
-  if (changed) {
-    SortByDrawOrder();
-    TraceWheelBaseMusicWheel(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace draw_order_update "
-        "focusDrawIndex=%d itemCount=%d offset=%.6f",
-        focusDrawIndex, itemCount, m_fPositionOffsetFromSelection);
   }
 }
 
@@ -429,38 +405,16 @@ void WheelBase::UpdateSwitch() {
 bool WheelBase::Select()  // return true if this selection can end the screen
 {
   if (LOG != nullptr) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace wheelbase_select_begin "
-        "selection=%d offset=%.4f moving=%d state=%s empty=%d valid=%d",
-        m_iSelection, m_fPositionOffsetFromSelection, m_Moving,
-        WheelStateToString(m_WheelState).c_str(), m_bEmpty ? 1 : 0,
-        HasValidSelection() ? 1 : 0);
+    LOG->Trace("WheelBase::Select()");
   }
 
+  m_Moving = 0;
+
   if (m_bEmpty || !HasValidSelection()) {
-    if (LOG != nullptr) {
-      LOG->Trace(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace wheelbase_select_rejected "
-          "selection=%d offset=%.4f moving=%d state=%s empty=%d",
-          m_iSelection, m_fPositionOffsetFromSelection, m_Moving,
-          WheelStateToString(m_WheelState).c_str(), m_bEmpty ? 1 : 0);
-    }
     return false;
   }
 
-  SettleSelectionOnFocusedItem();
-
   WheelItemBaseData* selected = m_CurWheelItemData[m_iSelection];
-  if (LOG != nullptr) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace wheelbase_select_after_settle "
-        "selection=%d offset=%.4f moving=%d state=%s selectedType=%s "
-        "selectedText='%s'",
-        m_iSelection, m_fPositionOffsetFromSelection, m_Moving,
-        WheelStateToString(m_WheelState).c_str(),
-        selected == nullptr ? "<null>" : WheelItemDataTypeToLogString(selected->m_Type),
-        selected == nullptr ? "" : selected->m_sText.c_str());
-  }
   switch (selected->m_Type) {
     case WheelItemDataType_Generic:
       m_LastSelection = selected;
@@ -537,28 +491,20 @@ void WheelBase::ChangeMusicUnlessLocked(int n) {
 }
 
 void WheelBase::Move(int n) {
-  const int requestedMove = n;
   n = NormalizeMoveDistance(n);
+  TraceWheelReintro(
+      "move_request",
+      ssprintf(
+          "requested=%d currentMoving=%d selection=%d offset=%.4f "
+          "state=%d settled=%d dataCount=%zu",
+          n, m_Moving, m_iSelection, m_fPositionOffsetFromSelection,
+          static_cast<int>(m_WheelState), IsSettled() ? 1 : 0,
+          m_CurWheelItemData.size()));
   if (n == m_Moving) {
-    if (LOG != nullptr) {
-      LOG->Trace(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace wheelbase_move_ignored "
-          "requested=%d normalized=%d selection=%d offset=%.4f moving=%d "
-          "state=%s reason=same_direction",
-          requestedMove, n, m_iSelection, m_fPositionOffsetFromSelection,
-          m_Moving, WheelStateToString(m_WheelState).c_str());
-    }
     return;
   }
 
   if (m_WheelState == STATE_LOCKED) {
-    if (LOG != nullptr) {
-      LOG->Trace(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace wheelbase_move_locked "
-          "requested=%d normalized=%d selection=%d offset=%.4f moving=%d",
-          requestedMove, n, m_iSelection, m_fPositionOffsetFromSelection,
-          m_Moving);
-    }
     if (n) {
       m_fLockedWheelVelocity = n * GetSafeLockedInitialVelocity();
       PlaySoundIfLoaded(m_soundLocked, true);
@@ -567,14 +513,6 @@ void WheelBase::Move(int n) {
   }
 
   if (!MoveSpecific(n)) {
-    if (LOG != nullptr) {
-      LOG->Trace(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace wheelbase_move_rejected "
-          "requested=%d normalized=%d selection=%d offset=%.4f moving=%d "
-          "state=%s",
-          requestedMove, n, m_iSelection, m_fPositionOffsetFromSelection,
-          m_Moving, WheelStateToString(m_WheelState).c_str());
-    }
     return;
   }
 
@@ -582,15 +520,6 @@ void WheelBase::Move(int n) {
   m_SpinSpeed =
       PREFSMAN != nullptr ? float(PREFSMAN->m_iMusicWheelSwitchSpeed) : 0.0f;
   m_Moving = n;
-
-  if (LOG != nullptr) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace wheelbase_move_accept "
-        "requested=%d normalized=%d selection=%d offset=%.4f moving=%d "
-        "state=%s spinSpeed=%.4f",
-        requestedMove, n, m_iSelection, m_fPositionOffsetFromSelection,
-        m_Moving, WheelStateToString(m_WheelState).c_str(), m_SpinSpeed);
-  }
 
   if (m_Moving) {
     ChangeMusic(m_Moving);
@@ -618,13 +547,6 @@ bool WheelBase::MoveSpecific(int n) {
   }
 
   if (m_Moving != 0 && n == 0 && m_TimeBeforeMovingBegins == 0) {
-    if (LOG != nullptr) {
-      LOG->Trace(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace wheelbase_stop_begin "
-          "selection=%d offset=%.4f moving=%d state=%s",
-          m_iSelection, m_fPositionOffsetFromSelection, m_Moving,
-          WheelStateToString(m_WheelState).c_str());
-    }
     /* We were moving, and now we're stopping.  If we're really close to
      * the selection, move to the next one, so we have a chance to spin down
      * smoothly. */
@@ -635,12 +557,6 @@ bool WheelBase::MoveSpecific(int n) {
     /* Make sure the user always gets an SM_SongChanged when
      * Moving() is 0, so the final banner, etc. always gets set. */
     if (SCREENMAN != nullptr) {
-      if (LOG != nullptr) {
-        LOG->Trace(
-            "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace post_sm_song_changed "
-            "reason=wheelbase_stop selection=%d offset=%.4f moving=%d",
-            m_iSelection, m_fPositionOffsetFromSelection, m_Moving);
-      }
       SCREENMAN->PostMessageToTopScreen(SM_SongChanged, 0);
     }
   }
@@ -660,11 +576,27 @@ void WheelBase::ChangeMusic(int iDist) {
     return;
   }
 
+  const int previousSelection = m_iSelection;
+  const float previousOffset = m_fPositionOffsetFromSelection;
   m_iSelection += iDist;
   wrap(m_iSelection, m_CurWheelItemData.size());
-  m_fPositionOffsetFromSelection += iDist;
+  TraceWheelReintro(
+      "change_music",
+      ssprintf(
+          "dist=%d prevSelection=%d newSelection=%d prevOffset=%.4f "
+          "dataCount=%zu moving=%d",
+          iDist, previousSelection, m_iSelection, previousOffset,
+          m_CurWheelItemData.size(), m_Moving));
 
   RebuildWheelItems(iDist);
+
+  m_fPositionOffsetFromSelection += iDist;
+  TraceWheelReintro(
+      "change_music_offset",
+      ssprintf(
+          "dist=%d selection=%d newOffset=%.4f moving=%d settled=%d",
+          iDist, m_iSelection, m_fPositionOffsetFromSelection, m_Moving,
+          IsSettled() ? 1 : 0));
 
   //	SCREENMAN->PostMessageToTopScreen( SM_SongChanged, 0 );
 
@@ -676,23 +608,11 @@ void WheelBase::ChangeMusic(int iDist) {
 }
 
 void WheelBase::RebuildWheelItems(int iDist) {
-  m_exprItemTransformFunction.ClearCache();
-
   const std::vector<WheelItemBaseData*>& data = m_CurWheelItemData;
   std::vector<WheelItemBase*>& items = m_WheelBaseItems;
-  TraceWheelBaseMusicWheel(
-      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_begin "
-      "requestedDist=%d selection=%d offset=%.6f moving=%d dataCount=%zu "
-      "actorCount=%zu empty=%d lastSelection=%p",
-      iDist, m_iSelection, m_fPositionOffsetFromSelection, m_Moving,
-      data.size(), items.size(), m_bEmpty, static_cast<void*>(m_LastSelection));
   if (data.empty() || items.empty()) {
     m_bEmpty = true;
     m_LastSelection = nullptr;
-    TraceWheelBaseMusicWheel(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_empty "
-        "requestedDist=%d dataCount=%zu actorCount=%zu",
-        iDist, data.size(), items.size());
     return;
   }
 
@@ -706,27 +626,26 @@ void WheelBase::RebuildWheelItems(int iDist) {
       std::find(data.begin(), data.end(), m_LastSelection) == data.end()) {
     m_LastSelection = nullptr;
   }
-  const int visualFocusIndex = GetVisualFocusIndex();
 
   // find the first wheel item shown
   const int wheelItemCount = GetWheelItemCount();
   const int itemCount = std::min(wheelItemCount, static_cast<int>(items.size()));
-  const int visualFocusDrawIndex = GetVisualFocusDrawIndex(itemCount);
   iFirstVisibleIndex -= wheelItemCount / 2;
 
   wrap(iFirstVisibleIndex, data.size());
+  TraceWheelReintro(
+      "rebuild_begin",
+      ssprintf(
+          "dist=%d selection=%d firstVisible=%d dataCount=%zu "
+          "wheelItemCount=%d actorCount=%zu offset=%.4f moving=%d",
+          iDist, m_iSelection, iFirstVisibleIndex, data.size(), wheelItemCount,
+          items.size(), m_fPositionOffsetFromSelection, m_Moving));
 
   // iIndex is now the index of the lowest WheelItem to draw
 
   int iFirst = 0;
   int iLast = itemCount - 1;
   if (iLast < 0) {
-    TraceWheelBaseMusicWheel(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_no_visible_items "
-        "requestedDist=%d selection=%d firstVisible=%d itemCount=%d "
-        "wheelItemCount=%d actorCount=%zu",
-        iDist, m_iSelection, iFirstVisibleIndex, itemCount, wheelItemCount,
-        items.size());
     return;
   }
 
@@ -741,16 +660,6 @@ void WheelBase::RebuildWheelItems(int iDist) {
     }
   }
 
-  TraceWheelBaseMusicWheel(
-      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_window "
-      "normalizedDist=%d selection=%d firstVisible=%d firstReloadSlot=%d "
-      "lastReloadSlot=%d itemCount=%d wheelItemCount=%d dataCount=%zu "
-      "actorCount=%zu offset=%.6f moving=%d visualFocus=%d "
-      "visualFocusDrawIndex=%d",
-      iDist, m_iSelection, iFirstVisibleIndex, iFirst, iLast, itemCount,
-      wheelItemCount, data.size(), items.size(), m_fPositionOffsetFromSelection,
-      m_Moving, visualFocusIndex, visualFocusDrawIndex);
-
   for (int i = iFirst; i <= iLast; i++) {
     int iIndex = iFirstVisibleIndex + i;
     wrap(iIndex, data.size());
@@ -758,11 +667,6 @@ void WheelBase::RebuildWheelItems(int iDist) {
     const WheelItemBaseData* pData = data[iIndex];
     WheelItemBase* pDisplay = items[i];
     if (pData == nullptr || pDisplay == nullptr) {
-      TraceWheelBaseMusicWheel(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_expand_skip "
-          "slot=%d dataIndex=%d dataPtr=%p actorPtr=%p",
-          i, iIndex, static_cast<const void*>(pData),
-          static_cast<void*>(pDisplay));
       continue;
     }
 
@@ -777,37 +681,17 @@ void WheelBase::RebuildWheelItems(int iDist) {
     const WheelItemBaseData* pData = data[iIndex];
     WheelItemBase* pDisplay = items[i];
     if (pData == nullptr || pDisplay == nullptr) {
-      TraceWheelBaseMusicWheel(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_load_skip "
-          "slot=%d dataIndex=%d dataPtr=%p actorPtr=%p logicalSelected=%d "
-          "hasVisualFocus=%d visualFocus=%d visualFocusDrawIndex=%d",
-          i, iIndex, static_cast<const void*>(pData),
-          static_cast<void*>(pDisplay), m_iSelection == iIndex,
-          i == visualFocusDrawIndex, visualFocusIndex, visualFocusDrawIndex);
       continue;
     }
-    const bool hasVisualFocus = i == visualFocusDrawIndex;
-    TraceWheelBaseMusicWheel(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_load_slot "
-        "slot=%d dataIndex=%d logicalSelected=%d hasVisualFocus=%d type='%s' "
-        "text='%s' dataPtr=%p actorPtr=%p firstVisible=%d selection=%d "
-        "visualFocus=%d visualFocusDrawIndex=%d offset=%.6f",
-        i, iIndex, m_iSelection == iIndex, hasVisualFocus,
-        WheelItemDataTypeToLogString(pData->m_Type), pData->m_sText.c_str(),
-        static_cast<const void*>(pData), static_cast<void*>(pDisplay),
-        iFirstVisibleIndex, m_iSelection, visualFocusIndex,
-        visualFocusDrawIndex,
-        m_fPositionOffsetFromSelection);
-    pDisplay->LoadFromWheelItemData(pData, iIndex, hasVisualFocus, i);
+    TraceWheelReintro(
+        "rebuild_load_slot",
+        ssprintf(
+            "slot=%d dataIndex=%d hasFocus=%d drawIndex=%d type=%s text='%s'",
+            i, iIndex, m_iSelection == iIndex ? 1 : 0, i,
+            WheelItemDataTypeTraceName(pData->m_Type),
+            pData->m_sText.c_str()));
+    pDisplay->LoadFromWheelItemData(pData, iIndex, m_iSelection == iIndex, i);
   }
-
-  TraceWheelBaseMusicWheel(
-      "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace rebuild_end "
-      "selection=%d visualFocus=%d offset=%.6f moving=%d firstVisible=%d "
-      "visualFocusDrawIndex=%d dataCount=%zu actorCount=%zu empty=%d",
-      m_iSelection, visualFocusIndex, m_fPositionOffsetFromSelection, m_Moving,
-      iFirstVisibleIndex, visualFocusDrawIndex, data.size(), items.size(),
-      m_bEmpty);
 }
 
 WheelItemBaseData* WheelBase::LastSelected() {
@@ -842,38 +726,6 @@ WheelItemDataType WheelBase::GetSelectedType() {
   }
 
   return m_CurWheelItemData[m_iSelection]->m_Type;
-}
-
-int WheelBase::GetVisualFocusIndex() const {
-  if (m_CurWheelItemData.empty()) {
-    return 0;
-  }
-
-  int focusedIndex = std::clamp(
-      m_iSelection, 0, static_cast<int>(m_CurWheelItemData.size()) - 1);
-  if (std::isfinite(m_fPositionOffsetFromSelection)) {
-    focusedIndex -=
-        static_cast<int>(std::lround(m_fPositionOffsetFromSelection));
-    wrap(focusedIndex, m_CurWheelItemData.size());
-  }
-
-  return focusedIndex;
-}
-
-int WheelBase::GetVisualFocusDrawIndex(int itemCount) const {
-  if (itemCount <= 0) {
-    return -1;
-  }
-
-  const int centerDrawIndex = GetWheelItemCount() / 2;
-  float offsetFromSelection = 0.0f;
-  if (std::isfinite(m_fPositionOffsetFromSelection)) {
-    offsetFromSelection = m_fPositionOffsetFromSelection;
-  }
-
-  const int focusDrawIndex =
-      static_cast<int>(std::lround(centerDrawIndex - offsetFromSelection));
-  return std::clamp(focusDrawIndex, 0, itemCount - 1);
 }
 
 int WheelBase::GetWheelItemCount() const {
@@ -934,58 +786,6 @@ bool WheelBase::HasValidSelection() const {
   }
 
   return m_CurWheelItemData[m_iSelection] != nullptr;
-}
-
-bool WheelBase::SettleSelectionOnFocusedItem() {
-  if (m_CurWheelItemData.empty()) {
-    m_bEmpty = true;
-    m_iSelection = 0;
-    m_Moving = 0;
-    m_fPositionOffsetFromSelection = 0.0f;
-    if (LOG != nullptr) {
-      LOG->Trace(
-          "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace settle_empty");
-    }
-    return false;
-  }
-
-  const int previousSelection = m_iSelection;
-  const float previousOffset = m_fPositionOffsetFromSelection;
-  m_iSelection = std::clamp(
-      m_iSelection, 0, static_cast<int>(m_CurWheelItemData.size()) - 1);
-  int offsetToFocusedItem = 0;
-  if (std::isfinite(m_fPositionOffsetFromSelection)) {
-    offsetToFocusedItem =
-        static_cast<int>(std::lround(m_fPositionOffsetFromSelection));
-    offsetToFocusedItem = std::clamp(offsetToFocusedItem, -1, 1);
-    m_iSelection -= offsetToFocusedItem;
-    wrap(m_iSelection, m_CurWheelItemData.size());
-  }
-
-  m_Moving = 0;
-  m_TimeBeforeMovingBegins = 0.0f;
-  m_fLockedWheelVelocity = 0.0f;
-  m_fPositionOffsetFromSelection = 0.0f;
-
-  RebuildWheelItems();
-  SetPositions();
-  UpdateScrollbar();
-
-  if (LOG != nullptr) {
-    const WheelItemBaseData* selected =
-        HasValidSelection() ? m_CurWheelItemData[m_iSelection] : nullptr;
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace settle_focus "
-        "previousSelection=%d newSelection=%d previousOffset=%.4f "
-        "offsetToFocusedItem=%d changed=%d selectedType=%s selectedText='%s'",
-        previousSelection, m_iSelection, previousOffset, offsetToFocusedItem,
-        m_iSelection != previousSelection ? 1 : 0,
-        selected == nullptr ? "<null>"
-                            : WheelItemDataTypeToLogString(selected->m_Type),
-        selected == nullptr ? "" : selected->m_sText.c_str());
-  }
-
-  return m_iSelection != previousSelection;
 }
 
 void WheelBase::ClearWheelItems() {

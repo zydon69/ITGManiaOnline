@@ -26,8 +26,6 @@ class LuaBinding {
   static void ApplyDerivedType(
       Lua* L, const std::string& sClassname, void* pSelf);
   static bool CheckLuaObjectType(lua_State* L, int narg, const char* szType);
-  static bool TryGetPointerFromStack(
-      Lua* L, const std::string& sType, int iArg, void*& pRet);
 
  protected:
   virtual void Register(Lua* L, int iMethods, int iMetatable) = 0;

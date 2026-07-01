@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <typeinfo>
 #include <utility>
 
 #include "Actor.h"
@@ -21,6 +22,16 @@ void WarnAutoActorAuditFix(const char* message) {
 
 std::unique_ptr<Actor> MakeFallbackActor() {
   return std::unique_ptr<Actor>(new Actor);
+}
+
+const char* ActorTraceName(const Actor* actor) {
+  if (actor == nullptr) {
+    return "<null>";
+  }
+  if (actor->GetName().empty()) {
+    return "<unnamed>";
+  }
+  return actor->GetName().c_str();
 }
 
 std::unique_ptr<Actor> CloneActorOrFallback(const Actor* actor) {
@@ -49,8 +60,18 @@ void DetachFromParent(Actor* actor) {
     return;
   }
 
-  WarnAutoActorAuditFix(
-      "SRC_AUDIT_FIX SRC-2645: AutoActor detached actor from non-frame parent.");
+  if (LOG != nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-2645: AutoActor detached actor from non-frame "
+        "parent actor=%p actorName='%s' actorType='%s' parent=%p "
+        "parentName='%s' parentType='%s'.",
+        static_cast<void*>(actor),
+        ActorTraceName(actor),
+        typeid(*actor).name(),
+        static_cast<void*>(parent),
+        ActorTraceName(parent),
+        typeid(*parent).name());
+  }
   actor->SetParent(nullptr);
 }
 }  // namespace

@@ -88,16 +88,12 @@ class WheelBase : public ActorFrame {
   virtual void UpdateSwitch();
   virtual bool MoveSpecific(int n);
   void SetPositions();
-  void ApplyWheelItemDrawOrder(int itemCount);
   int GetWheelItemCount() const;
   float GetNumWheelItemsToDraw() const;
   float GetSafeSwitchSeconds() const;
   float GetSafeLockedInitialVelocity() const;
   int NormalizeMoveDistance(int n) const;
-  int GetVisualFocusIndex() const;
-  int GetVisualFocusDrawIndex(int itemCount) const;
   bool HasValidSelection() const;
-  bool SettleSelectionOnFocusedItem();
   void ClearWheelItems();
   void PlaySoundIfLoaded(RageSound& sound, bool isAction);
 

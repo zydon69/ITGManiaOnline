@@ -26,31 +26,6 @@ enum WheelItemDataType {
 };
 LuaDeclareType(WheelItemDataType);
 
-inline const char* WheelItemDataTypeToLogString(WheelItemDataType type) {
-  switch (type) {
-    case WheelItemDataType_Generic:
-      return "Generic";
-    case WheelItemDataType_Section:
-      return "Section";
-    case WheelItemDataType_Song:
-      return "Song";
-    case WheelItemDataType_Roulette:
-      return "Roulette";
-    case WheelItemDataType_Random:
-      return "Random";
-    case WheelItemDataType_Portal:
-      return "Portal";
-    case WheelItemDataType_Course:
-      return "Course";
-    case WheelItemDataType_Sort:
-      return "Sort";
-    case WheelItemDataType_Custom:
-      return "Custom";
-    default:
-      return "Invalid";
-  }
-}
-
 struct WheelItemBaseData {
   WheelItemBaseData()
       : m_Type(WheelItemDataType_Invalid),
