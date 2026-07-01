@@ -22,6 +22,10 @@ set(ONLINE_LIVE_LEADERBOARD_SOURCE
     "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/BGAnimations/ScreenGameplay overlay/OnlineLiveLeaderboard.lua")
 file(READ "${ONLINE_LIVE_LEADERBOARD_SOURCE}" ONLINE_LIVE_LEADERBOARD_TEXT)
 
+set(TRACK_ONLINE_SCORE_PUSH_SOURCE
+    "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/BGAnimations/ScreenGameplay overlay/TrackOnlineScorePush.lua")
+file(READ "${TRACK_ONLINE_SCORE_PUSH_SOURCE}" TRACK_ONLINE_SCORE_PUSH_TEXT)
+
 foreach(REQUIRED_SNIPPET
     "GetGameplayStartLeadInSeconds"
     "const float startLeadInSeconds = GetGameplayStartLeadInSeconds"
@@ -54,7 +58,10 @@ foreach(REQUIRED_SNIPPET
     "live_score_flush_skipped reason=zero_progress_already_sent"
     "live_score_flush_skipped reason=final_score_already_accepted"
     "IsLiveScoreFinalizedForRound"
+    "IsLiveScoreFinalizedForCurrentRound"
     "lastAcceptedZeroLiveScoreRoundKey"
+    "ready_request_skipped reason=stale_lobby_ready_before_post"
+    "ready_request_phase_race_accepted"
     "final_failed_snapshot_selected reason=prefer_terminal_candidate"
     "if scoreMode == \"itg\" then"
     "itgScorePercent = outgoingPercent")
@@ -63,6 +70,28 @@ foreach(REQUIRED_SNIPPET
     message(
         FATAL_ERROR
         "Online score payload invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "live_score_finalized_for_runtime"
+    "not live_score_finalized_for_runtime()")
+  string(FIND "${ONLINE_HELPERS_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+        FATAL_ERROR
+        "Online live score runtime invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "IsLiveScoreFinalizedForCurrentRound(\"track_online_score_push\")"
+    "tracker_stop reason=final_score_already_accepted")
+  string(FIND "${TRACK_ONLINE_SCORE_PUSH_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+        FATAL_ERROR
+        "Online score tracker invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
 

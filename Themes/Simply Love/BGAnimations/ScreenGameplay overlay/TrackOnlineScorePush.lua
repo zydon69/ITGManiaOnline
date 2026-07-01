@@ -25,6 +25,11 @@ local function online_score_trace(message, force)
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
 
+local function live_score_finalized()
+	return ITGOnline and ITGOnline.IsLiveScoreFinalizedForCurrentRound
+		and ITGOnline:IsLiveScoreFinalizedForCurrentRound("track_online_score_push")
+end
+
 local function live_score_runtime_active()
 	if not (ITGOnline and ITGOnline.currentRoomId and ITGOnline.currentRoom) then
 		return false
@@ -36,6 +41,7 @@ end
 
 local function live_score_playing()
 	if not live_score_runtime_active() then return false end
+	if live_score_finalized() then return false end
 	local phase = ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) or tostring(ITGOnline.currentRoom.phase or "")
 	return phase == "playing"
 end
@@ -67,6 +73,14 @@ end
 
 return Def.Actor{
 	OnCommand=function(self)
+		if live_score_finalized() then
+			online_score_trace("tracker_off reason=final_score_already_accepted"
+				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"), true)
+			if ITGOnline and ITGOnline.StopLiveScoreFlush then
+				ITGOnline:StopLiveScoreFlush("tracker_finalized_on")
+			end
+			return
+		end
 		if not live_score_runtime_active() then
 			online_score_trace("tracker_off reason=local_or_inactive_room"
 				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
@@ -80,6 +94,14 @@ return Def.Actor{
 		self:queuecommand("FlushOnlineScore")
 	end,
 	FlushOnlineScoreCommand=function(self)
+		if live_score_finalized() then
+			online_score_trace("tracker_stop reason=final_score_already_accepted"
+				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"), true)
+			if ITGOnline and ITGOnline.StopLiveScoreFlush then
+				ITGOnline:StopLiveScoreFlush("tracker_finalized_flush")
+			end
+			return
+		end
 		if not live_score_runtime_active() then
 			online_score_trace("tracker_stop reason=local_or_inactive_room"
 				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")

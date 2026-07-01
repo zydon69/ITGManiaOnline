@@ -3913,21 +3913,26 @@ end
 
 function ITGOnline:StopLiveScoreFlush(reason)
 	local hadPending = self.pendingLiveScoreSnapshot ~= nil or tostring(self.pendingLiveScoreRoundKey or "") ~= ""
+	local wasInFlight = self.liveScoreInFlight == true
 	local pendingRoundKey = tostring(self.pendingLiveScoreRoundKey or "")
 	local currentRoundKey = self.PlayStateKey and self:PlayStateKey() or ""
 	self.pendingLiveScoreSnapshot = nil
 	self.pendingLiveScoreRoundKey = ""
 	self.liveScoreNextAttemptAt = 0
+	if not hadPending and not wasInFlight then
+		return false
+	end
 	online_flow_trace(
 		"live_score_flush_stopped reason=" .. tostring(reason or "unknown") ..
 		" hadPending=" .. tostring(hadPending) ..
-		" inFlight=" .. tostring(self.liveScoreInFlight == true) ..
+		" inFlight=" .. tostring(wasInFlight) ..
 		" room=" .. tostring(self.currentRoomId or "") ..
 		" phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil") ..
 		" screen=" .. tostring(self.currentScreenName or "nil") ..
 		" pendingRoundKey=" .. tostring(pendingRoundKey) ..
 		" currentRoundKey=" .. tostring(currentRoundKey)
 	)
+	return true
 end
 
 function ITGOnline:IsLiveScoreFinalizedForRound(roundKey)
@@ -3936,6 +3941,16 @@ function ITGOnline:IsLiveScoreFinalizedForRound(roundKey)
 	if self.PlayStateKeyIsValid and not self:PlayStateKeyIsValid(roundKey) then return false end
 	if tostring(self.lastFinalScoreKey or "") == roundKey then return true end
 	return false
+end
+
+function ITGOnline:IsLiveScoreFinalizedForCurrentRound(source)
+	local roundKey = ""
+	if self.CanonicalGameplayRoundKey then
+		roundKey = self:CanonicalGameplayRoundKey(source or "live_score_finalized_check")
+	elseif self.PlayStateKey then
+		roundKey = self:PlayStateKey()
+	end
+	return self:IsLiveScoreFinalizedForRound(roundKey)
 end
 
 function ITGOnline:NormalizeRoomPhase(value)
@@ -4679,11 +4694,12 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 		end
 
 		local currentPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
-		if currentPhase == "config" then
+		if currentPhase ~= "lobby" and currentPhase ~= "lobby_ready" and currentPhase ~= "unknown" then
 			self.songSelectedAutoReadyInFlightKey = ""
 			self.songSelectedAutoReadyCompletedKey = key
 			online_flow_trace("song_selected_auto_ready_completed key=" .. tostring(key)
-				.. " reason=room_already_config")
+				.. " reason=room_already_past_lobby_ready"
+				.. " currentPhase=" .. tostring(currentPhase))
 			if self.EnforceRoomPhaseScreen then
 				self:EnforceRoomPhaseScreen()
 			end
@@ -9463,6 +9479,11 @@ function ITGOnline:QueueLiveScoreTickIfDue(snapshot)
 		end
 		return false
 	end
+	if self:IsLiveScoreFinalizedForCurrentRound("live_score_tick") then
+		self:StopLiveScoreFlush("tick_final_score_already_accepted")
+		self.liveScoreInFlight = false
+		return false
+	end
 
 	if type(snapshot) == "table" then
 		self:RememberLiveScoreSnapshot(snapshot)
@@ -9477,6 +9498,11 @@ end
 
 function ITGOnline:HasPendingLiveScore()
 	if not self:HasCurrentOnlineRoom() then return false end
+	if self:IsLiveScoreFinalizedForCurrentRound("has_pending_live_score") then
+		self:StopLiveScoreFlush("pending_final_score_already_accepted")
+		self.liveScoreInFlight = false
+		return false
+	end
 	return self.pendingLiveScoreSnapshot ~= nil or self.liveScoreInFlight == true
 end
 
@@ -10660,6 +10686,28 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 			.. " play_key=" .. tostring(self:PlayStateKey()))
 	end
 
+	local latestPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+	if isReady and phase == "lobby_ready" and latestPhase ~= "lobby" and latestPhase ~= "lobby_ready" then
+		local pending = self.readyRequestInFlight[requestKey]
+		local callbacks = pending and pending.callbacks or {}
+		self.readyRequestInFlight[requestKey] = nil
+		self.readyRequestLastResult[requestKey] = {
+			ok = true,
+			at = GetTimeSinceStart(),
+		}
+		online_flow_trace("ready_request_skipped reason=stale_lobby_ready_before_post"
+			.. " key=" .. tostring(requestKey)
+			.. " room=" .. tostring(requestRoomId)
+			.. " requestedPhase=" .. tostring(phase)
+			.. " requestPhase=" .. tostring(requestPhase)
+			.. " latestPhase=" .. tostring(latestPhase)
+			.. " callbacks=" .. tostring(callbacks and #callbacks or 0))
+		for cb in ivalues(callbacks) do
+			safe_callback(cb, true, { room = self.currentRoom, stale_ready = true }, nil)
+		end
+		return
+	end
+
 	self:Request("POST", "/rooms/" .. requestRoomId .. "/ready", payload, function(ok, decoded, response)
 		self.readyRequestLastResult[requestKey] = {
 			ok = ok and true or false,
@@ -10673,6 +10721,35 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 		local errorCode = decoded and decoded.error_code
 		local phaseNotAccepting = errorCode == "room_phase_not_accepting"
 			or tostring(errorCode or ""):match("^room_phase_not_accepting") ~= nil
+		local lobbyReadyPhaseRace = not ok and phase == "lobby_ready" and phaseNotAccepting
+			and (livePhase == "config" or livePhase == "starting" or livePhase == "playing" or livePhase == "results")
+		if lobbyReadyPhaseRace then
+			self.readyRequestLastResult[requestKey] = {
+				ok = true,
+				at = GetTimeSinceStart(),
+			}
+			online_flow_trace("ready_request_phase_race_accepted"
+				.. " key=" .. tostring(requestKey)
+				.. " requestedPhase=" .. tostring(phase)
+				.. " requestRoom=" .. tostring(requestRoomId)
+				.. " liveRoom=" .. tostring(liveRoomId)
+				.. " requestPhase=" .. tostring(requestPhase)
+				.. " livePhase=" .. tostring(livePhase)
+				.. " error=" .. tostring(errorCode)
+				.. " callbacks=" .. tostring(callbacks and #callbacks or 0))
+			if self.currentRoomId then
+				self:FetchCurrentRoomFallback("ready_lobby_ready_phase_race", 0)
+			end
+			for cb in ivalues(callbacks) do
+				safe_callback(cb, true, {
+					room = self.currentRoom,
+					error_code = errorCode,
+					stale_ready = true,
+					phase_race = true,
+				}, response)
+			end
+			return
+		end
 		if liveRoomId ~= requestRoomId or (livePhase ~= "unknown" and livePhase ~= requestPhase) then
 			online_flow_trace("ready_request_response_dropped reason=context_changed"
 				.. " key=" .. tostring(requestKey)

@@ -2374,6 +2374,11 @@ function room_gameplay_runtime_should_run()
 	return room_runtime_should_run() and gameplayScreens[current_online_screen_name()] == true
 end
 
+function live_score_finalized_for_runtime()
+	return ITGOnline and ITGOnline.IsLiveScoreFinalizedForCurrentRound
+		and ITGOnline:IsLiveScoreFinalizedForCurrentRound("online_helpers_runtime")
+end
+
 function start_connection_timers(actor)
 	if not actor or onlineHandlerShuttingDown then
 		if online_trace then online_trace("FLOW connection_timers_start_skipped") end
@@ -2852,7 +2857,9 @@ CreateOnlineHandler = function()
 									DisplayLobbyState(self.lastLobbyStatePayload, self)
 								end
 							end
-							if ITGOnline and ITGOnline.FlushLiveScore and room_gameplay_runtime_should_run() then
+							if ITGOnline and ITGOnline.FlushLiveScore
+								and room_gameplay_runtime_should_run()
+								and not live_score_finalized_for_runtime() then
 								ITGOnline:FlushLiveScore()
 							end
 							schedule_named_timer(self, "OnlinePlayingCountdownTimer", 0.25, "Fire")
