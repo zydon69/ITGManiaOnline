@@ -23,6 +23,7 @@
 #include "LuaManager.h"
 #include "MessageManager.h"
 #include "MusicWheelItem.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "Preference.h"
 #include "PrefsManager.h"
@@ -62,7 +63,7 @@ void WarnMusicWheel(const std::string& message) {
 }
 
 void TraceMusicWheelReintro(const char* event, const std::string& details) {
-  if (LOG != nullptr) {
+  if (LOG != nullptr && LogMusicWheelDiagnosticsEnabled()) {
     LOG->Trace(
         "SRC_AUDIT_FIX SRC-2710 WheelReintroTrace %s %s", event,
         details.c_str());

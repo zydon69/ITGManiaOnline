@@ -14,6 +14,7 @@
 #include "Group.h"
 #include "HighScore.h"
 #include "MessageManager.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "Profile.h"
 #include "ProfileManager.h"
@@ -48,7 +49,7 @@ void WarnMusicWheelItem(const char* message) {
 }
 
 void TraceMusicWheelItemReintro(const char* event, const std::string& details) {
-  if (LOG != nullptr) {
+  if (LOG != nullptr && LogMusicWheelDiagnosticsEnabled()) {
     LOG->Trace(
         "SRC_AUDIT_FIX SRC-2710 WheelReintroTrace %s %s", event,
         details.c_str());

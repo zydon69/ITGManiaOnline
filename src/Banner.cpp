@@ -12,6 +12,7 @@
 #include "GameConstantsAndTypes.h"
 #include "ImageCache.h"
 #include "LuaManager.h"
+#include "PerfDiagnostics.h"
 #include "PrefsManager.h"
 #include "RageLog.h"
 #include "RageTextureID.h"
@@ -69,7 +70,7 @@ void WarnBannerAuditFix(const std::string& message) {
 }
 
 void TraceBannerAuditFix(const std::string& message) {
-  if (LOG != nullptr) {
+  if (LOG != nullptr && LogMusicWheelDiagnosticsEnabled()) {
     LOG->Trace("%s", message.c_str());
   }
 }

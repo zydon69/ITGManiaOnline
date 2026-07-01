@@ -29,6 +29,8 @@ static Preference<bool> g_bLogThemeLuaDiagnostics(
     "LogThemeLuaDiagnostics", false);
 static Preference<bool> g_bLogGlobalOffsetDiagnostics(
     "LogGlobalOffsetDiagnostics", false);
+static Preference<bool> g_bLogMusicWheelDiagnostics(
+    "LogMusicWheelDiagnostics", false);
 
 static std::atomic<bool> g_bPerfDiagnosticsCached{false};
 static std::atomic<bool> g_bLogAudioUnderrunDiagnosticsCached{false};
@@ -42,6 +44,7 @@ static std::atomic<bool> g_bLogMemoryCardDiagnosticsCached{false};
 static std::atomic<bool> g_bLogContentLoadDiagnosticsCached{false};
 static std::atomic<bool> g_bLogThemeLuaDiagnosticsCached{false};
 static std::atomic<bool> g_bLogGlobalOffsetDiagnosticsCached{false};
+static std::atomic<bool> g_bLogMusicWheelDiagnosticsCached{false};
 
 static bool EnvFlagEnabled(const char* name) {
   if (name == nullptr) {
@@ -66,6 +69,7 @@ static const bool g_bEnvLogThemeLua = EnvFlagEnabled("ITG_LOG_THEME_LUA");
 static const bool g_bEnvLogBackground = EnvFlagEnabled("ITG_LOG_BACKGROUND");
 static const bool g_bEnvLogGlobalOffset =
     EnvFlagEnabled("ITG_LOG_GLOBAL_OFFSET");
+static const bool g_bEnvLogMusicWheel = EnvFlagEnabled("ITG_LOG_MUSIC_WHEEL");
 static const bool g_bEnvLegacyTraceGlUploads =
     EnvFlagEnabled("ITG_TRACE_GL_UPLOADS");
 static const bool g_bEnvLegacyTraceResourceSnapshots =
@@ -99,6 +103,8 @@ void RefreshPerfDiagnosticsPreferenceCache() {
       g_bLogThemeLuaDiagnostics.Get(), std::memory_order_release);
   g_bLogGlobalOffsetDiagnosticsCached.store(
       g_bLogGlobalOffsetDiagnostics.Get(), std::memory_order_release);
+  g_bLogMusicWheelDiagnosticsCached.store(
+      g_bLogMusicWheelDiagnostics.Get(), std::memory_order_release);
 }
 
 /*
@@ -182,4 +188,12 @@ bool LogGlobalOffsetDiagnosticsEnabled() {
   // ITG_LOG_GLOBAL_OFFSET=1 when investigating this system.
   return g_bLogGlobalOffsetDiagnosticsCached.load(std::memory_order_acquire) ||
          g_bEnvLogGlobalOffset;
+}
+
+bool LogMusicWheelDiagnosticsEnabled() {
+  // Wheel/banner traces are useful for visual regression hunts, but a normal
+  // song-select session can emit tens of thousands of lines. Keep them behind a
+  // targeted switch so production logs surface real warnings first.
+  return g_bLogMusicWheelDiagnosticsCached.load(std::memory_order_acquire) ||
+         g_bEnvLogMusicWheel;
 }

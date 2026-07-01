@@ -11,6 +11,7 @@
 #include "EnumHelper.h"
 #include "GameState.h"
 #include "LuaManager.h"
+#include "PerfDiagnostics.h"
 #include "PrefsManager.h"
 #include "RageLog.h"
 #include "RageTypes.h"
@@ -64,7 +65,7 @@ const char* WheelItemDataTypeTraceName(WheelItemDataType type) {
 }
 
 void TraceWheelReintro(const char* event, const std::string& details) {
-  if (LOG != nullptr) {
+  if (LOG != nullptr && LogMusicWheelDiagnosticsEnabled()) {
     LOG->Trace(
         "SRC_AUDIT_FIX SRC-2710 WheelReintroTrace %s %s", event,
         details.c_str());

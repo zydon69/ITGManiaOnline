@@ -870,9 +870,11 @@ void SongManager::PreloadSongImages() {
 }
 
 void SongManager::FreeSongs() {
-  LOG->Trace(
-      "SongManager::FreeSongs begin songs=%zu deleted_songs=%zu groups=%zu",
-      m_pSongs.size(), m_pDeletedSongs.size(), m_mapNameToGroup.size());
+  if (LogContentLoadDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "SongManager::FreeSongs begin songs=%zu deleted_songs=%zu groups=%zu",
+        m_pSongs.size(), m_pDeletedSongs.size(), m_mapNameToGroup.size());
+  }
 
   m_sSongGroupNames.clear();
   m_sSongGroupBannerPaths.clear();
@@ -913,10 +915,12 @@ void SongManager::FreeSongs() {
 
   for (size_t i = 0; i < songsToDelete.size(); ++i) {
     Song* song = songsToDelete[i];
-    LOG->Trace(
-        "SongManager::FreeSongs deleting song index=%zu/%zu ptr=%p dir='%s'",
-        i + 1, songsToDelete.size(), static_cast<void*>(song),
-        song != nullptr ? song->GetSongDir().c_str() : "");
+    if (LogContentLoadDiagnosticsEnabled() && LOG != nullptr) {
+      LOG->Trace(
+          "SongManager::FreeSongs deleting song index=%zu/%zu ptr=%p dir='%s'",
+          i + 1, songsToDelete.size(), static_cast<void*>(song),
+          song != nullptr ? song->GetSongDir().c_str() : "");
+    }
     RageUtil::SafeDelete(song);
   }
 
@@ -929,11 +933,13 @@ void SongManager::FreeSongs() {
   m_mapNameToGroup.clear();
   m_mapSeriesToGroups.clear();
 
-  LOG->Trace(
-      "SongManager::FreeSongs end deleted=%zu remaining_songs=%zu "
-      "remaining_deleted_songs=%zu groups=%zu",
-      songsToDelete.size(), m_pSongs.size(), m_pDeletedSongs.size(),
-      m_mapNameToGroup.size());
+  if (LogContentLoadDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "SongManager::FreeSongs end deleted=%zu remaining_songs=%zu "
+        "remaining_deleted_songs=%zu groups=%zu",
+        songsToDelete.size(), m_pSongs.size(), m_pDeletedSongs.size(),
+        m_mapNameToGroup.size());
+  }
 }
 
 void SongManager::UnlistSong(Song* song) {

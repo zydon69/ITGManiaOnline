@@ -15,5 +15,6 @@ bool LogContentLoadDiagnosticsEnabled();
 bool LogVerboseContentLoadDiagnosticsEnabled();
 bool LogThemeLuaDiagnosticsEnabled();
 bool LogGlobalOffsetDiagnosticsEnabled();
+bool LogMusicWheelDiagnosticsEnabled();
 
 #endif

@@ -6,6 +6,7 @@
 #include "ActorUtil.h"
 #include "LuaManager.h"
 #include "MessageManager.h"
+#include "PerfDiagnostics.h"
 #include "RageLog.h"
 #include "RageUtil.h"
 #include "Song.h"
@@ -23,7 +24,7 @@ void WarnTextBannerAuditFix(const char* message) {
 }
 
 void TraceTextBannerAuditFix(const std::string& message) {
-  if (LOG != nullptr) {
+  if (LOG != nullptr && LogMusicWheelDiagnosticsEnabled()) {
     LOG->Trace("%s", message.c_str());
   }
 }
