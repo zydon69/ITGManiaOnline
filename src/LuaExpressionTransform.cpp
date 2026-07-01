@@ -73,7 +73,8 @@ bool LuaExpressionTransform::GetTransformCached(
   if (iNumItems < 0) {
     iNumItems = 0;
   }
-  PositionOffsetAndItemIndex key = {fPositionOffsetFromCenter, iItemIndex};
+  PositionOffsetAndItemIndex key = {
+      fPositionOffsetFromCenter, iItemIndex, iNumItems};
 
   std::map<PositionOffsetAndItemIndex, Actor::TweenState>::const_iterator iter =
       m_mapPositionToTweenStateCache.find(key);

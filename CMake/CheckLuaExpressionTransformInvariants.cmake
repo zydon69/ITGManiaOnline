@@ -60,10 +60,14 @@ require_not_contains(
   "${lua_expression_transform_cpp}"
   "NormalizeOffsetForCache(fPositionOffsetFromCenter)"
   "SRC-2667 remains excluded from this one-entry reintroduction")
-require_not_contains(
+require_contains(
   "${lua_expression_transform_h}"
   "int iNumItems;"
-  "SRC-2666 remains excluded from this one-entry reintroduction")
+  "SRC-2666 includes item count in cache key")
+require_contains(
+  "${lua_expression_transform_h}"
+  "return iNumItems < other.iNumItems;"
+  "SRC-2666 orders item count in cache key")
 require_contains(
   "${wheel_base_cpp}"
   "if (!m_exprItemTransformFunction.GetTransformCached("

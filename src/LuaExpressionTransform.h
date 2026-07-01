@@ -44,12 +44,16 @@ class LuaExpressionTransform {
   struct PositionOffsetAndItemIndex {
     float fPositionOffsetFromCenter;
     int iItemIndex;
+    int iNumItems;
 
     bool operator<(const PositionOffsetAndItemIndex& other) const {
       if (fPositionOffsetFromCenter != other.fPositionOffsetFromCenter) {
         return fPositionOffsetFromCenter < other.fPositionOffsetFromCenter;
       }
-      return iItemIndex < other.iItemIndex;
+      if (iItemIndex != other.iItemIndex) {
+        return iItemIndex < other.iItemIndex;
+      }
+      return iNumItems < other.iNumItems;
     }
   };
   mutable std::map<PositionOffsetAndItemIndex, Actor::TweenState>
