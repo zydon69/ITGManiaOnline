@@ -52,6 +52,11 @@ class RageSoundReader_Filter : public RageSoundReader {
   virtual std::string GetSourcePath() const {
     return m_pSource.isNull() ? std::string() : m_pSource->GetSourcePath();
   }
+  virtual void SetDebugSourcePath(const std::string& sPath) {
+    if (!m_pSource.isNull()) {
+      m_pSource->SetDebugSourcePath(sPath);
+    }
+  }
   virtual std::string GetError() const {
     return m_pSource.isNull() ? "No sound source" : m_pSource->GetError();
   }

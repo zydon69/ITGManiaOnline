@@ -100,7 +100,14 @@ RageSoundReader_FileReader* RageSoundReader_FileReader::TryOpenFile(
 #include "RageFileDriverMemory.h"
 
 std::string RageSoundReader_FileReader::GetSourcePath() const {
+  if (!m_sDebugSourcePath.empty()) {
+    return m_sDebugSourcePath;
+  }
   return m_pFile.isNull() ? std::string() : m_pFile->GetDisplayPath();
+}
+
+void RageSoundReader_FileReader::SetDebugSourcePath(const std::string& sPath) {
+  m_sDebugSourcePath = sPath;
 }
 
 RageSoundReader_FileReader* RageSoundReader_FileReader::OpenFile(
@@ -158,6 +165,7 @@ RageSoundReader_FileReader* RageSoundReader_FileReader::OpenFile(
     RageSoundReader_FileReader* NewSample =
         TryOpenFile(pCopy, error, format, bKeepTrying);
     if (NewSample) {
+      NewSample->SetDebugSourcePath(filename);
       return NewSample;
     }
     FileTypes.erase(format);
@@ -173,6 +181,7 @@ RageSoundReader_FileReader* RageSoundReader_FileReader::OpenFile(
     RageSoundReader_FileReader* NewSample =
         TryOpenFile(pCopy, error, *it, bKeepTrying);
     if (NewSample) {
+      NewSample->SetDebugSourcePath(filename);
       if (LOG != nullptr) {
         LOG->UserLog(
             "Sound file", pFile->GetDisplayPath(), "is really %s.",

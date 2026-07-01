@@ -551,6 +551,9 @@ void RageSound::LoadSoundReader(
 
   LockMut(m_Mutex);
   m_iStreamFrame = m_iStoppedSourceFrame = 0;
+  if (!sDebugFilePath.empty()) {
+    pSound->SetDebugSourcePath(sDebugFilePath);
+  }
   m_pSource = pSound;
   m_bLoadSucceeded = loadedSuccessfully && m_sError.empty();
   m_sFilePath = sDebugFilePath;

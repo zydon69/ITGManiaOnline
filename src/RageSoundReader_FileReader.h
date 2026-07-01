@@ -32,6 +32,7 @@ class RageSoundReader_FileReader : public RageSoundReader {
   virtual float GetStreamToSourceRatio() const { return 1.0f; }
   virtual std::string GetError() const { return m_sError; }
   virtual std::string GetSourcePath() const;
+  virtual void SetDebugSourcePath(const std::string& sPath);
 
   /* Open a file.  If pPrebuffer is non-nullptr, and the file is sufficiently
    * small, the (possibly compressed) data will be loaded entirely into memory,
@@ -47,6 +48,7 @@ class RageSoundReader_FileReader : public RageSoundReader {
   static RageSoundReader_FileReader* TryOpenFile(
       RageFileBasic* pFile, std::string& error, std::string format,
       bool& bKeepTrying);
+  std::string m_sDebugSourcePath;
   mutable std::string m_sError;
 };
 
