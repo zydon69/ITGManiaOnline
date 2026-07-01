@@ -154,6 +154,20 @@ void ActorScroller::RemoveChild(Actor* pActor) {
   m_fDestinationItem = ClampItemIndex(m_fDestinationItem);
 }
 
+void ActorScroller::SetLoop(bool bLoop) {
+  m_bLoop = bLoop;
+  if (m_bLoop) {
+    m_bWrap = false;
+  }
+}
+
+void ActorScroller::SetWrap(bool bWrap) {
+  m_bWrap = bWrap;
+  if (m_bWrap) {
+    m_bLoop = false;
+  }
+}
+
 void ActorScroller::SetDestinationItem(float fItemIndex) {
   m_fDestinationItem = ClampItemIndex(fItemIndex);
   if (m_fSecondsPerItem <= 0.0f) {
@@ -312,12 +326,24 @@ void ActorScroller::LoadFromNode(const XNode* pNode) {
     pNode->GetAttrValue("MaskWidth", m_fMaskWidth);
     pNode->GetAttrValue("MaskHeight", m_fMaskHeight);
     EnableMask(m_fMaskWidth, m_fMaskHeight);
+  } else {
+    DisableMask();
   }
 
-  pNode->GetAttrValue("QuantizePixels", m_fQuantizePixels);
-  m_fQuantizePixels = NonNegativeFiniteOrScroller(m_fQuantizePixels, 0.0f);
-  pNode->GetAttrValue("LoopScroller", m_bLoop);
-  pNode->GetAttrValue("WrapScroller", m_bWrap);
+  float fQuantizePixels = 0.0f;
+  if (pNode->GetAttrValue("QuantizePixels", fQuantizePixels)) {
+    m_fQuantizePixels = NonNegativeFiniteOrScroller(fQuantizePixels, 0.0f);
+  }
+  bool bLoop = false;
+  if (pNode->GetAttrValue("LoopScroller", bLoop)) {
+    SetLoop(bLoop);
+  }
+  bool bWrap = false;
+  if (pNode->GetAttrValue("WrapScroller", bWrap)) {
+    SetWrap(bWrap);
+  }
+  m_fCurrentItem = ClampItemIndex(m_fCurrentItem);
+  m_fDestinationItem = ClampItemIndex(m_fDestinationItem);
 }
 
 void ActorScroller::UpdateInternal(float fDeltaTime) {

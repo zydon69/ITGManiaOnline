@@ -1,7 +1,7 @@
 #include "DynamicActorScroller.h"
 
-#include <climits>
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstddef>
 #include <string>
@@ -58,21 +58,6 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
     }
   }
 
-  int iNumCopies =
-      std::clamp((int)std::ceil(std::max(1.0f, m_fNumItemsToDraw)), 1, 1024);
-  if (m_quadMask.GetVisible()) {
-    iNumCopies += 1;
-  }
-  for (int i = 1; i < iNumCopies; ++i) {
-    Actor* pCopy = m_SubActors[0]->Copy();
-    if (pCopy == nullptr) {
-      WarnDynamicActorScrollerAuditFix(
-          "SRC_AUDIT_FIX SRC-781: DynamicActorScroller replaced null copy.");
-      pCopy = new Actor;
-    }
-    this->AddChild(pCopy);
-  }
-
   if (LUA != nullptr) {
     Lua* L = LUA->Get();
     pNode->PushAttrValue(L, "LoadFunction");
@@ -123,6 +108,21 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
     m_iNumItems = std::clamp((int)numItems, 0, 1000000);
     lua_pop(L, 1);
     LUA->Release(L);
+  }
+
+  int iNumCopies =
+      std::clamp((int)std::ceil(std::max(1.0f, m_fNumItemsToDraw)), 1, 1024);
+  if (m_quadMask.GetVisible()) {
+    iNumCopies += 1;
+  }
+  for (int i = 1; i < iNumCopies; ++i) {
+    Actor* pCopy = m_SubActors[0]->Copy();
+    if (pCopy == nullptr) {
+      WarnDynamicActorScrollerAuditFix(
+          "SRC_AUDIT_FIX SRC-781: DynamicActorScroller replaced null copy.");
+      pCopy = new Actor;
+    }
+    this->AddChild(pCopy);
   }
 
   /* Reconfigure all items, so the loaded actors actually correspond with

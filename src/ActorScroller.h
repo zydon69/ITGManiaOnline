@@ -39,8 +39,8 @@ class ActorScroller : public ActorFrame {
   void AddChild(Actor* pActor) override;
   void RemoveChild(Actor* pActor) override;
 
-  void SetLoop(bool bLoop) { m_bLoop = bLoop; }
-  void SetWrap(bool bWrap) { m_bWrap = bWrap; }
+  void SetLoop(bool bLoop);
+  void SetWrap(bool bWrap);
   void SetNumItemsToDraw(float fNumItemsToDraw) {
     m_fNumItemsToDraw =
         std::isfinite(fNumItemsToDraw)
