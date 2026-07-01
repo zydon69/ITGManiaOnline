@@ -12001,7 +12001,6 @@ end
 function ITGOnline:ShouldHoldGameplayForOnlineStart()
 	return self.currentRoom
 		and self.currentRoom.phase == "starting"
-		and self:SecondsUntilScheduledStart() == nil
 end
 
 function ITGOnline:UpdateScheduledStart(room)

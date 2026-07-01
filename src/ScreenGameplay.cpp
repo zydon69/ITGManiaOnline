@@ -2473,29 +2473,6 @@ bool ScreenGameplay::SeekMusicSeconds(float seconds) {
   return seeked;
 }
 
-bool ScreenGameplay::AlignMusicForOnlineStart(float secondsUntilStart) {
-  if (!GetITGOnlineIsActive() || m_pSoundMusic == nullptr ||
-      !m_pSoundMusic->IsLoaded() || !std::isfinite(secondsUntilStart) ||
-      secondsUntilStart < -30.0f || secondsUntilStart > 120.0f) {
-    return false;
-  }
-
-  const float musicSeconds = -secondsUntilStart;
-  const bool seeked = m_pSoundMusic->SetPositionSeconds(musicSeconds, true);
-  if (seeked && GAMESTATE != nullptr) {
-    GAMESTATE->m_Position.m_fMusicSeconds = musicSeconds;
-  }
-
-  if (seeked) {
-    OnlineTrace(
-        "ITG Online: aligned gameplay music for scheduled start "
-        "secondsUntilStart=%.3f musicSeconds=%.3f.",
-        secondsUntilStart, musicSeconds);
-  }
-
-  return seeked;
-}
-
 void ScreenGameplay::PauseGame(bool bPause, GameController gc) {
   if (m_bPaused == bPause) {
     LOG->Trace(
@@ -4986,10 +4963,6 @@ class LunaScreenGameplay : public Luna<ScreenGameplay> {
     lua_pushboolean(L, p->SeekMusicSeconds(FArg(1)));
     return 1;
   }
-  static int AlignMusicForOnlineStart(T* p, lua_State* L) {
-    lua_pushboolean(L, p->AlignMusicForOnlineStart(FArg(1)));
-    return 1;
-  }
   static int IsPaused(T* p, lua_State* L) {
     lua_pushboolean(L, p->IsPaused());
     return 1;
@@ -5056,7 +5029,6 @@ class LunaScreenGameplay : public Luna<ScreenGameplay> {
     // sm-ssc additions:
     ADD_METHOD(PauseGame);
     ADD_METHOD(SeekMusicSeconds);
-    ADD_METHOD(AlignMusicForOnlineStart);
     ADD_METHOD(IsPaused);
     ADD_METHOD(GetHasteRate);
     ADD_METHOD(HasteTurningPoints);
