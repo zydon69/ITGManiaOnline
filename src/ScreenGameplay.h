@@ -384,6 +384,7 @@ class ScreenGameplay : public ScreenWithMenuElements {
   bool m_bLoggedOnlineNotesEndedDuringHold;
   bool m_bMarkedOnlineFailedEarly;
   bool m_bLoggedOnlineLocalFailKeepAlive;
+  bool m_bNotesEndedQueued;
   float m_fLastSeenEnemyHealth;
   int m_iLightsRowLastCrossed;
   int m_iBeatRowLastCrossed;

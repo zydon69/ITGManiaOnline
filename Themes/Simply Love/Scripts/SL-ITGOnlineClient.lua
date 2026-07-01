@@ -9354,7 +9354,7 @@ function ITGOnline:BestFinalFailedScoreSnapshot(candidate, fallback)
 	end
 
 	if fallbackDisplayed > candidateDisplayed then
-		online_flow_trace("final_failed_snapshot_replaced reason=prefer_fresh_candidate"
+		online_flow_trace("final_failed_snapshot_selected reason=prefer_terminal_candidate"
 			.. " fallbackDisplayed=" .. tostring(fallbackDisplayed)
 			.. " candidateDisplayed=" .. tostring(candidateDisplayed)
 			.. " fallbackScore=" .. tostring(fallbackScore)
@@ -9605,6 +9605,29 @@ function ITGOnline:FlushLiveScore()
 		return true
 	end
 
+	local displayedPercent = tonumber(snapshot.DisplayedPercent or snapshot.displayedPercent) or 0
+	local scorePercent = tonumber(snapshot.ScorePercent or snapshot.scorePercent) or 0
+	local exScorePercent = tonumber(snapshot.ExScorePercent or snapshot.exScorePercent) or 0
+	local hardExScorePercent = tonumber(snapshot.HardExScorePercent or snapshot.hardExScorePercent) or 0
+	local combo = tonumber(snapshot.Combo or snapshot.combo) or 0
+	local hasLiveProgress = displayedPercent > 0 or scorePercent > 0 or exScorePercent > 0 or hardExScorePercent > 0 or combo > 0
+	local zeroRoundKey = roundKey ~= "" and roundKey or tostring(self.currentRoomId or "")
+	local zeroAlreadyAccepted = self.lastAcceptedZeroLiveScoreRoundKey == zeroRoundKey
+	if not hasLiveProgress and zeroAlreadyAccepted then
+		self.pendingLiveScoreSnapshot = nil
+		self.pendingLiveScoreRoundKey = ""
+		online_flow_trace_throttled("live_score_zero_progress_suppressed", 2.0,
+			"live_score_flush_skipped reason=zero_progress_already_sent"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " roundKey=" .. tostring(zeroRoundKey)
+			.. " displayed=" .. tostring(displayedPercent)
+			.. " score=" .. tostring(scorePercent)
+			.. " ex=" .. tostring(exScorePercent)
+			.. " hardex=" .. tostring(hardExScorePercent)
+			.. " combo=" .. tostring(combo))
+		return false
+	end
+
 	self.pendingLiveScoreSnapshot = nil
 	self.pendingLiveScoreRoundKey = ""
 	self.liveScoreInFlight = true
@@ -9646,6 +9669,8 @@ function ITGOnline:FlushLiveScore()
 			self.pendingLiveScoreSnapshot = self.pendingLiveScoreSnapshot or snapshot
 			self.pendingLiveScoreRoundKey = self.pendingLiveScoreRoundKey ~= "" and self.pendingLiveScoreRoundKey or roundKey
 			self.liveScoreNextAttemptAt = GetTimeSinceStart() + 0.75
+		elseif ok and not hasLiveProgress then
+			self.lastAcceptedZeroLiveScoreRoundKey = zeroRoundKey
 		end
 	end)
 	return true

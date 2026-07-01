@@ -69,13 +69,20 @@ end
 
 local function room_round_context(room)
 	room = room or (ITGOnline and ITGOnline.currentRoom) or {}
+	if ITGOnline and ITGOnline.CanonicalGameplayRoundKey then
+		local key = ITGOnline:CanonicalGameplayRoundKey("live_leaderboard")
+		if ITGOnline.PlayStateKeyIsValid and ITGOnline:PlayStateKeyIsValid(key) then
+			return key
+		end
+	end
 	local play_state = room.play_state or {}
 	local selected_song = room.selected_song or {}
 	return table.concat({
 		tostring(room.id or room.roomId or ITGOnline and ITGOnline.currentRoomId or ""),
 		tostring(play_state.round_key or play_state.roundKey or play_state.round_id or play_state.roundId or ""),
-		tostring(play_state.started_at or play_state.startedAt or play_state.start_at or play_state.startAt or ""),
-		tostring(selected_song.selected_at or selected_song.selectedAt or selected_song.id or selected_song.chart_key or selected_song.chartKey or ""),
+		tostring(selected_song.song_hash or selected_song.songHash or ""),
+		tostring(selected_song.chart_hash or selected_song.chartHash or selected_song.chart_key or selected_song.chartKey or ""),
+		tostring(selected_song.selected_at or selected_song.selectedAt or play_state.started_at or play_state.startedAt or play_state.start_at or play_state.startAt or selected_song.id or ""),
 	}, "|")
 end
 

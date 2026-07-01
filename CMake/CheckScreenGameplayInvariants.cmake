@@ -47,6 +47,9 @@ endforeach()
 foreach(REQUIRED_SNIPPET
     "snapshotScorePercent == nil or final == true"
     "snapshotExScore == nil or final == true"
+    "live_score_flush_skipped reason=zero_progress_already_sent"
+    "lastAcceptedZeroLiveScoreRoundKey"
+    "final_failed_snapshot_selected reason=prefer_terminal_candidate"
     "if scoreMode == \"itg\" then"
     "itgScorePercent = outgoingPercent")
   string(FIND "${ONLINE_CLIENT_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
@@ -78,11 +81,24 @@ foreach(REQUIRED_SNIPPET
     "is_session_placeholder = true"
     "last_non_empty_score_row_for_user"
     "session_placeholder_preserved_score"
+    "CanonicalGameplayRoundKey(\"live_leaderboard\")"
     "score_cache_preserved reason=results_context_shift")
   string(FIND "${ONLINE_LIVE_LEADERBOARD_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(
         FATAL_ERROR
         "Online live leaderboard invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "sound != nullptr && sound->IsPlaying()"
+    "m_bNotesEndedQueued"
+    "!m_NextSong.IsTransitioning() && !m_bNotesEndedQueued")
+  string(FIND "${SCREEN_GAMEPLAY_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+        FATAL_ERROR
+        "ScreenGameplay notes-ended invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()

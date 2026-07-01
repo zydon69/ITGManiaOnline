@@ -852,7 +852,7 @@ static void BroadcastGameplayMessage(Message& message) {
 }
 
 static void StopMusicIfLoaded(RageSound* sound) {
-  if (sound != nullptr) {
+  if (sound != nullptr && sound->IsPlaying()) {
     sound->StopPlaying();
   }
 }
@@ -934,6 +934,7 @@ ScreenGameplay::ScreenGameplay() {
   m_bLoggedOnlineNotesEndedDuringHold = false;
   m_bMarkedOnlineFailedEarly = false;
   m_bLoggedOnlineLocalFailKeepAlive = false;
+  m_bNotesEndedQueued = false;
   m_fLastSeenEnemyHealth = 1.0f;
   m_iLightsRowLastCrossed = 0;
   m_iBeatRowLastCrossed = 0;
@@ -1952,6 +1953,7 @@ void ScreenGameplay::LoadNextSong() {
   if (!HasCoreGameplayManagers("ScreenGameplay::LoadNextSong")) {
     return;
   }
+  m_bNotesEndedQueued = false;
   GAMESTATE->ResetMusicStatistics();
   if (!ValidateGameplayQueues(
           m_apSongsQueue, m_vPlayerInfo, "ScreenGameplay::LoadNextSong")) {
@@ -2907,7 +2909,8 @@ void ScreenGameplay::Update(float fDeltaTime) {
               "until remote players finish.");
           m_bLoggedOnlineLocalFailKeepAlive = true;
         }
-      } else if (bAllFailed) {
+      } else if (bAllFailed && !m_bNotesEndedQueued) {
+        m_bNotesEndedQueued = true;
         StopMusicIfLoaded(m_pSoundMusic);
         PostScreenMessage(SM_NotesEnded, 0);
         m_LyricDisplay.Stop();
@@ -2971,7 +2974,8 @@ void ScreenGameplay::Update(float fDeltaTime) {
 
         if (GAMESTATE->m_Position.m_fMusicSeconds >=
                 fSecondsToStartTransitioningOut &&
-            !m_NextSong.IsTransitioning()) {
+            !m_NextSong.IsTransitioning() && !m_bNotesEndedQueued) {
+          m_bNotesEndedQueued = true;
           this->PostScreenMessage(SM_NotesEnded, 0);
         }
       }
@@ -3078,7 +3082,8 @@ void ScreenGameplay::Update(float fDeltaTime) {
         ResetGiveUpTimers(false);
         if (GIVING_UP_GOES_TO_PREV_SCREEN && !m_skipped_song) {
           BeginBackingOutFromGameplay();
-        } else {
+        } else if (!m_bNotesEndedQueued) {
+          m_bNotesEndedQueued = true;
           StopMusicIfLoaded(m_pSoundMusic);
           this->PostScreenMessage(SM_NotesEnded, 0);
         }
