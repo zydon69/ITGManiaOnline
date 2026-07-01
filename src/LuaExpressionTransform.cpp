@@ -16,6 +16,21 @@ void WarnLuaExpressionTransformAuditFix(const char* message) {
     LOG->Warn("%s", message);
   }
 }
+
+bool SanitizeTransformArgs(
+    float& fPositionOffsetFromCenter, int& iItemIndex, int& iNumItems) {
+  bool bValid = true;
+  (void)iItemIndex;
+  if (!std::isfinite(fPositionOffsetFromCenter)) {
+    fPositionOffsetFromCenter = 0.0f;
+    bValid = false;
+  }
+  if (iNumItems < 0) {
+    iNumItems = 0;
+    bValid = false;
+  }
+  return bValid;
+}
 }  // namespace
 
 LuaExpressionTransform::LuaExpressionTransform() { m_iNumSubdivisions = 1; }
@@ -27,22 +42,19 @@ void LuaExpressionTransform::SetFromReference(const LuaReference& ref) {
   ClearCache();
 }
 
-void LuaExpressionTransform::TransformItemDirect(
+bool LuaExpressionTransform::TransformItemDirect(
     Actor& a, float fPositionOffsetFromCenter, int iItemIndex,
     int iNumItems) const {
-  if (LUA == nullptr || !m_exprTransformFunction.IsSet() ||
-      m_exprTransformFunction.IsNil()) {
+  if (!m_exprTransformFunction.IsSet() || m_exprTransformFunction.IsNil()) {
+    return true;
+  }
+  if (LUA == nullptr) {
     WarnLuaExpressionTransformAuditFix(
         "SRC_AUDIT_FIX SRC-784: LuaExpressionTransform skipped invalid "
         "function.");
-    return;
+    return false;
   }
-  if (!std::isfinite(fPositionOffsetFromCenter)) {
-    fPositionOffsetFromCenter = 0.0f;
-  }
-  if (iNumItems < 0) {
-    iNumItems = 0;
-  }
+  SanitizeTransformArgs(fPositionOffsetFromCenter, iItemIndex, iNumItems);
   Lua* L = LUA->Get();
   m_exprTransformFunction.PushSelf(L);
   if (!lua_isfunction(L, -1)) {
@@ -50,46 +62,50 @@ void LuaExpressionTransform::TransformItemDirect(
     LUA->Release(L);
     WarnLuaExpressionTransformAuditFix(
         "SRC_AUDIT_FIX SRC-784: LuaExpressionTransform skipped non-function.");
-    return;
+    return false;
   }
   a.PushSelf(L);
   LuaHelpers::Push(L, fPositionOffsetFromCenter);
   LuaHelpers::Push(L, iItemIndex);
   LuaHelpers::Push(L, iNumItems);
   std::string error = "Lua error in Transform function: ";
-  LuaHelpers::RunScriptOnStack(L, error, 4, 0, true);
+  const bool bSuccess = LuaHelpers::RunScriptOnStack(L, error, 4, 0, true);
   LUA->Release(L);
+  return bSuccess;
 }
 
-const Actor::TweenState& LuaExpressionTransform::GetTransformCached(
-    float fPositionOffsetFromCenter, int iItemIndex, int iNumItems) const {
-  if (!std::isfinite(fPositionOffsetFromCenter)) {
-    fPositionOffsetFromCenter = 0.0f;
-  }
-  if (iNumItems < 0) {
-    iNumItems = 0;
-  }
-  PositionOffsetAndItemIndex key = {fPositionOffsetFromCenter, iItemIndex};
+bool LuaExpressionTransform::GetTransformCached(
+    float fPositionOffsetFromCenter, int iItemIndex, int iNumItems,
+    Actor::TweenState& tweenStateOut) const {
+  SanitizeTransformArgs(fPositionOffsetFromCenter, iItemIndex, iNumItems);
+  fPositionOffsetFromCenter =
+      NormalizeOffsetForCache(fPositionOffsetFromCenter);
+  PositionOffsetAndItemIndex key = {
+      fPositionOffsetFromCenter, iItemIndex, iNumItems};
 
   std::map<PositionOffsetAndItemIndex, Actor::TweenState>::const_iterator iter =
       m_mapPositionToTweenStateCache.find(key);
   if (iter != m_mapPositionToTweenStateCache.end()) {
-    return iter->second;
+    tweenStateOut = iter->second;
+    return true;
   }
 
   Actor a;
-  TransformItemDirect(a, fPositionOffsetFromCenter, iItemIndex, iNumItems);
-  return m_mapPositionToTweenStateCache[key] = a.DestTweenState();
+  if (!TransformItemDirect(
+          a, fPositionOffsetFromCenter, iItemIndex, iNumItems)) {
+    WarnLuaExpressionTransformAuditFix(
+        "SRC_AUDIT_FIX SRC-2665: LuaExpressionTransform skipped failed cache "
+        "entry.");
+    return false;
+  }
+  tweenStateOut = a.DestTweenState();
+  m_mapPositionToTweenStateCache[key] = tweenStateOut;
+  return true;
 }
 
-void LuaExpressionTransform::TransformItemCached(
+bool LuaExpressionTransform::TransformItemCached(
     Actor& a, float fPositionOffsetFromCenter, int iItemIndex, int iNumItems) {
-  if (!std::isfinite(fPositionOffsetFromCenter)) {
-    fPositionOffsetFromCenter = 0.0f;
-  }
-  if (iNumItems < 0) {
-    iNumItems = 0;
-  }
+  SanitizeTransformArgs(fPositionOffsetFromCenter, iItemIndex, iNumItems);
   if (m_iNumSubdivisions <= 0) {
     m_iNumSubdivisions = 1;
   }
@@ -98,12 +114,18 @@ void LuaExpressionTransform::TransformItemCached(
   float fCeil = QuantizeUp(fPositionOffsetFromCenter, fInterval);
 
   if (fFloor == fCeil) {
-    a.DestTweenState() = GetTransformCached(fCeil, iItemIndex, iNumItems);
+    Actor::TweenState ts;
+    if (!GetTransformCached(fCeil, iItemIndex, iNumItems, ts)) {
+      return false;
+    }
+    a.DestTweenState() = ts;
   } else {
-    const Actor::TweenState& tsFloor =
-        GetTransformCached(fFloor, iItemIndex, iNumItems);
-    const Actor::TweenState& tsCeil =
-        GetTransformCached(fCeil, iItemIndex, iNumItems);
+    Actor::TweenState tsFloor;
+    Actor::TweenState tsCeil;
+    if (!GetTransformCached(fFloor, iItemIndex, iNumItems, tsFloor) ||
+        !GetTransformCached(fCeil, iItemIndex, iNumItems, tsCeil)) {
+      return false;
+    }
 
     float fPercentTowardCeil =
         SCALE(fPositionOffsetFromCenter, fFloor, fCeil, 0.0f, 1.0f);
@@ -113,6 +135,17 @@ void LuaExpressionTransform::TransformItemCached(
     Actor::TweenState::MakeWeightedAverage(
         a.DestTweenState(), tsFloor, tsCeil, fPercentTowardCeil);
   }
+  return true;
+}
+
+float LuaExpressionTransform::NormalizeOffsetForCache(
+    float fPositionOffsetFromCenter) const {
+  if (!std::isfinite(fPositionOffsetFromCenter)) {
+    return 0.0f;
+  }
+  int subdivisions = std::clamp(m_iNumSubdivisions, 1, 1024);
+  float fInterval = 1.0f / subdivisions;
+  return Quantize(fPositionOffsetFromCenter, fInterval);
 }
 
 /*

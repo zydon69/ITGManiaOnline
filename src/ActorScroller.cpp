@@ -445,15 +445,18 @@ void ActorScroller::PositionItemsAndDrawPrimitives(bool bDrawPrimitives) {
     float fPositionFullyOffScreenTop = -(fNumItemsToDraw) / 2.f;
     float fPositionFullyOffScreenBottom = (fNumItemsToDraw) / 2.f;
 
-    m_exprTransformFunction.TransformItemCached(
-        m_quadMask, fPositionFullyOffScreenTop, -1, m_iNumItems);
-    if (bDrawPrimitives) {
+    const bool bTopMaskTransformOk =
+        m_exprTransformFunction.TransformItemCached(
+            m_quadMask, fPositionFullyOffScreenTop, -1, m_iNumItems);
+    if (bDrawPrimitives && bTopMaskTransformOk) {
       m_quadMask.Draw();
     }
 
-    m_exprTransformFunction.TransformItemCached(
-        m_quadMask, fPositionFullyOffScreenBottom, m_iNumItems, m_iNumItems);
-    if (bDrawPrimitives) {
+    const bool bBottomMaskTransformOk =
+        m_exprTransformFunction.TransformItemCached(
+            m_quadMask, fPositionFullyOffScreenBottom, m_iNumItems,
+            m_iNumItems);
+    if (bDrawPrimitives && bBottomMaskTransformOk) {
       m_quadMask.Draw();
     }
   }
@@ -507,9 +510,10 @@ void ActorScroller::PositionItemsAndDrawPrimitives(bool bDrawPrimitives) {
     }
 
     const unsigned mutationVersion = m_iChildMutationVersion;
-    m_exprTransformFunction.TransformItemCached(
+    const bool bTransformOk = m_exprTransformFunction.TransformItemCached(
         *child, fPosition, iItem, m_iNumItems);
-    if (mutationVersion != m_iChildMutationVersion || !ContainsChild(child)) {
+    if (!bTransformOk || mutationVersion != m_iChildMutationVersion ||
+        !ContainsChild(child)) {
       continue;
     }
     if (m_fQuantizePixels > 0.0f) {

@@ -188,16 +188,28 @@ void WheelBase::BeginScreen() { m_WheelState = STATE_SELECTING; }
 
 void WheelBase::SetItemPosition(
     Actor& item, int item_index, float offset_from_middle) {
-  Actor::TweenState ts = m_exprItemTransformFunction.GetTransformCached(
-      offset_from_middle, item_index, GetWheelItemCount());
+  Actor::TweenState ts;
+  if (!m_exprItemTransformFunction.GetTransformCached(
+          offset_from_middle, item_index, GetWheelItemCount(), ts)) {
+    item.SetVisible(false);
+    return;
+  }
+  item.SetVisible(true);
   item.DestTweenState() = ts;
 }
 
 void WheelBase::GetItemPosition(
     float fPosOffsetsFromMiddle, float& fX_out, float& fY_out, float& fZ_out,
     float& fRotationX_out) {
-  Actor::TweenState ts = m_exprItemTransformFunction.GetTransformCached(
-      fPosOffsetsFromMiddle, 0, GetWheelItemCount());
+  Actor::TweenState ts;
+  if (!m_exprItemTransformFunction.GetTransformCached(
+          fPosOffsetsFromMiddle, 0, GetWheelItemCount(), ts)) {
+    fX_out = 0.0f;
+    fY_out = 0.0f;
+    fZ_out = 0.0f;
+    fRotationX_out = 0.0f;
+    return;
+  }
   fX_out = ts.pos.x;
   fY_out = ts.pos.y;
   fZ_out = ts.pos.z;
