@@ -791,6 +791,12 @@ static const char* IxWebSocketMessageTypeName(ix::WebSocketMessageType type) {
   return "Unknown";
 }
 
+static bool IsExpectedInactiveWebSocketTerminalMessage(
+    ix::WebSocketMessageType type) {
+  return type == ix::WebSocketMessageType::Close ||
+         type == ix::WebSocketMessageType::Error;
+}
+
 NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
   NetworkTrace("ITG Online NetworkTrace: network_manager_ctor_begin");
   ix::initNetSystem();
@@ -2151,6 +2157,15 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     args.onMessage =
         [p, callbackState, luaMaxMessageBytes](const ix::WebSocketMessage& msg) {
       if (!callbackState->active.load()) {
+        if (IsExpectedInactiveWebSocketTerminalMessage(msg.type)) {
+          NetworkTrace(
+              "ITG Online NetworkTrace: lua_websocket_inactive_terminal_drop "
+              "id=%llu url=%s",
+              static_cast<unsigned long long>(callbackState->id),
+              RedactUrlForLog(callbackState->url).c_str());
+          return;
+        }
+
         NetworkTrace(
             "ITG Online NetworkTrace: lua_websocket_message_drop id=%llu "
             "url=%s reason=inactive type=%s",
