@@ -16,27 +16,42 @@ RageSoundReader_Pan::RageSoundReader_Pan(RageSoundReader* pSource)
 
 int RageSoundReader_Pan::Read(float* pBuf, int iFrames) {
   if (iFrames == 0) {
+    m_sError.clear();
     return 0;
   }
-  if (pBuf == nullptr || iFrames < 0 || m_pSource.isNull()) {
+  if (pBuf == nullptr) {
+    SetError("RageSoundReader_Pan::Read called with a null output buffer");
     return RageSoundReader::ERROR;
   }
+  if (iFrames < 0) {
+    SetError("RageSoundReader_Pan::Read called with a negative frame count");
+    return RageSoundReader::ERROR;
+  }
+  if (m_pSource.isNull()) {
+    SetError("RageSoundReader_Pan::Read has no source reader");
+    return RageSoundReader::ERROR;
+  }
+  m_sError.clear();
+
   iFrames = m_pSource->Read(pBuf, iFrames);
   if (iFrames < 0) {
     return iFrames;
   }
 
   const unsigned sourceChannels = m_pSource->GetNumChannels();
-  if (sourceChannels == 0 ||
-      static_cast<size_t>(iFrames) >
-          std::numeric_limits<int>::max() / sourceChannels) {
+  if (sourceChannels == 0) {
+    SetError("RageSoundReader_Pan source reports zero channels");
+    return RageSoundReader::ERROR;
+  }
+  if (static_cast<size_t>(iFrames) >
+      std::numeric_limits<int>::max() / sourceChannels) {
+    SetError("RageSoundReader_Pan sample count overflow");
     return RageSoundReader::ERROR;
   }
   int iSamples = iFrames * sourceChannels;
 
   if (sourceChannels == 1) {
     RageSoundUtil::ConvertMonoToStereoInPlace(pBuf, iSamples);
-    iSamples *= 2;
   }
 
   /* This block goes from iStreamFrame to iStreamFrame+iGotFrames. */
@@ -59,13 +74,28 @@ bool RageSoundReader_Pan::SetProperty(
     const std::string& sProperty, float fValue) {
   if (sProperty == "Pan") {
     if (!std::isfinite(fValue)) {
+      SetError("RageSoundReader_Pan rejected a non-finite pan value");
       return false;
     }
     m_fPan = std::clamp(fValue, -1.0f, 1.0f);
+    m_sError.clear();
     return true;
   }
 
   return RageSoundReader_Filter::SetProperty(sProperty, fValue);
+}
+
+std::string RageSoundReader_Pan::GetError() const {
+  if (!m_sError.empty()) {
+    return m_sError;
+  }
+  return RageSoundReader_Filter::GetError();
+}
+
+void RageSoundReader_Pan::SetError(const std::string& sError) {
+  // SRC_AUDIT_FIX SRC-2754: keep filter-owned failures diagnosable instead
+  // of reporting an unrelated source-reader error.
+  m_sError = sError;
 }
 
 /*

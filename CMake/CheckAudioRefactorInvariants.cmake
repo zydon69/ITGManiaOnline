@@ -45,6 +45,8 @@ read_source("src/AutoKeysounds.cpp" auto_keysounds_cpp)
 read_source("src/RageSoundManager.h" rage_sound_manager_h)
 read_source("src/RageSoundManager.cpp" rage_sound_manager_cpp)
 read_source("src/RageSoundReader_Extend.cpp" rage_sound_reader_extend_cpp)
+read_source("src/RageSoundReader_Pan.h" rage_sound_reader_pan_h)
+read_source("src/RageSoundReader_Pan.cpp" rage_sound_reader_pan_cpp)
 read_source("src/StepMania.cpp" stepmania_cpp)
 read_source("src/RageDisplay.cpp" rage_display_cpp)
 read_source("src/arch/LowLevelWindow/LowLevelWindow_MacOSX.mm" macos_window_cpp)
@@ -267,6 +269,22 @@ require_not_contains(
   "${rage_sound_reader_extend_cpp}"
   "ASSERT_M(\n      pSource != nullptr"
   "RageSoundReader_Extend must not assert on null source readers")
+require_contains(
+  "${rage_sound_reader_pan_h}"
+  "RageSoundReader_Pan* Copy() const override"
+  "RageSoundReader_Pan copy contract is explicitly overriding")
+require_contains(
+  "${rage_sound_reader_pan_h}"
+  "std::string GetError() const override;"
+  "RageSoundReader_Pan exposes filter-owned diagnostics")
+require_contains(
+  "${rage_sound_reader_pan_cpp}"
+  "SRC_AUDIT_FIX SRC-2754"
+  "RageSoundReader_Pan records internal filter failures locally")
+require_contains(
+  "${rage_sound_reader_pan_cpp}"
+  "RageSoundReader_Pan::Read called with a null output buffer"
+  "RageSoundReader_Pan diagnoses invalid output buffers")
 
 require_contains(
   "${rage_sound_manager_h}"

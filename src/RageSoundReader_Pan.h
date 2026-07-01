@@ -11,12 +11,18 @@
 class RageSoundReader_Pan : public RageSoundReader_Filter {
  public:
   RageSoundReader_Pan(RageSoundReader* pSource);
-  RageSoundReader_Pan* Copy() const { return new RageSoundReader_Pan(*this); }
-  virtual unsigned GetNumChannels() const;
-  virtual int Read(float* pBuf, int iFrames);
-  virtual bool SetProperty(const std::string& sProperty, float fValue);
+  RageSoundReader_Pan* Copy() const override {
+    return new RageSoundReader_Pan(*this);
+  }
+  unsigned GetNumChannels() const override;
+  int Read(float* pBuf, int iFrames) override;
+  bool SetProperty(const std::string& sProperty, float fValue) override;
+  std::string GetError() const override;
 
  private:
+  void SetError(const std::string& sError);
+
+  std::string m_sError;
   float m_fPan;
 };
 
