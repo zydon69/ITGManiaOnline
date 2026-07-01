@@ -1144,7 +1144,9 @@ void NetworkManager::Update() {
     }
 
     ++consecutiveBacklogWarnings;
-    if ((queuedTasks > 8 || consecutiveBacklogWarnings >= 3) &&
+    if ((queuedTasks > kBacklogAdaptiveThreshold * 4 ||
+         (queuedTasks >= kBacklogAdaptiveThreshold &&
+          consecutiveBacklogWarnings >= 3)) &&
         lastBacklogWarning.Ago() >= 1.0f) {
       NetworkWarn(
           "Network main-thread task backlog still has %zu queued task(s)",

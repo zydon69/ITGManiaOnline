@@ -62,6 +62,7 @@ foreach(REQUIRED_SNIPPET
     "lastAcceptedZeroLiveScoreRoundKey"
     "ready_request_skipped reason=stale_lobby_ready_before_post"
     "ready_request_phase_race_accepted"
+    "ready_request_phase_race_fetch_result"
     "terminal_skipped_failed_final_score_accepted"
     "mark_failed_early_confirmed_without_terminal_post"
     "final_failed_snapshot_selected reason=prefer_terminal_candidate"
@@ -119,12 +120,26 @@ foreach(REQUIRED_SNIPPET
     "last_non_empty_score_row_for_user"
     "session_placeholder_preserved_score"
     "CanonicalGameplayRoundKey(\"live_leaderboard\")"
-    "score_cache_preserved reason=results_context_shift")
+    "score_cache_preserved reason=results_context_shift"
+    "score_cache_reset reason=playing_context_changed")
   string(FIND "${ONLINE_LIVE_LEADERBOARD_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(
         FATAL_ERROR
         "Online live leaderboard invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "ready_request_phase_race_fetch_stale_context"
+    "selectionKeyMatches="
+    "callbackReadySelectionKey == readySelectionKey"
+    "room_deleted_before_coalesce")
+  string(FIND "${ONLINE_CLIENT_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+        FATAL_ERROR
+        "Online client race invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
 

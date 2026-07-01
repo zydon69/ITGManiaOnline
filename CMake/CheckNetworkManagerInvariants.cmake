@@ -12,7 +12,9 @@ foreach(REQUIRED_SNIPPET
     "type == ix::WebSocketMessageType::Error"
     "lua_websocket_inactive_terminal_drop"
     "if (IsExpectedInactiveWebSocketTerminalMessage(msg.type))"
-    "url=%s reason=inactive type=%s")
+    "url=%s reason=inactive type=%s"
+    "queuedTasks > kBacklogAdaptiveThreshold * 4"
+    "queuedTasks >= kBacklogAdaptiveThreshold")
   string(FIND "${NETWORK_MANAGER_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(

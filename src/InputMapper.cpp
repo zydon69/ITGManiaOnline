@@ -1289,9 +1289,7 @@ void InputMappings::WriteMappings(
   IniFile ini;
   ini.ReadFile(sFilePath);
 
-  // erase the key so that we overwrite everything for this game
-  ini.DeleteKey(pInputScheme->m_szName);
-
+  // Overwrite this game's mappings without warning on first-run keymap writes.
   XNode* pKey = ini.GetChild(pInputScheme->m_szName);
   if (pKey != nullptr) {
     ini.RemoveChild(pKey);

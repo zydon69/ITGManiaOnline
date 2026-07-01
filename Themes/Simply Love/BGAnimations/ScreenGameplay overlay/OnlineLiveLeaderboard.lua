@@ -90,9 +90,15 @@ local function reset_score_cache_if_needed(room)
 	local context = room_round_context(room)
 	local room_id = tostring(room and (room.id or room.roomId) or ITGOnline and ITGOnline.currentRoomId or "")
 	local phase = tostring(room and room.phase or ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "")
-	if room_id == cached_room_id and (context == cached_score_context or phase == "playing") then
+	if room_id == cached_room_id and context == cached_score_context then
 		last_score_phase = phase
 		return
+	end
+	if room_id == cached_room_id and phase == "playing" then
+		leaderboard_trace("score_cache_reset reason=playing_context_changed context=" .. tostring(context)
+			.. " cachedContext=" .. tostring(cached_score_context)
+			.. " cachedRows=" .. tostring(#cached_score_user_order)
+			.. " lastRows=" .. tostring(#last_non_empty_rows))
 	end
 	if room_id == cached_room_id and phase == "lobby" and last_score_phase == "results" and #last_non_empty_rows > 0 then
 		last_score_phase = phase

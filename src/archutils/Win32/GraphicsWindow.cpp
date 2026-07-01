@@ -217,11 +217,20 @@ static void AdjustVideoModeParams(VideoModeParams& p) {
   DEVMODE dm;
   ZERO(dm);
   dm.dmSize = sizeof(dm);
+  SetLastError(ERROR_SUCCESS);
   if (!EnumDisplaySettings(p.sDisplayId.c_str(), ENUM_CURRENT_SETTINGS, &dm)) {
     p.rate = 60;
-    LOG->Warn(
-        "%s",
-        werr_ssprintf(GetLastError(), "EnumDisplaySettings failed").c_str());
+    DWORD error = GetLastError();
+    if (error == ERROR_SUCCESS) {
+      LOG->Trace(
+          "EnumDisplaySettings returned no mode for display '%s'; "
+          "defaulting refresh rate to 60.",
+          p.sDisplayId.c_str());
+    } else {
+      LOG->Warn(
+          "%s",
+          werr_ssprintf(error, "EnumDisplaySettings failed").c_str());
+    }
     return;
   }
 

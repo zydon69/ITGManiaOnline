@@ -2132,8 +2132,8 @@ function ITGOnline:LoadAuthenticatedUser(callback)
 			self.user = decoded.user
 			self.sessionExpired = false
 			safe_callback(callback, true, decoded.user, decoded)
-			return
-		end
+		return
+	end
 
 		safe_callback(callback, false, nil, response or decoded or { errorMessage = "Failed to load authenticated user." })
 	end, true)
@@ -2565,7 +2565,7 @@ function ITGOnline:ShouldIgnoreRoomEvents(roomId)
 	if GetTimeSinceStart() <= untilTime then
 		online_flow_trace("ignore_room_events_active room=" .. tostring(key)
 			.. " remaining=" .. tostring(untilTime - GetTimeSinceStart())
-			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
+		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
 		return true
 	end
 	self.ignoredRoomEventsUntil[key] = nil
@@ -4693,7 +4693,7 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 			return
 		end
 
-		local currentPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+	local currentPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
 		if currentPhase ~= "lobby" and currentPhase ~= "lobby_ready" and currentPhase ~= "unknown" then
 			self.songSelectedAutoReadyInFlightKey = ""
 			self.songSelectedAutoReadyCompletedKey = key
@@ -8601,7 +8601,7 @@ function ITGOnline:SelectSong(callback, options)
 				return
 			end
 
-			safe_callback(callback, false, nil, { errorMessage = "Server scoring policy is unavailable." })
+		safe_callback(callback, false, nil, { errorMessage = "Server scoring policy is unavailable." })
 			safe_broadcast("OnlineResponseStatus", {
 				event = "selectSong",
 				success = false,
@@ -10714,16 +10714,22 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 			at = GetTimeSinceStart(),
 		}
 		local pending = self.readyRequestInFlight[requestKey]
-		local callbacks = pending and pending.callbacks or {}
-		self.readyRequestInFlight[requestKey] = nil
-		local liveRoomId = tostring(self.currentRoomId or "")
-		local livePhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+			local callbacks = pending and pending.callbacks or {}
+			self.readyRequestInFlight[requestKey] = nil
+			local liveRoomId = tostring(self.currentRoomId or "")
+			local livePhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+			local liveReadySelectionKey = function()
+				if self.CurrentOptionsSelectionKey then
+					return self:CurrentOptionsSelectionKey(self.currentRoom)
+				end
+				return tostring(self.currentRoomId or "")
+			end
 		local errorCode = decoded and decoded.error_code
 		local phaseNotAccepting = errorCode == "room_phase_not_accepting"
 			or tostring(errorCode or ""):match("^room_phase_not_accepting") ~= nil
 		local lobbyReadyPhaseRace = not ok and phase == "lobby_ready" and phaseNotAccepting
 			and (livePhase == "config" or livePhase == "starting" or livePhase == "playing" or livePhase == "results")
-		if lobbyReadyPhaseRace then
+		local acceptLobbyReadyPhaseRace = function(reason, room, fetchResponse)
 			self.readyRequestLastResult[requestKey] = {
 				ok = true,
 				at = GetTimeSinceStart(),
@@ -10732,22 +10738,97 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 				.. " key=" .. tostring(requestKey)
 				.. " requestedPhase=" .. tostring(phase)
 				.. " requestRoom=" .. tostring(requestRoomId)
-				.. " liveRoom=" .. tostring(liveRoomId)
+				.. " liveRoom=" .. tostring(self.currentRoomId or "")
 				.. " requestPhase=" .. tostring(requestPhase)
-				.. " livePhase=" .. tostring(livePhase)
+				.. " livePhase=" .. tostring(self:NormalizeRoomPhase(room and room.phase or self.currentRoom and self.currentRoom.phase))
 				.. " error=" .. tostring(errorCode)
+				.. " reason=" .. tostring(reason)
 				.. " callbacks=" .. tostring(callbacks and #callbacks or 0))
-			if self.currentRoomId then
-				self:FetchCurrentRoomFallback("ready_lobby_ready_phase_race", 0)
-			end
 			for cb in ivalues(callbacks) do
 				safe_callback(cb, true, {
-					room = self.currentRoom,
+					room = room or self.currentRoom,
 					error_code = errorCode,
 					stale_ready = true,
 					phase_race = true,
-				}, response)
+				}, fetchResponse or response)
 			end
+		end
+		if lobbyReadyPhaseRace then
+			if self.currentRoomId then
+				self:FetchCurrentRoomFallback("ready_lobby_ready_phase_race", 0)
+			end
+			acceptLobbyReadyPhaseRace("local_phase_already_advanced", self.currentRoom, response)
+			return
+		end
+		if not ok and phase == "lobby_ready" and phaseNotAccepting and liveRoomId == requestRoomId then
+			online_flow_trace("ready_request_phase_race_fetch_begin"
+				.. " key=" .. tostring(requestKey)
+				.. " requestedPhase=" .. tostring(phase)
+				.. " requestRoom=" .. tostring(requestRoomId)
+				.. " livePhase=" .. tostring(livePhase)
+				.. " error=" .. tostring(errorCode))
+				self:FetchRoom(requestRoomId, function(fetchOk, fetchDecoded, fetchResponse)
+					local callbackLiveRoomId = tostring(self.currentRoomId or "")
+					local callbackLivePhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+					local callbackReadySelectionKey = liveReadySelectionKey()
+					local selectionKeyMatches = readySelectionKey == "" or callbackReadySelectionKey == readySelectionKey
+					local fetchedRoom = fetchOk and fetchDecoded and fetchDecoded.room or self.currentRoom
+					local fetchedRoomId = tostring(fetchedRoom and (fetchedRoom.id or fetchedRoom.room_id or fetchedRoom.roomId) or "")
+					local fetchedPhase = self:NormalizeRoomPhase(fetchedRoom and fetchedRoom.phase)
+					local fetchedPhaseRace = fetchedRoomId == requestRoomId
+						and (fetchedPhase == "config" or fetchedPhase == "starting" or fetchedPhase == "playing" or fetchedPhase == "results")
+						and callbackLiveRoomId == requestRoomId
+						and selectionKeyMatches
+					online_flow_trace("ready_request_phase_race_fetch_result"
+						.. " key=" .. tostring(requestKey)
+						.. " ok=" .. tostring(fetchOk == true)
+						.. " requestRoom=" .. tostring(requestRoomId)
+						.. " liveRoom=" .. tostring(callbackLiveRoomId)
+						.. " livePhase=" .. tostring(callbackLivePhase)
+						.. " requestSelectionKey=" .. tostring(readySelectionKey)
+						.. " liveSelectionKey=" .. tostring(callbackReadySelectionKey)
+						.. " selectionKeyMatches=" .. tostring(selectionKeyMatches == true)
+						.. " fetchedRoom=" .. tostring(fetchedRoomId)
+						.. " fetchedPhase=" .. tostring(fetchedPhase)
+						.. " accepted=" .. tostring(fetchedPhaseRace == true))
+				if fetchedPhaseRace then
+					acceptLobbyReadyPhaseRace("fetch_confirmed_phase_advanced", fetchedRoom, fetchResponse)
+					return
+				end
+					if fetchedRoomId == requestRoomId
+						and (fetchedPhase == "config" or fetchedPhase == "starting" or fetchedPhase == "playing" or fetchedPhase == "results")
+						and (callbackLiveRoomId ~= requestRoomId or not selectionKeyMatches) then
+						online_flow_trace("ready_request_phase_race_fetch_stale_context"
+							.. " key=" .. tostring(requestKey)
+							.. " requestSelectionKey=" .. tostring(readySelectionKey)
+							.. " liveSelectionKey=" .. tostring(callbackReadySelectionKey)
+							.. " requestRoom=" .. tostring(requestRoomId)
+							.. " liveRoom=" .. tostring(callbackLiveRoomId)
+							.. " fetchedPhase=" .. tostring(fetchedPhase)
+						.. " livePhase=" .. tostring(callbackLivePhase)
+						.. " callbacks=" .. tostring(callbacks and #callbacks or 0))
+					for cb in ivalues(callbacks) do
+						safe_callback(cb, false, {
+							room = self.currentRoom,
+							error_code = "ready_context_changed",
+							stale = true,
+						}, fetchResponse or response)
+					end
+					return
+				end
+				online_flow_trace("ready_request_phase_not_accepting_rejected"
+					.. " key=" .. tostring(requestKey)
+					.. " requestedPhase=" .. tostring(phase)
+					.. " requestRoom=" .. tostring(requestRoomId)
+					.. " livePhase=" .. tostring(livePhase)
+					.. " fetchedPhase=" .. tostring(fetchedPhase)
+					.. " status=" .. tostring(response and response.statusCode or "nil")
+					.. " error=" .. tostring(errorCode)
+					.. " callbacks=" .. tostring(callbacks and #callbacks or 0))
+				for cb in ivalues(callbacks) do
+					safe_callback(cb, false, decoded, response)
+				end
+			end)
 			return
 		end
 		if liveRoomId ~= requestRoomId or (livePhase ~= "unknown" and livePhase ~= requestPhase) then
@@ -12580,7 +12661,7 @@ function ITGOnline:ReconcileCurrentRoomFromLobbyPayload(decoded, source)
 					.. " selectedAt=" .. tostring(selectedAt)
 					.. " members=" .. tostring(type(room.members) == "table" and #room.members or 0)
 					.. " readyStates=" .. tostring(type(room.ready_states) == "table" and #room.ready_states or 0)
-					.. " currentPhase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+				.. " currentPhase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
 				self:FetchCurrentRoomFallback("lobby_refresh_current_room_match", 0.25)
 				return true
 			end
@@ -13117,7 +13198,7 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 				.. " prefetchFoundRoom=" .. tostring(freshRoomFound == true)
 				.. " prefetchPhase=" .. tostring(freshPhase)
 				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
 			self:TraceOnlineState("join_room_response", {
 				source = "join_room",
 				roomSnapshot = decoded and decoded.room or nil,
@@ -13558,7 +13639,7 @@ function ITGOnline:LeaveRoom(callback)
 			return
 		end
 		local roomId = self.currentRoomId
-		local roomKey = self:RoomKey(roomId)
+	local roomKey = self:RoomKey(roomId)
 		self.leaveRoomCallbacksByRoomId = self.leaveRoomCallbacksByRoomId or {}
 		if self.leaveRoomCallbacksByRoomId[roomKey] then
 			online_flow_trace("leave_room_join_inflight room=" .. tostring(roomId)
@@ -13644,10 +13725,21 @@ function ITGOnline:FetchRoom(roomId, callback)
 		safe_callback(callback, false, nil, { errorMessage = "No room id available." })
 		return
 	end
+
 	local roomKey = tostring(roomId)
 	local currentRoomKey = tostring(self.currentRoom and (self.currentRoom.id or self.currentRoom.room_id or self.currentRoom.roomId) or self.currentRoomId or "")
 	local currentPhase = self.NormalizeRoomPhase and self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase) or tostring(self.currentRoom and self.currentRoom.phase or "")
 	local currentSummary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
+
+	if self.deletedRoomIds[roomKey] then
+		online_flow_trace_throttled("fetch_deleted_room_" .. roomKey, 5.0,
+			"fetch_room_skipped reason=room_deleted_before_coalesce roomId=" .. roomKey
+				.. " currentPhase=" .. tostring(currentPhase)
+				.. " currentRoom=" .. tostring(currentRoomKey))
+		safe_callback(callback, false, nil, { statusCode = 410, errorMessage = "Room was deleted." })
+		return
+	end
+
 	if currentRoomKey == roomKey
 		and currentPhase == "results"
 		and currentSummary
@@ -13673,17 +13765,12 @@ function ITGOnline:FetchRoom(roomId, callback)
 		end
 		self.fetchRoomStableResultsLastAtByRoomId[roomKey] = now
 	end
+
 	online_flow_trace("fetch_room_begin room=" .. tostring(roomKey)
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
 		.. " inFlight=" .. tostring(self.fetchRoomInFlightByRoomId and self.fetchRoomInFlightByRoomId[roomKey] ~= nil)
 		.. " screen=" .. tostring(self.currentScreenName or "nil"))
-	if self.deletedRoomIds[roomKey] then
-		online_flow_trace_throttled("fetch_deleted_room_" .. roomKey, 5.0,
-			"fetch_room_skipped reason=room_deleted roomId=" .. roomKey)
-		safe_callback(callback, false, nil, { statusCode = 410, errorMessage = "Room was deleted." })
-		return
-	end
 	self.fetchRoomInFlightByRoomId = self.fetchRoomInFlightByRoomId or {}
 	local inFlight = self.fetchRoomInFlightByRoomId[roomKey]
 	if inFlight then
