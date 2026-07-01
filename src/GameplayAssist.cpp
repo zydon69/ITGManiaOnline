@@ -11,6 +11,12 @@
 #include "Steps.h"
 #include "ThemeManager.h"
 
+static void StopIfPlaying(RageSound& sound) {
+  if (sound.IsPlaying()) {
+    sound.StopPlaying();
+  }
+}
+
 void GameplayAssist::Init() {
   m_soundAssistClap.Load(THEME->GetPathS("GameplayAssist", "clap"), true);
   m_soundAssistMetronomeMeasure.Load(
@@ -128,9 +134,9 @@ void GameplayAssist::PlayTicks(const NoteData& nd, const PlayerState* ps) {
 }
 
 void GameplayAssist::StopPlaying() {
-  m_soundAssistClap.StopPlaying();
-  m_soundAssistMetronomeMeasure.StopPlaying();
-  m_soundAssistMetronomeBeat.StopPlaying();
+  StopIfPlaying(m_soundAssistClap);
+  StopIfPlaying(m_soundAssistMetronomeMeasure);
+  StopIfPlaying(m_soundAssistMetronomeBeat);
 }
 
 /*

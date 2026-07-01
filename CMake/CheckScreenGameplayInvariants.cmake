@@ -6,6 +6,10 @@ set(SCREEN_GAMEPLAY_SOURCE
     "${ITGMANIA_SOURCE_DIR}/src/ScreenGameplay.cpp")
 file(READ "${SCREEN_GAMEPLAY_SOURCE}" SCREEN_GAMEPLAY_TEXT)
 
+set(GAMEPLAY_ASSIST_SOURCE
+    "${ITGMANIA_SOURCE_DIR}/src/GameplayAssist.cpp")
+file(READ "${GAMEPLAY_ASSIST_SOURCE}" GAMEPLAY_ASSIST_TEXT)
+
 set(ONLINE_HELPERS_SOURCE
     "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/Scripts/SL-OnlineHelpers.lua")
 file(READ "${ONLINE_HELPERS_SOURCE}" ONLINE_HELPERS_TEXT)
@@ -48,6 +52,8 @@ foreach(REQUIRED_SNIPPET
     "snapshotScorePercent == nil or final == true"
     "snapshotExScore == nil or final == true"
     "live_score_flush_skipped reason=zero_progress_already_sent"
+    "live_score_flush_skipped reason=final_score_already_accepted"
+    "IsLiveScoreFinalizedForRound"
     "lastAcceptedZeroLiveScoreRoundKey"
     "final_failed_snapshot_selected reason=prefer_terminal_candidate"
     "if scoreMode == \"itg\" then"
@@ -100,5 +106,19 @@ foreach(REQUIRED_SNIPPET
     message(
         FATAL_ERROR
         "ScreenGameplay notes-ended invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "static void StopIfPlaying(RageSound& sound)"
+    "if (sound.IsPlaying())"
+    "StopIfPlaying(m_soundAssistClap)"
+    "StopIfPlaying(m_soundAssistMetronomeMeasure)"
+    "StopIfPlaying(m_soundAssistMetronomeBeat)")
+  string(FIND "${GAMEPLAY_ASSIST_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+        FATAL_ERROR
+        "GameplayAssist invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()

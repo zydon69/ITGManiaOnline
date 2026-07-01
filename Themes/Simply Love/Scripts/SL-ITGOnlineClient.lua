@@ -3930,6 +3930,14 @@ function ITGOnline:StopLiveScoreFlush(reason)
 	)
 end
 
+function ITGOnline:IsLiveScoreFinalizedForRound(roundKey)
+	roundKey = tostring(roundKey or "")
+	if roundKey == "" then return false end
+	if self.PlayStateKeyIsValid and not self:PlayStateKeyIsValid(roundKey) then return false end
+	if tostring(self.lastFinalScoreKey or "") == roundKey then return true end
+	return false
+end
+
 function ITGOnline:NormalizeRoomPhase(value)
 	local phase = tostring(value or ""):lower()
 	if phase == "lobby" or phase == "lobby_ready" or phase == "config"
@@ -9389,6 +9397,19 @@ function ITGOnline:QueueLiveScore(snapshot)
 		return false
 	end
 
+	local roundKey, roundKeySource = self:CanonicalGameplayRoundKey("live_score_queue")
+	if self:IsLiveScoreFinalizedForRound(roundKey) then
+		self.pendingLiveScoreSnapshot = nil
+		self.pendingLiveScoreRoundKey = ""
+		online_flow_trace_throttled("live_score_queue_finalized_round", 2.0,
+			"live_score_queue_skipped reason=final_score_already_accepted"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " roundKey=" .. tostring(roundKey)
+			.. " roundKeySource=" .. tostring(roundKeySource)
+			.. " lastFinalScoreKey=" .. tostring(self.lastFinalScoreKey or ""))
+		return false
+	end
+
 	local scorePercent = tonumber(snapshot.scorePercent or snapshot.ScorePercent) or 0
 	local exScorePercent = tonumber(snapshot.exScorePercent or snapshot.ExScorePercent) or 0
 	local hardExScorePercent = tonumber(snapshot.hardExScorePercent or snapshot.HardExScorePercent) or 0
@@ -9415,7 +9436,7 @@ function ITGOnline:QueueLiveScore(snapshot)
 	}
 	self.lastDisplayedScoreSnapshot = snapshot
 	self.lastDisplayedScoreSnapshotAt = GetTimeSinceStart()
-	self.pendingLiveScoreRoundKey = self.PlayStateKey and self:PlayStateKey() or tostring(self.currentRoomId or "")
+	self.pendingLiveScoreRoundKey = roundKey ~= "" and roundKey or self.PlayStateKey and self:PlayStateKey() or tostring(self.currentRoomId or "")
 	self.pendingLiveScoreSnapshot = snapshot
 	online_flow_trace_throttled("live_score_queue", 1.5,
 		"live_score_queue room=" .. tostring(self.currentRoomId or "nil")
@@ -9541,6 +9562,18 @@ function ITGOnline:FlushLiveScore()
 		return false
 	end
 
+	local roundKey, roundKeySource = self:CanonicalGameplayRoundKey("live_score_flush")
+	if self:IsLiveScoreFinalizedForRound(roundKey) then
+		self:StopLiveScoreFlush("final_score_already_accepted:" .. tostring(roundKey))
+		online_flow_trace_throttled("live_score_flush_finalized_round", 2.0,
+			"live_score_flush_skipped reason=final_score_already_accepted"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " roundKey=" .. tostring(roundKey)
+			.. " roundKeySource=" .. tostring(roundKeySource)
+			.. " lastFinalScoreKey=" .. tostring(self.lastFinalScoreKey or ""))
+		return false
+	end
+
 	if now < (tonumber(self.liveScoreNextAttemptAt) or 0) then
 		online_flow_trace_throttled("live_score_flush_backoff", 2.0,
 			"live_score_flush_skipped reason=backoff remaining="
@@ -9580,7 +9613,6 @@ function ITGOnline:FlushLiveScore()
 		self.pendingLiveScoreRoundKey = ""
 		return false
 	end
-	local roundKey, roundKeySource = self:CanonicalGameplayRoundKey("live_score_flush")
 	local currentRoundIsValid = roundKey ~= ""
 	local pendingRoundIsValid = self.pendingLiveScoreRoundKey ~= ""
 	if self.PlayStateKeyIsValid then
@@ -10357,6 +10389,9 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 			self.onlineGameplayEvaluationRetryCount = 0
 			self.onlineGameplayEvaluationNextRetryAt = 0
 			self.onlineGameplayEvaluationTerminalErrorKey = ""
+			if self.StopLiveScoreFlush then
+				self:StopLiveScoreFlush("final_score_accepted:" .. tostring(roundKey))
+			end
 		end
 		if ok then
 			self.lastAcceptedScoreFingerprint = scoreFingerprint
