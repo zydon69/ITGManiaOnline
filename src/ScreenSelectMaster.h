@@ -133,10 +133,11 @@ class ScreenSelectMaster : public ScreenSelect {
   // icon is the shared, per-choice piece
   std::vector<AutoActor> m_vsprIcon;
 
+  // Keep the scrollers alive while the per-choice scroll actors detach.
+  ActorScroller m_Scroller[NUM_PLAYERS];
+
   // preview is per-player, per-choice piece
   std::vector<AutoActor> m_vsprScroll[NUM_PLAYERS];
-
-  ActorScroller m_Scroller[NUM_PLAYERS];
 
   // cursor is the per-player, shared by all choices
   AutoActor m_sprCursor[NUM_PLAYERS];
