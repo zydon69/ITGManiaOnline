@@ -1,6 +1,8 @@
 #ifndef ACTOR_PROXY_H
 #define ACTOR_PROXY_H
 
+#include <memory>
+
 #include "Actor.h"
 
 struct lua_State;
@@ -9,13 +11,13 @@ class ActorProxy : public Actor {
  public:
   ActorProxy();
   ActorProxy(const ActorProxy& cpy);
-  virtual ~ActorProxy();
+  ~ActorProxy() override;
 
-  virtual bool EarlyAbortDraw() const;
-  virtual void DrawPrimitives();
+  bool EarlyAbortDraw() const override;
+  void DrawPrimitives() override;
 
-  void LoadFromNode(const XNode* pNode);
-  virtual ActorProxy* Copy() const;
+  void LoadFromNode(const XNode* pNode) override;
+  ActorProxy* Copy() const override;
 
   Actor* GetTarget() { return m_pActorTarget; }
   const Actor* GetTarget() const { return m_pActorTarget; }
@@ -23,11 +25,16 @@ class ActorProxy : public Actor {
   static void DetachTargetFromAll(const Actor* pTarget);
 
   // Lua
-  virtual void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
  private:
+  struct LifetimeToken {
+    bool alive = true;
+  };
+
   Actor* m_pActorTarget;
   bool m_bDrawingTarget;
+  std::shared_ptr<LifetimeToken> m_pLifetimeToken;
 };
 
 #endif

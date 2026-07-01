@@ -1,21 +1,92 @@
 #include "ActorProxy.h"
 
+#include <map>
+#include <memory>
 #include <set>
+#include <vector>
 
 #include "Actor.h"
 #include "ActorUtil.h"
 #include "RageLog.h"
 
-REGISTER_ACTOR_CLASS(ActorProxy);
-
 namespace {
-std::set<ActorProxy*> g_ActorProxies;
+struct ActorLifetimeToken {
+  bool alive = true;
+};
+
+std::set<ActorProxy*>& ActorProxyRegistry() {
+  static std::set<ActorProxy*>* registry = new std::set<ActorProxy*>;
+  return *registry;
+}
+
+std::map<const Actor*, std::weak_ptr<ActorLifetimeToken>>&
+ActorLifetimeRegistry() {
+  static std::map<const Actor*, std::weak_ptr<ActorLifetimeToken>>* registry =
+      new std::map<const Actor*, std::weak_ptr<ActorLifetimeToken>>;
+  return *registry;
+}
 
 void WarnActorProxyAuditFix(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
 }
+
+std::shared_ptr<ActorLifetimeToken> WatchActorLifetime(const Actor* actor) {
+  std::map<const Actor*, std::weak_ptr<ActorLifetimeToken>>& registry =
+      ActorLifetimeRegistry();
+  std::shared_ptr<ActorLifetimeToken> token = registry[actor].lock();
+  if (token == nullptr) {
+    token = std::make_shared<ActorLifetimeToken>();
+    registry[actor] = token;
+  }
+  return token;
+}
+
+void MarkActorDestroyed(const Actor* actor) {
+  std::map<const Actor*, std::weak_ptr<ActorLifetimeToken>>& registry =
+      ActorLifetimeRegistry();
+  std::map<const Actor*, std::weak_ptr<ActorLifetimeToken>>::iterator iter =
+      registry.find(actor);
+  if (iter == registry.end()) {
+    return;
+  }
+
+  std::shared_ptr<ActorLifetimeToken> token = iter->second.lock();
+  if (token != nullptr) {
+    token->alive = false;
+  }
+  registry.erase(iter);
+}
+
+class TargetVisibilityGuard {
+ public:
+  explicit TargetVisibilityGuard(Actor* target)
+      : m_pTarget(target),
+        m_bOriginalVisible(target->GetVisible()),
+        m_pTargetToken(WatchActorLifetime(target)) {
+    m_pTarget->SetVisible(true);
+  }
+
+  ~TargetVisibilityGuard() {
+    if (m_pTargetToken != nullptr && m_pTargetToken->alive) {
+      m_pTarget->SetVisible(m_bOriginalVisible);
+    }
+  }
+
+ private:
+  Actor* m_pTarget;
+  bool m_bOriginalVisible;
+  std::shared_ptr<ActorLifetimeToken> m_pTargetToken;
+};
+
+struct RegisterActorProxy {
+  RegisterActorProxy() {
+    ActorUtil::Register("ActorProxy", CreateActor<ActorProxy>);
+  }
+};
+
+static RegisterActorProxy registerActorProxy;
 
 bool WouldCreateProxyCycle(const ActorProxy* proxy, const Actor* target) {
   const Actor* current = target;
@@ -36,18 +107,29 @@ bool WouldCreateProxyCycle(const ActorProxy* proxy, const Actor* target) {
 ActorProxy::ActorProxy() {
   m_pActorTarget = nullptr;
   m_bDrawingTarget = false;
-  g_ActorProxies.insert(this);
+  m_pLifetimeToken = std::make_shared<LifetimeToken>();
+  ActorProxyRegistry().insert(this);
 }
 
 ActorProxy::ActorProxy(const ActorProxy& cpy) : Actor(cpy) {
   m_pActorTarget = nullptr;
   m_bDrawingTarget = false;
-  g_ActorProxies.insert(this);
+  m_pLifetimeToken = std::make_shared<LifetimeToken>();
+  ActorProxyRegistry().insert(this);
+  if (cpy.m_pActorTarget != nullptr) {
+    WarnActorProxyAuditFix(
+        "SRC_AUDIT_FIX SRC-2654: ActorProxy copy intentionally dropped target.");
+  }
 }
 
 ActorProxy::~ActorProxy() {
-  g_ActorProxies.erase(this);
+  if (m_pLifetimeToken != nullptr) {
+    m_pLifetimeToken->alive = false;
+  }
+  ActorProxyRegistry().erase(this);
 }
+
+ActorProxy* ActorProxy::Copy() const { return new ActorProxy(*this); }
 
 bool ActorProxy::EarlyAbortDraw() const {
   return m_pActorTarget == nullptr || Actor::EarlyAbortDraw();
@@ -59,14 +141,27 @@ void ActorProxy::DrawPrimitives() {
   }
 
   Actor* target = m_pActorTarget;
-  const bool bVisible = target->GetVisible();
+  std::shared_ptr<LifetimeToken> proxyToken = m_pLifetimeToken;
+  class DrawingTargetGuard {
+   public:
+    DrawingTargetGuard(ActorProxy* proxy, std::shared_ptr<LifetimeToken> token)
+        : m_pProxy(proxy), m_pProxyToken(token) {}
+
+    ~DrawingTargetGuard() {
+      if (m_pProxyToken != nullptr && m_pProxyToken->alive) {
+        m_pProxy->m_bDrawingTarget = false;
+      }
+    }
+
+   private:
+    ActorProxy* m_pProxy;
+    std::shared_ptr<LifetimeToken> m_pProxyToken;
+  };
+
   m_bDrawingTarget = true;
-  target->SetVisible(true);
+  DrawingTargetGuard drawingTargetGuard(this, proxyToken);
+  TargetVisibilityGuard targetVisibilityGuard(target);
   target->Draw();
-  m_bDrawingTarget = false;
-  if (m_pActorTarget == target) {
-    target->SetVisible(bVisible);
-  }
 }
 
 void ActorProxy::LoadFromNode(const XNode* pNode) {
@@ -91,7 +186,11 @@ void ActorProxy::DetachTargetFromAll(const Actor* pTarget) {
   if (pTarget == nullptr) {
     return;
   }
-  for (ActorProxy* proxy : g_ActorProxies) {
+  MarkActorDestroyed(pTarget);
+
+  std::vector<ActorProxy*> proxies(
+      ActorProxyRegistry().begin(), ActorProxyRegistry().end());
+  for (ActorProxy* proxy : proxies) {
     if (proxy != nullptr && proxy->m_pActorTarget == pTarget) {
       proxy->m_pActorTarget = nullptr;
     }
@@ -109,7 +208,19 @@ class LunaActorProxy : public Luna<ActorProxy> {
       p->SetTarget(nullptr);
       COMMON_RETURN_SELF;
     }
-    Actor* pTarget = Luna<Actor>::check(L, 1);
+    if (!LuaBinding::CheckLuaObjectType(
+            L, 1, Luna<Actor>::m_sClassName.c_str())) {
+      LuaHelpers::TypeError(L, 1, Luna<Actor>::m_sClassName.c_str());
+    }
+    void* rawTarget = nullptr;
+    if (!LuaBinding::TryGetPointerFromStack(
+            L, Luna<Actor>::m_sClassName, 1, rawTarget)) {
+      WarnActorProxyAuditFix(
+          "SRC_AUDIT_FIX SRC-2651: ActorProxy cleared stale Lua target.");
+      p->SetTarget(nullptr);
+      COMMON_RETURN_SELF;
+    }
+    Actor* pTarget = static_cast<Actor*>(rawTarget);
     p->SetTarget(pTarget);
     COMMON_RETURN_SELF;
   }

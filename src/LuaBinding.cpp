@@ -293,9 +293,11 @@ void LuaBinding::ApplyDerivedType(
 #include "RageUtil_AutoPtr.h"
 REGISTER_CLASS_TRAITS(LuaClass, new LuaClass(*pCopy))
 
-void* LuaBinding::GetPointerFromStack(
-    Lua* L, const std::string& sType, int iArg) {
+bool LuaBinding::TryGetPointerFromStack(
+    Lua* L, const std::string& sType, int iArg, void*& pRet) {
+  (void)sType;
   iArg = LuaHelpers::AbsIndex(L, iArg);
+  pRet = nullptr;
 
   /* The stack has a userdata or a table.  If it's a table, look up the
    * associated userdata. */
@@ -305,21 +307,32 @@ void* LuaBinding::GetPointerFromStack(
     lua_pushvalue(L, iArg);
     lua_rawget(L, -2);
     if (lua_isnil(L, -1)) {
-      luaL_error(
-          L, "stale %s referenced (object used but no longer exists)",
-          sType.c_str());
+      lua_pop(L, 2);
+      return false;
     }
 
-    void* pRet = lua_touserdata(L, -1);
+    pRet = lua_touserdata(L, -1);
     lua_pop(L, 2);
 
-    return pRet;
+    return pRet != nullptr;
   } else if (lua_isuserdata(L, iArg)) {
     void** pData = (void**)lua_touserdata(L, iArg);
-    return *pData;
+    pRet = pData != nullptr ? *pData : nullptr;
+    return pRet != nullptr;
   } else {
-    return nullptr;
+    return false;
   }
+}
+
+void* LuaBinding::GetPointerFromStack(
+    Lua* L, const std::string& sType, int iArg) {
+  void* pRet = nullptr;
+  if (!TryGetPointerFromStack(L, sType, iArg, pRet)) {
+    luaL_error(
+        L, "stale %s referenced (object used but no longer exists)",
+        sType.c_str());
+  }
+  return pRet;
 }
 
 /* Tricky: when an instance table is copied, we want to do a deep
