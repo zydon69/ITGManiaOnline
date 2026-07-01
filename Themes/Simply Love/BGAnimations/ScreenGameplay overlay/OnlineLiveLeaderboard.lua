@@ -94,6 +94,14 @@ local function reset_score_cache_if_needed(room)
 			.. " rows=" .. tostring(#last_non_empty_rows))
 		return
 	end
+	if room_id == cached_room_id and phase == "results" and #last_non_empty_rows > 0 then
+		cached_score_context = context
+		last_score_phase = phase
+		leaderboard_trace("score_cache_preserved reason=results_context_shift context=" .. tostring(context)
+			.. " cachedRows=" .. tostring(#cached_score_user_order)
+			.. " rows=" .. tostring(#last_non_empty_rows))
+		return
+	end
 	cached_room_id = room_id
 	cached_score_context = context
 	cached_score_rows_by_user_id = {}
@@ -203,6 +211,9 @@ local function rows_from_play_state_sessions(play_state)
 			user_id = user_id,
 			name = online_display_name(user, "Player"),
 			percent = 0,
+			is_placeholder = true,
+			is_session_placeholder = true,
+			is_reliable = false,
 			rank = tonumber(session.rank),
 			display_order = tonumber(session.display_order),
 			failed = flags.failed,
@@ -283,6 +294,23 @@ local function cache_has_user_id(user_id)
 	return false
 end
 
+local function last_non_empty_score_row_for_user(user_id)
+	user_id = tostring(user_id or "")
+	if user_id == "" then
+		return nil
+	end
+
+	for row in ivalues(last_non_empty_rows or {}) do
+		if tostring(row.user_id or "") == user_id
+			and row.is_session_placeholder ~= true
+			and row.is_placeholder ~= true then
+			return copy_row(row)
+		end
+	end
+
+	return nil
+end
+
 local function remember_score_rows(rows)
 	local remembered = 0
 	for row in ivalues(rows or {}) do
@@ -352,6 +380,15 @@ local function rows_from_room(room, leaderboard_override)
 		for session_row in ivalues(session_rows) do
 			local user_id = tostring(session_row.user_id or "")
 			local score_row = score_by_user_id[user_id] or cached_score_rows_by_user_id[user_id]
+			if not score_row and session_row.is_session_placeholder == true then
+				score_row = last_non_empty_score_row_for_user(user_id)
+				if score_row then
+					leaderboard_trace("session_placeholder_preserved_score user=" .. tostring(user_id)
+						.. " percent=" .. tostring(score_row.percent)
+						.. " state=" .. tostring(session_row.play_state or "")
+						.. " phase=" .. tostring(room and room.phase or "nil"))
+				end
+			end
 			local row = score_row and copy_row(score_row) or copy_row(session_row)
 			if score_row then
 				row.play_state = session_row.play_state
