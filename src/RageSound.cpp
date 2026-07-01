@@ -1062,7 +1062,7 @@ bool RageSound::SetProperty(const std::string& sProperty, float fValue) {
   return m_pSource->SetProperty(sProperty, fValue);
 }
 
-bool RageSound::SetPositionSeconds(float seconds) {
+bool RageSound::SetPositionSeconds(float seconds, bool allowNegative) {
   int sampleRate = 0;
   {
     LockMut(m_Mutex);
@@ -1073,9 +1073,12 @@ bool RageSound::SetPositionSeconds(float seconds) {
     sampleRate = m_pSource->GetSampleRate();
   }
 
-  seconds = std::max(0.0f, seconds);
+  if (!allowNegative) {
+    seconds = std::max(0.0f, seconds);
+  }
   const double frameDouble = seconds * sampleRate + 0.5;
-  if (!std::isfinite(frameDouble) || frameDouble > INT_MAX) {
+  if (!std::isfinite(frameDouble) || frameDouble < INT_MIN ||
+      frameDouble > INT_MAX) {
     return false;
   }
   const int frame = static_cast<int>(frameDouble);

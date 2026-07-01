@@ -192,6 +192,7 @@ class ScreenGameplay : public ScreenWithMenuElements {
   PlayerInfo* GetDummyPlayerInfo(int iDummyIndex);
   void Pause(bool bPause) { PauseGame(bPause); }
   bool SeekMusicSeconds(float seconds);
+  bool AlignMusicForOnlineStart(float secondsUntilStart);
   bool IsPaused() const { return m_bPaused; }
   float GetHasteRate();
 

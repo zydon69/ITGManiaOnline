@@ -151,7 +151,7 @@ class RageSound : public RageSoundBase {
   RageSoundParams GetParams() const;
   void SetPrefersStrongPrebuffer(bool prefer);
   bool SetProperty(const std::string& sProperty, float fValue);
-  bool SetPositionSeconds(float seconds);
+  bool SetPositionSeconds(float seconds, bool allowNegative = false);
   void SetStopModeFromString(const std::string& sStopMode);
 
   // Lua

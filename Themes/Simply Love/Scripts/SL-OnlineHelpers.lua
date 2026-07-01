@@ -748,13 +748,20 @@ end
 
 ReleaseOnlineGameplay = function(screen, secondsUntilStart)
 	local lateBy = secondsUntilStart and math.max(0, -secondsUntilStart) or 0
+	local alignedToSchedule = false
 	if online_trace then
 		online_trace("FLOW release_gameplay screen=" .. tostring(screen and screen:GetName() or "nil")
 			.. " secondsUntilStart=" .. tostring(secondsUntilStart)
 			.. " lateBy=" .. tostring(lateBy)
 			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"))
 	end
-	if screen and lateBy > 0.03 and screen.SeekMusicSeconds then
+	if screen and secondsUntilStart ~= nil and screen.AlignMusicForOnlineStart then
+		local ok, aligned = safe_online_call("align online gameplay", function()
+			return screen:AlignMusicForOnlineStart(secondsUntilStart)
+		end)
+		alignedToSchedule = ok == true and aligned == true
+	end
+	if screen and not alignedToSchedule and lateBy > 0.03 and screen.SeekMusicSeconds then
 		safe_online_call("seek online gameplay", function()
 			screen:SeekMusicSeconds(lateBy)
 		end)
@@ -2946,6 +2953,11 @@ CreateOnlineHandler = function()
 						end
 
 							local seconds = ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or nil
+							if seconds ~= nil and screen.IsPaused and screen:IsPaused() and screen.AlignMusicForOnlineStart then
+								safe_online_call("align pending online gameplay", function()
+									screen:AlignMusicForOnlineStart(seconds)
+								end)
+							end
 							if seconds ~= nil and seconds <= 0.03 then
 								online_flow_trace("release_online_gameplay_now reason=start_time_reached seconds=" .. tostring(seconds))
 								ReleaseOnlineGameplay(screen, seconds)

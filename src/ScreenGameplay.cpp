@@ -293,6 +293,28 @@ static float FiniteNonNegativeOr(float value, float fallback) {
   return IsFiniteNonNegative(value) ? value : fallback;
 }
 
+static float GetGameplayStartLeadInSeconds(
+    const Song* song, float minTimeToNotes, float minTimeToMusic) {
+  minTimeToNotes = FiniteNonNegativeOr(minTimeToNotes, 0.0f);
+  minTimeToMusic = FiniteNonNegativeOr(minTimeToMusic, 0.0f);
+
+  float firstSecond = 0.0f;
+  if (song != nullptr) {
+    const float songFirstSecond = song->GetFirstSecond();
+    if (std::isfinite(songFirstSecond)) {
+      firstSecond = songFirstSecond;
+    }
+  }
+
+  float startDelay = minTimeToNotes - firstSecond;
+  if (!std::isfinite(startDelay)) {
+    startDelay = minTimeToMusic;
+  }
+
+  startDelay = std::max(startDelay, minTimeToMusic);
+  return std::max(startDelay, 0.0f);
+}
+
 static bool HasCoreGameplayManagers(const char* context) {
   if (GAMESTATE != nullptr && PREFSMAN != nullptr && STATSMAN != nullptr) {
     return true;
@@ -2372,16 +2394,19 @@ void ScreenGameplay::StartPlayingSong(
 
   {
     float onlineSecondsUntilStart = 0.0f;
+    const float startLeadInSeconds = GetGameplayStartLeadInSeconds(
+        GAMESTATE->m_pCurSong, fMinTimeToNotes, fMinTimeToMusic);
     if (GetITGOnlineShouldHoldGameplayForStart()) {
-      p.m_StartSecond = 0.0f;
+      p.m_StartSecond = -startLeadInSeconds;
       set_paused_internal(true);
+      OnlineTrace(
+          "ITG Online: holding gameplay before scheduled start with local "
+          "lead-in %.3fs startSecond=%.3f.",
+          startLeadInSeconds, p.m_StartSecond);
     } else if (GetITGOnlineSecondsUntilScheduledStart(onlineSecondsUntilStart)) {
       p.m_StartSecond = -onlineSecondsUntilStart;
     } else {
-      const float fFirstSecond = GAMESTATE->m_pCurSong->GetFirstSecond();
-      float fStartDelay = fMinTimeToNotes - fFirstSecond;
-      fStartDelay = std::max(fStartDelay, fMinTimeToMusic);
-      p.m_StartSecond = -fStartDelay;
+      p.m_StartSecond = -startLeadInSeconds;
     }
   }
 
@@ -2443,6 +2468,29 @@ bool ScreenGameplay::SeekMusicSeconds(float seconds) {
   const bool seeked = m_pSoundMusic->SetPositionSeconds(seconds);
   if (seeked && GAMESTATE != nullptr) {
     GAMESTATE->m_Position.m_fMusicSeconds = seconds;
+  }
+
+  return seeked;
+}
+
+bool ScreenGameplay::AlignMusicForOnlineStart(float secondsUntilStart) {
+  if (!GetITGOnlineIsActive() || m_pSoundMusic == nullptr ||
+      !m_pSoundMusic->IsLoaded() || !std::isfinite(secondsUntilStart) ||
+      secondsUntilStart < -30.0f || secondsUntilStart > 120.0f) {
+    return false;
+  }
+
+  const float musicSeconds = -secondsUntilStart;
+  const bool seeked = m_pSoundMusic->SetPositionSeconds(musicSeconds, true);
+  if (seeked && GAMESTATE != nullptr) {
+    GAMESTATE->m_Position.m_fMusicSeconds = musicSeconds;
+  }
+
+  if (seeked) {
+    OnlineTrace(
+        "ITG Online: aligned gameplay music for scheduled start "
+        "secondsUntilStart=%.3f musicSeconds=%.3f.",
+        secondsUntilStart, musicSeconds);
   }
 
   return seeked;
@@ -4938,6 +4986,10 @@ class LunaScreenGameplay : public Luna<ScreenGameplay> {
     lua_pushboolean(L, p->SeekMusicSeconds(FArg(1)));
     return 1;
   }
+  static int AlignMusicForOnlineStart(T* p, lua_State* L) {
+    lua_pushboolean(L, p->AlignMusicForOnlineStart(FArg(1)));
+    return 1;
+  }
   static int IsPaused(T* p, lua_State* L) {
     lua_pushboolean(L, p->IsPaused());
     return 1;
@@ -5004,6 +5056,7 @@ class LunaScreenGameplay : public Luna<ScreenGameplay> {
     // sm-ssc additions:
     ADD_METHOD(PauseGame);
     ADD_METHOD(SeekMusicSeconds);
+    ADD_METHOD(AlignMusicForOnlineStart);
     ADD_METHOD(IsPaused);
     ADD_METHOD(GetHasteRate);
     ADD_METHOD(HasteTurningPoints);
