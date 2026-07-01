@@ -62,6 +62,8 @@ foreach(REQUIRED_SNIPPET
     "lastAcceptedZeroLiveScoreRoundKey"
     "ready_request_skipped reason=stale_lobby_ready_before_post"
     "ready_request_phase_race_accepted"
+    "terminal_skipped_failed_final_score_accepted"
+    "mark_failed_early_confirmed_without_terminal_post"
     "final_failed_snapshot_selected reason=prefer_terminal_candidate"
     "if scoreMode == \"itg\" then"
     "itgScorePercent = outgoingPercent")

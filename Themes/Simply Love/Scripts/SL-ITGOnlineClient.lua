@@ -11685,11 +11685,31 @@ function ITGOnline:MarkPlayTerminal(endpoint, state, callback)
 	end
 
 	local currentPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+	local finalScoreAcceptedForRound = validKey
+		and tostring(self.lastFinalScoreKey or "") == tostring(key or "")
+	local currentUserHasFinalResult = validKey and self:CurrentUserHasFinalResult(self.currentRoom) == true
+	if validKey
+		and state == "failed"
+		and (finalScoreAcceptedForRound or currentUserHasFinalResult)
+	then
+		self.onlineGameplayTerminalKey = terminalKey
+		self.onlineGameplayTerminalState = state
+		self:ApplyLocalPlayState(state, "terminal_skipped_failed_final_score_accepted")
+		online_flow_trace("mark_play_terminal_skipped state=failed"
+			.. " reason=failed_final_score_accepted"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " roundKey=" .. tostring(key)
+			.. " phase=" .. tostring(currentPhase)
+			.. " lastFinalScoreKey=" .. tostring(self.lastFinalScoreKey or "")
+			.. " hasFinalResult=" .. tostring(currentUserHasFinalResult))
+		safe_callback(callback, true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil)
+		return
+	end
 	if validKey
 		and currentPhase == "results"
 		and (
-			tostring(self.lastFinalScoreKey or "") == tostring(key or "")
-			or self:CurrentUserHasFinalResult(self.currentRoom)
+			finalScoreAcceptedForRound
+			or currentUserHasFinalResult
 		)
 	then
 		self.onlineGameplayTerminalKey = terminalKey
@@ -11902,7 +11922,8 @@ function ITGOnline:MarkPlayFailedEarly(source, callback)
 				or self.currentRoom and self.currentRoom.phase
 				or phase
 		)
-		if scoreRoomPhase == "results" then
+		local finalScoreAcceptedAfterSubmit = self:IsLiveScoreFinalizedForRound(key)
+		if scoreRoomPhase == "results" or finalScoreAcceptedAfterSubmit then
 			if self.onlineGameplayFailedEarlyInFlightKey == key then
 				self.onlineGameplayFailedEarlyInFlightKey = ""
 			end
@@ -11912,7 +11933,8 @@ function ITGOnline:MarkPlayFailedEarly(source, callback)
 				.. " roundKey=" .. tostring(key)
 				.. " reason=final_failed_score_accepted"
 				.. " roomPhase=" .. tostring(scoreRoomPhase)
-				.. " lastFinalScoreKey=" .. tostring(self.lastFinalScoreKey or ""))
+				.. " lastFinalScoreKey=" .. tostring(self.lastFinalScoreKey or "")
+				.. " finalScoreAccepted=" .. tostring(finalScoreAcceptedAfterSubmit == true))
 			safe_callback(callback, true, scoreDecoded, scoreResponse)
 			return
 		end
