@@ -23,7 +23,7 @@ class RageSoundReader_SpeedChange : public RageSoundReader_Filter {
   virtual int GetNextSourceFrame() const;
   virtual float GetStreamToSourceRatio() const;
 
-  void SetSpeedRatio(float fRatio);
+  bool SetSpeedRatio(float fRatio);
 
   /* Return true if the next Read() will start a new block, allowing GetRatio()
    * to be updated to a new value.  Used by RageSoundReader_PitchChange. */

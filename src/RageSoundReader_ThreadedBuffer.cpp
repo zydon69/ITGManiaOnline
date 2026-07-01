@@ -250,7 +250,13 @@ bool RageSoundReader_ThreadedBuffer::SetProperty(
   if (m_pSource.isNull()) {
     return false;
   }
-  return m_pSource->SetProperty(sProperty, fValue);
+
+  const bool bWasEnabled = DisableBuffering();
+  const bool bRet = m_pSource->SetProperty(sProperty, fValue);
+  if (bWasEnabled) {
+    EnableBuffering();
+  }
+  return bRet;
 }
 
 void RageSoundReader_ThreadedBuffer::BufferingThread() {
@@ -355,9 +361,9 @@ int RageSoundReader_ThreadedBuffer::FillBlock() {
     if (pBuf == nullptr || (iBufSize % iSamplesPerFrame) != 0) {
       iGotFrames = RageSoundReader::ERROR;
     } else {
-    iGotFrames = m_pSource->RetriedRead(
-        pBuf, std::min(g_iReadBlockSizeFrames, iBufSize / iSamplesPerFrame),
-        &iNextSourceFrame, &fRate);
+      iGotFrames = m_pSource->RetriedRead(
+          pBuf, std::min(g_iReadBlockSizeFrames, iBufSize / iSamplesPerFrame),
+          &iNextSourceFrame, &fRate);
     }
   }
 

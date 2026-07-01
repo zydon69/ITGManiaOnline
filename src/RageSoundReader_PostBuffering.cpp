@@ -78,6 +78,7 @@ bool RageSoundReader_PostBuffering::SetProperty(
     if (!std::isfinite(fValue)) {
       return false;
     }
+    LockMut(g_Mutex);
     m_fVolume = std::clamp(fValue, 0.0f, 1.0f);
     return true;
   }

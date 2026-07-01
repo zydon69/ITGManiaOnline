@@ -25,9 +25,9 @@ RageSoundReader_SpeedChange::RageSoundReader_SpeedChange(
   Reset();
 }
 
-void RageSoundReader_SpeedChange::SetSpeedRatio(float fRatio) {
+bool RageSoundReader_SpeedChange::SetSpeedRatio(float fRatio) {
   if (!std::isfinite(fRatio) || fRatio <= 0.0f) {
-    return;
+    return false;
   }
   m_fSpeedRatio = fRatio;
 
@@ -36,6 +36,7 @@ void RageSoundReader_SpeedChange::SetSpeedRatio(float fRatio) {
   if (m_iDataBufferAvailFrames == 0) {
     m_fTrailingSpeedRatio = m_fSpeedRatio;
   }
+  return true;
 }
 
 int RageSoundReader_SpeedChange::GetWindowSizeFrames() const {
@@ -280,8 +281,7 @@ int RageSoundReader_SpeedChange::Step() {
 
     int iBest = FindClosestMatch(
         &c.m_DataBuffer[m_iUncorrelatedPos], iUncorrelatedToMatch,
-        &c.m_DataBuffer[c.m_iCorrelatedPos], iCorrelatedToMatch,
-        m_Channels.size());
+        &c.m_DataBuffer[c.m_iCorrelatedPos], iCorrelatedToMatch, 1);
     c.m_iLastCorrelatedPos = c.m_iCorrelatedPos;
     c.m_iCorrelatedPos = iBest + m_iUncorrelatedPos;
     if (m_Channels[i].m_iCorrelatedPos < 0 ||
@@ -381,8 +381,7 @@ int RageSoundReader_SpeedChange::SetPosition(int iFrame) {
 bool RageSoundReader_SpeedChange::SetProperty(
     const std::string& sProperty, float fValue) {
   if (sProperty == "Speed") {
-    SetSpeedRatio(fValue);
-    return true;
+    return SetSpeedRatio(fValue);
   }
 
   return RageSoundReader_Filter::SetProperty(sProperty, fValue);

@@ -110,7 +110,9 @@ int RageSoundReader_PitchChange::Read(float* pBuf, int iFrames) {
         return RageSoundReader::ERROR;
       }
       float fRequestedSpeedRatio = m_fSpeedRatio / fActualPitchRatio;
-      m_pSpeedChange->SetSpeedRatio(fRequestedSpeedRatio);
+      if (!m_pSpeedChange->SetSpeedRatio(fRequestedSpeedRatio)) {
+        return RageSoundReader::ERROR;
+      }
       m_fLastSetPitchRatio = m_fPitchRatio;
       m_fLastSetSpeedRatio = m_fSpeedRatio;
     } else {
