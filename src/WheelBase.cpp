@@ -620,6 +620,8 @@ void WheelBase::ChangeMusic(int iDist) {
 }
 
 void WheelBase::RebuildWheelItems(int iDist) {
+  m_exprItemTransformFunction.ClearCache();
+
   const std::vector<WheelItemBaseData*>& data = m_CurWheelItemData;
   std::vector<WheelItemBase*>& items = m_WheelBaseItems;
   if (data.empty() || items.empty()) {

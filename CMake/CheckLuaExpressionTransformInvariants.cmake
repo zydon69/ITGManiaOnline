@@ -90,6 +90,10 @@ require_contains(
   "SRC-2666 orders item count in cache key")
 require_contains(
   "${wheel_base_cpp}"
+  "m_exprItemTransformFunction.ClearCache();"
+  "WheelBase clears transform cache when rebuilding wheel items")
+require_contains(
+  "${wheel_base_cpp}"
   "if (!m_exprItemTransformFunction.GetTransformCached("
   "WheelBase handles cached transform failure")
 require_contains(
