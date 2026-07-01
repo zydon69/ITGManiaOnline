@@ -47,6 +47,8 @@ read_source("src/RageSoundManager.cpp" rage_sound_manager_cpp)
 read_source("src/RageSoundReader_Extend.cpp" rage_sound_reader_extend_cpp)
 read_source("src/RageSoundReader_Pan.h" rage_sound_reader_pan_h)
 read_source("src/RageSoundReader_Pan.cpp" rage_sound_reader_pan_cpp)
+read_source("src/RageSoundReader_ChannelSplit.h" rage_sound_reader_channel_split_h)
+read_source("src/RageSoundReader_ChannelSplit.cpp" rage_sound_reader_channel_split_cpp)
 read_source("src/StepMania.cpp" stepmania_cpp)
 read_source("src/RageDisplay.cpp" rage_display_cpp)
 read_source("src/arch/LowLevelWindow/LowLevelWindow_MacOSX.mm" macos_window_cpp)
@@ -285,6 +287,54 @@ require_contains(
   "${rage_sound_reader_pan_cpp}"
   "RageSoundReader_Pan::Read called with a null output buffer"
   "RageSoundReader_Pan diagnoses invalid output buffers")
+require_contains(
+  "${rage_sound_reader_channel_split_h}"
+  "std::shared_ptr<RageSoundSplitterImpl> m_pImpl;"
+  "ChannelSplit shares implementation lifetime with shared_ptr")
+require_contains(
+  "${rage_sound_reader_channel_split_h}"
+  "RageSoundReader_Split(const RageSoundReader_Split&) = delete;"
+  "ChannelSplit split readers forbid unsafe copying")
+require_contains(
+  "${rage_sound_reader_channel_split_h}"
+  "RageSoundSplitter(const RageSoundSplitter&) = delete;"
+  "ChannelSplit splitters forbid unsafe copying")
+require_contains(
+  "${rage_sound_reader_channel_split_cpp}"
+  "std::unique_ptr<RageSoundReader> m_pSource;"
+  "ChannelSplit owns its source reader with unique_ptr")
+require_contains(
+  "${rage_sound_reader_channel_split_cpp}"
+  "mutable std::mutex m_Mutex;"
+  "ChannelSplit serializes shared source and buffer state")
+require_contains(
+  "${rage_sound_reader_channel_split_cpp}"
+  "WarnAuditFix(\"SRC-2755\""
+  "ChannelSplit diagnoses null source and impl paths")
+require_contains(
+  "${rage_sound_reader_channel_split_cpp}"
+  "WarnAuditFix(\"SRC-2756\""
+  "ChannelSplit diagnoses invalid read buffers")
+require_contains(
+  "${rage_sound_reader_channel_split_cpp}"
+  "WarnAuditFix(\"SRC-2757\""
+  "ChannelSplit validates channel maps")
+require_contains(
+  "${rage_sound_reader_channel_split_cpp}"
+  "WarnAuditFix(\"SRC-2758\""
+  "ChannelSplit guards frame and sample arithmetic")
+require_contains(
+  "${rage_sound_reader_channel_split_cpp}"
+  "RageSoundReader_Split cannot be copied safely"
+  "ChannelSplit refuses unsafe Copy")
+require_not_contains(
+  "${rage_sound_reader_channel_split_cpp}"
+  "m_iRefCount"
+  "ChannelSplit must not return to manual refcounting")
+require_not_contains(
+  "${rage_sound_reader_channel_split_cpp}"
+  "&m_sBuffer[0]"
+  "ChannelSplit must not take vector element zero before proving non-empty")
 
 require_contains(
   "${rage_sound_manager_h}"

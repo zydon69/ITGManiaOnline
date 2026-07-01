@@ -4,6 +4,7 @@
 #ifndef RAGE_SOUND_READER_CHANNEL_SPLIT
 #define RAGE_SOUND_READER_CHANNEL_SPLIT
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -13,32 +14,31 @@ class RageSoundSplitterImpl;
 
 class RageSoundReader_Split : public RageSoundReader {
  public:
-  RageSoundReader_Split(const RageSoundReader_Split& cpy);
-  ~RageSoundReader_Split();
-  virtual RageSoundReader_Split* Copy() const {
-    return new RageSoundReader_Split(*this);
-  }
+  RageSoundReader_Split(const RageSoundReader_Split&) = delete;
+  RageSoundReader_Split& operator=(const RageSoundReader_Split&) = delete;
+  ~RageSoundReader_Split() override;
+  RageSoundReader_Split* Copy() const override;
 
-  virtual int GetLength() const;
-  virtual int GetLength_Fast() const;
-  virtual int SetPosition(int iFrame);
-  virtual int Read(float* pBuf, int iFrames);
-  virtual int GetSampleRate() const;
-  virtual unsigned GetNumChannels() const;
-  virtual bool SetProperty(const std::string& sProperty, float fValue);
-  virtual int GetNextSourceFrame() const;
-  virtual float GetStreamToSourceRatio() const;
-  virtual std::string GetError() const;
+  int GetLength() const override;
+  int GetLength_Fast() const override;
+  int SetPosition(int iFrame) override;
+  int Read(float* pBuf, int iFrames) override;
+  int GetSampleRate() const override;
+  unsigned GetNumChannels() const override;
+  bool SetProperty(const std::string& sProperty, float fValue) override;
+  int GetNextSourceFrame() const override;
+  float GetStreamToSourceRatio() const override;
+  std::string GetError() const override;
 
   void AddSourceChannelToSound(int iFromChannel, int iToChannel);
 
  private:
-  RageSoundReader_Split(
-      RageSoundSplitterImpl* pImpl);  // create with RageSoundSplitter
+  // Create with RageSoundSplitter.
+  RageSoundReader_Split(std::shared_ptr<RageSoundSplitterImpl> pImpl);
   friend class RageSoundSplitterImpl;
   friend class RageSoundSplitter;
 
-  RageSoundSplitterImpl* m_pImpl;
+  std::shared_ptr<RageSoundSplitterImpl> m_pImpl;
   struct ChannelMap {
     int m_iFromChannel;
     int m_iToChannel;
@@ -57,11 +57,13 @@ class RageSoundReader_Split : public RageSoundReader {
 class RageSoundSplitter {
  public:
   RageSoundSplitter(RageSoundReader* pSource);
+  RageSoundSplitter(const RageSoundSplitter&) = delete;
+  RageSoundSplitter& operator=(const RageSoundSplitter&) = delete;
   ~RageSoundSplitter();
   RageSoundReader_Split* CreateSound();
 
  private:
-  RageSoundSplitterImpl* m_pImpl;
+  std::shared_ptr<RageSoundSplitterImpl> m_pImpl;
 };
 
 #endif

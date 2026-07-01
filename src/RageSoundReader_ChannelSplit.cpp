@@ -35,41 +35,84 @@
 #include "RageSoundReader_ChannelSplit.h"
 
 #include <algorithm>
-#include <climits>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <new>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "RageLog.h"
 #include "RageSoundMixBuffer.h"
 #include "RageSoundReader.h"
+#include "global.h"
 
 class RageSoundReader_Split;
 
-/* This class is refcounted, freed when all RageSoundReader_Split and
- * RageSoundSplitter classes release it. */
+namespace {
+constexpr int kMaxSplitOutputChannels = 64;
+
+bool FramesToSamples(int iFrames, unsigned iChannels, size_t* pSamples) {
+  if (iFrames < 0 || iChannels == 0) {
+    return false;
+  }
+  const size_t frames = static_cast<size_t>(iFrames);
+  const size_t channels = static_cast<size_t>(iChannels);
+  if (frames > std::numeric_limits<size_t>::max() / channels) {
+    return false;
+  }
+  *pSamples = frames * channels;
+  return true;
+}
+
+bool FrameRangeEnd(int iStartFrame, int iFrames, int* pEndFrame) {
+  if (iStartFrame < 0 || iFrames < 0) {
+    return false;
+  }
+  const int64_t end =
+      static_cast<int64_t>(iStartFrame) + static_cast<int64_t>(iFrames);
+  if (end > std::numeric_limits<int>::max()) {
+    return false;
+  }
+  *pEndFrame = static_cast<int>(end);
+  return true;
+}
+
+void WarnAuditFix(const char* sFinding, const std::string& sMessage) {
+  if (LOG != nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX %s: %s", sFinding, sMessage.c_str());
+  }
+}
+}  // namespace
+
 class RageSoundSplitterImpl {
  public:
-  RageSoundSplitterImpl(RageSoundReader* pSource) {
-    m_iRefCount = 1;
-    m_pSource = pSource;
-    m_iBufferPositionFrames = 0;
-  }
-
-  ~RageSoundSplitterImpl() { delete m_pSource; }
-
-  static void Release(RageSoundSplitterImpl* pImpl) {
-    --pImpl->m_iRefCount;
-    if (pImpl->m_iRefCount == 0) {
-      delete pImpl;
+  explicit RageSoundSplitterImpl(RageSoundReader* pSource)
+      : m_pSource(pSource), m_iBufferPositionFrames(0) {
+    if (pSource == nullptr) {
+      SetErrorLocked("RageSoundSplitter created without a source reader");
+      WarnAuditFix("SRC-2755", m_sError);
     }
   }
 
-  /* Request that m_sBuffer contain frames [iStartFrame,iStartFrame+iFrames). */
-  int ReadBuffer();
-  int m_iRefCount;
+  bool HasSourceLocked() const { return m_pSource != nullptr; }
 
-  RageSoundReader* m_pSource;
+  unsigned SourceChannelsLocked() const {
+    return HasSourceLocked() ? m_pSource->GetNumChannels() : 0;
+  }
+
+  void SetErrorLocked(const std::string& sError) { m_sError = sError; }
+
+  /* Request that m_sBuffer contain frames [iStartFrame,iStartFrame+iFrames). */
+  int ReadBufferLocked();
+
+  std::unique_ptr<RageSoundReader> m_pSource;
+  mutable std::mutex m_Mutex;
+  std::string m_sError;
 
   std::set<RageSoundReader_Split*> m_apSounds;
 
@@ -79,51 +122,99 @@ class RageSoundSplitterImpl {
 };
 
 int RageSoundReader_Split::GetLength() const {
-  return m_pImpl->m_pSource->GetLength();
+  auto impl = m_pImpl;
+  if (impl == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::mutex> lock(impl->m_Mutex);
+  return impl->HasSourceLocked() ? impl->m_pSource->GetLength() : 0;
 }
 int RageSoundReader_Split::GetLength_Fast() const {
-  return m_pImpl->m_pSource->GetLength_Fast();
+  auto impl = m_pImpl;
+  if (impl == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::mutex> lock(impl->m_Mutex);
+  return impl->HasSourceLocked() ? impl->m_pSource->GetLength_Fast() : 0;
 }
 int RageSoundReader_Split::GetSampleRate() const {
-  return m_pImpl->m_pSource->GetSampleRate();
+  auto impl = m_pImpl;
+  if (impl == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::mutex> lock(impl->m_Mutex);
+  return impl->HasSourceLocked() ? impl->m_pSource->GetSampleRate() : 0;
 }
 unsigned RageSoundReader_Split::GetNumChannels() const {
-  return m_iNumOutputChannels;
+  auto impl = m_pImpl;
+  if (impl == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::mutex> lock(impl->m_Mutex);
+  return static_cast<unsigned>(m_iNumOutputChannels);
 }
 int RageSoundReader_Split::GetNextSourceFrame() const {
+  auto impl = m_pImpl;
+  if (impl == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::mutex> lock(impl->m_Mutex);
   return m_iPositionFrame;
 }
 float RageSoundReader_Split::GetStreamToSourceRatio() const { return 1.0f; }
 std::string RageSoundReader_Split::GetError() const {
-  return m_pImpl->m_pSource->GetError();
+  auto impl = m_pImpl;
+  if (impl == nullptr) {
+    return "RageSoundReader_Split has no splitter implementation";
+  }
+  std::lock_guard<std::mutex> lock(impl->m_Mutex);
+  if (!impl->m_sError.empty()) {
+    return impl->m_sError;
+  }
+  return impl->HasSourceLocked() ? impl->m_pSource->GetError()
+                                 : "RageSoundReader_Split has no source reader";
 }
 
-RageSoundReader_Split::RageSoundReader_Split(RageSoundSplitterImpl* pImpl) {
-  m_pImpl = pImpl;
-  ++m_pImpl->m_iRefCount;
-  m_pImpl->m_apSounds.insert(this);
+RageSoundReader_Split::RageSoundReader_Split(
+    std::shared_ptr<RageSoundSplitterImpl> pImpl)
+    : m_pImpl(std::move(pImpl)) {
   m_iNumOutputChannels = 0;
   m_iPositionFrame = 0;
   m_iRequestFrames = 0;
-}
-
-RageSoundReader_Split::RageSoundReader_Split(const RageSoundReader_Split& cpy)
-    : RageSoundReader(cpy) {
-  m_pImpl = cpy.m_pImpl;
-  ++m_pImpl->m_iRefCount;
-  m_pImpl->m_apSounds.insert(this);
-  m_aChannels = cpy.m_aChannels;
-  m_iNumOutputChannels = cpy.m_iNumOutputChannels;
-  m_iPositionFrame = cpy.m_iPositionFrame;
-  m_iRequestFrames = cpy.m_iRequestFrames;
+  if (m_pImpl != nullptr) {
+    std::lock_guard<std::mutex> lock(m_pImpl->m_Mutex);
+    m_pImpl->m_apSounds.insert(this);
+  }
 }
 
 RageSoundReader_Split::~RageSoundReader_Split() {
-  m_pImpl->m_apSounds.erase(this);
-  RageSoundSplitterImpl::Release(m_pImpl);
+  auto impl = m_pImpl;
+  if (impl != nullptr) {
+    std::lock_guard<std::mutex> lock(impl->m_Mutex);
+    impl->m_apSounds.erase(this);
+  }
+}
+
+RageSoundReader_Split* RageSoundReader_Split::Copy() const {
+  WarnAuditFix(
+      "SRC-2759",
+      "RageSoundReader_Split cannot be copied safely because split readers "
+      "share source position and buffer state.");
+  return nullptr;
 }
 
 int RageSoundReader_Split::SetPosition(int iFrame) {
+  auto impl = m_pImpl;
+  if (impl == nullptr) {
+    return RageSoundReader::ERROR;
+  }
+  std::lock_guard<std::mutex> lock(impl->m_Mutex);
+  if (iFrame < 0) {
+    impl->SetErrorLocked(
+        "RageSoundReader_Split::SetPosition rejected a negative frame");
+    WarnAuditFix("SRC-2758", impl->m_sError);
+    return RageSoundReader::ERROR;
+  }
   m_iPositionFrame = iFrame;
 
   /* We can't tell whether we're past EOF.  We can't ReadBuffer here, because
@@ -136,120 +227,312 @@ int RageSoundReader_Split::SetPosition(int iFrame) {
 
 bool RageSoundReader_Split::SetProperty(
     const std::string& sProperty, float fValue) {
-  return m_pImpl->m_pSource->SetProperty(sProperty, fValue);
+  auto impl = m_pImpl;
+  if (impl == nullptr) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(impl->m_Mutex);
+  if (!impl->HasSourceLocked()) {
+    impl->SetErrorLocked(
+        "RageSoundReader_Split::SetProperty has no source reader");
+    WarnAuditFix("SRC-2755", impl->m_sError);
+    return false;
+  }
+  return impl->m_pSource->SetProperty(sProperty, fValue);
 }
 
 int RageSoundReader_Split::Read(float* pBuf, int iFrames) {
-  m_iRequestFrames = iFrames;
-  int iRet = m_pImpl->ReadBuffer();
+  auto impl = m_pImpl;
+  if (impl == nullptr) {
+    return RageSoundReader::ERROR;
+  }
+  std::lock_guard<std::mutex> lock(impl->m_Mutex);
+  if (iFrames == 0) {
+    m_iRequestFrames = 0;
+    return 0;
+  }
+  if (pBuf == nullptr) {
+    impl->SetErrorLocked(
+        "RageSoundReader_Split::Read called with a null output buffer");
+    WarnAuditFix("SRC-2756", impl->m_sError);
+    return RageSoundReader::ERROR;
+  }
+  int iEndFrame = 0;
+  if (!FrameRangeEnd(m_iPositionFrame, iFrames, &iEndFrame)) {
+    impl->SetErrorLocked(
+        "RageSoundReader_Split::Read frame range is invalid or overflowing");
+    WarnAuditFix("SRC-2758", impl->m_sError);
+    return RageSoundReader::ERROR;
+  }
+  if (!impl->HasSourceLocked()) {
+    impl->SetErrorLocked("RageSoundReader_Split::Read has no source reader");
+    WarnAuditFix("SRC-2755", impl->m_sError);
+    return RageSoundReader::ERROR;
+  }
+  if (m_iNumOutputChannels <= 0 || m_aChannels.empty()) {
+    impl->SetErrorLocked(
+        "RageSoundReader_Split::Read has no output channel mapping");
+    WarnAuditFix("SRC-2757", impl->m_sError);
+    return RageSoundReader::ERROR;
+  }
 
-  int iSamplesAvailable = m_pImpl->m_sBuffer.size();
-  const float* pSrc = &m_pImpl->m_sBuffer[0];
-  if (m_pImpl->m_iBufferPositionFrames < m_iPositionFrame) {
-    int iSkipFrames = m_iPositionFrame - m_pImpl->m_iBufferPositionFrames;
-    int iSkipSamples = iSkipFrames * m_pImpl->m_pSource->GetNumChannels();
-    pSrc += iSkipSamples;
+  m_iRequestFrames = iFrames;
+  int iRet = impl->ReadBufferLocked();
+
+  const unsigned sourceChannels = impl->SourceChannelsLocked();
+  if (sourceChannels == 0) {
+    impl->SetErrorLocked(
+        "RageSoundReader_Split::Read source reports zero channels");
+    WarnAuditFix("SRC-2755", impl->m_sError);
+    m_iRequestFrames = 0;
+    return RageSoundReader::ERROR;
+  }
+
+  size_t iSamplesAvailable = impl->m_sBuffer.size();
+  size_t iSkipSamples = 0;
+  if (impl->m_iBufferPositionFrames < m_iPositionFrame) {
+    size_t iComputedSkip = 0;
+    const int iSkipFrames = m_iPositionFrame - impl->m_iBufferPositionFrames;
+    if (!FramesToSamples(iSkipFrames, sourceChannels, &iComputedSkip)) {
+      impl->SetErrorLocked(
+          "RageSoundReader_Split::Read skip sample count overflow");
+      WarnAuditFix("SRC-2758", impl->m_sError);
+      m_iRequestFrames = 0;
+      return RageSoundReader::ERROR;
+    }
+    iSkipSamples = std::min(iComputedSkip, iSamplesAvailable);
     iSamplesAvailable -= iSkipSamples;
   }
 
-  int iFramesWanted = iFrames;
-  int iFramesAvailable =
-      iSamplesAvailable / (m_pImpl->m_pSource->GetNumChannels());
+  size_t iFramesAvailable = iSamplesAvailable / sourceChannels;
 
   /* Report any errors from Read() if we don't have any data buffered to
    * return.  If we do have data, finish returning it first. */
   if (iFramesAvailable == 0 && iRet < 0) {
+    m_iRequestFrames = 0;
     return iRet;
   }
+  if (iFramesAvailable == 0) {
+    m_iRequestFrames = 0;
+    impl->ReadBufferLocked();
+    return 0;
+  }
 
-  iFramesAvailable = std::min(iFramesAvailable, iFramesWanted);
+  iFramesAvailable =
+      std::min(iFramesAvailable, static_cast<size_t>(iFrames));
+  if (iFramesAvailable >
+      static_cast<size_t>(std::numeric_limits<unsigned>::max())) {
+    impl->SetErrorLocked(
+        "RageSoundReader_Split::Read frame count exceeds mixer range");
+    WarnAuditFix("SRC-2758", impl->m_sError);
+    m_iRequestFrames = 0;
+    return RageSoundReader::ERROR;
+  }
+
+  const float* pSrc = impl->m_sBuffer.data() + iSkipSamples;
 
   {
     RageSoundMixBuffer mix;
-    for (int i = 0; i < (int)m_aChannels.size(); ++i) {
-      const ChannelMap& chan = m_aChannels[i];
+    for (const ChannelMap& chan : m_aChannels) {
+      if (chan.m_iFromChannel < 0 ||
+          static_cast<unsigned>(chan.m_iFromChannel) >= sourceChannels ||
+          chan.m_iToChannel < 0 || chan.m_iToChannel >= m_iNumOutputChannels) {
+        impl->SetErrorLocked(
+            "RageSoundReader_Split::Read found an invalid channel mapping");
+        WarnAuditFix("SRC-2757", impl->m_sError);
+        m_iRequestFrames = 0;
+        return RageSoundReader::ERROR;
+      }
       mix.SetWriteOffset(chan.m_iToChannel);
       mix.write(
-          pSrc + chan.m_iFromChannel, iFramesAvailable,
-          m_pImpl->m_pSource->GetNumChannels(), m_iNumOutputChannels);
+          pSrc + chan.m_iFromChannel, static_cast<unsigned>(iFramesAvailable),
+          sourceChannels, m_iNumOutputChannels);
     }
 
     mix.read(pBuf);
   }
 
-  m_iPositionFrame += iFramesAvailable;
+  m_iPositionFrame = iEndFrame - (iFrames - static_cast<int>(iFramesAvailable));
 
   /* We no longer need the data we requested.  Clear our request, so the
    * memory can be freed. */
   m_iRequestFrames = 0;
-  m_pImpl->ReadBuffer();
-  return iFramesAvailable;
+  impl->ReadBufferLocked();
+  return static_cast<int>(iFramesAvailable);
 }
 
-int RageSoundSplitterImpl::ReadBuffer() {
+int RageSoundSplitterImpl::ReadBufferLocked() {
+  if (!HasSourceLocked()) {
+    SetErrorLocked("RageSoundSplitterImpl::ReadBuffer has no source reader");
+    WarnAuditFix("SRC-2755", m_sError);
+    return RageSoundReader::ERROR;
+  }
+
+  const unsigned sourceChannels = SourceChannelsLocked();
+  if (sourceChannels == 0) {
+    SetErrorLocked("RageSoundSplitterImpl source reports zero channels");
+    WarnAuditFix("SRC-2755", m_sError);
+    return RageSoundReader::ERROR;
+  }
+  if (m_apSounds.empty()) {
+    m_sBuffer.clear();
+    return 1;
+  }
+
   /* Discard any bytes that are no longer requested by any sound. */
-  int iMinFrameRequested = INT_MAX;
-  int iMaxFrameRequested = INT_MIN;
+  int64_t iMinFrameRequested = std::numeric_limits<int64_t>::max();
+  int64_t iMaxFrameRequested = std::numeric_limits<int64_t>::min();
   for (RageSoundReader_Split* snd : m_apSounds) {
-    iMinFrameRequested = std::min(iMinFrameRequested, snd->m_iPositionFrame);
-    iMaxFrameRequested = std::max(
-        iMaxFrameRequested, snd->m_iPositionFrame + snd->m_iRequestFrames);
+    int iEndFrame = 0;
+    if (!FrameRangeEnd(
+            snd->m_iPositionFrame, snd->m_iRequestFrames, &iEndFrame)) {
+      SetErrorLocked(
+          "RageSoundSplitterImpl::ReadBuffer found an invalid reader range");
+      WarnAuditFix("SRC-2758", m_sError);
+      return RageSoundReader::ERROR;
+    }
+    iMinFrameRequested = std::min(
+        iMinFrameRequested, static_cast<int64_t>(snd->m_iPositionFrame));
+    iMaxFrameRequested =
+        std::max(iMaxFrameRequested, static_cast<int64_t>(iEndFrame));
   }
 
   if (iMinFrameRequested > m_iBufferPositionFrames) {
-    int iEraseFrames = iMinFrameRequested - m_iBufferPositionFrames;
-    iEraseFrames = std::min(iEraseFrames, (int)m_sBuffer.size());
-    m_sBuffer.erase(
-        m_sBuffer.begin(),
-        m_sBuffer.begin() +
-            static_cast<size_t>(iEraseFrames) * m_pSource->GetNumChannels());
-    m_iBufferPositionFrames += iEraseFrames;
+    const size_t iFramesBuffered = m_sBuffer.size() / sourceChannels;
+    const size_t iFramesToSkip = static_cast<size_t>(
+        iMinFrameRequested - static_cast<int64_t>(m_iBufferPositionFrames));
+    const size_t iEraseFrames = std::min(iFramesToSkip, iFramesBuffered);
+    const size_t iEraseSamples = iEraseFrames * sourceChannels;
+    m_sBuffer.erase(m_sBuffer.begin(), m_sBuffer.begin() + iEraseSamples);
+    const int64_t iNewBufferPosition =
+        static_cast<int64_t>(m_iBufferPositionFrames) +
+        static_cast<int64_t>(iEraseFrames);
+    if (iNewBufferPosition > std::numeric_limits<int>::max()) {
+      SetErrorLocked("RageSoundSplitterImpl buffer position overflow");
+      WarnAuditFix("SRC-2758", m_sError);
+      return RageSoundReader::ERROR;
+    }
+    m_iBufferPositionFrames = static_cast<int>(iNewBufferPosition);
   }
 
   if (iMinFrameRequested != m_iBufferPositionFrames) {
-    m_pSource->SetPosition(iMinFrameRequested);
-    m_iBufferPositionFrames = iMinFrameRequested;
+    if (iMinFrameRequested < 0 ||
+        iMinFrameRequested > std::numeric_limits<int>::max()) {
+      SetErrorLocked("RageSoundSplitterImpl cannot seek to invalid frame");
+      WarnAuditFix("SRC-2758", m_sError);
+      return RageSoundReader::ERROR;
+    }
+    int iSeekRet = m_pSource->SetPosition(static_cast<int>(iMinFrameRequested));
+    if (iSeekRet < 0) {
+      m_sBuffer.clear();
+      return iSeekRet;
+    }
+    m_iBufferPositionFrames = static_cast<int>(iMinFrameRequested);
     m_sBuffer.clear();
   }
 
-  int iFramesBuffered = m_sBuffer.size() / m_pSource->GetNumChannels();
+  const size_t iFramesBuffered = m_sBuffer.size() / sourceChannels;
 
-  int iFramesToRead =
-      iMaxFrameRequested - (m_iBufferPositionFrames + iFramesBuffered);
-  if (iFramesToRead <= 0) {
+  const int64_t iBufferedEndFrame =
+      static_cast<int64_t>(m_iBufferPositionFrames) +
+      static_cast<int64_t>(iFramesBuffered);
+  const int64_t iFramesToRead64 = iMaxFrameRequested - iBufferedEndFrame;
+  if (iFramesToRead64 <= 0) {
     return 1;  // requested data already buffered
   }
+  if (iFramesToRead64 > std::numeric_limits<int>::max()) {
+    SetErrorLocked("RageSoundSplitterImpl read request is too large");
+    WarnAuditFix("SRC-2758", m_sError);
+    return RageSoundReader::ERROR;
+  }
+  const int iFramesToRead = static_cast<int>(iFramesToRead64);
 
-  int iSamplesToRead = iFramesToRead * m_pSource->GetNumChannels();
-  int iOldSizeSamples = m_sBuffer.size();
-  m_sBuffer.resize(iOldSizeSamples + iSamplesToRead);
-  int iGotFrames =
-      m_pSource->Read(&m_sBuffer[0] + iOldSizeSamples, iFramesToRead);
+  size_t iSamplesToRead = 0;
+  if (!FramesToSamples(iFramesToRead, sourceChannels, &iSamplesToRead)) {
+    SetErrorLocked("RageSoundSplitterImpl read sample count overflow");
+    WarnAuditFix("SRC-2758", m_sError);
+    return RageSoundReader::ERROR;
+  }
+  const size_t iOldSizeSamples = m_sBuffer.size();
+  if (iSamplesToRead >
+      std::numeric_limits<size_t>::max() - iOldSizeSamples) {
+    SetErrorLocked("RageSoundSplitterImpl buffer resize overflow");
+    WarnAuditFix("SRC-2758", m_sError);
+    return RageSoundReader::ERROR;
+  }
+  try {
+    m_sBuffer.resize(iOldSizeSamples + iSamplesToRead);
+  } catch (const std::bad_alloc&) {
+    SetErrorLocked("RageSoundSplitterImpl could not allocate read buffer");
+    WarnAuditFix("SRC-2758", m_sError);
+    return RageSoundReader::ERROR;
+  }
+
+  int iGotFrames = m_pSource->Read(
+      m_sBuffer.data() + iOldSizeSamples, iFramesToRead);
   if (iGotFrames < 0) {
     m_sBuffer.resize(iOldSizeSamples);
     return iGotFrames;
   }
+  if (iGotFrames > iFramesToRead) {
+    m_sBuffer.resize(iOldSizeSamples);
+    SetErrorLocked("RageSoundSplitterImpl source returned too many frames");
+    WarnAuditFix("SRC-2758", m_sError);
+    return RageSoundReader::ERROR;
+  }
 
-  int iGotSamples = iGotFrames * m_pSource->GetNumChannels();
+  size_t iGotSamples = 0;
+  if (!FramesToSamples(iGotFrames, sourceChannels, &iGotSamples)) {
+    m_sBuffer.resize(iOldSizeSamples);
+    SetErrorLocked("RageSoundSplitterImpl returned sample count overflow");
+    WarnAuditFix("SRC-2758", m_sError);
+    return RageSoundReader::ERROR;
+  }
   m_sBuffer.resize(iOldSizeSamples + iGotSamples);
   return 1;
 }
 
 void RageSoundReader_Split::AddSourceChannelToSound(
     int iFromChannel, int iToChannel) {
+  auto impl = m_pImpl;
+  if (impl == nullptr) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(impl->m_Mutex);
+  const unsigned sourceChannels = impl->SourceChannelsLocked();
+  if (sourceChannels == 0 || iFromChannel < 0 ||
+      static_cast<unsigned>(iFromChannel) >= sourceChannels ||
+      iToChannel < 0 || iToChannel >= kMaxSplitOutputChannels) {
+    impl->SetErrorLocked(
+        "RageSoundReader_Split::AddSourceChannelToSound rejected an invalid "
+        "channel mapping");
+    WarnAuditFix("SRC-2757", impl->m_sError);
+    return;
+  }
+
   m_aChannels.push_back(ChannelMap(iFromChannel, iToChannel));
   m_iNumOutputChannels = std::max(m_iNumOutputChannels, iToChannel + 1);
 }
 
 RageSoundSplitter::RageSoundSplitter(RageSoundReader* pSource) {
-  m_pImpl = new RageSoundSplitterImpl(pSource);
+  m_pImpl = std::make_shared<RageSoundSplitterImpl>(pSource);
 }
 
 RageSoundSplitter::~RageSoundSplitter() {
-  RageSoundSplitterImpl::Release(m_pImpl);
 }
 
 RageSoundReader_Split* RageSoundSplitter::CreateSound() {
+  if (m_pImpl == nullptr) {
+    return nullptr;
+  }
+  {
+    std::lock_guard<std::mutex> lock(m_pImpl->m_Mutex);
+    if (!m_pImpl->HasSourceLocked()) {
+      m_pImpl->SetErrorLocked("RageSoundSplitter::CreateSound has no source");
+      WarnAuditFix("SRC-2755", m_pImpl->m_sError);
+      return nullptr;
+    }
+  }
   return new RageSoundReader_Split(m_pImpl);
 }
 
