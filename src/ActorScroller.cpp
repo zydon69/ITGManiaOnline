@@ -117,6 +117,24 @@ int ActorScroller::NormalizeShiftDistance(int iDist) const {
   return normalized;
 }
 
+void ActorScroller::ResetScrollerLoadState() {
+  m_fSecondsPerItem = 1.0f;
+  m_fSecondsPauseBetweenItems = 0.0f;
+  m_fNumItemsToDraw = 7.0f;
+  m_bLoop = false;
+  m_bWrap = false;
+  m_fPauseCountdownSeconds = 0.0f;
+  m_fQuantizePixels = 0.0f;
+  m_fMaskWidth = 0.0f;
+  m_fMaskHeight = 0.0f;
+  DisableMask();
+
+  LuaReference nilReference;
+  nilReference.SetFromNil();
+  SetTransformFromReference(nilReference);
+  SetNumSubdivisions(1);
+}
+
 void ActorScroller::SyncNumItemsToChildren() {
   if (SyncItemCountWithChildren()) {
     m_iNumItems = (int)std::min<size_t>(
@@ -251,6 +269,7 @@ void ActorScroller::LoadFromNode(const XNode* pNode) {
         "SRC_AUDIT_FIX SRC-774: ActorScroller ignored null XML node.");
     return;
   }
+  ResetScrollerLoadState();
   ActorFrame::LoadFromNode(pNode);
 
   Load2();

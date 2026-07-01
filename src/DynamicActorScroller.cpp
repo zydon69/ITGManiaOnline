@@ -187,7 +187,7 @@ void DynamicActorScroller::ShiftSubActors(int iDist) {
         continue;
       }
       Lua* L = LUA->Get();
-      lua_pushnumber(L, i);
+      lua_pushnumber(L, iItem);
       actor->m_pLuaInstance->Set(L, "ItemIndex");
       LUA->Release(L);
     }
@@ -199,6 +199,9 @@ void DynamicActorScroller::ShiftSubActors(int iDist) {
 void DynamicActorScroller::ConfigureActor(Actor* pActor, int iItem) {
   if (LUA == nullptr || pActor == nullptr || !m_LoadFunction.IsSet() ||
       m_LoadFunction.IsNil()) {
+    if (pActor != nullptr) {
+      pActor->SetVisible(false);
+    }
     WarnDynamicActorScrollerAuditFix(
         "SRC_AUDIT_FIX SRC-783: DynamicActorScroller skipped invalid "
         "ConfigureActor.");
@@ -209,18 +212,26 @@ void DynamicActorScroller::ConfigureActor(Actor* pActor, int iItem) {
   if (!lua_isfunction(L, -1)) {
     lua_pop(L, 1);
     LUA->Release(L);
+    pActor->SetVisible(false);
     WarnDynamicActorScrollerAuditFix(
         "SRC_AUDIT_FIX SRC-783: DynamicActorScroller skipped non-function "
         "ConfigureActor.");
     return;
   }
+  pActor->SetVisible(true);
   pActor->PushSelf(L);
   LuaHelpers::Push(L, iItem);
 
   std::string Error = "Error running LoadFunction: ";
-  LuaHelpers::RunScriptOnStack(L, Error, 2, 0, true);  // 2 args, 0 results
+  const bool ok =
+      LuaHelpers::RunScriptOnStack(L, Error, 2, 0, true);  // 2 args, 0 results
 
   LUA->Release(L);
+  if (!ok) {
+    pActor->SetVisible(false);
+    WarnDynamicActorScrollerAuditFix(
+        "SRC_AUDIT_FIX SRC-2660: DynamicActorScroller hid failed item.");
+  }
 }
 
 REGISTER_ACTOR_CLASS_WITH_NAME(

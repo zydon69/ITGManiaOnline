@@ -87,6 +87,7 @@ class ActorScroller : public ActorFrame {
 
   float ClampItemIndex(float fItemIndex) const;
   int NormalizeShiftDistance(int iDist) const;
+  void ResetScrollerLoadState();
   void SyncNumItemsToChildren();
 
   int m_iNumItems;
