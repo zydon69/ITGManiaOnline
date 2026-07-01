@@ -12914,12 +12914,44 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 		self.ignoredRoomEventsUntil[roomKey] = nil
 	end
 	self:MarkLeavingRoom(roomId, false)
-			self:Request("POST", "/rooms/" .. tostring(roomId) .. "/join", {}, function(ok, decoded, response)
+
+	local submitJoinRequest
+	submitJoinRequest = function(prefetchOk, prefetchDecoded, prefetchResponse)
+		local freshPhase = "nil"
+		local freshRoomFound = false
+		if prefetchOk and type(prefetchDecoded) == "table" then
+			local lobbyPayload = self:LobbySearchPayload(prefetchDecoded)
+			self.cachedLobbySearchPayload = lobbyPayload
+			for _, lobby in ipairs(lobbyPayload.lobbies or {}) do
+				local candidateRoomId = lobby and (lobby.roomId or lobby.code or lobby.id)
+				if online_room_ids_match(candidateRoomId, joinIntentRoomId) then
+					freshRoomFound = true
+					freshPhase = tostring(lobby.phase or "nil")
+					break
+				end
+			end
+			online_flow_trace("join_room_prefetch_applied room=" .. tostring(roomId)
+				.. " found=" .. tostring(freshRoomFound == true)
+				.. " phase=" .. tostring(freshPhase)
+				.. " lobbies=" .. tostring(#(lobbyPayload.lobbies or {}))
+				.. " onlinePlayers=" .. tostring(#(lobbyPayload.onlinePlayers or {})))
+			safe_broadcast("LobbySearched", lobbyPayload)
+		else
+			online_flow_trace("join_room_prefetch_failed_continue room=" .. tostring(roomId)
+				.. " ok=" .. tostring(prefetchOk == true)
+				.. " status=" .. tostring(prefetchResponse and prefetchResponse.statusCode or "nil")
+				.. " error=" .. tostring(prefetchDecoded and prefetchDecoded.error_code or prefetchResponse and prefetchResponse.errorMessage or "nil"))
+		end
+
+		self:Request("POST", "/rooms/" .. tostring(roomId) .. "/join", {}, function(ok, decoded, response)
 			online_flow_trace("join_room_response room=" .. tostring(roomId)
 				.. " ok=" .. tostring(ok == true)
 				.. " status=" .. tostring(response and response.statusCode or "nil")
 				.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
 				.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
+				.. " prefetched=" .. tostring(prefetchOk == true)
+				.. " prefetchFoundRoom=" .. tostring(freshRoomFound == true)
+				.. " prefetchPhase=" .. tostring(freshPhase)
 				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
 			self:TraceOnlineState("join_room_response", {
@@ -12952,6 +12984,12 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 			safe_callback(callback, ok, decoded, response)
 		end)
 	end
+
+	online_flow_trace("join_room_prefetch_begin room=" .. tostring(roomId)
+		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+	self:FetchLobby(submitJoinRequest)
+end
 
 function ITGOnline:CancelJoinRequest(callback)
 		local joinRequestId = self.pendingJoinRequestId
