@@ -61,6 +61,14 @@ require_not_contains(
   "NormalizeOffsetForCache(fPositionOffsetFromCenter)"
   "SRC-2667 remains excluded from this one-entry reintroduction")
 require_contains(
+  "${lua_expression_transform_cpp}"
+  "SRC_AUDIT_FIX SRC-2668"
+  "non-nil Lua references are rejected when the Lua manager is unavailable")
+require_contains(
+  "${lua_expression_transform_cpp}"
+  "m_exprTransformFunction.SetFromNil();"
+  "LuaExpressionTransform falls back to nil after rejecting an unsafe reference")
+require_contains(
   "${lua_expression_transform_h}"
   "int iNumItems;"
   "SRC-2666 includes item count in cache key")

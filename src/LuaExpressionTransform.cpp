@@ -23,6 +23,14 @@ LuaExpressionTransform::LuaExpressionTransform() { m_iNumSubdivisions = 1; }
 LuaExpressionTransform::~LuaExpressionTransform() {}
 
 void LuaExpressionTransform::SetFromReference(const LuaReference& ref) {
+  if (LUA == nullptr && ref.IsSet() && !ref.IsNil()) {
+    WarnLuaExpressionTransformAuditFix(
+        "SRC_AUDIT_FIX SRC-2668: LuaExpressionTransform skipped non-nil "
+        "reference without Lua manager.");
+    m_exprTransformFunction.SetFromNil();
+    ClearCache();
+    return;
+  }
   m_exprTransformFunction = ref;
   ClearCache();
 }
