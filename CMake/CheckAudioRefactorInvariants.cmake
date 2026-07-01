@@ -44,6 +44,7 @@ read_source("src/GameSoundManager.cpp" game_sound_manager_cpp)
 read_source("src/AutoKeysounds.cpp" auto_keysounds_cpp)
 read_source("src/RageSoundManager.h" rage_sound_manager_h)
 read_source("src/RageSoundManager.cpp" rage_sound_manager_cpp)
+read_source("src/RageSoundReader_Extend.cpp" rage_sound_reader_extend_cpp)
 read_source("src/StepMania.cpp" stepmania_cpp)
 read_source("src/RageDisplay.cpp" rage_display_cpp)
 read_source("src/arch/LowLevelWindow/LowLevelWindow_MacOSX.mm" macos_window_cpp)
@@ -258,6 +259,14 @@ require_not_contains(
   "${auto_keysounds_cpp}"
   "ASSERT_M(\n      m_pSharedSound != nullptr"
   "AutoKeysounds must not assert on songs without playable keysounds")
+require_contains(
+  "${rage_sound_reader_extend_cpp}"
+  "SRC_AUDIT_FIX SRC-2751"
+  "RageSoundReader_Extend logs null source readers without crashing")
+require_not_contains(
+  "${rage_sound_reader_extend_cpp}"
+  "ASSERT_M(\n      pSource != nullptr"
+  "RageSoundReader_Extend must not assert on null source readers")
 
 require_contains(
   "${rage_sound_manager_h}"

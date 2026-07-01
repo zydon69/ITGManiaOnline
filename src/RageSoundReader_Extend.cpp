@@ -6,6 +6,7 @@
 #include <limits>
 #include <string>
 
+#include "RageLog.h"
 #include "RageSoundReader.h"
 #include "RageSoundReader_Filter.h"
 #include "RageSoundUtil.h"
@@ -69,18 +70,24 @@ int SaturatingAddFrames(int a, int b) {
 
 RageSoundReader_Extend::RageSoundReader_Extend(RageSoundReader* pSource)
     : RageSoundReader_Filter(pSource) {
-  ASSERT_M(
-      pSource != nullptr,
-      "The music file was not found! Was it deleted or moved while the game "
-      "was on?");
-  m_iPositionFrames = pSource->GetNextSourceFrame();
-
   m_StopMode = M_STOP;
+  m_iPositionFrames = 0;
   m_iStartFrames = 0;
   m_iLengthFrames = -1;
   m_iFadeOutFrames = 0;
   m_iFadeInFrames = 0;
   m_bIgnoreFadeInFrames = false;
+
+  if (pSource == nullptr) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2751: RageSoundReader_Extend created without "
+          "a source reader.");
+    }
+    return;
+  }
+
+  m_iPositionFrames = pSource->GetNextSourceFrame();
 }
 
 int RageSoundReader_Extend::SetPosition(int iFrame) {
