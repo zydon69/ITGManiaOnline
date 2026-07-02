@@ -2,16 +2,42 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 
 Surface::Surface(const Surface& cpy) {
   iWidth = cpy.iWidth;
   iHeight = cpy.iHeight;
   iPitch = cpy.iPitch;
-  if (cpy.pRGBA) {
-    pRGBA = new unsigned char[iHeight * iPitch];
+  const size_t iBufferSize =
+      iHeight > 0 && iPitch > 0 ? static_cast<size_t>(iHeight) * iPitch : 0;
+  if (cpy.pRGBA && iBufferSize > 0) {
+    pRGBA = new unsigned char[iBufferSize];
+    memcpy(pRGBA, cpy.pRGBA, iBufferSize);
   } else {
     pRGBA = NULL;
   }
+}
+
+Surface& Surface::operator=(const Surface& rhs) {
+  if (this == &rhs) {
+    return *this;
+  }
+
+  const size_t iBufferSize = rhs.iHeight > 0 && rhs.iPitch > 0
+                                 ? static_cast<size_t>(rhs.iHeight) * rhs.iPitch
+                                 : 0;
+  unsigned char* pNewRGBA = NULL;
+  if (rhs.pRGBA && iBufferSize > 0) {
+    pNewRGBA = new unsigned char[iBufferSize];
+    memcpy(pNewRGBA, rhs.pRGBA, iBufferSize);
+  }
+
+  delete[] pRGBA;
+  iWidth = rhs.iWidth;
+  iHeight = rhs.iHeight;
+  iPitch = rhs.iPitch;
+  pRGBA = pNewRGBA;
+  return *this;
 }
 
 void BitmapToSurface(HBITMAP hBitmap, Surface* pSurf) {
@@ -137,20 +163,37 @@ bool SavePNG(FILE* f, char szErrorbuf[1024], const Surface* pSurf) {
      32, Swap32BE( 0xFF000000 ), Swap32BE( 0x00FF0000 ), Swap32BE( 0x0000FF00 ),
                           Swap32BE( 0x000000FF ) );
   */
+  if (szErrorbuf == NULL) {
+    return false;
+  }
+
+  szErrorbuf[0] = 0;
+  if (f == NULL) {
+    snprintf(szErrorbuf, 1024, "%s", "file is not open");
+    return false;
+  }
+
+  if (pSurf == NULL || pSurf->pRGBA == NULL || pSurf->iWidth <= 0 ||
+      pSurf->iHeight <= 0 || pSurf->iPitch <= 0 ||
+      pSurf->iWidth > pSurf->iPitch / 4) {
+    snprintf(szErrorbuf, 1024, "%s", "invalid PNG surface");
+    return false;
+  }
+
   error_info error;
   error.szErr = szErrorbuf;
 
   png_struct* pPng = png_create_write_struct(
       PNG_LIBPNG_VER_STRING, &error, PNG_Error, PNG_Warning);
   if (pPng == NULL) {
-    sprintf(szErrorbuf, "creating png_create_write_struct failed");
+    snprintf(szErrorbuf, 1024, "%s", "creating png_create_write_struct failed");
     return false;
   }
 
   png_info* pInfo = png_create_info_struct(pPng);
   if (pInfo == NULL) {
     png_destroy_write_struct(&pPng, NULL);
-    sprintf(szErrorbuf, "creating png_create_info_struct failed");
+    snprintf(szErrorbuf, 1024, "%s", "creating png_create_info_struct failed");
     return false;
   }
 

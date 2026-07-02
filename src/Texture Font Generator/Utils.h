@@ -7,9 +7,10 @@
 #include "stdafx.h"
 
 struct Surface {
-  Surface() { pRGBA = NULL; }
+  Surface() : iWidth(0), iHeight(0), iPitch(0), pRGBA(NULL) {}
   ~Surface() { delete[] pRGBA; }
   Surface(const Surface& cpy);
+  Surface& operator=(const Surface& rhs);
   int iWidth;
   int iHeight;
   int iPitch;
