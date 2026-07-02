@@ -1366,9 +1366,7 @@ bool ScreenSelectMusic::DetectCodes(const InputEventPlus& input) {
         m_MusicWheel.WheelIsLocked() || m_MusicWheel.IsRouletting()) {
       PlaySoundIfLoaded(m_soundLocked);
     } else {
-      std::string sCurSection = m_MusicWheel.GetSelectedSection();
-      m_MusicWheel.SelectSection(sCurSection);
-      m_MusicWheel.SetOpenSection("");
+      m_MusicWheel.CloseOpenSectionOneLevel();
       AfterMusicChange();
     }
   } else {

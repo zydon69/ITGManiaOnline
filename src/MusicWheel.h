@@ -47,6 +47,7 @@ class MusicWheel : public WheelBase {
   bool SelectSong(const Song* p);
   bool SelectCourse(const Course* p);
   bool SelectSection(const std::string& SectionName);
+  bool CloseOpenSectionOneLevel();
   void SetOpenSection(std::string group);
   SortOrder GetSortOrder() const;
   virtual void ChangeMusic(int dist); /* +1 or -1 */  // CHECK THIS
@@ -100,6 +101,7 @@ class MusicWheel : public WheelBase {
   // sm-ssc additions:
   ThemeMetric<bool> USE_SECTIONS_WITH_PREFERRED_GROUP;
   ThemeMetric<bool> HIDE_INACTIVE_SECTIONS;
+  ThemeMetric<bool> HIDE_INACTIVE_PARENT_SECTIONS;
   ThemeMetric<bool> HIDE_ACTIVE_SECTION_TITLE;
   ThemeMetric<bool> REMIND_WHEEL_POSITIONS;
   ThemeMetric<RageColor> ROULETTE_COLOR;
@@ -110,6 +112,7 @@ class MusicWheel : public WheelBase {
   ThemeMetric<std::string> CUSTOM_WHEEL_ITEM_NAMES;
   ThemeMetricMap<std::string> CUSTOM_CHOICES;
   ThemeMetricMap<RageColor> CUSTOM_CHOICE_COLORS;
+  std::string m_sExpandedParentSectionName;
 
  private:
   const Style* GetCurrentWheelStyle(PlayerNumber pn = PLAYER_INVALID) const;
@@ -133,6 +136,8 @@ class MusicWheel : public WheelBase {
   void FilterWheelItemDatas(
       std::vector<MusicWheelItemData*>& aUnFilteredDatas,
       std::vector<MusicWheelItemData*>& aFilteredData, SortOrder so);
+  void SetOpenSections(
+      const std::string& parentSection, const std::string& section);
 };
 
 #endif
