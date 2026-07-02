@@ -130,6 +130,7 @@ RageLog::~RageLog() {
   RageUtil::SafeDelete(g_fileLog);
   RageUtil::SafeDelete(g_fileInfo);
   RageUtil::SafeDelete(g_fileUserLog);
+  RageUtil::SafeDelete(g_fileTimeLog);
 }
 
 void RageLog::SetLogToDisk(bool b) {
@@ -143,6 +144,9 @@ void RageLog::SetLogToDisk(bool b) {
     if (g_fileLog->IsOpen()) {
       g_fileLog->Close();
     }
+    if (g_fileTimeLog->IsOpen()) {
+      g_fileTimeLog->Close();
+    }
     return;
   }
 
@@ -150,6 +154,12 @@ void RageLog::SetLogToDisk(bool b) {
     fprintf(
         stderr, "Couldn't open %s: %s\n", LOG_PATH,
         g_fileLog->GetError().c_str());
+  }
+
+  if (!g_fileTimeLog->Open(TIME_PATH, RageFile::WRITE | RageFile::STREAMED)) {
+    fprintf(
+        stderr, "Couldn't open %s: %s\n", TIME_PATH,
+        g_fileTimeLog->GetError().c_str());
   }
 }
 
