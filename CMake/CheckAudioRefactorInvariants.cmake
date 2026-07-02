@@ -51,6 +51,8 @@ read_source("src/RageSoundReader_Preload.h" rage_sound_reader_preload_h)
 read_source("src/RageSoundReader_Preload.cpp" rage_sound_reader_preload_cpp)
 read_source("src/RageSoundReader_Pan.h" rage_sound_reader_pan_h)
 read_source("src/RageSoundReader_Pan.cpp" rage_sound_reader_pan_cpp)
+read_source("src/RageSoundReader_WAV.h" rage_sound_reader_wav_h)
+read_source("src/RageSoundReader_WAV.cpp" rage_sound_reader_wav_cpp)
 read_source("src/RageSoundReader_ChannelSplit.h" rage_sound_reader_channel_split_h)
 read_source("src/RageSoundReader_ChannelSplit.cpp" rage_sound_reader_channel_split_cpp)
 read_source("src/RageSoundMixBuffer.h" rage_sound_mix_buffer_h)
@@ -319,6 +321,26 @@ require_not_contains(
   "${rage_sound_reader_preload_cpp}"
   "#define framesize"
   "RageSoundReader_Preload must not hide frame byte arithmetic in a macro")
+require_contains(
+  "${rage_sound_reader_wav_h}"
+  "RageSoundReader_WAV(const RageSoundReader_WAV&) = delete;"
+  "RageSoundReader_WAV forbids unsafe implicit copying")
+require_contains(
+  "${rage_sound_reader_wav_h}"
+  "RageSoundReader_WAV* Copy() const override;"
+  "RageSoundReader_WAV copy contract is explicit")
+require_contains(
+  "${rage_sound_reader_wav_cpp}"
+  "SRC_AUDIT_FIX SRC-2797"
+  "RageSoundReader_WAV converts allocation failures into decoder errors")
+require_contains(
+  "${rage_sound_reader_wav_cpp}"
+  "void RageSoundReader_WAV::Close()"
+  "RageSoundReader_WAV has a real close/reset implementation")
+require_contains(
+  "${rage_sound_reader_wav_cpp}"
+  "iBufferRemainingSamples / m_WavData.m_iChannels"
+  "ADPCM source-frame mapping treats buffer counters as samples")
 require_contains(
   "${rage_sound_reader_pan_h}"
   "RageSoundReader_Pan* Copy() const override"

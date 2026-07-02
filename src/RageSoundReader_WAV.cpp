@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -270,8 +271,13 @@ struct WavReaderADPCM : public WavReader {
       m_sError = "ADPCM WAV block too large";
       return false;
     }
-    m_iaCoef1.resize(iNumCoef);
-    m_iaCoef2.resize(iNumCoef);
+    try {
+      m_iaCoef1.resize(iNumCoef);
+      m_iaCoef2.resize(iNumCoef);
+    } catch (const std::bad_alloc&) {
+      m_sError = "SRC_AUDIT_FIX SRC-2797: ADPCM coefficient allocation failed";
+      return false;
+    }
     for (int i = 0; i < iNumCoef; ++i) {
       m_iaCoef1[i] = FileReading::read_16_le(m_File, m_sError);
       m_iaCoef2[i] = FileReading::read_16_le(m_File, m_sError);
@@ -281,7 +287,12 @@ struct WavReaderADPCM : public WavReader {
       return false;
     }
 
-    m_pBuffer = new float[m_iFramesPerBlock * m_WavData.m_iChannels];
+    try {
+      m_pBuffer = new float[m_iFramesPerBlock * m_WavData.m_iChannels];
+    } catch (const std::bad_alloc&) {
+      m_sError = "SRC_AUDIT_FIX SRC-2797: ADPCM decode buffer allocation failed";
+      return false;
+    }
     m_iBufferAvail = m_iBufferUsed = 0;
 
     m_File.Seek(m_WavData.m_iDataChunkPos);
@@ -545,9 +556,9 @@ struct WavReaderADPCM : public WavReader {
     int iBlock = iByte / m_WavData.m_iBlockAlign;
     int iFrame = iBlock * m_iFramesPerBlock;
 
-    int iBufferRemainingBytes = m_iBufferAvail - m_iBufferUsed;
+    int iBufferRemainingSamples = m_iBufferAvail - m_iBufferUsed;
     int iBufferRemainingFrames =
-        iBufferRemainingBytes / (m_WavData.m_iChannels * sizeof(int16_t));
+        iBufferRemainingSamples / m_WavData.m_iChannels;
     iFrame -= iBufferRemainingFrames;
 
     return iFrame;
@@ -563,11 +574,17 @@ std::string ReadString(RageFileBasic& f, int iSize, std::string& sError) {
     return std::string();
   }
 
-  char* buf = new char[iSize + 1];
-  std::fill(buf, buf + iSize + 1, '\0');
-  FileReading::ReadBytes(f, buf, iSize, sError);
-  std::string ret(buf);
-  delete[] buf;
+  std::string ret;
+  try {
+    ret.assign(static_cast<size_t>(iSize), '\0');
+  } catch (const std::bad_alloc&) {
+    sError = "SRC_AUDIT_FIX SRC-2797: WAV string allocation failed";
+    return std::string();
+  }
+  if (iSize == 0) {
+    return ret;
+  }
+  FileReading::ReadBytes(f, &ret[0], iSize, sError);
   return ret;
 }
 
@@ -580,6 +597,7 @@ std::string ReadString(RageFileBasic& f, int iSize, std::string& sError) {
 
 RageSoundReader_FileReader::OpenResult RageSoundReader_WAV::Open(
     RageFileBasic* pFile) {
+  Close();
   if (pFile == nullptr) {
     SetError("No file handle");
     return OPEN_FATAL_ERROR;
@@ -696,10 +714,18 @@ RageSoundReader_FileReader::OpenResult RageSoundReader_WAV::Open(
   switch (m_WavData.m_iFormatTag) {
     case 1:  // PCM
     case 3:  // FLOAT
-      m_pImpl = new WavReaderPCM(*m_pFile, m_WavData);
+      try {
+        m_pImpl = new WavReaderPCM(*m_pFile, m_WavData);
+      } catch (const std::bad_alloc&) {
+        FATAL_ERROR("SRC_AUDIT_FIX SRC-2797: PCM WAV reader allocation failed");
+      }
       break;
     case 2:  // ADPCM
-      m_pImpl = new WavReaderADPCM(*m_pFile, m_WavData);
+      try {
+        m_pImpl = new WavReaderADPCM(*m_pFile, m_WavData);
+      } catch (const std::bad_alloc&) {
+        FATAL_ERROR("SRC_AUDIT_FIX SRC-2797: ADPCM WAV reader allocation failed");
+      }
       break;
     case 85:  // MP3
       /* Return unknown, so other decoders will be tried.  MAD can read MP3s
@@ -748,11 +774,24 @@ RageSoundReader_WAV::RageSoundReader_WAV() {
 
 RageSoundReader_WAV::~RageSoundReader_WAV() { delete m_pImpl; }
 
+void RageSoundReader_WAV::Close() {
+  delete m_pImpl;
+  m_pImpl = nullptr;
+  memset(&m_WavData, 0, sizeof(m_WavData));
+  m_pFile = nullptr;
+  SetError("");
+}
+
 RageSoundReader_WAV* RageSoundReader_WAV::Copy() const {
   if (m_pFile.isNull()) {
     return nullptr;
   }
-  RageSoundReader_WAV* ret = new RageSoundReader_WAV;
+  RageSoundReader_WAV* ret = nullptr;
+  try {
+    ret = new RageSoundReader_WAV;
+  } catch (const std::bad_alloc&) {
+    return nullptr;
+  }
   RageFileBasic* pFile = m_pFile->Copy();
   if (pFile == nullptr) {
     delete ret;
