@@ -558,10 +558,9 @@ void GetGlobalRandomMoviePaths(
   vsDirsToTry.push_back(RANDOMMOVIES_DIR);
 
   for (const std::string& sDir : vsDirsToTry) {
-    GetDirListing(sDir + "*.ogv", vsPathsOut, false, true);
-    GetDirListing(sDir + "*.avi", vsPathsOut, false, true);
-    GetDirListing(sDir + "*.mpg", vsPathsOut, false, true);
-    GetDirListing(sDir + "*.mpeg", vsPathsOut, false, true);
+    FILEMAN->GetDirListingWithMultipleExtensions(
+        sDir, ActorUtil::GetTypeExtensionList(FT_Movie), vsPathsOut, false,
+        true);
 
     if (!ssFileNameWhitelist.empty()) {
       std::vector<std::string> vsMatches;
