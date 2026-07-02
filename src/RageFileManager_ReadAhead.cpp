@@ -15,7 +15,9 @@
 #include <io.h>
 #endif
 
-#if defined(HAVE_POSIX_FADVISE)
+#if defined(__linux__)
+
+#include <unistd.h>
 
 void RageFileManagerReadAhead::Init() {}
 void RageFileManagerReadAhead::Shutdown() {}
@@ -161,7 +163,7 @@ void RageFileManagerReadAhead::DiscardCache(
 #endif
 
 void RageFileManagerReadAhead::CacheHintStreaming(RageFileBasic* pFile) {
-#if defined(HAVE_POSIX_FADVISE)
+#if defined(__linux__)
   /* This guesses at the actual size of the file on disk, which may be smaller
    * if this file is compressed. Since this is usually used on music and video
    * files, it generally shouldn't be. */
