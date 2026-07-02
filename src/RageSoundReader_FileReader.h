@@ -19,7 +19,7 @@ class RageSoundReader_FileReader : public RageSoundReader {
    * there was an error initializing the file.
    *
    * If the file can not be opened at all, or contains no data, return
-   * OPEN_MATCH_BUT_FAIL.
+   * OPEN_FATAL_ERROR.
    */
   enum OpenResult {
     OPEN_OK,
@@ -29,10 +29,10 @@ class RageSoundReader_FileReader : public RageSoundReader {
 
   /* Takes ownership of pFile (even on failure). */
   virtual OpenResult Open(RageFileBasic* pFile) = 0;
-  virtual float GetStreamToSourceRatio() const { return 1.0f; }
-  virtual std::string GetError() const { return m_sError; }
-  virtual std::string GetSourcePath() const;
-  virtual void SetDebugSourcePath(const std::string& sPath);
+  float GetStreamToSourceRatio() const override { return 1.0f; }
+  std::string GetError() const override { return m_sError; }
+  std::string GetSourcePath() const override;
+  void SetDebugSourcePath(const std::string& sPath) override;
 
   /* Open a file.  If pPrebuffer is non-nullptr, and the file is sufficiently
    * small, the (possibly compressed) data will be loaded entirely into memory,

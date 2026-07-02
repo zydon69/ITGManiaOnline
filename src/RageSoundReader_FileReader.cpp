@@ -1,6 +1,7 @@
 #include "RageSoundReader_FileReader.h"
 
 #include <limits>
+#include <new>
 #include <set>
 #include <string>
 #include <vector>
@@ -26,16 +27,23 @@ RageSoundReader_FileReader* RageSoundReader_FileReader::TryOpenFile(
   }
   RageSoundReader_FileReader* Sample = nullptr;
 
-  if (!CompareNoCase(format, "wav")) {
-    Sample = new RageSoundReader_WAV;
-  }
+  try {
+    if (!CompareNoCase(format, "wav")) {
+      Sample = new RageSoundReader_WAV;
+    }
 
-  if (!CompareNoCase(format, "mp3")) {
-    Sample = new RageSoundReader_MP3;
-  }
+    if (!CompareNoCase(format, "mp3")) {
+      Sample = new RageSoundReader_MP3;
+    }
 
-  if (!CompareNoCase(format, "oga") || !CompareNoCase(format, "ogg")) {
-    Sample = new RageSoundReader_Vorbisfile;
+    if (!CompareNoCase(format, "oga") || !CompareNoCase(format, "ogg")) {
+      Sample = new RageSoundReader_Vorbisfile;
+    }
+  } catch (const std::bad_alloc&) {
+    delete pFile;
+    error = "SRC_AUDIT_FIX SRC-2794: out of memory creating sound reader";
+    bKeepTrying = false;
+    return nullptr;
   }
 
   if (!Sample) {
@@ -112,9 +120,19 @@ void RageSoundReader_FileReader::SetDebugSourcePath(const std::string& sPath) {
 
 RageSoundReader_FileReader* RageSoundReader_FileReader::OpenFile(
     std::string filename, std::string& error, bool* pPrebuffer) {
+  if (pPrebuffer != nullptr) {
+    *pPrebuffer = false;
+  }
+
   HiddenPtr<RageFileBasic> pFile;
   {
-    RageFile* pFileOpen = new RageFile;
+    RageFile* pFileOpen = nullptr;
+    try {
+      pFileOpen = new RageFile;
+    } catch (const std::bad_alloc&) {
+      error = "SRC_AUDIT_FIX SRC-2794: out of memory opening sound file";
+      return nullptr;
+    }
     if (!pFileOpen->Open(filename)) {
       error = pFileOpen->GetError();
       delete pFileOpen;
@@ -126,7 +144,13 @@ RageSoundReader_FileReader* RageSoundReader_FileReader::OpenFile(
   if (pPrebuffer) {
     const int fileSize = pFile->GetFileSize();
     if (fileSize >= 0 && fileSize < 1024 * 50) {
-      RageFileObjMem* pMem = new RageFileObjMem;
+      RageFileObjMem* pMem = nullptr;
+      try {
+        pMem = new RageFileObjMem;
+      } catch (const std::bad_alloc&) {
+        error = "SRC_AUDIT_FIX SRC-2794: out of memory prebuffering sound file";
+        return nullptr;
+      }
       bool bRet = FileCopy(*pFile, *pMem, error, nullptr);
       if (!bRet) {
         delete pMem;

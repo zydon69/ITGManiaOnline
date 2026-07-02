@@ -45,6 +45,8 @@ read_source("src/AutoKeysounds.cpp" auto_keysounds_cpp)
 read_source("src/RageSoundManager.h" rage_sound_manager_h)
 read_source("src/RageSoundManager.cpp" rage_sound_manager_cpp)
 read_source("src/RageSoundReader_Extend.cpp" rage_sound_reader_extend_cpp)
+read_source("src/RageSoundReader_FileReader.h" rage_sound_reader_file_reader_h)
+read_source("src/RageSoundReader_FileReader.cpp" rage_sound_reader_file_reader_cpp)
 read_source("src/RageSoundReader_Preload.h" rage_sound_reader_preload_h)
 read_source("src/RageSoundReader_Preload.cpp" rage_sound_reader_preload_cpp)
 read_source("src/RageSoundReader_Pan.h" rage_sound_reader_pan_h)
@@ -277,6 +279,22 @@ require_not_contains(
   "${rage_sound_reader_extend_cpp}"
   "ASSERT_M(\n      pSource != nullptr"
   "RageSoundReader_Extend must not assert on null source readers")
+require_contains(
+  "${rage_sound_reader_file_reader_h}"
+  "std::string GetError() const override"
+  "RageSoundReader_FileReader exposes base reader diagnostics with override")
+require_contains(
+  "${rage_sound_reader_file_reader_h}"
+  "OPEN_FATAL_ERROR."
+  "RageSoundReader_FileReader open contract references a real enum")
+require_contains(
+  "${rage_sound_reader_file_reader_cpp}"
+  "SRC_AUDIT_FIX SRC-2794"
+  "RageSoundReader_FileReader converts allocation failures into open errors")
+require_contains(
+  "${rage_sound_reader_file_reader_cpp}"
+  "*pPrebuffer = false;"
+  "RageSoundReader_FileReader initializes prebuffer state for callers")
 require_contains(
   "${rage_sound_reader_preload_h}"
   "std::string GetError() const override"
