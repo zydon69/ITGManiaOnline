@@ -765,6 +765,9 @@ void ProfileManager::RefreshLocalProfilesFromDisk() {
     case ProfileSortOrder_Recent:
       LoadLocalProfilesByRecent();
       break;
+    case ProfileSortOrder_CreationTime:
+      LoadLocalProfilesByCreationTime();
+      break;
     default:
       LoadLocalProfilesByPriority();
       break;
@@ -940,6 +943,64 @@ void ProfileManager::LoadLocalProfilesByRecent() {
   LoadLocalProfilesInCategory(testProfiles, g_vLocalProfile);
 }
 
+void ProfileManager::LoadLocalProfilesByCreationTime() {
+  std::vector<std::string> profile_ids;
+  GetDirListing(USER_PROFILES_DIR + "*", profile_ids, true, true);
+
+  std::vector<DirAndProfile> guestProfiles;
+  std::vector<DirAndProfile> normalProfiles;
+  std::vector<DirAndProfile> testProfiles;
+
+  for (const std::string& id : profile_ids) {
+    DirAndProfile derp;
+    derp.sDir = id + "/";
+    derp.profile.LoadEditableDataFromDir(derp.sDir);
+    derp.profile.LoadTypeFromDir(derp.sDir);
+    switch (derp.profile.m_Type) {
+      case ProfileType_Guest:
+        guestProfiles.push_back(derp);
+        break;
+      case ProfileType_Normal:
+        normalProfiles.push_back(derp);
+        break;
+      case ProfileType_Test:
+        testProfiles.push_back(derp);
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (GetProfileSortAscending()) {
+    auto creationAscending = [](const DirAndProfile& a,
+                                const DirAndProfile& b) {
+      if (a.profile.m_CreationTime != b.profile.m_CreationTime) {
+        return a.profile.m_CreationTime > b.profile.m_CreationTime;
+      }
+      return CompareProfileDisplayName(a, b) < 0;
+    };
+    std::sort(guestProfiles.begin(), guestProfiles.end(), creationAscending);
+    std::sort(normalProfiles.begin(), normalProfiles.end(), creationAscending);
+    std::sort(testProfiles.begin(), testProfiles.end(), creationAscending);
+  } else {
+    auto creationDescending = [](const DirAndProfile& a,
+                                 const DirAndProfile& b) {
+      if (a.profile.m_CreationTime != b.profile.m_CreationTime) {
+        return a.profile.m_CreationTime < b.profile.m_CreationTime;
+      }
+      return CompareProfileDisplayName(a, b) < 0;
+    };
+    std::sort(guestProfiles.begin(), guestProfiles.end(), creationDescending);
+    std::sort(
+        normalProfiles.begin(), normalProfiles.end(), creationDescending);
+    std::sort(testProfiles.begin(), testProfiles.end(), creationDescending);
+  }
+
+  LoadLocalProfilesInCategory(guestProfiles, g_vLocalProfile);
+  LoadLocalProfilesInCategory(normalProfiles, g_vLocalProfile);
+  LoadLocalProfilesInCategory(testProfiles, g_vLocalProfile);
+}
+
 const Profile* ProfileManager::GetLocalProfile(
     const std::string& sProfileID) const {
   if (!IsSafeLocalProfileID(sProfileID)) {
@@ -1015,6 +1076,7 @@ bool ProfileManager::CreateLocalProfile(
   // Create the new profile.
   std::unique_ptr<Profile> pProfile(new Profile);
   pProfile->m_sDisplayName = sName;
+  pProfile->m_CreationTime = DateTime::GetNowDateTime();
   if (CHARMAN == nullptr) {
     LOG->Warn(
         "ProfileManager::CreateLocalProfile: character manager is not "
@@ -1074,14 +1136,14 @@ static void InsertProfileIntoList(DirAndProfile& derp) {
   }
 
   // The above should run regardless of profile sort in case the user decides to
-  // change back to priority sorting. If we're using Recent sorting, move the
-  // new profile to the top, if we're using alphabetical find where it belongs.
+  // change back to priority sorting.
   if (PROFILEMAN == nullptr) {
     return;
   }
 
   switch (GetProfileSortOrder()) {
     case ProfileSortOrder_Recent:
+    case ProfileSortOrder_CreationTime:
       PROFILEMAN->MoveProfileTopBottom(index, GetProfileSortAscending());
       break;
     case ProfileSortOrder_Alphabetical:

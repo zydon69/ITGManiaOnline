@@ -126,7 +126,11 @@ StringToX(BackgroundFitMode);
 LuaXType(BackgroundFitMode);
 
 static const char* ProfileSortOrderNames[] = {
-    "Priority", "Recent", "Alphabetical"};
+    "Priority",
+    "Recent",
+    "Alphabetical",
+    "CreationTime",
+};
 XToString(ProfileSortOrder);
 StringToX(ProfileSortOrder);
 LuaXType(ProfileSortOrder);
