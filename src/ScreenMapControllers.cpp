@@ -55,9 +55,29 @@ ScreenMapControllers::ScreenMapControllers() {
 }
 
 ScreenMapControllers::~ScreenMapControllers() {
-  for (size_t i = 0; i < m_Line.size(); ++i) {
-    RageUtil::SafeDelete(m_Line[i]);
+  LOG->Trace(
+      "ITG Debug: ScreenMapControllers::~ScreenMapControllers begin "
+      "line_count=%zu action_count=%zu",
+      m_Line.size(),
+      m_Actions.size());
+
+  // Action rows own their AutoActor, while each AutoActor is attached to one of
+  // the line ActorFrames below.  Unload them before deleting lines so AutoActor
+  // never tries to detach from a parent frame that has already been freed.
+  for (ActionRow& action : m_Actions) {
+    action.m_actor.Unload();
   }
+  m_Actions.clear();
+
+  for (ActorFrame*& line : m_Line) {
+    if (line != nullptr) {
+      m_LineScroller.RemoveChild(line);
+    }
+    RageUtil::SafeDelete(line);
+  }
+  m_Line.clear();
+
+  LOG->Trace("ITG Debug: ScreenMapControllers::~ScreenMapControllers end");
 }
 
 static LocalizedString PLAYER_SLOTS("ScreenMapControllers", "%s slots");
