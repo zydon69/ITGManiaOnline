@@ -75,6 +75,23 @@ local DecodeResponseBody = function(res)
 	return data
 end
 
+local UpdateGrooveStatsConnectionState = function(res)
+	if not res or not res.statusCode then return end
+
+	local code = res.statusCode
+	local body = nil
+	if code == 200 and res.body and res.body ~= "" then
+		local ok, data = pcall(function()
+			return JsonDecode(res.body)
+		end)
+		if ok then body = data end
+	end
+
+	if (code >= 400 and code < 499 and code ~= 429) or (code == 200 and body and body.error and #body.error) then
+		SL.GrooveStats.IsConnected = false
+	end
+end
+
 local PopulateGrooveStatsLeaderboardPane = function(pane, leaderboard, scoreColor)
 	if not pane or type(leaderboard) ~= "table" then return false end
 
@@ -237,8 +254,14 @@ end
 local AutoSubmitRequestProcessor = function(res, overlay)
 	local master = GetChildSafe(overlay, "AutoSubmitMaster")
 	if not master then
-		GrooveStatsSubmitTrace("result=ignored reason=missing_auto_submit_master")
-		Trace("GrooveStats auto-submit warning: response ignored because evaluation actors are unavailable")
+		GrooveStatsSubmitTrace("response_received_without_ui status=" .. tostring(res and res.statusCode or "nil")
+			.. " hasError=" .. tostring(res and res.error ~= nil)
+			.. " bodyBytes=" .. tostring(res and res.body and string.len(res.body) or 0))
+		if res and res.statusCode == 200 and not res.error then
+			Trace("GrooveStats auto-submit response arrived after evaluation UI closed")
+		else
+			Trace("GrooveStats auto-submit warning: response ignored because evaluation actors are unavailable")
+		end
 		return
 	end
 
@@ -627,15 +650,19 @@ local af = Def.ActorFrame {
 					.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
 					.. " queryPlayers=" .. tostring((query.chartHashP1 and "P1" or "") .. (query.chartHashP2 and ",P2" or ""))
 					.. " bodyBytes=" .. tostring(string.len(JsonEncode(body))))
-				self:playcommand("MakeGrooveStatsRequest", {
-					endpoint="?action=scoreSubmit&"..NETWORK:EncodeQueryParameters(query),
+
+				NETWORK:HttpRequest{
+					url="https://apiservice.groovestats.com/api/?action=scoreSubmit&"..NETWORK:EncodeQueryParameters(query),
 					method="POST",
 					headers=headers,
 					body=JsonEncode(body),
-					timeout=30,
-					callback=AutoSubmitRequestProcessor,
-					args=evalCommon,
-				})
+					connectTimeout=30,
+					transferTimeout=30,
+					onResponse=function(res)
+						UpdateGrooveStatsConnectionState(res)
+						AutoSubmitRequestProcessor(res, evalCommon)
+					end,
+				}
 			else
 				GrooveStatsSubmitTrace("action=no_request")
 			end

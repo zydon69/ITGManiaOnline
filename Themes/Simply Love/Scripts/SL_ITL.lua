@@ -1,10 +1,17 @@
 -- -----------------------------------------------------------------------
 IsItlSong = function(player)
 	local song = GAMESTATE:GetCurrentSong()
-	local song_dir = song:GetSongDir()
-	local group = string.lower(song:GetGroupName())
 	local pn = ToEnumShortString(player)
-	return string.find(group, "itl online 2026") or string.find(group, "itl 2026") or SL[pn].ITLData["pathMap"][song_dir] ~= nil
+	if not song or not pn or not SL[pn] then return false end
+
+	local song_dir = song:GetSongDir()
+	local group = string.lower(song:GetGroupName() or "")
+	local itlData = SL[pn].ITLData or {}
+	local pathMap = itlData["pathMap"] or {}
+
+	return string.find(group, "itl online 2026") ~= nil
+		or string.find(group, "itl 2026") ~= nil
+		or pathMap[song_dir] ~= nil
 end
 
 

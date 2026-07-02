@@ -10,6 +10,13 @@ local pane_height = 60
 
 local text_zoom = WideScale(0.8, 0.9)
 
+local EnsureParsingState = function(actor)
+	if not actor.IsParsing then
+		actor.IsParsing = {false, false}
+	end
+	return actor.IsParsing
+end
+
 -- -----------------------------------------------------------------------
 -- Convenience function to return the SongOrCourse and StepsOrTrail for a
 -- for a player.
@@ -261,17 +268,17 @@ af[#af+1] = RequestResponseActor(17, 50)..{
 	Name="GetScoresRequester",
 	OnCommand=function(self)
 		-- Create variables for both players, even if they're not currently active.
-		self.IsParsing = {false, false}
+		EnsureParsingState(self)
 	end,
 	-- Broadcasted from ./PerPlayer/DensityGraph.lua
-	P1ChartParsingMessageCommand=function(self)	self.IsParsing[1] = true end,
-	P2ChartParsingMessageCommand=function(self)	self.IsParsing[2] = true end,
+	P1ChartParsingMessageCommand=function(self)	EnsureParsingState(self)[1] = true end,
+	P2ChartParsingMessageCommand=function(self)	EnsureParsingState(self)[2] = true end,
 	P1ChartParsedMessageCommand=function(self)
-		self.IsParsing[1] = false
+		EnsureParsingState(self)[1] = false
 		self:queuecommand("ChartParsed")
 	end,
 	P2ChartParsedMessageCommand=function(self)
-		self.IsParsing[2] = false
+		EnsureParsingState(self)[2] = false
 		self:queuecommand("ChartParsed")
 	end,
 	ChartParsedCommand=function(self)
@@ -291,7 +298,8 @@ af[#af+1] = RequestResponseActor(17, 50)..{
 		end
 
 		-- Make sure we're still not parsing either chart.
-		if self.IsParsing[1] or self.IsParsing[2] then return end
+		local parsing = EnsureParsingState(self)
+		if parsing[1] or parsing[2] then return end
 
 		-- This makes sure that the Hash in the ChartInfo cache exists.
 		local sendRequest = false

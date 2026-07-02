@@ -1091,6 +1091,12 @@ end
 GetPlayerOptionsJsonForGrooveStats = function(player)
 	local options = {}
 	local pn = ToEnumShortString(player)
+	local normalizedOptions = {
+		["BackgroundFilter"] = true,
+		["HideLookahead"] = true,
+		["Mini"] = true,
+		["VisualDelay"] = true,
+	}
 
 	local MaybeSetOption = function(options, key, value, expectedType)
 		local keyData = SL.Global.GrooveStatsPlayerOptionKeys[key]
@@ -1118,7 +1124,9 @@ GetPlayerOptionsJsonForGrooveStats = function(player)
 
 	-- First let's handle SL specific mods.
 	for key, value in pairs(SL[pn].ActiveModifiers) do
-		MaybeSetOption(options, key, value, type(value))
+		if not normalizedOptions[key] and SL.Global.GrooveStatsPlayerOptionKeys[key] ~= nil then
+			MaybeSetOption(options, key, value, type(value))
+		end
 	end
 
 
@@ -1163,12 +1171,12 @@ GetPlayerOptionsJsonForGrooveStats = function(player)
 		end
 	end
 
-		MaybeSetOption(options, "Mini", mini, "number")
-		MaybeSetOption(options, "VisualDelay", visualDelay, "number")
-		MaybeSetOption(options, "BackgroundFilter", backgroundFilter, "number")
-		MaybeSetOption(options, "HideLookahead", hideLookahead, "number")
+	MaybeSetOption(options, "Mini", mini, "number")
+	MaybeSetOption(options, "VisualDelay", visualDelay, "number")
+	MaybeSetOption(options, "BackgroundFilter", backgroundFilter, "number")
+	MaybeSetOption(options, "HideLookahead", hideLookahead, "number")
 
-		MaybeSetOption(options, "Cover", hasCover, "boolean")
+	MaybeSetOption(options, "Cover", hasCover, "boolean")
 	MaybeSetOption(options, "NoMines", hasNoMines, "boolean")
 	MaybeSetOption(options, "Reverse", hasReverse, "boolean")
 

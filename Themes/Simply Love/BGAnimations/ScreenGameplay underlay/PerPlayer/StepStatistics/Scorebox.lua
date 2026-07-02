@@ -71,6 +71,17 @@ local pendingRequests = 0
 
 local all_data = {}
 
+local QueueCheckScoreboxIfAlive = function(master, source)
+	if master == nil then return end
+
+	local ok, err = pcall(function()
+		master:queuecommand("CheckScorebox")
+	end)
+	if not ok and Trace then
+		Trace("GrooveStats gameplay scorebox ignored stale actor source=" .. tostring(source or "unknown") .. " error=" .. tostring(err))
+	end
+end
+
 local ResetAllData = function()
 	all_data = {}
 	SL[pn].Rival = {}
@@ -408,10 +419,10 @@ local LeaderboardRequestProcessor = function(res, master)
 				end
 			end
 		end
- 	end
+	end
 	pendingRequests = pendingRequests - 1
-	if pendingRequests <= 0 and master ~= nil then
-		master:queuecommand("CheckScorebox")
+	if pendingRequests <= 0 then
+		QueueCheckScoreboxIfAlive(master, "groovestats")
 	end
 end
 
@@ -550,7 +561,10 @@ local af = Def.ActorFrame{
 						ArrowCloudRequestProcessor(acres)
 						pendingRequests = pendingRequests - 1
 						if pendingRequests <= 0 then
-							self:GetParent():queuecommand("CheckScorebox")
+							local ok, parent = pcall(function()
+								return self:GetParent()
+							end)
+							QueueCheckScoreboxIfAlive(ok and parent or nil, "arrowcloud")
 						end
 					end
 				}

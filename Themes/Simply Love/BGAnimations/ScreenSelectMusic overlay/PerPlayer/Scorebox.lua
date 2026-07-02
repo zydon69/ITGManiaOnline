@@ -74,6 +74,13 @@ local ArrowCloudHardEXColor = color("#ff00cc")
 
 local currentHash = "nothing"
 
+local EnsureParsingState = function(actor)
+	if not actor.IsParsing then
+		actor.IsParsing = {false, false}
+	end
+	return actor.IsParsing
+end
+
 local style_color = {
 	[0] = GrooveStatsBlue,  -- GS ITG/EX slot A
 	[1] = GrooveStatsBlue,  -- GS ITG/EX slot B
@@ -609,24 +616,23 @@ local af = Def.ActorFrame{
 			self:sleep(loop_seconds):queuecommand("LoopScorebox")
 		end
 	end,
-
 	RequestResponseActor(0, 0)..{
 		OnCommand=function(self)
-			self:queuecommand("MakeRequest")
 			-- Create variables for both players, even if they're not currently active.
-			self.IsParsing = {false, false}
+			EnsureParsingState(self)
+			self:queuecommand("MakeRequest")
 		end,
 		-- Broadcasted from ./PerPlayer/DensityGraph.lua
-		P1ChartParsingMessageCommand=function(self)	self.IsParsing[1] = true end,
-		P2ChartParsingMessageCommand=function(self)	self.IsParsing[2] = true end,
+		P1ChartParsingMessageCommand=function(self)	EnsureParsingState(self)[1] = true end,
+		P2ChartParsingMessageCommand=function(self)	EnsureParsingState(self)[2] = true end,
 		P1ChartParsedMessageCommand=function(self)
-			self.IsParsing[1] = false
+			EnsureParsingState(self)[1] = false
 			if pn == "P1" then
 				self:queuecommand("ChartParsed")
 			end
 		end,
 		P2ChartParsedMessageCommand=function(self)
-			self.IsParsing[2] = false
+			EnsureParsingState(self)[2] = false
 			if pn == "P2" then
 				self:queuecommand("ChartParsed")
 			end
@@ -660,7 +666,8 @@ local af = Def.ActorFrame{
 			local willDoArrowCloud = acEnabled and acKey and acHash
 			-- (verbose debug removed)
 			if sendRequest or willDoArrowCloud then
-				if self.IsParsing[1] or self.IsParsing[2] then return end
+				local parsing = EnsureParsingState(self)
+				if parsing[1] or parsing[2] then return end
 				if currentHash == SL[pn].Streams.Hash and not willDoArrowCloud then
 					self:GetParent():visible(true)
 					self:GetParent():queuecommand("CheckScorebox")
