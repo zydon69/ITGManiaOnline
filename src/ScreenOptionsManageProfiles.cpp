@@ -75,11 +75,19 @@ static LocalizedString PROFILE_NAME_CONFLICTS(
     "ScreenEditMenu",
     "The name you chose conflicts with another profile. Please use a different "
     "name.");
+static LocalizedString PROFILE_NAME_INVALID_CHARS(
+    "ScreenEditMenu",
+    "Profile names cannot contain path or quote characters.");
+
 static bool ValidateLocalProfileName(
     const std::string& sAnswer, std::string& sErrorOut) {
   std::string sNormalizedAnswer = Profile::NormalizeDisplayName(sAnswer);
   if (sNormalizedAnswer.empty()) {
     sErrorOut = PROFILE_NAME_BLANK;
+    return false;
+  }
+  if (Profile::ContainsInvalidDisplayNameChar(sNormalizedAnswer)) {
+    sErrorOut = PROFILE_NAME_INVALID_CHARS;
     return false;
   }
 
@@ -106,6 +114,16 @@ static bool ValidateLocalProfileName(
     return false;
   }
 
+  return true;
+}
+
+static bool ValidateAppendProfileName(
+    const std::string& /*sAnswerBeforeChar*/, std::string& sAppend) {
+  sAppend.erase(
+      std::remove_if(
+          sAppend.begin(), sAppend.end(),
+          [](unsigned char c) { return Profile::IsInvalidDisplayNameChar(c); }),
+      sAppend.end());
   return true;
 }
 
@@ -363,7 +381,8 @@ void ScreenOptionsManageProfiles::HandleScreenMessage(const ScreenMessage SM) {
         case ProfileAction_Rename: {
           ScreenTextEntry::TextEntry(
               SM_BackFromRename, ENTER_PROFILE_NAME, pProfile->m_sDisplayName,
-              PROFILE_MAX_DISPLAY_NAME_LENGTH, ValidateLocalProfileName);
+              PROFILE_MAX_DISPLAY_NAME_LENGTH, ValidateLocalProfileName,
+              nullptr, nullptr, false, ValidateAppendProfileName);
         } break;
         case ProfileAction_Delete: {
           std::string sTitle = pProfile->m_sDisplayName;
@@ -465,7 +484,8 @@ void ScreenOptionsManageProfiles::ProcessMenuStart(const InputEventPlus&) {
     }
     ScreenTextEntry::TextEntry(
         SM_BackFromEnterNameForNew, ENTER_PROFILE_NAME, sPotentialName,
-        PROFILE_MAX_DISPLAY_NAME_LENGTH, ValidateLocalProfileName);
+        PROFILE_MAX_DISPLAY_NAME_LENGTH, ValidateLocalProfileName, nullptr,
+        nullptr, false, ValidateAppendProfileName);
   } else if (row.GetRowType() == OptionRow::RowType_Exit) {
     SCREENMAN->PlayStartSound();
     this->BeginFadingOut();

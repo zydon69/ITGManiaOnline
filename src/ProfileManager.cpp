@@ -1026,6 +1026,12 @@ bool ProfileManager::CreateLocalProfile(
     LOG->Warn("ProfileManager::CreateLocalProfile: empty profile name");
     return false;
   }
+  if (Profile::ContainsInvalidDisplayNameChar(sName)) {
+    LOG->Warn(
+        "ProfileManager::CreateLocalProfile: refusing profile name with "
+        "invalid path or quote characters");
+    return false;
+  }
 
   // Find a directory directory name that's a number greater than all
   // existing numbers.  This preserves the "order by create date".
@@ -1202,6 +1208,13 @@ bool ProfileManager::RenameLocalProfile(
     LOG->Warn(
         "ProfileManager::RenameLocalProfile: empty normalized profile name "
         "for '%s'",
+        sProfileID.c_str());
+    return false;
+  }
+  if (Profile::ContainsInvalidDisplayNameChar(sNewName)) {
+    LOG->Warn(
+        "ProfileManager::RenameLocalProfile: refusing profile name with "
+        "invalid path or quote characters for '%s'",
         sProfileID.c_str());
     return false;
   }

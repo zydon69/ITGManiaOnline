@@ -49,6 +49,29 @@ local function trimmed_profile_name(answer)
 	return (answer or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+local invalid_profile_name_chars = {
+	[34] = true, -- "
+	[39] = true, -- '
+	[42] = true, -- *
+	[47] = true, -- /
+	[58] = true, -- :
+	[60] = true, -- <
+	[62] = true, -- >
+	[63] = true, -- ?
+	[92] = true, -- \
+	[124] = true -- |
+}
+
+local function has_invalid_profile_name_chars(value)
+	for i = 1, #(value or "") do
+		local byte = value:byte(i)
+		if byte < 32 or byte == 127 or invalid_profile_name_chars[byte] then
+			return true
+		end
+	end
+	return false
+end
+
 local function screen_string(key, fallback)
 	local text = THEME:GetString("ScreenSelectProfile", key)
 	if not text or text == "" or text == key then
@@ -199,9 +222,16 @@ local function prompt_for_new_profile(player)
 				profile_create_log("validate_failed blank_name")
 				return false, screen_string("ProfileNameBlank", "Profile name cannot be blank.")
 			end
+			if has_invalid_profile_name_chars(trimmed) then
+				profile_create_log("validate_failed invalid_chars")
+				return false, screen_string("ProfileNameInvalidChars", "Profile names cannot contain path or quote characters.")
+			end
 
 			profile_create_log("validate_success")
 			return true, ""
+		end,
+		ValidateAppend = function(_, append)
+			return not has_invalid_profile_name_chars(append)
 		end,
 		OnOK = function(answer)
 			local trimmed = trimmed_profile_name(answer)

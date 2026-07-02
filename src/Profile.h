@@ -172,6 +172,8 @@ class Profile {
 
   // smart accessors
   std::string GetDisplayNameOrHighScoreName() const;
+  static bool IsInvalidDisplayNameChar(unsigned char c);
+  static bool ContainsInvalidDisplayNameChar(const std::string& sName);
   static std::string NormalizeDisplayName(const std::string& sName);
   Character* GetCharacter() const;
   void SetCharacter(const std::string sCharacterID);

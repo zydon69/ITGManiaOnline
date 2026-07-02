@@ -370,6 +370,23 @@ std::string Profile::GetDisplayNameOrHighScoreName() const {
   }
 }
 
+static const std::string INVALID_PROFILE_DISPLAY_NAME_CHARS = "'\"/\\:<>|?*";
+
+bool Profile::IsInvalidDisplayNameChar(unsigned char c) {
+  return c < 0x20 || c == 0x7f ||
+         INVALID_PROFILE_DISPLAY_NAME_CHARS.find(static_cast<char>(c)) !=
+             std::string::npos;
+}
+
+bool Profile::ContainsInvalidDisplayNameChar(const std::string& sName) {
+  return std::find_if(
+             sName.begin(), sName.end(),
+             [](unsigned char c) {
+               return Profile::IsInvalidDisplayNameChar(c);
+             }) !=
+         sName.end();
+}
+
 std::string Profile::NormalizeDisplayName(const std::string& sName) {
   std::string sClean;
   sClean.reserve(sName.size());
