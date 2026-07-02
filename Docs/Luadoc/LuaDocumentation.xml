@@ -3114,6 +3114,9 @@ end
 	<Function name='GetExpandedSectionName' return='string' arguments=''>
 		Returns the name of the currently expanded section.
 	</Function>
+	<Function name='GetExpandedParentSectionName' return='string' arguments=''>
+		Returns the name of the currently expanded parent section.
+	</Function>
 	<Function name='GetGameSeed' return='int' arguments=''>
 		Return the random seed for the game.
 	</Function>

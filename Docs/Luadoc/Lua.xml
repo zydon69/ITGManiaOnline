@@ -913,6 +913,7 @@
 			<Function name='GetEditSourceSteps'/>
 			<Function name='GetEnabledPlayers'/>
 			<Function name='GetExpandedSectionName'/>
+			<Function name='GetExpandedParentSectionName'/>
 			<Function name='GetGameSeed'/>
 			<Function name='GetGameplayLeadIn'/>
 			<Function name='GetHardestStepsDifficulty'/>
