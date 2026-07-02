@@ -20,7 +20,8 @@ enum WheelItemDataType {
   WheelItemDataType_Portal,   /**< The portal section on the Wheel. */
   WheelItemDataType_Course,   /**< A Course on the Wheel. */
   WheelItemDataType_Sort,     /**< A generic sorting item on the Wheel. */
-  WheelItemDataType_Custom,   /**< A custom item on the Wheel. */
+  WheelItemDataType_Custom,        /**< A custom item on the Wheel. */
+  WheelItemDataType_ParentSection, /**< A parent section on the Wheel. */
   NUM_WheelItemDataType,
   WheelItemDataType_Invalid
 };

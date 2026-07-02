@@ -33,6 +33,8 @@ enum MusicWheelItemType {
   MusicWheelItemType_Random,
   MusicWheelItemType_Portal,
   MusicWheelItemType_Custom,
+  MusicWheelItemType_ParentExpanded,
+  MusicWheelItemType_ParentCollapsed,
   NUM_MusicWheelItemType,
   MusicWheelItemType_Invalid,
 };

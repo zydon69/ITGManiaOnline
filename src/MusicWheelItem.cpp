@@ -36,6 +36,7 @@
 static const char* MusicWheelItemTypeNames[] = {
     "Song", "SectionExpanded", "SectionCollapsed", "Roulette", "Course", "Sort",
     "Mode", "Random",          "Portal",           "Custom",
+    "ParentExpanded", "ParentCollapsed",
 };
 XToString(MusicWheelItemType);
 

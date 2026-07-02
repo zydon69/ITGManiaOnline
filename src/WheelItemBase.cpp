@@ -13,7 +13,7 @@
 
 static const char* WheelItemDataTypeNames[] = {
     "Generic", "Section", "Song", "Roulette", "Random",
-    "Portal",  "Course",  "Sort", "Custom",
+    "Portal",  "Course",  "Sort", "Custom", "ParentSection",
 };
 XToString(WheelItemDataType);
 StringToX(WheelItemDataType);
