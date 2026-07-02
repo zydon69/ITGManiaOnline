@@ -5983,6 +5983,13 @@ local args = {
 		(New since ITGmania 0.6.0) If the optional argument <code>bIsAbsolute</code> is set, instead treats
 		sListName as an absolute path instead of loading it from the Theme's <code>Other</code> directory.
 	</Function>
+	<Function name='SetPreferredSongsFromTable' return='void' arguments='table sections'>
+		Sets preferred songs from a Lua table whose keys are section names and whose values are arrays of Song objects.
+<pre><code>{
+	["Section Name 1"] = { song1, song2, song3 },
+	["Section Name 2"] = { song4, song5, song6 }
+}</code></pre>
+	</Function>
 	<Function name='SongToPreferredSortSectionName' return='string' arguments='Song s'>
 		Returns the preferred sort section name for the specified Song.
 	</Function>
