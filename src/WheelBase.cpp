@@ -59,6 +59,8 @@ const char* WheelItemDataTypeTraceName(WheelItemDataType type) {
       return "Sort";
     case WheelItemDataType_Custom:
       return "Custom";
+    case WheelItemDataType_ParentSection:
+      return "ParentSection";
     default:
       return "Invalid";
   }
