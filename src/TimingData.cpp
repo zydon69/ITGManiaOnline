@@ -63,6 +63,8 @@ void TimingData::Copy(const TimingData& cpy) {
 }
 
 void TimingData::Clear() {
+  ReleaseLookup();
+
   /* Delete all pointers owned by this TimingData. */
   FOREACH_TimingSegmentType(tst) {
     std::vector<TimingSegment*>& vSegs = m_avpTimingSegments[tst];
@@ -139,11 +141,10 @@ void TimingData::PrepareLookup() {
     GetBeatInternal(beat_start, args, curr_segment);
     m_beat_start_lookup.push_back(lookup_item_t(args.elapsed_time, beat_start));
 
-    GetBeatStarts time_start;
-    time_start.last_time =
-        -m_fBeat0OffsetInSeconds - m_fBeat0GroupOffsetInSeconds;
+    // Reuse the advanced state for the beat -> elapsed lookup.  A fresh
+    // GetBeatStarts would keep every entry pinned to row 0.
     m_time_start_lookup.push_back(
-        lookup_item_t(NoteRowToBeat(time_start.last_row), time_start));
+        lookup_item_t(NoteRowToBeat(beat_start.last_row), beat_start));
   }
   // If there are less than two entries, then FindEntryInLookup in lookup
   // will always decide there's no appropriate entry.  So clear the table.
@@ -266,6 +267,8 @@ void TimingData::CopyRange(
 void TimingData::ShiftRange(
     int start_row, int end_row, TimingSegmentType shift_type,
     int shift_amount) {
+  ReleaseLookup();
+
   FOREACH_TimingSegmentType(seg_type) {
     if (seg_type == shift_type || shift_type == TimingSegmentType_Invalid) {
       std::vector<TimingSegment*>& segs = GetTimingSegments(seg_type);
@@ -328,6 +331,8 @@ void TimingData::ShiftRange(
 
 void TimingData::ClearRange(
     int start_row, int end_row, TimingSegmentType clear_type) {
+  ReleaseLookup();
+
   FOREACH_TimingSegmentType(seg_type) {
     if (seg_type == clear_type || clear_type == TimingSegmentType_Invalid) {
       std::vector<TimingSegment*>& segs = GetTimingSegments(seg_type);
@@ -431,6 +436,8 @@ struct ts_less {
 // Multiply the BPM in the range [fStartBeat,fEndBeat) by fFactor.
 void TimingData::MultiplyBPMInBeatRange(
     int iStartIndex, int iEndIndex, float fFactor) {
+  ReleaseLookup();
+
   // Change all other BPM segments in this range.
   std::vector<TimingSegment*>& bpms = m_avpTimingSegments[SEGMENT_BPM];
   for (unsigned i = 0; i < bpms.size(); i++) {
@@ -612,6 +619,8 @@ void TimingData::AddSegment(const TimingSegment* seg) {
         static_cast<int>(tst));
     return;
   }
+
+  ReleaseLookup();
 
   std::vector<TimingSegment*>& vSegs = m_avpTimingSegments[tst];
 
@@ -1076,6 +1085,8 @@ void TimingData::ScaleRegion(
     return;
   }
 
+  ReleaseLookup();
+
   int length = iEndIndex - iStartIndex;
   int newLength = std::lrint(fScale * length);
   if (newLength <= 0) {
@@ -1130,6 +1141,8 @@ void TimingData::InsertRows(int iStartRow, int iRowsToAdd) {
     return;
   }
 
+  ReleaseLookup();
+
   FOREACH_TimingSegmentType(tst) {
     std::vector<TimingSegment*>& segs = m_avpTimingSegments[tst];
     for (unsigned j = 0; j < segs.size(); j++) {
@@ -1163,6 +1176,8 @@ void TimingData::DeleteRows(int iStartRow, int iRowsToDelete) {
         iStartRow, iRowsToDelete);
     return;
   }
+
+  ReleaseLookup();
 
   FOREACH_TimingSegmentType(tst) {
     // Don't delete the indefinite segments that are still in effect
@@ -1257,6 +1272,8 @@ void TimingData::TidyUpData(bool allowEmpty) {
     return;
   }
 
+  ReleaseLookup();
+
   // If there are no BPM segments, provide a default.
   auto& segs = m_avpTimingSegments;
   if (segs[SEGMENT_BPM].empty()) {
@@ -1311,6 +1328,9 @@ void TimingData::SortSegments(TimingSegmentType tst) {
         static_cast<int>(tst));
     return;
   }
+
+  ReleaseLookup();
+
   std::vector<TimingSegment*>& vSegments = m_avpTimingSegments[tst];
   sort(vSegments.begin(), vSegments.end());
 }
