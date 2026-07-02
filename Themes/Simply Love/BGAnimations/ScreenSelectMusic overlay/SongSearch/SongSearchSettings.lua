@@ -72,8 +72,19 @@ local SongMatchesText = function(song, term)
 		or PlainContains(song:GetTranslitArtist(), term)
 end
 
+local GetSongSearchInstructions = function()
+	local fallback = "Search title/subtitle/artist\nUse 'pack/song' to limit by pack, '[12]' for difficulty, '[180]' for BPM"
+	local ok, text = pcall(function()
+		return THEME:GetString("ScreenSelectMusic", "SongSearchInstructions")
+	end)
+	if not ok or text == nil or text == "" or text == "SongSearchInstructions" then
+		return fallback
+	end
+	return text
+end
+
 return {
-	Question="Search title/subtitle/artist\nUse 'pack/song' to limit by pack, '[12]' for difficulty, '[180]' for BPM",
+	Question=GetSongSearchInstructions(),
 	InitialAnswer="",
 	MaxInputLength=30,
 	OnOK=function(input)
