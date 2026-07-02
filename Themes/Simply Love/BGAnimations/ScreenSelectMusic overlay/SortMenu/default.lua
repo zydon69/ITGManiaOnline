@@ -404,6 +404,7 @@ local t = Def.ActorFrame {
 				{"", "CategorySorts"}, 
 				{
 					{{"SortBy", "Group"} },
+					{ {"SortBy", "Series"} },
 					{ {"SortBy", "Title"} },
 					{ {"SortBy", "Artist"} },
 					{ {"SortBy", "Genre"} },

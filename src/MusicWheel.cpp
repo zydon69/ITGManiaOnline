@@ -1889,14 +1889,37 @@ void MusicWheel::UpdateSwitch() {
         SCREENMAN->PostMessageToTopScreen(SM_SortOrderChanged, 0);
       }
 
-      SetOpenSection(
-          SongUtil::GetSectionNameFromSongAndSort(
-              pPrevSelectedSong, GAMESTATE->m_SortOrder));
-
       m_iSelection = 0;
+
+      if (GAMESTATE->m_SortOrder == SORT_SERIES) {
+        SetOpenSections("", "");
+        std::string selectedSeriesSection;
+        if (pPrevSelectedSong != nullptr && SONGMAN != nullptr) {
+          const Group* previousGroup = SONGMAN->GetGroup(pPrevSelectedSong);
+          if (previousGroup != nullptr) {
+            if (!previousGroup->GetSeries().empty()) {
+              selectedSeriesSection = previousGroup->GetSeries();
+            } else {
+              selectedSeriesSection = previousGroup->GetGroupName();
+            }
+            SelectSection(selectedSeriesSection);
+          }
+        }
+        TraceMusicWheelReintro(
+            "SeriesRootAfterSort",
+            ssprintf(
+                "selected='%s' parent='' section=''",
+                selectedSeriesSection.c_str()));
+      } else {
+        SetOpenSection(
+            SongUtil::GetSectionNameFromSongAndSort(
+                pPrevSelectedSong, GAMESTATE->m_SortOrder));
+      }
 
       // Select the previously selected item
       switch (GAMESTATE->m_SortOrder) {
+        case SORT_SERIES:
+          break;
         default:
           // Look for the last selected song or course
           SelectSongOrCourse();
@@ -2392,22 +2415,18 @@ void MusicWheel::SetOpenSections(
         continue;
       }
 
-      if (!d.m_sParentSection.empty() &&
-          d.m_sParentSection != m_sExpandedParentSectionName) {
+      const bool isActiveParent =
+          d.m_Type == WheelItemDataType_ParentSection &&
+          d.m_sParentSection.empty() &&
+          d.m_sText == m_sExpandedParentSectionName;
+      const bool isChildOfActive =
+          d.m_Type == WheelItemDataType_Section &&
+          d.m_sParentSection == m_sExpandedParentSectionName;
+      if (!isActiveParent && !isChildOfActive) {
         continue;
       }
 
       if (HIDE_INACTIVE_PARENT_SECTIONS) {
-        const bool isActiveParent =
-            d.m_Type == WheelItemDataType_ParentSection &&
-            d.m_sParentSection.empty() &&
-            d.m_sText == m_sExpandedParentSectionName;
-        const bool isChildOfActive =
-            !d.m_sParentSection.empty() &&
-            d.m_sParentSection == m_sExpandedParentSectionName;
-        if (!isActiveParent && !isChildOfActive) {
-          continue;
-        }
         if (HIDE_ACTIVE_SECTION_TITLE && isActiveParent) {
           continue;
         }
