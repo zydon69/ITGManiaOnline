@@ -17,6 +17,7 @@
 #include "GameManager.h"
 #include "GameState.h"
 #include "Grade.h"
+#include "Group.h"
 #include "LocalizedString.h"
 #include "LuaBinding.h"
 #include "LuaManager.h"
@@ -939,6 +940,42 @@ void SongUtil::SortSongPointerArrayByGroupAndTitle(
       CompareSongPointersByGroupAndTitle);
 }
 
+void SongUtil::SortSongPointerArrayByParentSectionName(
+    std::vector<Song*>& vpSongsInOut) {
+  g_mapSongSortVal.clear();
+  for (Song* pSong : vpSongsInOut) {
+    if (pSong == nullptr) {
+      g_mapSongSortVal[pSong] = "3";
+      continue;
+    }
+
+    const std::string titleKey = MakeSortString(pSong->GetTranslitFullTitle());
+    const Group* pGroup = SONGMAN != nullptr ? SONGMAN->GetGroup(pSong) : nullptr;
+    if (pGroup == nullptr) {
+      LOG->Warn(
+          "SongUtil::SortSongPointerArrayByParentSectionName: %s has no group",
+          pSong->GetSongDir().c_str());
+      g_mapSongSortVal[pSong] =
+          "2" + MakeSortString(pSong->m_sGroupName) + "\t" + titleKey;
+      continue;
+    }
+
+    const std::string groupKey = MakeSortString(pGroup->GetSortTitle());
+    const std::string series = pGroup->GetSeries();
+    if (series.empty()) {
+      g_mapSongSortVal[pSong] = "1" + groupKey + "\t" + titleKey;
+    } else {
+      g_mapSongSortVal[pSong] =
+          "0" + MakeSortString(series) + "\t" + groupKey + "\t" + titleKey;
+    }
+  }
+
+  stable_sort(
+      vpSongsInOut.begin(), vpSongsInOut.end(),
+      CompareSongPointersBySortValueAscending);
+  g_mapSongSortVal.clear();
+}
+
 void SongUtil::SortSongPointerArrayByNumPlays(
     std::vector<Song*>& vpSongsInOut, ProfileSlot slot, bool bDescending) {
   if (!PROFILEMAN->IsPersistentProfile(slot)) {
@@ -973,7 +1010,8 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
     case SORT_PREFERRED:
       return SONGMAN->SongToPreferredSortSectionName(pSong);
     case SORT_GROUP:
-      if (SONGMAN->GetGroup(pSong) == nullptr) {
+    case SORT_SERIES:
+      if (SONGMAN == nullptr || SONGMAN->GetGroup(pSong) == nullptr) {
         LOG->Warn(
             "SongUtil::GetSectionNameFromSongAndSort: %s has no group",
             pSong->GetSongDir().c_str());

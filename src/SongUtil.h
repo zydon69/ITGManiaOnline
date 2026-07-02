@@ -149,6 +149,8 @@ void SortSongPointerArrayByArtist(std::vector<Song*>& vpSongsInOut);
 void SortSongPointerArrayByDisplayArtist(std::vector<Song*>& vpSongsInOut);
 void SortSongPointerArrayByGenre(std::vector<Song*>& vpSongsInOut);
 void SortSongPointerArrayByGroupAndTitle(std::vector<Song*>& vpSongsInOut);
+void SortSongPointerArrayByParentSectionName(
+    std::vector<Song*>& vpSongsInOut);
 void SortSongPointerArrayByNumPlays(
     std::vector<Song*>& vpSongsInOut, ProfileSlot slot, bool bDescending);
 void SortSongPointerArrayByNumPlays(

@@ -732,6 +732,7 @@ void MusicWheel::GetSongList(std::vector<Song*>& arraySongs, SortOrder so) {
       apAllSongs = SONGMAN->GetPopularSongs();
       break;
     case SORT_GROUP:
+    case SORT_SERIES:
       // if we're not using sections with a preferred song group, and there
       // is a group to load, only load those songs. -aj
       if (GAMESTATE->m_sPreferredSongGroup != GROUP_ALL &&
@@ -882,6 +883,7 @@ void MusicWheel::BuildWheelItemDatas(
     case SORT_PREFERRED:
     case SORT_ROULETTE:
     case SORT_GROUP:
+    case SORT_SERIES:
     case SORT_TITLE:
     case SORT_BPM:
     case SORT_POPULARITY:
@@ -935,6 +937,14 @@ void MusicWheel::BuildWheelItemDatas(
         }
         case SORT_GROUP:
           SongUtil::SortSongPointerArrayByGroupAndTitle(arraySongs);
+          if (USE_SECTIONS_WITH_PREFERRED_GROUP) {
+            bUseSections = true;
+          } else {
+            bUseSections = GAMESTATE->m_sPreferredSongGroup == GROUP_ALL;
+          }
+          break;
+        case SORT_SERIES:
+          SongUtil::SortSongPointerArrayByParentSectionName(arraySongs);
           if (USE_SECTIONS_WITH_PREFERRED_GROUP) {
             bUseSections = true;
           } else {
@@ -1042,7 +1052,7 @@ void MusicWheel::BuildWheelItemDatas(
           bUseSections = false;
           break;
         case MusicWheelUsesSections_ABC_ONLY:
-          if (so != SORT_TITLE && so != SORT_GROUP) {
+          if (so != SORT_TITLE && so != SORT_GROUP && so != SORT_SERIES) {
             bUseSections = false;
           }
           break;
@@ -1062,6 +1072,9 @@ void MusicWheel::BuildWheelItemDatas(
         switch (so) {
           case SORT_GROUP:
             SongUtil::SortSongPointerArrayByGroup(arraySongs);
+            break;
+          case SORT_SERIES:
+            SongUtil::SortSongPointerArrayByParentSectionName(arraySongs);
             break;
           case SORT_METER:
           case SORT_PREFERRED:
@@ -1195,6 +1208,112 @@ void MusicWheel::BuildWheelItemDatas(
                 0));
           }
           break;
+
+        case SORT_SERIES: {
+          std::string sLastParentSection;
+          std::string sLastSectionParent;
+          for (unsigned i = 0; i < arraySongs.size(); i++) {
+            Song* pSong = arraySongs[i];
+            if (pSong == nullptr) {
+              continue;
+            }
+
+            Group* pGroup = SONGMAN != nullptr ? SONGMAN->GetGroup(pSong) : nullptr;
+            const std::string sThisParentSection =
+                pGroup != nullptr ? pGroup->GetSeries() : std::string();
+            std::string sThisSection =
+                pGroup != nullptr ? pGroup->GetGroupName() : pSong->m_sGroupName;
+            if (sThisSection.empty()) {
+              sThisSection = GROUP_ALL;
+            }
+
+            if (bUseSections) {
+              if (!sThisParentSection.empty() &&
+                  sThisParentSection != sLastParentSection) {
+                int iParentSectionCount = 0;
+                for (unsigned j = i; j < arraySongs.size(); ++j) {
+                  Song* pNextSong = arraySongs[j];
+                  if (pNextSong == nullptr) {
+                    continue;
+                  }
+                  Group* pNextGroup =
+                      SONGMAN != nullptr ? SONGMAN->GetGroup(pNextSong) : nullptr;
+                  const std::string sNextParentSection =
+                      pNextGroup != nullptr ? pNextGroup->GetSeries()
+                                            : std::string();
+                  if (sNextParentSection != sThisParentSection) {
+                    break;
+                  }
+                  ++iParentSectionCount;
+                }
+
+                RageColor colorParentSection =
+                    GetSectionColor(iSectionColorIndex, EMPTY_COLOR);
+                arrayWheelItemDatas.push_back(new MusicWheelItemData(
+                    WheelItemDataType_ParentSection, nullptr,
+                    sThisParentSection, nullptr, nullptr, colorParentSection,
+                    iParentSectionCount));
+                sLastParentSection = sThisParentSection;
+
+                TraceMusicWheelReintro(
+                    "SeriesParent",
+                    ssprintf(
+                        "name='%s' count=%d",
+                        sThisParentSection.c_str(), iParentSectionCount));
+              } else if (sThisParentSection.empty()) {
+                sLastParentSection.clear();
+              }
+
+              if (sThisSection != sLastSection ||
+                  sThisParentSection != sLastSectionParent) {
+                int iSectionCount = 0;
+                for (unsigned j = i; j < arraySongs.size(); ++j) {
+                  Song* pNextSong = arraySongs[j];
+                  if (pNextSong == nullptr) {
+                    continue;
+                  }
+                  Group* pNextGroup =
+                      SONGMAN != nullptr ? SONGMAN->GetGroup(pNextSong) : nullptr;
+                  const std::string sNextParentSection =
+                      pNextGroup != nullptr ? pNextGroup->GetSeries()
+                                            : std::string();
+                  std::string sNextSection = pNextGroup != nullptr
+                                                 ? pNextGroup->GetGroupName()
+                                                 : pNextSong->m_sGroupName;
+                  if (sNextSection.empty()) {
+                    sNextSection = GROUP_ALL;
+                  }
+                  if (sNextParentSection != sThisParentSection ||
+                      sNextSection != sThisSection) {
+                    break;
+                  }
+                  ++iSectionCount;
+                }
+
+                RageColor colorSection =
+                    GetSectionColor(iSectionColorIndex, EMPTY_COLOR);
+                arrayWheelItemDatas.push_back(new MusicWheelItemData(
+                    WheelItemDataType_Section, nullptr, sThisSection, nullptr,
+                    pGroup, colorSection, iSectionCount, sThisParentSection));
+                sLastSection = sThisSection;
+                sLastSectionParent = sThisParentSection;
+
+                TraceMusicWheelReintro(
+                    "SeriesSection",
+                    ssprintf(
+                        "parent='%s' name='%s' count=%d",
+                        sThisParentSection.c_str(), sThisSection.c_str(),
+                        iSectionCount));
+              }
+            }
+
+            arrayWheelItemDatas.push_back(new MusicWheelItemData(
+                WheelItemDataType_Song, pSong, sLastSection, nullptr, pGroup,
+                SONGMAN != nullptr ? SONGMAN->GetSongColor(pSong) : EMPTY_COLOR,
+                0, sThisParentSection));
+          }
+          break;
+        }
 
         default:
           for (unsigned i = 0; i < arraySongs.size(); i++) {
@@ -1572,7 +1691,8 @@ void MusicWheel::FilterWheelItemDatas(
       continue;
     }
 
-    if (WID.m_Type == WheelItemDataType_Section &&
+    if ((WID.m_Type == WheelItemDataType_Section ||
+         WID.m_Type == WheelItemDataType_ParentSection) &&
         STATE_ROULETTE_SPINNING == m_WheelState) {
       aiRemove[i] = true;
     }
@@ -1663,24 +1783,34 @@ void MusicWheel::FilterWheelItemDatas(
 
   // Update the song count in each section header.
   unsigned filteredSize = aFilteredData.size();
-  for (unsigned i = 0; i < filteredSize;) {
-    if (aFilteredData[i] == nullptr) {
-      ++i;
+  MusicWheelItemData* pCurParentSection = nullptr;
+  MusicWheelItemData* pCurSection = nullptr;
+  for (unsigned i = 0; i < filteredSize; ++i) {
+    MusicWheelItemData* pData = aFilteredData[i];
+    if (pData == nullptr) {
       continue;
     }
-    MusicWheelItemData& WID = *aFilteredData[i];
-    ++i;
-    if (WID.m_Type != WheelItemDataType_Section) {
+    if (pData->m_Type == WheelItemDataType_ParentSection) {
+      pCurParentSection = pData;
+      pCurParentSection->m_iSectionCount = 0;
+      pCurSection = nullptr;
       continue;
     }
-
-    // Count songs in this section
-    WID.m_iSectionCount = 0;
-    for (;
-         i < filteredSize && aFilteredData[i] != nullptr &&
-         aFilteredData[i]->m_sText == WID.m_sText;
-         ++i) {
-      ++WID.m_iSectionCount;
+    if (pData->m_Type == WheelItemDataType_Section) {
+      pCurSection = pData;
+      pCurSection->m_iSectionCount = 0;
+      if (pData->m_sParentSection.empty()) {
+        pCurParentSection = nullptr;
+      }
+      continue;
+    }
+    if (pData->m_Type == WheelItemDataType_Song) {
+      if (pCurSection != nullptr) {
+        ++pCurSection->m_iSectionCount;
+      }
+      if (pCurParentSection != nullptr && !pData->m_sParentSection.empty()) {
+        ++pCurParentSection->m_iSectionCount;
+      }
     }
   }
 
@@ -1696,7 +1826,8 @@ void MusicWheel::FilterWheelItemDatas(
       continue;
     }
     MusicWheelItemData& WID = *aFilteredData[i];
-    if (WID.m_Type != WheelItemDataType_Section) {
+    if (WID.m_Type != WheelItemDataType_Section &&
+        WID.m_Type != WheelItemDataType_ParentSection) {
       continue;
     }
     if (WID.m_iSectionCount > 0) {
