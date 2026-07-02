@@ -134,6 +134,7 @@ RageLog::~RageLog() {
 }
 
 void RageLog::SetLogToDisk(bool b) {
+  LockMut(*g_Mutex);
   if (m_bLogToDisk == b) {
     return;
   }
@@ -191,6 +192,7 @@ bool RageLog::ResetFile() {
 }
 
 void RageLog::SetInfoToDisk(bool b) {
+  LockMut(*g_Mutex);
   if (m_bInfoToDisk == b) {
     return;
   }
@@ -212,6 +214,7 @@ void RageLog::SetInfoToDisk(bool b) {
 }
 
 void RageLog::SetUserLogToDisk(bool b) {
+  LockMut(*g_Mutex);
   if (m_bUserLogToDisk == b) {
     return;
   }
@@ -231,11 +234,15 @@ void RageLog::SetUserLogToDisk(bool b) {
   }
 }
 
-void RageLog::SetFlushing(bool b) { m_bFlush = b; }
+void RageLog::SetFlushing(bool b) {
+  LockMut(*g_Mutex);
+  m_bFlush = b;
+}
 
 /* Enable or disable display of output to stdout, or a console window in
  * Windows. */
 void RageLog::SetShowLogOutput(bool show) {
+  LockMut(*g_Mutex);
   m_bShowLogOutput = show;
 
 #if defined(_WIN32)
