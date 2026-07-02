@@ -77,22 +77,28 @@ af[#af+1] = Def.ActorFrame{
 	end,
 	["CurrentSteps"..pn.."ChangedMessageCommand"]=function(self)
 		self:queuecommand("Hide")
-		self:stoptweening()
-		self:sleep(0.4)
-		self:queuecommand("ParseChart")
-	end,
-	ParseChartCommand=function(self)
 		local steps = GAMESTATE:GetCurrentSteps(player)
 		if steps then
 			MESSAGEMAN:Broadcast(pn.."ChartParsing")
 			ParseChartInfo(steps, pn)
 			self:queuecommand("Show")
 		end
+
+		-- Computing the GrooveStats hash requires parsing the simfile, which is
+		-- expensive. Debounce it so wheel scrolling only hashes the chart the
+		-- player settles on.
+		self:stoptweening()
+		self:sleep(0.4)
+		self:queuecommand("ComputeHash")
+	end,
+	ComputeHashCommand=function(self)
+		local steps = GAMESTATE:GetCurrentSteps(player)
+		ComputeChartHash(steps, pn)
+		MESSAGEMAN:Broadcast(pn.."ChartParsed")
 	end,
 	ShowCommand=function(self)
 		if GAMESTATE:GetCurrentSong() and
 				GAMESTATE:GetCurrentSteps(player) then
-			MESSAGEMAN:Broadcast(pn.."ChartParsed")
 			self:queuecommand("Redraw")
 		else
 			self:queuecommand("Hide")
