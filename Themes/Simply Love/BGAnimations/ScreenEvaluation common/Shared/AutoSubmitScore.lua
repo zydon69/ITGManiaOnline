@@ -1,6 +1,6 @@
 if not IsServiceAllowed(SL.GrooveStats.AutoSubmit) or GAMESTATE:IsCourseMode() then return end
 
-local NumEntries = 10
+local NumEntries = math.min(10, tonumber(PREFSMAN:GetPreference("MaxHighScoresPerListForMachine")) or 10)
 
 local IsOnlineEvaluation = function()
 	return ITGOnline and ITGOnline.currentRoomId ~= nil
