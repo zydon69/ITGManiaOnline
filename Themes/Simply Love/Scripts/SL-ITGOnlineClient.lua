@@ -5523,6 +5523,34 @@ function ITGOnline:PlayStateSummary(room)
 	}
 end
 
+function ITGOnline:LocalTerminalRoundPendingResolution(room)
+	room = room or self.currentRoom
+	if not room then return false, "no_room", nil, nil, nil end
+
+	local phase = self:NormalizeRoomPhase(room.phase)
+	if phase ~= "starting" and phase ~= "playing" and phase ~= "results" then
+		return false, "phase_not_live_or_results", phase, nil, nil
+	end
+
+	local roundKey = self.PlayStateKey and self:PlayStateKey() or ""
+	local validRoundKey = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)
+	local playState = tostring(self:CurrentUserPlayState(room) or "")
+	local summary = self:PlayStateSummary(room)
+	local localTerminal = self:IsTerminalPlayState(playState)
+	local evaluationShown = validRoundKey and self.onlineGameplayEvaluationShownKey == roundKey
+	local roundEnded = validRoundKey and self.onlineGameplayEndedKey == roundKey
+	local finalReady = summary and summary.finalResultsReady == true
+
+	if finalReady then
+		return false, "final_results_ready", phase, roundKey, playState
+	end
+	if localTerminal or evaluationShown or roundEnded then
+		return true, "local_terminal_round_pending_resolution", phase, roundKey, playState
+	end
+
+	return false, "local_round_not_terminal", phase, roundKey, playState
+end
+
 function ITGOnline:ShouldWaitForOnlineResults(room)
 	room = room or self.currentRoom
 	if not room then
@@ -5641,6 +5669,25 @@ function ITGOnline:ShouldBlockEvaluationExit(reason, room)
 	local phase = self:NormalizeRoomPhase(room.phase)
 	local summary = self:PlayStateSummary(room)
 	if phase ~= "results" then
+		local pendingResolution, pendingReason, pendingPhase, roundKey, playState = self:LocalTerminalRoundPendingResolution(room)
+		if pendingResolution then
+			online_flow_trace_throttled("evaluation_exit_block_terminal_pending_resolution", 1.0,
+				"evaluation_exit_block_decision block=true reason=terminal_round_not_resolved"
+				.. " source=" .. tostring(reason or "unknown")
+				.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+				.. " phase=" .. tostring(pendingPhase or phase)
+				.. " playState=" .. tostring(playState or "nil")
+				.. " roundKey=" .. tostring(roundKey or "")
+				.. " evaluationShownKey=" .. tostring(self.onlineGameplayEvaluationShownKey or "")
+				.. " endedKey=" .. tostring(self.onlineGameplayEndedKey or "")
+				.. " players=" .. tostring(summary.players)
+				.. " terminal=" .. tostring(summary.terminal)
+				.. " failedTerminal=" .. tostring(summary.failedTerminal)
+				.. " finalResults=" .. tostring(summary.finalResults)
+				.. " finalResultsReady=" .. tostring(summary.finalResultsReady == true)
+				.. " pendingReason=" .. tostring(pendingReason or "nil"))
+			return true
+		end
 		online_flow_trace_throttled("evaluation_exit_block_not_results", 1.0,
 			"evaluation_exit_block_decision block=false reason=room_not_results"
 			.. " source=" .. tostring(reason or "unknown")
@@ -6279,6 +6326,7 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 	if phase == "starting" then
 		local hasStartAt = self.currentRoom
 			and (self.currentRoom.start_at ~= nil or self.currentRoom.start_at_ms ~= nil)
+		local pendingResolution, pendingReason = self:LocalTerminalRoundPendingResolution(self.currentRoom)
 		online_flow_trace("preferred_starting_detail"
 			.. " room=" .. tostring(self.currentRoomId or "nil")
 			.. " hasStartAt=" .. tostring(hasStartAt == true)
@@ -6286,7 +6334,21 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 			.. " secondsUntilStart=" .. tostring(self:SecondsUntilScheduledStart() or "nil")
 			.. " screen=" .. tostring(screenName or "nil")
 			.. " playState=" .. tostring(playState)
-			.. " localRoundEnded=" .. tostring(localRoundEnded == true))
+			.. " localRoundEnded=" .. tostring(localRoundEnded == true)
+			.. " pendingResolution=" .. tostring(pendingResolution == true)
+			.. " pendingReason=" .. tostring(pendingReason or "nil"))
+		if pendingResolution then
+			online_flow_trace("preferred=nil reason=starting_terminal_round_pending_resolution"
+				.. " screen=" .. tostring(screenName or "nil")
+				.. " playState=" .. tostring(playState)
+				.. " roundKey=" .. tostring(roundKey)
+				.. " evaluationShownKey=" .. tostring(self.onlineGameplayEvaluationShownKey or "")
+				.. " endedKey=" .. tostring(self.onlineGameplayEndedKey or "")
+				.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true)
+				.. " summaryTerminal=" .. tostring(summary and summary.terminal or "nil")
+				.. " summaryFinalResults=" .. tostring(summary and summary.finalResults or "nil"))
+			return nil
+		end
 		if localRoundEnded then
 			online_flow_trace("preferred=nil reason=starting_after_local_round_end playState=" .. tostring(playState) .. " roundKey=" .. tostring(roundKey))
 			return nil

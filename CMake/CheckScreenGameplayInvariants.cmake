@@ -134,7 +134,9 @@ foreach(REQUIRED_SNIPPET
     "ready_request_phase_race_fetch_stale_context"
     "selectionKeyMatches="
     "callbackReadySelectionKey == readySelectionKey"
-    "room_deleted_before_coalesce")
+    "room_deleted_before_coalesce"
+    "terminal_round_not_resolved"
+    "starting_terminal_round_pending_resolution")
   string(FIND "${ONLINE_CLIENT_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(
