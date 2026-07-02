@@ -2345,6 +2345,7 @@ void ScreenSelectMusic::AfterMusicChange() {
   SampleMusicPreviewMode pmode;
   switch (wtype) {
     case WheelItemDataType_Section:
+    case WheelItemDataType_ParentSection:
     case WheelItemDataType_Sort:
     case WheelItemDataType_Roulette:
     case WheelItemDataType_Random:
@@ -2366,10 +2367,16 @@ void ScreenSelectMusic::AfterMusicChange() {
 
       switch (wtype) {
         case WheelItemDataType_Section:
+        case WheelItemDataType_ParentSection:
           // reduce scope
           {
             SortOrder curSort = GAMESTATE->m_SortOrder;
-            if (curSort == SORT_GROUP && SONGMAN != nullptr) {
+            if (wtype == WheelItemDataType_ParentSection &&
+                curSort == SORT_SERIES && SONGMAN != nullptr) {
+              m_sBannerPath = SONGMAN->GetSeriesBannerPath(
+                  m_MusicWheel.GetSelectedSection());
+            } else if ((curSort == SORT_GROUP || curSort == SORT_SERIES) &&
+                       SONGMAN != nullptr) {
               m_sBannerPath = SONGMAN->GetSongGroupBannerPath(
                   m_MusicWheel.GetSelectedSection());
             } else {
