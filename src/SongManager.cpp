@@ -426,11 +426,23 @@ void SongManager::AddGroup(
   m_sSongGroupBannerPaths.push_back(sBannerPath);
   m_sSongGroupNames.push_back(sGroupDirName);
 
-  // Add the group to its series if the group has one and if the series exists
-  if (group->GetSeries() != "") {
-    std::unordered_set<Group*>& series =
-        m_mapSeriesToGroups[group->GetSeries()];
-    series.insert(group);
+  // Add the group to its series.  The first valid SeriesBanner wins; if no
+  // group declares one, GetSeriesBannerPath falls back to the first group.
+  if (!group->GetSeries().empty()) {
+    Series& series = m_mapNameToSeries[group->GetSeries()];
+    if (series.sName.empty()) {
+      series.sName = group->GetSeries();
+    }
+    series.groups.insert(group);
+    if (series.sBannerPath.empty() && !group->GetSeriesBannerPath().empty()) {
+      std::vector<std::string> arraySeriesBanners;
+      GetDirListing(
+          sDir + sGroupDirName + "/" + group->GetSeriesBannerPath(),
+          arraySeriesBanners, false, true);
+      if (!arraySeriesBanners.empty()) {
+        series.sBannerPath = arraySeriesBanners[0];
+      }
+    }
   }
   // m_sSongGroupBackgroundPaths.push_back( sBackgroundPath );
 }
@@ -931,7 +943,7 @@ void SongManager::FreeSongs() {
   }
 
   m_mapNameToGroup.clear();
-  m_mapSeriesToGroups.clear();
+  m_mapNameToSeries.clear();
 
   if (LogContentLoadDiagnosticsEnabled() && LOG != nullptr) {
     LOG->Trace(
@@ -1025,6 +1037,32 @@ std::string SongManager::GetSongGroupBannerPath(std::string sSongGroup) const {
     if (sSongGroup == m_sSongGroupNames[i]) {
       return m_sSongGroupBannerPaths[i];
     }
+  }
+
+  return std::string();
+}
+
+std::string SongManager::GetSeriesBannerPath(std::string sSeriesName) const {
+  std::map<std::string, Series>::const_iterator it =
+      m_mapNameToSeries.find(sSeriesName);
+  if (it == m_mapNameToSeries.end()) {
+    return std::string();
+  }
+  if (!it->second.sBannerPath.empty()) {
+    return it->second.sBannerPath;
+  }
+
+  Group* firstGroup = nullptr;
+  for (std::unordered_set<Group*>::const_iterator git =
+           it->second.groups.begin();
+       git != it->second.groups.end(); ++git) {
+    if (firstGroup == nullptr ||
+        (*git)->GetGroupName() < firstGroup->GetGroupName()) {
+      firstGroup = *git;
+    }
+  }
+  if (firstGroup != nullptr) {
+    return GetSongGroupBannerPath(firstGroup->GetGroupName());
   }
 
   return std::string();
@@ -1427,6 +1465,15 @@ std::string SongManager::ShortenGroupName(std::string sLongGroupName) {
 
   TitleFields title;
   title.Title = sLongGroupName;
+  tsub.Subst(title);
+  return title.Title;
+}
+
+std::string SongManager::ShortenSeriesName(std::string sLongSeriesName) {
+  static TitleSubst tsub("Series");
+
+  TitleFields title;
+  title.Title = sLongSeriesName;
   tsub.Subst(title);
   return title.Title;
 }
@@ -3041,6 +3088,7 @@ class LunaSongManager : public Luna<SongManager> {
   }
 
   DEFINE_METHOD(ShortenGroupName, ShortenGroupName(SArg(1)))
+  DEFINE_METHOD(ShortenSeriesName, ShortenSeriesName(SArg(1)))
 
   static int GetCourseGroupNames(T* p, lua_State* L) {
     std::vector<std::string> v;
@@ -3050,6 +3098,7 @@ class LunaSongManager : public Luna<SongManager> {
   }
 
   DEFINE_METHOD(GetSongGroupBannerPath, GetSongGroupBannerPath(SArg(1)));
+  DEFINE_METHOD(GetSeriesBannerPath, GetSeriesBannerPath(SArg(1)));
   DEFINE_METHOD(GetCourseGroupBannerPath, GetCourseGroupBannerPath(SArg(1)));
   DEFINE_METHOD(DoesSongGroupExist, DoesSongGroupExist(SArg(1)));
   DEFINE_METHOD(DoesCourseGroupExist, DoesCourseGroupExist(SArg(1)));
@@ -3114,12 +3163,14 @@ class LunaSongManager : public Luna<SongManager> {
     ADD_METHOD(GetSongsInGroup);
     ADD_METHOD(GetCoursesInGroup);
     ADD_METHOD(ShortenGroupName);
+    ADD_METHOD(ShortenSeriesName);
     ADD_METHOD(SetPreferredSongs);
     ADD_METHOD(SetPreferredSongsFromTable);
     ADD_METHOD(SetPreferredCourses);
     ADD_METHOD(GetPreferredSortSongs);
     ADD_METHOD(GetPreferredSortCourses);
     ADD_METHOD(GetSongGroupBannerPath);
+    ADD_METHOD(GetSeriesBannerPath);
     ADD_METHOD(GetCourseGroupBannerPath);
     ADD_METHOD(DoesSongGroupExist);
     ADD_METHOD(DoesCourseGroupExist);

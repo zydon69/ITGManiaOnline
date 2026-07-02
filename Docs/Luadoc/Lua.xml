@@ -1888,12 +1888,14 @@
 			<Function name='GetSongGroupBannerPath'/>
 			<Function name='GetSongGroupColor'/>
 			<Function name='GetSongGroupNames'/>
+			<Function name='GetSeriesBannerPath'/>
 			<Function name='GetGroup'/>
 			<Function name='GetSongRank'/>
 			<Function name='GetSongsInGroup'/>
 			<Function name='SetPreferredCourses'/>
 			<Function name='SetPreferredSongs'/>
 			<Function name='ShortenGroupName'/>
+			<Function name='ShortenSeriesName'/>
 			<Function name='SongToPreferredSortSectionName'/>
 			<Function name='GetPreferredSortSongsBySectionName'/>
 			<Function name='WasLoadedFromAdditionalCourses'/>
