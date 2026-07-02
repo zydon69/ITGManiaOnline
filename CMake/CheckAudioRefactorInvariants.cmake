@@ -45,6 +45,8 @@ read_source("src/AutoKeysounds.cpp" auto_keysounds_cpp)
 read_source("src/RageSoundManager.h" rage_sound_manager_h)
 read_source("src/RageSoundManager.cpp" rage_sound_manager_cpp)
 read_source("src/RageSoundReader_Extend.cpp" rage_sound_reader_extend_cpp)
+read_source("src/RageSoundReader_Preload.h" rage_sound_reader_preload_h)
+read_source("src/RageSoundReader_Preload.cpp" rage_sound_reader_preload_cpp)
 read_source("src/RageSoundReader_Pan.h" rage_sound_reader_pan_h)
 read_source("src/RageSoundReader_Pan.cpp" rage_sound_reader_pan_cpp)
 read_source("src/RageSoundReader_ChannelSplit.h" rage_sound_reader_channel_split_h)
@@ -275,6 +277,30 @@ require_not_contains(
   "${rage_sound_reader_extend_cpp}"
   "ASSERT_M(\n      pSource != nullptr"
   "RageSoundReader_Extend must not assert on null source readers")
+require_contains(
+  "${rage_sound_reader_preload_h}"
+  "std::string GetError() const override"
+  "RageSoundReader_Preload exposes local preload diagnostics")
+require_contains(
+  "${rage_sound_reader_preload_h}"
+  "size_t GetFrameSizeBytes() const;"
+  "RageSoundReader_Preload keeps byte arithmetic in size_t helpers")
+require_contains(
+  "${rage_sound_reader_preload_cpp}"
+  "SRC_AUDIT_FIX SRC-2790"
+  "RageSoundReader_Preload diagnoses preload open and allocation failures")
+require_contains(
+  "${rage_sound_reader_preload_cpp}"
+  "SRC_AUDIT_FIX SRC-2791"
+  "RageSoundReader_Preload diagnoses seek/read range failures")
+require_contains(
+  "${rage_sound_reader_preload_cpp}"
+  "catch (const std::bad_alloc&)"
+  "RageSoundReader_Preload converts allocation failures into preload errors")
+require_not_contains(
+  "${rage_sound_reader_preload_cpp}"
+  "#define framesize"
+  "RageSoundReader_Preload must not hide frame byte arithmetic in a macro")
 require_contains(
   "${rage_sound_reader_pan_h}"
   "RageSoundReader_Pan* Copy() const override"

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <string>
 
 #include "Preference.h"
@@ -25,14 +26,16 @@ Preference<bool> g_bSoundPreload16bit("SoundPreload16bit", true);
 Preference<int> g_iSoundPreloadMaxSamples(
     "SoundPreloadMaxSamples", 1024 * 1024);
 
-#define samplesize (m_bBufferIs16Bit ? sizeof(int16_t) : sizeof(float))
-#define framesize (samplesize * m_iChannels)
-
 bool RageSoundReader_Preload::PreloadSound(RageSoundReader*& pSound) {
   if (pSound == nullptr) {
     return false;
   }
-  RageSoundReader_Preload* pPreload = new RageSoundReader_Preload;
+  RageSoundReader_Preload* pPreload = nullptr;
+  try {
+    pPreload = new RageSoundReader_Preload;
+  } catch (const std::bad_alloc&) {
+    return false;
+  }
   if (!pPreload->Open(pSound)) {
     /* Preload failed.  It read some data, so we need to rewind the reader. */
     if (pSound != nullptr) {
@@ -52,41 +55,50 @@ RageSoundReader_Preload::RageSoundReader_Preload()
       m_iPosition(0),
       m_iSampleRate(0),
       m_iChannels(0),
-      m_fRate(0.0f) {
+      m_fRate(0.0f),
+      m_sError() {
   m_bBufferIs16Bit = g_bSoundPreload16bit.Get();
 }
 
 int RageSoundReader_Preload::GetTotalFrames() const {
-  if (m_iChannels == 0 || framesize == 0) {
-    return 0;
+  const size_t frames = GetTotalFramesSize();
+  if (frames > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    return std::numeric_limits<int>::max();
   }
-  return m_Buffer->size() / framesize;
+  return static_cast<int>(frames);
 }
 
 bool RageSoundReader_Preload::Open(RageSoundReader* pSource) {
+  m_sError.clear();
+  m_Buffer.Get()->clear();
+  m_iPosition = 0;
+  m_iSampleRate = 0;
+  m_iChannels = 0;
+  m_fRate = 0.0f;
+
   if (pSource == nullptr || pSource->GetSampleRate() <= 0 ||
       pSource->GetNumChannels() == 0 ||
       pSource->GetNumChannels() >
           static_cast<unsigned>(std::numeric_limits<int>::max())) {
-    return false;
+    return SetError("SRC_AUDIT_FIX SRC-2790: invalid preload source format");
   }
   m_iSampleRate = pSource->GetSampleRate();
   m_iChannels = static_cast<int>(pSource->GetNumChannels());
   m_fRate = pSource->GetStreamToSourceRatio();
   if (!std::isfinite(m_fRate) || m_fRate <= 0.0f || m_iChannels > 1024) {
-    return false;
+    return SetError("SRC_AUDIT_FIX SRC-2790: invalid preload stream ratio");
   }
 
   int iMaxSamples = g_iSoundPreloadMaxSamples.Get();
   if (iMaxSamples <= 0) {
-    return false;
+    return SetError("SRC_AUDIT_FIX SRC-2790: invalid preload sample limit");
   }
 
   /* Check the length, and see if we think it'll fit in the buffer. */
   int iLen = pSource->GetLength_Fast();
   if (iLen != -1) {
     if (iLen < 0) {
-      return false;
+      return SetError("SRC_AUDIT_FIX SRC-2790: invalid preload length");
     }
     float fSecs = iLen / 1000.f;
 
@@ -94,34 +106,46 @@ bool RageSoundReader_Preload::Open(RageSoundReader* pSource) {
         static_cast<double>(fSecs) * static_cast<double>(m_iSampleRate);
     if (!std::isfinite(framesDouble) || framesDouble < 0.0 ||
         framesDouble > static_cast<double>(std::numeric_limits<int>::max())) {
-      return false;
+      return SetError("SRC_AUDIT_FIX SRC-2790: preload length overflow");
     }
     int iFrames = static_cast<int>(framesDouble + 0.5); /* seconds -> frames */
     if (static_cast<unsigned>(iFrames) >
         static_cast<unsigned>(std::numeric_limits<int>::max()) / m_iChannels) {
-      return false;
+      return SetError("SRC_AUDIT_FIX SRC-2790: preload sample count overflow");
     }
     int iSamples = iFrames * m_iChannels; /* frames -> samples */
     if (iSamples > iMaxSamples) {
-      return false; /* Don't bother trying to preload it. */
+      return SetError("SRC_AUDIT_FIX SRC-2790: preload exceeds sample limit");
     }
 
+    const size_t sampleSize = GetSampleSizeBytes();
     if (static_cast<size_t>(iSamples) >
-        std::numeric_limits<size_t>::max() / samplesize) {
-      return false;
+        std::numeric_limits<size_t>::max() / sampleSize) {
+      return SetError("SRC_AUDIT_FIX SRC-2790: preload byte count overflow");
     }
-    size_t iBytes = static_cast<size_t>(iSamples) * samplesize;
-    m_Buffer.Get()->reserve(iBytes);
+    size_t iBytes = static_cast<size_t>(iSamples) * sampleSize;
+    try {
+      m_Buffer.Get()->reserve(iBytes);
+    } catch (const std::bad_alloc&) {
+      return SetError("SRC_AUDIT_FIX SRC-2790: preload reserve failed");
+    }
   }
+
+  const size_t sampleSize = GetSampleSizeBytes();
+  if (static_cast<size_t>(iMaxSamples) >
+      std::numeric_limits<size_t>::max() / sampleSize) {
+    return SetError("SRC_AUDIT_FIX SRC-2790: preload max byte count overflow");
+  }
+  const size_t maxBytes = static_cast<size_t>(iMaxSamples) * sampleSize;
 
   for (;;) {
     /* If the rate changes, we won't preload it. */
     if (pSource->GetStreamToSourceRatio() != m_fRate) {
-      return false; /* Don't bother trying to preload it. */
+      return SetError("SRC_AUDIT_FIX SRC-2790: preload stream ratio changed");
     }
     float buffer[1024];
     if (m_iChannels == 0 || m_iChannels > ARRAYLEN(buffer)) {
-      return false;
+      return SetError("SRC_AUDIT_FIX SRC-2790: invalid preload channel count");
     }
     int iCnt = pSource->Read(buffer, ARRAYLEN(buffer) / m_iChannels);
 
@@ -129,34 +153,46 @@ bool RageSoundReader_Preload::Open(RageSoundReader* pSource) {
       break;
     }
     if (iCnt < 0) {
+      m_sError = pSource->GetError();
+      if (m_sError.empty()) {
+        m_sError = "SRC_AUDIT_FIX SRC-2790: preload source read failed";
+      }
       return false;
     }
     if (iCnt == 0) {
-      return false;
+      return SetError("SRC_AUDIT_FIX SRC-2790: preload source returned zero frames");
     }
     if (static_cast<unsigned>(iCnt) > ARRAYLEN(buffer) / m_iChannels ||
         static_cast<unsigned>(iCnt) >
             static_cast<unsigned>(std::numeric_limits<int>::max()) /
                 m_iChannels) {
-      return false;
+      return SetError("SRC_AUDIT_FIX SRC-2790: preload read count overflow");
     }
-    /* Add the buffer. */
-    if (m_bBufferIs16Bit) {
-      int16_t buffer16[1024];
-      RageSoundUtil::ConvertFloatToNativeInt16(
-          buffer, buffer16, iCnt * m_iChannels);
-      m_Buffer.Get()->append(
-          (char*)buffer16, (char*)(buffer16 + iCnt * m_iChannels));
-    } else {
-      m_Buffer.Get()->append(
-          (char*)buffer, (char*)(buffer + iCnt * m_iChannels));
+    const size_t chunkSamples = static_cast<size_t>(iCnt) * m_iChannels;
+    if (chunkSamples > std::numeric_limits<size_t>::max() / sampleSize) {
+      return SetError("SRC_AUDIT_FIX SRC-2790: preload chunk byte overflow");
+    }
+    const size_t chunkBytes = chunkSamples * sampleSize;
+    if (m_Buffer->size() > maxBytes || chunkBytes > maxBytes - m_Buffer->size()) {
+      return SetError("SRC_AUDIT_FIX SRC-2790: preload exceeds sample limit");
     }
 
-    if (static_cast<size_t>(iMaxSamples) >
-            std::numeric_limits<size_t>::max() / samplesize ||
-        m_Buffer.Get()->size() >
-            static_cast<size_t>(iMaxSamples) * samplesize) {
-      return false; /* too big */
+    /* Add the buffer. */
+    try {
+      if (m_bBufferIs16Bit) {
+        int16_t buffer16[1024];
+        RageSoundUtil::ConvertFloatToNativeInt16(
+            buffer, buffer16, static_cast<int>(chunkSamples));
+        m_Buffer.Get()->append(
+            reinterpret_cast<const char*>(buffer16),
+            reinterpret_cast<const char*>(buffer16 + chunkSamples));
+      } else {
+        m_Buffer.Get()->append(
+            reinterpret_cast<const char*>(buffer),
+            reinterpret_cast<const char*>(buffer + chunkSamples));
+      }
+    } catch (const std::bad_alloc&) {
+      return SetError("SRC_AUDIT_FIX SRC-2790: preload append failed");
     }
   }
 
@@ -169,20 +205,51 @@ int RageSoundReader_Preload::GetLength() const {
   if (m_iSampleRate <= 0) {
     return 0;
   }
-  return int(float(GetTotalFrames()) * 1000.f / m_iSampleRate);
+  const double lengthMs =
+      static_cast<double>(GetTotalFramesSize()) * 1000.0 /
+      static_cast<double>(m_iSampleRate);
+  if (!std::isfinite(lengthMs) || lengthMs < 0.0) {
+    return 0;
+  }
+  if (lengthMs > static_cast<double>(std::numeric_limits<int>::max())) {
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(lengthMs);
 }
 
 int RageSoundReader_Preload::GetLength_Fast() const { return GetLength(); }
 
 int RageSoundReader_Preload::SetPosition(int iFrame) {
-  if (!std::isfinite(m_fRate) || m_fRate <= 0.0f) {
+  const size_t frameSize = GetFrameSizeBytes();
+  if (!std::isfinite(m_fRate) || m_fRate <= 0.0f || frameSize == 0) {
+    SetError("SRC_AUDIT_FIX SRC-2791: invalid preload seek state");
     return ERROR;
   }
-  m_iPosition = std::max(0, iFrame);
-  m_iPosition = static_cast<int>((m_iPosition / m_fRate) + 0.5);
+  const size_t totalFrames = GetTotalFramesSize();
+  const double targetFrame =
+      (static_cast<double>(std::max(0, iFrame)) / m_fRate) + 0.5;
+  if (!std::isfinite(targetFrame) || targetFrame < 0.0) {
+    SetError("SRC_AUDIT_FIX SRC-2791: preload seek position overflow");
+    return ERROR;
+  }
+  if (targetFrame >= static_cast<double>(totalFrames)) {
+    m_iPosition =
+        totalFrames > static_cast<size_t>(std::numeric_limits<int>::max())
+            ? std::numeric_limits<int>::max()
+            : static_cast<int>(totalFrames);
+    return 0;
+  }
+  if (targetFrame > static_cast<double>(std::numeric_limits<int>::max())) {
+    SetError("SRC_AUDIT_FIX SRC-2791: preload seek position exceeds int range");
+    return ERROR;
+  }
+  m_iPosition = static_cast<int>(targetFrame);
 
-  if (m_iPosition >= int(m_Buffer->size() / framesize)) {
-    m_iPosition = m_Buffer->size() / framesize;
+  if (static_cast<size_t>(m_iPosition) >= totalFrames) {
+    m_iPosition =
+        totalFrames > static_cast<size_t>(std::numeric_limits<int>::max())
+            ? std::numeric_limits<int>::max()
+            : static_cast<int>(totalFrames);
     return 0;
   }
 
@@ -193,47 +260,65 @@ int RageSoundReader_Preload::GetNextSourceFrame() const {
   if (!std::isfinite(m_fRate) || m_fRate <= 0.0f) {
     return 0;
   }
-  return static_cast<int>((m_iPosition * m_fRate) + 0.5);
+  const double sourceFrame =
+      (static_cast<double>(m_iPosition) * static_cast<double>(m_fRate)) + 0.5;
+  if (!std::isfinite(sourceFrame) || sourceFrame <= 0.0) {
+    return 0;
+  }
+  if (sourceFrame > static_cast<double>(std::numeric_limits<int>::max())) {
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(sourceFrame);
 }
 
 int RageSoundReader_Preload::Read(float* pBuffer, int iFrames) {
   if (iFrames == 0) {
     return 0;
   }
-  if (pBuffer == nullptr || iFrames < 0 || m_iChannels == 0 || framesize == 0) {
+  const size_t frameSize = GetFrameSizeBytes();
+  if (pBuffer == nullptr || iFrames < 0 || m_iChannels == 0 || frameSize == 0) {
+    SetError("SRC_AUDIT_FIX SRC-2791: invalid preload read arguments");
     return ERROR;
   }
-  const int iSizeFrames = m_Buffer->size() / framesize;
-  const int iFramesAvail = iSizeFrames - m_iPosition;
+  const size_t sizeFrames = GetTotalFramesSize();
+  if (m_iPosition < 0 || static_cast<size_t>(m_iPosition) > sizeFrames) {
+    SetError("SRC_AUDIT_FIX SRC-2791: invalid preload read position");
+    return ERROR;
+  }
+  const size_t framesAvail = sizeFrames - static_cast<size_t>(m_iPosition);
 
-  iFrames = std::min(iFrames, iFramesAvail);
-  if (iFrames < 0 ||
-      static_cast<unsigned>(iFrames) >
-          static_cast<unsigned>(std::numeric_limits<int>::max()) /
-              m_iChannels) {
+  const size_t framesToRead =
+      std::min(static_cast<size_t>(iFrames), framesAvail);
+  if (framesToRead >
+      static_cast<size_t>(std::numeric_limits<int>::max()) / m_iChannels) {
+    SetError("SRC_AUDIT_FIX SRC-2791: preload read sample count overflow");
     return ERROR;
   }
-  if (iFrames == 0) {
+  if (framesToRead == 0) {
     return END_OF_FILE;
   }
-  const int samples = iFrames * m_iChannels;
+  const size_t samples = framesToRead * m_iChannels;
+  if (samples > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    SetError("SRC_AUDIT_FIX SRC-2791: preload read sample count overflow");
+    return ERROR;
+  }
+  const size_t byteOffset = static_cast<size_t>(m_iPosition) * frameSize;
+  const size_t byteCount = framesToRead * frameSize;
+  if (byteOffset > m_Buffer->size() || byteCount > m_Buffer->size() - byteOffset) {
+    SetError("SRC_AUDIT_FIX SRC-2791: preload read byte range overflow");
+    return ERROR;
+  }
   if (m_bBufferIs16Bit) {
     const int16_t* pIn =
-        (const int16_t*)(m_Buffer->data() + (m_iPosition * framesize));
+        reinterpret_cast<const int16_t*>(m_Buffer->data() + byteOffset);
     RageSoundUtil::ConvertNativeInt16ToFloat(
-        pIn, pBuffer, samples);
+        pIn, pBuffer, static_cast<int>(samples));
   } else {
-    if (static_cast<size_t>(iFrames) >
-        std::numeric_limits<size_t>::max() / framesize) {
-      return ERROR;
-    }
-    memcpy(
-        pBuffer, m_Buffer->data() + (m_iPosition * framesize),
-        static_cast<size_t>(iFrames) * framesize);
+    memcpy(pBuffer, m_Buffer->data() + byteOffset, byteCount);
   }
-  m_iPosition += iFrames;
+  m_iPosition += static_cast<int>(framesToRead);
 
-  return iFrames;
+  return static_cast<int>(framesToRead);
 }
 
 RageSoundReader_Preload* RageSoundReader_Preload::Copy() const {
@@ -242,6 +327,35 @@ RageSoundReader_Preload* RageSoundReader_Preload::Copy() const {
 
 int RageSoundReader_Preload::GetReferenceCount() const {
   return m_Buffer.GetReferenceCount();
+}
+
+size_t RageSoundReader_Preload::GetSampleSizeBytes() const {
+  return m_bBufferIs16Bit ? sizeof(int16_t) : sizeof(float);
+}
+
+size_t RageSoundReader_Preload::GetFrameSizeBytes() const {
+  if (m_iChannels == 0) {
+    return 0;
+  }
+  const size_t sampleSize = GetSampleSizeBytes();
+  if (static_cast<size_t>(m_iChannels) >
+      std::numeric_limits<size_t>::max() / sampleSize) {
+    return 0;
+  }
+  return sampleSize * static_cast<size_t>(m_iChannels);
+}
+
+size_t RageSoundReader_Preload::GetTotalFramesSize() const {
+  const size_t frameSize = GetFrameSizeBytes();
+  if (frameSize == 0) {
+    return 0;
+  }
+  return m_Buffer->size() / frameSize;
+}
+
+bool RageSoundReader_Preload::SetError(const std::string& sError) {
+  m_sError = sError;
+  return false;
 }
 
 /*
