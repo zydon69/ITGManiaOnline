@@ -70,6 +70,33 @@ void TraceMusicWheelReintro(const char* event, const std::string& details) {
   }
 }
 
+const char* WheelItemDataTypeTraceName(WheelItemDataType type) {
+  switch (type) {
+    case WheelItemDataType_Generic:
+      return "Generic";
+    case WheelItemDataType_Section:
+      return "Section";
+    case WheelItemDataType_Song:
+      return "Song";
+    case WheelItemDataType_Roulette:
+      return "Roulette";
+    case WheelItemDataType_Random:
+      return "Random";
+    case WheelItemDataType_Portal:
+      return "Portal";
+    case WheelItemDataType_Course:
+      return "Course";
+    case WheelItemDataType_Sort:
+      return "Sort";
+    case WheelItemDataType_Custom:
+      return "Custom";
+    case WheelItemDataType_ParentSection:
+      return "ParentSection";
+    default:
+      return "Invalid";
+  }
+}
+
 std::string TraceMusicWheelItemName(const MusicWheelItemData* item) {
   if (item == nullptr) {
     return "<null>";
@@ -2027,10 +2054,11 @@ void MusicWheel::ChangeMusic(int iDist) {
       "music_change",
       ssprintf(
           "dist=%d prevSelection=%d newSelection=%d prevOffset=%.4f "
-          "dataCount=%zu moving=%d selectedType=%d selectedText='%s'",
+          "dataCount=%zu moving=%d selectedType=%s selectedText='%s'",
           iDist, previousSelection, m_iSelection, previousOffset,
           m_CurWheelItemData.size(), m_Moving,
-          selectedItem != nullptr ? static_cast<int>(selectedItem->m_Type) : -1,
+          selectedItem != nullptr ? WheelItemDataTypeTraceName(selectedItem->m_Type)
+                                  : "<null>",
           TraceMusicWheelItemName(selectedItem).c_str()));
 
   if (REMIND_WHEEL_POSITIONS && HIDE_INACTIVE_SECTIONS && SONGMAN != nullptr) {
