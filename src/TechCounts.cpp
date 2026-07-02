@@ -208,11 +208,8 @@ void TechCounts::CalculateTechCountsFromRows(
     return;
   }
 
-  for (unsigned long i = 1; i < rows.size(); i++) {
+  for (size_t i = 0; i < rows.size(); ++i) {
     const StepParity::Row& currentRow = rows[i];
-    const StepParity::Row& previousRow = rows[i - 1];
-
-    float elapsedTime = currentRow.second - previousRow.second;
 
     // Jacks are same arrow same foot
     // Doublestep is same foot on successive arrows
@@ -221,6 +218,31 @@ void TechCounts::CalculateTechCountsFromRows(
     // Footswitch is different foot on the up or down arrow
     // Sideswitch is footswitch on left or right arrow
     // Crossovers are left foot on right arrow or vice versa
+
+    // Check for brackets before any previous-row comparisons so brackets on
+    // the first row are counted.
+    if (currentRow.noteCount >= 2) {
+      if (currentRow.whereTheFeetAre[StepParity::LEFT_HEEL] !=
+              StepParity::INVALID_COLUMN &&
+          currentRow.whereTheFeetAre[StepParity::LEFT_TOE] !=
+              StepParity::INVALID_COLUMN) {
+        out[TechCountsCategory_Brackets] += 1;
+      }
+
+      if (currentRow.whereTheFeetAre[StepParity::RIGHT_HEEL] !=
+              StepParity::INVALID_COLUMN &&
+          currentRow.whereTheFeetAre[StepParity::RIGHT_TOE] !=
+              StepParity::INVALID_COLUMN) {
+        out[TechCountsCategory_Brackets] += 1;
+      }
+    }
+
+    if (i == 0) {
+      continue;
+    }
+
+    const StepParity::Row& previousRow = rows[i - 1];
+    float elapsedTime = currentRow.second - previousRow.second;
 
     // Check for jacks and doublesteps
     if (currentRow.noteCount == 1 && previousRow.noteCount == 1) {
@@ -240,23 +262,6 @@ void TechCounts::CalculateTechCountsFromRows(
             out[TechCountsCategory_Doublesteps] += 1;
           }
         }
-      }
-    }
-
-    // Check for brackets
-    if (currentRow.noteCount >= 2) {
-      if (currentRow.whereTheFeetAre[StepParity::LEFT_HEEL] !=
-              StepParity::INVALID_COLUMN &&
-          currentRow.whereTheFeetAre[StepParity::LEFT_TOE] !=
-              StepParity::INVALID_COLUMN) {
-        out[TechCountsCategory_Brackets] += 1;
-      }
-
-      if (currentRow.whereTheFeetAre[StepParity::RIGHT_HEEL] !=
-              StepParity::INVALID_COLUMN &&
-          currentRow.whereTheFeetAre[StepParity::RIGHT_TOE] !=
-              StepParity::INVALID_COLUMN) {
-        out[TechCountsCategory_Brackets] += 1;
       }
     }
 
