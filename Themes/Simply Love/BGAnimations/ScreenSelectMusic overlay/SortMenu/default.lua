@@ -194,6 +194,8 @@ end
 ------------------------------------------------------------
 
 local function AddFavorites()
+	if GAMESTATE:IsCourseMode() then return false end
+
     for player in ivalues(GAMESTATE:GetHumanPlayers()) do
         local path = getFavoritesPath(player)
         if FILEMAN:DoesFileExist(path) then
@@ -433,10 +435,12 @@ local t = Def.ActorFrame {
 				{
 					{ {"FeelingSalty", "TestInput"}, GAMESTATE:IsEventMode() },
 					{ {"HardTime", "PracticeMode"}, PracticeModeAvailable },
-					{ {"TakeABreather", "LoadNewSongs"} },
+					-- Loading songs from course mode can invalidate generated courses,
+					-- including the currently selected course.
+					{ {"TakeABreather", "LoadNewSongs"}, not GAMESTATE:IsCourseMode() },
 					{ {"NeedMoreRam", "ViewDownloads"}, DownloadsExist },
 					{ {"SetSummaryText", "SetSummary"}, SL.Global.Stages.PlayedThisGame > 0 },
-					{ {"BottomText", "OnlineLobbies"}, GAMESTATE:IsEventMode() },
+					{ {"BottomText", "OnlineLobbies"}, GAMESTATE:IsEventMode() and not GAMESTATE:IsCourseMode() },
 				}
 			},
 			{
