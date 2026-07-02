@@ -393,6 +393,7 @@ void RageLog::Write(int where, const std::string& sLine) {
 }
 
 void RageLog::Flush() {
+  LockMut(*g_Mutex);
   g_fileLog->Flush();
   g_fileInfo->Flush();
   g_fileTimeLog->Flush();
