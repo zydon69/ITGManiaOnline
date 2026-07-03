@@ -211,6 +211,10 @@ StageStats::StageStats() {
   m_fMusicRate = 1;
   FOREACH_PlayerNumber(pn) { m_player[pn].Init(pn); }
   FOREACH_MultiPlayer(pn) { m_multiPlayer[pn].Init(pn); }
+  m_RoutinePlayer.Init(
+      GAMESTATE != nullptr && IsValidPlayerNumber(GAMESTATE->GetMasterPlayerNumber())
+          ? GAMESTATE->GetMasterPlayerNumber()
+          : PLAYER_1);
 }
 
 void StageStats::Init() { *this = StageStats(); }
@@ -613,6 +617,38 @@ void StageStats::FinalizeScores(bool bSummary) {
         sPlayerGuid, sSongOptions, sMachineGuid, PREFSMAN->m_iProductID);
     bMultiPlayerScoreFilled[mp] = true;
   }
+  const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+  const Style* pMasterStyle = IsValidPlayerNumber(master)
+                                  ? GAMESTATE->GetCurrentStyle(master)
+                                  : nullptr;
+  const bool bRoutineSharedStyle =
+      pMasterStyle != nullptr &&
+      pMasterStyle->m_StyleType == StyleType_TwoPlayersSharedSides;
+  if (bRoutineSharedStyle && IsValidPlayerNumber(master) &&
+      HasRecordedPlayerStats(m_RoutinePlayer) &&
+      CanFillHighScore(master, "StageStats::FinalizeScores routine")) {
+    const Profile* pPlayerProfile = PROFILEMAN->GetProfile(master);
+    std::string sPlayerGuid =
+        PROFILEMAN->IsPersistentProfile(master) && pPlayerProfile != nullptr
+            ? pPlayerProfile->m_sGuid
+            : std::string("");
+    m_player[master].m_HighScore = FillInHighScore(
+        m_RoutinePlayer, *GAMESTATE->m_pPlayerState[master],
+        RANKING_TO_FILL_IN_MARKER[master], sPlayerGuid, sSongOptions,
+        sMachineGuid, PREFSMAN->m_iProductID);
+    m_player[master].m_HighScore.SetName(RANKING_TO_FILL_IN_MARKER[master]);
+    bPlayerScoreFilled[master] = true;
+    LOG->Trace(
+        "Routine shared high score prepared: master=%i score=%u percent=%.6f.",
+        static_cast<int>(master), m_RoutinePlayer.m_iScore,
+        m_RoutinePlayer.GetPercentDancePoints());
+
+    FOREACH_PlayerNumber(p) {
+      if (p != master) {
+        bPlayerScoreFilled[p] = false;
+      }
+    }
+  }
 
   FOREACH_PlayerNumber(p) {
     if (!bPlayerScoreFilled[p]) {
@@ -962,6 +998,10 @@ class LunaStageStats : public Luna<StageStats> {
     LuaHelpers::Push(L, p->m_bGaveUp);
     return 1;
   }
+  static int GetRoutineStageStats(T* p, lua_State* L) {
+    p->m_RoutinePlayer.PushSelf(L);
+    return 1;
+  }
 
   LunaStageStats() {
     ADD_METHOD(GetPlayerStageStats);
@@ -977,6 +1017,7 @@ class LunaStageStats : public Luna<StageStats> {
     ADD_METHOD(GetStepsSeconds);
     ADD_METHOD(PlayerHasHighScore);
     ADD_METHOD(GetEarnedExtraStage);
+    ADD_METHOD(GetRoutineStageStats);
   }
 };
 

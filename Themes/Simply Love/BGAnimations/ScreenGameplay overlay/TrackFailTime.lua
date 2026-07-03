@@ -5,7 +5,9 @@
 -- This does not count if the player holds start to fail
 
 local player = ...
-local pn = ToEnumShortString(player)
+local routineShared = IsRoutine and IsRoutine()
+local sourcePlayer = routineShared and GAMESTATE:GetMasterPlayerNumber() or player
+local pn = ToEnumShortString(sourcePlayer)
 
 local NotifyOnlineFailed = function()
     if ITGOnline and ITGOnline.MarkPlayFailedEarly then
@@ -95,37 +97,47 @@ end
 local af = Def.Actor{
 	HealthStateChangedMessageCommand=function(self, param)
 		-- Only do something if the player fails
-		if param.PlayerNumber == player and IsDeadHealthState(param.HealthState) then			
+		if param.PlayerNumber == sourcePlayer and IsDeadHealthState(param.HealthState) then
 			NotifyOnlineFailed()
 
-			local playerState = GAMESTATE:GetPlayerState(player)			
+			local playerState = GAMESTATE:GetPlayerState(sourcePlayer)
+			if not playerState then return end
 
 			-- These functions already account for rate mod
-			local currentSecond = CurrentTimeSongOrCourse(player)
+			local currentSecond = CurrentTimeSongOrCourse(sourcePlayer)
 			-- The course mode graph only shows lifebar history for the entire course up until the end
             -- of the current song. So for positioning in course mode, we need to find the total time
             -- of all the songs up until the end of the current song. This is *maybe* correct.
-			local totalSeconds = TotalLengthSongOrCourse(player)
-			local deathSecond = CurrentTimeSongOrCourse(player)
+			local totalSeconds = TotalLengthSongOrCourse(sourcePlayer)
+			local deathSecond = CurrentTimeSongOrCourse(sourcePlayer)
 			local graphPercentage = 0
             local graphLabel = 0
 
 			if GAMESTATE:IsCourseMode() then 
-				local cumulativeSeconds = CourseLengthPerSong(player)
+				local cumulativeSeconds = CourseLengthPerSong(sourcePlayer)
 				local courseIndex = GAMESTATE:GetCourseSongIndex()
-				local totalSecondsToEndOfSong = cumulativeSeconds[courseIndex+1]
+				local totalSecondsToEndOfSong = cumulativeSeconds and cumulativeSeconds[courseIndex+1] or totalSeconds
 
-				graphPercentage = deathSecond / totalSecondsToEndOfSong
-				graphLabel = deathSecond / totalSeconds
+				graphPercentage = totalSecondsToEndOfSong > 0 and deathSecond / totalSecondsToEndOfSong or 0
+				graphLabel = totalSeconds > 0 and deathSecond / totalSeconds or 0
 			else 
-				graphPercentage = deathSecond / totalSeconds
+				graphPercentage = totalSeconds > 0 and deathSecond / totalSeconds or 0
 				graphLabel = totalSeconds - deathSecond
 			end
 
 			local currentMeasure = math.floor(playerState:GetSongPosition():GetSongBeatVisible()/4)
 
-			local streams = SL[pn].Streams
-			local storage = SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
+			local streams = SL[pn] and SL[pn].Streams
+			local storage = SL[pn] and SL[pn].Stages and SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
+			if not storage then
+				if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
+					Trace("ROUTINE_UI TrackFailTime skipped missing storage player="
+						.. tostring(ToEnumShortString(player))
+						.. " source=" .. tostring(pn)
+						.. " routine_shared=" .. tostring(routineShared == true))
+				end
+				return
+			end
 
 			storage.TotalSeconds = totalSeconds
 			storage.DeathSecond = deathSecond
@@ -133,9 +145,9 @@ local af = Def.Actor{
 			storage.GraphLabel = graphLabel
 
 			-- find out if this measure was a stream (16ths or higher)
-			if streams.NotesPerMeasure[currentMeasure+1] >= 16 then
+			if streams and streams.NotesPerMeasure and streams.NotesPerMeasure[currentMeasure+1] and streams.NotesPerMeasure[currentMeasure+1] >= 16 then
 				-- find out which measure the fail was 
-				for i=1,#streams.Measures do
+				for i=1,#(streams.Measures or {}) do
 					if currentMeasure >= streams.Measures[i].streamStart and currentMeasure < streams.Measures[i].streamEnd  then							
 						local streamRun = currentMeasure - streams.Measures[i].streamStart + 1
 						local streamTotal = streams.Measures[i].streamEnd - streams.Measures[i].streamStart

@@ -9,10 +9,13 @@
 if SL.Global.GameMode == "Casual" then return end
 
 local player = ...
+local routineShared = IsRoutine and IsRoutine()
+local sourcePlayer = routineShared and GAMESTATE:GetMasterPlayerNumber() or player
+if routineShared and player ~= sourcePlayer then return end
 
-local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
-local storage = SL[ToEnumShortString(player)].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
-local mods = SL[ToEnumShortString(player)].ActiveModifiers
+local stats = routineShared and STATSMAN:GetCurStageStats():GetRoutineStageStats() or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+local storage = SL[ToEnumShortString(sourcePlayer)].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
+local mods = SL[ToEnumShortString(sourcePlayer)].ActiveModifiers
 
 local valid_tns = {
 	-- Emulated, not a real TNS.
@@ -62,7 +65,7 @@ return Def.Actor{
 			W010_total = 0
 		}
 		Trace(("FA_PLUS_ACTIVE: pn=%s window=%s ex=%s hardex=%s pane=%s smaller_white=%s"):format(
-			ToEnumShortString(player),
+			ToEnumShortString(sourcePlayer),
 			tostring(mods.ShowFaPlusWindow),
 			tostring(mods.ShowExScore),
 			tostring(mods.ShowHardEXScore),
@@ -71,8 +74,8 @@ return Def.Actor{
 		))
 	end,
 	JudgmentMessageCommand=function(self, params)
-		if params.Player ~= player then return end
-		if IsAutoplay(player) then return end
+		if params.Player ~= sourcePlayer then return end
+		if IsAutoplay(sourcePlayer) then return end
 		
 		local count_updated = false
 		if params.HoldNoteScore then
@@ -98,8 +101,8 @@ return Def.Actor{
 					-- W010: ArrowCloud HardEX +/-10ms
 					-- W0:   FA+/EX inner Fantastic
 					-- W1:   remaining white Fantastic
-					local is_W010 = IsW010Judgment(params, player)
-					local is_W0 = IsW0Judgment(params, player)
+					local is_W010 = IsW010Judgment(params, sourcePlayer)
+					local is_W0 = IsW0Judgment(params, sourcePlayer)
 					if is_W010 then
 						if not stats:GetFailed() then
 							storage.ex_counts.W0 = storage.ex_counts.W0 + 1
@@ -152,13 +155,13 @@ return Def.Actor{
 		end
 		if count_updated then
 			-- Broadcast so other elements on ScreenGameplay can process the updated count.
-			local ExScore, ActualPoints, ActualPossible = CalculateExScore(player)
-			local HardExScore = CalculateHardExScore(player)
+			local ExScore, ActualPoints, ActualPossible = CalculateExScore(sourcePlayer)
+			local HardExScore = CalculateHardExScore(sourcePlayer)
 
 			MESSAGEMAN:Broadcast(
 				"ExCountsChanged",
 				{
-					Player=player,
+					Player=sourcePlayer,
 					ExCounts=storage.ex_counts,
 					ExScore=ExScore,
 					HardExScore=HardExScore,
@@ -171,7 +174,7 @@ return Def.Actor{
 	OffCommand=function(self)
 		local counts = storage.ex_counts or {}
 		Trace(("FA_PLUS_SUMMARY: pn=%s w010=%s w0=%s w1=%s w2=%s w3=%s miss=%s held=%s letgo=%s smaller_white=%s"):format(
-			ToEnumShortString(player),
+			ToEnumShortString(sourcePlayer),
 			tostring(counts.W010_total or counts.W010 or 0),
 			tostring(counts.W0_total or counts.W0 or 0),
 			tostring(counts.W1 or 0),

@@ -151,6 +151,38 @@ const char* SafeStepsTypeName(StepsType st) {
                               : "Invalid";
 }
 
+std::string SafeStepsLabel(const Steps* steps) {
+  if (steps == nullptr) {
+    return "<none>";
+  }
+
+  return ssprintf(
+      "%s/%s/%d", SafeStepsTypeName(steps->m_StepsType),
+      DifficultyToString(steps->GetDifficulty()).c_str(), steps->GetMeter());
+}
+
+Steps* FindEasiestStepsForType(Song* song, StepsType stepsType) {
+  if (song == nullptr || !IsValidStepsType(stepsType)) {
+    return nullptr;
+  }
+
+  Steps* best = nullptr;
+  const std::vector<Steps*>& allSteps = song->GetAllSteps();
+  for (Steps* steps : allSteps) {
+    if (steps == nullptr || steps->m_StepsType != stepsType) {
+      continue;
+    }
+    if (best == nullptr ||
+        steps->GetDifficulty() < best->GetDifficulty() ||
+        (steps->GetDifficulty() == best->GetDifficulty() &&
+         steps->GetMeter() < best->GetMeter())) {
+      best = steps;
+    }
+  }
+
+  return best;
+}
+
 bool IsFiniteFloat(float value) {
   return std::isfinite(static_cast<double>(value));
 }
@@ -1367,6 +1399,56 @@ void GameState::SetCompatibleStylesForPlayers() {
     return;
   }
 
+  if (!IsCourseMode()) {
+    const Style* shared_style = nullptr;
+    FOREACH_EnabledPlayer(pn) {
+      const Style* style = GetCurrentStyle(pn);
+      if (style != nullptr &&
+          style->m_StyleType == StyleType_TwoPlayersSharedSides) {
+        shared_style = style;
+        break;
+      }
+    }
+
+    if (shared_style != nullptr) {
+      Steps* shared_steps = nullptr;
+      FOREACH_EnabledPlayer(pn) {
+        shared_steps = m_pCurSteps[pn].Get();
+        if (shared_steps != nullptr &&
+            shared_steps->m_StepsType == shared_style->m_StepsType) {
+          break;
+        }
+      }
+
+      if (shared_steps == nullptr ||
+          shared_steps->m_StepsType != shared_style->m_StepsType) {
+        Steps* replacement =
+            FindEasiestStepsForType(m_pCurSong.Get(), shared_style->m_StepsType);
+        if (replacement != nullptr) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX Routine: preserving shared-side style %s by "
+              "replacing incompatible pre-finalize steps %s with %s for song "
+              "'%s'.",
+              SafeStepsTypeName(shared_style->m_StepsType),
+              SafeStepsLabel(shared_steps).c_str(),
+              SafeStepsLabel(replacement).c_str(),
+              m_pCurSong != nullptr ? m_pCurSong->GetDisplayFullTitle().c_str()
+                                    : "<none>");
+          FOREACH_EnabledPlayer(pn) {
+            m_pCurSteps[pn].Set(replacement);
+          }
+        } else {
+          LOG->Warn(
+              "SRC_AUDIT_FIX Routine: shared-side style %s selected for song "
+              "'%s' but no compatible steps exist.",
+              SafeStepsTypeName(shared_style->m_StepsType),
+              m_pCurSong != nullptr ? m_pCurSong->GetDisplayFullTitle().c_str()
+                                    : "<none>");
+        }
+      }
+    }
+  }
+
   bool style_set = false;
   if (IsCourseMode()) {
     if (m_pCurCourse != nullptr) {
@@ -1450,13 +1532,42 @@ void GameState::ForceSharedSidesMatch() {
           other_pn);
       return;
     }
-    if (other_style->m_StyleType != StyleType_TwoPlayersSharedSides) {
-      SetCurrentStyle(shared_style, other_pn);
-      if (IsCourseMode()) {
-        m_pCurTrail[other_pn].Set(m_pCurTrail[pn_with_shared]);
-      } else {
-        m_pCurSteps[other_pn].Set(m_pCurSteps[pn_with_shared]);
+
+    if (!IsCourseMode()) {
+      Steps* shared_steps = m_pCurSteps[pn_with_shared].Get();
+      if (shared_steps == nullptr ||
+          shared_steps->m_StepsType != shared_style->m_StepsType) {
+        Steps* replacement =
+            FindEasiestStepsForType(m_pCurSong.Get(), shared_style->m_StepsType);
+        if (replacement != nullptr) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX Routine: shared-side style %s replaced "
+              "incompatible steps %s with %s for song '%s'.",
+              SafeStepsTypeName(shared_style->m_StepsType),
+              SafeStepsLabel(shared_steps).c_str(),
+              SafeStepsLabel(replacement).c_str(),
+              m_pCurSong != nullptr ? m_pCurSong->GetDisplayFullTitle().c_str()
+                                    : "<none>");
+          m_pCurSteps[pn_with_shared].Set(replacement);
+        } else {
+          LOG->Warn(
+              "SRC_AUDIT_FIX Routine: shared-side style %s has no compatible "
+              "steps for song '%s'; gameplay selection remains invalid.",
+              SafeStepsTypeName(shared_style->m_StepsType),
+              m_pCurSong != nullptr ? m_pCurSong->GetDisplayFullTitle().c_str()
+                                    : "<none>");
+        }
       }
+    }
+
+    if (other_style->m_StyleType != StyleType_TwoPlayersSharedSides ||
+        other_style != shared_style) {
+      SetCurrentStyle(shared_style, other_pn);
+    }
+    if (IsCourseMode()) {
+      m_pCurTrail[other_pn].Set(m_pCurTrail[pn_with_shared]);
+    } else {
+      m_pCurSteps[other_pn].Set(m_pCurSteps[pn_with_shared]);
     }
   }
 }

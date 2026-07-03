@@ -1232,7 +1232,9 @@ end
 -- -----------------------------------------------------------------------
 -- Calculate ArrowCloud HardEX score. HardEX uses a +/-10ms inner Fantastic
 -- split and stricter weights:
--- 10ms=3.5, white Fantastic=3, Excellent=1, Great/Decent/WayOff/Miss=0.
+-- 10ms=3.5, white Fantastic=3, Excellent=1, Great=0. Decents,
+-- WayOffs, misses, dropped holds, and mines are subtractive so the live
+-- score can move down when bad judgments occur.
 CalculateHardExScore = function(player, ex_counts, use_actual_w0_weight)
 	if SL and SL.Global and SL.Global.GameMode == "Casual" then return 0 end
 	local StepsOrTrail = (safe_is_course_mode() and safe_game_state_method("GetCurrentTrail", nil, player)) or safe_game_state_method("GetCurrentSteps", nil, player)

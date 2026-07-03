@@ -14,11 +14,13 @@ local af = Def.ActorFrame{
 
     self:addy(mods.NoteFieldOffsetY)
     local player = GetPlayerAF(pn)
+    if not player then return end
     
     player:addx(adjusted_offset_x + online_layout_offset_x)
     player:addy(mods.NoteFieldOffsetY)
 
     local notefield = player:GetChild("NoteField")
+    if not notefield then return end
     if mods.MeasureLines == "Off" then
       notefield:SetBeatBars(false)
       notefield:SetBeatBarsAlpha(0, 0, 0, 0)

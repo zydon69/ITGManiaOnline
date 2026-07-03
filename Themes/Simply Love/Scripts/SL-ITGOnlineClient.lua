@@ -82,6 +82,8 @@ ITGOnline.lastAcceptedScoreFingerprint = ITGOnline.lastAcceptedScoreFingerprint 
 ITGOnline.scoreInFlightFingerprint = ITGOnline.scoreInFlightFingerprint or nil
 ITGOnline.lastDisplayedScoreSnapshot = ITGOnline.lastDisplayedScoreSnapshot or nil
 ITGOnline.lastDisplayedScoreSnapshotAt = ITGOnline.lastDisplayedScoreSnapshotAt or 0
+ITGOnline.failedScoreSnapshot = ITGOnline.failedScoreSnapshot or nil
+ITGOnline.failedScoreSnapshotRoundKey = ITGOnline.failedScoreSnapshotRoundKey or ""
 ITGOnline.lastScoreJudgmentsByRoundKey = ITGOnline.lastScoreJudgmentsByRoundKey or {}
 ITGOnline.pendingLiveScoreSnapshot = ITGOnline.pendingLiveScoreSnapshot or nil
 ITGOnline.pendingLiveScoreRoundKey = ITGOnline.pendingLiveScoreRoundKey or ""
@@ -1234,6 +1236,52 @@ local function first_enabled_player()
 		end
 	end
 	return PLAYER_1
+end
+
+local function online_score_source_player()
+	local player = first_enabled_player()
+	local isRoutine = IsRoutine and IsRoutine()
+	if isRoutine and GAMESTATE and GAMESTATE.GetMasterPlayerNumber then
+		local ok, master = safe_call("online_score_source_master", function()
+			return GAMESTATE:GetMasterPlayerNumber()
+		end)
+		if ok and master then
+			player = master
+		end
+	end
+	return player
+end
+
+local function online_stage_stats_for_score(player)
+	if not player or not STATSMAN or not STATSMAN.GetCurStageStats then return nil end
+	local ok, stats = safe_call("online_stage_stats_for_score", function()
+		local stageStats = STATSMAN:GetCurStageStats()
+		if not stageStats then return nil end
+		if IsRoutine and IsRoutine() and stageStats.GetRoutineStageStats then
+			return stageStats:GetRoutineStageStats()
+		end
+		return stageStats:GetPlayerStageStats(player)
+	end)
+	if ok then return stats end
+	return nil
+end
+
+local function online_score_failed(player, stats)
+	local ok, failed = pcall(function() return stats and stats:GetFailed() end)
+	if ok and failed == true then return true end
+	if player and STATSMAN and STATSMAN.GetCurStageStats then
+		local sourceOk, sourceFailed = safe_call("online_score_failed_source_stats", function()
+			return STATSMAN:GetCurStageStats():GetPlayerStageStats(player):GetFailed()
+		end)
+		if sourceOk and sourceFailed == true then return true end
+	end
+	if player and GAMESTATE and GAMESTATE.GetPlayerState then
+		local healthOk, healthState = safe_call("online_score_failed_health", function()
+			return GAMESTATE:GetPlayerState(player):GetHealthState()
+		end)
+		if healthOk and tostring(healthState) == "HealthState_Dead" then return true end
+	end
+	return false
 end
 
 local function online_local_player_count()
@@ -4227,6 +4275,8 @@ function ITGOnline:ResetOnlineRoundRuntimeState(source)
 	self.lastAcceptedScoreSongPosition = 0
 	self.lastDisplayedScoreSnapshot = nil
 	self.lastDisplayedScoreSnapshotAt = 0
+	self.failedScoreSnapshot = nil
+	self.failedScoreSnapshotRoundKey = ""
 	self.lastScoreJudgmentsByRoundKey = {}
 	self:ClearActiveGameplayRound(source or "round_runtime_state_reset")
 end
@@ -5759,15 +5809,8 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 		return true
 	end
 
-	local player = first_enabled_player()
-	local stats = nil
-	if player and STATSMAN and STATSMAN.GetCurStageStats then
-		local statsOk, statsValue = safe_call("evaluation_player_stage_stats", function()
-			local stageStats = STATSMAN:GetCurStageStats()
-			return stageStats and stageStats:GetPlayerStageStats(player) or nil
-		end)
-		if statsOk then stats = statsValue end
-	end
+	local player = online_score_source_player()
+	local stats = online_stage_stats_for_score(player)
 	local failedOk, failedValue = pcall(function() return stats and stats:GetFailed() end)
 	local failed = failedOk and failedValue == true
 	local currentPlayState = self:CurrentUserPlayState(self.currentRoom)
@@ -7604,6 +7647,8 @@ function ITGOnline:Disconnect(options)
 	self.activeGameplayRoundKey = ""
 	self.lastDisplayedScoreSnapshot = nil
 	self.lastDisplayedScoreSnapshotAt = 0
+	self.failedScoreSnapshot = nil
+	self.failedScoreSnapshotRoundKey = ""
 	self.lastScoreJudgmentsByRoundKey = {}
 	self.pendingLiveScoreSnapshot = nil
 	self.pendingLiveScoreRoundKey = ""
@@ -9338,13 +9383,9 @@ function ITGOnline:ScoreFingerprint(score, combo, maxCombo, failed, judgments)
 end
 
 function ITGOnline:BuildCurrentScoreSnapshot()
-	local player = first_enabled_player()
-	if not player or not STATSMAN or not STATSMAN.GetCurStageStats then return nil end
-
-	local ok, stats = pcall(function()
-		return STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
-	end)
-	if not ok or not stats then return nil end
+	local player = online_score_source_player()
+	local stats = online_stage_stats_for_score(player)
+	if not player or not stats then return nil end
 
 	local dancePoints = 0
 	local danceOk, danceValue = pcall(function() return stats:GetPercentDancePoints() end)
@@ -9378,16 +9419,19 @@ function ITGOnline:BuildCurrentScoreSnapshot()
 	local combo = 0
 	local comboOk, comboValue = pcall(function() return stats:GetCurrentCombo() end)
 	if comboOk and tonumber(comboValue) then combo = tonumber(comboValue) end
+	local failed = online_score_failed(player, stats)
 
 	if self.debugScoreTrace == true then
 		local nowSecond = math.floor(GetTimeSinceStart())
 		if nowSecond ~= tonumber(self.lastHudScoreTraceSecond) then
 			self.lastHudScoreTraceSecond = nowSecond
 			online_trace(string.format(
-				"hud-score room=%s round=%s mode=%s displayed=%.3f score=%.3f ex=%.3f hardex=%.3f combo=%d",
+				"hud-score room=%s round=%s mode=%s player=%s routine=%s displayed=%.3f score=%.3f ex=%.3f hardex=%.3f combo=%d",
 				tostring(self.currentRoomId or ""),
 				tostring(self.PlayStateKey and self:PlayStateKey() or ""),
 				tostring(scoreMode),
+				tostring(player),
+				tostring(IsRoutine and IsRoutine() or false),
 				tonumber(displayedPercent) or 0,
 				tonumber(scorePercent) or 0,
 				tonumber(exScore) or 0,
@@ -9397,7 +9441,7 @@ function ITGOnline:BuildCurrentScoreSnapshot()
 		end
 	end
 
-	return {
+	local snapshot = {
 		Player = player,
 		ScorePercent = scorePercent,
 		ExScorePercent = exScore,
@@ -9405,18 +9449,64 @@ function ITGOnline:BuildCurrentScoreSnapshot()
 		DisplayedPercent = displayedPercent,
 		ScoreMode = scoreMode,
 		Combo = combo,
+		Failed = failed,
 		scorePercent = scorePercent,
 		exScorePercent = exScore,
 		hardExScorePercent = hardExScore,
 		displayedPercent = displayedPercent,
 		scoreMode = scoreMode,
 		combo = combo,
+		failed = failed,
 	}
+	if failed then
+		return self:FreezeFailedScoreSnapshot(snapshot, "BuildCurrentScoreSnapshot")
+	end
+	return snapshot
 end
 
 function ITGOnline:ScoreSnapshotDisplayedPercent(snapshot)
 	if type(snapshot) ~= "table" then return nil end
 	return tonumber(snapshot.displayedPercent or snapshot.DisplayedPercent)
+end
+
+function ITGOnline:FreezeFailedScoreSnapshot(snapshot, source)
+	if type(snapshot) ~= "table" then return snapshot, false end
+	if not (snapshot.Failed == true or snapshot.failed == true) then return snapshot, false end
+
+	local roundKey = self.CanonicalGameplayRoundKey and self:CanonicalGameplayRoundKey("freeze_failed_score") or ""
+	roundKey = tostring(roundKey or "")
+	if roundKey == "" then
+		roundKey = tostring(self.PlayStateKey and self:PlayStateKey() or self.currentRoomId or "")
+	end
+	if self.failedScoreSnapshot ~= nil and tostring(self.failedScoreSnapshotRoundKey or "") == roundKey then
+		return self.failedScoreSnapshot, true
+	end
+
+	local selected = snapshot
+	local fallback = self.lastDisplayedScoreSnapshot or self.pendingLiveScoreSnapshot
+	if type(fallback) == "table" then
+		selected = self:BestFinalFailedScoreSnapshot(snapshot, fallback) or snapshot
+	end
+
+	local frozen = {}
+	for key, value in pairs(selected) do
+		frozen[key] = value
+	end
+	frozen.Failed = true
+	frozen.failed = true
+	frozen.Frozen = true
+	frozen.frozen = true
+
+	self.failedScoreSnapshot = frozen
+	self.failedScoreSnapshotRoundKey = roundKey
+	online_flow_trace("failed_score_frozen"
+		.. " source=" .. tostring(source or "unknown")
+		.. " roundKey=" .. tostring(roundKey)
+		.. " displayed=" .. tostring(self:ScoreSnapshotDisplayedPercent(frozen) or "nil")
+		.. " score=" .. tostring(frozen.scorePercent or frozen.ScorePercent or "nil")
+		.. " ex=" .. tostring(frozen.exScorePercent or frozen.ExScorePercent or "nil")
+		.. " hardex=" .. tostring(frozen.hardExScorePercent or frozen.HardExScorePercent or "nil"))
+	return frozen, true
 end
 
 function ITGOnline:BestFinalFailedScoreSnapshot(candidate, fallback)
@@ -9497,6 +9587,8 @@ function ITGOnline:QueueLiveScore(snapshot)
 		displayedPercent = scorePercent
 	end
 	local combo = tonumber(snapshot.combo or snapshot.Combo) or 0
+	local failed = snapshot.Failed == true or snapshot.failed == true
+	local frozen = snapshot.Frozen == true or snapshot.frozen == true
 	snapshot = {
 		Player = snapshot.Player,
 		ScorePercent = scorePercent,
@@ -9505,13 +9597,20 @@ function ITGOnline:QueueLiveScore(snapshot)
 		DisplayedPercent = displayedPercent,
 		ScoreMode = scoreMode,
 		Combo = combo,
+		Failed = failed,
+		Frozen = frozen,
 		scorePercent = scorePercent,
 		exScorePercent = exScorePercent,
 		hardExScorePercent = hardExScorePercent,
 		displayedPercent = displayedPercent,
 		scoreMode = scoreMode,
 		combo = combo,
+		failed = failed,
+		frozen = frozen,
 	}
+	if failed then
+		snapshot = self:FreezeFailedScoreSnapshot(snapshot, "QueueLiveScore")
+	end
 	self.lastDisplayedScoreSnapshot = snapshot
 	self.lastDisplayedScoreSnapshotAt = GetTimeSinceStart()
 	self.pendingLiveScoreRoundKey = roundKey ~= "" and roundKey or self.PlayStateKey and self:PlayStateKey() or tostring(self.currentRoomId or "")
@@ -9525,7 +9624,9 @@ function ITGOnline:QueueLiveScore(snapshot)
 		.. " hardex=" .. tostring(hardExScorePercent)
 		.. " displayed=" .. tostring(displayedPercent)
 		.. " mode=" .. tostring(scoreMode)
-		.. " combo=" .. tostring(combo))
+		.. " combo=" .. tostring(combo)
+		.. " failed=" .. tostring(snapshot.Failed == true or snapshot.failed == true)
+		.. " frozen=" .. tostring(snapshot.Frozen == true or snapshot.frozen == true))
 	return true
 end
 
@@ -10011,14 +10112,11 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		return
 	end
 
-		local player = snapshot and snapshot.Player or first_enabled_player()
-		local stats = nil
-		if player and STATSMAN and STATSMAN.GetCurStageStats then
-			local statsOk, statsValue = pcall(function()
-				return STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
-			end)
-			if statsOk then stats = statsValue end
+		local player = snapshot and snapshot.Player or online_score_source_player()
+		if IsRoutine and IsRoutine() then
+			player = online_score_source_player()
 		end
+		local stats = online_stage_stats_for_score(player)
 
 		local snapshotScorePercent = tonumber(snapshot and (snapshot.scorePercent or snapshot.ScorePercent))
 		local dancePoints = (snapshotScorePercent or 0) / 100

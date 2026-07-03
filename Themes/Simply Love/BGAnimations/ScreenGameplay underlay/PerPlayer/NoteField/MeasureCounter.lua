@@ -1,5 +1,8 @@
 local player, layout = ...
 local pn = ToEnumShortString(player)
+local routineShared = IsRoutine and IsRoutine()
+local masterPlayer = routineShared and GAMESTATE:GetMasterPlayerNumber() or player
+local masterPn = ToEnumShortString(masterPlayer)
 local mods = SL[pn].ActiveModifiers
 
 -- don't allow MeasureCounter to appear in Casual gamemode via profile settings
@@ -8,10 +11,11 @@ or not mods.MeasureCounter
 or mods.MeasureCounter == "None" then
 	return
 end
+if routineShared and player ~= masterPlayer then return end
 
 -- -----------------------------------------------------------------------
 
-local PlayerState = GAMESTATE:GetPlayerState(player)
+local PlayerState = GAMESTATE:GetPlayerState(masterPlayer)
 local streams, prevMeasure, streamIndex
 -- Collection of the BitmapText actors used for the measure counters.
 local bmt = {}
@@ -26,13 +30,21 @@ local lookAhead = mods.HideLookahead and 0 or 3
 local InitializeMeasureCounter = function()
 	-- SL[pn].Streams is initially set (and updated in CourseMode)
 	-- in ./ScreenGameplay in/MeasureCounterAndModsLevel.lua
-	streams = SL[pn].Streams
+	streams = SL[masterPn].Streams
 	streamIndex = 1
 	prevMeasure = -1
 
 	for actor in ivalues(bmt) do
 		actor:visible(true)
 	end
+end
+
+local function GetAlignedNotefieldX()
+	local baseX = GetBaseNotefieldX and GetBaseNotefieldX(masterPlayer) or GetNotefieldX(masterPlayer)
+	local layoutX = GetNotefieldX(masterPlayer)
+	local activeMods = SL[masterPn].ActiveModifiers
+	local offsetX = (tonumber(activeMods.NoteFieldOffsetX) or 0) * (masterPlayer == PLAYER_1 and -1 or 1)
+	return (layoutX or baseX or _screen.cx) + offsetX
 end
 
 -- Returns whether or not we've reached the end of this stream segment.
@@ -171,8 +183,14 @@ end
 
 local af = Def.ActorFrame{
 	InitCommand=function(self)
-		self:xy(GetNotefieldX(player), layout.y)
+		self:xy(GetAlignedNotefieldX(), layout.y)
 		self:queuecommand("SetUpdate")
+		if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
+			Trace("ROUTINE_UI MeasureCounter init player=" .. tostring(pn)
+				.. " source=" .. tostring(masterPn)
+				.. " routine_shared=" .. tostring(routineShared == true)
+				.. " x=" .. tostring(GetAlignedNotefieldX()))
+		end
 	end,
 	SetUpdateCommand=function(self) self:SetUpdateFunction( Update ) end,
 

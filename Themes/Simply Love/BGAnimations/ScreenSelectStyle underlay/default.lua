@@ -7,14 +7,22 @@ local current_game = GAMESTATE:GetCurrentGame():GetName()
 local choices = {
 	{
 		name="single",
-		x=_screen.cx-SL_WideScale(160, 214),
+		x=_screen.cx-SL_WideScale(216, 300),
 		pads = {
 			{color=GetHexColor(SL.Global.ActiveColorIndex, true), offset=0}
 		}
 	},
 	{
 		name="versus",
-		x=_screen.cx,
+		x=_screen.cx-SL_WideScale(72, 100),
+		pads = {
+			{color=GetHexColor(SL.Global.ActiveColorIndex-1, true), offset=-SL_WideScale(42,51)},
+			{color=GetHexColor(SL.Global.ActiveColorIndex+2, true), offset= SL_WideScale(42,51)}
+		}
+	},
+	{
+		name="routine",
+		x=_screen.cx+SL_WideScale(72, 100),
 		pads = {
 			{color=GetHexColor(SL.Global.ActiveColorIndex-1, true), offset=-SL_WideScale(42,51)},
 			{color=GetHexColor(SL.Global.ActiveColorIndex+2, true), offset= SL_WideScale(42,51)}
@@ -22,7 +30,7 @@ local choices = {
 	},
 	{
 		name="double",
-		x=_screen.cx+SL_WideScale(160, 214),
+		x=_screen.cx+SL_WideScale(216, 300),
 		pads = {
 			{color=GetHexColor(SL.Global.ActiveColorIndex+1, true), offset=-SL_WideScale(42,51)},
 			{color=GetHexColor(SL.Global.ActiveColorIndex+1, true), offset= SL_WideScale(42,51)}
@@ -31,16 +39,18 @@ local choices = {
 }
 
 if current_game=="dance" and ThemePrefs.Get("AllowDanceSolo") then
-	choices[1].x = _screen.cx - SL_WideScale(240,290)
-	choices[2].x = _screen.cx - SL_WideScale(120,145)
-	choices[3].x = _screen.cx
-	choices[4] = { name="solo", pads={ {color=GetHexColor(SL.Global.ActiveColorIndex, true), offset=0}}, x=_screen.cx + SL_WideScale(120,145) }
-	choices[5] = { name="threepanel", pads={ {color=GetHexColor(SL.Global.ActiveColorIndex, true), offset=0}}, x=_screen.cx + SL_WideScale(240,290) }
+	choices[1].x = _screen.cx - SL_WideScale(300,360)
+	choices[2].x = _screen.cx - SL_WideScale(180,216)
+	choices[3].x = _screen.cx - SL_WideScale(60,72)
+	choices[4].x = _screen.cx + SL_WideScale(60,72)
+	choices[5] = { name="solo", pads={ {color=GetHexColor(SL.Global.ActiveColorIndex, true), offset=0}}, x=_screen.cx + SL_WideScale(180,216) }
+	choices[6] = { name="threepanel", pads={ {color=GetHexColor(SL.Global.ActiveColorIndex, true), offset=0}}, x=_screen.cx + SL_WideScale(300,360) }
 
 -- double is not a valid style in kb7 and para
 elseif current_game=="kb7" or current_game=="para" then
 	choices[1].x = _screen.cx-SL_WideScale(106, 140)
 	choices[2].x = _screen.cx+SL_WideScale(106, 140)
+	table.remove(choices, 4)
 	table.remove(choices, 3)
 end
 
@@ -50,6 +60,16 @@ local current_index = #GAMESTATE:GetHumanPlayers()
 ------------------------------------------------------------------------------------
 
 local EnableChoices = function()
+	local choice_indices = {}
+	for i, choice in ipairs(choices) do
+		choice_indices[choice.name] = i
+	end
+	local SetChoiceEnabled = function(name, enabled)
+		local index = choice_indices[name]
+		if index and af:GetChild("")[index] then
+			af:GetChild("")[index]:aux(enabled and 1 or 0)
+		end
+	end
 
 	-- everything is enabled
 	if PREFSMAN:GetPreference("EventMode")
@@ -65,7 +85,7 @@ local EnableChoices = function()
 	if GAMESTATE:GetCoinMode() == "CoinMode_Pay" then
 
 		-- if both players are already joined, disable "1 Player" as a choice
-		af:GetChild("")[1]:aux( (#GAMESTATE:GetHumanPlayers() == 1) and 1 or 0)
+		SetChoiceEnabled("single", #GAMESTATE:GetHumanPlayers() == 1)
 
 		-- double for 1 credit
 		if GAMESTATE:GetPremium() == "Premium_DoubleFor1Credit" then
@@ -73,26 +93,30 @@ local EnableChoices = function()
 			-- maybe enable "2 Players"
 			if GAMESTATE:EnoughCreditsToJoin()
 			or #GAMESTATE:GetHumanPlayers() == 2 then
-				af:GetChild("")[2]:aux(1)
+				SetChoiceEnabled("versus", true)
+				SetChoiceEnabled("routine", true)
 			else
-				af:GetChild("")[2]:aux(0)
+				SetChoiceEnabled("versus", false)
+				SetChoiceEnabled("routine", false)
 			end
 
 			-- enable "Double"
-			af:GetChild("")[3]:aux(1)
+			SetChoiceEnabled("double", true)
 
 		-- premium off
 		elseif GAMESTATE:GetPremium() == "Premium_Off" then
 
 			if GAMESTATE:EnoughCreditsToJoin()
 			or #GAMESTATE:GetHumanPlayers() == 2 then
-				-- enable "2 Players" and "Double"
-				af:GetChild("")[2]:aux(1)
-				af:GetChild("")[3]:aux(1)
+				-- enable "2 Players", "Routine", and "Double"
+				SetChoiceEnabled("versus", true)
+				SetChoiceEnabled("routine", true)
+				SetChoiceEnabled("double", true)
 			else
-				-- disable "2 Players" and "Double"
-				af:GetChild("")[2]:aux(0)
-				af:GetChild("")[3]:aux(0)
+				-- disable "2 Players", "Routine", and "Double"
+				SetChoiceEnabled("versus", false)
+				SetChoiceEnabled("routine", false)
+				SetChoiceEnabled("double", false)
 			end
 		end
 	end
@@ -101,8 +125,8 @@ local EnableChoices = function()
 
 	-- dance solo
 	if current_game=="dance" and ThemePrefs.Get("AllowDanceSolo") then
-		af:GetChild("")[4]:aux(1)
-		af:GetChild("")[5]:aux(1)
+		SetChoiceEnabled("solo", true)
+		SetChoiceEnabled("threepanel", true)
 	end
 end
 
@@ -123,8 +147,8 @@ local GetNextEnabledChoice = function(dir)
 end
 
 local JoinOrUnjoinPlayersMaybe = function(style, player)
-	-- if going into versus, ensure that both players are joined
-	if style == "versus" then
+	-- if going into versus or routine, ensure that both players are joined
+	if style == "versus" or style == "routine" then
 		for player in ivalues( PlayerNumber ) do
 			if not GAMESTATE:IsHumanPlayer(player) then GAMESTATE:JoinPlayer(player) end
 		end
@@ -159,7 +183,7 @@ local ManageCredits = function(style)
 	if GAMESTATE:GetCoinMode() == "CoinMode_Pay"
 	and GAMESTATE:GetPremium() == "Premium_DoubleFor1Credit"
 	and #GAMESTATE:GetHumanPlayers() == 1
-	and style == "versus" then
+	and (style == "versus" or style == "routine") then
 		GAMESTATE:InsertCoin( -GAMESTATE:GetCoinsNeededToJoin() )
 		return
 	end
@@ -177,7 +201,7 @@ local ManageCredits = function(style)
 	if GAMESTATE:GetCoinMode() == "CoinMode_Pay"
 	and GAMESTATE:GetPremium() == "Premium_Off"
 	and #GAMESTATE:GetHumanPlayers() == 1
-	and (style=="versus" or style=="double") then
+	and (style=="versus" or style=="routine" or style=="double") then
 		GAMESTATE:InsertCoin( -GAMESTATE:GetCoinsNeededToJoin() )
 		return
 	end

@@ -1687,6 +1687,12 @@ static void SetDefaultEditorNoteSkin(
   defaultValueOut = "cel";
 }
 
+static std::string RoutineEditorNoteSkinName(size_t i) {
+  return ssprintf("RoutineEditorNoteSkinP%i", int(i + 1));
+}
+static ThemeMetric1D<std::string> ROUTINE_EDITOR_NOTE_SKIN(
+    "ScreenEdit", RoutineEditorNoteSkinName, NUM_PLAYERS);
+
 static Preference1D<std::string> EDITOR_NOTE_SKINS(
     SetDefaultEditorNoteSkin, NUM_PLAYERS);
 
@@ -1710,6 +1716,19 @@ void ScreenEdit::Init() {
   ASSERT(GAMESTATE->m_pCurSong != nullptr);
   ASSERT(GAMESTATE->m_pCurSteps[main_player_] != nullptr);
 
+  const Style* currentStyle = GAMESTATE->GetCurrentStyle(main_player_);
+  const bool routineEdit =
+      currentStyle != nullptr &&
+      currentStyle->m_StyleType == StyleType_TwoPlayersSharedSides;
+  if (routineEdit) {
+    Steps* sharedSteps = GAMESTATE->m_pCurSteps[main_player_];
+    FOREACH_EnabledPlayer(pn) {
+      if (GAMESTATE->m_pCurSteps[pn].Get() != sharedSteps) {
+        GAMESTATE->m_pCurSteps[pn].Set(sharedSteps);
+      }
+    }
+  }
+
   EDIT_MODE.Load(m_sName, "EditMode");
   ScreenWithMenuElements::Init();
 
@@ -1723,8 +1742,7 @@ void ScreenEdit::Init() {
   m_CurrentAction = MAIN_MENU_CHOICE_INVALID;
   m_InputPlayerNumber = PLAYER_INVALID;
 
-  if (GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber())
-          ->m_StyleType == StyleType_TwoPlayersSharedSides) {
+  if (routineEdit) {
     m_InputPlayerNumber = main_player_;
   }
 
@@ -1772,7 +1790,12 @@ void ScreenEdit::Init() {
   if (!GAMESTATE->m_bDidModeChangeNoteSkin) {
     GAMESTATE->m_bDidModeChangeNoteSkin = true;
     FOREACH_PlayerNumber(pn) {
-      const std::string& sNoteSkin = EDITOR_NOTE_SKINS[pn].Get();
+      std::string sNoteSkin =
+          routineEdit ? ROUTINE_EDITOR_NOTE_SKIN.GetValue(pn)
+                      : EDITOR_NOTE_SKINS[pn].Get();
+      if (!NOTESKIN->DoesNoteSkinExist(sNoteSkin)) {
+        sNoteSkin = EDITOR_NOTE_SKINS[pn].Get();
+      }
       if (NOTESKIN->DoesNoteSkinExist(sNoteSkin)) {
         PO_GROUP_ASSIGN(
             GAMESTATE->m_pPlayerState[pn]->m_PlayerOptions, ModsLevel_Preferred,
@@ -1789,10 +1812,16 @@ void ScreenEdit::Init() {
   // productive editing.
   // todo: We should allow certain noteskins (note-colored/rhythm) to be
   // displayed. (Perhaps this should be a noteskin metric.) -aj
-  if (NOTESKIN->DoesNoteSkinExist(EDITOR_NOTE_SKINS[main_player_].Get())) {
+  std::string sEditNoteSkin =
+      routineEdit ? ROUTINE_EDITOR_NOTE_SKIN.GetValue(main_player_)
+                  : EDITOR_NOTE_SKINS[main_player_].Get();
+  if (!NOTESKIN->DoesNoteSkinExist(sEditNoteSkin)) {
+    sEditNoteSkin = EDITOR_NOTE_SKINS[main_player_].Get();
+  }
+  if (NOTESKIN->DoesNoteSkinExist(sEditNoteSkin)) {
     PO_GROUP_ASSIGN(
         m_PlayerStateEdit.m_PlayerOptions, ModsLevel_Stage, m_sNoteSkin,
-        EDITOR_NOTE_SKINS[main_player_].Get());
+        sEditNoteSkin);
   } else {
     PO_GROUP_ASSIGN(
         m_PlayerStateEdit.m_PlayerOptions, ModsLevel_Stage, m_sNoteSkin,
@@ -4880,8 +4909,10 @@ void ScreenEdit::HandleScreenMessage(const ScreenMessage SM) {
       if (m_pSteps == pSteps) {
         m_pSteps = nullptr;
       }
-      if (GAMESTATE->m_pCurSteps[main_player_].Get() == pSteps) {
-        GAMESTATE->m_pCurSteps[main_player_].Set(nullptr);
+      FOREACH_PlayerNumber(pn) {
+        if (GAMESTATE->m_pCurSteps[pn].Get() == pSteps) {
+          GAMESTATE->m_pCurSteps[pn].Set(nullptr);
+        }
       }
     }
 

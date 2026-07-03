@@ -13,14 +13,15 @@
 class CombinedLifeMeterTug : public CombinedLifeMeter {
  public:
   CombinedLifeMeterTug();
-  virtual void Update(float fDelta);
+  void Update(float fDelta) override;
 
-  virtual void ChangeLife(PlayerNumber pn, TapNoteScore score);
-  virtual void ChangeLife(
-      PlayerNumber pn, HoldNoteScore score, TapNoteScore tscore);
-  virtual void ChangeLife(PlayerNumber pn, float fPercentToMove);
-  virtual void SetLife(PlayerNumber pn, float value);
-  virtual void HandleTapScoreNone(PlayerNumber pn);
+  void ChangeLife(PlayerNumber pn, TapNoteScore score) override;
+  void ChangeLife(
+      PlayerNumber pn, HoldNoteScore score, TapNoteScore tscore) override;
+  void ChangeLife(PlayerNumber pn, float fPercentToMove) override;
+  void SetLife(PlayerNumber pn, float value) override;
+  void HandleTapScoreNone(PlayerNumber pn) override;
+  float GetLife(PlayerNumber pn) const override;
 
  protected:
   std::array<MeterDisplay, NUM_PLAYERS> m_Stream;

@@ -230,6 +230,7 @@ end
 local ValidAutoStyles = {
 	single = true,
 	versus = true,
+	routine = true,
 	double = true,
 }
 
@@ -396,8 +397,8 @@ Branch.AfterScreenSelectColor = function()
 			return "ScreenSelectStyle"
 		end
 
-		-- If "versus" ensure that both players are actually considered joined.
-		if preferred_style == "versus" then
+		-- If "versus" or "routine", ensure that both players are joined.
+		if preferred_style == "versus" or preferred_style == "routine" then
 			if GAMESTATE.JoinPlayer then
 				SafeCall("GAMESTATE.JoinPlayer P1", function() GAMESTATE:JoinPlayer(PLAYER_1) end)
 				SafeCall("GAMESTATE.JoinPlayer P2", function() GAMESTATE:JoinPlayer(PLAYER_2) end)

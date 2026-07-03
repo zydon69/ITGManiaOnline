@@ -1,27 +1,30 @@
 local player = ...
 local pn = ToEnumShortString(player)
+local routineShared = IsRoutine and IsRoutine()
+local masterPlayer = routineShared and GAMESTATE:GetMasterPlayerNumber() or player
+local masterPn = ToEnumShortString(masterPlayer)
 
 local mods = SL[pn].ActiveModifiers
 if SL.Global.GameMode == "Casual" then return end
 if not mods.ColumnCues then return end
+if routineShared and player ~= masterPlayer then return end
 
-local columnMapping = GetColumnMapping(player)
+local columnMapping = GetColumnMapping(masterPlayer)
 
 -- Disable column cues if we couldn't compute valid columnMapping
 if columnMapping == nil then return end
 
-local playerState = GAMESTATE:GetPlayerState(player)
-local columnCues = SL[pn].Streams.ColumnCues
+local playerState = GAMESTATE:GetPlayerState(masterPlayer)
+local columnCues = SL[masterPn].Streams.ColumnCues
 
-local numColumns = GAMESTATE:GetCurrentStyle():ColumnsPerPlayer()
-local style = GAMESTATE:GetCurrentStyle(player)
-local width = style:GetWidth(player)
+local style = GAMESTATE:GetCurrentStyle(masterPlayer)
+local numColumns = style:ColumnsPerPlayer()
+local width = style:GetWidth(masterPlayer)
 
 local yOffset = 80
 local reverseOffset = THEME:GetMetric("Player", "ReceptorArrowsYReverse")
 local fadeTime = 0.15
 local curIndex = 1
-local updatedFirstTime = false
 local activeColumnCues = {}
 
 local font = mods.ComboFont
@@ -73,6 +76,14 @@ local function UpdateColumnCueVisuals(self, curTime)
 	end
 end
 
+local function GetAlignedNotefieldX()
+	local baseX = GetBaseNotefieldX and GetBaseNotefieldX(masterPlayer) or GetNotefieldX(masterPlayer)
+	local layoutX = GetNotefieldX(masterPlayer)
+	local activeMods = SL[masterPn].ActiveModifiers
+	local offsetX = (tonumber(activeMods.NoteFieldOffsetX) or 0) * (masterPlayer == PLAYER_1 and -1 or 1)
+	return (layoutX or baseX or _screen.cx) + offsetX
+end
+
 local Update = function(self, delta)
 	local topScreen = SCREENMAN:GetTopScreen()
 	if topScreen and topScreen.IsPaused and topScreen:IsPaused() then return end
@@ -82,20 +93,6 @@ local Update = function(self, delta)
 		local columnCue = columnCues[curIndex]
 		local startTime = columnCue.startTime
 		local duration = columnCue.duration
-		-- MusicSecondsVisible might be negative before the chart actually starts.
-		-- In addition, sometimes charts might start on beat 0, and we still want to
-		-- accurately display the first column cue. To do this, we just adjust the
-		-- duration and start times of the first cue to account for this negative
-		-- time.
-		-- We only have to do this for the first column cue as the others should
-		-- have accurate start times.
-		-- TODO(teejusb): The timing for this seems to be off by a little bit. It's
-		-- not toooo bad but see if we can make this more accurate.
-		if curIndex == 1 and not updatedFirstTime and curTime < 0 then
-			duration = duration - curTime
-			startTime = startTime + curTime
-			updatedFirstTime = true
-		end
 		if startTime <= curTime then
 			-- Recompute visual state from MusicSecondsVisible every update instead
 			-- of using sleep/tween timing. This keeps cues tied to chart time and
@@ -121,10 +118,18 @@ end
 
 local af = Def.ActorFrame{
 	InitCommand=function(self)
-		self:xy( GetNotefieldX(player), yOffset)
+		self:xy(GetAlignedNotefieldX(), yOffset)
 		local zoom_factor = 1 - scale( mods.Mini:gsub("%%","")/100, 0, 2, 0, 1)
 		self:zoomx( zoom_factor )
 		self:queuecommand("SetUpdate")
+		if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
+			Trace("ROUTINE_UI ColumnCues init player=" .. tostring(pn)
+				.. " source=" .. tostring(masterPn)
+				.. " routine_shared=" .. tostring(routineShared == true)
+				.. " x=" .. tostring(GetAlignedNotefieldX())
+				.. " width=" .. tostring(width)
+				.. " columns=" .. tostring(numColumns))
+		end
 	end,
 	SetUpdateCommand=function(self)
 		self:SetUpdateFunction(Update)
@@ -133,18 +138,17 @@ local af = Def.ActorFrame{
 		local steps = nil
 		if GAMESTATE:IsCourseMode() then
 			local songIndex = GAMESTATE:GetCourseSongIndex() + 1
-			local trail = GAMESTATE:GetCurrentTrail(player):GetTrailEntries()[songIndex]
+			local trail = GAMESTATE:GetCurrentTrail(masterPlayer):GetTrailEntries()[songIndex]
 			steps = trail:GetSteps()
 		else
-			steps = GAMESTATE:GetCurrentSteps(player)
+			steps = GAMESTATE:GetCurrentSteps(masterPlayer)
 		end
 
-		ParseColumnCues(steps, pn)
+		ParseColumnCues(steps, masterPn)
 
-		playerState = GAMESTATE:GetPlayerState(player)
-		columnCues = SL[pn].Streams.ColumnCues
+		playerState = GAMESTATE:GetPlayerState(masterPlayer)
+		columnCues = SL[masterPn].Streams.ColumnCues
 		curIndex = 1
-		updatedFirstTime = false
 		activeColumnCues = {}
 	end,
 	PlayingCommand=function(self)
@@ -159,7 +163,7 @@ local IsReversedColumn = function(player, columnIndex)
 		columns[#columns + 1] = false
 	end
 
-	local opts = GAMESTATE:GetPlayerState(player):GetCurrentPlayerOptions()
+	local opts = GAMESTATE:GetPlayerState(masterPlayer):GetCurrentPlayerOptions()
 	if opts:Reverse() == 1 then
 		for column,val in ipairs(columns) do
 			columns[column] = not val

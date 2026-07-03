@@ -71,6 +71,7 @@ class StageStats {
 
   PlayerStageStats m_player[NUM_PLAYERS];
   PlayerStageStats m_multiPlayer[NUM_MultiPlayer];
+  PlayerStageStats m_RoutinePlayer;
 
   void FinalizeScores(bool bSummary);
   /**

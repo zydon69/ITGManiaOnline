@@ -206,6 +206,21 @@ void CombinedLifeMeterTug::SetLife(PlayerNumber pn, float value) {
   }
 }
 
+float CombinedLifeMeterTug::GetLife(PlayerNumber pn) const {
+  if (GAMESTATE == nullptr) {
+    return 0.0f;
+  }
+
+  switch (pn) {
+    case PLAYER_1:
+      return std::clamp(GAMESTATE->m_fTugLifePercentP1, 0.0f, 1.0f);
+    case PLAYER_2:
+      return std::clamp(1.0f - GAMESTATE->m_fTugLifePercentP1, 0.0f, 1.0f);
+    default:
+      return 0.0f;
+  }
+}
+
 /*
  * (c) 2003-2004 Chris Danford
  * All rights reserved.

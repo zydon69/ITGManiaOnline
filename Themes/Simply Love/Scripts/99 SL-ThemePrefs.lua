@@ -87,9 +87,10 @@ SL_CustomPrefs.Get = function()
 				THEME:GetString("ScreenSelectStyle", "None"),
 				THEME:GetString("ScreenSelectStyle", "Single"),
 				THEME:GetString("ScreenSelectStyle", "Versus"),
-				THEME:GetString("ScreenSelectStyle", "Double")
+				THEME:GetString("ScreenSelectStyle", "Double"),
+				THEME:GetString("ScreenSelectStyle", "Routine")
 			},
-			Values = { "none", "single", "versus", "double" }
+			Values = { "none", "single", "versus", "double", "routine" }
 		},
 		VisualStyle =
 		{

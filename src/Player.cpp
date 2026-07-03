@@ -704,8 +704,12 @@ void Player::Init(
   m_bSeenComboYet = false;
 
   // set initial life
-  if (m_pLifeMeter && m_pPlayerStageStats) {
-    float fLife = m_pLifeMeter->GetLife();
+  if ((m_pLifeMeter || m_pCombinedLifeMeter) && m_pPlayerState &&
+      m_pPlayerStageStats) {
+    float fLife = m_pLifeMeter
+                      ? m_pLifeMeter->GetLife()
+                      : m_pCombinedLifeMeter->GetLife(
+                            m_pPlayerState->m_PlayerNumber);
     m_pPlayerStageStats->SetLifeRecordAt(
         fLife, GetSafeStageStepsSeconds("Player::Init"));
   }
@@ -2345,6 +2349,10 @@ Player::GameplayPerfStats Player::GetGameplayPerfStats() {
     stats.life = m_pLifeMeter->GetLife();
     stats.in_danger = m_pLifeMeter->IsInDanger();
     stats.failing = m_pLifeMeter->IsFailing();
+  } else if (m_pCombinedLifeMeter && m_pPlayerState) {
+    stats.life = m_pCombinedLifeMeter->GetLife(m_pPlayerState->m_PlayerNumber);
+    stats.in_danger = m_pCombinedLifeMeter->IsInDanger();
+    stats.failing = m_pCombinedLifeMeter->IsFailing();
   }
 
   return stats;
@@ -2538,16 +2546,7 @@ void Player::ChangeLifeRecord() {
   if (m_pLifeMeter) {
     fLife = m_pLifeMeter->GetLife();
   } else if (m_pCombinedLifeMeter) {
-    if (GAMESTATE == nullptr) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2031: Combined life record skipped without "
-          "GAMESTATE.");
-      return;
-    }
-    fLife = GAMESTATE->m_fTugLifePercentP1;
-    if (pn == PLAYER_2) {
-      fLife = 1.0f - fLife;
-    }
+    fLife = m_pCombinedLifeMeter->GetLife(pn);
   }
   if (fLife != -1) {
     if (!std::isfinite(fLife)) {
