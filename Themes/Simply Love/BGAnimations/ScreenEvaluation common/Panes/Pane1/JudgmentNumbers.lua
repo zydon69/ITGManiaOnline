@@ -1,7 +1,7 @@
 local player, controller = unpack(...)
 
 local pn = ToEnumShortString(player)
-local pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 
 local TapNoteScores = {
 	Types = { 'W1', 'W2', 'W3', 'W4', 'W5', 'Miss' },

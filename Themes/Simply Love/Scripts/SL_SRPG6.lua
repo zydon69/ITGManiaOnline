@@ -1,4 +1,4 @@
-SL.SRPG9 = {
+SL.SRPG10 = {
 	Colors = {
 		            ----------+--------------
 		"#666000",  -- Unaff. | Yellow     --
@@ -40,9 +40,9 @@ SL.SRPG9 = {
 		end
 	end,
 	ActivateVisualStyle = function(self)
-		ThemePrefs.Set("VisualStyle", "SRPG9")
+		ThemePrefs.Set("VisualStyle", "SRPG10")
 		ThemePrefs.Set("RainbowMode", false)
-		ThemePrefs.Set("LastActiveEvent", "SRPG9")
+		ThemePrefs.Set("LastActiveEvent", "SRPG10")
 		ThemePrefs.Save()
 
 		MESSAGEMAN:Broadcast("VisualStyleSelected")
@@ -67,3 +67,23 @@ SL.SRPG9 = {
 		end
 	end,
 }
+
+local function Srpg10Trace(message)
+	if not Trace then return end
+	if not (PREFSMAN and PREFSMAN:GetPreference("LogThemeLuaDiagnostics")) then return end
+	Trace("SL_SRPG10_TRACE " .. tostring(message or ""))
+end
+
+if ThemePrefs.Get("VisualStyle") == "SRPG9" then
+	Srpg10Trace("migrating legacy VisualStyle=SRPG9 to SRPG10")
+	ThemePrefs.Set("VisualStyle", "SRPG10")
+	ThemePrefs.Set("RainbowMode", false)
+	ThemePrefs.Set("LastActiveEvent", "SRPG10")
+	ThemePrefs.Save()
+end
+
+if ThemePrefs.Get("LastActiveEvent") == "SRPG9" then
+	Srpg10Trace("migrating legacy LastActiveEvent=SRPG9 to SRPG10")
+	ThemePrefs.Set("LastActiveEvent", "SRPG10")
+	ThemePrefs.Save()
+end

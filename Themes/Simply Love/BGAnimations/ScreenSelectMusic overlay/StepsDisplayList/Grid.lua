@@ -15,7 +15,6 @@ local t = Def.ActorFrame{
 	CurrentStepsP2ChangedMessageCommand=function(self) self:queuecommand("RedrawStepsDisplay") end,
 
 	RedrawStepsDisplayCommand=function(self)
-
 		local song = GAMESTATE:GetCurrentSong()
 
 		if song then

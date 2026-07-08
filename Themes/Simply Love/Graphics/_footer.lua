@@ -2,11 +2,18 @@
 local dark  = {0,0,0,0.9}
 local light = {0.65,0.65,0.65,1}
 
+local function IsGameplayScreenName(name)
+	return name == "ScreenGameplay"
+		or name == "ScreenGameplayShared"
+		or name == "ScreenGameplaySyncMachine"
+		or name == "ScreenGameplayEditCourse"
+end
+
 return Def.Quad{
 	Name="Footer",
 	InitCommand=function(self)
 		self:draworder(90):zoomto(_screen.w, 32):vertalign(bottom):y(32)
-		if ThemePrefs.Get("VisualStyle") == "SRPG9" then
+		if ThemePrefs.Get("VisualStyle") == "SRPG10" then
 			self:diffuse(GetCurrentColor(true))
 		elseif DarkUI() then
 			self:diffuse(dark)
@@ -18,10 +25,14 @@ return Def.Quad{
 	end,
 	ScreenChangedMessageCommand=function(self)
 		local topscreen = SCREENMAN:GetTopScreen():GetName()
+		if IsGameplayScreenName(topscreen) then
+			self:visible(false)
+			return
+		end
 		if topscreen == "ScreenSelectMusicCasual" then
 			self:diffuse(dark)
 		end
-		if ThemePrefs.Get("VisualStyle") == "SRPG9" then
+		if ThemePrefs.Get("VisualStyle") == "SRPG10" then
 			self:diffuse(GetCurrentColor(true))
 		end
 		if ThemePrefs.Get("VisualStyle") == "Technique" then
@@ -33,7 +44,7 @@ return Def.Quad{
 		end
 	end,
 	ColorSelectedMessageCommand=function(self)
-		if ThemePrefs.Get("VisualStyle") == "SRPG9" then
+		if ThemePrefs.Get("VisualStyle") == "SRPG10" then
 			self:diffuse(GetCurrentColor(true))
 		end
 	end,

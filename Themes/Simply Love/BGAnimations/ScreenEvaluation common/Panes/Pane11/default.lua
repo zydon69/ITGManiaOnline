@@ -12,11 +12,12 @@ local pane_width, pane_height = 300, 180
 local plot_width, plot_height = 280, 58
 local worst_window = GetTimingWindow(storage.worst_window or 3)
 local steps = GAMESTATE:GetCurrentSteps(player)
-if not steps then return end
+local song = GAMESTATE:GetCurrentSong()
+if not (steps and song) then return end
 
 local timing_data = steps:GetTimingData()
 local first_second = math.min(timing_data:GetElapsedTimeFromBeat(0), 0)
-local last_second = GAMESTATE:GetCurrentSong():GetLastSecond()
+local last_second = song:GetLastSecond()
 local music_rate = SL.Global.ActiveModifiers.MusicRate
 local death_second = storage.DeathSecond
 

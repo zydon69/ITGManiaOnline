@@ -13,7 +13,7 @@ local HeartsSpacing = is_widescreen and (_screen.w / (NumHeartsToDraw-1)) or (_s
 local WheelHalfItems = math.floor(NumHeartsToDraw/2)
 
 local style = ThemePrefs.Get("VisualStyle")
-local colorTable = (style == "SRPG9") and SL.SRPG9.Colors or SL.DecorativeColors
+local colorTable = (style == "SRPG10") and SL.SRPG10.Colors or SL.DecorativeColors
 local color_count = #colorTable
 local colorIndexMap = {}
 for i, c in ipairs(colorTable) do
@@ -97,7 +97,7 @@ local wheel_item_mt = {
 					self.heart = subself
 					subself:diffusealpha(0)
 					subself:zoom(0.25)
-					if style == "SRPG9" then
+					if style == "SRPG10" then
 						subself:zoom(0.8)
 					end
 				end,
@@ -160,9 +160,9 @@ local wheel_item_mt = {
 				self.container:effectmagnitude(0,0,0)
 			end
 
-			if style == "SRPG9" and has_focus then
+			if style == "SRPG10" and has_focus then
 				local idx = self.color_index % color_count + 1
-				factionBmt:settext(SL.SRPG9.GetFactionName(idx))
+				factionBmt:settext(SL.SRPG10.GetFactionName(idx))
 			end
 		end,
 
@@ -243,14 +243,14 @@ local t = Def.ActorFrame{
 	wheel:create_actors( "ColorWheel", NumHeartsToDraw, wheel_item_mt, _screen.cx, _screen.cy )
 }
 
-if style == "SRPG9" then
+if style == "SRPG10" then
 	t[#t+1] = Def.BitmapText{
 		Font="Common Normal",
 		Text=THEME:GetString("SRPG", "SelectFaction"),
 		InitCommand=function(self)
 			self:xy(_screen.cx, 80)
 			self:zoom(1.5)
-			self:diffuse(color(SL.SRPG9.TextColor))
+			self:diffuse(color(SL.SRPG10.TextColor))
 			self:shadowlength(0.5)
 		end
 	}
@@ -263,7 +263,7 @@ if style == "SRPG9" then
 
 			self:xy(_screen.cx, _screen.h - 110)
 			self:zoom(2.0)
-			self:diffuse(color(SL.SRPG9.TextColor))
+			self:diffuse(color(SL.SRPG10.TextColor))
 			self:shadowlength(0.5)
 			self:wrapwidthpixels(150)
 		end

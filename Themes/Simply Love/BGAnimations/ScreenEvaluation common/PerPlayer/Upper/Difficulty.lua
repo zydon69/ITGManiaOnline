@@ -6,7 +6,7 @@ return Def.ActorFrame{
 	-- difficulty text ("beginner" or "expert" or etc.)
 	LoadFont("Common Normal")..{
 		InitCommand=function(self)
-			self:y(_screen.cy-64)
+			self:y(_screen.cy-77)
 			self:x(115 * (player==PLAYER_1 and -1 or 1))
 			self:halign(pn):zoom(0.7)
 

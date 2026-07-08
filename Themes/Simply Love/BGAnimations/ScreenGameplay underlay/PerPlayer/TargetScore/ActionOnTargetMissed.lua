@@ -25,6 +25,15 @@ local args = {
 				SCREENMAN:GetTopScreen():PostScreenMessage("SM_BeginFailed", 0)
 
 			elseif RestartOnMissedTarget then
+				if ITGOnline and ITGOnline.currentRoomId then
+					if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
+						Trace("ITG Online: FLOW gameplay_restart_blocked"
+							.. " reason=target_score_restart"
+							.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+							.. " player=" .. tostring(pn))
+					end
+					return
+				end
 				-- EventMode is assumed (i.e. not CoinMode_Pay), so no need to fuss with managing stage counts for SL or SM
 				SCREENMAN:GetTopScreen():SetPrevScreenName("ScreenGameplay"):SetNextScreenName("ScreenGameplay"):begin_backing_out()
 			end

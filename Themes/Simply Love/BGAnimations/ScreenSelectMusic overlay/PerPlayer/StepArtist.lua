@@ -1,6 +1,7 @@
 local player = ...
 local pn = ToEnumShortString(player)
 local p = PlayerNumber:Reverse()[player]
+local autoStyle = ThemePrefs.Get("AutoStyle") == "auto"
 
 local text_table, marquee_index
 
@@ -49,6 +50,9 @@ return Def.ActorFrame{
 			if GAMESTATE:IsCourseMode() then
 				self:x( _screen.cx - 210)
 				self:y(_screen.cy + 85)
+			elseif autoStyle then
+				self:x( _screen.cx - 210)
+				self:y(_screen.cy + 28)
 			else
 				self:x( _screen.cx - 244)
 				self:y(_screen.cy + 40)

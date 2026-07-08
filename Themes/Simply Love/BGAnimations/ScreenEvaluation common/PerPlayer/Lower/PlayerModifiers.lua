@@ -5,7 +5,7 @@ local player = ...
 local font_zoom = 0.7
 local width = THEME:GetMetric("GraphDisplay", "BodyWidth")
 
-local optionslist = GetPlayerOptionsString(player)
+local optionslist = GetPlayerOptionsString(player, "ModsLevel_Preferred")
 
 return Def.ActorFrame{
 	OnCommand=function(self) self:y(_screen.cy+200.5) end,

@@ -1,4 +1,6 @@
 local player, displayProfileNames = unpack(...)
+local sourcePlayer = GetRoutineSourcePlayer and GetRoutineSourcePlayer(player) or player
+local sourcePn = ToEnumShortString(sourcePlayer)
 
 local LetterGradesAF
 local playerStats
@@ -36,7 +38,7 @@ local af = Def.ActorFrame{
 		LetterGradesAF = self:GetParent():GetParent():GetChild("LetterGradesAF")
 	end,
 	DrawStageCommand=function(self, params)
-		playerStats = SL[ToEnumShortString(player)].Stages.Stats[params.StageNum]
+		playerStats = SL[sourcePn].Stages.Stats[params.StageNum]
 
 		if playerStats then
 			profile = playerStats.profile

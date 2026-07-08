@@ -140,26 +140,35 @@ function NPS_Histogram(player, width, height, desaturation)
 	return amv
 end
 
--- set of density graphs for a course
--- one little issue here is that varying nps per song isn't reflected by the relative height of each chart
--- honestly too big of a hassle for me to mess with right now
+-- Set of density graphs for a course.
 function NPS_Histogram_Static_Course(player, width, height, desaturation)
 	local pn = ToEnumShortString(player)
 	local af = Def.ActorFrame{}
 	local trail = GAMESTATE:GetCurrentTrail(pn)
-	
+
+	if not trail then return af end
+
 	-- first get the total time
 	local totaltime = TotalCourseLength(player)
-	
+	if not totaltime or totaltime <= 0 then return af end
+
 	-- build a table of offsets and widths (doing one loop with everything in InitCommand will just use
 	-- the last value whatever local variable in the loop was once the actors execute)
 	local curx = 0
 	local ptable = {}
-	for te in ivalues(trail:GetTrailEntries()) do
-		local w = (te:GetSong():GetLastSecond() / SL.Global.ActiveModifiers.MusicRate / totaltime) * width
-		table.insert(ptable, {curx, w, te:GetSteps()})
+	local course_peak_nps = 0
+	for te in ivalues(trail:GetTrailEntries() or {}) do
+		local song = te:GetSong()
+		local steps = te:GetSteps()
+		local entry_peak_nps = steps and steps:GetPeakNps(player) or 0
+		if entry_peak_nps > course_peak_nps then course_peak_nps = entry_peak_nps end
+
+		local entry_last_second = song and math.max(0, song:GetLastSecond()) or 0
+		local w = (entry_last_second / SL.Global.ActiveModifiers.MusicRate / totaltime) * width
+		table.insert(ptable, {curx, w, steps, entry_peak_nps})
 		curx = curx + w
 	end
+
 	for i, pos in ipairs(ptable) do
 		-- add density graph amv
 		af[#af+1] = Def.ActorMultiVertex{
@@ -169,11 +178,54 @@ function NPS_Histogram_Static_Course(player, width, height, desaturation)
 				self:queuecommand("SetVertices")
 			end,
 			SetVerticesCommand = function(self)
-				local verts = gen_vertices(player, pos[2], height, pos[3], desaturation)
+				local ratio = course_peak_nps > 0 and (pos[4] / course_peak_nps) or 1
+				local verts = pos[3] and gen_vertices(player, pos[2], height * ratio, pos[3], desaturation) or {}
 				self:SetNumVertices(#verts):SetVertices(verts)
 			end
 		}
 	end
+
+	return af
+end
+
+function NPS_Histogram_With_Position_Line(player, width, height, desaturation)
+	local af = Def.ActorFrame{}
+	af[#af+1] = NPS_Histogram(player, width, height, desaturation)
+
+	local first_second, last_second
+	local position_verts
+
+	af[#af+1] = Def.ActorMultiVertex{
+		Name="PositionLine",
+		InitCommand=function(self)
+			self:SetDrawState({Mode="DrawMode_LineStrip"})
+				:SetLineWidth(2)
+				:align(0, 0)
+
+			local color = {1, 1, 1, 1}
+			position_verts = {{{0, 0, 0}, color}, {{0, -height, 0}, color}}
+			self:SetNumVertices(2):SetVertices(position_verts)
+		end,
+		RedrawCommand=function(self)
+			local song = GAMESTATE:GetCurrentSong()
+			if song then
+				first_second = math.min(song:GetTimingData():GetElapsedTimeFromBeat(0), 0)
+				last_second = song:GetLastSecond()
+			end
+		end,
+		ScrollSongCommand=function(self)
+			if not position_verts or not first_second or not last_second or last_second <= first_second then
+				return
+			end
+
+			local current_second = GAMESTATE:GetCurMusicSeconds()
+			local scaled_offset = scale(current_second, first_second, last_second, 0, width)
+			local offset = math.max(0, math.min(width, scaled_offset))
+			position_verts[1][1][1] = offset
+			position_verts[2][1][1] = offset
+			self:SetVertices(position_verts)
+		end
+	}
 
 	return af
 end

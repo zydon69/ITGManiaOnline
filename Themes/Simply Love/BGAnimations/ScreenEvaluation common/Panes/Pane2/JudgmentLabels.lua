@@ -1,15 +1,10 @@
 local player, controller = unpack(...)
 
 local pn = ToEnumShortString(player)
-local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(pn)
-
-local firstToUpper = function(str)
-    return (str:gsub("^%l", string.upper))
-end
+local controller_name = ToEnumShortString(controller)
 
 -- iterating through the TapNoteScore enum directly isn't helpful because the
 -- sequencing is strange, so make our own data structures for this purpose
-local TapNoteScores = {}
 local TapNoteScores = {
 	Types = { 'W0', 'W1', 'W2', 'W3', 'W4', 'W5', 'Miss' },
 	Names = {
@@ -40,15 +35,14 @@ local RadarCategories = {
 	THEME:GetString("ScreenEvaluation", 'Rolls')
 }
 
-local EnglishRadarCategories = {
-	[THEME:GetString("ScreenEvaluation", 'Holds')] = "Holds",
-	[THEME:GetString("ScreenEvaluation", 'Mines')] = "Mines",
-	[THEME:GetString("ScreenEvaluation", 'Rolls')] = "Rolls",
-}
+local FrameX = { P1=50, P2=-50 }
+local TapLabelX = { P1=28, P2=-28 }
+local ExScoreLabelX = { P1=-160, P2=82 }
+local RadarLabelX = { P1=-160, P2=90 }
 
 local t = Def.ActorFrame{
 	InitCommand=function(self)
-		self:xy(50 * (controller==PLAYER_1 and 1 or -1), _screen.cy-24)
+		self:xy(FrameX[controller_name], _screen.cy-24)
 	end,
 }
 
@@ -77,12 +71,12 @@ for i=1, #TapNoteScores.Types do
 			Text=TapNoteScores.Names[i]:upper(),
 			InitCommand=function(self) self:zoom(0.833):horizalign(right):maxwidth(76) end,
 			BeginCommand=function(self)
-				self:x( (controller == PLAYER_1 and 28) or -28 )
+				self:x(TapLabelX[controller_name])
 				if maxCount > 9999 then
-					length = math.floor(math.log10(maxCount)+1)
-					modifier = controller == PLAYER_1 and -11*(length-4) or 11*(length-4)
-					finalPos = 28 + modifier
-					finalZoom = 0.833 - 0.1*(length-4)
+					local length = math.floor(math.log10(maxCount)+1)
+					local modifier = controller == PLAYER_1 and -11*(length-4) or 11*(length-4)
+					local finalPos = 28 + modifier
+					local finalZoom = 0.833 - 0.1*(length-4)
 					self:x( (controller == PLAYER_1 and finalPos) or -finalPos ):zoom(finalZoom)
 				end
 				self:y(i*26 -46)
@@ -96,19 +90,13 @@ end
 -- labels: hands/ex, holds, mines, rolls
 for index, label in ipairs(RadarCategories) do
 	if index == 1 then
-		text = nil
-		if SL[pn].ActiveModifiers.ShowExScore then
-			text = "ITG"
-		else
-			text = "EX"
-		end
-
+		local text = SL[pn].ActiveModifiers.ShowExScore and "ITG" or "EX"
 
 		t[#t+1] = LoadFont("Wendy/_wendy small")..{
 			Text=text,
 			InitCommand=function(self) self:zoom(0.5):horizalign(right) end,
 			BeginCommand=function(self)
-				self:x( (controller == PLAYER_1 and -160) or 82 )
+				self:x(ExScoreLabelX[controller_name])
 				self:y(38)
 
 				if SL[pn].ActiveModifiers.ShowExScore then
@@ -120,14 +108,11 @@ for index, label in ipairs(RadarCategories) do
 		}
 	end
 
-	local performance = stats:GetRadarActual():GetValue( "RadarCategory_"..firstToUpper(EnglishRadarCategories[label]) )
-	local possible = stats:GetRadarPossible():GetValue( "RadarCategory_"..firstToUpper(EnglishRadarCategories[label]) )
-
 	t[#t+1] = LoadFont("Common Normal")..{
 		Text=label,
 		InitCommand=function(self) self:zoom(0.833):horizalign(right) end,
 		BeginCommand=function(self)
-			self:x( (controller == PLAYER_1 and -160) or 90 )
+			self:x(RadarLabelX[controller_name])
 			self:y(index*28 + 41)
 		end
 	}

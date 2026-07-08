@@ -5,12 +5,20 @@ local h = 18
 local _y = 20
 local side_margin = 4
 local show_swoosh = SL[ToEnumShortString(player)].ActiveModifiers.LifeMeterSwoosh == true
+local style = GAMESTATE:GetCurrentStyle()
+local style_type = style and style:GetStyleType()
+local style_type_name = style_type and ToEnumShortString(style_type) or ""
+local is_shared_sides = style_type_name == "TwoPlayersSharedSides"
 
 local function resolve_lifebar_x(player_number)
 	local notefield_x = GetNotefieldX(player_number)
 	local panel_width = GetNotefieldWidth() or w
 	if IsUsingOnlineGameplayColumns and IsUsingOnlineGameplayColumns() then
 		panel_width = GetOnlineGameplayPanelWidth and GetOnlineGameplayPanelWidth("side") or panel_width
+	elseif is_shared_sides then
+		local metric = player_number == PLAYER_1 and "PlayerP1TwoPlayersTwoSidesX" or "PlayerP2TwoPlayersTwoSidesX"
+		notefield_x = THEME:GetMetric("ScreenGameplay", metric)
+		panel_width = 256
 	end
 	if player_number == PLAYER_1 then
 		return (notefield_x - panel_width / 2) + side_margin + w / 2
@@ -35,7 +43,17 @@ end
 
 local meter = Def.ActorFrame{
 
-	InitCommand=function(self) self:y(_y):SetUpdateFunction(Update):visible(false) end,
+	InitCommand=function(self)
+		self:y(_y):SetUpdateFunction(Update):visible(false)
+		Trace("ROUTINE_LAYOUT LifeMeterStandard"
+			.. " player=" .. tostring(ToEnumShortString(player))
+			.. " style_type=" .. tostring(style_type_name)
+			.. " shared=" .. tostring(is_shared_sides)
+			.. " x=" .. tostring(_x)
+			.. " y=" .. tostring(_y)
+			.. " w=" .. tostring(w)
+			.. " h=" .. tostring(h))
+	end,
 	OnCommand=function(self) self:visible(true) end,
 
 	-- frame

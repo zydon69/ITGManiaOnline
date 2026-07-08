@@ -67,9 +67,11 @@ for i=1,segment_count do
 end
 
 return Def.ActorFrame{
+	Name="SplashScreen",
 	InitCommand=function(self) self:draworder(200) end,
 
 	Def.Quad{
+		Name="Background",
 		InitCommand=function(self) self:diffuse(0,0,0,0):FullScreen():cropbottom(1):fadebottom(0.5) end,
 		OffCommand=function(self) self:linear(0.3):cropbottom(0):fadebottom(0):diffusealpha(1) end
 	},
@@ -125,7 +127,7 @@ return Def.ActorFrame{
 		},
 
 		LoadFont("Common Bold")..{
-			Name="PrimaryText",
+			Name="OptionsText",
 			Text=THEME:GetString("ScreenSelectMusic", "Press Start for Options"),
 			InitCommand=function(self)
 				self:y(0):zoom(0.72):diffuse(Color.White):shadowlength(1)

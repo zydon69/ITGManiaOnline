@@ -69,6 +69,14 @@ local input = function(event)
 				end
 				-- Get the style we want to change to
 				local new_style = focus.change:lower()
+				if new_style == "all" then
+					ThemePrefs.Set("AutoStyle", "auto")
+					THEME:ReloadMetrics()
+					new_style = (#GAMESTATE:GetHumanPlayers() == 1) and "single" or "versus"
+				elseif ThemePrefs.Get("AutoStyle") == "auto" then
+					ThemePrefs.Set("AutoStyle", "none")
+					THEME:ReloadMetrics()
+				end
 				-- accommodate techno game
 				if GAMESTATE:GetCurrentGame():GetName() == "techno" then new_style = new_style .. "8" end
 				-- set it in the engine

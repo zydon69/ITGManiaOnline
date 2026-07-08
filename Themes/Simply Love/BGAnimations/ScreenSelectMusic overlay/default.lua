@@ -4,6 +4,22 @@ local af = Def.ActorFrame{
 	-- If we're here in SelectMusic, set GameplayReloadCheck to false, signifying that the next
 	-- time ScreenGameplay loads, it should have a properly animated entrance.
 	InitCommand=function(self)
+		if (type(online_logs_enabled) ~= "function" or online_logs_enabled()) and Trace then
+			local ok, style = pcall(function() return GAMESTATE:GetCurrentStyle() end)
+			if ok and style then
+				ok, style = pcall(function() return style:GetName() end)
+			end
+			local players = {}
+			for player in ivalues(PlayerNumber) do
+				if GAMESTATE:IsHumanPlayer(player) then
+					players[#players+1] = ToEnumShortString(player)
+				end
+			end
+			Trace("ROUTINE_STYLE_FLOW select_music init style=" .. tostring(ok and style or "nil")
+				.. " joined=" .. table.concat(players, "/")
+				.. " auto_style=" .. tostring(ThemePrefs.Get("AutoStyle"))
+				.. " game_mode=" .. tostring(SL and SL.Global and SL.Global.GameMode or "nil"))
+		end
 		SL.Global.GameplayReloadCheck = false
 		generateFavoritesForMusicWheel()
 		-- While other SM versions don't need this, Outfox resets the
@@ -51,6 +67,9 @@ local af = Def.ActorFrame{
 	LoadActor("./PreserveMenuTimer.lua"),
 	-- Apply player modifiers from profile
 	LoadActor("./PlayerModifiers.lua"),
+
+	-- Allow charts from multiple styles to coexist in the MusicWheel when AutoStyle is "All".
+	LoadActor("./AutoSetStyle.lua"),
 
 	-- ---------------------------------------------------
 	-- next, load visual elements; the order of these matters

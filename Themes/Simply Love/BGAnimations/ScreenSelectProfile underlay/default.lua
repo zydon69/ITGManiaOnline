@@ -1,8 +1,9 @@
 -- AutoStyle is a Simply Love ThemePref that can allow players to always
--- automatically have one of [single, double, versus] chosen for them.
+-- automatically have a supported style chosen for them.
 -- If AutoStyle is either "single" or "double", we don't want to load
 -- SelectProfileFrames for both PLAYER_1 and PLAYER_2, but only the MasterPlayerNumber
 local AutoStyle = ThemePrefs.Get("AutoStyle")
+local AutoStyleNeedsTwoProfiles = (AutoStyle == "versus" or AutoStyle == "couple" or AutoStyle == "routine")
 
 -- a table of profile data (highscore name, most recent song, mods, etc.)
 -- indexed by "ProfileIndex" (provided by engine)
@@ -219,7 +220,7 @@ local t = Def.ActorFrame {
 			return
 		end
 
-		if AutoStyle=="none" or AutoStyle=="versus" or #GAMESTATE:GetHumanPlayers() > 1 then
+		if AutoStyle=="none" or AutoStyleNeedsTwoProfiles or #GAMESTATE:GetHumanPlayers() > 1 then
 			HandleStateChange(self, PLAYER_1)
 			HandleStateChange(self, PLAYER_2)
 		else
@@ -276,7 +277,7 @@ if SL.Global.FastProfileSwitchInProgress then
 end
 
 -- load PlayerFrames for both
-if AutoStyle=="none" or AutoStyle=="versus" or #GAMESTATE:GetHumanPlayers() > 1 then
+if AutoStyle=="none" or AutoStyleNeedsTwoProfiles or #GAMESTATE:GetHumanPlayers() > 1 then
 	t[#t+1] = LoadActor("PlayerFrame.lua", {Player=PLAYER_1, Scroller=scrollers[PLAYER_1], ProfileData=profile_data, Avatars=avatars})
 	t[#t+1] = LoadActor("PlayerFrame.lua", {Player=PLAYER_2, Scroller=scrollers[PLAYER_2], ProfileData=profile_data, Avatars=avatars})
 -- load only for the MasterPlayerNumber

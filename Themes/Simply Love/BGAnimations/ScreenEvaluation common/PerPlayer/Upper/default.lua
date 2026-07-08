@@ -12,9 +12,6 @@ return Def.ActorFrame{
 		end
 	end,
 
-	-- letter grade
-	LoadActor("./LetterGrade.lua", player),
-
 	-- nice
 	LoadActor("./nice.lua", player),
 
@@ -33,5 +30,8 @@ return Def.ActorFrame{
 	LoadActor("./RecordTexts.lua", player),
 
 	-- Event Progress Box
-	LoadActor("./EventProgress.lua", player)
+	LoadActor("./EventProgress.lua", player),
+
+	-- letter grade
+	LoadActor("./LetterGrade.lua", player)
 }

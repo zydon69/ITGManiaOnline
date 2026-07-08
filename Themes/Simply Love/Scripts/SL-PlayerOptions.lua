@@ -127,6 +127,20 @@ local HumanPlayers = function()
 	return {}
 end
 
+local IsRoutineSharedStyle = function()
+	if not (GAMESTATE and GAMESTATE.GetCurrentStyle) then return false end
+	local ok, style = SafeCall("GAMESTATE.GetCurrentStyle", function()
+		return GAMESTATE:GetCurrentStyle()
+	end)
+	if not (ok and style and style.GetStyleType) then return false end
+	local okType, styleType = SafeCall("Style.GetStyleType", function()
+		return style:GetStyleType()
+	end)
+	if not okType then return false end
+	local styleTypeName = SafeEnumShort(styleType, tostring(styleType or ""))
+	return styleTypeName == "TwoPlayersSharedSides" or tostring(styleType) == "StyleType_TwoPlayersSharedSides"
+end
+
 local NormalizeRoomPhase = function(phase)
 	if ITGOnline and type(ITGOnline.NormalizeRoomPhase) == "function" then
 		local ok, normalized = SafeCall("ITGOnline.NormalizeRoomPhase", function()
@@ -765,30 +779,86 @@ local Overrides = {
 	},
 	-------------------------------------------------------------------------
 	Mini = {
+		HideOnDisable = true,
+		EnabledForPlayers = function()
+			if IsRoutineSharedStyle() then return { PLAYER_1 } end
+			return HumanPlayers()
+		end,
 		Choices = function()
-			local first	= -100
+			local first	= 0
 			local last 	= 150
 			local step 	= 1
 
 			return stringify( range(first, last, step), "%g%%")
 		end,
-		SaveSelections = function(self, list, pn)
-			local mods, playeroptions = GetModsAndPlayerOptions(pn)
-			if not (mods and playeroptions) then return end
+		LoadSelections = function(self, list, pn)
+			local routineShared = IsRoutineSharedStyle()
+			local sourcePlayer = routineShared and PLAYER_1 or pn
+			local sourceMods = PlayerMods(sourcePlayer)
+			if not sourceMods then return list end
 
+			local miniPercent = Clamp((tostring(sourceMods.Mini or "0"):gsub("%%","")), 0, 150)
+			sourceMods.Mini = ("%g%%"):format(miniPercent)
+			local selected = FindInTable(sourceMods.Mini, self.Choices) or 1
 			for i=1,#self.Choices do
-				if list[i] then
-					mods.Mini = self.Choices[i]
+				list[i] = i == selected
+			end
+			return list
+		end,
+		SaveSelections = function(self, list, pn)
+			local mods = PlayerMods(pn)
+			if not mods then return end
+			local routineShared = IsRoutineSharedStyle()
+			local sourcePlayer = routineShared and PLAYER_1 or pn
+			local sourceMods = PlayerMods(sourcePlayer)
+			if not sourceMods then return end
+
+			local selectedMini = sourceMods.Mini
+			if not routineShared or pn == PLAYER_1 then
+				for i=1,#self.Choices do
+					if list[i] then
+						selectedMini = self.Choices[i]
+						sourceMods.Mini = selectedMini
+						break
+					end
 				end
 			end
 
-			-- to make the arrows smaller, pass Mini() a value between 0 and 1
-			-- (to make the arrows bigger, pass Mini() a value larger than 1)
-			local mini = Clamp(tostring(mods.Mini or "0"):gsub("%%",""), -100, 150) / 100
-			if playeroptions.Mini then
-				SafeCall("PlayerOptions.Mini", function()
-					playeroptions:Mini(mini)
-				end)
+			local miniPercent = Clamp((tostring(selectedMini or "0"):gsub("%%","")), 0, 150)
+			selectedMini = ("%g%%"):format(miniPercent)
+			sourceMods.Mini = selectedMini
+			local mini = miniPercent / 100
+			local function applyMini(target)
+				local targetMods, targetPlayerOptions = GetModsAndPlayerOptions(target)
+				if targetMods then targetMods.Mini = selectedMini end
+				if targetPlayerOptions and targetPlayerOptions.Mini then
+					SafeCall("PlayerOptions.Mini", function()
+						targetPlayerOptions:Mini(mini)
+					end)
+				end
+				if GAMESTATE and GAMESTATE.GetPlayerState then
+					local okState, playerState = SafeCall("GAMESTATE.GetPlayerState mini apply", function()
+						return GAMESTATE:GetPlayerState(target)
+					end)
+					if okState and playerState and playerState.ApplyPreferredOptionsToOtherLevels then
+						SafeCall("PlayerState.ApplyPreferredOptionsToOtherLevels mini apply", function()
+							playerState:ApplyPreferredOptionsToOtherLevels()
+						end)
+					end
+				end
+			end
+
+			if routineShared then
+				applyMini(PLAYER_1)
+				applyMini(PLAYER_2)
+				if PlayerOptionsTrace then
+					PlayerOptionsTrace("routine_shared_mini_applied source="
+						.. tostring(PlayerKey(pn) or pn)
+						.. " authority=P1"
+						.. " mini=" .. tostring(selectedMini))
+				end
+			else
+				applyMini(pn)
 			end
 		end
 	},
@@ -1268,7 +1338,7 @@ local Overrides = {
 		SelectType = "SelectMultiple",
 		Values = function()
 			-- GameplayExtras will be presented as a single OptionRow when WideScreen
-			local vals = { "ColumnFlashOnMiss", "SubtractiveScoring", "Pacemaker", "NPSGraphAtTop" }
+			local vals = { "SubtractiveScoring", "Pacemaker", "NPSGraphAtTop" }
 
 			-- if not WideScreen (traditional DDR cabinets running at 640x480)
 			-- remove the last two choices to be appended an additional OptionRow (GameplayExtrasB below).
@@ -1409,6 +1479,22 @@ local Overrides = {
 	TimingWindowOptions = {
 		SelectType = "SelectMultiple",
 		Values = { "HideEarlyDecentWayOffJudgments", "HideEarlyDecentWayOffFlash" }
+	},
+	-------------------------------------------------------------------------
+	JudgmentFlash = {
+		SelectType = "SelectMultiple",
+		Values = { "FlashMiss", "FlashWayOff", "FlashDecent", "FlashGreat", "FlashExcellent", "FlashFantastic" },
+		Choices = function()
+			local tns = "TapNoteScore"
+			return {
+				SafeThemeString(tns, "Miss"),
+				SafeThemeString(tns, "W5"),
+				SafeThemeString(tns, "W4"),
+				SafeThemeString(tns, "W3"),
+				SafeThemeString(tns, "W2"),
+				SafeThemeString(tns, "W1"),
+			}
+		end,
 	},
 	-------------------------------------------------------------------------
 	TimingWindows = {

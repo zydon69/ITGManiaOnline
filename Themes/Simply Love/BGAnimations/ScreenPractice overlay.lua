@@ -23,7 +23,34 @@ local t = Def.ActorFrame{
 	}
 }
 
-local players =  GAMESTATE:GetHumanPlayers()
+local players = GAMESTATE:GetHumanPlayers()
+local is43 = GetScreenAspectRatio() <= 1.4
+local style = GAMESTATE:GetCurrentStyle()
+local style_name = style and style:GetName() or ""
+
+local graph_width = _screen.h - 100
+local graph_height = 50
+local graph_y = 80
+local graph_x = GetNotefieldWidth() / 1.30
+
+if style_name ~= "versus" and style_name ~= "single" then
+	graph_x = GetNotefieldWidth() / 2.2
+end
+
+if is43 then
+	graph_height = 25
+	graph_x = (GetNotefieldWidth() / 1.50) - 1
+	if style_name ~= "versus" and style_name ~= "single" then
+		graph_width = _screen.h - 200
+		graph_x = GetNotefieldWidth() / 2.7
+		graph_y = 180
+	end
+end
+
+graph_x = graph_x + (_screen.w / 2) - graph_height
+
+local nps_graph_drawn = false
+
 for player in ivalues(players) do
 	local backgroundFilter = LoadActor("ScreenGameplay underlay/PerPlayer/BackgroundFilter.lua", player)
 
@@ -47,6 +74,22 @@ for player in ivalues(players) do
 		ShowCommand=function(self) self:visible(false) end,
 		PlayingCommand=function(self) self:visible(true) end,
 	}
+
+	if not nps_graph_drawn then
+		t[#t+1] = NPS_Histogram_With_Position_Line(player, graph_width, graph_height)..{
+			OnCommand=function(self)
+				self:xy(graph_x, graph_y)
+					:rotationz(90)
+				self:queuecommand("Redraw")
+			end,
+			ShowCommand=function(self)
+				self:queuecommand("ScrollSong")
+				self:visible(true)
+			end,
+			PlayingCommand=function(self) self:visible(false) end,
+		}
+		nps_graph_drawn = true
+	end
 end
 
 return t

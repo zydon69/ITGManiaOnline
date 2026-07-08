@@ -80,12 +80,18 @@ local t = Def.ActorFrame {
 	FinishCommand=function(self)
 		-- store the highscore name for this game
 		for player in ivalues(Players) do
-			GAMESTATE:StoreRankingName(player, SL[ToEnumShortString(player)].HighScores.Name)
+			local sourcePlayer = GetRoutineSourcePlayer and GetRoutineSourcePlayer(player) or player
+			local isRoutineMirror = IsRoutine and IsRoutine() and player ~= sourcePlayer
+			local pn = ToEnumShortString(player)
+
+			if not isRoutineMirror then
+				GAMESTATE:StoreRankingName(player, SL[pn].HighScores.Name or "")
+			end
 
 			-- if a profile is in use
-			if PROFILEMAN:IsPersistentProfile(player) then
+			if not isRoutineMirror and PROFILEMAN:IsPersistentProfile(player) then
 				-- update that profile's LastUsedHighScoreName attribute
-				PROFILEMAN:GetProfile(player):SetLastUsedHighScoreName( SL[ToEnumShortString(player)].HighScores.Name )
+				PROFILEMAN:GetProfile(player):SetLastUsedHighScoreName( SL[pn].HighScores.Name or "" )
 			end
 		end
 

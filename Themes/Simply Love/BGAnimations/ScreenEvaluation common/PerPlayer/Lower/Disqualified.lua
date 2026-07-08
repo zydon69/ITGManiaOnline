@@ -6,7 +6,7 @@ if SL.Global.GameMode == "Casual" then return end
 
 local player = ...
 
-local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+local stats = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 local disqualified = stats:IsDisqualified()
 
 -- If the player was disqualified, return a BitmapText actor with localized text

@@ -1,6 +1,10 @@
 local Player = ...
 local pn = ToEnumShortString(Player)
-local CanEnterName = SL[pn].HighScores.EnteringName
+local sourcePlayer = GetRoutineSourcePlayer and GetRoutineSourcePlayer(Player) or Player
+local sourcePn = ToEnumShortString(sourcePlayer)
+local IsRoutineMirror = IsRoutine and IsRoutine() and Player ~= sourcePlayer
+local SourceCanEnterName = SL[sourcePn] and SL[sourcePn].HighScores and SL[sourcePn].HighScores.EnteringName
+local CanEnterName = (not IsRoutineMirror) and SL[pn].HighScores.EnteringName
 
 if CanEnterName then
 	SL[pn].HighScores.Name = ""
@@ -61,7 +65,7 @@ t[#t+1] = LoadFont("Wendy/_wendy white")..{
 }
 
 t[#t+1] = LoadFont("Common Bold")..{
-	Text=ScreenString("OutOfRanking"),
+	Text=(IsRoutineMirror and SourceCanEnterName) and THEME:GetString("ScreenNameEntryTraditional", "SharedRanking") or ScreenString("OutOfRanking"),
 	OnCommand=function(self) self:zoom(0.7):diffuse(PlayerColor(Player)):y(58):visible(not CanEnterName) end
 }
 

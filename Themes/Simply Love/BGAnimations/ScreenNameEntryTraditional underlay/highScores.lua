@@ -1,5 +1,7 @@
 local player = ...
 local pn = ToEnumShortString(player)
+local sourcePlayer = GetRoutineSourcePlayer and GetRoutineSourcePlayer(player) or player
+local sourcePn = ToEnumShortString(sourcePlayer)
 
 -- get the number of stages that were played
 local NumStages = SL.Global.Stages.PlayedThisGame or 0
@@ -11,13 +13,13 @@ for i=1,NumStages do
 	local StepsOrTrail
 	local globalStageStats = SL.Global.Stages.Stats and SL.Global.Stages.Stats[i] or nil
 	local SongOrCourse = globalStageStats and globalStageStats.song or nil
-	local stats = SL[pn].Stages.Stats[i]
+	local stats = SL[sourcePn].Stages.Stats[i]
 
 	-- stats might exist for one player but not the other due to latejoin
 	if stats and globalStageStats then
 		StepsOrTrail = stats.steps
 
-		local args = { Player=player, RoundsAgo=(NumStages-(i-1)), SongOrCourse=SongOrCourse, StepsOrTrail=StepsOrTrail }
+		local args = { Player=sourcePlayer, RoundsAgo=(NumStages-(i-1)), SongOrCourse=SongOrCourse, StepsOrTrail=StepsOrTrail }
 		local list = LoadActor(THEME:GetPathB("", "_modules/HighScoreList.lua"), args)
 
 		list.Name = "HighScoreList" .. i .. ToEnumShortString(player)

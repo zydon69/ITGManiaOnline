@@ -14,6 +14,13 @@ local BranchTrace = function(message)
 	end
 end
 
+local StyleFlowTrace = function(message)
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then return end
+	if Trace then
+		Trace("ROUTINE_STYLE_FLOW branch " .. tostring(message or ""))
+	end
+end
+
 local SafeCall = function(context, fn)
 	if type(fn) ~= "function" then return false, nil end
 	local ok, result = pcall(fn)
@@ -75,6 +82,18 @@ end
 
 local SafeGameMode = function()
 	return SL and SL.Global and SL.Global.GameMode or nil
+end
+
+local SafeCurrentGameName = function()
+	if not (GAMESTATE and GAMESTATE.GetCurrentGame) then return nil end
+	local okGame, game = SafeCall("GAMESTATE.GetCurrentGame", function()
+		return GAMESTATE:GetCurrentGame()
+	end)
+	if not (okGame and game and game.GetName) then return nil end
+	local okName, name = SafeCall("Game.GetName", function()
+		return game:GetName()
+	end)
+	return okName and tostring(name or "") or nil
 end
 
 local SafeCourseMode = function()
@@ -228,13 +247,19 @@ local OnlineEvaluationBranchState = function(room)
 end
 
 local ValidAutoStyles = {
+	auto = true,
 	single = true,
 	versus = true,
+	couple = true,
 	routine = true,
 	double = true,
 }
 
 local EnoughCreditsToContinue = function()
+	if SafePreference("CoinMode", nil) ~= "CoinMode_Pay" then
+		return true
+	end
+
 	local credits = 0
 	if IsCallable(GetCredits) then
 		local ok, creditState = SafeCall("GetCredits", function()
@@ -397,8 +422,29 @@ Branch.AfterScreenSelectColor = function()
 			return "ScreenSelectStyle"
 		end
 
-		-- If "versus" or "routine", ensure that both players are joined.
-		if preferred_style == "versus" or preferred_style == "routine" then
+		if preferred_style == "auto" then
+			local style = "single"
+			local okSides, sidesJoined = SafeCall("GAMESTATE.GetNumSidesJoined", function()
+				return GAMESTATE:GetNumSidesJoined()
+			end)
+			if okSides and sidesJoined ~= 1 then
+				style = "versus"
+			end
+			if SafeCurrentGameName() == "techno" then
+				style = style .. "8"
+			end
+			local okStyle = SafeCall("GAMESTATE.SetCurrentStyle " .. style, function()
+				GAMESTATE:SetCurrentStyle(style)
+			end)
+			if not okStyle then
+				BranchTrace("AutoStyle skipped set_failed style=" .. tostring(style))
+				return "ScreenSelectStyle"
+			end
+			return Branch.AllowScreenSelectPlayMode()
+		end
+
+		-- If the preferred style needs two players, ensure that both are joined.
+		if preferred_style == "versus" or preferred_style == "couple" or preferred_style == "routine" then
 			if GAMESTATE.JoinPlayer then
 				SafeCall("GAMESTATE.JoinPlayer P1", function() GAMESTATE:JoinPlayer(PLAYER_1) end)
 				SafeCall("GAMESTATE.JoinPlayer P2", function() GAMESTATE:JoinPlayer(PLAYER_2) end)
@@ -432,6 +478,8 @@ Branch.AfterScreenSelectColor = function()
 end
 
 Branch.AllowScreenSelectPlayMode = function()
+	StyleFlowTrace("AllowScreenSelectPlayMode style=" .. tostring(SafeCurrentStyleName())
+		.. " pref=" .. tostring(SafeThemePref("AllowScreenSelectPlayMode", false)))
 	if SafeThemePref("AllowScreenSelectPlayMode", false) then
 		return "ScreenSelectPlayMode"
 	else
@@ -442,6 +490,9 @@ end
 Branch.AllowScreenSelectPlayMode2 = function()
 	-- now that a GameMode has been selected (or defaulted), set related preferences
 	local gameMode = tostring(SafeGameMode() or "")
+	StyleFlowTrace("AllowScreenSelectPlayMode2 begin style=" .. tostring(SafeCurrentStyleName())
+		.. " game_mode=" .. tostring(gameMode)
+		.. " pref=" .. tostring(SafeThemePref("AllowScreenSelectPlayMode2", false)))
 	if Branch._lastGameModePreferencesApplied ~= gameMode then
 		if IsCallable(SetGameModePreferences) then
 			SafeCall("SetGameModePreferences", function()
@@ -458,13 +509,17 @@ Branch.AllowScreenSelectPlayMode2 = function()
 	end
 
 	if gameMode == "ITG" and SafeThemePref("AllowScreenSelectPlayMode2", false) then
+		StyleFlowTrace("AllowScreenSelectPlayMode2 next=ScreenSelectPlayMode2 style=" .. tostring(SafeCurrentStyleName()))
 		return "ScreenSelectPlayMode2"
 	else
+		StyleFlowTrace("AllowScreenSelectPlayMode2 delegate_online style=" .. tostring(SafeCurrentStyleName()))
 		return Branch.AllowScreenSelectOnlineMode()
 	end
 end
 
 Branch.AllowScreenSelectOnlineMode = function()
+	StyleFlowTrace("AllowScreenSelectOnlineMode style=" .. tostring(SafeCurrentStyleName())
+		.. " pref=" .. tostring(SafeThemePref("AllowScreenSelectOnlineMode", false)))
 	if SafeThemePref("AllowScreenSelectOnlineMode", false) then
 		return "ScreenSelectOnlineMode"
 	end
@@ -477,6 +532,8 @@ Branch.AllowScreenSelectOnlineMode = function()
 end
 
 Branch.AfterSelectOnlineMode = function()
+	StyleFlowTrace("AfterSelectOnlineMode enabled=" .. tostring(SL and SL.Global and SL.Global.ITGOnline and SL.Global.ITGOnline.Enabled)
+		.. " style=" .. tostring(SafeCurrentStyleName()))
 	if SL and SL.Global and SL.Global.ITGOnline and SL.Global.ITGOnline.Enabled then
 		return "ScreenITGOnlineLogin"
 	end
@@ -886,8 +943,9 @@ Branch.AfterProfileSave = function()
 		-- this style is more verbose but avoids obnoxious if statements
 
 		if setOver then
-			-- continues are only allowed in Pay mode
-			if SafePreference("CoinMode", nil) == "CoinMode_Pay" then
+			-- continues are allowed in Pay and Free Play modes; Home mode goes
+			-- through the normal evaluation/summary flow without Play Again.
+			if SafePreference("CoinMode", nil) ~= "CoinMode_Home" then
 				local continuesRemaining = FiniteNumberOr(SL.Global.ContinuesRemaining, 0)
 				if continuesRemaining > 0 and EnoughCreditsToContinue() then
 					return "ScreenPlayAgain"

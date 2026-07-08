@@ -38,22 +38,26 @@ local function input(event)
 					end
 				end
 
-				local coins = PREFSMAN:GetPreference("CoinsPerCredit")
-				local premium = PREFSMAN:GetPreference("Premium")
-				local style = GAMESTATE:GetCurrentStyle():GetName():gsub("8", "")
+				-- If we're in Pay mode, deduct the credits required by the
+				-- current premium/style. Free Play continues have no credits.
+				if PREFSMAN:GetPreference("CoinMode") == "CoinMode_Pay" then
+					local coins = PREFSMAN:GetPreference("CoinsPerCredit")
+					local premium = PREFSMAN:GetPreference("Premium")
+					local style = GAMESTATE:GetCurrentStyle():GetName():gsub("8", "")
 
-				if premium == "Premium_DoubleFor1Credit" then
-					if style == "versus" then
-						coins = coins * 2
+					if premium == "Premium_DoubleFor1Credit" then
+						if style == "versus" or style == "couple" or style == "routine" then
+							coins = coins * 2
+						end
+
+					elseif premium == "Premium_Off" then
+						if style == "versus" or style == "couple" or style == "routine" or style == "double" then
+							coins = coins * 2
+						end
 					end
 
-				elseif premium == "Premium_Off" then
-					if style == "versus" or style == "double" then
-						coins = coins * 2
-					end
+					GAMESTATE:InsertCoin(-coins)
 				end
-
-				GAMESTATE:InsertCoin(-coins)
 
 				SL.Global.Stages.Remaining = PREFSMAN:GetPreference("SongsPerPlay")
 				SL.Global.ContinuesRemaining = SL.Global.ContinuesRemaining - 1

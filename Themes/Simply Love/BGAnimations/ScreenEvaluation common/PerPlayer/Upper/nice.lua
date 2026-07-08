@@ -4,7 +4,9 @@
 local player = ...
 local af = Def.ActorFrame{}
 
-local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+local stats = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+if not stats then return af end
+
 local failed = stats:GetFailed()
 local PercentDP = stats:GetPercentDancePoints()
 local percent = FormatPercentScore(PercentDP):gsub("%%", "")
@@ -58,9 +60,8 @@ local IsNice = function()
 	end
 
 	-- song title
-	local songtitle = (GAMESTATE:IsCourseMode()
-						and GAMESTATE:GetCurrentCourse():GetDisplayFullTitle())
-						or GAMESTATE:GetCurrentSong():GetDisplayFullTitle()
+	local SongOrCourse = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentCourse() or GAMESTATE:GetCurrentSong()
+	local songtitle = SongOrCourse and SongOrCourse:GetDisplayFullTitle()
 
 	if songtitle then
 		if string.match(tostring(songtitle), "69") ~= nil then return true end
@@ -76,6 +77,8 @@ local IsCranked = function()
 	if tonumber(percent) <= 0 then return false end
 
 	local SongOrCourse = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentCourse() or GAMESTATE:GetCurrentSong()
+	if not SongOrCourse then return false end
+
 	local title = SongOrCourse:GetDisplayFullTitle():lower()
 	local genre = not GAMESTATE:IsCourseMode() and SongOrCourse:GetGenre():lower() or ""
 	local group = not GAMESTATE:IsCourseMode() and SongOrCourse:GetGroupName():lower() or ""

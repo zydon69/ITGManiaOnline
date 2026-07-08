@@ -1,7 +1,7 @@
 local player, controller = unpack(...)
 
 local pn = ToEnumShortString(player)
-local pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 
 local TapNoteScores = {
 	Types = { 'W0', 'W1', 'W2', 'W3', 'W4', 'W5', 'Miss' },
@@ -15,14 +15,17 @@ local TapNoteScores = {
 		SL.JudgmentColors["ITG"][6], -- Red Miss
 	},
 	-- x values for P1 and P2
-	x = { P1=64, P2=94 }
+	x = { P1=64, P2=-128 }
 }
 
 local RadarCategories = {
 	Types = { 'Holds', 'Mines', 'Rolls' },
 	-- x values for P1 and P2
-	x = { P1=-180, P2=218 }
+	x = { P1=-180, P2=-3 }
 }
+
+local PercentX = { P1=-114, P2=61 }
+local SlashPossibleX = { P1=-114, P2=61 }
 
 -- TODO(Zankoku) - EX judgments are in storage now, so we shouldn't have to calculate this all over again
 local counts = GetExJudgmentCounts(player)
@@ -98,7 +101,7 @@ for index, RCType in ipairs(RadarCategories.Types) do
 			Text=("%.2f"):format(percent),
 			InitCommand=function(self)
 				self:horizalign(right):zoom(0.4)
-				self:x( ((controller == PLAYER_1) and -114) or 286 )
+				self:x( PercentX[ToEnumShortString(controller)] )
 				self:y(47)
 				
 				if SL[pn].ActiveModifiers.ShowExScore then
@@ -136,7 +139,7 @@ for index, RCType in ipairs(RadarCategories.Types) do
 	t[#t+1] = LoadFont("Wendy/_ScreenEvaluation numbers")..{
 		InitCommand=function(self) self:zoom(0.5):horizalign(right) end,
 		BeginCommand=function(self)
-			self:x( ((controller == PLAYER_1) and -114) or 286 )
+			self:x( SlashPossibleX[ToEnumShortString(controller)] )
 			self:y(index*35 + 53)
 			self:settext(("/%03d"):format(possible))
 			local leadingZeroAttr = { Length=4-tonumber(tostring(possible):len()), Diffuse=color("#5A6166") }

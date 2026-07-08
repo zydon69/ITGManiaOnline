@@ -2,27 +2,48 @@ local StyleSelected = false
 local af
 
 local current_game = GAMESTATE:GetCurrentGame():GetName()
+local top_row_y = _screen.cy - SL_WideScale(70, 86)
+local bottom_row_y = _screen.cy + SL_WideScale(80, 102)
 ------------------------------------------------------------------------------------
+
+local function StyleFlowTrace(message)
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then return end
+	if Trace then
+		Trace("ROUTINE_STYLE_FLOW select_style " .. tostring(message or ""))
+	end
+end
+
+local function CurrentStyleName()
+	local ok, style = pcall(function() return GAMESTATE:GetCurrentStyle() end)
+	if not ok or not style then return "nil" end
+
+	ok, style = pcall(function() return style:GetName() end)
+	return ok and tostring(style or "nil") or "unknown"
+end
+
+local function JoinedPlayersText()
+	local players = {}
+	for player in ivalues(PlayerNumber) do
+		if GAMESTATE:IsHumanPlayer(player) then
+			players[#players+1] = ToEnumShortString(player)
+		end
+	end
+	return table.concat(players, "/")
+end
 
 local choices = {
 	{
 		name="single",
-		x=_screen.cx-SL_WideScale(216, 300),
+		x=_screen.cx-SL_WideScale(108, 150),
+		y=top_row_y,
 		pads = {
 			{color=GetHexColor(SL.Global.ActiveColorIndex, true), offset=0}
 		}
 	},
 	{
 		name="versus",
-		x=_screen.cx-SL_WideScale(72, 100),
-		pads = {
-			{color=GetHexColor(SL.Global.ActiveColorIndex-1, true), offset=-SL_WideScale(42,51)},
-			{color=GetHexColor(SL.Global.ActiveColorIndex+2, true), offset= SL_WideScale(42,51)}
-		}
-	},
-	{
-		name="routine",
-		x=_screen.cx+SL_WideScale(72, 100),
+		x=_screen.cx+SL_WideScale(108, 150),
+		y=top_row_y,
 		pads = {
 			{color=GetHexColor(SL.Global.ActiveColorIndex-1, true), offset=-SL_WideScale(42,51)},
 			{color=GetHexColor(SL.Global.ActiveColorIndex+2, true), offset= SL_WideScale(42,51)}
@@ -30,27 +51,46 @@ local choices = {
 	},
 	{
 		name="double",
-		x=_screen.cx+SL_WideScale(216, 300),
+		x=_screen.cx-SL_WideScale(216, 300),
+		y=bottom_row_y,
 		pads = {
 			{color=GetHexColor(SL.Global.ActiveColorIndex+1, true), offset=-SL_WideScale(42,51)},
 			{color=GetHexColor(SL.Global.ActiveColorIndex+1, true), offset= SL_WideScale(42,51)}
 		}
 	},
+	{
+		name="couple",
+		x=_screen.cx,
+		y=bottom_row_y,
+		pads = {
+			{color=GetHexColor(SL.Global.ActiveColorIndex-1, true), offset=-SL_WideScale(42,51)},
+			{color=GetHexColor(SL.Global.ActiveColorIndex+2, true), offset= SL_WideScale(42,51)}
+		}
+	},
+	{
+		name="routine",
+		x=_screen.cx+SL_WideScale(216, 300),
+		y=bottom_row_y,
+		pads = {
+			{color=GetHexColor(SL.Global.ActiveColorIndex-1, true), offset=-SL_WideScale(42,51)},
+			{color=GetHexColor(SL.Global.ActiveColorIndex+2, true), offset= SL_WideScale(42,51)}
+		}
+	},
 }
 
 if current_game=="dance" and ThemePrefs.Get("AllowDanceSolo") then
-	choices[1].x = _screen.cx - SL_WideScale(300,360)
-	choices[2].x = _screen.cx - SL_WideScale(180,216)
-	choices[3].x = _screen.cx - SL_WideScale(60,72)
-	choices[4].x = _screen.cx + SL_WideScale(60,72)
-	choices[5] = { name="solo", pads={ {color=GetHexColor(SL.Global.ActiveColorIndex, true), offset=0}}, x=_screen.cx + SL_WideScale(180,216) }
-	choices[6] = { name="threepanel", pads={ {color=GetHexColor(SL.Global.ActiveColorIndex, true), offset=0}}, x=_screen.cx + SL_WideScale(300,360) }
+	choices[3].x = _screen.cx - SL_WideScale(360,432)
+	choices[4].x = _screen.cx - SL_WideScale(180,216)
+	choices[5].x = _screen.cx
+	choices[6] = { name="solo", pads={ {color=GetHexColor(SL.Global.ActiveColorIndex, true), offset=0}}, x=_screen.cx + SL_WideScale(180,216), y=bottom_row_y }
+	choices[7] = { name="threepanel", pads={ {color=GetHexColor(SL.Global.ActiveColorIndex, true), offset=0}}, x=_screen.cx + SL_WideScale(360,432), y=bottom_row_y }
 
 -- double is not a valid style in kb7 and para
 elseif current_game=="kb7" or current_game=="para" then
 	choices[1].x = _screen.cx-SL_WideScale(106, 140)
 	choices[2].x = _screen.cx+SL_WideScale(106, 140)
-	table.remove(choices, 4)
+	table.remove(choices, 3)
+	table.remove(choices, 3)
 	table.remove(choices, 3)
 end
 
@@ -94,9 +134,11 @@ local EnableChoices = function()
 			if GAMESTATE:EnoughCreditsToJoin()
 			or #GAMESTATE:GetHumanPlayers() == 2 then
 				SetChoiceEnabled("versus", true)
+				SetChoiceEnabled("couple", true)
 				SetChoiceEnabled("routine", true)
 			else
 				SetChoiceEnabled("versus", false)
+				SetChoiceEnabled("couple", false)
 				SetChoiceEnabled("routine", false)
 			end
 
@@ -110,11 +152,13 @@ local EnableChoices = function()
 			or #GAMESTATE:GetHumanPlayers() == 2 then
 				-- enable "2 Players", "Routine", and "Double"
 				SetChoiceEnabled("versus", true)
+				SetChoiceEnabled("couple", true)
 				SetChoiceEnabled("routine", true)
 				SetChoiceEnabled("double", true)
 			else
 				-- disable "2 Players", "Routine", and "Double"
 				SetChoiceEnabled("versus", false)
+				SetChoiceEnabled("couple", false)
 				SetChoiceEnabled("routine", false)
 				SetChoiceEnabled("double", false)
 			end
@@ -147,8 +191,8 @@ local GetNextEnabledChoice = function(dir)
 end
 
 local JoinOrUnjoinPlayersMaybe = function(style, player)
-	-- if going into versus or routine, ensure that both players are joined
-	if style == "versus" or style == "routine" then
+	-- if going into a two-player style, ensure that both players are joined
+	if style == "versus" or style == "couple" or style == "routine" then
 		for player in ivalues( PlayerNumber ) do
 			if not GAMESTATE:IsHumanPlayer(player) then GAMESTATE:JoinPlayer(player) end
 		end
@@ -183,7 +227,7 @@ local ManageCredits = function(style)
 	if GAMESTATE:GetCoinMode() == "CoinMode_Pay"
 	and GAMESTATE:GetPremium() == "Premium_DoubleFor1Credit"
 	and #GAMESTATE:GetHumanPlayers() == 1
-	and (style == "versus" or style == "routine") then
+	and (style == "versus" or style == "couple" or style == "routine") then
 		GAMESTATE:InsertCoin( -GAMESTATE:GetCoinsNeededToJoin() )
 		return
 	end
@@ -201,7 +245,7 @@ local ManageCredits = function(style)
 	if GAMESTATE:GetCoinMode() == "CoinMode_Pay"
 	and GAMESTATE:GetPremium() == "Premium_Off"
 	and #GAMESTATE:GetHumanPlayers() == 1
-	and (style=="versus" or style=="routine" or style=="double") then
+	and (style=="versus" or style=="couple" or style=="routine" or style=="double") then
 		GAMESTATE:InsertCoin( -GAMESTATE:GetCoinsNeededToJoin() )
 		return
 	end
@@ -275,6 +319,12 @@ local t = Def.ActorFrame{
 				child:queuecommand("GainFocus")
 			end
 		end
+
+		StyleFlowTrace("init current_index=" .. tostring(current_index)
+			.. " choice=" .. tostring(choices[current_index] and choices[current_index].name or "nil")
+			.. " current_style=" .. CurrentStyleName()
+			.. " joined=" .. JoinedPlayersText()
+			.. " auto_style=" .. tostring(ThemePrefs.Get("AutoStyle")))
 	end,
 	OnCommand=function(self)
 		if PREFSMAN:GetPreference("MenuTimer") then
@@ -311,9 +361,19 @@ local t = Def.ActorFrame{
 	end,
 	FinishCommand=function(self, params)
 		local style = choices[current_index].name
+		local selected_player = params and params.PlayerNumber or nil
+
+		StyleFlowTrace("finish_begin selected=" .. tostring(style)
+			.. " selected_player=" .. tostring(selected_player and ToEnumShortString(selected_player) or "timer")
+			.. " current_style_before=" .. CurrentStyleName()
+			.. " joined_before=" .. JoinedPlayersText())
 
 		ManageCredits(style)
 		JoinOrUnjoinPlayersMaybe(style, (params and params.PlayerNumber or nil))
+
+		StyleFlowTrace("after_join selected=" .. tostring(style)
+			.. " joined_after=" .. JoinedPlayersText()
+			.. " current_style_before_set=" .. CurrentStyleName())
 
 		-- ah, yes, techno mode
 		-- techo doesn't have styles like "single" and "double", it has "single8", "versus8", and "double8"
@@ -322,6 +382,10 @@ local t = Def.ActorFrame{
 		-- set this now, but keep in mind that the style can change during a game session in a number
 		-- of ways, like latejoin (when available) and using SSM's SortMenu to change styles mid-game
 		GAMESTATE:SetCurrentStyle(style)
+
+		StyleFlowTrace("after_set selected=" .. tostring(style)
+			.. " current_style_after=" .. CurrentStyleName()
+			.. " joined_after=" .. JoinedPlayersText())
 
 		for i=1, #choices do
 			if i ~= current_index then

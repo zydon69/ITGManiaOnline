@@ -10,7 +10,7 @@ elseif SL[ToEnumShortString(player)].ActiveModifiers.ShowExScore then
 	percent = CalculateExScore(player)
 	diffuse = SL.JudgmentColors[SL.Global.GameMode][1]
 else
-	local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+	local stats = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 	local PercentDP = stats:GetPercentDancePoints()
 	percent = FormatPercentScore(PercentDP):gsub("%%", "")
 	-- Format the Percentage string, removing the % symbol

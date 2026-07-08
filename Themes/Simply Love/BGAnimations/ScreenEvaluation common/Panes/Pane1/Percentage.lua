@@ -1,6 +1,6 @@
 local player, controller = unpack(...)
 
-local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+local stats = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 local PercentDP = stats:GetPercentDancePoints()
 local percent = FormatPercentScore(PercentDP)
 -- Format the Percentage string, removing the % symbol

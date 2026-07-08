@@ -95,7 +95,43 @@ local function AddPlayerSortOptions()
     return player_sort_options
 end
 
+local function AddSorts()
+	-- Most song sort orders switch the wheel out of course mode. Hide them
+	-- until course-specific sorting has been reviewed separately.
+	if GAMESTATE:IsCourseMode() then return {} end
+
+	return {
+		{{"SortBy", "Group"} },
+		{ {"SortBy", "Series"} },
+		{ {"SortBy", "Title"} },
+		{ {"SortBy", "Artist"} },
+		{ {"SortBy", "Genre"} },
+		{ {"SortBy", "BPM"} },
+		{ {"SortBy", "Length"} },
+		{ {"SortBy", "Meter"} },
+		{ {"SortBy", "Popularity"} },
+		{ {"SortBy", "Recent"} },
+		{ {"SortBy", "TopGrades"} },
+	}
+end
+
+local function AddProfileEntries()
+	if GAMESTATE:IsCourseMode() then return {} end
+
+	return {
+		{ {"NextPlease", "SwitchProfile"}, ThemePrefs.Get("AllowScreenSelectProfile") },
+		{ {"SortBy", "PopularityP1"}, function() return PROFILEMAN:IsPersistentProfile(PLAYER_1) end },
+		{ {"SortBy", "RecentP1"}, function() return PROFILEMAN:IsPersistentProfile(PLAYER_1) end },
+		{ {"SortBy", "TopP1Grades"}, function() return PROFILEMAN:IsPersistentProfile(PLAYER_1) end },
+		{ {"SortBy", "PopularityP2"}, function() return PROFILEMAN:IsPersistentProfile(PLAYER_2) end },
+		{ {"SortBy", "RecentP2"}, function() return PROFILEMAN:IsPersistentProfile(PLAYER_2) end },
+		{ {"SortBy", "TopP2Grades"}, function() return PROFILEMAN:IsPersistentProfile(PLAYER_2) end },
+		{ {"MixTape", "Preferred"}, AddFavorites },
+	}
+end
+
 local function AddPlaylists()
+	if GAMESTATE:IsCourseMode() then return {} end
 
 	-- First add the machine playlists
 	local player_sort_options = {}
@@ -142,7 +178,7 @@ local function GetChangeableStyles()
 	-- but only present these options if Joint Double or Joint Premium is enabled
 	-- and we're not in "AutoSetStyle" mode (all styles presented simultaneously like PIU does)
 	
-	if THEME:GetMetric("Common", "AutoSetStyle") == true then
+	if ThemePrefs.Get("AutoStyle") == "auto" then
 		-- Check number of players
 		if ThemePrefs.Get("AllowDanceSolo") then
 			table.insert(available_styles, {{"ChangeStyle", "Solo"}, GAMESTATE:GetNumPlayersEnabled() == 1  })
@@ -189,7 +225,7 @@ local function GetChangeableStyles()
 				table.insert(available_styles, {{"ChangeStyle", "Routine"}})
 				table.insert(available_styles, {{"ChangeStyle", "Couple"}})
 			end
-			-- table.insert(available_styles, {{"ChangeStyle", "All"}})
+			table.insert(available_styles, {{"ChangeStyle", "All"}})
 
 		end
 	end
@@ -256,7 +292,8 @@ local t = Def.ActorFrame {
 			-- and offer to switch them back to casual mode. This allows them to do so again.
 			-- It's technically not possible to reach the sort menu in Casual Mode, but juuust in case let's still
 			-- include the check.
-			{ { "", "GoBack" } },
+			-- Only show GoBack in 3-key navigation mode, as it is redundant in 5-key.
+			{ { "", "GoBack" }, PREFSMAN:GetPreference("ThreeKeyNavigation") },
 			{ {"NextPlease", "SwitchProfile"}, ThemePrefs.Get("AllowScreenSelectProfile") },
 			{ {"GrooveStats", "Leaderboard"}, function() return GAMESTATE:GetCurrentSong() ~= nil end },
 			{ {"WhereforeArtThou", "SongSearch"}, not GAMESTATE:IsCourseMode() and ThemePrefs.Get("KeyboardFeatures") },
@@ -266,31 +303,11 @@ local t = Def.ActorFrame {
 			{ 
 
 				{"", "CategorySorts"}, 
-				{
-					{{"SortBy", "Group"} },
-					{ {"SortBy", "Series"} },
-					{ {"SortBy", "Title"} },
-					{ {"SortBy", "Artist"} },
-					{ {"SortBy", "Genre"} },
-					{ {"SortBy", "BPM"} },
-					{ {"SortBy", "Length"} },
-					{ {"SortBy", "Meter"} },
-					{ {"SortBy", "Popularity"} },
-					{ {"SortBy", "Recent"} },
-					{ {"SortBy", "TopGrades"} },
-				}
+				AddSorts,
 			},
 			{
 				{"", "CategoryProfile"},
-				{
-					{ {"SortBy", "PopularityP1"}, function() return PROFILEMAN:IsPersistentProfile(PLAYER_1) end },
-					{ {"SortBy", "RecentP1"}, function() return PROFILEMAN:IsPersistentProfile(PLAYER_1) end },
-					{ {"SortBy", "TopP1Grades"}, function() return PROFILEMAN:IsPersistentProfile(PLAYER_1) end },
-					{ {"SortBy", "PopularityP2"}, function() return PROFILEMAN:IsPersistentProfile(PLAYER_2) end },
-					{ {"SortBy", "RecentP2"}, function() return PROFILEMAN:IsPersistentProfile(PLAYER_2) end },
-					{ {"SortBy", "TopP2Grades"}, function() return PROFILEMAN:IsPersistentProfile(PLAYER_2) end },
-					{ {"MixTape", "Preferred"}, AddFavorites },
-				}
+				AddProfileEntries,
 			},
 			{
 				{"", "CategoryAdvanced"},

@@ -1,35 +1,51 @@
--- don't allow ColumnFlashOnMiss to appear in Casual gamemode via profile settings
+-- don't allow JudgmentFlash to appear in Casual gamemode via profile settings
 if SL.Global.GameMode == "Casual" then return end
 
 local player = ...
 local mods = SL[ToEnumShortString(player)].ActiveModifiers
+local columns = {}
+
+local function JudgmentFlashTraceEnabled()
+	if not (PREFSMAN and type(PREFSMAN.GetPreference) == "function") then return false end
+	local ok, enabled = pcall(function()
+		return PREFSMAN:GetPreference("LogThemeLuaDiagnostics")
+	end)
+	return ok and enabled == true
+end
+
+local trace_enabled = JudgmentFlashTraceEnabled()
+local function JudgmentFlashTrace(message)
+	if trace_enabled and Trace then
+		Trace("SL_JUDGMENT_FLASH_TRACE " .. tostring(message or ""))
+	end
+end
 
 local NumColumns = GAMESTATE:GetCurrentStyle():ColumnsPerPlayer()
 local IsReversedColumn = function(player, columnIndex)
-	local columns = {}
+	local rColumns = {}
 	for i=1, NumColumns do
-		columns[#columns + 1] = false
+		rColumns[#rColumns + 1] = false
 	end
 
 	local opts = GAMESTATE:GetPlayerState(player):GetCurrentPlayerOptions()
 	if opts:Reverse() == 1 then
-		for column,val in ipairs(columns) do
-			columns[column] = not val
+		for column,val in ipairs(rColumns) do
+			rColumns[column] = not val
 		end
 	end
 
 	if opts:Alternate() == 1 then
-		for column,val in ipairs(columns) do
+		for column,val in ipairs(rColumns) do
 			if column % 2 == 0 then
-				columns[column] = not val
+				rColumns[column] = not val
 			end
 		end
 	end
 
 	if opts:Split() == 1 then
-		for column,val in ipairs(columns) do
+		for column,val in ipairs(rColumns) do
 			if column > NumColumns / 2 then
-				columns[column] = not val
+				rColumns[column] = not val
 			end
 		end
 	end
@@ -37,104 +53,191 @@ local IsReversedColumn = function(player, columnIndex)
 	if opts:Cross() == 1 then
 		local firstChunk = NumColumns / 4
 		local lastChunk = NumColumns - firstChunk
-		for column,val in ipairs(columns) do
+		for column,val in ipairs(rColumns) do
 			if column > firstChunk and column <= lastChunk then
-				columns[column] = not val
+				rColumns[column] = not val
 			end
 		end
 	end
 
-	return columns[columnIndex]
+	return rColumns[columnIndex]
 end
 
-if mods.ColumnFlashOnMiss then
-	local po = GAMESTATE:GetPlayerState(player):GetPlayerOptions('ModsLevel_Preferred')
-	-- Existing logic already accounts for turn mods but not flip or invert.
-	-- Manually try and account for it ourselves here.
-	local flip = po:Flip() > 0
-	local invert = po:Invert() > 0
-	
-	if flip and invert then return end
+local po = GAMESTATE:GetPlayerState(player):GetPlayerOptions('ModsLevel_Preferred')
+-- Existing logic already accounts for turn mods but not flip or invert.
+-- Manually try and account for it ourselves here.
+local flip = po:Flip() > 0
+local invert = po:Invert() > 0
 
-	-- Only support flip/invert in modes with 4 or 8 columns.
-	if NumColumns ~= 4 and NumColumns ~= 8 and (flip or invert) then return end
+if flip and invert then return end
 
-	local column_mapping = range((NumColumns==4 or NumColumns==8) and 4 or NumColumns)
+-- Only support flip/invert in modes with 4 or 8 columns.
+if NumColumns ~= 4 and NumColumns ~= 8 and (flip or invert) then
+	JudgmentFlashTrace(("unsupported_flip_invert_columns player=%s columns=%s flip=%s invert=%s")
+		:format(tostring(player), tostring(NumColumns), tostring(flip), tostring(invert)))
+	return
+end
+
+local column_mapping = range((NumColumns==4 or NumColumns==8) and 4 or NumColumns)
+if flip then
+	column_mapping = {column_mapping[4], column_mapping[3], column_mapping[2], column_mapping[1]}
+end
+
+if invert then
+	column_mapping = {column_mapping[2], column_mapping[1], column_mapping[4], column_mapping[3]}
+end
+
+if NumColumns == 8 then
+	for i=1,4 do
+		column_mapping[4+i] = column_mapping[i] + 4
+	end
+
 	if flip then
-		column_mapping = {column_mapping[4], column_mapping[3], column_mapping[2], column_mapping[1]}
-	end
-	
-	if invert then
-		column_mapping = {column_mapping[2], column_mapping[1], column_mapping[4], column_mapping[3]}
-	end
-
-	if NumColumns == 8 then
 		for i=1,4 do
-			column_mapping[4+i] = column_mapping[i] + 4
-		end
-
-		if flip then
-			for i=1,4 do
-				column_mapping[i] = column_mapping[i] + 4
-				column_mapping[i+4] = column_mapping[i+4] - 4
-			end
+			column_mapping[i] = column_mapping[i] + 4
+			column_mapping[i+4] = column_mapping[i+4] - 4
 		end
 	end
+end
 
-	local columns = {}
-	local style = GAMESTATE:GetCurrentStyle(player)
-	local width = style:GetWidth(player)
+local style = GAMESTATE:GetCurrentStyle(player)
+local width = style:GetWidth(player)
+local y_offset = 80
 
-	local y_offset = 80
-	local reverseOffset = THEME:GetMetric("Player", "ReceptorArrowsYReverse")
+JudgmentFlashTrace(("init player=%s columns=%d width=%.3f mini=%s flashMiss=%s flashWayOff=%s flashDecent=%s flashGreat=%s flashExcellent=%s flashFantastic=%s hideEarlyDecentWayOffFlash=%s")
+	:format(
+		tostring(player),
+		NumColumns,
+		tonumber(width) or -1,
+		tostring(mods.Mini),
+		tostring(mods.FlashMiss),
+		tostring(mods.FlashWayOff),
+		tostring(mods.FlashDecent),
+		tostring(mods.FlashGreat),
+		tostring(mods.FlashExcellent),
+		tostring(mods.FlashFantastic),
+		tostring(mods.HideEarlyDecentWayOffFlash)))
 
-	local af = Def.ActorFrame{
+local function FlashColumn(self, params)
+	if params.Player ~= player then return end
+
+	local tns = ToEnumShortString(params.TapNoteScore or params.HoldNoteScore)
+	local cols_to_flash = {}
+
+	-- JudgmentMessageCommand passes the judged column(s) in a table (e.g. for jumps).
+	if params.Notes or params.Holds then
+		for i, col in pairs(params.Notes or params.Holds) do
+			cols_to_flash[#cols_to_flash+1] = column_mapping[i]
+		end
+	-- EarlyHitMessageCommand passes a single physical column index.
+	elseif params.TapNoteScore and params.Column then
+		cols_to_flash[#cols_to_flash+1] = column_mapping[params.Column + 1]
+	end
+
+	for _, col_idx in ipairs(cols_to_flash) do
+		local column = columns[col_idx]
+		if column then
+			if (tns == "Miss" or tns == "MissedHold") and mods.FlashMiss then
+				JudgmentFlashTrace(("flash player=%s tns=%s col=%s source=%s")
+					:format(tostring(player), tostring(tns), tostring(col_idx), params.Notes and "JudgmentNotes" or params.Holds and "JudgmentHolds" or "EarlyHit"))
+				column:playcommand("Flash", {tns=tns})
+			elseif tns == "W5" and mods.FlashWayOff then
+				JudgmentFlashTrace(("flash player=%s tns=%s col=%s source=%s")
+					:format(tostring(player), tostring(tns), tostring(col_idx), params.Notes and "JudgmentNotes" or params.Holds and "JudgmentHolds" or "EarlyHit"))
+				column:playcommand("Flash", {tns=tns})
+			elseif tns == "W4" and mods.FlashDecent then
+				JudgmentFlashTrace(("flash player=%s tns=%s col=%s source=%s")
+					:format(tostring(player), tostring(tns), tostring(col_idx), params.Notes and "JudgmentNotes" or params.Holds and "JudgmentHolds" or "EarlyHit"))
+				column:playcommand("Flash", {tns=tns})
+			elseif tns == "W3" and mods.FlashGreat then
+				JudgmentFlashTrace(("flash player=%s tns=%s col=%s source=%s")
+					:format(tostring(player), tostring(tns), tostring(col_idx), params.Notes and "JudgmentNotes" or params.Holds and "JudgmentHolds" or "EarlyHit"))
+				column:playcommand("Flash", {tns=tns})
+			elseif tns == "W2" and mods.FlashExcellent then
+				JudgmentFlashTrace(("flash player=%s tns=%s col=%s source=%s")
+					:format(tostring(player), tostring(tns), tostring(col_idx), params.Notes and "JudgmentNotes" or params.Holds and "JudgmentHolds" or "EarlyHit"))
+				column:playcommand("Flash", {tns=tns})
+			elseif tns == "W1" and mods.FlashFantastic then
+				JudgmentFlashTrace(("flash player=%s tns=%s col=%s source=%s")
+					:format(tostring(player), tostring(tns), tostring(col_idx), params.Notes and "JudgmentNotes" or params.Holds and "JudgmentHolds" or "EarlyHit"))
+				column:playcommand("Flash", {tns=tns})
+			end
+		else
+			JudgmentFlashTrace(("missing_column player=%s tns=%s col=%s notes=%s holds=%s physicalColumn=%s columns=%d")
+				:format(
+					tostring(player),
+					tostring(tns),
+					tostring(col_idx),
+					tostring(params.Notes ~= nil),
+					tostring(params.Holds ~= nil),
+					tostring(params.Column),
+					NumColumns))
+		end
+	end
+end
+
+local reverseOffset = THEME:GetMetric("Player", "ReceptorArrowsYReverse")
+
+local af = Def.ActorFrame{
+	InitCommand=function(self)
+		self:xy( GetNotefieldX(player), y_offset)
+		-- Via empirical observation/testing, it seems that 200% mini is the effective cap.
+		-- At 200% mini, arrows are effectively invisible; they reach a zoom_factor of 0.
+		-- So, keeping that cap in mind, the spectrum of possible mini values in this theme
+		-- becomes 0 to 2, and it becomes necessary to transform...
+		-- a mini value like 35% to a zoom factor like 0.825, or
+		-- a mini value like 150% to a zoom factor like 0.25
+		local zoom_factor = 1 - scale( mods.Mini:gsub("%%","")/100, 0, 2, 0, 1)
+		self:zoomx( zoom_factor )
+	end,
+	EarlyHitMessageCommand=function(self, params)
+		if not mods.HideEarlyDecentWayOffFlash then
+			FlashColumn(self, params)
+		end
+	end,
+	JudgmentMessageCommand=function(self, params)
+		FlashColumn(self, params)
+	end
+}
+
+for ColumnIndex=1,NumColumns do
+	af[#af+1] = Def.Quad{
 		InitCommand=function(self)
-			self:xy( GetNotefieldX(player), y_offset)
-			-- Via empirical observation/testing, it seems that 200% mini is the effective cap.
-			-- At 200% mini, arrows are effectively invisible; they reach a zoom_factor of 0.
-			-- So, keeping that cap in mind, the spectrum of possible mini values in this theme
-			-- becomes 0 to 2, and it becomes necessary to transform...
-			-- a mini value like 35% to a zoom factor like 0.825, or
-			-- a mini value like 150% to a zoom factor like 0.25
-			local zoom_factor = 1 - scale( mods.Mini:gsub("%%","")/100, 0, 2, 0, 1)
-			self:zoomx( zoom_factor )
+			columns[ColumnIndex] = self
+
+			self:diffuse(0,0,0,0)
+				:x((ColumnIndex - (NumColumns/2 + 0.5)) * (width/NumColumns))
+				:vertalign(top)
+				:setsize(width/NumColumns, _screen.h - y_offset)
+				:fadebottom(0.333)
+
+			if IsReversedColumn(player, ColumnIndex) then
+				self:rotationz(180)
+				self:y(y_offset * 2 + reverseOffset + (width/NumColumns)/2)
+			end
 		end,
-		JudgmentMessageCommand=function(self, params)
-			if params.Player == player and (params.Notes or params.Holds) then
-				for i,col in pairs(params.Notes or params.Holds) do
-					local tns = ToEnumShortString(params.TapNoteScore or params.HoldNoteScore)
-					if tns == "Miss" or tns == "MissedHold" then
-						columns[column_mapping[i]]:playcommand("Flash")
-					end
-				end
+		FlashCommand=function(self, params)
+			if params.tns == "Miss" or params.tns == "MissedHold" then
+				self:diffuse(1,0,0,0.66)
+			elseif params.tns == "W5" then
+				self:diffuse(0.78, 0.52, 0.36, 0.66)
+			elseif params.tns == "W4" then
+				self:diffuse(0.70, 0.36, 1.00, 0.66)
+			elseif params.tns == "W3" then
+				self:diffuse(0.40, 0.79, 0.33, 0.66)
+			elseif params.tns == "W2" then
+				self:diffuse(0.88, 0.61, 0.09, 0.66)
+			elseif params.tns == "W1" then
+				self:diffuse(0.13, 0.80, 0.91, 0.66)
+			end
+
+			if params.tns == "Miss" or params.tns == "MissedHold" then
+				self:accelerate(0.165):diffuse(0,0,0,0)
+			else
+				self:accelerate(0.33):diffuse(0,0,0,0)
 			end
 		end
 	}
-
-	for ColumnIndex=1,NumColumns do
-		af[#af+1] = Def.Quad{
-			InitCommand=function(self)
-				columns[ColumnIndex] = self
-
-				self:diffuse(0,0,0,0)
-					:x((ColumnIndex - (NumColumns/2 + 0.5)) * (width/NumColumns))
-					:vertalign(top)
-					:setsize(width/NumColumns, _screen.h - y_offset)
-					:fadebottom(0.333)
-
-				if IsReversedColumn(player, ColumnIndex) then
-					self:rotationz(180)
-					self:y(y_offset * 2 + reverseOffset + (width/NumColumns)/2)
-				end
-	        end,
-			FlashCommand=function(self)
-				self:diffuse(1,0,0,0.66)
-					:accelerate(0.165):diffuse(0,0,0,0)
-			end
-		}
-	end
-
-	return af
-
 end
+
+return af

@@ -30,8 +30,8 @@ local smooth_offsets = {}
 local ScaleFactor = { 0.045, 0.090, 0.180, 0.370, 0.180, 0.090, 0.045 }
 
 local y, index
-for offset=-worst_window, worst_window, 0.001 do
-	offset = round(offset,3)
+for offset_value=-worst_window, worst_window, 0.001 do
+	local offset = round(offset_value, 3)
 	y = 0
 
 	-- smooth like butter
@@ -72,7 +72,7 @@ end
 -- into an ordered list of offset values
 -- this will make calculating the median very straightforward
 local list = {}
-for offset=-worst_window, worst_window, 0.001 do
+for offset_value=-worst_window, worst_window, 0.001 do
 
 	-- TODO: Ruminate over whether rounding to 3 decimal places (millisecond precision)
 	-- is the right thing to be doing here.  Things to consider include:
@@ -80,7 +80,7 @@ for offset=-worst_window, worst_window, 0.001 do
 	--   • does Lua 5.1's floating point precision come into play here?
 	--   • should hardware (e.g. low polling rates) be considered here?  can it?
 	--   • does the judgment offset histogram really need 10x more verts to draw?
-	offset = round(offset,3)
+	local offset = round(offset_value, 3)
 
 	if offsets[offset] then
 		for i=1,offsets[offset] do
@@ -114,8 +114,8 @@ local w = pane_width/total_width
 local x, c
 
 local i=1
-for offset=-worst_window, worst_window, 0.001 do
-	offset = round(offset,3)
+for offset_value=-worst_window, worst_window, 0.001 do
+	local offset = round(offset_value, 3)
 	x = i * w
 	y = smooth_offsets[offset] or 0
 
@@ -128,7 +128,7 @@ for offset=-worst_window, worst_window, 0.001 do
 		c = colors[DetermineTimingWindow(offset)]
 
 		if mods.ShowFaPlusPane and mods.ShowFaPlusWindow then
-			abs_offset = math.abs(offset)
+			local abs_offset = math.abs(offset)
 			if mods.SmallerWhite and abs_offset > GetTimingWindow(1, "FA+", true) and abs_offset <= GetTimingWindow(1, "FA+", false) then
 				c = BlendColors(SL.JudgmentColors["FA+"][2], colors[1])
 			elseif abs_offset > GetTimingWindow(1, "FA+") and abs_offset <= GetTimingWindow(2, "FA+") then

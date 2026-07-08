@@ -14,6 +14,7 @@ local InputHandler = function(event)
 		 if ThonkAndRTTOkay() and CurrentGameIsSupported() and StepManiaVersionIsSupported() then
 			 local top = SCREENMAN:GetTopScreen()
 			 if top then top:Cancel() end
+			 return true
 		 end
 	end
 	return false
@@ -30,8 +31,8 @@ end
 a.BeginCommand=function(self)
 	local style = ThemePrefs.Get("VisualStyle")
 	local rainbow = ThemePrefs.Get("RainbowMode")
-	-- In case we switched into SRPG9 and had Rainbow Mode enabled, disable it.
-	if style == "SRPG9" and rainbow == true then
+	-- In case we switched into SRPG10 and had Rainbow Mode enabled, disable it.
+	if style == "SRPG10" and rainbow == true then
 		ThemePrefs.Set("RainbowMode", false)
 	end
 
@@ -51,6 +52,11 @@ a.BeginCommand=function(self)
 
 	-- Broadcast a message for "./BGAnimations/_shared background/" to listen for in case VisualStyle has changed.
 	-- This compensates for ThemePrefsRows' current lack of support for ExportOnChange() and SaveSelections().
+	Trace(("Simply Love theme options applied VisualStyle=%s RainbowMode=%s Color=%s"):format(
+		tostring(ThemePrefs.Get("VisualStyle")),
+		tostring(ThemePrefs.Get("RainbowMode")),
+		tostring(ThemePrefs.Get("SimplyLoveColor"))
+	))
 	MESSAGEMAN:Broadcast("VisualStyleSelected")
 	MESSAGEMAN:Broadcast("AllowThemeVideoChanged")
 end

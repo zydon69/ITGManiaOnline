@@ -10,6 +10,21 @@ if not IsUsingWideScreen() and (chatModule or #GAMESTATE:GetHumanPlayers() ~= 1)
 local player = ...
 local pn = ToEnumShortString(player)
 
+local number_or = function(value, fallback)
+	value = tonumber(value)
+	if value ~= nil and value == value and value ~= math.huge and value ~= -math.huge then
+		return value
+	end
+	return fallback
+end
+
+local string_or = function(value, fallback)
+	if type(value) == "string" and value ~= "" then
+		return value
+	end
+	return fallback
+end
+
 local CreateRPGBody = function(rpgData)
 	local rpgStats = {
 		tp = true,
@@ -19,24 +34,26 @@ local CreateRPGBody = function(rpgData)
 		jp = true
 	}
 
-	local score = rpgData["score"]
-	local scoreDelta = rpgData["scoreDelta"]
-	local rate = rpgData["rate"]
-	local rateDelta = rpgData["rateDelta"]
+	local score = number_or(rpgData["score"], 0)
+	local scoreDelta = number_or(rpgData["scoreDelta"], 0)
+	local rate = number_or(rpgData["rate"], 0)
+	local rateDelta = number_or(rpgData["rateDelta"], 0)
 
 	local qualifierImprovements = {}
 	local statImprovements = {}
-	for improvement in ivalues(rpgData["statImprovements"]) do
-		if rpgStats[improvement.name] and improvement["gained"] > 0 then
-			if #rpgData["statImprovements"] >= 5 and (improvement.name == "tp" or improvement.name == "lp") then
+	local improvements = type(rpgData["statImprovements"]) == "table" and rpgData["statImprovements"] or {}
+	for improvement in ivalues(improvements) do
+		local gained = number_or(improvement["gained"], 0)
+		if rpgStats[improvement.name] and gained > 0 then
+			if #improvements >= 5 and (improvement.name == "tp" or improvement.name == "lp") then
 				table.insert(
 					qualifierImprovements,
-					string.format("+%d %s", improvement["gained"], string.upper(improvement["name"]))
+					string.format("+%d %s", gained, string.upper(improvement["name"]))
 				)
 			else
 				table.insert(
 					statImprovements,
-					string.format("+%d %s", improvement["gained"], string.upper(improvement["name"]))
+					string.format("+%d %s", gained, string.upper(improvement["name"]))
 				)
 			end
 		end
@@ -60,18 +77,18 @@ local CreateRPGBody = function(rpgData)
 end
 
 local CreateITLBody = function(itlData)
-	local score = itlData["score"]
-	local scoreDelta = itlData["scoreDelta"]
-	local currentPoints = itlData["currentPoints"]
-	local pointDelta = itlData["pointDelta"]
-	local currentRankingPointTotal = itlData["currentRankingPointTotal"]
-	local rankingDelta = itlData["rankingDelta"]
-	local currentSongPointTotal = itlData["currentSongPointTotal"]
-	local totalSongDelta = itlData["totalSongDelta"]
-	local currentExPointTotal = itlData["currentExPointTotal"]
-	local totalExDelta = itlData["totalExDelta"]
-	local currentPointTotal = itlData["currentPointTotal"]
-	local totalDelta = itlData["totalDelta"]
+	local score = number_or(itlData["score"], 0)
+	local scoreDelta = number_or(itlData["scoreDelta"], 0)
+	local currentPoints = number_or(itlData["currentPoints"], 0)
+	local pointDelta = number_or(itlData["pointDelta"], 0)
+	local currentRankingPointTotal = number_or(itlData["currentRankingPointTotal"], 0)
+	local rankingDelta = number_or(itlData["rankingDelta"], 0)
+	local currentSongPointTotal = number_or(itlData["currentSongPointTotal"], 0)
+	local totalSongDelta = number_or(itlData["totalSongDelta"], 0)
+	local currentExPointTotal = number_or(itlData["currentExPointTotal"], 0)
+	local totalExDelta = number_or(itlData["totalExDelta"], 0)
+	local currentPointTotal = number_or(itlData["currentPointTotal"], 0)
+	local totalDelta = number_or(itlData["totalDelta"], 0)
 
 	return string.format(
 		"EX Score: %.2f%% (%+.2f%%)\n"..
@@ -191,6 +208,8 @@ local af = Def.ActorFrame{
 	end,
 
 	SetDataCommand=function(self, params)
+		if not params then return end
+
 		if params.rpgData then
 			hasData = true
 			local rpgString = CreateRPGBody(params.rpgData)
@@ -202,7 +221,8 @@ local af = Def.ActorFrame{
 				RowHeight,
 				RpgYellow)
 
-			self:GetChild("Header"):settext(params.rpgData["name"]:gsub("Stamina RPG", "SRPG"))
+			local rpgName = string_or(params.rpgData["name"], "Stamina RPG")
+			self:GetChild("Header"):settext(rpgName:gsub("Stamina RPG", "SRPG"))
 
 			-- Ensure the header text fits within the box.
 			for zoomVal=0.5, 0.1, -0.05 do
@@ -224,7 +244,8 @@ local af = Def.ActorFrame{
 				RowHeight,
 				ItlPink)
 
-			self:GetChild("Header"):settext(params.itlData["name"]:gsub("ITL Online", "ITL"))
+			local itlName = string_or(params.itlData["name"], "ITL Online")
+			self:GetChild("Header"):settext(itlName:gsub("ITL Online", "ITL"))
 
 			-- Ensure the header text fits within the box.
 			for zoomVal=0.5, 0.1, -0.05 do

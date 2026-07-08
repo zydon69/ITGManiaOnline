@@ -143,7 +143,8 @@ end
 
 -- Finally, load the actors that will populate the actual player-specific stats.
 for player in ivalues( PlayerNumber ) do
-	local pn = ToEnumShortString(player)
+	local sourcePlayer = GetRoutineSourcePlayer and GetRoutineSourcePlayer(player) or player
+	local pn = ToEnumShortString(sourcePlayer)
 	local has_stage_stats = SL[pn] and SL[pn].Stages and SL[pn].Stages.Stats and #SL[pn].Stages.Stats > 0
 	if has_stage_stats then
 	-- PlayerStageStats.lua handles player-specific things

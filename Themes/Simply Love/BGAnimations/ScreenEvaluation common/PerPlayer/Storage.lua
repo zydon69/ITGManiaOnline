@@ -24,7 +24,7 @@ return Def.Actor{
 
 		-- a PlayerStageStats object from the engine
 		-- see: http://quietly-turning.github.io/Lua-For-SM5/LuaAPI#Actors-PlayerStageStats
-		local pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+		local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 		if not pss then
 			if ITGOnline and ITGOnline.currentRoomId and online_flow_trace then
 				online_flow_trace("evaluation_storage_skipped reason=missing_player_stage_stats"
@@ -73,7 +73,8 @@ return Def.Actor{
 			storage.meter      = storage.steps:GetMeter()
 			storage.stepartist = GAMESTATE:GetCurrentCourse(player):GetScripter()
 		else
-			storage.steps      = GAMESTATE:GetCurrentSteps(player)
+			local sourcePlayer = GetRoutineSourcePlayer and GetRoutineSourcePlayer(player) or player
+			storage.steps      = GAMESTATE:GetCurrentSteps(sourcePlayer)
 			local playedSteps = pss:GetPlayedSteps()
 			local firstPlayedSteps = playedSteps and playedSteps[1] or nil
 			if firstPlayedSteps then

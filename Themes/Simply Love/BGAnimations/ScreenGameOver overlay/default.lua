@@ -1,4 +1,9 @@
 local Players = GAMESTATE:GetHumanPlayers();
+Trace(("Simply Love ScreenGameOver init VisualStyle=%s RainbowMode=%s players=%s"):format(
+	tostring(ThemePrefs.Get("VisualStyle")),
+	tostring(ThemePrefs.Get("RainbowMode")),
+	tostring(#Players)
+))
 
 local t = Def.ActorFrame{
 	LoadFont("Wendy/_wendy white")..{

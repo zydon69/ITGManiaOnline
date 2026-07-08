@@ -7,6 +7,14 @@ local NumPlayers = #GAMESTATE:GetHumanPlayers()
 local GraphWidth  = THEME:GetMetric("GraphDisplay", "BodyWidth")
 local GraphHeight = THEME:GetMetric("GraphDisplay", "BodyHeight")
 
+local finite_number_or_nil = function(value)
+	value = tonumber(value)
+	if value ~= nil and value == value and value ~= math.huge and value ~= -math.huge then
+		return value
+	end
+	return nil
+end
+
 local af = Def.ActorFrame{
 	Name="JudgeGraph",
 	InitCommand=function(self)
@@ -69,11 +77,20 @@ af[#af+1] = Def.GraphDisplay{
 
 		if not GAMESTATE:IsCourseMode() then
 			local steps = GAMESTATE:GetCurrentSteps(player)
+			local song = GAMESTATE:GetCurrentSong()
+			if not (steps and song) then
+				self:visible(false)
+				return
+			end
 			local timingData = steps:GetTimingData()
 			local firstSecond = math.min(timingData:GetElapsedTimeFromBeat(0), 0)
-			local chartStartSecond = GAMESTATE:GetCurrentSong():GetFirstSecond()
-			local lastSecond = GAMESTATE:GetCurrentSong():GetLastSecond()
+			local chartStartSecond = song:GetFirstSecond()
+			local lastSecond = song:GetLastSecond()
 			local duration = lastSecond - firstSecond
+			if duration <= 0 then
+				self:visible(false)
+				return
+			end
 
 			-- GraphDisplay starts at chartStartSecond, but the NPS graph
 			-- and the scatter plot start at firstSecond, so we have to
@@ -87,12 +104,12 @@ af[#af+1] = Def.GraphDisplay{
 			local duration = TotalCourseLength(player)
 			local liveDuration = TotalCourseLengthPlayed(player)
 
-			if liveDuration ~= -1 then
+			if liveDuration ~= -1 and duration > 0 then
 				self:SetWidth(liveDuration / duration * GraphWidth):x(-GraphWidth/2):horizalign(left)
 			end
 		end
 
-		local playerStageStats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+		local playerStageStats = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 		local stageStats = STATSMAN:GetCurStageStats()
 		if not playerStageStats or not stageStats then
 			if ITGOnline and ITGOnline.currentRoomId and online_flow_trace then
@@ -123,19 +140,23 @@ af[#af+1] = Def.Quad{
 
 local storage = SL[pn] and SL[pn].Stages and SL[pn].Stages.Stats and SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1] or {}
 
-if storage.DeathSecond ~= nil then
-	local seconds = storage.TotalSeconds
-	local deathSecond = storage.DeathSecond
+local deathSecond = finite_number_or_nil(storage.DeathSecond)
+local seconds = finite_number_or_nil(storage.TotalSeconds)
+local graphPercentage = finite_number_or_nil(storage.GraphPercentage)
+
+if deathSecond ~= nil and seconds ~= nil and graphPercentage ~= nil then
 	local deathMeasures = storage.DeathMeasures
-	local graphPercentage = storage.GraphPercentage
 	local graphLabel = storage.GraphLabel
 	local secondsLeft = seconds - deathSecond
-	
+
 	if GAMESTATE:IsCourseMode() then
 		local duration = TotalCourseLength(player)
 		local liveDuration = TotalCourseLengthPlayed(player)
-		graphPercentage = graphPercentage * liveDuration / duration
+		if duration > 0 and liveDuration ~= -1 then
+			graphPercentage = graphPercentage * liveDuration / duration
+		end
 	end
+	graphPercentage = clamp(graphPercentage, 0, 1)
 
 	-- If the player failed, check how much time was remaining
 	af[#af+1] = Def.ActorFrame {

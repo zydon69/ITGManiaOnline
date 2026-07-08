@@ -4,10 +4,14 @@ if GAMESTATE:IsCourseMode() then return end
 
 local player = ...
 local pn = ToEnumShortString(player)
+local autoStyle = ThemePrefs.Get("AutoStyle") == "auto"
 
 -- Height and width of the density graph.
 local height = 64
 local width = IsUsingWideScreen() and 286 or 276
+if autoStyle then
+	width = 352
+end
 
 -- In 2-players mode, whether the DensityGraph or PatternInfo is shown
 -- Can be toggled by the code "ToggleChartInfo" in metrics.ini
@@ -17,12 +21,15 @@ local af = Def.ActorFrame{
 	InitCommand=function(self)
 		self:visible( GAMESTATE:IsHumanPlayer(player) )
 		self:xy(_screen.cx-182, _screen.cy+23)
-
-		if player == PLAYER_2 then
-			self:addy(height+24)
+		if autoStyle then
+			self:xy(IsUsingWideScreen() and _screen.cx-170 or _screen.cx-176, _screen.cy+20):zoom(0.91)
 		end
 
-		if IsUsingWideScreen() then
+		if player == PLAYER_2 then
+			self:addy(autoStyle and height+11 or height+24)
+		end
+
+		if IsUsingWideScreen() and not autoStyle then
 			self:addx(-5)
 		end
 	end,
@@ -209,7 +216,7 @@ af2[#af2+1] = Def.ActorFrame{
 		if GAMESTATE:GetNumSidesJoined() == 2 then
 			self:y(0)
 		else
-			self:y(88 * (player == PLAYER_1 and 1 or -1))
+			self:y((autoStyle and 74 or 88) * (player == PLAYER_1 and 1 or -1))
 		end
 		self:visible(GAMESTATE:GetNumSidesJoined() == 1)
 	end,
@@ -218,7 +225,7 @@ af2[#af2+1] = Def.ActorFrame{
 		if GAMESTATE:GetNumSidesJoined() == 2 then
 			self:y(0)
 		else
-			self:y(88 * (player == PLAYER_1 and 1 or -1))
+			self:y((autoStyle and 74 or 88) * (player == PLAYER_1 and 1 or -1))
 		end
 	end,
 	PlayerUnjoinedMessageCommand=function(self, params)
@@ -226,7 +233,7 @@ af2[#af2+1] = Def.ActorFrame{
 		if GAMESTATE:GetNumSidesJoined() == 2 then
 			self:y(0)
 		else
-			self:y(88 * (player == PLAYER_1 and 1 or -1))
+			self:y((autoStyle and 74 or 88) * (player == PLAYER_1 and 1 or -1))
 		end
 	end,
 	TogglePatternInfoCommand=function(self)
@@ -253,10 +260,19 @@ local layout = {
 	{"Brackets", "Total Stream"},
 }
 
-local colSpacing = 150
+local colSpacing = autoStyle and 200 or 150
 local rowSpacing = 20
 local noneText = THEME:GetString("SLPlayerOptions", "None")
 local totalStreamText = THEME:GetString("SLPlayerOptions", "TotalStream")
+local unknownText = "N/A"
+
+local FormatTechCount = function(value)
+	value = tonumber(value)
+	if value == nil or value < 0 then
+		return unknownText
+	end
+	return tostring(value)
+end
 
 for i, row in ipairs(layout) do
 	for j, col in pairs(row) do
@@ -283,7 +299,7 @@ for i, row in ipairs(layout) do
 			end,
 			RedrawCommand=function(self)
 				if col ~= "Total Stream" then
-					self:settext(SL[pn].Streams[col])
+					self:settext(FormatTechCount(SL[pn].Streams[col]))
 				else
 					local streamMeasures, breakMeasures = GetTotalStreamAndBreakMeasures(pn)
 					local totalMeasures = streamMeasures + breakMeasures

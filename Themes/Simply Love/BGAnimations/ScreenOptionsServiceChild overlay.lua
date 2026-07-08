@@ -5,15 +5,63 @@ local padding = 10
 local recommended_bmt
 local recommended_string = THEME:GetString("RecommendedOptionExplanations", "Recommended")
 
+local function log_global_offset_child(reason)
+	if PREFSMAN and PREFSMAN.LogGlobalOffsetDiagnostics then
+		PREFSMAN:LogGlobalOffsetDiagnostics("lua_operator_child_options:" .. tostring(reason))
+	end
+end
+
+local function RenameActiveGlobalOffsetProfile()
+	local top = SCREENMAN:GetTopScreen()
+	if not top or top:GetName() ~= "ScreenGraphicsSoundOptions" then return false end
+	if type(OpenGlobalOffsetProfileRenameScreen) ~= "function" then
+		log_global_offset_child("rename_shortcut_unavailable")
+		return false
+	end
+
+	local pn = GAMESTATE:GetMasterPlayerNumber()
+	local row_index = top:GetCurrentRowIndex(pn)
+	local row = top:GetOptionRow(row_index)
+	local row_name = row and row:GetName() or "nil"
+	log_global_offset_child("start_pressed row_index=" .. tostring(row_index) .. " row=" .. tostring(row_name))
+	if row_name ~= "GlobalOffsetProfile" then return false end
+
+	return OpenGlobalOffsetProfileRenameScreen(PREFSMAN:GetGlobalOffsetProfileSelected()) == true
+end
+
+local InputHandler = function(event)
+	if not event then return false end
+	if event.type == "InputEventType_FirstPress" and event.GameButton == "Start" then
+		if RenameActiveGlobalOffsetProfile() then return true end
+	end
+	return false
+end
+
 af.OnCommand=function(self)
-	local ScreenName = SCREENMAN:GetTopScreen():GetName()
+	local top = SCREENMAN:GetTopScreen()
+	local ScreenName = top:GetName()
 	if ScreenName == "ScreenMapControllers"
 	or ScreenName == "ScreenTestInput" or ScreenName == "ScreenBookkeeping" then
 		self:visible(false)
 		return
 	end
 
+	if ScreenName == "ScreenGraphicsSoundOptions" then
+		top:SetInputCallbacksHandleBeforeScreen(true)
+		top:AddInputCallback(InputHandler)
+		log_global_offset_child("rename_shortcut_enabled")
+	end
+
 	self:xy(WideScale(490,683), _screen.cy - 15.5)
+end
+
+af.OffCommand=function(self)
+	local top = SCREENMAN:GetTopScreen()
+	if top and top:GetName() == "ScreenGraphicsSoundOptions" then
+		top:RemoveInputCallback(InputHandler)
+		top:SetInputCallbacksHandleBeforeScreen(false)
+		log_global_offset_child("rename_shortcut_disabled")
+	end
 end
 
 af.OptionRowChangedMessageCommand=function(self, params)

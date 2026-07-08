@@ -2,13 +2,20 @@
 local dark  = {0,0,0,0.9}
 local light = {0.65,0.65,0.65,1}
 
+local function IsGameplayScreenName(name)
+	return name == "ScreenGameplay"
+		or name == "ScreenGameplayShared"
+		or name == "ScreenGameplaySyncMachine"
+		or name == "ScreenGameplayEditCourse"
+end
+
 return Def.ActorFrame{
 	Name="Header",
 
 	Def.Quad{
 		InitCommand=function(self)
 			self:zoomto(_screen.w, 32):vertalign(top):x(_screen.cx)
-			if ThemePrefs.Get("VisualStyle") == "SRPG9" then
+			if ThemePrefs.Get("VisualStyle") == "SRPG10" then
 				self:diffuse(GetCurrentColor(true))
 			elseif DarkUI() then
 				self:diffuse(dark)
@@ -20,10 +27,14 @@ return Def.ActorFrame{
 		end,
 		ScreenChangedMessageCommand=function(self)
 			local topscreen = SCREENMAN:GetTopScreen():GetName()
+			if IsGameplayScreenName(topscreen) then
+				self:visible(false)
+				return
+			end
 			if SL.Global.GameMode == "Casual" and (topscreen == "ScreenEvaluationStage" or topscreen == "ScreenEvaluationSummary") then
 				self:diffuse(dark)
 			end
-			if ThemePrefs.Get("VisualStyle") == "SRPG9" then
+			if ThemePrefs.Get("VisualStyle") == "SRPG10" then
 				self:diffuse(GetCurrentColor(true))
 			end
 			if ThemePrefs.Get("VisualStyle") == "Technique" then
@@ -36,7 +47,7 @@ return Def.ActorFrame{
 			self:visible(topscreen ~= "ScreenCRTTestPatterns")
 		end,
 		ColorSelectedMessageCommand=function(self)
-			if ThemePrefs.Get("VisualStyle") == "SRPG9" then
+			if ThemePrefs.Get("VisualStyle") == "SRPG10" then
 				self:diffuse(GetCurrentColor(true))
 			end
 		end,

@@ -4,7 +4,7 @@ local focus_tween_seconds = 0.1
 
 local function GetTextColor()
 	if has_focus then
-		if ThemePrefs.Get("VisualStyle") == "SRPG9" then
+		if ThemePrefs.Get("VisualStyle") == "SRPG10" then
 			return GetCurrentColor(true)
 		end
 		return PlayerColor(PLAYER_2)
@@ -13,8 +13,8 @@ local function GetTextColor()
 	if ThemePrefs.Get("RainbowMode") then
 		return Color.White
 	end
-	if ThemePrefs.Get("VisualStyle") == "SRPG9" then
-		return color(SL.SRPG9.TextColor)
+	if ThemePrefs.Get("VisualStyle") == "SRPG10" then
+		return color(SL.SRPG10.TextColor)
 	end
 	return color("#888888")
 end

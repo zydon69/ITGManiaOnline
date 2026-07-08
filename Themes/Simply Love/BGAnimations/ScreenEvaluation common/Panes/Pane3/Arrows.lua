@@ -90,7 +90,9 @@ for i, column in ipairs( cols ) do
 						self:xy(_x - 1, j*row_height - 6):zoom(0.65):halign(1)
 					end,
 					OnCommand=function(self)
-						self:x( self:GetX() - miss_bmt:GetWidth()/2 )
+						if miss_bmt then
+							self:x( self:GetX() - miss_bmt:GetWidth()/2 )
+						end
 					end
 				}
 			end
@@ -104,7 +106,9 @@ for i, column in ipairs( cols ) do
 			self:xy(_x - 1, 144):zoom(0.65):halign(1)
 		end,
 		OnCommand=function(self)
-			self:x( self:GetX() - miss_bmt:GetWidth()/2 )
+			if miss_bmt then
+				self:x( self:GetX() - miss_bmt:GetWidth()/2 )
+			end
 		end
 	}
 end

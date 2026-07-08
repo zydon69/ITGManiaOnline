@@ -12,6 +12,20 @@ local function online_gameplay_phase()
 	return ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase)
 end
 
+local function online_gameplay_restarts_are_disabled()
+	return ITGOnline and ITGOnline.currentRoomId
+end
+
+local function trace_online_restart_block(reason)
+	if not online_gameplay_restarts_are_disabled() then return end
+	if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
+		Trace("ITG Online: FLOW gameplay_restart_blocked"
+			.. " reason=" .. tostring(reason or "unknown")
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(online_gameplay_phase()))
+	end
+end
+
 local function online_gameplay_routes_back_to_lobby()
 	local phase = online_gameplay_phase()
 	return ITGOnline
@@ -95,6 +109,10 @@ local RestartHandler = function(event)
 			holdingCtrl = true
 		elseif event.DeviceInput.button == "DeviceButton_r" then
 			if holdingCtrl then
+				if online_gameplay_restarts_are_disabled() then
+					trace_online_restart_block("ctrl_r")
+					return true
+				end
 				SCREENMAN:GetTopScreen():SetPrevScreenName("ScreenGameplay"):SetNextScreenName("ScreenGameplay"):begin_backing_out()
 			end
 		end

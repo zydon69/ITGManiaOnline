@@ -73,7 +73,15 @@ function IsITGmania()
 end
 
 -- define the required version here
-local MinimumVersion = {1, 2, 1}
+-- This fork now officially reports ITGmania 1.3.0 with the adapted Simply Love
+-- 5.9.0 runtime surface.
+local MinimumVersion = {1, 3, 0}
+
+local function SupportVersionTrace(message)
+	if not Trace then return end
+	if not (PREFSMAN and PREFSMAN:GetPreference("LogThemeLuaDiagnostics")) then return end
+	Trace("SL_SUPPORT_VERSION_TRACE " .. tostring(message or ""))
+end
 
 -- -----------------------------------------------------------------------
 -- use StepManiaVersionIsSupported() to check if Simply Love supports the version of SM5 in use
@@ -82,9 +90,27 @@ StepManiaVersionIsSupported = function()
 	-- SM5.0.12, SM5.1.x and OutFox are no longer supported
 	-- ITGmania >= 0.8.0
 	if IsITGmania() then
-		return IsMinimumProductVersion(MinimumVersion[1], MinimumVersion[2], MinimumVersion[3])
+		local supported = IsMinimumProductVersion(MinimumVersion[1], MinimumVersion[2], MinimumVersion[3])
+		SupportVersionTrace(
+			("family=%s productVersion=%s minimum=%s supported=%s")
+			:format(
+				type(ProductFamily) == "function" and tostring(ProductFamily()) or "unknown",
+				type(ProductVersion) == "function" and tostring(ProductVersion()) or "unknown",
+				MinimumVersionString(),
+				tostring(supported)
+			)
+		)
+		return supported
 	end
 
+	SupportVersionTrace(
+		("family=%s productVersion=%s minimum=%s supported=false reason=unsupported_family")
+		:format(
+			type(ProductFamily) == "function" and tostring(ProductFamily()) or "unknown",
+			type(ProductVersion) == "function" and tostring(ProductVersion()) or "unknown",
+			MinimumVersionString()
+		)
+	)
 	return false
 end
 

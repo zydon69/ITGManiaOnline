@@ -2,8 +2,19 @@ local player = ...
 local pn = ToEnumShortString(player)
 local mods = SL[pn].ActiveModifiers
 
+local function IsSharedSidesSecondaryPlayer()
+	local style = GAMESTATE and GAMESTATE.GetCurrentStyle and GAMESTATE:GetCurrentStyle() or nil
+	local style_type = style and style.GetStyleType and style:GetStyleType() or nil
+	local style_type_name = style_type and ToEnumShortString(style_type) or ""
+	if style_type_name ~= "TwoPlayersSharedSides" then return false end
+
+	local master = GAMESTATE.GetMasterPlayerNumber and GAMESTATE:GetMasterPlayerNumber() or nil
+	return master ~= nil and player ~= master
+end
+
 -- if no BackgroundFilter is necessary, it's safe to bail now
 if mods.BackgroundFilter == "Off" then return end
+if IsSharedSidesSecondaryPlayer() then return end
 
 local FilterAlpha = BackgroundFilterValues()
 return Def.Quad{

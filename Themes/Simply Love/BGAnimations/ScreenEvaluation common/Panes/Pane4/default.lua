@@ -11,6 +11,8 @@ local pane = Def.ActorFrame{
 -- -----------------------------------------------------------------------
 
 local pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+if not pss then return pane end
+
 local NumHighScores = math.min(10, PREFSMAN:GetPreference("MaxHighScoresPerListForMachine"))
 
 local HighScoreIndex = {
@@ -24,7 +26,11 @@ local HighScoreIndex = {
 
 local SongOrCourse = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentCourse() or GAMESTATE:GetCurrentSong()
 local StepsOrTrail = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(player) or GAMESTATE:GetCurrentSteps(player)
-local MachineHighScores = PROFILEMAN:GetMachineProfile():GetHighScoreList(SongOrCourse,StepsOrTrail):GetHighScores()
+local MachineHighScores = {}
+if SongOrCourse and StepsOrTrail then
+	local highScoreList = PROFILEMAN:GetMachineProfile():GetHighScoreList(SongOrCourse, StepsOrTrail)
+	MachineHighScores = highScoreList and highScoreList:GetHighScores() or {}
+end
 
 local EarnedMachineHighScoreInEventMode = function()
 	-- if no DancePoints were earned, it's not a HighScore

@@ -20,6 +20,8 @@ local columnCues = SL[masterPn].Streams.ColumnCues
 local style = GAMESTATE:GetCurrentStyle(masterPlayer)
 local numColumns = style:ColumnsPerPlayer()
 local width = style:GetWidth(masterPlayer)
+local columnCenters = {}
+local columnWidths = {}
 
 local yOffset = 80
 local reverseOffset = THEME:GetMetric("Player", "ReceptorArrowsYReverse")
@@ -84,6 +86,96 @@ local function GetAlignedNotefieldX()
 	return (layoutX or baseX or _screen.cx) + offsetX
 end
 
+local function GetFieldZoom()
+	local playerOptions = GAMESTATE:GetPlayerState(masterPlayer):GetCurrentPlayerOptions()
+	local fallbackMini = (tonumber((tostring(mods.Mini or "0"):gsub("%%", ""))) or 0) / 100
+	local mini = nil
+	if playerOptions and playerOptions.Mini then
+		local ok, value = pcall(function() return playerOptions:Mini() end)
+		if ok and tonumber(value) then
+			mini = tonumber(value)
+		end
+	end
+	mini = mini or fallbackMini
+
+	return 1 - (mini * 0.5), mini
+end
+
+local function Scale(value, inLow, inHigh, outLow, outHigh)
+	if inHigh == inLow then return outLow end
+	return outLow + ((value - inLow) * (outHigh - outLow) / (inHigh - inLow))
+end
+
+local function GetPerspectiveInfo()
+	local playerOptions = GAMESTATE:GetPlayerState(masterPlayer):GetCurrentPlayerOptions()
+	if not playerOptions then return 0, "Overhead", 0 end
+
+	local function optionValue(name)
+		if not playerOptions[name] then return nil end
+		local ok, value = pcall(function() return playerOptions[name](playerOptions) end)
+		return ok and tonumber(value) or nil
+	end
+
+	local hallway = optionValue("Hallway")
+	if hallway and hallway > 0 then
+		return -hallway, "Hallway", hallway
+	end
+
+	local distant = optionValue("Distant")
+	if distant and distant > 0 then
+		return distant, "Distant", distant
+	end
+
+	return 0, "Overhead", 0
+end
+
+local function GetEngineDrawZoom(mini, perspectiveTilt)
+	local zoom = Scale(mini or 0, 0, 1, 1, 0.5)
+	if (perspectiveTilt or 0) > 0 then
+		zoom = zoom * Scale(perspectiveTilt, 0, 1, 1, 0.9)
+	else
+		zoom = zoom * Scale(perspectiveTilt or 0, 0, -1, 1, 0.9)
+	end
+	return zoom
+end
+
+local fieldZoom, miniValue = GetFieldZoom()
+local perspectiveTilt, perspectiveMode, perspectiveValue = GetPerspectiveInfo()
+local drawZoom = GetEngineDrawZoom(miniValue, perspectiveTilt)
+
+local function RebuildColumnGeometry()
+	columnCenters = {}
+	columnWidths = {}
+
+	for columnIndex=1,numColumns do
+		local center = (columnIndex - (numColumns/2 + 0.5)) * (width/numColumns)
+		if style and style.GetColumnInfo then
+			local ok, info = pcall(function() return style:GetColumnInfo(masterPlayer, columnIndex) end)
+			if ok and info and tonumber(info.XOffset) then
+				center = tonumber(info.XOffset)
+			end
+		end
+		columnCenters[columnIndex] = center * drawZoom
+	end
+
+	for columnIndex=1,numColumns do
+		local prevCenter = columnCenters[columnIndex - 1]
+		local nextCenter = columnCenters[columnIndex + 1]
+		local defaultWidth = (width / numColumns) * drawZoom
+		if prevCenter and nextCenter then
+			columnWidths[columnIndex] = (nextCenter - prevCenter) / 2
+		elseif nextCenter then
+			columnWidths[columnIndex] = nextCenter - columnCenters[columnIndex]
+		elseif prevCenter then
+			columnWidths[columnIndex] = columnCenters[columnIndex] - prevCenter
+		else
+			columnWidths[columnIndex] = defaultWidth
+		end
+	end
+end
+
+RebuildColumnGeometry()
+
 local Update = function(self, delta)
 	local topScreen = SCREENMAN:GetTopScreen()
 	if topScreen and topScreen.IsPaused and topScreen:IsPaused() then return end
@@ -119,16 +211,28 @@ end
 local af = Def.ActorFrame{
 	InitCommand=function(self)
 		self:xy(GetAlignedNotefieldX(), yOffset)
-		local zoom_factor = 1 - scale( mods.Mini:gsub("%%","")/100, 0, 2, 0, 1)
-		self:zoomx( zoom_factor )
 		self:queuecommand("SetUpdate")
 		if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
+			local geometry = {}
+			for columnIndex=1,numColumns do
+				geometry[#geometry + 1] = tostring(columnIndex) .. ":"
+					.. tostring(round(columnCenters[columnIndex] or 0, 2))
+					.. "/"
+					.. tostring(round(columnWidths[columnIndex] or 0, 2))
+			end
 			Trace("ROUTINE_UI ColumnCues init player=" .. tostring(pn)
 				.. " source=" .. tostring(masterPn)
 				.. " routine_shared=" .. tostring(routineShared == true)
 				.. " x=" .. tostring(GetAlignedNotefieldX())
 				.. " width=" .. tostring(width)
-				.. " columns=" .. tostring(numColumns))
+				.. " columns=" .. tostring(numColumns)
+				.. " mini=" .. tostring(miniValue)
+				.. " field_zoom=" .. tostring(fieldZoom)
+				.. " draw_zoom=" .. tostring(drawZoom)
+				.. " perspective=" .. tostring(perspectiveMode)
+				.. " perspective_value=" .. tostring(perspectiveValue)
+				.. " perspective_tilt=" .. tostring(perspectiveTilt)
+				.. " geometry=" .. table.concat(geometry, ","))
 		end
 	end,
 	SetUpdateCommand=function(self)
@@ -206,14 +310,14 @@ for columnIndex=1,numColumns do
 			Name="ColumnFlash",
 			InitCommand=function(self)
 				self:diffuse(0,0,0,0)
-					:x((columnIndex - (numColumns/2 + 0.5)) * (width/numColumns))
+					:x(columnCenters[columnIndex])
 					:vertalign(top)
-					:setsize(width/numColumns, _screen.h - yOffset)
+					:setsize(columnWidths[columnIndex], _screen.h - yOffset)
 					:fadebottom(0.333)
 
 				if IsReversedColumn(player, columnIndex) then
 					self:rotationz(180)
-					self:y(yOffset * 2 + reverseOffset + (width/numColumns)/2)
+					self:y(yOffset * 2 + reverseOffset + (columnWidths[columnIndex] or 0)/2)
 				end
 			end,
 			FlashCommand=function(self, params)
@@ -226,12 +330,10 @@ for columnIndex=1,numColumns do
 			Font=font,
 			Text="",
 			InitCommand=function(self)
-				local zoom_factor = 1 - scale( mods.Mini:gsub("%%","")/100, 0, 2, 0, 1)
 				self:zoom(0.5)
-					:zoomx(0.5/zoom_factor)
 					:diffuse(0,0,0,0)
 					:horizalign(center)
-					:x((columnIndex - (numColumns/2 + 0.5)) * (width/numColumns))
+					:x(columnCenters[columnIndex])
 				
 				if IsReversedColumn(player, columnIndex) then
 					self:y(260)

@@ -18,9 +18,9 @@ if SongOrCourse and SongOrCourse:HasBanner() then
 		Name="Banner",
 		InitCommand=function(self)
 			if GAMESTATE:IsCourseMode() then
-				self:LoadFromCourse( GAMESTATE:GetCurrentCourse() ):animate(false)
+				self:LoadFromCourse(SongOrCourse):animate(false)
 			else
-				self:LoadFromSong( GAMESTATE:GetCurrentSong() ):animate(false)
+				self:LoadFromSong(SongOrCourse):animate(false)
 			end
 			self:y(66):setsize(banner.width, 164):zoom(banner.zoom)
 		end,
@@ -45,7 +45,7 @@ af[#af+1] = Def.Quad{
 -- song/course title text
 af[#af+1] = LoadFont("Common Normal")..{
 	InitCommand=function(self)
-		local songtitle = (GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentCourse():GetDisplayFullTitle()) or GAMESTATE:GetCurrentSong():GetDisplayFullTitle()
+		local songtitle = SongOrCourse and SongOrCourse:GetDisplayFullTitle() or ""
 		if songtitle then self:settext(songtitle):maxwidth(banner.width*banner.zoom) end
 	end
 }

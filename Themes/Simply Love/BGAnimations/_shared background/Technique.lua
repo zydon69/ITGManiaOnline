@@ -18,11 +18,12 @@ local t = Def.ActorFrame {
 	OnCommand=function(self) self:fov(90):accelerate(0.8):diffusealpha(1) end,
 	HideCommand=function(self) self:visible(false) end,
 
-	VisualStyleSelectedMessageCommand=function(self)
-		local style = ThemePrefs.Get("VisualStyle")
-		if style == "Technique" then
-			self:visible(true):linear(0.6):diffusealpha(1)
-		else
+		VisualStyleSelectedMessageCommand=function(self)
+			local style = ThemePrefs.Get("VisualStyle")
+			Trace(("Simply Love technique background VisualStyleSelected style=%s"):format(tostring(style)))
+			if style == "Technique" then
+				self:visible(true):linear(0.6):diffusealpha(1)
+			else
 			self:linear(0.6):diffusealpha(0):queuecommand("Hide")
 		end
 	end,

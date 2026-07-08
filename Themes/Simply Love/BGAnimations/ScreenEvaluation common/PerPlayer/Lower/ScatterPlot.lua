@@ -89,7 +89,7 @@ for t in ivalues(sequential_offsets) do
 		c = colors[TimingWindow]
 
 		if mods.ShowFaPlusWindow and mods.ShowFaPlusPane then
-			abs_offset = math.abs(Offset)
+			local abs_offset = math.abs(Offset)
 			if mods.SmallerWhite and abs_offset > GetTimingWindow(1, "FA+", true) and abs_offset <= GetTimingWindow(1, "FA+", false) then
 				c = BlendColors(SL.JudgmentColors["FA+"][2], colors[1])
 			elseif abs_offset > GetTimingWindow(1, "FA+") and abs_offset <= GetTimingWindow(2, "FA+") then
@@ -126,7 +126,8 @@ local af = Def.ActorFrame{}
 
 -- if this is the score screen for a course, then iterate through each chart and plot them
 if iscourse then
-	local trailEntries = GAMESTATE:GetCurrentTrail(player):GetTrailEntries()
+	local trail = GAMESTATE:GetCurrentTrail(player)
+	local trailEntries = trail and trail:GetTrailEntries() or {}
 	local curSecs = 0
 	
 	for i=1,#trailEntries do

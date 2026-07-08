@@ -1,14 +1,10 @@
 local player, controller = unpack(...)
 
 local pn = ToEnumShortString(player)
-local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(pn)
-local pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+local controller_name = ToEnumShortString(controller)
 
 local tns_string = "TapNoteScore" .. (SL.Global.GameMode=="ITG" and "" or SL.Global.GameMode)
-
-local firstToUpper = function(str)
-    return (str:gsub("^%l", string.upper))
-end
 
 local GetTNSStringFromTheme = function( arg )
 	return THEME:GetString(tns_string, arg)
@@ -27,22 +23,13 @@ local RadarCategories = {
 	THEME:GetString("ScreenEvaluation", 'Rolls')
 }
 
-local EnglishRadarCategories = {
-	[THEME:GetString("ScreenEvaluation", 'Hands')] = "Hands",
-	[THEME:GetString("ScreenEvaluation", 'Holds')] = "Holds",
-	[THEME:GetString("ScreenEvaluation", 'Mines')] = "Mines",
-	[THEME:GetString("ScreenEvaluation", 'Rolls')] = "Rolls",
-}
-
-local scores_table = {}
-for index, window in ipairs(TapNoteScores.Types) do
-	local number = stats:GetTapNoteScores( "TapNoteScore_"..window )
-	scores_table[window] = number
-end
+local FrameX = { P1=50, P2=-50 }
+local TapLabelX = { P1=28, P2=-28 }
+local RadarLabelX = { P1=-160, P2=90 }
 
 local t = Def.ActorFrame{
 	InitCommand=function(self)
-		self:xy(50 * (controller==PLAYER_1 and 1 or -1), _screen.cy-24)
+		self:xy(FrameX[controller_name], _screen.cy-24)
 	end,
 }
 
@@ -67,12 +54,12 @@ for i=1, #TapNoteScores.Types do
 			Text=TapNoteScores.Names[i]:upper(),
 			InitCommand=function(self) self:zoom(0.833):horizalign(right):maxwidth(76) end,
 			BeginCommand=function(self)
-				self:x( (controller == PLAYER_1 and 28) or -28 )
+				self:x(TapLabelX[controller_name])
 				if maxCount > 9999 then
-					length = math.floor(math.log10(maxCount)+1)
-					modifier = controller == PLAYER_1 and -11*(length-4) or 11*(length-4)
-					finalPos = 28 + modifier
-					finalZoom = 0.833 - 0.1*(length-4)
+					local length = math.floor(math.log10(maxCount)+1)
+					local modifier = controller == PLAYER_1 and -11*(length-4) or 11*(length-4)
+					local finalPos = 28 + modifier
+					local finalZoom = 0.833 - 0.1*(length-4)
 					self:x( (controller == PLAYER_1 and finalPos) or -finalPos ):zoom(finalZoom)
 				end
 				self:y((i-1)*28 -16)
@@ -85,14 +72,11 @@ end
 
 -- labels: hands/ex, holds, mines, rolls
 for index, label in ipairs(RadarCategories) do
-    local performance = stats:GetRadarActual():GetValue( "RadarCategory_"..firstToUpper(EnglishRadarCategories[label]) )
-    local possible = stats:GetRadarPossible():GetValue( "RadarCategory_"..firstToUpper(EnglishRadarCategories[label]) )
-
     t[#t+1] = LoadFont("Common Normal")..{
         Text=label,
         InitCommand=function(self) self:zoom(0.833):horizalign(right) end,
         BeginCommand=function(self)
-            self:x( (controller == PLAYER_1 and -160) or 90 )
+            self:x(RadarLabelX[controller_name])
             self:y((index-1)*28 + 41)
         end
     }

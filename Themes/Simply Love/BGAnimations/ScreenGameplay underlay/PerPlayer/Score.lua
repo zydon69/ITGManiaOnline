@@ -18,6 +18,7 @@ local lastRoutineScoreSnapshot
 local failedScoreSnapshot
 local failedDetected = false
 local lastLowerLayoutTraceKey
+local stageIndex = math.max(1, math.floor(tonumber(SL.Global.Stages.PlayedThisGame) or 0) + 1)
 
 local LowerScoreLayout = {
 	y = -2,
@@ -147,6 +148,22 @@ local function get_itg_percent()
 	return tonumber(FormatPercentScore(pss:GetPercentDancePoints()):sub(1,-2)) or 0
 end
 
+local function current_ex_counts()
+	local playerState = SL[sourcePn]
+	local stages = playerState and playerState.Stages
+	local stats = stages and stages.Stats
+	local storage = stats and stats[stageIndex]
+	return storage and storage.ex_counts or nil
+end
+
+local function current_ex_score()
+	return CalculateExScore(sourcePlayer, current_ex_counts())
+end
+
+local function current_hard_ex_score()
+	return CalculateHardExScore(sourcePlayer, current_ex_counts())
+end
+
 local function set_normal_lower_score_layout(actor_frame)
 	local lower_ex = actor_frame:GetChild("LowerEXScore")
 	local lower_itg = actor_frame:GetChild("LowerITGScore")
@@ -258,6 +275,7 @@ local function trace_routine_score_drop(snapshot, reason, frozen)
 end
 
 local function frozen_or_current_score(snapshot, reason)
+	if GAMESTATE:IsCourseMode() then return snapshot, false end
 	if not stage_stats_failed() then return snapshot, false end
 	if failedScoreSnapshot == nil then
 		failedScoreSnapshot = snapshot
@@ -290,7 +308,7 @@ local function update_lower_scores(actor_frame, scoreMode, exPercent, itgPercent
 
 	itgPercent = itgPercent or get_itg_percent()
 	if scoreMode == "hardex" then
-		lower_ex:settext(format_percent(exPercent or CalculateExScore(sourcePlayer))):visible(true)
+		lower_ex:settext(format_percent(exPercent or current_ex_score())):visible(true)
 		lower_itg:settext(format_percent(itgPercent)):visible(true)
 		local ex_x, itg_x, primary_width = place_lower_scores_for_player(actor_frame, true, true)
 		if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
@@ -468,11 +486,16 @@ return Def.ActorFrame{
 		mark_failed_detected("HealthStateChanged")
 		self:queuecommand("RedrawScore")
 	end,
+	CurrentSongChangedMessageCommand=function(self)
+		if GAMESTATE:IsCourseMode() then
+			self:queuecommand("RedrawScore")
+		end
+	end,
 	RedrawScoreCommand=function(self)
 		local primary = self:GetChild("PrimaryScore")
 		local showEx, showHardEx, scoreMode = active_score_flags()
-		local exPercent = CalculateExScore(sourcePlayer)
-		local hardExPercent = CalculateHardExScore(sourcePlayer)
+		local exPercent = current_ex_score()
+		local hardExPercent = current_hard_ex_score()
 		local dance_points = pss:GetPercentDancePoints()
 		local percent = FormatPercentScore( dance_points ):sub(1,-2)
 		local displayedPercent = showHardEx and tonumber(hardExPercent) or (showEx and tonumber(exPercent) or tonumber(percent))
@@ -549,8 +572,11 @@ return Def.ActorFrame{
 		end
 		local dance_points = pss:GetPercentDancePoints()
 		local percent = FormatPercentScore( dance_points ):sub(1,-2)
-		local displayedPercent = showHardEx and tonumber(params.HardExScore) or tonumber(params.ExScore)
-		local snapshot = build_score_snapshot(scoreMode, percent, params.ExScore, params.HardExScore, displayedPercent, pss:GetCurrentCombo() or 0)
+		local exCounts = params.ExCounts or current_ex_counts()
+		local exPercent = CalculateExScore(sourcePlayer, exCounts)
+		local hardExPercent = CalculateHardExScore(sourcePlayer, exCounts)
+		local displayedPercent = showHardEx and tonumber(hardExPercent) or tonumber(exPercent)
+		local snapshot = build_score_snapshot(scoreMode, percent, exPercent, hardExPercent, displayedPercent, pss:GetCurrentCombo() or 0)
 		local frozen
 		snapshot, frozen = frozen_or_current_score(snapshot, "ExCountsChanged")
 		if showHardEx then

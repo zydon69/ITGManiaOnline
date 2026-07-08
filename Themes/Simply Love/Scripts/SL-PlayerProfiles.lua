@@ -50,7 +50,15 @@ local permitted_profile_settings = {
 	MeasureLines         = "string",
 	ShowStreamBreakdown  = "boolean",
 
+	-- Deprecated in Simply Love 5.9.0.  Keep readable so existing profiles can
+	-- migrate to FlashMiss without losing the player's old behavior.
 	ColumnFlashOnMiss    = "boolean",
+	FlashMiss            = "boolean",
+	FlashWayOff          = "boolean",
+	FlashDecent          = "boolean",
+	FlashGreat           = "boolean",
+	FlashExcellent       = "boolean",
+	FlashFantastic       = "boolean",
 	SubtractiveScoring   = "boolean",
 	Pacemaker            = "boolean",
 	NPSGraphAtTop        = "boolean",
@@ -278,6 +286,38 @@ local function apply_hard_ex_exclusivity(pn)
 	end
 end
 
+local function theme_lua_diagnostics_enabled()
+	if not (PREFSMAN and type(PREFSMAN.GetPreference) == "function") then return false end
+	local ok, enabled = safe_call("PREFSMAN.GetPreference LogThemeLuaDiagnostics", function()
+		return PREFSMAN:GetPreference("LogThemeLuaDiagnostics")
+	end)
+	return ok and enabled == true
+end
+
+local function judgment_flash_trace(message)
+	if theme_lua_diagnostics_enabled() then
+		profile_trace("SL_JUDGMENT_FLASH_TRACE " .. tostring(message or ""))
+	end
+end
+
+local function migrate_deprecated_profile_modifiers(pn)
+	local mods = pn and SL and SL[pn] and SL[pn].ActiveModifiers or nil
+	if type(mods) ~= "table" then return end
+
+	if mods.ColumnFlashOnMiss ~= nil then
+		judgment_flash_trace(("profile_migration_begin pn=%s ColumnFlashOnMiss=%s FlashMissBefore=%s")
+			:format(tostring(pn), tostring(mods.ColumnFlashOnMiss), tostring(mods.FlashMiss)))
+	end
+	if mods.ColumnFlashOnMiss == true and mods.FlashMiss ~= true then
+		mods.FlashMiss = true
+	end
+	mods.ColumnFlashOnMiss = nil
+	if mods.FlashMiss == true then
+		judgment_flash_trace(("profile_migration_end pn=%s FlashMiss=%s")
+			:format(tostring(pn), tostring(mods.FlashMiss)))
+	end
+end
+
 local function restore_player_options_string(player, pn, value)
 	if type(value) ~= "string" or value == "" then return false end
 	local playerState = safe_player_state(player)
@@ -322,6 +362,8 @@ LoadGuest = function(player)
 		SL[pn]:initialize()
 	end)
 	SL[pn].Stages = stages
+	migrate_deprecated_profile_modifiers(pn)
+	migrate_deprecated_profile_modifiers(pn)
 	apply_hard_ex_exclusivity(pn)
 	return true
 end

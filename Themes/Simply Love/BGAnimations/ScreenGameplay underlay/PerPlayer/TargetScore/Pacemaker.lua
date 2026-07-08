@@ -3,6 +3,7 @@ local pn = ToEnumShortString(player)
 local usesGhostData = tonumber(SL[pn].ActiveModifiers.TargetScore) == 19
 
 local pacemaker = Def.BitmapText{
+	Name="Pacemaker" .. pn,
 	Font="Common Bold",
 	JudgmentMessageCommand=function(self)
 		self:queuecommand("Update")

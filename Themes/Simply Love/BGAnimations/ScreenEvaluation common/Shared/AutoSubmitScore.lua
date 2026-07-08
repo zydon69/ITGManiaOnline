@@ -59,6 +59,11 @@ GetChildSafe = function(actor, name)
 	return ok and child or nil
 end
 
+local FormatGrooveStatsDateSafe = function(date)
+	if type(date) ~= "string" or date == "" then return "" end
+	return ParseGrooveStatsDate(date)
+end
+
 local DecodeResponseBody = function(res)
 	if not res or not res.body or res.body == "" then return nil end
 
@@ -105,13 +110,13 @@ local PopulateGrooveStatsLeaderboardPane = function(pane, leaderboard, scoreColo
 
 		entry:stoptweening()
 		entry:diffuse(Color.White)
-		SetEntryText(
-			tostring(gsEntry["rank"] or entryNum)..".",
-			GetMachineTag(gsEntry),
-			string.format("%.2f%%", tonumber(gsEntry["score"] or 0) / 100),
-			ParseGrooveStatsDate(gsEntry["date"]),
-			entry
-		)
+			SetEntryText(
+				tostring(gsEntry["rank"] or entryNum)..".",
+				GetMachineTag(gsEntry),
+				string.format("%.2f%%", tonumber(gsEntry["score"] or 0) / 100),
+				FormatGrooveStatsDateSafe(gsEntry["date"]),
+				entry
+			)
 
 		local score = GetChildSafe(entry, "Score")
 		if score then score:diffuse(scoreColor or Color.White) end
@@ -133,14 +138,14 @@ end
 
 GetMachineTag = function(gsEntry)
 	if not gsEntry then return end
-	if gsEntry["machineTag"] then
+	if type(gsEntry["machineTag"]) == "string" and gsEntry["machineTag"] ~= "" then
 		-- Make sure we only use up to 4 characters for space concerns.
 		return gsEntry["machineTag"]:sub(1, 4):upper()
 	end
 
 	-- User doesn't have a machineTag set. We'll "make" one based off of
 	-- their name.
-	if gsEntry["name"] then
+	if type(gsEntry["name"]) == "string" and gsEntry["name"] ~= "" then
 		-- 4 Characters is the "intended" length.
 		return gsEntry["name"]:sub(1,4):upper()
 	end
@@ -350,10 +355,10 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 							entry:stoptweening()
 							entry:diffuse(Color.White)
 							SetEntryText(
-								gsEntry["rank"]..".",
+								tostring(gsEntry["rank"] or entryNum)..".",
 								GetMachineTag(gsEntry),
-								string.format("%.2f%%", gsEntry["score"]/100),
-								ParseGrooveStatsDate(gsEntry["date"]),
+								string.format("%.2f%%", tonumber(gsEntry["score"] or 0) / 100),
+								FormatGrooveStatsDateSafe(gsEntry["date"]),
 								entry
 							)
 
@@ -514,7 +519,7 @@ local af = Def.ActorFrame {
 		-- local eventAf = overlay:GetChild("AutoSubmitMaster"):GetChild("EventOverlay"):GetChild("P1EventAf")
 		-- eventAf:playcommand("Show", {data={
 		-- 	["rpg"] = {
-		-- 		["name"] = "SRPG9",
+		-- 		["name"] = "SRPG10",
 		-- 		["result"] = "score-added",
 		-- 		["rpgLeaderboard"] = {
 		-- 			{

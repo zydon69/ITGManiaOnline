@@ -191,13 +191,6 @@ t[#t+1] = LoadActor("./Shared/ScreenshotHandler.lua")
 -- code for non-normal exits, such as restarting the song or entering practice mode
 t[#t+1] = LoadActor("./Shared/ExitHandler.lua")
 
--- the title of the song and its graphical banner, if there is one
-t[#t+1] = LoadActor("./Shared/TitleAndBanner.lua")
-
--- text to display BPM range (and ratemod if ~= 1.0) and song length immediately
--- under the banner
-t[#t+1] = LoadActor("./Shared/SongFeatures.lua")
-
 -- online final ranking, displayed only after the server has validated results
 t[#t+1] = LoadActor("./Shared/OnlineFinalRanking.lua")
 
@@ -217,10 +210,6 @@ for player in ivalues(Players) do
 	-- this doesn't draw anything to the screen, it just runs some code
 	t[#t+1] = LoadActor("./PerPlayer/Storage.lua", player)
 
-	-- the per-player upper half of ScreenEvaluation, including: letter grade, nice
-	-- stepartist, difficulty text, difficulty meter, machine/personal HighScore text
-	t[#t+1] = LoadActor("./PerPlayer/Upper/default.lua", player)
-
 	-- the per-player lower half of ScreenEvaluation, including:
 	-- judgment scatterplot, modifier list, disqualified text
 	t[#t+1] = LoadActor("./PerPlayer/Lower/default.lua", player)
@@ -237,6 +226,26 @@ end
 -- Then load the Panes.
 
 t[#t+1] = LoadActor("./Panes/default.lua", NumPanes)
+
+-- -----------------------------------------------------------------------
+
+-- Draw upper player data after the lower panels and panes.  Their background
+-- quads are meant to sit behind evaluation data, never over the grades,
+-- difficulty labels, or step artist text.
+for player in ivalues(Players) do
+	t[#t+1] = LoadActor("./PerPlayer/Upper/default.lua", player)..{
+		InitCommand=function(self) self:draworder(20) end
+	}
+end
+
+-- Draw the song identity layer last among the normal evaluation content so
+-- the banner, title, BPM, artist, and length cannot be tinted by pane panels.
+t[#t+1] = LoadActor("./Shared/TitleAndBanner.lua")..{
+	InitCommand=function(self) self:draworder(30) end
+}
+t[#t+1] = LoadActor("./Shared/SongFeatures.lua")..{
+	InitCommand=function(self) self:draworder(30) end
+}
 
 -- -----------------------------------------------------------------------
 

@@ -332,6 +332,26 @@ local MaybeCopyHashFromOppositePlayer = function(pn, filename, stepsType, diffic
 end
 
 local MINE_NOTE_TYPE = 4
+local TECHCOUNTS_VAL_UNKNOWN = -1
+
+local ResetTechCounts = function(pn, value)
+	value = value or 0
+	SL[pn].Streams.Crossovers = value
+	SL[pn].Streams.Footswitches = value
+	SL[pn].Streams.Sideswitches = value
+	SL[pn].Streams.Jacks = value
+	SL[pn].Streams.Brackets = value
+end
+
+local GetTechCountValue = function(techCounts, category)
+	if not techCounts then return TECHCOUNTS_VAL_UNKNOWN end
+	local ok, value = pcall(function()
+		return techCounts:GetValue(category)
+	end)
+	value = tonumber(ok and value or nil)
+	if value == nil then return TECHCOUNTS_VAL_UNKNOWN end
+	return value
+end
 
 -- The chart info shown while browsing the song wheel comes from cached engine
 -- data, so this is safe to call on every chart change without parsing the
@@ -341,11 +361,7 @@ ParseChartInfo = function(steps, pn)
 		SL[pn].Streams.NotesPerMeasure = {}
 		SL[pn].Streams.PeakNPS = 0
 		SL[pn].Streams.NPSperMeasure = {}
-		SL[pn].Streams.Crossovers = 0
-		SL[pn].Streams.Footswitches = 0
-		SL[pn].Streams.Sideswitches = 0
-		SL[pn].Streams.Jacks = 0
-		SL[pn].Streams.Brackets = 0
+		ResetTechCounts(pn, 0)
 		SL[pn].Streams.Hash = ""
 		SL[pn].Streams.EquallySpacedPerMeasure = {}
 		return
@@ -369,11 +385,11 @@ ParseChartInfo = function(steps, pn)
 	SL[pn].Streams.PeakNPS = steps:GetPeakNps(player)
 
 	local techCounts = steps:GetTechCounts(player)
-	SL[pn].Streams.Crossovers = techCounts:GetValue("TechCountsCategory_Crossovers")
-	SL[pn].Streams.Footswitches = techCounts:GetValue("TechCountsCategory_Footswitches")
-	SL[pn].Streams.Sideswitches = techCounts:GetValue("TechCountsCategory_Sideswitches")
-	SL[pn].Streams.Jacks = techCounts:GetValue("TechCountsCategory_Jacks")
-	SL[pn].Streams.Brackets = techCounts:GetValue("TechCountsCategory_Brackets")
+	SL[pn].Streams.Crossovers = GetTechCountValue(techCounts, "TechCountsCategory_Crossovers")
+	SL[pn].Streams.Footswitches = GetTechCountValue(techCounts, "TechCountsCategory_Footswitches")
+	SL[pn].Streams.Sideswitches = GetTechCountValue(techCounts, "TechCountsCategory_Sideswitches")
+	SL[pn].Streams.Jacks = GetTechCountValue(techCounts, "TechCountsCategory_Jacks")
+	SL[pn].Streams.Brackets = GetTechCountValue(techCounts, "TechCountsCategory_Brackets")
 end
 
 -- Computing the GrooveStats hash requires reading and minimizing NoteData from

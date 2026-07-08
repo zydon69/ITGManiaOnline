@@ -10,6 +10,31 @@ local function IsOnlineModeScreen()
 	return ScreenName == "ScreenSelectOnlineMode"
 end
 
+local function StyleFlowTrace(message)
+	if type(online_logs_enabled) == "function" and not online_logs_enabled() then return end
+	if Trace then
+		Trace("ROUTINE_STYLE_FLOW playmode " .. tostring(message or ""))
+	end
+end
+
+local function CurrentStyleName()
+	local ok, style = pcall(function() return GAMESTATE:GetCurrentStyle() end)
+	if not ok or not style then return "nil" end
+
+	ok, style = pcall(function() return style:GetName() end)
+	return ok and tostring(style or "nil") or "unknown"
+end
+
+local function JoinedPlayersText()
+	local players = {}
+	for player in ivalues(PlayerNumber) do
+		if GAMESTATE:IsHumanPlayer(player) then
+			players[#players+1] = ToEnumShortString(player)
+		end
+	end
+	return table.concat(players, "/")
+end
+
 local function PlayModeLayoutX()
 	if IsOnlineModeScreen() then
 		return _screen.cx + 30
@@ -138,18 +163,37 @@ local InputHandler = function(event)
 	if not selected then return false end
 
 	if ScreenName=="ScreenSelectPlayMode" or ScreenName=="ScreenSelectPlayModeThonk" then
+		StyleFlowTrace("start screen=" .. tostring(ScreenName)
+			.. " selected=" .. tostring(selected)
+			.. " style_before=" .. CurrentStyleName()
+			.. " joined=" .. JoinedPlayersText()
+			.. " game_mode_before=" .. tostring(SL and SL.Global and SL.Global.GameMode or "nil"))
 		SL.Global.GameMode = selected
 		-- now that a GameMode has been selected, set related preferences
 		SetGameModePreferences()
 		-- and reload the theme's Metrics
 		THEME:ReloadMetrics()
+		StyleFlowTrace("after_game_mode screen=" .. tostring(ScreenName)
+			.. " selected=" .. tostring(selected)
+			.. " style_after=" .. CurrentStyleName()
+			.. " joined=" .. JoinedPlayersText()
+			.. " game_mode_after=" .. tostring(SL and SL.Global and SL.Global.GameMode or "nil"))
 		if TopScreen then TopScreen:StartTransitioningScreen("SM_GoToNextScreen") end
 	elseif ScreenName=="ScreenSelectOnlineMode" then
+		StyleFlowTrace("start screen=" .. tostring(ScreenName)
+			.. " selected=" .. tostring(selected)
+			.. " style_before=" .. CurrentStyleName()
+			.. " joined=" .. JoinedPlayersText())
 		SL.Global.ITGOnline = SL.Global.ITGOnline or {}
 		SL.Global.ITGOnline.Enabled = selected == "Online"
 
 		if TopScreen then
-			TopScreen:SetNextScreenName(Branch.AfterSelectOnlineMode())
+			local next_screen = Branch.AfterSelectOnlineMode()
+			StyleFlowTrace("after_online_choice selected=" .. tostring(selected)
+				.. " style_after=" .. CurrentStyleName()
+				.. " joined=" .. JoinedPlayersText()
+				.. " next_screen=" .. tostring(next_screen))
+			TopScreen:SetNextScreenName(next_screen)
 			TopScreen:StartTransitioningScreen("SM_GoToNextScreen")
 		end
 	end
@@ -190,6 +234,14 @@ local t = Def.ActorFrame{
 		self:queuecommand("Update")
 		self:sleep(0):queuecommand("RefreshInitialChoiceLayout")
 		self:sleep(0.05):queuecommand("RefreshInitialChoiceLayout")
+
+		StyleFlowTrace("on screen=" .. tostring(ScreenName)
+			.. " choices=" .. table.concat(choices, "/")
+			.. " selected=" .. tostring(choices[cursor.index+1] or "nil")
+			.. " cursor=" .. tostring(cursor.index)
+			.. " style=" .. CurrentStyleName()
+			.. " joined=" .. JoinedPlayersText()
+			.. " game_mode=" .. tostring(SL and SL.Global and SL.Global.GameMode or "nil"))
 	end,
 	RefreshInitialChoiceLayoutCommand=function(self)
 		SetCursorIndex(cursor.index)

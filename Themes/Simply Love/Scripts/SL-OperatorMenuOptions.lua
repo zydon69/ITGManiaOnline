@@ -557,22 +557,49 @@ local function global_offset_string(name, fallback)
 	return (value ~= name and value) or fallback
 end
 
+local function global_offset_profile_label(index)
+	local name = PREFSMAN:GetGlobalOffsetProfileName(index)
+	local ms = round((PREFSMAN:GetGlobalOffsetProfileSeconds(index) or 0) * 1000)
+	return ("%s (%+dms)"):format(name, ms)
+end
+
 local function global_offset_profile_choices()
 	log_global_offset("build_profile_choices")
 	local choices = {}
 	for i=0, PREFSMAN:GetGlobalOffsetProfileCount() - 1 do
-		choices[#choices+1] = PREFSMAN:GetGlobalOffsetProfileName(i)
+		choices[#choices+1] = global_offset_profile_label(i)
 	end
 	return choices
 end
 
-local function global_offset_rename_choices()
-	log_global_offset("build_rename_choices")
-	local choices = { global_offset_string("ChooseGlobalOffsetProfile", "Choose profile") }
-	for i=0, PREFSMAN:GetGlobalOffsetProfileCount() - 1 do
-		choices[#choices+1] = PREFSMAN:GetGlobalOffsetProfileName(i)
+function OpenGlobalOffsetProfileRenameScreen(profile_index)
+	profile_index = tonumber(profile_index)
+	if not profile_index or profile_index < 0 or profile_index >= PREFSMAN:GetGlobalOffsetProfileCount() then
+		log_global_offset("rename_rejected invalid_index=" .. tostring(profile_index))
+		return false
 	end
-	return choices
+
+	SCREENMAN:AddNewScreenToTop("ScreenTextEntry")
+	SCREENMAN:GetTopScreen():Load({
+		Question = global_offset_string("RenameGlobalOffsetProfilePrompt", "Enter a name for this offset profile."),
+		InitialAnswer = PREFSMAN:GetGlobalOffsetProfileName(profile_index),
+		MaxInputLength = 32,
+		Validate = function(answer)
+			log_global_offset("validate_rename index=" .. tostring(profile_index) .. " blank=" .. tostring(trim_string(answer) == ""))
+			if trim_string(answer) == "" then
+				return false, global_offset_string("GlobalOffsetProfileNameBlank", "Profile name cannot be blank.")
+			end
+			return true, ""
+		end,
+		OnOK = function(answer)
+			log_global_offset("confirm_rename index=" .. tostring(profile_index) .. " name=" .. trim_string(answer))
+			PREFSMAN:SetGlobalOffsetProfileName(profile_index, trim_string(answer))
+			PREFSMAN:SavePreferences()
+			MESSAGEMAN:Broadcast("GlobalOffsetProfileChanged")
+		end,
+	})
+
+	return true
 end
 
 function offsetMS(pref, low, high)
@@ -676,62 +703,6 @@ OperatorMenuOptionRows.GlobalOffsetProfile = function()
 						PREFSMAN:SetGlobalOffsetProfileSelected(selected)
 						MESSAGEMAN:Broadcast("GlobalOffsetProfileChanged")
 					end
-					break
-				end
-			end
-		end,
-	}
-end
-
-OperatorMenuOptionRows.RenameGlobalOffsetProfile = function()
-	return {
-		Name="RenameGlobalOffsetProfile",
-		Choices=global_offset_rename_choices(),
-		LayoutType = "ShowOneInRow",
-		SelectType = "SelectOne",
-		OneChoiceForAllPlayers = true,
-		ExportOnChange = true,
-		ReloadRowMessages = { "GlobalOffsetProfileChanged" },
-		Reload = function(self)
-			self.Choices = global_offset_rename_choices()
-			log_global_offset("reload_rename_row")
-			return "ReloadChanged_All"
-		end,
-		LoadSelections = function(self, list, pn)
-			self._lastRenameSelection = 1
-			list[self._lastRenameSelection] = true
-			log_global_offset("load_rename_selection")
-		end,
-		SaveSelections = function(self, list, pn)
-			for i=1, #list do
-				if list[i] then
-					log_global_offset("save_rename_selection raw_index=" .. tostring(i))
-					if i == (self._lastRenameSelection or 1) then return end
-					if i == 1 then
-						self._lastRenameSelection = i
-						return
-					end
-					self._lastRenameSelection = i
-					local profile_index = i - 2
-					SCREENMAN:AddNewScreenToTop("ScreenTextEntry")
-					SCREENMAN:GetTopScreen():Load({
-						Question = global_offset_string("RenameGlobalOffsetProfilePrompt", "Enter a name for this offset profile."),
-						InitialAnswer = PREFSMAN:GetGlobalOffsetProfileName(profile_index),
-						MaxInputLength = 32,
-						Validate = function(answer)
-							log_global_offset("validate_rename index=" .. tostring(profile_index) .. " blank=" .. tostring(trim_string(answer) == ""))
-							if trim_string(answer) == "" then
-								return false, global_offset_string("GlobalOffsetProfileNameBlank", "Profile name cannot be blank.")
-							end
-							return true, ""
-						end,
-						OnOK = function(answer)
-							log_global_offset("confirm_rename index=" .. tostring(profile_index) .. " name=" .. trim_string(answer))
-							PREFSMAN:SetGlobalOffsetProfileName(profile_index, trim_string(answer))
-							PREFSMAN:SavePreferences()
-							MESSAGEMAN:Broadcast("GlobalOffsetProfileChanged")
-						end,
-					})
 					break
 				end
 			end

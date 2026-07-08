@@ -53,6 +53,21 @@ local function clamp_number(value, minimum, maximum, fallback)
 	return value
 end
 
+local function format_mini_option(option, mods)
+	local mini = mods and mods.Mini
+	if type(mini) == "string" then
+		local value = mini:match("^%s*([%+%-]?%d+%.?%d*)%%?%s*$")
+		if value then return value .. "% Mini" end
+	elseif type(mini) == "number" and mini == mini and mini ~= math.huge and mini ~= -math.huge then
+		return ("%g%% Mini"):format(mini)
+	end
+
+	local option_value = tostring(option or ""):match("([%+%-]?%d+%.?%d*)%%?%s*Mini")
+	if option_value then return option_value .. "% Mini" end
+
+	return "Mini"
+end
+
 local function option_enabled(value)
 	value = finite_number_or(value, value)
 	if type(value) == "number" then return value > 0 end
@@ -152,11 +167,133 @@ local function safe_radar_value(owner, player, category)
 	return math.max(0, finite_number_or(safe_method("RadarValues.GetValue", radar, "GetValue", category), 0))
 end
 
+local function safe_trail_entry_radar_values(owner, player)
+	if not (owner and owner.GetTrailEntries) then return 0, 0, 0, 0 end
+	local entries = safe_method("Trail.GetTrailEntries", owner, "GetTrailEntries")
+	if type(entries) ~= "table" then return 0, 0, 0, 0 end
+
+	local totalSteps, totalHolds, totalRolls, entryCount = 0, 0, 0, 0
+	for _, entry in ipairs(entries) do
+		local steps = safe_method("TrailEntry.GetSteps", entry, "GetSteps")
+		if steps then
+			totalSteps = totalSteps + safe_radar_value(steps, player, "RadarCategory_TapsAndHolds")
+			totalHolds = totalHolds + safe_radar_value(steps, player, "RadarCategory_Holds")
+			totalRolls = totalRolls + safe_radar_value(steps, player, "RadarCategory_Rolls")
+			entryCount = entryCount + 1
+		end
+	end
+
+	return totalSteps, totalHolds, totalRolls, entryCount
+end
+
 local function safe_stats_tap_score(stats, window)
 	return math.max(0, finite_number_or(safe_method("PlayerStageStats.GetTapNoteScores", stats, "GetTapNoteScores", window), 0))
 end
 
-local function safe_stage_index()
+local safe_stage_index
+
+local function safe_player_stage_stats(player)
+	local curStageStats = safe_method("STATSMAN.GetCurStageStats", STATSMAN, "GetCurStageStats")
+	local stats = safe_method("StageStats.GetPlayerStageStats", curStageStats, "GetPlayerStageStats", player)
+	if stats then return stats end
+
+	local playerKey = safe_enum_short(player, nil)
+	return playerKey and safe_method("StageStats.GetPlayerStageStats", curStageStats, "GetPlayerStageStats", playerKey) or nil
+end
+
+local routine_stage_stats_trace = {}
+
+GetRoutineSourcePlayer = function(player)
+	if IsRoutine and IsRoutine() then
+		local master = safe_game_state_method("GetMasterPlayerNumber", nil)
+		if master ~= nil then return master end
+	end
+	return player
+end
+
+GetEvaluationPlayerStageStats = function(player)
+	local curStageStats = safe_method("STATSMAN.GetCurStageStats", STATSMAN, "GetCurStageStats")
+	if IsRoutine and IsRoutine() then
+		local routineStats = safe_method("StageStats.GetRoutineStageStats", curStageStats, "GetRoutineStageStats")
+		if routineStats then
+			local sourcePlayer = GetRoutineSourcePlayer(player)
+			local key = tostring(safe_stage_index()) .. ":" .. tostring(safe_enum_short(player, player))
+			if not routine_stage_stats_trace[key] then
+				routine_stage_stats_trace[key] = true
+				Trace("ROUTINE_EVAL using shared stage stats"
+					.. " player=" .. tostring(safe_enum_short(player, player))
+					.. " source=" .. tostring(safe_enum_short(sourcePlayer, sourcePlayer))
+					.. " stage=" .. tostring(safe_stage_index()))
+			end
+			return routineStats, sourcePlayer, true
+		end
+	end
+
+	return safe_player_stage_stats(player), player, false
+end
+
+local function safe_stage_possible_radar_value(player, category)
+	local stats = safe_player_stage_stats(player)
+	local radar = safe_method("PlayerStageStats.GetRadarPossible", stats, "GetRadarPossible")
+	return math.max(0, finite_number_or(safe_method("RadarValues.GetValue", radar, "GetValue", category), 0))
+end
+
+local function safe_score_possible_values(owner, player)
+	local totalSteps = safe_radar_value(owner, player, "RadarCategory_TapsAndHolds")
+	local totalHolds = safe_radar_value(owner, player, "RadarCategory_Holds")
+	local totalRolls = safe_radar_value(owner, player, "RadarCategory_Rolls")
+	local source = "steps_or_trail"
+
+	if safe_is_course_mode() and totalSteps <= 0 then
+		local trailSteps, trailHolds, trailRolls, trailEntries = safe_trail_entry_radar_values(owner, player)
+		if trailSteps > 0 then
+			totalSteps = trailSteps
+			totalHolds = trailHolds
+			totalRolls = trailRolls
+			source = "trail_entries:" .. tostring(trailEntries)
+			return totalSteps, totalHolds, totalRolls, source
+		end
+
+		local stageSteps = safe_stage_possible_radar_value(player, "RadarCategory_TapsAndHolds")
+		if stageSteps > 0 then
+			totalSteps = stageSteps
+			totalHolds = safe_stage_possible_radar_value(player, "RadarCategory_Holds")
+			totalRolls = safe_stage_possible_radar_value(player, "RadarCategory_Rolls")
+			source = "stage_possible"
+		end
+	end
+
+	return totalSteps, totalHolds, totalRolls, source
+end
+
+local score_possible_trace_counts = {}
+local score_possible_trace_version_logged = false
+local function trace_score_possible(kind, player, source, totalSteps, totalHolds, totalRolls, primaryWeight, heldWeight, totalPossible)
+	if not (safe_is_course_mode() and Trace and (source ~= "steps_or_trail" or totalPossible <= 0)) then return end
+	if not score_possible_trace_version_logged then
+		score_possible_trace_version_logged = true
+		Trace("FA_PLUS_CALC_VERSION: course full-trail EX/HardEX denominator v3")
+	end
+	local key = tostring(kind) .. ":" .. tostring(source) .. ":" .. tostring(totalPossible <= 0)
+	score_possible_trace_counts[key] = (score_possible_trace_counts[key] or 0) + 1
+	local seen = score_possible_trace_counts[key]
+	if seen > 4 and seen % 200 ~= 0 then return end
+
+	Trace(("FA_PLUS_CALC: type=%s seen=%s player=%s source=%s totalSteps=%s totalHolds=%s totalRolls=%s primaryWeight=%s heldWeight=%s possible=%s"):format(
+		tostring(kind),
+		tostring(seen),
+		tostring(safe_enum_short(player, player)),
+		tostring(source),
+		tostring(totalSteps),
+		tostring(totalHolds),
+		tostring(totalRolls),
+		tostring(primaryWeight),
+		tostring(heldWeight),
+		tostring(totalPossible)
+	))
+end
+
+safe_stage_index = function()
 	local played = SL and SL.Global and SL.Global.Stages and SL.Global.Stages.PlayedThisGame
 	return math.max(1, math.floor(finite_number_or(played, 0) + 1))
 end
@@ -501,8 +638,7 @@ local NoteFieldWidth = {
 		solo    = 384,
 		threepanel = 192,
 		routine = 512,
-		-- couple not supported in Simply Love at this time D:
-		-- couple = 256,
+		couple  = 256,
 	},
 	-- pump's values are very similar to those used in dance, but curiously smaller
 	pump = {
@@ -510,6 +646,7 @@ local NoteFieldWidth = {
 		versus  = 250,
 		double  = 500,
 		routine = 500,
+		couple  = 250,
 	},
 	-- These values for techno, para, and kb7 are the result of empirical observation
 	-- of the SM5 engine and should not be regarded as any kind of Truth.
@@ -1081,10 +1218,12 @@ end
 -- Note: The returned table can't be used directly into CalculateExScore because the keys
 -- "HitMine", "Held", and "LetGo" aren't calculated here.
 GetExJudgmentCounts = function(player)
-	local pn = safe_enum_short(player, nil)
+	local sourcePlayer = GetRoutineSourcePlayer and GetRoutineSourcePlayer(player) or player
+	local pn = safe_enum_short(sourcePlayer, nil)
 	local curStageStats = safe_method("STATSMAN.GetCurStageStats", STATSMAN, "GetCurStageStats")
-	local stats = pn and safe_method("StageStats.GetPlayerStageStats", curStageStats, "GetPlayerStageStats", pn) or nil
-	local StepsOrTrail = (safe_is_course_mode() and safe_game_state_method("GetCurrentTrail", nil, player)) or safe_game_state_method("GetCurrentSteps", nil, player)
+	local stats = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or nil
+	stats = stats or (pn and safe_method("StageStats.GetPlayerStageStats", curStageStats, "GetPlayerStageStats", pn) or nil)
+	local StepsOrTrail = (safe_is_course_mode() and safe_game_state_method("GetCurrentTrail", nil, sourcePlayer)) or safe_game_state_method("GetCurrentSteps", nil, sourcePlayer)
 
 	local counts = {}
 
@@ -1109,7 +1248,7 @@ GetExJudgmentCounts = function(player)
 				counts["W010"] = faPlus10
 				counts["W110"] = math.max(0, safe_stats_tap_score(stats, "TapNoteScore_W1") - faPlus10)
 			else
-				local mods = safe_player_mods(player)
+				local mods = safe_player_mods(sourcePlayer)
 				local timingWindows = type(mods.TimingWindows) == "table" and mods.TimingWindows or {}
 				if ((window ~= "W4" and window ~= "W5") or
 						-- Only populate decent and way off windows if they're active.
@@ -1120,16 +1259,16 @@ GetExJudgmentCounts = function(player)
 			end
 		end
 	end
-	counts["totalSteps"] = safe_radar_value(StepsOrTrail, player, "RadarCategory_TapsAndHolds")
+	counts["totalSteps"] = safe_radar_value(StepsOrTrail, sourcePlayer, "RadarCategory_TapsAndHolds")
 
 	local RadarCategory = { "Holds", "Mines", "Rolls" }
 
-	local po = safe_player_options(player, "ModsLevel_Preferred")
+	local po = safe_player_options(sourcePlayer, "ModsLevel_Preferred")
 
 	for RCType in ivalues(RadarCategory) do
 		local radarActual = safe_method("PlayerStageStats.GetRadarActual", stats, "GetRadarActual")
 		local number = math.max(0, finite_number_or(safe_method("RadarValues.GetValue", radarActual, "GetValue", "RadarCategory_"..RCType), 0))
-		local possible = safe_radar_value(StepsOrTrail, player, "RadarCategory_"..RCType)
+		local possible = safe_radar_value(StepsOrTrail, sourcePlayer, "RadarCategory_"..RCType)
 
 		if RCType == "Mines" then
 			-- NoMines still report the total number of mines that exist in a chart, even if they weren't played in the chart.
@@ -1176,33 +1315,31 @@ end
 CalculateExScore = function(player, ex_counts, use_actual_w0_weight)
 	-- No EX scores in Casual mode, just return some dummy number early.
 	if SL and SL.Global and SL.Global.GameMode == "Casual" then return 0 end
-	local StepsOrTrail = (safe_is_course_mode() and safe_game_state_method("GetCurrentTrail", nil, player)) or safe_game_state_method("GetCurrentSteps", nil, player)
-	if not StepsOrTrail then return 0, 0, 0 end
+	local sourcePlayer = GetRoutineSourcePlayer and GetRoutineSourcePlayer(player) or player
+	local StepsOrTrail = (safe_is_course_mode() and safe_game_state_method("GetCurrentTrail", nil, sourcePlayer)) or safe_game_state_method("GetCurrentSteps", nil, sourcePlayer)
 
-	local totalSteps = safe_radar_value(StepsOrTrail, player, "RadarCategory_TapsAndHolds")
-	local totalHolds = safe_radar_value(StepsOrTrail, player, "RadarCategory_Holds")
-	local totalRolls = safe_radar_value(StepsOrTrail, player, "RadarCategory_Rolls")
+	local totalSteps, totalHolds, totalRolls, possibleSource = safe_score_possible_values(StepsOrTrail, sourcePlayer)
 
 	local weights = type(SL and SL.ExWeights) == "table" and SL.ExWeights or {}
 	local W0Weight = use_actual_w0_weight and 3.5 or finite_number_or(weights["W0"], 0)
 	local heldWeight = finite_number_or(weights["Held"], 0)
 	local total_possible = totalSteps * W0Weight + (totalHolds + totalRolls) * heldWeight
-	if total_possible <= 0 then return 0, 0, 0 end
+	trace_score_possible("ex", player, possibleSource, totalSteps, totalHolds, totalRolls, W0Weight, heldWeight, total_possible)
 
 	local total_points = 0
 
-	local po = safe_player_options(player, "ModsLevel_Preferred")
+	local po = safe_player_options(sourcePlayer, "ModsLevel_Preferred")
 
 	-- If mines are disabled, they should still be accounted for in EX Scoring based on the weight assigned to it.
 	-- Stamina community does often play with no-mines on, but because EX scoring is more timing centric where mines
 	-- generally have a negative weight, it's a better experience to make sure the EX score reflects that.
 	if option_enabled(safe_method("PlayerOptions.NoMines", po, "NoMines")) then
-		local totalMines = safe_radar_value(StepsOrTrail, player, "RadarCategory_Mines")
+		local totalMines = safe_radar_value(StepsOrTrail, sourcePlayer, "RadarCategory_Mines")
 		total_points = total_points + totalMines * finite_number_or(weights["HitMine"], 0)
 	end
 
 	local keys = { "W0", "W1", "W2", "W3", "W4", "W5", "Miss", "Held", "LetGo", "HitMine" }
-	local playerKey = safe_enum_short(player, nil)
+	local playerKey = safe_enum_short(sourcePlayer, nil)
 	local playerState = playerKey and SL and SL[playerKey] or nil
 	local stages = playerState and playerState.Stages
 	local stats = stages and stages.Stats
@@ -1217,6 +1354,22 @@ CalculateExScore = function(player, ex_counts, use_actual_w0_weight)
 	end
 	counts["Held"] = counts["Held"] or (finite_number_or(counts["Holds"], 0) + finite_number_or(counts["Rolls"], 0))
 	counts["HitMine"] = counts["HitMine"] or counts["Mines"] or 0
+
+	local exCountSteps = math.max(0, finite_number_or(counts.totalSteps, 0))
+	if safe_is_course_mode() and exCountSteps > 0 then
+		totalSteps = exCountSteps
+		totalHolds = math.max(0, finite_number_or(counts.totalHolds, 0))
+		totalRolls = math.max(0, finite_number_or(counts.totalRolls, 0))
+		total_possible = totalSteps * W0Weight + (totalHolds + totalRolls) * heldWeight
+		trace_score_possible("ex_counts", player, "ex_counts", totalSteps, totalHolds, totalRolls, W0Weight, heldWeight, total_possible)
+	elseif total_possible <= 0 then
+		totalSteps = exCountSteps
+		totalHolds = math.max(0, finite_number_or(counts.totalHolds, 0))
+		totalRolls = math.max(0, finite_number_or(counts.totalRolls, 0))
+		total_possible = totalSteps * W0Weight + (totalHolds + totalRolls) * heldWeight
+		trace_score_possible("ex_counts", player, "ex_counts", totalSteps, totalHolds, totalRolls, W0Weight, heldWeight, total_possible)
+		if total_possible <= 0 then return 0, 0, 0 end
+	end
 
 	for key in ivalues(keys) do
 		local value = finite_number_or(counts[key], nil)
@@ -1237,26 +1390,25 @@ end
 -- score can move down when bad judgments occur.
 CalculateHardExScore = function(player, ex_counts, use_actual_w0_weight)
 	if SL and SL.Global and SL.Global.GameMode == "Casual" then return 0 end
-	local StepsOrTrail = (safe_is_course_mode() and safe_game_state_method("GetCurrentTrail", nil, player)) or safe_game_state_method("GetCurrentSteps", nil, player)
-	if not StepsOrTrail then return 0, 0, 0 end
+	local sourcePlayer = GetRoutineSourcePlayer and GetRoutineSourcePlayer(player) or player
+	local StepsOrTrail = (safe_is_course_mode() and safe_game_state_method("GetCurrentTrail", nil, sourcePlayer)) or safe_game_state_method("GetCurrentSteps", nil, sourcePlayer)
 
-	local totalSteps = safe_radar_value(StepsOrTrail, player, "RadarCategory_TapsAndHolds")
-	local totalHolds = safe_radar_value(StepsOrTrail, player, "RadarCategory_Holds")
-	local totalRolls = safe_radar_value(StepsOrTrail, player, "RadarCategory_Rolls")
+	local totalSteps, totalHolds, totalRolls, possibleSource = safe_score_possible_values(StepsOrTrail, sourcePlayer)
 	local weights = type(SL and SL.HardExWeights) == "table" and SL.HardExWeights or {}
 	local W010Weight = finite_number_or(weights["W010"], 0)
-	local total_possible = totalSteps * W010Weight + (totalHolds + totalRolls) * finite_number_or(weights["Held"], 0)
-	if total_possible <= 0 then return 0, 0, 0 end
+	local heldWeight = finite_number_or(weights["Held"], 0)
+	local total_possible = totalSteps * W010Weight + (totalHolds + totalRolls) * heldWeight
+	trace_score_possible("hardex", player, possibleSource, totalSteps, totalHolds, totalRolls, W010Weight, heldWeight, total_possible)
 
 	local total_points = 0
-	local po = safe_player_options(player, "ModsLevel_Preferred")
+	local po = safe_player_options(sourcePlayer, "ModsLevel_Preferred")
 	if option_enabled(safe_method("PlayerOptions.NoMines", po, "NoMines")) then
-		local totalMines = safe_radar_value(StepsOrTrail, player, "RadarCategory_Mines")
+		local totalMines = safe_radar_value(StepsOrTrail, sourcePlayer, "RadarCategory_Mines")
 		total_points = total_points + totalMines * finite_number_or(weights["HitMine"], 0)
 	end
 
 	local keys = { "W010", "W110", "W2", "W3", "W4", "W5", "Miss", "Held", "LetGo", "HitMine" }
-	local playerKey = safe_enum_short(player, nil)
+	local playerKey = safe_enum_short(sourcePlayer, nil)
 	local playerState = playerKey and SL and SL[playerKey] or nil
 	local stages = playerState and playerState.Stages
 	local stats = stages and stages.Stats
@@ -1270,6 +1422,22 @@ CalculateHardExScore = function(player, ex_counts, use_actual_w0_weight)
 	end
 	counts["Held"] = counts["Held"] or (finite_number_or(counts["Holds"], 0) + finite_number_or(counts["Rolls"], 0))
 	counts["HitMine"] = counts["HitMine"] or counts["Mines"] or 0
+
+	local exCountSteps = math.max(0, finite_number_or(counts.totalSteps, 0))
+	if safe_is_course_mode() and exCountSteps > 0 then
+		totalSteps = exCountSteps
+		totalHolds = math.max(0, finite_number_or(counts.totalHolds, 0))
+		totalRolls = math.max(0, finite_number_or(counts.totalRolls, 0))
+		total_possible = totalSteps * W010Weight + (totalHolds + totalRolls) * heldWeight
+		trace_score_possible("hardex_counts", player, "ex_counts", totalSteps, totalHolds, totalRolls, W010Weight, heldWeight, total_possible)
+	elseif total_possible <= 0 then
+		totalSteps = exCountSteps
+		totalHolds = math.max(0, finite_number_or(counts.totalHolds, 0))
+		totalRolls = math.max(0, finite_number_or(counts.totalRolls, 0))
+		total_possible = totalSteps * W010Weight + (totalHolds + totalRolls) * heldWeight
+		trace_score_possible("hardex_counts", player, "ex_counts", totalSteps, totalHolds, totalRolls, W010Weight, heldWeight, total_possible)
+		if total_possible <= 0 then return 0, 0, 0 end
+	end
 
 	for key in ivalues(keys) do
 		local value = finite_number_or(counts[key], nil)
@@ -1475,7 +1643,7 @@ GetPlayerOptionsString = function(player, modsLevel)
 			not string.find(option, "Lights") then
 			-- 100% Mini will be in the PlayerOptions as just "Mini" so use the value from the SL table instead
 			if option:match("Mini") then
-				option = tostring(finite_number_or(mods.Mini, 0)) .. " Mini"
+				option = format_mini_option(option, mods)
 			end
 
 			if option:match("Cover") then
@@ -1544,26 +1712,42 @@ end
 -- -----------------------------------------------------------------------
 -- If the banner is missing, use the VisualStyle fallback banner according to selected color.
 GetFallbackBanner = function()
-	local themeDir = tostring(safe_method("THEME.GetCurrentThemeDirectory", THEME, "GetCurrentThemeDirectory") or "")
 	local visualStyle = tostring(safe_theme_pref("VisualStyle", "Arrows") or "Arrows")
-    local path = themeDir .. "Graphics/_FallbackBanners/" .. visualStyle
-	local exists = false
-	if FILEMAN and type(FILEMAN.DoesFileExist) == "function" then
-		local okExists, result = safe_call("FILEMAN.DoesFileExist fallback banner", function()
+	local bannerIndex = math.max(1, math.floor(finite_number_or(SL and SL.Global and SL.Global.ActiveColorIndex, 1)))
+	local bannerName = "banner" .. tostring(bannerIndex) .. " (doubleres).png"
+	local function theme_graphic_path(relativePath)
+		local themeDir = tostring(safe_method("THEME.GetCurrentThemeDirectory", THEME, "GetCurrentThemeDirectory") or "")
+		if themeDir ~= "" and themeDir:sub(1, 1) ~= "/" then
+			themeDir = "/" .. themeDir
+		end
+		return themeDir .. "Graphics/" .. relativePath
+	end
+
+	local function file_exists(path)
+		if not path or path == "" then return false end
+		if not (FILEMAN and type(FILEMAN.DoesFileExist) == "function") then return true end
+		local ok, result = safe_call("FILEMAN.DoesFileExist fallback banner", function()
 			return FILEMAN:DoesFileExist(path)
 		end)
-		exists = okExists and result == true
+		return ok and result == true
 	end
-	local fallback = ""
-	if THEME and type(THEME.GetPathG) == "function" then
-		local okFallback, value = safe_call("THEME.GetPathG fallback banner", function()
-			return THEME:GetPathG("", "_FallbackBanners/Arrows")
-		end)
-		fallback = okFallback and tostring(value or "") or ""
-	end
-    local banner_directory = exists and path or fallback
 
-    return banner_directory .. "/banner" .. tostring(math.max(1, math.floor(finite_number_or(SL and SL.Global and SL.Global.ActiveColorIndex, 1)))) .. " (doubleres).png"
+	local path = theme_graphic_path("_FallbackBanners/" .. visualStyle .. "/" .. bannerName)
+	if file_exists(path) then
+		Trace(("Simply Love fallback banner VisualStyle=%s index=%d path=%s"):format(visualStyle, bannerIndex, path))
+		return path
+	end
+
+	local fallback = theme_graphic_path("_FallbackBanners/Arrows/" .. bannerName)
+	if file_exists(fallback) then
+		Trace(("Simply Love fallback banner missing VisualStyle=%s index=%d path=%s; using %s"):format(visualStyle, bannerIndex, path, fallback))
+		return fallback
+	end
+
+	-- Last resort: keep returning a theme-resolved path so the caller never
+	-- receives a screen-relative "Themes/..." path that breaks LoadActor().
+	Trace(("Simply Love fallback banner missing VisualStyle=%s index=%d path=%s fallback=%s"):format(visualStyle, bannerIndex, path, fallback))
+	return fallback
 end
 
 -- -----------------------------------------------------------------------
