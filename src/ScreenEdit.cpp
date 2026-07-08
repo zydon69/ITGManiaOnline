@@ -6180,7 +6180,8 @@ void ScreenEdit::HandleAreaMenuChoice(
     case last_second_at_beat: {
       const TimingData& timing = GetAppropriateTiming();
       Song& s = *GAMESTATE->m_pCurSong;
-      s.SetSpecifiedLastSecond(timing.GetElapsedTimeFromBeat(GetBeat()));
+      s.SetSpecifiedLastSecond(
+          timing.GetElapsedTimeFromBeatNoOffset(GetBeat()));
       break;
     }
     case undo:

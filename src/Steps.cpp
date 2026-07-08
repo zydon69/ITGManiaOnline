@@ -533,12 +533,15 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
   }
 
   FOREACH_PlayerNumber(pn) m_TechCounts[pn].Zero();
+  m_NoteAnnotations.clear();
 
   const std::optional<StepParity::StageLayout> layout =
       getLayout(this->m_StepsType);
   // If we don't have a valid layout for this StepsType, then don't even
-  // bother
+  // bother, but keep the values explicitly unknown instead of silently
+  // displaying zeros in the theme.
   if (!layout) {
+    FOREACH_PlayerNumber(pn) m_TechCounts[pn].MakeUnknown();
     return;
   }
   if (this->m_StepsType == StepsType_dance_solo ||
@@ -558,8 +561,15 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
     FOREACH_PlayerNumber(pn) m_TechCounts[pn].MakeUnknown();
     return;
   }
-  TechCounts::CalculateTechCountsFromRows(gen.rows, &*layout, m_TechCounts[0]);
+  std::vector<NoteAnnotation> noteAnnotations;
+  TechCounts::CalculateTechCountsFromRows(
+      gen.rows, &*layout, m_TechCounts[0], noteAnnotations);
   std::fill_n(m_TechCounts + 1, NUM_PLAYERS - 1, m_TechCounts[0]);
+
+  NoteAnnotationCache cachedAnnotations;
+  cachedAnnotations.decompressed = noteAnnotations;
+  cachedAnnotations.Compress();
+  m_NoteAnnotations.push_back(cachedAnnotations);
 }
 
 void Steps::CalculateMeasureInfo(const NoteData& tempNoteData) {
@@ -777,6 +787,8 @@ void Steps::DeAutogen(bool bCopyNoteData) {
       m_RadarValues);
   std::copy(
       Real()->m_TechCounts, Real()->m_TechCounts + NUM_PLAYERS, m_TechCounts);
+  m_NoteAnnotations.assign(
+      Real()->m_NoteAnnotations.begin(), Real()->m_NoteAnnotations.end());
 
   m_NpsPerMeasure.assign(
       Real()->m_NpsPerMeasure.begin(), Real()->m_NpsPerMeasure.end());
@@ -1036,6 +1048,22 @@ const TechCounts& Steps::GetTechCounts(PlayerNumber pn) const {
   return Real()->m_TechCounts[SafePlayerNumber(pn, "GetTechCounts")];
 }
 
+const std::vector<NoteAnnotation>& Steps::GetNoteAnnotations(
+    PlayerNumber pn) const {
+  static const std::vector<NoteAnnotation> emptyAnnotations;
+  const std::vector<NoteAnnotationCache>& annotations = Real()->m_NoteAnnotations;
+  if (annotations.empty()) {
+    return emptyAnnotations;
+  }
+
+  const PlayerNumber safePlayer = SafePlayerNumber(pn, "GetNoteAnnotations");
+  if (static_cast<size_t>(safePlayer) < annotations.size()) {
+    return annotations[safePlayer].GetNoteAnnotations();
+  }
+
+  return annotations[PLAYER_1].GetNoteAnnotations();
+}
+
 void Steps::SetRadarValues(const RadarValues v[NUM_PLAYERS]) {
   DeAutogen();
   std::copy(v, v + NUM_PLAYERS, m_RadarValues);
@@ -1044,6 +1072,12 @@ void Steps::SetRadarValues(const RadarValues v[NUM_PLAYERS]) {
 void Steps::SetTechCounts(const TechCounts ts[NUM_PLAYERS]) {
   DeAutogen();
   std::copy(ts, ts + NUM_PLAYERS, m_TechCounts);
+}
+
+void Steps::SetNoteAnnotations(
+    const std::vector<NoteAnnotationCache>& noteAnnotations) {
+  DeAutogen();
+  m_NoteAnnotations.assign(noteAnnotations.begin(), noteAnnotations.end());
 }
 
 void Steps::SetNpsPerMeasure(std::vector<std::vector<float>>& npsPerMeasure) {
@@ -1384,6 +1418,49 @@ class LunaSteps : public Luna<Steps> {
     return 1;
   }
 
+  static int GetNoteAnnotations(T* p, lua_State* L) {
+    PlayerNumber pn = PLAYER_1;
+    if (!lua_isnil(L, 1)) {
+      pn = Enum::Check<PlayerNumber>(L, 1, true);
+      if (pn == PLAYER_INVALID) {
+        pn = PLAYER_1;
+      }
+    }
+
+    const std::vector<NoteAnnotation>& annotations =
+        p->GetNoteAnnotations(pn);
+    lua_createtable(L, static_cast<int>(annotations.size()), 0);
+
+    for (size_t i = 0; i < annotations.size(); ++i) {
+      const NoteAnnotation& annotation = annotations[i];
+      lua_createtable(L, 0, 3);
+
+      lua_pushstring(L, "beat");
+      lua_pushnumber(L, annotation.beat);
+      lua_settable(L, -3);
+
+      lua_pushstring(L, "whereTheFeetAre");
+      lua_createtable(L, static_cast<int>(annotation.whereTheFeetAre.size()), 0);
+      for (size_t foot = 0; foot < annotation.whereTheFeetAre.size(); ++foot) {
+        lua_pushinteger(L, annotation.whereTheFeetAre[foot]);
+        lua_rawseti(L, -2, static_cast<int>(foot + 1));
+      }
+      lua_settable(L, -3);
+
+      lua_pushstring(L, "tech");
+      lua_createtable(L, static_cast<int>(annotation.tech.size()), 0);
+      for (size_t tech = 0; tech < annotation.tech.size(); ++tech) {
+        LuaHelpers::Push(L, annotation.tech[tech]);
+        lua_rawseti(L, -2, static_cast<int>(tech + 1));
+      }
+      lua_settable(L, -3);
+
+      lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+
+    return 1;
+  }
+
   static int GetTimingData(T* p, lua_State* L) {
     p->GetTimingData()->PushSelf(L);
     return 1;
@@ -1529,6 +1606,7 @@ class LunaSteps : public Luna<Steps> {
     ADD_METHOD(GetNpsPerMeasure);
     ADD_METHOD(GetNotesPerMeasure);
     ADD_METHOD(GetPeakNps);
+    ADD_METHOD(GetNoteAnnotations);
     ADD_METHOD(GetGrooveStatsHash);
     ADD_METHOD(GetGrooveStatsHashVersion);
   }

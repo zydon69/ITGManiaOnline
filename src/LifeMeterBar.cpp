@@ -474,8 +474,8 @@ bool LifeMeterBar::IsFailing() const {
   if (!std::isfinite(passmark)) {
     LOG->Trace(
         "SRC_AUDIT_FIX SRC-248: LifeMeterBar treated non-finite passmark as "
-        "failing.");
-    return true;
+        "0.");
+    return m_fLifePercentage <= 0.0f;
   }
   return m_fLifePercentage <=
          passmark;

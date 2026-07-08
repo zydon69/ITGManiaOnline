@@ -252,6 +252,8 @@ class Player : public ActorFrame {
 
   bool m_bPaused;
   bool m_bDelay;
+  bool m_bLoggedRoutineMiniZoom;
+  bool m_bLoggedMiniDrawZoom;
 
   NoteData& m_NoteData;
   NoteField* m_pNoteField;

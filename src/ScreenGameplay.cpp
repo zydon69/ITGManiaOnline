@@ -4,8 +4,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cfloat>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <string>
 #include <vector>
@@ -301,6 +303,84 @@ static bool IsCurrentStyleSharedSides() {
          style->m_StyleType == StyleType_TwoPlayersSharedSides;
 }
 
+static bool GetRoutineSharedMiniFromTheme(float& miniOut) {
+  if (LUA == nullptr) {
+    return false;
+  }
+
+  Lua* L = LUA->Get();
+  const bool ran = LuaHelpers::RunExpression(
+      L,
+      "SL and SL.P1 and SL.P1.ActiveModifiers and "
+      "SL.P1.ActiveModifiers.Mini or nil",
+      "ScreenGameplay::GetRoutineSharedMiniFromTheme");
+  if (!ran || lua_isnil(L, -1)) {
+    lua_pop(L, 1);
+    LUA->Release(L);
+    return false;
+  }
+
+  float percent = 0.0f;
+  bool parsed = false;
+  if (lua_isnumber(L, -1)) {
+    percent = static_cast<float>(lua_tonumber(L, -1));
+    parsed = true;
+  } else if (lua_isstring(L, -1)) {
+    size_t len = 0;
+    const char* text = lua_tolstring(L, -1, &len);
+    if (text != nullptr && len > 0) {
+      char* end = nullptr;
+      percent = std::strtof(text, &end);
+      parsed = end != text;
+    }
+  }
+  lua_pop(L, 1);
+  LUA->Release(L);
+
+  if (!parsed || !std::isfinite(percent)) {
+    return false;
+  }
+  rage_clamp(percent, -100.0f, 150.0f);
+  miniOut = percent / 100.0f;
+  return true;
+}
+
+static void ApplyRoutineSharedMiniToPlayerStates(const char* context) {
+  if (!IsCurrentStyleSharedSides() || GAMESTATE == nullptr) {
+    return;
+  }
+
+  float mini = 0.0f;
+  if (!GetRoutineSharedMiniFromTheme(mini)) {
+    LOG->Trace(
+        "ROUTINE_UI shared mini sync skipped context=%s reason=no_theme_value",
+        context != nullptr ? context : "unknown");
+    return;
+  }
+
+  FOREACH_PlayerNumber(pn) {
+    PlayerState* playerState = GAMESTATE->m_pPlayerState[pn];
+    if (playerState == nullptr) {
+      continue;
+    }
+    PO_GROUP_ASSIGN_N(
+        playerState->m_PlayerOptions, ModsLevel_Preferred, m_fEffects,
+        PlayerOptions::EFFECT_MINI, mini);
+    LOG->Trace(
+        "ROUTINE_UI shared mini sync context=%s player=%i mini=%f "
+        "preferred=%f stage=%f song=%f current=%f",
+        context != nullptr ? context : "unknown", static_cast<int>(pn), mini,
+        playerState->m_PlayerOptions.GetPreferred()
+            .m_fEffects[PlayerOptions::EFFECT_MINI],
+        playerState->m_PlayerOptions.GetStage()
+            .m_fEffects[PlayerOptions::EFFECT_MINI],
+        playerState->m_PlayerOptions.GetSong()
+            .m_fEffects[PlayerOptions::EFFECT_MINI],
+        playerState->m_PlayerOptions.GetCurrent()
+            .m_fEffects[PlayerOptions::EFFECT_MINI]);
+  }
+}
+
 static bool IsFiniteNonNegative(float value) {
   return std::isfinite(value) && value >= 0.0f;
 }
@@ -329,6 +409,52 @@ static float GetGameplayStartLeadInSeconds(
 
   startDelay = std::max(startDelay, minTimeToMusic);
   return std::max(startDelay, 0.0f);
+}
+
+void ScreenGameplay::PropagateSharedSidesFailure(
+    PlayerNumber failedPlayer, const char* context) {
+  if (!IsCurrentStyleSharedSides() || STATSMAN == nullptr ||
+      GAMESTATE == nullptr) {
+    return;
+  }
+
+  const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+  if (!IsValidGameplayPlayer(master)) {
+    return;
+  }
+
+  StageStats& stageStats = STATSMAN->m_CurStageStats;
+  const bool routineWasFailed = stageStats.m_RoutinePlayer.m_bFailed;
+  stageStats.m_RoutinePlayer.m_bJoined = true;
+  stageStats.m_RoutinePlayer.m_bFailed = true;
+  if (!routineWasFailed) {
+    stageStats.m_RoutinePlayer.SetLifeRecordAt(
+        0, stageStats.m_fGameplaySeconds);
+  }
+
+  FOREACH_PlayerNumber(p) {
+    PlayerStageStats& pss = stageStats.m_player[p];
+    const bool hasRecordedStats =
+        pss.m_bJoined || pss.m_iStepsPlayed > 0 ||
+        !pss.m_vpPossibleSteps.empty();
+    if (!hasRecordedStats) {
+      continue;
+    }
+
+    const bool playerWasFailed = pss.m_bFailed;
+    pss.m_bFailed = true;
+    if (!playerWasFailed) {
+      pss.SetLifeRecordAt(0, stageStats.m_fGameplaySeconds);
+    }
+  }
+
+  LOG->Trace(
+      "Routine shared failure propagated: context=%s failed_player=%i "
+      "master=%i routine_was_failed=%d p1_failed=%d p2_failed=%d.",
+      context != nullptr ? context : "unknown", static_cast<int>(failedPlayer),
+      static_cast<int>(master), routineWasFailed ? 1 : 0,
+      stageStats.m_player[PLAYER_1].m_bFailed ? 1 : 0,
+      stageStats.m_player[PLAYER_2].m_bFailed ? 1 : 0);
 }
 
 static bool HasCoreGameplayManagers(const char* context) {
@@ -957,6 +1083,7 @@ ScreenGameplay::ScreenGameplay() {
   m_bLoggedOnlineNotesEndedDuringHold = false;
   m_bMarkedOnlineFailedEarly = false;
   m_bLoggedOnlineLocalFailKeepAlive = false;
+  m_bLoggedGameplayChartTiming = false;
   m_bNotesEndedQueued = false;
   m_fLastSeenEnemyHealth = 1.0f;
   m_iLightsRowLastCrossed = 0;
@@ -1038,6 +1165,9 @@ void ScreenGameplay::Init() {
   }
 
   const bool bSharedSidesStyle = IsCurrentStyleSharedSides();
+  if (bSharedSidesStyle) {
+    ApplyRoutineSharedMiniToPlayerStates("ScreenGameplay::Init");
+  }
   if (bSharedSidesStyle) {
     const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
     if (!IsValidGameplayPlayer(master) ||
@@ -1923,6 +2053,7 @@ bool ScreenGameplay::SetupSong(int iSongIndex) {
         iSongIndex, m_apSongsQueue.size());
     return false;
   }
+  ApplyRoutineSharedMiniToPlayerStates("ScreenGameplay::SetupSong begin");
   bool complete = true;
   FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
     PlayerState* playerState =
@@ -2060,6 +2191,7 @@ bool ScreenGameplay::SetupSong(int iSongIndex) {
     // on.
     playerState->m_PlayerOptions.SetCurrentToLevel(ModsLevel_Stage);
   }
+  ApplyRoutineSharedMiniToPlayerStates("ScreenGameplay::SetupSong end");
   return complete;
 }
 
@@ -2080,6 +2212,7 @@ void ScreenGameplay::LoadNextSong() {
     return;
   }
   m_bNotesEndedQueued = false;
+  m_bLoggedGameplayChartTiming = false;
   GAMESTATE->ResetMusicStatistics();
   if (!ValidateGameplayQueues(
           m_apSongsQueue, m_vPlayerInfo, "ScreenGameplay::LoadNextSong")) {
@@ -2747,6 +2880,64 @@ bool ScreenGameplay::AllAreFailing() {
   return true;
 }
 
+bool ScreenGameplay::GetCurrentChartTimingRange(
+    float& fFirstSecond, float& fLastSecond) {
+  fFirstSecond = FLT_MAX;
+  fLastSecond = 0.0f;
+
+  if (GAMESTATE == nullptr) {
+    return false;
+  }
+
+  bool foundPlayableChart = false;
+  FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
+    const PlayerNumber pn = pi->GetStepsAndTrailIndex();
+    if (!IsValidGameplayPlayer(pn) ||
+        GAMESTATE->m_pCurSteps[pn] == nullptr) {
+      continue;
+    }
+
+    const TimingData* timing = GAMESTATE->m_pCurSteps[pn]->GetTimingData();
+    if (timing == nullptr) {
+      continue;
+    }
+
+    NoteData noteData;
+    if (pi->m_pPlayer != nullptr) {
+      noteData = pi->m_pPlayer->GetNoteData();
+    } else {
+      GAMESTATE->m_pCurSteps[pn]->GetNoteData(noteData);
+    }
+
+    if (noteData.IsEmpty()) {
+      continue;
+    }
+
+    const float firstSecond =
+        timing->GetElapsedTimeFromBeat(noteData.GetFirstBeat());
+    const float lastSecond =
+        timing->GetElapsedTimeFromBeat(noteData.GetLastBeat());
+    if (!std::isfinite(firstSecond) || !std::isfinite(lastSecond)) {
+      continue;
+    }
+
+    fFirstSecond = std::min(fFirstSecond, firstSecond);
+    fLastSecond = std::max(fLastSecond, lastSecond);
+    foundPlayableChart = true;
+  }
+
+  if (!foundPlayableChart || !std::isfinite(fFirstSecond) ||
+      !std::isfinite(fLastSecond) || fLastSecond < fFirstSecond) {
+    fFirstSecond = 0.0f;
+    fLastSecond = 0.0f;
+    return false;
+  }
+
+  fFirstSecond = std::max(0.0f, fFirstSecond);
+  fLastSecond = std::max(fFirstSecond, fLastSecond);
+  return true;
+}
+
 void ScreenGameplay::GetMusicEndTiming(
     float& fSecondsToStartFadingOutMusic,
     float& fSecondsToStartTransitioningOut) {
@@ -2756,8 +2947,14 @@ void ScreenGameplay::GetMusicEndTiming(
     return;
   }
 
-  float fLastStepSeconds =
-      FiniteNonNegativeOr(GAMESTATE->m_pCurSong->GetLastSecond(), 0.0f);
+  float fFirstChartSeconds = 0.0f;
+  float fLastStepSeconds = 0.0f;
+  const bool usedCurrentChartTiming =
+      GetCurrentChartTimingRange(fFirstChartSeconds, fLastStepSeconds);
+  if (!usedCurrentChartTiming) {
+    fLastStepSeconds =
+        FiniteNonNegativeOr(GAMESTATE->m_pCurSong->GetLastSecond(), 0.0f);
+  }
   fLastStepSeconds += Player::GetMaxStepDistanceSeconds();
 
   float fTransitionLength;
@@ -2795,6 +2992,21 @@ void ScreenGameplay::GetMusicEndTiming(
       fSecondsToStartTransitioningOut, fSecondsToStartFadingOutMusic +
                                            musicFadeOutSeconds -
                                            fTransitionLength);
+
+  if (!m_bLoggedGameplayChartTiming) {
+    m_bLoggedGameplayChartTiming = true;
+    LOG->Trace(
+        "GAMEPLAY_CHART_END_TIMING: source=%s first=%.6f last_note=%.6f "
+        "transition=%.6f fade_start=%.6f music_length=%.6f "
+        "max_step_distance=%.6f",
+        usedCurrentChartTiming ? "current_steps" : "song",
+        fFirstChartSeconds,
+        fLastStepSeconds - Player::GetMaxStepDistanceSeconds(),
+        fSecondsToStartTransitioningOut,
+        fSecondsToStartFadingOutMusic,
+        GAMESTATE->m_pCurSong->m_fMusicLengthSeconds,
+        Player::GetMaxStepDistanceSeconds());
+  }
 }
 
 void ScreenGameplay::Update(float fDeltaTime) {
@@ -3029,6 +3241,10 @@ void ScreenGameplay::Update(float fDeltaTime) {
               marked ? 1 : 0, (int)pn);
         }
         pss->m_bFailed = true;  // fail
+        if (bSharedSidesLifeMeter) {
+          PropagateSharedSidesFailure(
+              pn, "ScreenGameplay::Update fail check");
+        }
 
         {
           Message msg("PlayerFailed");
@@ -4466,6 +4682,9 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
       if (GAMESTATE->GetPlayerFailType(playerState) != FailType_Off &&
           bPlayerIsFailing) {
         pss->m_bFailed = true;
+        if (bSharedSidesLifeMeter) {
+          PropagateSharedSidesFailure(pi->m_pn, "ScreenGameplay::SM_NotesEnded");
+        }
       }
 
       if (!pss->m_bFailed) {

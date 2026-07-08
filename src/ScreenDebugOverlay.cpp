@@ -356,6 +356,7 @@ void ScreenDebugOverlay::Init() {
     g_Mappings.debugButton[i++] = DeviceInput(DEVICE_KEYBOARD, KEY_Co);
     g_Mappings.debugButton[i++] = DeviceInput(DEVICE_KEYBOARD, KEY_Cp);
     g_Mappings.debugButton[i++] = DeviceInput(DEVICE_KEYBOARD, KEY_Ca);
+    g_Mappings.debugButton[i++] = DeviceInput(DEVICE_KEYBOARD, KEY_Cb);
     g_Mappings.debugButton[i++] = DeviceInput(DEVICE_KEYBOARD, KEY_Cs);
     g_Mappings.debugButton[i++] = DeviceInput(DEVICE_KEYBOARD, KEY_Cd);
     g_Mappings.pageButton[DeviceInput(DEVICE_KEYBOARD, KEY_F5)] = 0;
@@ -848,6 +849,7 @@ static LocalizedString VOLUME_UP("ScreenDebugOverlay", "Volume Up");
 static LocalizedString VOLUME_DOWN("ScreenDebugOverlay", "Volume Down");
 static LocalizedString UPTIME("ScreenDebugOverlay", "Uptime");
 static LocalizedString FORCE_CRASH("ScreenDebugOverlay", "Force Crash");
+static LocalizedString CURRENT_OFFSET("ScreenDebugOverlay", "Current Offset");
 static LocalizedString SLOW("ScreenDebugOverlay", "Slow");
 static LocalizedString CPU("ScreenDebugOverlay", "CPU");
 static LocalizedString SONG("ScreenDebugOverlay", "Song");
@@ -1405,6 +1407,51 @@ class DebugLineMuteActions : public IDebugLine {
   }
 };
 
+class DebugLineGlobalOffsetProfile : public IDebugLine {
+  virtual std::string GetDisplayTitle() {
+    return GetCurrentOffsetDisplayText();
+  }
+  virtual std::string GetDisplayValue() { return std::string(); }
+  virtual bool IsEnabled() { return PREFSMAN != nullptr; }
+  virtual void DoAndLog(std::string& sMessageOut) {
+    if (PREFSMAN == nullptr) {
+      WarnDebugOverlay("ignored global offset profile switch without PREFSMAN.");
+      return;
+    }
+
+    const int count = PREFSMAN->GetGlobalOffsetProfileCount();
+    if (count <= 0) {
+      WarnDebugOverlay("ignored global offset profile switch with no profiles.");
+      return;
+    }
+
+    const int current = PREFSMAN->GetGlobalOffsetProfileSelected();
+    const int next = (current + 1) % count;
+    PREFSMAN->SetGlobalOffsetProfileSelected(next);
+    PREFSMAN->SavePrefsToDisk();
+
+    sMessageOut = GetCurrentOffsetDisplayText();
+    if (SCREENMAN != nullptr) {
+      SCREENMAN->SystemMessage(sMessageOut);
+    }
+  }
+
+  std::string GetCurrentOffsetDisplayText() const {
+    if (PREFSMAN == nullptr) {
+      return CURRENT_OFFSET.GetValue();
+    }
+
+    const int selected = PREFSMAN->GetGlobalOffsetProfileSelected();
+    const std::string name = PREFSMAN->GetGlobalOffsetProfileName(selected);
+    const int milliseconds = static_cast<int>(
+        std::round(PREFSMAN->GetGlobalOffsetProfileSeconds(selected) * 1000.0f));
+
+    return ssprintf(
+        "%s \"%s\" : %+dms", CURRENT_OFFSET.GetValue().c_str(), name.c_str(),
+        milliseconds);
+  }
+};
+
 class DebugLineReloadCurrentScreen : public IDebugLine {
   virtual std::string GetDisplayTitle() { return RELOAD.GetValue(); }
   virtual std::string GetDisplayValue() {
@@ -1882,6 +1929,7 @@ DECLARE_ONE(FakeDebugLine2);  // force crash
 DECLARE_ONE(DebugLineUptime);
 DECLARE_ONE(DebugLineResetKeyMapping);
 DECLARE_ONE(DebugLineMuteActions);
+DECLARE_ONE(DebugLineGlobalOffsetProfile);
 
 /*
  * (c) 2001-2005 Chris Danford, Glenn Maynard

@@ -548,6 +548,8 @@ Player::Player(NoteData& nd, bool bVisibleParts) : m_NoteData(nd) {
 
   m_bPaused = false;
   m_bDelay = false;
+  m_bLoggedRoutineMiniZoom = false;
+  m_bLoggedMiniDrawZoom = false;
 
   m_pAttackDisplay = nullptr;
   m_pActorWithJudgmentPosition = nullptr;
@@ -1324,7 +1326,7 @@ void Player::Update(float fDeltaTime) {
       }
     }
 
-    float fMiniPercent = SanitizePlayerPercent(
+    float fMiniPercent = SanitizePlayerFinite(
         m_pPlayerState->m_PlayerOptions.GetCurrent()
             .m_fEffects[PlayerOptions::EFFECT_MINI],
         0.0f, "Player::Update mini");
@@ -1398,8 +1400,19 @@ void Player::Update(float fDeltaTime) {
           fPercentCentered);
     }
 
-    float field_zoom = SanitizePlayerNonNegative(
-        1 - fMiniPercent * 0.5f, 1.0f, "Player::Update field zoom");
+    float field_zoom = 1 - fMiniPercent * 0.5f;
+    if (!m_bLoggedRoutineMiniZoom && style != nullptr &&
+        (style->m_StyleType == StyleType_TwoPlayersSharedSides ||
+         std::abs(fMiniPercent) > 0.0001f)) {
+      LOG->Trace(
+          "MINI_UI Player mini zoom player=%i style_type=%i mini=%f "
+          "field_zoom=%f oitg_zoom_mode=%i has_notefield=%i",
+          static_cast<int>(m_pPlayerState->m_PlayerNumber),
+          static_cast<int>(style->m_StyleType), fMiniPercent, field_zoom,
+          m_oitg_zoom_mode ? 1 : 0,
+          m_pNoteField != nullptr ? 1 : 0);
+      m_bLoggedRoutineMiniZoom = true;
+    }
     if (m_pNoteField) {
       if (m_oitg_zoom_mode) {
         m_pNoteField->SetZoomX(field_zoom);
@@ -2210,7 +2223,7 @@ void Player::DrawPrimitives() {
       curr_options.m_fPerspectiveTilt, 0.0f, "Player::DrawPrimitives tilt");
   float skew = SanitizePlayerFinite(
       curr_options.m_fSkew, 0.0f, "Player::DrawPrimitives skew");
-  float mini = SanitizePlayerPercent(
+  float mini = SanitizePlayerFinite(
       curr_options.m_fEffects[PlayerOptions::EFFECT_MINI], 0.0f,
       "Player::DrawPrimitives mini");
   float center_y = SanitizePlayerFinite(
@@ -2379,7 +2392,7 @@ Player::PlayerNoteFieldPositioner::PlayerNoteFieldPositioner(
   }
   tilt = SanitizePlayerFinite(tilt, 0.0f, "PlayerNoteFieldPositioner tilt");
   skew = SanitizePlayerFinite(skew, 0.0f, "PlayerNoteFieldPositioner skew");
-  mini = SanitizePlayerPercent(mini, 0.0f, "PlayerNoteFieldPositioner mini");
+  mini = SanitizePlayerFinite(mini, 0.0f, "PlayerNoteFieldPositioner mini");
   center_y = SanitizePlayerFinite(
       center_y, SCREEN_CENTER_Y, "PlayerNoteFieldPositioner center_y");
   player->PushPlayerMatrix(x, skew, center_y);
@@ -2404,6 +2417,17 @@ Player::PlayerNoteFieldPositioner::PlayerNoteFieldPositioner(
     player->m_pNoteField->SetZoomY(zoom);
   } else {
     player->m_pNoteField->SetZoom(zoom);
+  }
+  if (!player->m_bLoggedMiniDrawZoom && std::abs(mini) > 0.0001f) {
+    LOG->Trace(
+        "MINI_UI Player draw zoom player=%i mini=%f computed_zoom=%f "
+        "notefield_zoom=%f notefield_zoom_x=%f notefield_zoom_y=%f "
+        "player_zoom=%f oitg_zoom_mode=%i tilt=%f y_offset=%f original_y=%f",
+        static_cast<int>(player->m_pPlayerState->m_PlayerNumber), mini, zoom,
+        player->m_pNoteField->GetZoom(), player->m_pNoteField->GetZoomX(),
+        player->m_pNoteField->GetZoomY(), player->GetZoom(),
+        player->m_oitg_zoom_mode ? 1 : 0, tilt, y_offset, original_y);
+    player->m_bLoggedMiniDrawZoom = true;
   }
   player->m_pNoteField->SetRotationX(tilt_degrees);
 }

@@ -643,7 +643,7 @@ void PlayerOptions::GetMods(
   AddPart(AddTo, m_fNoAttack, "NoAttacks");
   AddPart(AddTo, m_fPlayerAutoPlay, "PlayerAutoPlay");
 
-  AddPart(AddTo, m_fPassmark, "Passmark");
+  AddPart(AddTo, std::isfinite(m_fPassmark) ? m_fPassmark : 0.0f, "Passmark");
 
   AddPart(AddTo, m_fRandomSpeed, "RandomSpeed");
 

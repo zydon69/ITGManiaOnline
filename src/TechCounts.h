@@ -7,6 +7,8 @@
 #include "EnumHelper.h"
 #include "StepParityDatastructs.h"
 
+struct NoteAnnotation;
+
 /** @brief Unknown radar values are given a default value. */
 #define TECHCOUNTS_VAL_UNKNOWN -1
 
@@ -75,6 +77,10 @@ struct TechCounts {
   static void CalculateTechCountsFromRows(
       const std::vector<StepParity::Row>& rows,
       const StepParity::StageLayout* layout, TechCounts& out);
+  static void CalculateTechCountsFromRows(
+      const std::vector<StepParity::Row>& rows,
+      const StepParity::StageLayout* layout, TechCounts& out,
+      std::vector<NoteAnnotation>& annotationsOut);
 
  private:
   static bool isFootswitch(

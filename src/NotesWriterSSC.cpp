@@ -13,6 +13,7 @@
 #include "EnumHelper.h"
 #include "GameConstantsAndTypes.h"
 #include "LocalizedString.h"
+#include "NoteAnnotation.h"
 #include "NoteTypes.h"
 #include "PlayerNumber.h"
 #include "Profile.h"
@@ -955,6 +956,16 @@ static std::string GetSSCNoteData(
     const std::vector<float>& peakNps = in.GetAllPeakNps();
     lines.push_back("#PEAKNPS:" + serialize(peakNps, "|", 3) + ";");
 
+    const std::vector<NoteAnnotationCache>& noteAnnotations =
+        in.GetNoteAnnotationCaches();
+    std::vector<std::string> serializedAnnotations;
+    serializedAnnotations.reserve(noteAnnotations.size());
+    for (const NoteAnnotationCache& annotationCache : noteAnnotations) {
+      serializedAnnotations.push_back(annotationCache.GetCompressed());
+    }
+    lines.push_back(ssprintf(
+        "#NOTEANNOTATIONS:%s;", join("|", serializedAnnotations).c_str()));
+
     std::string GrooveStatsHash = in.GetGrooveStatsHash();
     lines.push_back(ssprintf("#GROOVESTATSHASH:%s;", GrooveStatsHash.c_str()));
 
@@ -1027,8 +1038,9 @@ bool NotesWriterSSC::Write(
 
   if (bSavingCache) {
     writer.PutLine(ssprintf("// cache tags:"));
-    writer.PutLine(ssprintf("#FIRSTSECOND:%.6f;", out.GetFirstSecond()));
-    writer.PutLine(ssprintf("#LASTSECOND:%.6f;", out.GetLastSecond()));
+    writer.PutLine(
+        ssprintf("#FIRSTSECOND:%.6f;", out.GetFirstSecondNoOffset()));
+    writer.PutLine(ssprintf("#LASTSECOND:%.6f;", out.GetLastSecondNoOffset()));
     writer.PutLine(
         ssprintf("#SONGFILENAME:%s;", SmEscape(out.m_sSongFileName).c_str()));
     writer.PutLine(ssprintf("#HASMUSIC:%i;", out.m_bHasMusic));

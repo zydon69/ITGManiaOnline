@@ -1,6 +1,7 @@
 #include "HighScore.h"
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cmath>
 #include <cstddef>
@@ -57,6 +58,10 @@ bool IsValidTapNoteScoreValue(TapNoteScore tns) {
 
 bool IsValidHoldNoteScoreValue(HoldNoteScore hns) {
   return hns >= HNS_None && hns < NUM_HoldNoteScore;
+}
+
+bool IsValidRoutinePlayer(PlayerNumber pn) {
+  return pn >= PLAYER_1 && pn < NUM_PLAYERS;
 }
 
 Grade SanitizeGrade(Grade grade) {
@@ -267,6 +272,14 @@ struct HighScoreImpl {
   RadarValues radarValues;
   float fLifeRemainingSeconds;
   bool bDisqualified;
+  bool bIsRoutine;
+  std::vector<Grade> playerGrades;
+  std::vector<unsigned int> playerScores;
+  std::vector<float> playerPercentDPs;
+  std::vector<unsigned int> playerMaxCombos;
+  std::vector<std::string> playerGuids;
+  std::vector<std::array<int, NUM_TapNoteScore>> playerTapNoteScores;
+  std::vector<std::array<int, NUM_HoldNoteScore>> playerHoldNoteScores;
 
   HighScoreImpl();
   XNode* CreateNode() const;
@@ -341,6 +354,28 @@ bool HighScoreImpl::operator==(const HighScoreImpl& other) const {
   if (bDisqualified != other.bDisqualified) {
     return false;
   }
+  if (bIsRoutine != other.bIsRoutine) {
+    return false;
+  }
+  if (playerGrades != other.playerGrades ||
+      playerScores != other.playerScores ||
+      playerGuids != other.playerGuids ||
+      playerMaxCombos != other.playerMaxCombos ||
+      playerTapNoteScores != other.playerTapNoteScores ||
+      playerHoldNoteScores != other.playerHoldNoteScores) {
+    return false;
+  }
+  for (size_t i = 0; i < playerPercentDPs.size(); ++i) {
+    if (i >= other.playerPercentDPs.size() ||
+        !NearlyEqualHighScoreFloat(
+            playerPercentDPs[i], other.playerPercentDPs[i],
+            "Routine PercentDP")) {
+      return false;
+    }
+  }
+  if (playerPercentDPs.size() != other.playerPercentDPs.size()) {
+    return false;
+  }
   return true;
 }
 
@@ -363,6 +398,20 @@ HighScoreImpl::HighScoreImpl() {
   radarValues.MakeUnknown();
   fLifeRemainingSeconds = 0;
   bDisqualified = false;
+  bIsRoutine = false;
+  playerGrades.assign(NUM_PLAYERS, Grade_NoData);
+  playerScores.assign(NUM_PLAYERS, 0);
+  playerPercentDPs.assign(NUM_PLAYERS, 0.0f);
+  playerMaxCombos.assign(NUM_PLAYERS, 0);
+  playerGuids.assign(NUM_PLAYERS, "");
+  playerTapNoteScores.assign(NUM_PLAYERS, {});
+  playerHoldNoteScores.assign(NUM_PLAYERS, {});
+  for (auto& scores : playerTapNoteScores) {
+    scores.fill(0);
+  }
+  for (auto& scores : playerHoldNoteScores) {
+    scores.fill(0);
+  }
 }
 
 XNode* HighScoreImpl::CreateNode() const {
@@ -409,6 +458,43 @@ XNode* HighScoreImpl::CreateNode() const {
       SanitizeFiniteNonNegativeFloat(
           fLifeRemainingSeconds, "LifeRemainingSeconds"));
   pNode->AppendChild("Disqualified", bDisqualified);
+  if (bIsRoutine) {
+    XNode* pRoutineNode = pNode->AppendChild("RoutineData");
+    FOREACH_PlayerNumber(pn) {
+      const size_t index = static_cast<size_t>(pn);
+      XNode* pPlayerNode = pRoutineNode->AppendChild(PlayerNumberToString(pn));
+      pPlayerNode->AppendChild(
+          "Grade", GradeToString(SanitizeGrade(playerGrades[index])));
+      pPlayerNode->AppendChild("Score", playerScores[index]);
+      pPlayerNode->AppendChild(
+          "PercentDP", SanitizePercentDP(playerPercentDPs[index]));
+      pPlayerNode->AppendChild("MaxCombo", playerMaxCombos[index]);
+      pPlayerNode->AppendChild("PlayerGuid", playerGuids[index]);
+
+      XNode* pRoutineTapNoteScores = pPlayerNode->AppendChild("TapNoteScores");
+      FOREACH_ENUM(TapNoteScore, tns) {
+        if (tns != TNS_None) {
+          pRoutineTapNoteScores->AppendChild(
+              TapNoteScoreToString(tns),
+              SanitizeNonNegativeInt(
+                  playerTapNoteScores[index][tns],
+                  "routine tap note score"));
+        }
+      }
+
+      XNode* pRoutineHoldNoteScores =
+          pPlayerNode->AppendChild("HoldNoteScores");
+      FOREACH_ENUM(HoldNoteScore, hns) {
+        if (hns != HNS_None) {
+          pRoutineHoldNoteScores->AppendChild(
+              HoldNoteScoreToString(hns),
+              SanitizeNonNegativeInt(
+                  playerHoldNoteScores[index][hns],
+                  "routine hold note score"));
+        }
+      }
+    }
+  }
 
   return pNode;
 }
@@ -473,6 +559,67 @@ void HighScoreImpl::LoadFromNode(const XNode* pNode) {
   fLifeRemainingSeconds = SanitizeFiniteNonNegativeFloat(
       fLifeRemainingSeconds, "LifeRemainingSeconds");
   pNode->GetChildValue("Disqualified", bDisqualified);
+  const XNode* pRoutineNode = pNode->GetChild("RoutineData");
+  if (pRoutineNode != nullptr) {
+    bIsRoutine = true;
+    FOREACH_PlayerNumber(pn) {
+      const XNode* pPlayerNode =
+          pRoutineNode->GetChild(PlayerNumberToString(pn));
+      if (pPlayerNode == nullptr) {
+        continue;
+      }
+      std::string routineGrade;
+      if (pPlayerNode->GetChildValue("Grade", routineGrade) &&
+          !routineGrade.empty()) {
+        playerGrades[pn] = SanitizeGrade(StringToGrade(routineGrade));
+      }
+      if (pPlayerNode->GetChildValue("Score", playerScores[pn])) {
+        playerScores[pn] = static_cast<unsigned int>(
+            SanitizeNonNegativeInt(
+                static_cast<int>(std::min<unsigned int>(
+                    playerScores[pn],
+                    static_cast<unsigned int>(std::numeric_limits<int>::max()))),
+                "routine player score"));
+      }
+      if (pPlayerNode->GetChildValue("PercentDP", playerPercentDPs[pn])) {
+        playerPercentDPs[pn] = SanitizePercentDP(playerPercentDPs[pn]);
+      }
+      if (pPlayerNode->GetChildValue("MaxCombo", playerMaxCombos[pn])) {
+        playerMaxCombos[pn] = static_cast<unsigned int>(
+            SanitizeNonNegativeInt(
+                static_cast<int>(std::min<unsigned int>(
+                    playerMaxCombos[pn],
+                    static_cast<unsigned int>(std::numeric_limits<int>::max()))),
+                "routine player max combo"));
+      }
+      pPlayerNode->GetChildValue("PlayerGuid", playerGuids[pn]);
+
+      const XNode* pRoutineTapNoteScores =
+          pPlayerNode->GetChild("TapNoteScores");
+      if (pRoutineTapNoteScores != nullptr) {
+        FOREACH_ENUM(TapNoteScore, tns) {
+          if (pRoutineTapNoteScores->GetChildValue(
+                  TapNoteScoreToString(tns), playerTapNoteScores[pn][tns])) {
+            playerTapNoteScores[pn][tns] = SanitizeNonNegativeInt(
+                playerTapNoteScores[pn][tns], "routine tap note score");
+          }
+        }
+      }
+
+      const XNode* pRoutineHoldNoteScores =
+          pPlayerNode->GetChild("HoldNoteScores");
+      if (pRoutineHoldNoteScores != nullptr) {
+        FOREACH_ENUM(HoldNoteScore, hns) {
+          if (pRoutineHoldNoteScores->GetChildValue(
+                  HoldNoteScoreToString(hns),
+                  playerHoldNoteScores[pn][hns])) {
+            playerHoldNoteScores[pn][hns] = SanitizeNonNegativeInt(
+                playerHoldNoteScores[pn][hns], "routine hold note score");
+          }
+        }
+      }
+    }
+  }
 }
 
 REGISTER_CLASS_TRAITS(HighScoreImpl, new HighScoreImpl(*pCopy))
@@ -547,6 +694,67 @@ float HighScore::GetLifeRemainingSeconds() const {
       m_Impl->fLifeRemainingSeconds, "LifeRemainingSeconds");
 }
 bool HighScore::GetDisqualified() const { return m_Impl->bDisqualified; }
+bool HighScore::IsRoutine() const { return m_Impl->bIsRoutine; }
+
+Grade HighScore::GetPlayerGrade(PlayerNumber pn) const {
+  if (!IsValidRoutinePlayer(pn)) {
+    WarnHighScore("HighScore rejected invalid routine player grade getter.");
+    return Grade_NoData;
+  }
+  return SanitizeGrade(m_Impl->playerGrades[pn]);
+}
+
+unsigned int HighScore::GetPlayerScore(PlayerNumber pn) const {
+  if (!IsValidRoutinePlayer(pn)) {
+    WarnHighScore("HighScore rejected invalid routine player score getter.");
+    return 0;
+  }
+  return m_Impl->playerScores[pn];
+}
+
+float HighScore::GetPlayerPercentDP(PlayerNumber pn) const {
+  if (!IsValidRoutinePlayer(pn)) {
+    WarnHighScore("HighScore rejected invalid routine player percent getter.");
+    return 0.0f;
+  }
+  return SanitizePercentDP(m_Impl->playerPercentDPs[pn]);
+}
+
+unsigned int HighScore::GetPlayerMaxCombo(PlayerNumber pn) const {
+  if (!IsValidRoutinePlayer(pn)) {
+    WarnHighScore("HighScore rejected invalid routine player combo getter.");
+    return 0;
+  }
+  return m_Impl->playerMaxCombos[pn];
+}
+
+std::string HighScore::GetPlayerGuid(PlayerNumber pn) const {
+  if (!IsValidRoutinePlayer(pn)) {
+    WarnHighScore("HighScore rejected invalid routine player guid getter.");
+    return "";
+  }
+  return m_Impl->playerGuids[pn];
+}
+
+int HighScore::GetPlayerTapNoteScore(
+    PlayerNumber pn, TapNoteScore tns) const {
+  if (!IsValidRoutinePlayer(pn) || !IsValidTapNoteScoreValue(tns)) {
+    WarnHighScore(
+        "HighScore rejected invalid routine player tap score getter.");
+    return 0;
+  }
+  return m_Impl->playerTapNoteScores[pn][tns];
+}
+
+int HighScore::GetPlayerHoldNoteScore(
+    PlayerNumber pn, HoldNoteScore hns) const {
+  if (!IsValidRoutinePlayer(pn) || !IsValidHoldNoteScoreValue(hns)) {
+    WarnHighScore(
+        "HighScore rejected invalid routine player hold score getter.");
+    return 0;
+  }
+  return m_Impl->playerHoldNoteScores[pn][hns];
+}
 
 void HighScore::SetName(const std::string& sName) { m_Impl->sName = sName; }
 void HighScore::SetGrade(Grade g) { m_Impl->grade = SanitizeGrade(g); }
@@ -592,6 +800,69 @@ void HighScore::SetLifeRemainingSeconds(float f) {
       SanitizeFiniteNonNegativeFloat(f, "LifeRemainingSeconds");
 }
 void HighScore::SetDisqualified(bool b) { m_Impl->bDisqualified = b; }
+void HighScore::SetRoutine(bool b) { m_Impl->bIsRoutine = b; }
+
+void HighScore::SetPlayerGrade(PlayerNumber pn, Grade g) {
+  if (!IsValidRoutinePlayer(pn)) {
+    WarnHighScore("HighScore rejected invalid routine player grade setter.");
+    return;
+  }
+  m_Impl->playerGrades[pn] = SanitizeGrade(g);
+}
+
+void HighScore::SetPlayerScore(PlayerNumber pn, unsigned int iScore) {
+  if (!IsValidRoutinePlayer(pn)) {
+    WarnHighScore("HighScore rejected invalid routine player score setter.");
+    return;
+  }
+  m_Impl->playerScores[pn] = iScore;
+}
+
+void HighScore::SetPlayerPercentDP(PlayerNumber pn, float f) {
+  if (!IsValidRoutinePlayer(pn)) {
+    WarnHighScore("HighScore rejected invalid routine player percent setter.");
+    return;
+  }
+  m_Impl->playerPercentDPs[pn] = SanitizePercentDP(f);
+}
+
+void HighScore::SetPlayerMaxCombo(PlayerNumber pn, unsigned int i) {
+  if (!IsValidRoutinePlayer(pn)) {
+    WarnHighScore("HighScore rejected invalid routine player combo setter.");
+    return;
+  }
+  m_Impl->playerMaxCombos[pn] = i;
+}
+
+void HighScore::SetPlayerGuid(PlayerNumber pn, const std::string& guid) {
+  if (!IsValidRoutinePlayer(pn)) {
+    WarnHighScore("HighScore rejected invalid routine player guid setter.");
+    return;
+  }
+  m_Impl->playerGuids[pn] = guid;
+}
+
+void HighScore::SetPlayerTapNoteScore(
+    PlayerNumber pn, TapNoteScore tns, int i) {
+  if (!IsValidRoutinePlayer(pn) || !IsValidTapNoteScoreValue(tns)) {
+    WarnHighScore(
+        "HighScore rejected invalid routine player tap score setter.");
+    return;
+  }
+  m_Impl->playerTapNoteScores[pn][tns] =
+      SanitizeNonNegativeInt(i, "routine tap note score");
+}
+
+void HighScore::SetPlayerHoldNoteScore(
+    PlayerNumber pn, HoldNoteScore hns, int i) {
+  if (!IsValidRoutinePlayer(pn) || !IsValidHoldNoteScoreValue(hns)) {
+    WarnHighScore(
+        "HighScore rejected invalid routine player hold score setter.");
+    return;
+  }
+  m_Impl->playerHoldNoteScores[pn][hns] =
+      SanitizeNonNegativeInt(i, "routine hold note score");
+}
 
 /* We normally don't give direct access to the members.  We need this one
  * for NameToFillIn; use a special accessor so it's easy to find where this
@@ -898,6 +1169,40 @@ class LunaHighScore : public Luna<HighScore> {
     p->GetRadarValues().PushSelf(L);
     return 1;
   }
+  static int IsRoutine(T* p, lua_State* L) {
+    lua_pushboolean(L, p->IsRoutine());
+    return 1;
+  }
+  static int GetPlayerGuid(T* p, lua_State* L) {
+    PlayerNumber pn = Enum::Check<PlayerNumber>(L, 1, true);
+    lua_pushstring(
+        L, pn != PLAYER_INVALID ? p->GetPlayerGuid(pn).c_str() : "");
+    return 1;
+  }
+  static int GetPlayerScore(T* p, lua_State* L) {
+    PlayerNumber pn = Enum::Check<PlayerNumber>(L, 1, true);
+    lua_pushnumber(L, pn != PLAYER_INVALID ? p->GetPlayerScore(pn) : 0);
+    return 1;
+  }
+  static int GetPlayerPercentDP(T* p, lua_State* L) {
+    PlayerNumber pn = Enum::Check<PlayerNumber>(L, 1, true);
+    lua_pushnumber(L, pn != PLAYER_INVALID ? p->GetPlayerPercentDP(pn) : 0);
+    return 1;
+  }
+  static int GetPlayerTapNoteScore(T* p, lua_State* L) {
+    PlayerNumber pn = Enum::Check<PlayerNumber>(L, 1, true);
+    TapNoteScore tns = Enum::Check<TapNoteScore>(L, 2, true, true);
+    lua_pushnumber(
+        L, pn != PLAYER_INVALID ? p->GetPlayerTapNoteScore(pn, tns) : 0);
+    return 1;
+  }
+  static int GetPlayerHoldNoteScore(T* p, lua_State* L) {
+    PlayerNumber pn = Enum::Check<PlayerNumber>(L, 1, true);
+    HoldNoteScore hns = Enum::Check<HoldNoteScore>(L, 2, true, true);
+    lua_pushnumber(
+        L, pn != PLAYER_INVALID ? p->GetPlayerHoldNoteScore(pn, hns) : 0);
+    return 1;
+  }
   DEFINE_METHOD(GetGrade, GetGrade())
   DEFINE_METHOD(GetStageAward, GetStageAward())
   DEFINE_METHOD(GetPeakComboAward, GetPeakComboAward())
@@ -913,6 +1218,12 @@ class LunaHighScore : public Luna<HighScore> {
     ADD_METHOD(GetTapNoteScore);
     ADD_METHOD(GetHoldNoteScore);
     ADD_METHOD(GetRadarValues);
+    ADD_METHOD(IsRoutine);
+    ADD_METHOD(GetPlayerGuid);
+    ADD_METHOD(GetPlayerScore);
+    ADD_METHOD(GetPlayerPercentDP);
+    ADD_METHOD(GetPlayerTapNoteScore);
+    ADD_METHOD(GetPlayerHoldNoteScore);
     ADD_METHOD(GetGrade);
     ADD_METHOD(GetMaxCombo);
     ADD_METHOD(GetStageAward);

@@ -1,5 +1,7 @@
 #include "MeterDisplay.h"
 
+#include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <string>
 
@@ -7,9 +9,14 @@
 #include "ActorUtil.h"
 #include "GameState.h"
 #include "LuaManager.h"
+#include "NoteData.h"
+#include "Player.h"
+#include "PlayerNumber.h"
 #include "RageLog.h"
 #include "RageUtil.h"
 #include "Song.h"
+#include "Steps.h"
+#include "TimingData.h"
 #include "XmlFile.h"
 #include "global.h"
 
@@ -21,6 +28,56 @@ void WarnMeterDisplayAuditFix(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
+}
+
+bool GetCurrentStepsTimingRange(float& fFirstSecond, float& fLastSecond) {
+  fFirstSecond = FLT_MAX;
+  fLastSecond = 0.0f;
+
+  if (GAMESTATE == nullptr) {
+    return false;
+  }
+
+  bool foundPlayableChart = false;
+  FOREACH_EnabledPlayer(pn) {
+    if (GAMESTATE->m_pCurSteps[pn] == nullptr) {
+      continue;
+    }
+
+    const TimingData* timing = GAMESTATE->m_pCurSteps[pn]->GetTimingData();
+    if (timing == nullptr) {
+      continue;
+    }
+
+    NoteData noteData;
+    GAMESTATE->m_pCurSteps[pn]->GetNoteData(noteData);
+    if (noteData.IsEmpty()) {
+      continue;
+    }
+
+    const float firstSecond =
+        timing->GetElapsedTimeFromBeat(noteData.GetFirstBeat());
+    const float lastSecond =
+        timing->GetElapsedTimeFromBeat(noteData.GetLastBeat());
+    if (!std::isfinite(firstSecond) || !std::isfinite(lastSecond)) {
+      continue;
+    }
+
+    fFirstSecond = std::min(fFirstSecond, firstSecond);
+    fLastSecond = std::max(fLastSecond, lastSecond);
+    foundPlayableChart = true;
+  }
+
+  if (!foundPlayableChart || !std::isfinite(fFirstSecond) ||
+      !std::isfinite(fLastSecond) || fLastSecond < fFirstSecond) {
+    fFirstSecond = 0.0f;
+    fLastSecond = 0.0f;
+    return false;
+  }
+
+  fFirstSecond = std::max(0.0f, fFirstSecond);
+  fLastSecond = std::max(fFirstSecond, fLastSecond);
+  return true;
 }
 }  // namespace
 
@@ -147,8 +204,26 @@ void MeterDisplay::SetStreamWidth(float fStreamWidth) {
 
 void SongMeterDisplay::Update(float fDeltaTime) {
   if (GAMESTATE != nullptr && GAMESTATE->m_pCurSong) {
-    float fSongStartSeconds = GAMESTATE->m_pCurSong->GetFirstSecond();
-    float fSongEndSeconds = GAMESTATE->m_pCurSong->GetLastSecond();
+    float fSongStartSeconds = 0.0f;
+    const float fLastChartSecond = GAMESTATE->m_pCurSong->GetLastSecond();
+    const float fMusicLengthSeconds = GAMESTATE->m_pCurSong->m_fMusicLengthSeconds;
+    float fCurrentStepsFirstSecond = 0.0f;
+    float fCurrentStepsLastSecond = 0.0f;
+    const bool hasCurrentStepsTiming = GetCurrentStepsTimingRange(
+        fCurrentStepsFirstSecond, fCurrentStepsLastSecond);
+    float fSongEndSeconds = hasCurrentStepsTiming
+                                ? fCurrentStepsLastSecond +
+                                      Player::GetMaxStepDistanceSeconds()
+                                : fMusicLengthSeconds;
+    if (hasCurrentStepsTiming) {
+      fSongStartSeconds = fCurrentStepsFirstSecond;
+    }
+    if (!std::isfinite(fSongEndSeconds) || fSongEndSeconds <= fSongStartSeconds) {
+      fSongEndSeconds = fLastChartSecond;
+    } else if (!hasCurrentStepsTiming && std::isfinite(fLastChartSecond) &&
+               fLastChartSecond > fSongEndSeconds) {
+      fSongEndSeconds = fLastChartSecond;
+    }
     float fPercentPositionSong = 0.0f;
     if (std::isfinite(fSongStartSeconds) && std::isfinite(fSongEndSeconds) &&
         fSongEndSeconds > fSongStartSeconds &&

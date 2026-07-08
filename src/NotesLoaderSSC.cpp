@@ -14,6 +14,7 @@
 #include "GameConstantsAndTypes.h"
 #include "GameManager.h"
 #include "MsdFile.h"  // No JSON here.
+#include "NoteAnnotation.h"
 #include "NoteTypes.h"
 #include "NotesLoaderSM.h"  // For programming shortcuts.
 #include "PerfDiagnostics.h"
@@ -261,12 +262,12 @@ void SetSongFakes(SongTagInfo& info) {
 }
 void SetFirstSecond(SongTagInfo& info) {
   if (info.from_cache) {
-    info.song->SetFirstSecond(StringToFloat((*info.params)[1]));
+    info.song->SetFirstSecondNoOffset(StringToFloat((*info.params)[1]));
   }
 }
 void SetLastSecond(SongTagInfo& info) {
   if (info.from_cache) {
-    info.song->SetLastSecond(StringToFloat((*info.params)[1]));
+    info.song->SetLastSecondNoOffset(StringToFloat((*info.params)[1]));
   }
 }
 void SetSongFilename(SongTagInfo& info) {
@@ -385,6 +386,32 @@ void SetTechCounts(StepsTagInfo& info) {
   } else {
     // just recalc at time.
   }
+}
+
+void SetNoteAnnotations(StepsTagInfo& info) {
+  info.ssc_format = true;
+  if (!info.from_cache && !info.for_load_edit) {
+    return;
+  }
+
+  std::vector<std::string> valuesPerPlayer;
+  split((*info.params)[1], "|", valuesPerPlayer, true);
+  if (valuesPerPlayer.size() > NUM_PlayerNumber) {
+    LOG->Warn(
+        "Ignoring extra #NOTEANNOTATIONS sections in '%s': got %zu, max %d",
+        info.path.c_str(), valuesPerPlayer.size(), NUM_PlayerNumber);
+  }
+
+  std::vector<NoteAnnotationCache> annotationsPerPlayer;
+  const std::size_t sectionsToRead =
+      std::min(valuesPerPlayer.size(), static_cast<std::size_t>(NUM_PLAYERS));
+  annotationsPerPlayer.reserve(sectionsToRead);
+  for (std::size_t pn = 0; pn < sectionsToRead; ++pn) {
+    NoteAnnotationCache annotationCache;
+    annotationCache.compressed = valuesPerPlayer[pn];
+    annotationsPerPlayer.push_back(annotationCache);
+  }
+  info.steps->SetNoteAnnotations(annotationsPerPlayer);
 }
 
 void SetNpsPerMeasure(StepsTagInfo& info) {
@@ -700,6 +727,7 @@ struct ssc_parser_helper_t {
     steps_tag_handlers["FAKES"] = &SetStepsFakes;
     steps_tag_handlers["LABELS"] = &SetStepsLabels;
     steps_tag_handlers["TECHCOUNTS"] = &SetTechCounts;
+    steps_tag_handlers["NOTEANNOTATIONS"] = &SetNoteAnnotations;
     steps_tag_handlers["NPSPERMEASURE"] = &SetNpsPerMeasure;
     steps_tag_handlers["NOTESPERMEASURE"] = &SetNotesPerMeasure;
     steps_tag_handlers["PEAKNPS"] = &SetPeakNps;

@@ -2401,8 +2401,12 @@ void MusicWheel::SetOpenSections(
   TraceMusicWheelReintro(
       "SetOpenSections",
       ssprintf(
-          "parent='%s' section='%s'",
-          parentSection.c_str(), section.c_str()));
+          "parent='%s' section='%s' hideInactiveSections=%d "
+          "hideInactiveParentSections=%d sort='%s'",
+          parentSection.c_str(), section.c_str(),
+          HIDE_INACTIVE_SECTIONS ? 1 : 0,
+          HIDE_INACTIVE_PARENT_SECTIONS ? 1 : 0,
+          SortOrderToString(GetCurrentSortOrderOrDefault()).c_str()));
 
   // wheel positions = num song groups
   if (REMIND_WHEEL_POSITIONS && HIDE_INACTIVE_SECTIONS && SONGMAN != nullptr) {
@@ -2429,6 +2433,7 @@ void MusicWheel::SetOpenSections(
 
   const bool parentSectionOnlyView =
       GetCurrentSortOrderOrDefault() == SORT_SERIES &&
+      HIDE_INACTIVE_PARENT_SECTIONS &&
       !m_sExpandedParentSectionName.empty() && m_sExpandedSectionName.empty();
 
   for (unsigned i = 0; i < from.size(); ++i) {

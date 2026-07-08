@@ -22,6 +22,7 @@
 #include "EnumHelper.h"
 #include "GameConstantsAndTypes.h"
 #include "GameManager.h"
+#include "GameState.h"
 #include "Group.h"
 #include "ImageCache.h"
 #include "LuaManager.h"
@@ -66,7 +67,7 @@
  * @brief The internal version of the cache for StepMania.
  *
  * Increment this value to invalidate the current cache. */
-const int FILE_CACHE_VERSION = 232;
+const int FILE_CACHE_VERSION = 233;
 
 /** @brief How long does a song sample last by default? */
 const float DEFAULT_MUSIC_SAMPLE_LENGTH = 12.f;
@@ -74,6 +75,26 @@ const float DEFAULT_MUSIC_SAMPLE_LENGTH = 12.f;
 static Preference<float> g_fLongVerSongSeconds("LongVerSongSeconds", 60 * 2.5f);
 static Preference<float> g_fMarathonVerSongSeconds(
     "MarathonVerSongSeconds", 60 * 5.f);
+
+static float GetRuntimeGlobalOffsetSeconds() {
+  float musicRate = 1.0f;
+  if (GAMESTATE != nullptr) {
+    musicRate = GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
+  }
+  if (!std::isfinite(musicRate) || musicRate <= 0.0f) {
+    musicRate = 1.0f;
+  }
+
+  float globalOffset = 0.0f;
+  if (PREFSMAN != nullptr) {
+    globalOffset = PREFSMAN->m_fGlobalOffsetSeconds.Get();
+  }
+  if (!std::isfinite(globalOffset)) {
+    globalOffset = 0.0f;
+  }
+
+  return musicRate * globalOffset;
+}
 static Preference<bool> g_BackUpAllSongSaves("BackUpAllSongSaves", false);
 
 namespace {
@@ -262,27 +283,40 @@ void Song::DetachSteps() {
   m_UnknownStyleSteps.clear();
 }
 
-float Song::GetFirstSecond() const { return this->firstSecond; }
+float Song::GetFirstSecondNoOffset() const { return this->firstSecond; }
 
-float Song::GetFirstBeat() const {
-  return this->m_SongTiming.GetBeatFromElapsedTime(this->firstSecond);
+float Song::GetFirstSecond() const {
+  return GetFirstSecondNoOffset() - GetRuntimeGlobalOffsetSeconds();
 }
 
-float Song::GetLastSecond() const { return this->lastSecond; }
+float Song::GetFirstBeat() const {
+  return this->m_SongTiming.GetBeatFromElapsedTimeNoOffset(this->firstSecond);
+}
+
+float Song::GetLastSecondNoOffset() const { return this->lastSecond; }
+
+float Song::GetLastSecond() const {
+  return GetLastSecondNoOffset() - GetRuntimeGlobalOffsetSeconds();
+}
 
 float Song::GetLastBeat() const {
-  return this->m_SongTiming.GetBeatFromElapsedTime(this->lastSecond);
+  return this->m_SongTiming.GetBeatFromElapsedTimeNoOffset(this->lastSecond);
 }
 
 float Song::GetSpecifiedLastSecond() const { return this->specifiedLastSecond; }
 
 float Song::GetSpecifiedLastBeat() const {
-  return this->m_SongTiming.GetBeatFromElapsedTime(this->specifiedLastSecond);
+  return this->m_SongTiming.GetBeatFromElapsedTimeNoOffset(
+      this->specifiedLastSecond);
 }
 
-void Song::SetFirstSecond(const float f) { this->firstSecond = f; }
+void Song::SetFirstSecondNoOffset(const float f) { this->firstSecond = f; }
 
-void Song::SetLastSecond(const float f) { this->lastSecond = f; }
+void Song::SetLastSecondNoOffset(const float f) { this->lastSecond = f; }
+
+void Song::SetFirstSecond(const float f) { SetFirstSecondNoOffset(f); }
+
+void Song::SetLastSecond(const float f) { SetLastSecondNoOffset(f); }
 
 void Song::SetSpecifiedLastSecond(const float f) {
   this->specifiedLastSecond = f;
@@ -1094,17 +1128,18 @@ void Song::TidyUpData(
           m_fMusicSampleStartSeconds + m_fMusicSampleLengthSeconds >
               this->m_fMusicLengthSeconds) {
         const TimingData& timing = this->m_SongTiming;
-        m_fMusicSampleStartSeconds = timing.GetElapsedTimeFromBeat(100);
+        m_fMusicSampleStartSeconds = timing.GetElapsedTimeFromBeatNoOffset(100);
 
         if (m_fMusicSampleStartSeconds + m_fMusicSampleLengthSeconds >
             this->m_fMusicLengthSeconds) {
           // Attempt to get a reasonable default.
           int iBeat = std::lrint(
-              this->m_SongTiming.GetBeatFromElapsedTime(this->GetLastSecond()) /
+              this->m_SongTiming.GetBeatFromElapsedTimeNoOffset(
+                  this->GetLastSecondNoOffset()) /
               2);
           iBeat -= iBeat % 4;
           m_fMusicSampleStartSeconds =
-              timing.GetElapsedTimeFromBeat((float)iBeat);
+              timing.GetElapsedTimeFromBeatNoOffset((float)iBeat);
         }
       }
 
@@ -1412,10 +1447,10 @@ void Song::ReCalculateStepStatsAndLastSecond(bool wipeNoteData) {
        * don't force the first beat of the whole song to 0. */
       if (tempNoteData.GetLastRow() != 0) {
         localFirst = std::min(
-            localFirst, pSteps->GetTimingData()->GetElapsedTimeFromBeat(
+            localFirst, pSteps->GetTimingData()->GetElapsedTimeFromBeatNoOffset(
                             tempNoteData.GetFirstBeat()));
         localLast = std::max(
-            localLast, pSteps->GetTimingData()->GetElapsedTimeFromBeat(
+            localLast, pSteps->GetTimingData()->GetElapsedTimeFromBeatNoOffset(
                            tempNoteData.GetLastBeat()));
       }
     }
@@ -2410,7 +2445,7 @@ bool Song::HasSignificantBpmChangesOrStops() const {
 }
 
 float Song::GetStepsSeconds() const {
-  return this->GetLastSecond() - this->GetFirstSecond();
+  return this->GetLastSecondNoOffset() - this->GetFirstSecondNoOffset();
 }
 
 bool Song::IsLong() const {

@@ -103,6 +103,11 @@ class ProfileManager {
     return const_cast<Profile*>(
         static_cast<const ProfileManager*>(this)->GetProfile(slot));
   }
+  const Profile* GetProfileByGuid(const std::string& guid) const;
+  Profile* GetProfileByGuid(const std::string& guid) {
+    return const_cast<Profile*>(
+        static_cast<const ProfileManager*>(this)->GetProfileByGuid(guid));
+  }
 
   const std::string& GetProfileDir(ProfileSlot slot) const;
   std::string GetProfileDirImportedFrom(ProfileSlot slot) const;

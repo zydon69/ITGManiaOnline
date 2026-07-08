@@ -7,6 +7,7 @@
 #include "DateTime.h"
 #include "GameConstantsAndTypes.h"
 #include "Grade.h"
+#include "PlayerNumber.h"
 #include "RageUtil_AutoPtr.h"
 #include "global.h"
 
@@ -64,6 +65,14 @@ struct HighScore {
    * disqualification.
    * @return true if the score would be disqualified, false otherwise. */
   bool GetDisqualified() const;
+  bool IsRoutine() const;
+  Grade GetPlayerGrade(PlayerNumber pn) const;
+  unsigned int GetPlayerScore(PlayerNumber pn) const;
+  float GetPlayerPercentDP(PlayerNumber pn) const;
+  unsigned int GetPlayerMaxCombo(PlayerNumber pn) const;
+  std::string GetPlayerGuid(PlayerNumber pn) const;
+  int GetPlayerTapNoteScore(PlayerNumber pn, TapNoteScore tns) const;
+  int GetPlayerHoldNoteScore(PlayerNumber pn, HoldNoteScore hns) const;
 
   /**
    * @brief Set the name of the Player that earned the score.
@@ -86,6 +95,14 @@ struct HighScore {
   void SetRadarValues(const RadarValues& rv);
   void SetLifeRemainingSeconds(float f);
   void SetDisqualified(bool b);
+  void SetRoutine(bool b);
+  void SetPlayerGrade(PlayerNumber pn, Grade g);
+  void SetPlayerScore(PlayerNumber pn, unsigned int iScore);
+  void SetPlayerPercentDP(PlayerNumber pn, float f);
+  void SetPlayerMaxCombo(PlayerNumber pn, unsigned int i);
+  void SetPlayerGuid(PlayerNumber pn, const std::string& guid);
+  void SetPlayerTapNoteScore(PlayerNumber pn, TapNoteScore tns, int i);
+  void SetPlayerHoldNoteScore(PlayerNumber pn, HoldNoteScore hns, int i);
 
   std::string* GetNameMutable();
   const std::string* GetNameMutable() const {

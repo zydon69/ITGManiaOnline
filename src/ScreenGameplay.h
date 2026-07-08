@@ -201,6 +201,8 @@ class ScreenGameplay : public ScreenWithMenuElements {
   void FailFadeRemovePlayer(PlayerInfo* pi);
   void FailFadeRemovePlayer(PlayerNumber pn);
   void BeginBackingOutFromGameplay();
+  void PropagateSharedSidesFailure(PlayerNumber failedPlayer,
+                                   const char* context);
 
   std::vector<float> m_HasteTurningPoints;  // Values at which the meaning of
                                             // GAMESTATE->m_fHasteRate changes.
@@ -248,6 +250,7 @@ class ScreenGameplay : public ScreenWithMenuElements {
   void ReloadCurrentSong();
   virtual void LoadNextSong();
   void StartPlayingSong(float fMinTimeToNotes, float fMinTimeToMusic);
+  bool GetCurrentChartTimingRange(float& fFirstSecond, float& fLastSecond);
   void GetMusicEndTiming(
       float& fSecondsToStartFadingOutMusic,
       float& fSecondsToStartTransitioningOut);
@@ -389,6 +392,7 @@ class ScreenGameplay : public ScreenWithMenuElements {
   bool m_bLoggedOnlineNotesEndedDuringHold;
   bool m_bMarkedOnlineFailedEarly;
   bool m_bLoggedOnlineLocalFailKeepAlive;
+  bool m_bLoggedGameplayChartTiming;
   bool m_bNotesEndedQueued;
   float m_fLastSeenEnemyHealth;
   int m_iLightsRowLastCrossed;

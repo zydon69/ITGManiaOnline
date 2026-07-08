@@ -54,7 +54,21 @@ local function GetThemeName()
 	-- theme is "home", but fails because there is no "home" entry in
 	-- PrefsTable.
 
-	return PREFSMAN:GetPreference("Theme")
+	local prefTheme = PREFSMAN:GetPreference("Theme")
+	local curTheme = nil
+
+	if THEME and THEME.GetCurThemeName then
+		curTheme = THEME:GetCurThemeName()
+	end
+
+	if curTheme and curTheme ~= "" and curTheme ~= FallbackTheme then
+		if prefTheme and prefTheme ~= "" and prefTheme ~= curTheme then
+			Trace(("ThemePrefs: using current theme section '%s' instead of preference section '%s'"):format(curTheme, prefTheme))
+		end
+		return curTheme
+	end
+
+	return prefTheme
 end
 
 -- Given a preference name, returns the table it's in. Checks the current
@@ -151,6 +165,9 @@ ThemePrefs =
 	Save = function()
 --		Trace( "ThemePrefs.Save" )
 		if IniFile and ThemePrefs.NeedsSaved then
+			local section = GetThemeName()
+			local visualStyle = PrefsTable and PrefsTable[section] and PrefsTable[section].VisualStyle or nil
+			Trace(("ThemePrefs.Save section=%s VisualStyle=%s"):format(tostring(section), tostring(visualStyle)))
 			IniFile.WriteFile( ThemePrefsPath, PrefsTable )
 			ThemePrefs.NeedsSaved = false
 			return
@@ -176,6 +193,9 @@ ThemePrefs =
 		--Trace( ("ThemePrefs.Set(%s, %s)"):format(name, tostring(value)) )
 		local tbl = ResolveTable(name)
 		if tbl then
+			if name == "VisualStyle" then
+				Trace(("ThemePrefs.Set VisualStyle section=%s value=%s"):format(tostring(GetThemeName()), tostring(value)))
+			end
 			ThemePrefs.NeedsSaved = true
 			tbl[name] = value
 			return

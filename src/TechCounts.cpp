@@ -1,6 +1,8 @@
 #include "TechCounts.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -8,6 +10,7 @@
 #include "GameConstantsAndTypes.h"
 #include "LuaBinding.h"
 #include "LuaManager.h"
+#include "NoteAnnotation.h"
 #include "RageLog.h"
 #include "RageUtil.h"
 #include "StepParityDatastructs.h"
@@ -115,6 +118,24 @@ static bool ValidateTechCountsInput(
   return true;
 }
 
+static void AddTechCount(
+    TechCounts& out, NoteAnnotation& annotation, TechCountsCategory category) {
+  out[category] += 1;
+  annotation.tech.push_back(category);
+}
+
+static NoteAnnotation MakeAnnotationForRow(const StepParity::Row& row) {
+  NoteAnnotation annotation;
+  annotation.beat = row.beat;
+  annotation.whereTheFeetAre.reserve(row.whereTheFeetAre.size());
+  for (int column : row.whereTheFeetAre) {
+    annotation.whereTheFeetAre.push_back(static_cast<int8_t>(std::clamp(
+        column, static_cast<int>(std::numeric_limits<int8_t>::min()),
+        static_cast<int>(std::numeric_limits<int8_t>::max()))));
+  }
+  return annotation;
+}
+
 // TechCounts methods
 TechCounts::TechCounts() { MakeUnknown(); }
 
@@ -203,13 +224,24 @@ void TechCounts::FromString(std::string sTechCounts) {
 void TechCounts::CalculateTechCountsFromRows(
     const std::vector<StepParity::Row>& rows,
     const StepParity::StageLayout* layout, TechCounts& out) {
+  std::vector<NoteAnnotation> unusedAnnotations;
+  CalculateTechCountsFromRows(rows, layout, out, unusedAnnotations);
+}
+
+void TechCounts::CalculateTechCountsFromRows(
+    const std::vector<StepParity::Row>& rows,
+    const StepParity::StageLayout* layout, TechCounts& out,
+    std::vector<NoteAnnotation>& annotationsOut) {
+  annotationsOut.clear();
   if (!ValidateTechCountsInput(rows, layout)) {
     out.MakeUnknown();
     return;
   }
+  annotationsOut.reserve(rows.size());
 
   for (size_t i = 0; i < rows.size(); ++i) {
     const StepParity::Row& currentRow = rows[i];
+    NoteAnnotation annotation = MakeAnnotationForRow(currentRow);
 
     // Jacks are same arrow same foot
     // Doublestep is same foot on successive arrows
@@ -226,18 +258,19 @@ void TechCounts::CalculateTechCountsFromRows(
               StepParity::INVALID_COLUMN &&
           currentRow.whereTheFeetAre[StepParity::LEFT_TOE] !=
               StepParity::INVALID_COLUMN) {
-        out[TechCountsCategory_Brackets] += 1;
+        AddTechCount(out, annotation, TechCountsCategory_Brackets);
       }
 
       if (currentRow.whereTheFeetAre[StepParity::RIGHT_HEEL] !=
               StepParity::INVALID_COLUMN &&
           currentRow.whereTheFeetAre[StepParity::RIGHT_TOE] !=
               StepParity::INVALID_COLUMN) {
-        out[TechCountsCategory_Brackets] += 1;
+        AddTechCount(out, annotation, TechCountsCategory_Brackets);
       }
     }
 
     if (i == 0) {
+      annotationsOut.push_back(annotation);
       continue;
     }
 
@@ -255,11 +288,11 @@ void TechCounts::CalculateTechCountsFromRows(
         if (previousRow.whereTheFeetAre[foot] ==
             currentRow.whereTheFeetAre[foot]) {
           if (elapsedTime < JACK_CUTOFF) {
-            out[TechCountsCategory_Jacks] += 1;
+            AddTechCount(out, annotation, TechCountsCategory_Jacks);
           }
         } else {
           if (elapsedTime < DOUBLESTEP_CUTOFF) {
-            out[TechCountsCategory_Doublesteps] += 1;
+            AddTechCount(out, annotation, TechCountsCategory_Doublesteps);
           }
         }
       }
@@ -268,22 +301,22 @@ void TechCounts::CalculateTechCountsFromRows(
     // Check for up footswitches
     for (int c : layout->upArrows) {
       if (isFootswitch(c, currentRow, previousRow, elapsedTime)) {
-        out[TechCountsCategory_UpFootswitches] += 1;
-        out[TechCountsCategory_Footswitches] += 1;
+        AddTechCount(out, annotation, TechCountsCategory_UpFootswitches);
+        AddTechCount(out, annotation, TechCountsCategory_Footswitches);
       }
     }
     // Check for down footswitches
     for (int c : layout->downArrows) {
       if (isFootswitch(c, currentRow, previousRow, elapsedTime)) {
-        out[TechCountsCategory_DownFootswitches] += 1;
-        out[TechCountsCategory_Footswitches] += 1;
+        AddTechCount(out, annotation, TechCountsCategory_DownFootswitches);
+        AddTechCount(out, annotation, TechCountsCategory_Footswitches);
       }
     }
 
     // Check for sideswitches
     for (int c : layout->sideArrows) {
       if (isFootswitch(c, currentRow, previousRow, elapsedTime)) {
-        out[TechCountsCategory_Sideswitches] += 1;
+        AddTechCount(out, annotation, TechCountsCategory_Sideswitches);
       }
     }
 
@@ -329,15 +362,17 @@ void TechCounts::CalculateTechCountsFromRows(
             StepParity::StagePoint previousPreviousRightPos =
                 layout->columns[previousPreviousRightHeel];
             if (previousPreviousRightPos.x > leftPos.x) {
-              out[TechCountsCategory_FullCrossovers] += 1;
+              AddTechCount(
+                  out, annotation, TechCountsCategory_FullCrossovers);
             } else {
-              out[TechCountsCategory_HalfCrossovers] += 1;
+              AddTechCount(
+                  out, annotation, TechCountsCategory_HalfCrossovers);
             }
-            out[TechCountsCategory_Crossovers] += 1;
+            AddTechCount(out, annotation, TechCountsCategory_Crossovers);
           }
         } else {
-          out[TechCountsCategory_HalfCrossovers] += 1;
-          out[TechCountsCategory_Crossovers] += 1;
+          AddTechCount(out, annotation, TechCountsCategory_HalfCrossovers);
+          AddTechCount(out, annotation, TechCountsCategory_Crossovers);
         }
       }
     }
@@ -360,18 +395,21 @@ void TechCounts::CalculateTechCountsFromRows(
             StepParity::StagePoint previousPreviousLeftPos =
                 layout->columns[previousPreviousLeftHeel];
             if (rightPos.x > previousPreviousLeftPos.x) {
-              out[TechCountsCategory_FullCrossovers] += 1;
+              AddTechCount(
+                  out, annotation, TechCountsCategory_FullCrossovers);
             } else {
-              out[TechCountsCategory_HalfCrossovers] += 1;
+              AddTechCount(
+                  out, annotation, TechCountsCategory_HalfCrossovers);
             }
-            out[TechCountsCategory_Crossovers] += 1;
+            AddTechCount(out, annotation, TechCountsCategory_Crossovers);
           }
         } else {
-          out[TechCountsCategory_HalfCrossovers] += 1;
-          out[TechCountsCategory_Crossovers] += 1;
+          AddTechCount(out, annotation, TechCountsCategory_HalfCrossovers);
+          AddTechCount(out, annotation, TechCountsCategory_Crossovers);
         }
       }
     }
+    annotationsOut.push_back(annotation);
   }
 }
 

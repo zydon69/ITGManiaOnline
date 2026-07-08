@@ -1045,12 +1045,18 @@
 			<Function name='GetName'/>
 			<Function name='GetPeakComboAward'/>
 			<Function name='GetPercentDP'/>
+			<Function name='GetPlayerGuid'/>
+			<Function name='GetPlayerHoldNoteScore'/>
+			<Function name='GetPlayerPercentDP'/>
+			<Function name='GetPlayerScore'/>
+			<Function name='GetPlayerTapNoteScore'/>
 			<Function name='GetRadarValues'/>
 			<Function name='GetScore'/>
 			<Function name='GetStageAward'/>
 			<Function name='GetSurvivalSeconds'/>
 			<Function name='GetTapNoteScore'/>
 			<Function name='IsFillInMarker'/>
+			<Function name='IsRoutine'/>
 		</Class>
 		<Class name='HighScoreList'>
 			<Function name='GetHighScores'/>
@@ -1569,6 +1575,7 @@
 			<Function name='GetPlayerName'/>
 			<Function name='GetProfile'/>
 			<Function name='GetProfileDir'/>
+			<Function name='GetProfileFromGuid'/>
 			<Function name='GetSongNumTimesPlayed'/>
 			<Function name='GetStatsPrefix'/>
 			<Function name='IsPersistentProfile'/>
@@ -1972,6 +1979,7 @@
 			<Function name='GetMultiPlayerStageStats'/>
 			<Function name='GetPlayedSongs'/>
 			<Function name='GetPlayerStageStats'/>
+			<Function name='GetRoutineStageStats'/>
 			<Function name='GetPossibleSongs'/>
 			<Function name='GetStage'/>
 			<Function name='GetStageIndex'/>
@@ -2002,6 +2010,7 @@
 			<Function name='GetFilename'/>
 			<Function name='GetHash'/>
 			<Function name='GetMeter'/>
+			<Function name='GetNoteAnnotations'/>
 			<Function name='GetRadarValues'/>
 			<Function name='GetStepsType'/>
 			<Function name='GetTimingData'/>

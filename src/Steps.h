@@ -9,6 +9,7 @@
 #include "Difficulty.h"
 #include "EnumHelper.h"
 #include "GameConstantsAndTypes.h"
+#include "NoteAnnotation.h"
 #include "PlayerNumber.h"
 #include "RadarValues.h"
 #include "RageUtil.h"
@@ -175,6 +176,8 @@ class Steps {
   void SetMeter(int meter);
   void SetRadarValues(const RadarValues v[NUM_PLAYERS]);
   void SetTechCounts(const TechCounts ts[NUM_PLAYERS]);
+  void SetNoteAnnotations(
+      const std::vector<NoteAnnotationCache>& noteAnnotations);
   void SetNpsPerMeasure(std::vector<std::vector<float>>& npsPerMeasure);
   void SetNotesPerMeasure(std::vector<std::vector<int>>& notesPerMeasure);
   void SetPeakNps(std::vector<float>& peakNps);
@@ -212,6 +215,10 @@ class Steps {
 
   void CalculateTechCounts(const NoteData& noteData);
   const TechCounts& GetTechCounts(PlayerNumber pn) const;
+  const std::vector<NoteAnnotation>& GetNoteAnnotations(PlayerNumber pn) const;
+  const std::vector<NoteAnnotationCache>& GetNoteAnnotationCaches() const {
+    return Real()->m_NoteAnnotations;
+  }
 
   void CalculateMeasureInfo(const NoteData& noteData);
 
@@ -331,6 +338,7 @@ class Steps {
 
   std::vector<std::vector<float>> m_NpsPerMeasure;
   std::vector<std::vector<int>> m_NotesPerMeasure;
+  std::vector<NoteAnnotationCache> m_NoteAnnotations;
 
   std::vector<float> m_PeakNps;
 
