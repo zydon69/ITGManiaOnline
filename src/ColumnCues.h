@@ -3,8 +3,10 @@
 
 #include <vector>
 
+#include "GameConstantsAndTypes.h"
 #include "NoteData.h"
 #include "NoteTypes.h"
+#include "PlayerNumber.h"
 #include "TimingData.h"
 
 /* ColumnCues are used to indicate to the player which column the next note will
@@ -45,7 +47,7 @@ struct ColumnCue {
    */
   static void CalculateColumnCues(
       const NoteData& in, TimingData* timing, std::vector<ColumnCue>& out,
-      float minDuration);
+      PlayerNumber pn, float minDuration, StepsType stepsType);
 };
 
 #endif

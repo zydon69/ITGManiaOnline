@@ -286,7 +286,7 @@ class Steps {
     return join(":", this->m_sAttackString);
   }
 
-  std::vector<ColumnCue> GetColumnCues(float minDuration);
+  std::vector<ColumnCue> GetColumnCues(PlayerNumber pn, float minDuration);
 
  private:
   const Steps* Real() const;

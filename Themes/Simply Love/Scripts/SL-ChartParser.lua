@@ -461,7 +461,8 @@ ParseColumnCues = function(steps, pn)
 		return
 	end
 
-	local columnCues = steps:GetColumnCues(SL.Global.ColumnCueMinTime)
+	local player = pn == "P2" and PLAYER_2 or PLAYER_1
+	local columnCues = steps:GetColumnCues(SL.Global.ColumnCueMinTime, player)
 	for _, cue in ipairs(columnCues) do
 		for _, col in ipairs(cue.columns) do
 			col.isMine = (col.noteType == MINE_NOTE_TYPE)
