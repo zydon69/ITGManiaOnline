@@ -18,7 +18,7 @@ local CurrentStyleName = function()
 end
 
 local UseAutoStyle = function()
-	return ThemePrefs.Get("AutoStyle") == "auto"
+	return type(IsSelectMusicAutoStyle) == "function" and IsSelectMusicAutoStyle()
 end
 
 local GetCurrentGameName = function()
@@ -47,9 +47,10 @@ end
 
 StyleFlowTrace("init metric=" .. tostring(THEME:GetMetric("Common", "AutoSetStyle"))
 	.. " pref=" .. tostring(ThemePrefs.Get("AutoStyle"))
+	.. " temporary=" .. tostring(type(IsTemporarySelectMusicAutoStyle) == "function" and IsTemporarySelectMusicAutoStyle())
 	.. " style_before=" .. CurrentStyleName())
 
-if THEME:GetMetric("Common", "AutoSetStyle") == true and UseAutoStyle() then
+if UseAutoStyle() then
 	local current_steps = {}
 	for player in ivalues(PlayerNumber) do
 		current_steps[player] = GAMESTATE:GetCurrentSteps(player)

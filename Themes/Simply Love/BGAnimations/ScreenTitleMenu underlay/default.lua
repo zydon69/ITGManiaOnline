@@ -1,7 +1,12 @@
 -- - - - - - - - - - - - - - - - - - - - -
 -- first, reset the global SL table to default values
 -- this is defined in:  ./Scripts/SL_Init.lua
+local had_temporary_select_music_auto_style = type(IsTemporarySelectMusicAutoStyle) == "function" and IsTemporarySelectMusicAutoStyle()
 InitializeSimplyLove()
+SetTemporarySelectMusicAutoStyle(false)
+if had_temporary_select_music_auto_style then
+	THEME:ReloadMetrics()
+end
 
 if ThemePrefs.Get("VisualStyle") == "SRPG10" then
 	SL.SRPG10:MaybeRandomizeColor()

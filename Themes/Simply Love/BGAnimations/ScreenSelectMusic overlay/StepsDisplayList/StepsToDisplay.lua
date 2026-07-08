@@ -1,5 +1,83 @@
 return function(AllSteps)
 
+	local TraceStepsDisplay = function(message)
+		if not PREFSMAN then return end
+		local okContent, logContent = pcall(function()
+			return PREFSMAN:GetPreference("LogContentLoadDiagnostics")
+		end)
+		local okTheme, logTheme = pcall(function()
+			return PREFSMAN:GetPreference("LogThemeLuaDiagnostics")
+		end)
+		if not ((okContent and logContent) or (okTheme and logTheme)) then return end
+		Trace("SELECT_MUSIC_STEPS_DISPLAY_TRACE " .. tostring(message or ""))
+	end
+
+	local IsAutoStyle = function()
+		return type(IsSelectMusicAutoStyle) == "function" and IsSelectMusicAutoStyle()
+	end
+
+	local StepsLabel = function(steps)
+		if not steps then return "nil" end
+		local stepsType = "unknown"
+		local difficulty = "unknown"
+		local meter = "?"
+		local description = ""
+		pcall(function() stepsType = ToEnumShortString(steps:GetStepsType()):gsub("_", "-"):lower() end)
+		pcall(function() difficulty = ToEnumShortString(steps:GetDifficulty()) end)
+		pcall(function() meter = tostring(steps:GetMeter()) end)
+		pcall(function() description = tostring(steps:GetDescription() or "") end)
+		return ("%s/%s/%s/%s"):format(stepsType, difficulty, meter, description)
+	end
+
+	local FindStepsIndex = function(steps, stepsList)
+		if not steps then return nil end
+		for i, stepchart in ipairs(stepsList) do
+			if stepchart == steps then return i end
+		end
+		return nil
+	end
+
+	local GetCurrentReferenceSteps = function()
+		for player in ivalues(GAMESTATE:GetHumanPlayers()) do
+			local steps = GAMESTATE:GetCurrentSteps(player)
+			if steps then return steps end
+		end
+		return nil
+	end
+
+	local GetAutoStyleStepsToDisplay = function()
+		local stepsList = {}
+		for stepchart in ivalues(AllSteps) do
+			stepsList[#stepsList+1] = stepchart
+		end
+
+		if #stepsList <= 5 then return stepsList end
+
+		local currentSteps = GetCurrentReferenceSteps()
+		local currentIndex = FindStepsIndex(currentSteps, stepsList) or 1
+		local firstIndex = math.floor((currentIndex - 1) / 5) * 5 + 1
+		if firstIndex + 4 > #stepsList then
+			firstIndex = math.max(1, #stepsList - 4)
+		end
+
+		local stepsToShow = {}
+		for row=1, 5 do
+			stepsToShow[row] = stepsList[firstIndex + row - 1]
+		end
+
+		TraceStepsDisplay(("auto_style current_index=%s first_index=%s total=%s current=%s"):format(
+			tostring(currentIndex),
+			tostring(firstIndex),
+			tostring(#stepsList),
+			StepsLabel(currentSteps)))
+
+		return stepsToShow
+	end
+
+	if IsAutoStyle() then
+		return GetAutoStyleStepsToDisplay()
+	end
+
 	local StepsToShow, edits = {}, {}
 
 	for stepchart in ivalues(AllSteps) do

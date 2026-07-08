@@ -70,11 +70,11 @@ local input = function(event)
 				-- Get the style we want to change to
 				local new_style = focus.change:lower()
 				if new_style == "all" then
-					ThemePrefs.Set("AutoStyle", "auto")
+					SetTemporarySelectMusicAutoStyle(true)
 					THEME:ReloadMetrics()
 					new_style = (#GAMESTATE:GetHumanPlayers() == 1) and "single" or "versus"
-				elseif ThemePrefs.Get("AutoStyle") == "auto" then
-					ThemePrefs.Set("AutoStyle", "none")
+				elseif IsTemporarySelectMusicAutoStyle() then
+					SetTemporarySelectMusicAutoStyle(false)
 					THEME:ReloadMetrics()
 				end
 				-- accommodate techno game

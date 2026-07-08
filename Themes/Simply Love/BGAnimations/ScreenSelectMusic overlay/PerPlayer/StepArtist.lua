@@ -1,7 +1,7 @@
 local player = ...
 local pn = ToEnumShortString(player)
 local p = PlayerNumber:Reverse()[player]
-local autoStyle = ThemePrefs.Get("AutoStyle") == "auto"
+local autoStyle = type(IsSelectMusicAutoStyle) == "function" and IsSelectMusicAutoStyle()
 
 local text_table, marquee_index
 

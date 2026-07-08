@@ -18,6 +18,7 @@ local af = Def.ActorFrame{
 			Trace("ROUTINE_STYLE_FLOW select_music init style=" .. tostring(ok and style or "nil")
 				.. " joined=" .. table.concat(players, "/")
 				.. " auto_style=" .. tostring(ThemePrefs.Get("AutoStyle"))
+				.. " temporary_auto_style=" .. tostring(type(IsTemporarySelectMusicAutoStyle) == "function" and IsTemporarySelectMusicAutoStyle())
 				.. " game_mode=" .. tostring(SL and SL.Global and SL.Global.GameMode or "nil"))
 		end
 		SL.Global.GameplayReloadCheck = false

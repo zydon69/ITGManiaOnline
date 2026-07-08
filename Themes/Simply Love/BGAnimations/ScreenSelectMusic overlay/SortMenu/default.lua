@@ -174,11 +174,12 @@ end
 local function GetChangeableStyles()
 	local style = GAMESTATE:GetCurrentStyle():GetName():gsub("8", "")
 	local available_styles = {}
+	local allow_all_styles_from_shared_two_player_styles = false
 	-- Allow players to switch from single to double and from double to single
 	-- but only present these options if Joint Double or Joint Premium is enabled
 	-- and we're not in "AutoSetStyle" mode (all styles presented simultaneously like PIU does)
 	
-	if ThemePrefs.Get("AutoStyle") == "auto" then
+	if type(IsSelectMusicAutoStyle) == "function" and IsSelectMusicAutoStyle() then
 		-- Check number of players
 		if ThemePrefs.Get("AllowDanceSolo") then
 			table.insert(available_styles, {{"ChangeStyle", "Solo"}, GAMESTATE:GetNumPlayersEnabled() == 1  })
@@ -188,9 +189,9 @@ local function GetChangeableStyles()
 
 		table.insert(available_styles, {{"ChangeStyle", "Double"}, GAMESTATE:GetNumPlayersEnabled() == 1  })
 		table.insert(available_styles, {{"ChangeStyle", "Versus"}, not (GAMESTATE:GetNumPlayersEnabled() == 1)  })
+		table.insert(available_styles, {{"ChangeStyle", "Couple"}, not (GAMESTATE:GetNumPlayersEnabled() == 1)  })
 		table.insert(available_styles, {{"ChangeStyle", "Routine"}, not (GAMESTATE:GetNumPlayersEnabled() == 1)  })
-		table.insert(available_styles, {{"ChangeStyle", "Couple"}, not (GAMESTATE:GetNumPlayersEnabled() == 1) })
-	else 
+	else
 		if not (PREFSMAN:GetPreference("Premium") == "Premium_Off" and GAMESTATE:GetCoinMode() == "CoinMode_Pay") then
 			if style == "single" then
 				table.insert(available_styles, {{"ChangeStyle", "Double"}})
@@ -212,9 +213,6 @@ local function GetChangeableStyles()
 				table.insert(available_styles, {{"ChangeStyle", "Single"}})
 				table.insert(available_styles, {{"ChangeStyle", "Double"}})
 				table.insert(available_styles, {{"ChangeStyle", "Solo"}})
-			-- Couple doesn't have enough content for people to be able to switch into it
-			-- However, if for some reason you end up in couples mode, you should be able to
-			-- escape
 			elseif style == "couple" then
 				table.insert(available_styles, {{"ChangeStyle", "Versus"}})
 				table.insert(available_styles, {{"ChangeStyle", "Routine"}})
@@ -222,10 +220,10 @@ local function GetChangeableStyles()
 				table.insert(available_styles, {{"ChangeStyle", "Versus"}})
 				table.insert(available_styles, {{"ChangeStyle", "Couple"}})
 			elseif style == "versus" then
-				table.insert(available_styles, {{"ChangeStyle", "Routine"}})
 				table.insert(available_styles, {{"ChangeStyle", "Couple"}})
+				table.insert(available_styles, {{"ChangeStyle", "Routine"}})
 			end
-			table.insert(available_styles, {{"ChangeStyle", "All"}})
+			table.insert(available_styles, {{"ChangeStyle", "All"}, not (style == "versus" or style == "couple" or style == "routine") or allow_all_styles_from_shared_two_player_styles})
 
 		end
 	end

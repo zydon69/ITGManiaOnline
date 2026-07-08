@@ -353,6 +353,18 @@ local GetTechCountValue = function(techCounts, category)
 	return value
 end
 
+local ChartParserTrace = function(message)
+	if not PREFSMAN then return end
+	local okContent, logContent = pcall(function()
+		return PREFSMAN:GetPreference("LogContentLoadDiagnostics")
+	end)
+	local okTheme, logTheme = pcall(function()
+		return PREFSMAN:GetPreference("LogThemeLuaDiagnostics")
+	end)
+	if not ((okContent and logContent) or (okTheme and logTheme)) then return end
+	Trace("CHART_PARSER_TRACE " .. tostring(message or ""))
+end
+
 -- The chart info shown while browsing the song wheel comes from cached engine
 -- data, so this is safe to call on every chart change without parsing the
 -- simfile. Hashing remains in ComputeChartHash().
@@ -390,6 +402,17 @@ ParseChartInfo = function(steps, pn)
 	SL[pn].Streams.Sideswitches = GetTechCountValue(techCounts, "TechCountsCategory_Sideswitches")
 	SL[pn].Streams.Jacks = GetTechCountValue(techCounts, "TechCountsCategory_Jacks")
 	SL[pn].Streams.Brackets = GetTechCountValue(techCounts, "TechCountsCategory_Brackets")
+	ChartParserTrace(("tech_counts pn=%s type=%s difficulty=%s desc=%s crossovers=%s footswitches=%s sideswitches=%s jacks=%s brackets=%s peakNps=%s"):format(
+		tostring(pn),
+		tostring(stepsType),
+		tostring(difficulty),
+		tostring(description),
+		tostring(SL[pn].Streams.Crossovers),
+		tostring(SL[pn].Streams.Footswitches),
+		tostring(SL[pn].Streams.Sideswitches),
+		tostring(SL[pn].Streams.Jacks),
+		tostring(SL[pn].Streams.Brackets),
+		tostring(SL[pn].Streams.PeakNPS)))
 end
 
 -- Computing the GrooveStats hash requires reading and minimizing NoteData from

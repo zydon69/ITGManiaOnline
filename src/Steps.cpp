@@ -126,9 +126,36 @@ std::optional<StepParity::StageLayout> getLayout(StepsType ty) {
           },
           {2}, {1}, {0, 3});
 
+    case StepsType_dance_couple:
+      return StepParity::StageLayout(
+          StepsType_dance_couple,
+          {
+              {0, 1},  // Left
+              {1, 0},  // Down
+              {1, 2},  // Up
+              {2, 1}   // Right
+          },
+          {2}, {1}, {0, 3});
+
     case StepsType_dance_double:
       return StepParity::StageLayout(
           StepsType_dance_double,
+          {
+              {0, 1},  // P1 Left
+              {1, 0},  // P1 Down
+              {1, 2},  // P1 Up
+              {2, 1},  // P1 Right
+
+              {3, 1},  // P2 Left
+              {4, 0},  // P2 Down
+              {4, 2},  // P2 Up
+              {5, 1}   // P2 Right
+          },
+          {2, 6}, {1, 5}, {0, 3, 4, 7});
+
+    case StepsType_dance_routine:
+      return StepParity::StageLayout(
+          StepsType_dance_routine,
           {
               {0, 1},  // P1 Left
               {1, 0},  // P1 Down
@@ -493,36 +520,30 @@ void Steps::CalculateRadarValues(
   if (stepsTypeInfo == nullptr) {
     return;
   }
-  if (tempNoteData.IsComposite()) {
-    std::vector<NoteData> vParts;
-
-    NoteDataUtil::SplitCompositeNoteData(tempNoteData, vParts);
+  std::vector<NoteData> vParts;
+  if (NoteDataUtil::SplitCompositeOrStackedNoteData(
+          tempNoteData, vParts, m_StepsType)) {
+    LOG->Trace(
+        "RADAR_TRACE split_begin stepsType=%s chart='%s' tracks=%i parts=%zu.",
+        m_StepsTypeStr.c_str(), m_sDescription.c_str(),
+        tempNoteData.GetNumTracks(), vParts.size());
     for (size_t pn = 0; pn < std::min(vParts.size(), size_t(NUM_PLAYERS));
          ++pn) {
       NoteDataUtil::CalculateRadarValues(
           vParts[pn], fMusicLengthSeconds, timing, m_RadarValues[pn]);
+      LOG->Trace(
+          "RADAR_TRACE split_done stepsType=%s chart='%s' player=%zu "
+          "tracks=%i values=%s.",
+          m_StepsTypeStr.c_str(), m_sDescription.c_str(), pn,
+          vParts[pn].GetNumTracks(), m_RadarValues[pn].ToString().c_str());
     }
-  } else if (
-      stepsTypeInfo->m_StepsTypeCategory == StepsTypeCategory_Couple) {
-    NoteData p1 = tempNoteData;
-    const int tracks = tempNoteData.GetNumTracks() / 2;
-    if (tempNoteData.GetNumTracks() % 2 != 0) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX: Couple RadarValues for '%s' has odd track count %i; "
-          "dropping unmatched final track.",
-          m_sFilename.c_str(), tempNoteData.GetNumTracks());
-    }
-    p1.SetNumTracks(tracks);
-    NoteDataUtil::CalculateRadarValues(
-        p1, fMusicLengthSeconds, timing, m_RadarValues[PLAYER_1]);
-    NoteData p2 = tempNoteData;
-    NoteDataUtil::ShiftTracks(p2, tracks);
-    p2.SetNumTracks(tracks);
-    NoteDataUtil::CalculateRadarValues(
-        p2, fMusicLengthSeconds, timing, m_RadarValues[PLAYER_2]);
   } else {
     NoteDataUtil::CalculateRadarValues(
         tempNoteData, fMusicLengthSeconds, timing, m_RadarValues[0]);
+    LOG->Trace(
+        "RADAR_TRACE shared_done stepsType=%s chart='%s' tracks=%i values=%s.",
+        m_StepsTypeStr.c_str(), m_sDescription.c_str(),
+        tempNoteData.GetNumTracks(), m_RadarValues[0].ToString().c_str());
     std::fill_n(m_RadarValues + 1, NUM_PLAYERS - 1, m_RadarValues[0]);
   }
 }
@@ -534,6 +555,15 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
 
   FOREACH_PlayerNumber(pn) m_TechCounts[pn].Zero();
   m_NoteAnnotations.clear();
+
+  if (tempNoteData.IsEmpty()) {
+    LOG->Trace(
+        "TECHCOUNTS_TRACE skip_empty stepsType=%s chart='%s'; marking tech "
+        "counts unknown.",
+        m_StepsTypeStr.c_str(), m_sDescription.c_str());
+    FOREACH_PlayerNumber(pn) m_TechCounts[pn].MakeUnknown();
+    return;
+  }
 
   const std::optional<StepParity::StageLayout> layout =
       getLayout(this->m_StepsType);
@@ -550,26 +580,97 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
         "SRC_AUDIT_FIX: calculating tech counts with %s StageLayout support.",
         m_StepsTypeStr.c_str());
   }
-  TimingData* timing = this->GetTimingData();
-  StepParity::StepParityGenerator gen =
-      StepParity::StepParityGenerator(&*layout, timing);
-  if (!gen.analyzeNoteData(tempNoteData)) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX SRC-642: StepParity analysis failed for %s; marking "
-        "tech counts unknown.",
-        m_StepsTypeStr.c_str());
-    FOREACH_PlayerNumber(pn) m_TechCounts[pn].MakeUnknown();
-    return;
-  }
-  std::vector<NoteAnnotation> noteAnnotations;
-  TechCounts::CalculateTechCountsFromRows(
-      gen.rows, &*layout, m_TechCounts[0], noteAnnotations);
-  std::fill_n(m_TechCounts + 1, NUM_PLAYERS - 1, m_TechCounts[0]);
 
-  NoteAnnotationCache cachedAnnotations;
-  cachedAnnotations.decompressed = noteAnnotations;
-  cachedAnnotations.Compress();
-  m_NoteAnnotations.push_back(cachedAnnotations);
+  TimingData* timing = this->GetTimingData();
+  std::vector<NoteData> splitNoteData;
+  if (NoteDataUtil::SplitCompositeOrStackedNoteData(
+          tempNoteData, splitNoteData, m_StepsType)) {
+    LOG->Trace(
+        "TECHCOUNTS_TRACE split_begin stepsType=%s chart='%s' tracks=%i "
+        "parts=%zu.",
+        m_StepsTypeStr.c_str(), m_sDescription.c_str(),
+        tempNoteData.GetNumTracks(), splitNoteData.size());
+    FOREACH_PlayerNumber(pn) {
+      NoteAnnotationCache cachedAnnotations;
+      if (splitNoteData.size() <= static_cast<size_t>(pn)) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-642: missing split NoteData for player %i in "
+            "%s; marking tech counts unknown.",
+            pn, m_StepsTypeStr.c_str());
+        m_TechCounts[pn].MakeUnknown();
+        m_NoteAnnotations.push_back(cachedAnnotations);
+        continue;
+      }
+      if (splitNoteData[pn].IsEmpty()) {
+        LOG->Trace(
+            "TECHCOUNTS_TRACE skip_empty stepsType=%s chart='%s' player=%i; "
+            "marking tech counts unknown.",
+            m_StepsTypeStr.c_str(), m_sDescription.c_str(), pn);
+        m_TechCounts[pn].MakeUnknown();
+        m_NoteAnnotations.push_back(cachedAnnotations);
+        continue;
+      }
+
+      StepParity::StepParityGenerator gen(&*layout, timing);
+      LOG->Trace(
+          "TECHCOUNTS_TRACE analyze_begin stepsType=%s chart='%s' player=%i "
+          "tracks=%i.",
+          m_StepsTypeStr.c_str(), m_sDescription.c_str(), pn,
+          splitNoteData[pn].GetNumTracks());
+      if (!gen.analyzeNoteData(splitNoteData[pn])) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-642: StepParity analysis failed for %s player "
+            "%i; marking tech counts unknown.",
+            m_StepsTypeStr.c_str(), pn);
+        m_TechCounts[pn].MakeUnknown();
+        m_NoteAnnotations.push_back(cachedAnnotations);
+        continue;
+      }
+
+      std::vector<NoteAnnotation> noteAnnotations;
+      TechCounts::CalculateTechCountsFromRows(
+          gen.rows, &*layout, m_TechCounts[pn], noteAnnotations);
+      LOG->Trace(
+          "TECHCOUNTS_TRACE analyze_done stepsType=%s chart='%s' player=%i "
+          "rows=%zu annotations=%zu values=%s.",
+          m_StepsTypeStr.c_str(), m_sDescription.c_str(), pn,
+          gen.rows.size(), noteAnnotations.size(),
+          m_TechCounts[pn].ToString().c_str());
+      cachedAnnotations.decompressed = noteAnnotations;
+      cachedAnnotations.Compress();
+      m_NoteAnnotations.push_back(cachedAnnotations);
+    }
+  } else {
+    StepParity::StepParityGenerator gen(&*layout, timing);
+    LOG->Trace(
+        "TECHCOUNTS_TRACE analyze_begin stepsType=%s chart='%s' player=shared "
+        "tracks=%i.",
+        m_StepsTypeStr.c_str(), m_sDescription.c_str(),
+        tempNoteData.GetNumTracks());
+    if (!gen.analyzeNoteData(tempNoteData)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-642: StepParity analysis failed for %s; marking "
+          "tech counts unknown.",
+          m_StepsTypeStr.c_str());
+      FOREACH_PlayerNumber(pn) m_TechCounts[pn].MakeUnknown();
+      return;
+    }
+
+    std::vector<NoteAnnotation> noteAnnotations;
+    TechCounts::CalculateTechCountsFromRows(
+        gen.rows, &*layout, m_TechCounts[0], noteAnnotations);
+    LOG->Trace(
+        "TECHCOUNTS_TRACE analyze_done stepsType=%s chart='%s' player=shared "
+        "rows=%zu annotations=%zu values=%s.",
+        m_StepsTypeStr.c_str(), m_sDescription.c_str(), gen.rows.size(),
+        noteAnnotations.size(), m_TechCounts[0].ToString().c_str());
+    std::fill_n(m_TechCounts + 1, NUM_PLAYERS - 1, m_TechCounts[0]);
+
+    NoteAnnotationCache cachedAnnotations;
+    cachedAnnotations.decompressed = noteAnnotations;
+    cachedAnnotations.Compress();
+    m_NoteAnnotations.push_back(cachedAnnotations);
+  }
 }
 
 void Steps::CalculateMeasureInfo(const NoteData& tempNoteData) {
@@ -588,42 +689,36 @@ void Steps::CalculateMeasureInfo(const NoteData& tempNoteData) {
     m_PeakNps.clear();
     return;
   }
-  if (tempNoteData.IsComposite()) {
+  std::vector<NoteData> vParts;
+  if (NoteDataUtil::SplitCompositeOrStackedNoteData(
+          tempNoteData, vParts, m_StepsType)) {
     measureInfoPerPlayer.resize(NUM_PLAYERS);
-    std::vector<NoteData> vParts;
-    NoteDataUtil::SplitCompositeNoteData(tempNoteData, vParts);
+    LOG->Trace(
+        "MEASURE_TRACE split_begin stepsType=%s chart='%s' tracks=%i "
+        "parts=%zu.",
+        m_StepsTypeStr.c_str(), m_sDescription.c_str(),
+        tempNoteData.GetNumTracks(), vParts.size());
     for (std::size_t pn = 0;
          pn < std::min(vParts.size(), std::size_t(NUM_PLAYERS)); ++pn) {
       MeasureInfo::CalculateMeasureInfo(
           vParts[pn], timing, measureInfoPerPlayer[pn]);
+      LOG->Trace(
+          "MEASURE_TRACE split_done stepsType=%s chart='%s' player=%zu "
+          "tracks=%i peakNps=%f measures=%zu.",
+          m_StepsTypeStr.c_str(), m_sDescription.c_str(), pn,
+          vParts[pn].GetNumTracks(), measureInfoPerPlayer[pn].peakNps,
+          measureInfoPerPlayer[pn].notesPerMeasure.size());
     }
-  } else if (
-      stepsTypeInfo->m_StepsTypeCategory == StepsTypeCategory_Couple) {
-    measureInfoPerPlayer.resize(NUM_PLAYERS);
-    NoteData p1 = tempNoteData;
-    const int tracks = tempNoteData.GetNumTracks() / 2;
-    if (tempNoteData.GetNumTracks() % 2 != 0) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX: Couple MeasureInfo for '%s' has odd track count %i; "
-          "dropping unmatched final track.",
-          m_sFilename.c_str(), tempNoteData.GetNumTracks());
-    }
-    LOG->Trace(
-        "SRC_AUDIT_FIX: calculating couple MeasureInfo per player: "
-        "total_tracks=%i, tracks_per_player=%i.",
-        tempNoteData.GetNumTracks(), tracks);
-    p1.SetNumTracks(tracks);
-    MeasureInfo::CalculateMeasureInfo(
-        p1, timing, measureInfoPerPlayer[PLAYER_1]);
-    NoteData p2 = tempNoteData;
-    NoteDataUtil::ShiftTracks(p2, tracks);
-    p2.SetNumTracks(tracks);
-    MeasureInfo::CalculateMeasureInfo(
-        p2, timing, measureInfoPerPlayer[PLAYER_2]);
   } else {
     measureInfoPerPlayer.resize(1);
     MeasureInfo::CalculateMeasureInfo(
         tempNoteData, timing, measureInfoPerPlayer[0]);
+    LOG->Trace(
+        "MEASURE_TRACE shared_done stepsType=%s chart='%s' tracks=%i "
+        "peakNps=%f measures=%zu.",
+        m_StepsTypeStr.c_str(), m_sDescription.c_str(),
+        tempNoteData.GetNumTracks(), measureInfoPerPlayer[0].peakNps,
+        measureInfoPerPlayer[0].notesPerMeasure.size());
   }
 
   m_NotesPerMeasure.clear();

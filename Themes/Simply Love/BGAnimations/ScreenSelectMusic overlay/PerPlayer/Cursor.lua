@@ -16,6 +16,31 @@ end
 
 local RowIndex = 1
 
+local CursorTrace = function(message)
+	if not PREFSMAN then return end
+	local okContent, logContent = pcall(function()
+		return PREFSMAN:GetPreference("LogContentLoadDiagnostics")
+	end)
+	local okTheme, logTheme = pcall(function()
+		return PREFSMAN:GetPreference("LogThemeLuaDiagnostics")
+	end)
+	if not ((okContent and logContent) or (okTheme and logTheme)) then return end
+	Trace("SELECT_MUSIC_CURSOR_TRACE " .. tostring(message or ""))
+end
+
+local StepsLabel = function(steps)
+	if not steps then return "nil" end
+	local stepsType = "unknown"
+	local difficulty = "unknown"
+	local meter = "?"
+	local description = ""
+	pcall(function() stepsType = ToEnumShortString(steps:GetStepsType()):gsub("_", "-"):lower() end)
+	pcall(function() difficulty = ToEnumShortString(steps:GetDifficulty()) end)
+	pcall(function() meter = tostring(steps:GetMeter()) end)
+	pcall(function() description = tostring(steps:GetDescription() or "") end)
+	return ("%s/%s/%s/%s"):format(stepsType, difficulty, meter, description)
+end
+
 return Def.Sprite{
 	Texture=THEME:GetPathB("ScreenSelectMusic", "overlay/PerPlayer/arrow.png"),
 	Name="Cursor"..pn,
@@ -71,6 +96,8 @@ return Def.Sprite{
 
 	SetCommand=function(self)
 		local song = GAMESTATE:GetCurrentSong()
+		local exactMatch = false
+		local fallbackReason = "none"
 
 		if song then
 			local playable_steps = SongUtil.GetPlayableSteps( song )
@@ -83,9 +110,32 @@ return Def.Sprite{
 			for i,chart in pairs( GetStepsToDisplay(playable_steps) ) do
 				if chart == current_steps then
 					RowIndex = i
+					exactMatch = true
 					break
 				end
 			end
+			if current_steps and not exactMatch then
+				local ok, difficulty = pcall(function()
+					return current_steps:GetDifficulty()
+				end)
+				local difficultyIndex = ok and Difficulty:Reverse()[difficulty] or nil
+				if difficultyIndex then
+					RowIndex = difficultyIndex + 1
+					fallbackReason = "difficulty"
+				else
+					RowIndex = 1
+					fallbackReason = "default"
+				end
+			elseif not current_steps then
+				RowIndex = 1
+				fallbackReason = "no_current_steps"
+			end
+			CursorTrace(("set pn=%s row=%s exact=%s fallback=%s current=%s"):format(
+				tostring(pn),
+				tostring(RowIndex),
+				tostring(exactMatch),
+				tostring(fallbackReason),
+				StepsLabel(current_steps)))
 		end
 
 		-- keep within reasonable limits because Edit charts are a thing

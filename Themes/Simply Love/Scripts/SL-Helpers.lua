@@ -96,6 +96,20 @@ local function safe_theme_pref(name, fallback)
 	return value
 end
 
+IsTemporarySelectMusicAutoStyle = function()
+	return SL and SL.Global and SL.Global.SelectMusicTemporaryAutoStyle == true
+end
+
+IsSelectMusicAutoStyle = function()
+	return safe_theme_pref("AutoStyle", "none") == "auto" or IsTemporarySelectMusicAutoStyle()
+end
+
+SetTemporarySelectMusicAutoStyle = function(enabled)
+	SL = SL or {}
+	SL.Global = SL.Global or {}
+	SL.Global.SelectMusicTemporaryAutoStyle = enabled == true
+end
+
 local function safe_theme_string(group, key)
 	if not (THEME and type(THEME.GetString) == "function") then return tostring(key or "") end
 	local ok, value = safe_call("THEME.GetString " .. tostring(group) .. "." .. tostring(key), function()
@@ -970,12 +984,23 @@ GetStepsCredit = function(player)
 				end
 			end
 		end
-	else
-		local steps = safe_game_state_method("GetCurrentSteps", nil, player)
-		if not steps then return t end
-		-- credit
-		local author = tostring(safe_method("Steps.GetAuthorCredit", steps, "GetAuthorCredit") or "")
-		if author ~= "" then t[#t+1] = author end
+		else
+			local steps = safe_game_state_method("GetCurrentSteps", nil, player)
+			if not steps then return t end
+
+			local rawStepsType = safe_method("Steps.GetStepsType", steps, "GetStepsType")
+			local stepsType = rawStepsType and ToEnumShortString(rawStepsType):gsub("_", "-"):lower() or ""
+			if stepsType == "dance-couple" then
+				t[#t+1] = player == PLAYER_2 and "Stats techniques joueur 2" or "Stats techniques joueur 1"
+				return t
+			elseif stepsType == "dance-routine" then
+				t[#t+1] = "Stats techniques joueur 1 et 2"
+				return t
+			end
+
+			-- credit
+			local author = tostring(safe_method("Steps.GetAuthorCredit", steps, "GetAuthorCredit") or "")
+			if author ~= "" then t[#t+1] = author end
 		-- description
 		local description = tostring(safe_method("Steps.GetDescription", steps, "GetDescription") or "")
 		if description ~= "" then t[#t+1] = description end

@@ -2,9 +2,6 @@
 
 #include <vector>
 
-#include "GameConstantsAndTypes.h"
-#include "GameManager.h"
-#include "GameState.h"
 #include "NoteData.h"
 #include "NoteDataUtil.h"
 #include "NoteTypes.h"
@@ -14,36 +11,18 @@ PlayerNumber SanitizePlayerNumber(PlayerNumber pn) {
   return pn >= 0 && pn < NUM_PLAYERS ? pn : PLAYER_1;
 }
 
-bool IsCoupleStepsType(StepsType stepsType) {
-  return stepsType >= 0 && stepsType < NUM_StepsType &&
-         GAMEMAN->GetStepsTypeInfo(stepsType).m_StepsTypeCategory ==
-             StepsTypeCategory_Couple;
-}
-
 NoteData GetPlayerNoteData(
     const NoteData& in, PlayerNumber pn, StepsType stepsType) {
   pn = SanitizePlayerNumber(pn);
 
-  if (in.IsComposite()) {
-    std::vector<NoteData> parts;
-    NoteDataUtil::SplitCompositeNoteData(in, parts);
+  std::vector<NoteData> parts;
+  if (NoteDataUtil::SplitCompositeOrStackedNoteData(in, parts, stepsType)) {
     if (parts.size() > static_cast<size_t>(pn)) {
       return parts[pn];
     }
     if (!parts.empty()) {
       return parts[PLAYER_1];
     }
-    return in;
-  }
-
-  if (IsCoupleStepsType(stepsType) && in.GetNumTracks() >= NUM_PLAYERS) {
-    const int tracksPerPlayer = in.GetNumTracks() / NUM_PLAYERS;
-    NoteData playerNoteData = in;
-    if (pn == PLAYER_2) {
-      NoteDataUtil::ShiftTracks(playerNoteData, tracksPerPlayer);
-    }
-    playerNoteData.SetNumTracks(tracksPerPlayer);
-    return playerNoteData;
   }
 
   return in;

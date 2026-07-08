@@ -37,6 +37,10 @@ bool ValidateLayoutColumnPair(
 }
 }  // namespace
 
+static bool IsStepParityPlayableNote(TapNoteType type) {
+  return type == TapNoteType_Tap || type == TapNoteType_HoldHead;
+}
+
 bool State::operator==(const State& other) const {
   return combined_mask == other.combined_mask &&
          moved_mask == other.moved_mask && holding_mask == other.holding_mask;
@@ -420,7 +424,7 @@ void Row::setFootPlacement(const StepParity::State* state) {
   }
 
   for (int c = 0; c < safeColumnCount; c++) {
-    if (notes[c].type != TapNoteType_Empty) {
+    if (IsStepParityPlayableNote(notes[c].type)) {
       const StepParity::Foot foot = state->combinedColumns[c];
       if (foot <= StepParity::NONE || foot >= StepParity::NUM_Foot) {
         LOG->Warn(

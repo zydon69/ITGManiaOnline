@@ -40,6 +40,15 @@ void GetSMNoteDataString(
     const NoteData& in, const TimingData* timing, std::string& notes_out,
     bool bIncludeMeasureComments);
 void SplitCompositeNoteData(const NoteData& in, std::vector<NoteData>& out);
+/**
+ * @brief Split composite routine data or stacked couple data into per-player
+ * NoteData.
+ *
+ * @return true when the input was split into per-player data, false when the
+ * input should be treated as shared data.
+ */
+bool SplitCompositeOrStackedNoteData(
+    const NoteData& in, std::vector<NoteData>& out, StepsType stepsType);
 void CombineCompositeNoteData(NoteData& out, const std::vector<NoteData>& in);
 /**
  * @brief Autogenerate notes from one type to another.

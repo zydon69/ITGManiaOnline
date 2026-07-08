@@ -16,6 +16,7 @@
 #include "Attack.h"
 #include "EnumHelper.h"
 #include "GameConstantsAndTypes.h"
+#include "GameManager.h"
 #include "GameState.h"
 #include "NoteData.h"
 #include "NoteTypes.h"
@@ -68,6 +69,22 @@ static bool CheckedScaledRow(
   }
   *out = int(std::lrint(scaled));
   return true;
+}
+
+static bool IsValidStepsType(StepsType st) {
+  return st >= 0 && st < NUM_StepsType;
+}
+
+static bool HasNotesInTrackRange(
+    const NoteData& noteData, int startTrack, int endTrack) {
+  const int safeStart = std::max(0, startTrack);
+  const int safeEnd = std::min(endTrack, noteData.GetNumTracks());
+  for (int t = safeStart; t < safeEnd; ++t) {
+    if (!noteData.IsTrackEmpty(t)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 static void GetMeasureRowRange(
@@ -657,6 +674,113 @@ void NoteDataUtil::SplitCompositeNoteData(
       out[index].SetTapNote(t, row, tn);
     }
   }
+}
+
+bool NoteDataUtil::SplitCompositeOrStackedNoteData(
+    const NoteData& in, std::vector<NoteData>& out, StepsType stepsType) {
+  out.clear();
+
+  if (in.IsComposite()) {
+    SplitCompositeNoteData(in, out);
+    if (!IsValidStepsType(stepsType) || out.size() < NUM_PLAYERS ||
+        in.GetNumTracks() < NUM_PLAYERS) {
+      return true;
+    }
+
+    const StepsTypeInfo& stepsTypeInfo = GAMEMAN->GetStepsTypeInfo(stepsType);
+    if (stepsTypeInfo.m_StepsTypeCategory != StepsTypeCategory_Routine) {
+      return true;
+    }
+
+    const int tracksPerPlayer = in.GetNumTracks() / NUM_PLAYERS;
+    if (tracksPerPlayer <= 0 || in.GetNumTracks() % NUM_PLAYERS != 0) {
+      return true;
+    }
+
+    int mixedPlayer = PLAYER_INVALID;
+    for (int pn = 0; pn < NUM_PLAYERS; ++pn) {
+      if (HasNotesInTrackRange(out[pn], 0, tracksPerPlayer) &&
+          HasNotesInTrackRange(out[pn], tracksPerPlayer, in.GetNumTracks())) {
+        mixedPlayer = pn;
+        break;
+      }
+    }
+
+    if (mixedPlayer != PLAYER_INVALID) {
+      bool otherPlayerHasNotes = false;
+      for (int pn = 0; pn < NUM_PLAYERS; ++pn) {
+        if (pn != mixedPlayer &&
+            HasNotesInTrackRange(out[pn], 0, in.GetNumTracks())) {
+          otherPlayerHasNotes = true;
+          break;
+        }
+      }
+
+      if (!otherPlayerHasNotes) {
+        LOG->Trace(
+            "TECHCOUNTS_TRACE routine_flat_split stepsType=%i "
+            "mixedPlayer=%i tracks=%i tracksPerPlayer=%i.",
+            stepsType, mixedPlayer, in.GetNumTracks(), tracksPerPlayer);
+
+        out.assign(NUM_PLAYERS, NoteData());
+        FOREACH_PlayerNumber(pn) { out[pn].SetNumTracks(in.GetNumTracks()); }
+
+        for (int t = 0; t < in.GetNumTracks(); ++t) {
+          const PlayerNumber target =
+              t < tracksPerPlayer ? PLAYER_1 : PLAYER_2;
+          for (NoteData::const_iterator iter = in.begin(t); iter != in.end(t);
+               ++iter) {
+            TapNote tn = iter->second;
+            tn.pn = PLAYER_INVALID;
+            out[target].SetTapNote(t, iter->first, tn);
+          }
+        }
+      }
+    }
+    return true;
+  }
+
+  if (!IsValidStepsType(stepsType)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SplitCompositeOrStackedNoteData ignored invalid "
+        "StepsType %i.",
+        stepsType);
+    return false;
+  }
+
+  const StepsTypeInfo& stepsTypeInfo = GAMEMAN->GetStepsTypeInfo(stepsType);
+  if (stepsTypeInfo.m_StepsTypeCategory != StepsTypeCategory_Couple) {
+    return false;
+  }
+
+  if (in.GetNumTracks() < NUM_PLAYERS) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SplitCompositeOrStackedNoteData cannot split %i tracks "
+        "for couple StepsType %i.",
+        in.GetNumTracks(), stepsType);
+    return false;
+  }
+
+  const int tracksPerPlayer = in.GetNumTracks() / NUM_PLAYERS;
+  if (tracksPerPlayer <= 0) {
+    return false;
+  }
+
+  if (in.GetNumTracks() % NUM_PLAYERS != 0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SplitCompositeOrStackedNoteData splitting odd couple "
+        "track count %i; dropping unmatched final track.",
+        in.GetNumTracks());
+  }
+
+  out.resize(NUM_PLAYERS);
+  out[PLAYER_1] = in;
+  out[PLAYER_1].SetNumTracks(tracksPerPlayer);
+
+  out[PLAYER_2] = in;
+  ShiftTracks(out[PLAYER_2], tracksPerPlayer);
+  out[PLAYER_2].SetNumTracks(tracksPerPlayer);
+  return true;
 }
 
 void NoteDataUtil::CombineCompositeNoteData(
