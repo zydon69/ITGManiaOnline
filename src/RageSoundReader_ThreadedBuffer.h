@@ -3,7 +3,9 @@
 #ifndef RAGE_SOUND_READER_THREADED_BUFFER
 #define RAGE_SOUND_READER_THREADED_BUFFER
 
+#include <cstdint>
 #include <list>
+#include <mutex>
 #include <string>
 
 #include "RageSoundReader.h"
@@ -16,22 +18,23 @@ class RageSoundReader_ThreadedBuffer : public RageSoundReader_Filter {
  public:
   RageSoundReader_ThreadedBuffer(RageSoundReader* pSource);
   RageSoundReader_ThreadedBuffer(const RageSoundReader_ThreadedBuffer& cpy);
+  RageSoundReader_ThreadedBuffer& operator=(
+      const RageSoundReader_ThreadedBuffer& rhs) = delete;
   ~RageSoundReader_ThreadedBuffer();
-  RageSoundReader_ThreadedBuffer* Copy() const {
-    return new RageSoundReader_ThreadedBuffer(*this);
-  }
+  RageSoundReader_ThreadedBuffer* Copy() const override;
 
-  virtual int SetPosition(int iFrame);
-  virtual int Read(float* pBuffer, int iLength);
-  virtual int GetNextSourceFrame() const;
+  int SetPosition(int iFrame) override;
+  int Read(float* pBuffer, int iLength) override;
+  int GetNextSourceFrame() const override;
 
-  virtual int GetLength() const;
-  virtual int GetLength_Fast() const;
-  virtual int GetSampleRate() const { return m_iSampleRate; }
-  virtual unsigned GetNumChannels() const { return m_iChannels; }
-  virtual bool SetProperty(const std::string& sProperty, float fValue);
-  virtual float GetStreamToSourceRatio() const;
-  virtual RageSoundReader* GetSource() { return nullptr; }
+  int GetLength() const override;
+  int GetLength_Fast() const override;
+  int GetSampleRate() const override { return m_iSampleRate; }
+  unsigned GetNumChannels() const override { return m_iChannels; }
+  bool SetProperty(const std::string& sProperty, float fValue) override;
+  float GetStreamToSourceRatio() const override;
+  RageSoundReader* GetSource() override { return nullptr; }
+  std::string GetError() const override;
 
   /* Enable and disable threaded buffering.  Disable buffering before accessing
    * the underlying sound.  DisableBuffering returns true if buffering was
@@ -47,11 +50,14 @@ class RageSoundReader_ThreadedBuffer : public RageSoundReader_Filter {
   }
 
  private:
-  int FillFrames(int iBytes);
+  int FillFrames(int iFrames);
   int FillBlock();
   int GetFilledFrames() const;
   int GetEmptyFrames() const;
-  void WaitUntilFrames(int iWaitUntilFrames);
+  bool DisableBufferingForSourceAccess(bool* pWasEnabled);
+  bool IsTopologyUsable() const;
+  void ClearError() const;
+  void SetError(const std::string& sError) const;
 
   int m_iSampleRate;
   int m_iChannels;
@@ -60,7 +66,7 @@ class RageSoundReader_ThreadedBuffer : public RageSoundReader_Filter {
 
   struct Mapping {
     int iFramesBuffered;
-    int iPositionOfFirstFrame;
+    std::int64_t iPositionOfFirstFrame;
     float fRate;
     Mapping() : iFramesBuffered(0), iPositionOfFirstFrame(0), fRate(1.0f) {}
   };
@@ -85,6 +91,9 @@ class RageSoundReader_ThreadedBuffer : public RageSoundReader_Filter {
   }
 
   void BufferingThread();
+
+  mutable std::mutex m_ErrorMutex;
+  mutable std::string m_sError;
 };
 
 #endif

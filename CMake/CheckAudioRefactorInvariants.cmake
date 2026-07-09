@@ -65,6 +65,10 @@ read_source(
 read_source(
   "src/RageSoundReader_SpeedChange.cpp" rage_sound_reader_speed_change_cpp)
 read_source(
+  "src/RageSoundReader_ThreadedBuffer.h" rage_sound_reader_threaded_buffer_h)
+read_source(
+  "src/RageSoundReader_ThreadedBuffer.cpp" rage_sound_reader_threaded_buffer_cpp)
+read_source(
   "src/RageSoundReader_Resample_Good.h" rage_sound_reader_resample_good_h)
 read_source(
   "src/RageSoundReader_Resample_Good.cpp" rage_sound_reader_resample_good_cpp)
@@ -578,6 +582,46 @@ require_not_contains(
   "${rage_sound_reader_speed_change_h}"
   "return new RageSoundReader_SpeedChange(*this);"
   "SpeedChange must not return to inline throwing Copy")
+require_contains(
+  "${rage_sound_reader_threaded_buffer_h}"
+  "RageSoundReader_ThreadedBuffer* Copy() const override;"
+  "ThreadedBuffer copy contract is explicit and out-of-line")
+require_contains(
+  "${rage_sound_reader_threaded_buffer_h}"
+  "std::string GetError() const override;"
+  "ThreadedBuffer exposes filter-owned diagnostics")
+require_contains(
+  "${rage_sound_reader_threaded_buffer_h}"
+  "std::int64_t iPositionOfFirstFrame;"
+  "ThreadedBuffer mapping positions use 64-bit arithmetic")
+require_contains(
+  "${rage_sound_reader_threaded_buffer_cpp}"
+  "MAX_THREADED_BUFFER_CHANNELS"
+  "ThreadedBuffer enforces an explicit channel ceiling")
+require_contains(
+  "${rage_sound_reader_threaded_buffer_cpp}"
+  "m_DataBuffer.reserve(static_cast<unsigned>(iSampleCapacity), m_iChannels);"
+  "ThreadedBuffer reserves float samples, not byte counts")
+require_contains(
+  "${rage_sound_reader_threaded_buffer_cpp}"
+  "DisableBufferingForSourceAccess"
+  "ThreadedBuffer waits for source ownership before direct source access")
+require_contains(
+  "${rage_sound_reader_threaded_buffer_cpp}"
+  "RestoreThreadedBufferState"
+  "ThreadedBuffer restores original buffering state during copy failures")
+require_contains(
+  "${rage_sound_reader_threaded_buffer_cpp}"
+  "SRC_AUDIT_FIX SRC-2858"
+  "ThreadedBuffer records internal failures locally")
+require_not_contains(
+  "${rage_sound_reader_threaded_buffer_h}"
+  "return new RageSoundReader_ThreadedBuffer(*this);"
+  "ThreadedBuffer must not return to inline throwing Copy")
+require_not_contains(
+  "${rage_sound_reader_threaded_buffer_cpp}"
+  "void RageSoundReader_ThreadedBuffer::WaitUntilFrames"
+  "ThreadedBuffer must not keep unused wait helpers")
 require_contains(
   "${rage_sound_reader_resample_good_h}"
   "bool SetRate(float fRatio);"
