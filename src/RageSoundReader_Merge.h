@@ -1,34 +1,36 @@
 #ifndef RAGE_SOUND_READER_MERGE
 #define RAGE_SOUND_READER_MERGE
 
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "RageSoundReader.h"
 
-/** @brief Chain different sounds together. */
+/** @brief Mix multiple sound readers into one stream. */
 class RageSoundReader_Merge : public RageSoundReader {
  public:
   RageSoundReader_Merge();
-  virtual ~RageSoundReader_Merge();
-  RageSoundReader_Merge(const RageSoundReader_Merge& cpy);
-  virtual RageSoundReader_Merge* Copy() const {
-    return new RageSoundReader_Merge(*this);
-  }
+  RageSoundReader_Merge(const RageSoundReader_Merge& cpy) = delete;
+  RageSoundReader_Merge& operator=(const RageSoundReader_Merge& cpy) = delete;
+  ~RageSoundReader_Merge() override;
+  RageSoundReader_Merge* Copy() const override;
 
-  virtual int GetLength() const;
-  virtual int GetLength_Fast() const;
-  virtual int SetPosition(int iFrame);
-  virtual int Read(float* pBuf, int iFrames);
-  virtual int GetSampleRate() const { return m_iSampleRate; }
-  virtual unsigned GetNumChannels() const { return m_iChannels; }
-  virtual bool SetProperty(const std::string& sProperty, float fValue);
-  virtual int GetNextSourceFrame() const { return m_iNextSourceFrame; }
-  virtual float GetStreamToSourceRatio() const {
+  int GetLength() const override;
+  int GetLength_Fast() const override;
+  int SetPosition(int iFrame) override;
+  int Read(float* pBuf, int iFrames) override;
+  int GetSampleRate() const override { return m_iSampleRate; }
+  unsigned GetNumChannels() const override { return m_iChannels; }
+  bool SetProperty(const std::string& sProperty, float fValue) override;
+  int GetNextSourceFrame() const override;
+  float GetStreamToSourceRatio() const override {
     return m_fCurrentStreamToSourceRatio;
   }
-  virtual std::string GetError() const { return ""; }
+  std::string GetError() const override;
 
+  /* Takes ownership of pSound. */
   void AddSound(RageSoundReader* pSound);
 
   /**
@@ -38,15 +40,21 @@ class RageSoundReader_Merge : public RageSoundReader {
 
  private:
   int GetSampleRateInternal() const;
+  void ClearError() const;
+  void SetError(const std::string& sError) const;
+  bool IsSoundTopologyUsable(const RageSoundReader* pSound) const;
+  void EraseNullSounds();
 
-  int m_iSampleRate;
-  unsigned m_iChannels;
+  int m_iSampleRate = -1;
+  unsigned m_iChannels = 0;
+  bool m_bFinished = false;
 
-  std::vector<RageSoundReader*> m_aSounds;
+  std::vector<std::unique_ptr<RageSoundReader>> m_aSounds;
+  mutable std::string m_sError;
 
   /* Read state: */
-  int m_iNextSourceFrame;
-  float m_fCurrentStreamToSourceRatio;
+  std::int64_t m_iNextSourceFrame = 0;
+  float m_fCurrentStreamToSourceRatio = 1.0f;
 };
 
 #endif

@@ -84,6 +84,7 @@ read_source("src/RageSoundMixBuffer.h" rage_sound_mix_buffer_h)
 read_source("src/RageSoundMixBuffer.cpp" rage_sound_mix_buffer_cpp)
 read_source("src/RageSoundReader_Chain.h" rage_sound_reader_chain_h)
 read_source("src/RageSoundReader_Chain.cpp" rage_sound_reader_chain_cpp)
+read_source("src/RageSoundReader_Merge.h" rage_sound_reader_merge_h)
 read_source("src/RageSoundReader_Merge.cpp" rage_sound_reader_merge_cpp)
 read_source("src/StepMania.cpp" stepmania_cpp)
 read_source("src/RageDisplay.cpp" rage_display_cpp)
@@ -796,9 +797,77 @@ require_not_contains(
   "MakeLower(sPath)"
   "RageSoundReader_Chain must not lowercase real file paths before opening")
 require_contains(
+  "${rage_sound_reader_merge_h}"
+  "std::vector<std::unique_ptr<RageSoundReader>> m_aSounds;"
+  "RageSoundReader_Merge owns sources with unique_ptr")
+require_contains(
+  "${rage_sound_reader_merge_h}"
+  "RageSoundReader_Merge& operator=(const RageSoundReader_Merge& cpy) = delete;"
+  "RageSoundReader_Merge forbids implicit shallow assignment")
+require_contains(
+  "${rage_sound_reader_merge_h}"
+  "RageSoundReader_Merge* Copy() const override;"
+  "RageSoundReader_Merge copy is implemented out-of-line")
+require_contains(
+  "${rage_sound_reader_merge_h}"
+  "std::int64_t m_iNextSourceFrame"
+  "RageSoundReader_Merge stores internal source frame in 64-bit")
+require_contains(
+  "${rage_sound_reader_merge_h}"
+  "std::string GetError() const override;"
+  "RageSoundReader_Merge exposes local diagnostics")
+require_contains(
+  "${rage_sound_reader_merge_cpp}"
+  "SRC_AUDIT_FIX SRC-2876"
+  "RageSoundReader_Merge copy failures are diagnosable")
+require_contains(
+  "${rage_sound_reader_merge_cpp}"
+  "SRC_AUDIT_FIX SRC-2877"
+  "RageSoundReader_Merge AddSound/Finish misuse is diagnosable")
+require_contains(
+  "${rage_sound_reader_merge_cpp}"
+  "SRC_AUDIT_FIX SRC-2878"
+  "RageSoundReader_Merge wrapper publication failures are diagnosable")
+require_contains(
+  "${rage_sound_reader_merge_cpp}"
+  "SRC_AUDIT_FIX SRC-2879"
+  "RageSoundReader_Merge validates source topology")
+require_contains(
   "${rage_sound_reader_merge_cpp}"
   "RageSoundReader_Merge: mix buffer write failed"
   "RageSoundReader_Merge handles mix write failures")
+require_contains(
+  "${rage_sound_reader_merge_cpp}"
+  "SRC_AUDIT_FIX SRC-2880"
+  "RageSoundReader_Merge checks channel mismatch in release builds")
+require_contains(
+  "${rage_sound_reader_merge_cpp}"
+  "SRC_AUDIT_FIX SRC-2881"
+  "RageSoundReader_Merge guards mix offset arithmetic")
+require_contains(
+  "${rage_sound_reader_merge_cpp}"
+  "SRC_AUDIT_FIX SRC-2882"
+  "RageSoundReader_Merge seek failures are diagnosable")
+require_contains(
+  "${rage_sound_reader_merge_cpp}"
+  "SRC_AUDIT_FIX SRC-2883"
+  "RageSoundReader_Merge property mismatches are diagnosable")
+require_contains(
+  "${rage_sound_reader_merge_cpp}"
+  "SRC_AUDIT_FIX SRC-2884"
+  "RageSoundReader_Merge read failures are diagnosable")
+require_contains(
+  "${rage_sound_reader_merge_cpp}"
+  "SRC_AUDIT_FIX SRC-2885"
+  "RageSoundReader_Merge read allocations are guarded")
+require_contains(
+  "${rage_sound_reader_merge_cpp}"
+  "SRC_AUDIT_FIX SRC-2886"
+  "RageSoundReader_Merge resync arithmetic is guarded")
+require_contains(
+  "${rage_sound_reader_merge_cpp}"
+  "SRC_AUDIT_FIX SRC-2887"
+  "RageSoundReader_Merge frame arithmetic is guarded")
 require_contains(
   "${rage_sound_driver_generic_cpp}"
   "RageSoundDriver::MixIntoBuffer: mix buffer write failed"

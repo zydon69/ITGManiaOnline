@@ -6,7 +6,10 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
+#include <memory>
+#include <new>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "RageLog.h"
@@ -19,78 +22,114 @@
 #include "global.h"
 
 namespace {
+static const unsigned MAX_MERGE_CHANNELS = 64;
+
 bool IsUsableRatio(float ratio) {
   return std::isfinite(ratio) && ratio > 0.0f;
 }
 
-int AdvanceSourceFrame(int sourceFrame, int streamFrames, float ratio) {
+int ClampInt64ToInt(std::int64_t value) {
+  if (value > std::numeric_limits<int>::max()) {
+    return std::numeric_limits<int>::max();
+  }
+  if (value < std::numeric_limits<int>::min()) {
+    return std::numeric_limits<int>::min();
+  }
+  return static_cast<int>(value);
+}
+
+bool AdvanceSourceFrame(
+    std::int64_t* sourceFrame, int streamFrames, float ratio) {
+  if (sourceFrame == nullptr) {
+    return false;
+  }
   if (streamFrames <= 0 || !IsUsableRatio(ratio)) {
-    return sourceFrame;
+    return true;
   }
   const double delta = static_cast<double>(streamFrames) * ratio;
-  if (delta > static_cast<double>(std::numeric_limits<int>::max())) {
-    return std::numeric_limits<int>::max();
+  if (!std::isfinite(delta) ||
+      delta > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+    return false;
   }
-  const int rounded = static_cast<int>(std::lround(delta));
-  if (sourceFrame > std::numeric_limits<int>::max() - rounded) {
-    return std::numeric_limits<int>::max();
+  const std::int64_t rounded = static_cast<std::int64_t>(std::llround(delta));
+  if (rounded < 0 ||
+      *sourceFrame > std::numeric_limits<std::int64_t>::max() - rounded) {
+    return false;
   }
-  return sourceFrame + rounded;
+  *sourceFrame += rounded;
+  return true;
 }
 }  // namespace
 
-RageSoundReader_Merge::RageSoundReader_Merge() {
-  m_iSampleRate = -1;
-  m_iChannels = 0;
-  m_iNextSourceFrame = 0;
-  m_fCurrentStreamToSourceRatio = 1.0f;
-}
+RageSoundReader_Merge::RageSoundReader_Merge() = default;
+RageSoundReader_Merge::~RageSoundReader_Merge() = default;
 
-RageSoundReader_Merge::~RageSoundReader_Merge() {
-  for (RageSoundReader* it : m_aSounds) {
-    delete it;
-  }
-}
+RageSoundReader_Merge* RageSoundReader_Merge::Copy() const {
+  try {
+    std::unique_ptr<RageSoundReader_Merge> copy(new RageSoundReader_Merge());
+    copy->m_iSampleRate = m_iSampleRate;
+    copy->m_iChannels = m_iChannels;
+    copy->m_bFinished = m_bFinished;
+    copy->m_iNextSourceFrame = m_iNextSourceFrame;
+    copy->m_fCurrentStreamToSourceRatio = m_fCurrentStreamToSourceRatio;
 
-RageSoundReader_Merge::RageSoundReader_Merge(const RageSoundReader_Merge& cpy)
-    : RageSoundReader(cpy) {
-  m_iSampleRate = cpy.m_iSampleRate;
-  m_iChannels = cpy.m_iChannels;
-  m_iNextSourceFrame = cpy.m_iNextSourceFrame;
-  m_fCurrentStreamToSourceRatio = cpy.m_fCurrentStreamToSourceRatio;
-
-  for (const RageSoundReader* it : cpy.m_aSounds) {
-    RageSoundReader* copy = it != nullptr ? it->Copy() : nullptr;
-    if (it != nullptr && copy == nullptr) {
-      for (RageSoundReader* sound : m_aSounds) {
-        delete sound;
+    copy->m_aSounds.reserve(m_aSounds.size());
+    for (const auto& sound : m_aSounds) {
+      if (sound == nullptr) {
+        continue;
       }
-      m_aSounds.clear();
-      return;
+      std::unique_ptr<RageSoundReader> soundCopy(sound->Copy());
+      if (soundCopy == nullptr) {
+        SetError("SRC_AUDIT_FIX SRC-2876: failed to copy merge source reader");
+        return nullptr;
+      }
+      copy->m_aSounds.push_back(std::move(soundCopy));
     }
-    if (copy != nullptr) {
-      m_aSounds.push_back(copy);
-    }
+    return copy.release();
+  } catch (const std::bad_alloc&) {
+    SetError("SRC_AUDIT_FIX SRC-2876: failed to allocate merge copy");
+    return nullptr;
   }
 }
 
 void RageSoundReader_Merge::AddSound(RageSoundReader* pSound) {
+  std::unique_ptr<RageSoundReader> soundOwner(pSound);
   if (pSound == nullptr) {
     if (LOG != nullptr) {
       LOG->Warn("RageSoundReader_Merge::AddSound: null sound reader");
     }
     return;
   }
-  m_aSounds.push_back(pSound);
+  if (m_bFinished) {
+    SetError("SRC_AUDIT_FIX SRC-2877: attempted to add merge source after "
+             "Finish");
+    if (LOG != nullptr) {
+      LOG->Warn("RageSoundReader_Merge::AddSound: ignored sound added after "
+                "Finish");
+    }
+    return;
+  }
+  try {
+    m_aSounds.push_back(std::move(soundOwner));
+  } catch (const std::bad_alloc&) {
+    SetError("SRC_AUDIT_FIX SRC-2877: failed to store merge source reader");
+  }
 }
 
 /* If every sound has the same sample rate, return it.  Otherwise, return -1. */
 int RageSoundReader_Merge::GetSampleRateInternal() const {
-  // TODO: Convert to a set and compare values?
+  if (m_aSounds.empty()) {
+    return FALLBACK_SAMPLE_RATE;
+  }
+
   int iRate = -1;
-  for (const RageSoundReader* it : m_aSounds) {
+  for (const auto& sound : m_aSounds) {
+    const RageSoundReader* it = sound.get();
     if (it == nullptr) {
       continue;
+    }
+    if (it->GetSampleRate() <= 0) {
+      return -1;
     }
     if (iRate == -1) {
       iRate = it->GetSampleRate();
@@ -102,6 +141,11 @@ int RageSoundReader_Merge::GetSampleRateInternal() const {
 }
 
 void RageSoundReader_Merge::Finish(int iPreferredSampleRate) {
+  if (m_bFinished) {
+    SetError("SRC_AUDIT_FIX SRC-2877: attempted to finish merge twice");
+    return;
+  }
+  ClearError();
   if (iPreferredSampleRate <= 0) {
     iPreferredSampleRate = FALLBACK_SAMPLE_RATE;
   }
@@ -109,11 +153,34 @@ void RageSoundReader_Merge::Finish(int iPreferredSampleRate) {
    * channels, which will be converted as needed, or have the same number of
    * channels. */
   m_iChannels = 1;
-  for (RageSoundReader* it : m_aSounds) {
-    if (it == nullptr) {
+  for (auto& sound : m_aSounds) {
+    if (sound == nullptr) {
       continue;
     }
-    m_iChannels = std::max(m_iChannels, it->GetNumChannels());
+    if (!IsSoundTopologyUsable(sound.get())) {
+      SetError("SRC_AUDIT_FIX SRC-2879: discarded invalid merge source "
+               "topology");
+      sound.reset();
+      continue;
+    }
+    m_iChannels = std::max(m_iChannels, sound->GetNumChannels());
+  }
+  EraseNullSounds();
+
+  if (m_iChannels > 2) {
+    for (auto& sound : m_aSounds) {
+      if (sound != nullptr && sound->GetNumChannels() != m_iChannels) {
+        if (LOG != nullptr) {
+          LOG->Warn(
+              "Discarded sound with %i channels, not %i", sound->GetNumChannels(),
+              m_iChannels);
+        }
+        SetError("SRC_AUDIT_FIX SRC-2879: discarded merge source with "
+                 "incompatible channel count");
+        sound.reset();
+      }
+    }
+    EraseNullSounds();
   }
 
   /*
@@ -124,86 +191,145 @@ void RageSoundReader_Merge::Finish(int iPreferredSampleRate) {
    */
   m_iSampleRate = GetSampleRateInternal();
   if (m_iSampleRate == -1) {
-    for (RageSoundReader*& it : m_aSounds) {
-      if (it == nullptr) {
+    for (auto& sound : m_aSounds) {
+      if (sound == nullptr) {
         continue;
       }
-      RageSoundReader_Resample_Good* pResample =
-          new RageSoundReader_Resample_Good(it, iPreferredSampleRate);
-      it = pResample;
+      try {
+        std::unique_ptr<RageSoundReader> original(std::move(sound));
+        RageSoundReader* pRawOriginal = original.release();
+        std::unique_ptr<RageSoundReader> pResample;
+        try {
+          pResample.reset(new RageSoundReader_Resample_Good(
+              pRawOriginal, iPreferredSampleRate));
+          pRawOriginal = nullptr;
+        } catch (...) {
+          original.reset(pRawOriginal);
+          sound = std::move(original);
+          throw;
+        }
+
+        if (!IsSoundTopologyUsable(pResample.get())) {
+          SetError("SRC_AUDIT_FIX SRC-2878: discarded invalid merge resample "
+                   "wrapper");
+          sound.reset();
+          continue;
+        }
+        sound = std::move(pResample);
+      } catch (const std::bad_alloc&) {
+        SetError("SRC_AUDIT_FIX SRC-2878: failed to allocate merge resampler");
+        sound.reset();
+      }
     }
 
     m_iSampleRate = iPreferredSampleRate;
+    EraseNullSounds();
   }
 
   /* If we have two channels, and any sounds have only one, convert them by
    * adding a Pan filter. */
-  for (RageSoundReader*& it : m_aSounds) {
-    if (it != nullptr && it->GetNumChannels() != this->GetNumChannels()) {
-      it = new RageSoundReader_Pan(it);
-    }
-  }
-
-  /* If we have more than two channels, then all sounds must have the same
-   * number of channels. */
-  if (m_iChannels > 2) {
-    std::vector<RageSoundReader*> aSounds;
-    for (RageSoundReader* it : m_aSounds) {
-      if (it != nullptr && it->GetNumChannels() != m_iChannels) {
-        if (LOG != nullptr) {
-          LOG->Warn(
-              "Discarded sound with %i channels, not %i", it->GetNumChannels(),
-              m_iChannels);
+  for (auto& sound : m_aSounds) {
+    if (sound != nullptr && sound->GetNumChannels() != this->GetNumChannels()) {
+      try {
+        RageSoundReader* pRawSound = sound.release();
+        std::unique_ptr<RageSoundReader> pPan;
+        try {
+          pPan.reset(new RageSoundReader_Pan(pRawSound));
+          pRawSound = nullptr;
+        } catch (...) {
+          sound.reset(pRawSound);
+          throw;
         }
-        delete it;
-        it = nullptr;
-      } else if (it != nullptr) {
-        aSounds.push_back(it);
+        if (!IsSoundTopologyUsable(pPan.get()) ||
+            pPan->GetNumChannels() != this->GetNumChannels()) {
+          SetError("SRC_AUDIT_FIX SRC-2878: discarded invalid merge pan "
+                   "wrapper");
+          sound.reset();
+          continue;
+        }
+        sound = std::move(pPan);
+      } catch (const std::bad_alloc&) {
+        SetError("SRC_AUDIT_FIX SRC-2878: failed to allocate merge pan filter");
+        sound.reset();
       }
     }
-    m_aSounds = aSounds;
+  }
+  EraseNullSounds();
+
+  if (m_aSounds.empty()) {
+    m_iChannels = 1;
   }
   if (m_iSampleRate <= 0) {
     m_iSampleRate = iPreferredSampleRate;
   }
+  m_bFinished = true;
 }
 
 int RageSoundReader_Merge::SetPosition(int iFrame) {
-  m_iNextSourceFrame = iFrame;
-
   int iRet = 0;
-  for (int i = 0; i < (int)m_aSounds.size(); ++i) {
-    RageSoundReader* pSound = m_aSounds[i];
+  std::vector<RageSoundReader*> seeked;
+  try {
+    seeked.reserve(m_aSounds.size());
+  } catch (const std::bad_alloc&) {
+    SetError("SRC_AUDIT_FIX SRC-2882: failed to track merge seek rollback");
+    return ERROR;
+  }
+
+  for (auto& sound : m_aSounds) {
+    RageSoundReader* pSound = sound.get();
     if (pSound == nullptr) {
       continue;
     }
     int iThisRet = pSound->SetPosition(iFrame);
     if (iThisRet == -1) {
-      return -1;
+      for (RageSoundReader* seekedSound : seeked) {
+        seekedSound->SetPosition(ClampInt64ToInt(m_iNextSourceFrame));
+      }
+      SetError("SRC_AUDIT_FIX SRC-2882: merge source seek failed");
+      return ERROR;
     }
+    seeked.push_back(pSound);
     if (iThisRet > 0) {
       iRet = 1;
     }
   }
 
+  m_iNextSourceFrame = iFrame;
+  ClearError();
   return iRet;
 }
 
 bool RageSoundReader_Merge::SetProperty(
     const std::string& sProperty, float fValue) {
-  bool bRet = false;
-  for (unsigned i = 0; i < m_aSounds.size(); ++i) {
-    if (m_aSounds[i] != nullptr &&
-        m_aSounds[i]->SetProperty(sProperty, fValue)) {
-      bRet = true;
+  bool bAnyAccepted = false;
+  bool bAnyRejected = false;
+  for (auto& sound : m_aSounds) {
+    if (sound == nullptr) {
+      continue;
+    }
+    if (sound->SetProperty(sProperty, fValue)) {
+      bAnyAccepted = true;
+    } else {
+      bAnyRejected = true;
     }
   }
 
-  return bRet;
+  if (bAnyAccepted && bAnyRejected) {
+    SetError("SRC_AUDIT_FIX SRC-2883: merge property was only partially "
+             "accepted");
+    return false;
+  }
+  if (!bAnyAccepted) {
+    SetError("SRC_AUDIT_FIX SRC-2883: merge property was rejected by all "
+             "sources");
+    return false;
+  }
+  ClearError();
+  return true;
 }
 
 static float Difference(float a, float b) { return std::abs(a - b); }
-static uint64_t Difference(int a, int b) {
+static uint64_t Difference(std::int64_t a, std::int64_t b) {
   if (a >= b) {
     return static_cast<uint64_t>(a) - static_cast<uint64_t>(b);
   }
@@ -236,7 +362,9 @@ static const int ERROR_CORRECTION_THRESHOLD = 16;
  * different sounds; a sound may be needed by more than one other sound. */
 int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
   if (pBuffer == nullptr || iFrames < 0 || m_iChannels == 0 ||
-      m_iSampleRate <= 0 || !IsUsableRatio(m_fCurrentStreamToSourceRatio)) {
+      m_iChannels > MAX_MERGE_CHANNELS || m_iSampleRate <= 0 ||
+      !m_bFinished || !IsUsableRatio(m_fCurrentStreamToSourceRatio)) {
+    SetError("SRC_AUDIT_FIX SRC-2884: invalid merge read state");
     return ERROR;
   }
   if (iFrames == 0) {
@@ -251,16 +379,26 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
    * should not come out of sync.  Accomodate small rounding errors.  A larger
    * inconsistency happens may be a bug, such as sounds at different speeds.
    */
-  std::vector<int> aNextSourceFrames(m_aSounds.size());
-  std::vector<float> aRatios(m_aSounds.size());
+  std::vector<std::int64_t> aNextSourceFrames;
+  std::vector<float> aRatios;
+  try {
+    aNextSourceFrames.resize(m_aSounds.size());
+    aRatios.resize(m_aSounds.size());
+  } catch (const std::bad_alloc&) {
+    SetError("SRC_AUDIT_FIX SRC-2885: failed to allocate merge read state");
+    return ERROR;
+  }
 
   for (size_t i = 0; i < m_aSounds.size(); ++i) {
     if (m_aSounds[i] == nullptr) {
+      SetError("SRC_AUDIT_FIX SRC-2884: merge source reader is null");
       return ERROR;
     }
     aNextSourceFrames[i] = m_aSounds[i]->GetNextSourceFrame();
     aRatios[i] = m_aSounds[i]->GetStreamToSourceRatio();
     if (!IsUsableRatio(aRatios[i])) {
+      SetError("SRC_AUDIT_FIX SRC-2884: merge source has invalid stream "
+               "ratio");
       return ERROR;
     }
   }
@@ -281,15 +419,30 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
     return 0;
   }
 
-  int iMinPosition = aNextSourceFrames[iEarliestSound];
+  const std::int64_t iMinPosition = aNextSourceFrames[iEarliestSound];
   for (size_t i = 0; i < m_aSounds.size(); ++i) {
     if (Difference(aNextSourceFrames[i], iMinPosition) >
         ERROR_CORRECTION_THRESHOLD) {
       /* A sound is being delayed to resync it; clamp the number of frames we
        * read now, so we don't advance past it. */
-      int iMaxSourceFramesToRead = aNextSourceFrames[i] - iMinPosition;
-      int iMaxStreamFramesToRead = static_cast<int>(
-          (iMaxSourceFramesToRead / m_fCurrentStreamToSourceRatio) + 0.5);
+      const std::int64_t iMaxSourceFramesToRead =
+          aNextSourceFrames[i] - iMinPosition;
+      if (iMaxSourceFramesToRead <= 0) {
+        continue;
+      }
+      const double iMaxStreamFrames =
+          (static_cast<double>(iMaxSourceFramesToRead) /
+           m_fCurrentStreamToSourceRatio) +
+          0.5;
+      if (!std::isfinite(iMaxStreamFrames)) {
+        SetError("SRC_AUDIT_FIX SRC-2886: merge resync frame calculation "
+                 "overflow");
+        return ERROR;
+      }
+      int iMaxStreamFramesToRead =
+          iMaxStreamFrames > std::numeric_limits<int>::max()
+              ? std::numeric_limits<int>::max()
+              : std::max(1, static_cast<int>(iMaxStreamFrames));
       iFrames = std::min(iFrames, iMaxStreamFramesToRead);
       //			LOG->Warn( "RageSoundReader_Merge: sound
       // positions moving at different rates" );
@@ -298,12 +451,19 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
 
   // Read directly if there's only one sound
   if (m_aSounds.size() == 1) {
-    RageSoundReader* pSound = m_aSounds.front();
+    RageSoundReader* pSound = m_aSounds.front().get();
+    if (pSound == nullptr || pSound->GetNumChannels() != m_iChannels) {
+      SetError("SRC_AUDIT_FIX SRC-2880: merge source channel mismatch");
+      return ERROR;
+    }
     iFrames = pSound->Read(pBuffer, iFrames);
     if (iFrames > 0) {
-      m_iNextSourceFrame =
-          AdvanceSourceFrame(
-              m_iNextSourceFrame, iFrames, m_fCurrentStreamToSourceRatio);
+      if (!AdvanceSourceFrame(
+              &m_iNextSourceFrame, iFrames, m_fCurrentStreamToSourceRatio)) {
+        SetError("SRC_AUDIT_FIX SRC-2887: merge source frame overflow");
+        return ERROR;
+      }
+      ClearError();
     }
     return iFrames;
   }
@@ -317,8 +477,11 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
 
   /* Read iFrames from each sound. */
   for (size_t i = 0; i < m_aSounds.size(); ++i) {
-    RageSoundReader* pSound = m_aSounds[i];
-    ASSERT(pSound->GetNumChannels() == m_iChannels);
+    RageSoundReader* pSound = m_aSounds[i].get();
+    if (pSound == nullptr || pSound->GetNumChannels() != m_iChannels) {
+      SetError("SRC_AUDIT_FIX SRC-2880: merge source channel mismatch");
+      return ERROR;
+    }
 
     int iFramesRead = 0;
     while (iFramesRead < iFrames) {
@@ -348,12 +511,28 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
       if (iGotFrames == 0) {
         break;
       }
+      if (!IsUsableRatio(aRatios[i])) {
+        SetError("SRC_AUDIT_FIX SRC-2884: merge source ratio became invalid");
+        return ERROR;
+      }
 
-      if (!mix.SetWriteOffset(iFramesRead * pSound->GetNumChannels()) ||
-          !mix.write(Buffer, iGotFrames * pSound->GetNumChannels())) {
-        LOG->Warn(
-            "RageSoundReader_Merge: mix buffer write failed: %s",
-            mix.GetError().c_str());
+      const unsigned soundChannels = pSound->GetNumChannels();
+      if (soundChannels == 0 ||
+          static_cast<size_t>(iFramesRead) >
+              static_cast<size_t>(std::numeric_limits<int>::max()) /
+                  soundChannels ||
+          static_cast<size_t>(iGotFrames) >
+              std::numeric_limits<size_t>::max() / soundChannels ||
+          !mix.SetWriteOffset(
+              static_cast<int>(iFramesRead * soundChannels)) ||
+          !mix.write(
+              Buffer, static_cast<size_t>(iGotFrames) * soundChannels)) {
+        SetError("SRC_AUDIT_FIX SRC-2881: merge mix buffer write failed");
+        if (LOG != nullptr) {
+          LOG->Warn(
+              "RageSoundReader_Merge: mix buffer write failed: %s",
+              mix.GetError().c_str());
+        }
         return ERROR;
       }
       iFramesRead += iGotFrames;
@@ -370,23 +549,31 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
     return 0;
   }
   if (!mix.read(pBuffer)) {
-    LOG->Warn(
-        "RageSoundReader_Merge: mix buffer read failed: %s",
-        mix.GetError().c_str());
+    SetError("SRC_AUDIT_FIX SRC-2884: merge mix buffer read failed");
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "RageSoundReader_Merge: mix buffer read failed: %s",
+          mix.GetError().c_str());
+    }
     return ERROR;
   }
 
-  m_iNextSourceFrame = AdvanceSourceFrame(
-      m_iNextSourceFrame, iMaxFramesRead, m_fCurrentStreamToSourceRatio);
+  if (!AdvanceSourceFrame(
+          &m_iNextSourceFrame, iMaxFramesRead,
+          m_fCurrentStreamToSourceRatio)) {
+    SetError("SRC_AUDIT_FIX SRC-2887: merge source frame overflow");
+    return ERROR;
+  }
 
+  ClearError();
   return iMaxFramesRead;
 }
 
 int RageSoundReader_Merge::GetLength() const {
   int iLength = 0;
-  for (unsigned i = 0; i < m_aSounds.size(); ++i) {
-    if (m_aSounds[i] != nullptr) {
-      iLength = std::max(iLength, m_aSounds[i]->GetLength());
+  for (const auto& sound : m_aSounds) {
+    if (sound != nullptr) {
+      iLength = std::max(iLength, sound->GetLength());
     }
   }
   return iLength;
@@ -394,12 +581,60 @@ int RageSoundReader_Merge::GetLength() const {
 
 int RageSoundReader_Merge::GetLength_Fast() const {
   int iLength = 0;
-  for (unsigned i = 0; i < m_aSounds.size(); ++i) {
-    if (m_aSounds[i] != nullptr) {
-      iLength = std::max(iLength, m_aSounds[i]->GetLength_Fast());
+  for (const auto& sound : m_aSounds) {
+    if (sound != nullptr) {
+      iLength = std::max(iLength, sound->GetLength_Fast());
     }
   }
   return iLength;
+}
+
+int RageSoundReader_Merge::GetNextSourceFrame() const {
+  return ClampInt64ToInt(m_iNextSourceFrame);
+}
+
+std::string RageSoundReader_Merge::GetError() const {
+  if (!m_sError.empty()) {
+    return m_sError;
+  }
+  for (const auto& sound : m_aSounds) {
+    if (sound == nullptr) {
+      continue;
+    }
+    const std::string sourceError = sound->GetError();
+    if (!sourceError.empty()) {
+      return sourceError;
+    }
+  }
+  return std::string();
+}
+
+void RageSoundReader_Merge::ClearError() const {
+  m_sError.clear();
+}
+
+void RageSoundReader_Merge::SetError(const std::string& sError) const {
+  m_sError = sError;
+}
+
+bool RageSoundReader_Merge::IsSoundTopologyUsable(
+    const RageSoundReader* pSound) const {
+  if (pSound == nullptr) {
+    return false;
+  }
+  const unsigned channels = pSound->GetNumChannels();
+  return pSound->GetSampleRate() > 0 && channels > 0 &&
+         channels <= MAX_MERGE_CHANNELS;
+}
+
+void RageSoundReader_Merge::EraseNullSounds() {
+  m_aSounds.erase(
+      std::remove_if(
+          m_aSounds.begin(), m_aSounds.end(),
+          [](const std::unique_ptr<RageSoundReader>& sound) {
+            return sound == nullptr;
+          }),
+      m_aSounds.end());
 }
 
 /*
