@@ -4,6 +4,7 @@
 #ifndef RAGE_SOUND_READER_PITCH_CHANGE_H
 #define RAGE_SOUND_READER_PITCH_CHANGE_H
 
+#include <mutex>
 #include <string>
 
 #include "RageSoundReader.h"
@@ -15,30 +16,37 @@ class RageSoundReader_PitchChange : public RageSoundReader_Filter {
  public:
   RageSoundReader_PitchChange(RageSoundReader* pSource);
   RageSoundReader_PitchChange(const RageSoundReader_PitchChange& cpy);
+  RageSoundReader_PitchChange& operator=(
+      const RageSoundReader_PitchChange& rhs) = delete;
 
-  virtual int Read(float* pBuf, int iFrames);
-  virtual bool SetProperty(const std::string& sProperty, float fValue);
+  int Read(float* pBuf, int iFrames) override;
+  bool SetProperty(const std::string& sProperty, float fValue) override;
+  std::string GetError() const override;
 
   bool SetSpeedRatio(float fRatio);
   bool SetPitchRatio(float fRatio);
 
-  virtual RageSoundReader_PitchChange* Copy() const {
-    return new RageSoundReader_PitchChange(*this);
-  }
+  RageSoundReader_PitchChange* Copy() const override;
 
  private:
+  bool IsTopologyUsable() const;
+  void ClearError() const;
+  void SetError(const std::string& sError) const;
+
   RageSoundReader_SpeedChange*
       m_pSpeedChange;  // freed by RageSoundReader_Filter
   RageSoundReader_Resample_Good*
       m_pResample;  // freed by RageSoundReader_Filter
+  bool m_bPreservePitch;
 
   float m_fSpeedRatio;
   float m_fPitchRatio;
   float m_fLastSetSpeedRatio;
   float m_fLastSetPitchRatio;
-  // Swallow up warnings. If they must be used, define them.
-  RageSoundReader_PitchChange& operator=(
-      const RageSoundReader_PitchChange& rhs);
+
+  mutable std::mutex m_StateMutex;
+  mutable std::mutex m_ErrorMutex;
+  mutable std::string m_sError;
 };
 
 #endif

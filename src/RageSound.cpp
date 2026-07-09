@@ -489,6 +489,13 @@ bool RageSound::Load(
       m_pSource = new RageSoundReader_Pan(m_pSource);
     }
 
+    const std::string setupError = m_pSource == nullptr
+                                       ? "Sound reader setup failed"
+                                       : m_pSource->GetError();
+    if (!setupError.empty()) {
+      m_sError = setupError;
+    }
+
     m_sFilePath = sSoundFilePath;
 
     m_Mutex.SetName(

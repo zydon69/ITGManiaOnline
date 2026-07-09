@@ -56,6 +56,10 @@ read_source("src/RageSoundReader_Preload.h" rage_sound_reader_preload_h)
 read_source("src/RageSoundReader_Preload.cpp" rage_sound_reader_preload_cpp)
 read_source("src/RageSoundReader_Pan.h" rage_sound_reader_pan_h)
 read_source("src/RageSoundReader_Pan.cpp" rage_sound_reader_pan_cpp)
+read_source(
+  "src/RageSoundReader_PitchChange.h" rage_sound_reader_pitch_change_h)
+read_source(
+  "src/RageSoundReader_PitchChange.cpp" rage_sound_reader_pitch_change_cpp)
 read_source("src/RageSoundReader_WAV.h" rage_sound_reader_wav_h)
 read_source("src/RageSoundReader_WAV.cpp" rage_sound_reader_wav_cpp)
 read_source("src/RageSoundReader_Vorbisfile.h" rage_sound_reader_vorbis_h)
@@ -490,6 +494,42 @@ require_contains(
   "${rage_sound_reader_pan_cpp}"
   "RageSoundReader_Pan::Read called with a null output buffer"
   "RageSoundReader_Pan diagnoses invalid output buffers")
+require_contains(
+  "${rage_sound_reader_pitch_change_h}"
+  "RageSoundReader_PitchChange* Copy() const override;"
+  "PitchChange copy contract is explicit and out-of-line")
+require_contains(
+  "${rage_sound_reader_pitch_change_h}"
+  "std::string GetError() const override;"
+  "PitchChange exposes filter-owned diagnostics")
+require_contains(
+  "${rage_sound_reader_pitch_change_h}"
+  "mutable std::mutex m_StateMutex;"
+  "PitchChange serializes ratio updates across gameplay and audio threads")
+require_contains(
+  "${rage_sound_reader_pitch_change_cpp}"
+  "std::unique_ptr<RageSoundReader> pOwnedSource(pSource);"
+  "PitchChange uses temporary ownership while building its filter chain")
+require_contains(
+  "${rage_sound_reader_pitch_change_cpp}"
+  "catch (const std::bad_alloc&)"
+  "PitchChange converts allocation failure into reader errors or nullptr")
+require_contains(
+  "${rage_sound_reader_pitch_change_cpp}"
+  "m_bPreservePitch(g_bRateModPreservesPitch.Get())"
+  "PitchChange snapshots RateModPreservesPitch at construction")
+require_contains(
+  "${rage_sound_reader_pitch_change_cpp}"
+  "SRC_AUDIT_FIX SRC-2827"
+  "PitchChange records internal read failures locally")
+require_contains(
+  "${rage_sound_reader_pitch_change_cpp}"
+  "SRC_AUDIT_FIX SRC-2830"
+  "PitchChange rejects unsafe speed and pitch ratios before resampling")
+require_contains(
+  "${rage_sound_cpp}"
+  "const std::string setupError ="
+  "RageSound::Load surfaces filter-chain setup errors immediately")
 require_contains(
   "${rage_sound_reader_channel_split_h}"
   "std::shared_ptr<RageSoundSplitterImpl> m_pImpl;"

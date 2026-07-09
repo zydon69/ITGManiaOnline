@@ -11,6 +11,8 @@
 #include "RageSoundReader_PitchChange.h"
 
 #include <cmath>
+#include <memory>
+#include <new>
 #include <string>
 
 #include "Preference.h"
@@ -20,44 +22,99 @@
 #include "RageSoundReader_SpeedChange.h"
 
 static Preference<bool> g_bRateModPreservesPitch("RateModPreservesPitch", true);
+static constexpr float MAX_REASONABLE_RATIO = 64.0f;
+
+static bool IsUsableSource(const RageSoundReader* pSource) {
+  return pSource != nullptr && pSource->GetSampleRate() > 0 &&
+         pSource->GetNumChannels() > 0;
+}
+
+static bool IsUsableRatio(float fRatio) {
+  return std::isfinite(fRatio) && fRatio > 0.0f &&
+         fRatio <= MAX_REASONABLE_RATIO;
+}
 
 RageSoundReader_PitchChange::RageSoundReader_PitchChange(
     RageSoundReader* pSource)
-    : RageSoundReader_Filter(nullptr) {
-  m_fSpeedRatio = 1.0f;
-  m_fPitchRatio = 1.0f;
-  m_fLastSetSpeedRatio = m_fSpeedRatio;
-  m_fLastSetPitchRatio = m_fPitchRatio;
-  m_pSpeedChange = nullptr;
-  m_pResample = nullptr;
-
-  if (pSource == nullptr || pSource->GetSampleRate() <= 0 ||
-      pSource->GetNumChannels() == 0) {
-    m_pSource = pSource;
+    : RageSoundReader_Filter(nullptr),
+      m_pSpeedChange(nullptr),
+      m_pResample(nullptr),
+      m_bPreservePitch(g_bRateModPreservesPitch.Get()),
+      m_fSpeedRatio(1.0f),
+      m_fPitchRatio(1.0f),
+      m_fLastSetSpeedRatio(1.0f),
+      m_fLastSetPitchRatio(1.0f) {
+  std::unique_ptr<RageSoundReader> pOwnedSource(pSource);
+  if (!IsUsableSource(pOwnedSource.get())) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2825: RageSoundReader_PitchChange received an "
+        "invalid source reader");
     return;
   }
 
-  bool bPreservePitch = g_bRateModPreservesPitch.Get();
-  if (bPreservePitch) {
-    m_pSpeedChange = new RageSoundReader_SpeedChange(pSource);
-    if (m_pSpeedChange->GetSampleRate() <= 0 ||
-        m_pSpeedChange->GetNumChannels() == 0) {
-      delete m_pSpeedChange;
-      m_pSpeedChange = nullptr;
+  try {
+    if (m_bPreservePitch) {
+      RageSoundReader* pSourceRaw = pOwnedSource.get();
+      std::unique_ptr<RageSoundReader_SpeedChange> pSpeedChange(
+          new RageSoundReader_SpeedChange(pSourceRaw));
+      pOwnedSource.release();
+      if (!IsUsableSource(pSpeedChange.get())) {
+        SetError(
+            "SRC_AUDIT_FIX SRC-2825: RageSoundReader_PitchChange could not "
+            "build a usable speed-change reader");
+        return;
+      }
+
+      RageSoundReader_SpeedChange* pSpeedChangeRaw = pSpeedChange.get();
+      std::unique_ptr<RageSoundReader_Resample_Good> pResample(
+          new RageSoundReader_Resample_Good(
+              pSpeedChangeRaw, pSpeedChangeRaw->GetSampleRate()));
+      pSpeedChange.release();
+      if (!IsUsableSource(pResample.get())) {
+        SetError(
+            "SRC_AUDIT_FIX SRC-2825: RageSoundReader_PitchChange could not "
+            "build a usable resampler");
+        return;
+      }
+
+      m_pSpeedChange = pSpeedChangeRaw;
+      m_pResample = pResample.get();
+      m_pSource = pResample.release();
       return;
     }
-    m_pResample = new RageSoundReader_Resample_Good(
-        m_pSpeedChange, m_pSpeedChange->GetSampleRate());
-  } else {
-    m_pResample =
-        new RageSoundReader_Resample_Good(pSource, pSource->GetSampleRate());
+
+    const int iSourceSampleRate = pOwnedSource->GetSampleRate();
+    RageSoundReader* pSourceRaw = pOwnedSource.get();
+    std::unique_ptr<RageSoundReader_Resample_Good> pResample(
+        new RageSoundReader_Resample_Good(
+            pSourceRaw, iSourceSampleRate));
+    pOwnedSource.release();
+    if (!IsUsableSource(pResample.get())) {
+      SetError(
+          "SRC_AUDIT_FIX SRC-2825: RageSoundReader_PitchChange could not "
+          "build a usable non-preserving resampler");
+      return;
+    }
+
+    m_pResample = pResample.get();
+    m_pSource = pResample.release();
+  } catch (const std::bad_alloc&) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2824: RageSoundReader_PitchChange ran out of "
+        "memory while building its filter chain");
   }
-  m_pSource = m_pResample;
 }
 
 RageSoundReader_PitchChange::RageSoundReader_PitchChange(
     const RageSoundReader_PitchChange& cpy)
-    : RageSoundReader_Filter(cpy) {
+    : RageSoundReader_Filter(cpy),
+      m_pSpeedChange(nullptr),
+      m_pResample(nullptr),
+      m_bPreservePitch(cpy.m_bPreservePitch),
+      m_fSpeedRatio(1.0f),
+      m_fPitchRatio(1.0f),
+      m_fLastSetSpeedRatio(1.0f),
+      m_fLastSetPitchRatio(1.0f) {
   /* The source tree has already been copied.  Our source is m_pResample; its
    * source is m_pSpeedChange (and its source is a copy of the pSource we were
    * initialized with). */
@@ -69,30 +126,68 @@ RageSoundReader_PitchChange::RageSoundReader_PitchChange(
       m_pResample == nullptr
           ? nullptr
           : dynamic_cast<RageSoundReader_SpeedChange*>(m_pResample->GetSource());
-  m_fSpeedRatio = cpy.m_fSpeedRatio;
-  m_fPitchRatio = cpy.m_fPitchRatio;
-  m_fLastSetSpeedRatio = cpy.m_fLastSetSpeedRatio;
-  m_fLastSetPitchRatio = cpy.m_fLastSetPitchRatio;
+
+  {
+    std::lock_guard<std::mutex> lock(cpy.m_StateMutex);
+    m_fSpeedRatio = cpy.m_fSpeedRatio;
+    m_fPitchRatio = cpy.m_fPitchRatio;
+    m_fLastSetSpeedRatio = cpy.m_fLastSetSpeedRatio;
+    m_fLastSetPitchRatio = cpy.m_fLastSetPitchRatio;
+  }
+
+  if (!IsTopologyUsable()) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2826: RageSoundReader_PitchChange copy produced "
+        "an invalid filter topology");
+  }
+}
+
+RageSoundReader_PitchChange* RageSoundReader_PitchChange::Copy() const {
+  try {
+    RageSoundReader_PitchChange* pCopy =
+        new RageSoundReader_PitchChange(*this);
+    if (!pCopy->IsTopologyUsable()) {
+      delete pCopy;
+      return nullptr;
+    }
+    return pCopy;
+  } catch (const std::bad_alloc&) {
+    return nullptr;
+  }
 }
 
 int RageSoundReader_PitchChange::Read(float* pBuf, int iFrames) {
   if (iFrames == 0) {
     return 0;
   }
-  if (pBuf == nullptr || iFrames < 0 || m_pSource.isNull() ||
-      m_pResample == nullptr) {
+  if (pBuf == nullptr) {
+    SetError("SRC_AUDIT_FIX SRC-2827: PitchChange Read called with null buffer");
     return RageSoundReader::ERROR;
   }
+  if (iFrames < 0) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2827: PitchChange Read called with negative frame "
+        "count");
+    return RageSoundReader::ERROR;
+  }
+  if (!IsTopologyUsable()) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2827: PitchChange Read has no usable filter "
+        "topology");
+    return RageSoundReader::ERROR;
+  }
+
   /* m_pSpeedChange->NextReadWillStep is true if speed changes will be applied
    * immediately on the next Read().  When this is true, apply the ratio to the
    * resampler and the speed changer simultaneously, so they take effect as
    * closely together as possible. */
-  bool bPreservePitch = g_bRateModPreservesPitch.Get();
-  if ((!bPreservePitch) || ((m_fLastSetSpeedRatio != m_fSpeedRatio ||
-                             m_fLastSetPitchRatio != m_fPitchRatio) &&
-                            m_pSpeedChange != nullptr &&
-                            m_pSpeedChange->NextReadWillStep())) {
-    float fRate = GetStreamToSourceRatio();
+  {
+    std::lock_guard<std::mutex> lock(m_StateMutex);
+    if ((!m_bPreservePitch) ||
+        ((m_fLastSetSpeedRatio != m_fSpeedRatio ||
+          m_fLastSetPitchRatio != m_fPitchRatio) &&
+         m_pSpeedChange != nullptr && m_pSpeedChange->NextReadWillStep())) {
+      float fRate = GetStreamToSourceRatio();
 
     /* This is the simple way: */
     // m_pResample->SetRate( m_fPitchRatio );
@@ -102,31 +197,46 @@ int RageSoundReader_PitchChange::Read(float* pBuf, int iFrames) {
      * point math, and the actual ratio will be slightly different than what
      * we tell it to use.  The actual ratio used is fActualPitchRatio. */
 
-    if (bPreservePitch) {
-      m_pResample->SetRate(m_fPitchRatio);
-      float fActualPitchRatio = m_pResample->GetRate();
-      if (!std::isfinite(fActualPitchRatio) || fActualPitchRatio <= 0.0f ||
-          m_pSpeedChange == nullptr) {
-        return RageSoundReader::ERROR;
+      if (m_bPreservePitch) {
+        m_pResample->SetRate(m_fPitchRatio);
+        float fActualPitchRatio = m_pResample->GetRate();
+        if (!std::isfinite(fActualPitchRatio) || fActualPitchRatio <= 0.0f ||
+            m_pSpeedChange == nullptr) {
+          SetError(
+              "SRC_AUDIT_FIX SRC-2830: PitchChange resampler rejected pitch "
+              "ratio");
+          return RageSoundReader::ERROR;
+        }
+        float fRequestedSpeedRatio = m_fSpeedRatio / fActualPitchRatio;
+        if (!m_pSpeedChange->SetSpeedRatio(fRequestedSpeedRatio)) {
+          SetError(
+              "SRC_AUDIT_FIX SRC-2830: PitchChange speed-change reader rejected "
+              "derived speed ratio");
+          return RageSoundReader::ERROR;
+        }
+        m_fLastSetPitchRatio = m_fPitchRatio;
+        m_fLastSetSpeedRatio = m_fSpeedRatio;
+      } else {
+        m_pResample->SetRate(m_fSpeedRatio);
+        float fActualSpeedRatio = m_pResample->GetRate();
+        if (!std::isfinite(fActualSpeedRatio) || fActualSpeedRatio <= 0.0f) {
+          SetError(
+              "SRC_AUDIT_FIX SRC-2830: PitchChange resampler rejected speed "
+              "ratio");
+          return RageSoundReader::ERROR;
+        }
+        m_fLastSetSpeedRatio = m_fSpeedRatio;
       }
-      float fRequestedSpeedRatio = m_fSpeedRatio / fActualPitchRatio;
-      if (!m_pSpeedChange->SetSpeedRatio(fRequestedSpeedRatio)) {
-        return RageSoundReader::ERROR;
-      }
-      m_fLastSetPitchRatio = m_fPitchRatio;
-      m_fLastSetSpeedRatio = m_fSpeedRatio;
-    } else {
-      m_pResample->SetRate(m_fSpeedRatio);
-      m_fLastSetSpeedRatio = m_fSpeedRatio;
-    }
 
-    /* If we just applied a new speed and it caused the ratio to change, return
-     * no data, so the caller can see the new ratio. */
-    if (fRate != GetStreamToSourceRatio()) {
-      return 0;
+      /* If we just applied a new speed and it caused the ratio to change,
+       * return no data, so the caller can see the new ratio. */
+      if (fRate != GetStreamToSourceRatio()) {
+        return 0;
+      }
     }
   }
 
+  ClearError();
   return RageSoundReader_Filter::Read(pBuf, iFrames);
 }
 
@@ -149,19 +259,57 @@ bool RageSoundReader_PitchChange::SetProperty(
 }
 
 bool RageSoundReader_PitchChange::SetSpeedRatio(float fRatio) {
-  if (!std::isfinite(fRatio) || fRatio <= 0.0f) {
+  if (!IsUsableRatio(fRatio)) {
+    SetError("SRC_AUDIT_FIX SRC-2830: PitchChange rejected unsafe speed ratio");
     return false;
   }
+  std::lock_guard<std::mutex> lock(m_StateMutex);
   m_fSpeedRatio = fRatio;
+  ClearError();
   return true;
 }
 
 bool RageSoundReader_PitchChange::SetPitchRatio(float fRatio) {
-  if (!std::isfinite(fRatio) || fRatio <= 0.0f) {
+  if (!IsUsableRatio(fRatio)) {
+    SetError("SRC_AUDIT_FIX SRC-2830: PitchChange rejected unsafe pitch ratio");
     return false;
   }
+  std::lock_guard<std::mutex> lock(m_StateMutex);
   m_fPitchRatio = fRatio;
+  ClearError();
   return true;
+}
+
+std::string RageSoundReader_PitchChange::GetError() const {
+  {
+    std::lock_guard<std::mutex> lock(m_ErrorMutex);
+    if (!m_sError.empty()) {
+      return m_sError;
+    }
+  }
+  return RageSoundReader_Filter::GetError();
+}
+
+bool RageSoundReader_PitchChange::IsTopologyUsable() const {
+  if (m_pSource.isNull() || m_pResample == nullptr ||
+      !IsUsableSource(m_pResample)) {
+    return false;
+  }
+  if (m_bPreservePitch &&
+      (m_pSpeedChange == nullptr || !IsUsableSource(m_pSpeedChange))) {
+    return false;
+  }
+  return true;
+}
+
+void RageSoundReader_PitchChange::ClearError() const {
+  std::lock_guard<std::mutex> lock(m_ErrorMutex);
+  m_sError.clear();
+}
+
+void RageSoundReader_PitchChange::SetError(const std::string& sError) const {
+  std::lock_guard<std::mutex> lock(m_ErrorMutex);
+  m_sError = sError;
 }
 
 /*
