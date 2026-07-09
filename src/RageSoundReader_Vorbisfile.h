@@ -3,6 +3,7 @@
 #ifndef RAGE_SOUND_READER_VORBISFILE_H
 #define RAGE_SOUND_READER_VORBISFILE_H
 
+#include <cstdint>
 #include <string>
 
 #include "RageSoundReader_FileReader.h"
@@ -12,25 +13,29 @@ class RageFileBasic;
 
 class RageSoundReader_Vorbisfile : public RageSoundReader_FileReader {
  public:
-  OpenResult Open(RageFileBasic* pFile);
+  OpenResult Open(RageFileBasic* pFile) override;
+  void Close();
 
-  int GetLength() const;
-  int SetPosition(int iFrame);
-  int Read(float* pBuf, int iFrames);
-  int GetSampleRate() const;
-  unsigned GetNumChannels() const { return channels; }
-  int GetNextSourceFrame() const;
+  int GetLength() const override;
+  int SetPosition(int iFrame) override;
+  int Read(float* pBuf, int iFrames) override;
+  int GetSampleRate() const override;
+  unsigned GetNumChannels() const override { return channels; }
+  int GetNextSourceFrame() const override;
   RageSoundReader_Vorbisfile();
-  ~RageSoundReader_Vorbisfile();
-  RageSoundReader_Vorbisfile* Copy() const;
+  ~RageSoundReader_Vorbisfile() override;
+  RageSoundReader_Vorbisfile(const RageSoundReader_Vorbisfile&) = delete;
+  RageSoundReader_Vorbisfile& operator=(const RageSoundReader_Vorbisfile&) =
+      delete;
+  RageSoundReader_Vorbisfile* Copy() const override;
 
  private:
-  OggVorbis_File* vf;
-  bool eof;
-  bool FillBuf();
-  std::string filename;
-  int read_offset;
-  unsigned channels;
+  void ResetDecoderState();
+
+  OggVorbis_File* vf = nullptr;
+  bool eof = true;
+  std::int64_t read_offset = 0;
+  unsigned channels = 0;
 };
 
 #endif

@@ -14,17 +14,18 @@
 #if defined(INTEGER_VORBIS)
 #include <tremor/ivorbisfile.h>
 
-#include <algorithm>
 #include <string>
 #else
 #include <vorbis/vorbisfile.h>
 #endif
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdarg>
 #include <cstddef>
 #include <cstring>
 #include <limits>
+#include <new>
 
 static size_t OggRageFile_read_func(
     void* ptr, size_t size, size_t nmemb, void* datasource) {
@@ -118,13 +119,22 @@ static std::string ov_ssprintf(int err, const char* fmt, ...) {
 
 RageSoundReader_FileReader::OpenResult RageSoundReader_Vorbisfile::Open(
     RageFileBasic* pFile) {
+  Close();
   if (pFile == nullptr) {
     SetError("No file handle");
     return OPEN_FATAL_ERROR;
   }
+
   m_pFile = pFile;
-  vf = new OggVorbis_File;
-  memset(vf, 0, sizeof(*vf));
+  OggVorbis_File* newVf = nullptr;
+  try {
+    newVf = new OggVorbis_File;
+  } catch (const std::bad_alloc&) {
+    SetError("SRC_AUDIT_FIX SRC-2802: Vorbis reader allocation failed");
+    m_pFile = nullptr;
+    return OPEN_FATAL_ERROR;
+  }
+  memset(newVf, 0, sizeof(*newVf));
 
   ov_callbacks callbacks;
   callbacks.read_func = OggRageFile_read_func;
@@ -132,11 +142,11 @@ RageSoundReader_FileReader::OpenResult RageSoundReader_Vorbisfile::Open(
   callbacks.close_func = OggRageFile_close_func;
   callbacks.tell_func = OggRageFile_tell_func;
 
-  int ret = ov_open_callbacks(pFile, vf, nullptr, 0, callbacks);
+  int ret = ov_open_callbacks(pFile, newVf, nullptr, 0, callbacks);
   if (ret < 0) {
     SetError(ov_ssprintf(ret, "ov_open failed"));
-    delete vf;
-    vf = nullptr;
+    delete newVf;
+    m_pFile = nullptr;
     switch (ret) {
       case OV_ENOTVORBIS:
         return OPEN_UNKNOWN_FILE_FORMAT;
@@ -145,6 +155,7 @@ RageSoundReader_FileReader::OpenResult RageSoundReader_Vorbisfile::Open(
     }
   }
 
+  vf = newVf;
   eof = false;
   read_offset = (int)ov_pcm_tell(vf);
 
@@ -152,6 +163,7 @@ RageSoundReader_FileReader::OpenResult RageSoundReader_Vorbisfile::Open(
   if (vi == nullptr || vi->channels <= 0 || vi->channels > 2 ||
       vi->rate <= 0) {
     SetError("Invalid Vorbis stream metadata");
+    ResetDecoderState();
     return OPEN_FATAL_ERROR;
   }
   channels = vi->channels;
@@ -225,9 +237,10 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
          * won't sync correctly. */
         if (LOG != nullptr) {
           LOG->Trace(
-              "p ahead %p %i < %i, we're ahead by %i",
-              static_cast<void*>(this), curofs, read_offset,
-              read_offset - curofs);
+              "p ahead %p %i < %lld, we're ahead by %lld",
+              static_cast<void*>(this), curofs,
+              static_cast<long long>(read_offset),
+              static_cast<long long>(read_offset - curofs));
         }
         read_offset = curofs;
       } else if (curofs > read_offset) {
@@ -244,8 +257,8 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
         }
         int silence = iSilentFrames * bytes_per_frame;
         CHECKPOINT_M(ssprintf(
-            "p %i,%i: %i frames of silence needed", curofs, read_offset,
-            silence));
+            "p %i,%lld: %i frames of silence needed", curofs,
+            static_cast<long long>(read_offset), silence));
 
         memset(buf, 0, silence);
         iFramesRead = iSilentFrames;
@@ -279,7 +292,7 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
           SetError(ssprintf(
               "File \"%s\" changes channel count from %i to %i; not "
               "supported.",
-              filename.c_str(), channel_count, (int)vi->channels));
+              GetSourcePath().c_str(), channel_count, (int)vi->channels));
           return ERROR;
         }
       }
@@ -367,13 +380,25 @@ int RageSoundReader_Vorbisfile::GetNextSourceFrame() const {
   return iFrame;
 }
 
-RageSoundReader_Vorbisfile::RageSoundReader_Vorbisfile() { vf = nullptr; }
+RageSoundReader_Vorbisfile::RageSoundReader_Vorbisfile() = default;
 
-RageSoundReader_Vorbisfile::~RageSoundReader_Vorbisfile() {
-  if (vf) {
+RageSoundReader_Vorbisfile::~RageSoundReader_Vorbisfile() { Close(); }
+
+void RageSoundReader_Vorbisfile::ResetDecoderState() {
+  if (vf != nullptr) {
     ov_clear(vf);
   }
   delete vf;
+  vf = nullptr;
+  m_pFile = nullptr;
+  eof = true;
+  read_offset = 0;
+  channels = 0;
+}
+
+void RageSoundReader_Vorbisfile::Close() {
+  ResetDecoderState();
+  SetError("");
 }
 
 RageSoundReader_Vorbisfile* RageSoundReader_Vorbisfile::Copy() const {
@@ -385,7 +410,13 @@ RageSoundReader_Vorbisfile* RageSoundReader_Vorbisfile::Copy() const {
     return nullptr;
   }
   pFile->Seek(0);
-  RageSoundReader_Vorbisfile* ret = new RageSoundReader_Vorbisfile;
+  RageSoundReader_Vorbisfile* ret = nullptr;
+  try {
+    ret = new RageSoundReader_Vorbisfile;
+  } catch (const std::bad_alloc&) {
+    delete pFile;
+    return nullptr;
+  }
 
   /* If we were able to open the sound in the first place, we expect to
    * be able to reopen it. */

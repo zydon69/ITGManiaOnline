@@ -53,6 +53,8 @@ read_source("src/RageSoundReader_Pan.h" rage_sound_reader_pan_h)
 read_source("src/RageSoundReader_Pan.cpp" rage_sound_reader_pan_cpp)
 read_source("src/RageSoundReader_WAV.h" rage_sound_reader_wav_h)
 read_source("src/RageSoundReader_WAV.cpp" rage_sound_reader_wav_cpp)
+read_source("src/RageSoundReader_Vorbisfile.h" rage_sound_reader_vorbis_h)
+read_source("src/RageSoundReader_Vorbisfile.cpp" rage_sound_reader_vorbis_cpp)
 read_source("src/RageSoundReader_ChannelSplit.h" rage_sound_reader_channel_split_h)
 read_source("src/RageSoundReader_ChannelSplit.cpp" rage_sound_reader_channel_split_cpp)
 read_source("src/RageSoundMixBuffer.h" rage_sound_mix_buffer_h)
@@ -341,6 +343,22 @@ require_contains(
   "${rage_sound_reader_wav_cpp}"
   "iBufferRemainingSamples / m_WavData.m_iChannels"
   "ADPCM source-frame mapping treats buffer counters as samples")
+require_contains(
+  "${rage_sound_reader_vorbis_h}"
+  "RageSoundReader_Vorbisfile(const RageSoundReader_Vorbisfile&) = delete;"
+  "RageSoundReader_Vorbisfile forbids unsafe implicit copying")
+require_contains(
+  "${rage_sound_reader_vorbis_h}"
+  "RageSoundReader_Vorbisfile* Copy() const override;"
+  "RageSoundReader_Vorbisfile copy contract is explicit")
+require_contains(
+  "${rage_sound_reader_vorbis_cpp}"
+  "void RageSoundReader_Vorbisfile::Close()"
+  "RageSoundReader_Vorbisfile has a real close/reset implementation")
+require_contains(
+  "${rage_sound_reader_vorbis_cpp}"
+  "SRC_AUDIT_FIX SRC-2802"
+  "RageSoundReader_Vorbisfile converts allocation failures into decoder errors")
 require_contains(
   "${rage_sound_reader_pan_h}"
   "RageSoundReader_Pan* Copy() const override"
