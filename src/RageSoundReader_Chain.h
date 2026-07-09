@@ -4,9 +4,11 @@
 #define RAGE_SOUND_READER_CHAIN
 
 #include <cstdint>
+#include <memory>
 #include <map>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "RageSoundConstants.h"
@@ -15,8 +17,10 @@
 class RageSoundReader_Chain : public RageSoundReader {
  public:
   RageSoundReader_Chain();
+  RageSoundReader_Chain(const RageSoundReader_Chain& rhs) = delete;
+  RageSoundReader_Chain& operator=(const RageSoundReader_Chain& rhs) = delete;
   ~RageSoundReader_Chain();
-  RageSoundReader_Chain* Copy() const;
+  RageSoundReader_Chain* Copy() const override;
 
   /* Set the preferred sample rate.  This will only be used if the source sounds
    * use different sample rates. */
@@ -35,28 +39,41 @@ class RageSoundReader_Chain : public RageSoundReader {
   void Finish();
 
   /* Return the number of added sounds. */
-  int GetNumSounds() const { return m_aSounds.size(); }
+  int GetNumSounds() const {
+    return m_aSounds.size() > static_cast<size_t>(std::numeric_limits<int>::max())
+               ? std::numeric_limits<int>::max()
+               : static_cast<int>(m_aSounds.size());
+  }
 
-  int GetLength() const;
-  int GetLength_Fast() const;
-  int SetPosition(int iFrame);
-  int Read(float* pBuf, int iFrames);
-  int GetSampleRate() const;
-  unsigned GetNumChannels() const { return m_iChannels; }
-  bool SetProperty(const std::string& sProperty, float fValue);
-  int GetNextSourceFrame() const;
-  float GetStreamToSourceRatio() const;
-  std::string GetError() const { return ""; }
+  int GetLength() const override;
+  int GetLength_Fast() const override;
+  int SetPosition(int iFrame) override;
+  int Read(float* pBuf, int iFrames) override;
+  int GetSampleRate() const override;
+  unsigned GetNumChannels() const override { return m_iChannels; }
+  bool SetProperty(const std::string& sProperty, float fValue) override;
+  int GetNextSourceFrame() const override;
+  float GetStreamToSourceRatio() const override;
+  std::string GetError() const override;
 
  private:
   int GetSampleRateInternal() const;
+  void ClearError() const;
+  void SetError(const std::string& sError) const;
+  void RemoveNamedSoundPointersTo(const RageSoundReader* pSound);
+  void ReplaceNamedSoundPointer(
+      const RageSoundReader* pOldSound, RageSoundReader* pNewSound);
+  bool IsSoundTopologyUsable(const RageSoundReader* pSound) const;
+  bool ApplyPendingProperties(RageSoundReader* pSound) const;
 
   int m_iPreferredSampleRate;
   int m_iActualSampleRate;
   unsigned m_iChannels;
 
   std::map<std::string, RageSoundReader*> m_apNamedSounds;
-  std::vector<RageSoundReader*> m_apLoadedSounds;
+  std::vector<std::unique_ptr<RageSoundReader>> m_apLoadedSounds;
+  std::vector<std::pair<std::string, float>> m_aPendingProperties;
+  mutable std::string m_sError;
 
   struct Sound {
     int iIndex;  // into m_apLoadedSounds
@@ -64,11 +81,16 @@ class RageSoundReader_Chain : public RageSoundReader {
     float fPan;
     RageSoundReader* pSound;  // nullptr if not activated
 
-    int GetOffsetFrame(int iSampleRate) const {
+    std::int64_t GetOffsetFrame64(int iSampleRate) const {
       if (iSampleRate <= 0) {
         iSampleRate = FALLBACK_SAMPLE_RATE;
       }
       const int64_t frames = int64_t(iOffsetMS) * iSampleRate / 1000;
+      return frames;
+    }
+
+    int GetOffsetFrame(int iSampleRate) const {
+      const int64_t frames = GetOffsetFrame64(iSampleRate);
       if (frames > std::numeric_limits<int>::max()) {
         return std::numeric_limits<int>::max();
       }
@@ -82,8 +104,8 @@ class RageSoundReader_Chain : public RageSoundReader {
   std::vector<Sound> m_aSounds;
 
   /* Read state: */
-  int m_iCurrentFrame;
-  unsigned m_iNextSound;
+  std::int64_t m_iCurrentFrame;
+  size_t m_iNextSound;
   std::vector<Sound*> m_apActiveSounds;
 
   bool ActivateSound(Sound* s);

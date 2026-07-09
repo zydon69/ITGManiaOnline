@@ -82,6 +82,7 @@ read_source("src/RageSoundReader_ChannelSplit.h" rage_sound_reader_channel_split
 read_source("src/RageSoundReader_ChannelSplit.cpp" rage_sound_reader_channel_split_cpp)
 read_source("src/RageSoundMixBuffer.h" rage_sound_mix_buffer_h)
 read_source("src/RageSoundMixBuffer.cpp" rage_sound_mix_buffer_cpp)
+read_source("src/RageSoundReader_Chain.h" rage_sound_reader_chain_h)
 read_source("src/RageSoundReader_Chain.cpp" rage_sound_reader_chain_cpp)
 read_source("src/RageSoundReader_Merge.cpp" rage_sound_reader_merge_cpp)
 read_source("src/StepMania.cpp" stepmania_cpp)
@@ -754,6 +755,46 @@ require_contains(
   "${rage_sound_reader_chain_cpp}"
   "RageSoundReader_Chain: mix buffer write failed"
   "RageSoundReader_Chain handles mix write failures")
+require_contains(
+  "${rage_sound_reader_chain_h}"
+  "std::vector<std::unique_ptr<RageSoundReader>> m_apLoadedSounds;"
+  "RageSoundReader_Chain owns loaded sounds with unique_ptr")
+require_contains(
+  "${rage_sound_reader_chain_h}"
+  "std::int64_t m_iCurrentFrame;"
+  "RageSoundReader_Chain stores internal frame position in 64-bit")
+require_contains(
+  "${rage_sound_reader_chain_h}"
+  "std::string GetError() const override;"
+  "RageSoundReader_Chain exposes local diagnostics")
+require_contains(
+  "${rage_sound_reader_chain_cpp}"
+  "SRC_AUDIT_FIX SRC-2865"
+  "RageSoundReader_Chain copy failures are diagnosable")
+require_contains(
+  "${rage_sound_reader_chain_cpp}"
+  "SRC_AUDIT_FIX SRC-2866"
+  "RageSoundReader_Chain load ownership failures are diagnosable")
+require_contains(
+  "${rage_sound_reader_chain_cpp}"
+  "SRC_AUDIT_FIX SRC-2870"
+  "RageSoundReader_Chain rejects invalid source topology")
+require_contains(
+  "${rage_sound_reader_chain_cpp}"
+  "SRC_AUDIT_FIX SRC-2873"
+  "RageSoundReader_Chain guards frame arithmetic")
+require_contains(
+  "${rage_sound_reader_chain_cpp}"
+  "ReplaceNamedSoundPointer"
+  "RageSoundReader_Chain keeps named cache aligned with wrapped readers")
+require_contains(
+  "${rage_sound_reader_chain_cpp}"
+  "m_aPendingProperties"
+  "RageSoundReader_Chain applies properties to future active sounds")
+require_not_contains(
+  "${rage_sound_reader_chain_cpp}"
+  "MakeLower(sPath)"
+  "RageSoundReader_Chain must not lowercase real file paths before opening")
 require_contains(
   "${rage_sound_reader_merge_cpp}"
   "RageSoundReader_Merge: mix buffer write failed"

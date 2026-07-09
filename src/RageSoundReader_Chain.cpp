@@ -6,7 +6,10 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <memory>
+#include <new>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "RageLog.h"
@@ -23,10 +26,19 @@
 #include "global.h"
 
 namespace {
+static const unsigned MAX_CHAIN_CHANNELS = 64;
+
 bool IsValidLoadedSoundIndex(
-    const std::vector<RageSoundReader*>& sounds, int index) {
+    const std::vector<std::unique_ptr<RageSoundReader>>& sounds, int index) {
   return index >= 0 && static_cast<size_t>(index) < sounds.size() &&
          sounds[index] != nullptr;
+}
+
+RageSoundReader* GetLoadedSound(
+    const std::vector<std::unique_ptr<RageSoundReader>>& sounds, int index) {
+  return IsValidLoadedSoundIndex(sounds, index)
+             ? sounds[static_cast<size_t>(index)].get()
+             : nullptr;
 }
 
 int SecondsToMilliseconds(float seconds) {
@@ -53,6 +65,28 @@ int SaturatingAddInt(int lhs, int rhs) {
   }
   return static_cast<int>(sum);
 }
+
+int ClampInt64ToInt(std::int64_t value) {
+  if (value > std::numeric_limits<int>::max()) {
+    return std::numeric_limits<int>::max();
+  }
+  if (value < std::numeric_limits<int>::min()) {
+    return std::numeric_limits<int>::min();
+  }
+  return static_cast<int>(value);
+}
+
+bool AdvanceFrameCounter(std::int64_t* frame, int framesToAdvance) {
+  if (frame == nullptr || framesToAdvance < 0) {
+    return false;
+  }
+  if (*frame > std::numeric_limits<std::int64_t>::max() - framesToAdvance) {
+    return false;
+  }
+  *frame += framesToAdvance;
+  return true;
+}
+
 }  // namespace
 
 /*
@@ -82,46 +116,64 @@ RageSoundReader_Chain::~RageSoundReader_Chain() {
     ReleaseSound(m_apActiveSounds.front());
   }
 
-  for (RageSoundReader* it : m_apLoadedSounds) {
-    delete it;
-  }
+  m_apNamedSounds.clear();
+  m_apLoadedSounds.clear();
 }
 
 RageSoundReader_Chain* RageSoundReader_Chain::Copy() const {
-  RageSoundReader_Chain* copy = new RageSoundReader_Chain();
-  copy->m_iPreferredSampleRate = this->m_iPreferredSampleRate;
-  copy->m_iActualSampleRate = this->m_iActualSampleRate;
-  copy->m_iChannels = this->m_iChannels;
-  copy->m_iCurrentFrame = 0;
-  copy->m_iNextSound = 0;
+  try {
+    std::unique_ptr<RageSoundReader_Chain> copy(new RageSoundReader_Chain());
+    copy->m_iPreferredSampleRate = this->m_iPreferredSampleRate;
+    copy->m_iActualSampleRate = this->m_iActualSampleRate;
+    copy->m_iChannels = this->m_iChannels;
+    copy->m_iCurrentFrame = 0;
+    copy->m_iNextSound = 0;
+    copy->m_aPendingProperties = this->m_aPendingProperties;
 
-  for (const RageSoundReader* it : this->m_apLoadedSounds) {
-    RageSoundReader* readerCopy = it != nullptr ? it->Copy() : nullptr;
-    if (it != nullptr && readerCopy == nullptr) {
-      delete copy;
+    copy->m_apLoadedSounds.reserve(this->m_apLoadedSounds.size());
+    for (const auto& it : this->m_apLoadedSounds) {
+      if (it == nullptr) {
+        copy->m_apLoadedSounds.emplace_back(nullptr);
+        continue;
+      }
+
+      std::unique_ptr<RageSoundReader> readerCopy(it->Copy());
+      if (readerCopy == nullptr) {
+        SetError("SRC_AUDIT_FIX SRC-2865: failed to copy chain source reader");
+        return nullptr;
+      }
+      copy->m_apLoadedSounds.push_back(std::move(readerCopy));
+    }
+
+    for (const auto& named : this->m_apNamedSounds) {
+      auto it = std::find_if(
+          this->m_apLoadedSounds.begin(), this->m_apLoadedSounds.end(),
+          [&named](const std::unique_ptr<RageSoundReader>& reader) {
+            return reader.get() == named.second;
+          });
+      if (it == this->m_apLoadedSounds.end()) {
+        continue;
+      }
+      const size_t index = static_cast<size_t>(
+          std::distance(this->m_apLoadedSounds.begin(), it));
+      copy->m_apNamedSounds[named.first] =
+          copy->m_apLoadedSounds[index].get();
+    }
+
+    copy->m_aSounds = this->m_aSounds;
+    for (Sound& sound : copy->m_aSounds) {
+      sound.pSound = nullptr;
+    }
+    if (copy->SetPosition(ClampInt64ToInt(this->m_iCurrentFrame)) ==
+        RageSoundReader::ERROR) {
+      SetError("SRC_AUDIT_FIX SRC-2865: failed to seek copied chain reader");
       return nullptr;
     }
-    copy->m_apLoadedSounds.push_back(readerCopy);
+    return copy.release();
+  } catch (const std::bad_alloc&) {
+    SetError("SRC_AUDIT_FIX SRC-2865: failed to allocate chain copy");
+    return nullptr;
   }
-
-  for (const auto& named : this->m_apNamedSounds) {
-    auto it = std::find(
-        this->m_apLoadedSounds.begin(), this->m_apLoadedSounds.end(),
-        named.second);
-    if (it == this->m_apLoadedSounds.end()) {
-      continue;
-    }
-    const size_t index = static_cast<size_t>(
-        std::distance(this->m_apLoadedSounds.begin(), it));
-    copy->m_apNamedSounds[named.first] = copy->m_apLoadedSounds[index];
-  }
-
-  copy->m_aSounds = this->m_aSounds;
-  for (Sound& sound : copy->m_aSounds) {
-    sound.pSound = nullptr;
-  }
-  copy->SetPosition(this->m_iCurrentFrame);
-  return copy;
 }
 
 /* The same sound may be used several times, and by several different chains.
@@ -142,20 +194,27 @@ void RageSoundReader_Chain::AddSound(
   s.iOffsetMS = SecondsToMilliseconds(fOffsetSecs);
   s.fPan = std::isfinite(fPan) ? std::clamp(fPan, -1.0f, 1.0f) : 0.0f;
   s.pSound = nullptr;
-  m_aSounds.push_back(s);
+  try {
+    m_aSounds.push_back(s);
+  } catch (const std::bad_alloc&) {
+    SetError("SRC_AUDIT_FIX SRC-2866: failed to append chain sound event");
+  }
 }
 
 int RageSoundReader_Chain::LoadSound(std::string sPath) {
-  MakeLower(sPath);
-
+  const std::string sOriginalPath = sPath;
   std::map<std::string, RageSoundReader*>::const_iterator it =
       m_apNamedSounds.find(sPath);
   if (it != m_apNamedSounds.end()) {
     const RageSoundReader* pReader = it->second;
 
-    for (int i = 0; i < (int)m_apLoadedSounds.size(); ++i) {
-      if (m_apLoadedSounds[i] == pReader) {
-        return i;
+    for (size_t i = 0; i < m_apLoadedSounds.size(); ++i) {
+      if (m_apLoadedSounds[i].get() == pReader) {
+        if (i > static_cast<size_t>(std::numeric_limits<int>::max())) {
+          SetError("SRC_AUDIT_FIX SRC-2874: named sound index overflow");
+          return -1;
+        }
+        return static_cast<int>(i);
       }
     }
     if (LOG != nullptr) {
@@ -168,21 +227,39 @@ int RageSoundReader_Chain::LoadSound(std::string sPath) {
 
   std::string sError;
   bool bPrebuffer;
-  RageSoundReader* pReader =
-      RageSoundReader_FileReader::OpenFile(sPath, sError, &bPrebuffer);
+  std::unique_ptr<RageSoundReader> pReader(
+      RageSoundReader_FileReader::OpenFile(sOriginalPath, sError, &bPrebuffer));
   if (pReader == nullptr) {
+    SetError("SRC_AUDIT_FIX SRC-2868: " + sError);
     if (LOG != nullptr) {
       LOG->Warn(
           "RageSoundReader_Chain: error opening sound \"%s\": %s",
-          sPath.c_str(), sError.c_str());
+          sOriginalPath.c_str(), sError.c_str());
     }
     return -1;
   }
 
-  m_apNamedSounds[sPath] = pReader;
-
-  m_apLoadedSounds.push_back(m_apNamedSounds[sPath]);
-  return m_apLoadedSounds.size() - 1;
+  try {
+    if (m_apLoadedSounds.size() >=
+        static_cast<size_t>(std::numeric_limits<int>::max())) {
+      SetError("SRC_AUDIT_FIX SRC-2874: too many chain sounds");
+      return -1;
+    }
+    RageSoundReader* pRawReader = pReader.get();
+    m_apLoadedSounds.push_back(std::move(pReader));
+    try {
+      m_apNamedSounds[sPath] = pRawReader;
+    } catch (const std::bad_alloc&) {
+      m_apLoadedSounds.pop_back();
+      SetError("SRC_AUDIT_FIX SRC-2866: failed to cache named chain sound");
+      return -1;
+    }
+  } catch (const std::bad_alloc&) {
+    SetError("SRC_AUDIT_FIX SRC-2866: failed to store chain sound");
+    return -1;
+  }
+  ClearError();
+  return static_cast<int>(m_apLoadedSounds.size() - 1);
 }
 
 int RageSoundReader_Chain::LoadSound(RageSoundReader* pSound) {
@@ -192,8 +269,20 @@ int RageSoundReader_Chain::LoadSound(RageSoundReader* pSound) {
     }
     return -1;
   }
-  m_apLoadedSounds.push_back(pSound);
-  return m_apLoadedSounds.size() - 1;
+  std::unique_ptr<RageSoundReader> soundOwner(pSound);
+  try {
+    if (m_apLoadedSounds.size() >=
+        static_cast<size_t>(std::numeric_limits<int>::max())) {
+      SetError("SRC_AUDIT_FIX SRC-2874: too many chain sounds");
+      return -1;
+    }
+    m_apLoadedSounds.push_back(std::move(soundOwner));
+  } catch (const std::bad_alloc&) {
+    SetError("SRC_AUDIT_FIX SRC-2866: failed to store owned chain sound");
+    return -1;
+  }
+  ClearError();
+  return static_cast<int>(m_apLoadedSounds.size() - 1);
 }
 
 /* If every sound has the same sample rate, return it.  Otherwise, return -1. */
@@ -203,7 +292,7 @@ int RageSoundReader_Chain::GetSampleRateInternal() const {
   }
 
   int iRate = -1;
-  for (const RageSoundReader* it : m_apLoadedSounds) {
+  for (const auto& it : m_apLoadedSounds) {
     if (it == nullptr) {
       continue;
     }
@@ -228,23 +317,30 @@ void RageSoundReader_Chain::Finish() {
    * channels, which will be converted as needed, or have the same number of
    * channels. */
   m_iChannels = 1;
-  for (RageSoundReader* it : m_apLoadedSounds) {
+  for (auto& it : m_apLoadedSounds) {
     if (it == nullptr) {
+      continue;
+    }
+    if (!IsSoundTopologyUsable(it.get())) {
+      RemoveNamedSoundPointersTo(it.get());
+      it.reset();
+      SetError("SRC_AUDIT_FIX SRC-2870: discarded invalid chain source "
+               "topology");
       continue;
     }
     m_iChannels = std::max(m_iChannels, it->GetNumChannels());
   }
 
   if (m_iChannels > 2) {
-    for (RageSoundReader*& it : m_apLoadedSounds) {
+    for (auto& it : m_apLoadedSounds) {
       if (it != nullptr && it->GetNumChannels() != m_iChannels) {
         if (LOG != nullptr) {
           LOG->Warn(
               "Discarded sound with %i channels, not %i", it->GetNumChannels(),
               m_iChannels);
         }
-        delete it;
-        it = nullptr;
+        RemoveNamedSoundPointersTo(it.get());
+        it.reset();
       }
     }
   }
@@ -272,22 +368,52 @@ void RageSoundReader_Chain::Finish() {
     if (m_iPreferredSampleRate <= 0) {
       m_iPreferredSampleRate = FALLBACK_SAMPLE_RATE;
     }
-    for (RageSoundReader*& pSound : m_apLoadedSounds) {
+    for (auto& pSound : m_apLoadedSounds) {
       if (pSound == nullptr) {
         continue;
       }
-      RageSoundReader_Resample_Good* pResample =
-          new RageSoundReader_Resample_Good(pSound, m_iPreferredSampleRate);
-      pSound = pResample;
+      try {
+        std::unique_ptr<RageSoundReader> original(std::move(pSound));
+        RageSoundReader* pOldSound = original.get();
+        RageSoundReader* pRawOriginal = original.release();
+        std::unique_ptr<RageSoundReader> pResample;
+        try {
+          pResample.reset(new RageSoundReader_Resample_Good(
+              pRawOriginal, m_iPreferredSampleRate));
+          pRawOriginal = nullptr;
+        } catch (...) {
+          original.reset(pRawOriginal);
+          pSound = std::move(original);
+          throw;
+        }
+        if (!IsSoundTopologyUsable(pResample.get())) {
+          SetError("SRC_AUDIT_FIX SRC-2871: chain resample wrapper has invalid "
+                   "topology");
+          pSound = std::move(pResample);
+          ReplaceNamedSoundPointer(pOldSound, pSound.get());
+          continue;
+        }
+        pSound = std::move(pResample);
+        ReplaceNamedSoundPointer(pOldSound, pSound.get());
+      } catch (const std::bad_alloc&) {
+        SetError("SRC_AUDIT_FIX SRC-2871: failed to allocate chain resampler");
+        continue;
+      }
     }
 
     m_iActualSampleRate = m_iPreferredSampleRate;
   }
 
   /* Attempt to preload all sounds. */
-  for (RageSoundReader*& pSound : m_apLoadedSounds) {
+  for (auto& pSound : m_apLoadedSounds) {
     if (pSound != nullptr) {
-      RageSoundReader_Preload::PreloadSound(pSound);
+      RageSoundReader* pOldSound = pSound.get();
+      RageSoundReader* pRawSound = pSound.release();
+      if (!RageSoundReader_Preload::PreloadSound(pRawSound)) {
+        SetError("SRC_AUDIT_FIX SRC-2871: chain preload failed");
+      }
+      pSound.reset(pRawSound);
+      ReplaceNamedSoundPointer(pOldSound, pSound.get());
     }
   }
 
@@ -307,7 +433,8 @@ int RageSoundReader_Chain::SetPosition(int iFrame) {
    * data at iFrame. */
   for (m_iNextSound = 0; m_iNextSound < m_aSounds.size(); ++m_iNextSound) {
     Sound* pSound = &m_aSounds[m_iNextSound];
-    int iOffsetFrame = pSound->GetOffsetFrame(GetSampleRate());
+    const std::int64_t iOffsetFrame =
+        pSound->GetOffsetFrame64(GetSampleRate());
 
     /* If this sound is in the future, skip it. */
     if (iOffsetFrame > m_iCurrentFrame) {
@@ -316,12 +443,15 @@ int RageSoundReader_Chain::SetPosition(int iFrame) {
 
     /* Find the RageSoundReader. */
     if (!ActivateSound(pSound)) {
-      continue;
+      while (!m_apActiveSounds.empty()) {
+        ReleaseSound(m_apActiveSounds.front());
+      }
+      return RageSoundReader::ERROR;
     }
     RageSoundReader* pReader = pSound->pSound;
 
-    int iOffsetFrames = m_iCurrentFrame - iOffsetFrame;
-    if (pReader->SetPosition(iOffsetFrames) == 0) {
+    const std::int64_t iOffsetFrames = m_iCurrentFrame - iOffsetFrame;
+    if (pReader->SetPosition(ClampInt64ToInt(iOffsetFrames)) == 0) {
       /* We're past the end of this sound. */
       ReleaseSound(pSound);
       continue;
@@ -342,9 +472,10 @@ bool RageSoundReader_Chain::ActivateSound(Sound* s) {
       !IsValidLoadedSoundIndex(m_apLoadedSounds, s->iIndex)) {
     return false;
   }
-  RageSoundReader* pSound = m_apLoadedSounds[s->iIndex];
-  s->pSound = pSound->Copy();
-  if (s->pSound == nullptr) {
+  RageSoundReader* pSound = GetLoadedSound(m_apLoadedSounds, s->iIndex);
+  std::unique_ptr<RageSoundReader> activeSound(pSound->Copy());
+  if (activeSound == nullptr) {
+    SetError("SRC_AUDIT_FIX SRC-2869: failed to copy active chain sound");
     if (LOG != nullptr) {
       LOG->Warn("RageSoundReader_Chain: failed to copy sound index %i",
                 s->iIndex);
@@ -354,13 +485,30 @@ bool RageSoundReader_Chain::ActivateSound(Sound* s) {
 
   /* Add a balance filter.  If this source has the same number of channels
    * as this sound, and does not need to be panned, we can omit this. */
-  if (s->fPan != 0.0f ||
-      s->pSound->GetNumChannels() != this->GetNumChannels()) {
-    s->pSound = new RageSoundReader_Pan(s->pSound);
-    s->pSound->SetProperty("Pan", s->fPan);
+  if (s->fPan != 0.0f || activeSound->GetNumChannels() != this->GetNumChannels()) {
+    try {
+      activeSound.reset(new RageSoundReader_Pan(activeSound.release()));
+    } catch (const std::bad_alloc&) {
+      SetError("SRC_AUDIT_FIX SRC-2864: failed to allocate chain pan filter");
+      return false;
+    }
+    if (!activeSound->SetProperty("Pan", s->fPan)) {
+      SetError("SRC_AUDIT_FIX SRC-2864: failed to configure chain pan filter");
+      return false;
+    }
   }
 
-  m_apActiveSounds.push_back(s);
+  if (!ApplyPendingProperties(activeSound.get())) {
+    return false;
+  }
+
+  try {
+    m_apActiveSounds.push_back(s);
+  } catch (const std::bad_alloc&) {
+    SetError("SRC_AUDIT_FIX SRC-2864: failed to store active chain sound");
+    return false;
+  }
+  s->pSound = activeSound.release();
   return true;
 }
 
@@ -383,18 +531,33 @@ void RageSoundReader_Chain::ReleaseSound(Sound* s) {
 
 bool RageSoundReader_Chain::SetProperty(
     const std::string& sProperty, float fValue) {
-  bool bRet = false;
+  auto pending = std::find_if(
+      m_aPendingProperties.begin(), m_aPendingProperties.end(),
+      [&sProperty](const std::pair<std::string, float>& property) {
+        return property.first == sProperty;
+      });
+  if (pending == m_aPendingProperties.end()) {
+    try {
+      m_aPendingProperties.emplace_back(sProperty, fValue);
+    } catch (const std::bad_alloc&) {
+      SetError("SRC_AUDIT_FIX SRC-2872: failed to store chain property");
+      return false;
+    }
+  } else {
+    pending->second = fValue;
+  }
+
   for (unsigned i = 0; i < m_apActiveSounds.size(); ++i) {
-    if (m_apActiveSounds[i]->pSound != nullptr &&
-        m_apActiveSounds[i]->pSound->SetProperty(sProperty, fValue)) {
-      bRet = true;
+    if (m_apActiveSounds[i]->pSound != nullptr) {
+      m_apActiveSounds[i]->pSound->SetProperty(sProperty, fValue);
     }
   }
-  return bRet;
+  ClearError();
+  return true;
 }
 
 int RageSoundReader_Chain::GetNextSourceFrame() const {
-  return m_iCurrentFrame;
+  return ClampInt64ToInt(m_iCurrentFrame);
   /*	if( m_apActiveSounds.empty() )
                   return m_iCurrentFrame;
 
@@ -440,6 +603,7 @@ float RageSoundReader_Chain::GetStreamToSourceRatio() const {
 int RageSoundReader_Chain::Read(float* pBuffer, int iFrames) {
   if (pBuffer == nullptr || iFrames < 0 || m_iChannels == 0 ||
       GetSampleRate() <= 0) {
+    SetError("SRC_AUDIT_FIX SRC-2868: invalid chain read state");
     return ERROR;
   }
   if (iFrames == 0) {
@@ -447,9 +611,11 @@ int RageSoundReader_Chain::Read(float* pBuffer, int iFrames) {
   }
   while (m_iNextSound < m_aSounds.size() &&
          m_iCurrentFrame ==
-             m_aSounds[m_iNextSound].GetOffsetFrame(m_iActualSampleRate)) {
+             m_aSounds[m_iNextSound].GetOffsetFrame64(m_iActualSampleRate)) {
     Sound* pSound = &m_aSounds[m_iNextSound];
-    ActivateSound(pSound);
+    if (!ActivateSound(pSound)) {
+      return ERROR;
+    }
     ++m_iNextSound;
   }
 
@@ -459,16 +625,13 @@ int RageSoundReader_Chain::Read(float* pBuffer, int iFrames) {
 
   /* Clamp iFrames to the beginning of the next sound we need to start. */
   if (m_iNextSound < m_aSounds.size()) {
-    int iOffsetFrame =
-        m_aSounds[m_iNextSound].GetOffsetFrame(m_iActualSampleRate);
-    ASSERT_M(
-        iOffsetFrame >= m_iCurrentFrame,
-        ssprintf("%i %i", iOffsetFrame, m_iCurrentFrame));
-    int iFramesToRead = iOffsetFrame - m_iCurrentFrame;
+    const std::int64_t iOffsetFrame =
+        m_aSounds[m_iNextSound].GetOffsetFrame64(m_iActualSampleRate);
+    std::int64_t iFramesToRead = iOffsetFrame - m_iCurrentFrame;
     if (iFramesToRead < 0) {
       iFramesToRead = 0;
     }
-    iFrames = std::min(iFramesToRead, iFrames);
+    iFrames = std::min(ClampInt64ToInt(iFramesToRead), iFrames);
   }
   if (iFrames == 0) {
     return 0;
@@ -483,11 +646,15 @@ int RageSoundReader_Chain::Read(float* pBuffer, int iFrames) {
      * directly from the source into the destination.  This is to optimize
      * the common case of having one BGM track and no autoplay sounds. */
     iFrames = m_apActiveSounds.front()->pSound->Read(pBuffer, iFrames);
-    if (iFrames < 0) {
+    if (iFrames == RageSoundReader::ERROR ||
+        iFrames == RageSoundReader::END_OF_FILE) {
       ReleaseSound(m_apActiveSounds.front());
     }
     if (iFrames > 0) {
-      m_iCurrentFrame += iFrames;
+      if (!AdvanceFrameCounter(&m_iCurrentFrame, iFrames)) {
+        SetError("SRC_AUDIT_FIX SRC-2873: chain frame counter overflow");
+        return ERROR;
+      }
     }
     return iFrames;
   }
@@ -497,10 +664,18 @@ int RageSoundReader_Chain::Read(float* pBuffer, int iFrames) {
   if (m_apActiveSounds.empty()) {
     /* If we have more sounds ahead of us, pretend we read the entire block,
      * since there's silence in between.  Otherwise, we're at EOF. */
-    size_t pBufferSize =
-        static_cast<size_t>(iFrames) * m_iChannels * sizeof(float);
+    const size_t channels = static_cast<size_t>(m_iChannels);
+    if (static_cast<size_t>(iFrames) >
+        std::numeric_limits<size_t>::max() / channels / sizeof(float)) {
+      SetError("SRC_AUDIT_FIX SRC-2873: chain silence buffer overflow");
+      return ERROR;
+    }
+    size_t pBufferSize = static_cast<size_t>(iFrames) * channels * sizeof(float);
     memset(pBuffer, 0, pBufferSize);
-    m_iCurrentFrame += iFrames;
+    if (!AdvanceFrameCounter(&m_iCurrentFrame, iFrames)) {
+      SetError("SRC_AUDIT_FIX SRC-2873: chain frame counter overflow");
+      return ERROR;
+    }
     return iFrames;
   }
 
@@ -511,6 +686,7 @@ int RageSoundReader_Chain::Read(float* pBuffer, int iFrames) {
   if (iFrames <= 0) {
     return ERROR;
   }
+  bool bSawWouldBlock = false;
   for (unsigned i = 0; i < m_apActiveSounds.size();) {
     RageSoundReader* pSound = m_apActiveSounds[i]->pSound;
     if (pSound == nullptr) {
@@ -528,6 +704,11 @@ int RageSoundReader_Chain::Read(float* pBuffer, int iFrames) {
     int iFramesRead = 0;
     while (iFramesRead < iFrames) {
       int iGotFrames = pSound->RetriedRead(Buffer, iFrames - iFramesRead);
+      if (iGotFrames == RageSoundReader::WOULD_BLOCK) {
+        bSawWouldBlock = true;
+        iFramesRead = iGotFrames;
+        break;
+      }
       if (iGotFrames < 0) {
         iFramesRead = iGotFrames;
         break;
@@ -536,8 +717,14 @@ int RageSoundReader_Chain::Read(float* pBuffer, int iFrames) {
         break;
       }
 
-      if (!mix.SetWriteOffset(iFramesRead * pSound->GetNumChannels()) ||
-          !mix.write(Buffer, iGotFrames * pSound->GetNumChannels())) {
+      const unsigned soundChannels = pSound->GetNumChannels();
+      if (static_cast<unsigned>(iFramesRead) >
+              static_cast<unsigned>(std::numeric_limits<int>::max()) /
+                  soundChannels ||
+          !mix.SetWriteOffset(
+              static_cast<int>(iFramesRead * soundChannels)) ||
+          !mix.write(Buffer, static_cast<size_t>(iGotFrames) * soundChannels)) {
+        SetError("SRC_AUDIT_FIX SRC-2868: chain mix buffer write failed");
         LOG->Warn(
             "RageSoundReader_Chain: mix buffer write failed: %s",
             mix.GetError().c_str());
@@ -546,7 +733,9 @@ int RageSoundReader_Chain::Read(float* pBuffer, int iFrames) {
       iFramesRead += iGotFrames;
     }
 
-    if (iFramesRead < 0) {
+    if (iFramesRead == RageSoundReader::WOULD_BLOCK) {
+      ++i;
+    } else if (iFramesRead < 0) {
       ReleaseSound(m_apActiveSounds[i]);
     } else {
       ++i;
@@ -554,19 +743,100 @@ int RageSoundReader_Chain::Read(float* pBuffer, int iFrames) {
   }
 
   /* Read mixed frames into the output buffer. */
-  int iMaxFramesRead = mix.size() / m_iChannels;
+  int iMaxFramesRead = ClampInt64ToInt(
+      static_cast<std::int64_t>(mix.size() / m_iChannels));
   if (iMaxFramesRead <= 0) {
+    if (bSawWouldBlock) {
+      return RageSoundReader::WOULD_BLOCK;
+    }
     return 0;
   }
   if (!mix.read(pBuffer)) {
+    SetError("SRC_AUDIT_FIX SRC-2868: chain mix buffer read failed");
     LOG->Warn(
         "RageSoundReader_Chain: mix buffer read failed: %s",
         mix.GetError().c_str());
     return ERROR;
   }
-  m_iCurrentFrame += iMaxFramesRead;
+  if (!AdvanceFrameCounter(&m_iCurrentFrame, iMaxFramesRead)) {
+    SetError("SRC_AUDIT_FIX SRC-2873: chain frame counter overflow");
+    return ERROR;
+  }
+  ClearError();
 
   return iMaxFramesRead;
+}
+
+void RageSoundReader_Chain::ClearError() const {
+  m_sError.clear();
+}
+
+void RageSoundReader_Chain::SetError(const std::string& sError) const {
+  m_sError = sError;
+}
+
+void RageSoundReader_Chain::RemoveNamedSoundPointersTo(
+    const RageSoundReader* pSound) {
+  if (pSound == nullptr) {
+    return;
+  }
+  for (auto it = m_apNamedSounds.begin(); it != m_apNamedSounds.end();) {
+    if (it->second == pSound) {
+      it = m_apNamedSounds.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+void RageSoundReader_Chain::ReplaceNamedSoundPointer(
+    const RageSoundReader* pOldSound, RageSoundReader* pNewSound) {
+  if (pOldSound == nullptr || pNewSound == nullptr) {
+    return;
+  }
+  for (auto& namedSound : m_apNamedSounds) {
+    if (namedSound.second == pOldSound) {
+      namedSound.second = pNewSound;
+    }
+  }
+}
+
+bool RageSoundReader_Chain::IsSoundTopologyUsable(
+    const RageSoundReader* pSound) const {
+  if (pSound == nullptr) {
+    return false;
+  }
+  const unsigned channels = pSound->GetNumChannels();
+  return pSound->GetSampleRate() > 0 && channels > 0 &&
+         channels <= MAX_CHAIN_CHANNELS;
+}
+
+bool RageSoundReader_Chain::ApplyPendingProperties(RageSoundReader* pSound)
+    const {
+  if (pSound == nullptr) {
+    return false;
+  }
+  for (const auto& property : m_aPendingProperties) {
+    pSound->SetProperty(property.first, property.second);
+  }
+  return true;
+}
+
+std::string RageSoundReader_Chain::GetError() const {
+  if (!m_sError.empty()) {
+    return m_sError;
+  }
+
+  for (const auto& activeSound : m_apActiveSounds) {
+    if (activeSound != nullptr && activeSound->pSound != nullptr) {
+      const std::string error = activeSound->pSound->GetError();
+      if (!error.empty()) {
+        return error;
+      }
+    }
+  }
+
+  return "";
 }
 
 int RageSoundReader_Chain::GetLength() const {
@@ -576,7 +846,7 @@ int RageSoundReader_Chain::GetLength() const {
     if (!IsValidLoadedSoundIndex(m_apLoadedSounds, sound.iIndex)) {
       continue;
     }
-    const RageSoundReader* pSound = m_apLoadedSounds[sound.iIndex];
+    const RageSoundReader* pSound = m_apLoadedSounds[sound.iIndex].get();
     int iThisLength = pSound->GetLength();
     if (iThisLength) {
       iLength = std::max(
@@ -593,7 +863,7 @@ int RageSoundReader_Chain::GetLength_Fast() const {
     if (!IsValidLoadedSoundIndex(m_apLoadedSounds, sound.iIndex)) {
       continue;
     }
-    const RageSoundReader* pSound = m_apLoadedSounds[sound.iIndex];
+    const RageSoundReader* pSound = m_apLoadedSounds[sound.iIndex].get();
     int iThisLength = pSound->GetLength_Fast();
     if (iThisLength) {
       iLength = std::max(
