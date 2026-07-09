@@ -44,6 +44,8 @@ read_source("src/GameSoundManager.cpp" game_sound_manager_cpp)
 read_source("src/AutoKeysounds.cpp" auto_keysounds_cpp)
 read_source("src/RageSoundManager.h" rage_sound_manager_h)
 read_source("src/RageSoundManager.cpp" rage_sound_manager_cpp)
+read_source("src/RageSoundReader.h" rage_sound_reader_h)
+read_source("src/RageSoundReader.cpp" rage_sound_reader_cpp)
 read_source("src/RageSoundReader_Extend.h" rage_sound_reader_extend_h)
 read_source("src/RageSoundReader_Extend.cpp" rage_sound_reader_extend_cpp)
 read_source("src/RageSoundReader_Filter.h" rage_sound_reader_filter_h)
@@ -243,6 +245,67 @@ require_contains(
   "${rage_sound_cpp}"
   "RageSound::Load: error preloading sound"
   "RageSound Load reports preload decode errors to callers")
+require_contains(
+  "${rage_sound_cpp}"
+  "int64_t iSourceFrame = 0;"
+  "RageSound consumes 64-bit source-frame metadata from RetriedRead")
+require_contains(
+  "${rage_sound_cpp}"
+  "source->GetBaseError()"
+  "RageSound preserves base-reader retry diagnostics when derived errors are empty")
+require_contains(
+  "${rage_sound_cpp}"
+  "TrySetProperty("
+  "RageSound uses the property wrapper that reports failure status")
+
+require_contains(
+  "${rage_sound_reader_h}"
+  "enum class PropertySetStatus"
+  "RageSoundReader property failures expose an explicit status")
+require_contains(
+  "${rage_sound_reader_h}"
+  "PropertySetResult TrySetProperty"
+  "RageSoundReader exposes a non-breaking property result wrapper")
+require_contains(
+  "${rage_sound_reader_h}"
+  "std::int64_t GetNextSourceFrame64() const"
+  "RageSoundReader exposes additive 64-bit source-frame metadata")
+require_contains(
+  "${rage_sound_reader_h}"
+  "static int ClampSourceFrameToInt"
+  "RageSoundReader centralizes public int source-frame clamping")
+require_contains(
+  "${rage_sound_reader_h}"
+  "std::string GetBaseError() const"
+  "RageSoundReader exposes shared base diagnostics")
+require_contains(
+  "${rage_sound_reader_cpp}"
+  "RageSoundReader::CopyReader"
+  "RageSoundReader copy traits go through the guarded base helper")
+require_contains(
+  "${rage_sound_reader_cpp}"
+  "SRC_AUDIT_FIX SRC-2905"
+  "RageSoundReader copy failures are review-traced")
+require_contains(
+  "${rage_sound_reader_cpp}"
+  "SRC_AUDIT_FIX SRC-2901"
+  "RageSoundReader invalid RetriedRead calls are diagnosable")
+require_contains(
+  "${rage_sound_reader_cpp}"
+  "SRC_AUDIT_FIX SRC-2899 SRC-2900"
+  "RageSoundReader retry exhaustion is diagnosable")
+require_contains(
+  "${rage_sound_reader_cpp}"
+  "SRC_AUDIT_FIX SRC-2902"
+  "RageSoundReader source-frame clamping is diagnosable")
+require_contains(
+  "${rage_sound_reader_cpp}"
+  "return RageSoundReader::ERROR;"
+  "RageSoundReader retry exhaustion returns ERROR instead of synthetic EOF")
+require_not_contains(
+  "${rage_sound_reader_cpp}"
+  "Pretend we got EOF"
+  "RageSoundReader must not mask retry exhaustion as EOF")
 
 require_contains(
   "${game_sound_manager_cpp}"
@@ -319,6 +382,10 @@ require_contains(
   "RageSoundReader_Extend stores playback frame position in 64-bit")
 require_contains(
   "${rage_sound_reader_extend_h}"
+  "std::int64_t GetNextSourceFrame64() const override;"
+  "RageSoundReader_Extend exposes its 64-bit source frame without clamping")
+require_contains(
+  "${rage_sound_reader_extend_h}"
   "std::string GetError() const override;"
   "RageSoundReader_Extend exposes local diagnostics")
 require_contains(
@@ -361,6 +428,10 @@ require_contains(
   "${rage_sound_reader_filter_h}"
   "int Read(float* pBuf, int iFrames) override"
   "RageSoundReader_Filter base forwarding contract is explicit")
+require_contains(
+  "${rage_sound_reader_filter_h}"
+  "std::int64_t GetNextSourceFrame64() const override"
+  "RageSoundReader_Filter forwards 64-bit source-frame metadata")
 require_contains(
   "${rage_sound_reader_filter_h}"
   "std::string GetError() const override"
@@ -421,6 +492,10 @@ require_contains(
   "${rage_sound_reader_preload_h}"
   "size_t GetFrameSizeBytes() const;"
   "RageSoundReader_Preload keeps byte arithmetic in size_t helpers")
+require_contains(
+  "${rage_sound_reader_preload_h}"
+  "std::int64_t GetNextSourceFrame64() const override;"
+  "RageSoundReader_Preload exposes 64-bit source-frame metadata")
 require_contains(
   "${rage_sound_reader_preload_cpp}"
   "SRC_AUDIT_FIX SRC-2790"
@@ -603,6 +678,10 @@ require_contains(
   "SpeedChange exposes filter-owned diagnostics")
 require_contains(
   "${rage_sound_reader_speed_change_h}"
+  "std::int64_t GetNextSourceFrame64() const override;"
+  "SpeedChange exposes 64-bit source-frame metadata")
+require_contains(
+  "${rage_sound_reader_speed_change_h}"
   "mutable std::mutex m_StateMutex;"
   "SpeedChange serializes ratio and buffer state")
 require_contains(
@@ -629,6 +708,10 @@ require_contains(
   "${rage_sound_reader_speed_change_cpp}"
   "ClampInt64ToInt"
   "SpeedChange clamps 64-bit position arithmetic before public int returns")
+require_contains(
+  "${rage_sound_reader_speed_change_cpp}"
+  "RageSoundReader_Filter::GetNextSourceFrame64()"
+  "SpeedChange preserves 64-bit source-frame metadata")
 require_not_contains(
   "${rage_sound_reader_speed_change_h}"
   "return new RageSoundReader_SpeedChange(*this);"
@@ -643,8 +726,16 @@ require_contains(
   "ThreadedBuffer exposes filter-owned diagnostics")
 require_contains(
   "${rage_sound_reader_threaded_buffer_h}"
+  "std::int64_t GetNextSourceFrame64() const override;"
+  "ThreadedBuffer exposes 64-bit source-frame metadata")
+require_contains(
+  "${rage_sound_reader_threaded_buffer_h}"
   "std::int64_t iPositionOfFirstFrame;"
   "ThreadedBuffer mapping positions use 64-bit arithmetic")
+require_contains(
+  "${rage_sound_reader_threaded_buffer_cpp}"
+  "std::int64_t iNextSourceFrame = 0;"
+  "ThreadedBuffer reads 64-bit source-frame metadata")
 require_contains(
   "${rage_sound_reader_threaded_buffer_cpp}"
   "MAX_THREADED_BUFFER_CHANNELS"
@@ -683,6 +774,10 @@ require_contains(
   "Resample_Good exposes filter-owned diagnostics")
 require_contains(
   "${rage_sound_reader_resample_good_h}"
+  "std::int64_t GetNextSourceFrame64() const override;"
+  "Resample_Good exposes 64-bit source-frame metadata")
+require_contains(
+  "${rage_sound_reader_resample_good_h}"
   "mutable std::mutex m_StateMutex;"
   "Resample_Good serializes topology/rate changes with audio reads")
 require_contains(
@@ -713,6 +808,10 @@ require_contains(
   "${rage_sound_reader_resample_good_cpp}"
   "MAX_RESAMPLE_CHANNELS"
   "Resample_Good enforces an explicit channel ceiling")
+require_contains(
+  "${rage_sound_reader_resample_good_cpp}"
+  "m_pSource->GetNextSourceFrame64()"
+  "Resample_Good preserves 64-bit source-frame metadata")
 require_contains(
   "${rage_sound_reader_channel_split_h}"
   "std::shared_ptr<RageSoundSplitterImpl> m_pImpl;"
@@ -815,6 +914,10 @@ require_contains(
   "RageSoundReader_Chain stores internal frame position in 64-bit")
 require_contains(
   "${rage_sound_reader_chain_h}"
+  "std::int64_t GetNextSourceFrame64() const override;"
+  "RageSoundReader_Chain exposes 64-bit source-frame metadata")
+require_contains(
+  "${rage_sound_reader_chain_h}"
   "std::string GetError() const override;"
   "RageSoundReader_Chain exposes local diagnostics")
 require_contains(
@@ -861,6 +964,10 @@ require_contains(
   "${rage_sound_reader_merge_h}"
   "std::int64_t m_iNextSourceFrame"
   "RageSoundReader_Merge stores internal source frame in 64-bit")
+require_contains(
+  "${rage_sound_reader_merge_h}"
+  "std::int64_t GetNextSourceFrame64() const override;"
+  "RageSoundReader_Merge exposes 64-bit source-frame metadata")
 require_contains(
   "${rage_sound_reader_merge_h}"
   "std::string GetError() const override;"
