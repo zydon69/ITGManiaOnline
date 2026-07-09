@@ -11,6 +11,7 @@
 #include <map>
 #include <string>
 
+#include "PerfDiagnostics.h"
 #include "RageFileBasic.h"
 #include "RageLog.h"
 #include "RageSoundReader.h"
@@ -18,6 +19,10 @@
 #include "RageUtil.h"
 #include "global.h"
 #include "mad.h"
+
+static void TraceReviewSrcError(const std::string& sError) {
+  LogReviewSrcDiagnostics("%s", sError.c_str());
+}
 
 // ID3 code from libid3:
 enum tagtype {
@@ -383,7 +388,10 @@ int RageSoundReader_MP3::fill_buffer() {
     if (!mad_stream_buffer_range_is_valid(mad) ||
         reinterpret_cast<std::uintptr_t>(mad->Stream.next_frame) >
             reinterpret_cast<std::uintptr_t>(mad->Stream.bufend)) {
-      SetError("SRC_AUDIT_FIX SRC-2810: invalid MP3 stream buffer pointers");
+      const std::string error =
+          "SRC_AUDIT_FIX SRC-2810: invalid MP3 stream buffer pointers";
+      SetError(error);
+      TraceReviewSrcError(error);
       return -1;
     }
 
@@ -392,7 +400,10 @@ int RageSoundReader_MP3::fill_buffer() {
     if (remaining < 0 ||
         remaining >
             static_cast<ptrdiff_t>(sizeof(mad->inbuf) - MAD_BUFFER_GUARD)) {
-      SetError("SRC_AUDIT_FIX SRC-2810: invalid MP3 buffer carry length");
+      const std::string error =
+          "SRC_AUDIT_FIX SRC-2810: invalid MP3 buffer carry length";
+      SetError(error);
+      TraceReviewSrcError(error);
       return -1;
     }
     inbytes = static_cast<int>(remaining);
@@ -490,7 +501,10 @@ int RageSoundReader_MP3::do_mad_frame_decode(bool headers_only) {
           mad->Stream.this_frame == nullptr ||
           reinterpret_cast<std::uintptr_t>(mad->Stream.this_frame) >
               reinterpret_cast<std::uintptr_t>(mad->Stream.bufend)) {
-        SetError("SRC_AUDIT_FIX SRC-2810: invalid MP3 sync buffer pointers");
+        const std::string error =
+            "SRC_AUDIT_FIX SRC-2810: invalid MP3 sync buffer pointers";
+        SetError(error);
+        TraceReviewSrcError(error);
         return -1;
       }
 
@@ -581,14 +595,20 @@ bool RageSoundReader_MP3::synth_output() {
 
   mad_synth_frame(&mad->Synth, &mad->Frame);
   if (this->Channels <= 0) {
-    SetError("SRC_AUDIT_FIX SRC-2815: MP3 synth output has invalid channels");
+    const std::string error =
+        "SRC_AUDIT_FIX SRC-2815: MP3 synth output has invalid channels";
+    SetError(error);
+    TraceReviewSrcError(error);
     mad->outleft = mad->outpos = 0;
     return false;
   }
   const size_t outputSamples =
       static_cast<size_t>(mad->Synth.pcm.length) * this->Channels;
   if (outputSamples > sizeof(mad->outbuf) / sizeof(mad->outbuf[0])) {
-    SetError("SRC_AUDIT_FIX SRC-2815: MP3 synth output exceeded buffer");
+    const std::string error =
+        "SRC_AUDIT_FIX SRC-2815: MP3 synth output exceeded buffer";
+    SetError(error);
+    TraceReviewSrcError(error);
     mad->outleft = mad->outpos = 0;
     return false;
   }
@@ -619,6 +639,9 @@ int RageSoundReader_MP3::seek_stream_to_byte(std::int64_t byte) {
       error = "SRC_AUDIT_FIX SRC-2816: MP3 seek failed without file error";
     }
     SetError(error);
+    if (error.find("SRC_AUDIT_FIX SRC-28") != std::string::npos) {
+      TraceReviewSrcError(error);
+    }
     return 0;
   }
   byte = seekResult;
@@ -1026,7 +1049,10 @@ int RageSoundReader_MP3::SetPosition_estimate(int iFrame) {
   if (seekMs < 0 ||
       seekMs > (std::numeric_limits<std::int64_t>::max() - mad->header_bytes) /
                    bytesPerMs) {
-    SetError("SRC_AUDIT_FIX SRC-2812: MP3 seek estimate overflowed");
+    const std::string error =
+        "SRC_AUDIT_FIX SRC-2812: MP3 seek estimate overflowed";
+    SetError(error);
+    TraceReviewSrcError(error);
     return ERROR;
   }
   std::int64_t seekpos = seekMs * bytesPerMs;

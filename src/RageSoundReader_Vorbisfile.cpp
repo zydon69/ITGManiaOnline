@@ -1,5 +1,6 @@
 #include "RageSoundReader_Vorbisfile.h"
 
+#include "PerfDiagnostics.h"
 #include "RageException.h"
 #include "RageFileBasic.h"
 #include "RageLog.h"
@@ -27,6 +28,11 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#include <string>
+
+static void TraceReviewSrcError(const std::string& sError) {
+  LogReviewSrcDiagnostics("%s", sError.c_str());
+}
 
 static size_t OggRageFile_read_func(
     void* ptr, size_t size, size_t nmemb, void* datasource) {
@@ -142,7 +148,10 @@ RageSoundReader_FileReader::OpenResult RageSoundReader_Vorbisfile::Open(
   try {
     newVf = new OggVorbis_File;
   } catch (const std::bad_alloc&) {
-    SetError("SRC_AUDIT_FIX SRC-2802: Vorbis reader allocation failed");
+    const std::string error =
+        "SRC_AUDIT_FIX SRC-2802: Vorbis reader allocation failed";
+    SetError(error);
+    TraceReviewSrcError(error);
     m_pFile = nullptr;
     return OPEN_FATAL_ERROR;
   }
@@ -171,9 +180,11 @@ RageSoundReader_FileReader::OpenResult RageSoundReader_Vorbisfile::Open(
   eof = false;
   read_offset = ov_pcm_tell(vf);
   if (read_offset < 0) {
-    SetError(
+    const std::string error =
         "SRC_AUDIT_FIX SRC-2803: Vorbis stream position unavailable after "
-        "open");
+        "open";
+    SetError(error);
+    TraceReviewSrcError(error);
     ResetDecoderState();
     return OPEN_FATAL_ERROR;
   }
@@ -237,9 +248,11 @@ int RageSoundReader_Vorbisfile::SetPosition(int iFrame) {
   }
   read_offset = ov_pcm_tell(vf);
   if (read_offset < 0) {
-    SetError(
+    const std::string error =
         "SRC_AUDIT_FIX SRC-2803: Vorbis stream position unavailable after "
-        "seek");
+        "seek";
+    SetError(error);
+    TraceReviewSrcError(error);
     return -1;
   }
 
@@ -269,9 +282,11 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
     {
       const ogg_int64_t curofs = ov_pcm_tell(vf);
       if (curofs < 0) {
-        SetError(
+        const std::string error =
             "SRC_AUDIT_FIX SRC-2803: Vorbis stream position unavailable during "
-            "read");
+            "read";
+        SetError(error);
+        TraceReviewSrcError(error);
         return ERROR;
       }
       if (curofs < read_offset) {

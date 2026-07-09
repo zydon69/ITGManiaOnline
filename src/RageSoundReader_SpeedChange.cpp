@@ -9,6 +9,7 @@
 #include <new>
 #include <string>
 
+#include "PerfDiagnostics.h"
 #include "RageSoundReader.h"
 #include "RageSoundReader_Filter.h"
 #include "RageUtil.h"
@@ -593,6 +594,12 @@ int RageSoundReader_SpeedChange::SetPosition(int iFrame) {
   }
   /* Negative positions are valid during gameplay lead-in.  Preserve them so
    * lower readers can clamp or synthesize pre-song silence as appropriate. */
+  if (iFrame < 0) {
+    LogReviewSrcDiagnostics(
+        "SRC_AUDIT_FIX SRC-2848: SpeedChange accepted lead-in SetPosition "
+        "frame=%d",
+        iFrame);
+  }
   Reset();
   int iRet = RageSoundReader_Filter::SetPosition(iFrame);
   if (iRet >= 0) {
@@ -679,6 +686,9 @@ void RageSoundReader_SpeedChange::ClearError() const {
 }
 
 void RageSoundReader_SpeedChange::SetError(const std::string& sError) const {
+  if (sError.find("SRC_AUDIT_FIX SRC-28") != std::string::npos) {
+    LogReviewSrcDiagnostics("%s", sError.c_str());
+  }
   std::lock_guard<std::mutex> lock(m_ErrorMutex);
   m_sError = sError;
 }

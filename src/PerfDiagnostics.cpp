@@ -1,10 +1,13 @@
 #include "PerfDiagnostics.h"
 
 #include <atomic>
+#include <cstdarg>
 #include <cstdlib>
 #include <string>
 
 #include "Preference.h"
+#include "RageLog.h"
+#include "RageUtil.h"
 
 static Preference<bool> g_bPerfDiagnostics("PerfDiagnostics", false);
 static Preference<bool> g_bLogAudioUnderrunDiagnostics(
@@ -31,6 +34,7 @@ static Preference<bool> g_bLogGlobalOffsetDiagnostics(
     "LogGlobalOffsetDiagnostics", false);
 static Preference<bool> g_bLogMusicWheelDiagnostics(
     "LogMusicWheelDiagnostics", false);
+static Preference<bool> g_bReviewSrc("review_src", true);
 
 static std::atomic<bool> g_bPerfDiagnosticsCached{false};
 static std::atomic<bool> g_bLogAudioUnderrunDiagnosticsCached{false};
@@ -45,6 +49,7 @@ static std::atomic<bool> g_bLogContentLoadDiagnosticsCached{false};
 static std::atomic<bool> g_bLogThemeLuaDiagnosticsCached{false};
 static std::atomic<bool> g_bLogGlobalOffsetDiagnosticsCached{false};
 static std::atomic<bool> g_bLogMusicWheelDiagnosticsCached{false};
+static std::atomic<bool> g_bReviewSrcCached{true};
 
 static bool EnvFlagEnabled(const char* name) {
   if (name == nullptr) {
@@ -70,6 +75,8 @@ static const bool g_bEnvLogBackground = EnvFlagEnabled("ITG_LOG_BACKGROUND");
 static const bool g_bEnvLogGlobalOffset =
     EnvFlagEnabled("ITG_LOG_GLOBAL_OFFSET");
 static const bool g_bEnvLogMusicWheel = EnvFlagEnabled("ITG_LOG_MUSIC_WHEEL");
+static const bool g_bEnvReviewSrc = EnvFlagEnabled("ITG_REVIEW_SRC") ||
+                                    EnvFlagEnabled("ITG_LOG_REVIEW_SRC");
 static const bool g_bEnvLegacyTraceGlUploads =
     EnvFlagEnabled("ITG_TRACE_GL_UPLOADS");
 static const bool g_bEnvLegacyTraceResourceSnapshots =
@@ -105,6 +112,7 @@ void RefreshPerfDiagnosticsPreferenceCache() {
       g_bLogGlobalOffsetDiagnostics.Get(), std::memory_order_release);
   g_bLogMusicWheelDiagnosticsCached.store(
       g_bLogMusicWheelDiagnostics.Get(), std::memory_order_release);
+  g_bReviewSrcCached.store(g_bReviewSrc.Get(), std::memory_order_release);
 }
 
 /*
@@ -196,4 +204,21 @@ bool LogMusicWheelDiagnosticsEnabled() {
   // targeted switch so production logs surface real warnings first.
   return g_bLogMusicWheelDiagnosticsCached.load(std::memory_order_acquire) ||
          g_bEnvLogMusicWheel;
+}
+
+bool ReviewSrcDiagnosticsEnabled() {
+  return g_bReviewSrcCached.load(std::memory_order_acquire) || g_bEnvReviewSrc;
+}
+
+void LogReviewSrcDiagnostics(const char* fmt, ...) {
+  if (!ReviewSrcDiagnosticsEnabled() || fmt == nullptr || LOG == nullptr) {
+    return;
+  }
+
+  va_list va;
+  va_start(va, fmt);
+  const std::string message = vssprintf(fmt, va);
+  va_end(va);
+
+  LOG->Trace("SRC_REVIEW_TRACE %s", message.c_str());
 }

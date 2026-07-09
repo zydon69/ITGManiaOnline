@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 
+#include "PerfDiagnostics.h"
 #include "RageSoundReader.h"
 #include "RageSoundReader_Filter.h"
 #include "RageTimer.h"
@@ -279,6 +280,12 @@ int RageSoundReader_ThreadedBuffer::SetPosition(int iFrame) {
 
     m_DataBuffer.clear();
 
+    if (iFrame < 0) {
+      LogReviewSrcDiagnostics(
+          "SRC_AUDIT_FIX SRC-2859: ThreadedBuffer accepted lead-in "
+          "SetPosition frame=%d",
+          iFrame);
+    }
     iRet = RageSoundReader_Filter::SetPosition(iFrame);
 
     m_StreamPosition.clear();
@@ -617,6 +624,9 @@ void RageSoundReader_ThreadedBuffer::ClearError() const {
 }
 
 void RageSoundReader_ThreadedBuffer::SetError(const std::string& sError) const {
+  if (sError.find("SRC_AUDIT_FIX SRC-28") != std::string::npos) {
+    LogReviewSrcDiagnostics("%s", sError.c_str());
+  }
   std::lock_guard<std::mutex> lock(m_ErrorMutex);
   m_sError = sError;
 }

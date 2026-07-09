@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "PerfDiagnostics.h"
 #include "RageLog.h"
 #include "RageSound.h"
 #include "RageSoundConstants.h"
@@ -772,6 +773,9 @@ void RageSoundReader_Chain::ClearError() const {
 }
 
 void RageSoundReader_Chain::SetError(const std::string& sError) const {
+  if (sError.find("SRC_AUDIT_FIX SRC-28") != std::string::npos) {
+    LogReviewSrcDiagnostics("%s", sError.c_str());
+  }
   m_sError = sError;
 }
 

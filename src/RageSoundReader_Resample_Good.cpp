@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "PerfDiagnostics.h"
 #include "RageSoundReader.h"
 #include "RageSoundReader_Filter.h"
 #include "RageThreads.h"
@@ -984,6 +985,12 @@ int RageSoundReader_Resample_Good::SetPosition(int iFrame) {
   const int64_t iSourceFrame =
       static_cast<int64_t>(iFrame) *
       static_cast<int64_t>(m_pSource->GetSampleRate()) / m_iSampleRate;
+  if (iFrame < 0) {
+    LogReviewSrcDiagnostics(
+        "SRC_AUDIT_FIX SRC-2837: Resample_Good accepted lead-in SetPosition "
+        "frame=%d sourceFrame=%lld",
+        iFrame, static_cast<long long>(iSourceFrame));
+  }
   return m_pSource->SetPosition(ClampInt64ToInt(iSourceFrame));
 }
 
@@ -1199,6 +1206,9 @@ void RageSoundReader_Resample_Good::ClearError() const {
 }
 
 void RageSoundReader_Resample_Good::SetError(const std::string& sError) const {
+  if (sError.find("SRC_AUDIT_FIX SRC-28") != std::string::npos) {
+    LogReviewSrcDiagnostics("%s", sError.c_str());
+  }
   std::lock_guard<std::mutex> lock(m_ErrorMutex);
   m_sError = sError;
 }

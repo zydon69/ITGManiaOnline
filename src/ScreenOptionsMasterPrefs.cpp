@@ -1068,6 +1068,8 @@ static void InitializeConfOptions() {
   g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogGlobalOffsetDiagnostics", MovePref<bool>, "Off", "On"));
   g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
+  ADD(ConfOption("review_src", MovePref<bool>, "Off", "On"));
+  g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
 
   // Sound options
   ADD(ConfOption(

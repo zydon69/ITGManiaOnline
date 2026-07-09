@@ -15,6 +15,7 @@
 #include <new>
 #include <string>
 
+#include "PerfDiagnostics.h"
 #include "Preference.h"
 #include "RageSoundReader.h"
 #include "RageSoundReader_Filter.h"
@@ -308,6 +309,9 @@ void RageSoundReader_PitchChange::ClearError() const {
 }
 
 void RageSoundReader_PitchChange::SetError(const std::string& sError) const {
+  if (sError.find("SRC_AUDIT_FIX SRC-28") != std::string::npos) {
+    LogReviewSrcDiagnostics("%s", sError.c_str());
+  }
   std::lock_guard<std::mutex> lock(m_ErrorMutex);
   m_sError = sError;
 }

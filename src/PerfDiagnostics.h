@@ -16,5 +16,7 @@ bool LogVerboseContentLoadDiagnosticsEnabled();
 bool LogThemeLuaDiagnosticsEnabled();
 bool LogGlobalOffsetDiagnosticsEnabled();
 bool LogMusicWheelDiagnosticsEnabled();
+bool ReviewSrcDiagnosticsEnabled();
+void LogReviewSrcDiagnostics(const char* fmt, ...);
 
 #endif
