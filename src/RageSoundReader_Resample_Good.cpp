@@ -967,11 +967,20 @@ bool RageSoundReader_Resample_Good::ReopenResamplerLocked(
  */
 int RageSoundReader_Resample_Good::SetPosition(int iFrame) {
   std::lock_guard<std::mutex> lock(m_StateMutex);
-  if (iFrame < 0 || m_pSource.isNull() || m_iSampleRate <= 0 ||
-      m_pSource->GetSampleRate() <= 0 || !ResetLocked()) {
-    SetError("SRC_AUDIT_FIX SRC-2837: Resample_Good rejected SetPosition");
+  if (m_pSource.isNull() || m_iSampleRate <= 0 ||
+      m_pSource->GetSampleRate() <= 0) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2837: Resample_Good rejected SetPosition topology");
     return RageSoundReader::ERROR;
   }
+  if (!ResetLocked()) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2837: Resample_Good could not reset before "
+        "SetPosition");
+    return RageSoundReader::ERROR;
+  }
+  /* Negative positions are valid during gameplay lead-in.  The wrapped reader
+   * decides whether to clamp to zero or synthesize silence before the song. */
   const int64_t iSourceFrame =
       static_cast<int64_t>(iFrame) *
       static_cast<int64_t>(m_pSource->GetSampleRate()) / m_iSampleRate;

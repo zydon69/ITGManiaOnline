@@ -585,11 +585,14 @@ int RageSoundReader_SpeedChange::Read(float* pBuf, int iFrames) {
  * previous selection. */
 int RageSoundReader_SpeedChange::SetPosition(int iFrame) {
   std::lock_guard<std::mutex> lock(m_StateMutex);
-  if (iFrame < 0 || m_pSource.isNull()) {
+  if (m_pSource.isNull()) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2848: SpeedChange rejected invalid SetPosition");
+        "SRC_AUDIT_FIX SRC-2848: SpeedChange rejected SetPosition without "
+        "source");
     return RageSoundReader::ERROR;
   }
+  /* Negative positions are valid during gameplay lead-in.  Preserve them so
+   * lower readers can clamp or synthesize pre-song silence as appropriate. */
   Reset();
   int iRet = RageSoundReader_Filter::SetPosition(iFrame);
   if (iRet >= 0) {

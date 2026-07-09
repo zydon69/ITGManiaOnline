@@ -265,7 +265,7 @@ bool RageSoundReader_ThreadedBuffer::DisableBufferingForSourceAccess(
 }
 
 int RageSoundReader_ThreadedBuffer::SetPosition(int iFrame) {
-  if (iFrame < 0 || m_pSource.isNull()) {
+  if (m_pSource.isNull()) {
     return RageSoundReader::ERROR;
   }
   bool bWasEnabled = false;
