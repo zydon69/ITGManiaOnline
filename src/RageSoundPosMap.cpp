@@ -1,11 +1,14 @@
 #include "RageSoundPosMap.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <deque>
 #include <limits>
+#include <mutex>
+#include <new>
+#include <string>
 #include <utility>
 
 #include "PerfDiagnostics.h"
@@ -17,7 +20,7 @@
 // an audio output buffer, so increasing it does not add playback latency; it
 // keeps more timing history available when CoreAudio scheduling or device
 // latency gets uneven mid-gameplay.
-static int pos_map_backlog_frames = 480000;
+static constexpr int kPosMapBacklogFrames = 480000;
 // CoreAudio and other backends can report a hardware cursor that is a small
 // buffer quantum ahead/behind the newest committed position while a sound is
 // starting or flushing. Treat that as timing jitter, not a real map failure.
@@ -26,15 +29,23 @@ static int pos_map_backlog_frames = 480000;
 static constexpr double kMinorPositionDriftToleranceMs = 46.0;
 static constexpr float kMinorPositionDriftTraceSeconds = 60.0f;
 static constexpr int kSustainedMinorPositionDriftSearches = 120;
+static constexpr size_t kMaxPosMapEntries = 4096;
+static constexpr double kRatioMergeEpsilon = 0.000000001;
 
-static int64_t MinorPositionDriftFramesForRate(int iFrameRate) {
+static bool MinorPositionDriftFramesForRate(
+    int iFrameRate, int64_t& outFrames) {
   if (iFrameRate <= 0) {
-    iFrameRate = 44100;
+    return false;
   }
-  return static_cast<int64_t>(
-      (static_cast<double>(iFrameRate) * kMinorPositionDriftToleranceMs /
-       1000.0) +
-      0.5);
+  const double frames =
+      static_cast<double>(iFrameRate) * kMinorPositionDriftToleranceMs /
+      1000.0;
+  if (!std::isfinite(frames) ||
+      frames > static_cast<double>(std::numeric_limits<int64_t>::max())) {
+    return false;
+  }
+  outFrames = static_cast<int64_t>(frames + 0.5);
+  return true;
 }
 
 static bool AddInt64(int64_t lhs, int64_t rhs, int64_t& out) {
@@ -69,6 +80,11 @@ static bool ScaleFramesToDestDelta(
   return true;
 }
 
+static bool RatiosEquivalent(double lhs, double rhs) {
+  return std::abs(lhs - rhs) <=
+         kRatioMergeEpsilon * std::max({1.0, std::abs(lhs), std::abs(rhs)});
+}
+
 struct pos_map_t {
   int64_t m_iSourceFrame;
   int64_t m_iDestFrame;
@@ -85,39 +101,80 @@ struct pos_map_t {
 
 struct pos_map_impl {
   std::deque<pos_map_t> m_Queue;
+  mutable std::mutex m_Mutex;
   mutable int m_iConsecutiveMinorDrifts = 0;
-  void Cleanup();
+  mutable RageTimer m_LastMinorDriftLog;
+  mutable RageTimer m_LastSustainedMinorDriftLog;
+  mutable RageTimer m_LastMismatchLog;
+  mutable std::string m_sError;
+
+  pos_map_impl() = default;
+  pos_map_impl(const pos_map_impl& rhs) {
+    std::lock_guard<std::mutex> lock(rhs.m_Mutex);
+    m_Queue = rhs.m_Queue;
+    m_iConsecutiveMinorDrifts = rhs.m_iConsecutiveMinorDrifts;
+    m_sError = rhs.m_sError;
+  }
+
+  pos_map_impl& operator=(const pos_map_impl&) = delete;
+
+  void ClearErrorLocked() const { m_sError.clear(); }
+
+  bool SetErrorLocked(const std::string& error) const {
+    m_sError = error;
+    LogReviewSrcDiagnostics("%s", error.c_str());
+    return false;
+  }
+
+  void CleanupLocked();
 };
 
-pos_map_queue::pos_map_queue() { m_pImpl = new pos_map_impl; }
+pos_map_queue::pos_map_queue() : m_pImpl(new pos_map_impl) {}
 
-pos_map_queue::~pos_map_queue() { delete m_pImpl; }
+pos_map_queue::~pos_map_queue() = default;
 
 pos_map_queue::pos_map_queue(const pos_map_queue& cpy) {
-  m_pImpl = new pos_map_impl(*cpy.m_pImpl);
+  m_pImpl.reset(new pos_map_impl(*cpy.m_pImpl));
 }
 
 pos_map_queue& pos_map_queue::operator=(const pos_map_queue& rhs) {
   if (this != &rhs) {
-    pos_map_impl* tempImpl = new pos_map_impl(*rhs.m_pImpl);
-    std::swap(m_pImpl, tempImpl);
-    delete tempImpl;
+    pos_map_queue temp(rhs);
+    std::swap(m_pImpl, temp.m_pImpl);
   }
   return *this;
 }
 
-void pos_map_queue::Insert(
+pos_map_queue::pos_map_queue(pos_map_queue&&) noexcept = default;
+
+pos_map_queue& pos_map_queue::operator=(pos_map_queue&&) noexcept = default;
+
+bool pos_map_queue::Insert(
     int64_t iSourceFrame, int64_t iFrames, int64_t iDestFrame,
     double fSourceToDestRatio) {
+  std::lock_guard<std::mutex> lock(m_pImpl->m_Mutex);
+  m_pImpl->ClearErrorLocked();
   if (iFrames <= 0 || !std::isfinite(fSourceToDestRatio) ||
       fSourceToDestRatio <= 0.0) {
-    return;
+    return m_pImpl->SetErrorLocked(
+        "SRC_AUDIT_FIX SRC-2916: PosMap rejected invalid insert arguments");
+  }
+  if (iSourceFrame < 0 || iDestFrame < 0) {
+    LogReviewSrcDiagnostics(
+        "SRC_AUDIT_FIX SRC-2918: PosMap accepted intentional negative frame "
+        "mapping source=%lld dest=%lld frames=%lld ratio=%.9f",
+        static_cast<long long>(iSourceFrame),
+        static_cast<long long>(iDestFrame), static_cast<long long>(iFrames),
+        fSourceToDestRatio);
   }
   int64_t sourceEnd = 0;
   int64_t destDelta = 0;
+  int64_t destEnd = 0;
   if (!AddInt64(iSourceFrame, iFrames, sourceEnd) ||
-      !ScaleFramesToDestDelta(iFrames, fSourceToDestRatio, destDelta)) {
-    return;
+      !ScaleFramesToDestDelta(iFrames, fSourceToDestRatio, destDelta) ||
+      !AddInt64(iDestFrame, destDelta, destEnd)) {
+    return m_pImpl->SetErrorLocked(
+        "SRC_AUDIT_FIX SRC-2916: PosMap rejected overflowed insert mapping");
   }
 
   bool merged = false;
@@ -132,8 +189,8 @@ void pos_map_queue::Insert(
             last.m_iFrames, last.m_fSourceToDestRatio, lastDestDelta) &&
         AddInt64(last.m_iDestFrame, lastDestDelta, lastDestEnd) &&
         lastSourceEnd == iSourceFrame &&
-        last.m_fSourceToDestRatio == fSourceToDestRatio &&
-        AbsDistance(lastDestEnd, iDestFrame) <= 1) {
+        RatiosEquivalent(last.m_fSourceToDestRatio, fSourceToDestRatio) &&
+        lastDestEnd == iDestFrame) {
       // Merge the frames and set the merged flag to true.
       int64_t mergedFrames = 0;
       if (AddInt64(last.m_iFrames, iFrames, mergedFrames)) {
@@ -144,7 +201,12 @@ void pos_map_queue::Insert(
   }
 
   if (!merged) {
-    m_pImpl->m_Queue.emplace_back();
+    try {
+      m_pImpl->m_Queue.emplace_back();
+    } catch (const std::bad_alloc&) {
+      return m_pImpl->SetErrorLocked(
+          "SRC_AUDIT_FIX SRC-2917: PosMap insert allocation failed");
+    }
     pos_map_t& m = m_pImpl->m_Queue.back();
     m.m_iSourceFrame = iSourceFrame;
     m.m_iDestFrame = iDestFrame;
@@ -152,35 +214,56 @@ void pos_map_queue::Insert(
     m.m_fSourceToDestRatio = fSourceToDestRatio;
   }
 
-  m_pImpl->Cleanup();
+  m_pImpl->CleanupLocked();
+  return true;
 }
 
-void pos_map_impl::Cleanup() {
+void pos_map_impl::CleanupLocked() {
   auto it = m_Queue.end();
   int64_t iTotalFrames = 0;
   // Scan backwards until we have at least pos_map_backlog_frames.
-  while (iTotalFrames < pos_map_backlog_frames) {
+  while (iTotalFrames < kPosMapBacklogFrames) {
     if (it == m_Queue.begin()) {
       break;
     }
     --it;
-    iTotalFrames += it->m_iFrames;
+    if (!AddInt64(iTotalFrames, it->m_iFrames, iTotalFrames)) {
+      iTotalFrames = std::numeric_limits<int64_t>::max();
+      SetErrorLocked(
+          "SRC_AUDIT_FIX SRC-2919: PosMap cleanup frame accumulator overflow");
+      break;
+    }
   }
 
   m_Queue.erase(m_Queue.begin(), it);
+  while (m_Queue.size() > kMaxPosMapEntries) {
+    m_Queue.pop_front();
+  }
 }
 
-int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
-  if (IsEmpty()) {
-    return 0;
+pos_map_search_result pos_map_queue::SearchResult(
+    int64_t iSourceFrame, int iFrameRate) const {
+  std::lock_guard<std::mutex> lock(m_pImpl->m_Mutex);
+  m_pImpl->ClearErrorLocked();
+
+  pos_map_search_result result;
+  if (m_pImpl->m_Queue.empty()) {
+    result.status = pos_map_search_result::Status::Empty;
+    return result;
   }
-  const int64_t minorPositionDriftFrames =
-      MinorPositionDriftFramesForRate(iFrameRate);
+  int64_t minorPositionDriftFrames = 0;
+  if (!MinorPositionDriftFramesForRate(iFrameRate, minorPositionDriftFrames)) {
+    m_pImpl->SetErrorLocked(
+        "SRC_AUDIT_FIX SRC-2925: PosMap search rejected invalid frame rate");
+    result.status = pos_map_search_result::Status::InvalidInput;
+    return result;
+  }
 
   // iSourceFrame is probably in pos_map.  Search to figure out what position it
   // maps to.
   int64_t iClosestPosition = 0;
   uint64_t iClosestPositionDist = std::numeric_limits<uint64_t>::max();
+  size_t skippedCorruptEntries = 0;
   for (const pos_map_t& pm : m_pImpl->m_Queue) {
     int64_t sourceEnd = 0;
     int64_t destDelta = 0;
@@ -189,6 +272,7 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
         !ScaleFramesToDestDelta(
             pm.m_iFrames, pm.m_fSourceToDestRatio, destDelta) ||
         !AddInt64(pm.m_iDestFrame, destDelta, destEnd)) {
+      ++skippedCorruptEntries;
       continue;
     }
 
@@ -199,13 +283,19 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
       // If we are in the correct block, calculate its current position
       int64_t iDiff = static_cast<int64_t>(iSourceFrame - pm.m_iSourceFrame);
       if (!ScaleFramesToDestDelta(iDiff, pm.m_fSourceToDestRatio, iDiff)) {
-        return pm.m_iDestFrame;
+        result.frame = pm.m_iDestFrame;
+        result.status = pos_map_search_result::Status::Approximate;
+        return result;
       }
       int64_t mappedFrame = 0;
       if (!AddInt64(pm.m_iDestFrame, iDiff, mappedFrame)) {
-        return pm.m_iDestFrame;
+        result.frame = pm.m_iDestFrame;
+        result.status = pos_map_search_result::Status::Approximate;
+        return result;
       }
-      return mappedFrame;
+      result.frame = mappedFrame;
+      result.status = pos_map_search_result::Status::Exact;
+      return result;
     }
 
     // See if the current position is close to the beginning of this block.
@@ -224,7 +314,18 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
   }
 
   if (iClosestPositionDist == std::numeric_limits<uint64_t>::max()) {
-    return 0;
+    if (skippedCorruptEntries > 0) {
+      m_pImpl->SetErrorLocked(
+          "SRC_AUDIT_FIX SRC-2921: PosMap search skipped only corrupt entries");
+      result.status = pos_map_search_result::Status::CorruptMap;
+    }
+    return result;
+  }
+
+  if (skippedCorruptEntries > 0) {
+    LogReviewSrcDiagnostics(
+        "SRC_AUDIT_FIX SRC-2921: PosMap search skipped %zu corrupt entries",
+        skippedCorruptEntries);
   }
 
   /*
@@ -249,7 +350,6 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
       iSourceFrame < firstStart ? "before" :
       iSourceFrame >= lastEnd ? "after" : "gap";
 
-  static RageTimer lastMinor;
   const uint64_t minorPositionDriftDistance =
       static_cast<uint64_t>(minorPositionDriftFrames);
   if (iClosestPositionDist <= minorPositionDriftDistance) {
@@ -258,10 +358,9 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
         m_pImpl->m_iConsecutiveMinorDrifts >
         kSustainedMinorPositionDriftSearches;
     if (sustainedDrift) {
-      static RageTimer lastSustainedMinor;
       if (LOG != nullptr && PerfDiagnosticsEnabled() &&
-          lastSustainedMinor.Ago() >= 10.0f) {
-        lastSustainedMinor.Touch();
+          m_pImpl->m_LastSustainedMinorDriftLog.Ago() >= 10.0f) {
+        m_pImpl->m_LastSustainedMinorDriftLog.Touch();
         LOG->Trace(
             "Audio position mismatch: sustained minor drift frame %" PRId64
             " outside buffered range relation=%s closest_dist=%" PRIu64
@@ -274,12 +373,15 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
             iFrameRate, m_pImpl->m_iConsecutiveMinorDrifts,
             m_pImpl->m_Queue.size(), firstStart, firstEnd, lastStart, lastEnd);
       }
-      return iClosestPosition;
+      result.frame = iClosestPosition;
+      result.status = pos_map_search_result::Status::Approximate;
+      return result;
     }
 
     if (LOG != nullptr && PerfDiagnosticsEnabled() &&
-        lastMinor.Ago() >= kMinorPositionDriftTraceSeconds) {
-      lastMinor.Touch();
+        m_pImpl->m_LastMinorDriftLog.Ago() >=
+            kMinorPositionDriftTraceSeconds) {
+      m_pImpl->m_LastMinorDriftLog.Touch();
       LOG->Trace(
           "Audio position map minor drift: frame %" PRId64
           " outside buffered range relation=%s closest_dist=%" PRIu64
@@ -291,14 +393,15 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
           iFrameRate, m_pImpl->m_iConsecutiveMinorDrifts,
           m_pImpl->m_Queue.size(), firstStart, firstEnd, lastStart, lastEnd);
     }
-    return iClosestPosition;
+    result.frame = iClosestPosition;
+    result.status = pos_map_search_result::Status::Approximate;
+    return result;
   }
 
-  static RageTimer lastMismatch;
   m_pImpl->m_iConsecutiveMinorDrifts = 0;
   if (LOG != nullptr && PerfDiagnosticsEnabled() &&
-      lastMismatch.Ago() >= 10.0f) {
-    lastMismatch.Touch();
+      m_pImpl->m_LastMismatchLog.Ago() >= 10.0f) {
+    m_pImpl->m_LastMismatchLog.Touch();
     LOG->Trace(
         "Audio position mismatch: frame %" PRId64
         " outside buffered range relation=%s closest_dist=%" PRIu64
@@ -310,15 +413,31 @@ int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
         lastEnd);
   }
 
-  return iClosestPosition;
+  result.frame = iClosestPosition;
+  result.status = pos_map_search_result::Status::Approximate;
+  return result;
+}
+
+int64_t pos_map_queue::Search(int64_t iSourceFrame, int iFrameRate) const {
+  return SearchResult(iSourceFrame, iFrameRate).frame;
 }
 
 void pos_map_queue::Clear() {
+  std::lock_guard<std::mutex> lock(m_pImpl->m_Mutex);
   m_pImpl->m_Queue.clear();
   m_pImpl->m_iConsecutiveMinorDrifts = 0;
+  m_pImpl->ClearErrorLocked();
 }
 
-bool pos_map_queue::IsEmpty() const { return m_pImpl->m_Queue.empty(); }
+bool pos_map_queue::IsEmpty() const {
+  std::lock_guard<std::mutex> lock(m_pImpl->m_Mutex);
+  return m_pImpl->m_Queue.empty();
+}
+
+std::string pos_map_queue::GetError() const {
+  std::lock_guard<std::mutex> lock(m_pImpl->m_Mutex);
+  return m_pImpl->m_sError;
+}
 
 /*
  * Copyright (c) 2002-2004 Glenn Maynard

@@ -333,8 +333,8 @@ RageSoundMixBuffer& RageSoundDriver::MixIntoBuffer(
 
       {
         Sound::QueuedPosMap pos;
-        pos.iStreamFrame = iFrameNumber + iGotFrames;
-        pos.iHardwareFrame = p[0]->m_iPosition;
+        pos.iHardwareFrame = iFrameNumber + iGotFrames;
+        pos.iStreamFrame = p[0]->m_iPosition;
         pos.iFrames = frames_to_read;
 
         s.m_PosMapQueue.write(&pos, 1);
@@ -819,7 +819,7 @@ void RageSoundDriver::Update() {
         RageSoundBase* pSound = m_Sounds[i].m_pSound;
         if (pSound != nullptr) {
           pSound->CommitPlayingPosition(
-              p.iStreamFrame, p.iHardwareFrame, p.iFrames);
+              p.iHardwareFrame, p.iStreamFrame, p.iFrames);
         }
       }
     }

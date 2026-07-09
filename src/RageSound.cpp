@@ -168,7 +168,7 @@ RageSound& RageSound::operator=(const RageSound& cpy) {
   std::unique_ptr<RageSoundReader> sourceCopy;
   RageSoundParams params;
   int64_t streamFrame = 0;
-  int stoppedSourceFrame = 0;
+  int64_t stoppedSourceFrame = 0;
   bool loadSucceeded = false;
   bool hadSource = false;
   bool preferStrongPrebuffer = false;
@@ -635,8 +635,13 @@ int RageSound::GetDataToPlay(
       }
     }
 
-    m_StreamToSourceMap.Insert(
-        m_iStreamFrame, iGotFrames, iSourceFrame, fRate);
+    if (!m_StreamToSourceMap.Insert(
+            m_iStreamFrame, iGotFrames, iSourceFrame, fRate)) {
+      LogReviewSrcDiagnostics(
+          "SRC_AUDIT_FIX SRC-2916: stream-to-source position map insert "
+          "failed sound='%s' error='%s'",
+          m_sFilePath.c_str(), m_StreamToSourceMap.GetError().c_str());
+    }
     m_iStreamFrame += iGotFrames;
 
     iFramesStored += iGotFrames;
@@ -666,7 +671,12 @@ void RageSound::CommitPlayingPosition(
     return;
   }
   m_Mutex.Lock();
-  m_HardwareToStreamMap.Insert(iHardwareFrame, iGotFrames, iStreamFrame);
+  if (!m_HardwareToStreamMap.Insert(iHardwareFrame, iGotFrames, iStreamFrame)) {
+    LogReviewSrcDiagnostics(
+        "SRC_AUDIT_FIX SRC-2916: hardware-to-stream position map insert "
+        "failed sound='%s' error='%s'",
+        m_sFilePath.c_str(), m_HardwareToStreamMap.GetError().c_str());
+  }
   m_Mutex.Unlock();
 }
 
@@ -805,8 +815,8 @@ void RageSound::SoundIsFinishedPlaying() {
       if (!m_HardwareToStreamMap.IsEmpty() && !m_StreamToSourceMap.IsEmpty()) {
         // Update stopped position only if maps are available; otherwise,
         // preserve existing value.
-        m_iStoppedSourceFrame = static_cast<int>(
-            GetSourceFrameFromHardwareFrame(iCurrentHardwareFrame));
+        m_iStoppedSourceFrame =
+            GetSourceFrameFromHardwareFrame(iCurrentHardwareFrame);
       }
 
       m_bPlaying.store(false, std::memory_order_release);
@@ -913,7 +923,8 @@ float RageSound::GetLengthSeconds() {
   return iLength / 1000.f;  // ms -> secs
 }
 
-int RageSound::GetSourceFrameFromHardwareFrame(int64_t iHardwareFrame) const {
+int64_t RageSound::GetSourceFrameFromHardwareFrame(
+    int64_t iHardwareFrame) const {
   if (m_HardwareToStreamMap.IsEmpty() || m_StreamToSourceMap.IsEmpty()) {
     return 0;
   }
@@ -926,10 +937,28 @@ int RageSound::GetSourceFrameFromHardwareFrame(int64_t iHardwareFrame) const {
   if (driverSampleRate <= 0 || sourceSampleRate <= 0) {
     return m_iStoppedSourceFrame;
   }
-  int64_t iStreamFrame =
-      m_HardwareToStreamMap.Search(iHardwareFrame, driverSampleRate);
-  return static_cast<int>(
-      m_StreamToSourceMap.Search(iStreamFrame, sourceSampleRate));
+  const pos_map_search_result streamFrame =
+      m_HardwareToStreamMap.SearchResult(iHardwareFrame, driverSampleRate);
+  if (!streamFrame.Found()) {
+    LogReviewSrcDiagnostics(
+        "SRC_AUDIT_FIX SRC-2920: hardware-to-stream position lookup failed "
+        "sound='%s' status=%d error='%s'",
+        m_sFilePath.c_str(), static_cast<int>(streamFrame.status),
+        m_HardwareToStreamMap.GetError().c_str());
+    return m_iStoppedSourceFrame;
+  }
+
+  const pos_map_search_result sourceFrame =
+      m_StreamToSourceMap.SearchResult(streamFrame.frame, sourceSampleRate);
+  if (!sourceFrame.Found()) {
+    LogReviewSrcDiagnostics(
+        "SRC_AUDIT_FIX SRC-2920: stream-to-source position lookup failed "
+        "sound='%s' status=%d error='%s'",
+        m_sFilePath.c_str(), static_cast<int>(sourceFrame.status),
+        m_StreamToSourceMap.GetError().c_str());
+    return m_iStoppedSourceFrame;
+  }
+  return sourceFrame.frame;
 }
 
 /* If non-nullptr, approximate is set to true if the returned time is
@@ -964,7 +993,8 @@ float RageSound::GetPositionSeconds(RageTimer* pTimestamp) const {
     return static_cast<float>(m_iStoppedSourceFrame) / fSampleRate;
   }
 
-  int iSourceFrame = GetSourceFrameFromHardwareFrame(iCurrentHardwareFrame);
+  const int64_t iSourceFrame =
+      GetSourceFrameFromHardwareFrame(iCurrentHardwareFrame);
   return static_cast<float>(iSourceFrame) / fSampleRate;
 }
 

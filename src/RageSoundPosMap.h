@@ -4,21 +4,48 @@
 #define RAGE_SOUND_POS_MAP_H
 
 #include <cstdint>
+#include <memory>
+#include <string>
 
 struct pos_map_impl;
+struct pos_map_search_result {
+  enum class Status {
+    Empty,
+    Exact,
+    Approximate,
+    InvalidInput,
+    CorruptMap
+  };
+
+  int64_t frame = 0;
+  Status status = Status::Empty;
+
+  bool Found() const {
+    return status == Status::Exact || status == Status::Approximate;
+  }
+
+  bool Exact() const { return status == Status::Exact; }
+};
+
 class pos_map_queue {
  public:
   pos_map_queue();
   ~pos_map_queue();
   pos_map_queue(const pos_map_queue& cpy);
   pos_map_queue& operator=(const pos_map_queue& rhs);
+  pos_map_queue(pos_map_queue&&) noexcept;
+  pos_map_queue& operator=(pos_map_queue&&) noexcept;
 
   /* Insert a mapping from iSourceFrame to iDestFrame, containing iFrames.
    * The double type is used to prevent precision loss leading to sync drift the
    * longer the game runs. -sukibaby */
-  void Insert(
+  bool Insert(
       int64_t iSourceFrame, int64_t iFrames, int64_t iDestFrame,
       double fSourceToDestRatio = 1.0);
+
+  /* Return the mapping plus whether it was exact or approximate. */
+  pos_map_search_result SearchResult(
+      int64_t iSourceFrame, int iFrameRate) const;
 
   /* Return the iDestFrame for the given iSourceFrame. */
   int64_t Search(int64_t iSourceFrame, int iFrameRate) const;
@@ -27,9 +54,10 @@ class pos_map_queue {
   void Clear();
 
   bool IsEmpty() const;
+  std::string GetError() const;
 
  private:
-  pos_map_impl* m_pImpl;
+  std::unique_ptr<pos_map_impl> m_pImpl;
 };
 
 #endif

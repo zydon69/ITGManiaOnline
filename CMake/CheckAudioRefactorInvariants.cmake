@@ -36,6 +36,7 @@ read_source("src/RageSound.h" rage_sound_h)
 read_source("src/RageSound.cpp" rage_sound_cpp)
 read_source("src/PerfDiagnostics.cpp" perf_diagnostics_cpp)
 read_source("src/PerfDiagnostics.h" perf_diagnostics_h)
+read_source("src/RageSoundPosMap.h" rage_sound_pos_map_h)
 read_source("src/RageSoundPosMap.cpp" rage_sound_pos_map_cpp)
 read_source("src/arch/Sound/RageSoundDriver.h" rage_sound_driver_h)
 read_source("src/arch/Sound/RageSoundDriver_Generic_Software.cpp" rage_sound_driver_generic_cpp)
@@ -166,6 +167,74 @@ require_not_contains(
   "${rage_sound_pos_map_cpp}"
   "kMinorPositionDriftFrames"
   "Audio position drift tolerance must not be a fixed frame count")
+require_contains(
+  "${rage_sound_pos_map_h}"
+  "std::unique_ptr<pos_map_impl> m_pImpl;"
+  "RageSoundPosMap owns its implementation with RAII")
+require_contains(
+  "${rage_sound_pos_map_h}"
+  "bool Insert("
+  "RageSoundPosMap insertion reports rejected mappings")
+require_contains(
+  "${rage_sound_pos_map_h}"
+  "pos_map_search_result SearchResult("
+  "RageSoundPosMap exposes exact/approximate lookup status")
+require_contains(
+  "${rage_sound_pos_map_h}"
+  "std::string GetError() const;"
+  "RageSoundPosMap exposes local diagnostics")
+require_contains(
+  "${rage_sound_pos_map_cpp}"
+  "mutable std::mutex m_Mutex;"
+  "RageSoundPosMap protects instance-owned drift state")
+require_contains(
+  "${rage_sound_pos_map_cpp}"
+  "SRC_AUDIT_FIX SRC-2916"
+  "RageSoundPosMap invalid inserts are review-traced")
+require_contains(
+  "${rage_sound_pos_map_cpp}"
+  "SRC_AUDIT_FIX SRC-2917"
+  "RageSoundPosMap allocation failures are review-traced")
+require_contains(
+  "${rage_sound_pos_map_cpp}"
+  "SRC_AUDIT_FIX SRC-2921"
+  "RageSoundPosMap corrupt search entries are review-traced")
+require_contains(
+  "${rage_sound_pos_map_cpp}"
+  "kMaxPosMapEntries"
+  "RageSoundPosMap bounds fragmented history by entry count")
+require_contains(
+  "${rage_sound_pos_map_cpp}"
+  "RatiosEquivalent"
+  "RageSoundPosMap merges near-identical playback ratios")
+require_not_contains(
+  "${rage_sound_pos_map_cpp}"
+  "static RageTimer lastMinor"
+  "RageSoundPosMap drift timers must be instance-owned")
+require_contains(
+  "${rage_sound_h}"
+  "int64_t GetSourceFrameFromHardwareFrame"
+  "RageSound preserves 64-bit source-frame position map results")
+require_contains(
+  "${rage_sound_cpp}"
+  "m_HardwareToStreamMap.SearchResult"
+  "RageSound consumes structured hardware-to-stream lookup status")
+require_contains(
+  "${rage_sound_cpp}"
+  "m_StreamToSourceMap.SearchResult"
+  "RageSound consumes structured stream-to-source lookup status")
+require_contains(
+  "${rage_sound_driver_h}"
+  "int64_t iHardwareFrame;"
+  "Generic sound position map queue names hardware frame explicitly")
+require_contains(
+  "${rage_sound_driver_generic_cpp}"
+  "pos.iHardwareFrame = iFrameNumber + iGotFrames;"
+  "Generic sound driver records hardware frame in the hardware field")
+require_contains(
+  "${rage_sound_driver_generic_cpp}"
+  "pSound->CommitPlayingPosition("
+  "Generic sound driver drains queued position maps into RageSound")
 
 require_contains(
   "${rage_sound_cpp}"

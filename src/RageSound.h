@@ -22,7 +22,7 @@ class RageSoundBase {
   virtual int GetDataToPlay(
       float* buffer, int size, int64_t& iStreamFrame, int& got_bytes) = 0;
   virtual void CommitPlayingPosition(
-      int64_t iFrameno, int64_t iPosition, int iBytesRead) = 0;
+      int64_t iHardwareFrame, int64_t iStreamFrame, int iFramesRead) = 0;
   virtual RageTimer GetStartTime() const { return RageZeroTimer; }
   virtual std::string GetLoadedFilePath() const = 0;
   virtual bool PrefersStrongPrebuffer() const { return false; }
@@ -184,14 +184,14 @@ class RageSound : public RageSoundBase {
    * Keep track of the position after a seek or stop, so we can return a sane
    * position when stopped, and when playing but pos_map hasn't yet been filled.
    */
-  int m_iStoppedSourceFrame;
+  int64_t m_iStoppedSourceFrame;
   std::atomic_bool m_bPlaying;
   bool m_bDeleteWhenFinished;
   bool m_bPreferStrongPrebuffer;
 
   std::string m_sError;
 
-  int GetSourceFrameFromHardwareFrame(int64_t iHardwareFrame) const;
+  int64_t GetSourceFrameFromHardwareFrame(int64_t iHardwareFrame) const;
 
   bool SetPositionFrames(int frames = -1);
   RageSoundParams::StopMode_t GetStopModeLocked() const;  // resolves M_AUTO

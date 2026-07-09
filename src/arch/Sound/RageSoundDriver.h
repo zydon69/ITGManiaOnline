@@ -193,8 +193,8 @@ class RageSoundDriver : public RageDriver {
 
     struct QueuedPosMap {
       int iFrames;
-      int64_t iStreamFrame;
       int64_t iHardwareFrame;
+      int64_t iStreamFrame;
     };
 
     CircBuf<QueuedPosMap> m_PosMapQueue;
