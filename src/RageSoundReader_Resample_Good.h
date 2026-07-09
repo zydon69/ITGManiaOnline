@@ -3,6 +3,7 @@
 #ifndef RAGE_SOUND_READER_RESAMPLE_GOOD_H
 #define RAGE_SOUND_READER_RESAMPLE_GOOD_H
 
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -17,36 +18,48 @@ class RageSoundReader_Resample_Good : public RageSoundReader_Filter {
   /* We own source. */
   RageSoundReader_Resample_Good(RageSoundReader* pSource, int iSampleRate);
   RageSoundReader_Resample_Good(const RageSoundReader_Resample_Good& cpy);
-  int SetPosition(int iFrame);
-  int Read(float* pBuf, int iFrames);
-  virtual ~RageSoundReader_Resample_Good();
-  RageSoundReader_Resample_Good* Copy() const;
-  bool SetProperty(const std::string& sProperty, float fValue);
-  int GetNextSourceFrame() const;
-  float GetStreamToSourceRatio() const;
+  RageSoundReader_Resample_Good& operator=(
+      const RageSoundReader_Resample_Good& rhs) = delete;
+  int SetPosition(int iFrame) override;
+  int Read(float* pBuf, int iFrames) override;
+  ~RageSoundReader_Resample_Good() override;
+  RageSoundReader_Resample_Good* Copy() const override;
+  bool SetProperty(const std::string& sProperty, float fValue) override;
+  int GetNextSourceFrame() const override;
+  float GetStreamToSourceRatio() const override;
+  std::string GetError() const override;
 
   /**
    * @brief Change the rate of a sound without changing the sample rate.
    * @param fRatio the ratio for changing. */
-  void SetRate(float fRatio);
+  bool SetRate(float fRatio);
 
   /**
    * @brief Retrieve the exact rate.
    * @return the exact rate. */
   float GetRate() const;
 
-  int GetSampleRate() const { return m_iSampleRate; }
+  int GetSampleRate() const override { return m_iSampleRate; }
 
  private:
-  void Reset();
-  void ReopenResampler();
-  void GetFactors(int& iDownFactor, int& iUpFactor) const;
+  void ClearError() const;
+  void SetError(const std::string& sError) const;
+  void ClearResamplers();
+  bool IsUsableLocked() const;
+  bool ResetLocked();
+  bool ReopenResamplerLocked(float fRate, float* fActualRate);
+  bool GetFactorsLocked(
+      float fRate, int& iDownFactor, int& iUpFactor,
+      int& iAppliedDownFactor) const;
 
   std::vector<RageSoundResampler_Polyphase*>
       m_apResamplers; /* one per channel */
 
   int m_iSampleRate;
   float m_fRate;
+  mutable std::mutex m_StateMutex;
+  mutable std::mutex m_ErrorMutex;
+  mutable std::string m_sError;
 };
 
 #endif

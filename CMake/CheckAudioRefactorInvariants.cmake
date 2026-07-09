@@ -60,6 +60,10 @@ read_source(
   "src/RageSoundReader_PitchChange.h" rage_sound_reader_pitch_change_h)
 read_source(
   "src/RageSoundReader_PitchChange.cpp" rage_sound_reader_pitch_change_cpp)
+read_source(
+  "src/RageSoundReader_Resample_Good.h" rage_sound_reader_resample_good_h)
+read_source(
+  "src/RageSoundReader_Resample_Good.cpp" rage_sound_reader_resample_good_cpp)
 read_source("src/RageSoundReader_WAV.h" rage_sound_reader_wav_h)
 read_source("src/RageSoundReader_WAV.cpp" rage_sound_reader_wav_cpp)
 read_source("src/RageSoundReader_Vorbisfile.h" rage_sound_reader_vorbis_h)
@@ -530,6 +534,46 @@ require_contains(
   "${rage_sound_cpp}"
   "const std::string setupError ="
   "RageSound::Load surfaces filter-chain setup errors immediately")
+require_contains(
+  "${rage_sound_reader_resample_good_h}"
+  "bool SetRate(float fRatio);"
+  "Resample_Good reports whether rate changes were applied")
+require_contains(
+  "${rage_sound_reader_resample_good_h}"
+  "std::string GetError() const override;"
+  "Resample_Good exposes filter-owned diagnostics")
+require_contains(
+  "${rage_sound_reader_resample_good_h}"
+  "mutable std::mutex m_StateMutex;"
+  "Resample_Good serializes topology/rate changes with audio reads")
+require_contains(
+  "${rage_sound_reader_resample_good_h}"
+  "const RageSoundReader_Resample_Good& rhs) = delete;"
+  "Resample_Good forbids unsafe pointer-owning assignment")
+require_contains(
+  "${rage_sound_reader_resample_good_cpp}"
+  "LockMutex lock(PolyphaseFiltersLock);"
+  "Resample_Good cache locking is RAII based")
+require_contains(
+  "${rage_sound_reader_resample_good_cpp}"
+  "std::unique_ptr<PolyphaseFilter>"
+  "Resample_Good cache builds filters with temporary ownership")
+require_contains(
+  "${rage_sound_reader_resample_good_cpp}"
+  "std::vector<std::unique_ptr<RageSoundResampler_Polyphase>> apNewResamplers"
+  "Resample_Good rebuilds channel topology in temporary owners before swap")
+require_contains(
+  "${rage_sound_reader_resample_good_cpp}"
+  "SRC_AUDIT_FIX SRC-2835"
+  "Resample_Good diagnoses failed rate changes")
+require_contains(
+  "${rage_sound_reader_resample_good_cpp}"
+  "SRC_AUDIT_FIX SRC-2837"
+  "Resample_Good records internal read/setup failures locally")
+require_contains(
+  "${rage_sound_reader_resample_good_cpp}"
+  "MAX_RESAMPLE_CHANNELS"
+  "Resample_Good enforces an explicit channel ceiling")
 require_contains(
   "${rage_sound_reader_channel_split_h}"
   "std::shared_ptr<RageSoundSplitterImpl> m_pImpl;"

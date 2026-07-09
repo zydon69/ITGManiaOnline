@@ -11,8 +11,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <string>
 #include <utility>
@@ -25,8 +27,42 @@
 #include "global.h"
 
 constexpr int FILTER_LENGTH = 8;  // This must be a power of 2.
+constexpr float RATE_DISABLED = -1.0f;
+constexpr float MAX_REASONABLE_RATE = 64.0f;
+constexpr unsigned MAX_RESAMPLE_CHANNELS = 64;
+constexpr float MIN_NORMALIZATION_SUM = 0.0000001f;
 
 namespace {
+bool IsFinitePositive(float f) { return std::isfinite(f) && f > 0.0f; }
+
+bool IsUsableSource(const RageSoundReader* pSource, int iSampleRate) {
+  return pSource != nullptr && pSource->GetSampleRate() > 0 &&
+         pSource->GetNumChannels() > 0 &&
+         pSource->GetNumChannels() <= MAX_RESAMPLE_CHANNELS &&
+         iSampleRate > 0;
+}
+
+int ClampInt64ToInt(int64_t value) {
+  if (value > std::numeric_limits<int>::max()) {
+    return std::numeric_limits<int>::max();
+  }
+  if (value < std::numeric_limits<int>::min()) {
+    return std::numeric_limits<int>::min();
+  }
+  return static_cast<int>(value);
+}
+
+bool CheckedMultiplyInt(int lhs, int rhs, int& out) {
+  if (lhs < 0 || rhs < 0) {
+    return false;
+  }
+  if (rhs != 0 && lhs > std::numeric_limits<int>::max() / rhs) {
+    return false;
+  }
+  out = lhs * rhs;
+  return true;
+}
+
 float sincf(float f) {
   if (f == 0) {
     return 1;
@@ -71,18 +107,34 @@ float BesselI0(float fX) {
  *
  * where B is the beta parameter, p is len/2, and n is in [-len/2,+len/2].
  */
-void ApplyKaiserWindow(float* pBuf, int iLen, float fBeta) {
+bool ApplyKaiserWindow(float* pBuf, int iLen, float fBeta) {
+  if (pBuf == nullptr || iLen <= 0 || !std::isfinite(fBeta)) {
+    return false;
+  }
   constexpr float VERY_TINY_NUMBER =
       0.0000001f;  // a little safer than comparing against zero
   const float fDenom = BesselI0(fBeta);
+  if (!std::isfinite(fDenom) || std::abs(fDenom) < VERY_TINY_NUMBER) {
+    return false;
+  }
   const float p = (iLen - 1) / 2.0f;
+  if (!std::isfinite(p) || p <= 0.0f) {
+    return false;
+  }
   for (int n = 0; n < iLen; ++n) {
     const float fN1 = std::abs((n - p) * (1.0f / p));
     const float fN1Squared = fN1 * fN1;
     const float fNum = BesselI0(
         fBeta * std::sqrt(std::max(1.0f - fN1Squared, VERY_TINY_NUMBER)));
+    if (!std::isfinite(fNum)) {
+      return false;
+    }
     pBuf[n] *= fNum / fDenom;
+    if (!std::isfinite(pBuf[n])) {
+      return false;
+    }
   }
+  return true;
 }
 
 void MultiplyVector(float* pStart, float* pEnd, float f) {
@@ -91,13 +143,20 @@ void MultiplyVector(float* pStart, float* pEnd, float f) {
   }
 }
 
-void GenerateSincLowPassFilter(float* pFIR, int iWinSize, float fCutoff) {
+bool GenerateSincLowPassFilter(float* pFIR, int iWinSize, float fCutoff) {
+  if (pFIR == nullptr || iWinSize <= 0 || !IsFinitePositive(fCutoff) ||
+      fCutoff > 0.5f) {
+    return false;
+  }
   constexpr double TWOPI = 2 * 3.141592653589793;
   const float p = (iWinSize - 1) / 2.0;
 
   for (int n = 0; n < iWinSize; ++n) {
     const float fN1 = (n - p);
     const float fVal = sincf((TWOPI * fCutoff * fN1)) * (2.0f * fCutoff);
+    if (!std::isfinite(fVal)) {
+      return false;
+    }
     pFIR[n] = fVal;
   }
 #if 0
@@ -113,11 +172,24 @@ void GenerateSincLowPassFilter(float* pFIR, int iWinSize, float fCutoff) {
 		for( int i=0; i < iWinSize; i++ )
 			printf( "sinc: %i: %f\n", i, pFIR[i] );
 #endif
+  return true;
 }
 
-void NormalizeVector(float* pBuf, int iSize) {
+bool NormalizeVector(float* pBuf, int iSize) {
+  if (pBuf == nullptr || iSize <= 0) {
+    return false;
+  }
   float fTotal = std::accumulate(&pBuf[0], &pBuf[iSize], 0.0f);
+  if (!std::isfinite(fTotal) || std::abs(fTotal) < MIN_NORMALIZATION_SUM) {
+    return false;
+  }
   MultiplyVector(&pBuf[0], &pBuf[iSize], 1 / fTotal);
+  for (int i = 0; i < iSize; ++i) {
+    if (!std::isfinite(pBuf[i])) {
+      return false;
+    }
+  }
+  return true;
 }
 
 int GCD(int i1, int i2) { return std::gcd(i1, i2); }
@@ -145,24 +217,25 @@ void RunFIRFilter( float *pIn, float *pOut, int iInputValues, float *pFIR, int i
 template <typename T>
 class AlignedBuffer {
  public:
-  AlignedBuffer(int iSize) {
-    m_iSize = iSize;
-    m_pBuf = new T[m_iSize];
-  }
+  explicit AlignedBuffer(size_t iSize)
+      : m_iSize(iSize), m_pBuf(iSize == 0 ? nullptr : new T[iSize]) {}
 
-  AlignedBuffer(const AlignedBuffer& cpy) {
-    m_iSize = cpy.m_iSize;
-    m_pBuf = new T[m_iSize];
-    memcpy(m_pBuf, cpy.m_pBuf, sizeof(T) * m_iSize);
+  AlignedBuffer(const AlignedBuffer& cpy)
+      : m_iSize(cpy.m_iSize),
+        m_pBuf(m_iSize == 0 ? nullptr : new T[m_iSize]) {
+    if (m_iSize != 0) {
+      memcpy(m_pBuf.get(), cpy.m_pBuf.get(), sizeof(T) * m_iSize);
+    }
   }
-  ~AlignedBuffer() { delete[] m_pBuf; }
-  operator T*() { return m_pBuf; }
-  operator const T*() const { return m_pBuf; }
+  AlignedBuffer& operator=(const AlignedBuffer& rhs) = delete;
+  T& operator[](size_t i) { return m_pBuf[i]; }
+  const T& operator[](size_t i) const { return m_pBuf[i]; }
+  operator T*() { return m_pBuf.get(); }
+  operator const T*() const { return m_pBuf.get(); }
 
  private:
-  T& operator=(T& rhs);
-  int m_iSize;
-  T* m_pBuf;
+  size_t m_iSize;
+  std::unique_ptr<T[]> m_pBuf;
 };
 
 struct PolyphaseFilter {
@@ -281,11 +354,26 @@ void PolyphaseFilter::Generate(const float* pFIR) {
 int PolyphaseFilter::RunPolyphaseFilter(
     State& State, const float* pIn, int iSamplesIn, int iDownFactor,
     float* pOut, int iSamplesOut, int iSampleStride) const {
-  ASSERT(iSamplesIn >= 0);
+  if (pIn == nullptr || pOut == nullptr || iSamplesIn < 0 ||
+      iSamplesOut < 0 || iSampleStride <= 0 || iDownFactor <= 0 ||
+      m_iUpFactor <= 0) {
+    return RageSoundReader::ERROR;
+  }
+  if ((iSamplesIn != 0 &&
+       iSampleStride > std::numeric_limits<int>::max() / iSamplesIn) ||
+      (iSamplesOut != 0 &&
+       iSampleStride > std::numeric_limits<int>::max() / iSamplesOut)) {
+    return RageSoundReader::ERROR;
+  }
 
   float* pOutOrig = pOut;
-  const float* pInEnd = pIn + iSamplesIn * iSampleStride;
-  const float* pOutEnd = pOut + iSamplesOut * iSampleStride;
+  const ptrdiff_t iInOffset =
+      static_cast<ptrdiff_t>(iSamplesIn) * static_cast<ptrdiff_t>(iSampleStride);
+  const ptrdiff_t iOutOffset =
+      static_cast<ptrdiff_t>(iSamplesOut) *
+      static_cast<ptrdiff_t>(iSampleStride);
+  const float* pInEnd = pIn + iInOffset;
+  const float* pOutEnd = pOut + iOutOffset;
 
   int iFilled = State.m_iFilled;
   int iPolyIndex = State.m_iPolyIndex;
@@ -328,9 +416,12 @@ int PolyphaseFilter::RunPolyphaseFilter(
   State.m_iFilled = iFilled;
   State.m_iPolyIndex = iPolyIndex;
 
-  int iRetSamples = pOut - pOutOrig;
-  int iRetFrames = iRetSamples / iSampleStride;
-  return iRetFrames;
+  const ptrdiff_t iRetSamples = pOut - pOutOrig;
+  const ptrdiff_t iRetFrames = iRetSamples / iSampleStride;
+  if (iRetFrames > std::numeric_limits<int>::max()) {
+    return RageSoundReader::ERROR;
+  }
+  return static_cast<int>(iRetFrames);
 }
 
 /*
@@ -340,9 +431,12 @@ int PolyphaseFilter::RunPolyphaseFilter(
  */
 int PolyphaseFilter::NumInputsForOutputSamples(
     const State& State, int iOut, int iDownFactor) const {
-  int iIn = 0;
-  int iFilled = State.m_iFilled;
-  int iPolyIndex = State.m_iPolyIndex;
+  if (iOut < 0 || iDownFactor <= 0 || m_iUpFactor <= 0) {
+    return RageSoundReader::ERROR;
+  }
+  int64_t iIn = 0;
+  int64_t iFilled = State.m_iFilled;
+  int64_t iPolyIndex = State.m_iPolyIndex;
 
 #if 0
 	while( iOut > 0 )
@@ -369,17 +463,21 @@ int PolyphaseFilter::NumInputsForOutputSamples(
 
   if (iOut > 0) {
     if (iFilled < FILTER_LENGTH) {
-      int iToFill = FILTER_LENGTH - iFilled;
+      int64_t iToFill = FILTER_LENGTH - iFilled;
       iIn += iToFill;
     }
 
     // The -1 here is because we don't refill m_fBuf after writing the last
     // output.
-    iPolyIndex += iDownFactor * (iOut - 1);
+    iPolyIndex +=
+        static_cast<int64_t>(iDownFactor) * static_cast<int64_t>(iOut - 1);
     iIn += iPolyIndex / m_iUpFactor;
   }
 
-  return iIn;
+  if (iIn > std::numeric_limits<int>::max()) {
+    return RageSoundReader::ERROR;
+  }
+  return static_cast<int>(iIn);
 }
 /** @brief Utilities for working with the PolyphaseFilter cache. */
 namespace PolyphaseFilterCache {
@@ -391,30 +489,68 @@ static FilterMap g_mapPolyphaseFilters;
 
 const PolyphaseFilter* MakePolyphaseFilter(
     int iUpFactor, float fCutoffFrequency) {
-  PolyphaseFiltersLock.Lock();
-  std::pair<int, float> params(std::make_pair(iUpFactor, fCutoffFrequency));
+  if (iUpFactor <= 0 || iUpFactor > std::numeric_limits<int>::max() /
+                                          FILTER_LENGTH ||
+      !IsFinitePositive(fCutoffFrequency) || fCutoffFrequency > 0.5f) {
+    return nullptr;
+  }
+
+  const std::pair<int, float> params(
+      std::make_pair(iUpFactor, fCutoffFrequency));
+  {
+    LockMutex lock(PolyphaseFiltersLock);
+    FilterMap::const_iterator it = g_mapPolyphaseFilters.find(params);
+    if (it != g_mapPolyphaseFilters.end()) {
+      /* We already have a filter for this upsampling factor and cutoff; use it.
+       */
+      return it->second;
+    }
+  }
+
+  std::unique_ptr<float[]> pFIR;
+  std::unique_ptr<PolyphaseFilter> pPolyphase;
+  try {
+    int iWinSize = 0;
+    if (!CheckedMultiplyInt(FILTER_LENGTH, iUpFactor, iWinSize) ||
+        iWinSize <= 0) {
+      return nullptr;
+    }
+    pFIR.reset(new float[iWinSize]);
+    if (!GenerateSincLowPassFilter(pFIR.get(), iWinSize, fCutoffFrequency) ||
+        !ApplyKaiserWindow(pFIR.get(), iWinSize, 8) ||
+        !NormalizeVector(pFIR.get(), iWinSize)) {
+      return nullptr;
+    }
+    MultiplyVector(&pFIR[0], &pFIR[iWinSize], (float)iUpFactor);
+    for (int i = 0; i < iWinSize; ++i) {
+      if (!std::isfinite(pFIR[i])) {
+        return nullptr;
+      }
+    }
+
+    pPolyphase.reset(new PolyphaseFilter(iUpFactor));
+    pPolyphase->Generate(pFIR.get());
+  } catch (const std::bad_alloc&) {
+    return nullptr;
+  }
+
+  LockMutex lock(PolyphaseFiltersLock);
   FilterMap::const_iterator it = g_mapPolyphaseFilters.find(params);
   if (it != g_mapPolyphaseFilters.end()) {
-    /* We already have a filter for this upsampling factor and cutoff; use it.
-     */
-    PolyphaseFilter* pPolyphase = it->second;
-    PolyphaseFiltersLock.Unlock();
-    return pPolyphase;
+    return it->second;
   }
-  int iWinSize = FILTER_LENGTH * iUpFactor;
-  float* pFIR = new float[iWinSize];
-  GenerateSincLowPassFilter(pFIR, iWinSize, fCutoffFrequency);
-  ApplyKaiserWindow(pFIR, iWinSize, 8);
-  NormalizeVector(pFIR, iWinSize);
-  MultiplyVector(&pFIR[0], &pFIR[iWinSize], (float)iUpFactor);
-
-  PolyphaseFilter* pPolyphase = new PolyphaseFilter(iUpFactor);
-  pPolyphase->Generate(pFIR);
-  delete[] pFIR;
-
-  g_mapPolyphaseFilters[params] = pPolyphase;
-  PolyphaseFiltersLock.Unlock();
-  return pPolyphase;
+  PolyphaseFilter* pRaw = pPolyphase.get();
+  try {
+    std::pair<FilterMap::iterator, bool> inserted =
+        g_mapPolyphaseFilters.insert(std::make_pair(params, pRaw));
+    if (!inserted.second) {
+      return inserted.first->second;
+    }
+  } catch (const std::bad_alloc&) {
+    return nullptr;
+  }
+  pPolyphase.release();
+  return pRaw;
 }
 
 const PolyphaseFilter* FindNearestPolyphaseFilter(
@@ -425,23 +561,20 @@ const PolyphaseFilter* FindNearestPolyphaseFilter(
   /* Find a cached filter with the same iUpFactor and a nearby cutoff frequency.
    * Round the cutoff down, if possible; it's better to filter out too much than
    * too little. */
-  PolyphaseFiltersLock.Lock();
+  LockMutex lock(PolyphaseFiltersLock);
   std::pair<int, float> params(
       std::make_pair(iUpFactor, fCutoffFrequency + 0.0001f));
   FilterMap::const_iterator it = g_mapPolyphaseFilters.upper_bound(params);
   if (g_mapPolyphaseFilters.empty()) {
-    PolyphaseFiltersLock.Unlock();
     return nullptr;
   }
   if (it != g_mapPolyphaseFilters.begin()) {
     --it;
   }
   if (it == g_mapPolyphaseFilters.end() || it->first.first != iUpFactor) {
-    PolyphaseFiltersLock.Unlock();
     return nullptr;
   }
   PolyphaseFilter* pPolyphase = it->second;
-  PolyphaseFiltersLock.Unlock();
   return pPolyphase;
 }
 }  // namespace PolyphaseFilterCache
@@ -465,33 +598,50 @@ class RageSoundResampler_Polyphase {
      * the conversion ratio will always be exact. */
     m_iUpFactor = iUpFactor;
     m_pPolyphase = nullptr;
-    m_pState = nullptr;
+    m_pState.reset();
+    m_iDownFactor = 1;
     if (iUpFactor <= 0 || iMinDownFactor <= 0 || iMaxDownFactor <= 0 ||
         iMinDownFactor > iMaxDownFactor) {
-      m_iDownFactor = 1;
       return;
     }
 
     int iFilterIncrement = std::max((iMaxDownFactor - iMinDownFactor) / 10, 1);
-    for (int iDownFactor = iMinDownFactor; iDownFactor <= iMaxDownFactor;
-         iDownFactor += iFilterIncrement) {
+    for (int iDownFactor = iMinDownFactor;;) {
       float fCutoffFrequency = GetCutoffFrequency(iDownFactor);
-      PolyphaseFilterCache::MakePolyphaseFilter(m_iUpFactor, fCutoffFrequency);
+      if (PolyphaseFilterCache::MakePolyphaseFilter(
+              m_iUpFactor, fCutoffFrequency) == nullptr) {
+        return;
+      }
+      if (iMaxDownFactor - iDownFactor <= iFilterIncrement) {
+        break;
+      }
+      iDownFactor += iFilterIncrement;
     }
 
-    SetDownFactor(iUpFactor);
-
-    m_pState = new PolyphaseFilter::State(iUpFactor);
-  }
-
-  ~RageSoundResampler_Polyphase() { delete m_pState; }
-
-  void SetDownFactor(int iDownFactor) {
-    if (iDownFactor <= 0) {
+    if (!SetDownFactor(iUpFactor)) {
       return;
     }
+
+    try {
+      m_pState.reset(new PolyphaseFilter::State(iUpFactor));
+    } catch (const std::bad_alloc&) {
+      m_pPolyphase = nullptr;
+    }
+  }
+
+  ~RageSoundResampler_Polyphase() = default;
+
+  bool SetDownFactor(int iDownFactor) {
+    if (iDownFactor <= 0) {
+      return false;
+    }
+    const PolyphaseFilter* pFilter = GetFilter(iDownFactor);
+    if (pFilter == nullptr) {
+      return false;
+    }
     m_iDownFactor = iDownFactor;
-    m_pPolyphase = GetFilter(m_iDownFactor);
+    m_pPolyphase = pFilter;
+    return true;
   }
 
   int Run(
@@ -507,13 +657,19 @@ class RageSoundResampler_Polyphase {
         iSampleStride);
   }
 
-  void Reset() {
-    delete m_pState;
+  bool Reset() {
     if (m_iUpFactor <= 0) {
-      m_pState = nullptr;
-      return;
+      m_pState.reset();
+      return false;
     }
-    m_pState = new PolyphaseFilter::State(m_iUpFactor);
+    try {
+      std::unique_ptr<PolyphaseFilter::State> pNewState(
+          new PolyphaseFilter::State(m_iUpFactor));
+      m_pState.swap(pNewState);
+    } catch (const std::bad_alloc&) {
+      return false;
+    }
+    return true;
   }
 
   int NumInputsForOutputSamples(int iOut) const {
@@ -524,17 +680,25 @@ class RageSoundResampler_Polyphase {
     return m_pPolyphase->NumInputsForOutputSamples(
         *m_pState, iOut, m_iDownFactor);
   }
-  int GetLatency() const { return m_pPolyphase->GetLatency(); }
+  int GetLatency() const {
+    return m_pPolyphase == nullptr ? 0 : m_pPolyphase->GetLatency();
+  }
   int GetFilled() const { return m_pState == nullptr ? 0 : m_pState->m_iFilled; }
+  bool IsUsable() const {
+    return m_pPolyphase != nullptr && m_pState != nullptr &&
+           m_iUpFactor > 0 && m_iDownFactor > 0;
+  }
 
   RageSoundResampler_Polyphase(const RageSoundResampler_Polyphase& cpy) {
     m_pPolyphase = cpy.m_pPolyphase;  // don't copy
-    m_pState = cpy.m_pState == nullptr
-                   ? nullptr
-                   : new PolyphaseFilter::State(*cpy.m_pState);
+    if (cpy.m_pState != nullptr) {
+      m_pState.reset(new PolyphaseFilter::State(*cpy.m_pState));
+    }
     m_iUpFactor = cpy.m_iUpFactor;
     m_iDownFactor = cpy.m_iDownFactor;
   }
+  RageSoundResampler_Polyphase& operator=(
+      const RageSoundResampler_Polyphase& rhs) = delete;
 
  private:
   float GetCutoffFrequency(int iDownFactor) const {
@@ -559,223 +723,351 @@ class RageSoundResampler_Polyphase {
   }
 
   const PolyphaseFilter* m_pPolyphase;
-  PolyphaseFilter::State* m_pState;
+  std::unique_ptr<PolyphaseFilter::State> m_pState;
   int m_iUpFactor;
   int m_iDownFactor;
 };
 
 int RageSoundReader_Resample_Good::GetNextSourceFrame() const {
-  if (m_pSource.isNull() || m_apResamplers.empty() ||
-      m_pSource->GetSampleRate() <= 0) {
+  std::lock_guard<std::mutex> lock(m_StateMutex);
+  if (!IsUsableLocked()) {
     return 0;
   }
   int64_t iPosition = m_pSource->GetNextSourceFrame();
   iPosition -= m_apResamplers[0]->GetFilled();
 
+  const int iSourceSampleRate = m_pSource->GetSampleRate();
+  if (iSourceSampleRate <= 0 ||
+      (iPosition > 0 &&
+       iPosition >
+           std::numeric_limits<int64_t>::max() / m_iSampleRate) ||
+      (iPosition < 0 &&
+       iPosition <
+           std::numeric_limits<int64_t>::min() / m_iSampleRate)) {
+    return 0;
+  }
   iPosition *= m_iSampleRate;
-  iPosition /= m_pSource->GetSampleRate();
-  return (int)iPosition;
+  iPosition /= iSourceSampleRate;
+  return ClampInt64ToInt(iPosition);
 }
 
 bool RageSoundReader_Resample_Good::SetProperty(
     const std::string& sProperty, float fValue) {
   if (sProperty == "Rate") {
-    if (!std::isfinite(fValue) || fValue <= 0.0f) {
-      return false;
-    }
-    SetRate(fValue);
-    return true;
+    return SetRate(fValue);
   }
 
+  std::lock_guard<std::mutex> lock(m_StateMutex);
   return m_pSource.isNull() ? false : m_pSource->SetProperty(sProperty, fValue);
 }
 
 float RageSoundReader_Resample_Good::GetStreamToSourceRatio() const {
+  std::lock_guard<std::mutex> lock(m_StateMutex);
   if (m_pSource.isNull()) {
     return 1.0f;
   }
   float fRatio = m_pSource->GetStreamToSourceRatio();
-  if (m_fRate != -1) {
+  if (m_fRate != RATE_DISABLED) {
     fRatio *= m_fRate;
   }
-  return fRatio;
+  return std::isfinite(fRatio) && fRatio > 0.0f ? fRatio : 1.0f;
 }
 
 RageSoundReader_Resample_Good::RageSoundReader_Resample_Good(
     RageSoundReader* pSource, int iSampleRate)
-    : RageSoundReader_Filter(pSource) {
+    : RageSoundReader_Filter(pSource), m_iSampleRate(0), m_fRate(RATE_DISABLED) {
   m_iSampleRate = iSampleRate > 0 ? iSampleRate : 0;
-  m_fRate = -1;
-  if (pSource != nullptr && pSource->GetSampleRate() > 0 &&
-      pSource->GetNumChannels() > 0 && m_iSampleRate > 0) {
-    ReopenResampler();
-  }
-}
-
-/* Call this if the input position is changed or reset. */
-void RageSoundReader_Resample_Good::Reset() {
-  if (m_pSource.isNull()) {
+  if (!IsUsableSource(pSource, m_iSampleRate)) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2837: Resample_Good received an invalid source "
+        "reader or sample rate");
     return;
   }
-  for (size_t iChannel = 0;
-       iChannel < m_pSource->GetNumChannels() &&
-       iChannel < m_apResamplers.size();
-       ++iChannel) {
-    m_apResamplers[iChannel]->Reset();
+  float fActualRate = RATE_DISABLED;
+  if (!ReopenResamplerLocked(RATE_DISABLED, &fActualRate)) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2834: Resample_Good could not build its initial "
+        "resampler topology");
   }
 }
 
-void RageSoundReader_Resample_Good::GetFactors(
-    int& iDownFactor, int& iUpFactor) const {
-  iDownFactor = m_pSource.isNull() ? 0 : m_pSource->GetSampleRate();
-  iUpFactor = m_iSampleRate;
-  if (iDownFactor <= 0 || iUpFactor <= 0) {
-    iDownFactor = 1;
-    iUpFactor = 1;
-    return;
-  }
-
-  {
-    int iGCD = GCD(iUpFactor, iDownFactor);
-    iUpFactor /= iGCD;
-    iDownFactor /= iGCD;
-  }
-
-  bool bRateChangingEnabled = m_fRate != -1;
-  if (bRateChangingEnabled) {
-    if (!std::isfinite(m_fRate) || m_fRate <= 0.0f ||
-        iUpFactor > std::numeric_limits<int>::max() / 100 ||
-        iDownFactor > std::numeric_limits<int>::max() / 100) {
-      iDownFactor = 1;
-      iUpFactor = 1;
-      return;
-    }
-    iUpFactor *= 100;
-    iDownFactor *= 100;
-  }
-}
-
-/* Call this if the sample factor changes. */
-void RageSoundReader_Resample_Good::ReopenResampler() {
+void RageSoundReader_Resample_Good::ClearResamplers() {
   for (size_t iChannel = 0; iChannel < m_apResamplers.size(); ++iChannel) {
     delete m_apResamplers[iChannel];
   }
   m_apResamplers.clear();
-
-  int iDownFactor, iUpFactor;
-  GetFactors(iDownFactor, iUpFactor);
-  if (m_pSource.isNull() || iDownFactor <= 0 || iUpFactor <= 0 ||
-      m_pSource->GetNumChannels() == 0) {
-    return;
-  }
-
-  for (size_t iChannel = 0; iChannel < m_pSource->GetNumChannels();
-       ++iChannel) {
-    int iMinDownFactor = iDownFactor;
-    int iMaxDownFactor = iDownFactor;
-    if (m_fRate != -1) {
-      if (iMaxDownFactor > std::numeric_limits<int>::max() / 5) {
-        return;
-      }
-      iMaxDownFactor *= 5;
-    }
-
-    RageSoundResampler_Polyphase* p = new RageSoundResampler_Polyphase(
-        iUpFactor, iMinDownFactor, iMaxDownFactor);
-    m_apResamplers.push_back(p);
-  }
-
-  if (m_fRate != -1) {
-    if (!std::isfinite(m_fRate) || m_fRate <= 0.0f ||
-        static_cast<double>(m_fRate) * iDownFactor >
-            static_cast<double>(std::numeric_limits<int>::max())) {
-      return;
-    }
-    iDownFactor = static_cast<int>((m_fRate * iDownFactor) + 0.5);
-  }
-
-  for (size_t iChannel = 0; iChannel < m_apResamplers.size(); ++iChannel) {
-    m_apResamplers[iChannel]->SetDownFactor(iDownFactor);
-  }
 }
 
 RageSoundReader_Resample_Good::~RageSoundReader_Resample_Good() {
-  for (size_t iChannel = 0; iChannel < m_apResamplers.size(); ++iChannel) {
-    delete m_apResamplers[iChannel];
+  ClearResamplers();
+}
+
+bool RageSoundReader_Resample_Good::IsUsableLocked() const {
+  if (!IsUsableSource(m_pSource.isNull() ? nullptr : &*m_pSource,
+                      m_iSampleRate)) {
+    return false;
   }
+  if (m_apResamplers.size() != m_pSource->GetNumChannels() ||
+      m_apResamplers.empty()) {
+    return false;
+  }
+  for (size_t i = 0; i < m_apResamplers.size(); ++i) {
+    if (m_apResamplers[i] == nullptr || !m_apResamplers[i]->IsUsable()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool RageSoundReader_Resample_Good::ResetLocked() {
+  if (m_pSource.isNull()) {
+    SetError("SRC_AUDIT_FIX SRC-2837: Resample_Good reset has no source");
+    return false;
+  }
+  for (size_t iChannel = 0; iChannel < m_pSource->GetNumChannels() &&
+                              iChannel < m_apResamplers.size();
+       ++iChannel) {
+    if (m_apResamplers[iChannel] == nullptr ||
+        !m_apResamplers[iChannel]->Reset()) {
+      SetError(
+          "SRC_AUDIT_FIX SRC-2833: Resample_Good could not reset resampler "
+          "state");
+      return false;
+    }
+  }
+  ClearError();
+  return true;
+}
+
+bool RageSoundReader_Resample_Good::GetFactorsLocked(
+    float fRate, int& iDownFactor, int& iUpFactor,
+    int& iAppliedDownFactor) const {
+  iDownFactor = m_pSource.isNull() ? 0 : m_pSource->GetSampleRate();
+  iUpFactor = m_iSampleRate;
+  iAppliedDownFactor = iDownFactor;
+  if (iDownFactor <= 0 || iUpFactor <= 0) {
+    return false;
+  }
+
+  const int iGCD = GCD(iUpFactor, iDownFactor);
+  if (iGCD <= 0) {
+    return false;
+  }
+  iUpFactor /= iGCD;
+  iDownFactor /= iGCD;
+  iAppliedDownFactor = iDownFactor;
+
+  if (fRate != RATE_DISABLED) {
+    if (!IsFinitePositive(fRate) || fRate > MAX_REASONABLE_RATE ||
+        iUpFactor > std::numeric_limits<int>::max() / 100 ||
+        iDownFactor > std::numeric_limits<int>::max() / 100) {
+      return false;
+    }
+    iUpFactor *= 100;
+    iDownFactor *= 100;
+    const double fAppliedDownFactor =
+        static_cast<double>(fRate) * static_cast<double>(iDownFactor);
+    if (!std::isfinite(fAppliedDownFactor) || fAppliedDownFactor <= 0.0 ||
+        fAppliedDownFactor >
+            static_cast<double>(std::numeric_limits<int>::max())) {
+      return false;
+    }
+    iAppliedDownFactor =
+        static_cast<int>(std::floor(fAppliedDownFactor + 0.5));
+    if (iAppliedDownFactor <= 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool RageSoundReader_Resample_Good::ReopenResamplerLocked(
+    float fRate, float* fActualRate) {
+  if (fActualRate != nullptr) {
+    *fActualRate = fRate;
+  }
+  if (!IsUsableSource(m_pSource.isNull() ? nullptr : &*m_pSource,
+                      m_iSampleRate)) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2834: Resample_Good refused invalid source "
+        "topology");
+    return false;
+  }
+
+  int iDownFactor = 0;
+  int iUpFactor = 0;
+  int iAppliedDownFactor = 0;
+  if (!GetFactorsLocked(fRate, iDownFactor, iUpFactor, iAppliedDownFactor)) {
+    SetError("SRC_AUDIT_FIX SRC-2838: Resample_Good rejected rate factors");
+    return false;
+  }
+
+  std::vector<std::unique_ptr<RageSoundResampler_Polyphase>> apNewResamplers;
+  try {
+    apNewResamplers.reserve(m_pSource->GetNumChannels());
+    for (size_t iChannel = 0; iChannel < m_pSource->GetNumChannels();
+         ++iChannel) {
+      int iMinDownFactor = iDownFactor;
+      int iMaxDownFactor = std::max(iDownFactor, iAppliedDownFactor);
+      if (fRate != RATE_DISABLED) {
+        if (iMaxDownFactor > std::numeric_limits<int>::max() / 5) {
+          SetError(
+              "SRC_AUDIT_FIX SRC-2838: Resample_Good rejected huge filter "
+              "factor");
+          return false;
+        }
+        iMaxDownFactor = std::max(iMaxDownFactor, iDownFactor * 5);
+      }
+
+      std::unique_ptr<RageSoundResampler_Polyphase> p(
+          new RageSoundResampler_Polyphase(
+              iUpFactor, iMinDownFactor, iMaxDownFactor));
+      if (!p->IsUsable() || !p->SetDownFactor(iAppliedDownFactor)) {
+        SetError(
+            "SRC_AUDIT_FIX SRC-2834: Resample_Good could not build a usable "
+            "channel resampler");
+        return false;
+      }
+      apNewResamplers.push_back(std::move(p));
+    }
+  } catch (const std::bad_alloc&) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2834: Resample_Good ran out of memory rebuilding "
+        "resamplers");
+    return false;
+  }
+
+  std::vector<RageSoundResampler_Polyphase*> apRawResamplers;
+  try {
+    apRawResamplers.reserve(apNewResamplers.size());
+    for (size_t i = 0; i < apNewResamplers.size(); ++i) {
+      apRawResamplers.push_back(apNewResamplers[i].get());
+    }
+  } catch (const std::bad_alloc&) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2834: Resample_Good ran out of memory publishing "
+        "resamplers");
+    return false;
+  }
+
+  ClearResamplers();
+  m_apResamplers.swap(apRawResamplers);
+  for (size_t i = 0; i < apNewResamplers.size(); ++i) {
+    apNewResamplers[i].release();
+  }
+  if (fActualRate != nullptr && fRate != RATE_DISABLED) {
+    *fActualRate = static_cast<float>(iAppliedDownFactor) /
+                   static_cast<float>(iUpFactor);
+  }
+  ClearError();
+  return true;
 }
 
 /* iFrame is in the destination rate.  Seek the source in its own sample rate.
  */
 int RageSoundReader_Resample_Good::SetPosition(int iFrame) {
-  if (m_pSource.isNull() || m_iSampleRate <= 0 ||
-      m_pSource->GetSampleRate() <= 0) {
+  std::lock_guard<std::mutex> lock(m_StateMutex);
+  if (iFrame < 0 || m_pSource.isNull() || m_iSampleRate <= 0 ||
+      m_pSource->GetSampleRate() <= 0 || !ResetLocked()) {
+    SetError("SRC_AUDIT_FIX SRC-2837: Resample_Good rejected SetPosition");
     return RageSoundReader::ERROR;
   }
-  Reset();
-  iFrame = (int)SCALE(
-      iFrame, 0, (int64_t)m_iSampleRate, 0,
-      (int64_t)m_pSource->GetSampleRate());
-  return m_pSource->SetPosition(iFrame);
+  const int64_t iSourceFrame =
+      static_cast<int64_t>(iFrame) *
+      static_cast<int64_t>(m_pSource->GetSampleRate()) / m_iSampleRate;
+  return m_pSource->SetPosition(ClampInt64ToInt(iSourceFrame));
 }
 
 int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
   if (iFrames == 0) {
     return 0;
   }
-  if (pBuf == nullptr || iFrames < 0 || m_pSource.isNull() ||
-      m_apResamplers.empty()) {
+  std::lock_guard<std::mutex> lock(m_StateMutex);
+  if (pBuf == nullptr) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2837: Resample_Good Read called with null buffer");
     return RageSoundReader::ERROR;
   }
-  int iChannels = m_apResamplers.size();
+  if (iFrames < 0) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2837: Resample_Good Read called with negative frame "
+        "count");
+    return RageSoundReader::ERROR;
+  }
+  if (!IsUsableLocked()) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2837: Resample_Good Read has no usable topology");
+    return RageSoundReader::ERROR;
+  }
+  const int iChannels = static_cast<int>(m_apResamplers.size());
 
   int iFramesRead = 0;
 
   /* If the ratio is 1:1, then we're effectively disabled, and we can read
    * directly into the buffer. */
-  int iDownFactor, iUpFactor;
-  GetFactors(iDownFactor, iUpFactor);
+  int iDownFactor = 0;
+  int iUpFactor = 0;
+  int iAppliedDownFactor = 0;
+  if (!GetFactorsLocked(m_fRate, iDownFactor, iUpFactor, iAppliedDownFactor)) {
+    SetError("SRC_AUDIT_FIX SRC-2838: Resample_Good has invalid rate factors");
+    return RageSoundReader::ERROR;
+  }
 
-  if (m_apResamplers[0]->GetFilled() == 0 && iDownFactor == iUpFactor &&
-      GetRate() == 1.0f) {
+  const float fCurrentRate = m_fRate == RATE_DISABLED ? 1.0f : m_fRate;
+  if (m_apResamplers[0]->GetFilled() == 0 &&
+      iAppliedDownFactor == iUpFactor && fCurrentRate == 1.0f) {
+    ClearError();
     return m_pSource->Read(pBuf, iFrames);
   }
 
-  {
-    int iFramesNeeded = m_apResamplers[0]->NumInputsForOutputSamples(iFrames);
-    if (iFramesNeeded < 0 ||
-        static_cast<size_t>(iFramesNeeded) >
-            std::numeric_limits<size_t>::max() /
-                static_cast<size_t>(iChannels)) {
-      return RageSoundReader::ERROR;
-    }
-    if (iFramesNeeded == 0) {
-      return 0;
-    }
-    std::vector<float> tmpBuf(
+  int iFramesNeeded = m_apResamplers[0]->NumInputsForOutputSamples(iFrames);
+  if (iFramesNeeded < 0 ||
+      static_cast<size_t>(iFramesNeeded) >
+          std::numeric_limits<size_t>::max() /
+              static_cast<size_t>(iChannels)) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2838: Resample_Good input frame request overflow");
+    return RageSoundReader::ERROR;
+  }
+  if (iFramesNeeded == 0) {
+    return 0;
+  }
+
+  std::vector<float> tmpBuf;
+  try {
+    tmpBuf.resize(
         static_cast<size_t>(iFramesNeeded) * static_cast<size_t>(iChannels));
-    int iFramesIn = m_pSource->Read(&tmpBuf[0], iFramesNeeded);
-    if (iFramesIn < 0) {
-      return iFramesIn;
-    }
-    if (iFramesIn > iFramesNeeded) {
+  } catch (const std::bad_alloc&) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2837: Resample_Good could not allocate read buffer");
+    return RageSoundReader::ERROR;
+  }
+
+  int iFramesIn = m_pSource->Read(&tmpBuf[0], iFramesNeeded);
+  if (iFramesIn < 0) {
+    return iFramesIn;
+  }
+  if (iFramesIn > iFramesNeeded) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2837: Resample_Good source returned too many "
+        "frames");
+    return RageSoundReader::ERROR;
+  }
+
+  for (int iChannel = 0; iChannel < iChannels; ++iChannel) {
+    int iGotFrames = m_apResamplers[iChannel]->Run(
+        &tmpBuf[0] + iChannel, iFramesIn, pBuf + iChannel, iFrames, iChannels);
+    if (iGotFrames < 0 || iGotFrames > iFrames) {
+      SetError("SRC_AUDIT_FIX SRC-2837: Resample_Good channel run failed");
       return RageSoundReader::ERROR;
     }
 
-    for (int iChannel = 0; iChannel < iChannels; ++iChannel) {
-      int iGotFrames = m_apResamplers[iChannel]->Run(
-          &tmpBuf[0] + iChannel, iFramesIn, pBuf + iChannel, iFrames,
-          iChannels);
-      if (iGotFrames < 0 || iGotFrames > iFrames) {
-        return RageSoundReader::ERROR;
-      }
-
-      if (iChannel == 0) {
-        iFramesRead += iGotFrames;
-      }
+    if (iChannel == 0) {
+      iFramesRead += iGotFrames;
     }
   }
 
+  ClearError();
   return iFramesRead;
 }
 
@@ -790,40 +1082,34 @@ int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
  * Changing these values will take effect immediately, with a buffering latency
  * of L/4 frames.
  */
-void RageSoundReader_Resample_Good::SetRate(float fRatio) {
-  if (!std::isfinite(fRatio) || fRatio <= 0.0f || m_apResamplers.empty()) {
-    return;
+bool RageSoundReader_Resample_Good::SetRate(float fRatio) {
+  std::lock_guard<std::mutex> lock(m_StateMutex);
+  if (!IsFinitePositive(fRatio) || fRatio > MAX_REASONABLE_RATE) {
+    SetError("SRC_AUDIT_FIX SRC-2835: Resample_Good rejected unsafe rate");
+    return false;
   }
-  bool bRateChangingWasEnabled = m_fRate != -1;
-  m_fRate = fRatio;
-
-  if (!bRateChangingWasEnabled) {
-    ReopenResampler();
-  }
-
-  int iDownFactor, iUpFactor;
-  GetFactors(iDownFactor, iUpFactor);
-  if (m_fRate != -1) {
-    if (static_cast<double>(m_fRate) * iDownFactor >
-        static_cast<double>(std::numeric_limits<int>::max())) {
-      return;
-    }
-    iDownFactor = static_cast<int>((m_fRate * iDownFactor) + 0.5);
-  }
-  if (iUpFactor <= 0 || iDownFactor <= 0) {
-    return;
+  if (!IsUsableLocked()) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2835: Resample_Good refused rate change without a "
+        "usable topology");
+    return false;
   }
 
-  /* Set m_fRate to the actual rate, after quantization by iUpFactor. */
-  m_fRate = float(iDownFactor) / iUpFactor;
-
-  for (size_t iChannel = 0; iChannel < m_apResamplers.size(); ++iChannel) {
-    m_apResamplers[iChannel]->SetDownFactor(iDownFactor);
+  float fActualRate = fRatio;
+  if (!ReopenResamplerLocked(fRatio, &fActualRate) ||
+      !IsFinitePositive(fActualRate)) {
+    SetError("SRC_AUDIT_FIX SRC-2835: Resample_Good failed to apply rate");
+    return false;
   }
+
+  m_fRate = fActualRate;
+  ClearError();
+  return true;
 }
 
 float RageSoundReader_Resample_Good::GetRate() const {
-  if (m_fRate == -1) {
+  std::lock_guard<std::mutex> lock(m_StateMutex);
+  if (m_fRate == RATE_DISABLED) {
     return 1.0f;
   } else {
     return m_fRate;
@@ -832,17 +1118,80 @@ float RageSoundReader_Resample_Good::GetRate() const {
 
 RageSoundReader_Resample_Good::RageSoundReader_Resample_Good(
     const RageSoundReader_Resample_Good& cpy)
-    : RageSoundReader_Filter(cpy) {
-  for (size_t i = 0; i < cpy.m_apResamplers.size(); ++i) {
-    this->m_apResamplers.push_back(
-        new RageSoundResampler_Polyphase(*cpy.m_apResamplers[i]));
-  }
+    : RageSoundReader_Filter(cpy), m_iSampleRate(0), m_fRate(RATE_DISABLED) {
+  std::lock_guard<std::mutex> lock(cpy.m_StateMutex);
   this->m_iSampleRate = cpy.m_iSampleRate;
   this->m_fRate = cpy.m_fRate;
+
+  std::vector<std::unique_ptr<RageSoundResampler_Polyphase>> apNewResamplers;
+  try {
+    apNewResamplers.reserve(cpy.m_apResamplers.size());
+    for (size_t i = 0; i < cpy.m_apResamplers.size(); ++i) {
+      if (cpy.m_apResamplers[i] == nullptr) {
+        SetError(
+            "SRC_AUDIT_FIX SRC-2840: Resample_Good copy found null channel "
+            "resampler");
+        return;
+      }
+      std::unique_ptr<RageSoundResampler_Polyphase> p(
+          new RageSoundResampler_Polyphase(*cpy.m_apResamplers[i]));
+      if (!p->IsUsable()) {
+        SetError(
+            "SRC_AUDIT_FIX SRC-2840: Resample_Good copy produced unusable "
+            "channel resampler");
+        return;
+      }
+      apNewResamplers.push_back(std::move(p));
+    }
+    m_apResamplers.reserve(apNewResamplers.size());
+    for (size_t i = 0; i < apNewResamplers.size(); ++i) {
+      m_apResamplers.push_back(apNewResamplers[i].get());
+    }
+  } catch (const std::bad_alloc&) {
+    ClearResamplers();
+    SetError("SRC_AUDIT_FIX SRC-2840: Resample_Good copy ran out of memory");
+    return;
+  }
+
+  for (size_t i = 0; i < apNewResamplers.size(); ++i) {
+    apNewResamplers[i].release();
+  }
 }
 
 RageSoundReader_Resample_Good* RageSoundReader_Resample_Good::Copy() const {
-  return new RageSoundReader_Resample_Good(*this);
+  try {
+    std::unique_ptr<RageSoundReader_Resample_Good> pCopy(
+        new RageSoundReader_Resample_Good(*this));
+    {
+      std::lock_guard<std::mutex> lock(pCopy->m_StateMutex);
+      if (!pCopy->IsUsableLocked()) {
+        return nullptr;
+      }
+    }
+    return pCopy.release();
+  } catch (const std::bad_alloc&) {
+    return nullptr;
+  }
+}
+
+std::string RageSoundReader_Resample_Good::GetError() const {
+  {
+    std::lock_guard<std::mutex> lock(m_ErrorMutex);
+    if (!m_sError.empty()) {
+      return m_sError;
+    }
+  }
+  return RageSoundReader_Filter::GetError();
+}
+
+void RageSoundReader_Resample_Good::ClearError() const {
+  std::lock_guard<std::mutex> lock(m_ErrorMutex);
+  m_sError.clear();
+}
+
+void RageSoundReader_Resample_Good::SetError(const std::string& sError) const {
+  std::lock_guard<std::mutex> lock(m_ErrorMutex);
+  m_sError = sError;
 }
 
 /*
