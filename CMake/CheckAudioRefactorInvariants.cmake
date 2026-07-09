@@ -360,6 +360,22 @@ require_contains(
   "SRC_AUDIT_FIX SRC-2802"
   "RageSoundReader_Vorbisfile converts allocation failures into decoder errors")
 require_contains(
+  "${rage_sound_reader_vorbis_cpp}"
+  "const ogg_int64_t curofs = ov_pcm_tell(vf);"
+  "RageSoundReader_Vorbisfile keeps Vorbis read positions in 64-bit form")
+require_contains(
+  "${rage_sound_reader_vorbis_cpp}"
+  "std::isfinite(lenSeconds)"
+  "RageSoundReader_Vorbisfile bounds non-integer Vorbis length conversion")
+require_contains(
+  "${rage_sound_reader_vorbis_cpp}"
+  "static_cast<int>(elementsToRead)"
+  "RageSoundReader_Vorbisfile bounds libvorbis read callback counts")
+require_contains(
+  "${rage_sound_reader_vorbis_cpp}"
+  "GetSourcePath().c_str()"
+  "RageSoundReader_Vorbisfile reports source paths in decoder diagnostics")
+require_contains(
   "${rage_sound_reader_pan_h}"
   "RageSoundReader_Pan* Copy() const override"
   "RageSoundReader_Pan copy contract is explicitly overriding")

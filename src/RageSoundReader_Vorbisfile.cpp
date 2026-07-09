@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstdarg>
 #include <cstddef>
 #include <cstring>
@@ -29,11 +30,22 @@
 
 static size_t OggRageFile_read_func(
     void* ptr, size_t size, size_t nmemb, void* datasource) {
-  if (ptr == nullptr || datasource == nullptr) {
+  if (ptr == nullptr || datasource == nullptr || size == 0 || nmemb == 0) {
     return 0;
   }
+  const size_t maxElementsByCount =
+      static_cast<size_t>(std::numeric_limits<int>::max());
+  const size_t maxElementsByBytes =
+      static_cast<size_t>(std::numeric_limits<int>::max()) / size;
+  const size_t elementsToRead =
+      std::min(nmemb, std::min(maxElementsByCount, maxElementsByBytes));
+  if (elementsToRead == 0) {
+    return 0;
+  }
+
   RageFileBasic* f = (RageFileBasic*)datasource;
-  return f->Read(ptr, size, nmemb);
+  const int ret = f->Read(ptr, size, static_cast<int>(elementsToRead));
+  return ret < 0 ? 0 : static_cast<size_t>(ret);
 }
 
 static int OggRageFile_seek_func(
@@ -157,7 +169,14 @@ RageSoundReader_FileReader::OpenResult RageSoundReader_Vorbisfile::Open(
 
   vf = newVf;
   eof = false;
-  read_offset = (int)ov_pcm_tell(vf);
+  read_offset = ov_pcm_tell(vf);
+  if (read_offset < 0) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2803: Vorbis stream position unavailable after "
+        "open");
+    ResetDecoderState();
+    return OPEN_FATAL_ERROR;
+  }
 
   vorbis_info* vi = ov_info(vf, -1);
   if (vi == nullptr || vi->channels <= 0 || vi->channels > 2 ||
@@ -176,15 +195,26 @@ int RageSoundReader_Vorbisfile::GetLength() const {
     return 0;
   }
 #if defined(INTEGER_VORBIS)
-  int len = ov_time_total(vf, -1);
-#else
-  int len = int(ov_time_total(vf, -1) * 1000);
-#endif
-  if (len < 0) {
+  const ogg_int64_t len = ov_time_total(vf, -1);
+  if (len <= 0) {
     return 0;
   }
-
-  return len;
+  if (len > std::numeric_limits<int>::max()) {
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(len);
+#else
+  const double lenSeconds = ov_time_total(vf, -1);
+  if (!std::isfinite(lenSeconds) || lenSeconds <= 0.0) {
+    return 0;
+  }
+  const double maxSeconds =
+      static_cast<double>(std::numeric_limits<int>::max()) / 1000.0;
+  if (lenSeconds >= maxSeconds) {
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(lenSeconds * 1000.0);
+#endif
 }
 
 int RageSoundReader_Vorbisfile::SetPosition(int iFrame) {
@@ -205,7 +235,13 @@ int RageSoundReader_Vorbisfile::SetPosition(int iFrame) {
     SetError(ov_ssprintf(ret, "ogg: SetPosition failed"));
     return -1;
   }
-  read_offset = (int)ov_pcm_tell(vf);
+  read_offset = ov_pcm_tell(vf);
+  if (read_offset < 0) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2803: Vorbis stream position unavailable after "
+        "seek");
+    return -1;
+  }
 
   return 1;
 }
@@ -231,14 +267,20 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
     int iFramesRead = 0;
 
     {
-      int curofs = (int)ov_pcm_tell(vf);
+      const ogg_int64_t curofs = ov_pcm_tell(vf);
+      if (curofs < 0) {
+        SetError(
+            "SRC_AUDIT_FIX SRC-2803: Vorbis stream position unavailable during "
+            "read");
+        return ERROR;
+      }
       if (curofs < read_offset) {
         /* The timestamps moved backwards.  Ignore it.  This file probably
          * won't sync correctly. */
         if (LOG != nullptr) {
           LOG->Trace(
-              "p ahead %p %i < %lld, we're ahead by %lld",
-              static_cast<void*>(this), curofs,
+              "p ahead %p %lld < %lld, we're ahead by %lld",
+              static_cast<void*>(this), static_cast<long long>(curofs),
               static_cast<long long>(read_offset),
               static_cast<long long>(read_offset - curofs));
         }
@@ -249,16 +291,17 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
          * That way, corruptions in the file won't casue desyncs. */
 
         /* In bytes: */
-        int iSilentFrames = curofs - read_offset;
-        iSilentFrames = std::min(iSilentFrames, (int)iFrames);
+        int iSilentFrames = static_cast<int>(
+            std::min<ogg_int64_t>(curofs - read_offset, iFrames));
         if (iSilentFrames >
             std::numeric_limits<int>::max() / bytes_per_frame) {
           return ERROR;
         }
         int silence = iSilentFrames * bytes_per_frame;
         CHECKPOINT_M(ssprintf(
-            "p %i,%lld: %i frames of silence needed", curofs,
-            static_cast<long long>(read_offset), silence));
+            "p %lld,%lld: %i frames of silence needed",
+            static_cast<long long>(curofs), static_cast<long long>(read_offset),
+            silence));
 
         memset(buf, 0, silence);
         iFramesRead = iSilentFrames;
@@ -376,8 +419,14 @@ int RageSoundReader_Vorbisfile::GetNextSourceFrame() const {
     return 0;
   }
 
-  int iFrame = (int)ov_pcm_tell(vf);
-  return iFrame;
+  const ogg_int64_t iFrame = ov_pcm_tell(vf);
+  if (iFrame <= 0) {
+    return 0;
+  }
+  if (iFrame > std::numeric_limits<int>::max()) {
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(iFrame);
 }
 
 RageSoundReader_Vorbisfile::RageSoundReader_Vorbisfile() = default;
