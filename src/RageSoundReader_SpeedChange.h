@@ -4,6 +4,7 @@
 #ifndef RAGE_SOUND_READER_SPEED_CHANGE_H
 #define RAGE_SOUND_READER_SPEED_CHANGE_H
 
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -13,24 +14,26 @@
 class RageSoundReader_SpeedChange : public RageSoundReader_Filter {
  public:
   RageSoundReader_SpeedChange(RageSoundReader* pSource);
+  RageSoundReader_SpeedChange(const RageSoundReader_SpeedChange& cpy);
+  RageSoundReader_SpeedChange& operator=(
+      const RageSoundReader_SpeedChange& rhs) = delete;
 
-  virtual int SetPosition(int iFrame);
-  virtual int Read(float* pBuf, int iFrames);
-  virtual RageSoundReader_SpeedChange* Copy() const {
-    return new RageSoundReader_SpeedChange(*this);
-  }
-  virtual bool SetProperty(const std::string& sProperty, float fValue);
-  virtual int GetNextSourceFrame() const;
-  virtual float GetStreamToSourceRatio() const;
+  int SetPosition(int iFrame) override;
+  int Read(float* pBuf, int iFrames) override;
+  RageSoundReader_SpeedChange* Copy() const override;
+  bool SetProperty(const std::string& sProperty, float fValue) override;
+  int GetNextSourceFrame() const override;
+  float GetStreamToSourceRatio() const override;
+  std::string GetError() const override;
 
   bool SetSpeedRatio(float fRatio);
 
   /* Return true if the next Read() will start a new block, allowing GetRatio()
    * to be updated to a new value.  Used by RageSoundReader_PitchChange. */
-  bool NextReadWillStep() const { return GetCursorAvail() == 0; }
+  bool NextReadWillStep() const;
 
   /* Get the ratio last set by SetSpeedRatio. */
-  float GetRatio() const { return m_fSpeedRatio; }
+  float GetRatio() const;
 
  protected:
   int FillData(int iMax);
@@ -42,6 +45,9 @@ class RageSoundReader_SpeedChange : public RageSoundReader_Filter {
 
   int GetWindowSizeFrames() const;
   int GetToleranceFrames() const { return GetWindowSizeFrames() / 4; }
+  bool IsTopologyUsableLocked() const;
+  void ClearError() const;
+  void SetError(const std::string& sError) const;
 
   int m_iDataBufferAvailFrames;
   struct ChannelInfo {
@@ -57,6 +63,10 @@ class RageSoundReader_SpeedChange : public RageSoundReader_Filter {
   float m_fSpeedRatio;
   float m_fTrailingSpeedRatio;
   float m_fErrorFrames;
+
+  mutable std::mutex m_StateMutex;
+  mutable std::mutex m_ErrorMutex;
+  mutable std::string m_sError;
 };
 
 #endif

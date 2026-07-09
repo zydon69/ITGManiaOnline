@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <limits>
+#include <new>
 #include <string>
 
 #include "RageSoundReader.h"
@@ -12,29 +15,127 @@
 #include "global.h"
 
 static const int WINDOW_SIZE_MS = 30;
+static constexpr unsigned MAX_SPEED_CHANGE_CHANNELS = 64;
+static constexpr float MAX_REASONABLE_SPEED_RATIO = 64.0f;
+
+static bool IsUsableSource(const RageSoundReader* pSource) {
+  return pSource != nullptr && pSource->GetSampleRate() > 0 &&
+         pSource->GetNumChannels() > 0 &&
+         pSource->GetNumChannels() <= MAX_SPEED_CHANGE_CHANNELS;
+}
+
+static bool IsUsableSpeedRatio(float fRatio) {
+  return std::isfinite(fRatio) && fRatio > 0.0f &&
+         fRatio <= MAX_REASONABLE_SPEED_RATIO;
+}
+
+static int ClampInt64ToInt(std::int64_t value) {
+  if (value > std::numeric_limits<int>::max()) {
+    return std::numeric_limits<int>::max();
+  }
+  if (value < std::numeric_limits<int>::min()) {
+    return std::numeric_limits<int>::min();
+  }
+  return static_cast<int>(value);
+}
+
+static bool AddNonNegativeInt(int lhs, int rhs, int* out) {
+  if (lhs < 0 || rhs < 0 ||
+      lhs > std::numeric_limits<int>::max() - rhs) {
+    return false;
+  }
+  *out = lhs + rhs;
+  return true;
+}
 
 RageSoundReader_SpeedChange::RageSoundReader_SpeedChange(
     RageSoundReader* pSource)
-    : RageSoundReader_Filter(pSource) {
-  if (pSource != nullptr && pSource->GetSampleRate() > 0) {
-    m_Channels.resize(pSource->GetNumChannels());
+    : RageSoundReader_Filter(pSource),
+      m_iDataBufferAvailFrames(0),
+      m_iUncorrelatedPos(0),
+      m_iPos(0),
+      m_fSpeedRatio(1.0f),
+      m_fTrailingSpeedRatio(1.0f),
+      m_fErrorFrames(0.0f) {
+  if (!IsUsableSource(pSource)) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2842: SpeedChange received an invalid source "
+        "reader");
+    return;
   }
-  m_fSpeedRatio = m_fTrailingSpeedRatio = 1.0f;
-  m_iDataBufferAvailFrames = 0;
-  SetSpeedRatio(1.0f);
+
+  try {
+    m_Channels.resize(pSource->GetNumChannels());
+  } catch (const std::bad_alloc&) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2844: SpeedChange ran out of memory while "
+        "initializing channel state");
+    return;
+  }
   Reset();
 }
 
+RageSoundReader_SpeedChange::RageSoundReader_SpeedChange(
+    const RageSoundReader_SpeedChange& cpy)
+    : RageSoundReader_Filter(cpy),
+      m_iDataBufferAvailFrames(0),
+      m_iUncorrelatedPos(0),
+      m_iPos(0),
+      m_fSpeedRatio(1.0f),
+      m_fTrailingSpeedRatio(1.0f),
+      m_fErrorFrames(0.0f) {
+  {
+    std::lock_guard<std::mutex> lock(cpy.m_StateMutex);
+    m_iDataBufferAvailFrames = cpy.m_iDataBufferAvailFrames;
+    m_Channels = cpy.m_Channels;
+    m_iUncorrelatedPos = cpy.m_iUncorrelatedPos;
+    m_iPos = cpy.m_iPos;
+    m_fSpeedRatio = cpy.m_fSpeedRatio;
+    m_fTrailingSpeedRatio = cpy.m_fTrailingSpeedRatio;
+    m_fErrorFrames = cpy.m_fErrorFrames;
+  }
+
+  if (!IsTopologyUsableLocked()) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2849: SpeedChange copy produced an invalid "
+        "reader topology");
+  }
+}
+
+RageSoundReader_SpeedChange* RageSoundReader_SpeedChange::Copy() const {
+  try {
+    RageSoundReader_SpeedChange* pCopy =
+        new RageSoundReader_SpeedChange(*this);
+    bool bUsable = false;
+    {
+      std::lock_guard<std::mutex> lock(pCopy->m_StateMutex);
+      bUsable = pCopy->IsTopologyUsableLocked();
+    }
+    if (!bUsable) {
+      delete pCopy;
+      return nullptr;
+    }
+    return pCopy;
+  } catch (const std::bad_alloc&) {
+    return nullptr;
+  }
+}
+
 bool RageSoundReader_SpeedChange::SetSpeedRatio(float fRatio) {
-  if (!std::isfinite(fRatio) || fRatio <= 0.0f) {
+  if (!IsUsableSpeedRatio(fRatio)) {
+    SetError("SRC_AUDIT_FIX SRC-2846: SpeedChange rejected unsafe speed ratio");
     return false;
   }
+  std::lock_guard<std::mutex> lock(m_StateMutex);
   m_fSpeedRatio = fRatio;
 
   /* If we haven't read any data yet, put the new delta into effect immediately.
    */
   if (m_iDataBufferAvailFrames == 0) {
     m_fTrailingSpeedRatio = m_fSpeedRatio;
+  }
+  if (IsTopologyUsableLocked()) {
+    ClearError();
   }
   return true;
 }
@@ -44,7 +145,9 @@ int RageSoundReader_SpeedChange::GetWindowSizeFrames() const {
   if (sampleRate <= 0) {
     return 1;
   }
-  return std::max(1, (WINDOW_SIZE_MS * sampleRate) / 1000);
+  const std::int64_t windowFrames =
+      (static_cast<std::int64_t>(WINDOW_SIZE_MS) * sampleRate) / 1000;
+  return std::max(1, ClampInt64ToInt(windowFrames));
 }
 
 void RageSoundReader_SpeedChange::Reset() {
@@ -92,14 +195,22 @@ static int FindClosestMatch(
 }
 
 int RageSoundReader_SpeedChange::FillData(int iMaxFrames) {
-  if (m_pSource.isNull() || m_Channels.empty() || iMaxFrames <= 0) {
+  if (iMaxFrames <= 0) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2848: SpeedChange FillData received an invalid "
+        "frame count");
     return RageSoundReader::ERROR;
   }
-  /* XXX: If the rate or source frame offset changes in the source, we should
-   * stop at that point, so the changes propagate upward.  That's tricky, since
-   * we want to process a block at a time.  We could just flush what we have,
-   * and maybe tweak m_iDeltaFrames for the next block based on how much we
-   * processed, so we average out the short block. */
+  if (!IsTopologyUsableLocked()) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2842: SpeedChange FillData has no usable source "
+        "topology");
+    return RageSoundReader::ERROR;
+  }
+
+  /* SpeedChange processes source data in whole windows.  If an upstream reader
+   * changes rate or frame offset mid-window, the change becomes visible at the
+   * next processed block boundary. */
   while (iMaxFrames > 0) {
     int iFramesToRead = iMaxFrames - m_iDataBufferAvailFrames;
     if (iFramesToRead <= 0) {
@@ -109,15 +220,32 @@ int RageSoundReader_SpeedChange::FillData(int iMaxFrames) {
     const size_t channels = m_Channels.size();
     if (static_cast<size_t>(iFramesToRead) >
         std::numeric_limits<size_t>::max() / channels) {
+      SetError("SRC_AUDIT_FIX SRC-2847: SpeedChange sample count overflow");
       return RageSoundReader::ERROR;
     }
     const size_t samplesToRead =
         static_cast<size_t>(iFramesToRead) * channels;
     if (samplesToRead > std::numeric_limits<size_t>::max() / sizeof(float)) {
+      SetError("SRC_AUDIT_FIX SRC-2847: SpeedChange byte count overflow");
       return RageSoundReader::ERROR;
     }
 
-    std::vector<float> tempBuffer(samplesToRead);
+    std::vector<float> tempBuffer;
+    try {
+      tempBuffer.resize(samplesToRead);
+      for (size_t i = 0; i < m_Channels.size(); ++i) {
+        ChannelInfo& c = m_Channels[i];
+        if (static_cast<int>(c.m_DataBuffer.size()) < iMaxFrames) {
+          c.m_DataBuffer.resize(iMaxFrames);
+        }
+      }
+    } catch (const std::bad_alloc&) {
+      SetError(
+          "SRC_AUDIT_FIX SRC-2844: SpeedChange ran out of memory while "
+          "preparing input buffers");
+      return RageSoundReader::ERROR;
+    }
+
     int iGotFrames = m_pSource->Read(&tempBuffer[0], iFramesToRead);
     if (iGotFrames < 0) {
       if (iGotFrames == END_OF_FILE && m_iDataBufferAvailFrames) {
@@ -129,15 +257,14 @@ int RageSoundReader_SpeedChange::FillData(int iMaxFrames) {
       return m_iDataBufferAvailFrames;
     }
     if (iGotFrames > iFramesToRead) {
+      SetError(
+          "SRC_AUDIT_FIX SRC-2848: SpeedChange source returned too many "
+          "frames");
       return RageSoundReader::ERROR;
     }
 
     for (size_t i = 0; i < m_Channels.size(); ++i) {
       ChannelInfo& c = m_Channels[i];
-
-      if ((int)c.m_DataBuffer.size() < iMaxFrames) {
-        c.m_DataBuffer.resize(iMaxFrames);
-      }
 
       const float* pIn = &tempBuffer[0] + i;
       float* pOut = &c.m_DataBuffer[m_iDataBufferAvailFrames];
@@ -160,7 +287,7 @@ void RageSoundReader_SpeedChange::EraseData(int iFramesToDelete) {
   iFramesToDelete = std::min(iFramesToDelete, m_iDataBufferAvailFrames);
   iFramesToDelete = std::min(iFramesToDelete, m_iUncorrelatedPos);
 
-  int iFramesToMove = m_iDataBufferAvailFrames - iFramesToDelete;
+  const int iFramesToMove = m_iDataBufferAvailFrames - iFramesToDelete;
   m_iDataBufferAvailFrames -= iFramesToDelete;
   m_iUncorrelatedPos -= iFramesToDelete;
   for (size_t i = 0; i < m_Channels.size(); ++i) {
@@ -178,7 +305,10 @@ void RageSoundReader_SpeedChange::EraseData(int iFramesToDelete) {
 }
 
 int RageSoundReader_SpeedChange::Step() {
-  if (m_Channels.empty()) {
+  if (!IsTopologyUsableLocked()) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2842: SpeedChange Step has no usable source "
+        "topology");
     return RageSoundReader::ERROR;
   }
   if (m_iDataBufferAvailFrames == 0) {
@@ -195,6 +325,9 @@ int RageSoundReader_SpeedChange::Step() {
       if (m_Channels[i].m_iCorrelatedPos < 0 ||
           m_Channels[i].m_iCorrelatedPos + m_iPos >
               m_iDataBufferAvailFrames) {
+        SetError(
+            "SRC_AUDIT_FIX SRC-2848: SpeedChange correlated position is out "
+            "of range");
         return RageSoundReader::ERROR;
       }
       m_Channels[i].m_iCorrelatedPos += m_iPos;
@@ -205,13 +338,30 @@ int RageSoundReader_SpeedChange::Step() {
      * Record the amount of error introduced here.  If we want to advance by 2.3
      * frames, we'll advance by 2.0 frames, and advance by 0.3 more the next
      * time around. */
-    float fAdvanceFrames = GetWindowSizeFrames() * m_fTrailingSpeedRatio;
+    double fAdvanceFrames =
+        static_cast<double>(GetWindowSizeFrames()) * m_fTrailingSpeedRatio;
     if (!std::isfinite(fAdvanceFrames)) {
+      SetError(
+          "SRC_AUDIT_FIX SRC-2846: SpeedChange produced a non-finite advance");
       return RageSoundReader::ERROR;
     }
     fAdvanceFrames += m_fErrorFrames;
-    int iTrailingDeltaFrames = static_cast<int>((fAdvanceFrames) + 0.5);
+    if (!std::isfinite(fAdvanceFrames) || fAdvanceFrames < 0.0 ||
+        fAdvanceFrames >
+            static_cast<double>(std::numeric_limits<int>::max())) {
+      SetError(
+          "SRC_AUDIT_FIX SRC-2847: SpeedChange advance does not fit in int");
+      return RageSoundReader::ERROR;
+    }
+    const int iTrailingDeltaFrames =
+        static_cast<int>((fAdvanceFrames) + 0.5);
     m_fErrorFrames = fAdvanceFrames - iTrailingDeltaFrames;
+    if (m_iUncorrelatedPos >
+        std::numeric_limits<int>::max() - iTrailingDeltaFrames) {
+      SetError(
+          "SRC_AUDIT_FIX SRC-2847: SpeedChange uncorrelated position overflow");
+      return RageSoundReader::ERROR;
+    }
     m_iUncorrelatedPos += iTrailingDeltaFrames;
 
     m_iPos = 0;
@@ -227,27 +377,46 @@ int RageSoundReader_SpeedChange::Step() {
   for (size_t i = 0; i < m_Channels.size(); ++i) {
     ChannelInfo& c = m_Channels[i];
     if (c.m_iCorrelatedPos < 0 || c.m_iCorrelatedPos > m_iDataBufferAvailFrames) {
+      SetError(
+          "SRC_AUDIT_FIX SRC-2848: SpeedChange delete window is out of range");
       return RageSoundReader::ERROR;
     }
     iToDelete = std::min(iToDelete, c.m_iCorrelatedPos);
-    // iToDelete = std::min( iToDelete, m_iDataBufferAvailFrames );
   }
   EraseData(iToDelete);
 
   /* Fill as much data as we might need to do the search and use the result. */
   {
-    int iMaxPositionNeeded =
-        m_iUncorrelatedPos + GetToleranceFrames() + GetWindowSizeFrames();
+    int iMaxPositionNeeded = 0;
+    int iTmp = 0;
+    if (!AddNonNegativeInt(m_iUncorrelatedPos, GetToleranceFrames(), &iTmp) ||
+        !AddNonNegativeInt(iTmp, GetWindowSizeFrames(), &iMaxPositionNeeded)) {
+      SetError(
+          "SRC_AUDIT_FIX SRC-2847: SpeedChange search window overflow");
+      return RageSoundReader::ERROR;
+    }
     if (iMaxPositionNeeded <= 0) {
+      SetError(
+          "SRC_AUDIT_FIX SRC-2848: SpeedChange search window is invalid");
       return RageSoundReader::ERROR;
     }
     for (size_t i = 0; i < m_Channels.size(); ++i) {
       if (m_Channels[i].m_iCorrelatedPos < 0) {
+        SetError(
+            "SRC_AUDIT_FIX SRC-2848: SpeedChange has negative correlated "
+            "position");
+        return RageSoundReader::ERROR;
+      }
+      int iChannelMax = 0;
+      if (!AddNonNegativeInt(
+              m_Channels[i].m_iCorrelatedPos, GetWindowSizeFrames(),
+              &iChannelMax)) {
+        SetError(
+            "SRC_AUDIT_FIX SRC-2847: SpeedChange correlated window overflow");
         return RageSoundReader::ERROR;
       }
       iMaxPositionNeeded = std::max(
-          iMaxPositionNeeded,
-          m_Channels[i].m_iCorrelatedPos + GetWindowSizeFrames());
+          iMaxPositionNeeded, iChannelMax);
     }
 
     int iGot = FillData(iMaxPositionNeeded);
@@ -272,10 +441,20 @@ int RageSoundReader_SpeedChange::Step() {
 
   for (size_t i = 0; i < m_Channels.size(); ++i) {
     ChannelInfo& c = m_Channels[i];
+    int iCorrelatedMatchEnd = 0;
+    int iUncorrelatedMatchEnd = 0;
     if (c.m_iCorrelatedPos < 0 ||
-        c.m_iCorrelatedPos + iCorrelatedToMatch > m_iDataBufferAvailFrames ||
+        !AddNonNegativeInt(
+            c.m_iCorrelatedPos, iCorrelatedToMatch, &iCorrelatedMatchEnd) ||
+        iCorrelatedMatchEnd > m_iDataBufferAvailFrames ||
         m_iUncorrelatedPos < 0 ||
-        m_iUncorrelatedPos + iUncorrelatedToMatch > m_iDataBufferAvailFrames) {
+        !AddNonNegativeInt(
+            m_iUncorrelatedPos, iUncorrelatedToMatch,
+            &iUncorrelatedMatchEnd) ||
+        iUncorrelatedMatchEnd > m_iDataBufferAvailFrames) {
+      SetError(
+          "SRC_AUDIT_FIX SRC-2848: SpeedChange correlation window is out of "
+          "range");
       return RageSoundReader::ERROR;
     }
 
@@ -284,9 +463,14 @@ int RageSoundReader_SpeedChange::Step() {
         &c.m_DataBuffer[c.m_iCorrelatedPos], iCorrelatedToMatch, 1);
     c.m_iLastCorrelatedPos = c.m_iCorrelatedPos;
     c.m_iCorrelatedPos = iBest + m_iUncorrelatedPos;
+    int iMatchedWindowEnd = 0;
     if (m_Channels[i].m_iCorrelatedPos < 0 ||
-        m_Channels[i].m_iCorrelatedPos + GetWindowSizeFrames() >
-            m_iDataBufferAvailFrames) {
+        !AddNonNegativeInt(
+            m_Channels[i].m_iCorrelatedPos, GetWindowSizeFrames(),
+            &iMatchedWindowEnd) ||
+        iMatchedWindowEnd > m_iDataBufferAvailFrames) {
+      SetError(
+          "SRC_AUDIT_FIX SRC-2848: SpeedChange matched window is out of range");
       return RageSoundReader::ERROR;
     }
   }
@@ -311,8 +495,21 @@ int RageSoundReader_SpeedChange::Read(float* pBuf, int iFrames) {
   if (iFrames == 0) {
     return 0;
   }
-  if (pBuf == nullptr || iFrames < 0 || m_pSource.isNull() ||
-      m_Channels.empty()) {
+  if (pBuf == nullptr) {
+    SetError("SRC_AUDIT_FIX SRC-2848: SpeedChange Read called with null buffer");
+    return RageSoundReader::ERROR;
+  }
+  if (iFrames < 0) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2848: SpeedChange Read called with negative frame "
+        "count");
+    return RageSoundReader::ERROR;
+  }
+  std::lock_guard<std::mutex> lock(m_StateMutex);
+  if (!IsTopologyUsableLocked()) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2842: SpeedChange Read has no usable source "
+        "topology");
     return RageSoundReader::ERROR;
   }
   for (;;) {
@@ -321,7 +518,11 @@ int RageSoundReader_SpeedChange::Read(float* pBuf, int iFrames) {
       /* Fast path: the buffer is empty, and we're not scaling the audio.  Read
        * directly into the output buffer, to eliminate memory and copying
        * overhead. */
-      return m_pSource->Read(pBuf, iFrames);
+      int iRet = m_pSource->Read(pBuf, iFrames);
+      if (iRet >= 0) {
+        ClearError();
+      }
+      return iRet;
     }
 
     int iCursorAvail = GetCursorAvail();
@@ -341,6 +542,8 @@ int RageSoundReader_SpeedChange::Read(float* pBuf, int iFrames) {
     int iFramesLen = iFrames;
     int iFramesAvail = std::min(iCursorAvail, iFramesLen);
     if (iFramesAvail <= 0) {
+      SetError(
+          "SRC_AUDIT_FIX SRC-2848: SpeedChange cursor produced no frames");
       return RageSoundReader::ERROR;
     }
 
@@ -351,20 +554,27 @@ int RageSoundReader_SpeedChange::Read(float* pBuf, int iFrames) {
     while (iFramesAvail--) {
       for (size_t i = 0; i < m_Channels.size(); ++i) {
         ChannelInfo& c = m_Channels[i];
-        if (c.m_iCorrelatedPos + m_iPos >=
-                static_cast<int>(c.m_DataBuffer.size()) ||
-            c.m_iLastCorrelatedPos + m_iPos >=
-                static_cast<int>(c.m_DataBuffer.size())) {
+        int iCorrelatedIndex = 0;
+        int iLastCorrelatedIndex = 0;
+        if (!AddNonNegativeInt(c.m_iCorrelatedPos, m_iPos, &iCorrelatedIndex) ||
+            !AddNonNegativeInt(
+                c.m_iLastCorrelatedPos, m_iPos, &iLastCorrelatedIndex) ||
+            iCorrelatedIndex >= static_cast<int>(c.m_DataBuffer.size()) ||
+            iLastCorrelatedIndex >= static_cast<int>(c.m_DataBuffer.size())) {
+          SetError(
+              "SRC_AUDIT_FIX SRC-2848: SpeedChange read window is out of "
+              "range");
           return RageSoundReader::ERROR;
         }
-        float i1 = c.m_DataBuffer[c.m_iCorrelatedPos + m_iPos];
-        float i2 = c.m_DataBuffer[c.m_iLastCorrelatedPos + m_iPos];
+        float i1 = c.m_DataBuffer[iCorrelatedIndex];
+        float i2 = c.m_DataBuffer[iLastCorrelatedIndex];
         *pBuf++ = SCALE(m_iPos, 0, iWindowSizeFrames, i2, i1);
       }
 
       ++m_iPos;
     }
 
+    ClearError();
     return iFramesRead;
   }
 }
@@ -374,8 +584,18 @@ int RageSoundReader_SpeedChange::Read(float* pBuf, int iFrames) {
  * can't do that, because the exact selection of slices is dependent on the
  * previous selection. */
 int RageSoundReader_SpeedChange::SetPosition(int iFrame) {
+  std::lock_guard<std::mutex> lock(m_StateMutex);
+  if (iFrame < 0 || m_pSource.isNull()) {
+    SetError(
+        "SRC_AUDIT_FIX SRC-2848: SpeedChange rejected invalid SetPosition");
+    return RageSoundReader::ERROR;
+  }
   Reset();
-  return RageSoundReader_Filter::SetPosition(iFrame);
+  int iRet = RageSoundReader_Filter::SetPosition(iFrame);
+  if (iRet >= 0) {
+    ClearError();
+  }
+  return iRet;
 }
 
 bool RageSoundReader_SpeedChange::SetProperty(
@@ -388,29 +608,76 @@ bool RageSoundReader_SpeedChange::SetProperty(
 }
 
 int RageSoundReader_SpeedChange::GetNextSourceFrame() const {
+  std::lock_guard<std::mutex> lock(m_StateMutex);
   float fRatio = m_fTrailingSpeedRatio;
   if (!std::isfinite(fRatio)) {
     fRatio = 1.0f;
   }
 
-  int iSourceFrame = RageSoundReader_Filter::GetNextSourceFrame();
-  int iPos = static_cast<int>((m_iPos * fRatio) + 0.5);
+  const int iSourceFrame = RageSoundReader_Filter::GetNextSourceFrame();
+  const double fPos = static_cast<double>(m_iPos) * fRatio + 0.5;
+  const int iPos =
+      (!std::isfinite(fPos) ||
+       fPos > static_cast<double>(std::numeric_limits<int>::max()))
+          ? std::numeric_limits<int>::max()
+          : static_cast<int>(fPos);
 
-  iSourceFrame -= m_iDataBufferAvailFrames;
-  iSourceFrame += m_iUncorrelatedPos + iPos;
-  return iSourceFrame;
+  const std::int64_t mappedFrame =
+      static_cast<std::int64_t>(iSourceFrame) - m_iDataBufferAvailFrames +
+      m_iUncorrelatedPos + iPos;
+  return ClampInt64ToInt(mappedFrame);
 }
 
 float RageSoundReader_SpeedChange::GetStreamToSourceRatio() const {
+  std::lock_guard<std::mutex> lock(m_StateMutex);
   /* If the ratio has changed and GetCursorAvail() is 0, the new ratio will
    * become the real ratio on the next read.  Otherwise, we'll continue using
    * our old ratio for a bit longer. */
-  if (GetCursorAvail() == 0) {
-    return m_fSpeedRatio * RageSoundReader_Filter::GetStreamToSourceRatio();
-  } else {
-    return m_fTrailingSpeedRatio *
-           RageSoundReader_Filter::GetStreamToSourceRatio();
+  const float fLocalRatio =
+      GetCursorAvail() == 0 ? m_fSpeedRatio : m_fTrailingSpeedRatio;
+  const float fSourceRatio = RageSoundReader_Filter::GetStreamToSourceRatio();
+  const float fRatio = fLocalRatio * fSourceRatio;
+  return std::isfinite(fRatio) && fRatio > 0.0f ? fRatio : 1.0f;
+}
+
+bool RageSoundReader_SpeedChange::NextReadWillStep() const {
+  std::lock_guard<std::mutex> lock(m_StateMutex);
+  return GetCursorAvail() == 0;
+}
+
+float RageSoundReader_SpeedChange::GetRatio() const {
+  std::lock_guard<std::mutex> lock(m_StateMutex);
+  return m_fSpeedRatio;
+}
+
+std::string RageSoundReader_SpeedChange::GetError() const {
+  {
+    std::lock_guard<std::mutex> lock(m_ErrorMutex);
+    if (!m_sError.empty()) {
+      return m_sError;
+    }
   }
+  return RageSoundReader_Filter::GetError();
+}
+
+bool RageSoundReader_SpeedChange::IsTopologyUsableLocked() const {
+  if (m_pSource.isNull() || m_Channels.empty() ||
+      m_Channels.size() > MAX_SPEED_CHANGE_CHANNELS ||
+      m_pSource->GetSampleRate() <= 0 ||
+      m_pSource->GetNumChannels() != m_Channels.size()) {
+    return false;
+  }
+  return true;
+}
+
+void RageSoundReader_SpeedChange::ClearError() const {
+  std::lock_guard<std::mutex> lock(m_ErrorMutex);
+  m_sError.clear();
+}
+
+void RageSoundReader_SpeedChange::SetError(const std::string& sError) const {
+  std::lock_guard<std::mutex> lock(m_ErrorMutex);
+  m_sError = sError;
 }
 
 /*

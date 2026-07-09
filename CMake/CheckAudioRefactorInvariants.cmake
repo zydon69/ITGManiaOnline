@@ -61,6 +61,10 @@ read_source(
 read_source(
   "src/RageSoundReader_PitchChange.cpp" rage_sound_reader_pitch_change_cpp)
 read_source(
+  "src/RageSoundReader_SpeedChange.h" rage_sound_reader_speed_change_h)
+read_source(
+  "src/RageSoundReader_SpeedChange.cpp" rage_sound_reader_speed_change_cpp)
+read_source(
   "src/RageSoundReader_Resample_Good.h" rage_sound_reader_resample_good_h)
 read_source(
   "src/RageSoundReader_Resample_Good.cpp" rage_sound_reader_resample_good_cpp)
@@ -534,6 +538,46 @@ require_contains(
   "${rage_sound_cpp}"
   "const std::string setupError ="
   "RageSound::Load surfaces filter-chain setup errors immediately")
+require_contains(
+  "${rage_sound_reader_speed_change_h}"
+  "RageSoundReader_SpeedChange* Copy() const override;"
+  "SpeedChange copy contract is explicit and out-of-line")
+require_contains(
+  "${rage_sound_reader_speed_change_h}"
+  "std::string GetError() const override;"
+  "SpeedChange exposes filter-owned diagnostics")
+require_contains(
+  "${rage_sound_reader_speed_change_h}"
+  "mutable std::mutex m_StateMutex;"
+  "SpeedChange serializes ratio and buffer state")
+require_contains(
+  "${rage_sound_reader_speed_change_h}"
+  "const RageSoundReader_SpeedChange& rhs) = delete;"
+  "SpeedChange forbids unsafe implicit assignment")
+require_contains(
+  "${rage_sound_reader_speed_change_cpp}"
+  "MAX_SPEED_CHANGE_CHANNELS"
+  "SpeedChange enforces an explicit channel ceiling")
+require_contains(
+  "${rage_sound_reader_speed_change_cpp}"
+  "MAX_REASONABLE_SPEED_RATIO"
+  "SpeedChange rejects unbounded speed ratios")
+require_contains(
+  "${rage_sound_reader_speed_change_cpp}"
+  "catch (const std::bad_alloc&)"
+  "SpeedChange converts allocation failures into reader errors or nullptr")
+require_contains(
+  "${rage_sound_reader_speed_change_cpp}"
+  "SRC_AUDIT_FIX SRC-2848"
+  "SpeedChange records internal read/setup failures locally")
+require_contains(
+  "${rage_sound_reader_speed_change_cpp}"
+  "ClampInt64ToInt"
+  "SpeedChange clamps 64-bit position arithmetic before public int returns")
+require_not_contains(
+  "${rage_sound_reader_speed_change_h}"
+  "return new RageSoundReader_SpeedChange(*this);"
+  "SpeedChange must not return to inline throwing Copy")
 require_contains(
   "${rage_sound_reader_resample_good_h}"
   "bool SetRate(float fRatio);"
