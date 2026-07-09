@@ -44,6 +44,7 @@ read_source("src/GameSoundManager.cpp" game_sound_manager_cpp)
 read_source("src/AutoKeysounds.cpp" auto_keysounds_cpp)
 read_source("src/RageSoundManager.h" rage_sound_manager_h)
 read_source("src/RageSoundManager.cpp" rage_sound_manager_cpp)
+read_source("src/RageSoundReader_Extend.h" rage_sound_reader_extend_h)
 read_source("src/RageSoundReader_Extend.cpp" rage_sound_reader_extend_cpp)
 read_source("src/RageSoundReader_Filter.h" rage_sound_reader_filter_h)
 read_source(
@@ -308,6 +309,54 @@ require_not_contains(
   "${rage_sound_reader_extend_cpp}"
   "ASSERT_M(\n      pSource != nullptr"
   "RageSoundReader_Extend must not assert on null source readers")
+require_contains(
+  "${rage_sound_reader_extend_h}"
+  "RageSoundReader_Extend* Copy() const override;"
+  "RageSoundReader_Extend copy contract is explicit and out-of-line")
+require_contains(
+  "${rage_sound_reader_extend_h}"
+  "std::int64_t m_iPositionFrames"
+  "RageSoundReader_Extend stores playback frame position in 64-bit")
+require_contains(
+  "${rage_sound_reader_extend_h}"
+  "std::string GetError() const override;"
+  "RageSoundReader_Extend exposes local diagnostics")
+require_contains(
+  "${rage_sound_reader_extend_cpp}"
+  "SRC_AUDIT_FIX SRC-2890"
+  "RageSoundReader_Extend copy failures are diagnosable")
+require_contains(
+  "${rage_sound_reader_extend_cpp}"
+  "SRC_AUDIT_FIX SRC-2891"
+  "RageSoundReader_Extend seek failures are diagnosable")
+require_contains(
+  "${rage_sound_reader_extend_cpp}"
+  "SRC_AUDIT_FIX SRC-2892"
+  "RageSoundReader_Extend loop restart failures are diagnosable")
+require_contains(
+  "${rage_sound_reader_extend_cpp}"
+  "SRC_AUDIT_FIX SRC-2893"
+  "RageSoundReader_Extend frame arithmetic is guarded")
+require_contains(
+  "${rage_sound_reader_extend_cpp}"
+  "SRC_AUDIT_FIX SRC-2894"
+  "RageSoundReader_Extend internal failures are diagnosable")
+require_contains(
+  "${rage_sound_reader_extend_cpp}"
+  "SRC_AUDIT_FIX SRC-2896"
+  "RageSoundReader_Extend length reporting failures are diagnosable")
+require_contains(
+  "${rage_sound_reader_extend_cpp}"
+  "SRC_AUDIT_FIX SRC-2897"
+  "RageSoundReader_Extend source-frame tracking is guarded")
+require_contains(
+  "${rage_sound_reader_extend_cpp}"
+  "AdvanceFrameByRatio"
+  "RageSoundReader_Extend accounts for stream-to-source ratios")
+require_not_contains(
+  "${rage_sound_reader_extend_cpp}"
+  "SaturatingAddFrames"
+  "RageSoundReader_Extend must not silently saturate frame arithmetic")
 require_contains(
   "${rage_sound_reader_filter_h}"
   "int Read(float* pBuf, int iFrames) override"

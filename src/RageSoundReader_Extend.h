@@ -3,6 +3,7 @@
 #ifndef RAGE_SOUND_READER_EXTEND
 #define RAGE_SOUND_READER_EXTEND
 
+#include <cstdint>
 #include <string>
 
 #include "RageSoundReader.h"
@@ -11,29 +12,37 @@
 class RageSoundReader_Extend : public RageSoundReader_Filter {
  public:
   RageSoundReader_Extend(RageSoundReader* pSource);
-  virtual int SetPosition(int iFrame);
-  virtual int Read(float* pBuffer, int iFrames);
-  virtual int GetNextSourceFrame() const;
-  virtual bool SetProperty(const std::string& sProperty, float fValue);
+  RageSoundReader_Extend(const RageSoundReader_Extend& cpy) = delete;
+  RageSoundReader_Extend& operator=(const RageSoundReader_Extend& cpy) = delete;
+  ~RageSoundReader_Extend() override = default;
+  RageSoundReader_Extend* Copy() const override;
 
-  RageSoundReader_Extend* Copy() const {
-    return new RageSoundReader_Extend(*this);
-  }
-  ~RageSoundReader_Extend() {}
+  int GetLength() const override;
+  int GetLength_Fast() const override;
+  int SetPosition(int iFrame) override;
+  int Read(float* pBuffer, int iFrames) override;
+  int GetNextSourceFrame() const override;
+  bool SetProperty(const std::string& sProperty, float fValue) override;
+  std::string GetError() const override;
 
  private:
-  int GetEndFrame() const;
-  int GetData(float* pBuffer, int iFrames);
+  bool GetEndFrame(std::int64_t* pEndFrame) const;
+  int GetData(
+      float* pBuffer, int iFrames, bool* pAdvancedPosition,
+      std::int64_t* pBlockStartFrame);
+  void ClearError() const;
+  void SetError(const std::string& sError) const;
 
-  int m_iPositionFrames;
+  std::int64_t m_iPositionFrames = 0;
 
   enum StopMode { M_LOOP, M_STOP, M_CONTINUE };
-  StopMode m_StopMode;
-  int m_iStartFrames;
-  int m_iLengthFrames;
-  int m_iFadeInFrames;
-  int m_iFadeOutFrames;
-  bool m_bIgnoreFadeInFrames;
+  StopMode m_StopMode = M_STOP;
+  std::int64_t m_iStartFrames = 0;
+  std::int64_t m_iLengthFrames = -1;
+  std::int64_t m_iFadeInFrames = 0;
+  std::int64_t m_iFadeOutFrames = 0;
+  bool m_bIgnoreFadeInFrames = false;
+  mutable std::string m_sError;
 };
 
 #endif
