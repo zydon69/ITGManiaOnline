@@ -3,6 +3,7 @@
 #ifndef RAGE_SOUND_READER_RESAMPLE_GOOD_H
 #define RAGE_SOUND_READER_RESAMPLE_GOOD_H
 
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -26,6 +27,7 @@ class RageSoundReader_Resample_Good : public RageSoundReader_Filter {
   RageSoundReader_Resample_Good* Copy() const override;
   bool SetProperty(const std::string& sProperty, float fValue) override;
   int GetNextSourceFrame() const override;
+  std::int64_t GetNextSourceFrame64() const override;
   float GetStreamToSourceRatio() const override;
   std::string GetError() const override;
 

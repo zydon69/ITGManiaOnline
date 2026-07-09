@@ -606,7 +606,7 @@ int RageSound::GetDataToPlay(
 
   while (iFrames > 0) {
     float fRate = 1.0f;
-    int iSourceFrame = 0;
+    int64_t iSourceFrame = 0;
 
     /* Read data from our source. */
     int iGotFrames = source->RetriedRead(
@@ -615,6 +615,9 @@ int RageSound::GetDataToPlay(
 
     if (iGotFrames == RageSoundReader::ERROR) {
       m_sError = source->GetError();
+      if (m_sError.empty()) {
+        m_sError = source->GetBaseError();
+      }
       // This error probably indicates an I/O error, rather than a decoding
       // error.
       if (LOG != nullptr) {
@@ -1021,41 +1024,77 @@ bool RageSound::ApplyParamsLocked() {
   m_Param = params;
 
   bool ok = true;
-  const bool pitchApplied = m_pSource->SetProperty("Pitch", params.m_fPitch);
-  const bool speedApplied = m_pSource->SetProperty("Speed", params.m_fSpeed);
-  ok = (pitchApplied || params.m_fPitch == 1.0f) && ok;
-  ok = (speedApplied || params.m_fSpeed == 1.0f) && ok;
-  ok = m_pSource->SetProperty("StartSecond", params.m_StartSecond) && ok;
-  ok = m_pSource->SetProperty("LengthSeconds", params.m_LengthSeconds) && ok;
-  ok = m_pSource->SetProperty("FadeInSeconds", params.m_fFadeInSeconds) && ok;
-  ok = m_pSource->SetProperty("FadeSeconds", params.m_fFadeOutSeconds) && ok;
+  std::string failedProperties;
+  const auto appendFailure =
+      [&failedProperties](
+          const std::string& property,
+          const RageSoundReader::PropertySetResult& result) {
+        if (!failedProperties.empty()) {
+          failedProperties += ", ";
+        }
+        failedProperties += property;
+        failedProperties += "=";
+        failedProperties += RageSoundReader::PropertySetStatusToString(
+            result.status);
+      };
+  const auto applyRequired =
+      [this, &appendFailure](const std::string& property, float value) {
+        const RageSoundReader::PropertySetResult result =
+            m_pSource->TrySetProperty(property, value);
+        if (!result.Applied()) {
+          appendFailure(property, result);
+          return false;
+        }
+        return true;
+      };
+  const auto applyOptionalDefault =
+      [this, &appendFailure](
+          const std::string& property, float value, float defaultValue) {
+        const RageSoundReader::PropertySetResult result =
+            m_pSource->TrySetProperty(property, value);
+        if (result.Applied() || value == defaultValue) {
+          return true;
+        }
+        appendFailure(property, result);
+        return false;
+      };
+
+  ok = applyOptionalDefault("Pitch", params.m_fPitch, 1.0f) && ok;
+  ok = applyOptionalDefault("Speed", params.m_fSpeed, 1.0f) && ok;
+  ok = applyRequired("StartSecond", params.m_StartSecond) && ok;
+  ok = applyRequired("LengthSeconds", params.m_LengthSeconds) && ok;
+  ok = applyRequired("FadeInSeconds", params.m_fFadeInSeconds) && ok;
+  ok = applyRequired("FadeSeconds", params.m_fFadeOutSeconds) && ok;
 
   float fVolume = params.m_Volume;
   if (!params.m_bIsCriticalSound) {
     fVolume *= params.m_fAttractVolume;
   }
   fVolume = ClampFinite(fVolume, 1.0f, 0.0f, kMaxSoundVolume);
-  ok = m_pSource->SetProperty("Volume", fVolume) && ok;
+  ok = applyRequired("Volume", fVolume) && ok;
 
   switch (GetStopModeLocked()) {
     case RageSoundParams::M_LOOP:
-      ok = m_pSource->SetProperty("Loop", 1.0f) && ok;
+      ok = applyRequired("Loop", 1.0f) && ok;
       break;
     case RageSoundParams::M_STOP:
-      ok = m_pSource->SetProperty("Stop", 1.0f) && ok;
+      ok = applyRequired("Stop", 1.0f) && ok;
       break;
     case RageSoundParams::M_CONTINUE:
-      ok = m_pSource->SetProperty("Continue", 1.0f) && ok;
+      ok = applyRequired("Continue", 1.0f) && ok;
       break;
     default:
       break;
   }
   if (!ok) {
-    m_sError = "Applying sound parameters failed";
+    m_sError = failedProperties.empty()
+                   ? "Applying sound parameters failed"
+                   : "Applying sound parameters failed: " + failedProperties;
     if (LOG != nullptr) {
       LOG->Warn(
-          "RageSound::ApplyParams: one or more properties failed for \"%s\"",
-          m_sFilePath.c_str());
+          "RageSound::ApplyParams: one or more properties failed for \"%s\" "
+          "(%s)",
+          m_sFilePath.c_str(), failedProperties.c_str());
     }
   }
   return ok;
@@ -1066,7 +1105,7 @@ bool RageSound::SetProperty(const std::string& sProperty, float fValue) {
   if (m_pSource == nullptr || !std::isfinite(fValue)) {
     return false;
   }
-  return m_pSource->SetProperty(sProperty, fValue);
+  return m_pSource->TrySetProperty(sProperty, fValue).Applied();
 }
 
 bool RageSound::SetPositionSeconds(float seconds) {

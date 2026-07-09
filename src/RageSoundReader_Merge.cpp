@@ -593,6 +593,10 @@ int RageSoundReader_Merge::GetNextSourceFrame() const {
   return ClampInt64ToInt(m_iNextSourceFrame);
 }
 
+std::int64_t RageSoundReader_Merge::GetNextSourceFrame64() const {
+  return m_iNextSourceFrame;
+}
+
 std::string RageSoundReader_Merge::GetError() const {
   if (!m_sError.empty()) {
     return m_sError;

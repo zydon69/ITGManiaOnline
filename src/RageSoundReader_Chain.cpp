@@ -578,6 +578,10 @@ int RageSoundReader_Chain::GetNextSourceFrame() const {
   */
 }
 
+std::int64_t RageSoundReader_Chain::GetNextSourceFrame64() const {
+  return m_iCurrentFrame;
+}
+
 float RageSoundReader_Chain::GetStreamToSourceRatio() const {
   if (m_apActiveSounds.empty()) {
     return 1.0f;

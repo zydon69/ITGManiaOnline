@@ -40,6 +40,15 @@ static int ClampInt64ToInt(std::int64_t value) {
   return static_cast<int>(value);
 }
 
+static bool AddInt64(std::int64_t lhs, std::int64_t rhs, std::int64_t* out) {
+  if ((rhs > 0 && lhs > std::numeric_limits<std::int64_t>::max() - rhs) ||
+      (rhs < 0 && lhs < std::numeric_limits<std::int64_t>::min() - rhs)) {
+    return false;
+  }
+  *out = lhs + rhs;
+  return true;
+}
+
 static bool AddNonNegativeInt(int lhs, int rhs, int* out) {
   if (lhs < 0 || rhs < 0 ||
       lhs > std::numeric_limits<int>::max() - rhs) {
@@ -618,24 +627,34 @@ bool RageSoundReader_SpeedChange::SetProperty(
 }
 
 int RageSoundReader_SpeedChange::GetNextSourceFrame() const {
+  return ClampSourceFrameToInt(GetNextSourceFrame64());
+}
+
+std::int64_t RageSoundReader_SpeedChange::GetNextSourceFrame64() const {
   std::lock_guard<std::mutex> lock(m_StateMutex);
   float fRatio = m_fTrailingSpeedRatio;
   if (!std::isfinite(fRatio)) {
     fRatio = 1.0f;
   }
 
-  const int iSourceFrame = RageSoundReader_Filter::GetNextSourceFrame();
+  const std::int64_t iSourceFrame = RageSoundReader_Filter::GetNextSourceFrame64();
   const double fPos = static_cast<double>(m_iPos) * fRatio + 0.5;
-  const int iPos =
+  const std::int64_t iPos =
       (!std::isfinite(fPos) ||
-       fPos > static_cast<double>(std::numeric_limits<int>::max()))
-          ? std::numeric_limits<int>::max()
-          : static_cast<int>(fPos);
+       fPos > static_cast<double>(std::numeric_limits<std::int64_t>::max()))
+          ? std::numeric_limits<std::int64_t>::max()
+          : static_cast<std::int64_t>(fPos);
 
-  const std::int64_t mappedFrame =
-      static_cast<std::int64_t>(iSourceFrame) - m_iDataBufferAvailFrames +
-      m_iUncorrelatedPos + iPos;
-  return ClampInt64ToInt(mappedFrame);
+  std::int64_t mappedFrame = 0;
+  if (!AddInt64(
+          iSourceFrame, -static_cast<std::int64_t>(m_iDataBufferAvailFrames),
+          &mappedFrame) ||
+      !AddInt64(mappedFrame, m_iUncorrelatedPos, &mappedFrame) ||
+      !AddInt64(mappedFrame, iPos, &mappedFrame)) {
+    return iSourceFrame < 0 ? std::numeric_limits<std::int64_t>::min()
+                            : std::numeric_limits<std::int64_t>::max();
+  }
+  return mappedFrame;
 }
 
 float RageSoundReader_SpeedChange::GetStreamToSourceRatio() const {

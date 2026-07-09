@@ -26,6 +26,7 @@ class RageSoundReader_ThreadedBuffer : public RageSoundReader_Filter {
   int SetPosition(int iFrame) override;
   int Read(float* pBuffer, int iLength) override;
   int GetNextSourceFrame() const override;
+  std::int64_t GetNextSourceFrame64() const override;
 
   int GetLength() const override;
   int GetLength_Fast() const override;

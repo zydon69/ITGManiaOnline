@@ -4,6 +4,7 @@
 #define RAGE_SOUND_READER_PRELOAD
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 #include "RageSoundReader.h"
@@ -22,6 +23,7 @@ class RageSoundReader_Preload : public RageSoundReader {
   int GetSampleRate() const override { return m_iSampleRate; }
   unsigned GetNumChannels() const override { return m_iChannels; }
   int GetNextSourceFrame() const override;
+  std::int64_t GetNextSourceFrame64() const override;
   float GetStreamToSourceRatio() const override { return m_fRate; }
   std::string GetError() const override { return m_sError; }
 

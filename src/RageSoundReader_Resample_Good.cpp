@@ -730,11 +730,15 @@ class RageSoundResampler_Polyphase {
 };
 
 int RageSoundReader_Resample_Good::GetNextSourceFrame() const {
+  return ClampSourceFrameToInt(GetNextSourceFrame64());
+}
+
+std::int64_t RageSoundReader_Resample_Good::GetNextSourceFrame64() const {
   std::lock_guard<std::mutex> lock(m_StateMutex);
   if (!IsUsableLocked()) {
     return 0;
   }
-  int64_t iPosition = m_pSource->GetNextSourceFrame();
+  int64_t iPosition = m_pSource->GetNextSourceFrame64();
   iPosition -= m_apResamplers[0]->GetFilled();
 
   const int iSourceSampleRate = m_pSource->GetSampleRate();
@@ -749,7 +753,7 @@ int RageSoundReader_Resample_Good::GetNextSourceFrame() const {
   }
   iPosition *= m_iSampleRate;
   iPosition /= iSourceSampleRate;
-  return ClampInt64ToInt(iPosition);
+  return iPosition;
 }
 
 bool RageSoundReader_Resample_Good::SetProperty(

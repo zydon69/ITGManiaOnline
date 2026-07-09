@@ -490,6 +490,10 @@ int RageSoundReader_Extend::GetNextSourceFrame() const {
   return ClampInt64ToInt(m_iPositionFrames);
 }
 
+std::int64_t RageSoundReader_Extend::GetNextSourceFrame64() const {
+  return m_iPositionFrames;
+}
+
 bool RageSoundReader_Extend::SetProperty(
     const std::string& sProperty, float fValue) {
   if (sProperty == "StartSecond") {

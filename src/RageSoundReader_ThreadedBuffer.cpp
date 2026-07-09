@@ -339,6 +339,14 @@ int RageSoundReader_ThreadedBuffer::GetNextSourceFrame() const {
   return iRet;
 }
 
+std::int64_t RageSoundReader_ThreadedBuffer::GetNextSourceFrame64() const {
+  m_Event.Lock();
+  const std::int64_t iRet =
+      m_StreamPosition.empty() ? 0 : m_StreamPosition.front().iPositionOfFirstFrame;
+  m_Event.Unlock();
+  return iRet;
+}
+
 float RageSoundReader_ThreadedBuffer::GetStreamToSourceRatio() const {
   m_Event.Lock();
   float fRet = m_StreamPosition.empty() ? 1.0f : m_StreamPosition.front().fRate;
@@ -484,7 +492,7 @@ int RageSoundReader_ThreadedBuffer::FillBlock() {
   }
 
   int iGotFrames;
-  int iNextSourceFrame = 0;
+  std::int64_t iNextSourceFrame = 0;
   float fRate = 0;
 
   m_Event.Unlock();

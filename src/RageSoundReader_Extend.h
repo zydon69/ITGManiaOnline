@@ -22,6 +22,7 @@ class RageSoundReader_Extend : public RageSoundReader_Filter {
   int SetPosition(int iFrame) override;
   int Read(float* pBuffer, int iFrames) override;
   int GetNextSourceFrame() const override;
+  std::int64_t GetNextSourceFrame64() const override;
   bool SetProperty(const std::string& sProperty, float fValue) override;
   std::string GetError() const override;
 

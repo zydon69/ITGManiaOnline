@@ -45,6 +45,9 @@ class RageSoundReader_Filter : public RageSoundReader {
   int GetNextSourceFrame() const override {
     return m_pSource.isNull() ? 0 : m_pSource->GetNextSourceFrame();
   }
+  std::int64_t GetNextSourceFrame64() const override {
+    return m_pSource.isNull() ? 0 : m_pSource->GetNextSourceFrame64();
+  }
   float GetStreamToSourceRatio() const override {
     return m_pSource.isNull() ? 1.0f : m_pSource->GetStreamToSourceRatio();
   }

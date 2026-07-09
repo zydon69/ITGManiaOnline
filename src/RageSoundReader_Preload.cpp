@@ -257,6 +257,10 @@ int RageSoundReader_Preload::SetPosition(int iFrame) {
 }
 
 int RageSoundReader_Preload::GetNextSourceFrame() const {
+  return ClampSourceFrameToInt(GetNextSourceFrame64());
+}
+
+std::int64_t RageSoundReader_Preload::GetNextSourceFrame64() const {
   if (!std::isfinite(m_fRate) || m_fRate <= 0.0f) {
     return 0;
   }
@@ -265,10 +269,10 @@ int RageSoundReader_Preload::GetNextSourceFrame() const {
   if (!std::isfinite(sourceFrame) || sourceFrame <= 0.0) {
     return 0;
   }
-  if (sourceFrame > static_cast<double>(std::numeric_limits<int>::max())) {
-    return std::numeric_limits<int>::max();
+  if (sourceFrame > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+    return std::numeric_limits<std::int64_t>::max();
   }
-  return static_cast<int>(sourceFrame);
+  return static_cast<std::int64_t>(sourceFrame);
 }
 
 int RageSoundReader_Preload::Read(float* pBuffer, int iFrames) {
