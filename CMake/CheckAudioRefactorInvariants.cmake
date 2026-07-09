@@ -55,6 +55,8 @@ read_source("src/RageSoundReader_WAV.h" rage_sound_reader_wav_h)
 read_source("src/RageSoundReader_WAV.cpp" rage_sound_reader_wav_cpp)
 read_source("src/RageSoundReader_Vorbisfile.h" rage_sound_reader_vorbis_h)
 read_source("src/RageSoundReader_Vorbisfile.cpp" rage_sound_reader_vorbis_cpp)
+read_source("src/RageSoundReader_MP3.h" rage_sound_reader_mp3_h)
+read_source("src/RageSoundReader_MP3.cpp" rage_sound_reader_mp3_cpp)
 read_source("src/RageSoundReader_ChannelSplit.h" rage_sound_reader_channel_split_h)
 read_source("src/RageSoundReader_ChannelSplit.cpp" rage_sound_reader_channel_split_cpp)
 read_source("src/RageSoundMixBuffer.h" rage_sound_mix_buffer_h)
@@ -375,6 +377,58 @@ require_contains(
   "${rage_sound_reader_vorbis_cpp}"
   "GetSourcePath().c_str()"
   "RageSoundReader_Vorbisfile reports source paths in decoder diagnostics")
+require_contains(
+  "${rage_sound_reader_mp3_h}"
+  "RageSoundReader_MP3(const RageSoundReader_MP3&) = delete;"
+  "RageSoundReader_MP3 forbids unsafe implicit copying")
+require_contains(
+  "${rage_sound_reader_mp3_h}"
+  "RageSoundReader_MP3* Copy() const override;"
+  "RageSoundReader_MP3 copy contract is explicit")
+require_contains(
+  "${rage_sound_reader_mp3_cpp}"
+  "void RageSoundReader_MP3::Close()"
+  "RageSoundReader_MP3 has a real close/reset implementation")
+require_contains(
+  "${rage_sound_reader_mp3_cpp}"
+  "RageSoundReader_FileReader::OpenResult RageSoundReader_MP3::FailOpen"
+  "RageSoundReader_MP3 cleans up partially-open decoders on failure")
+require_contains(
+  "${rage_sound_reader_mp3_cpp}"
+  "ret->Open(pFile) != OPEN_OK"
+  "RageSoundReader_MP3 Copy reparses copied files instead of cloning stale partial metadata")
+require_contains(
+  "${rage_sound_reader_mp3_cpp}"
+  "if (m_pFile->Seek(0) == -1)"
+  "RageSoundReader_MP3 verifies file rewind before resetting decoder state")
+require_contains(
+  "${rage_sound_reader_mp3_cpp}"
+  "SRC_AUDIT_FIX SRC-2810"
+  "RageSoundReader_MP3 diagnoses invalid MAD stream buffer pointers")
+require_contains(
+  "${rage_sound_reader_mp3_cpp}"
+  "bytes_read = std::max(0, bytes_read - tagsize);"
+  "RageSoundReader_MP3 keeps ID3 skip accounting non-negative")
+require_contains(
+  "${rage_sound_reader_mp3_cpp}"
+  "std::int64_t inbuf_filepos;"
+  "RageSoundReader_MP3 keeps file buffer positions in 64-bit form")
+require_contains(
+  "${rage_sound_reader_mp3_cpp}"
+  "clamp_milliseconds_to_int"
+  "RageSoundReader_MP3 clamps internal MP3 duration arithmetic before public int returns")
+require_contains(
+  "${rage_sound_reader_mp3_cpp}"
+  "SRC_AUDIT_FIX SRC-2812"
+  "RageSoundReader_MP3 diagnoses seek estimate overflow")
+require_contains(
+  "${rage_sound_reader_mp3_cpp}"
+  "SRC_AUDIT_FIX SRC-2815"
+  "RageSoundReader_MP3 bounds fixed synth output buffer writes")
+require_contains(
+  "${rage_sound_reader_mp3_cpp}"
+  "SRC_AUDIT_FIX SRC-2816"
+  "RageSoundReader_MP3 avoids stale errno diagnostics for seek failures")
 require_contains(
   "${rage_sound_reader_pan_h}"
   "RageSoundReader_Pan* Copy() const override"

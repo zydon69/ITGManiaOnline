@@ -3,7 +3,8 @@
 #include "RageSoundReader_MP3.h"
 
 #include <algorithm>
-#include <cerrno>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -211,17 +212,17 @@ struct madlib_t {
     }
   };
 
-  typedef std::map<mad_timer_t, int, mad_timer_compare_lt> tocmap_t;
+  typedef std::map<mad_timer_t, std::int64_t, mad_timer_compare_lt> tocmap_t;
   tocmap_t tocmap;
 
   /* Position in the file of inbuf: */
-  int inbuf_filepos;
+  std::int64_t inbuf_filepos;
 
   /* File size. */
-  int filesize;
+  std::int64_t filesize;
 
   /* Number of bytes of header data at the beginning; used for seeking. */
-  int header_bytes;
+  std::int64_t header_bytes;
 
   /* Whether we've decoded the first frame of real audio yet.  If this
    * is false, we're somewhere before the first frame; we might be in
@@ -247,11 +248,63 @@ static float scale(mad_fixed_t sample) {
   return float(double(sample) / (1 << MAD_F_FRACBITS));
 }
 
-static int get_this_frame_byte(const madlib_t* mad) {
-  int ret = mad->inbuf_filepos;
+static int clamp_to_public_frame(std::int64_t frame) {
+  if (frame <= 0) {
+    return 0;
+  }
+  if (frame > std::numeric_limits<int>::max()) {
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(frame);
+}
+
+static int clamp_milliseconds_to_int(double milliseconds) {
+  if (!std::isfinite(milliseconds) || milliseconds <= 0.0) {
+    return 0;
+  }
+  if (milliseconds >= std::numeric_limits<int>::max()) {
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(milliseconds);
+}
+
+static bool pointer_within_mad_buffer(
+    const madlib_t* mad, const unsigned char* pointer, bool allowEnd = true) {
+  if (pointer == nullptr) {
+    return false;
+  }
+  const auto begin = reinterpret_cast<std::uintptr_t>(mad->inbuf);
+  const auto end = begin + sizeof(mad->inbuf);
+  const auto value = reinterpret_cast<std::uintptr_t>(pointer);
+  return allowEnd ? (value >= begin && value <= end)
+                  : (value >= begin && value < end);
+}
+
+static bool mad_stream_buffer_range_is_valid(const madlib_t* mad) {
+  if (mad->Stream.bufend == nullptr) {
+    return mad->Stream.next_frame == nullptr &&
+           mad->Stream.this_frame == nullptr;
+  }
+  if (!pointer_within_mad_buffer(mad, mad->Stream.bufend)) {
+    return false;
+  }
+  if (mad->Stream.next_frame != nullptr &&
+      !pointer_within_mad_buffer(mad, mad->Stream.next_frame)) {
+    return false;
+  }
+  if (mad->Stream.this_frame != nullptr &&
+      !pointer_within_mad_buffer(mad, mad->Stream.this_frame)) {
+    return false;
+  }
+  return true;
+}
+
+static std::int64_t get_this_frame_byte(const madlib_t* mad) {
+  std::int64_t ret = mad->inbuf_filepos;
 
   /* If we have a frame, adjust. */
-  if (mad->Stream.this_frame != nullptr) {
+  if (mad->Stream.this_frame != nullptr &&
+      pointer_within_mad_buffer(mad, mad->Stream.this_frame)) {
     ret += mad->Stream.this_frame - mad->inbuf;
   }
 
@@ -292,14 +345,21 @@ bool RageSoundReader_MP3::handle_first_frame() {
     /* XXX: does this include the Xing header itself? */
     if (mad->xingtag.frames > 0) {
       mad_timer_multiply(&tm, mad->xingtag.frames);
-      mad->length = mad_timer_count(tm, MAD_UNITS_MILLISECONDS);
+      mad->length = clamp_milliseconds_to_int(
+          static_cast<double>(mad_timer_count(tm, MAD_UNITS_MILLISECONDS)));
     }
 
     /* XXX: an id3v2 footer tag would throw this off a little. This also assumes
      * the Xing tag is the last header; it always is, I think. */
-    int bytes = mad->filesize - mad->header_bytes;
+    std::int64_t bytes = mad->filesize - mad->header_bytes;
     if (bytes > 0 && mad->length > 0) {
-      mad->bitrate = (int)(bytes * 8 / (mad->length / 1000.f));
+      const double bitrate =
+          static_cast<double>(bytes) * 8.0 / (mad->length / 1000.0);
+      if (std::isfinite(bitrate) && bitrate > 0.0) {
+        mad->bitrate = bitrate >= std::numeric_limits<int>::max()
+                           ? std::numeric_limits<int>::max()
+                           : static_cast<int>(bitrate);
+      }
     }
 
     if (mad->xingtag.type == xing::XING) {
@@ -320,16 +380,31 @@ int RageSoundReader_MP3::fill_buffer() {
   /* Need more data. */
   int inbytes = 0;
   if (mad->Stream.next_frame != nullptr) {
+    if (!mad_stream_buffer_range_is_valid(mad) ||
+        reinterpret_cast<std::uintptr_t>(mad->Stream.next_frame) >
+            reinterpret_cast<std::uintptr_t>(mad->Stream.bufend)) {
+      SetError("SRC_AUDIT_FIX SRC-2810: invalid MP3 stream buffer pointers");
+      return -1;
+    }
+
     /* Pull out remaining data from the last buffer. */
-    inbytes = mad->Stream.bufend - mad->Stream.next_frame;
+    const auto remaining = mad->Stream.bufend - mad->Stream.next_frame;
+    if (remaining < 0 ||
+        remaining >
+            static_cast<ptrdiff_t>(sizeof(mad->inbuf) - MAD_BUFFER_GUARD)) {
+      SetError("SRC_AUDIT_FIX SRC-2810: invalid MP3 buffer carry length");
+      return -1;
+    }
+    inbytes = static_cast<int>(remaining);
     memmove(mad->inbuf, mad->Stream.next_frame, inbytes);
     mad->inbuf_filepos += mad->Stream.next_frame - mad->inbuf;
   }
 
   const bool bWasAtEOF = m_pFile->AtEOF();
 
-  int rc = m_pFile->Read(
-      mad->inbuf + inbytes, sizeof(mad->inbuf) - inbytes - MAD_BUFFER_GUARD);
+  const size_t bytesToRead = sizeof(mad->inbuf) -
+                             static_cast<size_t>(inbytes) - MAD_BUFFER_GUARD;
+  int rc = m_pFile->Read(mad->inbuf + inbytes, bytesToRead);
   if (rc < 0) {
     SetError(m_pFile->GetError());
     return -1;
@@ -352,7 +427,7 @@ int RageSoundReader_MP3::fill_buffer() {
 }
 
 void fill_frame_index_cache(madlib_t* mad) {
-  int pos;
+  std::int64_t pos;
 
   /* Only update the frame cache if our timer is consistent. */
   if (!mad->timer_accurate) {
@@ -411,15 +486,27 @@ int RageSoundReader_MP3::do_mad_frame_decode(bool headers_only) {
     }
 
     if (ret == -1 && mad->Stream.error == MAD_ERROR_LOSTSYNC) {
+      if (!mad_stream_buffer_range_is_valid(mad) ||
+          mad->Stream.this_frame == nullptr ||
+          reinterpret_cast<std::uintptr_t>(mad->Stream.this_frame) >
+              reinterpret_cast<std::uintptr_t>(mad->Stream.bufend)) {
+        SetError("SRC_AUDIT_FIX SRC-2810: invalid MP3 sync buffer pointers");
+        return -1;
+      }
+
       /* This might be an ID3V2 tag. */
+      const auto availableBytes =
+          mad->Stream.bufend - mad->Stream.this_frame;
       const int tagsize = id3_tag_query(
-          mad->Stream.this_frame, mad->Stream.bufend - mad->Stream.this_frame);
+          mad->Stream.this_frame, static_cast<id3_length_t>(availableBytes));
 
       if (tagsize) {
         mad_stream_skip(&mad->Stream, tagsize);
 
         /* Don't count the tagsize against the max-read-per-call figure. */
-        bytes_read -= tagsize;
+        if (tagsize > 0) {
+          bytes_read = std::max(0, bytes_read - tagsize);
+        }
 
         continue;
       }
@@ -481,7 +568,7 @@ int RageSoundReader_MP3::do_mad_frame_decode(bool headers_only) {
   }
 }
 
-void RageSoundReader_MP3::synth_output() {
+bool RageSoundReader_MP3::synth_output() {
   mad->outleft = mad->outpos = 0;
 
   if (MAD_NCHANNELS(&mad->Frame.header) != this->Channels) {
@@ -489,10 +576,22 @@ void RageSoundReader_MP3::synth_output() {
      * I've never actually seen this--it's just to prevent exploding if
      * it happens--and we could continue on easily enough, so if it happens,
      * just continue. */
-    return;
+    return true;
   }
 
   mad_synth_frame(&mad->Synth, &mad->Frame);
+  if (this->Channels <= 0) {
+    SetError("SRC_AUDIT_FIX SRC-2815: MP3 synth output has invalid channels");
+    mad->outleft = mad->outpos = 0;
+    return false;
+  }
+  const size_t outputSamples =
+      static_cast<size_t>(mad->Synth.pcm.length) * this->Channels;
+  if (outputSamples > sizeof(mad->outbuf) / sizeof(mad->outbuf[0])) {
+    SetError("SRC_AUDIT_FIX SRC-2815: MP3 synth output exceeded buffer");
+    mad->outleft = mad->outpos = 0;
+    return false;
+  }
   for (int i = 0; i < mad->Synth.pcm.length; i++) {
     for (int chan = 0; chan < this->Channels; ++chan) {
       float Sample = scale(mad->Synth.pcm.samples[chan][i]);
@@ -500,21 +599,29 @@ void RageSoundReader_MP3::synth_output() {
       ++mad->outleft;
     }
   }
+  return true;
 }
 
 /* Seek to a byte in the file.  If you're going to put the file position
  * back when you're done, and not going to read any data, you don't have
  * to use this. */
-int RageSoundReader_MP3::seek_stream_to_byte(int byte) {
+int RageSoundReader_MP3::seek_stream_to_byte(std::int64_t byte) {
   if (m_pFile.isNull()) {
     SetError("No file handle");
     return 0;
   }
-  byte = std::max(0, byte);
-  if (m_pFile->Seek(byte) == -1) {
-    SetError(strerror(errno));
+  byte = std::clamp<std::int64_t>(byte, 0, mad->filesize);
+  const int seekByte = static_cast<int>(byte);
+  const int seekResult = m_pFile->Seek(seekByte);
+  if (seekResult == -1) {
+    std::string error = m_pFile->GetError();
+    if (error.empty()) {
+      error = "SRC_AUDIT_FIX SRC-2816: MP3 seek failed without file error";
+    }
+    SetError(error);
     return 0;
   }
+  byte = seekResult;
 
   mad_frame_mute(&mad->Frame);
   mad_synth_mute(&mad->Synth);
@@ -556,6 +663,7 @@ RageSoundReader_MP3::RageSoundReader_MP3() {
 }
 
 RageSoundReader_MP3::~RageSoundReader_MP3() {
+  Close();
   mad_synth_finish(&mad->Synth);
   mad_frame_finish(&mad->Frame);
   mad_stream_finish(&mad->Stream);
@@ -563,8 +671,49 @@ RageSoundReader_MP3::~RageSoundReader_MP3() {
   delete mad;
 }
 
+void RageSoundReader_MP3::ResetDecoderState() {
+  mad_frame_mute(&mad->Frame);
+  mad_synth_mute(&mad->Synth);
+  mad_timer_reset(&mad->Timer);
+
+  mad_stream_finish(&mad->Stream);
+  mad_stream_init(&mad->Stream);
+  mad_stream_buffer(&mad->Stream, nullptr, 0);
+
+  mad->tocmap.clear();
+  mad->outpos = 0;
+  mad->outleft = 0;
+  mad->inbuf_filepos = 0;
+  mad->filesize = 0;
+  mad->header_bytes = 0;
+  mad->first_frame = true;
+  mad->has_xing = false;
+  memset(&mad->xingtag, 0, sizeof(mad->xingtag));
+  mad->length = -1;
+  mad->framelength = mad_timer_zero;
+  mad->bitrate = -1;
+  mad->timer_accurate = 1;
+
+  SampleRate = 0;
+  Channels = 0;
+  m_pFile = nullptr;
+}
+
+void RageSoundReader_MP3::Close() {
+  ResetDecoderState();
+  SetError("");
+}
+
+RageSoundReader_FileReader::OpenResult RageSoundReader_MP3::FailOpen(
+    OpenResult result, const std::string& error) {
+  ResetDecoderState();
+  SetError(error);
+  return result;
+}
+
 RageSoundReader_FileReader::OpenResult RageSoundReader_MP3::Open(
     RageFileBasic* pFile) {
+  Close();
   if (pFile == nullptr) {
     SetError("No file handle");
     return OPEN_FATAL_ERROR;
@@ -573,8 +722,7 @@ RageSoundReader_FileReader::OpenResult RageSoundReader_MP3::Open(
 
   mad->filesize = m_pFile->GetFileSize();
   if (mad->filesize <= 0) {
-    SetError("Unknown or empty MP3 file size");
-    return OPEN_FATAL_ERROR;
+    return FailOpen(OPEN_FATAL_ERROR, "Unknown or empty MP3 file size");
   }
 
   /* Make sure we can decode at least one frame.  This will also fill in header
@@ -584,11 +732,9 @@ RageSoundReader_FileReader::OpenResult RageSoundReader_MP3::Open(
   int ret = do_mad_frame_decode();
   switch (ret) {
     case 0:
-      SetError("Failed to read any data at all");
-      return OPEN_UNKNOWN_FILE_FORMAT;
+      return FailOpen(OPEN_UNKNOWN_FILE_FORMAT, "Failed to read any data at all");
     case -1:
-      SetError(GetError() + " (not an MP3 stream?)");
-      return OPEN_UNKNOWN_FILE_FORMAT;
+      return FailOpen(OPEN_UNKNOWN_FILE_FORMAT, GetError() + " (not an MP3 stream?)");
   }
 
   /* Store the bitrate of the frame we just got. */
@@ -601,23 +747,27 @@ RageSoundReader_FileReader::OpenResult RageSoundReader_MP3::Open(
   this->Channels = MAD_NCHANNELS(&mad->Frame.header);
   if (SampleRate <= 0 || this->Channels <= 0 || this->Channels > 2 ||
       mad->bitrate <= 0) {
-    SetError("Invalid MP3 frame metadata");
-    return OPEN_FATAL_ERROR;
+    return FailOpen(OPEN_FATAL_ERROR, "Invalid MP3 frame metadata");
   }
 
   /* Since we've already decoded a frame, just synth it instead of rewinding
    * the stream. */
-  synth_output();
+  if (!synth_output()) {
+    return FailOpen(OPEN_FATAL_ERROR, GetError());
+  }
 
   if (mad->length == -1) {
     /* If vbr and !xing, this is just an estimate. */
     int bps = mad->bitrate / 8;
     if (bps <= 0 || mad->filesize <= mad->header_bytes) {
-      SetError("Invalid MP3 bitrate or file size");
-      return OPEN_FATAL_ERROR;
+      return FailOpen(OPEN_FATAL_ERROR, "Invalid MP3 bitrate or file size");
     }
-    float secs = (float)(mad->filesize - mad->header_bytes) / bps;
-    mad->length = (int)(secs * 1000.f);
+    const double secs =
+        static_cast<double>(mad->filesize - mad->header_bytes) / bps;
+    mad->length = clamp_milliseconds_to_int(secs * 1000.0);
+    if (mad->length <= 0) {
+      return FailOpen(OPEN_FATAL_ERROR, "Invalid MP3 length estimate");
+    }
   }
 
   return OPEN_OK;
@@ -627,25 +777,29 @@ RageSoundReader_MP3* RageSoundReader_MP3::Copy() const {
   if (m_pFile.isNull()) {
     return nullptr;
   }
-  RageSoundReader_MP3* ret = new RageSoundReader_MP3;
+  RageFileBasic* pFile = m_pFile->Copy();
+  if (pFile == nullptr) {
+    return nullptr;
+  }
+  if (pFile->Seek(0) == -1) {
+    delete pFile;
+    return nullptr;
+  }
 
-  ret->m_pFile = m_pFile->Copy();
-  if (ret->m_pFile.isNull()) {
+  RageSoundReader_MP3* ret = nullptr;
+  try {
+    ret = new RageSoundReader_MP3;
+  } catch (const std::bad_alloc&) {
+    delete pFile;
+    return nullptr;
+  }
+
+  ret->m_bAccurateSync = m_bAccurateSync;
+  ret->SetDebugSourcePath(GetSourcePath());
+  if (ret->Open(pFile) != OPEN_OK) {
     delete ret;
     return nullptr;
   }
-  ret->m_pFile->Seek(0);
-  ret->m_bAccurateSync = m_bAccurateSync;
-  ret->mad->filesize = mad->filesize;
-  ret->mad->bitrate = mad->bitrate;
-  ret->SampleRate = SampleRate;
-  ret->mad->framelength = mad->framelength;
-  ret->Channels = Channels;
-  ret->mad->length = mad->length;
-
-  //	int n = ret->do_mad_frame_decode();
-  //	ASSERT( n > 0 );
-  //	ret->synth_output();
 
   return ret;
 }
@@ -694,7 +848,9 @@ int RageSoundReader_MP3::Read(float* buf, int iFrames) {
       return ERROR;
     }
 
-    synth_output();
+    if (!synth_output()) {
+      return ERROR;
+    }
   }
 
   return iFramesWritten;
@@ -705,7 +861,10 @@ bool RageSoundReader_MP3::MADLIB_rewind() {
     SetError("No file handle");
     return false;
   }
-  m_pFile->Seek(0);
+  if (m_pFile->Seek(0) == -1) {
+    SetError(m_pFile->GetError());
+    return false;
+  }
 
   mad_frame_mute(&mad->Frame);
   mad_synth_mute(&mad->Synth);
@@ -783,7 +942,9 @@ int RageSoundReader_MP3::SetPosition_hard(int iFrame) {
 
     if (mad_timer_compare(desired, next_frame_timer) < 0) {
       if (!synthed) {
-        synth_output();
+        if (!synth_output()) {
+          return ERROR;
+        }
       } else {
         mad->outleft += mad->outpos;
         mad->outpos = 0;
@@ -819,7 +980,9 @@ int RageSoundReader_MP3::SetPosition_hard(int iFrame) {
     mad_timer_add(&next_next_frame_timer, mad->framelength);
 
     if (mad_timer_compare(desired, next_next_frame_timer) < 0 && !synthed) {
-      synth_output();
+      if (!synth_output()) {
+        return ERROR;
+      }
       synthed = true;
     }
 
@@ -858,7 +1021,15 @@ int RageSoundReader_MP3::SetPosition_estimate(int iFrame) {
   if (bytesPerMs <= 0) {
     return SetPosition_hard(iFrame);
   }
-  int seekpos = mad_timer_count(seekamt, MAD_UNITS_MILLISECONDS) * bytesPerMs;
+  const std::int64_t seekMs =
+      mad_timer_count(seekamt, MAD_UNITS_MILLISECONDS);
+  if (seekMs < 0 ||
+      seekMs > (std::numeric_limits<std::int64_t>::max() - mad->header_bytes) /
+                   bytesPerMs) {
+    SetError("SRC_AUDIT_FIX SRC-2812: MP3 seek estimate overflowed");
+    return ERROR;
+  }
+  std::int64_t seekpos = seekMs * bytesPerMs;
   seekpos += mad->header_bytes;
   if (!seek_stream_to_byte(seekpos)) {
     return -1;
@@ -874,12 +1045,18 @@ int RageSoundReader_MP3::SetPosition_estimate(int iFrame) {
   }
 
   /* Throw out one synth. */
-  synth_output();
+  if (!synth_output()) {
+    return ERROR;
+  }
   mad->outleft = 0;
 
   /* Find out where we really seeked to. */
-  int ms = (get_this_frame_byte(mad) - mad->header_bytes) / bytesPerMs;
-  mad_timer_set(&mad->Timer, 0, ms, 1000);
+  const std::int64_t frameByte = get_this_frame_byte(mad);
+  std::int64_t ms = 0;
+  if (frameByte > mad->header_bytes) {
+    ms = (frameByte - mad->header_bytes) / bytesPerMs;
+  }
+  mad_timer_set(&mad->Timer, 0, clamp_to_public_frame(ms), 1000);
 
   return 1;
 }
@@ -922,10 +1099,10 @@ int RageSoundReader_MP3::GetNextSourceFrame() const {
   if (this->Channels <= 0 || mad->Frame.header.samplerate <= 0) {
     return 0;
   }
-  int iFrame =
+  std::int64_t iFrame =
       mad_timer_count(mad->Timer, mad_units(mad->Frame.header.samplerate));
   iFrame += mad->outpos / this->Channels;
-  return iFrame;
+  return clamp_to_public_frame(iFrame);
 }
 
 int RageSoundReader_MP3::GetLengthInternal(bool fast) {
@@ -974,7 +1151,8 @@ int RageSoundReader_MP3::GetLengthInternal(bool fast) {
   mad_timer_add(&end, mad->framelength);
 
   /* Count milliseconds. */
-  return mad_timer_count(end, MAD_UNITS_MILLISECONDS);
+  return clamp_milliseconds_to_int(
+      static_cast<double>(mad_timer_count(end, MAD_UNITS_MILLISECONDS)));
 }
 
 int RageSoundReader_MP3::GetLengthConst(bool fast) const {
