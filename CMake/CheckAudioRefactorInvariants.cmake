@@ -85,6 +85,8 @@ read_source("src/RageSoundReader_ChannelSplit.h" rage_sound_reader_channel_split
 read_source("src/RageSoundReader_ChannelSplit.cpp" rage_sound_reader_channel_split_cpp)
 read_source("src/RageSoundMixBuffer.h" rage_sound_mix_buffer_h)
 read_source("src/RageSoundMixBuffer.cpp" rage_sound_mix_buffer_cpp)
+read_source("src/RageSoundUtil.h" rage_sound_util_h)
+read_source("src/RageSoundUtil.cpp" rage_sound_util_cpp)
 read_source("src/RageSoundReader_Chain.h" rage_sound_reader_chain_h)
 read_source("src/RageSoundReader_Chain.cpp" rage_sound_reader_chain_cpp)
 read_source("src/RageSoundReader_Merge.h" rage_sound_reader_merge_h)
@@ -1028,6 +1030,46 @@ require_contains(
   "${rage_sound_driver_generic_cpp}"
   "RageSoundDriver::MixIntoBuffer: mix buffer write failed"
   "Software sound driver handles mix write failures")
+require_contains(
+  "${rage_sound_util_h}"
+  "bool Attenuate(float* pBuf, size_t iSamples, float fVolume);"
+  "RageSoundUtil attenuation exposes an explicit operation status")
+require_contains(
+  "${rage_sound_util_h}"
+  "bool Pan(float* pBuffer, size_t iFrames, unsigned iChannels, float fPos);"
+  "RageSoundUtil pan contract requires explicit channels")
+require_contains(
+  "${rage_sound_util_h}"
+  "bool ConvertMonoToStereoInPlace("
+  "RageSoundUtil mono to stereo conversion exposes an operation status")
+require_contains(
+  "${rage_sound_util_h}"
+  "size_t iOutputSamplesCapacity"
+  "RageSoundUtil mono to stereo conversion requires output capacity")
+require_contains(
+  "${rage_sound_util_cpp}"
+  "SRC_AUDIT_FIX %s RageSoundUtil::%s refused invalid input"
+  "RageSoundUtil invalid inputs are review-traced")
+require_contains(
+  "${rage_sound_util_cpp}"
+  "sanitized %zu non-finite samples"
+  "RageSoundUtil sample sanitation is review-traced")
+require_contains(
+  "${rage_sound_util_cpp}"
+  "sample <= -1.0f ? -32768L"
+  "RageSoundUtil PCM16 conversion preserves the full negative range")
+require_contains(
+  "${rage_sound_util_cpp}"
+  "static_cast<float>(iFrames - 1)"
+  "RageSoundUtil fades reach the requested end volume on the last frame")
+require_not_contains(
+  "${rage_sound_util_h}"
+  "void Attenuate("
+  "RageSoundUtil helpers must not silently discard operation status")
+require_not_contains(
+  "${rage_sound_util_h}"
+  "};  // namespace RageSoundUtil"
+  "RageSoundUtil namespace terminator uses normal namespace style")
 
 require_contains(
   "${rage_sound_manager_h}"

@@ -588,6 +588,7 @@ int RageSound::GetDataToPlay(
   iFramesStored = 0;
   LockMut(m_Mutex);
   iStreamFrame = m_iStreamFrame;
+  const int iRequestedFrames = iFrames;
   if (!IsPlaying() || !m_bLoadSucceeded || m_pSource == nullptr ||
       pBuffer == nullptr || iFrames <= 0) {
     return RageSoundReader::END_OF_FILE;
@@ -642,7 +643,17 @@ int RageSound::GetDataToPlay(
     iFrames -= iGotFrames;
   }
   if (channels == 1) {
-    RageSoundUtil::ConvertMonoToStereoInPlace(pBuffer, iFramesStored);
+    const size_t stereoCapacity =
+        static_cast<size_t>(iRequestedFrames) * static_cast<size_t>(2);
+    if (!RageSoundUtil::ConvertMonoToStereoInPlace(
+            pBuffer, static_cast<size_t>(iFramesStored), stereoCapacity)) {
+      m_sError =
+          "SRC_AUDIT_FIX SRC-2907: mono to stereo expansion failed during mix";
+      if (LOG != nullptr) {
+        LOG->Warn("%s", m_sError.c_str());
+      }
+      return RageSoundReader::ERROR;
+    }
   }
 
   return iFramesStored;

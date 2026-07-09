@@ -33,6 +33,7 @@ int RageSoundReader_Pan::Read(float* pBuf, int iFrames) {
   }
   m_sError.clear();
 
+  const int iRequestedFrames = iFrames;
   iFrames = m_pSource->Read(pBuf, iFrames);
   if (iFrames < 0) {
     return iFrames;
@@ -48,15 +49,25 @@ int RageSoundReader_Pan::Read(float* pBuf, int iFrames) {
     SetError("RageSoundReader_Pan sample count overflow");
     return RageSoundReader::ERROR;
   }
-  int iSamples = iFrames * sourceChannels;
 
   if (sourceChannels == 1) {
-    RageSoundUtil::ConvertMonoToStereoInPlace(pBuf, iSamples);
+    const size_t stereoCapacity =
+        static_cast<size_t>(iRequestedFrames) * GetNumChannels();
+    if (!RageSoundUtil::ConvertMonoToStereoInPlace(
+            pBuf, static_cast<size_t>(iFrames), stereoCapacity)) {
+      SetError("SRC_AUDIT_FIX SRC-2907: pan reader mono to stereo expansion "
+               "failed");
+      return RageSoundReader::ERROR;
+    }
   }
 
   /* This block goes from iStreamFrame to iStreamFrame+iGotFrames. */
   if (GetNumChannels() == 2 && m_fPan != 0.0) {
-    RageSoundUtil::Pan(pBuf, iFrames, m_fPan);
+    if (!RageSoundUtil::Pan(
+            pBuf, static_cast<size_t>(iFrames), GetNumChannels(), m_fPan)) {
+      SetError("SRC_AUDIT_FIX SRC-2908: pan reader refused non-stereo pan");
+      return RageSoundReader::ERROR;
+    }
   }
 
   return iFrames;

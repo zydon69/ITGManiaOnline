@@ -422,9 +422,12 @@ int RageSoundReader_Extend::Read(float* pBuffer, int iFrames) {
           iBlockStartFrame, 0, m_iFadeInFrames, 0.0f, 1.0f);
       const float fEndVolume =
           SCALE(iBlockEndFrame, 0, m_iFadeInFrames, 0.0f, 1.0f);
-      RageSoundUtil::Fade(
-          pBuffer, iFramesRead, this->GetNumChannels(), fStartVolume,
-          fEndVolume);
+      if (!RageSoundUtil::Fade(
+              pBuffer, static_cast<size_t>(iFramesRead),
+              this->GetNumChannels(), fStartVolume, fEndVolume)) {
+        SetError("SRC_AUDIT_FIX SRC-2909: extend fade-in failed");
+        return RageSoundReader::ERROR;
+      }
     }
 
     /* We want to fade when there's m_iFadeFrames frames left, but if
@@ -451,9 +454,12 @@ int RageSoundReader_Extend::Read(float* pBuffer, int iFrames) {
       const float fEndVolume = SCALE(
           iBlockEndFrame, iFullVolumePositionFrames, iSilencePositionFrames,
           1.0f, 0.0f);
-      RageSoundUtil::Fade(
-          pBuffer, iFramesRead, this->GetNumChannels(), fStartVolume,
-          fEndVolume);
+      if (!RageSoundUtil::Fade(
+              pBuffer, static_cast<size_t>(iFramesRead),
+              this->GetNumChannels(), fStartVolume, fEndVolume)) {
+        SetError("SRC_AUDIT_FIX SRC-2909: extend fade-out failed");
+        return RageSoundReader::ERROR;
+      }
     }
 
     if (!bAdvancedPosition &&

@@ -104,14 +104,17 @@ int RageSoundReader_PostBuffering::Read(float* pBuf, int iFrames) {
     const unsigned channels = this->GetNumChannels();
     if (channels == 0 ||
         static_cast<size_t>(iFrames) >
-            static_cast<size_t>(std::numeric_limits<int>::max()) / channels) {
+            std::numeric_limits<size_t>::max() /
+                static_cast<size_t>(channels)) {
       SetError(
           "SRC_AUDIT_FIX SRC-2821: PostBuffering sample count overflow");
       return RageSoundReader::ERROR;
     }
-    const int iSamples =
-        static_cast<int>(static_cast<size_t>(iFrames) * channels);
-    RageSoundUtil::Attenuate(pBuf, iSamples, fVolume);
+    const size_t iSamples = static_cast<size_t>(iFrames) * channels;
+    if (!RageSoundUtil::Attenuate(pBuf, iSamples, fVolume)) {
+      SetError("SRC_AUDIT_FIX SRC-2913: PostBuffering attenuation failed");
+      return RageSoundReader::ERROR;
+    }
   }
 
   return iFrames;

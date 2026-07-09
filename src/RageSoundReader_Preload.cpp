@@ -181,8 +181,12 @@ bool RageSoundReader_Preload::Open(RageSoundReader* pSource) {
     try {
       if (m_bBufferIs16Bit) {
         int16_t buffer16[1024];
-        RageSoundUtil::ConvertFloatToNativeInt16(
-            buffer, buffer16, static_cast<int>(chunkSamples));
+        if (!RageSoundUtil::ConvertFloatToNativeInt16(
+                buffer, buffer16, chunkSamples)) {
+          return SetError(
+              "SRC_AUDIT_FIX SRC-2913: preload float to PCM16 conversion "
+              "failed");
+        }
         m_Buffer.Get()->append(
             reinterpret_cast<const char*>(buffer16),
             reinterpret_cast<const char*>(buffer16 + chunkSamples));
@@ -315,8 +319,11 @@ int RageSoundReader_Preload::Read(float* pBuffer, int iFrames) {
   if (m_bBufferIs16Bit) {
     const int16_t* pIn =
         reinterpret_cast<const int16_t*>(m_Buffer->data() + byteOffset);
-    RageSoundUtil::ConvertNativeInt16ToFloat(
-        pIn, pBuffer, static_cast<int>(samples));
+    if (!RageSoundUtil::ConvertNativeInt16ToFloat(pIn, pBuffer, samples)) {
+      SetError("SRC_AUDIT_FIX SRC-2913: preload PCM16 to float conversion "
+               "failed");
+      return ERROR;
+    }
   } else {
     memcpy(pBuffer, m_Buffer->data() + byteOffset, byteCount);
   }
