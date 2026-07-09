@@ -1,14 +1,16 @@
 #include "RageSoundReader_PostBuffering.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <limits>
+#include <mutex>
+#include <new>
 #include <string>
 
 #include "RageSoundReader.h"
 #include "RageSoundReader_Filter.h"
 #include "RageSoundUtil.h"
-#include "RageThreads.h"
 #include "global.h"
 
 /*
@@ -16,57 +18,99 @@
  * properties that do not seek the sound, allowing these properties to be
  * changed with low latency.
  */
-RageMutex g_Mutex("PostBuffering");
-static float g_fMasterVolume = 1.0f;
+namespace {
+std::atomic<float> g_fMasterVolume{1.0f};
+
+float SanitizeVolume(float fVolume) {
+  if (!std::isfinite(fVolume)) {
+    return 1.0f;
+  }
+  return std::clamp(fVolume, 0.0f, 1.0f);
+}
+}
 
 RageSoundReader_PostBuffering::RageSoundReader_PostBuffering(
-    RageSoundReader* pSource)
-    : RageSoundReader_Filter(pSource) {
-  m_fVolume = 1.0f;
+    RageSoundReader* pSource) : RageSoundReader_Filter(pSource) {
 }
 
 void RageSoundReader_PostBuffering::SetMasterVolume(float fVolume) {
-  if (!std::isfinite(fVolume)) {
-    fVolume = 1.0f;
+  g_fMasterVolume.store(SanitizeVolume(fVolume), std::memory_order_relaxed);
+}
+
+RageSoundReader_PostBuffering* RageSoundReader_PostBuffering::Copy() const {
+  if (m_pSource.isNull()) {
+    return nullptr;
   }
-  LockMut(g_Mutex);
-  g_fMasterVolume = std::clamp(fVolume, 0.0f, 1.0f);
+
+  RageSoundReader* pSourceCopy = nullptr;
+  try {
+    pSourceCopy = m_pSource->Copy();
+  } catch (const std::bad_alloc&) {
+    return nullptr;
+  }
+  if (pSourceCopy == nullptr) {
+    return nullptr;
+  }
+
+  RageSoundReader_PostBuffering* pCopy = nullptr;
+  try {
+    pCopy = new RageSoundReader_PostBuffering(pSourceCopy);
+  } catch (const std::bad_alloc&) {
+    delete pSourceCopy;
+    return nullptr;
+  }
+
+  pCopy->m_fVolume.store(
+      m_fVolume.load(std::memory_order_relaxed), std::memory_order_relaxed);
+  return pCopy;
 }
 
 int RageSoundReader_PostBuffering::Read(float* pBuf, int iFrames) {
   if (iFrames == 0) {
+    ClearError();
     return 0;
   }
-  if (pBuf == nullptr || iFrames < 0 || m_pSource.isNull()) {
+  if (pBuf == nullptr) {
+    SetError("RageSoundReader_PostBuffering::Read called with a null buffer");
     return RageSoundReader::ERROR;
   }
+  if (iFrames < 0) {
+    SetError(
+        "RageSoundReader_PostBuffering::Read called with a negative frame count");
+    return RageSoundReader::ERROR;
+  }
+  if (m_pSource.isNull()) {
+    SetError("RageSoundReader_PostBuffering::Read has no source reader");
+    return RageSoundReader::ERROR;
+  }
+  ClearError();
+
   iFrames = m_pSource->Read(pBuf, iFrames);
   if (iFrames < 0) {
     return iFrames;
   }
 
   // Combine the sound's volume with master volume.
-  g_Mutex.Lock();
-
   // Square the master so lower volumes are more sensitive.
   // This lines up better with perceived volume.
-  float fVolume = m_fVolume * g_fMasterVolume * g_fMasterVolume;
-  if (!std::isfinite(fVolume)) {
-    fVolume = 1.0f;
-  }
-  fVolume = std::clamp(fVolume, 0.0f, 1.0f);
-  g_Mutex.Unlock();
+  const float fMasterVolume =
+      g_fMasterVolume.load(std::memory_order_relaxed);
+  float fVolume =
+      m_fVolume.load(std::memory_order_relaxed) * fMasterVolume * fMasterVolume;
+  fVolume = SanitizeVolume(fVolume);
 
   if (fVolume != 1.0f) {
     const unsigned channels = this->GetNumChannels();
     if (channels == 0 ||
         static_cast<size_t>(iFrames) >
-            std::numeric_limits<size_t>::max() / channels) {
+            static_cast<size_t>(std::numeric_limits<int>::max()) / channels) {
+      SetError(
+          "SRC_AUDIT_FIX SRC-2821: PostBuffering sample count overflow");
       return RageSoundReader::ERROR;
     }
-    RageSoundUtil::Attenuate(
-        pBuf, static_cast<int>(static_cast<size_t>(iFrames) * channels),
-        fVolume);
+    const int iSamples =
+        static_cast<int>(static_cast<size_t>(iFrames) * channels);
+    RageSoundUtil::Attenuate(pBuf, iSamples, fVolume);
   }
 
   return iFrames;
@@ -76,14 +120,35 @@ bool RageSoundReader_PostBuffering::SetProperty(
     const std::string& sProperty, float fValue) {
   if (sProperty == "Volume") {
     if (!std::isfinite(fValue)) {
+      SetError("RageSoundReader_PostBuffering rejected a non-finite volume");
       return false;
     }
-    LockMut(g_Mutex);
-    m_fVolume = std::clamp(fValue, 0.0f, 1.0f);
+    m_fVolume.store(SanitizeVolume(fValue), std::memory_order_relaxed);
+    ClearError();
     return true;
   }
 
   return RageSoundReader_Filter::SetProperty(sProperty, fValue);
+}
+
+std::string RageSoundReader_PostBuffering::GetError() const {
+  {
+    std::lock_guard<std::mutex> lock(m_ErrorMutex);
+    if (!m_sError.empty()) {
+      return m_sError;
+    }
+  }
+  return RageSoundReader_Filter::GetError();
+}
+
+void RageSoundReader_PostBuffering::ClearError() const {
+  std::lock_guard<std::mutex> lock(m_ErrorMutex);
+  m_sError.clear();
+}
+
+void RageSoundReader_PostBuffering::SetError(const std::string& sError) const {
+  std::lock_guard<std::mutex> lock(m_ErrorMutex);
+  m_sError = sError;
 }
 
 /*

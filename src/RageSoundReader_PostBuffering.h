@@ -3,6 +3,8 @@
 #ifndef RAGE_SOUND_READER_POST_BUFFERING_H
 #define RAGE_SOUND_READER_POST_BUFFERING_H
 
+#include <atomic>
+#include <mutex>
 #include <string>
 
 #include "RageSoundReader.h"
@@ -11,15 +13,22 @@
 class RageSoundReader_PostBuffering : public RageSoundReader_Filter {
  public:
   RageSoundReader_PostBuffering(RageSoundReader* pSource);
-  RageSoundReader_PostBuffering* Copy() const {
-    return new RageSoundReader_PostBuffering(*this);
-  }
+  RageSoundReader_PostBuffering(const RageSoundReader_PostBuffering&) = delete;
+  RageSoundReader_PostBuffering& operator=(
+      const RageSoundReader_PostBuffering&) = delete;
+  RageSoundReader_PostBuffering* Copy() const override;
   static void SetMasterVolume(float fVolume);
-  virtual int Read(float* pBuf, int iFrames);
-  virtual bool SetProperty(const std::string& sProperty, float fValue);
+  int Read(float* pBuf, int iFrames) override;
+  bool SetProperty(const std::string& sProperty, float fValue) override;
+  std::string GetError() const override;
 
  private:
-  float m_fVolume;
+  void ClearError() const;
+  void SetError(const std::string& sError) const;
+
+  std::atomic<float> m_fVolume{1.0f};
+  mutable std::mutex m_ErrorMutex;
+  mutable std::string m_sError;
 };
 
 #endif

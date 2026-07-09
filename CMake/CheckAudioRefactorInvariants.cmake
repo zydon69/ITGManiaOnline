@@ -45,6 +45,11 @@ read_source("src/AutoKeysounds.cpp" auto_keysounds_cpp)
 read_source("src/RageSoundManager.h" rage_sound_manager_h)
 read_source("src/RageSoundManager.cpp" rage_sound_manager_cpp)
 read_source("src/RageSoundReader_Extend.cpp" rage_sound_reader_extend_cpp)
+read_source("src/RageSoundReader_Filter.h" rage_sound_reader_filter_h)
+read_source(
+  "src/RageSoundReader_PostBuffering.h" rage_sound_reader_post_buffering_h)
+read_source(
+  "src/RageSoundReader_PostBuffering.cpp" rage_sound_reader_post_buffering_cpp)
 read_source("src/RageSoundReader_FileReader.h" rage_sound_reader_file_reader_h)
 read_source("src/RageSoundReader_FileReader.cpp" rage_sound_reader_file_reader_cpp)
 read_source("src/RageSoundReader_Preload.h" rage_sound_reader_preload_h)
@@ -285,6 +290,46 @@ require_not_contains(
   "${rage_sound_reader_extend_cpp}"
   "ASSERT_M(\n      pSource != nullptr"
   "RageSoundReader_Extend must not assert on null source readers")
+require_contains(
+  "${rage_sound_reader_filter_h}"
+  "int Read(float* pBuf, int iFrames) override"
+  "RageSoundReader_Filter base forwarding contract is explicit")
+require_contains(
+  "${rage_sound_reader_filter_h}"
+  "std::string GetError() const override"
+  "RageSoundReader_Filter error forwarding contract is explicit")
+require_contains(
+  "${rage_sound_reader_post_buffering_h}"
+  "RageSoundReader_PostBuffering* Copy() const override;"
+  "PostBuffering copy contract is explicit and out-of-line")
+require_contains(
+  "${rage_sound_reader_post_buffering_h}"
+  "std::atomic<float> m_fVolume{1.0f};"
+  "PostBuffering instance volume is atomic for audio-thread reads")
+require_contains(
+  "${rage_sound_reader_post_buffering_cpp}"
+  "std::atomic<float> g_fMasterVolume{1.0f};"
+  "PostBuffering master volume is atomic for audio-thread reads")
+require_contains(
+  "${rage_sound_reader_post_buffering_cpp}"
+  "RageSoundReader_PostBuffering::Copy() const"
+  "PostBuffering copy is implemented out-of-line")
+require_contains(
+  "${rage_sound_reader_post_buffering_cpp}"
+  "catch (const std::bad_alloc&)"
+  "PostBuffering converts copy allocation failures into nullptr")
+require_contains(
+  "${rage_sound_reader_post_buffering_cpp}"
+  "SRC_AUDIT_FIX SRC-2821"
+  "PostBuffering diagnoses sample-count overflow before int attenuation")
+require_contains(
+  "${rage_sound_reader_post_buffering_cpp}"
+  "RageSoundReader_PostBuffering::GetError() const"
+  "PostBuffering exposes filter-owned diagnostics")
+require_not_contains(
+  "${rage_sound_reader_post_buffering_cpp}"
+  "RageMutex g_Mutex(\"PostBuffering\")"
+  "PostBuffering must not serialize all audio reads on one global mutex")
 require_contains(
   "${rage_sound_reader_file_reader_h}"
   "std::string GetError() const override"

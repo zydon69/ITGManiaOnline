@@ -11,15 +11,17 @@ class RageSoundReader_Filter : public RageSoundReader {
  public:
   RageSoundReader_Filter(RageSoundReader* pSource) : m_pSource(pSource) {}
 
-  virtual int GetLength() const { return m_pSource.isNull() ? 0 : m_pSource->GetLength(); }
-  virtual int GetLength_Fast() const {
+  int GetLength() const override {
+    return m_pSource.isNull() ? 0 : m_pSource->GetLength();
+  }
+  int GetLength_Fast() const override {
     return m_pSource.isNull() ? 0 : m_pSource->GetLength_Fast();
   }
-  virtual int SetPosition(int iFrame) {
+  int SetPosition(int iFrame) override {
     return m_pSource.isNull() ? RageSoundReader::ERROR
                               : m_pSource->SetPosition(iFrame);
   }
-  virtual int Read(float* pBuf, int iFrames) {
+  int Read(float* pBuf, int iFrames) override {
     if (iFrames == 0) {
       return 0;
     }
@@ -28,36 +30,36 @@ class RageSoundReader_Filter : public RageSoundReader {
     }
     return m_pSource->Read(pBuf, iFrames);
   }
-  virtual int GetSampleRate() const {
+  int GetSampleRate() const override {
     return m_pSource.isNull() ? 0 : m_pSource->GetSampleRate();
   }
-  virtual unsigned GetNumChannels() const {
+  unsigned GetNumChannels() const override {
     return m_pSource.isNull() ? 0 : m_pSource->GetNumChannels();
   }
-  virtual bool SetProperty(const std::string& sProperty, float fValue) {
+  bool SetProperty(const std::string& sProperty, float fValue) override {
     if (m_pSource.isNull()) {
       return false;
     }
     return m_pSource->SetProperty(sProperty, fValue);
   }
-  virtual int GetNextSourceFrame() const {
+  int GetNextSourceFrame() const override {
     return m_pSource.isNull() ? 0 : m_pSource->GetNextSourceFrame();
   }
-  virtual float GetStreamToSourceRatio() const {
+  float GetStreamToSourceRatio() const override {
     return m_pSource.isNull() ? 1.0f : m_pSource->GetStreamToSourceRatio();
   }
-  virtual RageSoundReader* GetSource() {
+  RageSoundReader* GetSource() override {
     return m_pSource.isNull() ? nullptr : &*m_pSource;
   }
-  virtual std::string GetSourcePath() const {
+  std::string GetSourcePath() const override {
     return m_pSource.isNull() ? std::string() : m_pSource->GetSourcePath();
   }
-  virtual void SetDebugSourcePath(const std::string& sPath) {
+  void SetDebugSourcePath(const std::string& sPath) override {
     if (!m_pSource.isNull()) {
       m_pSource->SetDebugSourcePath(sPath);
     }
   }
-  virtual std::string GetError() const {
+  std::string GetError() const override {
     return m_pSource.isNull() ? "No sound source" : m_pSource->GetError();
   }
 
