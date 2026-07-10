@@ -2552,6 +2552,7 @@ CreateOnlineHandler = function()
 					self.invitePlayerBusy = false
 					self.joinPlayerBusy = false
 					self.privateJoinAnswerBusy = false
+					self.roomInvitationAnswerBusy = false
 					self.searchLobbyBusy = false
 					self.leaveLobbyBusy = false
 				end,
@@ -2559,6 +2560,21 @@ CreateOnlineHandler = function()
 	        if self.connecting then
 						if online_trace then online_trace("FLOW connect_online_skipped reason=already_connecting") end
 						return
+					end
+					local resumedAfterShutdown = onlineHandlerShuttingDown == true
+					onlineHandlerShuttingDown = false
+					if resumedAfterShutdown then
+						self.joinLobbyBusy = false
+						self.createLobbyBusy = false
+						self.startRoomBusy = false
+						self.invitePlayerBusy = false
+						self.joinPlayerBusy = false
+						self.privateJoinAnswerBusy = false
+						self.roomInvitationAnswerBusy = false
+						self.searchLobbyBusy = false
+						self.leaveLobbyBusy = false
+						online_flow_trace("connect_online_resume_after_shutdown restarting_connection_timers=true busy_flags_cleared=true")
+						start_connection_timers(self)
 					end
 					if online_trace then
 						online_trace("FLOW connect_online_begin connected=" .. tostring(self.connected == true)
@@ -3026,6 +3042,16 @@ CreateOnlineHandler = function()
 					if screenName == "ScreenOnlineLobbies" then
 						isWaiting = false
 						UnlockOnlineInput()
+						if pendingConfigReady and ITGOnline and ITGOnline.RememberPendingConfigReadyIntent then
+							local intentRemembered = ITGOnline:RememberPendingConfigReadyIntent("options_export_completed") == true
+							online_flow_trace("options_confirmed lobby_resume persistent_intent=" .. tostring(intentRemembered)
+								.. " key=" .. tostring(pendingConfigReady))
+							if intentRemembered then
+								-- ScreenPlayerOptions has finished SaveSelections at this point, so
+								-- GAMESTATE now contains the chart that may safely be sent.
+								schedule_named_timer(self, "ConfigReadyRetryTimer", 0.05, "Fire")
+							end
+						end
 						if not room_runtime_should_run() then
 							stop_room_timers(self, "screen_online_lobbies_no_fast_runtime")
 						end
@@ -3701,7 +3727,8 @@ CreateOnlineHandler = function()
 						local joinToken = begin_actor_operation(self, "join_lobby")
 		          ITGOnline:RequestJoinRoom(params.code, function(ok, decoded, response)
 								if not actor_operation_is_current(self, "join_lobby", joinToken) then
-									online_flow_trace("join_lobby_callback_ignored reason=stale_operation")
+									self.joinLobbyBusy = false
+									online_flow_trace("join_lobby_callback_ignored reason=stale_operation busy_cleared=true")
 									return
 								end
 								self.joinLobbyBusy = false
@@ -3777,7 +3804,8 @@ CreateOnlineHandler = function()
 						local createToken = begin_actor_operation(self, "create_lobby")
 		          ITGOnline:CreateRoom(function(ok, decoded, response)
 								if not actor_operation_is_current(self, "create_lobby", createToken) then
-									online_flow_trace("create_lobby_callback_ignored reason=stale_operation")
+									self.createLobbyBusy = false
+									online_flow_trace("create_lobby_callback_ignored reason=stale_operation busy_cleared=true")
 									return
 								end
 								self.createLobbyBusy = false
@@ -3858,7 +3886,8 @@ CreateOnlineHandler = function()
 							end
 							ITGOnline:StartRoom(function(ok, decoded, response)
 								if not actor_operation_is_current(self, "start_room", startToken) then
-									online_flow_trace("start_room_callback_ignored reason=stale_operation")
+									self.startRoomBusy = false
+									online_flow_trace("start_room_callback_ignored reason=stale_operation busy_cleared=true")
 									return
 								end
 								self.startRoomBusy = false
@@ -3922,9 +3951,10 @@ CreateOnlineHandler = function()
 						self.inLobby = false
 						local visibility = params.visibility or "private"
 						local inviteToken = begin_actor_operation(self, "invite_player")
-	          ITGOnline:InviteUserToNewRoom(params.user_id, visibility, function(ok, decoded, response)
+		          ITGOnline:InviteUserToNewRoom(params.user_id, visibility, function(ok, decoded, response)
 							if not actor_operation_is_current(self, "invite_player", inviteToken) then
-								online_flow_trace("invite_online_player_callback_ignored reason=stale_operation")
+								self.invitePlayerBusy = false
+								online_flow_trace("invite_online_player_callback_ignored reason=stale_operation busy_cleared=true")
 								return
 							end
 							self.invitePlayerBusy = false
@@ -3975,9 +4005,10 @@ CreateOnlineHandler = function()
 						self.joinPlayerBusy = true
 						self.inLobby = false
 						local joinPlayerToken = begin_actor_operation(self, "join_player_room")
-	          ITGOnline:RequestJoinUserRoom(params.user_id, function(ok, decoded, response)
+		          ITGOnline:RequestJoinUserRoom(params.user_id, function(ok, decoded, response)
 							if not actor_operation_is_current(self, "join_player_room", joinPlayerToken) then
-								online_flow_trace("join_online_player_room_callback_ignored reason=stale_operation")
+								self.joinPlayerBusy = false
+								online_flow_trace("join_online_player_room_callback_ignored reason=stale_operation busy_cleared=true")
 								return
 							end
 							self.joinPlayerBusy = false
@@ -4032,7 +4063,8 @@ CreateOnlineHandler = function()
 							if not ITGOnline.AcceptJoinRequest then self.privateJoinAnswerBusy = false return end
 							ITGOnline:AcceptJoinRequest(params.join_request_id, function(ok, decoded, response)
 								if not actor_operation_is_current(self, "private_join_answer", answerToken) then
-									online_flow_trace("answer_private_join_request_callback_ignored reason=stale_operation")
+									self.privateJoinAnswerBusy = false
+									online_flow_trace("answer_private_join_request_callback_ignored reason=stale_operation busy_cleared=true")
 									return
 								end
 								self.privateJoinAnswerBusy = false
@@ -4055,7 +4087,8 @@ CreateOnlineHandler = function()
 							if not ITGOnline.DeclineJoinRequest then self.privateJoinAnswerBusy = false return end
 							ITGOnline:DeclineJoinRequest(params.join_request_id, params.reason or "", function(ok, decoded, response)
 								if not actor_operation_is_current(self, "private_join_answer", answerToken) then
-									online_flow_trace("answer_private_join_request_callback_ignored reason=stale_operation")
+									self.privateJoinAnswerBusy = false
+									online_flow_trace("answer_private_join_request_callback_ignored reason=stale_operation busy_cleared=true")
 									return
 								end
 								self.privateJoinAnswerBusy = false
@@ -4096,7 +4129,8 @@ CreateOnlineHandler = function()
 							if not ITGOnline.AcceptInvitation then self.roomInvitationAnswerBusy = false return end
 							ITGOnline:AcceptInvitation(params.invitation_id, function(ok, decoded, response)
 								if not actor_operation_is_current(self, "room_invitation_answer", invitationToken) then
-									online_flow_trace("answer_room_invitation_callback_ignored reason=stale_operation")
+									self.roomInvitationAnswerBusy = false
+									online_flow_trace("answer_room_invitation_callback_ignored reason=stale_operation busy_cleared=true")
 									return
 								end
 								self.roomInvitationAnswerBusy = false
@@ -4120,7 +4154,8 @@ CreateOnlineHandler = function()
 							if not ITGOnline.DeclineInvitation then self.roomInvitationAnswerBusy = false return end
 							ITGOnline:DeclineInvitation(params.invitation_id, function(ok, decoded, response)
 								if not actor_operation_is_current(self, "room_invitation_answer", invitationToken) then
-									online_flow_trace("answer_room_invitation_callback_ignored reason=stale_operation")
+									self.roomInvitationAnswerBusy = false
+									online_flow_trace("answer_room_invitation_callback_ignored reason=stale_operation busy_cleared=true")
 									return
 								end
 								self.roomInvitationAnswerBusy = false
@@ -4170,7 +4205,8 @@ CreateOnlineHandler = function()
 						local searchToken = begin_actor_operation(self, "search_lobby")
 						ITGOnline:FetchLobby(function(ok, decoded, response)
 							if not actor_operation_is_current(self, "search_lobby", searchToken) then
-								online_flow_trace("search_lobby_callback_ignored reason=stale_operation")
+								self.searchLobbyBusy = false
+								online_flow_trace("search_lobby_callback_ignored reason=stale_operation busy_cleared=true")
 								return
 							end
 							self.searchLobbyBusy = false
@@ -4247,7 +4283,8 @@ CreateOnlineHandler = function()
 								local leaveToken = begin_actor_operation(self, "leave_lobby")
 								ITGOnline:LeaveRoom(function(ok, decoded, response)
 									if not actor_operation_is_current(self, "leave_lobby", leaveToken) then
-										online_flow_trace("leave_lobby_callback_ignored reason=stale_operation")
+										self.leaveLobbyBusy = false
+										online_flow_trace("leave_lobby_callback_ignored reason=stale_operation busy_cleared=true")
 										return
 									end
 									local alreadyLeftHandled = self.inLobby == false
