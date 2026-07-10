@@ -728,6 +728,30 @@ local function requestDeviceLoginStart(payload, onDone)
   }
 end
 
+local function getDeviceLoginShortCode(body)
+  if type(body) ~= "table" then return "" end
+
+  local candidates = {
+    body.shortCode,
+    body.userCode,
+    body.user_code,
+    body.deviceCode,
+    body.device_code,
+    body.code
+  }
+
+  for _, candidate in ipairs(candidates) do
+    if candidate ~= nil then
+      local value = tostring(candidate)
+      if value ~= "" then
+        return value
+      end
+    end
+  end
+
+  return ""
+end
+
 local function getMachineLabel()
   local configured = PREFSMAN and PREFSMAN:GetPreference("MachineName") or ""
   if configured and type(configured) == "string" and configured:gsub("%s+", "") ~= "" then
@@ -3035,7 +3059,7 @@ moduleRegistration["ScreenSelectMusic"] = Def.ActorFrame {
             side.sessionId = tostring(body.sessionId)
             side.pollToken = tostring(body.pollToken)
             side.verificationUrl = tostring(body.verificationUrl)
-            side.shortCode = body.shortCode and tostring(body.shortCode) or ""
+            side.shortCode = getDeviceLoginShortCode(body)
             side.pollIntervalSeconds = tonumber(body.pollIntervalSeconds) or 3
             side.expiresAt = tonumber(body.expiresAt)
             side.nextPollAt = GetTimeSinceStart() + 0.5
@@ -3185,7 +3209,10 @@ moduleRegistration["ScreenSelectMusic"] = Def.ActorFrame {
             status:zoom(0.54):diffuse(1, 1, 1, 1):settext((pn .. ": ") .. tostring(side.message or ""))
           end
         end
-        if code then code:settext(side.shortCode and ("Code: " .. side.shortCode) or "") end
+        if code then
+          local shortCode = tostring(side.shortCode or "")
+          code:settext(shortCode ~= "" and ("Code: " .. shortCode) or "")
+        end
         if url then
           url:settext("")
         end
