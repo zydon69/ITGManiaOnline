@@ -124,6 +124,20 @@ function PackSync:ShouldPreserveActiveDownloadDuringReset(reason)
 	end
 
 	reason = tostring(reason or "unknown")
+	local preserveBrowseOnly = self.activeBrowseOnlyDownload == true
+		and (
+			reason == "no_song_confirmed"
+			or reason == "online_lobby_state_clear_unconfirmed_preview"
+			or reason == "song_selection_cancelled"
+		)
+	if preserveBrowseOnly then
+		trace("Reset will preserve browse-only download reason=" .. tostring(reason)
+			.. " status=" .. tostring(self.currentStatus or "nil")
+			.. " key=" .. tostring(self.downloadInFlightKey or "")
+			.. " activeDownloadId=" .. tostring(self.activeDownloadId or ""))
+		return true
+	end
+
 	trace("Reset will cancel active download reason=" .. tostring(reason)
 		.. " status=" .. tostring(self.currentStatus or "nil")
 		.. " key=" .. tostring(self.downloadInFlightKey or "")
@@ -2593,6 +2607,10 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		activeDownloadId = self.activeDownloadId or "",
 	})
 	self.currentSongInfo = songInfo or self.currentSongInfo
+	-- Candidate downloads can be started after the choice overlay has cleared its
+	-- transient state. Persist the mode on PackSync before any room refresh can
+	-- decide whether a no-selection reset should cancel the transfer.
+	self.activeBrowseOnlyDownload = browseOnly
 	self:UpdateStatus(self.status.DownloadInProgress, downloadMessage, 0)
 	self.lastProgressStatusAt = 0
 	self.lastProgressValue = -10
