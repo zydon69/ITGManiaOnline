@@ -8,6 +8,7 @@
 #include "CommandLineActions.h"
 #include "DirectXHelpers.h"
 #include "DisplaySpec.h"
+#include "PerfDiagnostics.h"
 #include "PrefsManager.h"
 #include "ProductInfo.h"
 #include "RageDisplay.h"
@@ -39,6 +40,10 @@ static DEVMODE g_FullScreenDevMode;
 static bool g_bRecreatingVideoMode = false;
 
 static UINT g_iQueryCancelAutoPlayMessage = 0;
+
+static const char* DisplayNameForWin32(const std::string& displayId) {
+  return displayId.empty() ? nullptr : displayId.c_str();
+}
 
 static std::string GetNewWindow() {
   HWND h = GetForegroundWindow();
@@ -107,14 +112,16 @@ GraphicsWindow_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
          * because that's where most other apps seem to do it. */
         if (g_bHasFocus && !bHadFocus) {
           ChangeDisplaySettingsEx(
-              g_CurrentParams.sDisplayId.c_str(), &g_FullScreenDevMode, nullptr,
+              DisplayNameForWin32(g_CurrentParams.sDisplayId),
+              &g_FullScreenDevMode, nullptr,
               CDS_FULLSCREEN, nullptr);
           ShowWindow(g_hWndMain, SW_SHOWNORMAL);
           SetWindowPos(
               g_hWndMain, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
         } else if (!g_bHasFocus && bHadFocus) {
           ChangeDisplaySettingsEx(
-              g_CurrentParams.sDisplayId.c_str(), nullptr, nullptr, 0, nullptr);
+              DisplayNameForWin32(g_CurrentParams.sDisplayId), nullptr, nullptr,
+              0, nullptr);
         }
       }
 
@@ -218,14 +225,18 @@ static void AdjustVideoModeParams(VideoModeParams& p) {
   ZERO(dm);
   dm.dmSize = sizeof(dm);
   SetLastError(ERROR_SUCCESS);
-  if (!EnumDisplaySettings(p.sDisplayId.c_str(), ENUM_CURRENT_SETTINGS, &dm)) {
+  const char* displayName = DisplayNameForWin32(p.sDisplayId);
+  if (!EnumDisplaySettings(displayName, ENUM_CURRENT_SETTINGS, &dm)) {
     p.rate = 60;
     DWORD error = GetLastError();
+    LogReviewSrcDiagnostics(
+        "SRC_AUDIT_FIX SRC-2930: EnumDisplaySettings fallback display='%s' "
+        "primary=%s error=%lu",
+        p.sDisplayId.c_str(), displayName == nullptr ? "true" : "false",
+        static_cast<unsigned long>(error));
     if (error == ERROR_SUCCESS) {
-      LOG->Trace(
-          "EnumDisplaySettings returned no mode for display '%s'; "
-          "defaulting refresh rate to 60.",
-          p.sDisplayId.c_str());
+      // Some drivers return FALSE without setting an error. The 60 Hz
+      // fallback is intentional; review_src carries the diagnostic context.
     } else {
       LOG->Warn(
           "%s",
@@ -259,7 +270,8 @@ static void AdjustVideoModeParams(VideoModeParams& p) {
 std::string GraphicsWindow::SetScreenMode(const VideoModeParams& p) {
   if (p.windowed) {
     // We're going windowed. If we were previously fullscreen, reset.
-    ChangeDisplaySettingsEx(p.sDisplayId.c_str(), nullptr, nullptr, 0, nullptr);
+    ChangeDisplaySettingsEx(
+        DisplayNameForWin32(p.sDisplayId), nullptr, nullptr, 0, nullptr);
 
     return std::string();
   }
@@ -276,15 +288,18 @@ std::string GraphicsWindow::SetScreenMode(const VideoModeParams& p) {
     DevMode.dmDisplayFrequency = p.rate;
     DevMode.dmFields |= DM_DISPLAYFREQUENCY;
   }
-  ChangeDisplaySettingsEx(p.sDisplayId.c_str(), nullptr, nullptr, 0, nullptr);
+  ChangeDisplaySettingsEx(
+      DisplayNameForWin32(p.sDisplayId), nullptr, nullptr, 0, nullptr);
 
   int ret = ChangeDisplaySettingsEx(
-      p.sDisplayId.c_str(), &DevMode, nullptr, CDS_FULLSCREEN, nullptr);
+      DisplayNameForWin32(p.sDisplayId), &DevMode, nullptr, CDS_FULLSCREEN,
+      nullptr);
   if (ret != DISP_CHANGE_SUCCESSFUL &&
       (DevMode.dmFields & DM_DISPLAYFREQUENCY)) {
     DevMode.dmFields &= ~DM_DISPLAYFREQUENCY;
     ret = ChangeDisplaySettingsEx(
-        p.sDisplayId.c_str(), &DevMode, nullptr, CDS_FULLSCREEN, nullptr);
+        DisplayNameForWin32(p.sDisplayId), &DevMode, nullptr, CDS_FULLSCREEN,
+        nullptr);
   }
 
   // XXX: append error
@@ -337,7 +352,8 @@ void GraphicsWindow::CreateGraphicsWindow(
 
   // Look for the preferred display's position.
   if (EnumDisplaySettingsEx(
-          p.sDisplayId.c_str(), ENUM_CURRENT_SETTINGS, &devmode, 0) &&
+          DisplayNameForWin32(p.sDisplayId), ENUM_CURRENT_SETTINGS, &devmode,
+          0) &&
       deviceModeIsValid(devmode) && (devmode.dmFields & DM_POSITION)) {
     pos = devmode.dmPosition;
     resetDeviceMode(devmode);
@@ -557,7 +573,8 @@ void GraphicsWindow::Shutdown() {
    * we're shutting down OpenGL to try D3D, this will cause extra mode
    * switches. However, we need to do this before displaying dialogs. */
   ChangeDisplaySettingsEx(
-      g_CurrentParams.sDisplayId.c_str(), nullptr, nullptr, 0, nullptr);
+      DisplayNameForWin32(g_CurrentParams.sDisplayId), nullptr, nullptr, 0,
+      nullptr);
 
   AppInstance inst;
   UnregisterClass(g_sClassName.c_str(), inst);
