@@ -53,6 +53,14 @@
 
 namespace ix
 {
+    namespace
+    {
+        // Keep the transport safe before frame data is copied into _rxbuf or
+        // assembled into a fragmented message. NetworkManager exposes the
+        // same 1 MiB ceiling to Lua.
+        constexpr uint64_t kMaxIncomingMessageBytes = 1024ULL * 1024ULL;
+    }
+
     const int WebSocketTransport::kDefaultPingIntervalSecs(-1);
     const bool WebSocketTransport::kDefaultEnablePong(true);
     const int WebSocketTransport::kClosingMaximumWaitingDelayInMs(300);
@@ -112,7 +120,7 @@ namespace ix
         std::string remoteUrl(url);
 
         WebSocketInitResult result;
-        const int maxRedirections = 10;
+        const int maxRedirections = 1;
 
         for (int i = 0; i < maxRedirections; ++i)
         {
@@ -144,18 +152,12 @@ namespace ix
 
             if (result.http_status >= 300 && result.http_status < 400)
             {
-                auto it = result.headers.find("Location");
-                if (it == result.headers.end())
-                {
-                    std::stringstream ss;
-                    ss << "Missing Location Header for HTTP Redirect response. "
-                       << "Rejecting connection to " << url << ", status: " << result.http_status;
-                    result.errorStr = ss.str();
-                    break;
-                }
-
-                remoteUrl = it->second;
-                continue;
+                std::stringstream ss;
+                ss << "WebSocket redirects are disabled for credential safety. "
+                   << "Rejecting connection to " << url << ", status: " << result.http_status;
+                result.success = false;
+                result.errorStr = ss.str();
+                return result;
             }
 
             if (result.success)
@@ -545,6 +547,14 @@ namespace ix
                 return;
             }
 
+            if (ws.N > kMaxIncomingMessageBytes)
+            {
+                close(WebSocketCloseConstants::kProtocolErrorCode,
+                      WebSocketCloseConstants::kProtocolErrorMessage,
+                      _rxbuf.size());
+                return;
+            }
+
             if (_rxbuf.size() < ws.header_size + ws.N)
             {
                 _rxbufWanted = ws.header_size + ws.N;
@@ -615,6 +625,19 @@ namespace ix
                     // the internal buffer which is slow and can let the internal OS
                     // receive buffer fill out.
                     //
+                    uint64_t bufferedBytes = 0;
+                    for (const auto& chunk : _chunks)
+                    {
+                        bufferedBytes += chunk.size();
+                    }
+                    if (bufferedBytes > kMaxIncomingMessageBytes - frameData.size())
+                    {
+                        close(WebSocketCloseConstants::kProtocolErrorCode,
+                              WebSocketCloseConstants::kProtocolErrorMessage,
+                              _rxbuf.size());
+                        _chunks.clear();
+                        return;
+                    }
                     _chunks.emplace_back(frameData);
 
                     if (ws.fin)

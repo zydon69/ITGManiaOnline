@@ -411,13 +411,31 @@ namespace ix
                                                   downloadSize);
         }
 
-        // Parse response:
+        // Parse response. Enforce the body limit before readBytes() is given a
+        // peer-controlled length, otherwise a Content-Length header can force
+        // an oversized allocation before the application sees the response.
+        uint64_t receivedBodyBytes = 0;
         if (headers.find("Content-Length") != headers.end())
         {
             ssize_t contentLength = -1;
             ss.str("");
             ss << headers["Content-Length"];
             ss >> contentLength;
+
+            if (contentLength < 0 ||
+                (args->maxResponseBodyBytes > 0 &&
+                 static_cast<uint64_t>(contentLength) > args->maxResponseBodyBytes))
+            {
+                std::string errorMsg("HTTP response body exceeded maximum allowed size");
+                return std::make_shared<HttpResponse>(code,
+                                                      description,
+                                                      HttpErrorCode::CannotReadBody,
+                                                      headers,
+                                                      payload,
+                                                      errorMsg,
+                                                      uploadSize,
+                                                      downloadSize);
+            }
 
             auto chunkResult = _socket->readBytes(contentLength,
                                                   args->onProgressCallback,
@@ -470,6 +488,22 @@ namespace ix
                 ss.str("");
                 ss << std::hex << line;
                 ss >> chunkSize;
+
+                if (args->maxResponseBodyBytes > 0 &&
+                    (chunkSize > args->maxResponseBodyBytes ||
+                     receivedBodyBytes > args->maxResponseBodyBytes - chunkSize))
+                {
+                    std::string errorMsg("HTTP response body exceeded maximum allowed size");
+                    return std::make_shared<HttpResponse>(code,
+                                                          description,
+                                                          HttpErrorCode::CannotReadBody,
+                                                          headers,
+                                                          payload,
+                                                          errorMsg,
+                                                          uploadSize,
+                                                          downloadSize);
+                }
+                receivedBodyBytes += chunkSize;
 
                 if (args->verbose)
                 {
@@ -544,6 +578,18 @@ namespace ix
         // If the content was compressed with gzip, decode it
         if (headers["Content-Encoding"] == "gzip")
         {
+            if (!args->allowCompressedResponse)
+            {
+                std::string errorMsg("Compressed HTTP responses are not allowed");
+                return std::make_shared<HttpResponse>(code,
+                                                      description,
+                                                      HttpErrorCode::Gzip,
+                                                      headers,
+                                                      payload,
+                                                      errorMsg,
+                                                      uploadSize,
+                                                      downloadSize);
+            }
 #ifdef IXWEBSOCKET_USE_ZLIB
             std::string decompressedPayload;
             if (!gzipDecompress(payload, decompressedPayload))

@@ -85,6 +85,12 @@ namespace ix
         int transferTimeout = 1800;
         bool followRedirects = true;
         int maxRedirects = 5;
+        // This is enforced before allocating a response body. A value of zero
+        // disables the limit for callers that deliberately opt into it.
+        uint64_t maxResponseBodyBytes = 8ULL * 1024ULL * 1024ULL;
+        // NetworkManager does not request compressed responses. Reject an
+        // unexpected compressed response unless a caller opts in explicitly.
+        bool allowCompressedResponse = false;
         bool verbose = false;
         bool compress = true;
         bool compressRequest = false;

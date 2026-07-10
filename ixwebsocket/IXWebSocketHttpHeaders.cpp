@@ -19,6 +19,10 @@ namespace ix
 
         char line[1024];
         int i;
+        std::size_t headerCount = 0;
+        std::size_t totalHeaderBytes = 0;
+        constexpr std::size_t kMaxHeaderCount = 64;
+        constexpr std::size_t kMaxTotalHeaderBytes = 64 * 1024;
 
         while (true)
         {
@@ -36,6 +40,10 @@ namespace ix
                     colon = i;
                 }
             }
+            if (i >= 1023 && !(line[i - 2] == '\r' && line[i - 1] == '\n'))
+            {
+                return std::make_pair(false, headers);
+            }
             if (line[0] == '\r' && line[1] == '\n')
             {
                 break;
@@ -45,6 +53,12 @@ namespace ix
             // header map. ignore lines with no colon.
             if (colon > 0)
             {
+                ++headerCount;
+                totalHeaderBytes += static_cast<std::size_t>(i);
+                if (headerCount > kMaxHeaderCount || totalHeaderBytes > kMaxTotalHeaderBytes)
+                {
+                    return std::make_pair(false, headers);
+                }
                 line[i] = '\0';
                 std::string lineStr(line);
                 // colon is ':', usually colon+1 is ' ', and colon+2 is the start of the value.
