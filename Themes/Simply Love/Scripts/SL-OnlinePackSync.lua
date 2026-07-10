@@ -28,6 +28,9 @@ PackSync.statusPostInFlightSignature = PackSync.statusPostInFlightSignature or "
 PackSync.statusPostInFlightCallbacks = PackSync.statusPostInFlightCallbacks or {}
 PackSync.statusPostInFlightStartedAt = tonumber(PackSync.statusPostInFlightStartedAt) or 0
 PackSync.statusPostInFlightTimeoutSeconds = tonumber(PackSync.statusPostInFlightTimeoutSeconds) or 15
+PackSync.statusPostPendingIntent = PackSync.statusPostPendingIntent or nil
+PackSync.statusPostRequestToken = tonumber(PackSync.statusPostRequestToken) or 0
+PackSync.statusPostActiveRequestToken = tonumber(PackSync.statusPostActiveRequestToken) or 0
 PackSync.lastAppliedLocalStatusSignature = PackSync.lastAppliedLocalStatusSignature or ""
 PackSync.lastAppliedLocalStatusAt = tonumber(PackSync.lastAppliedLocalStatusAt) or 0
 PackSync.localStatusDuplicateSuppressSeconds = tonumber(PackSync.localStatusDuplicateSuppressSeconds) or 0.35
@@ -76,6 +79,7 @@ local function early_trim(value)
 end
 
 local trace
+local current_room_selected_at
 
 function PackSync:IsActiveDownloadStatus(status)
 	status = tostring(status or self.currentStatus or "")
@@ -153,6 +157,100 @@ local function safe_invoke_callback(callback, ...)
 	end
 end
 
+local function review_src_trace(message)
+	if not (PREFSMAN and PREFSMAN.GetPreference) then return end
+	local ok, enabled = pcall(function() return PREFSMAN:GetPreference("review_src") end)
+	if not ok or enabled ~= true then return end
+	local line = "SRC_REVIEW_TRACE [OnlinePackSync] " .. tostring(message or "")
+	if Trace then Trace(line) elseif Warn then Warn(line) end
+end
+
+function PackSync:DiscardPendingStatusPost(reason)
+	local pending = self.statusPostPendingIntent
+	if type(pending) ~= "table" then return false end
+	self.statusPostPendingIntent = nil
+	for _, pendingCallback in ipairs(pending.callbacks or {}) do
+		safe_invoke_callback(pendingCallback, false, nil, {
+			errorCode = "client_status_post_coalesced",
+			errorMessage = "Le statut online a été remplacé par un état plus récent.",
+		})
+	end
+	review_src_trace("discarded pending pack status reason=" .. tostring(reason or "unknown")
+		.. " status=" .. tostring(pending.status or "nil")
+		.. " signature=" .. tostring(pending.signature or ""))
+	return true
+end
+
+function PackSync:QueuePendingStatusPost(signature, status, message, progress, callback, options, roomId, selectedAt)
+	local pending = self.statusPostPendingIntent
+	if type(pending) == "table" and tostring(pending.signature or "") == tostring(signature or "") then
+		if callback then
+			pending.callbacks = pending.callbacks or {}
+			if #pending.callbacks < 16 then
+				pending.callbacks[#pending.callbacks + 1] = callback
+			else
+				safe_invoke_callback(callback, false, nil, { errorMessage = "Trop de statuts online en attente." })
+			end
+		end
+		return
+	end
+
+	self:DiscardPendingStatusPost("superseded_by_newer_status")
+	local queuedOptions = {}
+	for key, value in pairs(type(options) == "table" and options or {}) do
+		queuedOptions[key] = value
+	end
+	queuedOptions.fromPendingStatusQueue = true
+	self.statusPostPendingIntent = {
+		signature = signature,
+		status = status,
+		message = message,
+		progress = progress,
+		options = queuedOptions,
+		roomId = tostring(roomId or ""),
+		selectedAt = tostring(selectedAt or ""),
+		callbacks = callback and { callback } or {},
+	}
+	review_src_trace("queued latest pack status while request is active status=" .. tostring(status)
+		.. " room=" .. tostring(roomId or "")
+		.. " selected_at=" .. tostring(selectedAt or ""))
+end
+
+function PackSync:FlushPendingStatusPost(reason)
+	local pending = self.statusPostPendingIntent
+	if type(pending) ~= "table" then return false end
+	self.statusPostPendingIntent = nil
+	local activeRoomId = tostring(ITGOnline and ITGOnline.currentRoomId or "")
+	local activeSelectedAt = tostring(current_room_selected_at() or "")
+	if activeRoomId ~= tostring(pending.roomId or "")
+		or activeSelectedAt ~= tostring(pending.selectedAt or "") then
+		for _, pendingCallback in ipairs(pending.callbacks or {}) do
+			safe_invoke_callback(pendingCallback, false, nil, {
+				errorCode = "client_status_context_changed",
+				errorMessage = "Le salon ou la sélection a changé avant la publication du statut.",
+			})
+		end
+		review_src_trace("dropped pending pack status after context change reason=" .. tostring(reason or "unknown")
+			.. " queued_room=" .. tostring(pending.roomId or "")
+			.. " active_room=" .. activeRoomId
+			.. " queued_selected_at=" .. tostring(pending.selectedAt or "")
+			.. " active_selected_at=" .. activeSelectedAt)
+		return false
+	end
+
+	local callbacks = pending.callbacks or {}
+	local function fan_out(...)
+		for _, pendingCallback in ipairs(callbacks) do
+			safe_invoke_callback(pendingCallback, ...)
+		end
+	end
+	review_src_trace("flushing latest queued pack status reason=" .. tostring(reason or "unknown")
+		.. " status=" .. tostring(pending.status or "nil"))
+	self:UpdateStatus(pending.status, pending.message, pending.progress,
+		#callbacks > 0 and fan_out or nil, pending.options)
+	return true
+end
+
 function PackSync:ExpireStatusPostInFlight(reason)
 	local signature = tostring(self.statusPostInFlightSignature or "")
 	if signature == "" then return false end
@@ -167,6 +265,7 @@ function PackSync:ExpireStatusPostInFlight(reason)
 	self.statusPostInFlightCallbacks[signature] = nil
 	self.statusPostInFlightSignature = ""
 	self.statusPostInFlightStartedAt = 0
+	self.statusPostActiveRequestToken = 0
 	trace("Expired in-flight status post reason=" .. tostring(reason or "unknown")
 		.. " signature=" .. tostring(signature)
 		.. " age=" .. tostring(startedAt > 0 and string.format("%.3f", now - startedAt) or "unknown")
@@ -401,7 +500,7 @@ local function current_room_selected_song()
 	return ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song or nil
 end
 
-local function current_room_selected_at()
+current_room_selected_at = function()
 	return selected_at(current_room_selected_song())
 end
 
@@ -999,6 +1098,17 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	})
 	self.currentSongInfo = with_current_room_selection(self.currentSongInfo, "status:" .. tostring(status))
 	local currentSelectedAt = self:SelectedAtForStatusPost(status, self.currentSongInfo)
+	if status == self.status.SearchingLocalCharts then
+		self:ApplyLocalStatus(status, message, progress)
+		safe_invoke_callback(callback, true, {
+			pack_sync_status = {
+				applied = false,
+				ignored_reason = "client_local_scan_status",
+			},
+			local_only = true,
+		}, nil)
+		return
+	end
 	if status == self.status.Ready and currentSelectedAt ~= "" then
 		self.lastReadySelectedAt = currentSelectedAt
 	end
@@ -1080,7 +1190,9 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		tostring(self.activeDownloadId or ""),
 	}, "||")
 	local now = GetTimeSinceStart and GetTimeSinceStart() or 0
-	if intentSignature ~= "" and intentSignature == tostring(self.lastStatusPostIntentSignature or "") then
+	if options.fromPendingStatusQueue ~= true
+		and intentSignature ~= ""
+		and intentSignature == tostring(self.lastStatusPostIntentSignature or "") then
 		local age = now - (tonumber(self.lastStatusPostIntentAt) or 0)
 		if age < 0.35 then
 			trace("Status post skipped duplicate_intent status=" .. tostring(status)
@@ -1099,6 +1211,18 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		end
 	self.lastStatusPostIntentSignature = intentSignature
 	self.lastStatusPostIntentAt = now
+	local signature = status_post_signature(ITGOnline and ITGOnline.currentRoomId or "", currentSelectedAt, status, message, progress, options)
+	self:ExpireStatusPostInFlight("before_status_update")
+	if tostring(self.statusPostInFlightSignature or "") == "" and self.statusPostPendingIntent then
+		self:DiscardPendingStatusPost("superseded_after_in_flight_timeout")
+	end
+	if tostring(self.statusPostInFlightSignature or "") ~= ""
+		and signature ~= tostring(self.statusPostInFlightSignature or "") then
+		self:ApplyLocalStatus(status, message, progress)
+		self:QueuePendingStatusPost(signature, status, message, progress, callback,
+			options, ITGOnline and ITGOnline.currentRoomId or "", currentSelectedAt)
+		return
+	end
 
 	local requestSequence = 0
 	if usesDownloadSequence then
@@ -1127,10 +1251,8 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		.. " progress=" .. tostring(progress)
 		.. " inFlightKey=" .. tostring(self.downloadInFlightKey or "")
 		.. " browseOnly=" .. tostring(self.activeBrowseOnlyDownload == true))
-		local signature = status_post_signature(ITGOnline and ITGOnline.currentRoomId or "", currentSelectedAt, status, message, progress, options)
 		local postedAt = tonumber(self.lastPostedStatusAt) or 0
 		local heartbeat = tonumber(self.statusPostDuplicateHeartbeatSeconds) or 5.0
-		self:ExpireStatusPostInFlight("before_status_update")
 		if signature ~= "" and signature == tostring(self.statusPostInFlightSignature or "") then
 			trace("Status post skipped duplicate_in_flight status=" .. tostring(status)
 				.. " progress=" .. tostring(progress)
@@ -1181,6 +1303,9 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	self.lastPostedStatusAt = now
 	self.statusPostInFlightSignature = signature
 	self.statusPostInFlightStartedAt = now
+	self.statusPostRequestToken = (tonumber(self.statusPostRequestToken) or 0) + 1
+	self.statusPostActiveRequestToken = self.statusPostRequestToken
+	local requestToken = self.statusPostRequestToken
 
 	local payload = {
 		status = status,
@@ -1198,9 +1323,23 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	end
 
 	ITGOnline:Request("POST", "/rooms/" .. requestRoomId .. "/pack-sync-status", payload, function(ok, decoded, response)
-		if tostring(self.statusPostInFlightSignature or "") == signature then
+		local ownsActiveRequest = tonumber(self.statusPostActiveRequestToken) == tonumber(requestToken)
+			and tostring(self.statusPostInFlightSignature or "") == signature
+		if ownsActiveRequest then
 			self.statusPostInFlightSignature = ""
 			self.statusPostInFlightStartedAt = 0
+			self.statusPostActiveRequestToken = 0
+		else
+			review_src_trace("ignored stale pack status response status=" .. tostring(status)
+				.. " request_token=" .. tostring(requestToken)
+				.. " active_token=" .. tostring(self.statusPostActiveRequestToken or 0)
+				.. " room=" .. tostring(requestRoomId)
+				.. " selected_at=" .. tostring(requestSelectedAt))
+			local staleResponse = response or {}
+			staleResponse.errorCode = "client_stale_status_response"
+			staleResponse.errorMessage = "Une réponse de statut online obsolète a été ignorée."
+			safe_invoke_callback(callback, false, decoded, staleResponse)
+			return
 		end
 		local statusResult = decoded and decoded.pack_sync_status or nil
 		local ignored = ok and statusResult and statusResult.applied == false
@@ -1240,6 +1379,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 			for _, queuedCallback in ipairs(waitingCallbacks) do
 				safe_invoke_callback(queuedCallback, callbackOk, decoded, response)
 			end
+			self:FlushPendingStatusPost("status_response")
 		end)
 	end
 
@@ -1463,7 +1603,9 @@ function PackSync:ResetLocalState(reason)
 		self.lastPostedStatusAt = 0
 		self.statusPostInFlightSignature = ""
 		self.statusPostInFlightStartedAt = 0
+		self.statusPostActiveRequestToken = 0
 		self.statusPostInFlightCallbacks = {}
+		self:DiscardPendingStatusPost("reset_local_state")
 		self.lastAppliedLocalStatusSignature = ""
 		self.lastAppliedLocalStatusAt = 0
 		self.lastResetSignature = ""
@@ -1677,7 +1819,19 @@ function PackSync:FindLocalMatch(songInfo)
 	end
 	local scanKey = local_scan_key(songInfo)
 	local cachedScan = self.localScanCache and self.localScanCache[scanKey] or nil
-	if cachedScan and cachedScan.ok == false then
+	if cachedScan and cachedScan.ok == true then
+		review_src_trace("reused successful local chart scan title=" .. selected_title(songInfo)
+			.. " source=" .. tostring(cachedScan.matchSource or "unknown"))
+		self:ApplyLocalStatus(self.status.LocalChartMatchFound, cachedScan.matchMessage)
+		return {
+			ok = true,
+			song = cachedScan.song,
+			steps = cachedScan.steps,
+			payload = cachedScan.payload,
+			matchSource = cachedScan.matchSource,
+			matchMessage = cachedScan.matchMessage,
+		}
+	elseif cachedScan and cachedScan.ok == false then
 		trace("Local chart scan reused cached terminal result title=" .. selected_title(songInfo)
 			.. " status=" .. tostring(cachedScan.status)
 			.. " reason=" .. tostring(cachedScan.reason))
@@ -1757,7 +1911,9 @@ function PackSync:FindLocalMatch(songInfo)
 				and "Pack+chart trouvées"
 				or "Pack KO / chart compatible trouvée"
 			self:UpdateStatus(self.status.LocalChartMatchFound, matchMessage)
-			return { ok = true, song = song, steps = steps, payload = payload, matchSource = matchSource, matchMessage = matchMessage }
+			local result = { ok = true, song = song, steps = steps, payload = payload, matchSource = matchSource, matchMessage = matchMessage }
+			self.localScanCache[scanKey] = result
+			return result
 		end
 
 		mismatchReason = mismatchReason or reason or "chart_mismatch"
@@ -1791,7 +1947,9 @@ function PackSync:FindLocalMatch(songInfo)
 				trace("Matching local chart found via hash index " .. tostring(candidate.song:GetSongDir()))
 				local matchMessage = "Pack KO / chart compatible trouvée"
 				self:UpdateStatus(self.status.LocalChartMatchFound, matchMessage)
-				return { ok = true, song = candidate.song, steps = candidate.steps, payload = payload, matchSource = "alternate_pack", matchMessage = matchMessage }
+				local result = { ok = true, song = candidate.song, steps = candidate.steps, payload = payload, matchSource = "alternate_pack", matchMessage = matchMessage }
+				self.localScanCache[scanKey] = result
+				return result
 			end
 			trace("Candidate hash index mismatch dir=" .. tostring(candidate.song:GetSongDir())
 				.. " reason=" .. tostring(reason or "unknown")

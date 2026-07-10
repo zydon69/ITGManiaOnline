@@ -989,6 +989,14 @@ local function online_flow_trace(message)
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
 
+local function review_src_trace(message)
+	if not (PREFSMAN and PREFSMAN.GetPreference) then return end
+	local ok, enabled = pcall(function() return PREFSMAN:GetPreference("review_src") end)
+	if not ok or enabled ~= true then return end
+	local line = "SRC_REVIEW_TRACE [ITGOnline] " .. tostring(message or "")
+	if Trace then Trace(line) elseif Warn then Warn(line) end
+end
+
 local function online_flow_trace_throttled(key, intervalSeconds, message)
 	if not ITGOnline then return end
 
@@ -12612,6 +12620,53 @@ function ITGOnline:Heartbeat(status, force)
 			.. " queuedFingerprint=" .. tostring(queuedFingerprint ~= "" and queuedFingerprint or "nil")
 			.. " screen=" .. tostring(self.currentScreenName or "nil")
 			.. " disconnecting=" .. tostring(self.disconnecting == true))
+		local errorCode = response_error_code(response, decoded)
+		local requestRoomKey = tostring(roomId or "")
+		local activeRoomKey = tostring(self.currentRoomId or "")
+		local requestContextStillCurrent = requestRoomKey == activeRoomKey
+		if not ok and errorCode ~= "" then
+			review_src_trace("heartbeat rejected error=" .. tostring(errorCode)
+				.. " status=" .. tostring(status)
+				.. " request_room=" .. tostring(roomId or "nil")
+				.. " active_room=" .. tostring(self.currentRoomId or "nil")
+				.. " context_current=" .. tostring(requestContextStillCurrent))
+		end
+		if not ok and errorCode == "presence_room_not_available"
+			and roomId ~= nil and requestContextStillCurrent then
+			self:ClearCurrentRoomState("heartbeat_room_not_available")
+			queuedStatus = "available"
+			queuedForce = true
+			queuedFingerprint = "available|"
+			self:QueueLobbyRefresh({
+				ignoreSuppression = true,
+				reason = "heartbeat_room_not_available",
+			})
+		elseif not ok and errorCode == "presence_room_required"
+			and roomId == nil and requestContextStillCurrent then
+			-- A stale in-room intent was emitted after the local room was cleared.
+			queuedStatus = "available"
+			queuedForce = true
+			queuedFingerprint = "available|"
+		elseif not ok and errorCode == "presence_open_room_required"
+			and roomId == nil and requestContextStillCurrent then
+			queuedStatus = nil
+			queuedForce = false
+			queuedFingerprint = ""
+			if type(self.FetchCurrentRoom) == "function" then
+				self:FetchCurrentRoom(function(fetchOk, fetchDecoded)
+					review_src_trace("heartbeat open-room reconciliation ok=" .. tostring(fetchOk == true)
+						.. " room=" .. tostring(fetchDecoded and fetchDecoded.room and fetchDecoded.room.id or "nil"))
+					if not self.disconnecting then
+						self:Heartbeat(self.currentRoomId and "in_room" or "available", true)
+					end
+				end)
+			end
+		elseif not ok and not requestContextStillCurrent then
+			-- The response belongs to a room transition that has already completed.
+			review_src_trace("ignored stale heartbeat response error=" .. tostring(errorCode)
+				.. " request_fingerprint=" .. tostring(fingerprint)
+				.. " active_room=" .. tostring(self.currentRoomId or "nil"))
+		end
 		if ok and self.currentScreenName == "ScreenOnlineLobbies" and not self.disconnecting then
 			if self.currentRoomId then
 				online_flow_trace("heartbeat_fetch_current_room source=heartbeat_ack room=" .. tostring(self.currentRoomId))
