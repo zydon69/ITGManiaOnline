@@ -153,7 +153,7 @@ class NetworkManager {
   void CloseAllWebSockets();
   void CloseAllWebSocketsFromLua();
   void Update();
-  bool EnqueueMainThreadTask(std::function<void()> task);
+  bool EnqueueMainThreadTask(std::function<void()> task, bool terminal = false);
   std::string UrlEncode(const std::string& value);
   std::string EncodeQueryParameters(
       const std::unordered_map<std::string, std::string>& query);
@@ -163,11 +163,13 @@ class NetworkManager {
 
  private:
   void RunHttpWorker();
+  void RunDownloadWorker();
   void RunWebSocketWorker();
   void StopWorkers();
   void ClearMainThreadTasks();
   void DrainMainThreadTasks();
   void CloseAllWebSocketsInternal(bool calledFromLua);
+  void CancelActiveHttpRequests();
 
   std::string GetUserAgent();
   void ClearDownloads();
@@ -189,6 +191,14 @@ class NetworkManager {
   std::mutex httpWorkerMutex;
   std::condition_variable httpWorkerCv;
   std::queue<std::function<void()>> httpWorkerQueue;
+
+  std::thread downloadWorker;
+  std::mutex downloadWorkerMutex;
+  std::condition_variable downloadWorkerCv;
+  std::queue<std::function<void()>> downloadWorkerQueue;
+
+  std::mutex activeHttpRequestsMutex;
+  std::vector<std::weak_ptr<ix::HttpRequestArgs>> activeHttpRequests;
 
   std::thread webSocketWorker;
   std::mutex webSocketWorkerMutex;

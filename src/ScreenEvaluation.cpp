@@ -33,6 +33,7 @@
 #include "LuaManager.h"
 #include "MemoryCardManager.h"
 #include "ModsGroup.h"
+#include "OnlineSessionGuard.h"
 #include "PlayerNumber.h"
 #include "PlayerState.h"
 #include "PrefsManager.h"
@@ -400,47 +401,94 @@ float GetBannerMetric(
 
 bool ShouldIgnoreOnlineEvaluationNextScreen() {
   if (LUA == nullptr) {
-    return false;
-  }
-
-  Lua* L = LUA->Get();
-  bool shouldIgnore = false;
-  const bool ok = LuaHelpers::RunExpression(
-      L,
-      "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil "
-      "and ITGOnline.onlineEvaluationExitRequested ~= true",
-      "ScreenEvaluation online next-screen guard");
-  if (ok) {
-    LuaHelpers::Pop(L, shouldIgnore);
-  }
-  LUA->Release(L);
-
-  return ok && shouldIgnore;
-}
-
-bool TryHandleOnlineEvaluationNativeExit(const std::string& inputName) {
-  if (LUA == nullptr) {
-    return false;
+    return ITGOnlineSessionGuard::IsObservedActive();
   }
 
   Lua* L = LUA->Get();
   if (L == nullptr) {
-    return false;
+    return ITGOnlineSessionGuard::IsObservedActive();
   }
 
   const int stackTop = lua_gettop(L);
   bool onlineActive = false;
+  bool hasActiveAnswer = false;
+  const bool activeOk = LuaHelpers::RunExpression(
+      L,
+      "ITGOnline ~= nil and ITGOnline.HasOnlineSession ~= nil and ITGOnline:HasOnlineSession()",
+      "ScreenEvaluation online active-session guard");
+  if (activeOk && lua_isboolean(L, -1)) {
+    onlineActive = lua_toboolean(L, -1);
+    hasActiveAnswer = true;
+  }
+  lua_settop(L, stackTop);
+
+  if (!hasActiveAnswer) {
+    LUA->Release(L);
+    LOG->Warn("ITG Online: evaluation active-session gate failed; using observed state=%d.",
+              ITGOnlineSessionGuard::IsObservedActive() ? 1 : 0);
+    return ITGOnlineSessionGuard::IsObservedActive();
+  }
+
+  ITGOnlineSessionGuard::Observe(onlineActive);
+  if (!onlineActive) {
+    LUA->Release(L);
+    return false;
+  }
+
+  bool exitRequested = false;
+  const bool exitOk = LuaHelpers::RunExpression(
+      L,
+      "ITGOnline ~= nil and ITGOnline.onlineEvaluationExitRequested == true",
+      "ScreenEvaluation online explicit-exit guard");
+  if (exitOk && lua_isboolean(L, -1)) {
+    exitRequested = lua_toboolean(L, -1);
+  }
+  lua_settop(L, stackTop);
+  LUA->Release(L);
+
+  if (!exitOk) {
+    LOG->Warn("ITG Online: evaluation exit-state gate failed; holding evaluation closed.");
+    return true;
+  }
+  return !exitRequested;
+}
+
+bool TryHandleOnlineEvaluationNativeExit(const std::string& inputName) {
+  if (LUA == nullptr) {
+    return ITGOnlineSessionGuard::IsObservedActive();
+  }
+
+  Lua* L = LUA->Get();
+  if (L == nullptr) {
+    return ITGOnlineSessionGuard::IsObservedActive();
+  }
+
+  const int stackTop = lua_gettop(L);
+  bool onlineActive = false;
+  bool hasActiveAnswer = false;
   bool handled = false;
   bool shouldConsume = false;
   const bool activeOk = LuaHelpers::RunExpression(
       L,
-      "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil",
+      "ITGOnline ~= nil and ITGOnline.HasOnlineSession ~= nil and ITGOnline:HasOnlineSession()",
       "ScreenEvaluation online native exit active check");
   if (activeOk) {
     if (lua_isboolean(L, -1)) {
       LuaHelpers::Pop(L, onlineActive);
+      hasActiveAnswer = true;
     } else {
       lua_pop(L, 1);
+    }
+  }
+
+  if (hasActiveAnswer) {
+    ITGOnlineSessionGuard::Observe(onlineActive);
+  }
+
+  if (!hasActiveAnswer) {
+    shouldConsume = ITGOnlineSessionGuard::IsObservedActive();
+    if (shouldConsume) {
+      LOG->Warn("ITG Online: native evaluation exit active-session gate failed; holding input closed.");
     }
   }
 
@@ -458,7 +506,11 @@ bool TryHandleOnlineEvaluationNativeExit(const std::string& inputName) {
         lua_pop(L, 1);
       }
     }
-    shouldConsume = true;
+    shouldConsume = handlerOk && handled;
+    if (!handlerOk) {
+      shouldConsume = true;
+      LOG->Warn("ITG Online: native evaluation exit handler failed; holding input closed.");
+    }
     OnlineTrace("ITG Online: ScreenEvaluation consumed native %s input online "
         "handled=%i.",
         inputName.c_str(), handled ? 1 : 0);
@@ -1499,15 +1551,37 @@ void ScreenEvaluation::HandleMenuStart() {
 
 bool ScreenEvaluation::OnlineEvaluationAutoAdvanceBlocked() const {
   if (LUA == nullptr) {
-    return false;
+    return ITGOnlineSessionGuard::IsObservedActive();
   }
 
   Lua* L = LUA->Get();
   if (L == nullptr) {
-    return false;
+    return ITGOnlineSessionGuard::IsObservedActive();
   }
 
   const int stackTop = lua_gettop(L);
+  bool onlineActive = false;
+  bool hasActiveAnswer = false;
+  const bool activeOk = LuaHelpers::RunExpression(
+      L,
+      "ITGOnline ~= nil and ITGOnline.HasOnlineSession ~= nil and ITGOnline:HasOnlineSession()",
+      "ScreenEvaluation online auto-advance active-session gate");
+  if (activeOk && lua_isboolean(L, -1)) {
+    onlineActive = lua_toboolean(L, -1);
+    hasActiveAnswer = true;
+  }
+  lua_settop(L, stackTop);
+
+  if (!hasActiveAnswer) {
+    LUA->Release(L);
+    return ITGOnlineSessionGuard::IsObservedActive();
+  }
+  ITGOnlineSessionGuard::Observe(onlineActive);
+  if (!onlineActive) {
+    LUA->Release(L);
+    return false;
+  }
+
   bool blocked = false;
   const bool ok = LuaHelpers::RunExpression(
       L,
@@ -1526,7 +1600,11 @@ bool ScreenEvaluation::OnlineEvaluationAutoAdvanceBlocked() const {
   }
   lua_settop(L, stackTop);
   LUA->Release(L);
-  return ok && blocked;
+  if (!ok) {
+    LOG->Warn("ITG Online: evaluation auto-advance gate failed; holding evaluation closed.");
+    return true;
+  }
+  return blocked;
 }
 
 // lua start

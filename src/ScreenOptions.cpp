@@ -229,10 +229,8 @@ static bool OnlinePlayerOptionsRequireReadyOnly(const std::string& screenName) {
   const int top = lua_gettop(L);
   const bool ran = LuaHelpers::RunExpression(
       L,
-      "ITGOnline ~= nil "
-      "and ITGOnline.currentRoomId ~= nil "
-      "and ITGOnline.currentRoom ~= nil "
-      "and ITGOnline.currentRoom.id == ITGOnline.currentRoomId "
+      "ITGOnline ~= nil and ITGOnline.HasActiveRoom ~= nil "
+      "and ITGOnline:HasActiveRoom() "
       "and ITGOnline.currentRoom.selected_song ~= nil "
       "and ITGOnline.NormalizeRoomPhase ~= nil "
       "and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) == "

@@ -43,6 +43,12 @@ bool ValidateInputs(
     error = "account is required";
     return false;
   }
+  if (service.find('\0') != std::string::npos ||
+      account.find('\0') != std::string::npos || service.size() > 256 ||
+      account.size() > 256) {
+    error = "invalid credential identifier";
+    return false;
+  }
 
   return true;
 }
@@ -237,6 +243,10 @@ bool Store(
   }
   if (secret.empty()) {
     error = "secret is required";
+    return false;
+  }
+  if (secret.size() > 4096 || secret.find('\0') != std::string::npos) {
+    error = "secret must be bounded text without NUL bytes";
     return false;
   }
 

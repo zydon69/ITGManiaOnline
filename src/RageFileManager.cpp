@@ -134,7 +134,8 @@ size_t zipRead(void* pOpaque, mz_uint64 file_ofs, void* pBuf, size_t n) {
     return 0;
   }
 
-  return f->Read(pBuf, n);
+  const int read = f->Read(pBuf, n);
+  return read > 0 ? static_cast<size_t>(read) : 0;
 }
 
 size_t zipWriteFile(
@@ -191,9 +192,10 @@ bool IsSafeZipEntryPath(const std::string& rawPath) {
 
 constexpr mz_uint kMaxZipEntryCount = 20000;
 constexpr mz_uint64 kMaxZipSingleFileBytes =
-    static_cast<mz_uint64>(1024) * 1024 * 1024;
+    static_cast<mz_uint64>(256) * 1024 * 1024;
 constexpr mz_uint64 kMaxZipTotalUncompressedBytes =
-    static_cast<mz_uint64>(4) * 1024 * 1024 * 1024;
+    static_cast<mz_uint64>(1024) * 1024 * 1024;
+constexpr mz_uint64 kMaxZipCompressionRatio = 200;
 
 static bool EndsWithNoCase(const std::string& value, const std::string& suffix) {
   if (value.size() < suffix.size()) {
@@ -306,6 +308,23 @@ bool RageFileManager::Unzip(
       break;
     }
 
+    if ((info.m_bit_flag & 1U) != 0U) {
+      LOG->Warn("Could not unzip %s: encrypted entry %s is not allowed",
+                zipPath.c_str(), info.m_filename);
+      success = false;
+      break;
+    }
+
+    if (!info.m_is_directory && info.m_uncomp_size > 0 &&
+        (info.m_comp_size == 0 ||
+         info.m_uncomp_size / std::max<mz_uint64>(1, info.m_comp_size) >
+             kMaxZipCompressionRatio)) {
+      LOG->Warn("Could not unzip %s: entry %s exceeds compression ratio limit",
+                zipPath.c_str(), info.m_filename);
+      success = false;
+      break;
+    }
+
     if (info.m_uncomp_size > kMaxZipTotalUncompressedBytes) {
       LOG->Warn(
           "Could not unzip %s: entry %s is too large for the archive limit",
@@ -352,7 +371,8 @@ bool RageFileManager::Unzip(
 
     if (FILEMAN->IsPathProtected(filepath)) {
       LOG->Warn("Overwriting %s is not allowed", filepath.c_str());
-      continue;
+      success = false;
+      break;
     }
 
     if (info.m_is_directory) {
@@ -363,7 +383,7 @@ bool RageFileManager::Unzip(
     } else {
       RageFile f;
       if (!f.Open(filepath, RageFile::WRITE | RageFile::STREAMED)) {
-        std::string error = zipFile.GetError();
+        std::string error = f.GetError();
         LOG->Warn("Could not write to %s: %s", filepath.c_str(), error.c_str());
         success = false;
         break;
@@ -1491,6 +1511,14 @@ static bool IsLuaDeleteRecursivePathAllowed(const std::string& path) {
               legacyOnlineDownloadRoot) == 0);
 }
 
+static bool IsLuaOnlineMutablePathAllowed(const std::string& path) {
+  static const std::string downloadsRoot = "/Downloads/";
+  return IsLuaDeleteRecursivePathAllowed(NormalizeLuaDeleteRecursivePath(path)) ||
+         (path.size() > downloadsRoot.size() &&
+          CompareNoCase(path.substr(0, downloadsRoot.size()), downloadsRoot) == 0 &&
+          path.find("..") == std::string::npos);
+}
+
 static std::string NormalizeLuaMovePath(std::string path) {
   FixSlashesInPlace(path);
   CollapsePath(path, true);
@@ -1546,6 +1574,29 @@ class LunaRageFileManager : public Luna<RageFileManager> {
     lua_pushboolean(L, p->DoesFileExist(SArg(1)));
     return 1;
   }
+  static int CreateDir(T* p, lua_State* L) {
+    const std::string path = NormalizeLuaDeleteRecursivePath(SArg(1));
+    if (!IsLuaDeleteRecursivePathAllowed(path)) {
+      LOG->Warn("Refusing to create unsafe online staging directory %s", path.c_str());
+      lua_pushboolean(L, false);
+      return 1;
+    }
+    p->CreateDir(path);
+    lua_pushboolean(L, p->DoesFileExist(path));
+    return 1;
+  }
+  static int Remove(T* p, lua_State* L) {
+    std::string path = SArg(1);
+    FixSlashesInPlace(path);
+    CollapsePath(path, true);
+    if (!IsLuaOnlineMutablePathAllowed(path) || p->IsADirectory(path)) {
+      LOG->Warn("Refusing to remove unsafe online file %s", path.c_str());
+      lua_pushboolean(L, false);
+      return 1;
+    }
+    lua_pushboolean(L, p->Remove(path));
+    return 1;
+  }
   static int GetFileSizeBytes(T* p, lua_State* L) {
     lua_pushnumber(L, p->GetFileSizeInBytes(SArg(1)));
     return 1;
@@ -1581,8 +1632,23 @@ class LunaRageFileManager : public Luna<RageFileManager> {
     return 0;
   }
   static int Unzip(T* p, lua_State* L) {
-    std::string zipPath = SArg(1);
-    std::string targetPath = SArg(2);
+    const std::string zipPath = NormalizeLuaMovePath(SArg(1));
+    const std::string targetPath = NormalizeLuaMovePath(SArg(2));
+
+    static const std::string downloadsRoot = "/Downloads/";
+    static const std::string songsRoot = "/Songs/";
+    const bool sourceAllowed = zipPath.size() > downloadsRoot.size() &&
+        CompareNoCase(zipPath.substr(0, downloadsRoot.size()), downloadsRoot) == 0;
+    const bool targetAllowed = IsLuaDeleteRecursivePathAllowed(
+        NormalizeLuaDeleteRecursivePath(targetPath)) ||
+        IsLuaOnlineSongInstallMoveAllowed(
+            "/Songs/__OnlineDownload_unzip_probe", targetPath);
+    if (!sourceAllowed || !targetAllowed) {
+      LOG->Warn("Refusing unsafe Lua unzip from %s to %s",
+                zipPath.c_str(), targetPath.c_str());
+      lua_pushboolean(L, false);
+      return 1;
+    }
 
     int strip = 0;
     if (lua_gettop(L) >= 3) {
@@ -1627,9 +1693,25 @@ class LunaRageFileManager : public Luna<RageFileManager> {
     lua_pushboolean(L, p->Move(fromPath, toPath));
     return 1;
   }
+  static int RollbackOnlineSongPack(T* p, lua_State* L) {
+    std::string path = NormalizeLuaMovePath(SArg(1));
+    while (path.size() > 1 && path.back() == '/') {
+      path.pop_back();
+    }
+    const std::string stagingProbe = "/Songs/__OnlineDownload_rollback_probe";
+    if (!IsLuaOnlineSongInstallMoveAllowed(stagingProbe, path)) {
+      LOG->Warn("Refusing unsafe online song pack rollback %s", path.c_str());
+      lua_pushboolean(L, false);
+      return 1;
+    }
+    lua_pushboolean(L, p->DeleteRecursive(path));
+    return 1;
+  }
 
   LunaRageFileManager() {
     ADD_METHOD(Copy);
+    ADD_METHOD(CreateDir);
+    ADD_METHOD(Remove);
     ADD_METHOD(DoesFileExist);
     ADD_METHOD(GetFileSizeBytes);
     ADD_METHOD(GetHashForFile);
@@ -1638,6 +1720,7 @@ class LunaRageFileManager : public Luna<RageFileManager> {
     ADD_METHOD(Unzip);
     ADD_METHOD(DeleteRecursive);
     ADD_METHOD(MoveOnlineSongPack);
+    ADD_METHOD(RollbackOnlineSongPack);
   }
 };
 

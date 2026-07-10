@@ -52,6 +52,7 @@
 #include "NoteDataUtil.h"
 #include "NoteDataWithScoring.h"
 #include "NoteTypes.h"
+#include "OnlineSessionGuard.h"
 #include "Player.h"
 #include "PlayerAI.h"  // for NUM_SKILL_LEVELS
 #include "PlayerNumber.h"
@@ -179,7 +180,7 @@ static bool HasActiveITGOnlineRoom() {
 
   Lua* L = LUA->Get();
   const bool ran = LuaHelpers::RunExpression(
-      L, "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil",
+      L, "ITGOnline ~= nil and ITGOnline.HasOnlineSession ~= nil and ITGOnline:HasOnlineSession()",
       "ScreenGameplay::HasActiveITGOnlineRoom");
   const bool active = ran && lua_toboolean(L, -1);
   lua_pop(L, 1);
@@ -515,20 +516,36 @@ static bool GetITGOnlineSecondsUntilScheduledStart(float& secondsUntilStart) {
 
 static bool GetITGOnlineIsActive() {
   if (LUA == nullptr) {
-    return false;
+    return ITGOnlineSessionGuard::IsObservedActive();
   }
 
   Lua* L = LUA->Get();
+  if (L == nullptr) {
+    return ITGOnlineSessionGuard::IsObservedActive();
+  }
+  const int stackTop = lua_gettop(L);
+  bool isActive = false;
+  bool hasDefinitiveAnswer = false;
   const bool ran = LuaHelpers::RunExpression(
       L,
-      "ITGOnline ~= nil and ITGOnline.currentRoomId ~= nil",
+      "ITGOnline ~= nil and ITGOnline.HasOnlineSession ~= nil and ITGOnline:HasOnlineSession()",
       "ScreenGameplay::GetITGOnlineIsActive");
 
-  const bool isActive = ran && lua_toboolean(L, -1);
-  lua_pop(L, 1);
+  if (ran && lua_isboolean(L, -1)) {
+    isActive = lua_toboolean(L, -1);
+    hasDefinitiveAnswer = true;
+  }
+  lua_settop(L, stackTop);
   LUA->Release(L);
 
-  return isActive;
+  if (hasDefinitiveAnswer) {
+    ITGOnlineSessionGuard::Observe(isActive);
+    return isActive;
+  }
+
+  LOG->Warn("ITG Online: active-session gate failed; using observed state=%d.",
+            ITGOnlineSessionGuard::IsObservedActive() ? 1 : 0);
+  return ITGOnlineSessionGuard::IsObservedActive();
 }
 
 static bool GetITGOnlineShouldReleaseGameplayForEvaluation() {
@@ -557,10 +574,13 @@ static bool GetITGOnlineShouldReleaseGameplayForEvaluation() {
 
 static bool GetITGOnlineShouldHoldGameplayForStart() {
   if (LUA == nullptr) {
-    return false;
+    return ITGOnlineSessionGuard::IsObservedActive();
   }
 
   Lua* L = LUA->Get();
+  if (L == nullptr) {
+    return ITGOnlineSessionGuard::IsObservedActive();
+  }
   const bool ran = LuaHelpers::RunExpression(
       L,
       "ITGOnline ~= nil and ITGOnline.ShouldHoldGameplayForOnlineStart ~= nil "
@@ -4441,9 +4461,12 @@ bool ScreenGameplay::OnlineShouldHoldBeforeEvaluation() {
   }
 
   if (LUA == nullptr) {
-    return false;
+    return ITGOnlineSessionGuard::IsObservedActive();
   }
   Lua* L = LUA->Get();
+  if (L == nullptr) {
+    return ITGOnlineSessionGuard::IsObservedActive();
+  }
   bool shouldHold = false;
   const bool ok = LuaHelpers::RunExpression(
       L,
@@ -4473,9 +4496,12 @@ bool ScreenGameplay::OnlineShouldHoldBeforeEvaluation() {
 
 bool ScreenGameplay::OnlineShouldKeepGameplayAliveAfterLocalFail() {
   if (LUA == nullptr) {
-    return false;
+    return ITGOnlineSessionGuard::IsObservedActive();
   }
   Lua* L = LUA->Get();
+  if (L == nullptr) {
+    return ITGOnlineSessionGuard::IsObservedActive();
+  }
   bool keepAlive = false;
   const bool ok = LuaHelpers::RunExpression(
       L,
@@ -5073,9 +5099,13 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
   } else if (SM == SM_BeginFailed) {
     if (GetITGOnlineIsActive()) {
       if (!m_bMarkedOnlineFailedEarly) {
-        m_bMarkedOnlineFailedEarly = true;
-        MarkITGOnlineFailedEarly();
-        OnlineTrace("ITG Online: player failed but ScreenGameplay is kept active.");
+        const bool confirmed = MarkITGOnlineFailedEarly();
+        if (confirmed) {
+          m_bMarkedOnlineFailedEarly = true;
+        }
+        OnlineTrace(
+            "ITG Online: player failed; early failed finalization confirmed=%d.",
+            confirmed ? 1 : 0);
       }
 
       if (OnlineShouldHoldBeforeEvaluation()) {

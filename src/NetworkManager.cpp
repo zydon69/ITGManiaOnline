@@ -83,43 +83,54 @@ constexpr std::size_t kMaxQueryValueLength = 8192;
 constexpr std::size_t kMaxCredentialPartLength = 256;
 constexpr std::size_t kMaxCredentialSecretLength = 64 * 1024;
 constexpr std::size_t kMaxMainThreadTaskQueue = 4096;
+constexpr std::size_t kMaxTerminalMainThreadTaskQueue = 8192;
+constexpr std::size_t kMaxHttpWorkerQueue = 256;
+constexpr std::size_t kMaxDownloadWorkerQueue = 8;
+constexpr std::size_t kMaxWebSocketWorkerQueue = 64;
 constexpr int64_t kDefaultMaxHttpResponseBytes = 8LL * 1024LL * 1024LL;
+constexpr int64_t kDefaultMaxDownloadBytes = 512LL * 1024LL * 1024LL;
+constexpr int64_t kMaxDownloadBytes = 1024LL * 1024LL * 1024LL;
+constexpr std::size_t kMaxHttpRequestBodyBytes = 1024ULL * 1024ULL;
 constexpr int64_t kDefaultMaxWebSocketMessageBytes = 1024LL * 1024LL;
 constexpr int kDefaultDownloadTransferTimeoutSeconds = 30 * 60;
 constexpr int kMinTimeoutSeconds = 1;
 constexpr int kMaxTimeoutSeconds = 60 * 60;
 
-bool OnlineVerboseLogsEnabledFromThemePrefs() {
+std::atomic<bool> g_OnlineVerboseLogsEnabled{false};
+
+void RefreshOnlineVerboseLogsPreference() {
   static time_t lastRead = 0;
-  static bool cached = false;
 
   const time_t now = time(nullptr);
   if (now == lastRead) {
-    return cached;
+    return;
   }
 
   lastRead = now;
-  cached = false;
+  g_OnlineVerboseLogsEnabled = false;
 
   if (PREFSMAN == nullptr) {
-    return false;
+    return;
   }
 
   IniFile ini;
   if (!ini.ReadFile("Save/ThemePrefs.ini")) {
-    return false;
+    return;
   }
 
   bool enabled = false;
   if (!ini.GetValue(
           PREFSMAN->m_sTheme,
-          "ITGOnlineGameplayLayoutLogs",
+          "ITGOnlineNetworkLogs",
           enabled)) {
-    return false;
+    return;
   }
 
-  cached = enabled;
-  return cached;
+  g_OnlineVerboseLogsEnabled = enabled;
+}
+
+bool OnlineVerboseLogsEnabledFromThemePrefs() {
+  return g_OnlineVerboseLogsEnabled.load();
 }
 
 void NetworkTrace(const char* fmt, ...) {
@@ -133,7 +144,6 @@ void NetworkTrace(const char* fmt, ...) {
   vsnprintf(buffer, sizeof(buffer), fmt, args);
   va_end(args);
   LOG->Trace("%s", buffer);
-  LOG->Flush();
 }
 
 void NetworkWarn(const char* fmt, ...) {
@@ -576,13 +586,28 @@ bool LoadSignedNetworkSecurityOverride(
 }
 
 bool IsSafeDownloadFileName(const std::string& value) {
-  if (value.empty() || value == "." || value == "..") {
+  if (value.empty() || value.size() > 128 || value == "." || value == ".." ||
+      value.back() == '.' || value.back() == ' ') {
+    return false;
+  }
+
+  std::string base = value;
+  const auto dot = base.find('.');
+  if (dot != std::string::npos) {
+    base.erase(dot);
+  }
+  MakeLower(base);
+  static const std::set<std::string> kReservedWindowsNames{
+      "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4",
+      "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2",
+      "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"};
+  if (kReservedWindowsNames.count(base) != 0) {
     return false;
   }
 
   for (const char ch : value) {
     if (ch == '/' || ch == '\\' || ch == ':' ||
-        static_cast<unsigned char>(ch) < 32) {
+        static_cast<unsigned char>(ch) < 32 || static_cast<unsigned char>(ch) == 127) {
       return false;
     }
   }
@@ -595,16 +620,22 @@ bool IsProductionItgOnlineHost(const std::string& host) {
 }
 
 bool TlsBackendLikelySupportsPinning() {
+#if defined(__APPLE__)
+  // IXSocketAppleSSL rejects a pinned connection when it cannot enforce the
+  // configured public key hash. Treat that backend as fail-closed.
+  return true;
+#else
   const std::string userAgent = ix::userAgent();
   return userAgent.find("ssl/OpenSSL") != std::string::npos ||
          userAgent.find("ssl/mbedtls") != std::string::npos;
+#endif
 }
 }
 
 Preference<bool> NetworkManager::httpEnabled(
     "HttpEnabled", true, nullptr, PreferenceType::Immutable);
 Preference<std::string> NetworkManager::httpAllowHosts(
-    "HttpAllowHosts", BUILT_IN_HTTP_ALLOW_HOSTS);
+    "HttpAllowHosts", BUILT_IN_HTTP_ALLOW_HOSTS, nullptr, PreferenceType::Immutable);
 Preference<std::string> NetworkManager::httpDenyHosts("HttpDenyHosts", "");
 Preference<std::string> NetworkManager::httpPublicKeyPins(
     "HttpPublicKeyPins", BUILT_IN_HTTP_PUBLIC_KEY_PINS);
@@ -650,11 +681,21 @@ static std::atomic<std::uint64_t> g_LuaWebSocketCallbackStateIds{0};
 static std::atomic<std::uint64_t> g_WebSocketHandleIds{0};
 static std::atomic<std::uint64_t> g_DownloadTempFileIds{0};
 
+void SecureWipe(std::string& value) {
+  volatile char* bytes = value.empty() ? nullptr : value.data();
+  for (std::size_t i = 0; bytes != nullptr && i < value.size(); ++i) {
+    bytes[i] = 0;
+  }
+  value.clear();
+  value.shrink_to_fit();
+}
+
 struct LuaHttpCallbackState {
   std::uint64_t id{0};
   std::string url;
   std::atomic<bool> active{true};
   std::atomic<bool> canceled{false};
+  std::atomic<bool> progressCancelRequested{false};
   std::atomic<bool> progressQueued{false};
   std::atomic<int> latestProgressCurrent{0};
   std::atomic<int> latestProgressTotal{0};
@@ -671,12 +712,40 @@ struct LuaWebSocketCallbackState {
   std::atomic<bool> refReleased{false};
 };
 
+std::mutex g_LuaCallbackStateMutex;
+std::unordered_map<std::uint64_t, std::shared_ptr<LuaHttpCallbackState>>
+    g_LuaHttpCallbackStates;
+std::unordered_map<std::uint64_t, std::shared_ptr<LuaWebSocketCallbackState>>
+    g_LuaWebSocketCallbackStates;
+
+void RegisterLuaHttpCallbackState(
+    const std::shared_ptr<LuaHttpCallbackState>& state) {
+  std::lock_guard<std::mutex> lock(g_LuaCallbackStateMutex);
+  g_LuaHttpCallbackStates[state->id] = state;
+}
+
+void RegisterLuaWebSocketCallbackState(
+    const std::shared_ptr<LuaWebSocketCallbackState>& state) {
+  std::lock_guard<std::mutex> lock(g_LuaCallbackStateMutex);
+  g_LuaWebSocketCallbackStates[state->id] = state;
+}
+
 void ReleaseLuaHttpCallbackRefs(
     lua_State* L,
     const std::shared_ptr<LuaHttpCallbackState>& state) {
-  if (!state || state->refsReleased.exchange(true)) {
+  if (!state || state->refsReleased.load()) {
     return;
   }
+
+  state->active = false;
+  if (L == nullptr) {
+    NetworkTrace(
+        "ITG Online NetworkTrace: http_refs_release_deferred id=%llu url=%s",
+        static_cast<unsigned long long>(state->id),
+        RedactUrlForLog(state->url).c_str());
+    return;
+  }
+  if (state->refsReleased.exchange(true)) return;
 
   NetworkTrace(
       "ITG Online NetworkTrace: http_refs_release_begin id=%llu url=%s "
@@ -688,12 +757,11 @@ void ReleaseLuaHttpCallbackRefs(
       state->canceled.load() ? 1 : 0,
       state->active.load() ? 1 : 0);
 
-  state->active = false;
-  if (L != nullptr && state->progressRef != LUA_NOREF) {
+  if (state->progressRef != LUA_NOREF) {
     luaL_unref(L, LUA_REGISTRYINDEX, state->progressRef);
   }
   state->progressRef = LUA_NOREF;
-  if (L != nullptr && state->responseRef != LUA_NOREF) {
+  if (state->responseRef != LUA_NOREF) {
     luaL_unref(L, LUA_REGISTRYINDEX, state->responseRef);
   }
   state->responseRef = LUA_NOREF;
@@ -701,14 +769,26 @@ void ReleaseLuaHttpCallbackRefs(
       "ITG Online NetworkTrace: http_refs_release_end id=%llu url=%s",
       static_cast<unsigned long long>(state->id),
       RedactUrlForLog(state->url).c_str());
+  std::lock_guard<std::mutex> lock(g_LuaCallbackStateMutex);
+  g_LuaHttpCallbackStates.erase(state->id);
 }
 
 void ReleaseLuaWebSocketCallbackRef(
     lua_State* L,
     const std::shared_ptr<LuaWebSocketCallbackState>& state) {
-  if (!state || state->refReleased.exchange(true)) {
+  if (!state || state->refReleased.load()) {
     return;
   }
+
+  state->active = false;
+  if (L == nullptr) {
+    NetworkTrace(
+        "ITG Online NetworkTrace: websocket_ref_release_deferred id=%llu url=%s",
+        static_cast<unsigned long long>(state->id),
+        RedactUrlForLog(state->url).c_str());
+    return;
+  }
+  if (state->refReleased.exchange(true)) return;
 
   NetworkTrace(
       "ITG Online NetworkTrace: websocket_ref_release_begin id=%llu url=%s "
@@ -718,8 +798,7 @@ void ReleaseLuaWebSocketCallbackRef(
       state->messageRef,
       state->active.load() ? 1 : 0);
 
-  state->active = false;
-  if (L != nullptr && state->messageRef != LUA_NOREF) {
+  if (state->messageRef != LUA_NOREF) {
     luaL_unref(L, LUA_REGISTRYINDEX, state->messageRef);
   }
   state->messageRef = LUA_NOREF;
@@ -727,6 +806,32 @@ void ReleaseLuaWebSocketCallbackRef(
       "ITG Online NetworkTrace: websocket_ref_release_end id=%llu url=%s",
       static_cast<unsigned long long>(state->id),
       RedactUrlForLog(state->url).c_str());
+  std::lock_guard<std::mutex> lock(g_LuaCallbackStateMutex);
+  g_LuaWebSocketCallbackStates.erase(state->id);
+}
+
+void ReleaseAllLuaCallbackRefs(lua_State* L) {
+  std::vector<std::shared_ptr<LuaHttpCallbackState>> httpStates;
+  std::vector<std::shared_ptr<LuaWebSocketCallbackState>> webSocketStates;
+  {
+    std::lock_guard<std::mutex> lock(g_LuaCallbackStateMutex);
+    for (const auto& entry : g_LuaHttpCallbackStates) {
+      httpStates.push_back(entry.second);
+    }
+    for (const auto& entry : g_LuaWebSocketCallbackStates) {
+      webSocketStates.push_back(entry.second);
+    }
+  }
+  for (const auto& state : httpStates) ReleaseLuaHttpCallbackRefs(L, state);
+  for (const auto& state : webSocketStates) {
+    ReleaseLuaWebSocketCallbackRef(L, state);
+  }
+}
+
+void ForgetAllLuaCallbackStates() {
+  std::lock_guard<std::mutex> lock(g_LuaCallbackStateMutex);
+  g_LuaHttpCallbackStates.clear();
+  g_LuaWebSocketCallbackStates.clear();
 }
 
 static bool HostMatchesPattern(const std::string& host, const std::string& pattern) {
@@ -886,6 +991,7 @@ NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
   this->ClearDownloads();
 
   this->httpWorker = std::thread(&NetworkManager::RunHttpWorker, this);
+  this->downloadWorker = std::thread(&NetworkManager::RunDownloadWorker, this);
   this->webSocketWorker =
       std::thread(&NetworkManager::RunWebSocketWorker, this);
   NetworkTrace("ITG Online NetworkTrace: network_manager_ctor_end");
@@ -896,6 +1002,11 @@ NetworkManager::~NetworkManager() {
   this->CloseAllWebSockets();
   this->StopWorkers();
   this->DrainMainThreadTasks();
+  if (!WithLua([](Lua* L) { ReleaseAllLuaCallbackRefs(L); })) {
+    // The Lua registry has already been destroyed, so its references no
+    // longer own any objects. Drop only the C++ keep-alive registry.
+    ForgetAllLuaCallbackStates();
+  }
   this->ClearMainThreadTasks();
 
   // Unregister with Lua after all network callbacks have been cancelled.
@@ -979,6 +1090,24 @@ void NetworkManager::RunHttpWorker() {
   }
 }
 
+void NetworkManager::RunDownloadWorker() {
+  while (true) {
+    std::function<void()> task;
+    {
+      std::unique_lock<std::mutex> lock(this->downloadWorkerMutex);
+      this->downloadWorkerCv.wait(lock, [this] {
+        return this->shutdownWorkers.load() || !this->downloadWorkerQueue.empty();
+      });
+      if (this->shutdownWorkers.load() && this->downloadWorkerQueue.empty()) {
+        return;
+      }
+      task = std::move(this->downloadWorkerQueue.front());
+      this->downloadWorkerQueue.pop();
+    }
+    task();
+  }
+}
+
 void NetworkManager::RunWebSocketWorker() {
   while (true) {
     std::function<void()> task;
@@ -1010,11 +1139,17 @@ void NetworkManager::RunWebSocketWorker() {
 
 void NetworkManager::StopWorkers() {
   this->shutdownWorkers = true;
+  this->CancelActiveHttpRequests();
 
   {
     std::lock_guard<std::mutex> lock(this->httpWorkerMutex);
     std::queue<std::function<void()>> emptyQueue;
     this->httpWorkerQueue.swap(emptyQueue);
+  }
+  {
+    std::lock_guard<std::mutex> lock(this->downloadWorkerMutex);
+    std::queue<std::function<void()>> emptyQueue;
+    this->downloadWorkerQueue.swap(emptyQueue);
   }
   {
     std::lock_guard<std::mutex> lock(this->webSocketWorkerMutex);
@@ -1023,14 +1158,31 @@ void NetworkManager::StopWorkers() {
   }
 
   this->httpWorkerCv.notify_one();
+  this->downloadWorkerCv.notify_one();
   this->webSocketWorkerCv.notify_one();
 
   if (this->httpWorker.joinable()) {
     this->httpWorker.join();
   }
+  if (this->downloadWorker.joinable()) {
+    this->downloadWorker.join();
+  }
 
   if (this->webSocketWorker.joinable()) {
     this->webSocketWorker.join();
+  }
+}
+
+void NetworkManager::CancelActiveHttpRequests() {
+  std::lock_guard<std::mutex> lock(this->activeHttpRequestsMutex);
+  for (auto it = this->activeHttpRequests.begin();
+       it != this->activeHttpRequests.end();) {
+    if (auto request = it->lock()) {
+      request->cancel = true;
+      ++it;
+    } else {
+      it = this->activeHttpRequests.erase(it);
+    }
   }
 }
 
@@ -1074,7 +1226,8 @@ void NetworkManager::DrainMainThreadTasks() {
   }
 }
 
-bool NetworkManager::EnqueueMainThreadTask(std::function<void()> task) {
+bool NetworkManager::EnqueueMainThreadTask(
+    std::function<void()> task, bool terminal) {
   if (this->shutdownWorkers.load()) {
     NetworkTrace(
         "ITG Online NetworkTrace: enqueue_main_thread_task_skipped "
@@ -1083,11 +1236,13 @@ bool NetworkManager::EnqueueMainThreadTask(std::function<void()> task) {
   }
 
   std::lock_guard<std::mutex> lock(this->mainThreadTaskMutex);
-  if (this->mainThreadTaskQueue.size() >= kMaxMainThreadTaskQueue) {
+  const std::size_t limit = terminal ? kMaxTerminalMainThreadTaskQueue
+                                     : kMaxMainThreadTaskQueue;
+  if (this->mainThreadTaskQueue.size() >= limit) {
     NetworkWarn(
-        "Network main-thread task queue overflow: dropping task at %zu queued "
-        "task(s)",
-        this->mainThreadTaskQueue.size());
+        "Network main-thread task queue overflow: dropping %s task at %zu "
+        "queued task(s)",
+        terminal ? "terminal" : "non-terminal", this->mainThreadTaskQueue.size());
     return false;
   }
   this->mainThreadTaskQueue.push(std::move(task));
@@ -1095,6 +1250,7 @@ bool NetworkManager::EnqueueMainThreadTask(std::function<void()> task) {
 }
 
 void NetworkManager::Update() {
+  RefreshOnlineVerboseLogsPreference();
   RageTimer timer;
   static RageTimer lastBacklogWarning;
   int tasksProcessed = 0;
@@ -1175,28 +1331,24 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
     return false;
   }
 
-  if (protocol != "http" && protocol != "https" && protocol != "ws" &&
-      protocol != "wss") {
+  if (protocol != "https" && protocol != "wss") {
+    return false;
+  }
+
+  if (port != 443) {
     return false;
   }
 
   MakeLower(host);
 
-  if ((protocol == "http" || protocol == "ws") &&
-      IsProductionItgOnlineHost(host)) {
-    return false;
-  }
-
-  if ((protocol == "https" || protocol == "wss") &&
-      IsProductionItgOnlineHost(host) &&
+  if (IsProductionItgOnlineHost(host) &&
       !this->tlsBackendEnforcesPublicKeyPins &&
       !this->httpPublicKeyPins.Get().empty() &&
       !this->warnedPinningUnsupportedForProductionHost.exchange(true)) {
     NetworkWarn(
-        "Allowing %s without enforced public key pinning because this build "
-        "TLS backend does not support pin verification. Rebuild with a "
-        "pinning-capable backend for strict trust guarantees.",
+        "Refusing %s because this build cannot verify configured public key pins.",
         RedactUrlForLog(url).c_str());
+    return false;
   }
 
   std::lock_guard<std::mutex> hostCacheLock(hostCacheMutex);
@@ -1267,10 +1419,19 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
   auto downloadedBytes = std::make_shared<int64_t>(0);
   std::string downloadFilename;
   std::string tempDownloadFilename;
+  const int64_t effectiveMaxDownloadBytes = args.maxDownloadBytes >= 0
+      ? std::min(args.maxDownloadBytes, kMaxDownloadBytes)
+      : kDefaultMaxDownloadBytes;
 
   ix::HttpRequestArgsPtr req = client.createRequest(args.url, args.method);
   req->body = args.body;
   req->multipartBoundary = args.multipartBoundary;
+  req->followRedirects = false;
+  req->maxRedirects = 0;
+  req->allowCompressedResponse = false;
+  req->maxResponseBodyBytes = static_cast<uint64_t>(
+      args.maxResponseBytes >= 0 ? args.maxResponseBytes
+                                 : kDefaultMaxHttpResponseBytes);
   // Avoid gzip-compressed HTTP responses: Lua JSON consumers expect plain text.
   // Some upstream endpoints return gzip payloads that are not decoded in this path.
   req->compress = false;
@@ -1293,15 +1454,13 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
     }
 
     req->onChunkCallback =
-        [args, downloadFile, downloadError, downloadedBytes,
+        [downloadFile, downloadError, downloadedBytes, effectiveMaxDownloadBytes,
          req](const std::string& data) {
-      if (args.maxDownloadBytes >= 0) {
-        *downloadedBytes += static_cast<int64_t>(data.size());
-        if (*downloadedBytes > args.maxDownloadBytes) {
-          *downloadError = "download exceeded maximum allowed size";
-          req->cancel = true;
-          return;
-        }
+      *downloadedBytes += static_cast<int64_t>(data.size());
+      if (*downloadedBytes > effectiveMaxDownloadBytes) {
+        *downloadError = "download exceeded maximum allowed size";
+        req->cancel = true;
+        return;
       }
       if (downloadFile->Write(data.c_str(), data.size()) < 0) {
         req->cancel = true;
@@ -1324,12 +1483,38 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
   }
 
   {
-    std::lock_guard<std::mutex> lock(this->httpWorkerMutex);
+    std::mutex& workerMutex = useDownloadClient ? this->downloadWorkerMutex
+                                                 : this->httpWorkerMutex;
+    std::queue<std::function<void()>>& workerQueue =
+        useDownloadClient ? this->downloadWorkerQueue : this->httpWorkerQueue;
+    const std::size_t workerQueueLimit =
+        useDownloadClient ? kMaxDownloadWorkerQueue : kMaxHttpWorkerQueue;
+    std::lock_guard<std::mutex> lock(workerMutex);
     if (this->shutdownWorkers.load()) {
       req->cancel = true;
       return std::make_shared<HttpRequestFuture>(req, args.onCancel);
     }
-    this->httpWorkerQueue.push(
+    if (workerQueue.size() >= workerQueueLimit) {
+      req->cancel = true;
+      if (args.onResponse) {
+        args.onResponse(MakeCancelledHttpResponse(
+            useDownloadClient ? "download worker queue is full"
+                              : "HTTP worker queue is full"));
+      }
+      return std::make_shared<HttpRequestFuture>(req, args.onCancel);
+    }
+    {
+      std::lock_guard<std::mutex> activeLock(this->activeHttpRequestsMutex);
+      this->activeHttpRequests.erase(
+          std::remove_if(
+              this->activeHttpRequests.begin(), this->activeHttpRequests.end(),
+              [](const std::weak_ptr<ix::HttpRequestArgs>& request) {
+                return request.expired();
+              }),
+          this->activeHttpRequests.end());
+      this->activeHttpRequests.push_back(req);
+    }
+    workerQueue.push(
         [this, useDownloadClient, req, args, downloadFile, downloadError,
          downloadFilename, tempDownloadFilename]() {
           if (this->shutdownWorkers.load()) {
@@ -1363,10 +1548,12 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
                     return;
                   }
 
-                  if (response && response->errorCode != ix::HttpErrorCode::Ok) {
+                  if (response == nullptr ||
+                      response->errorCode != ix::HttpErrorCode::Ok ||
+                      response->statusCode < 200 || response->statusCode >= 300) {
                     if (args.onFileError) {
                       args.onFileError(
-                          response->errorMsg.empty()
+                          response == nullptr || response->errorMsg.empty()
                               ? "download request failed"
                               : response->errorMsg);
                     }
@@ -1380,17 +1567,36 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
                     if (args.onFileError) {
                       args.onFileError("file manager unavailable");
                     }
+                    downloadFile->Close();
                     return;
                   }
 
-                  FILEMAN->Remove(downloadFilename);
+                  const std::string backupFilename = downloadFilename + ".previous";
+                  FILEMAN->Remove(backupFilename);
+                  const bool hadExistingDownload =
+                      FILEMAN->DoesFileExist(downloadFilename);
+                  if (hadExistingDownload &&
+                      !FILEMAN->Move(downloadFilename, backupFilename)) {
+                    if (args.onFileError) {
+                      args.onFileError(
+                          "could not preserve existing completed download");
+                    }
+                    FILEMAN->Remove(tempDownloadFilename);
+                    return;
+                  }
                   if (!FILEMAN->Move(tempDownloadFilename, downloadFilename)) {
+                    if (hadExistingDownload) {
+                      FILEMAN->Move(backupFilename, downloadFilename);
+                    }
                     if (args.onFileError) {
                       args.onFileError(
                           "could not move completed download into place");
                     }
                     FILEMAN->Remove(tempDownloadFilename);
                     return;
+                  }
+                  if (hadExistingDownload) {
+                    FILEMAN->Remove(backupFilename);
                   }
                 }
 
@@ -1402,17 +1608,18 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
                   args.onResponse(response);
                 }
 
-                if (!args.downloadFile.empty() &&
-                    args.deleteDownloadAfterResponse) {
-                  if (FILEMAN != nullptr) {
-                    FILEMAN->Remove(downloadFilename);
-                  }
-                }
+                // The Lua callback consumes the published download on the
+                // main thread. It must explicitly remove the artifact once
+                // processing is complete; deleting here races that callback.
               });
         });
   }
 
-  this->httpWorkerCv.notify_one();
+  if (useDownloadClient) {
+    this->downloadWorkerCv.notify_one();
+  } else {
+    this->httpWorkerCv.notify_one();
+  }
 
   return std::make_shared<HttpRequestFuture>(req, args.onCancel);
 }
@@ -1426,6 +1633,17 @@ WebSocketHandlePtr NetworkManager::WebSocket(const WebSocketArgs& args) {
     handle->closed = true;
     NetworkWarn(
         "blocked websocket access to %s", RedactUrlForLog(args.url).c_str());
+    if (args.onMessage) {
+      static const std::string kEmptyMessage;
+      ix::WebSocketErrorInfo errorInfo;
+      errorInfo.reason = this->shutdownWorkers.load()
+          ? "network manager is shutting down"
+          : "websocket URL is not allowed";
+      const ix::WebSocketMessage message(
+          ix::WebSocketMessageType::Error, kEmptyMessage, 0, errorInfo,
+          ix::WebSocketOpenInfo(), ix::WebSocketCloseInfo());
+      args.onMessage(message);
+    }
     return handle;
   }
 
@@ -1436,6 +1654,7 @@ WebSocketHandlePtr NetworkManager::WebSocket(const WebSocketArgs& args) {
 
   handle->webSocket.setUrl(args.url);
   handle->webSocket.setTLSOptions(this->tlsOptions);
+  handle->webSocket.disablePerMessageDeflate();
   const int64_t maxMessageBytes = args.maxMessageBytes >= 0
       ? args.maxMessageBytes
       : kDefaultMaxWebSocketMessageBytes;
@@ -1478,6 +1697,21 @@ WebSocketHandlePtr NetworkManager::WebSocket(const WebSocketArgs& args) {
     std::lock_guard<std::mutex> lock(this->webSocketWorkerMutex);
     if (this->shutdownWorkers.load()) {
       handle->closed = true;
+      return handle;
+    }
+    if (this->webSocketWorkerQueue.size() >= kMaxWebSocketWorkerQueue) {
+      handle->closed = true;
+      NetworkWarn("WebSocket worker queue is full for %s",
+                  RedactUrlForLog(args.url).c_str());
+      if (args.onMessage) {
+        static const std::string kEmptyMessage;
+        ix::WebSocketErrorInfo errorInfo;
+        errorInfo.reason = "websocket worker queue is full";
+        const ix::WebSocketMessage message(
+            ix::WebSocketMessageType::Error, kEmptyMessage, 0, errorInfo,
+            ix::WebSocketOpenInfo(), ix::WebSocketCloseInfo());
+        args.onMessage(message);
+      }
       return handle;
     }
     this->webSocketWorkerQueue.push([this, handle]() {
@@ -1546,9 +1780,12 @@ void NetworkManager::ClearDownloads() {
     const auto slash = file.find_last_of('/');
     const std::string filename =
         slash == std::string::npos ? file : file.substr(slash + 1);
-    if (filename.compare(0, 10, ".itgmania-") != 0 ||
-        filename.size() < 4 ||
-        filename.substr(filename.size() - 4) != ".tmp") {
+	const bool managedTemp = filename.compare(0, 10, ".itgmania-") == 0 &&
+		filename.size() >= 4 && filename.substr(filename.size() - 4) == ".tmp";
+	const bool managedOnlineArchive =
+		filename.compare(0, 11, "itg-online-") == 0 && filename.size() >= 4 &&
+		filename.substr(filename.size() - 4) == ".zip";
+	if (!managedTemp && !managedOnlineArchive) {
       continue;
     }
 
@@ -1561,10 +1798,9 @@ void NetworkManager::ClearDownloads() {
 int HttpRequestFuture::Collect(lua_State* L) {
   void* udata = luaL_checkudata(L, 1, "HttpRequestFuture");
   auto futptr = static_cast<HttpRequestFuturePtr*>(udata);
-  if (futptr != nullptr && *futptr) {
-    (*futptr)->args->cancel = true;
-    (*futptr)->canceled = true;
-  }
+  // Futures are handles, not ownership of the request. Fire-and-forget Lua
+  // callers are valid and must not have their request silently cancelled by
+  // a collection cycle. Explicit Cancel() remains the only cancellation API.
   futptr->~shared_ptr();
   return 0;
 }
@@ -1796,6 +2032,9 @@ class LunaNetworkManager : public Luna<NetworkManager> {
       if (lua_isstring(L, -1)) {
         size_t len;
         const char* s = lua_tolstring(L, -1, &len);
+        if (len > kMaxHttpRequestBodyBytes) {
+          luaL_error(L, "body exceeds maximum allowed size");
+        }
         args.body = std::string(s, len);
       } else {
         luaL_error(L, "body must be a string");
@@ -1808,6 +2047,9 @@ class LunaNetworkManager : public Luna<NetworkManager> {
       if (lua_isstring(L, -1)) {
         size_t len;
         const char* s = lua_tolstring(L, -1, &len);
+        if (len > kMaxHttpHeaderValueLength) {
+          luaL_error(L, "multipartBoundary exceeds maximum allowed size");
+        }
         args.multipartBoundary = std::string(s, len);
       } else {
         luaL_error(L, "multipartBoundary must be a string");
@@ -1870,7 +2112,7 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     lua_getfield(L, 1, "maxDownloadBytes");
     if (!lua_isnil(L, -1)) {
       args.maxDownloadBytes = ClampNonNegativeInt64(
-          L, -1, "maxDownloadBytes", std::numeric_limits<int64_t>::max());
+          L, -1, "maxDownloadBytes", kMaxDownloadBytes);
     }
     lua_pop(L, 1);
 
@@ -1904,7 +2146,8 @@ class LunaNetworkManager : public Luna<NetworkManager> {
         callbackState->progressRef = luaL_ref(L, LUA_REGISTRYINDEX);
 
         args.onProgress = [p, callbackState](int current, int total) {
-          if (!callbackState->active.load()) {
+		  if (!callbackState->active.load() ||
+		      callbackState->progressCancelRequested.load()) {
             return false;
           }
 
@@ -1926,7 +2169,9 @@ class LunaNetworkManager : public Luna<NetworkManager> {
             const int current = callbackState->latestProgressCurrent.load();
             const int total = callbackState->latestProgressTotal.load();
             WithLua([callbackState, current, total](Lua* L) {
-              handleProgress(L, current, total, callbackState->progressRef);
+			  if (!handleProgress(L, current, total, callbackState->progressRef)) {
+				callbackState->progressCancelRequested = true;
+			  }
             });
           })) {
             callbackState->progressQueued = false;
@@ -1953,6 +2198,7 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     }
     lua_pop(L, 1);
 
+    RegisterLuaHttpCallbackState(callbackState);
     args.onCancel = [p, callbackState]() {
       NetworkTrace(
           "ITG Online NetworkTrace: lua_http_cancel id=%llu url=%s",
@@ -1966,7 +2212,7 @@ class LunaNetworkManager : public Luna<NetworkManager> {
             })) {
           ReleaseLuaHttpCallbackRefs(nullptr, callbackState);
         }
-      })) {
+      }, true)) {
         ReleaseLuaHttpCallbackRefs(nullptr, callbackState);
       }
     };
@@ -1990,7 +2236,7 @@ class LunaNetworkManager : public Luna<NetworkManager> {
             })) {
           ReleaseLuaHttpCallbackRefs(nullptr, callbackState);
         }
-      })) {
+      }, true)) {
         ReleaseLuaHttpCallbackRefs(nullptr, callbackState);
       }
     };
@@ -2029,32 +2275,22 @@ class LunaNetworkManager : public Luna<NetworkManager> {
             })) {
           ReleaseLuaHttpCallbackRefs(nullptr, callbackState);
         }
-      })) {
+      }, true)) {
         ReleaseLuaHttpCallbackRefs(nullptr, callbackState);
       }
     };
 
-    if (p->IsUrlAllowed(args.url)) {
-      NetworkTrace(
-          "ITG Online NetworkTrace: lua_http_request_submit id=%llu url=%s",
-          static_cast<unsigned long long>(callbackState->id),
-          RedactUrlForLog(callbackState->url).c_str());
-      auto fut = p->HttpRequest(args);
+    NetworkTrace(
+        "ITG Online NetworkTrace: lua_http_request_submit id=%llu url=%s",
+        static_cast<unsigned long long>(callbackState->id),
+        RedactUrlForLog(callbackState->url).c_str());
+    auto fut = p->HttpRequest(args);
 
-      void* vp = lua_newuserdata(L, sizeof(std::shared_ptr<HttpRequestFuture>));
-      new (vp) std::shared_ptr<::HttpRequestFuture>(fut);
-      luaL_getmetatable(L, "HttpRequestFuture");
-      lua_setmetatable(L, -2);
-      return 1;
-    } else {
-      NetworkWarn("blocked access to %s", RedactUrlForLog(args.url).c_str());
-      callbackState->active = false;
-      if (callbackState->responseRef != LUA_NOREF) {
-        handleUrlForbidden(L, args.url, callbackState->responseRef);
-      }
-      ReleaseLuaHttpCallbackRefs(L, callbackState);
-      return 0;
-    }
+    void* vp = lua_newuserdata(L, sizeof(std::shared_ptr<HttpRequestFuture>));
+    new (vp) std::shared_ptr<::HttpRequestFuture>(fut);
+    luaL_getmetatable(L, "HttpRequestFuture");
+    lua_setmetatable(L, -2);
+    return 1;
   }
 
   static int WebSocket(T* p, lua_State* L) {
@@ -2156,6 +2392,7 @@ class LunaNetworkManager : public Luna<NetworkManager> {
         ? args.maxMessageBytes
         : kDefaultMaxWebSocketMessageBytes;
 
+    RegisterLuaWebSocketCallbackState(callbackState);
     args.onMessage =
         [p, callbackState, luaMaxMessageBytes](const ix::WebSocketMessage& msg) {
       if (!callbackState->active.load()) {
@@ -2198,6 +2435,9 @@ class LunaNetworkManager : public Luna<NetworkManager> {
           IxWebSocketMessageTypeName(type),
           data.size());
 
+      const bool terminalMessage =
+          type == ix::WebSocketMessageType::Close ||
+          type == ix::WebSocketMessageType::Error;
       if (!p->EnqueueMainThreadTask(
           [type, data, errorInfo, openInfo, closeInfo, binary, callbackState]() {
             if (!callbackState->active.load() ||
@@ -2235,7 +2475,7 @@ class LunaNetworkManager : public Luna<NetworkManager> {
                   RedactUrlForLog(callbackState->url).c_str(),
                   IxWebSocketMessageTypeName(type));
             });
-          })) {
+          }, terminalMessage)) {
         ReleaseLuaWebSocketCallbackRef(nullptr, callbackState);
       }
     };
@@ -2252,32 +2492,22 @@ class LunaNetworkManager : public Luna<NetworkManager> {
                 })) {
               ReleaseLuaWebSocketCallbackRef(nullptr, callbackState);
             }
-          })) {
+          }, true)) {
         ReleaseLuaWebSocketCallbackRef(nullptr, callbackState);
       }
     };
 
-    if (p->IsUrlAllowed(args.url)) {
-      NetworkTrace(
-          "ITG Online NetworkTrace: lua_websocket_submit id=%llu url=%s",
-          static_cast<unsigned long long>(callbackState->id),
-          RedactUrlForLog(callbackState->url).c_str());
-      auto handle = p->WebSocket(args);
+    NetworkTrace(
+        "ITG Online NetworkTrace: lua_websocket_submit id=%llu url=%s",
+        static_cast<unsigned long long>(callbackState->id),
+        RedactUrlForLog(callbackState->url).c_str());
+    auto handle = p->WebSocket(args);
 
-      void* vp = lua_newuserdata(L, sizeof(std::shared_ptr<WebSocketHandle>));
-      new (vp) std::shared_ptr<::WebSocketHandle>(handle);
-      luaL_getmetatable(L, "WebSocketHandle");
-      lua_setmetatable(L, -2);
-      return 1;
-    } else {
-      NetworkWarn("blocked access to %s", RedactUrlForLog(args.url).c_str());
-      callbackState->active = false;
-      if (callbackState->messageRef != LUA_NOREF) {
-        handleWebSocketUrlForbidden(L, args.url, callbackState->messageRef);
-      }
-      ReleaseLuaWebSocketCallbackRef(L, callbackState);
-      return 0;
-    }
+    void* vp = lua_newuserdata(L, sizeof(std::shared_ptr<WebSocketHandle>));
+    new (vp) std::shared_ptr<::WebSocketHandle>(handle);
+    luaL_getmetatable(L, "WebSocketHandle");
+    lua_setmetatable(L, -2);
+    return 1;
   }
 
   static int UrlEncode(T* p, lua_State* L) {
@@ -2372,6 +2602,7 @@ class LunaNetworkManager : public Luna<NetworkManager> {
       lua_pushstring(L, error.c_str());
       lua_setfield(L, -2, "error");
     }
+	SecureWipe(secret);
 
     return 1;
   }
@@ -2385,7 +2616,9 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     std::string secret(secretBytes, secretLength);
     if (!IsBoundedPlainValue(service, kMaxCredentialPartLength, false) ||
         !IsBoundedPlainValue(account, kMaxCredentialPartLength, false) ||
-        secretLength > kMaxCredentialSecretLength) {
+		secretLength == 0 || secretLength > kMaxCredentialSecretLength ||
+		secret.find('\0') != std::string::npos) {
+		SecureWipe(secret);
       lua_newtable(L);
       lua_pushboolean(L, false);
       lua_setfield(L, -2, "ok");
@@ -2396,6 +2629,7 @@ class LunaNetworkManager : public Luna<NetworkManager> {
 
     std::string error;
     bool ok = SecureCredentialStore::Store(service, account, secret, error);
+	SecureWipe(secret);
 
     lua_newtable(L);
     lua_pushboolean(L, ok);
@@ -2452,21 +2686,6 @@ class LunaNetworkManager : public Luna<NetworkManager> {
   }
 
  private:
-  static void handleUrlForbidden(Lua* L, std::string& url, int onResponseRef) {
-    lua_rawgeti(L, LUA_REGISTRYINDEX, onResponseRef);
-
-    lua_newtable(L);
-
-    LuaHelpers::Push(L, HttpErrorCode_Blocked);
-    lua_setfield(L, -2, "error");
-
-    lua_pushfstring(L, "access to %s is not allowed", url.c_str());
-    lua_setfield(L, -2, "errorMessage");
-
-    std::string error = "Lua error in HTTP response handler: ";
-    LuaHelpers::RunScriptOnStack(L, error, 1, 0, true);
-  }
-
   static void handleFileError(
       Lua* L, const std::string& errorMessage, int onResponseRef) {
     lua_rawgeti(L, LUA_REGISTRYINDEX, onResponseRef);
@@ -2592,30 +2811,22 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     LuaHelpers::RunScriptOnStack(L, error, 1, 0, true);
   }
 
-  static void handleProgress(
+  static bool handleProgress(
       Lua* L, int current, int total, int onProgressRef) {
     lua_rawgeti(L, LUA_REGISTRYINDEX, onProgressRef);
     lua_pushinteger(L, current);
     lua_pushinteger(L, total);
 
     std::string error = "Lua error in HTTP progress handler: ";
-    LuaHelpers::RunScriptOnStack(L, error, 2, 0, true);
-  }
-
-  static void handleWebSocketUrlForbidden(
-      Lua* L, std::string& url, int onMessageRef) {
-    lua_rawgeti(L, LUA_REGISTRYINDEX, onMessageRef);
-
-    lua_newtable(L);
-
-    LuaHelpers::Push(L, WebSocketMessageType_Error);
-    lua_setfield(L, -2, "type");
-
-    lua_pushfstring(L, "access to %s is not allowed", url.c_str());
-    lua_setfield(L, -2, "reason");
-
-    std::string error = "Lua error in WebSocket message handler: ";
-    LuaHelpers::RunScriptOnStack(L, error, 1, 0, true);
+	if (!LuaHelpers::RunScriptOnStack(L, error, 2, 1, true)) {
+	  return false;
+	}
+	bool keepGoing = true;
+	if (lua_isboolean(L, -1)) {
+	  keepGoing = lua_toboolean(L, -1);
+	}
+	lua_pop(L, 1);
+	return keepGoing;
   }
 
   static void handleMessage(

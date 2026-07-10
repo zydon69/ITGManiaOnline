@@ -271,11 +271,8 @@ static bool HasActiveITGOnlineRoom() {
   const int top = lua_gettop(L);
   const bool ran = LuaHelpers::RunExpression(
       L,
-      "ITGOnline ~= nil "
-      "and ITGOnline.currentRoom ~= nil "
-      "and ITGOnline.currentRoomId ~= nil "
-      "and ITGOnline.currentRoom.id == ITGOnline.currentRoomId "
-      "and ITGOnline.user ~= nil",
+      "ITGOnline ~= nil and ITGOnline.HasActiveRoom ~= nil "
+      "and ITGOnline:HasActiveRoom()",
       "HasActiveITGOnlineRoom");
   const bool active = ran && lua_gettop(L) > top && lua_toboolean(L, -1);
   lua_settop(L, top);
