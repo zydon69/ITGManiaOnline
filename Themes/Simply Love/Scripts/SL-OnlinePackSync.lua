@@ -21,6 +21,7 @@ PackSync.downloadedPackKey = PackSync.downloadedPackKey or ""
 PackSync.downloadGeneration = tonumber(PackSync.downloadGeneration) or 0
 PackSync.downloadStatusSequence = tonumber(PackSync.downloadStatusSequence) or 0
 PackSync.activeDownloadId = PackSync.activeDownloadId or ""
+PackSync.downloadFuture = PackSync.downloadFuture or nil
 PackSync.localScanCache = PackSync.localScanCache or {}
 PackSync.lastPostedStatusSignature = PackSync.lastPostedStatusSignature or ""
 PackSync.lastPostedStatusAt = tonumber(PackSync.lastPostedStatusAt) or 0
@@ -380,6 +381,11 @@ local function current_user_is_active_room_member()
 end
 
 function PackSync:NextDownloadGeneration(reason)
+	if self.downloadFuture and self.downloadFuture.Cancel then
+		pcall(function() self.downloadFuture:Cancel() end)
+		trace("Cancelled stale pack download before advancing generation=" .. tostring(self.downloadGeneration or 0))
+	end
+	self.downloadFuture = nil
 	self.downloadGeneration = (tonumber(self.downloadGeneration) or 0) + 1
 	self.downloadStatusSequence = math.max(tonumber(self.downloadStatusSequence) or 0, tonumber(self.sequence) or 0)
 	reason = tostring(reason or "unknown")
@@ -631,6 +637,17 @@ local function remove_directory_if_possible(path)
 	end
 end
 
+local function rollback_installed_pack_if_possible(path)
+	if not path or path == "" then return false end
+	if FILEMAN and FILEMAN.RollbackOnlineSongPack then
+		local ok, removed = pcall(function() return FILEMAN:RollbackOnlineSongPack(path) end)
+		if ok and removed then return true end
+		trace("Installed pack rollback failed path=" .. tostring(path))
+		return false
+	end
+	return false
+end
+
 local function create_directory_if_possible(path)
 	if not FILEMAN or not FILEMAN.CreateDir then return end
 	if not path or path == "" then return end
@@ -869,15 +886,18 @@ local function local_song_library_key()
 		if dir ~= "" then dirs[#dirs + 1] = dir end
 	end
 	table.sort(dirs)
-	local hash = 2166136261
-	local totalLength = 0
-	for _, dir in ipairs(dirs) do
-		totalLength = totalLength + #dir
-		for index = 1, #dir do
-			hash = (hash * 16777619 + string.byte(dir, index)) % 4294967296
+	local joined = table.concat(dirs, "\n")
+	if CRYPTMAN and CRYPTMAN.SHA256String and type(BinaryToHex) == "function" then
+		local ok, digest = pcall(function()
+			return BinaryToHex(CRYPTMAN:SHA256String(joined))
+		end)
+		if ok and type(digest) == "string" and digest ~= "" then
+			return tostring(#dirs) .. ":" .. digest:lower()
 		end
 	end
-	return tostring(#dirs) .. ":" .. tostring(totalLength) .. ":" .. tostring(hash)
+	-- No imprecise numeric hash fallback: a failed native digest merely forces
+	-- a rescan instead of risking a cache collision.
+	return ""
 end
 
 local function local_scan_key(songInfo)
@@ -2180,8 +2200,8 @@ local function request_json(url, callback, options)
 		safe_invoke_callback(callback, false, nil, { errorMessage = "Le decodeur JSON n'est pas disponible." })
 		return
 	end
-	local okRequest, requestError = pcall(function()
-		NETWORK:HttpRequest({
+	local okRequest, requestOrError = pcall(function()
+		return NETWORK:HttpRequest({
 		url = url,
 		method = "GET",
 		headers = {
@@ -2190,7 +2210,7 @@ local function request_json(url, callback, options)
 		},
 		connectTimeout = 10,
 		transferTimeout = 20,
-		onResponse = function(response)
+			onResponse = function(response)
 			local statusCode = tonumber(response and response.statusCode) or 0
 				if statusCode ~= 200 then
 					if statusCode == 404 and options.expected404 == true then
@@ -2233,16 +2253,36 @@ local function path_escape(value)
 	end)
 end
 
+local function canonical_id(value)
+	if ITGOnlineProtocol and ITGOnlineProtocol.canonical_decimal_id then
+		return ITGOnlineProtocol.canonical_decimal_id(value)
+	end
+	local text = tostring(value or "")
+	if not text:match("^%d+$") then return nil end
+	text = text:gsub("^0+", "")
+	return text ~= "" and text or "0"
+end
+
 local function build_pack_candidate(packResult, source)
 	if type(packResult) ~= "table" then return nil end
-	local id = tonumber(packResult.id)
-	if not id or id < 1 then return nil end
+	local id = canonical_id(packResult.id)
+	if not id or id == "0" then return nil end
+	local archiveHash = tostring(packResult.archive_sha256 or packResult.download_sha256 or packResult.sha256 or ""):lower()
 	return {
 		id = id,
 		name = trim(packResult.name or ("Pack " .. tostring(id))),
 		songs_count = tonumber(packResult.songs_count) or 0,
+		archive_sha256 = #archiveHash == 64 and archiveHash:match("^[a-f0-9]+$") and archiveHash or nil,
 		match_source = source or "unknown",
 	}
+end
+
+local function sha256_file_hex(path)
+	if not (CRYPTMAN and CRYPTMAN.SHA256File and type(BinaryToHex) == "function") then return nil end
+	local ok, digest = pcall(function() return CRYPTMAN:SHA256File(path) end)
+	if not ok or type(digest) ~= "string" or digest == "" then return nil end
+	local hexOk, hex = pcall(function() return BinaryToHex(digest) end)
+	return hexOk and type(hex) == "string" and hex:lower() or nil
 end
 
 local function dedupe_candidates(candidates)
@@ -2369,15 +2409,9 @@ local function install_extracted_pack_at_songs_root(quarantinePath, expectedPack
 		.. " sourceExistsAfter=" .. tostring(path_exists(sourcePath) or path_exists(sourcePath .. "/"))
 		.. " targetExistsAfter=" .. tostring(path_exists(rootGroupPath) or path_exists(rootGroupPath .. "/")))
 	if not moved then
-		trace("MoveOnlineSongPack failed; trying recursive copy source=" .. tostring(sourcePath) .. " target=" .. tostring(rootGroupPath))
-		if not copy_directory_recursive(sourcePath .. "/", rootGroupPath .. "/", 8) then
-			remove_directory_if_possible(rootGroupPath .. "/")
-			return nil, "Impossible d'installer le pack téléchargé."
-		end
-		flush_dir_cache("/Songs/")
-		flush_dir_cache(quarantinePath)
-		flush_dir_cache(sourcePath)
-		flush_dir_cache(rootGroupPath)
+		trace("MoveOnlineSongPack failed; refusing non-transactional recursive copy source=" .. tostring(sourcePath) .. " target=" .. tostring(rootGroupPath))
+		remove_directory_if_possible(quarantinePath)
+		return nil, "Impossible d'installer le pack téléchargé de manière atomique."
 	elseif path_exists(sourcePath) or path_exists(sourcePath .. "/") then
 		trace("MoveOnlineSongPack left source visible after cache flush; removing source=" .. tostring(sourcePath))
 		log_dir_listing("Install source still visible after move", sourcePath .. "/")
@@ -2680,6 +2714,11 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			if callback then callback(false, "Pack candidat invalide.") end
 			return
 		end
+		if pack.trusted_room_package ~= true then
+			trace("DownloadPackByCandidate blocked reason=untrusted_source packId=" .. tostring(pack.id))
+			if callback then callback(false, "Les packs online doivent etre fournis par le serveur du salon.") end
+			return
+		end
 		if not (NETWORK and NETWORK.HttpRequest) then
 			trace("DownloadPackByCandidate blocked reason=network_unavailable")
 			if callback then callback(false, "Le reseau du moteur n'est pas disponible.") end
@@ -2698,6 +2737,14 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil)
 			.. " hasUser=" .. tostring(ITGOnline and ITGOnline.user ~= nil))
 		if callback then callback(false, "Vous n'etes plus dans le salon.") end
+		return
+	end
+		if type(pack.archive_sha256) ~= "string"
+		or #pack.archive_sha256 ~= 64
+		or not pack.archive_sha256:match("^[a-f0-9]+$") then
+		trace("DownloadPackByCandidate blocked reason=missing_archive_manifest packId="
+			.. tostring(pack and pack.id or "nil"))
+			if callback then callback(false, "Le serveur n'a pas fourni de manifeste SHA-256 verifiable.") end
 		return
 	end
 	options = type(options) == "table" and options or {}
@@ -2723,8 +2770,8 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		return
 	end
 
-	local packId = tonumber(pack.id)
-	if not packId or math.floor(packId) ~= packId or packId < 1 then
+	local packId = canonical_id(pack.id)
+	if not packId or packId == "0" then
 		trace("DownloadPackByCandidate blocked reason=invalid_pack_id raw=" .. tostring(pack.id)
 			.. " packName=" .. tostring(pack.name or "nil"))
 		if callback then callback(false, "StepManiaOnline a renvoye un identifiant de pack invalide.") end
@@ -2735,10 +2782,11 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	if existingDownloadKey == "" then
 		self.downloadInFlightKey = (browseOnly and "browse-candidate|" or "selected-candidate|") .. tostring(packId) .. "|" .. packName
 	end
-	local downloadGeneration = tonumber(options.downloadGeneration)
-		or self:NextDownloadGeneration(browseOnly and "browse_candidate_start" or "selected_candidate_start")
-		local fileName = tostring(packId) .. "_" .. safe_file_name(packName)
-		local quarantinePath = pack_quarantine_path(packId, packName)
+		local downloadGeneration = tonumber(options.downloadGeneration)
+			or self:NextDownloadGeneration(browseOnly and "browse_candidate_start" or "selected_candidate_start")
+			local fileName = "itg-online-" .. tostring(packId) .. "_" .. safe_file_name(packName)
+			local zipPath = "/Downloads/" .. fileName
+			local quarantinePath = pack_quarantine_path(packId, packName)
 		local maxDownloadBytes = tonumber(self.maxDownloadBytes) or (512 * 1024 * 1024)
 		local defaultMaxDownloadBytes = 512 * 1024 * 1024
 		if maxDownloadBytes < (16 * 1024 * 1024) or maxDownloadBytes > (1024 * 1024 * 1024) then
@@ -2747,7 +2795,11 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			maxDownloadBytes = defaultMaxDownloadBytes
 		end
 
-	local url = stepmaniaonline_origin() .. "/download/pack/" .. tostring(packId) .. "/"
+		local url = tostring(pack.download_url or "")
+		if url == "" then
+			if callback then callback(false, "Le serveur n'a pas fourni d'URL de telechargement securisee.") end
+			return
+		end
 	local downloadMessage = "Telechargement de " .. tostring(packName)
 	trace("Download started pack=" .. tostring(packName) .. " id=" .. tostring(packId)
 		.. " generation=" .. tostring(downloadGeneration)
@@ -2808,9 +2860,10 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		self.downloadLastByteCount = nil
 		self.pendingPostReloadCallback = nil
 		if browseOnly then self.activeBrowseOnlyDownload = false end
-		self:ClearActiveDownloadId("candidate_download_failed")
-		self:UpdateStatus(self.status.DownloadFailed, message)
-		remove_directory_if_possible(quarantinePath)
+			self:ClearActiveDownloadId("candidate_download_failed")
+			self:UpdateStatus(self.status.DownloadFailed, message)
+			remove_path_if_exists(zipPath)
+			remove_directory_if_possible(quarantinePath)
 		if not browseOnly and broadcastMissing ~= false and MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
 			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
 		elseif not browseOnly and broadcastMissing ~= false then
@@ -2849,9 +2902,10 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	end
 
 	local okRequest, requestError = pcall(function()
-		NETWORK:HttpRequest({
-		url = url,
-		method = "GET",
+		return NETWORK:HttpRequest({
+			url = url,
+			method = "GET",
+			headers = pack.headers or {},
 		downloadFile = fileName,
 		connectTimeout = 15,
 		transferTimeout = 600,
@@ -2913,8 +2967,9 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 				.. " statusCode=" .. tostring(response and response.statusCode or "nil")
 				.. " completed=" .. tostring(downloadCompleted == true)
 				.. " currentGeneration=" .. tostring(self.downloadGeneration))
-			if not self:IsDownloadGenerationCurrent(downloadGeneration) then
-				trace("Download response ignored reason=stale_generation pack=" .. tostring(packName)
+				if not self:IsDownloadGenerationCurrent(downloadGeneration) then
+					remove_path_if_exists(zipPath)
+					trace("Download response ignored reason=stale_generation pack=" .. tostring(packName)
 					.. " generation=" .. tostring(downloadGeneration)
 					.. " current=" .. tostring(self.downloadGeneration))
 				return
@@ -2937,14 +2992,22 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			end
 			self:UpdateStatus(self.status.DownloadInProgress, downloadMessage, 100)
 
-			local zipPath = "/Downloads/" .. fileName
-			if not FILEMAN:DoesFileExist(zipPath) then
+				if not FILEMAN:DoesFileExist(zipPath) then
 				trace("Download failed missing zip pack=" .. tostring(packName)
 					.. " zipPath=" .. tostring(zipPath)
 					.. " fileName=" .. tostring(fileName))
 				fail_candidate_download("Le fichier téléchargé est introuvable.")
-				return
-			end
+					return
+				end
+				local archiveHash = sha256_file_hex(zipPath)
+				if archiveHash ~= tostring(pack.archive_sha256):lower() then
+					remove_path_if_exists(zipPath)
+					trace("Download failed archive_hash_mismatch pack=" .. tostring(packName)
+						.. " expected=" .. tostring(pack.archive_sha256):sub(1, 12)
+						.. " actual=" .. tostring(archiveHash or "nil"):sub(1, 12))
+					fail_candidate_download("Le hash SHA-256 du pack telecharge ne correspond pas au manifeste.")
+					return
+				end
 
 			remove_directory_if_possible(quarantinePath)
 			create_directory_if_possible(quarantinePath)
@@ -2982,11 +3045,71 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			transition_to_reload_songs()
 			finish_candidate_download()
 		end,
-	})
+		})
 	end)
-	if not okRequest then
-		fail_candidate_download("La requete de telechargement a echoue: " .. tostring(requestError or "unknown error"))
+	if okRequest and requestOrError and requestOrError.Cancel then
+		self.downloadFuture = requestOrError
 	end
+	if not okRequest then
+		fail_candidate_download("La requete de telechargement a echoue: " .. tostring(requestOrError or "unknown error"))
+	end
+end
+
+function PackSync:DownloadTrustedRoomPackage(songInfo, callback, options)
+	options = type(options) == "table" and options or {}
+	if not (ITGOnline and ITGOnline.Request and ITGOnline.ConnectionConfig and ITGOnline.AuthHeaders) then
+		if callback then callback(false, "Le client online n'est pas pret a telecharger le package du salon.") end
+		return
+	end
+	local roomId = ITGOnline.currentRoomId
+	if not roomId then
+		if callback then callback(false, "Aucun salon online actif.") end
+		return
+	end
+
+	ITGOnline:Request("GET", "/rooms/" .. tostring(roomId) .. "/song-package", nil, function(ok, decoded, response)
+		local package = ok and decoded and decoded.package or nil
+		if type(package) ~= "table" then
+			local message = response and response.statusCode == 404
+				and "Le manager doit d'abord publier le package verifie de cette chanson."
+				or "Le package verifie du salon est indisponible."
+			trace("Trusted room package unavailable room=" .. tostring(roomId)
+				.. " status=" .. tostring(response and response.statusCode or "nil"))
+			if callback then callback(false, message) end
+			return
+		end
+
+		local archiveHash = tostring(package.sha256 or ""):lower()
+		local packageId = canonical_id(package.id)
+		local packageSize = tonumber(package.size_bytes)
+		if not packageId or packageId == "0" or #archiveHash ~= 64
+			or not archiveHash:match("^[a-f0-9]+$") or not packageSize or packageSize < 1 then
+			trace("Trusted room package rejected reason=invalid_manifest room=" .. tostring(roomId))
+			if callback then callback(false, "Le manifeste du package du salon est invalide.") end
+			return
+		end
+
+		local selected = ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song or songInfo or {}
+		if tostring(package.song_hash or "") ~= tostring(selected.song_hash or selected.songHash or "")
+			or tostring(package.chart_hash or "") ~= tostring(selected.chart_hash or selected.chartHash or "") then
+			trace("Trusted room package rejected reason=selected_song_mismatch room=" .. tostring(roomId))
+			if callback then callback(false, "Le package ne correspond plus a la chanson selectionnee.") end
+			return
+		end
+
+		local config = ITGOnline:ConnectionConfig()
+		local headers = ITGOnline:AuthHeaders()
+		headers["Accept"] = "application/zip"
+		headers["Accept-Encoding"] = "identity"
+		self:DownloadPackByCandidate(songInfo, {
+			id = packageId,
+			name = "Room " .. tostring(roomId) .. " package",
+			archive_sha256 = archiveHash,
+			download_url = tostring(config.apiBaseUrl) .. "/rooms/" .. tostring(roomId) .. "/song-package/download",
+			headers = headers,
+			trusted_room_package = true,
+		}, callback, options)
+	end)
 end
 
 function PackSync:DownloadSelectedPack(songInfo, callback)
@@ -3049,172 +3172,33 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 	end
 
 	self:UpdateStatus(self.status.DownloadRequested, nil)
-	self:SearchStepManiaOnline(songInfo, function(ok, pack, searchError)
-		trace("DownloadSelectedPack search_result ok=" .. tostring(ok == true)
-			.. " packId=" .. tostring(pack and pack.id or "nil")
-			.. " packName=" .. tostring(pack and pack.name or "nil")
-			.. " candidates=" .. tostring(searchError and searchError.candidates and #searchError.candidates or 0)
-			.. " generation=" .. tostring(downloadGeneration)
-			.. " currentGeneration=" .. tostring(self.downloadGeneration))
-		if not self:IsDownloadGenerationCurrent(downloadGeneration) then
-			trace("DownloadSelected search result ignored reason=stale_generation generation="
-				.. tostring(downloadGeneration) .. " current=" .. tostring(self.downloadGeneration))
+	self:DownloadTrustedRoomPackage(songInfo, function(downloadOk, downloadMessage)
+		if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
+		if downloadOk then
+			if callback then callback(true) end
 			return
 		end
-		if not current_user_is_active_room_member() then
-			trace("DownloadSelectedPack cancelled after search reason=not_active_room_member")
-			fail_download("Vous n'etes plus dans le salon.")
-			return
-		end
-		if not ok or not pack or not pack.id then
-			if searchError and type(searchError.candidates) == "table" and #searchError.candidates > 0 then
-				trace("Download selection required candidates=" .. tostring(#searchError.candidates))
-				self:UpdateStatus(self.status.DownloadRequested, "Choisissez le pack a telecharger")
-				if callback then
-					callback(false, {
-						kind = "pack_candidates",
-						message = searchError.errorMessage or "Plusieurs packs correspondent à cette chanson.",
-						candidates = searchError.candidates,
-						downloadKey = downloadKey,
-					})
-				end
-				return
-			end
-			local message = searchError and searchError.errorMessage or "La recherche de pack StepManiaOnline a echoue."
-			trace("Download failed search=" .. tostring(message))
-			fail_download(message)
-			return
-		end
-		self:DownloadPackByCandidate(songInfo, pack, function(downloadOk, downloadMessage)
-			trace("DownloadSelectedPack candidate_callback ok=" .. tostring(downloadOk == true)
-				.. " message=" .. tostring(downloadMessage or "")
-				.. " generation=" .. tostring(downloadGeneration)
-				.. " currentGeneration=" .. tostring(self.downloadGeneration))
-			if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
-			if downloadOk then
-				if callback then callback(true) end
-				return
-			end
-			self.downloadInFlightKey = nil
-			self:ClearActiveDownloadId("selected_candidate_download_failed")
-			if callback then callback(false, downloadMessage or "Le téléchargement du pack a échoué.") end
-		end, { allowExistingDownloadKey = downloadKey, downloadGeneration = downloadGeneration })
-	end)
+		fail_download(downloadMessage or "Le package verifie du salon est indisponible.")
+	end, { allowExistingDownloadKey = downloadKey, downloadGeneration = downloadGeneration })
 end
 
 function PackSync:DownloadBrowsingPack(songInfo, callback)
 	songInfo = with_current_room_selection(songInfo, "download_browsing")
-	trace("DownloadBrowsingPack begin title=" .. tostring(selected_title(songInfo))
-		.. " pack=" .. tostring(selected_pack(songInfo))
-		.. " status=" .. tostring(self.currentStatus or "nil")
-		.. " key=" .. tostring(self.downloadInFlightKey or ""))
 	if not songInfo then
 		trace("DownloadBrowsingPack blocked reason=no_song_info")
 		if callback then callback(false, "Aucun pack a telecharger.") end
 		return
 	end
-	trace("DownloadBrowsingPack begin title=" .. tostring(selected_title(songInfo))
-		.. " pack=" .. tostring(selected_pack(songInfo))
-		.. " selected_at=" .. tostring(selected_at(songInfo))
-		.. " currentKey=" .. tostring(self.downloadInFlightKey or "")
-		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
-	if not current_user_is_active_room_member() then
-		trace("DownloadBrowsingPack blocked reason=not_active_room_member"
-			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-			.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil)
-			.. " hasUser=" .. tostring(ITGOnline and ITGOnline.user ~= nil))
-		if callback then callback(false, "Vous n'etes plus dans le salon.") end
-		return
-	end
 
-	if trim(self.downloadInFlightKey) ~= "" then
-		local message = download_already_in_progress_message()
-		trace(message .. " key=" .. tostring(self.downloadInFlightKey)
-			.. " requestedPack=" .. tostring(selected_pack(songInfo))
-			.. " requestedTitle=" .. tostring(selected_title(songInfo)))
-		if callback then callback(false, message) end
-		return
+	-- A room package is the only download source whose archive and song identity can
+	-- be verified against the room selected by the server.  Catalog search remains
+	-- available for discovery, but never installs an archive directly.
+	trace("DownloadBrowsingPack blocked reason=untrusted_catalog_disabled"
+		.. " title=" .. tostring(selected_title(songInfo))
+		.. " pack=" .. tostring(selected_pack(songInfo)))
+	if callback then
+		callback(false, "Le telechargement est disponible uniquement pour le package verifie de la chanson selectionnee.")
 	end
-	self.currentSongInfo = songInfo
-	self.activeBrowseOnlyDownload = true
-	local packName = selected_pack(songInfo)
-	local downloadKey = "browse|" .. (packName ~= "" and packName or (selected_title(songInfo) .. "|" .. selected_artist(songInfo)))
-	if downloadKey == "browse|" then downloadKey = "browse|" .. tostring(songInfo) end
-
-	self.downloadInFlightKey = downloadKey
-	local downloadGeneration = self:NextDownloadGeneration("download_browsing_search")
-	local function fail_download(message)
-		if not self:IsDownloadGenerationCurrent(downloadGeneration) then
-			trace("DownloadBrowsing failure ignored reason=stale_generation generation="
-				.. tostring(downloadGeneration) .. " current=" .. tostring(self.downloadGeneration))
-			return
-		end
-		self.downloadInFlightKey = nil
-		self.activeBrowseOnlyDownload = false
-		self.downloadStartedAt = nil
-		self.downloadLastByteAt = nil
-		self.downloadLastByteCount = nil
-		self.pendingPostReloadBrowseOnly = false
-		self:ClearActiveDownloadId("browse_download_failed")
-		self:UpdateStatus(self.status.DownloadFailed, message)
-		if callback then callback(false, message) end
-	end
-
-	self:UpdateStatus(self.status.DownloadRequested, nil)
-	self:SearchStepManiaOnline(songInfo, function(ok, pack, searchError)
-		trace("DownloadBrowsingPack search_result ok=" .. tostring(ok == true)
-			.. " packId=" .. tostring(pack and pack.id or "nil")
-			.. " packName=" .. tostring(pack and pack.name or "nil")
-			.. " candidates=" .. tostring(searchError and searchError.candidates and #searchError.candidates or 0)
-			.. " generation=" .. tostring(downloadGeneration)
-			.. " currentGeneration=" .. tostring(self.downloadGeneration))
-		if not self:IsDownloadGenerationCurrent(downloadGeneration) then
-			trace("DownloadBrowsing search result ignored reason=stale_generation generation="
-				.. tostring(downloadGeneration) .. " current=" .. tostring(self.downloadGeneration))
-			return
-		end
-		if not current_user_is_active_room_member() then
-			trace("DownloadBrowsingPack cancelled after search reason=not_active_room_member")
-			fail_download("Vous n'etes plus dans le salon.")
-			return
-		end
-		if not ok or not pack or not pack.id then
-			if searchError and type(searchError.candidates) == "table" and #searchError.candidates > 0 then
-				trace("Browse download selection required candidates=" .. tostring(#searchError.candidates))
-				self:UpdateStatus(self.status.DownloadRequested, "Choisissez le pack a telecharger")
-				if callback then
-					callback(false, {
-						kind = "pack_candidates",
-						message = searchError.errorMessage or "Plusieurs packs correspondent a ce pack.",
-						candidates = searchError.candidates,
-						browseOnly = true,
-						downloadKey = downloadKey,
-					})
-				end
-				return
-			end
-			local message = searchError and searchError.errorMessage or "La recherche de pack StepManiaOnline a echoue."
-			trace("Browse download failed search=" .. tostring(message))
-			fail_download(message)
-			return
-		end
-		self:DownloadPackByCandidate(songInfo, pack, function(downloadOk, downloadMessage)
-			trace("DownloadBrowsingPack candidate_callback ok=" .. tostring(downloadOk == true)
-				.. " message=" .. tostring(downloadMessage or "")
-				.. " generation=" .. tostring(downloadGeneration)
-				.. " currentGeneration=" .. tostring(self.downloadGeneration))
-			if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
-			if downloadOk then
-				if callback then callback(true) end
-				return
-			end
-			self.downloadInFlightKey = nil
-			self.activeBrowseOnlyDownload = false
-			self:ClearActiveDownloadId("browse_candidate_download_failed")
-			if callback then callback(false, downloadMessage or "Le telechargement du pack a echoue.") end
-		end, { browseOnly = true, allowExistingDownloadKey = downloadKey, downloadGeneration = downloadGeneration })
-	end)
 end
 
 local function browse_pack_reload_validated(songInfo, quarantinePath)
@@ -3270,7 +3254,7 @@ function PackSync:ValidatePendingPostReload()
 		end
 		if not browse_pack_reload_validated(songInfo, quarantinePath) then
 			trace("Browse-only pack download did not expose the expected pack after reload")
-			remove_directory_if_possible(quarantinePath)
+			rollback_installed_pack_if_possible(quarantinePath)
 			self:UnmarkPackInstalled(packName, "browse_reload_validation_failed")
 			self:UpdateStatus(self.status.DownloadFailed, "Le pack telecharge n'a pas ete trouve apres reload.")
 				if MESSAGEMAN then
@@ -3317,8 +3301,8 @@ function PackSync:ValidatePendingPostReload()
 	if result.ok then
 		local songDir = result.song and result.song.GetSongDir and tostring(result.song:GetSongDir() or "") or ""
 		if quarantinePath and quarantinePath ~= "" and songDir:sub(1, #quarantinePath) ~= quarantinePath then
-			trace("Downloaded pack did not contain the selected chart; matched existing local chart instead")
-			remove_directory_if_possible(quarantinePath)
+				trace("Downloaded pack did not contain the selected chart; matched existing local chart instead")
+				rollback_installed_pack_if_possible(quarantinePath)
 			self:UnmarkPackInstalled(packName, "selected_chart_not_in_downloaded_pack")
 			self:UpdateStatus(self.status.DownloadFailed, "Le pack téléchargé ne contient pas la stepchart attendue.")
 				if MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
@@ -3384,7 +3368,7 @@ function PackSync:ValidatePendingPostReload()
 
 	if result.status == "mismatch" then
 		self:UpdateStatus(self.status.ChartMismatch, "La musique ou la stepchart trouvée est différente de celle du manager.")
-		remove_directory_if_possible(quarantinePath)
+		rollback_installed_pack_if_possible(quarantinePath)
 		self:UnmarkPackInstalled(packName, "chart_mismatch")
 		if ITGOnline and ITGOnline.ReportSongAvailability and self:SongInfoMatchesCurrentSelection(songInfo) then
 			ITGOnline:ReportSongAvailability(true, "chart_mismatch")
@@ -3395,7 +3379,7 @@ function PackSync:ValidatePendingPostReload()
 			complete_pending(false, "La musique ou la stepchart trouvée est différente de celle du manager.", "post_reload_chart_mismatch")
 		else
 			self:UpdateStatus(self.status.DownloadFailed, "La chanson est introuvable après reload.")
-			remove_directory_if_possible(quarantinePath)
+			rollback_installed_pack_if_possible(quarantinePath)
 		self:UnmarkPackInstalled(packName, "downloaded_song_missing_after_reload")
 		if ITGOnline and ITGOnline.ReportSongAvailability and self:SongInfoMatchesCurrentSelection(songInfo) then
 			ITGOnline:ReportSongAvailability(true, "download_failed")

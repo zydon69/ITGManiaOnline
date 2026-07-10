@@ -146,7 +146,25 @@ end
 
 local OnlineRoomId = function(room)
 	if type(room) ~= "table" then return "" end
-	return tostring(room.id or room.room_id or room.roomId or "")
+	local roomId = room.id or room.room_id or room.roomId
+	if ITGOnline and IsCallable(ITGOnline.RoomKey) then
+		local ok, key = SafeCall("ITGOnline.RoomKey", function()
+			return ITGOnline:RoomKey(roomId)
+		end)
+		if ok then return tostring(key or "") end
+	end
+	return tostring(roomId or "")
+end
+
+local HasOnlineSession = function()
+	if not ITGOnline then return false end
+	if IsCallable(ITGOnline.HasOnlineSession) then
+		local ok, active = SafeCall("ITGOnline.HasOnlineSession", function()
+			return ITGOnline:HasOnlineSession()
+		end)
+		if ok then return active == true end
+	end
+	return tostring(ITGOnline.currentRoomId or "") ~= ""
 end
 
 local OnlineUserIsRoomMember = function(room, userId)
@@ -167,24 +185,39 @@ end
 
 local HasActiveOnlineRoom = function(options)
 	options = type(options) == "table" and options or {}
-	if not (ITGOnline and ITGOnline.currentRoomId and ITGOnline.currentRoom) then
+	if not HasOnlineSession() then
 		return false, nil, "missing_room"
 	end
 
 	local room = ITGOnline.currentRoom
-	local expectedRoomId = tostring(ITGOnline.currentRoomId or "")
+	local expectedRoomId = ""
+	if IsCallable(ITGOnline.RoomKey) then
+		local ok, key = SafeCall("ITGOnline.RoomKey current", function()
+			return ITGOnline:RoomKey(ITGOnline.currentRoomId)
+		end)
+		if ok then expectedRoomId = tostring(key or "") end
+	end
+	if expectedRoomId == "" then expectedRoomId = tostring(ITGOnline.currentRoomId or "") end
+	if type(room) ~= "table" then
+		-- Keep the player in the online flow until the server explicitly clears the
+		-- session. A missing snapshot is a reconciliation state, not a local exit.
+		return true, { id = ITGOnline.currentRoomId, phase = "unknown" }, "snapshot_pending"
+	end
+
 	local actualRoomId = OnlineRoomId(room)
 	if expectedRoomId == "" or actualRoomId == "" or actualRoomId ~= expectedRoomId then
-		return false, room, "room_id_mismatch"
+		return true, room, "room_snapshot_reconciling"
 	end
 
 	local userId = CurrentOnlineUserId()
 	if options.requireUser ~= false and userId == "" then
-		return false, room, "missing_user"
+		return true, room, "user_reconciling"
 	end
 
 	if options.requireMember ~= false and not OnlineUserIsRoomMember(room, userId) then
-		return false, room, "user_not_in_room"
+		-- Event payloads can legitimately omit members while HTTP reconciliation is
+		-- in flight. ClearCurrentRoomState is the only authoritative local exit.
+		return true, room, "membership_reconciling"
 	end
 
 	if options.phase then
@@ -700,6 +733,12 @@ Branch.AfterSelectMusic = function()
 	elseif ITGOnline and ITGOnline.currentRoomId then
 		BranchTrace("AfterSelectMusic online_skipped reason=" .. tostring(inactiveReason)
 			.. " room=" .. tostring(ITGOnline.currentRoomId))
+		if HasOnlineSession() then
+			BranchTrace("AfterSelectMusic next=ScreenOnlineLobbies reason=online_session_reconciling"
+				.. " room=" .. tostring(ITGOnline.currentRoomId)
+				.. " phase=" .. tostring(OnlineRoomPhase(room)))
+			return "ScreenOnlineLobbies"
+		end
 	end
 
 	local goToOptions = false

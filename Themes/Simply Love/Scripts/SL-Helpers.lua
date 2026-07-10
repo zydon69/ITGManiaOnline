@@ -508,6 +508,22 @@ IsOnlineGameplayLayoutLoggingEnabled = function()
 		and ThemePrefs.Get("ITGOnlineGameplayLayoutLogs") == true
 end
 
+local function IsOnlineDiagnosticLoggingEnabled(prefName)
+	return ThemePrefs and ThemePrefs.Get and ThemePrefs.Get(prefName) == true
+end
+
+IsOnlineNetworkLoggingEnabled = function()
+	return IsOnlineDiagnosticLoggingEnabled("ITGOnlineNetworkLogs")
+end
+
+IsOnlineAuthLoggingEnabled = function()
+	return IsOnlineDiagnosticLoggingEnabled("ITGOnlineAuthLogs")
+end
+
+IsOnlineScoreLoggingEnabled = function()
+	return IsOnlineDiagnosticLoggingEnabled("ITGOnlineScoreLogs")
+end
+
 GetOnlineGameplayLayout = function()
 	local margin = clamp(_screen.w * 0.055, 44, 120)
 	local usable_width = math.max(1, _screen.w - (margin * 2))

@@ -3,11 +3,6 @@ local NumPanes = SL.Global.GameMode=="Casual" and 1 or 11
 
 local InputHandler = nil
 local EventOverlayInputHandler = nil
-local OnlineEvaluationInputHandler = nil
-
-local function OnlineEvaluationActive()
-	return ITGOnline and ITGOnline.currentRoomId ~= nil
-end
 
 local function OnlineDisplayName(user, fallback)
 	if ITGOnline and ITGOnline.UserDisplayName then
@@ -15,88 +10,6 @@ local function OnlineDisplayName(user, fallback)
 	end
 	user = type(user) == "table" and user or {}
 	return tostring(user.display_name or user.displayName or user.name or fallback or "Player")
-end
-
-local function SetOnlineEvaluationInputRedirected(enabled, reason)
-	if type(online_logs_enabled) == "function" and online_logs_enabled() then
-		Trace("ITG Online: FLOW evaluation_input_redirect"
-			.. " enabled=" .. tostring(enabled == true)
-			.. " reason=" .. tostring(reason or "unknown")
-			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-			.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
-	end
-	if not OnlineEvaluationActive() then return end
-	for player in ivalues(PlayerNumber) do
-		SCREENMAN:set_input_redirected(player, enabled == true)
-	end
-	if online_trace then
-		online_trace("FLOW evaluation_input_redirected enabled=" .. tostring(enabled == true)
-			.. " reason=" .. tostring(reason or "unknown"))
-	end
-end
-
-local function ReturnToOnlineLobby(reason)
-	if type(online_logs_enabled) == "function" and online_logs_enabled() then
-		Trace("ITG Online: FLOW evaluation_return_to_lobby_begin"
-			.. " reason=" .. tostring(reason or "unknown")
-			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-			.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
-	end
-	if ITGOnlineReturnToLobbyFromEvaluation and ITGOnlineReturnToLobbyFromEvaluation(reason) then
-		return true
-	end
-
-	local topScreen = SCREENMAN:GetTopScreen()
-	if not topScreen then return false end
-	if ITGOnline then ITGOnline.onlineEvaluationExitRequested = true end
-	if online_trace then
-		online_trace("FLOW evaluation_exit_requested reason=" .. tostring(reason or "fallback")
-			.. " screen=" .. tostring(topScreen:GetName()))
-	end
-	SetOnlineEvaluationInputRedirected(false, "exit_fallback")
-	topScreen:SetNextScreenName("ScreenOnlineLobbies")
-	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
-	return true
-end
-
-local function IsEvaluationExitInput(event)
-	if not event then return false end
-	local deviceButton = ""
-	if event.DeviceInput and event.DeviceInput.button then
-		deviceButton = string.lower(tostring(event.DeviceInput.button))
-	end
-	return event.GameButton == "Start"
-		or event.GameButton == "Back"
-		or string.find(deviceButton, "enter", 1, true) ~= nil
-		or string.find(deviceButton, "return", 1, true) ~= nil
-		or deviceButton == "devicebutton_z"
-		or deviceButton == "z"
-		or string.find(deviceButton, "escape", 1, true) ~= nil
-		or string.find(deviceButton, "backspace", 1, true) ~= nil
-end
-
-local function BuildOnlineEvaluationInputHandler(reason)
-	return function(event)
-		if not OnlineEvaluationActive() then return false end
-		if not IsEvaluationExitInput(event) then return false end
-		if event.type ~= "InputEventType_FirstPress" and event.type ~= "InputEventType_Repeat" then
-			return true
-		end
-
-		if online_trace then
-			local summary = ITGOnline.PlayStateSummary and ITGOnline:PlayStateSummary() or nil
-			online_trace("FLOW evaluation_input button=" .. tostring(event.GameButton)
-				.. " type=" .. tostring(event.type)
-				.. " reason=" .. tostring(reason or "unknown")
-				.. " terminal=" .. tostring(summary and summary.terminal or "nil")
-				.. " players=" .. tostring(summary and summary.players or "nil"))
-		end
-
-		if event.type == "InputEventType_FirstPress" then
-			ReturnToOnlineLobby("evaluation_common_input")
-		end
-		return true
-	end
 end
 
 local function DisableOnlineEvaluationTimer(reason)
@@ -141,8 +54,6 @@ if SL.Global.GameMode ~= "Casual" then
 		EventOverlayInputHandler = LoadActor("./Shared/EventInputHandler.lua")
 		local screen = SCREENMAN:GetTopScreen()
 		if screen then
-			OnlineEvaluationInputHandler = BuildOnlineEvaluationInputHandler("standard")
-			screen:AddInputCallback(OnlineEvaluationInputHandler)
 			screen:AddInputCallback(InputHandler)
 			DisableOnlineEvaluationTimer("on_command")
 		end
@@ -166,20 +77,15 @@ if SL.Global.GameMode ~= "Casual" then
 	end
 else
 	t.OnCommand=function(self)
-		OnlineEvaluationInputHandler = BuildOnlineEvaluationInputHandler("casual")
-		local screen = SCREENMAN:GetTopScreen()
-		if screen then screen:AddInputCallback(OnlineEvaluationInputHandler) end
 		DisableOnlineEvaluationTimer("casual_on_command")
 		PROFILEMAN:SaveMachineProfile()
 	end
 end
 
 t.OffCommand=function(self)
-	local screen = SCREENMAN:GetTopScreen()
-	if screen and OnlineEvaluationInputHandler then
-		screen:RemoveInputCallback(OnlineEvaluationInputHandler)
+	for player in ivalues(PlayerNumber) do
+		SCREENMAN:set_input_redirected(player, false)
 	end
-	SetOnlineEvaluationInputRedirected(false, "off")
 end
 
 -- -----------------------------------------------------------------------

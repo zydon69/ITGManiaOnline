@@ -27,6 +27,9 @@ local showing_private_join_prompt = false
 local private_join_prompt_index = 1
 local private_join_request = nil
 local private_join_prompt_kind = "join_request"
+local private_prompt_queue = {}
+local private_prompt_keys = {}
+local MAX_PRIVATE_PROMPTS = 16
 local showing_pack_choice_menu = false
 local pack_choice_index = 1
 local pack_choice_candidates = {}
@@ -44,6 +47,48 @@ local private_join_options = {
 	{label="Occupe", accept=false, reason="Occupe pour le moment."},
 	{label="Plus tard", accept=false, reason="Plus tard."},
 }
+
+local function private_prompt_key(params, kind)
+	local payload = type(params) == "table" and params[kind == "invitation" and "invitation" or "join_request"] or nil
+	return kind .. ":" .. tostring(type(payload) == "table" and payload.id or "")
+end
+
+local function display_private_prompt(actor, params, kind)
+	private_join_request = params
+	private_join_prompt_kind = kind
+	private_join_prompt_index = 1
+	showing_private_join_prompt = true
+	local prompt = actor:GetChild("PrivateJoinPrompt")
+	if prompt then prompt:visible(true) end
+	actor:queuecommand("UpdatePrivateJoinPrompt")
+end
+
+local function enqueue_private_prompt(actor, params, kind)
+	local key = private_prompt_key(params, kind)
+	if key:sub(-1) == ":" or private_prompt_keys[key] then return false end
+	private_prompt_keys[key] = true
+	if not showing_private_join_prompt then
+		display_private_prompt(actor, params, kind)
+		return true
+	end
+	if #private_prompt_queue >= MAX_PRIVATE_PROMPTS then
+		private_prompt_keys[key] = nil
+		lobby_flow_trace("private_prompt_rejected reason=queue_full kind=" .. tostring(kind))
+		return false
+	end
+	private_prompt_queue[#private_prompt_queue + 1] = { params = params, kind = kind, key = key }
+	return true
+end
+
+local function finish_private_prompt(actor)
+	private_prompt_keys[private_prompt_key(private_join_request, private_join_prompt_kind)] = nil
+	showing_private_join_prompt = false
+	private_join_request = nil
+	local prompt = actor:GetChild("PrivateJoinPrompt")
+	if prompt then prompt:visible(false) end
+	local nextPrompt = table.remove(private_prompt_queue, 1)
+	if nextPrompt then display_private_prompt(actor, nextPrompt.params, nextPrompt.kind) end
+end
 local room_invitation_options = {
 	{label="Accepter l'invitation", accept=true},
 	{label="Refuser l'invitation", accept=false},
@@ -2883,12 +2928,10 @@ local function handle_private_join_prompt_input(event)
 		if private_join_prompt_kind == "invitation" then
 			local invitation = private_join_request and private_join_request.invitation
 			if option and option.dismiss then
-				showing_private_join_prompt = false
-				t:GetChild("PrivateJoinPrompt"):visible(false)
+				finish_private_prompt(t)
 				play_online_sound_once("Common", "Cancel")
 			elseif option and invitation and invitation.id then
-				showing_private_join_prompt = false
-				t:GetChild("PrivateJoinPrompt"):visible(false)
+				finish_private_prompt(t)
 				MESSAGEMAN:Broadcast("AnswerRoomInvitation", {
 					invitation_id=invitation.id,
 					accept=option.accept,
@@ -2898,8 +2941,7 @@ local function handle_private_join_prompt_input(event)
 		else
 			local request = private_join_request and private_join_request.join_request
 			if option and request and request.id then
-				showing_private_join_prompt = false
-				t:GetChild("PrivateJoinPrompt"):visible(false)
+				finish_private_prompt(t)
 				MESSAGEMAN:Broadcast("AnswerPrivateJoinRequest", {
 					join_request_id=request.id,
 					accept=option.accept,
@@ -2909,8 +2951,7 @@ local function handle_private_join_prompt_input(event)
 			end
 		end
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
-		showing_private_join_prompt = false
-		t:GetChild("PrivateJoinPrompt"):visible(false)
+		finish_private_prompt(t)
 		play_online_sound_once("Common", "Cancel")
 	end
 	return false
@@ -5264,13 +5305,7 @@ local af = Def.ActorFrame{
 		.. " mode=" .. tostring(mode)
 		.. " joined_code=" .. tostring(joined_lobby_code)
 		.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
-	private_join_request = params
-	private_join_prompt_kind = "join_request"
-	private_join_prompt_index = 1
-	showing_private_join_prompt = true
-	local prompt = self:GetChild("PrivateJoinPrompt")
-	if prompt then prompt:visible(true) end
-	self:queuecommand("UpdatePrivateJoinPrompt")
+	enqueue_private_prompt(self, params, "join_request")
 end,
 	OnlineRoomInvitationMessageCommand=function(self, params)
 		if not is_active_lobby_overlay() then
@@ -5290,13 +5325,7 @@ end,
 		.. " mode=" .. tostring(mode)
 		.. " joined_code=" .. tostring(joined_lobby_code)
 		.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
-	private_join_request = params
-	private_join_prompt_kind = "invitation"
-	private_join_prompt_index = 1
-	showing_private_join_prompt = true
-	local prompt = self:GetChild("PrivateJoinPrompt")
-	if prompt then prompt:visible(true) end
-	self:queuecommand("UpdatePrivateJoinPrompt")
+	enqueue_private_prompt(self, params, "invitation")
 	end,
 			OnlineSongPreviewMessageCommand=function(self, params)
 				if not is_active_lobby_overlay() then

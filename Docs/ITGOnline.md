@@ -25,6 +25,9 @@ On Windows, secure credential persistence uses the Unicode Credential Manager AP
 (`CredWriteW` / `CredReadW` / `CredDeleteW`) so non-ASCII account identifiers are
 stored and loaded without ANSI conversion loss.
 
+If native secure storage is unavailable, the token remains memory-only for the
+current process. The client never falls back to a plaintext profile or INI token.
+
 Until production mail is enabled on the server, accounts must be created and verified from the server side before the game can log in.
 
 ## Network allow-list
@@ -36,6 +39,23 @@ The engine default `HttpAllowHosts` now permits:
 - the existing GrooveStats/ITGmania hosts
 
 For a self-hosted server, update `HttpAllowHosts`, `ApiBaseUrl`, and `WebSocketUrl` to match the deployed domain. `HttpAllowHosts` is an immutable preference, so distribution builds should set it through their own `Data/Static.ini` or source default.
+
+Only HTTPS/WSS on port 443 is accepted. HTTP and WebSocket redirects are
+disabled so credentials cannot cross an origin after the initial policy check.
+
+## Diagnostics
+
+The online options expose four independent, bounded diagnostics switches:
+
+- gameplay layout;
+- network, rooms, realtime, and pack synchronization;
+- authentication and credential lifecycle;
+- live score, fail, and evaluation synchronization.
+
+They are disabled by default. `Save/ITGOnlineDebug.ini` can enable the same
+categories for a diagnostic session. Logs carry a stable session correlation
+identifier, strip control characters, truncate remote values, redact URLs, and
+never include bearer tokens or WebSocket tickets.
 
 ## TLS public-key pinning
 

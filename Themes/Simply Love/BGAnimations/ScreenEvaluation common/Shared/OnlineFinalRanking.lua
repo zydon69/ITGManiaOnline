@@ -20,7 +20,7 @@ local function online_display_name(user, fallback)
 end
 
 local function final_ranking_trace(message)
-	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+	if type(online_logs_enabled) == "function" and not online_logs_enabled("score") then
 		return
 	end
 	local line = "ITG Online: FLOW final_ranking " .. tostring(message or "")
@@ -169,6 +169,19 @@ local function final_results_signature(rows)
 	return table.concat(parts, "|")
 end
 
+local function should_poll_final_results()
+	return ITGOnline
+		and ITGOnline.currentRoom
+		and ITGOnline.NormalizeRoomPhase
+		and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) == "results"
+end
+
+local function schedule_refresh(self)
+	if not self.polling_active or self.polling_scheduled then return end
+	self.polling_scheduled = true
+	self:sleep(0.5):queuecommand("Poll")
+end
+
 local width = clamp(_screen.w * 0.20, 280, 400)
 local row_zoom = 0.66
 local banner_zoom = 0.7
@@ -211,19 +224,23 @@ local t = Def.ActorFrame{
 		if not has_final_ranking_context() then
 			self:visible(false)
 			self.polling_active = false
+			self.polling_scheduled = false
 			self.lastFinalRankingSignature = ""
 			return
 		end
 		local rows = final_results()
 		local show = #rows > 0
+		local shouldPoll = show or should_poll_final_results()
 		local signature = final_results_signature(rows)
 		if signature == tostring(self.lastFinalRankingSignature or "") then
+			self.polling_active = shouldPoll
+			schedule_refresh(self)
 			final_ranking_trace("refresh_skipped reason=duplicate_signature rows=" .. tostring(#rows))
 			return
 		end
 		self.lastFinalRankingSignature = signature
 		self:visible(show)
-		self.polling_active = show
+		self.polling_active = shouldPoll
 		final_ranking_trace("refresh show=" .. tostring(show == true)
 			.. " rows=" .. tostring(#rows)
 			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
@@ -263,9 +280,11 @@ local t = Def.ActorFrame{
 			end
 		end
 
-		if self.polling_active then
-			self:sleep(0.5):queuecommand("Refresh")
-		end
+		schedule_refresh(self)
+	end,
+	PollCommand=function(self)
+		self.polling_scheduled = false
+		self:queuecommand("Refresh")
 	end,
 
 	Def.Quad{

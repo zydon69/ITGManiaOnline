@@ -70,19 +70,38 @@ local knownDisconnectScreens = {
 
 DisplayLobbyState = nil
 
-function online_logs_enabled()
-	return type(IsOnlineGameplayLayoutLoggingEnabled) == "function"
-		and IsOnlineGameplayLayoutLoggingEnabled() == true
+function online_logs_enabled(category)
+	category = tostring(category or "network")
+	if category == "layout" then
+		return type(IsOnlineGameplayLayoutLoggingEnabled) == "function"
+			and IsOnlineGameplayLayoutLoggingEnabled() == true
+	elseif category == "auth" then
+		return type(IsOnlineAuthLoggingEnabled) == "function"
+			and IsOnlineAuthLoggingEnabled() == true
+	elseif category == "score" then
+		return type(IsOnlineScoreLoggingEnabled) == "function"
+			and IsOnlineScoreLoggingEnabled() == true
+	end
+	return type(IsOnlineNetworkLoggingEnabled) == "function"
+		and IsOnlineNetworkLoggingEnabled() == true
 end
 
-function online_trace(message)
-	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
-		return
-	end
+function online_trace(message, category)
+	category = tostring(category or "network")
+	local enabled = ITGOnline and (
+		(category == "score" and ITGOnline.debugScoreTrace == true)
+		or (category == "auth" and ITGOnline.debugAuthTrace == true)
+		or (category == "ready" and ITGOnline.debugReadyFlow == true)
+		or (category == "network" and ITGOnline.debugOnlineTrace == true)
+	)
+	if not enabled then return end
+	local safeMessage = tostring(message or ""):gsub("[%c]", " ")
+	if #safeMessage > 4096 then safeMessage = safeMessage:sub(1, 4096) .. "...[truncated]" end
+	local sessionId = tostring(ITGOnline and ITGOnline.logSessionId or "none"):gsub("[%c]", " "):sub(1, 64)
 	if Trace then
-		Trace("ITG Online: " .. tostring(message or ""))
+		Trace("ITG Online: session=" .. sessionId .. " " .. safeMessage)
 	elseif Warn then
-		Warn("ITG Online: " .. tostring(message or ""))
+		Warn("ITG Online: session=" .. sessionId .. " " .. safeMessage)
 	end
 end
 
@@ -336,7 +355,37 @@ function room_id_from(value)
 end
 
 function current_room_id()
+	if ITGOnline and ITGOnline.RoomKey then
+		return tostring(ITGOnline:RoomKey(ITGOnline.currentRoomId) or "")
+	end
 	return tostring(ITGOnline and ITGOnline.currentRoomId or "")
+end
+
+function online_room_ids_match(left, right)
+	if ITGOnline and ITGOnline.RoomMatchesId then
+		return ITGOnline:RoomMatchesId({ id = left }, right)
+	end
+	left = tostring(left or "")
+	right = tostring(right or "")
+	return left ~= "" and left == right
+end
+
+local function protocol_sort_key(value)
+	value = tostring(value or "")
+	if value:match("^%d+$") then
+		value = value:gsub("^0+", "")
+		return value == "" and "0" or value
+	end
+	return value
+end
+
+local function protocol_sort_key_less(left, right)
+	left = protocol_sort_key(left)
+	right = protocol_sort_key(right)
+	local leftNumeric = left:match("^%d+$") ~= nil
+	local rightNumeric = right:match("^%d+$") ~= nil
+	if leftNumeric and rightNumeric and #left ~= #right then return #left < #right end
+	return left < right
 end
 
 function normalize_room_phase(phase)
@@ -371,7 +420,7 @@ function current_room_is_active(options)
 
 	local room = ITGOnline.currentRoom
 	local roomId = current_room_id()
-	if roomId == "" or tostring(room.id or "") ~= roomId then
+	if roomId == "" or not online_room_ids_match(room.id or room.room_id or room.roomId, roomId) then
 		return false, room, "room_id_mismatch"
 	end
 
@@ -385,7 +434,7 @@ function current_room_is_active(options)
 
 	if options.payload then
 		local payloadRoomId = room_id_from(options.payload)
-		if payloadRoomId == "" or payloadRoomId ~= roomId then
+		if payloadRoomId == "" or not online_room_ids_match(payloadRoomId, roomId) then
 			return false, room, "payload_room_mismatch"
 		end
 	end
@@ -533,7 +582,7 @@ function maybe_set_lobby_ready(reason, callback)
 			.. " room=" .. tostring(verifyRoomId)
 			.. " localPhase=" .. tostring(phase))
 		ITGOnline:FetchRoom(verifyRoomId, function(ok, decoded)
-			if tostring(ITGOnline and ITGOnline.currentRoomId or "") ~= tostring(verifyRoomId or "") then
+			if not online_room_ids_match(ITGOnline and ITGOnline.currentRoomId, verifyRoomId) then
 				online_flow_trace("lobby_ready_verify_ignored reason=room_changed"
 					.. " expected=" .. tostring(verifyRoomId)
 					.. " current=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
@@ -1265,7 +1314,7 @@ SelectOnlineSongAsManager = function(actor)
 			return
 		end
 
-		if tostring(room and room.id or "") ~= current_room_id() then
+		if not online_room_ids_match(room and (room.id or room.room_id or room.roomId), current_room_id()) then
 			clearPendingSelection()
 			online_flow_trace("song_selected_ignored reason=synced_room_mismatch key=" .. tostring(selectionKey)
 				.. " room=" .. tostring(room and room.id or "nil")
@@ -1441,7 +1490,7 @@ end
 
 PollOnlineStart = function(actor, roomId)
 	if not actor or not roomId or not (ITGOnline and ITGOnline.FetchRoom) then return end
-	if tostring(roomId) ~= current_room_id() then
+	if not online_room_ids_match(roomId, current_room_id()) then
 		online_flow_trace("poll_online_start_skipped reason=stale_room"
 			.. " requested=" .. tostring(roomId)
 			.. " current=" .. current_room_id())
@@ -1703,10 +1752,10 @@ OrderPlayers = function(data, localScreenName)
 		end
 		local aUser = type(a.user) == "table" and a.user or {}
 		local bUser = type(b.user) == "table" and b.user or {}
-		local aRankKey = tonumber(a.rank or a.sort_index or a.sortIndex or a.user_id or aUser.id or a.id) or 0
-		local bRankKey = tonumber(b.rank or b.sort_index or b.sortIndex or b.user_id or bUser.id or b.id) or 0
-		if aRankKey ~= bRankKey then
-			return aRankKey < bRankKey
+			local aRankKey = protocol_sort_key(a.rank or a.sort_index or a.sortIndex or a.user_id or aUser.id or a.id)
+			local bRankKey = protocol_sort_key(b.rank or b.sort_index or b.sortIndex or b.user_id or bUser.id or b.id)
+			if aRankKey ~= bRankKey then
+				return protocol_sort_key_less(aRankKey, bRankKey)
 		end
 		return tostring(a.name or aUser.name or "") < tostring(b.name or bUser.name or "")
 	end)
@@ -3444,7 +3493,7 @@ CreateOnlineHandler = function()
 										schedule_named_timer(self, "ConfigReadyRetryTimer", 1, "Fire")
 										return
 								end
-								if tostring(decoded.room.id or "") ~= tostring(fetchRoomId or "") then
+								if not online_room_ids_match(decoded.room.id or decoded.room.room_id or decoded.room.roomId, fetchRoomId) then
 									online_flow_trace("options_confirmed legacy_fetch_room_ignored reason=room_mismatch key=" .. tostring(expectedConfigReadyKey))
 									return
 								end
@@ -4417,7 +4466,7 @@ CreateOnlineHandler = function()
 						end
 
 							ITGOnline:FetchRoom(roomId, function(ok, decoded)
-								if tostring(roomId or "") ~= current_room_id() then
+								if not online_room_ids_match(roomId, current_room_id()) then
 									online_flow_trace("online_start_poll_ignored reason=stale_room requested=" .. tostring(roomId)
 										.. " current=" .. current_room_id())
 									return
@@ -4426,7 +4475,7 @@ CreateOnlineHandler = function()
 									PollOnlineStart(actor, roomId)
 									return
 								end
-								if tostring(decoded.room.id or "") ~= tostring(roomId or "") then
+								if not online_room_ids_match(decoded.room.id or decoded.room.room_id or decoded.room.roomId, roomId) then
 									online_flow_trace("online_start_poll_ignored reason=room_mismatch requested=" .. tostring(roomId)
 										.. " decoded=" .. tostring(decoded.room.id or "nil"))
 									return

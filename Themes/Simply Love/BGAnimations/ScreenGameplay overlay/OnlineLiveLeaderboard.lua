@@ -31,7 +31,7 @@ local function monotonic_time()
 end
 
 local function force_trace(message)
-	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+	if type(online_logs_enabled) == "function" and not online_logs_enabled("score") then
 		return
 	end
 	local line = "ITG Online: FLOW live_leaderboard " .. tostring(message or "")
@@ -61,7 +61,7 @@ local function local_user_id()
 end
 
 local function leaderboard_trace(message)
-	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
+	if type(online_logs_enabled) == "function" and not online_logs_enabled("score") then
 		return
 	end
 	force_trace(message)
@@ -421,12 +421,8 @@ local function rows_from_room(room, leaderboard_override)
 			end
 		end
 
-		for user_id in ivalues(cached_score_user_order or {}) do
-			if tostring(user_id) ~= "" and not seen[tostring(user_id)] and cached_score_rows_by_user_id[tostring(user_id)] then
-				merged[#merged + 1] = copy_row(cached_score_rows_by_user_id[tostring(user_id)])
-				seen[tostring(user_id)] = true
-			end
-		end
+		-- `session_rows` is authoritative membership. Cached scores may enrich a
+		-- present placeholder, but must never resurrect a departed member.
 	else
 		for row in ivalues(score_rows or {}) do
 			local user_id = tostring(row.user_id or "")

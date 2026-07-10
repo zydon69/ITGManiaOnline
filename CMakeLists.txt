@@ -17,6 +17,14 @@ add_subdirectory(extern)
 add_subdirectory(src)
 
 if(BUILD_TESTING)
+  find_program(ITGMANIA_LUA_EXECUTABLE NAMES lua5.1 lua)
+  if(ITGMANIA_LUA_EXECUTABLE)
+    add_test(
+      NAME online_protocol_behavior
+      COMMAND ${ITGMANIA_LUA_EXECUTABLE}
+              ${CMAKE_SOURCE_DIR}/Tests/online_protocol_spec.lua
+              ${CMAKE_SOURCE_DIR})
+  endif()
   add_test(
     NAME audio_refactor_source_invariants
     COMMAND ${CMAKE_COMMAND}

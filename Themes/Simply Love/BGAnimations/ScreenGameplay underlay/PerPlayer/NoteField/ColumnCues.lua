@@ -212,7 +212,7 @@ local af = Def.ActorFrame{
 	InitCommand=function(self)
 		self:xy(GetAlignedNotefieldX(), yOffset)
 		self:queuecommand("SetUpdate")
-		if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
+		if type(online_logs_enabled) == "function" and online_logs_enabled("layout") and Trace then
 			local geometry = {}
 			for columnIndex=1,numColumns do
 				geometry[#geometry + 1] = tostring(columnIndex) .. ":"

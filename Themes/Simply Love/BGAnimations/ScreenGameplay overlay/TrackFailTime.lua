@@ -130,7 +130,7 @@ local af = Def.Actor{
 			local streams = SL[pn] and SL[pn].Streams
 			local storage = SL[pn] and SL[pn].Stages and SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
 			if not storage then
-				if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
+				if type(online_logs_enabled) == "function" and online_logs_enabled("score") and Trace then
 					Trace("ROUTINE_UI TrackFailTime skipped missing storage player="
 						.. tostring(ToEnumShortString(player))
 						.. " source=" .. tostring(pn)

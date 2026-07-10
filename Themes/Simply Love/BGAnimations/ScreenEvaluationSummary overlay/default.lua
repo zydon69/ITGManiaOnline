@@ -67,14 +67,14 @@ local online_final_results = function()
 	local normalized = {}
 	for index, result in ipairs(results) do
 		local user = result.user or {}
-		normalized[#normalized + 1] = {
+		local displayedPercent = tonumber(result.displayed_percent or result.displayedPercent or result.score_percent)
+		if displayedPercent then normalized[#normalized + 1] = {
 			rank = tonumber(result.rank) or index,
 			name = online_display_name(user, "Player"),
 			score = math.floor(tonumber(result.score) or 0),
-			displayed_percent = tonumber(result.displayed_percent or result.displayedPercent or result.score_percent),
-			accuracy = tonumber(result.accuracy) or 0,
+			displayed_percent = math.max(0, math.min(100, displayedPercent)),
 			failed = result.failed and true or false,
-		}
+		} end
 	end
 
 	table.sort(normalized, function(a, b)
@@ -157,7 +157,7 @@ t[#t+1] = Def.ActorFrame{
 				local row = self:GetChild("Row" .. tostring(i))
 				local data = rows[i]
 				if row and data then
-					local line = string.format("%d. %s  %d pts (%.2f%%)", data.rank, data.name, data.score, data.accuracy)
+					local line = string.format("%d. %s  %d pts (%.2f%%)", data.rank, data.name, data.score, data.displayed_percent)
 					if data.failed then
 						line = line .. " ✖"
 					end

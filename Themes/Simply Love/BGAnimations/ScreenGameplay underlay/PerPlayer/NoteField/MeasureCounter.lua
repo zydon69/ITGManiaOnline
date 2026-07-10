@@ -185,7 +185,7 @@ local af = Def.ActorFrame{
 	InitCommand=function(self)
 		self:xy(GetAlignedNotefieldX(), layout.y)
 		self:queuecommand("SetUpdate")
-		if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
+		if type(online_logs_enabled) == "function" and online_logs_enabled("layout") and Trace then
 			Trace("ROUTINE_UI MeasureCounter init player=" .. tostring(pn)
 				.. " source=" .. tostring(masterPn)
 				.. " routine_shared=" .. tostring(routineShared == true)
