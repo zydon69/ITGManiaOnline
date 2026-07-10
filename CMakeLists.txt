@@ -93,6 +93,16 @@ if(BUILD_TESTING)
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_SOURCE_DIR}/CMake/CheckScreenGameplayInvariants.cmake)
   add_test(
+    NAME online_pack_sync_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckOnlinePackSyncInvariants.cmake)
+  add_test(
+    NAME win32_graphics_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckWin32GraphicsInvariants.cmake)
+  add_test(
     NAME timing_loader_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
