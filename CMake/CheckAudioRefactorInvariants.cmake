@@ -371,8 +371,12 @@ require_contains(
   "RageSoundReader source-frame clamping is diagnosable")
 require_contains(
   "${rage_sound_reader_cpp}"
-  "return RageSoundReader::ERROR;"
-  "RageSoundReader retry exhaustion returns ERROR instead of synthetic EOF")
+  "return RageSoundReader::WOULD_BLOCK;"
+  "RageSoundReader retry exhaustion reports temporary backpressure")
+require_contains(
+  "${rage_sound_reader_h}"
+  "m_bRetriedReadStallReported"
+  "RageSoundReader throttles repeated retry-stall diagnostics")
 require_not_contains(
   "${rage_sound_reader_cpp}"
   "Pretend we got EOF"

@@ -81,6 +81,7 @@ class RageSoundReader {
 
  private:
   mutable std::string m_sBaseError;
+  mutable bool m_bRetriedReadStallReported = false;
 };
 
 #endif

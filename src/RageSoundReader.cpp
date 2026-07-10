@@ -20,13 +20,6 @@ std::string ReaderSourcePathOrUnknown(const RageSoundReader& reader) {
   return sourcePath.empty() ? std::string("<unknown>") : sourcePath;
 }
 
-std::string ReaderErrorOrBaseError(const RageSoundReader& reader) {
-  std::string error = reader.GetError();
-  if (error.empty()) {
-    error = reader.GetBaseError();
-  }
-  return error;
-}
 }  // namespace
 
 RageSoundReader* RageSoundReader::CopyReader(const RageSoundReader* pCopy) {
@@ -134,37 +127,25 @@ int RageSoundReader::RetriedRead(
           *iSourceFrame = nextSourceFrame;
         }
         ClearBaseError();
+        m_bRetriedReadStallReported = false;
       }
       return framesRead;
     }
     ++zeroProgressReads;
   }
 
-  SetBaseError(
-      "SRC_AUDIT_FIX SRC-2899 SRC-2900: sound reader made no progress after "
-      "immediate retries");
-  LogReviewSrcDiagnostics(
-      "%s source=%s zero_progress=%u stream_looped=%u",
-      GetBaseError().c_str(), ReaderSourcePathOrUnknown(*this).c_str(),
-      zeroProgressReads, streamLoopedReads);
-
-  if (LOG != nullptr) {
-    const std::string sourcePath = ReaderSourcePathOrUnknown(*this);
-    const std::string error = ReaderErrorOrBaseError(*this);
-    if (error.empty()) {
-      LOG->Warn(
-          "RageSoundReader could not read from sound file '%s'; giving up "
-          "after retries.",
-          sourcePath.c_str());
-    } else {
-      LOG->Warn(
-          "RageSoundReader could not read from sound file '%s'; giving up "
-          "after retries. Last error: %s",
-          sourcePath.c_str(), error.c_str());
-    }
+  ClearBaseError();
+  if (!m_bRetriedReadStallReported) {
+    LogReviewSrcDiagnostics(
+        "SRC_AUDIT_FIX SRC-2899 SRC-2900: sound reader temporarily made no "
+        "progress after immediate retries source=%s zero_progress=%u "
+        "stream_looped=%u",
+        ReaderSourcePathOrUnknown(*this).c_str(), zeroProgressReads,
+        streamLoopedReads);
+    m_bRetriedReadStallReported = true;
   }
 
-  return RageSoundReader::ERROR;
+  return RageSoundReader::WOULD_BLOCK;
 }
 
 int RageSoundReader::RetriedRead(
