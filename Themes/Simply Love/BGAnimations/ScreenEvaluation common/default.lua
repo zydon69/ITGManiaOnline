@@ -12,12 +12,18 @@ local function OnlineDisplayName(user, fallback)
 	return tostring(user.display_name or user.displayName or user.name or fallback or "Player")
 end
 
+local function OnlineEvaluationActive()
+	return ITGOnline ~= nil
+		and ITGOnline.currentRoomId ~= nil
+		and tostring(ITGOnline.currentRoomId) ~= ""
+end
+
 local function DisableOnlineEvaluationTimer(reason)
 	if type(online_logs_enabled) == "function" and online_logs_enabled() then
 		Trace("ITG Online: FLOW evaluation_timer_disable"
 			.. " reason=" .. tostring(reason or "unknown")
-			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-			.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 	end
 	if not (ITGOnline and ITGOnline.currentRoomId) then return end
 	local screen = SCREENMAN:GetTopScreen()

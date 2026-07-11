@@ -742,8 +742,8 @@ local function getDeviceLoginShortCode(body)
 
   for _, candidate in ipairs(candidates) do
     if candidate ~= nil then
-      local value = tostring(candidate)
-      if value ~= "" then
+      local value = tostring(candidate):upper()
+      if value:match("^[A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9]$") then
         return value
       end
     end
@@ -3348,7 +3348,11 @@ moduleRegistration["ScreenSelectMusic"] = Def.ActorFrame {
       },
       LoadFont("Common Normal") .. {
         Name = "Code",
-        InitCommand = function(self) self:xy(0, 108):zoom(0.58):diffuse(0.95, 0.95, 0.95, 1):settext("") end
+        InitCommand = function(self)
+          self:xy(0, 108):zoom(0.9):maxwidth(290)
+            :diffuse(1, 1, 1, 1):strokecolor(0, 0, 0, 1):strokewidth(2)
+            :settext("")
+        end
       },
       LoadFont("Common Normal") .. {
         Name = "Url",
@@ -3438,7 +3442,11 @@ moduleRegistration["ScreenSelectMusic"] = Def.ActorFrame {
       },
       LoadFont("Common Normal") .. {
         Name = "Code",
-        InitCommand = function(self) self:xy(0, 108):zoom(0.58):diffuse(0.95, 0.95, 0.95, 1):settext("") end
+        InitCommand = function(self)
+          self:xy(0, 108):zoom(0.9):maxwidth(290)
+            :diffuse(1, 1, 1, 1):strokecolor(0, 0, 0, 1):strokewidth(2)
+            :settext("")
+        end
       },
       LoadFont("Common Normal") .. {
         Name = "Url",

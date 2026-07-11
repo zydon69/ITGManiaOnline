@@ -65,6 +65,14 @@ local function trusted_verification_url(value)
 	return value
 end
 
+local function normalize_short_code(value)
+	value = tostring(value or ""):upper()
+	if value:match("^[A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9]$") then
+		return value
+	end
+	return ""
+end
+
 local state = {
 	mode = "idle",
 	status = "",
@@ -273,7 +281,7 @@ start_device_login = function(resetAttempts)
 				login_flow_trace("start_device_login rejected untrusted_verification_url" .. login_state_summary())
 				return
 			end
-		state.shortCode = tostring(decoded.shortCode or "")
+		state.shortCode = normalize_short_code(decoded.shortCode)
 		state.pollIntervalSeconds = tonumber(decoded.pollIntervalSeconds) or 3
 		state.expiresAt = tostring(decoded.expiresAt or "")
 		state.nextPollAt = GetTimeSinceStart() + 0.25
@@ -416,6 +424,7 @@ local function render_qr(panel)
 	local inset = panel:GetChild("QRInset")
 	local data = panel:GetChild("QRCodeData")
 	local status = panel:GetChild("Status")
+	local code = panel:GetChild("Code")
 	local url = panel:GetChild("Url")
 
 	local showQr = state.mode == "waiting" and state.verificationUrl and state.verificationUrl ~= ""
@@ -467,11 +476,16 @@ local function render_qr(panel)
 	end
 
 	if url then
-		local urlText = showQr and state.verificationUrl or ""
+		local urlText = ""
 		if urlText ~= lastUrlText then
 			url:settext(urlText)
 			lastUrlText = urlText
 		end
+	end
+
+	if code then
+		local codeText = normalize_short_code(state.shortCode)
+		code:settext(codeText ~= "" and ("CODE: " .. codeText) or "")
 	end
 end
 
@@ -648,22 +662,29 @@ local t = Def.ActorFrame{
 		},
 		LoadFont("Common Normal")..{
 			Name="Status",
-			InitCommand=function(self) self:xy(0, 96):horizalign(center):zoom(0.56):maxwidth(250):settext("") end
+			InitCommand=function(self) self:xy(0, 92):horizalign(center):zoom(0.56):maxwidth(250):settext("") end
+		},
+		LoadFont("Common Normal")..{
+			Name="Code",
+			InitCommand=function(self)
+				self:xy(0, 116):horizalign(center):zoom(0.74):maxwidth(286)
+					:diffuse(1, 1, 1, 1):strokecolor(0, 0, 0, 1):strokewidth(2):settext("")
+			end
 		},
 		LoadFont("Common Normal")..{
 			Name="Url",
-			InitCommand=function(self) self:xy(0, 128):horizalign(center):zoom(0.34):maxwidth(250):settext("") end
+			InitCommand=function(self) self:xy(0, 148):horizalign(center):zoom(0.28):maxwidth(250):settext("") end
 		},
 	},
 
 	LoadFont("Common Normal")..{
 		Text=THEME:GetString("ScreenITGOnlineLogin", "Help"),
-		InitCommand=function(self) self:xy(0, 134):horizalign(center):zoom(0.56):maxwidth(safe_screen_text_width()):diffuse(0.8,0.8,0.8,1) end,
+		InitCommand=function(self) self:xy(0, 164):horizalign(center):zoom(0.56):maxwidth(safe_screen_text_width()):diffuse(0.8,0.8,0.8,1) end,
 	},
 
 	LoadFont("Common Normal")..{
 		Name="MenuRow",
-		InitCommand=function(self) self:xy(0, 168):horizalign(center):zoom(0.72):maxwidth(safe_screen_text_width()) end,
+		InitCommand=function(self) self:xy(0, 198):horizalign(center):zoom(0.72):maxwidth(safe_screen_text_width()) end,
 		ITGOnlineLoginStateChangedMessageCommand=function(self) self:playcommand("Refresh") end,
 	},
 }

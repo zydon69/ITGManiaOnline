@@ -2,10 +2,9 @@
 -- ITG Online API client.
 --
 -- This bridges Simply Love's existing online-lobby UI to the Laravel server.
--- Save/ITGOnline.ini stores connection settings only; the password is kept in
--- native secure storage when available, otherwise only in memory for the
--- current session. Access tokens can be persisted only when the current local
--- profile explicitly enables it and native secure storage is available.
+-- Save/ITGOnline.ini stores connection settings and the optional profile-scoped
+-- access-token fallback. Native secure storage remains preferred when available,
+-- but local profiles may persist the token like the GrooveStats integration.
 
 local previousITGOnline = rawget(_G, "ITGOnline")
 if type(previousITGOnline) == "table" and previousITGOnline.runtimeLoaded == true then
@@ -668,11 +667,7 @@ local function profile_prefers_persistent_online_token()
 		return false
 	end
 
-	if not PROFILEMAN or not PROFILEMAN.IsPersistentProfile then return false end
-	local ok, persistent = safe_call("profile_persistent", function()
-		return PROFILEMAN:IsPersistentProfile(player)
-	end)
-	return ok and persistent == true
+	return true
 end
 
 local function online_profile_slot(player)
@@ -729,6 +724,27 @@ local function clear_profile_access_token()
 	if not ini_write(path, contents) then return false end
 	invalidate_profile_access_token_cache(path)
 	return true
+end
+
+local function read_profile_access_token(expectedScope)
+	local path = active_profile_auth_path()
+	if not path or not file_exists(path) then return nil, false end
+	local contents = ini_read(path) or {}
+	local section = contents["ITGOnline"] or {}
+	local token = trim(section["AccessToken"])
+	if token == "" then return nil, false end
+	if trim(section["AccessTokenScope"]) ~= trim(expectedScope) then return nil, false end
+	return token, true
+end
+
+local function write_profile_access_token(token, scope)
+	local path = active_profile_auth_path()
+	if not path then return false end
+	local contents = ini_read(path) or {}
+	contents["ITGOnline"] = contents["ITGOnline"] or {}
+	contents["ITGOnline"]["AccessToken"] = tostring(token or "")
+	contents["ITGOnline"]["AccessTokenScope"] = tostring(scope or "")
+	return ini_write(path, contents)
 end
 
 local function secure_password_account(apiBaseUrl, email)
@@ -801,9 +817,9 @@ local function secure_access_token_get(apiBaseUrl, deviceName)
 	end
 
 	if not secure_credentials_available() then
-		clear_profile_access_token()
-		online_trace("Secure access token load skipped: secure credential storage unavailable; plaintext profile persistence is disabled.")
-		return nil, false
+		local token, stored = read_profile_access_token(access_token_scope(apiBaseUrl, deviceName))
+		online_trace("Secure access token unavailable; using profile token fallback stored=" .. tostring(stored))
+		return token, stored
 	end
 
 	local account = secure_access_token_account(apiBaseUrl, deviceName)
@@ -846,9 +862,9 @@ local function secure_access_token_set(apiBaseUrl, deviceName, accessToken, user
 	end
 
 	if not secure_credentials_available() then
-		clear_profile_access_token()
-		online_trace("Secure access token save skipped: secure credential storage unavailable; plaintext profile token persistence disabled.")
-		return false
+		local stored = write_profile_access_token(accessToken, access_token_scope(apiBaseUrl, deviceName))
+		online_trace("Secure access token unavailable; profile token fallback saved=" .. tostring(stored))
+		return stored
 	end
 
 	local account = secure_access_token_account(apiBaseUrl, deviceName)
@@ -858,13 +874,11 @@ local function secure_access_token_set(apiBaseUrl, deviceName, accessToken, user
 		return NETWORK:SecureCredentialSet(ITGOnline.accessTokenService, account, tostring(accessToken))
 	end)
 	if not ok then
-		clear_profile_access_token()
-		return false
+		return write_profile_access_token(accessToken, access_token_scope(apiBaseUrl, deviceName))
 	end
 	if not result or not result.ok then
 		online_trace("Secure access token save failed using " .. secure_credentials_backend() .. ": " .. tostring(result and result.error or "unknown"))
-		clear_profile_access_token()
-		return false
+		return write_profile_access_token(accessToken, access_token_scope(apiBaseUrl, deviceName))
 	end
 
 	clear_profile_access_token()
