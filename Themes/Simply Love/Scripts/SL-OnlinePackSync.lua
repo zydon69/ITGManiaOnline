@@ -2880,12 +2880,20 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		self.downloadLastByteCount = nil
 		self.pendingPostReloadCallback = nil
 		if browseOnly then self.activeBrowseOnlyDownload = false end
-			self:ClearActiveDownloadId("candidate_download_failed")
-			self:UpdateStatus(self.status.DownloadFailed, message)
-			remove_path_if_exists(zipPath)
-			remove_directory_if_possible(quarantinePath)
+		self:ClearActiveDownloadId("candidate_download_failed")
+		self:UpdateStatus(self.status.DownloadFailed, message)
+		remove_path_if_exists(zipPath)
+		remove_directory_if_possible(quarantinePath)
 		if not browseOnly and broadcastMissing ~= false and MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
-			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
+			MESSAGEMAN:Broadcast("OnlineMissingSong", {
+				songInfo = songInfo,
+				reason = "download_failed",
+				-- The archive never reached the chart-verification step. Keep the
+				-- selected candidate available for a retry instead of treating it as
+				-- an incompatible pack.
+				downloadAttemptFailed = true,
+				message = message,
+			})
 		elseif not browseOnly and broadcastMissing ~= false then
 			trace("Download failure missing broadcast skipped reason=stale_or_no_active_selection"
 				.. " pack=" .. tostring(packName)
@@ -2926,19 +2934,22 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			url = url,
 			method = "GET",
 			headers = pack.headers or {},
-		downloadFile = fileName,
-		connectTimeout = 15,
-		transferTimeout = 600,
-		maxDownloadBytes = maxDownloadBytes,
-		-- Keep the zip until we explicitly unzip/cleanup it. If removed too early,
-		-- the post-download check will falsely report "file missing".
-		deleteDownloadAfterResponse = false,
-		onFileError = function(errorMessage)
-			if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
-			if downloadCompleted then return end
-			trace("Download file error pack=" .. tostring(packName) .. " err=" .. tostring(errorMessage))
-			fail_candidate_download("Erreur d'écriture du fichier téléchargé: " .. tostring(errorMessage or "unknown error"))
-		end,
+			downloadFile = fileName,
+			connectTimeout = 15,
+			transferTimeout = 600,
+			maxDownloadBytes = maxDownloadBytes,
+			-- Older engine builds can still apply this cap even for file downloads.
+			-- Newer builds stream with maxDownloadBytes instead.
+			maxResponseBytes = maxDownloadBytes,
+			-- Keep the zip until we explicitly unzip/cleanup it. If removed too early,
+			-- the post-download check will falsely report "file missing".
+			deleteDownloadAfterResponse = false,
+			onFileError = function(errorMessage)
+				if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
+				if downloadCompleted then return end
+				trace("Download file error pack=" .. tostring(packName) .. " err=" .. tostring(errorMessage))
+				fail_candidate_download("Erreur d'écriture du fichier téléchargé: " .. tostring(errorMessage or "unknown error"))
+			end,
 		onProgress = function(current, total)
 			if not self:IsDownloadGenerationCurrent(downloadGeneration) then return false end
 			if downloadCompleted then return false end
@@ -2987,7 +2998,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 				.. " statusCode=" .. tostring(response and response.statusCode or "nil")
 				.. " completed=" .. tostring(downloadCompleted == true)
 				.. " currentGeneration=" .. tostring(self.downloadGeneration))
-				if not self:IsDownloadGenerationCurrent(downloadGeneration) then
+			if not self:IsDownloadGenerationCurrent(downloadGeneration) then
 					remove_path_if_exists(zipPath)
 					trace("Download response ignored reason=stale_generation pack=" .. tostring(packName)
 					.. " generation=" .. tostring(downloadGeneration)
@@ -3007,6 +3018,10 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			if transportError ~= "" then
 				trace("Download failed transport_error pack=" .. tostring(packName)
 					.. " error=" .. tostring(transportError))
+				if transportError:lower():find("response body exceeded maximum allowed size", 1, true) then
+					fail_candidate_download("Ce build du jeu limite encore les téléchargements à 8 Mo. Reconstruisez le jeu avec la version actuelle avant de réessayer.")
+					return
+				end
 				fail_candidate_download("Telechargement impossible : " .. transportError)
 				return
 			end
@@ -3019,14 +3034,14 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			end
 			self:UpdateStatus(self.status.DownloadInProgress, downloadMessage, 100)
 
-				if not FILEMAN:DoesFileExist(zipPath) then
+			if not FILEMAN:DoesFileExist(zipPath) then
 				trace("Download failed missing zip pack=" .. tostring(packName)
 					.. " zipPath=" .. tostring(zipPath)
 					.. " fileName=" .. tostring(fileName))
 				fail_candidate_download("Le fichier téléchargé est introuvable.")
-					return
-				end
-				local archiveHash = sha256_file_hex(zipPath)
+				return
+			end
+			local archiveHash = sha256_file_hex(zipPath)
 				if trustedRoomPackage and archiveHash ~= tostring(pack.archive_sha256):lower() then
 					remove_path_if_exists(zipPath)
 					trace("Download failed archive_hash_mismatch pack=" .. tostring(packName)

@@ -23,6 +23,8 @@ foreach(REQUIRED_SNIPPET
     "ignored stale pack status response"
     "lastMarkLobbyReadyCompletedKey"
     "MarkLobbyReady skipped reason=already_acknowledged"
+    "downloadAttemptFailed"
+    "maxDownloadBytes = maxDownloadBytes"
     "SRC_REVIEW_TRACE [OnlinePackSync]")
   string(FIND "${ONLINE_PACK_SYNC_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)

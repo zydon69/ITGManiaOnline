@@ -7795,6 +7795,10 @@ function ITGOnline:Disconnect(options)
 	self.authAttemptGeneration = (tonumber(self.authAttemptGeneration) or 0) + 1
 	self.authRefreshInFlight = false
 	self.authRefreshCallbacks = {}
+	-- Cancel older room/heartbeat requests before queueing the independent leave
+	-- request.  Otherwise an in-flight leave can occupy the worker queue until
+	-- the process exits, leaving a ghost member in the room.
+	self:CancelPendingRequests()
 	if roomIdToLeave and options.leaveRoom ~= false and self.token and NETWORK and NETWORK.HttpRequest then
 		self:MarkLeavingRoom(roomIdToLeave, true)
 		self:IgnoreRoomEvents(roomIdToLeave, 30)
@@ -7826,7 +7830,6 @@ function ITGOnline:Disconnect(options)
 			.. " hasToken=" .. tostring(tostring(self.token or "") ~= "")
 			.. " hasNetwork=" .. tostring(NETWORK and NETWORK.HttpRequest ~= nil))
 	end
-	self:CancelPendingRequests()
 	if revokeToken and self.token then
 		online_flow_trace("disconnect_revoke_token_request")
 		local token = self.token

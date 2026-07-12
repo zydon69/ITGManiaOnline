@@ -5139,7 +5139,7 @@ local af = Def.ActorFrame{
 					.. " song=" .. tostring(params.songInfo.song or params.songInfo.title or ""))
 			end
 			local reason = missingReason
-			if reason == "download_failed" then
+			if reason == "download_failed" and not (params and params.downloadAttemptFailed == true) then
 				lobby_flow_trace("OnlineMissingSong_download_failed candidates=" .. tostring(type(pack_choice_last_candidates) == "table" and #pack_choice_last_candidates or 0)
 					.. " selectedPackId=" .. tostring(pack_choice_last_selected_pack_id))
 				if (#pack_choice_last_candidates == 0) and SL and SL.Global and SL.Global.Online and type(SL.Global.Online.PackChoiceRecovery.candidates) == "table" then
@@ -5177,6 +5177,13 @@ local af = Def.ActorFrame{
 						showPrompt=true
 					})
 				end
+			elseif reason == "download_failed" then
+				lobby_flow_trace("OnlineMissingSong_download_attempt_failed message=" .. tostring(params and params.message or "nil"))
+				self:playcommand("SetStatus", {
+					text = tostring(params and params.message or "Le téléchargement du pack a échoué. Vous pouvez réessayer."),
+					showSpinner = false,
+					showPrompt = true,
+				})
 			end
 			set_joined_default_active_index()
 			lobby_flow_trace("OnlineMissingSong_update_ui")
@@ -6393,7 +6400,7 @@ end,
 						Name="ReloadSongsKickWarning",
 						Text="",
 						InitCommand=function(self)
-							self:y(29):zoom(0.28):maxwidth(700):diffuse(color("#FFDD55")):visible(false)
+							self:y(29):zoom(0.36):maxwidth(700):diffuse(color("#FFDD55")):visible(false)
 						end
 					}
 				},
