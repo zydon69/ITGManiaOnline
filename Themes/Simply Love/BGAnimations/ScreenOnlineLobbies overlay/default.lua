@@ -1610,12 +1610,6 @@ local function song_info_matches_current_room_selection(songInfo)
 end
 
 function can_download_browsed_pack()
-	-- A preview has no server-signed archive. Do not offer an action that the
-	-- secure downloader must reject; downloads start after official selection.
-	if joined_preview_unknown_pack then
-		lobby_flow_trace("can_download_browsed_pack false reason=preview_package_not_verified")
-		return false
-	end
 	local joinedPhase = normalized_online_phase and normalized_online_phase(joined_phase) or tostring(joined_phase or "")
 	local roomPhase = ITGOnline and ITGOnline.currentRoom and normalized_online_phase and normalized_online_phase(ITGOnline.currentRoom.phase) or ""
 	if joinedPhase == "results" then

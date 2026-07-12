@@ -1777,7 +1777,7 @@ function PackSync:ManagerBrowsingPreview(songInfo)
 	local exists = self:PackExists(packName)
 	local status = exists and self.status.DownloadedOk or self.status.ManagerBrowsingUnknownPack
 	local message = exists and "Pack disponible localement."
-		or "Pack absent. Le telechargement securise sera propose apres la selection de la chanson."
+		or "Pack absent. Vous pouvez rechercher un pack correspondant."
 	if exists and self.downloadedPackKey == packKey then
 		message = "Pack téléchargé et disponible localement."
 	end
@@ -2715,9 +2715,11 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			if callback then callback(false, "Pack candidat invalide.") end
 			return
 		end
-		if pack.trusted_room_package ~= true then
+		local trustedRoomPackage = pack.trusted_room_package == true
+		local trustedCatalogCandidate = pack.trusted_catalog_candidate == true
+		if not trustedRoomPackage and not trustedCatalogCandidate then
 			trace("DownloadPackByCandidate blocked reason=untrusted_source packId=" .. tostring(pack.id))
-			if callback then callback(false, "Les packs online doivent etre fournis par le serveur du salon.") end
+			if callback then callback(false, "La source du pack n'est pas autorisee.") end
 			return
 		end
 		if not (NETWORK and NETWORK.HttpRequest) then
@@ -2740,9 +2742,9 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		if callback then callback(false, "Vous n'etes plus dans le salon.") end
 		return
 	end
-		if type(pack.archive_sha256) ~= "string"
+		if trustedRoomPackage and (type(pack.archive_sha256) ~= "string"
 		or #pack.archive_sha256 ~= 64
-		or not pack.archive_sha256:match("^[a-f0-9]+$") then
+		or not pack.archive_sha256:match("^[a-f0-9]+$")) then
 		trace("DownloadPackByCandidate blocked reason=missing_archive_manifest packId="
 			.. tostring(pack and pack.id or "nil"))
 			if callback then callback(false, "Le serveur n'a pas fourni de manifeste SHA-256 verifiable.") end
@@ -2780,6 +2782,16 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	end
 
 	local packName = trim(pack.name or ("Pack " .. tostring(packId)))
+	local url = tostring(pack.download_url or "")
+	if trustedCatalogCandidate then
+		local expectedCatalogUrl = stepmaniaonline_origin() .. "/download/pack/" .. tostring(packId) .. "/"
+		if url ~= expectedCatalogUrl then
+			trace("DownloadPackByCandidate blocked reason=invalid_catalog_url packId=" .. tostring(packId)
+				.. " url=" .. tostring(url))
+			if callback then callback(false, "L'URL du pack StepManiaOnline est invalide.") end
+			return
+		end
+	end
 	if existingDownloadKey == "" then
 		self.downloadInFlightKey = (browseOnly and "browse-candidate|" or "selected-candidate|") .. tostring(packId) .. "|" .. packName
 	end
@@ -2796,7 +2808,6 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			maxDownloadBytes = defaultMaxDownloadBytes
 		end
 
-		local url = tostring(pack.download_url or "")
 		if url == "" then
 			if callback then callback(false, "Le serveur n'a pas fourni d'URL de telechargement securisee.") end
 			return
@@ -3001,13 +3012,18 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 					return
 				end
 				local archiveHash = sha256_file_hex(zipPath)
-				if archiveHash ~= tostring(pack.archive_sha256):lower() then
+				if trustedRoomPackage and archiveHash ~= tostring(pack.archive_sha256):lower() then
 					remove_path_if_exists(zipPath)
 					trace("Download failed archive_hash_mismatch pack=" .. tostring(packName)
 						.. " expected=" .. tostring(pack.archive_sha256):sub(1, 12)
 						.. " actual=" .. tostring(archiveHash or "nil"):sub(1, 12))
 					fail_candidate_download("Le hash SHA-256 du pack telecharge ne correspond pas au manifeste.")
 					return
+				end
+				if trustedCatalogCandidate then
+					trace("Download catalog archive hash pack=" .. tostring(packName)
+						.. " id=" .. tostring(packId)
+						.. " sha256=" .. tostring(archiveHash or "unavailable"):sub(1, 12))
 				end
 
 			remove_directory_if_possible(quarantinePath)
@@ -3191,15 +3207,47 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 		return
 	end
 
-	-- A room package is the only download source whose archive and song identity can
-	-- be verified against the room selected by the server.  Catalog search remains
-	-- available for discovery, but never installs an archive directly.
-	trace("DownloadBrowsingPack blocked reason=untrusted_catalog_disabled"
-		.. " title=" .. tostring(selected_title(songInfo))
-		.. " pack=" .. tostring(selected_pack(songInfo)))
-	if callback then
-		callback(false, "Selectionnez d'abord la chanson : le telechargement sera alors verifie par le serveur du salon.")
-	end
+	-- Preview downloads deliberately use only the canonical HTTPS catalog URL built
+	-- from a validated numeric API id. They remain isolated from selected-song
+	-- synchronization: once a song is selected, the room package and its SHA-256
+	-- manifest are still mandatory.
+	self:SearchStepManiaOnline(songInfo, function(ok, result, details)
+		local candidates = {}
+		if ok and type(result) == "table" then
+			local candidate = build_pack_candidate(result, "catalog_exact")
+			if candidate then candidates[#candidates + 1] = candidate end
+		elseif type(details) == "table" and type(details.candidates) == "table" then
+			candidates = details.candidates
+		end
+
+		candidates = dedupe_candidates(candidates)
+		for _, candidate in ipairs(candidates) do
+			local candidateId = canonical_id(candidate.id)
+			if candidateId then
+				candidate.id = candidateId
+				candidate.trusted_catalog_candidate = true
+				candidate.download_url = stepmaniaonline_origin() .. "/download/pack/" .. tostring(candidateId) .. "/"
+			end
+		end
+
+		trace("DownloadBrowsingPack catalog candidates=" .. tostring(#candidates)
+			.. " title=" .. tostring(selected_title(songInfo))
+			.. " pack=" .. tostring(selected_pack(songInfo)))
+		if #candidates == 0 then
+			if callback then
+				callback(false, (type(details) == "table" and details.errorMessage)
+					or "Aucun pack StepManiaOnline correspondant n'a ete trouve.")
+			end
+			return
+		end
+		if callback then
+			callback(false, {
+				kind = "pack_candidates",
+				candidates = candidates,
+				message = "Choisissez le pack correspondant a cette previsualisation.",
+			})
+		end
+	end)
 end
 
 local function browse_pack_reload_validated(songInfo, quarantinePath)
