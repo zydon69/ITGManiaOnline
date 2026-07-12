@@ -29,6 +29,10 @@ foreach(REQUIRED_SNIPPET
     "catalog resolved a single candidate; starting transfer"
     "archive_hash_mismatch"
     "archive integrity verified"
+    "local expectedArchiveHash = \"\""
+    "download_callback_exception"
+    "download_reload_requested"
+    "self.activeBrowseOnlyDownload == true"
     "SRC_REVIEW_TRACE [OnlinePackSync]")
   string(FIND "${ONLINE_PACK_SYNC_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
