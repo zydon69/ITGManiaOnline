@@ -63,7 +63,7 @@ PackSync.status = {
 PackSync.statusText = {
 	idle = "Pret",
 	ready = "Pret",
-	manager_browsing_unknown_pack = "Pack inconnu",
+	manager_browsing_unknown_pack = "Pack absent - telechargement apres selection",
 	searching_local_charts = "Recherche locale",
 	local_chart_match_found = "Chart compatible trouvee",
 	no_compatible_chart_found = "Aucune chart compatible",
@@ -1776,7 +1776,8 @@ function PackSync:ManagerBrowsingPreview(songInfo)
 	local packKey = pack_name_key(packName)
 	local exists = self:PackExists(packName)
 	local status = exists and self.status.DownloadedOk or self.status.ManagerBrowsingUnknownPack
-	local message = exists and "Pack disponible localement." or "Le manager navigue dans un pack que vous ne possédez pas."
+	local message = exists and "Pack disponible localement."
+		or "Pack absent. Le telechargement securise sera propose apres la selection de la chanson."
 	if exists and self.downloadedPackKey == packKey then
 		message = "Pack téléchargé et disponible localement."
 	end
@@ -3197,7 +3198,7 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 		.. " title=" .. tostring(selected_title(songInfo))
 		.. " pack=" .. tostring(selected_pack(songInfo)))
 	if callback then
-		callback(false, "Le telechargement est disponible uniquement pour le package verifie de la chanson selectionnee.")
+		callback(false, "Selectionnez d'abord la chanson : le telechargement sera alors verifie par le serveur du salon.")
 	end
 end
 

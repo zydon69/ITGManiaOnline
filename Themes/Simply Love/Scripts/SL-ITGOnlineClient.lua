@@ -4049,6 +4049,13 @@ function ITGOnline:MaybeAutoReadyManager(room)
 					.. " key=" .. tostring(key)
 					.. " retry_after=" .. tostring(retryAfter)
 					.. " serverDeferred=" .. tostring(decoded and decoded.deferred == true))
+				if MESSAGEMAN then
+					MESSAGEMAN:Broadcast("OnlineManagerAutoReadyRetryRequested", {
+						key = key,
+						readyPhase = readyPhase,
+						retryAfter = retryAfter,
+					})
+				end
 			end
 			if errorCode == "room_phase_not_accepting_lobby_ready" then
 				-- Stale phase race: avoid immediate replay storm on the same key.
@@ -6821,11 +6828,7 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 			.. " roomPhase=" .. tostring(roomPhase)
 			.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true)
 			.. " finalResults=" .. tostring(summary and summary.finalResults or "nil"))
-		if roomPhase == "results" and summary and summary.finalResultsReady == true then
-			online_flow_trace("navigate_force_evaluation reason=results_ready target=" .. tostring(target)
-				.. " roundKey=" .. tostring(roundKey))
-			topScreen:StartTransitioningScreen("SM_GoToNextScreen")
-		elseif topScreen.PostScreenMessage then
+		if topScreen.PostScreenMessage then
 			topScreen:PostScreenMessage("SM_LeaveGameplay", 0)
 		else
 			topScreen:StartTransitioningScreen("SM_GoToNextScreen")
@@ -15388,8 +15391,13 @@ function ITGOnline:LobbyStatePayload(room)
 	local globalOptions = self:NormalizeGlobalOptions(room.global_options)
 
 	local readyByUserId = {}
+	local readyPhaseByUserId = {}
 	if room.ready_states then
 		for state in ivalues(room.ready_states) do
+			local readyUserId = state.user and state.user.id or state.user_id
+			if readyUserId ~= nil then
+				readyPhaseByUserId[tostring(readyUserId)] = tostring(state.phase or state.ready_phase or state.readyPhase or "")
+			end
 			if state.user and state.user.id then
 				readyByUserId[tostring(state.user.id)] = state.is_ready and true or false
 			elseif state.user_id then
@@ -15464,11 +15472,18 @@ function ITGOnline:LobbyStatePayload(room)
 				and online_protocol_ids_match(self.user.id, userId)
 				and self:CurrentUserHasOptimisticConfigReady(room)
 				and readyByUserId[userId] ~= true
+			local serverReady = readyByUserId[userId] == true
+			local readyPhase = readyPhaseByUserId[userId] or ""
+			local configReady = room.phase == "config" and readyPhase == "config_ready" and serverReady
 			local playerPayload = {
 				playerId = userId,
 				profileName = user_display_name(user, "Player " .. userId),
 				screenName = memberScreenName,
-				ready = readyByUserId[userId] == true,
+				-- A green check means options are validated, never merely that a
+				-- local chart was found during the lobby-ready barrier.
+				ready = configReady,
+				lobbyReady = readyPhase == "lobby_ready" and serverReady,
+				readyPhase = readyPhase,
 				readyPendingServer = localOptimisticConfigReady,
 				missingSong = member.missing_song and true or false,
 				missingSongReason = member.missing_song_reason,
