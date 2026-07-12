@@ -463,7 +463,10 @@ void PrefsManager::RestoreGamePrefs() {
 
 PrefsManager::GamePrefs::GamePrefs()
     : m_sAnnouncer(""),
-      m_sTheme(SpecialFiles::BASE_THEME_NAME),
+      // A newly-created per-game preference set must start with a selectable
+      // theme.  Using the internal base theme here makes fresh installations
+      // briefly attempt to load `_fallback` before ThemeManager repairs it.
+      m_sTheme("Simply Love"),
       m_sDefaultModifiers("") {}
 
 int PrefsManager::GetGlobalOffsetProfileCount() const {

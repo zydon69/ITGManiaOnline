@@ -52,6 +52,8 @@ foreach(REQUIRED_SNIPPET
     "unsupported_audio_format"
     "room_snapshot_screen_enforcement"
     "navigate_retargeted_in_flight_transition"
+    "evaluation_options_redirect_via_lobby"
+    "EstimatedServerTimeMilliseconds"
     "profile-guid:v1:"
     "stored_token_binding_user_mismatch"
     "stored token ignored reason=profile_binding_missing_or_invalid"

@@ -43,6 +43,7 @@ PackSync.lastResetSignature = PackSync.lastResetSignature or ""
 PackSync.lastResetAt = tonumber(PackSync.lastResetAt) or 0
 PackSync.lastNoSongClearResetAt = tonumber(PackSync.lastNoSongClearResetAt) or 0
 PackSync.lastNoSongClearResetReason = PackSync.lastNoSongClearResetReason or ""
+PackSync.lastDeferredLocalMatchTraceKey = PackSync.lastDeferredLocalMatchTraceKey or ""
 PackSync.maxDownloadBytes = 5 * 1024 * 1024 * 1024
 
 PackSync.status = {
@@ -1818,17 +1819,34 @@ function PackSync:FindLocalMatch(songInfo)
 
 	self.currentSongInfo = songInfo
 	if self:IsActiveDownload() and self.validatingPostReload ~= true then
-		trace("Skipping local chart status scan during active download title=" .. selected_title(songInfo))
-		trace_online_state("local_match_skipped_active_download", {
-			selected_at = selected_at(songInfo),
-			title = selected_title(songInfo),
-			pack = selected_pack(songInfo),
-			status = self.currentStatus or "nil",
-			downloadKey = self.downloadInFlightKey or "",
-			activeDownloadId = self.activeDownloadId or "",
-			browseOnly = self.activeBrowseOnlyDownload == true,
-		})
-		return { ok = false, status = "download_in_progress", reason = "download_in_progress" }
+		local deferredKey = table.concat({
+			selected_at(songInfo),
+			self.downloadInFlightKey or "",
+			self.activeDownloadId or "",
+			self.currentStatus or "",
+		}, "|")
+		local traceEmitted = self.lastDeferredLocalMatchTraceKey ~= deferredKey
+		if traceEmitted then
+			self.lastDeferredLocalMatchTraceKey = deferredKey
+			trace("Deferring local chart scan until active download completes title=" .. selected_title(songInfo))
+			trace_online_state("local_match_deferred_active_download", {
+				selected_at = selected_at(songInfo),
+				title = selected_title(songInfo),
+				pack = selected_pack(songInfo),
+				status = self.currentStatus or "nil",
+				downloadKey = self.downloadInFlightKey or "",
+				activeDownloadId = self.activeDownloadId or "",
+				browseOnly = self.activeBrowseOnlyDownload == true,
+				outcome = "deferred",
+			})
+		end
+		return {
+			ok = false,
+			deferred = true,
+			traceEmitted = traceEmitted,
+			status = "download_in_progress",
+			reason = "download_in_progress",
+		}
 	end
 	local scanKey = local_scan_key(songInfo)
 	local cachedScan = self.localScanCache and self.localScanCache[scanKey] or nil
@@ -1999,10 +2017,6 @@ function PackSync:ApplySelectedChart(songInfo)
 	})
 	trace("ApplySelectedChart begin title=" .. tostring(selected_title(songInfo))
 		.. " pack=" .. tostring(selected_pack(songInfo))
-		.. " chartHash=" .. tostring(selected_chart_hash(songInfo)):sub(1, 12)
-		.. " currentStatus=" .. tostring(self.currentStatus or "nil"))
-	trace("ApplySelectedChart begin title=" .. tostring(selected_title(songInfo))
-		.. " pack=" .. tostring(selected_pack(songInfo))
 		.. " selected_at=" .. tostring(selected_at(songInfo))
 		.. " chart_hash=" .. tostring(selected_chart_hash(songInfo))
 		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
@@ -2015,16 +2029,27 @@ function PackSync:ApplySelectedChart(songInfo)
 			trace("ApplySelectedChart local match failed err=" .. tostring(result))
 			result = { ok = false, status = "missing", reason = "local_match_error" }
 		end
-	trace("ApplySelectedChart result ok=" .. tostring(result and result.ok == true)
-		.. " status=" .. tostring(result and result.status or "nil")
-		.. " reason=" .. tostring(result and result.reason or "nil")
-		.. " message=" .. tostring(result and result.message or "nil"))
-	trace_online_state("apply_selected_chart_result", {
-		selected_at = selected_at(songInfo),
-		ok = result and result.ok == true,
-		status = result and result.status or "nil",
-		reason = result and result.reason or "nil",
-	})
+	if result.deferred == true and result.traceEmitted == true then
+		trace("ApplySelectedChart deferred status=" .. tostring(result.status or "nil")
+			.. " reason=" .. tostring(result.reason or "nil"))
+		trace_online_state("apply_selected_chart_deferred", {
+			selected_at = selected_at(songInfo),
+			status = result.status or "nil",
+			reason = result.reason or "nil",
+			outcome = "deferred",
+		})
+	else
+		trace("ApplySelectedChart result ok=" .. tostring(result and result.ok == true)
+			.. " status=" .. tostring(result and result.status or "nil")
+			.. " reason=" .. tostring(result and result.reason or "nil")
+			.. " message=" .. tostring(result and result.message or "nil"))
+		trace_online_state("apply_selected_chart_result", {
+			selected_at = selected_at(songInfo),
+			ok = result and result.ok == true,
+			status = result and result.status or "nil",
+			reason = result and result.reason or "nil",
+		})
+	end
 	if result.ok then
 		set_current_selection(result.song, result.steps, songInfo, "pack_sync_apply_selected_chart")
 		if MESSAGEMAN then
@@ -2050,7 +2075,7 @@ function PackSync:ApplySelectedChart(songInfo)
 	end
 
 	local reason = result.reason or "missing_local_song"
-	if reason == "download_in_progress" then
+	if result.deferred == true or reason == "download_in_progress" then
 		return false
 	end
 	if result.status == "mismatch" then

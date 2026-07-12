@@ -179,6 +179,8 @@ ITGOnline.onlineOptionsReadyTimeoutSeconds = ITGOnline.onlineOptionsReadyTimeout
 ITGOnline.serverClockOffsetSeconds = ITGOnline.serverClockOffsetSeconds or nil
 ITGOnline.lastClockSyncAt = ITGOnline.lastClockSyncAt or 0
 ITGOnline.lastClockRttSeconds = ITGOnline.lastClockRttSeconds or nil
+ITGOnline.lastRoomServerTimeMs = ITGOnline.lastRoomServerTimeMs or nil
+ITGOnline.lastRoomServerTimeObservedAt = ITGOnline.lastRoomServerTimeObservedAt or 0
 ITGOnline.syncMaxPages = ITGOnline.syncMaxPages or 100
 ITGOnline.syncOverflowMaxRetries = ITGOnline.syncOverflowMaxRetries or 3
 ITGOnline.syncOverflowMaxBudgetMultiplier = ITGOnline.syncOverflowMaxBudgetMultiplier or 4
@@ -3442,6 +3444,31 @@ function ITGOnline:SecondsUntilServerTimestamp(timestamp)
 	return (timestampMs / 1000) - estimatedServerNow
 end
 
+function ITGOnline:ObserveRoomServerTime(serverTime, source)
+	local serverTimeMs = tonumber(serverTime or "") or iso_utc_milliseconds(serverTime)
+	if not serverTimeMs or serverTimeMs ~= serverTimeMs or math.abs(serverTimeMs) > 4102444800000 then
+		return false
+	end
+	self.lastRoomServerTimeMs = serverTimeMs
+	self.lastRoomServerTimeObservedAt = GetTimeSinceStart()
+	online_flow_trace_throttled("room_server_time_observed", 1.0,
+		"room_server_time_observed source=" .. tostring(source or "unknown")
+		.. " serverTimeMs=" .. tostring(serverTimeMs))
+	return true
+end
+
+function ITGOnline:EstimatedServerTimeMilliseconds()
+	if self:ClockSyncIsFresh() then
+		return math.floor((GetTimeSinceStart() + self.serverClockOffsetSeconds) * 1000)
+	end
+	local sampledAt = tonumber(self.lastRoomServerTimeObservedAt) or 0
+	local sampledTimeMs = tonumber(self.lastRoomServerTimeMs)
+	if sampledTimeMs and sampledAt > 0 then
+		return math.floor(sampledTimeMs + math.max(0, GetTimeSinceStart() - sampledAt) * 1000)
+	end
+	return nil
+end
+
 function ITGOnline:CancelPendingRequests()
 	local count = 0
 	for _, _ in pairs(self.requests or {}) do
@@ -5252,6 +5279,7 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	self.lastAuthoritativeRoomSnapshotAt = GetTimeSinceStart()
 	self.lastAuthoritativeRoomSnapshotSource = tostring(source or "unknown")
 	self.currentRoom = room
+	self:ObserveRoomServerTime(room.server_time_ms or room.server_time, "room_snapshot:" .. tostring(source or "unknown"))
 	self:MarkRoomSnapshotApplied(room)
 	self:UpdateScheduledStart(room)
 	self:MaybeAckScheduledStart(room)
@@ -6798,6 +6826,11 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 			.. " from=" .. tostring(topScreen:GetName()))
 		return false
 	end
+	local bridgeEvaluationThroughLobby = preferred == "options"
+		and self:IsOnlineEvaluationScreen(topScreen:GetName())
+	if bridgeEvaluationThroughLobby then
+		target = "ScreenOnlineLobbies"
+	end
 
 	local roomPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
 	local roundKey = self.CanonicalGameplayRoundKey and self:CanonicalGameplayRoundKey("navigation") or (self.PlayStateKey and self:PlayStateKey() or "")
@@ -6836,7 +6869,7 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 		return true
 	end
 	if topScreen.IsTransitioning and topScreen:IsTransitioning() then
-		if preferred == "options" then
+		if preferred == "options" and not bridgeEvaluationThroughLobby then
 			self:MarkOptionsPresentedForCurrentSelection("retarget_in_flight_room_transition", self.currentRoom)
 			if self.ClearFinalLeaderboardCache then
 				self:ClearFinalLeaderboardCache("new_song_options_navigation", self.currentRoomId)
@@ -6857,7 +6890,7 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 	self.onlineNavigationInFlightAt = now
 
 		online_flow_trace("navigate decisionId=" .. tostring(decisionId) .. " target=" .. tostring(target) .. " preferred=" .. tostring(preferred) .. " from=" .. tostring(topScreen:GetName()))
-		if preferred == "options" then
+		if preferred == "options" and not bridgeEvaluationThroughLobby then
 			self:MarkOptionsPresentedForCurrentSelection("apply_preferred_room_screen", self.currentRoom)
 			if self.ClearFinalLeaderboardCache then
 				self:ClearFinalLeaderboardCache("new_song_options_navigation", self.currentRoomId)
@@ -6870,6 +6903,13 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 					.. " phase=" .. tostring(roomPhase)
 					.. " room=" .. tostring(self.currentRoomId or "nil"))
 			end
+		end
+		if bridgeEvaluationThroughLobby then
+			online_flow_trace("evaluation_options_redirect_via_lobby decisionId=" .. tostring(decisionId)
+				.. " from=" .. tostring(topScreen:GetName())
+				.. " target=" .. tostring(target)
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " phase=" .. tostring(roomPhase))
 		end
 		if preferred == "gameplay" and self.ApplyResolvedLocalGameplaySteps then
 			self:ApplyResolvedLocalGameplaySteps("navigate_to_gameplay")

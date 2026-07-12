@@ -1729,16 +1729,9 @@ function pack_sync_countdown_seconds_for_player(player)
 	local deadlineMs = tonumber(player and player.packSyncDownloadDeadlineMs)
 	if not deadlineMs or deadlineMs <= 0 then return nil end
 
-	local remaining = nil
-	if ITGOnline.SecondsUntilServerTimestamp then
-		remaining = ITGOnline:SecondsUntilServerTimestamp(deadlineMs)
-	end
-	if remaining == nil then
-		local roomTimeMs = tonumber(ITGOnline.currentRoom.server_time_ms)
-		if roomTimeMs then
-			remaining = (deadlineMs - roomTimeMs) / 1000
-		end
-	end
+	local estimatedServerTimeMs = ITGOnline.EstimatedServerTimeMilliseconds
+		and ITGOnline:EstimatedServerTimeMilliseconds() or nil
+	local remaining = estimatedServerTimeMs and (deadlineMs - estimatedServerTimeMs) / 1000 or nil
 	if remaining == nil then
 		lobby_flow_trace("pack_sync_kick_warning_waiting_for_clock deadlineMs=" .. tostring(deadlineMs)
 			.. " player=" .. tostring(player and player.playerId or "nil"))
