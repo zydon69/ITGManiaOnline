@@ -14,7 +14,8 @@ foreach(REQUIRED_SNIPPET
     "if (IsExpectedInactiveWebSocketTerminalMessage(msg.type))"
     "url=%s reason=inactive type=%s"
     "queuedTasks > kBacklogAdaptiveThreshold * 4"
-    "queuedTasks >= kBacklogAdaptiveThreshold")
+    "queuedTasks >= kBacklogAdaptiveThreshold"
+    "useDownloadClient ? effectiveMaxDownloadBytes")
   string(FIND "${NETWORK_MANAGER_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(

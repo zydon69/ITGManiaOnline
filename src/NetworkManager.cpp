@@ -1429,9 +1429,15 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
   req->followRedirects = false;
   req->maxRedirects = 0;
   req->allowCompressedResponse = false;
+  // Downloads stream their payload to a temporary file. Applying the regular
+  // JSON/API response cap here rejects valid song-pack archives before the
+  // chunk callback can persist them. Keep the small cap for in-memory HTTP
+  // responses, but use the independently bounded download limit for files.
   req->maxResponseBodyBytes = static_cast<uint64_t>(
-      args.maxResponseBytes >= 0 ? args.maxResponseBytes
-                                 : kDefaultMaxHttpResponseBytes);
+      useDownloadClient ? effectiveMaxDownloadBytes
+                        : (args.maxResponseBytes >= 0
+                               ? args.maxResponseBytes
+                               : kDefaultMaxHttpResponseBytes));
   // Avoid gzip-compressed HTTP responses: Lua JSON consumers expect plain text.
   // Some upstream endpoints return gzip payloads that are not decoded in this path.
   req->compress = false;
