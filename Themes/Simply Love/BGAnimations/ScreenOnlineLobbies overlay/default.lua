@@ -1754,7 +1754,25 @@ local function joined_download_kick_warning_text()
 	local remaining = joined_missing_song_countdown_seconds()
 	if remaining == nil then return "" end
 	play_online_warning_countdown_tick("pack_sync_kick:download_button", remaining)
-	return "Ou vous serez expulsez dans " .. tostring(math.ceil(remaining)) .. " sec"
+	return "Expulsion dans " .. tostring(math.ceil(remaining)) .. " s : telechargez le pack"
+end
+
+local function update_joined_download_kick_warning(root)
+	if not root then return end
+	local joinedContent = root:GetChild("JoinedLobbyContent")
+	local warningText = mode == "joined" and joined_download_kick_warning_text() or ""
+	local warning = joinedContent and joinedContent:GetChild("PackSyncKickWarning")
+	if warning then
+		warning:settext(warningText)
+		warning:visible(warningText ~= "")
+	end
+
+	local packChoiceMenu = root:GetChild("PackChoiceMenu")
+	local modalWarning = packChoiceMenu and packChoiceMenu:GetChild("PackChoiceKickWarning")
+	if modalWarning then
+		modalWarning:settext(warningText)
+		modalWarning:visible(showing_pack_choice_menu and warningText ~= "")
+	end
 end
 
 function local_pack_exists(songInfo)
@@ -2647,8 +2665,8 @@ local function update_pack_choice_menu()
 		.. " candidates=" .. tostring(#pack_choice_candidates)
 		.. " browseOnly=" .. tostring(pack_choice_browse_only == true)
 		.. " message=" .. tostring(pack_choice_message or "nil"))
-	local title = menu:GetChild("PackChoiceTitle")
-	local options = menu:GetChild("PackChoiceOptions")
+		local title = menu:GetChild("PackChoiceTitle")
+		local options = menu:GetChild("PackChoiceOptions")
 		if title then title:settext("Choisir le pack a telecharger") end
 	if options then
 		local lines = {}
@@ -2665,9 +2683,10 @@ local function update_pack_choice_menu()
 		lines[#lines + 1] = ""
 			lines[#lines + 1] = "Gauche/Droite pour choisir, START pour telecharger, Select pour annuler."
 		options:settext(table.concat(lines, "\n"))
+		end
+		menu:visible(true)
+		update_joined_download_kick_warning(t)
 	end
-	menu:visible(true)
-end
 
 local function open_pack_choice_menu(songInfo, candidates, message, browseOnly)
 	if type(candidates) ~= "table" or #candidates == 0 then
@@ -3927,6 +3946,17 @@ local af = Def.ActorFrame{
 					self:sleep(0.5):queuecommand("Fire")
 				end
 			},
+			Def.Actor{
+				Name="PackSyncKickWarningTimer",
+				OnCommand=function(self)
+					self:sleep(0.5):queuecommand("Refresh")
+				end,
+				RefreshCommand=function(self)
+					local parent = self:GetParent()
+					if parent then parent:playcommand("UpdatePackSyncKickWarning") end
+					self:sleep(0.5):queuecommand("Refresh")
+				end
+			},
 		HoverCommand=function(self)
 			self:GetChild("LobbyContent"):playcommand("Hover")
 			self:GetChild("OnlinePlayersContent"):playcommand("Hover")
@@ -3942,6 +3972,9 @@ local af = Def.ActorFrame{
 			if indicator then
 				indicator:playcommand("Set", realtime_health_snapshot())
 			end
+		end,
+		UpdatePackSyncKickWarningCommand=function(self)
+			update_joined_download_kick_warning(self)
 		end,
 		OnlineRealtimeHealthMessageCommand=function(self, params)
 			local indicator = self:GetChild("RealtimeIndicator")
@@ -4318,10 +4351,9 @@ local af = Def.ActorFrame{
 			local canDownloadBrowsePack = can_download_browsed_pack()
 			local syncBusy = pack_sync_busy()
 			local reloadVisible = show_pack_download_button()
-			reloadSongsButton:visible(reloadVisible)
-			local label = reloadSongsButton:GetChild("ReloadSongsLabel")
-			local kickWarning = reloadSongsButton:GetChild("ReloadSongsKickWarning")
-			local labelText = ""
+				reloadSongsButton:visible(reloadVisible)
+				local label = reloadSongsButton:GetChild("ReloadSongsLabel")
+				local labelText = ""
 			if label then
 				if syncBusy then
 					labelText = "Telechargement..."
@@ -4330,11 +4362,7 @@ local af = Def.ActorFrame{
 				end
 				label:settext(labelText)
 			end
-			if kickWarning then
-				local warningText = reloadVisible and joined_download_kick_warning_text() or ""
-				kickWarning:visible(warningText ~= "")
-				kickWarning:settext(warningText)
-			end
+			update_joined_download_kick_warning(self)
 			lobby_flow_trace("reload_download_button_state visible=" .. tostring(reloadVisible == true)
 				.. " label=" .. tostring(labelText)
 				.. " syncBusy=" .. tostring(syncBusy == true)
@@ -6194,6 +6222,14 @@ end,
 				self:horizalign(right):x(50):y(-170):zoom(0.42)
 			end
 		},
+		LoadFont("Common Bold")..{
+			Name="PackSyncKickWarning",
+			Text="",
+			InitCommand=function(self)
+				self:horizalign(center):xy(180, 172):zoom(0.56):maxwidth(760)
+					:diffuse(color("#FFDD55")):strokecolor(Color.Black):visible(false)
+			end
+		},
 		Def.ActorFrame{
 			Name="JoinedLobbyPlayersFrame",
 			InitCommand=function(self)
@@ -6396,13 +6432,6 @@ end,
 							end
 						end
 					},
-					LoadFont("Common Normal")..{
-						Name="ReloadSongsKickWarning",
-						Text="",
-						InitCommand=function(self)
-							self:y(29):zoom(0.36):maxwidth(700):diffuse(color("#FFDD55")):visible(false)
-						end
-					}
 				},
 
 				Def.ActorFrame{

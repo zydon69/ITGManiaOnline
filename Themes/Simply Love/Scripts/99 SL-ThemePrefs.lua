@@ -418,25 +418,25 @@ SL_CustomPrefs.Get = function()
 		},
 
 		ITGOnlineGameplayLayoutLogs = {
-			Default = false,
+			Default = true,
 			Choices =  { THEME:GetString("ThemePrefs","No"), THEME:GetString("ThemePrefs", "Yes") },
 			Values  = { false, true }
 		},
 
 		ITGOnlineNetworkLogs = {
-			Default = false,
+			Default = true,
 			Choices =  { THEME:GetString("ThemePrefs","No"), THEME:GetString("ThemePrefs", "Yes") },
 			Values  = { false, true }
 		},
 
 		ITGOnlineAuthLogs = {
-			Default = false,
+			Default = true,
 			Choices =  { THEME:GetString("ThemePrefs","No"), THEME:GetString("ThemePrefs", "Yes") },
 			Values  = { false, true }
 		},
 
 		ITGOnlineScoreLogs = {
-			Default = false,
+			Default = true,
 			Choices =  { THEME:GetString("ThemePrefs","No"), THEME:GetString("ThemePrefs", "Yes") },
 			Values  = { false, true }
 		},

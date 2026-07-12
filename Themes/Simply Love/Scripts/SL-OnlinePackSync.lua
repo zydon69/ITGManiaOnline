@@ -43,6 +43,7 @@ PackSync.lastResetSignature = PackSync.lastResetSignature or ""
 PackSync.lastResetAt = tonumber(PackSync.lastResetAt) or 0
 PackSync.lastNoSongClearResetAt = tonumber(PackSync.lastNoSongClearResetAt) or 0
 PackSync.lastNoSongClearResetReason = PackSync.lastNoSongClearResetReason or ""
+PackSync.maxDownloadBytes = 5 * 1024 * 1024 * 1024
 
 PackSync.status = {
 	Idle = "idle",
@@ -52,6 +53,7 @@ PackSync.status = {
 	SearchingLocalCharts = "searching_local_charts",
 	LocalChartMatchFound = "local_chart_match_found",
 	NoCompatibleChartFound = "no_compatible_chart_found",
+	AwaitingPackChoice = "awaiting_pack_choice",
 	DownloadRequested = "download_requested",
 	DownloadInProgress = "download_in_progress",
 	DownloadFailed = "download_failed",
@@ -67,6 +69,7 @@ PackSync.statusText = {
 	searching_local_charts = "Recherche locale",
 	local_chart_match_found = "Chart compatible trouvee",
 	no_compatible_chart_found = "Aucune chart compatible",
+	awaiting_pack_choice = "Choisissez un pack",
 	download_requested = "Telechargement demande",
 	download_in_progress = "Telechargement en cours",
 	download_failed = "Telechargement echoue",
@@ -799,23 +802,6 @@ local function set_current_selection(song, steps, songInfo, source)
 			end
 		end
 	end
-end
-
-local function transition_to_player_options()
-	local topScreen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
-	if not topScreen then return end
-
-	local screenName = topScreen:GetName()
-	if screenName == "ScreenPlayerOptions"
-		or screenName == "ScreenPlayerOptions2"
-		or screenName == "ScreenPlayerOptions3"
-		or screenName == "ScreenGameplay"
-		or screenName == "ScreenGameplayShared" then
-		return
-	end
-
-	topScreen:SetNextScreenName("ScreenPlayerOptions")
-	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
 end
 
 local function transition_to_reload_songs()
@@ -2722,9 +2708,8 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			if callback then callback(false, "Pack candidat invalide.") end
 			return
 		end
-		local trustedRoomPackage = pack.trusted_room_package == true
 		local trustedCatalogCandidate = pack.trusted_catalog_candidate == true
-		if not trustedRoomPackage and not trustedCatalogCandidate then
+		if not trustedCatalogCandidate then
 			trace("DownloadPackByCandidate blocked reason=untrusted_source packId=" .. tostring(pack.id))
 			if callback then callback(false, "La source du pack n'est pas autorisee.") end
 			return
@@ -2739,7 +2724,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			if callback then callback(false, "Le gestionnaire de fichiers du moteur n'est pas disponible.") end
 			return
 		end
-	if not current_user_is_active_room_member() then
+		if not current_user_is_active_room_member() then
 		trace("DownloadPackByCandidate blocked reason=not_active_room_member"
 			.. " packId=" .. tostring(pack and pack.id or "nil")
 			.. " packName=" .. tostring(pack and pack.name or "nil")
@@ -2747,14 +2732,6 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil)
 			.. " hasUser=" .. tostring(ITGOnline and ITGOnline.user ~= nil))
 		if callback then callback(false, "Vous n'etes plus dans le salon.") end
-		return
-	end
-		if trustedRoomPackage and (type(pack.archive_sha256) ~= "string"
-		or #pack.archive_sha256 ~= 64
-		or not pack.archive_sha256:match("^[a-f0-9]+$")) then
-		trace("DownloadPackByCandidate blocked reason=missing_archive_manifest packId="
-			.. tostring(pack and pack.id or "nil"))
-			if callback then callback(false, "Le serveur n'a pas fourni de manifeste SHA-256 verifiable.") end
 		return
 	end
 	options = type(options) == "table" and options or {}
@@ -2798,6 +2775,13 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			if callback then callback(false, "L'URL du pack StepManiaOnline est invalide.") end
 			return
 		end
+		local expectedArchiveHash = tostring(pack.archive_sha256 or ""):lower()
+		if expectedArchiveHash ~= "" and (#expectedArchiveHash ~= 64 or not expectedArchiveHash:match("^[a-f0-9]+$")) then
+			trace("DownloadPackByCandidate blocked reason=invalid_catalog_archive_hash packId="
+				.. tostring(pack.id))
+			if callback then callback(false, "Le manifeste du pack catalogue est invalide.") end
+			return
+		end
 	end
 	if existingDownloadKey == "" then
 		self.downloadInFlightKey = (browseOnly and "browse-candidate|" or "selected-candidate|") .. tostring(packId) .. "|" .. packName
@@ -2807,8 +2791,8 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			local fileName = "itg-online-" .. tostring(packId) .. "_" .. safe_file_name(packName)
 			local zipPath = "/Downloads/" .. fileName
 			local quarantinePath = pack_quarantine_path(packId, packName)
-		local maxDownloadBytes = tonumber(self.maxDownloadBytes) or (512 * 1024 * 1024)
-		local defaultMaxDownloadBytes = 512 * 1024 * 1024
+		local maxDownloadBytes = tonumber(self.maxDownloadBytes) or (5 * 1024 * 1024 * 1024)
+		local defaultMaxDownloadBytes = 5 * 1024 * 1024 * 1024
 		local maximumDownloadBytes = 5 * 1024 * 1024 * 1024
 		if maxDownloadBytes < (16 * 1024 * 1024) or maxDownloadBytes > maximumDownloadBytes then
 			trace("Download max bytes clamped raw=" .. tostring(self.maxDownloadBytes)
@@ -2948,7 +2932,12 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 				if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
 				if downloadCompleted then return end
 				trace("Download file error pack=" .. tostring(packName) .. " err=" .. tostring(errorMessage))
-				fail_candidate_download("Erreur d'écriture du fichier téléchargé: " .. tostring(errorMessage or "unknown error"))
+				local normalizedError = tostring(errorMessage or "unknown error")
+				if normalizedError:lower():find("maximum allowed size", 1, true) then
+					fail_candidate_download("Le pack dépasse la limite de téléchargement de 5 Gio.")
+					return
+				end
+				fail_candidate_download("Erreur d'écriture du fichier téléchargé: " .. normalizedError)
 			end,
 		onProgress = function(current, total)
 			if not self:IsDownloadGenerationCurrent(downloadGeneration) then return false end
@@ -3042,19 +3031,30 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 				return
 			end
 			local archiveHash = sha256_file_hex(zipPath)
-				if trustedRoomPackage and archiveHash ~= tostring(pack.archive_sha256):lower() then
+			if expectedArchiveHash ~= "" then
+				if archiveHash == nil then
 					remove_path_if_exists(zipPath)
-					trace("Download failed archive_hash_mismatch pack=" .. tostring(packName)
-						.. " expected=" .. tostring(pack.archive_sha256):sub(1, 12)
-						.. " actual=" .. tostring(archiveHash or "nil"):sub(1, 12))
-					fail_candidate_download("Le hash SHA-256 du pack telecharge ne correspond pas au manifeste.")
+					trace("Download failed archive_hash_unavailable pack=" .. tostring(packName)
+						.. " expected=" .. expectedArchiveHash:sub(1, 12))
+					fail_candidate_download("Impossible de verifier l'integrite du pack catalogue.")
 					return
 				end
-				if trustedCatalogCandidate then
-					trace("Download catalog archive hash pack=" .. tostring(packName)
-						.. " id=" .. tostring(packId)
-						.. " sha256=" .. tostring(archiveHash or "unavailable"):sub(1, 12))
+				if archiveHash ~= expectedArchiveHash then
+					remove_path_if_exists(zipPath)
+					trace("Download failed archive_hash_mismatch pack=" .. tostring(packName)
+						.. " expected=" .. expectedArchiveHash:sub(1, 12)
+						.. " actual=" .. archiveHash:sub(1, 12))
+					fail_candidate_download("Le hash SHA-256 du pack catalogue ne correspond pas au manifeste.")
+					return
 				end
+				trace("Download catalog archive integrity verified pack=" .. tostring(packName)
+					.. " id=" .. tostring(packId)
+					.. " sha256=" .. archiveHash:sub(1, 12))
+			else
+				trace("Download catalog archive integrity unavailable pack=" .. tostring(packName)
+					.. " id=" .. tostring(packId)
+					.. " sha256=" .. tostring(archiveHash or "unavailable"):sub(1, 12))
+			end
 
 			remove_directory_if_possible(quarantinePath)
 			create_directory_if_possible(quarantinePath)
@@ -3102,69 +3102,8 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	end
 end
 
-function PackSync:DownloadTrustedRoomPackage(songInfo, callback, options)
-	options = type(options) == "table" and options or {}
-	if not (ITGOnline and ITGOnline.Request and ITGOnline.ConnectionConfig and ITGOnline.AuthHeaders) then
-		if callback then callback(false, "Le client online n'est pas pret a telecharger le package du salon.") end
-		return
-	end
-	local roomId = ITGOnline.currentRoomId
-	if not roomId then
-		if callback then callback(false, "Aucun salon online actif.") end
-		return
-	end
-
-	ITGOnline:Request("GET", "/rooms/" .. tostring(roomId) .. "/song-package", nil, function(ok, decoded, response)
-		local package = ok and decoded and decoded.package or nil
-		if type(package) ~= "table" then
-			local message = response and response.statusCode == 404
-				and "Le manager doit d'abord publier le package verifie de cette chanson."
-				or "Le package verifie du salon est indisponible."
-			trace("Trusted room package unavailable room=" .. tostring(roomId)
-				.. " status=" .. tostring(response and response.statusCode or "nil"))
-			if callback then callback(false, message, response and response.statusCode == 404 and "missing" or "unavailable") end
-			return
-		end
-
-		local archiveHash = tostring(package.sha256 or ""):lower()
-		local packageId = canonical_id(package.id)
-		local packageSize = tonumber(package.size_bytes)
-		if not packageId or packageId == "0" or #archiveHash ~= 64
-			or not archiveHash:match("^[a-f0-9]+$") or not packageSize or packageSize < 1 then
-			trace("Trusted room package rejected reason=invalid_manifest room=" .. tostring(roomId))
-			if callback then callback(false, "Le manifeste du package du salon est invalide.") end
-			return
-		end
-
-		local selected = ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song or songInfo or {}
-		if tostring(package.song_hash or "") ~= tostring(selected.song_hash or selected.songHash or "")
-			or tostring(package.chart_hash or "") ~= tostring(selected.chart_hash or selected.chartHash or "") then
-			trace("Trusted room package rejected reason=selected_song_mismatch room=" .. tostring(roomId))
-			if callback then callback(false, "Le package ne correspond plus a la chanson selectionnee.") end
-			return
-		end
-
-		local config = ITGOnline:ConnectionConfig()
-		local headers = ITGOnline:AuthHeaders()
-		headers["Accept"] = "application/zip"
-		headers["Accept-Encoding"] = "identity"
-		self:DownloadPackByCandidate(songInfo, {
-			id = packageId,
-			name = "Room " .. tostring(roomId) .. " package",
-			archive_sha256 = archiveHash,
-			download_url = tostring(config.apiBaseUrl) .. "/rooms/" .. tostring(roomId) .. "/song-package/download",
-			headers = headers,
-			trusted_room_package = true,
-		}, callback, options)
-	end)
-end
-
 function PackSync:DownloadSelectedPack(songInfo, callback)
 	songInfo = with_current_room_selection(songInfo, "download_selected")
-	trace("DownloadSelectedPack begin title=" .. tostring(selected_title(songInfo))
-		.. " pack=" .. tostring(selected_pack(songInfo))
-		.. " status=" .. tostring(self.currentStatus or "nil")
-		.. " key=" .. tostring(self.downloadInFlightKey or ""))
 	if not songInfo then
 		trace("DownloadSelectedPack blocked reason=no_song_info")
 		if callback then callback(false, "Aucune chanson selectionnee.") end
@@ -3203,10 +3142,9 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 	if downloadKey == "" then downloadKey = tostring(songInfo) end
 	self.downloadInFlightKey = downloadKey
 	local downloadGeneration = self:NextDownloadGeneration("download_selected_search")
-	-- Keep the server-side pack-sync state cancellable while the signed package
-	-- lookup falls back to catalog candidates.  The candidate picker reuses this
-	-- key, so it cannot be mistaken for a second concurrent download.
-	self:UpdateStatus(self.status.DownloadRequested, nil)
+	-- Keep the catalog search cancellable without announcing it as a download.
+	-- Only DownloadPackByCandidate may pause the server-side missing-pack
+	-- deadline, once an actual archive transfer has started.
 	local function fail_download(message)
 		if not self:IsDownloadGenerationCurrent(downloadGeneration) then
 			trace("DownloadSelected failure ignored reason=stale_generation generation="
@@ -3214,37 +3152,54 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 			return
 		end
 		self.downloadInFlightKey = nil
-			self.downloadStartedAt = nil
-			self.downloadLastByteAt = nil
-			self.downloadLastByteCount = nil
-			self:ClearActiveDownloadId("selected_download_failed")
-			self:UpdateStatus(self.status.DownloadFailed, message)
-			if callback then callback(false, message) end
+		self.downloadStartedAt = nil
+		self.downloadLastByteAt = nil
+		self.downloadLastByteCount = nil
+		self:ClearActiveDownloadId("selected_download_failed")
+		self:UpdateStatus(self.status.DownloadFailed, message)
+		if callback then callback(false, message) end
 	end
 
-	self:DownloadTrustedRoomPackage(songInfo, function(downloadOk, downloadMessage, unavailableReason)
+	trace("DownloadSelectedPack catalog lookup begin"
+		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " selected_at=" .. tostring(selected_at(songInfo)))
+	self:DownloadBrowsingPack(songInfo, function(catalogOk, catalogMessage)
 		if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
-		if downloadOk then
-			if callback then callback(true) end
-			return
-		end
-		if unavailableReason == "missing" then
-			trace("DownloadSelectedPack trusted package missing; searching catalog candidates"
-				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-				.. " selected_at=" .. tostring(selected_at(songInfo)))
-			self:DownloadBrowsingPack(songInfo, function(catalogOk, catalogMessage)
-				if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
-				if not catalogOk and type(catalogMessage) == "table" and catalogMessage.kind == "pack_candidates" then
-					catalogMessage.downloadKey = downloadKey
+		if not catalogOk and type(catalogMessage) == "table" and catalogMessage.kind == "pack_candidates" then
+			catalogMessage.downloadKey = downloadKey
+			local candidates = catalogMessage.candidates or {}
+			if #candidates == 1 then
+				trace("DownloadSelectedPack catalog resolved a single candidate; starting transfer"
+					.. " packId=" .. tostring(candidates[1] and candidates[1].id or "nil")
+					.. " selected_at=" .. tostring(selected_at(songInfo)))
+				self:DownloadPackByCandidate(songInfo, candidates[1], callback, {
+					allowExistingDownloadKey = downloadKey,
+					downloadGeneration = downloadGeneration,
+				})
+				return
+			end
+
+			-- The selection modal needs its own bounded grace period.  This status
+			-- deliberately does not start a download, but the server rearms the
+			-- missing-pack deadline once for this selection.
+			self:UpdateStatus(self.status.AwaitingPackChoice,
+				"Choisissez le pack correspondant dans les 30 secondes.", nil,
+				function(statusOk, _, statusResponse)
+					if not statusOk then
+						trace("DownloadSelectedPack candidate choice deadline rearm failed"
+							.. " status=" .. tostring(statusResponse and statusResponse.statusCode or "nil")
+							.. " error=" .. tostring(statusResponse and statusResponse.errorMessage or "unknown"))
+						if callback then
+							callback(false, "Impossible de reinitialiser le delai de choix du pack. Reessayez.")
+						end
+						return
+					end
 					if callback then callback(false, catalogMessage) end
-					return
-				end
-				fail_download(catalogMessage or "Aucun pack catalogue compatible n'a ete trouve.")
-			end)
+				end)
 			return
 		end
-		fail_download(downloadMessage or "Le package verifie du salon est indisponible.")
-	end, { allowExistingDownloadKey = downloadKey, downloadGeneration = downloadGeneration })
+		fail_download(catalogMessage or "Aucun pack catalogue compatible n'a ete trouve.")
+	end)
 end
 
 function PackSync:DownloadBrowsingPack(songInfo, callback)
@@ -3255,10 +3210,9 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 		return
 	end
 
-	-- Catalog downloads use only the canonical HTTPS URL built from a validated
-	-- numeric API id. A selected song first prefers the room package and falls
-	-- back here only when no room package was published; post-reload chart
-	-- verification still decides whether the player may join the round.
+	-- Downloads use only the canonical HTTPS URL built from the external pack
+	-- catalog's validated numeric ID. Post-reload chart verification decides
+	-- whether the downloaded pack matches the selected online chart.
 	self:SearchStepManiaOnline(songInfo, function(ok, result, details)
 		local candidates = {}
 		if ok and type(result) == "table" then

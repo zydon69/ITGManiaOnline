@@ -31,4 +31,12 @@ return Def.ActorFrame{
 			self:horizalign(left):vertalign(top):xy(-350, -78):zoom(0.68):maxwidth(1020)
 		end
 	},
+	LoadFont("Common Bold")..{
+		Name="PackChoiceKickWarning",
+		Text="",
+		InitCommand=function(self)
+			self:y(154):zoom(0.56):maxwidth(760):diffuse(color("#FFDD55"))
+				:strokecolor(Color.Black):visible(false)
+		end,
+	},
 }

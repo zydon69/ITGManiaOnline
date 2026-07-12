@@ -25,6 +25,10 @@ foreach(REQUIRED_SNIPPET
     "MarkLobbyReady skipped reason=already_acknowledged"
     "downloadAttemptFailed"
     "maxDownloadBytes = maxDownloadBytes"
+    "AwaitingPackChoice"
+    "catalog resolved a single candidate; starting transfer"
+    "archive_hash_mismatch"
+    "archive integrity verified"
     "SRC_REVIEW_TRACE [OnlinePackSync]")
   string(FIND "${ONLINE_PACK_SYNC_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
@@ -38,6 +42,11 @@ foreach(REQUIRED_SNIPPET
     "heartbeat_room_not_available"
     "presence_open_room_required"
     "ignored stale heartbeat response"
+    "new_song_while_evaluation_song_unavailable"
+    "song_availability_enforce_screen"
+    "profile-guid:v1:"
+    "stored_token_binding_user_mismatch"
+    "stored token ignored reason=profile_binding_missing_or_invalid"
     "SRC_REVIEW_TRACE [ITGOnline]")
   string(FIND "${ONLINE_CLIENT_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
