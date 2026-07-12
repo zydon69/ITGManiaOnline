@@ -1359,7 +1359,7 @@ namespace ix
         args->compress = compress;
         args->compressRequest = compressRequest;
         args->logger = [](const std::string& msg) { spdlog::info(msg); };
-        args->onProgressCallback = [verbose](int current, int total) -> bool {
+        args->onProgressCallback = [verbose](int64_t current, int64_t total) -> bool {
             if (verbose)
             {
                 spdlog::info("Downloaded {} bytes out of {}", current, total);

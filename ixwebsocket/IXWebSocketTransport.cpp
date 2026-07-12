@@ -943,7 +943,8 @@ namespace ix
                     return WebSocketSendInfo(false);
                 }
 
-                if (onProgressCallback && !onProgressCallback((int) i, (int) steps))
+                if (onProgressCallback &&
+                    !onProgressCallback(static_cast<int64_t>(i), static_cast<int64_t>(steps)))
                 {
                     break;
                 }

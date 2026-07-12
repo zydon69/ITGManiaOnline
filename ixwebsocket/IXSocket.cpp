@@ -436,7 +436,11 @@ namespace ix
                 return std::make_pair(false, errorMsg);
             }
 
-            if (onProgressCallback) onProgressCallback((int) bytesRead, (int) length);
+            if (onProgressCallback)
+            {
+                onProgressCallback(
+                    static_cast<int64_t>(bytesRead), static_cast<int64_t>(length));
+            }
 
             // Wait with a 1ms timeout until the socket is ready to read.
             // This way we are not busy looping
