@@ -61,6 +61,7 @@ std::vector<TimingData> AdjustSync::s_vpTimingDataOriginal;
 float AdjustSync::s_fGlobalOffsetSecondsOriginal = 0.0f;
 int AdjustSync::s_iGlobalOffsetProfileOriginal = 0;
 int AdjustSync::s_iAutosyncOffsetSample = 0;
+const int AdjustSync::OFFSET_SAMPLE_COUNT;
 float AdjustSync::s_fAutosyncOffset[AdjustSync::OFFSET_SAMPLE_COUNT];
 float AdjustSync::s_fStandardDeviation = 0.0f;
 std::vector<std::pair<float, float>> AdjustSync::s_vAutosyncTempoData;
