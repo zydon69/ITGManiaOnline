@@ -5376,6 +5376,11 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		previousReadyStates = previousReadyStates,
 		previousSelectedAt = previousSelectedAt or "nil",
 	})
+	local enforced = self:EnforceCurrentRoomScreenAfterStateUpdate("room_snapshot:" .. tostring(source or "unknown"))
+	online_flow_trace("room_snapshot_screen_enforcement source=" .. tostring(source or "unknown")
+		.. " enforced=" .. tostring(enforced == true)
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
 
 	return self.currentRoom
 end
@@ -6828,6 +6833,24 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 			.. " room=" .. tostring(self.currentRoomId or "nil")
 			.. " phase=" .. tostring(roomPhase)
 			.. " roundKey=" .. tostring(roundKey or ""))
+		return true
+	end
+	if topScreen.IsTransitioning and topScreen:IsTransitioning() then
+		if preferred == "options" then
+			self:MarkOptionsPresentedForCurrentSelection("retarget_in_flight_room_transition", self.currentRoom)
+			if self.ClearFinalLeaderboardCache then
+				self:ClearFinalLeaderboardCache("new_song_options_navigation", self.currentRoomId)
+			end
+		end
+		topScreen:SetNextScreenName(target)
+		self.onlineNavigationInFlightKey = navigationKey
+		self.onlineNavigationInFlightAt = now
+		online_flow_trace("navigate_retargeted_in_flight_transition decisionId=" .. tostring(decisionId)
+			.. " target=" .. tostring(target)
+			.. " preferred=" .. tostring(preferred)
+			.. " from=" .. tostring(topScreen:GetName())
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(roomPhase))
 		return true
 	end
 	self.onlineNavigationInFlightKey = navigationKey
@@ -8542,6 +8565,28 @@ function ITGOnline:BuildSongPayload()
 	return self:BuildSongPayloadFor(ok and song or nil, selected_steps())
 end
 
+function ITGOnline:ValidateSongForOnlineSelection(song, steps)
+	if not song or not steps then
+		return false, "Aucune chanson ou chart n'est selectionnee.", "song_or_chart_missing"
+	end
+
+	local musicPath = song.GetMusicPath and tostring(song:GetMusicPath() or "") or ""
+	if musicPath == "" or not file_exists(musicPath) then
+		return false, "La chanson selectionnee ne contient pas de fichier audio jouable.", "music_file_missing"
+	end
+
+	local extension = musicPath:match("%.([%w]+)$")
+	extension = extension and string.lower(extension) or ""
+	local supportedExtensions = { mp3 = true, ogg = true, wav = true }
+	if not supportedExtensions[extension] then
+		return false,
+			"La chanson selectionnee utilise un format audio non pris en charge (." .. (extension ~= "" and extension or "inconnu") .. ").",
+			"unsupported_audio_format"
+	end
+
+	return true, nil, nil
+end
+
 function ITGOnline:ApplyMatchedSongSelection(match, source)
 	if not match or not match.song then
 		online_flow_trace("apply_matched_song_selection_skipped reason=no_match"
@@ -9028,6 +9073,26 @@ function ITGOnline:SelectSong(callback, options)
 
 	local song = GAMESTATE:GetCurrentSong()
 	local steps = selected_steps()
+	local playable, validationMessage, validationReason = self:ValidateSongForOnlineSelection(song, steps)
+	if not playable then
+		online_flow_trace("song_selection_rejected reason=" .. tostring(validationReason)
+			.. " song=" .. tostring(song and song.GetDisplayFullTitle and song:GetDisplayFullTitle() or "nil")
+			.. " music=" .. tostring(song and song.GetMusicPath and song:GetMusicPath() or "nil"))
+		self:TraceOnlineState("song_selection_rejected", {
+			source = "select_song_validation",
+			reason = validationReason,
+			title = song and song.GetDisplayFullTitle and song:GetDisplayFullTitle() or "nil",
+			musicPath = song and song.GetMusicPath and song:GetMusicPath() or "nil",
+		})
+		safe_callback(callback, false, nil, { errorMessage = validationMessage, error = validationReason })
+		safe_broadcast("OnlineResponseStatus", {
+			event = "selectSong",
+			success = false,
+			message = validationMessage,
+			errorCode = validationReason,
+		})
+		return
+	end
 	local payload = self:BuildSongPayloadFor(song, steps)
 	if not payload then
 		local songFilePath = song and song.GetSongFilePath and song:GetSongFilePath() or ""

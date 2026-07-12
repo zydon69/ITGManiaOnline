@@ -1382,10 +1382,14 @@ SelectOnlineSongAsManager = function(actor)
 			})
 			online_flow_trace("song_selected_handler_failed status=" .. tostring(response and response.statusCode or "nil")
 				.. " error=" .. tostring(decoded and decoded.error_code or response and response.error or "nil"))
+			local message = (decoded and decoded.message) or (response and response.errorMessage) or "Echec de selection de la chanson."
+			if SCREENMAN and SCREENMAN.SystemMessage then
+				SCREENMAN:SystemMessage(message)
+			end
 			safe_broadcast("OnlineResponseStatus", {
 				event="selectSong",
 				success=false,
-				message=(decoded and decoded.message) or (response and response.errorMessage) or "Echec de selection de la chanson."
+				message=message
 			})
 		end)
 	end

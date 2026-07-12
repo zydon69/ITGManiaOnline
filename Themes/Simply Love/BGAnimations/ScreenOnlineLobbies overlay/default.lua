@@ -205,6 +205,7 @@ local function player_state_signature(player)
 		stable_scalar(player.pack_sync_status or player.packSyncStatus),
 		stable_scalar(player.pack_sync_sequence or player.packSyncSequence),
 		stable_scalar(player.download_progress or player.downloadProgress),
+		stable_scalar(player.pack_sync_download_deadline_ms or player.packSyncDownloadDeadlineMs),
 	}, ":")
 end
 
@@ -1724,19 +1725,29 @@ end
 
 function pack_sync_countdown_seconds_for_player(player)
 	if not (ITGOnline and ITGOnline.currentRoom) then return nil end
-	local roomTimeMs = nil
-	if ITGOnline.serverClockOffsetSeconds then
-		roomTimeMs = math.floor((GetTimeSinceStart() + tonumber(ITGOnline.serverClockOffsetSeconds)) * 1000)
-	else
-		roomTimeMs = tonumber(ITGOnline.currentRoom.server_time_ms)
-	end
-	if not roomTimeMs then return nil end
 	if joined_manager_user_id ~= nil and tostring(player and player.playerId or "") == tostring(joined_manager_user_id) then return nil end
 	local deadlineMs = tonumber(player and player.packSyncDownloadDeadlineMs)
-	if deadlineMs and deadlineMs > roomTimeMs then
-		return math.max(1, math.ceil((deadlineMs - roomTimeMs) / 1000))
+	if not deadlineMs or deadlineMs <= 0 then return nil end
+
+	local remaining = nil
+	if ITGOnline.SecondsUntilServerTimestamp then
+		remaining = ITGOnline:SecondsUntilServerTimestamp(deadlineMs)
 	end
-	return nil
+	if remaining == nil then
+		local roomTimeMs = tonumber(ITGOnline.currentRoom.server_time_ms)
+		if roomTimeMs then
+			remaining = (deadlineMs - roomTimeMs) / 1000
+		end
+	end
+	if remaining == nil then
+		lobby_flow_trace("pack_sync_kick_warning_waiting_for_clock deadlineMs=" .. tostring(deadlineMs)
+			.. " player=" .. tostring(player and player.playerId or "nil"))
+		return 1
+	end
+
+	-- Keep the warning visible until the server removes the deadline or ejects
+	-- the member. A delayed timeout worker must never hide this safety message.
+	return math.max(1, math.ceil(remaining))
 end
 
 function joined_missing_song_countdown_seconds()
