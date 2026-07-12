@@ -3850,6 +3850,22 @@ local af = Def.ActorFrame{
 		end
 	end,
 	Def.Actor{
+		Name="PackSyncCountdownTimer",
+		OnCommand=function(self)
+			self:queuecommand("Tick")
+		end,
+		TickCommand=function(self)
+			if is_active_lobby_overlay() and mode == "joined"
+				and joined_missing_song_countdown_seconds() ~= nil then
+				local root = self:GetParent()
+				if root then
+					root:queuecommand("UpdateJoinedLobbyText")
+				end
+			end
+			self:sleep(1):queuecommand("Tick")
+		end,
+	},
+	Def.Actor{
 		Name="JoinTimeoutTimer",
 		CheckJoinTimeoutCommand=function(self)
 			lobby_flow_trace("join_timeout_check actionId=" .. tostring(pending_join_action_id)

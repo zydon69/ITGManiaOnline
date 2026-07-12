@@ -3100,7 +3100,7 @@ function PackSync:DownloadTrustedRoomPackage(songInfo, callback, options)
 				or "Le package verifie du salon est indisponible."
 			trace("Trusted room package unavailable room=" .. tostring(roomId)
 				.. " status=" .. tostring(response and response.statusCode or "nil"))
-			if callback then callback(false, message) end
+			if callback then callback(false, message, response and response.statusCode == 404 and "missing" or "unavailable") end
 			return
 		end
 
@@ -3181,6 +3181,10 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 	if downloadKey == "" then downloadKey = tostring(songInfo) end
 	self.downloadInFlightKey = downloadKey
 	local downloadGeneration = self:NextDownloadGeneration("download_selected_search")
+	-- Keep the server-side pack-sync state cancellable while the signed package
+	-- lookup falls back to catalog candidates.  The candidate picker reuses this
+	-- key, so it cannot be mistaken for a second concurrent download.
+	self:UpdateStatus(self.status.DownloadRequested, nil)
 	local function fail_download(message)
 		if not self:IsDownloadGenerationCurrent(downloadGeneration) then
 			trace("DownloadSelected failure ignored reason=stale_generation generation="
@@ -3196,11 +3200,25 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 			if callback then callback(false, message) end
 	end
 
-	self:UpdateStatus(self.status.DownloadRequested, nil)
-	self:DownloadTrustedRoomPackage(songInfo, function(downloadOk, downloadMessage)
+	self:DownloadTrustedRoomPackage(songInfo, function(downloadOk, downloadMessage, unavailableReason)
 		if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
 		if downloadOk then
 			if callback then callback(true) end
+			return
+		end
+		if unavailableReason == "missing" then
+			trace("DownloadSelectedPack trusted package missing; searching catalog candidates"
+				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " selected_at=" .. tostring(selected_at(songInfo)))
+			self:DownloadBrowsingPack(songInfo, function(catalogOk, catalogMessage)
+				if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
+				if not catalogOk and type(catalogMessage) == "table" and catalogMessage.kind == "pack_candidates" then
+					catalogMessage.downloadKey = downloadKey
+					if callback then callback(false, catalogMessage) end
+					return
+				end
+				fail_download(catalogMessage or "Aucun pack catalogue compatible n'a ete trouve.")
+			end)
 			return
 		end
 		fail_download(downloadMessage or "Le package verifie du salon est indisponible.")
@@ -3215,10 +3233,10 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 		return
 	end
 
-	-- Preview downloads deliberately use only the canonical HTTPS catalog URL built
-	-- from a validated numeric API id. They remain isolated from selected-song
-	-- synchronization: once a song is selected, the room package and its SHA-256
-	-- manifest are still mandatory.
+	-- Catalog downloads use only the canonical HTTPS URL built from a validated
+	-- numeric API id. A selected song first prefers the room package and falls
+	-- back here only when no room package was published; post-reload chart
+	-- verification still decides whether the player may join the round.
 	self:SearchStepManiaOnline(songInfo, function(ok, result, details)
 		local candidates = {}
 		if ok and type(result) == "table" then
