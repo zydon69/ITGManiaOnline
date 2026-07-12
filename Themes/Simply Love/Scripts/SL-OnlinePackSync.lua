@@ -3190,7 +3190,10 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	if okRequest and requestOrError and requestOrError.Cancel then
 		self.downloadFuture = requestOrError
 	end
-	if not okRequest or not requestOrError then
+	-- Some engine builds enqueue an asynchronous HTTP request without returning
+	-- a Lua future. `nil` is therefore not a submission failure; only a thrown
+	-- request call is terminal here. Completion still arrives through callbacks.
+	if not okRequest then
 		fail_candidate_download("La requete de telechargement a echoue: " .. tostring(requestOrError or "unknown error"))
 	end
 end
