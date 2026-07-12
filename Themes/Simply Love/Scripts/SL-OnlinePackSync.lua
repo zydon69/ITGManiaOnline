@@ -2802,7 +2802,8 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			local quarantinePath = pack_quarantine_path(packId, packName)
 		local maxDownloadBytes = tonumber(self.maxDownloadBytes) or (512 * 1024 * 1024)
 		local defaultMaxDownloadBytes = 512 * 1024 * 1024
-		if maxDownloadBytes < (16 * 1024 * 1024) or maxDownloadBytes > (1024 * 1024 * 1024) then
+		local maximumDownloadBytes = 5 * 1024 * 1024 * 1024
+		if maxDownloadBytes < (16 * 1024 * 1024) or maxDownloadBytes > maximumDownloadBytes then
 			trace("Download max bytes clamped raw=" .. tostring(self.maxDownloadBytes)
 				.. " effective=" .. tostring(defaultMaxDownloadBytes))
 			maxDownloadBytes = defaultMaxDownloadBytes
@@ -2995,6 +2996,13 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			self.downloadStartedAt = nil
 			self.downloadLastByteAt = nil
 			self.downloadLastByteCount = nil
+			local transportError = trim(response and response.errorMessage or "")
+			if transportError ~= "" then
+				trace("Download failed transport_error pack=" .. tostring(packName)
+					.. " error=" .. tostring(transportError))
+				fail_candidate_download("Telechargement impossible : " .. transportError)
+				return
+			end
 			local statusCode = tonumber(response and response.statusCode) or 0
 			if statusCode < 200 or statusCode >= 300 then
 				local message = "Le téléchargement du pack a échoué."

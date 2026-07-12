@@ -2186,11 +2186,13 @@ local function pack_sync_line_for_player(player)
 	end
 
 	if previewOnly then
+		if status == "download_failed" then
+			return message ~= "" and message or pack_sync_display_text(status)
+		end
 		if status == "manager_browsing_unknown_pack" then
 			return "Pack inconnu"
 		end
-		if status == "download_failed"
-			or status == "downloaded_ok" then
+		if status == "downloaded_ok" then
 			return message ~= "" and message or pack_sync_display_text(status)
 		end
 		return ""

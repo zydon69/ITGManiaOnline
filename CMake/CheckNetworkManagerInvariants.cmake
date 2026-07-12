@@ -15,7 +15,9 @@ foreach(REQUIRED_SNIPPET
     "url=%s reason=inactive type=%s"
     "queuedTasks > kBacklogAdaptiveThreshold * 4"
     "queuedTasks >= kBacklogAdaptiveThreshold"
-    "useDownloadClient ? effectiveMaxDownloadBytes")
+    "useDownloadClient ? effectiveMaxDownloadBytes"
+    "kMaxDownloadBytes = 5LL * 1024LL * 1024LL * 1024LL"
+    "std::atomic<int64_t> latestProgressCurrent")
   string(FIND "${NETWORK_MANAGER_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(

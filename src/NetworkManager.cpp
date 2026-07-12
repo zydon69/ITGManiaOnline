@@ -89,7 +89,7 @@ constexpr std::size_t kMaxDownloadWorkerQueue = 8;
 constexpr std::size_t kMaxWebSocketWorkerQueue = 64;
 constexpr int64_t kDefaultMaxHttpResponseBytes = 8LL * 1024LL * 1024LL;
 constexpr int64_t kDefaultMaxDownloadBytes = 512LL * 1024LL * 1024LL;
-constexpr int64_t kMaxDownloadBytes = 1024LL * 1024LL * 1024LL;
+constexpr int64_t kMaxDownloadBytes = 5LL * 1024LL * 1024LL * 1024LL;
 constexpr std::size_t kMaxHttpRequestBodyBytes = 1024ULL * 1024ULL;
 constexpr int64_t kDefaultMaxWebSocketMessageBytes = 1024LL * 1024LL;
 constexpr int kDefaultDownloadTransferTimeoutSeconds = 30 * 60;
@@ -697,8 +697,8 @@ struct LuaHttpCallbackState {
   std::atomic<bool> canceled{false};
   std::atomic<bool> progressCancelRequested{false};
   std::atomic<bool> progressQueued{false};
-  std::atomic<int> latestProgressCurrent{0};
-  std::atomic<int> latestProgressTotal{0};
+  std::atomic<int64_t> latestProgressCurrent{0};
+  std::atomic<int64_t> latestProgressTotal{0};
   int progressRef = LUA_NOREF;
   int responseRef = LUA_NOREF;
   std::atomic<bool> refsReleased{false};
@@ -2151,9 +2151,9 @@ class LunaNetworkManager : public Luna<NetworkManager> {
         lua_pushvalue(L, -1);
         callbackState->progressRef = luaL_ref(L, LUA_REGISTRYINDEX);
 
-        args.onProgress = [p, callbackState](int current, int total) {
-		  if (!callbackState->active.load() ||
-		      callbackState->progressCancelRequested.load()) {
+        args.onProgress = [p, callbackState](int64_t current, int64_t total) {
+          if (!callbackState->active.load() ||
+              callbackState->progressCancelRequested.load()) {
             return false;
           }
 
@@ -2172,12 +2172,12 @@ class LunaNetworkManager : public Luna<NetworkManager> {
               return;
             }
 
-            const int current = callbackState->latestProgressCurrent.load();
-            const int total = callbackState->latestProgressTotal.load();
+            const int64_t current = callbackState->latestProgressCurrent.load();
+            const int64_t total = callbackState->latestProgressTotal.load();
             WithLua([callbackState, current, total](Lua* L) {
-			  if (!handleProgress(L, current, total, callbackState->progressRef)) {
-				callbackState->progressCancelRequested = true;
-			  }
+              if (!handleProgress(L, current, total, callbackState->progressRef)) {
+                callbackState->progressCancelRequested = true;
+              }
             });
           })) {
             callbackState->progressQueued = false;
@@ -2818,7 +2818,7 @@ class LunaNetworkManager : public Luna<NetworkManager> {
   }
 
   static bool handleProgress(
-      Lua* L, int current, int total, int onProgressRef) {
+      Lua* L, int64_t current, int64_t total, int onProgressRef) {
     lua_rawgeti(L, LUA_REGISTRYINDEX, onProgressRef);
     lua_pushinteger(L, current);
     lua_pushinteger(L, total);
