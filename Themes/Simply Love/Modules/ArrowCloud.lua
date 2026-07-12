@@ -3350,8 +3350,7 @@ moduleRegistration["ScreenSelectMusic"] = Def.ActorFrame {
         Name = "Code",
         InitCommand = function(self)
           self:xy(0, 108):zoom(0.9):maxwidth(290)
-            :diffuse(1, 1, 1, 1):strokecolor(0, 0, 0, 1):strokewidth(2)
-            :settext("")
+            :diffuse(1, 1, 1, 1):strokecolor(0, 0, 0, 1):settext("")
         end
       },
       LoadFont("Common Normal") .. {
@@ -3444,8 +3443,7 @@ moduleRegistration["ScreenSelectMusic"] = Def.ActorFrame {
         Name = "Code",
         InitCommand = function(self)
           self:xy(0, 108):zoom(0.9):maxwidth(290)
-            :diffuse(1, 1, 1, 1):strokecolor(0, 0, 0, 1):strokewidth(2)
-            :settext("")
+            :diffuse(1, 1, 1, 1):strokecolor(0, 0, 0, 1):settext("")
         end
       },
       LoadFont("Common Normal") .. {

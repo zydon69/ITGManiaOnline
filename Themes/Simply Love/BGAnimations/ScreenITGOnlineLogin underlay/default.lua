@@ -668,7 +668,7 @@ local t = Def.ActorFrame{
 			Name="Code",
 			InitCommand=function(self)
 				self:xy(0, 116):horizalign(center):zoom(0.74):maxwidth(286)
-					:diffuse(1, 1, 1, 1):strokecolor(0, 0, 0, 1):strokewidth(2):settext("")
+					:diffuse(1, 1, 1, 1):strokecolor(0, 0, 0, 1):settext("")
 			end
 		},
 		LoadFont("Common Normal")..{

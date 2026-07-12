@@ -17,7 +17,10 @@ foreach(REQUIRED_SNIPPET
     "queuedTasks >= kBacklogAdaptiveThreshold"
     "useDownloadClient ? effectiveMaxDownloadBytes"
     "kMaxDownloadBytes = 5LL * 1024LL * 1024LL * 1024LL"
-    "std::atomic<int64_t> latestProgressCurrent")
+    "std::atomic<int64_t> latestProgressCurrent"
+    "LEGACY_GROOVESTATS_QR_LOGIN_HOST"
+    "protocol == \"ws\" && host == LEGACY_GROOVESTATS_QR_LOGIN_HOST"
+    "HttpDenyHosts remains authoritative above")
   string(FIND "${NETWORK_MANAGER_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(

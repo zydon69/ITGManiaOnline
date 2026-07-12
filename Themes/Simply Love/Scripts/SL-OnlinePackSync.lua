@@ -2109,6 +2109,12 @@ function PackSync:MarkLobbyReadyForSelectedSong(source, retrying)
 			.. " key=" .. tostring(readyIntentKey))
 		return true
 	end
+	if retrying ~= true and self.lastMarkLobbyReadyCompletedKey == readyIntentKey then
+		trace("MarkLobbyReady skipped reason=already_acknowledged"
+			.. " source=" .. tostring(source or "unknown")
+			.. " key=" .. tostring(readyIntentKey))
+		return true
+	end
 	if retrying ~= true
 		and self.lastMarkLobbyReadyIntentKey == readyIntentKey
 		and (now - (tonumber(self.lastMarkLobbyReadyIntentAt) or 0)) < 1.5
@@ -2148,6 +2154,7 @@ function PackSync:MarkLobbyReadyForSelectedSong(source, retrying)
 			selected_at = selected_at(self.currentSongInfo),
 		})
 		if ok then
+			self.lastMarkLobbyReadyCompletedKey = readyIntentKey
 			if ITGOnline.EnforceRoomPhaseScreen then ITGOnline:EnforceRoomPhaseScreen() end
 			return
 		end

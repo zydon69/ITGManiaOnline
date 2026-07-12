@@ -70,6 +70,9 @@ constexpr const char* BUILT_IN_HTTP_ALLOW_HOSTS =
     ITGMANIA_HTTP_ALLOW_HOSTS_DEFAULT;
 constexpr const char* REQUIRED_BUNDLED_ONLINE_ALLOW_HOSTS =
     "*.groovestats.com,*.itgmania.com,itgonline.fr,*.itgonline.fr,stepmaniaonline.net,www.stepmaniaonline.net,*.arrowcloud.dance";
+constexpr const char* LEGACY_GROOVESTATS_QR_LOGIN_HOST =
+    "qrlogin.groovestats.com";
+constexpr int LEGACY_GROOVESTATS_QR_LOGIN_PORT = 3000;
 constexpr const char* SIGNED_HTTP_SECURITY_OVERRIDE_PATH =
     "Save/ITGOnlineNetworkSecurity.ini";
 
@@ -1331,15 +1334,19 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
     return false;
   }
 
-  if (protocol != "https" && protocol != "wss") {
-    return false;
-  }
-
-  if (port != 443) {
-    return false;
-  }
-
   MakeLower(host);
+  const bool isLegacyGrooveStatsQrLogin =
+      protocol == "ws" && host == LEGACY_GROOVESTATS_QR_LOGIN_HOST &&
+      port == LEGACY_GROOVESTATS_QR_LOGIN_PORT;
+
+  if (!isLegacyGrooveStatsQrLogin &&
+      (protocol != "https" && protocol != "wss")) {
+    return false;
+  }
+
+  if (!isLegacyGrooveStatsQrLogin && port != 443) {
+    return false;
+  }
 
   if (IsProductionItgOnlineHost(host) &&
       !this->tlsBackendEnforcesPublicKeyPins &&
@@ -1362,6 +1369,14 @@ bool NetworkManager::IsUrlAllowed(const std::string& url) {
     if (HostMatchesPattern(host, deniedHost)) {
       return false;
     }
+  }
+
+  // GrooveStats' upstream QR-login service intentionally still exposes its
+  // authenticated handshake only over this exact legacy WebSocket endpoint.
+  // Keep the exception narrow: no other cleartext scheme, host, or port is
+  // admitted, and HttpDenyHosts remains authoritative above.
+  if (isLegacyGrooveStatsQrLogin) {
+    return true;
   }
 
   static std::string cachedAllowedRaw;
