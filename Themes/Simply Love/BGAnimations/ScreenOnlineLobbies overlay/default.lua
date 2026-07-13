@@ -6251,7 +6251,7 @@ end,
 			Name="PackSyncKickWarning",
 			Text="",
 			InitCommand=function(self)
-				self:horizalign(center):xy(_screen.cx - 180, _screen.cy):zoom(0.78):maxwidth(980)
+				self:horizalign(center):xy(0, 0):zoom(0.42):maxwidth(1100)
 					:diffuse(color("#FFDD55")):strokecolor(Color.Black):visible(false)
 			end
 		},
