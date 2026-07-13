@@ -3047,6 +3047,18 @@ CreateOnlineHandler = function()
 						.. " pendingOnlineStartRoomId=" .. tostring(pendingOnlineStartRoomId or "nil")
 						.. " pendingConfigReady=" .. tostring(pendingConfigReady ~= nil))
 					remove_online_input_callbacks()
+					if self.inLobby and screen and screen.AddInputCallback then
+						local activityHandler = function(event)
+							local inputType = tostring(event and event.type or "")
+							if inputType == "InputEventType_FirstPress" or inputType == "FirstPress" then
+								if ITGOnline and ITGOnline.MarkUserActivity then
+									ITGOnline:MarkUserActivity("input:" .. tostring(screenName))
+								end
+							end
+							return false
+						end
+						replace_online_input_callback(screen, "presence_activity", activityHandler)
+					end
 					if screenName ~= "ScreenEvaluationStage"
 						and screenName ~= "ScreenEvaluationNonstop"
 						and screenName ~= "ScreenEvaluationSummary" then

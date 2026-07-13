@@ -133,14 +133,11 @@ function PackSync:ShouldPreserveActiveDownloadDuringReset(reason)
 	end
 
 	reason = tostring(reason or "unknown")
-	local preserveBrowseOnly = self.activeBrowseOnlyDownload == true
-		and (
-			reason == "no_song_confirmed"
-			or reason == "online_lobby_state_clear_unconfirmed_preview"
-			or reason == "song_selection_cancelled"
-		)
-	if preserveBrowseOnly then
-		trace("Reset will preserve browse-only download reason=" .. tostring(reason)
+	local preserveActiveDownload = reason == "no_song_confirmed"
+		or reason == "online_lobby_state_clear_unconfirmed_preview"
+		or reason == "song_selection_cancelled"
+	if preserveActiveDownload then
+		trace("Reset will preserve active download reason=" .. tostring(reason)
 			.. " status=" .. tostring(self.currentStatus or "nil")
 			.. " key=" .. tostring(self.downloadInFlightKey or "")
 			.. " activeDownloadId=" .. tostring(self.activeDownloadId or ""))

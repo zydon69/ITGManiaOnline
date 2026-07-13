@@ -1761,10 +1761,31 @@ local function joined_download_kick_warning_text()
 	return "Expulsion dans " .. tostring(math.ceil(remaining)) .. " s : telechargez le pack"
 end
 
+local function joined_inactivity_warning_text()
+	local currentUserId = tostring(ITGOnline and ITGOnline.user and ITGOnline.user.id or "")
+	if currentUserId == "" then return "" end
+	for _, player in ipairs(joined_lobby_players or {}) do
+		if tostring(player.playerId or "") == currentUserId then
+			local deadlineMs = tonumber(player.inactivityDeadlineMs)
+			local serverTimeMs = ITGOnline and ITGOnline.EstimatedServerTimeMilliseconds
+				and ITGOnline:EstimatedServerTimeMilliseconds()
+			if deadlineMs and serverTimeMs and deadlineMs > serverTimeMs then
+				local remaining = math.ceil((deadlineMs - serverTimeMs) / 1000)
+				local warningSeconds = tonumber(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.inactivity_warning_seconds) or 300
+				if remaining <= warningSeconds then
+					return "Expulsion pour inactivite dans " .. tostring(math.max(1, math.ceil(remaining / 60))) .. " min"
+				end
+			end
+		end
+	end
+	return ""
+end
+
 local function update_joined_download_kick_warning(root)
 	if not root then return end
 	local joinedContent = root:GetChild("JoinedLobbyContent")
 	local warningText = mode == "joined" and joined_download_kick_warning_text() or ""
+	if warningText == "" and mode == "joined" then warningText = joined_inactivity_warning_text() end
 	local warning = joinedContent and joinedContent:GetChild("PackSyncKickWarning")
 	if warning then
 		warning:settext(warningText)
@@ -6230,7 +6251,7 @@ end,
 			Name="PackSyncKickWarning",
 			Text="",
 			InitCommand=function(self)
-				self:horizalign(center):xy(180, 172):zoom(0.56):maxwidth(760)
+				self:horizalign(center):xy(_screen.cx - 180, _screen.cy):zoom(0.78):maxwidth(980)
 					:diffuse(color("#FFDD55")):strokecolor(Color.Black):visible(false)
 			end
 		},
