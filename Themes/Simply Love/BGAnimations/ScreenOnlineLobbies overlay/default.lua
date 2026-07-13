@@ -115,6 +115,9 @@ local lobby_trace_state = {
 	lastOnlineMissingSongSignature = "",
 	lastOnlineMissingSongSignatureAt = 0,
 	onlineMissingSongDuplicateWindow = 3.0,
+	seen = {},
+	order = {},
+	maxSignatures = 512,
 }
 local online_warning_countdown_last_second = {}
 
@@ -1165,17 +1168,28 @@ end
 
 function lobby_debug(message)
 	if not lobby_debug_enabled() then return end
-	local line = "ITG Online Lobby: " .. tostring(message or "")
-	if Trace then Trace(line) elseif Warn then Warn(line) end
+	if type(online_trace) == "function" then
+		online_trace("lobby " .. tostring(message or ""))
+	end
 end
 
 lobby_flow_trace = function(message)
 		if type(online_logs_enabled) == "function" and not online_logs_enabled() then
 			return
 		end
-		local line = "ITG Online: FLOW lobby_ui " .. tostring(message or "")
-		if Trace then Trace(line) elseif Warn then Warn(line) end
-		if Flush then Flush() end
+		local normalizedMessage = tostring(message or "")
+		if lobby_trace_state.seen[normalizedMessage] then
+			return
+		end
+		lobby_trace_state.seen[normalizedMessage] = true
+		lobby_trace_state.order[#lobby_trace_state.order + 1] = normalizedMessage
+		if #lobby_trace_state.order > lobby_trace_state.maxSignatures then
+			local oldest = table.remove(lobby_trace_state.order, 1)
+			lobby_trace_state.seen[oldest] = nil
+		end
+		if type(online_flow_trace) == "function" then
+			online_flow_trace("lobby_ui " .. normalizedMessage)
+		end
 end
 
 function lobby_count(value)
@@ -1791,6 +1805,20 @@ local function update_joined_download_kick_warning(root)
 		warning:settext(warningText)
 		warning:visible(warningText ~= "")
 	end
+	local warningTraceKey = table.concat({
+		tostring(overlay_instance_id or "none"),
+		tostring(ITGOnline and ITGOnline.currentRoomId or "no-room"),
+		tostring(mode),
+		tostring(warningText),
+		tostring(showing_pack_choice_menu == true),
+	}, "|")
+	SL.Global.Online = SL.Global.Online or {}
+	if warningTraceKey ~= tostring(SL.Global.Online.ScreenOnlineLobbiesPackSyncWarningTraceKey or "") then
+		SL.Global.Online.ScreenOnlineLobbiesPackSyncWarningTraceKey = warningTraceKey
+		lobby_flow_trace("pack_sync_warning_render visible=" .. tostring(warningText ~= "")
+			.. " modalVisible=" .. tostring(showing_pack_choice_menu == true and warningText ~= "")
+			.. " text=" .. tostring(warningText))
+	end
 
 	local packChoiceMenu = root:GetChild("PackChoiceMenu")
 	local modalWarning = packChoiceMenu and packChoiceMenu:GetChild("PackChoiceKickWarning")
@@ -2206,6 +2234,26 @@ local function close_transfer_manager_confirm()
 	end
 end
 
+function ScreenOnlineLobbiesPackSyncDisplayLine(player, status, display, reason)
+	SL.Global.Online = SL.Global.Online or {}
+	local traceByPlayer = SL.Global.Online.ScreenOnlineLobbiesPackSyncDisplayTrace or {}
+	SL.Global.Online.ScreenOnlineLobbiesPackSyncDisplayTrace = traceByPlayer
+	local playerId = table.concat({
+		tostring(overlay_instance_id or "none"),
+		tostring(ITGOnline and ITGOnline.currentRoomId or "no-room"),
+		tostring(player and player.playerId or "unknown"),
+	}, "|")
+	local signature = table.concat({ tostring(status or ""), tostring(display or ""), tostring(reason or "") }, "|")
+	if traceByPlayer[playerId] ~= signature then
+		traceByPlayer[playerId] = signature
+		lobby_flow_trace("pack_sync_display player=" .. playerId
+			.. " status=" .. tostring(status or "")
+			.. " display=" .. tostring(display or "")
+			.. " reason=" .. tostring(reason or ""))
+	end
+	return display
+end
+
 local function pack_sync_line_for_player(player)
 	if not player or player_is_manager(player) or joined_phase == "results" then return "" end
 	if joined_song_preview == nil and not (ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song) then return "" end
@@ -2215,17 +2263,29 @@ local function pack_sync_line_for_player(player)
 	local reason = trim_text(player.missingSongReason)
 	local songAvailable = player.songAvailable == true
 	local previewOnly = joined_song_preview ~= nil and not joined_song_confirmed
+	local isCurrentUser = ITGOnline and ITGOnline.user
+		and tostring(player.playerId or "") == tostring(ITGOnline.user.id or "")
 
 	if status == "download_in_progress" then
-		local progress = tonumber(player.packSyncDownloadProgress)
+		-- Only the downloading player needs the byte-level progress.  Everyone
+		-- else merely needs to know that this member is still synchronising.
+		local progress = isCurrentUser and tonumber(player.packSyncDownloadProgress) or nil
 		local suffix = progress and (" " .. tostring(math.floor(progress)) .. "%") or ""
-		return "Telechargement en cours" .. suffix
+		return ScreenOnlineLobbiesPackSyncDisplayLine(player, status, "Telechargement en cours" .. suffix,
+			isCurrentUser and "local_progress" or "remote_progress_hidden")
 	end
 	if status == "download_requested" or status == "reloading_songs" then
-		return message ~= "" and message or pack_sync_display_text(status)
+		return ScreenOnlineLobbiesPackSyncDisplayLine(player, status, "Telechargement en cours", "transient_download")
 	end
-	if status == "searching_local_charts" or status == "downloaded_ok" then
-		return message ~= "" and message or pack_sync_display_text(status)
+	if status == "searching_local_charts" then
+		if not isCurrentUser then
+			return ScreenOnlineLobbiesPackSyncDisplayLine(player, status, "Telechargement en cours", "remote_scan_hidden")
+		end
+		return ScreenOnlineLobbiesPackSyncDisplayLine(player, status,
+			message ~= "" and message or pack_sync_display_text(status), "local_scan")
+	end
+	if status == "downloaded_ok" then
+		return ScreenOnlineLobbiesPackSyncDisplayLine(player, status, "", "download_complete_hidden")
 	end
 
 	if previewOnly then
@@ -2234,9 +2294,6 @@ local function pack_sync_line_for_player(player)
 		end
 		if status == "manager_browsing_unknown_pack" then
 			return "Pack inconnu"
-		end
-		if status == "downloaded_ok" then
-			return message ~= "" and message or pack_sync_display_text(status)
 		end
 		return ""
 	end
@@ -2261,16 +2318,17 @@ local function pack_sync_line_for_player(player)
 		end
 
 	if songAvailable or status == "ready" or status == "local_chart_match_found" then
-		if message == "Pack KO / chart compatible trouvée" then return message end
-		if message == "Pack+chart trouvées" then return message end
-		return "Pack+chart trouvées"
+		if message == "Pack KO / chart compatible trouvée" then
+			return ScreenOnlineLobbiesPackSyncDisplayLine(player, status, message, "compatible_chart_fallback")
+		end
+		return ScreenOnlineLobbiesPackSyncDisplayLine(player, status, "", "available_hidden")
 	end
 
 	if status ~= "" and status ~= "unknown" and status ~= "idle" then
 		return pack_sync_display_text(status)
 	end
 
-	return ""
+	return ScreenOnlineLobbiesPackSyncDisplayLine(player, status, "", "no_display_status")
 end
 
 joined_any_player_missing_song = function()
@@ -3763,6 +3821,12 @@ local InputHandler = function(event)
 		.. " joinedCanDownload=" .. tostring(joined_can_download_pack == true)
 		.. " packBusy=" .. tostring(pack_sync_busy() == true)
 		.. " canDownloadBrowsedPack=" .. tostring(can_download_browsed_pack() == true))
+
+	-- This overlay owns the input callback, so it must also report activity.
+	-- Navigation is intentional participation and must reset the idle warning.
+	if event.type == "InputEventType_FirstPress" and ITGOnline and ITGOnline.MarkUserActivity then
+		ITGOnline:MarkUserActivity("lobby_input:" .. tostring(event.GameButton or event.button))
+	end
 
 	if should_suppress_input_during_quiet_window(event) then
 		lobby_flow_trace("input_ignored reason=quiet_window type=" .. tostring(event.type)
@@ -6251,7 +6315,7 @@ end,
 			Name="PackSyncKickWarning",
 			Text="",
 			InitCommand=function(self)
-				self:horizalign(center):xy(0, 0):zoom(0.42):maxwidth(1100)
+				self:horizalign(center):xy(0, 190):zoom(0.42):maxwidth(1100)
 					:diffuse(color("#FFDD55")):strokecolor(Color.Black):visible(false)
 			end
 		},

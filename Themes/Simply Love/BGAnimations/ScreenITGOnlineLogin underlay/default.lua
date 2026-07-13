@@ -95,8 +95,9 @@ local function login_flow_trace(message)
 	if type(online_logs_enabled) == "function" and not online_logs_enabled("auth") then
 		return
 	end
-	if not Trace then return end
-	Trace("ITG Online: LoginFlow " .. tostring(message or ""))
+	if type(online_trace) == "function" then
+		online_trace("login_flow " .. tostring(message or ""), "auth")
+	end
 end
 
 local function login_state_summary()

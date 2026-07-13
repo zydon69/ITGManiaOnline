@@ -22,6 +22,9 @@ local cached_score_user_order = {}
 local last_non_empty_rows = {}
 local last_non_empty_rows_at = -999
 local last_score_phase = ""
+local leaderboard_trace_seen = {}
+local leaderboard_trace_order = {}
+local max_leaderboard_trace_signatures = 512
 
 local function monotonic_time()
 	if GetTimeSinceStart then
@@ -34,8 +37,19 @@ local function force_trace(message)
 	if type(online_logs_enabled) == "function" and not online_logs_enabled("score") then
 		return
 	end
-	local line = "ITG Online: FLOW live_leaderboard " .. tostring(message or "")
-	if Trace then Trace(line) elseif Warn then Warn(line) end
+	local normalizedMessage = tostring(message or "")
+	if leaderboard_trace_seen[normalizedMessage] then
+		return
+	end
+	leaderboard_trace_seen[normalizedMessage] = true
+	leaderboard_trace_order[#leaderboard_trace_order + 1] = normalizedMessage
+	if #leaderboard_trace_order > max_leaderboard_trace_signatures then
+		local oldest = table.remove(leaderboard_trace_order, 1)
+		leaderboard_trace_seen[oldest] = nil
+	end
+	if type(online_trace) == "function" then
+		online_trace("FLOW live_leaderboard " .. normalizedMessage, "score")
+	end
 end
 
 local function compact_name(name)
@@ -538,7 +552,7 @@ local function update_rows(frame, rows)
 				local localShown = tonumber(ITGOnline.lastDisplayedScoreSnapshot and ITGOnline.lastDisplayedScoreSnapshot.displayedPercent) or -1
 				local delta = (localShown >= 0) and (shownValue - localShown) or 0
 				if online_trace then
-					online_trace(string.format(
+					force_trace(string.format(
 						"ITG Online Leaderboard trace: shown=%.3f local=%.3f delta=%.3f source=server state=%s failed=%s finished=%s status=%s",
 						shownValue,
 						localShown,

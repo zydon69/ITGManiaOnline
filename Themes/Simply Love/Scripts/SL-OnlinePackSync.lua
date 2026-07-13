@@ -279,12 +279,41 @@ function PackSync:ExpireStatusPostInFlight(reason)
 	return true
 end
 
+function PackSync:CancelStatusPostInFlight(reason)
+	local signature = tostring(self.statusPostInFlightSignature or "")
+	if signature == "" then return false end
+
+	local callbacks = self.statusPostInFlightCallbacks[signature] or {}
+	self.statusPostInFlightCallbacks[signature] = nil
+	self.statusPostInFlightSignature = ""
+	self.statusPostInFlightStartedAt = 0
+	self.statusPostActiveRequestToken = 0
+	trace("Cancelled in-flight status post reason=" .. tostring(reason or "unknown")
+		.. " signature=" .. tostring(signature)
+		.. " callbacks=" .. tostring(#callbacks))
+	local response = {
+		errorCode = "client_status_post_cancelled",
+		errorMessage = "La publication du statut online a été annulée car son contexte a changé.",
+	}
+	for _, waitingCallback in ipairs(callbacks) do
+		safe_invoke_callback(waitingCallback, false, nil, response)
+	end
+	return true
+end
+
 trace = function(message)
 	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
 		return
 	end
-	local line = "[OnlinePackSync] " .. tostring(message or "")
-	if Trace then Trace(line) elseif Warn then Warn(line) end
+	local line = "pack_sync " .. tostring(message or "")
+	if type(online_flow_trace) == "function" then
+		online_flow_trace(line)
+		return
+	end
+	local safeLine = type(online_safe_log_text) == "function"
+		and online_safe_log_text(line, 4096)
+		or tostring(line):gsub("[%c]", " ")
+	if Trace then Trace("ITG Online FLOW: " .. safeLine) elseif Warn then Warn("ITG Online FLOW: " .. safeLine) end
 end
 
 local function trace_online_state(label, fields)
@@ -1313,6 +1342,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	self.lastPostedStatusAt = now
 	self.statusPostInFlightSignature = signature
 	self.statusPostInFlightStartedAt = now
+	self.statusPostInFlightCallbacks[signature] = callback and { callback } or {}
 	self.statusPostRequestToken = (tonumber(self.statusPostRequestToken) or 0) + 1
 	self.statusPostActiveRequestToken = self.statusPostRequestToken
 	local requestToken = self.statusPostRequestToken
@@ -1348,7 +1378,11 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 			local staleResponse = response or {}
 			staleResponse.errorCode = "client_stale_status_response"
 			staleResponse.errorMessage = "Une réponse de statut online obsolète a été ignorée."
-			safe_invoke_callback(callback, false, decoded, staleResponse)
+			local waitingCallbacks = self.statusPostInFlightCallbacks[signature] or {}
+			self.statusPostInFlightCallbacks[signature] = nil
+			for _, waitingCallback in ipairs(waitingCallbacks) do
+				safe_invoke_callback(waitingCallback, false, decoded, staleResponse)
+			end
 			return
 		end
 		local statusResult = decoded and decoded.pack_sync_status or nil
@@ -1383,7 +1417,6 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 				.. " sequence=" .. tostring(payload.sequence)
 				.. " selected_at=" .. tostring(payload.selected_at or ""))
 		end
-			safe_invoke_callback(callback, callbackOk, decoded, response)
 			local waitingCallbacks = self.statusPostInFlightCallbacks[signature] or {}
 			self.statusPostInFlightCallbacks[signature] = nil
 			for _, queuedCallback in ipairs(waitingCallbacks) do
@@ -1611,9 +1644,7 @@ function PackSync:ResetLocalState(reason)
 	self.lastSelectedAt = ""
 		self.lastPostedStatusSignature = ""
 		self.lastPostedStatusAt = 0
-		self.statusPostInFlightSignature = ""
-		self.statusPostInFlightStartedAt = 0
-		self.statusPostActiveRequestToken = 0
+		self:CancelStatusPostInFlight("reset_local_state")
 		self.statusPostInFlightCallbacks = {}
 		self:DiscardPendingStatusPost("reset_local_state")
 		self.lastAppliedLocalStatusSignature = ""

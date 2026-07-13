@@ -21,8 +21,10 @@ local function online_score_trace(message, force)
 	local suffix = onlineScoreTraceSuppressed > 0 and (" suppressed=" .. tostring(onlineScoreTraceSuppressed)) or ""
 	onlineScoreTraceSuppressed = 0
 	onlineScoreTraceLastAt = now
-	local line = "ITG Online: FLOW gameplay_score " .. tostring(message or "") .. suffix
-	if Trace then Trace(line) elseif Warn then Warn(line) end
+	local line = "FLOW gameplay_score " .. tostring(message or "") .. suffix
+	if type(online_trace) == "function" then
+		online_trace(line, "score")
+	end
 end
 
 local function live_score_finalized()

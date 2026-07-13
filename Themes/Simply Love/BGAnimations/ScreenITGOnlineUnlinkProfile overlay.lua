@@ -14,8 +14,9 @@ local function unlink_trace(message)
 	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
 		return
 	end
-	if not Trace then return end
-	Trace("ITG Online: UnlinkProfile " .. tostring(message or ""))
+	if type(online_flow_trace) == "function" then
+		online_flow_trace("unlink_profile " .. tostring(message or ""))
+	end
 end
 
 local function go_back()

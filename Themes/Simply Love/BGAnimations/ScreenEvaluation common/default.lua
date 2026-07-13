@@ -19,8 +19,8 @@ local function OnlineEvaluationActive()
 end
 
 local function DisableOnlineEvaluationTimer(reason)
-	if type(online_logs_enabled) == "function" and online_logs_enabled() then
-		Trace("ITG Online: FLOW evaluation_timer_disable"
+	if type(online_flow_trace) == "function" then
+		online_flow_trace("evaluation_timer_disable"
 			.. " reason=" .. tostring(reason or "unknown")
 			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))

@@ -19,8 +19,8 @@ local last_online_options_deadline_active_key = ""
 
 local function online_options_trace(message)
 	if type(online_logs_enabled) == "function" and not online_logs_enabled() then return end
-	if Trace then
-		Trace("[ITGOnline] options_flow " .. tostring(message or ""))
+	if type(online_flow_trace) == "function" then
+		online_flow_trace("options_flow " .. tostring(message or ""))
 	end
 end
 
@@ -38,8 +38,8 @@ local function play_online_options_warning_tick(remaining)
 	end
 
 	last_online_options_warning_second = second
-	if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
-		Trace("[ITGOnline] options_ready_warning_tick remaining=" .. tostring(second)
+	if type(online_flow_trace) == "function" then
+		online_flow_trace("options_ready_warning_tick remaining=" .. tostring(second)
 			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 	end
 	SOUND:PlayOnce(THEME:GetPathS("MenuTimer", "tick"))

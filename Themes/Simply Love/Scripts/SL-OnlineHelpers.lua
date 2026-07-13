@@ -86,6 +86,23 @@ function online_logs_enabled(category)
 		and IsOnlineNetworkLoggingEnabled() == true
 end
 
+function online_safe_log_text(value, maxLength)
+	local text = tostring(value or ""):gsub("[%c]", " ")
+	-- Error payloads can originate from the network.  Keep diagnostics useful
+	-- without allowing credentials copied from a response to reach log.txt.
+	text = text:gsub("([Bb]earer%s+)[A-Za-z0-9%-%._~%+/%=]+", "%1[redacted]")
+	text = text:gsub("(%f[%a][Aa]ccess[_%-]?[Tt]oken%f[^%a]%s*[=:]%s*)[^%s,;]+", "%1[redacted]")
+	text = text:gsub("(%f[%a][Tt]oken%f[^%a]%s*[=:]%s*)[^%s,;]+", "%1[redacted]")
+	text = text:gsub("([\"'][Aa]ccess[_%-]?[Tt]oken[\"']%s*:%s*[\"'])[^\"']+", "%1[redacted]")
+	text = text:gsub("([\"'][Tt]oken[\"']%s*:%s*[\"'])[^\"']+", "%1[redacted]")
+	text = text:gsub("(%f[%a][Pp]assword%f[^%a]%s*[=:]%s*)[^%s,;]+", "%1[redacted]")
+	text = text:gsub("([\"'][Pp]assword[\"']%s*:%s*[\"'])[^\"']+", "%1[redacted]")
+	text = text:gsub("([Aa]uthorization%s*:%s*)[^%s,;]+", "%1[redacted]")
+	maxLength = math.max(64, tonumber(maxLength) or 4096)
+	if #text > maxLength then text = text:sub(1, maxLength) .. "...[truncated]" end
+	return text
+end
+
 function online_trace(message, category)
 	category = tostring(category or "network")
 	local enabled = ITGOnline and (
@@ -95,9 +112,8 @@ function online_trace(message, category)
 		or (category == "network" and ITGOnline.debugOnlineTrace == true)
 	)
 	if not enabled then return end
-	local safeMessage = tostring(message or ""):gsub("[%c]", " ")
-	if #safeMessage > 4096 then safeMessage = safeMessage:sub(1, 4096) .. "...[truncated]" end
-	local sessionId = tostring(ITGOnline and ITGOnline.logSessionId or "none"):gsub("[%c]", " "):sub(1, 64)
+	local safeMessage = online_safe_log_text(message, 4096)
+	local sessionId = online_safe_log_text(ITGOnline and ITGOnline.logSessionId or "none", 64)
 	if Trace then
 		Trace("ITG Online: session=" .. sessionId .. " " .. safeMessage)
 	elseif Warn then
@@ -156,7 +172,7 @@ function online_flow_trace(message)
 	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
 		return
 	end
-	local line = tostring(message or "")
+	local line = online_safe_log_text(message, 4096)
 	if online_trace then
 		online_trace("FLOW " .. line)
 	elseif Trace then
@@ -167,6 +183,8 @@ function online_flow_trace(message)
 end
 
 local online_flow_trace_throttle_last_at = {}
+local online_flow_trace_throttle_order = {}
+local max_online_flow_trace_throttle_keys = 512
 function online_flow_trace_throttled(key, intervalSeconds, message)
 	local throttleKey = tostring(key or "default")
 	local interval = tonumber(intervalSeconds) or 1.0
@@ -174,6 +192,13 @@ function online_flow_trace_throttled(key, intervalSeconds, message)
 	local lastAt = tonumber(online_flow_trace_throttle_last_at[throttleKey]) or -9999
 	if now - lastAt < interval then
 		return
+	end
+	if online_flow_trace_throttle_last_at[throttleKey] == nil then
+		online_flow_trace_throttle_order[#online_flow_trace_throttle_order + 1] = throttleKey
+		if #online_flow_trace_throttle_order > max_online_flow_trace_throttle_keys then
+			local oldest = table.remove(online_flow_trace_throttle_order, 1)
+			online_flow_trace_throttle_last_at[oldest] = nil
+		end
 	end
 	online_flow_trace_throttle_last_at[throttleKey] = now
 	online_flow_trace(message)
@@ -610,7 +635,7 @@ function maybe_preview_current_online_song(force)
 		and ITGOnline.currentRoomId
 		and ITGOnline.currentRoom
 		and ITGOnline.user) then
-		online_flow_trace("song_preview_skipped cause=missing_context"
+		online_flow_trace_throttled("song_preview_skipped:missing_context", 15.0, "song_preview_skipped cause=missing_context"
 			.. " hasClient=" .. tostring(ITGOnline ~= nil)
 			.. " hasPreviewApi=" .. tostring(ITGOnline and ITGOnline.PreviewSong ~= nil)
 			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
@@ -622,7 +647,7 @@ function maybe_preview_current_online_song(force)
 	local active, room, inactiveReason = current_room_is_active({ phase = "lobby" })
 	local phase = normalize_room_phase(room and room.phase)
 	if not active then
-		online_flow_trace("song_preview_skipped cause=invalid_phase"
+		online_flow_trace_throttled("song_preview_skipped:invalid_phase:" .. tostring(phase), 15.0, "song_preview_skipped cause=invalid_phase"
 			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
 			.. " phase=" .. tostring(phase)
 			.. " reason=" .. tostring(inactiveReason))
@@ -630,14 +655,14 @@ function maybe_preview_current_online_song(force)
 	end
 
 	if room.selected_song ~= nil then
-		online_flow_trace("song_preview_skipped cause=selected_song_exists"
+		online_flow_trace_throttled("song_preview_skipped:selected_song_exists", 15.0, "song_preview_skipped cause=selected_song_exists"
 			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
 		return
 	end
 
 	local manager = room.manager
 	if not manager or tonumber(manager.id) ~= tonumber(ITGOnline.user.id) then
-		online_flow_trace("song_preview_skipped cause=not_manager"
+		online_flow_trace_throttled("song_preview_skipped:not_manager", 15.0, "song_preview_skipped cause=not_manager"
 			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
 			.. " manager=" .. tostring(manager and manager.id or "nil")
 			.. " user=" .. tostring(ITGOnline.user and ITGOnline.user.id or "nil"))
@@ -645,12 +670,12 @@ function maybe_preview_current_online_song(force)
 	end
 
 	if not GAMESTATE then
-		online_flow_trace("song_preview_skipped cause=no_gamestate")
+		online_flow_trace_throttled("song_preview_skipped:no_gamestate", 15.0, "song_preview_skipped cause=no_gamestate")
 		return
 	end
 	local song = GAMESTATE:GetCurrentSong()
 	if not song then
-		online_flow_trace("song_preview_skipped cause=no_current_song"
+		online_flow_trace_throttled("song_preview_skipped:no_current_song", 15.0, "song_preview_skipped cause=no_current_song"
 			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
 		return
 	end
@@ -658,7 +683,7 @@ function maybe_preview_current_online_song(force)
 	local now = GetTimeSinceStart()
 	local key = song:GetSongDir() or song:GetDisplayFullTitle() or ""
 	if not force and key == lastSongPreviewKey and now - lastSongPreviewSentAt < 1.5 then
-		online_flow_trace("song_preview_skipped cause=debounced"
+		online_flow_trace_throttled("song_preview_skipped:debounced:" .. tostring(key), 15.0, "song_preview_skipped cause=debounced"
 			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
 			.. " key=" .. tostring(key)
 			.. " age=" .. tostring(now - lastSongPreviewSentAt))

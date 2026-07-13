@@ -26,8 +26,8 @@ local args = {
 
 			elseif RestartOnMissedTarget then
 				if ITGOnline and ITGOnline.currentRoomId then
-					if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
-						Trace("ITG Online: FLOW gameplay_restart_blocked"
+					if type(online_flow_trace) == "function" then
+						online_flow_trace("gameplay_restart_blocked"
 							.. " reason=target_score_restart"
 							.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
 							.. " player=" .. tostring(pn))

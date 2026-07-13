@@ -82,7 +82,7 @@ ITGOnline.lastCriticalRoomActionResyncAt = ITGOnline.lastCriticalRoomActionResyn
 ITGOnline.lastSyncRequestedAt = ITGOnline.lastSyncRequestedAt or 0
 ITGOnline.lastCurrentRoomWatchdogAt = ITGOnline.lastCurrentRoomWatchdogAt or 0
 ITGOnline.currentRoomWatchdogIntervalSeconds = ITGOnline.currentRoomWatchdogIntervalSeconds or 2.0
-ITGOnline.currentRoomWatchdogRealtimeIntervalSeconds = ITGOnline.currentRoomWatchdogRealtimeIntervalSeconds or 4.0
+ITGOnline.currentRoomWatchdogRealtimeIntervalSeconds = ITGOnline.currentRoomWatchdogRealtimeIntervalSeconds or 15.0
 ITGOnline.realtimeReconnectNextAttemptAt = ITGOnline.realtimeReconnectNextAttemptAt or 0
 ITGOnline.realtimeReconnectAttempt = ITGOnline.realtimeReconnectAttempt or 0
 ITGOnline.realtimeReconnectBaseDelaySeconds = ITGOnline.realtimeReconnectBaseDelaySeconds or 1.0
@@ -240,6 +240,8 @@ ITGOnline.lobbyRefreshQueuedAt = ITGOnline.lobbyRefreshQueuedAt or 0
 ITGOnline.fileHashCache = ITGOnline.fileHashCache or {}
 ITGOnline.fileHashCacheTtlSeconds = ITGOnline.fileHashCacheTtlSeconds or 30
 ITGOnline.onlineFlowTraceThrottle = ITGOnline.onlineFlowTraceThrottle or {}
+ITGOnline.onlineFlowTraceThrottleOrder = ITGOnline.onlineFlowTraceThrottleOrder or {}
+ITGOnline.maxOnlineFlowTraceThrottleKeys = tonumber(ITGOnline.maxOnlineFlowTraceThrottleKeys) or 512
 ITGOnline.debugOnlineTrace = type(IsOnlineNetworkLoggingEnabled) == "function"
 	and IsOnlineNetworkLoggingEnabled() == true
 ITGOnline.debugAuthTrace = type(IsOnlineAuthLoggingEnabled) == "function"
@@ -252,17 +254,31 @@ ITGOnline.debugConfigPollIntervalSeconds = ITGOnline.debugConfigPollIntervalSeco
 ITGOnline.lastHudScoreTraceSecond = ITGOnline.lastHudScoreTraceSecond or -1
 ITGOnline.cachedLobbySearchPayload = ITGOnline.cachedLobbySearchPayload or { lobbies = {}, onlinePlayers = {} }
 ITGOnline.finalLeaderboardCache = ITGOnline.finalLeaderboardCache or {}
+ITGOnline.finalLeaderboardCacheOrder = ITGOnline.finalLeaderboardCacheOrder or {}
+ITGOnline.maxFinalLeaderboardCacheRooms = tonumber(ITGOnline.maxFinalLeaderboardCacheRooms) or 8
 ITGOnline.latestFinalLeaderboardCache = ITGOnline.latestFinalLeaderboardCache or nil
 ITGOnline.finalLeaderboardCacheSignature = ITGOnline.finalLeaderboardCacheSignature or ""
 ITGOnline.finalLeaderboardCacheLogSignature = ITGOnline.finalLeaderboardCacheLogSignature or ""
 ITGOnline.finalLeaderboardCacheBootLogged = ITGOnline.finalLeaderboardCacheBootLogged or false
+ITGOnline.finalLeaderboardTraceSeen = ITGOnline.finalLeaderboardTraceSeen or {}
+ITGOnline.finalLeaderboardTraceOrder = ITGOnline.finalLeaderboardTraceOrder or {}
+ITGOnline.maxFinalLeaderboardTraceSignatures = tonumber(ITGOnline.maxFinalLeaderboardTraceSignatures) or 256
 
 local function final_leaderboard_cache_trace(message)
 	if type(online_logs_enabled) == "function" and not online_logs_enabled() then
 		return
 	end
-	local line = "ITG Online: FLOW final_leaderboard_cache " .. tostring(message or "")
-	if Trace then Trace(line) elseif Warn then Warn(line) end
+	local normalizedMessage = tostring(message or "")
+	if ITGOnline.finalLeaderboardTraceSeen[normalizedMessage] then return end
+	ITGOnline.finalLeaderboardTraceSeen[normalizedMessage] = true
+	ITGOnline.finalLeaderboardTraceOrder[#ITGOnline.finalLeaderboardTraceOrder + 1] = normalizedMessage
+	if #ITGOnline.finalLeaderboardTraceOrder > ITGOnline.maxFinalLeaderboardTraceSignatures then
+		local oldest = table.remove(ITGOnline.finalLeaderboardTraceOrder, 1)
+		ITGOnline.finalLeaderboardTraceSeen[oldest] = nil
+	end
+	if type(online_flow_trace) == "function" then
+		online_flow_trace("final_leaderboard_cache " .. normalizedMessage)
+	end
 end
 
 if not ITGOnline.finalLeaderboardCacheBootLogged then
@@ -301,7 +317,14 @@ local function safe_call(label, fn)
 	local ok = results[1]
 	if not ok then
 		local message = "safe_call_failed label=" .. tostring(label or "unknown") .. " error=" .. tostring(results[2])
-		if online_trace then online_trace(message) elseif Warn then Warn("ITG Online: " .. message) end
+		if online_trace then
+			online_trace(message)
+		elseif Warn then
+			local safeMessage = type(online_safe_log_text) == "function"
+				and online_safe_log_text(message, 4096)
+				or tostring(message):gsub("[%c]", " ")
+			Warn("ITG Online: " .. safeMessage)
+		end
 	end
 	return ok, unpack(results, 2, results.n)
 end
@@ -796,7 +819,7 @@ local function write_profile_access_token(token, scope, user)
 	if not path or not identity then return false end
 	local userId = online_user_identifier(user)
 	if trim(scope) == "" or userId == "" then return false end
-	local contents = ini_read(path) or {}
+	local contents = file_exists(path) and (ini_read(path) or {}) or {}
 	contents["ITGOnline"] = contents["ITGOnline"] or {}
 	local section = contents["ITGOnline"]
 	section["AccessToken"] = tostring(token or "")
@@ -1041,6 +1064,17 @@ end
 local function safe_log_text(value, maxLength)
 	local text = tostring(value or "")
 	text = text:gsub("[%c]", " ")
+	-- Network errors and third-party payloads can be echoed in diagnostic traces.
+	-- Redact credential-shaped fragments defensively even though callers must not
+	-- deliberately include credentials in a log message.
+	text = text:gsub("([Bb]earer%s+)[A-Za-z0-9%-%._~%+/%=]+", "%1[redacted]")
+	text = text:gsub("(%f[%a][Aa]ccess[_%-]?[Tt]oken%f[^%a]%s*[=:]%s*)[^%s,;]+", "%1[redacted]")
+	text = text:gsub("(%f[%a][Tt]oken%f[^%a]%s*[=:]%s*)[^%s,;]+", "%1[redacted]")
+	text = text:gsub("([\"'][Aa]ccess[_%-]?[Tt]oken[\"']%s*:%s*[\"'])[^\"']+", "%1[redacted]")
+	text = text:gsub("([\"'][Tt]oken[\"']%s*:%s*[\"'])[^\"']+", "%1[redacted]")
+	text = text:gsub("(%f[%a][Pp]assword%f[^%a]%s*[=:]%s*)[^%s,;]+", "%1[redacted]")
+	text = text:gsub("([\"'][Pp]assword[\"']%s*:%s*[\"'])[^\"']+", "%1[redacted]")
+	text = text:gsub("([Aa]uthorization%s*:%s*)[^%s,;]+", "%1[redacted]")
 	maxLength = math.max(64, tonumber(maxLength) or 4096)
 	if #text > maxLength then text = text:sub(1, maxLength) .. "...[truncated]" end
 	return text
@@ -1130,10 +1164,17 @@ local function online_flow_trace_throttled(key, intervalSeconds, message)
 
 	local throttleKey = tostring(key or "")
 	local previous = ITGOnline.onlineFlowTraceThrottle[throttleKey] or {}
-	if previous.message == message and now - (tonumber(previous.at) or 0) < (tonumber(intervalSeconds) or 1.0) then
+	if now - (tonumber(previous.at) or 0) < (tonumber(intervalSeconds) or 1.0) then
 		return
 	end
 
+	if ITGOnline.onlineFlowTraceThrottle[throttleKey] == nil then
+		ITGOnline.onlineFlowTraceThrottleOrder[#ITGOnline.onlineFlowTraceThrottleOrder + 1] = throttleKey
+		if #ITGOnline.onlineFlowTraceThrottleOrder > ITGOnline.maxOnlineFlowTraceThrottleKeys then
+			local oldest = table.remove(ITGOnline.onlineFlowTraceThrottleOrder, 1)
+			ITGOnline.onlineFlowTraceThrottle[oldest] = nil
+		end
+	end
 	ITGOnline.onlineFlowTraceThrottle[throttleKey] = {
 		at = now,
 		message = message,
@@ -2569,7 +2610,8 @@ function ITGOnline:SendRealtimePing(reason)
 		return self.socket:Send(encoded)
 	end)
 	self.lastRealtimeClientPingAt = GetTimeSinceStart()
-	online_flow_trace("realtime_ping_send source=" .. tostring(reason or "unknown")
+	online_flow_trace_throttled("realtime_ping_send", 30,
+		"realtime_ping_send source=" .. tostring(reason or "unknown")
 		.. " sent=" .. tostring(sendOk and sent == true)
 		.. " generation=" .. tostring(self.realtimeGeneration or "nil")
 		.. " lastRealtimeAge=" .. string.format("%.3f", self:RealtimeLastMessageAge()))
@@ -2727,24 +2769,35 @@ function ITGOnline:MaintainRealtimeAndRoomSync(source)
 
 	if roomId then
 		local realtimeFresh = self.RealtimeIsFresh and self:RealtimeIsFresh() or false
-		local interval = realtimeFresh
-			and (tonumber(self.currentRoomWatchdogRealtimeIntervalSeconds) or 4.0)
-			or (tonumber(self.currentRoomWatchdogIntervalSeconds) or 2.0)
+		local realtimeConnected = self.RealtimeIsConnected and self:RealtimeIsConnected() or false
+		local recoveryRequired = self.needsSyncAfterScreenCancel == true
+			or not realtimeFresh
+			or not realtimeConnected
+		local interval = recoveryRequired
+			and (tonumber(self.currentRoomWatchdogIntervalSeconds) or 2.0)
+			or (tonumber(self.currentRoomWatchdogRealtimeIntervalSeconds) or 15.0)
 		local elapsed = now - (tonumber(self.lastCurrentRoomWatchdogAt) or 0)
 		if elapsed >= interval then
 			self.lastCurrentRoomWatchdogAt = now
-			online_flow_trace("current_room_watchdog_tick source=" .. tostring(source or "unknown")
-				.. " room=" .. tostring(roomId)
-				.. " screen=" .. screenName
-				.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
-				.. " realtimeConnected=" .. tostring(self.realtimeConnected == true)
-				.. " realtimeConnecting=" .. tostring(self.realtimeConnecting == true)
-				.. " lastSyncAge=" .. string.format("%.3f", now - (tonumber(self.lastSyncRequestedAt) or 0))
-				.. " lastRealtimeAge=" .. string.format("%.3f", now - (tonumber(self.lastRealtimeMessageAt) or 0)))
-			if self.FetchCurrentRoomFallback then
-				self:FetchCurrentRoomFallback("current_room_watchdog:" .. tostring(source or "unknown"), 1.0)
+			if recoveryRequired then
+				online_flow_trace("current_room_watchdog_recover source=" .. tostring(source or "unknown")
+					.. " room=" .. tostring(roomId)
+					.. " screen=" .. screenName
+					.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+					.. " recoveryRequired=" .. tostring(self.needsSyncAfterScreenCancel == true)
+					.. " realtimeConnected=" .. tostring(realtimeConnected)
+					.. " realtimeFresh=" .. tostring(realtimeFresh)
+					.. " lastRealtimeAge=" .. string.format("%.3f", now - (tonumber(self.lastRealtimeMessageAt) or 0)))
+				if self.FetchCurrentRoomFallback then
+					self:FetchCurrentRoomFallback("current_room_watchdog:" .. tostring(source or "unknown"), 1.0)
+				end
+			elseif online_flow_trace_throttled then
+				online_flow_trace_throttled("current_room_watchdog_healthy", 60.0,
+					"current_room_watchdog_healthy room=" .. tostring(roomId)
+					.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+					.. " realtimeAge=" .. string.format("%.3f", self:RealtimeLastMessageAge()))
 			end
-			local syncInterval = realtimeFresh and 6.0 or 2.0
+			local syncInterval = recoveryRequired and 2.0 or 30.0
 			if self.Sync and not self.syncInFlight and (now - (tonumber(self.lastSyncRequestedAt) or 0)) >= syncInterval then
 				online_flow_trace("current_room_watchdog_sync source=" .. tostring(source or "unknown")
 					.. " room=" .. tostring(roomId)
@@ -4342,10 +4395,15 @@ function ITGOnline:TraceOnlineState(label, fields)
 		"finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true or false),
 		"source=" .. tostring(fields.source or "unknown"),
 	}
+	local extraFields = {}
 	for key, value in pairs(fields) do
-		if key ~= "roomSnapshot" and key ~= "room_id" and key ~= "roomId" and key ~= "phase"
-			and key ~= "selected_at" and key ~= "selectedAt" and key ~= "roundKey" and key ~= "source" then
-			parts[#parts + 1] = tostring(key) .. "=" .. tostring(value)
+		extraFields[#extraFields + 1] = { key = tostring(key), value = value }
+	end
+	table.sort(extraFields, function(left, right) return left.key < right.key end)
+	for _, field in ipairs(extraFields) do
+		if field.key ~= "roomSnapshot" and field.key ~= "room_id" and field.key ~= "roomId" and field.key ~= "phase"
+			and field.key ~= "selected_at" and field.key ~= "selectedAt" and field.key ~= "roundKey" and field.key ~= "source" then
+			parts[#parts + 1] = field.key .. "=" .. tostring(field.value)
 		end
 	end
 	online_flow_trace(table.concat(parts, " "))
@@ -4752,8 +4810,6 @@ local function source_can_be_partial_room_snapshot(source)
 	return partialRoomSnapshotSources[value] == true
 		or value == "realtime_room_event:room.member_pack_sync_updated"
 		or value == "realtime_room_event:room.member_song_availability_updated"
-		or value == "member_room_refresh:room.member_pack_sync_updated"
-		or value == "member_room_refresh:room.member_song_availability_updated"
 		or value == "lobby_refresh_current_room:fetch_lobby"
 end
 
@@ -4776,7 +4832,6 @@ local roomPhaseRegressionSources = {
 	["realtime_room_event:room.play_state_reset_to_lobby"] = true,
 	["realtime_room_event_fetch:room.play_state_reset_to_lobby"] = true,
 	["realtime_room_event:room.member_left"] = true,
-	["member_room_refresh:room.member_left"] = true,
 	fetch_room = true,
 	fetch_current_room = true,
 	sync_current_room = true,
@@ -5630,7 +5685,17 @@ function ITGOnline:StoreFinalLeaderboardFromRoom(source, cacheSource)
 	local previous = roomId ~= "" and self.finalLeaderboardCache[roomId] or self.latestFinalLeaderboardCache
 	local duplicate = previous and tostring(previous.signature or "") == canonicalSignature
 	if roomId ~= "" then
+		self.finalLeaderboardCacheOrder = self.finalLeaderboardCacheOrder or {}
+		if self.finalLeaderboardCache[roomId] == nil then
+			self.finalLeaderboardCacheOrder[#self.finalLeaderboardCacheOrder + 1] = roomId
+		end
 		self.finalLeaderboardCache[roomId] = cache
+		while #self.finalLeaderboardCacheOrder > math.max(1, self.maxFinalLeaderboardCacheRooms or 8) do
+			local oldestRoomId = table.remove(self.finalLeaderboardCacheOrder, 1)
+			if oldestRoomId and oldestRoomId ~= roomId then
+				self.finalLeaderboardCache[oldestRoomId] = nil
+			end
+		end
 	end
 	self.latestFinalLeaderboardCache = cache
 
@@ -5661,6 +5726,7 @@ end
 
 function ITGOnline:ClearFinalLeaderboardCache(reason, roomId)
 	self.finalLeaderboardCache = self.finalLeaderboardCache or {}
+	self.finalLeaderboardCacheOrder = self.finalLeaderboardCacheOrder or {}
 	local key = tostring(roomId or self.currentRoomId or "")
 	local clearReason = tostring(reason or "unknown")
 	if clearReason == "room_snapshot_results_to_lobby_ready" then
@@ -5679,6 +5745,12 @@ function ITGOnline:ClearFinalLeaderboardCache(reason, roomId)
 	local clearedRoomCache = false
 	if key ~= "" and self.finalLeaderboardCache[key] ~= nil then
 		self.finalLeaderboardCache[key] = nil
+		for index = #self.finalLeaderboardCacheOrder, 1, -1 do
+			if self.finalLeaderboardCacheOrder[index] == key then
+				table.remove(self.finalLeaderboardCacheOrder, index)
+				break
+			end
+		end
 		clearedRoomCache = true
 	end
 	local clearedLatest = false
@@ -13198,8 +13270,29 @@ function ITGOnline:Heartbeat(status, force, activity)
 		end
 		if ok and self.currentScreenName == "ScreenOnlineLobbies" and not self.disconnecting then
 			if self.currentRoomId then
-				online_flow_trace("heartbeat_fetch_current_room source=heartbeat_ack room=" .. tostring(self.currentRoomId))
-				self:FetchCurrentRoomFallback("heartbeat_ack", 1.0)
+				-- Realtime room events are acknowledged and retried by the server.  A
+				-- successful presence heartbeat is therefore not, by itself, evidence
+				-- that a room snapshot was lost. Fetch only when the realtime stream is
+				-- stale/disconnected or a screen-bound request was cancelled.
+				local recoveryRequired = self.needsSyncAfterScreenCancel == true
+				local realtimeFresh = self:RealtimeIsFresh()
+				local realtimeConnected = self:RealtimeIsConnected()
+				if recoveryRequired or not realtimeFresh or not realtimeConnected then
+					online_flow_trace("heartbeat_fetch_current_room source=heartbeat_ack"
+						.. " room=" .. tostring(self.currentRoomId)
+						.. " recoveryRequired=" .. tostring(recoveryRequired)
+						.. " realtimeFresh=" .. tostring(realtimeFresh)
+						.. " realtimeConnected=" .. tostring(realtimeConnected))
+					local started = self:FetchCurrentRoomFallback("heartbeat_ack", 1.0)
+					if recoveryRequired and started then
+						self.needsSyncAfterScreenCancel = false
+					end
+				else
+					online_flow_trace_throttled("heartbeat_room_sync_skipped", 30.0,
+						"heartbeat_room_sync_skipped reason=realtime_fresh"
+						.. " room=" .. tostring(self.currentRoomId)
+						.. " realtimeAge=" .. string.format("%.3f", self:RealtimeLastMessageAge()))
+				end
 			else
 				online_flow_trace("heartbeat_queue_lobby_refresh source=heartbeat_ack")
 				self:QueueLobbyRefresh({ reason = "heartbeat_ack" })
@@ -13225,9 +13318,19 @@ function ITGOnline:Heartbeat(status, force, activity)
 end
 
 function ITGOnline:MarkUserActivity(source)
-	if not self.user or not self.currentRoomId or self.disconnecting then return end
+	if not self.user or not self.currentRoomId or self.disconnecting then
+		online_flow_trace_throttled("user_activity_skipped", 5.0,
+			"user_activity_skipped"
+			.. " hasUser=" .. tostring(self.user ~= nil)
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " disconnecting=" .. tostring(self.disconnecting == true))
+		return
+	end
 	local now = GetTimeSinceStart()
 	if now - (tonumber(self.lastUserActivitySentAt) or 0) < (tonumber(self.userActivityMinIntervalSeconds) or 3) then
+		online_flow_trace_throttled("user_activity_throttled", 3.0,
+			"user_activity_throttled room=" .. tostring(self.currentRoomId)
+			.. " intervalSeconds=" .. tostring(tonumber(self.userActivityMinIntervalSeconds) or 3))
 		return
 	end
 	self.lastUserActivitySentAt = now
@@ -13351,7 +13454,8 @@ function ITGOnline:FetchCurrentRoomFallback(source, minIntervalSeconds)
 	self.lastCurrentRoomFallbackFetchAtByRoomId = self.lastCurrentRoomFallbackFetchAtByRoomId or {}
 	local lastFetchAt = tonumber(self.lastCurrentRoomFallbackFetchAtByRoomId[key]) or 0
 	if now - lastFetchAt < interval then
-		online_flow_trace("current_room_fallback_fetch_throttled source=" .. tostring(source)
+		online_flow_trace_throttled("current_room_fallback_fetch_throttled:" .. key, 3.0,
+			"current_room_fallback_fetch_throttled source=" .. tostring(source)
 			.. " room=" .. key
 			.. " elapsed=" .. string.format("%.3f", now - lastFetchAt)
 			.. " interval=" .. string.format("%.3f", interval))
@@ -13370,9 +13474,11 @@ function ITGOnline:FetchCurrentRoomFallback(source, minIntervalSeconds)
 			.. " members=" .. tostring(type(room) == "table" and type(room.members) == "table" and #room.members or 0)
 			.. " readyStates=" .. tostring(type(room) == "table" and type(room.ready_states) == "table" and #room.ready_states or 0))
 		if ok and type(room) == "table" then
-			local applied = self:ApplyRoomSnapshot(room, "current_room_fallback:" .. tostring(source))
-			safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(applied or room))
-			self:BroadcastLeaderboardFromRoom(applied or room, "current_room_fallback:" .. tostring(source))
+			-- FetchRoom has already validated and applied this snapshot before this
+			-- coalesced callback runs. Applying it again can duplicate broadcasts and
+			-- compete with screen enforcement during a phase transition.
+			safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(room))
+			self:BroadcastLeaderboardFromRoom(room, "current_room_fallback:" .. tostring(source))
 			if type(self.EnforceRoomPhaseScreen) == "function" then
 				self:EnforceRoomPhaseScreen()
 			end
@@ -14597,8 +14703,8 @@ function ITGOnline:FetchRoom(roomId, callback)
 			self.pendingJoinRoomId = nil
 		end
 
-		for queuedCallback in ivalues(queuedCallbacks) do
-			queuedCallback(ok, decoded, response)
+		for _, queuedCallback in ipairs(queuedCallbacks) do
+			safe_callback(queuedCallback, ok, decoded, response)
 		end
 	end)
 end
@@ -14655,6 +14761,12 @@ function ITGOnline:RealtimeRoomEventPolicy(name, hasRoomSnapshot)
 				refreshLobby = true,
 				reason = "member_left_requires_room_and_lobby_refresh",
 			},
+			["room.manager_transferred"] = {
+				memberChange = true,
+				fetchRoom = true,
+				refreshLobby = true,
+				reason = "manager_transfer_requires_authoritative_room_and_lobby_refresh",
+			},
 			["room.member_pack_sync_updated"] = {
 				roomUiRefresh = true,
 				minLobbyRefreshInterval = 1.5,
@@ -14709,6 +14821,14 @@ function ITGOnline:RealtimeNonRoomEventPolicy(name)
 				action = "ignore_control_frame",
 				reason = "server_ping_has_no_state",
 			},
+			["pong"] = {
+				action = "update_server_clock",
+				reason = "keepalive_ack_has_no_room_state",
+			},
+			["client.error"] = {
+				action = "notify_protocol_error",
+				reason = "server_rejected_a_client_realtime_message",
+			},
 			["connection.closed"] = {
 				action = "ignore_control_frame",
 				reason = "close_lifecycle_handled_by_socket",
@@ -14750,9 +14870,14 @@ function ITGOnline:RealtimeNonRoomEventPolicy(name)
 			action = "fallback_event_handler",
 			reason = "no_explicit_non_room_policy",
 		}
-		online_flow_trace("realtime_non_room_policy name=" .. tostring(name or "nil")
+		local traceMessage = "realtime_non_room_policy name=" .. tostring(name or "nil")
 			.. " action=" .. tostring(policy.action or "nil")
-			.. " reason=" .. tostring(policy.reason or "nil"))
+			.. " reason=" .. tostring(policy.reason or "nil")
+		if policy.action == "ignore_control_frame" or policy.action == "update_server_clock" then
+			online_flow_trace_throttled("realtime_non_room_policy:" .. tostring(name or "nil"), 30.0, traceMessage)
+		else
+			online_flow_trace(traceMessage)
+		end
 		return policy
 	end
 
@@ -14775,7 +14900,7 @@ function ITGOnline:HandleRealtimeEvent(event)
 		local payloadSessions = payloadRoom and payloadRoom.play_sessions or payload.play_sessions
 		local payloadLeaderboard = payload.leaderboard or (payloadRoom and payloadRoom.leaderboard)
 		local payloadPlayState = payload.play_state or payload.playState or (payloadRoom and (payloadRoom.play_state or payloadRoom.playState))
-		online_flow_trace("realtime_event_begin name=" .. tostring(name or "nil")
+		local eventTrace = "realtime_event_begin name=" .. tostring(name or "nil")
 			.. " eventId=" .. tostring(eventId or "nil")
 			.. " payloadRoomId=" .. tostring(payload.room_id or (payload.room and payload.room.id) or "nil")
 			.. " payloadPhase=" .. tostring(payload.room and payload.room.phase or payload.room_phase or "nil")
@@ -14790,7 +14915,12 @@ function ITGOnline:HandleRealtimeEvent(event)
 			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
 			.. " currentPhase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
 			.. " screen=" .. tostring(self.currentScreenName or "nil")
-			.. " generation=" .. tostring(self.screenGeneration or "nil"))
+			.. " generation=" .. tostring(self.screenGeneration or "nil")
+		if name == "server.ping" or name == "pong" then
+			online_flow_trace_throttled("realtime_control_event:" .. tostring(name), 30, eventTrace)
+		else
+			online_flow_trace(eventTrace)
+		end
 		local idlessControlEvents = {
 			["connection.ready"] = true,
 			["connection.closed"] = true,
@@ -14906,6 +15036,17 @@ function ITGOnline:HandleRealtimeEvent(event)
 		if self.UpdateServerClockOffset then
 			self:UpdateServerClockOffset(event.server_time or payload.server_time, GetTimeSinceStart(), GetTimeSinceStart())
 		end
+		return
+	elseif name == "client.error" then
+		local errorCode = tostring(payload.error_code or payload.code or "realtime_protocol_error")
+		online_flow_trace("realtime_event_apply name=client.error action=notify_protocol_error"
+			.. " code=" .. errorCode
+			.. " hasMessage=" .. tostring(payload.message ~= nil))
+		safe_broadcast("OnlineResponseStatus", {
+			event = "realtime",
+			success = false,
+			message = "Erreur de communication temps reel : " .. errorCode,
+		})
 		return
 		elseif name == "connection.closed" then
 			-- Informational frame. WebSocket close lifecycle is handled by onMessage Close.
@@ -15308,10 +15449,11 @@ function ITGOnline:HandleRealtimeEvent(event)
 				safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(room or self.currentRoom or payload.room))
 				self:BroadcastLeaderboardFromRoom(room or payload.room, "realtime_room_event:" .. tostring(name))
 				local roomPolicy = self:RealtimeRoomEventPolicy(name, payload.room ~= nil)
-				if roomPolicy.fetchRoom == true and type(self.FetchCurrentRoomFallback) == "function" then
-					local minInterval = roomPolicy.minLobbyRefreshInterval or 0.5
-					if name == "room.song_selected" then minInterval = 0 end
-					self:FetchCurrentRoomFallback("realtime_room_event:" .. tostring(name), minInterval)
+				if roomPolicy.fetchRoom == true then
+					online_flow_trace("realtime_room_fetch_skipped reason=authoritative_snapshot"
+						.. " name=" .. tostring(name)
+						.. " roomId=" .. tostring(roomId or payload.room.id or "nil")
+						.. " eventId=" .. tostring(eventId or "nil"))
 				end
 				if roomPolicy.memberChange == true then
 					online_flow_trace("room_member_change_refresh_requested name=" .. tostring(name)
@@ -15322,40 +15464,6 @@ function ITGOnline:HandleRealtimeEvent(event)
 						online_flow_trace("room_policy_lobby_refresh name=" .. tostring(name)
 							.. " reason=" .. tostring(roomPolicy.reason or "nil"))
 						self:QueueLobbyRefresh({ reason = tostring(roomPolicy.reason or name or "room_policy") })
-					end
-					local refreshRoomId = roomId or (room and room.id) or (self.currentRoom and self.currentRoom.id) or self.currentRoomId
-					if roomPolicy.fetchRoom == true and refreshRoomId and self.FetchRoom then
-						self.lastMemberRoomRefreshAtByRoomId = self.lastMemberRoomRefreshAtByRoomId or {}
-						local refreshKey = tostring(refreshRoomId)
-						local now = GetTimeSinceStart()
-						local lastRefreshAt = tonumber(self.lastMemberRoomRefreshAtByRoomId[refreshKey]) or 0
-						if now - lastRefreshAt >= 0.5 then
-							self.lastMemberRoomRefreshAtByRoomId[refreshKey] = now
-							online_flow_trace("member_room_refresh_fetch name=" .. tostring(name)
-								.. " roomId=" .. tostring(refreshRoomId)
-								.. " eventId=" .. tostring(eventId))
-							self:FetchRoom(refreshRoomId, function(ok, decoded)
-								online_flow_trace("member_room_refresh_result name=" .. tostring(name)
-									.. " ok=" .. tostring(ok == true)
-									.. " roomId=" .. tostring(refreshRoomId)
-									.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
-									.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
-									.. " members=" .. tostring(decoded and decoded.room and decoded.room.members and #decoded.room.members or 0)
-									.. " readyStates=" .. tostring(decoded and decoded.room and decoded.room.ready_states and #decoded.room.ready_states or 0))
-								if ok and decoded and decoded.room then
-									local fetchedRoom = self:ApplyRoomSnapshot(decoded.room, "member_room_refresh:" .. tostring(name))
-									online_flow_trace("member_room_refresh_broadcast name=" .. tostring(name)
-										.. " roomId=" .. tostring(refreshRoomId)
-										.. " appliedPhase=" .. tostring(fetchedRoom and fetchedRoom.phase or "nil")
-										.. " members=" .. tostring(fetchedRoom and fetchedRoom.members and #fetchedRoom.members or 0))
-									safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(fetchedRoom or decoded.room))
-								end
-							end)
-						else
-							online_flow_trace("member_room_refresh_throttled name=" .. tostring(name)
-								.. " roomId=" .. tostring(refreshRoomId)
-								.. " age=" .. tostring(now - lastRefreshAt))
-						end
 					end
 				elseif roomPolicy.roomUiRefresh == true then
 					if payload.room then
@@ -15433,7 +15541,9 @@ function ITGOnline:HandleRealtimeEvent(event)
 				end)
 			end
 	else
-		online_trace("Unhandled realtime event: " .. tostring(name))
+		online_flow_trace_throttled("unhandled_realtime_event:" .. tostring(name), 30.0,
+			"realtime_event_unhandled name=" .. tostring(name)
+			.. " eventId=" .. tostring(eventId or "nil"))
 	end
 end
 
@@ -15508,8 +15618,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 			rawOnlineUserIds[#rawOnlineUserIds + 1] = tostring(user.id or "?")
 			local presenceIdentity = type(user.presence_identity) == "table" and user.presence_identity or {}
 			local viewerSession = type(presenceIdentity.viewer_session) == "table" and presenceIdentity.viewer_session or {}
-			local presenceId = presenceIdentity.presence_id or presenceIdentity.presenceId or user.presence_id or user.presenceId
-			local presenceKey = tostring(presenceIdentity.model or "presence") .. ":" .. tostring(presenceId or "?") .. ":user:" .. tostring(user.id or "?")
+			local presenceKey = tostring(presenceIdentity.model or "presence") .. ":user:" .. tostring(user.id or "?")
 			rawPresenceIdentities[#rawPresenceIdentities + 1] = presenceKey
 			local isViewerPresence = presenceIdentity.is_viewer == true or presenceIdentity.isViewer == true
 			local isSelf = isViewerPresence
@@ -15525,10 +15634,10 @@ function ITGOnline:LobbySearchPayload(decoded)
 			else
 				local sameAccountNonViewer = self.user and online_protocol_ids_match(user.id, self.user.id)
 				if sameAccountNonViewer then
-					retainedSameAccountPresenceIds[#retainedSameAccountPresenceIds + 1] = tostring(presenceId or "?")
+					retainedSameAccountPresenceIds[#retainedSameAccountPresenceIds + 1] = "present"
 					local apiTokenId = presenceIdentity.api_token_id or presenceIdentity.apiTokenId
 					if apiTokenId then
-						retainedSameAccountSessionIds[#retainedSameAccountSessionIds + 1] = tostring(apiTokenId)
+						retainedSameAccountSessionIds[#retainedSameAccountSessionIds + 1] = "present"
 					end
 					online_flow_trace("lobby_search_presence_retained_same_account"
 						.. " userId=" .. tostring(user.id or "?")

@@ -7,8 +7,9 @@ local function lobby_info_trace(message)
   if type(online_logs_enabled) == "function" and not online_logs_enabled() then
     return
   end
-  if not Trace then return end
-  Trace("ITG Online: LobbyInfo " .. tostring(message or ""))
+  if type(online_flow_trace) == "function" then
+    online_flow_trace("lobby_info " .. tostring(message or ""))
+  end
 end
 
 local function lobby_row_summary(row)

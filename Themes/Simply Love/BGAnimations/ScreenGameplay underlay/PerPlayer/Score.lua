@@ -535,19 +535,8 @@ return Def.ActorFrame{
 		end
 
 		if ITGOnline and ITGOnline.currentRoomId then
-			if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
-				Trace("ITG Online: FLOW gameplay_score_broadcast source=RedrawScore"
-					.. " player=" .. tostring(player)
-					.. " scorePlayer=" .. tostring(sourcePlayer)
-					.. " room=" .. tostring(ITGOnline.currentRoomId)
-					.. " score=" .. tostring(percent)
-					.. " ex=" .. tostring(exPercent)
-					.. " hardex=" .. tostring(hardExPercent)
-					.. " displayed=" .. tostring(displayedPercent)
-					.. " scoreMode=" .. tostring(scoreMode)
-					.. " combo=" .. tostring(snapshot.Combo)
-					.. " frozen=" .. tostring(frozen == true))
-			end
+			-- TrackOnlineScorePush emits a throttled, score-category trace for this
+			-- stream. Logging every redraw here flooded log.txt during gameplay.
 			MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
 				Player = sourcePlayer,
 				ScorePercent = snapshot.ScorePercent,
@@ -588,19 +577,6 @@ return Def.ActorFrame{
 		trace_routine_score_drop(snapshot, "ExCountsChanged", frozen)
 
 		if ITGOnline and ITGOnline.currentRoomId then
-			if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
-				Trace("ITG Online: FLOW gameplay_score_broadcast source=ExCountsChanged"
-					.. " player=" .. tostring(player)
-					.. " scorePlayer=" .. tostring(sourcePlayer)
-					.. " room=" .. tostring(ITGOnline.currentRoomId)
-					.. " score=" .. tostring(snapshot.ScorePercent)
-					.. " ex=" .. tostring(snapshot.ExScorePercent)
-					.. " hardex=" .. tostring(snapshot.HardExScorePercent)
-					.. " displayed=" .. tostring(snapshot.DisplayedPercent)
-					.. " scoreMode=" .. tostring(scoreMode)
-					.. " combo=" .. tostring(snapshot.Combo)
-					.. " frozen=" .. tostring(frozen == true))
-			end
 			MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
 				Player = sourcePlayer,
 				ScorePercent = snapshot.ScorePercent,

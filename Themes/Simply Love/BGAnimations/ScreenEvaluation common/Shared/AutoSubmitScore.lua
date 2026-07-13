@@ -9,8 +9,8 @@ end
 local GrooveStatsSubmitTrace = function(message)
 	if not IsOnlineEvaluation() then return end
 
-	if Trace then
-		Trace("ITG Online external_submit groovestats " .. tostring(message or ""))
+	if type(online_trace) == "function" then
+		online_trace("external_submit groovestats " .. tostring(message or ""), "network")
 	end
 end
 
@@ -73,7 +73,7 @@ local DecodeResponseBody = function(res)
 
 	if not ok then
 		GrooveStatsSubmitTrace("result=failed reason=json_decode")
-		Trace("GrooveStats auto-submit warning: failed to decode response body")
+		GrooveStatsSubmitTrace("warning=json_decode_failed")
 		return nil
 	end
 
@@ -263,9 +263,9 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 			.. " hasError=" .. tostring(res and res.error ~= nil)
 			.. " bodyBytes=" .. tostring(res and res.body and string.len(res.body) or 0))
 		if res and res.statusCode == 200 and not res.error then
-			Trace("GrooveStats auto-submit response arrived after evaluation UI closed")
+			GrooveStatsSubmitTrace("response_ignored reason=evaluation_ui_closed")
 		else
-			Trace("GrooveStats auto-submit warning: response ignored because evaluation actors are unavailable")
+			GrooveStatsSubmitTrace("response_ignored reason=evaluation_actors_unavailable")
 		end
 		return
 	end

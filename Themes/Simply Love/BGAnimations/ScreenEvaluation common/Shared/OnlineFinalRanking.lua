@@ -19,12 +19,27 @@ local function online_display_name(user, fallback)
 	return tostring(user.display_name or user.displayName or user.name or fallback or "Player")
 end
 
+local final_ranking_trace_seen = {}
+local final_ranking_trace_order = {}
+local max_final_ranking_trace_signatures = 256
+
 local function final_ranking_trace(message)
 	if type(online_logs_enabled) == "function" and not online_logs_enabled("score") then
 		return
 	end
-	local line = "ITG Online: FLOW final_ranking " .. tostring(message or "")
-	if Trace then Trace(line) elseif Warn then Warn(line) end
+	local normalizedMessage = tostring(message or "")
+	if final_ranking_trace_seen[normalizedMessage] then
+		return
+	end
+	final_ranking_trace_seen[normalizedMessage] = true
+	final_ranking_trace_order[#final_ranking_trace_order + 1] = normalizedMessage
+	if #final_ranking_trace_order > max_final_ranking_trace_signatures then
+		local oldest = table.remove(final_ranking_trace_order, 1)
+		final_ranking_trace_seen[oldest] = nil
+	end
+	if type(online_trace) == "function" then
+		online_trace("FLOW final_ranking " .. normalizedMessage, "score")
+	end
 end
 
 local function final_ranking_row_summary(row, index)
@@ -170,10 +185,17 @@ local function final_results_signature(rows)
 end
 
 local function should_poll_final_results()
-	return ITGOnline
-		and ITGOnline.currentRoom
-		and ITGOnline.NormalizeRoomPhase
-		and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) == "results"
+	if not (ITGOnline and ITGOnline.currentRoom and ITGOnline.NormalizeRoomPhase) then
+		return false
+	end
+	if ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) ~= "results" then
+		return false
+	end
+	if type(ITGOnline.RoomPlayStateSummary) ~= "function" then
+		return true
+	end
+	local summary = ITGOnline:RoomPlayStateSummary(ITGOnline.currentRoom)
+	return not (summary and summary.finalResultsReady == true)
 end
 
 local function schedule_refresh(self)
@@ -230,7 +252,7 @@ local t = Def.ActorFrame{
 		end
 		local rows = final_results()
 		local show = #rows > 0
-		local shouldPoll = show or should_poll_final_results()
+		local shouldPoll = should_poll_final_results()
 		local signature = final_results_signature(rows)
 		if signature == tostring(self.lastFinalRankingSignature or "") then
 			self.polling_active = shouldPoll

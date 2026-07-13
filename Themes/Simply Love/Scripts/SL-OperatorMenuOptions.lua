@@ -294,8 +294,8 @@ OperatorMenuOptionRows.ITGOnlineDissociateAccount = function()
 			local topScreen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
 			if not topScreen then return end
 
-			if type(online_logs_enabled) == "function" and online_logs_enabled() and Trace then
-				Trace("ITG Online options: unlink confirmation requested")
+			if type(online_flow_trace) == "function" then
+				online_flow_trace("options_unlink_confirmation_requested")
 			end
 			topScreen:SetNextScreenName("ScreenITGOnlineUnlinkProfile")
 			topScreen:StartTransitioningScreen("SM_GoToNextScreen")

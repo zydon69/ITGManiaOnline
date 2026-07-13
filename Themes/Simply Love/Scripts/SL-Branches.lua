@@ -5,7 +5,9 @@
 local MAX_STAGE_ADD_BACK = 10
 
 local BranchTrace = function(message)
-	if type(online_trace) == "function" then
+	if type(online_flow_trace) == "function" then
+		online_flow_trace("branch " .. tostring(message or ""))
+	elseif type(online_trace) == "function" then
 		online_trace("FLOW branch " .. tostring(message or ""))
 	elseif Trace then
 		Trace("SL-Branches: " .. tostring(message or ""))
@@ -16,7 +18,9 @@ end
 
 local StyleFlowTrace = function(message)
 	if type(online_logs_enabled) == "function" and not online_logs_enabled() then return end
-	if Trace then
+	if type(online_flow_trace) == "function" then
+		online_flow_trace("routine_style branch " .. tostring(message or ""))
+	elseif Trace then
 		Trace("ROUTINE_STYLE_FLOW branch " .. tostring(message or ""))
 	end
 end
