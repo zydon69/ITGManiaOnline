@@ -6868,7 +6868,45 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 			.. " roundKey=" .. tostring(roundKey or ""))
 		return true
 	end
+	-- ScreenEvaluationStage deliberately suppresses its normal automatic exit
+	-- while the online room remains active.  Asking it to follow the ordinary
+	-- SM_GoToNextScreen path therefore leaves the screen faded out until the
+	-- player presses a key.  Use the same direct screen replacement as the
+	-- explicit online evaluation exit instead.
+	if self:IsOnlineEvaluationScreen(topScreen:GetName())
+		and SCREENMAN and SCREENMAN.SetNewScreen then
+		self.onlineEvaluationExitRequested = true
+		self.onlineEvaluationExitRequestedAt = now
+		self.onlineNavigationInFlightKey = navigationKey
+		self.onlineNavigationInFlightAt = now
+		online_flow_trace("evaluation_room_navigation_direct decisionId=" .. tostring(decisionId)
+			.. " target=" .. tostring(target)
+			.. " preferred=" .. tostring(preferred)
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(roomPhase))
+		SCREENMAN:SetNewScreen(target)
+		return true
+	end
 	if topScreen.IsTransitioning and topScreen:IsTransitioning() then
+		-- ScreenOnlineLobbies reports itself as transitioning while it is only
+		-- fading in.  Retargeting that enter transition updates its next-screen
+		-- name but never starts an exit, leaving a confirmed player in the lobby.
+		if topScreen:GetName() == "ScreenOnlineLobbies"
+			and preferred == "options"
+			and SCREENMAN and SCREENMAN.SetNewScreen then
+			self:MarkOptionsPresentedForCurrentSelection("direct_from_lobby_enter_transition", self.currentRoom)
+			if self.ClearFinalLeaderboardCache then
+				self:ClearFinalLeaderboardCache("new_song_options_navigation", self.currentRoomId)
+			end
+			self.onlineNavigationInFlightKey = navigationKey
+			self.onlineNavigationInFlightAt = now
+			online_flow_trace("lobby_enter_navigation_direct decisionId=" .. tostring(decisionId)
+				.. " target=" .. tostring(target)
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " phase=" .. tostring(roomPhase))
+			SCREENMAN:SetNewScreen(target)
+			return true
+		end
 		if preferred == "options" and not bridgeEvaluationThroughLobby then
 			self:MarkOptionsPresentedForCurrentSelection("retarget_in_flight_room_transition", self.currentRoom)
 			if self.ClearFinalLeaderboardCache then

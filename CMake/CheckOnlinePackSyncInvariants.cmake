@@ -53,6 +53,8 @@ foreach(REQUIRED_SNIPPET
     "room_snapshot_screen_enforcement"
     "navigate_retargeted_in_flight_transition"
     "evaluation_options_redirect_via_lobby"
+    "evaluation_room_navigation_direct"
+    "lobby_enter_navigation_direct"
     "EstimatedServerTimeMilliseconds"
     "profile-guid:v1:"
     "stored_token_binding_user_mismatch"
