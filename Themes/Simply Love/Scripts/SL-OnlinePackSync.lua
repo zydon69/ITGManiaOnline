@@ -1181,14 +1181,13 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 				return
 			end
 		end
-	-- A manager-browsing download is strictly local. It must never advertise a
-	-- transfer to the room: there is no selected chart to synchronize and doing
-	-- so can leave a member falsely stuck in `download_in_progress`.
+	-- Browsing has no selected chart to synchronize, but the lobby still needs
+	-- the member's pack-transfer state.  Otherwise other players retain a
+	-- stale "Pack inconnu" row after a background download completes.
+	-- Keep only chart-validation states local; transfer lifecycle states are
+	-- deliberately shared with the room.
 	local noActiveSelectionLocalOnly = currentSelectedAt == "" and (
-		self.activeBrowseOnlyDownload == true
-		or
-		status == self.status.DownloadedOk
-		or status == self.status.Ready
+		status == self.status.Ready
 		or status == self.status.SearchingLocalCharts
 		or status == self.status.LocalChartMatchFound
 		or status == self.status.NoCompatibleChartFound
@@ -2295,7 +2294,7 @@ local function request_json(url, callback, options)
 		})
 	end)
 	if not okRequest then
-		trace("HTTP JSON request failed url=" .. tostring(url) .. " err=" .. tostring(requestError))
+		trace("HTTP JSON request failed url=" .. tostring(url) .. " err=" .. tostring(requestOrError))
 		safe_invoke_callback(callback, false, nil, { errorMessage = "La requete StepManiaOnline a echoue." })
 	end
 end

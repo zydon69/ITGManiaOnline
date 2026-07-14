@@ -144,6 +144,7 @@ ITGOnline.songAvailabilityInFlightCallbacks = ITGOnline.songAvailabilityInFlight
 ITGOnline.songAvailabilityReportedKey = ITGOnline.songAvailabilityReportedKey or ""
 ITGOnline.songAvailabilitySuppressedUntil = ITGOnline.songAvailabilitySuppressedUntil or {}
 ITGOnline.songAvailabilityFailureDedupSeconds = ITGOnline.songAvailabilityFailureDedupSeconds or 5
+ITGOnline.songAvailabilityGeneration = ITGOnline.songAvailabilityGeneration or 0
 ITGOnline.songSelectionInFlightKey = ITGOnline.songSelectionInFlightKey or ""
 ITGOnline.songSelectionInFlightCallbacks = ITGOnline.songSelectionInFlightCallbacks or {}
 ITGOnline.songSelectionTransitionInFlight = ITGOnline.songSelectionTransitionInFlight or false
@@ -237,6 +238,7 @@ ITGOnline.heartbeatThrottleLogAt = ITGOnline.heartbeatThrottleLogAt or 0
 ITGOnline.heartbeatThrottleLogCount = ITGOnline.heartbeatThrottleLogCount or 0
 ITGOnline.lobbyRefreshQueuedReason = ITGOnline.lobbyRefreshQueuedReason or ""
 ITGOnline.lobbyRefreshQueuedAt = ITGOnline.lobbyRefreshQueuedAt or 0
+ITGOnline.lobbyRefreshQueuedForceFresh = ITGOnline.lobbyRefreshQueuedForceFresh or false
 ITGOnline.fileHashCache = ITGOnline.fileHashCache or {}
 ITGOnline.fileHashCacheTtlSeconds = ITGOnline.fileHashCacheTtlSeconds or 30
 ITGOnline.onlineFlowTraceThrottle = ITGOnline.onlineFlowTraceThrottle or {}
@@ -1213,6 +1215,31 @@ local function room_member_status_summary(room)
 		.. " play={" .. sorted_count_summary(playCounts) .. "}"
 end
 
+-- A room event can alter a single member's pack state without changing the
+-- room phase, selection, or aggregate status counts.  Keep a deterministic
+-- per-member fingerprint so those authoritative updates are never discarded
+-- as duplicate snapshots.
+local function room_member_sync_snapshot_key(room)
+	local parts = {}
+	for member in ivalues(online_values(room and room.members or {})) do
+		local user = member.user or member
+		local userId = tostring(user.id or member.user_id or member.userId or "")
+		parts[#parts + 1] = table.concat({
+			userId,
+			tostring(member.role or ""),
+			tostring(member.pack_sync_status or member.packSyncStatus or ""),
+			tostring(member.pack_sync_sequence or member.packSyncSequence or ""),
+			tostring(member.pack_sync_download_progress or member.packSyncDownloadProgress or ""),
+			tostring(member.pack_sync_updated_at or member.packSyncUpdatedAt or ""),
+			tostring(member.song_available == true or member.songAvailable == true),
+			tostring(member.missing_song == true or member.missingSong == true),
+			tostring(member.missing_song_reason or member.missingSongReason or ""),
+		}, ":")
+	end
+	table.sort(parts)
+	return table.concat(parts, ",")
+end
+
 local function room_ready_summary(room)
 	local counts = {}
 	for ready in ivalues(online_values(room and room.ready_states or {})) do
@@ -1257,6 +1284,7 @@ local function room_transition_key(room)
 		tostring(room.started_at_ms or room.started_at or ""),
 		tostring(playState.version_ms or ""),
 		room_member_status_summary(room),
+		"member_sync={" .. room_member_sync_snapshot_key(room) .. "}",
 		"ready={" .. room_ready_summary(room) .. "}",
 		"final={" .. room_final_results_summary(room) .. "}",
 	}, "|")
@@ -2274,6 +2302,7 @@ function ITGOnline:InvalidateAuthenticatedSession(reason, payload)
 	self.lobbyRefreshQueued = false
 	self.lobbyRefreshQueuedReason = ""
 	self.lobbyRefreshQueuedAt = 0
+	self.lobbyRefreshQueuedForceFresh = false
 	self.lobbyRefreshDeferredScheduled = false
 	self.heartbeatInFlight = false
 	self.heartbeatQueuedStatus = nil
@@ -2494,9 +2523,7 @@ function ITGOnline:ResetRealtimeState()
 	self.pendingLiveScoreSnapshot = nil
 	self.pendingLiveScoreRoundKey = ""
 	self.liveScoreInFlight = false
-	self.songAvailabilityInFlightKey = ""
-	self.songAvailabilityInFlightCallbacks = {}
-	self.songAvailabilitySuppressedUntil = {}
+	self:InvalidateSongAvailabilityRequests("realtime_state_reset")
 end
 
 function ITGOnline:ScheduleRealtimeReconnect(reason)
@@ -2924,6 +2951,7 @@ function ITGOnline:SuppressAutomaticLobbyRefresh(seconds, reason)
 			tonumber(self.lobbyRefreshDropUntil) or 0,
 			GetTimeSinceStart() + duration)
 		self.lobbyRefreshQueued = false
+		self.lobbyRefreshQueuedForceFresh = false
 		self.lobbyRefreshDeferredScheduled = false
 		online_flow_trace("lobby_refresh_auto_suppressed duration=" .. tostring(duration)
 			.. " reason=" .. tostring(reason or "unknown"))
@@ -2949,6 +2977,7 @@ function ITGOnline:ClearLobbyRefreshSuppression(reason)
 		self.lobbyRefreshDeferredScheduled = false
 		self.deferredLobbyRefreshReason = ""
 		self.lobbyRefreshQueued = false
+		self.lobbyRefreshQueuedForceFresh = false
 		online_flow_trace("lobby_refresh_suppression_cleared reason=" .. tostring(reason or "unknown")
 			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 			.. " screen=" .. tostring(self.currentScreenName or "nil"))
@@ -4559,6 +4588,18 @@ function ITGOnline:ClearActiveGameplayRound(source)
 	self.onlineGameplayEvaluationReturnedKey = ""
 end
 
+function ITGOnline:InvalidateSongAvailabilityRequests(reason)
+	local previousGeneration = tonumber(self.songAvailabilityGeneration) or 0
+	self.songAvailabilityGeneration = previousGeneration + 1
+	self.songAvailabilityInFlightKey = ""
+	self.songAvailabilityInFlightCallbacks = {}
+	self.songAvailabilityReportedKey = ""
+	self.songAvailabilitySuppressedUntil = {}
+	online_flow_trace("song_availability_invalidated reason=" .. tostring(reason or "unknown")
+		.. " previousGeneration=" .. tostring(previousGeneration)
+		.. " generation=" .. tostring(self.songAvailabilityGeneration))
+end
+
 function ITGOnline:ResetOnlineRoundRuntimeState(source)
 	local previousActiveRoundKey = tostring(self.activeGameplayRoundKey or "")
 	local previousRoomRoundKey = tostring(self.currentRoomRoundKey or "")
@@ -4576,10 +4617,7 @@ function ITGOnline:ResetOnlineRoundRuntimeState(source)
 	self.songLoadedAckKey = ""
 	self.songLoadedInFlightKey = ""
 	self.songLoadedPendingCallbacks = {}
-	self.songAvailabilityInFlightKey = ""
-	self.songAvailabilityInFlightCallbacks = {}
-	self.songAvailabilityReportedKey = ""
-	self.songAvailabilitySuppressedUntil = {}
+	self:InvalidateSongAvailabilityRequests("round_runtime_state_reset:" .. tostring(source or "unknown"))
 	self.startScheduleAckKey = ""
 	self.startScheduleAckInFlightKey = ""
 	self.onlineGameplayEnteredKey = ""
@@ -4732,6 +4770,7 @@ function ITGOnline:ClearSelectedSongForLobby(source, shouldBroadcast)
 	self.currentRoom.selected_song = nil
 	self.currentSongPayload = nil
 	self.currentRoomRoundKey = ""
+	self:InvalidateSongAvailabilityRequests("lobby_song_clear:" .. tostring(source or "unknown"))
 	self:ClearActiveGameplayRound(tostring(source or "lobby_song_clear"))
 	if type(self.currentRoom.ready_states) == "table" and #self.currentRoom.ready_states > 0 then
 		self.currentRoom.ready_states = {}
@@ -8105,6 +8144,7 @@ function ITGOnline:Disconnect(options)
 	self.lobbyRefreshQueued = false
 	self.lobbyRefreshQueuedReason = ""
 	self.lobbyRefreshQueuedAt = 0
+	self.lobbyRefreshQueuedForceFresh = false
 	self.lobbyRefreshInFlight = false
 	self.lobbyRefreshDeferredScheduled = false
 	self.scheduledStartLocalTime = nil
@@ -8114,10 +8154,7 @@ function ITGOnline:Disconnect(options)
 	self.songLoadedAckKey = ""
 	self.songLoadedInFlightKey = ""
 	self.songLoadedPendingCallbacks = {}
-	self.songAvailabilityInFlightKey = ""
-	self.songAvailabilityInFlightCallbacks = {}
-	self.songAvailabilityReportedKey = ""
-	self.songAvailabilitySuppressedUntil = {}
+	self:InvalidateSongAvailabilityRequests("disconnect")
 	self.songSelectionInFlightKey = ""
 	self.startScheduleAckKey = ""
 	self.startScheduleAckInFlightKey = ""
@@ -9679,10 +9716,7 @@ function ITGOnline:CancelSongSelection(callback)
 			self.songLoadedAckKey = ""
 			self.songLoadedInFlightKey = ""
 			self.songLoadedPendingCallbacks = {}
-			self.songAvailabilityInFlightKey = ""
-			self.songAvailabilityInFlightCallbacks = {}
-			self.songAvailabilityReportedKey = ""
-			self.songAvailabilitySuppressedUntil = {}
+			self:InvalidateSongAvailabilityRequests("song_selection_cancelled")
 			self.startScheduleAckKey = ""
 			self.startScheduleAckInFlightKey = ""
 			self.readyRequestBlockedErrors = {}
@@ -13591,6 +13625,7 @@ function ITGOnline:ResetPostRoomExitLobbyRefreshState(reason)
 	self.lobbyRefreshQueued = false
 	self.lobbyRefreshQueuedReason = ""
 	self.lobbyRefreshQueuedAt = 0
+	self.lobbyRefreshQueuedForceFresh = false
 	self.lobbyRefreshDeferredScheduled = false
 	self.deferredLobbyRefreshReason = ""
 	self.deferredLobbyRefreshRoomUiGeneration = nil
@@ -13710,18 +13745,25 @@ function ITGOnline:QueueLobbyRefresh(options)
 			.. " autoSuppressed=" .. tostring(self:IsAutomaticLobbyRefreshSuppressed() == true)
 			.. " suppressed=" .. tostring(self:IsLobbyRefreshSuppressed() == true))
 		if forceFresh then
-			self.lobbyRefreshGeneration = (tonumber(self.lobbyRefreshGeneration) or 0) + 1
 			self.lobbyRefreshSuppressedUntil = nil
 			self.lobbyRefreshDropUntil = nil
 			if self.lobbyRefreshInFlight then
-				online_flow_trace("lobby_refresh_force_fresh_reset_inflight reason=" .. refreshReason
+				local previousReason = tostring(self.lobbyRefreshQueuedReason or "")
+				self.lobbyRefreshQueued = true
+				self.lobbyRefreshQueuedReason = refreshReason
+				self.lobbyRefreshQueuedAt = GetTimeSinceStart()
+				self.lobbyRefreshQueuedForceFresh = true
+				online_flow_trace("lobby_refresh_force_fresh_queued reason=" .. refreshReason
 					.. " queuedReason=" .. tostring(self.lobbyRefreshQueuedReason or "nil")
+					.. " previousReason=" .. tostring(previousReason ~= "" and previousReason or "nil")
 					.. " screen=" .. refreshScreen)
-				self.lobbyRefreshInFlight = false
+				return
 			end
+			self.lobbyRefreshGeneration = (tonumber(self.lobbyRefreshGeneration) or 0) + 1
 			self.lobbyRefreshQueued = false
 			self.lobbyRefreshQueuedReason = ""
 			self.lobbyRefreshQueuedAt = 0
+			self.lobbyRefreshQueuedForceFresh = false
 			self.lobbyRefreshDeferredScheduled = false
 			self.deferredLobbyRefreshReason = ""
 			self.deferredLobbyRefreshRoomUiGeneration = nil
@@ -13774,6 +13816,7 @@ function ITGOnline:QueueLobbyRefresh(options)
 			self.lobbyRefreshQueued = true
 			self.lobbyRefreshQueuedReason = refreshReason
 			self.lobbyRefreshQueuedAt = GetTimeSinceStart()
+			self.lobbyRefreshQueuedForceFresh = self.lobbyRefreshQueuedForceFresh == true or forceFresh
 			online_flow_trace("lobby_refresh_join_inflight queued=true"
 				.. " reason=" .. refreshReason
 				.. " previousReason=" .. tostring(previousReason ~= "" and previousReason or "nil"))
@@ -13868,11 +13911,21 @@ function ITGOnline:QueueLobbyRefresh(options)
 			end
 		if self.lobbyRefreshQueued and not self.disconnecting then
 			local queuedReason = tostring(self.lobbyRefreshQueuedReason or "")
+			local queuedForceFresh = self.lobbyRefreshQueuedForceFresh == true
 			self.lobbyRefreshQueued = false
 			self.lobbyRefreshQueuedReason = ""
 			self.lobbyRefreshQueuedAt = 0
+			self.lobbyRefreshQueuedForceFresh = false
 			online_flow_trace("lobby_refresh_replay_coalesced reason=" .. tostring(queuedReason ~= "" and queuedReason or "queued_after_response"))
-			self:ScheduleCoalescedLobbyRefresh("queued_after_response:" .. tostring(queuedReason ~= "" and queuedReason or "unknown"))
+			if queuedForceFresh then
+				self:QueueLobbyRefresh({
+					reason = queuedReason ~= "" and queuedReason or "queued_after_response",
+					forceFresh = true,
+					ignoreSuppression = true,
+				})
+			else
+				self:ScheduleCoalescedLobbyRefresh("queued_after_response:" .. tostring(queuedReason ~= "" and queuedReason or "unknown"))
+			end
 		end
 	end)
 end
@@ -14241,6 +14294,7 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		safe_callback(callback, true, nil, { duplicate = true, suppressed = true })
 		return
 	end
+	local availabilityGeneration = tonumber(self.songAvailabilityGeneration) or 0
 	self.songAvailabilityInFlightKey = availabilityKey
 	self.songAvailabilityInFlightCallbacks = callback and { callback } or {}
 	online_flow_trace("song_availability_request key=" .. tostring(availabilityKey)
@@ -14252,6 +14306,14 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		.. " chartHash=" .. tostring(payload.chart_hash or "nil"))
 
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/song-availability", payload, function(ok, decoded, response)
+		if availabilityGeneration ~= (tonumber(self.songAvailabilityGeneration) or 0) then
+			online_flow_trace("song_availability_response_ignored reason=invalidated_request"
+				.. " key=" .. tostring(availabilityKey)
+				.. " requestGeneration=" .. tostring(availabilityGeneration)
+				.. " currentGeneration=" .. tostring(self.songAvailabilityGeneration)
+				.. " status=" .. tostring(response and response.statusCode or "nil"))
+			return
+		end
 		local callbacks = self.songAvailabilityInFlightCallbacks or {}
 		local availabilityResult = decoded and decoded.song_availability or nil
 		local ignored = ok and availabilityResult and availabilityResult.applied == false

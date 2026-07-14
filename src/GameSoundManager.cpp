@@ -1479,17 +1479,26 @@ void GameSoundManager::Update(float fDeltaTime) {
     const float fDiff = fExpectedTimePassed - fSoundTimePassed;
 
     static std::string sLastFile = "";
+    static RageTimer sLastSkipLog;
+    static int sSuppressedSkipLogs = 0;
     const std::string ThisFile = g_Playing->m_Music->GetLoadedFilePath();
 
     /* If fSoundTimePassed < 0, the sound has probably looped. */
     if (sLastFile == ThisFile && fSoundTimePassed >= 0 &&
         std::abs(fDiff) > 0.003f) {
-      if (LOG != nullptr) {
+      // A paused preview can report the same position every frame. Preserve
+      // diagnostics without allowing that expected state to flood the log.
+      if (LOG != nullptr && sLastSkipLog.Ago() >= 1.0f) {
         LOG->Trace(
             "Song position skip in %s: expected %.3f, got %.3f (cur %f, prev %f) "
-            "(%.3f difference)",
+            "(%.3f difference, coalesced=%d)",
             Basename(ThisFile).c_str(), fExpectedTimePassed, fSoundTimePassed,
-            fSeconds, GAMESTATE->m_Position.m_fMusicSeconds, fDiff);
+            fSeconds, GAMESTATE->m_Position.m_fMusicSeconds, fDiff,
+            sSuppressedSkipLogs);
+        sSuppressedSkipLogs = 0;
+        sLastSkipLog.Touch();
+      } else {
+        ++sSuppressedSkipLogs;
       }
     }
     sLastFile = ThisFile;
