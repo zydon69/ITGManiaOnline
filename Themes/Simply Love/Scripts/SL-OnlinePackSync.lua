@@ -44,6 +44,7 @@ PackSync.lastResetAt = tonumber(PackSync.lastResetAt) or 0
 PackSync.lastNoSongClearResetAt = tonumber(PackSync.lastNoSongClearResetAt) or 0
 PackSync.lastNoSongClearResetReason = PackSync.lastNoSongClearResetReason or ""
 PackSync.lastDeferredLocalMatchTraceKey = PackSync.lastDeferredLocalMatchTraceKey or ""
+PackSync.lastDeferredApplyKey = PackSync.lastDeferredApplyKey or ""
 PackSync.maxDownloadBytes = 5 * 1024 * 1024 * 1024
 
 PackSync.status = {
@@ -2033,6 +2034,35 @@ function PackSync:FindLocalMatch(songInfo)
 end
 
 function PackSync:ApplySelectedChart(songInfo)
+	-- A download owns the song scan until its reload/validation finishes.  Room
+	-- snapshots can repeat while that happens; do not rescan or re-log the same
+	-- selected chart for the same in-flight transfer.
+	if self:IsActiveDownload() and self.validatingPostReload ~= true then
+		local deferredKey = table.concat({
+			selected_at(songInfo),
+			self.downloadInFlightKey or "",
+			self.activeDownloadId or "",
+			self.currentStatus or "",
+		}, "|")
+		if self.lastDeferredApplyKey == deferredKey then
+			return false
+		end
+		self.lastDeferredApplyKey = deferredKey
+		trace("ApplySelectedChart deferred reason=active_download"
+			.. " title=" .. tostring(selected_title(songInfo))
+			.. " selected_at=" .. tostring(selected_at(songInfo))
+			.. " downloadKey=" .. tostring(self.downloadInFlightKey or "")
+			.. " activeDownloadId=" .. tostring(self.activeDownloadId or ""))
+		trace_online_state("apply_selected_chart_deferred", {
+			selected_at = selected_at(songInfo),
+			status = self.currentStatus or "nil",
+			reason = "download_in_progress",
+			outcome = "deferred_before_scan",
+		})
+		return false
+	end
+	self.lastDeferredApplyKey = ""
+
 	trace_online_state("apply_selected_chart_begin", {
 		selected_at = selected_at(songInfo),
 		title = selected_title(songInfo),
@@ -2132,6 +2162,16 @@ function PackSync:MarkLobbyReadyForSelectedSong(source, retrying)
 		trace("MarkLobbyReady skipped reason=phase_not_lobby source=" .. tostring(source or "unknown")
 			.. " phase=" .. tostring(phase))
 		return false
+	end
+	if ITGOnline.CurrentUserConfirmedSelectedSong then
+		local confirmed, confirmationReason = ITGOnline:CurrentUserConfirmedSelectedSong(ITGOnline.currentRoom)
+		if not confirmed then
+			trace("MarkLobbyReady skipped reason=local_song_not_confirmed"
+				.. " source=" .. tostring(source or "unknown")
+				.. " confirmation=" .. tostring(confirmationReason or "unknown")
+				.. " phase=" .. tostring(phase))
+			return false
+		end
 	end
 	trace("MarkLobbyReady begin source=" .. tostring(source or "unknown")
 		.. " retrying=" .. tostring(retrying == true)

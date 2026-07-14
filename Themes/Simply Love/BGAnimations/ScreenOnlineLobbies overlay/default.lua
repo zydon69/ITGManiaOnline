@@ -2702,6 +2702,12 @@ local function execute_player_action(option, user)
 	end
 end
 
+local function pack_choice_requires_selection()
+	return showing_pack_choice_menu
+		and pack_choice_browse_only ~= true
+		and joined_song_confirmed == true
+end
+
 local function close_pack_choice_menu(cancelPackChoice)
 	lobby_flow_trace("pack_choice_menu_close begin cancelPackChoice=" .. tostring(cancelPackChoice == true)
 		.. " showing=" .. tostring(showing_pack_choice_menu == true)
@@ -2747,10 +2753,17 @@ local function update_pack_choice_menu()
 	lobby_flow_trace("pack_choice_menu_update index=" .. tostring(pack_choice_index)
 		.. " candidates=" .. tostring(#pack_choice_candidates)
 		.. " browseOnly=" .. tostring(pack_choice_browse_only == true)
+		.. " requiresSelection=" .. tostring(pack_choice_requires_selection())
 		.. " message=" .. tostring(pack_choice_message or "nil"))
 		local title = menu:GetChild("PackChoiceTitle")
+		local hint = menu:GetChild("PackChoiceHint")
 		local options = menu:GetChild("PackChoiceOptions")
 		if title then title:settext("Choisir le pack a telecharger") end
+		if hint then
+			hint:settext(pack_choice_requires_selection()
+				and "&MENULEFT;/&MENURIGHT; pour choisir | &START; pour telecharger | choix obligatoire"
+				or "&MENULEFT;/&MENURIGHT; pour choisir | &START; pour telecharger | &SELECT; pour annuler")
+		end
 	if options then
 		local lines = {}
 		if pack_choice_message and trim_text(pack_choice_message) ~= "" then
@@ -2764,7 +2777,11 @@ local function update_pack_choice_menu()
 					.. " (" .. tostring(songsCount) .. " chansons)"
 		end
 		lines[#lines + 1] = ""
+		if pack_choice_requires_selection() then
+			lines[#lines + 1] = "Gauche/Droite pour choisir, START pour telecharger. Choix obligatoire avant expulsion."
+		else
 			lines[#lines + 1] = "Gauche/Droite pour choisir, START pour telecharger, Select pour annuler."
+		end
 		options:settext(table.concat(lines, "\n"))
 		end
 		menu:visible(true)
@@ -3143,8 +3160,17 @@ local function handle_pack_choice_menu_input(event)
 			end, { browseOnly = browseOnly, allowExistingDownloadKey = downloadKey })
 		end
 	elseif event.GameButton == "Select" or event.GameButton == "Back" then
-		play_online_sound_once("Common", "Cancel")
-		close_pack_choice_menu(true)
+		if pack_choice_requires_selection() then
+			lobby_flow_trace("input_pack_choice_menu_cancel_blocked reason=confirmed_selection_requires_choice"
+				.. " button=" .. tostring(event.GameButton)
+				.. " candidates=" .. tostring(#pack_choice_candidates)
+				.. " downloadKey=" .. tostring(pack_choice_download_key or ""))
+			play_online_sound_once("Common", "invalid")
+			update_pack_choice_menu()
+		else
+			play_online_sound_once("Common", "Cancel")
+			close_pack_choice_menu(true)
+		end
 	end
 	return false
 end
@@ -4340,7 +4366,12 @@ local af = Def.ActorFrame{
 			if speedMod ~= "" then optionParts[#optionParts+1] = speedMod end
 			local stepchart = abbreviate_stepchart(player.stepchart)
 			if stepchart ~= "" then optionParts[#optionParts+1] = stepchart end
-			if missing == "" and joined_song_preview ~= nil and player.songAvailable == false and not player_is_current_user(player) then
+			-- A background download leaves a short-lived downloaded_ok/ready status
+			-- while the manager is still browsing. songAvailable can still describe
+			-- the previous preview, so do not show a phantom active selection.
+			local syncCompleted = status == "downloaded_ok" or status == "ready"
+			if missing == "" and joined_song_preview ~= nil and player.songAvailable == false
+				and not syncCompleted and not player_is_current_user(player) then
 				missing = " - selection en cours"
 			end
 			local maxLineLen = 88

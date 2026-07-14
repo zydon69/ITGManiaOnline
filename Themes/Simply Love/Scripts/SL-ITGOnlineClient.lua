@@ -5029,6 +5029,21 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 		return
 	end
 
+	local songConfirmed, confirmationReason = self:CurrentUserConfirmedSelectedSong(room)
+	if not songConfirmed and self.songSelectedAutoReadyAwaitingConfirmationKey == key then
+		online_flow_trace("song_selected_auto_ready_skipped source=" .. tostring(source or "unknown")
+			.. " reason=awaiting_song_confirmation"
+			.. " key=" .. tostring(key)
+			.. " confirmation=" .. tostring(confirmationReason))
+		return
+	end
+	if songConfirmed and self.songSelectedAutoReadyAwaitingConfirmationKey == key then
+		self.songSelectedAutoReadyAwaitingConfirmationKey = ""
+		online_flow_trace("song_selected_auto_ready_confirmation_observed"
+			.. " key=" .. tostring(key)
+			.. " source=" .. tostring(source or "unknown"))
+	end
+
 	if self:IsCurrentUserReadyInRoom(room, "lobby_ready") then
 		if self.songSelectedAutoReadyCompletedKey ~= key then
 			online_flow_trace("song_selected_auto_ready_completed_by_snapshot source=" .. tostring(source or "unknown")
@@ -5082,7 +5097,20 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 			return
 		end
 
-	local currentPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
+		local availabilityRoom = (availabilityDecoded and availabilityDecoded.room) or self.currentRoom or room
+		local confirmedAfterAvailability, confirmationReasonAfterAvailability = self:CurrentUserConfirmedSelectedSong(availabilityRoom)
+		if not confirmedAfterAvailability then
+			self.songSelectedAutoReadyInFlightKey = ""
+			self.songSelectedAutoReadyAwaitingConfirmationKey = key
+			online_flow_trace("song_selected_auto_ready_waiting"
+				.. " key=" .. tostring(key)
+				.. " reason=local_song_not_confirmed"
+				.. " confirmation=" .. tostring(confirmationReasonAfterAvailability))
+			return
+		end
+		self.songSelectedAutoReadyAwaitingConfirmationKey = ""
+
+		local currentPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
 		if currentPhase ~= "lobby" and currentPhase ~= "lobby_ready" and currentPhase ~= "unknown" then
 			self.songSelectedAutoReadyInFlightKey = ""
 			self.songSelectedAutoReadyCompletedKey = key
@@ -9842,7 +9870,10 @@ function ITGOnline:PreviewSong(callback)
 			.. " room=" .. tostring(self.currentRoomId or "nil")
 			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
 			.. " screen=" .. tostring(self.currentScreenName or "nil"))
-		safe_callback(callback, false, nil, { errorMessage = "No selected song or chart." })
+		safe_callback(callback, false, {
+			skipped = true,
+			reason = "no_payload",
+		}, { errorMessage = "No selected song or chart.", skipped = true })
 		return
 	end
 

@@ -19,7 +19,8 @@ return Def.ActorFrame{
 		end
 	},
 	LoadFont("Common Normal")..{
-			Text="&MENULEFT;/&MENURIGHT; pour choisir | &START; pour telecharger | &SELECT; pour annuler",
+		Name="PackChoiceHint",
+		Text="",
 		InitCommand=function(self)
 			self:y(-114):zoom(0.5)
 		end

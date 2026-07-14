@@ -694,15 +694,18 @@ function maybe_preview_current_online_song(force)
 		.. " key=" .. tostring(key)
 		.. " force=" .. tostring(force == true))
 	local token = room_context_token("song_preview")
-	ITGOnline:PreviewSong(function(ok)
+	ITGOnline:PreviewSong(function(ok, decoded)
 		if not room_context_still_active(token, { phase = "lobby" }) then
 			online_flow_trace("song_preview_response_ignored reason=stale_context"
 				.. " key=" .. tostring(key))
 			return
 		end
-		online_flow_trace("song_preview_response room=" .. tostring(ITGOnline.currentRoomId or "nil")
+		local skipped = type(decoded) == "table" and decoded.skipped == true
+		online_flow_trace((skipped and "song_preview_skipped" or "song_preview_response")
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
 			.. " key=" .. tostring(key)
-			.. " ok=" .. tostring(ok == true))
+			.. " ok=" .. tostring(ok == true)
+			.. " reason=" .. tostring(skipped and decoded.reason or "nil"))
 		if ok then
 			lastSongPreviewKey = key
 			lastSongPreviewSentAt = now
@@ -1399,6 +1402,22 @@ SelectOnlineSongAsManager = function(actor)
 				return
 			end
 
+			local errorCode = tostring(decoded and decoded.error_code or response and response.error or "")
+			if errorCode == "ready_context_changed" then
+				safe_broadcast("OnlineOptionsRedirectWait", {
+					show=false,
+					reason="song_selection_context_synchronized",
+					roomId=ITGOnline and ITGOnline.currentRoomId or nil,
+					selectionKey=selectionKey,
+				})
+				online_flow_trace("song_selected_handler_deferred reason=ready_context_changed"
+					.. " status=" .. tostring(response and response.statusCode or "nil")
+					.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+					.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+				TransitionToOnlineOptions()
+				return
+			end
+
 			safe_broadcast("OnlineOptionsRedirectWait", {
 				show=false,
 				reason="song_selection_failed",
@@ -1406,7 +1425,7 @@ SelectOnlineSongAsManager = function(actor)
 				selectionKey=selectionKey,
 			})
 			online_flow_trace("song_selected_handler_failed status=" .. tostring(response and response.statusCode or "nil")
-				.. " error=" .. tostring(decoded and decoded.error_code or response and response.error or "nil"))
+				.. " error=" .. errorCode)
 			local message = (decoded and decoded.message) or (response and response.errorMessage) or "Echec de selection de la chanson."
 			if SCREENMAN and SCREENMAN.SystemMessage then
 				SCREENMAN:SystemMessage(message)
