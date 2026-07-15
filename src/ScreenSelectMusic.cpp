@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
+#include <cstdio>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -19,6 +22,7 @@
 #include "GameSoundManager.h"
 #include "GameState.h"
 #include "ImageCache.h"
+#include "IniFile.h"
 #include "InputEventPlus.h"
 #include "InputFilter.h"
 #include "InputMapper.h"
@@ -87,6 +91,49 @@ static LocalizedString PROMPT_BEFORE_EXITING(
 REGISTER_SCREEN_CLASS(ScreenSelectMusic);
 
 namespace {
+bool OnlineVerboseLogsEnabledFromThemePrefs() {
+  static time_t lastRead = 0;
+  static bool cached = false;
+
+  const time_t now = time(nullptr);
+  if (now == lastRead) {
+    return cached;
+  }
+
+  lastRead = now;
+  cached = false;
+  if (PREFSMAN == nullptr) {
+    return false;
+  }
+
+  IniFile ini;
+  if (!ini.ReadFile("Save/ThemePrefs.ini")) {
+    return false;
+  }
+
+  bool enabled = false;
+  if (!ini.GetValue(
+          PREFSMAN->m_sTheme, "ITGOnlineGameplayLayoutLogs", enabled)) {
+    return false;
+  }
+
+  cached = enabled;
+  return cached;
+}
+
+void OnlineTrace(const char* fmt, ...) {
+  if (LOG == nullptr || !OnlineVerboseLogsEnabledFromThemePrefs()) {
+    return;
+  }
+
+  va_list args;
+  va_start(args, fmt);
+  char buffer[2048];
+  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+  LOG->Trace("%s", buffer);
+}
+
 bool IsValidPlayer(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
 }
@@ -2016,8 +2063,14 @@ void ScreenSelectMusic::ReturnToOnlineLobbyFromMusicSelect() {
   StartTransitioningScreen(SM_GoToNextScreen);
 }
 
-bool ScreenSelectMusic::MenuBack(const InputEventPlus& /* input */) {
+bool ScreenSelectMusic::MenuBack(const InputEventPlus& input) {
   if (HasActiveITGOnlineRoom()) {
+    OnlineTrace("ITG Online: ScreenSelectMusic MenuBack source pn=%s menu=%s "
+                "type=%s device=%s.",
+                PlayerNumberToString(input.pn).c_str(),
+                GameButtonToString(INPUTMAPPER->GetInputScheme(), input.MenuI).c_str(),
+                InputEventTypeToString(input.type).c_str(),
+                input.DeviceI.ToString().c_str());
     ReturnToOnlineLobbyFromMusicSelect();
     return true;
   }

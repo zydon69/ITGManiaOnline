@@ -3272,7 +3272,14 @@ CreateOnlineHandler = function()
 								.. " cacheRows=" .. tostring(cache and cache.rows and #cache.rows or 0)
 								.. " cacheSource=" .. tostring(cache and cache.source or "nil"))
 						end
-						replace_online_input_callback(screen, "evaluation", EvaluationInputHandler)
+						-- ScreenEvaluation owns online exit input in native code and delegates
+						-- to ReturnToOnlineLobbyFromEvaluation. Registering a second Lua input
+						-- callback causes the same press to be processed twice.
+						local callback = onlineInputCallbacks.evaluation
+						if callback and callback.screen and callback.handler and callback.screen.RemoveInputCallback then
+							pcall(function() callback.screen:RemoveInputCallback(callback.handler) end)
+						end
+						onlineInputCallbacks.evaluation = nil
 					end
 
 					if syncLockScreens[screenName] then

@@ -5287,7 +5287,7 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 			.. " incomingSelectionId=" .. tostring(room.current_selection_id or room.currentSelectionId or "nil")
 			.. " previousSelectionId=" .. tostring(previousRoom and (previousRoom.current_selection_id or previousRoom.currentSelectionId) or "nil"))
 		return self.currentRoom
-	elseif incomingRoomVersion > 0 and roomVersionKey ~= "" then
+	elseif incomingRoomVersion > previousRoomVersion and roomVersionKey ~= "" then
 		self.lastRoomVersionByRoomId[roomVersionKey] = incomingRoomVersion
 		online_flow_trace("room_snapshot_room_version_accepted source=" .. tostring(source or "unknown")
 			.. " room=" .. tostring(roomVersionKey)
@@ -5314,7 +5314,7 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 			.. " incomingPhase=" .. tostring(room.phase or "nil")
 			.. " previousPhase=" .. tostring(previousRoom.phase or "nil"))
 		room.play_state = previousRoom.play_state
-	elseif incomingPlayStateVersion > 0 and roomVersionKey ~= "" then
+	elseif incomingPlayStateVersion > previousPlayStateVersion and roomVersionKey ~= "" then
 		online_flow_trace("room_snapshot_play_state_version_accepted source=" .. tostring(source or "unknown")
 			.. " room=" .. tostring(roomVersionKey)
 			.. " incomingVersion=" .. tostring(incomingPlayStateVersion)
@@ -7948,12 +7948,20 @@ function ITGOnline:ConnectWebSocket(callbacks)
 							eventName = payload and (payload.event or payload.name) or "nil",
 							ok = handled == true,
 						})
-						if handled and normalizedPayload and normalizedPayload.id
+						-- Older servers did not expose requires_ack. Preserve compatibility
+						-- during a staggered rollout, while avoiding ACK traffic for events
+						-- that explicitly declare themselves volatile.
+						local requiresAck = normalizedPayload and normalizedPayload.requires_ack ~= false
+						if handled and normalizedPayload and normalizedPayload.id and requiresAck
 							and not normalizedPayload._itgOnlineAckHandled then
 							online_flow_trace("realtime_ack_begin id=" .. tostring(normalizedPayload.id)
 								.. " name=" .. tostring(normalizedPayload.event or normalizedPayload.name or "nil"))
 							self:SendRealtimeAck(normalizedPayload.id)
 							online_flow_trace("realtime_ack_end id=" .. tostring(normalizedPayload.id)
+								.. " name=" .. tostring(normalizedPayload.event or normalizedPayload.name or "nil"))
+						elseif handled and normalizedPayload and normalizedPayload.id and not requiresAck then
+							online_flow_trace("realtime_ack_skipped reason=event_does_not_require_ack id="
+								.. tostring(normalizedPayload.id)
 								.. " name=" .. tostring(normalizedPayload.event or normalizedPayload.name or "nil"))
 						elseif not handled then
 							online_trace("Realtime event handling failed before ack: " .. tostring(err))
@@ -12913,13 +12921,11 @@ function ITGOnline:PlayStateKeyIsValid(key)
 end
 
 function ITGOnline:PlayStateKey()
+	local roomKey = self:RoomSongRoundKey(self.currentRoom)
+	if roomKey ~= "" then return roomKey end
+
 	local song = self:CurrentSelectedSongPayload()
-	local selectedAt = song and (song.selected_at or song.selectedAt) or ""
-	return tostring(self.currentRoomId or "") .. "|"
-		.. tostring(song and (song.game_session_id or song.session_id or song.round_id or song.selected_song_id) or "") .. "|"
-		.. tostring(song and (song.song_hash or song.songHash) or "") .. "|"
-		.. tostring(song and song.chart_hash or "") .. "|"
-		.. tostring(selectedAt or "")
+	return self:SelectedSongRoundKey(song, self.currentRoomId)
 end
 
 function ITGOnline:MarkPlayEntered(callback)
@@ -13047,6 +13053,10 @@ function ITGOnline:MarkReturnedToLobby(callback)
 	if self:PlayStateKeyIsValid(key) then
 		self.onlineGameplayReturnedInFlightKey = key
 		self.onlineGameplayEvaluationShownKey = key
+		-- The local transition is already committed by the player. Mark that
+		-- intent before the HTTP round trip so the screen enforcer cannot reopen
+		-- evaluation while returned-to-lobby is in flight.
+		self.onlineGameplayEvaluationReturnedKey = key
 	end
 	self.onlineGameplayReturnedLocalRoomId = tostring(self.currentRoomId or "")
 	self.onlineGameplayReturnedLocalAt = GetTimeSinceStart()
@@ -13080,6 +13090,11 @@ function ITGOnline:MarkReturnedToLobby(callback)
 					.. " phase=" .. tostring(self.currentRoom.phase or "nil")
 					.. " roundKey=" .. tostring(key))
 			end
+		elseif self.onlineGameplayEvaluationReturnedKey == key then
+			-- A deterministic rejection must allow a later retry. Transport errors
+			-- are reconciled by the request layer and will call this callback only
+			-- after the operation is known not to have been accepted.
+			self.onlineGameplayEvaluationReturnedKey = ""
 		end
 		online_flow_trace("mark_returned_to_lobby_response room=" .. tostring(self.currentRoomId)
 			.. " roundKey=" .. tostring(key)

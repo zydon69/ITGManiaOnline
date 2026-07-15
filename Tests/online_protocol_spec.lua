@@ -100,6 +100,7 @@ equal(nonFiniteReason, "non_finite_number:room.server_time_ms", "non-finite numb
 local event = assert(protocol.normalize_event({
 	id = "00017",
 	event = "room.ready_updated",
+	requires_ack = false,
 	target = { id = "0009", type = "room" },
 	payload = {
 		room_id = "0009",
@@ -109,6 +110,16 @@ local event = assert(protocol.normalize_event({
 equal(event.id, "17", "event ID")
 equal(event.target.id, "9", "nested target ID")
 equal(event.payload.room_id, "9", "nested payload room ID")
+equal(event.requires_ack, false, "event acknowledgement contract")
+
+local invalidAckEvent, invalidAckReason = protocol.normalize_event({
+	id = "18",
+	event = "room.ready_updated",
+	requires_ack = "false",
+	payload = {},
+})
+equal(invalidAckEvent, nil, "invalid event acknowledgement rejection")
+equal(invalidAckReason, "invalid_event_requires_ack", "invalid event acknowledgement reason")
 
 local invalidEvent, invalidEventReason = protocol.normalize_event({
 	id = "18",

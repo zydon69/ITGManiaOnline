@@ -149,11 +149,20 @@ endif()
 
 foreach(REQUIRED_SNIPPET
     "terminal_download_status_is_not_preview_state"
-    "browse_reload_status_not_acknowledged"
-    "Retrying browse-only completion acknowledgement")
+    "browse_reload_status_not_acknowledged")
   string(FIND "${ONLINE_PACK_SYNC_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(FATAL_ERROR "Online pack completion invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "Retrying \" .. (browseOnly and \"browse-only\" or \"selected-song\")"
+    "PostReload completion acknowledgement failed; retaining transfer identity"
+    "Stale-selection completion acknowledgement failed; retaining transfer identity")
+  string(FIND "${ONLINE_PACK_SYNC_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(FATAL_ERROR "Online pack completion retry invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
 

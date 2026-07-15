@@ -269,6 +269,9 @@ local function normalize_event(event, alreadySanitized)
 	local name = normalized.event or normalized.name
 	if type(name) ~= "string" or name == "" or #name > 128 then return nil, "invalid_event_name" end
 	normalized.event = name
+	if normalized.requires_ack ~= nil and type(normalized.requires_ack) ~= "boolean" then
+		return nil, "invalid_event_requires_ack"
+	end
 	if normalized.payload == nil then normalized.payload = {} end
 	if type(normalized.payload) ~= "table" then return nil, "invalid_event_payload" end
 	if normalized.payload.room ~= nil then

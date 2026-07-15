@@ -12,6 +12,7 @@ local PackSync = ITGOnline.PackSync
 PackSync.scriptVersion = "2026-06-21-pack-status-download-sequence-v2"
 PackSync.statusChangedAt = PackSync.statusChangedAt or 0
 PackSync.currentStatusMessage = PackSync.currentStatusMessage or nil
+PackSync.currentStatusProgress = tonumber(PackSync.currentStatusProgress) or 0
 PackSync.watchdogLastKey = PackSync.watchdogLastKey or ""
 PackSync.watchdogTimeoutSeconds = PackSync.watchdogTimeoutSeconds or 25
 PackSync.activeBrowseOnlyDownload = PackSync.activeBrowseOnlyDownload or false
@@ -39,6 +40,7 @@ PackSync.lastAppliedLocalStatusSignature = PackSync.lastAppliedLocalStatusSignat
 PackSync.lastAppliedLocalStatusAt = tonumber(PackSync.lastAppliedLocalStatusAt) or 0
 PackSync.localStatusDuplicateSuppressSeconds = tonumber(PackSync.localStatusDuplicateSuppressSeconds) or 0.35
 PackSync.statusPostDuplicateHeartbeatSeconds = tonumber(PackSync.statusPostDuplicateHeartbeatSeconds) or 5.0
+PackSync.downloadHeartbeatSeconds = tonumber(PackSync.downloadHeartbeatSeconds) or 10.0
 PackSync.lastManagerBrowsingPreviewPostKey = PackSync.lastManagerBrowsingPreviewPostKey or ""
 PackSync.lastManagerBrowsingPreviewPostAt = tonumber(PackSync.lastManagerBrowsingPreviewPostAt) or 0
 PackSync.managerBrowsingPreviewDuplicateSuppressSeconds = tonumber(PackSync.managerBrowsingPreviewDuplicateSuppressSeconds) or 1.5
@@ -1394,6 +1396,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		end
 		self.currentStatus = status
 		self.currentStatusMessage = message
+		self.currentStatusProgress = tonumber(progress) or self.currentStatusProgress or 0
 		self.statusChangedAt = now
 		if MESSAGEMAN then
 			local activeRoomId = ITGOnline and ITGOnline.currentRoomId or nil
@@ -1527,6 +1530,7 @@ function PackSync:ApplyLocalStatus(status, message, progress)
 		.. " browseOnly=" .. tostring(self.activeBrowseOnlyDownload == true))
 	self.currentStatus = status
 	self.currentStatusMessage = message
+	self.currentStatusProgress = tonumber(progress) or self.currentStatusProgress or 0
 	local now = GetTimeSinceStart and GetTimeSinceStart() or 0
 	self.statusChangedAt = now
 	local localSignature = table.concat({
@@ -1566,28 +1570,32 @@ end
 
 function PackSync:WatchdogTick()
 	local status = tostring(self.currentStatus or self.status.Unknown)
-	if status == self.status.DownloadedOk
-		and self.pendingPostReloadSongInfo ~= nil
-		and self.pendingPostReloadBrowseOnly == true then
+	if status == self.status.DownloadedOk and self.pendingPostReloadSongInfo ~= nil then
 		local now = GetTimeSinceStart()
 		if now >= (tonumber(self.pendingBrowseCompletionRetryAt) or 0)
-			and tostring(self.statusPostInFlightSignature or "") == "" then
+		and tostring(self.statusPostInFlightSignature or "") == "" then
 			self.pendingBrowseCompletionRetryAt = now + 5.25
 			self.pendingBrowseCompletionRetryCount = (tonumber(self.pendingBrowseCompletionRetryCount) or 0) + 1
-			trace("Retrying browse-only completion acknowledgement attempt="
+			local browseOnly = self.pendingPostReloadBrowseOnly == true
+			trace("Retrying " .. (browseOnly and "browse-only" or "selected-song")
+				.. " completion acknowledgement attempt="
 				.. tostring(self.pendingBrowseCompletionRetryCount)
 				.. " downloadId=" .. tostring(self.activeDownloadId or self.lastDownloadId or ""))
-			self:UpdateStatus(self.status.DownloadedOk,
-				"Pack telecharge. En attente du choix de chanson du manager.", 100,
-				function(statusOk, decoded, response)
-					trace("Browse-only completion retry response ok=" .. tostring(statusOk == true)
-						.. " status=" .. tostring(response and response.statusCode or "nil")
-						.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
-					if statusOk then
-						self:CompletePendingPostReload(true, "Pack telecharge et valide apres reload.",
-							"browse_reload_validation_retry_ok")
-					end
-				end)
+			if browseOnly then
+				self:UpdateStatus(self.status.DownloadedOk,
+					"Pack telecharge. En attente du choix de chanson du manager.", 100,
+					function(statusOk, decoded, response)
+						trace("Browse-only completion retry response ok=" .. tostring(statusOk == true)
+							.. " status=" .. tostring(response and response.statusCode or "nil")
+							.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
+						if statusOk then
+							self:CompletePendingPostReload(true, "Pack telecharge et valide apres reload.",
+								"browse_reload_validation_retry_ok")
+						end
+					end)
+			else
+				self:ValidatePendingPostReload()
+			end
 		end
 		return
 	end
@@ -1605,6 +1613,19 @@ function PackSync:WatchdogTick()
 	if not watchable then return end
 
 	local now = GetTimeSinceStart()
+	if status == self.status.DownloadInProgress
+		and early_trim(self.activeDownloadId) ~= ""
+		and tostring(self.statusPostInFlightSignature or "") == ""
+		and (now - (tonumber(self.lastPostedStatusAt) or 0)) >= (tonumber(self.downloadHeartbeatSeconds) or 10.0)
+	then
+		trace("Download heartbeat status=" .. tostring(status)
+			.. " progress=" .. tostring(self.currentStatusProgress or 0)
+			.. " downloadId=" .. tostring(self.activeDownloadId))
+		self:UpdateStatus(status, self.currentStatusMessage, self.currentStatusProgress, nil, {
+			downloadId = self.activeDownloadId,
+			downloadSelectionId = self.activeDownloadSelectionId,
+		})
+	end
 	local age = now - (tonumber(self.statusChangedAt) or 0)
 	local timeout = tonumber(self.watchdogTimeoutSeconds) or 25
 	if status == self.status.DownloadInProgress then
@@ -1778,6 +1799,7 @@ function PackSync:ResetLocalState(reason)
 	self.lastNoSongClearResetAt = now
 	self.lastNoSongClearResetReason = normalizedReason
 	self.localScanCache = {}
+	self.lastCachedTerminalScanTraceKey = ""
 	self.browsePreviewPackKey = ""
 	self.downloadInFlightKey = nil
 	self.downloadStartedAt = nil
@@ -1859,6 +1881,7 @@ function PackSync:InvalidateLocalChartIndex()
 	self.localChartIndex = nil
 	self.localChartIndexKey = nil
 	self.localScanCache = {}
+	self.lastCachedTerminalScanTraceKey = ""
 end
 
 function PackSync:LocalChartIndex()
@@ -2027,13 +2050,16 @@ function PackSync:FindLocalMatch(songInfo)
 			matchMessage = cachedScan.matchMessage,
 		}
 	elseif cachedScan and cachedScan.ok == false then
-		trace("Local chart scan reused cached terminal result title=" .. selected_title(songInfo)
-			.. " status=" .. tostring(cachedScan.status)
-			.. " reason=" .. tostring(cachedScan.reason))
-		if cachedScan.status == "mismatch" then
-			self:ApplyLocalStatus(self.status.ChartMismatch, cachedScan.message)
-		else
-			self:ApplyLocalStatus(self.status.NoCompatibleChartFound, cachedScan.message)
+		if self.lastCachedTerminalScanTraceKey ~= scanKey then
+			self.lastCachedTerminalScanTraceKey = scanKey
+			trace("Local chart scan reused cached terminal result title=" .. selected_title(songInfo)
+				.. " status=" .. tostring(cachedScan.status)
+				.. " reason=" .. tostring(cachedScan.reason))
+		end
+		local cachedStatus = cachedScan.status == "mismatch"
+			and self.status.ChartMismatch or self.status.NoCompatibleChartFound
+		if self.currentStatus ~= cachedStatus or self.currentStatusMessage ~= cachedScan.message then
+			self:ApplyLocalStatus(cachedStatus, cachedScan.message)
 		end
 		return {
 			ok = false,
@@ -3772,26 +3798,47 @@ function PackSync:ValidatePendingPostReload()
 				.. " currentTitle=" .. tostring(selected_title(currentSelectedSong))
 				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 				.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
-			self:UpdateStatus(self.status.DownloadedOk, "Pack telecharge. En attente du choix de chanson du manager.", 100)
-			if MESSAGEMAN then
-				MESSAGEMAN:Broadcast("OnlinePackDownloaded", { songInfo = songInfo, staleSelection = true })
-			end
-				if currentSelectedSong and currentSelectedAt ~= "" then
+			self:UpdateStatus(self.status.DownloadedOk,
+				"Pack telecharge. En attente du choix de chanson du manager.", 100,
+				function(statusOk, statusDecoded, statusResponse)
+					if not statusOk then
+						trace("Stale-selection completion acknowledgement failed; retaining transfer identity"
+							.. " status=" .. tostring(statusResponse and statusResponse.statusCode or "nil")
+							.. " error=" .. tostring(statusDecoded and statusDecoded.error_code
+								or statusResponse and statusResponse.errorMessage or "nil"))
+						return
+					end
+					if MESSAGEMAN then
+						MESSAGEMAN:Broadcast("OnlinePackDownloaded", { songInfo = songInfo, staleSelection = true })
+					end
+					complete_pending(true, "Pack telecharge et valide apres reload.",
+						"selected_reload_validation_stale_selection")
+				end)
+			if currentSelectedSong and currentSelectedAt ~= "" then
 					trace("Applying current manager selection after stale-selection download completion"
 					.. " currentSelectedAt=" .. tostring(currentSelectedAt)
 					.. " currentTitle=" .. tostring(selected_title(currentSelectedSong))
 					.. " currentPack=" .. tostring(selected_pack(currentSelectedSong)))
 					self:ApplySelectedChart(currentSelectedSong)
-				end
-				complete_pending(true, "Pack telecharge et valide apres reload.", "selected_reload_validation_stale_selection")
-				return true
+			end
+			return true
 			end
 
-		self:UpdateStatus(self.status.DownloadedOk, nil, 100)
-		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
-			ITGOnline:ConfirmSelectedSongAvailability("downloaded_ok", function(ok, decoded, response)
+		self:UpdateStatus(self.status.DownloadedOk, nil, 100, function(statusOk, statusDecoded, statusResponse)
+			if not statusOk then
+				trace("PostReload completion acknowledgement failed; retaining transfer identity"
+					.. " status=" .. tostring(statusResponse and statusResponse.statusCode or "nil")
+					.. " error=" .. tostring(statusDecoded and statusDecoded.error_code or statusResponse and statusResponse.errorMessage or "nil"))
+				return
+			end
+			if MESSAGEMAN then
+				MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
+			end
+
+			if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
+				ITGOnline:ConfirmSelectedSongAvailability("downloaded_ok", function(ok, decoded, response)
 				local confirmed, deferred, availabilityReason = availability_confirmation_state(ok, decoded, response)
-				trace("PostReload availability confirmed ok=" .. tostring(confirmed)
+				trace("PostReload availability result confirmed=" .. tostring(confirmed)
 					.. " deferred=" .. tostring(deferred)
 					.. " reason=" .. tostring(availabilityReason)
 					.. " source=downloaded_ok")
@@ -3799,15 +3846,14 @@ function PackSync:ValidatePendingPostReload()
 					self:UpdateStatus(self.status.Ready, nil)
 					self:MarkLobbyReadyForSelectedSong("downloaded_ok")
 				end
-			end)
-		else
-			self:UpdateStatus(self.status.Ready, nil)
-			self:MarkLobbyReadyForSelectedSong("downloaded_ok_no_client_confirm")
-		end
-		if MESSAGEMAN then
-			MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
-		end
-		complete_pending(true, "Pack telecharge et valide apres reload.", "selected_reload_validation_ok")
+					complete_pending(true, "Pack telecharge et valide apres reload.", "selected_reload_validation_ok")
+				end)
+			else
+				self:UpdateStatus(self.status.Ready, nil)
+				self:MarkLobbyReadyForSelectedSong("downloaded_ok_no_client_confirm")
+				complete_pending(true, "Pack telecharge et valide apres reload.", "selected_reload_validation_ok")
+			end
+		end)
 		return true
 	end
 
