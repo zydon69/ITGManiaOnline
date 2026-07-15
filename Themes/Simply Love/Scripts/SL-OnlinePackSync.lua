@@ -2752,15 +2752,64 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 	end
 
 	if chartKey ~= "" then
+		local completed = false
+		local chartLookupDone = false
+		local catalogLookupDone = false
+		local catalogResult = nil
+		local function finish_once(ok, result, details, source)
+			if completed then
+				trace("SMO parallel lookup ignored late result source=" .. tostring(source or "unknown")
+					.. " ok=" .. tostring(ok == true))
+				return false
+			end
+			completed = true
+			trace("SMO parallel lookup resolved source=" .. tostring(source or "unknown")
+				.. " ok=" .. tostring(ok == true)
+				.. " candidates=" .. tostring(details and details.candidates and #details.candidates or 0))
+			callback(ok, result, details)
+			return true
+		end
+		local function finish_catalog_if_available()
+			if not catalogLookupDone or not catalogResult then return false end
+			return finish_once(
+				catalogResult.ok,
+				catalogResult.result,
+				catalogResult.details,
+				"catalog_after_chart")
+		end
+
+		-- A missing chart-key endpoint used to delay the catalog search by a
+		-- complete network round trip.  Both lookups are independent and either
+		-- may safely produce the exact pack or a bounded user choice.
+		self:SearchStepManiaOnline({
+			title = title,
+			artist = artist,
+			pack = pack,
+			songPath = selected_path(songInfo),
+		}, function(ok, result, details)
+			catalogLookupDone = true
+			catalogResult = { ok = ok, result = result, details = details }
+			local hasCandidates = type(details) == "table"
+				and type(details.candidates) == "table"
+				and #details.candidates > 0
+			trace("SMO parallel catalog result ok=" .. tostring(ok == true)
+				.. " candidates=" .. tostring(hasCandidates and #details.candidates or 0)
+				.. " chartLookupDone=" .. tostring(chartLookupDone))
+			if ok or hasCandidates or chartLookupDone then
+				finish_once(ok, result, details, "catalog")
+			end
+		end)
+
 		trace("SMO chart_key lookup begin chartKey=" .. tostring(chartKey))
 		request_json(origin .. "/api/chart/key/" .. path_escape(chartKey), function(ok, chartDecoded)
+			chartLookupDone = true
 			trace("SMO chart_key lookup result ok=" .. tostring(ok == true)
 				.. " commonPacks=" .. tostring(chartDecoded and chartDecoded.common_packs and #chartDecoded.common_packs or 0)
 				.. " chartKey=" .. tostring(chartKey))
 			if ok and chartDecoded then
 				local chartPack = choose_chart_key_pack(chartDecoded)
 				if chartPack and chartPack.id then
-					callback(true, chartPack)
+					finish_once(true, chartPack, nil, "chart_key_exact")
 					return
 				end
 					local commonPacks = chartDecoded.common_packs or {}
@@ -2770,21 +2819,16 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 							local built = build_pack_candidate(candidate, "chart_key")
 							if built then payload[#payload + 1] = built end
 						end
-						callback(false, nil, {
+						finish_once(false, nil, {
 							errorMessage = "La chart StepManiaOnline correspond a plusieurs packs.",
 							candidates = dedupe_candidates(payload),
-						})
+						}, "chart_key_candidates")
 						return
 					end
-					callback(false, nil, { errorMessage = "La chart StepManiaOnline ne correspond pas au pack selectionne." })
+					finish_catalog_if_available()
 				return
 			end
-			self:SearchStepManiaOnline({
-				title = title,
-				artist = artist,
-				pack = pack,
-				songPath = selected_path(songInfo),
-			}, callback)
+			finish_catalog_if_available()
 		end, { expected404 = true })
 	elseif pack ~= "" then
 		search("pack", pack, function(ok, decoded)

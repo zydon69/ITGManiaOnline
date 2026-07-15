@@ -1490,6 +1490,10 @@ function ITGOnline:RememberOnlineOptionSteps(player, steps, source)
 	self.pendingOnlineOptionStepsPlayer = player
 	self.pendingOnlineOptionStepsAt = GetTimeSinceStart and GetTimeSinceStart() or 0
 	self.pendingOnlineOptionStepsSource = tostring(source or "unknown")
+	local currentSong = GAMESTATE and GAMESTATE.GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
+	self.pendingOnlineOptionSongHash = currentSong and self.SongHashFor and self:SongHashFor(currentSong) or ""
+	self.pendingOnlineOptionSelectionKey = self.CurrentOptionsSelectionKey
+		and self:CurrentOptionsSelectionKey(self.currentRoom) or ""
 
 	local chartHash = self.ChartHashForSteps and self:ChartHashForSteps(steps) or ""
 	local chartKey = steps.GetChartKey and tostring(steps:GetChartKey() or "") or ""
@@ -1504,7 +1508,9 @@ function ITGOnline:RememberOnlineOptionSteps(player, steps, source)
 		.. " chartType=" .. tostring(chartType)
 		.. " difficulty=" .. tostring(difficulty or "")
 		.. " meter=" .. tostring(meter or "nil")
-		.. " notes=" .. tostring(notes or "nil"))
+		.. " notes=" .. tostring(notes or "nil")
+		.. " songHash=" .. tostring(self.pendingOnlineOptionSongHash or ""):sub(1, 12)
+		.. " selectionKey=" .. tostring(self.pendingOnlineOptionSelectionKey or ""))
 end
 
 local function selected_steps()
@@ -12178,6 +12184,30 @@ function ITGOnline:CurrentOnlineOptionSummary()
 	local song = GAMESTATE:GetCurrentSong()
 	local songHash = song and self.SongHashFor and self:SongHashFor(song) or ""
 	local chartHash = steps and self.ChartHashForSteps and self:ChartHashForSteps(steps) or ""
+	local songHashSource = songHash ~= "" and "gamestate_current_song" or "missing"
+	local selectedSong = self.currentRoom and self.currentRoom.selected_song or nil
+	local selectedSongHash = type(selectedSong) == "table"
+		and tostring(selectedSong.song_hash or selectedSong.songHash or "") or ""
+	local selectedChartHash = type(selectedSong) == "table"
+		and tostring(selectedSong.chart_hash or selectedSong.chartHash or "") or ""
+	local rememberedSongHash = tostring(self.pendingOnlineOptionSongHash or "")
+	local rememberedSelectionKey = tostring(self.pendingOnlineOptionSelectionKey or "")
+	local currentSelectionKey = self.CurrentOptionsSelectionKey
+		and tostring(self:CurrentOptionsSelectionKey(self.currentRoom) or "") or ""
+	if songHash == ""
+		and chartHash ~= ""
+		and selectedSongHash ~= ""
+		and selectedChartHash ~= ""
+		and rememberedSelectionKey ~= ""
+		and rememberedSelectionKey == currentSelectionKey
+		and (rememberedSongHash == "" or lower(rememberedSongHash) == lower(selectedSongHash))
+		and lower(chartHash) == lower(selectedChartHash) then
+		-- ScreenPlayerOptions can clear GAMESTATE's song while returning to the
+		-- lobby.  Recover only when the remembered chart proves that it belongs
+		-- to the room's immutable selection.
+		songHash = selectedSongHash
+		songHashSource = "room_selected_song_chart_match"
+	end
 	local chartKey = steps and steps.GetChartKey and tostring(steps:GetChartKey() or "") or ""
 	local chartType = steps and normalize_chart_type(enum_short(steps:GetStepsType()) or "") or ""
 	local difficulty = steps and enum_short(steps:GetDifficulty()) or ""
@@ -12200,7 +12230,11 @@ function ITGOnline:CurrentOnlineOptionSummary()
 	online_flow_trace("online_options_summary"
 		.. " stepchart=" .. tostring(summary.stepchart or "")
 		.. " songHash=" .. tostring(summary.song_hash or "nil"):sub(1, 12)
+		.. " songHashSource=" .. tostring(songHashSource)
 		.. " chartHash=" .. tostring(summary.chart_hash or "nil"):sub(1, 12)
+		.. " selectedChartHash=" .. tostring(selectedChartHash ~= "" and selectedChartHash:sub(1, 12) or "nil")
+		.. " rememberedSongHash=" .. tostring(rememberedSongHash ~= "" and rememberedSongHash:sub(1, 12) or "nil")
+		.. " selectionKeyMatches=" .. tostring(rememberedSelectionKey ~= "" and rememberedSelectionKey == currentSelectionKey)
 		.. " chartKey=" .. tostring(summary.chart_key or "nil")
 		.. " chartType=" .. tostring(summary.chart_type or "nil")
 		.. " difficulty=" .. tostring(summary.difficulty or "nil")
@@ -12298,8 +12332,17 @@ function ITGOnline:MarkConfigReady(callback)
 			.. " error=" .. tostring((decoded and decoded.error_code) or (response and response.errorMessage) or ""))
 		local currentIntentKey = self:ConfigReadyIntentKey(self.currentRoom)
 		local contextStillCurrent = currentIntentKey == intentKey
+		local failureCode = tostring((decoded and decoded.error_code)
+			or (response and response.error_code)
+			or (response and response.errorCode)
+			or "")
 		if not ok and contextStillCurrent then
 			self:ClearOptimisticConfigReady("config_ready_finish_failed")
+			if failureCode == "config_ready_song_context_mismatch" then
+				-- A deterministic local mismatch is not a lost acknowledgement.
+				-- Replaying it would leave the lobby in a permanent pending state.
+				self:ClearPendingConfigReadyIntent("config_ready_terminal_context_mismatch", intentKey)
+			end
 		elseif ok and requestMode == "config" and contextStillCurrent then
 			self:ClearPendingConfigReadyIntent("config_ready_finish_ok", intentKey)
 		elseif not contextStillCurrent then
