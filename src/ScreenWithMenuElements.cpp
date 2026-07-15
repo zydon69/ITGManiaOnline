@@ -316,6 +316,7 @@ void ScreenWithMenuElements::StartPlayingMusic() {
     GameSoundManager::PlayMusicParams pmp;
     pmp.sFile = HandleLuaMusicFile(m_sPathToMusic);
     if (!pmp.sFile.empty()) {
+      pmp.bForceLoop = true;
       pmp.bAlignBeat = MUSIC_ALIGN_BEAT;
       const float delaySeconds = SafeNonNegativeSeconds(DELAY_MUSIC_SECONDS);
       if (delaySeconds > 0.0f) {

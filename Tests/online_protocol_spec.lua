@@ -27,6 +27,13 @@ equal(protocol.is_auth_retry_idempotent("POST", "/rooms/1/invitations", {
 }), false, "unknown mutation retry rejection")
 equal(protocol.is_auth_retry_idempotent("POST", "/rooms/1/song-selection", {}), false, "missing action ID retry rejection")
 
+equal(protocol.valid_round_key("183|selection:74e14e8e-ff1b-4fe6-b50d-ee201090b493"), true, "selection round key")
+equal(protocol.valid_round_key("183|session-1|song-hash|chart-hash|2026-07-15T11:18:57Z"), true, "legacy round key")
+equal(protocol.valid_round_key("183|selection:"), false, "empty selection ID")
+equal(protocol.valid_round_key("bad-room|selection:uuid"), false, "invalid selection room ID")
+equal(protocol.valid_round_key("183|selection:uuid|extra"), false, "selection key with trailing field")
+equal(protocol.valid_round_key("183||||"), false, "incomplete legacy round key")
+
 local logged = protocol.safe_log_text("room\r\nforged", 32)
 assert(not logged:find("\r") and not logged:find("\n"), "log controls must be removed")
 

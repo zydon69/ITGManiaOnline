@@ -13053,7 +13053,17 @@ function ITGOnline:CurrentSelectedSongPayload()
 end
 
 function ITGOnline:PlayStateKeyIsValid(key)
-	local roomId, sessionId, songHash, chartHash, selectedAt = tostring(key or ""):match("^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
+	if ITGOnlineProtocol and type(ITGOnlineProtocol.valid_round_key) == "function" then
+		return ITGOnlineProtocol.valid_round_key(key)
+	end
+
+	key = tostring(key or "")
+	local selectionRoomId, selectionId = key:match("^([^|]+)|selection:([^|]+)$")
+	if selectionRoomId and selectionId and selectionRoomId ~= "" and selectionId ~= "" then
+		return true
+	end
+
+	local roomId, sessionId, songHash, chartHash, selectedAt = key:match("^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
 	return roomId ~= nil and roomId ~= ""
 		and chartHash ~= nil and chartHash ~= ""
 		and (

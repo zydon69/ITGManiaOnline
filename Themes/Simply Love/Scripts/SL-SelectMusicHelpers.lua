@@ -175,10 +175,11 @@ play_sample_music = function()
 		stop_music()
 		return false
 	end
+	local onlinePhase = ITGOnline and ITGOnline.currentRoom and tostring(ITGOnline.currentRoom.phase or "") or ""
 	local onlinePreview = ITGOnline
 		and ITGOnline.currentRoomId ~= nil
 		and ITGOnline.currentRoom ~= nil
-		and tostring(ITGOnline.currentRoom.phase or "") == "lobby"
+		and (onlinePhase == "lobby" or onlinePhase == "lobby_ready" or onlinePhase == "config")
 		and ITGOnline.currentRoom.selected_song == nil
 	return play_song_sample(song, {
 		source = onlinePreview and "online_manager_music_wheel" or "casual_music_wheel",
@@ -262,6 +263,7 @@ play_online_preview_music_normal_rate = function(songInfo, source)
 			.. " path=" .. tostring(sample.path)
 			.. " sampleStart=" .. tostring(sample.start)
 			.. " sampleLen=" .. tostring(sample.length)
+			.. " loop=true"
 			.. " activeMusicRate=" .. tostring(SL and SL.Global and SL.Global.ActiveModifiers and SL.Global.ActiveModifiers.MusicRate or "nil")
 			.. " applyMusicRate=false")
 	end

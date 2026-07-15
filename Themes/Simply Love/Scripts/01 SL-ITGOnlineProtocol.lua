@@ -93,6 +93,23 @@ local function canonical_decimal_id(value)
 	return text
 end
 
+local function valid_round_key(value)
+	local key = tostring(value or "")
+	local selectionRoomId, selectionId = key:match("^([^|]+)|selection:([^|]+)$")
+	if selectionRoomId and selectionId then
+		return canonical_decimal_id(selectionRoomId) ~= nil and selectionId ~= ""
+	end
+
+	local roomId, sessionId, songHash, chartHash, selectedAt = key:match("^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
+	return canonical_decimal_id(roomId) ~= nil
+		and chartHash ~= nil and chartHash ~= ""
+		and (
+			(sessionId ~= nil and sessionId ~= "")
+			or (songHash ~= nil and songHash ~= "")
+			or (selectedAt ~= nil and selectedAt ~= "")
+		)
+end
+
 local function sanitize(value, depth, seen, path)
 	local valueType = type(value)
 	if valueType == "string" then
@@ -402,6 +419,8 @@ function ITGOnlineProtocol.new_event_reducer(roomId)
 	end
 	return reducer
 end
+
+ITGOnlineProtocol.valid_round_key = valid_round_key
 
 function ITGOnlineProtocol.new_callback_queue(limit)
 	limit = math.max(1, math.min(256, math.floor(tonumber(limit) or 32)))
