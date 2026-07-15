@@ -419,8 +419,10 @@ void RageSoundReader_ThreadedBuffer::BufferingThread() {
     m_bFilling = false;
     m_Event.Broadcast();
 
-    // On error or end of file, stop buffering the sound.
-    if (iRet < 0) {
+    // WOULD_BLOCK only means that the decoder made no progress during this
+    // pass.  Keep the buffer enabled so the next timed pass can resume it.
+    // Errors and EOF remain terminal for this source.
+    if (iRet < 0 && iRet != RageSoundReader::WOULD_BLOCK) {
       m_bEnabled = false;
       continue;
     }

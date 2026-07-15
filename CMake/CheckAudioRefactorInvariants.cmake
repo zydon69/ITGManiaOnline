@@ -1157,6 +1157,10 @@ require_contains(
   "LockMut(g_SoundManMutex);"
   "RageSoundManager volume getter uses sound manager mutex")
 require_contains(
+  "${rage_sound_reader_threaded_buffer_cpp}"
+  "iRet < 0 && iRet != RageSoundReader::WOULD_BLOCK"
+  "Threaded audio buffering preserves transient decoder backpressure")
+require_contains(
   "${stepmania_cpp}"
   "playonce-smoke-test"
   "StepMania exposes the PlayOnce runtime smoke test")

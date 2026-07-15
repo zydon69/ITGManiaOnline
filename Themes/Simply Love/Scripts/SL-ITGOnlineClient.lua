@@ -4444,9 +4444,10 @@ function ITGOnline:CanonicalGameplayRoundKey(source)
 
 	if activeValid then
 		if playStateValid and playStateRoundKey ~= activeRoundKey then
-			online_flow_trace(
+			online_flow_trace_throttled(
+				"round_key_canonicalized_active:" .. tostring(source or "unknown"), 5.0,
 				"round_key_canonicalized source=" .. tostring(source or "unknown") ..
-				" canonical=active" ..
+					" canonical=active" ..
 				" activeRoundKey=" .. activeRoundKey ..
 				" stalePlayStateRoundKey=" .. playStateRoundKey
 			)
@@ -4456,7 +4457,8 @@ function ITGOnline:CanonicalGameplayRoundKey(source)
 
 	if currentRoomValid then
 		if playStateValid and playStateRoundKey ~= currentRoomRoundKey then
-			online_flow_trace(
+			online_flow_trace_throttled(
+				"round_key_canonicalized_room:" .. tostring(source or "unknown"), 5.0,
 				"round_key_canonicalized source=" .. tostring(source or "unknown") ..
 				" canonical=current_room" ..
 				" currentRoomRoundKey=" .. currentRoomRoundKey ..
@@ -6164,7 +6166,7 @@ function ITGOnline:LocalTerminalRoundPendingResolution(room)
 		return false, "phase_not_live_or_results", phase, nil, nil
 	end
 
-	local roundKey = self.PlayStateKey and self:PlayStateKey() or ""
+	local roundKey = self.CanonicalGameplayRoundKey and self:CanonicalGameplayRoundKey("terminal_pending_resolution") or (self.PlayStateKey and self:PlayStateKey() or "")
 	local validRoundKey = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)
 	local playState = tostring(self:CurrentUserPlayState(room) or "")
 	local summary = self:PlayStateSummary(room)
@@ -6904,7 +6906,7 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 	local topScreenName = topScreen and topScreen.GetName and topScreen:GetName() or "nil"
 	local phase = self:NormalizeRoomPhase(self.currentRoom.phase)
 	local playState = tostring(self:CurrentUserPlayState(self.currentRoom) or "")
-	local roundKey = self.PlayStateKey and self:PlayStateKey() or ""
+	local roundKey, roundKeySource = self:CanonicalGameplayRoundKey("preferred_screen")
 	local localRoundEnded = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey) and self.onlineGameplayEndedKey == roundKey
 	local summary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
 	online_flow_trace("preferred_check decisionId=" .. tostring(decisionId)
@@ -6915,6 +6917,7 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 		.. " phase=" .. tostring(phase)
 		.. " playState=" .. tostring(playState)
 		.. " roundKey=" .. tostring(roundKey)
+		.. " roundKeySource=" .. tostring(roundKeySource or "")
 		.. " localRoundEnded=" .. tostring(localRoundEnded == true)
 		.. " activeRoundKey=" .. tostring(self.activeGameplayRoundKey or "")
 		.. " endedKey=" .. tostring(self.onlineGameplayEndedKey or "")
@@ -7441,8 +7444,15 @@ function ITGOnline:NoteScreenChanged(screenName)
 			and self.currentRoom
 			and self:IsCurrentUserRoomManager(self.currentRoom)
 			and self:NormalizeRoomPhase(self.currentRoom.phase) == "lobby"
-			and self.currentRoom.selected_song == nil then
+			and self.currentRoom.selected_song == nil
+			and tostring(self.songSelectionInFlightKey or "") == "" then
 			self:ClearSongPreview("manager_returned_to_lobby")
+		elseif self:IsOnlineMusicSelectScreen(previous)
+			and screenName == "ScreenOnlineLobbies"
+			and tostring(self.songSelectionInFlightKey or "") ~= "" then
+			online_flow_trace("song_preview_clear_skipped reason=song_selection_in_flight"
+				.. " selectionKey=" .. tostring(self.songSelectionInFlightKey)
+				.. " room=" .. tostring(self.currentRoomId or "nil"))
 		end
 		if self:IsOnlineGameplayScreen(previous) and not self:IsOnlineGameplayScreen(screenName) then
 			self:StopLiveScoreFlush("screen_changed:" .. tostring(previous) .. "->" .. tostring(screenName))
@@ -7590,6 +7600,18 @@ function ITGOnline:ForceGameplayEvaluationIfResultsReady(source)
 		.. " terminal=" .. tostring(summary.terminal)
 		.. " finalResults=" .. tostring(summary.finalResults))
 
+	local evaluationScreen = GAMESTATE:IsCourseMode() and "ScreenEvaluationNonstop" or "ScreenEvaluationStage"
+	local targetSet = safe_call("force_evaluation_set_target", function()
+		topScreen:SetNextScreenName(evaluationScreen)
+	end)
+	if not targetSet then
+		online_flow_trace("force_evaluation_skipped reason=set_target_failed"
+			.. " source=" .. tostring(source or "unknown")
+			.. " target=" .. tostring(evaluationScreen)
+			.. " forceKey=" .. tostring(forceKey))
+		return false
+	end
+
 	if topScreen.PostScreenMessage then
 		topScreen:PostScreenMessage("SM_LeaveGameplay", 0)
 		online_flow_trace("force_evaluation_transition_posted"
@@ -7597,6 +7619,7 @@ function ITGOnline:ForceGameplayEvaluationIfResultsReady(source)
 			.. " message=SM_LeaveGameplay"
 			.. " source=" .. tostring(source or "unknown")
 			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " target=" .. tostring(evaluationScreen)
 			.. " forceKey=" .. tostring(forceKey))
 	else
 		topScreen:StartTransitioningScreen("SM_GoToNextScreen")
@@ -7605,6 +7628,7 @@ function ITGOnline:ForceGameplayEvaluationIfResultsReady(source)
 			.. " message=SM_GoToNextScreen"
 			.. " source=" .. tostring(source or "unknown")
 			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " target=" .. tostring(evaluationScreen)
 			.. " forceKey=" .. tostring(forceKey))
 	end
 	return true
@@ -7624,12 +7648,13 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 		or previousScreenName == "ScreenEvaluationNonstop"
 		or previousScreenName == "ScreenEvaluationSummary"
 	local roomPhase = self:NormalizeRoomPhase(self.currentRoom.phase)
-	local roundKey = self:PlayStateKey()
+	local roundKey, roundKeySource = self:CanonicalGameplayRoundKey("gameplay_transition")
 	local validRoundKey = self:PlayStateKeyIsValid(roundKey)
 	online_flow_trace("gameplay_transition previous=" .. tostring(previousScreenName)
 		.. " next=" .. tostring(nextScreenName)
 		.. " roomPhase=" .. tostring(roomPhase)
 		.. " roundKey=" .. tostring(roundKey)
+		.. " roundKeySource=" .. tostring(roundKeySource or "")
 		.. " previousWasGameplay=" .. tostring(previousWasGameplay)
 		.. " previousWasEvaluation=" .. tostring(previousWasEvaluation)
 		.. " nextIsEvaluation=" .. tostring(nextIsEvaluation)
