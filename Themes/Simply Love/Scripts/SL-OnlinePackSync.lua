@@ -21,6 +21,9 @@ PackSync.downloadedPackKey = PackSync.downloadedPackKey or ""
 PackSync.downloadGeneration = tonumber(PackSync.downloadGeneration) or 0
 PackSync.downloadStatusSequence = tonumber(PackSync.downloadStatusSequence) or 0
 PackSync.activeDownloadId = PackSync.activeDownloadId or ""
+PackSync.lastDownloadId = PackSync.lastDownloadId or ""
+PackSync.activeDownloadSelectionId = PackSync.activeDownloadSelectionId or ""
+PackSync.lastDownloadSelectionId = PackSync.lastDownloadSelectionId or ""
 PackSync.downloadFuture = PackSync.downloadFuture or nil
 PackSync.localScanCache = PackSync.localScanCache or {}
 PackSync.lastPostedStatusSignature = PackSync.lastPostedStatusSignature or ""
@@ -46,6 +49,9 @@ PackSync.lastNoSongClearResetReason = PackSync.lastNoSongClearResetReason or ""
 PackSync.lastDeferredLocalMatchTraceKey = PackSync.lastDeferredLocalMatchTraceKey or ""
 PackSync.lastDeferredApplyKey = PackSync.lastDeferredApplyKey or ""
 PackSync.maxDownloadBytes = 5 * 1024 * 1024 * 1024
+PackSync.minimumDownloadFreeBytes = 256 * 1024 * 1024
+PackSync.extractionReserveBytes = 1024 * 1024 * 1024
+PackSync.diskSafetyMarginBytes = 256 * 1024 * 1024
 
 PackSync.status = {
 	Idle = "idle",
@@ -86,6 +92,7 @@ end
 
 local trace
 local current_room_selected_at
+local current_room_selection_id
 
 function PackSync:IsActiveDownloadStatus(status)
 	status = tostring(status or self.currentStatus or "")
@@ -109,11 +116,14 @@ end
 
 function PackSync:ClearActiveDownloadId(reason)
 	if early_trim(self.activeDownloadId) == "" then return end
+	self.lastDownloadId = self.activeDownloadId
+	self.lastDownloadSelectionId = self.activeDownloadSelectionId or ""
 	trace("Active download id cleared reason=" .. tostring(reason or "unknown")
 		.. " activeDownloadId=" .. tostring(self.activeDownloadId)
 		.. " status=" .. tostring(self.currentStatus or "nil")
 		.. " key=" .. tostring(self.downloadInFlightKey or ""))
 	self.activeDownloadId = ""
+	self.activeDownloadSelectionId = ""
 end
 
 function PackSync:UsesDownloadStatusSequence(status)
@@ -123,6 +133,11 @@ function PackSync:UsesDownloadStatusSequence(status)
 		or status == self.status.ReloadingSongs
 		or status == self.status.DownloadedOk
 		or status == self.status.DownloadFailed
+end
+
+function PackSync:IsTerminalDownloadStatus(status)
+	status = tostring(status or "")
+	return status == self.status.DownloadedOk or status == self.status.DownloadFailed
 end
 
 function PackSync:ShouldPreserveActiveDownloadDuringReset(reason)
@@ -137,6 +152,7 @@ function PackSync:ShouldPreserveActiveDownloadDuringReset(reason)
 	local preserveActiveDownload = reason == "no_song_confirmed"
 		or reason == "online_lobby_state_clear_unconfirmed_preview"
 		or reason == "song_selection_cancelled"
+		or reason == "song_preview_cleared"
 	if preserveActiveDownload then
 		trace("Reset will preserve active download reason=" .. tostring(reason)
 			.. " status=" .. tostring(self.currentStatus or "nil")
@@ -225,8 +241,9 @@ function PackSync:FlushPendingStatusPost(reason)
 	self.statusPostPendingIntent = nil
 	local activeRoomId = tostring(ITGOnline and ITGOnline.currentRoomId or "")
 	local activeSelectedAt = tostring(current_room_selected_at() or "")
+	local immutableDownloadId = early_trim(pending.options and pending.options.downloadId)
 	if activeRoomId ~= tostring(pending.roomId or "")
-		or activeSelectedAt ~= tostring(pending.selectedAt or "") then
+		or (immutableDownloadId == "" and activeSelectedAt ~= tostring(pending.selectedAt or "")) then
 		for _, pendingCallback in ipairs(pending.callbacks or {}) do
 			safe_invoke_callback(pendingCallback, false, nil, {
 				errorCode = "client_status_context_changed",
@@ -369,6 +386,8 @@ local function status_post_signature(roomId, selectedAt, status, message, progre
 		tostring(message or ""),
 		status_progress_signature(progress),
 		options and options.downloadCancelled and "cancelled" or "",
+		tostring(options and options.downloadId or ""),
+		tostring(options and options.downloadSelectionId or ""),
 	}, "|")
 end
 
@@ -425,9 +444,19 @@ function PackSync:NextDownloadGeneration(reason)
 		or reason == "selected_candidate_start"
 		or reason == "browse_candidate_start"
 	if startsDownload then
-		self.activeDownloadId = tostring(self.downloadGeneration) .. ":" .. tostring(math.floor(((GetTimeSinceStart and GetTimeSinceStart()) or 0) * 1000))
+		if early_trim(self.activeDownloadId) ~= "" then
+			self:ClearActiveDownloadId("superseded_by_new_generation:" .. reason)
+		end
+		if ITGOnline and ITGOnline.NewClientActionId then
+			self.activeDownloadId = ITGOnline:NewClientActionId("pack-download")
+		else
+			self.activeDownloadId = tostring(self.downloadGeneration) .. ":" .. tostring(math.floor(((GetTimeSinceStart and GetTimeSinceStart()) or 0) * 1000))
+		end
+		self.lastDownloadId = ""
+		self.activeDownloadSelectionId = current_room_selection_id and current_room_selection_id() or ""
+		self.lastDownloadSelectionId = ""
 	else
-		self.activeDownloadId = ""
+		self:ClearActiveDownloadId("generation_advanced:" .. reason)
 	end
 	trace("Download generation advanced generation=" .. tostring(self.downloadGeneration)
 		.. " reason=" .. tostring(reason)
@@ -539,6 +568,11 @@ end
 
 current_room_selected_at = function()
 	return selected_at(current_room_selected_song())
+end
+
+current_room_selection_id = function()
+	local room = ITGOnline and ITGOnline.currentRoom or nil
+	return trim(room and (room.current_selection_id or room.currentSelectionId))
 end
 
 local function song_info_matches_room_selection(songInfo, roomSong)
@@ -673,7 +707,7 @@ local function rollback_installed_pack_if_possible(path)
 	if FILEMAN and FILEMAN.RollbackOnlineSongPack then
 		local ok, removed = pcall(function() return FILEMAN:RollbackOnlineSongPack(path) end)
 		if ok and removed then return true end
-		trace("Installed pack rollback failed path=" .. tostring(path))
+		trace("Installed pack rollback failed path=<engine-pack-path>")
 		return false
 	end
 	return false
@@ -838,26 +872,37 @@ local function transition_to_reload_songs()
 		if online_flow_trace then
 			online_flow_trace("pack_sync_reload_songs_skipped reason=no_top_screen")
 		end
-		return
+		return false
 	end
 
 	if topScreen:GetName() == "ScreenReloadSongsOnline" then
 		if online_flow_trace then
 			online_flow_trace("pack_sync_reload_songs_skipped reason=already_reloading")
 		end
-		return
-	end
-
-	if SL and SL.Global then
-		SL.Global.Online = SL.Global.Online or {}
-		SL.Global.Online.ReturnToLobbyAfterSongReload = true
+		return true
 	end
 
 	if online_flow_trace then
 		online_flow_trace("pack_sync_reload_songs_transition from=" .. tostring(topScreen:GetName()))
 	end
-	topScreen:SetNextScreenName("ScreenReloadSongsOnline")
-	topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+	local ok, err = pcall(function()
+		topScreen:SetNextScreenName("ScreenReloadSongsOnline")
+		topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+	end)
+	if not ok and SCREENMAN and SCREENMAN.SetNewScreen then
+		ok, err = pcall(function() SCREENMAN:SetNewScreen("ScreenReloadSongsOnline") end)
+	end
+	if not ok then
+		if online_flow_trace then
+			online_flow_trace("pack_sync_reload_songs_failed error=" .. tostring(err or "unknown"))
+		end
+		return false
+	end
+	if SL and SL.Global then
+		SL.Global.Online = SL.Global.Online or {}
+		SL.Global.Online.ReturnToLobbyAfterSongReload = true
+	end
+	return true
 end
 
 local function playable_steps(song)
@@ -1132,6 +1177,28 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	})
 	self.currentSongInfo = with_current_room_selection(self.currentSongInfo, "status:" .. tostring(status))
 	local currentSelectedAt = self:SelectedAtForStatusPost(status, self.currentSongInfo)
+	local tracksDownload = self:UsesDownloadStatusSequence(status) or options.downloadCancelled == true
+	if tracksDownload then
+		local immutableDownloadId = early_trim(options.downloadId)
+		if immutableDownloadId == "" then immutableDownloadId = early_trim(self.activeDownloadId) end
+		if immutableDownloadId == "" then immutableDownloadId = early_trim(self.lastDownloadId) end
+		local immutableSelectionId = early_trim(options.downloadSelectionId)
+		if immutableSelectionId == "" then immutableSelectionId = early_trim(self.activeDownloadSelectionId) end
+		if immutableSelectionId == "" then immutableSelectionId = early_trim(self.lastDownloadSelectionId) end
+		options.downloadId = immutableDownloadId
+		options.downloadSelectionId = immutableSelectionId
+		if immutableDownloadId == "" then
+			trace("Status post blocked reason=missing_download_identity status=" .. tostring(status)
+				.. " generation=" .. tostring(self.downloadGeneration or "nil")
+				.. " selected_at=" .. tostring(currentSelectedAt))
+			self:ApplyLocalStatus(status, message, progress)
+			safe_invoke_callback(callback, false, nil, {
+				errorCode = "client_download_identity_missing",
+				errorMessage = "L'identifiant immuable du téléchargement est manquant.",
+			})
+			return
+		end
+	end
 	if status == self.status.SearchingLocalCharts then
 		self:ApplyLocalStatus(status, message, progress)
 		safe_invoke_callback(callback, true, {
@@ -1226,7 +1293,8 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		tostring(progress or ""),
 		tostring(options.downloadCancelled == true),
 		tostring(self.downloadInFlightKey or ""),
-		tostring(self.activeDownloadId or ""),
+		tostring(options.downloadId or ""),
+		tostring(options.downloadSelectionId or ""),
 	}, "||")
 	local now = GetTimeSinceStart and GetTimeSinceStart() or 0
 	if options.fromPendingStatusQueue ~= true
@@ -1348,15 +1416,25 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	local requestToken = self.statusPostRequestToken
 
 	local payload = {
+		client_action_id = ITGOnline:NewClientActionId("pack-status"),
 		status = status,
 		message = message,
 		download_progress = progress,
 		sequence = requestSequence,
 	}
+	local selectionId = current_room_selection_id()
+	if tracksDownload then
+		selectionId = early_trim(options.downloadSelectionId)
+	end
+	if selectionId ~= "" then payload.selection_id = selectionId end
+	if tracksDownload then
+		local downloadId = early_trim(options.downloadId)
+		if downloadId ~= "" then payload.download_id = downloadId end
+	end
 	if options.downloadCancelled == true then
 		payload.download_cancelled = true
 	end
-	if self.currentSongInfo then
+	if self.currentSongInfo and (not tracksDownload or selectionId == current_room_selection_id()) then
 		if currentSelectedAt ~= "" then
 			payload.selected_at = currentSelectedAt
 		end
@@ -1386,6 +1464,11 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 			return
 		end
 		local statusResult = decoded and decoded.pack_sync_status or nil
+		if ok and self:IsTerminalDownloadStatus(status)
+			and tostring(payload.download_id or "") == tostring(self.lastDownloadId or "") then
+			self.lastDownloadId = ""
+			self.lastDownloadSelectionId = ""
+		end
 		local ignored = ok and statusResult and statusResult.applied == false
 		local callbackOk = ok and not ignored
 		local responseRoom = decoded and decoded.room or nil
@@ -2282,13 +2365,14 @@ end
 
 local function request_json(url, callback, options)
 	options = options or {}
+	local requestLabel = tostring(options.logLabel or "stepmaniaonline")
 	if not (NETWORK and NETWORK.HttpRequest) then
-		trace("HTTP JSON skipped reason=network_unavailable url=" .. tostring(url))
+		trace("HTTP JSON skipped reason=network_unavailable request=" .. requestLabel)
 		safe_invoke_callback(callback, false, nil, { errorMessage = "Le reseau du moteur n'est pas disponible." })
 		return
 	end
 	if type(JsonDecode) ~= "function" then
-		trace("HTTP JSON skipped reason=json_decode_unavailable url=" .. tostring(url))
+		trace("HTTP JSON skipped reason=json_decode_unavailable request=" .. requestLabel)
 		safe_invoke_callback(callback, false, nil, { errorMessage = "Le decodeur JSON n'est pas disponible." })
 		return
 	end
@@ -2306,9 +2390,9 @@ local function request_json(url, callback, options)
 			local statusCode = tonumber(response and response.statusCode) or 0
 				if statusCode ~= 200 then
 					if statusCode == 404 and options.expected404 == true then
-						trace("HTTP JSON not found (expected fallback) url=" .. tostring(url))
+						trace("HTTP JSON not found (expected fallback) request=" .. requestLabel)
 					else
-						trace("HTTP JSON failed status=" .. tostring(statusCode) .. " url=" .. tostring(url))
+						trace("HTTP JSON failed status=" .. tostring(statusCode) .. " request=" .. requestLabel)
 					end
 					safe_invoke_callback(callback, false, nil, response)
 					return
@@ -2317,7 +2401,7 @@ local function request_json(url, callback, options)
 				if not ok or decoded == nil then
 					local bodyLength = #(tostring(response and response.body or ""))
 					trace("HTTP JSON decode failed status=" .. tostring(statusCode)
-						.. " url=" .. tostring(url)
+						.. " request=" .. requestLabel
 						.. " body_length=" .. tostring(bodyLength))
 					local firstByte = string.byte(response and response.body or "", 1)
 					local secondByte = string.byte(response and response.body or "", 2)
@@ -2334,7 +2418,7 @@ local function request_json(url, callback, options)
 		})
 	end)
 	if not okRequest then
-		trace("HTTP JSON request failed url=" .. tostring(url) .. " err=" .. tostring(requestOrError))
+		trace("HTTP JSON request failed request=" .. requestLabel .. " err=" .. tostring(requestOrError))
 		safe_invoke_callback(callback, false, nil, { errorMessage = "La requete StepManiaOnline a echoue." })
 	end
 end
@@ -2369,12 +2453,12 @@ local function build_pack_candidate(packResult, source)
 	}
 end
 
-local function sha256_file_hex(path)
-	if not (CRYPTMAN and CRYPTMAN.SHA256File and type(BinaryToHex) == "function") then return nil end
-	local ok, digest = pcall(function() return CRYPTMAN:SHA256File(path) end)
-	if not ok or type(digest) ~= "string" or digest == "" then return nil end
-	local hexOk, hex = pcall(function() return BinaryToHex(digest) end)
-	return hexOk and type(hex) == "string" and hex:lower() or nil
+local function disk_free_bytes(path)
+	if not (FILEMAN and FILEMAN.GetDiskFreeSpaceBytes) then return nil end
+	local ok, value = pcall(function() return FILEMAN:GetDiskFreeSpaceBytes(path) end)
+	value = ok and tonumber(value) or nil
+	if not value or value <= 0 then return nil end
+	return value
 end
 
 local function dedupe_candidates(candidates)
@@ -2417,13 +2501,13 @@ local function log_dir_listing(prefix, path)
 		return FILEMAN:GetDirListing(path .. "*", false, true)
 	end)
 	if not ok or type(entries) ~= "table" then
-		trace(prefix .. " path=" .. tostring(path) .. " entries=<unavailable>")
+		trace(prefix .. " path=<engine-pack-path> entries=<unavailable>")
 		return
 	end
 	table.sort(entries)
-	trace(prefix .. " path=" .. tostring(path) .. " entries=" .. tostring(#entries))
+	trace(prefix .. " path=<engine-pack-path> entries=" .. tostring(#entries))
 	for i = 1, math.min(#entries, 20) do
-		trace(prefix .. " entry[" .. tostring(i) .. "]=" .. tostring(entries[i]))
+		trace(prefix .. " entry[" .. tostring(i) .. "]=<redacted>")
 	end
 	if #entries > 20 then
 		trace(prefix .. " ... truncated")
@@ -2817,7 +2901,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			if callback then callback(false, "Le reseau du moteur n'est pas disponible.") end
 			return
 		end
-		if not (FILEMAN and FILEMAN.DoesFileExist and FILEMAN.Unzip) then
+			if not (FILEMAN and FILEMAN.DoesFileExist and NETWORK.ProcessPackArchive) then
 			trace("DownloadPackByCandidate blocked reason=fileman_unavailable")
 			if callback then callback(false, "Le gestionnaire de fichiers du moteur n'est pas disponible.") end
 			return
@@ -2901,6 +2985,17 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 				.. " effective=" .. tostring(defaultMaxDownloadBytes))
 			maxDownloadBytes = defaultMaxDownloadBytes
 		end
+		local initialFreeBytes = disk_free_bytes("/Downloads/")
+		local minimumFreeBytes = tonumber(self.minimumDownloadFreeBytes) or (256 * 1024 * 1024)
+		if initialFreeBytes and initialFreeBytes < minimumFreeBytes then
+			trace("Download blocked reason=insufficient_disk_space free=" .. tostring(initialFreeBytes)
+				.. " required=" .. tostring(minimumFreeBytes)
+				.. " pack=" .. tostring(packName))
+			self.downloadInFlightKey = nil
+			self:ClearActiveDownloadId("download_disk_preflight_failed")
+			if callback then callback(false, "Espace disque insuffisant pour télécharger ce pack.") end
+			return
+		end
 
 		if url == "" then
 			if callback then callback(false, "Le serveur n'a pas fourni d'URL de telechargement securisee.") end
@@ -2932,6 +3027,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	self.lastProgressValue = -10
 	self.lastProgressBucket = -1
 	local downloadCompleted = false
+	local diskCapacityChecked = false
 
 	local function fail_candidate_download(message, broadcastMissing)
 		if not self:IsDownloadGenerationCurrent(downloadGeneration) then
@@ -3090,6 +3186,24 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 					end
 
 					local currentBytes = tonumber(current) or 0
+					local totalBytes = tonumber(total) or 0
+					if not diskCapacityChecked and totalBytes > 0 then
+						local freeBytes = disk_free_bytes("/Downloads/")
+						local remainingBytes = math.max(0, totalBytes - currentBytes)
+						local extractionReserve = tonumber(self.extractionReserveBytes) or (1024 * 1024 * 1024)
+						local safetyMargin = tonumber(self.diskSafetyMarginBytes) or (256 * 1024 * 1024)
+						local requiredBytes = remainingBytes + extractionReserve + safetyMargin
+						if freeBytes and freeBytes < requiredBytes then
+							trace("Download aborted reason=insufficient_disk_capacity free=" .. tostring(freeBytes)
+								.. " required=" .. tostring(requiredBytes)
+								.. " total=" .. tostring(totalBytes)
+								.. " current=" .. tostring(currentBytes)
+								.. " pack=" .. tostring(packName))
+							fail_candidate_download("Espace disque insuffisant pour télécharger et extraire ce pack.")
+							return false
+						end
+						diskCapacityChecked = true
+					end
 					if currentBytes > (tonumber(self.downloadLastByteCount) or 0) then
 						self.downloadLastByteCount = currentBytes
 						self.downloadLastByteAt = now
@@ -3179,102 +3293,117 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 				fail_candidate_download("Le fichier téléchargé est introuvable.")
 				return
 			end
-			local archiveHash = sha256_file_hex(zipPath)
-				if expectedArchiveHash ~= "" then
-				if archiveHash == nil then
-					remove_path_if_exists(zipPath)
-					trace("Download failed archive_hash_unavailable pack=" .. tostring(packName)
-						.. " expected=" .. expectedArchiveHash:sub(1, 12))
-					fail_candidate_download("Impossible de verifier l'integrite du pack catalogue.")
-					return
-				end
-				if archiveHash ~= expectedArchiveHash then
-					remove_path_if_exists(zipPath)
-					trace("Download failed archive_hash_mismatch pack=" .. tostring(packName)
-						.. " expected=" .. expectedArchiveHash:sub(1, 12)
-						.. " actual=" .. archiveHash:sub(1, 12))
-					fail_candidate_download("Le hash SHA-256 du pack catalogue ne correspond pas au manifeste.")
-					return
-				end
-					trace("Download catalog archive integrity verified pack=" .. tostring(packName)
-					.. " id=" .. tostring(packId)
-					.. " sha256=" .. archiveHash:sub(1, 12))
-				else
-				trace("Download catalog archive integrity unavailable pack=" .. tostring(packName)
-					.. " id=" .. tostring(packId)
-					.. " sha256=" .. tostring(archiveHash or "unavailable"):sub(1, 12))
-				end
-				trace_online_state("download_archive_verified", {
-					selected_at = selected_at(songInfo),
-					packId = packId,
-					packName = packName,
-					generation = downloadGeneration,
-					activeDownloadId = self.activeDownloadId or "",
-					hashProvided = expectedArchiveHash ~= "",
-					hashVerified = expectedArchiveHash ~= "" and archiveHash ~= nil,
-					archiveHashPrefix = tostring(archiveHash or ""):sub(1, 12),
-				})
-
 				self:UpdateStatus(self.status.DownloadInProgress, "Installation du pack", 100)
-				remove_directory_if_possible(quarantinePath)
-			create_directory_if_possible(quarantinePath)
-			trace("Download unzip begin pack=" .. tostring(packName)
-				.. " zipPath=" .. tostring(zipPath)
-				.. " quarantine=" .. tostring(quarantinePath))
-			local extracted = FILEMAN:Unzip(zipPath, quarantinePath, 0)
-			if not extracted then
-				remove_path_if_exists(zipPath)
-				remove_directory_if_possible(quarantinePath)
-				trace("Download failed unzip pack=" .. tostring(packName))
-				fail_candidate_download("Le zip téléchargé est invalide ou impossible à extraire.")
-				return
-			end
-				flush_dir_cache("/Songs/")
-				flush_dir_cache(quarantinePath)
-				log_dir_listing("Extracted quarantine", quarantinePath)
-				trace_online_state("download_archive_extracted", {
-					selected_at = selected_at(songInfo),
-					packId = packId,
-					packName = packName,
-					generation = downloadGeneration,
-					activeDownloadId = self.activeDownloadId or "",
-					quarantinePath = quarantinePath,
-				})
-
-			local installedPath, installError = install_extracted_pack_at_songs_root(quarantinePath, packName)
-			if not installedPath then
-				remove_path_if_exists(zipPath)
-				remove_directory_if_possible(quarantinePath)
-				trace("Download failed install pack=" .. tostring(packName) .. " reason=" .. tostring(installError))
-				fail_candidate_download(installError or "Impossible d'installer le pack téléchargé.")
-				return
+				local extractionFreeBytes = disk_free_bytes("/Songs/")
+				local extractionRequiredBytes = (tonumber(self.extractionReserveBytes) or (1024 * 1024 * 1024))
+					+ (tonumber(self.diskSafetyMarginBytes) or (256 * 1024 * 1024))
+				if extractionFreeBytes and extractionFreeBytes < extractionRequiredBytes then
+					trace("Download extraction blocked reason=insufficient_disk_space free="
+						.. tostring(extractionFreeBytes) .. " required=" .. tostring(extractionRequiredBytes)
+						.. " pack=" .. tostring(packName))
+					fail_candidate_download("Espace disque insuffisant pour extraire ce pack.")
+					return
 				end
-				remove_path_if_exists(zipPath)
-				trace_online_state("download_pack_installed", {
-					selected_at = selected_at(songInfo),
-					packId = packId,
-					packName = packName,
-					generation = downloadGeneration,
-					activeDownloadId = self.activeDownloadId or "",
-					installedPath = installedPath,
-				})
+				remove_directory_if_possible(quarantinePath)
+				create_directory_if_possible(quarantinePath)
+				trace("Download archive worker begin pack=" .. tostring(packName)
+					.. " generation=" .. tostring(downloadGeneration))
 
-				trace("Reload Songs after download pack=" .. tostring(packName))
-			self.pendingPostReloadSongInfo = songInfo
-			self.pendingQuarantinePath = installedPath
-			self.pendingPostReloadBrowseOnly = browseOnly
-				self.pendingPostReloadCallback = callback
-				self:UpdateStatus(self.status.ReloadingSongs, "Rechargement des chansons")
-				trace_online_state("download_reload_requested", {
-					selected_at = selected_at(songInfo),
-					packId = packId,
-					packName = packName,
-					generation = downloadGeneration,
-					activeDownloadId = self.activeDownloadId or "",
-					browseOnly = browseOnly == true,
-				})
-				transition_to_reload_songs()
-				finish_candidate_download()
+				local archiveQueued, archiveFuture = pcall(function()
+					return NETWORK:ProcessPackArchive({
+						archivePath = zipPath,
+						targetPath = quarantinePath,
+						expectedSha256 = expectedArchiveHash,
+						onComplete = function(result)
+							guarded_download_callback("archive_process", function()
+								self.downloadFuture = nil
+								if not self:IsDownloadGenerationCurrent(downloadGeneration) then
+									remove_path_if_exists(zipPath)
+									remove_directory_if_possible(quarantinePath)
+									trace("Archive result ignored reason=stale_generation pack=" .. tostring(packName))
+									return
+								end
+
+								result = type(result) == "table" and result or {}
+								local archiveHash = trim(result.sha256 or ""):lower()
+								if result.ok ~= true then
+									local errorCode = trim(result.errorCode or "archive_processing_failed")
+									remove_path_if_exists(zipPath)
+									remove_directory_if_possible(quarantinePath)
+									trace("Download archive worker failed pack=" .. tostring(packName)
+										.. " errorCode=" .. tostring(errorCode))
+									local message = "Le zip téléchargé est invalide ou impossible à extraire."
+									if errorCode == "hash_unavailable" then
+										message = "Impossible de verifier l'integrite du pack catalogue."
+									elseif errorCode == "hash_mismatch" then
+										message = "Le hash SHA-256 du pack catalogue ne correspond pas au manifeste."
+									elseif errorCode == "engine_unavailable" then
+										message = "Le moteur de fichiers n'est plus disponible."
+									elseif errorCode == "cancelled" then
+										message = "L'installation du pack a été annulée."
+									end
+									fail_candidate_download(message)
+									return
+								end
+
+								trace_online_state("download_archive_verified", {
+									selected_at = selected_at(songInfo), packId = packId, packName = packName,
+									generation = downloadGeneration, activeDownloadId = self.activeDownloadId or "",
+									hashProvided = expectedArchiveHash ~= "",
+									hashVerified = expectedArchiveHash ~= "" and archiveHash ~= "",
+									archiveHashPrefix = archiveHash:sub(1, 12),
+								})
+								flush_dir_cache("/Songs/")
+								flush_dir_cache(quarantinePath)
+								log_dir_listing("Extracted quarantine", quarantinePath)
+								trace_online_state("download_archive_extracted", {
+									selected_at = selected_at(songInfo), packId = packId, packName = packName,
+									generation = downloadGeneration, activeDownloadId = self.activeDownloadId or "",
+								})
+
+								local installedPath, installError = install_extracted_pack_at_songs_root(quarantinePath, packName)
+								if not installedPath then
+									remove_path_if_exists(zipPath)
+									remove_directory_if_possible(quarantinePath)
+									fail_candidate_download(installError or "Impossible d'installer le pack téléchargé.")
+									return
+								end
+								remove_path_if_exists(zipPath)
+								trace_online_state("download_pack_installed", {
+									selected_at = selected_at(songInfo), packId = packId, packName = packName,
+									generation = downloadGeneration, activeDownloadId = self.activeDownloadId or "",
+								})
+
+								self.pendingPostReloadSongInfo = songInfo
+								self.pendingQuarantinePath = installedPath
+								self.pendingPostReloadBrowseOnly = browseOnly
+								self.pendingPostReloadCallback = callback
+								self:UpdateStatus(self.status.ReloadingSongs, "Rechargement des chansons")
+								trace_online_state("download_reload_requested", {
+									selected_at = selected_at(songInfo), packId = packId, packName = packName,
+									generation = downloadGeneration, activeDownloadId = self.activeDownloadId or "",
+									browseOnly = browseOnly == true,
+								})
+								if not transition_to_reload_songs() then
+									rollback_installed_pack_if_possible(installedPath)
+									self.pendingPostReloadSongInfo = nil
+									self.pendingQuarantinePath = nil
+									self.pendingPostReloadBrowseOnly = false
+									self.pendingPostReloadCallback = nil
+									fail_candidate_download("Le rechargement des chansons n'a pas pu démarrer.", false)
+									return
+								end
+								finish_candidate_download()
+							end)
+						end,
+					})
+				end)
+				if not archiveQueued or not archiveFuture then
+					fail_candidate_download("Le traitement du pack n'a pas pu démarrer: "
+						.. tostring(archiveFuture or "worker unavailable"))
+					return
+				end
+				self.downloadFuture = archiveFuture
 				end, response)
 			end,
 		})
@@ -3503,7 +3632,7 @@ function PackSync:ValidatePendingPostReload()
 				return false
 			end
 			self:MarkPackInstalled(packName)
-			self:UpdateStatus(self.status.DownloadedOk, "Pack telecharge. En attente du choix de chanson du manager.")
+			self:UpdateStatus(self.status.DownloadedOk, "Pack telecharge. En attente du choix de chanson du manager.", 100)
 		if MESSAGEMAN then
 			MESSAGEMAN:Broadcast("OnlinePackDownloaded", { songInfo = songInfo })
 		end
@@ -3566,7 +3695,7 @@ function PackSync:ValidatePendingPostReload()
 				.. " currentTitle=" .. tostring(selected_title(currentSelectedSong))
 				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 				.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
-			self:UpdateStatus(self.status.DownloadedOk, "Pack telecharge. En attente du choix de chanson du manager.")
+			self:UpdateStatus(self.status.DownloadedOk, "Pack telecharge. En attente du choix de chanson du manager.", 100)
 			if MESSAGEMAN then
 				MESSAGEMAN:Broadcast("OnlinePackDownloaded", { songInfo = songInfo, staleSelection = true })
 			end
@@ -3581,7 +3710,7 @@ function PackSync:ValidatePendingPostReload()
 				return true
 			end
 
-		self:UpdateStatus(self.status.DownloadedOk, nil)
+		self:UpdateStatus(self.status.DownloadedOk, nil, 100)
 		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
 			ITGOnline:ConfirmSelectedSongAvailability("downloaded_ok", function(ok, decoded, response)
 				local confirmed, deferred, availabilityReason = availability_confirmation_state(ok, decoded, response)

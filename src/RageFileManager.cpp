@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <string>
 #include <utility>
@@ -27,6 +28,7 @@
 #include <windows.h>
 #elif defined(UNIX) || defined(MACOSX)
 #include <paths.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
@@ -138,9 +140,19 @@ size_t zipRead(void* pOpaque, mz_uint64 file_ofs, void* pBuf, size_t n) {
   return read > 0 ? static_cast<size_t>(read) : 0;
 }
 
+struct ZipWriteContext {
+  RageFile* file;
+  const std::function<bool()>* shouldCancel;
+};
+
 size_t zipWriteFile(
     void* pOpaque, mz_uint64 file_ofs, const void* pBuf, size_t n) {
-  RageFile* f = static_cast<RageFile*>(pOpaque);
+  auto* context = static_cast<ZipWriteContext*>(pOpaque);
+  if (context->shouldCancel != nullptr && *context->shouldCancel &&
+      (*context->shouldCancel)()) {
+    return 0;
+  }
+  RageFile* f = context->file;
 
   /*
    * XXX: RageFile doesn't allow to Seek() in a file open for writing. We
@@ -160,7 +172,7 @@ size_t zipWriteFile(
 }
 
 bool IsSafeZipEntryPath(const std::string& rawPath) {
-  if (rawPath.empty()) {
+  if (rawPath.empty() || rawPath.size() > 4096) {
     return false;
   }
 
@@ -177,13 +189,31 @@ bool IsSafeZipEntryPath(const std::string& rawPath) {
   std::vector<std::string> segments;
   split(path, "/", segments);
   for (const auto& segment : segments) {
-    if (segment.empty() || segment == "." || segment == "..") {
+    if (segment.empty() || segment.size() > 255 || segment == "." ||
+        segment == "..") {
       return false;
     }
     for (const char ch : segment) {
-      if (static_cast<unsigned char>(ch) < 32) {
+      if (static_cast<unsigned char>(ch) < 32 || ch == '<' || ch == '>' ||
+          ch == ':' || ch == '"' || ch == '|' || ch == '?' || ch == '*') {
         return false;
       }
+    }
+
+    if (segment.back() == '.' || segment.back() == ' ') {
+      return false;
+    }
+
+    std::string basename = segment.substr(0, segment.find('.'));
+    MakeLower(basename);
+    const bool reservedDevice = basename == "con" || basename == "prn" ||
+                                basename == "aux" || basename == "nul" ||
+                                (basename.size() == 4 &&
+                                 (basename.compare(0, 3, "com") == 0 ||
+                                  basename.compare(0, 3, "lpt") == 0) &&
+                                 basename[3] >= '1' && basename[3] <= '9');
+    if (reservedDevice) {
+      return false;
     }
   }
 
@@ -197,12 +227,12 @@ constexpr mz_uint64 kMaxZipTotalUncompressedBytes =
     static_cast<mz_uint64>(1024) * 1024 * 1024;
 constexpr mz_uint64 kMaxZipCompressionRatio = 200;
 
-static bool EndsWithNoCase(const std::string& value, const std::string& suffix) {
+static bool EndsWithNoCase(
+    const std::string& value, const std::string& suffix) {
   if (value.size() < suffix.size()) {
     return false;
   }
-  return CompareNoCase(
-             value.substr(value.size() - suffix.size()), suffix) == 0;
+  return CompareNoCase(value.substr(value.size() - suffix.size()), suffix) == 0;
 }
 
 static void CleanupTempNewDirArtifacts(const std::string& rootPath) {
@@ -240,7 +270,8 @@ static void CleanupTempNewDirArtifacts(const std::string& rootPath) {
         if (removed) {
           LOG->Trace("Removed temp directory artifact %s", entry.c_str());
         } else {
-          LOG->Warn("Could not remove temp directory artifact %s", entry.c_str());
+          LOG->Warn(
+              "Could not remove temp directory artifact %s", entry.c_str());
         }
         continue;
       }
@@ -253,7 +284,8 @@ static void CleanupTempNewDirArtifacts(const std::string& rootPath) {
 }
 
 bool RageFileManager::Unzip(
-    const std::string& zipPath, std::string targetPath, int strip) {
+    const std::string& zipPath, std::string targetPath, int strip,
+    const std::function<bool()>& shouldCancel) {
   if (targetPath.empty() || targetPath.back() != '/') {
     targetPath.push_back('/');
   }
@@ -288,8 +320,14 @@ bool RageFileManager::Unzip(
   }
 
   mz_uint64 total_uncompressed_size = 0;
+  std::unordered_set<std::string> portableEntryPaths;
+  std::map<std::string, std::string> portablePathCasing;
 
   for (mz_uint fileIndex = 0; fileIndex < file_count; fileIndex++) {
+    if (shouldCancel && shouldCancel()) {
+      success = false;
+      break;
+    }
     mz_zip_archive_file_stat info;
     if (!mz_zip_reader_file_stat(&zip, fileIndex, &info)) {
       LOG->Warn(
@@ -299,18 +337,18 @@ bool RageFileManager::Unzip(
       break;
     }
 
-    if (!info.m_is_directory &&
-        info.m_uncomp_size > kMaxZipSingleFileBytes) {
+    if (!info.m_is_directory && info.m_uncomp_size > kMaxZipSingleFileBytes) {
       LOG->Warn(
-          "Could not unzip %s: entry %s is too large",
-          zipPath.c_str(), info.m_filename);
+          "Could not unzip %s: entry %s is too large", zipPath.c_str(),
+          info.m_filename);
       success = false;
       break;
     }
 
     if ((info.m_bit_flag & 1U) != 0U) {
-      LOG->Warn("Could not unzip %s: encrypted entry %s is not allowed",
-                zipPath.c_str(), info.m_filename);
+      LOG->Warn(
+          "Could not unzip %s: encrypted entry %s is not allowed",
+          zipPath.c_str(), info.m_filename);
       success = false;
       break;
     }
@@ -319,8 +357,9 @@ bool RageFileManager::Unzip(
         (info.m_comp_size == 0 ||
          info.m_uncomp_size / std::max<mz_uint64>(1, info.m_comp_size) >
              kMaxZipCompressionRatio)) {
-      LOG->Warn("Could not unzip %s: entry %s exceeds compression ratio limit",
-                zipPath.c_str(), info.m_filename);
+      LOG->Warn(
+          "Could not unzip %s: entry %s exceeds compression ratio limit",
+          zipPath.c_str(), info.m_filename);
       success = false;
       break;
     }
@@ -361,9 +400,46 @@ bool RageFileManager::Unzip(
     }
     if (!IsSafeZipEntryPath(filename)) {
       LOG->Warn(
-          "Could not unzip %s: unsafe archive entry %s",
+          "Could not unzip %s: unsafe archive entry %s", zipPath.c_str(),
+          info.m_filename);
+      success = false;
+      break;
+    }
+
+    std::string portableEntryPath(filename);
+    MakeLower(portableEntryPath);
+    if (!portableEntryPaths.insert(portableEntryPath).second) {
+      LOG->Warn(
+          "Could not unzip %s: archive entry collides case-insensitively: %s",
           zipPath.c_str(), info.m_filename);
       success = false;
+      break;
+    }
+
+    std::vector<std::string> portableSegments;
+    split(filename, "/", portableSegments);
+    std::string canonicalPrefix;
+    std::string originalPrefix;
+    for (const auto& segment : portableSegments) {
+      std::string canonicalSegment(segment);
+      MakeLower(canonicalSegment);
+      if (!canonicalPrefix.empty()) {
+        canonicalPrefix += '/';
+        originalPrefix += '/';
+      }
+      canonicalPrefix += canonicalSegment;
+      originalPrefix += segment;
+      const auto insertion =
+          portablePathCasing.emplace(canonicalPrefix, originalPrefix);
+      if (!insertion.second && insertion.first->second != originalPrefix) {
+        LOG->Warn(
+            "Could not unzip %s: archive path casing collides at %s",
+            zipPath.c_str(), info.m_filename);
+        success = false;
+        break;
+      }
+    }
+    if (!success) {
       break;
     }
 
@@ -389,8 +465,9 @@ bool RageFileManager::Unzip(
         break;
       }
 
+      ZipWriteContext writeContext{&f, &shouldCancel};
       success = mz_zip_reader_extract_to_callback(
-          &zip, fileIndex, zipWriteFile, &f, 0);
+          &zip, fileIndex, zipWriteFile, &writeContext, 0);
       if (!success) {
         std::string error = f.GetError();
         LOG->Warn("Could not write to %s: %s", filepath.c_str(), error.c_str());
@@ -1102,6 +1179,33 @@ int RageFileManager::GetFileSizeInBytes(const std::string& sPath_) {
   return iRet;
 }
 
+uint64_t RageFileManager::GetDiskFreeSpaceInBytes(const std::string& path) {
+  const std::string resolvedPath = ResolvePath(path);
+
+#if defined(_WIN32)
+  ULARGE_INTEGER available = {};
+  if (!GetDiskFreeSpaceExA(
+          resolvedPath.c_str(), &available, nullptr, nullptr)) {
+    return 0;
+  }
+  return static_cast<uint64_t>(available.QuadPart);
+#elif defined(UNIX) || defined(MACOSX)
+  struct statvfs info = {};
+  if (statvfs(resolvedPath.c_str(), &info) != 0) {
+    return 0;
+  }
+  const uint64_t blocks = static_cast<uint64_t>(info.f_bavail);
+  const uint64_t blockSize = static_cast<uint64_t>(info.f_frsize);
+  if (blockSize != 0 &&
+      blocks > std::numeric_limits<uint64_t>::max() / blockSize) {
+    return std::numeric_limits<uint64_t>::max();
+  }
+  return blocks * blockSize;
+#else
+  return 0;
+#endif
+}
+
 int RageFileManager::GetFileHash(const std::string& sPath_) {
   std::string sPath = sPath_;
 
@@ -1435,8 +1539,7 @@ bool DeleteRecursive(RageFileDriver* prfd, const std::string& sDir) {
   bool removedAllChildren = true;
   for (const std::string& s : vsFiles) {
     if (prfd->GetFileType(s) == RageFileManager::TYPE_DIR) {
-      removedAllChildren =
-          DeleteRecursive(prfd, s + "/") && removedAllChildren;
+      removedAllChildren = DeleteRecursive(prfd, s + "/") && removedAllChildren;
     } else {
       removedAllChildren = prfd->Remove(s) && removedAllChildren;
     }
@@ -1502,9 +1605,11 @@ static std::string NormalizeLuaDeleteRecursivePath(std::string path) {
 
 static bool IsLuaDeleteRecursivePathAllowed(const std::string& path) {
   static const std::string allowedRoot = "/Songs/Online Downloads/";
-  static const std::string legacyOnlineDownloadRoot = "/Songs/__OnlineDownload_";
+  static const std::string legacyOnlineDownloadRoot =
+      "/Songs/__OnlineDownload_";
   return (path.size() >= allowedRoot.size() &&
-          CompareNoCase(path.substr(0, allowedRoot.size()), allowedRoot) == 0) ||
+          CompareNoCase(path.substr(0, allowedRoot.size()), allowedRoot) ==
+              0) ||
          (path.size() > legacyOnlineDownloadRoot.size() &&
           CompareNoCase(
               path.substr(0, legacyOnlineDownloadRoot.size()),
@@ -1513,9 +1618,11 @@ static bool IsLuaDeleteRecursivePathAllowed(const std::string& path) {
 
 static bool IsLuaOnlineMutablePathAllowed(const std::string& path) {
   static const std::string downloadsRoot = "/Downloads/";
-  return IsLuaDeleteRecursivePathAllowed(NormalizeLuaDeleteRecursivePath(path)) ||
+  return IsLuaDeleteRecursivePathAllowed(
+             NormalizeLuaDeleteRecursivePath(path)) ||
          (path.size() > downloadsRoot.size() &&
-          CompareNoCase(path.substr(0, downloadsRoot.size()), downloadsRoot) == 0 &&
+          CompareNoCase(path.substr(0, downloadsRoot.size()), downloadsRoot) ==
+              0 &&
           path.find("..") == std::string::npos);
 }
 
@@ -1526,13 +1633,12 @@ static std::string NormalizeLuaMovePath(std::string path) {
 }
 
 static bool IsLuaOnlineSongInstallMoveAllowed(
-    const std::string& fromPath,
-    const std::string& toPath) {
+    const std::string& fromPath, const std::string& toPath) {
   static const std::string quarantineRoot = "/Songs/__OnlineDownload_";
   static const std::string songsRoot = "/Songs/";
   if (fromPath.size() <= quarantineRoot.size() ||
-      CompareNoCase(fromPath.substr(0, quarantineRoot.size()), quarantineRoot) !=
-          0) {
+      CompareNoCase(
+          fromPath.substr(0, quarantineRoot.size()), quarantineRoot) != 0) {
     return false;
   }
 
@@ -1551,7 +1657,8 @@ static bool IsLuaOnlineSongInstallMoveAllowed(
   return !relativeToSongs.empty() &&
          relativeToSongs.find('/') == std::string::npos &&
          relativeToSongs.find('\\') == std::string::npos &&
-         relativeToSongs.find("..") == std::string::npos;
+         relativeToSongs.find("..") == std::string::npos &&
+         IsSafeZipEntryPath(relativeToSongs);
 }
 
 /** @brief Allow Lua to have access to the RageFileManager. */
@@ -1577,7 +1684,9 @@ class LunaRageFileManager : public Luna<RageFileManager> {
   static int CreateDir(T* p, lua_State* L) {
     const std::string path = NormalizeLuaDeleteRecursivePath(SArg(1));
     if (!IsLuaDeleteRecursivePathAllowed(path)) {
-      LOG->Warn("Refusing to create unsafe online staging directory %s", path.c_str());
+      LOG->Warn(
+          "Refusing to create unsafe online staging directory %s",
+          path.c_str());
       lua_pushboolean(L, false);
       return 1;
     }
@@ -1599,6 +1708,11 @@ class LunaRageFileManager : public Luna<RageFileManager> {
   }
   static int GetFileSizeBytes(T* p, lua_State* L) {
     lua_pushnumber(L, p->GetFileSizeInBytes(SArg(1)));
+    return 1;
+  }
+  static int GetDiskFreeSpaceBytes(T* p, lua_State* L) {
+    lua_pushnumber(
+        L, static_cast<lua_Number>(p->GetDiskFreeSpaceInBytes(SArg(1))));
     return 1;
   }
   static int GetHashForFile(T* p, lua_State* L) {
@@ -1637,15 +1751,19 @@ class LunaRageFileManager : public Luna<RageFileManager> {
 
     static const std::string downloadsRoot = "/Downloads/";
     static const std::string songsRoot = "/Songs/";
-    const bool sourceAllowed = zipPath.size() > downloadsRoot.size() &&
-        CompareNoCase(zipPath.substr(0, downloadsRoot.size()), downloadsRoot) == 0;
-    const bool targetAllowed = IsLuaDeleteRecursivePathAllowed(
-        NormalizeLuaDeleteRecursivePath(targetPath)) ||
+    const bool sourceAllowed =
+        zipPath.size() > downloadsRoot.size() &&
+        CompareNoCase(zipPath.substr(0, downloadsRoot.size()), downloadsRoot) ==
+            0;
+    const bool targetAllowed =
+        IsLuaDeleteRecursivePathAllowed(
+            NormalizeLuaDeleteRecursivePath(targetPath)) ||
         IsLuaOnlineSongInstallMoveAllowed(
             "/Songs/__OnlineDownload_unzip_probe", targetPath);
     if (!sourceAllowed || !targetAllowed) {
-      LOG->Warn("Refusing unsafe Lua unzip from %s to %s",
-                zipPath.c_str(), targetPath.c_str());
+      LOG->Warn(
+          "Refusing unsafe Lua unzip from %s to %s", zipPath.c_str(),
+          targetPath.c_str());
       lua_pushboolean(L, false);
       return 1;
     }
@@ -1678,8 +1796,7 @@ class LunaRageFileManager : public Luna<RageFileManager> {
     if (!IsLuaOnlineSongInstallMoveAllowed(fromPath, toPath)) {
       LOG->Warn(
           "Refusing unsafe online song pack move from %s to %s",
-          fromPath.c_str(),
-          toPath.c_str());
+          fromPath.c_str(), toPath.c_str());
       lua_pushboolean(L, false);
       return 1;
     }
@@ -1714,6 +1831,7 @@ class LunaRageFileManager : public Luna<RageFileManager> {
     ADD_METHOD(Remove);
     ADD_METHOD(DoesFileExist);
     ADD_METHOD(GetFileSizeBytes);
+    ADD_METHOD(GetDiskFreeSpaceBytes);
     ADD_METHOD(GetHashForFile);
     ADD_METHOD(GetDirListing);
     ADD_METHOD(FlushDirCache);

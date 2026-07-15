@@ -1,9 +1,12 @@
 #ifndef SECURE_CREDENTIAL_STORE_H
 #define SECURE_CREDENTIAL_STORE_H
 
+#include <cstddef>
 #include <string>
 
 namespace SecureCredentialStore {
+
+inline constexpr std::size_t kMaxSecretLength = 4096;
 
 const char* BackendName();
 bool IsAvailable();

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <string>
 
@@ -406,6 +407,11 @@ RageFileObjInflate* GunzipFile(
   if (sError != "") {
     return nullptr;
   }
+  if (iUncompressedSize >
+      static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+    sError = "Uncompressed size exceeds supported range";
+    return nullptr;
+  }
 
   RageFileDriverSlice* pSliceFile =
       new RageFileDriverSlice(pFile.release(), iDataPos, iFooterPos - iDataPos);
@@ -515,24 +521,50 @@ void GzipString(const std::string& sIn, std::string& sOut) {
 
 bool GunzipString(
     const std::string& sIn, std::string& sOut, std::string& sError) {
+  return GunzipStringBounded(
+      sIn, sOut, sError,
+      static_cast<std::size_t>(std::numeric_limits<int>::max()));
+}
+
+bool GunzipStringBounded(
+    const std::string& sIn, std::string& sOut, std::string& sError,
+    std::size_t maxOutputBytes) {
+  sOut.clear();
   RageFileObjMem* mem = new RageFileObjMem;
   mem->PutString(sIn);
 
   uint32_t iCRC32;
-  RageFileBasic* pFile = GunzipFile(mem, sError, &iCRC32);
-  if (pFile == nullptr) {
+  std::unique_ptr<RageFileBasic> file(GunzipFile(mem, sError, &iCRC32));
+  if (file == nullptr) {
     return false;
   }
 
-  pFile->Read(sOut);
+  const int uncompressedSize = file->GetFileSize();
+  if (uncompressedSize < 0 ||
+      static_cast<std::size_t>(uncompressedSize) > maxOutputBytes) {
+    sError = "Uncompressed data exceeds maximum allowed size";
+    return false;
+  }
+
+  const int bytesRead = file->Read(sOut, uncompressedSize);
+  if (bytesRead != uncompressedSize) {
+    sError = file->GetError().empty() ? "Unexpected end of compressed data"
+                                      : file->GetError();
+    sOut.clear();
+    return false;
+  }
 
   /* Check the CRC. */
   unsigned iRet;
-  ASSERT(pFile->GetCRC32(&iRet));
-  RageUtil::SafeDelete(pFile);
+  if (!file->GetCRC32(&iRet)) {
+    sError = "Could not calculate uncompressed CRC";
+    sOut.clear();
+    return false;
+  }
 
   if (iRet != iCRC32) {
     sError = "CRC error";
+    sOut.clear();
     return false;
   }
 

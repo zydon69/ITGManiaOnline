@@ -115,6 +115,7 @@ local lobby_trace_state = {
 	lastOnlineMissingSongSignature = "",
 	lastOnlineMissingSongSignatureAt = 0,
 	onlineMissingSongDuplicateWindow = 3.0,
+	joinedPreviewPlaybackKey = "",
 	seen = {},
 	order = {},
 	maxSignatures = 512,
@@ -597,6 +598,7 @@ local function reset_joined_lobby_state()
 	joined_can_download_pack = false
 	joined_missing_song_reason = nil
 	joined_preview_unknown_pack = false
+	lobby_trace_state.joinedPreviewPlaybackKey = ""
 	showing_global_options_menu = false
 	joined_global_options = { scoreMode="itg", musicRate=1.0 }
 	joined_focus_initialized = false
@@ -1841,6 +1843,29 @@ function normalized_online_phase(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
 end
 
+function play_joined_song_preview(preview, source)
+	if not (preview and play_online_preview_music_normal_rate) then return false end
+	local playbackKey = table.concat({
+		tostring(ITGOnline and ITGOnline.currentRoomId or joined_lobby_code or ""),
+		trim_text(preview.preview_session_id or preview.previewSessionId),
+		trim_text(song_info_pack(preview)),
+		trim_text(preview.songPath or preview.song_path or preview.folder_name or preview.title),
+	}, "|")
+	if playbackKey == lobby_trace_state.joinedPreviewPlaybackKey then
+		lobby_flow_trace("song_preview_playback_skipped reason=already_playing"
+			.. " source=" .. tostring(source or "unknown")
+			.. " key=" .. tostring(playbackKey))
+		return true
+	end
+	local played = play_online_preview_music_normal_rate(preview, source or "online_lobby_preview") == true
+	if played then
+		lobby_trace_state.joinedPreviewPlaybackKey = playbackKey
+	else
+		lobby_trace_state.joinedPreviewPlaybackKey = ""
+	end
+	return played
+end
+
 local function reset_joined_transient_song_state(reason, options)
 	options = options or {}
 	local clearPreview = options.clearPreview ~= false
@@ -1857,6 +1882,7 @@ local function reset_joined_transient_song_state(reason, options)
 		.. " previousUnknownPack=" .. tostring(joined_preview_unknown_pack == true))
 	if clearPreview then
 		joined_song_preview = nil
+		lobby_trace_state.joinedPreviewPlaybackKey = ""
 	end
 	joined_song_confirmed = false
 	joined_song_selected_key = ""
@@ -1875,6 +1901,45 @@ local function reset_joined_transient_song_state(reason, options)
 	if resetPackSync and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.ResetLocalState then
 		ITGOnline.PackSync:ResetLocalState(tostring(reason or "joined_transient_song_reset"))
 	end
+end
+
+local function restore_active_song_preview(root, source)
+	if not (ITGOnline and ITGOnline.GetActiveSongPreview) then return false end
+	local preview = normalize_online_song_info(ITGOnline:GetActiveSongPreview())
+	if not preview then return false end
+	local phase = normalized_online_phase(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or joined_phase)
+	if phase ~= "lobby" or (ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song ~= nil) then
+		return false
+	end
+
+	reset_joined_transient_song_state("restore_active_preview:" .. tostring(source or "unknown"), {
+		clearPreview = false,
+		resetPackSync = false,
+	})
+	joined_song_preview = preview
+	joined_song_confirmed = false
+	joined_song_selected_key = ""
+	joined_preview_unknown_pack = not local_pack_exists(preview)
+	lobby_flow_trace("active_song_preview_restored source=" .. tostring(source or "unknown")
+		.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+		.. " session=" .. tostring(preview.preview_session_id or preview.previewSessionId or "nil")
+		.. " pack=" .. tostring(song_info_pack(preview))
+		.. " title=" .. tostring(preview.title or preview.folder_name or "nil")
+		.. " unknownPack=" .. tostring(joined_preview_unknown_pack == true))
+	if ITGOnline.PackSync and ITGOnline.PackSync.ManagerBrowsingPreview then
+		ITGOnline.PackSync:ManagerBrowsingPreview(preview)
+	end
+	if joined_preview_unknown_pack then
+		lobby_trace_state.joinedPreviewPlaybackKey = ""
+		if stop_music then stop_music() end
+	else
+		play_joined_song_preview(preview, "online_lobby_restore_after_reload")
+	end
+	if root then
+		root:queuecommand("UpdateJoinedLobbyText")
+		request_lobby_ui_repaint(root, "restore_active_song_preview")
+	end
+	return true
 end
 
 function joined_phase_allows_song_selection()
@@ -2406,14 +2471,19 @@ local function set_joined_default_active_index(force)
 end
 
 local function transition_to_online_song_reload()
-	SL.Global.Online = SL.Global.Online or {}
-	SL.Global.Online.ReturnToLobbyAfterSongReload = true
-
 	local topScreen = SCREENMAN:GetTopScreen()
-	if topScreen then
+	if not topScreen then return false end
+	local ok, err = pcall(function()
 		topScreen:SetNextScreenName("ScreenReloadSongsOnline")
 		topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+	end)
+	if not ok then
+		lobby_flow_trace("song_reload_transition_failed error=" .. tostring(err or "unknown"))
+		return false
 	end
+	SL.Global.Online = SL.Global.Online or {}
+	SL.Global.Online.ReturnToLobbyAfterSongReload = true
+	return true
 end
 
 local function room_visibility_label(room)
@@ -3813,7 +3883,14 @@ local function should_suppress_input_during_quiet_window(event)
 end
 
 local InputHandler = function(event)
-	if not event.PlayerNumber or not event.button then return false end
+	local inputType = tostring(event and event.type or "")
+	if (inputType == "InputEventType_FirstPress" or inputType == "FirstPress")
+		and ITGOnline and ITGOnline.MarkUserActivity then
+		-- Activity is transport-level, not UI-level.  Even an unmapped key or a
+		-- key consumed by a modal proves that the player is still present.
+		ITGOnline:MarkUserActivity("lobby_input:" .. tostring(event and (event.GameButton or event.button) or "unknown"))
+	end
+	if not event or not event.PlayerNumber or not event.button then return false end
 	if not t then return false end
 	if not is_active_lobby_overlay() then
 		lobby_flow_trace("input_ignored reason=inactive_overlay type=" .. tostring(event.type)
@@ -3847,12 +3924,6 @@ local InputHandler = function(event)
 		.. " joinedCanDownload=" .. tostring(joined_can_download_pack == true)
 		.. " packBusy=" .. tostring(pack_sync_busy() == true)
 		.. " canDownloadBrowsedPack=" .. tostring(can_download_browsed_pack() == true))
-
-	-- This overlay owns the input callback, so it must also report activity.
-	-- Navigation is intentional participation and must reset the idle warning.
-	if event.type == "InputEventType_FirstPress" and ITGOnline and ITGOnline.MarkUserActivity then
-		ITGOnline:MarkUserActivity("lobby_input:" .. tostring(event.GameButton or event.button))
-	end
 
 	if should_suppress_input_during_quiet_window(event) then
 		lobby_flow_trace("input_ignored reason=quiet_window type=" .. tostring(event.type)
@@ -3963,7 +4034,11 @@ local af = Def.ActorFrame{
 				showSpinner=true
 			})
 		self:queuecommand("RefreshCurrentRoomSnapshot")
+		self:queuecommand("RestoreActiveSongPreview")
 		self:queuecommand("CheckConnect")
+	end,
+	RestoreActiveSongPreviewCommand=function(self)
+		restore_active_song_preview(self, "lobby_overlay_on")
 	end,
 	OffCommand=function(self)
 			lobby_flow_trace("overlay_off instance=" .. tostring(overlay_instance_id)
@@ -4343,16 +4418,17 @@ local af = Def.ActorFrame{
 			if tostring(player.playerId or "") == tostring(joined_manager_user_id or "") then
 				profile = "[M] " .. profile
 			end
-			local ready = player.ready and " ✔" or player.readyPendingServer and " ..." or ""
+			local ready = player.ready and " ✔" or ""
 			local missing = ""
 			local packSyncText = pack_sync_line_for_player(player)
+			local playerScreenName = trim_text(player.screenName or player.screen or player.currentScreen)
 			renderParts[#renderParts + 1] = table.concat({
 				tostring(i),
 				tostring(player.playerId or ""),
 				tostring(profile),
 				tostring(player.ready == true),
 				tostring(player.readyPendingServer == true),
-				tostring(player.screen or player.currentScreen or ""),
+				tostring(playerScreenName),
 				tostring(player.playState or player.play_state or ""),
 				tostring(player.packSyncStatus or player.pack_sync_status or ""),
 				tostring(player.songAvailable),
@@ -4360,6 +4436,11 @@ local af = Def.ActorFrame{
 			}, ":")
 			if packSyncText ~= "" then
 				missing = " · " .. packSyncText
+			end
+			if not player.ready and playerScreenName:find("ScreenPlayerOptions", 1, true) == 1 then
+				missing = " · écran d'option" .. (player.readyPendingServer and " ..." or "")
+			elseif player.readyPendingServer and missing == "" then
+				missing = " ..."
 			end
 			local optionParts = {}
 			local speedMod = trim_text(player.speedMod)
@@ -4369,9 +4450,10 @@ local af = Def.ActorFrame{
 			-- A background download leaves a short-lived downloaded_ok/ready status
 			-- while the manager is still browsing. songAvailable can still describe
 			-- the previous preview, so do not show a phantom active selection.
+			local status = trim_text(player.packSyncStatus or player.pack_sync_status)
 			local syncCompleted = status == "downloaded_ok" or status == "ready"
 			if missing == "" and joined_song_preview ~= nil and player.songAvailable == false
-				and not syncCompleted and not player_is_current_user(player) then
+				and not syncCompleted and player_is_manager(player) and not player_is_current_user(player) then
 				missing = " - selection en cours"
 			end
 			local maxLineLen = 88
@@ -5135,6 +5217,9 @@ local af = Def.ActorFrame{
 					joined_song_confirmed = false
 					joined_song_selected_key = ""
 				end
+				if not selectedSongInfo and joined_song_preview == nil then
+					restore_active_song_preview(self, "online_lobby_state")
+				end
 				joined_preview_unknown_pack = joined_song_preview ~= nil and not local_pack_exists(joined_song_preview)
 				if selectedSongInfo and joined_song_selected_key ~= previousSelectedKey then
 					joined_missing_song = false
@@ -5539,22 +5624,53 @@ end,
 				lobby_flow_trace("OnlineSongPreview_manager_browsing_preview")
 				ITGOnline.PackSync:ManagerBrowsingPreview(preview)
 			end
-			if joined_preview_unknown_pack and stop_music then
-				lobby_flow_trace("OnlineSongPreview_stop_music reason=unknown_local_pack"
-					.. " pack=" .. tostring(song_info_pack(preview))
-					.. " song=" .. tostring(preview.song or preview.title or ""))
-				stop_music()
-			elseif play_online_preview_music_normal_rate then
-				play_online_preview_music_normal_rate(preview, "online_lobby_song_preview")
+			if joined_preview_unknown_pack then
+				lobby_trace_state.joinedPreviewPlaybackKey = ""
+				if stop_music then
+					lobby_flow_trace("OnlineSongPreview_stop_music reason=unknown_local_pack"
+						.. " pack=" .. tostring(song_info_pack(preview))
+						.. " song=" .. tostring(preview.song or preview.title or ""))
+					stop_music()
+				end
+			else
+				play_joined_song_preview(preview, "online_lobby_song_preview")
 			end
 			self:queuecommand("UpdateJoinedLobbyText")
 		else
+			lobby_trace_state.joinedPreviewPlaybackKey = ""
 			if stop_music then
 				lobby_flow_trace("OnlineSongPreview_stop_music reason=normalize_failed")
 				stop_music()
 			end
 			lobby_flow_trace("OnlineSongPreview_ignored reason=normalize_failed")
 		end
+	end,
+	OnlineSongPreviewClearedMessageCommand=function(self, params)
+		if not is_active_lobby_overlay() then
+			lobby_flow_trace("OnlineSongPreviewCleared_ignored reason=inactive_overlay")
+			return
+		end
+		local requestedSession = trim_text(params and (params.preview_session_id or params.previewSessionId))
+		local activeSession = trim_text(joined_song_preview and (joined_song_preview.preview_session_id or joined_song_preview.previewSessionId))
+		if requestedSession ~= "" and activeSession ~= "" and requestedSession ~= activeSession then
+			lobby_flow_trace("OnlineSongPreviewCleared_ignored reason=session_mismatch"
+				.. " requestedSession=" .. tostring(requestedSession)
+				.. " activeSession=" .. tostring(activeSession))
+			return
+		end
+		lobby_flow_trace("OnlineSongPreviewCleared_received room=" .. tostring(params and (params.room_id or params.roomId) or "nil")
+			.. " session=" .. tostring(requestedSession)
+			.. " activeSession=" .. tostring(activeSession))
+		reset_joined_transient_song_state("song_preview_cleared", { clearPreview = true, resetPackSync = true })
+		if stop_music then stop_music() end
+		self:queuecommand("UpdateJoinedLobbyText")
+		request_lobby_ui_repaint(self, "song_preview_cleared")
+		self:queuecommand("Hover")
+	end,
+	OnlineSongReloadCompletedMessageCommand=function(self)
+		if not is_active_lobby_overlay() or leaving_lobby then return end
+		lobby_flow_trace("OnlineSongReloadCompleted_received restoring_active_preview=true")
+		restore_active_song_preview(self, "song_reload_completed")
 	end,
 		OnlinePackSyncReloadSongsMessageCommand=function(self)
 			if not is_active_lobby_overlay() then
@@ -5639,6 +5755,9 @@ end,
 			lobby_flow_trace("OnlinePackDownloaded_mark_installed pack=" .. tostring(song_info_pack(params.songInfo)))
 			ITGOnline.PackSync:MarkPackInstalled(song_info_pack(params.songInfo))
 		end
+		if joined_song_preview == nil then
+			restore_active_song_preview(self, "online_pack_downloaded")
+		end
 		if params and params.songInfo and joined_song_preview and song_info_pack(params.songInfo) == song_info_pack(joined_song_preview) then
 			joined_preview_unknown_pack = false
 			lobby_flow_trace("OnlinePackDownloaded_matches_preview refreshing_joined_ui pack=" .. tostring(song_info_pack(params.songInfo)))
@@ -5646,6 +5765,7 @@ end,
 				lobby_flow_trace("OnlinePackDownloaded_recheck_manager_preview")
 				ITGOnline.PackSync:ManagerBrowsingPreview(joined_song_preview)
 			end
+			play_joined_song_preview(joined_song_preview, "online_pack_downloaded_resume_preview")
 			normalize_joined_active_index()
 			self:queuecommand("UpdateJoinedLobbyText")
 			request_lobby_ui_repaint(self, "online_pack_downloaded")

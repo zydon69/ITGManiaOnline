@@ -94,8 +94,7 @@ struct HttpRequestArgs {
 class HttpRequestFuture {
  public:
   HttpRequestFuture(
-      ix::HttpRequestArgsPtr& args,
-      std::function<void()> onCancel = nullptr)
+      ix::HttpRequestArgsPtr& args, std::function<void()> onCancel = nullptr)
       : args(args), onCancel(std::move(onCancel)) {};
 
   static int Collect(lua_State* L);
@@ -154,6 +153,7 @@ class NetworkManager {
   void CloseAllWebSocketsFromLua();
   void Update();
   bool EnqueueMainThreadTask(std::function<void()> task, bool terminal = false);
+  bool EnqueueDownloadTask(std::function<void()> task);
   std::string UrlEncode(const std::string& value);
   std::string EncodeQueryParameters(
       const std::unordered_map<std::string, std::string>& query);

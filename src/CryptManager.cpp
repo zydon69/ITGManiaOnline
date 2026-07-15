@@ -36,13 +36,19 @@ static const std::string PRIVATE_KEY_PATH = "Data/private.rsa";
 static const std::string PUBLIC_KEY_PATH = "Data/public.rsa";
 static const std::string ALTERNATE_PUBLIC_KEY_DIR = "Data/keys/";
 
-static bool HashFile(RageFileBasic& f, unsigned char buf_hash[20], int iHash) {
+static bool HashFile(
+    RageFileBasic& f, unsigned char buf_hash[20], int iHash,
+    const std::function<bool()>& shouldCancel = {}) {
   hash_state hash;
   int iRet = hash_descriptor[iHash].init(&hash);
   ASSERT_M(iRet == CRYPT_OK, error_to_string(iRet));
 
   std::string s;
   while (!f.AtEOF()) {
+    if (shouldCancel && shouldCancel()) {
+      hash_descriptor[iHash].done(&hash, buf_hash);
+      return false;
+    }
     s.erase();
     if (f.Read(s, 1024 * 4) == -1) {
       LOG->Warn(
@@ -469,6 +475,11 @@ std::string CryptManager::GetSHA256ForString(std::string sData) {
 }
 
 std::string CryptManager::GetSHA256ForFile(std::string fn) {
+  return GetSHA256ForFile(fn, {});
+}
+
+std::string CryptManager::GetSHA256ForFile(
+    std::string fn, const std::function<bool()>& shouldCancel) {
   RageFile file;
   if (!file.Open(fn, RageFile::READ)) {
     LOG->Warn("GetSHA256: Failed to open file '%s'", fn.c_str());
@@ -478,7 +489,9 @@ std::string CryptManager::GetSHA256ForFile(std::string fn) {
   ASSERT(iHash >= 0);
 
   unsigned char digest[32];
-  HashFile(file, digest, iHash);
+  if (!HashFile(file, digest, iHash, shouldCancel)) {
+    return std::string();
+  }
 
   return std::string((const char*)digest, sizeof(digest));
 }

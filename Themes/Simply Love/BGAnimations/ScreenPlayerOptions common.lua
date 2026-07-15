@@ -16,6 +16,7 @@ local last_online_options_warning_second = nil
 local last_online_options_timer_trace_key = ""
 local last_online_options_deadline_begin_key = ""
 local last_online_options_deadline_active_key = ""
+local last_online_options_preview_key = ""
 
 local function online_options_trace(message)
 	if type(online_logs_enabled) == "function" and not online_logs_enabled() then return end
@@ -123,7 +124,7 @@ local function return_to_online_lobby()
 	screen:StartTransitioningScreen("SM_GoToNextScreen")
 end
 
-local function play_online_options_preview_music(source)
+local function play_online_options_preview_music(source, force)
 	if not (ITGOnline and ITGOnline.currentRoom and play_online_preview_music_normal_rate) then
 		online_options_trace("preview_skipped reason=missing_context source=" .. tostring(source or "nil")
 			.. " hasClient=" .. tostring(ITGOnline ~= nil)
@@ -145,13 +146,27 @@ local function play_online_options_preview_music(source)
 			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
 		return
 	end
+	local previewKey = table.concat({
+		tostring(ITGOnline.currentRoomId or ""),
+		tostring(songInfo.selected_at or songInfo.selectedAt or ""),
+		tostring(songInfo.song_hash or songInfo.songHash or songInfo.folder_name or ""),
+	}, "|")
+	if force ~= true and previewKey ~= "" and previewKey == last_online_options_preview_key then
+		online_options_trace("preview_skipped reason=already_playing source=" .. tostring(source or "nil")
+			.. " key=" .. tostring(previewKey))
+		return
+	end
 	online_options_trace("preview_play source=" .. tostring(source or "nil")
 		.. " phase=" .. tostring(phase)
 		.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
 		.. " title=" .. tostring(songInfo.title or songInfo.song_title or songInfo.folder_name or "nil")
 		.. " pack=" .. tostring(songInfo.pack_name or songInfo.group_name or "nil")
 		.. " rate=" .. tostring(ITGOnline.currentRoom.music_rate or ITGOnline.currentRoom.rate or "nil"))
-	play_online_preview_music_normal_rate(songInfo, source or "screen_player_options")
+	if play_online_preview_music_normal_rate(songInfo, source or "screen_player_options") then
+		last_online_options_preview_key = previewKey
+	else
+		last_online_options_preview_key = ""
+	end
 end
 
 local af = Def.ActorFrame{
@@ -174,7 +189,7 @@ local af = Def.ActorFrame{
 			last_online_options_warning_second = nil
 			begin_online_options_ready_deadline(self, "screen_player_options")
 		end
-		play_online_options_preview_music("screen_player_options_on")
+		play_online_options_preview_music("screen_player_options_on", true)
 	end,
 	OnlineLobbyStateMessageCommand=function(self)
 		online_options_trace("lobby_state_received screen=" .. tostring(online_options_screen_name or "nil")
@@ -186,6 +201,7 @@ local af = Def.ActorFrame{
 		play_online_options_preview_music("screen_player_options_state")
 	end,
 	OffCommand=function(self)
+		last_online_options_preview_key = ""
 		if not (ITGOnline and ITGOnline.currentRoomId) then
 			online_options_trace("screen_off_skipped reason=no_room")
 			return

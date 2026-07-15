@@ -1,6 +1,8 @@
 #ifndef RAGE_FILE_MANAGER_H
 #define RAGE_FILE_MANAGER_H
 
+#include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -16,6 +18,7 @@ struct lua_State;
 
 bool ilt(const std::string& a, const std::string& b);
 bool ieq(const std::string& a, const std::string& b);
+bool IsSafeZipEntryPath(const std::string& rawPath);
 
 /** @brief File utilities and high-level manager for RageFile objects. */
 class RageFileManager {
@@ -46,6 +49,7 @@ class RageFileManager {
   bool DoesFileExist(const std::string& sPath);
 
   int GetFileSizeInBytes(const std::string& sPath);
+  uint64_t GetDiskFreeSpaceInBytes(const std::string& path);
   int GetFileHash(const std::string& sPath);
 
   /**
@@ -82,7 +86,9 @@ class RageFileManager {
   RageFileDriver* GetFileDriver(std::string sMountpoint);
   void ReleaseFileDriver(RageFileDriver* pDriver);
 
-  bool Unzip(const std::string& zipPath, std::string targetPath, int strip);
+  bool Unzip(
+      const std::string& zipPath, std::string targetPath, int strip,
+      const std::function<bool()>& shouldCancel = {});
 
   // path protection
   void ProtectPath(const std::string& path);

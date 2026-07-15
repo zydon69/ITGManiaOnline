@@ -152,11 +152,14 @@ local function play_song_sample(song, options)
 			SOUND:DimMusic(safe_sound_volume(), math.huge)
 		end)
 	end
+	local sampleLoops = options.loop == nil
+		and safe_sample_music_loops()
+		or options.loop == true
 	local ok = safe_call("SOUND.PlayMusicPart sample", function()
 		if options.normalRate == true then
-			SOUND:PlayMusicPart(sample.path, sample.start, sample.length, 0.5, 1.5, safe_sample_music_loops(), false, true)
+			SOUND:PlayMusicPart(sample.path, sample.start, sample.length, 0.5, 1.5, sampleLoops, false, true)
 		else
-			SOUND:PlayMusicPart(sample.path, sample.start, sample.length, 0.5, 1.5, safe_sample_music_loops(), options.applyMusicRate ~= false)
+			SOUND:PlayMusicPart(sample.path, sample.start, sample.length, 0.5, 1.5, sampleLoops, options.applyMusicRate ~= false)
 		end
 	end)
 	if not ok then safe_stop_music() end
@@ -172,7 +175,18 @@ play_sample_music = function()
 		stop_music()
 		return false
 	end
-	return play_song_sample(song, { source = "casual_music_wheel", applyMusicRate = true })
+	local onlinePreview = ITGOnline
+		and ITGOnline.currentRoomId ~= nil
+		and ITGOnline.currentRoom ~= nil
+		and tostring(ITGOnline.currentRoom.phase or "") == "lobby"
+		and ITGOnline.currentRoom.selected_song == nil
+	return play_song_sample(song, {
+		source = onlinePreview and "online_manager_music_wheel" or "casual_music_wheel",
+		applyMusicRate = true,
+		-- Online participants can remain on a focused song indefinitely.  Their
+		-- shared preview must therefore not depend on the local theme preference.
+		loop = onlinePreview and true or nil,
+	})
 end
 
 -- used by SSMCasual to stop playing preview music,
@@ -255,6 +269,7 @@ play_online_preview_music_normal_rate = function(songInfo, source)
 		source = source or "online_preview",
 		applyMusicRate = false,
 		normalRate = true,
+		loop = true,
 		sample = sample,
 	})
 end

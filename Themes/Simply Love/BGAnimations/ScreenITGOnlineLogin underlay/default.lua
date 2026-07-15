@@ -231,6 +231,16 @@ local function connect_with_token(accessToken, generation)
 			return
 		end
 
+		local sessionId = state.sessionId
+		local pollToken = state.pollToken
+		if tostring(sessionId or "") ~= "" and tostring(pollToken or "") ~= "" then
+			ITGOnline:AcknowledgeDeviceLogin(sessionId, pollToken, function(ackOk, decoded, response)
+				login_flow_trace("device_login_acknowledge result ok=" .. tostring(ackOk)
+					.. " acknowledged=" .. tostring(decoded and decoded.acknowledged)
+					.. " responseError=" .. tostring(response and response.errorMessage))
+			end)
+		end
+		clear_session()
 		connect_to_lobbies(generation)
 	end)
 end

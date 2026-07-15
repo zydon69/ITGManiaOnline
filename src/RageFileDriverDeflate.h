@@ -83,6 +83,9 @@ void GzipString(const std::string& sIn, std::string& sOut);
 bool GunzipString(
     const std::string& sIn, std::string& sOut,
     std::string& sError);  // returns false on CRC, etc. error
+bool GunzipStringBounded(
+    const std::string& sIn, std::string& sOut, std::string& sError,
+    std::size_t maxOutputBytes);
 
 #endif
 

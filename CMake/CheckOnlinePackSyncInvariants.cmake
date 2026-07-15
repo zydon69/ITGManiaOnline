@@ -14,6 +14,10 @@ file(
   READ
   "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/metrics.ini"
   SIMPLY_LOVE_METRICS_TEXT)
+file(
+  READ
+  "${ITGMANIA_SOURCE_DIR}/src/NetworkManager.cpp"
+  NETWORK_MANAGER_TEXT)
 
 foreach(REQUIRED_SNIPPET
     "statusPostPendingIntent"
@@ -27,8 +31,9 @@ foreach(REQUIRED_SNIPPET
     "maxDownloadBytes = maxDownloadBytes"
     "AwaitingPackChoice"
     "catalog resolved a single candidate; starting transfer"
-    "archive_hash_mismatch"
-    "archive integrity verified"
+    "NETWORK:ProcessPackArchive"
+    "errorCode == \"hash_mismatch\""
+    "download_archive_verified"
     "local expectedArchiveHash = \"\""
     "download_callback_exception"
     "download_reload_requested"
@@ -39,6 +44,20 @@ foreach(REQUIRED_SNIPPET
     message(
       FATAL_ERROR
       "Online pack-sync invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "NormalizeOnlineArchivePaths"
+    "CryptManager::GetSHA256ForFile(archivePath, shouldCancel)"
+    "FILEMAN->Unzip("
+    "requestArgs->cancel.load()"
+    "FILEMAN->DeleteRecursive(targetPath)")
+  string(FIND "${NETWORK_MANAGER_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+      FATAL_ERROR
+      "Online pack archive worker invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
 

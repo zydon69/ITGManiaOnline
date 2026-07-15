@@ -245,7 +245,8 @@ bool Store(
     error = "secret is required";
     return false;
   }
-  if (secret.size() > 4096 || secret.find('\0') != std::string::npos) {
+  if (secret.size() > kMaxSecretLength ||
+      secret.find('\0') != std::string::npos) {
     error = "secret must be bounded text without NUL bytes";
     return false;
   }

@@ -15,7 +15,7 @@ foreach(REQUIRED_SNIPPET
     "url=%s reason=inactive type=%s"
     "queuedTasks > kBacklogAdaptiveThreshold * 4"
     "queuedTasks >= kBacklogAdaptiveThreshold"
-    "useDownloadClient ? effectiveMaxDownloadBytes"
+    "effectiveMaxDownloadBytes"
     "kMaxDownloadBytes = 5LL * 1024LL * 1024LL * 1024LL"
     "std::atomic<int64_t> latestProgressCurrent"
     "LEGACY_GROOVESTATS_QR_LOGIN_HOST"
@@ -28,6 +28,13 @@ foreach(REQUIRED_SNIPPET
         "NetworkManager invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
+
+if(NOT NETWORK_MANAGER_TEXT MATCHES
+   "useDownloadClient[ \t\r\n]*\\?[ \t\r\n]*effectiveMaxDownloadBytes")
+  message(
+    FATAL_ERROR
+    "NetworkManager invariant failed: download requests must use the dedicated download size cap")
+endif()
 
 string(FIND
     "${NETWORK_MANAGER_TEXT}"

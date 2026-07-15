@@ -1,6 +1,7 @@
 #ifndef CryptManager_H
 #define CryptManager_H
 
+#include <functional>
 #include <string>
 
 class RageFileBasic;
@@ -40,6 +41,8 @@ class CryptManager {
   static std::string GetSHA1ForFile(std::string fn);         // in binary
   static std::string GetSHA256ForString(std::string sData);  // in binary
   static std::string GetSHA256ForFile(std::string fn);       // in binary
+  static std::string GetSHA256ForFile(
+      std::string fn, const std::function<bool()>& shouldCancel);
 
   static std::string GetPublicKeyFileName();
 

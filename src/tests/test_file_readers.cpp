@@ -355,6 +355,30 @@ void TestDeflate() {
   CheckDeflate(data, iSize, iOutputCRC, 1024 * 4);
   CheckDeflate(data, iSize, iOutputCRC, iSize - 1);
   CheckDeflate(data, iSize, iOutputCRC, iSize);
+
+  const std::string compressiblePayload(1024 * 64, 'A');
+  std::string gzipPayload;
+  std::string uncompressedPayload;
+  std::string gzipError;
+  GzipString(compressiblePayload, gzipPayload);
+
+  if (GunzipStringBounded(gzipPayload, uncompressedPayload, gzipError, 1024)) {
+    LOG->Warn("Bounded gunzip accepted an oversized output");
+    return;
+  }
+  if (!uncompressedPayload.empty()) {
+    LOG->Warn("Bounded gunzip retained partial oversized output");
+    return;
+  }
+  if (!GunzipStringBounded(
+          gzipPayload, uncompressedPayload, gzipError,
+          compressiblePayload.size())) {
+    LOG->Warn("Bounded gunzip rejected valid output: %s", gzipError.c_str());
+    return;
+  }
+  if (uncompressedPayload != compressiblePayload) {
+    LOG->Warn("Bounded gunzip returned unexpected output");
+  }
 }
 
 int main(int argc, char* argv[]) {
