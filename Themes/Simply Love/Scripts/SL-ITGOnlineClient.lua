@@ -11787,7 +11787,26 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 	}
 
 	if phase == "config_ready" then
-		payload.options = self:CurrentOnlineOptionSummary()
+		local optionsOk, optionsOrError = pcall(function()
+			return self:CurrentOnlineOptionSummary()
+		end)
+		if not optionsOk or type(optionsOrError) ~= "table" then
+			online_flow_trace("ready_request_rejected_locally"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " phase=" .. tostring(phase)
+				.. " reason=config_ready_options_payload_error"
+				.. " error=" .. tostring(optionsOrError or "invalid_options_payload"))
+			safe_callback(callback, false, {
+				room = self.currentRoom,
+				error_code = "config_ready_options_payload_error",
+				local_guard = true,
+			}, {
+				error_code = "config_ready_options_payload_error",
+				errorMessage = "Unable to build the online option summary.",
+			})
+			return
+		end
+		payload.options = optionsOrError
 		local selectedSong = self.currentRoom and self.currentRoom.selected_song or nil
 		local selectedSongHash = type(selectedSong) == "table"
 			and tostring(selectedSong.song_hash or selectedSong.songHash or ""):lower() or ""
@@ -12200,8 +12219,8 @@ function ITGOnline:CurrentOnlineOptionSummary()
 		and selectedChartHash ~= ""
 		and rememberedSelectionKey ~= ""
 		and rememberedSelectionKey == currentSelectionKey
-		and (rememberedSongHash == "" or lower(rememberedSongHash) == lower(selectedSongHash))
-		and lower(chartHash) == lower(selectedChartHash) then
+		and (rememberedSongHash == "" or rememberedSongHash:lower() == selectedSongHash:lower())
+		and chartHash:lower() == selectedChartHash:lower() then
 		-- ScreenPlayerOptions can clear GAMESTATE's song while returning to the
 		-- lobby.  Recover only when the remembered chart proves that it belongs
 		-- to the room's immutable selection.
@@ -12338,7 +12357,8 @@ function ITGOnline:MarkConfigReady(callback)
 			or "")
 		if not ok and contextStillCurrent then
 			self:ClearOptimisticConfigReady("config_ready_finish_failed")
-			if failureCode == "config_ready_song_context_mismatch" then
+			if failureCode == "config_ready_song_context_mismatch"
+				or failureCode == "config_ready_options_payload_error" then
 				-- A deterministic local mismatch is not a lost acknowledgement.
 				-- Replaying it would leave the lobby in a permanent pending state.
 				self:ClearPendingConfigReadyIntent("config_ready_terminal_context_mismatch", intentKey)

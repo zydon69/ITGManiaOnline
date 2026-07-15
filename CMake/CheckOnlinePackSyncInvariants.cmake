@@ -100,6 +100,7 @@ foreach(REQUIRED_SNIPPET
     "ignored stale heartbeat response"
     "heartbeat_status_normalized"
     "config_ready_song_context_mismatch"
+    "config_ready_options_payload_error"
     "room_selected_song_chart_match"
     "pendingOnlineOptionSelectionKey"
     "config_ready_terminal_context_mismatch"
@@ -125,6 +126,11 @@ foreach(REQUIRED_SNIPPET
       "Online heartbeat invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
+
+string(FIND "${ONLINE_CLIENT_TEXT}" "lower(chartHash)" INVALID_GLOBAL_LOWER_OFFSET)
+if(NOT INVALID_GLOBAL_LOWER_OFFSET EQUAL -1)
+  message(FATAL_ERROR "Online ready invariant failed: undefined global lower() used for chart hash")
+endif()
 
 foreach(REQUIRED_SNIPPET
     "online_options_timer_update_scheduled"
