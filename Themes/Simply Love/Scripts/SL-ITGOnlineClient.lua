@@ -3804,6 +3804,12 @@ end
 
 function ITGOnline:OnlineOptionsReadyKey()
 	if not self.currentRoomId then return "" end
+	if self.currentRoom then
+		local roomKey = self:RoomOnlineOptionsReadyKey(self.currentRoom)
+		if roomKey ~= "" then
+			return roomKey
+		end
+	end
 	local key = self.PlayStateKey and self:PlayStateKey() or ""
 	if self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(key) then
 		return key
@@ -11940,6 +11946,28 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 
 	if phase == "config_ready" then
 		payload.options = self:CurrentOnlineOptionSummary()
+		local selectedSong = self.currentRoom and self.currentRoom.selected_song or nil
+		local selectedSongHash = type(selectedSong) == "table"
+			and tostring(selectedSong.song_hash or selectedSong.songHash or ""):lower() or ""
+		local optionSongHash = tostring(payload.options.song_hash or ""):lower()
+		if isReady and (selectedSongHash == "" or optionSongHash == "" or optionSongHash ~= selectedSongHash) then
+			online_flow_trace("ready_request_rejected_locally"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " phase=" .. tostring(phase)
+				.. " reason=config_ready_song_context_mismatch"
+				.. " selectedSongHash=" .. tostring(selectedSongHash ~= "" and selectedSongHash:sub(1, 12) or "nil")
+				.. " optionSongHash=" .. tostring(optionSongHash ~= "" and optionSongHash:sub(1, 12) or "nil"))
+			safe_callback(callback, false, {
+				room = self.currentRoom,
+				error_code = "config_ready_song_context_mismatch",
+				deferred = true,
+				local_guard = true,
+			}, {
+				error_code = "config_ready_song_context_mismatch",
+				errorMessage = "The option screen is not bound to the selected song yet.",
+			})
+			return
+		end
 		online_flow_trace("ready_request_options_payload"
 			.. " room=" .. tostring(self.currentRoomId or "nil")
 			.. " stepchart=" .. tostring(payload.options.stepchart or "")
@@ -13384,23 +13412,20 @@ function ITGOnline:MarkPlayFailedEarly(source, callback)
 		return false
 	end
 
-	local key = self:PlayStateKey()
+	local key, keySource = self:CanonicalGameplayRoundKey("mark_failed_early:" .. tostring(source or "unknown"))
 	if not self:PlayStateKeyIsValid(key) then
 		online_flow_trace("mark_failed_early_skipped source=" .. tostring(source or "unknown")
-			.. " reason=invalid_round_key")
+			.. " reason=invalid_round_key"
+			.. " keySource=" .. tostring(keySource or "nil"))
 		safe_callback(callback, false, nil, { errorMessage = "No active song round." })
 		return false
 	end
 
-	local activeRoundKey = tostring(self.activeGameplayRoundKey or "")
-	if self:PlayStateKeyIsValid(activeRoundKey) and activeRoundKey ~= key then
-		online_flow_trace("mark_failed_early_skipped source=" .. tostring(source or "unknown")
-			.. " reason=stale_round_key"
-			.. " active=" .. tostring(activeRoundKey)
-			.. " incoming=" .. tostring(key))
-		safe_callback(callback, false, nil, { errorMessage = "Stale song round." })
-		return false
-	end
+	online_flow_trace("mark_failed_early_round_resolved source=" .. tostring(source or "unknown")
+		.. " roundKey=" .. tostring(key)
+		.. " keySource=" .. tostring(keySource or "nil")
+		.. " rawPlayStateKey=" .. tostring(self:PlayStateKey() or "")
+		.. " activeRoundKey=" .. tostring(self.activeGameplayRoundKey or ""))
 
 	local finalScoreAccepted = self.lastFinalScoreKey == key
 	if self.onlineGameplayFailedEarlyKey == key then
@@ -13848,6 +13873,14 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 	status = status or "available"
 	activityRetryCount = math.max(0, tonumber(activityRetryCount) or 0)
 	local roomId = self.currentRoomId
+	if roomId == nil and tostring(status) == "in_room" then
+		online_flow_trace("heartbeat_status_normalized"
+			.. " from=in_room to=available"
+			.. " reason=no_current_room"
+			.. " screen=" .. tostring(self.currentScreenName or "nil"))
+		status = "available"
+		activity = false
+	end
 	local isLobbyPresenceHeartbeat = roomId == nil and tostring(status) == "available"
 	online_flow_trace("heartbeat_begin status=" .. tostring(status)
 		.. " force=" .. tostring(force == true)
@@ -14062,6 +14095,17 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 			end
 		end
 		if queuedStatus then
+			if self.currentRoomId == nil and tostring(queuedStatus) == "in_room" then
+				online_flow_trace("heartbeat_replay_normalized"
+					.. " from=in_room to=available"
+					.. " reason=room_cleared_while_request_in_flight"
+					.. " queuedFingerprint=" .. tostring(queuedFingerprint ~= "" and queuedFingerprint or "nil"))
+				queuedStatus = "available"
+				queuedForce = true
+				queuedActivity = false
+				queuedActivityRetryCount = 0
+				queuedFingerprint = "available|"
+			end
 			local replayNow = GetTimeSinceStart()
 			if not queuedActivity and queuedFingerprint ~= ""
 				and queuedFingerprint == tostring(self.lastHeartbeatFingerprint or "")

@@ -12,6 +12,14 @@ file(
   ONLINE_CLIENT_TEXT)
 file(
   READ
+  "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/default.lua"
+  ONLINE_LOBBY_OVERLAY_TEXT)
+file(
+  READ
+  "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/BGAnimations/ScreenPlayerOptions common.lua"
+  ONLINE_PLAYER_OPTIONS_TEXT)
+file(
+  READ
   "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/metrics.ini"
   SIMPLY_LOVE_METRICS_TEXT)
 file(
@@ -89,7 +97,10 @@ foreach(REQUIRED_SNIPPET
     "heartbeat_room_not_available"
     "presence_open_room_required"
     "ignored stale heartbeat response"
+    "heartbeat_status_normalized"
+    "config_ready_song_context_mismatch"
     "new_song_while_evaluation_song_unavailable"
+    "mark_failed_early_round_resolved"
     "song_availability_enforce_screen"
     "ValidateSongForOnlineSelection"
     "unsupported_audio_format"
@@ -108,6 +119,31 @@ foreach(REQUIRED_SNIPPET
     message(
       FATAL_ERROR
       "Online heartbeat invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "online_options_timer_update_scheduled"
+    "if actor and not online_options_timer_update_scheduled"
+    "self:sleep(0.25):queuecommand(\"UpdateOptionsReadyTimer\")")
+  string(FIND "${ONLINE_PLAYER_OPTIONS_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(FATAL_ERROR "Online options timer invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+string(FIND "${ONLINE_LOBBY_OVERLAY_TEXT}" "refresh_then_server_authoritative_join" JOIN_PREFLIGHT_OFFSET)
+if(JOIN_PREFLIGHT_OFFSET EQUAL -1)
+  message(FATAL_ERROR "Online join preflight invariant failed")
+endif()
+
+foreach(REQUIRED_SNIPPET
+    "terminal_download_status_is_not_preview_state"
+    "browse_reload_status_not_acknowledged"
+    "Retrying browse-only completion acknowledgement")
+  string(FIND "${ONLINE_PACK_SYNC_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(FATAL_ERROR "Online pack completion invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
 

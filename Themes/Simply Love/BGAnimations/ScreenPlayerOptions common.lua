@@ -17,6 +17,7 @@ local last_online_options_timer_trace_key = ""
 local last_online_options_deadline_begin_key = ""
 local last_online_options_deadline_active_key = ""
 local last_online_options_preview_key = ""
+local online_options_timer_update_scheduled = false
 
 local function online_options_trace(message)
 	if type(online_logs_enabled) == "function" and not online_logs_enabled() then return end
@@ -111,7 +112,8 @@ local function begin_online_options_ready_deadline(actor, source)
 			.. " remaining=" .. tostring(math.ceil(remaining)))
 	end
 
-	if actor then
+	if actor and not online_options_timer_update_scheduled then
+		online_options_timer_update_scheduled = true
 		actor:queuecommand("UpdateOptionsReadyTimer")
 	end
 	return remaining
@@ -201,6 +203,7 @@ local af = Def.ActorFrame{
 		play_online_options_preview_music("screen_player_options_state")
 	end,
 	OffCommand=function(self)
+		online_options_timer_update_scheduled = false
 		last_online_options_preview_key = ""
 		if not (ITGOnline and ITGOnline.currentRoomId) then
 			online_options_trace("screen_off_skipped reason=no_room")
@@ -246,6 +249,7 @@ local af = Def.ActorFrame{
 	end,
 
 	UpdateOptionsReadyTimerCommand=function(self)
+		online_options_timer_update_scheduled = false
 		local timer = self:GetChild("OnlineOptionsReadyTimer")
 		if not timer then
 			online_options_trace("timer_skipped reason=missing_actor")
@@ -304,7 +308,10 @@ local af = Def.ActorFrame{
 				.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 		end
 		timer:settext(("Ready in %02ds or leave lobby"):format(math.ceil(remaining)))
-		self:sleep(0.25):queuecommand("UpdateOptionsReadyTimer")
+		if not online_options_timer_update_scheduled then
+			online_options_timer_update_scheduled = true
+			self:sleep(0.25):queuecommand("UpdateOptionsReadyTimer")
+		end
 	end,
 
 	LoadFont("Common Bold")..{

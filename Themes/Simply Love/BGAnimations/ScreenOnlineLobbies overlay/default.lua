@@ -1741,6 +1741,12 @@ end
 
 function pack_sync_countdown_seconds_for_player(player)
 	if not (ITGOnline and ITGOnline.currentRoom) then return nil end
+	local phase = normalized_online_phase(ITGOnline.currentRoom.phase)
+	local selectedSong = ITGOnline.currentRoom.selected_song
+	if type(selectedSong) ~= "table"
+		or (phase ~= "lobby_ready" and phase ~= "config" and phase ~= "starting") then
+		return nil
+	end
 	if joined_manager_user_id ~= nil and tostring(player and player.playerId or "") == tostring(joined_manager_user_id) then return nil end
 	local deadlineMs = tonumber(player and player.packSyncDownloadDeadlineMs)
 	if not deadlineMs or deadlineMs <= 0 then return nil end
@@ -5479,20 +5485,13 @@ local af = Def.ActorFrame{
 			.. " phase=" .. tostring(params.phase)
 			.. " mode=" .. tostring(mode)
 			.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
-		local joinPhase = normalized_online_phase(params.phase)
-		local phaseAllowsJoin = joinPhase == "lobby" or joinPhase == "results"
-		if params.acceptsNewMembers == false
-			or (params.acceptsNewMembers == nil and params.phase ~= nil and not phaseAllowsJoin) then
-			lobby_flow_trace("OnlineLobbyJoinSelected_rejected reason=not_accepting_members code=" .. tostring(params.code)
-				.. " phase=" .. tostring(params.phase))
-			play_online_sound_once("Common", "Cancel")
-			self:playcommand("SetStatus", {
-				text="Ce salon n'accepte plus de nouveaux joueurs.",
-				showSpinner=false,
-				showPrompt=true,
-				duration=4
-			})
-			return
+		-- The lobby list is only a cache.  RequestJoinRoom performs a mandatory
+		-- FetchLobby preflight immediately before POST /join, so a stale config
+		-- snapshot must never reject a room that has just returned to lobby.
+		if params.acceptsNewMembers == false then
+			lobby_flow_trace("OnlineLobbyJoinSelected_stale_non_joinable_hint_ignored code=" .. tostring(params.code)
+				.. " cachedPhase=" .. tostring(params.phase)
+				.. " action=refresh_then_server_authoritative_join")
 		end
 
 		join_lobby_code = params.code

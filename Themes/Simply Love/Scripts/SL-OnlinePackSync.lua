@@ -42,6 +42,8 @@ PackSync.statusPostDuplicateHeartbeatSeconds = tonumber(PackSync.statusPostDupli
 PackSync.lastManagerBrowsingPreviewPostKey = PackSync.lastManagerBrowsingPreviewPostKey or ""
 PackSync.lastManagerBrowsingPreviewPostAt = tonumber(PackSync.lastManagerBrowsingPreviewPostAt) or 0
 PackSync.managerBrowsingPreviewDuplicateSuppressSeconds = tonumber(PackSync.managerBrowsingPreviewDuplicateSuppressSeconds) or 1.5
+PackSync.pendingBrowseCompletionRetryAt = tonumber(PackSync.pendingBrowseCompletionRetryAt) or 0
+PackSync.pendingBrowseCompletionRetryCount = tonumber(PackSync.pendingBrowseCompletionRetryCount) or 0
 PackSync.lastResetSignature = PackSync.lastResetSignature or ""
 PackSync.lastResetAt = tonumber(PackSync.lastResetAt) or 0
 PackSync.lastNoSongClearResetAt = tonumber(PackSync.lastNoSongClearResetAt) or 0
@@ -1564,6 +1566,31 @@ end
 
 function PackSync:WatchdogTick()
 	local status = tostring(self.currentStatus or self.status.Unknown)
+	if status == self.status.DownloadedOk
+		and self.pendingPostReloadSongInfo ~= nil
+		and self.pendingPostReloadBrowseOnly == true then
+		local now = GetTimeSinceStart()
+		if now >= (tonumber(self.pendingBrowseCompletionRetryAt) or 0)
+			and tostring(self.statusPostInFlightSignature or "") == "" then
+			self.pendingBrowseCompletionRetryAt = now + 5.25
+			self.pendingBrowseCompletionRetryCount = (tonumber(self.pendingBrowseCompletionRetryCount) or 0) + 1
+			trace("Retrying browse-only completion acknowledgement attempt="
+				.. tostring(self.pendingBrowseCompletionRetryCount)
+				.. " downloadId=" .. tostring(self.activeDownloadId or self.lastDownloadId or ""))
+			self:UpdateStatus(self.status.DownloadedOk,
+				"Pack telecharge. En attente du choix de chanson du manager.", 100,
+				function(statusOk, decoded, response)
+					trace("Browse-only completion retry response ok=" .. tostring(statusOk == true)
+						.. " status=" .. tostring(response and response.statusCode or "nil")
+						.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
+					if statusOk then
+						self:CompletePendingPostReload(true, "Pack telecharge et valide apres reload.",
+							"browse_reload_validation_retry_ok")
+					end
+				end)
+		end
+		return
+	end
 	if status == self.status.Unknown or status == self.status.Ready then
 		self.watchdogLastKey = ""
 		return
@@ -1601,6 +1628,20 @@ function PackSync:WatchdogTick()
 	self:NextDownloadGeneration("watchdog_timeout")
 	self:UpdateStatus(self.status.DownloadFailed, message)
 	if SM then SM(message, 4) end
+end
+
+function PackSync:CompletePendingPostReload(ok, message, reason)
+	local pendingCallback = self.pendingPostReloadCallback
+	self.pendingPostReloadSongInfo = nil
+	self.pendingQuarantinePath = nil
+	self.pendingPostReloadBrowseOnly = false
+	self.pendingPostReloadCallback = nil
+	self.pendingBrowseCompletionRetryAt = 0
+	self.pendingBrowseCompletionRetryCount = 0
+	self.downloadInFlightKey = nil
+	self.activeBrowseOnlyDownload = false
+	self:ClearActiveDownloadId(reason or "post_reload_validation_complete")
+	safe_invoke_callback(pendingCallback, ok == true, message)
 end
 
 function PackSync:ResetLocalState(reason)
@@ -1884,6 +1925,18 @@ function PackSync:ManagerBrowsingPreview(songInfo)
 		or "Pack absent. Vous pouvez rechercher un pack correspondant."
 	if exists and self.downloadedPackKey == packKey then
 		message = "Pack téléchargé et disponible localement."
+	end
+	-- downloaded_ok is a terminal transfer acknowledgement and requires the
+	-- immutable download id plus progress=100.  A later preview refresh must not
+	-- manufacture a second, incomplete terminal update while that acknowledgement
+	-- is queued or already applied.
+	if exists
+		and self.downloadedPackKey == packKey
+		and self.currentStatus == self.status.DownloadedOk then
+		trace("Manager browsing preview preserved completed download pack=" .. tostring(packName)
+			.. " reason=terminal_download_status_is_not_preview_state")
+		self.currentSongInfo = songInfo
+		return
 	end
 	local normalizedMessage = status_message(message)
 	local postKey = table.concat({
@@ -3564,20 +3617,12 @@ function PackSync:ValidatePendingPostReload()
 	local songInfo = self.pendingPostReloadSongInfo
 	local quarantinePath = self.pendingQuarantinePath
 	local browseOnly = self.pendingPostReloadBrowseOnly == true
-	local pendingCallback = self.pendingPostReloadCallback
 	local packName = selected_pack(songInfo)
 	local pendingCompleted = false
 	local function complete_pending(ok, message, reason)
 		if pendingCompleted then return end
 		pendingCompleted = true
-		self.pendingPostReloadSongInfo = nil
-		self.pendingQuarantinePath = nil
-		self.pendingPostReloadBrowseOnly = false
-		self.pendingPostReloadCallback = nil
-		self.downloadInFlightKey = nil
-		self.activeBrowseOnlyDownload = false
-		self:ClearActiveDownloadId(reason or "post_reload_validation_complete")
-		safe_invoke_callback(pendingCallback, ok == true, message)
+		self:CompletePendingPostReload(ok, message, reason)
 	end
 	trace("ValidatePendingPostReload begin hasSong=" .. tostring(songInfo ~= nil)
 		.. " browseOnly=" .. tostring(browseOnly == true)
@@ -3609,7 +3654,19 @@ function PackSync:ValidatePendingPostReload()
 				return false
 			end
 			self:MarkPackInstalled(packName)
-			self:UpdateStatus(self.status.DownloadedOk, "Pack telecharge. En attente du choix de chanson du manager.", 100)
+			self:UpdateStatus(self.status.DownloadedOk, "Pack telecharge. En attente du choix de chanson du manager.", 100,
+				function(statusOk, decoded, response)
+					trace("PostReload browse-only completion acknowledged ok=" .. tostring(statusOk == true)
+						.. " status=" .. tostring(response and response.statusCode or "nil")
+						.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil")
+						.. " downloadId=" .. tostring(self.activeDownloadId or self.lastDownloadId or ""))
+					if statusOk then
+						complete_pending(true, "Pack telecharge et valide apres reload.", "browse_reload_validation_ok")
+					else
+						self.pendingBrowseCompletionRetryAt = GetTimeSinceStart() + 5.25
+						trace("PostReload browse-only completion retained for retry reason=browse_reload_status_not_acknowledged")
+					end
+				end)
 		if MESSAGEMAN then
 			MESSAGEMAN:Broadcast("OnlinePackDownloaded", { songInfo = songInfo })
 		end
@@ -3623,7 +3680,6 @@ function PackSync:ValidatePendingPostReload()
 				.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 				self:ApplySelectedChart(selectedSong)
 			end
-			complete_pending(true, "Pack telecharge et valide apres reload.", "browse_reload_validation_ok")
 			return true
 		end
 	trace("PostReload validate expected chart_hash=" .. tostring(selected_chart_hash(songInfo))
