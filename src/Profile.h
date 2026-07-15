@@ -98,6 +98,10 @@ class Profile {
         m_sDisplayName(""),
         m_sCharacterID(""),
         m_sLastUsedHighScoreName(""),
+        m_sITGOnlineAccessToken(""),
+        m_sITGOnlineAccessTokenScope(""),
+        m_sITGOnlineUserId(""),
+        m_sITGOnlineUserName(""),
         m_iWeightPounds(0),
         m_Voomax(0),
         m_BirthYear(0),
@@ -175,6 +179,12 @@ class Profile {
   static bool IsInvalidDisplayNameChar(unsigned char c);
   static bool ContainsInvalidDisplayNameChar(const std::string& sName);
   static std::string NormalizeDisplayName(const std::string& sName);
+  bool SetITGOnlineAuth(
+      const std::string& accessToken,
+      const std::string& scope,
+      const std::string& userId,
+      const std::string& userName);
+  void ClearITGOnlineAuth();
   Character* GetCharacter() const;
   void SetCharacter(const std::string sCharacterID);
   std::string GetDisplayTotalCaloriesBurned()
@@ -225,6 +235,12 @@ class Profile {
    * This really shouldn't be in "editable", but it's needed in the smaller
    * editable file so that it can be ready quickly. */
   std::string m_sLastUsedHighScoreName;
+  // This bearer is intentionally stored in Editable.ini so authentication is
+  // owned by, and deleted with, the local player profile.
+  std::string m_sITGOnlineAccessToken;
+  std::string m_sITGOnlineAccessTokenScope;
+  std::string m_sITGOnlineUserId;
+  std::string m_sITGOnlineUserName;
   int m_iWeightPounds;  // 0 == not set
   // Voomax and BirthYear are used for calculating calories from heart rate.
   float m_Voomax;   // 0 == not set

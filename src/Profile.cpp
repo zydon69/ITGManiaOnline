@@ -81,7 +81,7 @@ static ThemeMetric<std::string> UNLOCK_AUTH_STRING(
     "Profile", "UnlockAuthString");
 #define GUID_SIZE_BYTES 8
 
-#define MAX_EDITABLE_INI_SIZE_BYTES 2 * 1024               // 2KB
+#define MAX_EDITABLE_INI_SIZE_BYTES 16 * 1024              // 16KB
 #define MAX_PLAYER_STATS_XML_SIZE_BYTES 100 * 1024 * 1024  // 100MB
 
 const int DEFAULT_WEIGHT_POUNDS = 120;
@@ -89,8 +89,19 @@ const float DEFAULT_BIRTH_YEAR = 1995;
 const size_t MAX_PROFILE_SCORE_ROOT_ENTRIES = 100000;
 const size_t MAX_PROFILE_SCREENSHOTS = 10000;
 const size_t MAX_PROFILE_CALORIE_DAYS = 36500;
+const size_t MAX_ITG_ONLINE_ACCESS_TOKEN_BYTES = 4096;
+const size_t MAX_ITG_ONLINE_SCOPE_BYTES = 1024;
+const size_t MAX_ITG_ONLINE_USER_ID_BYTES = 256;
+const size_t MAX_ITG_ONLINE_USER_NAME_BYTES = 512;
 
 namespace {
+bool IsValidITGOnlineAuthField(const std::string& value, size_t maxBytes) {
+  return value.size() <= maxBytes &&
+         std::none_of(value.begin(), value.end(), [](unsigned char c) {
+           return c < 0x20 || c == 0x7f || c == '\\';
+         });
+}
+
 int AddProfileIntSaturated(int lhs, int rhs, const char* field) {
   if (lhs < 0) {
     LOG->Warn("Profile: clamped negative %s value %d to 0.", field, lhs);
@@ -273,6 +284,7 @@ void Profile::InitEditableData() {
   m_sDisplayName = "";
   m_sCharacterID = "";
   m_sLastUsedHighScoreName = "";
+  ClearITGOnlineAuth();
   m_iWeightPounds = 0;
   m_Voomax = 0;
   m_BirthYear = 0;
@@ -280,11 +292,48 @@ void Profile::InitEditableData() {
   m_IsMale = true;
 }
 
+bool Profile::SetITGOnlineAuth(
+    const std::string& accessToken,
+    const std::string& scope,
+    const std::string& userId,
+    const std::string& userName) {
+  if (accessToken.empty() || scope.empty() || userId.empty() ||
+      !IsValidITGOnlineAuthField(
+          accessToken, MAX_ITG_ONLINE_ACCESS_TOKEN_BYTES) ||
+      !IsValidITGOnlineAuthField(scope, MAX_ITG_ONLINE_SCOPE_BYTES) ||
+      !IsValidITGOnlineAuthField(userId, MAX_ITG_ONLINE_USER_ID_BYTES) ||
+      !IsValidITGOnlineAuthField(
+          userName, MAX_ITG_ONLINE_USER_NAME_BYTES)) {
+    return false;
+  }
+
+  m_sITGOnlineAccessToken = accessToken;
+  m_sITGOnlineAccessTokenScope = scope;
+  m_sITGOnlineUserId = userId;
+  m_sITGOnlineUserName = userName;
+  return true;
+}
+
+void Profile::ClearITGOnlineAuth() {
+  m_sITGOnlineAccessToken.clear();
+  m_sITGOnlineAccessTokenScope.clear();
+  m_sITGOnlineUserId.clear();
+  m_sITGOnlineUserName.clear();
+}
+
 void Profile::ClearStats() {
-  // don't reset the Guid
+  // Keep identity fields while resetting gameplay statistics.
   std::string sGuid = m_sGuid;
+  std::string onlineAccessToken = m_sITGOnlineAccessToken;
+  std::string onlineAccessTokenScope = m_sITGOnlineAccessTokenScope;
+  std::string onlineUserId = m_sITGOnlineUserId;
+  std::string onlineUserName = m_sITGOnlineUserName;
   InitAll();
   m_sGuid = sGuid;
+  m_sITGOnlineAccessToken = onlineAccessToken;
+  m_sITGOnlineAccessTokenScope = onlineAccessTokenScope;
+  m_sITGOnlineUserId = onlineUserId;
+  m_sITGOnlineUserName = onlineUserName;
 }
 
 std::string Profile::MakeGuid() {
@@ -1261,6 +1310,10 @@ void Profile::swap(Profile& other) {
   SWAP_STR_MEMBER(m_sDisplayName);
   SWAP_STR_MEMBER(m_sCharacterID);
   SWAP_STR_MEMBER(m_sLastUsedHighScoreName);
+  SWAP_STR_MEMBER(m_sITGOnlineAccessToken);
+  SWAP_STR_MEMBER(m_sITGOnlineAccessTokenScope);
+  SWAP_STR_MEMBER(m_sITGOnlineUserId);
+  SWAP_STR_MEMBER(m_sITGOnlineUserName);
   SWAP_GENERAL(m_iWeightPounds);
   SWAP_GENERAL(m_Voomax);
   SWAP_GENERAL(m_BirthYear);
@@ -1468,6 +1521,10 @@ void Profile::HandleStatsPrefixChange(std::string dir, bool require_signature) {
   std::string display_name = m_sDisplayName;
   std::string character_id = m_sCharacterID;
   std::string last_high_score_name = m_sLastUsedHighScoreName;
+  std::string online_access_token = m_sITGOnlineAccessToken;
+  std::string online_access_token_scope = m_sITGOnlineAccessTokenScope;
+  std::string online_user_id = m_sITGOnlineUserId;
+  std::string online_user_name = m_sITGOnlineUserName;
   int weight = m_iWeightPounds;
   float voomax = m_Voomax;
   int birth_year = m_BirthYear;
@@ -1505,6 +1562,10 @@ void Profile::HandleStatsPrefixChange(std::string dir, bool require_signature) {
   m_sDisplayName = display_name;
   m_sCharacterID = character_id;
   m_sLastUsedHighScoreName = last_high_score_name;
+  m_sITGOnlineAccessToken = online_access_token;
+  m_sITGOnlineAccessTokenScope = online_access_token_scope;
+  m_sITGOnlineUserId = online_user_id;
+  m_sITGOnlineUserName = online_user_name;
   m_iWeightPounds = weight;
   m_Voomax = voomax;
   m_BirthYear = birth_year;
@@ -1996,6 +2057,13 @@ bool Profile::SaveEditableDataToDir(std::string sDir) const {
   ini.SetValue(
       "Editable", "IgnoreStepCountCalories", m_IgnoreStepCountCalories);
   ini.SetValue("Editable", "IsMale", m_IsMale);
+  if (!m_sITGOnlineAccessToken.empty()) {
+    ini.SetValue("ITGOnline", "AccessToken", m_sITGOnlineAccessToken);
+    ini.SetValue(
+        "ITGOnline", "AccessTokenScope", m_sITGOnlineAccessTokenScope);
+    ini.SetValue("ITGOnline", "OnlineUserId", m_sITGOnlineUserId);
+    ini.SetValue("ITGOnline", "OnlineUserName", m_sITGOnlineUserName);
+  }
 
   if (!ini.WriteFile(sDir + EDITABLE_INI)) {
     LOG->Warn(
@@ -2190,6 +2258,9 @@ XNode* Profile::SaveGeneralDataCreateNode() const {
 
 ProfileLoadResult Profile::LoadEditableDataFromDir(std::string sDir) {
   std::string fn = sDir + EDITABLE_INI;
+  // Never let credentials from a previously loaded profile survive a failed,
+  // missing, or legacy Editable.ini read.
+  ClearITGOnlineAuth();
 
   // Don't load unreasonably large editable.xml files.
   int iBytes = FILEMAN->GetFileSizeInBytes(fn);
@@ -2218,6 +2289,32 @@ ProfileLoadResult Profile::LoadEditableDataFromDir(std::string sDir) {
   ini.GetValue(
       "Editable", "IgnoreStepCountCalories", m_IgnoreStepCountCalories);
   ini.GetValue("Editable", "IsMale", m_IsMale);
+  ini.GetValue("ITGOnline", "AccessToken", m_sITGOnlineAccessToken);
+  ini.GetValue(
+      "ITGOnline", "AccessTokenScope", m_sITGOnlineAccessTokenScope);
+  ini.GetValue("ITGOnline", "OnlineUserId", m_sITGOnlineUserId);
+  ini.GetValue("ITGOnline", "OnlineUserName", m_sITGOnlineUserName);
+
+  const bool hasAnyOnlineAuthField = !m_sITGOnlineAccessToken.empty() ||
+                                     !m_sITGOnlineAccessTokenScope.empty() ||
+                                     !m_sITGOnlineUserId.empty() ||
+                                     !m_sITGOnlineUserName.empty();
+  if (hasAnyOnlineAuthField &&
+      (m_sITGOnlineAccessToken.empty() ||
+       m_sITGOnlineAccessTokenScope.empty() || m_sITGOnlineUserId.empty() ||
+       !IsValidITGOnlineAuthField(
+           m_sITGOnlineAccessToken, MAX_ITG_ONLINE_ACCESS_TOKEN_BYTES) ||
+       !IsValidITGOnlineAuthField(
+           m_sITGOnlineAccessTokenScope, MAX_ITG_ONLINE_SCOPE_BYTES) ||
+       !IsValidITGOnlineAuthField(
+           m_sITGOnlineUserId, MAX_ITG_ONLINE_USER_ID_BYTES) ||
+       !IsValidITGOnlineAuthField(
+           m_sITGOnlineUserName, MAX_ITG_ONLINE_USER_NAME_BYTES))) {
+    LOG->Warn(
+        "Profile::LoadEditableDataFromDir: discarded invalid ITG Online "
+        "authentication data.");
+    ClearITGOnlineAuth();
+  }
 
   // This is data that the user can change, so we have to validate it.
   m_sDisplayName = SanitizeProfileText(m_sDisplayName);
@@ -3429,6 +3526,27 @@ class LunaProfile : public Luna<Profile> {
     p->m_sLastUsedHighScoreName = SanitizeProfileText(SArg(1));
     COMMON_RETURN_SELF;
   }
+  static int GetITGOnlineAuth(T* p, lua_State* L) {
+    lua_createtable(L, 0, 4);
+    lua_pushstring(L, p->m_sITGOnlineAccessToken.c_str());
+    lua_setfield(L, -2, "accessToken");
+    lua_pushstring(L, p->m_sITGOnlineAccessTokenScope.c_str());
+    lua_setfield(L, -2, "scope");
+    lua_pushstring(L, p->m_sITGOnlineUserId.c_str());
+    lua_setfield(L, -2, "onlineUserId");
+    lua_pushstring(L, p->m_sITGOnlineUserName.c_str());
+    lua_setfield(L, -2, "onlineUserName");
+    return 1;
+  }
+  static int SetITGOnlineAuth(T* p, lua_State* L) {
+    lua_pushboolean(
+        L, p->SetITGOnlineAuth(SArg(1), SArg(2), SArg(3), SArg(4)));
+    return 1;
+  }
+  static int ClearITGOnlineAuth(T* p, lua_State* L) {
+    p->ClearITGOnlineAuth();
+    COMMON_RETURN_SELF;
+  }
   static int GetHighScoreList(T* p, lua_State* L) {
     if (LuaBinding::CheckLuaObjectType(L, 1, "Song")) {
       const Song* pSong = Luna<Song>::check(L, 1);
@@ -3823,6 +3941,9 @@ class LunaProfile : public Luna<Profile> {
     ADD_METHOD(SetDisplayName);
     ADD_METHOD(GetLastUsedHighScoreName);
     ADD_METHOD(SetLastUsedHighScoreName);
+    ADD_METHOD(GetITGOnlineAuth);
+    ADD_METHOD(SetITGOnlineAuth);
+    ADD_METHOD(ClearITGOnlineAuth);
     ADD_METHOD(GetAllUsedHighScoreNames);
     ADD_METHOD(GetHighScoreListIfExists);
     ADD_METHOD(GetHighScoreList);

@@ -110,7 +110,7 @@ foreach(REQUIRED_SNIPPET
     "evaluation_room_navigation_direct"
     "lobby_enter_navigation_direct"
     "EstimatedServerTimeMilliseconds"
-    "profile-guid:v1:"
+    "profile-guid:v2:"
     "stored_token_binding_user_mismatch"
     "stored token ignored reason=profile_binding_missing_or_invalid"
     "SRC_REVIEW_TRACE [ITGOnline]")

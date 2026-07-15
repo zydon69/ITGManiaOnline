@@ -2,8 +2,9 @@
 -- ITG Online API client.
 --
 -- This bridges Simply Love's existing online-lobby UI to the Laravel server.
--- Save/ITGOnline.ini stores non-secret connection settings. Persistent secrets
--- live only in the native credential store and remain bound to the active profile.
+-- Save/ITGOnline.ini stores non-secret connection settings. A remembered
+-- access token is stored in the active profile's Editable.ini so deleting the
+-- profile also deletes its online identity. Passwords remain memory-only.
 
 local previousITGOnline = rawget(_G, "ITGOnline")
 if type(previousITGOnline) == "table" and previousITGOnline.runtimeLoaded == true then
@@ -28,8 +29,6 @@ ITGOnline.runtimeLoaded = true
 
 ITGOnline.configPath = "/Save/ITGOnline.ini"
 ITGOnline.debugConfigPath = "/Save/ITGOnlineDebug.ini"
-ITGOnline.passwordService = "ITG Online Password"
-ITGOnline.accessTokenService = "ITG Online Access Token"
 ITGOnline.defaults = {
 	apiBaseUrl = "https://itgonline.fr/api/v1",
 	webSocketUrl = "wss://ws.itgonline.fr",
@@ -622,22 +621,8 @@ local function origin_from_base_url(value)
 	return value:match("^(https?://[^/]+)") or ""
 end
 
-local function secure_credentials_available()
-	if not (NETWORK and NETWORK.SecureCredentialIsAvailable) then return false end
-	local ok, available = safe_call("secure_credentials_available", function()
-		return NETWORK:SecureCredentialIsAvailable()
-	end)
-	return ok and available == true
-end
-
 local function secure_credentials_backend()
-	if NETWORK and NETWORK.SecureCredentialBackend then
-		local ok, backend = safe_call("secure_credentials_backend", function()
-			return NETWORK:SecureCredentialBackend()
-		end)
-		if ok then return tostring(backend or "unavailable") end
-	end
-	return "unavailable"
+	return "profile Editable.ini"
 end
 
 local function active_online_player()
@@ -715,7 +700,7 @@ local function active_persistent_online_profile()
 		if nameOk then name = trim(displayName) end
 	end
 
-	return { player = player, slot = slot, guid = guid, dir = dir, name = name }
+	return { player = player, slot = slot, profile = profile, guid = guid, dir = dir, name = name }
 end
 
 local function profile_prefers_persistent_online_token()
@@ -742,51 +727,13 @@ end
 local function active_profile_auth_path()
 	local identity = active_persistent_online_profile()
 	if not identity then return nil, nil, nil end
-	return identity.dir .. "ITGOnline.ini", identity.dir, identity
+	return identity.dir .. "Editable.ini", identity.dir, identity
 end
 
-local function access_token_scope(_apiBaseUrl, _deviceName)
+local function access_token_scope(apiBaseUrl, _deviceName)
 	local _, _, identity = active_profile_auth_path()
 	if not identity then return "" end
-	return "profile-guid:v1:" .. identity.guid
-end
-
-local function clear_profile_access_token()
-	local path = active_profile_auth_path()
-	if not path or not file_exists(path) then
-		return true
-	end
-
-	local contents = ini_read(path) or {}
-	contents["ITGOnline"] = contents["ITGOnline"] or {}
-	local section = contents["ITGOnline"]
-	if tostring(section["AccessToken"] or "") == ""
-		and tostring(section["AccessTokenScope"] or "") == ""
-		and tostring(section["BindingVersion"] or "") == ""
-	then
-		return true
-	end
-
-	section["AccessToken"] = ""
-	section["AccessTokenScope"] = ""
-	section["BindingVersion"] = ""
-	section["ProfileGuid"] = ""
-	section["ProfileName"] = ""
-	section["OnlineUserId"] = ""
-	section["OnlineUserName"] = ""
-	if not ini_write(path, contents) then return false end
-	return true
-end
-
-local function clear_profile_access_token_secret()
-	local path = active_profile_auth_path()
-	if not path or not file_exists(path) then return false end
-	local contents = ini_read(path) or {}
-	contents["ITGOnline"] = contents["ITGOnline"] or {}
-	if tostring(contents["ITGOnline"]["AccessToken"] or "") == "" then return false end
-	contents["ITGOnline"]["AccessToken"] = ""
-	if not ini_write(path, contents) then return false end
-	return true
+	return "profile-guid:v2:" .. identity.guid .. "|api:" .. normalize_base_url(apiBaseUrl)
 end
 
 local function online_user_identifier(user)
@@ -799,44 +746,55 @@ local function online_user_display_name(user)
 	return trim(user.displayName or user.display_name or user.username or user.name or user.email)
 end
 
-local function read_profile_access_token_binding(expectedScope)
-	local path, _, identity = active_profile_auth_path()
-	if not path or not identity or not file_exists(path) then return nil end
-	local contents = ini_read(path) or {}
-	local section = contents["ITGOnline"] or {}
-	if tostring(section["BindingVersion"] or "") ~= "1" then return nil end
-	if trim(section["AccessTokenScope"]) ~= trim(expectedScope) then return nil end
-	if trim(section["ProfileGuid"]) ~= identity.guid then return nil end
-	local onlineUserId = trim(section["OnlineUserId"])
-	if onlineUserId == "" then return nil end
-	return {
-		profileGuid = identity.guid,
-		profileName = trim(section["ProfileName"]),
-		onlineUserId = onlineUserId,
-		onlineUserName = trim(section["OnlineUserName"]),
-		scope = trim(expectedScope),
-	}
+local function profile_auth_snapshot(identity)
+	if not identity or not identity.profile or not identity.profile.GetITGOnlineAuth then return nil end
+	local ok, auth = safe_call("profile_auth_get", function()
+		return identity.profile:GetITGOnlineAuth()
+	end)
+	return ok and type(auth) == "table" and auth or nil
 end
 
-local function write_profile_access_token_binding(scope, user)
-	local path, _, identity = active_profile_auth_path()
-	if not path or not identity then return false end
-	local userId = online_user_identifier(user)
-	if trim(scope) == "" or userId == "" then return false end
-	local contents = file_exists(path) and (ini_read(path) or {}) or {}
-	contents["ITGOnline"] = contents["ITGOnline"] or {}
+local function restore_profile_auth(identity, previous)
+	if not identity or not identity.profile then return end
+	if type(previous) == "table"
+		and tostring(previous.accessToken or "") ~= ""
+		and identity.profile.SetITGOnlineAuth
+	then
+		safe_call("profile_auth_restore", function()
+			return identity.profile:SetITGOnlineAuth(
+				tostring(previous.accessToken), tostring(previous.scope or ""),
+				tostring(previous.onlineUserId or ""), tostring(previous.onlineUserName or ""))
+		end)
+	elseif identity.profile.ClearITGOnlineAuth then
+		safe_call("profile_auth_restore_empty", function()
+			identity.profile:ClearITGOnlineAuth()
+		end)
+	end
+end
+
+local function save_profile_auth(identity)
+	if not identity or not PROFILEMAN or not PROFILEMAN.SaveProfileEditable then return false end
+	local ok, saved = safe_call("profile_auth_save_editable", function()
+		return PROFILEMAN:SaveProfileEditable(identity.player)
+	end)
+	return ok and saved == true
+end
+
+local function clear_legacy_profile_auth_file(identity)
+	if not identity then return end
+	local path = identity.dir .. "ITGOnline.ini"
+	if not file_exists(path) then return end
+	local contents = ini_read(path)
+	if type(contents) ~= "table" or type(contents["ITGOnline"]) ~= "table" then return end
 	local section = contents["ITGOnline"]
-	-- The profile stores identity metadata only. The bearer belongs exclusively
-	-- in the native OS credential store.
 	section["AccessToken"] = ""
-	section["AccessTokenScope"] = tostring(scope)
-	section["BindingVersion"] = "1"
-	section["ProfileGuid"] = identity.guid
-	section["ProfileName"] = identity.name
-	section["OnlineUserId"] = userId
-	section["OnlineUserName"] = online_user_display_name(user)
-	if not ini_write(path, contents) then return false end
-	return true
+	section["AccessTokenScope"] = ""
+	section["BindingVersion"] = ""
+	section["ProfileGuid"] = ""
+	section["ProfileName"] = ""
+	section["OnlineUserId"] = ""
+	section["OnlineUserName"] = ""
+	ini_write(path, contents)
 end
 
 local function secure_password_account(apiBaseUrl, email)
@@ -845,169 +803,73 @@ local function secure_password_account(apiBaseUrl, email)
 	return normalize_base_url(apiBaseUrl) .. "|" .. email
 end
 
-local function secure_password_get(apiBaseUrl, email)
-	if not secure_credentials_available() then return nil, false end
-
-	local account = secure_password_account(apiBaseUrl, email)
-	if account == "" then return nil, false end
-
-	local ok, result = safe_call("secure_password_get", function()
-		return NETWORK:SecureCredentialGet(ITGOnline.passwordService, account)
+local function clear_active_profile_auth()
+	local _, _, identity = active_profile_auth_path()
+	if not identity then return true end
+	if not identity.profile.ClearITGOnlineAuth then return false end
+	local previous = profile_auth_snapshot(identity)
+	local ok = safe_call("profile_auth_clear", function()
+		identity.profile:ClearITGOnlineAuth()
 	end)
-	if not ok then return nil, false end
-	if result and result.ok and tostring(result.secret or "") ~= "" then
-		return tostring(result.secret), true
-	end
-
-	return nil, false
-end
-
-local function secure_password_set(apiBaseUrl, email, password)
-	if not secure_credentials_available() then return false end
-
-	local account = secure_password_account(apiBaseUrl, email)
-	if account == "" or tostring(password or "") == "" then return false end
-
-	local ok, result = safe_call("secure_password_set", function()
-		return NETWORK:SecureCredentialSet(ITGOnline.passwordService, account, tostring(password))
-	end)
-	if not ok then return false end
-	if not result or not result.ok then
-		online_trace("Secure password save failed using " .. secure_credentials_backend() .. ": " .. tostring(result and result.error or "unknown"))
+	if not ok or not save_profile_auth(identity) then
+		restore_profile_auth(identity, previous)
 		return false
 	end
-
+	clear_legacy_profile_auth_file(identity)
 	return true
-end
-
-local function secure_password_delete(apiBaseUrl, email)
-	if not secure_credentials_available() then return false end
-
-	local account = secure_password_account(apiBaseUrl, email)
-	if account == "" then return false end
-
-	local ok, result = safe_call("secure_password_delete", function()
-		return NETWORK:SecureCredentialDelete(ITGOnline.passwordService, account)
-	end)
-	if not ok then return false end
-	return result and result.ok
-end
-
-local function secure_access_token_account(apiBaseUrl, deviceName)
-	local scope = access_token_scope(apiBaseUrl, deviceName)
-	if scope == "" then return "" end
-	return normalize_base_url(apiBaseUrl) .. "|" .. scope
-end
-
-local function legacy_secure_access_token_account(apiBaseUrl, deviceName)
-	local account = normalize_base_url(apiBaseUrl) .. "|" .. trim(deviceName)
-	return account == "|" and "" or account
 end
 
 local function secure_access_token_get(apiBaseUrl, deviceName)
 	if not profile_prefers_persistent_online_token() then
 		return nil, false, nil
 	end
+	local _, _, identity = active_profile_auth_path()
 	local scope = access_token_scope(apiBaseUrl, deviceName)
-	local binding = read_profile_access_token_binding(scope)
-	if not binding then
+	local auth = profile_auth_snapshot(identity)
+	if not auth or trim(auth.scope) ~= scope or trim(auth.onlineUserId) == ""
+		or tostring(auth.accessToken or "") == ""
+	then
 		online_trace("stored token ignored reason=profile_binding_missing_or_invalid")
 		return nil, false, nil
 	end
 
-	if not secure_credentials_available() then
-		online_trace("Secure access token unavailable; persistence disabled backend=" .. secure_credentials_backend())
-		return nil, false, binding
-	end
-
-	local account = secure_access_token_account(apiBaseUrl, deviceName)
-	if account == "" then return nil, false, nil end
-
-	local ok, result = safe_call("secure_access_token_get", function()
-		return NETWORK:SecureCredentialGet(ITGOnline.accessTokenService, account)
-	end)
-	if not ok then return nil, false, binding end
-	if result and result.ok and tostring(result.secret or "") ~= "" then
-		return tostring(result.secret), true, binding
-	end
-
-	-- Deliberately do not migrate machine-scoped credentials. They were not tied
-	-- to a local player profile and could silently authenticate another person.
-	return nil, false, binding
+	return tostring(auth.accessToken), true, {
+		profileGuid = identity.guid,
+		profileName = identity.name,
+		onlineUserId = trim(auth.onlineUserId),
+		onlineUserName = trim(auth.onlineUserName),
+		scope = scope,
+	}
 end
 
 local function secure_access_token_set(apiBaseUrl, deviceName, accessToken, user)
 	if not profile_prefers_persistent_online_token() then
-		clear_profile_access_token()
+		clear_active_profile_auth()
 		return false
 	end
 	local scope = access_token_scope(apiBaseUrl, deviceName)
-	if scope == "" or online_user_identifier(user) == "" then return false end
+	local _, _, identity = active_profile_auth_path()
+	local userId = online_user_identifier(user)
+	if not identity or scope == "" or userId == "" or tostring(accessToken or "") == ""
+		or not identity.profile.SetITGOnlineAuth
+	then return false end
 
-	if not secure_credentials_available() then
-		online_trace("Secure access token persistence refused: native credential store unavailable")
-		clear_profile_access_token()
-		return false
-	end
-
-	local account = secure_access_token_account(apiBaseUrl, deviceName)
-	if account == "" or tostring(accessToken or "") == "" then return false end
-
-	local ok, result = safe_call("secure_access_token_set", function()
-		return NETWORK:SecureCredentialSet(ITGOnline.accessTokenService, account, tostring(accessToken))
+	local previous = profile_auth_snapshot(identity)
+	local ok, accepted = safe_call("profile_auth_set", function()
+		return identity.profile:SetITGOnlineAuth(
+			tostring(accessToken), scope, userId, online_user_display_name(user))
 	end)
-	if not ok then
-		clear_profile_access_token()
-		return false
-	end
-	if not result or not result.ok then
-		online_trace("Secure access token save failed using " .. secure_credentials_backend() .. ": " .. tostring(result and result.error or "unknown"))
-		clear_profile_access_token()
+	if not ok or accepted ~= true or not save_profile_auth(identity) then
+		restore_profile_auth(identity, previous)
 		return false
 	end
 
-	-- The profile binding is required even when the secret itself lives in the
-	-- OS credential store. Deleting the profile then makes the secret unusable.
-	if not write_profile_access_token_binding(scope, user) then
-		safe_call("secure_access_token_delete_unbound", function()
-			return NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, account)
-		end)
-		return false
-	end
-	clear_profile_access_token_secret()
-
-	local legacyAccount = legacy_secure_access_token_account(apiBaseUrl, deviceName)
-	if legacyAccount ~= "" and legacyAccount ~= account then
-		safe_call("secure_access_token_delete_legacy_after_set", function()
-			return NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, legacyAccount)
-		end)
-	end
-
+	clear_legacy_profile_auth_file(identity)
 	return true
 end
 
-local function secure_access_token_delete(apiBaseUrl, deviceName)
-	local profileDeleted = clear_profile_access_token()
-	if not secure_credentials_available() then return profileDeleted end
-
-	local account = secure_access_token_account(apiBaseUrl, deviceName)
-	local secureDeleted = true
-	if account ~= "" then
-		local ok, result = safe_call("secure_access_token_delete", function()
-			return NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, account)
-		end)
-		secureDeleted = ok and result and result.ok == true
-	end
-
-	local legacyAccount = legacy_secure_access_token_account(apiBaseUrl, deviceName)
-	if legacyAccount ~= "" and legacyAccount ~= account then
-		local ok, result = safe_call("secure_access_token_delete_legacy", function()
-			return NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, legacyAccount)
-		end)
-		secureDeleted = secureDeleted and ok and result and result.ok == true
-	end
-
-	return profileDeleted and secureDeleted
+local function secure_access_token_delete(_apiBaseUrl, _deviceName)
+	return clear_active_profile_auth()
 end
 
 local function safe_decode(body)
@@ -1960,11 +1822,6 @@ end
 
 local function current_password(config)
 	config = config or {}
-	local securePassword, securePasswordStored = secure_password_get(config.apiBaseUrl, config.email)
-	if securePasswordStored and tostring(securePassword or "") ~= "" then
-		return tostring(securePassword)
-	end
-
 	local currentAccount = secure_password_account(config.apiBaseUrl, config.email)
 	if currentAccount ~= "" and transientPasswordAccount == currentAccount then
 		return tostring(transientPassword or "")
@@ -2043,34 +1900,16 @@ function ITGOnline:SaveConfig(values)
 		return nil, "config_write_failed"
 	end
 
-	local securePasswordStored = false
-
 	if passwordWasProvided then
 		if nextPassword == "" then
 			transientPassword = nil
 			transientPasswordAccount = nil
-			secure_password_delete(current.apiBaseUrl, current.email)
-			secure_password_delete(nextConfig.apiBaseUrl, nextConfig.email)
 		else
-			securePasswordStored = secure_password_set(nextConfig.apiBaseUrl, nextConfig.email, nextPassword)
-			if securePasswordStored
-				and (nextConfig.email ~= current.email or nextConfig.apiBaseUrl ~= current.apiBaseUrl) then
-				secure_password_delete(current.apiBaseUrl, current.email)
-			end
-			if securePasswordStored then
-				transientPassword = nil
-				transientPasswordAccount = nil
-			else
-				transientPassword = nextPassword
-				transientPasswordAccount = secure_password_account(nextConfig.apiBaseUrl, nextConfig.email)
-			end
+			transientPassword = nextPassword
+			transientPasswordAccount = secure_password_account(nextConfig.apiBaseUrl, nextConfig.email)
 		end
 	else
-		local storedPassword
-		storedPassword, securePasswordStored = secure_password_get(nextConfig.apiBaseUrl, nextConfig.email)
-		if storedPassword and storedPassword ~= "" then
-			nextPassword = storedPassword
-		elseif transientPasswordAccount == secure_password_account(nextConfig.apiBaseUrl, nextConfig.email)
+		if transientPasswordAccount == secure_password_account(nextConfig.apiBaseUrl, nextConfig.email)
 			and tostring(transientPassword or "") ~= ""
 		then
 			nextPassword = tostring(transientPassword or "")
@@ -3206,10 +3045,7 @@ function ITGOnline:HasStoredCredentials()
 		return true
 	end
 
-	local storedPassword = secure_password_get(config.apiBaseUrl, config.email)
-	local hasPassword = storedPassword ~= nil and tostring(storedPassword) ~= ""
-	storedPassword = nil
-	return hasPassword
+	return false
 end
 
 function ITGOnline:AuthHeaders()

@@ -17,16 +17,15 @@ DeviceName=itgmania-client
 The file is local to the machine. Do not commit it. The cabinet no longer types
 its password on the game screen: the game starts a device login, shows a QR
 code, and the player approves the sign-in on a phone. The resulting access
-token is stored in native secure storage when available (Keychain / Credential
-Manager), so the cabinet can reconnect without re-entering credentials until
-the token is revoked.
+token is stored, by explicit product choice, in the active local profile's
+`Editable.ini`. The bearer is plaintext, but it is scoped to both the profile
+GUID and API origin. Deleting that profile deletes the saved online identity;
+choosing the non-persistent login option clears it immediately. Passwords are
+never persisted and remain memory-only for legacy email/password flows.
 
-On Windows, secure credential persistence uses the Unicode Credential Manager APIs
-(`CredWriteW` / `CredReadW` / `CredDeleteW`) so non-ASCII account identifiers are
-stored and loaded without ANSI conversion loss.
-
-If native secure storage is unavailable, the token remains memory-only for the
-current process. The client never falls back to a plaintext profile or INI token.
+The client intentionally does not read or migrate old Keychain / Credential
+Manager entries. This avoids operating-system credential prompts and prevents
+machine-scoped credentials from being attached to a newly-created profile.
 
 Until production mail is enabled on the server, accounts must be created and verified from the server side before the game can log in.
 

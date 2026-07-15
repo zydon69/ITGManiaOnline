@@ -7,12 +7,10 @@ set(NETWORK_MANAGER_SOURCE
 file(READ "${NETWORK_MANAGER_SOURCE}" NETWORK_MANAGER_TEXT)
 file(
   READ
-  "${ITGMANIA_SOURCE_DIR}/src/SecureCredentialStore.cpp"
-  SECURE_CREDENTIAL_STORE_TEXT)
-file(
-  READ
   "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/Scripts/SL-ITGOnlineClient.lua"
   ONLINE_CLIENT_TEXT)
+file(READ "${ITGMANIA_SOURCE_DIR}/src/Profile.cpp" PROFILE_SOURCE_TEXT)
+file(READ "${ITGMANIA_SOURCE_DIR}/src/ProfileManager.cpp" PROFILE_MANAGER_SOURCE_TEXT)
 
 foreach(REQUIRED_SNIPPET
     "IsExpectedInactiveWebSocketTerminalMessage"
@@ -45,15 +43,34 @@ if(NOT NETWORK_MANAGER_TEXT MATCHES
 endif()
 
 foreach(REQUIRED_SNIPPET
-    "#if defined(__APPLE__)"
-    "kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly"
     "local sessionAccessToken = nil"
     "function ITGOnline:ApplyStoredAccessToken(callback)"
-    "Secure access token persistence refused: native credential store unavailable"
-    "write_profile_access_token_binding")
-  string(FIND "${SECURE_CREDENTIAL_STORE_TEXT}${ONLINE_CLIENT_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+    "profile-guid:v2:"
+    "GetITGOnlineAuth"
+    "SaveProfileEditable")
+  string(
+    FIND
+    "${ONLINE_CLIENT_TEXT}${PROFILE_SOURCE_TEXT}${PROFILE_MANAGER_SOURCE_TEXT}"
+    "${REQUIRED_SNIPPET}"
+    SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(FATAL_ERROR "Secure credential invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "ini.SetValue(\"ITGOnline\", \"AccessToken\""
+    "ini.GetValue(\"ITGOnline\", \"AccessToken\""
+    "MAX_ITG_ONLINE_ACCESS_TOKEN_BYTES = 4096"
+    "ClearITGOnlineAuth();"
+    "SaveProfileEditable(PlayerNumber pn) const")
+  string(
+    FIND
+    "${PROFILE_SOURCE_TEXT}${PROFILE_MANAGER_SOURCE_TEXT}"
+    "${REQUIRED_SNIPPET}"
+    SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(FATAL_ERROR "Profile credential invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
 
@@ -66,6 +83,9 @@ foreach(FORBIDDEN_SNIPPET
     "config.password ="
     "nextConfig.password ="
     "self.transientPassword ="
+    "NETWORK:SecureCredentialGet"
+    "NETWORK:SecureCredentialSet"
+    "NETWORK:SecureCredentialDelete"
     "profile token fallback saved"
     "using profile token fallback")
   string(FIND "${ONLINE_CLIENT_TEXT}" "${FORBIDDEN_SNIPPET}" SNIPPET_OFFSET)

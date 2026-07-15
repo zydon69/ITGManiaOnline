@@ -660,6 +660,32 @@ bool ProfileManager::SaveProfile(PlayerNumber pn) const {
   return b;
 }
 
+bool ProfileManager::SaveProfileEditable(PlayerNumber pn) const {
+  if (!IsProfilePlayerNumberValid(
+          pn, "ProfileManager::SaveProfileEditable") ||
+      m_sProfileDir[pn].empty()) {
+    return false;
+  }
+
+  const Profile* profile = GetProfile(pn);
+  if (profile == nullptr) {
+    LOG->Warn(
+        "ProfileManager::SaveProfileEditable: no profile loaded for P%d",
+        pn + 1);
+    return false;
+  }
+  if (ProfileWasLoadedFromMemoryCard(pn) &&
+      (MEMCARDMAN == nullptr || !MEMCARDMAN->IsMounted(pn))) {
+    LOG->Warn(
+        "ProfileManager::SaveProfileEditable: memory card for P%d is not "
+        "mounted",
+        pn + 1);
+    return false;
+  }
+
+  return profile->SaveEditableDataToDir(m_sProfileDir[pn]);
+}
+
 bool ProfileManager::SaveLocalProfile(std::string sProfileID) {
   if (!IsSafeLocalProfileID(sProfileID)) {
     LOG->Warn(
@@ -2131,6 +2157,11 @@ class LunaProfileManager : public Luna<ProfileManager> {
     lua_pushboolean(L, pn != PLAYER_INVALID && p->SaveProfile(pn));
     return 1;
   }
+  static int SaveProfileEditable(T* p, lua_State* L) {
+    PlayerNumber pn = Enum::Check<PlayerNumber>(L, 1, true);
+    lua_pushboolean(L, pn != PLAYER_INVALID && p->SaveProfileEditable(pn));
+    return 1;
+  }
   static int SaveLocalProfile(T* p, lua_State* L) {
     lua_pushboolean(L, p->SaveLocalProfile(SArg(1)));
     return 1;
@@ -2181,6 +2212,7 @@ class LunaProfileManager : public Luna<ProfileManager> {
     ADD_METHOD(GetProfileFromGuid);
     //
     ADD_METHOD(SaveProfile);
+    ADD_METHOD(SaveProfileEditable);
     ADD_METHOD(SaveLocalProfile);
     ADD_METHOD(ProfileFromMemoryCardIsNew);
     ADD_METHOD(GetSongNumTimesPlayed);

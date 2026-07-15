@@ -66,6 +66,7 @@ class ProfileManager {
   bool FastLoadProfileNameFromMemoryCard(
       std::string sRootDir, std::string& sName) const;
   bool SaveProfile(PlayerNumber pn) const;
+  bool SaveProfileEditable(PlayerNumber pn) const;
   bool SaveLocalProfile(std::string sProfileID);
   void UnloadProfile(PlayerNumber pn);
 
