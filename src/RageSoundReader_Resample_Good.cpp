@@ -1049,21 +1049,27 @@ int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
         "SRC_AUDIT_FIX SRC-2838: Resample_Good input frame request overflow");
     return RageSoundReader::ERROR;
   }
-  if (iFramesNeeded == 0) {
-    return 0;
-  }
-
   std::vector<float> tmpBuf;
   try {
     tmpBuf.resize(
-        static_cast<size_t>(iFramesNeeded) * static_cast<size_t>(iChannels));
+        std::max<size_t>(
+            1, static_cast<size_t>(iFramesNeeded) *
+                   static_cast<size_t>(iChannels)));
   } catch (const std::bad_alloc&) {
     SetError(
         "SRC_AUDIT_FIX SRC-2837: Resample_Good could not allocate read buffer");
     return RageSoundReader::ERROR;
   }
 
-  int iFramesIn = m_pSource->Read(&tmpBuf[0], iFramesNeeded);
+  int iFramesIn = 0;
+  if (iFramesNeeded > 0) {
+    iFramesIn = m_pSource->Read(&tmpBuf[0], iFramesNeeded);
+  } else {
+    LogReviewSrcDiagnostics(
+        "SRC_AUDIT_FIX SRC-2922: resampler draining buffered samples "
+        "without source input source=%s requested=%d",
+        GetSourcePath().c_str(), iFrames);
+  }
   if (iFramesIn < 0) {
     return iFramesIn;
   }

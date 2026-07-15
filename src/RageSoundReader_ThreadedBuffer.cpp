@@ -571,17 +571,24 @@ int RageSoundReader_ThreadedBuffer::Read(float* pBuffer, int iFrames) {
   }
 
   {
-    /* Delete any empty mappings from the beginning, but don't empty the list,
-     * so we always have the current position and rate. If we delete an item,
-     * the rate or position has probably changed, so return. */
-    std::list<Mapping>::iterator it = m_StreamPosition.begin();
-    if (it != m_StreamPosition.end()) {
-      ++it;
-    }
-    if (it != m_StreamPosition.end() &&
-        !m_StreamPosition.front().iFramesBuffered) {
-      ++it;
+    /* Collapse all consumed mappings at once, but keep the final mapping so
+     * the current source position and rate remain available.  Returning once
+     * still tells RetriedRead that the mapping changed without making it burn
+     * one retry per historical mapping. */
+    size_t collapsedMappings = 0;
+    while (m_StreamPosition.size() > 1 &&
+           m_StreamPosition.front().iFramesBuffered == 0) {
       m_StreamPosition.pop_front();
+      ++collapsedMappings;
+    }
+    if (collapsedMappings != 0) {
+      if (collapsedMappings > 1) {
+        LogReviewSrcDiagnostics(
+            "SRC_AUDIT_FIX SRC-2921: collapsed %zu consumed threaded audio "
+            "mappings source=%s remaining=%zu",
+            collapsedMappings, GetSourcePath().c_str(),
+            m_StreamPosition.size());
+      }
       m_Event.Unlock();
       return 0;
     }

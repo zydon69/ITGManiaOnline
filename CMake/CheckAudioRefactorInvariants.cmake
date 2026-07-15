@@ -383,6 +383,23 @@ require_not_contains(
   "RageSoundReader must not mask retry exhaustion as EOF")
 
 require_contains(
+  "${rage_sound_reader_threaded_buffer_cpp}"
+  "while (m_StreamPosition.size() > 1 &&"
+  "ThreadedBuffer collapses consumed mapping runs in one retry transition")
+require_contains(
+  "${rage_sound_reader_threaded_buffer_cpp}"
+  "SRC_AUDIT_FIX SRC-2921"
+  "ThreadedBuffer mapping compaction is review-traced")
+require_not_contains(
+  "${rage_sound_reader_resample_good_cpp}"
+  "if (iFramesNeeded == 0) {\n    return 0;"
+  "Resample_Good must drain internally buffered output without source input")
+require_contains(
+  "${rage_sound_reader_resample_good_cpp}"
+  "SRC_AUDIT_FIX SRC-2922"
+  "Resample_Good internal-buffer draining is review-traced")
+
+require_contains(
   "${game_sound_manager_cpp}"
   "DeleteUnregisteredSoundPool"
   "PlayOnce separates unregistered pool deletion")
