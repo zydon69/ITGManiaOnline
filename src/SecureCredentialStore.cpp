@@ -2,13 +2,10 @@
 
 #include <string>
 
-// The macOS Keychain can trigger an interactive "session keychain" prompt on
-// freshly copied / unsigned development builds. For the distributed arcade
-// client, credentials must stay explicit and non-persistent until we ship a
-// proper notarized Developer ID build with a deliberate keychain policy.
-#if defined(__APPLE__) && !defined(ITGMANIA_ENABLE_MACOS_KEYCHAIN)
-#define ITGMANIA_MACOS_KEYCHAIN_ENABLED 0
-#elif defined(__APPLE__)
+// Keychain is the only acceptable persistent secret store on macOS. The app
+// already links Security.framework and requests a device-local accessibility
+// class, so there must not be a plaintext profile fallback.
+#if defined(__APPLE__)
 #define ITGMANIA_MACOS_KEYCHAIN_ENABLED 1
 #else
 #define ITGMANIA_MACOS_KEYCHAIN_ENABLED 0

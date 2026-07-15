@@ -1,5 +1,8 @@
 local function is_connected()
-	return ITGOnline and ITGOnline.token ~= nil and ITGOnline.user ~= nil
+	return ITGOnline
+		and ITGOnline.HasActiveAccessToken
+		and ITGOnline:HasActiveAccessToken()
+		and ITGOnline.user ~= nil
 end
 
 local function has_stored_access_token()
@@ -201,20 +204,8 @@ local function connect_to_lobbies(generation)
 	})
 end
 
-local function connect_with_token(accessToken, generation)
-	generation = generation or state.attemptGeneration
-	if not attempt_is_current(generation) then return end
-	if tostring(accessToken or "") == "" then
-		login_flow_trace("connect_with_token rejected empty_token" .. login_state_summary())
-		set_status(THEME:GetString("ScreenITGOnlineLogin", "DeviceLoginUnavailable"))
-		return
-	end
-
-	state.mode = "connecting"
-	state.connecting = true
-	login_flow_trace("connect_with_token begin tokenPresent=true" .. login_state_summary())
-	set_status(THEME:GetString("ScreenITGOnlineLogin", "Connecting"))
-	ITGOnline:ApplyAccessToken(accessToken, function(ok, user, response)
+local function finish_token_connection(generation)
+	return function(ok, user, response)
 		if not attempt_is_current(generation) then return end
 		local userId = type(user) == "table" and (user.id or user.user_id) or nil
 		login_flow_trace("apply_access_token result ok=" .. tostring(ok)
@@ -234,15 +225,46 @@ local function connect_with_token(accessToken, generation)
 		local sessionId = state.sessionId
 		local pollToken = state.pollToken
 		if tostring(sessionId or "") ~= "" and tostring(pollToken or "") ~= "" then
-			ITGOnline:AcknowledgeDeviceLogin(sessionId, pollToken, function(ackOk, decoded, response)
+			ITGOnline:AcknowledgeDeviceLogin(sessionId, pollToken, function(ackOk, decoded, ackResponse)
 				login_flow_trace("device_login_acknowledge result ok=" .. tostring(ackOk)
 					.. " acknowledged=" .. tostring(decoded and decoded.acknowledged)
-					.. " responseError=" .. tostring(response and response.errorMessage))
+					.. " responseError=" .. tostring(ackResponse and ackResponse.errorMessage))
 			end)
 		end
 		clear_session()
 		connect_to_lobbies(generation)
-	end)
+	end
+end
+
+local function prepare_token_connection(generation, source)
+	generation = generation or state.attemptGeneration
+	if not attempt_is_current(generation) then return nil end
+	state.mode = "connecting"
+	state.connecting = true
+	login_flow_trace("connect_with_token begin source=" .. tostring(source) .. " tokenPresent=true" .. login_state_summary())
+	set_status(THEME:GetString("ScreenITGOnlineLogin", "Connecting"))
+	return generation
+end
+
+local function connect_with_token(accessToken, generation)
+	generation = generation or state.attemptGeneration
+	if tostring(accessToken or "") == "" then
+		login_flow_trace("connect_with_token rejected empty_token" .. login_state_summary())
+		set_status(THEME:GetString("ScreenITGOnlineLogin", "DeviceLoginUnavailable"))
+		return
+	end
+	if not prepare_token_connection(generation, "device_login") then return end
+	ITGOnline:ApplyAccessToken(accessToken, finish_token_connection(generation))
+end
+
+local function connect_with_stored_token(generation)
+	generation = generation or state.attemptGeneration
+	if not prepare_token_connection(generation, "credential_store") then return end
+	if not ITGOnline:ApplyStoredAccessToken(finish_token_connection(generation)) then
+		state.connecting = false
+		state.mode = "idle"
+		start_device_login()
+	end
 end
 
 start_device_login = function(resetAttempts)
@@ -377,7 +399,7 @@ local function action_connect()
 
 	if has_stored_access_token() then
 		login_flow_trace("action_connect stored_token")
-		connect_with_token((ITGOnline:Config().accessToken or ""))
+		connect_with_stored_token()
 		return
 	end
 
@@ -560,7 +582,7 @@ local t = Def.ActorFrame{
 			state.mode = "connecting"
 			login_flow_trace("auto_connect stored_token" .. login_state_summary())
 			set_status(THEME:GetString("ScreenITGOnlineLogin", "Connecting"))
-			connect_with_token((ITGOnline:Config().accessToken or ""), state.attemptGeneration)
+			connect_with_stored_token(state.attemptGeneration)
 		else
 			login_flow_trace("auto_connect start_device_login" .. login_state_summary())
 			start_device_login(true)

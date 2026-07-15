@@ -224,7 +224,7 @@ constexpr mz_uint kMaxZipEntryCount = 20000;
 constexpr mz_uint64 kMaxZipSingleFileBytes =
     static_cast<mz_uint64>(256) * 1024 * 1024;
 constexpr mz_uint64 kMaxZipTotalUncompressedBytes =
-    static_cast<mz_uint64>(1024) * 1024 * 1024;
+    static_cast<mz_uint64>(5) * 1024 * 1024 * 1024;
 constexpr mz_uint64 kMaxZipCompressionRatio = 200;
 
 static bool EndsWithNoCase(

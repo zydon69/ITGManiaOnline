@@ -50,12 +50,12 @@ PackSync.lastDeferredLocalMatchTraceKey = PackSync.lastDeferredLocalMatchTraceKe
 PackSync.lastDeferredApplyKey = PackSync.lastDeferredApplyKey or ""
 PackSync.maxDownloadBytes = 5 * 1024 * 1024 * 1024
 PackSync.minimumDownloadFreeBytes = 256 * 1024 * 1024
-PackSync.extractionReserveBytes = 1024 * 1024 * 1024
+PackSync.maxArchiveUncompressedBytes = 5 * 1024 * 1024 * 1024
+PackSync.extractionReserveBytes = PackSync.maxArchiveUncompressedBytes
 PackSync.diskSafetyMarginBytes = 256 * 1024 * 1024
 
 PackSync.status = {
-	Idle = "idle",
-	Unknown = "idle",
+	Unknown = "unknown",
 	Ready = "ready",
 	ManagerBrowsingUnknownPack = "manager_browsing_unknown_pack",
 	SearchingLocalCharts = "searching_local_charts",
@@ -71,7 +71,7 @@ PackSync.status = {
 }
 
 PackSync.statusText = {
-	idle = "Pret",
+	unknown = "Etat inconnu",
 	ready = "Pret",
 	manager_browsing_unknown_pack = "Pack absent - telechargement apres selection",
 	searching_local_charts = "Recherche locale",
@@ -1039,7 +1039,7 @@ local function song_matches_text_prefilter(song, songInfo)
 end
 
 function PackSync:DisplayText(status)
-	return self.statusText[tostring(status or "")] or self.statusText.idle
+	return self.statusText[tostring(status or "")] or self.statusText.unknown
 end
 
 function PackSync:MarkPackInstalled(packName)
@@ -2514,38 +2514,6 @@ local function log_dir_listing(prefix, path)
 	end
 end
 
-local function copy_directory_recursive(sourcePath, targetPath, maxDepth)
-	if not FILEMAN or not FILEMAN.Copy or not FILEMAN.CreateDir then return false end
-	if not sourcePath or sourcePath == "" or not targetPath or targetPath == "" then return false end
-	maxDepth = tonumber(maxDepth) or 0
-	if maxDepth < 0 then return false end
-	if sourcePath:sub(-1) ~= "/" then sourcePath = sourcePath .. "/" end
-	if targetPath:sub(-1) ~= "/" then targetPath = targetPath .. "/" end
-
-	FILEMAN:CreateDir(targetPath)
-	local folderPaths = {}
-	for _, folderName in ivalues(dir_listing(sourcePath, true, false)) do
-		local safeName = safe_child_folder_name(folderName)
-		if safeName ~= "" and not is_temp_newdir_artifact(safeName) then
-			folderPaths[sourcePath .. safeName] = true
-			folderPaths[sourcePath .. safeName .. "/"] = true
-			if not copy_directory_recursive(sourcePath .. safeName .. "/", targetPath .. safeName .. "/", maxDepth - 1) then
-				return false
-			end
-		end
-	end
-	for _, entryPath in ivalues(dir_listing(sourcePath, false, true)) do
-		local fileName = tostring(entryPath or ""):match("([^/]+)$") or ""
-		if fileName ~= "" and not is_temp_newdir_artifact(fileName) and not folderPaths[tostring(entryPath or "")] then
-			if not FILEMAN:Copy(entryPath, targetPath .. fileName) then
-				trace("Recursive copy failed from=" .. tostring(entryPath) .. " to=" .. tostring(targetPath .. fileName))
-				return false
-			end
-		end
-	end
-	return true
-end
-
 local function install_extracted_pack_at_songs_root(quarantinePath, expectedPackName)
 	trace("Install extracted pack begin quarantine=" .. tostring(quarantinePath)
 		.. " expectedPack=" .. tostring(expectedPackName)
@@ -3008,6 +2976,15 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		.. " key=" .. tostring(self.downloadInFlightKey or "")
 		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+	trace_online_state("download_security_limits", {
+		selected_at = selected_at(songInfo),
+		packId = packId,
+		maxDownloadBytes = maxDownloadBytes,
+		maxArchiveUncompressedBytes = tonumber(self.maxArchiveUncompressedBytes) or 0,
+		extractionReserveBytes = tonumber(self.extractionReserveBytes) or 0,
+		diskSafetyMarginBytes = tonumber(self.diskSafetyMarginBytes) or 0,
+		archiveIntegrity = expectedArchiveHash ~= "" and "sha256_catalog" or "publisher_signature_unavailable",
+	})
 	trace_online_state("download_started", {
 		selected_at = selected_at(songInfo),
 		packId = packId,
@@ -3190,7 +3167,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 					if not diskCapacityChecked and totalBytes > 0 then
 						local freeBytes = disk_free_bytes("/Downloads/")
 						local remainingBytes = math.max(0, totalBytes - currentBytes)
-						local extractionReserve = tonumber(self.extractionReserveBytes) or (1024 * 1024 * 1024)
+						local extractionReserve = tonumber(self.extractionReserveBytes) or (5 * 1024 * 1024 * 1024)
 						local safetyMargin = tonumber(self.diskSafetyMarginBytes) or (256 * 1024 * 1024)
 						local requiredBytes = remainingBytes + extractionReserve + safetyMargin
 						if freeBytes and freeBytes < requiredBytes then
@@ -3295,7 +3272,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			end
 				self:UpdateStatus(self.status.DownloadInProgress, "Installation du pack", 100)
 				local extractionFreeBytes = disk_free_bytes("/Songs/")
-				local extractionRequiredBytes = (tonumber(self.extractionReserveBytes) or (1024 * 1024 * 1024))
+				local extractionRequiredBytes = (tonumber(self.extractionReserveBytes) or (5 * 1024 * 1024 * 1024))
 					+ (tonumber(self.diskSafetyMarginBytes) or (256 * 1024 * 1024))
 				if extractionFreeBytes and extractionFreeBytes < extractionRequiredBytes then
 					trace("Download extraction blocked reason=insufficient_disk_space free="

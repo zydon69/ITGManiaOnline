@@ -18,6 +18,10 @@ file(
   READ
   "${ITGMANIA_SOURCE_DIR}/src/NetworkManager.cpp"
   NETWORK_MANAGER_TEXT)
+file(
+  READ
+  "${ITGMANIA_SOURCE_DIR}/src/RageFileManager.cpp"
+  RAGE_FILE_MANAGER_TEXT)
 
 foreach(REQUIRED_SNIPPET
     "statusPostPendingIntent"
@@ -44,6 +48,26 @@ foreach(REQUIRED_SNIPPET
     message(
       FATAL_ERROR
       "Online pack-sync invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "maxArchiveUncompressedBytes = 5 * 1024 * 1024 * 1024"
+    "static_cast<mz_uint64>(5) * 1024 * 1024 * 1024"
+    "Unknown = \"unknown\"")
+  string(FIND "${ONLINE_PACK_SYNC_TEXT}${RAGE_FILE_MANAGER_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(FATAL_ERROR "Online pack bounds invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(FORBIDDEN_SNIPPET
+    "local function copy_directory_recursive"
+    "Idle = \"idle\""
+    "Unknown = \"idle\"")
+  string(FIND "${ONLINE_PACK_SYNC_TEXT}" "${FORBIDDEN_SNIPPET}" SNIPPET_OFFSET)
+  if(NOT SNIPPET_OFFSET EQUAL -1)
+    message(FATAL_ERROR "Online pack invariant failed: forbidden '${FORBIDDEN_SNIPPET}'")
   endif()
 endforeach()
 

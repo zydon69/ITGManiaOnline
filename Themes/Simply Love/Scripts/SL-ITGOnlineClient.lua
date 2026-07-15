@@ -2,9 +2,8 @@
 -- ITG Online API client.
 --
 -- This bridges Simply Love's existing online-lobby UI to the Laravel server.
--- Save/ITGOnline.ini stores connection settings and the optional profile-scoped
--- access-token fallback. Native secure storage remains preferred when available,
--- but local profiles may persist the token like the GrooveStats integration.
+-- Save/ITGOnline.ini stores non-secret connection settings. Persistent secrets
+-- live only in the native credential store and remain bound to the active profile.
 
 local previousITGOnline = rawget(_G, "ITGOnline")
 if type(previousITGOnline) == "table" and previousITGOnline.runtimeLoaded == true then
@@ -31,7 +30,6 @@ ITGOnline.configPath = "/Save/ITGOnline.ini"
 ITGOnline.debugConfigPath = "/Save/ITGOnlineDebug.ini"
 ITGOnline.passwordService = "ITG Online Password"
 ITGOnline.accessTokenService = "ITG Online Access Token"
-ITGOnline.profileAccessTokenCache = ITGOnline.profileAccessTokenCache or {}
 ITGOnline.defaults = {
 	apiBaseUrl = "https://itgonline.fr/api/v1",
 	webSocketUrl = "wss://ws.itgonline.fr",
@@ -41,8 +39,14 @@ ITGOnline.defaults = {
 ITGOnline.requests = ITGOnline.requests or {}
 ITGOnline.nextRequestId = ITGOnline.nextRequestId or 1
 ITGOnline.requestIdCounter = ITGOnline.requestIdCounter or 0
-ITGOnline.token = ITGOnline.token or nil
-ITGOnline.pendingAccessToken = ITGOnline.pendingAccessToken or nil
+-- Bearers stay private to this script chunk. Other theme actors can invoke the
+-- authenticated facade, but cannot read or overwrite the session secret.
+local sessionAccessToken = nil
+local pendingSessionAccessToken = nil
+local transientPassword = previousITGOnline and previousITGOnline.transientPassword or nil
+local transientPasswordAccount = previousITGOnline and previousITGOnline.transientPasswordAccount or nil
+ITGOnline.transientPassword = nil
+ITGOnline.transientPasswordAccount = nil
 ITGOnline.logSessionId = ITGOnline.logSessionId or string.format("%08x-%08x",
 	math.floor(((os and os.time and os.time() or 0)) % 4294967295),
 	math.floor(((GetTimeSinceStart and GetTimeSinceStart() or 0) * 1000000) % 4294967295))
@@ -136,7 +140,7 @@ ITGOnline.lastUnversionedPlayStateFetchAt = ITGOnline.lastUnversionedPlayStateFe
 ITGOnline.lastRoomNotPlayingScoreRejectAt = ITGOnline.lastRoomNotPlayingScoreRejectAt or 0
 ITGOnline.processedRealtimeEventIds = ITGOnline.processedRealtimeEventIds or {}
 ITGOnline.processedRealtimeEventOrder = ITGOnline.processedRealtimeEventOrder or {}
-ITGOnline.processedRealtimeEventLimit = ITGOnline.processedRealtimeEventLimit or 512
+ITGOnline.processedRealtimeEventLimit = math.max(4096, tonumber(ITGOnline.processedRealtimeEventLimit) or 0)
 ITGOnline.deletedRoomIds = ITGOnline.deletedRoomIds or {}
 ITGOnline.leavingRoomIds = ITGOnline.leavingRoomIds or {}
 ITGOnline.ignoredRoomEventsUntil = ITGOnline.ignoredRoomEventsUntil or {}
@@ -747,19 +751,9 @@ local function access_token_scope(_apiBaseUrl, _deviceName)
 	return "profile-guid:v1:" .. identity.guid
 end
 
-local function invalidate_profile_access_token_cache(path)
-	ITGOnline.profileAccessTokenCache = ITGOnline.profileAccessTokenCache or {}
-	if path then
-		ITGOnline.profileAccessTokenCache[path] = nil
-	else
-		ITGOnline.profileAccessTokenCache = {}
-	end
-end
-
 local function clear_profile_access_token()
 	local path = active_profile_auth_path()
 	if not path or not file_exists(path) then
-		invalidate_profile_access_token_cache(path)
 		return true
 	end
 
@@ -770,7 +764,6 @@ local function clear_profile_access_token()
 		and tostring(section["AccessTokenScope"] or "") == ""
 		and tostring(section["BindingVersion"] or "") == ""
 	then
-		invalidate_profile_access_token_cache(path)
 		return true
 	end
 
@@ -782,7 +775,6 @@ local function clear_profile_access_token()
 	section["OnlineUserId"] = ""
 	section["OnlineUserName"] = ""
 	if not ini_write(path, contents) then return false end
-	invalidate_profile_access_token_cache(path)
 	return true
 end
 
@@ -794,7 +786,6 @@ local function clear_profile_access_token_secret()
 	if tostring(contents["ITGOnline"]["AccessToken"] or "") == "" then return false end
 	contents["ITGOnline"]["AccessToken"] = ""
 	if not ini_write(path, contents) then return false end
-	invalidate_profile_access_token_cache(path)
 	return true
 end
 
@@ -827,7 +818,7 @@ local function read_profile_access_token_binding(expectedScope)
 	}
 end
 
-local function write_profile_access_token(token, scope, user)
+local function write_profile_access_token_binding(scope, user)
 	local path, _, identity = active_profile_auth_path()
 	if not path or not identity then return false end
 	local userId = online_user_identifier(user)
@@ -835,7 +826,9 @@ local function write_profile_access_token(token, scope, user)
 	local contents = file_exists(path) and (ini_read(path) or {}) or {}
 	contents["ITGOnline"] = contents["ITGOnline"] or {}
 	local section = contents["ITGOnline"]
-	section["AccessToken"] = tostring(token or "")
+	-- The profile stores identity metadata only. The bearer belongs exclusively
+	-- in the native OS credential store.
+	section["AccessToken"] = ""
 	section["AccessTokenScope"] = tostring(scope)
 	section["BindingVersion"] = "1"
 	section["ProfileGuid"] = identity.guid
@@ -843,18 +836,7 @@ local function write_profile_access_token(token, scope, user)
 	section["OnlineUserId"] = userId
 	section["OnlineUserName"] = online_user_display_name(user)
 	if not ini_write(path, contents) then return false end
-	invalidate_profile_access_token_cache(path)
 	return true
-end
-
-local function read_profile_access_token(expectedScope)
-	local path = active_profile_auth_path()
-	local binding = read_profile_access_token_binding(expectedScope)
-	if not path or not binding or not file_exists(path) then return nil, false, nil end
-	local contents = ini_read(path) or {}
-	local token = trim((contents["ITGOnline"] or {})["AccessToken"])
-	if token == "" then return nil, false, binding end
-	return token, true, binding
 end
 
 local function secure_password_account(apiBaseUrl, email)
@@ -934,9 +916,8 @@ local function secure_access_token_get(apiBaseUrl, deviceName)
 	end
 
 	if not secure_credentials_available() then
-		local token, stored, profileBinding = read_profile_access_token(scope)
-		online_trace("Secure access token unavailable; using profile token fallback stored=" .. tostring(stored))
-		return token, stored, profileBinding
+		online_trace("Secure access token unavailable; persistence disabled backend=" .. secure_credentials_backend())
+		return nil, false, binding
 	end
 
 	local account = secure_access_token_account(apiBaseUrl, deviceName)
@@ -964,9 +945,9 @@ local function secure_access_token_set(apiBaseUrl, deviceName, accessToken, user
 	if scope == "" or online_user_identifier(user) == "" then return false end
 
 	if not secure_credentials_available() then
-		local stored = write_profile_access_token(accessToken, scope, user)
-		online_trace("Secure access token unavailable; profile token fallback saved=" .. tostring(stored))
-		return stored
+		online_trace("Secure access token persistence refused: native credential store unavailable")
+		clear_profile_access_token()
+		return false
 	end
 
 	local account = secure_access_token_account(apiBaseUrl, deviceName)
@@ -976,16 +957,18 @@ local function secure_access_token_set(apiBaseUrl, deviceName, accessToken, user
 		return NETWORK:SecureCredentialSet(ITGOnline.accessTokenService, account, tostring(accessToken))
 	end)
 	if not ok then
-		return write_profile_access_token(accessToken, scope, user)
+		clear_profile_access_token()
+		return false
 	end
 	if not result or not result.ok then
 		online_trace("Secure access token save failed using " .. secure_credentials_backend() .. ": " .. tostring(result and result.error or "unknown"))
-		return write_profile_access_token(accessToken, scope, user)
+		clear_profile_access_token()
+		return false
 	end
 
 	-- The profile binding is required even when the secret itself lives in the
 	-- OS credential store. Deleting the profile then makes the secret unusable.
-	if not write_profile_access_token("", scope, user) then
+	if not write_profile_access_token_binding(scope, user) then
 		safe_call("secure_access_token_delete_unbound", function()
 			return NETWORK:SecureCredentialDelete(ITGOnline.accessTokenService, account)
 		end)
@@ -1394,6 +1377,13 @@ end
 function ITGOnline:NewClientActionId(prefix)
 	prefix = tostring(prefix or "command"):gsub("[^A-Za-z0-9._:-]", "-"):sub(1, 24)
 	return prefix .. ":" .. request_id()
+end
+
+function ITGOnline:RoundClientActionId(action)
+	action = tostring(action or "play"):gsub("[^A-Za-z0-9._:-]", "-"):sub(1, 24)
+	local selectionId = tostring(self:CurrentSelectionId() or "")
+	if selectionId == "" then return self:NewClientActionId(action) end
+	return action .. ":" .. selectionId
 end
 
 local function days_from_civil(year, month, day)
@@ -1926,8 +1916,7 @@ local function normalize_chart_type(value)
 	return lower
 end
 
-local function read_config(loadPassword)
-	if loadPassword == nil then loadPassword = true end
+local function read_config()
 	if not file_exists(ITGOnline.configPath) then
 		local created = ini_write(ITGOnline.configPath, {
 			["ITGOnline"] = {
@@ -1949,34 +1938,10 @@ local function read_config(loadPassword)
 	local apiBaseUrl = normalize_base_url(section["ApiBaseUrl"])
 	local email = trim(section["Email"])
 	local deviceName = trim(section["DeviceName"]) ~= "" and trim(section["DeviceName"]) or ITGOnline.defaults.deviceName
-	local securePassword, securePasswordStored = nil, false
-	if loadPassword then
-		securePassword, securePasswordStored = secure_password_get(apiBaseUrl, email)
-		if not securePasswordStored then
-			local transientAccount = ITGOnline and ITGOnline.transientPasswordAccount or nil
-			local currentAccount = secure_password_account(apiBaseUrl, email)
-			if (currentAccount ~= "" and transientAccount == currentAccount)
-				or (transientAccount == "" and tostring(ITGOnline.transientPassword or "") ~= "")
-			then
-				local transientPassword = tostring(ITGOnline.transientPassword or "")
-				if transientPassword ~= "" then
-					securePassword = transientPassword
-				end
-			end
-		end
-	end
-	local accessToken, accessTokenStored, accessTokenBinding = secure_access_token_get(apiBaseUrl, deviceName)
-
 	return {
 		apiBaseUrl = apiBaseUrl,
 		webSocketUrl = normalize_websocket_url(section["WebSocketUrl"]),
 		email = email,
-		password = tostring(securePassword or ""),
-		passwordStoredSecurely = securePasswordStored,
-		accessToken = tostring(accessToken or ""),
-		accessTokenStoredSecurely = accessTokenStored,
-		accessTokenBinding = accessTokenBinding,
-		accessTokenScope = access_token_scope(apiBaseUrl, deviceName),
 		secureCredentialsBackend = secure_credentials_backend(),
 		deviceName = deviceName,
 	}
@@ -1988,80 +1953,37 @@ local function copy_connection_config(config)
 		apiBaseUrl = config.apiBaseUrl or ITGOnline.defaults.apiBaseUrl,
 		webSocketUrl = config.webSocketUrl or ITGOnline.defaults.webSocketUrl,
 		email = config.email or "",
-		password = "",
-		passwordStoredSecurely = config.passwordStoredSecurely == true,
-		accessToken = config.accessToken or "",
-		accessTokenStoredSecurely = config.accessTokenStoredSecurely == true,
-		accessTokenBinding = config.accessTokenBinding,
-		accessTokenScope = config.accessTokenScope or access_token_scope(config.apiBaseUrl, config.deviceName),
 		secureCredentialsBackend = config.secureCredentialsBackend or secure_credentials_backend(),
 		deviceName = config.deviceName or ITGOnline.defaults.deviceName,
 	}
 end
 
-local function hydrate_config_password(config)
+local function current_password(config)
 	config = config or {}
-	local currentAccessTokenScope = access_token_scope(config.apiBaseUrl, config.deviceName)
-	if config.accessTokenScope ~= currentAccessTokenScope then
-		config.accessToken = ""
-		config.accessTokenStoredSecurely = false
-		config.accessTokenBinding = nil
-		config.accessTokenScope = currentAccessTokenScope
+	local securePassword, securePasswordStored = secure_password_get(config.apiBaseUrl, config.email)
+	if securePasswordStored and tostring(securePassword or "") ~= "" then
+		return tostring(securePassword)
 	end
 
-	if tostring(config.password or "") == "" then
-		local securePassword, securePasswordStored = secure_password_get(config.apiBaseUrl, config.email)
-		if securePasswordStored and tostring(securePassword or "") ~= "" then
-			config.password = tostring(securePassword or "")
-			config.passwordStoredSecurely = true
-		else
-			local transientAccount = ITGOnline and ITGOnline.transientPasswordAccount or nil
-			local currentAccount = secure_password_account(config.apiBaseUrl, config.email)
-			if (currentAccount ~= "" and transientAccount == currentAccount)
-				or (transientAccount == "" and tostring(ITGOnline.transientPassword or "") ~= "")
-			then
-				local transientPassword = tostring(ITGOnline.transientPassword or "")
-				if transientPassword ~= "" then
-					config.password = transientPassword
-				end
-			end
-
-			config.passwordStoredSecurely = false
-		end
+	local currentAccount = secure_password_account(config.apiBaseUrl, config.email)
+	if currentAccount ~= "" and transientPasswordAccount == currentAccount then
+		return tostring(transientPassword or "")
 	end
 
-	local accessToken, accessTokenStored, accessTokenBinding = secure_access_token_get(config.apiBaseUrl, config.deviceName)
-	if accessTokenStored and tostring(accessToken or "") ~= "" then
-		config.accessToken = tostring(accessToken or "")
-		config.accessTokenStoredSecurely = true
-		config.accessTokenBinding = accessTokenBinding
-		config.accessTokenScope = currentAccessTokenScope
-		return config
-	end
-	if tostring(accessToken or "") ~= "" then
-		config.accessToken = tostring(accessToken)
-		config.accessTokenStoredSecurely = false
-		config.accessTokenBinding = accessTokenBinding
-		config.accessTokenScope = currentAccessTokenScope
-		return config
-	end
-
-	config.accessTokenStoredSecurely = false
-	config.accessTokenBinding = nil
-	return config
+	return ""
 end
 
 function ITGOnline:Config()
 	if self.config then
-		return hydrate_config_password(self.config)
+		return self.config
 	end
 
 	if self.connectionConfig then
 		self.config = copy_connection_config(self.connectionConfig)
-		return hydrate_config_password(self.config)
+		return self.config
 	end
 
-	self.config = read_config(true)
+	self.config = read_config()
 	self.connectionConfig = copy_connection_config(self.config)
 	return self.config
 end
@@ -2076,24 +1998,6 @@ end
 
 function ITGOnline:ConnectionConfig()
 	if self.connectionConfig then
-		local currentAccessTokenScope = access_token_scope(self.connectionConfig.apiBaseUrl, self.connectionConfig.deviceName)
-		if self.connectionConfig.accessTokenScope ~= currentAccessTokenScope then
-			self.connectionConfig.accessToken = ""
-			self.connectionConfig.accessTokenStoredSecurely = false
-			self.connectionConfig.accessTokenBinding = nil
-			self.connectionConfig.accessTokenScope = currentAccessTokenScope
-		end
-		if tostring(self.connectionConfig.accessToken or "") == "" then
-			local accessToken, accessTokenStored, accessTokenBinding = secure_access_token_get(
-				self.connectionConfig.apiBaseUrl,
-				self.connectionConfig.deviceName
-			)
-			if tostring(accessToken or "") ~= "" then
-				self.connectionConfig.accessToken = tostring(accessToken)
-				self.connectionConfig.accessTokenStoredSecurely = accessTokenStored == true
-				self.connectionConfig.accessTokenBinding = accessTokenBinding
-			end
-		end
 		return self.connectionConfig
 	end
 
@@ -2102,7 +2006,7 @@ function ITGOnline:ConnectionConfig()
 		return self.connectionConfig
 	end
 
-	self.connectionConfig = read_config(false)
+	self.connectionConfig = read_config()
 	return self.connectionConfig
 end
 
@@ -2118,7 +2022,7 @@ function ITGOnline:SaveConfig(values)
 	}
 
 	local passwordWasProvided = values.password ~= nil
-	local nextPassword = tostring(passwordWasProvided and values.password or current.password or "")
+	local nextPassword = tostring(passwordWasProvided and values.password or current_password(current))
 	local written = ini_write(ITGOnline.configPath, {
 		["ITGOnline"] = {
 			["ApiBaseUrl"] = nextConfig.apiBaseUrl,
@@ -2143,8 +2047,8 @@ function ITGOnline:SaveConfig(values)
 
 	if passwordWasProvided then
 		if nextPassword == "" then
-			self.transientPassword = nil
-			self.transientPasswordAccount = nil
+			transientPassword = nil
+			transientPasswordAccount = nil
 			secure_password_delete(current.apiBaseUrl, current.email)
 			secure_password_delete(nextConfig.apiBaseUrl, nextConfig.email)
 		else
@@ -2154,11 +2058,11 @@ function ITGOnline:SaveConfig(values)
 				secure_password_delete(current.apiBaseUrl, current.email)
 			end
 			if securePasswordStored then
-				self.transientPassword = nil
-				self.transientPasswordAccount = nil
+				transientPassword = nil
+				transientPasswordAccount = nil
 			else
-				self.transientPassword = nextPassword
-				self.transientPasswordAccount = secure_password_account(nextConfig.apiBaseUrl, nextConfig.email)
+				transientPassword = nextPassword
+				transientPasswordAccount = secure_password_account(nextConfig.apiBaseUrl, nextConfig.email)
 			end
 		end
 	else
@@ -2166,26 +2070,15 @@ function ITGOnline:SaveConfig(values)
 		storedPassword, securePasswordStored = secure_password_get(nextConfig.apiBaseUrl, nextConfig.email)
 		if storedPassword and storedPassword ~= "" then
 			nextPassword = storedPassword
-		elseif self.transientPasswordAccount == secure_password_account(nextConfig.apiBaseUrl, nextConfig.email)
-			and tostring(self.transientPassword or "") ~= ""
+		elseif transientPasswordAccount == secure_password_account(nextConfig.apiBaseUrl, nextConfig.email)
+			and tostring(transientPassword or "") ~= ""
 		then
-			nextPassword = tostring(self.transientPassword or "")
-		elseif self.transientPasswordAccount == ""
-			and tostring(self.transientPassword or "") ~= ""
-		then
-			nextPassword = tostring(self.transientPassword or "")
-			self.transientPasswordAccount = secure_password_account(nextConfig.apiBaseUrl, nextConfig.email)
+			nextPassword = tostring(transientPassword or "")
 		elseif nextConfig.email ~= current.email or nextConfig.apiBaseUrl ~= current.apiBaseUrl then
 			nextPassword = ""
 		end
 	end
 
-	nextConfig.password = nextPassword
-	nextConfig.passwordStoredSecurely = securePasswordStored
-	nextConfig.accessToken = ""
-	nextConfig.accessTokenStoredSecurely = false
-	nextConfig.accessTokenBinding = nil
-	nextConfig.accessTokenScope = access_token_scope(nextConfig.apiBaseUrl, nextConfig.deviceName)
 	nextConfig.secureCredentialsBackend = secure_credentials_backend()
 
 	self.config = nextConfig
@@ -2195,13 +2088,9 @@ function ITGOnline:SaveConfig(values)
 end
 
 function ITGOnline:ClearTransientSecrets()
-	online_flow_trace("transient_secrets_clear hasTransientPassword=" .. tostring(tostring(ITGOnline.transientPassword or "") ~= "")
-		.. " hasConfigPassword=" .. tostring(self.config and tostring(self.config.password or "") ~= "" or false))
-	ITGOnline.transientPassword = nil
-	ITGOnline.transientPasswordAccount = nil
-	if self.config then
-		self.config.password = ""
-	end
+	online_flow_trace("transient_secrets_clear hasTransientPassword=" .. tostring(tostring(transientPassword or "") ~= ""))
+	transientPassword = nil
+	transientPasswordAccount = nil
 end
 
 function ITGOnline:HasStoredAccessToken()
@@ -2210,34 +2099,41 @@ function ITGOnline:HasStoredAccessToken()
 	end
 
 	local config = self:ConnectionConfig()
-	if tostring(config.accessToken or "") ~= "" then return true end
 	local accessToken = secure_access_token_get(config.apiBaseUrl, config.deviceName)
 	return accessToken ~= nil and tostring(accessToken or "") ~= ""
+end
+
+function ITGOnline:ApplyStoredAccessToken(callback)
+	local config = self:ConnectionConfig()
+	local accessToken, storedSecurely, binding = secure_access_token_get(config.apiBaseUrl, config.deviceName)
+	if not storedSecurely or tostring(accessToken or "") == "" then
+		online_flow_trace("stored_access_token_apply_failed reason=missing_or_unbound")
+		safe_callback(callback, false, nil, { message = "No profile-bound access token is available." })
+		return false
+	end
+
+	online_flow_trace("stored_access_token_apply_begin bindingPresent=" .. tostring(binding ~= nil))
+	self:ApplyAccessToken(tostring(accessToken), callback, binding)
+	accessToken = nil
+	return true
+end
+
+function ITGOnline:HasActiveAccessToken()
+	return tostring(sessionAccessToken or "") ~= ""
 end
 
 function ITGOnline:StoreAccessToken(accessToken, user)
 	local config = self:Config()
 	if not profile_prefers_persistent_online_token() then
 		self:ClearStoredAccessToken()
-		self.config = self.config or config
-		self.config.accessToken = ""
-		self.config.accessTokenStoredSecurely = false
-		self.config.accessTokenBinding = nil
-		self.config.accessTokenScope = access_token_scope(config.apiBaseUrl, config.deviceName)
-		self.connectionConfig = copy_connection_config(self.config)
 		online_trace("ITG Online token persistence disabled for active profile; token kept in memory for current session only.")
 		return false
 	end
 
 	local stored = secure_access_token_set(config.apiBaseUrl, config.deviceName, accessToken, user)
 	if stored then
-		local _, storedSecurely, binding = secure_access_token_get(config.apiBaseUrl, config.deviceName)
-		self.config = self.config or config
-		self.config.accessToken = tostring(accessToken or "")
-		self.config.accessTokenStoredSecurely = storedSecurely == true
-		self.config.accessTokenBinding = binding
-		self.config.accessTokenScope = access_token_scope(config.apiBaseUrl, config.deviceName)
-		self.connectionConfig = copy_connection_config(self.config)
+		online_flow_trace("stored_access_token_saved scope="
+			.. tostring(access_token_scope(config.apiBaseUrl, config.deviceName)))
 	end
 	return stored
 end
@@ -2257,19 +2153,8 @@ end
 function ITGOnline:ClearStoredAccessToken()
 	local config = self:ConnectionConfig()
 	online_flow_trace("stored_access_token_clear scope=" .. tostring(access_token_scope(config.apiBaseUrl, config.deviceName))
-		.. " hadConfigToken=" .. tostring(self.config and tostring(self.config.accessToken or "") ~= "" or false)
-		.. " hadConnectionToken=" .. tostring(self.connectionConfig and tostring(self.connectionConfig.accessToken or "") ~= "" or false))
+		.. " activeSession=" .. tostring(self:HasActiveAccessToken()))
 	local deleted = secure_access_token_delete(config.apiBaseUrl, config.deviceName)
-	if self.config then
-		self.config.accessToken = ""
-		self.config.accessTokenStoredSecurely = false
-		self.config.accessTokenBinding = nil
-	end
-	if self.connectionConfig then
-		self.connectionConfig.accessToken = ""
-		self.connectionConfig.accessTokenStoredSecurely = false
-		self.connectionConfig.accessTokenBinding = nil
-	end
 	self.tokenPersistenceError = deleted ~= true
 	if not deleted then
 		online_trace("Stored access token deletion failed; local session was cleared but persistent credentials may remain.")
@@ -2328,8 +2213,8 @@ function ITGOnline:InvalidateAuthenticatedSession(reason, payload)
 	self.activeRealtimeCallbacks = nil
 
 	self:ClearStoredAccessToken()
-	self.token = nil
-	self.pendingAccessToken = nil
+	sessionAccessToken = nil
+	pendingSessionAccessToken = nil
 	self.user = nil
 	self.currentRoomId = nil
 	self.currentRoom = nil
@@ -2394,7 +2279,7 @@ end
 
 function ITGOnline:UnlinkLocalProfile()
 	local hadStoredToken = self:HasStoredAccessToken()
-	local hadActiveToken = tostring(self.token or "") ~= ""
+	local hadActiveToken = tostring(sessionAccessToken or "") ~= ""
 
 	local tokenDeleted = true
 	if hadActiveToken then
@@ -2421,7 +2306,7 @@ function ITGOnline:UnlinkLocalProfile()
 end
 
 function ITGOnline:LoadAuthenticatedUser(callback, expectedAuthGeneration, expectedToken)
-	local tokenAtRequest = tostring(expectedToken or self.token or "")
+	local tokenAtRequest = tostring(expectedToken or sessionAccessToken or "")
 	online_flow_trace("auth_load_user_begin"
 		.. " hasToken=" .. tostring(tokenAtRequest ~= "")
 		.. " configured=" .. tostring(self:Configured() == true)
@@ -2434,12 +2319,12 @@ function ITGOnline:LoadAuthenticatedUser(callback, expectedAuthGeneration, expec
 	self:Request("GET", "/me", nil, function(ok, decoded, response)
 		if expectedAuthGeneration ~= nil and (
 			tonumber(expectedAuthGeneration) ~= tonumber(self.authAttemptGeneration)
-			or tostring(self.pendingAccessToken or self.token or "") ~= tokenAtRequest
+			or tostring(pendingSessionAccessToken or sessionAccessToken or "") ~= tokenAtRequest
 		) then
 			online_flow_trace("auth_load_user_ignored reason=stale_attempt"
 				.. " expectedGeneration=" .. tostring(expectedAuthGeneration)
 				.. " currentGeneration=" .. tostring(self.authAttemptGeneration)
-				.. " tokenMatches=" .. tostring(tostring(self.pendingAccessToken or self.token or "") == tokenAtRequest))
+				.. " tokenMatches=" .. tostring(tostring(pendingSessionAccessToken or sessionAccessToken or "") == tokenAtRequest))
 			safe_callback(callback, false, nil, { cancelled = true, errorMessage = "A newer authentication attempt superseded this request." })
 			return
 		end
@@ -2476,8 +2361,8 @@ function ITGOnline:ApplyAccessToken(accessToken, callback, expectedBinding)
 	self.authRefreshCallbacks = {}
 	-- Do not publish a device-login token to unrelated requests before `/me`
 	-- has confirmed the authenticated identity.
-	self.pendingAccessToken = accessToken
-	self.token = nil
+	pendingSessionAccessToken = accessToken
+	sessionAccessToken = nil
 	self.user = nil
 	self.disconnecting = false
 	self.sessionExpired = false
@@ -2487,7 +2372,7 @@ function ITGOnline:ApplyAccessToken(accessToken, callback, expectedBinding)
 	self.authRefreshNextAttemptAt = 0
 
 	self:LoadAuthenticatedUser(function(ok, user, decodedOrResponse)
-		if authAttemptGeneration ~= self.authAttemptGeneration or tostring(self.pendingAccessToken or "") ~= accessToken then
+		if authAttemptGeneration ~= self.authAttemptGeneration or tostring(pendingSessionAccessToken or "") ~= accessToken then
 			online_flow_trace("auth_apply_token_ignored reason=stale_attempt"
 				.. " expectedGeneration=" .. tostring(authAttemptGeneration)
 				.. " currentGeneration=" .. tostring(self.authAttemptGeneration))
@@ -2495,8 +2380,8 @@ function ITGOnline:ApplyAccessToken(accessToken, callback, expectedBinding)
 			return
 		end
 		if not ok then
-			self.token = nil
-			self.pendingAccessToken = nil
+			sessionAccessToken = nil
+			pendingSessionAccessToken = nil
 			self.user = nil
 			safe_callback(callback, false, nil, decodedOrResponse)
 			return
@@ -2508,8 +2393,8 @@ function ITGOnline:ApplyAccessToken(accessToken, callback, expectedBinding)
 				online_trace("stored_token_binding_user_mismatch expectedUser=" .. tostring(expectedUserId)
 					.. " actualUser=" .. tostring(actualUserId)
 					.. " scope=" .. tostring(expectedBinding.scope or ""))
-				self.token = nil
-				self.pendingAccessToken = nil
+				sessionAccessToken = nil
+				pendingSessionAccessToken = nil
 				self.user = nil
 				self:ClearStoredAccessToken()
 				safe_callback(callback, false, nil, {
@@ -2520,8 +2405,8 @@ function ITGOnline:ApplyAccessToken(accessToken, callback, expectedBinding)
 			end
 		end
 
-		self.token = accessToken
-		self.pendingAccessToken = nil
+		sessionAccessToken = accessToken
+		pendingSessionAccessToken = nil
 		apply_authenticated_user_state(self, user)
 		local persisted = self:StoreAccessToken(accessToken, user)
 		self.tokenPersistenceError = self:ShouldRememberTokenForCurrentProfile() and persisted ~= true or false
@@ -2599,7 +2484,7 @@ function ITGOnline:ResetRealtimeState()
 end
 
 function ITGOnline:ScheduleRealtimeReconnect(reason)
-	if self.disconnecting or not self.token then
+	if self.disconnecting or not sessionAccessToken then
 		return false
 	end
 
@@ -2738,7 +2623,7 @@ function ITGOnline:SendRealtimePing(reason)
 end
 
 function ITGOnline:ForceRealtimeReconnect(reason)
-	if self.disconnecting or not self.token then
+	if self.disconnecting or not sessionAccessToken then
 		return false
 	end
 
@@ -2818,7 +2703,7 @@ function ITGOnline:ReconcileCurrentRoomAfterRealtimeGap(source, minIntervalSecon
 end
 
 function ITGOnline:MaintainRealtimeAndRoomSync(source)
-	if self.disconnecting or not self.token then
+	if self.disconnecting or not sessionAccessToken then
 		return false
 	end
 
@@ -3312,11 +3197,14 @@ end
 
 function ITGOnline:HasStoredCredentials()
 	local config = self:ConnectionConfig()
-	if tostring(config.accessToken or "") ~= "" then return true end
+	if self:HasStoredAccessToken() then return true end
 	if config.email == "" then return false end
 
-	local transientPassword = tostring(self.transientPassword or "")
-	if transientPassword ~= "" then return true end
+	if transientPasswordAccount == secure_password_account(config.apiBaseUrl, config.email)
+		and tostring(transientPassword or "") ~= ""
+	then
+		return true
+	end
 
 	local storedPassword = secure_password_get(config.apiBaseUrl, config.email)
 	local hasPassword = storedPassword ~= nil and tostring(storedPassword) ~= ""
@@ -3329,8 +3217,8 @@ function ITGOnline:AuthHeaders()
 		["Accept"] = "application/json",
 		["Content-Type"] = "application/json",
 	}
-	if self.token then
-		headers["Authorization"] = "Bearer " .. tostring(self.token)
+	if sessionAccessToken then
+		headers["Authorization"] = "Bearer " .. tostring(sessionAccessToken)
 	end
 	return headers
 end
@@ -3388,7 +3276,7 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 		["Content-Type"] = "application/json",
 		["X-Request-ID"] = traceId,
 	}
-	local requestAuthToken = options.authToken or self.token
+	local requestAuthToken = options.authToken or sessionAccessToken
 	if requestAuthToken then
 		headers["Authorization"] = "Bearer " .. tostring(requestAuthToken)
 	end
@@ -7727,7 +7615,7 @@ function ITGOnline:Login(callback)
 	self.authRefreshFailureCount = 0
 	self.authRefreshNextAttemptAt = 0
 	online_flow_trace("login_begin localPlayers=" .. tostring(online_local_player_count())
-		.. " hasToken=" .. tostring(tostring(self.token or "") ~= "")
+		.. " hasToken=" .. tostring(tostring(sessionAccessToken or "") ~= "")
 		.. " sessionExpired=" .. tostring(self.sessionExpired == true))
 	if online_local_player_count() > 1 then
 		online_flow_trace("login_failed reason=two_local_players")
@@ -7736,15 +7624,15 @@ function ITGOnline:Login(callback)
 	end
 
 	local config = self:Config()
-	if config.email == "" or config.password == "" then
+	local loginPassword = current_password(config)
+	if config.email == "" or loginPassword == "" then
 		online_flow_trace("login_failed reason=missing_credentials hasEmail=" .. tostring(config.email ~= "")
-			.. " hasPassword=" .. tostring(config.password ~= ""))
+			.. " hasPassword=" .. tostring(loginPassword ~= ""))
 		self:ClearTransientSecrets()
 		safe_callback(callback, false, "Configure Save/ITGOnline.ini with Email and Password.")
 		return
 	end
 
-	local loginPassword = config.password
 	self:Request("POST", "/auth/login", {
 		email = config.email,
 		password = loginPassword,
@@ -7773,8 +7661,8 @@ function ITGOnline:Login(callback)
 		apply_authenticated_user_state(self, decoded.user)
 		self.authSessionInvalidated = false
 		self.authSessionInvalidatedReason = ""
-		self.token = decoded.access_token
-		local persisted = self:StoreAccessToken(self.token, decoded.user)
+		sessionAccessToken = decoded.access_token
+		local persisted = self:StoreAccessToken(sessionAccessToken, decoded.user)
 		self.tokenPersistenceError = self:ShouldRememberTokenForCurrentProfile() and persisted ~= true or false
 		if self.tokenPersistenceError then
 			online_flow_trace("login_token_persistence_failed user=" .. tostring(decoded.user and decoded.user.id or "nil"))
@@ -7786,7 +7674,7 @@ end
 
 function ITGOnline:Register(name, callback)
 	local config = self:Config()
-	local password = tostring(config.password or "")
+	local password = current_password(config)
 	if config.email == "" or password == "" or tostring(name or "") == "" then
 		safe_callback(callback, false, nil, { errorMessage = "Name, email, and password are required." })
 		return
@@ -7850,7 +7738,7 @@ function ITGOnline:Relogin(callback)
 		.. " inFlight=" .. tostring(self.authRefreshInFlight == true)
 		.. " failureCount=" .. tostring(self.authRefreshFailureCount or 0)
 		.. " nextAttemptAt=" .. tostring(self.authRefreshNextAttemptAt or 0)
-		.. " hasToken=" .. tostring(tostring(self.token or "") ~= ""))
+		.. " hasToken=" .. tostring(tostring(sessionAccessToken or "") ~= ""))
 
 	if self.authRefreshInFlight then
 		online_flow_trace("relogin_join_inflight")
@@ -7879,7 +7767,7 @@ function ITGOnline:Relogin(callback)
 	self.authRefreshInFlight = true
 	self.authRefreshInFlightGeneration = authAttemptGeneration
 
-	if not self.token then
+	if not sessionAccessToken then
 		self.authRefreshInFlight = false
 		self.authRefreshInFlightGeneration = nil
 		online_flow_trace("relogin_failed reason=no_token callbacks=" .. tostring(self.authRefreshCallbacks and #self.authRefreshCallbacks or 0))
@@ -7911,12 +7799,12 @@ function ITGOnline:Relogin(callback)
 		if ok and decoded and decoded.access_token then
 			self.authRefreshInFlight = false
 			self.authRefreshInFlightGeneration = nil
-			self.token = decoded.access_token
+			sessionAccessToken = decoded.access_token
 			self.user = decoded.user
 			self.sessionExpired = false
 			self.authRefreshFailureCount = 0
 			self.authRefreshNextAttemptAt = 0
-			local persisted = self:StoreAccessToken(self.token, decoded.user)
+			local persisted = self:StoreAccessToken(sessionAccessToken, decoded.user)
 			self.tokenPersistenceError = self:ShouldRememberTokenForCurrentProfile() and persisted ~= true or false
 			if self.tokenPersistenceError then
 				self:ClearStoredAccessToken()
@@ -7936,7 +7824,7 @@ function ITGOnline:Relogin(callback)
 		if response and response.statusCode == 401 and self:Configured() then
 			online_trace("Auth refresh failed with 401; falling back to password login.")
 			online_flow_trace("relogin_refresh_401_fallback_to_login callbacks=" .. tostring(#callbacks))
-			self.token = nil
+			sessionAccessToken = nil
 			self.user = nil
 			self:ClearStoredAccessToken()
 			local passwordFallbackGeneration = (tonumber(self.authAttemptGeneration) or 0) + 1
@@ -8043,7 +7931,7 @@ function ITGOnline:InvokeActiveRealtimeCallbacks(generation, method, value)
 end
 
 function ITGOnline:ConnectWebSocket(callbacks)
-	if self.disconnecting and tostring(self.token or "") ~= "" then
+	if self.disconnecting and tostring(sessionAccessToken or "") ~= "" then
 		online_flow_trace("auth_session_resumed source=connect_websocket previousDisconnecting=true"
 			.. " hasUser=" .. tostring(self.user ~= nil)
 			.. " socket=" .. tostring(self.socket ~= nil)
@@ -8080,13 +7968,13 @@ function ITGOnline:ConnectWebSocket(callbacks)
 	self.realtimeConnecting = true
 	self:RememberRealtimeConnectCallbacks(callbacks)
 	online_flow_trace("connect_websocket_ticket_request generation=" .. tostring(self.realtimeGeneration or "nil")
-		.. " hasToken=" .. tostring(tostring(self.token or "") ~= "")
+		.. " hasToken=" .. tostring(tostring(sessionAccessToken or "") ~= "")
 		.. " room=" .. tostring(self.currentRoomId or "nil")
 		.. " screen=" .. tostring(self.currentScreenName or "nil"))
 	self:TraceOnlineState("realtime_ticket_request", {
 		source = "connect_websocket",
 		generation = self.realtimeGeneration or "nil",
-		hasToken = tostring(self.token or "") ~= "",
+		hasToken = tostring(sessionAccessToken or "") ~= "",
 		realtimeConnecting = self.realtimeConnecting == true,
 		realtimeConnected = self.realtimeConnected == true,
 	})
@@ -8334,7 +8222,7 @@ end
 
 function ITGOnline:Connect(callbacks)
 	self.disconnecting = false
-	online_flow_trace("connect_begin hasToken=" .. tostring(tostring(self.token or "") ~= "")
+	online_flow_trace("connect_begin hasToken=" .. tostring(tostring(sessionAccessToken or "") ~= "")
 		.. " hasUser=" .. tostring(self.user ~= nil)
 		.. " sessionExpired=" .. tostring(self.sessionExpired == true)
 		.. " authInvalidated=" .. tostring(self.authSessionInvalidated == true)
@@ -8346,7 +8234,7 @@ function ITGOnline:Connect(callbacks)
 		.. " screen=" .. tostring(self.currentScreenName or "nil"))
 	self:TraceOnlineState("connect_begin", {
 		source = "connect",
-		hasToken = tostring(self.token or "") ~= "",
+		hasToken = tostring(sessionAccessToken or "") ~= "",
 		hasUser = self.user ~= nil,
 		sessionExpired = self.sessionExpired == true,
 		authInvalidated = self.authSessionInvalidated == true,
@@ -8355,7 +8243,7 @@ function ITGOnline:Connect(callbacks)
 		realtimeConnecting = self.realtimeConnecting == true,
 		socket = self.socket ~= nil,
 	})
-	if self.authSessionInvalidated and not self.token then
+	if self.authSessionInvalidated and not sessionAccessToken then
 		local message = "Session ouverte ailleurs. Utilise un compte different ou reconnecte-toi depuis l'ecran de connexion."
 		online_flow_trace("connect_blocked reason=auth_session_invalidated authReason="
 			.. tostring(self.authSessionInvalidatedReason or ""))
@@ -8373,14 +8261,14 @@ function ITGOnline:Connect(callbacks)
 		self:RememberRealtimeConnectCallbacks(callbacks)
 		return
 	end
-	if self.token and self.user and not self.sessionExpired then
+	if sessionAccessToken and self.user and not self.sessionExpired then
 		online_flow_trace("connect_using_existing_token")
 		self:ConnectWebSocket(callbacks)
 		return
 	end
 	online_flow_trace("connect_login_required")
 
-	if self.token and not self.sessionExpired then
+	if sessionAccessToken and not self.sessionExpired then
 		self:LoadAuthenticatedUser(function(ok, user, response)
 			if not ok then
 				safe_callback(callbacks and callbacks.error, response_message(nil, response, "Failed to load user profile."))
@@ -8392,15 +8280,14 @@ function ITGOnline:Connect(callbacks)
 		return
 	end
 
-	local config = self:Config()
-	if tostring(config.accessToken or "") ~= "" then
-		self:ApplyAccessToken(tostring(config.accessToken), function(ok, _user, response)
+	if self:HasStoredAccessToken() then
+		self:ApplyStoredAccessToken(function(ok, _user, response)
 			if not ok then
 				safe_callback(callbacks and callbacks.error, response_message(nil, response, "Failed to load user profile."))
 				return
 			end
 			self:ConnectWebSocket(callbacks)
-		end, config.accessTokenBinding)
+		end)
 		return
 	end
 
@@ -8421,7 +8308,7 @@ function ITGOnline:Disconnect(options)
 		.. " revokeToken=" .. tostring(revokeToken == true)
 		.. " room=" .. tostring(roomIdToLeave or "nil")
 		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
-		.. " hasToken=" .. tostring(tostring(self.token or "") ~= "")
+		.. " hasToken=" .. tostring(tostring(sessionAccessToken or "") ~= "")
 		.. " socket=" .. tostring(self.socket ~= nil)
 		.. " realtimeConnected=" .. tostring(self.realtimeConnected == true)
 		.. " syncInFlight=" .. tostring(self.syncInFlight == true)
@@ -8431,7 +8318,7 @@ function ITGOnline:Disconnect(options)
 		leaveRoom = options.leaveRoom ~= false,
 		revokeToken = revokeToken == true,
 		roomToLeave = roomIdToLeave or "nil",
-		hasToken = tostring(self.token or "") ~= "",
+		hasToken = tostring(sessionAccessToken or "") ~= "",
 		socket = self.socket ~= nil,
 		realtimeConnected = self.realtimeConnected == true,
 		syncInFlight = self.syncInFlight == true,
@@ -8445,7 +8332,7 @@ function ITGOnline:Disconnect(options)
 	-- request.  Otherwise an in-flight leave can occupy the worker queue until
 	-- the process exits, leaving a ghost member in the room.
 	self:CancelPendingRequests()
-	if roomIdToLeave and options.leaveRoom ~= false and self.token and NETWORK and NETWORK.HttpRequest then
+	if roomIdToLeave and options.leaveRoom ~= false and sessionAccessToken and NETWORK and NETWORK.HttpRequest then
 		self:MarkLeavingRoom(roomIdToLeave, true)
 		self:IgnoreRoomEvents(roomIdToLeave, 30)
 		local config = self:ConnectionConfig()
@@ -8473,12 +8360,12 @@ function ITGOnline:Disconnect(options)
 	else
 		online_flow_trace("disconnect_best_effort_leave_skipped room=" .. tostring(roomIdToLeave or "nil")
 			.. " leaveRoom=" .. tostring(options.leaveRoom ~= false)
-			.. " hasToken=" .. tostring(tostring(self.token or "") ~= "")
+			.. " hasToken=" .. tostring(tostring(sessionAccessToken or "") ~= "")
 			.. " hasNetwork=" .. tostring(NETWORK and NETWORK.HttpRequest ~= nil))
 	end
-	if revokeToken and self.token then
+	if revokeToken and sessionAccessToken then
 		online_flow_trace("disconnect_revoke_token_request")
-		local token = self.token
+		local token = sessionAccessToken
 		self:Request("POST", "/auth/logout", {}, function(ok, decoded, response)
 			online_flow_trace("disconnect_revoke_token_result ok=" .. tostring(ok == true)
 				.. " status=" .. tostring(response and response.statusCode or "nil")
@@ -8501,8 +8388,8 @@ function ITGOnline:Disconnect(options)
 	self.realtimeConnected = false
 	self.pendingRealtimeConnectCallbacks = {}
 	self.activeRealtimeCallbacks = nil
-	self.token = nil
-	self.pendingAccessToken = nil
+	sessionAccessToken = nil
+	pendingSessionAccessToken = nil
 	self.user = nil
 	self.currentRoomId = nil
 	self.currentRoom = nil
@@ -8603,14 +8490,14 @@ function ITGOnline:Disconnect(options)
 	online_flow_trace("disconnect_end syncGeneration=" .. tostring(self.syncGeneration)
 		.. " realtimeGeneration=" .. tostring(self.realtimeGeneration or "nil")
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-		.. " token=" .. tostring(self.token ~= nil)
+		.. " token=" .. tostring(sessionAccessToken ~= nil)
 		.. " user=" .. tostring(self.user ~= nil)
 		.. " disconnecting=" .. tostring(self.disconnecting == true))
 	self:TraceOnlineState("disconnect_end", {
 		source = "disconnect",
 		syncGeneration = self.syncGeneration or "nil",
 		realtimeGeneration = self.realtimeGeneration or "nil",
-		hasToken = self.token ~= nil,
+		hasToken = sessionAccessToken ~= nil,
 		hasUser = self.user ~= nil,
 		disconnecting = self.disconnecting == true,
 	})
@@ -13175,6 +13062,7 @@ function ITGOnline:MarkPlayEntered(callback)
 	})
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/play/entered", {
 		selection_id = self:CurrentSelectionId(),
+		client_action_id = self:RoundClientActionId("play-entered"),
 	}, function(ok, decoded, response)
 		if self.onlineGameplayEnteredInFlightKey == key then
 			self.onlineGameplayEnteredInFlightKey = ""
@@ -13250,6 +13138,7 @@ function ITGOnline:MarkReturnedToLobby(callback)
 		.. " localReturnAt=" .. string.format("%.3f", tonumber(self.onlineGameplayReturnedLocalAt) or 0))
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/play/returned-to-lobby", {
 		selection_id = self:CurrentSelectionId(),
+		client_action_id = self:RoundClientActionId("play-returned"),
 	}, function(ok, decoded, response)
 		if self.onlineGameplayReturnedInFlightKey == key then
 			self.onlineGameplayReturnedInFlightKey = ""
@@ -13391,6 +13280,7 @@ function ITGOnline:MarkPlayTerminal(endpoint, state, callback)
 
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. endpoint, {
 		selection_id = self:CurrentSelectionId(),
+		client_action_id = self:RoundClientActionId("play-" .. tostring(state)),
 	}, function(ok, decoded, response)
 		if validKey and self.onlineGameplayTerminalInFlightKey == terminalKey then
 			self.onlineGameplayTerminalInFlightKey = ""
@@ -14691,7 +14581,7 @@ function ITGOnline:QueueLobbyRefresh(options)
 				self.postRoomExitLobbyRefreshPending = false
 				self.postRoomExitLobbyRefreshReason = ""
 			end
-			if self.disconnecting or not self.token then
+			if self.disconnecting or not sessionAccessToken then
 				self.lobbyRefreshQueued = false
 				self.lobbyRefreshQueuedReason = ""
 				self.lobbyRefreshQueuedAt = 0
@@ -14699,7 +14589,7 @@ function ITGOnline:QueueLobbyRefresh(options)
 					.. " ok=" .. tostring(ok == true)
 					.. " screen=" .. tostring(self.currentScreenName or "nil")
 					.. " disconnecting=" .. tostring(self.disconnecting == true)
-					.. " hasToken=" .. tostring(self.token ~= nil))
+					.. " hasToken=" .. tostring(sessionAccessToken ~= nil))
 				return
 			end
 			local rawPublicRoomCount = decoded and decoded.public_rooms and #decoded.public_rooms
@@ -15639,7 +15529,7 @@ function ITGOnline:CommitRealtimeEventProcessed(eventId)
 	end
 
 	local limit = math.max(1, math.min(4096,
-		math.floor(tonumber(self.processedRealtimeEventLimit) or 512)))
+		math.floor(tonumber(self.processedRealtimeEventLimit) or 4096)))
 	self.processedRealtimeEventLimit = limit
 	while #self.processedRealtimeEventOrder > limit do
 		local oldestId = table.remove(self.processedRealtimeEventOrder, 1)
@@ -16550,6 +16440,10 @@ function ITGOnline:HandleRealtimeEvent(event)
 			online_flow_trace("realtime_event_unhandled_sync_queued name=" .. tostring(name)
 				.. " eventId=" .. tostring(eventId or "nil"))
 		end
+		-- A snapshot may repair current state, but cannot prove that a future
+		-- command had no side effect outside /sync. Keep the event unacknowledged
+		-- so the server retries it and the incompatibility remains observable.
+		return false
 	end
 	return true
 end
