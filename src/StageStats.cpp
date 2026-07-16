@@ -358,6 +358,75 @@ void StageStats::AddStats(const StageStats& other) {
       m_multiPlayer[mp].AddStats(other.m_multiPlayer[mp]);
     }
   }
+  if (HasRecordedPlayerStats(other.m_RoutinePlayer)) {
+    m_RoutinePlayer.AddStats(other.m_RoutinePlayer);
+  }
+}
+
+void StageStats::SynchronizeRoutineScoreToPlayers() {
+  if (!IsRoutineSharedStyleActive() ||
+      !HasRecordedPlayerStats(m_RoutinePlayer)) {
+    return;
+  }
+
+  const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+  const Style* style = IsValidPlayerNumber(master)
+                           ? GAMESTATE->GetCurrentStyle(master)
+                           : nullptr;
+  if (style == nullptr) {
+    LOG->Warn(
+        "Routine score synchronization skipped because the shared style is "
+        "missing.");
+    return;
+  }
+
+  FOREACH_PlayerNumber(pn) {
+    PlayerStageStats& target = m_player[pn];
+    target.m_pStyle = style;
+    target.m_bJoined = true;
+    target.m_vpPossibleSteps = m_RoutinePlayer.m_vpPossibleSteps;
+    target.m_iStepsPlayed = m_RoutinePlayer.m_iStepsPlayed;
+    target.m_fAliveSeconds = m_RoutinePlayer.m_fAliveSeconds;
+    target.m_bFailed = m_RoutinePlayer.m_bFailed;
+    target.m_bPlayerCanAchieveFullCombo =
+        m_RoutinePlayer.m_bPlayerCanAchieveFullCombo;
+    target.m_iPossibleDancePoints = m_RoutinePlayer.m_iPossibleDancePoints;
+    target.m_iCurPossibleDancePoints =
+        m_RoutinePlayer.m_iCurPossibleDancePoints;
+    target.m_iActualDancePoints = m_RoutinePlayer.m_iActualDancePoints;
+    target.m_iPossibleGradePoints = m_RoutinePlayer.m_iPossibleGradePoints;
+    FOREACH_ENUM(TapNoteScore, tns) {
+      target.m_iTapNoteScores[tns] = m_RoutinePlayer.m_iTapNoteScores[tns];
+    }
+    FOREACH_ENUM(HoldNoteScore, hns) {
+      target.m_iHoldNoteScores[hns] = m_RoutinePlayer.m_iHoldNoteScores[hns];
+    }
+    target.m_iCurCombo = m_RoutinePlayer.m_iCurCombo;
+    target.m_iMaxCombo = m_RoutinePlayer.m_iMaxCombo;
+    target.m_iCurMissCombo = m_RoutinePlayer.m_iCurMissCombo;
+    target.m_iCurScoreMultiplier = m_RoutinePlayer.m_iCurScoreMultiplier;
+    target.m_iScore = m_RoutinePlayer.m_iScore;
+    target.m_iCurMaxScore = m_RoutinePlayer.m_iCurMaxScore;
+    target.m_iMaxScore = m_RoutinePlayer.m_iMaxScore;
+    target.m_iSongsPassed = m_RoutinePlayer.m_iSongsPassed;
+    target.m_iSongsPlayed = m_RoutinePlayer.m_iSongsPlayed;
+    target.m_fLifeRemainingSeconds =
+        m_RoutinePlayer.m_fLifeRemainingSeconds;
+    target.m_fLifeRecord = m_RoutinePlayer.m_fLifeRecord;
+    target.m_ComboList = m_RoutinePlayer.m_ComboList;
+    target.m_fFirstSecond = m_RoutinePlayer.m_fFirstSecond;
+    target.m_fLastSecond = m_RoutinePlayer.m_fLastSecond;
+    target.m_StageAward = m_RoutinePlayer.m_StageAward;
+    target.m_PeakComboAward = m_RoutinePlayer.m_PeakComboAward;
+    target.m_bDisqualified = m_RoutinePlayer.m_bDisqualified;
+  }
+
+  LOG->Trace(
+      "Routine shared score synchronized to participants: master=%i score=%u "
+      "percent=%.6f failed=%d disqualified=%d.",
+      static_cast<int>(master), m_RoutinePlayer.m_iScore,
+      m_RoutinePlayer.GetPercentDancePoints(), m_RoutinePlayer.m_bFailed ? 1 : 0,
+      m_RoutinePlayer.m_bDisqualified ? 1 : 0);
 }
 
 bool StageStats::OnePassed() const {
@@ -911,6 +980,15 @@ void StageStats::FinalizeScores(bool bSummary) {
           "handled outside StageStats.",
           mp);
     }
+  }
+
+  if (bRoutineSharedStyle && IsValidPlayerNumber(master) &&
+      HasRecordedPlayerStats(m_RoutinePlayer)) {
+    m_RoutinePlayer.m_HighScore = m_player[master].m_HighScore;
+    m_RoutinePlayer.m_iPersonalHighScoreIndex =
+        m_player[master].m_iPersonalHighScoreIndex;
+    m_RoutinePlayer.m_iMachineHighScoreIndex =
+        m_player[master].m_iMachineHighScoreIndex;
   }
 
   LOG->Trace("done saving stats and high scores");

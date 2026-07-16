@@ -1073,9 +1073,23 @@ void GameState::BeginStage() {
         std::max(0, m_iPlayerStageTokens[p] - m_iNumStagesOfThisSong);
   }
   if (STATSMAN != nullptr) {
-    FOREACH_HumanPlayer(pn) if (CurrentOptionsDisqualifyPlayer(pn))
-        STATSMAN->m_CurStageStats.m_player[pn]
-            .m_bDisqualified = true;
+    bool routineDisqualified = false;
+    FOREACH_HumanPlayer(pn) {
+      if (CurrentOptionsDisqualifyPlayer(pn)) {
+        STATSMAN->m_CurStageStats.m_player[pn].m_bDisqualified = true;
+        routineDisqualified = true;
+      }
+    }
+    const PlayerNumber master = GetMasterPlayerNumber();
+    const Style* style = IsValidPlayerNumber(master)
+                             ? GetCurrentStyle(master)
+                             : nullptr;
+    if (routineDisqualified && style != nullptr &&
+        style->m_StyleType == StyleType_TwoPlayersSharedSides) {
+      STATSMAN->m_CurStageStats.m_RoutinePlayer.m_bDisqualified = true;
+      LOG->Trace(
+          "Routine shared score marked disqualified by participant options.");
+    }
   }
   m_bEarnedExtraStage = false;
   m_sStageGUID = CryptManager::GenerateRandomUUID();
@@ -1163,9 +1177,20 @@ void GameState::FinishStage() {
           p);
       continue;
     }
+    const PlayerNumber master = GetMasterPlayerNumber();
+    const Style* style = IsValidPlayerNumber(master)
+                             ? GetCurrentStyle(master)
+                             : nullptr;
+    const bool sharedRoutine =
+        STATSMAN != nullptr && style != nullptr &&
+        style->m_StyleType == StyleType_TwoPlayersSharedSides &&
+        STATSMAN->m_CurStageStats.m_RoutinePlayer.m_bJoined;
     pProfile->m_iCurrentCombo =
-        STATSMAN != nullptr ? STATSMAN->m_CurStageStats.m_player[p].m_iCurCombo
-                            : 0;
+        STATSMAN == nullptr
+            ? 0
+            : (sharedRoutine
+                   ? STATSMAN->m_CurStageStats.m_RoutinePlayer.m_iCurCombo
+                   : STATSMAN->m_CurStageStats.m_player[p].m_iCurCombo);
     // If the sort order is Recent, move the profile to the top of the list.
     if (PREFSMAN != nullptr &&
         PREFSMAN->m_ProfileSortOrder == ProfileSortOrder_Recent &&
@@ -1526,11 +1551,9 @@ void GameState::ForceSharedSidesMatch() {
     PlayerNumber other_pn = OPPOSITE_PLAYER[pn_with_shared];
     const Style* other_style = GetCurrentStyle(other_pn);
     if (other_style == nullptr) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX GameState: cannot mirror shared-side style to player "
-          "%d without a style.",
+      LOG->Trace(
+          "Routine shared-side repair assigning missing style to player %d.",
           other_pn);
-      return;
     }
 
     if (!IsCourseMode()) {
@@ -1560,7 +1583,8 @@ void GameState::ForceSharedSidesMatch() {
       }
     }
 
-    if (other_style->m_StyleType != StyleType_TwoPlayersSharedSides ||
+    if (other_style == nullptr ||
+        other_style->m_StyleType != StyleType_TwoPlayersSharedSides ||
         other_style != shared_style) {
       SetCurrentStyle(shared_style, other_pn);
     }

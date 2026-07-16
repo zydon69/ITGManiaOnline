@@ -31,6 +31,7 @@ class StageStats {
   void AssertValid(MultiPlayer mp) const;
 
   void AddStats(const StageStats& other);  // accumulate
+  void SynchronizeRoutineScoreToPlayers();
 
   bool OnePassed() const;
   bool AllFailed() const;

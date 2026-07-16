@@ -242,6 +242,10 @@ static StageStats AccumPlayedStageStats(const std::vector<StageStats>& vss) {
       ssreturn.m_multiPlayer[p].m_radarActual[r] /= uNumSongs;
     }
   }
+  for (int r = 0; r < RadarCategory_TapsAndHolds; r++) {
+    ssreturn.m_RoutinePlayer.m_radarPossible[r] /= uNumSongs;
+    ssreturn.m_RoutinePlayer.m_radarActual[r] /= uNumSongs;
+  }
   return ssreturn;
 }
 

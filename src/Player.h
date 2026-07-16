@@ -149,7 +149,9 @@ class Player : public ActorFrame {
   void ScoreAllActiveHoldsLetGo();
   void DoTapScoreNone();
 
-  void Step(int col, int row, const RageTimer& tm, bool bHeld, bool bRelease);
+  void Step(
+      int col, int row, const RageTimer& tm, bool bHeld, bool bRelease,
+      PlayerNumber inputSource = PLAYER_INVALID);
 
   void FadeToFail();
   void CacheAllUsedNoteSkins();

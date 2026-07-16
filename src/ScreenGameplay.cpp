@@ -1485,8 +1485,10 @@ void ScreenGameplay::Init() {
         PlayerInfo& masterInfo = m_vPlayerInfo[master];
         PlayerState* playerState = GetPlayerStateOrWarn(
             masterInfo, "ScreenGameplay::Init shared life meter");
-        PlayerStageStats* stageStats = GetPlayerStageStatsOrWarn(
-            masterInfo, "ScreenGameplay::Init shared life meter");
+        PlayerStageStats* stageStats =
+            STATSMAN != nullptr
+                ? &STATSMAN->m_CurStageStats.m_RoutinePlayer
+                : nullptr;
         if (playerState == nullptr || stageStats == nullptr) {
           break;
         }
@@ -1770,6 +1772,16 @@ void ScreenGameplay::Init() {
       STATSMAN->m_CurStageStats.m_RoutinePlayer.m_vpPossibleSteps =
           m_vPlayerInfo[master].m_vpStepsQueue;
       STATSMAN->m_CurStageStats.m_RoutinePlayer.m_bJoined = true;
+      STATSMAN->m_CurStageStats.m_RoutinePlayer.m_pStyle =
+          GAMESTATE->GetCurrentStyle(master);
+      STATSMAN->m_CurStageStats.m_RoutinePlayer.m_player_number = master;
+      FOREACH_PlayerNumber(pn) {
+        PlayerStageStats& participant =
+            STATSMAN->m_CurStageStats.m_player[pn];
+        participant.m_bJoined = true;
+        participant.m_pStyle = GAMESTATE->GetCurrentStyle(master);
+        participant.m_vpPossibleSteps = m_vPlayerInfo[master].m_vpStepsQueue;
+      }
       LOG->Trace(
           "Routine shared stats initialized: master=%i steps_queue=%zu.",
           static_cast<int>(master), m_vPlayerInfo[master].m_vpStepsQueue.size());
@@ -2223,6 +2235,10 @@ void ScreenGameplay::ReloadCurrentSong() {
       pss->m_iSongsPlayed--;
     }
   }
+  if (IsCurrentStyleSharedSides() && STATSMAN != nullptr &&
+      STATSMAN->m_CurStageStats.m_RoutinePlayer.m_iSongsPlayed > 0) {
+    STATSMAN->m_CurStageStats.m_RoutinePlayer.m_iSongsPlayed--;
+  }
 
   LoadNextSong();
 }
@@ -2250,6 +2266,10 @@ void ScreenGameplay::LoadNextSong() {
           SONG_NUMBER_FORMAT.GetValue().c_str(),
           pss->m_iSongsPassed + 1));
     }
+  }
+  if (IsCurrentStyleSharedSides()) {
+    PlayerStageStats& routine = STATSMAN->m_CurStageStats.m_RoutinePlayer;
+    routine.m_iSongsPlayed++;
   }
 
   if (GAMESTATE->m_bMultiplayer) {
@@ -2409,6 +2429,9 @@ void ScreenGameplay::LoadNextSong() {
         }
       }
     }
+  }
+  if (IsCurrentStyleSharedSides()) {
+    STATSMAN->m_CurStageStats.m_RoutinePlayer.m_iStepsPlayed++;
   }
 
   if (m_pCombinedLifeMeter != nullptr) {
@@ -3359,6 +3382,12 @@ void ScreenGameplay::Update(float fDeltaTime) {
             GetPlayerStageStatsOrWarn(*pi, "ScreenGameplay::Update alive time");
         if (pss != nullptr && !pss->m_bFailed) {
           pss->m_fAliveSeconds += fUnscaledDeltaTime * musicRate;
+        }
+      }
+      if (IsCurrentStyleSharedSides()) {
+        PlayerStageStats& routine = STATSMAN->m_CurStageStats.m_RoutinePlayer;
+        if (!routine.m_bFailed) {
+          routine.m_fAliveSeconds += fUnscaledDeltaTime * musicRate;
         }
       }
 
@@ -4358,7 +4387,8 @@ bool ScreenGameplay::Input(const InputEventPlus& input) {
                     static_cast<int>(input.GameI.controller),
                     static_cast<int>(input.GameI.button), iCol);
               }
-              pi->m_pPlayer->Step(iCol, -1, input.DeviceI.ts, false, bRelease);
+              pi->m_pPlayer->Step(
+                  iCol, -1, input.DeviceI.ts, false, bRelease, input.pn);
             }
             return true;
         }
@@ -4395,6 +4425,74 @@ void ScreenGameplay::SaveStats() {
     return;
   }
   float fMusicLen = GAMESTATE->m_pCurSong->m_fMusicLengthSeconds;
+
+  if (IsCurrentStyleSharedSides()) {
+    const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+    if (!IsValidGameplayPlayer(master) ||
+        static_cast<size_t>(master) >= m_vPlayerInfo.size() ||
+        m_vPlayerInfo[master].m_pPlayer == nullptr ||
+        GAMESTATE->m_pCurSteps[master] == nullptr) {
+      LOG->Warn(
+          "Routine radar save skipped because the master gameplay context is "
+          "incomplete.");
+      return;
+    }
+
+    const NoteData& noteData = m_vPlayerInfo[master].m_pPlayer->GetNoteData();
+    const TimingData* timing =
+        GAMESTATE->m_pCurSteps[master]->GetTimingData();
+    PlayerStageStats& shared = STATSMAN->m_CurStageStats.m_RoutinePlayer;
+    RadarValues radar;
+    NoteDataUtil::CalculateRadarValues(
+        noteData, fMusicLen, timing, radar);
+    shared.m_radarPossible += radar;
+
+    PlayerStageStats sharedRadarContext = shared;
+    sharedRadarContext.m_for_multiplayer = true;
+    NoteDataWithScoring::GetActualRadarValues(
+        noteData, sharedRadarContext, timing, fMusicLen, radar);
+    shared.m_radarActual += radar;
+
+    std::vector<NoteData> parts;
+    if (!NoteDataUtil::SplitCompositeOrStackedNoteData(
+            noteData, parts, GAMESTATE->m_pCurSteps[master]->m_StepsType) ||
+        parts.size() < NUM_PLAYERS) {
+      LOG->Warn(
+          "Routine participant radar save skipped because NoteData could not "
+          "be split safely.");
+      return;
+    }
+
+    shared.m_iNumControllerSteps = 0.0f;
+    shared.m_fCaloriesBurned = 0.0f;
+    FOREACH_PlayerNumber(pn) {
+      PlayerStageStats& participant =
+          STATSMAN->m_CurStageStats.m_player[pn];
+      NoteDataUtil::CalculateRadarValues(
+          parts[pn], fMusicLen, timing, radar);
+      participant.m_radarPossible += radar;
+
+      PlayerStageStats participantRadarContext = shared;
+      participantRadarContext.m_for_multiplayer = false;
+      participantRadarContext.m_player_number = pn;
+      NoteDataWithScoring::GetActualRadarValues(
+          parts[pn], participantRadarContext, timing, fMusicLen, radar);
+      participant.m_radarActual += radar;
+
+      shared.m_iNumControllerSteps += participant.m_iNumControllerSteps;
+      shared.m_fCaloriesBurned += participant.m_fCaloriesBurned;
+    }
+    LOG->Trace(
+        "Routine radar saved: possible=%s actual=%s p1_actual=%s "
+        "p2_actual=%s.",
+        shared.m_radarPossible.ToString().c_str(),
+        shared.m_radarActual.ToString().c_str(),
+        STATSMAN->m_CurStageStats.m_player[PLAYER_1]
+            .m_radarActual.ToString().c_str(),
+        STATSMAN->m_CurStageStats.m_player[PLAYER_2]
+            .m_radarActual.ToString().c_str());
+    return;
+  }
 
   FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
     /* Note that adding stats is only meaningful for the counters (eg.
@@ -4575,6 +4673,13 @@ void ScreenGameplay::StageFinished(bool bBackedOut) {
     FOREACH_HumanPlayer(p) GAMESTATE->m_iPlayerStageTokens[p] = 0;
   }
 
+  if (IsCurrentStyleSharedSides()) {
+    const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+    STATSMAN->m_CurStageStats.m_RoutinePlayer.CalcAwards(
+        master, STATSMAN->m_CurStageStats.m_bGaveUp,
+        STATSMAN->m_CurStageStats.m_bUsedAutoplay);
+    STATSMAN->m_CurStageStats.SynchronizeRoutineScoreToPlayers();
+  }
   FOREACH_HumanPlayer(pn) STATSMAN->m_CurStageStats.m_player[pn].CalcAwards(
       pn, STATSMAN->m_CurStageStats.m_bGaveUp,
       STATSMAN->m_CurStageStats.m_bUsedAutoplay);
@@ -4720,6 +4825,19 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
       // set a life record at the point of failure
       if (pss->m_bFailed) {
         pss->SetLifeRecordAt(
+            0, STATSMAN->m_CurStageStats.m_fGameplaySeconds);
+      }
+    }
+
+    if (bSharedSidesStyle) {
+      PlayerStageStats& routine = STATSMAN->m_CurStageStats.m_RoutinePlayer;
+      if (bSharedSidesLifeMeter && m_pCombinedLifeMeter->IsFailing()) {
+        routine.m_bFailed = true;
+      }
+      if (!routine.m_bFailed) {
+        routine.m_iSongsPassed++;
+      } else {
+        routine.SetLifeRecordAt(
             0, STATSMAN->m_CurStageStats.m_fGameplaySeconds);
       }
     }

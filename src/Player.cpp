@@ -2891,7 +2891,8 @@ void Player::PlayKeysound(const TapNote& tn, TapNoteScore score) {
 }
 
 void Player::Step(
-    int col, int row, const RageTimer& tm, bool bHeld, bool bRelease) {
+    int col, int row, const RageTimer& tm, bool bHeld, bool bRelease,
+    PlayerNumber inputSource) {
   const Style* style = GetSafePlayerStyle(m_pPlayerState);
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr || m_Timing == nullptr ||
       GAMESTATE->GetCurrentGame() == nullptr || style == nullptr || col < 0 ||
@@ -3021,10 +3022,20 @@ void Player::Step(
   // is held over a mine or being released.
   // TODO: Move calorie counting into a ScoreKeeper?
   if (m_pPlayerStageStats && m_pPlayerState && !bHeld && !bRelease) {
-    m_pPlayerStageStats->m_iNumControllerSteps++;
-    // TODO: remove use of PlayerNumber
-    PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
-    Profile* pProfile = PROFILEMAN != nullptr ? PROFILEMAN->GetProfile(pn) : nullptr;
+    const bool sharedInput =
+        style->m_StyleType == StyleType_TwoPlayersSharedSides &&
+        IsValidPlayerNumberForPlayer(inputSource) && STATSMAN != nullptr;
+    const PlayerNumber physicalPlayer =
+        sharedInput ? inputSource : m_pPlayerState->m_PlayerNumber;
+    PlayerStageStats* physicalStats =
+        sharedInput
+            ? &STATSMAN->m_CurStageStats.m_player[physicalPlayer]
+            : m_pPlayerStageStats;
+    physicalStats->m_bJoined = true;
+    physicalStats->m_iNumControllerSteps++;
+    Profile* pProfile = PROFILEMAN != nullptr
+                            ? PROFILEMAN->GetProfile(physicalPlayer)
+                            : nullptr;
     if (pProfile == nullptr || INPUTMAPPER == nullptr) {
       LOG->Warn(
           "SRC_AUDIT_FIX SRC-2034: Calorie count skipped without profile/input.");
@@ -3034,7 +3045,7 @@ void Player::Step(
           m_fTimingWindowJump, 0.25f, "Player::Step timing window jump");
       for (int t = 0; t < m_NoteData.GetNumTracks(); t++) {
         std::vector<GameInput> GameI;
-        style->StyleInputToGameInput(t, pn, GameI);
+        style->StyleInputToGameInput(t, physicalPlayer, GameI);
         float secs_held = 0.0f;
         for (size_t i = 0; i < GameI.size(); ++i) {
           secs_held = std::max(secs_held, INPUTMAPPER->GetSecsHeld(GameI[i]));
@@ -3067,7 +3078,7 @@ void Player::Step(
       }
 
       if (std::isfinite(fCals) && fCals >= 0.0f) {
-        m_pPlayerStageStats->m_fCaloriesBurned += fCals;
+        physicalStats->m_fCaloriesBurned += fCals;
       }
     }
   }
@@ -3541,6 +3552,11 @@ void Player::Step(
     }
     Message msg("Step");
     msg.SetParam("PlayerNumber", m_pPlayerState->m_PlayerNumber);
+    msg.SetParam(
+        "InputPlayerNumber",
+        IsValidPlayerNumberForPlayer(inputSource)
+            ? inputSource
+            : m_pPlayerState->m_PlayerNumber);
     msg.SetParam("MultiPlayer", m_pPlayerState->m_mp);
     msg.SetParam("Column", col);
     BroadcastPlayerMessage(msg, "Player::Step");
