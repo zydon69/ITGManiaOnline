@@ -14,7 +14,6 @@
 #include "Group.h"
 #include "HighScore.h"
 #include "MessageManager.h"
-#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "Profile.h"
 #include "ProfileManager.h"
@@ -46,14 +45,6 @@ const int MAX_SECTION_COUNT_DISPLAY = 99999;
 void WarnMusicWheelItem(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
-  }
-}
-
-void TraceMusicWheelItemReintro(const char* event, const std::string& details) {
-  if (LOG != nullptr && LogMusicWheelDiagnosticsEnabled()) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2710 WheelReintroTrace %s %s", event,
-        details.c_str());
   }
 }
 
@@ -303,25 +294,6 @@ void MusicWheelItem::LoadFromWheelItemData(
         "data.");
     return;
   }
-
-  std::string traceTitle = pWID->m_sText;
-  if (pWID->m_pSong != nullptr) {
-    traceTitle = pWID->m_pSong->GetDisplayFullTitle();
-  } else if (pWID->m_pCourse != nullptr) {
-    traceTitle = pWID->m_pCourse->GetDisplayFullTitle();
-  } else if (pWID->m_pGroup != nullptr) {
-    traceTitle = pWID->m_pGroup->GetDisplayTitle();
-  } else if (!pWID->m_sLabel.empty()) {
-    traceTitle = pWID->m_sLabel;
-  }
-  TraceMusicWheelItemReintro(
-      "item_load",
-      ssprintf(
-          "dataIndex=%d drawIndex=%d hasFocus=%d dataType=%d text='%s' "
-          "parent='%s'",
-          iIndex, iDrawIndex, bHasFocus ? 1 : 0,
-          static_cast<int>(pWID->m_Type), traceTitle.c_str(),
-          pWID->m_sParentSection.c_str()));
 
   // hide all
   FOREACH_ENUM(MusicWheelItemType, i) {

@@ -60,6 +60,10 @@ class WheelItemBase : public ActorFrame {
   const RageColor GetColor() const;
   WheelItemDataType GetType() const;
   bool IsLoaded() const { return m_pData != nullptr; }
+  bool CanReuseWheelItemData(
+      const WheelItemBaseData* pWID, bool bHasFocus) const {
+    return m_pData == pWID && m_bHasFocus == bHasFocus;
+  }
 
   // Lua
   void PushSelf(lua_State* L);
@@ -68,6 +72,7 @@ class WheelItemBase : public ActorFrame {
   void SetGrayBar(Actor* pBar) { m_pGrayBar = pBar; }
 
   const WheelItemBaseData* m_pData;
+  bool m_bHasFocus;
   bool m_bExpanded;  // if TYPE_SECTION whether this section is expanded
 
   Actor* m_pGrayBar;

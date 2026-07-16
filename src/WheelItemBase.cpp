@@ -44,12 +44,14 @@ WheelItemBase::WheelItemBase(const WheelItemBase& cpy)
     : ActorFrame(cpy),
       m_colorLocked(cpy.m_colorLocked),
       m_pData(cpy.m_pData),
+      m_bHasFocus(cpy.m_bHasFocus),
       m_bExpanded(cpy.m_bExpanded),
       m_pGrayBar(nullptr) {}
 
 WheelItemBase::WheelItemBase(std::string sType) {
   SetName(sType);
   m_pData = nullptr;
+  m_bHasFocus = false;
   m_bExpanded = false;
   m_pGrayBar = nullptr;
   Load(sType);
@@ -59,6 +61,7 @@ void WheelItemBase::Load(std::string sType) {
   (void)sType;
   m_colorLocked = RageColor(0, 0, 0, 0.25f);
   m_pData = nullptr;
+  m_bHasFocus = false;
   m_pGrayBar = nullptr;
 }
 
@@ -71,10 +74,12 @@ void WheelItemBase::LoadFromWheelItemData(
     WarnWheelItemBase(
         "SRC_AUDIT_FIX SRC-1268: WheelItemBase ignored null wheel item data.");
     m_pData = nullptr;
+    m_bHasFocus = false;
     m_pGrayBar = nullptr;
     return;
   }
   m_pData = pWID;
+  m_bHasFocus = bHasFocus;
 }
 
 void WheelItemBase::DrawGrayBar(Actor& bar) {

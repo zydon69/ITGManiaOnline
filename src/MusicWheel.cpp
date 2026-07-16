@@ -23,7 +23,6 @@
 #include "LuaManager.h"
 #include "MessageManager.h"
 #include "MusicWheelItem.h"
-#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "Preference.h"
 #include "PrefsManager.h"
@@ -60,60 +59,6 @@ void WarnMusicWheel(const std::string& message) {
   if (LOG != nullptr) {
     LOG->Warn("MusicWheel: %s", message.c_str());
   }
-}
-
-void TraceMusicWheelReintro(const char* event, const std::string& details) {
-  if (LOG != nullptr && LogMusicWheelDiagnosticsEnabled()) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2710 WheelReintroTrace %s %s", event,
-        details.c_str());
-  }
-}
-
-const char* WheelItemDataTypeTraceName(WheelItemDataType type) {
-  switch (type) {
-    case WheelItemDataType_Generic:
-      return "Generic";
-    case WheelItemDataType_Section:
-      return "Section";
-    case WheelItemDataType_Song:
-      return "Song";
-    case WheelItemDataType_Roulette:
-      return "Roulette";
-    case WheelItemDataType_Random:
-      return "Random";
-    case WheelItemDataType_Portal:
-      return "Portal";
-    case WheelItemDataType_Course:
-      return "Course";
-    case WheelItemDataType_Sort:
-      return "Sort";
-    case WheelItemDataType_Custom:
-      return "Custom";
-    case WheelItemDataType_ParentSection:
-      return "ParentSection";
-    default:
-      return "Invalid";
-  }
-}
-
-std::string TraceMusicWheelItemName(const MusicWheelItemData* item) {
-  if (item == nullptr) {
-    return "<null>";
-  }
-  if (item->m_pSong != nullptr) {
-    return item->m_pSong->GetDisplayFullTitle();
-  }
-  if (item->m_pCourse != nullptr) {
-    return item->m_pCourse->GetDisplayFullTitle();
-  }
-  if (item->m_pGroup != nullptr) {
-    return item->m_pGroup->GetDisplayTitle();
-  }
-  if (!item->m_sLabel.empty()) {
-    return item->m_sLabel;
-  }
-  return item->m_sText;
 }
 
 bool IsValidSortOrderValue(SortOrder so) {
@@ -177,6 +122,7 @@ static LocalizedString EMPTY_STRING("MusicWheel", "Empty");
 
 AutoScreenMessage(
     SM_SongChanged);  // TODO: Replace this with a Message and MESSAGEMAN
+AutoScreenMessage(SM_WheelBannerChanged);
 AutoScreenMessage(SM_SortOrderChanging);
 AutoScreenMessage(SM_SortOrderChanged);
 
@@ -1292,12 +1238,6 @@ void MusicWheel::BuildWheelItemDatas(
                     sThisParentSection, nullptr, nullptr, colorParentSection,
                     iParentSectionCount));
                 sLastParentSection = sThisParentSection;
-
-                TraceMusicWheelReintro(
-                    "SeriesParent",
-                    ssprintf(
-                        "name='%s' count=%d",
-                        sThisParentSection.c_str(), iParentSectionCount));
               } else if (sThisParentSection.empty()) {
                 sLastParentSection.clear();
               }
@@ -1335,13 +1275,6 @@ void MusicWheel::BuildWheelItemDatas(
                     pGroup, colorSection, iSectionCount, sThisParentSection));
                 sLastSection = sThisSection;
                 sLastSectionParent = sThisParentSection;
-
-                TraceMusicWheelReintro(
-                    "SeriesSection",
-                    ssprintf(
-                        "parent='%s' name='%s' count=%d",
-                        sThisParentSection.c_str(), sThisSection.c_str(),
-                        iSectionCount));
               }
             }
 
@@ -1932,11 +1865,6 @@ void MusicWheel::UpdateSwitch() {
             SelectSection(selectedSeriesSection);
           }
         }
-        TraceMusicWheelReintro(
-            "SeriesRootAfterSort",
-            ssprintf(
-                "selected='%s' parent='' section=''",
-                selectedSeriesSection.c_str()));
       } else {
         SetOpenSection(
             SongUtil::GetSectionNameFromSongAndSort(
@@ -2045,21 +1973,8 @@ void MusicWheel::ChangeMusic(int iDist) {
     return;
   }
 
-  const int previousSelection = m_iSelection;
-  const float previousOffset = m_fPositionOffsetFromSelection;
   m_iSelection += iDist;
   wrap(m_iSelection, m_CurWheelItemData.size());
-  const MusicWheelItemData* selectedItem = GetCurWheelItemData(m_iSelection);
-  TraceMusicWheelReintro(
-      "music_change",
-      ssprintf(
-          "dist=%d prevSelection=%d newSelection=%d prevOffset=%.4f "
-          "dataCount=%zu moving=%d selectedType=%s selectedText='%s'",
-          iDist, previousSelection, m_iSelection, previousOffset,
-          m_CurWheelItemData.size(), m_Moving,
-          selectedItem != nullptr ? WheelItemDataTypeTraceName(selectedItem->m_Type)
-                                  : "<null>",
-          TraceMusicWheelItemName(selectedItem).c_str()));
 
   if (REMIND_WHEEL_POSITIONS && HIDE_INACTIVE_SECTIONS && SONGMAN != nullptr) {
     // store the group song index
@@ -2073,15 +1988,13 @@ void MusicWheel::ChangeMusic(int iDist) {
   RebuildWheelItems(iDist);
 
   m_fPositionOffsetFromSelection += iDist;
-  TraceMusicWheelReintro(
-      "music_change_offset",
-      ssprintf(
-          "dist=%d selection=%d newOffset=%.4f moving=%d settled=%d",
-          iDist, m_iSelection, m_fPositionOffsetFromSelection, m_Moving,
-          IsSettled() ? 1 : 0));
 
+  // Keep banners visually responsive during key repeat, but defer chart,
+  // preview-audio and theme recomputation until Move(0) posts the guaranteed
+  // final SM_SongChanged.
   if (SCREENMAN != nullptr) {
-    SCREENMAN->PostMessageToTopScreen(SM_SongChanged, 0);
+    SCREENMAN->PostMessageToTopScreen(
+        IsMoving() ? SM_WheelBannerChanged : SM_SongChanged, 0);
   }
 
   // If we're moving automatically, don't play this; it'll be called in Update.
@@ -2397,16 +2310,6 @@ void MusicWheel::SetOpenSections(
         section.empty() ? parentSection : section;
     GAMESTATE->sExpandedParentSectionName = parentSection;
   }
-
-  TraceMusicWheelReintro(
-      "SetOpenSections",
-      ssprintf(
-          "parent='%s' section='%s' hideInactiveSections=%d "
-          "hideInactiveParentSections=%d sort='%s'",
-          parentSection.c_str(), section.c_str(),
-          HIDE_INACTIVE_SECTIONS ? 1 : 0,
-          HIDE_INACTIVE_PARENT_SECTIONS ? 1 : 0,
-          SortOrderToString(GetCurrentSortOrderOrDefault()).c_str()));
 
   // wheel positions = num song groups
   if (REMIND_WHEEL_POSITIONS && HIDE_INACTIVE_SECTIONS && SONGMAN != nullptr) {

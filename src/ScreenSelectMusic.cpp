@@ -77,6 +77,7 @@ static const ThemeMetric<int> HARD_COMMENT_METER(
 
 AutoScreenMessage(SM_AllowOptionsMenuRepeat);
 AutoScreenMessage(SM_SongChanged);
+AutoScreenMessage(SM_WheelBannerChanged);
 AutoScreenMessage(SM_SortOrderChanging);
 AutoScreenMessage(SM_SortOrderChanged);
 AutoScreenMessage(SM_BackFromPlayerOptions);
@@ -1646,6 +1647,8 @@ void ScreenSelectMusic::HandleScreenMessage(const ScreenMessage SM) {
     }
   } else if (SM == SM_SongChanged) {
     AfterMusicChange();
+  } else if (SM == SM_WheelBannerChanged) {
+    AfterMusicChangeBannerOnly();
   } else if (SM == SM_SortOrderChanging)  // happens immediately
   {
     this->PlayCommand("SortChange");
@@ -2360,7 +2363,6 @@ void ScreenSelectMusic::AfterMusicChange() {
   if (GAMESTATE == nullptr) {
     return;
   }
-
   if (!m_MusicWheel.IsRouletting() && HasUsableTimer(m_MenuTimer)) {
     m_MenuTimer->Stall();
   }
@@ -2705,6 +2707,65 @@ void ScreenSelectMusic::AfterMusicChange() {
   FOREACH_HumanPlayer(p) vpns.push_back(p);
 
   AfterStepsOrTrailChange(vpns);
+
+}
+
+void ScreenSelectMusic::AfterMusicChangeBannerOnly() {
+  m_Banner.SetMovingFast(true);
+
+  const WheelItemDataType type = m_MusicWheel.GetSelectedType();
+  switch (type) {
+    case WheelItemDataType_Song:
+    case WheelItemDataType_Portal:
+      if (PREFSMAN != nullptr && PREFSMAN->m_bShowBanners) {
+        m_Banner.LoadFromSong(m_MusicWheel.GetSelectedSong());
+      } else {
+        m_Banner.LoadFallback();
+      }
+      break;
+    case WheelItemDataType_Course:
+      m_Banner.LoadFromCourse(m_MusicWheel.GetSelectedCourse());
+      break;
+    case WheelItemDataType_Section:
+    case WheelItemDataType_ParentSection: {
+      std::string bannerPath;
+      if (SONGMAN != nullptr) {
+        if (type == WheelItemDataType_ParentSection &&
+            GAMESTATE != nullptr && GAMESTATE->m_SortOrder == SORT_SERIES) {
+          bannerPath = SONGMAN->GetSeriesBannerPath(
+              m_MusicWheel.GetSelectedSection());
+        } else {
+          bannerPath = SONGMAN->GetSongGroupBannerPath(
+              m_MusicWheel.GetSelectedSection());
+        }
+      }
+      m_Banner.LoadFromCachedBanner(bannerPath);
+      break;
+    }
+    case WheelItemDataType_Sort:
+      m_Banner.LoadMode();
+      break;
+    case WheelItemDataType_Roulette:
+      m_Banner.LoadRoulette();
+      break;
+    case WheelItemDataType_Random:
+      m_Banner.LoadRandom();
+      break;
+    case WheelItemDataType_Custom: {
+      const MusicWheelItemData* item = m_MusicWheel.GetCurWheelItemData(
+          m_MusicWheel.GetCurrentIndex());
+      if (item != nullptr && !item->m_pAction.isNull()) {
+        m_Banner.LoadCustom(item->m_pAction->m_sName);
+      } else {
+        m_Banner.LoadFallback();
+      }
+      break;
+    }
+    default:
+      m_Banner.LoadFallback();
+      break;
+  }
+
 }
 
 void ScreenSelectMusic::OpenOptionsList(PlayerNumber pn) {

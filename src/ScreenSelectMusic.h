@@ -83,6 +83,7 @@ class ScreenSelectMusic : public ScreenWithMenuElements {
   void SwitchToDifficulty(Difficulty d);
   void SwitchToPreferredDifficulty();
   void AfterMusicChange();
+  void AfterMusicChangeBannerOnly();
 
   void CheckBackgroundRequests(bool bForce);
   void StartSampleMusicPreviewNow();

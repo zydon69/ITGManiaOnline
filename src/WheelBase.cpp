@@ -11,7 +11,6 @@
 #include "EnumHelper.h"
 #include "GameState.h"
 #include "LuaManager.h"
-#include "PerfDiagnostics.h"
 #include "PrefsManager.h"
 #include "RageLog.h"
 #include "RageTypes.h"
@@ -39,40 +38,6 @@ void WarnWheelBase(const std::string& message) {
   }
 }
 
-const char* WheelItemDataTypeTraceName(WheelItemDataType type) {
-  switch (type) {
-    case WheelItemDataType_Generic:
-      return "Generic";
-    case WheelItemDataType_Section:
-      return "Section";
-    case WheelItemDataType_Song:
-      return "Song";
-    case WheelItemDataType_Roulette:
-      return "Roulette";
-    case WheelItemDataType_Random:
-      return "Random";
-    case WheelItemDataType_Portal:
-      return "Portal";
-    case WheelItemDataType_Course:
-      return "Course";
-    case WheelItemDataType_Sort:
-      return "Sort";
-    case WheelItemDataType_Custom:
-      return "Custom";
-    case WheelItemDataType_ParentSection:
-      return "ParentSection";
-    default:
-      return "Invalid";
-  }
-}
-
-void TraceWheelReintro(const char* event, const std::string& details) {
-  if (LOG != nullptr && LogMusicWheelDiagnosticsEnabled()) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2710 WheelReintroTrace %s %s", event,
-        details.c_str());
-  }
-}
 }  // namespace
 
 AutoScreenMessage(
@@ -507,14 +472,6 @@ void WheelBase::ChangeMusicUnlessLocked(int n) {
 
 void WheelBase::Move(int n) {
   n = NormalizeMoveDistance(n);
-  TraceWheelReintro(
-      "move_request",
-      ssprintf(
-          "requested=%d currentMoving=%d selection=%d offset=%.4f "
-          "state=%d settled=%d dataCount=%zu",
-          n, m_Moving, m_iSelection, m_fPositionOffsetFromSelection,
-          static_cast<int>(m_WheelState), IsSettled() ? 1 : 0,
-          m_CurWheelItemData.size()));
   if (n == m_Moving) {
     return;
   }
@@ -591,27 +548,12 @@ void WheelBase::ChangeMusic(int iDist) {
     return;
   }
 
-  const int previousSelection = m_iSelection;
-  const float previousOffset = m_fPositionOffsetFromSelection;
   m_iSelection += iDist;
   wrap(m_iSelection, m_CurWheelItemData.size());
-  TraceWheelReintro(
-      "change_music",
-      ssprintf(
-          "dist=%d prevSelection=%d newSelection=%d prevOffset=%.4f "
-          "dataCount=%zu moving=%d",
-          iDist, previousSelection, m_iSelection, previousOffset,
-          m_CurWheelItemData.size(), m_Moving));
 
   RebuildWheelItems(iDist);
 
   m_fPositionOffsetFromSelection += iDist;
-  TraceWheelReintro(
-      "change_music_offset",
-      ssprintf(
-          "dist=%d selection=%d newOffset=%.4f moving=%d settled=%d",
-          iDist, m_iSelection, m_fPositionOffsetFromSelection, m_Moving,
-          IsSettled() ? 1 : 0));
 
   //	SCREENMAN->PostMessageToTopScreen( SM_SongChanged, 0 );
 
@@ -650,37 +592,24 @@ void WheelBase::RebuildWheelItems(int iDist) {
   iFirstVisibleIndex -= wheelItemCount / 2;
 
   wrap(iFirstVisibleIndex, data.size());
-  TraceWheelReintro(
-      "rebuild_begin",
-      ssprintf(
-          "dist=%d selection=%d firstVisible=%d dataCount=%zu "
-          "wheelItemCount=%d actorCount=%zu offset=%.4f moving=%d",
-          iDist, m_iSelection, iFirstVisibleIndex, data.size(), wheelItemCount,
-          items.size(), m_fPositionOffsetFromSelection, m_Moving));
 
   // iIndex is now the index of the lowest WheelItem to draw
 
-  int iFirst = 0;
-  int iLast = itemCount - 1;
-  if (iLast < 0) {
+  if (itemCount <= 0) {
     return;
   }
 
-  if (iDist != INT_MAX) {
+  const bool fullRebuild = iDist == INT_MAX;
+  if (!fullRebuild) {
     iDist = NormalizeMoveDistance(iDist);
-    // Shift items and refresh only those that have changed.
+    // Keep actors attached to their existing data.  Only the actor entering
+    // the viewport and the actors whose focus changes need a content reload.
     CircularShift(items, iDist);
-    if (iDist > 0) {
-      iFirst = std::max(0, itemCount - iDist);
-    } else if (iDist < 0) {
-      iLast = std::min(itemCount - 1, -iDist - 1);
-    }
   }
 
-  for (int i = iFirst; i <= iLast; i++) {
+  for (int i = 0; i < itemCount; i++) {
     int iIndex = iFirstVisibleIndex + i;
     wrap(iIndex, data.size());
-
     const WheelItemBaseData* pData = data[iIndex];
     WheelItemBase* pDisplay = items[i];
     if (pData == nullptr || pDisplay == nullptr) {
@@ -690,24 +619,13 @@ void WheelBase::RebuildWheelItems(int iDist) {
     pDisplay->SetExpanded(
         pData->m_Type == WheelItemDataType_Section &&
         pData->m_sText == m_sExpandedSectionName);
-  }
 
-  for (int i = 0; i < (int)items.size(); i++) {
-    int iIndex = iFirstVisibleIndex + i;
-    wrap(iIndex, data.size());
-    const WheelItemBaseData* pData = data[iIndex];
-    WheelItemBase* pDisplay = items[i];
-    if (pData == nullptr || pDisplay == nullptr) {
+    const bool hasFocus = m_iSelection == iIndex;
+    if (!fullRebuild && pDisplay->CanReuseWheelItemData(pData, hasFocus)) {
       continue;
     }
-    TraceWheelReintro(
-        "rebuild_load_slot",
-        ssprintf(
-            "slot=%d dataIndex=%d hasFocus=%d drawIndex=%d type=%s text='%s'",
-            i, iIndex, m_iSelection == iIndex ? 1 : 0, i,
-            WheelItemDataTypeTraceName(pData->m_Type),
-            pData->m_sText.c_str()));
-    pDisplay->LoadFromWheelItemData(pData, iIndex, m_iSelection == iIndex, i);
+
+    pDisplay->LoadFromWheelItemData(pData, iIndex, hasFocus, i);
   }
 }
 
