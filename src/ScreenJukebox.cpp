@@ -46,8 +46,13 @@
 
 namespace {
 
+bool HasThemeRuntime() {
+  return THEME != nullptr && THEME->IsThemeLoaded() && LUA != nullptr;
+}
+
 float GetCourseModifiersProbability(const std::string& screenName) {
-  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
+  if (!HasThemeRuntime() ||
+      !THEME->HasMetric(screenName, "ShowCourseModifiersProbability")) {
     return 0.0f;
   }
 
@@ -65,6 +70,10 @@ float GetCourseModifiersProbability(const std::string& screenName) {
 }
 
 bool GetAllowAdvancedModifiers(const std::string& screenName) {
+  if (!HasThemeRuntime() ||
+      !THEME->HasMetric(screenName, "AllowAdvancedModifiers")) {
+    return false;
+  }
   ThemeMetric<bool> metric(screenName, "AllowAdvancedModifiers");
   return metric.IsLoaded() && metric.GetValue();
 }
@@ -108,12 +117,19 @@ void ScreenJukebox::SetSong() {
   const bool allowAdvancedModifiers = GetAllowAdvancedModifiers(m_sName);
   const StepsType stepsType = currentStyle->m_StepsType;
 
+  GAMESTATE->m_pCurSong.Set(nullptr);
+  GAMESTATE->m_pCurCourse.Set(nullptr);
+  FOREACH_PlayerNumber(p) {
+    GAMESTATE->m_pCurSteps[p].Set(nullptr);
+    GAMESTATE->m_pCurTrail[p].Set(nullptr);
+  }
+
   std::vector<Song*> vSongs;
 
   /* Check to see if there is a theme course. If there is a course that has
    * the exact same name as the theme, then we pick a song from this course. */
   Course* pCourse = nullptr;
-  if (THEME != nullptr && THEME->IsThemeLoaded()) {
+  if (HasThemeRuntime()) {
     pCourse = SONGMAN->GetCourseFromName(THEME->GetCurThemeName());
   }
   if (pCourse != nullptr) {
@@ -142,7 +158,7 @@ void ScreenJukebox::SetSong() {
 
   // Calculate what difficulties to show
   std::vector<Difficulty> vDifficultiesToShow;
-  if (m_bDemonstration) {
+  if (m_bDemonstration && HasThemeRuntime()) {
     // HACK: This belongs in ScreenDemonstration.
     ThemeMetricDifficultiesToShow DIFFICULTIES_TO_SHOW_HERE(
         m_sName, "DifficultiesToShow");
@@ -301,6 +317,7 @@ void ScreenJukebox::Init() {
   if (GAMESTATE == nullptr) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-1944: ScreenJukebox cannot init without game state.");
+    AbortJukeboxScreen(this, NO_MATCHING_STEPS, SM_GoToPrevScreen);
     return;
   }
 
@@ -407,6 +424,9 @@ bool ScreenJukebox::Input(const InputEventPlus& input) {
   if (input.type != IET_FIRST_PRESS) {
     return false;  // ignore
   }
+  if (IsInputLocked() || IsTransitioning()) {
+    return false;
+  }
 
   switch (input.MenuI) {
     case GAME_BUTTON_LEFT:
@@ -455,15 +475,15 @@ void ScreenJukebox::InitSongQueues() {
     return;
   }
 
-  int iIndexToKeep = -1;
-  for (unsigned i = 0; i < m_apSongsQueue.size(); i++) {
+  size_t indexToKeep = m_apSongsQueue.size();
+  for (size_t i = 0; i < m_apSongsQueue.size(); i++) {
     if (m_apSongsQueue[i] == GAMESTATE->m_pCurSong) {
-      iIndexToKeep = i;
+      indexToKeep = i;
       break;
     }
   }
 
-  if (iIndexToKeep == -1) {
+  if (indexToKeep == m_apSongsQueue.size()) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-1946: current song is missing from the jukebox "
         "queue; rebuilding a single-song queue.");
@@ -486,25 +506,25 @@ void ScreenJukebox::InitSongQueues() {
     return;
   }
 
-  for (int i = (m_apSongsQueue.size()) - 1; i >= 0; i--) {
-    if (i != iIndexToKeep) {
+  for (size_t i = m_apSongsQueue.size(); i-- > 0;) {
+    if (i != indexToKeep) {
       m_apSongsQueue.erase(m_apSongsQueue.begin() + i);
       FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
-        if (i < static_cast<int>(pi->m_vpStepsQueue.size())) {
+        if (i < pi->m_vpStepsQueue.size()) {
           pi->m_vpStepsQueue.erase(pi->m_vpStepsQueue.begin() + i);
         } else {
           LOG->Warn(
               "SRC_AUDIT_FIX SRC-1947: jukebox steps queue for %s was shorter "
               "than song queue at %i.",
-              pi->GetName().c_str(), i);
+            pi->GetName().c_str(), static_cast<int>(i));
         }
-        if (i < static_cast<int>(pi->m_asModifiersQueue.size())) {
+        if (i < pi->m_asModifiersQueue.size()) {
           pi->m_asModifiersQueue.erase(pi->m_asModifiersQueue.begin() + i);
         } else {
           LOG->Warn(
               "SRC_AUDIT_FIX SRC-1947: jukebox modifier queue for %s was "
               "shorter than song queue at %i.",
-              pi->GetName().c_str(), i);
+            pi->GetName().c_str(), static_cast<int>(i));
         }
       }
     }

@@ -1,7 +1,10 @@
 #include "ScreenBookkeeping.h"
 
 #include <algorithm>
+#include <limits>
+#include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "ActorUtil.h"
@@ -33,9 +36,30 @@ XToString(BookkeepingView);
 
 namespace {
 void WarnBookkeeping(const std::string& message) {
+  static std::mutex warningMutex;
+  static std::unordered_set<std::string> emittedWarnings;
+  {
+    std::lock_guard<std::mutex> lock(warningMutex);
+    if (!emittedWarnings.insert(message).second) {
+      return;
+    }
+  }
   if (LOG != nullptr) {
     LOG->Warn("ScreenBookkeeping: %s", message.c_str());
   }
+}
+
+int SaturatingAdd(int lhs, int rhs, const char* context) {
+  const long long sum = static_cast<long long>(lhs) + rhs;
+  if (sum > std::numeric_limits<int>::max()) {
+    WarnBookkeeping(std::string(context) + " total saturated at INT_MAX.");
+    return std::numeric_limits<int>::max();
+  }
+  if (sum < std::numeric_limits<int>::min()) {
+    WarnBookkeeping(std::string(context) + " total saturated at INT_MIN.");
+    return std::numeric_limits<int>::min();
+  }
+  return static_cast<int>(sum);
 }
 
 bool HasThemeRuntime() {
@@ -150,6 +174,17 @@ void FillCoinsByHour(int coins[HOURS_IN_DAY]) {
 REGISTER_SCREEN_CLASS(ScreenBookkeeping);
 
 void ScreenBookkeeping::Init() {
+  RemoveChild(&m_textAllTime);
+  RemoveChild(&m_textTitle);
+  for (BitmapText& text : m_textData) {
+    RemoveChild(&text);
+  }
+  m_bAllTimeLoaded = false;
+  m_bTitleLoaded = false;
+  m_bDataLoaded.fill(false);
+  m_vBookkeepingViews.clear();
+  m_iViewIndex = 0;
+
   ScreenWithMenuElements::Init();
 
   m_textAllTime.SetName("AllTime");
@@ -364,7 +399,8 @@ void ScreenBookkeeping::UpdateView() {
             (UNLOCKMAN->SongIsLocked(pSong) & ~LOCKED_DISABLED)) {
           continue;
         }
-        iCount += pProfile->GetSongNumTimesPlayed(pSong);
+        iCount = SaturatingAdd(
+            iCount, pProfile->GetSongNumTimesPlayed(pSong), "Song play");
         vpSongs.push_back(pSong);
       }
       SetTitleText(ssprintf(SONG_PLAYS.GetValue().c_str(), iCount));
@@ -400,7 +436,7 @@ void ScreenBookkeeping::UpdateView() {
       for (int i = 0; i < NUM_LAST_DAYS; i++) {
         sTitle += LastDayToLocalizedString(i) + "\n";
         sData += ssprintf("%d", coins[i]) + "\n";
-        iTotalLast += coins[i];
+        iTotalLast = SaturatingAdd(iTotalLast, coins[i], "Last-days coin");
       }
 
       sTitle += ALL_TIME.GetValue() + "\n";

@@ -26,7 +26,8 @@ namespace {
 
 float GetSecondsToShow(const std::string& screenName) {
   constexpr float kFallbackSeconds = 25.0f;
-  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
+  if (THEME == nullptr || !THEME->IsThemeLoaded() || LUA == nullptr ||
+      !THEME->HasMetric(screenName, "SecondsToShow")) {
     return kFallbackSeconds;
   }
 
@@ -42,7 +43,8 @@ float GetSecondsToShow(const std::string& screenName) {
 
 std::vector<StyleType> GetAllowedStyleTypes(const std::string& screenName) {
   std::vector<StyleType> styleTypes;
-  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
+  if (THEME == nullptr || !THEME->IsThemeLoaded() || LUA == nullptr ||
+      !THEME->HasMetric(screenName, "AllowStyleTypes")) {
     return styleTypes;
   }
 
