@@ -1,9 +1,11 @@
 #include "BGAnimation.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -26,11 +28,32 @@ BGAnimation::BGAnimation() {}
 
 BGAnimation::~BGAnimation() { DeleteAllChildren(); }
 
+namespace {
+constexpr size_t MAX_BG_ANIMATION_IMPORT_DEPTH = 64;
+
+bool ParseLayerNumber(const std::string& name, int& number) {
+  constexpr char prefix[] = "Layer";
+  if (name.compare(0, sizeof(prefix) - 1, prefix) != 0 ||
+      name.size() == sizeof(prefix) - 1) {
+    return false;
+  }
+  const std::string suffix = name.substr(sizeof(prefix) - 1);
+  if (!std::all_of(suffix.begin(), suffix.end(), [](unsigned char ch) {
+        return std::isdigit(ch) != 0;
+      })) {
+    return false;
+  }
+  size_t parsed = 0;
+  number = StringToInt(suffix, &parsed, 10, -1);
+  return parsed == suffix.size() && number >= 0;
+}
+}  // namespace
+
 static bool CompareLayerNames(const std::string& s1, const std::string& s2) {
   int i1 = 0;
   int i2 = 0;
-  const bool bParsed1 = sscanf(s1.c_str(), "Layer%d", &i1) == 1;
-  const bool bParsed2 = sscanf(s2.c_str(), "Layer%d", &i2) == 1;
+  const bool bParsed1 = ParseLayerNumber(s1, i1);
+  const bool bParsed2 = ParseLayerNumber(s2, i2);
   if (!bParsed1 || !bParsed2) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-701: BGAnimation saw malformed layer names '%s' "
@@ -41,7 +64,10 @@ static bool CompareLayerNames(const std::string& s1, const std::string& s2) {
     }
     return s1 < s2;
   }
-  return i1 < i2;
+  if (i1 != i2) {
+    return i1 < i2;
+  }
+  return s1 < s2;
 }
 
 void BGAnimation::AddLayersFromAniDir(
@@ -58,6 +84,13 @@ void BGAnimation::AddLayersFromAniDir(
         "SRC_AUDIT_FIX SRC-702: BGAnimation ignored a null animation node for "
         "'%s'.",
         _sAniDir.c_str());
+    return;
+  }
+  if (importStack.size() >= MAX_BG_ANIMATION_IMPORT_DEPTH) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3096: BGAnimation stopped imports at depth %zu "
+        "while loading '%s'.",
+        importStack.size(), _sAniDir.c_str());
     return;
   }
   const std::string& sAniDir = _sAniDir;
@@ -136,9 +169,16 @@ void BGAnimation::AddLayersFromAniDir(
         AddLayersFromAniDir(sImportDir, &ini2, importStack);
       } else {
         // import as a single layer
-        BGAnimationLayer* bgLayer = new BGAnimationLayer;
+        std::unique_ptr<BGAnimationLayer> bgLayer(new BGAnimationLayer);
         bgLayer->LoadFromNode(pKey);
-        this->AddChild(bgLayer);
+        if (bgLayer->GetNumChildren() == 0) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX SRC-3101: BGAnimation skipped empty layer '%s' "
+              "while loading '%s'.",
+              sLayer.c_str(), sAniDir.c_str());
+          continue;
+        }
+        this->AddChild(bgLayer.release());
       }
     }
   }
@@ -146,9 +186,8 @@ void BGAnimation::AddLayersFromAniDir(
 }
 
 void BGAnimation::LoadFromAniDir(const std::string& _sAniDir) {
-  DeleteAllChildren();
-
   if (_sAniDir.empty()) {
+    DeleteAllChildren();
     return;
   }
 
@@ -177,6 +216,7 @@ void BGAnimation::LoadFromAniDir(const std::string& _sAniDir) {
         return;
       }
 
+      DeleteAllChildren();
       AddLayersFromAniDir(sAniDir, &ini);
 
       XNode* pBGAnimation = ini.GetChild("BGAnimation");
@@ -188,6 +228,7 @@ void BGAnimation::LoadFromAniDir(const std::string& _sAniDir) {
       LoadFromNode(pBGAnimation);
     } else  // We don't officially support .ini files anymore.
     {
+      DeleteAllChildren();
       XNode dummy("BGAnimation");
       XNode* pBG = &dummy;
       LoadFromNode(pBG);
@@ -207,6 +248,7 @@ void BGAnimation::LoadFromAniDir(const std::string& _sAniDir) {
     GetDirListing(sAniDir + "*.mpeg", asImagePaths, false, true);
 
     SortRStringArray(asImagePaths);
+    DeleteAllChildren();
 
     for (unsigned i = 0; i < asImagePaths.size(); i++) {
       const std::string sPath = asImagePaths[i];

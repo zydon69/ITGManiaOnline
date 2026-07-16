@@ -41,8 +41,8 @@ class RageSoundDriver_WaveOut : public RageSoundDriver {
   WAVEHDR wo_buffers_[kMaximumNumBlocks];
   int wo_samplerate_;
   std::atomic<bool> wo_shutdown_;
-  int wo_last_cursor_position_;
-  bool wo_init_success_;
+  std::atomic<int64_t> wo_last_cursor_position_;
+  mutable std::atomic<int64_t> wo_last_hardware_position_;
   int wo_frames_per_block_;
   int wo_num_blocks_;
   int wo_blocksize_;

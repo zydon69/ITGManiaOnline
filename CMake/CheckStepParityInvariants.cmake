@@ -20,6 +20,8 @@ endfunction()
 
 read_source("src/StepParityGenerator.cpp" step_parity_generator_cpp)
 read_source("src/Steps.cpp" steps_cpp)
+read_source("src/TechCounts.cpp" tech_counts_cpp)
+read_source("src/StepParityDatastructs.cpp" step_parity_data_cpp)
 
 require_contains(
   "${step_parity_generator_cpp}"
@@ -37,3 +39,19 @@ require_contains(
   "${steps_cpp}"
   "StepsType_dance_threepanel"
   "dance-threepanel layout remains explicit")
+require_contains(
+  "${step_parity_generator_cpp}"
+  "statePool.clear();"
+  "StepParity analysis resets reusable generator state")
+require_contains(
+  "${tech_counts_cpp}"
+  "!std::isfinite(value) || value < TECHCOUNTS_VAL_UNKNOWN"
+  "TechCounts cache rejects non-finite and invalid negative values")
+require_contains(
+  "${tech_counts_cpp}"
+  "row.second < rows[rowIndex - 1].second"
+  "TechCounts rejects non-monotonic row timing")
+require_contains(
+  "${step_parity_data_cpp}"
+  "distance <= 0.0f"
+  "StageLayout difference helpers reject coincident points")

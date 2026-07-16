@@ -5,6 +5,7 @@
  * create shapes that quads can't. */
 
 #include <cstddef>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -39,10 +40,10 @@ class ActorMultiVertex : public Actor {
   static const size_t num_vert_splines = 4;
   ActorMultiVertex();
   ActorMultiVertex(const ActorMultiVertex& cpy);
-  virtual ~ActorMultiVertex();
+  ~ActorMultiVertex() override;
 
   void LoadFromNode(const XNode* Node) override;
-  virtual ActorMultiVertex* Copy() const override;
+  ActorMultiVertex* Copy() const override;
 
   struct AMV_TweenState {
     AMV_TweenState()
@@ -83,10 +84,10 @@ class ActorMultiVertex : public Actor {
     return const_cast<ActorMultiVertex*>(this)->AMV_DestTweenState();
   }
 
-  virtual void EnableAnimation(bool bEnable) override;
-  virtual void Update(float fDelta) override;
-  virtual bool EarlyAbortDraw() const override;
-  virtual void DrawPrimitives() override;
+  void EnableAnimation(bool bEnable) override;
+  void Update(float fDelta) override;
+  bool EarlyAbortDraw() const override;
+  void DrawPrimitives() override;
   virtual void DrawInternal(const AMV_TweenState* TS);
 
   void SetCurrentTweenStart() override;
@@ -108,9 +109,21 @@ class ActorMultiVertex : public Actor {
   void AddVertex();
   void AddVertices(int Add);
 
-  void SetEffectMode(EffectMode em) { _EffectMode = em; }
-  void SetTextureMode(TextureMode tm) { _TextureMode = tm; }
-  void SetLineWidth(float width) { AMV_DestTweenState().line_width = width; }
+  void SetEffectMode(EffectMode em) {
+    if (em >= 0 && em < NUM_EffectMode) {
+      _EffectMode = em;
+    }
+  }
+  void SetTextureMode(TextureMode tm) {
+    if (tm >= 0 && tm < NUM_TextureMode) {
+      _TextureMode = tm;
+    }
+  }
+  void SetLineWidth(float width) {
+    if (std::isfinite(width) && width >= 0.0f) {
+      AMV_DestTweenState().line_width = width;
+    }
+  }
 
   void SetDrawState(DrawMode dm, int first, int num) {
     AMV_DestTweenState().SetDrawState(dm, first, num);
@@ -138,7 +151,7 @@ class ActorMultiVertex : public Actor {
     float delay;
   };
   int GetNumStates() const override { return _states.size(); }
-  void AddState(const State& new_state) { _states.push_back(new_state); }
+  void AddState(const State& new_state);
   void RemoveState(size_t i) {
     if (i >= _states.size()) {
       return;
@@ -156,20 +169,8 @@ class ActorMultiVertex : public Actor {
     }
     return _states[i];
   }
-  void SetStateData(size_t i, const State& s) {
-    if (i >= _states.size()) {
-      return;
-    }
-    _states[i] = s;
-  }
-  void SetStateProperties(const std::vector<State>& new_states) {
-    _states = new_states;
-    if (_states.empty()) {
-      _cur_state = 0;
-    } else {
-      SetState(0);
-    }
-  }
+  void SetStateData(size_t i, const State& s);
+  void SetStateProperties(const std::vector<State>& new_states);
   void SetState(int i) override;
   void SetAllStateDelays(float delay);
   float GetAnimationLengthSeconds() const override;
@@ -201,7 +202,7 @@ class ActorMultiVertex : public Actor {
   bool _use_animation_state;
   bool _decode_movie;
 
-  virtual void PushSelf(lua_State* L) override;
+  void PushSelf(lua_State* L) override;
 
  private:
   RageTexture* _Texture;
@@ -210,9 +211,6 @@ class ActorMultiVertex : public Actor {
   std::vector<AMV_TweenState> AMV_Tweens;
   AMV_TweenState AMV_current;
   AMV_TweenState AMV_start;
-
-  // required to handle diffuse and glow
-  AMV_TweenState* AMV_TempState;
 
   EffectMode _EffectMode;
   TextureMode _TextureMode;

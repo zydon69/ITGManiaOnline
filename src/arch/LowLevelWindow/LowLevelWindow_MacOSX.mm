@@ -1042,7 +1042,22 @@ static float EffectiveMacOSFramePacingTargetHz(const VideoModeParams& params) {
 }
 
 static bool MacOSMetalPresentRequested() {
-  return CompareNoCase(g_sMacOSPresentBackend.Get(), "metal") == 0;
+  const bool requested =
+      CompareNoCase(g_sMacOSPresentBackend.Get(), "metal") == 0;
+  if (!requested) {
+    return false;
+  }
+  if (MacOSMetalPresenterNativeRendererActive()) {
+    static bool loggedSuppression = false;
+    if (!loggedSuppression) {
+      LOG->Trace(
+          "MacOS Metal presentation bridge suppressed: native Metal "
+          "renderer owns the window content layer.");
+      loggedSuppression = true;
+    }
+    return false;
+  }
+  return true;
 }
 
 static bool MacOSMetalBridgeEnabled() {

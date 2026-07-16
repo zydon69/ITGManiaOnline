@@ -14,6 +14,9 @@
 #include "archutils/Win32/ErrorStrings.h"
 #include "global.h"
 
+#include <cmath>
+#include <limits>
+
 REGISTER_SOUND_DRIVER_CLASS2("WASAPI", WASAPI);
 
 RageSoundDriver_WASAPI::RageSoundDriver_WASAPI()
@@ -126,7 +129,8 @@ bool RageSoundDriver_WASAPI::InitWASAPI(std::string& sError) {
     return false;
   }
 
-  if (pwfx->wFormatTag != WAVE_FORMAT_EXTENSIBLE) {
+  if (pwfx->wFormatTag != WAVE_FORMAT_EXTENSIBLE ||
+      pwfx->cbSize < sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) {
     sError = ssprintf("Unsupported format tag: %d", pwfx->wFormatTag);
     CoTaskMemFree(pwfx);
     FreeWASAPI();
@@ -168,6 +172,7 @@ bool RageSoundDriver_WASAPI::InitWASAPI(std::string& sError) {
 
   m_hAudioEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
   if (m_hAudioEvent == NULL) {
+    m_hAudioEvent = INVALID_HANDLE_VALUE;
     sError = werr_ssprintf(GetLastError(), "CreateEvent failed");
     FreeWASAPI();
     return false;
@@ -188,6 +193,11 @@ bool RageSoundDriver_WASAPI::InitWASAPI(std::string& sError) {
   }
   if (m_iBufferSizeFrames == 0) {
     sError = "WASAPI reported a zero-sized audio buffer";
+    FreeWASAPI();
+    return false;
+  }
+  if (m_iBufferSizeFrames > static_cast<UINT32>(INT_MAX / 2)) {
+    sError = "WASAPI reported an excessively large audio buffer";
     FreeWASAPI();
     return false;
   }
@@ -235,7 +245,7 @@ std::string RageSoundDriver_WASAPI::Init() {
 
   // Set decode buffer size.
   // We want it to be at least as big as the WASAPI buffer.
-  SetDecodeBufferSize(m_iBufferSizeFrames * 3 / 2);
+  SetDecodeBufferSize(static_cast<int>(m_iBufferSizeFrames * 3 / 2));
   StartDecodeThread();
 
   m_MixingThread.SetName("WASAPI Mixer Thread");
@@ -305,6 +315,14 @@ void RageSoundDriver_WASAPI::MixerThread() {
       continue;
     }
 
+    if (padding > m_iBufferSizeFrames) {
+      if (LOG != nullptr) {
+        LOG->Warn(
+            "WASAPI reported invalid padding: %u > %u", padding,
+            m_iBufferSizeFrames);
+      }
+      break;
+    }
     UINT32 framesAvailable = m_iBufferSizeFrames - padding;
     if (framesAvailable == 0) {
       continue;
@@ -325,10 +343,13 @@ void RageSoundDriver_WASAPI::MixerThread() {
     int64_t iCurrentFrame = GetPosition();
 
     if (m_bFloat) {
-      this->Mix((float*)pData, framesAvailable, iHardwareFrame, iCurrentFrame);
+      this->Mix(
+          reinterpret_cast<float*>(pData), static_cast<int>(framesAvailable),
+          iHardwareFrame, iCurrentFrame);
     } else {
       this->Mix(
-          (int16_t*)pData, framesAvailable, iHardwareFrame, iCurrentFrame);
+          reinterpret_cast<int16_t*>(pData),
+          static_cast<int>(framesAvailable), iHardwareFrame, iCurrentFrame);
     }
 
     hr = m_pRenderClient->ReleaseBuffer(framesAvailable, 0);
@@ -352,7 +373,13 @@ int64_t RageSoundDriver_WASAPI::GetPosition() const {
   if (FAILED(m_pAudioClock->GetPosition(&position, nullptr))) {
     return 0;
   }
-  return (int64_t)(position * (UINT64)m_iSampleRate / m_iAudioClockFreq);
+  const long double frames =
+      static_cast<long double>(position) * m_iSampleRate / m_iAudioClockFreq;
+  if (!std::isfinite(frames) ||
+      frames >= static_cast<long double>(std::numeric_limits<int64_t>::max())) {
+    return std::numeric_limits<int64_t>::max();
+  }
+  return static_cast<int64_t>(frames);
 }
 
 float RageSoundDriver_WASAPI::GetPlayLatency() const {

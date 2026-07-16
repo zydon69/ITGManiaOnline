@@ -1,6 +1,9 @@
 #include "NotesLoaderDWI.h"
 
+#include <cerrno>
+#include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <cstdio>
 #include <map>
 #include <set>
@@ -14,7 +17,6 @@
 #include "NoteData.h"
 #include "NoteTypes.h"
 #include "NotesLoader.h"
-#include "PrefsManager.h"
 #include "RageLog.h"
 #include "RageThreads.h"
 #include "RageUtil.h"
@@ -26,6 +28,20 @@
 #include "global.h"
 
 Difficulty DwiCompatibleStringToDifficulty(const std::string& sDC);
+
+static bool ParseFiniteDWIValue(const std::string& raw, float& valueOut) {
+  std::string value = raw;
+  Trim(value);
+  if (value.empty()) {
+    return false;
+  }
+
+  char* end = nullptr;
+  errno = 0;
+  valueOut = std::strtof(value.c_str(), &end);
+  return end != value.c_str() && end != nullptr && *end == '\0' &&
+         errno != ERANGE && std::isfinite(valueOut);
+}
 
 /** @brief The different types of core DWI arrows and pads. */
 enum DanceNotes {
@@ -759,9 +775,9 @@ bool DWILoader::LoadFromDir(
     }
 
     else if (EqualsNoCase(sValueName, "BPM")) {
-      const float fBPM = StringToFloat(sParams[1]);
+      float fBPM = 0.0f;
 
-      if (unlikely(fBPM <= 0.0f && !PREFSMAN->m_bQuirksMode)) {
+      if (!ParseFiniteDWIValue(sParams[1], fBPM) || fBPM <= 0.0f) {
         LOG->UserLog(
             "Song file", sPath, "has an invalid BPM change at beat %f, BPM %f.",
             0.0f, fBPM);
@@ -822,9 +838,19 @@ bool DWILoader::LoadFromDir(
               arrayFreezeExpressions[f].c_str());
           continue;
         }
-        int iFreezeRow =
-            BeatToNoteRow(StringToFloat(arrayFreezeValues[0]) / 4.0f);
-        float fFreezeSeconds = StringToFloat(arrayFreezeValues[1]) / 1000.0f;
+        float freezePosition = 0.0f;
+        float freezeMilliseconds = 0.0f;
+        if (!ParseFiniteDWIValue(arrayFreezeValues[0], freezePosition) ||
+            !ParseFiniteDWIValue(
+                arrayFreezeValues[1], freezeMilliseconds)) {
+          LOG->UserLog(
+              "Song file", sPath,
+              "SRC_AUDIT_FIX has a non-numeric or non-finite FREEZE '%s'.",
+              arrayFreezeExpressions[f].c_str());
+          continue;
+        }
+        const int iFreezeRow = BeatToNoteRow(freezePosition / 4.0f);
+        const float fFreezeSeconds = freezeMilliseconds / 1000.0f;
         if (iFreezeRow < 0 || fFreezeSeconds <= 0.0f) {
           LOG->UserLog(
               "Song file", sPath,
@@ -855,10 +881,19 @@ bool DWILoader::LoadFromDir(
           continue;
         }
 
-        int iStartIndex =
-            BeatToNoteRow(StringToFloat(arrayBPMChangeValues[0]) / 4.0f);
-        float fBPM = StringToFloat(arrayBPMChangeValues[1]);
-        if (fBPM > 0.0f) {
+        float bpmPosition = 0.0f;
+        float fBPM = 0.0f;
+        if (!ParseFiniteDWIValue(arrayBPMChangeValues[0], bpmPosition) ||
+            !ParseFiniteDWIValue(arrayBPMChangeValues[1], fBPM)) {
+          LOG->UserLog(
+              "Song file", sPath,
+              "SRC_AUDIT_FIX has a non-numeric or non-finite BPM change "
+              "'%s'.",
+              arrayBPMChangeExpressions[b].c_str());
+          continue;
+        }
+        const int iStartIndex = BeatToNoteRow(bpmPosition / 4.0f);
+        if (iStartIndex >= 0 && fBPM > 0.0f) {
           out.m_SongTiming.AddSegment(BPMSegment(iStartIndex, fBPM));
         } else {
           LOG->UserLog(

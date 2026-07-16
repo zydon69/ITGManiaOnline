@@ -1,12 +1,14 @@
 #include "GameSoundManager.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cmath>
 #include <cstddef>
 #include <limits>
 #include <map>
 #include <memory>
+#include <new>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -63,7 +65,7 @@ GameSoundManager* SOUND = nullptr;
 /* Lock this before touching g_UpdatingTimer or g_Playing. */
 static RageEvent* g_Mutex;
 static bool g_UpdatingTimer;
-static bool g_Shutdown;
+static std::atomic<bool> g_Shutdown{true};
 static bool g_bFlushing = false;
 
 enum FadeState { FADE_NONE, FADE_OUT, FADE_WAIT, FADE_IN };
@@ -145,7 +147,7 @@ constexpr size_t kMaxQueuedPathLength = 4096;
 constexpr float kMaxDimVolume = 16.0f;
 
 static bool HasSoundQueueRuntime() {
-  return g_Mutex != nullptr && !g_Shutdown;
+  return g_Mutex != nullptr && !g_Shutdown.load(std::memory_order_acquire);
 }
 
 static bool HasCurrentMusic() {
@@ -526,7 +528,15 @@ struct MusicToPlay {
   float fStartSecond, fLengthSeconds, fFadeInLengthSeconds,
       fFadeOutLengthSeconds;
   bool bAlignBeat, bApplyMusicRate;
-  MusicToPlay() { HasTiming = false; }
+  MusicToPlay()
+      : HasTiming(false),
+        bForceLoop(false),
+        fStartSecond(0.0f),
+        fLengthSeconds(-1.0f),
+        fFadeInLengthSeconds(0.0f),
+        fFadeOutLengthSeconds(0.0f),
+        bAlignBeat(true),
+        bApplyMusicRate(false) {}
 };
 std::vector<MusicToPlay> g_MusicsToPlay;
 static GameSoundManager::PlayMusicParams g_FallbackMusicParams;
@@ -588,6 +598,38 @@ static void StartMusic(MusicToPlay& ToPlay) {
     }
     std::unique_ptr<MusicPlaying> loadedMusic(
         new MusicPlaying(pSound.release()));
+
+    /* Parsing a simfile can perform filesystem IO.  Keep it outside the global
+     * sound queue lock, just like the audio load above. */
+    if (!ToPlay.HasTiming && IsAFile(ToPlay.m_sTimingFile)) {
+      if (LOG != nullptr) {
+        LOG->Trace("Found '%s'", ToPlay.m_sTimingFile.c_str());
+      }
+      Song song;
+      SSCLoader loaderSSC;
+      SMLoader loaderSM;
+      if (GetExtension(ToPlay.m_sTimingFile) == ".ssc" &&
+          loaderSSC.LoadFromSimfile(ToPlay.m_sTimingFile, song)) {
+        ToPlay.HasTiming = true;
+        ToPlay.m_TimingData = song.m_SongTiming;
+        Steps* pStepsCabinetLights =
+            SongUtil::GetOneSteps(&song, StepsType_lights_cabinet);
+        if (pStepsCabinetLights) {
+          pStepsCabinetLights->GetNoteData(ToPlay.m_LightsData);
+        }
+      } else if (
+          GetExtension(ToPlay.m_sTimingFile) == ".sm" &&
+          loaderSM.LoadFromSimfile(ToPlay.m_sTimingFile, song)) {
+        ToPlay.HasTiming = true;
+        ToPlay.m_TimingData = song.m_SongTiming;
+        Steps* pStepsCabinetLights =
+            SongUtil::GetOneSteps(&song, StepsType_lights_cabinet);
+        if (pStepsCabinetLights) {
+          pStepsCabinetLights->GetNoteData(ToPlay.m_LightsData);
+        }
+      }
+    }
+
     g_Mutex->Lock();
     NewMusic = std::move(loadedMusic);
     if (!HasCurrentMusic()) {
@@ -598,38 +640,6 @@ static void StartMusic(MusicToPlay& ToPlay) {
 
   NewMusic->m_Timing = g_Playing->m_Timing;
   NewMusic->m_Lights = g_Playing->m_Lights;
-
-  /* See if we can find timing data, if it's not already loaded. */
-  if (!ToPlay.HasTiming && IsAFile(ToPlay.m_sTimingFile)) {
-    if (LOG != nullptr) {
-      LOG->Trace("Found '%s'", ToPlay.m_sTimingFile.c_str());
-    }
-    Song song;
-    SSCLoader loaderSSC;
-    SMLoader loaderSM;
-    if (GetExtension(ToPlay.m_sTimingFile) == ".ssc" &&
-        loaderSSC.LoadFromSimfile(ToPlay.m_sTimingFile, song)) {
-      ToPlay.HasTiming = true;
-      ToPlay.m_TimingData = song.m_SongTiming;
-      // get cabinet lights if any
-      Steps* pStepsCabinetLights =
-          SongUtil::GetOneSteps(&song, StepsType_lights_cabinet);
-      if (pStepsCabinetLights) {
-        pStepsCabinetLights->GetNoteData(ToPlay.m_LightsData);
-      }
-    } else if (
-        GetExtension(ToPlay.m_sTimingFile) == ".sm" &&
-        loaderSM.LoadFromSimfile(ToPlay.m_sTimingFile, song)) {
-      ToPlay.HasTiming = true;
-      ToPlay.m_TimingData = song.m_SongTiming;
-      // get cabinet lights if any
-      Steps* pStepsCabinetLights =
-          SongUtil::GetOneSteps(&song, StepsType_lights_cabinet);
-      if (pStepsCabinetLights) {
-        pStepsCabinetLights->GetNoteData(ToPlay.m_LightsData);
-      }
-    }
-  }
 
   if (ToPlay.HasTiming) {
     NewMusic->m_NewTiming = ToPlay.m_TimingData;
@@ -961,6 +971,11 @@ static void DoPlayOnceFromDir(std::string sPath) {
   GetDirListing(sPath + "*.ogg", arraySoundFiles);
   GetDirListing(sPath + "*.oga", arraySoundFiles);
 
+  std::sort(arraySoundFiles.begin(), arraySoundFiles.end());
+  arraySoundFiles.erase(
+      std::unique(arraySoundFiles.begin(), arraySoundFiles.end()),
+      arraySoundFiles.end());
+
   if (arraySoundFiles.empty()) {
     return;
   } else if (arraySoundFiles.size() == 1) {
@@ -1012,17 +1027,17 @@ static void StartQueuedSounds() {
   if (!HasSoundQueueRuntime()) {
     return;
   }
-  g_Mutex->Lock();
-  std::vector<std::string> aSoundsToPlayOnce = g_SoundsToPlayOnce;
-  g_SoundsToPlayOnce.clear();
-  std::vector<std::string> aSoundsToPlayOnceFromDir = g_SoundsToPlayOnceFromDir;
-  g_SoundsToPlayOnceFromDir.clear();
-  std::vector<std::string> aSoundsToPlayOnceFromAnnouncer =
-      g_SoundsToPlayOnceFromAnnouncer;
-  g_SoundsToPlayOnceFromAnnouncer.clear();
-  std::vector<MusicToPlay> aMusicsToPlay = g_MusicsToPlay;
-  g_MusicsToPlay.clear();
-  g_Mutex->Unlock();
+  std::vector<std::string> aSoundsToPlayOnce;
+  std::vector<std::string> aSoundsToPlayOnceFromDir;
+  std::vector<std::string> aSoundsToPlayOnceFromAnnouncer;
+  std::vector<MusicToPlay> aMusicsToPlay;
+  {
+    LockMut(*g_Mutex);
+    aSoundsToPlayOnce.swap(g_SoundsToPlayOnce);
+    aSoundsToPlayOnceFromDir.swap(g_SoundsToPlayOnceFromDir);
+    aSoundsToPlayOnceFromAnnouncer.swap(g_SoundsToPlayOnceFromAnnouncer);
+    aMusicsToPlay.swap(g_MusicsToPlay);
+  }
 
   for (unsigned i = 0; i < aSoundsToPlayOnce.size(); ++i) {
     if (aSoundsToPlayOnce[i] != "") {
@@ -1056,12 +1071,22 @@ static void StartQueuedSounds() {
       CHECKPOINT_M(ssprintf("Removing old sound at index %d", i));
       /* StopPlaying() can take a while, so don't hold the lock while we stop
        * the sound. */
-      g_Mutex->Lock();
-      RageSound* pOldSound = HasCurrentMusic() ? g_Playing->m_Music : nullptr;
-      if (g_Playing != nullptr) {
-        g_Playing->m_Music = new RageSound;
+      std::unique_ptr<RageSound> replacement(new (std::nothrow) RageSound);
+      if (!replacement) {
+        if (LOG != nullptr) {
+          LOG->Warn("GameSoundManager could not allocate a replacement sound");
+        }
+        continue;
       }
-      g_Mutex->Unlock();
+
+      RageSound* pOldSound = nullptr;
+      {
+        LockMut(*g_Mutex);
+        if (g_Playing != nullptr) {
+          pOldSound = g_Playing->m_Music;
+          g_Playing->m_Music = replacement.release();
+        }
+      }
 
       delete pOldSound;
     }
@@ -1073,7 +1098,7 @@ void GameSoundManager::Flush() {
     return;
   }
   g_Mutex->Lock();
-  if (g_Shutdown) {
+  if (g_Shutdown.load(std::memory_order_acquire)) {
     g_Mutex->Unlock();
     return;
   }
@@ -1083,7 +1108,7 @@ void GameSoundManager::Flush() {
 
   RageTimer timeout;
   timeout += 5.0f;
-  while (g_bFlushing && !g_Shutdown) {
+  while (g_bFlushing && !g_Shutdown.load(std::memory_order_acquire)) {
     if (!g_Mutex->Wait(&timeout)) {
       if (LOG != nullptr) {
         LOG->Warn("GameSoundManager::Flush timed out");
@@ -1096,12 +1121,13 @@ void GameSoundManager::Flush() {
 }
 
 int MusicThread_start(void* p) {
-  while (!g_Shutdown) {
+  while (!g_Shutdown.load(std::memory_order_acquire)) {
     if (g_Mutex == nullptr) {
       break;
     }
     g_Mutex->Lock();
-    while (!SoundWaiting() && !g_Shutdown && !g_bFlushing) {
+    while (!SoundWaiting() &&
+           !g_Shutdown.load(std::memory_order_acquire) && !g_bFlushing) {
       g_Mutex->Wait();
     }
     g_Mutex->Unlock();
@@ -1169,7 +1195,7 @@ GameSoundManager::GameSoundManager() {
   g_PlayOnceAnnouncerCacheKey = ANNOUNCER ? ANNOUNCER->GetCurAnnouncerName()
                                           : "";
 
-  g_Shutdown = false;
+  g_Shutdown.store(false, std::memory_order_release);
   MusicThread.SetName("Music thread");
   MusicThread.Create(MusicThread_start, this);
 
@@ -1199,7 +1225,7 @@ GameSoundManager::~GameSoundManager() {
   }
   if (g_Mutex != nullptr) {
     g_Mutex->Lock();
-    g_Shutdown = true;
+    g_Shutdown.store(true, std::memory_order_release);
     g_bFlushing = false;
     g_Mutex->Broadcast();
     g_Mutex->Unlock();

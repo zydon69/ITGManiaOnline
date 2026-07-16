@@ -29,7 +29,6 @@ static const int bytes_per_frame = sizeof(int16_t) * samples_per_frame;
  * than others. */
 static const unsigned g_iMaxWriteahead_linux_26 = 512;
 static const unsigned safe_writeahead = 1024 * 4;
-static unsigned g_iMaxWriteahead;
 const int num_chunks = 8;
 
 int RageSoundDriver_ALSA9_Software::MixerThread_start(void* p) {
@@ -83,6 +82,7 @@ void RageSoundDriver_ALSA9_Software::SetupDecodingThread() {
 
 RageSoundDriver_ALSA9_Software::RageSoundDriver_ALSA9_Software() {
   m_pPCM = nullptr;
+  m_iWriteaheadFrames = safe_writeahead;
   m_bShutdown.store(false, std::memory_order_relaxed);
 }
 
@@ -92,7 +92,7 @@ std::string RageSoundDriver_ALSA9_Software::Init() {
     return ssprintf("Driver unusable: %s", sError.c_str());
   }
 
-  g_iMaxWriteahead = safe_writeahead;
+  m_iWriteaheadFrames = safe_writeahead;
   std::string sys;
   int vers;
   GetKernel(sys, vers);
@@ -100,17 +100,18 @@ std::string RageSoundDriver_ALSA9_Software::Init() {
     LOG->Trace("OS: %s ver %06i", sys.c_str(), vers);
   }
   if (sys == "Linux" && vers >= 20600) {
-    g_iMaxWriteahead = g_iMaxWriteahead_linux_26;
+    m_iWriteaheadFrames = g_iMaxWriteahead_linux_26;
   }
 
   if (PREFSMAN != nullptr && PREFSMAN->m_iSoundWriteAhead > 0) {
-    g_iMaxWriteahead = PREFSMAN->m_iSoundWriteAhead;
+    m_iWriteaheadFrames = PREFSMAN->m_iSoundWriteAhead;
   }
-  g_iMaxWriteahead = std::clamp<unsigned>(g_iMaxWriteahead, num_chunks, 262144);
+  m_iWriteaheadFrames =
+      std::clamp<unsigned>(m_iWriteaheadFrames, num_chunks, 262144);
 
   m_pPCM = new Alsa9Buf();
   sError = m_pPCM->Init(
-      channels, g_iMaxWriteahead, g_iMaxWriteahead / num_chunks,
+      channels, m_iWriteaheadFrames, m_iWriteaheadFrames / num_chunks,
       PREFSMAN != nullptr ? PREFSMAN->m_iSoundPreferredSampleRate.Get()
                           : FALLBACK_SAMPLE_RATE);
   if (sError != "") {
@@ -149,7 +150,7 @@ float RageSoundDriver_ALSA9_Software::GetPlayLatency() const {
   if (m_iSampleRate <= 0) {
     return 0.0f;
   }
-  return float(g_iMaxWriteahead) / m_iSampleRate;
+  return float(m_iWriteaheadFrames) / m_iSampleRate;
 }
 
 /*

@@ -250,12 +250,15 @@ void ScreenStatsOverlay::UpdateSkips() {
 
   /* These are thresholds for severity of skips.  The smallest
    * is slightly above expected, to tolerate normal jitter. */
-  const float Thresholds[] = {
-      ExpectedUpdate * 2.0f, ExpectedUpdate * 4.0f, 0.1f, -1};
-
   int skip = 0;
-  while (Thresholds[skip] != -1 && UpdateTime > Thresholds[skip]) {
-    skip++;
+  if (UpdateTime > ExpectedUpdate * 2.0f) {
+    skip = 1;
+  }
+  if (UpdateTime > ExpectedUpdate * 4.0f) {
+    skip = 2;
+  }
+  if (UpdateTime > 0.1f) {
+    skip = 3;
   }
 
   if (skip) {

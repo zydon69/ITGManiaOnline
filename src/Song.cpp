@@ -472,11 +472,11 @@ std::string Song::GetCacheFilePath() const {
 
 // Get a path to the SM containing data for this song. It might be a cache file.
 const std::string& Song::GetSongFilePath() const {
-  ASSERT_M(
-      !m_sSongFileName.empty(),
-      ssprintf(
-          "The song %s has no filename associated with it!",
-          this->m_sMainTitle.c_str()));
+  if (m_sSongFileName.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Song '%s' has no simfile path.",
+        this->m_sMainTitle.c_str());
+  }
   return m_sSongFileName;
 }
 
@@ -847,7 +847,7 @@ void Song::LoadEditsFromSongDir(std::string dir) {
 }
 
 bool Song::HasAutosaveFile() {
-  if (m_sSongFileName.empty()) {
+  if (m_sSongFileName.empty() || FILEMAN == nullptr) {
     return false;
   }
   std::string autosave_path = SetExtension(m_sSongFileName, "ats");
@@ -1555,6 +1555,12 @@ void Song::Save(bool autosave) {
 }
 
 bool Song::SaveToSMFile() {
+  if (m_sSongFileName.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Refusing to save SM for '%s' without a simfile path.",
+        m_sMainTitle.c_str());
+    return false;
+  }
   const std::string sPath = SetExtension(GetSongFilePath(), "sm");
   LOG->Trace("Song::SaveToSMFile(%s)", sPath.c_str());
 
@@ -1570,6 +1576,12 @@ bool Song::SaveToSMFile() {
 
   std::vector<Steps*> vpStepsToSave;
   for (Steps* pSteps : m_vpSteps) {
+    if (pSteps == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Refusing to save SM for '%s' with null Steps.",
+          m_sSongDir.c_str());
+      return false;
+    }
     if (pSteps->IsAutogen()) {
       continue;  // don't write autogen notes
     }
@@ -1582,6 +1594,13 @@ bool Song::SaveToSMFile() {
     vpStepsToSave.push_back(pSteps);
   }
   for (Steps* s : m_UnknownStyleSteps) {
+    if (s == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Refusing to save SM for '%s' with null unknown "
+          "Steps.",
+          m_sSongDir.c_str());
+      return false;
+    }
     vpStepsToSave.push_back(s);
   }
 
@@ -1589,6 +1608,12 @@ bool Song::SaveToSMFile() {
 }
 
 bool Song::SaveToSSCFile(std::string sPath, bool bSavingCache, bool autosave) {
+  if (sPath.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Refusing to save SSC for '%s' without a path.",
+        m_sMainTitle.c_str());
+    return false;
+  }
   std::string path = sPath;
   if (!bSavingCache) {
     path = SetExtension(sPath, "ssc");
@@ -1611,6 +1636,12 @@ bool Song::SaveToSSCFile(std::string sPath, bool bSavingCache, bool autosave) {
 
   std::vector<Steps*> vpStepsToSave;
   for (Steps* pSteps : m_vpSteps) {
+    if (pSteps == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Refusing to save SSC for '%s' with null Steps.",
+          m_sSongDir.c_str());
+      return false;
+    }
     if (pSteps->IsAutogen()) {
       continue;  // don't write autogen notes
     }
@@ -1623,6 +1654,13 @@ bool Song::SaveToSSCFile(std::string sPath, bool bSavingCache, bool autosave) {
     vpStepsToSave.push_back(pSteps);
   }
   for (Steps* s : m_UnknownStyleSteps) {
+    if (s == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Refusing to save SSC for '%s' with null unknown "
+          "Steps.",
+          m_sSongDir.c_str());
+      return false;
+    }
     vpStepsToSave.push_back(s);
   }
 
@@ -1674,6 +1712,12 @@ bool Song::SaveToJsonFile(std::string sPath) {
 }
 
 bool Song::SaveToCacheFile() {
+  if (SONGMAN == nullptr || SONGINDEX == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Refusing to cache '%s' without song managers.",
+        m_sSongDir.c_str());
+    return false;
+  }
   if (SONGMAN->IsGroupNeverCached(m_sGroupName)) {
     return true;
   }
@@ -1690,6 +1734,12 @@ bool Song::SaveToCacheFile() {
 }
 
 bool Song::SaveToDWIFile() {
+  if (m_sSongFileName.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Refusing to save DWI for '%s' without a simfile path.",
+        m_sMainTitle.c_str());
+    return false;
+  }
   const std::string sPath = SetExtension(GetSongFilePath(), "dwi");
   LOG->Trace("Song::SaveToDWIFile(%s)", sPath.c_str());
 

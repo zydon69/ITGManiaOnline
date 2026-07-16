@@ -101,7 +101,10 @@ float NoteTypeToBeat(NoteType nt) {
     case NoteType_Invalid:
       return 1.0f / 48;
     default:
-      FAIL_M(ssprintf("Unrecognized note type: %i", nt));
+      LOG->Trace(
+          "SRC_AUDIT_FIX NoteTypeToBeat used 192nd fallback for invalid type %i.",
+          int(nt));
+      return 1.0f / 48;
   }
 }
 
@@ -127,7 +130,10 @@ int NoteTypeToRow(NoteType nt) {
     case NoteType_Invalid:
       return 1;
     default:
-      FAIL_M("Invalid note type found: cannot convert to row.");
+      LOG->Trace(
+          "SRC_AUDIT_FIX NoteTypeToRow used one-row fallback for invalid type %i.",
+          int(nt));
+      return 1;
   }
 }
 

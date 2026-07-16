@@ -6,6 +6,7 @@
 #include <map>
 #include <string>
 #include <typeinfo>
+#include <unordered_set>
 #include <vector>
 
 #include "ActorFrame.h"
@@ -54,9 +55,10 @@ void WarnActorAuditFix(const char* message) {
 }
 
 bool WouldCreateParentCycle(const Actor* actor, const Actor* parent) {
+  std::unordered_set<const Actor*> visited;
   for (const Actor* current = parent; current != nullptr;
        current = current->GetParent()) {
-    if (current == actor) {
+    if (current == actor || !visited.insert(current).second) {
       return true;
     }
   }
@@ -319,6 +321,8 @@ Actor& Actor::operator=(Actor other) {
   /* Don't copy an Actor in the middle of rendering. */
   ASSERT(other.m_pTempState == nullptr);
   m_pTempState = nullptr;
+  Actor* const currentParent = m_pParent;
+  Actor* const currentFakeParent = m_FakeParent;
 
   using std::swap;
 #define SWAP(x) swap(x, other.x)
@@ -389,6 +393,9 @@ Actor& Actor::operator=(Actor other) {
 #undef SWAP
   m_bMatrixPushed = false;
   m_bTextureMatrixPushed = false;
+  m_pParent = currentParent;
+  m_FakeParent = currentFakeParent;
+  SetParent(currentParent);
   return *this;
 }
 
@@ -999,6 +1006,12 @@ void Actor::Update(float fDeltaTime) {
     // Prevent divide by 0 when tab + tilde are both pressed.
     if (rate != 0) {
       fDeltaTime *= (1 / rate);
+      if (!IsFiniteActorValue(fDeltaTime) || fDeltaTime < 0.0f) {
+        WarnActorAuditFix(
+            "SRC_AUDIT_FIX SRC-3120: Actor rejected an overflowing scaled "
+            "update delta.");
+        return;
+      }
     }
   }
 
@@ -1040,13 +1053,10 @@ void Actor::UpdateInternal(float delta_time) {
                                  : default_effect_period;
   switch (m_EffectClock) {
     case CLOCK_TIMER:
-      m_fSecsIntoEffect += delta_time;
+      m_fSecsIntoEffect = static_cast<float>(std::fmod(
+          static_cast<double>(m_fSecsIntoEffect) + delta_time,
+          static_cast<double>(effectPeriod)));
       m_fEffectDelta = delta_time;
-      // Wrap the counter, so it doesn't increase indefinitely (causing loss
-      // of precision if a screen is left to sit for a day).
-      if (m_fSecsIntoEffect > effectPeriod) {
-        m_fSecsIntoEffect -= effectPeriod;
-      }
       break;
     case CLOCK_TIMER_GLOBAL:
       generic_global_timer_update(
@@ -1111,12 +1121,29 @@ void Actor::UpdateInternal(float delta_time) {
 }
 
 std::string Actor::GetLineage() const {
-  std::string sPath;
-
-  if (m_pParent) {
-    sPath = m_pParent->GetLineage() + '/';
+  std::vector<const Actor*> lineage;
+  std::unordered_set<const Actor*> visited;
+  for (const Actor* current = this; current != nullptr;
+       current = current->GetParent()) {
+    if (!visited.insert(current).second) {
+      lineage.push_back(nullptr);
+      break;
+    }
+    lineage.push_back(current);
   }
-  sPath += ssprintf("<type %s> %s", typeid(*this).name(), m_sName.c_str());
+
+  std::string sPath;
+  for (auto it = lineage.rbegin(); it != lineage.rend(); ++it) {
+    if (!sPath.empty()) {
+      sPath += '/';
+    }
+    if (*it == nullptr) {
+      sPath += "<parent cycle>";
+    } else {
+      sPath += ssprintf(
+          "<type %s> %s", typeid(**it).name(), (*it)->GetName().c_str());
+    }
+  }
   return sPath;
 }
 
@@ -1218,8 +1245,21 @@ void Actor::HurryTweening(float factor) {
   }
   for (unsigned i = 0; i < m_Tweens.size(); ++i) {
     if (m_Tweens[i] != nullptr) {
-      m_Tweens[i]->info.m_fTimeLeftInTween *= factor;
-      m_Tweens[i]->info.m_fTweenTime *= factor;
+      TweenInfo& info = m_Tweens[i]->info;
+      const double timeLeft = static_cast<double>(info.m_fTimeLeftInTween) *
+                              static_cast<double>(factor);
+      const double tweenTime = static_cast<double>(info.m_fTweenTime) *
+                               static_cast<double>(factor);
+      if (!std::isfinite(timeLeft) || !std::isfinite(tweenTime) ||
+          timeLeft > std::numeric_limits<float>::max() ||
+          tweenTime > std::numeric_limits<float>::max()) {
+        WarnActorAuditFix(
+            "SRC_AUDIT_FIX SRC-3120: Actor ignored an overflowing hurry "
+            "factor.");
+        continue;
+      }
+      info.m_fTimeLeftInTween = static_cast<float>(timeLeft);
+      info.m_fTweenTime = static_cast<float>(tweenTime);
     }
   }
 }
@@ -1503,24 +1543,24 @@ void Actor::AddRotationH(float rot) {
   if (!IsFiniteActorValue(rot)) {
     return;
   }
-  RageQuatMultiply(
-      &DestTweenState().quat, DestTweenState().quat, RageQuatFromH(rot));
+  RageQuatMultiply(&DestTweenState().quat, DestTweenState().quat,
+                   RageQuatFromH(std::fmod(rot, 360.0f)));
 }
 
 void Actor::AddRotationP(float rot) {
   if (!IsFiniteActorValue(rot)) {
     return;
   }
-  RageQuatMultiply(
-      &DestTweenState().quat, DestTweenState().quat, RageQuatFromP(rot));
+  RageQuatMultiply(&DestTweenState().quat, DestTweenState().quat,
+                   RageQuatFromP(std::fmod(rot, 360.0f)));
 }
 
 void Actor::AddRotationR(float rot) {
   if (!IsFiniteActorValue(rot)) {
     return;
   }
-  RageQuatMultiply(
-      &DestTweenState().quat, DestTweenState().quat, RageQuatFromR(rot));
+  RageQuatMultiply(&DestTweenState().quat, DestTweenState().quat,
+                   RageQuatFromR(std::fmod(rot, 360.0f)));
 }
 
 void Actor::RunCommands(
@@ -1565,7 +1605,7 @@ void Actor::RunCommands(
 }
 
 float Actor::GetTweenTimeLeft() const {
-  float tot = 0;
+  double tot = 0.0;
 
   tot += m_fHibernateSecondsLeft;
 
@@ -1576,7 +1616,10 @@ float Actor::GetTweenTimeLeft() const {
     }
   }
 
-  return tot;
+  if (!std::isfinite(tot) || tot > std::numeric_limits<float>::max()) {
+    return std::numeric_limits<float>::max();
+  }
+  return static_cast<float>(tot);
 }
 
 /* This is a hack to change all tween states while leaving existing tweens

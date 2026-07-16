@@ -59,39 +59,40 @@ float ClampVolume(float volume) {
 }
 }  // namespace
 
-RageSoundManager::RageSoundManager()
-    : m_pDriver(nullptr), m_fVolumeOfNonCriticalSounds(1.0f) {}
+RageSoundManager::RageSoundManager() : m_fVolumeOfNonCriticalSounds(1.0f) {}
 
 static LocalizedString COULDNT_FIND_SOUND_DRIVER(
     "RageSoundManager", "Couldn't find a sound driver that works");
 void RageSoundManager::Init() {
-  m_pDriver = RageSoundDriver::Create(g_sSoundDrivers);
-  if (m_pDriver == nullptr) {
+  std::shared_ptr<RageSoundDriver> driver(
+      RageSoundDriver::Create(g_sSoundDrivers));
+  if (driver == nullptr) {
     RageException::Throw("%s", COULDNT_FIND_SOUND_DRIVER.GetValue().c_str());
   }
+  std::lock_guard<std::mutex> lock(m_DriverMutex);
+  m_pDriver = std::move(driver);
 }
 
 RageSoundManager::~RageSoundManager() {
   const bool trace = LogPlayOnceDiagnosticsEnabled();
+  const void* driverAddress = static_cast<void*>(GetDriver().get());
   if (LOG && trace) {
     LOG->Trace(
         "RageSoundManager::~RageSoundManager begin driver=%p preloaded=%zu",
-        static_cast<void*>(m_pDriver), m_mapPreloadedSounds.size());
+        driverAddress, m_mapPreloadedSounds.size());
   }
   /* Don't lock while deleting the driver (the decoder thread might deadlock).
    */
   if (LOG && trace) {
     LOG->Trace("RageSoundManager delete driver begin driver=%p",
-               static_cast<void*>(m_pDriver));
+               driverAddress);
   }
-  delete m_pDriver;
-  m_pDriver = nullptr;
+  Shutdown();
   if (LOG && trace) {
     LOG->Trace("RageSoundManager delete driver end");
   }
   size_t preloadIndex = 0;
-  for (std::pair<const std::string&, RageSoundReader_Preload*> s :
-       m_mapPreloadedSounds) {
+  for (const auto& s : m_mapPreloadedSounds) {
     ++preloadIndex;
     if (LOG && trace) {
       LOG->Trace(
@@ -121,44 +122,60 @@ RageSoundManager::~RageSoundManager() {
  * still using it; just shut down the driver.
  */
 void RageSoundManager::Shutdown() {
+  std::shared_ptr<RageSoundDriver> driver;
+  {
+    std::lock_guard<std::mutex> lock(m_DriverMutex);
+    driver.swap(m_pDriver);
+  }
   if (LOG && LogPlayOnceDiagnosticsEnabled()) {
     LOG->Trace(
         "RageSoundManager::Shutdown begin driver=%p",
-        static_cast<void*>(m_pDriver));
+        static_cast<void*>(driver.get()));
   }
-  RageUtil::SafeDelete(m_pDriver);
+  /* The last active caller retains its own snapshot.  Destroy the detached
+   * driver outside m_DriverMutex because driver teardown can wait on callbacks. */
+  driver.reset();
   if (LOG && LogPlayOnceDiagnosticsEnabled()) {
     LOG->Trace("RageSoundManager::Shutdown end");
   }
 }
 
+std::shared_ptr<RageSoundDriver> RageSoundManager::GetDriver() const {
+  std::lock_guard<std::mutex> lock(m_DriverMutex);
+  return m_pDriver;
+}
+
 bool RageSoundManager::StartMixing(RageSoundBase* pSound) {
-  if (m_pDriver == nullptr || pSound == nullptr) {
+  const std::shared_ptr<RageSoundDriver> driver = GetDriver();
+  if (driver == nullptr || pSound == nullptr) {
     return false;
   }
-  m_pDriver->StartMixing(pSound);
+  driver->StartMixing(pSound);
   return true;
 }
 
 void RageSoundManager::StopMixing(RageSoundBase* pSound) {
-  if (m_pDriver != nullptr && pSound != nullptr) {
-    m_pDriver->StopMixing(pSound);
+  const std::shared_ptr<RageSoundDriver> driver = GetDriver();
+  if (driver != nullptr && pSound != nullptr) {
+    driver->StopMixing(pSound);
   }
 }
 
 bool RageSoundManager::Pause(RageSoundBase* pSound, bool bPause) {
-  if (m_pDriver == nullptr || pSound == nullptr) {
+  const std::shared_ptr<RageSoundDriver> driver = GetDriver();
+  if (driver == nullptr || pSound == nullptr) {
     return false;
   } else {
-    return m_pDriver->PauseMixing(pSound, bPause);
+    return driver->PauseMixing(pSound, bPause);
   }
 }
 
 int64_t RageSoundManager::GetPosition(RageTimer* pTimer) const {
-  if (m_pDriver == nullptr) {
+  const std::shared_ptr<RageSoundDriver> driver = GetDriver();
+  if (driver == nullptr) {
     return 0;
   }
-  return m_pDriver->GetHardwareFrame(pTimer);
+  return driver->GetHardwareFrame(pTimer);
 }
 
 void RageSoundManager::Update() {
@@ -204,26 +221,30 @@ void RageSoundManager::Update() {
         lastDeletedSound.c_str());
   }
 
-  if (m_pDriver != nullptr) {
-    m_pDriver->Update();
+  const std::shared_ptr<RageSoundDriver> driver = GetDriver();
+  if (driver != nullptr) {
+    driver->Update();
   }
 }
 
 float RageSoundManager::GetPlayLatency() const {
-  if (m_pDriver == nullptr) {
+  const std::shared_ptr<RageSoundDriver> driver = GetDriver();
+  if (driver == nullptr) {
     return 0;
   }
 
-  return m_pDriver->GetPlayLatency();
+  return driver->GetPlayLatency();
 }
 
 int RageSoundManager::GetDriverSampleRate() const {
-  if (m_pDriver == nullptr) {
+  const std::shared_ptr<RageSoundDriver> driver = GetDriver();
+  if (driver == nullptr) {
     return FALLBACK_SAMPLE_RATE;
   }
 
   // Returns the *actual* operating rate of the loaded driver
-  return m_pDriver->GetSampleRate();
+  const int sampleRate = driver->GetSampleRate();
+  return sampleRate > 0 ? sampleRate : FALLBACK_SAMPLE_RATE;
 }
 
 /* If the given path is loaded, return a copy; otherwise return nullptr.

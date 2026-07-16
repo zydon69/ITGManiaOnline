@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "PerfDiagnostics.h"
 #include "RageLog.h"
 #include "RageSoundConstants.h"
 #include "RageSoundMixBuffer.h"
@@ -267,7 +268,7 @@ void RageSoundReader_Merge::Finish(int iPreferredSampleRate) {
 
 int RageSoundReader_Merge::SetPosition(int iFrame) {
   int iRet = 0;
-  std::vector<RageSoundReader*> seeked;
+  std::vector<std::pair<RageSoundReader*, std::int64_t>> seeked;
   try {
     seeked.reserve(m_aSounds.size());
   } catch (const std::bad_alloc&) {
@@ -280,15 +281,22 @@ int RageSoundReader_Merge::SetPosition(int iFrame) {
     if (pSound == nullptr) {
       continue;
     }
+    const std::int64_t previousFrame = pSound->GetNextSourceFrame64();
     int iThisRet = pSound->SetPosition(iFrame);
     if (iThisRet == -1) {
-      for (RageSoundReader* seekedSound : seeked) {
-        seekedSound->SetPosition(ClampInt64ToInt(m_iNextSourceFrame));
+      bool rollbackFailed = false;
+      for (const auto& previous : seeked) {
+        if (previous.first->SetPosition(ClampInt64ToInt(previous.second)) < 0) {
+          rollbackFailed = true;
+        }
       }
-      SetError("SRC_AUDIT_FIX SRC-2882: merge source seek failed");
+      SetError(
+          rollbackFailed
+              ? "SRC_AUDIT_FIX SRC-3174: merge seek and rollback failed"
+              : "SRC_AUDIT_FIX SRC-2882: merge source seek failed");
       return ERROR;
     }
-    seeked.push_back(pSound);
+    seeked.emplace_back(pSound, previousFrame);
     if (iThisRet > 0) {
       iRet = 1;
     }
@@ -394,7 +402,7 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
       SetError("SRC_AUDIT_FIX SRC-2884: merge source reader is null");
       return ERROR;
     }
-    aNextSourceFrames[i] = m_aSounds[i]->GetNextSourceFrame();
+    aNextSourceFrames[i] = m_aSounds[i]->GetNextSourceFrame64();
     aRatios[i] = m_aSounds[i]->GetStreamToSourceRatio();
     if (!IsUsableRatio(aRatios[i])) {
       SetError("SRC_AUDIT_FIX SRC-2884: merge source has invalid stream "
@@ -498,7 +506,7 @@ int RageSoundReader_Merge::Read(float* pBuffer, int iFrames) {
       // }
 
       int iGotFrames = pSound->Read(Buffer, iFrames - iFramesRead);
-      aNextSourceFrames[i] = m_aSounds[i]->GetNextSourceFrame();
+      aNextSourceFrames[i] = m_aSounds[i]->GetNextSourceFrame64();
       aRatios[i] = m_aSounds[i]->GetStreamToSourceRatio();
       //	LOG->Trace( "read %i from %i; %i -> %i", iGotFrames, i, oldf,
       // aNextSourceFrames[i] );
@@ -618,6 +626,9 @@ void RageSoundReader_Merge::ClearError() const {
 }
 
 void RageSoundReader_Merge::SetError(const std::string& sError) const {
+  if (sError.find("SRC_AUDIT_FIX SRC-") != std::string::npos) {
+    LogReviewSrcDiagnostics("%s", sError.c_str());
+  }
   m_sError = sError;
 }
 

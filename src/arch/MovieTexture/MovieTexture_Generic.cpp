@@ -153,9 +153,10 @@ void MovieTexture_Generic::DestroyTexture() {
 
   if (DISPLAY != nullptr && texture_handle_) {
     DISPLAY->DeleteTexture(texture_handle_);
-    texture_handle_ = 0;
   }
+  texture_handle_ = 0;
 
+  render_target_.reset();
   intermediate_texture_ = nullptr;
 }
 
@@ -217,14 +218,23 @@ class RageMovieTexture_Generic_Intermediate : public RageTexture {
 
 void MovieTexture_Generic::Invalidate() {
   texture_handle_ = 0;
+  if (render_target_ != nullptr) {
+    render_target_->Invalidate();
+  }
   if (intermediate_texture_ != nullptr) {
     intermediate_texture_->Invalidate();
   }
 }
 
 bool MovieTexture_Generic::CreateTexture() {
-  if (texture_handle_ || render_target_ != nullptr) {
+  if (texture_handle_ ||
+      (render_target_ != nullptr && render_target_->IsValid())) {
     return true;
+  }
+  if (render_target_ != nullptr) {
+    sprite_->UnloadTexture();
+    intermediate_texture_.reset();
+    render_target_.reset();
   }
   if (DISPLAY == nullptr || TEXTUREMAN == nullptr || decoder_ == nullptr) {
     return false;
@@ -291,6 +301,10 @@ bool MovieTexture_Generic::CreateTexture() {
         m_iImageWidth, m_iImageHeight,
         TEXTUREMAN->GetPrefs().m_iMovieColorDepth == 32, fmt);
     if (!IsValidMovieSurface(surface_)) {
+      delete surface_;
+      surface_ = nullptr;
+      delete texture_lock_;
+      texture_lock_ = nullptr;
       return false;
     }
     if (texture_lock_ != nullptr) {
@@ -380,8 +394,14 @@ bool MovieTexture_Generic::CreateTexture() {
      * the refcount when it unloads the texture.  Normally we'd make a "copy",
      * but we can't access RageTextureManager from here.  Just increment the
      * refcount. */
-    ++intermediate_texture_->m_iRefCount;
-    sprite_->SetTexture(intermediate_texture_.get());
+    RageTexture* sprite_texture =
+        TEXTUREMAN->CopyTexture(intermediate_texture_.get());
+    if (sprite_texture == nullptr) {
+      intermediate_texture_.reset();
+      render_target_.reset();
+      return false;
+    }
+    sprite_->SetTexture(sprite_texture);
     sprite_->SetEffectMode(GetEffectMode(fmt));
 
     return true;
@@ -458,8 +478,12 @@ void MovieTexture_Generic::UpdateFrame() {
   // loop will continue attempting to find a displayable frame until we hit that
   // limit. If we really can't find a frame after that, then the currently
   // displayed frame will appear stuck.
-  while (frame_ret < 0 && decoder_->IsCurrentFrameReady()) {
+  constexpr int kMaxSkippedFramesPerUpdate = 256;
+  int skipped_frames = 0;
+  while (frame_ret < 0 && decoder_->IsCurrentFrameReady() &&
+         skipped_frames < kMaxSkippedFramesPerUpdate) {
     frame_ret = decoder_->GetFrame(surface_);
+    ++skipped_frames;
 
     // Are we looping?
     if (decoder_->EndOfMovie() && loop_) {
@@ -510,7 +534,12 @@ void MovieTexture_Generic::UpdateFrame() {
       return;
     }
     render_target_->BeginRenderingTo(false);
-    sprite_->Draw();
+    try {
+      sprite_->Draw();
+    } catch (...) {
+      render_target_->FinishRenderingTo();
+      throw;
+    }
     render_target_->FinishRenderingTo();
   } else {
     if (texture_lock_ == nullptr) {
@@ -563,7 +592,7 @@ void MovieTexture_Generic::SetPosition(float seconds) {
 }
 
 void MovieTexture_Generic::SetPlaybackRate(float rate) {
-  if (!std::isfinite(rate)) {
+  if (!std::isfinite(rate) || rate < 0.0f) {
     rate = 0.0f;
   }
   rate_ = rate;

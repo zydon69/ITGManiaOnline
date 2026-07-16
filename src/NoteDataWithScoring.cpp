@@ -37,14 +37,11 @@ bool IsValidPlayerNumberForScoring(PlayerNumber pn) {
   return pn == PLAYER_INVALID || (pn >= PLAYER_1 && pn < NUM_PLAYERS);
 }
 
-bool IsValidScoringRow(unsigned row) {
-  return row <= MAX_NOTE_ROW;
-}
+bool IsValidScoringRow(unsigned row) { return row <= MAX_NOTE_ROW; }
 
 bool HasScoringTapType(const TapNote& tn) {
-  return tn.type != TapNoteType_Empty && tn.type != TapNoteType_Mine &&
-         tn.type != TapNoteType_Fake &&
-         tn.type != TapNoteType_AutoKeysound;
+  return tn.type == TapNoteType_Tap || tn.type == TapNoteType_HoldHead ||
+         tn.type == TapNoteType_Lift || tn.type == TapNoteType_Attack;
 }
 
 TapNoteScore NormalizeTapNoteScore(
@@ -61,7 +58,7 @@ TapNoteScore NormalizeTapNoteScore(
 
 TapNoteScore NormalizeThreshold(
     TapNoteScore tns, TapNoteScore fallback, const char* context) {
-  if (IsValidTapNoteScore(tns)) {
+  if (tns >= TNS_Miss && tns <= TNS_W1) {
     return tns;
   }
   LOG->Warn(
@@ -110,7 +107,7 @@ int ClampRadarCount(float value, RadarCategory rc) {
     return 0;
   }
   const float maxInt = static_cast<float>(std::numeric_limits<int>::max());
-  if (value > maxInt) {
+  if (value >= maxInt) {
     LOG->Warn(
         "SRC_AUDIT_FIX: NoteDataWithScoring saturated possible radar %s value "
         "%f.",
@@ -171,8 +168,8 @@ int LastTapNoteScoreTrack(const NoteData& in, unsigned iRow, PlayerNumber pn) {
       continue;
     }
 
-    TapNoteScore tns = NormalizeTapNoteScore(
-        tn.result.tns, TNS_None, "LastTapNoteScoreTrack");
+    TapNoteScore tns =
+        NormalizeTapNoteScore(tn.result.tns, TNS_None, "LastTapNoteScoreTrack");
 
     if (tns == TNS_Miss || tns == TNS_None) {
       return t;
@@ -338,7 +335,7 @@ float GetActualChaosRadarValue(
     const NoteData& in, float fSongSeconds, const PlayerStageStats& pss) {
   const int iPossibleDP = pss.m_iPossibleDancePoints;
   if (iPossibleDP == 0) {
-    return 1;
+    return 0.0f;
   }
   if (iPossibleDP < 0) {
     LOG->Warn(
@@ -349,6 +346,13 @@ float GetActualChaosRadarValue(
   }
 
   const int ActualDP = pss.m_iActualDancePoints;
+  if (ActualDP < 0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: NoteDataWithScoring clamped negative actual dance "
+        "points %i for chaos radar.",
+        ActualDP);
+    return 0.0f;
+  }
   const float chaos = float(ActualDP) / iPossibleDP;
   if (!std::isfinite(chaos)) {
     LOG->Warn(
@@ -441,9 +445,9 @@ static void DoRowEndRadarActualCalc(garv_state& state, RadarValues& out) {
           state.jumps_hit, state.last_tns_on_row >= state.jumps_tns,
           "jumps_hit");
     }
-    const int active_hold_count =
-        std::max(0, static_cast<int>(state.hold_ends.size()) -
-                        state.num_holds_on_curr_row);
+    const int active_hold_count = std::max(
+        0,
+        static_cast<int>(state.hold_ends.size()) - state.num_holds_on_curr_row);
     if (state.num_notes_on_curr_row + active_hold_count >= 3) {
       if (state.worst_tns_on_row >= state.hands_tns) {
         size_t holds_down = 0;
@@ -451,8 +455,7 @@ static void DoRowEndRadarActualCalc(garv_state& state, RadarValues& out) {
           holds_down += (state.curr_row <= state.hold_ends[n].last_held_row);
         }
         state.hands_hit = IncrementIf(
-            state.hands_hit, holds_down == state.hold_ends.size(),
-            "hands_hit");
+            state.hands_hit, holds_down == state.hold_ends.size(), "hands_hit");
       }
     }
   }
@@ -482,7 +485,15 @@ void NoteDataWithScoring::GetActualRadarValues(
   // Some of this logic is similar or identical to
   // NoteDataUtil::CalculateRadarValues because I couldn't figure out a good
   // way to combine them into one. -Kyz
-  PlayerNumber pn = pss.m_for_multiplayer ? PLAYER_INVALID : pss.m_player_number;
+  if (!std::isfinite(song_seconds) || song_seconds < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: NoteDataWithScoring normalized invalid song duration "
+        "%f to 0.",
+        song_seconds);
+    song_seconds = 0.0f;
+  }
+  PlayerNumber pn =
+      pss.m_for_multiplayer ? PLAYER_INVALID : pss.m_player_number;
   if (!IsValidPlayerNumberForScoring(pn)) {
     LOG->Warn(
         "SRC_AUDIT_FIX: NoteDataWithScoring using PLAYER_INVALID for invalid "
@@ -575,8 +586,8 @@ void NoteDataWithScoring::GetActualRadarValues(
             state.notes_hit_for_stream = IncrementIf(
                 state.notes_hit_for_stream, tns >= state.stream_tns,
                 "notes_hit_for_stream");
-            state.notes_hit =
-                IncrementIf(state.notes_hit, tns >= state.taps_tns, "notes_hit");
+            state.notes_hit = IncrementIf(
+                state.notes_hit, tns >= state.taps_tns, "notes_hit");
             if (tns < state.worst_tns_on_row) {
               state.worst_tns_on_row = tns;
             }
@@ -617,8 +628,8 @@ void NoteDataWithScoring::GetActualRadarValues(
           } else if (curr_note->type == TapNoteType_Lift) {
             TapNoteScore tns = NormalizeTapNoteScore(
                 curr_note->result.tns, TNS_None, "actual radar lift");
-            state.lifts_hit =
-                IncrementIf(state.lifts_hit, tns >= state.lifts_tns, "lifts_hit");
+            state.lifts_hit = IncrementIf(
+                state.lifts_hit, tns >= state.lifts_tns, "lifts_hit");
           }
           break;
         case TapNoteType_Mine:
@@ -635,16 +646,28 @@ void NoteDataWithScoring::GetActualRadarValues(
   }
   DoRowEndRadarActualCalc(state, out);
 
-  int note_count = ClampRadarCount(possible[RadarCategory_Notes], RadarCategory_Notes);
-  int jump_count = ClampRadarCount(possible[RadarCategory_Jumps], RadarCategory_Jumps);
-  int hold_count = ClampRadarCount(possible[RadarCategory_Holds], RadarCategory_Holds);
+  int note_count =
+      ClampRadarCount(possible[RadarCategory_Notes], RadarCategory_Notes);
+  int jump_count =
+      ClampRadarCount(possible[RadarCategory_Jumps], RadarCategory_Jumps);
+  int hold_count =
+      ClampRadarCount(possible[RadarCategory_Holds], RadarCategory_Holds);
   float hittable_steps_length = 0.0f;
   if (first_hittable_row != -1 && last_hittable_row != -1) {
     if (timing != nullptr) {
-      hittable_steps_length = std::max(
-          0.0f,
-          timing->GetElapsedTimeFromBeat(NoteRowToBeat(last_hittable_row)) -
-              timing->GetElapsedTimeFromBeat(NoteRowToBeat(first_hittable_row)));
+      const float firstTime =
+          timing->GetElapsedTimeFromBeat(NoteRowToBeat(first_hittable_row));
+      const float lastTime =
+          timing->GetElapsedTimeFromBeat(NoteRowToBeat(last_hittable_row));
+      const float duration = lastTime - firstTime;
+      if (std::isfinite(duration) && duration > 0.0f) {
+        hittable_steps_length = duration;
+      } else if (!std::isfinite(duration)) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: NoteDataWithScoring ignored non-finite hittable "
+            "duration %f.",
+            duration);
+      }
     } else if (std::isfinite(song_seconds) && song_seconds > 0.0f) {
       hittable_steps_length = song_seconds;
     }

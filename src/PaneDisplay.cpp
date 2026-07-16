@@ -1,8 +1,8 @@
 #include "PaneDisplay.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cctype>
+#include <cmath>
 #include <string>
 
 #include "ActorFrame.h"
@@ -18,18 +18,13 @@
 #include "Profile.h"
 #include "ProfileManager.h"
 #include "RadarValues.h"
-#include "RageThreads.h"
 #include "RageLog.h"
+#include "RageThreads.h"
 #include "RageUtil.h"
 #include "Song.h"
 #include "Steps.h"
 #include "ThemeManager.h"
 #include "XmlFile.h"
-
-#define SHIFT_X(pc) \
-  THEME->GetMetricF(sMetricsGroup, ssprintf("ShiftP%iX", pc + 1))
-#define SHIFT_Y(pc) \
-  THEME->GetMetricF(sMetricsGroup, ssprintf("ShiftP%iY", pc + 1))
 
 static const char* PaneCategoryNames[] = {
     "NumSteps",
@@ -102,7 +97,8 @@ bool IsSafeCountFormat(const std::string& format) {
       return false;
     }
     size_t j = i + 1;
-    while (j < format.size() && std::string("-+ #0").find(format[j]) != std::string::npos) {
+    while (j < format.size() &&
+           std::string("-+ #0").find(format[j]) != std::string::npos) {
       ++j;
     }
     int width = 0;
@@ -130,7 +126,7 @@ bool IsSafeCountFormat(const std::string& format) {
       return false;
     }
     if (std::string("fFeEgG").find(format[j]) == std::string::npos) {
-        return false;
+      return false;
     }
   }
   return conversions == 1;
@@ -218,6 +214,30 @@ PaneDisplay::PaneDisplay() {
   m_bLoaded = false;
 }
 
+PaneDisplay::PaneDisplay(const PaneDisplay& cpy)
+    : ActorFrame(cpy),
+      m_textContents(cpy.m_textContents),
+      m_Labels(cpy.m_Labels),
+      m_ContentsFrame(cpy.m_ContentsFrame),
+      m_PlayerNumber(cpy.m_PlayerNumber),
+      m_bLoaded(cpy.m_bLoaded),
+      EMPTY_MACHINE_HIGH_SCORE_NAME(cpy.EMPTY_MACHINE_HIGH_SCORE_NAME),
+      NOT_AVAILABLE(cpy.NOT_AVAILABLE),
+      COUNT_FORMAT(cpy.COUNT_FORMAT),
+      NULL_COUNT_STRING(cpy.NULL_COUNT_STRING) {
+  m_ContentsFrame.RemoveAllChildren();
+  if (!m_bLoaded) {
+    return;
+  }
+  FOREACH_ENUM(PaneCategory, pc) {
+    m_ContentsFrame.AddChild(&m_textContents[pc]);
+    if (m_Labels[pc].IsLoaded()) {
+      m_ContentsFrame.AddChild(m_Labels[pc]);
+    }
+  }
+  AddChild(&m_ContentsFrame);
+}
+
 void PaneDisplay::ResetLoadedActors() {
   RemoveChild(&m_ContentsFrame);
   FOREACH_ENUM(PaneCategory, pc) {
@@ -273,13 +293,17 @@ void PaneDisplay::Load(const std::string& sMetricsGroup, PlayerNumber pn) {
     ActorUtil::SetXY(m_textContents[pc], sResolvedMetricsGroup);
     m_ContentsFrame.AddChild(&m_textContents[pc]);
 
-    m_Labels[pc].Load(
-        THEME->GetPathG(
-            sResolvedMetricsGroup, "label " + PaneCategoryToString(pc)));
-    m_Labels[pc]->SetName(PaneCategoryToString(pc) + "Label");
-    ActorUtil::LoadAllCommands(*m_Labels[pc], sResolvedMetricsGroup);
-    ActorUtil::SetXY(m_Labels[pc], sResolvedMetricsGroup);
-    m_ContentsFrame.AddChild(m_Labels[pc]);
+    m_Labels[pc].Load(THEME->GetPathG(
+        sResolvedMetricsGroup, "label " + PaneCategoryToString(pc)));
+    if (m_Labels[pc].IsLoaded()) {
+      m_Labels[pc]->SetName(PaneCategoryToString(pc) + "Label");
+      ActorUtil::LoadAllCommands(*m_Labels[pc], sResolvedMetricsGroup);
+      ActorUtil::SetXY(m_Labels[pc], sResolvedMetricsGroup);
+      m_ContentsFrame.AddChild(m_Labels[pc]);
+    } else {
+      WarnPaneDisplayAuditFix(
+          "SRC_AUDIT_FIX SRC-2976: PaneDisplay loaded without a label actor.");
+    }
 
     ActorUtil::LoadAllCommandsFromName(
         m_textContents[pc], sResolvedMetricsGroup, PaneCategoryToString(pc));
@@ -332,8 +356,10 @@ void PaneDisplay::LoadFromNode(const XNode* pNode) {
 void PaneDisplay::GetPaneTextAndLevel(
     PaneCategory c, std::string& sTextOut, float& fLevelOut) {
   if (c < PaneCategory_NumSteps || c >= NUM_PaneCategory) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX SRC-267: PaneDisplay ignored invalid category %i.", c);
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-267: PaneDisplay ignored invalid category %i.", c);
+    }
     sTextOut = NOT_AVAILABLE;
     fLevelOut = 0;
     return;

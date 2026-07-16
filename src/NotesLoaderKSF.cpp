@@ -1,7 +1,9 @@
 #include "NotesLoaderKSF.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -108,7 +110,7 @@ static bool NormalizeTickCount(
 }
 
 static bool ExtractDirectMoveValue(
-    const std::string& row, std::string& valueOut, const std::string& path) {
+    const std::string& row, float& valueOut, const std::string& path) {
   if (row.size() <= 2) {
     LOG->UserLog(
         "Song file", path,
@@ -117,19 +119,32 @@ static bool ExtractDirectMoveValue(
     return false;
   }
 
-  valueOut = row.substr(2);
-  Trim(valueOut);
-  if (!valueOut.empty() && valueOut.back() == ';') {
-    valueOut.pop_back();
-    Trim(valueOut);
+  std::string rawValue = row.substr(2);
+  Trim(rawValue);
+  if (!rawValue.empty() && rawValue.back() == ';') {
+    rawValue.pop_back();
+    Trim(rawValue);
   }
 
-  if (valueOut.empty()) {
+  if (rawValue.empty()) {
     LOG->UserLog(
         "Song file", path,
         "SRC_AUDIT_FIX ignored KSF DirectMove command \"%s\" with an empty "
         "value.",
         row.c_str());
+    return false;
+  }
+
+  char* end = nullptr;
+  errno = 0;
+  valueOut = std::strtof(rawValue.c_str(), &end);
+  if (end == rawValue.c_str() || end == nullptr || *end != '\0' ||
+      errno == ERANGE || !std::isfinite(valueOut)) {
+    LOG->UserLog(
+        "Song file", path,
+        "SRC_AUDIT_FIX ignored KSF DirectMove command \"%s\" with invalid "
+        "numeric value \"%s\".",
+        row.c_str(), rawValue.c_str());
     return false;
   }
   return true;
@@ -445,11 +460,10 @@ static bool LoadFromKSFFile(
       // I'm making some experiments, please spare me...
       // continue;
 
-      std::string temp;
-      if (!ExtractDirectMoveValue(sRowString, temp, sPath)) {
+      float numTemp = 0.0f;
+      if (!ExtractDirectMoveValue(sRowString, numTemp, sPath)) {
         continue;
       }
-      float numTemp = StringToFloat(temp);
       if (BeginsWith(sRowString, "|T")) {
         // duh
         int parsedTickCount = static_cast<int>(numTemp);

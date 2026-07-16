@@ -1,6 +1,7 @@
 #include "CourseUtil.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <map>
 #include <string>
@@ -185,6 +186,13 @@ static bool CompareCoursePointersByRanking(
 }
 
 static bool GetCurrentCourseStepsType(StepsType& stOut, const char* sContext) {
+  if (GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3086: %s requested without GAMESTATE; falling back "
+        "to title sort.",
+        sContext);
+    return false;
+  }
   const Style* pStyle = GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
   if (pStyle == nullptr) {
     LOG->Warn(
@@ -300,10 +308,19 @@ void CourseUtil::MoveRandomToEnd(std::vector<Course*>& vpCoursesInOut) {
   stable_sort(vpCoursesInOut.begin(), vpCoursesInOut.end(), CompareRandom);
 }
 
-static std::map<const Course*, std::string> course_sort_val;
+static thread_local std::map<const Course*, std::string> course_sort_val;
 
 bool CompareCoursePointersBySortValueAscending(
     const Course* pSong1, const Course* pSong2) {
+  if (pSong1 == pSong2) {
+    return false;
+  }
+  if (pSong1 == nullptr) {
+    return false;
+  }
+  if (pSong2 == nullptr) {
+    return true;
+  }
   const auto p1 = course_sort_val.find(pSong1);
   const auto p2 = course_sort_val.find(pSong2);
   const std::string s1 =
@@ -315,6 +332,15 @@ bool CompareCoursePointersBySortValueAscending(
 
 bool CompareCoursePointersBySortValueDescending(
     const Course* pSong1, const Course* pSong2) {
+  if (pSong1 == pSong2) {
+    return false;
+  }
+  if (pSong1 == nullptr) {
+    return false;
+  }
+  if (pSong2 == nullptr) {
+    return true;
+  }
   const auto p1 = course_sort_val.find(pSong1);
   const auto p2 = course_sort_val.find(pSong2);
   const std::string s1 =
@@ -395,9 +421,11 @@ void CourseUtil::SortCoursePointerArrayByNumPlays(
     return;
   }
   course_sort_val.clear();
-  for (unsigned i = 0; i < vpCoursesInOut.size(); ++i) {
-    course_sort_val[vpCoursesInOut[i]] =
-        ssprintf("%09i", pProfile->GetCourseNumTimesPlayed(vpCoursesInOut[i]));
+  for (Course* pCourse : vpCoursesInOut) {
+    if (pCourse != nullptr) {
+      course_sort_val[pCourse] =
+          ssprintf("%09i", pProfile->GetCourseNumTimesPlayed(pCourse));
+    }
   }
   stable_sort(
       vpCoursesInOut.begin(), vpCoursesInOut.end(),
@@ -420,6 +448,9 @@ void CourseUtil::SortByMostRecentlyPlayedForMachine(
 
   course_sort_val.clear();
   for (const Course* c : vpCoursesInOut) {
+    if (c == nullptr) {
+      continue;
+    }
     int iNumTimesPlayed = pProfile->GetCourseNumTimesPlayed(c);
     std::string val = iNumTimesPlayed
                           ? pProfile->GetCourseLastPlayedDateTime(c).GetString()
@@ -434,6 +465,7 @@ void CourseUtil::SortByMostRecentlyPlayedForMachine(
 }
 
 void CourseUtil::MakeDefaultEditCourseEntry(CourseEntry& out) {
+  out = CourseEntry();
   Song* pDefaultSong =
       GAMESTATE == nullptr ? nullptr : GAMESTATE->GetDefaultSong();
   if (pDefaultSong == nullptr) {
@@ -451,12 +483,12 @@ void CourseUtil::MakeDefaultEditCourseEntry(CourseEntry& out) {
 
 void CourseUtil::AutogenEndlessFromGroup(
     const std::string& sGroupName, Difficulty diff, Course& out) {
-  if (SONGMAN == nullptr || THEME == nullptr) {
+  out = Course();
+  if (SONGMAN == nullptr || THEME == nullptr || !THEME->IsThemeLoaded()) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-671: cannot autogen endless course for group '%s' "
         "without SONGMAN or THEME.",
         sGroupName.c_str());
-    out.m_vEntries.clear();
     return;
   }
   if (diff < Difficulty_Beginner || diff >= NUM_Difficulty) {
@@ -501,10 +533,6 @@ void CourseUtil::AutogenNonstopFromGroup(
     const std::string& sGroupName, Difficulty diff, Course& out) {
   AutogenEndlessFromGroup(sGroupName, diff, out);
 
-  out.m_bRepeat = false;
-
-  out.m_sMainTitle += " Random";
-
   if (out.m_vEntries.empty()) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-128: skipped nonstop autogen entries for empty group "
@@ -512,6 +540,9 @@ void CourseUtil::AutogenNonstopFromGroup(
         sGroupName.c_str());
     return;
   }
+
+  out.m_bRepeat = false;
+  out.m_sMainTitle += " Random";
 
   // resize to 4
   while (out.m_vEntries.size() < 4) {
@@ -525,6 +556,7 @@ void CourseUtil::AutogenNonstopFromGroup(
 void CourseUtil::AutogenOniFromArtist(
     const std::string& sArtistName, std::string sArtistNameTranslit,
     std::vector<Song*> aSongs, Difficulty dc, Course& out) {
+  out = Course();
   aSongs.erase(
       std::remove(aSongs.begin(), aSongs.end(), nullptr), aSongs.end());
   if (sArtistName.empty() || aSongs.empty()) {
@@ -532,7 +564,6 @@ void CourseUtil::AutogenOniFromArtist(
         "SRC_AUDIT_FIX SRC-672: skipped artist oni autogen for artist '%s' "
         "with %zu valid songs.",
         sArtistName.c_str(), aSongs.size());
-    out.m_vEntries.clear();
     return;
   }
   if (dc < Difficulty_Beginner || dc >= NUM_Difficulty) {
@@ -557,7 +588,7 @@ void CourseUtil::AutogenOniFromArtist(
    * lowercasing "by" puts more emphasis on the artist's name. It also sorts
    * them together. */
   out.m_sMainTitle = "by " + sArtistName;
-  if (sArtistNameTranslit != sArtistName) {
+  if (!sArtistNameTranslit.empty() && sArtistNameTranslit != sArtistName) {
     out.m_sMainTitleTranslit = "by " + sArtistNameTranslit;
   }
 
@@ -649,8 +680,24 @@ bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
     return false;
   }
   Trim(sNewName);
-  if (sNewName.empty()) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-133: refusing to save course with empty name");
+  const bool hasUnsafeFileCharacter =
+      sNewName.find_first_of("\\/:*?\"<>|") != std::string::npos ||
+      std::any_of(sNewName.begin(), sNewName.end(), [](unsigned char c) {
+        return c < 0x20 || c == 0x7f;
+      });
+  if (sNewName.empty() || sNewName == "." || sNewName == ".." ||
+      hasUnsafeFileCharacter || !utf8_is_valid(sNewName)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3087: refusing to save course with unsafe name "
+        "'%s'.",
+        sNewName.c_str());
+    return false;
+  }
+  if (FILEMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3087: refusing to save course '%s' without "
+        "FILEMAN.",
+        sNewName.c_str());
     return false;
   }
 
@@ -660,6 +707,13 @@ bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
   const std::string sOldName = pCourse->m_sMainTitle;
   std::string sNewFilePath;
   if (pCourse->IsAnEdit()) {
+    if (PROFILEMAN == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-3087: refusing to save edit course '%s' without "
+          "PROFILEMAN.",
+          sNewName.c_str());
+      return false;
+    }
     const ProfileSlot slot = pCourse->GetLoadedFromProfileSlot();
     if (!PROFILEMAN->IsPersistentProfile(slot)) {
       LOG->Warn(
@@ -710,6 +764,29 @@ bool EditCourseUtil::RemoveAndDeleteFile(Course* pCourse) {
         pCourse->m_sPath.c_str());
     return false;
   }
+  if (SONGMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3088: refusing to delete course '%s' without "
+        "SONGMAN.",
+        pCourse->m_sPath.c_str());
+    return false;
+  }
+  if (pCourse->IsAnEdit() && PROFILEMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3088: refusing to delete edit course '%s' without "
+        "PROFILEMAN.",
+        pCourse->m_sPath.c_str());
+    return false;
+  }
+  std::vector<Course*> loadedCourses;
+  SONGMAN->GetAllCourses(loadedCourses, true);
+  if (std::find(loadedCourses.begin(), loadedCourses.end(), pCourse) ==
+      loadedCourses.end()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3088: refusing to delete foreign course '%s'.",
+        pCourse->m_sPath.c_str());
+    return false;
+  }
   if (!FILEMAN->Remove(pCourse->m_sPath)) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-674: failed to delete course file '%s'.",
@@ -724,13 +801,6 @@ bool EditCourseUtil::RemoveAndDeleteFile(Course* pCourse) {
         pCourse->m_sPath.c_str(), sCachePath.c_str());
   }
   if (pCourse->IsAnEdit()) {
-    if (PROFILEMAN == nullptr || SONGMAN == nullptr) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX SRC-674: deleted edit course '%s' but cannot reload "
-          "edits without PROFILEMAN or SONGMAN.",
-          pCourse->m_sPath.c_str());
-      return true;
-    }
     const ProfileSlot slot = pCourse->GetLoadedFromProfileSlot();
     if (PROFILEMAN->IsPersistentProfile(slot)) {
       const std::string sProfileDir = PROFILEMAN->GetProfileDir(slot);
@@ -744,13 +814,6 @@ bool EditCourseUtil::RemoveAndDeleteFile(Course* pCourse) {
           pCourse->m_sPath.c_str(), slot);
     }
   } else {
-    if (SONGMAN == nullptr) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX SRC-674: deleted course '%s' but cannot remove loaded "
-          "course without SONGMAN.",
-          pCourse->m_sPath.c_str());
-      return true;
-    }
     SONGMAN->DeleteCourse(pCourse);
     delete pCourse;
   }
@@ -843,6 +906,17 @@ void EditCourseUtil::PrepareForPlay() {
         "profile or current course.");
     return;
   }
+  if (!std::isfinite(pCourse->m_fGoalSeconds) ||
+      pCourse->m_fGoalSeconds < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3089: cannot prepare edit course with invalid goal "
+        "seconds %.3f.",
+        pCourse->m_fGoalSeconds);
+    return;
+  }
+  const float maxGoalSeconds = MAX_WORKOUT_MINUTES * 60.0f;
+  const int goalSeconds = static_cast<int>(
+      std::min(pCourse->m_fGoalSeconds, maxGoalSeconds));
 
   GAMESTATE->m_pCurSong.Set(
       nullptr);  // CurSong will be set if we back out.  Set it back to nullptr
@@ -851,7 +925,7 @@ void EditCourseUtil::PrepareForPlay() {
   GAMESTATE->m_bSideIsJoined[0] = true;
 
   pProfile->m_GoalType = GoalType_Time;
-  pProfile->m_iGoalSeconds = static_cast<int>(pCourse->m_fGoalSeconds);
+  pProfile->m_iGoalSeconds = goalSeconds;
 }
 
 void EditCourseUtil::GetAllEditCourses(std::vector<Course*>& vpCoursesOut) {

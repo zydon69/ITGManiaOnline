@@ -80,8 +80,10 @@ FadingBanner::FadingBanner() {
 }
 
 void FadingBanner::ScaleToClipped(float fWidth, float fHeight) {
-  if (!IsFiniteFloat(fWidth) || !IsFiniteFloat(fHeight) || fWidth < 0.0f ||
-      fHeight < 0.0f) {
+  const bool validWidth = fWidth == -1.0f || fWidth > 0.0f;
+  const bool validHeight = fHeight == -1.0f || fHeight > 0.0f;
+  if (!IsFiniteFloat(fWidth) || !IsFiniteFloat(fHeight) || !validWidth ||
+      !validHeight) {
     WarnFadingBannerAuditFix(ssprintf(
         "SRC_AUDIT_FIX SRC-1047: FadingBanner ignored invalid clip size "
         "%.6fx%.6f.",
@@ -386,9 +388,26 @@ void FadingBanner::LoadCustom(std::string sBanner) {
     return;
   }
 
+  const std::string path = GetFadingBannerThemePath("Banner", sBanner);
+  if (path.empty()) {
+    WarnFadingBannerAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-3111: FadingBanner could not resolve custom banner "
+        "'%s'.",
+        sBanner.c_str()));
+    LoadFallback();
+    return;
+  }
+
   BeforeChange();
-  m_Banner[m_iIndexLatest].Load(GetFadingBannerThemePath("Banner", sBanner));
-  m_Banner[m_iIndexLatest].PlayCommand(sBanner);
+  Banner& banner = m_Banner[m_iIndexLatest];
+  banner.Load(path);
+  if (banner.HasCommand(sBanner)) {
+    banner.PlayCommand(sBanner);
+  } else {
+    TraceFadingBannerAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-3111: FadingBanner custom command '%s' is absent.",
+        sBanner.c_str()));
+  }
 }
 
 // lua start

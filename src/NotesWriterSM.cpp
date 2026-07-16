@@ -642,11 +642,14 @@ static LocalizedString ERROR_WRITING_FILE(
     "NotesWriterSM", "Error writing file '%s'.");
 bool NotesWriterSM::WriteEditFileToMachine(
     const Song* pSong, Steps* pSteps, std::string& sErrorOut) {
-  if (pSong == nullptr || pSteps == nullptr || PROFILEMAN == nullptr) {
-    sErrorOut = "Invalid song, steps, or profile manager for SM edit save.";
+  if (pSong == nullptr || pSteps == nullptr || PROFILEMAN == nullptr ||
+      FILEMAN == nullptr) {
+    sErrorOut =
+        "Invalid song, steps, profile manager, or file manager for SM edit "
+        "save.";
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-591: refusing to write SM edit with null "
-        "song/steps/profile manager.");
+        "song/steps/profile manager/file manager.");
     return false;
   }
 

@@ -1,17 +1,27 @@
 #include "ModelManager.h"
 
 #include <map>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
 
 #include "RageLog.h"
+#include "RageException.h"
 #include "RageModelGeometry.h"
 #include "RageUtil.h"
 #include "global.h"
 
 ModelManager* MODELMAN =
     nullptr;  // global and accessible from anywhere in our program
+
+namespace {
+std::string NormalizeGeometryPath(std::string path) {
+  FixSlashesInPlace(path);
+  CollapsePath(path, true);
+  return path;
+}
+}  // namespace
 
 ModelManager::ModelManager() {}
 
@@ -20,19 +30,22 @@ ModelManager::~ModelManager() {
            m_mapFileToGeometry.begin();
        i != m_mapFileToGeometry.end(); ++i) {
     RageModelGeometry* pGeom = i->second;
-    if (pGeom != nullptr && pGeom->m_iRefCount && LOG != nullptr) {
+    const bool referenced = pGeom != nullptr && pGeom->m_iRefCount > 0;
+    if (referenced && LOG != nullptr) {
       LOG->Trace(
           "MODELMAN LEAK: '%s' normals=%d, RefCount = %d.",
           i->first.first.c_str(), i->first.second ? 1 : 0, pGeom->m_iRefCount);
     }
-    RageUtil::SafeDelete(pGeom);
+    if (!referenced) {
+      RageUtil::SafeDelete(pGeom);
+    }
   }
   m_mapFileToGeometry.clear();
 }
 
 RageModelGeometry* ModelManager::LoadMilkshapeAscii(
     const std::string& sFile, bool bNeedNormals) {
-  const GeometryCacheKey key(sFile, bNeedNormals);
+  const GeometryCacheKey key(NormalizeGeometryPath(sFile), bNeedNormals);
   std::map<GeometryCacheKey, RageModelGeometry*>::iterator p =
       m_mapFileToGeometry.find(key);
   if (p != m_mapFileToGeometry.end()) {
@@ -42,12 +55,16 @@ RageModelGeometry* ModelManager::LoadMilkshapeAscii(
       m_mapFileToGeometry.erase(p);
       return LoadMilkshapeAscii(sFile, bNeedNormals);
     }
+    if (pGeom->m_iRefCount == std::numeric_limits<int>::max()) {
+      RageException::Throw(
+          "Model geometry \"%s\" reference count overflow.", sFile.c_str());
+    }
     ++pGeom->m_iRefCount;
     return pGeom;
   }
 
   std::unique_ptr<RageModelGeometry> pGeom(new RageModelGeometry);
-  pGeom->LoadMilkshapeAscii(sFile, bNeedNormals);
+  pGeom->LoadMilkshapeAscii(key.first, bNeedNormals);
 
   RageModelGeometry* raw = pGeom.release();
   m_mapFileToGeometry[key] = raw;
@@ -58,6 +75,25 @@ void ModelManager::UnloadModel(RageModelGeometry* m) {
   if (m == nullptr) {
     return;
   }
+
+  std::map<GeometryCacheKey, RageModelGeometry*>::iterator cached =
+      m_mapFileToGeometry.end();
+  for (auto i = m_mapFileToGeometry.begin(); i != m_mapFileToGeometry.end();
+       ++i) {
+    if (i->second == m) {
+      cached = i;
+      break;
+    }
+  }
+  if (cached == m_mapFileToGeometry.end()) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-3143: ignored uncached model geometry pointer %p.",
+          static_cast<void*>(m));
+    }
+    return;
+  }
+
   if (m->m_iRefCount <= 0) {
     if (LOG != nullptr) {
       LOG->Warn("SRC_AUDIT_FIX SRC-799: duplicate unload of model geometry %p.",
@@ -71,26 +107,11 @@ void ModelManager::UnloadModel(RageModelGeometry* m) {
     return; /* Can't unload models that are still referenced. */
   }
 
-  for (std::map<GeometryCacheKey, RageModelGeometry*>::iterator i =
-           m_mapFileToGeometry.begin();
-       i != m_mapFileToGeometry.end(); ++i) {
-    if (i->second == m) {
-      if (m_Prefs.m_bDelayedUnload) {
-        // leave this geometry loaded
-        return;
-      } else {
-        m_mapFileToGeometry.erase(i);  // remove map entry
-        RageUtil::SafeDelete(m);       // free the texture
-        return;
-      }
-    }
+  if (m_Prefs.m_bDelayedUnload) {
+    return;
   }
-
-  if (LOG != nullptr) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX SRC-799: tried to unload uncached model geometry %p.",
-        static_cast<void*>(m));
-  }
+  m_mapFileToGeometry.erase(cached);
+  RageUtil::SafeDelete(m);
 }
 
 bool ModelManager::SetPrefs(const ModelManagerPrefs& prefs) {

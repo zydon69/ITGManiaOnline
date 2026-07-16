@@ -27,6 +27,22 @@
 
 REGISTER_CLASS_TRAITS(NoteData, new NoteData(*pCopy))
 
+NoteData::NoteData(const NoteData& other)
+    : m_TapNotes(other.m_TapNotes),
+      m_atis(),
+      m_const_atis(),
+      NonEmptyRowVector(other.NonEmptyRowVector) {}
+
+NoteData& NoteData::operator=(const NoteData& other) {
+  if (this == &other) {
+    return *this;
+  }
+  m_TapNotes = other.m_TapNotes;
+  NonEmptyRowVector = other.NonEmptyRowVector;
+  RevalidateATIs(std::vector<int>(), false);
+  return *this;
+}
+
 NoteData::TrackMap& NoteData::InvalidTrackMap() {
   static TrackMap invalidTrack;
   return invalidTrack;
@@ -97,17 +113,36 @@ static bool IsJudgableAtRowWithTiming(
 void NoteData::Init() {
   m_TapNotes = std::vector<TrackMap>();  // ensure that the memory is freed
   m_TapNotes.resize(1);
+  NonEmptyRowVector.clear();
+  RevalidateATIs(std::vector<int>(), false);
 }
 
 void NoteData::SetNumTracks(int iNewNumTracks) {
-  if (iNewNumTracks <= 0) {
+  if (iNewNumTracks <= 0 || iNewNumTracks > MAX_NOTE_TRACKS) {
     LOG->Trace(
-        "SRC_AUDIT_FIX NoteData corrected invalid track count %i to 1.",
+        "SRC_AUDIT_FIX SRC-2944: corrected invalid track count %i to the valid "
+        "range.",
         iNewNumTracks);
-    iNewNumTracks = 1;
+    iNewNumTracks = std::clamp(iNewNumTracks, 1, MAX_NOTE_TRACKS);
   }
 
+  const int iOldNumTracks = GetNumTracks();
+  if (iOldNumTracks == iNewNumTracks) {
+    return;
+  }
   m_TapNotes.resize(iNewNumTracks);
+  std::vector<int> changedTracks;
+  if (iNewNumTracks > iOldNumTracks) {
+    for (int track = iOldNumTracks; track < iNewNumTracks; ++track) {
+      changedTracks.push_back(track);
+    }
+    RevalidateATIs(changedTracks, true);
+  } else {
+    for (int track = iNewNumTracks; track < iOldNumTracks; ++track) {
+      changedTracks.push_back(track);
+    }
+    RevalidateATIs(changedTracks, false);
+  }
 }
 
 bool NoteData::IsComposite() const {
@@ -380,7 +415,8 @@ int NoteData::GetLastTrackWithTapOrHoldHead(int row) const {
 }
 
 void NoteData::AddHoldNote(int iTrack, int iStartRow, int iEndRow, TapNote tn) {
-  if (!IsValidTrack(iTrack) || iStartRow < 0 || iEndRow <= iStartRow) {
+  if (!IsValidTrack(iTrack) || iStartRow < 0 || iEndRow <= iStartRow ||
+      iEndRow > MAX_NOTE_ROW) {
     LOG->Trace(
         "SRC_AUDIT_FIX NoteData ignored invalid hold track=%i start=%i "
         "end=%i.",
@@ -399,6 +435,14 @@ void NoteData::AddHoldNote(int iTrack, int iStartRow, int iEndRow, TapNote tn) {
     const TapNote& tnOther = it->second;
     if (tnOther.type == TapNoteType_HoldHead) {
       iStartRow = std::min(iStartRow, iOtherRow);
+      if (tnOther.iDuration <= 0 ||
+          iOtherRow > MAX_NOTE_ROW - tnOther.iDuration) {
+        LOG->Trace(
+            "SRC_AUDIT_FIX SRC-2946: ignored malformed overlapping hold at row "
+            "%i with duration %i.",
+            iOtherRow, tnOther.iDuration);
+        continue;
+      }
       iEndRow = std::max(iEndRow, iOtherRow + tnOther.iDuration);
     }
   }
@@ -1037,6 +1081,15 @@ void NoteData::LoadTransformed(
   // reset all notes
   Init();
 
+  if (iNewNumTracks < 1 || iNewNumTracks > MAX_NOTE_TRACKS ||
+      iOriginalTrackToTakeFrom == nullptr) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2945: ignored transformed NoteData with invalid "
+        "track count %i or null mapping.",
+        iNewNumTracks);
+    return;
+  }
+
   SetNumTracks(iNewNumTracks);
 
   // copy tracks
@@ -1591,6 +1644,10 @@ void NoteData::_all_tracks_iterator<ND, iter, TN>::Revalidate(
       m_vEndIters.resize(m_pNoteData->GetNumTracks());
     }
   }
+  m_PrevCurrentRows.resize(m_pNoteData->GetNumTracks(), 0);
+  m_vBeginIters.resize(m_pNoteData->GetNumTracks());
+  m_vCurrentIters.resize(m_pNoteData->GetNumTracks());
+  m_vEndIters.resize(m_pNoteData->GetNumTracks());
   for (int track = 0; track < m_pNoteData->GetNumTracks(); ++track) {
     if (track >= static_cast<int>(m_PrevCurrentRows.size())) {
       m_PrevCurrentRows.push_back(0);

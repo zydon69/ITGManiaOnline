@@ -37,12 +37,16 @@ require_not_contains(
   "JSON NoteData must initialize track count from StepsType, not a fresh NoteData")
 require_contains(
   "${notes_loader_json_cpp}"
-  "o.type = root.isMember(\"Type\") ? (TapNoteType)root[\"Type\"].asInt()"
-  "JSON object notes read their explicit TapNoteType")
+  "rawType = root.asInt();"
+  "JSON legacy integer notes pass through common TapNoteType validation")
 require_contains(
   "${notes_loader_json_cpp}"
-  ": TapNoteType_Tap;"
+  "root.isMember(\"Type\") ? root[\"Type\"].asInt() : TapNoteType_Tap;"
   "JSON object notes without Type default to normal taps written by NotesWriterJson")
+require_contains(
+  "${notes_loader_json_cpp}"
+  "if (rawType < TapNoteType_Empty || rawType >= NUM_TapNoteType)"
+  "JSON validates both legacy and object TapNoteType values")
 require_contains(
   "${notes_loader_json_cpp}"
   "const int iTracks = GAMEMAN->GetStepsTypeInfo(st).iNumTracks;"
@@ -138,3 +142,11 @@ require_contains(
   "${notes_loader_json_cpp}"
   "JSON song root is not an object; load rejected"
   "JSON loader rejects non-object song roots")
+require_contains(
+  "${notes_loader_json_cpp}"
+  "if (!charts.isArray())"
+  "JSON song loads require a Charts array")
+require_contains(
+  "${notes_loader_json_cpp}"
+  "if (out.GetAllSteps().empty())"
+  "JSON song loads reject empty or wholly invalid chart arrays")

@@ -200,6 +200,14 @@ for player in ivalues( GAMESTATE:GetHumanPlayers() ) do
 						or overlay:GetChild(("NoteSkin_%s"):format(fallback_noteskin))
 				end
 			end
+			-- Keep this trace at target-resolution time rather than every draw.  It
+			-- makes renderer-specific preview failures diagnosable without flooding
+			-- logs once per frame.
+			if params.Name=="NoteSkin" or params.Name=="NoteSkinVariant" then
+				Trace(("METAL_PREVIEW_TRACE player=%s row=%s value=%s target=%s resolved=%s")
+					:format(pn, tostring(params.Name), tostring(params.Value),
+						offscreen_actor_name, offscreen_actor and "yes" or "no"))
+			end
 			-- ensure that that actor exists before attempting to set it as the target of this ActorProxy
 			if offscreen_actor then self:SetTarget( offscreen_actor ) end
 		end

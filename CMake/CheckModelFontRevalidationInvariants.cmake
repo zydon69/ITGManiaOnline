@@ -1,0 +1,31 @@
+if(NOT DEFINED ITGMANIA_SOURCE_DIR)
+  message(FATAL_ERROR "ITGMANIA_SOURCE_DIR is required")
+endif()
+
+function(require_contains file needle description)
+  file(READ "${ITGMANIA_SOURCE_DIR}/${file}" contents)
+  string(FIND "${contents}" "${needle}" position)
+  if(position EQUAL -1)
+    message(FATAL_ERROR "${description}: '${needle}' missing from ${file}")
+  endif()
+endfunction()
+
+require_contains("src/Model.cpp" "ResolveFinalPoseBone(" "Model bone hierarchy must not depend on file order")
+require_contains("src/Model.cpp" "SetBones(m_pCurAnimation, m_fCurFrame, m_vpBones);" "Model seeks must immediately update the skeletal pose")
+require_contains("src/Model.cpp" "if (!std::isfinite(fDelta))" "Model updates must reject non-finite deltas")
+require_contains("src/ModelManager.cpp" "NormalizeGeometryPath" "Geometry cache keys must be normalized")
+require_contains("src/ModelManager.cpp" "cached == m_mapFileToGeometry.end()" "Model unload must prove pointer ownership before dereferencing")
+
+require_contains("src/ModelTypes.cpp" "ResolveAnimatedTexturePath" "Animated texture files must stay confined to their definition directory")
+require_contains("src/ModelTypes.cpp" "SetSecondsIntoAnimation(static_cast<float>(seconds));" "Animated texture updates must use bounded absolute seeking")
+require_contains("src/ModelTypes.cpp" "kMaxAnimationKeys" "Milkshape animation keys must have a cumulative allocation limit")
+require_contains("src/ModelTypes.cpp" "return !bLoaded;" "Milkshape parsing must reject files without a Bones section")
+
+require_contains("src/Font.cpp" "std::unique_ptr<FontPage> page" "Font page construction must be exception safe")
+require_contains("src/Font.cpp" "value <= 0x10FFFFUL" "Font mappings must reject codepoints outside Unicode")
+require_contains("src/Font.cpp" "it->first >= 0" "The ASCII glyph cache must reject negative keys")
+require_contains("src/Font.cpp" "static thread_local std::vector<std::string> LoadStack" "Font recursion tracking must be thread-local")
+require_contains("src/FontManager.cpp" "g_mapPathToFont.clear();" "Font manager teardown must clear its global cache")
+require_contains("src/FontManager.cpp" "std::any_of(" "Font copies must prove cache ownership before dereferencing")
+
+message(STATUS "Model/font revalidation invariants passed")

@@ -13,7 +13,7 @@ class RageSoundDriver_OSS : public RageSoundDriver {
   int fd;
 
   std::atomic<bool> shutdown;
-  int last_cursor_pos;
+  std::atomic<int64_t> last_cursor_pos;
   int samplerate;
   std::vector<int16_t> mix_buffer;
 

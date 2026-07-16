@@ -30,6 +30,7 @@ class RageSoundDriver_ALSA9_Software : public RageSoundDriver {
   bool GetData();
 
   std::atomic<bool> m_bShutdown;
+  unsigned m_iWriteaheadFrames;
   int m_iSampleRate;
   Alsa9Buf* m_pPCM;
   std::vector<int16_t> m_MixBuffer;

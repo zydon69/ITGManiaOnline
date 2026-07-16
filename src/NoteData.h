@@ -44,6 +44,8 @@ class NoteData {
   typedef std::map<int, TapNote>::const_reverse_iterator const_reverse_iterator;
 
   NoteData() : m_TapNotes() { Init(); }
+  NoteData(const NoteData& other);
+  NoteData& operator=(const NoteData& other);
 
   iterator begin(int iTrack) { return GetTrackMap(iTrack).begin(); }
   const_iterator begin(int iTrack) const {
@@ -73,6 +75,7 @@ class NoteData {
   }
   void swap(NoteData& nd) {
     m_TapNotes.swap(nd.m_TapNotes);
+    NonEmptyRowVector.swap(nd.NonEmptyRowVector);
     RevalidateATIs(std::vector<int>(), false);
     nd.RevalidateATIs(std::vector<int>(), false);
   }
@@ -304,8 +307,6 @@ class NoteData {
   // Call this after using any transform that changes the NoteData.
   void RevalidateATIs(
       const std::vector<int>& added_or_removed_tracks, bool added);
-  void TransferATIs(NoteData& to);
-
   /* Return an iterator range include iStartRow to iEndRow.  Extend the range to
    * include hold notes overlapping the boundary. */
   void GetTapNoteRangeInclusive(
@@ -484,7 +485,7 @@ class NoteData {
 /** @brief Allow a quick way to swap notedata. */
 namespace std {
 template <>
-inline void swap<NoteData>(NoteData& nd1, NoteData& nd2) noexcept {
+inline void swap<NoteData>(NoteData& nd1, NoteData& nd2) {
   nd1.swap(nd2);
 }
 }  // namespace std

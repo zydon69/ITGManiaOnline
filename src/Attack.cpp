@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,19 @@ static float SanitizeAttackSeconds(float value, const char* context) {
   return value;
 }
 
+static float AddAttackSeconds(float start, float duration,
+                              const char* context) {
+  const double result = static_cast<double>(start) + duration;
+  if (!std::isfinite(result) ||
+      result > static_cast<double>(std::numeric_limits<float>::max())) {
+    WarnAttack(ssprintf(
+        "SRC_AUDIT_FIX: Attack second range overflow in %s; clamping.",
+        context));
+    return std::numeric_limits<float>::max();
+  }
+  return static_cast<float>(result);
+}
+
 void Attack::GetAttackBeats(
     const Song* pSong, float& fStartBeat, float& fEndBeat) const {
   fStartBeat = 0.0f;
@@ -52,7 +66,8 @@ void Attack::GetAttackBeats(
 
   const TimingData& timing = pSong->m_SongTiming;
   fStartBeat = timing.GetBeatFromElapsedTime(startSecond);
-  fEndBeat = timing.GetBeatFromElapsedTime(startSecond + secondsRemaining);
+  fEndBeat = timing.GetBeatFromElapsedTime(AddAttackSeconds(
+      startSecond, secondsRemaining, "Attack::GetAttackBeats"));
   if (!std::isfinite(fStartBeat) || !std::isfinite(fEndBeat) ||
       fEndBeat < fStartBeat) {
     WarnAttack(ssprintf(
@@ -100,9 +115,15 @@ void Attack::GetRealtimeAttackBeats(
 
   const TimingData& timing = pSong->m_SongTiming;
   const float lStartSecond = timing.GetElapsedTimeFromBeat(fStartBeat);
-  const float fEndSecond = lStartSecond + SanitizeAttackSeconds(
-                                             fSecsRemaining,
-                                             "Attack::GetRealtimeAttackBeats");
+  if (!std::isfinite(lStartSecond)) {
+    WarnAttack("SRC_AUDIT_FIX: Realtime attack start second was non-finite.");
+    fEndBeat = fStartBeat;
+    return;
+  }
+  const float fEndSecond = AddAttackSeconds(
+      lStartSecond,
+      SanitizeAttackSeconds(fSecsRemaining, "Attack::GetRealtimeAttackBeats"),
+      "Attack::GetRealtimeAttackBeats");
   fEndBeat = timing.GetBeatFromElapsedTime(fEndSecond);
   fEndBeat = std::trunc(fEndBeat) + 1;
 
@@ -219,11 +240,19 @@ void AttackArray::UpdateStartTimes(float delta) {
     return;
   }
   for (Attack& a : *this) {
-    a.fStartSecond += delta;
     if (!std::isfinite(a.fStartSecond)) {
-      WarnAttack(
-          "SRC_AUDIT_FIX: Attack start time overflowed; clamping to 0.");
+      WarnAttack("SRC_AUDIT_FIX: Invalid stored attack start time; using 0.");
       a.fStartSecond = 0.0f;
+    }
+    const double updated = static_cast<double>(a.fStartSecond) + delta;
+    if (updated > std::numeric_limits<float>::max()) {
+      WarnAttack("SRC_AUDIT_FIX: Attack start time overflowed; saturating.");
+      a.fStartSecond = std::numeric_limits<float>::max();
+    } else if (updated < std::numeric_limits<float>::lowest()) {
+      WarnAttack("SRC_AUDIT_FIX: Attack start time underflowed; saturating.");
+      a.fStartSecond = std::numeric_limits<float>::lowest();
+    } else {
+      a.fStartSecond = static_cast<float>(updated);
     }
   }
 }

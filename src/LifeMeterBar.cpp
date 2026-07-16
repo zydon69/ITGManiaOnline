@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <string>
 
 #include "ActorUtil.h"
@@ -71,6 +72,25 @@ float NormalizeMaxLife(float maxLife) {
 }  // namespace
 
 LifeMeterBar::LifeMeterBar() {
+  m_pStream = nullptr;
+  m_pPlayerState = nullptr;
+  m_fLifePercentage = 0.0f;
+  m_fPassingAlpha = 0.0f;
+  m_fHotAlpha = 0.0f;
+  m_fBaseLifeDifficulty = 1.0f;
+  m_fLifeDifficulty = 1.0f;
+  m_bMercifulBeginnerInEffect = false;
+  m_iProgressiveLifebar = 0;
+  m_iMissCombo = 0;
+  m_iComboToRegainLife = 0;
+
+  if (THEME == nullptr || PREFSMAN == nullptr || GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: LifeMeterBar constructed without complete runtime "
+        "managers.");
+    return;
+  }
+
   DANGER_THRESHOLD.Load("LifeMeterBar", "DangerThreshold");
   INITIAL_VALUE.Load("LifeMeterBar", "InitialValue");
   HOT_VALUE.Load("LifeMeterBar", "HotValue");
@@ -82,23 +102,11 @@ LifeMeterBar::LifeMeterBar() {
   m_fLifePercentChange.Load(
       "LifeMeterBar", LIFE_PERCENT_CHANGE_NAME, NUM_ScoreEvent);
 
-  m_pPlayerState = nullptr;
-
   const std::string sType = "LifeMeterBar";
-
-  m_fPassingAlpha = 0;
-  m_fHotAlpha = 0;
 
   m_fBaseLifeDifficulty = PREFSMAN->m_fLifeDifficultyScale;
   m_fLifeDifficulty = m_fBaseLifeDifficulty;
-  m_bMercifulBeginnerInEffect = false;
-
-  // set up progressive lifebar
-  m_iProgressiveLifebar = PREFSMAN->m_iProgressiveLifebar;
-  m_iMissCombo = 0;
-
-  // set up combotoregainlife
-  m_iComboToRegainLife = 0;
+  m_iProgressiveLifebar = std::max(0, (int)PREFSMAN->m_iProgressiveLifebar);
 
   bool bExtra = GAMESTATE->IsAnExtraStage();
   std::string sExtra = bExtra ? "extra " : "";
@@ -143,6 +151,12 @@ void LifeMeterBar::Load(
   }
 
   PlayerNumber pn = pPlayerState->m_PlayerNumber;
+  if (!IsValidPlayerNumber(pn) || GAMESTATE == nullptr || PREFSMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-243: LifeMeterBar refused load with invalid "
+        "player or missing managers.");
+    return;
+  }
 
   DrainType dtype = NormalizeDrainType(
       pPlayerState->m_PlayerOptions.GetStage().m_DrainType,
@@ -161,8 +175,7 @@ void LifeMeterBar::Load(
   }
 
   // Change life difficulty to really easy if merciful beginner on
-  const bool hasValidSteps =
-      IsValidPlayerNumber(pn) && GAMESTATE->m_pCurSteps[pn] != nullptr;
+  const bool hasValidSteps = GAMESTATE->m_pCurSteps[pn] != nullptr;
   m_bMercifulBeginnerInEffect =
       GAMESTATE->m_PlayMode == PLAY_MODE_REGULAR &&
       GAMESTATE->IsPlayerEnabled(pPlayerState) && hasValidSteps &&
@@ -183,6 +196,12 @@ void LifeMeterBar::ChangeLife(TapNoteScore score) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-244: LifeMeterBar ignored invalid TapNoteScore %i.",
         score);
+    return;
+  }
+  if (m_pPlayerState == nullptr || PREFSMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-244: LifeMeterBar ignored tap score without "
+        "complete runtime state.");
     return;
   }
 
@@ -226,16 +245,10 @@ void LifeMeterBar::ChangeLife(TapNoteScore score) {
   }
 
   // this was previously if( IsHot()  &&  score < TNS_GOOD ) in 3.9... -freem
-  if (PREFSMAN->m_HarshHotLifePenalty && IsHot() && fDeltaLife < 0) {
+  if (PREFSMAN != nullptr && PREFSMAN->m_HarshHotLifePenalty && IsHot() &&
+      fDeltaLife < 0) {
     fDeltaLife = std::min(
         fDeltaLife, -0.10f);  // make it take a while to get back to "hot"
-  }
-
-  if (m_pPlayerState == nullptr) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX SRC-244: LifeMeterBar ignored tap score without "
-        "PlayerState.");
-    return;
   }
 
   switch (NormalizeDrainType(
@@ -297,7 +310,8 @@ void LifeMeterBar::ChangeLife(HoldNoteScore score, TapNoteScore tscore) {
         default:
           break;
       }
-      if (PREFSMAN->m_HarshHotLifePenalty && IsHot() && score == HNS_LetGo) {
+      if (PREFSMAN != nullptr && PREFSMAN->m_HarshHotLifePenalty && IsHot() &&
+          score == HNS_LetGo) {
         fDeltaLife = -0.10f;  // make it take a while to get back to "hot"
       }
       break;
@@ -352,6 +366,11 @@ void LifeMeterBar::ChangeLife(float fDeltaLife) {
         "complete player state.");
     return;
   }
+  if (PREFSMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: LifeMeterBar ignored life change without PrefsManager.");
+    return;
+  }
 
   bool bUseMercifulDrain =
       m_bMercifulBeginnerInEffect || PREFSMAN->m_bMercifulDrain;
@@ -367,15 +386,37 @@ void LifeMeterBar::ChangeLife(float fDeltaLife) {
       fDeltaLife = 0.0f;
     }
   } else {
-    fDeltaLife *= 1 + (float)m_iProgressiveLifebar / 8 * m_iMissCombo;
+    const double progressiveMultiplier =
+        1.0 + static_cast<double>(std::max(m_iProgressiveLifebar, 0)) / 8.0 *
+                  std::max(m_iMissCombo, 0);
+    const double progressiveDelta =
+        static_cast<double>(fDeltaLife) * progressiveMultiplier;
+    if (!std::isfinite(progressiveDelta) ||
+        progressiveDelta < -std::numeric_limits<float>::max() ||
+        progressiveDelta > std::numeric_limits<float>::max()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: LifeMeterBar saturated progressive life delta.");
+      fDeltaLife = progressiveDelta < 0.0
+                       ? -std::numeric_limits<float>::max()
+                       : std::numeric_limits<float>::max();
+    } else {
+      fDeltaLife = static_cast<float>(progressiveDelta);
+    }
     // do this after; only successive W5/miss will increase the amount of life
     // lost.
-    m_iMissCombo++;
+    if (m_iMissCombo < std::numeric_limits<int>::max()) {
+      ++m_iMissCombo;
+    }
     /* Increase by m_iRegenComboAfterMiss; never push it beyond
      * m_iMaxRegenComboAfterMiss but don't reduce it if it's already past. */
-    const int NewComboToRegainLife = std::min(
-        (int)PREFSMAN->m_iMaxRegenComboAfterMiss,
-        m_iComboToRegainLife + PREFSMAN->m_iRegenComboAfterMiss);
+    const int maxRegen =
+        std::max(0, (int)PREFSMAN->m_iMaxRegenComboAfterMiss);
+    const int regen = std::max(0, (int)PREFSMAN->m_iRegenComboAfterMiss);
+    const int64_t proposedRegen =
+        static_cast<int64_t>(std::max(m_iComboToRegainLife, 0)) + regen;
+    const int NewComboToRegainLife = static_cast<int>(std::min<int64_t>(
+        maxRegen, std::min<int64_t>(proposedRegen,
+                                    std::numeric_limits<int>::max())));
 
     m_iComboToRegainLife = std::max(m_iComboToRegainLife, NewComboToRegainLife);
   }
@@ -446,7 +487,9 @@ void LifeMeterBar::AfterLifeChanged() {
   if (m_pStream != nullptr) {
     m_pStream->SetPercent(m_fLifePercentage);
   }
-  if (m_pPlayerState == nullptr) {
+  if (m_pPlayerState == nullptr ||
+      !IsValidPlayerNumber(m_pPlayerState->m_PlayerNumber) ||
+      MESSAGEMAN == nullptr) {
     LOG->Trace(
         "SRC_AUDIT_FIX SRC-248: LifeMeterBar skipped LifeChanged broadcast "
         "without PlayerState.");
@@ -459,10 +502,12 @@ void LifeMeterBar::AfterLifeChanged() {
   MESSAGEMAN->Broadcast(msg);
 }
 
-bool LifeMeterBar::IsHot() const { return m_fLifePercentage >= HOT_VALUE; }
+bool LifeMeterBar::IsHot() const {
+  return HOT_VALUE.IsLoaded() && m_fLifePercentage >= HOT_VALUE;
+}
 
 bool LifeMeterBar::IsInDanger() const {
-  return m_fLifePercentage < DANGER_THRESHOLD;
+  return DANGER_THRESHOLD.IsLoaded() && m_fLifePercentage < DANGER_THRESHOLD;
 }
 
 bool LifeMeterBar::IsFailing() const {
@@ -489,6 +534,12 @@ void LifeMeterBar::Update(float fDeltaTime) {
         "PlayerState.");
     return;
   }
+  if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: LifeMeterBar ignored invalid update delta %f.",
+        fDeltaTime);
+    return;
+  }
 
   m_fPassingAlpha += !IsFailing() ? +fDeltaTime * 2 : -fDeltaTime * 2;
   rage_clamp(m_fPassingAlpha, 0, 1);
@@ -507,6 +558,13 @@ void LifeMeterBar::Update(float fDeltaTime) {
 }
 
 void LifeMeterBar::UpdateNonstopLifebar() {
+  if (GAMESTATE == nullptr || PREFSMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-247: LifeMeterBar skipped progressive update "
+        "without managers.");
+    return;
+  }
+
   int iCleared, iTotal, iProgressiveLifebarDifficulty;
 
   switch (GAMESTATE->m_PlayMode) {
@@ -555,14 +613,25 @@ void LifeMeterBar::UpdateNonstopLifebar() {
     return;
   }
 
-  if (iTotal > 1) {
-    m_fLifeDifficulty =
-        m_fBaseLifeDifficulty -
-        0.2f * (int)(iProgressiveLifebarDifficulty * iCleared / (iTotal - 1));
-  } else {
-    m_fLifeDifficulty =
-        m_fBaseLifeDifficulty - 0.2f * iProgressiveLifebarDifficulty;
+  iCleared = std::max(iCleared, 0);
+  const int64_t progressiveProduct =
+      static_cast<int64_t>(iProgressiveLifebarDifficulty) * iCleared;
+  const double progressiveAdjustment =
+      iTotal > 1
+          ? static_cast<double>(progressiveProduct) / (iTotal - 1)
+          : static_cast<double>(iProgressiveLifebarDifficulty);
+  if (!std::isfinite(progressiveAdjustment)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-247: LifeMeterBar ignored non-finite progressive "
+        "adjustment.");
+    m_fLifeDifficulty = NormalizeLifeDifficulty(
+        m_fBaseLifeDifficulty, "SRC-247 LifeMeterBar");
+    return;
   }
+
+  m_fLifeDifficulty = static_cast<float>(
+      static_cast<double>(m_fBaseLifeDifficulty) -
+      0.2 * progressiveAdjustment);
 
   if (m_fLifeDifficulty >= 0.4f) {
     m_fLifeDifficulty =

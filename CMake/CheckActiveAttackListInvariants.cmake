@@ -80,3 +80,23 @@ require_contains(
   "${player_state_cpp}"
   "m_iActiveAttackListRevision"
   "PlayerState exposes an attack-list revision for HUD refresh invalidation")
+require_contains(
+  "${player_state_cpp}"
+  "m_EffectHistory = SampleHistory();"
+  "PlayerState reset clears effect sample history")
+require_contains(
+  "${player_state_cpp}"
+  "m_ActiveAttacks.erase(m_ActiveAttacks.begin() + s);"
+  "invalid active attacks are removed instead of retained forever")
+require_contains(
+  "${player_state_cpp}"
+  "HasUsableAttackModifiers"
+  "attack modifiers are bounded before queue insertion")
+require_contains(
+  "${player_state_cpp}"
+  "m_ActiveAttacks[s].bOn && m_ActiveAttacks[s].fSecsRemaining > 0"
+  "attack level sum includes only attacks currently active")
+require_contains(
+  "${player_state_cpp}"
+  "Enum::to_integral(m_ActiveAttacks[s].level) + 1"
+  "zero-based attack levels contribute their one-based strength")

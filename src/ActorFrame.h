@@ -2,6 +2,7 @@
 #define ACTORFRAME_H
 
 #include <cmath>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -15,12 +16,12 @@ class ActorFrame : public Actor {
  public:
   ActorFrame();
   ActorFrame(const ActorFrame& cpy);
-  virtual ~ActorFrame();
+  ~ActorFrame() override;
 
   /** @brief Set up the initial state. */
-  virtual void InitState();
-  void LoadFromNode(const XNode* pNode);
-  virtual ActorFrame* Copy() const;
+  void InitState() override;
+  void LoadFromNode(const XNode* pNode) override;
+  ActorFrame* Copy() const override;
 
   /**
    * @brief Add a new child to the ActorFrame.
@@ -33,7 +34,8 @@ class ActorFrame : public Actor {
   void TransferChildren(ActorFrame* pTo);
   Actor* GetChild(const std::string& sName);
   std::vector<Actor*> GetChildren() { return m_SubActors; }
-  int GetNumChildren() const { return m_SubActors.size(); }
+  const std::vector<Actor*>& GetChildren() const { return m_SubActors; }
+  size_t GetNumChildren() const { return m_SubActors.size(); }
 
   /** @brief Remove all of the children from the frame. */
   void RemoveAllChildren();
@@ -67,7 +69,7 @@ class ActorFrame : public Actor {
   void DeleteAllChildren();
 
   // Commands
-  virtual void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
   void PushChildrenTable(lua_State* L);
   void PushChildTable(lua_State* L, const std::string& sName);
   void PlayCommandOnChildren(
@@ -77,8 +79,9 @@ class ActorFrame : public Actor {
       const std::string& sCommandName,
       const LuaReference* pParamTable = nullptr);
 
-  virtual void RunCommandsRecursively(
-      const LuaReference& cmds, const LuaReference* pParamTable = nullptr);
+  void RunCommandsRecursively(
+      const LuaReference& cmds,
+      const LuaReference* pParamTable = nullptr) override;
   virtual void RunCommandsOnChildren(
       const LuaReference& cmds,
       const LuaReference* pParamTable = nullptr); /* but not on self */
@@ -86,32 +89,37 @@ class ActorFrame : public Actor {
       const apActorCommands& cmds, const LuaReference* pParamTable = nullptr) {
     this->RunCommandsOnChildren(*cmds, pParamTable);
   }  // convenience
-  virtual void RunCommandsOnLeaves(
+  void RunCommandsOnLeaves(
       const LuaReference& cmds,
-      const LuaReference* pParamTable = nullptr); /* but not on self */
+      const LuaReference* pParamTable = nullptr) override; /* but not on self */
 
-  virtual void UpdateInternal(float fDeltaTime);
-  virtual void BeginDraw();
-  virtual void DrawPrimitives();
-  virtual void EndDraw();
+  void UpdateInternal(float fDeltaTime) override;
+  void BeginDraw() override;
+  void DrawPrimitives() override;
+  void EndDraw() override;
 
   static void PushDrawPerfTraceScope(
       const char* scopeName, float slowActorThresholdMs);
   static void PopDrawPerfTraceScope();
 
   // propagated commands
-  virtual void SetZTestMode(ZTestMode mode);
-  virtual void SetZWrite(bool b);
-  virtual void FinishTweening();
-  virtual void HurryTweening(float factor);
+  void SetZTestMode(ZTestMode mode) override;
+  void SetZWrite(bool b) override;
+  void FinishTweening() override;
+  void HurryTweening(float factor) override;
 
-  void SetUpdateRate(float rate) {
+  void SetUpdateRate(float rate) override {
     if (std::isfinite(rate) && rate > 0.0f) {
       m_fUpdateRate = rate;
     }
   }
-  float GetUpdateRate() { return m_fUpdateRate; }
-  void SetFOV(float fFOV) { m_fFOV = std::isfinite(fFOV) ? fFOV : -1.0f; }
+  float GetUpdateRate() override { return m_fUpdateRate; }
+  void SetFOV(float fFOV) {
+    m_fFOV = fFOV == -1.0f ||
+                     (std::isfinite(fFOV) && fFOV >= 0.0f && fFOV < 180.0f)
+                 ? fFOV
+                 : -1.0f;
+  }
   void SetVanishPoint(float fX, float fY) {
     m_fVanishX = std::isfinite(fX) ? fX : m_fVanishX;
     m_fVanishY = std::isfinite(fY) ? fY : m_fVanishY;
@@ -126,20 +134,28 @@ class ActorFrame : public Actor {
     m_specularColor = SanitizeColor(c);
   }
   void SetLightDirection(RageVector3 vec) {
-    m_lightDirection = RageVector3(
-        FiniteOr(vec.x, 0.0f), FiniteOr(vec.y, 0.0f),
-        FiniteOr(vec.z, 1.0f));
+    const double lengthSquared = static_cast<double>(vec.x) * vec.x +
+                                 static_cast<double>(vec.y) * vec.y +
+                                 static_cast<double>(vec.z) * vec.z;
+    if (!std::isfinite(lengthSquared) || lengthSquared <= 0.0) {
+      m_lightDirection = RageVector3(0.0f, 0.0f, 1.0f);
+      return;
+    }
+    const float inverseLength =
+        static_cast<float>(1.0 / std::sqrt(lengthSquared));
+    m_lightDirection = vec * inverseLength;
   }
 
   virtual void SetPropagateCommands(bool b);
 
   /** @brief Amount of time until all tweens (and all children's tweens) have
    * stopped: */
-  virtual float GetTweenTimeLeft() const;
+  float GetTweenTimeLeft() const override;
 
-  virtual void HandleMessage(const Message& msg);
-  virtual void RunCommands(
-      const LuaReference& cmds, const LuaReference* pParamTable = nullptr);
+  void HandleMessage(const Message& msg) override;
+  void RunCommands(
+      const LuaReference& cmds,
+      const LuaReference* pParamTable = nullptr) override;
   void RunCommands(
       const apActorCommands& cmds, const LuaReference* pParamTable = nullptr) {
     this->RunCommands(*cmds, pParamTable);
@@ -165,7 +181,7 @@ class ActorFrame : public Actor {
   bool m_bPropagateCommands;
   bool m_bDeleteChildren;
   bool m_bDrawByZPosition;
-  unsigned m_iChildMutationVersion;
+  uint64_t m_iChildMutationVersion;
   bool m_bCameraPushed;
   LuaReference m_UpdateFunction;
   LuaReference m_DrawFunction;
@@ -192,8 +208,8 @@ class ActorFrame : public Actor {
 class ActorFrameAutoDeleteChildren : public ActorFrame {
  public:
   ActorFrameAutoDeleteChildren() { DeleteChildrenWhenDone(true); }
-  virtual bool AutoLoadChildren() const { return true; }
-  virtual ActorFrameAutoDeleteChildren* Copy() const;
+  bool AutoLoadChildren() const override { return true; }
+  ActorFrameAutoDeleteChildren* Copy() const override;
 };
 
 #endif

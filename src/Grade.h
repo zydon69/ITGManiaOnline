@@ -50,16 +50,15 @@ enum Grade {
  * @return the string reprsentation.
  */
 static inline std::string GradeToString(Grade g) {
-  ASSERT_M(
-      (g >= 0 && g < NUM_Grade) || g == Grade_NoData,
-      ssprintf("grade = %d", g));
-
   switch (g) {
     case Grade_NoData:
       return "NoData";
     case Grade_Failed:
       return "Failed";
     default:
+      if (g < Grade_Tier01 || g >= Grade_Failed) {
+        return "NoData";
+      }
       return ssprintf("Tier%02d", g + 1);
   }
 }

@@ -214,6 +214,13 @@ void Course::SetCourseType(CourseType ct) {
     return;
   }
 
+  if (ct < COURSE_TYPE_NONSTOP || ct >= NUM_CourseType) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-125: refusing invalid course type %i for '%s'", ct,
+        m_sPath.c_str());
+    return;
+  }
+
   m_bRepeat = false;
   m_iLives = -1;
   if (!m_vEntries.empty()) {
@@ -221,11 +228,6 @@ void Course::SetCourseType(CourseType ct) {
   }
 
   switch (ct) {
-    default:
-      LOG->Warn(
-          "SRC_AUDIT_FIX SRC-125: refusing invalid course type %i for '%s'", ct,
-          m_sPath.c_str());
-      return;
     case COURSE_TYPE_NONSTOP:
       break;
     case COURSE_TYPE_ONI:
@@ -239,6 +241,8 @@ void Course::SetCourseType(CourseType ct) {
         m_vEntries[0].fGainSeconds = 120;
       }
       break;
+    default:
+      return;
   }
 }
 
@@ -453,11 +457,13 @@ bool Course::GetTrailSorted(
         SortTrail = trail;
       }
     }
-    ASSERT_M(
-        trail.m_vEntries.size() == SortTrail.m_vEntries.size(),
-        ssprintf(
-            "%i %i", int(trail.m_vEntries.size()),
-            int(SortTrail.m_vEntries.size())));
+    if (trail.m_vEntries.size() != SortTrail.m_vEntries.size()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-2935: course '%s' has incompatible sorted trails "
+          "(%zu current, %zu medium); sorting with the current difficulty",
+          m_sPath.c_str(), trail.m_vEntries.size(), SortTrail.m_vEntries.size());
+      SortTrail = trail;
+    }
 
     std::vector<SortTrailEntry> entries;
     for (unsigned i = 0; i < trail.m_vEntries.size(); ++i) {
@@ -1009,6 +1015,13 @@ void Course::GetAllTrails(std::vector<Trail*>& AddTo) const {
 }
 
 int Course::GetMeter(StepsType st, CourseDifficulty cd) const {
+  if (cd < Difficulty_Beginner || cd >= NUM_Difficulty) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-2936: refusing invalid course difficulty %i while "
+        "reading meter for '%s'",
+        cd, m_sPath.c_str());
+    return 0;
+  }
   if (m_iCustomMeter[cd] != -1) {
     return m_iCustomMeter[cd];
   }

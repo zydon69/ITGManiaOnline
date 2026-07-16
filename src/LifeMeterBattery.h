@@ -45,6 +45,7 @@ class LifeMeterBattery : public LifeMeter {
   virtual void PushSelf(lua_State* L);
 
  private:
+  void ResetLoadedActors();
   void SubtractLives(int iLives);
   void AddLives(int iLives);
 

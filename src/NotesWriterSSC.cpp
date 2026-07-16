@@ -328,7 +328,8 @@ static std::vector<std::string> GetTimingVectorForWrite(
   if (type == SEGMENT_LABEL) {
     for (TimingSegment* seg : segs) {
       const LabelSegment* label = ToLabel(seg);
-      if (!label->GetLabel().empty()) {
+      if (!label->GetLabel().empty() &&
+          ShouldWriteTimingSegment(label, SEGMENT_LABEL, "SSC")) {
         out.push_back(ssprintf(
             "%.6f=%s", label->GetBeat(),
             SanitizeSSCLabelForWrite(label->GetLabel()).c_str()));
@@ -630,13 +631,16 @@ static void WriteTimingTags(
       join(",\r\n", GetTimingVectorForWrite(timing, SEGMENT_BPM, 6)).c_str()));
   f.PutLine(ssprintf(
       "#STOPS:%s;",
-      join(",\r\n", timing.ToVectorString(SEGMENT_STOP, 6)).c_str()));
+      join(",\r\n", GetTimingVectorForWrite(timing, SEGMENT_STOP, 6))
+          .c_str()));
   f.PutLine(ssprintf(
       "#DELAYS:%s;",
-      join(",\r\n", timing.ToVectorString(SEGMENT_DELAY, 6)).c_str()));
+      join(",\r\n", GetTimingVectorForWrite(timing, SEGMENT_DELAY, 6))
+          .c_str()));
   f.PutLine(ssprintf(
       "#WARPS:%s;",
-      join(",\r\n", timing.ToVectorString(SEGMENT_WARP, 6)).c_str()));
+      join(",\r\n", GetTimingVectorForWrite(timing, SEGMENT_WARP, 6))
+          .c_str()));
   f.PutLine(ssprintf(
       "#TIMESIGNATURES:%s;",
       join(",\r\n", GetTimingVectorForWrite(timing, SEGMENT_TIME_SIG, 6))
@@ -658,7 +662,8 @@ static void WriteTimingTags(
   if (!bIsSong) {
     f.PutLine(ssprintf(
         "#FAKES:%s;",
-        join(",\r\n", timing.ToVectorString(SEGMENT_FAKE, 6)).c_str()));
+        join(",\r\n", GetTimingVectorForWrite(timing, SEGMENT_FAKE, 6))
+            .c_str()));
   }
   f.PutLine(ssprintf(
       "#LABELS:%s;",
@@ -1115,11 +1120,14 @@ static LocalizedString ERROR_WRITING_FILE(
     "NotesWriterSSC", "Error writing file '%s'.");
 bool NotesWriterSSC::WriteEditFileToMachine(
     const Song* pSong, Steps* pSteps, std::string& sErrorOut) {
-  if (pSong == nullptr || pSteps == nullptr || PROFILEMAN == nullptr) {
-    sErrorOut = "Invalid song, steps, or profile manager for SSC edit save.";
+  if (pSong == nullptr || pSteps == nullptr || PROFILEMAN == nullptr ||
+      FILEMAN == nullptr) {
+    sErrorOut =
+        "Invalid song, steps, profile manager, or file manager for SSC edit "
+        "save.";
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-582: refusing to write SSC edit with null "
-        "song/steps/profile manager.");
+        "song/steps/profile manager/file manager.");
     return false;
   }
 

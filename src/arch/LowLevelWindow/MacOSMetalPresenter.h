@@ -15,6 +15,8 @@ struct MacOSMetalSolidVertex {
   float w = 1.0f;
   float u = 0.0f;
   float v = 0.0f;
+  float u2 = 0.0f;
+  float v2 = 0.0f;
   float textureMatrixScaleX = 1.0f;
   float textureMatrixScaleY = 1.0f;
   float r = 1.0f;
@@ -62,6 +64,8 @@ struct MacOSMetalDrawBatch {
   CullMode cullMode = CULL_NONE;
   bool textureWrapping = false;
   bool textureFiltering = true;
+  bool texture2Wrapping = false;
+  bool texture2Filtering = true;
   bool zWrite = false;
   bool alphaTest = false;
   bool clearDepthBefore = false;
@@ -74,6 +78,12 @@ struct MacOSMetalVertexFrame {
   size_t capacityVertices = 0;
   bool renderTarget = false;
 };
+
+// The native Metal renderer owns the window's CAMetalLayer directly.  The
+// OpenGL-to-Metal presentation bridge must stay disabled while that renderer
+// is alive or both presenters will race to replace the same NSWindow content.
+void MacOSMetalPresenterSetNativeRendererActive(bool active);
+bool MacOSMetalPresenterNativeRendererActive();
 
 class MacOSMetalPresenter {
  public:

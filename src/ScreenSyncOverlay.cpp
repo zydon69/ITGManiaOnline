@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "AdjustSync.h"
@@ -57,30 +58,28 @@ bool IsValidAutosyncType(AutosyncType type) {
   }
 }
 
-bool ApplyBPSDeltaToTiming(TimingData& timing, float beat, float delta) {
+bool PrepareBPSDelta(
+    TimingData& timing, float beat, float delta, BPMSegment*& segment,
+    float& new_bps) {
+  segment = nullptr;
+  new_bps = 0.0f;
   if (!IsFinite(beat) || !IsFinite(delta)) {
     return false;
-  }
-  if (delta == 0.0f) {
-    return true;
   }
   if (timing.GetTimingSegments(SEGMENT_BPM).empty()) {
     return false;
   }
 
-  BPMSegment* seg = timing.GetBPMSegmentAtBeat(beat);
-  if (seg == nullptr) {
+  segment = timing.GetBPMSegmentAtBeat(beat);
+  if (segment == nullptr) {
     return false;
   }
 
-  const float old_bps = seg->GetBPS();
-  const float new_bps = old_bps + delta;
+  const float old_bps = segment->GetBPS();
+  new_bps = old_bps + delta;
   if (!IsFinite(old_bps) || !IsFinite(new_bps) || new_bps < MIN_SYNC_BPS) {
     return false;
   }
-
-  seg->SetBPS(new_bps);
-  timing.ReleaseLookup();
   return true;
 }
 }
@@ -90,7 +89,7 @@ REGISTER_SCREEN_CLASS(ScreenSyncOverlay);
 void ScreenSyncOverlay::Init() {
   Screen::Init();
 
-  if (THEME != nullptr && THEME->IsThemeLoaded()) {
+  if (THEME != nullptr && THEME->IsThemeLoaded() && LUA != nullptr) {
     m_overlay.LoadB(m_sName, "overlay");
   } else {
     WarnSyncOverlay("using empty overlay actor because no theme is loaded.");
@@ -410,15 +409,25 @@ bool ScreenSyncOverlay::ApplyBPMDelta(float delta) {
   Song* song = GAMESTATE->m_pCurSong;
   TimingData& song_timing = song->m_SongTiming;
   const float song_beat = GAMESTATE->m_Position.m_fSongBeat;
-  if (!ApplyBPSDeltaToTiming(song_timing, song_beat, delta)) {
-    WarnSyncOverlay("ignored BPM delta that would produce invalid song timing.");
+  const float second = song_timing.GetElapsedTimeFromBeat(song_beat);
+  if (!IsFinite(second)) {
     return false;
   }
 
-  const float second = song_timing.GetElapsedTimeFromBeat(song_beat);
-  if (!IsFinite(second)) {
-    return true;
+  struct PendingBPSUpdate {
+    TimingData* timing;
+    BPMSegment* segment;
+    float new_bps;
+  };
+  std::vector<PendingBPSUpdate> updates;
+  BPMSegment* song_segment = nullptr;
+  float song_new_bps = 0.0f;
+  if (!PrepareBPSDelta(
+          song_timing, song_beat, delta, song_segment, song_new_bps)) {
+    WarnSyncOverlay("ignored BPM delta that would produce invalid song timing.");
+    return false;
   }
+  updates.push_back({&song_timing, song_segment, song_new_bps});
 
   const std::vector<Steps*>& steps_list = song->GetAllSteps();
   for (Steps* steps : steps_list) {
@@ -428,9 +437,23 @@ bool ScreenSyncOverlay::ApplyBPMDelta(float delta) {
 
     const float steps_beat = steps->m_Timing.GetBeatFromElapsedTime(second);
     if (!IsFinite(steps_beat)) {
-      continue;
+      return false;
     }
-    ApplyBPSDeltaToTiming(steps->m_Timing, steps_beat, delta);
+    BPMSegment* steps_segment = nullptr;
+    float steps_new_bps = 0.0f;
+    if (!PrepareBPSDelta(
+            steps->m_Timing, steps_beat, delta, steps_segment,
+            steps_new_bps)) {
+      WarnSyncOverlay(
+          "ignored BPM delta because a steps timing could not be updated.");
+      return false;
+    }
+    updates.push_back({&steps->m_Timing, steps_segment, steps_new_bps});
+  }
+
+  for (const PendingBPSUpdate& update : updates) {
+    update.segment->SetBPS(update.new_bps);
+    update.timing->ReleaseLookup();
   }
 
   ReleaseCurrentStepLookups();
@@ -479,8 +502,8 @@ bool ScreenSyncOverlay::ApplySongOffsetDelta(float delta) {
     return false;
   }
 
-  song->m_SongTiming.m_fBeat0OffsetInSeconds = new_song_offset;
-  song->m_SongTiming.ReleaseLookup();
+  std::vector<std::pair<TimingData*, float>> updates;
+  updates.emplace_back(&song->m_SongTiming, new_song_offset);
 
   const std::vector<Steps*>& steps_list = song->GetAllSteps();
   for (Steps* steps : steps_list) {
@@ -490,10 +513,16 @@ bool ScreenSyncOverlay::ApplySongOffsetDelta(float delta) {
     const float old_steps_offset = steps->m_Timing.m_fBeat0OffsetInSeconds;
     const float new_steps_offset = old_steps_offset + delta;
     if (!IsFinite(old_steps_offset) || !IsFinite(new_steps_offset)) {
-      continue;
+      WarnSyncOverlay(
+          "ignored song offset delta because a steps offset is invalid.");
+      return false;
     }
-    steps->m_Timing.m_fBeat0OffsetInSeconds = new_steps_offset;
-    steps->m_Timing.ReleaseLookup();
+    updates.emplace_back(&steps->m_Timing, new_steps_offset);
+  }
+
+  for (const auto& update : updates) {
+    update.first->m_fBeat0OffsetInSeconds = update.second;
+    update.first->ReleaseLookup();
   }
 
   ReleaseCurrentStepLookups();

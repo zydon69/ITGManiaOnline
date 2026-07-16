@@ -1,5 +1,6 @@
 #include "LuaBinding.h"
 
+#include <cmath>
 #include <map>
 #include <set>
 #include <string>
@@ -388,8 +389,8 @@ void DefaultNilArgs(lua_State* L, int n) {
 
 float FArgGTEZero(lua_State* L, int index) {
   float s = FArg(index);
-  if (s < 0) {
-    luaL_error(L, "Arg must be greater than or equal to zero.");
+  if (!std::isfinite(s) || s < 0) {
+    luaL_error(L, "Arg must be finite and greater than or equal to zero.");
   }
   return s;
 }

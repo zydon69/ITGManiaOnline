@@ -52,8 +52,6 @@ void AutogenOniFromArtist(
     const std::string& sArtistName, std::string sArtistNameTranslit,
     std::vector<Song*> aSongs, Difficulty dc, Course& out);
 
-bool ValidateEditCourseName(const std::string& sAnswer, std::string& sErrorOut);
-
 void WarnOnInvalidMods(std::string sMods);
 
 // sm-ssc additions:
@@ -71,9 +69,6 @@ bool ValidateEditCourseName(const std::string& sAnswer, std::string& sErrorOut);
 void GetAllEditCourses(std::vector<Course*>& vpCoursesOut);
 bool Save(Course* pCourse);
 bool RenameAndSave(Course* pCourse, std::string sName);
-
-bool ValidateEditCourseNametName(
-    const std::string& sAnswer, std::string& sErrorOut);
 
 extern int MAX_NAME_LENGTH;
 extern int MAX_PER_PROFILE;

@@ -19,10 +19,10 @@ class BitmapText : public Actor {
   BitmapText();
   BitmapText(const BitmapText& cpy);
   BitmapText& operator=(const BitmapText& cpy);
-  virtual ~BitmapText();
+  ~BitmapText() override;
 
-  virtual void LoadFromNode(const XNode* pNode) override;
-  virtual BitmapText* Copy() const override;
+  void LoadFromNode(const XNode* pNode) override;
+  BitmapText* Copy() const override;
 
   struct BMT_TweenState {
     // We'd be better off not adding strokes to things we can't control
@@ -53,17 +53,17 @@ class BitmapText : public Actor {
     return const_cast<BitmapText*>(this)->BMT_DestTweenState();
   }
 
-  virtual void SetCurrentTweenStart() override;
-  virtual void EraseHeadTween() override;
-  virtual void UpdatePercentThroughTween(float between) override;
-  virtual void BeginTweening(float time, ITween* interp) override;
+  void SetCurrentTweenStart() override;
+  void EraseHeadTween() override;
+  void UpdatePercentThroughTween(float between) override;
+  void BeginTweening(float time, ITween* interp) override;
   // This function exists because the compiler tried to connect a call of
   // "BeginTweening(1.2f)" to the function above. -Kyz
-  virtual void BeginTweening(float time, TweenType tt = TWEEN_LINEAR) override {
+  void BeginTweening(float time, TweenType tt = TWEEN_LINEAR) override {
     Actor::BeginTweening(time, tt);
   }
-  virtual void StopTweening() override;
-  virtual void FinishTweening() override;
+  void StopTweening() override;
+  void FinishTweening() override;
 
   bool LoadFromFont(const std::string& sFontName);
   bool LoadFromTextureAndChars(
@@ -79,8 +79,8 @@ class BitmapText : public Actor {
   void CropLineToWidth(size_t l, int width);
   void CropToWidth(int width);
 
-  virtual bool EarlyAbortDraw() const override;
-  virtual void DrawPrimitives() noexcept override;
+  bool EarlyAbortDraw() const override;
+  void DrawPrimitives() noexcept override;
 
   void SetUppercase(bool b);
   void SetRainbowScroll(bool b) { m_bRainbowScroll = b; }
@@ -125,11 +125,13 @@ class BitmapText : public Actor {
   void ClearAttributes();
 
   // Commands
-  virtual void PushSelf(lua_State* L) override;
+  void PushSelf(lua_State* L) override;
 
  protected:
   Font* m_pFont;
   bool m_bUppercase;
+  std::string m_sSourceText;
+  std::string m_sAlternateText;
   std::string m_sText;
   std::vector<std::wstring> m_wTextLines;
   std::vector<int> m_iLineWidths;  // in source pixels

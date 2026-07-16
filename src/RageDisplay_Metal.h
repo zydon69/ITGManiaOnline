@@ -52,7 +52,7 @@ class RageDisplay_Metal : public RageDisplay {
   RageTextureLock* CreateTextureLock() override;
   void DeleteTexture(uintptr_t iTexHandle) override;
   void ClearAllTextures() override;
-  int GetNumTextureUnits() override { return 1; }
+  int GetNumTextureUnits() override { return 2; }
   void SetTexture(TextureUnit, uintptr_t iTexture) override;
   void SetTextureMode(TextureUnit tu, TextureMode mode) override;
   void SetTextureWrapping(TextureUnit tu, bool wrapping) override;
@@ -67,6 +67,7 @@ class RageDisplay_Metal : public RageDisplay {
   uintptr_t GetRenderTarget() override;
   void SetRenderTarget(
       uintptr_t iHandle, bool bPreserveTexture = true) override;
+  void ResolutionChanged() override;
 
   bool IsZWriteEnabled() const override { return m_bZWrite; }
   bool IsZTestEnabled() const override { return m_ZTestMode != ZTEST_OFF; }
@@ -136,7 +137,7 @@ class RageDisplay_Metal : public RageDisplay {
     std::array<TextureMode, NUM_TextureUnit> textureModes = {};
     EffectMode effectMode = EffectMode_Normal;
     int celStage = 0;
-    bool sphereMapping = false;
+    std::array<bool, NUM_TextureUnit> sphereMapping = {};
     float zBias = 0.0f;
     ZTestMode zTestMode = ZTEST_OFF;
     CullMode cullMode = CULL_NONE;
@@ -184,6 +185,8 @@ class RageDisplay_Metal : public RageDisplay {
   uintptr_t AllocateTextureHandle();
   void RecycleTextureHandle(uintptr_t handle);
   void ReleaseTexture(MetalTexture* texture);
+  void ReleasePendingTextureDeletes();
+  bool IsTexturePendingDelete(uintptr_t handle) const;
   void DestroyAllTextures();
   bool UploadTexturePixels(
       MetalTexture* texture, RageSurface* img, int xoffset, int yoffset,
@@ -202,12 +205,13 @@ class RageDisplay_Metal : public RageDisplay {
   VertexWriterState m_RenderTargetVertexWriter;
   std::vector<MetalTexture> m_Textures;
   std::vector<uintptr_t> m_FreeTextureHandles;
+  std::vector<uintptr_t> m_PendingTextureDeletes;
   std::array<uintptr_t, NUM_TextureUnit> m_TextureHandles;
   BlendMode m_BlendMode;
   std::array<TextureMode, NUM_TextureUnit> m_TextureModes;
   EffectMode m_EffectMode;
   int m_iCelShadedStage;
-  bool m_bSphereMapping;
+  std::array<bool, NUM_TextureUnit> m_SphereMapping;
   float m_fZBias;
   ZTestMode m_ZTestMode;
   CullMode m_CullMode;
@@ -216,15 +220,19 @@ class RageDisplay_Metal : public RageDisplay {
   bool m_bZWrite;
   bool m_bAlphaTest;
   bool m_bClearDepthNextFrame;
+  bool m_bLayerReconfiguredForResolutionChange = false;
   uintptr_t m_iCurrentRenderTargetHandle;
   RageColor m_MaterialDiffuse;
   RageColor m_MaterialAmbient;
   RageColor m_MaterialEmissive;
+  RageColor m_MaterialSpecular;
+  float m_fMaterialShininess;
   bool m_bLighting;
   struct DirectionalLight {
     bool enabled = false;
     RageColor ambient = RageColor(0.0f, 0.0f, 0.0f, 1.0f);
     RageColor diffuse = RageColor(1.0f, 1.0f, 1.0f, 1.0f);
+    RageColor specular = RageColor(0.0f, 0.0f, 0.0f, 1.0f);
     RageVector3 direction = RageVector3(0.0f, 0.0f, 1.0f);
   };
   std::vector<DirectionalLight> m_Lights;

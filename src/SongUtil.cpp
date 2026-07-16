@@ -96,7 +96,6 @@ bool SongCriteria::Matches(const Song* pSong) const {
   }
 
   switch (m_Selectable) {
-    DEFAULT_FAIL(m_Selectable);
     case Selectable_Yes:
       if (UNLOCKMAN && UNLOCKMAN->SongIsLocked(pSong) & LOCKED_SELECTABLE) {
         return false;
@@ -109,6 +108,12 @@ bool SongCriteria::Matches(const Song* pSong) const {
       break;
     case Selectable_DontCare:
       break;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-3082: rejected song criteria with invalid "
+          "selectable value %i.",
+          m_Selectable);
+      return false;
   }
 
   if (m_bUseSongAllowedList) {
@@ -152,7 +157,6 @@ bool SongCriteria::Matches(const Song* pSong) const {
   }
 
   switch (m_Tutorial) {
-    DEFAULT_FAIL(m_Tutorial);
     case Tutorial_Yes:
       if (!pSong->IsTutorial()) {
         return false;
@@ -165,10 +169,15 @@ bool SongCriteria::Matches(const Song* pSong) const {
       break;
     case Tutorial_DontCare:
       break;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-3082: rejected song criteria with invalid "
+          "tutorial value %i.",
+          m_Tutorial);
+      return false;
   }
 
   switch (m_Locked) {
-    DEFAULT_FAIL(m_Locked);
     case Locked_Locked:
       if (UNLOCKMAN && !(UNLOCKMAN->SongIsLocked(pSong) & LOCKED_LOCK)) {
         return false;
@@ -181,6 +190,12 @@ bool SongCriteria::Matches(const Song* pSong) const {
       break;
     case Locked_DontCare:
       break;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-3082: rejected song criteria with invalid locked "
+          "value %i.",
+          m_Locked);
+      return false;
   }
 
   return true;
@@ -523,16 +538,40 @@ static LocalizedString SORT_OTHER("Sort", "Other");
 
 /* Just calculating GetNumTimesPlayed within the sort is pretty slow, so let's
  * precompute it.  (This could be generalized with a template.) */
-static std::map<const Song*, std::string> g_mapSongSortVal;
+static thread_local std::map<const Song*, std::string> g_mapSongSortVal;
+
+static const std::string& GetSongSortValue(const Song* pSong) {
+  static const std::string empty;
+  const auto value = g_mapSongSortVal.find(pSong);
+  return value == g_mapSongSortVal.end() ? empty : value->second;
+}
 
 static bool CompareSongPointersBySortValueAscending(
     const Song* pSong1, const Song* pSong2) {
-  return g_mapSongSortVal[pSong1] < g_mapSongSortVal[pSong2];
+  if (pSong1 == pSong2) {
+    return false;
+  }
+  if (pSong1 == nullptr) {
+    return false;
+  }
+  if (pSong2 == nullptr) {
+    return true;
+  }
+  return GetSongSortValue(pSong1) < GetSongSortValue(pSong2);
 }
 
 static bool CompareSongPointersBySortValueDescending(
     const Song* pSong1, const Song* pSong2) {
-  return g_mapSongSortVal[pSong1] > g_mapSongSortVal[pSong2];
+  if (pSong1 == pSong2) {
+    return false;
+  }
+  if (pSong1 == nullptr) {
+    return false;
+  }
+  if (pSong2 == nullptr) {
+    return true;
+  }
+  return GetSongSortValue(pSong1) > GetSongSortValue(pSong2);
 }
 
 std::string SongUtil::MakeSortString(std::string s) {
@@ -552,6 +591,16 @@ std::string SongUtil::MakeSortString(std::string s) {
 }
 
 static bool CompareSongPointersByTitle(const Song* pSong1, const Song* pSong2) {
+  if (pSong1 == pSong2) {
+    return false;
+  }
+  if (pSong1 == nullptr) {
+    return false;
+  }
+  if (pSong2 == nullptr) {
+    return true;
+  }
+
   // Prefer transliterations to full titles
   std::string s1 = pSong1->GetTranslitMainTitle();
   std::string s2 = pSong2->GetTranslitMainTitle();
@@ -582,6 +631,16 @@ void SongUtil::SortSongPointerArrayByTitle(std::vector<Song*>& vpSongsInOut) {
 }
 
 static bool CompareSongPointersByBPM(const Song* pSong1, const Song* pSong2) {
+  if (pSong1 == pSong2) {
+    return false;
+  }
+  if (pSong1 == nullptr) {
+    return false;
+  }
+  if (pSong2 == nullptr) {
+    return true;
+  }
+
   DisplayBpms bpms1, bpms2;
   pSong1->GetDisplayBpms(bpms1);
   pSong2->GetDisplayBpms(bpms2);
@@ -603,6 +662,16 @@ void SongUtil::SortSongPointerArrayByBPM(std::vector<Song*>& vpSongsInOut) {
 
 static bool CompareSongPointersByLength(
     const Song* pSong1, const Song* pSong2) {
+  if (pSong1 == pSong2) {
+    return false;
+  }
+  if (pSong1 == nullptr) {
+    return false;
+  }
+  if (pSong2 == nullptr) {
+    return true;
+  }
+
   float length1, length2;
   length1 = pSong1->m_fMusicLengthSeconds;
   length2 = pSong2->m_fMusicLengthSeconds;
@@ -801,9 +870,10 @@ void SongUtil::SortSongPointerArrayByProfileGrades(
 
 void SongUtil::SortSongPointerArrayByArtist(std::vector<Song*>& vpSongsInOut) {
   g_mapSongSortVal.clear();
-  for (unsigned i = 0; i < vpSongsInOut.size(); ++i) {
-    g_mapSongSortVal[vpSongsInOut[i]] =
-        MakeSortString(vpSongsInOut[i]->GetTranslitArtist());
+  for (Song* pSong : vpSongsInOut) {
+    if (pSong != nullptr) {
+      g_mapSongSortVal[pSong] = MakeSortString(pSong->GetTranslitArtist());
+    }
   }
   stable_sort(
       vpSongsInOut.begin(), vpSongsInOut.end(),
@@ -816,9 +886,10 @@ void SongUtil::SortSongPointerArrayByArtist(std::vector<Song*>& vpSongsInOut) {
 void SongUtil::SortSongPointerArrayByDisplayArtist(
     std::vector<Song*>& vpSongsInOut) {
   g_mapSongSortVal.clear();
-  for (unsigned i = 0; i < vpSongsInOut.size(); ++i) {
-    g_mapSongSortVal[vpSongsInOut[i]] =
-        MakeSortString(vpSongsInOut[i]->GetDisplayArtist());
+  for (Song* pSong : vpSongsInOut) {
+    if (pSong != nullptr) {
+      g_mapSongSortVal[pSong] = MakeSortString(pSong->GetDisplayArtist());
+    }
   }
   stable_sort(
       vpSongsInOut.begin(), vpSongsInOut.end(),
@@ -827,6 +898,15 @@ void SongUtil::SortSongPointerArrayByDisplayArtist(
 }
 
 static int CompareSongPointersByGenre(const Song* pSong1, const Song* pSong2) {
+  if (pSong1 == pSong2) {
+    return false;
+  }
+  if (pSong1 == nullptr) {
+    return false;
+  }
+  if (pSong2 == nullptr) {
+    return true;
+  }
   return pSong1->m_sGenre < pSong2->m_sGenre;
 }
 
@@ -978,6 +1058,13 @@ void SongUtil::SortSongPointerArrayByParentSectionName(
 
 void SongUtil::SortSongPointerArrayByNumPlays(
     std::vector<Song*>& vpSongsInOut, ProfileSlot slot, bool bDescending) {
+  if (PROFILEMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3083: song play-count sort requested without "
+        "PROFILEMAN; falling back to title sort.");
+    SortSongPointerArrayByTitle(vpSongsInOut);
+    return;
+  }
   if (!PROFILEMAN->IsPersistentProfile(slot)) {
     return;  // nothing to do since we don't have data
   }
@@ -988,10 +1075,19 @@ void SongUtil::SortSongPointerArrayByNumPlays(
 void SongUtil::SortSongPointerArrayByNumPlays(
     std::vector<Song*>& vpSongsInOut, const Profile* pProfile,
     bool bDescending) {
-  ASSERT(pProfile != nullptr);
-  for (unsigned i = 0; i < vpSongsInOut.size(); ++i) {
-    g_mapSongSortVal[vpSongsInOut[i]] =
-        ssprintf("%9i", pProfile->GetSongNumTimesPlayed(vpSongsInOut[i]));
+  if (pProfile == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3083: song play-count sort requested without "
+        "profile; falling back to title sort.");
+    SortSongPointerArrayByTitle(vpSongsInOut);
+    return;
+  }
+  g_mapSongSortVal.clear();
+  for (Song* pSong : vpSongsInOut) {
+    if (pSong != nullptr) {
+      g_mapSongSortVal[pSong] =
+          ssprintf("%9i", pProfile->GetSongNumTimesPlayed(pSong));
+    }
   }
   stable_sort(
       vpSongsInOut.begin(), vpSongsInOut.end(),
@@ -1008,6 +1104,12 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
 
   switch (so) {
     case SORT_PREFERRED:
+      if (SONGMAN == nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-3084: preferred section requested without "
+            "SONGMAN.");
+        return std::string();
+      }
       return SONGMAN->SongToPreferredSortSectionName(pSong);
     case SORT_GROUP:
     case SORT_SERIES:
@@ -1021,17 +1123,8 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
       }
     case SORT_TITLE:
     case SORT_ARTIST: {
-      std::string s;
-      switch (so) {
-        case SORT_TITLE:
-          s = pSong->GetTranslitMainTitle();
-          break;
-        case SORT_ARTIST:
-          s = pSong->GetTranslitArtist();
-          break;
-        default:
-          FAIL_M(ssprintf("Unexpected SortOrder: %i", so));
-      }
+      std::string s = so == SORT_TITLE ? pSong->GetTranslitMainTitle()
+                                       : pSong->GetTranslitArtist();
       s = MakeSortString(s);  // resulting string will be uppercase
 
       if (s.empty()) {
@@ -1110,6 +1203,12 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
     case SORT_RECENT:
     case SORT_RECENT_P1:
     case SORT_RECENT_P2:
+      if (THEME == nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-3084: localized sort section requested without "
+            "THEME.");
+        return SortOrderToString(so);
+      }
       return THEME->GetString(
           "MusicWheel",
           ssprintf("%s%s", SortOrderToString(so).c_str(), "Text"));
@@ -1164,7 +1263,8 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
       }
 
       Steps* pSteps = GetStepsByDifficulty(pSong, st, dc);
-      if (pSteps && !UNLOCKMAN->StepsIsLocked(pSong, pSteps)) {
+      if (pSteps &&
+          (UNLOCKMAN == nullptr || !UNLOCKMAN->StepsIsLocked(pSong, pSteps))) {
         return ssprintf("%02d", pSteps->GetMeter());
       }
       return SORT_NOT_AVAILABLE.GetValue();
@@ -1228,7 +1328,7 @@ void SongUtil::SortSongPointerArrayByStepsTypeAndMeter(
      * songs are using the preferred difficulty (dc), this will be a no-op. */
     s += ssprintf("%c", (pSteps ? pSteps->GetDifficulty() : 0) + '0');
 
-    if (PREFSMAN->m_bSubSortByNumSteps) {
+    if (PREFSMAN != nullptr && PREFSMAN->m_bSubSortByNumSteps) {
       s += ssprintf(
           "%06.0f",
           pSteps ? pSteps->GetRadarValues(PLAYER_1)[RadarCategory_TapsAndHolds]
@@ -1255,6 +1355,9 @@ void SongUtil::SortByMostRecentlyPlayedForMachine(
 
   g_mapSongSortVal.clear();
   for (const Song* s : vpSongsInOut) {
+    if (s == nullptr) {
+      continue;
+    }
     int iNumTimesPlayed = pProfile->GetSongNumTimesPlayed(s);
     std::string val = iNumTimesPlayed
                           ? pProfile->GetSongLastPlayedDateTime(s).GetString()
@@ -1282,6 +1385,9 @@ void SongUtil::SortByMostRecentlyPlayedForProfile(
   }
   g_mapSongSortVal.clear();
   for (const Song* s : vpSongsInOut) {
+    if (s == nullptr) {
+      continue;
+    }
     int iNumTimesPlayed = pProfile->GetSongNumTimesPlayed(s);
     std::string val = iNumTimesPlayed
                           ? pProfile->GetSongLastPlayedDateTime(s).GetString()
@@ -1679,9 +1785,14 @@ bool SongUtil::ValidateCurrentStepsMusic(
 }
 
 void SongUtil::GetAllSongGenres(std::vector<std::string>& vsOut) {
+  if (SONGMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3085: song genres requested without SONGMAN.");
+    return;
+  }
   std::set<std::string> genres;
   for (const Song* song : SONGMAN->GetAllSongs()) {
-    if (!song->m_sGenre.empty()) {
+    if (song != nullptr && !song->m_sGenre.empty()) {
       genres.insert(song->m_sGenre);
     }
   }
@@ -1708,10 +1819,11 @@ void SongUtil::GetPlayableStepsTypes(
         "SRC_AUDIT_FIX SRC-663: playable steps types requested without song.");
     return;
   }
-  if (GAMESTATE == nullptr || GAMEMAN == nullptr) {
+  if (GAMESTATE == nullptr || GAMEMAN == nullptr ||
+      GAMESTATE->m_pCurGame == nullptr) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-663: playable steps types requested without "
-        "GAMESTATE or GAMEMAN.");
+        "GAMESTATE, GAMEMAN, or current game.");
     return;
   }
 

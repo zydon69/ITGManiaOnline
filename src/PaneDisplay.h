@@ -1,6 +1,9 @@
 #ifndef PANE_DISPLAY_H
 #define PANE_DISPLAY_H
 
+#include <array>
+#include <string>
+
 #include "ActorFrame.h"
 #include "ActorUtil.h"
 #include "AutoActor.h"
@@ -8,7 +11,6 @@
 #include "PlayerNumber.h"
 #include "ThemeMetric.h"
 class XNode;
-#include <string>
 
 #include "LocalizedString.h"
 
@@ -37,15 +39,16 @@ enum PaneCategory {
 class PaneDisplay : public ActorFrame {
  public:
   PaneDisplay();
-  virtual PaneDisplay* Copy() const;
+  PaneDisplay(const PaneDisplay& cpy);
+  PaneDisplay* Copy() const override;
 
   void Load(const std::string& sMetricsGroup, PlayerNumber pn);
   void SetFromGameState();
 
-  void LoadFromNode(const XNode* pNode);
+  void LoadFromNode(const XNode* pNode) override;
 
   // Lua
-  void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
  private:
   void ResetLoadedActors();
@@ -53,8 +56,8 @@ class PaneDisplay : public ActorFrame {
       PaneCategory c, std::string& sTextOut, float& fLevelOut);
   void SetContent(PaneCategory c);
 
-  BitmapText m_textContents[NUM_PaneCategory];
-  AutoActor m_Labels[NUM_PaneCategory];
+  std::array<BitmapText, NUM_PaneCategory> m_textContents;
+  std::array<AutoActor, NUM_PaneCategory> m_Labels;
   ActorFrame m_ContentsFrame;
 
   PlayerNumber m_PlayerNumber;

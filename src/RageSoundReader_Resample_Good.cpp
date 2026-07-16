@@ -1066,7 +1066,7 @@ int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
     iFramesIn = m_pSource->Read(&tmpBuf[0], iFramesNeeded);
   } else {
     LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2922: resampler draining buffered samples "
+        "SRC_AUDIT_FIX SRC-2934: resampler draining buffered samples "
         "without source input source=%s requested=%d",
         GetSourcePath().c_str(), iFrames);
   }

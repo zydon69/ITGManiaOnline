@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <deque>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -284,6 +286,7 @@ BackgroundImpl::BackgroundImpl() {
   m_bInitted = false;
   m_pDancingCharacters = nullptr;
   m_pSong = nullptr;
+  m_fLastMusicSeconds = -9999.0f;
   m_bDangerAllWasVisible = false;
 }
 
@@ -316,6 +319,13 @@ void BackgroundImpl::Init() {
     }
     std::vector<std::string> vsPaths, vsNames;
     BackgroundUtil::GetBackgroundTransitions("", vsPaths, vsNames);
+    if (LUA == nullptr && !vsPaths.empty()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-3091: Background transitions skipped without "
+          "LUA.");
+      vsPaths.clear();
+      vsNames.clear();
+    }
     for (unsigned i = 0; i < vsPaths.size(); i++) {
       const std::string& sPath = vsPaths[i];
       const std::string& sName = vsNames[i];
@@ -583,7 +593,11 @@ bool BackgroundImpl::Layer::CreateBackground(
   Actor* pActor = ActorUtil::MakeActor(sEffectFile);
 
   if (pActor == nullptr) {
-    pActor = new Actor;
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3092: Background actor creation failed for effect "
+        "'%s'.",
+        sEffectFile.c_str());
+    return false;
   }
   m_BGAnimations[bd] = pActor;
 
@@ -669,15 +683,18 @@ void BackgroundImpl::LoadFromRandom(
       iSegmentEndRow = tSigs[i + 1]->GetRow();
     }
     const float fChangeMeasures = RAND_BG_CHANGE_MEASURES;
-    const int iStepRows =
-        std::lround(fChangeMeasures * ts->GetNoteRowsPerMeasure());
-    if (!std::isfinite(fChangeMeasures) || iStepRows <= 0) {
+    const double rawStepRows =
+        static_cast<double>(fChangeMeasures) * ts->GetNoteRowsPerMeasure();
+    if (!std::isfinite(fChangeMeasures) || !std::isfinite(rawStepRows) ||
+        rawStepRows < 1.0 ||
+        rawStepRows > static_cast<double>(std::numeric_limits<int>::max())) {
       LOG->Warn(
           "SRC_AUDIT_FIX SRC-692: Random background change interval %.3f "
-          "produced %d rows; skipping segment.",
-          fChangeMeasures, iStepRows);
+          "produced %.3f rows; skipping segment.",
+          fChangeMeasures, rawStepRows);
       continue;
     }
+    const int iStepRows = static_cast<int>(std::lround(rawStepRows));
 
     int time_signature_start = std::max(ts->GetRow(), iStartRow);
     for (int j = time_signature_start; j < std::min(iEndRow, iSegmentEndRow);
@@ -710,8 +727,9 @@ void BackgroundImpl::LoadFromRandom(
             ts->GetNoteRowsPerMeasure() <= 0) {
           continue;
         }
-        if ((bpms[i]->GetRow() - ts->GetRow()) % ts->GetNoteRowsPerMeasure() ==
-            0) {
+        const int64_t rowDelta = static_cast<int64_t>(bpms[i]->GetRow()) -
+                                 static_cast<int64_t>(ts->GetRow());
+        if (rowDelta % ts->GetNoteRowsPerMeasure() == 0) {
           bAtBeginningOfMeasure = true;
           break;
         }
@@ -781,8 +799,16 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
     // Pick the same random items every time the song is played.
     RandomGen rnd(GetHashForString(pSong->GetSongDir()));
     std::shuffle(vsNames.begin(), vsNames.end(), rnd);
-    int iSize = std::min((int)g_iNumBackgrounds, (int)vsNames.size());
-    vsNames.resize(iSize);
+    const int requestedCount = std::max(0, static_cast<int>(g_iNumBackgrounds));
+    const size_t selectedCount =
+        std::min(vsNames.size(), static_cast<size_t>(requestedCount));
+    if (requestedCount != static_cast<int>(g_iNumBackgrounds)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-3093: Negative random background count %i was "
+          "clamped to zero.",
+          static_cast<int>(g_iNumBackgrounds));
+    }
+    vsNames.resize(selectedCount);
 
     for (const std::string& s : vsNames) {
       BackgroundDef bd;
@@ -909,15 +935,19 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
 
   // At this point, we shouldn't have any BGChanges to "".  "" is an invalid
   // name.
-  for (unsigned i = 0; i < mainlayer.m_aBGChanges.size(); i++) {
-    if (mainlayer.m_aBGChanges[i].m_def.m_sFile1.empty()) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX SRC-694: Removing empty main background change at "
-          "index %u.",
-          i);
-      mainlayer.m_aBGChanges.erase(mainlayer.m_aBGChanges.begin() + i);
-      --i;
-    }
+  const auto firstEmpty = std::remove_if(
+      mainlayer.m_aBGChanges.begin(), mainlayer.m_aBGChanges.end(),
+      [](const BackgroundChange& bgChange) {
+        return bgChange.m_def.m_sFile1.empty();
+      });
+  if (firstEmpty != mainlayer.m_aBGChanges.end()) {
+    const size_t removed = static_cast<size_t>(
+        mainlayer.m_aBGChanges.end() - firstEmpty);
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3094: Removing %zu empty main background "
+        "change(s).",
+        removed);
+    mainlayer.m_aBGChanges.erase(firstEmpty, mainlayer.m_aBGChanges.end());
   }
 
   // Re-sort.

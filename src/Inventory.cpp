@@ -2,9 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-
-#include <algorithm>
-#include <cmath>
 #include <string>
 #include <vector>
 
@@ -34,6 +31,9 @@ struct Item {
   std::string sModifier;
 };
 static std::vector<Item> g_Items;
+
+static constexpr float MAX_INVENTORY_ITEM_DURATION_SECONDS =
+    24.0f * 60.0f * 60.0f;
 
 static bool IsValidInventoryPlayer(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
@@ -118,7 +118,13 @@ static int GetSafeNumItemTypes() {
         "SRC_AUDIT_FIX: Invalid Inventory NumItemTypes %f; using 0.", value));
     return 0;
   }
-  return std::clamp(static_cast<int>(std::floor(value)), 0, 128);
+  if (value > 128.0f) {
+    WarnInventory(ssprintf(
+        "SRC_AUDIT_FIX: Inventory NumItemTypes %f exceeds 128; clamping.",
+        value));
+    return 128;
+  }
+  return static_cast<int>(std::floor(value));
 }
 
 static float GetSafeItemDurationSeconds(int itemIndex) {
@@ -128,6 +134,12 @@ static float GetSafeItemDurationSeconds(int itemIndex) {
         "SRC_AUDIT_FIX: Ignoring inventory item %i with invalid duration %f.",
         itemIndex, value));
     return 0.0f;
+  }
+  if (value > MAX_INVENTORY_ITEM_DURATION_SECONDS) {
+    WarnInventory(ssprintf(
+        "SRC_AUDIT_FIX: Inventory item %i duration %f exceeds 24h; clamping.",
+        itemIndex, value));
+    return MAX_INVENTORY_ITEM_DURATION_SECONDS;
   }
   return value;
 }
@@ -269,7 +281,15 @@ void Inventory::Update(float fDelta) {
           ssprintf("SRC_AUDIT_FIX: Inventory::Update invalid delta %f.", fDelta));
       return;
     }
-    m_fSecondsUntilCpuUseCheck += fDelta;
+    const double elapsed =
+        static_cast<double>(m_fSecondsUntilCpuUseCheck) + fDelta;
+    if (!std::isfinite(elapsed)) {
+      WarnInventory(
+          "SRC_AUDIT_FIX: Inventory CPU-use timer overflowed; resetting.");
+      m_fSecondsUntilCpuUseCheck = 0.0f;
+      return;
+    }
+    m_fSecondsUntilCpuUseCheck = static_cast<float>(elapsed);
     if (m_fSecondsUntilCpuUseCheck < 1.0f) {
       return;
     }
@@ -277,7 +297,9 @@ void Inventory::Update(float fDelta) {
 
     const float useRate = GetSafeItemUseRateSeconds();
     const float useProbability =
-        std::isfinite(useRate) && useRate > 0.0f ? 1.0f / useRate : 0.0f;
+        std::isfinite(useRate) && useRate > 0.0f
+            ? std::clamp(1.0f / useRate, 0.0f, 1.0f)
+            : 0.0f;
     for (int s = 0; s < NUM_INVENTORY_SLOTS; s++) {
       if (!m_pPlayerState->m_Inventory[s].IsBlank()) {
         if (randomf(0, 1) < useProbability) {

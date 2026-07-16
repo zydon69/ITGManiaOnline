@@ -1,6 +1,7 @@
 #include "PlayerState.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -23,6 +24,8 @@
 
 namespace {
 const size_t MAX_ACTIVE_ATTACKS_PER_PLAYER = 4096;
+const size_t MAX_ATTACK_MODIFIER_CHARS = 4096;
+const float MAX_ATTACK_DURATION_SECONDS = 24.0f * 60.0f * 60.0f;
 
 bool IsValidPlayerNumberForState(PlayerNumber pn) {
   return pn == PLAYER_INVALID || (pn >= PLAYER_1 && pn < NUM_PLAYERS);
@@ -49,13 +52,20 @@ TimingData& FallbackDisplayedTiming() {
   return fallbackTiming;
 }
 
-Attack NormalizeAttackForLaunch(const Attack& source, const SongPosition& position) {
+Attack NormalizeAttackForLaunch(
+    const Attack& source, const SongPosition& position) {
   Attack attack = source;
   if (!std::isfinite(attack.fSecsRemaining) || attack.fSecsRemaining < 0.0f) {
     LOG->Warn(
         "SRC_AUDIT_FIX: PlayerState clamped invalid attack duration %f to 0.",
         attack.fSecsRemaining);
     attack.fSecsRemaining = 0.0f;
+  } else if (attack.fSecsRemaining > MAX_ATTACK_DURATION_SECONDS) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState clamped oversized attack duration %f to "
+        "%f.",
+        attack.fSecsRemaining, MAX_ATTACK_DURATION_SECONDS);
+    attack.fSecsRemaining = MAX_ATTACK_DURATION_SECONDS;
   }
   if (!std::isfinite(attack.fStartSecond)) {
     LOG->Warn(
@@ -70,8 +80,9 @@ Attack NormalizeAttackForLaunch(const Attack& source, const SongPosition& positi
     attack.level = ATTACK_LEVEL_1;
   }
   if (attack.fStartSecond == ATTACK_STARTS_NOW) {
-    attack.fStartSecond =
-        std::isfinite(position.m_fMusicSeconds) ? position.m_fMusicSeconds : 0.0f;
+    attack.fStartSecond = std::isfinite(position.m_fMusicSeconds)
+                              ? position.m_fMusicSeconds
+                              : 0.0f;
   } else if (attack.fStartSecond < 0.0f) {
     LOG->Warn(
         "SRC_AUDIT_FIX: PlayerState clamped negative attack start %f to 0.",
@@ -79,6 +90,24 @@ Attack NormalizeAttackForLaunch(const Attack& source, const SongPosition& positi
     attack.fStartSecond = 0.0f;
   }
   return attack;
+}
+
+bool HasUsableAttackModifiers(const std::string& modifiers) {
+  if (modifiers.empty() || modifiers.size() > MAX_ATTACK_MODIFIER_CHARS) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState rejected attack modifier length %zu.",
+        modifiers.size());
+    return false;
+  }
+  for (unsigned char c : modifiers) {
+    if (std::iscntrl(c)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: PlayerState rejected attack modifiers containing "
+          "control characters.");
+      return false;
+    }
+  }
+  return true;
 }
 
 bool NormalizeActiveAttack(Attack& attack) {
@@ -131,6 +160,7 @@ void PlayerState::Reset() {
   m_CacheDisplayedBeat.clear();
   m_CacheNoteStat.clear();
   m_PlayerOptions.Init();
+  m_EffectHistory = SampleHistory();
 
   m_fLastDrawnBeat = -100;
 
@@ -174,20 +204,31 @@ void PlayerState::Update(float fDelta) {
   bool bRebuildPlayerOptions = false;
 
   // See if any delayed attacks are starting or ending.
-  for (unsigned s = 0; s < m_ActiveAttacks.size(); s++) {
+  const float musicSeconds = m_Position.m_fMusicSeconds;
+  if (!std::isfinite(musicSeconds) && !m_ActiveAttacks.empty()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: PlayerState disabled timed attacks for non-finite "
+        "music position %f.",
+        musicSeconds);
+  }
+  for (size_t s = 0; s < m_ActiveAttacks.size();) {
     Attack& attack = m_ActiveAttacks[s];
 
     if (!NormalizeActiveAttack(attack)) {
+      m_ActiveAttacks.erase(m_ActiveAttacks.begin() + s);
       bRebuildPlayerOptions = true;
       continue;
     }
 
-    bool bCurrentlyEnabled =
-        attack.bGlobal || (attack.fStartSecond < m_Position.m_fMusicSeconds &&
-                           m_Position.m_fMusicSeconds <
-                               attack.fStartSecond + attack.fSecsRemaining);
+    const double attackEnd = static_cast<double>(attack.fStartSecond) +
+                             static_cast<double>(attack.fSecsRemaining);
+    const bool bCurrentlyEnabled =
+        attack.bGlobal ||
+        (std::isfinite(musicSeconds) && std::isfinite(attackEnd) &&
+         attack.fStartSecond < musicSeconds && musicSeconds < attackEnd);
 
     if (m_ActiveAttacks[s].bOn == bCurrentlyEnabled) {
+      ++s;
       continue;  // OK
     }
 
@@ -200,6 +241,7 @@ void PlayerState::Update(float fDelta) {
     bRebuildPlayerOptions = true;
 
     m_ActiveAttacks[s].bOn = bCurrentlyEnabled;
+    ++s;
   }
 
   if (bRebuildPlayerOptions) {
@@ -262,6 +304,11 @@ void PlayerState::LaunchAttack(const Attack& a) {
         static_cast<int>(m_PlayerNumber), static_cast<int>(m_mp));
     return;
   }
+  Attack normalizedSource = a;
+  Trim(normalizedSource.sModifiers);
+  if (!HasUsableAttackModifiers(normalizedSource.sModifiers)) {
+    return;
+  }
   if (m_ActiveAttacks.size() >= MAX_ACTIVE_ATTACKS_PER_PLAYER ||
       m_ModsToApply.size() >= MAX_ACTIVE_ATTACKS_PER_PLAYER) {
     LOG->Warn(
@@ -275,19 +322,13 @@ void PlayerState::LaunchAttack(const Attack& a) {
    * know when the attack started so it can be removed later.  For
    * m_ModsToApply, leave the sentinel in, so Player::Update knows to apply
    * attack transforms correctly. (yuck) */
-  Attack modToApply = a;
-  if (!std::isfinite(modToApply.fSecsRemaining) ||
-      modToApply.fSecsRemaining < 0.0f) {
-    modToApply.fSecsRemaining = 0.0f;
-  }
-  if (!std::isfinite(modToApply.fStartSecond)) {
+  Attack attack = NormalizeAttackForLaunch(normalizedSource, m_Position);
+  Attack modToApply = attack;
+  if (normalizedSource.fStartSecond == ATTACK_STARTS_NOW ||
+      !std::isfinite(normalizedSource.fStartSecond)) {
     modToApply.fStartSecond = ATTACK_STARTS_NOW;
   }
-  if (!IsValidAttackLevelForActiveAttack(modToApply.level)) {
-    modToApply.level = ATTACK_LEVEL_1;
-  }
   m_ModsToApply.push_back(modToApply);
-  Attack attack = NormalizeAttackForLaunch(a, m_Position);
   m_ActiveAttacks.push_back(attack);
   ++m_iActiveAttackListRevision;
 
@@ -302,7 +343,7 @@ void PlayerState::RemoveActiveAttacks(AttackLevel al) {
     return;
   }
   bool bRemovedAny = false;
-  for (unsigned s = 0; s < m_ActiveAttacks.size(); s++) {
+  for (size_t s = 0; s < m_ActiveAttacks.size(); s++) {
     if (al != NUM_ATTACK_LEVELS && al != m_ActiveAttacks[s].level) {
       continue;
     }
@@ -357,7 +398,8 @@ void PlayerState::RebuildPlayerOptionsFromActiveAttacks() {
     }
   }
   m_PlayerOptions.Assign(ModsLevel_Song, po);
-  if (canApplySongOptions && m_PlayerNumber == GAMESTATE->GetMasterPlayerNumber()) {
+  if (canApplySongOptions &&
+      m_PlayerNumber == GAMESTATE->GetMasterPlayerNumber()) {
     GAMESTATE->m_SongOptions.Assign(ModsLevel_Song, so);
   } else if (!canApplySongOptions) {
     LOG->Warn(
@@ -380,14 +422,15 @@ int PlayerState::GetSumOfActiveAttackLevels() const {
   int iSum = 0;
 
   for (unsigned s = 0; s < m_ActiveAttacks.size(); s++) {
-    if (m_ActiveAttacks[s].fSecsRemaining > 0 &&
+    if (m_ActiveAttacks[s].bOn && m_ActiveAttacks[s].fSecsRemaining > 0 &&
         IsValidAttackLevelForActiveAttack(m_ActiveAttacks[s].level)) {
-      if (iSum > std::numeric_limits<int>::max() - m_ActiveAttacks[s].level) {
+      const int levelValue = Enum::to_integral(m_ActiveAttacks[s].level) + 1;
+      if (iSum > std::numeric_limits<int>::max() - levelValue) {
         LOG->Warn(
             "SRC_AUDIT_FIX: PlayerState saturated active attack level sum.");
         return std::numeric_limits<int>::max();
       }
-      iSum += m_ActiveAttacks[s].level;
+      iSum += levelValue;
     }
   }
 

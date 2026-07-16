@@ -9,7 +9,6 @@
 #include <string>
 
 #include "RageSoundDriver.h"
-#include "RageThreads.h"
 
 class RageSoundDriver_AU : public RageSoundDriver {
  public:
@@ -28,17 +27,11 @@ class RageSoundDriver_AU : public RageSoundDriver {
       void* inRefCon, AudioUnitRenderActionFlags* ioActionFlags,
       const AudioTimeStamp* inTimeStamp, UInt32 inBusNumber,
       UInt32 inNumberFrames, AudioBufferList* ioData);
-  static void NameHALThread(
-      CFRunLoopObserverRef, CFRunLoopActivity activity, void* inRefCon);
-
   double m_TimeScale;
   AudioUnit m_OutputUnit;
   int m_iSampleRate;
   std::atomic<bool> m_bDone;
   bool m_bStarted;
-  RageThreadRegister* m_pIOThread;
-  RageThreadRegister* m_pNotificationThread;
-  RageSemaphore m_Semaphore;
 };
 
 #endif

@@ -4,7 +4,10 @@
 #include <climits>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "Actor.h"
 #include "ActorScroller.h"
@@ -98,14 +101,16 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
     const bool ok =
         LuaHelpers::RunScriptOnStack(L, Error, 2, 1, true);  // 2 args, 1 result
 
-    float numItems = ok && lua_isnumber(L, -1) ? (float)lua_tonumber(L, -1) : 0.0f;
+    float numItems =
+        ok && lua_isnumber(L, -1) ? (float)lua_tonumber(L, -1) : 0.0f;
     if (!std::isfinite(numItems) || numItems < 0.0f) {
       WarnDynamicActorScrollerAuditFix(
           "SRC_AUDIT_FIX SRC-781: DynamicActorScroller replaced invalid item "
           "count.");
       numItems = 0.0f;
     }
-    m_iNumItems = std::clamp((int)numItems, 0, 1000000);
+    numItems = std::min(numItems, 1000000.0f);
+    m_iNumItems = static_cast<int>(numItems);
     lua_pop(L, 1);
     LUA->Release(L);
   }
@@ -115,14 +120,20 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
   if (m_quadMask.GetVisible()) {
     iNumCopies += 1;
   }
+  std::vector<std::unique_ptr<Actor>> copies;
+  copies.reserve(static_cast<size_t>(iNumCopies - 1));
   for (int i = 1; i < iNumCopies; ++i) {
-    Actor* pCopy = m_SubActors[0]->Copy();
-    if (pCopy == nullptr) {
+    std::unique_ptr<Actor> copy(m_SubActors[0]->Copy());
+    if (copy == nullptr) {
       WarnDynamicActorScrollerAuditFix(
           "SRC_AUDIT_FIX SRC-781: DynamicActorScroller replaced null copy.");
-      pCopy = new Actor;
+      copy.reset(new Actor);
     }
-    this->AddChild(pCopy);
+    copies.push_back(std::move(copy));
+  }
+  for (std::unique_ptr<Actor>& copy : copies) {
+    AddChild(copy.get());
+    copy.release();
   }
 
   /* Reconfigure all items, so the loaded actors actually correspond with
@@ -149,17 +160,21 @@ void DynamicActorScroller::ShiftSubActors(int iDist) {
      * reconfigures much fewer actors. */
     int iWrapped = iDist;
     wrap(iWrapped, m_iNumItems);
-    if (std::abs(iWrapped) < std::abs(iDist)) {
+    if (std::abs(static_cast<int64_t>(iWrapped)) <
+        std::abs(static_cast<int64_t>(iDist))) {
       iDist = iWrapped;
     }
   }
 
+  const std::vector<Actor*> children = m_SubActors;
   int iFirstToReconfigure = 0;
-  int iLastToReconfigure = (int)m_SubActors.size();
-  if (!bReconfigureAll && iDist > 0 && iDist < (int)m_SubActors.size()) {
-    iFirstToReconfigure = m_SubActors.size() - iDist;
+  int iLastToReconfigure = static_cast<int>(children.size());
+  if (!bReconfigureAll && iDist > 0 &&
+      iDist < static_cast<int>(children.size())) {
+    iFirstToReconfigure = static_cast<int>(children.size()) - iDist;
   } else if (
-      !bReconfigureAll && iDist < 0 && -iDist < (int)m_SubActors.size()) {
+      !bReconfigureAll && iDist < 0 &&
+      -static_cast<int64_t>(iDist) < static_cast<int64_t>(children.size())) {
     iLastToReconfigure = -iDist;
   }
 
@@ -167,15 +182,15 @@ void DynamicActorScroller::ShiftSubActors(int iDist) {
     int iIndex = i;  // index into m_SubActors
     int iItem = i + m_iFirstSubActorIndex;
     if (m_bLoop) {
-      wrap(iIndex, m_SubActors.size());
+      wrap(iIndex, children.size());
       wrap(iItem, m_iNumItems);
     } else if (
-        iIndex < 0 || iIndex >= (int)m_SubActors.size() || iItem < 0 ||
+        iIndex < 0 || iIndex >= static_cast<int>(children.size()) || iItem < 0 ||
         iItem >= m_iNumItems) {
       continue;
     }
 
-    Actor* actor = m_SubActors[iIndex];
+    Actor* actor = children[iIndex];
     if (actor == nullptr || !ContainsChild(actor)) {
       continue;
     }
@@ -227,7 +242,7 @@ void DynamicActorScroller::ConfigureActor(Actor* pActor, int iItem) {
       LuaHelpers::RunScriptOnStack(L, Error, 2, 0, true);  // 2 args, 0 results
 
   LUA->Release(L);
-  if (!ok) {
+  if (!ok && ContainsChild(pActor)) {
     pActor->SetVisible(false);
     WarnDynamicActorScrollerAuditFix(
         "SRC_AUDIT_FIX SRC-2660: DynamicActorScroller hid failed item.");

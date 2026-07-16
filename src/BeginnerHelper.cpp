@@ -1,6 +1,7 @@
 #include "BeginnerHelper.h"
 
 #include <cmath>
+#include <cstdint>
 #include <string>
 
 #include "ActorFrame.h"
@@ -101,7 +102,10 @@ bool BeginnerHelper::Init(int iDancePadType) {
     return true;
   }
 
-  if (!CanUse(PLAYER_INVALID)) {
+  if (THEME == nullptr || !CanUse(PLAYER_INVALID)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3113: BeginnerHelper cannot initialize without "
+        "THEME or a compatible style.");
     return false;
   }
 
@@ -219,18 +223,23 @@ bool BeginnerHelper::Init(int iDancePadType) {
     m_pDancer[pl]->LoadMilkshapeAscii(Character->GetModelPath());
 
     // Load needed animations
-    m_pDancer[pl]->LoadMilkshapeAsciiBones("Step-LEFT", GetAnimPath(ANIM_LEFT));
-    m_pDancer[pl]->LoadMilkshapeAsciiBones("Step-DOWN", GetAnimPath(ANIM_DOWN));
-    m_pDancer[pl]->LoadMilkshapeAsciiBones("Step-UP", GetAnimPath(ANIM_UP));
-    m_pDancer[pl]->LoadMilkshapeAsciiBones(
-        "Step-RIGHT", GetAnimPath(ANIM_RIGHT));
-    m_pDancer[pl]->LoadMilkshapeAsciiBones(
-        "Step-JUMPLR", GetAnimPath(ANIM_JUMPLR));
-    if (!m_pDancer[pl]->LoadMilkshapeAsciiBones(
-            "rest", Character->GetRestAnimationPath())) {
+    const bool animationsLoaded =
+        m_pDancer[pl]->LoadMilkshapeAsciiBones(
+            "Step-LEFT", GetAnimPath(ANIM_LEFT)) &&
+        m_pDancer[pl]->LoadMilkshapeAsciiBones(
+            "Step-DOWN", GetAnimPath(ANIM_DOWN)) &&
+        m_pDancer[pl]->LoadMilkshapeAsciiBones(
+            "Step-UP", GetAnimPath(ANIM_UP)) &&
+        m_pDancer[pl]->LoadMilkshapeAsciiBones(
+            "Step-RIGHT", GetAnimPath(ANIM_RIGHT)) &&
+        m_pDancer[pl]->LoadMilkshapeAsciiBones(
+            "Step-JUMPLR", GetAnimPath(ANIM_JUMPLR)) &&
+        m_pDancer[pl]->LoadMilkshapeAsciiBones(
+            "rest", Character->GetRestAnimationPath());
+    if (!animationsLoaded) {
       LOG->Warn(
           "SRC_AUDIT_FIX SRC-732: BeginnerHelper disabled player %d because "
-          "rest animation '%s' failed to load.",
+          "one or more animations failed to load (rest='%s').",
           pl + 1, Character->GetRestAnimationPath().c_str());
       m_bPlayerEnabled[pl] = false;
       continue;
@@ -283,10 +292,11 @@ void BeginnerHelper::ShowStepCircle(PlayerNumber pn, int CSTEP) {
   }
 
   const float bps = GetSafeBeginnerHelperBPS();
+  const float secondsPerBeat = 1.0f / bps;
   m_sStepCircle[pn][isc].StopEffect();
   m_sStepCircle[pn][isc].SetZoom(2);
   m_sStepCircle[pn][isc].StopTweening();
-  m_sStepCircle[pn][isc].BeginTweening(bps / 3, TWEEN_LINEAR);
+  m_sStepCircle[pn][isc].BeginTweening(secondsPerBeat / 3.0f, TWEEN_LINEAR);
   m_sStepCircle[pn][isc].SetZoom(0);
 }
 
@@ -425,6 +435,7 @@ void BeginnerHelper::Step(PlayerNumber pn, int CSTEP) {
   }
 
   const float bps = GetSafeBeginnerHelperBPS();
+  const float secondsPerBeat = 1.0f / bps;
   m_pDancer[pn]->StopTweening();
   m_pDancer[pn]->SetRotationY(
       0);  // Make sure we're not still inside of a JUMPUD tween.
@@ -456,10 +467,11 @@ void BeginnerHelper::Step(PlayerNumber pn, int CSTEP) {
       ShowStepCircle(pn, ST_DOWN);
       m_pDancer[pn]->StopTweening();
       m_pDancer[pn]->PlayAnimation("Step-JUMPLR", 1.5f);
-      m_pDancer[pn]->BeginTweening(bps / 8, TWEEN_LINEAR);
+      m_pDancer[pn]->BeginTweening(secondsPerBeat / 8.0f, TWEEN_LINEAR);
       m_pDancer[pn]->SetRotationY(90);
-      m_pDancer[pn]->BeginTweening(1 / (bps * 2));  // sleep between jump-frames
-      m_pDancer[pn]->BeginTweening(bps / 6, TWEEN_LINEAR);
+      m_pDancer[pn]->BeginTweening(
+          secondsPerBeat / 2.0f);  // sleep between jump-frames
+      m_pDancer[pn]->BeginTweening(secondsPerBeat / 6.0f, TWEEN_LINEAR);
       m_pDancer[pn]->SetRotationY(0);
       break;
     default:
@@ -472,9 +484,9 @@ void BeginnerHelper::Step(PlayerNumber pn, int CSTEP) {
 
   m_sFlash.StopEffect();
   m_sFlash.StopTweening();
-  m_sFlash.Sleep(bps / 16);
+  m_sFlash.Sleep(secondsPerBeat / 16.0f);
   m_sFlash.SetDiffuseAlpha(1);
-  m_sFlash.BeginTweening(1 / bps * 0.5f);
+  m_sFlash.BeginTweening(secondsPerBeat * 0.5f);
   m_sFlash.SetDiffuseAlpha(0);
 }
 
@@ -498,7 +510,9 @@ void BeginnerHelper::Update(float fDeltaTime) {
   }
 
   static const int MAX_BEGINNER_HELPER_ROWS_PER_UPDATE = ROWS_PER_BEAT * 64;
-  if (iCurRow - m_iLastRowChecked > MAX_BEGINNER_HELPER_ROWS_PER_UPDATE) {
+  const int64_t rowsToScan = static_cast<int64_t>(iCurRow) -
+                             static_cast<int64_t>(m_iLastRowChecked);
+  if (rowsToScan > MAX_BEGINNER_HELPER_ROWS_PER_UPDATE) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-734: BeginnerHelper capped row scan from %d to %d.",
         m_iLastRowChecked, iCurRow);
@@ -553,13 +567,8 @@ void BeginnerHelper::Update(float fDeltaTime) {
     if (!m_bPlayerEnabled[pu] || m_pDancer[pu] == nullptr) {
       continue;
     }
-    // Update dancer's animation and StepCircles
+    // Step circles are ActorFrame children and were updated above.
     m_pDancer[pu]->Update(beat);
-    for (int scu = 0; scu < NUM_PLAYERS; scu++) {
-      for (int scue = 0; scue < 4; scue++) {
-        m_sStepCircle[scu][scue].Update(beat);
-      }
-    }
   }
 }
 

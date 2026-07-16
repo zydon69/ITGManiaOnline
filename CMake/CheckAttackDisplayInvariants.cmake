@@ -86,6 +86,10 @@ require_contains(
   "AttackDisplay hides when no active attack remains")
 require_contains(
   "${attack_display_cpp}"
+  "!IsValidAttackDisplayPlayer(m_pPlayerState->m_PlayerNumber)"
+  "AttackDisplay revalidates its retained player identity during updates")
+require_contains(
+  "${attack_display_cpp}"
   "AttackDisplay* AttackDisplay::Copy() const"
   "AttackDisplay has an explicit polymorphic copy")
 require_contains(

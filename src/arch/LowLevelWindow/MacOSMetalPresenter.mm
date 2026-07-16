@@ -6,7 +6,6 @@
 #include "RageUtil.h"
 
 #import <AppKit/AppKit.h>
-#import <CoreGraphics/CoreGraphics.h>
 #import <IOSurface/IOSurface.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -34,6 +33,25 @@
 @end
 
 namespace {
+
+bool CheckedAddSize(size_t lhs, size_t rhs, size_t* result) {
+  if (result == nullptr || rhs > std::numeric_limits<size_t>::max() - lhs) {
+    return false;
+  }
+  *result = lhs + rhs;
+  return true;
+}
+
+bool CheckedVertexBufferLength(size_t vertexCount, NSUInteger* length) {
+  if (length == nullptr ||
+      vertexCount > std::numeric_limits<NSUInteger>::max() /
+                        sizeof(MacOSMetalSolidVertex)) {
+    return false;
+  }
+  *length = static_cast<NSUInteger>(
+      vertexCount * sizeof(MacOSMetalSolidVertex));
+  return true;
+}
 
 constexpr int kMetalInteropSurfaceCount = 3;
 constexpr float kMetalSlowNextDrawableSummaryMs = 8.0f;
@@ -102,6 +120,7 @@ std::atomic<uint64_t> g_iMetalSlowDrawableAcquires{0};
 std::atomic<uint64_t> g_iMetalDrawableMisses{0};
 std::atomic_bool g_bMetalPresenterRuntimeActive{false};
 std::atomic<int> g_iMetalNativePresentationChangeReason{0};
+std::atomic_bool g_bMetalNativeRendererActive{false};
 
 void ResetMetalRuntimeStats() {
   g_iMetalDirectPresentSubmittedFrames.store(0, std::memory_order_relaxed);
@@ -604,7 +623,7 @@ void AppendMetalTimingSummary(
 
 void ConfigureMetalLayer(
     MacOSMetalPresenterImpl* impl, CAMetalLayer* layer, NSRect bounds,
-    CGSize drawableSize) {
+    CGSize drawableSize, CGFloat contentsScale) {
   if (impl == nullptr || layer == nil) {
     return;
   }
@@ -612,28 +631,42 @@ void ConfigureMetalLayer(
   layer.device = impl->device;
   layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
   layer.opaque = YES;
-  CGColorSpaceRef srgbColorSpace =
-      CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-  if (srgbColorSpace != nullptr) {
-    layer.colorspace = srgbColorSpace;
-    CGColorSpaceRelease(srgbColorSpace);
-  }
+  // The legacy OpenGL framebuffer is presented as device-native RGB.  An
+  // explicit sRGB ColorSync transform here reduced saturation on wide-gamut
+  // displays and made otherwise identical Metal output look grey.
+  layer.colorspace = nil;
   layer.framebufferOnly = YES;
   layer.displaySyncEnabled = YES;
   layer.allowsNextDrawableTimeout = YES;
   layer.maximumDrawableCount = 3;
   layer.frame = bounds;
+  layer.contentsScale = std::max<CGFloat>(1, contentsScale);
   layer.drawableSize = drawableSize;
+}
+
+CGFloat BackingScaleForLayerView(NSView* layerView) {
+  if (layerView == nil) {
+    return 1;
+  }
+  NSWindow* window = [layerView window];
+  if (window != nil) {
+    return std::max<CGFloat>(1, [window backingScaleFactor]);
+  }
+  const NSSize backingUnit =
+      [layerView convertSizeToBacking:NSMakeSize(1, 1)];
+  return std::max<CGFloat>(
+      1, std::max(backingUnit.width, backingUnit.height));
 }
 
 CGSize DrawableSizeForLayerView(NSView* layerView) {
   if (layerView == nil) {
     return CGSizeMake(1, 1);
   }
-  const NSRect bounds = [layerView bounds];
+  const NSRect backingBounds =
+      [layerView convertRectToBacking:[layerView bounds]];
   return CGSizeMake(
-      std::max<CGFloat>(1, bounds.size.width),
-      std::max<CGFloat>(1, bounds.size.height));
+      std::max<CGFloat>(1, std::ceil(backingBounds.size.width)),
+      std::max<CGFloat>(1, std::ceil(backingBounds.size.height)));
 }
 
 void PurgePrefetchedDrawable(MacOSMetalPresenterImpl* impl) {
@@ -663,15 +696,15 @@ bool AdoptLayerFromView(
   }
 
   CAMetalLayer* metalLayer = (CAMetalLayer*)backingLayer;
-  const CGSize drawableSize =
-      impl->layer != nil ? impl->layer.drawableSize
-                         : CGSizeMake(bounds.size.width, bounds.size.height);
+  const CGSize drawableSize = DrawableSizeForLayerView(layerView);
   [metalLayer retain];
   if (impl->layer != nil) {
     [impl->layer release];
   }
   impl->layer = metalLayer;
-  ConfigureMetalLayer(impl, impl->layer, [layerView bounds], drawableSize);
+  ConfigureMetalLayer(
+      impl, impl->layer, [layerView bounds], drawableSize,
+      BackingScaleForLayerView(layerView));
   return true;
 }
 
@@ -1340,6 +1373,63 @@ void ReleaseOffscreenPresentTextures(MacOSMetalPresenterImpl* impl) {
   impl->offscreenPresentHeight = 0;
 }
 
+bool ConfigureLayerResourcesForView(
+    MacOSMetalPresenterImpl* impl, NSView* layerView,
+    std::string* failureReason) {
+  if (impl == nullptr || impl->layer == nil || layerView == nil) {
+    if (failureReason != nullptr) {
+      *failureReason = "Metal layer or host view is unavailable.";
+    }
+    return false;
+  }
+
+  const CGSize drawableSize = DrawableSizeForLayerView(layerView);
+  if (!std::isfinite(drawableSize.width) ||
+      !std::isfinite(drawableSize.height) || drawableSize.width < 1 ||
+      drawableSize.height < 1 ||
+      drawableSize.width > std::numeric_limits<int>::max() ||
+      drawableSize.height > std::numeric_limits<int>::max()) {
+    if (failureReason != nullptr) {
+      *failureReason = ssprintf(
+          "Invalid Metal drawable size %.3fx%.3f.", drawableSize.width,
+          drawableSize.height);
+    }
+    return false;
+  }
+
+  const int drawableWidth = static_cast<int>(drawableSize.width);
+  const int drawableHeight = static_cast<int>(drawableSize.height);
+  const bool depthSizeChanged =
+      impl->depthTexture == nil ||
+      static_cast<int>([impl->depthTexture width]) != drawableWidth ||
+      static_cast<int>([impl->depthTexture height]) != drawableHeight;
+  id<MTLTexture> replacementDepth = nil;
+  if (depthSizeChanged) {
+    replacementDepth =
+        CreateDepthTexture(impl->device, drawableWidth, drawableHeight);
+    if (replacementDepth == nil) {
+      if (failureReason != nullptr) {
+        *failureReason = ssprintf(
+            "Could not create Metal depth texture %dx%d.", drawableWidth,
+            drawableHeight);
+      }
+      return false;
+    }
+  }
+
+  ConfigureMetalLayer(
+      impl, impl->layer, [layerView bounds], drawableSize,
+      BackingScaleForLayerView(layerView));
+  if (replacementDepth != nil) {
+    if (impl->depthTexture != nil) {
+      [impl->depthTexture release];
+    }
+    impl->depthTexture = replacementDepth;
+    ReleaseOffscreenPresentTextures(impl);
+  }
+  return true;
+}
+
 bool EnsureOffscreenPresentTextures(
     MacOSMetalPresenterImpl* impl, int width, int height) {
   if (impl == nullptr || impl->device == nil || width <= 0 || height <= 0) {
@@ -1517,9 +1607,17 @@ bool EncodeSolidBatches(
       continue;
     }
     if (batch.vertexBuffer != nullptr || batch.vertices != nullptr) {
-      totalVertexCount += batch.vertexCount;
+      if (!CheckedAddSize(
+              totalVertexCount, batch.vertexCount, &totalVertexCount)) {
+        LOG->Warn("MacOS Metal refused overflowing total vertex count.");
+        return false;
+      }
       if (batch.vertexBuffer == nullptr) {
-        cpuVertexCount += batch.vertexCount;
+        if (!CheckedAddSize(
+                cpuVertexCount, batch.vertexCount, &cpuVertexCount)) {
+          LOG->Warn("MacOS Metal refused overflowing CPU vertex count.");
+          return false;
+        }
       }
     }
   }
@@ -1529,13 +1627,20 @@ bool EncodeSolidBatches(
 
   const size_t initialVertexOffset =
       frameVertexOffsetInOut != nullptr ? *frameVertexOffsetInOut : 0;
+  size_t stagedVertexEnd = 0;
+  if (!CheckedAddSize(
+          initialVertexOffset, cpuVertexCount, &stagedVertexEnd)) {
+    return false;
+  }
   const size_t requiredVertexCount =
-      std::max(requiredVertexCapacity, initialVertexOffset + cpuVertexCount);
+      std::max(requiredVertexCapacity, stagedVertexEnd);
   id<MTLBuffer> frameVertexBuffer = nil;
   MacOSMetalSolidVertex* frameVertices = nullptr;
   if (cpuVertexCount > 0) {
-    const NSUInteger vertexBufferLength = static_cast<NSUInteger>(
-        sizeof(MacOSMetalSolidVertex) * requiredVertexCount);
+    NSUInteger vertexBufferLength = 0;
+    if (!CheckedVertexBufferLength(requiredVertexCount, &vertexBufferLength)) {
+      return false;
+    }
     frameVertexBuffer = PrepareSolidVertexBuffer(
         impl, vertexBufferLength, frameSlot, retainedBuffers, ringBuffers,
         ringCapacities, ringLabel);
@@ -1560,7 +1665,8 @@ bool EncodeSolidBatches(
   id<MTLDepthStencilState> currentDepthState = nil;
   id<MTLTexture> currentTexture0 = nil;
   id<MTLTexture> currentTexture1 = nil;
-  id<MTLSamplerState> currentSampler = nil;
+  id<MTLSamplerState> currentSampler0 = nil;
+  id<MTLSamplerState> currentSampler1 = nil;
   MTLCullMode currentCullMode = MTLCullModeNone;
   bool hasCurrentDepthState = false;
   bool hasCurrentCullMode = false;
@@ -1574,7 +1680,11 @@ bool EncodeSolidBatches(
   MacOSMetalTransformUniforms currentTransform;
   bool hasCurrentTransform = false;
 
-  [encoder setFrontFacingWinding:MTLWindingClockwise];
+  // Rage model assets are authored counter-clockwise.  Metal's viewport
+  // convention already accounts for the Y-axis transform used by Model, so
+  // keep the authored winding here.  Using clockwise only appeared viable
+  // while stale depth hid the one-sided models entirely.
+  [encoder setFrontFacingWinding:MTLWindingCounterClockwise];
 
   bool encodedAny = false;
   for (size_t i = 0; i < batchCount; ++i) {
@@ -1600,10 +1710,11 @@ bool EncodeSolidBatches(
             ? impl->distanceFieldPipelines[blendMode]
             : impl->solidPipelines[blendMode];
     if (pipeline == nil) {
-      pipeline = impl->solidPipelines[BLEND_NORMAL];
-    }
-    if (pipeline == nil) {
-      continue;
+      LOG->Warn(
+          "MacOS Metal presenter rejected batch with unavailable pipeline: "
+          "batch=%zu blend=%d effect=%d.",
+          i, static_cast<int>(blendMode), static_cast<int>(batch.effectMode));
+      return false;
     }
 
     id<MTLBuffer> drawVertexBuffer = nil;
@@ -1641,13 +1752,31 @@ bool EncodeSolidBatches(
                                   : impl->whiteTexture;
     const int wrappingIndex = batch.textureWrapping ? 1 : 0;
     const int filteringIndex = batch.textureFiltering ? 1 : 0;
+    const int wrappingIndex2 = batch.texture2Wrapping ? 1 : 0;
+    const int filteringIndex2 = batch.texture2Filtering ? 1 : 0;
     const bool textureHasMipmaps =
         sourceTexture != nil && [sourceTexture mipmapLevelCount] > 1;
-    id<MTLSamplerState> sampler =
+    const bool texture2HasMipmaps =
+        sourceTexture2 != nil && [sourceTexture2 mipmapLevelCount] > 1;
+    id<MTLSamplerState> sampler0 =
         impl->samplerStates[wrappingIndex][filteringIndex]
                             [textureHasMipmaps ? 1 : 0];
+    id<MTLSamplerState> sampler1 =
+        impl->samplerStates[wrappingIndex2][filteringIndex2]
+                            [texture2HasMipmaps ? 1 : 0];
     id<MTLDepthStencilState> depthState =
         impl->depthStates[zTestMode][batch.zWrite ? 1 : 0];
+    if (sourceTexture == nil || sourceTexture2 == nil || sampler0 == nil ||
+        sampler1 == nil || depthState == nil) {
+      LOG->Warn(
+          "MacOS Metal presenter rejected batch with incomplete GPU state: "
+          "batch=%zu texture0=%d texture1=%d sampler0=%d sampler1=%d "
+          "depth=%d.",
+          i, sourceTexture != nil ? 1 : 0, sourceTexture2 != nil ? 1 : 0,
+          sampler0 != nil ? 1 : 0, sampler1 != nil ? 1 : 0,
+          depthState != nil ? 1 : 0);
+      return false;
+    }
     TrackTextureForCommandBuffer(retainedTextures, sourceTexture);
     TrackTextureForCommandBuffer(retainedTextures, sourceTexture2);
 
@@ -1757,9 +1886,13 @@ bool EncodeSolidBatches(
       [encoder setFragmentTexture:sourceTexture2 atIndex:1];
       currentTexture1 = sourceTexture2;
     }
-    if (sampler != nil && sampler != currentSampler) {
-      [encoder setFragmentSamplerState:sampler atIndex:0];
-      currentSampler = sampler;
+    if (sampler0 != currentSampler0) {
+      [encoder setFragmentSamplerState:sampler0 atIndex:0];
+      currentSampler0 = sampler0;
+    }
+    if (sampler1 != currentSampler1) {
+      [encoder setFragmentSamplerState:sampler1 atIndex:1];
+      currentSampler1 = sampler1;
     }
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                 vertexStart:0
@@ -1789,6 +1922,14 @@ bool EncodeSolidBatches(
 }
 
 }  // namespace
+
+void MacOSMetalPresenterSetNativeRendererActive(bool active) {
+  g_bMetalNativeRendererActive.store(active, std::memory_order_release);
+}
+
+bool MacOSMetalPresenterNativeRendererActive() {
+  return g_bMetalNativeRendererActive.load(std::memory_order_acquire);
+}
 
 MacOSMetalPresenter::MacOSMetalPresenter()
     : m_Impl(nullptr), m_Available(false) {}
@@ -2014,13 +2155,40 @@ bool MacOSMetalPresenter::Initialize(
     impl = nullptr;
   };
 
+  bool nativePipelineSetComplete = fixedFunctionLibraryAvailable;
+  for (int i = 0; i < NUM_BlendMode; ++i) {
+    nativePipelineSetComplete =
+        nativePipelineSetComplete && impl->solidPipelines[i] != nil &&
+        impl->distanceFieldPipelines[i] != nil;
+  }
+  bool nativeDepthStateSetComplete = true;
+  for (int mode = 0; mode < NUM_ZTestMode; ++mode) {
+    for (int write = 0; write < 2; ++write) {
+      nativeDepthStateSetComplete =
+          nativeDepthStateSetComplete && impl->depthStates[mode][write] != nil;
+    }
+  }
+  bool nativeSamplerSetComplete = true;
+  for (int wrapping = 0; wrapping < 2; ++wrapping) {
+    for (int filtering = 0; filtering < 2; ++filtering) {
+      for (int mipmapped = 0; mipmapped < 2; ++mipmapped) {
+        nativeSamplerSetComplete =
+            nativeSamplerSetComplete &&
+            impl->samplerStates[wrapping][filtering][mipmapped] != nil;
+      }
+    }
+  }
+
   if (!createInteropSurfaces &&
-      (!fixedFunctionLibraryAvailable ||
-       impl->solidPipelines[BLEND_NORMAL] == nil ||
-       impl->distanceFieldPipelines[BLEND_NORMAL] == nil)) {
+      (!nativePipelineSetComplete || !nativeDepthStateSetComplete ||
+       !nativeSamplerSetComplete)) {
     m_FailureReason =
-        "Native Metal renderer requires the fixed-function Metal shader "
-        "library and normal/distance-field pipelines.";
+        ssprintf(
+            "Native Metal renderer requires complete fixed-function GPU "
+            "state (pipelines=%d depth_states=%d samplers=%d).",
+            nativePipelineSetComplete ? 1 : 0,
+            nativeDepthStateSetComplete ? 1 : 0,
+            nativeSamplerSetComplete ? 1 : 0);
     cleanupFailedImpl();
     LOG->Warn("MacOS Metal presenter unavailable: %s", m_FailureReason.c_str());
     return false;
@@ -2054,7 +2222,9 @@ bool MacOSMetalPresenter::Initialize(
   const NSRect bounds = contentView != nil ? [contentView bounds] : NSZeroRect;
 
   impl->layer = [[CAMetalLayer layer] retain];
-  ConfigureMetalLayer(impl, impl->layer, bounds, CGSizeMake(width, height));
+  ConfigureMetalLayer(
+      impl, impl->layer, bounds, CGSizeMake(width, height),
+      contentView != nil ? BackingScaleForLayerView(contentView) : 1);
 
   bool interopReady = false;
   if (createInteropSurfaces) {
@@ -2334,12 +2504,31 @@ bool MacOSMetalPresenter::AttachLayerToWindow(void* nsWindow) {
     return false;
   }
 
-  const NSRect bounds = [contentView bounds];
+  NSRect bounds = [contentView bounds];
+  if (impl->layerView != nil &&
+      (impl->layerOwnsContentView || [impl->layerView window] != window)) {
+    DetachLayer();
+    contentView = [window contentView];
+    if (contentView == nil) {
+      m_FailureReason =
+          "Cannot attach Metal layer: restored window has no content view.";
+      LOG->Warn("%s", m_FailureReason.c_str());
+      return false;
+    }
+    bounds = [contentView bounds];
+  }
   if (impl->layerView != nil) {
     StopDrawablePrefetcher(impl);
     ResetDisplayPacingTarget(impl);
     [impl->layerView setFrame:bounds];
-    impl->layer.frame = [impl->layerView bounds];
+    std::string configureFailure;
+    if (!ConfigureLayerResourcesForView(
+            impl, impl->layerView, &configureFailure)) {
+      m_FailureReason = "Cannot reattach Metal layer: " + configureFailure;
+      LOG->Warn("%s", m_FailureReason.c_str());
+      StartDrawablePrefetcher(impl);
+      return false;
+    }
     [impl->layerView setHidden:NO];
     impl->layerVisible.store(true, std::memory_order_release);
     StartDrawablePrefetcher(impl);
@@ -2368,6 +2557,16 @@ bool MacOSMetalPresenter::AttachLayerToWindow(void* nsWindow) {
   impl->layerVisible.store(true, std::memory_order_release);
   [contentView addSubview:layerView positioned:NSWindowAbove relativeTo:nil];
   impl->layerView = layerView;
+  std::string configureFailure;
+  if (!ConfigureLayerResourcesForView(
+          impl, impl->layerView, &configureFailure)) {
+    [impl->layerView removeFromSuperview];
+    [impl->layerView release];
+    impl->layerView = nil;
+    m_FailureReason = "Cannot attach Metal layer: " + configureFailure;
+    LOG->Warn("%s", m_FailureReason.c_str());
+    return false;
+  }
   ResetDisplayPacingTarget(impl);
   StartDrawablePrefetcher(impl);
 
@@ -2411,12 +2610,23 @@ bool MacOSMetalPresenter::AttachLayerAsContentView(void* nsWindow) {
   }
 
   const NSRect bounds = [contentView bounds];
+  if (impl->layerView != nil && [impl->layerView window] != window) {
+    DetachLayer();
+  }
   if (impl->layerView != nil && impl->layerOwnsContentView &&
       [window contentView] == impl->layerView) {
     StopDrawablePrefetcher(impl);
     ResetDisplayPacingTarget(impl);
     [impl->layerView setFrame:bounds];
-    impl->layer.frame = [impl->layerView bounds];
+    std::string configureFailure;
+    if (!ConfigureLayerResourcesForView(
+            impl, impl->layerView, &configureFailure)) {
+      m_FailureReason =
+          "Cannot reattach native Metal layer: " + configureFailure;
+      LOG->Warn("%s", m_FailureReason.c_str());
+      StartDrawablePrefetcher(impl);
+      return false;
+    }
     [impl->layerView setHidden:NO];
     impl->layerVisible.store(true, std::memory_order_release);
     StartDrawablePrefetcher(impl);
@@ -2460,6 +2670,20 @@ bool MacOSMetalPresenter::AttachLayerAsContentView(void* nsWindow) {
   impl->layerView = layerView;
   impl->layerOwnsContentView = true;
   [window setContentView:layerView];
+  std::string configureFailure;
+  if (!ConfigureLayerResourcesForView(
+          impl, impl->layerView, &configureFailure)) {
+    [window setContentView:impl->replacedContentView];
+    [impl->layerView release];
+    impl->layerView = nil;
+    impl->layerOwnsContentView = false;
+    [impl->replacedContentView release];
+    impl->replacedContentView = nil;
+    m_FailureReason =
+        "Cannot attach native Metal layer: " + configureFailure;
+    LOG->Warn("%s", m_FailureReason.c_str());
+    return false;
+  }
   ResetDisplayPacingTarget(impl);
   StartDrawablePrefetcher(impl);
 
@@ -2522,33 +2746,24 @@ bool MacOSMetalPresenter::ReconfigureAttachedLayer(
   [impl->layerView setHidden:NO];
   impl->layerVisible.store(true, std::memory_order_release);
 
-  const CGSize drawableSize = DrawableSizeForLayerView(impl->layerView);
-  ConfigureMetalLayer(impl, impl->layer, [impl->layerView bounds], drawableSize);
-
+  std::string configureFailure;
+  if (!ConfigureLayerResourcesForView(
+          impl, impl->layerView, &configureFailure)) {
+    LOG->Warn(
+        "MacOS Metal presenter could not reconfigure attached layer: "
+        "reason=%s error=%s",
+        reason != nullptr ? reason : "unknown", configureFailure.c_str());
+    if (wasPrefetchStarted || impl->useDrawablePrefetch) {
+      StartDrawablePrefetcher(impl);
+    }
+    return false;
+  }
+  const CGSize drawableSize = impl->layer.drawableSize;
   const bool depthSizeChanged =
-      impl->depthTexture == nil ||
       static_cast<int>(beforeDrawableSize.width) !=
           static_cast<int>(drawableSize.width) ||
       static_cast<int>(beforeDrawableSize.height) !=
           static_cast<int>(drawableSize.height);
-  if (depthSizeChanged) {
-    id<MTLTexture> replacementDepth = CreateDepthTexture(
-        impl->device, static_cast<int>(drawableSize.width),
-        static_cast<int>(drawableSize.height));
-    if (replacementDepth != nil) {
-      if (impl->depthTexture != nil) {
-        [impl->depthTexture release];
-      }
-      impl->depthTexture = replacementDepth;
-    } else {
-      LOG->Warn(
-          "MacOS Metal presenter could not recreate depth texture after "
-          "window presentation change: size=%dx%d.",
-          static_cast<int>(drawableSize.width),
-          static_cast<int>(drawableSize.height));
-    }
-    ReleaseOffscreenPresentTextures(impl);
-  }
 
   PurgePrefetchedDrawable(impl);
   if (wasPrefetchStarted || impl->useDrawablePrefetch) {
@@ -2793,7 +3008,10 @@ bool MacOSMetalPresenter::PresentSolidBatches(
   }
   size_t totalVertexCount = 0;
   for (size_t i = 0; i < batchCount; ++i) {
-    totalVertexCount += batches[i].vertexCount;
+    if (!CheckedAddSize(
+            totalVertexCount, batches[i].vertexCount, &totalVertexCount)) {
+      return false;
+    }
   }
   if (totalVertexCount == 0) {
     return PresentClearFrame(clearRed, clearGreen, clearBlue, clearAlpha,
@@ -3436,10 +3654,18 @@ bool MacOSMetalPresenter::RenderSolidBatchesToTexture(
   bool hasExplicitClearCommand = false;
   for (size_t i = 0; i < batchCount; ++i) {
     const MacOSMetalDrawBatch& batch = batches[i];
-    totalVertexCount += batch.vertexCount;
+    if (!CheckedAddSize(
+            totalVertexCount, batch.vertexCount, &totalVertexCount)) {
+      releaseExternalVertexFrameNow();
+      return false;
+    }
     if (batch.vertexCount > 0 && batch.vertexBuffer == nullptr &&
         batch.vertices != nullptr) {
-      cpuVertexCount += batch.vertexCount;
+      if (!CheckedAddSize(
+              cpuVertexCount, batch.vertexCount, &cpuVertexCount)) {
+        releaseExternalVertexFrameNow();
+        return false;
+      }
     }
     hasExplicitClearCommand = hasExplicitClearCommand ||
                               batch.clearDepthBefore;
@@ -3807,7 +4033,9 @@ void* MacOSMetalPresenter::CreateRGBA8Texture(
     bool generateMipMaps) {
   ScopedAutoreleasePool autoreleasePool;
 
-  if (!IsAvailable() || width <= 0 || height <= 0 || pixels == nullptr) {
+  if (!IsAvailable() || width <= 0 || height <= 0 || pixels == nullptr ||
+      static_cast<size_t>(width) > std::numeric_limits<size_t>::max() / 4 ||
+      bytesPerRow < static_cast<size_t>(width) * 4) {
     return nullptr;
   }
 
@@ -3853,8 +4081,10 @@ void* MacOSMetalPresenter::CreateRGBA8Texture(
     if ([commandBuffer status] != MTLCommandBufferStatusCompleted) {
       LOG->Warn(
           "MacOS Metal texture mipmap generation failed for %dx%d texture; "
-          "continuing with base level only.",
+          "rejecting texture with incomplete mip levels.",
           width, height);
+      [texture release];
+      return nullptr;
     }
   }
 
@@ -3865,13 +4095,21 @@ bool MacOSMetalPresenter::UpdateRGBA8Texture(
     void* texture, int xoffset, int yoffset, int width, int height,
     const void* pixels, size_t bytesPerRow) {
   if (texture == nullptr || pixels == nullptr || width <= 0 || height <= 0 ||
-      xoffset < 0 || yoffset < 0) {
+      xoffset < 0 || yoffset < 0 ||
+      static_cast<size_t>(width) > std::numeric_limits<size_t>::max() / 4 ||
+      bytesPerRow < static_cast<size_t>(width) * 4) {
     return false;
   }
 
   id<MTLTexture> metalTexture = (id<MTLTexture>)texture;
-  if (xoffset + width > static_cast<int>([metalTexture width]) ||
-      yoffset + height > static_cast<int>([metalTexture height])) {
+  const NSUInteger regionX = static_cast<NSUInteger>(xoffset);
+  const NSUInteger regionY = static_cast<NSUInteger>(yoffset);
+  const NSUInteger regionWidth = static_cast<NSUInteger>(width);
+  const NSUInteger regionHeight = static_cast<NSUInteger>(height);
+  if (regionX > [metalTexture width] ||
+      regionWidth > [metalTexture width] - regionX ||
+      regionY > [metalTexture height] ||
+      regionHeight > [metalTexture height] - regionY) {
     return false;
   }
 
@@ -3885,15 +4123,26 @@ bool MacOSMetalPresenter::UpdateRGBA8Texture(
         static_cast<MacOSMetalPresenterImpl*>(m_Impl);
     if (impl != nullptr && impl->commandQueue != nil) {
       id<MTLCommandBuffer> commandBuffer = [impl->commandQueue commandBuffer];
-      if (commandBuffer != nil) {
-        id<MTLBlitCommandEncoder> blitEncoder = [commandBuffer blitCommandEncoder];
-        if (blitEncoder != nil) {
-          [blitEncoder generateMipmapsForTexture:metalTexture];
-          [blitEncoder endEncoding];
-          [commandBuffer commit];
-          [commandBuffer waitUntilCompleted];
-        }
+      if (commandBuffer == nil) {
+        return false;
       }
+      id<MTLBlitCommandEncoder> blitEncoder = [commandBuffer blitCommandEncoder];
+      if (blitEncoder == nil) {
+        return false;
+      }
+      [blitEncoder generateMipmapsForTexture:metalTexture];
+      [blitEncoder endEncoding];
+      [commandBuffer commit];
+      [commandBuffer waitUntilCompleted];
+      if ([commandBuffer status] != MTLCommandBufferStatusCompleted) {
+        LOG->Warn(
+            "MacOS Metal texture mipmap regeneration failed after update "
+            "region=%d,%d %dx%d.",
+            xoffset, yoffset, width, height);
+        return false;
+      }
+    } else {
+      return false;
     }
   }
   return true;

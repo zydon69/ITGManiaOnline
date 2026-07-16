@@ -24,6 +24,7 @@ class ScreenTestSound : public Screen {
 
  private:
   static constexpr int NUM_SOUNDS = 5;
+  static constexpr std::size_t MAX_SIMULTANEOUS_COPIES = 64;
   struct Sound {
     RageSound s;
     BitmapText txt;

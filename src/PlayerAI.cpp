@@ -125,6 +125,10 @@ TapNoteScore PlayerAI::GetTapNoteScore(const PlayerState* pPlayerState) {
   if (pPlayerState->m_PlayerController == PC_AUTOPLAY) {
     return TNS_W1;
   }
+  if (GAMESTATE == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: PlayerAI called without GAMESTATE.");
+    return TNS_None;
+  }
 
   /*
   // handle replay data playback -aj
@@ -146,7 +150,7 @@ TapNoteScore PlayerAI::GetTapNoteScore(const PlayerState* pPlayerState) {
    * modifiers attached, don't make demonstration miss a lot. */
   // Idea: weight certain modifiers (boomerang, tornado) more? (to simulate
   // readability problems) -aj
-  if (GAMESTATE != nullptr && !GAMESTATE->m_bDemonstrationOrJukebox) {
+  if (!GAMESTATE->m_bDemonstrationOrJukebox) {
     int iSumOfAttackLevels =
         pPlayerState->m_fSecondsUntilAttacksPhasedOut > 0
             ? pPlayerState->m_iLastPositiveSumOfAttackLevels

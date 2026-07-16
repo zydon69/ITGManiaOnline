@@ -6,7 +6,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Actor.h"
@@ -35,6 +37,7 @@ static const std::string DEFAULT_ANIMATION_NAME = "default";
 
 namespace {
 constexpr int kMaxMaterials = 4096;
+constexpr float kMaxAnimationRate = 1000.0f;
 
 bool IsFiniteVector(const RageVector4& v) {
   return std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]) &&
@@ -75,7 +78,23 @@ std::string ResolveMaterialTexturePath(
     normalizedBase += '/';
   }
 
-  std::string texturePath = normalizedBase + textureName;
+  std::string normalizedTextureName = textureName;
+  FixSlashesInPlace(normalizedTextureName);
+  std::vector<std::string> textureParts;
+  split(normalizedTextureName, "/", textureParts, false);
+  const bool absolute = !normalizedTextureName.empty() &&
+                        (normalizedTextureName.front() == '/' ||
+                         (normalizedTextureName.size() > 1 &&
+                          normalizedTextureName[1] == ':'));
+  if (absolute || std::find(textureParts.begin(), textureParts.end(), "..") !=
+                      textureParts.end()) {
+    RageException::Throw(
+        "Parse error in \"%s\" at line %d: texture path \"%s\" escapes the "
+        "model directory in \"%s\".",
+        materialPath.c_str(), lineNum, textureName.c_str(), line.c_str());
+  }
+
+  std::string texturePath = normalizedBase + normalizedTextureName;
   FixSlashesInPlace(texturePath);
   CollapsePath(texturePath);
   if (!normalizedBase.empty() && !BeginsWith(texturePath, normalizedBase)) {
@@ -86,6 +105,75 @@ std::string ResolveMaterialTexturePath(
   }
   return texturePath;
 }
+
+bool ResolveBindPoseBone(
+    size_t index, const msAnimation& animation, std::vector<myBone_t>& bones,
+    std::vector<uint8_t>& states, std::vector<bool>& validHierarchy) {
+  if (states[index] == 2) {
+    return validHierarchy[index];
+  }
+  if (states[index] == 1) {
+    validHierarchy[index] = false;
+    return false;
+  }
+
+  states[index] = 1;
+  const int parent =
+      animation.FindBoneByName(animation.Bones[index].sParentName);
+  bool valid = true;
+  if (parent == -1) {
+    bones[index].m_Absolute = bones[index].m_Relative;
+  } else if (!IsValidBoneIndex(parent, bones.size()) ||
+             static_cast<size_t>(parent) == index ||
+             !ResolveBindPoseBone(
+                 static_cast<size_t>(parent), animation, bones, states,
+                 validHierarchy)) {
+    bones[index].m_Absolute = bones[index].m_Relative;
+    valid = false;
+  } else {
+    RageMatrixMultiply(
+        &bones[index].m_Absolute, &bones[parent].m_Absolute,
+        &bones[index].m_Relative);
+  }
+  states[index] = 2;
+  validHierarchy[index] = valid;
+  bones[index].m_Final = bones[index].m_Absolute;
+  return valid;
+}
+
+bool ResolveFinalPoseBone(
+    size_t index, const msAnimation& animation,
+    const std::vector<RageMatrix>& relativePose, std::vector<myBone_t>& bones,
+    std::vector<uint8_t>& states, std::vector<bool>& validHierarchy) {
+  if (states[index] == 2) {
+    return validHierarchy[index];
+  }
+  if (states[index] == 1) {
+    validHierarchy[index] = false;
+    return false;
+  }
+
+  states[index] = 1;
+  const int parent =
+      animation.FindBoneByName(animation.Bones[index].sParentName);
+  bool valid = true;
+  if (parent == -1) {
+    bones[index].m_Final = relativePose[index];
+  } else if (!IsValidBoneIndex(parent, bones.size()) ||
+             static_cast<size_t>(parent) == index ||
+             !ResolveFinalPoseBone(
+                 static_cast<size_t>(parent), animation, relativePose, bones,
+                 states, validHierarchy)) {
+    bones[index].m_Final = relativePose[index];
+    valid = false;
+  } else {
+    RageMatrixMultiply(
+        &bones[index].m_Final, &bones[parent].m_Final, &relativePose[index]);
+  }
+  states[index] = 2;
+  validHierarchy[index] = valid;
+  return valid;
+}
 }  // namespace
 
 Model::Model() {
@@ -94,11 +182,52 @@ Model::Model() {
   SetCullMode(CULL_BACK);
   m_pGeometry = nullptr;
   m_pCurAnimation = nullptr;
+  m_animation_length_seconds = 0.0f;
+  m_fCurFrame = 0.0f;
   m_fDefaultAnimationRate = 1;
   m_fCurAnimationRate = 1;
   m_bLoop = true;
-  m_bDrawCelShaded = false;
   m_pTempGeometry = nullptr;
+  m_bBonesPreprocessed = false;
+}
+
+Model::Model(const Model& cpy) : Actor(cpy) {
+  m_pGeometry = nullptr;
+  m_pCurAnimation = nullptr;
+  m_animation_length_seconds = 0.0f;
+  m_fCurFrame = 0.0f;
+  m_fDefaultAnimationRate = cpy.m_fDefaultAnimationRate;
+  m_fCurAnimationRate = cpy.m_fCurAnimationRate;
+  m_bLoop = cpy.m_bLoop;
+  m_pTempGeometry = nullptr;
+  m_bBonesPreprocessed = false;
+  m_sDefaultAnimation = cpy.m_sDefaultAnimation;
+
+  std::string currentAnimation;
+  for (const auto& animation : cpy.m_mapNameToAnimation) {
+    if (&animation.second == cpy.m_pCurAnimation) {
+      currentAnimation = animation.first;
+      break;
+    }
+  }
+
+  if (!cpy.m_sMeshesPath.empty() && !cpy.m_sMaterialsPath.empty() &&
+      !cpy.m_sBonesPath.empty()) {
+    LoadPieces(
+        cpy.m_sMeshesPath, cpy.m_sMaterialsPath, cpy.m_sBonesPath);
+    m_mapNameToAnimation = cpy.m_mapNameToAnimation;
+    m_pCurAnimation = nullptr;
+    if (!currentAnimation.empty()) {
+      PlayAnimation(currentAnimation, cpy.m_fCurAnimationRate);
+      if (m_pCurAnimation != nullptr) {
+        m_fCurFrame = std::clamp(
+            cpy.m_fCurFrame, 0.0f,
+            static_cast<float>(m_pCurAnimation->nTotalFrames));
+        SetBones(m_pCurAnimation, m_fCurFrame, m_vpBones);
+        UpdateTempGeometry();
+      }
+    }
+  }
 }
 
 Model::~Model() { Clear(); }
@@ -114,6 +243,7 @@ void Model::Clear() {
   m_Materials.clear();
   m_mapNameToAnimation.clear();
   m_pCurAnimation = nullptr;
+  m_fCurFrame = 0.0f;
   RecalcAnimationLengthSeconds();
 
   if (m_pTempGeometry) {
@@ -123,6 +253,11 @@ void Model::Clear() {
     m_pTempGeometry = nullptr;
   }
   m_vTempMeshes.clear();
+  m_vSourceMeshes.clear();
+  m_bBonesPreprocessed = false;
+  m_sMeshesPath.clear();
+  m_sMaterialsPath.clear();
+  m_sBonesPath.clear();
 }
 
 void Model::Load(const std::string& sFile) {
@@ -134,6 +269,10 @@ void Model::Load(const std::string& sFile) {
   MakeLower(sExt);
   if (sExt == "txt") {
     LoadMilkshapeAscii(sFile);
+  } else {
+    RageException::Throw(
+        "Model::Load does not support model extension \"%s\" for \"%s\".",
+        sExt.c_str(), sFile.c_str());
   }
   RecalcAnimationLengthSeconds();
 }
@@ -160,6 +299,17 @@ void Model::LoadPieces(
     RageException::Throw(
         "Model::LoadPieces requires meshes, materials and bones paths.");
   }
+  Model staged;
+  staged.m_sDefaultAnimation = m_sDefaultAnimation;
+  staged.m_fDefaultAnimationRate = m_fDefaultAnimationRate;
+  staged.m_bLoop = m_bLoop;
+  staged.LoadPiecesInPlace(sMeshesPath, sMaterialsPath, sBonesPath);
+  SwapLoadedState(staged);
+}
+
+void Model::LoadPiecesInPlace(
+    const std::string& sMeshesPath, const std::string& sMaterialsPath,
+    const std::string& sBonesPath) {
   Clear();
 
   // TRICKY: Load materials before geometry so we can figure out whether the
@@ -189,13 +339,17 @@ void Model::LoadPieces(
     }
   }
 
+  // Setup temp vertices (if necessary)
+  if (m_pGeometry->HasAnyPerVertexBones()) {
+    m_vSourceMeshes = m_pGeometry->m_Meshes;
+    m_vTempMeshes = m_vSourceMeshes;
+  }
+
   if (LoadMilkshapeAsciiBones(DEFAULT_ANIMATION_NAME, sBonesPath)) {
     PlayAnimation(DEFAULT_ANIMATION_NAME);
   }
 
-  // Setup temp vertices (if necessary)
-  if (m_pGeometry->HasAnyPerVertexBones()) {
-    m_vTempMeshes = m_pGeometry->m_Meshes;
+  if (!m_vTempMeshes.empty()) {
     m_pTempGeometry = DISPLAY->CreateCompiledGeometry();
     if (m_pTempGeometry == nullptr) {
       RageException::Throw(
@@ -204,7 +358,32 @@ void Model::LoadPieces(
     }
     m_pTempGeometry->Set(m_vTempMeshes, this->MaterialsNeedNormals());
   }
+  m_sMeshesPath = sMeshesPath;
+  m_sMaterialsPath = sMaterialsPath;
+  m_sBonesPath = sBonesPath;
   RecalcAnimationLengthSeconds();
+}
+
+void Model::SwapLoadedState(Model& other) noexcept {
+  using std::swap;
+  swap(m_pGeometry, other.m_pGeometry);
+  swap(m_animation_length_seconds, other.m_animation_length_seconds);
+  swap(m_Materials, other.m_Materials);
+  swap(m_mapNameToAnimation, other.m_mapNameToAnimation);
+  swap(m_pCurAnimation, other.m_pCurAnimation);
+  swap(m_vpBones, other.m_vpBones);
+  swap(m_pTempGeometry, other.m_pTempGeometry);
+  swap(m_vSourceMeshes, other.m_vSourceMeshes);
+  swap(m_vTempMeshes, other.m_vTempMeshes);
+  swap(m_bBonesPreprocessed, other.m_bBonesPreprocessed);
+  swap(m_fCurFrame, other.m_fCurFrame);
+  swap(m_sDefaultAnimation, other.m_sDefaultAnimation);
+  swap(m_fDefaultAnimationRate, other.m_fDefaultAnimationRate);
+  swap(m_fCurAnimationRate, other.m_fCurAnimationRate);
+  swap(m_bLoop, other.m_bLoop);
+  swap(m_sMeshesPath, other.m_sMeshesPath);
+  swap(m_sMaterialsPath, other.m_sMaterialsPath);
+  swap(m_sBonesPath, other.m_sBonesPath);
 }
 
 void Model::LoadFromNode(const XNode* pNode) {
@@ -357,7 +536,7 @@ void Model::LoadMaterialsFromMilkshapeAscii(const std::string& _sPath) {
         if (!std::isfinite(fShininess) || fShininess < 0.0f) {
           THROW;
         }
-        Material.fShininess = fShininess;
+        Material.fShininess = std::min(fShininess, 128.0f);
 
         // transparency
         if (f.GetLine(sLine) <= 0) {
@@ -430,12 +609,21 @@ void Model::LoadMaterialsFromMilkshapeAscii(const std::string& _sPath) {
 
 bool Model::LoadMilkshapeAsciiBones(
     const std::string& sAniName, const std::string& sPath) {
-  m_mapNameToAnimation[sAniName] = msAnimation();
-  msAnimation& Animation = m_mapNameToAnimation[sAniName];
-
-  if (Animation.LoadMilkshapeAsciiBones(sAniName, sPath)) {
-    m_mapNameToAnimation.erase(sAniName);
+  if (sAniName.empty() || sPath.empty()) {
     return false;
+  }
+  msAnimation animation;
+  if (animation.LoadMilkshapeAsciiBones(sAniName, sPath)) {
+    return false;
+  }
+
+  const bool replacingCurrent =
+      m_pCurAnimation != nullptr &&
+      m_mapNameToAnimation.find(sAniName) != m_mapNameToAnimation.end() &&
+      &m_mapNameToAnimation.find(sAniName)->second == m_pCurAnimation;
+  m_mapNameToAnimation[sAniName] = std::move(animation);
+  if (replacingCurrent) {
+    m_pCurAnimation = &m_mapNameToAnimation.find(sAniName)->second;
   }
 
   return true;
@@ -449,6 +637,9 @@ void Model::DrawCelShaded() {
   if (DISPLAY == nullptr) {
     return;
   }
+  const bool originalZWrite = m_bZWrite;
+  const CullMode originalCullMode = m_CullMode;
+
   // First pass: shell. We only want the backfaces for this.
   DISPLAY->SetCelShaded(1);
   DISPLAY->SetCullMode(CULL_FRONT);
@@ -462,6 +653,10 @@ void Model::DrawCelShaded() {
   this->Draw();
 
   DISPLAY->SetCelShaded(0);
+  SetZWrite(originalZWrite);
+  SetCullMode(originalCullMode);
+  DISPLAY->SetZWrite(originalZWrite);
+  DISPLAY->SetCullMode(originalCullMode);
 }
 
 void Model::DrawPrimitives() {
@@ -557,6 +752,9 @@ void Model::DrawPrimitives() {
 
           // Turn off environment mapping on tex unit 0.
           DISPLAY->SetSphereEnvironmentMapping(TextureUnit_1, false);
+          DISPLAY->SetSphereEnvironmentMapping(TextureUnit_2, false);
+          DISPLAY->SetTexture(TextureUnit_2, 0);
+          DISPLAY->SetTextureMode(TextureUnit_2, TextureMode_Modulate);
         } else {
           // render the diffuse texture
           DISPLAY->SetTexture(
@@ -640,6 +838,11 @@ void Model::DrawPrimitives() {
       DrawMesh(i);
     }
   }
+  DISPLAY->SetTextureMode(TextureUnit_1, TextureMode_Modulate);
+  DISPLAY->SetSphereEnvironmentMapping(TextureUnit_1, false);
+  DISPLAY->SetSphereEnvironmentMapping(TextureUnit_2, false);
+  DISPLAY->SetTexture(TextureUnit_2, 0);
+  DISPLAY->SetBlendMode(BLEND_NORMAL);
 }
 
 void Model::DrawMesh(int i) const {
@@ -677,12 +880,16 @@ void Model::DrawMesh(int i) const {
 
 void Model::SetDefaultAnimation(std::string sAnimation, float fPlayRate) {
   m_sDefaultAnimation = sAnimation;
-  m_fDefaultAnimationRate =
-      std::isfinite(fPlayRate) && fPlayRate > 0.0f ? fPlayRate : 1.0f;
+  m_fDefaultAnimationRate = std::isfinite(fPlayRate) && fPlayRate > 0.0f
+                                ? std::min(fPlayRate, kMaxAnimationRate)
+                                : 1.0f;
 }
 
 void Model::SetRate(float fRate) {
-  m_fCurAnimationRate = std::isfinite(fRate) ? fRate : 1.0f;
+  m_fCurAnimationRate = std::isfinite(fRate)
+                            ? std::clamp(
+                                  fRate, -kMaxAnimationRate, kMaxAnimationRate)
+                            : 1.0f;
 }
 
 void Model::PlayAnimation(const std::string& sAniName, float fPlayRate) {
@@ -690,75 +897,60 @@ void Model::PlayAnimation(const std::string& sAniName, float fPlayRate) {
     return;
   }
 
-  const msAnimation* pNewAnimation = &m_mapNameToAnimation[sAniName];
+  const msAnimation* pNewAnimation = &m_mapNameToAnimation.find(sAniName)->second;
 
   m_fCurFrame = 0;
   SetRate(fPlayRate);
 
-  if (m_pCurAnimation == pNewAnimation) {
-    return;
-  }
+  if (m_pCurAnimation != pNewAnimation) {
+    m_pCurAnimation = pNewAnimation;
+    m_vpBones.resize(m_pCurAnimation->Bones.size());
 
-  m_pCurAnimation = pNewAnimation;
-
-  // setup bones
-  m_vpBones.resize(m_pCurAnimation->Bones.size());
-
-  for (unsigned i = 0; i < m_pCurAnimation->Bones.size(); i++) {
-    const msBone* pBone = &m_pCurAnimation->Bones[i];
-    const RageVector3& vRot = pBone->Rotation;
-
-    RageMatrixAngles(&m_vpBones[i].m_Relative, vRot);
-
-    m_vpBones[i].m_Relative.m[3][0] = pBone->Position[0];
-    m_vpBones[i].m_Relative.m[3][1] = pBone->Position[1];
-    m_vpBones[i].m_Relative.m[3][2] = pBone->Position[2];
-
-    int nParentBone = m_pCurAnimation->FindBoneByName(pBone->sParentName);
-    if (nParentBone != -1) {
-      if (static_cast<unsigned>(nParentBone) < i) {
-        RageMatrixMultiply(
-            &m_vpBones[i].m_Absolute, &m_vpBones[nParentBone].m_Absolute,
-            &m_vpBones[i].m_Relative);
-      } else {
-        m_vpBones[i].m_Absolute = m_vpBones[i].m_Relative;
-      }
-    } else {
-      m_vpBones[i].m_Absolute = m_vpBones[i].m_Relative;
+    for (size_t i = 0; i < m_pCurAnimation->Bones.size(); ++i) {
+      const msBone& bone = m_pCurAnimation->Bones[i];
+      RageMatrixAngles(&m_vpBones[i].m_Relative, bone.Rotation);
+      m_vpBones[i].m_Relative.m[3][0] = bone.Position[0];
+      m_vpBones[i].m_Relative.m[3][1] = bone.Position[1];
+      m_vpBones[i].m_Relative.m[3][2] = bone.Position[2];
     }
-    m_vpBones[i].m_Final = m_vpBones[i].m_Absolute;
+    std::vector<uint8_t> states(m_vpBones.size(), 0);
+    std::vector<bool> validHierarchy(m_vpBones.size(), true);
+    for (size_t i = 0; i < m_vpBones.size(); ++i) {
+      ResolveBindPoseBone(
+          i, *m_pCurAnimation, m_vpBones, states, validHierarchy);
+    }
   }
 
-  // subtract out the bone's resting position
-  if (m_pGeometry != nullptr) {
-    for (unsigned i = 0; i < m_pGeometry->m_Meshes.size(); ++i) {
-      msMesh* pMesh = &m_pGeometry->m_Meshes[i];
+  // Convert the private bind-pose copy once.  Never mutate ModelManager's
+  // shared geometry, and never apply this subtraction again on animation
+  // switches.
+  if (!m_bBonesPreprocessed && !m_vSourceMeshes.empty()) {
+    for (unsigned i = 0; i < m_vSourceMeshes.size(); ++i) {
+      msMesh* pMesh = &m_vSourceMeshes[i];
       std::vector<RageModelVertex>& Vertices = pMesh->Vertices;
       for (unsigned j = 0; j < Vertices.size(); j++) {
-      // int iBoneIndex = (pMesh->m_iBoneIndex!=-1) ? pMesh->m_iBoneIndex :
-      // bone;
-      RageVector3& pos = Vertices[j].p;
-      int8_t bone = Vertices[j].bone;
-      if (bone != -1 && IsValidBoneIndex(bone, m_vpBones.size())) {
-        pos[0] -= m_vpBones[bone].m_Absolute.m[3][0];
-        pos[1] -= m_vpBones[bone].m_Absolute.m[3][1];
-        pos[2] -= m_vpBones[bone].m_Absolute.m[3][2];
+        RageVector3& pos = Vertices[j].p;
+        int8_t bone = Vertices[j].bone;
+        if (bone != -1 && IsValidBoneIndex(bone, m_vpBones.size())) {
+          pos[0] -= m_vpBones[bone].m_Absolute.m[3][0];
+          pos[1] -= m_vpBones[bone].m_Absolute.m[3][1];
+          pos[2] -= m_vpBones[bone].m_Absolute.m[3][2];
 
-        RageVector3 vTmp;
-
-        RageMatrix inverse;
-        RageMatrixTranspose(
-            &inverse,
-            &m_vpBones[bone]
-                 .m_Absolute);  // transpose = inverse for rotation matrices
-        RageVec3TransformNormal(&vTmp, &pos, &inverse);
-
-        pos = vTmp;
-      } else if (bone != -1) {
-        Vertices[j].bone = -1;
+          RageVector3 vTmp;
+          RageMatrix inverse;
+          RageMatrixTranspose(
+              &inverse,
+              &m_vpBones[bone]
+                   .m_Absolute);  // transpose = inverse for rotation matrices
+          RageVec3TransformNormal(&vTmp, &pos, &inverse);
+          pos = vTmp;
+        } else if (bone != -1) {
+          Vertices[j].bone = -1;
+        }
       }
     }
-    }
+    m_bBonesPreprocessed = true;
+    m_vTempMeshes = m_vSourceMeshes;
   }
 
   // Set up m_vpBones, just in case we're drawn without being Update()d.
@@ -771,9 +963,11 @@ void Model::SetPosition(float fSeconds) {
       !std::isfinite(fSeconds)) {
     return;
   }
-  m_fCurFrame = FRAMES_PER_SECOND * fSeconds;
-  m_fCurFrame =
-      std::clamp(m_fCurFrame, (float)0, (float)m_pCurAnimation->nTotalFrames);
+  const double frame = static_cast<double>(FRAMES_PER_SECOND) * fSeconds;
+  m_fCurFrame = static_cast<float>(std::clamp(
+      frame, 0.0, static_cast<double>(m_pCurAnimation->nTotalFrames)));
+  SetBones(m_pCurAnimation, m_fCurFrame, m_vpBones);
+  UpdateTempGeometry();
 }
 
 void Model::AdvanceFrame(float fDeltaTime) {
@@ -785,7 +979,29 @@ void Model::AdvanceFrame(float fDeltaTime) {
 
   // LOG->Trace( "m_fCurFrame = %f", m_fCurFrame );
 
-  m_fCurFrame += FRAMES_PER_SECOND * fDeltaTime * m_fCurAnimationRate;
+  const double nextFrame =
+      static_cast<double>(m_fCurFrame) + FRAMES_PER_SECOND *
+          static_cast<double>(fDeltaTime) * m_fCurAnimationRate;
+  if (!std::isfinite(nextFrame)) {
+    m_fCurFrame = 0.0f;
+  } else if (
+      std::abs(nextFrame) >
+      static_cast<double>(std::numeric_limits<float>::max())) {
+    if (m_bLoop && m_sDefaultAnimation.empty()) {
+      double wrapped = std::fmod(
+          nextFrame, static_cast<double>(m_pCurAnimation->nTotalFrames));
+      if (wrapped < 0.0) {
+        wrapped += m_pCurAnimation->nTotalFrames;
+      }
+      m_fCurFrame = static_cast<float>(wrapped);
+    } else {
+      m_fCurFrame = nextFrame < 0.0f
+                        ? -static_cast<float>(m_pCurAnimation->nTotalFrames)
+                        : static_cast<float>(m_pCurAnimation->nTotalFrames);
+    }
+  } else {
+    m_fCurFrame = static_cast<float>(nextFrame);
+  }
   if (m_fCurFrame < 0 || m_fCurFrame >= m_pCurAnimation->nTotalFrames) {
     if (m_sDefaultAnimation != "") {
       this->PlayAnimation(m_sDefaultAnimation, m_fDefaultAnimationRate);
@@ -810,12 +1026,9 @@ void Model::SetBones(
       !std::isfinite(fFrame)) {
     return;
   }
+  std::vector<RageMatrix> relativePose(pAnimation->Bones.size());
   for (size_t i = 0; i < pAnimation->Bones.size(); ++i) {
     const msBone* pBone = &pAnimation->Bones[i];
-    if (pBone->PositionKeys.size() == 0 && pBone->RotationKeys.size() == 0) {
-      vpBones[i].m_Final = vpBones[i].m_Absolute;
-      continue;
-    }
 
     // search for the adjacent position keys
     const msPositionKey *pLastPositionKey = nullptr,
@@ -841,7 +1054,7 @@ void Model::SetBones(
              (pThisPositionKey->Position - pLastPositionKey->Position) * s;
     } else if (pLastPositionKey == nullptr && pThisPositionKey != nullptr) {
       vPos = pThisPositionKey->Position;
-    } else if (pThisPositionKey == nullptr) {
+    } else if (pThisPositionKey == nullptr && pLastPositionKey != nullptr) {
       vPos = pLastPositionKey->Position;
     }
 
@@ -869,7 +1082,7 @@ void Model::SetBones(
           &vRot, pLastRotationKey->Rotation, pThisRotationKey->Rotation, s);
     } else if (pLastRotationKey == nullptr && pThisRotationKey != nullptr) {
       vRot = pThisRotationKey->Rotation;
-    } else if (pThisRotationKey == nullptr) {
+    } else if (pThisRotationKey == nullptr && pLastRotationKey != nullptr) {
       vRot = pLastRotationKey->Rotation;
     }
 
@@ -880,19 +1093,14 @@ void Model::SetBones(
     m.m[3][1] = vPos[1];
     m.m[3][2] = vPos[2];
 
-    RageMatrix RelativeFinal;
-    RageMatrixMultiply(&RelativeFinal, &vpBones[i].m_Relative, &m);
+    RageMatrixMultiply(&relativePose[i], &vpBones[i].m_Relative, &m);
+  }
 
-    int iParentBone = pAnimation->FindBoneByName(pBone->sParentName);
-    if (iParentBone == -1) {
-      vpBones[i].m_Final = RelativeFinal;
-    } else if (!IsValidBoneIndex(iParentBone, vpBones.size()) ||
-               static_cast<size_t>(iParentBone) >= i) {
-      vpBones[i].m_Final = RelativeFinal;
-    } else {
-      RageMatrixMultiply(
-          &vpBones[i].m_Final, &vpBones[iParentBone].m_Final, &RelativeFinal);
-    }
+  std::vector<uint8_t> states(vpBones.size(), 0);
+  std::vector<bool> validHierarchy(vpBones.size(), true);
+  for (size_t i = 0; i < vpBones.size(); ++i) {
+    ResolveFinalPoseBone(
+        i, *pAnimation, relativePose, vpBones, states, validHierarchy);
   }
 }
 
@@ -900,18 +1108,22 @@ void Model::UpdateTempGeometry() {
   if (m_pGeometry == nullptr || m_pTempGeometry == nullptr) {
     return;
   }
-  if (m_vTempMeshes.size() != m_pGeometry->m_Meshes.size()) {
+  if (m_vSourceMeshes.size() != m_pGeometry->m_Meshes.size() ||
+      m_vTempMeshes.size() != m_vSourceMeshes.size()) {
     return;
+  }
+  for (size_t i = 0; i < m_vSourceMeshes.size(); ++i) {
+    if (m_vTempMeshes[i].Vertices.size() !=
+        m_vSourceMeshes[i].Vertices.size()) {
+      return;
+    }
   }
 
   for (unsigned i = 0; i < m_pGeometry->m_Meshes.size(); ++i) {
-    const msMesh& origMesh = m_pGeometry->m_Meshes[i];
+    const msMesh& origMesh = m_vSourceMeshes[i];
     msMesh& tempMesh = m_vTempMeshes[i];
     const std::vector<RageModelVertex>& origVertices = origMesh.Vertices;
     std::vector<RageModelVertex>& tempVertices = tempMesh.Vertices;
-    if (tempVertices.size() != origVertices.size()) {
-      return;
-    }
     for (unsigned j = 0; j < origVertices.size(); j++) {
       RageVector3& tempPos = tempVertices[j].p;
       RageVector3& tempNormal = tempVertices[j].n;
@@ -939,10 +1151,10 @@ void Model::UpdateTempGeometry() {
 }
 
 void Model::Update(float fDelta) {
-  Actor::Update(fDelta);
   if (!std::isfinite(fDelta)) {
     return;
   }
+  Actor::Update(fDelta);
   AdvanceFrame(fDelta);
 
   for (unsigned i = 0; i < m_Materials.size(); ++i) {

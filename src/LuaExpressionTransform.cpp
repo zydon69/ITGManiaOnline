@@ -1,6 +1,7 @@
 #include "LuaExpressionTransform.h"
 
 #include <cmath>
+#include <cstddef>
 #include <map>
 #include <string>
 
@@ -11,6 +12,8 @@
 #include "global.h"
 
 namespace {
+constexpr size_t kMaxTransformCacheEntries = 65536;
+
 void WarnLuaExpressionTransformAuditFix(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
@@ -19,8 +22,6 @@ void WarnLuaExpressionTransformAuditFix(const char* message) {
 }  // namespace
 
 LuaExpressionTransform::LuaExpressionTransform() { m_iNumSubdivisions = 1; }
-
-LuaExpressionTransform::~LuaExpressionTransform() {}
 
 void LuaExpressionTransform::SetFromReference(const LuaReference& ref) {
   if (LUA == nullptr && ref.IsSet() && !ref.IsNil()) {
@@ -111,7 +112,12 @@ bool LuaExpressionTransform::GetTransformCached(
     return false;
   }
   tweenStateOut = a.DestTweenState();
-  m_mapPositionToTweenStateCache[key] = tweenStateOut;
+  if (m_mapPositionToTweenStateCache.size() >= kMaxTransformCacheEntries) {
+    m_mapPositionToTweenStateCache.clear();
+    WarnLuaExpressionTransformAuditFix(
+        "SRC_AUDIT_FIX SRC-3132: LuaExpressionTransform bounded its cache.");
+  }
+  m_mapPositionToTweenStateCache.emplace(key, tweenStateOut);
   return true;
 }
 

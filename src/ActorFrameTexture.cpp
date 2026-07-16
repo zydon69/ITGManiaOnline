@@ -1,9 +1,11 @@
 #include "ActorFrameTexture.h"
 
+#include <atomic>
 #include <cinttypes>
 #include <cstdint>
 #include <cmath>
 #include <limits>
+#include <memory>
 
 #include "ActorFrame.h"
 #include "ActorUtil.h"
@@ -18,26 +20,35 @@
 
 REGISTER_ACTOR_CLASS_WITH_NAME(
     ActorFrameTextureAutoDeleteChildren, ActorFrameTexture);
+
+namespace {
+std::string GetUniqueActorFrameTextureName() {
+  static std::atomic<uint64_t> counter{0};
+  const uint64_t id = counter.fetch_add(1, std::memory_order_relaxed) + 1;
+  return ssprintf("ActorFrameTexture %" PRIu64, id);
+}
+}  // namespace
+
 ActorFrameTexture* ActorFrameTexture::Copy() const {
   return new ActorFrameTexture(*this);
 }
 
-ActorFrameTexture::ActorFrameTexture() {
-  m_bDepthBuffer = false;
-  m_bAlphaBuffer = false;
-  m_bFloat = false;
-  m_bPreserveTexture = false;
-  static uint64_t i = 0;
-  ++i;
-  m_sTextureName = ssprintf("ActorFrameTexture %" PRIu64, i);
-
-  m_pRenderTarget = nullptr;
-}
+ActorFrameTexture::ActorFrameTexture()
+    : m_pRenderTarget(nullptr),
+      m_bDepthBuffer(false),
+      m_bAlphaBuffer(false),
+      m_bFloat(false),
+      m_bPreserveTexture(false),
+      m_sTextureName(GetUniqueActorFrameTextureName()) {}
 
 ActorFrameTexture::ActorFrameTexture(const ActorFrameTexture& cpy)
-    : ActorFrame(cpy) {
-  FAIL_M("ActorFrameTexture copy not implemented");
-}
+    : ActorFrame(cpy),
+      m_pRenderTarget(nullptr),
+      m_bDepthBuffer(cpy.m_bDepthBuffer),
+      m_bAlphaBuffer(cpy.m_bAlphaBuffer),
+      m_bFloat(cpy.m_bFloat),
+      m_bPreserveTexture(cpy.m_bPreserveTexture),
+      m_sTextureName(GetUniqueActorFrameTextureName()) {}
 
 ActorFrameTexture::~ActorFrameTexture() {
   /* Release our reference to the texture. */
@@ -102,19 +113,19 @@ void ActorFrameTexture::Create() {
   param.bFloat = m_bFloat;
   param.iWidth = (int)m_size.x;
   param.iHeight = (int)m_size.y;
-  m_pRenderTarget = new RageTextureRenderTarget(id, param);
-  if (!m_pRenderTarget->IsValid()) {
-    delete m_pRenderTarget;
-    m_pRenderTarget = nullptr;
+  std::unique_ptr<RageTextureRenderTarget> target(
+      new RageTextureRenderTarget(id, param));
+  if (!target->IsValid()) {
     LuaHelpers::ReportScriptError(
         "ActorFrameTexture: Failed to create render target.");
     return;
   }
-  m_pRenderTarget->m_bWasUsed = true;
+  target->m_bWasUsed = true;
 
   /* This passes ownership of m_pRenderTarget to TEXTUREMAN, but we retain
    * our reference to it until we call TEXTUREMAN->UnloadTexture. */
-  TEXTUREMAN->RegisterTexture(id, m_pRenderTarget);
+  TEXTUREMAN->RegisterTexture(id, target.get());
+  m_pRenderTarget = target.release();
 }
 
 void ActorFrameTexture::DrawPrimitives() {

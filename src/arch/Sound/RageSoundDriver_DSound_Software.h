@@ -26,10 +26,12 @@ class RageSoundDriver_DSound_Software : public RageSoundDriver {
   DSound ds;
   DSoundBuf* m_pPCM;
   int m_iSampleRate;
+  int m_iWriteaheadFrames;
 
   std::atomic<bool> m_bShutdownMixerThread;
 
   static int MixerThread_start(void* p);
+  int ChunkSize() const;
   void MixerThread();
   RageThread m_MixingThread;
 };

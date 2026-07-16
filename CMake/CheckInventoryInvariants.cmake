@@ -62,6 +62,14 @@ require_contains(
   "Inventory validates item duration before awarding")
 require_contains(
   "${inventory_cpp}"
+  "MAX_INVENTORY_ITEM_DURATION_SECONDS"
+  "Inventory item duration has an explicit upper bound")
+require_contains(
+  "${inventory_cpp}"
+  "if (value > 128.0f)"
+  "Inventory item count is bounded before integer conversion")
+require_contains(
+  "${inventory_cpp}"
   "GetSafeItemUseRateSeconds"
   "Inventory validates CPU use-rate metric")
 require_contains(
@@ -74,8 +82,12 @@ require_contains(
   "Inventory validates item effects through option parsers")
 require_contains(
   "${inventory_cpp}"
-  "m_fSecondsUntilCpuUseCheck += fDelta"
-  "Inventory CPU item timing accumulates frame deltas")
+  "static_cast<double>(m_fSecondsUntilCpuUseCheck) + fDelta"
+  "Inventory CPU item timing accumulates frame deltas with wide arithmetic")
+require_contains(
+  "${inventory_cpp}"
+  "std::clamp(1.0f / useRate, 0.0f, 1.0f)"
+  "Inventory CPU item probability remains in its probability domain")
 require_not_contains(
   "${inventory_cpp}"
   "static_cast<int>(fDelta)"

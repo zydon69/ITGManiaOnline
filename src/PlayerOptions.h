@@ -76,7 +76,8 @@ class PlayerOptions {
    *
    * This code was taken from Init() to use proper initialization. */
   PlayerOptions()
-      : m_HideLightType(HideLightType_NoHideLights),
+      : m_pn(PLAYER_INVALID),
+        m_HideLightType(HideLightType_NoHideLights),
         m_LifeType(LifeType_Bar),
         m_DrainType(DrainType_Normal),
         m_ModTimerType(ModTimerType_Default),

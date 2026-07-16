@@ -97,12 +97,18 @@ bool IsValidAttackLevel(AttackLevel al) {
   return al >= ATTACK_LEVEL_1 && al < NUM_ATTACK_LEVELS;
 }
 
-float ClampFiniteFloat(float value, float low, float high, const char* context) {
+float ClampFiniteFloat(
+    float value, float low, float high, const char* context) {
   if (!std::isfinite(value)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s normalized non-finite value %f to %f.",
-        context, value, low);
+        "SRC_AUDIT_FIX: %s normalized non-finite value %f to %f.", context,
+        value, low);
     return low;
+  }
+  if (value < low || value > high) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: %s clamped out-of-range value %f to [%f, %f].", context,
+        value, low, high);
   }
   return std::max(low, std::min(high, value));
 }
@@ -195,9 +201,6 @@ void ScoreKeeperRave::HandleTapScore(const TapNote& tn) {
   AddSuperMeterDelta(fPercentToMove);
 }
 
-#define CROSSED(val) (fOld < val && fNew >= val)
-#define CROSSED_ATTACK_LEVEL(level) \
-  CROSSED(1.f / NUM_ATTACK_LEVELS * (level + 1))
 void ScoreKeeperRave::HandleTapRowScore(const NoteData& nd, int iRow) {
   if (!HasScoringState("ScoreKeeperRave::HandleTapRowScore")) {
     return;
@@ -383,11 +386,12 @@ void ScoreKeeperRave::AddSuperMeterDelta(float fUnscaledPercentChange) {
 
   // mercy: drop super meter faster if at a higher level
   if (fUnscaledPercentChange < 0) {
-    fUnscaledPercentChange *=
-        SCALE(
-            m_pPlayerState->m_fSuperMeter, 0.f,
-            static_cast<float>(NUM_ATTACK_LEVELS), 0.01f, 1.f);
+    fUnscaledPercentChange *= SCALE(
+        m_pPlayerState->m_fSuperMeter, 0.f,
+        static_cast<float>(NUM_ATTACK_LEVELS), 0.01f, 1.f);
   }
+  fUnscaledPercentChange = ClampSuperMeterDelta(
+      fUnscaledPercentChange, "ScoreKeeperRave adjusted super meter delta");
 
   AttackLevel oldAL = (AttackLevel)(int)m_pPlayerState->m_fSuperMeter;
 

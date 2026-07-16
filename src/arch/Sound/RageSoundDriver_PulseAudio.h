@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 
 #include "RageSound.h"
@@ -26,7 +27,12 @@ class RageSoundDriver_PulseAudio : public RageSoundDriver {
 
   int64_t m_LastPosition;
   pa_sample_spec m_ss;
-  char* m_Error;
+  void SetError(const std::string& error);
+  std::string GetError() const;
+
+  mutable std::mutex m_StateMutex;
+  std::string m_Error;
+  bool m_MainLoopStarted;
 
   void m_InitStream();
   RageSemaphore m_Sem;

@@ -53,8 +53,12 @@ require_contains(
   "DWI direct LoadFromDir handles missing files without ASSERT")
 require_contains(
   "${notes_loader_dwi_cpp}"
-  "fFreezeSeconds <= 0.0f"
-  "DWI FREEZE segments reject non-positive durations")
+  "ParseFiniteDWIValue"
+  "DWI timing values require strict finite numeric parsing")
+require_contains(
+  "${notes_loader_dwi_cpp}"
+  "iFreezeRow < 0 || fFreezeSeconds <= 0.0f"
+  "DWI FREEZE segments reject negative rows and non-positive durations")
 
 read_source("src/NotesWriterDWI.cpp" notes_writer_dwi_cpp)
 
@@ -97,6 +101,14 @@ require_contains(
   "${notes_loader_ksf_cpp}"
   "ExtractDirectMoveValue"
   "KSF DirectMove commands are checked before value parsing")
+require_contains(
+  "${notes_loader_ksf_cpp}"
+  "*end != '\\0'"
+  "KSF DirectMove parsing rejects trailing non-numeric content")
+require_contains(
+  "${notes_loader_ksf_cpp}"
+  "!std::isfinite(valueOut)"
+  "KSF DirectMove parsing rejects non-finite numeric values")
 require_contains(
   "${notes_loader_ksf_cpp}"
   "has no KSF STEP data"

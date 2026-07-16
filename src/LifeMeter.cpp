@@ -18,10 +18,12 @@ LifeMeter::LifeMeter() {
 void LifeMeter::Load(
     const PlayerState* pPlayerState, PlayerStageStats* pPlayerStageStats) {
   if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX SRC-236: LifeMeter loaded with PlayerState=%p "
-        "PlayerStageStats=%p.",
-        pPlayerState, pPlayerStageStats);
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-236: LifeMeter loaded with PlayerState=%p "
+          "PlayerStageStats=%p.",
+          pPlayerState, pPlayerStageStats);
+    }
   }
   m_pPlayerState = pPlayerState;
   m_pPlayerStageStats = pPlayerStageStats;
@@ -36,8 +38,10 @@ LifeMeter* LifeMeter::MakeLifeMeter(LifeType t) {
     case LifeType_Time:
       return new LifeMeterTime;
     default:
-      LOG->Warn(
-          "SRC_AUDIT_FIX SRC-235: Invalid LifeMeter type %i; using Bar.", t);
+      if (LOG != nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-235: Invalid LifeMeter type %i; using Bar.", t);
+      }
       return new LifeMeterBar;
   }
 }

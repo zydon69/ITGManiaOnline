@@ -31,7 +31,6 @@ class AutoActor {
    * @brief Determine if this actor is presently loaded.
    * @return true if it is loaded, or false otherwise. */
   bool IsLoaded() const { return m_pActor != nullptr; }
-  void Load(std::unique_ptr<Actor> pActor);
   void Adopt(std::unique_ptr<Actor> pActor);
   void LoadFallback();
   void Load(const std::string& sPath);
@@ -42,9 +41,6 @@ class AutoActor {
   void LoadActorFromNode(const XNode* pNode, Actor* pParent);
   void LoadAndSetName(
       const std::string& sScreenName, const std::string& sActorName);
-
- private:
-  void Load(Actor* pActor);
 
  protected:
   /** @brief the Actor for which there is a smart pointer to. */

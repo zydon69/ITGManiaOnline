@@ -17,14 +17,15 @@ class ComboGraph : public ActorFrame {
  public:
   ComboGraph();
   ComboGraph(const ComboGraph& cpy);
-  virtual ~ComboGraph();
+  ComboGraph& operator=(const ComboGraph&) = delete;
+  ~ComboGraph() override;
   void Load(std::string sMetricsGroup);
   void Set(const StageStats& s, const PlayerStageStats& pss);
-  virtual ComboGraph* Copy() const;
-  virtual bool AutoLoadChildren() const { return true; }
+  ComboGraph* Copy() const override;
+  bool AutoLoadChildren() const override { return true; }
 
   // Commands
-  virtual void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
  private:
   void ClearGeneratedActors();

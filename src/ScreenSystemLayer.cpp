@@ -1,7 +1,9 @@
 #include "ScreenSystemLayer.h"
 
 #include <algorithm>
+#include <mutex>
 #include <string>
+#include <unordered_set>
 
 #include "Actor.h"
 #include "EnumHelper.h"
@@ -50,7 +52,14 @@ bool IsValidCreditPlayer(PlayerNumber pn) {
 }
 
 void WarnSystemLayer(const std::string& message) {
+  static std::mutex warned_messages_mutex;
+  static std::unordered_set<std::string> warned_messages;
+
   if (LOG != nullptr) {
+    std::lock_guard<std::mutex> lock(warned_messages_mutex);
+    if (!warned_messages.insert(message).second) {
+      return;
+    }
     LOG->Warn("ScreenSystemLayer: %s", message.c_str());
   }
 }

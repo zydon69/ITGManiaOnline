@@ -73,10 +73,12 @@ void ScoreDisplayAliveTime::LoadFromNode(const XNode* pNode) {
         lua_pop(L, 1);
       }
     }
-    if (!b && !b2) {
+    if (b == b2) {
       WarnScoreDisplayAliveTimeAuditFix(
-          "SRC_AUDIT_FIX SRC-237: ScoreDisplayAliveTime missing PlayerNumber "
-          "or MultiPlayer attribute.");
+          "SRC_AUDIT_FIX SRC-237: ScoreDisplayAliveTime requires exactly one "
+          "of PlayerNumber or MultiPlayer.");
+      m_PlayerNumber = PLAYER_INVALID;
+      m_MultiPlayer = MultiPlayer_Invalid;
     }
     if (b && !IsValidPlayerNumber(m_PlayerNumber)) {
       WarnScoreDisplayAliveTimeAuditFix(

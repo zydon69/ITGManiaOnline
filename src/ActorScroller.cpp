@@ -118,11 +118,16 @@ int ActorScroller::NormalizeShiftDistance(int iDist) const {
 }
 
 void ActorScroller::ResetScrollerLoadState() {
+  m_iNumItems = 0;
+  m_fCurrentItem = 0.0f;
+  m_fDestinationItem = 0.0f;
+  m_iFirstSubActorIndex = 0;
   m_fSecondsPerItem = 1.0f;
   m_fSecondsPauseBetweenItems = 0.0f;
   m_fNumItemsToDraw = 7.0f;
   m_bLoop = false;
   m_bWrap = false;
+  m_bFastCatchup = false;
   m_fPauseCountdownSeconds = 0.0f;
   m_fQuantizePixels = 0.0f;
   m_fMaskWidth = 0.0f;
@@ -180,7 +185,8 @@ void ActorScroller::SetCurrentAndDestinationItem(float fItemIndex) {
 }
 
 void ActorScroller::Load2() {
-  m_iNumItems = m_SubActors.size();
+  m_iNumItems = static_cast<int>(std::min<size_t>(
+      m_SubActors.size(), static_cast<size_t>(kMaxScrollerLogicalItems)));
 
   if (LUA == nullptr) {
     WarnActorScrollerAuditFix(
@@ -445,15 +451,18 @@ void ActorScroller::PositionItemsAndDrawPrimitives(bool bDrawPrimitives) {
     float fPositionFullyOffScreenTop = -(fNumItemsToDraw) / 2.f;
     float fPositionFullyOffScreenBottom = (fNumItemsToDraw) / 2.f;
 
-    m_exprTransformFunction.TransformItemCached(
-        m_quadMask, fPositionFullyOffScreenTop, -1, m_iNumItems);
-    if (bDrawPrimitives) {
+    const bool topMaskPositioned =
+        m_exprTransformFunction.TransformItemCached(
+            m_quadMask, fPositionFullyOffScreenTop, -1, m_iNumItems);
+    if (bDrawPrimitives && topMaskPositioned) {
       m_quadMask.Draw();
     }
 
-    m_exprTransformFunction.TransformItemCached(
-        m_quadMask, fPositionFullyOffScreenBottom, m_iNumItems, m_iNumItems);
-    if (bDrawPrimitives) {
+    const bool bottomMaskPositioned =
+        m_exprTransformFunction.TransformItemCached(
+            m_quadMask, fPositionFullyOffScreenBottom, m_iNumItems,
+            m_iNumItems);
+    if (bDrawPrimitives && bottomMaskPositioned) {
       m_quadMask.Draw();
     }
   }
@@ -506,10 +515,11 @@ void ActorScroller::PositionItemsAndDrawPrimitives(bool bDrawPrimitives) {
       iItem = 0;
     }
 
-    const unsigned mutationVersion = m_iChildMutationVersion;
-    m_exprTransformFunction.TransformItemCached(
+    const uint64_t mutationVersion = m_iChildMutationVersion;
+    const bool transformed = m_exprTransformFunction.TransformItemCached(
         *child, fPosition, iItem, m_iNumItems);
-    if (mutationVersion != m_iChildMutationVersion || !ContainsChild(child)) {
+    if (!transformed || mutationVersion != m_iChildMutationVersion ||
+        !ContainsChild(child)) {
       continue;
     }
     if (m_fQuantizePixels > 0.0f) {

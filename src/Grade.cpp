@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <string>
 
 #include "EnumHelper.h"
@@ -29,6 +28,10 @@ int GetNumGradeTiersUsed() {
 
 Grade GetNextPossibleGrade(Grade g) {
   const int iTiersUsed = GetNumGradeTiersUsed();
+  if (g < Grade_Tier01 || g >= NUM_Grade) {
+    LOG->Warn("GetNextPossibleGrade ignored invalid grade %i.", g);
+    return Grade_Invalid;
+  }
   if (g < iTiersUsed - 1) {
     return (Grade)(g + 1);
   } else if (g == iTiersUsed - 1) {
@@ -40,6 +43,12 @@ Grade GetNextPossibleGrade(Grade g) {
 
 std::string GradeToLocalizedString(Grade g) {
   std::string s = GradeToString(g);
+  if (THEME == nullptr) {
+    LOG->Warn(
+        "GradeToLocalizedString cannot localize %s without ThemeManager.",
+        s.c_str());
+    return "???";
+  }
   if (!THEME->HasString("Grade", s)) {
     return "???";
   }
@@ -76,6 +85,11 @@ Grade GradeToOldGrade(Grade g) {
   // There used to be 7 grades (plus fail) but grades can now be defined by
   // themes. So we need to re-scale the grade bands based on how many actual
   // grades the theme defines.
+  if (g < Grade_Tier01 || g >= NUM_Grade) {
+    LOG->Warn("GradeToOldGrade ignored invalid grade %i.", g);
+    return Grade_NoData;
+  }
+
   const int iTiersUsed = GetNumGradeTiersUsed();
   if (g >= 0 && g < iTiersUsed) {
     if (iTiersUsed <= 1) {
@@ -93,9 +107,13 @@ Grade StringToGrade(const std::string& sGrade) {
   MakeUpper(s);
 
   // new style
-  int iTier;
-  if (sscanf(sGrade.c_str(), "Tier%02d", &iTier) == 1 && iTier >= 1 &&
-      iTier <= (int)Grade_Failed) {
+  const bool bTierFormat =
+      s.size() == 6 && s.compare(0, 4, "TIER") == 0 && s[4] >= '0' &&
+      s[4] <= '9' && s[5] >= '0' && s[5] <= '9';
+  const int iTier =
+      bTierFormat ? (s[4] - '0') * 10 + (s[5] - '0') : 0;
+  if (bTierFormat && iTier >= 1 &&
+      iTier <= static_cast<int>(Grade_Failed)) {
     return (Grade)(iTier - 1);
   } else if (s == "FAILED") {
     return Grade_Failed;

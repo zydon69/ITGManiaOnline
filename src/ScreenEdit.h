@@ -255,7 +255,7 @@ class ScreenEdit : public ScreenWithMenuElements {
 
   void TransitionEditState(EditState em);
   void ScrollTo(float fDestinationBeat);
-  bool IsGameplayColumnInputPressed() const;
+  bool IsGameplayColumnInputPressed(EditState state) const;
   void UpdateGameplayInputReleaseGuard();
   void PlayTicks();
   void PlayPreviewMusic();

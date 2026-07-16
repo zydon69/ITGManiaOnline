@@ -4,9 +4,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cstdint>
 #include <limits>
 #include <numeric>
 #include <string>
+#include <unordered_set>
 
 #include "IniFile.h"
 #include "RageException.h"
@@ -26,6 +28,7 @@
 namespace {
 constexpr int kMaxBones = 4096;
 constexpr int kMaxBoneKeys = 200000;
+constexpr int kMaxAnimationKeys = 1000000;
 constexpr float kDefaultFrameDelaySeconds = 1.0f;
 
 bool IsFiniteVector(const RageVector2& v) {
@@ -49,11 +52,31 @@ void ValidateCount(
 void ValidateKeyTime(
     float value, const char* label, const std::string& sPath, int iLineNum,
     const std::string& sLine) {
-  if (!std::isfinite(value) || value < 0.0f) {
+  if (!std::isfinite(value) || value < 0.0f ||
+      value > static_cast<float>(std::numeric_limits<int>::max() - 1)) {
     RageException::Throw(
         "Parse error in \"%s\" at line %d: invalid %s time %.6f in \"%s\".",
         sPath.c_str(), iLineNum, label, value, sLine.c_str());
   }
+}
+
+std::string ResolveAnimatedTexturePath(
+    const std::string& iniPath, std::string fileName) {
+  FixSlashesInPlace(fileName);
+  std::vector<std::string> parts;
+  split(fileName, "/", parts, false);
+  const bool absolute = !fileName.empty() &&
+                        (fileName.front() == '/' ||
+                         (fileName.size() > 1 && fileName[1] == ':'));
+  if (absolute || std::find(parts.begin(), parts.end(), "..") != parts.end()) {
+    RageException::Throw(
+        "Animated texture \"%s\" references a frame outside its directory: "
+        "\"%s\".",
+        iniPath.c_str(), fileName.c_str());
+  }
+  std::string path = Dirname(iniPath) + fileName;
+  CollapsePath(path);
+  return path;
 }
 }  // namespace
 
@@ -81,6 +104,12 @@ void AnimatedTexture::LoadBlank() {
 
 void AnimatedTexture::Load(const std::string& sTexOrIniPath) {
   Unload();
+
+  if (TEXTUREMAN == nullptr) {
+    RageException::Throw(
+        "Cannot load animated texture \"%s\" without the texture manager.",
+        sTexOrIniPath.c_str());
+  }
 
   m_bSphereMapped = sTexOrIniPath.find("sphere") != std::string::npos;
   if (sTexOrIniPath.find("add") != std::string::npos) {
@@ -140,13 +169,11 @@ void AnimatedTexture::Load(const std::string& sTexOrIniPath) {
         }
 
         RageTextureID ID;
-        ID.filename = Dirname(sTexOrIniPath) + sFileName;
+        ID.filename = ResolveAnimatedTexturePath(sTexOrIniPath, sFileName);
         ID.bStretch = true;
         ID.bHotPinkColorKey = true;
         ID.bMipMaps = true;  // use mipmaps in Models
-        AnimatedTextureState state(
-            TEXTUREMAN != nullptr ? TEXTUREMAN->LoadTexture(ID) : nullptr,
-            fDelay, vOffset);
+        AnimatedTextureState state(TEXTUREMAN->LoadTexture(ID), fDelay, vOffset);
         vFrames.push_back(state);
       } else {
         break;
@@ -162,8 +189,8 @@ void AnimatedTexture::Load(const std::string& sTexOrIniPath) {
     ID.bStretch = true;
     ID.bMipMaps = true;  // use mipmaps in Models
     AnimatedTextureState state(
-        TEXTUREMAN != nullptr ? TEXTUREMAN->LoadTexture(ID) : nullptr,
-        kDefaultFrameDelaySeconds, RageVector2(0, 0));
+        TEXTUREMAN->LoadTexture(ID), kDefaultFrameDelaySeconds,
+        RageVector2(0, 0));
     vFrames.push_back(state);
   }
 }
@@ -176,16 +203,14 @@ void AnimatedTexture::Update(float fDelta) {
     m_iCurState = 0;
     m_fSecsIntoFrame = 0.0f;
   }
-  m_fSecsIntoFrame += fDelta;
-  while (m_fSecsIntoFrame > vFrames[m_iCurState].fDelaySecs) {
-    if (!std::isfinite(vFrames[m_iCurState].fDelaySecs) ||
-        vFrames[m_iCurState].fDelaySecs <= 0.0f) {
-      m_fSecsIntoFrame = 0.0f;
-      return;
-    }
-    m_fSecsIntoFrame -= vFrames[m_iCurState].fDelaySecs;
-    m_iCurState = (m_iCurState + 1) % vFrames.size();
+  const double seconds =
+      static_cast<double>(GetSecondsIntoAnimation()) + fDelta;
+  if (!std::isfinite(seconds)) {
+    m_iCurState = 0;
+    m_fSecsIntoFrame = 0.0f;
+    return;
   }
+  SetSecondsIntoAnimation(static_cast<float>(seconds));
 }
 
 RageTexture* AnimatedTexture::GetCurrentTexture() {
@@ -208,16 +233,18 @@ void AnimatedTexture::SetState(int iState) {
   }
   rage_clamp(iState, 0, GetNumStates() - 1);
   m_iCurState = iState;
+  m_fSecsIntoFrame = 0.0f;
 }
 
 float AnimatedTexture::GetAnimationLengthSeconds() const {
-  return std::accumulate(
-      vFrames.begin(), vFrames.end(), 0.f,
-      [](float total, const AnimatedTextureState& state) {
-        return std::isfinite(state.fDelaySecs) && state.fDelaySecs > 0.0f
-                   ? total + state.fDelaySecs
-                   : total;
-      });
+  double total = 0.0;
+  for (const AnimatedTextureState& state : vFrames) {
+    if (std::isfinite(state.fDelaySecs) && state.fDelaySecs > 0.0f) {
+      total += state.fDelaySecs;
+    }
+  }
+  return static_cast<float>(std::min(
+      total, static_cast<double>(std::numeric_limits<float>::max())));
 }
 
 void AnimatedTexture::SetSecondsIntoAnimation(float fSeconds) {
@@ -247,7 +274,12 @@ void AnimatedTexture::SetSecondsIntoAnimation(float fSeconds) {
 }
 
 float AnimatedTexture::GetSecondsIntoAnimation() const {
-  float fSeconds = 0;
+  if (vFrames.empty() || m_iCurState < 0 ||
+      m_iCurState >= static_cast<int>(vFrames.size()) ||
+      !std::isfinite(m_fSecsIntoFrame)) {
+    return 0.0f;
+  }
+  double seconds = 0.0;
 
   for (unsigned i = 0; i < vFrames.size(); i++) {
     const AnimatedTextureState& ats = vFrames[i];
@@ -255,10 +287,17 @@ float AnimatedTexture::GetSecondsIntoAnimation() const {
       break;
     }
 
-    fSeconds += ats.fDelaySecs;
+    if (!std::isfinite(ats.fDelaySecs) || ats.fDelaySecs <= 0.0f) {
+      return 0.0f;
+    }
+    seconds += ats.fDelaySecs;
   }
-  fSeconds += m_fSecsIntoFrame;
-  return fSeconds;
+  seconds += m_fSecsIntoFrame;
+  return std::isfinite(seconds)
+             ? static_cast<float>(std::min(
+                   seconds,
+                   static_cast<double>(std::numeric_limits<float>::max())))
+             : 0.0f;
 }
 
 void AnimatedTexture::Unload() {
@@ -270,6 +309,10 @@ void AnimatedTexture::Unload() {
   vFrames.clear();
   m_iCurState = 0;
   m_fSecsIntoFrame = 0;
+  m_vTexOffset = RageVector2(0, 0);
+  m_vTexVelocity = RageVector2(0, 0);
+  m_bSphereMapped = false;
+  m_BlendMode = BLEND_NORMAL;
 }
 
 RageVector2 AnimatedTexture::GetTextureTranslate() {
@@ -279,6 +322,9 @@ RageVector2 AnimatedTexture::GetTextureTranslate() {
     fPercentIntoAnimation = GetSecondsIntoAnimation() / length;
   }
   RageVector2 v = m_vTexVelocity * fPercentIntoAnimation + m_vTexOffset;
+  if (!IsFiniteVector(v)) {
+    v = RageVector2(0, 0);
+  }
 
   if (vFrames.empty()) {
     return v;
@@ -315,6 +361,7 @@ bool msAnimation::LoadMilkshapeAsciiBones(
   msAnimation& Animation = *this;
 
   bool bLoaded = false;
+  int totalKeys = 0;
   while (f.GetLine(sLine) > 0) {
     iLineNum++;
 
@@ -327,11 +374,18 @@ bool msAnimation::LoadMilkshapeAsciiBones(
     if (sscanf(sLine.c_str(), "Bones: %d", &nNumBones) != 1) {
       continue;
     }
+    if (bLoaded) {
+      RageException::Throw(
+          "Parse error in \"%s\" at line %d: duplicate Bones section.",
+          sPath.c_str(), iLineNum);
+    }
+    bLoaded = true;
     ValidateCount(nNumBones, kMaxBones, "bone", sPath, iLineNum, sLine);
 
     char szName[MS_MAX_NAME];
 
     Animation.Bones.resize(nNumBones);
+    std::unordered_set<std::string> boneNames;
 
     for (int i = 0; i < nNumBones; i++) {
       msBone& Bone = Animation.Bones[i];
@@ -344,6 +398,11 @@ bool msAnimation::LoadMilkshapeAsciiBones(
         THROW;
       }
       Bone.sName = szName;
+      if (!boneNames.insert(Bone.sName).second) {
+        RageException::Throw(
+            "Parse error in \"%s\" at line %d: duplicate bone name \"%s\".",
+            sPath.c_str(), iLineNum, Bone.sName.c_str());
+      }
 
       // parent
       if (f.GetLine(sLine) <= 0) {
@@ -387,6 +446,12 @@ bool msAnimation::LoadMilkshapeAsciiBones(
       ValidateCount(
           nNumPositionKeys, kMaxBoneKeys, "position key", sPath, iLineNum,
           sLine);
+      if (nNumPositionKeys > kMaxAnimationKeys - totalKeys) {
+        RageException::Throw(
+            "Parse error in \"%s\" at line %d: animation exceeds %d keys.",
+            sPath.c_str(), iLineNum, kMaxAnimationKeys);
+      }
+      totalKeys += nNumPositionKeys;
 
       Bone.PositionKeys.resize(nNumPositionKeys);
 
@@ -423,6 +488,12 @@ bool msAnimation::LoadMilkshapeAsciiBones(
       ValidateCount(
           nNumRotationKeys, kMaxBoneKeys, "rotation key", sPath, iLineNum,
           sLine);
+      if (nNumRotationKeys > kMaxAnimationKeys - totalKeys) {
+        RageException::Throw(
+            "Parse error in \"%s\" at line %d: animation exceeds %d keys.",
+            sPath.c_str(), iLineNum, kMaxAnimationKeys);
+      }
+      totalKeys += nNumRotationKeys;
 
       Bone.RotationKeys.resize(nNumRotationKeys);
 
@@ -466,17 +537,19 @@ bool msAnimation::LoadMilkshapeAsciiBones(
     for (int i = 0; i < (int)Animation.Bones.size(); i++) {
       msBone& Bone = Animation.Bones[i];
       for (unsigned j = 0; j < Bone.PositionKeys.size(); ++j) {
-        Animation.nTotalFrames =
-            std::max(Animation.nTotalFrames, (int)Bone.PositionKeys[j].fTime);
+        Animation.nTotalFrames = std::max(
+            Animation.nTotalFrames,
+            static_cast<int>(std::ceil(Bone.PositionKeys[j].fTime)));
       }
       for (unsigned j = 0; j < Bone.RotationKeys.size(); ++j) {
-        Animation.nTotalFrames =
-            std::max(Animation.nTotalFrames, (int)Bone.RotationKeys[j].fTime);
+        Animation.nTotalFrames = std::max(
+            Animation.nTotalFrames,
+            static_cast<int>(std::ceil(Bone.RotationKeys[j].fTime)));
       }
     }
   }
 
-  return bLoaded;
+  return !bLoaded;
 }
 
 /*

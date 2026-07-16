@@ -43,6 +43,7 @@ class GameState {
    * sides. */
   PlayerNumber masterPlayerNumber;
   /** @brief The TimingData that is used for processing certain functions. */
+  // Non-owning: points into the active Steps or Player timing data.
   TimingData* processedTiming;
 
  public:
@@ -58,7 +59,7 @@ class GameState {
       const std::string& sCommand, PlayerNumber pn = PLAYER_INVALID);
   /** @brief Start the game when the first player joins in. */
   void BeginGame();
-  void JoinPlayer(PlayerNumber pn);
+  bool JoinPlayer(PlayerNumber pn);
   void UnjoinPlayer(PlayerNumber pn);
   bool JoinInput(PlayerNumber pn);
   bool JoinPlayers();

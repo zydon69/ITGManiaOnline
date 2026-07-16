@@ -14,13 +14,13 @@ class ActorMultiTexture : public Actor {
  public:
   ActorMultiTexture();
   ActorMultiTexture(const ActorMultiTexture& cpy);
-  virtual ~ActorMultiTexture();
+  ~ActorMultiTexture() override;
 
-  void LoadFromNode(const XNode* pNode);
-  virtual ActorMultiTexture* Copy() const;
+  void LoadFromNode(const XNode* pNode) override;
+  ActorMultiTexture* Copy() const override;
 
-  virtual bool EarlyAbortDraw() const;
-  virtual void DrawPrimitives();
+  bool EarlyAbortDraw() const override;
+  void DrawPrimitives() override;
 
   void ClearTextures();
   int AddTexture(RageTexture* pTexture);
@@ -28,9 +28,13 @@ class ActorMultiTexture : public Actor {
 
   void SetSizeFromTexture(RageTexture* pTexture);
   void SetTextureCoords(const RectF& r);
-  void SetEffectMode(EffectMode em) { m_EffectMode = em; }
+  void SetEffectMode(EffectMode em) {
+    if (em >= 0 && em < NUM_EffectMode) {
+      m_EffectMode = em;
+    }
+  }
 
-  virtual void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
  private:
   EffectMode m_EffectMode;

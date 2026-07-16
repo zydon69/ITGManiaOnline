@@ -29,6 +29,9 @@ read_source("src/ActorProxy.cpp" actor_proxy_cpp)
 read_source("src/ActorProxy.h" actor_proxy_h)
 read_source("src/LuaBinding.cpp" lua_binding_cpp)
 read_source("src/LuaBinding.h" lua_binding_h)
+read_source(
+  "Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/OptionRowPreviews/NoteSkinVariant.lua"
+  noteskin_variant_previews)
 
 require_contains(
   "${actor_proxy_h}"
@@ -136,3 +139,12 @@ require_contains(
   "${lua_binding_cpp}"
   "if (!TryGetPointerFromStack(L, sType, iArg, pRet))"
   "LuaBinding throwing lookup remains layered on the non-throwing path")
+
+require_contains(
+  "${noteskin_variant_previews}"
+  "preloaded_all=true"
+  "all selectable noteskin variants have proxy targets")
+require_not_contains(
+  "${noteskin_variant_previews}"
+  "active_noteskins[noteskin]"
+  "variant previews must not depend on the skin active at overlay load")

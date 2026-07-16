@@ -58,9 +58,12 @@ RageSoundDriver* RageSoundDriver::Create(const std::string& drivers) {
     const std::vector<std::string> defaultDrivers = GetDefaultSoundDriverList();
 
     while (to_try < driversToTry.size()) {
-      if (std::find(
-              defaultDrivers.begin(), defaultDrivers.end(),
-              driversToTry[to_try]) == defaultDrivers.end()) {
+      const auto canonical = std::find_if(
+          defaultDrivers.begin(), defaultDrivers.end(),
+          [&driversToTry, to_try](const std::string& candidate) {
+            return EqualsNoCase(candidate, driversToTry[to_try]);
+          });
+      if (canonical == defaultDrivers.end()) {
         if (LOG != nullptr) {
           LOG->Warn(
               "Removed unusable sound driver %s", driversToTry[to_try].c_str());
@@ -68,6 +71,7 @@ RageSoundDriver* RageSoundDriver::Create(const std::string& drivers) {
         WarnUserAboutBadSoundDriverEntry();
         driversToTry.erase(driversToTry.begin() + to_try);
       } else {
+        driversToTry[to_try] = *canonical;
         ++to_try;
       }
     }

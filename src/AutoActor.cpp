@@ -113,22 +113,19 @@ AutoActor& AutoActor::operator=(AutoActor&& cpy) noexcept {
   return *this;
 }
 
-void AutoActor::Load(Actor* pActor) {
-  if (pActor == m_pActor.get()) {
-    return;
-  }
-  Load(std::unique_ptr<Actor>(pActor));
-}
-
-void AutoActor::Load(std::unique_ptr<Actor> pActor) {
-  Adopt(std::move(pActor));
-}
-
 void AutoActor::Adopt(std::unique_ptr<Actor> pActor) {
   if (pActor == nullptr) {
     WarnAutoActorAuditFix(
         "SRC_AUDIT_FIX SRC-2647: AutoActor replaced null adopted actor.");
     pActor = MakeFallbackActor();
+  }
+
+  if (pActor.get() == m_pActor.get()) {
+    WarnAutoActorAuditFix(
+        "SRC_AUDIT_FIX SRC-3129: AutoActor ignored duplicate ownership "
+        "adoption.");
+    pActor.release();
+    return;
   }
 
   DetachFromParent(pActor.get());

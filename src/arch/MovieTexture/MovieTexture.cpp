@@ -7,7 +7,6 @@
 
 #include "LocalizedString.h"
 #include "Preference.h"
-#include "RageException.h"
 #include "RageFile.h"
 #include "RageLog.h"
 #include "RageTextureID.h"
@@ -124,7 +123,10 @@ RageMovieTexture* RageMovieTexture::Create(RageTextureID ID) {
       DriversToTry.end());
 
   if (DriversToTry.empty()) {
-    RageException::Throw("%s", MOVIE_DRIVERS_EMPTY.GetValue().c_str());
+    if (LOG != nullptr) {
+      LOG->Warn("%s", MOVIE_DRIVERS_EMPTY.GetValue().c_str());
+    }
+    return nullptr;
   }
 
   RageMovieTexture* ret = nullptr;
@@ -169,7 +171,11 @@ RageMovieTexture* RageMovieTexture::Create(RageTextureID ID) {
     break;
   }
   if (!ret) {
-    RageException::Throw("%s", COULDNT_CREATE_MOVIE_DRIVER.GetValue().c_str());
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "%s File: %s", COULDNT_CREATE_MOVIE_DRIVER.GetValue().c_str(),
+          ID.filename.c_str());
+    }
   }
 
   return ret;

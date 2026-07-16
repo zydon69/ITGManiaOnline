@@ -13,20 +13,20 @@
 class RageTextureRenderTarget : public RageTexture {
  public:
   RageTextureRenderTarget(RageTextureID name, const RenderTargetParam& param);
-  virtual ~RageTextureRenderTarget();
-  virtual void Invalidate() {
+  ~RageTextureRenderTarget() override;
+  void Invalidate() override {
     m_iTexHandle = 0; /* don't Destroy() */
     m_bValid = false;
     m_bRendering = false;
   }
-  virtual void Reload();
-  virtual uintptr_t GetTexHandle() const { return m_iTexHandle; }
+  void Reload() override;
+  uintptr_t GetTexHandle() const override { return m_iTexHandle; }
   bool IsValid() const { return m_bValid; }
 
   void BeginRenderingTo(bool bPreserveTexture = true);
   void FinishRenderingTo();
 
-  virtual void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
  private:
   const RenderTargetParam m_Param;

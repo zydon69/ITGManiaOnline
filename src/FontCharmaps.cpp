@@ -1,9 +1,9 @@
 #include "FontCharmaps.h"
 
 #include <map>
+#include <mutex>
 #include <string>
 
-#include "RageThreads.h"
 #include "StdString.h"
 
 const wchar_t FontCharmaps::M_SKIP = 0xFEFF;
@@ -13,9 +13,9 @@ static std::map<std::string, const wchar_t*> charmaps;
 using namespace FontCharmaps;
 
 namespace {
-RageMutex& GetCharmapsMutex() {
-  static RageMutex* mutex = new RageMutex("FontCharmaps");
-  return *mutex;
+std::once_flag& GetCharmapsInitFlag() {
+  static std::once_flag flag;
+  return flag;
 }
 }  // namespace
 
@@ -264,11 +264,6 @@ static const wchar_t map_numbers[] = {
     0x0038, 0x0039, 0x0025, 0x002E, 0x0020, 0x003A, 0x0078, 0};
 
 static void Init() {
-  LockMutex lock(GetCharmapsMutex());
-  if (!charmaps.empty()) {
-    return;
-  }
-
   charmaps["ascii"] = map_ascii;
   charmaps["basic-japanese"] = map_basic_japanese;
   charmaps["iso-8859-1"] = map_iso_8859_1;
@@ -279,8 +274,7 @@ static void Init() {
 }
 
 const wchar_t* FontCharmaps::get_char_map(std::string name) {
-  LockMutex lock(GetCharmapsMutex());
-  Init();
+  std::call_once(GetCharmapsInitFlag(), Init);
 
   MakeLower(name);
 

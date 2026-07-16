@@ -1,6 +1,8 @@
 #include "RageSoundDriver_JACK.h"
 
 #include <cstdint>
+#include <climits>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -18,19 +20,24 @@ RageSoundDriver_JACK::RageSoundDriver_JACK() : RageSoundDriver() {
   port_l = nullptr;
   port_r = nullptr;
   sample_rate.store(FALLBACK_SAMPLE_RATE, std::memory_order_relaxed);
+  last_frame.store(0, std::memory_order_relaxed);
 }
 
 RageSoundDriver_JACK::~RageSoundDriver_JACK() {
-  // If Init failed, it cleaned up already and set client to nullptr
-  if (client == nullptr) {
+  jack_client_t* currentClient =
+      client.exchange(nullptr, std::memory_order_acq_rel);
+  if (currentClient == nullptr) {
     return;
   }
 
-  // Clean up and shut down client
-  jack_deactivate(client);
-  jack_port_unregister(client, port_r);
-  jack_port_unregister(client, port_l);
-  jack_client_close(client);
+  jack_deactivate(currentClient);
+  if (jack_port_t* right = port_r.exchange(nullptr, std::memory_order_acq_rel)) {
+    jack_port_unregister(currentClient, right);
+  }
+  if (jack_port_t* left = port_l.exchange(nullptr, std::memory_order_acq_rel)) {
+    jack_port_unregister(currentClient, left);
+  }
+  jack_client_close(currentClient);
 }
 
 std::string RageSoundDriver_JACK::Init() {
@@ -38,12 +45,15 @@ std::string RageSoundDriver_JACK::Init() {
   std::string error;
 
   // Open JACK client and call it "StepMania" or whatever
-  client = jack_client_open(PRODUCT_FAMILY, JackNoStartServer, &status);
-  if (client == nullptr) {
+  jack_client_t* currentClient =
+      jack_client_open(PRODUCT_FAMILY, JackNoStartServer, &status);
+  client.store(currentClient, std::memory_order_release);
+  if (currentClient == nullptr) {
     return "Couldn't connect to JACK server";
   }
 
-  sample_rate.store(jack_get_sample_rate(client), std::memory_order_release);
+  sample_rate.store(
+      jack_get_sample_rate(currentClient), std::memory_order_release);
   if (LOG != nullptr) {
     LOG->Trace("JACK connected at %u Hz",
                sample_rate.load(std::memory_order_acquire));
@@ -53,35 +63,42 @@ std::string RageSoundDriver_JACK::Init() {
   StartDecodeThread();
 
   // Set callback for processing audio
-  if (jack_set_process_callback(client, ProcessTrampoline, this)) {
+  if (jack_set_process_callback(currentClient, ProcessTrampoline, this)) {
     error = "Couldn't set JACK process callback";
     goto out_close;
   }
 
-  if (jack_set_sample_rate_callback(client, SampleRateTrampoline, this)) {
+  if (jack_set_sample_rate_callback(
+          currentClient, SampleRateTrampoline, this)) {
     error = "Couldn't set JACK sample-rate callback";
     goto out_close;
   }
 
-  jack_on_shutdown(client, ShutdownTrampoline, this);
+  jack_on_shutdown(currentClient, ShutdownTrampoline, this);
 
   // Create output ports
-  port_l = jack_port_register(
-      client, "out_l", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0);
-  if (port_l == nullptr) {
+  port_l.store(
+      jack_port_register(
+          currentClient, "out_l", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput,
+          0),
+      std::memory_order_release);
+  if (port_l.load(std::memory_order_acquire) == nullptr) {
     error = "Couldn't create JACK port out_l";
     goto out_close;
   }
 
-  port_r = jack_port_register(
-      client, "out_r", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0);
-  if (port_r == nullptr) {
+  port_r.store(
+      jack_port_register(
+          currentClient, "out_r", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput,
+          0),
+      std::memory_order_release);
+  if (port_r.load(std::memory_order_acquire) == nullptr) {
     error = "Couldn't create JACK port out_r";
     goto out_unreg_l;
   }
 
   // Go!
-  if (jack_activate(client)) {
+  if (jack_activate(currentClient)) {
     error = "Couldn't activate JACK client";
     goto out_unreg_r;
   }
@@ -91,28 +108,43 @@ std::string RageSoundDriver_JACK::Init() {
     // Eh. Not fatal. JACK *is* running and we successfully created
     // our source ports, so it's unlkely any other driver will
     // function.
-    LOG->Warn(
-        "RageSoundDriver_JACK: Couldn't connect ports: %s", error.c_str());
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "RageSoundDriver_JACK: Couldn't connect ports: %s", error.c_str());
+    }
   }
 
   // Success!
-  LOG->Trace("JACK sound driver started successfully");
+  if (LOG != nullptr) {
+    LOG->Trace("JACK sound driver started successfully");
+  }
   return std::string();
 
   // Not success!
 out_unreg_r:
-  jack_port_unregister(client, port_r);
+  jack_port_unregister(
+      currentClient, port_r.exchange(nullptr, std::memory_order_acq_rel));
 out_unreg_l:
-  jack_port_unregister(client, port_l);
+  jack_port_unregister(
+      currentClient, port_l.exchange(nullptr, std::memory_order_acq_rel));
 out_close:
-  jack_client_close(client);
-  client = nullptr;
+  jack_client_close(currentClient);
+  client.store(nullptr, std::memory_order_release);
   return error;
 }
 
 std::string RageSoundDriver_JACK::ConnectPorts() {
   std::vector<std::string> portNames;
-  split(PREFSMAN->m_iSoundDevice.Get(), ",", portNames, true);
+  if (PREFSMAN != nullptr) {
+    split(PREFSMAN->m_iSoundDevice.Get(), ",", portNames, true);
+  }
+
+  jack_client_t* currentClient = client.load(std::memory_order_acquire);
+  jack_port_t* leftPort = port_l.load(std::memory_order_acquire);
+  jack_port_t* rightPort = port_r.load(std::memory_order_acquire);
+  if (currentClient == nullptr || leftPort == nullptr || rightPort == nullptr) {
+    return "JACK client or output ports are unavailable";
+  }
 
   const char *port_out_l = nullptr, *port_out_r = nullptr;
   const char** ports = nullptr;
@@ -120,7 +152,7 @@ std::string RageSoundDriver_JACK::ConnectPorts() {
     // The user has NOT specified any ports to connect to. Search
     // for all physical sinks and use the first two.
     ports = jack_get_ports(
-        client, nullptr, nullptr, JackPortIsInput | JackPortIsPhysical);
+        currentClient, nullptr, nullptr, JackPortIsInput | JackPortIsPhysical);
     if (ports == nullptr) {
       return "Couldn't get JACK ports";
     }
@@ -145,7 +177,7 @@ std::string RageSoundDriver_JACK::ConnectPorts() {
     // if that second step is necessary, I've seen something about
     // "aliases" in the docs.)
     for (const std::string& portName : portNames) {
-      jack_port_t* out = jack_port_by_name(client, portName.c_str());
+      jack_port_t* out = jack_port_by_name(currentClient, portName.c_str());
       if (out == nullptr) {
         continue;
       }
@@ -173,9 +205,10 @@ std::string RageSoundDriver_JACK::ConnectPorts() {
 
   std::string ret = std::string();
 
-  if (jack_connect(client, jack_port_name(port_l), port_out_l) != 0) {
+  if (jack_connect(currentClient, jack_port_name(leftPort), port_out_l) != 0) {
     ret = "Couldn't connect left JACK port";
-  } else if (jack_connect(client, jack_port_name(port_r), port_out_r) != 0) {
+  } else if (
+      jack_connect(currentClient, jack_port_name(rightPort), port_out_r) != 0) {
     ret = "Couldn't connect right JACK port";
   }
 
@@ -187,7 +220,13 @@ std::string RageSoundDriver_JACK::ConnectPorts() {
 }
 
 int64_t RageSoundDriver_JACK::GetPosition() const {
-  return jack_frame_time(client);
+  jack_client_t* currentClient = client.load(std::memory_order_acquire);
+  if (currentClient == nullptr) {
+    return last_frame.load(std::memory_order_acquire);
+  }
+  const int64_t frame = jack_frame_time(currentClient);
+  last_frame.store(frame, std::memory_order_release);
+  return frame;
 }
 
 int RageSoundDriver_JACK::GetSampleRate() const {
@@ -195,24 +234,38 @@ int RageSoundDriver_JACK::GetSampleRate() const {
 }
 
 int RageSoundDriver_JACK::ProcessCallback(jack_nframes_t nframes) {
+  jack_client_t* currentClient = client.load(std::memory_order_acquire);
+  jack_port_t* leftPort = port_l.load(std::memory_order_acquire);
+  jack_port_t* rightPort = port_r.load(std::memory_order_acquire);
+  if (currentClient == nullptr || leftPort == nullptr || rightPort == nullptr ||
+      nframes > static_cast<jack_nframes_t>(std::numeric_limits<int>::max())) {
+    return 0;
+  }
   jack_default_audio_sample_t* bufs[2];
 
-  bufs[0] = (jack_default_audio_sample_t*)jack_port_get_buffer(port_l, nframes);
-  bufs[1] = (jack_default_audio_sample_t*)jack_port_get_buffer(port_r, nframes);
+  bufs[0] = static_cast<jack_default_audio_sample_t*>(
+      jack_port_get_buffer(leftPort, nframes));
+  bufs[1] = static_cast<jack_default_audio_sample_t*>(
+      jack_port_get_buffer(rightPort, nframes));
+  if (bufs[0] == nullptr || bufs[1] == nullptr) {
+    return 0;
+  }
 
-  jack_time_t now = jack_last_frame_time(client);
+  jack_time_t now = jack_last_frame_time(currentClient);
+  last_frame.store(now, std::memory_order_release);
 
-  MixDeinterlaced(bufs, 2, nframes, now, now + nframes);
+  MixDeinterlaced(
+      bufs, 2, static_cast<int>(nframes), now, now + nframes);
 
   return 0;
 }
 
 int RageSoundDriver_JACK::SampleRateCallback(jack_nframes_t nframes) {
-  if (client != nullptr) {
-    sample_rate.store(jack_get_sample_rate(client), std::memory_order_release);
-  } else {
-    sample_rate.store(nframes, std::memory_order_release);
-  }
+  const int newRate =
+      nframes > 0 && nframes <= static_cast<jack_nframes_t>(INT_MAX)
+          ? static_cast<int>(nframes)
+          : FALLBACK_SAMPLE_RATE;
+  sample_rate.store(newRate, std::memory_order_release);
   return 0;
 }
 
@@ -227,9 +280,9 @@ int RageSoundDriver_JACK::SampleRateTrampoline(
 }
 
 void RageSoundDriver_JACK::ShutdownCallback() {
-  client = nullptr;
-  port_l = nullptr;
-  port_r = nullptr;
+  client.store(nullptr, std::memory_order_release);
+  port_l.store(nullptr, std::memory_order_release);
+  port_r.store(nullptr, std::memory_order_release);
 }
 
 void RageSoundDriver_JACK::ShutdownTrampoline(void* arg) {

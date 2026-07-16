@@ -47,10 +47,9 @@ static void UserLogCourseWarning(
 static bool ParseCRSAttackFloat(
     const std::string& rawValue, const std::string& fieldName,
     const std::string& sPath, float& valueOut) {
-  valueOut = StringToFloat(rawValue);
-  if (!std::isfinite(valueOut)) {
+  if (!StringToFloat(rawValue, valueOut)) {
     UserLogCourseWarning(
-        sPath, "ignored non-finite attack %s value", fieldName);
+        sPath, "ignored invalid or non-finite attack %s value", fieldName);
     return false;
   }
   return true;

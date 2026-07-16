@@ -100,10 +100,12 @@ static std::string GetTopScreenNameForPerf() {
 }
 
 static bool PerfTraceRateLimit(uint64_t nowUsec) {
+  float minIntervalSeconds = g_fPerfTraceFrameMinIntervalSeconds.Get();
+  if (!std::isfinite(minIntervalSeconds) || minIntervalSeconds < 0.25f) {
+    minIntervalSeconds = 0.25f;
+  }
   const uint64_t minIntervalUsec =
-      static_cast<uint64_t>(std::max(0.25f,
-                                     g_fPerfTraceFrameMinIntervalSeconds.Get()) *
-                            1000000.0f);
+      static_cast<uint64_t>(minIntervalSeconds * 1000000.0f);
   if (g_LastLoopPerfTraceUsec != 0 &&
       nowUsec - g_LastLoopPerfTraceUsec < minIntervalUsec) {
     return false;
@@ -174,6 +176,9 @@ static void LogLoopPerfSnapshot(
 }  // namespace
 
 static void CheckGameLoopTimerSkips(float fDeltaTime) {
+  if (DISPLAY == nullptr || !std::isfinite(fDeltaTime)) {
+    return;
+  }
   static int iLastFPS = 0;
   int iThisFPS = DISPLAY->GetFPS();
   if (iThisFPS <= 0) {
@@ -213,6 +218,9 @@ static bool ChangeAppPri() {
 }
 
 static void CheckFocus() {
+  if (HOOKS == nullptr || INPUTFILTER == nullptr) {
+    return;
+  }
   if (!HOOKS->AppFocusChanged()) {
     return;
   }
@@ -222,6 +230,10 @@ static void CheckFocus() {
 }
 
 static void CheckInputDevices() {
+  if (INPUTMAN == nullptr || INPUTFILTER == nullptr || INPUTMAPPER == nullptr ||
+      SCREENMAN == nullptr) {
+    return;
+  }
   if (INPUTMAN->DevicesChanged()) {
     INPUTFILTER->Reset();  // fix "buttons stuck" if button held while unplugged
     INPUTMAN->LoadDrivers();
@@ -364,6 +376,18 @@ void DoChangeGame() {
 }  // namespace
 
 void GameLoop::UpdateAllButDraw(bool bRunningFromVBLANK) {
+  if (SOUNDMAN == nullptr || SOUND == nullptr || TEXTUREMAN == nullptr ||
+      GAMESTATE == nullptr || NETWORK == nullptr || SCREENMAN == nullptr ||
+      MEMCARDMAN == nullptr || LIGHTSMAN == nullptr) {
+    static bool loggedMissingManagers = false;
+    if (!loggedMissingManagers && LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: GameLoop update skipped with incomplete managers.");
+      loggedMissingManagers = true;
+    }
+    return;
+  }
+
   // Flag to indicate whether an update has been processed during the VBLANK
   // period.
   static bool m_bUpdatedDuringVBLANK = false;
@@ -401,11 +425,17 @@ void GameLoop::UpdateAllButDraw(bool bRunningFromVBLANK) {
     LogLoopPerfSnapshot("incoming_delta_hitch", g_LastLoopPerf, true);
   }
 
-  if (PREFSMAN->m_bLogSkips) {
+  if (PREFSMAN != nullptr && PREFSMAN->m_bLogSkips) {
     CheckGameLoopTimerSkips(fDeltaTime);
   }
 
   fDeltaTime *= g_fUpdateRate;
+  if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: GameLoop reset invalid scaled delta %.6f.",
+        fDeltaTime);
+    fDeltaTime = 0.0f;
+  }
 
   LoopPerfSnapshot currentPerf;
   currentPerf.incomingDeltaSeconds = rawDeltaTime;

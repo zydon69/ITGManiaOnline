@@ -218,6 +218,15 @@ static bool IsSafeBackgroundDirectoryComponent(
   return true;
 }
 
+static bool HasBackgroundFileManager(const char* context) {
+  if (FILEMAN != nullptr) {
+    return true;
+  }
+  BACKGROUND_UTIL_WARN(
+      "SRC_AUDIT_FIX SRC-3090: %s ignored without FILEMAN.", context);
+  return false;
+}
+
 static void StripCvsAndSvn(
     std::vector<std::string>& vsPathsToStrip,
     std::vector<std::string>& vsNamesToStrip) {
@@ -261,13 +270,19 @@ static bool HasFiniteBackgroundChangeTiming(const BackgroundChange& seg) {
 
 void BackgroundUtil::SortBackgroundChangesArray(
     std::vector<BackgroundChange>& vBackgroundChanges) {
-  for (const BackgroundChange& seg : vBackgroundChanges) {
-    if (!HasFiniteBackgroundChangeTiming(seg)) {
-      BACKGROUND_UTIL_WARN(
-          "SRC_AUDIT_FIX SRC-680: kept BGChange with non-finite start beat %f; "
-          "it will sort after finite BGChanges.",
-          seg.m_fStartBeat);
-    }
+  const auto firstInvalid = std::remove_if(
+      vBackgroundChanges.begin(), vBackgroundChanges.end(),
+      [](const BackgroundChange& seg) {
+        return !HasFiniteBackgroundChangeTiming(seg);
+      });
+  if (firstInvalid != vBackgroundChanges.end()) {
+    const size_t removed =
+        static_cast<size_t>(vBackgroundChanges.end() - firstInvalid);
+    BACKGROUND_UTIL_WARN(
+        "SRC_AUDIT_FIX SRC-680: removed %zu BGChange(s) with non-finite start "
+        "beats.",
+        removed);
+    vBackgroundChanges.erase(firstInvalid, vBackgroundChanges.end());
   }
   sort(
       vBackgroundChanges.begin(), vBackgroundChanges.end(),
@@ -278,8 +293,10 @@ void BackgroundUtil::AddBackgroundChange(
     std::vector<BackgroundChange>& vBackgroundChanges, BackgroundChange seg) {
   if (!HasFiniteBackgroundChangeTiming(seg)) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX SRC-680: kept BGChange with non-finite start beat %f.",
+        "SRC_AUDIT_FIX SRC-680: rejected BGChange with non-finite start beat "
+        "%f.",
         seg.m_fStartBeat);
+    return;
   }
   std::vector<BackgroundChange>::iterator it;
   it = upper_bound(
@@ -294,6 +311,11 @@ void BackgroundUtil::GetBackgroundEffects(
   std::string sName = _sName;
   if (sName == "") {
     sName = "*";
+  }
+  if (!HasBackgroundFileManager("background effect listing")) {
+    vsPathsOut.clear();
+    vsNamesOut.clear();
+    return;
   }
   if (!IsSafeBackgroundAssetName(sName, "SRC-1034")) {
     vsPathsOut.clear();
@@ -319,6 +341,11 @@ void BackgroundUtil::GetBackgroundTransitions(
   std::string sName = _sName;
   if (sName == "") {
     sName = "*";
+  }
+  if (!HasBackgroundFileManager("background transition listing")) {
+    vsPathsOut.clear();
+    vsNamesOut.clear();
+    return;
   }
   if (!IsSafeBackgroundAssetName(sName, "SRC-1034")) {
     vsPathsOut.clear();
@@ -354,6 +381,9 @@ void BackgroundUtil::GetSongBGAnimations(
         "song.");
     return;
   }
+  if (!HasBackgroundFileManager("song BG animation listing")) {
+    return;
+  }
   if (!IsSafeBackgroundMatch(sMatch, true, "SRC-681")) {
     return;
   }
@@ -379,6 +409,9 @@ void BackgroundUtil::GetSongMovies(
   if (pSong == nullptr) {
     BACKGROUND_UTIL_WARN(
         "SRC_AUDIT_FIX SRC-681: song movie listing requested without song.");
+    return;
+  }
+  if (!HasBackgroundFileManager("song movie listing")) {
     return;
   }
   if (!IsSafeBackgroundMatch(sMatch, true, "SRC-681")) {
@@ -410,6 +443,9 @@ void BackgroundUtil::GetSongBitmaps(
         "SRC_AUDIT_FIX SRC-681: song bitmap listing requested without song.");
     return;
   }
+  if (!HasBackgroundFileManager("song bitmap listing")) {
+    return;
+  }
   if (!IsSafeBackgroundMatch(sMatch, true, "SRC-681")) {
     return;
   }
@@ -436,6 +472,9 @@ static void GetFilterToFileNames(
   if (pSong == nullptr) {
     BACKGROUND_UTIL_WARN(
         "SRC_AUDIT_FIX SRC-682: background mapping requested without song.");
+    return;
+  }
+  if (!HasBackgroundFileManager("background mapping")) {
     return;
   }
   if (pSong->m_sGenre.empty()) {
@@ -491,6 +530,9 @@ void BackgroundUtil::GetGlobalBGAnimations(
     std::vector<std::string>& vsNamesOut) {
   vsPathsOut.clear();
   vsNamesOut.clear();
+  if (!HasBackgroundFileManager("global BG animation listing")) {
+    return;
+  }
   if (!IsSafeBackgroundMatch(sMatch, false, "SRC-683")) {
     return;
   }
@@ -594,6 +636,9 @@ void BackgroundUtil::GetGlobalRandomMovies(
     bool bTryInsideOfSongGroupAndGenreFirst, bool bTryInsideOfSongGroupFirst) {
   vsPathsOut.clear();
   vsNamesOut.clear();
+  if (!HasBackgroundFileManager("global random movie listing")) {
+    return;
+  }
 
   GetGlobalRandomMoviePaths(
       pSong, sMatch, vsPathsOut, bTryInsideOfSongGroupAndGenreFirst,

@@ -67,11 +67,11 @@ Foreground::Foreground() : m_fLastMusicSeconds(-9999), m_pSong(nullptr) {}
 Foreground::~Foreground() { Unload(); }
 
 void Foreground::Unload() {
+  RemoveAllChildren();
   for (unsigned i = 0; i < m_BGAnimations.size(); ++i) {
     delete m_BGAnimations[i].m_bga;
   }
   m_BGAnimations.clear();
-  m_SubActors.clear();
   m_fLastMusicSeconds = -9999;
   m_pSong = nullptr;
 }
@@ -89,6 +89,12 @@ void Foreground::LoadFromSong(const Song* pSong) {
 
   m_pSong = pSong;
   for (const BackgroundChange& change : pSong->GetForegroundChanges()) {
+    if (!std::isfinite(change.m_fStartBeat)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-3106: Foreground skipped a change with "
+          "non-finite start beat.");
+      continue;
+    }
     const std::string sBGName = change.m_def.m_sFile1;
     const std::string sForegroundPath =
         Song::GetSongAssetPath(sBGName, pSong->GetSongDir());
@@ -167,9 +173,29 @@ void Foreground::Update(float fDeltaTime) {
 
       const float fStartSecond =
           m_pSong->m_SongTiming.GetElapsedTimeFromBeat(bga.m_fStartBeat);
-      const float fStopSecond = fStartSecond + bga.m_bga->GetTweenTimeLeft();
+      const float tweenTime = bga.m_bga->GetTweenTimeLeft();
+      if (!std::isfinite(fStartSecond) || !std::isfinite(tweenTime) ||
+          tweenTime < 0.0f) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-3106: Foreground disabled '%s' because its "
+            "timing is invalid.",
+            bga.m_bga->GetName().c_str());
+        bga.m_bga->SetVisible(false);
+        bga.m_bFinished = true;
+        continue;
+      }
+      const float fStopSecond = fStartSecond + tweenTime;
       bga.m_fStopBeat =
           m_pSong->m_SongTiming.GetBeatFromElapsedTime(fStopSecond);
+      if (!std::isfinite(bga.m_fStopBeat)) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-3106: Foreground disabled '%s' because its "
+            "stop beat is invalid.",
+            bga.m_bga->GetName().c_str());
+        bga.m_bga->SetVisible(false);
+        bga.m_bFinished = true;
+        continue;
+      }
 
       lDeltaTime = GAMESTATE->m_Position.m_fMusicSeconds - fStartSecond;
     } else {

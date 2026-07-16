@@ -16,17 +16,17 @@
 class MovieTexture_Null : public RageMovieTexture {
  public:
   MovieTexture_Null(RageTextureID ID);
-  virtual ~MovieTexture_Null();
-  void Invalidate() { texHandle = 0; }
-  uintptr_t GetTexHandle() const { return texHandle; }
-  void Update(float /* delta */) {}
-  void Reload() {}
-  void SetPosition(float /* seconds */) {}
-  void SetPlaybackRate(float) {}
-  void SetLooping(bool looping = true) { loop = looping; }
+  ~MovieTexture_Null() override;
+  void Invalidate() override { texHandle = 0; }
+  uintptr_t GetTexHandle() const override { return texHandle; }
+  void Update(float /* delta */) override {}
+  void Reload() override;
+  void SetPosition(float /* seconds */) override {}
+  void SetPlaybackRate(float) override {}
+  void SetLooping(bool looping = true) override { loop = looping; }
 
  private:
-  bool playing;
+  void CreateTexture();
   bool loop;
   uintptr_t texHandle;
 };
@@ -36,7 +36,6 @@ MovieTexture_Null::MovieTexture_Null(RageTextureID ID) : RageMovieTexture(ID) {
     LOG->Trace("MovieTexture_Null::MovieTexture_Null(ID)");
   }
   texHandle = 0;
-  playing = false;
   loop = true;
 
   RageTextureID actualID = GetID();
@@ -53,6 +52,14 @@ MovieTexture_Null::MovieTexture_Null(RageTextureID ID) : RageMovieTexture(ID) {
   m_iFramesHigh = 1;
 
   CreateFrameRects();
+  CreateTexture();
+}
+
+void MovieTexture_Null::CreateTexture() {
+  constexpr int size = 64;
+  if (texHandle != 0) {
+    return;
+  }
   if (DISPLAY == nullptr) {
     return;
   }
@@ -83,6 +90,8 @@ MovieTexture_Null::MovieTexture_Null(RageTextureID ID) : RageMovieTexture(ID) {
 
   delete img;
 }
+
+void MovieTexture_Null::Reload() { CreateTexture(); }
 
 MovieTexture_Null::~MovieTexture_Null() {
   if (DISPLAY != nullptr && texHandle != 0) {

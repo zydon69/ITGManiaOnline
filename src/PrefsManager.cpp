@@ -367,10 +367,10 @@ PrefsManager::PrefsManager()
           "DebugMenuEnabled", true, nullptr, PreferenceType::Immutable),
       m_bLogToDisk("LogToDisk", true),
 #if defined(DEBUG)
-      m_bForceLogFlush("ForceLogFlush", true),
+      m_bForceLogFlush("ForceLogFlush", false),
       m_bShowLogOutput("ShowLogOutput", true),
 #else
-      m_bForceLogFlush("ForceLogFlush", true),
+      m_bForceLogFlush("ForceLogFlush", false),
       m_bShowLogOutput("ShowLogOutput", true),
 #endif
       m_bShowPopups("ShowPopups", false),

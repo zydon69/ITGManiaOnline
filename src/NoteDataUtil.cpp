@@ -71,6 +71,20 @@ static bool CheckedScaledRow(
   return true;
 }
 
+static bool CheckedHoldEndRow(
+    int startRow, int duration, int* endRowOut, const char* context) {
+  if (endRowOut == nullptr || startRow < 0 || startRow > MAX_NOTE_ROW ||
+      duration <= 0 || duration > MAX_NOTE_ROW - startRow) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX %s refused invalid hold start=%i duration=%i.",
+        context, startRow, duration);
+    return false;
+  }
+
+  *endRowOut = startRow + duration;
+  return true;
+}
+
 static bool IsValidStepsType(StepsType st) {
   return st >= 0 && st < NUM_StepsType;
 }
@@ -192,6 +206,14 @@ static void LoadFromSMNoteDataStringWithPlayer(
    * pointers to each measure line we can perform this without copying the
    * string at all. */
   int size = -1;
+  if (!IsValidNoteTrackCount(iNumTracks, "LoadFromSMNoteDataStringWithPlayer") ||
+      start < 0 || len < 0 || start > int(sSMNoteData.size()) ||
+      len > int(sSMNoteData.size()) - start) {
+    LOG->Warn(
+        "SM note data slice rejected: start=%i length=%i size=%zu tracks=%i.",
+        start, len, sSMNoteData.size(), iNumTracks);
+    return;
+  }
   const int end = start + len;
   std::vector<std::pair<const char*, const char*>> aMeasureLines;
   for (unsigned m = 0; true; ++m) {
@@ -418,6 +440,17 @@ static void LoadFromSMNoteDataStringWithPlayer(
 void NoteDataUtil::LoadFromSMNoteDataString(
     NoteData& out, const std::string& sSMNoteData_, bool bComposite) {
   // Load note data
+  const int iNumTracks = out.GetNumTracks();
+  out.Init();
+  if (!IsValidNoteTrackCount(iNumTracks, "LoadFromSMNoteDataString") ||
+      sSMNoteData_.size() > size_t(std::numeric_limits<int>::max())) {
+    LOG->Warn(
+        "SM note data rejected: size=%zu tracks=%i.",
+        sSMNoteData_.size(), iNumTracks);
+    return;
+  }
+  out.SetNumTracks(iNumTracks);
+
   std::string sSMNoteData;
   std::string::size_type iIndexCommentStart = 0;
   std::string::size_type iIndexCommentEnd = 0;
@@ -438,10 +471,6 @@ void NoteDataUtil::LoadFromSMNoteDataString(
   sSMNoteData.append(p, origSize - iIndexCommentEnd);
 
   // Clear notes, but keep the same number of tracks.
-  int iNumTracks = out.GetNumTracks();
-  out.Init();
-  out.SetNumTracks(iNumTracks);
-
   if (!bComposite) {
     LoadFromSMNoteDataStringWithPlayer(
         out, sSMNoteData, 0, sSMNoteData.size(), PLAYER_INVALID, iNumTracks);
@@ -482,11 +511,11 @@ void NoteDataUtil::InsertHoldTails(NoteData& inout) {
       TapNote tail = tn;
       tail.type = TapNoteType_HoldTail;
 
-      /* If iDuration is 0, we'd end up overwriting the head with the tail
-       * (and invalidating our iterator). Empty hold notes aren't valid. */
-      ASSERT(tn.iDuration != 0);
-
-      inout.SetTapNote(t, iRow + tn.iDuration, tail);
+      int iEndRow = 0;
+      if (!CheckedHoldEndRow(iRow, tn.iDuration, &iEndRow, "InsertHoldTails")) {
+        continue;
+      }
+      inout.SetTapNote(t, iEndRow, tail);
     }
   }
 }
@@ -569,7 +598,12 @@ void NoteDataUtil::GetSMNoteDataString(
                   break;
                 // case TapNoteSubType_Mine:	c = 'N'; break;
                 default:
-                  FAIL_M(ssprintf("Invalid tap note subtype: %i", tn.subType));
+                  LOG->Warn(
+                      "SM serialization replaced invalid hold subtype %i at "
+                      "row %i track %i.",
+                      int(tn.subType), r, t);
+                  c = '0';
+                  break;
               }
               break;
             case TapNoteType_HoldTail:
@@ -591,8 +625,12 @@ void NoteDataUtil::GetSMNoteDataString(
               c = 'F';
               break;
             default:
-              c = '\0';
-              FAIL_M(ssprintf("Invalid tap note type: %i", tn.type));
+              LOG->Warn(
+                  "SM serialization replaced invalid tap type %i at row %i "
+                  "track %i.",
+                  int(tn.type), r, t);
+              c = '0';
+              break;
           }
           sRet.append(1, c);
 
@@ -726,7 +764,12 @@ void NoteDataUtil::CombineCompositeNoteData(
           continue;
         }
         if (i->second.type == TapNoteType_HoldHead) {
-          out.AddHoldNote(track, row, row + i->second.iDuration, i->second);
+          int endRow = 0;
+          if (CheckedHoldEndRow(
+                  row, i->second.iDuration, &endRow,
+                  "CombineCompositeNoteData")) {
+            out.AddHoldNote(track, row, endRow, i->second);
+          }
         } else {
           out.SetTapNote(track, row, i->second);
         }
@@ -879,7 +922,10 @@ void NoteDataUtil::LoadOverlapped(
       // If this is a hold note, find the end.
       int iEndIndex = row;
       if (tnFrom.type == TapNoteType_HoldHead) {
-        iEndIndex = row + tnFrom.iDuration;
+        if (!CheckedHoldEndRow(
+                row, tnFrom.iDuration, &iEndIndex, "LoadOverlapped")) {
+          continue;
+        }
       }
 
       int& iTrackTo = DestRow[iTrackFrom];
@@ -933,7 +979,12 @@ int FindLongestOverlappingHoldNoteForAnyTrack(const NoteData& in, int iRow) {
   for (int t = 0; t < in.GetNumTracks(); t++) {
     const TapNote& tn = in.GetTapNote(t, iRow);
     if (tn.type == TapNoteType_HoldHead) {
-      iMaxTailRow = std::max(iMaxTailRow, iRow + tn.iDuration);
+      int endRow = 0;
+      if (CheckedHoldEndRow(
+              iRow, tn.iDuration, &endRow,
+              "FindLongestOverlappingHoldNoteForAnyTrack")) {
+        iMaxTailRow = std::max(iMaxTailRow, endRow);
+      }
     }
   }
 
@@ -1373,7 +1424,13 @@ void NoteDataUtil::CalculateRadarValues(
               break;
           }
           if (curr_note->type == TapNoteType_HoldHead) {
-            state.hold_ends.push_back(curr_row + curr_note->iDuration);
+            int holdEndRow = 0;
+            if (!CheckedHoldEndRow(
+                    curr_row, curr_note->iDuration, &holdEndRow,
+                    "CalculateRadarValues")) {
+              break;
+            }
+            state.hold_ends.push_back(holdEndRow);
             ++state.num_holds_on_curr_row;
             switch (curr_note->subType) {
               case TapNoteSubType_Hold:
@@ -2237,7 +2294,10 @@ static void GetTrackMapping(
       }
       break;
     default:
-      ASSERT(0);
+      LOG->Trace(
+          "SRC_AUDIT_FIX GetTrackMapping kept identity for invalid mapping %i.",
+          int(tt));
+      break;
   }
 
   for (int t = 0; t < NumTracks; ++t) {
@@ -2275,7 +2335,12 @@ static void HyperShuffleNotes(NoteData& inout, int iStartIndex, int iEndIndex) {
 
         // Check for a hold that ends on or after this row.
         if (tn.type == TapNoteType_HoldHead) {
-          int iHoldEndRow = iTargetRow + tn.iDuration;
+          int iHoldEndRow = 0;
+          if (!CheckedHoldEndRow(
+                  iTargetRow, tn.iDuration, &iHoldEndRow,
+                  "HyperShuffleNotes active hold")) {
+            continue;
+          }
 
           if (iHoldEndRow >= iStartIndex) {
             viHoldEndRows[track] = iHoldEndRow;
@@ -2393,8 +2458,15 @@ static void HyperShuffleNotes(NoteData& inout, int iStartIndex, int iEndIndex) {
           inout.SetTapNote(targetTrack, r, TAP_EMPTY);
           continue;
         }
+        int holdEndRow = 0;
+        if (!CheckedHoldEndRow(
+                r, current_tn.iDuration, &holdEndRow,
+                "HyperShuffleNotes shuffled hold")) {
+          inout.SetTapNote(targetTrack, r, TAP_EMPTY);
+          continue;
+        }
         iFreeTracks--;
-        viHoldEndRows[targetTrack] = r + current_tn.iDuration;
+        viHoldEndRows[targetTrack] = holdEndRow;
       }
     }
   }
@@ -2525,7 +2597,11 @@ void NoteDataUtil::Backwards(NoteData& inout) {
       const TapNote& tnEarlier = inout.GetTapNote(t, iRowEarlier);
       TapNote tnLater = tnEarlier;
       if (tnEarlier.type == TapNoteType_HoldHead) {
-        const int oldEndRow = iRowEarlier + tnEarlier.iDuration;
+        int oldEndRow = 0;
+        if (!CheckedHoldEndRow(
+                iRowEarlier, tnEarlier.iDuration, &oldEndRow, "Backwards")) {
+          continue;
+        }
         const int newStartRow = max_row - oldEndRow;
         const int newEndRow = max_row - iRowEarlier;
         if (newStartRow < 0 || newEndRow <= newStartRow) {
@@ -2869,7 +2945,15 @@ void NoteDataUtil::AddMines(NoteData& inout, int iStartIndex, int iEndIndex) {
         continue;
       }
 
-      int iMineRow = r + tn.iDuration + BeatToNoteRow(0.5f);
+      int iHoldEndRow = 0;
+      if (!CheckedHoldEndRow(r, tn.iDuration, &iHoldEndRow, "AddMines")) {
+        continue;
+      }
+      const int iMineOffset = BeatToNoteRow(0.5f);
+      if (iHoldEndRow > MAX_NOTE_ROW - iMineOffset) {
+        continue;
+      }
+      int iMineRow = iHoldEndRow + iMineOffset;
       if (iMineRow < iStartIndex || iMineRow > iEndIndex) {
         continue;
       }
@@ -3132,7 +3216,12 @@ void NoteDataUtil::SnapToNearestNoteType(
       }
 
       if (tnNew.type == TapNoteType_HoldHead) {
-        const int iOldEndIndex = iOldIndex + tnNew.iDuration;
+        int iOldEndIndex = 0;
+        if (!CheckedHoldEndRow(
+                iOldIndex, tnNew.iDuration, &iOldEndIndex,
+                "SnapToNearestNoteType")) {
+          continue;
+        }
         const int iNewEndIndex1 = Quantize(iOldEndIndex, iSnapRows1);
         const int iNewEndIndex2 = Quantize(iOldEndIndex, iSnapRows2);
         bool bEndBeat1IsCloser =
@@ -3147,7 +3236,16 @@ void NoteDataUtil::SnapToNearestNoteType(
 
         /* We might be moving a hold note downwards, or extending its duration
          * downwards.  Make sure there isn't anything else in the new range. */
-        inout.ClearRangeForTrack(iNewIndex, iNewIndex + tnNew.iDuration + 1, c);
+        int iNewEndIndexChecked = 0;
+        if (!CheckedHoldEndRow(
+                iNewIndex, tnNew.iDuration, &iNewEndIndexChecked,
+                "SnapToNearestNoteType snapped hold")) {
+          continue;
+        }
+        const int clearEnd =
+            iNewEndIndexChecked < MAX_NOTE_ROW ? iNewEndIndexChecked + 1
+                                               : MAX_NOTE_ROW;
+        inout.ClearRangeForTrack(iNewIndex, clearEnd, c);
       }
 
       inout.SetTapNote(c, iNewIndex, tnNew);
@@ -3565,9 +3663,14 @@ void NoteDataUtil::Scale(NoteData& nd, float fScale) {
         continue;
       }
       if (tn.type == TapNoteType_HoldHead) {
+        int iOldEndRow = 0;
+        if (!CheckedHoldEndRow(
+                iter->first, tn.iDuration, &iOldEndRow, "Scale")) {
+          continue;
+        }
         int iNewEndRow = 0;
         if (!CheckedScaledRow(
-                fScale, iter->first + tn.iDuration, &iNewEndRow, "Scale")) {
+                fScale, iOldEndRow, &iNewEndRow, "Scale")) {
           continue;
         }
         tn.iDuration = iNewEndRow - iNewRow;
@@ -3588,15 +3691,31 @@ void NoteDataUtil::Scale(NoteData& nd, float fScale) {
 
 /* XXX: move this to an appropriate place, same place as NoteRowToBeat perhaps?
  */
-static inline int GetScaledRow(
-    float fScale, int iStartIndex, int iEndIndex, int iRow) {
-  if (iRow < iStartIndex) {
-    return iRow;
-  } else if (iRow > iEndIndex) {
-    return iRow + std::lrint((iEndIndex - iStartIndex) * (fScale - 1));
-  } else {
-    return std::lrint((iRow - iStartIndex) * fScale) + iStartIndex;
+static bool GetScaledRow(
+    float fScale, int iStartIndex, int iEndIndex, int iRow, int* iRowOut) {
+  if (iRowOut == nullptr || !std::isfinite(fScale) || fScale <= 0.f ||
+      iStartIndex < 0 || iStartIndex >= iEndIndex || iRow < 0 ||
+      iRow > MAX_NOTE_ROW) {
+    return false;
   }
+
+  double scaledRow = iRow;
+  if (iRow > iEndIndex) {
+    scaledRow = double(iRow) +
+                double(iEndIndex - iStartIndex) * (double(fScale) - 1.0);
+  } else if (iRow >= iStartIndex) {
+    scaledRow = double(iStartIndex) +
+                double(iRow - iStartIndex) * double(fScale);
+  }
+  if (!std::isfinite(scaledRow) || scaledRow < 0.0 ||
+      scaledRow > double(MAX_NOTE_ROW)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX ScaleRegion refused transformed row %f from row %i.",
+        scaledRow, iRow);
+    return false;
+  }
+  *iRowOut = int(std::lrint(scaledRow));
+  return true;
 }
 
 void NoteDataUtil::ScaleRegion(
@@ -3616,17 +3735,25 @@ void NoteDataUtil::ScaleRegion(
     for (NoteData::const_iterator iter = nd.begin(t); iter != nd.end(t);
          ++iter) {
       TapNote tn = iter->second;
-      int iNewRow = GetScaledRow(fScale, iStartIndex, iEndIndex, iter->first);
-      int iNewDuration =
-          GetScaledRow(
-              fScale, iStartIndex, iEndIndex, iter->first + tn.iDuration) -
-          iNewRow;
-      tn.iDuration = iNewDuration;
-      if (tn.type == TapNoteType_HoldHead && tn.iDuration <= 0) {
-        LOG->Trace(
-            "SRC_AUDIT_FIX ScaleRegion skipped invalid scaled hold at row %i.",
-            iter->first);
+      int iNewRow = 0;
+      if (!GetScaledRow(
+              fScale, iStartIndex, iEndIndex, iter->first, &iNewRow)) {
         continue;
+      }
+      if (tn.type == TapNoteType_HoldHead) {
+        int iOldEndRow = 0;
+        int iNewEndRow = 0;
+        if (!CheckedHoldEndRow(
+                iter->first, tn.iDuration, &iOldEndRow, "ScaleRegion") ||
+            !GetScaledRow(
+                fScale, iStartIndex, iEndIndex, iOldEndRow, &iNewEndRow) ||
+            iNewEndRow <= iNewRow) {
+          LOG->Trace(
+              "SRC_AUDIT_FIX ScaleRegion skipped invalid scaled hold at row %i.",
+              iter->first);
+          continue;
+        }
+        tn.iDuration = iNewEndRow - iNewRow;
       }
       ndOut.SetTapNote(t, iNewRow, tn);
     }
@@ -3637,7 +3764,8 @@ void NoteDataUtil::ScaleRegion(
 }
 
 void NoteDataUtil::InsertRows(NoteData& nd, int iStartIndex, int iRowsToAdd) {
-  if (iStartIndex < 0 || iRowsToAdd < 0) {
+  if (iStartIndex < 0 || iStartIndex > MAX_NOTE_ROW || iRowsToAdd < 0 ||
+      iRowsToAdd > MAX_NOTE_ROW - iStartIndex) {
     LOG->Trace(
         "SRC_AUDIT_FIX InsertRows ignored invalid start=%i rows=%i.",
         iStartIndex, iRowsToAdd);
@@ -3654,7 +3782,8 @@ void NoteDataUtil::InsertRows(NoteData& nd, int iStartIndex, int iRowsToAdd) {
 
 void NoteDataUtil::DeleteRows(
     NoteData& nd, int iStartIndex, int iRowsToDelete) {
-  if (iStartIndex < 0 || iRowsToDelete < 0) {
+  if (iStartIndex < 0 || iStartIndex > MAX_NOTE_ROW || iRowsToDelete < 0 ||
+      iRowsToDelete > MAX_NOTE_ROW - iStartIndex) {
     LOG->Trace(
         "SRC_AUDIT_FIX DeleteRows ignored invalid start=%i rows=%i.",
         iStartIndex, iRowsToDelete);
@@ -3752,13 +3881,16 @@ bool NoteDataUtil::GetNextEditorPosition(const NoteData& in, int& rowInOut) {
     }
 
     const TapNote& tn = in.GetTapNote(t, iHeadRow);
-    int iEndRow = iHeadRow + tn.iDuration;
+    int iEndRow = 0;
+    if (!CheckedHoldEndRow(
+            iHeadRow, tn.iDuration, &iEndRow, "GetNextEditorPosition")) {
+      continue;
+    }
     if (iEndRow == iOriginalRow) {
       continue;
     }
 
     bAnyHaveNextNote = true;
-    ASSERT(iEndRow < MAX_NOTE_ROW);
     iClosestNextRow = std::min(iClosestNextRow, iEndRow);
   }
 
@@ -3786,13 +3918,16 @@ bool NoteDataUtil::GetPrevEditorPosition(const NoteData& in, int& rowInOut) {
       continue;
     }
 
-    int iEndRow = iHeadRow + tn.iDuration;
+    int iEndRow = 0;
+    if (!CheckedHoldEndRow(
+            iHeadRow, tn.iDuration, &iEndRow, "GetPrevEditorPosition")) {
+      continue;
+    }
     if (iEndRow >= iOriginalRow) {
       continue;
     }
 
     bAnyHavePrevNote = true;
-    ASSERT(iEndRow < MAX_NOTE_ROW);
     iClosestPrevRow = std::max(iClosestPrevRow, iEndRow);
   }
 
@@ -3814,13 +3949,14 @@ unsigned int NoteDataUtil::GetTotalHoldTicks(
   }
   unsigned int ret = 0;
   // Last row must be included. -- Matt
-  int end = nd->GetLastRow() + 1;
+  int64_t end = std::min<int64_t>(
+      int64_t(MAX_NOTE_ROW) + 1, int64_t(nd->GetLastRow()) + 1);
   std::vector<TimingSegment*> segments =
       td->GetTimingSegments(SEGMENT_TICKCOUNT);
   if (segments.empty()) {
     const int step = ROWS_PER_BEAT;
-    for (int j = 0; j < end; j += step) {
-      if (nd->GetNumTracksHeldAtRow(j) > 0) {
+    for (int64_t j = 0; j < end; j += step) {
+      if (nd->GetNumTracksHeldAtRow(int(j)) > 0) {
         ret++;
       }
     }
@@ -3839,9 +3975,9 @@ unsigned int NoteDataUtil::GetTotalHoldTicks(
       const int step = std::max(1, ROWS_PER_BEAT / ts->GetTicks());
       // Jump to each point where holds would tick and add the number of holds
       // there to ret.
-      for (int j = ts->GetRow(); j < end; j += step) {
+      for (int64_t j = std::max(0, ts->GetRow()); j < end; j += step) {
         // 1 tick per row.
-        if (nd->GetNumTracksHeldAtRow(j) > 0) {
+        if (nd->GetNumTracksHeldAtRow(int(j)) > 0) {
           ret++;
         }
       }

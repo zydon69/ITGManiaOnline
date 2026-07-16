@@ -23,8 +23,6 @@ static void EraseSegment(
     std::vector<TimingSegment*>& vSegs, int index, TimingSegment* cur);
 static const int INVALID_INDEX = -1;
 
-TimingSegment* GetSegmentAtRow(int iNoteRow, TimingSegmentType tst);
-
 static bool IsValidTimingSegmentType(TimingSegmentType tst) {
   return tst >= SEGMENT_BPM && tst < NUM_TimingSegmentType;
 }
@@ -948,6 +946,12 @@ void TimingData::GetBeatAndBPSFromElapsedTimeNoOffset(GetBeatArgs& args) const {
 
 float TimingData::GetElapsedTimeInternal(
     GetBeatStarts& start, float beat, unsigned int max_segment) const {
+  if (std::isnan(beat)) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2939: ignored NaN beat in elapsed-time conversion.");
+    return start.last_time;
+  }
+
   const std::vector<TimingSegment*>& bpms = m_avpTimingSegments[SEGMENT_BPM];
   const std::vector<TimingSegment*>& warps = m_avpTimingSegments[SEGMENT_WARP];
   const std::vector<TimingSegment*>& stops = m_avpTimingSegments[SEGMENT_STOP];
@@ -971,6 +975,9 @@ float TimingData::GetElapsedTimeInternal(
     FindEvent(
         event_row, event_type, start, beat, find_marker, bpms, warps, stops,
         delays);
+    if (event_type == NOT_FOUND) {
+      return start.last_time;
+    }
     float time_to_next_event =
         start.is_warping ? 0 : NoteRowToBeat(event_row - start.last_row) / bps;
     float next_event_time = start.last_time + time_to_next_event;
@@ -1077,7 +1084,7 @@ float TimingData::GetDisplayedBeat(float fBeat) const {
 void TimingData::ScaleRegion(
     float fScale, int iStartIndex, int iEndIndex, bool bAdjustBPM) {
   if (!std::isfinite(fScale) || fScale <= 0.0f || iStartIndex < 0 ||
-      iStartIndex >= iEndIndex) {
+      iStartIndex >= iEndIndex || iEndIndex > MAX_NOTE_ROW) {
     LOG->Trace(
         "SRC_AUDIT_FIX TimingData ignored invalid ScaleRegion scale=%f "
         "start=%i end=%i.",
@@ -1087,15 +1094,17 @@ void TimingData::ScaleRegion(
 
   ReleaseLookup();
 
-  int length = iEndIndex - iStartIndex;
-  int newLength = std::lrint(fScale * length);
-  if (newLength <= 0) {
+  const int length = iEndIndex - iStartIndex;
+  const double scaledLength = static_cast<double>(fScale) * length;
+  if (!std::isfinite(scaledLength) || scaledLength < 1.0 ||
+      scaledLength > MAX_NOTE_ROW - iStartIndex) {
     LOG->Trace(
-        "SRC_AUDIT_FIX TimingData ignored ScaleRegion producing invalid "
-        "length %i.",
-        newLength);
+        "SRC_AUDIT_FIX TimingData ignored ScaleRegion producing invalid length "
+        "%.3f.",
+        scaledLength);
     return;
   }
+  const int newLength = static_cast<int>(std::lrint(scaledLength));
 
   FOREACH_TimingSegmentType(tst) for (unsigned j = 0;
                                       j < m_avpTimingSegments[tst].size(); j++)
@@ -1134,7 +1143,8 @@ void TimingData::ScaleRegion(
 }
 
 void TimingData::InsertRows(int iStartRow, int iRowsToAdd) {
-  if (iStartRow < 0 || iRowsToAdd <= 0) {
+  if (iStartRow < 0 || iStartRow > MAX_NOTE_ROW || iRowsToAdd <= 0 ||
+      iRowsToAdd > MAX_NOTE_ROW - iStartRow) {
     LOG->Trace(
         "SRC_AUDIT_FIX TimingData ignored invalid InsertRows start=%i rows=%i.",
         iStartRow, iRowsToAdd);
@@ -1170,7 +1180,8 @@ void TimingData::InsertRows(int iStartRow, int iRowsToAdd) {
 
 // Delete timing changes in [iStartRow, iStartRow + iRowsToDelete) and shift up.
 void TimingData::DeleteRows(int iStartRow, int iRowsToDelete) {
-  if (iStartRow < 0 || iRowsToDelete <= 0) {
+  if (iStartRow < 0 || iStartRow > MAX_NOTE_ROW || iRowsToDelete <= 0 ||
+      iRowsToDelete > MAX_NOTE_ROW - iStartRow) {
     LOG->Trace(
         "SRC_AUDIT_FIX TimingData ignored invalid DeleteRows start=%i rows=%i.",
         iStartRow, iRowsToDelete);
@@ -1180,22 +1191,25 @@ void TimingData::DeleteRows(int iStartRow, int iRowsToDelete) {
   ReleaseLookup();
 
   FOREACH_TimingSegmentType(tst) {
+    std::vector<TimingSegment*>& segs = m_avpTimingSegments[tst];
     // Don't delete the indefinite segments that are still in effect
     // at the end row; rather, shift them so they start there.
-    TimingSegment* tsEnd = GetSegmentAtRow(iStartRow + iRowsToDelete, tst);
+    const int iEndRow = iStartRow + iRowsToDelete;
+    const int iEndSegment = GetSegmentIndexAtRow(tst, iEndRow);
+    TimingSegment* tsEnd =
+        iEndSegment == INVALID_INDEX ? nullptr : segs[iEndSegment];
     if (tsEnd != nullptr &&
         tsEnd->GetEffectType() == SegmentEffectType_Indefinite &&
         iStartRow <= tsEnd->GetRow() &&
-        tsEnd->GetRow() < iStartRow + iRowsToDelete) {
+        tsEnd->GetRow() < iEndRow) {
       // The iRowsToDelete will eventually be subtracted out
       LOG->Trace(
           "Segment at row %d shifted to %d", tsEnd->GetRow(),
           iStartRow + iRowsToDelete);
-      tsEnd->SetRow(iStartRow + iRowsToDelete);
+      tsEnd->SetRow(iEndRow);
     }
 
     // Now delete and shift up
-    std::vector<TimingSegment*>& segs = m_avpTimingSegments[tst];
     for (unsigned j = 0; j < segs.size(); j++) {
       TimingSegment* seg = segs[j];
       // Before deleted region:
@@ -1356,8 +1370,24 @@ void TimingData::NoteRowToMeasureAndBeat(
     int iNoteRow, int& iMeasureIndexOut, int& iBeatIndexOut,
     int& iRowsRemainder) const {
   iMeasureIndexOut = 0;
+  iBeatIndexOut = 0;
+  iRowsRemainder = 0;
   const std::vector<TimingSegment*>& tSigs =
       GetTimingSegments(SEGMENT_TIME_SIG);
+  if (tSigs.empty()) {
+    LOG->Trace(
+        "SRC_AUDIT_FIX SRC-2942: using 4/4 fallback for measure conversion "
+        "without time signatures.");
+    if (iNoteRow <= 0) {
+      return;
+    }
+    const int iRowsPerMeasure = ROWS_PER_BEAT * 4;
+    iMeasureIndexOut = iNoteRow / iRowsPerMeasure;
+    const int iRowsThisMeasure = iNoteRow % iRowsPerMeasure;
+    iBeatIndexOut = iRowsThisMeasure / ROWS_PER_BEAT;
+    iRowsRemainder = iRowsThisMeasure % ROWS_PER_BEAT;
+    return;
+  }
   for (unsigned i = 0; i < tSigs.size(); i++) {
     TimeSignatureSegment* curSig = ToTimeSignature(tSigs[i]);
     int iSegmentEndRow =
@@ -1393,7 +1423,10 @@ void TimingData::NoteRowToMeasureAndBeat(
     }
   }
 
-  FAIL_M("Failed to get measure and beat for note row");
+  LOG->Warn(
+      "SRC_AUDIT_FIX SRC-2942: failed to resolve measure for row %i; returning "
+      "the accumulated safe fallback.",
+      iNoteRow);
 }
 
 std::vector<std::string> TimingData::ToVectorString(

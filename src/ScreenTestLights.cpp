@@ -30,6 +30,18 @@ bool IsValidController(GameController controller) {
   return controller >= GameController_1 && controller < NUM_GameController;
 }
 
+bool IsValidTestPlayer(PlayerNumber player) {
+  return player >= PLAYER_1 && player < NUM_PLAYERS;
+}
+
+bool IsValidCabinetLight(CabinetLight light) {
+  return light >= 0 && light < NUM_CabinetLight;
+}
+
+bool IsCycleInputType(InputEventType type) {
+  return type == IET_FIRST_PRESS || type == IET_REPEAT;
+}
+
 std::string SafeGameButtonString(const InputScheme* scheme, GameButton button) {
   if (scheme == nullptr || !IsValidGameButton(button)) {
     return "Invalid";
@@ -44,6 +56,7 @@ std::string SafeGameButtonString(const InputScheme* scheme, GameButton button) {
 void ScreenTestLights::Init() {
   ScreenWithMenuElements::Init();
 
+  m_bTextReady = false;
   m_textInputs.SetName("Text");
   if (HasLoadedTheme() &&
       m_textInputs.LoadFromFont(THEME->GetPathF("Common", "normal", true))) {
@@ -103,7 +116,7 @@ void ScreenTestLights::Update(float fDeltaTime) {
       break;
   }
 
-  if (cl == CabinetLight_Invalid) {
+  if (!IsValidCabinetLight(cl)) {
     s += CABINET_LIGHT.GetValue() + ": -----\n";
   } else {
     s += ssprintf(
@@ -139,7 +152,7 @@ bool ScreenTestLights::Input(const InputEventPlus& input) {
 
 bool ScreenTestLights::MenuLeft(const InputEventPlus& input) {
   if (LIGHTSMAN == nullptr || IsTransitioning() || m_fLockInputSecs > 0 ||
-      input.type == IET_RELEASE || input.pn == PLAYER_INVALID) {
+      !IsCycleInputType(input.type) || !IsValidTestPlayer(input.pn)) {
     return false;
   }
   if (LIGHTSMAN->GetLightsMode() != LIGHTSMODE_TEST_MANUAL_CYCLE) {
@@ -156,7 +169,7 @@ bool ScreenTestLights::MenuLeft(const InputEventPlus& input) {
 
 bool ScreenTestLights::MenuRight(const InputEventPlus& input) {
   if (LIGHTSMAN == nullptr || IsTransitioning() || m_fLockInputSecs > 0 ||
-      input.type == IET_RELEASE || input.pn == PLAYER_INVALID) {
+      !IsCycleInputType(input.type) || !IsValidTestPlayer(input.pn)) {
     return false;
   }
   if (LIGHTSMAN->GetLightsMode() != LIGHTSMODE_TEST_MANUAL_CYCLE) {

@@ -100,7 +100,11 @@ bool RageSoundDriver_OSS::GetData() {
   }
   mix_buffer.resize(size_t(samples));
 
-  this->Mix(mix_buffer.data(), chunksize / bytes_per_frame, last_cursor_pos, GetPosition());
+  const int64_t writePosition =
+      last_cursor_pos.load(std::memory_order_acquire);
+  this->Mix(
+      mix_buffer.data(), chunksize / bytes_per_frame, writePosition,
+      GetPosition());
 
   int wrote = write(fd, mix_buffer.data(), chunksize);
   if (wrote != chunksize) {
@@ -111,29 +115,30 @@ bool RageSoundDriver_OSS::GetData() {
   }
 
   /* Increment last_cursor_pos. */
-  last_cursor_pos += chunksize / bytes_per_frame;
+  last_cursor_pos.fetch_add(
+      chunksize / bytes_per_frame, std::memory_order_release);
 
   return true;
 }
 
-/* XXX: There's a race on last_cursor_pos here: new data might be written after
- * the ioctl returns, incrementing last_cursor_pos. */
 int64_t RageSoundDriver_OSS::GetPosition() const {
+  const int64_t writePosition =
+      last_cursor_pos.load(std::memory_order_acquire);
   if (fd == -1) {
-    return last_cursor_pos;
+    return writePosition;
   }
 
   int delay;
   if (ioctl(fd, SNDCTL_DSP_GETODELAY, &delay) == -1) {
     LOG->Warn("RageSoundDriver_OSS: ioctl(SNDCTL_DSP_GETODELAY): %s", strerror(errno));
-    return last_cursor_pos;
+    return writePosition;
   }
 
   if (delay < 0) {
     LOG->Warn("RageSoundDriver_OSS: invalid output delay: %i", delay);
-    return last_cursor_pos;
+    return writePosition;
   }
-  return last_cursor_pos - (delay / bytes_per_frame);
+  return writePosition - (delay / bytes_per_frame);
 }
 
 std::string RageSoundDriver_OSS::CheckOSSVersion(int fd) {
@@ -190,7 +195,7 @@ std::string RageSoundDriver_OSS::CheckOSSVersion(int fd) {
 RageSoundDriver_OSS::RageSoundDriver_OSS() {
   fd = -1;
   shutdown.store(false, std::memory_order_relaxed);
-  last_cursor_pos = 0;
+  last_cursor_pos.store(0, std::memory_order_relaxed);
   samplerate = FALLBACK_SAMPLE_RATE;
 }
 

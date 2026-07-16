@@ -10,6 +10,8 @@ if type(sequential_offsets) ~= "table" or #sequential_offsets == 0 then return e
 
 local pane_width, pane_height = 300, 180
 local plot_width, plot_height = 280, 58
+local pane_title_zoom = 0.4
+local pane_title_width = pane_width - 20
 local worst_window = GetTimingWindow(storage.worst_window or 3)
 local steps = GAMESTATE:GetCurrentSteps(player)
 local song = GAMESTATE:GetCurrentSong()
@@ -129,7 +131,9 @@ return Def.ActorFrame{
 	LoadFont("Common Bold")..{
 		Text=pane_title,
 		InitCommand=function(self)
-			self:xy(-pane_width * 0.5, -62):zoom(0.75):horizalign(left):diffuse(Color.White)
+			self:xy(-pane_width * 0.5, -62)
+				:zoom(pane_title_zoom):maxwidth(pane_title_width / pane_title_zoom)
+				:horizalign(left):diffuse(Color.White)
 		end
 	},
 	MakePlot(column_title, "column", -18),

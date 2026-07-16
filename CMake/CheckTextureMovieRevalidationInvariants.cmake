@@ -1,0 +1,28 @@
+if(NOT DEFINED ITGMANIA_SOURCE_DIR)
+  message(FATAL_ERROR "ITGMANIA_SOURCE_DIR is required")
+endif()
+
+function(require_contains file needle description)
+  file(READ "${ITGMANIA_SOURCE_DIR}/${file}" contents)
+  string(FIND "${contents}" "${needle}" position)
+  if(position EQUAL -1)
+    message(FATAL_ERROR "${description}: '${needle}' missing from ${file}")
+  endif()
+endfunction()
+
+require_contains("src/FontCharAliases.cpp" "std::call_once(GetAliasInitFlag()" "Font aliases must use non-recursive one-time initialization")
+require_contains("src/FontCharmaps.cpp" "std::call_once(GetCharmapsInitFlag()" "Font charmaps must use non-recursive one-time initialization")
+require_contains("src/ActorFrameTexture.cpp" "std::unique_ptr<RageTextureRenderTarget> target" "Render-target registration must be exception safe")
+require_contains("src/ActorFrameTexture.cpp" "m_sTextureName(GetUniqueActorFrameTextureName())" "Copied render targets must receive a distinct identity")
+require_contains("src/ActorMultiTexture.cpp" "RageSpriteVertex v[4]" "Multi-texture draws must use reentrant vertex storage")
+require_contains("src/ActorMultiVertex.cpp" "AMV_TweenState TS = AMV_current" "Multi-vertex draws must use reentrant tween storage")
+require_contains("src/ActorMultiVertex.cpp" "kMaxActorMultiVertexStates" "Multi-vertex state allocations must be bounded")
+require_contains("src/ActorMultiVertex.cpp" "std::fmod(static_cast<double>(seconds), length)" "Animation seek must be bounded by state count")
+require_contains("src/ActorMultiVertex.cpp" "case DrawMode_Quads:" "Quad UV state handling must remain explicit")
+
+require_contains("src/arch/MovieTexture/MovieTexture.cpp" "return nullptr;" "Movie driver failure must permit texture fallback")
+require_contains("src/arch/MovieTexture/MovieTexture_Generic.cpp" "render_target_->Invalidate();" "Movie render targets must invalidate with the display context")
+require_contains("src/arch/MovieTexture/MovieTexture_Generic.cpp" "kMaxSkippedFramesPerUpdate" "Movie frame catch-up must be bounded")
+require_contains("src/arch/MovieTexture/MovieTexture_Generic.cpp" "} catch (...) {" "Movie render-target state must be restored on draw failure")
+
+message(STATUS "Texture/movie revalidation invariants passed")

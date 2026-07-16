@@ -2,7 +2,9 @@
 #define TIMING_SEGMENTS_H
 
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -540,7 +542,11 @@ struct TimeSignatureSegment : public TimingSegment {
    * @returns the number of note rows per measure.
    */
   int GetNoteRowsPerMeasure() const {
-    return BeatToNoteRow(1) * 4 * m_iNumerator / m_iDenominator;
+    const int64_t rows =
+        static_cast<int64_t>(BeatToNoteRow(1)) * 4 * m_iNumerator /
+        m_iDenominator;
+    return static_cast<int>(
+        std::clamp<int64_t>(rows, 1, std::numeric_limits<int>::max()));
   }
 
   bool operator==(const TimeSignatureSegment& other) const {

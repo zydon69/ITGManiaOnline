@@ -42,6 +42,28 @@ float SanitizeComboGraphDimension(float value, const char* name) {
   }
   return value;
 }
+
+bool GetClampedComboRange(
+    const PlayerStageStats::Combo_t& combo, float firstSecond, float lastSecond,
+    float& startOut, float& endOut) {
+  if (!std::isfinite(combo.m_fStartSecond) ||
+      !std::isfinite(combo.m_fSizeSeconds) || combo.m_fSizeSeconds <= 0.0f) {
+    return false;
+  }
+  const double start = std::max(
+      static_cast<double>(combo.m_fStartSecond),
+      static_cast<double>(firstSecond));
+  const double end = std::min(
+      static_cast<double>(combo.m_fStartSecond) +
+          static_cast<double>(combo.m_fSizeSeconds),
+      static_cast<double>(lastSecond));
+  if (!std::isfinite(start) || !std::isfinite(end) || end <= start) {
+    return false;
+  }
+  startOut = static_cast<float>(start);
+  endOut = static_cast<float>(end);
+  return true;
+}
 }  // namespace
 
 ComboGraph::ComboGraph() {
@@ -218,15 +240,12 @@ void ComboGraph::Set(const StageStats& s, const PlayerStageStats& pss) {
   int iMaxComboSize = 0;
   for (unsigned i = 0; i < pss.m_ComboList.size(); ++i) {
     const PlayerStageStats::Combo_t& combo = pss.m_ComboList[i];
-    if (combo.GetStageCnt() < MinComboSizeToShow ||
-        !std::isfinite(combo.m_fStartSecond) ||
-        !std::isfinite(combo.m_fSizeSeconds) || combo.m_fSizeSeconds <= 0.0f) {
+    if (combo.GetStageCnt() < MinComboSizeToShow) {
       continue;
     }
-    const float fStart = std::max(combo.m_fStartSecond, fFirstSecond);
-    const float fEnd =
-        std::min(combo.m_fStartSecond + combo.m_fSizeSeconds, fLastSecond);
-    if (fEnd <= fStart) {
+    float fStart = 0.0f;
+    float fEnd = 0.0f;
+    if (!GetClampedComboRange(combo, fFirstSecond, fLastSecond, fStart, fEnd)) {
       continue;
     }
     iMaxComboSize = std::max(iMaxComboSize, combo.GetStageCnt());
@@ -239,18 +258,12 @@ void ComboGraph::Set(const StageStats& s, const PlayerStageStats& pss) {
     }
 
     const bool bIsMax = (combo.GetStageCnt() == iMaxComboSize);
-    if (!std::isfinite(combo.m_fStartSecond) ||
-        !std::isfinite(combo.m_fSizeSeconds) || combo.m_fSizeSeconds <= 0.0f) {
+    float fClampedStart = 0.0f;
+    float fClampedEnd = 0.0f;
+    if (!GetClampedComboRange(
+            combo, fFirstSecond, fLastSecond, fClampedStart, fClampedEnd)) {
       TraceComboGraphAuditFix(
           "SRC_AUDIT_FIX SRC-264: ComboGraph skipped invalid combo timing.");
-      continue;
-    }
-    const float fClampedStart = std::max(combo.m_fStartSecond, fFirstSecond);
-    const float fClampedEnd =
-        std::min(combo.m_fStartSecond + combo.m_fSizeSeconds, fLastSecond);
-    if (fClampedEnd <= fClampedStart) {
-      TraceComboGraphAuditFix(
-          "SRC_AUDIT_FIX SRC-1078: ComboGraph skipped out-of-range combo.");
       continue;
     }
 
@@ -269,10 +282,8 @@ void ComboGraph::Set(const StageStats& s, const PlayerStageStats& pss) {
 
     const float fStart =
         SCALE(fClampedStart, fFirstSecond, fLastSecond, 0.0f, 1.0f);
-    const float fSize =
-        SCALE(
-            fClampedEnd - fClampedStart, 0, fLastSecond - fFirstSecond, 0.0f,
-            1.0f);
+    const float fSize = SCALE(
+        fClampedEnd - fClampedStart, 0, fLastSecond - fFirstSecond, 0.0f, 1.0f);
     pSprite->SetCropLeft(SCALE(fSize, 0.0f, 1.0f, 0.5f, 0.0f));
     pSprite->SetCropRight(SCALE(fSize, 0.0f, 1.0f, 0.5f, 0.0f));
 
@@ -297,14 +308,10 @@ void ComboGraph::Set(const StageStats& s, const PlayerStageStats& pss) {
     if (!bIsMax) {
       continue;
     }
-    if (!std::isfinite(combo.m_fStartSecond) ||
-        !std::isfinite(combo.m_fSizeSeconds) || combo.m_fSizeSeconds <= 0.0f) {
-      continue;
-    }
-    const float fClampedStart = std::max(combo.m_fStartSecond, fFirstSecond);
-    const float fClampedEnd =
-        std::min(combo.m_fStartSecond + combo.m_fSizeSeconds, fLastSecond);
-    if (fClampedEnd <= fClampedStart) {
+    float fClampedStart = 0.0f;
+    float fClampedEnd = 0.0f;
+    if (!GetClampedComboRange(
+            combo, fFirstSecond, fLastSecond, fClampedStart, fClampedEnd)) {
       continue;
     }
 
@@ -318,15 +325,12 @@ void ComboGraph::Set(const StageStats& s, const PlayerStageStats& pss) {
 
     const float fStart =
         SCALE(fClampedStart, fFirstSecond, fLastSecond, 0.0f, 1.0f);
-    const float fSize =
-        SCALE(
-            fClampedEnd - fClampedStart, 0, fLastSecond - fFirstSecond, 0.0f,
-            1.0f);
+    const float fSize = SCALE(
+        fClampedEnd - fClampedStart, 0, fLastSecond - fFirstSecond, 0.0f, 1.0f);
 
     const float fCenterPercent = fStart + fSize / 2;
     const float fCenterXPos = SCALE(
-        fCenterPercent, 0.0f, 1.0f, -m_fBodyWidth / 2.0f,
-        m_fBodyWidth / 2.0f);
+        fCenterPercent, 0.0f, 1.0f, -m_fBodyWidth / 2.0f, m_fBodyWidth / 2.0f);
     pText->SetX(fCenterXPos);
 
     pText->SetText(ssprintf("%i", combo.GetStageCnt()));

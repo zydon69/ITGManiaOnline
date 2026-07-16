@@ -78,6 +78,7 @@ void ScreenSplash::Init() {
 }
 
 void ScreenSplash::BeginScreen() {
+  ClearMessageQueue(SM_PrepareNextScreen);
   m_bPrepareScreenQueued = false;
   ScreenWithMenuElements::BeginScreen();
 }
@@ -102,6 +103,8 @@ bool ScreenSplash::MenuBack(const InputEventPlus& input) {
   if (IsTransitioning() || m_fLockInputSecs > 0) {
     return false;
   }
+  ClearMessageQueue(SM_PrepareNextScreen);
+  m_bPrepareScreenQueued = false;
   Cancel(SM_GoToPrevScreen);
   return true;
 }

@@ -69,10 +69,10 @@ require_contains(
   "${auto_actor_h}"
   "Actor* Get()"
   "AutoActor has named pointer accessors")
-require_contains(
+require_not_contains(
   "${auto_actor_h}"
-  "private:\n  void Load(Actor* pActor);"
-  "AutoActor keeps raw pointer adoption out of the public API")
+  "void Load(Actor* pActor);"
+  "AutoActor does not expose raw pointer ownership loading")
 
 require_contains(
   "${auto_actor_cpp}"

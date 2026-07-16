@@ -15,7 +15,7 @@ class Model;
 class BeginnerHelper : public ActorFrame {
  public:
   BeginnerHelper();
-  ~BeginnerHelper();
+  ~BeginnerHelper() override;
 
   bool Init(int iDancePadType);
   bool IsInitialized() { return m_bInitialized; }
@@ -24,8 +24,8 @@ class BeginnerHelper : public ActorFrame {
   void ShowStepCircle(PlayerNumber pn, int CSTEP);
   bool m_bShowBackground;
 
-  void Update(float fDeltaTime);
-  virtual void DrawPrimitives();
+  void Update(float fDeltaTime) override;
+  void DrawPrimitives() override;
 
  protected:
   void Step(PlayerNumber pn, int CSTEP);

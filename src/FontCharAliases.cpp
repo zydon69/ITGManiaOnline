@@ -1,10 +1,10 @@
 #include "FontCharAliases.h"
 
 #include <map>
+#include <mutex>
 #include <string>
 
 #include "Font.h"
-#include "RageThreads.h"
 #include "RageUtil.h"
 #include "StdString.h"
 
@@ -32,9 +32,9 @@ struct StdStringLessNoCase {
   }
 };
 
-RageMutex& GetAliasMutex() {
-  static RageMutex* mutex = new RageMutex("FontCharAliases");
-  return *mutex;
+std::once_flag& GetAliasInitFlag() {
+  static std::once_flag flag;
+  return flag;
 }
 }  // namespace
 
@@ -101,11 +101,6 @@ And here's one for a kanji page:
  */
 
 static void InitCharAliases() {
-  LockMutex lock(GetAliasMutex());
-  if (!CharAliases.empty()) {
-    return;
-  }
-
   CharAliases["default"] = FONT_DEFAULT_GLYPH;  // ?
   CharAliases["invalid"] = INVALID_CHAR;        // 0xFFFD
 
@@ -405,16 +400,14 @@ static void InitCharAliases() {
 
 // Replace all &markers; and &#NNNN;s with UTF-8.
 void FontCharAliases::ReplaceMarkers(std::string& sText) {
-  LockMutex lock(GetAliasMutex());
-  InitCharAliases();
+  std::call_once(GetAliasInitFlag(), InitCharAliases);
   ReplaceEntityText(sText, CharAliasRepl);
   Replace_Unicode_Markers(sText);
 }
 
 // Replace all &markers; and &#NNNN;s with UTF-8.
 bool FontCharAliases::GetChar(std::string& codepoint, wchar_t& ch) {
-  LockMutex lock(GetAliasMutex());
-  InitCharAliases();
+  std::call_once(GetAliasInitFlag(), InitCharAliases);
   aliasmap::const_iterator i = CharAliases.find(codepoint);
   if (i == CharAliases.end()) {
     return false;

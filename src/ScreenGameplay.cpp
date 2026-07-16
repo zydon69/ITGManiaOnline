@@ -1,14 +1,15 @@
 #include "ScreenGameplay.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
-#include <cfloat>
-#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -36,9 +37,9 @@
 #include "GameSoundManager.h"
 #include "GameState.h"
 #include "GameplayHelpers.h"
+#include "IniFile.h"
 #include "InputFilter.h"
 #include "InputMapper.h"
-#include "IniFile.h"
 #include "Inventory.h"
 #include "LifeMeter.h"
 #include "LifeMeterBar.h"
@@ -53,12 +54,12 @@
 #include "NoteDataWithScoring.h"
 #include "NoteTypes.h"
 #include "OnlineSessionGuard.h"
+#include "PerfDiagnostics.h"
 #include "Player.h"
 #include "PlayerAI.h"  // for NUM_SKILL_LEVELS
 #include "PlayerNumber.h"
 #include "PlayerOptions.h"
 #include "PlayerState.h"
-#include "PerfDiagnostics.h"
 #include "Preference.h"
 #include "PrefsManager.h"
 #include "Profile.h"  // for replay data stuff
@@ -150,9 +151,7 @@ static bool OnlineVerboseLogsEnabledFromThemePrefs() {
 
   bool enabled = false;
   if (!ini.GetValue(
-          PREFSMAN->m_sTheme,
-          "ITGOnlineGameplayLayoutLogs",
-          enabled)) {
+          PREFSMAN->m_sTheme, "ITGOnlineGameplayLayoutLogs", enabled)) {
     return false;
   }
 
@@ -180,7 +179,9 @@ static bool HasActiveITGOnlineRoom() {
 
   Lua* L = LUA->Get();
   const bool ran = LuaHelpers::RunExpression(
-      L, "ITGOnline ~= nil and ITGOnline.HasOnlineSession ~= nil and ITGOnline:HasOnlineSession()",
+      L,
+      "ITGOnline ~= nil and ITGOnline.HasOnlineSession ~= nil and "
+      "ITGOnline:HasOnlineSession()",
       "ScreenGameplay::HasActiveITGOnlineRoom");
   const bool active = ran && lua_toboolean(L, -1);
   lua_pop(L, 1);
@@ -435,9 +436,8 @@ void ScreenGameplay::PropagateSharedSidesFailure(
 
   FOREACH_PlayerNumber(p) {
     PlayerStageStats& pss = stageStats.m_player[p];
-    const bool hasRecordedStats =
-        pss.m_bJoined || pss.m_iStepsPlayed > 0 ||
-        !pss.m_vpPossibleSteps.empty();
+    const bool hasRecordedStats = pss.m_bJoined || pss.m_iStepsPlayed > 0 ||
+                                  !pss.m_vpPossibleSteps.empty();
     if (!hasRecordedStats) {
       continue;
     }
@@ -487,8 +487,8 @@ static bool HasRenderableGameplayManagers(const char* context) {
 
 static bool IsValidGameInputIndex(const GameInput& input) {
   return input.controller >= GameController_1 &&
-         input.controller < NUM_GameController && input.button >= GAME_BUTTON_MENULEFT &&
-         input.button < NUM_GameButton;
+         input.controller < NUM_GameController &&
+         input.button >= GAME_BUTTON_MENULEFT && input.button < NUM_GameButton;
 }
 
 static bool GetITGOnlineSecondsUntilScheduledStart(float& secondsUntilStart) {
@@ -528,7 +528,8 @@ static bool GetITGOnlineIsActive() {
   bool hasDefinitiveAnswer = false;
   const bool ran = LuaHelpers::RunExpression(
       L,
-      "ITGOnline ~= nil and ITGOnline.HasOnlineSession ~= nil and ITGOnline:HasOnlineSession()",
+      "ITGOnline ~= nil and ITGOnline.HasOnlineSession ~= nil and "
+      "ITGOnline:HasOnlineSession()",
       "ScreenGameplay::GetITGOnlineIsActive");
 
   if (ran && lua_isboolean(L, -1)) {
@@ -543,8 +544,9 @@ static bool GetITGOnlineIsActive() {
     return isActive;
   }
 
-  LOG->Warn("ITG Online: active-session gate failed; using observed state=%d.",
-            ITGOnlineSessionGuard::IsObservedActive() ? 1 : 0);
+  LOG->Warn(
+      "ITG Online: active-session gate failed; using observed state=%d.",
+      ITGOnlineSessionGuard::IsObservedActive() ? 1 : 0);
   return ITGOnlineSessionGuard::IsObservedActive();
 }
 
@@ -595,7 +597,8 @@ static bool GetITGOnlineShouldHoldGameplayForStart() {
     const bool isOnlineActive = GetITGOnlineIsActive();
     LOG->Warn(
         "ITG Online: start hold gate failed; %s",
-        isOnlineActive ? "holding gameplay closed" : "local gameplay unaffected");
+        isOnlineActive ? "holding gameplay closed"
+                       : "local gameplay unaffected");
     return isOnlineActive;
   }
 
@@ -827,8 +830,9 @@ PlayerInfo::~PlayerInfo() {
 
 void PlayerInfo::ShowOniGameOver() {
   if (!m_sprOniGameOver.IsLoaded()) {
-    LOG->Warn("SRC_AUDIT_FIX: Oni gameover actor is not loaded for %s.",
-              GetName().c_str());
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Oni gameover actor is not loaded for %s.",
+        GetName().c_str());
     return;
   }
   m_sprOniGameOver->PlayCommand("Die");
@@ -955,13 +959,12 @@ std::vector<PlayerInfo>::iterator GetNextVisiblePlayerInfo(
   return iter;
 }
 
-static PlayerState* GetPlayerStateOrWarn(
-    PlayerInfo& pi, const char* context) {
+static PlayerState* GetPlayerStateOrWarn(PlayerInfo& pi, const char* context) {
   PlayerState* playerState = pi.GetPlayerState();
   if (playerState == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s skipped %s because PlayerState is missing.",
-        context, pi.GetName().c_str());
+        "SRC_AUDIT_FIX: %s skipped %s because PlayerState is missing.", context,
+        pi.GetName().c_str());
   }
   return playerState;
 }
@@ -1012,8 +1015,9 @@ static void BroadcastGameplayMessage(const std::string& message) {
 
 static void BroadcastGameplayMessage(Message& message) {
   if (MESSAGEMAN == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: dropped gameplay Message because MESSAGEMAN is "
-              "missing.");
+    LOG->Warn(
+        "SRC_AUDIT_FIX: dropped gameplay Message because MESSAGEMAN is "
+        "missing.");
     return;
   }
   MESSAGEMAN->Broadcast(message);
@@ -1032,8 +1036,7 @@ struct RepeatTrailSnapshot {
 };
 
 static bool ValidateGameplayQueues(
-    const std::vector<Song*>& songs,
-    std::vector<PlayerInfo>& playerInfos,
+    const std::vector<Song*>& songs, std::vector<PlayerInfo>& playerInfos,
     const char* context) {
   if (songs.empty()) {
     LOG->Warn("SRC_AUDIT_FIX: %s rejected empty song queue.", context);
@@ -1043,8 +1046,8 @@ static bool ValidateGameplayQueues(
   for (size_t i = 0; i < songs.size(); ++i) {
     if (songs[i] == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: %s rejected null song at queue index %zu.",
-          context, i);
+          "SRC_AUDIT_FIX: %s rejected null song at queue index %zu.", context,
+          i);
       return false;
     }
   }
@@ -1066,6 +1069,12 @@ static bool ValidateGameplayQueues(
       if (pi->m_vpStepsQueue[i] == nullptr) {
         LOG->Warn(
             "SRC_AUDIT_FIX: %s rejected null steps for %s at queue index %zu.",
+            context, pi->GetName().c_str(), i);
+        valid = false;
+      } else if (pi->m_vpStepsQueue[i]->m_pSong != songs[i]) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: %s rejected song/steps mismatch for %s at queue "
+            "index %zu.",
             context, pi->GetName().c_str(), i);
         valid = false;
       }
@@ -1242,9 +1251,7 @@ void ScreenGameplay::Init() {
    * Difficulty_Hard and save over their default modifiers every time someone
    * got an extra stage. Do this before course modifiers are set up. */
   if (!GAMESTATE->IsAnExtraStage()) {
-    FOREACH_HumanPlayer(pn) {
-      GAMESTATE->SaveCurrentSettingsToProfile(pn);
-    }
+    FOREACH_HumanPlayer(pn) { GAMESTATE->SaveCurrentSettingsToProfile(pn); }
   }
 
   /* Called once per stage (single song or single course). */
@@ -1290,8 +1297,9 @@ void ScreenGameplay::Init() {
       if (!IsValidGameplayPlayer(human_pn) ||
           GAMESTATE->m_pCurSteps[human_pn] == nullptr ||
           GAMESTATE->GetCurrentGame() == nullptr) {
-        LOG->Warn("SRC_AUDIT_FIX: CPU step/style sync skipped because the "
-                  "human player or current game is unavailable.");
+        LOG->Warn(
+            "SRC_AUDIT_FIX: CPU step/style sync skipped because the "
+            "human player or current game is unavailable.");
         continue;
       }
       GAMESTATE->m_pCurSteps[p].Set(GAMESTATE->m_pCurSteps[human_pn]);
@@ -1486,9 +1494,8 @@ void ScreenGameplay::Init() {
         PlayerState* playerState = GetPlayerStateOrWarn(
             masterInfo, "ScreenGameplay::Init shared life meter");
         PlayerStageStats* stageStats =
-            STATSMAN != nullptr
-                ? &STATSMAN->m_CurStageStats.m_RoutinePlayer
-                : nullptr;
+            STATSMAN != nullptr ? &STATSMAN->m_CurStageStats.m_RoutinePlayer
+                                : nullptr;
         if (playerState == nullptr || stageStats == nullptr) {
           break;
         }
@@ -1540,8 +1547,9 @@ void ScreenGameplay::Init() {
         pi->m_pLifeMeter = LifeMeter::MakeLifeMeter(
             playerState->m_PlayerOptions.GetStage().m_LifeType);
         if (pi->m_pLifeMeter == nullptr) {
-          LOG->Warn("SRC_AUDIT_FIX: LifeMeter creation failed for %s.",
-                    pi->GetName().c_str());
+          LOG->Warn(
+              "SRC_AUDIT_FIX: LifeMeter creation failed for %s.",
+              pi->GetName().c_str());
           continue;
         }
         pi->m_pLifeMeter->Load(playerState, stageStats);
@@ -1753,13 +1761,17 @@ void ScreenGameplay::Init() {
     }
     pi->m_pPlayer->Init(
         sType, playerState, stageStats, pi->m_pLifeMeter, m_pCombinedLifeMeter,
-        pi->m_pPrimaryScoreDisplay,
-        pi->m_pSecondaryScoreDisplay, pi->m_pInventory,
-        pi->m_pPrimaryScoreKeeper, pi->m_pSecondaryScoreKeeper);
+        pi->m_pPrimaryScoreDisplay, pi->m_pSecondaryScoreDisplay,
+        pi->m_pInventory, pi->m_pPrimaryScoreKeeper,
+        pi->m_pSecondaryScoreKeeper);
   }
 
   // Fill StageStats
   STATSMAN->m_CurStageStats.m_vpPossibleSongs = m_apSongsQueue;
+  STATSMAN->m_CurStageStats.m_pPlayedCourse = GAMESTATE->m_pCurCourse;
+  FOREACH_PlayerNumber(pn) {
+    STATSMAN->m_CurStageStats.m_pPlayedTrails[pn] = GAMESTATE->m_pCurTrail[pn];
+  }
   for (PlayerInfo& pi : m_vPlayerInfo) {
     if (pi.GetPlayerStageStats()) {
       pi.GetPlayerStageStats()->m_vpPossibleSteps = pi.m_vpStepsQueue;
@@ -1776,24 +1788,25 @@ void ScreenGameplay::Init() {
           GAMESTATE->GetCurrentStyle(master);
       STATSMAN->m_CurStageStats.m_RoutinePlayer.m_player_number = master;
       FOREACH_PlayerNumber(pn) {
-        PlayerStageStats& participant =
-            STATSMAN->m_CurStageStats.m_player[pn];
+        PlayerStageStats& participant = STATSMAN->m_CurStageStats.m_player[pn];
         participant.m_bJoined = true;
         participant.m_pStyle = GAMESTATE->GetCurrentStyle(master);
         participant.m_vpPossibleSteps = m_vPlayerInfo[master].m_vpStepsQueue;
       }
       LOG->Trace(
           "Routine shared stats initialized: master=%i steps_queue=%zu.",
-          static_cast<int>(master), m_vPlayerInfo[master].m_vpStepsQueue.size());
+          static_cast<int>(master),
+          m_vPlayerInfo[master].m_vpStepsQueue.size());
     }
   }
 
   bool bLoadedRoutineSharedKeeper = false;
   FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
     if (pi->m_vpStepsQueue.empty()) {
-      LOG->Warn("SRC_AUDIT_FIX: ScoreKeeper load skipped for %s with empty "
-                "steps queue.",
-                pi->GetName().c_str());
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScoreKeeper load skipped for %s with empty "
+          "steps queue.",
+          pi->GetName().c_str());
       continue;
     }
     if (pi->GetPlayerStageStats()) {
@@ -1959,8 +1972,7 @@ void ScreenGameplay::InitSongQueues() {
         pi->m_asModifiersQueue.push_back(aa);
         continue;
       }
-      const PlayerOptions& p =
-          playerState->m_PlayerOptions.GetCurrent();
+      const PlayerOptions& p = playerState->m_PlayerOptions.GetCurrent();
 
       if (p.m_fNoAttack == 0 && p.m_fRandAttack == 0 &&
           pSteps->m_Attacks.size() > 0) {
@@ -2032,9 +2044,9 @@ ScreenGameplay::~ScreenGameplay() {
   LOG->Trace("ScreenGameplay::~ScreenGameplay()");
 
   if (IsCurrentStyleSharedSides()) {
-    const PlayerNumber master =
-        GAMESTATE != nullptr ? GAMESTATE->GetMasterPlayerNumber()
-                             : PLAYER_INVALID;
+    const PlayerNumber master = GAMESTATE != nullptr
+                                    ? GAMESTATE->GetMasterPlayerNumber()
+                                    : PLAYER_INVALID;
     FOREACH_PlayerNumberInfo(m_vPlayerInfo, pi) {
       if (pi->m_pSecondaryScoreKeeper == m_pRoutineSharedScoreKeeper &&
           pi->m_pn != master) {
@@ -2078,8 +2090,7 @@ bool ScreenGameplay::IsLastSong() {
 }
 
 bool ScreenGameplay::SetupSong(int iSongIndex) {
-  if (iSongIndex < 0 ||
-      iSongIndex >= static_cast<int>(m_apSongsQueue.size())) {
+  if (iSongIndex < 0 || iSongIndex >= static_cast<int>(m_apSongsQueue.size())) {
     LOG->Warn(
         "SRC_AUDIT_FIX: SetupSong rejected invalid song index %i/%zu.",
         iSongIndex, m_apSongsQueue.size());
@@ -2129,8 +2140,7 @@ bool ScreenGameplay::SetupSong(int iSongIndex) {
     NoteData originalNoteData;
     pSteps->GetNoteData(originalNoteData);
 
-    const PlayerNumber stylePn =
-        pi->IsMultiPlayer() ? PLAYER_INVALID : stepsPn;
+    const PlayerNumber stylePn = pi->IsMultiPlayer() ? PLAYER_INVALID : stepsPn;
     const Style* pStyle = GAMESTATE->GetCurrentStyle(stylePn);
     if (pStyle == nullptr) {
       LOG->Warn(
@@ -2199,8 +2209,7 @@ bool ScreenGameplay::SetupSong(int iSongIndex) {
           break;
       }
 
-      pi->m_SoundEffectControl.Load(
-          sType, playerState, &pi->m_NoteData);
+      pi->m_SoundEffectControl.Load(sType, playerState, &pi->m_NoteData);
     }
 
     // Put course options into effect.  Do this after Player::Load so
@@ -2263,8 +2272,7 @@ void ScreenGameplay::LoadNextSong() {
     pss->m_iSongsPlayed++;
     if (pi->m_ptextCourseSongNumber) {
       pi->m_ptextCourseSongNumber->SetText(ssprintf(
-          SONG_NUMBER_FORMAT.GetValue().c_str(),
-          pss->m_iSongsPassed + 1));
+          SONG_NUMBER_FORMAT.GetValue().c_str(), pss->m_iSongsPassed + 1));
     }
   }
   if (IsCurrentStyleSharedSides()) {
@@ -2315,7 +2323,8 @@ void ScreenGameplay::LoadNextSong() {
   m_textSongOptions.SetText(GAMESTATE->m_SongOptions.GetCurrent().GetString());
 
   if (!SetupSong(iPlaySongIndex)) {
-    LOG->Warn("SRC_AUDIT_FIX: LoadNextSong aborted after incomplete song setup.");
+    LOG->Warn(
+        "SRC_AUDIT_FIX: LoadNextSong aborted after incomplete song setup.");
     return;
   }
 
@@ -2368,8 +2377,7 @@ void ScreenGameplay::LoadNextSong() {
       pi->ShowOniGameOver();
     }
 
-    if (playerState->m_PlayerOptions.GetStage().m_LifeType ==
-            LifeType_Bar &&
+    if (playerState->m_PlayerOptions.GetStage().m_LifeType == LifeType_Bar &&
         pi->m_pLifeMeter) {
       pi->m_pLifeMeter->UpdateNonstopLifebar();
     }
@@ -2407,9 +2415,9 @@ void ScreenGameplay::LoadNextSong() {
     if (!pi->m_bIsDummy) {
       if (bDisableAutoplayForITGOnline) {
         DisableAutoplayForITGOnline(playerState);
-        OnlineTrace("ITG Online: disabled autoplay for gameplay player=%s",
-                   PlayerNumberToString(playerState->m_PlayerNumber)
-                       .c_str());
+        OnlineTrace(
+            "ITG Online: disabled autoplay for gameplay player=%s",
+            PlayerNumberToString(playerState->m_PlayerNumber).c_str());
       } else if (GAMESTATE->m_bDemonstrationOrJukebox) {
         playerState->m_PlayerController = PC_CPU;
         playerState->m_iCpuSkill = 5;
@@ -2458,10 +2466,9 @@ void ScreenGameplay::LoadNextSong() {
   FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
     PlayerState* playerState =
         GetPlayerStateOrWarn(*pi, "ScreenGameplay::LoadNextSong reverse UI");
-    bool bReverse =
-        playerState != nullptr &&
-        playerState->m_PlayerOptions.GetCurrent()
-                .m_fScrolls[PlayerOptions::SCROLL_REVERSE] == 1;
+    bool bReverse = playerState != nullptr &&
+                    playerState->m_PlayerOptions.GetCurrent()
+                            .m_fScrolls[PlayerOptions::SCROLL_REVERSE] == 1;
 
     if (pi->m_pStepsDisplay) {
       pi->m_pStepsDisplay->PlayCommand(
@@ -2532,8 +2539,8 @@ void ScreenGameplay::LoadNextSong() {
   }
 
   FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
-    PlayerStageStats* pss =
-        GetPlayerStageStatsOrWarn(*pi, "ScreenGameplay::LoadNextSong OnLoadSong");
+    PlayerStageStats* pss = GetPlayerStageStatsOrWarn(
+        *pi, "ScreenGameplay::LoadNextSong OnLoadSong");
     if (pss != nullptr && !pss->m_bFailed) {
       // give a little life back between stages
       if (pi->m_pLifeMeter) {
@@ -2615,15 +2622,17 @@ void ScreenGameplay::LoadLights() {
   // Always use the steps from the primary steps type so that lights are
   // consistent over single and double styles.
   if (GAMEMAN == nullptr || GAMESTATE->m_pCurGame == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: LoadLights skipped autogen lights without game "
-              "manager/current game.");
+    LOG->Warn(
+        "SRC_AUDIT_FIX: LoadLights skipped autogen lights without game "
+        "manager/current game.");
     return;
   }
-  const Style* lightsStyle = GAMEMAN->GetHowToPlayStyleForGame(
-      GAMESTATE->m_pCurGame);
+  const Style* lightsStyle =
+      GAMEMAN->GetHowToPlayStyleForGame(GAMESTATE->m_pCurGame);
   if (lightsStyle == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: LoadLights skipped autogen lights without a "
-              "how-to-play style.");
+    LOG->Warn(
+        "SRC_AUDIT_FIX: LoadLights skipped autogen lights without a "
+        "how-to-play style.");
     return;
   }
   StepsType st = lightsStyle->m_StepsType;
@@ -2705,10 +2714,8 @@ void ScreenGameplay::StartPlayingSong(
 
   RageSoundParams p;
   p.m_fSpeed = GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
-  if (!std::isfinite(p.m_fSpeed) || p.m_fSpeed < 0.0f) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid music rate %.3f; using 1.0.",
-        p.m_fSpeed);
+  if (!std::isfinite(p.m_fSpeed) || p.m_fSpeed <= 0.0f) {
+    LOG->Warn("SRC_AUDIT_FIX: Invalid music rate %.3f; using 1.0.", p.m_fSpeed);
     p.m_fSpeed = 1.0f;
   }
   p.StopMode = RageSoundParams::M_CONTINUE;
@@ -2724,7 +2731,8 @@ void ScreenGameplay::StartPlayingSong(
           "ITG Online: holding gameplay before scheduled start with local "
           "lead-in %.3fs startSecond=%.3f.",
           startLeadInSeconds, p.m_StartSecond);
-    } else if (GetITGOnlineSecondsUntilScheduledStart(onlineSecondsUntilStart)) {
+    } else if (GetITGOnlineSecondsUntilScheduledStart(
+                   onlineSecondsUntilStart)) {
       p.m_StartSecond = -onlineSecondsUntilStart;
     } else {
       p.m_StartSecond = -startLeadInSeconds;
@@ -2739,10 +2747,10 @@ void ScreenGameplay::StartPlayingSong(
 
     if (IsFiniteNonNegative(fSecondsToStartFadingOutMusic) &&
         fSecondsToStartFadingOutMusic <
-        GAMESTATE->m_pCurSong->m_fMusicLengthSeconds) {
+            GAMESTATE->m_pCurSong->m_fMusicLengthSeconds) {
       p.m_fFadeOutSeconds = FiniteNonNegativeOr(MUSIC_FADE_OUT_SECONDS, 0.0f);
-      p.m_LengthSeconds = fSecondsToStartFadingOutMusic +
-                          p.m_fFadeOutSeconds - p.m_StartSecond;
+      p.m_LengthSeconds =
+          fSecondsToStartFadingOutMusic + p.m_fFadeOutSeconds - p.m_StartSecond;
       if (!IsFiniteNonNegative(p.m_LengthSeconds)) {
         p.m_LengthSeconds = 0.0f;
       }
@@ -2892,8 +2900,25 @@ void ScreenGameplay::UpdateSongPosition(float fDeltaTime) {
   RageTimer tm;
   const float fSeconds = m_pSoundMusic->GetPositionSeconds(&tm);
   const float fAdjust = SOUND->GetFrameTimingAdjustment(fDeltaTime);
+  if (!std::isfinite(fSeconds) || !std::isfinite(fAdjust)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: UpdateSongPosition rejected audio position/adjustment "
+        "%.6f/%.6f.",
+        fSeconds, fAdjust);
+    return;
+  }
+  const double adjustedSeconds =
+      static_cast<double>(fSeconds) + static_cast<double>(fAdjust);
+  if (!std::isfinite(adjustedSeconds) ||
+      adjustedSeconds > std::numeric_limits<float>::max() ||
+      adjustedSeconds < std::numeric_limits<float>::lowest()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: UpdateSongPosition rejected overflowing audio time.");
+    return;
+  }
   GAMESTATE->UpdateSongPosition(
-      fSeconds + fAdjust, GAMESTATE->m_pCurSong->m_SongTiming, tm + fAdjust);
+      static_cast<float>(adjustedSeconds),
+      GAMESTATE->m_pCurSong->m_SongTiming, tm + fAdjust);
 }
 
 void ScreenGameplay::BeginScreen() {
@@ -2935,8 +2960,7 @@ bool ScreenGameplay::GetCurrentChartTimingRange(
   bool foundPlayableChart = false;
   FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
     const PlayerNumber pn = pi->GetStepsAndTrailIndex();
-    if (!IsValidGameplayPlayer(pn) ||
-        GAMESTATE->m_pCurSteps[pn] == nullptr) {
+    if (!IsValidGameplayPlayer(pn) || GAMESTATE->m_pCurSteps[pn] == nullptr) {
       continue;
     }
 
@@ -3032,9 +3056,8 @@ void ScreenGameplay::GetMusicEndTiming(
 
   /* Make sure the fade finishes before the transition finishes. */
   fSecondsToStartTransitioningOut = std::max(
-      fSecondsToStartTransitioningOut, fSecondsToStartFadingOutMusic +
-                                           musicFadeOutSeconds -
-                                           fTransitionLength);
+      fSecondsToStartTransitioningOut,
+      fSecondsToStartFadingOutMusic + musicFadeOutSeconds - fTransitionLength);
 
   if (!m_bLoggedGameplayChartTiming) {
     m_bLoggedGameplayChartTiming = true;
@@ -3042,11 +3065,9 @@ void ScreenGameplay::GetMusicEndTiming(
         "GAMEPLAY_CHART_END_TIMING: source=%s first=%.6f last_note=%.6f "
         "transition=%.6f fade_start=%.6f music_length=%.6f "
         "max_step_distance=%.6f",
-        usedCurrentChartTiming ? "current_steps" : "song",
-        fFirstChartSeconds,
+        usedCurrentChartTiming ? "current_steps" : "song", fFirstChartSeconds,
         fLastStepSeconds - Player::GetMaxStepDistanceSeconds(),
-        fSecondsToStartTransitioningOut,
-        fSecondsToStartFadingOutMusic,
+        fSecondsToStartTransitioningOut, fSecondsToStartFadingOutMusic,
         GAMESTATE->m_pCurSong->m_fMusicLengthSeconds,
         Player::GetMaxStepDistanceSeconds());
   }
@@ -3094,16 +3115,15 @@ void ScreenGameplay::Update(float fDeltaTime) {
           "failing_players=%d min_life=%.3f",
           fDeltaTime, GAMESTATE->m_Position.m_fMusicSeconds,
           GAMESTATE->m_Position.m_fSongBeat,
-          DISPLAY != nullptr ? DISPLAY->GetFPS() : 0,
-          perf.valid ? 1 : 0, perf.draw_ms, perf.song_background_ms,
-          perf.notefield_board_ms, perf.clear_zbuffer_ms,
-          perf.screen_elements_ms, perf.max_notefield_board_player.c_str(),
-          perf.max_notefield_board_ms, perf.visible_total, perf.visible_taps,
-          perf.visible_holds, perf.visible_mines, perf.visible_lifts,
-          perf.visible_fakes, perf.visible_attacks,
-          perf.visible_autokeysounds, perf.max_visible_notes_player.c_str(),
-          perf.max_player_visible_total, perf.active_receptors,
-          perf.active_ghosts, perf.active_tap_judgments,
+          DISPLAY != nullptr ? DISPLAY->GetFPS() : 0, perf.valid ? 1 : 0,
+          perf.draw_ms, perf.song_background_ms, perf.notefield_board_ms,
+          perf.clear_zbuffer_ms, perf.screen_elements_ms,
+          perf.max_notefield_board_player.c_str(), perf.max_notefield_board_ms,
+          perf.visible_total, perf.visible_taps, perf.visible_holds,
+          perf.visible_mines, perf.visible_lifts, perf.visible_fakes,
+          perf.visible_attacks, perf.visible_autokeysounds,
+          perf.max_visible_notes_player.c_str(), perf.max_player_visible_total,
+          perf.active_receptors, perf.active_ghosts, perf.active_tap_judgments,
           perf.active_hold_judgments, perf.active_combo,
           perf.tap_judgments_since_last_snapshot,
           perf.hold_judgments_since_last_snapshot,
@@ -3151,9 +3171,9 @@ void ScreenGameplay::Update(float fDeltaTime) {
   const bool bSharedSidesStyle = IsCurrentStyleSharedSides();
   const PlayerNumber sharedSidesMaster =
       bSharedSidesStyle ? GAMESTATE->GetMasterPlayerNumber() : PLAYER_INVALID;
-  const bool bSharedSidesLifeMeter =
-      bSharedSidesStyle && m_pCombinedLifeMeter != nullptr &&
-      IsValidGameplayPlayer(sharedSidesMaster);
+  const bool bSharedSidesLifeMeter = bSharedSidesStyle &&
+                                     m_pCombinedLifeMeter != nullptr &&
+                                     IsValidGameplayPlayer(sharedSidesMaster);
 
   // update GameState HealthState
   FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
@@ -3170,13 +3190,13 @@ void ScreenGameplay::Update(float fDeltaTime) {
 
     HealthState& hs = playerState->m_HealthState;
     HealthState OldHealthState = hs;
-    bool bIsFailing = pi->m_pLifeMeter != nullptr &&
-                      pi->m_pLifeMeter->IsFailing();
+    bool bIsFailing =
+        pi->m_pLifeMeter != nullptr && pi->m_pLifeMeter->IsFailing();
     bool bIsHot = pi->m_pLifeMeter != nullptr && pi->m_pLifeMeter->IsHot();
     bool bIsInDanger =
         pi->m_pLifeMeter != nullptr && pi->m_pLifeMeter->IsInDanger();
-    float fLife = pi->m_pLifeMeter != nullptr ? pi->m_pLifeMeter->GetLife()
-                                              : -1.0f;
+    float fLife =
+        pi->m_pLifeMeter != nullptr ? pi->m_pLifeMeter->GetLife() : -1.0f;
     if (bSharedSidesLifeMeter) {
       bIsFailing = m_pCombinedLifeMeter->IsFailing();
       bIsHot = m_pCombinedLifeMeter->IsHot();
@@ -3202,10 +3222,7 @@ void ScreenGameplay::Update(float fDeltaTime) {
           "LIFE_TRACE: player=%s old=%s new=%s life=%.3f in_danger=%d "
           "failing=%d music=%.6f beat=%.6f",
           pi->GetName().c_str(), HealthStateName(OldHealthState),
-          HealthStateName(hs),
-          fLife,
-          bIsInDanger ? 1 : 0,
-          bIsFailing ? 1 : 0,
+          HealthStateName(hs), fLife, bIsInDanger ? 1 : 0, bIsFailing ? 1 : 0,
           GAMESTATE->m_Position.m_fMusicSeconds,
           GAMESTATE->m_Position.m_fSongBeat);
       Message msg("HealthStateChanged");
@@ -3227,8 +3244,8 @@ void ScreenGameplay::Update(float fDeltaTime) {
       fSpeed *= GetHasteRate();
     }
 
-    RageSoundParams p = m_pSoundMusic ? m_pSoundMusic->GetParams()
-                                      : RageSoundParams();
+    RageSoundParams p =
+        m_pSoundMusic ? m_pSoundMusic->GetParams() : RageSoundParams();
     if (m_pSoundMusic && std::abs(p.m_fSpeed - fSpeed) > 0.01f &&
         fSpeed >= 0.0f && std::isfinite(fSpeed)) {
       p.m_fSpeed = fSpeed;
@@ -3262,10 +3279,10 @@ void ScreenGameplay::Update(float fDeltaTime) {
         }
 
         // check for individual fail
-        const bool bPlayerIsFailing =
-            bSharedSidesLifeMeter
-            ? m_pCombinedLifeMeter->IsFailing()
-            : (pi->m_pLifeMeter != nullptr && pi->m_pLifeMeter->IsFailing());
+        const bool bPlayerIsFailing = bSharedSidesLifeMeter
+                                          ? m_pCombinedLifeMeter->IsFailing()
+                                          : (pi->m_pLifeMeter != nullptr &&
+                                             pi->m_pLifeMeter->IsFailing());
         if (!bPlayerIsFailing) {
           continue; /* isn't failing */
         }
@@ -3279,14 +3296,14 @@ void ScreenGameplay::Update(float fDeltaTime) {
           if (marked) {
             m_bMarkedOnlineFailedEarly = true;
           }
-          OnlineTrace("ITG Online: individual fail triggered early failed finalization "
+          OnlineTrace(
+              "ITG Online: individual fail triggered early failed finalization "
               "marked=%d player=%d.",
               marked ? 1 : 0, (int)pn);
         }
         pss->m_bFailed = true;  // fail
         if (bSharedSidesLifeMeter) {
-          PropagateSharedSidesFailure(
-              pn, "ScreenGameplay::Update fail check");
+          PropagateSharedSidesFailure(pn, "ScreenGameplay::Update fail check");
         }
 
         {
@@ -3346,8 +3363,9 @@ void ScreenGameplay::Update(float fDeltaTime) {
             bAllFailed = false;  // never fail.
             break;
           default:
-            LOG->Warn("SRC_AUDIT_FIX: invalid fail type %d for %s.",
-                      static_cast<int>(ft), pi->GetName().c_str());
+            LOG->Warn(
+                "SRC_AUDIT_FIX: invalid fail type %d for %s.",
+                static_cast<int>(ft), pi->GetName().c_str());
             bAllFailed = false;
             break;
         }
@@ -3355,7 +3373,9 @@ void ScreenGameplay::Update(float fDeltaTime) {
 
       if (bAllFailed && OnlineShouldKeepGameplayAliveAfterLocalFail()) {
         if (!m_bLoggedOnlineLocalFailKeepAlive) {
-          OnlineTrace("ITG Online: local players failed, keeping ScreenGameplay running "
+          OnlineTrace(
+              "ITG Online: local players failed, keeping ScreenGameplay "
+              "running "
               "until remote players finish.");
           m_bLoggedOnlineLocalFailKeepAlive = true;
         }
@@ -3530,9 +3550,9 @@ void ScreenGameplay::Update(float fDeltaTime) {
           if (pss != nullptr) {
             pss->m_bFailed |= bAllHumanHaveBigMissCombo;
             pss->m_bDisqualified |=
-                bGiveUpTimerFired;  // Don't disqualify if failing for miss combo.
-                                    // The player should still be eligable for a
-                                    // high score on courses.
+                bGiveUpTimerFired;  // Don't disqualify if failing for miss
+                                    // combo. The player should still be
+                                    // eligable for a high score on courses.
           }
         }
         ResetGiveUpTimers(false);
@@ -3716,14 +3736,14 @@ void ScreenGameplay::DrawPrimitives() {
         "hold_judgments_since_snapshot=%d mine_judgments_since_snapshot=%d "
         "danger_players=%d failing_players=%d min_life=%.3f",
         totalMs, songBackgroundMs, noteFieldBoardMs, clearZBufferMs,
-        screenElementsMs, maxNoteFieldBoardPlayer.c_str(),
-        maxNoteFieldBoardMs, perf.visible_total, perf.visible_taps,
-        perf.visible_holds, perf.visible_mines, perf.visible_lifts,
-        perf.visible_fakes, perf.visible_attacks, perf.visible_autokeysounds,
+        screenElementsMs, maxNoteFieldBoardPlayer.c_str(), maxNoteFieldBoardMs,
+        perf.visible_total, perf.visible_taps, perf.visible_holds,
+        perf.visible_mines, perf.visible_lifts, perf.visible_fakes,
+        perf.visible_attacks, perf.visible_autokeysounds,
         perf.max_visible_notes_player.c_str(), perf.max_player_visible_total,
-        perf.active_receptors, perf.active_ghosts,
-        perf.active_tap_judgments, perf.active_hold_judgments,
-        perf.active_combo, perf.tap_judgments_since_last_snapshot,
+        perf.active_receptors, perf.active_ghosts, perf.active_tap_judgments,
+        perf.active_hold_judgments, perf.active_combo,
+        perf.tap_judgments_since_last_snapshot,
         perf.hold_judgments_since_last_snapshot,
         perf.mine_judgments_since_last_snapshot, perf.danger_players,
         perf.failing_players, perf.min_life);
@@ -3768,8 +3788,12 @@ void ScreenGameplay::UpdateHasteRate() {
     m_fHasteTimeBetweenUpdates = 4.0f;
   }
   if (!std::isfinite(m_fHasteLifeSwitchPoint) ||
-      m_fHasteLifeSwitchPoint < 0.0f) {
+      m_fHasteLifeSwitchPoint < 0.0f || m_fHasteLifeSwitchPoint > 1.0f) {
     m_fHasteLifeSwitchPoint = 0.5f;
+  }
+  if (!std::isfinite(GAMESTATE->m_fHasteRate)) {
+    LOG->Warn("SRC_AUDIT_FIX: Reset non-finite gameplay haste rate.");
+    GAMESTATE->m_fHasteRate = 0.0f;
   }
   if (GAMESTATE->m_Position.m_fMusicSeconds <
           GAMESTATE->m_fLastHasteUpdateMusicSeconds ||  // new song
@@ -3822,8 +3846,7 @@ void ScreenGameplay::UpdateHasteRate() {
       fMaxLife = 1;
     }
   }
-  if (m_fHasteLifeSwitchPoint > 0.0f &&
-      fMaxLife <= m_fHasteLifeSwitchPoint) {
+  if (m_fHasteLifeSwitchPoint > 0.0f && fMaxLife <= m_fHasteLifeSwitchPoint) {
     GAMESTATE->m_fHasteRate =
         SCALE(fMaxLife, 0.0f, m_fHasteLifeSwitchPoint, -1.0f, 0.0f);
   }
@@ -3865,12 +3888,18 @@ void ScreenGameplay::UpdateHasteRate() {
   }
   // If negative haste is being used, the game instead slows down when the
   // player does well.
-  float speed_add = SCALE(
-                        GAMESTATE->m_fHasteRate, scale_from_low,
-                        scale_from_high, scale_to_low, scale_to_high) *
-                    options_haste;
+  float speed_add = 0.0f;
   if (scale_from_low == scale_from_high) {
     speed_add = scale_to_high * options_haste;
+  } else {
+    speed_add = SCALE(
+                    GAMESTATE->m_fHasteRate, scale_from_low, scale_from_high,
+                    scale_to_low, scale_to_high) *
+                options_haste;
+  }
+  if (!std::isfinite(speed_add)) {
+    LOG->Warn("SRC_AUDIT_FIX: Reset non-finite gameplay haste adjustment.");
+    speed_add = 0.0f;
   }
   rage_clamp(speed_add, -1.0f, 1.0f);
 
@@ -4114,7 +4143,8 @@ void ScreenGameplay::SendCrossedMessages() {
 
 void ScreenGameplay::BeginBackingOutFromGameplay() {
   if (GetITGOnlineIsActive()) {
-    OnlineTrace("ITG Online: BeginBackingOutFromGameplay ignored while online "
+    OnlineTrace(
+        "ITG Online: BeginBackingOutFromGameplay ignored while online "
         "gameplay is active; round completion must flow through results.");
     ResetGiveUpTimers(false);
     return;
@@ -4439,12 +4469,10 @@ void ScreenGameplay::SaveStats() {
     }
 
     const NoteData& noteData = m_vPlayerInfo[master].m_pPlayer->GetNoteData();
-    const TimingData* timing =
-        GAMESTATE->m_pCurSteps[master]->GetTimingData();
+    const TimingData* timing = GAMESTATE->m_pCurSteps[master]->GetTimingData();
     PlayerStageStats& shared = STATSMAN->m_CurStageStats.m_RoutinePlayer;
     RadarValues radar;
-    NoteDataUtil::CalculateRadarValues(
-        noteData, fMusicLen, timing, radar);
+    NoteDataUtil::CalculateRadarValues(noteData, fMusicLen, timing, radar);
     shared.m_radarPossible += radar;
 
     PlayerStageStats sharedRadarContext = shared;
@@ -4466,10 +4494,8 @@ void ScreenGameplay::SaveStats() {
     shared.m_iNumControllerSteps = 0.0f;
     shared.m_fCaloriesBurned = 0.0f;
     FOREACH_PlayerNumber(pn) {
-      PlayerStageStats& participant =
-          STATSMAN->m_CurStageStats.m_player[pn];
-      NoteDataUtil::CalculateRadarValues(
-          parts[pn], fMusicLen, timing, radar);
+      PlayerStageStats& participant = STATSMAN->m_CurStageStats.m_player[pn];
+      NoteDataUtil::CalculateRadarValues(parts[pn], fMusicLen, timing, radar);
       participant.m_radarPossible += radar;
 
       PlayerStageStats participantRadarContext = shared;
@@ -4488,9 +4514,11 @@ void ScreenGameplay::SaveStats() {
         shared.m_radarPossible.ToString().c_str(),
         shared.m_radarActual.ToString().c_str(),
         STATSMAN->m_CurStageStats.m_player[PLAYER_1]
-            .m_radarActual.ToString().c_str(),
+            .m_radarActual.ToString()
+            .c_str(),
         STATSMAN->m_CurStageStats.m_player[PLAYER_2]
-            .m_radarActual.ToString().c_str());
+            .m_radarActual.ToString()
+            .c_str());
     return;
   }
 
@@ -4548,11 +4576,13 @@ void ScreenGameplay::SongFinished() {
 bool ScreenGameplay::OnlineShouldHoldBeforeEvaluation() {
   if (GetITGOnlineShouldReleaseGameplayForEvaluation()) {
     if (m_bLoggedOnlineEvaluationHold) {
-      OnlineTrace("ITG Online: released ScreenGameplay for evaluation because server "
+      OnlineTrace(
+          "ITG Online: released ScreenGameplay for evaluation because server "
           "results are ready.");
       m_bLoggedOnlineEvaluationHold = false;
     } else {
-      OnlineTrace("ITG Online: evaluation hold bypassed because server results are "
+      OnlineTrace(
+          "ITG Online: evaluation hold bypassed because server results are "
           "ready.");
     }
     return false;
@@ -4586,7 +4616,8 @@ bool ScreenGameplay::OnlineShouldHoldBeforeEvaluation() {
     const bool isOnlineActive = GetITGOnlineIsActive();
     LOG->Warn(
         "ITG Online: evaluation hold gate failed; %s",
-        isOnlineActive ? "holding gameplay closed" : "local gameplay unaffected");
+        isOnlineActive ? "holding gameplay closed"
+                       : "local gameplay unaffected");
     return isOnlineActive;
   }
   return shouldHold;
@@ -4615,7 +4646,8 @@ bool ScreenGameplay::OnlineShouldKeepGameplayAliveAfterLocalFail() {
     const bool isOnlineActive = GetITGOnlineIsActive();
     LOG->Warn(
         "ITG Online: local fail keep-alive gate failed; %s",
-        isOnlineActive ? "keeping gameplay alive" : "local gameplay unaffected");
+        isOnlineActive ? "keeping gameplay alive"
+                       : "local gameplay unaffected");
     return isOnlineActive;
   }
 
@@ -4628,10 +4660,10 @@ void ScreenGameplay::StageFinished(bool bBackedOut) {
   }
   const bool isOnlineActive = GetITGOnlineIsActive();
   if (isOnlineActive) {
-    OnlineTrace("ITG Online: StageFinished begin backedOut=%d allFailed=%d gaveUp=%d "
+    OnlineTrace(
+        "ITG Online: StageFinished begin backedOut=%d allFailed=%d gaveUp=%d "
         "usedAutoplay=%d playMode=%d",
-        bBackedOut ? 1 : 0,
-        STATSMAN->m_CurStageStats.AllFailed() ? 1 : 0,
+        bBackedOut ? 1 : 0, STATSMAN->m_CurStageStats.AllFailed() ? 1 : 0,
         STATSMAN->m_CurStageStats.m_bGaveUp ? 1 : 0,
         STATSMAN->m_CurStageStats.m_bUsedAutoplay ? 1 : 0,
         static_cast<int>(GAMESTATE->m_PlayMode));
@@ -4662,7 +4694,8 @@ void ScreenGameplay::StageFinished(bool bBackedOut) {
 
   if (bBackedOut) {
     if (isOnlineActive) {
-      OnlineTrace("ITG Online: StageFinished cancelling stage after backed out.");
+      OnlineTrace(
+          "ITG Online: StageFinished cancelling stage after backed out.");
     }
     GAMESTATE->CancelStage();
     return;
@@ -4701,8 +4734,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
   CHECKPOINT_M(ssprintf(
       "HandleScreenMessage(%s)",
       ScreenMessageHelpers::ScreenMessageToString(SM).c_str()));
-  if (GAMESTATE == nullptr &&
-      SM != SM_GainFocus && SM != SM_LoseFocus) {
+  if (GAMESTATE == nullptr && SM != SM_GainFocus && SM != SM_LoseFocus) {
     LOG->Warn(
         "SRC_AUDIT_FIX: ScreenGameplay ignored message %s without GAMESTATE.",
         ScreenMessageHelpers::ScreenMessageToString(SM).c_str());
@@ -4712,8 +4744,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
   const bool requiresCoreManagers =
       SM == SM_NotesEnded || SM == SM_LeaveGameplay ||
       SM == SM_StartLoadingNextSong || SM == SM_LoadNextSong ||
-      SM == SM_DoPrevScreen || SM == SM_DoNextScreen ||
-      SM == SM_BeginFailed;
+      SM == SM_DoPrevScreen || SM == SM_DoNextScreen || SM == SM_BeginFailed;
   if (requiresCoreManagers &&
       !HasCoreGameplayManagers("ScreenGameplay::HandleScreenMessage")) {
     ScreenWithMenuElements::HandleScreenMessage(SM);
@@ -4766,11 +4797,11 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
         STATE_DANCING;  // STATE CHANGE!  Now the user is allowed to press Back
   } else if (SM == SM_NotesEnded)  // received while STATE_DANCING
   {
-    if (GetITGOnlineIsActive() &&
-        (m_bOnlineEvaluationHoldStarted ||
-         m_bOnlineEvaluationHoldMessagePending)) {
+    if (GetITGOnlineIsActive() && (m_bOnlineEvaluationHoldStarted ||
+                                   m_bOnlineEvaluationHoldMessagePending)) {
       if (!m_bLoggedOnlineNotesEndedDuringHold) {
-        OnlineTrace("ITG Online: SM_NotesEnded ignored while evaluation hold is "
+        OnlineTrace(
+            "ITG Online: SM_NotesEnded ignored while evaluation hold is "
             "active.");
         m_bLoggedOnlineNotesEndedDuringHold = true;
       }
@@ -4786,11 +4817,10 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
 
     const bool bSharedSidesStyle = IsCurrentStyleSharedSides();
     const PlayerNumber sharedSidesMaster =
-        bSharedSidesStyle ? GAMESTATE->GetMasterPlayerNumber()
-                          : PLAYER_INVALID;
-    const bool bSharedSidesLifeMeter =
-        bSharedSidesStyle && m_pCombinedLifeMeter != nullptr &&
-        IsValidGameplayPlayer(sharedSidesMaster);
+        bSharedSidesStyle ? GAMESTATE->GetMasterPlayerNumber() : PLAYER_INVALID;
+    const bool bSharedSidesLifeMeter = bSharedSidesStyle &&
+                                       m_pCombinedLifeMeter != nullptr &&
+                                       IsValidGameplayPlayer(sharedSidesMaster);
 
     FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
       PlayerState* playerState =
@@ -4814,7 +4844,8 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
           bPlayerIsFailing) {
         pss->m_bFailed = true;
         if (bSharedSidesLifeMeter) {
-          PropagateSharedSidesFailure(pi->m_pn, "ScreenGameplay::SM_NotesEnded");
+          PropagateSharedSidesFailure(
+              pi->m_pn, "ScreenGameplay::SM_NotesEnded");
         }
       }
 
@@ -4824,8 +4855,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
 
       // set a life record at the point of failure
       if (pss->m_bFailed) {
-        pss->SetLifeRecordAt(
-            0, STATSMAN->m_CurStageStats.m_fGameplaySeconds);
+        pss->SetLifeRecordAt(0, STATSMAN->m_CurStageStats.m_fGameplaySeconds);
       }
     }
 
@@ -4873,7 +4903,8 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
   } else if (SM == SM_LeaveGameplay) {
     if (m_bOnlineEvaluationHoldMessagePending &&
         m_timerOnlineEvaluationHoldMessage.Ago() < 0.20f) {
-      OnlineTrace("ITG Online: SM_LeaveGameplay ignored while evaluation hold message "
+      OnlineTrace(
+          "ITG Online: SM_LeaveGameplay ignored while evaluation hold message "
           "is pending.");
       return;
     }
@@ -4889,15 +4920,18 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
         m_timerOnlineEvaluationHoldMessage.Touch();
         this->PostScreenMessage(SM_LeaveGameplay, 0.25f);
         return;
-      } else if (m_timerOnlineEvaluationHoldStarted.Ago() >=
-                 ITGONLINE_EVALUATION_HOLD_MAX_SECONDS) {
+      } else if (
+          m_timerOnlineEvaluationHoldStarted.Ago() >=
+          ITGONLINE_EVALUATION_HOLD_MAX_SECONDS) {
         LOG->Warn(
             "ITG Online: evaluation hold timed out after %.2fs; continuing to "
             "evaluation",
             m_timerOnlineEvaluationHoldStarted.Ago());
         m_bOnlineEvaluationHoldStarted = false;
       } else {
-        OnlineTrace("ITG Online: SM_LeaveGameplay continuing evaluation hold for %.2fs.",
+        OnlineTrace(
+            "ITG Online: SM_LeaveGameplay continuing evaluation hold for "
+            "%.2fs.",
             m_timerOnlineEvaluationHoldStarted.Ago());
         m_bOnlineEvaluationHoldMessagePending = true;
         m_timerOnlineEvaluationHoldMessage.Touch();
@@ -5020,14 +5054,15 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
           continue;
         }
         trailSnapshots.push_back(
-            { stepsPn, trail->m_StepsType, trail->m_CourseDifficulty });
+            {stepsPn, trail->m_StepsType, trail->m_CourseDifficulty});
       }
       // Set a new stage seed so the order will be different.
       GAMESTATE->SetNewStageSeed();
       course->InvalidateTrailCache();
       course->RegenerateNonFixedTrails();
       for (const RepeatTrailSnapshot& snapshot : trailSnapshots) {
-        Trail* trail = course->GetTrail(snapshot.stepsType, snapshot.difficulty);
+        Trail* trail =
+            course->GetTrail(snapshot.stepsType, snapshot.difficulty);
         if (trail == nullptr) {
           LOG->Warn(
               "SRC_AUDIT_FIX: Repeat course failed to regenerate trail for "
@@ -5072,7 +5107,8 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
           entry.GetAttackArray(a);
           pi->m_asModifiersQueue.push_back(a);
           if (pi->GetPlayerStageStats()) {
-            pi->GetPlayerStageStats()->m_vpPossibleSteps.push_back(entry.pSteps);
+            pi->GetPlayerStageStats()->m_vpPossibleSteps.push_back(
+                entry.pSteps);
           }
         }
         // In a survival course, override stored mods
@@ -5091,8 +5127,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
         }
       }
       if (!ValidateGameplayQueues(
-              m_apSongsQueue, m_vPlayerInfo,
-              "ScreenGameplay::repeat course")) {
+              m_apSongsQueue, m_vPlayerInfo, "ScreenGameplay::repeat course")) {
         LOG->Warn(
             "SRC_AUDIT_FIX: Repeat course produced invalid queues; leaving "
             "gameplay.");
@@ -5169,13 +5204,15 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
   } else if (SM == SM_DoPrevScreen) {
     if (GetITGOnlineIsActive()) {
       if (OnlineShouldHoldBeforeEvaluation()) {
-        OnlineTrace("ITG Online: SM_DoPrevScreen blocked while waiting for "
+        OnlineTrace(
+            "ITG Online: SM_DoPrevScreen blocked while waiting for "
             "authoritative results.");
         ResetGiveUpTimers(false);
         return;
       }
 
-      OnlineTrace("ITG Online: SM_DoPrevScreen redirected to SM_DoNextScreen so "
+      OnlineTrace(
+          "ITG Online: SM_DoPrevScreen redirected to SM_DoNextScreen so "
           "online gameplay reaches evaluation instead of lobby.");
       HandleScreenMessage(SM_DoNextScreen);
       return;
@@ -5222,24 +5259,28 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
           m_bMarkedOnlineFailedEarly = true;
         }
         OnlineTrace(
-            "ITG Online: player failed; early failed finalization confirmed=%d.",
+            "ITG Online: player failed; early failed finalization "
+            "confirmed=%d.",
             confirmed ? 1 : 0);
       }
 
       if (OnlineShouldHoldBeforeEvaluation()) {
         if (!m_bOnlineFailedHoldStarted) {
-          OnlineTrace("ITG Online: SM_BeginFailed starting failed-player hold.");
+          OnlineTrace(
+              "ITG Online: SM_BeginFailed starting failed-player hold.");
           m_bOnlineFailedHoldStarted = true;
           m_timerOnlineFailedHoldStarted.Touch();
-        } else if (m_timerOnlineFailedHoldStarted.Ago() >=
-                   ITGONLINE_FAILED_HOLD_MAX_SECONDS) {
+        } else if (
+            m_timerOnlineFailedHoldStarted.Ago() >=
+            ITGONLINE_FAILED_HOLD_MAX_SECONDS) {
           LOG->Warn(
               "ITG Online: failed-player hold timed out after %.2fs; "
               "continuing to evaluation.",
               m_timerOnlineFailedHoldStarted.Ago());
           m_bOnlineFailedHoldStarted = false;
         } else {
-          OnlineTrace("ITG Online: SM_BeginFailed continuing failed-player hold for "
+          OnlineTrace(
+              "ITG Online: SM_BeginFailed continuing failed-player hold for "
               "%.2fs.",
               m_timerOnlineFailedHoldStarted.Ago());
           ResetGiveUpTimers(false);
@@ -5248,19 +5289,22 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
         }
 
         if (m_bOnlineFailedHoldStarted) {
-          OnlineTrace("ITG Online: SM_BeginFailed reposting failed-player hold.");
+          OnlineTrace(
+              "ITG Online: SM_BeginFailed reposting failed-player hold.");
           ResetGiveUpTimers(false);
           this->PostScreenMessage(SM_BeginFailed, 0.25f);
           return;
         }
       } else {
         if (m_bOnlineFailedHoldStarted) {
-          OnlineTrace("ITG Online: SM_BeginFailed failed-player hold released.");
+          OnlineTrace(
+              "ITG Online: SM_BeginFailed failed-player hold released.");
         }
         m_bOnlineFailedHoldStarted = false;
       }
 
-      OnlineTrace("ITG Online: failed player released from ScreenGameplay to "
+      OnlineTrace(
+          "ITG Online: failed player released from ScreenGameplay to "
           "evaluation.");
     }
 
@@ -5339,8 +5383,7 @@ void ScreenGameplay::HandleMessage(const Message& msg) {
       TapNoteScore tns = TapNoteScore_Invalid;
       const bool hasTapScore = msg.GetParam("TapNoteScore", tns);
       if (!hasHoldScore && !hasTapScore) {
-        LOG->Warn(
-            "SRC_AUDIT_FIX: Ignoring Judgment message without a score.");
+        LOG->Warn("SRC_AUDIT_FIX: Ignoring Judgment message without a score.");
         continue;
       }
 

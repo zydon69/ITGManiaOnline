@@ -51,7 +51,16 @@ ActorMultiTexture::ActorMultiTexture(const ActorMultiTexture& cpy)
   }
 }
 
-void ActorMultiTexture::SetTextureCoords(const RectF& r) { m_Rect = r; }
+void ActorMultiTexture::SetTextureCoords(const RectF& r) {
+  if (!std::isfinite(r.left) || !std::isfinite(r.top) ||
+      !std::isfinite(r.right) || !std::isfinite(r.bottom)) {
+    if (LOG != nullptr) {
+      LOG->Warn("Can't set non-finite ActorMultiTexture coordinates.");
+    }
+    return;
+  }
+  m_Rect = r;
+}
 
 void ActorMultiTexture::LoadFromNode(const XNode* pNode) {
   m_Rect = RectF(0, 0, 1, 1);
@@ -60,7 +69,9 @@ void ActorMultiTexture::LoadFromNode(const XNode* pNode) {
 
 void ActorMultiTexture::SetSizeFromTexture(RageTexture* pTexture) {
   if (pTexture == nullptr) {
-    LOG->Warn("Can't size ActorMultiTexture from a nil texture.");
+    if (LOG != nullptr) {
+      LOG->Warn("Can't size ActorMultiTexture from a nil texture.");
+    }
     return;
   }
   ActorMultiTexture::m_size.x = pTexture->GetSourceWidth();
@@ -79,25 +90,35 @@ void ActorMultiTexture::ClearTextures() {
 
 int ActorMultiTexture::AddTexture(RageTexture* pTexture) {
   if (pTexture == nullptr) {
-    LOG->Warn("Can't add nil texture to ActorMultiTexture");
+    if (LOG != nullptr) {
+      LOG->Warn("Can't add nil texture to ActorMultiTexture");
+    }
     return 0;
   }
   if (TEXTUREMAN == nullptr) {
-    LOG->Warn("Can't add texture to ActorMultiTexture without texture manager.");
+    if (LOG != nullptr) {
+      LOG->Warn("Can't add texture to ActorMultiTexture without texture manager.");
+    }
     return 0;
   }
   if (m_aTextureUnits.size() >= GetMaxTextureUnitsForActorMultiTexture()) {
-    LOG->Warn(
-        "Can't add texture to ActorMultiTexture, texture unit limit reached.");
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "Can't add texture to ActorMultiTexture, texture unit limit reached.");
+    }
     return 0;
   }
-  LOG->Trace(
-      "ActorMultiTexture::AddTexture( %s )",
-      pTexture->GetID().filename.c_str());
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "ActorMultiTexture::AddTexture( %s )",
+        pTexture->GetID().filename.c_str());
+  }
 
   RageTexture* pCopy = TEXTUREMAN->CopyTexture(pTexture);
   if (pCopy == nullptr) {
-    LOG->Warn("Can't add texture to ActorMultiTexture, copy failed.");
+    if (LOG != nullptr) {
+      LOG->Warn("Can't add texture to ActorMultiTexture, copy failed.");
+    }
     return 0;
   }
 
@@ -108,7 +129,15 @@ int ActorMultiTexture::AddTexture(RageTexture* pTexture) {
 
 void ActorMultiTexture::SetTextureMode(int iIndex, TextureMode tm) {
   if (iIndex < 0 || iIndex >= static_cast<int>(m_aTextureUnits.size())) {
-    LOG->Warn("Can't set texture mode, index %d out of range.", iIndex);
+    if (LOG != nullptr) {
+      LOG->Warn("Can't set texture mode, index %d out of range.", iIndex);
+    }
+    return;
+  }
+  if (tm < 0 || tm >= NUM_TextureMode) {
+    if (LOG != nullptr) {
+      LOG->Warn("Can't set invalid texture mode %d.", static_cast<int>(tm));
+    }
     return;
   }
   m_aTextureUnits[iIndex].m_TextureMode = tm;
@@ -144,7 +173,7 @@ void ActorMultiTexture::DrawPrimitives() {
 
   DISPLAY->SetEffectMode(m_EffectMode);
 
-  static RageSpriteVertex v[4];
+  RageSpriteVertex v[4];
   v[0].p = RageVector3(quadVerticies.left, quadVerticies.top, 0);  // top left
   v[1].p =
       RageVector3(quadVerticies.left, quadVerticies.bottom, 0);  // bottom left

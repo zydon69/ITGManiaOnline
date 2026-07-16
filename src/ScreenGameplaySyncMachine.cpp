@@ -36,6 +36,7 @@ REGISTER_SCREEN_CLASS(ScreenGameplaySyncMachine);
 
 void ScreenGameplaySyncMachine::Init() {
   if (GAMESTATE == nullptr || GAMEMAN == nullptr || THEME == nullptr ||
+      PREFSMAN == nullptr ||
       GAMESTATE->m_pCurGame == nullptr) {
     LOG->Warn("SRC_AUDIT_FIX: SyncMachine missing required global state.");
     return;

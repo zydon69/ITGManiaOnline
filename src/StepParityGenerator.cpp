@@ -17,6 +17,19 @@
 using namespace StepParity;
 
 bool StepParityGenerator::analyzeNoteData(const NoteData& in) {
+  beginningState = nullptr;
+  startNode = nullptr;
+  endingState = nullptr;
+  endNode = nullptr;
+  tmpState = nullptr;
+  statePool.clear();
+  nodePool.clear();
+  stateCache.clear();
+  nodes.clear();
+  rows.clear();
+  nodes_for_rows.clear();
+  columnCount_ = 0;
+
   if (layout == nullptr) {
     LOG->Warn("SRC_AUDIT_FIX SRC-639: StepParity analysis has no layout.");
     return false;

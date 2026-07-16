@@ -1,5 +1,5 @@
-#ifndef RAGE_SOUND_WAVEOUT_H
-#define RAGE_SOUND_WAVEOUT_H
+#ifndef RAGE_SOUND_WDMKS_H
+#define RAGE_SOUND_WDMKS_H
 
 #include <windows.h>
 
@@ -27,13 +27,15 @@ class RageSoundDriver_WDMKS : public RageSoundDriver {
   static int MixerThread_start(void* p);
   void MixerThread();
   bool Fill(int iPacket, std::string& sError);
-  void Read(void* pData, int iFrames, int iLastCursorPos, int iCurrentFrame);
+  void Read(
+      void* pData, int iFrames, int64_t iLastCursorPos,
+      int64_t iCurrentFrame);
 
   RageThread MixingThread;
   void SetupDecodingThread();
 
   std::atomic<bool> m_bShutdown;
-  int m_iLastCursorPos;
+  std::atomic<int64_t> m_iLastCursorPos;
 
   HANDLE m_hSignal;
   WinWdmStream* m_pStream;

@@ -27,7 +27,11 @@
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
 
-constexpr double kMetalDisplayPacingHeadroomFactor = 1.2;
+// Presentation cadence must match the physical display.  Rendering faster than
+// a fixed-refresh CAMetalLayer produces an uneven 6:5 cadence on a 120 Hz panel
+// when the engine targets 144 Hz, which is perceived as micro-stutter even when
+// neither the CPU nor GPU is saturated.
+constexpr double kMetalDisplayPacingHeadroomFactor = 1.0;
 
 static RageDisplay::RagePixelFormatDesc PIXEL_FORMAT_DESC[NUM_RagePixelFormat] =
     {{/* R8G8B8A8 */
@@ -125,12 +129,49 @@ RageVector3 NormalizeOrDefault(
     const RageVector3& vector, const RageVector3& fallback) {
   const float lengthSq =
       vector.x * vector.x + vector.y * vector.y + vector.z * vector.z;
-  if (lengthSq <= 0.000001f) {
+  if (!std::isfinite(lengthSq) || lengthSq <= 0.000001f) {
     return fallback;
   }
   RageVector3 normalized;
   RageVec3Normalize(&normalized, &vector);
   return normalized;
+}
+
+RageVector3 TransformNormalInverseTranspose(
+    const RageVector3& normal, const RageMatrix& matrix) {
+  const float a = matrix.m[0][0];
+  const float b = matrix.m[0][1];
+  const float c = matrix.m[0][2];
+  const float d = matrix.m[1][0];
+  const float e = matrix.m[1][1];
+  const float f = matrix.m[1][2];
+  const float g = matrix.m[2][0];
+  const float h = matrix.m[2][1];
+  const float i = matrix.m[2][2];
+
+  const float c00 = e * i - f * h;
+  const float c01 = f * g - d * i;
+  const float c02 = d * h - e * g;
+  const float c10 = c * h - b * i;
+  const float c11 = a * i - c * g;
+  const float c12 = b * g - a * h;
+  const float c20 = b * f - c * e;
+  const float c21 = c * d - a * f;
+  const float c22 = a * e - b * d;
+  const float determinant = a * c00 + b * c01 + c * c02;
+  if (!std::isfinite(determinant) || std::fabs(determinant) <= 0.000001f) {
+    return NormalizeOrDefault(normal, RageVector3(0.0f, 0.0f, 1.0f));
+  }
+
+  const float inverseDeterminant = 1.0f / determinant;
+  const RageVector3 transformed(
+      (normal.x * c00 + normal.y * c10 + normal.z * c20) *
+          inverseDeterminant,
+      (normal.x * c01 + normal.y * c11 + normal.z * c21) *
+          inverseDeterminant,
+      (normal.x * c02 + normal.y * c12 + normal.z * c22) *
+          inverseDeterminant);
+  return NormalizeOrDefault(transformed, RageVector3(0.0f, 0.0f, 1.0f));
 }
 
 class RageCompiledGeometryMetal : public RageCompiledGeometry {
@@ -147,9 +188,37 @@ class RageCompiledGeometryMetal : public RageCompiledGeometry {
 
   void Change(const std::vector<msMesh>& vMeshes) override {
     m_bIndexOverflow = false;
+    if (vMeshes.size() != m_vMeshInfo.size()) {
+      LOG->Warn(
+          "RageCompiledGeometryMetal: refusing mesh update with mismatched "
+          "mesh count source=%zu allocated=%zu.",
+          vMeshes.size(), m_vMeshInfo.size());
+      m_bIndexOverflow = true;
+      return;
+    }
     for (size_t i = 0; i < vMeshes.size(); ++i) {
       const MeshInfo& meshInfo = m_vMeshInfo[i];
       const msMesh& mesh = vMeshes[i];
+
+      if (meshInfo.iVertexStart < 0 || meshInfo.iTriangleStart < 0 ||
+          mesh.Vertices.size() >
+              m_vVertices.size() - std::min(
+                  static_cast<size_t>(meshInfo.iVertexStart),
+                  m_vVertices.size()) ||
+          mesh.Triangles.size() >
+              m_vTriangles.size() - std::min(
+                  static_cast<size_t>(meshInfo.iTriangleStart),
+                  m_vTriangles.size())) {
+        LOG->Warn(
+            "RageCompiledGeometryMetal: refusing mesh update outside "
+            "allocated geometry mesh=%zu vertices=%zu start=%d capacity=%zu "
+            "triangles=%zu triangle_start=%d triangle_capacity=%zu.",
+            i, mesh.Vertices.size(), meshInfo.iVertexStart,
+            m_vVertices.size(), mesh.Triangles.size(),
+            meshInfo.iTriangleStart, m_vTriangles.size());
+        m_bIndexOverflow = true;
+        return;
+      }
 
       for (size_t j = 0; j < mesh.Vertices.size(); ++j) {
         m_vVertices[meshInfo.iVertexStart + j] = mesh.Vertices[j];
@@ -194,24 +263,57 @@ class RageCompiledGeometryMetal : public RageCompiledGeometry {
 class RageTextureLockMetal : public RageTextureLock {
  public:
   void Lock(uintptr_t textureHandle, RageSurface* surface) override {
-    ASSERT(m_TextureHandle == 0);
-    ASSERT(surface != nullptr);
-    ASSERT(surface->pixels == nullptr);
+    if (m_TextureHandle != 0 || surface == nullptr ||
+        surface->pixels != nullptr || surface->h <= 0 || surface->pitch <= 0) {
+      LOG->Warn(
+          "RageTextureLockMetal: refusing invalid lock handle=%lu "
+          "already_locked=%d surface=%p pixels=%p height=%d pitch=%d.",
+          static_cast<unsigned long>(textureHandle),
+          m_TextureHandle != 0 ? 1 : 0, surface,
+          surface != nullptr ? surface->pixels : nullptr,
+          surface != nullptr ? surface->h : 0,
+          surface != nullptr ? surface->pitch : 0);
+      return;
+    }
 
+    const size_t height = static_cast<size_t>(surface->h);
+    const size_t pitch = static_cast<size_t>(surface->pitch);
+    if (height > std::numeric_limits<size_t>::max() / pitch) {
+      LOG->Warn(
+          "RageTextureLockMetal: refusing overflowing lock allocation "
+          "handle=%lu height=%zu pitch=%zu.",
+          static_cast<unsigned long>(textureHandle), height, pitch);
+      return;
+    }
+    try {
+      m_Buffer.assign(height * pitch, 0);
+    } catch (const std::bad_alloc&) {
+      LOG->Warn(
+          "RageTextureLockMetal: allocation failed handle=%lu bytes=%zu.",
+          static_cast<unsigned long>(textureHandle), height * pitch);
+      return;
+    }
     m_TextureHandle = textureHandle;
-    const size_t bufferSize =
-        static_cast<size_t>(std::max(0, surface->h)) *
-        static_cast<size_t>(std::max(0, surface->pitch));
-    m_Buffer.assign(bufferSize, 0);
     surface->pixels = m_Buffer.empty() ? nullptr : m_Buffer.data();
     surface->pixels_owned = false;
   }
 
   void Unlock(RageSurface* surface, bool changed = true) override {
-    ASSERT(surface != nullptr);
-    if (changed && m_TextureHandle != 0 && surface->pixels != nullptr) {
+    if (surface == nullptr || m_TextureHandle == 0) {
+      LOG->Warn(
+          "RageTextureLockMetal: ignoring invalid unlock surface=%p "
+          "locked_handle=%lu.",
+          surface, static_cast<unsigned long>(m_TextureHandle));
+      return;
+    }
+    if (changed && surface->pixels != nullptr && DISPLAY != nullptr) {
       DISPLAY->UpdateTexture(
           m_TextureHandle, surface, 0, 0, surface->w, surface->h);
+    } else if (changed && DISPLAY == nullptr) {
+      LOG->Warn(
+          "RageTextureLockMetal: dropping changed texture unlock after "
+          "display shutdown handle=%lu.",
+          static_cast<unsigned long>(m_TextureHandle));
     }
 
     surface->pixels = nullptr;
@@ -307,6 +409,7 @@ RageVector2 SphereMapTextureCoord(const RageVector3& normal) {
 
 MacOSMetalSolidVertex ToMetalSolidVertex(
     const RageVector3& position, const RageVector2& texcoord,
+    const RageVector2& texcoord2,
     const RageVColor& color, const RageVector2& textureMatrixScale) {
   MacOSMetalSolidVertex out;
   out.x = position.x;
@@ -315,6 +418,8 @@ MacOSMetalSolidVertex ToMetalSolidVertex(
   out.w = 1.0f;
   out.u = texcoord.x;
   out.v = texcoord.y;
+  out.u2 = texcoord2.x;
+  out.v2 = texcoord2.y;
   out.textureMatrixScaleX = textureMatrixScale.x;
   out.textureMatrixScaleY = textureMatrixScale.y;
   out.r = ByteColorToFloat(color.r);
@@ -326,7 +431,7 @@ MacOSMetalSolidVertex ToMetalSolidVertex(
 
 MacOSMetalSolidVertex ToMetalSolidVertex(
     const RageSpriteVertex& v) {
-  return ToMetalSolidVertex(v.p, v.t, v.c, RageVector2(1.0f, 1.0f));
+  return ToMetalSolidVertex(v.p, v.t, v.t, v.c, RageVector2(1.0f, 1.0f));
 }
 
 void AppendTriangle(
@@ -372,6 +477,22 @@ RageColor RageDisplay_Metal::ComputeModelColor(
     lit.r += m_MaterialDiffuse.r * light.diffuse.r * intensity;
     lit.g += m_MaterialDiffuse.g * light.diffuse.g * intensity;
     lit.b += m_MaterialDiffuse.b * light.diffuse.b * intensity;
+    if (intensity > 0.0f) {
+      // OpenGL's default non-local viewer uses a constant eye vector.  The
+      // half-vector form matches its fixed-function directional-light model.
+      const RageVector3 halfVector = NormalizeOrDefault(
+          lightDir + RageVector3(0.0f, 0.0f, 1.0f),
+          RageVector3(0.0f, 0.0f, 1.0f));
+      const float specularBase = std::max(
+          0.0f, normalizedNormal.x * halfVector.x +
+                    normalizedNormal.y * halfVector.y +
+                    normalizedNormal.z * halfVector.z);
+      const float specularIntensity =
+          std::pow(specularBase, m_fMaterialShininess);
+      lit.r += m_MaterialSpecular.r * light.specular.r * specularIntensity;
+      lit.g += m_MaterialSpecular.g * light.specular.g * specularIntensity;
+      lit.b += m_MaterialSpecular.b * light.specular.b * specularIntensity;
+    }
   }
   if (!anyLight) {
     lit.r += m_MaterialAmbient.r + m_MaterialDiffuse.r;
@@ -435,8 +556,21 @@ void RageCompiledGeometryMetal::EmitTo(
     return;
   }
 
-  const size_t outputVertexCount =
-      static_cast<size_t>(meshInfo.iTriangleCount) * 3;
+  const size_t triangleStart = static_cast<size_t>(meshInfo.iTriangleStart);
+  const size_t triangleCount = static_cast<size_t>(meshInfo.iTriangleCount);
+  if (meshInfo.iTriangleStart < 0 ||
+      triangleStart > m_vTriangles.size() ||
+      triangleCount > m_vTriangles.size() - triangleStart ||
+      triangleCount > std::numeric_limits<size_t>::max() / 3) {
+    LOG->Warn(
+        "RageCompiledGeometryMetal: refusing invalid draw range mesh=%d "
+        "triangle_start=%d triangle_count=%d capacity=%zu.",
+        iMeshIndex, meshInfo.iTriangleStart, meshInfo.iTriangleCount,
+        m_vTriangles.size());
+    return;
+  }
+
+  const size_t outputVertexCount = triangleCount * 3;
   RageDisplay_Metal::DrawBatch* directBatch = nullptr;
   MacOSMetalSolidVertex* directVertices = nullptr;
   const bool useDirectVertices = display->ReserveDirectVertices(
@@ -447,8 +581,30 @@ void RageCompiledGeometryMetal::EmitTo(
         display->m_iActiveDrawBatchCount > 0 &&
         display->m_DrawBatches[display->m_iActiveDrawBatchCount - 1]
             .vertexBuffer != nullptr);
-    fallbackBatch->vertices.reserve(
-        fallbackBatch->vertices.size() + outputVertexCount);
+    if (outputVertexCount >
+        std::numeric_limits<size_t>::max() - fallbackBatch->vertices.size()) {
+      LOG->Warn(
+          "RageCompiledGeometryMetal: refusing overflowing vertex staging "
+          "mesh=%d vertices=%zu.",
+          iMeshIndex, outputVertexCount);
+      return;
+    }
+    try {
+      fallbackBatch->vertices.reserve(
+          fallbackBatch->vertices.size() + outputVertexCount);
+    } catch (const std::bad_alloc&) {
+      LOG->Warn(
+          "RageCompiledGeometryMetal: vertex staging allocation failed "
+          "mesh=%d vertices=%zu.",
+          iMeshIndex, outputVertexCount);
+      return;
+    } catch (const std::length_error&) {
+      LOG->Warn(
+          "RageCompiledGeometryMetal: vertex staging length rejected "
+          "mesh=%d vertices=%zu.",
+          iMeshIndex, outputVertexCount);
+      return;
+    }
   }
 
   RageMatrix modelView;
@@ -463,8 +619,8 @@ void RageCompiledGeometryMetal::EmitTo(
         continue;
       }
       const RageModelVertex& modelVertex = m_vVertices[vertexIndex];
-      RageVector3 transformedNormal;
-      RageVec3TransformNormal(&transformedNormal, &modelVertex.n, &modelView);
+      const RageVector3 transformedNormal =
+          TransformNormalInverseTranspose(modelVertex.n, modelView);
       RageVector3 position = modelVertex.p;
       RageColor litColor =
           display->ComputeModelColor(transformedNormal, modelView);
@@ -474,13 +630,18 @@ void RageCompiledGeometryMetal::EmitTo(
       } else if (display->m_iCelShadedStage == 2) {
         litColor = display->ComputeCelModelColor(transformedNormal, modelView);
       }
-      const RageVector2 texcoord =
-          (useDirectVertices ? directBatch->sphereMapping
-                             : fallbackBatch->sphereMapping)
-              ? SphereMapTextureCoord(transformedNormal)
-              : modelVertex.t;
+      const RageDisplay_Metal::DrawBatch& batch =
+          useDirectVertices ? *directBatch : *fallbackBatch;
+      const RageVector2 sphereTexcoord =
+          SphereMapTextureCoord(transformedNormal);
+      const RageVector2 texcoord = batch.sphereMapping[TextureUnit_1]
+                                       ? sphereTexcoord
+                                       : modelVertex.t;
+      const RageVector2 texcoord2 = batch.sphereMapping[TextureUnit_2]
+                                        ? sphereTexcoord
+                                        : modelVertex.t;
       const MacOSMetalSolidVertex vertex = ToMetalSolidVertex(
-          position, texcoord, ToVertexColor(litColor),
+          position, texcoord, texcoord2, ToVertexColor(litColor),
           modelVertex.TextureMatrixScale);
       if (useDirectVertices) {
         directVertices[out++] = vertex;
@@ -505,7 +666,7 @@ RageDisplay_Metal::RageDisplay_Metal()
       m_TextureModes{},
       m_EffectMode(EffectMode_Normal),
       m_iCelShadedStage(0),
-      m_bSphereMapping(false),
+      m_SphereMapping{},
       m_fZBias(0.0f),
       m_ZTestMode(ZTEST_OFF),
       m_CullMode(CULL_NONE),
@@ -518,6 +679,8 @@ RageDisplay_Metal::RageDisplay_Metal()
       m_MaterialDiffuse(1.0f, 1.0f, 1.0f, 1.0f),
       m_MaterialAmbient(0.0f, 0.0f, 0.0f, 1.0f),
       m_MaterialEmissive(0.0f, 0.0f, 0.0f, 1.0f),
+      m_MaterialSpecular(0.0f, 0.0f, 0.0f, 1.0f),
+      m_fMaterialShininess(0.0f),
       m_bLighting(false),
       m_Lights(4),
       m_iNextTextureHandle(1),
@@ -528,6 +691,7 @@ RageDisplay_Metal::RageDisplay_Metal()
       m_iLastRenderTargetDirectVertexCapacity(16384),
       m_iRequestedRefreshRate(REFRESH_DEFAULT),
       m_bReady(false) {
+  MacOSMetalPresenterSetNativeRendererActive(true);
   m_TextureModes.fill(TextureMode_Modulate);
   m_TextureFiltering.fill(true);
   m_Textures.resize(1);
@@ -536,10 +700,13 @@ RageDisplay_Metal::RageDisplay_Metal()
 
 RageDisplay_Metal::~RageDisplay_Metal() {
   SetRuntimeFramePacingTargetHz(0.0f);
+  ResetVertexWriter(&m_MainVertexWriter, true);
+  ResetVertexWriter(&m_RenderTargetVertexWriter, true);
+  DestroyAllTextures();
   if (m_Presenter) {
     m_Presenter->Shutdown();
   }
-  DestroyAllTextures();
+  MacOSMetalPresenterSetNativeRendererActive(false);
 }
 
 std::string RageDisplay_Metal::Init(
@@ -573,7 +740,13 @@ void RageDisplay_Metal::GetDisplaySpecs(DisplaySpecs& out) const {
 
 const RageDisplay::RagePixelFormatDesc* RageDisplay_Metal::GetPixelFormatDesc(
     RagePixelFormat pf) const {
-  ASSERT(pf >= 0 && pf < NUM_RagePixelFormat);
+  if (pf < 0 || pf >= NUM_RagePixelFormat) {
+    LOG->Warn(
+        "RageDisplay_Metal: invalid pixel format requested value=%d; "
+        "falling back to RGBA8.",
+        static_cast<int>(pf));
+    pf = RagePixelFormat_RGBA8;
+  }
   return &PIXEL_FORMAT_DESC[pf];
 }
 
@@ -600,6 +773,12 @@ bool RageDisplay_Metal::BeginFrame() {
   if (!m_bReady) {
     return false;
   }
+  // OpenGL clears color and depth at the beginning of every frame.  Metal's
+  // offscreen color target is cleared by the presenter, but depth is only
+  // cleared when this flag is set.  Re-arm it here so depth-writing models do
+  // not occlude later frames with stale geometry.
+  m_bClearDepthNextFrame = true;
+  m_bLayerReconfiguredForResolutionChange = false;
   SetDefaultRenderStates();
   return true;
 }
@@ -629,6 +808,23 @@ void RageDisplay_Metal::ReleaseTexture(MetalTexture* texture) {
   texture->preserveNextRender = false;
 }
 
+bool RageDisplay_Metal::IsTexturePendingDelete(uintptr_t handle) const {
+  return std::find(
+             m_PendingTextureDeletes.begin(), m_PendingTextureDeletes.end(),
+             handle) != m_PendingTextureDeletes.end();
+}
+
+void RageDisplay_Metal::ReleasePendingTextureDeletes() {
+  for (uintptr_t handle : m_PendingTextureDeletes) {
+    if (handle == 0 || handle >= m_Textures.size()) {
+      continue;
+    }
+    ReleaseTexture(&m_Textures[handle]);
+    RecycleTextureHandle(handle);
+  }
+  m_PendingTextureDeletes.clear();
+}
+
 bool RageDisplay_Metal::UploadTexturePixels(
     MetalTexture* texture, RageSurface* img, int xoffset, int yoffset,
     int width, int height) {
@@ -645,7 +841,37 @@ bool RageDisplay_Metal::UploadTexturePixels(
     return false;
   }
 
-  std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4, 0);
+  const int bytesPerPixel = img->format->BytesPerPixel;
+  if (bytesPerPixel <= 0 || img->w < width || img->h < height ||
+      img->pitch <= 0 ||
+      static_cast<size_t>(img->pitch) <
+          static_cast<size_t>(width) * static_cast<size_t>(bytesPerPixel)) {
+    LOG->Warn(
+        "RageDisplay_Metal: refusing malformed texture source size=%dx%d "
+        "upload=%dx%d pitch=%d bytes_per_pixel=%d.",
+        img->w, img->h, width, height, img->pitch, bytesPerPixel);
+    return false;
+  }
+  const size_t uploadWidth = static_cast<size_t>(width);
+  const size_t uploadHeight = static_cast<size_t>(height);
+  if (uploadWidth > std::numeric_limits<size_t>::max() / 4 ||
+      uploadHeight >
+          std::numeric_limits<size_t>::max() / (uploadWidth * 4)) {
+    LOG->Warn(
+        "RageDisplay_Metal: refusing overflowing texture upload size=%dx%d.",
+        width, height);
+    return false;
+  }
+
+  std::vector<uint8_t> pixels;
+  try {
+    pixels.assign(uploadWidth * uploadHeight * 4, 0);
+  } catch (const std::bad_alloc&) {
+    LOG->Warn(
+        "RageDisplay_Metal: texture conversion allocation failed size=%dx%d.",
+        width, height);
+    return false;
+  }
   for (int y = 0; y < height; ++y) {
     const uint8_t* src = img->pixels + static_cast<size_t>(y) * img->pitch;
     uint8_t* dst = pixels.data() + static_cast<size_t>(y) * width * 4;
@@ -669,8 +895,22 @@ bool RageDisplay_Metal::UploadTexturePixels(
         bytesPerRow);
   }
 
-  std::vector<uint8_t> fullPixels(
-      static_cast<size_t>(texture->width) * texture->height * 4, 0);
+  const size_t textureWidth = static_cast<size_t>(texture->width);
+  const size_t textureHeight = static_cast<size_t>(texture->height);
+  if (textureWidth > std::numeric_limits<size_t>::max() / 4 ||
+      textureHeight >
+          std::numeric_limits<size_t>::max() / (textureWidth * 4)) {
+    return false;
+  }
+  std::vector<uint8_t> fullPixels;
+  try {
+    fullPixels.assign(textureWidth * textureHeight * 4, 0);
+  } catch (const std::bad_alloc&) {
+    LOG->Warn(
+        "RageDisplay_Metal: full texture allocation failed size=%dx%d.",
+        texture->width, texture->height);
+    return false;
+  }
   for (int y = 0; y < height; ++y) {
     std::memcpy(
         fullPixels.data() +
@@ -755,7 +995,8 @@ uintptr_t RageDisplay_Metal::CreateTexture(
 void RageDisplay_Metal::UpdateTexture(
     uintptr_t iTexHandle, RageSurface* img, int xoffset, int yoffset,
     int width, int height) {
-  if (iTexHandle == 0 || iTexHandle >= m_Textures.size()) {
+  if (iTexHandle == 0 || iTexHandle >= m_Textures.size() ||
+      IsTexturePendingDelete(iTexHandle)) {
     return;
   }
   MetalTexture& texture = m_Textures[iTexHandle];
@@ -770,7 +1011,7 @@ void RageDisplay_Metal::UpdateTexture(
   }
 
   if (xoffset < 0 || yoffset < 0 || width <= 0 || height <= 0 ||
-      xoffset + width > texture.width || yoffset + height > texture.height) {
+      xoffset > texture.width - width || yoffset > texture.height - height) {
     LOG->Warn(
         "RageDisplay_Metal: ignoring invalid texture update handle=%lu "
         "offset=%d,%d size=%dx%d texture=%dx%d.",
@@ -939,6 +1180,9 @@ void RageDisplay_Metal::DeleteTexture(uintptr_t iTexHandle) {
     FlushBatches();
     m_iCurrentRenderTargetHandle = 0;
   }
+  if (IsTexturePendingDelete(iTexHandle)) {
+    return;
+  }
   const MetalTexture& texture = m_Textures[iTexHandle];
   const bool hadAllocatedTexture =
       texture.texture != nullptr || texture.depthTexture != nullptr ||
@@ -954,13 +1198,17 @@ void RageDisplay_Metal::DeleteTexture(uintptr_t iTexHandle) {
         texture.renderWidth, texture.renderHeight, texture.width,
         texture.height);
   }
-  ReleaseTexture(&m_Textures[iTexHandle]);
   for (uintptr_t& textureHandle : m_TextureHandles) {
     if (textureHandle == iTexHandle) {
       textureHandle = 0;
     }
   }
-  RecycleTextureHandle(iTexHandle);
+  /*
+   * DrawBatch keeps stable engine handles until EndFrame builds and submits the
+   * Metal command buffers.  Releasing or recycling this handle here could make
+   * an earlier draw sample either freed memory or a newly allocated texture.
+   */
+  m_PendingTextureDeletes.push_back(iTexHandle);
 }
 
 void RageDisplay_Metal::ClearAllTextures() {
@@ -974,6 +1222,7 @@ void RageDisplay_Metal::DestroyAllTextures() {
   m_Textures.clear();
   m_Textures.resize(1);
   m_FreeTextureHandles.clear();
+  m_PendingTextureDeletes.clear();
   m_TextureHandles.fill(0);
   m_iCurrentRenderTargetHandle = 0;
   m_iNextTextureHandle = 1;
@@ -982,6 +1231,14 @@ void RageDisplay_Metal::DestroyAllTextures() {
 void RageDisplay_Metal::SetTexture(TextureUnit tu, uintptr_t iTexture) {
   if (tu < 0 || tu >= NUM_TextureUnit) {
     return;
+  }
+  if (iTexture != 0 &&
+      (iTexture >= m_Textures.size() || IsTexturePendingDelete(iTexture) ||
+       m_Textures[iTexture].texture == nullptr)) {
+    LOG->Warn(
+        "RageDisplay_Metal: refusing invalid texture binding unit=%d handle=%lu.",
+        static_cast<int>(tu), static_cast<unsigned long>(iTexture));
+    iTexture = 0;
   }
   m_TextureHandles[tu] = iTexture;
 }
@@ -1082,11 +1339,14 @@ void RageDisplay_Metal::SetAlphaTest(bool enabled) {
 
 void RageDisplay_Metal::SetMaterial(
     const RageColor& emissive, const RageColor& ambient,
-    const RageColor& diffuse, const RageColor& /* specular */,
-    float /* shininess */) {
+    const RageColor& diffuse, const RageColor& specular,
+    float shininess) {
   m_MaterialDiffuse = diffuse;
   m_MaterialAmbient = ambient;
   m_MaterialEmissive = emissive;
+  m_MaterialSpecular = specular;
+  m_fMaterialShininess =
+      std::isfinite(shininess) ? std::clamp(shininess, 0.0f, 128.0f) : 0.0f;
 }
 
 void RageDisplay_Metal::SetLighting(bool enabled) {
@@ -1102,7 +1362,7 @@ void RageDisplay_Metal::SetLightOff(int index) {
 
 void RageDisplay_Metal::SetLightDirectional(
     int index, const RageColor& ambient, const RageColor& diffuse,
-    const RageColor& /* specular */, const RageVector3& dir) {
+    const RageColor& specular, const RageVector3& dir) {
   if (index < 0) {
     return;
   }
@@ -1113,6 +1373,7 @@ void RageDisplay_Metal::SetLightDirectional(
   light.enabled = true;
   light.ambient = ambient;
   light.diffuse = diffuse;
+  light.specular = specular;
   light.direction = dir;
 }
 
@@ -1121,7 +1382,7 @@ void RageDisplay_Metal::SetSphereEnvironmentMapping(
   if (tu < 0 || tu >= NUM_TextureUnit) {
     return;
   }
-  m_bSphereMapping = enabled;
+  m_SphereMapping[tu] = enabled;
 }
 
 void RageDisplay_Metal::SetCelShaded(int stage) {
@@ -1142,7 +1403,7 @@ RageDisplay_Metal::DrawBatch& RageDisplay_Metal::ActiveBatch(bool forceNew) {
         last.textureModes == m_TextureModes &&
         last.effectMode == m_EffectMode &&
         last.celStage == m_iCelShadedStage &&
-        last.sphereMapping == m_bSphereMapping &&
+        last.sphereMapping == m_SphereMapping &&
         last.zBias == m_fZBias &&
         TransformUniformsEqual(last.transform, currentTransform) &&
         last.zTestMode == m_ZTestMode &&
@@ -1166,7 +1427,7 @@ RageDisplay_Metal::DrawBatch& RageDisplay_Metal::ActiveBatch(bool forceNew) {
   batch.textureModes = m_TextureModes;
   batch.effectMode = m_EffectMode;
   batch.celStage = m_iCelShadedStage;
-  batch.sphereMapping = m_bSphereMapping;
+  batch.sphereMapping = m_SphereMapping;
   batch.zBias = m_fZBias;
   batch.zTestMode = m_ZTestMode;
   batch.cullMode = m_CullMode;
@@ -1229,9 +1490,15 @@ bool RageDisplay_Metal::ReserveDirectVertices(
     writer.active = true;
   }
 
-  if (writer.usedVertices + vertexCount > writer.capacityVertices) {
+  if (vertexCount >
+      std::numeric_limits<size_t>::max() - writer.usedVertices) {
+    writer.disabled = true;
+    return false;
+  }
+  const size_t requiredVertices = writer.usedVertices + vertexCount;
+  if (requiredVertices > writer.capacityVertices) {
     writer.overflowRequiredVertices = std::max(
-        writer.overflowRequiredVertices, writer.usedVertices + vertexCount);
+        writer.overflowRequiredVertices, requiredVertices);
     writer.disabled = true;
     return false;
   }
@@ -1340,23 +1607,34 @@ void RageDisplay_Metal::BuildMetalBatches(
         hasTexture2 = texture2 != nullptr;
       }
     }
-    const MacOSMetalSolidVertex* cpuVertices =
+    MacOSMetalDrawBatch metalBatch;
+    metalBatch.vertices =
         batch.vertices.empty() ? nullptr : batch.vertices.data();
-    const bool metalTextureFiltering = batch.textureFiltering[TextureUnit_1];
-    metalBatches->push_back(
-        {cpuVertices,
-         batch.vertexBuffer, batch.vertexBufferOffsetBytes,
-         batch.vertexCount > 0 ? batch.vertexCount : batch.vertices.size(),
-         texture, textureWidth,
-         texture2, texture2Width,
-         batch.textureModes[TextureUnit_2], hasTexture2,
-         batch.blendMode, batch.textureModes[TextureUnit_1], batch.effectMode,
-         batch.celStage,
-         batch.zTestMode,
-         batch.cullMode, batch.textureWrapping[TextureUnit_1],
-         metalTextureFiltering,
-         batch.zWrite, batch.alphaTest, batch.clearDepthBefore,
-         batch.transform});
+    metalBatch.vertexBuffer = batch.vertexBuffer;
+    metalBatch.vertexBufferOffsetBytes = batch.vertexBufferOffsetBytes;
+    metalBatch.vertexCount =
+        batch.vertexCount > 0 ? batch.vertexCount : batch.vertices.size();
+    metalBatch.texture = texture;
+    metalBatch.textureWidth = textureWidth;
+    metalBatch.texture2 = texture2;
+    metalBatch.texture2Width = texture2Width;
+    metalBatch.textureMode2 = batch.textureModes[TextureUnit_2];
+    metalBatch.hasTexture2 = hasTexture2;
+    metalBatch.blendMode = batch.blendMode;
+    metalBatch.textureMode = batch.textureModes[TextureUnit_1];
+    metalBatch.effectMode = batch.effectMode;
+    metalBatch.celStage = batch.celStage;
+    metalBatch.zTestMode = batch.zTestMode;
+    metalBatch.cullMode = batch.cullMode;
+    metalBatch.textureWrapping = batch.textureWrapping[TextureUnit_1];
+    metalBatch.textureFiltering = batch.textureFiltering[TextureUnit_1];
+    metalBatch.texture2Wrapping = batch.textureWrapping[TextureUnit_2];
+    metalBatch.texture2Filtering = batch.textureFiltering[TextureUnit_2];
+    metalBatch.zWrite = batch.zWrite;
+    metalBatch.alphaTest = batch.alphaTest;
+    metalBatch.clearDepthBefore = batch.clearDepthBefore;
+    metalBatch.transform = batch.transform;
+    metalBatches->push_back(metalBatch);
   }
 }
 
@@ -1667,13 +1945,46 @@ void RageDisplay_Metal::EndFrame() {
     m_Window->Update();
     const int nativePresentationReason =
         MacOSMetalPresenterConsumeNativePresentationChangeReason();
-    if (nativePresentationReason != 0 && m_Presenter && m_bReady) {
+    if (nativePresentationReason != 0 && m_Presenter && m_bReady &&
+        !m_bLayerReconfiguredForResolutionChange) {
       m_Presenter->ReconfigureAttachedLayer(
           m_Window->GetNativeWindowHandle(),
           MacOSNativePresentationReasonNameForMetal(nativePresentationReason));
     }
   }
+  ReleasePendingTextureDeletes();
   ProcessStatsOnFlip();
+}
+
+void RageDisplay_Metal::ResolutionChanged() {
+  if (m_Window == nullptr) {
+    return;
+  }
+
+  const ActualVideoModeParams previousParams = m_Params;
+  m_Params = m_Window->GetActualVideoModeParams();
+  RageDisplay::ResolutionChanged();
+
+  bool layerReconfigured = false;
+  if (m_Presenter != nullptr && m_bReady) {
+    layerReconfigured = m_Presenter->ReconfigureAttachedLayer(
+        m_Window->GetNativeWindowHandle(), "resolution_changed");
+    m_bLayerReconfiguredForResolutionChange = layerReconfigured;
+    if (!layerReconfigured) {
+      LOG->Warn(
+          "RageDisplay_Metal: layer reconfiguration failed after resize "
+          "%dx%d -> %dx%d.",
+          previousParams.width, previousParams.height, m_Params.width,
+          m_Params.height);
+    }
+  }
+  if (PerfDiagnosticsEnabled()) {
+    LOG->Trace(
+        "PERF_TRACE: metal_resolution_changed previous=%dx%d current=%dx%d "
+        "layer_reconfigured=%d",
+        previousParams.width, previousParams.height, m_Params.width,
+        m_Params.height, layerReconfigured ? 1 : 0);
+  }
 }
 
 void RageDisplay_Metal::DrawQuadsInternal(
@@ -1726,8 +2037,8 @@ void RageDisplay_Metal::DrawQuadStripInternal(
       directVertices[out++] = ToMetalSolidVertex(v[i + 0]);
       directVertices[out++] = ToMetalSolidVertex(v[i + 1]);
       directVertices[out++] = ToMetalSolidVertex(v[i + 2]);
-      directVertices[out++] = ToMetalSolidVertex(v[i + 1]);
       directVertices[out++] = ToMetalSolidVertex(v[i + 2]);
+      directVertices[out++] = ToMetalSolidVertex(v[i + 1]);
       directVertices[out++] = ToMetalSolidVertex(v[i + 3]);
     }
     directBatch->vertexCount -= outputVertexCount - out;
@@ -1745,7 +2056,7 @@ void RageDisplay_Metal::DrawQuadStripInternal(
       batch.vertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
   for (int i = 0; i + 3 < iNumVerts; i += 2) {
     AppendTriangle(&batch.vertices, v[i + 0], v[i + 1], v[i + 2]);
-    AppendTriangle(&batch.vertices, v[i + 1], v[i + 2], v[i + 3]);
+    AppendTriangle(&batch.vertices, v[i + 2], v[i + 1], v[i + 3]);
   }
 }
 
@@ -1875,10 +2186,8 @@ void RageDisplay_Metal::DrawCompiledGeometryInternal(
   const bool translucentModel = m_MaterialDiffuse.a < 0.999f;
   const CullMode previousCullMode = m_CullMode;
   const bool previousZWrite = m_bZWrite;
-  if (translucentModel || m_iCelShadedStage != 0) {
-    m_CullMode = CULL_NONE;
-  }
   if (translucentModel) {
+    m_CullMode = CULL_NONE;
     m_bZWrite = false;
   }
   metalGeometry->EmitTo(this, iMeshIndex, ToVertexColor(m_MaterialDiffuse));
@@ -1898,10 +2207,7 @@ RageSurface* RageDisplay_Metal::CreateScreenshot() {
                          static_cast<size_t>(height) * 4) {
       RageSurface* image = CreateSurface(
           width, height, 32,
-          PIXEL_FORMAT_DESC[RagePixelFormat_BGRA8].masks[0],
-          PIXEL_FORMAT_DESC[RagePixelFormat_BGRA8].masks[1],
-          PIXEL_FORMAT_DESC[RagePixelFormat_BGRA8].masks[2],
-          PIXEL_FORMAT_DESC[RagePixelFormat_BGRA8].masks[3]);
+          0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
       if (image != nullptr && image->pixels != nullptr) {
         const size_t srcPitch = static_cast<size_t>(width) * 4;
         if (image->pitch < 0 ||
@@ -2071,6 +2377,17 @@ std::string RageDisplay_Metal::TryVideoMode(
   const bool hadWorkingPresenter =
       m_bReady && previousParams.width > 0 && previousParams.height > 0;
   m_bReady = false;
+
+  // A presenter reinitialization invalidates direct frame slots.  Discard the
+  // unfinished frame before touching the window and finish any deferred
+  // texture deletions now that no CPU batch can still reference them.
+  ResetVertexWriter(&m_MainVertexWriter, true);
+  ResetVertexWriter(&m_RenderTargetVertexWriter, true);
+  ClearActiveBatches();
+  m_PendingMainDrawBatches.clear();
+  m_MetalDrawBatches.clear();
+  m_iCurrentRenderTargetHandle = 0;
+  ReleasePendingTextureDeletes();
 
   std::string err = m_Window->TryVideoMode(p, bNewDeviceOut);
   if (!err.empty()) {

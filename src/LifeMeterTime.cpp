@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <string>
 
 #include "Actor.h"
@@ -79,9 +80,28 @@ float SanitizeSeconds(float seconds, const char* context) {
   }
 
   LOG->Warn(
-      "SRC_AUDIT_FIX %s: corrected non-finite seconds %f to 0.",
-      context, seconds);
+      "SRC_AUDIT_FIX %s: corrected non-finite seconds %f to 0.", context,
+      seconds);
   return 0.0f;
+}
+
+float AddSecondsSaturated(float current, float delta, const char* context) {
+  current = SanitizeSeconds(current, context);
+  delta = SanitizeSeconds(delta, context);
+  const double sum = static_cast<double>(current) + delta;
+  if (sum > std::numeric_limits<float>::max()) {
+    LOG->Warn("SRC_AUDIT_FIX %s: saturated positive seconds sum.", context);
+    return std::numeric_limits<float>::max();
+  }
+  if (sum < -std::numeric_limits<float>::max()) {
+    LOG->Warn("SRC_AUDIT_FIX %s: saturated negative seconds sum.", context);
+    return -std::numeric_limits<float>::max();
+  }
+  return static_cast<float>(sum);
+}
+
+float SanitizeDimension(float value) {
+  return std::isfinite(value) && value > 0.0f ? value : 1.0f;
 }
 }  // namespace
 
@@ -91,22 +111,52 @@ LifeMeterTime::LifeMeterTime() {
   m_pStream = nullptr;
 }
 
-LifeMeterTime::~LifeMeterTime() { delete m_pStream; }
+LifeMeterTime::~LifeMeterTime() { ResetLoadedActors(); }
+
+void LifeMeterTime::ResetLoadedActors() {
+  if (m_sprBackground.IsLoaded()) {
+    RemoveChild(m_sprBackground);
+    m_sprBackground.Unload();
+  }
+  RemoveChild(&m_quadDangerGlow);
+  if (m_pStream != nullptr) {
+    RemoveChild(m_pStream);
+    RageUtil::SafeDelete(m_pStream);
+  }
+  if (m_sprFrame.IsLoaded()) {
+    RemoveChild(m_sprFrame);
+    m_sprFrame.Unload();
+  }
+}
 
 void LifeMeterTime::Load(
     const PlayerState* pPlayerState, PlayerStageStats* pPlayerStageStats) {
   LifeMeter::Load(pPlayerState, pPlayerStageStats);
+  ResetLoadedActors();
+  m_fLifeTotalGainedSeconds = 0.0f;
+  m_fLifeTotalLostSeconds = 0.0f;
+
+  if (pPlayerState == nullptr || pPlayerStageStats == nullptr ||
+      !IsValidPlayerNumber(pPlayerState->m_PlayerNumber) || THEME == nullptr ||
+      GAMESTATE == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: LifeMeterTime refused load without complete runtime "
+        "state.");
+    return;
+  }
 
   const std::string sType = "LifeMeterTime";
+  const float meterWidth = SanitizeDimension(METER_WIDTH);
+  const float meterHeight = SanitizeDimension(METER_HEIGHT);
 
   m_sprBackground.Load(THEME->GetPathG(sType, "background"));
   m_sprBackground->SetName("Background");
-  m_sprBackground->ZoomToWidth(METER_WIDTH);
-  m_sprBackground->ZoomToHeight(METER_HEIGHT);
+  m_sprBackground->ZoomToWidth(meterWidth);
+  m_sprBackground->ZoomToHeight(meterHeight);
   this->AddChild(m_sprBackground);
 
-  m_quadDangerGlow.ZoomToWidth(METER_WIDTH);
-  m_quadDangerGlow.ZoomToHeight(METER_HEIGHT);
+  m_quadDangerGlow.ZoomToWidth(meterWidth);
+  m_quadDangerGlow.ZoomToHeight(meterHeight);
   // hardcoded effects...
   m_quadDangerGlow.SetEffectDiffuseShift(
       1.0f, RageColor(1, 0, 0, 0.8f), RageColor(1, 0, 0, 0));
@@ -127,13 +177,15 @@ void LifeMeterTime::Load(
 }
 
 void LifeMeterTime::OnLoadSong() {
-  if (GetLifeSeconds() <= 0 && GAMESTATE->GetCourseSongIndex() > 0) {
-    return;
-  }
-  if (m_pPlayerState == nullptr) {
+  if (GAMESTATE == nullptr || STATSMAN == nullptr ||
+      m_pPlayerState == nullptr ||
+      !IsValidPlayerNumber(m_pPlayerState->m_PlayerNumber)) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-253: LifeMeterTime ignored OnLoadSong without "
-        "PlayerState.");
+        "complete runtime state.");
+    return;
+  }
+  if (GetLifeSeconds() <= 0 && GAMESTATE->GetCourseSongIndex() > 0) {
     return;
   }
 
@@ -185,10 +237,14 @@ void LifeMeterTime::OnLoadSong() {
   }
 
   fGainSeconds = SanitizeSeconds(fGainSeconds, "SRC-255 LifeMeterTime gain");
-  if (MIN_LIFE_TIME > fGainSeconds) {
-    fGainSeconds = MIN_LIFE_TIME;
+  const float minLifeTime =
+      std::isfinite((float)MIN_LIFE_TIME) ? (float)MIN_LIFE_TIME : 0.0f;
+  if (minLifeTime > fGainSeconds) {
+    fGainSeconds = minLifeTime;
   }
-  m_fLifeTotalGainedSeconds += fGainSeconds;
+  m_fLifeTotalGainedSeconds = AddSecondsSaturated(
+      m_fLifeTotalGainedSeconds, fGainSeconds,
+      "SRC-255 LifeMeterTime gained total");
   m_soundGainLife.Play(false);
   SendLifeChangedMessage(fOldLife, TapNoteScore_Invalid, HoldNoteScore_Invalid);
 }
@@ -243,7 +299,9 @@ void LifeMeterTime::ChangeLife(TapNoteScore tns) {
   }
 
   float fOldLife = m_fLifeTotalLostSeconds;
-  m_fLifeTotalLostSeconds -= fMeterChange;
+  m_fLifeTotalLostSeconds = AddSecondsSaturated(
+      m_fLifeTotalLostSeconds, -fMeterChange,
+      "SRC-255 LifeMeterTime tap total");
   SendLifeChangedMessage(fOldLife, tns, HoldNoteScore_Invalid);
 }
 
@@ -278,7 +336,9 @@ void LifeMeterTime::ChangeLife(HoldNoteScore hns, TapNoteScore tns) {
   }
 
   float fOldLife = m_fLifeTotalLostSeconds;
-  m_fLifeTotalLostSeconds -= fMeterChange;
+  m_fLifeTotalLostSeconds = AddSecondsSaturated(
+      m_fLifeTotalLostSeconds, -fMeterChange,
+      "SRC-255 LifeMeterTime hold total");
   SendLifeChangedMessage(fOldLife, tns, hns);
 }
 
@@ -291,7 +351,8 @@ void LifeMeterTime::ChangeLife(float delta) {
     return;
   }
   float old_life = m_fLifeTotalLostSeconds;
-  m_fLifeTotalLostSeconds -= delta;
+  m_fLifeTotalLostSeconds = AddSecondsSaturated(
+      m_fLifeTotalLostSeconds, -delta, "SRC-255 LifeMeterTime direct total");
   SendLifeChangedMessage(old_life, TapNoteScore_Invalid, HoldNoteScore_Invalid);
 }
 
@@ -313,7 +374,9 @@ void LifeMeterTime::HandleTapScoreNone() {
 
 void LifeMeterTime::SendLifeChangedMessage(
     float fOldLife, TapNoteScore tns, HoldNoteScore hns) {
-  if (m_pPlayerState == nullptr) {
+  if (m_pPlayerState == nullptr ||
+      !IsValidPlayerNumber(m_pPlayerState->m_PlayerNumber) ||
+      MESSAGEMAN == nullptr) {
     LOG->Trace(
         "SRC_AUDIT_FIX SRC-256: LifeMeterTime skipped LifeChanged broadcast "
         "without PlayerState.");
@@ -324,13 +387,21 @@ void LifeMeterTime::SendLifeChangedMessage(
   msg.SetParam("TapNoteScore", LuaReference::Create(tns));
   msg.SetParam("HoldNoteScore", LuaReference::Create(hns));
   msg.SetParam("OldLife", fOldLife);
-  msg.SetParam("Difference", fOldLife - m_fLifeTotalLostSeconds);
+  const double difference =
+      static_cast<double>(SanitizeSeconds(fOldLife, "LifeMeterTime old life")) -
+      SanitizeSeconds(m_fLifeTotalLostSeconds, "LifeMeterTime current life");
+  const float finiteDifference = static_cast<float>(std::max(
+      -static_cast<double>(std::numeric_limits<float>::max()),
+      std::min(
+          static_cast<double>(std::numeric_limits<float>::max()), difference)));
+  msg.SetParam("Difference", finiteDifference);
   msg.SetParam("LifeMeter", LuaReference::CreateFromPush(*this));
   MESSAGEMAN->Broadcast(msg);
 }
 
 bool LifeMeterTime::IsInDanger() const {
-  if (m_pStream == nullptr) {
+  if (m_pStream == nullptr || !DANGER_THRESHOLD.IsLoaded() ||
+      !std::isfinite((float)DANGER_THRESHOLD)) {
     return false;
   }
   return m_pStream->GetPercent() < DANGER_THRESHOLD;
@@ -346,6 +417,12 @@ void LifeMeterTime::Update(float fDeltaTime) {
     LOG->Trace(
         "SRC_AUDIT_FIX SRC-256: LifeMeterTime skipped update without complete "
         "state.");
+    return;
+  }
+  if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: LifeMeterTime ignored invalid update delta %f.",
+        fDeltaTime);
     return;
   }
   // update current stage stats so ScoreDisplayLifeTime can show the right thing
@@ -378,13 +455,24 @@ float LifeMeterTime::GetLife() const {
 }
 
 float LifeMeterTime::GetLifeSeconds() const {
-  const float gained =
-      SanitizeSeconds(m_fLifeTotalGainedSeconds, "SRC-255 LifeMeterTime gained");
+  const float gained = SanitizeSeconds(
+      m_fLifeTotalGainedSeconds, "SRC-255 LifeMeterTime gained");
   const float lost =
       SanitizeSeconds(m_fLifeTotalLostSeconds, "SRC-255 LifeMeterTime lost");
-  const float steps = SanitizeSeconds(
-      STATSMAN->m_CurStageStats.m_fStepsSeconds, "SRC-255 LifeMeterTime steps");
-  return gained - (lost + steps);
+  const float steps = STATSMAN == nullptr
+                          ? 0.0f
+                          : SanitizeSeconds(
+                                STATSMAN->m_CurStageStats.m_fStepsSeconds,
+                                "SRC-255 LifeMeterTime steps");
+  const double remaining =
+      static_cast<double>(gained) - lost - static_cast<double>(steps);
+  if (remaining > std::numeric_limits<float>::max()) {
+    return std::numeric_limits<float>::max();
+  }
+  if (remaining < -std::numeric_limits<float>::max()) {
+    return -std::numeric_limits<float>::max();
+  }
+  return static_cast<float>(remaining);
 }
 
 /*

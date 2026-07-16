@@ -101,6 +101,13 @@ float StageLayout::getXDifference(int leftIndex, int rightIndex) const {
   float dy = columns[rightIndex].y - columns[leftIndex].y;
 
   float distance = sqrt(dx * dx + dy * dy);
+  if (!std::isfinite(distance) || distance <= 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: getXDifference received coincident/non-finite stage "
+        "points for columns %d/%d.",
+        leftIndex, rightIndex);
+    return 0;
+  }
   dx /= distance;
 
   bool negative = dx <= 0;
@@ -126,6 +133,13 @@ float StageLayout::getYDifference(int leftIndex, int rightIndex) const {
   float dy = columns[rightIndex].y - columns[leftIndex].y;
 
   float distance = sqrt(dx * dx + dy * dy);
+  if (!std::isfinite(distance) || distance <= 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: getYDifference received coincident/non-finite stage "
+        "points for columns %d/%d.",
+        leftIndex, rightIndex);
+    return 0;
+  }
   dy /= distance;
 
   bool negative = dy <= 0;

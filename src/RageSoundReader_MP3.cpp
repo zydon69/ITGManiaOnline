@@ -835,6 +835,7 @@ int RageSoundReader_MP3::Read(float* buf, int iFrames) {
     return ERROR;
   }
   int iFramesWritten = 0;
+  unsigned emptyDecodedFrames = 0;
 
   while (iFrames > 0) {
     if (mad->outleft > 0) {
@@ -873,6 +874,18 @@ int RageSoundReader_MP3::Read(float* buf, int iFrames) {
 
     if (!synth_output()) {
       return ERROR;
+    }
+    if (mad->outleft == 0) {
+      if (++emptyDecodedFrames >= 1024) {
+        const std::string error =
+            "SRC_AUDIT_FIX SRC-3172: MP3 decoder produced too many empty "
+            "frames";
+        SetError(error);
+        TraceReviewSrcError(error);
+        return ERROR;
+      }
+    } else {
+      emptyDecodedFrames = 0;
     }
   }
 
@@ -1159,7 +1172,6 @@ int RageSoundReader_MP3::GetLengthInternal(bool fast) {
     return -1;
   }
 
-  MADLIB_rewind();
   for (;;) {
     int ret = do_mad_frame_decode(true);
     if (ret == -1) {

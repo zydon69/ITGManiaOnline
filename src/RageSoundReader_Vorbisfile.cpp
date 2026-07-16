@@ -61,7 +61,7 @@ static int OggRageFile_seek_func(
     return -1;
   }
   RageFileBasic* f = (RageFileBasic*)datasource;
-  return f->Seek((int)offset, whence);
+  return f->Seek((int)offset, whence) < 0 ? -1 : 0;
 }
 
 static int OggRageFile_close_func(void* datasource) { return 0; }
@@ -269,6 +269,8 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
   }
   const int channel_count = static_cast<int>(channels);
   int frames_read = 0;
+  unsigned consecutiveHoles = 0;
+  static constexpr unsigned kMaxConsecutiveHoles = 1024;
 
   while (iFrames && !eof) {
     if (channel_count >
@@ -356,6 +358,10 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
       }
 
       if (ret == OV_HOLE) {
+        if (++consecutiveHoles > kMaxConsecutiveHoles) {
+          SetError("Vorbis read aborted after too many consecutive holes");
+          return ERROR;
+        }
         continue;
       }
       if (ret == OV_EBADLINK) {
@@ -371,6 +377,7 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
         eof = true;
         continue;
       }
+      consecutiveHoles = 0;
 
 #if defined(INTEGER_VORBIS)
       if (ret > 0) {
@@ -386,11 +393,19 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
       }
 #else
       if (ret > 0) {
+        if (pcm == nullptr) {
+          SetError("Vorbis decoder returned no PCM planes");
+          return ERROR;
+        }
         iFramesRead = ret;
 
         int iNumChannels = channel_count;
         for (int iChannel = 0; iChannel < iNumChannels; ++iChannel) {
           const float* pChannelIn = pcm[iChannel];
+          if (pChannelIn == nullptr) {
+            SetError("Vorbis decoder returned a null PCM channel");
+            return ERROR;
+          }
           float* pChannelOut = &buf[iChannel];
           for (int i = 0; i < iFramesRead; ++i) {
             *pChannelOut = *pChannelIn;

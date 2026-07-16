@@ -50,6 +50,16 @@ bool MemoryCardDriverThreaded_Folder::FolderExists(std::string path) {
 }
 
 bool MemoryCardDriverThreaded_Folder::TestWrite(UsbStorageDevice* pDevice) {
+  if (pDevice == nullptr || pDevice->sOsMountDir.empty() || FILEMAN == nullptr) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "MemoryCardDriverThreaded_Folder::TestWrite: invalid device/context");
+    }
+    if (pDevice != nullptr) {
+      pDevice->SetError("TestFailed");
+    }
+    return false;
+  }
   const std::string test_file = pDevice->sOsMountDir + "/.itgmania_write_test";
   RageFile f;
   if (!f.Open(test_file, RageFile::WRITE)) {

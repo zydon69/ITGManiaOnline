@@ -230,7 +230,18 @@ static LocalizedString ENTER_PROFILE_NAME(
     "ScreenOptionsManageProfiles", "Enter a name for the profile.");
 void ScreenOptionsManageProfiles::HandleScreenMessage(const ScreenMessage SM) {
   if (SM == SM_GoToNextScreen) {
-    int iCurRow = m_iCurrentRow[GAMESTATE->GetMasterPlayerNumber()];
+    const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+    if (master < PLAYER_1 || master >= NUM_PLAYERS) {
+      LOG->Warn(
+          "ScreenOptionsManageProfiles: invalid master player on exit");
+      return;
+    }
+    int iCurRow = m_iCurrentRow[master];
+    if (iCurRow < 0 || iCurRow >= static_cast<int>(m_pRows.size()) ||
+        m_pRows[iCurRow] == nullptr) {
+      LOG->Warn("ScreenOptionsManageProfiles: invalid current row on exit");
+      return;
+    }
     OptionRow& row = *m_pRows[iCurRow];
     if (row.GetRowType() == OptionRow::RowType_Exit) {
       this->HandleScreenMessage(SM_GoToPrevScreen);
@@ -238,12 +249,19 @@ void ScreenOptionsManageProfiles::HandleScreenMessage(const ScreenMessage SM) {
     }
   } else if (SM == SM_BackFromEnterNameForNew) {
     if (!ScreenTextEntry::s_bCancelledLast) {
-      ASSERT(
-          ScreenTextEntry::s_sLastAnswer !=
-          "");  // validate should have assured this
+      if (ScreenTextEntry::s_sLastAnswer.empty()) {
+        LOG->Warn("ScreenOptionsManageProfiles: empty profile name returned");
+        SCREENMAN->PlayInvalidSound();
+        return;
+      }
 
       std::string sNewName = ScreenTextEntry::s_sLastAnswer;
-      ASSERT(GAMESTATE->m_sEditLocalProfileID.Get().empty());
+      if (!GAMESTATE->m_sEditLocalProfileID.Get().empty()) {
+        LOG->Warn(
+            "ScreenOptionsManageProfiles: clearing stale edited profile ID "
+            "before creation");
+        GAMESTATE->m_sEditLocalProfileID.Set("");
+      }
 
       int iNumProfiles = PROFILEMAN->GetNumLocalProfiles();
 
@@ -285,13 +303,18 @@ void ScreenOptionsManageProfiles::HandleScreenMessage(const ScreenMessage SM) {
     }
   } else if (SM == SM_BackFromRename) {
     if (!ScreenTextEntry::s_bCancelledLast) {
-      ASSERT(
-          ScreenTextEntry::s_sLastAnswer !=
-          "");  // validate should have assured this
+      if (ScreenTextEntry::s_sLastAnswer.empty()) {
+        LOG->Warn("ScreenOptionsManageProfiles: empty rename returned");
+        SCREENMAN->PlayInvalidSound();
+        return;
+      }
 
       std::string sNewName = ScreenTextEntry::s_sLastAnswer;
-      PROFILEMAN->RenameLocalProfile(
-          GAMESTATE->m_sEditLocalProfileID, sNewName);
+      if (!PROFILEMAN->RenameLocalProfile(
+              GAMESTATE->m_sEditLocalProfileID, sNewName)) {
+        SCREENMAN->PlayInvalidSound();
+        return;
+      }
       if (PREFSMAN->m_ProfileSortOrder == ProfileSortOrder_Alphabetical) {
         PROFILEMAN->MoveProfileSorted(
             GetLocalProfileIndexWithFocus(),
@@ -328,13 +351,23 @@ void ScreenOptionsManageProfiles::HandleScreenMessage(const ScreenMessage SM) {
       rage_clamp(iIndex, 0, int(m_vsLocalProfileID.size()) - 1);
       GAMESTATE->m_sEditLocalProfileID.Set(m_vsLocalProfileID[iIndex]);
 
-      PROFILEMAN->DeleteLocalProfile(GetLocalProfileIDWithFocus());
+      if (!PROFILEMAN->DeleteLocalProfile(GetLocalProfileIDWithFocus())) {
+        SCREENMAN->PlayInvalidSound();
+        return;
+      }
 
       SCREENMAN->SetNewScreen(this->m_sName);  // reload
     }
   } else if (SM == SM_BackFromClearConfirm) {
     if (ScreenPrompt::s_LastAnswer == ANSWER_YES) {
-      GAMESTATE->GetEditLocalProfile()->InitAll();
+      Profile* profile = GAMESTATE->GetEditLocalProfile();
+      if (profile == nullptr) {
+        LOG->Warn(
+            "ScreenOptionsManageProfiles: clear target profile is missing");
+        SCREENMAN->PlayInvalidSound();
+        return;
+      }
+      profile->InitAll();
 
       SCREENMAN->SetNewScreen(this->m_sName);  // reload
     }

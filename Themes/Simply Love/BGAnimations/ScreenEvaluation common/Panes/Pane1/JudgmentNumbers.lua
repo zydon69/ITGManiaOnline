@@ -6,15 +6,16 @@ local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(play
 local TapNoteScores = {
 	Types = { 'W1', 'W2', 'W3', 'W4', 'W5', 'Miss' },
 	-- x values for P1 and P2
-	x = { P1=64, P2=94 }
+	x = { P1=64, P2=-128 }
 }
 
 local RadarCategories = {
 	Types = { 'Hands', 'Holds', 'Mines', 'Rolls' },
 	-- x values for P1 and P2
-	x = { P1=-180, P2=218 }
+	x = { P1=-180, P2=-3 }
 }
 
+local SlashPossibleX = { P1=-114, P2=61 }
 
 local t = Def.ActorFrame{
 	InitCommand=function(self)self:zoom(0.8):xy(90,_screen.cy-24) end,
@@ -83,7 +84,7 @@ for index, RCType in ipairs(RadarCategories.Types) do
     t[#t+1] = LoadFont("Wendy/_ScreenEvaluation numbers")..{
         InitCommand=function(self) self:zoom(0.5):horizalign(right) end,
         BeginCommand=function(self)
-            self:x( ((controller == PLAYER_1) and -114) or 286 )
+            self:x( SlashPossibleX[ToEnumShortString(controller)] )
             self:y((index-1)*35 + 53)
             self:settext(("/%03d"):format(possible))
             local leadingZeroAttr = { Length=4-tonumber(tostring(possible):len()), Diffuse=color("#5A6166") }

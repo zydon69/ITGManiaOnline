@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -130,6 +132,8 @@ BitmapText& BitmapText::operator=(const BitmapText& cpy) {
   Actor::operator=(cpy);
 
   m_bUppercase = cpy.m_bUppercase;
+  m_sSourceText = cpy.m_sSourceText;
+  m_sAlternateText = cpy.m_sAlternateText;
   m_sText = cpy.m_sText;
   m_wTextLines = cpy.m_wTextLines;
   m_iLineWidths = cpy.m_iLineWidths;
@@ -143,8 +147,6 @@ BitmapText& BitmapText::operator=(const BitmapText& cpy) {
   m_mult_attrs_with_diffuse = cpy.m_mult_attrs_with_diffuse;
   m_iVertSpacing = cpy.m_iVertSpacing;
   m_MaxDimensionUsesZoom = cpy.m_MaxDimensionUsesZoom;
-  m_aVertices = cpy.m_aVertices;
-  m_vpFontPageTextures = cpy.m_vpFontPageTextures;
   m_mAttributes = cpy.m_mAttributes;
   m_bHasGlowAttribute = cpy.m_bHasGlowAttribute;
   BMT_Tweens = cpy.BMT_Tweens;
@@ -159,6 +161,13 @@ BitmapText& BitmapText::operator=(const BitmapText& cpy) {
     m_pFont = FONT->CopyFont(cpy.m_pFont);
   } else {
     m_pFont = nullptr;
+  }
+
+  m_aVertices.clear();
+  m_vpFontPageTextures.clear();
+  if (m_pFont != nullptr) {
+    BuildChars();
+    UpdateBaseZoom();
   }
 
   return *this;
@@ -339,6 +348,7 @@ void BitmapText::BuildChars() {
 
   // calculate line lengths and widths
   m_size.x = 0;
+  m_size.y = 0;
 
   m_iLineWidths.clear();
   for (unsigned l = 0; l < m_wTextLines.size(); l++)  // for each line
@@ -389,6 +399,14 @@ void BitmapText::BuildChars() {
     for (unsigned j = 0; j < sLine.size(); ++j) {
       RageSpriteVertex v[4];
       const glyph& g = m_pFont->GetGlyph(sLine[j]);
+      if (g.m_pPage == nullptr || g.GetFontPageTextures() == nullptr) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-3116: BitmapText skipped glyph U+%04X because "
+            "its font page is missing.",
+            static_cast<unsigned>(sLine[j]));
+        iX += m_pFont->IsRightToLeft() ? -g.m_iHadvance : g.m_iHadvance;
+        continue;
+      }
 
       // Advance the cursor early for RTL(?)
       if (m_pFont->IsRightToLeft()) {
@@ -428,7 +446,9 @@ void BitmapText::BuildChars() {
   }
 
   if (m_bUsingDistortion) {
-    int iSeed = RageTimer::GetTimeSinceStartSeconds() * 500000;
+    const uint32_t iSeed = static_cast<uint32_t>(
+        std::fmod(RageTimer::GetTimeSinceStartSeconds() * 500000.0,
+                  static_cast<double>(std::numeric_limits<uint32_t>::max())));
     RandomGen rnd(iSeed);
     for (unsigned int i = 0; i < m_aVertices.size(); i += 4) {
       float w = m_aVertices[i + 2].p.x - m_aVertices[i].p.x;
@@ -455,7 +475,14 @@ void BitmapText::DrawChars(bool bUseStrokeTexture) {
     return;
   }
 
-  const int iNumGlyphs = m_vpFontPageTextures.size();
+  if (m_vpFontPageTextures.size() >
+      static_cast<size_t>(std::numeric_limits<int>::max())) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3116: BitmapText refused to draw %zu glyphs.",
+        m_vpFontPageTextures.size());
+    return;
+  }
+  const int iNumGlyphs = static_cast<int>(m_vpFontPageTextures.size());
   int iStartGlyph = std::lrint(
       SCALE(m_pTempState->crop.left, 0.f, 1.f, 0, (float)iNumGlyphs));
   int iEndGlyph = std::lrint(
@@ -605,9 +632,18 @@ void BitmapText::SetText(
     MakeUpper(sNewText);
   }
 
+  if (iWrapWidthPixels < -1) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3117: BitmapText clamped wrap width %d to -1.",
+        iWrapWidthPixels);
+    iWrapWidthPixels = -1;
+  }
   if (iWrapWidthPixels == -1) {  // wrap not specified
     iWrapWidthPixels = m_iWrapWidthPixels;
   }
+
+  m_sSourceText = _sText;
+  m_sAlternateText = _sAlternateText;
 
   if (m_sText == sNewText && iWrapWidthPixels == m_iWrapWidthPixels) {
     return;
@@ -699,7 +735,7 @@ void BitmapText::SetUppercase(bool b) {
     return;
   }
   m_bUppercase = b;
-  SetText(m_sText);
+  SetText(m_sSourceText, m_sAlternateText, m_iWrapWidthPixels);
 }
 
 void BitmapText::SetDistortion(float f) {
@@ -743,6 +779,7 @@ void BitmapText::UpdateBaseZoom() {
   if (m_fMaxWidth == 0) {
     SetBaseZoomX(1);
   } else {
+    SetBaseZoomX(1.0f);
     float width = GetUnzoomedWidth();
     if (m_MaxDimensionUsesZoom) {
       const float zoomX = GetZoomX();
@@ -759,6 +796,7 @@ void BitmapText::UpdateBaseZoom() {
   if (m_fMaxHeight == 0) {
     SetBaseZoomY(1);
   } else {
+    SetBaseZoomY(1.0f);
     float height = GetUnzoomedHeight();
     if (m_MaxDimensionUsesZoom) {
       const float zoomY = GetZoomY();
@@ -863,8 +901,10 @@ void BitmapText::DrawPrimitives() noexcept {
     // render the diffuse pass
     if (m_bRainbowScroll) {
       EnsureRainbowColorsAvailable();
-      int color_index =
-          int(RageTimer::GetTimeSinceStart() / 0.200) % RAINBOW_COLORS.size();
+      const double rainbowPhase = std::fmod(
+          RageTimer::GetTimeSinceStart() / 0.200,
+          static_cast<double>(RAINBOW_COLORS.size()));
+      size_t color_index = static_cast<size_t>(std::max(0.0, rainbowPhase));
       for (size_t i = 0; i < m_aVertices.size(); i += 4) {
         const RageColor color = RAINBOW_COLORS[color_index];
         for (size_t j = i; j < i + 4; j++) {
@@ -1010,6 +1050,12 @@ void BitmapText::SetWrapWidthPixels(int iWrapWidthPixels) {
         "load.");
     return;
   }
+  if (iWrapWidthPixels < -1) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3117: BitmapText clamped wrap width %d to -1.",
+        iWrapWidthPixels);
+    iWrapWidthPixels = -1;
+  }
   if (m_iWrapWidthPixels == iWrapWidthPixels) {
     return;
   }
@@ -1108,8 +1154,11 @@ void BitmapText::AddAttribute(size_t iPos, const Attribute& attr) {
   if (iterLastBeforeEnd != iterFirstAfterStart) {
     // Go back one, so that we are at the last overlapping attribute
     --iterLastBeforeEnd;
+    const int priorLength = iterLastBeforeEnd->second.length;
     const bool lastAttrOverlappingCompletely =
-        iterLastBeforeEnd->first + iterLastBeforeEnd->second.length <= iEndPos;
+        priorLength >= 0 &&
+        static_cast<size_t>(priorLength) <=
+            iEndPos - iterLastBeforeEnd->first;
 
     auto iterEraseEnd = iterLastBeforeEnd;
     // If it's overlapping completely, erase it as well
@@ -1122,7 +1171,11 @@ void BitmapText::AddAttribute(size_t iPos, const Attribute& attr) {
     if (!lastAttrOverlappingCompletely) {
       // Fixup the length accordingly
       Attribute lastAttr = iterLastBeforeEnd->second;
-      lastAttr.length -= iEndPos - iterLastBeforeEnd->first;
+      if (lastAttr.length >= 0) {
+        const size_t consumed = iEndPos - iterLastBeforeEnd->first;
+        lastAttr.length -= static_cast<int>(std::min(
+            consumed, static_cast<size_t>(lastAttr.length)));
+      }
 
       // Erase it and insert just after the new attribute
       m_mAttributes.erase(iterLastBeforeEnd);
@@ -1149,9 +1202,13 @@ void BitmapText::Attribute::FromStack(lua_State* L, int iPos) {
 
   // Get the length.
   lua_getfield(L, iTab, "Length");
-  length = lua_tointeger(L, -1);
-  if (length < -1) {
+  const lua_Integer luaLength = lua_tointeger(L, -1);
+  if (luaLength < -1) {
     length = -1;
+  } else if (luaLength > std::numeric_limits<int>::max()) {
+    length = std::numeric_limits<int>::max();
+  } else {
+    length = static_cast<int>(luaLength);
   }
   lua_settop(L, iTab);
 

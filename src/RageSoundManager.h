@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <string>
 
 class RageSound;
@@ -46,9 +48,12 @@ class RageSoundManager {
       const std::string& sPath, RageSoundReader_Preload* pSound);
 
  private:
+  std::shared_ptr<RageSoundDriver> GetDriver() const;
+
   std::map<std::string, RageSoundReader_Preload*> m_mapPreloadedSounds;
 
-  RageSoundDriver* m_pDriver;
+  mutable std::mutex m_DriverMutex;
+  std::shared_ptr<RageSoundDriver> m_pDriver;
 
   /* Prefs: */
   float m_fVolumeOfNonCriticalSounds;

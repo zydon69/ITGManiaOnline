@@ -2,8 +2,8 @@
 #define MODEL_MANAGER_H
 
 #include <map>
-#include <utility>
 #include <string>
+#include <utility>
 
 #include "RageModelGeometry.h"
 
@@ -11,9 +11,11 @@ struct ModelManagerPrefs {
   bool m_bDelayedUnload;
 
   ModelManagerPrefs() { m_bDelayedUnload = false; }
-  ModelManagerPrefs(bool bDelayedUnload) { m_bDelayedUnload = bDelayedUnload; }
+  explicit ModelManagerPrefs(bool bDelayedUnload) {
+    m_bDelayedUnload = bDelayedUnload;
+  }
 
-  bool operator!=(const ModelManagerPrefs& rhs) {
+  bool operator!=(const ModelManagerPrefs& rhs) const {
     return m_bDelayedUnload != rhs.m_bDelayedUnload;
   }
 };
@@ -36,7 +38,7 @@ class ModelManager {
    * @param prefs the new preferences to set up.
    * @return true if the display needs to be reset, false otherwise. */
   bool SetPrefs(const ModelManagerPrefs& prefs);
-  const ModelManagerPrefs& GetPrefs() { return m_Prefs; }
+  const ModelManagerPrefs& GetPrefs() const { return m_Prefs; }
 
  protected:
   typedef std::pair<std::string, bool> GeometryCacheKey;

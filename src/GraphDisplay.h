@@ -17,14 +17,16 @@ class GraphBody;
 class GraphDisplay : public ActorFrame {
  public:
   GraphDisplay();
-  ~GraphDisplay();
-  virtual GraphDisplay* Copy() const;
+  GraphDisplay(const GraphDisplay& cpy);
+  GraphDisplay& operator=(const GraphDisplay&) = delete;
+  ~GraphDisplay() override;
+  GraphDisplay* Copy() const override;
 
   void Load(std::string sMetricsGroup);
   void Set(const StageStats& ss, const PlayerStageStats& s);
 
   // Lua
-  virtual void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
  private:
   void ClearGraphActors();

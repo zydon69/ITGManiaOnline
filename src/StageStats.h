@@ -9,6 +9,8 @@
 
 class Song;
 class Style;
+class Course;
+class Trail;
 struct lua_State;
 
 /**
@@ -43,6 +45,9 @@ class StageStats {
   PlayMode m_playMode;
   std::vector<Song*> m_vpPlayedSongs;
   std::vector<Song*> m_vpPossibleSongs;
+  // Non-owning gameplay snapshots, parallel to the song/steps pointers.
+  Course* m_pPlayedCourse;
+  Trail* m_pPlayedTrails[NUM_PLAYERS];
 
   /** @brief Was an extra stage earned this goaround? */
   EarnedExtraStage m_EarnedExtraStage;

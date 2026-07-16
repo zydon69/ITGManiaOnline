@@ -480,9 +480,9 @@ class Actor : public MessageSubscriber {
   void SetRotationY(float rot) { DestTweenState().rotation.y = FiniteOr(rot, 0.0f); }
   void SetRotationZ(float rot) { DestTweenState().rotation.z = FiniteOr(rot, 0.0f); }
   // added in StepNXA, now available in sm-ssc:
-  void AddRotationX(float rot) { DestTweenState().rotation.x += FiniteOr(rot, 0.0f); };
-  void AddRotationY(float rot) { DestTweenState().rotation.y += FiniteOr(rot, 0.0f); };
-  void AddRotationZ(float rot) { DestTweenState().rotation.z += FiniteOr(rot, 0.0f); };
+  void AddRotationX(float rot) { SetRotationX(GetRotationX() + rot); }
+  void AddRotationY(float rot) { SetRotationY(GetRotationY() + rot); }
+  void AddRotationZ(float rot) { SetRotationZ(GetRotationZ() + rot); }
   // and these were normally in SM:
   void AddRotationH(float rot);
   void AddRotationP(float rot);

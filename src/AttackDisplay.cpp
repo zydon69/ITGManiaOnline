@@ -121,6 +121,7 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
         "SRC_AUDIT_FIX SRC-1236: AttackDisplay::Init missing gameplay "
         "context.");
     HideAttack();
+    m_pPlayerState = nullptr;
     return;
   }
 
@@ -130,6 +131,7 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
     WarnAttackDisplay(
         "SRC_AUDIT_FIX SRC-1236: AttackDisplay::Init invalid player %i.", pn);
     HideAttack();
+    m_pPlayerState = nullptr;
     return;
   }
   m_sprAttack.SetName(ssprintf("TextP%d", pn + 1));
@@ -153,6 +155,7 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
           "SRC_AUDIT_FIX SRC-1236: AttackDisplay missing character for player "
           "%i.",
           pn);
+      m_pPlayerState = nullptr;
       return;
     }
     const std::string* asAttacks = ch->m_sAttacks[al];
@@ -206,6 +209,7 @@ void AttackDisplay::Update(float fDelta) {
   ActorFrame::Update(fDelta);
 
   if (GAMESTATE == nullptr || m_pPlayerState == nullptr ||
+      !IsValidAttackDisplayPlayer(m_pPlayerState->m_PlayerNumber) ||
       (GAMESTATE->m_PlayMode != PLAY_MODE_BATTLE &&
        GAMESTATE->m_PlayMode != PLAY_MODE_RAVE)) {
     return;

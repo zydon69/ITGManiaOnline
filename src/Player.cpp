@@ -4,6 +4,8 @@
 #include <climits>
 #include <cmath>
 #include <cstddef>
+#include <memory>
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -73,23 +75,11 @@ void TimingWindowSecondsInit(
  * taking too much memory.
  */
 class JudgedRows {
-  std::vector<bool> m_vRows;
+  std::set<int> m_JudgedRows;
   int m_iStart;
-  int m_iOffset;
-
-  void Resize(size_t iMin) {
-    size_t iNewSize = std::max(2 * m_vRows.size(), iMin);
-    std::vector<bool> vNewRows(m_vRows.begin() + m_iOffset, m_vRows.end());
-    vNewRows.reserve(iNewSize);
-    vNewRows.insert(
-        vNewRows.end(), m_vRows.begin(), m_vRows.begin() + m_iOffset);
-    vNewRows.resize(iNewSize, false);
-    m_vRows.swap(vNewRows);
-    m_iOffset = 0;
-  }
 
  public:
-  JudgedRows() : m_iStart(0), m_iOffset(0) { Resize(32); }
+  JudgedRows() : m_iStart(0) {}
   // Returns true if the row has already been judged.
   bool JudgeRow(int iRow) {
     if (iRow < 0 || iRow > MAX_NOTE_ROW) {
@@ -99,25 +89,11 @@ class JudgedRows {
     if (iRow < m_iStart) {
       return true;
     }
-    if (iRow >= m_iStart + int(m_vRows.size())) {
-      Resize(iRow + 1 - m_iStart);
-    }
-    const int iIndex = (iRow - m_iStart + m_iOffset) % m_vRows.size();
-    const bool ret = m_vRows[iIndex];
-    m_vRows[iIndex] = true;
-    while (m_vRows[m_iOffset]) {
-      m_vRows[m_iOffset] = false;
-      ++m_iStart;
-      if (++m_iOffset >= int(m_vRows.size())) {
-        m_iOffset -= m_vRows.size();
-      }
-    }
-    return ret;
+    return !m_JudgedRows.insert(iRow).second;
   }
   void Reset(int iStart) {
-    m_iStart = iStart;
-    m_iOffset = 0;
-    m_vRows.assign(m_vRows.size(), false);
+    m_iStart = std::clamp(iStart, 0, MAX_NOTE_ROW);
+    m_JudgedRows.clear();
   }
 };
 
@@ -137,6 +113,26 @@ static const float PlayerReadBpmFallback = 200.0f;
 
 static bool IsValidPlayerNumberForPlayer(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+static void AddPlayerCaloriesSaturated(float& total, float calories) {
+  if (!std::isfinite(total) || total < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Reset invalid accumulated calorie value %f.", total);
+    total = 0.0f;
+  }
+  if (!std::isfinite(calories) || calories < 0.0f) {
+    LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid calorie increment %f.",
+              calories);
+    return;
+  }
+  const float maximum = std::numeric_limits<float>::max();
+  if (calories > maximum - total) {
+    LOG->Warn("SRC_AUDIT_FIX: Saturating accumulated calories.");
+    total = maximum;
+    return;
+  }
+  total += calories;
 }
 
 static bool IsValidTapNoteTypeForPlayer(TapNoteType type) {
@@ -1016,6 +1012,11 @@ static void GenerateCacheDataStructure(
 
 void Player::Load() {
   m_bLoaded = false;
+  RageUtil::SafeDelete(m_pIterNeedsTapJudging);
+  RageUtil::SafeDelete(m_pIterNeedsHoldJudging);
+  RageUtil::SafeDelete(m_pIterUncrossedRows);
+  RageUtil::SafeDelete(m_pIterUnjudgedRows);
+  RageUtil::SafeDelete(m_pIterUnjudgedMineRows);
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr) {
     LOG->Warn("SRC_AUDIT_FIX: Player::Load called without gameplay state.");
     return;
@@ -1037,8 +1038,6 @@ void Player::Load() {
     LOG->Warn("SRC_AUDIT_FIX: Player::Load missing timing data; load aborted.");
     return;
   }
-
-  m_bLoaded = true;
 
   // Figured this is probably a little expensive so let's cache it
   m_bTickHolds = TICK_HOLDS;
@@ -1190,25 +1189,22 @@ void Player::Load() {
         m_pPlayerStageStats->m_iCurCombo, m_pPlayerStageStats->m_iCurMissCombo);
   }
 
-  RageUtil::SafeDelete(m_pIterNeedsTapJudging);
-  m_pIterNeedsTapJudging = new NoteData::all_tracks_iterator(
-      m_NoteData.GetTapNoteRangeAllTracks(iNoteRow, MAX_NOTE_ROW));
+  auto makeIterator = [&]() {
+    return std::make_unique<NoteData::all_tracks_iterator>(
+        m_NoteData.GetTapNoteRangeAllTracks(iNoteRow, MAX_NOTE_ROW));
+  };
+  auto tapJudging = makeIterator();
+  auto holdJudging = makeIterator();
+  auto uncrossedRows = makeIterator();
+  auto unjudgedRows = makeIterator();
+  auto unjudgedMineRows = makeIterator();
 
-  RageUtil::SafeDelete(m_pIterNeedsHoldJudging);
-  m_pIterNeedsHoldJudging = new NoteData::all_tracks_iterator(
-      m_NoteData.GetTapNoteRangeAllTracks(iNoteRow, MAX_NOTE_ROW));
-
-  RageUtil::SafeDelete(m_pIterUncrossedRows);
-  m_pIterUncrossedRows = new NoteData::all_tracks_iterator(
-      m_NoteData.GetTapNoteRangeAllTracks(iNoteRow, MAX_NOTE_ROW));
-
-  RageUtil::SafeDelete(m_pIterUnjudgedRows);
-  m_pIterUnjudgedRows = new NoteData::all_tracks_iterator(
-      m_NoteData.GetTapNoteRangeAllTracks(iNoteRow, MAX_NOTE_ROW));
-
-  RageUtil::SafeDelete(m_pIterUnjudgedMineRows);
-  m_pIterUnjudgedMineRows = new NoteData::all_tracks_iterator(
-      m_NoteData.GetTapNoteRangeAllTracks(iNoteRow, MAX_NOTE_ROW));
+  m_pIterNeedsTapJudging = tapJudging.release();
+  m_pIterNeedsHoldJudging = holdJudging.release();
+  m_pIterUncrossedRows = uncrossedRows.release();
+  m_pIterUnjudgedRows = unjudgedRows.release();
+  m_pIterUnjudgedMineRows = unjudgedMineRows.release();
+  m_bLoaded = true;
 }
 
 void Player::SendComboMessages(
@@ -1722,9 +1718,12 @@ void Player::UpdateHoldNotes(
   int iFirstTrackWithMaxEndRow = -1;
 
   TapNoteSubType subType = TapNoteSubType_Invalid;
+  const int styleTracks =
+      std::clamp(style->m_iColsPerPlayer, 0, MAX_COLS_PER_PLAYER);
   for (const TrackRowTapNote& trtn : vTN) {
     int iTrack = trtn.iTrack;
-    if (trtn.pTN == nullptr || trtn.iRow != iStartRow) {
+    if (trtn.pTN == nullptr || trtn.iRow != iStartRow || iTrack < 0 ||
+        iTrack >= m_NoteData.GetNumTracks() || iTrack >= styleTracks) {
       LOG->Warn(
           "SRC_AUDIT_FIX: Invalid grouped hold note at row %i track %i; "
           "skipping group.",
@@ -1732,6 +1731,27 @@ void Player::UpdateHoldNotes(
       return;
     }
     TapNote& tn = *trtn.pTN;
+    if (!IsValidHoldNoteScoreForPlayer(tn.HoldResult.hns)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid hold score %i at row %i track %i; "
+          "resetting it.",
+          tn.HoldResult.hns, trtn.iRow, iTrack);
+      tn.HoldResult.hns = HNS_None;
+    }
+    if (!IsValidTapNoteScoreForPlayer(tn.result.tns)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid tap score %i at row %i track %i; resetting "
+          "it.",
+          tn.result.tns, trtn.iRow, iTrack);
+      tn.result.tns = TNS_None;
+    }
+    if (!IsValidTapNoteScoreForPlayer(tn.result.earlyTns)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Invalid early tap score %i at row %i track %i; "
+          "resetting it.",
+          tn.result.earlyTns, trtn.iRow, iTrack);
+      tn.result.earlyTns = TNS_None;
+    }
     int iEndRow = SafeEndRowForPlayer(iStartRow, tn.iDuration);
     if (subType == TapNoteSubType_Invalid) {
       subType = tn.subType;
@@ -1988,10 +2008,11 @@ void Player::UpdateHoldNotes(
   // TODO: Cap the active time passed to the score keeper to the actual start
   // time and end time of the hold.
   if (vTN[0].pTN->HoldResult.bActive) {
-    float fSecondsActiveSinceLastUpdate =
+    float fSecondsActiveSinceLastUpdate = SanitizePlayerNonNegative(
         fDeltaTime * SanitizePlayerMusicRate(
                          GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate,
-                         "Player::UpdateHoldNotes active seconds");
+                         "Player::UpdateHoldNotes active seconds"),
+        0.0f, "Player::UpdateHoldNotes active seconds product");
     if (m_pPrimaryScoreKeeper) {
       m_pPrimaryScoreKeeper->HandleHoldActiveSeconds(
           fSecondsActiveSinceLastUpdate);
@@ -2113,6 +2134,7 @@ void Player::UpdateHoldNotes(
               fLifeFraction);
     fLifeFraction = 0.0f;
   }
+  fLifeFraction = std::clamp(fLifeFraction, 0.0f, 1.0f);
 
   for (const TrackRowTapNote& trtn : vTN) {
     TapNote& tn = *trtn.pTN;
@@ -2201,8 +2223,11 @@ void Player::ApplyWaitingTransforms() {
 
 void Player::DrawPrimitives() {
   const Style* style = GetSafePlayerStyle(m_pPlayerState);
-  if (GAMESTATE == nullptr || m_pPlayerState == nullptr || style == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: Skipping Player::DrawPrimitives without style.");
+  if (!m_bLoaded || GAMESTATE == nullptr || m_pPlayerState == nullptr ||
+      style == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Skipping Player::DrawPrimitives before a complete "
+        "load or without style.");
     return;
   }
   // TODO: Remove use of PlayerNumber.
@@ -2473,7 +2498,9 @@ void Player::DrawHoldJudgments() {
 }
 
 void Player::ChangeLife(TapNoteScore tns) {
-  if (m_pPlayerState == nullptr || !IsValidTapNoteScoreForPlayer(tns)) {
+  if (m_pPlayerState == nullptr ||
+      !IsValidPlayerNumberForPlayer(m_pPlayerState->m_PlayerNumber) ||
+      !IsValidTapNoteScoreForPlayer(tns)) {
     LOG->Warn(
         "SRC_AUDIT_FIX: Ignoring invalid ChangeLife tap score %i.", tns);
     return;
@@ -2502,7 +2529,9 @@ void Player::ChangeLife(TapNoteScore tns) {
 }
 
 void Player::ChangeLife(HoldNoteScore hns, TapNoteScore tns) {
-  if (m_pPlayerState == nullptr || !IsValidHoldNoteScoreForPlayer(hns) ||
+  if (m_pPlayerState == nullptr ||
+      !IsValidPlayerNumberForPlayer(m_pPlayerState->m_PlayerNumber) ||
+      !IsValidHoldNoteScoreForPlayer(hns) ||
       !IsValidTapNoteScoreForPlayer(tns)) {
     LOG->Warn(
         "SRC_AUDIT_FIX: Ignoring invalid ChangeLife hold/tap score %i/%i.",
@@ -2521,7 +2550,9 @@ void Player::ChangeLife(HoldNoteScore hns, TapNoteScore tns) {
 }
 
 void Player::ChangeLife(float delta) {
-  if (m_pPlayerState == nullptr || !std::isfinite(delta)) {
+  if (m_pPlayerState == nullptr ||
+      !IsValidPlayerNumberForPlayer(m_pPlayerState->m_PlayerNumber) ||
+      !std::isfinite(delta)) {
     LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid life delta %f.", delta);
     return;
   }
@@ -2541,7 +2572,9 @@ void Player::ChangeLife(float delta) {
 }
 
 void Player::SetLife(float value) {
-  if (m_pPlayerState == nullptr || !std::isfinite(value)) {
+  if (m_pPlayerState == nullptr ||
+      !IsValidPlayerNumberForPlayer(m_pPlayerState->m_PlayerNumber) ||
+      !std::isfinite(value)) {
     LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid life value %f.", value);
     return;
   }
@@ -2561,7 +2594,8 @@ void Player::SetLife(float value) {
 }
 
 void Player::ChangeLifeRecord() {
-  if (m_pPlayerState == nullptr) {
+  if (m_pPlayerState == nullptr ||
+      !IsValidPlayerNumberForPlayer(m_pPlayerState->m_PlayerNumber)) {
     LOG->Warn("SRC_AUDIT_FIX: Ignoring life record without PlayerState.");
     return;
   }
@@ -2801,8 +2835,11 @@ void Player::DoTapScoreNone() {
       IsValidPlayerNumberForPlayer(m_pPlayerState->m_PlayerNumber)) {
     pn = m_pPlayerState->m_PlayerNumber;
   }
-  if (m_pCombinedLifeMeter) {
+  if (m_pCombinedLifeMeter && IsValidPlayerNumberForPlayer(pn)) {
     m_pCombinedLifeMeter->HandleTapScoreNone(pn);
+  } else if (m_pCombinedLifeMeter) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: Combined TapScoreNone skipped without valid player.");
   }
 
   if (PENALIZE_TAP_SCORE_NONE) {
@@ -3043,7 +3080,11 @@ void Player::Step(
       int iNumTracksHeld = 0;
       const float timingWindowJump = SanitizePlayerNonNegative(
           m_fTimingWindowJump, 0.25f, "Player::Step timing window jump");
-      for (int t = 0; t < m_NoteData.GetNumTracks(); t++) {
+      const int styleTracks =
+          std::clamp(style->m_iColsPerPlayer, 0, MAX_COLS_PER_PLAYER);
+      const int calorieTracks =
+          std::min(m_NoteData.GetNumTracks(), styleTracks);
+      for (int t = 0; t < calorieTracks; t++) {
         std::vector<GameInput> GameI;
         style->StyleInputToGameInput(t, physicalPlayer, GameI);
         float secs_held = 0.0f;
@@ -3077,9 +3118,7 @@ void Player::Step(
         } break;
       }
 
-      if (std::isfinite(fCals) && fCals >= 0.0f) {
-        physicalStats->m_fCaloriesBurned += fCals;
-      }
+      AddPlayerCaloriesSaturated(physicalStats->m_fCaloriesBurned, fCals);
     }
   }
 
@@ -3099,14 +3138,16 @@ void Player::Step(
   const float currentMusicSeconds = SanitizePlayerFinite(
       m_pPlayerState->m_Position.m_fMusicSeconds, 0.0f,
       "Player::Step search music seconds");
-  const int iStepSearchRows =
-      std::max(
-          BeatToNoteRow(m_Timing->GetBeatFromElapsedTime(
-              currentMusicSeconds + StepSearchDistance)) -
-              iSongRow,
-          iSongRow - BeatToNoteRow(m_Timing->GetBeatFromElapsedTime(
-                         currentMusicSeconds - StepSearchDistance))) +
+  const int forwardRow = BeatToNoteRow(m_Timing->GetBeatFromElapsedTime(
+      currentMusicSeconds + StepSearchDistance));
+  const int backwardRow = BeatToNoteRow(m_Timing->GetBeatFromElapsedTime(
+      currentMusicSeconds - StepSearchDistance));
+  const int64_t searchRows =
+      std::max(static_cast<int64_t>(forwardRow) - iSongRow,
+               static_cast<int64_t>(iSongRow) - backwardRow) +
       ROWS_PER_BEAT;
+  const int iStepSearchRows = static_cast<int>(
+      std::clamp<int64_t>(searchRows, 0, MAX_NOTE_ROW));
   int iRowOfOverlappingNoteOrRow = row;
   if (row == -1) {
     iRowOfOverlappingNoteOrRow =
@@ -3374,8 +3415,6 @@ void Player::Step(
     if (pTN->type == TapNoteType_Attack && score == TNS_W2) {
       score = TNS_None;  // don't score this as anything
 
-      m_soundAttackLaunch.Play(false);
-
       // put attack in effect
       Attack attack(
           ATTACK_LEVEL_1,
@@ -3384,15 +3423,16 @@ void Player::Step(
 
       // TODO: Remove use of PlayerNumber
       PlayerNumber pnToAttack = OPPOSITE_PLAYER[m_pPlayerState->m_PlayerNumber];
-      if (!IsValidPlayerNumberForPlayer(pnToAttack) ||
-          GAMESTATE->m_pPlayerState[pnToAttack] == nullptr) {
+      if (IsValidPlayerNumberForPlayer(pnToAttack) &&
+          GAMESTATE->m_pPlayerState[pnToAttack] != nullptr) {
+        m_soundAttackLaunch.Play(false);
+        PlayerState* pPlayerStateToAttack = GAMESTATE->m_pPlayerState[pnToAttack];
+        pPlayerStateToAttack->LaunchAttack(attack);
+      } else {
         LOG->Warn(
-            "SRC_AUDIT_FIX: Attack note has no valid target player %i.",
+            "SRC_AUDIT_FIX: Consuming attack note without target player %i.",
             pnToAttack);
-        return;
       }
-      PlayerState* pPlayerStateToAttack = GAMESTATE->m_pPlayerState[pnToAttack];
-      pPlayerStateToAttack->LaunchAttack(attack);
 
       // remove all TapAttacks on this row
       for (int t = 0; t < m_NoteData.GetNumTracks(); t++) {

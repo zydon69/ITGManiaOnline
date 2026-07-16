@@ -19,7 +19,7 @@
 class LuaExpressionTransform {
  public:
   LuaExpressionTransform();
-  ~LuaExpressionTransform();
+  ~LuaExpressionTransform() = default;
 
   void SetFromReference(const LuaReference& ref);
   void SetNumSubdivisions(int iNumSubdivisions) {

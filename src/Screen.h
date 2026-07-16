@@ -27,7 +27,13 @@ struct RegisterScreenClass {
 };
 #define REGISTER_SCREEN_CLASS(className)                       \
   static Screen* Create##className(const std::string& sName) { \
-    LuaThreadVariable var("LoadingScreen", sName);             \
+    if (LUA != nullptr) {                                      \
+      LuaThreadVariable var("LoadingScreen", sName);           \
+      Screen* pRet = new className;                            \
+      pRet->SetName(sName);                                    \
+      Screen::InitScreen(pRet);                                \
+      return pRet;                                             \
+    }                                                          \
     Screen* pRet = new className;                              \
     pRet->SetName(sName);                                      \
     Screen::InitScreen(pRet);                                  \

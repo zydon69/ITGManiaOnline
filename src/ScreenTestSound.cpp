@@ -1,5 +1,6 @@
 #include "ScreenTestSound.h"
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <vector>
@@ -48,6 +49,13 @@ std::string GetOptionalSoundPath(const TestSoundPath& path) {
 void ScreenTestSound::Init() {
   Screen::Init();
 
+  m_helpReady = false;
+  m_textReady.fill(false);
+  for (size_t i = 0; i < m_sounds.size(); ++i) {
+    m_soundCopies[i].clear();
+    m_sounds[i].s.Unload();
+  }
+
   m_help.SetXY(450, 400);
   m_helpReady = LoadCommonFont(m_help);
   if (m_helpReady) {
@@ -78,13 +86,15 @@ void ScreenTestSound::Init() {
 
   for (size_t i = 0; i < m_sounds.size(); ++i) {
     const std::string path = GetOptionalSoundPath(TEST_SOUND_PATHS[i]);
-    if (!path.empty()) {
-      m_sounds[i].s.Load(path);
-    } else if (LOG != nullptr) {
+    if (path.empty() || !m_sounds[i].s.Load(path)) {
+      if (LOG == nullptr) {
+        continue;
+      }
       LOG->Warn(
-          "ScreenTestSound: missing optional test sound %s/%s",
+          "ScreenTestSound: failed to load optional test sound %s/%s path='%s'",
           TEST_SOUND_PATHS[i].group,
-          TEST_SOUND_PATHS[i].element);
+          TEST_SOUND_PATHS[i].element,
+          path.c_str());
     }
   }
 
@@ -196,13 +206,38 @@ bool ScreenTestSound::Input(const InputEventPlus& input) {
           if (!IsValidSoundIndex(m_selected)) {
             return false;
           }
+          if (!m_sounds[m_selected].s.LoadSucceeded()) {
+            if (LOG != nullptr) {
+              LOG->Warn(
+                  "ScreenTestSound: ignored play for unloaded sound index %d",
+                  m_selected);
+            }
+            return true;
+          }
+          auto& copies = m_soundCopies[m_selected];
+          copies.erase(
+              std::remove_if(
+                  copies.begin(), copies.end(),
+                  [](const std::unique_ptr<RageSound>& sound) {
+                    return sound == nullptr || !sound->IsPlaying();
+                  }),
+              copies.end());
+          if (copies.size() >= MAX_SIMULTANEOUS_COPIES) {
+            if (LOG != nullptr) {
+              LOG->Warn(
+                  "ScreenTestSound: simultaneous copy limit reached for "
+                  "sound index %d",
+                  m_selected);
+            }
+            return true;
+          }
           /* We want to be able to read the position of copied sounds; if we let
            * RageSound copy itself, then the copy will be owned by
            * RageSoundManager and we won't be allowed to touch it.  Copy it
            * ourself. */
           auto copy = std::make_unique<RageSound>(m_sounds[m_selected].s);
           copy->Play(false);
-          m_soundCopies[m_selected].push_back(std::move(copy));
+          copies.push_back(std::move(copy));
           handled = true;
           break;
         }

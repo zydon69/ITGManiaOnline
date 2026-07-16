@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <list>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <string>
@@ -187,12 +188,16 @@ RageSoundReader_ThreadedBuffer::RageSoundReader_ThreadedBuffer(
 }
 
 RageSoundReader_ThreadedBuffer* RageSoundReader_ThreadedBuffer::Copy() const {
-  auto* copy = new RageSoundReader_ThreadedBuffer(*this);
-  if (!copy->IsTopologyUsable()) {
-    delete copy;
+  std::unique_ptr<RageSoundReader_ThreadedBuffer> copy;
+  try {
+    copy.reset(new RageSoundReader_ThreadedBuffer(*this));
+  } catch (const std::bad_alloc&) {
     return nullptr;
   }
-  return copy;
+  if (!copy->IsTopologyUsable()) {
+    return nullptr;
+  }
+  return copy.release();
 }
 
 RageSoundReader_ThreadedBuffer::~RageSoundReader_ThreadedBuffer() {
@@ -238,22 +243,28 @@ bool RageSoundReader_ThreadedBuffer::DisableBufferingForSourceAccess(
   m_bEnabled = false;
   m_Event.Broadcast();
 
+  RageTimer timeout;
+  timeout.Touch();
+  timeout += g_fBufferWaitTimeoutSeconds;
+  RageTimer waitStarted;
   while (m_bFilling) {
+    bool waitCompleted = true;
     if (m_Event.WaitTimeoutSupported()) {
-      RageTimer timeout;
-      timeout.Touch();
-      timeout += g_fBufferWaitTimeoutSeconds;
-      if (!m_Event.Wait(&timeout)) {
-        if (pWasEnabled != nullptr) {
-          *pWasEnabled = bWasEnabled;
-        }
-        m_Event.Unlock();
-        SetError("SRC_AUDIT_FIX SRC-2853: timed out waiting for threaded "
-                 "audio source access");
-        return false;
-      }
+      waitCompleted = m_Event.Wait(&timeout);
     } else {
-      m_Event.Wait();
+      m_Event.Unlock();
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      m_Event.Lock();
+      waitCompleted = waitStarted.Ago() < g_fBufferWaitTimeoutSeconds;
+    }
+    if (!waitCompleted) {
+      if (pWasEnabled != nullptr) {
+        *pWasEnabled = bWasEnabled;
+      }
+      m_Event.Unlock();
+      SetError("SRC_AUDIT_FIX SRC-2853: timed out waiting for threaded "
+               "audio source access");
+      return false;
     }
   }
 
@@ -273,6 +284,7 @@ int RageSoundReader_ThreadedBuffer::SetPosition(int iFrame) {
   if (!DisableBufferingForSourceAccess(&bWasEnabled)) {
     return RageSoundReader::ERROR;
   }
+  RestoreThreadedBufferState restoreBuffering(*this, bWasEnabled);
 
   int iRet = RageSoundReader::ERROR;
   {
@@ -301,10 +313,6 @@ int RageSoundReader_ThreadedBuffer::SetPosition(int iFrame) {
     m_StreamPosition.back().fRate = m_pSource->GetStreamToSourceRatio();
 
     m_bEOF = iRet == 0;
-  }
-
-  if (bWasEnabled) {
-    EnableBuffering();
   }
 
   return iRet;
@@ -360,10 +368,8 @@ int RageSoundReader_ThreadedBuffer::GetLength() const {
            ->DisableBufferingForSourceAccess(&bWasEnabled)) {
     return 0;
   }
+  RestoreThreadedBufferState restoreBuffering(*this, bWasEnabled);
   int iRet = m_pSource.isNull() ? 0 : m_pSource->GetLength();
-  if (bWasEnabled) {
-    EnableBuffering();
-  }
   return iRet;
 }
 int RageSoundReader_ThreadedBuffer::GetLength_Fast() const {
@@ -372,10 +378,8 @@ int RageSoundReader_ThreadedBuffer::GetLength_Fast() const {
            ->DisableBufferingForSourceAccess(&bWasEnabled)) {
     return 0;
   }
+  RestoreThreadedBufferState restoreBuffering(*this, bWasEnabled);
   int iRet = m_pSource.isNull() ? 0 : m_pSource->GetLength_Fast();
-  if (bWasEnabled) {
-    EnableBuffering();
-  }
   return iRet;
 }
 
@@ -389,10 +393,8 @@ bool RageSoundReader_ThreadedBuffer::SetProperty(
   if (!DisableBufferingForSourceAccess(&bWasEnabled)) {
     return false;
   }
+  RestoreThreadedBufferState restoreBuffering(*this, bWasEnabled);
   const bool bRet = m_pSource->SetProperty(sProperty, fValue);
-  if (bWasEnabled) {
-    EnableBuffering();
-  }
   return bRet;
 }
 
@@ -584,7 +586,7 @@ int RageSoundReader_ThreadedBuffer::Read(float* pBuffer, int iFrames) {
     if (collapsedMappings != 0) {
       if (collapsedMappings > 1) {
         LogReviewSrcDiagnostics(
-            "SRC_AUDIT_FIX SRC-2921: collapsed %zu consumed threaded audio "
+            "SRC_AUDIT_FIX SRC-2933: collapsed %zu consumed threaded audio "
             "mappings source=%s remaining=%zu",
             collapsedMappings, GetSourcePath().c_str(),
             m_StreamPosition.size());

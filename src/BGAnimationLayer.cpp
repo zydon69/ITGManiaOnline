@@ -1,7 +1,10 @@
 #include "BGAnimationLayer.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <limits>
+#include <memory>
 #include <string>
 
 #include "ActorFrame.h"
@@ -65,6 +68,8 @@ inline bool IsOffScreen(Actor* pActor) {
 }
 
 namespace {
+constexpr float MAX_LAYER_NUMERIC_MAGNITUDE = 1000000.0f;
+
 float SafeFinite(float value, float fallback, const char* context) {
   if (!std::isfinite(value)) {
     LOG->Warn(
@@ -76,8 +81,20 @@ float SafeFinite(float value, float fallback, const char* context) {
   return value;
 }
 
-float SafePositive(float value, float fallback, const char* context) {
+float SafeBoundedFinite(float value, float fallback, const char* context) {
   value = SafeFinite(value, fallback, context);
+  if (std::abs(value) > MAX_LAYER_NUMERIC_MAGNITUDE) {
+    const float bounded = std::copysign(MAX_LAYER_NUMERIC_MAGNITUDE, value);
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-3099: BGAnimationLayer bounded %s %.3f to %.3f.",
+        context, value, bounded);
+    return bounded;
+  }
+  return value;
+}
+
+float SafePositive(float value, float fallback, const char* context) {
+  value = SafeBoundedFinite(value, fallback, context);
   if (value <= 0.0f) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-710: BGAnimationLayer replaced non-positive %s "
@@ -114,6 +131,14 @@ RageVector3 SafeRandomUnitVector() {
   }
   return velocity;
 }
+
+int SafeGridCount(float screenExtent, float spacing, int maximum) {
+  const double raw = 2.0 + static_cast<double>(screenExtent) / spacing;
+  if (!std::isfinite(raw)) {
+    return 1;
+  }
+  return static_cast<int>(std::clamp(raw, 1.0, static_cast<double>(maximum)));
+}
 }  // namespace
 
 // guard rail is the area that keeps particles from going off screen
@@ -143,10 +168,15 @@ inline bool HitGuardRailBottom(Actor* pActor) {
   return pActor->GetY() > GetGuardRailBottom(pActor);
 }
 
-BGAnimationLayer::BGAnimationLayer() {
-  m_vParticleVelocity.clear();
+BGAnimationLayer::BGAnimationLayer() { ResetLayerState(); }
 
+void BGAnimationLayer::ResetLayerState() {
+  DeleteAllChildren();
+  m_vParticleVelocity.clear();
   m_Type = TYPE_SPRITE;
+  m_fFOV = -1.0f;
+  m_bOverrideLighting = false;
+  m_bLighting = false;
 
   m_fTexCoordVelocityX = 0;
   m_fTexCoordVelocityY = 0;
@@ -164,6 +194,7 @@ BGAnimationLayer::BGAnimationLayer() {
 BGAnimationLayer::~BGAnimationLayer() { ActorFrame::DeleteAllChildren(); }
 
 void BGAnimationLayer::LoadFromAniLayerFile(const std::string& sPath) {
+  ResetLayerState();
   /* Generic BGAs are new.  Animation directories with no INI are old and
    * obsolete. Don't combine them. */
   std::string lcPath = sPath;
@@ -335,8 +366,18 @@ void BGAnimationLayer::LoadFromAniLayerFile(const std::string& sPath) {
             sPath.c_str(), fSpriteWidth, fSpriteHeight);
         return;
       }
-      int iSpriteArea = int(fSpriteWidth * fSpriteHeight);
-      const int iMaxArea = int(SCREEN_WIDTH * SCREEN_HEIGHT);
+      const double spriteArea =
+          static_cast<double>(fSpriteWidth) * fSpriteHeight;
+      if (!std::isfinite(spriteArea) || spriteArea < 1.0 ||
+          spriteArea > static_cast<double>(std::numeric_limits<int>::max())) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-3097: BGAnimationLayer skipped particles for "
+            "'%s' because sprite area %.3f is unsupported.",
+            sPath.c_str(), spriteArea);
+        return;
+      }
+      const int iSpriteArea = static_cast<int>(spriteArea);
+      const int iMaxArea = static_cast<int>(SCREEN_WIDTH * SCREEN_HEIGHT);
       int iNumParticles = iMaxArea / iSpriteArea;
       iNumParticles = std::max(1, std::min(iNumParticles, MAX_SPRITES));
 
@@ -418,12 +459,9 @@ void BGAnimationLayer::LoadFromAniLayerFile(const std::string& sPath) {
             sPath.c_str(), fTileWidth, fTileHeight);
         return;
       }
-      m_iNumTilesWide = 2 + int(SCREEN_WIDTH / fTileWidth);
-      m_iNumTilesWide = std::min(m_iNumTilesWide, MAX_TILES_WIDE);
-      m_iNumTilesWide = std::max(1, m_iNumTilesWide);
-      m_iNumTilesHigh = 2 + int(SCREEN_HEIGHT / fTileHeight);
-      m_iNumTilesHigh = std::min(m_iNumTilesHigh, MAX_TILES_HIGH);
-      m_iNumTilesHigh = std::max(1, m_iNumTilesHigh);
+      m_iNumTilesWide = SafeGridCount(SCREEN_WIDTH, fTileWidth, MAX_TILES_WIDE);
+      m_iNumTilesHigh =
+          SafeGridCount(SCREEN_HEIGHT, fTileHeight, MAX_TILES_HIGH);
       m_fTilesStartX = fTileWidth / 2;
       m_fTilesStartY = fTileHeight / 2;
       m_fTilesSpacingX = fTileWidth;
@@ -517,6 +555,7 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
     LOG->Warn("SRC_AUDIT_FIX SRC-710: BGAnimationLayer ignored null node.");
     return;
   }
+  ResetLayerState();
   {
     bool bCond;
     if (pNode->GetAttrValue("Condition", bCond) && !bCond) {
@@ -538,18 +577,30 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
     // Check for string match first, then do integer match.
     // "if(StringType(type)==0)" was matching against all string matches.
     // -Chris
+    size_t parsed = 0;
+    const bool hasExactNumericType =
+        !type.empty() &&
+        std::all_of(type.begin(), type.end(), [](unsigned char ch) {
+          return std::isdigit(ch) != 0;
+        });
+    const int numericType = hasExactNumericType
+                                ? StringToInt(type, &parsed, 10, -1)
+                                : -1;
     if (EqualsNoCase(type, "sprite")) {
       m_Type = TYPE_SPRITE;
     } else if (EqualsNoCase(type, "particles")) {
       m_Type = TYPE_PARTICLES;
     } else if (EqualsNoCase(type, "tiles")) {
       m_Type = TYPE_TILES;
-    } else if (StringToInt(type) == 1) {
+    } else if (hasExactNumericType && parsed == type.size() &&
+               numericType == 1) {
       m_Type = TYPE_SPRITE;
       bStretch = true;
-    } else if (StringToInt(type) == 2) {
+    } else if (hasExactNumericType && parsed == type.size() &&
+               numericType == 2) {
       m_Type = TYPE_PARTICLES;
-    } else if (StringToInt(type) == 3) {
+    } else if (hasExactNumericType && parsed == type.size() &&
+               numericType == 3) {
       m_Type = TYPE_TILES;
     } else {
       LOG->Warn(
@@ -561,7 +612,7 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
   }
 
   pNode->GetAttrValue("FOV", m_fFOV);
-  m_fFOV = SafeFinite(m_fFOV, 0.0f, "FOV");
+  m_fFOV = SafeBoundedFinite(m_fFOV, 0.0f, "FOV");
   pNode->GetAttrValue("Lighting", m_bLighting);
 
   pNode->GetAttrValue("TexCoordVelocityX", m_fTexCoordVelocityX);
@@ -571,9 +622,9 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
   pNode->GetAttrValue("StretchTexCoordVelocityX", m_fTexCoordVelocityX);
   pNode->GetAttrValue("StretchTexCoordVelocityY", m_fTexCoordVelocityY);
   m_fTexCoordVelocityX =
-      SafeFinite(m_fTexCoordVelocityX, 0.0f, "TexCoordVelocityX");
+      SafeBoundedFinite(m_fTexCoordVelocityX, 0.0f, "TexCoordVelocityX");
   m_fTexCoordVelocityY =
-      SafeFinite(m_fTexCoordVelocityY, 0.0f, "TexCoordVelocityY");
+      SafeBoundedFinite(m_fTexCoordVelocityY, 0.0f, "TexCoordVelocityY");
 
   // particle and tile stuff
   float fZoomMin = 1;
@@ -597,12 +648,15 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
   pNode->GetAttrValue("VelocityZMin", fVelocityZMin);
   pNode->GetAttrValue("VelocityZMax", fVelocityZMax);
   pNode->GetAttrValue("OverrideSpeed", fOverrideSpeed);
-  fVelocityXMin = SafeFinite(fVelocityXMin, 0.0f, "VelocityXMin");
-  fVelocityXMax = SafeFinite(fVelocityXMax, fVelocityXMin, "VelocityXMax");
-  fVelocityYMin = SafeFinite(fVelocityYMin, 0.0f, "VelocityYMin");
-  fVelocityYMax = SafeFinite(fVelocityYMax, fVelocityYMin, "VelocityYMax");
-  fVelocityZMin = SafeFinite(fVelocityZMin, 0.0f, "VelocityZMin");
-  fVelocityZMax = SafeFinite(fVelocityZMax, fVelocityZMin, "VelocityZMax");
+  fVelocityXMin = SafeBoundedFinite(fVelocityXMin, 0.0f, "VelocityXMin");
+  fVelocityXMax =
+      SafeBoundedFinite(fVelocityXMax, fVelocityXMin, "VelocityXMax");
+  fVelocityYMin = SafeBoundedFinite(fVelocityYMin, 0.0f, "VelocityYMin");
+  fVelocityYMax =
+      SafeBoundedFinite(fVelocityYMax, fVelocityYMin, "VelocityYMax");
+  fVelocityZMin = SafeBoundedFinite(fVelocityZMin, 0.0f, "VelocityZMin");
+  fVelocityZMax =
+      SafeBoundedFinite(fVelocityZMax, fVelocityZMin, "VelocityZMax");
   if (fVelocityXMin > fVelocityXMax) {
     std::swap(fVelocityXMin, fVelocityXMax);
   }
@@ -612,7 +666,8 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
   if (fVelocityZMin > fVelocityZMax) {
     std::swap(fVelocityZMin, fVelocityZMax);
   }
-  fOverrideSpeed = SafeFinite(fOverrideSpeed, 0.0f, "OverrideSpeed");
+  fOverrideSpeed =
+      SafeBoundedFinite(fOverrideSpeed, 0.0f, "OverrideSpeed");
   if (fOverrideSpeed < 0.0f) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-710: BGAnimationLayer converted negative "
@@ -639,12 +694,14 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
   pNode->GetAttrValue("TilesSpacingY", m_fTilesSpacingY);
   pNode->GetAttrValue("TileVelocityX", m_fTileVelocityX);
   pNode->GetAttrValue("TileVelocityY", m_fTileVelocityY);
-  m_fTilesStartX = SafeFinite(m_fTilesStartX, 0.0f, "TilesStartX");
-  m_fTilesStartY = SafeFinite(m_fTilesStartY, 0.0f, "TilesStartY");
+  m_fTilesStartX = SafeBoundedFinite(m_fTilesStartX, 0.0f, "TilesStartX");
+  m_fTilesStartY = SafeBoundedFinite(m_fTilesStartY, 0.0f, "TilesStartY");
   m_fTilesSpacingX = SafeFinite(m_fTilesSpacingX, -1.0f, "TilesSpacingX");
   m_fTilesSpacingY = SafeFinite(m_fTilesSpacingY, -1.0f, "TilesSpacingY");
-  m_fTileVelocityX = SafeFinite(m_fTileVelocityX, 0.0f, "TileVelocityX");
-  m_fTileVelocityY = SafeFinite(m_fTileVelocityY, 0.0f, "TileVelocityY");
+  m_fTileVelocityX =
+      SafeBoundedFinite(m_fTileVelocityX, 0.0f, "TileVelocityX");
+  m_fTileVelocityY =
+      SafeBoundedFinite(m_fTileVelocityY, 0.0f, "TileVelocityY");
 
   switch (m_Type) {
     case TYPE_SPRITE: {
@@ -731,22 +788,26 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
       }
       m_fTilesSpacingX = SafePositive(m_fTilesSpacingX, 64.0f, "TilesSpacingX");
       m_fTilesSpacingY = SafePositive(m_fTilesSpacingY, 64.0f, "TilesSpacingY");
-      m_iNumTilesWide = 2 + (int)(SCREEN_WIDTH / m_fTilesSpacingX);
-      m_iNumTilesHigh = 2 + (int)(SCREEN_HEIGHT / m_fTilesSpacingY);
       m_iNumTilesWide =
-          std::max(1, std::min(m_iNumTilesWide, MAX_TILES_WIDE));
+          SafeGridCount(SCREEN_WIDTH, m_fTilesSpacingX, MAX_TILES_WIDE);
       m_iNumTilesHigh =
-          std::max(1, std::min(m_iNumTilesHigh, MAX_TILES_HIGH));
+          SafeGridCount(SCREEN_HEIGHT, m_fTilesSpacingY, MAX_TILES_HIGH);
       unsigned NumSprites = m_iNumTilesWide * m_iNumTilesHigh;
       NumSprites = std::min<unsigned>(NumSprites, MAX_SPRITES);
       for (unsigned i = 0; i < NumSprites; i++) {
-        Actor* pSprite = ActorUtil::MakeActor(sFile, this);
-        if (pSprite == nullptr) {
-          continue;
+        std::unique_ptr<Actor> pSprite(ActorUtil::MakeActor(sFile, this));
+        if (!pSprite) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX SRC-3098: BGAnimationLayer discarded partial "
+              "tile grid after actor %u of %u failed to load.",
+              i, NumSprites);
+          ResetLayerState();
+          return;
         }
-        this->AddChild(pSprite);
-        pSprite->SetTextureWrapping(true);  // gets rid of some "cracks"
-        pSprite->SetZoom(randomf(fZoomMin, fZoomMax));
+        Actor* rawSprite = pSprite.release();
+        this->AddChild(rawSprite);
+        rawSprite->SetTextureWrapping(true);  // gets rid of some "cracks"
+        rawSprite->SetZoom(randomf(fZoomMin, fZoomMax));
       }
     } break;
     default:

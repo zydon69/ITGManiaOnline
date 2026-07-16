@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -95,7 +96,7 @@ bool RageSoundDriver_WaveOut::GetData() {
   /* Call the callback. */
   this->Mix(
       (int16_t*)wo_buffers_[b].lpData, kBlockSizeFrames,
-      wo_last_cursor_position_, GetPosition());
+      wo_last_cursor_position_.load(std::memory_order_acquire), GetPosition());
 
   MMRESULT ret =
       waveOutWrite(waveout_handle_, &wo_buffers_[b], sizeof(wo_buffers_[b]));
@@ -109,7 +110,8 @@ bool RageSoundDriver_WaveOut::GetData() {
   }
 
   /* Increment wo_last_cursor_position_. */
-  wo_last_cursor_position_ += kBlockSizeFrames;
+  wo_last_cursor_position_.fetch_add(
+      kBlockSizeFrames, std::memory_order_release);
 
   return true;
 }
@@ -124,7 +126,7 @@ void RageSoundDriver_WaveOut::SetupDecodingThread() {
 
 int64_t RageSoundDriver_WaveOut::GetPosition() const {
   if (waveout_handle_ == nullptr) {
-    return wo_last_cursor_position_;
+    return wo_last_hardware_position_.load(std::memory_order_acquire);
   }
 
   MMTIME tm;
@@ -132,10 +134,25 @@ int64_t RageSoundDriver_WaveOut::GetPosition() const {
   MMRESULT ret = waveOutGetPosition(waveout_handle_, &tm, sizeof(tm));
   if (ret != MMSYSERR_NOERROR) {
     LOG->Warn(wo_ssprintf(ret, "waveOutGetPosition failed").c_str());
-    return wo_last_cursor_position_;
+    return wo_last_hardware_position_.load(std::memory_order_acquire);
   }
 
-  return tm.u.sample;
+  const uint32_t rawPosition = tm.u.sample;
+  int64_t previous =
+      wo_last_hardware_position_.load(std::memory_order_acquire);
+  while (true) {
+    int64_t candidate =
+        (previous & ~INT64_C(0xFFFFFFFF)) | rawPosition;
+    if (candidate + INT64_C(0x80000000) < previous) {
+      candidate += INT64_C(0x100000000);
+    }
+    candidate = std::max(candidate, previous);
+    if (wo_last_hardware_position_.compare_exchange_weak(
+            previous, candidate, std::memory_order_release,
+            std::memory_order_acquire)) {
+      return candidate;
+    }
+  }
 }
 
 RageSoundDriver_WaveOut::RageSoundDriver_WaveOut()
@@ -146,13 +163,12 @@ RageSoundDriver_WaveOut::RageSoundDriver_WaveOut()
       wo_samplerate_(0),
       wo_shutdown_(false),
       wo_last_cursor_position_(0),
-      wo_init_success_(false),
+      wo_last_hardware_position_(0),
       wo_frames_per_block_(0),
       wo_num_blocks_(1),
       wo_blocksize_(0) {}
 
 std::string RageSoundDriver_WaveOut::Init() {
-  wo_init_success_ = false;
   wo_shutdown_.store(false, std::memory_order_release);
   if (soundevent_handle_ == nullptr) {
     return "CreateEvent failed for WaveOut notification event";
@@ -162,6 +178,7 @@ std::string RageSoundDriver_WaveOut::Init() {
   if (wo_samplerate_ <= 0) {
     wo_samplerate_ = FALLBACK_SAMPLE_RATE;
   }
+  wo_samplerate_ = std::clamp(wo_samplerate_, 8000, 384000);
 
   wo_num_blocks_ = CalculateNumBlocks(wo_samplerate_);
 
@@ -186,7 +203,7 @@ std::string RageSoundDriver_WaveOut::Init() {
   fmt.nAvgBytesPerSec = fmt.nSamplesPerSec * fmt.nBlockAlign;
 
   std::vector<UINT> deviceIds;
-  if (!PREFSMAN->m_iSoundDevice.Get().empty()) {
+  if (PREFSMAN != nullptr && !PREFSMAN->m_iSoundDevice.Get().empty()) {
     std::vector<std::string> portNames;
     split(PREFSMAN->m_iSoundDevice.Get(), ",", portNames, true);
     for (const std::string& device : portNames) {
@@ -214,9 +231,13 @@ std::string RageSoundDriver_WaveOut::Init() {
   ZERO(wo_buffers_);
   for (int b = 0; b < wo_num_blocks_; ++b) {
     wo_buffers_[b].dwBufferLength = wo_blocksize_;
-    wo_buffers_[b].lpData = new char[wo_blocksize_];
-    ret = waveOutPrepareHeader(
-        waveout_handle_, &wo_buffers_[b], sizeof(wo_buffers_[b]));
+    wo_buffers_[b].lpData = new (std::nothrow) char[wo_blocksize_];
+    if (wo_buffers_[b].lpData == nullptr) {
+      ret = MMSYSERR_NOMEM;
+    } else {
+      ret = waveOutPrepareHeader(
+          waveout_handle_, &wo_buffers_[b], sizeof(wo_buffers_[b]));
+    }
     if (ret != MMSYSERR_NOERROR) {
       for (int i = 0; i <= b; ++i) {
         if (wo_buffers_[i].lpData == nullptr) {
@@ -245,7 +266,6 @@ std::string RageSoundDriver_WaveOut::Init() {
   MixingThread.SetName("Mixer thread");
   MixingThread.Create(MixerThread_start, this);
 
-  wo_init_success_ = true;
   return std::string();
 }
 

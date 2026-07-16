@@ -2,11 +2,12 @@
 #include "PrefsManager.h"
 #include "RageLog.h"
 #include "RageSoundConstants.h"
-#include "RageTimer.h"
 #include "archutils/Darwin/DarwinThreadHelpers.h"
 #include "global.h"
 
 #include <cstdint>
+#include <cstring>
+#include <limits>
 #include <vector>
 
 #ifdef HAVE_UNISTD_H
@@ -36,10 +37,7 @@ RageSoundDriver_AU::RageSoundDriver_AU()
     : m_OutputUnit(nullptr),
       m_iSampleRate(0),
       m_bDone(false),
-      m_bStarted(false),
-      m_pIOThread(nullptr),
-      m_pNotificationThread(nullptr),
-      m_Semaphore("Sound") {}
+      m_bStarted(false) {}
 
 static void SetSampleRate(AudioUnit au, Float64 desiredRate) {
   AudioDeviceID OutputDevice;
@@ -149,7 +147,9 @@ std::string RageSoundDriver_AU::Init() {
 
   AudioStreamBasicDescription streamFormat;
 
-  streamFormat.mSampleRate = PREFSMAN->m_iSoundPreferredSampleRate;
+  streamFormat.mSampleRate =
+      PREFSMAN != nullptr ? PREFSMAN->m_iSoundPreferredSampleRate.Get()
+                          : FALLBACK_SAMPLE_RATE;
   streamFormat.mFormatID = kAudioFormatLinearPCM;
   streamFormat.mFormatFlags = kFormatFlags;
   streamFormat.mBytesPerPacket = kBytesPerPacket;
@@ -190,7 +190,7 @@ std::string RageSoundDriver_AU::Init() {
   // Keep a larger decode buffer on macOS to reduce intermittent underruns
   // observed during heavy screen transitions.
   int decodeBufferFrames = 32768;
-  if (PREFSMAN->m_iSoundWriteAhead > 0) {
+  if (PREFSMAN != nullptr && PREFSMAN->m_iSoundWriteAhead > 0) {
     decodeBufferFrames = std::max(decodeBufferFrames, PREFSMAN->m_iSoundWriteAhead.Get());
   }
   SetDecodeBufferSize(decodeBufferFrames);
@@ -210,21 +210,14 @@ RageSoundDriver_AU::~RageSoundDriver_AU() {
   }
   if (m_bStarted) {
     m_bDone.store(true, std::memory_order_release);
-    const uint64_t timeoutUsec = RageTimer::GetTimeSinceStartMicroseconds() + 2000000;
-    while (!m_Semaphore.TryWait()) {
-      if (RageTimer::GetTimeSinceStartMicroseconds() >= timeoutUsec) {
-        LOG->Warn("Timed out waiting for AudioUnit render callback to stop.");
-        break;
-      }
-#ifdef HAVE_UNISTD_H
-      usleep(1000);
-#endif
+    const OSStatus stopError = AudioOutputUnitStop(m_OutputUnit);
+    if (stopError != noErr && LOG != nullptr) {
+      LOG->Warn("Could not stop the AudioUnit: %s", FormatOSError(stopError));
     }
+    m_bStarted = false;
   }
   AudioUnitUninitialize(m_OutputUnit);
   AudioComponentInstanceDispose(m_OutputUnit);
-  delete m_pIOThread;
-  delete m_pNotificationThread;
 }
 
 int64_t RageSoundDriver_AU::GetPosition() const {
@@ -361,20 +354,22 @@ OSStatus RageSoundDriver_AU::Render(
     return noErr;
   }
 
-  if (unlikely(This->m_pIOThread == nullptr)) {
-    This->m_pIOThread = new RageThreadRegister("HAL I/O thread");
-  }
-
   AudioBuffer& buf = ioData->mBuffers[0];
+  if (buf.mNumberChannels != kChannelsPerFrame ||
+      inNumberFrames > std::numeric_limits<int>::max() ||
+      static_cast<uint64_t>(inNumberFrames) * kBytesPerFrame >
+          buf.mDataByteSize) {
+    memset(buf.mData, 0, buf.mDataByteSize);
+    return noErr;
+  }
   int64_t now = int64_t(This->m_TimeScale * AudioGetCurrentHostTime());
   int64_t next = int64_t(This->m_TimeScale * inTimeStamp->mHostTime);
 
-  This->Mix((float*)buf.mData, inNumberFrames, next, now);
+  This->Mix(
+      static_cast<float*>(buf.mData), static_cast<int>(inNumberFrames), next,
+      now);
   if (unlikely(This->m_bDone.load(std::memory_order_acquire))) {
-    if (This->m_OutputUnit != nullptr) {
-      AudioOutputUnitStop(This->m_OutputUnit);
-    }
-    This->m_Semaphore.Post();
+    memset(buf.mData, 0, buf.mDataByteSize);
   }
   return noErr;
 }

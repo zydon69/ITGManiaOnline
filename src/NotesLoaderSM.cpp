@@ -390,12 +390,17 @@ void SMLoader::ProcessAttacks(AttackArray& attacks, MsdFile::value_t params) {
   Attack attack;
   float end = 0.0f;
   bool hasEnd = false;
+  bool hasTime = false;
+  bool hasDuration = false;
   bool attackValid = true;
 
-  auto resetAttack = [&attack, &end, &hasEnd, &attackValid]() {
+  auto resetAttack = [&attack, &end, &hasEnd, &hasTime, &hasDuration,
+                      &attackValid]() {
     attack.MakeBlank();
     end = 0.0f;
     hasEnd = false;
+    hasTime = false;
+    hasDuration = false;
     attackValid = true;
   };
 
@@ -405,6 +410,7 @@ void SMLoader::ProcessAttacks(AttackArray& attacks, MsdFile::value_t params) {
 
     // Need an identifer and a value for this to work
     if (sBits.size() < 2) {
+      attackValid = false;
       continue;
     }
 
@@ -414,6 +420,7 @@ void SMLoader::ProcessAttacks(AttackArray& attacks, MsdFile::value_t params) {
       float value = 0.0f;
       if (ParseSMFloat(*this, "ATTACKS", "TIME", sBits[1], params[j], value)) {
         attack.fStartSecond = value;
+        hasTime = true;
       } else {
         attackValid = false;
       }
@@ -421,25 +428,29 @@ void SMLoader::ProcessAttacks(AttackArray& attacks, MsdFile::value_t params) {
       float value = 0.0f;
       if (ParseSMFloat(*this, "ATTACKS", "LEN", sBits[1], params[j], value)) {
         attack.fSecsRemaining = value;
+        hasDuration = true;
       } else {
         attackValid = false;
       }
     } else if (!CompareNoCase(sBits[0], "END")) {
       if (ParseSMFloat(*this, "ATTACKS", "END", sBits[1], params[j], end)) {
         hasEnd = true;
+        hasDuration = true;
       } else {
         attackValid = false;
       }
     } else if (!CompareNoCase(sBits[0], "MODS")) {
-      Trim(sBits[1]);
-      attack.sModifiers = sBits[1];
+      attack.sModifiers = join("=", sBits.begin() + 1, sBits.end());
+      Trim(attack.sModifiers);
 
-      if (!attackValid || attack.sModifiers.empty()) {
+      if (!attackValid || !hasTime || !hasDuration ||
+          attack.sModifiers.empty()) {
         LOG->UserLog(
             "Song file", this->GetSongTitle(),
-            "SRC_AUDIT_FIX ignored malformed #ATTACKS entry ending at "
-            "\"%s\".",
-            params[j].c_str());
+            "SRC_AUDIT_FIX ignored incomplete #ATTACKS entry ending at "
+            "\"%s\" (time=%d duration=%d modifiers=%d).",
+            SanitizeForLog(params[j]).c_str(), hasTime ? 1 : 0,
+            hasDuration ? 1 : 0, attack.sModifiers.empty() ? 0 : 1);
         resetAttack();
         continue;
       }
@@ -1177,7 +1188,7 @@ bool SMLoader::LoadFromBGChangesVector(
       MakeLower(tmp);
       if ((tmp.find(".ini") != std::string::npos ||
            tmp.find(".xml") != std::string::npos) &&
-          !PREFSMAN->m_bQuirksMode) {
+          (PREFSMAN == nullptr || !PREFSMAN->m_bQuirksMode)) {
         return false;
       }
       change.m_def.m_sFile2 = aBGChangeValues[7];
@@ -1235,7 +1246,7 @@ bool SMLoader::LoadFromBGChangesVector(
       MakeLower(tmp);
       if ((tmp.find(".ini") != std::string::npos ||
            tmp.find(".xml") != std::string::npos) &&
-          !PREFSMAN->m_bQuirksMode) {
+          (PREFSMAN == nullptr || !PREFSMAN->m_bQuirksMode)) {
         return false;
       }
       change.m_def.m_sFile1 = aBGChangeValues[1];

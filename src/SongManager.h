@@ -146,13 +146,13 @@ class SongManager {
    * valid step for the current gametype.
    * @param sGroupName the name of the group.
    * @return the songs within the group that have at least one valid Step. */
-  const std::vector<Song*>& GetSongsOfCurrentGame(
+  std::vector<Song*> GetSongsOfCurrentGame(
       const std::string& sGroupName) const;
   /**
    * @brief Retrieve all of the songs in the game that have at least one
    * valid step for the current gametype.
    * @return the songs within the game that have at least one valid Step. */
-  const std::vector<Song*>& GetAllSongsOfCurrentGame() const;
+  std::vector<Song*> GetAllSongsOfCurrentGame() const;
 
   std::map<int, std::vector<Song*>> GetMeterToSongsMap() const {
     return m_mapSongsByDifficulty;

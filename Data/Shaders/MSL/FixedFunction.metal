@@ -4,6 +4,7 @@ using namespace metal;
 struct VertexIn {
   packed_float4 position;
   packed_float2 texcoord;
+  packed_float2 texcoord2;
   packed_float2 textureMatrixScale;
   packed_float4 color;
 };
@@ -18,6 +19,7 @@ struct TransformUniforms {
 struct VertexOut {
   float4 position [[position]];
   float2 texcoord;
+  float2 texcoord2;
   float4 color;
 };
 
@@ -37,8 +39,11 @@ vertex VertexOut solid_vertex(
   }
 
   const float2 texcoord = float2(in.texcoord.x, in.texcoord.y);
+  const float2 texcoord2 = float2(in.texcoord2.x, in.texcoord2.y);
   const float4 transformedTexcoord =
       transform.textureMatrix * float4(texcoord.x, texcoord.y, 0.0, 1.0);
+  const float4 transformedTexcoord2 =
+      transform.textureMatrix * float4(texcoord2.x, texcoord2.y, 0.0, 1.0);
   const float2 textureMatrixScale =
       float2(in.textureMatrixScale.x, in.textureMatrixScale.y);
 
@@ -46,6 +51,8 @@ vertex VertexOut solid_vertex(
   out.position = position;
   out.texcoord = transformedTexcoord.xy * textureMatrixScale +
                  texcoord * (1.0 - textureMatrixScale);
+  out.texcoord2 = transformedTexcoord2.xy * textureMatrixScale +
+                  texcoord2 * (1.0 - textureMatrixScale);
   out.color = in.color;
   return out;
 }
@@ -108,11 +115,26 @@ float4 blend_compose(float4 over, float4 under, float fill, uint effectMode) {
   return ret;
 }
 
+float4 texture_stage_compose(
+    float4 sampleColor, float4 previousColor, float4 primaryColor,
+    uint textureMode) {
+  if (textureMode == 1) {
+    return float4(primaryColor.rgb, sampleColor.a * primaryColor.a);
+  }
+  if (textureMode == 2) {
+    return float4(
+        saturate(sampleColor.rgb + previousColor.rgb),
+        sampleColor.a * previousColor.a);
+  }
+  return sampleColor * previousColor;
+}
+
 fragment float4 solid_fragment(
     VertexOut in [[stage_in]],
     texture2d<float> source [[texture(0)]],
     texture2d<float> source2 [[texture(1)]],
     sampler sourceSampler [[sampler(0)]],
+    sampler sourceSampler2 [[sampler(1)]],
     constant uint& textureMode [[buffer(1)]],
     constant uint& alphaTest [[buffer(2)]],
     constant uint& celStage [[buffer(3)]],
@@ -124,35 +146,20 @@ fragment float4 solid_fragment(
     return float4(0.25, 0.125, 0.125, 1.0);
   }
 
-  float4 sampleColor = source.sample(sourceSampler, in.texcoord);
-  if (celStage == 0 && alphaTest != 0 && sampleColor.a <= 0.00390625) {
-    discard_fragment();
-  }
-
-  if (effectMode == 0 && hasTexture2 != 0 && textureMode2 == 2) {
-    const float4 sampleColor2 = source2.sample(sourceSampler, in.texcoord);
-    sampleColor = float4(
-        saturate(sampleColor.rgb + sampleColor2.rgb),
-        sampleColor.a * sampleColor2.a);
-  }
+  const float4 sampleColor = source.sample(sourceSampler, in.texcoord);
+  float4 outputColor;
 
   if (celStage == 2) {
-    return float4(sampleColor.rgb * in.color.rgb, 1.0);
-  }
-
-  if (effectMode == 1) {
-    if (sampleColor.a == 0.0) {
-      return sampleColor;
+    outputColor = float4(sampleColor.rgb * in.color.rgb, 1.0);
+  } else if (effectMode == 1) {
+    outputColor = sampleColor;
+    if (sampleColor.a != 0.0) {
+      outputColor.rgb /= sampleColor.a;
     }
-    return float4(sampleColor.rgb / sampleColor.a, sampleColor.a) * in.color;
-  }
-
-  if (effectMode >= 2 && effectMode <= 7) {
-    const float4 over = source2.sample(sourceSampler, in.texcoord);
-    return blend_compose(over, sampleColor, in.color.a, effectMode);
-  }
-
-  if (effectMode == 8) {
+  } else if (effectMode >= 2 && effectMode <= 7) {
+    const float4 over = source2.sample(sourceSampler2, in.texcoord2);
+    outputColor = blend_compose(over, sampleColor, in.color.a, effectMode);
+  } else if (effectMode == 8) {
     float fU = in.texcoord.x * float(textureWidth) * 2.0 - 0.5;
     const float fOdd = fmod(fU + 0.0001, 2.0);
     fU -= fOdd;
@@ -160,21 +167,26 @@ fragment float4 solid_fragment(
     const float4 yuyv = source.sample(sourceSampler, float2(fU, in.texcoord.y));
     float3 yuv = fOdd <= 0.5 ? yuyv.rga : yuyv.bga;
     yuv -= float3(16.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0);
-    return float4(
+    outputColor = float4(
         dot(yuv, float3(1.1643, 0.0000, 1.5958)),
         dot(yuv, float3(1.1643, -0.39173, -0.81290)),
         dot(yuv, float3(1.1643, 2.0170, 0.0000)),
-        1.0) * in.color;
+        1.0);
+  } else {
+    outputColor =
+        texture_stage_compose(sampleColor, in.color, in.color, textureMode);
+    if (hasTexture2 != 0) {
+      const float4 sampleColor2 =
+          source2.sample(sourceSampler2, in.texcoord2);
+      outputColor = texture_stage_compose(
+          sampleColor2, outputColor, in.color, textureMode2);
+    }
   }
 
-  if (textureMode == 1) {
-    return float4(in.color.rgb, sampleColor.a * in.color.a);
+  if (alphaTest != 0 && outputColor.a <= 0.00390625) {
+    discard_fragment();
   }
-  if (textureMode == 2) {
-    return float4(
-        saturate(sampleColor.rgb + in.color.rgb), sampleColor.a * in.color.a);
-  }
-  return sampleColor * in.color;
+  return outputColor;
 }
 
 float sdf_median_rgb(float r, float g, float b) {
@@ -200,9 +212,6 @@ fragment float4 distance_field_fragment(
   const float coverage = smoothstep(0.5 - afwidth, 0.5 + afwidth, dist);
   if (celStage == 0 && alphaTest != 0 && coverage <= 0.00390625) {
     discard_fragment();
-  }
-  if (textureMode == 2) {
-    return saturate(float4(in.color.rgb, in.color.a * coverage) + in.color);
   }
   return float4(in.color.rgb, in.color.a * coverage);
 }

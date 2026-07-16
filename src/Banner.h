@@ -17,14 +17,14 @@ class UnlockEntry;
 class Banner : public Sprite {
  public:
   Banner();
-  virtual ~Banner() {}
-  virtual Banner* Copy() const;
+  ~Banner() override = default;
+  Banner* Copy() const override;
 
   void Load(RageTextureID ID, bool bIsBanner);
-  virtual void Load(RageTextureID ID) { Load(ID, true); }
+  void Load(RageTextureID ID) override { Load(ID, true); }
   void LoadFromCachedBanner(const std::string& sPath);
 
-  virtual void Update(float fDeltaTime);
+  void Update(float fDeltaTime) override;
 
   /**
    * @brief Attempt to load the banner from a song.
@@ -52,7 +52,7 @@ class Banner : public Sprite {
   float ScrollingPercent() const { return m_fPercentScrolling; }
 
   // Lua
-  void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
  protected:
   bool m_bScrolling;

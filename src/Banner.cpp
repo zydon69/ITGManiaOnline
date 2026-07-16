@@ -104,7 +104,9 @@ void Banner::Load(RageTextureID ID, bool bIsBanner) {
       "SRC_AUDIT_FIX SRC-2693 MusicWheelTrace banner_load_raw "
       "path='%s' isBanner=%d scrolling=%d percent=%.6f",
       ID.filename.c_str(), bIsBanner, m_bScrolling, m_fPercentScrolling));
-  if (ID.filename == "") {
+  m_fPercentScrolling = 0;
+  m_bScrolling = false;
+  if (ID.filename.empty()) {
     Sprite::Load(RageTextureID());
     return;
   }
@@ -112,9 +114,6 @@ void Banner::Load(RageTextureID ID, bool bIsBanner) {
   if (bIsBanner) {
     ID = SongBannerTexture(ID);
   }
-
-  m_fPercentScrolling = 0;
-  m_bScrolling = false;
 
   OddDimensionWarningGuard oddDimensionWarningGuard;
   Sprite::Load(ID);
@@ -168,6 +167,11 @@ void Banner::LoadFromCachedBanner(const std::string& sPath) {
 }
 
 void Banner::Update(float fDeltaTime) {
+  if (!IsFiniteFloat(fDeltaTime)) {
+    WarnBannerAuditFix(
+        "SRC_AUDIT_FIX SRC-3109: Banner ignored non-finite update delta.");
+    return;
+  }
   Sprite::Update(fDeltaTime);
 
   if (m_bScrolling) {
@@ -192,6 +196,8 @@ void Banner::Update(float fDeltaTime) {
       WarnBannerAuditFix(
           "SRC_AUDIT_FIX SRC-723: Banner skipped scrolling because no texture "
           "coord rect is available.");
+      m_bScrolling = false;
+      m_fPercentScrolling = 0.0f;
       return;
     }
 
@@ -249,7 +255,7 @@ void Banner::LoadFromSong(Song* pSong)  // nullptr means no song
 
 void Banner::LoadMode() {
   Load(GetBannerThemePath("Banner", "Mode"));
-  m_bScrolling = (bool)SCROLL_MODE;
+  m_bScrolling = THEME != nullptr && static_cast<bool>(SCROLL_MODE);
 }
 
 void Banner::LoadFromSongGroup(std::string sSongGroup) {
@@ -384,22 +390,27 @@ void Banner::LoadFallbackCharacterIcon() {
 
 void Banner::LoadRoulette() {
   Load(GetBannerThemePath("Banner", "roulette"));
-  m_bScrolling = (bool)SCROLL_ROULETTE;
+  m_bScrolling = THEME != nullptr && static_cast<bool>(SCROLL_ROULETTE);
 }
 
 void Banner::LoadRandom() {
   Load(GetBannerThemePath("Banner", "random"));
-  m_bScrolling = (bool)SCROLL_RANDOM;
+  m_bScrolling = THEME != nullptr && static_cast<bool>(SCROLL_RANDOM);
 }
 
 void Banner::LoadFromSortOrder(SortOrder so) {
+  if (so < 0 || so >= NUM_SortOrder) {
+    WarnBannerAuditFix(ssprintf(
+        "SRC_AUDIT_FIX SRC-3109: Banner rejected invalid sort order %d.",
+        static_cast<int>(so)));
+    LoadFallback();
+    return;
+  }
   // TODO: See if the check for nullptr/PREFERRED(?) is needed.
   switch (so) {
-    case SortOrder_Invalid:
-      LoadFallback();
-      break;
     case SORT_SERIES:
     case SORT_GROUP:
+      LoadGroupFallback();
       break;
     // This is necessary to prevent multiple banners from matching for
     // SORT_RECENT and SORT_POPULARITY
@@ -421,7 +432,7 @@ void Banner::LoadFromSortOrder(SortOrder so) {
           "Banner", ssprintf("%s", SortOrderToString(so).c_str())));
       break;
   }
-  m_bScrolling = (bool)SCROLL_SORT_ORDER;
+  m_bScrolling = THEME != nullptr && static_cast<bool>(SCROLL_SORT_ORDER);
 }
 
 // lua start

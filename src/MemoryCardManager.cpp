@@ -275,12 +275,14 @@ MemoryCardManager::MemoryCardManager() {
   ASSERT(g_pWorker == nullptr);
 
   // Register with Lua.
-  {
+  if (LUA != nullptr) {
     Lua* L = LUA->Get();
-    lua_pushstring(L, "MEMCARDMAN");
-    this->PushSelf(L);
-    lua_settable(L, LUA_GLOBALSINDEX);
-    LUA->Release(L);
+    if (L != nullptr) {
+      lua_pushstring(L, "MEMCARDMAN");
+      this->PushSelf(L);
+      lua_settable(L, LUA_GLOBALSINDEX);
+      LUA->Release(L);
+    }
   }
 
   g_pWorker = new ThreadedMemoryCardWorker;
@@ -293,32 +295,41 @@ MemoryCardManager::MemoryCardManager() {
 
   /* These can play at any time.  Preload them, so we don't cause a skip in
    * gameplay. */
-  m_soundReady.Load(THEME->GetPathS("MemoryCardManager", "ready"), true);
-  m_soundError.Load(THEME->GetPathS("MemoryCardManager", "error"), true);
-  m_soundTooLate.Load(THEME->GetPathS("MemoryCardManager", "too late"), true);
-  m_soundDisconnect.Load(
-      THEME->GetPathS("MemoryCardManager", "disconnect"), true);
+  if (THEME != nullptr && THEME->IsThemeLoaded()) {
+    m_soundReady.Load(THEME->GetPathS("MemoryCardManager", "ready"), true);
+    m_soundError.Load(THEME->GetPathS("MemoryCardManager", "error"), true);
+    m_soundTooLate.Load(
+        THEME->GetPathS("MemoryCardManager", "too late"), true);
+    m_soundDisconnect.Load(
+        THEME->GetPathS("MemoryCardManager", "disconnect"), true);
+  }
 
   /* Mount the filesystems that we'll use with Mount().  Use a bogus root for
    * the internal mount for now, since we don't know where we'll mount to yet;
    * nothing reads from it until it's mounted, anyway. */
-  FOREACH_PlayerNumber(pn) {
-    FILEMAN->Mount("dir", "(empty)", MEM_CARD_MOUNT_POINT_INTERNAL[pn]);
-    FILEMAN->Mount(
-        "timeout", MEM_CARD_MOUNT_POINT_INTERNAL[pn], MEM_CARD_MOUNT_POINT[pn]);
+  if (FILEMAN != nullptr) {
+    FOREACH_PlayerNumber(pn) {
+      FILEMAN->Mount("dir", "(empty)", MEM_CARD_MOUNT_POINT_INTERNAL[pn]);
+      FILEMAN->Mount(
+          "timeout", MEM_CARD_MOUNT_POINT_INTERNAL[pn],
+          MEM_CARD_MOUNT_POINT[pn]);
+    }
   }
 }
 
 MemoryCardManager::~MemoryCardManager() {
   // Unregister with Lua.
-  LUA->UnsetGlobal("MEMCARDMAN");
+  if (LUA != nullptr) {
+    LUA->UnsetGlobal("MEMCARDMAN");
+  }
 
-  ASSERT(g_pWorker != nullptr);
   RageUtil::SafeDelete(g_pWorker);
 
-  FOREACH_PlayerNumber(pn) {
-    FILEMAN->Unmount("", "", MEM_CARD_MOUNT_POINT[pn]);
-    FILEMAN->Unmount("", "", MEM_CARD_MOUNT_POINT_INTERNAL[pn]);
+  if (FILEMAN != nullptr) {
+    FOREACH_PlayerNumber(pn) {
+      FILEMAN->Unmount("", "", MEM_CARD_MOUNT_POINT[pn]);
+      FILEMAN->Unmount("", "", MEM_CARD_MOUNT_POINT_INTERNAL[pn]);
+    }
   }
 }
 
@@ -351,6 +362,9 @@ bool MemoryCardManager::GetCardLocked(PlayerNumber pn) const {
 }
 
 void MemoryCardManager::Update() {
+  if (g_pWorker == nullptr) {
+    return;
+  }
   std::vector<UsbStorageDevice> vOld;
 
   vOld = m_vStorageDevices;  // copy
@@ -361,7 +375,9 @@ void MemoryCardManager::Update() {
   UpdateAssignments();
   RefreshStoredProfileNames();
 
-  MESSAGEMAN->Broadcast(Message_StorageDevicesChanged);
+  if (MESSAGEMAN != nullptr) {
+    MESSAGEMAN->Broadcast(Message_StorageDevicesChanged);
+  }
 }
 
 void MemoryCardManager::RefreshStoredProfileNames() {

@@ -9,8 +9,8 @@
 #include "ActorFrame.h"
 #include "ActorUtil.h"
 #include "LuaManager.h"
-#include "RageLog.h"
 #include "RageDisplay.h"
+#include "RageLog.h"
 #include "RageMath.h"
 #include "RageTexture.h"
 #include "RageTextureManager.h"
@@ -138,8 +138,7 @@ class GraphLine : public Actor {
     for (int i = 0; i < static_cast<int>(validLineStrip.size()); ++i) {
       MakeCircle(
           validLineStrip[i], &m_pCircles[0] + iCircleVertices * i,
-          iSubdivisions,
-          1);
+          iSubdivisions, 1);
     }
 
     int iNumLines = static_cast<int>(validLineStrip.size()) - 1;
@@ -211,6 +210,13 @@ class GraphBody : public Actor {
       m_Slices[i].t = RageVector2(0, 0);
     }
   }
+  GraphBody(const GraphBody& cpy) : Actor(cpy), m_pTexture(nullptr) {
+    if (TEXTUREMAN != nullptr && cpy.m_pTexture != nullptr) {
+      m_pTexture = TEXTUREMAN->CopyTexture(cpy.m_pTexture);
+    }
+    std::copy(
+        std::begin(cpy.m_Slices), std::end(cpy.m_Slices), std::begin(m_Slices));
+  }
   ~GraphBody() {
     if (TEXTUREMAN != nullptr && m_pTexture != nullptr) {
       TEXTUREMAN->UnloadTexture(m_pTexture);
@@ -244,9 +250,44 @@ GraphDisplay::GraphDisplay() {
   m_pGraphBody = nullptr;
 }
 
-GraphDisplay::~GraphDisplay() {
-  ClearGraphActors();
+GraphDisplay::GraphDisplay(const GraphDisplay& cpy)
+    : ActorFrame(cpy),
+      m_Values(cpy.m_Values),
+      m_quadVertices(cpy.m_quadVertices),
+      m_sprBarely(cpy.m_sprBarely),
+      m_sprBacking(cpy.m_sprBacking),
+      m_sprSongBoundary(cpy.m_sprSongBoundary),
+      m_pGraphLine(nullptr),
+      m_pGraphBody(nullptr) {
+  if (m_sprBacking.IsLoaded()) {
+    AddChild(m_sprBacking);
+  }
+  if (cpy.m_pGraphBody != nullptr) {
+    m_pGraphBody = new GraphBody(*cpy.m_pGraphBody);
+    AddChild(m_pGraphBody);
+  }
+  if (cpy.m_pGraphLine != nullptr) {
+    m_pGraphLine = cpy.m_pGraphLine->Copy();
+    if (m_pGraphLine != nullptr) {
+      AddChild(m_pGraphLine);
+    }
+  }
+  if (m_sprBarely.IsLoaded()) {
+    AddChild(m_sprBarely);
+  }
+  for (const Actor* boundary : cpy.m_vpSongBoundaries) {
+    if (boundary == nullptr) {
+      continue;
+    }
+    Actor* copy = boundary->Copy();
+    if (copy != nullptr) {
+      AddChild(copy);
+      m_vpSongBoundaries.push_back(copy);
+    }
+  }
 }
+
+GraphDisplay::~GraphDisplay() { ClearGraphActors(); }
 
 void GraphDisplay::ClearSongBoundaries() {
   for (Actor* p : m_vpSongBoundaries) {
@@ -284,8 +325,7 @@ void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
   }
 
   m_Values.assign(VALUE_RESOLUTION, 0.0f);
-  pss.GetLifeRecord(
-      m_Values.data(), VALUE_RESOLUTION, fTotalStepSeconds);
+  pss.GetLifeRecord(m_Values.data(), VALUE_RESOLUTION, fTotalStepSeconds);
   for (float& value : m_Values) {
     if (!std::isfinite(value)) {
       TraceGraphDisplayAuditFix(
@@ -299,7 +339,7 @@ void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
   UpdateVerts();
 
   // Show song boundaries
-  float fSec = 0;
+  double fSec = 0.0;
   const std::vector<Song*>& possibleSongs = ss.m_vpPossibleSongs;
 
   if (possibleSongs.size() > 1) {
@@ -324,13 +364,25 @@ void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
                 "seconds.");
             return;
           }
-          fSec += songSeconds;
+          fSec += static_cast<double>(songSeconds);
+          if (!std::isfinite(fSec) || fSec > fTotalStepSeconds) {
+            TraceGraphDisplayAuditFix(
+                "SRC_AUDIT_FIX SRC-2972: GraphDisplay clamped cumulative song "
+                "boundary timing.");
+            fSec = fTotalStepSeconds;
+          }
 
           Actor* p = m_sprSongBoundary->Copy();
+          if (p == nullptr) {
+            WarnGraphDisplayAuditFix(
+                "SRC_AUDIT_FIX SRC-2972: GraphDisplay skipped null boundary "
+                "copy.");
+            return;
+          }
           m_vpSongBoundaries.push_back(p);
           float fX = SCALE(
-              fSec, 0, fTotalStepSeconds, m_quadVertices.left,
-              m_quadVertices.right);
+              static_cast<float>(fSec), 0, fTotalStepSeconds,
+              m_quadVertices.left, m_quadVertices.right);
           p->SetX(fX);
           this->AddChild(p);
         });
@@ -393,9 +445,14 @@ void GraphDisplay::Load(std::string sMetricsGroup) {
   }
 
   m_sprBacking.Load(THEME->GetPathG(sMetricsGroup, "Backing"));
-  m_sprBacking->ZoomToWidth(m_size.x);
-  m_sprBacking->ZoomToHeight(m_size.y);
-  this->AddChild(m_sprBacking);
+  if (m_sprBacking.IsLoaded()) {
+    m_sprBacking->ZoomToWidth(m_size.x);
+    m_sprBacking->ZoomToHeight(m_size.y);
+    this->AddChild(m_sprBacking);
+  } else {
+    WarnGraphDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-2973: GraphDisplay loaded without backing actor.");
+  }
 
   m_pGraphBody = new GraphBody(THEME->GetPathG(sMetricsGroup, "Body", true));
   this->AddChild(m_pGraphBody);
@@ -408,8 +465,13 @@ void GraphDisplay::Load(std::string sMetricsGroup) {
   m_sprSongBoundary.Load(THEME->GetPathG(sMetricsGroup, "SongBoundary"));
 
   m_sprBarely.Load(THEME->GetPathG(sMetricsGroup, "Barely"));
-  m_sprBarely->SetVisible(false);
-  this->AddChild(m_sprBarely);
+  if (m_sprBarely.IsLoaded()) {
+    m_sprBarely->SetVisible(false);
+    this->AddChild(m_sprBarely);
+  } else {
+    WarnGraphDisplayAuditFix(
+        "SRC_AUDIT_FIX SRC-2973: GraphDisplay loaded without barely actor.");
+  }
 }
 
 void GraphDisplay::UpdateVerts() {
@@ -480,8 +542,10 @@ class LunaGraphDisplay : public Luna<GraphDisplay> {
     COMMON_RETURN_SELF;
   }
   static int Set(T* p, lua_State* L) {
-    StageStats* pStageStats = Luna<StageStats>::check(L, 1);
-    PlayerStageStats* pPlayerStageStats = Luna<PlayerStageStats>::check(L, 2);
+    StageStats* pStageStats =
+        lua_isnil(L, 1) ? nullptr : Luna<StageStats>::check(L, 1);
+    PlayerStageStats* pPlayerStageStats =
+        lua_isnil(L, 2) ? nullptr : Luna<PlayerStageStats>::check(L, 2);
     if (pStageStats == nullptr) {
       luaL_error(L, "The StageStats passed to GraphDisplay:Set are nil.");
     }

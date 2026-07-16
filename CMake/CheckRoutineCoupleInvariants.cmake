@@ -25,7 +25,7 @@ require_source_text("src/StageStats.cpp"
 require_source_text("src/StageStats.cpp"
   "void StageStats::SynchronizeRoutineScoreToPlayers()")
 require_source_text("src/StatsManager.cpp"
-  "ssreturn.m_RoutinePlayer.m_radarPossible[r] /= uNumSongs")
+  "ssreturn.m_RoutinePlayer.m_radarPossible[r] /= routineStepsPlayed")
 require_source_text("src/ScreenGameplay.cpp"
   "&STATSMAN->m_CurStageStats.m_RoutinePlayer")
 require_source_text("src/ScreenGameplay.cpp"

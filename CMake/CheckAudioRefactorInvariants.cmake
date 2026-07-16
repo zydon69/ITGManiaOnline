@@ -388,7 +388,7 @@ require_contains(
   "ThreadedBuffer collapses consumed mapping runs in one retry transition")
 require_contains(
   "${rage_sound_reader_threaded_buffer_cpp}"
-  "SRC_AUDIT_FIX SRC-2921"
+  "SRC_AUDIT_FIX SRC-2933"
   "ThreadedBuffer mapping compaction is review-traced")
 require_not_contains(
   "${rage_sound_reader_resample_good_cpp}"
@@ -396,7 +396,7 @@ require_not_contains(
   "Resample_Good must drain internally buffered output without source input")
 require_contains(
   "${rage_sound_reader_resample_good_cpp}"
-  "SRC_AUDIT_FIX SRC-2922"
+  "SRC_AUDIT_FIX SRC-2934"
   "Resample_Good internal-buffer draining is review-traced")
 
 require_contains(

@@ -2102,8 +2102,8 @@ void ScreenEdit::Update(float fDeltaTime) {
      * the end of the range.  We won't allow placing anything outside of the
      * range.
      */
-    bool bButtonIsBeingPressed =
-        !m_bIgnoreGameplayInputUntilRelease && IsGameplayColumnInputPressed();
+    bool bButtonIsBeingPressed = !m_bIgnoreGameplayInputUntilRelease &&
+                                 IsGameplayColumnInputPressed(m_EditState);
 
     float fLastBeat = NoteRowToBeat(m_iStopPlayingAt);
     if (bButtonIsBeingPressed && m_EditState == STATE_RECORDING) {
@@ -4050,7 +4050,7 @@ void ScreenEdit::TransitionEditState(EditState em) {
   m_EditState = em;
 
   if (bStateChanging && (em == STATE_RECORDING || em == STATE_PLAYING)) {
-    m_bIgnoreGameplayInputUntilRelease = IsGameplayColumnInputPressed();
+    m_bIgnoreGameplayInputUntilRelease = IsGameplayColumnInputPressed(em);
     if (m_bIgnoreGameplayInputUntilRelease) {
       LOG->Trace(
           "ScreenEdit: ignoring held gameplay columns until release after "
@@ -4062,18 +4062,31 @@ void ScreenEdit::TransitionEditState(EditState em) {
   }
 }
 
-bool ScreenEdit::IsGameplayColumnInputPressed() const {
+bool ScreenEdit::IsGameplayColumnInputPressed(EditState state) const {
   const Style* style =
       GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber());
   if (style == nullptr) {
     return false;
   }
 
-  for (int t = 0; t < style->m_iColsPerPlayer; ++t) {
-    std::vector<GameInput> gameInputs;
-    style->StyleInputToGameInput(t, PLAYER_1, gameInputs);
-    if (INPUTMAPPER->IsBeingPressed(gameInputs)) {
-      return true;
+  std::vector<PlayerNumber> players;
+  if (state == STATE_RECORDING) {
+    // Recording input is intentionally handled by InputRecord() on P1.
+    players.push_back(PLAYER_1);
+  } else {
+    FOREACH_EnabledPlayer(pn) players.push_back(pn);
+    if (players.empty()) {
+      players.push_back(main_player_);
+    }
+  }
+
+  for (PlayerNumber pn : players) {
+    for (int t = 0; t < style->m_iColsPerPlayer; ++t) {
+      std::vector<GameInput> gameInputs;
+      style->StyleInputToGameInput(t, pn, gameInputs);
+      if (INPUTMAPPER->IsBeingPressed(gameInputs)) {
+        return true;
+      }
     }
   }
 
@@ -4085,7 +4098,7 @@ void ScreenEdit::UpdateGameplayInputReleaseGuard() {
     return;
   }
 
-  if (!IsGameplayColumnInputPressed()) {
+  if (!IsGameplayColumnInputPressed(m_EditState)) {
     m_bIgnoreGameplayInputUntilRelease = false;
     LOG->Trace("ScreenEdit: gameplay column input release guard cleared");
   }

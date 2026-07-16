@@ -561,6 +561,18 @@ bool Screen::PassInputToLua(const InputEventPlus& input) {
     WarnScreen(m_sName, "cannot run input callbacks without Lua/input mapper.");
     return false;
   }
+  const InputScheme* inputScheme = INPUTMAPPER->GetInputScheme();
+  if (inputScheme == nullptr) {
+    WarnScreen(m_sName, "cannot run input callbacks without an input scheme.");
+    return false;
+  }
+
+  std::vector<LuaReference> callbacks;
+  callbacks.reserve(m_InputCallbacks.size());
+  for (const auto& callback : m_InputCallbacks) {
+    callbacks.push_back(callback.second);
+  }
+
   m_CallingInputCallbacks = true;
   bool handled = false;
   Lua* L = LUA->Get();
@@ -590,23 +602,22 @@ bool Screen::PassInputToLua(const InputEventPlus& input) {
   lua_setfield(L, -2, "DeviceInput");
   Enum::Push(L, input.GameI.controller);
   lua_setfield(L, -2, "controller");
-  LuaHelpers::Push(
-      L, GameButtonToString(INPUTMAPPER->GetInputScheme(), input.GameI.button));
+  LuaHelpers::Push(L, GameButtonToString(inputScheme, input.GameI.button));
   lua_setfield(L, -2, "button");
   Enum::Push(L, input.type);
   lua_setfield(L, -2, "type");
-  LuaHelpers::Push(
-      L, GameButtonToString(INPUTMAPPER->GetInputScheme(), input.MenuI));
+  LuaHelpers::Push(L, GameButtonToString(inputScheme, input.MenuI));
   lua_setfield(L, -2, "GameButton");
   Enum::Push(L, input.pn);
   lua_setfield(L, -2, "PlayerNumber");
   Enum::Push(L, input.mp);
   lua_setfield(L, -2, "MultiPlayer");
   const int inputTableIndex = lua_gettop(L);
-  for (std::map<callback_key_t, LuaReference>::iterator callback =
-           m_InputCallbacks.begin();
-       callback != m_InputCallbacks.end() && !handled; ++callback) {
-    callback->second.PushSelf(L);
+  for (LuaReference& callback : callbacks) {
+    if (handled) {
+      break;
+    }
+    callback.PushSelf(L);
     lua_pushvalue(L, -2);
     std::string error = "Error running input callback: ";
     if (LuaHelpers::RunScriptOnStack(L, error, 1, 1, true)) {

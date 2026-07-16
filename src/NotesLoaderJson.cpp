@@ -147,24 +147,36 @@ static void Deserialize(BackgroundChange& o, const Json::Value& root) {
 }
 
 static void Deserialize(TapNote& o, const Json::Value& root) {
+  int rawType = TapNoteType_Empty;
   if (root.isInt()) {
-    o.type = (TapNoteType)root.asInt();
+    rawType = root.asInt();
+  } else if (root.isObject()) {
+    // NotesWriterJson omits Type for normal taps, so an object without Type
+    // still represents a tap rather than an empty note.
+    if (root.isMember("Type") && !root["Type"].isInt()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX JSON note has a non-integer TapNoteType; treating "
+          "it as empty.");
+      o = TAP_EMPTY;
+      return;
+    }
+    rawType =
+        root.isMember("Type") ? root["Type"].asInt() : TapNoteType_Tap;
+  } else {
     return;
   }
 
-  if (!root.isObject()) {
-    return;
-  }
-
-  // NotesWriterJson omits Type for normal taps, so an object without Type
-  // still represents a tap rather than an empty note.
-  o.type = root.isMember("Type") ? (TapNoteType)root["Type"].asInt()
-                                 : TapNoteType_Tap;
-  if (o.type < TapNoteType_Empty || o.type >= NUM_TapNoteType) {
+  if (rawType < TapNoteType_Empty || rawType >= NUM_TapNoteType) {
     LOG->Warn("SRC_AUDIT_FIX JSON note has invalid TapNoteType %i; treating "
               "it as empty.",
-              (int)o.type);
+              rawType);
     o = TAP_EMPTY;
+    return;
+  }
+  o.type = static_cast<TapNoteType>(rawType);
+
+  // Legacy JSON represented a note solely by its integer TapNoteType.
+  if (root.isInt()) {
     return;
   }
 
@@ -372,18 +384,21 @@ static bool Deserialize(Song& out, const Json::Value& root) {
 
   out.m_vsKeysoundFile = JsonUtil::DeserializeArrayStrings(root["KeySounds"]);
 
-  {
-    const Json::Value& charts = root["Charts"];
-    for (unsigned i = 0; i < charts.size(); ++i) {
-      Steps* step = new Steps(&out);
-      if (Deserialize(*step, charts[i])) {
-        out.AddSteps(step);
-      } else {
-        RageUtil::SafeDelete(step);
-      }
+  const Json::Value& charts = root["Charts"];
+  if (!charts.isArray()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX JSON song has no Charts array; load rejected.");
+    return false;
+  }
+  for (unsigned i = 0; i < charts.size(); ++i) {
+    Steps* step = new Steps(&out);
+    if (Deserialize(*step, charts[i])) {
+      out.AddSteps(step);
+    } else {
+      RageUtil::SafeDelete(step);
     }
   }
-  if (out.GetAllSteps().empty() && root.isMember("Charts")) {
+  if (out.GetAllSteps().empty()) {
     LOG->Warn("SRC_AUDIT_FIX JSON song has no loadable charts; load rejected.");
     return false;
   }

@@ -29,6 +29,7 @@
 
 const float min_state_delay = 0.0001f;
 constexpr size_t kMaxActorMultiVertexVertices = 1000000;
+constexpr size_t kMaxActorMultiVertexStates = 65536;
 
 static const char* DrawModeNames[] = {
     "Quads",     "QuadStrip",          "Fan", "Strip", "Triangles",
@@ -79,6 +80,16 @@ bool IsFiniteRect(const RectF& rect) {
          std::isfinite(rect.right) && std::isfinite(rect.bottom);
 }
 
+float GetValidStateDelay(float delay) {
+  return std::isfinite(delay) && delay > min_state_delay ? delay
+                                                         : min_state_delay;
+}
+
+bool IsValidState(const ActorMultiVertex::State& state) {
+  return IsFiniteRect(state.rect) && std::isfinite(state.delay) &&
+         state.delay > 0.0f;
+}
+
 uint8_t MultiplyColorChannel(uint8_t channel, float multiplier) {
   if (!std::isfinite(multiplier)) {
     return 0;
@@ -109,7 +120,6 @@ ActorMultiVertex::ActorMultiVertex() {
   _use_animation_state = false;
   _secs_into_state = 0.0f;
   _cur_state = 0;
-  AMV_TempState = nullptr;
 }
 
 ActorMultiVertex::~ActorMultiVertex() { UnloadTexture(); }
@@ -127,7 +137,6 @@ ActorMultiVertex::ActorMultiVertex(const ActorMultiVertex& cpy) : Actor(cpy) {
   _secs_into_state = cpy._secs_into_state;
   _cur_state = cpy._cur_state;
   _states = cpy._states;
-  AMV_TempState = nullptr;
 
   if (TEXTUREMAN != nullptr && cpy._Texture != nullptr) {
     _Texture = TEXTUREMAN->CopyTexture(cpy._Texture);
@@ -316,11 +325,8 @@ void ActorMultiVertex::DrawPrimitives() {
   Actor::SetTextureRenderStates();
   DISPLAY->SetEffectMode(_EffectMode);
 
-  // set temporary diffuse and glow
-  static AMV_TweenState TS;
-
-  AMV_TempState = &TS;
-  TS = AMV_current;
+  // Set temporary diffuse and glow without sharing mutable draw state.
+  AMV_TweenState TS = AMV_current;
 
   // skip if no change or fully transparent
   if (m_pTempState->diffuse[0] != RageColor(1, 1, 1, 1) &&
@@ -349,7 +355,7 @@ void ActorMultiVertex::DrawPrimitives() {
   // Draw diffuse pass.
   if (m_pTempState->diffuse[0].a > 0) {
     DISPLAY->SetTextureMode(TextureUnit_1, _TextureMode);
-    DrawInternal(AMV_TempState);
+    DrawInternal(&TS);
   }
 
   // Draw the glow pass
@@ -358,7 +364,7 @@ void ActorMultiVertex::DrawPrimitives() {
       TS.vertices[i].c = m_pTempState->glow;
     }
     DISPLAY->SetTextureMode(TextureUnit_1, TextureMode_Glow);
-    DrawInternal(AMV_TempState);
+    DrawInternal(&TS);
   }
   DISPLAY->SetTexture(TextureUnit_1, 0);
   DISPLAY->SetEffectMode(EffectMode_Normal);
@@ -523,6 +529,37 @@ void ActorMultiVertex::SetState(int i) {
   _secs_into_state = 0.0f;
 }
 
+void ActorMultiVertex::AddState(const State& new_state) {
+  if (_states.size() >= kMaxActorMultiVertexStates ||
+      !IsValidState(new_state)) {
+    LuaHelpers::ReportScriptError(
+        "ActorMultiVertex:AddState: invalid state or state limit reached.");
+    return;
+  }
+  _states.push_back(new_state);
+}
+
+void ActorMultiVertex::SetStateData(size_t i, const State& state) {
+  if (i >= _states.size() || !IsValidState(state)) {
+    return;
+  }
+  _states[i] = state;
+}
+
+void ActorMultiVertex::SetStateProperties(
+    const std::vector<State>& new_states) {
+  if (new_states.size() > kMaxActorMultiVertexStates ||
+      !std::all_of(new_states.begin(), new_states.end(), IsValidState)) {
+    LuaHelpers::ReportScriptError(
+        "ActorMultiVertex:SetStateProperties: invalid states or state limit "
+        "reached.");
+    return;
+  }
+  _states = new_states;
+  _cur_state = 0;
+  _secs_into_state = 0.0f;
+}
+
 void ActorMultiVertex::SetAllStateDelays(float delay) {
   if (!std::isfinite(delay) || delay <= min_state_delay) {
     delay = min_state_delay;
@@ -533,28 +570,43 @@ void ActorMultiVertex::SetAllStateDelays(float delay) {
 }
 
 float ActorMultiVertex::GetAnimationLengthSeconds() const {
-  auto calcDelay = [](float total, const State& s) {
-    return std::isfinite(s.delay) && s.delay > min_state_delay
-               ? total + s.delay
-               : total + min_state_delay;
-  };
-  return std::accumulate(_states.begin(), _states.end(), 0.f, calcDelay);
+  double total = 0.0;
+  for (const State& state : _states) {
+    total += GetValidStateDelay(state.delay);
+    if (total >= std::numeric_limits<float>::max()) {
+      return std::numeric_limits<float>::max();
+    }
+  }
+  return static_cast<float>(total);
 }
 
 void ActorMultiVertex::SetSecondsIntoAnimation(float seconds) {
   if (!std::isfinite(seconds)) {
     seconds = 0.0f;
   }
-  if (!_states.empty()) {
-    SetState(0);
-  }
   if (_Texture) {
     _Texture->SetPosition(seconds);
   }
-  _secs_into_state = seconds;
-  if (!_states.empty()) {
-    UpdateAnimationState(true);
+  if (_states.empty()) {
+    _cur_state = 0;
+    _secs_into_state = 0.0f;
+    return;
   }
+
+  const double length = GetAnimationLengthSeconds();
+  double phase = length > 0.0 ? std::fmod(static_cast<double>(seconds), length)
+                              : 0.0;
+  if (phase < 0.0) {
+    phase += length;
+  }
+  _cur_state = 0;
+  while (_cur_state + 1 < _states.size() &&
+         phase >= GetValidStateDelay(_states[_cur_state].delay)) {
+    phase -= GetValidStateDelay(_states[_cur_state].delay);
+    ++_cur_state;
+  }
+  _secs_into_state = static_cast<float>(phase);
+  UpdateAnimationState(true);
 }
 
 void ActorMultiVertex::UpdateAnimationState(bool force_update) {
@@ -583,21 +635,24 @@ void ActorMultiVertex::UpdateAnimationState(bool force_update) {
   if (last > verts.size()) {
     return;
   }
-  bool state_changed = force_update;
-  if (_states.size() > 1) {
-    while (true) {
-      float delay = _states[_cur_state].delay;
-      if (!std::isfinite(delay) || delay <= min_state_delay) {
-        delay = min_state_delay;
-      }
-      if (_secs_into_state + min_state_delay <= delay) {
-        break;
-      }
-      _secs_into_state -= delay;
-      _cur_state = (_cur_state + 1) % _states.size();
-      state_changed = true;
-    }
+  const size_t previous_state = _cur_state;
+  double phase = _secs_into_state;
+  for (size_t i = 0; i < _cur_state; ++i) {
+    phase += GetValidStateDelay(_states[i].delay);
   }
+  const double length = GetAnimationLengthSeconds();
+  phase = length > 0.0 ? std::fmod(phase, length) : 0.0;
+  if (phase < 0.0) {
+    phase += length;
+  }
+  _cur_state = 0;
+  while (_cur_state + 1 < _states.size() &&
+         phase >= GetValidStateDelay(_states[_cur_state].delay)) {
+    phase -= GetValidStateDelay(_states[_cur_state].delay);
+    ++_cur_state;
+  }
+  _secs_into_state = static_cast<float>(phase);
+  const bool state_changed = force_update || previous_state != _cur_state;
   if (state_changed) {
     switch (AMV_DestTweenState()._DrawMode) {
       case DrawMode_Quads:

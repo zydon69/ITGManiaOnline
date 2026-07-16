@@ -15,6 +15,7 @@
 #include "GameConstantsAndTypes.h"
 #include "GameState.h"
 #include "LuaManager.h"
+#include "NoteDataUtil.h"
 #include "NoteSkinManager.h"
 #include "PlayerNumber.h"
 #include "PrefsManager.h"
@@ -28,6 +29,7 @@
 #include "Steps.h"
 #include "Style.h"
 #include "ThemeMetric.h"
+#include "TimingData.h"
 #include "Trail.h"
 #include "global.h"
 
@@ -91,6 +93,44 @@ static bool IsValidPlayerNumber(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
 }
 
+static bool StepsContainQuadsForPlayer(const Steps* steps, PlayerNumber pn) {
+  if (steps == nullptr || !IsValidPlayerNumber(pn)) {
+    return false;
+  }
+
+  NoteData noteData;
+  steps->GetNoteData(noteData);
+  std::vector<NoteData> playerParts;
+  const NoteData* playerData = &noteData;
+  if (NoteDataUtil::SplitCompositeOrStackedNoteData(
+          noteData, playerParts, steps->m_StepsType)) {
+    if (static_cast<size_t>(pn) >= playerParts.size()) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: Cannot inspect NoQuads for player %i in malformed "
+          "per-player Steps data.",
+          pn);
+      return false;
+    }
+    playerData = &playerParts[pn];
+  }
+
+  const TimingData* timing = steps->GetTimingData();
+  int previousRow = -1;
+  auto iter = playerData->GetTapNoteRangeAllTracks(0, MAX_NOTE_ROW, true);
+  for (; !iter.IsAtEnd(); ++iter) {
+    const int row = iter.Row();
+    if (row == previousRow) {
+      continue;
+    }
+    previousRow = row;
+    if ((timing == nullptr || timing->IsJudgableAtRow(row)) &&
+        playerData->RowNeedsAtLeastSimultaneousPresses(4, row)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static TapNoteScore GetDefaultMinTNSToHideNotes() {
   return PREFSMAN ? PREFSMAN->m_MinTNSToHideNotes.Get() : TNS_None;
 }
@@ -117,6 +157,23 @@ static int ClampBatteryLives(float value) {
     return 4;
   }
   return std::clamp(static_cast<int>(std::lrint(value)), 0, 100);
+}
+
+static bool HasNumericModPrefix(const std::string& value, char prefix) {
+  if (value.size() < 2 || value[0] != prefix) {
+    return false;
+  }
+  const unsigned char firstValue = static_cast<unsigned char>(value[1]);
+  return std::isdigit(firstValue) || value[1] == '+' || value[1] == '-' ||
+         value[1] == '.';
+}
+
+static bool ParsePositiveXMod(const std::string& value, float& speedOut) {
+  if (value.size() < 2 || value.back() != 'x' ||
+      !StringToFloat(value.substr(0, value.size() - 1), speedOut)) {
+    return false;
+  }
+  return speedOut > 0.0f;
 }
 
 template<typename EnumT>
@@ -184,6 +241,7 @@ void PlayerOptions::Init() {
   m_bDizzyHolds = false;
   m_bZBuffer = false;
   m_bCosecant = false;
+  m_FailType = FailType_Immediate;
   m_sNoteSkin = "";
   m_fVisualDelay = 0.0f;
   m_twDisabledWindows.reset();
@@ -250,7 +308,11 @@ void PlayerOptions::Approach(const PlayerOptions& other, float fDeltaSeconds) {
   APPROACH(fMaxScrollBPM);
   fapproach(
       m_fScrollBPM, other.m_fScrollBPM,
-      fDeltaSeconds * other.m_SpeedfScrollBPM * 150);
+      fRateMult * fDeltaSeconds *
+          SanitizeTweenSpeed(
+              other.m_SpeedfScrollBPM,
+              "PlayerOptions::Approach scroll BPM") *
+          150.0f);
   for (int i = 0; i < NUM_ACCELS; i++) {
     APPROACH(fAccels[i]);
   }
@@ -374,7 +436,8 @@ void PlayerOptions::GetMods(
       }
       break;
     case LifeType_Battery:
-      AddTo.push_back(ssprintf("%dLives", m_BatteryLives));
+      AddTo.push_back(
+          ssprintf("%dLives", std::clamp(m_BatteryLives, 0, 100)));
       break;
     case LifeType_Time:
       AddTo.push_back("LifeTime");
@@ -409,13 +472,21 @@ void PlayerOptions::GetMods(
       break;
   }
 
-  if (!m_fTimeSpacing) {
-    if (m_fMaxScrollBPM) {
+  const bool useTimeSpacing =
+      std::isfinite(m_fTimeSpacing) && m_fTimeSpacing != 0.0f;
+  if (!useTimeSpacing) {
+    if (std::isfinite(m_fMaxScrollBPM) && m_fMaxScrollBPM > 0.0f) {
       std::string s = ssprintf("m%.0f", m_fMaxScrollBPM);
       AddTo.push_back(s);
-    } else if (m_bSetScrollSpeed || m_fScrollSpeed != 1) {
+    } else if (
+        m_bSetScrollSpeed ||
+        (std::isfinite(m_fScrollSpeed) && m_fScrollSpeed != 1.0f)) {
       /* -> 1.00 */
-      std::string s = ssprintf("%2.2f", m_fScrollSpeed);
+      const float scrollSpeed =
+          std::isfinite(m_fScrollSpeed) && m_fScrollSpeed > 0.0f
+              ? m_fScrollSpeed
+              : 1.0f;
+      std::string s = ssprintf("%2.2f", scrollSpeed);
       if (s[s.size() - 1] == '0') {
         /* -> 1.0 */
         s.erase(s.size() - 1);  // delete last char
@@ -427,7 +498,10 @@ void PlayerOptions::GetMods(
       AddTo.push_back(s + "x");
     }
   } else {
-    std::string s = ssprintf("C%.0f", m_fScrollBPM);
+    const float scrollBpm =
+        std::isfinite(m_fScrollBPM) && m_fScrollBPM > 0.0f ? m_fScrollBPM
+                                                           : CMOD_DEFAULT;
+    std::string s = ssprintf("C%.0f", scrollBpm);
     AddTo.push_back(s);
   }
 
@@ -797,7 +871,8 @@ void PlayerOptions::GetMods(
     AddTo.push_back(s);
   }
 
-  if (std::abs(m_fVisualDelay) > 0.0001f) {
+  if (std::isfinite(m_fVisualDelay) &&
+      std::abs(m_fVisualDelay) > 0.0001f) {
     // Format the string to be something like "10ms VisualDelay".
     // Note that we don't process sub-millisecond visual delay.
     AddTo.push_back(ssprintf("%.0fms VisualDelay", m_fVisualDelay * 1000.0f));
@@ -879,40 +954,44 @@ bool PlayerOptions::FromOneModString(
     }
     if (s == "no") {
       level = 0;
-    } else if (isdigit(static_cast<unsigned char>(s[0])) || s[0] == '-') {
-      if (EndsWith(s, "ms")) {
-        // Strip off the "ms" before parsing and convert to seconds.
-        std::string ms_value = s.substr(0, s.size() - 2);
-        level = StringToFloat(ms_value) / 1000.0f;
-        if (!std::isfinite(level)) {
-          sErrorOut = ssprintf("non-finite ms value '%s'", s.c_str());
+    } else {
+      float parsedXMod = 0.0f;
+      if (ParsePositiveXMod(s, parsedXMod)) {
+        continue;
+      }
+      if (isdigit(static_cast<unsigned char>(s[0])) || s[0] == '-') {
+        if (EndsWith(s, "ms")) {
+          // Strip off the "ms" before parsing and convert to seconds.
+          std::string ms_value = s.substr(0, s.size() - 2);
+          float parsed = 0.0f;
+          if (!StringToFloat(ms_value, parsed)) {
+            sErrorOut = ssprintf("invalid ms value '%s'", s.c_str());
+            return false;
+          }
+          level = parsed / 1000.0f;
+        } else if (Right(s, 1) == "*") {
+          /* If the last character is a *, they probably said "123*" when
+           * they meant "*123". */
+          sErrorOut = ssprintf(
+              "Invalid player options \"%s\"; did you mean '*%d'?",
+              s.c_str(), StringToInt(s));
+          return false;
+        } else {
+          const std::string rawValue =
+              EndsWith(s, "%") ? s.substr(0, s.size() - 1) : s;
+          float parsed = 0.0f;
+          if (!StringToFloat(rawValue, parsed)) {
+            sErrorOut = ssprintf("invalid percent value '%s'", s.c_str());
+            return false;
+          }
+          level = parsed / 100.0f;
+        }
+      } else if (s[0] == '*') {
+        if (s.size() == 1 || !StringToFloat(s.substr(1), speed) ||
+            speed < 0.0f) {
+          sErrorOut = ssprintf("invalid approach speed '%s'", s.c_str());
           return false;
         }
-      }
-      /* If the last character is a *, they probably said "123*" when
-       * they meant "*123". */
-      else if (Right(s, 1) == "*") {
-        // XXX: We know what they want, is there any reason not to handle it?
-        // Yes. We should be strict in handling the format. -Chris
-        sErrorOut = ssprintf(
-            "Invalid player options \"%s\"; did you mean '*%d'?", s.c_str(),
-            StringToInt(s));
-        return false;
-      } else {
-        level = StringToFloat(s) / 100.0f;
-        if (!std::isfinite(level)) {
-          sErrorOut = ssprintf("non-finite percent value '%s'", s.c_str());
-          return false;
-        }
-      }
-    } else if (s[0] == '*') {
-      sscanf(s.c_str(), "*%f", &speed);
-      if (!std::isfinite(speed) || speed < 0.0f) {
-        LOG->Warn(
-            "SRC_AUDIT_FIX: Invalid PlayerOptions approach speed '%s'; "
-            "using 1.",
-            s.c_str());
-        speed = 1.0f;
       }
     }
   }
@@ -933,18 +1012,18 @@ bool PlayerOptions::FromOneModString(
   }
   const bool on = (level > 0.5f);
 
-  static Regex mult("^([0-9]+(\\.[0-9]+)?)x$");
   static Regex disabledWindows("(w[1-5])");
   std::vector<std::string> matches;
-  if (mult.Compare(sBit, matches)) {
-    StringConversion::FromString(matches[0], level);
+  if (ParsePositiveXMod(sBit, level)) {
     SET_FLOAT(fScrollSpeed)
     SET_FLOAT(fTimeSpacing)
     m_fTimeSpacing = 0;
     m_fMaxScrollBPM = 0;
-  } else if (sscanf(sBit.c_str(), "c%f", &level) == 1) {
-    if (!std::isfinite(level) || level <= 0.0f) {
-      level = CMOD_DEFAULT;
+  } else if (HasNumericModPrefix(sBit, 'c')) {
+    if (sBit.size() == 1 || !StringToFloat(sBit.substr(1), level) ||
+        level <= 0.0f) {
+      sErrorOut = ssprintf("invalid CMod value '%s'", sBit.c_str());
+      return false;
     }
     SET_FLOAT(fScrollBPM)
     SET_FLOAT(fTimeSpacing)
@@ -952,12 +1031,11 @@ bool PlayerOptions::FromOneModString(
     m_fMaxScrollBPM = 0;
   }
   // oITG's m-mods
-  else if (sscanf(sBit.c_str(), "m%f", &level) == 1) {
-    if (!std::isfinite(level) || level <= 0.0f) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid MMod value '%s'; using default CMod BPM.",
-          sBit.c_str());
-      level = CMOD_DEFAULT;
+  else if (HasNumericModPrefix(sBit, 'm')) {
+    if (sBit.size() == 1 || !StringToFloat(sBit.substr(1), level) ||
+        level <= 0.0f) {
+      sErrorOut = ssprintf("invalid MMod value '%s'", sBit.c_str());
+      return false;
     }
     SET_FLOAT(fMaxScrollBPM)
     m_fTimeSpacing = 0;
@@ -965,7 +1043,8 @@ bool PlayerOptions::FromOneModString(
 
   else if (sBit == "clearall") {
     Init();
-    m_sNoteSkin = NOTESKIN->GetDefaultNoteSkinName();
+    m_sNoteSkin = NOTESKIN ? NOTESKIN->GetDefaultNoteSkinName()
+                           : CommonMetrics::DEFAULT_NOTESKIN_NAME.GetValue();
   } else if (sBit == "resetspeed") {
     /* level is set to the values from Init() because all speed related
        fields are being reset to initial values, and they each have different
@@ -1612,6 +1691,10 @@ bool PlayerOptions::FromOneModString(
   } else if (sBit == "failoff") {
     m_FailType = FailType_Off;
   } else if (sBit == "faildefault") {
+    if (GAMESTATE == nullptr) {
+      sErrorOut = "cannot resolve faildefault without GameState";
+      return false;
+    }
     PlayerOptions po;
     GAMESTATE->GetDefaultPlayerOptions(po);
     m_FailType = po.m_FailType;
@@ -1701,6 +1784,7 @@ bool PlayerOptions::FromOneModString(
     MakeLower(name);
     if (NOTESKIN && NOTESKIN->DoesNoteSkinExist(name)) {
       m_sNoteSkin = name;
+      return true;
     }
     return false;
   }
@@ -2166,8 +2250,10 @@ bool PlayerOptions::IsEasierForSongAndSteps(
   if (m_bTransforms[TRANSFORM_NOHANDS] && rv[RadarCategory_Hands] > 0) {
     return true;
   }
-  if (m_bTransforms[TRANSFORM_NOQUADS] && rv[RadarCategory_Hands] > 0) {
-    return true;
+  if (m_bTransforms[TRANSFORM_NOQUADS]) {
+    if (StepsContainQuadsForPlayer(pSteps, pn)) {
+      return true;
+    }
   }
   if (m_bTransforms[TRANSFORM_NOJUMPS] && rv[RadarCategory_Jumps] > 0) {
     return true;
@@ -2261,12 +2347,18 @@ bool PlayerOptions::IsEasierForCourseAndTrail(
         "treating options as not easier.");
     return false;
   }
+  if (!IsValidPlayerNumber(m_pn)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: IsEasierForCourseAndTrail has no valid player "
+        "identity; treating options as not easier.");
+    return false;
+  }
 
   return std::any_of(
       pTrail->m_vEntries.begin(), pTrail->m_vEntries.end(),
       [&](const TrailEntry& e) {
         return e.pSong && e.pSteps &&
-               IsEasierForSongAndSteps(e.pSong, e.pSteps, PLAYER_1);
+               IsEasierForSongAndSteps(e.pSong, e.pSteps, m_pn);
       });
 }
 

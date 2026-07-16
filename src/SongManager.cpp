@@ -143,19 +143,26 @@ SongManager::SongManager() {
 }
 
 SongManager::~SongManager() {
-  LOG->Trace(
-      "SongManager::~SongManager begin songs=%zu deleted_songs=%zu groups=%zu",
-      m_pSongs.size(), m_pDeletedSongs.size(), m_mapNameToGroup.size());
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "SongManager::~SongManager begin songs=%zu deleted_songs=%zu "
+        "groups=%zu",
+        m_pSongs.size(), m_pDeletedSongs.size(), m_mapNameToGroup.size());
+  }
 
   // Unregister with Lua.
-  LUA->UnsetGlobal("SONGMAN");
+  if (LUA != nullptr) {
+    LUA->UnsetGlobal("SONGMAN");
+  }
 
   // Courses depend on Songs and Songs don't depend on Courses.
   // So, delete the Courses first.
   FreeCourses();
   FreeSongs();
 
-  LOG->Trace("SongManager::~SongManager end");
+  if (LOG != nullptr) {
+    LOG->Trace("SongManager::~SongManager end");
+  }
 }
 
 void SongManager::InitAll(LoadingWindow* ld, bool onlyAdditions) {
@@ -181,6 +188,13 @@ static LocalizedString SANITY_CHECKING_GROUPS(
     "SongManager", "Sanity checking groups...");
 
 void SongManager::Reload(bool bAllowFastLoad, LoadingWindow* ld) {
+  if (FILEMAN == nullptr || PROFILEMAN == nullptr || GAMESTATE == nullptr ||
+      PREFSMAN == nullptr || MEMCARDMAN == nullptr || UNLOCKMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: SongManager::Reload refused with an incomplete "
+        "manager graph.");
+    return;
+  }
   FILEMAN->FlushDirCache(SpecialFiles::SONGS_DIR);
   FILEMAN->FlushDirCache(SpecialFiles::COURSES_DIR);
   FILEMAN->FlushDirCache(EDIT_SUBDIR);
@@ -199,10 +213,18 @@ void SongManager::Reload(bool bAllowFastLoad, LoadingWindow* ld) {
       if (PROFILEMAN->ProfileWasLoadedFromMemoryCard(pn)) {
         rejoinPlayers.push_back(std::make_tuple(pn, std::string(""), true));
       } else if (PROFILEMAN->IsPersistentProfile(pn)) {
+        const Profile* currentProfile = PROFILEMAN->GetProfile(pn);
+        if (currentProfile == nullptr) {
+          LOG->Warn(
+              "SRC_AUDIT_FIX: joined %s had no persistent profile during "
+              "song reload; player will remain unjoined.",
+              PlayerNumberToString(pn).c_str());
+        }
         int numLocalProfiles = PROFILEMAN->GetNumLocalProfiles();
-        for (int i = 0; i < numLocalProfiles; i++) {
+        for (int i = 0; currentProfile != nullptr && i < numLocalProfiles;
+             i++) {
           Profile* profile = PROFILEMAN->GetLocalProfileFromIndex(i);
-          if (profile->m_sGuid == PROFILEMAN->GetProfile(pn)->m_sGuid) {
+          if (profile != nullptr && profile->m_sGuid == currentProfile->m_sGuid) {
             std::string profileID = PROFILEMAN->GetLocalProfileIDFromIndex(i);
             rejoinPlayers.push_back(std::make_tuple(pn, profileID, false));
             break;
@@ -238,37 +260,35 @@ void SongManager::Reload(bool bAllowFastLoad, LoadingWindow* ld) {
   // reload scores and unlocks afterward
   PROFILEMAN->LoadMachineProfile();
   MEMCARDMAN->WaitForCheckingToComplete();
-	  for (auto& it : rejoinPlayers) {
-	    PlayerNumber pn;
-	    std::string profileID;
-	    bool isMemoryCard;
-	    std::tie(pn, profileID, isMemoryCard) = it;
+  for (auto& it : rejoinPlayers) {
+    PlayerNumber pn;
+    std::string profileID;
+    bool isMemoryCard;
+    std::tie(pn, profileID, isMemoryCard) = it;
 
-	    GAMESTATE->JoinPlayer(pn);
-	    bool loadedProfile = profileID.empty() && !isMemoryCard;
-	    if (isMemoryCard) {
-	      bool success = MEMCARDMAN->MountCard(pn);
-	      if (success) {
-	        loadedProfile = PROFILEMAN->LoadProfileFromMemoryCard(pn, true);
-	        MEMCARDMAN->UnmountCard(pn);
-	      }
-	    } else {
-	      if (!profileID.empty()) {
-	        PROFILEMAN->m_sDefaultLocalProfileID[pn].Set(profileID);
-	        loadedProfile = PROFILEMAN->LoadLocalProfileFromMachine(pn);
-	      }
-	    }
-	    if (!loadedProfile) {
-	      LOG->Warn(
-	          "SRC_AUDIT_FIX SRC-619: profile reload failed for %s; leaving "
-	          "player unjoined.",
-	          PlayerNumberToString(pn).c_str());
-	      PROFILEMAN->UnloadProfile(pn);
-	      GAMESTATE->UnjoinPlayer(pn);
-	      continue;
-	    }
-	    GAMESTATE->LoadCurrentSettingsFromProfile(pn);
-	  }
+    GAMESTATE->JoinPlayer(pn);
+    bool loadedProfile = profileID.empty() && !isMemoryCard;
+    if (isMemoryCard) {
+      const bool success = MEMCARDMAN->MountCard(pn);
+      if (success) {
+        loadedProfile = PROFILEMAN->LoadProfileFromMemoryCard(pn, true);
+        MEMCARDMAN->UnmountCard(pn);
+      }
+    } else if (!profileID.empty()) {
+      PROFILEMAN->m_sDefaultLocalProfileID[pn].Set(profileID);
+      loadedProfile = PROFILEMAN->LoadLocalProfileFromMachine(pn);
+    }
+    if (!loadedProfile) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-619: profile reload failed for %s; leaving "
+          "player unjoined.",
+          PlayerNumberToString(pn).c_str());
+      PROFILEMAN->UnloadProfile(pn);
+      GAMESTATE->UnjoinPlayer(pn);
+      continue;
+    }
+    GAMESTATE->LoadCurrentSettingsFromProfile(pn);
+  }
   UNLOCKMAN->Reload();
 
   if (!bAllowFastLoad) {
@@ -808,15 +828,15 @@ int SongManager::LoadGroupSymLinks(
           includePath.c_str(), sSymDestination.c_str());
       continue;
     }
-    if (GetSongFromDir(sSymDestination) != nullptr) {
-      if (onlyAdditions) {
+    if (Song* existingSong = GetSongFromDir(sSymDestination)) {
+      if (std::find(index_entry.begin(), index_entry.end(), existingSong) ==
+          index_entry.end()) {
+        index_entry.push_back(existingSong);
+        ++loadedCount;
         LOG->Trace(
-            "SRC_AUDIT_FIX SRC-615: skipped already loaded song include '%s'.",
-            sSymDestination.c_str());
-      } else {
-        LOG->Warn(
-            "SRC_AUDIT_FIX SRC-618: skipped duplicate song include '%s'.",
-            sSymDestination.c_str());
+            "SRC_AUDIT_FIX: reused canonical song '%s' for include group "
+            "'%s'.",
+            sSymDestination.c_str(), sGroupFolder.c_str());
       }
       continue;
     }
@@ -960,18 +980,26 @@ void SongManager::UnlistSong(Song* song) {
     return;
   }
 
-  // cannot immediately free song data, as it is needed temporarily for smooth
-  // audio transitions, etc. Instead, remove it from the m_pSongs list and store
-  // it in a special place where it can safely be deleted later.
-  if (std::find(m_pDeletedSongs.begin(), m_pDeletedSongs.end(), song) ==
+  if (std::find(m_pDeletedSongs.begin(), m_pDeletedSongs.end(), song) !=
       m_pDeletedSongs.end()) {
-    m_pDeletedSongs.push_back(song);
-  } else {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-097: ignored duplicate unlist request for song %p "
         "'%s'.",
         static_cast<void*>(song), song->GetSongDir().c_str());
+    return;
   }
+  if (std::find(m_pSongs.begin(), m_pSongs.end(), song) == m_pSongs.end()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-097: refused to unlist foreign song %p '%s' not "
+        "owned by SongManager.",
+        static_cast<void*>(song), song->GetSongDir().c_str());
+    return;
+  }
+
+  // Song data cannot be freed immediately because transitions may still use
+  // it. Ownership moves to the deferred-deletion list only after membership
+  // has been established.
+  m_pDeletedSongs.push_back(song);
 
   auto erase_song_from_vector = [song](std::vector<Song*>& songs) -> bool {
     const auto old_size = songs.size();
@@ -1035,6 +1063,13 @@ bool SongManager::IsGroupNeverCached(const std::string& group) const {
 std::string SongManager::GetSongGroupBannerPath(std::string sSongGroup) const {
   for (unsigned i = 0; i < m_sSongGroupNames.size(); ++i) {
     if (sSongGroup == m_sSongGroupNames[i]) {
+      if (i >= m_sSongGroupBannerPaths.size()) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX SRC-096: song group/banner indexes diverged for "
+            "group '%s' at index %u (banners=%zu).",
+            sSongGroup.c_str(), i, m_sSongGroupBannerPaths.size());
+        return std::string();
+      }
       return m_sSongGroupBannerPaths[i];
     }
   }
@@ -1305,30 +1340,29 @@ const std::vector<Song*>& SongManager::GetSongs(
   return vEmpty;
 }
 
-const std::vector<Song*>& SongManager::GetSongsOfCurrentGame(
+std::vector<Song*> SongManager::GetSongsOfCurrentGame(
     const std::string& sGroupName) const {
-  static const std::vector<Song*> vEmpty;
-  static std::vector<Song*> vFiltered;
-  vFiltered.clear();
+  std::vector<Song*> filtered;
 
-  const Style* style = GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
+  const Style* style =
+      GAMESTATE != nullptr ? GAMESTATE->GetCurrentStyle(PLAYER_INVALID) : nullptr;
   if (style == nullptr) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-623: requested current-game songs without a current "
         "style.");
-    return vEmpty;
+    return filtered;
   }
 
   const std::vector<Song*>& songs = GetSongs(sGroupName);
   for (Song* song : songs) {
     if (song != nullptr && SongUtil::IsStepsTypePlayable(song, style->m_StepsType)) {
-      vFiltered.push_back(song);
+      filtered.push_back(song);
     }
   }
-  return vFiltered;
+  return filtered;
 }
 
-const std::vector<Song*>& SongManager::GetAllSongsOfCurrentGame() const {
+std::vector<Song*> SongManager::GetAllSongsOfCurrentGame() const {
   return GetSongsOfCurrentGame(GROUP_ALL);
 }
 
@@ -1855,6 +1889,13 @@ void SongManager::DeleteSteps(Steps* pSteps) {
         "song.");
     return;
   }
+  if (std::find(m_pSongs.begin(), m_pSongs.end(), pSteps->m_pSong) ==
+      m_pSongs.end()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-108: refused to delete steps whose parent song "
+        "is not owned by SongManager.");
+    return;
+  }
   pSteps->m_pSong->DeleteSteps(pSteps);
 }
 
@@ -2292,10 +2333,13 @@ void SongManager::UpdateShuffled() {
 
 void SongManager::SetPreferredSongsFromTable(
     const std::map<std::string, std::vector<Song*>>& mapSectionToSongs) {
-  ASSERT(UNLOCKMAN != nullptr);
-
   m_vPreferredSongSort.clear();
   m_mapPreferredSectionToSongs.clear();
+  if (UNLOCKMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: preferred song table ignored without UnlockManager.");
+    return;
+  }
 
   for (const auto& pair : mapSectionToSongs) {
     PreferredSortSection section;
@@ -2344,10 +2388,13 @@ void SongManager::SetPreferredSongsFromTable(
 
 void SongManager::SetPreferredSongs(
     std::string sPreferredSongs, bool bIsAbsolute) {
-  ASSERT(UNLOCKMAN != nullptr);
-
   m_vPreferredSongSort.clear();
   m_mapPreferredSectionToSongs.clear();
+  if (UNLOCKMAN == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: preferred song file ignored without UnlockManager.");
+    return;
+  }
   std::vector<std::string> asLines;
   std::string sFile = sPreferredSongs;
   if (!bIsAbsolute) {

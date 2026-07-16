@@ -2,6 +2,21 @@ local player, controller = unpack(...)
 
 local pn = ToEnumShortString(player)
 local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+local usesExPrimaryLayout = SL[pn].ActiveModifiers.ShowExScore or SL[pn].ActiveModifiers.ShowHardEXScore
+
+-- Pane2 serves two different layouts.  EX/HardEX uses it as the primary score
+-- pane, while ITG uses it as the secondary ITG+EX details pane.
+local P2Positions = usesExPrimaryLayout and {
+	TapNotes = -128,
+	Radar = -3,
+	Percent = 61,
+	SlashPossible = 61,
+} or {
+	TapNotes = 94,
+	Radar = 218,
+	Percent = 286,
+	SlashPossible = 286,
+}
 
 local TapNoteScores = {
 	Types = { 'W0', 'W1', 'W2', 'W3', 'W4', 'W5', 'Miss' },
@@ -15,17 +30,17 @@ local TapNoteScores = {
 		SL.JudgmentColors["ITG"][6], -- Red Miss
 	},
 	-- x values for P1 and P2
-	x = { P1=64, P2=-128 }
+	x = { P1=64, P2=P2Positions.TapNotes }
 }
 
 local RadarCategories = {
 	Types = { 'Holds', 'Mines', 'Rolls' },
 	-- x values for P1 and P2
-	x = { P1=-180, P2=-3 }
+	x = { P1=-180, P2=P2Positions.Radar }
 }
 
-local PercentX = { P1=-114, P2=61 }
-local SlashPossibleX = { P1=-114, P2=61 }
+local PercentX = { P1=-114, P2=P2Positions.Percent }
+local SlashPossibleX = { P1=-114, P2=P2Positions.SlashPossible }
 
 -- TODO(Zankoku) - EX judgments are in storage now, so we shouldn't have to calculate this all over again
 local counts = GetExJudgmentCounts(player)

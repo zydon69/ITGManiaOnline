@@ -64,6 +64,22 @@ require_contains(
   "Global course modifier duration is named")
 require_contains(
   "${attack_cpp}"
+  "static float AddAttackSeconds"
+  "Attack ranges use checked second addition")
+require_contains(
+  "${attack_cpp}"
+  "std::numeric_limits<float>::max()"
+  "Overflowing attack ranges are clamped before timing conversion")
+require_contains(
+  "${attack_cpp}"
+  "static_cast<double>(a.fStartSecond) + delta"
+  "Attack start-time updates use checked wide arithmetic")
+require_not_contains(
+  "${attack_cpp}"
+  "Attack start time overflowed; clamping to 0."
+  "Overflowing attack updates must preserve temporal ordering")
+require_contains(
+  "${attack_cpp}"
   "Trim(fragment)"
   "Attack GetNumAttacks ignores whitespace-only fragments")
 require_not_contains(
@@ -76,8 +92,8 @@ require_contains(
   "CRS attack parser rejects non-finite floats")
 require_contains(
   "${course_loader_crs_cpp}"
-  "std::isfinite(valueOut)"
-  "CRS attack parser checks finite values")
+  "StringToFloat(rawValue, valueOut)"
+  "CRS attack parser uses strict finite full-string conversion")
 require_contains(
   "${course_loader_crs_cpp}"
   "auto resetAttack"

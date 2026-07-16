@@ -13,16 +13,16 @@ class XNode;
 class BGAnimationLayer : public ActorFrame {
  public:
   BGAnimationLayer();
-  ~BGAnimationLayer();
+  ~BGAnimationLayer() override;
 
   void LoadFromAniLayerFile(const std::string& sPath);
-  void LoadFromNode(const XNode* pNode);
+  void LoadFromNode(const XNode* pNode) override;
 
-  void UpdateInternal(float fDeltaTime);
-
-  float GetMaxTweenTimeLeft() const;
+  void UpdateInternal(float fDeltaTime) override;
 
  protected:
+  void ResetLayerState();
+
   std::vector<RageVector3> m_vParticleVelocity;
 
   enum Type {

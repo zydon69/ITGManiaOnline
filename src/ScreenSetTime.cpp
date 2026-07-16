@@ -163,6 +163,17 @@ bool SafeAddTime(time_t base, time_t offset, time_t& out) {
   return true;
 }
 
+bool SafeSubtractTime(time_t lhs, time_t rhs, time_t& out) {
+  if (rhs > 0 && lhs < std::numeric_limits<time_t>::min() + rhs) {
+    return false;
+  }
+  if (rhs < 0 && lhs > std::numeric_limits<time_t>::max() + rhs) {
+    return false;
+  }
+  out = lhs - rhs;
+  return true;
+}
+
 bool SafeNow(time_t& now) {
   now = time(nullptr);
   return now != static_cast<time_t>(-1);
@@ -291,7 +302,16 @@ bool ScreenSetTime::SetAdjustedTime(const tm& adjusted) {
     return false;
   }
 
-  m_TimeOffset = adjustedTime - now;
+  time_t newOffset;
+  if (!SafeSubtractTime(adjustedTime, now, newOffset)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-3211: ScreenSetTime refused overflowing time "
+          "offset subtraction.");
+    }
+    return false;
+  }
+  m_TimeOffset = newOffset;
   return true;
 }
 

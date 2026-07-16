@@ -1,6 +1,7 @@
 #include "TechCounts.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -90,6 +91,14 @@ static bool ValidateTechCountsInput(
 
   for (size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex) {
     const StepParity::Row& row = rows[rowIndex];
+    if (!std::isfinite(row.second) || !std::isfinite(row.beat) ||
+        (rowIndex > 0 && row.second < rows[rowIndex - 1].second)) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: TechCounts row %zu has invalid/non-monotonic "
+          "timing (beat=%.6f second=%.6f).",
+          rowIndex, row.beat, row.second);
+      return false;
+    }
     if (row.columns.size() != static_cast<size_t>(layout->columnCount)) {
       LOG->Warn(
           "SRC_AUDIT_FIX SRC-649: TechCounts row %zu has %zu columns; "
@@ -152,7 +161,7 @@ bool TechCounts::IsValidCategoryIndex(int cat) {
 }
 
 float& TechCounts::InvalidMutableValue(int cat) {
-  static float invalidValue = TECHCOUNTS_VAL_UNKNOWN;
+  thread_local float invalidValue = TECHCOUNTS_VAL_UNKNOWN;
   invalidValue = TECHCOUNTS_VAL_UNKNOWN;
   LOG->Warn(
       "SRC_AUDIT_FIX SRC-638: invalid mutable TechCounts index %d.", cat);
@@ -214,6 +223,13 @@ void TechCounts::FromString(std::string sTechCounts) {
     if (!StringConversion::FromString<float>(saValues[i], value)) {
       LOG->Warn(
           "SRC_AUDIT_FIX SRC-637: invalid TechCounts value '%s' at index %zu.",
+          saValues[i].c_str(), i);
+      continue;
+    }
+    if (!std::isfinite(value) || value < TECHCOUNTS_VAL_UNKNOWN) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: invalid non-finite/out-of-range TechCounts value "
+          "'%s' at index %zu.",
           saValues[i].c_str(), i);
       continue;
     }

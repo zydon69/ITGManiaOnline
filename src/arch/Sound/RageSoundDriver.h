@@ -189,7 +189,7 @@ class RageSoundDriver : public RageDriver {
     RageTimer m_StartTime;
     CircBuf<sound_block> m_Buffer;
 
-    bool m_bPaused;
+    std::atomic<bool> m_bPaused{false};
 
     struct QueuedPosMap {
       int iFrames;
@@ -230,8 +230,17 @@ class RageSoundDriver : public RageDriver {
   Sound m_Sounds[32];
 
   int64_t ClampHardwareFrame(int64_t iHardwareFrame) const;
-  mutable int64_t m_iMaxHardwareFrame;
-  mutable int64_t m_iVMaxHardwareFrame;
+  mutable std::atomic<int64_t> m_iMaxHardwareFrame{0};
+  mutable std::atomic<uint64_t> m_iLastHardwareClampLogUsec{0};
+  mutable std::atomic<bool> m_bLoggedHardwareFrameRetry{false};
+
+  int m_iFramesToBuffer = 4096;
+  std::atomic<int> m_iUnderruns{0};
+  int m_iLoggedUnderruns = 0;
+  uint64_t m_iNextUnderrunLogUsec = 0;
+  uint64_t m_iLastMixerStarvationTraceUsec = 0;
+  uint64_t m_iLastEmergencyCapTraceUsec = 0;
+  uint64_t m_iLastDecodeStallTraceUsec = 0;
 
   std::atomic<bool> m_bShutdownDecodeThread;
 

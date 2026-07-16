@@ -107,6 +107,7 @@ struct pos_map_impl {
   mutable RageTimer m_LastSustainedMinorDriftLog;
   mutable RageTimer m_LastMismatchLog;
   mutable std::string m_sError;
+  bool m_bLoggedIntentionalNegativeMapping = false;
 
   pos_map_impl() = default;
   pos_map_impl(const pos_map_impl& rhs) {
@@ -114,6 +115,8 @@ struct pos_map_impl {
     m_Queue = rhs.m_Queue;
     m_iConsecutiveMinorDrifts = rhs.m_iConsecutiveMinorDrifts;
     m_sError = rhs.m_sError;
+    m_bLoggedIntentionalNegativeMapping =
+        rhs.m_bLoggedIntentionalNegativeMapping;
   }
 
   pos_map_impl& operator=(const pos_map_impl&) = delete;
@@ -159,10 +162,13 @@ bool pos_map_queue::Insert(
     return m_pImpl->SetErrorLocked(
         "SRC_AUDIT_FIX SRC-2916: PosMap rejected invalid insert arguments");
   }
-  if (iSourceFrame < 0 || iDestFrame < 0) {
+  if ((iSourceFrame < 0 || iDestFrame < 0) &&
+      !m_pImpl->m_bLoggedIntentionalNegativeMapping) {
+    m_pImpl->m_bLoggedIntentionalNegativeMapping = true;
     LogReviewSrcDiagnostics(
         "SRC_AUDIT_FIX SRC-2918: PosMap accepted intentional negative frame "
-        "mapping source=%lld dest=%lld frames=%lld ratio=%.9f",
+        "mapping source=%lld dest=%lld frames=%lld ratio=%.9f "
+        "(further mappings suppressed for this queue)",
         static_cast<long long>(iSourceFrame),
         static_cast<long long>(iDestFrame), static_cast<long long>(iFrames),
         fSourceToDestRatio);
@@ -353,7 +359,10 @@ pos_map_search_result pos_map_queue::SearchResult(
   const uint64_t minorPositionDriftDistance =
       static_cast<uint64_t>(minorPositionDriftFrames);
   if (iClosestPositionDist <= minorPositionDriftDistance) {
-    ++m_pImpl->m_iConsecutiveMinorDrifts;
+    if (m_pImpl->m_iConsecutiveMinorDrifts <
+        std::numeric_limits<int>::max()) {
+      ++m_pImpl->m_iConsecutiveMinorDrifts;
+    }
     const bool sustainedDrift =
         m_pImpl->m_iConsecutiveMinorDrifts >
         kSustainedMinorPositionDriftSearches;

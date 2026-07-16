@@ -73,10 +73,25 @@ void RadarValues::LoadFromNode(const XNode* pNode) {
     return;
   }
 
-  Zero();
+  MakeUnknown();
 
   FOREACH_ENUM(RadarCategory, rc) {
-    pNode->GetChildValue(RadarCategoryToString(rc), (*this)[rc]);
+    const std::string category = RadarCategoryToString(rc);
+    const XNode* child = pNode->GetChild(category);
+    if (child == nullptr) {
+      continue;
+    }
+    std::string rawValue;
+    child->GetTextValue(rawValue);
+    float value = RADAR_VAL_UNKNOWN;
+    if (!StringToFloat(rawValue, value)) {
+      LOG->Trace(
+          "SRC_AUDIT_FIX SRC-2947: RadarValues rejected malformed XML value "
+          "'%s' for category '%s'.",
+          rawValue.c_str(), category.c_str());
+      continue;
+    }
+    (*this)[rc] = value;
   }
 }
 

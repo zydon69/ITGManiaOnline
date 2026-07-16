@@ -614,74 +614,85 @@ int RageSoundReader_Chain::Read(float* pBuffer, int iFrames) {
   if (iFrames == 0) {
     return 0;
   }
-  while (m_iNextSound < m_aSounds.size() &&
-         m_iCurrentFrame ==
-             m_aSounds[m_iNextSound].GetOffsetFrame64(m_iActualSampleRate)) {
-    Sound* pSound = &m_aSounds[m_iNextSound];
-    if (!ActivateSound(pSound)) {
-      return ERROR;
+  const int iRequestedFrames = iFrames;
+  for (;;) {
+    while (m_iNextSound < m_aSounds.size() &&
+           m_iCurrentFrame ==
+               m_aSounds[m_iNextSound].GetOffsetFrame64(m_iActualSampleRate)) {
+      Sound* pSound = &m_aSounds[m_iNextSound];
+      if (!ActivateSound(pSound)) {
+        return ERROR;
+      }
+      ++m_iNextSound;
     }
-    ++m_iNextSound;
-  }
 
-  if (m_iNextSound == m_aSounds.size() && m_apActiveSounds.empty()) {
-    return END_OF_FILE;
-  }
-
-  /* Clamp iFrames to the beginning of the next sound we need to start. */
-  if (m_iNextSound < m_aSounds.size()) {
-    const std::int64_t iOffsetFrame =
-        m_aSounds[m_iNextSound].GetOffsetFrame64(m_iActualSampleRate);
-    std::int64_t iFramesToRead = iOffsetFrame - m_iCurrentFrame;
-    if (iFramesToRead < 0) {
-      iFramesToRead = 0;
+    if (m_iNextSound == m_aSounds.size() && m_apActiveSounds.empty()) {
+      return END_OF_FILE;
     }
-    iFrames = std::min(ClampInt64ToInt(iFramesToRead), iFrames);
-  }
-  if (iFrames == 0) {
-    return 0;
-  }
 
-  if (m_apActiveSounds.size() == 1 &&
-      m_apActiveSounds.front()->pSound != nullptr &&
-      m_apActiveSounds.front()->pSound->GetNumChannels() == m_iChannels &&
-      m_apActiveSounds.front()->pSound->GetSampleRate() ==
-          m_iActualSampleRate) {
-    /* We have only one source, and it matches our target.  Don't mix; read
-     * directly from the source into the destination.  This is to optimize
-     * the common case of having one BGM track and no autoplay sounds. */
-    iFrames = m_apActiveSounds.front()->pSound->Read(pBuffer, iFrames);
-    if (iFrames == RageSoundReader::ERROR ||
-        iFrames == RageSoundReader::END_OF_FILE) {
-      ReleaseSound(m_apActiveSounds.front());
+    /* Clamp iFrames to the beginning of the next sound we need to start. */
+    iFrames = iRequestedFrames;
+    if (m_iNextSound < m_aSounds.size()) {
+      const std::int64_t iOffsetFrame =
+          m_aSounds[m_iNextSound].GetOffsetFrame64(m_iActualSampleRate);
+      std::int64_t iFramesToRead = iOffsetFrame - m_iCurrentFrame;
+      if (iFramesToRead < 0) {
+        SetError("SRC_AUDIT_FIX SRC-3171: chain cursor passed a pending sound");
+        return ERROR;
+      }
+      iFrames = std::min(ClampInt64ToInt(iFramesToRead), iFrames);
     }
-    if (iFrames > 0) {
+    if (iFrames == 0) {
+      continue;
+    }
+
+    if (m_apActiveSounds.size() == 1 &&
+        m_apActiveSounds.front()->pSound != nullptr &&
+        m_apActiveSounds.front()->pSound->GetNumChannels() == m_iChannels &&
+        m_apActiveSounds.front()->pSound->GetSampleRate() ==
+            m_iActualSampleRate) {
+      /* We have only one source, and it matches our target.  Don't mix; read
+       * directly from the source into the destination.  This is to optimize
+       * the common case of having one BGM track and no autoplay sounds. */
+      const int iRead =
+          m_apActiveSounds.front()->pSound->Read(pBuffer, iFrames);
+      if (iRead == RageSoundReader::ERROR) {
+        ReleaseSound(m_apActiveSounds.front());
+        return ERROR;
+      }
+      if (iRead == RageSoundReader::END_OF_FILE) {
+        ReleaseSound(m_apActiveSounds.front());
+        continue;
+      }
+      if (iRead > 0 && !AdvanceFrameCounter(&m_iCurrentFrame, iRead)) {
+        SetError("SRC_AUDIT_FIX SRC-2873: chain frame counter overflow");
+        return ERROR;
+      }
+      return iRead;
+    }
+
+    // Note: this is only safe because we know pBuffer is not nullptr
+    // and iFrames and m_iChannels are reasonable sizes.
+    if (m_apActiveSounds.empty()) {
+      /* If we have more sounds ahead of us, pretend we read the entire block,
+       * since there's silence in between.  Otherwise, we're at EOF. */
+      const size_t channels = static_cast<size_t>(m_iChannels);
+      if (static_cast<size_t>(iFrames) >
+          std::numeric_limits<size_t>::max() / channels / sizeof(float)) {
+        SetError("SRC_AUDIT_FIX SRC-2873: chain silence buffer overflow");
+        return ERROR;
+      }
+      size_t pBufferSize =
+          static_cast<size_t>(iFrames) * channels * sizeof(float);
+      memset(pBuffer, 0, pBufferSize);
       if (!AdvanceFrameCounter(&m_iCurrentFrame, iFrames)) {
         SetError("SRC_AUDIT_FIX SRC-2873: chain frame counter overflow");
         return ERROR;
       }
+      return iFrames;
     }
-    return iFrames;
-  }
 
-  // Note: this is only safe because we know pBuffer is not nullptr
-  // and iFrames and m_iChannels are reasonable sizes.
-  if (m_apActiveSounds.empty()) {
-    /* If we have more sounds ahead of us, pretend we read the entire block,
-     * since there's silence in between.  Otherwise, we're at EOF. */
-    const size_t channels = static_cast<size_t>(m_iChannels);
-    if (static_cast<size_t>(iFrames) >
-        std::numeric_limits<size_t>::max() / channels / sizeof(float)) {
-      SetError("SRC_AUDIT_FIX SRC-2873: chain silence buffer overflow");
-      return ERROR;
-    }
-    size_t pBufferSize = static_cast<size_t>(iFrames) * channels * sizeof(float);
-    memset(pBuffer, 0, pBufferSize);
-    if (!AdvanceFrameCounter(&m_iCurrentFrame, iFrames)) {
-      SetError("SRC_AUDIT_FIX SRC-2873: chain frame counter overflow");
-      return ERROR;
-    }
-    return iFrames;
+    break;
   }
 
   RageSoundMixBuffer mix;
@@ -754,6 +765,35 @@ int RageSoundReader_Chain::Read(float* pBuffer, int iFrames) {
     if (bSawWouldBlock) {
       return RageSoundReader::WOULD_BLOCK;
     }
+    if (m_apActiveSounds.empty() && m_iNextSound < m_aSounds.size()) {
+      const std::int64_t nextOffset =
+          m_aSounds[m_iNextSound].GetOffsetFrame64(m_iActualSampleRate);
+      const std::int64_t silentFrames = nextOffset - m_iCurrentFrame;
+      if (silentFrames <= 0) {
+        SetError(
+            "SRC_AUDIT_FIX SRC-3171: chain could not advance to pending sound");
+        return ERROR;
+      }
+      const int framesToWrite =
+          std::min(iRequestedFrames, ClampInt64ToInt(silentFrames));
+      const size_t channels = static_cast<size_t>(m_iChannels);
+      if (static_cast<size_t>(framesToWrite) >
+          std::numeric_limits<size_t>::max() / channels / sizeof(float)) {
+        SetError("SRC_AUDIT_FIX SRC-2873: chain silence buffer overflow");
+        return ERROR;
+      }
+      memset(
+          pBuffer, 0,
+          static_cast<size_t>(framesToWrite) * channels * sizeof(float));
+      if (!AdvanceFrameCounter(&m_iCurrentFrame, framesToWrite)) {
+        SetError("SRC_AUDIT_FIX SRC-2873: chain frame counter overflow");
+        return ERROR;
+      }
+      return framesToWrite;
+    }
+    if (m_apActiveSounds.empty()) {
+      return RageSoundReader::END_OF_FILE;
+    }
     return 0;
   }
   if (!mix.read(pBuffer)) {
@@ -777,7 +817,7 @@ void RageSoundReader_Chain::ClearError() const {
 }
 
 void RageSoundReader_Chain::SetError(const std::string& sError) const {
-  if (sError.find("SRC_AUDIT_FIX SRC-28") != std::string::npos) {
+  if (sError.find("SRC_AUDIT_FIX SRC-") != std::string::npos) {
     LogReviewSrcDiagnostics("%s", sError.c_str());
   }
   m_sError = sError;

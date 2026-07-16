@@ -6,6 +6,16 @@ set(SCREEN_GAMEPLAY_SOURCE
     "${ITGMANIA_SOURCE_DIR}/src/ScreenGameplay.cpp")
 file(READ "${SCREEN_GAMEPLAY_SOURCE}" SCREEN_GAMEPLAY_TEXT)
 
+string(FIND
+    "${SCREEN_GAMEPLAY_TEXT}"
+    "pi->m_vpStepsQueue[i]->m_pSong != songs[i]"
+    COURSE_QUEUE_ASSOCIATION_OFFSET)
+if(COURSE_QUEUE_ASSOCIATION_OFFSET EQUAL -1)
+  message(
+      FATAL_ERROR
+      "ScreenGameplay invariant failed: steps queues must remain associated with their songs")
+endif()
+
 set(GAMEPLAY_ASSIST_SOURCE
     "${ITGMANIA_SOURCE_DIR}/src/GameplayAssist.cpp")
 file(READ "${GAMEPLAY_ASSIST_SOURCE}" GAMEPLAY_ASSIST_TEXT)
@@ -37,6 +47,20 @@ foreach(REQUIRED_SNIPPET
     message(
         FATAL_ERROR
         "ScreenGameplay invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "p.m_fSpeed <= 0.0f"
+    "UpdateSongPosition rejected audio position/adjustment"
+    "static_cast<double>(fSeconds) + static_cast<double>(fAdjust)"
+    "scale_from_low == scale_from_high"
+    "Reset non-finite gameplay haste adjustment")
+  string(FIND "${SCREEN_GAMEPLAY_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+        FATAL_ERROR
+        "ScreenGameplay numeric invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
 

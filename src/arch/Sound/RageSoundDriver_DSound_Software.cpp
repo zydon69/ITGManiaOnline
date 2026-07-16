@@ -1,6 +1,7 @@
 #include "RageSoundDriver_DSound_Software.h"
 
 #include <cstdint>
+#include <new>
 #include <string>
 #include <algorithm>
 
@@ -17,11 +18,12 @@ REGISTER_SOUND_DRIVER_CLASS2("DirectSound-sw", DSound_Software);
 static const int channels = 2;
 static const int bytes_per_frame = channels * 2; /* 16-bit */
 static const int safe_writeahead = 1024 * 4;     /* in frames */
-static int g_iMaxWriteahead;
-
 /* We'll fill the buffer in chunks this big. */
 static const int num_chunks = 8;
-static int chunksize() { return std::max(1, g_iMaxWriteahead / num_chunks); }
+
+int RageSoundDriver_DSound_Software::ChunkSize() const {
+  return std::max(1, m_iWriteaheadFrames / num_chunks);
+}
 
 void RageSoundDriver_DSound_Software::MixerThread() {
   if (!SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL)) {
@@ -40,7 +42,7 @@ void RageSoundDriver_DSound_Software::MixerThread() {
 
   char* locked_buf_init;
   unsigned len_init;
-  while (m_pPCM->get_output_buf(&locked_buf_init, &len_init, chunksize())) {
+  while (m_pPCM->get_output_buf(&locked_buf_init, &len_init, ChunkSize())) {
     memset(locked_buf_init, 0, len_init);
     m_pPCM->release_output_buf(locked_buf_init, len_init);
   }
@@ -54,8 +56,8 @@ void RageSoundDriver_DSound_Software::MixerThread() {
     const int64_t iPlayPos =
         m_pPCM->GetOutputPosition(); /* must be called before get_output_buf */
 
-    if (!m_pPCM->get_output_buf(&pLockedBuf, &iLen, chunksize())) {
-      Sleep(std::max(1, chunksize() * 1000 / m_iSampleRate));
+    if (!m_pPCM->get_output_buf(&pLockedBuf, &iLen, ChunkSize())) {
+      Sleep(std::max(1, ChunkSize() * 1000 / m_iSampleRate));
       continue;
     }
 
@@ -84,7 +86,10 @@ int RageSoundDriver_DSound_Software::MixerThread_start(void* p) {
 }
 
 RageSoundDriver_DSound_Software::RageSoundDriver_DSound_Software()
-    : m_pPCM(nullptr), m_iSampleRate(0), m_bShutdownMixerThread(false) {}
+    : m_pPCM(nullptr),
+      m_iSampleRate(0),
+      m_iWriteaheadFrames(safe_writeahead),
+      m_bShutdownMixerThread(false) {}
 
 std::string RageSoundDriver_DSound_Software::Init() {
   m_bShutdownMixerThread.store(false, std::memory_order_release);
@@ -99,13 +104,17 @@ std::string RageSoundDriver_DSound_Software::Init() {
     return "Driver unusable (emulated device)";
   }
 
-  g_iMaxWriteahead = safe_writeahead;
+  m_iWriteaheadFrames = safe_writeahead;
   if (PREFSMAN != nullptr && PREFSMAN->m_iSoundWriteAhead.Get() > 0) {
-    g_iMaxWriteahead = std::clamp(PREFSMAN->m_iSoundWriteAhead.Get(), num_chunks, 262144);
+    m_iWriteaheadFrames = std::clamp(
+        PREFSMAN->m_iSoundWriteAhead.Get(), num_chunks, 262144);
   }
 
   /* Create a DirectSound stream, but don't force it into hardware. */
-  m_pPCM = new DSoundBuf;
+  m_pPCM = new (std::nothrow) DSoundBuf;
+  if (m_pPCM == nullptr) {
+    return "Could not allocate DirectSound output buffer";
+  }
   m_iSampleRate = PREFSMAN != nullptr ? PREFSMAN->m_iSoundPreferredSampleRate.Get() : 0;
   if (m_iSampleRate <= 0) {
     m_iSampleRate = FALLBACK_SAMPLE_RATE;
@@ -114,7 +123,7 @@ std::string RageSoundDriver_DSound_Software::Init() {
   // to DSoundBuf::Init()
   sError = m_pPCM->Init(
       ds, DSoundBuf::HW_DONT_CARE, channels, m_iSampleRate, 16,
-      g_iMaxWriteahead);
+      m_iWriteaheadFrames);
   if (sError != "") {
     delete m_pPCM;
     m_pPCM = nullptr;
@@ -161,7 +170,7 @@ float RageSoundDriver_DSound_Software::GetPlayLatency() const {
   if (m_iSampleRate <= 0) {
     return 0.0f;
   }
-  return (1.0f / m_iSampleRate) * g_iMaxWriteahead;
+  return (1.0f / m_iSampleRate) * m_iWriteaheadFrames;
 }
 
 int RageSoundDriver_DSound_Software::GetSampleRate() const {

@@ -16,8 +16,9 @@ class RageCompiledGeometry;
 class Model : public Actor {
  public:
   Model();
-  virtual ~Model();
-  virtual Model* Copy() const override;
+  Model(const Model& cpy);
+  ~Model() override;
+  Model* Copy() const override;
 
   void Clear();
   void Load(const std::string& sFile);
@@ -37,20 +38,19 @@ class Model : public Actor {
   void SetLoop(bool b) { m_bLoop = b; }
   void SetPosition(float fSeconds);
 
-  virtual void Update(float fDelta) override;
-  virtual bool EarlyAbortDraw() const override;
-  virtual void DrawPrimitives() override;
+  void Update(float fDelta) override;
+  bool EarlyAbortDraw() const override;
+  void DrawPrimitives() override;
 
   void DrawCelShaded();
-  void SetCelShading(bool bShading) { m_bDrawCelShaded = bShading; }
 
-  virtual int GetNumStates() const override;
-  virtual void SetState(int iNewState) override;
-  virtual float GetAnimationLengthSeconds() const override {
+  int GetNumStates() const override;
+  void SetState(int iNewState) override;
+  float GetAnimationLengthSeconds() const override {
     return m_animation_length_seconds;
   }
-  virtual void RecalcAnimationLengthSeconds();
-  virtual void SetSecondsIntoAnimation(float fSeconds) override;
+  void RecalcAnimationLengthSeconds();
+  void SetSecondsIntoAnimation(float fSeconds) override;
 
   std::string GetDefaultAnimation() const { return m_sDefaultAnimation; };
   void SetDefaultAnimation(std::string sAnimation, float fPlayRate = 1);
@@ -58,11 +58,15 @@ class Model : public Actor {
   bool MaterialsNeedNormals() const;
 
   // Lua
-  virtual void PushSelf(lua_State* L) override;
+  void PushSelf(lua_State* L) override;
 
   Model& operator=(const Model& rhs) = delete;
 
  private:
+  void LoadPiecesInPlace(
+      const std::string& sMeshesPath, const std::string& sMaterialsPath,
+      const std::string& sBonesPath);
+  void SwapLoadedState(Model& other) noexcept;
   RageModelGeometry* m_pGeometry;
 
   float m_animation_length_seconds;
@@ -80,6 +84,11 @@ class Model : public Actor {
   RageCompiledGeometry* m_pTempGeometry;
   void UpdateTempGeometry();
 
+  // Private bind-pose input prevents animation setup from mutating the
+  // ModelManager geometry shared by other Model actors.
+  std::vector<msMesh> m_vSourceMeshes;
+  bool m_bBonesPreprocessed;
+
   /* Keep a copy of the mesh data only if m_pTempGeometry is in use.  The normal
    * and position data will be changed; the rest is static and kept only to
    * prevent making a complete copy. */
@@ -93,7 +102,9 @@ class Model : public Actor {
   float m_fDefaultAnimationRate;
   float m_fCurAnimationRate;
   bool m_bLoop;
-  bool m_bDrawCelShaded;  // for Lua models
+  std::string m_sMeshesPath;
+  std::string m_sMaterialsPath;
+  std::string m_sBonesPath;
 };
 
 #endif

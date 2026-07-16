@@ -6,7 +6,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -29,22 +28,12 @@
 /* Register the RageSoundDriver_Pulseaudio class as sound driver "Pulse" */
 REGISTER_SOUND_DRIVER_CLASS2("Pulse", PulseAudio);
 
-namespace {
-char* DuplicatePulseError(const std::string& message) {
-  char* out = static_cast<char*>(malloc(message.size() + 1));
-  if (out == nullptr) {
-    return nullptr;
-  }
-  memcpy(out, message.c_str(), message.size() + 1);
-  return out;
-}
-}  // namespace
-
 /* Constructor */
 RageSoundDriver_PulseAudio::RageSoundDriver_PulseAudio()
     : RageSoundDriver(),
       m_LastPosition(0),
-      m_Error(nullptr),
+      m_Error(),
+      m_MainLoopStarted(false),
       m_Sem("Pulseaudio Synchronization Semaphore"),
       m_PulseMainLoop(nullptr),
 	      m_PulseCtx(nullptr),
@@ -57,25 +46,39 @@ RageSoundDriver_PulseAudio::RageSoundDriver_PulseAudio()
 }
 
 RageSoundDriver_PulseAudio::~RageSoundDriver_PulseAudio() {
+  if (m_PulseMainLoop != nullptr && m_MainLoopStarted) {
+    pa_threaded_mainloop_stop(m_PulseMainLoop);
+    m_MainLoopStarted = false;
+  }
   if (m_PulseStream != nullptr) {
+    pa_stream_set_write_callback(m_PulseStream, nullptr, nullptr);
+    pa_stream_set_state_callback(m_PulseStream, nullptr, nullptr);
     pa_stream_disconnect(m_PulseStream);
     pa_stream_unref(m_PulseStream);
     m_PulseStream = nullptr;
   }
   if (m_PulseCtx != nullptr) {
+    pa_context_set_state_callback(m_PulseCtx, nullptr, nullptr);
     pa_context_disconnect(m_PulseCtx);
     pa_context_unref(m_PulseCtx);
     m_PulseCtx = nullptr;
   }
   if (m_PulseMainLoop != nullptr) {
-    pa_threaded_mainloop_stop(m_PulseMainLoop);
     pa_threaded_mainloop_free(m_PulseMainLoop);
     m_PulseMainLoop = nullptr;
   }
+}
 
-  if (m_Error != nullptr) {
-    free(m_Error);
+void RageSoundDriver_PulseAudio::SetError(const std::string& error) {
+  std::lock_guard<std::mutex> lock(m_StateMutex);
+  if (m_Error.empty()) {
+    m_Error = error;
   }
+}
+
+std::string RageSoundDriver_PulseAudio::GetError() const {
+  std::lock_guard<std::mutex> lock(m_StateMutex);
+  return m_Error;
 }
 
 /* Initialization */
@@ -128,6 +131,7 @@ std::string RageSoundDriver_PulseAudio::Init() {
   if (error < 0) {
     return ssprintf("pa_threaded_mainloop_start() returned %i", error);
   }
+  m_MainLoopStarted = true;
 
   /* Create the decode thread, this will be needed for Mix(), that we
    * will use as soon as a stream is ready. */
@@ -138,19 +142,13 @@ std::string RageSoundDriver_PulseAudio::Init() {
   const uint64_t waitStart = RageTimer::GetTimeSinceStartMicroseconds();
   while (!m_Sem.TryWait()) {
     if (RageTimer::GetTimeSinceStartMicroseconds() - waitStart > 10000000ULL) {
-      if (m_Error == nullptr) {
-        m_Error = DuplicatePulseError("PulseAudio init timed out");
-      }
+      SetError("PulseAudio init timed out");
       break;
     }
     usleep(1000);
   }
 
-  if (m_Error == nullptr) {
-    return "";
-  } else {
-    return m_Error;
-  }
+  return GetError();
 }
 
 void RageSoundDriver_PulseAudio::m_InitStream(void) {
@@ -169,9 +167,7 @@ void RageSoundDriver_PulseAudio::m_InitStream(void) {
 
   /* check sample spec */
   if (!pa_sample_spec_valid(&ss_local)) {
-    if (asprintf(&m_Error, "invalid sample spec!") == -1) {
-      m_Error = DuplicatePulseError("invalid sample spec");
-    }
+    SetError("invalid sample spec");
     m_Sem.Post();
     return;
   }
@@ -186,11 +182,8 @@ void RageSoundDriver_PulseAudio::m_InitStream(void) {
   m_PulseStream =
       pa_stream_new(m_PulseCtx, PRODUCT_FAMILY " Audio", &ss_local, &map);
   if (m_PulseStream == nullptr) {
-    if (asprintf(
-            &m_Error, "pa_stream_new(): %s",
-            pa_strerror(pa_context_errno(m_PulseCtx))) == -1) {
-      m_Error = DuplicatePulseError("pa_stream_new failed");
-    }
+    SetError(ssprintf(
+        "pa_stream_new(): %s", pa_strerror(pa_context_errno(m_PulseCtx))));
     m_Sem.Post();
     return;
   }
@@ -275,11 +268,9 @@ void RageSoundDriver_PulseAudio::m_InitStream(void) {
       m_PulseStream, nullptr, &attr, static_cast<pa_stream_flags_t>(flags),
       nullptr, nullptr);
   if (error < 0) {
-    if (asprintf(
-            &m_Error, "pa_stream_connect_playback(): %s",
-            pa_strerror(pa_context_errno(m_PulseCtx))) == -1) {
-      m_Error = DuplicatePulseError("pa_stream_connect_playback failed");
-    }
+    SetError(ssprintf(
+        "pa_stream_connect_playback(): %s",
+        pa_strerror(pa_context_errno(m_PulseCtx))));
     m_Sem.Post();
     return;
   }
@@ -312,11 +303,9 @@ void RageSoundDriver_PulseAudio::CtxStateCb(pa_context* c) {
       break;
     case PA_CONTEXT_TERMINATED:
     case PA_CONTEXT_FAILED:
-      if (asprintf(
-              &m_Error, "context connection failed: %s",
-              pa_strerror(pa_context_errno(m_PulseCtx))) == -1) {
-        m_Error = DuplicatePulseError("context connection failed");
-      }
+      SetError(ssprintf(
+          "context connection failed: %s",
+          pa_strerror(pa_context_errno(m_PulseCtx))));
       m_Sem.Post();
       return;
       break;
@@ -338,11 +327,9 @@ void RageSoundDriver_PulseAudio::StreamStateCb(pa_stream* s) {
     case PA_STREAM_UNCONNECTED:
     case PA_STREAM_TERMINATED:
     case PA_STREAM_FAILED:
-      if (asprintf(
-	              &m_Error, "stream connection failed: %s",
-	              pa_strerror(pa_context_errno(m_PulseCtx))) == -1) {
-        m_Error = DuplicatePulseError("stream connection failed");
-      }
+      SetError(ssprintf(
+          "stream connection failed: %s",
+          pa_strerror(pa_context_errno(m_PulseCtx))));
       m_Sem.Post();
       return;
       break;
@@ -350,6 +337,9 @@ void RageSoundDriver_PulseAudio::StreamStateCb(pa_stream* s) {
 }
 
 int64_t RageSoundDriver_PulseAudio::GetPosition() const {
+  if (m_PulseMainLoop == nullptr || !m_MainLoopStarted) {
+    return m_LastPosition;
+  }
   pa_threaded_mainloop_lock(m_PulseMainLoop);
   int64_t position = GetPositionUnlocked();
   pa_threaded_mainloop_unlock(m_PulseMainLoop);

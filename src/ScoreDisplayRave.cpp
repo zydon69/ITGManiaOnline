@@ -116,9 +116,8 @@ void ScoreDisplayRave::Update(float fDelta) {
 
   float fLevel = m_pPlayerState->m_fSuperMeter;
   if (!std::isfinite(fLevel)) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreDisplayRave ignored non-finite super meter %f.",
-        fLevel);
+    WarnScoreDisplayRaveAuditFix(
+        "SRC_AUDIT_FIX: ScoreDisplayRave ignored non-finite super meter.");
     fLevel = 0.0f;
   }
   rage_clamp(fLevel, 0.0f, (float)NUM_ATTACK_LEVELS - 0.0001f);

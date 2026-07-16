@@ -447,32 +447,36 @@ bool RageSound::Load(
     }
   }
 
-  /* Try to precache.  Do this after calling LoadSoundReader() to put the
-   * sound in this->m_pSource, so we preload after resampling. */
-  if (bPrecache && GetError().empty()) {
-    if (RageSoundReader_Preload::PreloadSound(m_pSource)) {
-      /* We've preloaded the sound.  Pass it to SOUNDMAN, for reuse. */
-      if (SOUNDMAN != nullptr) {
-        SOUNDMAN->AddLoadedSound(
-            sSoundFilePath, (RageSoundReader_Preload*)m_pSource);
-      }
-    } else {
-      const std::string preloadError = m_pSource->GetError();
-      if (!preloadError.empty()) {
-        LockMut(m_Mutex);
-        m_sError = preloadError;
-        if (LOG != nullptr) {
-          LOG->Warn(
-              "RageSound::Load: error preloading sound \"%s\": %s",
-              sSoundFilePath.c_str(), m_sError.c_str());
-        }
-      }
-    }
-    bNeedBuffer = false;
-  }
-
+  /* Preloading replaces m_pSource.  Keep that ownership transition under the
+   * sound lock so an overlapping unload cannot invalidate the reader. */
   {
     LockMut(m_Mutex);
+    RageSoundReader_Preload* preloadedSource = nullptr;
+    if (bPrecache) {
+      if (m_sError.empty() && m_pSource != nullptr) {
+        if (RageSoundReader_Preload::PreloadSound(m_pSource)) {
+          preloadedSource = static_cast<RageSoundReader_Preload*>(m_pSource);
+        } else {
+          const std::string preloadError = m_pSource->GetError();
+          if (!preloadError.empty()) {
+            m_sError = preloadError;
+            if (LOG != nullptr) {
+              LOG->Warn(
+                  "RageSound::Load: error preloading sound \"%s\": %s",
+                  sSoundFilePath.c_str(), m_sError.c_str());
+            }
+          }
+        }
+        bNeedBuffer = false;
+      }
+    }
+
+    /* The documented lock order permits RageSound before SoundMan.  Publish
+     * while the source is still protected because AddLoadedSound copies it. */
+    if (preloadedSource != nullptr && SOUNDMAN != nullptr) {
+      SOUNDMAN->AddLoadedSound(sSoundFilePath, preloadedSource);
+    }
+
     m_pSource = new RageSoundReader_Extend(m_pSource);
     if (bNeedBuffer) {
       m_pSource = new RageSoundReader_ThreadedBuffer(m_pSource);
@@ -873,8 +877,19 @@ void RageSound::PlayCopy(bool is_action, const RageSoundParams* pParams) const {
     pSound->SetParams(*pParams);
   }
 
-  if (pSound->StartPlaying()) {
-    pSound.release()->DeleteSelfWhenFinishedPlaying();
+  /* Arm deletion before playback can reach EOF.  The old order started the
+   * driver first, leaving a short callback race for zero-length sounds. */
+  RageSound* detachedSound = pSound.release();
+  {
+    LockMut(detachedSound->m_Mutex);
+    detachedSound->m_bDeleteWhenFinished = true;
+  }
+  if (!detachedSound->StartPlaying()) {
+    {
+      LockMut(detachedSound->m_Mutex);
+      detachedSound->m_bDeleteWhenFinished = false;
+    }
+    delete detachedSound;
   }
 }
 

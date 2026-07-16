@@ -50,15 +50,23 @@ static bool IsRegistered(const std::string& sClassName) {
 }
 
 void ActorUtil::Register(const std::string& sClassName, CreateActorFn pfn) {
+  if (sClassName.empty() || pfn == nullptr) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-3124: ActorUtil rejected an invalid registry "
+        "entry.");
+    return;
+  }
   if (g_pmapRegistrees == nullptr) {
     g_pmapRegistrees = new std::map<std::string, CreateActorFn>;
   }
 
   std::map<std::string, CreateActorFn>::iterator iter =
       g_pmapRegistrees->find(sClassName);
-  ASSERT_M(
-      iter == g_pmapRegistrees->end(),
-      ssprintf("Actor class '%s' already registered.", sClassName.c_str()));
+  if (iter != g_pmapRegistrees->end()) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-3124: ActorUtil ignored duplicate actor class.");
+    return;
+  }
 
   (*g_pmapRegistrees)[sClassName] = pfn;
 }
@@ -68,10 +76,10 @@ void ActorUtil::Register(const std::string& sClassName, CreateActorFn pfn) {
  * function of the same name. */
 bool ActorUtil::ResolvePath(
     std::string& sPath, const std::string& sName, bool optional) {
-  if (FILEMAN == nullptr) {
+  if (FILEMAN == nullptr || sPath.empty()) {
     WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-761: ActorUtil refused path resolution without "
-        "FILEMAN.");
+        "SRC_AUDIT_FIX SRC-3125: ActorUtil refused path resolution without "
+        "FILEMAN or a path.");
     return false;
   }
 
@@ -119,8 +127,15 @@ retry_resolution:
       }
     }
 
-    if (THEME != nullptr) {
+    if (THEME != nullptr && THEME->IsThemeLoaded()) {
       THEME->FilterFileLanguages(asPaths);
+    }
+
+    if (asPaths.empty()) {
+      WarnActorUtilAuditFix(
+          "SRC_AUDIT_FIX SRC-3125: ActorUtil path candidates were removed "
+          "by language filtering.");
+      return false;
     }
 
     if (asPaths.size() > 1) {
@@ -166,6 +181,12 @@ retry_resolution:
   }
 
   sPath = DerefRedir(sPath);
+  if (sPath.empty()) {
+    WarnActorUtilAuditFix(
+        "SRC_AUDIT_FIX SRC-3125: ActorUtil rejected an empty redirect "
+        "target.");
+    return false;
+  }
   return true;
 }
 
@@ -279,15 +300,15 @@ Actor* ActorUtil::LoadFromNode(const XNode* _pNode, Actor* pParentActor) {
         sPath = Dirname(GetSourcePath(&node)) + sFile;
       }
       if (ResolvePath(sPath, GetWhere(&node))) {
-        Actor* pNewActor = MakeActor(sPath, pParentActor);
-        if (pNewActor == nullptr) {
+        std::unique_ptr<Actor> newActor(MakeActor(sPath, pParentActor));
+        if (newActor == nullptr) {
           return nullptr;
         }
         if (pParentActor) {
-          pNewActor->SetParent(pParentActor);
+          newActor->SetParent(pParentActor);
         }
-        pNewActor->LoadFromNode(&node);
-        return pNewActor;
+        newActor->LoadFromNode(&node);
+        return newActor.release();
       }
     }
 
@@ -306,19 +327,19 @@ Actor* ActorUtil::LoadFromNode(const XNode* _pNode, Actor* pParentActor) {
         "SRC_AUDIT_FIX SRC-763: ActorUtil rejected null actor factory.");
     return MakeFallbackActor();
   }
-  Actor* pRet = pfn();
-  if (pRet == nullptr) {
+  std::unique_ptr<Actor> actor(pfn());
+  if (actor == nullptr) {
     WarnActorUtilAuditFix(
         "SRC_AUDIT_FIX SRC-763: ActorUtil replaced null factory result.");
     return MakeFallbackActor();
   }
 
   if (pParentActor) {
-    pRet->SetParent(pParentActor);
+    actor->SetParent(pParentActor);
   }
 
-  pRet->LoadFromNode(&node);
-  return pRet;
+  actor->LoadFromNode(&node);
+  return actor.release();
 }
 
 namespace {
@@ -577,9 +598,10 @@ apActorCommands ActorUtil::ParseActorCommands(
 }
 
 void ActorUtil::SetXY(Actor& actor, const std::string& sMetricsGroup) {
-  if (actor.GetName().empty() || THEME == nullptr) {
+  if (actor.GetName().empty() || THEME == nullptr || !THEME->IsThemeLoaded()) {
     WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-767: ActorUtil skipped SetXY without name/theme.");
+        "SRC_AUDIT_FIX SRC-767: ActorUtil skipped SetXY without name or a "
+        "loaded theme.");
     return;
   }
 
@@ -605,7 +627,7 @@ void ActorUtil::LoadCommand(
 void ActorUtil::LoadCommandFromName(
     Actor& actor, const std::string& sMetricsGroup,
     const std::string& sCommandName, const std::string& sName) {
-  if (THEME == nullptr) {
+  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
     WarnActorUtilAuditFix(
         "SRC_AUDIT_FIX SRC-767: ActorUtil skipped command load without THEME.");
     return;
@@ -622,7 +644,7 @@ void ActorUtil::LoadAllCommands(
 
 void ActorUtil::LoadAllCommandsFromName(
     Actor& actor, const std::string& sMetricsGroup, const std::string& sName) {
-  if (THEME == nullptr) {
+  if (THEME == nullptr || !THEME->IsThemeLoaded()) {
     WarnActorUtilAuditFix(
         "SRC_AUDIT_FIX SRC-767: ActorUtil skipped all command load without "
         "THEME.");
@@ -721,6 +743,9 @@ void ActorUtil::InitFileTypeLists() {
 }
 
 const std::vector<std::string>& ActorUtil::GetTypeExtensionList(FileType ft) {
+  if (ExtensionToFileType.empty()) {
+    ActorUtil::InitFileTypeLists();
+  }
   static const std::vector<std::string> empty;
   fttel_cont_t::const_iterator iter = FileTypeToExtensionList.find(ft);
   if (iter == FileTypeToExtensionList.end()) {
@@ -731,6 +756,9 @@ const std::vector<std::string>& ActorUtil::GetTypeExtensionList(FileType ft) {
 
 void ActorUtil::AddTypeExtensionsToList(
     FileType ft, std::vector<std::string>& add_to) {
+  if (ExtensionToFileType.empty()) {
+    ActorUtil::InitFileTypeLists();
+  }
   fttel_cont_t::iterator ext_list = FileTypeToExtensionList.find(ft);
   if (ext_list != FileTypeToExtensionList.end()) {
     add_to.reserve(add_to.size() + ext_list->second.size());
@@ -742,6 +770,9 @@ void ActorUtil::AddTypeExtensionsToList(
 }
 
 FileType ActorUtil::GetFileType(const std::string& sPath) {
+  if (ExtensionToFileType.empty()) {
+    ActorUtil::InitFileTypeLists();
+  }
   std::string sExt = GetExtension(sPath);
   MakeLower(sExt);
 

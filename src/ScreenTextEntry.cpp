@@ -31,7 +31,9 @@
 namespace {
 constexpr int MAX_TEXT_ENTRY_INPUT_LENGTH = 4096;
 
-bool HasLoadedTheme() { return THEME != nullptr && THEME->IsThemeLoaded(); }
+bool HasLoadedTheme() {
+  return THEME != nullptr && THEME->IsThemeLoaded() && LUA != nullptr;
+}
 
 int ClampInputLength(int length) {
   return std::clamp(length, 0, MAX_TEXT_ENTRY_INPUT_LENGTH);
@@ -147,6 +149,8 @@ void ScreenTextEntry::TextEntry(
 
   if (SCREENMAN == nullptr) {
     WarnTextEntry("cannot open text entry without SCREENMAN");
+    g_PendingSettings = RuntimeSettings();
+    g_bPendingSettingsValid = false;
     return;
   }
   SCREENMAN->AddNewScreenToTop("ScreenTextEntry", smSendOnPop);
@@ -214,6 +218,11 @@ void ScreenTextEntry::RefreshFromSettings() {
 void ScreenTextEntry::Init() {
   ScreenWithMenuElements::Init();
 
+  m_bQuestionReady = false;
+  m_bAnswerReady = false;
+  m_sndType.Unload();
+  m_sndBackspace.Unload();
+
   if (g_bPendingSettingsValid) {
     ApplySettings(g_PendingSettings);
     g_bPendingSettingsValid = false;
@@ -241,8 +250,15 @@ void ScreenTextEntry::Init() {
   // m_iCaretLocation = 0;
 
   if (HasLoadedTheme()) {
-    m_sndType.Load(THEME->GetPathS(m_sName, "type", true), true);
-    m_sndBackspace.Load(THEME->GetPathS(m_sName, "backspace", true), true);
+    const std::string type_path = THEME->GetPathS(m_sName, "type", true);
+    const std::string backspace_path =
+        THEME->GetPathS(m_sName, "backspace", true);
+    if (!type_path.empty()) {
+      m_sndType.Load(type_path, true);
+    }
+    if (!backspace_path.empty()) {
+      m_sndBackspace.Load(backspace_path, true);
+    }
   }
 }
 
@@ -592,6 +608,7 @@ void ScreenTextEntry::End(bool bCancelled) {
   if (m_bEnding || IsTransitioning()) {
     return;
   }
+  m_bEnding = true;
 
   std::string sAnswer = WStringToRString(m_sAnswer);
   std::string callbackAnswer = sAnswer;
@@ -602,6 +619,8 @@ void ScreenTextEntry::End(bool bCancelled) {
       if (sError.empty()) {
         sError = "Invalid answer.";
       }
+      sError = WStringToRString(TruncateAnswerToLimit(
+          RStringToWstring(sError), MAX_TEXT_ENTRY_INPUT_LENGTH));
       if (SCREENMAN != nullptr) {
         ScreenPrompt::Prompt(SM_None, sError);
       } else {
@@ -613,7 +632,6 @@ void ScreenTextEntry::End(bool bCancelled) {
     FontCharAliases::ReplaceMarkers(callbackAnswer);
   }
 
-  m_bEnding = true;
   s_bCancelledLast = bCancelled;
   s_sLastAnswer = bCancelled ? std::string("") : sAnswer;
 
@@ -684,7 +702,18 @@ void ScreenTextEntry::TextEntrySettings::FromStack(lua_State* L) {
   // Get Max Input Length
   lua_getfield(L, iTab, "MaxInputLength");
   if (lua_isnumber(L, -1)) {
-    iMaxInputLength = ClampInputLength(static_cast<int>(lua_tointeger(L, -1)));
+    const lua_Number requested = lua_tonumber(L, -1);
+    if (!std::isfinite(static_cast<double>(requested))) {
+      LuaHelpers::ReportScriptError(
+          "ScreenTextEntry \"MaxInputLength\" must be finite.");
+      iMaxInputLength = ClampInputLength(iMaxInputLength);
+    } else if (requested <= 0) {
+      iMaxInputLength = 0;
+    } else if (requested >= MAX_TEXT_ENTRY_INPUT_LENGTH) {
+      iMaxInputLength = MAX_TEXT_ENTRY_INPUT_LENGTH;
+    } else {
+      iMaxInputLength = static_cast<int>(requested);
+    }
   } else if (!lua_isnil(L, -1)) {
     LuaHelpers::ReportScriptError(
         "ScreenTextEntry \"MaxInputLength\" entry is not a number.");
@@ -752,6 +781,18 @@ LUA_REGISTER_DERIVED_CLASS(ScreenTextEntry, ScreenWithMenuElements)
 ScreenTextEntryVisual::ScreenTextEntryVisual() : m_ptextKeys{} {}
 
 void ScreenTextEntryVisual::Init() {
+  m_bKeyboardReady = false;
+  m_sndChange.Unload();
+  FOREACH_KeyboardRow(r) {
+    for (int x = 0; x < KEYS_PER_ROW; ++x) {
+      BitmapText*& key = m_ptextKeys[r][x];
+      if (key != nullptr) {
+        RemoveChild(key);
+        RageUtil::SafeDelete(key);
+      }
+    }
+  }
+
   if (HasLoadedTheme()) {
     ROW_START_X.Load(m_sName, "RowStartX");
     ROW_START_Y.Load(m_sName, "RowStartY");
@@ -778,6 +819,11 @@ void ScreenTextEntryVisual::Init() {
       return;
     }
     text.SetName("Keys");
+    if (!ROW_START_X.IsLoaded() || !ROW_START_Y.IsLoaded() ||
+        !ROW_END_X.IsLoaded() || !ROW_END_Y.IsLoaded()) {
+      WarnTextEntry("visual keyboard disabled because layout metrics are missing");
+      return;
+    }
     ActorUtil::LoadAllCommands(text, m_sName);
     text.PlayCommand("Init");
     m_bKeyboardReady = true;
@@ -821,6 +867,17 @@ void ScreenTextEntryVisual::BeginScreen() {
     return;
   }
 
+  const float row_start_x = ROW_START_X.GetValue();
+  const float row_start_y = ROW_START_Y.GetValue();
+  const float row_end_x = ROW_END_X.GetValue();
+  const float row_end_y = ROW_END_Y.GetValue();
+  if (!std::isfinite(row_start_x) || !std::isfinite(row_start_y) ||
+      !std::isfinite(row_end_x) || !std::isfinite(row_end_y)) {
+    WarnTextEntry("visual keyboard disabled because layout metrics are invalid");
+    m_bKeyboardReady = false;
+    return;
+  }
+
   FOREACH_KeyboardRow(r) {
     for (int x = 0; x < KEYS_PER_ROW; ++x) {
       BitmapText* bt = m_ptextKeys[r][x];
@@ -828,9 +885,9 @@ void ScreenTextEntryVisual::BeginScreen() {
         continue;
       }
       float fX =
-          std::round(SCALE(x, 0, KEYS_PER_ROW - 1, ROW_START_X, ROW_END_X));
+          std::round(SCALE(x, 0, KEYS_PER_ROW - 1, row_start_x, row_end_x));
       float fY =
-          std::round(SCALE(r, 0, NUM_KeyboardRow - 1, ROW_START_Y, ROW_END_Y));
+          std::round(SCALE(r, 0, NUM_KeyboardRow - 1, row_start_y, row_end_y));
       bt->SetXY(fX, fY);
     }
   }

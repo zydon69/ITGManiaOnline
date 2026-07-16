@@ -1,11 +1,14 @@
 #include "FontManager.h"
 
+#include <algorithm>
 #include <map>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
 
 #include "Font.h"
+#include "RageException.h"
 #include "RageLog.h"
 #include "RageThreads.h"
 #include "RageUtil.h"
@@ -17,6 +20,14 @@ FontManager* FONT =
 // map from file name to a texture holder
 typedef std::pair<std::string, std::string> FontName;
 static std::map<FontName, Font*> g_mapPathToFont;
+
+namespace {
+std::string NormalizeFontPath(std::string path) {
+  FixSlashesInPlace(path);
+  CollapsePath(path, true);
+  return path;
+}
+}  // namespace
 
 FontManager::FontManager() {}
 
@@ -32,6 +43,7 @@ FontManager::~FontManager() {
     }
     delete pFont;
   }
+  g_mapPathToFont.clear();
 }
 
 Font* FontManager::LoadFont(
@@ -44,16 +56,25 @@ Font* FontManager::LoadFont(
 
   CHECKPOINT_M(
       ssprintf("FontManager::LoadFont(%s).", sFontOrTextureFilePath.c_str()));
-  const FontName NewName(sFontOrTextureFilePath, sChars);
+  const FontName NewName(NormalizeFontPath(sFontOrTextureFilePath), sChars);
   std::map<FontName, Font*>::iterator p = g_mapPathToFont.find(NewName);
   if (p != g_mapPathToFont.end()) {
     pFont = p->second;
+    if (pFont == nullptr) {
+      g_mapPathToFont.erase(p);
+      return LoadFont(sFontOrTextureFilePath, std::move(sChars));
+    }
+    if (pFont->m_iRefCount == std::numeric_limits<int>::max()) {
+      RageException::Throw(
+          "Font \"%s\" reference count overflow.",
+          sFontOrTextureFilePath.c_str());
+    }
     pFont->m_iRefCount++;
     return pFont;
   }
 
   std::unique_ptr<Font> f(new Font);
-  f->Load(sFontOrTextureFilePath, sChars);
+  f->Load(NewName.first, sChars);
   Font* raw = f.release();
   g_mapPathToFont[NewName] = raw;
   return raw;
@@ -66,6 +87,21 @@ Font* FontManager::CopyFont(Font* pFont) {
     }
     return nullptr;
   }
+  const bool cached = std::any_of(
+      g_mapPathToFont.begin(), g_mapPathToFont.end(),
+      [pFont](const auto& entry) { return entry.second == pFont; });
+  if (!cached) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX SRC-3144: refused to copy an uncached font pointer "
+          "%p.",
+          static_cast<void*>(pFont));
+    }
+    return nullptr;
+  }
+  if (pFont->m_iRefCount == std::numeric_limits<int>::max()) {
+    RageException::Throw("Font reference count overflow.");
+  }
   ++pFont->m_iRefCount;
   return pFont;
 }
@@ -74,13 +110,14 @@ void FontManager::UnloadFont(Font* fp) {
   if (fp == nullptr) {
     return;
   }
-  CHECKPOINT_M(ssprintf("FontManager::UnloadFont(%s).", fp->path.c_str()));
 
   for (std::map<FontName, Font*>::iterator i = g_mapPathToFont.begin();
        i != g_mapPathToFont.end(); ++i) {
     if (i->second != fp) {
       continue;
     }
+
+    CHECKPOINT_M(ssprintf("FontManager::UnloadFont(%s).", fp->path.c_str()));
 
     if (fp->m_iRefCount <= 0) {
       if (LOG != nullptr) {

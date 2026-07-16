@@ -9,7 +9,7 @@
 class ActorSound : public Actor {
  public:
   ActorSound();
-  ~ActorSound() override {}
+  ~ActorSound() override = default;
   ActorSound* Copy() const override;
 
   bool Load(const std::string& sPath);

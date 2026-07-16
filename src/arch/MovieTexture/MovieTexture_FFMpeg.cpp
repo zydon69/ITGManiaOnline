@@ -30,6 +30,7 @@
 namespace {
 constexpr int kMaxMovieDimension = 8192;
 constexpr std::size_t kMaxMovieFrames = 1000000;
+constexpr int kMaxPacketsScannedPerFrame = 10000;
 constexpr double kDefaultFrameDelay = 1.0 / 60.0;
 
 bool IsValidMovieDimension(int value) {
@@ -178,9 +179,14 @@ MovieDecoder_FFMpeg::~MovieDecoder_FFMpeg() {
   }
   if (av_io_context_ != nullptr) {
     RageFile* file = (RageFile*)av_io_context_->opaque;
-    file->Close();
-    delete file;
-    avcodec::av_free(av_io_context_);
+    if (file != nullptr) {
+      file->Close();
+      delete file;
+      av_io_context_->opaque = nullptr;
+    }
+    avcodec::av_freep(&av_io_context_->buffer);
+    av_buffer_ = nullptr;
+    avcodec::avio_context_free(&av_io_context_);
   }
   if (av_buffer_ != nullptr) {
     avcodec::av_free(av_buffer_);
@@ -267,6 +273,9 @@ int MovieDecoder_FFMpeg::HandleNextPacket() {
   // If the decoder hit the end of the file, then that means the packet
   // buffer is complete.
   if (!end_of_file_) {
+    if (packet_buffer_.size() >= kMaxMovieFrames) {
+      return -1;
+    }
     // Add in a new FrameBuffer entry, and lock it immediately.
     auto packetHolder = std::make_unique<PacketHolder>();
     if (!packetHolder->IsValid()) {
@@ -413,7 +422,7 @@ int MovieDecoder_FFMpeg::SendPacketToBuffer() {
     return -1;
   }
 
-  while (true) {
+  for (int scanned = 0; scanned < kMaxPacketsScannedPerFrame; ++scanned) {
     int ret = avcodec::av_read_frame(
         av_format_context_, packet_buffer_.back()->packet);
     /* XXX: why is avformat returning AVERROR_NOMEM on EOF? */
@@ -428,6 +437,13 @@ int MovieDecoder_FFMpeg::SendPacketToBuffer() {
     /* It's not for the video stream; ignore it. */
     avcodec::av_packet_unref(packet_buffer_.back()->packet);
   }
+  if (LOG != nullptr) {
+    LOG->Warn(
+        "FFmpeg refused more than %d non-video packets while looking for the "
+        "next frame.",
+        kMaxPacketsScannedPerFrame);
+  }
+  return -1;
 }
 
 int MovieDecoder_FFMpeg::DecodePacketToFrame() {
@@ -586,10 +602,12 @@ int MovieDecoder_FFMpeg::GetFrame(RageSurface* surface_out) {
         GetWidth(), GetHeight(), av_pixel_format_, kSwsFlags, nullptr, nullptr,
         nullptr);
     if (av_sws_context_ == nullptr) {
-      LOG->Warn(
-          "Cannot initialize sws conversion context for (%d,%d) %d->%d",
-          GetWidth(), GetHeight(), av_stream_codec_->pix_fmt,
-          av_pixel_format_);
+      if (LOG != nullptr) {
+        LOG->Warn(
+            "Cannot initialize sws conversion context for (%d,%d) %d->%d",
+            GetWidth(), GetHeight(), av_stream_codec_->pix_fmt,
+            av_pixel_format_);
+      }
       return -1;
     }
   }
@@ -616,10 +634,12 @@ int MovieDecoder_FFMpeg::GetFrame(RageSurface* surface_out) {
         frame_buffer_[display_frame_in_buffer]->frame->linesize, 0, GetHeight(),
         pict.data, pict.linesize);
   } else {
-    LOG->Warn(
-        "Unexpected frame trying to display! display_frame_num_ = %zu, "
-        "packet_num = %zu",
-        displayFrame, frame_buffer_[display_frame_in_buffer]->packet_num);
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "Unexpected frame trying to display! display_frame_num_ = %zu, "
+          "packet_num = %zu",
+          displayFrame, frame_buffer_[display_frame_in_buffer]->packet_num);
+    }
   }
 
   // Even if scale_status returns a failure, we mark displayed as true. The
@@ -770,9 +790,11 @@ std::string MovieDecoder_FFMpeg::Open(std::string file) {
 
   if (LOG != nullptr) {
     LOG->Trace("Bitrate: %i", static_cast<int>(av_stream_codec_->bit_rate));
+    const char* pixelFormatName =
+        avcodec::av_get_pix_fmt_name(av_stream_codec_->pix_fmt);
     LOG->Trace(
         "Codec pixel format: %s",
-        avcodec::av_get_pix_fmt_name(av_stream_codec_->pix_fmt));
+        pixelFormatName != nullptr ? pixelFormatName : "unknown");
   }
   int64_t detectedFrames = av_stream_->nb_frames;
 

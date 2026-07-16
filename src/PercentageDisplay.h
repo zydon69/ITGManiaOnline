@@ -15,6 +15,7 @@ class PlayerState;
 class PercentageDisplay : public ActorFrame {
  public:
   PercentageDisplay();
+  PercentageDisplay(const PercentageDisplay& cpy);
   void Load(
       const PlayerState* pPlayerState,
       const PlayerStageStats* pPlayerStageStats);
@@ -22,14 +23,14 @@ class PercentageDisplay : public ActorFrame {
       const PlayerState* pPlayerState,
       const PlayerStageStats* pPlayerStageStats,
       const std::string& sMetricsGroup, bool bAutoRefresh);
-  void Update(float fDeltaTime);
-  virtual void LoadFromNode(const XNode* pNode);
-  virtual PercentageDisplay* Copy() const;
+  void Update(float fDeltaTime) override;
+  void LoadFromNode(const XNode* pNode) override;
+  PercentageDisplay* Copy() const override;
 
   bool ShowDancePointsNotPercentage() const;
 
   // Lua
-  virtual void PushSelf(lua_State* L);
+  void PushSelf(lua_State* L) override;
 
  private:
   int m_iDancePointsDigits;

@@ -62,14 +62,14 @@ float ClampFiniteNonNegativeStageFloat(
     float value, const char* field, const char* context) {
   if (!std::isfinite(value)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s clamped non-finite %s value %f to 0.",
-        context, field, value);
+        "SRC_AUDIT_FIX: %s clamped non-finite %s value %f to 0.", context,
+        field, value);
     return 0.0f;
   }
   if (value < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s clamped negative %s value %f to 0.",
-        context, field, value);
+        "SRC_AUDIT_FIX: %s clamped negative %s value %f to 0.", context, field,
+        value);
     return 0.0f;
   }
   return value;
@@ -81,8 +81,8 @@ float AddFiniteNonNegativeStageFloat(
   add = ClampFiniteNonNegativeStageFloat(add, field, context);
   if (add > std::numeric_limits<float>::max() - current) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s saturated %s float sum %f + %f.",
-        context, field, current, add);
+        "SRC_AUDIT_FIX: %s saturated %s float sum %f + %f.", context, field,
+        current, add);
     return std::numeric_limits<float>::max();
   }
   return current + add;
@@ -91,8 +91,7 @@ float AddFiniteNonNegativeStageFloat(
 int ClampMeterForAverage(int meter, const char* context) {
   if (meter < 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s clamped negative meter %i to 0.",
-        context, meter);
+        "SRC_AUDIT_FIX: %s clamped negative meter %i to 0.", context, meter);
     return 0;
   }
   return meter;
@@ -151,8 +150,7 @@ bool HasUsableStageStats(
   }
   if (!IsValidPlayMode(playMode)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s received invalid play mode %i.",
-        context, playMode);
+        "SRC_AUDIT_FIX: %s received invalid play mode %i.", context, playMode);
     return false;
   }
   if (playedSongs.size() != static_cast<size_t>(pss.m_iStepsPlayed) ||
@@ -174,8 +172,8 @@ bool HasUsableStageStats(
   for (size_t i = 0; i < playedSongs.size(); ++i) {
     if (playedSongs[i] == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: %s received null played song at index %zu.",
-          context, i);
+          "SRC_AUDIT_FIX: %s received null played song at index %zu.", context,
+          i);
       return false;
     }
   }
@@ -218,6 +216,8 @@ StageStats::StageStats() {
   m_iStageIndex = -1;
   m_vpPlayedSongs.clear();
   m_vpPossibleSongs.clear();
+  m_pPlayedCourse = nullptr;
+  FOREACH_PlayerNumber(pn) { m_pPlayedTrails[pn] = nullptr; }
   m_EarnedExtraStage = EarnedExtraStage_No;
   m_bGaveUp = false;
   m_bUsedAutoplay = false;
@@ -227,7 +227,8 @@ StageStats::StageStats() {
   FOREACH_PlayerNumber(pn) { m_player[pn].Init(pn); }
   FOREACH_MultiPlayer(pn) { m_multiPlayer[pn].Init(pn); }
   m_RoutinePlayer.Init(
-      GAMESTATE != nullptr && IsValidPlayerNumber(GAMESTATE->GetMasterPlayerNumber())
+      GAMESTATE != nullptr &&
+              IsValidPlayerNumber(GAMESTATE->GetMasterPlayerNumber())
           ? GAMESTATE->GetMasterPlayerNumber()
           : PLAYER_1);
 }
@@ -279,8 +280,8 @@ int StageStats::GetAverageMeter(PlayerNumber pn) const {
           i, pn);
       continue;
     }
-    iTotalMeter += ClampMeterForAverage(
-        pSteps->GetMeter(), "StageStats::GetAverageMeter");
+    iTotalMeter +=
+        ClampMeterForAverage(pSteps->GetMeter(), "StageStats::GetAverageMeter");
     ++iValidMeters;
   }
   if (iValidMeters <= 0) {
@@ -302,11 +303,23 @@ void StageStats::AddStats(const StageStats& other) {
     LOG->Warn("SRC_AUDIT_FIX: StageStats::AddStats ignored empty stage stats.");
     return;
   }
+  if (std::find(
+          other.m_vpPlayedSongs.begin(), other.m_vpPlayedSongs.end(),
+          nullptr) != other.m_vpPlayedSongs.end() ||
+      std::find(
+          other.m_vpPossibleSongs.begin(), other.m_vpPossibleSongs.end(),
+          nullptr) != other.m_vpPossibleSongs.end()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: StageStats::AddStats rejected null song pointers to "
+        "preserve song/steps alignment.");
+    return;
+  }
   if (!IsValidPlayMode(other.m_playMode)) {
     LOG->Warn(
         "SRC_AUDIT_FIX: StageStats::AddStats ignored invalid source play mode "
         "%i.",
         other.m_playMode);
+    return;
   } else if (!IsValidPlayMode(m_playMode)) {
     m_playMode = other.m_playMode;
   } else if (m_playMode != other.m_playMode) {
@@ -315,21 +328,30 @@ void StageStats::AddStats(const StageStats& other) {
         "stats from mode %i.",
         m_playMode, other.m_playMode);
   }
-  for (Song* s : other.m_vpPlayedSongs) {
-    if (s == nullptr) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX: StageStats::AddStats skipped null played song.");
-      continue;
-    }
-    m_vpPlayedSongs.push_back(s);
+  m_vpPlayedSongs.insert(
+      m_vpPlayedSongs.end(), other.m_vpPlayedSongs.begin(),
+      other.m_vpPlayedSongs.end());
+  m_vpPossibleSongs.insert(
+      m_vpPossibleSongs.end(), other.m_vpPossibleSongs.begin(),
+      other.m_vpPossibleSongs.end());
+  if (m_pPlayedCourse == nullptr) {
+    m_pPlayedCourse = other.m_pPlayedCourse;
+  } else if (
+      other.m_pPlayedCourse != nullptr &&
+      m_pPlayedCourse != other.m_pPlayedCourse) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: StageStats::AddStats cleared conflicting course "
+        "snapshots.");
+    m_pPlayedCourse = nullptr;
   }
-  for (Song* s : other.m_vpPossibleSongs) {
-    if (s == nullptr) {
-      LOG->Warn(
-          "SRC_AUDIT_FIX: StageStats::AddStats skipped null possible song.");
-      continue;
+  FOREACH_PlayerNumber(p) {
+    if (m_pPlayedTrails[p] == nullptr) {
+      m_pPlayedTrails[p] = other.m_pPlayedTrails[p];
+    } else if (
+        other.m_pPlayedTrails[p] != nullptr &&
+        m_pPlayedTrails[p] != other.m_pPlayedTrails[p]) {
+      m_pPlayedTrails[p] = nullptr;
     }
-    m_vpPossibleSongs.push_back(s);
   }
   m_Stage = Stage_Invalid;  // meaningless
   m_iStageIndex = -1;       // meaningless
@@ -410,8 +432,7 @@ void StageStats::SynchronizeRoutineScoreToPlayers() {
     target.m_iMaxScore = m_RoutinePlayer.m_iMaxScore;
     target.m_iSongsPassed = m_RoutinePlayer.m_iSongsPassed;
     target.m_iSongsPlayed = m_RoutinePlayer.m_iSongsPlayed;
-    target.m_fLifeRemainingSeconds =
-        m_RoutinePlayer.m_fLifeRemainingSeconds;
+    target.m_fLifeRemainingSeconds = m_RoutinePlayer.m_fLifeRemainingSeconds;
     target.m_fLifeRecord = m_RoutinePlayer.m_fLifeRecord;
     target.m_ComboList = m_RoutinePlayer.m_ComboList;
     target.m_fFirstSecond = m_RoutinePlayer.m_fFirstSecond;
@@ -425,13 +446,13 @@ void StageStats::SynchronizeRoutineScoreToPlayers() {
       "Routine shared score synchronized to participants: master=%i score=%u "
       "percent=%.6f failed=%d disqualified=%d.",
       static_cast<int>(master), m_RoutinePlayer.m_iScore,
-      m_RoutinePlayer.GetPercentDancePoints(), m_RoutinePlayer.m_bFailed ? 1 : 0,
+      m_RoutinePlayer.GetPercentDancePoints(),
+      m_RoutinePlayer.m_bFailed ? 1 : 0,
       m_RoutinePlayer.m_bDisqualified ? 1 : 0);
 }
 
 bool StageStats::OnePassed() const {
-  if (IsRoutineSharedStyleActive() &&
-      HasRecordedPlayerStats(m_RoutinePlayer)) {
+  if (IsRoutineSharedStyleActive() && HasRecordedPlayerStats(m_RoutinePlayer)) {
     return !m_RoutinePlayer.m_bFailed;
   }
 
@@ -444,8 +465,7 @@ bool StageStats::OnePassed() const {
 }
 
 bool StageStats::AllFailed() const {
-  if (IsRoutineSharedStyleActive() &&
-      HasRecordedPlayerStats(m_RoutinePlayer)) {
+  if (IsRoutineSharedStyleActive() && HasRecordedPlayerStats(m_RoutinePlayer)) {
     return m_RoutinePlayer.m_bFailed;
   }
 
@@ -463,7 +483,7 @@ bool StageStats::AllFailed() const {
 }
 
 float StageStats::GetTotalPossibleStepsSeconds() const {
-  float fSecs = 0;
+  double fSecs = 0.0;
   for (const Song* s : m_vpPlayedSongs) {
     if (s == nullptr) {
       LOG->Warn(
@@ -479,18 +499,32 @@ float StageStats::GetTotalPossibleStepsSeconds() const {
           fSongSeconds);
       continue;
     }
-    fSecs = AddFiniteNonNegativeStageFloat(
-        fSecs, fSongSeconds, "possible steps seconds",
-        "StageStats::GetTotalPossibleStepsSeconds");
+    fSecs += static_cast<double>(fSongSeconds);
+    if (!std::isfinite(fSecs) ||
+        fSecs > static_cast<double>(std::numeric_limits<float>::max())) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: StageStats::GetTotalPossibleStepsSeconds saturated "
+          "its accumulated duration.");
+      fSecs = std::numeric_limits<float>::max();
+      break;
+    }
   }
   if (!std::isfinite(m_fMusicRate) || m_fMusicRate <= 0.0f) {
     LOG->Warn(
         "SRC_AUDIT_FIX: StageStats::GetTotalPossibleStepsSeconds ignored "
         "invalid music rate %f.",
         m_fMusicRate);
-    return fSecs;
+    return static_cast<float>(fSecs);
   }
-  return fSecs / m_fMusicRate;
+  const double adjusted = fSecs / static_cast<double>(m_fMusicRate);
+  if (!std::isfinite(adjusted) ||
+      adjusted > static_cast<double>(std::numeric_limits<float>::max())) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: StageStats::GetTotalPossibleStepsSeconds saturated "
+        "its rate-adjusted duration.");
+    return std::numeric_limits<float>::max();
+  }
+  return static_cast<float>(adjusted);
 }
 
 static HighScore FillInHighScore(
@@ -503,8 +537,7 @@ static HighScore FillInHighScore(
   hs.SetGrade(pss.GetGrade());
   hs.SetScore(pss.m_iScore);
   hs.SetPercentDP(ClampFiniteNonNegativeStageFloat(
-      pss.GetPercentDancePoints(), "percent dance points",
-      "FillInHighScore"));
+      pss.GetPercentDancePoints(), "percent dance points", "FillInHighScore"));
   hs.SetAliveSeconds(ClampFiniteNonNegativeStageFloat(
       pss.m_fAliveSeconds, "alive seconds", "FillInHighScore"));
   hs.SetMaxCombo(pss.GetMaxCombo().m_cnt);
@@ -763,8 +796,8 @@ void StageStats::FinalizeScores(bool bSummary) {
     }
     std::string sPlayerGuid = "00000000-0000-0000-0000-000000000000";  // FIXME
     m_multiPlayer[mp].m_HighScore = FillInHighScore(
-        m_multiPlayer[mp], *GAMESTATE->m_pMultiPlayerState[mp], "",
-        sPlayerGuid, sSongOptions, sMachineGuid, PREFSMAN->m_iProductID);
+        m_multiPlayer[mp], *GAMESTATE->m_pMultiPlayerState[mp], "", sPlayerGuid,
+        sSongOptions, sMachineGuid, PREFSMAN->m_iProductID);
     bMultiPlayerScoreFilled[mp] = true;
   }
   const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
@@ -785,9 +818,8 @@ void StageStats::FinalizeScores(bool bSummary) {
 
     const Steps* pRoutineSteps = GetPrimaryScoreSteps(m_RoutinePlayer);
     const std::string routineStepsType =
-        pRoutineSteps != nullptr
-            ? StepsTypeToString(pRoutineSteps->m_StepsType)
-            : std::string("StepsType_Invalid");
+        pRoutineSteps != nullptr ? StepsTypeToString(pRoutineSteps->m_StepsType)
+                                 : std::string("StepsType_Invalid");
 
     if (m_RoutinePlayer.m_bFailed) {
       bPlayerScoreFilled[master] = false;
@@ -798,8 +830,7 @@ void StageStats::FinalizeScores(bool bSummary) {
           "score=%u percent=%.6f steps_type=%s.",
           static_cast<int>(master), m_RoutinePlayer.m_iScore,
           m_RoutinePlayer.GetPercentDancePoints(), routineStepsType.c_str());
-    } else if (CanFillHighScore(
-                   master, "StageStats::FinalizeScores routine")) {
+    } else if (CanFillHighScore(master, "StageStats::FinalizeScores routine")) {
       std::vector<PlayerStageStats> routinePlayerStats(NUM_PLAYERS);
       std::vector<std::string> routinePlayerGuids(NUM_PLAYERS);
       FOREACH_PlayerNumber(pn) {
@@ -827,9 +858,8 @@ void StageStats::FinalizeScores(bool bSummary) {
       continue;
     }
     const HighScore& hs = m_player[p].m_HighScore;
-    const bool bRoutineSharedScore =
-        bRoutineSharedStyle && p == master &&
-        HasRecordedPlayerStats(m_RoutinePlayer);
+    const bool bRoutineSharedScore = bRoutineSharedStyle && p == master &&
+                                     HasRecordedPlayerStats(m_RoutinePlayer);
     const PlayerStageStats& scoreStats =
         bRoutineSharedScore ? m_RoutinePlayer : m_player[p];
     const Style* pStyle =
@@ -884,8 +914,8 @@ void StageStats::FinalizeScores(bool bSummary) {
       PROFILEMAN->IncrementCategoryPlayCount(st, m_player[p].m_rc, p);
     } else if (bCourseMode) {
       // Save this stage to recent scores
-      Course* pCourse = GAMESTATE->m_pCurCourse;
-      Trail* pTrail = GAMESTATE->m_pCurTrail[p];
+      Course* pCourse = m_pPlayedCourse;
+      Trail* pTrail = m_pPlayedTrails[p];
       if (!HasCourseScoreContext(
               pCourse, pTrail, p, "StageStats::FinalizeScores")) {
         continue;
@@ -926,9 +956,8 @@ void StageStats::FinalizeScores(bool bSummary) {
       m_player[p].m_iMachineHighScoreIndex = -1;
       continue;
     }
-    const bool bRoutineSharedScore =
-        bRoutineSharedStyle && p == master &&
-        HasRecordedPlayerStats(m_RoutinePlayer);
+    const bool bRoutineSharedScore = bRoutineSharedStyle && p == master &&
+                                     HasRecordedPlayerStats(m_RoutinePlayer);
     const PlayerStageStats& scoreStats =
         bRoutineSharedScore ? m_RoutinePlayer : m_player[p];
     const Style* pStyle =
@@ -945,8 +974,8 @@ void StageStats::FinalizeScores(bool bSummary) {
     if (bSummary) {
       pHSL = &pProfile->GetCategoryHighScoreList(st, m_player[p].m_rc);
     } else if (bCourseMode) {
-      Course* pCourse = GAMESTATE->m_pCurCourse;
-      Trail* pTrail = GAMESTATE->m_pCurTrail[p];
+      Course* pCourse = m_pPlayedCourse;
+      Trail* pTrail = m_pPlayedTrails[p];
       if (!HasCourseScoreContext(
               pCourse, pTrail, p, "StageStats::FinalizeScores")) {
         m_player[p].m_iMachineHighScoreIndex = -1;
@@ -1012,9 +1041,9 @@ bool StageStats::PlayerHasHighScore(PlayerNumber pn) const {
   }
 
   const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
-  const bool bRoutineSharedScore =
-      IsRoutineSharedStyleActive() && pn == master &&
-      HasRecordedPlayerStats(m_RoutinePlayer);
+  const bool bRoutineSharedScore = IsRoutineSharedStyleActive() &&
+                                   pn == master &&
+                                   HasRecordedPlayerStats(m_RoutinePlayer);
   const PlayerStageStats& scoreStats =
       bRoutineSharedScore ? m_RoutinePlayer : m_player[pn];
 
@@ -1026,23 +1055,13 @@ bool StageStats::PlayerHasHighScore(PlayerNumber pn) const {
     return false;
   }
 
-  if (m_vpPlayedSongs.empty() || m_vpPlayedSongs[0] == nullptr ||
-      scoreStats.m_vpPossibleSteps.empty() ||
-      scoreStats.m_vpPossibleSteps[0] == nullptr) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX: StageStats::PlayerHasHighScore missing stats for "
-        "player %i routine=%d.",
-        pn, bRoutineSharedScore ? 1 : 0);
-    return false;
-  }
-
   const Song* pSong = GetPrimaryScoreSong(*this);
   const Steps* pSteps = GetPrimaryScoreSteps(scoreStats);
-  const bool bCourseMode =
-      IsValidPlayMode(m_playMode) ? IsCoursePlayMode(m_playMode)
-                                  : GAMESTATE->IsCourseMode();
-  const Course* pCourse = GAMESTATE->m_pCurCourse;
-  const Trail* pTrail = GAMESTATE->m_pCurTrail[pn];
+  const bool bCourseMode = IsValidPlayMode(m_playMode)
+                               ? IsCoursePlayMode(m_playMode)
+                               : GAMESTATE->IsCourseMode();
+  const Course* pCourse = m_pPlayedCourse;
+  const Trail* pTrail = m_pPlayedTrails[pn];
   Profile* pMachineProfile = PROFILEMAN->GetMachineProfile();
   if (pMachineProfile == nullptr) {
     LOG->Warn(
@@ -1056,15 +1075,20 @@ bool StageStats::PlayerHasHighScore(PlayerNumber pn) const {
     return false;
   }
 
+  if (!bCourseMode &&
+      !HasSongScoreContext(
+          pSong, pSteps, pn, "StageStats::PlayerHasHighScore")) {
+    return false;
+  }
+
   // Don't show high scores for tutorial songs.
-  if (pSong->IsTutorial() == Song::SHOW_NEVER) {
+  if (!bCourseMode && pSong->IsTutorial() == Song::SHOW_NEVER) {
     return false;
   }
 
   const HighScoreList& hsl =
-      bCourseMode
-          ? pMachineProfile->GetCourseHighScoreList(pCourse, pTrail)
-          : pMachineProfile->GetStepsHighScoreList(pSong, pSteps);
+      bCourseMode ? pMachineProfile->GetCourseHighScoreList(pCourse, pTrail)
+                  : pMachineProfile->GetStepsHighScoreList(pSong, pSteps);
 
   const unsigned int iScore = scoreStats.m_iScore;
   float fPercentDP = ClampFiniteNonNegativeStageFloat(
@@ -1072,9 +1096,9 @@ bool StageStats::PlayerHasHighScore(PlayerNumber pn) const {
       "StageStats::PlayerHasHighScore");
   const int iMaxScores =
       std::max(0, PREFSMAN->m_iMaxHighScoresPerListForMachine.Get());
-  for (int h = 0; h < static_cast<int>(hsl.vHighScores.size()) &&
-                  h < iMaxScores;
-       ++h) {
+  const size_t iScoresToInspect =
+      std::min(hsl.vHighScores.size(), static_cast<size_t>(iMaxScores));
+  for (size_t h = 0; h < iScoresToInspect; ++h) {
     const HighScore& hs = hsl.vHighScores[h];
     if (hs.GetName() == RANKING_TO_FILL_IN_MARKER[pn] &&
         std::fabs(hs.GetPercentDP() - fPercentDP) <= 0.000001f &&
@@ -1087,7 +1111,7 @@ bool StageStats::PlayerHasHighScore(PlayerNumber pn) const {
 }
 
 unsigned int StageStats::GetMinimumMissCombo() const {
-  unsigned int iMin = INT_MAX;
+  unsigned int iMin = std::numeric_limits<unsigned int>::max();
   bool bSawHumanPlayer = false;
   FOREACH_PlayerNumber(p) {
     if (!HasRecordedPlayerStats(m_player[p])) {
@@ -1196,9 +1220,9 @@ class LunaStageStats : public Luna<StageStats> {
   DEFINE_METHOD(GetStageIndex, m_iStageIndex)
   static int GetStepsSeconds(T* p, lua_State* L) {
     lua_pushnumber(
-        L, ClampFiniteNonNegativeStageFloat(
-               p->m_fStepsSeconds, "steps seconds",
-               "StageStats:GetStepsSeconds"));
+        L,
+        ClampFiniteNonNegativeStageFloat(
+            p->m_fStepsSeconds, "steps seconds", "StageStats:GetStepsSeconds"));
     return 1;
   }
   static int PlayerHasHighScore(T* p, lua_State* L) {

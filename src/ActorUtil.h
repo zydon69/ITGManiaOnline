@@ -125,7 +125,9 @@ inline void LoadAllCommandsAndSetXYAndOnCommand(
 
 /* convenience */
 inline void SetXY(Actor* pActor, const std::string& sMetricsGroup) {
-  SetXY(*pActor, sMetricsGroup);
+  if (pActor != nullptr) {
+    SetXY(*pActor, sMetricsGroup);
+  }
 }
 inline void PlayCommand(Actor* pActor, const std::string& sCommandName) {
   if (pActor) {

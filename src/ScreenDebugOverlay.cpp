@@ -5,8 +5,9 @@
 #include <cstdlib>
 #include <cstddef>
 #include <map>
-#include <set>
+#include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "Actor.h"
@@ -96,23 +97,28 @@ bool IsValidAutosyncTypeValue(AutosyncType type) {
 }
 
 void WarnDebugOverlay(const std::string& message) {
-  if (LOG != nullptr) {
+  static std::mutex warned_messages_mutex;
+  static std::unordered_set<std::string> warned_messages;
+
+  if (LOG == nullptr) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(warned_messages_mutex);
+  if (warned_messages.insert(message).second) {
     LOG->Warn("ScreenDebugOverlay: %s", message.c_str());
   }
 }
 
 bool IsThemeReadyForDebugOverlay() {
-  return THEME != nullptr && THEME->IsThemeLoaded();
+  return THEME != nullptr && THEME->IsThemeLoaded() && LUA != nullptr;
 }
 
 template <typename T>
 Preference<T>* GetDebugPreference(const std::string& name) {
   Preference<T>* pref = Preference<T>::GetPreferenceByName(name);
   if (pref == nullptr) {
-    static std::set<std::string> s_warnedMissingPrefs;
-    if (s_warnedMissingPrefs.insert(name).second) {
-      WarnDebugOverlay("missing preference '" + name + "'.");
-    }
+    WarnDebugOverlay("missing preference '" + name + "'.");
   }
   return pref;
 }
@@ -166,6 +172,12 @@ static const ThemeMetric<float> PAGE_START_X(
     "ScreenDebugOverlay", "PageStartX");
 static const ThemeMetric<float> PAGE_SPACING_X(
     "ScreenDebugOverlay", "PageSpacingX");
+
+bool AreDebugLayoutMetricsLoaded() {
+  return LINE_START_Y.IsLoaded() && LINE_SPACING.IsLoaded() &&
+         LINE_BUTTON_X.IsLoaded() && LINE_FUNCTION_X.IsLoaded() &&
+         PAGE_START_X.IsLoaded() && PAGE_SPACING_X.IsLoaded();
+}
 
 // self-registering debug lines
 // We don't use SubscriptionManager, because we want to keep the line order.
@@ -262,6 +274,7 @@ struct MapDebugToDI {
       debugButton[i].MakeInvalid();
       gameplayButton[i].MakeInvalid();
     }
+    pageButton.clear();
   }
 };
 static MapDebugToDI g_Mappings;
@@ -309,8 +322,11 @@ void ScreenDebugOverlay::Init() {
     return;
   }
 
-  if (!IsThemeReadyForDebugOverlay() || g_pvpSubscribers == nullptr) {
-    WarnDebugOverlay("disabled because theme or debug line registry is missing.");
+  if (!IsThemeReadyForDebugOverlay() || !AreDebugLayoutMetricsLoaded() ||
+      g_pvpSubscribers == nullptr) {
+    WarnDebugOverlay(
+        "disabled because theme, Lua, layout metrics, or debug line registry "
+        "is missing.");
     g_bEnableDebugMenu = false;
     return;
   }
@@ -482,13 +498,14 @@ void ScreenDebugOverlay::Init() {
 
 void ScreenDebugOverlay::Update(float fDeltaTime) {
   if (!g_bEnableDebugMenu) {
+    GameLoop::SetUpdateRate(1.0f);
     Screen::Update(fDeltaTime);
     this->SetVisible(false);
     return;
   }
 
+  float fRate = 1.0f;
   if (INPUTFILTER != nullptr) {
-    float fRate = 1;
     if (INPUTFILTER->IsBeingPressed(g_Mappings.holdForFast)) {
       if (INPUTFILTER->IsBeingPressed(g_Mappings.holdForSlow)) {
         fRate = 0;  // both; stop time
@@ -499,13 +516,17 @@ void ScreenDebugOverlay::Update(float fDeltaTime) {
       fRate /= 4;
     }
 
-    if (g_bIsHalt) {
-      fRate = 0;
-    } else if (g_bIsSlow) {
-      fRate /= 4;
-    }
+  }
+  if (g_bIsHalt) {
+    fRate = 0;
+  } else if (g_bIsSlow) {
+    fRate /= 4;
+  }
+  GameLoop::SetUpdateRate(fRate);
 
-    GameLoop::SetUpdateRate(fRate);
+  if (!IsFinite(fDeltaTime) || fDeltaTime < 0.0f) {
+    WarnDebugOverlay("replaced invalid frame delta before image scaling.");
+    fDeltaTime = 0.0f;
   }
 
   if (!IsFinite(g_fImageScaleCurrent)) {
@@ -672,13 +693,21 @@ bool ScreenDebugOverlay::Input(const InputEventPlus& input) {
       g_bIsDisplayed = false;
     }
   }
-  if (input.DeviceI == g_Mappings.toggleMute && PREFSMAN != nullptr) {
+  if (input.DeviceI == g_Mappings.toggleMute) {
+    if (input.type != IET_FIRST_PRESS) {
+      return true;
+    }
+    if (PREFSMAN == nullptr) {
+      WarnDebugOverlay("ignored mute action toggle without PREFSMAN.");
+      return true;
+    }
     PREFSMAN->m_MuteActions.Set(!PREFSMAN->m_MuteActions);
     if (SCREENMAN != nullptr) {
       SCREENMAN->SystemMessage(
           PREFSMAN->m_MuteActions ? MUTE_ACTIONS_ON.GetValue()
                                   : MUTE_ACTIONS_OFF.GetValue());
     }
+    return true;
   }
 
   int iPage = 0;
@@ -778,6 +807,14 @@ void ChangeVolume(float fDelta) {
     return;
   }
   float fVol = pRet->Get();
+  if (!IsFinite(fVol)) {
+    WarnDebugOverlay("reset non-finite sound volume before adjustment.");
+    fVol = 1.0f;
+  }
+  if (!IsFinite(fDelta)) {
+    WarnDebugOverlay("ignored non-finite sound volume delta.");
+    return;
+  }
   fVol += fDelta;
   rage_clamp(fVol, 0.0f, 1.0f);
   pRet->Set(fVol);
@@ -792,6 +829,14 @@ void ChangeVisualDelay(float fDelta) {
     return;
   }
   float fSecs = pRet->Get();
+  if (!IsFinite(fSecs)) {
+    WarnDebugOverlay("reset non-finite visual delay before adjustment.");
+    fSecs = 0.0f;
+  }
+  if (!IsFinite(fDelta)) {
+    WarnDebugOverlay("ignored non-finite visual delay delta.");
+    return;
+  }
   fSecs += fDelta;
   rage_clamp(fSecs, -1.0f, 1.0f);
   pRet->Set(fSecs);

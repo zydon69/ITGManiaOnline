@@ -208,12 +208,7 @@ struct TapNote {
         iDuration(0),
         HoldResult() {}
   void Init() {
-    type = TapNoteType_Empty;
-    subType = TapNoteSubType_Invalid;
-    source = TapNoteSource_Original;
-    pn = PLAYER_INVALID, fAttackDurationSeconds = 0.f;
-    iKeysoundIndex = -1;
-    iDuration = 0;
+    *this = TapNote();
   }
   TapNote(
       TapNoteType type_, TapNoteSubType subType_, TapNoteSource source_,

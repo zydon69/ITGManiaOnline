@@ -117,6 +117,10 @@ SongCacheIndex::~SongCacheIndex() {
 void SongCacheIndex::ReadFromDisk() { ReadCacheIndex(); }
 
 static void EmptyDir(std::string dir) {
+  if (FILEMAN == nullptr) {
+    LOG->Warn("SRC_AUDIT_FIX: refused to purge cache without FileManager.");
+    return;
+  }
   if (dir.empty()) {
     LOG->Warn("SRC_AUDIT_FIX SRC-634: refused to empty an empty cache path.");
     return;
@@ -154,6 +158,13 @@ void SongCacheIndex::ReadCacheIndex() {
         sCacheIndexPath.c_str(), bCacheIndexExists ? ": " : "",
         bCacheIndexExists ? CacheIndex.GetError().c_str()
                           : " because it does not exist yet");
+    if (bCacheIndexExists) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: preserving cache files after unreadable cache "
+          "index '%s'.",
+          sCacheIndexPath.c_str());
+      return;
+    }
   }
 
   int iCacheVersion = -1;
