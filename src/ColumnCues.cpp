@@ -23,6 +23,9 @@ NoteData GetPlayerNoteData(
     if (!parts.empty()) {
       return parts[PLAYER_1];
     }
+    NoteData empty;
+    empty.SetNumTracks(in.GetNumTracks());
+    return empty;
   }
 
   return in;

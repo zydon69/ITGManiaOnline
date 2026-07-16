@@ -75,18 +75,6 @@ static bool IsValidStepsType(StepsType st) {
   return st >= 0 && st < NUM_StepsType;
 }
 
-static bool HasNotesInTrackRange(
-    const NoteData& noteData, int startTrack, int endTrack) {
-  const int safeStart = std::max(0, startTrack);
-  const int safeEnd = std::min(endTrack, noteData.GetNumTracks());
-  for (int t = safeStart; t < safeEnd; ++t) {
-    if (!noteData.IsTrackEmpty(t)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 static void GetMeasureRowRange(
     const TimingData* timing, int iMeasureIndex, int& iMeasureStartRow,
     int& iMeasureEndRow) {
@@ -627,6 +615,7 @@ void NoteDataUtil::GetSMNoteDataString(
 
 void NoteDataUtil::SplitCompositeNoteData(
     const NoteData& in, std::vector<NoteData>& out) {
+  out.clear();
   if (!in.IsComposite()) {
     out.push_back(in);
     return;
@@ -642,33 +631,15 @@ void NoteDataUtil::SplitCompositeNoteData(
          ++iter) {
       int row = iter->first;
       TapNote tn = iter->second;
-      /*
-       XXX: This code is (hopefully) a temporary hack to make sure that
-       routine charts don't have any notes without players assigned to them.
-       I suspect this is due to a related bug that these problems were
-       occuring to begin with, but at this time, I am unsure how to deal with
-       it. Hopefully this hack can be removed soon. -- Jason "Wolfman2000" Felds
-       */
-      const Style* curStyle =
-          GAMESTATE != nullptr ? GAMESTATE->GetCurrentStyle(PLAYER_INVALID)
-                               : nullptr;
-      if ((curStyle == nullptr ||
-           curStyle->m_StyleType == StyleType_TwoPlayersSharedSides) &&
-          (int(tn.pn) < 0 || int(tn.pn) >= NUM_PlayerNumber)) {
-        LOG->Trace(
-            "SRC_AUDIT_FIX SplitCompositeNoteData assigned invalid player %i "
-            "to P1 at row %i track %i.",
-            int(tn.pn), row, t);
-        tn.pn = PLAYER_1;
-      }
       int index = int(tn.pn);
 
       if (index < 0 || index >= NUM_PlayerNumber) {
-        LOG->Trace(
-            "SRC_AUDIT_FIX SplitCompositeNoteData skipped note with invalid "
-            "player %i at beat %f column %i.",
+        LOG->Warn(
+            "Composite chart rejected: note has invalid player %i at beat "
+            "%f column %i.",
             int(tn.pn), NoteRowToBeat(row), t + 1);
-        continue;
+        out.clear();
+        return;
       }
       tn.pn = PLAYER_INVALID;
       out[index].SetTapNote(t, row, tn);
@@ -682,6 +653,9 @@ bool NoteDataUtil::SplitCompositeOrStackedNoteData(
 
   if (in.IsComposite()) {
     SplitCompositeNoteData(in, out);
+    if (out.empty()) {
+      return true;
+    }
     if (!IsValidStepsType(stepsType) || out.size() < NUM_PLAYERS ||
         in.GetNumTracks() < NUM_PLAYERS) {
       return true;
@@ -692,51 +666,6 @@ bool NoteDataUtil::SplitCompositeOrStackedNoteData(
       return true;
     }
 
-    const int tracksPerPlayer = in.GetNumTracks() / NUM_PLAYERS;
-    if (tracksPerPlayer <= 0 || in.GetNumTracks() % NUM_PLAYERS != 0) {
-      return true;
-    }
-
-    int mixedPlayer = PLAYER_INVALID;
-    for (int pn = 0; pn < NUM_PLAYERS; ++pn) {
-      if (HasNotesInTrackRange(out[pn], 0, tracksPerPlayer) &&
-          HasNotesInTrackRange(out[pn], tracksPerPlayer, in.GetNumTracks())) {
-        mixedPlayer = pn;
-        break;
-      }
-    }
-
-    if (mixedPlayer != PLAYER_INVALID) {
-      bool otherPlayerHasNotes = false;
-      for (int pn = 0; pn < NUM_PLAYERS; ++pn) {
-        if (pn != mixedPlayer &&
-            HasNotesInTrackRange(out[pn], 0, in.GetNumTracks())) {
-          otherPlayerHasNotes = true;
-          break;
-        }
-      }
-
-      if (!otherPlayerHasNotes) {
-        LOG->Trace(
-            "TECHCOUNTS_TRACE routine_flat_split stepsType=%i "
-            "mixedPlayer=%i tracks=%i tracksPerPlayer=%i.",
-            stepsType, mixedPlayer, in.GetNumTracks(), tracksPerPlayer);
-
-        out.assign(NUM_PLAYERS, NoteData());
-        FOREACH_PlayerNumber(pn) { out[pn].SetNumTracks(in.GetNumTracks()); }
-
-        for (int t = 0; t < in.GetNumTracks(); ++t) {
-          const PlayerNumber target =
-              t < tracksPerPlayer ? PLAYER_1 : PLAYER_2;
-          for (NoteData::const_iterator iter = in.begin(t); iter != in.end(t);
-               ++iter) {
-            TapNote tn = iter->second;
-            tn.pn = PLAYER_INVALID;
-            out[target].SetTapNote(t, iter->first, tn);
-          }
-        }
-      }
-    }
     return true;
   }
 
@@ -758,19 +687,20 @@ bool NoteDataUtil::SplitCompositeOrStackedNoteData(
         "SRC_AUDIT_FIX SplitCompositeOrStackedNoteData cannot split %i tracks "
         "for couple StepsType %i.",
         in.GetNumTracks(), stepsType);
-    return false;
+    return true;
   }
 
   const int tracksPerPlayer = in.GetNumTracks() / NUM_PLAYERS;
   if (tracksPerPlayer <= 0) {
-    return false;
+    return true;
   }
 
   if (in.GetNumTracks() % NUM_PLAYERS != 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SplitCompositeOrStackedNoteData splitting odd couple "
-        "track count %i; dropping unmatched final track.",
+        "Couple chart statistics rejected: odd track count %i cannot be "
+        "split without data loss.",
         in.GetNumTracks());
+    return true;
   }
 
   out.resize(NUM_PLAYERS);
@@ -1558,10 +1488,9 @@ void NoteDataUtil::RemoveSimultaneousNotes(
       RemoveSimultaneousNotes(nd, iMaxSimultaneous, iStartIndex, iEndIndex);
     }
     if (vParts.empty()) {
-      LOG->Trace(
-          "SRC_AUDIT_FIX RemoveSimultaneousNotes skipped empty composite "
-          "split.");
-      in.Init();
+      LOG->Warn(
+          "RemoveSimultaneousNotes preserved invalid composite data because "
+          "it could not be split safely.");
       return;
     }
     in.Init();

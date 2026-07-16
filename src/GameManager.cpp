@@ -68,7 +68,7 @@ static const StepsTypeInfo g_StepsTypeInfos[] = {
     {"pump-double", 10, true, StepsTypeCategory_Double},
     {"pump-couple", 10, true, StepsTypeCategory_Couple},
     // uh, dance-routine has that one bool as false... wtf? -aj
-    {"pump-routine", 10, true, StepsTypeCategory_Routine},
+    {"pump-routine", 10, false, StepsTypeCategory_Routine},
     // kb7
     {"kb7-single", 7, true, StepsTypeCategory_Single},
     // { "kb7-small",		7,	true,	StepsTypeCategory_Single },

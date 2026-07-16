@@ -44,8 +44,9 @@ void SplitCompositeNoteData(const NoteData& in, std::vector<NoteData>& out);
  * @brief Split composite routine data or stacked couple data into per-player
  * NoteData.
  *
- * @return true when the input was split into per-player data, false when the
- * input should be treated as shared data.
+ * @return true when the input is per-player data.  An empty output indicates
+ * invalid per-player ownership or dimensions and must not fall back to shared
+ * interpretation.  False means the input should be treated as shared data.
  */
 bool SplitCompositeOrStackedNoteData(
     const NoteData& in, std::vector<NoteData>& out, StepsType stepsType);

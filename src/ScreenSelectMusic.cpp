@@ -1866,24 +1866,32 @@ bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
         }
 
         if (bAnySelectedRoutine) {
-          /* Timer ran out. If we haven't agreed on steps, move players with
-           * Routine steps down to Beginner. I'll admit that's annoying,
-           * but at least they won't lose more stages. */
+          /* A Routine chart is one shared choreography.  On timeout, preserve
+           * the selected Routine chart and atomically apply it to both players
+           * instead of mixing it with an unrelated difficulty/style. */
           if (bInitiatedByMenuTimer && !bSelectedSameSteps) {
-            /* Since m_vpSteps is sorted by Difficulty, the first
-             * entry should be the easiest. */
-            Steps* pSteps = GetSelectedSteps(m_vpSteps, 0);
-            if (pSteps == nullptr) {
+            Steps* sharedRoutineSteps = nullptr;
+            FOREACH_HumanPlayer(p) {
+              if (bSelectedRoutineSteps[p]) {
+                sharedRoutineSteps = GAMESTATE->m_pCurSteps[p];
+                break;
+              }
+            }
+            if (sharedRoutineSteps == nullptr) {
               WarnSelectMusic(
-                  "Routine timer fallback could not find a playable chart.");
+                  "Routine timer fallback could not preserve a valid shared "
+                  "chart.");
               return false;
             }
 
-            FOREACH_PlayerNumber(p) {
-              if (bSelectedRoutineSteps[p]) {
-                GAMESTATE->m_pCurSteps[p].Set(pSteps);
-              }
+            FOREACH_HumanPlayer(p) {
+              GAMESTATE->m_pCurSteps[p].Set(sharedRoutineSteps);
+              m_bStepsChosen[p] = true;
             }
+            LOG->Trace(
+                "Routine timer fallback synchronized both players to steps "
+                "%p.",
+                static_cast<void*>(sharedRoutineSteps));
 
             break;
           }
