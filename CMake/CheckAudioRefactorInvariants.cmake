@@ -43,6 +43,8 @@ read_source("src/arch/Sound/RageSoundDriver_Generic_Software.cpp" rage_sound_dri
 read_source("src/GameSoundManager.h" game_sound_manager_h)
 read_source("src/GameSoundManager.cpp" game_sound_manager_cpp)
 read_source("src/AutoKeysounds.cpp" auto_keysounds_cpp)
+read_source("src/PrefsManager.cpp" prefs_manager_cpp)
+read_source("src/arch/Sound/RageSoundDriver_AU.mm" audio_unit_cpp)
 read_source("src/RageSoundManager.h" rage_sound_manager_h)
 read_source("src/RageSoundManager.cpp" rage_sound_manager_cpp)
 read_source("src/RageSoundReader.h" rage_sound_reader_h)
@@ -123,6 +125,26 @@ require_contains(
   "${macos_window_cpp}"
   "PerfDiagnosticsEnabled()"
   "macOS present tracing follows the shared perf diagnostics switch")
+require_contains(
+  "${prefs_manager_cpp}"
+  "m_iSoundWriteAhead(\"SoundWriteAhead\", 0)"
+  "Sound write-ahead defaults to backend-controlled low-latency sizing")
+require_contains(
+  "${stepmania_cpp}"
+  "kLegacyForcedSoundWriteAheadFrames"
+  "legacy high-latency write-ahead values are migrated")
+require_not_contains(
+  "${stepmania_cpp}"
+  "kForcedSoundWriteAheadFrames"
+  "startup must not force a high-latency sound write-ahead")
+require_contains(
+  "${audio_unit_cpp}"
+  "constexpr int decodeBufferFrames = 4096;"
+  "AudioUnit uses the decoder scheduler's effective lead size")
+require_not_contains(
+  "${audio_unit_cpp}"
+  "std::max(decodeBufferFrames, PREFSMAN->m_iSoundWriteAhead.Get())"
+  "AudioUnit must not inflate every short-sound slot from SoundWriteAhead")
 require_contains(
   "${rage_sound_h}"
   "std::atomic_bool m_bPlaying;"

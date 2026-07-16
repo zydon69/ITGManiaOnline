@@ -187,12 +187,10 @@ std::string RageSoundDriver_AU::Init() {
     return ssprintf("Could not initialize the AudioUnit: %s", FormatOSError(error));
   }
 
-  // Keep a larger decode buffer on macOS to reduce intermittent underruns
-  // observed during heavy screen transitions.
-  int decodeBufferFrames = 32768;
-  if (PREFSMAN != nullptr && PREFSMAN->m_iSoundWriteAhead > 0) {
-    decodeBufferFrames = std::max(decodeBufferFrames, PREFSMAN->m_iSoundWriteAhead.Get());
-  }
+  // The decoder scheduler maintains at most 4096 frames of useful lead.  A
+  // larger slot allocation adds work to every short UI sound without improving
+  // underrun protection.
+  constexpr int decodeBufferFrames = 4096;
   SetDecodeBufferSize(decodeBufferFrames);
 
   StartDecodeThread();
@@ -201,6 +199,12 @@ std::string RageSoundDriver_AU::Init() {
     return ssprintf("Could not start the AudioUnit: %s", FormatOSError(error));
   }
   m_bStarted = true;
+  if (LOG != nullptr) {
+    LOG->Info(
+        "AudioUnit initialized: sample_rate=%d decode_buffer_frames=%d "
+        "estimated_output_latency_ms=%.2f",
+        m_iSampleRate, decodeBufferFrames, GetPlayLatency() * 1000.0f);
+  }
   return std::string();
 }
 

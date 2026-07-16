@@ -1077,19 +1077,21 @@ int sm_main(int argc, char* argv[]) {
     delete pSurface;
   }
 
-  // Enforce conservative macOS audio runtime values even if local preferences
-  // are stale from tuning runs. Other platforms keep their configured defaults.
-#if defined(__APPLE__)
-  constexpr int kForcedSoundWriteAheadFrames = 32768;
-  constexpr int kForcedPreferredSampleRate = 48000;
-  PREFSMAN->m_iSoundWriteAhead.Set(kForcedSoundWriteAheadFrames);
-  PREFSMAN->m_iSoundPreferredSampleRate.Set(kForcedPreferredSampleRate);
-  LOG->Info(
-      "Forcing audio runtime config: SoundWriteAhead=%d, "
-      "SoundPreferredSampleRate=%d",
-      PREFSMAN->m_iSoundWriteAhead.Get(),
-      PREFSMAN->m_iSoundPreferredSampleRate.Get());
-#endif
+  // Older fork builds used this exact value as the cross-platform default and
+  // also forced it on macOS.  It reserves far more software buffering than the
+  // current decoder consumes and asks WASAPI for roughly 683 ms at 48 kHz.
+  // Migrate that legacy value once and let each backend select its native
+  // low-latency buffer again.
+  constexpr int kLegacyForcedSoundWriteAheadFrames = 32768;
+  if (PREFSMAN->m_iSoundWriteAhead.Get() ==
+      kLegacyForcedSoundWriteAheadFrames) {
+    PREFSMAN->m_iSoundWriteAhead.Set(0);
+    if (LOG != nullptr) {
+      LOG->Info(
+          "Migrated legacy SoundWriteAhead=%d to automatic backend sizing",
+          kLegacyForcedSoundWriteAheadFrames);
+    }
+  }
 
   std::string playOnceSmokeCountArg;
   const bool runPlayOnceSmokeTest =
