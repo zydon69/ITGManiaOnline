@@ -33,6 +33,23 @@ read_source("Data/Shaders/MSL/FixedFunction.metal" metal_shader)
 read_source("src/Model.cpp" model_source)
 read_source("src/PrefsManager.cpp" prefs_manager)
 read_source("src/RageSoundPosMap.cpp" sound_pos_map)
+read_source("src/StepMania.cpp" stepmania_source)
+read_source(
+  "Themes/Simply Love/Scripts/SL-OperatorMenuOptions.lua"
+  operator_menu_options)
+
+require_contains(
+  "${stepmania_source}"
+  "\"metal,opengl\",  // Native Metal by default"
+  "macOS defaults to native Metal with an OpenGL fallback")
+require_contains(
+  "${operator_menu_options}"
+  "choices = { \"OpenGL\", \"Metal\" }"
+  "the hybrid OpenGL plus Metal option stays hidden")
+require_contains(
+  "${operator_menu_options}"
+  "Keep this mapping here so it can be restored if needed"
+  "the hidden hybrid option remains documented for restoration")
 
 require_contains(
   "${metal_display}"

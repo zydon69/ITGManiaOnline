@@ -564,7 +564,11 @@ struct VideoCardDefaults {
     // These lines correspond to the struct defined above.
     VideoCardDefaults(
         "OpenGL",   // Video card name (generic Mac/Linux)
+#if defined(__APPLE__)
+        "metal,opengl",  // Native Metal by default; OpenGL remains a fallback.
+#else
         "opengl",   // Available renderers
+#endif
         1280, 800,  // Default resolution
         32,         // Display color
         32,         // Texture color

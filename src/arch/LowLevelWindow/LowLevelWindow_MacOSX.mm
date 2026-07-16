@@ -64,7 +64,7 @@ static Preference<float> g_fPerfTraceSlowMacSwapBuffersMs(
 static Preference<float> g_fMacOSOpenGLFencePacingWaitMs(
     "MacOSOpenGLFencePacingWaitMs", -1.0f);
 static Preference<std::string> g_sMacOSPresentBackend(
-    "MacOSPresentBackend", "opengl");
+    "MacOSPresentBackend", "native");
 extern Preference<float> g_fFramePacingTargetHz;
 
 constexpr int kMetalBridgeInitialBuildDelayFrames = 5;

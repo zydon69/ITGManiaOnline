@@ -402,12 +402,17 @@ OperatorMenuOptionRows.VideoRenderer = function()
 
 	local architecture = HOOKS:GetArchName():lower()
 	if architecture:match("mac") then
-		choices = { "OpenGL", "OpenGL + Metal", "Metal" }
+		choices = { "OpenGL", "Metal" }
 		values = {
 			{ VideoRenderers="opengl", MacOSPresentBackend="opengl" },
-			{ VideoRenderers="opengl", MacOSPresentBackend="metal" },
 			{ VideoRenderers="metal,opengl", MacOSPresentBackend="native" },
 		}
+
+		-- The hybrid OpenGL renderer presented through Metal is intentionally
+		-- hidden. Keep this mapping here so it can be restored if needed:
+		-- choices = { "OpenGL", "OpenGL + Metal", "Metal" }
+		-- table.insert(values, 2,
+		-- 	{ VideoRenderers="opengl", MacOSPresentBackend="metal" })
 	end
 
 	-- Windows also has d3d as a VideoRenderer on ITGm.
@@ -442,10 +447,7 @@ OperatorMenuOptionRows.VideoRenderer = function()
 
 			local i = 1
 			if architecture:match("mac") then
-				local present = PREFSMAN:GetPreference("MacOSPresentBackend")
 				if pref == "metal" then
-					i = 3
-				elseif type(present) == "string" and present:lower() == "metal" then
 					i = 2
 				end
 			else

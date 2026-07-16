@@ -17,8 +17,8 @@ class LowLevelWindow;
 struct RageMatrix;
 
 /*
- * Experimental native Metal renderer.  OpenGL remains the production default;
- * this backend is advanced in small, testable milestones.
+ * Native Metal renderer used by default on macOS.  OpenGL remains available
+ * as a startup fallback and can still be selected explicitly.
  */
 class RageDisplay_Metal : public RageDisplay {
  public:
