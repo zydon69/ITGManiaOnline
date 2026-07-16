@@ -1,7 +1,10 @@
 local player = ...
 local pn = ToEnumShortString(player)
 
-local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+-- GrooveStats does not define a shared two-player Routine score payload.
+if IsRoutine and IsRoutine() then return "" end
+
+local stats = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 
 local judgmentCounts = GetExJudgmentCounts(player)
 

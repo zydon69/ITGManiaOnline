@@ -75,17 +75,19 @@ if args.RoundsAgo then
 	-- players earn a HighScore and they are both tied in score and neither is using a profile.)
 
 	if highscoreindex <= 0 then
+		local playerProfile = PROFILEMAN:GetProfile(player)
+		local lastUsedName = playerProfile and playerProfile:GetLastUsedHighScoreName() or ""
 		for i, highscore in ipairs(HighScores) do
-			local name
+			local name = pss:GetHighScore():GetName()
 		 	if  pss:GetHighScore():GetScore() == highscore:GetScore()
 			and pss:GetHighScore():GetDate()  == highscore:GetDate()
 			and
 			(
-				name == PROFILEMAN:GetProfile(player):GetLastUsedHighScoreName()
+					name == lastUsedName
 				or
 				(
 					(#GAMESTATE:GetHumanPlayers()==1 and name=="EVNT")
-					or (highscore:GetScore() ~= STATSMAN:GetPlayedStageStats(args.RoundsAgo):GetPlayerStageStats(OtherPlayer[player]):GetHighScore():GetScore())
+					or (not (IsRoutine and IsRoutine()) and highscore:GetScore() ~= STATSMAN:GetPlayedStageStats(args.RoundsAgo):GetPlayerStageStats(OtherPlayer[player]):GetHighScore():GetScore())
 				)
 			)
 			then

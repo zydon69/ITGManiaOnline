@@ -555,7 +555,7 @@ end
 
 CreateCommentString = function(player)
 	local pn = ToEnumShortString(player)
-	local pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+	local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 
 	local suffixes = {"w", "e", "g", "d", "wo"}
 

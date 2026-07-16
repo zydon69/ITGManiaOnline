@@ -1,10 +1,12 @@
 local player = ...
-local pn = ToEnumShortString(player)
+local sourcePlayer = GetRoutineSourcePlayer and GetRoutineSourcePlayer(player) or player
+local pn = ToEnumShortString(sourcePlayer)
 
 if SL.Global.GameMode == "Casual" then return end
-if IsAutoplay(player) then return end
+if IsRoutine and IsRoutine() and player ~= sourcePlayer then return end
+if IsAutoplay(sourcePlayer) then return end
 
-local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+local stats = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(sourcePlayer) or STATSMAN:GetCurStageStats():GetPlayerStageStats(sourcePlayer)
 if stats:GetFailed() then return end
 
 local stageStorage = SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
@@ -18,7 +20,7 @@ local profile_slot = {
 }
 
 local function ProfileDir()
-	local dir = PROFILEMAN:GetProfileDir(profile_slot[player])
+	local dir = PROFILEMAN:GetProfileDir(profile_slot[sourcePlayer])
 	if not dir or dir == "" then return nil end
 	return dir
 end

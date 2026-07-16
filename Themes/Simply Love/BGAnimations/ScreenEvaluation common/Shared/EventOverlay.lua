@@ -236,7 +236,7 @@ local GetRpgPaneFunctions = function(eventAf, rpgData, player)
 	local pn = ToEnumShortString(player)
 
 	local score, scoreDelta, rate, rateDelta = 0, 0, 0, 0
-	local pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+	local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 	local paneTexts = {}
 	local paneFunctions = {}
 	if not pss then return paneFunctions end

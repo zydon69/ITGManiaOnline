@@ -373,7 +373,7 @@ ParseChartInfo = function(steps, pn)
 		SL[pn].Streams.NotesPerMeasure = {}
 		SL[pn].Streams.PeakNPS = 0
 		SL[pn].Streams.NPSperMeasure = {}
-		ResetTechCounts(pn, 0)
+		ResetTechCounts(pn, TECHCOUNTS_VAL_UNKNOWN)
 		SL[pn].Streams.Hash = ""
 		SL[pn].Streams.EquallySpacedPerMeasure = {}
 		return

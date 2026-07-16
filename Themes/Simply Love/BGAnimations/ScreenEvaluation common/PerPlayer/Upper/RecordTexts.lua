@@ -2,8 +2,10 @@ if SL.Global.GameMode == "Casual" then return end
 
 local player = ...
 local pn = ToEnumShortString(player)
+local sourcePlayer = GetRoutineSourcePlayer and GetRoutineSourcePlayer(player) or player
+local routineMirror = IsRoutine and IsRoutine() and player ~= sourcePlayer
 
-local pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 
 local HighScoreIndex = {
 	Machine =  pss:GetMachineHighScoreIndex(),
@@ -14,7 +16,7 @@ local HighScoreIndex = {
 -- GetMachineHighScoreIndex() will always return -1 in EventMode, so...
 
 local SongOrCourse = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentCourse() or GAMESTATE:GetCurrentSong()
-local StepsOrTrail = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(player) or GAMESTATE:GetCurrentSteps(player)
+local StepsOrTrail = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(sourcePlayer) or GAMESTATE:GetCurrentSteps(sourcePlayer)
 
 local MaxMachineHighScores = PREFSMAN:GetPreference("MaxHighScoresPerListForMachine")
 local MachineHighScoreList = SongOrCourse and StepsOrTrail and PROFILEMAN:GetMachineProfile():GetHighScoreList(SongOrCourse, StepsOrTrail) or nil
@@ -33,6 +35,8 @@ end
 --        GetMachineHighScoreIndex() should really be patched in the SM5 engine.
 local MachineHighScoreIndexInEventMode = function()
 	local index = -1
+	local playerProfile = PROFILEMAN:GetProfile(sourcePlayer)
+	local lastUsedName = playerProfile and playerProfile:GetLastUsedHighScoreName() or ""
 
 	for i, highscore in ipairs(MachineHighScores) do
 		local name = pss:GetHighScore():GetName()
@@ -41,11 +45,11 @@ local MachineHighScoreIndexInEventMode = function()
 		and pss:GetHighScore():GetDate()  == highscore:GetDate()
 		and
 		(
-			name == PROFILEMAN:GetProfile(player):GetLastUsedHighScoreName()
+			name == lastUsedName
 			or
 			(
 				(#GAMESTATE:GetHumanPlayers()==1 and name=="EVNT")
-				or (highscore:GetScore() ~= STATSMAN:GetPlayedStageStats(1):GetPlayerStageStats(OtherPlayer[player]):GetHighScore():GetScore())
+				or (not (IsRoutine and IsRoutine()) and highscore:GetScore() ~= STATSMAN:GetPlayedStageStats(1):GetPlayerStageStats(OtherPlayer[player]):GetHighScore():GetScore())
 			)
 		)
 		then
@@ -70,7 +74,7 @@ local EarnedPersonalRecord = ( HighScoreIndex.Personal ~= -1 ) and pss:GetPercen
 
 -- this player earned some record and the ability to enter a high score name
 -- we'll check for this flag later in ./BGAnimations/ScreenNameEntryTradtional underlay/default.lua
-if EarnedMachineRecord or EarnedPersonalRecord then
+if (EarnedMachineRecord or EarnedPersonalRecord) and not routineMirror then
 	SL[pn].HighScores = SL[pn].HighScores or {}
 	SL[pn].HighScores.EnteringName = true
 end

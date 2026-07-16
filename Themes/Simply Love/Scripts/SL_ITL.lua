@@ -333,8 +333,12 @@ end
 -- Should be called during ScreenEvaluation to update the ITL data loaded.
 -- Will also write the contents to the file.
 UpdateItlData = function(player)
+	if IsRoutine and IsRoutine() then
+		Trace("Routine shared scores are not submitted to ITL.")
+		return
+	end
 	local pn = ToEnumShortString(player)
-	local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+	local stats = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 		
 	-- Do the same validation as GrooveStats.
 	-- This checks important things like timing windows, addition/removal of arrows, etc.

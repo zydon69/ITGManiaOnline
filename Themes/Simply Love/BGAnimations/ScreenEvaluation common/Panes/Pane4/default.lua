@@ -1,6 +1,7 @@
 -- Pane4 displays a list of HighScores for the stepchart that was played.
 
 local player = unpack(...)
+local sourcePlayer = GetRoutineSourcePlayer and GetRoutineSourcePlayer(player) or player
 
 local pane = Def.ActorFrame{
 	InitCommand=function(self)
@@ -10,7 +11,7 @@ local pane = Def.ActorFrame{
 
 -- -----------------------------------------------------------------------
 
-local pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 if not pss then return pane end
 
 local NumHighScores = math.min(10, PREFSMAN:GetPreference("MaxHighScoresPerListForMachine"))
@@ -25,7 +26,7 @@ local HighScoreIndex = {
 -- custom logic to (try to) assess if a MachineHighScore was achieved when in EventMode
 
 local SongOrCourse = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentCourse() or GAMESTATE:GetCurrentSong()
-local StepsOrTrail = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(player) or GAMESTATE:GetCurrentSteps(player)
+local StepsOrTrail = GAMESTATE:IsCourseMode() and GAMESTATE:GetCurrentTrail(sourcePlayer) or GAMESTATE:GetCurrentSteps(sourcePlayer)
 local MachineHighScores = {}
 if SongOrCourse and StepsOrTrail then
 	local highScoreList = PROFILEMAN:GetMachineProfile():GetHighScoreList(SongOrCourse, StepsOrTrail)
@@ -69,7 +70,7 @@ local EarnedTop2Personal  = (HighScoreIndex.Personal >= 0 and HighScoreIndex.Per
 
 
 -- 22px RowHeight by default, which works for displaying 10 machine HighScores
-local args = { Player=player, RoundsAgo=1, RowHeight=22}
+local args = { Player=sourcePlayer, RoundsAgo=1, RowHeight=22}
 
 if (not EarnedMachineRecord and EarnedTop2Personal) then
 
@@ -85,7 +86,7 @@ if (not EarnedMachineRecord and EarnedTop2Personal) then
 
 	-- top 2 player HighScores
 	args.NumHighScores = 2
-	args.Profile = PROFILEMAN:GetProfile(player)
+	args.Profile = PROFILEMAN:GetProfile(sourcePlayer)
 	pane[#pane+1] = LoadActor(THEME:GetPathB("", "_modules/HighScoreList.lua"), args)..{
 		InitCommand=function(self) self:y(args.RowHeight*9) end
 	}

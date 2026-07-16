@@ -552,6 +552,10 @@ local af = Def.ActorFrame {
 	end,
 	RequestResponseActor(17, 50)..{
 		OnCommand=function(self)
+			if IsRoutine and IsRoutine() then
+				GrooveStatsSubmitTrace("action=skip reason=routine_shared_score_unsupported")
+				return
+			end
 			local sendRequest = false
 			local headers = {}
 			local query = {
@@ -570,7 +574,7 @@ local af = Def.ActorFrame {
 
 				if GAMESTATE:IsHumanPlayer(player) and GAMESTATE:IsSideJoined(player) then
 					local _, valid, _ = ValidForGrooveStats(player)
-					local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+					local stats = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 					local submitForPlayer = false
 					local failed = stats:GetFailed()
 					local isPadPlayer = SL[pn].IsPadPlayer == true

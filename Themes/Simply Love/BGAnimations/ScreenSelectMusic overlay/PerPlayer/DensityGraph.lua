@@ -508,8 +508,9 @@ end
 
 local GetDisplayedTechCount = function(col)
 	if IsRoutineMode() and player == PLAYER_2 then
-		local p1 = tonumber(SL.P1.Streams[col]) or 0
-		local p2 = tonumber(SL.P2.Streams[col]) or 0
+		local p1 = tonumber(SL.P1.Streams[col])
+		local p2 = tonumber(SL.P2.Streams[col])
+		if p1 == nil or p2 == nil or p1 < 0 or p2 < 0 then return -1 end
 		return p1 + p2
 	end
 

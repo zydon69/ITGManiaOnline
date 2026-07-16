@@ -16,13 +16,17 @@ function WriteScores()
 		GameMode = SL.Global.GameMode,
 	}
 
-	for player in ivalues(GAMESTATE:GetHumanPlayers()) do
+	local scorePlayers = GAMESTATE:GetHumanPlayers()
+	if IsRoutine and IsRoutine() then
+		scorePlayers = { GetRoutineSourcePlayer(PLAYER_1) }
+	end
+	for player in ivalues(scorePlayers) do
 		local content = {}
 		for k, v in pairs(template) do
 			content[k] = v
 		end
 
-		local pss = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+		local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 		local highscore = pss:GetHighScore()
 		local actualRadar = pss:GetRadarActual()
 		local possibleRadar = pss:GetRadarPossible()

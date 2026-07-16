@@ -81,6 +81,11 @@ local function PracticeModeAvailable()
 	if onlineHandler and onlineHandler.connected then
 		return false
 	end
+	local steps = GAMESTATE:GetCurrentSteps(GAMESTATE:GetMasterPlayerNumber())
+	local stepsType = steps and ToEnumShortString(steps:GetStepsType()):lower() or ""
+	if stepsType:find("routine", 1, true) or stepsType:find("couple", 1, true) then
+		return false
+	end
 
 	return GAMESTATE:IsEventMode() and GAMESTATE:GetCurrentSong() ~= nil and ThemePrefs.Get("KeyboardFeatures")
 end

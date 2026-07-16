@@ -14,10 +14,9 @@ The following is a list of known issues with StepMania 5.
 * Attacks involving noteskins do not work. They may never work again unless
   some internal coding issues are figured out.
 
-* Routine mode (dance or pump) isn't perfect yet.
- * Attempting to use the Jukebox to show Routine steps will lead to an infinite
-   loop that is not escapable short of killing the program.
- * Attempting to select routine mode in the Practice menu causes a crash.
+* Routine mode (dance or pump) is not supported by Practice mode.  Simply Love
+  hides that option for Couple and Routine charts until the editor path can
+  safely represent shared and per-player note ownership.
 
 * The attempted unlock code written around Previews 2-4 (?) does not seem to
   work at this time. Assistance may be needed here.
