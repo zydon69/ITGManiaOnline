@@ -20,18 +20,6 @@ local patternInfoYOffset = 88
 -- Can be toggled by the code "ToggleChartInfo" in metrics.ini
 local showPatternInfo = false
 
-local PatternInfoTrace = function(message)
-	if not PREFSMAN then return end
-	local okContent, logContent = pcall(function()
-		return PREFSMAN:GetPreference("LogContentLoadDiagnostics")
-	end)
-	local okTheme, logTheme = pcall(function()
-		return PREFSMAN:GetPreference("LogThemeLuaDiagnostics")
-	end)
-	if not ((okContent and logContent) or (okTheme and logTheme)) then return end
-	Trace("PATTERN_INFO_TRACE " .. tostring(message or ""))
-end
-
 local PlayCommandOnChildren = function(parent, command)
 	if not parent then return end
 	local children = parent:GetChildren()
@@ -253,17 +241,9 @@ af[#af+1] = Def.ActorFrame{
 		-- Queueing Show before this would cancel the Show command too.
 		self:stoptweening()
 		self:playcommand("Hide")
-		local steps, usedFallback = GetCurrentStepsForChartInfo()
+		local steps = GetCurrentStepsForChartInfo()
 		if steps then
 			showPatternInfo = ShouldUsePatternInfoForSteps(steps)
-			local stepsType = ToEnumShortString(steps:GetStepsType()):gsub("_", "-"):lower()
-			PatternInfoTrace(("current_steps pn=%s type=%s showPatternInfo=%s sides=%s style=%s fallback=%s"):format(
-				tostring(pn),
-				tostring(stepsType),
-				tostring(showPatternInfo),
-				tostring(GAMESTATE:GetNumSidesJoined()),
-				tostring(GetCurrentStyleName()),
-				tostring(usedFallback)))
 			MESSAGEMAN:Broadcast(pn.."ChartParsing")
 			ParseChartInfo(steps, pn)
 			self:playcommand("Show")
@@ -302,11 +282,6 @@ af[#af+1] = Def.ActorFrame{
 	ShowCommand=function(self)
 		if GAMESTATE:GetCurrentSong() and
 				GetCurrentStepsForChartInfo() then
-			PatternInfoTrace(("chart_parser_show pn=%s showPatternInfo=%s sides=%s style=%s"):format(
-				tostring(pn),
-				tostring(showPatternInfo),
-				tostring(GAMESTATE:GetNumSidesJoined()),
-				tostring(GetCurrentStyleName())))
 			self:playcommand("TogglePatternInfo")
 			self:playcommand("Redraw")
 		else
@@ -435,22 +410,12 @@ af2[#af2+1] = Def.ActorFrame{
 		local visible = ShouldShowPatternInfo()
 		PositionPatternInfo(self)
 		self:visible(visible)
-		PatternInfoTrace(("pattern_frame_redraw pn=%s visible=%s showPatternInfo=%s sides=%s"):format(
-			tostring(pn),
-			tostring(visible),
-			tostring(showPatternInfo),
-			tostring(GAMESTATE:GetNumSidesJoined())))
 		PlayCommandOnChildren(self, "Redraw")
 	end,
 	TogglePatternInfoCommand=function(self)
 		local visible = ShouldShowPatternInfo()
 		PositionPatternInfo(self)
 		self:visible(visible)
-		PatternInfoTrace(("pattern_frame_toggle pn=%s visible=%s showPatternInfo=%s sides=%s"):format(
-			tostring(pn),
-			tostring(visible),
-			tostring(showPatternInfo),
-			tostring(GAMESTATE:GetNumSidesJoined())))
 	end,
 
 	-- Background for the additional chart info.
@@ -571,11 +536,6 @@ for i, row in ipairs(layout) do
 					local rawValue = GetDisplayedTechCount(col)
 					local text = FormatTechCount(rawValue)
 					self:settext(text)
-					PatternInfoTrace(("pattern_value pn=%s col=%s raw=%s text=%s"):format(
-						tostring(pn),
-						tostring(col),
-						tostring(rawValue),
-						tostring(text)))
 				else
 					local streamMeasures, breakMeasures = GetDisplayedTotalStreamAndBreakMeasures()
 					local totalMeasures = streamMeasures + breakMeasures

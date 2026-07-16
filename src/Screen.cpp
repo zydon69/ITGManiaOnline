@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <ctime>
 #include <map>
 #include <set>
 #include <string>
@@ -12,7 +11,6 @@
 #include "ActorUtil.h"
 #include "EnumHelper.h"
 #include "GameInput.h"
-#include "IniFile.h"
 #include "InputEventPlus.h"
 #include "InputFilter.h"
 #include "InputMapper.h"
@@ -69,83 +67,6 @@ float GetLoadedFloatMetric(const ThemeMetric<float>& metric, float fallback) {
   return std::isfinite(value) ? value : fallback;
 }
 
-bool OnlineVerboseLogsEnabledFromThemePrefs() {
-  static time_t lastRead = 0;
-  static bool cached = false;
-
-  const time_t now = time(nullptr);
-  if (now == lastRead) {
-    return cached;
-  }
-
-  lastRead = now;
-  cached = false;
-
-  if (PREFSMAN == nullptr) {
-    return false;
-  }
-
-  IniFile ini;
-  if (!ini.ReadFile("Save/ThemePrefs.ini")) {
-    return false;
-  }
-
-  bool enabled = false;
-  if (!ini.GetValue(
-          PREFSMAN->m_sTheme,
-          "ITGOnlineGameplayLayoutLogs",
-          enabled)) {
-    return false;
-  }
-
-  cached = enabled;
-  return cached;
-}
-
-void TraceOnlineScreenMessage(
-    const std::string& event, const std::string& screenName, ScreenMessage SM,
-    bool running, size_t queued) {
-  if (LOG == nullptr || !OnlineVerboseLogsEnabledFromThemePrefs()) {
-    return;
-  }
-  LOG->Trace(
-      "ITG Online ScreenTrace: %s screen=%s message=%s running=%d queued=%zu",
-      event.c_str(),
-      screenName.c_str(),
-      ScreenMessageHelpers::ScreenMessageToString(SM).c_str(),
-      running ? 1 : 0,
-      queued);
-  LOG->Flush();
-}
-
-void TraceOnlineScreenTransition(
-    const std::string& event, const std::string& fromScreen,
-    const std::string& toScreen, ScreenMessage SM) {
-  if (LOG == nullptr || !OnlineVerboseLogsEnabledFromThemePrefs()) {
-    return;
-  }
-  LOG->Trace(
-      "ITG Online ScreenTrace: %s from=%s to=%s message=%s",
-      event.c_str(),
-      fromScreen.c_str(),
-      toScreen.c_str(),
-      ScreenMessageHelpers::ScreenMessageToString(SM).c_str());
-  LOG->Flush();
-}
-
-void TraceOnlineScreenPop(
-    const std::string& screenName, ScreenMessage SM) {
-  if (LOG == nullptr || !OnlineVerboseLogsEnabledFromThemePrefs()) {
-    return;
-  }
-  LOG->Trace(
-      "ITG Online ScreenTrace: handle_screen_message_pop_stacked screen=%s "
-      "message=%s",
-      screenName.c_str(),
-      ScreenMessageHelpers::ScreenMessageToString(SM).c_str());
-  LOG->Flush();
-}
-
 void BroadcastMouseMessage(MessageID message) {
   if (MESSAGEMAN != nullptr) {
     MESSAGEMAN->Broadcast(message);
@@ -161,18 +82,6 @@ static const char* ScreenTypeNames[] = {
 };
 XToString(ScreenType);
 LuaXType(ScreenType);
-
-static bool ShouldTraceOnlineScreen(const std::string& screenName) {
-  if (!OnlineVerboseLogsEnabledFromThemePrefs()) {
-    return false;
-  }
-  return screenName.find("Online") != std::string::npos ||
-         screenName == "ScreenSelectMusic" ||
-         screenName == "ScreenPlayerOptions" ||
-         screenName == "ScreenEvaluation" ||
-         screenName == "ScreenEvaluationStage" ||
-         screenName == "ScreenGameplay";
-}
 
 void Screen::InitScreen(Screen* pScreen) {
   if (pScreen == nullptr) {
@@ -438,21 +347,12 @@ bool Screen::Input(const InputEventPlus& input) {
 }
 
 void Screen::HandleScreenMessage(const ScreenMessage SM) {
-  const bool traceOnlineScreen = ShouldTraceOnlineScreen(m_sName);
-  if (traceOnlineScreen) {
-    TraceOnlineScreenMessage(
-        "handle_screen_message_begin", m_sName, SM, m_bRunning,
-        m_QueuedMessages.size());
-  }
   if (SM == SM_GoToNextScreen || SM == SM_GoToPrevScreen) {
     if (SCREENMAN == nullptr) {
       WarnScreen(m_sName, "cannot change screens without SCREENMAN.");
       return;
     }
     if (SCREENMAN->IsStackedScreen(this)) {
-      if (traceOnlineScreen) {
-        TraceOnlineScreenPop(m_sName, SM);
-      }
       SCREENMAN->PopTopScreen(m_smSendOnPop);
     } else {
       std::string ToScreen =
@@ -462,10 +362,6 @@ void Screen::HandleScreenMessage(const ScreenMessage SM) {
       } else if (!IsUsableScreenTarget(ToScreen)) {
         WarnScreen(m_sName, "refusing invalid target screen: " + ToScreen);
       } else {
-        if (traceOnlineScreen || ShouldTraceOnlineScreen(ToScreen)) {
-          TraceOnlineScreenTransition(
-              "handle_screen_message_set_new_screen", m_sName, ToScreen, SM);
-        }
         SCREENMAN->SetNewScreen(ToScreen);
       }
     }
@@ -486,11 +382,6 @@ void Screen::HandleScreenMessage(const ScreenMessage SM) {
     if (INPUTFILTER != nullptr) {
       INPUTFILTER->ResetRepeatRate();
     }
-  }
-  if (traceOnlineScreen) {
-    TraceOnlineScreenMessage(
-        "handle_screen_message_end", m_sName, SM, m_bRunning,
-        m_QueuedMessages.size());
   }
 }
 
@@ -523,17 +414,6 @@ void Screen::PostScreenMessage(const ScreenMessage SM, float fDelay) {
   }
 
   fDelay = SanitizeNonNegativeSeconds(fDelay);
-
-  if (ShouldTraceOnlineScreen(m_sName) && LOG != nullptr) {
-    LOG->Trace(
-        "ITG Online ScreenTrace: post_screen_message screen=%s message=%s "
-        "delay=%.3f queued_before=%zu",
-        m_sName.c_str(),
-        ScreenMessageHelpers::ScreenMessageToString(SM).c_str(),
-        fDelay,
-        m_QueuedMessages.size());
-    LOG->Flush();
-  }
 
   QueuedScreenMessage QSM;
   QSM.SM = SM;

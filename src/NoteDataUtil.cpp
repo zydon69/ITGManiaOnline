@@ -215,6 +215,12 @@ static void LoadFromSMNoteDataStringWithPlayer(
     return;
   }
   const int end = start + len;
+  unsigned unmatchedHoldTailCount = 0;
+  unsigned firstUnmatchedMeasure = 0;
+  unsigned firstUnmatchedMeasureLine = 0;
+  int firstUnmatchedRow = 0;
+  int firstUnmatchedTrack = 0;
+  std::string firstUnmatchedLine;
   std::vector<std::pair<const char*, const char*>> aMeasureLines;
   for (unsigned m = 0; true; ++m) {
     /* XXX Ignoring empty seems wrong for measures. It means that ",,," is
@@ -300,11 +306,14 @@ static void LoadFromSMNoteDataStringWithPlayer(
             // This is the end of a hold. Search for the beginning.
             int iHeadRow;
             if (!out.IsHoldNoteAtRow(iTrack, iIndex, &iHeadRow)) {
-              int n = intptr_t(endLine) - intptr_t(beginLine);
-              LOG->Warn(
-                  "Unmatched hold tail '3' while parsing note data: player=%d "
-                  "measure=%u measure_line=%u row=%d track=%d line=\"%.*s\"",
-                  (int)pn, m, l, iIndex, iTrack, n, beginLine);
+              ++unmatchedHoldTailCount;
+              if (unmatchedHoldTailCount == 1) {
+                firstUnmatchedMeasure = m;
+                firstUnmatchedMeasureLine = l;
+                firstUnmatchedRow = iIndex;
+                firstUnmatchedTrack = iTrack;
+                firstUnmatchedLine.assign(beginLine, endLine);
+              }
             } else {
               out.FindTapNote(iTrack, iHeadRow)->second.iDuration =
                   iIndex - iHeadRow;
@@ -412,6 +421,15 @@ static void LoadFromSMNoteDataStringWithPlayer(
         iTrack++;
       }
     }
+  }
+
+  if (unmatchedHoldTailCount > 0) {
+    LOG->Warn(
+        "Ignored %u unmatched hold tail(s) while parsing note data for player "
+        "%d; first at measure=%u measure_line=%u row=%d track=%d line=\"%s\".",
+        unmatchedHoldTailCount, static_cast<int>(pn), firstUnmatchedMeasure,
+        firstUnmatchedMeasureLine, firstUnmatchedRow, firstUnmatchedTrack,
+        firstUnmatchedLine.c_str());
   }
 
   // Make sure we don't have any hold notes that didn't find a tail.

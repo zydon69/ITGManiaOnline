@@ -523,27 +523,14 @@ void Steps::CalculateRadarValues(
   std::vector<NoteData> vParts;
   if (NoteDataUtil::SplitCompositeOrStackedNoteData(
           tempNoteData, vParts, m_StepsType)) {
-    LOG->Trace(
-        "RADAR_TRACE split_begin stepsType=%s chart='%s' tracks=%i parts=%zu.",
-        m_StepsTypeStr.c_str(), m_sDescription.c_str(),
-        tempNoteData.GetNumTracks(), vParts.size());
     for (size_t pn = 0; pn < std::min(vParts.size(), size_t(NUM_PLAYERS));
          ++pn) {
       NoteDataUtil::CalculateRadarValues(
           vParts[pn], fMusicLengthSeconds, timing, m_RadarValues[pn]);
-      LOG->Trace(
-          "RADAR_TRACE split_done stepsType=%s chart='%s' player=%zu "
-          "tracks=%i values=%s.",
-          m_StepsTypeStr.c_str(), m_sDescription.c_str(), pn,
-          vParts[pn].GetNumTracks(), m_RadarValues[pn].ToString().c_str());
     }
   } else {
     NoteDataUtil::CalculateRadarValues(
         tempNoteData, fMusicLengthSeconds, timing, m_RadarValues[0]);
-    LOG->Trace(
-        "RADAR_TRACE shared_done stepsType=%s chart='%s' tracks=%i values=%s.",
-        m_StepsTypeStr.c_str(), m_sDescription.c_str(),
-        tempNoteData.GetNumTracks(), m_RadarValues[0].ToString().c_str());
     std::fill_n(m_RadarValues + 1, NUM_PLAYERS - 1, m_RadarValues[0]);
   }
 }
@@ -557,10 +544,6 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
   m_NoteAnnotations.clear();
 
   if (tempNoteData.IsEmpty()) {
-    LOG->Trace(
-        "TECHCOUNTS_TRACE skip_empty stepsType=%s chart='%s'; marking tech "
-        "counts unknown.",
-        m_StepsTypeStr.c_str(), m_sDescription.c_str());
     FOREACH_PlayerNumber(pn) m_TechCounts[pn].MakeUnknown();
     return;
   }
@@ -574,22 +557,10 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
     FOREACH_PlayerNumber(pn) m_TechCounts[pn].MakeUnknown();
     return;
   }
-  if (this->m_StepsType == StepsType_dance_solo ||
-      this->m_StepsType == StepsType_dance_threepanel) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX: calculating tech counts with %s StageLayout support.",
-        m_StepsTypeStr.c_str());
-  }
-
   TimingData* timing = this->GetTimingData();
   std::vector<NoteData> splitNoteData;
   if (NoteDataUtil::SplitCompositeOrStackedNoteData(
           tempNoteData, splitNoteData, m_StepsType)) {
-    LOG->Trace(
-        "TECHCOUNTS_TRACE split_begin stepsType=%s chart='%s' tracks=%i "
-        "parts=%zu.",
-        m_StepsTypeStr.c_str(), m_sDescription.c_str(),
-        tempNoteData.GetNumTracks(), splitNoteData.size());
     FOREACH_PlayerNumber(pn) {
       NoteAnnotationCache cachedAnnotations;
       if (splitNoteData.size() <= static_cast<size_t>(pn)) {
@@ -602,21 +573,12 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
         continue;
       }
       if (splitNoteData[pn].IsEmpty()) {
-        LOG->Trace(
-            "TECHCOUNTS_TRACE skip_empty stepsType=%s chart='%s' player=%i; "
-            "marking tech counts unknown.",
-            m_StepsTypeStr.c_str(), m_sDescription.c_str(), pn);
         m_TechCounts[pn].MakeUnknown();
         m_NoteAnnotations.push_back(cachedAnnotations);
         continue;
       }
 
       StepParity::StepParityGenerator gen(&*layout, timing);
-      LOG->Trace(
-          "TECHCOUNTS_TRACE analyze_begin stepsType=%s chart='%s' player=%i "
-          "tracks=%i.",
-          m_StepsTypeStr.c_str(), m_sDescription.c_str(), pn,
-          splitNoteData[pn].GetNumTracks());
       if (!gen.analyzeNoteData(splitNoteData[pn])) {
         LOG->Warn(
             "SRC_AUDIT_FIX SRC-642: StepParity analysis failed for %s player "
@@ -630,23 +592,12 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
       std::vector<NoteAnnotation> noteAnnotations;
       TechCounts::CalculateTechCountsFromRows(
           gen.rows, &*layout, m_TechCounts[pn], noteAnnotations);
-      LOG->Trace(
-          "TECHCOUNTS_TRACE analyze_done stepsType=%s chart='%s' player=%i "
-          "rows=%zu annotations=%zu values=%s.",
-          m_StepsTypeStr.c_str(), m_sDescription.c_str(), pn,
-          gen.rows.size(), noteAnnotations.size(),
-          m_TechCounts[pn].ToString().c_str());
       cachedAnnotations.decompressed = noteAnnotations;
       cachedAnnotations.Compress();
       m_NoteAnnotations.push_back(cachedAnnotations);
     }
   } else {
     StepParity::StepParityGenerator gen(&*layout, timing);
-    LOG->Trace(
-        "TECHCOUNTS_TRACE analyze_begin stepsType=%s chart='%s' player=shared "
-        "tracks=%i.",
-        m_StepsTypeStr.c_str(), m_sDescription.c_str(),
-        tempNoteData.GetNumTracks());
     if (!gen.analyzeNoteData(tempNoteData)) {
       LOG->Warn(
           "SRC_AUDIT_FIX SRC-642: StepParity analysis failed for %s; marking "
@@ -659,11 +610,6 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
     std::vector<NoteAnnotation> noteAnnotations;
     TechCounts::CalculateTechCountsFromRows(
         gen.rows, &*layout, m_TechCounts[0], noteAnnotations);
-    LOG->Trace(
-        "TECHCOUNTS_TRACE analyze_done stepsType=%s chart='%s' player=shared "
-        "rows=%zu annotations=%zu values=%s.",
-        m_StepsTypeStr.c_str(), m_sDescription.c_str(), gen.rows.size(),
-        noteAnnotations.size(), m_TechCounts[0].ToString().c_str());
     std::fill_n(m_TechCounts + 1, NUM_PLAYERS - 1, m_TechCounts[0]);
 
     NoteAnnotationCache cachedAnnotations;
@@ -693,32 +639,15 @@ void Steps::CalculateMeasureInfo(const NoteData& tempNoteData) {
   if (NoteDataUtil::SplitCompositeOrStackedNoteData(
           tempNoteData, vParts, m_StepsType)) {
     measureInfoPerPlayer.resize(NUM_PLAYERS);
-    LOG->Trace(
-        "MEASURE_TRACE split_begin stepsType=%s chart='%s' tracks=%i "
-        "parts=%zu.",
-        m_StepsTypeStr.c_str(), m_sDescription.c_str(),
-        tempNoteData.GetNumTracks(), vParts.size());
     for (std::size_t pn = 0;
          pn < std::min(vParts.size(), std::size_t(NUM_PLAYERS)); ++pn) {
       MeasureInfo::CalculateMeasureInfo(
           vParts[pn], timing, measureInfoPerPlayer[pn]);
-      LOG->Trace(
-          "MEASURE_TRACE split_done stepsType=%s chart='%s' player=%zu "
-          "tracks=%i peakNps=%f measures=%zu.",
-          m_StepsTypeStr.c_str(), m_sDescription.c_str(), pn,
-          vParts[pn].GetNumTracks(), measureInfoPerPlayer[pn].peakNps,
-          measureInfoPerPlayer[pn].notesPerMeasure.size());
     }
   } else {
     measureInfoPerPlayer.resize(1);
     MeasureInfo::CalculateMeasureInfo(
         tempNoteData, timing, measureInfoPerPlayer[0]);
-    LOG->Trace(
-        "MEASURE_TRACE shared_done stepsType=%s chart='%s' tracks=%i "
-        "peakNps=%f measures=%zu.",
-        m_StepsTypeStr.c_str(), m_sDescription.c_str(),
-        tempNoteData.GetNumTracks(), measureInfoPerPlayer[0].peakNps,
-        measureInfoPerPlayer[0].notesPerMeasure.size());
   }
 
   m_NotesPerMeasure.clear();
